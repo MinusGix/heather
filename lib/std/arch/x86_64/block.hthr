@@ -412,10 +412,13 @@ theorem execute_short_control_preserves_gprs<M>(control: ShortControl,
 // Near (rel32) forms of the same two transfers, for edges a short branch
 // cannot reach: a bounded loop's exit and back edge span its whole body
 // (docs/native-bounded-loops-design.md §2). The displacement is little-endian
-// after the opcode, relative to the end of the instruction.
+// after the opcode, relative to the end of the instruction. `JumpSignNear`
+// (JS) is how a program tells a syscall's error return, a negative word,
+// from a count (docs/native-syscall-failures-design.md §4).
 inductive NearControl {
     JumpZeroNear(displacement: BitVec(32)),
     JumpNear(displacement: BitVec(32)),
+    JumpSignNear(displacement: BitVec(32)),
 }
 
 fn rel16_bytes(value: BitVec(16)) → List<BitVec(8)> {
@@ -436,6 +439,8 @@ fn near_control_bytes(control: NearControl) → List<BitVec(8)> {
         JumpZeroNear(displacement) =>
             Cons(BitVec::ofNat(0x0f), Cons(BitVec::ofNat(0x84), rel32_bytes(displacement))),
         JumpNear(displacement) => Cons(BitVec::ofNat(0xe9), rel32_bytes(displacement)),
+        JumpSignNear(displacement) =>
+            Cons(BitVec::ofNat(0x0f), Cons(BitVec::ofNat(0x88), rel32_bytes(displacement))),
     }
 }
 
@@ -522,7 +527,6 @@ fn decode_near_control(bytes: List<BitVec(8)>) → Option<NearControlDecode(byte
                 Inl(first_exact) => match tail as λ rest => Option<NearControlDecode(Cons(opcode, rest))> {
                     Nil => None,
                     Cons(second, rest) => match second.eq_dec(BitVec::ofNat(0x84)) {
-                        Inr(_) => None,
                         Inl(second_exact) => match decode_rel32(rest) {
                             None => None,
                             Some(found) => Some(NearControlDecode(control := JumpZeroNear(found.displacement),
@@ -530,6 +534,17 @@ fn decode_near_control(bytes: List<BitVec(8)>) → Option<NearControlDecode(byte
                                     trans(cong_fn<BitVec(8), List<BitVec(8)>>(λ next => Cons(BitVec::ofNat(0x0f), Cons(next, rest)), second_exact),
                                         cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ tail => Cons(BitVec::ofNat(0x0f), Cons(BitVec::ofNat(0x84), tail)),
                                             found.decoding))))),
+                        },
+                        Inr(_) => match second.eq_dec(BitVec::ofNat(0x88)) {
+                            Inr(_) => None,
+                            Inl(second_exact) => match decode_rel32(rest) {
+                                None => None,
+                                Some(found) => Some(NearControlDecode(control := JumpSignNear(found.displacement),
+                                    decoding := trans(cong_fn<BitVec(8), List<BitVec(8)>>(λ first => Cons(first, Cons(second, rest)), first_exact),
+                                        trans(cong_fn<BitVec(8), List<BitVec(8)>>(λ next => Cons(BitVec::ofNat(0x0f), Cons(next, rest)), second_exact),
+                                            cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ tail => Cons(BitVec::ofNat(0x0f), Cons(BitVec::ofNat(0x88), tail)),
+                                                found.decoding))))),
+                            },
                         },
                     },
                 },
@@ -554,6 +569,8 @@ theorem decode_near_control_complete(control: NearControl): NearControlDecodes(c
         JumpZeroNear(displacement) => cong_fn(λ (value: BitVec(32)) => Some(JumpZeroNear(value)),
             rel32_round_trip(displacement)),
         JumpNear(displacement) => cong_fn(λ (value: BitVec(32)) => Some(JumpNear(value)),
+            rel32_round_trip(displacement)),
+        JumpSignNear(displacement) => cong_fn(λ (value: BitVec(32)) => Some(JumpSignNear(value)),
             rel32_round_trip(displacement)),
     }
 }
@@ -581,6 +598,10 @@ fn near_control_rip<M>(control: NearControl, before: MachineState<M>) → BitVec
             True => near_branch_target(before.rip, 6, displacement),
         },
         JumpNear(displacement) => near_branch_target(before.rip, 5, displacement),
+        JumpSignNear(displacement) => match before.flags.sf {
+            False => next_rip(before.rip, 6),
+            True => near_branch_target(before.rip, 6, displacement),
+        },
     }
 }
 

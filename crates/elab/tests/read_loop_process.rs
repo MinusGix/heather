@@ -17,7 +17,10 @@ fn read_loop_library_checks() {
 // restarts the count at every chunk, keeps it where the next chunk's setup
 // overwrites it, tests another register for the end of file, exits with the
 // register SYSCALL clobbers, or jumps back to somewhere other than the read
-// (docs/native-read-until-eof-design.md).
+// (docs/native-read-until-eof-design.md); nor over one that takes another
+// errno for EINTR, exits 0 on a failed read, loses the count on a retry, or
+// jumps to the failure path from the wrong distance
+// (docs/native-syscall-failures-design.md).
 #[test]
 fn slow_acceptance_read_loop_refusals() {
     let library = checker().semantic_image();
@@ -33,6 +36,13 @@ fn slow_acceptance_read_loop_refusals() {
         ("end_tested_elsewhere", "[TestRR(Rax, Rax)]", "[TestRR(Rdx, Rdx)]"),
         ("exit_with_clobbered", "[MovRR(Rdi, R13), MovRI(Rax", "[MovRR(Rdi, R11), MovRI(Rax"),
         ("back_span", "(((((read_entry_len() + 2) + eof_test_len())", "(((((read_entry_len() + 3) + eof_test_len())"),
+        ("eintr_tested_as_other", "fn eof_retry_block() → List<Instruction> { [MovRI(Rbx, BitVec::ofNat(4))",
+            "fn eof_retry_block() → List<Instruction> { [MovRI(Rbx, BitVec::ofNat(5))"),
+        ("failure_exits_zero", "fn eof_fail_block() → List<Instruction> { [MovRI(Rdi, BitVec::ofNat(1))",
+            "fn eof_fail_block() → List<Instruction> { [MovRI(Rdi, BitVec::ofNat(0))"),
+        ("retry_clobbers_count", "[MovRI(Rbx, BitVec::ofNat(4)), AddRR(Rax, Rbx)]", "[MovRI(R13, BitVec::ofNat(4)), AddRR(Rax, R13)]"),
+        ("failure_span", "    ((eof_setup_len(needle) + loop_bytes.len()) + eof_save_len()) + 5\n}",
+            "    ((eof_setup_len(needle) + loop_bytes.len()) + eof_save_len()) + 4\n}"),
     ] {
         let bad = PROCESS.replacen(from, to, 1);
         assert_ne!(bad, PROCESS, "{name}");

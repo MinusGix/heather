@@ -246,6 +246,113 @@ theorem test_self_nonzero(n: Nat): (x: BitVec(n)) → 0 < x.toNat() → is_zero_
     }
 }
 
+// ZF reads a word's value: set exactly at zero.
+theorem zero_bits_of_zero(n: Nat): (x: BitVec(n)) → x.toNat() = 0 → is_zero_bits(n, x) = True {
+    match n as λ k => (x: BitVec(k)) → x.toNat() = 0 → is_zero_bits(k, x) = True {
+        Zero => λ x zero => refl,
+        Succ(k, ih) => λ x zero => {
+            let t = x.tail_bits();
+            (match x.head_bit() as λ h => Nat::of_bit(h) + t.toNat().twice() = 0 → h.not() && is_zero_bits(k, t) = True {
+                False => λ sum => {
+                    let two: (t.toNat().twice() = t.toNat() + t.toNat()) = Nat::twice_add_self(t.toNat());
+                    let none: (t.toNat() = 0) = { let s: (0 + t.toNat().twice() = 0) = sum; omega };
+                    ih(t, none)
+                },
+                True => λ sum => false_elim({ let one: (1 + t.toNat().twice() = 0) = sum; omega }),
+            })(zero)
+        },
+    }
+}
+theorem zero_bits_of_pos(n: Nat): (x: BitVec(n)) → 0 < x.toNat() → is_zero_bits(n, x) = False {
+    match n as λ k => (x: BitVec(k)) → 0 < x.toNat() → is_zero_bits(k, x) = False {
+        Zero => λ x some => false_elim({ let z: (0 < 0) = some; omega }),
+        Succ(k, ih) => λ x some => {
+            let t = x.tail_bits();
+            (match x.head_bit() as λ h => 0 < Nat::of_bit(h) + t.toNat().twice() → h.not() && is_zero_bits(k, t) = False {
+                False => λ sum => {
+                    let two: (t.toNat().twice() = t.toNat() + t.toNat()) = Nat::twice_add_self(t.toNat());
+                    ih(t, { let s: (0 < 0 + t.toNat().twice()) = sum; omega })
+                },
+                True => λ sum => refl,
+            })(some)
+        },
+    }
+}
+
+// SF reads a word's value: set exactly in the top half of its range, which
+// is where a syscall's negated errno lands and a count never does.
+theorem bit_value_le_one(b: Bool): Nat::of_bit(b) <= 1 {
+    match b as λ c => Nat::of_bit(c) <= 1 { False => { omega }, True => { omega } }
+}
+theorem sign_bit_small(k: Nat): (x: BitVec(Succ(k))) → x.toNat() < Nat::pow(2, k) → x.sign_bit() = False {
+    match k as λ j => (x: BitVec(Succ(j))) → x.toNat() < Nat::pow(2, j) → x.sign_bit() = False {
+        Zero => λ x small => (match x.head_bit() as λ h => Nat::of_bit(h) + 0 < 1 → h = False {
+            False => λ _ => refl,
+            True => λ over => false_elim({ let one: (1 + 0 < 1) = over; omega }),
+        })(small),
+        Succ(j, ih) => λ x small => {
+            let t = x.tail_bits();
+            let pow: (Nat::pow(2, Succ(j)) = Nat::twice(Nat::pow(2, j))) = BitVec::pow_two_succ_twice(j);
+            let sum: (Nat::of_bit(x.head_bit()) + t.toNat().twice() < Nat::pow(2, Succ(j))) = small;
+            let bit: (Nat::of_bit(x.head_bit()) <= 1) = bit_value_le_one(x.head_bit());
+            let two: (t.toNat().twice() = t.toNat() + t.toNat()) = Nat::twice_add_self(t.toNat());
+            let ptwo: (Nat::twice(Nat::pow(2, j)) = Nat::pow(2, j) + Nat::pow(2, j)) = Nat::twice_add_self(Nat::pow(2, j));
+            ih(t, { omega })
+        },
+    }
+}
+theorem sign_bit_large(k: Nat): (x: BitVec(Succ(k))) → Nat::pow(2, k) <= x.toNat() → x.sign_bit() = True {
+    match k as λ j => (x: BitVec(Succ(j))) → Nat::pow(2, j) <= x.toNat() → x.sign_bit() = True {
+        Zero => λ x large => (match x.head_bit() as λ h => 1 <= Nat::of_bit(h) + 0 → h = True {
+            True => λ _ => refl,
+            False => λ under => false_elim({ let zero: (1 <= 0 + 0) = under; omega }),
+        })(large),
+        Succ(j, ih) => λ x large => {
+            let t = x.tail_bits();
+            let pow: (Nat::pow(2, Succ(j)) = Nat::twice(Nat::pow(2, j))) = BitVec::pow_two_succ_twice(j);
+            let sum: (Nat::pow(2, Succ(j)) <= Nat::of_bit(x.head_bit()) + t.toNat().twice()) = large;
+            let bit: (Nat::of_bit(x.head_bit()) <= 1) = bit_value_le_one(x.head_bit());
+            let two: (t.toNat().twice() = t.toNat() + t.toNat()) = Nat::twice_add_self(t.toNat());
+            let ptwo: (Nat::twice(Nat::pow(2, j)) = Nat::pow(2, j) + Nat::pow(2, j)) = Nat::twice_add_self(Nat::pow(2, j));
+            ih(t, { omega })
+        },
+    }
+}
+theorem band_self_value(n: Nat): (x: BitVec(n)) → x.band(x).toNat() = x.toNat() {
+    match n as λ k => (x: BitVec(k)) → x.band(x).toNat() = x.toNat() {
+        Zero => λ x => refl,
+        Succ(k, ih) => λ x => {
+            let t = x.tail_bits();
+            let same: (Nat::of_bit(x.head_bit() && x.head_bit()) = Nat::of_bit(x.head_bit())) =
+                match x.head_bit() as λ h => Nat::of_bit(h && h) = Nat::of_bit(h) { False => refl, True => refl };
+            let rest: (t.band(t).toNat() = t.toNat()) = ih(t);
+            let two: (t.toNat().twice() = t.toNat() + t.toNat()) = Nat::twice_add_self(t.toNat());
+            let two_and: (t.band(t).toNat().twice() = t.band(t).toNat() + t.band(t).toNat()) = Nat::twice_add_self(t.band(t).toNat());
+            let goal: (Nat::of_bit(x.head_bit() && x.head_bit()) + t.band(t).toNat().twice() =
+                Nat::of_bit(x.head_bit()) + t.toNat().twice()) = { omega };
+            goal
+        },
+    }
+}
+// TEST of a register with itself: SF is the value's top-half test.
+theorem test_self_negative(x: BitVec(64), large: Nat::pow(2, 63) <= x.toNat()): x.band(x).sign_bit() = True {
+    sign_bit_large(63, x.band(x), j(sym(band_self_value(64, x)), λ v _ => Nat::pow(2, 63) <= v, large))
+}
+theorem test_self_nonnegative(x: BitVec(64), small: x.toNat() < Nat::pow(2, 63)): x.band(x).sign_bit() = False {
+    sign_bit_small(63, x.band(x), j(sym(band_self_value(64, x)), λ v _ => v < Nat::pow(2, 63), small))
+}
+
+theorem near_sign_taken_rip<M>(displacement: BitVec(32), state: MachineState<M>, selected: state.flags.sf = True):
+    execute_near_control(JumpSignNear(displacement), state).rip = near_branch_target(state.rip, 6, displacement) {
+    j(sym(selected), λ sf _ => (match sf { False => next_rip(state.rip, 6), True => near_branch_target(state.rip, 6, displacement) }) =
+        near_branch_target(state.rip, 6, displacement), refl)
+}
+theorem near_sign_not_taken_rip<M>(displacement: BitVec(32), state: MachineState<M>, selected: state.flags.sf = False):
+    execute_near_control(JumpSignNear(displacement), state).rip = next_rip(state.rip, 6) {
+    j(sym(selected), λ sf _ => (match sf { False => next_rip(state.rip, 6), True => near_branch_target(state.rip, 6, displacement) }) =
+        next_rip(state.rip, 6), refl)
+}
+
 // A rip reached as `next_rip(origin, a)` and then advanced by `b`.
 theorem rip_advance(origin, address: BitVec(64), a, b: Nat, at: address = next_rip(origin, a)):
     next_rip(address, b) = next_rip(origin, a + b) {

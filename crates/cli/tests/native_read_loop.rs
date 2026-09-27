@@ -71,6 +71,18 @@ fn bursts(executable: &Path) -> Output {
     child.wait_with_output().unwrap()
 }
 
+// Failures (docs/native-syscall-failures-design.md): a read of a directory
+// fails with EISDIR, a write to a descriptor open only for reading with EBADF,
+// and a write to `/dev/full` with ENOSPC. Each exits 1.
+fn unreadable_stdin(executable: &Path) -> Output {
+    Command::new(executable).stdin(std::fs::File::open("/").unwrap()).output().unwrap()
+}
+fn unwritable_stdout(executable: &Path, stdout: Stdio) -> Output {
+    let mut child = Command::new(executable).stdin(Stdio::piped()).stdout(stdout).spawn().unwrap();
+    child.stdin.take().unwrap().write_all(b"one\n").unwrap();
+    child.wait_with_output().unwrap()
+}
+
 #[test]
 fn wc_l_counts_every_line() {
     let directory = scratch("read-loop");
@@ -88,6 +100,7 @@ fn wc_l_counts_every_line() {
         assert_eq!(status.code(), Some(expected(input)), "input {index} ({} bytes)", input.len());
     }
     assert_eq!(bursts(&executable).status.code(), Some(4));
+    assert_eq!(unreadable_stdin(&executable).status.code(), Some(1));
     std::fs::remove_dir_all(directory).unwrap();
 }
 
@@ -107,7 +120,7 @@ fn a_needle_the_specification_does_not_count_is_refused() {
 
 // With `--print`, the count is the output: its decimal digits and a newline
 // on stdout, as `decimal_line(wc_l(eof_input(chunks)))` states it, and the
-// exit is 0.
+// exit is 0; a failed read or write exits 1.
 #[test]
 fn wc_l_prints_every_line() {
     let directory = scratch("read-print");
@@ -115,7 +128,7 @@ fn wc_l_prints_every_line() {
     assert!(output.status.success(), "build-x86 {}: {}", output.status, String::from_utf8_lossy(&output.stderr));
     let executable = directory.join("wc_l");
     let certificate = std::fs::read_to_string(directory.join("wc_l.certificate.hthr")).unwrap();
-    for claim in ["_runs(", "WriteEvent(", "decimal_line(", "_code_written(", "_file_correct("] {
+    for claim in ["_runs(", "write_events(", "decimal_line(", "_code_written(", "_file_correct("] {
         assert!(certificate.contains(claim), "missing {claim}");
     }
     for (index, input) in inputs().iter().enumerate() {
@@ -127,6 +140,13 @@ fn wc_l_prints_every_line() {
     }
     let run = bursts(&executable);
     assert_eq!((run.status.code(), run.stdout.as_slice()), (Some(0), b"4\n".as_slice()));
+    let run = unreadable_stdin(&executable);
+    assert_eq!((run.status.code(), run.stdout.as_slice()), (Some(1), b"".as_slice()));
+    assert_eq!(unwritable_stdout(&executable, Stdio::null()).status.code(), Some(0));
+    let full = std::fs::OpenOptions::new().write(true).open("/dev/full").unwrap();
+    assert_eq!(unwritable_stdout(&executable, Stdio::from(full)).status.code(), Some(1));
+    let closed = std::fs::File::open("/").unwrap();
+    assert_eq!(unwritable_stdout(&executable, Stdio::from(closed)).status.code(), Some(1));
     std::fs::remove_dir_all(directory).unwrap();
 }
 

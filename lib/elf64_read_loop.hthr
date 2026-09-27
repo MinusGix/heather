@@ -2,6 +2,8 @@
 // read stdin a page at a time into the page, count each chunk with a
 // certified counting loop into a running total, stop at the empty read, and
 // hand the total to a tail (exit with it, here; elf64_read_print writes it).
+// A failed read (docs/native-syscall-failures-design.md) is retried when it
+// is EINTR and otherwise exits with status 1.
 // Nothing here is about any one program: the loop, its source function, and
 // the specification its count meets are parameters, and a program supplies
 // its loop certificate and two facts about its source. The profile fixes the
@@ -50,6 +52,10 @@ fn eof_setup_block(needle: BitVec(8)) → List<Instruction> {
 fn eof_save_block() → List<Instruction> { [MovRR(R13, R11)] }
 // exit(total).
 fn eof_exit_block() → List<Instruction> { [MovRR(Rdi, R13), MovRI(Rax, BitVec::ofNat(60))] }
+// A failed read: RAX + 4 is zero exactly at -EINTR, which retries the read;
+// anything else is exit(1). RBX is free between reads.
+fn eof_retry_block() → List<Instruction> { [MovRI(Rbx, BitVec::ofNat(4)), AddRR(Rax, Rbx)] }
+fn eof_fail_block() → List<Instruction> { [MovRI(Rdi, BitVec::ofNat(1)), MovRI(Rax, BitVec::ofNat(60))] }
 
 fn read_entry_len() → Nat { canonical_block_bytes(read_entry_block()).len() }
 fn eof_init_len() → Nat { canonical_block_bytes(eof_init_block()).len() }
@@ -57,18 +63,28 @@ fn eof_test_len() → Nat { canonical_block_bytes(eof_test_block()).len() }
 fn eof_setup_len(needle: BitVec(8)) → Nat { canonical_block_bytes(eof_setup_block(needle)).len() }
 fn eof_save_len() → Nat { canonical_block_bytes(eof_save_block()).len() }
 fn eof_exit_len() → Nat { canonical_block_bytes(eof_exit_block()).len() }
+fn eof_retry_len() → Nat { canonical_block_bytes(eof_retry_block()).len() }
+fn eof_fail_len() → Nat { canonical_block_bytes(eof_fail_block()).len() }
 
-// The program: init, then the read, the test and its jump to the tail, the
-// chunk's setup and loop, the save and the jump back, then the tail.
-fn eof_code(needle: BitVec(8), loop_bytes: List<BitVec(8)>, ed, bd: BitVec(32), tail: List<BitVec(8)>) → List<BitVec(8)> {
+// The jumps' displacements: JZ to the tail at end of file, JS to the failure
+// path, JMP back after a chunk, JZ back to the read after EINTR.
+record EofJumps { ed: BitVec(32), sd: BitVec(32), bd: BitVec(32), rd: BitVec(32) }
+
+// The program: init, then the read, the test and its jumps to the tail and
+// the failure path, the chunk's setup and loop, the save and the jump back,
+// the failure path (retry test, jump back, exit(1)), then the tail.
+fn eof_code(needle: BitVec(8), loop_bytes: List<BitVec(8)>, jumps: EofJumps, tail: List<BitVec(8)>) → List<BitVec(8)> {
     canonical_block_bytes(eof_init_block()) ++ (canonical_block_bytes(read_entry_block()) ++ (linux_syscall_bytes() ++
-    (canonical_block_bytes(eof_test_block()) ++ (near_control_bytes(JumpZeroNear(ed)) ++
+    (canonical_block_bytes(eof_test_block()) ++ (near_control_bytes(JumpZeroNear(jumps.ed)) ++
+    (near_control_bytes(JumpSignNear(jumps.sd)) ++
     (canonical_block_bytes(eof_setup_block(needle)) ++ (loop_bytes ++ (canonical_block_bytes(eof_save_block()) ++
-    (near_control_bytes(JumpNear(bd)) ++ tail))))))))
+    (near_control_bytes(JumpNear(jumps.bd)) ++
+    (canonical_block_bytes(eof_retry_block()) ++ (near_control_bytes(JumpZeroNear(jumps.rd)) ++
+    (canonical_block_bytes(eof_fail_block()) ++ (linux_syscall_bytes() ++ tail)))))))))))))
 }
 fn eof_exit_code() → List<BitVec(8)> { canonical_block_bytes(eof_exit_block()) ++ linux_syscall_bytes() }
-fn read_loop_code(needle: BitVec(8), loop_bytes: List<BitVec(8)>, ed, bd: BitVec(32)) → List<BitVec(8)> {
-    eof_code(needle, loop_bytes, ed, bd, eof_exit_code())
+fn read_loop_code(needle: BitVec(8), loop_bytes: List<BitVec(8)>, jumps: EofJumps) → List<BitVec(8)> {
+    eof_code(needle, loop_bytes, jumps, eof_exit_code())
 }
 
 // Offsets from the entry, piece by piece.
@@ -77,49 +93,70 @@ fn eof_at_read() → Nat { 0 + eof_init_len() }
 fn eof_at_call() → Nat { eof_at_read() + read_entry_len() }
 fn eof_at_test() → Nat { eof_at_call() + 2 }
 fn eof_at_jz() → Nat { eof_at_test() + eof_test_len() }
-fn eof_at_setup() → Nat { eof_at_jz() + 6 }
+fn eof_at_js() → Nat { eof_at_jz() + 6 }
+fn eof_at_setup() → Nat { eof_at_js() + 6 }
 fn eof_at_loop(needle: BitVec(8)) → Nat { eof_at_setup() + eof_setup_len(needle) }
 fn eof_at_save(needle: BitVec(8), loop_bytes: List<BitVec(8)>) → Nat { eof_at_loop(needle) + loop_bytes.len() }
 fn eof_at_jmp(needle: BitVec(8), loop_bytes: List<BitVec(8)>) → Nat { eof_at_save(needle, loop_bytes) + eof_save_len() }
-fn eof_at_done(needle: BitVec(8), loop_bytes: List<BitVec(8)>) → Nat { eof_at_jmp(needle, loop_bytes) + 5 }
+fn eof_at_failed(needle: BitVec(8), loop_bytes: List<BitVec(8)>) → Nat { eof_at_jmp(needle, loop_bytes) + 5 }
+fn eof_at_retry(needle: BitVec(8), loop_bytes: List<BitVec(8)>) → Nat { eof_at_failed(needle, loop_bytes) + eof_retry_len() }
+fn eof_at_fail(needle: BitVec(8), loop_bytes: List<BitVec(8)>) → Nat { eof_at_retry(needle, loop_bytes) + 6 }
+fn eof_at_fail_call(needle: BitVec(8), loop_bytes: List<BitVec(8)>) → Nat { eof_at_fail(needle, loop_bytes) + eof_fail_len() }
+fn eof_at_done(needle: BitVec(8), loop_bytes: List<BitVec(8)>) → Nat { eof_at_fail_call(needle, loop_bytes) + 2 }
 
 // The program's pieces, resident at their offsets from the entry.
-record EofPieces(memory: IoMemory, needle: BitVec(8), loop_bytes: List<BitVec(8)>, ed, bd: BitVec(32), tail: List<BitVec(8)>) {
+record EofPieces(memory: IoMemory, needle: BitVec(8), loop_bytes: List<BitVec(8)>, jumps: EofJumps, tail: List<BitVec(8)>) {
     init_at: CodeResident(io_fetch_access(), memory, canonical_block_bytes(eof_init_block()), eof_rip(0)),
     entry_at: CodeResident(io_fetch_access(), memory, canonical_block_bytes(read_entry_block()), eof_rip(eof_at_read())),
     call_at: CodeResident(io_fetch_access(), memory, linux_syscall_bytes(), eof_rip(eof_at_call())),
     test_at: CodeResident(io_fetch_access(), memory, canonical_block_bytes(eof_test_block()), eof_rip(eof_at_test())),
-    jz_at: CodeResident(io_fetch_access(), memory, near_control_bytes(JumpZeroNear(ed)), eof_rip(eof_at_jz())),
+    jz_at: CodeResident(io_fetch_access(), memory, near_control_bytes(JumpZeroNear(jumps.ed)), eof_rip(eof_at_jz())),
+    js_at: CodeResident(io_fetch_access(), memory, near_control_bytes(JumpSignNear(jumps.sd)), eof_rip(eof_at_js())),
     setup_at: CodeResident(io_fetch_access(), memory, canonical_block_bytes(eof_setup_block(needle)), eof_rip(eof_at_setup())),
     loop_at: CodeResident(io_fetch_access(), memory, loop_bytes, eof_rip(eof_at_loop(needle))),
     save_at: CodeResident(io_fetch_access(), memory, canonical_block_bytes(eof_save_block()), eof_rip(eof_at_save(needle, loop_bytes))),
-    jmp_at: CodeResident(io_fetch_access(), memory, near_control_bytes(JumpNear(bd)), eof_rip(eof_at_jmp(needle, loop_bytes))),
+    jmp_at: CodeResident(io_fetch_access(), memory, near_control_bytes(JumpNear(jumps.bd)), eof_rip(eof_at_jmp(needle, loop_bytes))),
+    retry_at: CodeResident(io_fetch_access(), memory, canonical_block_bytes(eof_retry_block()), eof_rip(eof_at_failed(needle, loop_bytes))),
+    retry_jz_at: CodeResident(io_fetch_access(), memory, near_control_bytes(JumpZeroNear(jumps.rd)), eof_rip(eof_at_retry(needle, loop_bytes))),
+    fail_at: CodeResident(io_fetch_access(), memory, canonical_block_bytes(eof_fail_block()), eof_rip(eof_at_fail(needle, loop_bytes))),
+    fail_call_at: CodeResident(io_fetch_access(), memory, linux_syscall_bytes(), eof_rip(eof_at_fail_call(needle, loop_bytes))),
     tail_at: CodeResident(io_fetch_access(), memory, tail, eof_rip(eof_at_done(needle, loop_bytes))),
 }
 
-theorem eof_pieces(memory: IoMemory, needle: BitVec(8), loop_bytes: List<BitVec(8)>, ed, bd: BitVec(32), tail: List<BitVec(8)>,
-    resident: CodeResident(io_fetch_access(), memory, eof_code(needle, loop_bytes, ed, bd, tail), BitVec::ofNat(0x4000e8))):
-    EofPieces(memory, needle, loop_bytes, ed, bd, tail) {
+theorem eof_pieces(memory: IoMemory, needle: BitVec(8), loop_bytes: List<BitVec(8)>, jumps: EofJumps, tail: List<BitVec(8)>,
+    resident: CodeResident(io_fetch_access(), memory, eof_code(needle, loop_bytes, jumps, tail), BitVec::ofNat(0x4000e8))):
+    EofPieces(memory, needle, loop_bytes, jumps, tail) {
     let fetch = io_fetch_access();
     let entry: BitVec(64) = BitVec::ofNat(0x4000e8);
     let i = canonical_block_bytes(eof_init_block());
     let e = canonical_block_bytes(read_entry_block());
     let call = linux_syscall_bytes();
     let t = canonical_block_bytes(eof_test_block());
-    let z = near_control_bytes(JumpZeroNear(ed));
+    let z = near_control_bytes(JumpZeroNear(jumps.ed));
+    let sg = near_control_bytes(JumpSignNear(jumps.sd));
     let s = canonical_block_bytes(eof_setup_block(needle));
     let v = canonical_block_bytes(eof_save_block());
-    let b = near_control_bytes(JumpNear(bd));
-    let r0 = resident_split_at(fetch, memory, i, e ++ (call ++ (t ++ (z ++ (s ++ (loop_bytes ++ (v ++ (b ++ tail))))))), entry, 0, resident);
-    let r1 = resident_split_at(fetch, memory, e, call ++ (t ++ (z ++ (s ++ (loop_bytes ++ (v ++ (b ++ tail)))))), entry, eof_at_read(), r0.right);
-    let r2 = resident_split_at(fetch, memory, call, t ++ (z ++ (s ++ (loop_bytes ++ (v ++ (b ++ tail))))), entry, eof_at_call(), r1.right);
-    let r3 = resident_split_at(fetch, memory, t, z ++ (s ++ (loop_bytes ++ (v ++ (b ++ tail)))), entry, eof_at_test(), r2.right);
-    let r4 = resident_split_at(fetch, memory, z, s ++ (loop_bytes ++ (v ++ (b ++ tail))), entry, eof_at_jz(), r3.right);
-    let r5 = resident_split_at(fetch, memory, s, loop_bytes ++ (v ++ (b ++ tail)), entry, eof_at_setup(), r4.right);
-    let r6 = resident_split_at(fetch, memory, loop_bytes, v ++ (b ++ tail), entry, eof_at_loop(needle), r5.right);
-    let r7 = resident_split_at(fetch, memory, v, b ++ tail, entry, eof_at_save(needle, loop_bytes), r6.right);
-    let r8 = resident_split_at(fetch, memory, b, tail, entry, eof_at_jmp(needle, loop_bytes), r7.right);
-    EofPieces(r0.left, r1.left, r2.left, r3.left, r4.left, r5.left, r6.left, r7.left, r8.left, r8.right)
+    let b = near_control_bytes(JumpNear(jumps.bd));
+    let rt = canonical_block_bytes(eof_retry_block());
+    let rz = near_control_bytes(JumpZeroNear(jumps.rd));
+    let f = canonical_block_bytes(eof_fail_block());
+    let after_jmp = rt ++ (rz ++ (f ++ (call ++ tail)));
+    let r0 = resident_split_at(fetch, memory, i, e ++ (call ++ (t ++ (z ++ (sg ++ (s ++ (loop_bytes ++ (v ++ (b ++ after_jmp)))))))), entry, 0, resident);
+    let r1 = resident_split_at(fetch, memory, e, call ++ (t ++ (z ++ (sg ++ (s ++ (loop_bytes ++ (v ++ (b ++ after_jmp))))))), entry, eof_at_read(), r0.right);
+    let r2 = resident_split_at(fetch, memory, call, t ++ (z ++ (sg ++ (s ++ (loop_bytes ++ (v ++ (b ++ after_jmp)))))), entry, eof_at_call(), r1.right);
+    let r3 = resident_split_at(fetch, memory, t, z ++ (sg ++ (s ++ (loop_bytes ++ (v ++ (b ++ after_jmp))))), entry, eof_at_test(), r2.right);
+    let r4 = resident_split_at(fetch, memory, z, sg ++ (s ++ (loop_bytes ++ (v ++ (b ++ after_jmp)))), entry, eof_at_jz(), r3.right);
+    let r4s = resident_split_at(fetch, memory, sg, s ++ (loop_bytes ++ (v ++ (b ++ after_jmp))), entry, eof_at_js(), r4.right);
+    let r5 = resident_split_at(fetch, memory, s, loop_bytes ++ (v ++ (b ++ after_jmp)), entry, eof_at_setup(), r4s.right);
+    let r6 = resident_split_at(fetch, memory, loop_bytes, v ++ (b ++ after_jmp), entry, eof_at_loop(needle), r5.right);
+    let r7 = resident_split_at(fetch, memory, v, b ++ after_jmp, entry, eof_at_save(needle, loop_bytes), r6.right);
+    let r8 = resident_split_at(fetch, memory, b, after_jmp, entry, eof_at_jmp(needle, loop_bytes), r7.right);
+    let r9 = resident_split_at(fetch, memory, rt, rz ++ (f ++ (call ++ tail)), entry, eof_at_failed(needle, loop_bytes), r8.right);
+    let r10 = resident_split_at(fetch, memory, rz, f ++ (call ++ tail), entry, eof_at_retry(needle, loop_bytes), r9.right);
+    let r11 = resident_split_at(fetch, memory, f, call ++ tail, entry, eof_at_fail(needle, loop_bytes), r10.right);
+    let r12 = resident_split_at(fetch, memory, call, tail, entry, eof_at_fail_call(needle, loop_bytes), r11.right);
+    EofPieces(r0.left, r1.left, r2.left, r3.left, r4.left, r4s.left, r5.left, r6.left, r7.left, r8.left,
+        r9.left, r10.left, r11.left, r12.left, r12.right)
 }
 
 theorem nth_some_below<A>(xs: List<A>, i: Nat, x: A, present: xs.nth(i) = Some(x)): i < xs.len() {
@@ -275,18 +312,35 @@ theorem eof_test_clear(returned: MachineState<IoMemory>, n: Nat, below: n < Nat:
     j(sym(length_word), λ w _ => is_zero_bits(64, w.band(w)) = False, test_self_nonzero(64, n_word, positive))
 }
 
-// TEST RAX, RAX and JZ to the tail, not taken: the chunk is not empty.
-theorem eof_enter(file: List<BitVec(8)>, page: Nat → BitVec(8), ed: BitVec(32), at_test: Nat, bytes: List<BitVec(8)>,
-    some: 0 < bytes.len(), below: bytes.len() < Nat::pow(2, 64), returned: MachineState<IoMemory>,
+theorem eof_test_count(returned: MachineState<IoMemory>, n: Nat, fits: n <= 4096,
+    length_word: read_gpr(Rax, returned.gprs) = bitvec_nat::word_of_nat(64, n)):
+    execute_block_normal(eof_test_block(), returned).flags.sf = False {
+    let n_word = bitvec_nat::word_of_nat(64, n);
+    let value: (n_word.toNat() = n) = bitvec_nat::toNat_word_of_nat(64, n, { omega });
+    j(sym(length_word), λ w _ => w.band(w).sign_bit() = False, test_self_nonnegative(n_word, { omega }))
+}
+
+// The chunk's steps: after entry at `going`, what the jumps passed.
+fn EofEntered(returned, going: MachineState<IoMemory>, stored: IoMemory, at: BitVec(64)) → Type {
+    FetchedSteps(io_fetch_access(), io_data_access(), returned, going) ∧ ((going.memory = stored) ∧ (going.rip = at))
+}
+
+// TEST RAX, RAX, then JZ to the tail and JS to the failure path, neither
+// taken: the chunk is not empty, and a count is not an error.
+theorem eof_enter(file: List<BitVec(8)>, page: Nat → BitVec(8), ed, sd: BitVec(32), at_test: Nat, bytes: List<BitVec(8)>,
+    some: 0 < bytes.len(), fits: bytes.len() <= 4096, returned: MachineState<IoMemory>,
     memory_is: returned.memory = io_store_offset(IoMemory(file, page), 0, bytes),
     rip_is: returned.rip = eof_rip(at_test),
     length_word: read_gpr(Rax, returned.gprs) = bitvec_nat::word_of_nat(64, bytes.len()),
     test_at: CodeResident(io_fetch_access(), io_store_offset(IoMemory(file, page), 0, bytes),
         canonical_block_bytes(eof_test_block()), eof_rip(at_test)),
     jz_at: CodeResident(io_fetch_access(), io_store_offset(IoMemory(file, page), 0, bytes),
-        near_control_bytes(JumpZeroNear(ed)), eof_rip(at_test + eof_test_len()))):
-    FetchedSteps(io_fetch_access(), io_data_access(), returned, execute_near_control(JumpZeroNear(ed), execute_block_normal(eof_test_block(), returned))) ∧
-    (execute_near_control(JumpZeroNear(ed), execute_block_normal(eof_test_block(), returned)).rip = eof_rip((at_test + eof_test_len()) + 6)) {
+        near_control_bytes(JumpZeroNear(ed)), eof_rip(at_test + eof_test_len())),
+    js_at: CodeResident(io_fetch_access(), io_store_offset(IoMemory(file, page), 0, bytes),
+        near_control_bytes(JumpSignNear(sd)), eof_rip((at_test + eof_test_len()) + 6))):
+    EofEntered(returned,
+        execute_near_control(JumpSignNear(sd), execute_near_control(JumpZeroNear(ed), execute_block_normal(eof_test_block(), returned))),
+        io_store_offset(IoMemory(file, page), 0, bytes), eof_rip(((at_test + eof_test_len()) + 6) + 6)) {
     let fetch = io_fetch_access();
     let data = io_data_access();
     let entry: BitVec(64) = BitVec::ofNat(0x4000e8);
@@ -297,12 +351,20 @@ theorem eof_enter(file: List<BitVec(8)>, page: Nat → BitVec(8), ed: BitVec(32)
     let tested = execute_block_normal(eof_test_block(), returned);
     let tested_memory: (tested.memory = stored) = trans(pure_block_memory(eof_test_block(), returned), memory_is);
     let tested_rip: (tested.rip = eof_rip(at_jz)) = trans(test.right, rip_advance(entry, returned.rip, at_test, eof_test_len(), rip_is));
+    let below: (bytes.len() < Nat::pow(2, 64)) = omega;
     let clear = eof_test_clear(returned, bytes.len(), below, some, length_word);
+    let positive = eof_test_count(returned, bytes.len(), fits, length_word);
     let jz = near_fetched_step(fetch, data, JumpZeroNear(ed), tested,
         resident_state(fetch, near_control_bytes(JumpZeroNear(ed)), stored, eof_rip(at_jz), tested, tested_memory, tested_rip, jz_at));
-    let going = execute_near_control(JumpZeroNear(ed), tested);
-    ⟨fetched_steps_trans(fetch, data, returned, tested, going, test.left, fetched_steps_one(fetch, data, tested, going, jz)),
-     trans(near_not_taken_rip(ed, tested, clear), rip_advance(entry, tested.rip, at_jz, 6, tested_rip))⟩
+    let passed = execute_near_control(JumpZeroNear(ed), tested);
+    let passed_rip: (passed.rip = eof_rip(at_jz + 6)) = trans(near_not_taken_rip(ed, tested, clear), rip_advance(entry, tested.rip, at_jz, 6, tested_rip));
+    let js = near_fetched_step(fetch, data, JumpSignNear(sd), passed,
+        resident_state(fetch, near_control_bytes(JumpSignNear(sd)), stored, eof_rip(at_jz + 6), passed, tested_memory, passed_rip, js_at));
+    let going = execute_near_control(JumpSignNear(sd), passed);
+    ⟨fetched_steps_trans(fetch, data, returned, tested, going, test.left,
+        fetched_steps_trans(fetch, data, tested, passed, going, fetched_steps_one(fetch, data, tested, passed, jz),
+            fetched_steps_one(fetch, data, passed, going, js))),
+     ⟨tested_memory, trans(near_sign_not_taken_rip(sd, passed, positive), rip_advance(entry, passed.rip, at_jz + 6, 6, passed_rip))⟩⟩
 }
 
 // The chunk's close: keep the count across the next SYSCALL and jump back to
@@ -344,8 +406,8 @@ theorem eof_chunk(file: List<BitVec(8)>, page: Nat → BitVec(8), p: LoopPlaceme
         loop_run(budget, region, buffer, needle, cursor, carry) = source(buffer, needle, budget, cursor, carry),
     native: ReadLoopCertificate(p, region, loop_code, loop_bytes, source),
     computes: ReadEofComputes(source, needle, spec),
-    ed, bd: BitVec(32), at_read, at_test: Nat,
-    back_target: near_branch_target(eof_rip((((((at_test + eof_test_len()) + 6) + eof_setup_len(needle)) + loop_bytes.len()) + eof_save_len())), 5, bd)
+    ed, sd, bd: BitVec(32), at_read, at_test: Nat,
+    back_target: near_branch_target(eof_rip(((((((at_test + eof_test_len()) + 6) + 6) + eof_setup_len(needle)) + loop_bytes.len()) + eof_save_len())), 5, bd)
         = eof_rip(at_read),
     bytes: List<BitVec(8)>, some: 0 < bytes.len(), fits: bytes.len() <= read_capacity(), carry: Nat,
     room: carry + bytes.len() < Nat::pow(2, 64), returned: MachineState<IoMemory>,
@@ -357,44 +419,76 @@ theorem eof_chunk(file: List<BitVec(8)>, page: Nat → BitVec(8), p: LoopPlaceme
         canonical_block_bytes(eof_test_block()), eof_rip(at_test)),
     jz_at: CodeResident(io_fetch_access(), io_store_offset(IoMemory(file, page), 0, bytes),
         near_control_bytes(JumpZeroNear(ed)), eof_rip(at_test + eof_test_len())),
+    js_at: CodeResident(io_fetch_access(), io_store_offset(IoMemory(file, page), 0, bytes),
+        near_control_bytes(JumpSignNear(sd)), eof_rip((at_test + eof_test_len()) + 6)),
     setup_at: CodeResident(io_fetch_access(), io_store_offset(IoMemory(file, page), 0, bytes),
-        canonical_block_bytes(eof_setup_block(needle)), eof_rip((at_test + eof_test_len()) + 6)),
+        canonical_block_bytes(eof_setup_block(needle)), eof_rip(((at_test + eof_test_len()) + 6) + 6)),
     loop_at: CodeResident(io_fetch_access(), io_store_offset(IoMemory(file, page), 0, bytes),
-        loop_bytes, eof_rip(((at_test + eof_test_len()) + 6) + eof_setup_len(needle))),
+        loop_bytes, eof_rip((((at_test + eof_test_len()) + 6) + 6) + eof_setup_len(needle))),
     save_at: CodeResident(io_fetch_access(), io_store_offset(IoMemory(file, page), 0, bytes),
-        canonical_block_bytes(eof_save_block()), eof_rip((((at_test + eof_test_len()) + 6) + eof_setup_len(needle)) + loop_bytes.len())),
+        canonical_block_bytes(eof_save_block()), eof_rip(((((at_test + eof_test_len()) + 6) + 6) + eof_setup_len(needle)) + loop_bytes.len())),
     jmp_at: CodeResident(io_fetch_access(), io_store_offset(IoMemory(file, page), 0, bytes),
-        near_control_bytes(JumpNear(bd)), eof_rip(((((at_test + eof_test_len()) + 6) + eof_setup_len(needle)) + loop_bytes.len()) + eof_save_len()))):
+        near_control_bytes(JumpNear(bd)), eof_rip((((((at_test + eof_test_len()) + 6) + 6) + eof_setup_len(needle)) + loop_bytes.len()) + eof_save_len()))):
     EofBack(returned, io_store_offset(IoMemory(file, page), 0, bytes), carry + spec(bytes), eof_rip(at_read)) {
     let fetch = io_fetch_access();
     let data = io_data_access();
     let entry: BitVec(64) = BitVec::ofNat(0x4000e8);
     let stored = io_store_offset(IoMemory(file, page), 0, bytes);
-    let at_setup = (at_test + eof_test_len()) + 6;
+    let at_setup = ((at_test + eof_test_len()) + 6) + 6;
     let at_save = (at_setup + eof_setup_len(needle)) + loop_bytes.len();
-    let below: (bytes.len() < Nat::pow(2, 64)) = omega;
-    let entered = eof_enter(file, page, ed, at_test, bytes, some, below, returned, memory_is, rip_is, length_word, test_at, jz_at);
-    let going = execute_near_control(JumpZeroNear(ed), execute_block_normal(eof_test_block(), returned));
+    let entered = eof_enter(file, page, ed, sd, at_test, bytes, some, fits, returned, memory_is, rip_is, length_word, test_at, jz_at, js_at);
+    let going = execute_near_control(JumpSignNear(sd), execute_near_control(JumpZeroNear(ed), execute_block_normal(eof_test_block(), returned)));
     eof_chunk_close(returned, going, stored, carry + spec(bytes), bd, at_save, at_read, back_target, entered.left,
         eof_counts(file, page, p, at, region, loop_code, loop_bytes, source, needle, spec, agreement, native, computes,
-            bytes, fits, carry, room, going, at_setup, trans(pure_block_memory(eof_test_block(), returned), memory_is), entered.right,
+            bytes, fits, carry, room, going, at_setup, entered.right.left, entered.right.right,
             length_word, carry_word, setup_at, loop_at),
         save_at, jmp_at)
 }
 
-// What the reads return: each chunk, then the empty read at end of file.
-fn eof_events(chunks: List<List<BitVec(8)>>, tail: List<LinuxEvent>) → List<LinuxEvent> {
-    match chunks {
-        Nil => Cons(ReadEvent(BitVec::ofNat(0), Nil), tail),
-        Cons(chunk, rest) => Cons(ReadEvent(BitVec::ofNat(0), chunk), eof_events(rest, tail)),
+// What the reads return, in order: chunks, and EINTRs that are retried; then
+// how the reading ended, at the empty read or at a failure other than EINTR.
+inductive ReadStep {
+    Chunk(bytes: List<BitVec(8)>),
+    Interrupted,
+}
+inductive ReadEnding {
+    AtEnd,
+    FailedWith(errno: Nat),
+}
+
+// The trace of the reads: at end of file the tail follows; a failed read
+// exits 1.
+fn eof_events(steps: List<ReadStep>, ending: ReadEnding, tail: List<LinuxEvent>) → List<LinuxEvent> {
+    match steps {
+        Nil => match ending {
+            AtEnd => Cons(ReadEvent(BitVec::ofNat(0), ReadBytes(Nil)), tail),
+            FailedWith(errno) => [ReadEvent(BitVec::ofNat(0), ReadFailed(errno)), ExitEvent(BitVec::ofNat(1))],
+        },
+        Cons(step, rest) => match step {
+            Chunk(chunk) => Cons(ReadEvent(BitVec::ofNat(0), ReadBytes(chunk)), eof_events(rest, ending, tail)),
+            Interrupted => Cons(ReadEvent(BitVec::ofNat(0), ReadFailed(eintr())), eof_events(rest, ending, tail)),
+        },
     }
 }
-fn eof_input(chunks: List<List<BitVec(8)>>) → List<BitVec(8)> {
-    match chunks { Nil => Nil, Cons(chunk, rest) => chunk ++ eof_input(rest) }
+fn eof_input(steps: List<ReadStep>) → List<BitVec(8)> {
+    match steps {
+        Nil => Nil,
+        Cons(step, rest) => match step { Chunk(chunk) => chunk ++ eof_input(rest), Interrupted => eof_input(rest) },
+    }
 }
 // A read before end of file returns at least one byte, and at most the page.
-fn EofChunks(chunks: List<List<BitVec(8)>>) → Type {
-    match chunks { Nil => True, Cons(chunk, rest) => (0 < chunk.len()) ∧ ((chunk.len() <= read_capacity()) ∧ EofChunks(rest)) }
+fn EofChunks(steps: List<ReadStep>) → Type {
+    match steps {
+        Nil => True,
+        Cons(step, rest) => match step {
+            Chunk(chunk) => (0 < chunk.len()) ∧ ((chunk.len() <= read_capacity()) ∧ EofChunks(rest)),
+            Interrupted => EofChunks(rest),
+        },
+    }
+}
+// A failure that ends the reading is an errno, and not EINTR, which retries.
+fn EofEnding(ending: ReadEnding) → Type {
+    match ending { AtEnd => True, FailedWith(errno) => Errno(errno) ∧ Not(errno = eintr()) }
 }
 
 fn EofTail(file: List<BitVec(8)>, needle: BitVec(8), loop_bytes: List<BitVec(8)>, total: Nat, events: List<LinuxEvent>) → Type {
@@ -408,8 +502,171 @@ theorem eof_room(carry, len, first, rest, total: Nat, sum: carry + (first + rest
     room: total + 4096 < Nat::pow(2, 64)): carry + len < Nat::pow(2, 64) { omega }
 theorem eof_later(carry, first, rest, total: Nat, sum: carry + (first + rest) = total): carry + first + rest = total { omega }
 
-// The loop, by recursion on the chunks: from the read with the count so far in
-// R13, every chunk is read and counted, the empty read ends it, and the tail runs.
+// ---------------------------------------------------------------------------
+// A failed read.
+
+// From the read's return with a negated errno in RAX: TEST, JZ not taken, JS
+// taken, the retry test. The total in R13 is untouched.
+fn EofFailedAt(returned: MachineState<IoMemory>, stored: IoMemory, errno: Nat, at: BitVec(64)) → Type {
+    Exists<MachineState<IoMemory>>(λ fixed => FetchedSteps(io_fetch_access(), io_data_access(), returned, fixed) ∧
+        ((fixed.memory = stored) ∧ ((fixed.rip = at) ∧
+        ((fixed.flags.zf = is_zero_bits(64, errno_word(errno).add(BitVec::ofNat(4)))) ∧
+        (read_gpr(R13, fixed.gprs) = read_gpr(R13, returned.gprs))))))
+}
+
+theorem eof_failed(stored: IoMemory, needle: BitVec(8), loop_bytes: List<BitVec(8)>, jumps: EofJumps, tail_code: List<BitVec(8)>,
+    pieces: EofPieces(stored, needle, loop_bytes, jumps, tail_code),
+    js_target: near_branch_target(eof_rip(eof_at_js()), 6, jumps.sd) = eof_rip(eof_at_failed(needle, loop_bytes)),
+    errno: Nat, error: Errno(errno), returned: MachineState<IoMemory>,
+    memory_is: returned.memory = stored, rip_is: returned.rip = eof_rip(eof_at_test()),
+    rax: read_gpr(Rax, returned.gprs) = errno_word(errno)):
+    EofFailedAt(returned, stored, errno, eof_rip(eof_at_retry(needle, loop_bytes))) {
+    let fetch = io_fetch_access();
+    let data = io_data_access();
+    let entry: BitVec(64) = BitVec::ofNat(0x4000e8);
+    let w = errno_word(errno);
+    let test = block_fetched(fetch, data, eof_test_block(), returned, trivial,
+        resident_state(fetch, canonical_block_bytes(eof_test_block()), stored, eof_rip(eof_at_test()), returned, memory_is, rip_is,
+            pieces.test_at));
+    let tested = execute_block_normal(eof_test_block(), returned);
+    let tested_memory: (tested.memory = stored) = trans(pure_block_memory(eof_test_block(), returned), memory_is);
+    let tested_rip: (tested.rip = eof_rip(eof_at_jz())) =
+        trans(test.right, rip_advance(entry, returned.rip, eof_at_test(), eof_test_len(), rip_is));
+    let nonzero: (tested.flags.zf = False) =
+        j(sym(rax), λ v _ => is_zero_bits(64, v.band(v)) = False, test_self_nonzero(64, w, errno_nonzero(errno, error)));
+    let negative: (tested.flags.sf = True) =
+        j(sym(rax), λ v _ => v.band(v).sign_bit() = True, test_self_negative(w, errno_negative(errno, error)));
+    let jz = near_fetched_step(fetch, data, JumpZeroNear(jumps.ed), tested,
+        resident_state(fetch, near_control_bytes(JumpZeroNear(jumps.ed)), stored, eof_rip(eof_at_jz()), tested, tested_memory, tested_rip,
+            pieces.jz_at));
+    let passed = execute_near_control(JumpZeroNear(jumps.ed), tested);
+    let passed_rip: (passed.rip = eof_rip(eof_at_js())) =
+        trans(near_not_taken_rip(jumps.ed, tested, nonzero), rip_advance(entry, tested.rip, eof_at_jz(), 6, tested_rip));
+    let js = near_fetched_step(fetch, data, JumpSignNear(jumps.sd), passed,
+        resident_state(fetch, near_control_bytes(JumpSignNear(jumps.sd)), stored, eof_rip(eof_at_js()), passed, tested_memory, passed_rip,
+            pieces.js_at));
+    let failing = execute_near_control(JumpSignNear(jumps.sd), passed);
+    let failing_rip: (failing.rip = eof_rip(eof_at_failed(needle, loop_bytes))) =
+        trans(near_sign_taken_rip(jumps.sd, passed, negative),
+            trans(cong_fn<BitVec(64), BitVec(64)>(λ address => near_branch_target(address, 6, jumps.sd), passed_rip), js_target));
+    let retry = block_fetched(fetch, data, eof_retry_block(), failing, trivial,
+        resident_state(fetch, canonical_block_bytes(eof_retry_block()), stored, eof_rip(eof_at_failed(needle, loop_bytes)), failing,
+            tested_memory, failing_rip, pieces.retry_at));
+    let fixed = execute_block_normal(eof_retry_block(), failing);
+    let fixed_memory: (fixed.memory = stored) = trans(pure_block_memory(eof_retry_block(), failing), tested_memory);
+    let fixed_rip: (fixed.rip = eof_rip(eof_at_retry(needle, loop_bytes))) =
+        trans(retry.right, rip_advance(entry, failing.rip, eof_at_failed(needle, loop_bytes), eof_retry_len(), failing_rip));
+    let flag: (fixed.flags.zf = is_zero_bits(64, w.add(BitVec::ofNat(4)))) =
+        cong_fn<BitVec(64), Bool>(λ v => is_zero_bits(64, v.add(BitVec::ofNat(4))), rax);
+    Exists(fixed, ⟨fetched_steps_trans(fetch, data, returned, tested, fixed, test.left,
+            fetched_steps_trans(fetch, data, tested, passed, fixed, fetched_steps_one(fetch, data, tested, passed, jz),
+                fetched_steps_trans(fetch, data, passed, failing, fixed, fetched_steps_one(fetch, data, passed, failing, js), retry.left))),
+        ⟨fixed_memory, ⟨fixed_rip, ⟨flag, refl⟩⟩⟩⟩)
+}
+
+// Back at the read with the total kept: what EINTR's retry reaches.
+fn EofRetried(returned: MachineState<IoMemory>, stored: IoMemory, at: BitVec(64)) → Type {
+    Exists<MachineState<IoMemory>>(λ back => FetchedSteps(io_fetch_access(), io_data_access(), returned, back) ∧
+        ((back.memory = stored) ∧ ((back.rip = at) ∧ (read_gpr(R13, back.gprs) = read_gpr(R13, returned.gprs)))))
+}
+
+theorem eof_retry(stored: IoMemory, needle: BitVec(8), loop_bytes: List<BitVec(8)>, jumps: EofJumps, tail_code: List<BitVec(8)>,
+    pieces: EofPieces(stored, needle, loop_bytes, jumps, tail_code),
+    retry_target: near_branch_target(eof_rip(eof_at_retry(needle, loop_bytes)), 6, jumps.rd) = eof_rip(eof_at_read()),
+    returned: MachineState<IoMemory>, failed: EofFailedAt(returned, stored, eintr(), eof_rip(eof_at_retry(needle, loop_bytes)))):
+    EofRetried(returned, stored, eof_rip(eof_at_read())) {
+    let fetch = io_fetch_access();
+    let data = io_data_access();
+    let fixed = failed.witness;
+    let set: (fixed.flags.zf = True) = trans(failed.proof.right.right.right.left, eintr_plus_four());
+    let jz = near_fetched_step(fetch, data, JumpZeroNear(jumps.rd), fixed,
+        resident_state(fetch, near_control_bytes(JumpZeroNear(jumps.rd)), stored, eof_rip(eof_at_retry(needle, loop_bytes)), fixed,
+            failed.proof.right.left, failed.proof.right.right.left, pieces.retry_jz_at));
+    let back = execute_near_control(JumpZeroNear(jumps.rd), fixed);
+    let back_rip: (back.rip = eof_rip(eof_at_read())) =
+        trans(near_taken_rip(jumps.rd, fixed, set),
+            trans(cong_fn<BitVec(64), BitVec(64)>(λ address => near_branch_target(address, 6, jumps.rd), failed.proof.right.right.left),
+                retry_target));
+    Exists(back, ⟨fetched_steps_trans(fetch, data, returned, fixed, back, failed.proof.left, fetched_steps_one(fetch, data, fixed, back, jz)),
+        ⟨failed.proof.right.left, ⟨back_rip, failed.proof.right.right.right.right⟩⟩⟩)
+}
+
+// Any other errno: exit(1).
+theorem eof_fail_exit(stored: IoMemory, needle: BitVec(8), loop_bytes: List<BitVec(8)>, jumps: EofJumps, tail_code: List<BitVec(8)>,
+    pieces: EofPieces(stored, needle, loop_bytes, jumps, tail_code),
+    errno: Nat, error: Errno(errno), other: Not(errno = eintr()),
+    returned: MachineState<IoMemory>, failed: EofFailedAt(returned, stored, errno, eof_rip(eof_at_retry(needle, loop_bytes)))):
+    LinuxRuns(io_linux(), [ExitEvent(BitVec::ofNat(1))], returned) {
+    let fetch = io_fetch_access();
+    let data = io_data_access();
+    let entry: BitVec(64) = BitVec::ofNat(0x4000e8);
+    let fixed = failed.witness;
+    let fixed_memory: (fixed.memory = stored) = failed.proof.right.left;
+    let fixed_rip: (fixed.rip = eof_rip(eof_at_retry(needle, loop_bytes))) = failed.proof.right.right.left;
+    let clear: (fixed.flags.zf = False) = trans(failed.proof.right.right.right.left, other_errno_plus_four(errno, error, other));
+    let jz = near_fetched_step(fetch, data, JumpZeroNear(jumps.rd), fixed,
+        resident_state(fetch, near_control_bytes(JumpZeroNear(jumps.rd)), stored, eof_rip(eof_at_retry(needle, loop_bytes)), fixed,
+            fixed_memory, fixed_rip, pieces.retry_jz_at));
+    let going = execute_near_control(JumpZeroNear(jumps.rd), fixed);
+    let going_rip: (going.rip = eof_rip(eof_at_fail(needle, loop_bytes))) =
+        trans(near_not_taken_rip(jumps.rd, fixed, clear), rip_advance(entry, fixed.rip, eof_at_retry(needle, loop_bytes), 6, fixed_rip));
+    let exiting = block_fetched(fetch, data, eof_fail_block(), going, trivial,
+        resident_state(fetch, canonical_block_bytes(eof_fail_block()), stored, eof_rip(eof_at_fail(needle, loop_bytes)), going,
+            fixed_memory, going_rip, pieces.fail_at));
+    let last = execute_block_normal(eof_fail_block(), going);
+    let last_memory: (last.memory = stored) = trans(pure_block_memory(eof_fail_block(), going), fixed_memory);
+    let last_rip: (last.rip = eof_rip(eof_at_fail_call(needle, loop_bytes))) =
+        trans(exiting.right, rip_advance(entry, going.rip, eof_at_fail(needle, loop_bytes), eof_fail_len(), going_rip));
+    let call: LinuxSyscallAt(io_linux(), last) = FetchedFrom(resident_readable(fetch, last.memory, linux_syscall_bytes(), last.rip,
+        resident_state(fetch, linux_syscall_bytes(), stored, eof_rip(eof_at_fail_call(needle, loop_bytes)), last, last_memory, last_rip,
+            pieces.fail_call_at)));
+    linux_runs_exit(io_linux(), returned, last, BitVec::ofNat(1),
+        fetched_steps_trans(fetch, data, returned, fixed, last, failed.proof.left,
+            fetched_steps_trans(fetch, data, fixed, going, last, fetched_steps_one(fetch, data, fixed, going, jz), exiting.left)),
+        call, refl, refl)
+}
+
+// ---------------------------------------------------------------------------
+// The loop.
+
+// From the read with the count so far in R13, the rest of the run.
+fn EofFrom(file: List<BitVec(8)>, spec: List<BitVec(8)> → Nat, total: Nat, ending: ReadEnding, tail_events: List<LinuxEvent>,
+    steps: List<ReadStep>) → Type {
+    EofChunks(steps) → (page: Nat → BitVec(8)) → (carry: Nat) → (state: MachineState<IoMemory>) →
+    state.rip = eof_rip(eof_at_read()) → state.memory = IoMemory(file, page) →
+    read_gpr(R13, state.gprs) = bitvec_nat::word_of_nat(64, carry) → carry + spec(eof_input(steps)) = total →
+    LinuxRuns(io_linux(), eof_events(steps, ending, tail_events), state)
+}
+
+// The read, from the read label: the entry block runs, and the SYSCALL is
+// fetched where the next step starts.
+fn EofAsked(file: List<BitVec(8)>, page: Nat → BitVec(8), state: MachineState<IoMemory>) → Type {
+    FetchedSteps(io_fetch_access(), io_data_access(), state, execute_block_normal(read_entry_block(), state)) ∧
+    ((execute_block_normal(read_entry_block(), state).memory = IoMemory(file, page)) ∧
+    ((execute_block_normal(read_entry_block(), state).rip = eof_rip(eof_at_call())) ∧
+    LinuxSyscallAt(io_linux(), execute_block_normal(read_entry_block(), state))))
+}
+theorem eof_ask(file: List<BitVec(8)>, needle: BitVec(8), loop_bytes: List<BitVec(8)>, jumps: EofJumps, tail_code: List<BitVec(8)>,
+    page: Nat → BitVec(8), here: EofPieces(IoMemory(file, page), needle, loop_bytes, jumps, tail_code),
+    state: MachineState<IoMemory>, at_read: state.rip = eof_rip(eof_at_read()), memory_is: state.memory = IoMemory(file, page)):
+    EofAsked(file, page, state) {
+    let fetch = io_fetch_access();
+    let data = io_data_access();
+    let entry: BitVec(64) = BitVec::ofNat(0x4000e8);
+    let entered = block_fetched(fetch, data, read_entry_block(), state, trivial,
+        resident_state(fetch, canonical_block_bytes(read_entry_block()), IoMemory(file, page), eof_rip(eof_at_read()),
+            state, memory_is, at_read, here.entry_at));
+    let asked = execute_block_normal(read_entry_block(), state);
+    let asked_memory: (asked.memory = IoMemory(file, page)) = trans(pure_block_memory(read_entry_block(), state), memory_is);
+    let asked_rip: (asked.rip = eof_rip(eof_at_call())) =
+        trans(entered.right, rip_advance(entry, state.rip, eof_at_read(), read_entry_len(), at_read));
+    ⟨entered.left, ⟨asked_memory, ⟨asked_rip, FetchedFrom(resident_readable(fetch, asked.memory, linux_syscall_bytes(), asked.rip,
+        resident_state(fetch, linux_syscall_bytes(), IoMemory(file, page), eof_rip(eof_at_call()), asked,
+            asked_memory, asked_rip, here.call_at)))⟩⟩⟩
+}
+
+// The loop, by recursion on the steps: every chunk is read and counted, every
+// EINTR retried, and then the empty read runs the tail or the failure exits 1.
 theorem eof_from(file: List<BitVec(8)>, p: LoopPlacement, at: ReadLoopPlacement(p),
     region: ReadonlyLoop<Nat>, loop_code: AccessCode, loop_bytes: List<BitVec(8)>,
     source: ReadonlyBytes → BitVec(8) → Nat → Nat → Nat → LoopOutcome<Nat>, needle: BitVec(8), spec: List<BitVec(8)> → Nat,
@@ -418,25 +675,24 @@ theorem eof_from(file: List<BitVec(8)>, p: LoopPlacement, at: ReadLoopPlacement(
     native: ReadLoopCertificate(p, region, loop_code, loop_bytes, source),
     computes: ReadEofComputes(source, needle, spec),
     adds: (a, b: List<BitVec(8)>) → spec(a ++ b) = spec(a) + spec(b),
-    ed, bd: BitVec(32),
-    exit_target: near_branch_target(eof_rip(eof_at_jz()), 6, ed) = eof_rip(eof_at_done(needle, loop_bytes)),
-    back_target: near_branch_target(eof_rip(eof_at_jmp(needle, loop_bytes)), 5, bd) = eof_rip(eof_at_read()),
-    tail_code: List<BitVec(8)>, pieces: (page: Nat → BitVec(8)) → EofPieces(IoMemory(file, page), needle, loop_bytes, ed, bd, tail_code),
+    jumps: EofJumps,
+    exit_target: near_branch_target(eof_rip(eof_at_jz()), 6, jumps.ed) = eof_rip(eof_at_done(needle, loop_bytes)),
+    js_target: near_branch_target(eof_rip(eof_at_js()), 6, jumps.sd) = eof_rip(eof_at_failed(needle, loop_bytes)),
+    back_target: near_branch_target(eof_rip(eof_at_jmp(needle, loop_bytes)), 5, jumps.bd) = eof_rip(eof_at_read()),
+    retry_target: near_branch_target(eof_rip(eof_at_retry(needle, loop_bytes)), 6, jumps.rd) = eof_rip(eof_at_read()),
+    tail_code: List<BitVec(8)>, pieces: (page: Nat → BitVec(8)) → EofPieces(IoMemory(file, page), needle, loop_bytes, jumps, tail_code),
     total: Nat, room: total + 4096 < Nat::pow(2, 64), tail_events: List<LinuxEvent>,
-    tail: EofTail(file, needle, loop_bytes, total, tail_events), chunks: List<List<BitVec(8)>>):
-    EofChunks(chunks) → (page: Nat → BitVec(8)) → (carry: Nat) → (state: MachineState<IoMemory>) →
-    state.rip = eof_rip(eof_at_read()) → state.memory = IoMemory(file, page) →
-    read_gpr(R13, state.gprs) = bitvec_nat::word_of_nat(64, carry) → carry + spec(eof_input(chunks)) = total →
-    LinuxRuns(io_linux(), eof_events(chunks, tail_events), state) {
+    tail: EofTail(file, needle, loop_bytes, total, tail_events), ending: ReadEnding, ending_ok: EofEnding(ending),
+    chunks: List<ReadStep>):
+    EofFrom(file, spec, total, ending, tail_events, chunks) {
     let fetch = io_fetch_access();
     let data = io_data_access();
     let entry: BitVec(64) = BitVec::ofNat(0x4000e8);
     let spec_nil: (spec(Nil) = 0) = { let twice = adds(Nil, Nil); omega };
-    match chunks as λ cs => EofChunks(cs) → (page: Nat → BitVec(8)) → (carry: Nat) → (state: MachineState<IoMemory>) →
-            state.rip = eof_rip(eof_at_read()) → state.memory = IoMemory(file, page) →
-            read_gpr(R13, state.gprs) = bitvec_nat::word_of_nat(64, carry) → carry + spec(eof_input(cs)) = total →
-            LinuxRuns(io_linux(), eof_events(cs, tail_events), state) {
-        Nil => λ ok page carry state at_read memory_is carry_word counted => {
+    match chunks as λ cs => EofFrom(file, spec, total, ending, tail_events, cs) {
+        Nil => λ ok page carry state at_read memory_is carry_word counted =>
+            (match ending as λ en => EofEnding(en) → LinuxRuns(io_linux(), eof_events(Nil, en, tail_events), state) {
+                AtEnd => λ _ => {
             let here = pieces(page);
             let entered = block_fetched(fetch, data, read_entry_block(), state, trivial,
                 resident_state(fetch, canonical_block_bytes(read_entry_block()), IoMemory(file, page), eof_rip(eof_at_read()),
@@ -467,13 +723,13 @@ theorem eof_from(file: List<BitVec(8)>, p: LoopPlacement, at: ReadLoopPlacement(
                     let tested_rip: (tested.rip = eof_rip(eof_at_jz())) =
                         trans(test.right, rip_advance(entry, returned.rip, eof_at_test(), eof_test_len(), returned_rip));
                     let set: (tested.flags.zf = True) = test_self_zero(64, bitvec_nat::word_of_nat(64, 0), refl);
-                    let jz = near_fetched_step(fetch, data, JumpZeroNear(ed), tested,
-                        resident_state(fetch, near_control_bytes(JumpZeroNear(ed)), stored, eof_rip(eof_at_jz()), tested,
+                    let jz = near_fetched_step(fetch, data, JumpZeroNear(jumps.ed), tested,
+                        resident_state(fetch, near_control_bytes(JumpZeroNear(jumps.ed)), stored, eof_rip(eof_at_jz()), tested,
                             tested_memory, tested_rip, there.jz_at));
-                    let ended = execute_near_control(JumpZeroNear(ed), tested);
+                    let ended = execute_near_control(JumpZeroNear(jumps.ed), tested);
                     let ended_rip: (ended.rip = eof_rip(eof_at_done(needle, loop_bytes))) =
-                        trans(near_taken_rip(ed, tested, set),
-                            trans(cong_fn<BitVec(64), BitVec(64)>(λ address => near_branch_target(address, 6, ed), tested_rip), exit_target));
+                        trans(near_taken_rip(jumps.ed, tested, set),
+                            trans(cong_fn<BitVec(64), BitVec(64)>(λ address => near_branch_target(address, 6, jumps.ed), tested_rip), exit_target));
                     let finished: (carry = total) = { omega };
                     let kept: (read_gpr(R13, ended.gprs) = bitvec_nat::word_of_nat(64, total)) =
                         trans(carry_word, cong_fn<Nat, BitVec(64)>(λ n => bitvec_nat::word_of_nat(64, n), finished));
@@ -482,7 +738,29 @@ theorem eof_from(file: List<BitVec(8)>, p: LoopPlacement, at: ReadLoopPlacement(
                         tail(stored.page, ended, ended_rip, tested_memory, kept))
                 })
         },
-        Cons(chunk, rest) => λ ok page carry state at_read memory_is carry_word counted => {
+                FailedWith(errno) => λ bad => {
+                    let asked = execute_block_normal(read_entry_block(), state);
+                    let read = eof_ask(file, needle, loop_bytes, jumps, tail_code, page, pieces(page), state, at_read, memory_is);
+                    let writable: IoWritable(asked.memory, read_gpr(Rsi, asked.gprs), read_gpr(Rdx, asked.gprs).toNat()) =
+                        ⟨Nat::le_refl(io_page_base()), Nat::le_refl(io_page_base() + 4096)⟩;
+                    linux_runs_read_failed(io_linux(), state, asked, BitVec::ofNat(0), errno, [ExitEvent(BitVec::ofNat(1))],
+                        linux_steps_of_fetched(io_linux(), state, asked, read.left), read.right.right.right, refl, refl, bad.left, writable,
+                        λ junk short rcx r11 => {
+                            let returned = linux_read_failed_return(io_linux(), asked, errno, junk, rcx, r11);
+                            let stored = io_store_offset(IoMemory(file, page), 0, junk);
+                            let returned_memory: (returned.memory = stored) =
+                                cong_fn<IoMemory, IoMemory>(λ m => io_store(m, BitVec::ofNat(0x401000), junk), read.right.left);
+                            let returned_rip: (returned.rip = eof_rip(eof_at_test())) =
+                                rip_advance(entry, asked.rip, eof_at_call(), 2, read.right.right.left);
+                            let there = pieces(stored.page);
+                            eof_fail_exit(stored, needle, loop_bytes, jumps, tail_code, there, errno, bad.left, bad.right, returned,
+                                eof_failed(stored, needle, loop_bytes, jumps, tail_code, there, js_target, errno, bad.left, returned,
+                                    returned_memory, returned_rip, refl))
+                        })
+                },
+            })(ending_ok),
+        Cons(step, rest) => (match step as λ st => EofFrom(file, spec, total, ending, tail_events, Cons(st, rest)) {
+            Chunk(chunk) => λ ok page carry state at_read memory_is carry_word counted => {
             let here = pieces(page);
             let some: (0 < chunk.len()) = ok.left;
             let fits: (chunk.len() <= read_capacity()) = ok.right.left;
@@ -502,7 +780,7 @@ theorem eof_from(file: List<BitVec(8)>, p: LoopPlacement, at: ReadLoopPlacement(
                 trans(entered.right, rip_advance(entry, state.rip, eof_at_read(), read_entry_len(), at_read));
             let writable: IoWritable(asked.memory, read_gpr(Rsi, asked.gprs), chunk.len()) =
                 ⟨Nat::le_refl(io_page_base()), Nat::add_le_mono_l(io_page_base(), chunk.len(), 4096, fits)⟩;
-            linux_runs_read(io_linux(), state, asked, BitVec::ofNat(0), chunk, eof_events(rest, tail_events), entered.left,
+            linux_runs_read(io_linux(), state, asked, BitVec::ofNat(0), chunk, eof_events(rest, ending, tail_events), entered.left,
                 FetchedFrom(resident_readable(fetch, asked.memory, linux_syscall_bytes(), asked.rip,
                     resident_state(fetch, linux_syscall_bytes(), IoMemory(file, page), eof_rip(eof_at_call()), asked,
                         asked_memory, asked_rip, here.call_at))),
@@ -515,41 +793,97 @@ theorem eof_from(file: List<BitVec(8)>, p: LoopPlacement, at: ReadLoopPlacement(
                     let returned_rip: (returned.rip = eof_rip(eof_at_test())) = rip_advance(entry, asked.rip, eof_at_call(), 2, asked_rip);
                     let there = pieces(stored.page);
                     let back = eof_chunk(file, page, p, at, region, loop_code, loop_bytes, source, needle, spec, agreement, native, computes,
-                        ed, bd, eof_at_read(), eof_at_test(), back_target, chunk, some, fits, carry, room_here, returned,
+                        jumps.ed, jumps.sd, jumps.bd, eof_at_read(), eof_at_test(), back_target, chunk, some, fits, carry, room_here, returned,
                         returned_memory, returned_rip, refl, carry_word,
-                        there.test_at, there.jz_at, there.setup_at, there.loop_at, there.save_at, there.jmp_at);
+                        there.test_at, there.jz_at, there.js_at, there.setup_at, there.loop_at, there.save_at, there.jmp_at);
                     let later: (carry + spec(chunk) + spec(eof_input(rest)) = total) =
                         eof_later(carry, spec(chunk), spec(eof_input(rest)), total, sum);
-                    linux_runs_after_steps(io_linux(), eof_events(rest, tail_events), returned, back.witness, back.proof.left,
+                    linux_runs_after_steps(io_linux(), eof_events(rest, ending, tail_events), returned, back.witness, back.proof.left,
                         eof_from(file, p, at, region, loop_code, loop_bytes, source, needle, spec, agreement, native, computes, adds,
-                            ed, bd, exit_target, back_target, tail_code, pieces, total, room, tail_events, tail, rest)(ok.right.right, stored.page, carry + spec(chunk), back.witness, back.proof.right.right.left,
+                            jumps, exit_target, js_target, back_target, retry_target, tail_code, pieces, total, room, tail_events, tail,
+                            ending, ending_ok, rest)(ok.right.right, stored.page, carry + spec(chunk), back.witness, back.proof.right.right.left,
                             back.proof.right.left, back.proof.right.right.right, later))
                 })
         },
+            Interrupted => λ ok page carry state at_read memory_is carry_word counted => {
+                let asked = execute_block_normal(read_entry_block(), state);
+                let read = eof_ask(file, needle, loop_bytes, jumps, tail_code, page, pieces(page), state, at_read, memory_is);
+                let writable: IoWritable(asked.memory, read_gpr(Rsi, asked.gprs), read_gpr(Rdx, asked.gprs).toNat()) =
+                    ⟨Nat::le_refl(io_page_base()), Nat::le_refl(io_page_base() + 4096)⟩;
+                let eintr_errno: Errno(eintr()) = ⟨trivial, trivial⟩;
+                linux_runs_read_failed(io_linux(), state, asked, BitVec::ofNat(0), eintr(), eof_events(rest, ending, tail_events),
+                    linux_steps_of_fetched(io_linux(), state, asked, read.left), read.right.right.right, refl, refl, eintr_errno, writable,
+                    λ junk short rcx r11 => {
+                        let returned = linux_read_failed_return(io_linux(), asked, eintr(), junk, rcx, r11);
+                        let stored = io_store_offset(IoMemory(file, page), 0, junk);
+                        let returned_memory: (returned.memory = stored) =
+                            cong_fn<IoMemory, IoMemory>(λ m => io_store(m, BitVec::ofNat(0x401000), junk), read.right.left);
+                        let returned_rip: (returned.rip = eof_rip(eof_at_test())) =
+                            rip_advance(entry, asked.rip, eof_at_call(), 2, read.right.right.left);
+                        let there = pieces(stored.page);
+                        let back = eof_retry(stored, needle, loop_bytes, jumps, tail_code, there, retry_target, returned,
+                            eof_failed(stored, needle, loop_bytes, jumps, tail_code, there, js_target, eintr(), eintr_errno, returned,
+                                returned_memory, returned_rip, refl));
+                        let kept: (read_gpr(R13, back.witness.gprs) = bitvec_nat::word_of_nat(64, carry)) =
+                            trans(back.proof.right.right.right, carry_word);
+                        linux_runs_after_steps(io_linux(), eof_events(rest, ending, tail_events), returned, back.witness, back.proof.left,
+                            eof_from(file, p, at, region, loop_code, loop_bytes, source, needle, spec, agreement, native, computes, adds,
+                                jumps, exit_target, js_target, back_target, retry_target, tail_code, pieces, total, room, tail_events, tail,
+                                ending, ending_ok, rest)(ok, stored.page, carry, back.witness, back.proof.right.right.left,
+                                back.proof.right.left, kept, counted))
+                    })
+            },
+        }),
     }
 }
 
 // ---------------------------------------------------------------------------
-// The two jumps' targets, from a closed fact about each displacement that the
+// The four jumps' targets, from a closed fact about each displacement that the
 // producer proves at the written bytes.
 
-theorem eof_exit_sum(z, s, l, v: Nat): z + (6 + (((s + l) + v) + 5)) = ((((z + 6) + s) + l) + v) + 5 { omega }
-theorem eof_back_sum(r, e, t, s, l, v: Nat): r + ((((((e + 2) + t) + 6) + s) + l) + v) = ((((((r + e) + 2) + t) + 6) + s) + l) + v { omega }
+theorem eof_skip_sum(z, s, l, v: Nat): z + (6 + (((s + l) + v) + 5)) = ((((z + 6) + s) + l) + v) + 5 { omega }
+theorem eof_exit_sum(z, s, l, v, r, f: Nat):
+    z + (6 + ((((((((6 + s) + l) + v) + 5) + r) + 6) + f) + 2)) = (((((((((z + 6) + 6) + s) + l) + v) + 5) + r) + 6) + f) + 2 { omega }
+theorem eof_back_sum(r, e, t, s, l, v: Nat):
+    r + (((((((e + 2) + t) + 6) + 6) + s) + l) + v) = (((((((r + e) + 2) + t) + 6) + 6) + s) + l) + v { omega }
+theorem eof_retry_sum(r, e, t, s, l, v, q: Nat):
+    r + (((((((((e + 2) + t) + 6) + 6) + s) + l) + v) + 5) + q) = (((((((((r + e) + 2) + t) + 6) + 6) + s) + l) + v) + 5) + q { omega }
 
-// JZ skips the chunk's setup, loop, save and jump back.
+// What JZ skips at end of file: the JS, the chunk, and the failure path.
+fn eof_exit_skip(needle: BitVec(8), loop_bytes: List<BitVec(8)>) → Nat {
+    (((((((6 + eof_setup_len(needle)) + loop_bytes.len()) + eof_save_len()) + 5) + eof_retry_len()) + 6) + eof_fail_len()) + 2
+}
+// What JS skips on a failed read: the chunk's setup, loop, save and jump back.
+fn eof_fail_skip(needle: BitVec(8), loop_bytes: List<BitVec(8)>) → Nat {
+    ((eof_setup_len(needle) + loop_bytes.len()) + eof_save_len()) + 5
+}
+
 theorem eof_exit_target(needle: BitVec(8), loop_bytes: List<BitVec(8)>, ed: BitVec(32),
-    reads: ed.sign_extend(32).toNat() = ((eof_setup_len(needle) + loop_bytes.len()) + eof_save_len()) + 5):
+    reads: ed.sign_extend(32).toNat() = eof_exit_skip(needle, loop_bytes)):
     near_branch_target(eof_rip(eof_at_jz()), 6, ed) = eof_rip(eof_at_done(needle, loop_bytes)) {
-    let skip = ((eof_setup_len(needle) + loop_bytes.len()) + eof_save_len()) + 5;
+    let skip = eof_exit_skip(needle, loop_bytes);
     let lands: (eof_at_jz() + (6 + skip) = eof_at_done(needle, loop_bytes)) =
-        eof_exit_sum(eof_at_jz(), eof_setup_len(needle), loop_bytes.len(), eof_save_len());
+        eof_exit_sum(eof_at_jz(), eof_setup_len(needle), loop_bytes.len(), eof_save_len(), eof_retry_len(), eof_fail_len());
     trans(near_branch_forward(eof_rip(eof_at_jz()), 6, skip, ed, reads),
         trans(rip_compose(BitVec::ofNat(0x4000e8), eof_at_jz(), 6 + skip), rip_count(BitVec::ofNat(0x4000e8), lands)))
 }
 
-// From the read to the end of the jump back.
+theorem eof_js_target(needle: BitVec(8), loop_bytes: List<BitVec(8)>, sd: BitVec(32),
+    reads: sd.sign_extend(32).toNat() = eof_fail_skip(needle, loop_bytes)):
+    near_branch_target(eof_rip(eof_at_js()), 6, sd) = eof_rip(eof_at_failed(needle, loop_bytes)) {
+    let skip = eof_fail_skip(needle, loop_bytes);
+    let lands: (eof_at_js() + (6 + skip) = eof_at_failed(needle, loop_bytes)) =
+        eof_skip_sum(eof_at_js(), eof_setup_len(needle), loop_bytes.len(), eof_save_len());
+    trans(near_branch_forward(eof_rip(eof_at_js()), 6, skip, sd, reads),
+        trans(rip_compose(BitVec::ofNat(0x4000e8), eof_at_js(), 6 + skip), rip_count(BitVec::ofNat(0x4000e8), lands)))
+}
+
+// From the read to the end of the jump back, and to the retry's JZ.
 fn eof_loop_span(needle: BitVec(8), loop_bytes: List<BitVec(8)>) → Nat {
-    (((((read_entry_len() + 2) + eof_test_len()) + 6) + eof_setup_len(needle)) + loop_bytes.len()) + eof_save_len()
+    ((((((read_entry_len() + 2) + eof_test_len()) + 6) + 6) + eof_setup_len(needle)) + loop_bytes.len()) + eof_save_len()
+}
+fn eof_retry_span(needle: BitVec(8), loop_bytes: List<BitVec(8)>) → Nat {
+    (eof_loop_span(needle, loop_bytes) + 5) + eof_retry_len()
 }
 
 // JMP returns to the read: its displacement completes the span to 2^64.
@@ -561,6 +895,18 @@ theorem eof_back_target(needle: BitVec(8), loop_bytes: List<BitVec(8)>, bd: BitV
             loop_bytes.len(), eof_save_len()))), sym(rip_compose(BitVec::ofNat(0x4000e8), eof_at_read(), eof_loop_span(needle, loop_bytes))));
     trans(cong_fn<BitVec(64), BitVec(64)>(λ address => near_branch_target(address, 5, bd), at_jmp),
         near_branch_returns(eof_rip(eof_at_read()), eof_loop_span(needle, loop_bytes), 5, bd, closes))
+}
+
+// The retry's JZ returns to the read the same way.
+theorem eof_retry_target(needle: BitVec(8), loop_bytes: List<BitVec(8)>, rd: BitVec(32),
+    closes: eof_retry_span(needle, loop_bytes) + 6 + rd.sign_extend(32).toNat() = Nat::pow(2, 64)):
+    near_branch_target(eof_rip(eof_at_retry(needle, loop_bytes)), 6, rd) = eof_rip(eof_at_read()) {
+    let at_retry: (eof_rip(eof_at_retry(needle, loop_bytes)) = next_rip(eof_rip(eof_at_read()), eof_retry_span(needle, loop_bytes))) =
+        trans(rip_count(BitVec::ofNat(0x4000e8), sym(eof_retry_sum(eof_at_read(), read_entry_len(), eof_test_len(), eof_setup_len(needle),
+            loop_bytes.len(), eof_save_len(), eof_retry_len()))),
+            sym(rip_compose(BitVec::ofNat(0x4000e8), eof_at_read(), eof_retry_span(needle, loop_bytes))));
+    trans(cong_fn<BitVec(64), BitVec(64)>(λ address => near_branch_target(address, 6, rd), at_retry),
+        near_branch_returns(eof_rip(eof_at_read()), eof_retry_span(needle, loop_bytes), 6, rd, closes))
 }
 
 // ---------------------------------------------------------------------------
@@ -599,28 +945,34 @@ theorem eof_start(file: List<BitVec(8)>, p: LoopPlacement, at: ReadLoopPlacement
     native: ReadLoopCertificate(p, region, loop_code, loop_bytes, source),
     computes: ReadEofComputes(source, needle, spec),
     adds: (a, b: List<BitVec(8)>) → spec(a ++ b) = spec(a) + spec(b),
-    ed, bd: BitVec(32),
-    exit_target: near_branch_target(eof_rip(eof_at_jz()), 6, ed) = eof_rip(eof_at_done(needle, loop_bytes)),
-    back_target: near_branch_target(eof_rip(eof_at_jmp(needle, loop_bytes)), 5, bd) = eof_rip(eof_at_read()),
-    tail_code: List<BitVec(8)>, pieces: (page: Nat → BitVec(8)) → EofPieces(IoMemory(file, page), needle, loop_bytes, ed, bd, tail_code),
-    chunks: List<List<BitVec(8)>>, ok: EofChunks(chunks), room: spec(eof_input(chunks)) + 4096 < Nat::pow(2, 64),
+    jumps: EofJumps,
+    exit_target: near_branch_target(eof_rip(eof_at_jz()), 6, jumps.ed) = eof_rip(eof_at_done(needle, loop_bytes)),
+    js_target: near_branch_target(eof_rip(eof_at_js()), 6, jumps.sd) = eof_rip(eof_at_failed(needle, loop_bytes)),
+    back_target: near_branch_target(eof_rip(eof_at_jmp(needle, loop_bytes)), 5, jumps.bd) = eof_rip(eof_at_read()),
+    retry_target: near_branch_target(eof_rip(eof_at_retry(needle, loop_bytes)), 6, jumps.rd) = eof_rip(eof_at_read()),
+    tail_code: List<BitVec(8)>, pieces: (page: Nat → BitVec(8)) → EofPieces(IoMemory(file, page), needle, loop_bytes, jumps, tail_code),
+    chunks: List<ReadStep>, ok: EofChunks(chunks), ending: ReadEnding, ending_ok: EofEnding(ending),
+    room: spec(eof_input(chunks)) + 4096 < Nat::pow(2, 64),
     tail_events: List<LinuxEvent>, tail: EofTail(file, needle, loop_bytes, spec(eof_input(chunks)), tail_events),
     page: Nat → BitVec(8), gprs: Gprs, flags: Flags):
-    LinuxRuns(io_linux(), eof_events(chunks, tail_events), io_initial(file, page, gprs, flags)) {
+    LinuxRuns(io_linux(), eof_events(chunks, ending, tail_events), io_initial(file, page, gprs, flags)) {
     let fetch = io_fetch_access();
     let data = io_data_access();
     let start = io_initial(file, page, gprs, flags);
     let started = block_fetched(fetch, data, eof_init_block(), start, trivial, pieces(page).init_at);
     let ready = execute_block_normal(eof_init_block(), start);
-    linux_runs_after_steps(io_linux(), eof_events(chunks, tail_events), start, ready, started.left,
+    linux_runs_after_steps(io_linux(), eof_events(chunks, ending, tail_events), start, ready, started.left,
         eof_from(file, p, at, region, loop_code, loop_bytes, source, needle, spec, agreement, native, computes, adds,
-            ed, bd, exit_target, back_target, tail_code, pieces, spec(eof_input(chunks)), room, tail_events, tail, chunks)(
+            jumps, exit_target, js_target, back_target, retry_target, tail_code, pieces, spec(eof_input(chunks)), room, tail_events, tail,
+            ending, ending_ok, chunks)(
             ok, page, 0, ready, started.right, refl, refl, Nat::add_left_zero(spec(eof_input(chunks)))))
 }
 
 // The process claim: for every way the reads may split the input into
-// non-empty chunks, ending at the empty read, the file has a run that reads
-// them all and exits with the specification's count of their concatenation.
+// non-empty chunks, with EINTRs anywhere between them, ending at the empty
+// read or at a failed read, the file has a run that reads them all, retries
+// every EINTR, and then exits with the specification's count of the chunks'
+// concatenation or, after the failure, with 1.
 theorem read_loop_runs(file: List<BitVec(8)>, p: LoopPlacement, at: ReadLoopPlacement(p),
     region: ReadonlyLoop<Nat>, loop_code: AccessCode, loop_bytes: List<BitVec(8)>,
     source: ReadonlyBytes → BitVec(8) → Nat → Nat → Nat → LoopOutcome<Nat>, needle: BitVec(8), spec: List<BitVec(8)> → Nat,
@@ -629,19 +981,23 @@ theorem read_loop_runs(file: List<BitVec(8)>, p: LoopPlacement, at: ReadLoopPlac
     native: ReadLoopCertificate(p, region, loop_code, loop_bytes, source),
     computes: ReadEofComputes(source, needle, spec),
     adds: (a, b: List<BitVec(8)>) → spec(a ++ b) = spec(a) + spec(b),
-    ed, bd: BitVec(32),
-    exit_reads: ed.sign_extend(32).toNat() = ((eof_setup_len(needle) + loop_bytes.len()) + eof_save_len()) + 5,
-    back_closes: eof_loop_span(needle, loop_bytes) + 5 + bd.sign_extend(32).toNat() = Nat::pow(2, 64),
-    resident: (page: Nat → BitVec(8)) → CodeResident(io_fetch_access(), IoMemory(file, page), read_loop_code(needle, loop_bytes, ed, bd),
+    jumps: EofJumps,
+    exit_reads: jumps.ed.sign_extend(32).toNat() = eof_exit_skip(needle, loop_bytes),
+    fail_reads: jumps.sd.sign_extend(32).toNat() = eof_fail_skip(needle, loop_bytes),
+    back_closes: eof_loop_span(needle, loop_bytes) + 5 + jumps.bd.sign_extend(32).toNat() = Nat::pow(2, 64),
+    retry_closes: eof_retry_span(needle, loop_bytes) + 6 + jumps.rd.sign_extend(32).toNat() = Nat::pow(2, 64),
+    resident: (page: Nat → BitVec(8)) → CodeResident(io_fetch_access(), IoMemory(file, page), read_loop_code(needle, loop_bytes, jumps),
         BitVec::ofNat(0x4000e8)),
-    chunks: List<List<BitVec(8)>>, ok: EofChunks(chunks), room: spec(eof_input(chunks)) + 4096 < Nat::pow(2, 64),
+    chunks: List<ReadStep>, ok: EofChunks(chunks), ending: ReadEnding, ending_ok: EofEnding(ending),
+    room: spec(eof_input(chunks)) + 4096 < Nat::pow(2, 64),
     page: Nat → BitVec(8), gprs: Gprs, flags: Flags):
-    LinuxRuns(io_linux(), eof_events(chunks, [ExitEvent(bitvec_nat::word_of_nat(64, spec(eof_input(chunks))))]),
+    LinuxRuns(io_linux(), eof_events(chunks, ending, [ExitEvent(bitvec_nat::word_of_nat(64, spec(eof_input(chunks))))]),
         io_initial(file, page, gprs, flags)) {
-    let pieces = λ (page: Nat → BitVec(8)) => eof_pieces(IoMemory(file, page), needle, loop_bytes, ed, bd, eof_exit_code(), resident(page));
-    eof_start(file, p, at, region, loop_code, loop_bytes, source, needle, spec, agreement, native, computes, adds, ed, bd,
-        eof_exit_target(needle, loop_bytes, ed, exit_reads), eof_back_target(needle, loop_bytes, bd, back_closes),
-        eof_exit_code(), pieces, chunks, ok, room, [ExitEvent(bitvec_nat::word_of_nat(64, spec(eof_input(chunks))))],
+    let pieces = λ (page: Nat → BitVec(8)) => eof_pieces(IoMemory(file, page), needle, loop_bytes, jumps, eof_exit_code(), resident(page));
+    eof_start(file, p, at, region, loop_code, loop_bytes, source, needle, spec, agreement, native, computes, adds, jumps,
+        eof_exit_target(needle, loop_bytes, jumps.ed, exit_reads), eof_js_target(needle, loop_bytes, jumps.sd, fail_reads),
+        eof_back_target(needle, loop_bytes, jumps.bd, back_closes), eof_retry_target(needle, loop_bytes, jumps.rd, retry_closes),
+        eof_exit_code(), pieces, chunks, ok, ending, ending_ok, room, [ExitEvent(bitvec_nat::word_of_nat(64, spec(eof_input(chunks))))],
         eof_exit_tail(file, needle, loop_bytes, spec(eof_input(chunks)), λ page => pieces(page).tail_at), page, gprs, flags)
 }
 

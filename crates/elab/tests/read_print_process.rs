@@ -11,7 +11,9 @@ const DECIMAL: &str = include_str!("../../../lib/decimal_line.hthr");
 // restated over a program that writes with another syscall, to another
 // descriptor, from the length register or with the start as the length,
 // stores its word off the page or stores another register, exits nonzero, or
-// formats a count other than the loop's total.
+// formats a count other than the loop's total; nor over a write loop that
+// advances by the length instead of what was sent, never counts down, or
+// jumps from the wrong distance (docs/native-syscall-failures-design.md).
 #[test]
 fn slow_acceptance_read_print_refusals() {
     let mut elab = checker();
@@ -29,6 +31,10 @@ fn slow_acceptance_read_print_refusals() {
         ("stored_register", "WordStore(R8, Rax)", "WordStore(R8, R9)"),
         ("exit_status", "MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))", "MovRI(Rdi, BitVec::ofNat(1)), MovRI(Rax, BitVec::ofNat(60))"),
         ("count_from_elsewhere", "[MovRR(R11, R13), MovRI(R8", "[MovRR(R11, R12), MovRI(R8"),
+        ("advance_by_length", "[AddRR(R9, Rax), SubRR(R10, Rax)]", "[AddRR(R9, R10), SubRR(R10, Rax)]"),
+        ("remaining_not_counted", "[AddRR(R9, Rax), SubRR(R10, Rax)]", "[AddRR(R9, Rax), SubRR(R10, R10)]"),
+        ("exit_span", "{ (((5 + eof_retry_len()) + 6) + eof_fail_len()) + 2 }", "{ (((5 + eof_retry_len()) + 6) + eof_fail_len()) + 3 }"),
+        ("write_back_span", "{ ((((print_write_len() + 2) + eof_test_len())", "{ ((((print_write_len() + 1) + eof_test_len())"),
     ] {
         let bad = PRINT.replacen(from, to, 1);
         assert_ne!(bad, PRINT, "{name}");

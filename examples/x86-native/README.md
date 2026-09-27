@@ -238,7 +238,8 @@ protects the parent return word.
 
 `wc_l.hthr` is a whole program. It reads stdin a page at a time, counts each
 chunk's newlines with a certified loop into a running total, stops at the
-empty read (end of file), and exits with the total.
+empty read (end of file), and exits with the total. A read interrupted by a
+signal (EINTR) is retried; any other failed read exits with status 1.
 
 ```sh
 cargo build --release -p heather-cli
@@ -253,19 +254,22 @@ Expected output: `3`.
 
 The certificate's `count_lines_native_runs` states the whole process against
 the source. For every way the reads may split stdin into non-empty chunks,
-ending at the empty read, the written file has a run that reads them all and
-exits with `wc_l` of their concatenation, and the parent sees the low eight
-bits. `wc_l` is an ordinary Heather function; the program supplies it, the
+with EINTRs anywhere between them, and ending at the empty read or at a
+failed read, the written file has a run that reads them all and exits with
+`wc_l` of their concatenation (the parent sees the low eight bits), or with 1
+after the failure. `wc_l` is an ordinary Heather function; the program supplies it, the
 counting step, and two lemmas: `count_lines_input`, that its loop adds `wc_l`
 of a buffer's contents to whatever count it starts from, and `wc_l_append`,
 that `wc_l` adds over concatenation. Everything machine-shaped comes from the
 shared generators and the library's process theorem
 (`lib/elf64_read_loop.hthr`, [its design](../../docs/native-read-until-eof-design.md)).
 
-The trace is deliberately basic (`lib/linux_x86_64_io.hthr`): successful reads,
-complete writes and exit are the only syscalls with rules, so the claim says
-nothing about a run that meets a read error or a short write. The proper
-syscall model is `issues/linux-syscall-trace-model.md`.
+The trace (`lib/linux_x86_64_io.hthr`) records each syscall with Linux's
+response: a read returns bytes or fails with an errno, and a write sends some
+prefix of what it asked or fails. A failed read may leave anything in the
+buffer. Read, write and exit are the only syscalls with rules, and the claim
+is existential: a run with this trace exists
+(`issues/linux-syscall-trace-model.md`, `docs/native-syscall-failures-design.md`).
 
 ### Printing the count
 
@@ -283,9 +287,12 @@ printf 'one\ntwo\nthree\n' | ./target/x86-native/wc_l_print
 
 Expected output: `3`, and exit status 0.
 
-The certificate's `count_lines_native_runs` now ends the trace with
-`WriteEvent(1, decimal_line(n)), ExitEvent(0)` for the total `n`, for inputs
-with fewer than 10000 lines. `decimal_line(n)` is `decimal(n) ++ [newline]`,
+The certificate's `count_lines_native_runs` now ends the trace with the write
+loop's events, `write_events(decimal_line(n), writes, written)` for the total
+`n`, for inputs with fewer than 10000 lines. It covers every way the writes
+may return. Short writes resume after what was sent, EINTR retries, and any
+other failure exits 1; a finished loop exits 0. `prints_the_line` shows that
+on a run that ends well, stdout receives exactly `decimal_line(n)`. `decimal_line(n)` is `decimal(n) ++ [newline]`,
 and `decimal` is an ordinary function: the digits of `n / 10`, then `n % 10`.
 The line is computed by code the native compiler generates from
 `lib/decimal_line.hthr`'s source functions. The machine has no divide or

@@ -1,12 +1,11 @@
-// The basic Linux trace (docs/native-first-program-design.md §4, §10): a run
-// of a process is steps between syscalls, and each syscall is an event.
-// Three syscalls have rules: a successful read, whose bytes the event names;
-// a complete write, whose bytes are what memory holds at the buffer; and
-// exit. Everything else, including a failed read and a short write, has no
-// rule, so a claim over this relation says nothing about a run that meets
-// one. The proper model is issues/linux-syscall-trace-model.md. As for exit
-// today, syscall delivery and Linux itself are environment assumptions, not
-// theorems here.
+// The Linux trace (docs/native-first-program-design.md §4, §10;
+// docs/native-syscall-failures-design.md §2): a run of a process is steps
+// between syscalls, and each syscall is an event, the call together with
+// Linux's response. Three syscalls have rules. A read returns bytes or fails
+// with an errno; a write sends a prefix of what it asked (possibly all,
+// possibly none) or fails; exit ends the run. The rest of the model is
+// issues/linux-syscall-trace-model.md. Syscall delivery and Linux itself are
+// environment assumptions, not theorems here.
 import linux_x86_64_entry;
 import x86_64;
 import x86_64_fetch;
@@ -19,13 +18,108 @@ import bitvec_nat;
 import list;
 import logic;
 import nat;
+import omega;
 
-// The exit status is the full request word, as LinuxExitRequest states it;
-// the parent observes its low eight bits.
+// What a read or a write came back with. An errno is 1 to 4095, and RAX
+// holds its negation.
+inductive ReadResult {
+    ReadBytes(bytes: List<BitVec(8)>),
+    ReadFailed(errno: Nat),
+}
+inductive WriteResult {
+    Wrote(count: Nat),
+    WriteFailed(errno: Nat),
+}
+
+// A write names what it asked to send, the buffer's bytes, and the result;
+// what left is the first `count` of them. The exit status is the full request
+// word, as LinuxExitRequest states it; the parent observes its low eight bits.
 inductive LinuxEvent {
-    ReadEvent(fd: BitVec(64), bytes: List<BitVec(8)>),
-    WriteEvent(fd: BitVec(64), bytes: List<BitVec(8)>),
+    ReadEvent(fd: BitVec(64), result: ReadResult),
+    WriteEvent(fd: BitVec(64), bytes: List<BitVec(8)>, result: WriteResult),
     ExitEvent(status: BitVec(64)),
+}
+
+fn Errno(errno: Nat) → Type { (1 <= errno) ∧ (errno <= 4095) }
+fn errno_word(errno: Nat) → BitVec(64) { BitVec::ofNat(Nat::pow(2, 64) -errno) }
+fn eintr() → Nat { 4 }
+
+theorem errno_value(e: Nat, error: Errno(e)): errno_word(e).toNat() = Nat::pow(2, 64) -e {
+    let low: (1 <= e) = error.left;
+    let high: (e <= 4095) = error.right;
+    let back: ((Nat::pow(2, 64) -e) + e = Nat::pow(2, 64)) = Nat::sub_add_cancel(e, Nat::pow(2, 64), { omega });
+    BitVec::toNat_ofNat(64, Nat::pow(2, 64) -e, { omega })
+}
+// An errno word is in the top half of the range, so TEST sets SF; no count
+// the rules return is.
+theorem errno_negative(e: Nat, error: Errno(e)): Nat::pow(2, 63) <= errno_word(e).toNat() {
+    let value = errno_value(e, error);
+    let high: (e <= 4095) = error.right;
+    let back: ((Nat::pow(2, 64) -e) + e = Nat::pow(2, 64)) = Nat::sub_add_cancel(e, Nat::pow(2, 64), { omega });
+    omega
+}
+theorem errno_nonzero(e: Nat, error: Errno(e)): 0 < errno_word(e).toNat() {
+    let large = errno_negative(e, error);
+    omega
+}
+
+// Adding 4 to an errno word gives zero exactly at EINTR: the retry test.
+theorem eintr_plus_four(): is_zero_bits(64, errno_word(eintr()).add(BitVec::ofNat(4))) = True { refl }
+theorem other_errno_plus_four(e: Nat, error: Errno(e), other: Not(e = eintr())):
+    is_zero_bits(64, errno_word(e).add(BitVec::ofNat(4))) = False {
+    let large = λ (big: 5 <= e) => {
+        let a = errno_word(e);
+        let four: BitVec(64) = BitVec::ofNat(4);
+        let value = errno_value(e, error);
+        let high: (e <= 4095) = error.right;
+        let back: ((Nat::pow(2, 64) -e) + e = Nat::pow(2, 64)) = Nat::sub_add_cancel(e, Nat::pow(2, 64), { omega });
+        let four_value: (four.toNat() = 4) = BitVec::toNat_ofNat(64, 4, trivial);
+        let sum: (a.add(four).toNat() = a.toNat() + four.toNat()) = bitvec_nat::toNat_add(64, a, four, { omega });
+        zero_bits_of_pos(64, a.add(four), { omega })
+    };
+    (match e as λ k => (1 <= k) → Not(k = eintr()) → (5 <= k → is_zero_bits(64, errno_word(k).add(BitVec::ofNat(4))) = False) →
+            is_zero_bits(64, errno_word(k).add(BitVec::ofNat(4))) = False {
+        Zero => λ low _ _ => false_elim({ let z: (1 <= 0) = low; omega }),
+        Succ(a) => match a as λ k1 => (1 <= Succ(k1)) → Not(Succ(k1) = eintr()) →
+                (5 <= Succ(k1) → is_zero_bits(64, errno_word(Succ(k1)).add(BitVec::ofNat(4))) = False) →
+                is_zero_bits(64, errno_word(Succ(k1)).add(BitVec::ofNat(4))) = False {
+            Zero => λ _ _ _ => refl,
+            Succ(b) => match b as λ k2 => (1 <= Succ(Succ(k2))) → Not(Succ(Succ(k2)) = eintr()) →
+                    (5 <= Succ(Succ(k2)) → is_zero_bits(64, errno_word(Succ(Succ(k2))).add(BitVec::ofNat(4))) = False) →
+                    is_zero_bits(64, errno_word(Succ(Succ(k2))).add(BitVec::ofNat(4))) = False {
+                Zero => λ _ _ _ => refl,
+                Succ(c) => match c as λ k3 => (1 <= Succ(Succ(Succ(k3)))) → Not(Succ(Succ(Succ(k3))) = eintr()) →
+                        (5 <= Succ(Succ(Succ(k3))) → is_zero_bits(64, errno_word(Succ(Succ(Succ(k3)))).add(BitVec::ofNat(4))) = False) →
+                        is_zero_bits(64, errno_word(Succ(Succ(Succ(k3)))).add(BitVec::ofNat(4))) = False {
+                    Zero => λ _ _ _ => refl,
+                    Succ(d) => λ _ not_eintr big => match d as λ k4 => Not(Succ(Succ(Succ(Succ(k4)))) = eintr()) →
+                            (5 <= Succ(Succ(Succ(Succ(k4)))) → is_zero_bits(64, errno_word(Succ(Succ(Succ(Succ(k4))))).add(BitVec::ofNat(4))) = False) →
+                            is_zero_bits(64, errno_word(Succ(Succ(Succ(Succ(k4))))).add(BitVec::ofNat(4))) = False {
+                        Zero => λ is_not _ => false_elim(is_not(refl)),
+                        Succ(f) => λ _ big => big({ omega }),
+                    }(not_eintr, big),
+                },
+            },
+        },
+    })(error.left, other, large)
+}
+
+// What a run sent to `fd`, in order.
+fn sent_to(fd: BitVec(64), events: List<LinuxEvent>) → List<BitVec(8)> {
+    match events {
+        Nil => Nil,
+        Cons(event, rest) => match event {
+            WriteEvent(to, bytes, result) => match to.eq_dec(fd) {
+                Inl(_) => match result {
+                    Wrote(count) => bytes.take(count) ++ sent_to(fd, rest),
+                    WriteFailed(_) => sent_to(fd, rest),
+                },
+                Inr(_) => sent_to(fd, rest),
+            },
+            ReadEvent(_, _) => sent_to(fd, rest),
+            ExitEvent(_) => sent_to(fd, rest),
+        },
+    }
 }
 
 // What the environment needs to know about a memory: how code is fetched and
@@ -50,12 +144,24 @@ fn linux_read_return<M>(io: LinuxIo<M>, state: MachineState<M>, bytes: List<BitV
         memory := io.store(state.memory, read_gpr(Rsi, state.gprs), bytes))
 }
 
-// After a complete write: RAX holds the count and RIP is past the SYSCALL;
-// memory is unchanged. RCX and R11 are quantified over, as for read.
-fn linux_write_return<M>(state: MachineState<M>, bytes: List<BitVec(8)>, rcx, r11: BitVec(64)) → MachineState<M> {
+// After a failed read: RAX holds the negated errno. Linux does not promise
+// the buffer was left alone, so `junk`, which the rule quantifies over, is
+// stored where the bytes would have gone.
+fn linux_read_failed_return<M>(io: LinuxIo<M>, state: MachineState<M>, errno: Nat, junk: List<BitVec(8)>,
+    rcx, r11: BitVec(64)) → MachineState<M> {
     MachineState(
-        gprs := write_gpr(R11, r11, write_gpr(Rcx, rcx,
-            write_gpr(Rax, bitvec_nat::word_of_nat(64, bytes.len()), state.gprs))),
+        gprs := write_gpr(R11, r11, write_gpr(Rcx, rcx, write_gpr(Rax, errno_word(errno), state.gprs))),
+        flags := state.flags,
+        rip := next_rip(state.rip, 2),
+        memory := io.store(state.memory, read_gpr(Rsi, state.gprs), junk))
+}
+
+// After a write, whole, short or failed: RAX holds the count sent or the
+// negated errno, and RIP is past the SYSCALL; memory is unchanged. RCX and R11
+// are quantified over, as for read.
+fn linux_write_return<M>(state: MachineState<M>, rax, rcx, r11: BitVec(64)) → MachineState<M> {
+    MachineState(
+        gprs := write_gpr(R11, r11, write_gpr(Rcx, rcx, write_gpr(Rax, rax, state.gprs))),
         flags := state.flags,
         rip := next_rip(state.rip, 2),
         memory := state.memory)
@@ -139,18 +245,32 @@ fn LinuxRuns<M>(io: LinuxIo<M>, events: List<LinuxEvent>) → MachineState<M> �
         Cons(event, rest) => λ state => Exists<MachineState<M>>(λ at =>
             LinuxSteps(io, state, at) ∧ (LinuxSyscallAt(io, at) ∧
             match event as λ _ => Type {
-                ReadEvent(fd, bytes) =>
+                ReadEvent(fd, result) =>
                     (read_gpr(Rax, at.gprs) = BitVec::ofNat(0)) ∧
                     ((read_gpr(Rdi, at.gprs) = fd) ∧
-                    ((bytes.len() <= read_gpr(Rdx, at.gprs).toNat()) ∧
-                    (io.writable(at.memory, read_gpr(Rsi, at.gprs), bytes.len()) ∧
-                    ((rcx, r11: BitVec(64)) → LinuxRuns(io, rest, linux_read_return(io, at, bytes, rcx, r11)))))),
-                WriteEvent(fd, bytes) =>
+                    match result as λ _ => Type {
+                        ReadBytes(bytes) =>
+                            (bytes.len() <= read_gpr(Rdx, at.gprs).toNat()) ∧
+                            (io.writable(at.memory, read_gpr(Rsi, at.gprs), bytes.len()) ∧
+                            ((rcx, r11: BitVec(64)) → LinuxRuns(io, rest, linux_read_return(io, at, bytes, rcx, r11)))),
+                        ReadFailed(errno) =>
+                            Errno(errno) ∧
+                            (io.writable(at.memory, read_gpr(Rsi, at.gprs), read_gpr(Rdx, at.gprs).toNat()) ∧
+                            ((junk: List<BitVec(8)>) → junk.len() <= read_gpr(Rdx, at.gprs).toNat() → (rcx, r11: BitVec(64)) →
+                                LinuxRuns(io, rest, linux_read_failed_return(io, at, errno, junk, rcx, r11)))),
+                    }),
+                WriteEvent(fd, bytes, result) =>
                     (read_gpr(Rax, at.gprs) = BitVec::ofNat(1)) ∧
                     ((read_gpr(Rdi, at.gprs) = fd) ∧
                     ((read_gpr(Rdx, at.gprs).toNat() = bytes.len()) ∧
                     (LinuxWritesFrom(io, at.memory, read_gpr(Rsi, at.gprs), bytes) ∧
-                    ((rcx, r11: BitVec(64)) → LinuxRuns(io, rest, linux_write_return(at, bytes, rcx, r11)))))),
+                    match result as λ _ => Type {
+                        Wrote(count) => (count <= bytes.len()) ∧
+                            ((rcx, r11: BitVec(64)) →
+                                LinuxRuns(io, rest, linux_write_return(at, bitvec_nat::word_of_nat(64, count), rcx, r11))),
+                        WriteFailed(errno) => Errno(errno) ∧
+                            ((rcx, r11: BitVec(64)) → LinuxRuns(io, rest, linux_write_return(at, errno_word(errno), rcx, r11))),
+                    }))),
                 ExitEvent(status) =>
                     (read_gpr(Rax, at.gprs) = BitVec::ofNat(60)) ∧
                     ((read_gpr(Rdi, at.gprs) = status) ∧ (rest = Nil)),
@@ -188,8 +308,18 @@ theorem linux_runs_read<M>(io: LinuxIo<M>, before, at: MachineState<M>, fd: BitV
     capacity: bytes.len() <= read_gpr(Rdx, at.gprs).toNat(),
     writable: io.writable(at.memory, read_gpr(Rsi, at.gprs), bytes.len()),
     after: (rcx, r11: BitVec(64)) → LinuxRuns(io, rest, linux_read_return(io, at, bytes, rcx, r11))):
-    LinuxRuns(io, Cons(ReadEvent(fd, bytes), rest), before) {
+    LinuxRuns(io, Cons(ReadEvent(fd, ReadBytes(bytes)), rest), before) {
     Exists(at, ⟨linux_steps_of_fetched(io, before, at, steps), ⟨syscall, ⟨number, ⟨descriptor, ⟨capacity, ⟨writable, after⟩⟩⟩⟩⟩⟩)
+}
+
+theorem linux_runs_read_failed<M>(io: LinuxIo<M>, before, at: MachineState<M>, fd: BitVec(64), errno: Nat,
+    rest: List<LinuxEvent>, steps: LinuxSteps(io, before, at), syscall: LinuxSyscallAt(io, at),
+    number: read_gpr(Rax, at.gprs) = BitVec::ofNat(0), descriptor: read_gpr(Rdi, at.gprs) = fd,
+    error: Errno(errno), writable: io.writable(at.memory, read_gpr(Rsi, at.gprs), read_gpr(Rdx, at.gprs).toNat()),
+    after: (junk: List<BitVec(8)>) → junk.len() <= read_gpr(Rdx, at.gprs).toNat() → (rcx, r11: BitVec(64)) →
+        LinuxRuns(io, rest, linux_read_failed_return(io, at, errno, junk, rcx, r11))):
+    LinuxRuns(io, Cons(ReadEvent(fd, ReadFailed(errno)), rest), before) {
+    Exists(at, ⟨steps, ⟨syscall, ⟨number, ⟨descriptor, ⟨error, ⟨writable, after⟩⟩⟩⟩⟩⟩)
 }
 
 theorem linux_runs_write<M>(io: LinuxIo<M>, before, at: MachineState<M>, fd: BitVec(64), bytes: List<BitVec(8)>,
@@ -197,9 +327,20 @@ theorem linux_runs_write<M>(io: LinuxIo<M>, before, at: MachineState<M>, fd: Bit
     number: read_gpr(Rax, at.gprs) = BitVec::ofNat(1), descriptor: read_gpr(Rdi, at.gprs) = fd,
     length: read_gpr(Rdx, at.gprs).toNat() = bytes.len(),
     sends: LinuxWritesFrom(io, at.memory, read_gpr(Rsi, at.gprs), bytes),
-    after: (rcx, r11: BitVec(64)) → LinuxRuns(io, rest, linux_write_return(at, bytes, rcx, r11))):
-    LinuxRuns(io, Cons(WriteEvent(fd, bytes), rest), before) {
-    Exists(at, ⟨steps, ⟨syscall, ⟨number, ⟨descriptor, ⟨length, ⟨sends, after⟩⟩⟩⟩⟩⟩)
+    count: Nat, some: count <= bytes.len(),
+    after: (rcx, r11: BitVec(64)) → LinuxRuns(io, rest, linux_write_return(at, bitvec_nat::word_of_nat(64, count), rcx, r11))):
+    LinuxRuns(io, Cons(WriteEvent(fd, bytes, Wrote(count)), rest), before) {
+    Exists(at, ⟨steps, ⟨syscall, ⟨number, ⟨descriptor, ⟨length, ⟨sends, ⟨some, after⟩⟩⟩⟩⟩⟩⟩)
+}
+
+theorem linux_runs_write_failed<M>(io: LinuxIo<M>, before, at: MachineState<M>, fd: BitVec(64), bytes: List<BitVec(8)>,
+    rest: List<LinuxEvent>, steps: LinuxSteps(io, before, at), syscall: LinuxSyscallAt(io, at),
+    number: read_gpr(Rax, at.gprs) = BitVec::ofNat(1), descriptor: read_gpr(Rdi, at.gprs) = fd,
+    length: read_gpr(Rdx, at.gprs).toNat() = bytes.len(),
+    sends: LinuxWritesFrom(io, at.memory, read_gpr(Rsi, at.gprs), bytes), errno: Nat, error: Errno(errno),
+    after: (rcx, r11: BitVec(64)) → LinuxRuns(io, rest, linux_write_return(at, errno_word(errno), rcx, r11))):
+    LinuxRuns(io, Cons(WriteEvent(fd, bytes, WriteFailed(errno)), rest), before) {
+    Exists(at, ⟨steps, ⟨syscall, ⟨number, ⟨descriptor, ⟨length, ⟨sends, ⟨error, after⟩⟩⟩⟩⟩⟩⟩)
 }
 
 // The exit-only profile's request is this relation's exit event.

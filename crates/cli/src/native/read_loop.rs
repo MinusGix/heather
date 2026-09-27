@@ -77,28 +77,50 @@ pub(super) fn generate_loop(elab: &Elaborator, prefix: &str, program: &Program) 
         Some(&format!("{}::{}", program.root, program.advance))).map_err(|e| format!("{e:?}"))
 }
 
-// The outer loop's fixed pieces, in `eof_code`'s order, and its two jumps'
+// A near jump's bytes: JZ (0F 84), JS (0F 88) or JMP (E9), then rel32.
+fn near(opcode: &[u8], displacement: u32) -> Vec<u8> { [opcode, &displacement.to_le_bytes()[..]].concat() }
+fn forward(distance: usize) -> u32 { u32::try_from(distance).expect("the program fits a page") }
+fn backward(distance: usize) -> u32 { 0u32.wrapping_sub(forward(distance)) }
+
+// TEST RAX, RAX: the lowering's encoder has no TEST of its own; the
+// certificate checks these bytes against the model's encoding.
+const TEST: [u8; 3] = [0x48, 0x85, 0xc0];
+
+// A failed syscall's path (docs/native-syscall-failures-design.md §4):
+// RAX + 4 is zero exactly at -EINTR, which retries; otherwise exit(1).
+fn retry_block() -> Vec<u8> {
+    super::encode(&[Instruction::MovRI { destination: Gpr::Rbx, immediate: 4 }, Instruction::AddRR { destination: Gpr::Rax, source: Gpr::Rbx }])
+}
+fn fail_block() -> Vec<u8> {
+    super::encode(&[Instruction::MovRI { destination: Gpr::Rdi, immediate: 1 }, Instruction::MovRI { destination: Gpr::Rax, immediate: 60 }])
+}
+
+// The outer loop's fixed pieces, in `eof_code`'s order, and its four jumps'
 // displacements from the loop's length.
-struct Pieces { init: Vec<u8>, entry: Vec<u8>, test: Vec<u8>, jz: Vec<u8>, setup: Vec<u8>, save: Vec<u8>, jmp: Vec<u8>, ed: u32, bd: u32 }
+struct Pieces {
+    init: Vec<u8>, entry: Vec<u8>, jz: Vec<u8>, js: Vec<u8>, setup: Vec<u8>, save: Vec<u8>, jmp: Vec<u8>,
+    retry: Vec<u8>, rjz: Vec<u8>, fail: Vec<u8>, ed: u32, sd: u32, bd: u32, rd: u32,
+}
 fn pieces(needle: u8, loop_len: usize) -> Pieces {
     use Gpr::*;
     let mov = |destination, immediate| Instruction::MovRI { destination, immediate };
     let rr = |destination, source| Instruction::MovRR { destination, source };
     let init = super::encode(&[mov(R13, 0)]);
     let entry = super::encode(&[mov(Rax, 0), mov(Rdi, 0), mov(Rsi, 0x401000), mov(Rdx, 4096)]);
-    // TEST RAX, RAX: the lowering's encoder has no TEST of its own; the
-    // certificate checks these bytes against the model's encoding.
-    let test = vec![0x48, 0x85, 0xc0];
     let setup = super::encode(&[rr(Rbp, Rax), rr(R12, Rax), mov(Rdi, 0x401000), mov(Rcx, u64::from(needle)), mov(Rsi, 0), rr(R11, R13)]);
     let save = super::encode(&[rr(R13, R11)]);
-    // JZ skips setup, loop, save and the jump back; the jump back returns to
-    // the read, from its own end.
-    let ed = u32::try_from(setup.len() + loop_len + save.len() + 5).expect("the loop fits a page");
-    let back = entry.len() + 2 + test.len() + 6 + setup.len() + loop_len + save.len() + 5;
-    let bd = 0u32.wrapping_sub(u32::try_from(back).expect("the loop fits a page"));
-    let jz = [&[0x0f, 0x84][..], &ed.to_le_bytes()].concat();
-    let jmp = [&[0xe9][..], &bd.to_le_bytes()].concat();
-    Pieces { init, entry, test, jz, setup, save, jmp, ed, bd }
+    let (retry, fail) = (retry_block(), fail_block());
+    // JS skips the chunk's setup, loop, save and jump back to the failure
+    // path; JZ skips that and the failure path too. The jump back and the
+    // retry's JZ return to the read, each from its own end.
+    let chunk = setup.len() + loop_len + save.len() + 5;
+    let sd = forward(chunk);
+    let ed = forward(6 + chunk + retry.len() + 6 + fail.len() + 2);
+    let span = entry.len() + 2 + TEST.len() + 6 + 6 + setup.len() + loop_len + save.len();
+    let bd = backward(span + 5);
+    let rd = backward(span + 5 + retry.len() + 6);
+    Pieces { init, entry, jz: near(&[0x0f, 0x84], ed), js: near(&[0x0f, 0x88], sd), setup, save, jmp: near(&[0xe9], bd),
+        retry, rjz: near(&[0x0f, 0x84], rd), fail, ed, sd, bd, rd }
 }
 
 fn literal(bytes: &[u8]) -> String {
@@ -109,7 +131,15 @@ fn literal(bytes: &[u8]) -> String {
 // `tail` for what follows the jump back.
 fn spell(prefix: &str, looped: &str, tail: &str) -> String {
     format!("{prefix}_init_written() ++ ({prefix}_entry_written() ++ (linux_syscall_bytes() ++ ({prefix}_test_written() ++ \
-        ({prefix}_jz_written() ++ ({prefix}_setup_written() ++ ({looped} ++ ({prefix}_save_written() ++ ({prefix}_jmp_written() ++ {tail}))))))))")
+        ({prefix}_jz_written() ++ ({prefix}_js_written() ++ ({prefix}_setup_written() ++ ({looped} ++ ({prefix}_save_written() ++ \
+        ({prefix}_jmp_written() ++ ({prefix}_retry_written() ++ ({prefix}_rjz_written() ++ ({prefix}_fail_written() ++ \
+        (linux_syscall_bytes() ++ {tail})))))))))))))")
+}
+
+// A closed fact `lhs = rhs` over Nats, by `leb` both ways (`refl` over values
+// in the thousands runs past the kernel's depth budget).
+fn closed_eq(lhs: &str, rhs: &str) -> String {
+    format!("Nat::le_antisym({lhs}, {rhs}, Nat::leb_sound({lhs}, {rhs}, trivial), Nat::leb_sound({rhs}, {lhs}, trivial))")
 }
 
 /// What both profiles state about the written file: its pieces, the code as
@@ -118,16 +148,17 @@ fn spell(prefix: &str, looped: &str, tail: &str) -> String {
 fn certify_file(module: &mut Module, prefix: &str, program: &Program, parts: &Pieces, loop_bytes: &[u8],
     tail: &[(&str, &[u8])], code_term: &str, spelled: &str, chain: &str, file: &[u8]) {
     let needle = format!("@bitvec::BitVec::ofNat(8, {})", program.needle);
-    let fixed = [("init", &parts.init), ("entry", &parts.entry), ("test", &parts.test), ("jz", &parts.jz), ("setup", &parts.setup),
-        ("loop_bytes", &loop_bytes.to_vec()), ("save", &parts.save), ("jmp", &parts.jmp)];
+    let fixed = [("init", &parts.init), ("entry", &parts.entry), ("test", &TEST.to_vec()), ("jz", &parts.jz), ("js", &parts.js),
+        ("setup", &parts.setup), ("loop_bytes", &loop_bytes.to_vec()), ("save", &parts.save), ("jmp", &parts.jmp),
+        ("retry", &parts.retry), ("rjz", &parts.rjz), ("fail", &parts.fail)];
     for (name, bytes) in fixed.iter().map(|(n, b)| (*n, b.as_slice())).chain(tail.iter().copied()) {
         module.raw(format!("fn {prefix}_{name}_written() → List<BitVec(8)> {{ {} }}", literal(bytes)));
     }
     let size = file.len();
     super::byte_chain(module, &format!("{prefix}_header"), &file[..232]);
     module.raw(format!("\
-fn {prefix}_ed() → BitVec(32) {{ @bitvec::BitVec::ofNat(32, {ed}) }}
-fn {prefix}_bd() → BitVec(32) {{ @bitvec::BitVec::ofNat(32, {bd}) }}
+fn {prefix}_jumps() → EofJumps {{ EofJumps(@bitvec::BitVec::ofNat(32, {ed}), @bitvec::BitVec::ofNat(32, {sd}),
+    @bitvec::BitVec::ofNat(32, {bd}), @bitvec::BitVec::ofNat(32, {rd})) }}
 theorem {prefix}_header_length(): {prefix}_header().len() = 232 {{ refl }}
 theorem {prefix}_loop_written(): {prefix}_bytes() = {prefix}_loop_bytes_written() {{ refl }}
 // The code as the producer wrote it: each fixed piece's encoding, and the
@@ -157,22 +188,32 @@ theorem {prefix}_resident(): (page: Nat → BitVec(8)) → CodeResident(io_fetch
     eof_file_resident({prefix}_header(), {code_term}, {prefix}_header_length(), {prefix}_fits())
 }}
 
-// Where the jumps land: JZ past the chunk's code to the tail, JMP back to the
-// read. Closed facts about the written displacements, by `leb` both ways.
-theorem {prefix}_exit_reads(): {prefix}_ed().sign_extend(32).toNat() =
-    ((eof_setup_len({needle}) + {prefix}_bytes().len()) + eof_save_len()) + 5 {{
-    j(sym({prefix}_loop_written()), λ b _ => {prefix}_ed().sign_extend(32).toNat() = ((eof_setup_len({needle}) + b.len()) + eof_save_len()) + 5,
-        Nat::le_antisym({prefix}_ed().sign_extend(32).toNat(), ((eof_setup_len({needle}) + {prefix}_loop_bytes_written().len()) + eof_save_len()) + 5,
-            Nat::leb_sound({prefix}_ed().sign_extend(32).toNat(), ((eof_setup_len({needle}) + {prefix}_loop_bytes_written().len()) + eof_save_len()) + 5, trivial),
-            Nat::leb_sound(((eof_setup_len({needle}) + {prefix}_loop_bytes_written().len()) + eof_save_len()) + 5, {prefix}_ed().sign_extend(32).toNat(), trivial)))
+// Where the jumps land: JZ past the chunk's code and the failure path to the
+// tail, JS past the chunk's code to the failure path, JMP and the retry's JZ
+// back to the read. Closed facts about the written displacements.
+theorem {prefix}_exit_reads(): {prefix}_jumps().ed.sign_extend(32).toNat() = eof_exit_skip({needle}, {prefix}_bytes()) {{
+    j(sym({prefix}_loop_written()), λ b _ => {prefix}_jumps().ed.sign_extend(32).toNat() = eof_exit_skip({needle}, b),
+        {exit_eq})
 }}
-theorem {prefix}_back_closes(): eof_loop_span({needle}, {prefix}_bytes()) + 5 + {prefix}_bd().sign_extend(32).toNat() = Nat::pow(2, 64) {{
-    j(sym({prefix}_loop_written()), λ b _ => eof_loop_span({needle}, b) + 5 + {prefix}_bd().sign_extend(32).toNat() = Nat::pow(2, 64),
-        Nat::le_antisym(eof_loop_span({needle}, {prefix}_loop_bytes_written()) + 5 + {prefix}_bd().sign_extend(32).toNat(), Nat::pow(2, 64),
-            Nat::leb_sound(eof_loop_span({needle}, {prefix}_loop_bytes_written()) + 5 + {prefix}_bd().sign_extend(32).toNat(), Nat::pow(2, 64), trivial),
-            Nat::leb_sound(Nat::pow(2, 64), eof_loop_span({needle}, {prefix}_loop_bytes_written()) + 5 + {prefix}_bd().sign_extend(32).toNat(), trivial)))
+theorem {prefix}_fail_reads(): {prefix}_jumps().sd.sign_extend(32).toNat() = eof_fail_skip({needle}, {prefix}_bytes()) {{
+    j(sym({prefix}_loop_written()), λ b _ => {prefix}_jumps().sd.sign_extend(32).toNat() = eof_fail_skip({needle}, b),
+        {fail_eq})
 }}
-", low = size & 255, high = size >> 8, ed = parts.ed, bd = parts.bd));
+theorem {prefix}_back_closes(): eof_loop_span({needle}, {prefix}_bytes()) + 5 + {prefix}_jumps().bd.sign_extend(32).toNat() = Nat::pow(2, 64) {{
+    j(sym({prefix}_loop_written()), λ b _ => eof_loop_span({needle}, b) + 5 + {prefix}_jumps().bd.sign_extend(32).toNat() = Nat::pow(2, 64),
+        {back_eq})
+}}
+theorem {prefix}_retry_closes(): eof_retry_span({needle}, {prefix}_bytes()) + 6 + {prefix}_jumps().rd.sign_extend(32).toNat() = Nat::pow(2, 64) {{
+    j(sym({prefix}_loop_written()), λ b _ => eof_retry_span({needle}, b) + 6 + {prefix}_jumps().rd.sign_extend(32).toNat() = Nat::pow(2, 64),
+        {retry_eq})
+}}
+", low = size & 255, high = size >> 8, ed = parts.ed, sd = parts.sd, bd = parts.bd, rd = parts.rd,
+    exit_eq = closed_eq(&format!("{prefix}_jumps().ed.sign_extend(32).toNat()"), &format!("eof_exit_skip({needle}, {prefix}_loop_bytes_written())")),
+    fail_eq = closed_eq(&format!("{prefix}_jumps().sd.sign_extend(32).toNat()"), &format!("eof_fail_skip({needle}, {prefix}_loop_bytes_written())")),
+    back_eq = closed_eq(&format!("eof_loop_span({needle}, {prefix}_loop_bytes_written()) + 5 + {prefix}_jumps().bd.sign_extend(32).toNat()"),
+        "Nat::pow(2, 64)"),
+    retry_eq = closed_eq(&format!("eof_retry_span({needle}, {prefix}_loop_bytes_written()) + 6 + {prefix}_jumps().rd.sign_extend(32).toNat()"),
+        "Nat::pow(2, 64)")));
 }
 
 // The arguments both claims pass the library, up to the program's facts.
@@ -191,26 +232,27 @@ fn common_arguments(prefix: &str, program: &Program) -> String {
 pub(super) fn certify(module: &mut Module, prefix: &str, program: &Program, emission: &LoopX86Emission) -> Result<Vec<u8>, String> {
     let parts = pieces(program.needle, emission.bytes.len());
     let exit = super::encode(&[Instruction::MovRR { destination: Gpr::Rdi, source: Gpr::R13 }, Instruction::MovRI { destination: Gpr::Rax, immediate: 60 }]);
-    let code = [parts.init.as_slice(), &parts.entry, &[0x0f, 0x05], &parts.test, &parts.jz, &parts.setup, &emission.bytes, &parts.save, &parts.jmp,
-        &exit, &[0x0f, 0x05]].concat();
+    let code = [parts.init.as_slice(), &parts.entry, &[0x0f, 0x05], &TEST, &parts.jz, &parts.js, &parts.setup, &emission.bytes, &parts.save,
+        &parts.jmp, &parts.retry, &parts.rjz, &parts.fail, &[0x0f, 0x05], &exit, &[0x0f, 0x05]].concat();
     let file = super::calls::image(&code)?;
     let needle = format!("@bitvec::BitVec::ofNat(8, {})", program.needle);
     let root = program.root;
-    let code_term = format!("read_loop_code({needle}, {prefix}_bytes(), {prefix}_ed(), {prefix}_bd())");
+    let code_term = format!("read_loop_code({needle}, {prefix}_bytes(), {prefix}_jumps())");
     let tail = format!("({prefix}_exit_written() ++ linux_syscall_bytes())");
     let spelled = spell(prefix, &format!("{prefix}_loop_bytes_written()"), &tail);
     let chain = format!("j({prefix}_loop_written(), λ y _ => {code_term} = {}, refl)", spell(prefix, "y", &tail));
     certify_file(module, prefix, program, &parts, &emission.bytes, &[("exit", &exit)], &code_term, &spelled, &chain, &file);
     module.raw(format!("\
 // The process claim for the written file: for every way the reads may split
-// stdin into non-empty chunks, ending at the empty read, a run that reads them
-// all and exits with `{root}::{spec}` of their concatenation.
-theorem {prefix}_runs(chunks: List<List<BitVec(8)>>, ok: EofChunks(chunks),
+// stdin into non-empty chunks, with EINTRs between them, ending at the empty
+// read or at a failed read, a run that reads them all and exits with
+// `{root}::{spec}` of their concatenation, or with 1 after the failure.
+theorem {prefix}_runs(chunks: List<ReadStep>, ok: EofChunks(chunks), ending: ReadEnding, ending_ok: EofEnding(ending),
     room: {root}::{spec}(eof_input(chunks)) + 4096 < Nat::pow(2, 64), page: Nat → BitVec(8), gprs: Gprs, flags: Flags):
-    LinuxRuns(io_linux(), eof_events(chunks, [ExitEvent(bitvec_nat::word_of_nat(64, {root}::{spec}(eof_input(chunks))))]),
+    LinuxRuns(io_linux(), eof_events(chunks, ending, [ExitEvent(bitvec_nat::word_of_nat(64, {root}::{spec}(eof_input(chunks))))]),
         io_initial({prefix}_file(), page, gprs, flags)) {{
-    read_loop_runs({common}, {prefix}_ed(), {prefix}_bd(), {prefix}_exit_reads(), {prefix}_back_closes(), {prefix}_resident(),
-        chunks, ok, room, page, gprs, flags)
+    read_loop_runs({common}, {prefix}_jumps(), {prefix}_exit_reads(), {prefix}_fail_reads(), {prefix}_back_closes(),
+        {prefix}_retry_closes(), {prefix}_resident(), chunks, ok, ending, ending_ok, room, page, gprs, flags)
 }}
 ", spec = program.spec, common = common_arguments(prefix, program)));
     Ok(file)
@@ -250,18 +292,33 @@ pub(super) fn certify_print(module: &mut Module, prefix: &str, program: &Program
     let store = vec![0x49, 0x89, 0x00];
     let write = super::encode(&[Instruction::MovRR { destination: Rsi, source: R9 }, Instruction::MovRR { destination: Rdx, source: R10 },
         mov(Rdi, 1), mov(Rax, 1)]);
+    let advance = super::encode(&[Instruction::AddRR { destination: R9, source: Rax }, Instruction::SubRR { destination: R10, source: Rax }]);
     let exit = super::encode(&[mov(Rdi, 0), mov(Rax, 60)]);
+    let (retry, fail) = (retry_block(), fail_block());
+    // The write loop's jumps (elf64_read_print's `PrintJumps`): JS to its
+    // failure path, JZ to exit(0) past it, JMP and the retry's JZ back to the
+    // write.
+    let psd = forward(advance.len() + 6 + 5);
+    let pzd = forward(5 + retry.len() + 6 + fail.len() + 2);
+    let span = write.len() + 2 + TEST.len() + 6 + advance.len() + 6;
+    let pbd = backward(span + 5);
+    let prd = backward(span + 5 + retry.len() + 6);
+    let (wjs, wjz, wjmp, wrjz) = (near(&[0x0f, 0x88], psd), near(&[0x0f, 0x84], pzd), near(&[0xe9], pbd), near(&[0x0f, 0x84], prd));
     let [word, start, length] = format else { return Err("the formatter has three parts".into()) };
-    let code = [parts.init.as_slice(), &parts.entry, &[0x0f, 0x05], &parts.test, &parts.jz, &parts.setup, &emission.bytes, &parts.save, &parts.jmp,
-        &base, &word.bytes, &start.bytes, &length.bytes, &store, &write, &[0x0f, 0x05], &exit, &[0x0f, 0x05]].concat();
+    let code = [parts.init.as_slice(), &parts.entry, &[0x0f, 0x05], &TEST, &parts.jz, &parts.js, &parts.setup, &emission.bytes, &parts.save,
+        &parts.jmp, &parts.retry, &parts.rjz, &parts.fail, &[0x0f, 0x05],
+        &base, &word.bytes, &start.bytes, &length.bytes, &store, &write, &[0x0f, 0x05], &TEST, &wjs, &advance, &wjz, &wjmp,
+        &retry, &wrjz, &fail, &[0x0f, 0x05], &exit, &[0x0f, 0x05]].concat();
     let file = super::calls::image(&code)?;
     let needle = format!("@bitvec::BitVec::ofNat(8, {})", program.needle);
     let root = program.root;
     let (w, st, ln) = (&word.prefix, &start.prefix, &length.prefix);
-    let code_term = format!("read_print_code({needle}, {prefix}_bytes(), {prefix}_ed(), {prefix}_bd(), {w}_code(), {st}_code(), {ln}_code())");
+    let code_term = format!("read_print_code({needle}, {prefix}_bytes(), {prefix}_jumps(), {w}_code(), {st}_code(), {ln}_code(), {prefix}_print_jumps())");
     let tail = |w: &str, st: &str, ln: &str| format!(
         "({prefix}_base_written() ++ ({w} ++ ({st} ++ ({ln} ++ ({prefix}_store_written() ++ ({prefix}_write_written() ++ \
-        (linux_syscall_bytes() ++ ({prefix}_exit_written() ++ linux_syscall_bytes()))))))))");
+        (linux_syscall_bytes() ++ ({prefix}_test_written() ++ ({prefix}_wjs_written() ++ ({prefix}_advance_written() ++ \
+        ({prefix}_wjz_written() ++ ({prefix}_wjmp_written() ++ ({prefix}_retry_written() ++ ({prefix}_wrjz_written() ++ \
+        ({prefix}_fail_written() ++ (linux_syscall_bytes() ++ ({prefix}_exit_written() ++ linux_syscall_bytes())))))))))))))))))");
     let layout = |looped: &str, w: &str, st: &str, ln: &str| spell(prefix, looped, &tail(w, st, ln));
     let original = (format!("{prefix}_bytes()"), format!("{w}_bytes()"), format!("{st}_bytes()"), format!("{ln}_bytes()"));
     let written = (format!("{prefix}_loop_bytes_written()"), format!("{w}_lit()"), format!("{st}_lit()"), format!("{ln}_lit()"));
@@ -278,25 +335,46 @@ pub(super) fn certify_print(module: &mut Module, prefix: &str, program: &Program
         chain = format!("j({lemma}, λ y _ => {code_term} = {motive}, {chain})");
     }
     let spelled = layout(&written.0, &written.1, &written.2, &written.3);
-    certify_file(module, prefix, program, &parts, &emission.bytes, &[("base", &base), ("store", &store), ("write", &write), ("exit", &exit)],
+    module.raw(format!("fn {prefix}_print_jumps() → PrintJumps {{ PrintJumps(@bitvec::BitVec::ofNat(32, {psd}), \
+        @bitvec::BitVec::ofNat(32, {pzd}), @bitvec::BitVec::ofNat(32, {pbd}), @bitvec::BitVec::ofNat(32, {prd})) }}"));
+    certify_file(module, prefix, program, &parts, &emission.bytes, &[("base", &base), ("store", &store), ("write", &write),
+        ("wjs", &wjs), ("advance", &advance), ("wjz", &wjz), ("wjmp", &wjmp), ("wrjz", &wrjz), ("exit", &exit)],
         &code_term, &spelled, &chain, &file);
+    let pj = format!("{prefix}_print_jumps()");
+    module.raw(format!("\
+theorem {prefix}_write_fail_reads(): {pj}.sd.sign_extend(32).toNat() = print_fail_skip() {{ {} }}
+theorem {prefix}_write_exit_reads(): {pj}.zd.sign_extend(32).toNat() = print_exit_skip() {{ {} }}
+theorem {prefix}_write_back_closes(): print_loop_span() + 5 + {pj}.bd.sign_extend(32).toNat() = Nat::pow(2, 64) {{ {} }}
+theorem {prefix}_write_retry_closes(): print_retry_span() + 6 + {pj}.rd.sign_extend(32).toNat() = Nat::pow(2, 64) {{ {} }}
+",
+        closed_eq(&format!("{pj}.sd.sign_extend(32).toNat()"), "print_fail_skip()"),
+        closed_eq(&format!("{pj}.zd.sign_extend(32).toNat()"), "print_exit_skip()"),
+        closed_eq(&format!("print_loop_span() + 5 + {pj}.bd.sign_extend(32).toNat()"), "Nat::pow(2, 64)"),
+        closed_eq(&format!("print_retry_span() + 6 + {pj}.rd.sign_extend(32).toNat()"), "Nat::pow(2, 64)")));
     module.raw(format!("\
 // The process claim for the written file: for every way the reads may split
-// stdin into non-empty chunks, ending at the empty read, a run that reads them
-// all, writes `{root}::{spec}` of their concatenation to stdout as a decimal
-// line, and exits 0. The formatter covers counts below 10000.
-theorem {prefix}_runs(chunks: List<List<BitVec(8)>>, ok: EofChunks(chunks), small: {root}::{spec}(eof_input(chunks)) < 10000,
+// stdin into non-empty chunks, with EINTRs between them, ending at the empty
+// read or at a failed read, and every way the writes may return (short counts
+// and EINTRs, then the rest or a failure), a run that reads them all, writes
+// `{root}::{spec}` of their concatenation to stdout as a decimal line and
+// exits 0, or exits 1 at the failure. The formatter covers counts below 10000.
+theorem {prefix}_runs(chunks: List<ReadStep>, ok: EofChunks(chunks), ending: ReadEnding, ending_ok: EofEnding(ending),
+    small: {root}::{spec}(eof_input(chunks)) < 10000,
+    writes: List<WriteStep>, writes_ok: WriteSteps(writes)(decimal_line({root}::{spec}(eof_input(chunks)))),
+    written: WriteEnding, written_ok: WriteEndingOk(written),
     page: Nat → BitVec(8), gprs: Gprs, flags: Flags):
-    LinuxRuns(io_linux(), eof_events(chunks, [WriteEvent(@bitvec::BitVec::ofNat(64, 1), decimal_line({root}::{spec}(eof_input(chunks)))),
-        ExitEvent(@bitvec::BitVec::ofNat(64, 0))]), io_initial({prefix}_file(), page, gprs, flags)) {{
+    LinuxRuns(io_linux(), eof_events(chunks, ending, write_events(decimal_line({root}::{spec}(eof_input(chunks))), writes, written)),
+        io_initial({prefix}_file(), page, gprs, flags)) {{
     read_print_runs({common},
         {w}_code(), {st}_code(), {ln}_code(), {w}_Protected, {st}_Protected, {ln}_Protected,
         ReadPrintFormat(λ before n placed => {w}_typed_artifact(n, before, placed),
             λ before base n at_base at_n => {st}_typed_artifact(base, n, before, at_base, at_n),
             λ before n placed => {ln}_typed_artifact(n, before, placed),
             trivial, trivial, trivial, trivial, trivial, trivial, trivial, trivial),
-        {prefix}_ed(), {prefix}_bd(), {prefix}_exit_reads(), {prefix}_back_closes(), {prefix}_resident(),
-        chunks, ok, small, page, gprs, flags)
+        {prefix}_jumps(), {prefix}_exit_reads(), {prefix}_fail_reads(), {prefix}_back_closes(), {prefix}_retry_closes(),
+        {prefix}_print_jumps(), {prefix}_write_fail_reads(), {prefix}_write_exit_reads(), {prefix}_write_back_closes(),
+        {prefix}_write_retry_closes(), {prefix}_resident(),
+        chunks, ok, ending, ending_ok, small, writes, writes_ok, written, written_ok, page, gprs, flags)
 }}
 ", spec = program.spec, common = common_arguments(prefix, program)));
     Ok(file)
