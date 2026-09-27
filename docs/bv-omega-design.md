@@ -49,6 +49,11 @@ up:
 - every other word's bound, the outermost words' and a `sub`'s minuend's, is
   a side condition for `omega`. So is each `sub`'s no-borrow, `Q <= P`.
 
+Shared operands must not make bound dependencies cyclic: `w.sub(w)` cannot
+get `w`'s bound from itself, and `w.add(w).sub(w)` must not pass it around
+through the addition. A parent edge that would close a cycle is skipped,
+leaving a stated bound or an independent side condition to supply it.
+
 A side condition over no atoms (`5 < 2^64 + 0`) is a comparison of literals,
 proved by `trivial`: the kernel decides `Le` of literals, `pow` included.
 

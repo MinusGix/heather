@@ -166,6 +166,21 @@ fn unfolds_only_what_no_fact_states() {
 }
 
 fn refuses_naming_the_side_condition() {
+    let message = refused("an unbounded word_of_nat",
+        "theorem self_sub(e: Nat): bitvec_nat::word_of_nat(64, e).sub(bitvec_nat::word_of_nat(64, e)).toNat() = 0 { bv_omega }");
+    assert!(message.contains("does not fit 64 bits"), "{message}");
+    checks("a bounded word_of_nat subtracted from itself",
+        "theorem t(e: Nat, small: e < 1000): bitvec_nat::word_of_nat(64, e).sub(bitvec_nat::word_of_nat(64, e)).toNat() = 0 { bv_omega }");
+    checks("a shared operand below the minuend",
+        "theorem t(e: Nat, small: e < 1000): double(bitvec_nat::word_of_nat(64, e)).sub(bitvec_nat::word_of_nat(64, e)).toNat() = e { bv_omega }");
+    checks("a variable word subtracted from itself",
+        "theorem t(a: BitVec(64)): a.sub(a).toNat() = 0 { bv_omega }");
+    let message = refused("an unbounded shared operand below the minuend",
+        "theorem t(e: Nat): double(bitvec_nat::word_of_nat(64, e)).sub(bitvec_nat::word_of_nat(64, e)).toNat() = e { bv_omega }");
+    assert!(message.contains("may overflow 64 bits"), "{message}");
+    let message = refused("a wrong self subtraction",
+        "theorem t(e: Nat, small: e < 1000): bitvec_nat::word_of_nat(64, e).sub(bitvec_nat::word_of_nat(64, e)).toNat() = 1 { bv_omega }");
+    assert!(message.contains("no contradiction"), "{message}");
     let message = refused("an overflowing doubling",
         "theorem t(y: BitVec(64), v: Nat, value: y.toNat() = v, bound: v < 18446744073709551615): double(y).toNat() = v * 2 { bv_omega }");
     assert!(message.contains("`double(y)` may overflow 64 bits"), "{message}");

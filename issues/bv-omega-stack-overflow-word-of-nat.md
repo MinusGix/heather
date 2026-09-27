@@ -1,6 +1,6 @@
 ---
 title: bv_omega overflows the stack on word_of_nat at an open value
-status: open
+status: closed
 labels: [bitvec,omega,crash,metaprogramming]
 created: 2026-09-27
 updated: 2026-09-27
@@ -29,3 +29,17 @@ width-bounded steps, so that round no longer meets it.
 
 - The reproducer is refused with a message or proved; no crash.
 - A test pins it, beside `bv_omega.rs`'s existing negatives.
+
+## Log
+
+2026-09-27: Fixed the bound planner's dependency cycle. The definition walk
+already recognizes `word_of_nat`; the crash occurred while emitting its
+bound. In `w.sub(w)`, the shared operand's bound was taken from the
+subtraction's minuend, which is that same operand. Nested shared operands
+can close a longer cycle through an addition's bound. The planner now
+rejects any parent edge whose bound dependency reaches the operand and
+uses an independent stated bound or side condition instead.
+
+The reproducer is refused with `does not fit 64 bits`. Regression tests
+cover bounded self subtraction, nested sharing with and without a bound,
+variable-word self subtraction, and a false equality control.

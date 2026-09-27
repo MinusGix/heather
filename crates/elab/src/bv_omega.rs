@@ -604,8 +604,8 @@ impl<'w, 'a> Emitter<'w, 'a> {
         let from = if matches!(self.walk.nodes[n].kind, Kind::Leaf | Kind::Defined(..)) {
             BoundFrom::Range
         } else if let Some(from) = self.parents[n].iter().find_map(|&p| match self.walk.nodes[p].kind {
-            Kind::Add(a, _) => Some(BoundFrom::AddParent { parent: p, left: a == n }),
-            Kind::Sub(_, b) if b == n => Some(BoundFrom::SubParent { parent: p }),
+            Kind::Add(a, _) if !self.bound_depends_on(p, n) => Some(BoundFrom::AddParent { parent: p, left: a == n }),
+            Kind::Sub(a, b) if b == n && !self.bound_depends_on(a, n) => Some(BoundFrom::SubParent { parent: p }),
             _ => None,
         }) {
             from
@@ -642,6 +642,26 @@ impl<'w, 'a> Emitter<'w, 'a> {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Bounds are shared with word nodes. Passing a subtraction's bound
+    /// from its minuend can otherwise make a cycle, as in `w.sub(w)` or
+    /// `w.add(w).sub(w)`. Reject the edge that would close that cycle;
+    /// an independent bound (a stated fact or an obligation) is needed.
+    fn bound_depends_on(&self, mut from: usize, target: usize) -> bool {
+        loop {
+            if from == target {
+                return true;
+            }
+            match self.bound_from[from] {
+                Some(BoundFrom::AddParent { parent, .. }) => from = parent,
+                Some(BoundFrom::SubParent { parent }) => {
+                    let Kind::Sub(a, _) = self.walk.nodes[parent].kind else { unreachable!() };
+                    from = a;
+                }
+                _ => return false,
+            }
         }
     }
 
