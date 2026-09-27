@@ -10,7 +10,8 @@ const DECIMAL: &str = include_str!("../../../lib/decimal_line.hthr");
 // The print profile (design §10.3), refused the same way: the claim can't be
 // restated over a program that writes with another syscall, to another
 // descriptor, from the length register or with the start as the length,
-// stores its word off the page or stores another register, or exits nonzero.
+// stores its word off the page or stores another register, exits nonzero, or
+// formats a count other than the loop's total.
 #[test]
 fn slow_acceptance_read_print_refusals() {
     let mut elab = checker();
@@ -27,6 +28,7 @@ fn slow_acceptance_read_print_refusals() {
         ("store_outside_page", "MovRI(R8, BitVec::ofNat(0x401000))", "MovRI(R8, BitVec::ofNat(0x402000))"),
         ("stored_register", "WordStore(R8, Rax)", "WordStore(R8, R9)"),
         ("exit_status", "MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))", "MovRI(Rdi, BitVec::ofNat(1)), MovRI(Rax, BitVec::ofNat(60))"),
+        ("count_from_elsewhere", "[MovRR(R11, R13), MovRI(R8", "[MovRR(R11, R12), MovRI(R8"),
     ] {
         let bad = PRINT.replacen(from, to, 1);
         assert_ne!(bad, PRINT, "{name}");

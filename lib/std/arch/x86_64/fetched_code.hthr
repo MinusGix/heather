@@ -202,6 +202,50 @@ theorem near_taken_rip<M>(displacement: BitVec(32), state: MachineState<M>, sele
     j(sym(selected), λ zf _ => (match zf { False => next_rip(state.rip, 6), True => near_branch_target(state.rip, 6, displacement) }) =
         near_branch_target(state.rip, 6, displacement), refl)
 }
+// TEST of a register with itself sets ZF exactly when its value is zero: the
+// test a loop over syscall returns makes of RAX.
+theorem test_self_zero(n: Nat): (x: BitVec(n)) → x.toNat() = 0 → is_zero_bits(n, x.band(x)) = True {
+    match n as λ k => (x: BitVec(k)) → x.toNat() = 0 → is_zero_bits(k, x.band(x)) = True {
+        Zero => λ x zero => refl,
+        Succ(k, ih) => λ x zero => {
+            let t = x.tail_bits();
+            (match x.head_bit() as λ h => Nat::of_bit(h) + t.toNat().twice() = 0 →
+                    (h && h).not() && is_zero_bits(k, t.band(t)) = True {
+                False => λ sum => {
+                    let doubled: (t.toNat() + t.toNat() = 0) =
+                        trans(sym(Nat::twice_add_self(t.toNat())), trans(sym(Nat::add_left_zero(t.toNat().twice())), sum));
+                    let none: (t.toNat() = 0) = omega;
+                    ih(t, none)
+                },
+                // `omega` keeps a closed `of_bit(True)` as an atom: spelled as 1.
+                True => λ sum => {
+                    let one: (1 + t.toNat().twice() = 0) = sum;
+                    let bad: False = omega;
+                    false_elim(bad)
+                },
+            })(zero)
+        },
+    }
+}
+theorem test_self_nonzero(n: Nat): (x: BitVec(n)) → 0 < x.toNat() → is_zero_bits(n, x.band(x)) = False {
+    match n as λ k => (x: BitVec(k)) → 0 < x.toNat() → is_zero_bits(k, x.band(x)) = False {
+        Zero => λ x some => { let bad: False = omega; false_elim(bad) },
+        Succ(k, ih) => λ x some => {
+            let t = x.tail_bits();
+            (match x.head_bit() as λ h => 0 < Nat::of_bit(h) + t.toNat().twice() →
+                    (h && h).not() && is_zero_bits(k, t.band(t)) = False {
+                False => λ sum => {
+                    let s0: (0 < t.toNat().twice()) = j(Nat::add_left_zero(t.toNat().twice()), λ v _ => 0 < v, sum);
+                    let doubled: (0 < t.toNat() + t.toNat()) = j(Nat::twice_add_self(t.toNat()), λ v _ => 0 < v, s0);
+                    let part: (0 < t.toNat()) = omega;
+                    ih(t, part)
+                },
+                True => λ sum => refl,
+            })(some)
+        },
+    }
+}
+
 // A rip reached as `next_rip(origin, a)` and then advanced by `b`.
 theorem rip_advance(origin, address: BitVec(64), a, b: Nat, at: address = next_rip(origin, a)):
     next_rip(address, b) = next_rip(origin, a + b) {

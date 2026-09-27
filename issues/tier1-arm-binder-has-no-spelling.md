@@ -3,7 +3,7 @@ title: A tier-1 match arm's recursive binder has no spelling
 status: open
 labels: [frontend,diagnostics,inductives,display]
 created: 2026-09-06
-updated: 2026-09-06
+updated: 2026-09-27
 ---
 
 Found by the [[omega-measure-at-constructor-pattern]] design pass
@@ -32,3 +32,7 @@ the elaborator knows when it builds the arm.
 ## When
 Triggered: the next diagnostic, `omega` render, or lint that has to name a
 recursive arm binder and prints a projection or refuses instead.
+
+## Log
+
+- 2026-09-27: 2026-09-27: Probably seen again, not confirmed as this binder: in the read-until-EOF process proof ([[native-read-until-eof]]), `omega` inside a `Cons(chunk, rest)` arm of a theorem matching on its list parameter failed with "could not spell a natural expression" over a goal about `chunk.len()`. The workaround there is a Nat-only lemma (`eof_room`).

@@ -1,9 +1,11 @@
-// `wc -l`, as a certified static executable (docs/native-first-program-design.md).
-// The program is the counting loop below, over the bytes one read of stdin
-// returns; the process exits with the count. `wc_l` is the specification the
-// exit status is stated against, and `count_lines_reads` is this client's
-// one fact about its own loop: over a buffer holding `bytes`, it computes
-// `wc_l(bytes)`. Everything machine-shaped comes from the shared generators.
+// `wc -l`, as a certified static executable (docs/native-first-program-design.md,
+// docs/native-read-until-eof-design.md). The program is the counting loop
+// below, run over each chunk the reads of stdin return until the empty one;
+// the process exits with (or prints) the total. `wc_l` is the specification
+// the total is stated against, and this client's facts about its own loop
+// are two: over a buffer holding `bytes`, it adds `wc_l(bytes)` to the count
+// (`count_lines_input`), and `wc_l` adds over concatenation (`wc_l_append`).
+// Everything machine-shaped comes from the shared generators.
 import function_ir_loop;
 import bitvec;
 import bool;
@@ -87,34 +89,27 @@ theorem count_lines_reads(tail: List<BitVec(8)>): (buffer: ReadonlyBytes) → (c
     }
 }
 
-// The fact the read-once profile asks of its loop (elf64_read_loop's
-// ReadLoopComputes): from the start of a buffer holding `bytes`, the count
-// is `wc_l(bytes)`.
-theorem count_lines_input(bytes: List<BitVec(8)>, buffer: ReadonlyBytes, length: buffer.length = bytes.len(),
+// The fact the profile asks of its loop (elf64_read_loop's ReadEofComputes):
+// from the start of a buffer holding `bytes`, the loop adds `wc_l(bytes)` to
+// whatever count it starts from.
+theorem count_lines_input(carry: Nat, bytes: List<BitVec(8)>, buffer: ReadonlyBytes, length: buffer.length = bytes.len(),
     reads: (i: Nat) → (byte: BitVec(8)) → bytes.nth(i) = Some(byte) → buffer.read(buffer.base + i) = Some(byte)):
-    count_lines(buffer, newline(), bytes.len(), 0, 0) = End(bytes.len(), 0, wc_l(bytes)) {
+    count_lines(buffer, newline(), bytes.len(), 0, carry) = End(bytes.len(), 0, carry + wc_l(bytes)) {
     let from_start = Nat::add_left_zero(bytes.len());
-    let counted = count_lines_reads(bytes, buffer, 0, 0, trans(length, sym(from_start)),
+    let counted = count_lines_reads(bytes, buffer, 0, carry, trans(length, sym(from_start)),
         λ i byte present => j(sym(Nat::add_left_zero(i)), λ at _ => buffer.read(buffer.base + at) = Some(byte), reads(i, byte, present)));
-    trans(counted, trans(cong_fn<Nat, LoopOutcome<Nat>>(λ at => End(at, 0, 0 + wc_l(bytes)), from_start),
-        cong_fn<Nat, LoopOutcome<Nat>>(λ count => End(bytes.len(), 0, count), Nat::add_left_zero(wc_l(bytes)))))
+    trans(counted, cong_fn<Nat, LoopOutcome<Nat>>(λ at => End(at, 0, carry + wc_l(bytes)), from_start))
 }
 
-// At most one line per byte.
-theorem wc_l_le_len(bytes: List<BitVec(8)>): wc_l(bytes) <= bytes.len() {
-    match bytes {
-        Nil => trivial,
+// Counting chunk by chunk counts the whole input.
+theorem wc_l_append(front: List<BitVec(8)>, back: List<BitVec(8)>): wc_l(front ++ back) = wc_l(front) + wc_l(back) {
+    match front {
+        Nil => sym(Nat::add_left_zero(wc_l(back))),
         Cons(byte, rest) => (match byte_equal(newline(), byte) as λ equal =>
-                (match equal { False => wc_l(rest), True => Succ(wc_l(rest)) }) <= Succ(rest.len()) {
-            False => Nat::le_succ_r(wc_l(rest), rest.len(), wc_l_le_len(rest)),
-            True => wc_l_le_len(rest),
+                (match equal { False => wc_l(rest ++ back), True => Succ(wc_l(rest ++ back)) }) =
+                (match equal { False => wc_l(rest), True => Succ(wc_l(rest)) }) + wc_l(back) {
+            False => wc_l_append(rest, back),
+            True => trans(cong_fn<Nat, Nat>(λ n => Succ(n), wc_l_append(rest, back)), sym(Nat::add_succ_left(wc_l(rest), wc_l(back)))),
         }),
     }
-}
-
-// What the printing profile asks of its count (elf64_read_print): one read
-// returns at most 4096 bytes, so the count fits the line it prints.
-theorem wc_l_bounded(bytes: List<BitVec(8)>, fits: bytes.len() <= 4096): wc_l(bytes) < 10000 {
-    let most = wc_l_le_len(bytes);
-    omega
 }

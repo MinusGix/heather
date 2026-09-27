@@ -236,59 +236,61 @@ protects the parent return word.
 
 ## A program with input: `wc -l`
 
-`wc_l.hthr` is a whole program: it reads stdin once into a 4096-byte page,
-counts the newlines with a certified loop, and exits with the count.
+`wc_l.hthr` is a whole program. It reads stdin a page at a time, counts each
+chunk's newlines with a certified loop into a running total, stops at the
+empty read (end of file), and exits with the total.
 
 ```sh
 cargo build --release -p heather-cli
 (ulimit -v 8388608 -t 900 -c 0; target/release/heather build-x86 \
   examples/x86-native/wc_l.hthr count_lines --read-loop --needle 10 \
   --advance line_body_advances --spec wc_l --computes count_lines_input \
-  -o target/x86-native/wc_l --cache-dir target/native-images)
+  --adds wc_l_append -o target/x86-native/wc_l --cache-dir target/native-images)
 printf 'one\ntwo\nthree\n' | ./target/x86-native/wc_l; echo $?
 ```
 
 Expected output: `3`.
 
 The certificate's `count_lines_native_runs` states the whole process against
-the source. For every input one successful read may return (at most 4096
-bytes), the written file has a run that reads it and exits with
-`wc_l(bytes)`, and the parent sees the low eight bits. `wc_l` is an ordinary
-Heather function; the program supplies it, the counting step, and one lemma
-(`count_lines_input`) saying its loop computes `wc_l` over a buffer holding
-the input. Everything machine-shaped comes from the shared generators and the
-library's read-once process theorem (`lib/elf64_read_loop.hthr`).
+the source. For every way the reads may split stdin into non-empty chunks,
+ending at the empty read, the written file has a run that reads them all and
+exits with `wc_l` of their concatenation, and the parent sees the low eight
+bits. `wc_l` is an ordinary Heather function; the program supplies it, the
+counting step, and two lemmas: `count_lines_input`, that its loop adds `wc_l`
+of a buffer's contents to whatever count it starts from, and `wc_l_append`,
+that `wc_l` adds over concatenation. Everything machine-shaped comes from the
+shared generators and the library's process theorem
+(`lib/elf64_read_loop.hthr`, [its design](../../docs/native-read-until-eof-design.md)).
 
 The trace is deliberately basic (`lib/linux_x86_64_io.hthr`): successful reads,
 complete writes and exit are the only syscalls with rules, so the claim says
-nothing about a run that meets a read error or a short write, and it covers
-only what the first read returns. A longer file is counted up to its first
-4096 bytes. The proper syscall model is `issues/linux-syscall-trace-model.md`.
+nothing about a run that meets a read error or a short write. The proper
+syscall model is `issues/linux-syscall-trace-model.md`.
 
 ### Printing the count
 
-Add `--print --bound wc_l_bounded` (and a fresh output path) and the program
-prints the count instead of exiting with it:
+Add `--print` (and a fresh output path) and the program prints the count
+instead of exiting with it:
 
 ```sh
 (ulimit -v 12582912 -t 3600 -c 0; target/release/heather build-x86 \
   examples/x86-native/wc_l.hthr count_lines --read-loop --needle 10 \
   --advance line_body_advances --spec wc_l --computes count_lines_input \
-  --print --bound wc_l_bounded -o target/x86-native/wc_l_print \
+  --adds wc_l_append --print -o target/x86-native/wc_l_print \
   --cache-dir target/native-images)
 printf 'one\ntwo\nthree\n' | ./target/x86-native/wc_l_print
 ```
 
 Expected output: `3`, and exit status 0.
 
-The certificate's `count_lines_native_runs` now states the trace
-`[ReadEvent(0, bytes), WriteEvent(1, decimal_line(wc_l(bytes))), ExitEvent(0)]`.
-`decimal_line(n)` is `decimal(n) ++ [newline]`, and `decimal` is an ordinary
-function: the digits of `n / 10`, then `n % 10`. The line is computed by code the
-native compiler generates from `lib/decimal_line.hthr`'s source functions. The
-machine has no divide or multiply, so they use a restoring chain of
-subtract-if-fits steps. The library proves that for every count below 10000
-the stored word holds exactly that line past its leading zeros. `wc_l_bounded`
-is the program's one extra fact: a count of at most 4096 bytes is below
-10000. The word is stored with a `mov [r8], rax` (`lib/std/arch/x86_64/store.hthr`)
-and written with `write(1, …)` (`lib/elf64_read_print.hthr`).
+The certificate's `count_lines_native_runs` now ends the trace with
+`WriteEvent(1, decimal_line(n)), ExitEvent(0)` for the total `n`, for inputs
+with fewer than 10000 lines. `decimal_line(n)` is `decimal(n) ++ [newline]`,
+and `decimal` is an ordinary function: the digits of `n / 10`, then `n % 10`.
+The line is computed by code the native compiler generates from
+`lib/decimal_line.hthr`'s source functions. The machine has no divide or
+multiply, so they use a restoring chain of subtract-if-fits steps. The
+library proves that for every count below 10000 the stored word holds exactly
+that line past its leading zeros. The word is stored with a `mov [r8], rax`
+(`lib/std/arch/x86_64/store.hthr`) and written with `write(1, …)`
+(`lib/elf64_read_print.hthr`).

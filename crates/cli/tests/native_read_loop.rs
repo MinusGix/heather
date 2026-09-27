@@ -1,7 +1,9 @@
-//! The first program with input: `wc -l` built as a certified read-once
-//! executable (docs/native-first-program-design.md) with no toolchain on PATH,
-//! then run on files and a pipe. The status is compared with the newline count
-//! of what the one read returned, as the certificate states it.
+//! The first program with input: `wc -l` built as a certified executable that
+//! reads stdin to its end (docs/native-first-program-design.md,
+//! docs/native-read-until-eof-design.md) with no toolchain on PATH, then run
+//! on files and on pipes written in bursts. The status and the printed line
+//! are compared with the newline count of the whole input, as the certificate
+//! states it.
 #![cfg(all(target_arch = "x86_64", target_os = "linux"))]
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -19,6 +21,10 @@ fn scratch(name: &str) -> PathBuf {
 fn build(directory: &Path, needle: &str) -> Output { build_with(directory, needle, &[]) }
 
 fn build_with(directory: &Path, needle: &str, extra: &[&str]) -> Output {
+    build_raw(directory, needle, &[&["--adds", "wc_l_append"], extra].concat())
+}
+
+fn build_raw(directory: &Path, needle: &str, extra: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_heather")).current_dir(root()).env("PATH", directory)
         .args(["build-x86", "examples/x86-native/wc_l.hthr", "count_lines", "--read-loop", "--needle", needle,
             "--advance", "line_body_advances", "--spec", "wc_l", "--computes", "count_lines_input"]).args(extra).arg("-o")
@@ -34,28 +40,39 @@ fn inputs() -> Vec<Vec<u8>> {
         b"".to_vec(), b"hello".to_vec(), b"a\nb\nc\n".to_vec(), b"no newline at the end\nsecond".to_vec(),
         vec![b'\n'; 255], vec![b'\n'; 256], vec![b'\n'; 257], vec![b'\n'; 4096], vec![b'x'; 4096],
     ];
-    for len in [1, 17, 4095, 4096, 4097, 9000] { inputs.push(random(len)); }
-    // Newline at the last byte the read returns, and just past it.
-    let mut edge = vec![b'y'; 4097];
-    edge[4095] = b'\n';
-    edge[4096] = b'\n';
+    for len in [1, 17, 4095, 4096, 4097, 9000, 40000] { inputs.push(random(len)); }
+    // Newlines on both sides of each page boundary a read may stop at.
+    let mut edge = vec![b'y'; 8193];
+    for at in [4095, 4096, 8191, 8192] { edge[at] = b'\n'; }
     inputs.push(edge);
-    // A count of each width the line prints: 1, 2, 3 and 4 digits.
-    for count in [9, 10, 99, 100, 999, 1000] { inputs.push(vec![b'\n'; count]); }
+    // A count of each width the line prints: 1, 2, 3 and 4 digits, the last
+    // across three reads.
+    for count in [9, 10, 99, 100, 999, 1000, 9999] { inputs.push(vec![b'\n'; count]); }
     inputs
 }
 
-// What `wc -l` prints for what the one read returned.
-fn newlines(input: &[u8]) -> usize { input.iter().take(4096).filter(|&&b| b == b'\n').count() }
+// What `wc -l` prints: every newline, however many reads it took.
+fn newlines(input: &[u8]) -> usize { input.iter().filter(|&&b| b == b'\n').count() }
 
-// What the certificate promises for a regular file: one read returns its
-// first min(len, 4096) bytes, and the status is their newline count's low byte.
-fn expected(input: &[u8]) -> i32 {
-    (input.iter().take(4096).filter(|&&b| b == b'\n').count() % 256) as i32
+// The status: the count's low byte.
+fn expected(input: &[u8]) -> i32 { (newlines(input) % 256) as i32 }
+
+// A pipe written in bursts, so the reads return pieces: the program must
+// keep reading until the writer closes it.
+fn bursts(executable: &Path) -> Output {
+    let mut child = Command::new(executable).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    for piece in [&b"one\ntw"[..], b"o\n", b"", b"three", b"\n\n"] {
+        stdin.write_all(piece).unwrap();
+        stdin.flush().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(30));
+    }
+    drop(stdin);
+    child.wait_with_output().unwrap()
 }
 
 #[test]
-fn wc_l_counts_what_the_read_returned() {
+fn wc_l_counts_every_line() {
     let directory = scratch("read-loop");
     let output = build(&directory, "10");
     assert!(output.status.success(), "build-x86 {}: {}", output.status, String::from_utf8_lossy(&output.stderr));
@@ -70,15 +87,12 @@ fn wc_l_counts_what_the_read_returned() {
         let status = Command::new(&executable).stdin(std::fs::File::open(&path).unwrap()).status().unwrap();
         assert_eq!(status.code(), Some(expected(input)), "input {index} ({} bytes)", input.len());
     }
-    // A pipe: a small write arrives in one read.
-    let mut child = Command::new(&executable).stdin(Stdio::piped()).spawn().unwrap();
-    child.stdin.take().unwrap().write_all(b"one\ntwo\n").unwrap();
-    assert_eq!(child.wait().unwrap().code(), Some(2));
+    assert_eq!(bursts(&executable).status.code(), Some(4));
     std::fs::remove_dir_all(directory).unwrap();
 }
 
 // The loop given a byte its specification does not count: the program's
-// ReadLoopComputes fact is about newlines, so the certificate is refused and
+// ReadEofComputes fact is about newlines, so the certificate is refused and
 // nothing is published.
 #[test]
 fn a_needle_the_specification_does_not_count_is_refused() {
@@ -92,11 +106,12 @@ fn a_needle_the_specification_does_not_count_is_refused() {
 }
 
 // With `--print`, the count is the output: its decimal digits and a newline
-// on stdout, as `decimal_line(wc_l(bytes))` states it, and the exit is 0.
+// on stdout, as `decimal_line(wc_l(eof_input(chunks)))` states it, and the
+// exit is 0.
 #[test]
-fn wc_l_prints_what_the_read_returned() {
+fn wc_l_prints_every_line() {
     let directory = scratch("read-print");
-    let output = build_with(&directory, "10", &["--print", "--bound", "wc_l_bounded"]);
+    let output = build_with(&directory, "10", &["--print"]);
     assert!(output.status.success(), "build-x86 {}: {}", output.status, String::from_utf8_lossy(&output.stderr));
     let executable = directory.join("wc_l");
     let certificate = std::fs::read_to_string(directory.join("wc_l.certificate.hthr")).unwrap();
@@ -110,20 +125,18 @@ fn wc_l_prints_what_the_read_returned() {
         assert_eq!(run.status.code(), Some(0), "input {index}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), format!("{}\n", newlines(input)), "input {index} ({} bytes)", input.len());
     }
-    let mut child = Command::new(&executable).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
-    child.stdin.take().unwrap().write_all(b"one\ntwo\n").unwrap();
-    let run = child.wait_with_output().unwrap();
-    assert_eq!((run.status.code(), run.stdout.as_slice()), (Some(0), b"2\n".as_slice()));
+    let run = bursts(&executable);
+    assert_eq!((run.status.code(), run.stdout.as_slice()), (Some(0), b"4\n".as_slice()));
     std::fs::remove_dir_all(directory).unwrap();
 }
 
-// `--print` needs the program's bound on its count, and the bound belongs to
-// `--print`.
+// Counting chunk by chunk needs the program's proof that its specification
+// adds over concatenation.
 #[test]
-fn print_needs_its_bound() {
-    let directory = scratch("read-print-refused");
-    let output = build_with(&directory, "10", &["--print"]);
-    assert!(!output.status.success() && String::from_utf8_lossy(&output.stderr).contains("--bound"));
+fn read_loop_needs_its_additivity() {
+    let directory = scratch("read-loop-no-adds");
+    let output = build_raw(&directory, "10", &[]);
+    assert!(!output.status.success() && String::from_utf8_lossy(&output.stderr).contains("--adds"));
     assert!(!directory.join("wc_l").exists());
     std::fs::remove_dir_all(directory).unwrap();
 }

@@ -13,7 +13,11 @@ fn read_loop_library_checks() {
 // Each change to the process shape is refused where it is wrong, not by a
 // missing name: the claim can't be restated over a program that reads
 // elsewhere, asks for more than the page, issues another syscall, reads
-// another descriptor, or hands the loop the wrong buffer.
+// another descriptor, or hands the loop the wrong buffer; nor over one that
+// restarts the count at every chunk, keeps it where the next chunk's setup
+// overwrites it, tests another register for the end of file, exits with the
+// register SYSCALL clobbers, or jumps back to somewhere other than the read
+// (docs/native-read-until-eof-design.md).
 #[test]
 fn slow_acceptance_read_loop_refusals() {
     let library = checker().semantic_image();
@@ -24,6 +28,11 @@ fn slow_acceptance_read_loop_refusals() {
         ("descriptor", "MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rsi", "MovRI(Rdi, BitVec::ofNat(1)), MovRI(Rsi"),
         ("exit_number", "MovRI(Rax, BitVec::ofNat(60))", "MovRI(Rax, BitVec::ofNat(61))"),
         ("loop_base", "MovRI(Rdi, BitVec::ofNat(0x401000)), MovRI(Rcx", "MovRI(Rdi, BitVec::ofNat(0x401001)), MovRI(Rcx"),
+        ("count_reset", "MovRI(Rsi, BitVec::ofNat(0)), MovRR(R11, R13)]", "MovRI(Rsi, BitVec::ofNat(0)), MovRI(R11, BitVec::ofNat(0))]"),
+        ("count_saved_where_setup_writes", "{ [MovRR(R13, R11)] }", "{ [MovRR(R12, R11)] }"),
+        ("end_tested_elsewhere", "[TestRR(Rax, Rax)]", "[TestRR(Rdx, Rdx)]"),
+        ("exit_with_clobbered", "[MovRR(Rdi, R13), MovRI(Rax", "[MovRR(Rdi, R11), MovRI(Rax"),
+        ("back_span", "(((((read_entry_len() + 2) + eof_test_len())", "(((((read_entry_len() + 3) + eof_test_len())"),
     ] {
         let bad = PROCESS.replacen(from, to, 1);
         assert_ne!(bad, PROCESS, "{name}");

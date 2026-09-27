@@ -99,7 +99,7 @@ if [[ "${1:-}" == --fast ]]; then
         --skip loaded_mapping_and_fetch_refusals
         --skip elf_header_mutations_are_rejected_by_heather
         --skip call_stack_semantics_and_refusals
-        --skip wc_l_prints_what_the_read_returned)
+        --skip wc_l_prints_every_line)
 elif [[ "${1:-}" == --long ]]; then
   shift
   TEST_LANE=long

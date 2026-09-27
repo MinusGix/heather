@@ -5,6 +5,11 @@ executable and runs.** Amendments from probing and building are folded into
 §3–§5 and listed in §8. **Slice 4 landed 2026-09-25 (§10): `build-x86
 --read-loop --print` writes the count in decimal to stdout, and the
 certificate states that write.**
+**Superseded in part 2026-09-27:** the single read is now a loop to the end
+of file, and the read-once profile is gone
+(`docs/native-read-until-eof-design.md`). §3 (fetched execution), §4 (the
+trace) and §10's formatter still stand as written. §5's code, the claims in
+§2 and §10, and the `read_loop_*` theorem names describe the read-once program.
 Owner: `issues/native-first-program.md`. Follow-up owner for the syscall
 model's proper form: `issues/linux-syscall-trace-model.md`.
 
