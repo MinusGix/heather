@@ -1,6 +1,6 @@
 ---
 title: The native print test runs within 6% of the CPU rail under suite load
-status: open
+status: closed
 labels: [x86,testing,performance]
 created: 2026-09-25
 updated: 2026-09-27
@@ -46,3 +46,4 @@ above).
 - 2026-09-25: Measured in [[nat-div-mod-lemma-kit]]'s full suite: `wc_l_prints_what_the_read_returned` took 170 s under suite load, down from 283 s. `decimal_line` went from 106 to 32 CPU-s standalone at width eight, and nothing in it sends a `div`/`mod` goal to `omega` any more. Option 1 above is done for `decimal_line`. Whether the rest now leaves enough margin is this issue's call.
 - 2026-09-25: It tipped. In the full suite after the crossing-link fix, the print build's child was SIGKILLed at 369 s wall. The fix changed the formatter certificate's terms, so the verdict store at `target/native-test-images` was cold for them, and the child ran beside heavy parallel targets. A fresh print build alone at width one costs 239 CPU-s, the same as before the fix, so the change did not make it slower. With a warm verdict store the whole `native_read_loop` target takes 6 s: the cost is almost all first-time kernel checking of terms that changed. The test is therefore safe except in rounds that change what the generator or elaborator emits, and those are exactly when the gate has to run. Option 2 above (warm the read-loop/print bundle before the test) would pre-check the library half, but not the generated certificate. Still open. The acceptance margin was not met in this run.
 - 2026-09-27: 2026-09-27: The print test is now `wc_l_prints_every_line` (read until end of file, [[native-read-until-eof]]). The fast lane skips it under the new name. Its build now includes the outer loop's proofs, and a 9999-line input takes three reads.
+- 2026-09-27: 2026-09-27: Acceptance met. In [[native-read-until-eof]]'s landing suite (3010 passed) `wc_l_prints_every_line` took 43 s, about 85% under the 300 s rail. That round changed the emitted certificate terms, so the verdict store was cold for them: this was the worst case this issue feared, not a warm replay. The read-until-EOF build is cheaper than the read-once one it replaced, because `decimal_line` is on `bv_omega` and the spine-substitution round has landed. Closed. Reopen if a full suite puts it past 200 s.

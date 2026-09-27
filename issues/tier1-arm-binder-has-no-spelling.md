@@ -1,6 +1,6 @@
 ---
 title: A tier-1 match arm's recursive binder has no spelling
-status: open
+status: closed
 labels: [frontend,diagnostics,inductives,display]
 created: 2026-09-06
 updated: 2026-09-27
@@ -36,3 +36,4 @@ recursive arm binder and prints a projection or refuses instead.
 ## Log
 
 - 2026-09-27: 2026-09-27: Probably seen again, not confirmed as this binder: in the read-until-EOF process proof ([[native-read-until-eof]]), `omega` inside a `Cons(chunk, rest)` arm of a theorem matching on its list parameter failed with "could not spell a natural expression" over a goal about `chunk.len()`. The workaround there is a Nat-only lemma (`eof_room`).
+- 2026-09-27: 2026-09-27: Fixed. The display walk's fallback (`Speller::alias`, `crates/elab/src/display.rs`) spells a term that *is* an unshadowed alias in scope by the alias's name. It covers every lowering's arm binders, payload fields and recursive children alike, and changes no spelling that already worked. The source flavour now declines on the `C(…)`/`T<…>` elisions instead of emitting them. Tests: the arm-binders section of `omega_measure_reduction.rs` (payload field, recursive binder at an open element type, shadowed-binder control; both positives fail without the fix). The read-until-EOF sighting was the payload field `chunk`, not the recursive binder. `eof_room` stays for now: the arm's `Cons(…)` value in `counted` still does not spell. That, unspellable facts refusing the whole call, and measure candidates in arms are [[omega-inside-match-arms]].

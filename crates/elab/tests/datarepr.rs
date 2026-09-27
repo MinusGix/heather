@@ -75,7 +75,7 @@ fn a_wrong_abs_is_refused_by_the_kernel() {
         "        B0(b) => bin_abs(b),\n        B1(b) => Succ(bin_abs(b)),",
     );
     let msg = bad(&src);
-    assert!(msg.contains("NotConvertible"), "{msg}");
+    assert!(wrong_abs_refused(&msg), "{msg}");
 }
 
 #[test]
@@ -336,7 +336,15 @@ fn a_wrong_abs_is_refused_under_a_defaulted_fold() {
         "        B0(b) => double(bin_abs(b)),\n        B1(b) => Succ(double(bin_abs(b))),",
         "        B0(b) => bin_abs(b),\n        B1(b) => Succ(bin_abs(b)),",
     ));
-    assert!(msg.contains("NotConvertible"), "{msg}");
+    assert!(wrong_abs_refused(&msg), "{msg}");
+}
+
+/// The wrong basis is refused at the `B1` arm's law, and since arm binders
+/// spell (issues/tier1-arm-binder-has-no-spelling.md) the refusal names both
+/// sides there instead of reporting a bare `NotConvertible`.
+fn wrong_abs_refused(msg: &str) -> bool {
+    msg.contains("this has type `double(bin_abs(binc(b))) = double(Succ(bin_abs(b)))`")
+        && msg.contains("is expected here")
 }
 
 /// Negative control: a *written* fold is checked exactly as before — the

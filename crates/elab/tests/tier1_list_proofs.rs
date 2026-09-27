@@ -205,10 +205,13 @@ fn the_gate_rejects_the_near_misses() {
 
     // Each is a *conversion* failure in the kernel, not a parse or scoping
     // slip — i.e. the gate that rejected them is the one that matters.
-    for m in [&m1, &m2, &m3, &m4] {
+    for m in [&m1, &m2, &m3] {
         assert!(m.contains("the kernel rejected"), "{m}");
         assert!(m.contains("NotConvertible"), "{m}");
     }
+    // The same refusal, spelled at its site now that the arm's `t` spells
+    // (issues/tier1-arm-binder-has-no-spelling.md).
+    assert!(m4.contains("this has type `Cons(h, append(t, ys)) = Cons(h, append(ys, t))`"), "{m4}");
 
     // The verdict is the gate's; the `refl` that claimed the conversion is
     // named alongside it, with both sides

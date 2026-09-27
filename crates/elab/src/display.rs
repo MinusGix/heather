@@ -186,8 +186,47 @@ impl Speller<'_> {
     }
 
     fn raw_tm(&self, t: &Term) -> String {
+        if let Some(name) = self.alias(t) {
+            return name;
+        }
         self.fallbacks.set(self.fallbacks.get() + 1);
         elide(&format!("{t:?}"))
+    }
+
+    /// A spelling that admits, with `…`, what it did not recover. A reader
+    /// can take that; a caller that re-*parses* the result cannot, so there it
+    /// counts as a fallback and the source flavour declines — before this,
+    /// `omega` met the `…` of an arm's `Cons(…)` as an unexpected character.
+    fn elided(&self, shown: String) -> String {
+        if self.qualified {
+            self.fallbacks.set(self.fallbacks.get() + 1);
+        }
+        shown
+    }
+
+    /// The written name of an alias in scope that `t` *is*, before `t` falls
+    /// back to its raw form. A `match` arm binds its constructor's fields as
+    /// aliases for projections out of the arm's payload or children
+    /// (`fst(snd(#rest))`), and a projection out of a neutral tuple has no
+    /// spelling of its own — but the arm binder's name is one, and the one
+    /// the programmer wrote (issues/tier1-arm-binder-has-no-spelling.md). Only
+    /// a fallback: a term that spells never becomes a `let`'s name, so no
+    /// display that worked changes. An alias counts only while its name still
+    /// means it — not re-bound by a later binder or alias — so re-parsing the
+    /// spelling here comes back to `t`.
+    fn alias(&self, t: &Term) -> Option<String> {
+        let names = self.names.borrow();
+        let aliases = &self.cx.aliases;
+        aliases.iter().enumerate().rev().find_map(|(k, a)| {
+            // A context can carry an alias bound deeper than its own names
+            // (one cut back to a prefix); that alias is not in scope here.
+            let later = names.get(a.depth..)?;
+            let shadowed = later.iter().any(|n| *n == a.name)
+                || aliases[k + 1..].iter().any(|b| b.name == a.name);
+            let written = a.name.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_');
+            (written && !shadowed && (*a.term).shift_local((names.len() - a.depth) as u32) == *t)
+                .then(|| a.name.clone())
+        })
     }
 
     // -- binders ------------------------------------------------------------
@@ -317,7 +356,7 @@ impl Speller<'_> {
                     .join(", ");
                 format!("{}<{shown}>", ind.name)
             } else {
-                format!("{}<…>", ind.name)
+                self.elided(format!("{}<…>", ind.name))
             };
         }
         match ty {
@@ -492,7 +531,7 @@ impl Speller<'_> {
             return Some(if ctor.fields.is_empty() {
                 ctor.name.clone()
             } else {
-                format!("{}(…)", ctor.name)
+                self.elided(format!("{}(…)", ctor.name))
             });
         };
         let mut payload: Vec<&Rc<Term>> = Vec::new();

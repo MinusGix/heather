@@ -311,7 +311,9 @@ fn a_split_on_another_decision_is_refused() {
              }}
          }}"
     ));
-    assert!(e.contains("NotConvertible"), "{e}");
+    // A kernel conversion refusal; since arm binders spell it is reported
+    // with both sides at the site.
+    assert!(e.contains("this has type `filt(app(t, ys), p) = app(filt(t, p), filt(ys, p))`"), "{e}");
 }
 
 // Mutation control: the goal mentions a second field of the same value, at the

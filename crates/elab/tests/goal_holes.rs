@@ -692,14 +692,12 @@ fn a_chain_of_entries_each_names_the_binders_it_mentions() {
 /// Binders pushed *after* the alias are what make the two contexts differ; the
 /// nested `match m` is here to supply some.
 ///
-/// For a **constructor field binder** specifically the fix is currently
-/// invisible, and that is worth pinning rather than assuming: a tier-0 arm
-/// aliases field `j` to `fst(snd^j v)`, so a *dependent* field's type mentions
-/// projections of the scrutinee, which the speller declines and the listing
-/// prints raw — de Bruijn, naming nobody. A field type that mentions no earlier
-/// field (`n : Nat`) is closed and reads the same in any prefix. So no name can
-/// come out wrong here *today*; the property the test pins is that none does,
-/// which is what would break the day projections become spellable.
+/// For a **constructor field binder** the fix became visible when projections
+/// did: a tier-0 arm aliases field `j` to `fst(snd^j v)`, so a *dependent*
+/// field's type mentions projections of the scrutinee. Those printed raw until
+/// the speller learned to name a term by the alias it is
+/// (issues/tier1-arm-binder-has-no-spelling.md); now they print as the field's
+/// name, and a name scoped at the wrong depth would come out wrong here.
 #[test]
 fn an_arm_field_alias_is_rendered_at_the_depth_it_was_bound() {
     let r = reject(
@@ -725,11 +723,11 @@ fn an_arm_field_alias_is_rendered_at_the_depth_it_was_bound() {
     let names: Vec<&str> = ctx.iter().map(|(n, _)| *n).collect();
     assert_eq!(names, ["w", "m", "k", "n", "p"]);
     assert_eq!(ctx[3], ("n", "Nat"));
-    // `p`'s type is `n = n` with `n` the projection: raw, and in particular it
-    // does not name `k`, the binder pushed after the alias was bound.
+    // `p`'s type is `n = n` with `n` the projection, which spells by its alias
+    // since issues/tier1-arm-binder-has-no-spelling.md: the alias's name, and
+    // not `k`, the binder pushed after it was bound.
     let p_ty = ctx[4].1;
-    assert!(p_ty.starts_with("fst["), "{p_ty}");
-    assert!(!p_ty.contains('k'), "{p_ty}");
+    assert_eq!(p_ty, "n = n");
 }
 
 /// A `let` alias is where alias scoping *is* observable: its type is written in

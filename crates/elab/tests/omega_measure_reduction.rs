@@ -17,6 +17,10 @@
 //! The kept-by-hand sites (`runs`'s `drop_eq_le`, `gcd`'s `nat::Nat::mod_lt`) and
 //! the removed ones (`merge`'s two `on`s) live in `termination_measures.rs`,
 //! and the group's in `mutual_recursion.rs`.
+//!
+//! The last section is the same design's filed-separately gap
+//! (issues/tier1-arm-binder-has-no-spelling.md): a `match` arm's binders
+//! spell by name, so an `omega` goal inside an arm can mention them.
 
 use std::cell::OnceCell;
 use std::sync::Mutex;
@@ -234,4 +238,77 @@ fn a_neutral_measure_head_still_interns_under_its_own_spelling() {
     assert!(msg.contains("must decrease the measure"), "{msg}");
     assert!(msg.contains("drop_eq(t, rest)"), "{msg}");
     assert!(!msg.contains("elim"), "{msg}");
+}
+
+// -- arm binders --------------------------------------------------------------
+//
+// issues/tier1-arm-binder-has-no-spelling.md: a `match` arm binds its
+// constructor's fields as aliases for projections out of the arm's neutral
+// payload and children tuples, and those projections have no spelling of
+// their own. The display walk spells such a term by the alias's written name,
+// only while that name still means it. A payload field and the recursive
+// binder, a concrete and an open element type, a fact from the motive and a
+// goal in checking position; the control re-binds the name first.
+
+const SHORT: &str = r#"
+fn Short(chunks: List<List<Nat>>) → Type {
+    match chunks { Nil => True, Cons(chunk, rest) => (chunk.len() <= 4096) ∧ Short(rest) }
+}
+"#;
+
+#[test]
+fn a_payload_binder_spells_by_its_name() {
+    // `lib/elf64_read_loop.hthr`'s `eof_room` shape: a fact about the payload
+    // field from the arm's motive, used by `omega` in the arm.
+    ok(&format!(
+        "{SHORT}\n\
+         theorem short_room(chunks: List<List<Nat>>, carry: Nat, room: carry + 4096 < 10000): Short(chunks) → Nat {{\n\
+             match chunks as λ cs => Short(cs) → Nat {{\n\
+                 Nil => λ ok => 0,\n\
+                 Cons(chunk, _) => λ ok => {{\n\
+                     let capped: (chunk.len() <= 4096) = ok.left;\n\
+                     let here: (carry + chunk.len() < 10000) = {{ omega }};\n\
+                     0\n\
+                 }}\n\
+             }}\n\
+         }}"
+    ));
+}
+
+#[test]
+fn the_recursive_binder_spells_at_an_open_element_type() {
+    ok(r#"
+        theorem rest_open<A>(xs: List<A>, carry: Nat): Nat {
+            match xs {
+                Nil => 0,
+                Cons(_, rest) => {
+                    let here: ((rest.len() <= 5) → carry + rest.len() < carry + 6) = λ small => { omega };
+                    0
+                }
+            }
+        }
+    "#);
+}
+
+#[test]
+fn a_rebound_arm_binder_is_not_spelled_by_its_old_name() {
+    // After `let chunk: Nat = …` the fact `capped` is about the *field*, and
+    // `chunk` now names a number: spelling the field `chunk` would hand the
+    // certificate a different term. The fact stays unspellable, as it was
+    // before arm binders spelled at all.
+    let msg = elab_err(&format!(
+        "{SHORT}\n\
+         theorem shadow(chunks: List<List<Nat>>, carry: Nat, room: carry + 4096 < 10000): Short(chunks) → Nat {{\n\
+             match chunks as λ cs => Short(cs) → Nat {{\n\
+                 Nil => λ ok => 0,\n\
+                 Cons(chunk, _) => λ ok => {{\n\
+                     let capped = ok.left;\n\
+                     let chunk: Nat = 5000;\n\
+                     let here: (carry < 10000) = {{ omega }};\n\
+                     0\n\
+                 }}\n\
+             }}\n\
+         }}"
+    ));
+    assert!(msg.contains("could not spell a natural expression"), "{msg}");
 }
