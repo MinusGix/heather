@@ -1,6 +1,6 @@
 ---
 title: Type application spines and identity context references without quadratic substitution
-status: open
+status: closed
 labels: [kernel,elaborator,performance]
 created: 2026-09-26
 updated: 2026-09-26
@@ -49,3 +49,15 @@ Both are strategy changes with no semantic content:
 
 Measure with `scripts/perf ab` on `perf/fixtures/bv_omega/` and on the
 corpus: hand proofs pay the same rule, with smaller arguments.
+
+## Log
+
+- 2026-09-26: Landed both. `Tc::app_at_spine` walks an `app@` spine holding its arguments while the head's type stays a syntactic Π, checks each at its domain under the earlier ones substituted at once, and instantiates the codomain once; `Tc::app_at_node` is the old per-node rule, taken for a Π that needs reduction and whenever checked spellings are recorded. `apply_explicit` does the same when every node is written `app@` (the annotated `App` still needs each node's `dom`/`cod`). `Tc::subst_ck` returns at once for the identity into the current context. The identity is also materialised once per spine now, not once per node.
+
+  Directional first (width 1, own runs, fixture uncached): subst_ck alone took `bv_place_step` ~504 → 422 ms, the kernel spine to 352, the elaborator spine to 253; the hand rows fell with it (640 → 385 ms for the six rows' hand sides), so the per-row ratios hardly moved — the rule was costing hand proofs the same way.
+
+  `scripts/perf ab --base master` (3 samples, all separating; every counter identical except `conv_shortcut_hits` −13%, the identity references' skipped entry checks): bv fixture at width 1 wall −27%, gate −33%, max RSS −24% (`bv_place_step` gate −50%, the hand helpers −38 to −53%); showcase `calc_parser` wall −10 to −12%, gate −16 to −18%, RSS −4%. `lib/decimal_line` does not check standalone (harness module names), so it is not in the A/B.
+
+  Tests: `crates/kernel/tests/typing.rs` `a_spine_is_typed_in_one_walk` (three-node dependent spine under a non-trivial Γ equals the annotated `app`'s syntax; an `El ⌜Π⌝` mid-spine; negative controls) and `an_identity_reference_checks_in_its_own_context_only` (identity-shaped substitution into another context still refused). Suite 3010 passed; bench --check only the known wf/check-tree band.
+
+  Residue, not owned here: the elaborator's `lift_proved` and name resolution still substitute per use (about 5% and 3% of `bv_place_step` in the profile before this round); nothing ranks them above what `scripts/perf report` shows elsewhere.

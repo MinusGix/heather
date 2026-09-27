@@ -572,6 +572,46 @@ pub(crate) fn apply_explicit(
 ) -> R<(Term, Type, Level)> {
     let (mut term, mut ty, mut lvl) = (head, ty, lvl);
     let what = name.map_or_else(|| "this function".to_string(), |n| format!("`{n}`"));
+    // Every node written `app@` (§6.1 of the app design): nothing needs a
+    // node's own `dom`/`cod`, so while the telescope stays a syntactic Π the
+    // arguments are held in `delta` and each domain is instantiated under
+    // the ones before it, the codomain once at the end — not the remaining
+    // telescope per argument, which copies every earlier argument once per
+    // mention. `ty` is `ty[delta]` while `delta` is held. The whnf of a
+    // syntactic Π is itself.
+    if elab.emits_checked_applications(cx) && !matches!(term, Term::Lam { .. }) {
+        let mut delta: Option<LocalSubst> = None;
+        for (i, arg) in args.iter().enumerate() {
+            let head = match (&delta, &ty) {
+                (_, Type::Pi { .. }) => ty.clone(),
+                (Some(held), _) => {
+                    ty = ty.apply_local(held);
+                    delta = None;
+                    elab.whnf_for_application(cx, &ty, arg.span)?
+                }
+                (None, _) => elab.whnf_for_application(cx, &ty, arg.span)?,
+            };
+            let Type::Pi { dom_level, cod_level, dom, cod } = head else {
+                return err(format!("{what} is applied to too many arguments"), arg.span);
+            };
+            let dom = match &delta {
+                Some(held) => Rc::new(dom.apply_local(held)),
+                None => dom,
+            };
+            let param = params.get(i + param_offset);
+            let hint = name.zip(param).map(|(n, p)| (n, p.name.as_str()));
+            let skel = param.and_then(|p| p.skel.as_deref());
+            let arg = Rc::new(elab.check_explicit_argument(cx, arg, &dom, &dom_level, hint, skel)?);
+            delta = Some(delta.take().unwrap_or_else(|| LocalSubst::id(&cx.gamma)).extended(Rc::clone(&arg)));
+            ty = (*cod).clone();
+            lvl = cod_level;
+            term = Term::AppAt { fun: Rc::new(term), arg };
+        }
+        if let Some(held) = delta {
+            ty = ty.apply_local(&held);
+        }
+        return Ok((term, ty, lvl));
+    }
     for (i, arg) in args.iter().enumerate() {
         let head = elab.whnf_for_application(cx, &ty, arg.span)?;
         let Type::Pi {

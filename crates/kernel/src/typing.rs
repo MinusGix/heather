@@ -791,6 +791,14 @@ impl Env {
 
 /// Ψ-lookup: 0 is innermost; the result is scoped over its *prefix* of Ψ —
 /// callers shift by `v + 1`.
+/// Whether `delta` is the identity on its source: every entry the variable
+/// that names it (`LocalSubst::id`'s expansion), as many as the source has.
+fn is_identity(delta: &LocalSubst) -> bool {
+    let m = delta.terms.len();
+    m as u32 == delta.source_len()
+        && delta.terms.iter().enumerate().all(|(k, t)| matches!(&**t, Term::Var(v) if v.0 as usize == m - 1 - k))
+}
+
 fn lookup(psi: &GlobalCtx, v: GlobalVar) -> Option<&GlobalBinding> {
     psi.bindings.len().checked_sub(1 + v.0 as usize).and_then(|i| psi.bindings.get(i))
 }
@@ -1579,6 +1587,15 @@ impl Tc {
         if delta.terms.len() != target.entries.len() {
             return Err(TypeError::SubstMismatch);
         }
+        // The identity into Γ itself: `Γ ⊢ id_Γ : Γ` holds for every
+        // well-formed Γ, which the environment is. A strategy, not a rule —
+        // it decides the same judgement as the step cases below, which for
+        // a global referenced in the context it was made in (a lifted proof,
+        // a named value) instantiate every entry's type by a prefix of the
+        // identity: quadratic in the context for no information.
+        if *target == env.gamma && is_identity(delta) {
+            return Ok(());
+        }
         // Step cases: ⊢_i t_k : T_k[δ_{<k}] @ l_k.
         for (k, entry) in target.entries.iter().enumerate() {
             let prefix = LocalSubst { tail: delta.tail, terms: delta.terms[..k].to_vec() };
@@ -2128,53 +2145,116 @@ impl Tc {
             // type-level definition) is viewed in the value domain and
             // answers a description: §3.3 of the intro design, the rewriter
             // never runs on a type that came through a checked spelling.
-            Term::AppAt { fun, arg } => {
+            //
+            // A spine is typed as one walk (`Tc::app_at_spine`): while the
+            // telescope stays a syntactic Π, each argument meets its domain
+            // under the arguments before it, substituted at once, and the
+            // codomain is instantiated once at the end — not the remaining
+            // telescope per node, which carries a copy of every earlier
+            // argument per mention.
+            Term::AppAt { .. } => {
                 self.checked_spelling_admitted(env)?;
-                let (fun_ty, _) = self.tm_infer(env, fun)?;
-                if let Some(Type::Pi { dom_level, cod_level, dom, cod }) = fun_ty.as_syn() {
-                    if let Some(rec) = &self.spellings {
-                        let key = (t as *const Term as usize, env.gamma.entries.len() as u32);
-                        rec.borrow_mut().insert(
-                            key,
-                            Spelled::Pi {
-                                dom_level: dom_level.clone(),
-                                cod_level: cod_level.clone(),
-                                dom: Rc::clone(dom),
-                                cod: Rc::clone(cod),
-                            },
-                        );
-                    }
-                    self.tm_check_rc(env, arg, dom, dom_level)?;
-                    let ty = cod.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(arg)));
-                    return Ok((ITy::Owned(ty), cod_level.clone()));
-                }
-                let form = self.view_v(env, &fun_ty)?;
-                self.record(env, t, &form);
-                let TyForm::Pi { dom_level, cod_level, dom, cod } = form else {
-                    return Err(TypeError::HeadMismatch);
-                };
-                self.tm_check(env, arg, dom.as_ref(), &dom_level)?;
-                // The eager mode's view is the rewriter's, so its codomain
-                // is syntax and the result is too — which is what keeps that
-                // mode today's checker on `app@`.
-                let ty = match cod {
-                    ITy::Syn(cod) => ITy::Owned(
-                        cod.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(arg))),
-                    ),
-                    ITy::Owned(cod) => ITy::Owned(
-                        cod.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(arg))),
-                    ),
-                    ITy::Sel { .. } => ITy::Sel {
-                        of: Rc::new(fun_ty),
-                        sel: Sel::App(Rc::clone(arg)),
-                        at_depth: env.gamma.entries.len() as u32,
-                    },
-                };
-                Ok((ty, cod_level))
+                self.app_at_spine(env, t)
             }
             // An unannotated intro: checking-only, exactly as `box` is.
             _ => Err(TypeError::NotInferable),
         }
+    }
+
+    /// An `app@` spine `f(a₁, …, aₖ)`, innermost node first. `base[delta]`
+    /// is the type so far while `delta` holds arguments not yet substituted
+    /// into `base`, the rest of a syntactic Π telescope scoped under them;
+    /// substituting all of them at once is the same syntax as one at a time.
+    /// A node whose Π is not syntax, and every node while the checked
+    /// spellings are recorded (each node's Π is recorded as it is met), is
+    /// typed alone by [`Tc::app_at_node`].
+    fn app_at_spine(&self, env: &Env, t: &Term) -> R<(ITy, Level)> {
+        let mut spine = Vec::new();
+        let mut head = t;
+        while let Term::AppAt { fun, arg } = head {
+            spine.push((head, arg));
+            head = fun;
+        }
+        let (mut ty, mut level) = self.tm_infer(env, head)?;
+        let mut pending: Option<(Rc<Type>, LocalSubst)> = None;
+        for &(node, arg) in spine.iter().rev() {
+            if self.spellings.is_none() {
+                let pi = match &pending {
+                    Some((base, _)) => Some(Rc::clone(base)),
+                    None => match ty.as_syn() {
+                        Some(pi @ Type::Pi { .. }) => Some(Rc::new(pi.clone())),
+                        _ => None,
+                    },
+                };
+                if let Some(pi) = pi
+                    && let Type::Pi { dom_level, cod_level, dom, cod } = &*pi
+                {
+                    match &pending {
+                        Some((_, delta)) => self.tm_check_rc(env, arg, &Rc::new(dom.apply_local(delta)), dom_level)?,
+                        None => self.tm_check_rc(env, arg, dom, dom_level)?,
+                    }
+                    let delta = match pending.take() {
+                        Some((_, delta)) => delta,
+                        None => LocalSubst::id(&env.gamma),
+                    };
+                    pending = Some((Rc::clone(cod), delta.extended(Rc::clone(arg))));
+                    level = cod_level.clone();
+                    continue;
+                }
+            }
+            if let Some((base, delta)) = pending.take() {
+                ty = ITy::Owned(base.apply_local(&delta));
+            }
+            (ty, level) = self.app_at_node(env, node, ty, arg)?;
+        }
+        if let Some((base, delta)) = pending {
+            ty = ITy::Owned(base.apply_local(&delta));
+        }
+        Ok((ty, level))
+    }
+
+    /// One `app@` node `t = app@(f; arg)`, `f` inferred as `fun_ty`.
+    fn app_at_node(&self, env: &Env, t: &Term, fun_ty: ITy, arg: &Rc<Term>) -> R<(ITy, Level)> {
+        if let Some(Type::Pi { dom_level, cod_level, dom, cod }) = fun_ty.as_syn() {
+            if let Some(rec) = &self.spellings {
+                let key = (t as *const Term as usize, env.gamma.entries.len() as u32);
+                rec.borrow_mut().insert(
+                    key,
+                    Spelled::Pi {
+                        dom_level: dom_level.clone(),
+                        cod_level: cod_level.clone(),
+                        dom: Rc::clone(dom),
+                        cod: Rc::clone(cod),
+                    },
+                );
+            }
+            self.tm_check_rc(env, arg, dom, dom_level)?;
+            let ty = cod.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(arg)));
+            return Ok((ITy::Owned(ty), cod_level.clone()));
+        }
+        let form = self.view_v(env, &fun_ty)?;
+        self.record(env, t, &form);
+        let TyForm::Pi { dom_level, cod_level, dom, cod } = form else {
+            return Err(TypeError::HeadMismatch);
+        };
+        self.tm_check(env, arg, dom.as_ref(), &dom_level)?;
+        // The eager mode's view is the rewriter's, so its codomain
+        // is syntax and the result is too — which is what keeps that
+        // mode today's checker on `app@`.
+        let ty = match cod {
+            ITy::Syn(cod) => ITy::Owned(
+                cod.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(arg))),
+            ),
+            ITy::Owned(cod) => ITy::Owned(
+                cod.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(arg))),
+            ),
+            ITy::Sel { .. } => ITy::Sel {
+                of: Rc::new(fun_ty),
+                sel: Sel::App(Rc::clone(arg)),
+                at_depth: env.gamma.entries.len() as u32,
+            },
+        };
+        Ok((ty, cod_level))
     }
 
     /// The three **unannotated** intros in checking position (design §3.4),

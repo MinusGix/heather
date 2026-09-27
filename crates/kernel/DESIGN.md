@@ -449,6 +449,22 @@ paper too).
   chain). At Σ types, two neutrals try their spines before η-expanding
   (`Conv::tm_nf`'s Σ arm): η on two neutral 64-bit vectors was quadratic
   in the length, and a failed spine attempt still falls through to η.
+- **Typing a spine is one walk** (2026-09-26,
+  `issues/application-spine-substitution-cost.md`): `app@(…app@(f; a₁)…; aₖ)`
+  holds the arguments while `f`'s type stays a syntactic Π telescope, checks
+  each `aᵢ` at its domain under `a₁…aᵢ₋₁` substituted at once, and
+  instantiates the codomain once (`Tc::app_at_spine`). Node by node, each
+  `T[a/x]` copied the rest of the telescope with every earlier argument in
+  it, once per mention — quadratic in a many-argument lemma's arguments.
+  Simultaneous and one-at-a-time substitution spell the same syntax, so the
+  inferred type is the rule's own; a Π that needs reduction, and every node
+  while checked spellings are recorded, is typed alone as before. The
+  elaborator's `apply_explicit` walks the same way. Likewise **an identity
+  reference into its own context** (`Tc::subst_ck`): `u^{id_Γ}` checked in
+  Γ, where `u`'s context *is* Γ, holds for a well-formed Γ without
+  instantiating each entry by a prefix of the identity — a lifted proof or
+  named value referenced where it was made had paid that, quadratic in the
+  context, per reference. Both are strategies, deciding the same judgement.
 - **Its reduction engine is an environment machine over a value domain**
   (`src/value.rs`, `src/eval.rs`; `docs/nbe-conversion-design.md`), not a
   term rewriter — adopted 2026-07-31 to kill the exponential of

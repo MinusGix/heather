@@ -2536,3 +2536,78 @@ fn w_formation_intro_encoding_and_elim() {
     );
     assert_eq!(infer_closed(Layer::Var, &elim).unwrap_err(), TypeError::LayerMismatch);
 }
+
+/// A spine is typed as one walk (`Tc::app_at_spine`): the arguments held and
+/// substituted at once. The type it infers is the annotated `app`'s own
+/// syntax — one substitution at a time — for a three-node dependent spine
+/// under a context the identity is not trivial on; a telescope that stops
+/// being a syntactic Π mid-spine (`El ⌜Π⌝`) is taken node by node from
+/// there; and each argument is still checked at its domain under the ones
+/// before it.
+#[test]
+fn a_spine_is_typed_in_one_walk() {
+    // Γ = n : Nat, f : Π(A : Ty 0). Π(a : El A). Π(b : El A). El A
+    let el = |i: u32| Type::El { level: Level::Zero, tm: rt(v(i)) };
+    let pi = |dom_level: Level, dom: Type, cod: Type| Type::Pi { dom_level, cod_level: Level::Zero, dom: rty(dom), cod: rty(cod) };
+    let f_ty = pi(c(1), Type::Ty(Level::Zero), pi(Level::Zero, el(0), pi(Level::Zero, el(1), el(2))));
+    let gamma = ext(&ext(&nil_ctx(), Type::Nat, Level::Zero), f_ty.clone(), c(1));
+    let psi = GlobalCtx::default();
+    let n = || rt(v(1));
+    let at = |fun: Term, arg: Rc<Term>| Term::AppAt { fun: rt(fun), arg };
+    let spine = at(at(at(v(0), rt(Term::TmNat)), n()), rt(Term::Zero));
+    // The annotated spelling, one substitution per node.
+    let id = |t: Rc<Term>| LocalSubst::id(&gamma).extended(t);
+    let Type::Pi { cod: c1, .. } = &f_ty else { unreachable!() };
+    let t1 = c1.apply_local(&id(rt(Term::TmNat)));
+    let Type::Pi { dom: d2, cod: c2, .. } = &t1 else { unreachable!() };
+    let t2 = c2.apply_local(&id(n()));
+    let Type::Pi { dom: d3, cod: c3, .. } = &t2 else { unreachable!() };
+    let app = |fun: Term, dom: &Rc<Type>, cod: &Rc<Type>, arg: Rc<Term>, dom_level: Level| Term::App {
+        fun: rt(fun),
+        dom_level,
+        cod_level: Level::Zero,
+        dom: Rc::clone(dom),
+        cod: Rc::clone(cod),
+        arg,
+    };
+    let annotated = app(
+        app(app(v(0), &rty(Type::Ty(Level::Zero)), c1, rt(Term::TmNat), c(1)), d2, c2, n(), Level::Zero),
+        d3,
+        c3,
+        rt(Term::Zero),
+        Level::Zero,
+    );
+    let (ty_at, _) = infer_term(&psi, 0, Layer::Prog, &gamma, &spine, FUEL).unwrap();
+    let (ty_app, _) = infer_term(&psi, 0, Layer::Prog, &gamma, &annotated, FUEL).unwrap();
+    assert!(ty_at == ty_app, "one walk must spell what one substitution per node does: {ty_at:?} vs {ty_app:?}");
+    // Negative control: the third argument is checked at `El A[Nat/A]`.
+    let bad = at(at(at(v(0), rt(Term::TmNat)), n()), rt(Term::Triv { level: Level::Zero }));
+    assert!(infer_term(&psi, 0, Layer::Prog, &gamma, &bad, FUEL).is_err());
+
+    // g : Π(A : Ty 0). Π(a : El A). El ⌜Π(x : A). A⌝ — the third node's Π
+    // is only a Π after reduction.
+    let code = Term::TmPi { dom_level: Level::Zero, cod_level: Level::Zero, dom: rt(v(1)), cod: rt(v(2)) };
+    let g_ty = pi(c(1), Type::Ty(Level::Zero), pi(Level::Zero, el(0), Type::El { level: Level::Zero, tm: rt(code) }));
+    let gamma = ext(&ext(&nil_ctx(), Type::Nat, Level::Zero), g_ty, c(1));
+    let spine = at(at(at(v(0), rt(Term::TmNat)), n()), rt(Term::Zero));
+    check_term(&psi, 0, Layer::Prog, &gamma, &spine, &Type::Nat, &Level::Zero, FUEL).unwrap();
+    let bad = at(at(at(v(0), rt(Term::TmNat)), n()), rt(Term::Triv { level: Level::Zero }));
+    assert!(infer_term(&psi, 0, Layer::Prog, &gamma, &bad, FUEL).is_err());
+}
+
+/// A global referenced in the context it was made in, by the identity — a
+/// lifted proof, a named value — checks without instantiating each entry
+/// (`Tc::subst_ck`'s identity case). The identity's *shape* is not enough:
+/// into a context that is not the current one, the entries are checked, and
+/// a mismatch is refused.
+#[test]
+fn an_identity_reference_checks_in_its_own_context_only() {
+    // u : Trm_p(x : Nat, y : Nat ⊢ Nat @ 0)
+    let delta = ext(&ext(&nil_ctx(), Type::Nat, Level::Zero), Type::Nat, Level::Zero);
+    let psi = GlobalCtx::new(vec![GlobalBinding::opaque_tm(delta.clone(), Layer::Prog, rty(Type::Nat), Level::Zero)]);
+    check_term(&psi, 0, Layer::Prog, &delta, &gtm(0, &delta), &Type::Nat, &Level::Zero, FUEL).unwrap();
+    // Γ = x : Nat, y : Ty 0 — the same length, so `id_Γ` has the identity's
+    // shape, but `y` is no `Nat`.
+    let gamma = ext(&ext(&nil_ctx(), Type::Nat, Level::Zero), Type::Ty(Level::Zero), c(1));
+    assert!(check_term(&psi, 0, Layer::Prog, &gamma, &gtm(0, &gamma), &Type::Nat, &Level::Zero, FUEL).is_err());
+}
