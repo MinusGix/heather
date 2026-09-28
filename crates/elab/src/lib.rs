@@ -579,6 +579,9 @@ pub struct Elaborator {
     /// because the Omega certificate route raises it from a `&self` checking
     /// position.
     generated_depth: Cell<usize>,
+    /// Active checking/inference frames. Clones inherit the current depth so
+    /// speculative elaboration cannot start a fresh native-stack budget.
+    expr_depth: Cell<usize>,
     /// Set while a `:= derive()` route elaborates the transfer generator's
     /// emission, so that the `impl` block *inside* that emission records
     /// `Derived` rather than what its own clauses look like. `None` everywhere
@@ -1559,6 +1562,7 @@ impl Elaborator {
             slice_plan: None,
             resolution_scopes: RefCell::new(Vec::new()),
             generated_depth: Cell::new(0),
+            expr_depth: Cell::new(0),
             impl_provenance: None,
             attempt: DeclAttempt::default(),
             instance_scope: Vec::new(),
@@ -4281,6 +4285,7 @@ impl Elaborator {
         skel: Option<&Skel>,
         capture_slots: bool,
     ) -> R<Term> {
+        let _depth = expr::ExprDepthGuard::enter(&self.expr_depth, e.span)?;
         if capture_slots && has_free_slots(e) {
             let probe = self.clone();
             match probe.elab_check_skel_slots(cx, e, expected, lvl, hint, skel, false) {
@@ -5518,6 +5523,7 @@ impl Elaborator {
     /// other arm ignores it; inference stays inference, and this is a hint
     /// for one hook rather than a second checking mode.
     fn elab_infer_at(&self, cx: &Cx, e: &Expr, expected: Option<&Type>) -> R<(Term, Type, Level)> {
+        let _depth = expr::ExprDepthGuard::enter(&self.expr_depth, e.span)?;
         // An operator symbol resolves to a name *first*, and then this whole
         // function is the path the written name already took
         // (docs/operators-onto-classes-design.md §4).

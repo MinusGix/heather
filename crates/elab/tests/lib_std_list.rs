@@ -47,6 +47,15 @@ fn its_literal_instance_uses_the_compact_protocol_lowering() {
     assert_eq!(e.psi().bindings.len(), before + 1);
 }
 
+#[test]
+fn a_large_bracket_literal_avoids_constructor_elaboration_recursion() {
+    let mut e = elaborated();
+    let elements = vec!["0"; 1000].join(", ");
+    let source = format!("import list; fn xs() -> List<Nat> {{ [{elements}] }}");
+    e.elab_module_source("large_list_literal", &source)
+        .expect("a flat literal does not consume one elaboration frame per element");
+}
+
 /// The seven laws `issues/std-api-waves.md` named as wave L2, plus the three
 /// this round proved on top of them. Named one by one rather than counted:
 /// the point is which facts the library states, and a count would go on

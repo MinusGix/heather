@@ -25,6 +25,20 @@ fn elab_err(src: &str) -> String {
     }
 }
 
+#[test]
+fn depth_refusal_does_not_poison_the_next_declaration() {
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    e.elab_source("inductive L { Nil, Cons(Nat, L) }").expect("list type");
+    let source = format!(
+        "fn deep() -> L {{ {}Nil{} }}",
+        "Cons(0, ".repeat(1000), ")".repeat(1000),
+    );
+    let err = e.elab_source(&source).expect_err("deep expression refused");
+    assert!(err.to_string().contains("expression elaboration depth limit exceeded"), "{err}");
+    e.elab_source("fn shallow() -> L { Cons(0, Nil) }")
+        .expect("depth restored after failure");
+}
+
 // §4.1–2 — the builtin. `Succ` passed as an argument, written at an annotated
 // type, and η-convertible with its own lambda.
 #[test]

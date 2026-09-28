@@ -19,6 +19,33 @@ use crate::oracle::SemanticOracle;
 use crate::surface::{expression_as_type, expression_needs_numeral_carrier};
 use crate::{Cx, ElabError, IMPLICIT_MARK_REFUSED, R, TyVar, err};
 
+/// Bound the native recursion shared by checking and inference. Constructor
+/// checking keeps several large builder frames alive per recursive field;
+/// the kernel's reduction budget cannot protect this earlier surface walk.
+/// Leave room on the usual 8 MiB stack for builders and surface AST walks.
+const NATIVE_EXPR_DEPTH_LIMIT: usize = 512;
+
+pub(crate) struct ExprDepthGuard<'a>(&'a Cell<usize>);
+
+impl<'a> ExprDepthGuard<'a> {
+    pub(crate) fn enter(depth: &'a Cell<usize>, span: Span) -> R<Self> {
+        if depth.get() >= NATIVE_EXPR_DEPTH_LIMIT {
+            return err(
+                format!("expression elaboration depth limit exceeded ({NATIVE_EXPR_DEPTH_LIMIT}): expression is too deeply nested"),
+                span,
+            );
+        }
+        depth.set(depth.get() + 1);
+        Ok(Self(depth))
+    }
+}
+
+impl Drop for ExprDepthGuard<'_> {
+    fn drop(&mut self) {
+        self.0.set(self.0.get() - 1);
+    }
+}
+
 /// Recursive services required by primitive structural type forms.
 ///
 /// The mechanism receives these operations per call. It does not retain the
