@@ -2407,6 +2407,8 @@ impl Elaborator {
         d: u32,
         g: u32,
     ) -> Option<(Level, Vec<Rc<Term>>)> {
+        let _phase = crate::stats::guard(crate::stats::Timer::InstanceMatch);
+        crate::stats::count(crate::stats::Counter::InstanceMatchCalls);
         let Some(entry) = self.ty_code_fn_now(ind.tag, g) else {
             decline!("instance_match", &ind.name, "no-tycode-fn");
             return None;

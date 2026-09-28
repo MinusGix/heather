@@ -3,6 +3,10 @@
 use heather_elab::{Elaborator, stats};
 
 fn measure(setup: &str, source: &str, item: &str, refusal: &str) -> u64 {
+    measure_item(setup, source, item, refusal).kernel.eval_steps
+}
+
+fn measure_item(setup: &str, source: &str, item: &str, refusal: &str) -> stats::ItemTiming {
     let mut el = Elaborator::with_prelude().expect("prelude");
     el.set_kernel_workers(1);
     el.elab_source(setup).unwrap_or_else(|e| panic!("{}", e.render(setup)));
@@ -13,7 +17,7 @@ fn measure(setup: &str, source: &str, item: &str, refusal: &str) -> u64 {
     if !refusal.is_empty() {
         assert!(el.elab_source(refusal).is_err(), "false equation was accepted");
     }
-    rows.iter().find(|r| r.item == item).expect("measured declaration").kernel.eval_steps
+    rows.into_iter().find(|r| r.item == item).expect("measured declaration")
 }
 
 fn payload(width: usize) -> String {
@@ -101,23 +105,37 @@ theorem read<A>(seed: {ty}): make(seed).out{path} = seed{path} {{ make(seed).sam
 }
 
 /// A visible conjunction spine must not turn into a chain of deferred
-/// selections whose prefixes are normalized again at every projection.
+/// selections whose prefixes are normalized again at every projection, or
+/// have each inferred suffix respelled by recursive instance matching.
 #[test]
 fn conjunction_projection_chain_cost() {
     for alias in [false, true] {
-        let counts: Vec<_> = [8, 16, 32].into_iter().map(|depth| {
+        let rows: Vec<_> = [8, 16, 32].into_iter().map(|depth| {
             let ty = format!("{}A{}", "And<A, ".repeat(depth), ">".repeat(depth));
             let path = ".right".repeat(depth);
             let body = if alias { format!("let p = identity(facts); p{path}") } else { format!("facts{path}") };
-            measure(
+            measure_item(
                 "record And<P, Q> { left: P, right: Q }\ntheorem identity<A>(a: A): A { a }",
                 &format!("fn probe<A>(facts: {ty}) -> A {{ {body} }}"),
                 "probe", "",
             )
         }).collect();
+        let counts: Vec<_> = rows.iter().map(|r| r.kernel.eval_steps).collect();
+        let matches: Vec<_> = rows.iter().map(|r| r.counters[stats::Counter::InstanceMatchCalls as usize]).collect();
         eprintln!("conjunction depths 8/16/32, alias={alias}: {counts:?}");
+        eprintln!("conjunction instance matches, alias={alias}: {matches:?}");
         assert!(counts.iter().all(|&n| n > 0));
         assert!(counts[2] <= 3 * counts[1], "projection prefix replay returned: {counts:?}");
+        assert!(matches.iter().all(|&n| n > 0));
+        assert!(matches[2] <= 3 * matches[1], "inferred suffix respelling returned: {matches:?}");
+        for row in &rows {
+            assert!(row.counters[stats::Counter::ProjectionStructural as usize] > 0,
+                "the structural fallback must be exercised");
+            if alias {
+                assert_eq!(row.counters[stats::Counter::ProjectionNamed as usize], 0,
+                    "opaque aliases must retain the receiver boundary");
+            }
+        }
     }
 }
 

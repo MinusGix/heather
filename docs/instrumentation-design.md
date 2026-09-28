@@ -250,6 +250,15 @@ sampler's item name and no bracket):
 - `unify`, `resolve`, `matching`, `gendefs` — the entry point of each
   subsystem, not its internals; the exclusive rule keeps a nested entry from
   double-counting.
+- `projection_subst`, `projection_emit`, `instance_match` — checked field
+  projection's dependent tail substitution, component projection's initial
+  type emission, and recovered-instance matching respectively. Matching includes
+  argument recovery, strict identity validation and recursive argument
+  emission; its self time is excluded from any enclosing emission timer.
+  `projection_named` and `projection_structural` count the chosen field
+  routes; `instance_match_calls` exposes repeated suffix preparation even
+  when kernel evaluator counts stay linear. Checked field reads return their
+  inferred structural type directly, so they do not enter `projection_emit`.
 - `omega_*` — the existing `OmegaPhases` fields, folded in.
 
 The declaration phases are placed so that they partition `check_decl`: what

@@ -61,6 +61,12 @@ COLUMNS = {
     # module-sized layer. `*.cow-sites.txt` beside the TSV names the sites.
     "cow ms":    (["cow_ns"], 1e6),
     "copies":    (["cow_copies"], 1),
+    "projection subst ms": (["projection_subst_ns"], 1e6),
+    "projection emit ms": (["projection_emit_ns"], 1e6),
+    "instance match ms": (["instance_match_ns"], 1e6),
+    "named projections": (["projection_named"], 1),
+    "structural projections": (["projection_structural"], 1),
+    "instance matches": (["instance_match_calls"], 1),
 }
 DEFAULT = ["total ms", "gate ms", "misses", "queries", "steps"]
 

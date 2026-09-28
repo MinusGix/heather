@@ -110,3 +110,4 @@ return, and a person should not meet a quadratic when reading one.
   that flag; no benchmark baseline or band was changed. The first benchmark
   run overlapped compilation and the full suite and reported noisy timing
   flags that disappeared on the full rerun.
+- 2026-09-28: The source-type follow-up eliminated premature field emission and closes [[conjunction-projection-type-preparation-cost]]; that owner records attribution, library validation and the decision to retain structural tail substitution.

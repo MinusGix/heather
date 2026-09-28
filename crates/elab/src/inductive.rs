@@ -2966,6 +2966,7 @@ impl Elaborator {
         if let Some(args) = args.as_ref()
             && let Some(t) = self.rec_proj_ref_at(cx, ind.tag, idx, args, &value)
         {
+            crate::stats::count(crate::stats::Counter::ProjectionNamed);
             return Ok(t);
         }
         decline!(
@@ -2980,11 +2981,12 @@ impl Elaborator {
                 "no-projection-def"
             }
         );
-        // Checked projections carry no component annotations. Walk only the
-        // structural type, and spell the selected field once at the end.
-        // Preparing a parallel emitted tail at every link re-walks all the
-        // conjunctions below it even though none of that syntax is emitted.
+        // Checked projections carry no component annotations. Their inferred
+        // field type is a structural read too: keep it inline until a caller
+        // actually writes an annotation. Emitting a selected conjunction here
+        // recursively matches every remaining instance again at every dot.
         if self.emits_at_forms(cx) {
+            crate::stats::count(crate::stats::Counter::ProjectionStructural);
             let mut cur = record_ty.clone();
             let mut pair = value;
             for step in 0..=idx + 1 {
@@ -2996,10 +2998,10 @@ impl Elaborator {
                 };
                 let proj = Rc::new(Term::FstAt { pair: Rc::clone(&pair) });
                 if step == idx + 1 {
-                    let field = self.annotation_type(cx, &fst, 0);
-                    return Ok(((*proj).clone(), field, fst_level));
+                    return Ok(((*proj).clone(), (*fst).clone(), fst_level));
                 }
-                cur = snd.apply_local(&LocalSubst::id(&cx.gamma).extended(proj));
+                cur = crate::stats::timed(crate::stats::Timer::ProjectionSubst,
+                    || snd.apply_local(&LocalSubst::id(&cx.gamma).extended(proj)));
                 pair = Rc::new(Term::SndAt { pair });
             }
             unreachable!("the loop returns at step idx + 1");
@@ -3010,7 +3012,7 @@ impl Elaborator {
         // respell and keep this as `None`, so their old path stays allocation-
         // free; a parameterized law record such as `IrPassLaws(R, alg)` gets
         // the exact component spelling its closed Π binder received.
-        let mut cur_emit = match self.emit_ty(cx, record_ty, 0) {
+        let mut cur_emit = crate::stats::timed(crate::stats::Timer::ProjectionEmit, || match self.emit_ty(cx, record_ty, 0) {
             Some(emitted) => Some(emitted),
             // The type may **already** be the emission spelling: since
             // `docs/per-instantiation-type-codes-design.md` a parameterized
@@ -3022,7 +3024,7 @@ impl Elaborator {
             // reference the value's own type carries (`Sigma`/`El(?)`, the
             // largest row of the x86 certificates before this line).
             None => self.unspell_here(record_ty).map(|_| record_ty.clone()),
-        };
+        });
         let mut pair = value;
         // Entry 0 is the tag (§3.3), so field `idx` is spine entry `idx + 1`.
         for step in 0..=idx + 1 {

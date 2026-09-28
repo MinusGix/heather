@@ -102,6 +102,9 @@ registry! {
         Unify = "unify_ns",
         Resolve = "resolve_ns",
         Matching = "matching_ns",
+        ProjectionSubst = "projection_subst_ns",
+        ProjectionEmit = "projection_emit_ns",
+        InstanceMatch = "instance_match_ns",
         Gendefs = "gendefs_ns",
         OmegaReflect = "omega_reflect_ns",
         OmegaSearch = "omega_search_ns",
@@ -126,6 +129,9 @@ registry! {
         DiagNotes = "diag_notes",
         DiagCandidates = "diag_candidates",
         CowCopies = "cow_copies",
+        ProjectionNamed = "projection_named",
+        ProjectionStructural = "projection_structural",
+        InstanceMatchCalls = "instance_match_calls",
     }
 }
 

@@ -442,10 +442,15 @@ slip into stage 2. The per-query arena is kept because stage 1b measured
 what abandoning it costs. A contiguous projection chain is one such query:
 its intermediate views reuse the preceding value instead of replaying the
 selection prefix at each link. This removes quadratic prefix replay without
-retaining an arena across independent typing or conversion queries. Source
-projection preparation can still traverse the remaining type per field;
-[conjunction-projection-chain-cost](../issues/conjunction-projection-chain-cost.md) records that separate cost and its
-measured family.
+retaining an arena across independent typing or conversion queries. The
+elaborator's checked field reads likewise return the inferred structural
+type directly; emission belongs to a caller writing an annotation. Respell
+each inferred suffix and recursive instance matching revisits overlapping
+conjunctions at every source dot. Tail substitution still traverses the
+remaining type per field; this leaves quadratic source work even with
+linear kernel evaluator steps and linear instance-match calls.
+[conjunction-projection-type-preparation-cost](../issues/conjunction-projection-type-preparation-cost.md)
+records the attribution and the decision to retain structural substitution.
 
 ### 3.8 The value forms for the unannotated spellings
 
