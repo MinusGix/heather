@@ -46,6 +46,7 @@ Vector types can be returned directly, including at an unknown length:
 ```heather
 fn V<A>(n: Nat) -> Type { [A; n] }
 fn pass<A>(n: Nat, xs: V<A>(n)) -> [A; n] { xs }
+fn one<A>(x: A) -> V<A>(1) { [x] }
 ```
 
 The semicolon distinguishes a vector type `[A; n]` from a collection literal

@@ -57,6 +57,23 @@ fn empty_nonempty_and_trailing_comma_literals_lower_to_list_constructors() {
 }
 
 #[test]
+fn computed_nonvector_carriers_keep_the_collection_protocol() {
+    elab(r#"
+        record Bag { tag: Nat }
+        fn Carrier() -> Type { Bag }
+        instance(n: Nat) CollectionLiteral<Carrier()>(n) {
+            element := Nat,
+            fromLiteral := λ (xs: [Nat; n]) => Bag(7),
+        }
+        fn empty() -> Carrier() { [] }
+        fn two() -> Carrier() { [1, 2] }
+        theorem empty_value(): empty() = Bag(7) { refl }
+        theorem two_values(): two() = Bag(7) { refl }
+        fn generic<C> requires literal: CollectionLiteral<C>(2) (x: literal.element) -> C { [x, x] }
+    "#);
+}
+
+#[test]
 fn list_literals_are_checking_only_because_the_container_is_ambiguous() {
     elab(
         r#"

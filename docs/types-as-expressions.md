@@ -180,6 +180,15 @@ keeps the collection-literal reading. There is no backtracking or elaboration
 retry, so a semicolon after a comma remains a malformed collection literal.
 The dedicated type-position production is unchanged.
 
+Collection literals also recognize computed vector carriers
+(`issues/vector-literals-at-computed-carriers.md`). The literal checker first
+uses the structural decode; for an `El` of a computed code, it normalizes the
+code term to weak head and decodes that former. `TmVec` is already a term
+weak head, so this preserves the vector's element and length even at a closed
+length where full type normalization would reduce it to Unit/Sigma. A
+non-vector result keeps the original carrier for class resolution. Other
+intrinsic vector operations retain their existing structural readers.
+
 ## 4. Elaboration: lazy decode, and the four readers that had to learn it
 
 A named abbreviation is elaborated in one place and consumed in another:

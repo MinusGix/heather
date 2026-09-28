@@ -1027,6 +1027,23 @@ impl<'a> ExprElab<'a> {
         }
     }
 
+    /// Discover the intrinsic literal carrier without reducing a vector to
+    /// Unit/Sigma. Computed carriers are `El` of a type-valued expression:
+    /// normalize its code term, where `TmVec` is already a weak head, then
+    /// decode just that former. A non-vector result leaves class policy to
+    /// the caller, with the original expected type intact.
+    pub(crate) fn vector_literal_type(&self, cx: &Cx, expected: &Type, span: Span) -> R<Option<Type>> {
+        let mut head = crate::inductive::decoded(expected).into_owned();
+        if let Type::El { level, tm } = &head {
+            let tm = self.semantic.whnf_term(&cx.gamma, tm).map_err(|_| ElabError::Elab {
+                msg: "ran out of fuel reducing a collection literal's expected type".into(),
+                span,
+            })?;
+            head = crate::inductive::decoded(&Type::El { level: level.clone(), tm: Rc::new(tm) }).into_owned();
+        }
+        Ok(matches!(head, Type::Vec { .. }).then_some(head))
+    }
+
     fn check_vec_lit(
         &self,
         elab: &impl RecursiveCheckingElab,
@@ -1517,6 +1534,34 @@ mod tests {
                 .unwrap(),
             Term::GlobalTm { .. }
         ));
+    }
+
+    #[test]
+    fn collection_carrier_exhaustion_is_an_error_at_the_literal() {
+        use heather_kernel::layer::Layer;
+        use heather_kernel::term::{GlobalBinding, LocalCtx, LocalSubst};
+
+        let goals = GoalArena::default();
+        let slot_probe = Cell::new(None);
+        let cx = Cx::empty();
+        let world = GlobalCtx::new(vec![GlobalBinding::Tm {
+            ctx: LocalCtx::nil(),
+            layer: Layer::Code,
+            ty: Rc::new(Type::Ty(Level::Zero)),
+            level: Level::constant(1),
+            body: Some(Rc::new(Term::TmVec {
+                level: Level::Zero, elem: Rc::new(Term::TmNat), len: Rc::new(Term::Zero),
+            })),
+        }]);
+        let expr = ExprElab::new(SemanticOracle::in_world(world, 0), goals.allocator(), &slot_probe);
+        let expected = Type::El {
+            level: Level::Zero,
+            tm: Rc::new(Term::GlobalTm { var: GlobalVar(0), subst: LocalSubst::id(&cx.gamma) }),
+        };
+        let error = expr.vector_literal_type(&cx, &expected, SPAN).unwrap_err();
+        let ElabError::Elab { msg, span } = error else { panic!("expected a local diagnostic") };
+        assert!(msg.contains("fuel") && msg.contains("expected type"), "{msg}");
+        assert_eq!(span, SPAN);
     }
 
     #[test]

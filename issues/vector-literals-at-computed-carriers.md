@@ -1,6 +1,6 @@
 ---
 title: Recognize primitive vector literals at computed vector carriers
-status: open
+status: closed
 labels: [frontend,elaboration,vectors,ergonomics]
 created: 2026-09-28
 updated: 2026-09-28
@@ -59,3 +59,34 @@ just for this client.
 - **[[collection-literal-protocol]]** owns class-directed literals.
   Assumed here: only that primitive vectors retain an intrinsic bootstrap
   reading while other carriers use the protocol.
+
+## Log
+
+- 2026-09-28: Reproduced the refusal by replacing the parser round's annotated intermediate
+  bindings with direct literals: 6 vector tests passed and the direct-carrier
+  regression failed with the missing `CollectionLiteral` instance.
+
+  Literal dispatch now asks `ExprElab::vector_literal_type` for the intrinsic
+  carrier. It keeps the existing structural decode fast path; for a remaining
+  `El`, it weak-head normalizes the code term with the ordinary semantic oracle
+  and decodes only its resulting former. `TmVec` is already term WHNF, so this
+  exposes the vector without reducing its closed length to Unit/Sigma. The
+  resolved vector view is passed to the existing intrinsic literal builder;
+  non-vector results leave the original expected carrier to class resolution.
+  Fuel exhaustion is a local error at the literal, not a protocol miss.
+
+  Reviewed the other intrinsic vector readers in `vec/surface.rs`: they retain
+  their structural decode and are outside this literal-checking change. The
+  kernel, global type normalization and instance-inference routes are unchanged.
+
+  Kernel-checked surface coverage includes open element types, empty/nonempty
+  and nested aliases, a type family selected by a match, a local type-valued
+  function, a projected type-valued field, and equality of the produced values.
+  Negative controls retain exact length diagnostics, refuse neutral lengths and
+  wrong elements, and keep missing non-vector instances as protocol errors.
+  A custom computed non-vector carrier and a neutral carrier with an explicit
+  local dictionary retain class-based construction. Focused vector/list tests:
+  19 passed; the independent zero-fuel diagnostic test passed. Updated the guide,
+  design note and shared editor fixture. All 13 Tree-sitter corpus cases and all
+  shared positive fixtures passed. Final full `scripts/test`: 3,083 passed,
+  0 failed, 5 ignored.

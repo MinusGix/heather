@@ -78,12 +78,12 @@ fn vector_type_expressions_compose_and_check_literals() {
         fn nested<A>(n, m: Nat) -> Type { [[A; n]; m] }
         fn arrows<A>(n: Nat) -> Type { [A -> A; n] }
         fn higher() -> Type<1> { [Type; 0] }
-        fn empty<A>() -> V<A>(0) { let xs: [A; 0] = []; xs }
-        fn one() -> V<Nat>(1) { let xs: [Nat; 1] = [1]; xs }
-        fn two() -> V<Nat>(2) { let xs: [Nat; 2] = [1, 2]; xs }
+        fn empty<A>() -> V<A>(0) { [] }
+        fn one() -> V<Nat>(1) { [1] }
+        fn two() -> V<Nat>(2) { [1, 2] }
         fn plain_two() -> [Nat; 2] { [1, 2] }
-        fn nested_value() -> nested<Nat>(2, 1) { let xs: [[Nat; 2]; 1] = [[1, 2]]; xs }
-        fn functions<A>() -> arrows<A>(1) { let xs: [A -> A; 1] = [λ x => x]; xs }
+        fn nested_value() -> nested<Nat>(2, 1) { [[1, 2]] }
+        fn functions<A>() -> arrows<A>(1) { [λ x => x] }
         theorem empty_shape<A>(): V<A>(0) = [A; 0] { refl }
         theorem closed_shape(): V<Nat>(2) = [Nat; 2] { refl }
         theorem two_values(): two() = plain_two() { refl }
@@ -103,6 +103,45 @@ fn vector_type_expressions_reject_wrong_types_lengths_and_levels() {
         heather_syntax::parse_file(src).expect("vector type expression parses");
         elab_err(src);
     }
+}
+
+#[test]
+fn vector_literals_check_at_nested_and_computed_carriers() {
+    elab(r#"
+        fn V<A>(n: Nat) -> Type { [A; n] }
+        fn Rows<A>(n, m: Nat) -> Type { [V<A>(n); m] }
+        fn selected<A>(n: Nat) -> Type {
+            match n { Zero => [A; 0], Succ(k) => [A; Succ(k)] }
+        }
+        fn empty<A>() -> selected<A>(0) { [] }
+        fn row<A>(x: A) -> Rows<A>(2, 1) { [[x, x]] }
+        fn selected_row<A>(x: A) -> selected<A>(1) { [x] }
+        fn local_family<A>(x: A) -> [A; 1] {
+            let family: Nat -> Type = λ (n: Nat) => [A; n];
+            let xs: family(1) = [x]; xs
+        }
+        record Family<A> { carrier: Nat -> Type }
+        fn projected_family<A>(x: A) -> [A; 1] {
+            let family = Family<A>(λ (n: Nat) => [A; n]);
+            let xs: family.carrier(1) = [x]; xs
+        }
+        theorem nested_value<A>(x: A): row(x) = [[x, x]] { refl }
+        theorem selected_value<A>(x: A): selected_row(x) = [x] { refl }
+        theorem local_value<A>(x: A): local_family(x) = [x] { refl }
+        theorem projected_value<A>(x: A): projected_family(x) = [x] { refl }
+    "#);
+}
+
+#[test]
+fn vector_literals_at_computed_carriers_keep_intrinsic_refusals() {
+    let m = elab_err("fn V<A>(n: Nat) -> Type { [A; n] } fn bad() -> V<Nat>(2) { [1] }");
+    assert!(m.contains("1 element(s) but 2 are expected"), "{m}");
+    let m = elab_err("fn V<A>(n: Nat) -> Type { [A; n] } fn bad<A>(n: Nat, x: A) -> V<A>(n) { [x] }");
+    assert!(m.contains("literal length"), "{m}");
+    let m = elab_err("fn V<A>(n: Nat) -> Type { [A; n] } fn bad() -> V<Nat>(1) { [Type] }");
+    assert!(m.contains("LevelMismatch"), "{m}");
+    let m = elab_err("fn Carrier() -> Type { Nat } fn bad() -> Carrier() { [1] }");
+    assert!(m.contains("no instance for `CollectionLiteral<Nat>(1)`"), "{m}");
 }
 
 #[test]

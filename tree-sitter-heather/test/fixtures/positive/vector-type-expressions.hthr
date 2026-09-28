@@ -3,6 +3,6 @@ fn nested<A>(n, m: Nat) -> Type { [[A; n]; m] }
 fn arrows<A>(n: Nat) -> Type { [A -> A; n] }
 fn to_named<A>(n: Nat, xs: [A; n]) -> V<A>(n) { xs }
 fn from_named<A>(n: Nat, xs: V<A>(n)) -> [A; n] { xs }
-fn empty<A>() -> V<A>(0) { let xs: [A; 0] = []; xs }
-fn one() -> V<Nat>(1) { let xs: [Nat; 1] = [1]; xs }
-fn two() -> V<Nat>(2) { let xs: [Nat; 2] = [1, 2]; xs }
+fn empty<A>() -> V<A>(0) { [] }
+fn one() -> V<Nat>(1) { [1] }
+fn two() -> V<Nat>(2) { [1, 2] }

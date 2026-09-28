@@ -4632,9 +4632,9 @@ impl Elaborator {
             // their intrinsic reading, just as `Nat` does for numerals. Every
             // other container opts in through the canonical prelude protocol.
             ExprKind::CollectionLit(elems) => {
-                if matches!(&*inductive::decoded(expected), Type::Vec { .. }) {
-                    self.expr_elab()
-                        .check_indexed_form(self, cx, e, expected)
+                let expr = self.expr_elab();
+                if let Some(vector) = expr.vector_literal_type(cx, expected, e.span)? {
+                    expr.check_indexed_form(self, cx, e, &vector)
                         .expect("classified as an ExprElab indexed checking form")
                 } else {
                     self.check_collection_literal(cx, e, elems, expected, lvl, e.span)
