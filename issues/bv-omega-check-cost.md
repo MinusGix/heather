@@ -3,7 +3,7 @@ title: bv_omega costs several times the hand proofs it replaces
 status: open
 labels: [performance,proofs,bitvec,omega]
 created: 2026-09-26
-updated: 2026-09-27
+updated: 2026-09-28
 ---
 
 `bv_omega` checks the word facts of `lib/decimal_line.hthr`, but it costs
@@ -314,3 +314,61 @@ theorem bv_place_step(s: BitVec(64), r, h, c, w, q, rest: Nat,
 
   Levers, not taken: (a) where a word's `Q` is zero, put its form `P` straight into `omega`'s goal instead of generalising it. That saves one atom and one equation per such word, at the price of transporting the goal along the fact. (b) Share word facts between the `bv_omega` calls of one declaration (a slot, like `omega`'s atom list). (c) Pruning atoms that are reachable only through unused facts does not help here. Together, (a) and (b) would recover part of the gap. The rest is structural: a hand proof split into single-purpose lemmas gives `omega` minimal contexts, which a tactic working in place does not get. Verdict: `place_step` stays at about 2×, and the library switches to `bv_omega` anyway (dogfooding over hand proofs). The levers above are this issue's remaining work.
 - 2026-09-27: `lib/decimal_line.hthr` switched. `times256_value`, `raise_value`, `line_start_value`, `line_length_value`, `place_step` and a new `line_state_start_value` (split out of `line_word_value`) are now `bv_omega`, and 12 helpers are gone (`double_value`, `double_scaled`, `doubling_bounds`, `raise_bounds`, `kept_*`, `taken_*`, `weight_small`). `bitvec_omega` is bundled before `decimal_line` in `PRINT_SUPPORT` and in `read_print_process.rs`. A trap found on the way: `line_state_start_value` with no fact in scope took `raise` apart down to its 40 doublings (161 ms). With `raise_value`'s fact in scope, `raise(x)` is a defined leaf (15 ms). So state a proved sub-word's value before calling `bv_omega`. Staged standalone check at width 1, per-module item totals over two runs each: `decimal_line` 1.45 s → 1.69 s (+17%), gate 0.57 → 0.64 s; `bitvec_omega` itself 16 ms. Largest remaining row: `raise_value` (~150 ms, forty doublings taken apart), owned by [[bv-omega-definition-summaries]]. Full suite 3010 passed; `wc_l_prints_what_the_read_returned` 50 s wall with the library half cold.
+
+- 2026-09-28: Adopted the byte and comparison bridges from
+  [[bv-omega-bytes-and-comparisons]] in `decimal_line`. `place_step` now
+  proves its `True`/`False` outcomes directly with `bv_omega`; its separate
+  Nat orders and `unsigned_lt_nat` transport are gone. `word_bytes_of`
+  uses a width-generic `byte_parts` lemma proved by two `bv_omega` calls,
+  returning the low byte's word equality and the high part's Nat value.
+  This removes seven explicit `toNat_take_drop` proofs, their range
+  arguments, and seven applications of `byte_of_value`. The remaining
+  `byte_of_value` is itself `bv_omega`.
+
+  Factoring is load-bearing. Eight independent `bv_omega` arguments to
+  `eight_cong` checked, but their row cost 10.64 s total / 5.53 s gate in a
+  single width-one probe, against the old byte row plus helpers at
+  0.133 s / 0.053 s. Factoring the seven splits but leaving the last byte
+  inline still cost 1.576 s / 0.604 s for the row: its written alias is not
+  the canonical drop term in the helper's result, so the walk retraverses
+  the extraction chain. Passing that result to `byte_of_value` keeps the
+  last tactic call in a small context too. `below_value` retains its
+  Boolean-to-Boolean guard transport: the new tactic bridges constant
+  outcomes, and replacing its two direct value lemmas with tactic calls
+  doubled that small row's cost in the probe without simplifying the proof.
+
+  Measured against `08d647ad`, one release binary (SHA prefix
+  `55101045451a`), local Ryzen 7 5700X, kernel width 1, three interleaved
+  cold samples through `scripts/perf ab --source-patch`. Current kit,
+  model, fetch and store modules were staged in
+  `target/decimal-line-comparisons/` under their import names; standard
+  modules came from `lib/std`. Medians, item rows only:
+
+  | rows, including their helpers | total ms before → after | gate ms before → after | evaluator steps before → after |
+  |---|---:|---:|---:|
+  | `place_step` | 489.7 → 459.4 | 152.8 → 160.2 | 190166 → 187511 |
+  | bytes (`word_bytes_of`, old `byte_split` / new `byte_parts`, `byte_of_value`) | 130.3 → 173.4 | 52.9 → 56.6 | 80631 → 91287 |
+  | all `decimal_line` items | 2266.3 → 2247.5 | 824.3 → 778.1 | 622663 → 630664 |
+
+  The time sample ranges overlap in every row group: no speedup or slowdown
+  claim. The module pays 1.3% more evaluator steps and 4.8% more global
+  rescoping nodes (2062771 → 2162477); the byte group pays 13.2% more steps.
+  Whole-file wall medians, imports included, were 6.06 → 5.72 s with
+  overlapping samples too. Verdict: substantially less proof plumbing at
+  approximately the same observed whole-module cost; retain the shared
+  lemmas rather than independent byte proofs. Raw tables and the replayable
+  report are in `target/perf-ab/`; the group summary is
+  `target/decimal-line-comparisons/summary.json`.
+
+  Reproduce the source measurement after saving the library diff to a patch:
+  `scripts/perf ab --source-patch /tmp/decimal-line-bv-simplification.patch
+  --heather target/release/heather --file
+  lib/decimal_line.hthr:lib/std,target/decimal-line-comparisons --only
+  lib/decimal_line.hthr --samples 3 --kernel-workers 1 --cpu-secs 300`.
+
+  Validation: the full formatter passed the release CLI kernel check;
+  `scripts/test -p heather-elab --test read_print_process` passed its print
+  certificate acceptance and twelve mutation refusals; `scripts/test -p
+  heather-cli --test native_read_loop -- wc_l_prints_every_line` passed
+  certificate generation and execution, including fragmented input and
+  failed reads/writes. Both ran in the normal lane.

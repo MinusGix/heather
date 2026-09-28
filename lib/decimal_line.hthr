@@ -186,12 +186,10 @@ theorem place_step(s: BitVec(64), r, h, c, w, q, rest: Nat,
     place(s, BitVec::ofNat(1099511627776 * c), BitVec::ofNat(w)).toNat() = 1099511627776 * rest + (h + w * q) {
     let big = BitVec::ofNat(1099511627776 * c, n := 64);
     let weight = BitVec::ofNat(w, n := 64);
-    let test: (s.unsigned_lt_bit(big) = Succ(s.toNat()).leb(big.toNat())) = bitvec_nat::unsigned_lt_nat(64, s, big);
     (match q as λ k => (r = c * k + rest) → (k <= 1) →
         place(s, big, weight).toNat() = 1099511627776 * rest + (h + w * k) {
         Zero => λ parts one => {
-            let under: (Succ(s.toNat()) <= big.toNat()) = bv_omega;
-            let kept: (s.unsigned_lt_bit(big) = True) = trans(test, leb_yes(Succ(s.toNat()), big.toNat(), under));
+            let kept: (s.unsigned_lt_bit(big) = True) = bv_omega;
             let same: (place(s, big, weight) = s) =
                 j(sym(kept), λ b _ => (match b { True => s, False => s.sub(big).add(weight) }) = s, refl);
             let moved: (place(s, big, weight).toNat() = s.toNat()) = @cong(λ (v: BitVec(64)) => v.toNat(), place(s, big, weight), s, same);
@@ -200,8 +198,7 @@ theorem place_step(s: BitVec(64), r, h, c, w, q, rest: Nat,
         Succ(k) => (match k as λ k2 => (r = c * Succ(k2) + rest) → (Succ(k2) <= 1) →
             place(s, big, weight).toNat() = 1099511627776 * rest + (h + w * Succ(k2)) {
             Zero => λ parts one => {
-                let over: (big.toNat() < Succ(s.toNat())) = bv_omega;
-                let taken: (s.unsigned_lt_bit(big) = False) = trans(test, leb_no(Succ(s.toNat()), big.toNat(), over));
+                let taken: (s.unsigned_lt_bit(big) = False) = bv_omega;
                 let stepped: (place(s, big, weight) = s.sub(big).add(weight)) =
                     j(sym(taken), λ b _ => (match b { True => s, False => s.sub(big).add(weight) }) = s.sub(big).add(weight), refl);
                 let moved: (place(s, big, weight).toNat() = s.sub(big).add(weight).toNat()) =
@@ -515,8 +512,12 @@ theorem line_word_value(n: Nat, small: n < 10000):
 // ---------------------------------------------------------------------------
 // The word's bytes.
 
-theorem byte_split(v, t, u, b, rest: Nat, whole: v = t + 256 * u, t_small: t < 256, again: v = b + 256 * rest, b_small: b < 256):
-    (t = b) ∧ (u = rest) { ⟨omega, omega⟩ }
+// Split one byte, with its remaining value stated for the next step.
+theorem byte_parts(m: Nat, x: BitVec(m + 8), b, rest: Nat,
+    value: x.toNat() = b + 256 * rest, small: b < 256):
+    (x.take_low(8, m) = BitVec::ofNat(b)) ∧ (x.drop_low(8, m).toNat() = rest) {
+    ⟨bv_omega, bv_omega⟩
+}
 
 theorem eight_cong<A>(a0, a1, a2, a3, a4, a5, a6, a7, c0, c1, c2, c3, c4, c5, c6, c7: A,
     e0: a0 = c0, e1: a1 = c1, e2: a2 = c2, e3: a3 = c3, e4: a4 = c4, e5: a5 = c5, e6: a6 = c6, e7: a7 = c7):
@@ -531,31 +532,22 @@ theorem eight_cong<A>(a0, a1, a2, a3, a4, a5, a6, a7, c0, c1, c2, c3, c4, c5, c6
     j(e7, λ y _ => Cons(a0, Cons(a1, Cons(a2, Cons(a3, Cons(a4, Cons(a5, Cons(a6, Cons(a7, Nil)))))))) = Cons(c0, Cons(c1, Cons(c2, Cons(c3, Cons(c4, Cons(c5, Cons(c6, Cons(y, Nil)))))))), r6)
 }
 
-theorem byte_of_value(x: BitVec(8), b: Nat, value: x.toNat() = b): x = BitVec::ofNat(b) {
-    trans(sym(BitVec::ofNat_toNat(8, x)), @cong(λ (t: Nat) => BitVec::ofNat(t, n := 8), x.toNat(), b, value))
-}
+theorem byte_of_value(x: BitVec(8), b: Nat, value: x.toNat() = b): x = BitVec::ofNat(b) { bv_omega }
 
 // A word's bytes are its base-256 digits, low first.
 theorem word_bytes_of(v: BitVec(64), b0, b1, b2, b3, b4, b5, b6, b7: Nat,
     value: v.toNat() = b0 + 256 * (b1 + 256 * (b2 + 256 * (b3 + 256 * (b4 + 256 * (b5 + 256 * (b6 + 256 * b7)))))),
     s0: b0 < 256, s1: b1 < 256, s2: b2 < 256, s3: b3 < 256, s4: b4 < 256, s5: b5 < 256, s6: b6 < 256, s7: b7 < 256):
     word_bytes(v) = [BitVec::ofNat(b0), BitVec::ofNat(b1), BitVec::ofNat(b2), BitVec::ofNat(b3), BitVec::ofNat(b4), BitVec::ofNat(b5), BitVec::ofNat(b6), BitVec::ofNat(b7)] {
-    let w0: (v.toNat() = imm_byte0(v).toNat() + 256 * imm_rest0(v).toNat()) = bitvec_nat::toNat_take_drop(8, 56, v);
-    let e0 = byte_split(v.toNat(), imm_byte0(v).toNat(), imm_rest0(v).toNat(), b0, b1 + 256 * (b2 + 256 * (b3 + 256 * (b4 + 256 * (b5 + 256 * (b6 + 256 * b7))))), w0, BitVec::toNat_lt_pow(8, imm_byte0(v)), value, s0);
-    let w1: (imm_rest0(v).toNat() = imm_byte1(v).toNat() + 256 * imm_rest1(v).toNat()) = bitvec_nat::toNat_take_drop(8, 48, imm_rest0(v));
-    let e1 = byte_split(imm_rest0(v).toNat(), imm_byte1(v).toNat(), imm_rest1(v).toNat(), b1, b2 + 256 * (b3 + 256 * (b4 + 256 * (b5 + 256 * (b6 + 256 * b7)))), w1, BitVec::toNat_lt_pow(8, imm_byte1(v)), e0.right, s1);
-    let w2: (imm_rest1(v).toNat() = imm_byte2(v).toNat() + 256 * imm_rest2(v).toNat()) = bitvec_nat::toNat_take_drop(8, 40, imm_rest1(v));
-    let e2 = byte_split(imm_rest1(v).toNat(), imm_byte2(v).toNat(), imm_rest2(v).toNat(), b2, b3 + 256 * (b4 + 256 * (b5 + 256 * (b6 + 256 * b7))), w2, BitVec::toNat_lt_pow(8, imm_byte2(v)), e1.right, s2);
-    let w3: (imm_rest2(v).toNat() = imm_byte3(v).toNat() + 256 * imm_rest3(v).toNat()) = bitvec_nat::toNat_take_drop(8, 32, imm_rest2(v));
-    let e3 = byte_split(imm_rest2(v).toNat(), imm_byte3(v).toNat(), imm_rest3(v).toNat(), b3, b4 + 256 * (b5 + 256 * (b6 + 256 * b7)), w3, BitVec::toNat_lt_pow(8, imm_byte3(v)), e2.right, s3);
-    let w4: (imm_rest3(v).toNat() = imm_byte4(v).toNat() + 256 * imm_rest4(v).toNat()) = bitvec_nat::toNat_take_drop(8, 24, imm_rest3(v));
-    let e4 = byte_split(imm_rest3(v).toNat(), imm_byte4(v).toNat(), imm_rest4(v).toNat(), b4, b5 + 256 * (b6 + 256 * b7), w4, BitVec::toNat_lt_pow(8, imm_byte4(v)), e3.right, s4);
-    let w5: (imm_rest4(v).toNat() = imm_byte5(v).toNat() + 256 * imm_rest5(v).toNat()) = bitvec_nat::toNat_take_drop(8, 16, imm_rest4(v));
-    let e5 = byte_split(imm_rest4(v).toNat(), imm_byte5(v).toNat(), imm_rest5(v).toNat(), b5, b6 + 256 * b7, w5, BitVec::toNat_lt_pow(8, imm_byte5(v)), e4.right, s5);
-    let w6: (imm_rest5(v).toNat() = imm_byte6(v).toNat() + 256 * imm_byte7(v).toNat()) = bitvec_nat::toNat_take_drop(8, 8, imm_rest5(v));
-    let e6 = byte_split(imm_rest5(v).toNat(), imm_byte6(v).toNat(), imm_byte7(v).toNat(), b6, b7, w6, BitVec::toNat_lt_pow(8, imm_byte6(v)), e5.right, s6);
+    let e0 = byte_parts(56, v, b0, b1 + 256 * (b2 + 256 * (b3 + 256 * (b4 + 256 * (b5 + 256 * (b6 + 256 * b7))))), value, s0);
+    let e1 = byte_parts(48, imm_rest0(v), b1, b2 + 256 * (b3 + 256 * (b4 + 256 * (b5 + 256 * (b6 + 256 * b7)))), e0.right, s1);
+    let e2 = byte_parts(40, imm_rest1(v), b2, b3 + 256 * (b4 + 256 * (b5 + 256 * (b6 + 256 * b7))), e1.right, s2);
+    let e3 = byte_parts(32, imm_rest2(v), b3, b4 + 256 * (b5 + 256 * (b6 + 256 * b7)), e2.right, s3);
+    let e4 = byte_parts(24, imm_rest3(v), b4, b5 + 256 * (b6 + 256 * b7), e3.right, s4);
+    let e5 = byte_parts(16, imm_rest4(v), b5, b6 + 256 * b7, e4.right, s5);
+    let e6 = byte_parts(8, imm_rest5(v), b6, b7, e5.right, s6);
     eight_cong<BitVec(8)>(imm_byte0(v), imm_byte1(v), imm_byte2(v), imm_byte3(v), imm_byte4(v), imm_byte5(v), imm_byte6(v), imm_byte7(v), BitVec::ofNat(b0, n := 8), BitVec::ofNat(b1, n := 8), BitVec::ofNat(b2, n := 8), BitVec::ofNat(b3, n := 8), BitVec::ofNat(b4, n := 8), BitVec::ofNat(b5, n := 8), BitVec::ofNat(b6, n := 8), BitVec::ofNat(b7, n := 8),
-        byte_of_value(imm_byte0(v), b0, e0.left), byte_of_value(imm_byte1(v), b1, e1.left), byte_of_value(imm_byte2(v), b2, e2.left), byte_of_value(imm_byte3(v), b3, e3.left), byte_of_value(imm_byte4(v), b4, e4.left), byte_of_value(imm_byte5(v), b5, e5.left), byte_of_value(imm_byte6(v), b6, e6.left), byte_of_value(imm_byte7(v), b7, e6.right))
+        e0.left, e1.left, e2.left, e3.left, e4.left, e5.left, e6.left, byte_of_value(imm_byte7(v), b7, e6.right))
 }
 
 // A digit's character code fits its byte.
