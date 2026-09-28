@@ -10,6 +10,7 @@
 // Everything is Nat. An Omega row (`dot` over a list of coefficients) costs
 // the checker thousands of steps per application, a form a few dozen.
 import bitvec;
+import bool;
 import logic;
 import nat;
 import bitvec_nat;
@@ -163,4 +164,36 @@ theorem sub_form(n: Nat, a, b: BitVec(n), qa, pa, qb, pb, q, p: Nat, fa: a.toNat
     let le = sub_fits_arith(a.toNat(), b.toNat(), qa, pa, qb, pb, q, p, fa, fb, hp, hq, fits);
     j(sym(bitvec_nat::toNat_sub(n, a, b, le)), λ v _ => v + q = p,
         sub_arith(a.toNat(), b.toNat(), a.toNat() -b.toNat(), qa, pa, qb, pb, q, p, fa, fb, hp, hq, Nat::sub_add_cancel(b.toNat(), a.toNat(), le)))
+}
+
+// Equality and Boolean comparisons reduce to arithmetic over values.
+theorem word_eq(n: Nat, a, b: BitVec(n), h: a.toNat() = b.toNat()): a = b {
+    trans(sym(BitVec::ofNat_toNat(n, a)),
+        trans(@cong(λ (v: Nat) => BitVec::ofNat(v, n := n), a.toNat(), b.toNat(), h), BitVec::ofNat_toNat(n, b)))
+}
+
+theorem unsigned_true(n: Nat, a, b: BitVec(n), h: a.unsigned_lt_bit(b) = bool::True): a.toNat() < b.toNat() {
+    Nat::leb_sound(Succ(a.toNat()), b.toNat(),
+        j(sym(trans(sym(bitvec_nat::unsigned_lt_nat(n, a, b)), h)), λ flag _ => flag.IsTrue(), trivial))
+}
+
+theorem unsigned_false(n: Nat, a, b: BitVec(n), h: a.unsigned_lt_bit(b) = bool::False): b.toNat() <= a.toNat() {
+    Nat::le_of_not_lt(a.toNat(), b.toNat(), λ lt =>
+        j(trans(sym(bitvec_nat::unsigned_lt_nat(n, a, b)), h), λ flag _ => flag.IsTrue(), Nat::leb_complete(Succ(a.toNat()), b.toNat(), lt)))
+}
+
+theorem unsigned_of_true(n: Nat, a, b: BitVec(n), h: a.toNat() < b.toNat()): a.unsigned_lt_bit(b) = bool::True {
+    trans(bitvec_nat::unsigned_lt_nat(n, a, b), bool::eq_true_of_is_true(Succ(a.toNat()).leb(b.toNat()), Nat::leb_complete(Succ(a.toNat()), b.toNat(), h)))
+}
+
+theorem unsigned_of_false(n: Nat, a, b: BitVec(n), h: b.toNat() <= a.toNat()): a.unsigned_lt_bit(b) = bool::False {
+    (match a.unsigned_lt_bit(b) as λ flag => (a.unsigned_lt_bit(b) = flag) → flag = bool::False {
+        False => λ same => refl,
+        True => λ yes => false_elim(Nat::lt_irrefl(a.toNat(), Nat::le_trans(Succ(a.toNat()), b.toNat(), a.toNat(), unsigned_true(n, a, b, yes), h))),
+    })(refl)
+}
+
+// A value equation already supplies the range needed for this word equality.
+theorem word_eq_value(n: Nat, a: BitVec(n), c: Nat, h: a.toNat() = c): a = BitVec::ofNat(c) {
+    trans(sym(BitVec::ofNat_toNat(n, a)), @cong(λ (v: Nat) => BitVec::ofNat(v, n := n), a.toNat(), c, h))
 }

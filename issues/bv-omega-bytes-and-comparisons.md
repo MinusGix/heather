@@ -1,9 +1,9 @@
 ---
 title: bv_omega: byte extraction, unsigned comparisons and word equality goals
-status: open
+status: closed
 labels: [proofs,bitvec,metaprogramming]
 created: 2026-09-26
-updated: 2026-09-26
+updated: 2026-09-28
 ---
 
 `bv_omega`'s first slice (docs/bv-omega-design.md §4) takes words apart through
@@ -26,3 +26,18 @@ Each is a new row in the walk's table (§3) over the same fact form
 
 - **[[bitvec-nat-lifting-tactic]]** owns the tactic and its emission shape.
   Assumed here: only the fact form and the bundle.
+
+## Implemented 2026-09-28
+
+The walk adds shared take/drop decompositions and both half-word ranges,
+including nested extractions and definitions that step to either half.
+Literal powers are emitted as coefficients. Unsigned Boolean equations in
+scope become Nat orders; comparison and word equality goals use checked
+bridge lemmas over a Nat `bv_omega` subgoal. Optional comparison operands
+follow the existing careful retry policy for overflow and borrow.
+
+`crates/elab/tests/bv_omega.rs` covers seven byte extractions, arithmetic
+inputs, aliases, zero and open widths, both comparison outcomes and equation
+orientations, word equality, and false-goal controls. Nested extraction also
+required reconstructing both finite endpoints of positive Omega combinations
+with a non-exact interval, using the existing endpoint lemmas.

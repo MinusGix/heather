@@ -10,7 +10,7 @@ leaves only) and `issues/bv-omega-check-cost.md` (the cost rounds that shaped
 
 `bv_omega` is a checking-position leaf, like `omega` (`docs/goal-combinators.md`).
 At a goal about `x.toNat()` of words built from `add`, `sub`, `ofNat` and
-`word_of_nat`, it writes a proof as source: one fact per word, stating that
+`word_of_nat`, or byte extraction, it writes a proof as source: one fact per word, stating that
 word's value, with every "does not overflow" and "does not borrow" side
 condition discharged by `omega`. It elaborates that source at the goal and
 lifts the result into a lemma of its own (§6). The result is an ordinary
@@ -102,6 +102,7 @@ classifies `t` by its head:
 | `BitVec::sub(a, b)` | `sub_form` over `a`, `b` |
 | `BitVec::ofNat(c)` | `ofNat_form`, `c` read as a form |
 | `word_of_nat(n, c)` | `word_of_nat_form`, `c` read as a form |
+| `BitVec::take_low(n, m, x)` / `drop_low(n, m, x)` | half-word leaves, their ranges, and `x.toNat() = lo.toNat() + 2^n * hi.toNat()` |
 | a definition | its reduct's, under a step budget |
 | anything else | a leaf |
 
@@ -135,14 +136,32 @@ the careful attempt (§5) try each fact's new side conditions first and leave
 the fact alone when one fails. Trying them first had cost an `omega` per new
 side condition on every call, and the bundle then proved each one again.
 
+Byte decomposition is shared by the two halves of a split. Literal widths
+spell `2^n` as a literal coefficient for `omega`; an open width retains the
+power expression. The input is walked too, so extracting from an arithmetic
+word uses its ordinary value fact. Definitions of either half retain their
+written name, with equality facts connecting additional aliases.
+
+An unsigned comparison equation in scope, in either orientation, supplies
+`a.toNat() < b.toNat()` for `True`, or `b.toNat() <= a.toNat()` for `False`.
+These bridge facts are available before side conditions and are restated
+under the same names when the arithmetic goal generalises composite words.
+Words appearing only in a comparison remain optional in the careful attempt.
+
 ## 4. Scope
 
 - Goals: whatever `omega` accepts, over the lifted atoms, and a word's fact
-  itself, including as a truncated difference `P - Q` (§2).
-- Operations: `add`, `sub`, `ofNat`, `word_of_nat`, and definitions that step
-  to them. Byte extraction, `unsigned_lt_bit` and word equality goals are
-  `issues/bv-omega-bytes-and-comparisons.md`; splitting a `match` stuck on a
-  word comparison is `issues/bv-omega-split-stuck-comparison.md`.
+  itself, including as a truncated difference `P - Q` (§2). Word equality
+  goals reduce to equality of their Nat values through `ofNat_toNat`;
+  equality with `ofNat(c)` uses a value equation directly. An unsigned
+  comparison equal to `True` or `False`, in either orientation, reduces to
+  the corresponding Nat order. Each bridge is an ordinary lemma application
+  over a checking-position `bv_omega` subgoal.
+- Operations: `add`, `sub`, `ofNat`, `word_of_nat`, `take_low`, `drop_low`,
+  and definitions that step to them. Byte extraction and comparison bridges
+  are recorded in `issues/bv-omega-bytes-and-comparisons.md`; splitting a
+  `match` stuck on a word comparison is
+  `issues/bv-omega-split-stuck-comparison.md`.
 
 ## 5. Failure
 

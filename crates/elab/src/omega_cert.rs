@@ -4239,6 +4239,43 @@ fn refute_spelled(
                     exact: None,
                 }
             }
+            // Two bounded rows can combine into a bounded interval that
+            // is not exact. Reconstruct each endpoint independently.
+            Derivation::Combo { left, left_scale, right, right_scale }
+                if left_scale > 0 && right_scale > 0
+                    && fact.interval.lower.is_some() && fact.interval.upper.is_some() =>
+            {
+                let left = parent(&proofs, left)?;
+                let right = parent(&proofs, right)?;
+                let row_source = format!("omega::combo({}, {}, {}, {})",
+                    int(left_scale), left.row_source, int(right_scale), right.row_source);
+                let mut endpoints = Vec::new();
+                for lower in [true, false] {
+                    let (lv, rv, lp, rp, lemma) = if lower {
+                        (left.interval.lower, right.interval.lower, &left.lower, &right.lower, "lower_combo")
+                    } else {
+                        (left.interval.upper, right.interval.upper, &left.upper, &right.upper, "upper_combo")
+                    };
+                    let name = format!("__omega_generated_{id}_{}", if lower { "lower" } else { "upper" });
+                    bindings.push(format!(
+                        "let {name} = omega::{lemma}({}, {}, {}, {}, {}, {}, {}, int::Int::zero_le_ofNat({}), int::Int::zero_le_ofNat({}), {}, {});",
+                        int(left_scale), int(right_scale), left.row_source, right.row_source, atoms_source,
+                        int(lv.ok_or("Omega bounded combination lost its left endpoint")?),
+                        int(rv.ok_or("Omega bounded combination lost its right endpoint")?),
+                        nat_lit(left_scale), nat_lit(right_scale),
+                        lp.as_ref().ok_or("Omega bounded combination lost its left proof")?,
+                        rp.as_ref().ok_or("Omega bounded combination lost its right proof")?,
+                    ));
+                    endpoints.push(name);
+                }
+                BoundProof {
+                    row_source,
+                    interval: fact.interval,
+                    lower: Some(endpoints[0].clone()),
+                    upper: Some(endpoints[1].clone()),
+                    exact: None,
+                }
+            }
             Derivation::Combo {
                 left,
                 left_scale,

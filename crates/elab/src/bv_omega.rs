@@ -2,8 +2,8 @@
 //!
 //! A generator, not a solver. It finds every `toNat` of a word in the goal
 //! and in the facts in scope, takes each word apart through `add`, `sub`,
-//! `ofNat`, `word_of_nat` and the definitions that step to them, and writes a
-//! proof as source. Each word's value is stated as `w.toNat() + Q = P` over
+//! `ofNat`, `word_of_nat`, byte extraction and definitions that step to them,
+//! and writes a proof as source. Each word's value is stated as `w.toNat() + Q = P` over
 //! *forms*, `c₁ * a₁ + (… + k)` in a fixed atom order: forms add one lemma
 //! step per atom, with literal coefficients the checker adds, so no fact
 //! needs `omega`. Only the outermost words' bounds and each subtraction's
@@ -126,6 +126,9 @@ struct Walk<'a> {
     defined: HashMap<String, (String, Rc<Term>)>,
     /// The defined words being read, so a cycle of definitions ends in a leaf.
     defining: HashSet<String>,
+    /// Decompositions and reflected comparisons, stated before arithmetic.
+    bridges: Vec<(String, String, String)>,
+    splits: HashMap<String, (String, String)>,
 }
 
 impl<'a> Walk<'a> {
@@ -234,22 +237,26 @@ impl<'a> Walk<'a> {
     /// The word's node, built on first sight. `None` when the word does not
     /// spell, which leaves its `toNat` to `omega` as an opaque atom.
     fn word(&mut self, width: &Rc<Term>, word: &Rc<Term>) -> Result<Option<usize>, String> {
+        let Some(w) = self.elab.spell_term_source(self.cx, width) else { return Ok(None) };
+        self.word_at(w, word)
+    }
+
+    fn word_at(&mut self, w: String, word: &Rc<Term>) -> Result<Option<usize>, String> {
         let Some(spelled) = self.elab.spell_term_source(self.cx, word) else {
             return Ok(None);
         };
         if let Some(&node) = self.node_index.get(&spelled) {
             return Ok(Some(node));
         }
-        let Some(w) = self.elab.spell_term_source(self.cx, width) else {
-            return Ok(None);
-        };
+
         let shape = if self.stated.contains(&spelled) { self.known(word).unwrap_or(Shape::Leaf) } else { self.shape(word) };
+        let split = match &shape { Shape::Split(n, m, x, low) => Some((n.clone(), m.clone(), x.clone(), *low)), _ => None };
         let kind = match shape {
-            Shape::Add(a, b) => match (self.word(width, &a)?, self.word(width, &b)?) {
+            Shape::Add(a, b) => match (self.word_at(w.clone(), &a)?, self.word_at(w.clone(), &b)?) {
                 (Some(na), Some(nb)) => Kind::Add(na, nb),
                 _ => Kind::Leaf,
             },
-            Shape::Sub(a, b) => match (self.word(width, &a)?, self.word(width, &b)?) {
+            Shape::Sub(a, b) => match (self.word_at(w.clone(), &a)?, self.word_at(w.clone(), &b)?) {
                 (Some(na), Some(nb)) => Kind::Sub(na, nb),
                 _ => Kind::Leaf,
             },
@@ -257,14 +264,52 @@ impl<'a> Walk<'a> {
                 let c_source = nat_term_source(self.elab, self.cx, &c)?;
                 Kind::Value(lemma, c_source, self.nat(&c)?)
             }
-            Shape::Leaf => self.defined_kind(&spelled)?,
+            Shape::Leaf | Shape::Split(..) => self.defined_kind(&spelled)?,
         };
         if let Kind::Leaf = kind {
             self.atom(format!("bitvec::BitVec::toNat({spelled})"));
         }
         let index = self.nodes.len();
         self.node_index.insert(spelled.clone(), index);
-        self.nodes.push(Node { word: spelled, width: w, kind });
+        self.nodes.push(Node { word: spelled.clone(), width: w, kind });
+        if let Some((n, m, x, is_low)) = split {
+            let x_source = self.elab.spell_term_source(self.cx, &x).ok_or("could not spell split word")?;
+            let ns = nat_term_source(self.elab, self.cx, &n)?;
+            let ms = nat_term_source(self.elab, self.cx, &m)?;
+            let key = format!("{ns}, {ms}, {x_source}");
+            if let Some((low, high)) = self.splits.get(&key) {
+                let half = if is_low { low } else { high };
+                if half != &spelled {
+                    self.bridges.push((format!("__bv_alias{}", self.bridges.len()),
+                        format!("bitvec::BitVec::toNat({spelled}) = bitvec::BitVec::toNat({half})"), "refl".into()));
+                }
+            } else {
+                // Register both halves as leaves before walking the input,
+                // so the companion extraction cannot reopen this split.
+                let low = if is_low { spelled.clone() } else { format!("bitvec::BitVec::take_low({key})") };
+                let high = if is_low { format!("bitvec::BitVec::drop_low({key})") } else { spelled.clone() };
+                self.splits.insert(key.clone(), (low.clone(), high.clone()));
+                for (word, width) in [(&low, &ns), (&high, &ms)] {
+                    if !self.node_index.contains_key(word) {
+                        let i = self.nodes.len();
+                        self.node_index.insert(word.clone(), i);
+                        self.atom(format!("bitvec::BitVec::toNat({word})"));
+                        self.nodes.push(Node { word: word.clone(), width: width.clone(), kind: Kind::Leaf });
+                    }
+                }
+                let width = self.literal(&n).zip(self.literal(&m))
+                    .and_then(|(n, m)| n.checked_add(m))
+                    .map(|width| width.to_string()).unwrap_or_else(|| add(&ms, &ns));
+                self.word_at(width, &x)?;
+                let power = match self.literal(&n).and_then(|n| u32::try_from(n).ok()).filter(|n| *n < 127) {
+                    Some(n) => (1i128 << n).to_string(),
+                    None => format!("nat::Nat::pow(2, {ns})"),
+                };
+                let name = format!("__bv_split{}", self.bridges.len());
+                let statement = format!("bitvec::BitVec::toNat({x_source}) = {}", add(&format!("bitvec::BitVec::toNat({low})"), &mul(&power, &format!("bitvec::BitVec::toNat({high})"))));
+                self.bridges.push((name, statement, format!("bitvec_nat::toNat_take_drop({key})")));
+            }
+        }
         Ok(Some(index))
     }
 
@@ -319,11 +364,19 @@ impl<'a> Walk<'a> {
         {
             return Some(Shape::Value("word_of_nat_row", Rc::clone(c)));
         }
+        for name in ["bitvec::BitVec::take_low", "bitvec::BitVec::drop_low"] {
+            if let Some(args) = named_args(self.elab, word, name)
+                && let [n, m, x] = args.as_slice()
+            {
+                return Some(Shape::Split(Rc::clone(n), Rc::clone(m), Rc::clone(x), name.ends_with("take_low")));
+            }
+        }
         None
     }
 }
 
 enum Shape {
+    Split(Rc<Term>, Rc<Term>, Rc<Term>, bool),
     Add(Rc<Term>, Rc<Term>),
     Sub(Rc<Term>, Rc<Term>),
     /// `ofNat(c)` or `word_of_nat(n, c)`, with the lemma that reads it back.
@@ -879,7 +932,7 @@ fn direct_goal(walk: &mut Walk, expected: &Type) -> Option<(usize, bool, Target)
             continue;
         }
         let saved = walk.clone();
-        let mut read = |walk: &mut Walk, t: &Rc<Term>| -> Option<(NatSyn, String)> {
+        let read = |walk: &mut Walk, t: &Rc<Term>| -> Option<(NatSyn, String)> {
             Some((walk.nat(t).ok()?, nat_term_source(walk.elab, walk.cx, t).ok()?))
         };
         let target = match named_args(walk.elab, other, "nat::Nat::sub").as_deref() {
@@ -902,6 +955,68 @@ fn direct_goal(walk: &mut Walk, expected: &Type) -> Option<(usize, bool, Target)
     None
 }
 
+/// A Boolean equation for an unsigned comparison, in either orientation.
+fn comparison(elab: &Elaborator, cx: &Cx, ty: &Type) -> Option<(Vec<Rc<Term>>, bool, bool)> {
+    let Type::Id { lhs, rhs, .. } = ty else { return None };
+    for (flipped, side, flag) in [(false, lhs, rhs), (true, rhs, lhs)] {
+        let Some(args) = named_args(elab, side, "bitvec::BitVec::unsigned_lt_bit") else { continue };
+        if args.len() != 3 { continue; }
+        let Some(source) = elab.spell_term_source(cx, flag) else { continue };
+        // The speller may use the bare constructor name. In particular,
+        // `False` also names logic's empty type under these imports.
+        let qualified = if source.contains("::") { source } else { format!("bool::{source}") };
+        let Some((ind, ctor)) = elab.lookup_ctor(&qualified) else { continue };
+        let Some(boolean) = elab.lookup_inductive("bool::Bool") else { continue };
+        if ind.tag == boolean.tag {
+            return Some((args.into_iter().cloned().collect(), ctor == 1, flipped));
+        }
+    }
+    None
+}
+
+/// Word equality and comparison goals use the same Nat generator through
+/// an ordinary checking-position subgoal.
+fn bridge_goal(elab: &Elaborator, cx: &Cx, expected: &Type) -> Option<String> {
+    if let Some((args, yes, flipped)) = comparison(elab, cx, expected) {
+        let spelled: Option<Vec<_>> = args.iter().map(|t| elab.spell_term_source(cx, t)).collect();
+        let spelled = spelled?;
+        let [n, a, b] = spelled.as_slice() else { return None };
+        let av = format!("bitvec::BitVec::toNat({a})");
+        let bv = format!("bitvec::BitVec::toNat({b})");
+        let statement = if yes { lt(&av, &bv) } else { le(&bv, &av) };
+        let proof = format!("bitvec_omega::unsigned_of_{}({n}, {a}, {b}, __bv_result)", if yes { "true" } else { "false" });
+        return Some(format!("{{ have __bv_result: ({statement}) = bv_omega; {} }}", if flipped { format!("sym({proof})") } else { proof }));
+    }
+    let Type::Id { ty, lhs, rhs, .. } = expected else { return None };
+    let ind = elab.display_tag_of(ty)?;
+    if !elab.lookup_inductive("bitvec::BitVec").is_some_and(|word| word.tag == ind.tag) { return None; }
+    let a = elab.spell_term_source(cx, lhs)?;
+    let b = elab.spell_term_source(cx, rhs)?;
+    // Type spellings include instantiated codes and inline lowerings. Let
+    // the existing method inference recover the width in all those forms.
+    let expr = parse_generated_expr(&format!("bitvec::BitVec::toNat({a})")).ok()?;
+    let mark = (elab.warnings.borrow().len(), elab.attempt.goal_arena.mark());
+    let inferred = elab.generated_scope(|me| me.elab_infer(cx, &expr)).ok();
+    let n = inferred.and_then(|(tm, _, _)| {
+        let args = named_args(elab, &tm, "bitvec::BitVec::toNat")?;
+        let [width, _] = args.as_slice() else { return None };
+        elab.spell_term_source(cx, width)
+    });
+    elab.warnings.borrow_mut().truncate(mark.0);
+    elab.attempt.goal_arena.rollback(mark.1);
+    let n = n?;
+    for (flipped, word, other) in [(false, &a, rhs), (true, &b, lhs)] {
+        if let Some(args) = named_args(elab, other, "bitvec::BitVec::ofNat")
+            && let [_, c] = args.as_slice()
+            && let Some(c) = elab.spell_term_source(cx, c)
+        {
+            let proof = format!("bitvec_omega::word_eq_value({n}, {word}, {c}, __bv_result)");
+            return Some(format!("{{ have __bv_result: (bitvec::BitVec::toNat({word}) = {c}) = bv_omega; {} }}", if flipped { format!("sym({proof})") } else { proof }));
+        }
+    }
+    Some(format!("{{ have __bv_result: (bitvec::BitVec::toNat({a}) = bitvec::BitVec::toNat({b})) = bv_omega; bitvec_omega::word_eq({n}, {a}, {b}, __bv_result) }}"))
+}
+
 /// The proof `bv_omega` offers at `expected`, as source (§2). The first
 /// attempt is not `careful`: it reads a goal that is a word's fact off the
 /// fact, and restates every fact over a word it takes apart without trying
@@ -909,6 +1024,9 @@ fn direct_goal(walk: &mut Walk, expected: &Type) -> Option<(usize, bool, Target)
 /// careful one proves the goal with `omega` and leaves alone a fact whose
 /// side conditions fail.
 pub(crate) fn generate(elab: &Elaborator, cx: &Cx, expected: &Type, careful: bool) -> Result<Generated, String> {
+    if let Some(source) = bridge_goal(elab, cx, expected) {
+        return Ok(Generated { source, prelude: String::new(), obligations: Vec::new(), retry: false });
+    }
     let mut walk = Walk {
         elab,
         cx,
@@ -920,6 +1038,8 @@ pub(crate) fn generate(elab: &Elaborator, cx: &Cx, expected: &Type, careful: boo
         stated: Default::default(),
         defined: HashMap::new(),
         defining: HashSet::new(),
+        bridges: Vec::new(),
+        splits: HashMap::new(),
     };
     let facts_in_scope = local_facts(elab, cx);
     for (name, ty) in &facts_in_scope {
@@ -930,11 +1050,9 @@ pub(crate) fn generate(elab: &Elaborator, cx: &Cx, expected: &Type, careful: boo
     }
     walk.scan_type(expected)?;
     let mut subjects: Vec<usize> = std::mem::take(&mut walk.found);
-    if walk.nodes.is_empty() {
-        return Err("found no `toNat` of a word in the goal; use `omega`".into());
-    }
+    subjects.extend(walk.nodes.iter().enumerate().filter_map(|(i, n)| (!n.is_leaf()).then_some(i)));
     let stated = stated_bounds(&mut walk, &facts_in_scope);
-    if !careful && let Some((n, flipped, target)) = direct_goal(&mut walk, expected) {
+    if !careful && walk.bridges.is_empty() && let Some((n, flipped, target)) = direct_goal(&mut walk, expected) {
         return Ok(generate_direct(&walk, &stated, n, flipped, &target));
     }
     // A fact in scope over a word the walk takes apart is restated over the
@@ -945,13 +1063,30 @@ pub(crate) fn generate(elab: &Elaborator, cx: &Cx, expected: &Type, careful: boo
     let mut restated: Vec<(String, Type)> = Vec::new();
     let mut optimistic = false;
     for (name, ty) in facts_in_scope {
-        if !is_nat_relation(elab, cx, &ty) {
+        let is_comparison = comparison(elab, cx, &ty).is_some();
+        if !is_comparison && !is_nat_relation(elab, cx, &ty) {
             continue;
         }
         let before = walk.clone();
-        walk.scan_type(&ty)?;
-        let found = std::mem::take(&mut walk.found);
-        if !found.iter().any(|&n| !walk.nodes[n].is_leaf()) {
+        if let Some((args, yes, flipped)) = comparison(elab, cx, &ty) {
+            let [n, a, b] = args.as_slice() else { continue };
+            if let Some(i) = walk.word(n, a)? { walk.found.push(i); }
+            if let Some(i) = walk.word(n, b)? { walk.found.push(i); }
+            let ns = nat_term_source(elab, cx, n)?;
+            let av = elab.spell_term_source(cx, a).ok_or("could not spell comparison operand")?;
+            let bv = elab.spell_term_source(cx, b).ok_or("could not spell comparison operand")?;
+            let at = format!("bitvec::BitVec::toNat({av})");
+            let bt = format!("bitvec::BitVec::toNat({bv})");
+            let statement = if yes { lt(&at, &bt) } else { le(&bt, &at) };
+            let proof = if flipped { format!("sym({name})") } else { name.clone() };
+            walk.bridges.push((format!("__bv_compare{}", walk.bridges.len()), statement,
+                format!("bitvec_omega::unsigned_{}({ns}, {av}, {bv}, {proof})", if yes { "true" } else { "false" })));
+        }
+        if !is_comparison { walk.scan_type(&ty)?; }
+        let mut found = std::mem::take(&mut walk.found);
+        // A split also needs the arithmetic value of its input.
+        found.extend((before.nodes.len()..walk.nodes.len()).filter(|&i| !walk.nodes[i].is_leaf()));
+        if !is_comparison && walk.bridges.len() == before.bridges.len() && !found.iter().any(|&n| !walk.nodes[n].is_leaf()) {
             walk = before;
             continue;
         }
@@ -962,10 +1097,13 @@ pub(crate) fn generate(elab: &Elaborator, cx: &Cx, expected: &Type, careful: boo
         optimistic |= !careful && !new.is_empty();
         if !careful || new.iter().all(|o| holds(elab, cx, &walk, o)) {
             subjects.extend(found);
-            restated.push((name, ty));
+            if !is_comparison { restated.push((name, ty)); }
         } else {
             walk = before;
         }
+    }
+    if walk.nodes.is_empty() {
+        return Err("found no `toNat` of a word in the goal or unsigned comparison in scope; use `omega`".into());
     }
     // A leaf a fact defines is still a leaf here: its `toNat` stays an atom
     // for `omega`, beside the fact that defines it, rather than a variable
@@ -1004,6 +1142,10 @@ pub(crate) fn generate(elab: &Elaborator, cx: &Cx, expected: &Type, careful: boo
             binders.push_str(&format!("(__bv_h{n}: {} = {}) → ", add(&format!("__bv_w{n}"), &e.spell(q)), e.spell(p)));
             names.push(format!("__bv_h{n}"));
         }
+        for (name, statement, _) in &walk.bridges {
+            binders.push_str(&format!("({name}: {}) → ", generalise(statement.clone())));
+            names.push(name.clone());
+        }
         // Rebinding a fact under its own name hides the original from the
         // `omega` inside.
         for (name, ty) in &restated {
@@ -1021,6 +1163,9 @@ pub(crate) fn generate(elab: &Elaborator, cx: &Cx, expected: &Type, careful: boo
     for &n in &subjects {
         let fact = e.fact(n);
         arguments.push(fact);
+    }
+    for (name, _, _) in &walk.bridges {
+        arguments.push(name.clone());
     }
     for (name, _) in &restated {
         arguments.push(name.clone());
@@ -1123,6 +1268,9 @@ fn prelude(walk: &Walk) -> String {
             let statement = lt(&format!("bitvec::BitVec::toNat({})", node.word), &format!("nat::Nat::pow(2, {})", node.width));
             out.push(format!("have __bv_range_{i}: ({statement}) = bitvec::BitVec::toNat_lt_pow({}, {});", node.width, node.word));
         }
+    }
+    for (name, statement, proof) in &walk.bridges {
+        out.push(format!("have {name}: ({statement}) = {proof};"));
     }
     out.join("\n")
 }

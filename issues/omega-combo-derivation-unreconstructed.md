@@ -1,9 +1,9 @@
 ---
 title: omega finds a refutation through a Combo derivation it cannot reconstruct
-status: open
+status: closed
 labels: [omega,proofs]
 created: 2026-09-26
-updated: 2026-09-26
+updated: 2026-09-28
 ---
 
 `omega` finds a refutation it then cannot certify:
@@ -30,3 +30,12 @@ leaf.
 - The reconstructor covers the `Combo` shape, or the search avoids emitting a
   derivation it cannot replay, with a control that such a derivation is still
   refused rather than trusted.
+
+## Fixed 2026-09-28
+
+The missing case was a positive combination with two finite endpoints and a
+non-exact interval. Reconstruction now emits both the `lower_combo` and
+`upper_combo` proofs, using the existing checked lemmas. The repro above and
+a satisfiable mutation run in `crates/elab/tests/bv_omega.rs`; nested byte
+extraction exercises the same case. This was required by
+[[bv-omega-bytes-and-comparisons]].

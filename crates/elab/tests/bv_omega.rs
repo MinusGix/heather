@@ -60,6 +60,8 @@ fn refused(what: &str, body: &str) -> String {
 fn bv_omega_suite() {
     respelled_atoms_elaborate();
     lifts_word_arithmetic();
+    lifts_bytes_comparisons_and_equality();
+    reconstructs_bounded_combinations();
     lifts_at_an_open_width();
     lifts_in_other_positions();
     lifts_a_deep_word();
@@ -252,4 +254,66 @@ fn proves_what_is_written_down_without_search() {
     let message = refused("a difference off by one",
         "theorem t(z: BitVec(64), k: Nat, zv: z.toNat() = k, small: k <= 3): BitVec::ofNat(5, n := 64).sub(z).toNat() = 6 -k { bv_omega }");
     assert!(message.contains("no contradiction"), "{message}");
+}
+
+fn lifts_bytes_comparisons_and_equality() {
+    checks("low byte and remaining bytes",
+        "theorem t(x: BitVec(16), lo, hi: Nat, v: x.toNat() = lo + 256 * hi, small: lo < 256): x.take_low(8, 8).toNat() = lo { bv_omega }\n\
+         theorem u(x: BitVec(16), lo, hi: Nat, v: x.toNat() = lo + 256 * hi, small: lo < 256): x.drop_low(8, 8).toNat() = hi { bv_omega }");
+    checks("extraction through definitions",
+        "fn byte(x: BitVec(16)) → BitVec(8) { x.take_low(8, 8) }\n\
+         theorem t(x: BitVec(16), lo, hi: Nat, v: x.toNat() = lo + 256 * hi, small: lo < 256): byte(x) = BitVec::ofNat(lo) { bv_omega }");
+    checks("named aliases of both halves",
+        "fn byte(x: BitVec(16)) → BitVec(8) { x.take_low(8, 8) }\n\
+         fn tail(x: BitVec(16)) → BitVec(8) { x.drop_low(8, 8) }\n\
+         theorem t(x: BitVec(16)): x.toNat() = byte(x).toNat() + 256 * tail(x).toNat() { bv_omega }");
+    checks("word equality in a let annotation",
+        "theorem t(a: BitVec(8), h: a.toNat() = 5): a.toNat() = BitVec::ofNat(5, n := 8).toNat() { let same: (a = BitVec::ofNat(5)) = bv_omega; @cong(λ (w: BitVec(8)) => w.toNat(), a, BitVec::ofNat(5), same) }");
+    checks("extraction of arithmetic",
+        "theorem t(x: BitVec(16), v: Nat, h: x.toNat() = v, small: v < 200): x.add(BitVec::ofNat(3)).take_low(8, 8).toNat() = v + 3 { bv_omega }");
+    checks("nested extraction",
+        "theorem t(x: BitVec(24), a, b, c: Nat, h: x.toNat() = a + 256 * (b + 256 * c), sa: a < 256, sb: b < 256): x.drop_low(8, 16).take_low(8, 8).toNat() = b { bv_omega }");
+    checks("seven byte extractions",
+        "theorem t(x: BitVec(64), a, b, c, d, e, f, g, h: Nat, value: x.toNat() = a + 256 * (b + 256 * (c + 256 * (d + 256 * (e + 256 * (f + 256 * (g + 256 * h)))))), sa: a < 256, sb: b < 256, sc: c < 256, sd: d < 256, se: e < 256, sf: f < 256, sg: g < 256): x.drop_low(8, 56).drop_low(8, 48).drop_low(8, 40).drop_low(8, 32).drop_low(8, 24).drop_low(8, 16).drop_low(8, 8).toNat() = h { bv_omega }");
+    checks("a zero width half",
+        "theorem t(x: BitVec(8)): x.take_low(0, 8).toNat() = 0 { bv_omega }");
+    checks("open width decomposition",
+        "theorem t(n, m: Nat, x: BitVec(m + n)): x.toNat() = x.take_low(n, m).toNat() + Nat::pow(2, n) * x.drop_low(n, m).toNat() { bv_omega }");
+    checks("comparison at an open width",
+        "theorem t(n: Nat, a, b: BitVec(n), h: bool::True = a.unsigned_lt_bit(b)): a.toNat() < b.toNat() { bv_omega }");
+    checks("an optional comparison that wraps",
+        "theorem t(a: BitVec(8), h: a.toNat() < 10, other: a.add(BitVec::ofNat(255)).unsigned_lt_bit(a) = bool::True): a.add(BitVec::ofNat(1)).toNat() < 11 { bv_omega }");
+    checks("open width word equality",
+        "theorem t(n: Nat, a, b: BitVec(n), h: a.toNat() = b.toNat()): a = b { bv_omega }");
+    checks("word arithmetic equality",
+        "theorem t(a: BitVec(8), h: a.toNat() < 100): a.add(BitVec::ofNat(1)) = BitVec::ofNat(a.toNat() + 1) { bv_omega }");
+    checks("unsigned true and false goals",
+        "theorem t(a, b: BitVec(8), h: a.toNat() < b.toNat()): a.unsigned_lt_bit(b) = bool::True { bv_omega }\n\
+         theorem u(a, b: BitVec(8), h: b.toNat() <= a.toNat()): bool::False = a.unsigned_lt_bit(b) { bv_omega }");
+    checks("unsigned comparison hypotheses",
+        "theorem t(a, b: BitVec(8), h: a.unsigned_lt_bit(b) = bool::True): a.toNat() < b.toNat() { bv_omega }\n\
+         theorem u(a, b: BitVec(8), h: bool::False = a.unsigned_lt_bit(b)): b.toNat() <= a.toNat() { bv_omega }");
+    checks("comparison of arithmetic words",
+        "theorem t(a: BitVec(8), h: a.toNat() < 100): a.add(BitVec::ofNat(1)).unsigned_lt_bit(BitVec::ofNat(101)) = bool::True { bv_omega }");
+    checks("equal words compare false", "theorem t(a: BitVec(8)): a.unsigned_lt_bit(a) = bool::False { bv_omega }");
+    for (what, body) in [
+        ("wrong low byte", "theorem t(x: BitVec(16), h: x.toNat() = 257): x.take_low(8, 8).toNat() = 2 { bv_omega }"),
+        ("wrong high byte", "theorem t(x: BitVec(16), h: x.toNat() = 257): x.drop_low(8, 8).toNat() = 2 { bv_omega }"),
+        ("out of range byte", "theorem t(x: BitVec(16), h: x.toNat() = 256): x.take_low(8, 8) = BitVec::ofNat(1) { bv_omega }"),
+        ("wrapping comparison", "theorem t(a: BitVec(8), h: a.toNat() = 255): a.add(BitVec::ofNat(1)).unsigned_lt_bit(a) = bool::False { bv_omega }"),
+        ("wrong word equality", "theorem t(a: BitVec(8), h: a.toNat() = 2): a = BitVec::ofNat(3) { bv_omega }"),
+        ("false unsigned comparison", "theorem t(a: BitVec(8)): a.unsigned_lt_bit(a) = bool::True { bv_omega }"),
+    ] {
+        refused(what, body);
+    }
+}
+
+// Byte decomposition uses intervals with two finite endpoints. Their
+// positive combinations must reconstruct both endpoints through checked
+// lemmas, including when unrelated range rows affect the search route.
+fn reconstructs_bounded_combinations() {
+    checks("a bounded combination with extra ranges",
+        "theorem t(s, t, v: Nat, value: s = v, small: v < 1000, first: t = v + v, r0: s < Nat::pow(2, 64), r1: t < Nat::pow(2, 64)): 2 * t + 0 < Nat::pow(2, 64) + 0 { omega }");
+    refused("a false bound with the same ranges",
+        "theorem t(s, t, v: Nat, value: s = v, small: v < 1000, first: t = v + v, r0: s < Nat::pow(2, 64), r1: t < Nat::pow(2, 64)): 2 * t < 1000 { omega }");
 }
