@@ -82,6 +82,50 @@ fn bad(src: &str) {
 #[test]
 fn the_bitvec_module_checks() { ok(""); }
 
+/// Use the public record and its generated type code too: a synthetic Vec
+/// alone misses the cost of unfolding library result types during probing.
+#[test]
+fn valuation_lookup_dispatch_cost_does_not_follow_result_width() {
+    use heather_elab::stats;
+    let _guard = ELAB_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let mut e = BASE.with(|base| {
+        base.get_or_init(|| support::semantic_test_base(MODULES).semantic_image())
+            .elaborator()
+    });
+    e.set_kernel_workers(1);
+    let mut body = "values(width, 201)".to_string();
+    for i in (0..=200).rev() {
+        let id = if i == 0 { "id".to_string() } else { format!("id_{i}") };
+        body = format!("match {id} {{ Zero => values(width, {i}), Succ(id_{}) => {body} }}", i + 1);
+    }
+    let setup = format!("import bitvec;\nfn lookup(values: (width: Nat) -> Nat -> BitVec(width)) -> (width: Nat) -> Nat -> BitVec(width) {{ λ width id => {body} }}");
+    e.elab_module_source("lookup_setup", &setup).unwrap_or_else(|err| panic!("{}", err.render(&setup)));
+    let mut source = String::from("import bitvec; import lookup_setup;\n");
+    for width in ["1", "8", "64", "w"] {
+        let open = if width == "w" { "w: Nat, " } else { "" };
+        for id in [0, 8, 51, 200, 201, 250] {
+            source.push_str(&format!("theorem at_{width}_{id}({open}values: (width: Nat) -> Nat -> BitVec(width)): lookup(values)({width}, {id}) = values({width}, {}) {{ refl }}\n", id.min(201)));
+        }
+    }
+    source.push_str("theorem successor(values: (width: Nat) -> Nat -> BitVec(width)): lookup(values)(64, Succ(Succ(49))) = values(64, 51) { refl }\n");
+    e.enable_item_timings();
+    e.elab_module_source("lookup_probe", &source).unwrap_or_else(|err| panic!("{}", err.render(&source)));
+    let rows = e.take_item_timings();
+    stats::disable();
+    for width in ["1", "8", "64", "w"] {
+        let count = |id| rows.iter().find(|r| r.item.rsplit("::").next() == Some(format!("at_{width}_{id}").as_str())).expect("measured lookup").kernel.eval_steps;
+        let counts: Vec<_> = [0, 8, 51, 200, 201, 250].into_iter().map(count).collect();
+        eprintln!("BitVec lookup width {width}, ids 0/8/51/200/201/250: {counts:?}");
+        for id in [8, 51, 200] {
+            assert_eq!(count(id) - count(0), 2 * id as u64,
+                "result type preparation leaked into case dispatch: {counts:?}");
+        }
+        assert_eq!(count(201), count(250), "the default arm must stop dispatch");
+    }
+    let refusal = "import bitvec; import lookup_setup; theorem wrong(values: (width: Nat) -> Nat -> BitVec(width)): lookup(values)(64, 51) = values(64, 50) { refl }";
+    assert!(e.elab_module_source("lookup_wrong", refusal).is_err(), "wrong port accepted");
+}
+
 /// `from_bits(64, [...])` spelling `value`, least-significant bit first — an
 /// independent statement of the bits `ofNat` must produce.
 fn bit_vector_literal(value: u64) -> String {

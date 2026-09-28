@@ -25,6 +25,39 @@ fn payload(width: usize) -> String {
     format!("inductive Payload {{ P0, P1({fields}), P2 }}")
 }
 
+/// Dispatching on a port id should not normalize the result's vector at
+/// every successor. The arms remain neutral so no bit computation is timed.
+#[test]
+fn valuation_lookup_case_step_cost() {
+    let mut baseline = None;
+    for width in [1, 8, 64] {
+        let counts: Vec<_> = [0, 8, 16, 32].into_iter().map(|depth| {
+            let mut body = "values(width, 7)".to_string();
+            for i in (0..=depth).rev() {
+                let id = if i == 0 { "id".to_string() } else { format!("id_{i}") };
+                let port = if i == depth { 7 } else { 0 };
+                body = format!("match {id} {{ Zero => values(width, {port}), Succ(id_{}) => {body} }}", i + 1);
+            }
+            measure(
+                &format!("inductive Bit {{ Off, On }}\nrecord Word(n: Nat) {{ bits: [Bit; n] }}\nfn lookup(values: (width: Nat) -> Nat -> Word(width)) -> (width: Nat) -> Nat -> Word(width) {{ λ width id => {body} }}"),
+                &format!("theorem probe(values: (width: Nat) -> Nat -> Word(width)): lookup(values)({width}, {depth}) = values({width}, 7) {{ refl }}"),
+                "probe", &format!("theorem wrong(values: (width: Nat) -> Nat -> Word(width)): lookup(values)({width}, {depth}) = values({width}, 9) {{ refl }}"),
+            )
+        }).collect();
+        eprintln!("lookup width {width}, ids 0/8/16/32: {counts:?}");
+        assert!(counts[0] > 0);
+        for (i, depth) in [0, 8, 16, 32].into_iter().enumerate() {
+            assert_eq!(counts[i] - counts[0], 2 * depth,
+                "case dispatch must cost two steps per successor: {counts:?}");
+        }
+        if let Some(ref first) = baseline {
+            assert_eq!(&counts, first, "result width leaked into dispatch");
+        } else {
+            baseline = Some(counts);
+        }
+    }
+}
+
 #[test]
 fn named_recursive_telescope_cost_does_not_follow_payload_width() {
     let counts: Vec<_> = [2, 8, 32].into_iter().map(|width| {

@@ -17,6 +17,18 @@ accelerated thing is an eliminator applied to a native value, classified by
 Two things the probes changed before a line of prose was written, both in §3
 and §5; they are flagged there as corrections to the charter's sketch.
 
+An ordinary Nat case can also return an unrelated neutral word. Before
+walking a candidate transducer's motive, the classifier evaluates the step
+at neutral predecessor and recursive-result variables. A neutral whose head
+is not that recursive result declines immediately: further applications
+cannot turn its unknown head into a word producer or a recognized consumer.
+Function and constructor heads continue through the existing classifier,
+as do recursive-result heads and their elimination spines, which finite
+consumers need. This avoids repeatedly inspecting and enumerating a closed
+word result during nested port dispatch; the ordinary case evaluator leaves
+the motive lazy. Measurements and regression coverage belong to
+[valuation-lookup-case-step-cost](../issues/valuation-lookup-case-step-cost.md).
+
 ## 1. The before column
 
 Furnace instance of 2026-09-13 (`ocid1.instance…gvb5vvpq`, VM.Standard.E5.Flex,

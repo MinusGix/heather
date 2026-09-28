@@ -417,15 +417,20 @@ missing, and both are general:
 
 The formatter (`place` ×16, 1562 bytes) compiles and certifies with
 `compile-x86` in about 35 s, and agrees with a C reference on every n below
-10 000. Two residues: a link still costs about 40K steps more per level, since
+10 000. At that point two residues remained: a link cost about 40K steps more per level, since
 the continuation's instantiation walks the chain once (quadratic overall, 432K
-at the root, within fuel); and a valuation lookup costs about 1.3K steps per
+at the root, within fuel); and a valuation lookup cost about 1.3K steps per
 peeled `Succ` of the port id at a `BitVec(64)` result, whatever the entries
-are. Every valuation now dispatches with a balanced `Nat::leb` tree instead
-(`issues/valuation-lookup-case-step-cost.md`), and with it the per-level
-growth went: a link costs the same at every depth, to 32 and beyond. Port ids
+were. Every valuation now dispatches with a balanced `Nat::leb` tree instead,
+and with it the per-level growth went: a link costs the same at every depth,
+to 32 and beyond. Port ids
 grow with depth, so the growth was most likely the lookup's (the 40K figure
-predates the tree; the old binary was not re-measured). One link still
+predates the tree; the old binary was not re-measured). The underlying
+width-dependent case cost was subsequently removed: the bit-transducer
+classifier declines an unrelated neutral step before walking its result
+type. Ordinary nested lookup now pays a constant cost per successor,
+independent of result width; balanced generator dispatch remains in place
+([valuation-lookup-case-step-cost](../issues/valuation-lookup-case-step-cost.md)). One link still
 unfolded a whole helper. Nested helpers (`raise` → `times256` → `double`)
 share their result port, and only the innermost body was kept for it, so the
 `raise` crossing had no meaning over its child and compared all 40 doublings

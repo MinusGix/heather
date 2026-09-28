@@ -143,6 +143,19 @@ impl<'a, 'v> Eval<'a, 'v> {
         step: &'v TmClo<'v>,
         motive: &'v TyClo<'v>,
     ) -> Res<Option<Transducer>> {
+        // A non-function neutral unrelated to the recursive result cannot
+        // be a word producer, pass, or finite-output consumer. Decide that
+        // from the step before walking its motive: an ordinary port lookup
+        // can return a neutral word at any closed width, and enumerating its
+        // result type at every nested case pays for bits it never reads.
+        // Keep ih-headed neutrals: consumers inspect the recursive result
+        // through an elimination spine, which the finite-output probe reads.
+        let value = self.transduce_apply(step, &[])?;
+        if let Val::Neutral(n) = &*value {
+            if !matches!(n.head, Head::Var(PROBE_IH)) {
+                return Ok(None);
+            }
+        }
         let k = self.transduce_var(PROBE_K);
         let succ_k = self.vclo(Rc::new(Val::Succ(k)));
         // One walk with a representative choice says how many combinations
