@@ -62,6 +62,68 @@ pub(crate) fn proj_of(t: &Term) -> Option<(bool, &Rc<Term>)> {
     }
 }
 
+/// Compare a projection path without comparing its typing annotations.
+/// Arm aliases and motive instantiations carry different emitted spellings
+/// of the same Σ types.
+pub(crate) fn same_projection(a: &Term, b: &Term) -> bool {
+    match (proj_of(a), proj_of(b)) {
+        (Some((af, ap)), Some((bf, bp))) => af == bf && same_projection(ap, bp),
+        _ => a == b,
+    }
+}
+
+/// Read a constructor tuple, recovering neutral fields from the typed arm
+/// aliases. In the Wf lowering an alias is an `nth` call; bounded reduction
+/// exposes the same projection path. Returning that alias's original term
+/// preserves both its type and its surface spelling. `under` is the display
+/// walk's extra binder depth: reduction happens in `cx` before weakening,
+/// so the oracle never receives a term outside its context.
+pub(crate) fn tuple_fields(
+    elab: &crate::Elaborator,
+    cx: &crate::Cx,
+    tuple: &Term,
+    skip: usize,
+    count: usize,
+    under: u32,
+) -> Option<Vec<Rc<Term>>> {
+    let mut cur = Rc::new(tuple.clone());
+    for _ in 0..skip {
+        cur = match pair_of(&cur) {
+            Some((_, snd)) => Rc::clone(snd),
+            None => Rc::new(Term::SndAt { pair: cur }),
+        };
+    }
+    let mut out = Vec::with_capacity(count);
+    for _ in 0..count {
+        if let Some((fst, snd)) = pair_of(&cur) {
+            out.push(Rc::clone(fst));
+            cur = Rc::clone(snd);
+            continue;
+        }
+        let field = Term::FstAt { pair: Rc::clone(&cur) };
+        let alias = cx.aliases.iter().rev().find_map(|a| {
+            let shift = cx.names.len().checked_sub(a.depth)? as u32;
+            let term = Rc::new(a.term.shift_local(shift));
+            let shifted = Rc::new(term.shift_local(under));
+            if same_projection(&field, &shifted) {
+                return Some(shifted);
+            }
+            // `nth` is headed by Nat elimination. Ordinary let-bound
+            // function calls cannot be arm children and need no evaluation.
+            if matches!(app_spine(&term).0, Term::ElimNat { .. }) {
+                let reduced = elab.goal_oracle().whnf_term_bounded(&cx.gamma, &term).ok()?;
+                if same_projection(&field, &reduced.shift_local(under)) {
+                    return Some(shifted);
+                }
+            }
+            None
+        })?;
+        out.push(alias);
+        cur = Rc::new(Term::SndAt { pair: cur });
+    }
+    Some(out)
+}
+
 /// The head and argument of either application spelling — `app` with its
 /// annotations or the checked `app@(f; a)`, whose Π is the one the head
 /// infers (`docs/app-by-head-type-design.md` §6.2). A reader that needs the

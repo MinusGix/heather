@@ -1482,19 +1482,6 @@ fn is_ctor_value(tm: &Rc<Term>) -> bool {
     )
 }
 
-/// The elements of a lowered constructor's children tuple — its *recursive*
-/// fields, in declaration order. A plain field sits in the label's Σ spine and
-/// is not one of these.
-fn children_fields(children: &Rc<Term>) -> Vec<&Rc<Term>> {
-    let mut out = Vec::new();
-    let mut cur = children;
-    while let Some((fst, snd)) = crate::spelling::pair_of(cur) {
-        out.push(fst);
-        cur = snd;
-    }
-    out
-}
-
 /// §2 step 3's candidates: `g(ā[C(f̄) ↦ fᵢ])` for each recursive field `fᵢ` of
 /// each constructor argument. Built from the *original* term, so a candidate
 /// spells under a name the rest of the goal produces too (§5); one that does
@@ -1505,13 +1492,28 @@ fn recursive_field_candidates(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>) -> Vec<
     let mut out = Vec::new();
     for (position, arg) in args.iter().enumerate() {
         let fields = match &***arg {
-            Term::Supf { children, .. } => children_fields(children),
-            Term::Succ(inner) => vec![inner],
+            Term::Supf { shape, label, children, .. } => {
+                let Some(ind) = elab.display_tag_of(shape) else { continue };
+                let mut index = 0;
+                let mut cur = &**label;
+                while let Some((left, value)) = crate::spelling::inj_of(cur) {
+                    if left { break; }
+                    index += 1;
+                    cur = value;
+                }
+                let Some(ctor) = ind.ctors.get(index) else { continue };
+                if ctor.container().is_some() { continue; }
+                let Some(fields) = crate::spelling::tuple_fields(elab, cx, children, 0, ctor.arity(), 0) else {
+                    continue;
+                };
+                fields
+            }
+            Term::Succ(inner) => vec![Rc::clone(inner)],
             _ => continue,
         };
         for field in fields {
             // `app_spine` counts from the head; `with_arg_at` from the outside.
-            let candidate = with_arg_at(tm, arity - 1 - position, field);
+            let candidate = with_arg_at(tm, arity - 1 - position, &field);
             if nat_term_source(elab, cx, &candidate).is_ok() {
                 out.push(candidate);
             }
@@ -1982,6 +1984,7 @@ struct Collected {
     atoms: AtomTable<ReflectedAtom>,
     relations: Vec<ReflectedConstraint<AffineSyntax, String>>,
     names: Vec<String>,
+    skipped: Vec<String>,
 }
 
 /// An ordinary reflection, rendered: the facts, the atom list's source, the
@@ -2002,6 +2005,7 @@ fn collect_ordinary(
     let mut atoms = AtomTable::default();
     let mut relations = Vec::new();
     let mut names = Vec::new();
+    let mut skipped = Vec::new();
     for (name, ty) in local_facts(elab, cx) {
         if name.starts_with("__cutsat_nat_eq_") || name.starts_with("__cutsat_int_eq_") {
             continue;
@@ -2009,173 +2013,197 @@ fn collect_ordinary(
         if keep.is_some_and(|keep| !keep.contains(&name)) {
             continue;
         }
-        let decoded_ty = crate::inductive::decoded(&ty);
-        let (domain, left, right, relation, proof) =
-            if let Some((left, right)) = relation_args(elab, &ty) {
-                if dot_args(elab, left).is_some() || dot_args(elab, right).is_some() {
-                    return Ok(None);
-                }
-                (
-                    Domain::Int,
-                    affine_syntax(elab, cx, left, &mut atoms)?,
-                    affine_syntax(elab, cx, right, &mut atoms)?,
-                    Relation::Le,
-                    name.clone(),
-                )
-            } else if let Some((left, right)) = strict_relation_args(elab, &ty) {
-                let left = AffineSyntax::Add {
-                    left: Box::new(affine_syntax(elab, cx, left, &mut atoms)?),
-                    right: Box::new(AffineSyntax::Const {
-                        value: 1,
-                        source: int(1),
-                    }),
-                };
-                (
-                    Domain::Int,
-                    left,
-                    affine_syntax(elab, cx, right, &mut atoms)?,
-                    Relation::Le,
-                    name.clone(),
-                )
-            } else if let Some((left, right)) =
-                equality_args(elab, cx, &ty).or_else(|| equality_args(elab, cx, &decoded_ty))
-            {
-                (
-                    Domain::Int,
-                    affine_syntax(elab, cx, left, &mut atoms)?,
-                    affine_syntax(elab, cx, right, &mut atoms)?,
-                    Relation::Eq,
-                    name.clone(),
-                )
-            } else if let Some((left, right)) = nat_relation_args(elab, &ty) {
-                let left_source = nat_term_source(elab, cx, left)?;
-                let right_source = nat_term_source(elab, cx, right)?;
-                (
-                    Domain::NatEmbedded,
-                    nat_affine_syntax(elab, cx, left, &mut atoms)?,
-                    nat_affine_syntax(elab, cx, right, &mut atoms)?,
-                    Relation::Le,
-                    format!(
-                        "omega::nat_le_to_int({}, {}, {})",
-                        left_source, right_source, name
-                    ),
-                )
-            } else if let Some((left, right)) = nat_strict_relation_args(elab, &ty) {
-                let left_source = nat_term_source(elab, cx, left)?;
-                let right_source = nat_term_source(elab, cx, right)?;
-                let left = AffineSyntax::Add {
-                    left: Box::new(nat_affine_syntax(elab, cx, left, &mut atoms)?),
-                    right: Box::new(AffineSyntax::Const {
-                        value: 1,
-                        source: int(1),
-                    }),
-                };
-                (
-                    Domain::NatEmbedded,
-                    left,
-                    nat_affine_syntax(elab, cx, right, &mut atoms)?,
-                    Relation::Le,
-                    format!(
-                        "omega::nat_lt_to_int({}, {}, {})",
-                        left_source, right_source, name
-                    ),
-                )
-            } else if let Some((left, right)) = nat_equality_args(elab, cx, &ty)
-                .or_else(|| nat_equality_args(elab, cx, &decoded_ty))
-            {
-                (
-                    Domain::NatEmbedded,
-                    nat_affine_syntax(elab, cx, left, &mut atoms)?,
-                    nat_affine_syntax(elab, cx, right, &mut atoms)?,
-                    Relation::Eq,
-                    format!("int::Int::cong_ofnat({})", name),
-                )
-            } else if let Some(domain) = negated_domain(elab, cx, &ty) {
-                if let Some((left, right)) = relation_args(elab, &domain) {
-                    let left_source = int_term_source(elab, cx, left)?;
-                    let right_source = int_term_source(elab, cx, right)?;
-                    let strict_left = AffineSyntax::Add {
-                        left: Box::new(affine_syntax(elab, cx, right, &mut atoms)?),
-                        right: Box::new(AffineSyntax::Const {
-                            value: 1,
-                            source: int(1),
-                        }),
-                    };
-                    (
-                        Domain::Int,
-                        strict_left,
-                        affine_syntax(elab, cx, left, &mut atoms)?,
-                        Relation::Le,
-                        format!(
-                            "int::Int::lt_of_not_le({}, {}, {})",
-                            right_source, left_source, name
-                        ),
-                    )
-                } else if let Some((left, right)) = strict_relation_args(elab, &domain) {
-                    let left_source = int_term_source(elab, cx, left)?;
-                    let right_source = int_term_source(elab, cx, right)?;
-                    (
-                        Domain::Int,
-                        affine_syntax(elab, cx, right, &mut atoms)?,
-                        affine_syntax(elab, cx, left, &mut atoms)?,
-                        Relation::Le,
-                        format!(
-                            "int::Int::le_of_not_lt({}, {}, {})",
-                            left_source, right_source, name
-                        ),
-                    )
-                } else if let Some((left, right)) = nat_relation_args(elab, &domain) {
-                    let left_source = nat_term_source(elab, cx, left)?;
-                    let right_source = nat_term_source(elab, cx, right)?;
-                    let strict_left = AffineSyntax::Add {
-                        left: Box::new(nat_affine_syntax(elab, cx, right, &mut atoms)?),
-                        right: Box::new(AffineSyntax::Const {
-                            value: 1,
-                            source: int(1),
-                        }),
-                    };
-                    (
-                        Domain::NatEmbedded,
-                        strict_left,
-                        nat_affine_syntax(elab, cx, left, &mut atoms)?,
-                        Relation::Le,
-                        format!(
-                            "omega::nat_lt_to_int({}, {}, omega::nat_lt_of_not_le({}, {}, {}))",
-                            right_source, left_source, left_source, right_source, name,
-                        ),
-                    )
-                } else if let Some((left, right)) = nat_strict_relation_args(elab, &domain) {
-                    let left_source = nat_term_source(elab, cx, left)?;
-                    let right_source = nat_term_source(elab, cx, right)?;
-                    (
-                        Domain::NatEmbedded,
-                        nat_affine_syntax(elab, cx, right, &mut atoms)?,
-                        nat_affine_syntax(elab, cx, left, &mut atoms)?,
-                        Relation::Le,
-                        format!(
-                            "omega::nat_le_to_int({}, {}, omega::nat_le_of_not_lt({}, {}, {}))",
-                            right_source, left_source, left_source, right_source, name,
-                        ),
-                    )
-                } else {
-                    continue;
-                }
-            } else {
+        if relation_args(elab, &ty).is_some_and(|(left, right)|
+            dot_args(elab, left).is_some() || dot_args(elab, right).is_some()) {
+            return Ok(None);
+        }
+        let saved_atoms = atoms.iter().len();
+        let reflected = reflect_ordinary_relation(elab, cx, &name, &ty, &mut atoms);
+        match reflected {
+            Ok(Some(relation)) => relations.push(relation),
+            Ok(None) => continue,
+            Err(error) if error.contains("could not spell") => {
+                atoms.truncate(saved_atoms);
+                skipped.push(format!("{name}: {error}"));
                 continue;
-            };
-        relations.push(ReflectedConstraint {
-            domain,
-            lhs: left,
-            relation,
-            rhs: right,
-            evidence: proof,
-        });
+            }
+            Err(error) => return Err(error),
+        }
+
         names.push(name);
     }
-    if relations.is_empty() {
+    if relations.is_empty() && skipped.is_empty() {
         return Ok(None);
     }
-    Ok(Some(Collected { atoms, relations, names }))
+    Ok(Some(Collected { atoms, relations, names, skipped }))
+}
+
+/// Reflect one fact. The caller rolls back its atoms if source spelling fails.
+fn reflect_ordinary_relation(
+    elab: &Elaborator,
+    cx: &Cx,
+    name: &str,
+    ty: &Type,
+    atoms: &mut AtomTable<ReflectedAtom>,
+) -> Result<Option<ReflectedConstraint<AffineSyntax, String>>, String> {
+    let decoded_ty = crate::inductive::decoded(&ty);
+    let (domain, left, right, relation, proof) =
+        if let Some((left, right)) = relation_args(elab, &ty) {
+            (
+                Domain::Int,
+                affine_syntax(elab, cx, left, atoms)?,
+                affine_syntax(elab, cx, right, atoms)?,
+                Relation::Le,
+                name.to_string(),
+            )
+        } else if let Some((left, right)) = strict_relation_args(elab, &ty) {
+            let left = AffineSyntax::Add {
+                left: Box::new(affine_syntax(elab, cx, left, atoms)?),
+                right: Box::new(AffineSyntax::Const {
+                    value: 1,
+                    source: int(1),
+                }),
+            };
+            (
+                Domain::Int,
+                left,
+                affine_syntax(elab, cx, right, atoms)?,
+                Relation::Le,
+                name.to_string(),
+            )
+        } else if let Some((left, right)) =
+            equality_args(elab, cx, &ty).or_else(|| equality_args(elab, cx, &decoded_ty))
+        {
+            (
+                Domain::Int,
+                affine_syntax(elab, cx, left, atoms)?,
+                affine_syntax(elab, cx, right, atoms)?,
+                Relation::Eq,
+                name.to_string(),
+            )
+        } else if let Some((left, right)) = nat_relation_args(elab, &ty) {
+            let left_source = nat_term_source(elab, cx, left)?;
+            let right_source = nat_term_source(elab, cx, right)?;
+            (
+                Domain::NatEmbedded,
+                nat_affine_syntax(elab, cx, left, atoms)?,
+                nat_affine_syntax(elab, cx, right, atoms)?,
+                Relation::Le,
+                format!(
+                    "omega::nat_le_to_int({}, {}, {})",
+                    left_source, right_source, name
+                ),
+            )
+        } else if let Some((left, right)) = nat_strict_relation_args(elab, &ty) {
+            let left_source = nat_term_source(elab, cx, left)?;
+            let right_source = nat_term_source(elab, cx, right)?;
+            let left = AffineSyntax::Add {
+                left: Box::new(nat_affine_syntax(elab, cx, left, atoms)?),
+                right: Box::new(AffineSyntax::Const {
+                    value: 1,
+                    source: int(1),
+                }),
+            };
+            (
+                Domain::NatEmbedded,
+                left,
+                nat_affine_syntax(elab, cx, right, atoms)?,
+                Relation::Le,
+                format!(
+                    "omega::nat_lt_to_int({}, {}, {})",
+                    left_source, right_source, name
+                ),
+            )
+        } else if let Some((left, right)) = nat_equality_args(elab, cx, &ty)
+            .or_else(|| nat_equality_args(elab, cx, &decoded_ty))
+        {
+            (
+                Domain::NatEmbedded,
+                nat_affine_syntax(elab, cx, left, atoms)?,
+                nat_affine_syntax(elab, cx, right, atoms)?,
+                Relation::Eq,
+                format!("int::Int::cong_ofnat({})", name),
+            )
+        } else if let Some(domain) = negated_domain(elab, cx, &ty) {
+            if let Some((left, right)) = relation_args(elab, &domain) {
+                let left_source = int_term_source(elab, cx, left)?;
+                let right_source = int_term_source(elab, cx, right)?;
+                let strict_left = AffineSyntax::Add {
+                    left: Box::new(affine_syntax(elab, cx, right, atoms)?),
+                    right: Box::new(AffineSyntax::Const {
+                        value: 1,
+                        source: int(1),
+                    }),
+                };
+                (
+                    Domain::Int,
+                    strict_left,
+                    affine_syntax(elab, cx, left, atoms)?,
+                    Relation::Le,
+                    format!(
+                        "int::Int::lt_of_not_le({}, {}, {})",
+                        right_source, left_source, name
+                    ),
+                )
+            } else if let Some((left, right)) = strict_relation_args(elab, &domain) {
+                let left_source = int_term_source(elab, cx, left)?;
+                let right_source = int_term_source(elab, cx, right)?;
+                (
+                    Domain::Int,
+                    affine_syntax(elab, cx, right, atoms)?,
+                    affine_syntax(elab, cx, left, atoms)?,
+                    Relation::Le,
+                    format!(
+                        "int::Int::le_of_not_lt({}, {}, {})",
+                        left_source, right_source, name
+                    ),
+                )
+            } else if let Some((left, right)) = nat_relation_args(elab, &domain) {
+                let left_source = nat_term_source(elab, cx, left)?;
+                let right_source = nat_term_source(elab, cx, right)?;
+                let strict_left = AffineSyntax::Add {
+                    left: Box::new(nat_affine_syntax(elab, cx, right, atoms)?),
+                    right: Box::new(AffineSyntax::Const {
+                        value: 1,
+                        source: int(1),
+                    }),
+                };
+                (
+                    Domain::NatEmbedded,
+                    strict_left,
+                    nat_affine_syntax(elab, cx, left, atoms)?,
+                    Relation::Le,
+                    format!(
+                        "omega::nat_lt_to_int({}, {}, omega::nat_lt_of_not_le({}, {}, {}))",
+                        right_source, left_source, left_source, right_source, name,
+                    ),
+                )
+            } else if let Some((left, right)) = nat_strict_relation_args(elab, &domain) {
+                let left_source = nat_term_source(elab, cx, left)?;
+                let right_source = nat_term_source(elab, cx, right)?;
+                (
+                    Domain::NatEmbedded,
+                    nat_affine_syntax(elab, cx, right, atoms)?,
+                    nat_affine_syntax(elab, cx, left, atoms)?,
+                    Relation::Le,
+                    format!(
+                        "omega::nat_le_to_int({}, {}, omega::nat_le_of_not_lt({}, {}, {}))",
+                        right_source, left_source, left_source, right_source, name,
+                    ),
+                )
+            } else {
+                return Ok(None);
+            }
+        } else {
+            return Ok(None);
+        };
+    Ok(Some(ReflectedConstraint {
+        domain,
+        lhs: left,
+        relation,
+        rhs: right,
+        evidence: proof,
+    }))
 }
 
 /// How many times [`relevant_layers`] widens past the goal's own atoms
@@ -3340,6 +3368,7 @@ pub(crate) fn reconstruct(
     let ordinary = timed(|p| &mut p.reflect_ns, crate::stats::Timer::OmegaReflect, || {
         collect_ordinary(elab, cx, None)
     })?;
+    let skipped = ordinary.as_ref().map(|all| all.skipped.clone()).unwrap_or_default();
     let flags = (allow_disequality_split, allow_connective_split, allow_cutsat);
     let reflection = if let Some(all) = ordinary {
         // The facts nearest the goal first, widening; every fact only if no
@@ -3408,7 +3437,11 @@ pub(crate) fn reconstruct(
             let atom_count = reflected_atom_count(&facts);
             (facts, atoms_source, indexed_atom_labels(atom_count), None, None)
         };
-    refute(elab, cx, flags, reflection, true)
+    refute(elab, cx, flags, reflection, true).map_err(|error| {
+        if skipped.is_empty() { error } else {
+            format!("{error}; skipped unspellable facts [{}]", skipped.join(", "))
+        }
+    })
 }
 
 /// Omega's search and certificate over one reflection, with the splits it

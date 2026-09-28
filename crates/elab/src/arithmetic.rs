@@ -281,6 +281,11 @@ impl<T> AtomTable<T> {
         self.entries.iter().position(equivalent).map(AtomId)
     }
 
+    /// Roll back atoms interned while reflecting a fact that was declined.
+    pub(crate) fn truncate(&mut self, len: usize) {
+        self.entries.truncate(len);
+    }
+
     pub fn get(&self, id: AtomId) -> &T {
         &self.entries[id.0]
     }

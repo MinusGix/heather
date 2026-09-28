@@ -376,3 +376,27 @@ Five things, none of which changes a verdict.
   `termination_measures.rs` they took that binary past `scripts/test`'s
   per-child address-space cap under the parallel bound, and it was `SIGKILL`ed
   — an `INCOMPLETE` suite, not a failure. Two binaries, two peaks.
+
+## 9. Neutral constructor arguments inside match arms
+
+`issues/omega-inside-match-arms.md` extends step 3 to a constructor whose
+payload or children tuple is neutral. `spelling::tuple_fields` reads literal
+pairs as before; for a neutral tuple, it matches each field's projection path
+against the context's typed aliases, ignoring projection annotations. A Wf
+child alias is an `nth` application headed by Nat elimination: bounded whnf
+exposes its projection path. The candidate retains the original alias term,
+so its argument is a recursive child of this constructor with the correct
+type, rather than an arbitrary local that happens to spell. Container fields
+remain outside this reader's scope.
+
+The constructor printer uses the same reader and interleaves payload and
+recursive fields in declaration order. Alias spelling still checks shadowing.
+Under a printed binder, alias terms are weakened to the printer's depth;
+any reduction happens first in the alias's actual context. Generated binder
+names avoid aliases as well as kernel binders.
+
+Ordinary fact reflection now declines an unspellable fact and rolls back any
+atoms it interned before the spelling failure. Other reflection errors still
+propagate. The final stuck diagnostic lists the declined facts by name and
+reason, while the relevance filter and certificate checker operate on the
+remaining facts. No discarded fact contributes evidence to a certificate.

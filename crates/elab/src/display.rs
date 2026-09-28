@@ -267,8 +267,9 @@ impl Speller<'_> {
             let shadowed = later.iter().any(|n| *n == a.name)
                 || aliases[k + 1..].iter().any(|b| b.name == a.name);
             let written = a.name.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_');
-            (written && !shadowed && (*a.term).shift_local((names.len() - a.depth) as u32) == *t)
-                .then(|| a.name.clone())
+            (written && !shadowed && crate::spelling::same_projection(
+                &a.term.shift_local((names.len() - a.depth) as u32), t,
+            )).then(|| a.name.clone())
         })
     }
 
@@ -291,12 +292,19 @@ impl Speller<'_> {
     /// preference list not already in scope, else `x{n}`.
     fn fresh(&self) -> String {
         let names = self.names.borrow();
+        let used = |candidate: &str| names.iter().any(|n| n == candidate)
+            || self.cx.aliases.iter().any(|a| a.name == candidate);
         for cand in ["x", "y", "z", "a", "b", "c"] {
-            if !names.iter().any(|n| n == cand) {
+            if !used(cand) {
                 return cand.to_string();
             }
         }
-        format!("x{}", names.len())
+        let mut next = names.len();
+        loop {
+            let candidate = format!("x{next}");
+            if !used(&candidate) { return candidate; }
+            next += 1;
+        }
     }
 
     /// Does `body`, scoped in `Γ` plus `d` display binders plus its own, use
@@ -567,42 +575,18 @@ impl Speller<'_> {
         if ctor.container().is_some() {
             return None;
         }
-        // A `match` arm's motive is instantiated at the *neutral* summand
-        // value, not at a canonical constructor
-        // (issues/absurd-on-branch-scrutinee.md), so the payload is a variable
-        // and its fields are projections of it. The constructor is still
-        // identified by the injection path, which is the readable part: name
-        // it, and admit the fields were not recovered — the same convention a
-        // parameterized inductive's arguments get.
-        let Some((_, snd)) = crate::spelling::pair_of(cur) else {
-            return Some(if ctor.fields.is_empty() {
-                ctor.name.clone()
-            } else {
-                self.elided(format!("{}(…)", ctor.name))
-            });
+        let Some(payload) = crate::spelling::tuple_fields(
+            self.el, self.cx, cur, 1, ctor.payload().count(), self.binders(),
+        ) else {
+            return Some(self.elided(format!("{}(…)", ctor.name)));
         };
-        let mut payload: Vec<&Rc<Term>> = Vec::new();
-        let mut p = snd;
-        for _ in 0..ctor.payload().count() {
-            let Some((fst, snd)) = crate::spelling::pair_of(p) else {
-                return None;
-            };
-            payload.push(fst);
-            p = snd;
-        }
-        let mut kids: Vec<&Rc<Term>> = Vec::new();
-        if let Some(children) = children {
-            let mut c = children;
-            for _ in 0..ctor.arity() {
-                let Some((fst, snd)) = crate::spelling::pair_of(c) else {
-                    return None;
-                };
-                kids.push(fst);
-                c = snd;
-            }
-        } else if ctor.arity() > 0 {
-            return None;
-        }
+        let kids = match children {
+            Some(children) => crate::spelling::tuple_fields(
+                self.el, self.cx, children, 0, ctor.arity(), self.binders(),
+            )?,
+            None if ctor.arity() == 0 => Vec::new(),
+            None => return None,
+        };
         // Re-interleave into declaration order, which is the order the surface
         // writes the constructor's arguments in.
         let (mut a, mut b) = (0usize, 0usize);

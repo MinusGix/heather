@@ -497,9 +497,7 @@ fn EofTail(file: List<BitVec(8)>, needle: BitVec(8), loop_bytes: List<BitVec(8)>
     LinuxRuns(io_linux(), events, state)
 }
 
-// The count's arithmetic, kept to Nat.
-theorem eof_room(carry, len, first, rest, total: Nat, sum: carry + (first + rest) = total, capped: len <= 4096,
-    room: total + 4096 < Nat::pow(2, 64)): carry + len < Nat::pow(2, 64) { omega }
+// The count's arithmetic.
 theorem eof_later(carry, first, rest, total: Nat, sum: carry + (first + rest) = total): carry + first + rest = total { omega }
 
 // ---------------------------------------------------------------------------
@@ -770,7 +768,7 @@ theorem eof_from(file: List<BitVec(8)>, p: LoopPlacement, at: ReadLoopPlacement(
             let sum: (carry + (spec(chunk) + spec(eof_input(rest))) = total) =
                 trans(sym(cong_fn<Nat, Nat>(λ v => carry + v, parts)), whole);
             let room_here: (carry + chunk.len() < Nat::pow(2, 64)) =
-                eof_room(carry, chunk.len(), spec(chunk), spec(eof_input(rest)), total, sum, capped, room);
+                { omega };
             let entered = block_fetched(fetch, data, read_entry_block(), state, trivial,
                 resident_state(fetch, canonical_block_bytes(read_entry_block()), IoMemory(file, page), eof_rip(eof_at_read()),
                     state, memory_is, at_read, here.entry_at));

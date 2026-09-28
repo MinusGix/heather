@@ -294,8 +294,8 @@ fn the_recursive_binder_spells_at_an_open_element_type() {
 fn a_rebound_arm_binder_is_not_spelled_by_its_old_name() {
     // After `let chunk: Nat = …` the fact `capped` is about the *field*, and
     // `chunk` now names a number: spelling the field `chunk` would hand the
-    // certificate a different term. The fact stays unspellable, as it was
-    // before arm binders spelled at all.
+    // certificate a different term. Mis-spelling `capped` would assert
+    // `5000 <= 4096` and let omega prove this impossible goal.
     let msg = elab_err(&format!(
         "{SHORT}\n\
          theorem shadow(chunks: List<List<Nat>>, carry: Nat, room: carry + 4096 < 10000): Short(chunks) → Nat {{\n\
@@ -304,11 +304,132 @@ fn a_rebound_arm_binder_is_not_spelled_by_its_old_name() {
                  Cons(chunk, _) => λ ok => {{\n\
                      let capped = ok.left;\n\
                      let chunk: Nat = 5000;\n\
-                     let here: (carry < 10000) = {{ omega }};\n\
+                     let here: (carry < 0) = {{ omega }};\n\
                      0\n\
                  }}\n\
              }}\n\
          }}"
     ));
-    assert!(msg.contains("could not spell a natural expression"), "{msg}");
+    assert!(msg.contains("skipped unspellable facts") && msg.contains("capped"), "{msg}");
+}
+
+// -- omega inside match arms --------------------------------------------------
+
+#[test]
+fn a_neutral_constructor_in_an_arithmetic_fact_spells_its_fields() {
+    ok(r#"
+        theorem ctor_fact(xs: List<Nat>, f: List<Nat> → Nat):
+            (f(xs) = 7) → Nat {
+            match xs as λ ys => (f(ys) = 7) → Nat {
+                Nil => λ counted => 0,
+                Cons(x, rest) => λ counted => {
+                    let same: (f(Cons(x, rest)) <= 7) = omega;
+                    0
+                }
+            }
+        }
+    "#);
+}
+
+#[test]
+fn an_arm_measure_finds_its_recursive_child() {
+    ok(r#"
+        theorem tail_bound(xs: List<Nat>): (xs.len() <= 4096) → Nat {
+            match xs as λ ys => (ys.len() <= 4096) → Nat {
+                Nil => λ ok => 0,
+                Cons(x, rest) => λ ok => {
+                    let capped: (rest.len() <= 4096) = omega;
+                    0
+                }
+            }
+        }
+    "#);
+}
+
+#[test]
+fn an_arm_measure_finds_its_recursive_child_at_an_open_type() {
+    ok(r#"
+        theorem tail_bound_open<A>(xs: List<A>): (xs.len() <= 4096) → Nat {
+            match xs as λ ys => (ys.len() <= 4096) → Nat {
+                Nil => λ ok => 0,
+                Cons(x, rest) => λ ok => {
+                    let capped: (rest.len() <= 4096) = omega;
+                    0
+                }
+            }
+        }
+    "#);
+}
+
+#[test]
+fn an_unspellable_shadowed_fact_does_not_block_other_arithmetic() {
+    ok(&format!(
+        "{SHORT}\n\
+         theorem skipped(chunks: List<List<Nat>>, carry: Nat, room: carry + 4096 < 10000): Short(chunks) → Nat {{\n\
+             match chunks as λ cs => Short(cs) → Nat {{\n\
+                 Nil => λ ok => 0,\n\
+                 Cons(chunk, _) => λ ok => {{\n\
+                     let capped = ok.left;\n\
+                     let chunk: Nat = 5000;\n\
+                     let here: (carry < 10000) = omega;\n\
+                     0\n\
+                 }}\n\
+             }}\n\
+         }}"
+    ));
+}
+
+#[test]
+fn an_arm_measure_recovers_both_recursive_children_in_declaration_order() {
+    ok(r#"
+        inductive Tree<A> { Leaf, Node(left: Tree<A>, value: A, right: Tree<A>) }
+        fn nodes<A>(t: Tree<A>) → Nat {
+            match t { Leaf => 0, Node(l, _, r) => Succ(nodes(l) + nodes(r)) }
+        }
+        theorem child_bounds<A>(t: Tree<A>): (nodes(t) <= 100) → Nat {
+            match t as λ tree => (nodes(tree) <= 100) → Nat {
+                Leaf => λ small => 0,
+                Node(l, value, r) => λ small => {
+                    let both: (nodes(l) + nodes(r) < 100) = omega;
+                    0
+                }
+            }
+        }
+    "#);
+}
+
+#[test]
+fn a_skipped_fact_rolls_back_atoms_interned_before_its_unspellable_operand() {
+    let msg = elab_err(&format!(
+        "{SHORT}\n\
+         theorem partial(chunks: List<List<Nat>>, f: Nat → Nat): Short(chunks) → Nat {{\n\
+             match chunks as λ cs => Short(cs) → Nat {{\n\
+                 Nil => λ ok => 0,\n\
+                 Cons(chunk, _) => λ ok => {{\n\
+                     let stale: (f(123) + chunk.len() = f(123) + chunk.len()) = refl;\n\
+                     let chunk: Nat = 5000;\n\
+                     let impossible: False = omega;\n\
+                     0\n\
+                 }}\n\
+             }}\n\
+         }}"
+    ));
+    assert!(msg.contains("skipped unspellable facts") && msg.contains("stale"), "{msg}");
+    assert!(msg.contains("atoms []"), "the declined fact leaked an atom: {msg}");
+}
+
+#[test]
+fn constructor_fields_spell_under_a_lambda_without_losing_binder_depth() {
+    ok(r#"
+        theorem under_lambda(xs: List<Nat>, f: List<Nat> → Nat, g: (Nat → Nat) → Nat):
+            (g(λ n => f(xs) + n) = 7) → Nat {
+            match xs as λ ys => (g(λ n => f(ys) + n) = 7) → Nat {
+                Nil => λ counted => 0,
+                Cons(x, rest) => λ counted => {
+                    let same: (g(λ n => f(Cons(x, rest)) + n) <= 7) = omega;
+                    0
+                }
+            }
+        }
+    "#);
 }

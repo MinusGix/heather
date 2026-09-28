@@ -110,9 +110,9 @@ theorem len_append<A>(xs, ys: List<A>): len(append(xs, ys)) = add(len(xs), len(y
     // constructor, so the constructor value spells too.
     assert_eq!(gs[0].0, "len(append(Nil, ys)) = add(len(Nil), len(ys))");
     // The `Cons` arm's motive is instantiated at the *neutral* summand value,
-    // whose fields are projections rather than the arm's binders. The
-    // injection still names the constructor; the fields are admitted lost.
-    assert_eq!(gs[1].0, "len(append(Cons(…), ys)) = add(len(Cons(…)), len(ys))");
+    // whose fields are projections. The typed arm aliases recover their
+    // written names, including the recursive child at the open element type.
+    assert_eq!(gs[1].0, "len(append(Cons(h, t), ys)) = add(len(Cons(h, t)), len(ys))");
     for g in &gs {
         assert!(
             g.1.iter().any(|(n, ty)| n == "xs" && ty == "List<A>"),
