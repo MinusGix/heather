@@ -35,6 +35,16 @@ Two sites carry native depth, and the round counts both:
   (`conv/dom/values.rs::run`), so the two interleave on one stack. Neither is
   bounded by the other.
 
+Nat constructor congruence is a tail position in conversion too
+(`issues/closed-nat-equality-depth-budget.md`, 2026-09-28). Both `Succ/Succ`
+and compressed-prefix cancellation return residual pairs to `tm_nat_tail`;
+the loop holds one depth slot rather than nesting once per predecessor.
+Each residual still pays the ordinary entry fuel, checks identity and memo,
+and runs WHNF, δ-lazy comparison and transport stripping before the next
+constructor comparison. Pending memo keys receive only the final equality
+or inequality verdict, never exhaustion. Other recursive comparisons and
+evaluator re-entries retain their depth guards and the same limit.
+
 A drive re-enters only when the enclosing one is still in its loop, which is
 what separates the two nestings. A *syntactic* chain of scrutinees does not
 qualify: `step_eval` walks it to the bottom before the first `drive` starts, so

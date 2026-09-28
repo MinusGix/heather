@@ -458,3 +458,32 @@ theorem open_cons_head<A: DecEq>(x: A, xs: List<A>): ¬(Nil<A> = Cons(x, xs)) {
         );
     }
 }
+
+/// The native ELF size fact must compare lazy list lengths without retaining
+/// one conversion frame per successor (closed-nat-equality-depth-budget).
+#[test]
+fn closed_list_size_uses_refl_past_the_depth_budget() {
+    let mut e = elaborated();
+    let src = "import list;\nimport nat;\n\
+        fn bytes<A>(x: A) -> List<A> { List::replicate(x, 20000) }\n\
+        fn size16(lo: Nat, hi: Nat) -> Nat { lo + 256 * hi }\n";
+    e.elab_module_source("size_probe", src).expect("list size fixture");
+    e.elab_module_source("size_facts", r#"
+import list;
+import nat;
+import size_probe;
+
+theorem closed_size(): 232 + bytes(0).len() = size16(8, 79) { refl }
+// The element type stays open while the list's spine and length are closed.
+theorem open_element_size<A>(x: A): 232 + bytes(x).len() = size16(8, 79) { refl }
+"#).expect("large size facts by refl");
+    for (name, fact) in [
+        ("wrong_size", "232 + bytes(0).len() = size16(9, 79)"),
+        ("neutral_size", "232 + xs.len() = size16(8, 79)"),
+    ] {
+        let args = if name == "neutral_size" { "xs: List<Nat>" } else { "" };
+        let src = format!("import list;\nimport nat;\nimport size_probe;\ntheorem bad({args}): {fact} {{ refl }}");
+        let err = e.elab_module_source(name, &src).expect_err("incorrect size fact");
+        assert!(err.to_string().contains("NotConvertible"), "{err}");
+    }
+}

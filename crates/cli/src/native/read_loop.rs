@@ -136,12 +136,6 @@ fn spell(prefix: &str, looped: &str, tail: &str) -> String {
         (linux_syscall_bytes() ++ {tail})))))))))))))")
 }
 
-// A closed fact `lhs = rhs` over Nats, by `leb` both ways (`refl` over values
-// in the thousands runs past the kernel's depth budget).
-fn closed_eq(lhs: &str, rhs: &str) -> String {
-    format!("Nat::le_antisym({lhs}, {rhs}, Nat::leb_sound({lhs}, {rhs}, trivial), Nat::leb_sound({rhs}, {lhs}, trivial))")
-}
-
 /// What both profiles state about the written file: its pieces, the code as
 /// written, the header and image, and the facts the two jumps need. `chain`
 /// proves `code_term = spelled` from `refl` over the fixed pieces.
@@ -170,14 +164,9 @@ theorem {prefix}_fits(): 232 + {code_term}.len() <= 4096 {{
 // The file is the call profile's header, then the program.
 fn {prefix}_file() → List<BitVec(8)> {{ {prefix}_header() ++ {code_term} }}
 fn {prefix}_image() → CallElfImage({code_term}) {{
-    // By `leb` both ways, not `refl`: comparing a length in the thousands
-    // successor by successor runs past the kernel's depth budget.
     CallElfImage(j(sym({prefix}_code_written()), λ code _ => 0 < code.len(), Nat::leb_sound(1, ({spelled}).len(), trivial)),
         elf_byte({low}), elf_byte({high}),
-        j(sym({prefix}_code_written()), λ code _ => 232 + code.len() = elf_size16(elf_byte({low}), elf_byte({high})),
-            Nat::le_antisym(232 + ({spelled}).len(), elf_size16(elf_byte({low}), elf_byte({high})),
-                Nat::leb_sound(232 + ({spelled}).len(), elf_size16(elf_byte({low}), elf_byte({high})), trivial),
-                Nat::leb_sound(elf_size16(elf_byte({low}), elf_byte({high})), 232 + ({spelled}).len(), trivial))), trivial)
+        refl, trivial)
 }}
 theorem {prefix}_file_correct(): {prefix}_file() = call_elf_bytes({code_term}, {prefix}_image()) {{ refl }}
 theorem {prefix}_written(): {prefix}_file() = {prefix}_header() ++ ({spelled}) {{
@@ -193,27 +182,21 @@ theorem {prefix}_resident(): (page: Nat → BitVec(8)) → CodeResident(io_fetch
 // back to the read. Closed facts about the written displacements.
 theorem {prefix}_exit_reads(): {prefix}_jumps().ed.sign_extend(32).toNat() = eof_exit_skip({needle}, {prefix}_bytes()) {{
     j(sym({prefix}_loop_written()), λ b _ => {prefix}_jumps().ed.sign_extend(32).toNat() = eof_exit_skip({needle}, b),
-        {exit_eq})
+        refl)
 }}
 theorem {prefix}_fail_reads(): {prefix}_jumps().sd.sign_extend(32).toNat() = eof_fail_skip({needle}, {prefix}_bytes()) {{
     j(sym({prefix}_loop_written()), λ b _ => {prefix}_jumps().sd.sign_extend(32).toNat() = eof_fail_skip({needle}, b),
-        {fail_eq})
+        refl)
 }}
 theorem {prefix}_back_closes(): eof_loop_span({needle}, {prefix}_bytes()) + 5 + {prefix}_jumps().bd.sign_extend(32).toNat() = Nat::pow(2, 64) {{
     j(sym({prefix}_loop_written()), λ b _ => eof_loop_span({needle}, b) + 5 + {prefix}_jumps().bd.sign_extend(32).toNat() = Nat::pow(2, 64),
-        {back_eq})
+        refl)
 }}
 theorem {prefix}_retry_closes(): eof_retry_span({needle}, {prefix}_bytes()) + 6 + {prefix}_jumps().rd.sign_extend(32).toNat() = Nat::pow(2, 64) {{
     j(sym({prefix}_loop_written()), λ b _ => eof_retry_span({needle}, b) + 6 + {prefix}_jumps().rd.sign_extend(32).toNat() = Nat::pow(2, 64),
-        {retry_eq})
+        refl)
 }}
-", low = size & 255, high = size >> 8, ed = parts.ed, sd = parts.sd, bd = parts.bd, rd = parts.rd,
-    exit_eq = closed_eq(&format!("{prefix}_jumps().ed.sign_extend(32).toNat()"), &format!("eof_exit_skip({needle}, {prefix}_loop_bytes_written())")),
-    fail_eq = closed_eq(&format!("{prefix}_jumps().sd.sign_extend(32).toNat()"), &format!("eof_fail_skip({needle}, {prefix}_loop_bytes_written())")),
-    back_eq = closed_eq(&format!("eof_loop_span({needle}, {prefix}_loop_bytes_written()) + 5 + {prefix}_jumps().bd.sign_extend(32).toNat()"),
-        "Nat::pow(2, 64)"),
-    retry_eq = closed_eq(&format!("eof_retry_span({needle}, {prefix}_loop_bytes_written()) + 6 + {prefix}_jumps().rd.sign_extend(32).toNat()"),
-        "Nat::pow(2, 64)")));
+", low = size & 255, high = size >> 8, ed = parts.ed, sd = parts.sd, bd = parts.bd, rd = parts.rd));
 }
 
 // The arguments both claims pass the library, up to the program's facts.
@@ -342,15 +325,11 @@ pub(super) fn certify_print(module: &mut Module, prefix: &str, program: &Program
         &code_term, &spelled, &chain, &file);
     let pj = format!("{prefix}_print_jumps()");
     module.raw(format!("\
-theorem {prefix}_write_fail_reads(): {pj}.sd.sign_extend(32).toNat() = print_fail_skip() {{ {} }}
-theorem {prefix}_write_exit_reads(): {pj}.zd.sign_extend(32).toNat() = print_exit_skip() {{ {} }}
-theorem {prefix}_write_back_closes(): print_loop_span() + 5 + {pj}.bd.sign_extend(32).toNat() = Nat::pow(2, 64) {{ {} }}
-theorem {prefix}_write_retry_closes(): print_retry_span() + 6 + {pj}.rd.sign_extend(32).toNat() = Nat::pow(2, 64) {{ {} }}
-",
-        closed_eq(&format!("{pj}.sd.sign_extend(32).toNat()"), "print_fail_skip()"),
-        closed_eq(&format!("{pj}.zd.sign_extend(32).toNat()"), "print_exit_skip()"),
-        closed_eq(&format!("print_loop_span() + 5 + {pj}.bd.sign_extend(32).toNat()"), "Nat::pow(2, 64)"),
-        closed_eq(&format!("print_retry_span() + 6 + {pj}.rd.sign_extend(32).toNat()"), "Nat::pow(2, 64)")));
+theorem {prefix}_write_fail_reads(): {pj}.sd.sign_extend(32).toNat() = print_fail_skip() {{ refl }}
+theorem {prefix}_write_exit_reads(): {pj}.zd.sign_extend(32).toNat() = print_exit_skip() {{ refl }}
+theorem {prefix}_write_back_closes(): print_loop_span() + 5 + {pj}.bd.sign_extend(32).toNat() = Nat::pow(2, 64) {{ refl }}
+theorem {prefix}_write_retry_closes(): print_retry_span() + 6 + {pj}.rd.sign_extend(32).toNat() = Nat::pow(2, 64) {{ refl }}
+"));
     module.raw(format!("\
 // The process claim for the written file: for every way the reads may split
 // stdin into non-empty chunks, with EINTRs between them, ending at the empty

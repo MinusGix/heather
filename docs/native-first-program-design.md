@@ -502,9 +502,10 @@ crossing reads the one over its child
   - Deep `.right` projections through a large conjunction re-check the whole
     conjunction at every step. Records with named fields replace them
     (`GroupFacts`, `ReadPrintFormat`, `PrintFormatted`).
-  - A `refl` between two large Nat lengths exceeds the kernel's depth budget,
-    which is reported as `OutOfFuel`. The image's transported fields are
-    proved with `leb` in both directions and then `le_antisym`.
+  - Large Nat length comparisons originally exceeded the kernel's depth
+    budget, reported as `OutOfFuel`. Nat-prefix conversion now walks its tail
+    iteratively (`issues/closed-nat-equality-depth-budget.md`); the image size
+    and closed jump equalities use `refl`.
   A fresh `--print` build costs more than the exit-status build, mostly in
   `decimal_line`'s `omega` lemmas. It stays within one test process's CPU
   rail, but only just, so the native print test is acceptance-class (skipped

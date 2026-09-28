@@ -103,6 +103,14 @@ type R<T = ()> = Result<T, ConvError>;
 
 const NC: ConvError = ConvError::NotConvertible;
 
+/// A completed comparison, or the residual Nat comparison after cancelling
+/// an equal constructor prefix. Only the latter is a tail continuation: no
+/// binder, context, or type changes, and no sibling comparison remains.
+enum TmProgress<T> {
+    Done,
+    Nat(T, T),
+}
+
 /// `Ψ; Γ ⊢_i T ≈ T' : l` — convertibility of types.
 /// Syntactic equality **modulo level equivalence** — the quotient DeLaM
 /// ch. 05's Static Code lemma (`lem:dt:static`) takes over its equalities.
@@ -753,8 +761,8 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
 
     /// Take one native frame of the depth budget; the caller gives it back
     /// with `self.depth -= 1` once its recursive call has returned. Paired by
-    /// hand rather than by a guard type because the two comparison nodes are
-    /// the only callers and a guard would borrow `self` across their bodies.
+    /// hand rather than by a guard type because a guard would borrow `self`
+    /// across the comparison nodes and Nat tail loop.
     fn descend(&mut self) -> R {
         if self.depth >= NATIVE_DEPTH_LIMIT {
             return Err(ConvError::OutOfFuel);
@@ -1301,7 +1309,10 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
             let w = D::whnf_ty(self, env, ty)?;
             let wa = D::whnf_tm_opaque(self, env, a)?;
             let wb = D::whnf_tm_opaque(self, env, b)?;
-            self.tm_w(env, wa, wb, &w, l)
+            match self.tm_w(env, wa, wb, &w, l)? {
+                TmProgress::Done => Ok(()),
+                TmProgress::Nat(x, y) => self.tm_nat_tail(env, x, y),
+            }
         })();
         self.depth -= 1;
         if let Some(key) = key {
@@ -1324,13 +1335,16 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         let w = D::whnf_ty_root(self, env, ty)?;
         let wa = D::whnf_tm_root(self, env, a)?;
         let wb = D::whnf_tm_root(self, env, b)?;
-        self.tm_w(env, wa, wb, &w, l)
+        match self.tm_w(env, wa, wb, &w, l)? {
+            TmProgress::Done => Ok(()),
+            TmProgress::Nat(x, y) => self.tm_nat_tail(env, x, y),
+        }
     }
 
     /// The δ stage, the transp strip and the comparison, shared by the two
     /// entries above.
     #[inline]
-    fn tm_w(&mut self, env: &Env<'v>, mut wa: D::Tm, mut wb: D::Tm, w: &D::Ty, l: &Level) -> R {
+    fn tm_w(&mut self, env: &Env<'v>, mut wa: D::Tm, mut wb: D::Tm, w: &D::Ty, l: &Level) -> R<TmProgress<D::TmC>> {
         // δ-lazy stage (extension; see [`Conv::ty`]): stop at a definition's
         // spine, and when both sides stop at the *same* one, try the spine
         // comparison before unfolding anything.
@@ -1352,7 +1366,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                     // `BitVec`) and needlessly force the definition body.
                     && self.delta_lazy(|c| c.tm_nee(env, &wa, &wb).map(drop))?.is_some()
                 {
-                    return Ok(());
+                    return Ok(TmProgress::Done);
                 }
                 match heads {
                     (None, None) => break,
@@ -1464,11 +1478,72 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         Ok(D::push_entry(env, &el, l))
     }
 
+    /// Consume Nat-prefix continuations without one native frame per
+    /// predecessor. Each iteration is the ordinary `tm` entry (fuel,
+    /// identity, memo, WHNF), followed by the same δ-lazy/strip/type-directed
+    /// comparison as before. The loop holds one depth slot, including when
+    /// entered from `tm_root`, which holds none of its own.
+    ///
+    /// Every cancelled prefix has exactly its residual comparison's verdict.
+    /// Keep its memo key until that verdict exists; exhaustion is never a
+    /// verdict and must not poison any of the pending keys.
+    fn tm_nat_tail(&mut self, env: &Env<'v>, mut a: D::TmC, mut b: D::TmC) -> R {
+        let mut entered = false;
+        let mut pending = Vec::new();
+        let result = (|| {
+            loop {
+                self.spend()?;
+                if D::tm_identity_fast(&a, &b) {
+                    return Ok(());
+                }
+                let key = D::tm_memo_key(env, &a, &b);
+                if let Some(key) = &key {
+                    if let Some(&verdict) = self.memo.get(key) {
+                        return if verdict { Ok(()) } else { Err(NC) };
+                    }
+                }
+                if !entered {
+                    self.descend()?;
+                    entered = true;
+                }
+                if let Some(key) = key {
+                    pending.push(key);
+                }
+                let ty = D::nat(env);
+                let w = D::whnf_ty(self, env, &ty)?;
+                let wa = D::whnf_tm_opaque(self, env, &a)?;
+                let wb = D::whnf_tm_opaque(self, env, &b)?;
+                match self.tm_w(env, wa, wb, &w, &Level::Zero)? {
+                    TmProgress::Done => return Ok(()),
+                    TmProgress::Nat(x, y) => {
+                        a = x;
+                        b = y;
+                    }
+                }
+            }
+        })();
+        if entered {
+            self.depth -= 1;
+        }
+        let verdict = match &result {
+            Ok(()) => Some(true),
+            Err(ConvError::NotConvertible) => Some(false),
+            Err(ConvError::OutOfFuel) => None,
+        };
+        if let Some(verdict) = verdict {
+            for key in pending {
+                self.memo.insert(key, verdict);
+            }
+        }
+        result
+    }
+
     /// `Γ ⊢ w ≈ w' : W @ l` for weak head normal terms at a WHNF type,
-    /// directed by the type.
-    fn tm_nf(&mut self, env: &Env<'v>, a: &D::Tm, b: &D::Tm, w: &D::Ty, _l: &Level) -> R {
+    /// directed by the type. Nat congruence returns a tail continuation;
+    /// all other rules complete their own recursive comparisons here.
+    fn tm_nf(&mut self, env: &Env<'v>, a: &D::Tm, b: &D::Tm, w: &D::Ty, _l: &Level) -> R<TmProgress<D::TmC>> {
         let vw = D::view_ty(self, env, w);
-        match &vw {
+        let result = match &vw {
             // η: Γ, x : S ⊢ app(w↑; l,l'; x:S↑.T↑; x) ≈ app(w'↑; …; x) : T
             TyView::Pi { dom_level, cod_level, dom, cod } => {
                 let e = D::push_entry(env, dom, dom_level);
@@ -1535,11 +1610,13 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
             },
             TyView::Nat => {
                 if let Some((x, y)) = D::cancel_nat_prefix(self, env, a, b)? {
-                    return self.tm_at_nat(env, &x, &y);
+                    return Ok(TmProgress::Nat(x, y));
                 }
                 match (&D::view_tm(self, env, a), &D::view_tm(self, env, b)) {
                     (TmView::Zero, TmView::Zero) => Ok(()),
-                    (TmView::Succ(x), TmView::Succ(y)) => self.tm_at_nat(env, x, y),
+                    (TmView::Succ(x), TmView::Succ(y)) => {
+                        return Ok(TmProgress::Nat(x.clone(), y.clone()));
+                    }
                     (x, y) if x.is_nat_data() || y.is_nat_data() => Err(NC),
                     _ => self.tm_nee(env, a, b).map(drop),
                 }
@@ -1682,7 +1759,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                 // one instruction. Anything that does not pack falls through
                 // to η unchanged.
                 if D::bit_vec_eq(self, env, a, b, fst, snd, snd_level)?.is_some() {
-                    return Ok(());
+                    return Ok(TmProgress::Done);
                 }
                 // Neutral-first (extension): two stuck terms whose spines
                 // agree are convertible by congruence, and deciding that on
@@ -1698,7 +1775,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                     && D::view_tm(self, env, b).is_neutral()
                     && self.delta_lazy(|c| c.tm_nee(env, a, b).map(drop))?.is_some()
                 {
-                    return Ok(());
+                    return Ok(TmProgress::Done);
                 }
                 let (fa, fb) =
                     D::eta_proj(self, env, true, a, b, fst_level, snd_level, fst, snd)?;
@@ -1807,7 +1884,8 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
             | TyView::GlobalTy { .. }
             | TyView::Vec { .. }
             | TyView::Fin { .. } => self.tm_nee(env, a, b).map(drop),
-        }
+        };
+        result.map(|()| TmProgress::Done)
     }
 
     /// Neutral comparison with the inferred type reduced to WHNF.

@@ -103,6 +103,9 @@ fn var_at<'v>(env: &Env<'v>, level: u32) -> &'v TmClo<'v> {
 }
 
 #[cfg(test)]
+mod closed_nat_depth_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::num::NonZeroU64;
