@@ -70,6 +70,88 @@ fn bv_omega_suite() {
     refuses_naming_the_side_condition();
     names_atom_lists();
     proves_what_is_written_down_without_search();
+    splits_stuck_comparisons();
+}
+
+fn splits_stuck_comparisons() {
+    checks("a restoring step split at its comparison", r#"
+        fn place(s, threshold, weight: BitVec(8)) → BitVec(8) {
+            match s.unsigned_lt_bit(threshold) {
+                True => s, False => s.sub(threshold).add(weight)
+            }
+        }
+        theorem kept(s: BitVec(8), small: s.toNat() < 10):
+            place(s, BitVec::ofNat(10), BitVec::ofNat(1)).toNat() = s.toNat() {
+            split_all; all_goals { bv_omega }
+        }
+        theorem taken(s: BitVec(8), lo: 10 <= s.toNat(), hi: s.toNat() < 100):
+            place(s, BitVec::ofNat(10), BitVec::ofNat(1)).toNat() + 9 = s.toNat() {
+            split_all; all_goals { bv_omega }
+        }
+        theorem both_branches(s: BitVec(8)):
+            place(s, BitVec::ofNat(10), BitVec::ofNat(0)).toNat() <= s.toNat() {
+            split_all; all_goals { bv_omega }
+        }
+        theorem open_threshold(s: BitVec(8), c: Nat, fits: 16 * c < 256):
+            place(s, BitVec::ofNat(16 * c), BitVec::ofNat(0)).toNat() <= s.toNat() {
+            split_all; all_goals { bv_omega }
+        }
+    "#);
+    checks("open widths, nested comparisons, and finite locals", r#"
+        fn minimum(n: Nat, a, b: BitVec(n)) → BitVec(n) {
+            match a.unsigned_lt_bit(b) { True => a, False => b }
+        }
+        theorem bound(n: Nat, a, b, c: BitVec(n), flag: bool::Bool,
+            __split_comparison: Nat):
+            minimum(n, minimum(n, a, b), c).toNat() <= a.toNat() {
+            split_all; all_goals { bv_omega }
+        }
+        theorem equal(n: Nat, a: BitVec(n)):
+            minimum(n, a, a) = a {
+            split_all; all_goals { bv_omega }
+        }
+        theorem nat_leaf(n: Nat, a, b: BitVec(n)): minimum(n, a, b).toNat() <= a.toNat() {
+            split_all; all_goals { omega }
+        }
+        fn minimum3(n: Nat, a, b, c: BitVec(n)) → BitVec(n) {
+            match a.unsigned_lt_bit(b) {
+                True => match a.unsigned_lt_bit(c) { True => a, False => c },
+                False => match b.unsigned_lt_bit(c) { True => b, False => c }
+            }
+        }
+        theorem nested(n: Nat, a, b, c: BitVec(n)):
+            minimum3(n, a, b, c).toNat() <= a.toNat() {
+            split_all; all_goals { bv_omega }
+        }
+    "#);
+    checks("a comparison split with a non-arithmetic leaf", r#"
+        fn select(a, b: BitVec(8)) → bool::Bool {
+            match a.unsigned_lt_bit(b) { True => True, False => False }
+        }
+        theorem same(a, b: BitVec(8)): select(a, b) = select(a, b) {
+            split_all; all_goals { refl }
+        }
+    "#);
+    let error = refused("a false comparison branch", r#"
+        fn minimum(a, b: BitVec(8)) → BitVec(8) {
+            match a.unsigned_lt_bit(b) { True => a, False => b }
+        }
+        theorem wrong(a, b: BitVec(8)): minimum(a, b).toNat() < a.toNat() {
+            split_all; all_goals { bv_omega }
+        }
+    "#);
+    assert!(error.contains("no contradiction"), "{error}");
+    let error = refused("overflow in a comparison branch", r#"
+        fn raise(a: BitVec(8)) → BitVec(8) {
+            match a.unsigned_lt_bit(BitVec::ofNat(1)) {
+                True => a, False => a.add(BitVec::ofNat(255))
+            }
+        }
+        theorem wrong(a: BitVec(8)): a.toNat() <= raise(a).toNat() {
+            split_all; all_goals { bv_omega }
+        }
+    "#);
+    assert!(error.contains("may overflow 8 bits"), "{error}");
 }
 
 /// The respelling issue's acceptance: an atom whose implicit nothing written

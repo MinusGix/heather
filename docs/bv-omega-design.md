@@ -87,9 +87,10 @@ Shapes that were tried and measured against, with the reason each lost:
   `add`. Hence the goal over Nat variables.
 
 The side conditions form one balanced conjunction, proved leaf by leaf by
-`omega` in the entry context, before any fact exists. Balanced, because each
-nesting level costs the kernel's conversion stack; before any fact, because
-an `omega` after the facts would reflect every one of them.
+`omega` in the entry context, before the arithmetic word facts exist (the
+ranges and comparison bridges in §3 are already available). Balanced, because
+each nesting level costs the kernel's conversion stack; before the arithmetic
+facts, because an `omega` after them would reflect every one of them.
 
 ## 3. The walk
 
@@ -147,6 +148,11 @@ An unsigned comparison equation in scope, in either orientation, supplies
 These bridge facts are available before side conditions and are restated
 under the same names when the arithmetic goal generalises composite words.
 Words appearing only in a comparison remain optional in the careful attempt.
+For a comparison operand built by `ofNat` or `word_of_nat`, an independently
+checked fit bound permits its value equation before the side conditions too.
+This lets a comparison against `ofNat(c)` justify a subtraction's no-borrow
+condition over `c`. When that bound fails, the comparison supplies no equation
+equating the operand's value with the Nat it was built from.
 
 ## 4. Scope
 
@@ -159,9 +165,10 @@ Words appearing only in a comparison remain optional in the careful attempt.
   over a checking-position `bv_omega` subgoal.
 - Operations: `add`, `sub`, `ofNat`, `word_of_nat`, `take_low`, `drop_low`,
   and definitions that step to them. Byte extraction and comparison bridges
-  are recorded in `issues/bv-omega-bytes-and-comparisons.md`; splitting a
-  `match` stuck on a word comparison is
-  `issues/bv-omega-split-stuck-comparison.md`.
+  are recorded in `issues/bv-omega-bytes-and-comparisons.md`. `split_all` also
+  splits matches stuck on unsigned word comparisons and supplies their branch
+  equations to the leaf (`docs/goal-combinators.md`,
+  `issues/bv-omega-split-stuck-comparison.md`).
 
 ## 5. Failure
 

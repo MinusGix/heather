@@ -17,6 +17,35 @@ proof tree its locals describe. Recursive and indexed families are left alone.
 Payload fields are bound by the generated match, although this first form does
 not recursively inspect finite values introduced by those fields.
 
+After splitting the locals, it also splits matches in the goal that are
+blocked on `BitVec::unsigned_lt_bit`. It searches application arguments and
+transparent definition heads with a bounded unfolding budget, without entering
+unselected match arms. Each comparison branch gets an equation stating that
+the comparison is `True` or `False`. With `bitvec_omega` imported, it also
+supplies the corresponding Nat order as an ordinary `have`, usable by both
+`omega` and `bv_omega`. The usual composition handles restoring steps:
+
+```text
+fn place(s, threshold, weight: BitVec(8)) → BitVec(8) {
+    match s.unsigned_lt_bit(threshold) {
+        True => s, False => s.sub(threshold).add(weight)
+    }
+}
+
+theorem lowers(s: BitVec(8)):
+    place(s, BitVec::ofNat(10), BitVec::ofNat(0)).toNat() <= s.toNat() {
+    split_all;
+    all_goals { bv_omega }
+}
+```
+
+The splitter abstracts the exposed match into its motive, including below
+`toNat`, and computes constructor cases before checking a leaf. It searches
+again in each specialized branch, so nested comparisons are split as they
+become visible. The leaf remains independent of the splitter: `refl` and other
+checking expressions work too. A comparison the bounded search cannot expose
+leaves the goal to the written leaf.
+
 `all_goals { body }` checks the same block independently at every leaf. With no
 finite local it checks `body` once at the original goal. The initial surface
 requires the pair in sequence inside a declaration body:

@@ -1070,8 +1070,12 @@ pub(crate) fn generate(elab: &Elaborator, cx: &Cx, expected: &Type, careful: boo
         let before = walk.clone();
         if let Some((args, yes, flipped)) = comparison(elab, cx, &ty) {
             let [n, a, b] = args.as_slice() else { continue };
-            if let Some(i) = walk.word(n, a)? { walk.found.push(i); }
-            if let Some(i) = walk.word(n, b)? { walk.found.push(i); }
+            for operand in [a, b] {
+                if let Some(i) = walk.word(n, operand)? {
+                    walk.found.push(i);
+                    comparison_value_bridge(&mut walk, i);
+                }
+            }
             let ns = nat_term_source(elab, cx, n)?;
             let av = elab.spell_term_source(cx, a).ok_or("could not spell comparison operand")?;
             let bv = elab.spell_term_source(cx, b).ok_or("could not spell comparison operand")?;
@@ -1273,6 +1277,36 @@ fn prelude(walk: &Walk) -> String {
         out.push(format!("have {name}: ({statement}) = {proof};"));
     }
     out.join("\n")
+}
+
+/// A comparison against a Nat-built word must expose that word's value
+/// before the arithmetic side conditions: otherwise a subtraction's
+/// no-borrow sees `toNat(ofNat(c)) <= s`, while its form needs `c <= s`.
+/// Only an independently checked bound permits this early fact. A wrapping
+/// comparison operand remains opaque, as comparisons alone never bound the
+/// Nat it was built from.
+fn comparison_value_bridge(walk: &mut Walk, i: usize) {
+    let node = &walk.nodes[i];
+    let Kind::Value(lemma, c, syn) = &node.kind else { return };
+    let statement = format!("bitvec::BitVec::toNat({}) = {c}", node.word);
+    if walk.bridges.iter().any(|(_, other, _)| other == &statement) { return; }
+    let lemma = if *lemma == "ofNat_row" {
+        "bitvec::BitVec::toNat_ofNat"
+    } else {
+        "bitvec_nat::toNat_word_of_nat"
+    };
+    let bound = if matches!(syn, NatSyn::Lit(_)) { "trivial" } else { "omega" };
+    let proof = format!("{lemma}({}, {c}, {bound})", node.width);
+    let source = format!("{{ have __bv_value: ({statement}) = {proof}; __bv_value }}");
+    let Ok(expr) = parse_generated_expr(&source) else { return };
+    let elab = walk.elab;
+    let mark = (elab.warnings.borrow().len(), elab.attempt.goal_arena.mark());
+    let checked = elab.generated_scope(|me| me.elab_infer(walk.cx, &expr)).is_ok();
+    elab.warnings.borrow_mut().truncate(mark.0);
+    elab.attempt.goal_arena.rollback(mark.1);
+    if checked {
+        walk.bridges.push((format!("__bv_compare_value{}", walk.bridges.len()), statement, proof));
+    }
 }
 
 /// Whether `omega` proves `o` in the entry context, for an optional word.

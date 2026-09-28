@@ -4445,6 +4445,23 @@ impl Elaborator {
                 let split = goal_combinators::split_all(self, cx, body, e.span);
                 self.elab_check_skel_slots(cx, &split, expected, lvl, hint, skel, capture_slots)
             }
+            ExprKind::App { head, args, named, explicit: false, goal_oriented: false }
+                if matches!(&head.kind, ExprKind::Var(name) if name == goal_combinators::SPLIT_STUCK)
+                    && named.is_empty() =>
+            {
+                let [body] = args.as_slice() else {
+                    return err("internal comparison splitter has the wrong arity", e.span);
+                };
+                let goal = goal_combinators::simplify_goal(self, cx, expected);
+                let Some(split) = goal_combinators::split_stuck(self, cx, &goal, body, e.span) else {
+                    return self.elab_check_skel_slots(cx, body, &goal, lvl, hint, skel, capture_slots);
+                };
+                let (scrut, ty, level) = self.elab_infer(cx, &split.scrut)?;
+                self.elab_convoy(
+                    cx, heather_syntax::MatchForm::Match, true, &split.equation, &split.arms,
+                    scrut, &ty, &level, split.motive, lvl, &goal, e.span,
+                )
+            }
             // **Rule 2** (docs/let-and-blocks-design.md §5.2): `refl` is a
             // *nullary* special form, so its node carries no name to
             // re-derive and the parser cannot buy the name back with a
