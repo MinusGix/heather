@@ -1,0 +1,36 @@
+// P3: ofNat against the same value written as a from_bits literal.
+// p3_ofnat_*  : ofNat(n, k) = from_bits(n, <bits of k>)  by refl.
+// p3_ctl_*    : the from_bits literal against ITSELF (the A3 shape) — the
+//               control that subtracts the literal's own elaboration and
+//               packing, leaving what ofNat costs.
+// Widths and magnitudes are the ones lib/ actually spells: 218 sites are
+// ofNat(64, <small>), 63 are ofNat(8, <small>), and the immediates in
+// examples/x86-native are ofNat(64, 0x0123456789abcdef).
+// Re-measure with a FRESH --cache-dir (see probes/README.md).
+
+import bitvec;
+import bool;
+
+theorem p3_ofnat_64_big(): bitvec::ofNat(64, 0x123456789abcdef) = bitvec::from_bits(64, [True, True, True, True, False, True, True, True, True, False, True, True, False, False, True, True, True, True, False, True, False, True, False, True, True, False, False, True, False, False, False, True, True, True, True, False, False, True, True, False, True, False, True, False, False, False, True, False, True, True, False, False, False, True, False, False, True, False, False, False, False, False, False, False]) { refl }
+
+theorem p3_ctl_64_big(): bitvec::from_bits(64, [True, True, True, True, False, True, True, True, True, False, True, True, False, False, True, True, True, True, False, True, False, True, False, True, True, False, False, True, False, False, False, True, True, True, True, False, False, True, True, False, True, False, True, False, False, False, True, False, True, True, False, False, False, True, False, False, True, False, False, False, False, False, False, False]) = bitvec::from_bits(64, [True, True, True, True, False, True, True, True, True, False, True, True, False, False, True, True, True, True, False, True, False, True, False, True, True, False, False, True, False, False, False, True, True, True, True, False, False, True, True, False, True, False, True, False, False, False, True, False, True, True, False, False, False, True, False, False, True, False, False, False, False, False, False, False]) { refl }
+
+theorem p3_ofnat_64_one(): bitvec::ofNat(64, 1) = bitvec::from_bits(64, [True, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False]) { refl }
+
+theorem p3_ctl_64_one(): bitvec::from_bits(64, [True, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False]) = bitvec::from_bits(64, [True, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False]) { refl }
+
+theorem p3_ofnat_64_zero(): bitvec::ofNat(64, 0) = bitvec::from_bits(64, [False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False]) { refl }
+
+theorem p3_ctl_64_zero(): bitvec::from_bits(64, [False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False]) = bitvec::from_bits(64, [False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False]) { refl }
+
+theorem p3_ofnat_64_small(): bitvec::ofNat(64, 7) = bitvec::from_bits(64, [True, True, True, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False]) { refl }
+
+theorem p3_ctl_64_small(): bitvec::from_bits(64, [True, True, True, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False]) = bitvec::from_bits(64, [True, True, True, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False]) { refl }
+
+theorem p3_ofnat_8_c0(): bitvec::ofNat(8, 0xc0) = bitvec::from_bits(8, [False, False, False, False, False, False, True, True]) { refl }
+
+theorem p3_ctl_8_c0(): bitvec::from_bits(8, [False, False, False, False, False, False, True, True]) = bitvec::from_bits(8, [False, False, False, False, False, False, True, True]) { refl }
+
+theorem p3_ofnat_8_small(): bitvec::ofNat(8, 15) = bitvec::from_bits(8, [True, True, True, True, False, False, False, False]) { refl }
+
+theorem p3_ctl_8_small(): bitvec::from_bits(8, [True, True, True, True, False, False, False, False]) = bitvec::from_bits(8, [True, True, True, True, False, False, False, False]) { refl }

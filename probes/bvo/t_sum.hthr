@@ -1,0 +1,9 @@
+import bitvec;
+import logic;
+import nat;
+import omega;
+import bitvec_nat;
+import bitvec_omega;
+
+theorem sum5(y: BitVec(64), small: y.toNat() < 1000): y.add(BitVec::ofNat(1)).add(BitVec::ofNat(2)).add(BitVec::ofNat(3)).add(BitVec::ofNat(4)).add(BitVec::ofNat(5)).toNat() = y.toNat() + 15 { bv_omega }
+theorem sum10(y: BitVec(64), small: y.toNat() < 1000): y.add(BitVec::ofNat(1)).add(BitVec::ofNat(2)).add(BitVec::ofNat(3)).add(BitVec::ofNat(4)).add(BitVec::ofNat(5)).add(BitVec::ofNat(6)).add(BitVec::ofNat(7)).add(BitVec::ofNat(8)).add(BitVec::ofNat(9)).add(BitVec::ofNat(10)).toNat() = y.toNat() + 55 { bv_omega }

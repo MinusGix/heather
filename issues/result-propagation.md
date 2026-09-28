@@ -3,7 +3,7 @@ title: Add function-scoped Result propagation with explicit success values
 status: closed
 labels: [frontend,stdlib,elaboration,syntax]
 created: 2026-09-14
-updated: 2026-09-14
+updated: 2026-09-28
 ---
 
 Own the Result slice of [[prelude-option-and-friends]]: a standard Result
@@ -32,7 +32,7 @@ The application solver can infer the result of a generated propagation
 callback once its input domain is fully solved. That narrow fallback does
 not change ordinary source-lambda inference or introduce a kernel rule.
 
-The runnable customer is `docs/showcase/result-parser.hthr`: two-number token
+The runnable customer is `docs/showcase/result_parser.hthr`: two-number token
 parsing, specific errors, trailing-input rejection, a handwritten-match
 reference, and recursive collection. Focused acceptance also covers open
 types, lexical shadowing, nested lambda boundaries, fields, vector indexing,

@@ -296,6 +296,18 @@ theorem decode_short_control_complete(control: ShortControl):
     match control { JumpZero(_) => refl, Jump(_) => refl }
 }
 
+theorem short_control_bytes_unique(left, right: ShortControl,
+    same: short_control_bytes(left) = short_control_bytes(right)): left = right {
+    Option::some_inj(left, right,
+        trans(sym(decode_short_control_complete(left)),
+            trans(cong_fn(λ bytes => erase_short_control_decode(bytes, decode_short_control(bytes)), same),
+                decode_short_control_complete(right))))
+}
+
+theorem short_control_bytes_length(control: ShortControl): short_control_bytes(control).len() = 2 {
+    match control { JumpZero(_) => refl, Jump(_) => refl }
+}
+
 theorem decode_short_control_rejects_empty():
     erase_short_control_decode([], decode_short_control([])) = None
 { refl }
@@ -575,6 +587,18 @@ theorem decode_near_control_complete(control: NearControl): NearControlDecodes(c
     }
 }
 
+theorem near_control_bytes_unique(left, right: NearControl,
+    same: near_control_bytes(left) = near_control_bytes(right)): left = right {
+    Option::some_inj(left, right,
+        trans(sym(decode_near_control_complete(left)),
+            trans(cong_fn(λ bytes => erase_near_control_decode(bytes, decode_near_control(bytes)), same),
+                decode_near_control_complete(right))))
+}
+
+theorem near_opcodes_distinct(): Not(BitVec::ofNat(0xe9, n := 8) = BitVec::ofNat(0x0f, n := 8)) {
+    λ same => absurd(cong_fn(λ (byte: BitVec(8)) => byte.sign_bit(), same))
+}
+
 theorem decode_near_control_rejects_truncated():
     erase_near_control_decode([BitVec::ofNat(0xe9), BitVec::ofNat(0), BitVec::ofNat(0), BitVec::ofNat(0)],
         decode_near_control([BitVec::ofNat(0xe9), BitVec::ofNat(0), BitVec::ofNat(0), BitVec::ofNat(0)])) = None
@@ -607,6 +631,38 @@ fn near_control_rip<M>(control: NearControl, before: MachineState<M>) → BitVec
 
 fn execute_near_control<M>(control: NearControl, before: MachineState<M>) → MachineState<M> {
     with_rip(before, near_control_rip(control, before))
+}
+
+theorem erase_af_short_commute<M>(control: ShortControl, before: MachineState<M>):
+    erase_af(execute_short_control(control, before)) =
+    erase_af(execute_short_control(control, erase_af(before))) {
+    match control { JumpZero(_) => refl, Jump(_) => refl }
+}
+
+theorem erase_af_near_commute<M>(control: NearControl, before: MachineState<M>):
+    erase_af(execute_near_control(control, before)) =
+    erase_af(execute_near_control(control, erase_af(before))) {
+    match control { JumpZeroNear(_) => refl, JumpNear(_) => refl, JumpSignNear(_) => refl }
+}
+
+theorem short_control_respects_defined<M>(control: ShortControl,
+    left, right: MachineState<M>, same: SameDefinedState<M>(left, right)):
+    SameDefinedState<M>(execute_short_control(control, left), execute_short_control(control, right)) {
+    erased_equal_same_defined(execute_short_control(control, left), execute_short_control(control, right),
+        trans(erase_af_short_commute(control, left),
+            trans(cong_fn(λ (state: MachineState<M>) => erase_af(execute_short_control(control, state)),
+                    same_defined_erased_equal(left, right, same)),
+                sym(erase_af_short_commute(control, right)))))
+}
+
+theorem near_control_respects_defined<M>(control: NearControl,
+    left, right: MachineState<M>, same: SameDefinedState<M>(left, right)):
+    SameDefinedState<M>(execute_near_control(control, left), execute_near_control(control, right)) {
+    erased_equal_same_defined(execute_near_control(control, left), execute_near_control(control, right),
+        trans(erase_af_near_commute(control, left),
+            trans(cong_fn(λ (state: MachineState<M>) => erase_af(execute_near_control(control, state)),
+                    same_defined_erased_equal(left, right, same)),
+                sym(erase_af_near_commute(control, right)))))
 }
 
 theorem execute_near_control_preserves_gprs<M>(control: NearControl, before: MachineState<M>):

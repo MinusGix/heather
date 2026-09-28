@@ -1,0 +1,22 @@
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import char;
+import string;
+
+class Seq<S> { Elem: Type, view: S → List<Elem> }
+instance<A> Seq<List<A>> { Elem := A, view := λ (xs: List<A>) => xs }
+instance Seq<String> { Elem := Char, view := λ (s: String) => s.chars }
+
+// (ii) a source-polymorphic field: can a record field quantify over a
+// constrained type parameter (a rank-2 run)?
+record AnySource<A> {
+    go: <S: Seq>(source: S) → Option<A>,
+}
+
+fn firstOf<S: Seq>(s: S) → Option<Nat> { match S.view(s) { Nil => None, Cons(h, t) => Some(0) } }
+
+fn packed() → AnySource<Nat> { AnySource(λ source => firstOf(source)) }
+theorem packed_string(): packed().go("7") = Some(0) { refl }

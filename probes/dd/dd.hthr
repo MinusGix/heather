@@ -1,0 +1,6 @@
+import nat;
+import logic;
+import omega;
+
+theorem nested(n: Nat): n.div(10).div(10) = n.div(100) { omega }
+theorem nested_mod(n: Nat): n.div(10).mod(10) = n.mod(100).div(10) { omega }

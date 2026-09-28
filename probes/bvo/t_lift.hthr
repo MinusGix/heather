@@ -1,0 +1,28 @@
+import bitvec;
+import bool;
+import logic;
+import nat;
+import omega;
+import bitvec_nat;
+import bitvec_omega;
+
+fn double(x: BitVec(64)) → BitVec(64) { x.add(x) }
+
+// One site, elaborated once per branch.
+theorem branches(b: Bool, y: BitVec(64), v: Nat, value: y.toNat() = v, small: v < 1000):
+    double(y).toNat() = v + v {
+    split_all;
+    all_goals { bv_omega }
+}
+
+// Two lifted proofs, the second in the scope of the first.
+theorem chained(y: BitVec(64), v: Nat, value: y.toNat() = v, small: v < 1000): double(y).add(BitVec::ofNat(1)).toNat() = v + v + 1 {
+    let first: (y.add(BitVec::ofNat(2)).toNat() = v + 2) = bv_omega;
+    bv_omega
+}
+
+// A hole beside a lifted proof.
+theorem with_hole(y: BitVec(64), v: Nat, value: y.toNat() = v, small: v < 1000): double(y).toNat() = v + v ∧ v <= v + 1 {
+    ⟨bv_omega, ?rest⟩
+    on ?rest := omega;
+}

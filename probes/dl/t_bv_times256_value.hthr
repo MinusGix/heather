@@ -1,0 +1,11 @@
+import bitvec;
+import logic;
+import nat;
+import omega;
+import bitvec_nat;
+import bitvec_omega;
+import decimal_line;
+
+theorem bv_times256_value(y: BitVec(64), v: Nat, value: y.toNat() = v * 1, bound: v * 256 < 1152921504606846976):
+    times256(y).toNat() = v * 256 { bv_omega }
+

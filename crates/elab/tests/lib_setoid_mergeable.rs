@@ -208,7 +208,7 @@ fn composed_context_showcase_checks() {
     check(
         &mut e,
         "relational_contexts",
-        include_str!("../../../docs/showcase/relational-contexts.hthr"),
+        include_str!("../../../docs/showcase/relational_contexts.hthr"),
     );
 }
 

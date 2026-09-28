@@ -1,0 +1,35 @@
+import logic;
+import bool;
+import nat;
+import list;
+import char;
+import string;
+
+// (a) `∧` in place of `And<...>` in a Type-returning body
+fn all_of(cls: Char -> Bool, cs: List<Char>) -> Type {
+    match cs { Nil => True, Cons(c, r) => IsTrue(cls(c)) ∧ all_of(cls, r) }
+}
+
+// (b) a receiver form for a Type-valued member, and a namespaced member
+fn List::all<A>(self xs: List<A>, p: A -> Bool) -> Type {
+    match xs { Nil => True, Cons(c, r) => IsTrue(p(c)) ∧ r.all(p) }
+}
+
+// (c) a generic nonempty, beside list's own `is_nil`
+fn nonempty<A>(xs: List<A>) -> Type { match xs { Nil => False, Cons(_, _) => True } }
+
+// (d) a namespaced member on a local inductive, called as a receiver
+inductive Derivation { Number(digits: List<Char>), Sum(l: Derivation, r: Derivation) }
+fn Derivation::tier(self d: Derivation) -> Nat {
+    match d { Number(_) => 2, Sum(_, _) => 0 }
+}
+
+// (e) is a partially applied *record type* usable where a relation is expected,
+// or does a `fn` wrapper (GrammarSpec) have to exist?
+record Grammar(level: Nat, value: Nat) { at_level: level = level }
+fn takes_relation(rel: Nat -> Nat -> Type) -> Type { rel(0, 1) }
+// fn direct() -> Type { takes_relation(Grammar) }   // refused: see below
+
+theorem digits_all(): "12".chars.all(is_digit) { And(trivial, And(trivial, trivial)) }
+theorem tier_receiver(): Sum(Number([]), Number([])).tier() = 0 { refl }
+theorem ne(): nonempty("x".chars) { trivial }

@@ -1,0 +1,6 @@
+inductive Col { Red, Green }
+fn pick(c: Col) -> Col { match c { Red => Green, Green => Red } }
+fn wrap(c: Col, d: Col) -> Col { d }
+theorem t(c: Col): wrap(c, pick(c)) = wrap(c, Red) {
+    match shape: pick(c) { Red => cong(shape), Green => cong(shape) }
+}

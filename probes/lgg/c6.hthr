@@ -1,0 +1,12 @@
+inductive Col { Red, Green }
+fn wrap(d: Col) -> Col { d }
+fn pick(c: Col) -> Col { match c { Red => Green, Green => Red } }
+// The calc step *writes* both endpoints, so the match's refinement does not
+// reach them: the goal's `Red` is the written one and the proof's is the
+// pattern's. That is `finish_text`'s shape in six lines.
+theorem t(c: Col): wrap(pick(c)) = wrap(Red) {
+    match shape: pick(c) {
+        Red => calc { wrap(pick(c)) = wrap(Red) := cong(shape), },
+        Green => calc { wrap(pick(c)) = wrap(Red) := cong(shape), },
+    }
+}

@@ -1,0 +1,26 @@
+import bitvec;
+import bool;
+fn double(x: BitVec(64)) → BitVec(64) { x.add(x) }
+
+// Times 256, by doubling. Each doubling is a call: a `let` would be copied
+// into every use, and the term would double with each one.
+fn times256(x: BitVec(64)) → BitVec(64) { double(double(double(double(double(double(double(double(x)))))))) }
+
+// The count moved above the line's five bytes: `n * 2^40`.
+fn raise(n: BitVec(64)) → BitVec(64) { times256(times256(times256(times256(times256(n))))) }
+
+// One restoring step: when at least `threshold` is left, take it away and
+// add `weight` to the digit it counts.
+fn place(state, threshold, weight: BitVec(64)) → BitVec(64) {
+    match state.unsigned_lt_bit(threshold) {
+        True => state,
+        False => state.sub(threshold).add(weight),
+    }
+}
+
+// For `n < 10000`: the bytes of "dddd\n", low first, with nothing left above.
+fn line_word(n: BitVec(64)) → BitVec(64) {
+    place(place(place(place(place(place(place(place(place(place(place(place(place(place(place(place(raise(n).add(BitVec::ofNat(0x0a30303030)), BitVec::ofNat(8796093022208000), BitVec::ofNat(8)), BitVec::ofNat(4398046511104000), BitVec::ofNat(4)), BitVec::ofNat(2199023255552000), BitVec::ofNat(2)), BitVec::ofNat(1099511627776000), BitVec::ofNat(1)), BitVec::ofNat(879609302220800), BitVec::ofNat(2048)), BitVec::ofNat(439804651110400), BitVec::ofNat(1024)), BitVec::ofNat(219902325555200), BitVec::ofNat(512)), BitVec::ofNat(109951162777600), BitVec::ofNat(256)), BitVec::ofNat(87960930222080), BitVec::ofNat(524288)), BitVec::ofNat(43980465111040), BitVec::ofNat(262144)), BitVec::ofNat(21990232555520), BitVec::ofNat(131072)), BitVec::ofNat(10995116277760), BitVec::ofNat(65536)), BitVec::ofNat(8796093022208), BitVec::ofNat(134217728)), BitVec::ofNat(4398046511104), BitVec::ofNat(67108864)), BitVec::ofNat(2199023255552), BitVec::ofNat(33554432)), BitVec::ofNat(1099511627776), BitVec::ofNat(16777216))
+}
+
+fn chain(n, unused: BitVec(64)) → BitVec(64) { line_word(n) }

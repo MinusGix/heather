@@ -1,0 +1,11 @@
+import bitvec;
+import logic;
+import nat;
+import omega;
+import bitvec_nat;
+
+fn double(x: BitVec(64)) → BitVec(64) { x.add(x) }
+fn times256(x: BitVec(64)) → BitVec(64) { double(double(double(double(double(double(double(double(x)))))))) }
+fn raise(n: BitVec(64)) → BitVec(64) { times256(times256(times256(times256(times256(n))))) }
+theorem s3(v0, v1, v2, m: Nat, e: v0 = m, s: m < 16384, h1: v1 = v0 + v0, h2: v2 = v1 + v1): v2 + v2 < 1152921504606846976 { omega }
+theorem s0(v0: Nat, s: v0 < 16384): v0 + v0 < 1152921504606846976 { omega }

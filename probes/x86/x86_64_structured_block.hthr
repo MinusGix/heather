@@ -1,0 +1,166 @@
+// Recursive physical composition of canonical blocks and short branches.
+// The tree fixes both the byte stream and the selected machine execution.
+import x86_64;
+import x86_64_block;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+
+inductive StructuredCode {
+    CodeBlock(instructions: List<Instruction>),
+    CodeSequence(prefix: StructuredCode, continuation: StructuredCode),
+    CodeBranch(register: Gpr, false_displacement: BitVec(8),
+        join_displacement: BitVec(8), when_true: StructuredCode, when_false: StructuredCode),
+}
+
+fn structured_bytes(code: StructuredCode) → List<BitVec(8)> {
+    match code {
+        CodeBlock(instructions) => canonical_block_bytes(instructions),
+        CodeSequence(prefix, continuation) => structured_bytes(prefix) ++ structured_bytes(continuation),
+        CodeBranch(register, false_displacement, join_displacement, yes, no) =>
+            canonical_bytes(TestRR(register, register)) ++
+            short_control_bytes(JumpZero(false_displacement)) ++ structured_bytes(yes) ++
+            short_control_bytes(Jump(join_displacement)) ++ structured_bytes(no),
+    }
+}
+
+fn structured_test<M>(register: Gpr, before: MachineState<M>) → MachineState<M> {
+    let value = read_gpr(register, before.gprs);
+    MachineState(gprs := before.gprs, flags := test_flags(value, value, False),
+        rip := next_rip(before.rip, 3), memory := before.memory)
+}
+
+theorem structured_test_canonical<M>(register: Gpr, before: MachineState<M>):
+    structured_test(register, before) =
+        execute_normal(decoded_canonical(TestRR(register, register)), before)
+{
+    refl
+}
+
+fn structured_branch_entry<M>(register: Gpr, displacement: BitVec(8),
+    before: MachineState<M>) → MachineState<M>
+{
+    execute_short_control(JumpZero(displacement), structured_test(register, before))
+}
+
+fn structured_after<M>(code: StructuredCode, before: MachineState<M>) → MachineState<M> {
+    match code {
+        CodeBlock(instructions) => execute_block_normal(instructions, before),
+        CodeSequence(prefix, continuation) => structured_after(continuation, structured_after(prefix, before)),
+        CodeBranch(register, false_displacement, join_displacement, yes, no) => {
+            let entry = structured_branch_entry(register, false_displacement, before);
+            match structured_test(register, before).flags.zf {
+                False => execute_short_control(Jump(join_displacement), structured_after(yes, entry)),
+                True => structured_after(no, entry),
+            }
+        },
+    }
+}
+
+fn ExecuteStructured<M>(code: StructuredCode, before, after: MachineState<M>) → Type {
+    after = structured_after(code, before)
+}
+
+// Layout ties actual displacement arithmetic to the emitted child lengths.
+// This is separate from execution: a malformed edge still executes, but
+// cannot be certified as entering its selected child or reaching the join.
+fn StructuredLayout(code: StructuredCode) → Type {
+    match code {
+        CodeBlock(_) => True,
+        CodeSequence(prefix, continuation) => StructuredLayout(prefix) ∧ StructuredLayout(continuation),
+        CodeBranch(_, false_displacement, join_displacement, yes, no) =>
+            ((start: BitVec(64)) → short_branch_target(start, false_displacement) =
+                next_rip(start, 2 + (structured_bytes(yes).len() + 2))) ∧
+            (((start: BitVec(64)) → short_branch_target(start, join_displacement) =
+                next_rip(start, 2 + structured_bytes(no).len())) ∧
+            (StructuredLayout(yes) ∧ StructuredLayout(no))),
+    }
+}
+
+fn StructuredDecodes(code: StructuredCode) → BitVec(64) → Type {
+    match code {
+        CodeBlock(instructions) => λ start => CanonicalBlockDecodes(instructions, start),
+        CodeSequence(prefix, continuation) => λ start => StructuredDecodes(prefix, start) ∧
+            StructuredDecodes(continuation, next_rip(start, structured_bytes(prefix).len())),
+        CodeBranch(register, false_displacement, join_displacement, yes, no) => λ start =>
+            DecodedAt(encoded_at(start, TestRR(register, register)),
+                decoded_canonical(TestRR(register, register))) ∧
+            (ShortControlDecodes(JumpZero(false_displacement)) ∧
+            (StructuredDecodes(yes, next_rip(start, 5)) ∧
+            (ShortControlDecodes(Jump(join_displacement)) ∧
+            StructuredDecodes(no, next_rip(start, 5 + structured_bytes(yes).len() + 2))))),
+    }
+}
+
+record StructuredArtifact<M>(code: StructuredCode, before: MachineState<M>,
+    result_register: Gpr, result: BitVec(64), protected: Gpr → Type)
+{
+    after: MachineState<M>,
+    execution: ExecuteStructured(code, before, after),
+    layout: StructuredLayout(code),
+    decoding: StructuredDecodes(code, before.rip),
+    result_correct: read_gpr(result_register, after.gprs) = result,
+    memory_preserved: after.memory = before.memory,
+    rip_correct: after.rip = next_rip(before.rip, structured_bytes(code).len()),
+    registers_preserved: (register: Gpr) → protected(register) →
+        read_gpr(register, after.gprs) = read_gpr(register, before.gprs),
+}
+
+// Fold a property over the actual machine selector without evaluating either
+// unselected child. Generated proofs supply the local child obligations.
+theorem structured_branch_property<M>(register: Gpr, fd, jd: BitVec(8),
+    yes, no: StructuredCode, before: MachineState<M>,
+    property: MachineState<M> → Type,
+    true_case: property(execute_short_control(Jump(jd),
+        structured_after(yes, structured_branch_entry(register, fd, before)))),
+    false_case: property(structured_after(no, structured_branch_entry(register, fd, before)))):
+    property(structured_after(CodeBranch(register, fd, jd, yes, no), before))
+{
+    match structured_test(register, before).flags.zf as λ selected =>
+        property(match selected {
+            False => execute_short_control(Jump(jd),
+                structured_after(yes, structured_branch_entry(register, fd, before))),
+            True => structured_after(no, structured_branch_entry(register, fd, before)),
+        }) { False => true_case, True => false_case }
+}
+
+// Equality-directed branch reasoning also exposes the actual branch address.
+theorem structured_branch_cases<M>(register: Gpr, fd, jd: BitVec(8),
+    yes, no: StructuredCode, before: MachineState<M>,
+    property: MachineState<M> → Type,
+    true_case: (structured_test(register, before).flags.zf = False) →
+        property(execute_short_control(Jump(jd),
+            structured_after(yes, structured_branch_entry(register, fd, before)))),
+    false_case: (structured_test(register, before).flags.zf = True) →
+        property(structured_after(no, structured_branch_entry(register, fd, before)))):
+    property(structured_after(CodeBranch(register, fd, jd, yes, no), before))
+{
+    (match structured_test(register, before).flags.zf as λ selected =>
+        (structured_test(register, before).flags.zf = selected) →
+        property(match selected {
+            False => execute_short_control(Jump(jd),
+                structured_after(yes, structured_branch_entry(register, fd, before))),
+            True => structured_after(no, structured_branch_entry(register, fd, before)),
+        }) { False => true_case, True => false_case })(refl)
+}
+
+theorem structured_branch_read<M>(register: Gpr, fd, jd: BitVec(8),
+    yes, no: StructuredCode, before: MachineState<M>, output: Gpr):
+    read_gpr(output, structured_after(CodeBranch(register, fd, jd, yes, no), before).gprs) =
+        match structured_test(register, before).flags.zf {
+            False => read_gpr(output, structured_after(yes, structured_branch_entry(register, fd, before)).gprs),
+            True => read_gpr(output, structured_after(no, structured_branch_entry(register, fd, before)).gprs),
+        }
+{
+    match structured_test(register, before).flags.zf as λ selected =>
+        read_gpr(output, (match selected {
+            False => execute_short_control(Jump(jd), structured_after(yes, structured_branch_entry(register, fd, before))),
+            True => structured_after(no, structured_branch_entry(register, fd, before)),
+        }).gprs) = match selected {
+            False => read_gpr(output, structured_after(yes, structured_branch_entry(register, fd, before)).gprs),
+            True => read_gpr(output, structured_after(no, structured_branch_entry(register, fd, before)).gprs),
+        }
+    { False => refl, True => refl }
+}

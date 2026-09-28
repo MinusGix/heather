@@ -1,0 +1,27 @@
+// cp15 — cp7 with the second conjunct's equation moved from `List<T>` to
+// `Nat`: `list_len(rest(source,end)) = 0` says the same thing about the same
+// computed suffix, but its element type is a primitive rather than the
+// Wf-lowered `List`. Against cp7/cp1 this isolates the equation's TYPE.
+import nat;
+import list;
+import logic;
+import result;
+import option;
+import pair;
+import int;
+import omega;
+import parser;
+
+fn CPNatEq<T,A>(
+    relation: (source: List<T>) -> Cursor<T>(source) -> Cursor<T>(source) -> A -> Type,
+    source: List<T>, begin: Cursor<T>(source), end: Cursor<T>(source), value: A) -> Type {
+    And<relation(source,begin,end,value),list_len(rest(source,end)) = 0>
+}
+theorem cp_nateq<T,A>(source: List<T>, begin: Cursor<T>(source), r: Reply<T,A>(source,begin), expected: Nat,
+    relation: (source: List<T>) -> Cursor<T>(source) -> Cursor<T>(source) -> A -> Type):
+    Post(source,begin,relation,r) -> Post(source,begin,CPNatEq<T,A>(relation),
+        bind_at<T,A,A>(source,begin,r,λ value middle forward => map_at(source,middle,eof_at(expected,source,middle),λ (ignored: Nat) => value))) {
+    match r { Err(e) => λ h => trivial, Ok(s) => λ h => match shape : rest(source,s.end) {
+        Nil => And(h,j(sym(shape),λ l q => list_len(l) = 0,refl)), Cons(head,tail) => trivial,
+    } }
+}

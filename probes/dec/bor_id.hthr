@@ -1,0 +1,12 @@
+import bitvec;
+import bool;
+import logic;
+fn place(state, threshold, weight: BitVec(64)) → BitVec(64) {
+    match state.band(BitVec::ofNat(0xffff)).unsigned_lt_bit(threshold) {
+        True => state,
+        False => state.sub(threshold).add(weight),
+    }
+}
+theorem var(x: BitVec(64)): @bitvec::BitVec::bor(64, @bitvec::BitVec::ofNat(64, 0), x) = x { refl }
+theorem deep(x: BitVec(64)): @bitvec::BitVec::bor(64, @bitvec::BitVec::ofNat(64, 0), place(place(place(place(place(place(place(x, BitVec::ofNat(1), BitVec::ofNat(2)), BitVec::ofNat(1), BitVec::ofNat(2)), BitVec::ofNat(1), BitVec::ofNat(2)), BitVec::ofNat(1), BitVec::ofNat(2)), BitVec::ofNat(1), BitVec::ofNat(2)), BitVec::ofNat(1), BitVec::ofNat(2)), BitVec::ofNat(1), BitVec::ofNat(2))) = place(place(place(place(place(place(place(x, BitVec::ofNat(1), BitVec::ofNat(2)), BitVec::ofNat(1), BitVec::ofNat(2)), BitVec::ofNat(1), BitVec::ofNat(2)), BitVec::ofNat(1), BitVec::ofNat(2)), BitVec::ofNat(1), BitVec::ofNat(2)), BitVec::ofNat(1), BitVec::ofNat(2)), BitVec::ofNat(1), BitVec::ofNat(2)) { refl }
+theorem hb(b: Bool): @bitvec::BitVec::head_bit(0, bitvec::BitVec::ofBool(b)) = b { refl }

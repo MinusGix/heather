@@ -1,0 +1,9 @@
+{
+have __bv_range_0: (bitvec::BitVec::toNat(s) < nat::Nat::pow(2, 64)) = bitvec::BitVec::toNat_lt_pow(64, s);
+have __bv_goal: ((__bv_w1: Nat) → (__bv_h1: __bv_w1 + (0) = (nat::Nat::mul(1099511627776, c))) → nat::Nat::Le(Succ(bitvec::BitVec::toNat(s)), __bv_w1)) = λ __bv_w1 __bv_h1 => omega;
+have __bv_obligations: ((nat::Nat::mul(1099511627776, c)) < nat::Nat::pow(2, 64)) = omega;
+have __bv_0: (bitvec::BitVec::toNat(s) + (0) = (bitvec::BitVec::toNat(s))) = bitvec_omega::leaf_affine(64, s);
+have __bv_1: (bitvec::BitVec::toNat(bitvec::BitVec::ofNat(nat::Nat::mul(1099511627776, c), n := 64)) + (0) = (nat::Nat::mul(1099511627776, c))) = bitvec_omega::ofNat_affine(64, nat::Nat::mul(1099511627776, c), nat::Nat::mul(1099511627776, c), 0, __bv_obligations, refl);
+have __bv_obligations = trivial;
+__bv_goal(bitvec::BitVec::toNat(bitvec::BitVec::ofNat(nat::Nat::mul(1099511627776, c), n := 64)), __bv_1)
+}

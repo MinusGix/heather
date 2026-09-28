@@ -1,0 +1,16 @@
+// Arm 1 reproducer (`docs/instance-match-quote-arm-design.md` §1): one
+// `Certified` read, whose `A` argument is the primitive `Nat`. Expected
+// decline: `instance_match Certified identity-match-El/Nat`.
+import nat;
+import list;
+import logic;
+import parser;
+
+inductive ATok { AA, AB }
+fn AR(source: List<ATok>, begin: Cursor<ATok>(source), end: Cursor<ATok>(source), value: Nat) -> Type {
+    nat::Le(begin.offset, end.offset)
+}
+fn ia_one(source: List<ATok>, begin: Cursor<ATok>(source),
+    a: Certified<ATok,Nat>(source,begin,AR)) -> nat::Le(begin.offset, a.end.offset) {
+    a.forward
+}

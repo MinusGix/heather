@@ -1,0 +1,8 @@
+import logic;
+import bool;
+import nat;
+import bitvec;
+fn e01(m, k: Nat, x: BitVec(m + Succ(k))) → Bool { x.head_bit() }
+fn e03(m, k: Nat, x: BitVec(Succ(m + k))) → Bool { x.head_bit() }
+fn e05(m, k: Nat, x: BitVec(m + Succ(k))) → BitVec(Succ(m + k)) { x }
+fn e06(k: Nat, x: BitVec(k + 1)) → Bool { x.head_bit() }

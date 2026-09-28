@@ -1,0 +1,10 @@
+import bitvec;
+import logic;
+import nat;
+import omega;
+import bitvec_nat;
+import bitvec_omega;
+import decimal_line;
+
+theorem bv_line_state_start(n: Nat, small: n < 10000): line_state_start(n).toNat() = 1099511627776 * n + 43758137392 { bv_omega }
+

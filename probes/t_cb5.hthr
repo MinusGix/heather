@@ -1,0 +1,32 @@
+// `t_cb1` with a relation that ignores its cursors (`True`): the `evidence`
+// field is `trivial` and the `forward` chain is the only proof left., on the real library `Certified` (whose third value
+// parameter is FUNCTION-typed): three chained receivers, a `result::fold` over
+// a recognized reply, and an `Ok(Certified(...))` whose `forward` field is two
+// chained `le_trans` over projected cursors.
+import nat;
+import list;
+import logic;
+import result;
+import option;
+import pair;
+import int;
+import omega;
+import parser;
+
+inductive CTok { CA, CB }
+fn CR(source: List<CTok>, begin: Cursor<CTok>(source), end: Cursor<CTok>(source), value: Nat) -> Type {
+    True
+}
+fn cb_trivrel(source: List<CTok>, begin: Cursor<CTok>(source),
+    op: Certified<CTok,Nat>(source,begin,CR),
+    inner: Certified<CTok,Nat>(source,op.end,CR),
+    r: Result<Certified<CTok,Nat>(source,inner.end,CR),Failure<CTok>(source)>)
+    -> Result<Certified<CTok,Nat>(source,begin,CR),Failure<CTok>(source)> {
+    result::fold<Certified<CTok,Nat>(source,inner.end,CR),Failure<CTok>(source),Result<Certified<CTok,Nat>(source,begin,CR),Failure<CTok>(source)>>(r,
+        λ (close: Certified<CTok,Nat>(source,inner.end,CR)) =>
+            Ok(Certified(inner.value,close.end,
+                nat::le_trans(begin.offset,op.end.offset,close.end.offset,op.forward,
+                    nat::le_trans(op.end.offset,inner.end.offset,close.end.offset,inner.forward,close.forward)),
+                trivial)),
+        λ (e: Failure<CTok>(source)) => Err(e))
+}

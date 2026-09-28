@@ -1,9 +1,9 @@
 ---
 title: Report test-target outcomes immediately while retaining grouped logs
-status: open
+status: closed
 labels: [tooling,testing,diagnostics]
 created: 2026-09-08
-updated: 2026-09-08
+updated: 2026-09-28
 ---
 
 `scripts/run-test-targets.mjs` buffers each target's output and prints full
@@ -26,3 +26,7 @@ failure diagnosis and makes a completed target easy to mistake for a pass.
 
 - [[generated-proof-cost-diagnostics]] owns checker-level attribution; this issue
   owns delivery of test outcomes already available to the runner.
+
+## Log
+
+- 2026-09-28: LANDED: completion messages now distinguish PASS, FAIL, TERMINATED (with signal), and INCOMPLETE (with exit status and summary count), retaining wall/CPU timings. Failures print up to eight excerpt lines, capped at 160 characters each, in the same write as the completion; output truncation is explicit. Final grouped output, accounting, rails and scheduling policy are unchanged. The Node runner tests cover outcome classification, excerpt bounds, killed children, truncated output, reporting while another target remains active, keep-going and fail-fast. Validation: 13 Node tests passed. Final plain `scripts/test`: 3,025 passed, 0 failed, 5 ignored.

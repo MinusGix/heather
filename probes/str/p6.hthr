@@ -1,0 +1,48 @@
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import char;
+import string;
+
+class Sequence<S, T> {
+    view: S → List<T>,
+    seq_len: S → Nat,
+    seq_drop: S → Nat → S,
+    len_view: (s: S) → seq_len(s) = list_len(view(s)),
+    drop_view: (s: S) → (n: Nat) → view(seq_drop(s, n)) = list::drop(view(s), n),
+}
+
+instance<A> Sequence<List<A>, A> {
+    view := λ (xs: List<A>) => xs,
+    seq_len := λ (xs: List<A>) => list_len(xs),
+    seq_drop := λ (xs: List<A>) (n: Nat) => list::drop(xs, n),
+    len_view := λ (xs: List<A>) => refl,
+    drop_view := λ (xs: List<A>) (n: Nat) => refl,
+}
+
+instance Sequence<String, Char> {
+    view := λ (s: String) => s.chars,
+    seq_len := λ (s: String) => s.len(),
+    seq_drop := λ (s: String) (n: Nat) => string::drop(s, n),
+    len_view := λ (s: String) => refl,
+    drop_view := λ (s: String) (n: Nat) => refl,
+}
+
+// A cursor indexed by an abstract source, the way the parser's is by a list.
+record Cursor<S, T: Sequence<S, T>>(source: S) {
+    identity: source = source,
+    offset: Nat,
+    within: nat::Le(offset, S.seq_len(source)),
+}
+
+// The keystone: a consumer that FIXES its token type and stays polymorphic in
+// the source, the way a grammar must.
+fn digit_head<S: Sequence<Char>>(source: S) → Option<Nat> {
+    match S.view(source) { Nil => None, Cons(c, t) => Some(nat::sub(c.code, 0x30)) }
+}
+
+theorem on_string(): digit_head("7x") = Some(7) { refl }
+theorem on_charlist(): digit_head(Cons('7', Nil<Char>)) = Some(7) { refl }

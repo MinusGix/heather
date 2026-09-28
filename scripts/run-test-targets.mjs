@@ -222,6 +222,32 @@ export function targetIncomplete(run) {
   return Boolean(run.signal) || run.code === null || run.result.resultLines !== 1;
 }
 
+export function targetOutcome(run) {
+  if (run.signal) return `TERMINATED (signal=${run.signal})`;
+  if (targetIncomplete(run)) return `INCOMPLETE (exit=${run.code ?? "none"}, result-lines=${run.result.resultLines})`;
+  if (run.code !== 0 || run.result.failed) return `FAIL (exit=${run.code}, ${run.result.failed} failed)`;
+  return `PASS (${run.result.passed} passed, ${run.result.ignored} ignored)`;
+}
+
+// One write per completion keeps concurrent targets' messages together. The
+// excerpt is bounded even when a panic prints a huge term; the buffered logs
+// still follow in label order when all scheduled targets have finished.
+export function completionMessage(run, completed, total) {
+  const cpu = run.cpu === null ? "" : `, ${run.cpu.toFixed(1)} CPU-s`;
+  const lines = [`[done  ${completed}/${total}] ${run.target.label}: ${targetOutcome(run)} (${run.wall.toFixed(2)}s${cpu})`];
+  if (targetIncomplete(run) || run.code !== 0 || run.result.failed) {
+    const output = run.output.split("\n").filter((line) => line.trim());
+    const start = output.findIndex((line) => /^(failures:|thread .*panicked|test .*\.\.\. FAILED|error[:\[])/.test(line));
+    const excerpt = start < 0 ? output.slice(-8) : output.slice(start, start + 8);
+    for (const line of excerpt) lines.push(`  | ${line.length > 160 ? line.slice(0, 159) + "…" : line}`);
+    if (output.length > excerpt.length || excerpt.some((line) => line.length > 160)) {
+      lines.push("  | … buffered log follows after targets finish");
+    }
+  }
+  if (run.truncated) lines.push(`  | output truncated after ${OUTPUT_LIMIT} bytes`);
+  return lines.join("\n") + "\n";
+}
+
 // Kernel-gate width for a suite child. The default is eight
 // (`HEATHER_KERNEL_WORKERS`, crates/elab/src/pool.rs), which is right for one
 // interactive `heather check` on an idle box and wrong underneath a scheduler
@@ -338,7 +364,7 @@ function readOwnCgroupValue(name) {
   }
 }
 
-async function runTargets(targets, jobs, libtestArgs, keepGoing, extraEnv = {}) {
+export async function runTargets(targets, jobs, libtestArgs, keepGoing, extraEnv = {}) {
   const pending = [...targets];
   const completed = [];
   let active = 0;
@@ -366,8 +392,7 @@ async function runTargets(targets, jobs, libtestArgs, keepGoing, extraEnv = {}) 
           if (run.code !== 0 || run.signal || run.result.resultLines !== 1) failed = true;
           completed.push(run);
           active--;
-          const cpu = run.cpu === null ? "" : `, ${run.cpu.toFixed(1)} CPU-s`;
-          process.stdout.write(`[done  ${completed.length}/${targets.length}] ${target.label} (${run.wall.toFixed(2)}s${cpu})\n`);
+          process.stdout.write(completionMessage(run, completed.length, targets.length));
           pump();
         });
         if (target.exclusive) break;

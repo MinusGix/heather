@@ -1,0 +1,20 @@
+// cp3 — cp2 minus the `eof_at`/`map_at` continuation and the inner match:
+// the same `bind_at` over the same open `r`, continued by `pure_at`, so the
+// reply is still built by a combinator but nothing is stuck on
+// `rest(source, s.end)`.
+import nat;
+import list;
+import logic;
+import result;
+import option;
+import pair;
+import int;
+import omega;
+import parser;
+
+theorem cp_pure<T,A>(source: List<T>, begin: Cursor<T>(source), r: Reply<T,A>(source,begin), expected: Nat,
+    relation: (source: List<T>) -> Cursor<T>(source) -> Cursor<T>(source) -> A -> Type):
+    Post(source,begin,relation,r) -> Post(source,begin,relation,
+        bind_at<T,A,A>(source,begin,r,λ value middle forward => pure_at(source,middle,value))) {
+    match r { Err(e) => λ h => trivial, Ok(s) => λ h => h }
+}

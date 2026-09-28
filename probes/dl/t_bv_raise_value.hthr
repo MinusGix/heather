@@ -1,0 +1,10 @@
+import bitvec;
+import logic;
+import nat;
+import omega;
+import bitvec_nat;
+import bitvec_omega;
+import decimal_line;
+
+theorem bv_raise_value(n: Nat, small: n < 16384): raise(bitvec_nat::word_of_nat(64, n)).toNat() = n * 1099511627776 { bv_omega }
+

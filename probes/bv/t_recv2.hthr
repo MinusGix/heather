@@ -1,0 +1,11 @@
+import logic;
+import bool;
+import nat;
+import list;
+import bitvec;
+fn a03(n: Nat) → BitVec(n) { BitVec::iterate_increment(BitVec::zero(), 3) }
+fn a04(n: Nat) → Type { BitVec::band(BitVec::zero(), BitVec::zero()) = @BitVec::zero(n) }
+fn a05(xs: List<Nat>) → Nat { List::len(List::append(Nil, xs)) }
+fn a06() → Nat { List::len(Nil) }
+fn a07(n: Nat) → Nat { (@BitVec::ofNat(n, 3)).toNat() }
+fn a08(n: Nat) → Nat { BitVec::toNat(BitVec::ofNat(3)) }

@@ -1,0 +1,8 @@
+import nat;
+inductive Step { Go(next: Nat), Stop(result: Nat) }
+fn payload(s: Step) → Nat { match s { Go(p) => p, Stop(p) => p } }
+fn dbl(n: Nat) → Nat { n + n }
+// The per-arm spelling as the whole body.
+theorem as_body(r: Step, w: Nat, h: w = match r { Go(p) => dbl(p), Stop(p) => dbl(p) }): w = dbl(payload(r)) {
+    h
+}

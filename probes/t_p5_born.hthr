@@ -1,0 +1,29 @@
+// P5: born packed vs born structural, on the SAME value.
+// `bitvec::all_ones`/`zero` are `repeat_bit`, an elim_Nat on the width with
+// no peeled argument and a cons output — which round 3's transducer class
+// already classifies, so they are produced as a Val::BitRun. The same value
+// written as a [Bool; 64] literal is 64 Term::Pairs. The three rows below
+// are word/word, word/literal and literal/literal at one value, which is
+// what candidate 1 (a packed vector-literal term) would move and by how much.
+// Re-measure with a FRESH --cache-dir (see probes/README.md).
+
+import bitvec;
+import bool;
+
+theorem p5_ww_64(): bitvec::all_ones(64) = bitvec::all_ones(64) { refl }
+
+theorem p5_wl_64(): bitvec::all_ones(64) = bitvec::from_bits(64, [True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True]) { refl }
+
+theorem p5_ll_64(): bitvec::from_bits(64, [True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True]) = bitvec::from_bits(64, [True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True]) { refl }
+
+theorem p5_zz_64(): bitvec::zero(64) = bitvec::from_bits(64, [False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False]) { refl }
+
+theorem p5_ww_8(): bitvec::all_ones(8) = bitvec::all_ones(8) { refl }
+
+theorem p5_wl_8(): bitvec::all_ones(8) = bitvec::from_bits(8, [True, True, True, True, True, True, True, True]) { refl }
+
+theorem p5_ll_8(): bitvec::from_bits(8, [True, True, True, True, True, True, True, True]) = bitvec::from_bits(8, [True, True, True, True, True, True, True, True]) { refl }
+
+theorem p5_tonat_word(): bitvec::toNat(64, bitvec::all_ones(64)) = 18446744073709551615 { refl }
+
+theorem p5_tonat_lit(): bitvec::toNat(64, bitvec::from_bits(64, [True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True])) = 18446744073709551615 { refl }

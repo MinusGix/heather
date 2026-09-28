@@ -1,0 +1,16 @@
+fn bare_character() -> Char { 'a' }
+fn parenthesized_character() -> Char { ('a') }
+fn character_argument() -> Char { g('a') }
+fn nested_characters() -> List<Char> { Cons('(', Cons('+', Cons(')', tail))) }
+fn escaped_characters() -> List<Char> { ['\n', '\t', '\r', '\\', '\'', '\"', '\0', '\u{1F600}', 'λ', '😀', ' '] }
+fn strings() -> List<String> { ["", "// still a string", "a\n\t\r\\\'\"\0\u{1F600}😀"] }
+fn parenthesized_string() -> String { ("text") }
+fn string_argument() -> String { g("text") }
+fn literal_scrutinee() -> Nat { match 'a' { x => 0 } }
+fn string_scrutinee() -> Nat { match "text" { x => 0 } }
+theorem literal_type(): 'a' = 'a' { refl }
+theorem string_type(): "text" = "text" { refl }
+theorem identity_chain(): X { calc { a = b := p, = c := q, } }
+theorem relational_step(): X { calc { a ≈ b := p } }
+theorem relational_chain(): X { calc { a ≈ b := p, ≈ c := q, ≈ d := r, } }
+theorem nested_endpoints(): X { calc { (a ≈ b) ≈ (c ≈ d) := p, ≈ (e ≈ f) := q } }

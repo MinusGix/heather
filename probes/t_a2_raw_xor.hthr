@@ -1,0 +1,23 @@
+// A2: the same xor over [Bool; n] — no record, no from_bits/cons_bit/head_bit/tail_bits.
+// Probe file for docs/native-bitvector-values-design.md §2.
+// Re-measure with a FRESH --cache-dir (see probes/README.md).
+
+import bitvec;
+import bool;
+
+fn xor_bit_p(a, b: Bool) → Bool { match a { False => b, True => bool::not(b) } }
+
+fn xor_raw(n: Nat) → [Bool; n] → [Bool; n] → [Bool; n] {
+    match n as λ k => [Bool; k] → [Bool; k] → [Bool; k] {
+        Zero => λ x y => [],
+        Succ(k, ih) => λ x y => cons(xor_bit_p(head(x), head(y)), ih(tail(x), tail(y))),
+    }
+}
+
+theorem a2_xor_raw_8(): xor_raw(8, [True, False, True, False, True, False, True, False], [True, True, True, True, True, True, True, True]) = [False, True, False, True, False, True, False, True] { refl }
+
+theorem a2_xor_raw_16(): xor_raw(16, [True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False], [True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True]) = [False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True] { refl }
+
+theorem a2_xor_raw_32(): xor_raw(32, [True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False], [True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True]) = [False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True] { refl }
+
+theorem a2_xor_raw_64(): xor_raw(64, [True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False], [True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True]) = [False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True] { refl }

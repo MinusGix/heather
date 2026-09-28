@@ -1,0 +1,10 @@
+import logic;
+import nat;
+import list;
+record R(n: Nat) { x: Nat, p: x = n }
+fn get(k: Nat) → Nat { k }
+fn R::get({n: Nat}, self r: R(n)) → Nat { r.x }
+fn b01(n: Nat, r: R(n)) → Nat { r.get() }
+fn b02(xs: List<Nat>) → Nat { xs.len() }
+fn len(k: Nat) → Nat { k }
+fn b03(xs: List<Nat>) → Nat { xs.len() }

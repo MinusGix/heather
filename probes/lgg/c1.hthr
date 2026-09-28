@@ -1,0 +1,2 @@
+inductive Wrap { Mk(n: Nat, ok: n = n) }
+theorem t(a: Nat, b: Nat, p: a = b): Mk(a, refl) = Mk(b, refl) { cong(p) }

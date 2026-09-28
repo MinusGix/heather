@@ -30,3 +30,35 @@ separate from the failure paths ([[linux-syscall-trace-model]]).
 - `read_print_runs`'s conclusion can be restated as: every run from
   `io_initial` that follows the history's responses produces
   `eof_events(…)`.
+
+## Log
+
+- 2026-09-27: First proof boundary landed in the working tree (see
+  `docs/fetched-step-determinism-design.md`). Canonical ordinary bytes have a
+  unique decoded instruction; equal-length successful fetches from one memory
+  and RIP return equal bytes. `Execute` outcomes for the same decoded
+  instruction agree on all state components except TEST's undefined AF.
+  Byte loads have a unique result for a fixed load and state, and two
+  executions of a fixed emitted instruction agree on defined components.
+  These lemmas kernel-check through the read-loop library; the full suite
+  passed (3023 tests, 0 failures, 5 ignored). The issue
+  remains open: cross-family byte selection, congruence across states that
+  differ only in AF, syscall exclusion, and the universal process theorem are
+  still required for acceptance.
+- 2026-09-27: The AF congruence slice kernel-checks. Erasing AF from a state
+  makes `SameDefinedState` an equality, and ordinary execution plus short and
+  near branches commute with that erasure. Byte loads read the same byte from
+  related states; word stores write the same bytes at the same address.
+  `EmittedExecutes`, `FetchedStep`, and `StoreStep` now preserve the relation
+  when their emitted witnesses agree. Fetch heads agree at a common address,
+  and short/near branch encoders are injective through their decoders.
+  Remaining: prove that the fetched bytes choose one witness across all
+  emitted families, then lift step agreement through `LinuxRuns` to the
+  universal claim.
+- 2026-09-27: The same-length fetch result was strengthened from one state
+  to two states equal on defined components. It selects the same canonical
+  ordinary instruction and gives related outputs; the short branch case
+  selects its control without a length assumption. The near branch case has
+  the same theorem given equal lengths. All are kernel-checked. The
+  cross-family selector and the near length argument remain open. Full suite:
+  3023 passed, 0 failed, 5 ignored.

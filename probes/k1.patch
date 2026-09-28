@@ -1,0 +1,729 @@
+diff --git a/crates/kernel/DESIGN.md b/crates/kernel/DESIGN.md
+index b954807..da3e217 100644
+--- a/crates/kernel/DESIGN.md
++++ b/crates/kernel/DESIGN.md
+@@ -325,20 +325,39 @@ the same closed-prefix-over-a-tail shape, the same virtual predecessor on
+ the way out, and the same generality — nothing in it names a library type or
+ definition.
+ 
+-Adequacy is bisimulation. *Values mean the same*: a word unpacks to the pair
+-the `Vec` rule builds, with the element type's own injections and their
+-canonical payloads, so every consumer that matched on `Pair` sees what it
+-saw before; a bit whose payload is not canonical does not pack. *Reduction
+-is unchanged*: nothing in the evaluator produces a word yet — entry is
+-**pack-on-demand at conversion**, where the type is in hand and the walk is
+-the one η was about to perform. Conversion compares two vectors over such an
+-element type by their words, before Σ-η, packing a structural side by the
+-`fst`/`snd` η would have taken; a side that is two stuck spines is left to
+-the neutral-first guard. Native steps charge one fuel unit per bit, which is
+-strictly less than the structural path spent, so no verdict that fuel
+-allowed becomes a refusal. What does not meet the criterion — an element
+-type with a payload of its own, an open width, a chain that stops being a Σ
+-— is compared exactly as it is today.
++Adequacy is bisimulation, in two parts. *Values mean the same*: a word
++unpacks to the pair the `Vec` rule builds, with the element type's own
++injections and their canonical payloads, so every consumer that matched on
++`Pair` sees what it saw before; a bit whose payload is not canonical does not
++pack. *Reduction is unchanged*: a fold over a **width** — which is what every
++bitvector operation is, `elim_Nat` whose motive at `Succ k` is a function
++type over vectors — is classified (`eval/transduce.rs`) as a **bit
++transducer** when, at every combination of closed head bits and of a finitely
++enumerable state, one application of its step reduces to `cons(closed bit,
++ih(tails, closed state))` with the tails reached by projection paths of
++neutral probe variables. Such a fold is iterated over the word instead of
++being taken one bit at a time. The neutral tails are the substitution
++property, as in the `Nat` classes: a probe value with no stuck case split on
++them was reached by a reduction that holds at every instantiation. The bits
++and the state are not an argument at all but a truth table, exhaustive
++because both types are finite. Consumers into `Nat`/`Bool` are the same
++machine with a different output algebra — a finite value, or a run
++endomorphism `ih ↦ q·ih + r`, which is the affine tree with a scale. The
++argument modes come from the eliminator's **motive**, never from a
++definition's spelling; the library's vectors sit inside a record, so a
++peeled argument is a `Vec` in a unit-like Σ-context and the class carries the
++projection path to it.
++
++Conversion compares two vectors over such an element type by their words,
++before Σ-η, packing a structural side by the `fst`/`snd` η would have taken;
++a side that is two stuck spines is left to the neutral-first guard, and a
++difference settles the comparison at the bit it appears on. Native steps
++charge one fuel unit per bit, which is strictly less than the structural path
++spent, so no verdict that fuel allowed becomes a refusal. What does not
++classify — an open `Fin` index, a recursion on a shift count, a state type
++above the cap — folds exactly as it does today, and what does not meet the
++criterion — an element type with a payload of its own, an open width, a chain
++that stops being a Σ — is compared exactly as it is today.
+ 
+ Owed to ch. 07: the logical relation interprets a bodied `u` at p by its
+ body (definitional glueing) and at c as a neutral, and the fundamental
+diff --git a/crates/kernel/src/conv/dom/values.rs b/crates/kernel/src/conv/dom/values.rs
+index 25f5b8b..bdd413c 100644
+--- a/crates/kernel/src/conv/dom/values.rs
++++ b/crates/kernel/src/conv/dom/values.rs
+@@ -793,6 +793,7 @@ impl<'v> Dom<'v> for Values {
+             Val::Lam { .. }
+             | Val::BitRun { .. }
+             | Val::NatSync { .. }
++            | Val::BitFold { .. }
+             | Val::ULam { .. }
+             | Val::CtxLam { .. }
+             | Val::TyLam { .. }
+diff --git a/crates/kernel/src/eval.rs b/crates/kernel/src/eval.rs
+index 8f1e2cd..89b07b8 100644
+--- a/crates/kernel/src/eval.rs
++++ b/crates/kernel/src/eval.rs
+@@ -67,6 +67,7 @@ use crate::value::program::ContextProgram;
+ mod bits;
+ mod probe;
+ mod runs;
++mod transduce;
+ 
+ type Res<T> = Result<T, OutOfFuel>;
+ 
+@@ -260,6 +261,22 @@ impl<'a, 'v> Eval<'a, 'v> {
+         Ok(())
+     }
+ 
++    /// [`Eval::spend`] in bulk: one unit per bit a native step consumed or
++    /// produced (`docs/native-bitvector-values-design.md` §8). Charging
++    /// *something* proportional to the data keeps `eval_steps` an
++    /// interpretable measure and keeps a pathological width from being free;
++    /// charging at most what the structural path charged is what keeps a
++    /// verdict fuel allows today from becoming a refusal.
++    fn spend_n(&mut self, n: u64) -> Res<()> {
++        if self.fuel < n {
++            self.fuel = 0;
++            return Err(OutOfFuel);
++        }
++        self.fuel -= n;
++        self.steps += n;
++        Ok(())
++    }
++
+     /// A Γ of the right *shape* for the shared β helpers, which read only its
+     /// length and base (`reduce.rs` module doc). The entry types are never
+     /// inspected, so a filler suffices — and building one is confined to the
+@@ -1399,6 +1416,11 @@ impl<'a, 'v> Eval<'a, 'v> {
+             // open-argument unfolding theorems meet at a *folded* scrutinee
+             // (`match decode_opcode_direct(…)` on both sides), and unfolding
+             // it eagerly exhausts fuel on the dispatch it hides.
++            // Only the `Nat` classes ask this: their scrutinee is closed
++            // arithmetic whenever the fold can fire at all. A width fold's
++            // scrutinee is the *width*, which reaches the eliminator as a
++            // literal; probing every glued-scrutinee fold for a transducer
++            // costs a motive walk per occurrence and buys nothing.
+             if let (Some(unfold), Elim::ElimNat { step, .. }) = (n.unfold, &e) {
+                 if !matches!(&*self.classify_step(step)?, FoldClass::Opaque) {
+                     self.spend()?;
+@@ -1422,6 +1444,11 @@ impl<'a, 'v> Eval<'a, 'v> {
+             return Ok(Work::Val(self.push_elim(&n, e)));
+         }
+         match (&*head, &e) {
++            // A width fold waiting for the arguments its class fires at
++            // (`docs/native-bitvector-values-design.md` §4).
++            (Val::BitFold { .. }, Elim::App { .. }) => {
++                return self.bit_fold_app(&head, e);
++            }
+             (
+                 Val::NatSync { program, tail, elim },
+                 Elim::App { dom_level, cod_level, dom, cod, arg },
+diff --git a/crates/kernel/src/eval/bits.rs b/crates/kernel/src/eval/bits.rs
+index 90934f6..7be4374 100644
+--- a/crates/kernel/src/eval/bits.rs
++++ b/crates/kernel/src/eval/bits.rs
+@@ -36,7 +36,7 @@ use super::{Eval, Res};
+ /// `O(log id_D)` deep and this is slack of several orders. The bound exists
+ /// so that neither the criterion nor the payload check can recurse on the
+ /// native stack over an adversarial type.
+-const UNIT_NEST_LIMIT: u32 = 64;
++pub(crate) const UNIT_NEST_LIMIT: u32 = 64;
+ 
+ /// A common prefix of two vectors, read as two machine words
+ /// (design §7): at least one bit was consumed from each side, and
+@@ -127,7 +127,7 @@ impl<'v> Eval<'_, 'v> {
+     /// makes the reading total for a dependent nest as well as a constant
+     /// one; the pair keeps the **uninstantiated** tail as its annotation,
+     /// which is where a pair's `snd_ty` is scoped.
+-    fn unit_inhabitant(
++    pub(crate) fn unit_inhabitant(
+         &mut self,
+         ty: &'v TyClo<'v>,
+         depth: u32,
+@@ -171,7 +171,7 @@ impl<'v> Eval<'_, 'v> {
+     /// makes unpacking reproduce the same value rather than a merely
+     /// convertible one (design §3.1); anything else does not pack and stays
+     /// structural.
+-    fn bit_of(&mut self, v: &Rc<Val<'v>>) -> Res<Option<bool>> {
++    pub(crate) fn bit_of(&mut self, v: &Rc<Val<'v>>) -> Res<Option<bool>> {
+         let (bit, payload) = match &**v {
+             Val::Inl { val, .. } => (false, *val),
+             Val::Inr { val, .. } => (true, *val),
+@@ -184,7 +184,7 @@ impl<'v> Eval<'_, 'v> {
+         })
+     }
+ 
+-    fn is_canonical_unit(&mut self, c: &'v TmClo<'v>, depth: u32) -> Res<bool> {
++    pub(crate) fn is_canonical_unit(&mut self, c: &'v TmClo<'v>, depth: u32) -> Res<bool> {
+         if depth == 0 {
+             return Ok(false);
+         }
+@@ -277,6 +277,14 @@ impl<'v> Eval<'_, 'v> {
+             left = l_rest;
+             right = r_rest;
+             out_ty = sigma.snd;
++            // Two canonical bits that differ settle the comparison: the
++            // element type has exactly two inhabitants and they are
++            // different injections, so no residual can rescue the pair.
++            // Stopping here is what makes a difference at bit 0 cost one
++            // projection and not a whole word's worth (design §8).
++            if l_bit != r_bit {
++                break;
++            }
+             let w = self.force_ty(sigma.snd)?;
+             let VTy::Sigma { fst, snd, .. } = &*w else { break };
+             // The next component is a bit only if it is at the same element
+@@ -315,3 +323,155 @@ impl<'v> Eval<'_, 'v> {
+         }))
+     }
+ }
++
++#[cfg(test)]
++mod tests {
++    //! The round trips design §8 asks for, seed-only in the `law!` spirit:
++    //! a failing case is reported by its seed, because a disagreeing word is
++    //! exactly the value that would fill a log.
++
++    use super::*;
++    use crate::reduce::Defs;
++    use crate::term::{CtxBase, Type};
++    use crate::value::{Env, ValueArena, BIT_RUN_WIDTH_CAP};
++
++    const FUEL: u64 = 1_000_000;
++
++    /// `Unit + Unit`: the smallest type that meets the criterion.
++    fn elem_ty<'v>(arena: &'v ValueArena<'v>) -> &'v TyClo<'v> {
++        let unit = || Rc::new(Type::Unit { level: Level::Zero });
++        arena.ty(TyClo::new(
++            Env::empty(),
++            Rc::new(Type::Sum {
++                lhs_level: Level::Zero,
++                rhs_level: Level::Zero,
++                lhs: unit(),
++                rhs: unit(),
++            }),
++        ))
++    }
++
++    fn lcg(seed: &mut u64) -> u64 {
++        *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
++        *seed >> 33
++    }
++
++    #[test]
++    fn unpacking_a_run_one_bit_at_a_time_reads_back_the_word() {
++        let arena = ValueArena::new();
++        let mut seed = 21;
++        for case in 0..64u64 {
++            let width = (lcg(&mut seed) % u64::from(BIT_RUN_WIDTH_CAP)) as u32 + 1;
++            let bits = lcg(&mut seed) & mask(width);
++            let mut ev = Eval::new(FUEL, Defs::opaque(), CtxBase::Nil, &arena);
++            let elem = elem_ty(&arena);
++            let run = ev
++                .closed_bit_run(&Level::Zero, elem, width, bits)
++                .expect("fuel")
++                .expect("the criterion holds");
++            // Walk the Σ-chain the run stands for, one `Pair` at a time.
++            let mut read = 0u64;
++            let mut cur = Rc::new(run);
++            for i in 0..width {
++                let Val::BitRun { level, ty, width: w, bits: b, tail_len, tail } = &*cur else {
++                    panic!("seed {case}: chain ended at bit {i}");
++                };
++                let pair =
++                    Val::bit_run_unpack(&arena, level, ty, *w, *b, tail_len, tail);
++                let Val::Pair { fst, snd, .. } = pair else { unreachable!() };
++                let head = ev.force(fst).expect("fuel");
++                let bit = ev.bit_of(&head).expect("fuel").expect("a bit value");
++                read |= u64::from(bit) << i;
++                cur = ev.force(snd).expect("fuel");
++            }
++            assert_eq!(read, bits, "seed {case}");
++            assert!(matches!(&*cur, Val::Triv { .. }), "seed {case}: tail is not ⟨⟩");
++        }
++    }
++
++    #[test]
++    fn packing_two_runs_reads_both_words_and_stops_at_the_first_difference() {
++        let arena = ValueArena::new();
++        let mut seed = 33;
++        for case in 0..64u64 {
++            let width = (lcg(&mut seed) % u64::from(BIT_RUN_WIDTH_CAP)) as u32 + 1;
++            let a = lcg(&mut seed) & mask(width);
++            let b = lcg(&mut seed) & mask(width);
++            let mut ev = Eval::new(FUEL, Defs::opaque(), CtxBase::Nil, &arena);
++            let elem = elem_ty(&arena);
++            let left = ev.closed_bit_run(&Level::Zero, elem, width, a).unwrap().unwrap();
++            let right = ev.closed_bit_run(&Level::Zero, elem, width, b).unwrap().unwrap();
++            // The Σ-tail of the *first* pair: a `Vec` at one less than the
++            // words' width, which is the type `pack_bit_prefix` walks in
++            // lockstep with the values.
++            let mut len = ev.vclo(Rc::new(Val::Zero));
++            for _ in 1..width {
++                len = ev.vclo(Rc::new(Val::Succ(len)));
++            }
++            let tail_ty = arena.ty_vec(Level::Zero, elem, len);
++            let prefix = ev
++                .pack_bit_prefix(&Level::Zero, elem, tail_ty, Rc::new(left), Rc::new(right))
++                .expect("fuel");
++            let prefix = prefix.expect("at least one bit packs");
++            let differ = a ^ b;
++            if differ == 0 {
++                assert_eq!(prefix.left_bits, a, "seed {case}");
++                assert_eq!(prefix.right_bits, b, "seed {case}");
++            } else {
++                // The walk stops one bit past the first difference, so the
++                // words differ — which is the verdict — and no more bits
++                // than that were ever projected.
++                assert_ne!(prefix.left_bits, prefix.right_bits, "seed {case}");
++                let taken = 64 - prefix.left_bits.leading_zeros().min(63);
++                assert!(taken <= differ.trailing_zeros() + 1, "seed {case}");
++            }
++        }
++    }
++
++    #[test]
++    fn a_word_over_wide_by_one_keeps_its_last_bit_in_the_tail() {
++        // The cap is a *representation* bound, not a semantic one: the bit
++        // past it is the residual's, and it must still be there.
++        let arena = ValueArena::new();
++        let mut ev = Eval::new(FUEL, Defs::opaque(), CtxBase::Nil, &arena);
++        let elem = elem_ty(&arena);
++        assert!(ev
++            .closed_bit_run(&Level::Zero, elem, BIT_RUN_WIDTH_CAP, u64::MAX)
++            .unwrap()
++            .is_some());
++        // One more bit does not fit: `bit_run_cons` refuses at the cap, and
++        // the caller keeps a structural pair over the run.
++        let Some(Val::BitRun { ty, width, bits, tail_len, tail, .. }) = ev
++            .closed_bit_run(&Level::Zero, elem, BIT_RUN_WIDTH_CAP, 0)
++            .unwrap()
++        else {
++            panic!("the criterion holds")
++        };
++        assert!(
++            Val::bit_run_cons(&Level::Zero, ty, true, width, bits, tail_len, tail).is_none()
++        );
++        // Below the cap it fits, and the new bit is the head.
++        let Some(Val::BitRun { bits, width, .. }) = ev
++            .closed_bit_run(&Level::Zero, elem, BIT_RUN_WIDTH_CAP - 1, 0)
++            .unwrap()
++            .and_then(|v| {
++                let Val::BitRun { ty, width, bits, tail_len, tail, .. } = v else {
++                    unreachable!()
++                };
++                Val::bit_run_cons(&Level::Zero, ty, true, width, bits, tail_len, tail)
++            })
++        else {
++            panic!("one more bit fits below the cap")
++        };
++        assert_eq!(width, BIT_RUN_WIDTH_CAP);
++        assert_eq!(bits & 1, 1);
++    }
++
++    fn mask(width: u32) -> u64 {
++        if width >= 64 {
++            u64::MAX
++        } else {
++            (1u64 << width) - 1
++        }
++    }
++}
+diff --git a/crates/kernel/src/eval/runs.rs b/crates/kernel/src/eval/runs.rs
+index a3e07c0..35786c2 100644
+--- a/crates/kernel/src/eval/runs.rs
++++ b/crates/kernel/src/eval/runs.rs
+@@ -40,7 +40,11 @@ impl<'a, 'v> Eval<'a, 'v> {
+         };
+         let class = self.classify_step(step)?;
+         match &*class {
+-            FoldClass::Opaque => Ok(None),
++            // Not a `Nat` algebra — which is what every fold over a *width*
++            // is, its step returning a function. The bit-transducer class
++            // (`eval/transduce.rs`) is asked next, and `None` from it is the
++            // ordinary one-step path as before.
++            FoldClass::Opaque => self.fold_transduce(program, tail, e),
+             FoldClass::Sync { .. } => Ok(Some(Work::Val(Rc::new(Val::NatSync {
+                 program: Rc::clone(program),
+                 tail,
+diff --git a/crates/kernel/src/value.rs b/crates/kernel/src/value.rs
+index f7f4ce6..147f623 100644
+--- a/crates/kernel/src/value.rs
++++ b/crates/kernel/src/value.rs
+@@ -55,6 +55,9 @@ use crate::term::{Branches, CtxBase, GlobalVar, LocalCtx, Motives, SubstTail, Te
+ pub mod algebra;
+ pub mod program;
+ pub mod shift;
++pub mod transducer;
++
++use self::transducer::Transducer;
+ 
+ use program::ContextProgram;
+ 
+@@ -106,6 +109,14 @@ impl<'v> Env<'v> {
+         self.len == 0
+     }
+ 
++    /// Object identity as a hashable key: the head node's address and the
++    /// length, which is exactly what [`Env::ptr_eq`] compares. Two closures
++    /// with the same body and the same key denote the same value, so a
++    /// verdict about one is a verdict about the other.
++    pub fn ident(&self) -> (usize, u32) {
++        (self.node.map_or(0, |n| n as *const EnvNode<'v> as usize), self.len)
++    }
++
+     /// Object identity: the same spine (both empty, or one shared head
+     /// node). Two identical environments answer every lookup identically,
+     /// so a closure body evaluated under either denotes the same value.
+@@ -264,6 +275,20 @@ pub struct ValueArena<'v> {
+     /// the closure and the definitions, both fixed for one arena.
+     bit_types: RefCell<HashMap<*const TyClo<'v>, Option<&'v BitTy<'v>>>>,
+     bit_tys: Arena<BitTy<'v>>,
++    /// The transducer class of a width fold, keyed on **both** the step and
++    /// the motive: the argument modes are read off the motive, so two
++    /// eliminations sharing a step but not a motive are two questions
++    /// (`eval/transduce.rs`).
++    ///
++    /// The key is the closures' [`TmClo::ident`], not their addresses: the
++    /// evaluator allocates a fresh closure cell at every `Term::ElimNat` it
++    /// evaluates, so an address key re-probes the same fold once per
++    /// occurrence — which for this class is a walk of the motive and one
++    /// application of the step per table entry. The identity's addresses are
++    /// a syntax `Rc` and an environment node, both of which the arena's own
++    /// closures keep alive for as long as this map lives, so neither can be
++    /// freed and reused underneath it.
++    transducers: RefCell<HashMap<(CloId, CloId), Option<Rc<Transducer>>>>,
+     envs: Arena<EnvNode<'v>>,
+     levels: Arena<Level>,
+     elims: Arena<ElimNode<'v>>,
+@@ -636,6 +661,7 @@ impl<'v> ValueArena<'v> {
+             fold_classes: RefCell::new(HashMap::new()),
+             bit_types: RefCell::new(HashMap::new()),
+             bit_tys: Arena::new(),
++            transducers: RefCell::new(HashMap::new()),
+             envs: Arena::new(),
+             levels: Arena::new(),
+             elims: Arena::new(),
+@@ -656,6 +682,7 @@ impl<'v> ValueArena<'v> {
+                 fold_classes: RefCell::new(HashMap::new()),
+                 bit_types: RefCell::new(HashMap::new()),
+                 bit_tys: Arena::new(),
++                transducers: RefCell::new(HashMap::new()),
+                 envs: Arena::new(),
+                 levels: Arena::new(),
+                 elims: Arena::new(),
+@@ -737,6 +764,23 @@ impl<'v> ValueArena<'v> {
+         self.bit_tys.alloc(ty)
+     }
+ 
++    pub fn transducer(
++        &self,
++        step: &'v TmClo<'v>,
++        motive: &'v TyClo<'v>,
++    ) -> Option<Option<Rc<Transducer>>> {
++        self.transducers.borrow().get(&(step.ident(), motive.ident())).cloned()
++    }
++
++    pub fn cache_transducer(
++        &self,
++        step: &'v TmClo<'v>,
++        motive: &'v TyClo<'v>,
++        class: Option<Rc<Transducer>>,
++    ) {
++        self.transducers.borrow_mut().insert((step.ident(), motive.ident()), class);
++    }
++
+     pub fn memo_tm(&self, clo: &'v TmClo<'v>) -> Option<Rc<Val<'v>>> {
+         match clo {
+             TmClo::Val(value) => Some(Rc::clone(value)),
+@@ -875,8 +919,24 @@ impl<'v> TmClo<'v> {
+         }
+     }
+ 
++    /// A hashable identity that survives re-evaluation: a syntactic closure
++    /// is its body and its environment, both of which outlive the closure
++    /// cell the evaluator allocates afresh at every `Term::ElimNat` it
++    /// meets. Anything else is only itself.
++    pub fn ident(&self) -> CloId {
++        match self {
++            TmClo::Syn { env, body } => {
++                let (node, len) = env.ident();
++                (Rc::as_ptr(body) as usize, node, len)
++            }
++            _ => (self as *const TmClo<'v> as usize, usize::MAX, u32::MAX),
++        }
++    }
+ }
+ 
++/// See [`TmClo::ident`].
++pub type CloId = (usize, usize, u32);
++
+ /// A type sub-structure of a value: the type mirror of [`TmClo`].
+ ///
+ /// [`TyClo::Syn`] is the ordinary case — an environment plus unevaluated
+@@ -938,6 +998,17 @@ impl<'v> TyClo<'v> {
+     /// The environment and syntax, when this is a syntactic closure. See
+     /// [`TmClo::as_syn`]: a rule that needs the sub-structure's *syntax*
+     /// falls back to a stuck value rather than panicking.
++    /// See [`TmClo::ident`].
++    pub fn ident(&self) -> CloId {
++        match self {
++            TyClo::Syn { env, body } => {
++                let (node, len) = env.ident();
++                (Rc::as_ptr(body) as usize, node, len)
++            }
++            _ => (self as *const TyClo<'v> as usize, usize::MAX, u32::MAX),
++        }
++    }
++
+     pub fn as_syn(&self) -> Option<(&Env<'v>, &Rc<Type>)> {
+         match self {
+             TyClo::Syn { env, body, .. } => Some((env, body)),
+@@ -1291,6 +1362,22 @@ pub enum Val<'v> {
+         tail: &'v TmClo<'v>,
+         elim: Rc<Elim<'v>>,
+     },
++    /// A fold over a *width* whose step is a bit transducer
++    /// (`eval/transduce.rs`), waiting for the arguments its class fires at.
++    ///
++    /// Every bitvector operation's motive is a Π, so the fold's own value is
++    /// a function and no word can be produced until the vectors arrive.
++    /// This is [`Val::NatSync`]'s shape for the other class: the run, its
++    /// tail, the eliminator, and the applications collected so far. It is a
++    /// function, so conversion compares it by η — which applies it, which is
++    /// what makes it fire.
++    BitFold {
++        program: Rc<ContextProgram<()>>,
++        tail: &'v TmClo<'v>,
++        elim: Rc<Elim<'v>>,
++        class: Rc<Transducer>,
++        apps: Rc<Vec<Rc<Elim<'v>>>>,
++    },
+     Refl {
+         level: Level,
+         ty: &'v TyClo<'v>,
+@@ -1888,6 +1975,9 @@ impl fmt::Debug for Val<'_> {
+                 ContextProgram::Run { count, .. } => write!(f, "sync^{}", count),
+                 ContextProgram::Compose { .. } => f.write_str("sync^<shared>"),
+             },
++            Val::BitFold { apps, class, .. } => {
++                write!(f, "bitfold[{}/{}]", apps.len(), class.modes.len())
++            }
+             Val::Refl { tm, .. } => write!(f, "refl({tm:?})"),
+             Val::SRefl { tm, .. } => write!(f, "srefl({tm:?})"),
+             Val::Squash { tm, .. } => write!(f, "squash({tm:?})"),
+diff --git a/crates/kernel/src/value/shift.rs b/crates/kernel/src/value/shift.rs
+index ceeadfb..3f8037b 100644
+--- a/crates/kernel/src/value/shift.rs
++++ b/crates/kernel/src/value/shift.rs
+@@ -565,6 +565,15 @@ pub fn val<'v>(v: &Rc<Val<'v>>, o: Outer<'v>) -> Rc<Val<'v>> {
+             tail: tm_clo(tail, o),
+             elim: Rc::new(elimination(elim, o)),
+         },
++        // The class is pure data — a table of bits and state indices — so it
++        // is shared; everything scoped is shifted.
++        Val::BitFold { program, tail, elim, class, apps } => Val::BitFold {
++            program: Rc::clone(program),
++            tail: tm_clo(tail, o),
++            elim: Rc::new(elimination(elim, o)),
++            class: Rc::clone(class),
++            apps: Rc::new(apps.iter().map(|e| Rc::new(elimination(e, o))).collect()),
++        },
+         Val::Refl { level: l, ty, tm } => Val::Refl {
+             level: level(l, o),
+             ty: ty_clo(ty, o),
+diff --git a/crates/kernel/tests/eval_differential.rs b/crates/kernel/tests/eval_differential.rs
+index 6ee56f3..a96120f 100644
+--- a/crates/kernel/tests/eval_differential.rs
++++ b/crates/kernel/tests/eval_differential.rs
+@@ -478,6 +478,20 @@ impl<'a, 'v> Agree<'a, 'v> {
+                 let pred = Val::nat_run_pred(self.arena, program, tail);
+                 self.lazy_tm(pred, b, gamma, d)
+             }
++            // A machine word is a closed prefix of a `Vec`'s Σ-chain
++            // (`docs/native-bitvector-values-design.md` §3.3), so it is
++            // related to a `Pair` by **unpacking one bit** — the same
++            // one-step view every other consumer sees. The residual is a
++            // freshly built run, and the annotations are the ones the `Vec`
++            // rule itself produces, so the pair arm below compares them
++            // through `lazy_ty` rather than syntactically: this arm is where
++            // "the rule's own annotations" (§3.3) is put to the test.
++            (Val::BitRun { level, ty, width, bits, tail_len, tail }, Term::Pair { .. }) => {
++                let pair = Rc::new(Val::bit_run_unpack(
++                    self.arena, level, ty, *width, *bits, tail_len, tail,
++                ));
++                self.tm(&pair, &w, gamma, depth)
++            }
+             (Val::Refl { level: a, ty, tm }, Term::Refl { level: b, ty: t2, tm: m2 })
+             | (Val::SRefl { level: a, ty, tm }, Term::SRefl { level: b, ty: t2, tm: m2 }) => {
+                 self.lev(a, b, "refl level")?;
+diff --git a/docs/native-bitvector-values-design.md b/docs/native-bitvector-values-design.md
+index 8357d08..e7629ba 100644
+--- a/docs/native-bitvector-values-design.md
++++ b/docs/native-bitvector-values-design.md
+@@ -779,3 +779,156 @@ is a small part — and the transducer class is not an accelerant on top of a
+ conversion win but the whole of it. The conversion fast path in this tree is
+ a correct prerequisite for round 3 (a fold that produces a word needs a
+ comparison that reads one), not a measurable change on its own.
++
++---
++
++Round 3, 2026-09-13, same instance. The transducer class, the producer, the
++consumer modes and the shape operations. Corrections are listed with the
++section each amends.
++
++**§4.2 step 2 — a peeled argument's type is a `Vec` *in a unit-like Σ-context*,
++not a `Vec`.** §4.2 says each domain of `M(Succ k)` "whnfs to a `Vec` at a
++successor length". None of them does: the library's vectors arrive inside a
++**record**, and a record is a one-constructor tier-0 inductive — a Σ-nest
++whose other components are `Tag_D` spines
++(`docs/inductive-tier0-lowering.md` §3). So `BitVec(Succ k)` whnfs to
++`Σ(Tag). Σ(Vec(Bool; Succ k)). Unit`, and the class carries the **projection
++path** to the vector (`eval/transduce.rs`'s `Slot`) for each peeled argument
++and for its result. This is still the eliminator's own annotation and not a
++definition's shape: the path is found by walking the *type*, and every
++component it does not pass through must be the canonical inhabitant of a
++unit-like type — the same criterion `bits.rs` decides for a bit's payload,
++and proof-irrelevant for the same reason, which is what makes rebuilding the
++wrapper reproduce the value rather than a merely convertible one. §4.2's own
++`projection_path` idea survives intact for the *recursive* arguments: the
++value the step hands `ih` is projected through the same wrapper and must be
++the probe's own tail variable.
++
++**§4.2 step 2 — "a `Vec` at a successor length" has to be read
++δ-transparently.** `take_low`/`drop_low`/`concat` are indexed `BitVec(m + k)`,
++and `m + k` is `nat::add` — a *definition* — applied to the width. At
++`Succ k` it is a successor only after that definition unfolds. Reading the
++length with `force` alone classifies all three as **carried**, which is to say
++not at all; the shape operations of §6 were dark until this was fixed. As in
++§13's earlier note about the element type, this is not a δ-discipline change:
++the question is about the eliminator's annotation, asked once per class.
++
++**§4.2 — the class is memoized on `(step, motive)`, and on their *syntax*.**
++The argument modes come from the motive, so the step alone is not the
++question; and the evaluator allocates a fresh closure cell at every
++`Term::ElimNat` it evaluates, so an address key re-probes the same fold once
++per occurrence. The key is the closures' body pointer and environment
++identity, both of which the arena keeps alive for as long as the memo.
++
++**§4.1/§5 — `pass` is decided before the result type is consulted.** The
++design presents `pass` as one of the *word* output modes, alongside `cons`.
++It is not: a step that hands the recursive result back untouched is one
++whatever that result is, and the whole carry family —
++`carry_bits`/`borrow_bits`, which fold a carry over two vectors and return a
++`Bool` they never inspect — is exactly that shape. Asking "is the codomain a
++vector?" first refuses all of them; `byte_wrap` (131 items of the
++certificate) is `carry_add_bit`, and it did not move until the order was
++swapped.
++
++**§5 — the finite and scaled outputs admit no state argument.** A finite
++output is tabulated by probing the step with a *constant* `ih` at each
++enumerated value of its own type, and that pass cannot also observe where the
++arguments went. A state whose transition is invisible cannot be tabulated, so
++a step with one is declined rather than guessed at. Nothing in §5's list
++needs one (the ones that look like they do — the carries — are `pass`,
++above).
++
++**§5 — the scaled output needs a closed base, or a coefficient of one.**
++`toNat`'s fold is `ih ↦ q·ih + r` and the whole word's map is the
++composition; applying it to the fold at the tail is `Q·base + R`, and a
++`NatRun` can only spell that when `Q = 1` or `base` is a closed count.
++Anything else is the multiplication of an *open* term, which the run
++representation has no form for, and the fold declines. At a literal width the
++base is `Zero` and the answer is one run literal, which is what §5 predicted.
++
++**§5 — the finite output must keep the structural path's early exit.** §5
++says `is_zero_bits`'s early exit at a differing low bit "disappears — both
++become O(1)". The first implementation made it *worse*: it packed the whole
++word and forced the fold at the tail before consulting the table, where the
++structural path had stopped at the first set bit. The fix is in the machine,
++not the class: a combination whose table row is constant in `ih` settles the
++fold, so the bits are read one at a time and the walk stops at the first such
++row (`Transducer::run_finite_short`). The fold at the tail is then never
++built.
++
++**§3.2 route 1 — `Frame::BitRunTail` is not needed and was not added.** The
++producer builds its run with an **unforced** tail — the fold at the residual
++width, as a projection closure — which is what makes a chain of shape
++operations cost its last step and not its whole history. Nothing therefore
++forces a tail into a position where a merge could happen, and a merging frame
++would force exactly what the laziness exists to avoid. Round 2's
++`Val::bit_run_cons` stays what it was: the operation, exercised by the
++property tests. A width above the cap is the second run over the first's
++tail that §13 predicted, and the packing walk consumes such a chain without
++noticing it.
++
++**§8 — the oracle arm is in, and is not reachable from the generator.** The
++`BitRun`↔`Term::Pair` arm of `Agree` is added and is the `NatRun`↔`Succ` arm's
++shape exactly: unpack one bit, and let the pair arm compare the annotations
++through `lazy_ty`. It cannot fire from a random seed: `Agree` relates a value
++`eval` produced to the rewriter's whnf, and `eval` produces a `BitRun` only
++from a **classified fold**, which the well-typed generator does not build —
++generating `Vec` literals over a two-valued element type, which §8 asks for,
++exercises the *conversion* path, where no `Val` ever reaches the oracle. The
++standing evidence for the producer is therefore the in-crate fold tests
++(`eval/transduce.rs`'s `tests`, which run the eliminator on a run and read
++the word back) and the certificate; the arm is insurance for the day a
++generator does build one.
++
++**§9 — the bar, measured, and not met.** Same instance, both columns cold
++and back to back in **one** job, the before column the committed tree
++(reversed patch), the after column this one:
++
++| | items | total s | `kernel_gate` s | steps | misses |
++| --- | --- | --- | --- | --- | --- |
++| before | 5 001 | 100.067 | 71.540 | 51 909 608 | 361 706 |
++| after | 5 001 | 100.347 | 71.789 | 48 797 992 | 361 706 |
++
++The mechanism fires — 4 532 classified folds over the workload, every output
++mode among them — and evaluator steps fall **6.0 %** with the conversion miss
++count **identical**, which is the signature §7 predicted and the evidence
++that no verdict changed shape. Per family (steps, before → after):
++`byte_page` 1 461 584 → 726 116 (−50 %), `byte_wrap` 1 347 239 → 742 508
++(−45 %), `stack_allowed` 1 117 724 → 663 444 (−41 %), `store_offset`
++653 392 → 424 776 (−35 %), `write_literal` 455 664 → 228 192 (−50 %),
++`read_address` 384 344 → 250 920 (−35 %). The unit probes at width 64
++(evaluator steps): `bitvec::add` 13 914 → 9 444, `is_zero(bxor(x,x))`
++10 755 → 4 941, `toNat` 4 540 → 2 322, `is_zero` of a literal 3 016 → 365,
++`bxor` 10 099 → 8 742 — and A3, the literal floor, **3 481 → 3 481**, which
++is the right reading of the rest: A1's residue is its three 64-element
++`Bool` literals, not its fold.
++
++**But the seconds are flat, and §9's bar is the seconds.** Item total is
+++0.28 % and `kernel_gate` +0.35 %; the round does not meet the bar, and per
++§9 it stops there rather than being tuned into it. The gap is smaller than
++this instance's own run-to-run spread (three before columns on the same tree
++came in at 100.067, 100.275 and, in round 2, 99.202), and a same-binary A/B
++on a desktop — the mechanism switched off and on in two back-to-back runs of
++one process image, which removes the rebuild from the comparison — reported
++92.166 → 90.924 s total and 67.901 → 66.232 s gate, i.e. the other sign. The
++honest statement is **flat**, not a win and not a regression, with the step
++count down 6 % and the miss count unmoved.
++
++**One family is worse, and it is the whole of the gap.** `read_literal` (32
++items) goes 410 379 → 435 235 steps and **0.682 → 1.398 s** — +0.72 s, more
++than the +0.28 s the whole workload moved; without it the after column is
++0.44 s *under* the before one. The cause is not overhead but **eagerness**: a
++classified `bxor` computes all 64 bits at once, where the structural
++cons-chain computed only the bits its consumer forced — and this family's
++consumer is a memory walk whose address comparison short-circuits at the
++first differing bit, so it forced one. Packing two structural literal
++arguments is what the family now pays. It cannot be fixed by making the
++producer lazier: a `BitRun` is its whole width by construction. What it
++points at is a design question this round did not have — *at what width
++should a classified fold fire when its consumer is demand-driven?* — whose
++cheap answers (fire only when every argument is already a word; fire in
++fixed chunks) are both tuning, and §9 forbids that here. It is recorded for
++the round that takes it up.
++
++Everything else the round found is above; the tree is otherwise complete, the
++suite is green twice, and the class is the one §4 specified.

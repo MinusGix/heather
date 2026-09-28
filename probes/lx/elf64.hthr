@@ -1,0 +1,97 @@
+// Restricted Linux x86-64 ET_EXEC profile. This is a specification of our
+// emitted files, not a general ELF parser or a proof of the Linux loader.
+// ELF gABI chapters 2 and 7 define field order, sizes, and PT_LOAD semantics.
+// One RX mapping at 0x400000; entry at file offset 176; no interpreter,
+// relocations, sections, or writable data. PT_GNU_STACK requests an RW stack.
+// The first profile limits total file size to 65535 bytes.
+import bitvec;
+import list;
+import nat;
+import logic;
+
+fn elf_byte(n: Nat) → BitVec(8) { BitVec::ofNat(n) }
+
+// Multiply on the bounded (256) side: Nat multiplication recurses on its
+// second argument. No unary conversion of a full machine address is needed.
+fn elf_size16(low, high: BitVec(8)) → Nat {
+    low.toNat() + high.toNat() * 256
+}
+
+fn static_elf64_header(low, high: BitVec(8)) → List<BitVec(8)> {
+    [
+        // 0x00: e_ident: magic, ELF64, little endian, current version, System V
+        elf_byte(0x7f), elf_byte(0x45), elf_byte(0x4c), elf_byte(0x46), elf_byte(0x02), elf_byte(0x01), elf_byte(0x01), elf_byte(0x00),
+        // 0x08: e_ident: ABI version and reserved bytes
+        elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00),
+        // 0x10: e_type = ET_EXEC; e_machine = EM_X86_64; e_version = 1
+        elf_byte(0x02), elf_byte(0x00), elf_byte(0x3e), elf_byte(0x00), elf_byte(0x01), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00),
+        // 0x18: e_entry = 0x4000b0
+        elf_byte(0xb0), elf_byte(0x00), elf_byte(0x40), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00),
+        // 0x20: e_phoff = 64
+        elf_byte(0x40), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00),
+        // 0x28: e_shoff = 0
+        elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00),
+        // 0x30: e_flags = 0; e_ehsize = 64; e_phentsize = 56
+        elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x40), elf_byte(0x00), elf_byte(0x38), elf_byte(0x00),
+        // 0x38: e_phnum = 2; no section table or section strings
+        elf_byte(0x02), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00),
+        // 0x40: PT_LOAD; PF_R | PF_X
+        elf_byte(0x01), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x05), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00),
+        // 0x48: p_offset = 0
+        elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00),
+        // 0x50: p_vaddr = 0x400000
+        elf_byte(0x00), elf_byte(0x00), elf_byte(0x40), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00),
+        // 0x58: p_paddr = 0x400000 (ignored by Linux)
+        elf_byte(0x00), elf_byte(0x00), elf_byte(0x40), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00),
+        // 0x60: p_filesz
+        low, high, elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00),
+        // 0x68: p_memsz = p_filesz
+        low, high, elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00),
+        // 0x70: p_align = 4096
+        elf_byte(0x00), elf_byte(0x10), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00),
+        // 0x78: PT_GNU_STACK; PF_R | PF_W
+        elf_byte(0x51), elf_byte(0xe5), elf_byte(0x74), elf_byte(0x64), elf_byte(0x06), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00),
+        // 0x80: p_offset = 0
+        elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00),
+        // 0x88: p_vaddr = 0
+        elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00),
+        // 0x90: p_paddr = 0
+        elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00),
+        // 0x98: p_filesz = 0
+        elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00),
+        // 0xa0: p_memsz = 0
+        elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00),
+        // 0xa8: p_align = 16
+        elf_byte(0x10), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00), elf_byte(0x00)
+    ]
+}
+
+theorem static_elf64_header_length(low, high: BitVec(8)):
+    static_elf64_header(low, high).len() = 176
+{ refl }
+
+// A code image carries the size equation needed for both p_filesz and
+// p_memsz. Header construction fixes all remaining fields of this profile.
+record StaticElf64Image(code: List<BitVec(8)>) {
+    code_nonempty: 0 < code.len(),
+    size_low: BitVec(8),
+    size_high: BitVec(8),
+    file_size_correct: 176 + code.len() = elf_size16(size_low, size_high),
+}
+
+fn static_elf64_bytes({code: List<BitVec(8)>}, image: StaticElf64Image(code)) →
+    List<BitVec(8)>
+{
+    static_elf64_header(image.size_low, image.size_high) ++ code
+}
+
+theorem elf_drop_zero<A>(xs: List<A>): xs.drop(0) = xs {
+    match xs { Nil => refl, Cons(_, _) => refl }
+}
+
+// File offset 176 is also entry minus mapping base in this fixed profile.
+// This theorem is about serialized bytes; OS mapping remains a premise.
+theorem static_elf64_entry_bytes({code: List<BitVec(8)>},
+    image: StaticElf64Image(code)):
+    static_elf64_bytes(image).drop(176) = code
+{ elf_drop_zero(code) }

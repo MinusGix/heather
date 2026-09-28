@@ -38,12 +38,12 @@ calc_text	lib/std,lib/std/parser	cli	Scannerless character grammar. 16 s at 0.3 
 idealized	-	unchecked	The language we want; does not check, and its job is to be argued with. A snippet is quoted in crates/elab/tests/mutual_recursion.rs.
 finite-sets-idealized	-	unchecked	The finite-set half of the same argument; does not check.
 parser_core	lib/std	test	The pre-library parser prototype: crates/elab/tests/parser_core.rs. Name clashes with lib/std/parser/parser_core.hthr on purpose — see `search` above.
-result-parser	lib/std	test-only	`?` propagation over a small parser: crates/elab/tests/result_propagation.rs. The hyphen means `heather check` refuses it as a module: issues/showcase-hyphen-stems.md.
+result_parser	lib/std	cli	`?` propagation over a small parser; also checked in crates/elab/tests/result_propagation.rs.
 contextual_rewrite_input	lib/std	test-only	Generator input: crates/cli/examples/relational_context.rs, driven by scripts/relational-context-demo. Its `rewrite_receive` is `{ ?rewrite }`, a hole the generator fills, so it does not check standalone.
 contextual_rewrite_generated	lib/std	cli	Generator output, checked in. Nothing regenerates it, so the gate is that it still checks.
 relational_generator_input	lib/std	test	Generator input, as above.
 relational_generator_generated	lib/std	cli	Generator output, checked in, as above.
-relational-contexts	lib/std	test-only	crates/elab/tests/lib_setoid_mergeable.rs. The hyphen means `heather check` refuses it as a module: issues/showcase-hyphen-stems.md.
+relational_contexts	lib/std	cli	Composed relational-context certificates; also checked in crates/elab/tests/lib_setoid_mergeable.rs.
 relational_proof	lib/std	test	crates/elab/tests/lib_setoid_mergeable.rs.
 mergeable	lib/std	test	crates/elab/tests/lib_setoid_mergeable.rs.
 element_transport	lib/std	test	crates/elab/tests/lib_setoid_mergeable.rs.

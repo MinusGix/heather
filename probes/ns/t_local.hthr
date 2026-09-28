@@ -1,0 +1,6 @@
+import logic;
+import nat;
+import list;
+fn l01(xs, ys: List<Nat>) → Nat { let len = xs.len(); len + ys.len() }
+fn l02<A>(self a: A) → A { a }
+fn l03(xs: List<Nat>) → Nat { xs.len() }

@@ -260,7 +260,7 @@ module.exports = grammar({
       // A head position is where a match scrutinee lives, so the contextual
       // words have to be ordinary names here too — `match code { … }` is an
       // ordinary match on a variable named `code`.
-      $.identifier, $.contextual_identifier, $.qualified_identifier, $.number, $.hole, $.argument_slot,
+      $.identifier, $.contextual_identifier, $.qualified_identifier, $.number, $.character, $.string, $.hole, $.argument_slot,
       $.builtin_type, $.universe, seq('(', $._head_expression, ')'), $.vector_expression,
       $.anonymous_constructor_expression,
       $.boolean_reflection_expression,
@@ -306,6 +306,8 @@ module.exports = grammar({
       $.qualified_identifier,
       $.builtin_type,
       $.number,
+      $.character,
+      $.string,
       $.hole,
       $.universe,
       $.vector_type,
@@ -354,6 +356,8 @@ module.exports = grammar({
       $.qualified_identifier,
       $.builtin_type,
       $.number,
+      $.character,
+      $.string,
       $.hole,
       $.argument_slot,
       $.universe,
@@ -461,9 +465,16 @@ module.exports = grammar({
 
     quote_expression: $ => seq('code', $.block),
     splice_expression: $ => prec(PREC.PREFIX, seq('$', choice($.identifier, seq('{', $._expression, '}')))),
-    calc_expression: $ => seq('calc', '{', $.calc_first_step, repeat(seq(',', $.calc_next_step)), optional(','), '}'),
+    // The compiler accepts homogeneous identity and setoid chains.
+    calc_expression: $ => seq('calc', '{', choice(
+      seq($.calc_first_step, repeat(seq(',', $.calc_next_step))),
+      seq(alias($._calc_relational_first_step, $.calc_first_step),
+        repeat(seq(',', alias($._calc_relational_next_step, $.calc_next_step)))),
+    ), optional(','), '}'),
     calc_first_step: $ => seq($._expression, '=', $._expression, ':=', $._expression),
     calc_next_step: $ => seq('=', $._expression, ':=', $._expression),
+    _calc_relational_first_step: $ => seq($._expression, '≈', $._expression, ':=', $._expression),
+    _calc_relational_next_step: $ => seq('≈', $._expression, ':=', $._expression),
     apply_expression: $ => prec.right(seq(
       'apply', field('function', $._expression), ';',
       repeat(seq('give', field('argument', $._expression), ';')),
@@ -540,6 +551,10 @@ module.exports = grammar({
     qualified_identifier: _ => token(/[A-Za-z_][A-Za-z0-9_]*(::[A-Za-z_][A-Za-z0-9_]*)+/),
     identifier: _ => /[A-Za-z_][A-Za-z0-9_]*/,
     number: _ => token(/0x[0-9A-Fa-f][0-9A-Fa-f_]*|0o[0-7][0-7_]*|0b[01][01_]*|[0-9][0-9_]*/),
+    // Match the lexer's closed escape set; scalar-value validation stays in
+    // the compiler. Tokens keep spaces and comment markers inside literals.
+    character: _ => token(seq("'", choice(/[^'\\\r\n]/, /\\[ntr\\'"0]/, /\\u\{[0-9A-Fa-f]+\}/), "'")),
+    string: _ => token(seq('"', repeat(choice(/[^"\\\r\n]/, /\\[ntr\\'"0]/, /\\u\{[0-9A-Fa-f]+\}/)), '"')),
     hole: _ => token(/\?[A-Za-z_][A-Za-z0-9_]*|\?/),
     argument_slot: _ => token(/·[₀₁₂₃₄₅₆₇₈₉]*/),
     comment: _ => token(seq('//', /[^\n]*/)),

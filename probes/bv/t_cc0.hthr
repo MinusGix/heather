@@ -1,0 +1,7 @@
+import logic;
+import nat;
+import list;
+theorem cc({l, r: Nat}, {lt, rt: List<Nat>}, h: l = r, t: lt = rt): Cons(l, lt) = Cons(r, rt) {
+    j(t, λ z _ => Cons(l, lt) = Cons(r, z), j(h, λ z _ => Cons(l, lt) = Cons(z, lt), refl))
+}
+theorem t0(): Cons(1, Cons(2, Nil)) = Cons(1, Cons(2, Nil)) { cc(refl, cc(refl, refl)) }

@@ -1,0 +1,11 @@
+import bitvec;
+import logic;
+import nat;
+import omega;
+
+theorem over_word(y: BitVec(64), s: y.toNat() < 16384): y.toNat() * 64 + y.toNat() * 64 < Nat::pow(2, 64) { omega }
+theorem over_var(v: Nat, s: v < 16384): v * 64 + v * 64 < Nat::pow(2, 64) { omega }
+theorem generalized(y: BitVec(64), s: y.toNat() < 16384): y.toNat() * 64 + y.toNat() * 64 < Nat::pow(2, 64) {
+    let g: ((v: Nat) → v < 16384 → v * 64 + v * 64 < Nat::pow(2, 64)) = λ v h => omega;
+    g(y.toNat(), s)
+}

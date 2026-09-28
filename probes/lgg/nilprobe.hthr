@@ -1,0 +1,18 @@
+import list;
+import logic;
+import nat;
+import result;
+
+fn spell(xs: List<Nat>, tail: List<Nat>) -> List<Nat> {
+    match xs { Nil => tail, Cons(h, t) => Cons(h, spell(t, tail)) }
+}
+
+// The `finish_text` shape: the scrutinee is a *computed* term, so the match
+// refines nothing in the goal and only hands over `shape : rev(ys) = Nil`.
+// The goal's `Nil<Nat>` is written; the proof's `Nil` came from the pattern.
+fn probe(xs, ys: List<Nat>) -> Result<spell(xs, rev(ys)) = spell(xs, Nil<Nat>), Nat> {
+    match shape: rev(ys) {
+        Nil => Ok(cong(shape)),
+        Cons(_, _) => Err(0),
+    }
+}

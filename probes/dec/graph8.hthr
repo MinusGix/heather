@@ -1,0 +1,56 @@
+import function_ir;
+import bitvec;
+import bool;
+import nat;
+import list;
+import logic;
+fn v0(values: Valuation(), width: Nat) → BitVec(width) { values(width, 0) }
+fn b1(values: Valuation(), width: Nat) → BitVec(width) { @bitvec::BitVec::band(width, v0(values, width), @bitvec::BitVec::ofNat(width, 65535)) }
+fn c1(values: Valuation(), width: Nat) → BitVec(width) { match width as λ n => BitVec(n) { Zero => @bitvec::BitVec::zero(0), Succ(k) => @bitvec::BitVec::cons_bit(k, @bitvec::BitVec::unsigned_lt_bit(64, b1(values, 64), @bitvec::BitVec::ofNat(64, 7)), @bitvec::BitVec::zero(k)) } }
+fn s1(values: Valuation(), width: Nat) → BitVec(width) { @bitvec::BitVec::sub(width, v0(values, width), @bitvec::BitVec::ofNat(width, 7)) }
+fn f1(values: Valuation(), width: Nat) → BitVec(width) { @bitvec::BitVec::add(width, s1(values, width), @bitvec::BitVec::ofNat(width, 100)) }
+fn t1(values: Valuation(), width: Nat) → BitVec(width) { v0(values, width) }
+fn v1(values: Valuation(), width: Nat) → BitVec(width) { match @bitvec::BitVec::head_bit(0, c1(values, 1)) { False => f1(values, width), True => t1(values, width) } }
+fn b2(values: Valuation(), width: Nat) → BitVec(width) { @bitvec::BitVec::band(width, v1(values, width), @bitvec::BitVec::ofNat(width, 65535)) }
+fn c2(values: Valuation(), width: Nat) → BitVec(width) { match width as λ n => BitVec(n) { Zero => @bitvec::BitVec::zero(0), Succ(k) => @bitvec::BitVec::cons_bit(k, @bitvec::BitVec::unsigned_lt_bit(64, b2(values, 64), @bitvec::BitVec::ofNat(64, 14)), @bitvec::BitVec::zero(k)) } }
+fn s2(values: Valuation(), width: Nat) → BitVec(width) { @bitvec::BitVec::sub(width, v1(values, width), @bitvec::BitVec::ofNat(width, 14)) }
+fn f2(values: Valuation(), width: Nat) → BitVec(width) { @bitvec::BitVec::add(width, s2(values, width), @bitvec::BitVec::ofNat(width, 200)) }
+fn t2(values: Valuation(), width: Nat) → BitVec(width) { v1(values, width) }
+fn v2(values: Valuation(), width: Nat) → BitVec(width) { match @bitvec::BitVec::head_bit(0, c2(values, 1)) { False => f2(values, width), True => t2(values, width) } }
+fn b3(values: Valuation(), width: Nat) → BitVec(width) { @bitvec::BitVec::band(width, v2(values, width), @bitvec::BitVec::ofNat(width, 65535)) }
+fn c3(values: Valuation(), width: Nat) → BitVec(width) { match width as λ n => BitVec(n) { Zero => @bitvec::BitVec::zero(0), Succ(k) => @bitvec::BitVec::cons_bit(k, @bitvec::BitVec::unsigned_lt_bit(64, b3(values, 64), @bitvec::BitVec::ofNat(64, 21)), @bitvec::BitVec::zero(k)) } }
+fn s3(values: Valuation(), width: Nat) → BitVec(width) { @bitvec::BitVec::sub(width, v2(values, width), @bitvec::BitVec::ofNat(width, 21)) }
+fn f3(values: Valuation(), width: Nat) → BitVec(width) { @bitvec::BitVec::add(width, s3(values, width), @bitvec::BitVec::ofNat(width, 300)) }
+fn t3(values: Valuation(), width: Nat) → BitVec(width) { v2(values, width) }
+fn v3(values: Valuation(), width: Nat) → BitVec(width) { match @bitvec::BitVec::head_bit(0, c3(values, 1)) { False => f3(values, width), True => t3(values, width) } }
+fn b4(values: Valuation(), width: Nat) → BitVec(width) { @bitvec::BitVec::band(width, v3(values, width), @bitvec::BitVec::ofNat(width, 65535)) }
+fn c4(values: Valuation(), width: Nat) → BitVec(width) { match width as λ n => BitVec(n) { Zero => @bitvec::BitVec::zero(0), Succ(k) => @bitvec::BitVec::cons_bit(k, @bitvec::BitVec::unsigned_lt_bit(64, b4(values, 64), @bitvec::BitVec::ofNat(64, 28)), @bitvec::BitVec::zero(k)) } }
+fn s4(values: Valuation(), width: Nat) → BitVec(width) { @bitvec::BitVec::sub(width, v3(values, width), @bitvec::BitVec::ofNat(width, 28)) }
+fn f4(values: Valuation(), width: Nat) → BitVec(width) { @bitvec::BitVec::add(width, s4(values, width), @bitvec::BitVec::ofNat(width, 400)) }
+fn t4(values: Valuation(), width: Nat) → BitVec(width) { v3(values, width) }
+fn v4(values: Valuation(), width: Nat) → BitVec(width) { match @bitvec::BitVec::head_bit(0, c4(values, 1)) { False => f4(values, width), True => t4(values, width) } }
+fn b5(values: Valuation(), width: Nat) → BitVec(width) { @bitvec::BitVec::band(width, v4(values, width), @bitvec::BitVec::ofNat(width, 65535)) }
+fn c5(values: Valuation(), width: Nat) → BitVec(width) { match width as λ n => BitVec(n) { Zero => @bitvec::BitVec::zero(0), Succ(k) => @bitvec::BitVec::cons_bit(k, @bitvec::BitVec::unsigned_lt_bit(64, b5(values, 64), @bitvec::BitVec::ofNat(64, 35)), @bitvec::BitVec::zero(k)) } }
+fn s5(values: Valuation(), width: Nat) → BitVec(width) { @bitvec::BitVec::sub(width, v4(values, width), @bitvec::BitVec::ofNat(width, 35)) }
+fn f5(values: Valuation(), width: Nat) → BitVec(width) { @bitvec::BitVec::add(width, s5(values, width), @bitvec::BitVec::ofNat(width, 500)) }
+fn t5(values: Valuation(), width: Nat) → BitVec(width) { v4(values, width) }
+fn v5(values: Valuation(), width: Nat) → BitVec(width) { match @bitvec::BitVec::head_bit(0, c5(values, 1)) { False => f5(values, width), True => t5(values, width) } }
+fn b6(values: Valuation(), width: Nat) → BitVec(width) { @bitvec::BitVec::band(width, v5(values, width), @bitvec::BitVec::ofNat(width, 65535)) }
+fn c6(values: Valuation(), width: Nat) → BitVec(width) { match width as λ n => BitVec(n) { Zero => @bitvec::BitVec::zero(0), Succ(k) => @bitvec::BitVec::cons_bit(k, @bitvec::BitVec::unsigned_lt_bit(64, b6(values, 64), @bitvec::BitVec::ofNat(64, 42)), @bitvec::BitVec::zero(k)) } }
+fn s6(values: Valuation(), width: Nat) → BitVec(width) { @bitvec::BitVec::sub(width, v5(values, width), @bitvec::BitVec::ofNat(width, 42)) }
+fn f6(values: Valuation(), width: Nat) → BitVec(width) { @bitvec::BitVec::add(width, s6(values, width), @bitvec::BitVec::ofNat(width, 600)) }
+fn t6(values: Valuation(), width: Nat) → BitVec(width) { v5(values, width) }
+fn v6(values: Valuation(), width: Nat) → BitVec(width) { match @bitvec::BitVec::head_bit(0, c6(values, 1)) { False => f6(values, width), True => t6(values, width) } }
+fn b7(values: Valuation(), width: Nat) → BitVec(width) { @bitvec::BitVec::band(width, v6(values, width), @bitvec::BitVec::ofNat(width, 65535)) }
+fn c7(values: Valuation(), width: Nat) → BitVec(width) { match width as λ n => BitVec(n) { Zero => @bitvec::BitVec::zero(0), Succ(k) => @bitvec::BitVec::cons_bit(k, @bitvec::BitVec::unsigned_lt_bit(64, b7(values, 64), @bitvec::BitVec::ofNat(64, 49)), @bitvec::BitVec::zero(k)) } }
+fn s7(values: Valuation(), width: Nat) → BitVec(width) { @bitvec::BitVec::sub(width, v6(values, width), @bitvec::BitVec::ofNat(width, 49)) }
+fn f7(values: Valuation(), width: Nat) → BitVec(width) { @bitvec::BitVec::add(width, s7(values, width), @bitvec::BitVec::ofNat(width, 700)) }
+fn t7(values: Valuation(), width: Nat) → BitVec(width) { v6(values, width) }
+fn v7(values: Valuation(), width: Nat) → BitVec(width) { match @bitvec::BitVec::head_bit(0, c7(values, 1)) { False => f7(values, width), True => t7(values, width) } }
+fn b8(values: Valuation(), width: Nat) → BitVec(width) { @bitvec::BitVec::band(width, v7(values, width), @bitvec::BitVec::ofNat(width, 65535)) }
+fn c8(values: Valuation(), width: Nat) → BitVec(width) { match width as λ n => BitVec(n) { Zero => @bitvec::BitVec::zero(0), Succ(k) => @bitvec::BitVec::cons_bit(k, @bitvec::BitVec::unsigned_lt_bit(64, b8(values, 64), @bitvec::BitVec::ofNat(64, 56)), @bitvec::BitVec::zero(k)) } }
+fn s8(values: Valuation(), width: Nat) → BitVec(width) { @bitvec::BitVec::sub(width, v7(values, width), @bitvec::BitVec::ofNat(width, 56)) }
+fn f8(values: Valuation(), width: Nat) → BitVec(width) { @bitvec::BitVec::add(width, s8(values, width), @bitvec::BitVec::ofNat(width, 800)) }
+fn t8(values: Valuation(), width: Nat) → BitVec(width) { v7(values, width) }
+fn v8(values: Valuation(), width: Nat) → BitVec(width) { match @bitvec::BitVec::head_bit(0, c8(values, 1)) { False => f8(values, width), True => t8(values, width) } }
+theorem g(values: Valuation()): b8(values, 64) = @bitvec::BitVec::band(64, v7(values, 64), @bitvec::BitVec::ofNat(64, 65535)) { refl }

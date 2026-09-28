@@ -1,0 +1,8 @@
+import nat;
+import logic;
+import omega;
+
+theorem d_thousands(n, a, b: Nat, ha: n = a * 10 + n.mod(10), hb: a = b * 10 + a.mod(10)): n.div(1000) = b.div(10) { omega }
+theorem d_hundreds(n, a, b: Nat, ha: n = a * 10 + n.mod(10), hb: a = b * 10 + a.mod(10)): n.mod(1000).div(100) = b.mod(10) { omega }
+theorem d_tens(n, a: Nat, ha: n = a * 10 + n.mod(10)): n.mod(1000).mod(100).div(10) = a.mod(10) { omega }
+theorem d_units(n: Nat): n.mod(1000).mod(100).mod(10).div(1) = n.mod(10) { omega }

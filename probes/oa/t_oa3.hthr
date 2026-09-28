@@ -1,0 +1,4 @@
+import nat;
+import list;
+import omega;
+theorem distinct(f: List<Nat> → Nat, h: f(Cons(0, Nil)) = f(Nil) + 1): f(Nil) = 0 { omega }

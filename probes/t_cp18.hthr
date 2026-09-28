@@ -1,0 +1,27 @@
+// cp18 — the SAME binder-dependent argument twice: `And<relation(…),relation(…)>`.
+// cp9 has it once (70 320 misses over cp2's 16 282). If two occurrences of one
+// argument cost twice one occurrence, the block is charged per OCCURRENCE and
+// nothing is shared between them.
+import nat;
+import list;
+import logic;
+import result;
+import option;
+import pair;
+import int;
+import omega;
+import parser;
+
+fn CPTwice<T,A>(
+    relation: (source: List<T>) -> Cursor<T>(source) -> Cursor<T>(source) -> A -> Type,
+    source: List<T>, begin: Cursor<T>(source), end: Cursor<T>(source), value: A) -> Type {
+    And<relation(source,begin,end,value),relation(source,begin,end,value)>
+}
+theorem cp_twice<T,A>(source: List<T>, begin: Cursor<T>(source), r: Reply<T,A>(source,begin), expected: Nat,
+    relation: (source: List<T>) -> Cursor<T>(source) -> Cursor<T>(source) -> A -> Type):
+    Post(source,begin,relation,r) -> Post(source,begin,CPTwice<T,A>(relation),
+        bind_at<T,A,A>(source,begin,r,λ value middle forward => map_at(source,middle,eof_at(expected,source,middle),λ (ignored: Nat) => value))) {
+    match r { Err(e) => λ h => trivial, Ok(s) => λ h => match shape : rest(source,s.end) {
+        Nil => And(h,h), Cons(head,tail) => trivial,
+    } }
+}

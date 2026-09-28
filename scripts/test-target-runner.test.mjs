@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { CPU_MARKER, collect, familyShards, jobBounds, limitedCommand, listingArgs, parseArtifacts, parseCpu, parseResults, parseTestTimes, shardTestName, targetIncomplete, timedLibtestArgs } from "./run-test-targets.mjs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { CPU_MARKER, collect, completionMessage, familyShards, jobBounds, limitedCommand, listingArgs, parseArtifacts, parseCpu, parseResults, parseTestTimes, runTargets, shardTestName, targetIncomplete, targetOutcome, timedLibtestArgs } from "./run-test-targets.mjs";
 
 test("artifact discovery keeps test-profile executables once", () => {
   const artifact = { reason: "compiler-artifact", executable: "/tmp/example", profile: { test: true },
@@ -62,6 +65,94 @@ test("ordinary failures are red but only missing summaries are incomplete", () =
   assert.equal(targetIncomplete({ code: 101, signal: null, result: { resultLines: 1 } }), false);
   assert.equal(targetIncomplete({ code: null, signal: "SIGKILL", result: { resultLines: 0 } }), true);
   assert.equal(targetIncomplete({ code: 1, signal: null, result: { resultLines: 0 } }), true);
+});
+
+test("immediate outcomes distinguish passes, failures, termination and incomplete summaries", () => {
+  const pass = { code: 0, signal: null, result: { resultLines: 1, passed: 4, failed: 0, ignored: 2 } };
+  assert.equal(targetOutcome(pass), "PASS (4 passed, 2 ignored)");
+  assert.equal(targetOutcome({ ...pass, code: 101, result: { ...pass.result, failed: 1 } }), "FAIL (exit=101, 1 failed)");
+  assert.equal(targetOutcome({ ...pass, code: 1 }), "FAIL (exit=1, 0 failed)");
+  assert.equal(targetOutcome({ ...pass, result: { ...pass.result, failed: 1 } }), "FAIL (exit=0, 1 failed)");
+  // A signal wins even if the child printed a complete-looking summary.
+  assert.equal(targetOutcome({ ...pass, code: null, signal: "SIGKILL" }), "TERMINATED (signal=SIGKILL)");
+  assert.equal(targetOutcome({ ...pass, code: null }), "INCOMPLETE (exit=none, result-lines=1)");
+  for (const resultLines of [0, 2]) {
+    assert.equal(targetOutcome({ ...pass, result: { ...pass.result, resultLines } }),
+      `INCOMPLETE (exit=0, result-lines=${resultLines})`);
+  }
+});
+
+test("completion output bounds failure excerpts and makes truncation visible", () => {
+  const run = { code: 101, signal: null, target: { label: "example.rs" }, wall: 1.25, cpu: 2.5,
+    result: { resultLines: 1, passed: 3, failed: 1, ignored: 0 }, truncated: false,
+    output: "running 4 tests\nfailures:\nthread 'bad' panicked: expected 3, got 4\n" + "x".repeat(200) + "\n" + "detail\n".repeat(30) };
+  const message = completionMessage(run, 2, 5);
+  assert.match(message, /^\[done  2\/5\] example.rs: FAIL \(exit=101, 1 failed\) \(1.25s, 2.5 CPU-s\)\n/);
+  assert.match(message, /expected 3, got 4/);
+  assert.match(message, /… buffered log follows after targets finish/);
+  assert.ok(message.length < 1600);
+  assert.ok(message.split("\n").every((line) => line.length <= 164));
+  assert.equal(run.output.split("detail").length, 31, "the grouped log is retained");
+  const truncated = completionMessage({ ...run, code: 0, cpu: null, truncated: true,
+    result: { ...run.result, resultLines: 0 }, output: "prefix\n" + "noise\n".repeat(100) }, 1, 1);
+  assert.match(truncated, /INCOMPLETE/);
+  assert.match(truncated, /output truncated after 1048576 bytes/);
+  assert.ok(truncated.length < 1600);
+  const pass = completionMessage({ ...run, code: 0, output: "ok\n", result: { ...run.result, failed: 0 } }, 1, 1);
+  assert.match(pass, /PASS/);
+  assert.equal(pass.split("\n").length, 2, "passing completions are one line");
+});
+
+test("a killed child gets an immediate signal outcome and available context", async () => {
+  const run = await collect(limitedCommand("bash", ["-c", "echo before-kill; kill -9 $$"]));
+  const { cpu, output } = parseCpu(run.output);
+  const message = completionMessage({ ...run, cpu, output, result: parseResults(output),
+    wall: 0.1, target: { label: "killed.rs" } }, 1, 1);
+  assert.match(message, /TERMINATED \(signal=SIGKILL\)/);
+  assert.match(message, /before-kill/);
+});
+
+test("failure reporting arrives while another target is running and keep-going schedules the rest", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "heather-outcomes-"));
+  const write = process.stdout.write;
+  try {
+    const gate = join(dir, "release-slow");
+    const summary = "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s";
+    const targets = [
+      { label: "slow.rs", executable: "bash", args: ["-c",
+        'for ((i=0; i<500; i++)); do if [[ -f "$1" ]]; then printf "%s\\n" "$2"; exit 0; fi; sleep 0.01; done; exit 1', "slow", gate, summary] },
+      { label: "failed.rs", executable: "bash", args: ["-c",
+        'printf "%s\\n" "failures:" "thread bad panicked: expected 3, got 4" "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"; exit 101'] },
+      { label: "later.rs", executable: "bash", args: ["-c", 'printf "%s\\n" "$1"', "later", summary] },
+    ];
+    let received = "";
+    let immediate = false;
+    process.stdout.write = function(chunk, ...args) {
+      const message = chunk.toString();
+      if (!/^\[(start|done )/.test(message)) return write.call(this, chunk, ...args);
+      received += message;
+      if (message.includes("failed.rs: FAIL")) {
+        immediate = !received.includes("slow.rs: PASS");
+        writeFileSync(gate, "release\n");
+      }
+      return true;
+    };
+    const runs = await runTargets(targets, 2, [], true);
+    assert.ok(immediate, received);
+    assert.match(received, /expected 3, got 4/);
+    assert.match(received, /later.rs: PASS/);
+    assert.match(received, /slow.rs: PASS/);
+    assert.equal(runs.length, 3);
+    assert.match(runs.find((run) => run.target.label === "failed.rs").output, /expected 3, got 4/);
+    received = "";
+    const stopped = await runTargets(targets.slice(1), 1, [], false);
+    assert.equal(stopped.length, 1, "fail-fast still stops scheduling after a failure");
+    assert.match(received, /failed.rs: FAIL/);
+    assert.ok(!received.includes("later.rs"));
+  } finally {
+    process.stdout.write = write;
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("the wrapper's CPU line is summed and removed from the child's output", () => {

@@ -1,0 +1,13 @@
+import bitvec;
+import logic;
+import nat;
+import omega;
+import bitvec_nat;
+
+fn double(x: BitVec(64)) → BitVec(64) { x.add(x) }
+fn times256(x: BitVec(64)) → BitVec(64) { double(double(double(double(double(double(double(double(x)))))))) }
+fn raise(n: BitVec(64)) → BitVec(64) { times256(times256(times256(times256(times256(n))))) }
+theorem deep(y: BitVec(64), n: Nat, value: y.toNat() = n, small: n < 16384): double(y).toNat() = n * 2 {
+    let f1: (double(y).toNat() = y.toNat() + y.toNat()) = bitvec_nat::toNat_add(64, y, y, omega);
+    omega
+}

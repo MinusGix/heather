@@ -1,0 +1,23 @@
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import char;
+import string;
+
+// (i) an associated element type as a class field
+class Seq<S> {
+    Elem: Type,
+    view: S → List<Elem>,
+}
+
+instance<A> Seq<List<A>> { Elem := A, view := λ (xs: List<A>) => xs }
+instance Seq<String> { Elem := Char, view := λ (s: String) => s.chars }
+
+fn first<S: Seq>(s: S) → Option<S.Elem> {
+    match S.view(s) { Nil => None, Cons(h, t) => Some(h) }
+}
+
+theorem first_string(): first("7x") = Some('7') { refl }
+theorem first_list(): first(Cons(4, Nil<Nat>)) = Some(4) { refl }

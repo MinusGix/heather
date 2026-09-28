@@ -1,0 +1,4 @@
+import nat;
+record W { after: Nat, pres: after = 0 }
+theorem mk_w(n: Nat): W { W(after := 0, pres := refl) }
+theorem via_trans(n: Nat): 0 = 0 { let w = mk_w(n); Nat::trans(w.pres, refl) }

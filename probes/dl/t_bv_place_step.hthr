@@ -1,0 +1,42 @@
+import bitvec;
+import logic;
+import nat;
+import omega;
+import bitvec_nat;
+import bitvec_omega;
+import decimal_line;
+
+theorem bv_place_step(s: BitVec(64), r, h, c, w, q, rest: Nat,
+    value: s.toNat() = 1099511627776 * r + h, low: h + w < 1099511627776,
+    parts: r = c * q + rest, remainder: rest < c, one: q <= 1,
+    fits: 1099511627776 * r + h < 1152921504606846976, c_fits: 1099511627776 * c < 1152921504606846976):
+    place(s, BitVec::ofNat(1099511627776 * c), BitVec::ofNat(w)).toNat() = 1099511627776 * rest + (h + w * q) {
+    let big = BitVec::ofNat(1099511627776 * c, n := 64);
+    let weight = BitVec::ofNat(w, n := 64);
+    let test: (s.unsigned_lt_bit(big) = Succ(s.toNat()).leb(big.toNat())) = bitvec_nat::unsigned_lt_nat(64, s, big);
+    (match q as λ k => (r = c * k + rest) → (k <= 1) →
+        place(s, big, weight).toNat() = 1099511627776 * rest + (h + w * k) {
+        Zero => λ parts one => {
+            let under: (Succ(s.toNat()) <= big.toNat()) = bv_omega;
+            let kept: (s.unsigned_lt_bit(big) = True) = trans(test, leb_yes(Succ(s.toNat()), big.toNat(), under));
+            let same: (place(s, big, weight) = s) =
+                j(sym(kept), λ b _ => (match b { True => s, False => s.sub(big).add(weight) }) = s, refl);
+            let moved: (place(s, big, weight).toNat() = s.toNat()) = @cong(λ (v: BitVec(64)) => v.toNat(), place(s, big, weight), s, same);
+            bv_omega
+        },
+        Succ(k) => (match k as λ k2 => (r = c * Succ(k2) + rest) → (Succ(k2) <= 1) →
+            place(s, big, weight).toNat() = 1099511627776 * rest + (h + w * Succ(k2)) {
+            Zero => λ parts one => {
+                let over: (big.toNat() < Succ(s.toNat())) = bv_omega;
+                let taken: (s.unsigned_lt_bit(big) = False) = trans(test, leb_no(Succ(s.toNat()), big.toNat(), over));
+                let stepped: (place(s, big, weight) = s.sub(big).add(weight)) =
+                    j(sym(taken), λ b _ => (match b { True => s, False => s.sub(big).add(weight) }) = s.sub(big).add(weight), refl);
+                let moved: (place(s, big, weight).toNat() = s.sub(big).add(weight).toNat()) =
+                    @cong(λ (v: BitVec(64)) => v.toNat(), place(s, big, weight), s.sub(big).add(weight), stepped);
+                let sum: (s.sub(big).add(weight).toNat() = 1099511627776 * rest + (h + w * 1)) = bv_omega;
+                trans(moved, sum)
+            },
+            Succ(_) => λ parts one => false_elim(one),
+        }),
+    })(parts, one)
+}

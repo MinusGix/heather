@@ -99,7 +99,7 @@ fn parser_client_checks_and_its_wrong_result_is_rejected() {
     e.elab_module_source("nat",include_str!("../../../lib/std/nat.hthr")).expect("nat");
     e.elab_module_source("option",include_str!("../../../lib/std/option.hthr")).expect("option");
     e.elab_module_source("list",include_str!("../../../lib/std/list.hthr")).expect("list");
-    let src = include_str!("../../../docs/showcase/result-parser.hthr");
+    let src = include_str!("../../../docs/showcase/result_parser.hthr");
     e.elab_module_source("parser",src).unwrap_or_else(|e| panic!("{}",e.render(src)));
     let bad = "import parser; import result; theorem wrong(): parse_sum([Number(2), Plus, Number(3)]) = Ok(6) { refl }";
     e.elab_module_source("wrong",bad).expect_err("wrong parser result");

@@ -1,0 +1,86 @@
+warning: constructor payload `k` is not used in this arm; write `_` instead
+  --> /home/minus/Kairos/Code/heather/lib/std/bitvec.hthr:1159:14
+     |
+1159 |         Succ(k, ih) => λ x i b => match i {
+     |              ^
+
+warning: constructor payload `k` is not used in this arm; write `_` instead
+  --> /home/minus/Kairos/Code/heather/lib/std/bitvec.hthr:1184:14
+     |
+1184 |         Succ(k, ih) => λ m lo hi => ih(m, lo.tail_bits(), hi),
+     |              ^
+
+warning: constructor payload `k` is not used in this arm; write `_` instead
+  --> /home/minus/Kairos/Code/heather/lib/std/bitvec.hthr:1765:14
+     |
+1765 |         Succ(k, ih) => λ extra a b borrow =>
+     |              ^
+
+/home/minus/Kairos/Code/heather/lib/std/bitvec.hthr: 3 warnings
+error: unbound name `iterate_increment`
+  --> probes/bv/t_bv.hthr:12:33
+   |
+12 | fn a01(n: Nat) → BitVec(n) { (BitVec::zero()).iterate_increment(3) }
+   |                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: unbound name `iterate_increment`
+  --> probes/bv/t_bv.hthr:13:32
+   |
+13 | fn a02(n: Nat) → BitVec(n) { BitVec::zero().iterate_increment(3) }
+   |                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: this argument of `BitVec::from_bits` was deferred — the type of its parameter `bits` still mentions an implicit that could not be inferred; give the type arguments (`BitVec::from_bits<…>(…)`) or write the call fully explicitly (`@BitVec::from_bits(…)`)
+  --> probes/bv/t_bv.hthr:16:46
+   |
+16 | fn b01(y: Bool) → Type { BitVec::from_bits([y, False, True]) = BitVec::from_bits([False, False, True]) }
+   |                                            ^^^^^^^^^^^^^^^^
+
+error: this argument of `BitVec::from_bits` was deferred — the type of its parameter `bits` still mentions an implicit that could not be inferred; give the type arguments (`BitVec::from_bits<…>(…)`) or write the call fully explicitly (`@BitVec::from_bits(…)`)
+  --> probes/bv/t_bv.hthr:20:74
+   |
+20 | fn c04(p: BitVec(7)) → BitVec(8) { BitVec::concat(p, BitVec::from_bits([False])) }
+   |                                                                        ^^^^^^^
+
+error: this argument of `BitVec::from_bits` was deferred — the type of its parameter `bits` still mentions an implicit that could not be inferred; give the type arguments (`BitVec::from_bits<…>(…)`) or write the call fully explicitly (`@BitVec::from_bits(…)`)
+  --> probes/bv/t_bv.hthr:21:65
+   |
+21 | fn c05(p: BitVec(7)) → BitVec(8) { p.concat(BitVec::from_bits([False])) }
+   |                                                               ^^^^^^^
+
+error: could not infer the implicit argument `n` of `BitVec::head_bit`
+  --> probes/bv/t_bv.hthr:27:54
+   |
+27 | fn e01(m, k: Nat, x: BitVec(m + Succ(k))) → Bool { x.head_bit() }
+   |                                                    ^^^^^^^^^^^^
+
+error: could not infer the implicit argument `n` of `BitVec::head_bit`
+  --> probes/bv/t_bv.hthr:28:54
+   |
+28 | fn e02(m, k: Nat, x: BitVec(m + Succ(k))) → Bool { BitVec::head_bit(x) }
+   |                                                    ^^^^^^^^^^^^^^^^^^^
+
+error: could not infer the implicit argument `n` of `BitVec::ofNat`
+  --> probes/bv/t_bv.hthr:37:51
+   |
+37 | fn g01() → BitVec(64) { BitVec::sign_extend(56, BitVec::ofNat(8)) }
+   |                                                 ^^^^^^^^^^^^^^^^
+
+error: this argument of `BitVec::cons_bit_cong` was deferred — the type of its parameter `ph` still mentions an implicit that could not be inferred; give the type arguments (`BitVec::cons_bit_cong<…>(…)`) or write the call fully explicitly (`@BitVec::cons_bit_cong(…)`)
+  --> probes/bv/t_bv.hthr:41:118
+   |
+41 | theorem h02(n: Nat, x, y: BitVec(n), e: x = y): x.cons_bit(True) = y.cons_bit(True) { trans(BitVec::cons_bit_cong(n, refl, e), refl) }
+   |                                                                                                                      ^^^^
+
+error: unbound name `band`
+  --> probes/bv/t_bv.hthr:44:27
+   |
+44 | fn i01(n: Nat) → Type { BitVec::zero().band(BitVec::zero()) = @BitVec::zero(n) }
+   |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: the value binder `n` does not occur in the head `Decide<my_lt(a, b)>`, so resolution has no way to determine it — a binder is recovered by unifying the head against the goal, and one the head does not mention would stay an unsolved metavariable at every use site, in an instance every search of this class would still have to try. If `n` was meant to select between structures at one carrier, that is a class **index** (`class C<A>(op)`), which joins the registry key so the alternatives coexist; if it was meant to be filled by hand, a `fn` is a value with no registry entry. Resolution choosing `n` for itself is the one reading that is unavailable, deliberately: search selects among candidates and never guesses an argument (issues/instance-binder-occurrence.md)
+  --> probes/bv/t_bv.hthr:50:10
+   |
+50 | instance(n: Nat, a, b: BitVec(n)) Decide<my_lt(a, b)> { dec := BitVec::unsigned_lt_dec(a, b) }
+   |          ^^^^^^
+
+probes/bv/t_bv.hthr: 11 errors

@@ -1,0 +1,14 @@
+import bitvec;
+import bool;
+// One restoring step: the low 16 bits hold what is left to print; at least
+// `threshold` left means subtract it and add `weight` to the digit it counts.
+fn place(state, threshold, weight: BitVec(64)) → BitVec(64) {
+    match state.band(BitVec::ofNat(0xffff)).unsigned_lt_bit(threshold) {
+        True => state,
+        False => state.sub(threshold).add(weight),
+    }
+}
+fn format_word(n: BitVec(64)) → BitVec(64) {
+    place(place(place(place(place(place(place(place(place(place(place(place(place(place(place(place(n.add(BitVec::ofNat(0x0a303030300000)), BitVec::ofNat(8000), BitVec::ofNat(0x80000)), BitVec::ofNat(4000), BitVec::ofNat(0x40000)), BitVec::ofNat(2000), BitVec::ofNat(0x20000)), BitVec::ofNat(1000), BitVec::ofNat(0x10000)), BitVec::ofNat(800), BitVec::ofNat(0x8000000)), BitVec::ofNat(400), BitVec::ofNat(0x4000000)), BitVec::ofNat(200), BitVec::ofNat(0x2000000)), BitVec::ofNat(100), BitVec::ofNat(0x1000000)), BitVec::ofNat(80), BitVec::ofNat(0x800000000)), BitVec::ofNat(40), BitVec::ofNat(0x400000000)), BitVec::ofNat(20), BitVec::ofNat(0x200000000)), BitVec::ofNat(10), BitVec::ofNat(0x100000000)), BitVec::ofNat(8), BitVec::ofNat(0x80000000000)), BitVec::ofNat(4), BitVec::ofNat(0x40000000000)), BitVec::ofNat(2), BitVec::ofNat(0x20000000000)), BitVec::ofNat(1), BitVec::ofNat(0x10000000000))
+}
+fn probe(n, unused: BitVec(64)) → BitVec(64) { format_word(n) }

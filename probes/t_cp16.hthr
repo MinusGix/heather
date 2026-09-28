@@ -1,0 +1,26 @@
+// cp16 — cp12 with the same move: `And<True, list_len(rest(source,end)) = 0>`.
+// cp12 is the `List<T>` equation in an argument slot (56 818 misses); this is
+// the same slot at `Nat`.
+import nat;
+import list;
+import logic;
+import result;
+import option;
+import pair;
+import int;
+import omega;
+import parser;
+
+fn CPTNatEq<T,A>(
+    relation: (source: List<T>) -> Cursor<T>(source) -> Cursor<T>(source) -> A -> Type,
+    source: List<T>, begin: Cursor<T>(source), end: Cursor<T>(source), value: A) -> Type {
+    And<True,list_len(rest(source,end)) = 0>
+}
+theorem cp_tnateq<T,A>(source: List<T>, begin: Cursor<T>(source), r: Reply<T,A>(source,begin), expected: Nat,
+    relation: (source: List<T>) -> Cursor<T>(source) -> Cursor<T>(source) -> A -> Type):
+    Post(source,begin,relation,r) -> Post(source,begin,CPTNatEq<T,A>(relation),
+        bind_at<T,A,A>(source,begin,r,λ value middle forward => map_at(source,middle,eof_at(expected,source,middle),λ (ignored: Nat) => value))) {
+    match r { Err(e) => λ h => trivial, Ok(s) => λ h => match shape : rest(source,s.end) {
+        Nil => And(trivial,j(sym(shape),λ l q => list_len(l) = 0,refl)), Cons(head,tail) => trivial,
+    } }
+}

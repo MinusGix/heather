@@ -1,0 +1,11 @@
+import nat;
+inductive Step { Go(next: Nat), Stop(result: Nat) }
+fn payload(s: Step) → Nat { match s { Go(p) => p, Stop(p) => p } }
+fn dbl(n: Nat) → Nat { n + n }
+fn obs(r: Step) → Nat { match r { Go(p) => dbl(p), Stop(p) => dbl(p) } }
+theorem use_word(w: Nat, c: Nat, computed: w = dbl(c)): w = dbl(c) { computed }
+// Through a named observer, as the generator emits it.
+theorem via_fn(r: Step, w: Nat, h: w = obs(r)): w = dbl(payload(r)) {
+    let k = use_word(w, payload(r), h);
+    k
+}

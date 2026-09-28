@@ -1,0 +1,202 @@
+warning: constructor payload `k` is not used in this arm; write `_` instead
+  --> /home/minus/Kairos/Code/heather/lib/std/bitvec.hthr:1159:14
+     |
+1159 |         Succ(k, ih) => λ x i b => match i {
+     |              ^
+
+warning: constructor payload `k` is not used in this arm; write `_` instead
+  --> /home/minus/Kairos/Code/heather/lib/std/bitvec.hthr:1184:14
+     |
+1184 |         Succ(k, ih) => λ m lo hi => ih(m, lo.tail_bits(), hi),
+     |              ^
+
+warning: constructor payload `k` is not used in this arm; write `_` instead
+  --> /home/minus/Kairos/Code/heather/lib/std/bitvec.hthr:1765:14
+     |
+1765 |         Succ(k, ih) => λ extra a b borrow =>
+     |              ^
+
+/home/minus/Kairos/Code/heather/lib/std/bitvec.hthr: 3 warnings
+warning: constructor payload `l` is not used in this arm; write `_` instead
+  --> /home/minus/Kairos/Code/heather/probes/claude_x86/x86_64.hthr:39:14
+   |
+39 |         Succ(l, ih) => λ right => match right {
+   |              ^
+
+warning: this builds a concrete list with a manual `Cons`/`Nil` spine; write `[…]` instead (your parentheses have suffered enough)
+  --> /home/minus/Kairos/Code/heather/probes/claude_x86/x86_64.hthr:266:5
+    |
+266 |     Cons(rex_w_rr(rm, reg), Cons(BitVec::ofNat(opcode),
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: constructor payload `bit1_clear` is not used in this arm; write `_` instead
+  --> /home/minus/Kairos/Code/heather/probes/claude_x86/x86_64.hthr:619:13
+    |
+619 |         Inl(bit1_clear) => match byte_bit3(rex).eq_dec(True) {
+    |             ^^^^^^^^^^
+
+warning: constructor payload `width_set` is not used in this arm; write `_` instead
+  --> /home/minus/Kairos/Code/heather/probes/claude_x86/x86_64.hthr:621:17
+    |
+621 |             Inl(width_set) => match byte_bit4(rex).eq_dec(False) {
+    |                 ^^^^^^^^^
+
+warning: constructor payload `bit4_clear` is not used in this arm; write `_` instead
+  --> /home/minus/Kairos/Code/heather/probes/claude_x86/x86_64.hthr:623:21
+    |
+623 |                 Inl(bit4_clear) => match byte_bit5(rex).eq_dec(False) {
+    |                     ^^^^^^^^^^
+
+warning: constructor payload `bit5_clear` is not used in this arm; write `_` instead
+  --> /home/minus/Kairos/Code/heather/probes/claude_x86/x86_64.hthr:625:25
+    |
+625 |                     Inl(bit5_clear) => match byte_bit6(rex).eq_dec(True) {
+    |                         ^^^^^^^^^^
+
+warning: constructor payload `rex_class` is not used in this arm; write `_` instead
+  --> /home/minus/Kairos/Code/heather/probes/claude_x86/x86_64.hthr:627:29
+    |
+627 |                         Inl(rex_class) => match byte_bit7(rex).eq_dec(False) {
+    |                             ^^^^^^^^^
+
+warning: constructor payload `bit7_clear` is not used in this arm; write `_` instead
+  --> /home/minus/Kairos/Code/heather/probes/claude_x86/x86_64.hthr:629:33
+    |
+629 |                             Inl(bit7_clear) => Some(DecodedRexFields(
+    |                                 ^^^^^^^^^^
+
+warning: constructor payload `register_mode_low` is not used in this arm; write `_` instead
+  --> /home/minus/Kairos/Code/heather/probes/claude_x86/x86_64.hthr:649:13
+    |
+649 |         Inl(register_mode_low) => match byte_bit7(modrm).eq_dec(True) {
+    |             ^^^^^^^^^^^^^^^^^
+
+warning: constructor payload `register_mode_high` is not used in this arm; write `_` instead
+  --> /home/minus/Kairos/Code/heather/probes/claude_x86/x86_64.hthr:651:17
+    |
+651 |             Inl(register_mode_high) => Some(DecodedModrmFields(
+    |                 ^^^^^^^^^^^^^^^^^^
+
+warning: this builds a concrete list with a manual `Cons`/`Nil` spine; write `[…]` instead (your parentheses have suffered enough)
+  --> /home/minus/Kairos/Code/heather/probes/claude_x86/x86_64.hthr:938:5
+    |
+938 |     Cons(Rax, Cons(Rcx, Cons(Rdx, Cons(Rbx,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: this builds a concrete list with a manual `Cons`/`Nil` spine; write `[…]` instead (your parentheses have suffered enough)
+  --> /home/minus/Kairos/Code/heather/probes/claude_x86/x86_64.hthr:1073:25
+     |
+1073 |                         Cons(prefix, Cons(opcode, Cons(modrm, Nil))),
+     |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: this builds a concrete list with a manual `Cons`/`Nil` spine; write `[…]` instead (your parentheses have suffered enough)
+  --> /home/minus/Kairos/Code/heather/probes/claude_x86/x86_64.hthr:1138:5
+     |
+1138 |     Cons(CertifiedEntry(key := BitVec::ofNat(0x01), value := AddRmReg, valid := refl),
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: this builds a concrete list with a manual `Cons`/`Nil` spine; write `[…]` instead (your parentheses have suffered enough)
+  --> /home/minus/Kairos/Code/heather/probes/claude_x86/x86_64.hthr:1169:16
+     |
+1169 |     ByteDecode(Cons(rex, Cons(opcode, Cons(modrm, Nil))))
+     |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: this builds a concrete list with a manual `Cons`/`Nil` spine; write `[…]` instead (your parentheses have suffered enough)
+  --> /home/minus/Kairos/Code/heather/probes/claude_x86/x86_64.hthr:1172:24
+     |
+1172 |             ByteDecode(Cons(rex, Cons(opcode, Cons(modrm, Nil)))) {
+     |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: this builds a concrete list with a manual `Cons`/`Nil` spine; write `[…]` instead (your parentheses have suffered enough)
+  --> /home/minus/Kairos/Code/heather/probes/claude_x86/x86_64.hthr:1214:23
+     |
+1214 |     Option<ByteDecode(Cons(rex, Cons(opcode, Cons(modrm, Nil))))>
+     |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: this builds a concrete list with a manual `Cons`/`Nil` spine; write `[…]` instead (your parentheses have suffered enough)
+  --> /home/minus/Kairos/Code/heather/probes/claude_x86/x86_64.hthr:1228:23
+     |
+1228 |     Option<ByteDecode(Cons(rex, Cons(opcode, Cons(modrm, Nil))))>
+     |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: this builds a concrete list with a manual `Cons`/`Nil` spine; write `[…]` instead (your parentheses have suffered enough)
+  --> /home/minus/Kairos/Code/heather/probes/claude_x86/x86_64.hthr:1248:27
+     |
+1248 |         erase_byte_decode(Cons(rex, Cons(opcode, Cons(modrm, Nil))),
+     |                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: this builds a concrete list with a manual `Cons`/`Nil` spine; write `[…]` instead (your parentheses have suffered enough)
+  --> /home/minus/Kairos/Code/heather/probes/claude_x86/x86_64.hthr:1251:23
+     |
+1251 |     erase_byte_decode(Cons(rex, Cons(opcode, Cons(modrm, Nil))),
+     |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: this builds a concrete list with a manual `Cons`/`Nil` spine; write `[…]` instead (your parentheses have suffered enough)
+  --> /home/minus/Kairos/Code/heather/probes/claude_x86/x86_64.hthr:1258:31
+     |
+1258 |             erase_byte_decode(Cons(rex, Cons(opcode, Cons(modrm, Nil))),
+     |                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: this builds a concrete list with a manual `Cons`/`Nil` spine; write `[…]` instead (your parentheses have suffered enough)
+  --> /home/minus/Kairos/Code/heather/probes/claude_x86/x86_64.hthr:1528:37
+     |
+1528 |                                     Cons(op, Cons(modrm, Nil)),
+     |                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: this builds a concrete list with a manual `Cons`/`Nil` spine; write `[…]` instead (your parentheses have suffered enough)
+  --> /home/minus/Kairos/Code/heather/probes/claude_x86/x86_64.hthr:1529:37
+     |
+1529 |                                     Cons(BitVec::ofNat(opcode),
+     |                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: this builds a concrete list with a manual `Cons`/`Nil` spine; write `[…]` instead (your parentheses have suffered enough)
+  --> /home/minus/Kairos/Code/heather/probes/claude_x86/x86_64.hthr:1534:41
+     |
+1534 |                                         Cons(modrm, Nil),
+     |                                         ^^^^^^^^^^^^^^^^
+
+warning: this builds a concrete list with a manual `Cons`/`Nil` spine; write `[…]` instead (your parentheses have suffered enough)
+  --> /home/minus/Kairos/Code/heather/probes/claude_x86/x86_64.hthr:1535:41
+     |
+1535 |                                         Cons(modrm_rr(rm, reg), Nil),
+     |                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: this `match` returns a function only to be immediately applied to `first`; move the trailing lambda binder into the match result so the match is in checking position, where its motive may be inferable
+  --> /home/minus/Kairos/Code/heather/probes/claude_x86/x86_64.hthr:1510:14
+     |
+1510 |             (match tail1 as λ rest =>
+     |              ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: this `match` returns a function only to be immediately applied to `second`; move the trailing lambda binder into the match result so the match is in checking position, where its motive may be inferable
+  --> /home/minus/Kairos/Code/heather/probes/claude_x86/x86_64.hthr:1515:22
+     |
+1515 |                     (match tail2 as λ rest => RrEncoding(
+     |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: this `match` returns a function only to be immediately applied to `third`; move the trailing lambda binder into the match result so the match is in checking position, where its motive may be inferable
+  --> /home/minus/Kairos/Code/heather/probes/claude_x86/x86_64.hthr:1521:30
+     |
+1521 |                             (match tail3 as λ rest => RrEncoding(
+     |                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: constructor payload `k` is not used in this arm; write `_` instead
+  --> /home/minus/Kairos/Code/heather/probes/claude_x86/x86_64.hthr:1898:14
+     |
+1898 |         Succ(k, ih) => λ x => x.head_bit().xor(ih(x.tail_bits())),
+     |              ^
+
+warning: constructor payload `k` is not used in this arm; write `_` instead
+  --> /home/minus/Kairos/Code/heather/probes/claude_x86/x86_64.hthr:1905:14
+     |
+1905 |         Succ(k, ih) => λ x =>
+     |              ^
+
+/home/minus/Kairos/Code/heather/probes/claude_x86/x86_64.hthr: 29 warnings
+warning: constructor payload `load` is not used in this arm; write `_` instead
+  --> probes/claude_x86/x86_64_access_memory.hthr:36:20
+   |
+36 |         AccessRead(load) => λ before after step =>
+   |                    ^^^^
+
+probes/claude_x86/x86_64_access_memory.hthr: 1 warning
+probes/claude_x86/x86_64_access_memory.hthr: ok

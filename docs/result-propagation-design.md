@@ -69,7 +69,7 @@ substitution, so ordinary deferred arguments incur no new type traversal.
 
 ## Runnable customer and verification
 
-`docs/showcase/result-parser.hthr` parses two natural-number tokens joined by
+`docs/showcase/result_parser.hthr` parses two natural-number tokens joined by
 Plus. It uses a nested `parse_atom(parse_plus(left.rest)?)?` call, preserves
 specific parse errors, and checks for trailing input. A second recursive
 `collect` client stops at the first failing list element. Its handwritten-match

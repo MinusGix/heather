@@ -1,0 +1,51 @@
+import bitvec;
+import bool;
+import logic;
+import nat;
+import bitvec_nat;
+
+// Subtraction that does not borrow reads back as Nat subtraction.
+theorem toNat_sub(n: Nat, a, b: BitVec(n), fits: b.toNat() <= a.toNat()):
+    a.sub(b).toNat() = a.toNat() - b.toNat() {
+    let d = a.toNat() - b.toNat();
+    let d_below: (d < Nat::pow(2, n)) = Nat::le_trans(Succ(d), Succ(a.toNat()), Nat::pow(2, n),
+        Nat::le_succ_succ(d, a.toNat(), Nat::sub_le(a.toNat(), b.toNat())), BitVec::toNat_lt_pow(n, a));
+    let c = BitVec::ofNat(d, n := n);
+    let c_value: (c.toNat() = d) = BitVec::toNat_ofNat(n, d, d_below);
+    let total: (c.toNat() + b.toNat() = a.toNat()) =
+        trans(@cong(λ (x: Nat) => x + b.toNat(), c.toNat(), d, c_value), Nat::sub_add_cancel(b.toNat(), a.toNat(), fits));
+    let fits_sum: (c.toNat() + b.toNat() < Nat::pow(2, n)) =
+        j(sym(total), λ t _ => t < Nat::pow(2, n), BitVec::toNat_lt_pow(n, a));
+    let back: (c.add(b) = a) = trans(bitvec_nat::add_ofNat_sum(n, c, b, fits_sum),
+        trans(@cong(λ (t: Nat) => BitVec::ofNat(t, n := n), c.toNat() + b.toNat(), a.toNat(), total), BitVec::ofNat_toNat(n, a)));
+    let same: (a.sub(b) = c) = trans(@cong(λ (x: BitVec(n)) => x.sub(b), a, c.add(b), sym(back)), BitVec::add_sub_cancel(n, c, b));
+    trans(@cong(λ (x: BitVec(n)) => x.toNat(), a.sub(b), c, same), c_value)
+}
+
+// `(p * 2) * d` is `p * d` twice: the step from one width to the next.
+theorem scale_twice(p, d: Nat): (p * 2) * d = (p * d).twice() {
+    trans(Nat::mul_assoc(p, 2, d),
+        trans(@cong(λ (x: Nat) => p * x, 2 * d, d + d, trans(Nat::mul_succ_left(1, d), @cong(λ (x: Nat) => d + x, 1 * d, d, Nat::mul_left_one(d)))),
+        trans(Nat::mul_add_distr(p, d, d), sym(Nat::twice_add_self(p * d)))))
+}
+
+// A value splits at its low `n` bits.
+theorem toNat_take_drop(n: Nat): (m: Nat) → (x: BitVec(m + n)) →
+    x.toNat() = x.take_low(n, m).toNat() + Nat::pow(2, n) * x.drop_low(n, m).toNat() {
+    match n as λ k => (m: Nat) → (x: BitVec(m + k)) →
+        x.toNat() = x.take_low(k, m).toNat() + Nat::pow(2, k) * x.drop_low(k, m).toNat() {
+        Zero => λ m x => sym(trans(Nat::add_left_zero(1 * x.toNat()), Nat::mul_left_one(x.toNat()))),
+        Succ(k, ih) => λ m x => {
+            let tail = x.tail_bits();
+            let t = tail.take_low(k, m).toNat();
+            let d = tail.drop_low(k, m).toNat();
+            let p = Nat::pow(2, k);
+            let bit = Nat::of_bit(x.head_bit());
+            let doubled: (tail.toNat().twice() = t.twice() + (p * 2) * d) =
+                trans(@cong(λ (v: Nat) => v.twice(), tail.toNat(), t + p * d, ih(m, tail)),
+                trans(Nat::twice_add(t, p * d), @cong(λ (v: Nat) => t.twice() + v, (p * d).twice(), (p * 2) * d, sym(scale_twice(p, d)))));
+            trans(@cong(λ (v: Nat) => bit + v, tail.toNat().twice(), t.twice() + (p * 2) * d, doubled),
+                sym(Nat::add_assoc(bit, t.twice(), (p * 2) * d)))
+        },
+    }
+}

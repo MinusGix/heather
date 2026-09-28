@@ -1,0 +1,85 @@
+// Physically linked conditional blocks with a shared continuation. Kept
+// separate from the foundational block model so its semantic image remains
+// within the ordinary module cache rail.
+
+import x86_64_block;
+import x86_64;
+import bitvec;
+import bool;
+import list;
+
+record LinkedControlBlock {
+    conditional: LinkedConditionalBlock,
+    continuation: List<Instruction>,
+}
+
+fn linked_control_bytes(block: LinkedControlBlock) → List<BitVec(8)> {
+    linked_conditional_bytes(block.conditional) ++
+        canonical_block_bytes(block.continuation)
+}
+
+fn linked_control_gprs<M>(block: LinkedControlBlock,
+    before: MachineState<M>) → Gprs
+{
+    match linked_test_after(block.conditional, before).flags.zf {
+        False => execute_block_normal(block.continuation,
+            linked_true_jump_after(block.conditional, before)).gprs,
+        True => execute_block_normal(block.continuation,
+            linked_false_after(block.conditional, before)).gprs,
+    }
+}
+
+fn linked_control_flags<M>(block: LinkedControlBlock,
+    before: MachineState<M>) → Flags
+{
+    match linked_test_after(block.conditional, before).flags.zf {
+        False => execute_block_normal(block.continuation,
+            linked_true_jump_after(block.conditional, before)).flags,
+        True => execute_block_normal(block.continuation,
+            linked_false_after(block.conditional, before)).flags,
+    }
+}
+
+fn linked_control_rip<M>(block: LinkedControlBlock,
+    before: MachineState<M>) → BitVec(64)
+{
+    match linked_test_after(block.conditional, before).flags.zf {
+        False => execute_block_normal(block.continuation,
+            linked_true_jump_after(block.conditional, before)).rip,
+        True => execute_block_normal(block.continuation,
+            linked_false_after(block.conditional, before)).rip,
+    }
+}
+
+fn linked_control_memory<M>(block: LinkedControlBlock,
+    before: MachineState<M>) → M
+{
+    match linked_test_after(block.conditional, before).flags.zf {
+        False => execute_block_normal(block.continuation,
+            linked_true_jump_after(block.conditional, before)).memory,
+        True => execute_block_normal(block.continuation,
+            linked_false_after(block.conditional, before)).memory,
+    }
+}
+
+fn linked_control_after<M>(block: LinkedControlBlock,
+    before: MachineState<M>) → MachineState<M>
+{
+    MachineState(gprs := linked_control_gprs(block, before),
+        flags := linked_control_flags(block, before),
+        rip := linked_control_rip(block, before),
+        memory := linked_control_memory(block, before))
+}
+
+fn ExecuteLinkedControlBlock<M>(block: LinkedControlBlock,
+    before, after: MachineState<M>) → Type
+{
+    after = linked_control_after(block, before)
+}
+
+theorem canonical_linked_control_executes<M>(block: LinkedControlBlock,
+    before: MachineState<M>): ExecuteLinkedControlBlock<M>(block, before,
+        linked_control_after(block, before))
+{
+    refl
+}

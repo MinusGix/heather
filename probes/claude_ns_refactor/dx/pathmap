@@ -1,0 +1,14 @@
+probes/claude_x86/bitvec_nat.hthr lib/std/bitvec/nat.hthr
+probes/claude_x86/x86_64_access_code.hthr lib/std/arch/x86_64/access_code.hthr
+probes/claude_x86/x86_64_access_memory.hthr lib/std/arch/x86_64/access_memory.hthr
+probes/claude_x86/x86_64_block.hthr lib/std/arch/x86_64/block.hthr
+probes/claude_x86/x86_64_call_frame.hthr lib/std/arch/x86_64/call_frame.hthr
+probes/claude_x86/x86_64_calls.hthr lib/std/arch/x86_64/calls.hthr
+probes/claude_x86/x86_64_call_summary.hthr lib/std/arch/x86_64/call_summary.hthr
+probes/claude_x86/x86_64_control_block.hthr lib/std/arch/x86_64/control_block.hthr
+probes/claude_x86/x86_64_control_flow.hthr lib/std/arch/x86_64/control_flow.hthr
+probes/claude_x86/x86_64_data_read.hthr lib/std/arch/x86_64/data_read.hthr
+probes/claude_x86/x86_64_fetch_block.hthr lib/std/arch/x86_64/fetch_block.hthr
+probes/claude_x86/x86_64_fetch.hthr lib/std/arch/x86_64/fetch.hthr
+probes/claude_x86/x86_64.hthr lib/std/arch/x86_64/model.hthr
+probes/claude_x86/x86_64_structured_block.hthr lib/std/arch/x86_64/structured_block.hthr

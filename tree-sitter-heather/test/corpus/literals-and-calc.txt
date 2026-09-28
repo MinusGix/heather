@@ -1,0 +1,104 @@
+==================
+Characters in expression positions
+==================
+
+fn bare() -> X { 'a' }
+fn parenthesized() -> X { ('a') }
+fn argument() -> X { g('a') }
+
+---
+
+(source_file
+  (function_declaration
+    (qualified_identifier)
+    (parameter_list)
+    (identifier)
+    (block
+      (character)))
+  (function_declaration
+    (qualified_identifier)
+    (parameter_list)
+    (identifier)
+    (block
+      (parenthesized_expression
+        (character))))
+  (function_declaration
+    (qualified_identifier)
+    (parameter_list)
+    (identifier)
+    (block
+      (call_expression
+        (identifier)
+        (argument_list
+          (character))))))
+
+==================
+Strings in expression positions
+==================
+
+fn bare() -> X { "// text" }
+fn parenthesized() -> X { ("text") }
+fn argument() -> X { g("text") }
+
+---
+
+(source_file
+  (function_declaration
+    (qualified_identifier)
+    (parameter_list)
+    (identifier)
+    (block
+      (string)))
+  (function_declaration
+    (qualified_identifier)
+    (parameter_list)
+    (identifier)
+    (block
+      (parenthesized_expression
+        (string))))
+  (function_declaration
+    (qualified_identifier)
+    (parameter_list)
+    (identifier)
+    (block
+      (call_expression
+        (identifier)
+        (argument_list
+          (string))))))
+
+==================
+Setoid calc chains
+==================
+
+theorem single(): X { calc { a ≈ b := p } }
+theorem chain(): X { calc { a ≈ b := p, ≈ c := q, ≈ d := r, } }
+
+---
+
+(source_file
+  (theorem_declaration
+    (qualified_identifier)
+    (parameter_list)
+    (identifier)
+    (block
+      (calc_expression
+        (calc_first_step
+          (identifier)
+          (identifier)
+          (identifier)))))
+  (theorem_declaration
+    (qualified_identifier)
+    (parameter_list)
+    (identifier)
+    (block
+      (calc_expression
+        (calc_first_step
+          (identifier)
+          (identifier)
+          (identifier))
+        (calc_next_step
+          (identifier)
+          (identifier))
+        (calc_next_step
+          (identifier)
+          (identifier))))))

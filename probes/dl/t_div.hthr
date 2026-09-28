@@ -1,0 +1,6 @@
+import nat;
+import omega;
+theorem two(n: Nat): n.div(10).div(10) = n.div(100) { omega }
+theorem three(m: Nat): m.div(10) = m.div(10) { omega }
+theorem step(n, a: Nat, h: a = n.div(10)): a.div(100) = n.div(1000) { omega }
+theorem mixed(n: Nat, small: n < 10000): n.mod(1000).div(100) = n.div(100).mod(10) { omega }

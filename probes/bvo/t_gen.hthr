@@ -1,0 +1,19 @@
+import bitvec;
+import logic;
+import nat;
+import omega;
+import bitvec_nat;
+
+fn double(x: BitVec(64)) → BitVec(64) { x.add(x) }
+fn times256(x: BitVec(64)) → BitVec(64) { double(double(double(double(double(double(double(double(x)))))))) }
+fn raise(n: BitVec(64)) → BitVec(64) { times256(times256(times256(times256(times256(n))))) }
+theorem gen3(y: BitVec(64), n: Nat, value: y.toNat() = n, small: n < 16384): double(double(double(y))).toNat() = n * 8 {
+    let s1: ((v0, m: Nat) → v0 = m → m < 16384 → v0 + v0 < Nat::pow(2, 64)) = λ v0 m e s => omega;
+    let f1: (double(y).toNat() = y.toNat() + y.toNat()) = bitvec_nat::toNat_add(64, y, y, s1(y.toNat(), n, value, small));
+    let s2: ((v0, v1, m: Nat) → v0 = m → m < 16384 → v1 = v0 + v0 → v1 + v1 < Nat::pow(2, 64)) = λ v0 v1 m e s h1 => omega;
+    let f2: (double(double(y)).toNat() = double(y).toNat() + double(y).toNat()) = bitvec_nat::toNat_add(64, double(y), double(y), s2(y.toNat(), double(y).toNat(), n, value, small, f1));
+    let s3: ((v0, v1, v2, m: Nat) → v0 = m → m < 16384 → v1 = v0 + v0 → v2 = v1 + v1 → v2 + v2 < Nat::pow(2, 64)) = λ v0 v1 v2 m e s h1 h2 => omega;
+    let f3: (double(double(double(y))).toNat() = double(double(y)).toNat() + double(double(y)).toNat()) = bitvec_nat::toNat_add(64, double(double(y)), double(double(y)), s3(y.toNat(), double(y).toNat(), double(double(y)).toNat(), n, value, small, f1, f2));
+    let g: ((v0, v1, v2, v3, m: Nat) → v0 = m → m < 16384 → v1 = v0 + v0 → v2 = v1 + v1 → v3 = v2 + v2 → v3 = m * 8) = λ v0 v1 v2 v3 m e s h1 h2 h3 => omega;
+    g(y.toNat(), double(y).toNat(), double(double(y)).toNat(), double(double(double(y))).toNat(), n, value, small, f1, f2, f3)
+}

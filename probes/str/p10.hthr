@@ -1,0 +1,77 @@
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import result;
+import pair;
+import int;
+import omega;
+import char;
+import parser;
+
+// The same certified run at two token types: `Char` (a record) and `Nat` (an
+// inductive). Everything else is identical, so a miss-count gap between the
+// two items is the token type's encoding and nothing else.
+
+fn char_pick(cls: Char -> Bool) -> Char -> Option<Char> {
+    λ (c: Char) => match cls(c) { False => None, True => Some(c) }
+}
+fn char_all(cls: Char -> Bool, cs: List<Char>) -> Type {
+    match cs { Nil => True, Cons(c, r) => And<IsTrue(cls(c)), char_all(cls, r)> }
+}
+fn CharRun(cls: Char -> Bool, source: List<Char>, begin, end: Cursor<Char>(source), cs: List<Char>) -> Type {
+    And<char_all(cls, cs), rest(source, begin) = cs ++ rest(source, end)>
+}
+fn char_run(cls: Char -> Bool, source: List<Char>, begin: Cursor<Char>(source))
+    -> Certified<Char, List<Char>>(source, begin, CharRun(cls))
+    decreases list_len(rest(source, begin)) {
+    match recognize_certified(char_pick(cls), 0, source, begin) {
+        Err(stop) => Certified([], begin, nat::le_refl(begin.offset), And(trivial, refl)),
+        Ok(one) => {
+            let head = recognized_head(char_pick(cls), source, begin, one.end, one.value, one.evidence);
+            let inside = selected_of_match(cls(head.head), head.head, one.value, head.selected);
+            let step = recognized_progress(char_pick(cls), source, begin, one.end, one.value, one.evidence);
+            let small = drop_length_strict(source, begin.offset, one.end.offset, step, one.end.within);
+            let more = char_run(cls, source, one.end) decreasing tail;
+            Certified(Cons(one.value, more.value), more.end,
+                nat::le_trans(begin.offset, one.end.offset, more.end.offset, one.forward, more.forward),
+                And(And(j(inside.right, λ y q => IsTrue(cls(y)), inside.left), more.evidence.left),
+                    trans(head.suffix,
+                        trans(j(inside.right, λ y q => Cons(head.head, rest(source, one.end)) = Cons(y, rest(source, one.end)), refl),
+                            list::cong_cons(one.value, more.evidence.right)))))
+        },
+    }
+    on decreasing tail := small;
+}
+
+fn nat_pick(cls: Nat -> Bool) -> Nat -> Option<Nat> {
+    λ (c: Nat) => match cls(c) { False => None, True => Some(c) }
+}
+fn nat_all(cls: Nat -> Bool, cs: List<Nat>) -> Type {
+    match cs { Nil => True, Cons(c, r) => And<IsTrue(cls(c)), nat_all(cls, r)> }
+}
+fn NatRun(cls: Nat -> Bool, source: List<Nat>, begin, end: Cursor<Nat>(source), cs: List<Nat>) -> Type {
+    And<nat_all(cls, cs), rest(source, begin) = cs ++ rest(source, end)>
+}
+fn nat_run(cls: Nat -> Bool, source: List<Nat>, begin: Cursor<Nat>(source))
+    -> Certified<Nat, List<Nat>>(source, begin, NatRun(cls))
+    decreases list_len(rest(source, begin)) {
+    match recognize_certified(nat_pick(cls), 0, source, begin) {
+        Err(stop) => Certified([], begin, nat::le_refl(begin.offset), And(trivial, refl)),
+        Ok(one) => {
+            let head = recognized_head(nat_pick(cls), source, begin, one.end, one.value, one.evidence);
+            let inside = selected_of_match(cls(head.head), head.head, one.value, head.selected);
+            let step = recognized_progress(nat_pick(cls), source, begin, one.end, one.value, one.evidence);
+            let small = drop_length_strict(source, begin.offset, one.end.offset, step, one.end.within);
+            let more = nat_run(cls, source, one.end) decreasing tail;
+            Certified(Cons(one.value, more.value), more.end,
+                nat::le_trans(begin.offset, one.end.offset, more.end.offset, one.forward, more.forward),
+                And(And(j(inside.right, λ y q => IsTrue(cls(y)), inside.left), more.evidence.left),
+                    trans(head.suffix,
+                        trans(j(inside.right, λ y q => Cons(head.head, rest(source, one.end)) = Cons(y, rest(source, one.end)), refl),
+                            list::cong_cons(one.value, more.evidence.right)))))
+        },
+    }
+    on decreasing tail := small;
+}

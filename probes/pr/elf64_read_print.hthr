@@ -1,0 +1,430 @@
+// The read-print process shape (docs/native-first-program-design.md §10): read
+// stdin once, count with a certified loop, write the count as a decimal line
+// to stdout, exit 0. As in elf64_read_loop, nothing here is about one
+// program: the loop, its source and specification are parameters, and so are
+// the formatter's three certificates, which the producer generates from
+// decimal_line's source functions. The profile fixes their registers: the
+// count in R11, the page's base in R8, the line's word in RAX, its start in
+// R9 and its length in R10.
+import elf64_read_loop;
+import decimal_line;
+import elf64_io;
+import linux_x86_64_entry;
+import linux_x86_64_io;
+import function_ir_loop;
+import function_ir_loop_trace;
+import x86_64;
+import x86_64_block;
+import x86_64_fetch;
+import x86_64_data_read;
+import x86_64_access_code;
+import x86_64_access_memory;
+import x86_64_fetched_code;
+import x86_64_structured_block;
+import x86_64_store;
+import bitvec;
+import bitvec_nat;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+import omega;
+
+// Where the line's word is stored: the page's base.
+fn print_base_block() → List<Instruction> { [MovRI(R8, BitVec::ofNat(0x401000))] }
+fn print_store() → WordStore { WordStore(R8, Rax) }
+// write(1, start, length).
+fn print_write_block() → List<Instruction> {
+    [MovRR(Rsi, R9), MovRR(Rdx, R10), MovRI(Rdi, BitVec::ofNat(1)), MovRI(Rax, BitVec::ofNat(1))]
+}
+// exit(0).
+fn print_exit_block() → List<Instruction> { [MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))] }
+
+fn read_print_code(needle: BitVec(8), loop_bytes: List<BitVec(8)>, word, start, length: StructuredCode) → List<BitVec(8)> {
+    canonical_block_bytes(read_entry_block()) ++ (linux_syscall_bytes() ++
+    (canonical_block_bytes(read_setup_block(needle)) ++ (loop_bytes ++
+    (canonical_block_bytes(print_base_block()) ++ (structured_bytes(word) ++ (structured_bytes(start) ++
+    (structured_bytes(length) ++ (word_store_bytes(print_store()) ++ (canonical_block_bytes(print_write_block()) ++
+    (linux_syscall_bytes() ++ (canonical_block_bytes(print_exit_block()) ++ linux_syscall_bytes())))))))))))
+}
+
+fn print_base_len() → Nat { canonical_block_bytes(print_base_block()).len() }
+fn print_write_len() → Nat { canonical_block_bytes(print_write_block()).len() }
+fn print_exit_len() → Nat { canonical_block_bytes(print_exit_block()).len() }
+
+// Offsets from the entry, piece by piece.
+fn print_at_loop(needle: BitVec(8)) → Nat { ((0 + read_entry_len()) + 2) + read_setup_len(needle) }
+fn print_at_base(needle: BitVec(8), loop_bytes: List<BitVec(8)>) → Nat { print_at_loop(needle) + loop_bytes.len() }
+fn print_at_word(needle: BitVec(8), loop_bytes: List<BitVec(8)>) → Nat { print_at_base(needle, loop_bytes) + print_base_len() }
+fn print_at_start(needle: BitVec(8), loop_bytes: List<BitVec(8)>, word: StructuredCode) → Nat {
+    print_at_word(needle, loop_bytes) + structured_bytes(word).len()
+}
+fn print_at_length(needle: BitVec(8), loop_bytes: List<BitVec(8)>, word, start: StructuredCode) → Nat {
+    print_at_start(needle, loop_bytes, word) + structured_bytes(start).len()
+}
+fn print_at_store(needle: BitVec(8), loop_bytes: List<BitVec(8)>, word, start, length: StructuredCode) → Nat {
+    print_at_length(needle, loop_bytes, word, start) + structured_bytes(length).len()
+}
+fn print_at_write(needle: BitVec(8), loop_bytes: List<BitVec(8)>, word, start, length: StructuredCode) → Nat {
+    print_at_store(needle, loop_bytes, word, start, length) + word_store_bytes(print_store()).len()
+}
+fn print_at_write_call(needle: BitVec(8), loop_bytes: List<BitVec(8)>, word, start, length: StructuredCode) → Nat {
+    print_at_write(needle, loop_bytes, word, start, length) + print_write_len()
+}
+fn print_at_exit(needle: BitVec(8), loop_bytes: List<BitVec(8)>, word, start, length: StructuredCode) → Nat {
+    print_at_write_call(needle, loop_bytes, word, start, length) + 2
+}
+fn print_at_exit_call(needle: BitVec(8), loop_bytes: List<BitVec(8)>, word, start, length: StructuredCode) → Nat {
+    print_at_exit(needle, loop_bytes, word, start, length) + print_exit_len()
+}
+
+fn print_rip(at: Nat) → BitVec(64) { next_rip(BitVec::ofNat(0x4000e8), at) }
+
+// The program's pieces, resident at their offsets from the entry.
+record ReadPrintResident(memory: IoMemory, needle: BitVec(8), loop_bytes: List<BitVec(8)>, word, start, length: StructuredCode) {
+    entry_at: CodeResident(io_fetch_access(), memory, canonical_block_bytes(read_entry_block()), print_rip(0)),
+    read_at: CodeResident(io_fetch_access(), memory, linux_syscall_bytes(), print_rip(0 + read_entry_len())),
+    setup_at: CodeResident(io_fetch_access(), memory, canonical_block_bytes(read_setup_block(needle)), print_rip((0 + read_entry_len()) + 2)),
+    loop_at: CodeResident(io_fetch_access(), memory, loop_bytes, print_rip(print_at_loop(needle))),
+    base_at: CodeResident(io_fetch_access(), memory, canonical_block_bytes(print_base_block()), print_rip(print_at_base(needle, loop_bytes))),
+    word_at: CodeResident(io_fetch_access(), memory, structured_bytes(word), print_rip(print_at_word(needle, loop_bytes))),
+    start_at: CodeResident(io_fetch_access(), memory, structured_bytes(start), print_rip(print_at_start(needle, loop_bytes, word))),
+    length_at: CodeResident(io_fetch_access(), memory, structured_bytes(length), print_rip(print_at_length(needle, loop_bytes, word, start))),
+    store_at: CodeResident(io_fetch_access(), memory, word_store_bytes(print_store()),
+        print_rip(print_at_store(needle, loop_bytes, word, start, length))),
+    write_at: CodeResident(io_fetch_access(), memory, canonical_block_bytes(print_write_block()),
+        print_rip(print_at_write(needle, loop_bytes, word, start, length))),
+    write_call_at: CodeResident(io_fetch_access(), memory, linux_syscall_bytes(),
+        print_rip(print_at_write_call(needle, loop_bytes, word, start, length))),
+    exit_at: CodeResident(io_fetch_access(), memory, canonical_block_bytes(print_exit_block()),
+        print_rip(print_at_exit(needle, loop_bytes, word, start, length))),
+    exit_call_at: CodeResident(io_fetch_access(), memory, linux_syscall_bytes(),
+        print_rip(print_at_exit_call(needle, loop_bytes, word, start, length))),
+}
+
+theorem read_print_resident(memory: IoMemory, needle: BitVec(8), loop_bytes: List<BitVec(8)>, word, start, length: StructuredCode,
+    resident: CodeResident(io_fetch_access(), memory, read_print_code(needle, loop_bytes, word, start, length), BitVec::ofNat(0x4000e8))):
+    ReadPrintResident(memory, needle, loop_bytes, word, start, length) {
+    let fetch = io_fetch_access();
+    let entry: BitVec(64) = BitVec::ofNat(0x4000e8);
+    let e = canonical_block_bytes(read_entry_block());
+    let call = linux_syscall_bytes();
+    let s = canonical_block_bytes(read_setup_block(needle));
+    let b = canonical_block_bytes(print_base_block());
+    let w = structured_bytes(word);
+    let st = structured_bytes(start);
+    let ln = structured_bytes(length);
+    let sb = word_store_bytes(print_store());
+    let wb = canonical_block_bytes(print_write_block());
+    let x = canonical_block_bytes(print_exit_block());
+    let r0 = resident_split_at(fetch, memory, e, call ++ (s ++ (loop_bytes ++ (b ++ (w ++ (st ++ (ln ++ (sb ++ (wb ++ (call ++ (x ++ call)))))))))), entry, 0, resident);
+    let r1 = resident_split_at(fetch, memory, call, s ++ (loop_bytes ++ (b ++ (w ++ (st ++ (ln ++ (sb ++ (wb ++ (call ++ (x ++ call))))))))), entry, 0 + e.len(), r0.right);
+    let r2 = resident_split_at(fetch, memory, s, loop_bytes ++ (b ++ (w ++ (st ++ (ln ++ (sb ++ (wb ++ (call ++ (x ++ call)))))))), entry, (0 + e.len()) + 2, r1.right);
+    let r3 = resident_split_at(fetch, memory, loop_bytes, b ++ (w ++ (st ++ (ln ++ (sb ++ (wb ++ (call ++ (x ++ call))))))), entry, print_at_loop(needle), r2.right);
+    let r4 = resident_split_at(fetch, memory, b, w ++ (st ++ (ln ++ (sb ++ (wb ++ (call ++ (x ++ call)))))), entry, print_at_base(needle, loop_bytes), r3.right);
+    let r5 = resident_split_at(fetch, memory, w, st ++ (ln ++ (sb ++ (wb ++ (call ++ (x ++ call))))), entry, print_at_word(needle, loop_bytes), r4.right);
+    let r6 = resident_split_at(fetch, memory, st, ln ++ (sb ++ (wb ++ (call ++ (x ++ call)))), entry, print_at_start(needle, loop_bytes, word), r5.right);
+    let r7 = resident_split_at(fetch, memory, ln, sb ++ (wb ++ (call ++ (x ++ call))), entry, print_at_length(needle, loop_bytes, word, start), r6.right);
+    let r8 = resident_split_at(fetch, memory, sb, wb ++ (call ++ (x ++ call)), entry, print_at_store(needle, loop_bytes, word, start, length), r7.right);
+    let r9 = resident_split_at(fetch, memory, wb, call ++ (x ++ call), entry, print_at_write(needle, loop_bytes, word, start, length), r8.right);
+    let r10 = resident_split_at(fetch, memory, call, x ++ call, entry, print_at_write_call(needle, loop_bytes, word, start, length), r9.right);
+    let r11 = resident_split_at(fetch, memory, x, call, entry, print_at_exit(needle, loop_bytes, word, start, length), r10.right);
+    ReadPrintResident(r0.left, r1.left, r2.left, r3.left, r4.left, r5.left, r6.left, r7.left, r8.left, r9.left, r10.left, r11.left, r11.right)
+}
+
+// The formatter's certificates, as the producer generates them from
+// decimal_line's source functions at the profile's registers, and the
+// registers each keeps for what runs after it.
+fn PrintWord(word: StructuredCode, keeps: Gpr → Type) → Type {
+    (before: MachineState<IoMemory>) → (n: BitVec(64)) → n = read_gpr(R11, before.gprs) →
+        StructuredArtifact<IoMemory>(word, before, Rax, line_word(n), keeps)
+}
+fn PrintStart(start: StructuredCode, keeps: Gpr → Type) → Type {
+    (before: MachineState<IoMemory>) → (base, n: BitVec(64)) → base = read_gpr(R8, before.gprs) → n = read_gpr(R11, before.gprs) →
+        StructuredArtifact<IoMemory>(start, before, R9, line_start(base, n), keeps)
+}
+fn PrintLength(length: StructuredCode, keeps: Gpr → Type) → Type {
+    (before: MachineState<IoMemory>) → (n: BitVec(64)) → n = read_gpr(R11, before.gprs) →
+        StructuredArtifact<IoMemory>(length, before, R10, line_length(n), keeps)
+}
+record ReadPrintFormat(word, start, length: StructuredCode, word_keeps, start_keeps, length_keeps: Gpr → Type) {
+    word_cert: PrintWord(word, word_keeps),
+    start_cert: PrintStart(start, start_keeps),
+    length_cert: PrintLength(length, length_keeps),
+    word_r8: word_keeps(R8), word_r11: word_keeps(R11),
+    start_rax: start_keeps(Rax), start_r8: start_keeps(R8), start_r11: start_keeps(R11),
+    length_rax: length_keeps(Rax), length_r8: length_keeps(R8), length_r9: length_keeps(R9),
+}
+
+// One artifact, fetched where its bytes are resident: the run, its end, and
+// that memory is untouched.
+theorem artifact_fetched(code: StructuredCode, before: MachineState<IoMemory>, result_register: Gpr, result: BitVec(64),
+    keeps: Gpr → Type, artifact: StructuredArtifact<IoMemory>(code, before, result_register, result, keeps),
+    resident: CodeResident(io_fetch_access(), before.memory, structured_bytes(code), before.rip)):
+    FetchedSteps(io_fetch_access(), io_data_access(), before, artifact.after) {
+    j(sym(artifact.execution), λ after _ => FetchedSteps(io_fetch_access(), io_data_access(), before, after),
+        structured_fetched(io_fetch_access(), io_data_access(), code, before, artifact.layout, resident).left)
+}
+
+theorem page_write_reads(i, skip: Nat):
+    bitvec_nat::word_of_nat(64, (0x401000 + skip) + i) = bitvec_nat::word_of_nat(64, io_page_base() + (i + skip)) {
+    let base: (io_page_base() = 0x401000) = refl;
+    let same: ((0x401000 + skip) + i = io_page_base() + (i + skip)) = omega;
+    cong_fn<Nat, BitVec(64)>(λ at => bitvec_nat::word_of_nat(64, at), same)
+}
+
+// A byte of the line is within the stored word.
+theorem write_room(i, skip, len: Nat, short: i < len, total: len + skip = 5):
+    (i + skip < 8) ∧ (i + skip < 4096) { ⟨omega, omega⟩ }
+
+// The formatter has run: the line's word, start and length are in their
+// registers, the base still in R8, memory as the read left it.
+record PrintFormatted(stored: IoMemory, needle: BitVec(8), loop_bytes: List<BitVec(8)>, word, start, length: StructuredCode,
+    count: Nat, state: MachineState<IoMemory>) {
+    memory: state.memory = stored,
+    rip: state.rip = print_rip(print_at_store(needle, loop_bytes, word, start, length)),
+    base: read_gpr(R8, state.gprs) = BitVec::ofNat(0x401000),
+    word_value: read_gpr(Rax, state.gprs) = line_word(bitvec_nat::word_of_nat(64, count)),
+    start_value: read_gpr(R9, state.gprs) = line_start(BitVec::ofNat(0x401000), bitvec_nat::word_of_nat(64, count)),
+    length_value: read_gpr(R10, state.gprs) = line_length(bitvec_nat::word_of_nat(64, count)),
+}
+
+// From the loop's end, with the count in R11: the base, then the formatter.
+theorem print_formats(stored: IoMemory, needle: BitVec(8), loop_bytes: List<BitVec(8)>, word, start, length: StructuredCode,
+    word_keeps, start_keeps, length_keeps: Gpr → Type, format: ReadPrintFormat(word, start, length, word_keeps, start_keeps, length_keeps),
+    pieces: ReadPrintResident(stored, needle, loop_bytes, word, start, length), count: Nat, done: MachineState<IoMemory>,
+    done_memory: done.memory = stored, done_rip: done.rip = print_rip(print_at_base(needle, loop_bytes)),
+    done_count: read_gpr(R11, done.gprs) = bitvec_nat::word_of_nat(64, count)):
+    Exists<MachineState<IoMemory>>(λ last => FetchedSteps(io_fetch_access(), io_data_access(), done, last) ∧
+        PrintFormatted(stored, needle, loop_bytes, word, start, length, count, last)) {
+    let fetch = io_fetch_access();
+    let data = io_data_access();
+    let entry: BitVec(64) = BitVec::ofNat(0x4000e8);
+    let n = bitvec_nat::word_of_nat(64, count);
+    let based = block_fetched(fetch, data, print_base_block(), done, trivial,
+        resident_state(fetch, canonical_block_bytes(print_base_block()), stored, print_rip(print_at_base(needle, loop_bytes)), done,
+            done_memory, done_rip, pieces.base_at));
+    let s0 = execute_block_normal(print_base_block(), done);
+    let s0_memory: (s0.memory = stored) = trans(pure_block_memory(print_base_block(), done), done_memory);
+    let s0_rip: (s0.rip = print_rip(print_at_word(needle, loop_bytes))) =
+        trans(based.right, rip_advance(entry, done.rip, print_at_base(needle, loop_bytes), print_base_len(), done_rip));
+    let s0_r11: (read_gpr(R11, s0.gprs) = n) = done_count;
+    // The line's word.
+    let w = format.word_cert(s0, read_gpr(R11, s0.gprs), refl);
+    let w_run = artifact_fetched(word, s0, Rax, line_word(read_gpr(R11, s0.gprs)), word_keeps, w,
+        resident_state(fetch, structured_bytes(word), stored, print_rip(print_at_word(needle, loop_bytes)), s0, s0_memory, s0_rip, pieces.word_at));
+    let s1 = w.after;
+    let s1_memory: (s1.memory = stored) = trans(w.memory_preserved, s0_memory);
+    let s1_rip: (s1.rip = print_rip(print_at_start(needle, loop_bytes, word))) =
+        trans(w.rip_correct, rip_advance(entry, s0.rip, print_at_word(needle, loop_bytes), structured_bytes(word).len(), s0_rip));
+    let s1_r8: (read_gpr(R8, s1.gprs) = BitVec::ofNat(0x401000)) = w.registers_preserved(R8, format.word_r8);
+    let s1_r11: (read_gpr(R11, s1.gprs) = n) = trans(w.registers_preserved(R11, format.word_r11), s0_r11);
+    let s1_rax: (read_gpr(Rax, s1.gprs) = line_word(n)) =
+        trans(w.result_correct, cong_fn<BitVec(64), BitVec(64)>(λ v => line_word(v), s0_r11));
+    // Where the line starts.
+    let st = format.start_cert(s1, read_gpr(R8, s1.gprs), read_gpr(R11, s1.gprs), refl, refl);
+    let st_run = artifact_fetched(start, s1, R9, line_start(read_gpr(R8, s1.gprs), read_gpr(R11, s1.gprs)), start_keeps, st,
+        resident_state(fetch, structured_bytes(start), stored, print_rip(print_at_start(needle, loop_bytes, word)), s1, s1_memory, s1_rip, pieces.start_at));
+    let s2 = st.after;
+    let s2_memory: (s2.memory = stored) = trans(st.memory_preserved, s1_memory);
+    let s2_rip: (s2.rip = print_rip(print_at_length(needle, loop_bytes, word, start))) =
+        trans(st.rip_correct, rip_advance(entry, s1.rip, print_at_start(needle, loop_bytes, word), structured_bytes(start).len(), s1_rip));
+    let s2_r8: (read_gpr(R8, s2.gprs) = BitVec::ofNat(0x401000)) = trans(st.registers_preserved(R8, format.start_r8), s1_r8);
+    let s2_r11: (read_gpr(R11, s2.gprs) = n) = trans(st.registers_preserved(R11, format.start_r11), s1_r11);
+    let s2_rax: (read_gpr(Rax, s2.gprs) = line_word(n)) = trans(st.registers_preserved(Rax, format.start_rax), s1_rax);
+    let s2_r9: (read_gpr(R9, s2.gprs) = line_start(BitVec::ofNat(0x401000), n)) =
+        trans(st.result_correct, trans(cong_fn<BitVec(64), BitVec(64)>(λ b => line_start(b, read_gpr(R11, s1.gprs)), s1_r8),
+            cong_fn<BitVec(64), BitVec(64)>(λ v => line_start(BitVec::ofNat(0x401000), v), s1_r11)));
+    // How long it is.
+    let ln = format.length_cert(s2, read_gpr(R11, s2.gprs), refl);
+    let ln_run = artifact_fetched(length, s2, R10, line_length(read_gpr(R11, s2.gprs)), length_keeps, ln,
+        resident_state(fetch, structured_bytes(length), stored, print_rip(print_at_length(needle, loop_bytes, word, start)), s2, s2_memory, s2_rip, pieces.length_at));
+    let s3 = ln.after;
+    Exists(s3, ⟨fetched_steps_trans(fetch, data, done, s0, s3, based.left,
+            fetched_steps_trans(fetch, data, s0, s1, s3, w_run, fetched_steps_trans(fetch, data, s1, s2, s3, st_run, ln_run))),
+        PrintFormatted(
+            memory := trans(ln.memory_preserved, s2_memory),
+            rip := trans(ln.rip_correct, rip_advance(entry, s2.rip, print_at_length(needle, loop_bytes, word, start), structured_bytes(length).len(), s2_rip)),
+            base := trans(ln.registers_preserved(R8, format.length_r8), s2_r8),
+            word_value := trans(ln.registers_preserved(Rax, format.length_rax), s2_rax),
+            start_value := trans(ln.registers_preserved(R9, format.length_r9), s2_r9),
+            length_value := trans(ln.result_correct, cong_fn<BitVec(64), BitVec(64)>(λ v => line_length(v), s2_r11)))⟩)
+}
+
+// The write's bytes: the line, read back from the stored word past its
+// leading zeros.
+theorem print_sends(stored: IoMemory, count: Nat, small: count < 10000, memory: IoMemory,
+    memory_is: memory = io_store_offset(stored, 0, word_bytes(line_word(bitvec_nat::word_of_nat(64, count)))),
+    buffer: BitVec(64), buffer_is: buffer.toNat() = 0x401000 + line_skip(count)):
+    LinuxWritesFrom(io_linux(), memory, buffer, decimal_line(count)) {
+    λ i b present => {
+        let line = decimal_line(count);
+        let skip = line_skip(count);
+        let wb = word_bytes(line_word(bitvec_nat::word_of_nat(64, count)));
+        let within = line_in_word(count, small);
+        let total: (line.len() + skip = 5) = trans(cong_fn<Nat, Nat>(λ l => l + skip, within.right),
+            Nat::sub_add_cancel(skip, 5, Nat::le_trans(skip, 3, 5, line_skip_le(count), trivial)));
+        let room = write_room(i, skip, line.len(), nth_some_below(line, i, b, present), total);
+        let in_word: (wb.nth(i + skip) = Some(b)) =
+            j(sym(line_word_bytes(count, small)), λ list _ => list.nth(i + skip) = Some(b), within.left(i, b, present));
+        let read: (io_read(io_store_offset(stored, 0, wb), bitvec_nat::word_of_nat(64, io_page_base() + (i + skip))) = Some(b)) =
+            io_read_stored(stored, wb, i + skip, b, room.right, in_word);
+        j(sym(memory_is), λ current _ => io_read(current, bitvec_nat::word_of_nat(64, buffer.toNat() + i)) = Some(b),
+            trans(cong_fn<Nat, Option<BitVec(8)>>(λ at => io_read(io_store_offset(stored, 0, wb), bitvec_nat::word_of_nat(64, at + i)), buffer_is),
+                trans(cong_fn<BitVec(64), Option<BitVec(8)>>(λ address => io_read(io_store_offset(stored, 0, wb), address), page_write_reads(i, skip)), read)))
+    }
+}
+
+// From the formatted state: store the word, write(1, start, length), exit 0.
+theorem print_writes(stored: IoMemory, needle: BitVec(8), loop_bytes: List<BitVec(8)>, word, start, length: StructuredCode,
+    count: Nat, small: count < 10000, s3: MachineState<IoMemory>,
+    formatted: PrintFormatted(stored, needle, loop_bytes, word, start, length, count, s3),
+    pieces: ReadPrintResident(stored, needle, loop_bytes, word, start, length),
+    later: ReadPrintResident(io_store_offset(stored, 0, word_bytes(line_word(bitvec_nat::word_of_nat(64, count)))),
+        needle, loop_bytes, word, start, length)):
+    LinuxRuns(io_linux(), [WriteEvent(BitVec::ofNat(1), decimal_line(count)), ExitEvent(BitVec::ofNat(0))], s3) {
+    let fetch = io_fetch_access();
+    let data = io_data_access();
+    let entry: BitVec(64) = BitVec::ofNat(0x4000e8);
+    let n = bitvec_nat::word_of_nat(64, count);
+    let line = decimal_line(count);
+    let wb = word_bytes(line_word(n));
+    let after_store = io_store_offset(stored, 0, wb);
+    let writes = linux_writes(io_linux());
+    let store_at: CodeResident(fetch, s3.memory, word_store_bytes(print_store()), s3.rip) =
+        resident_state(fetch, word_store_bytes(print_store()), stored, print_rip(print_at_store(needle, loop_bytes, word, start, length)),
+            s3, formatted.memory, formatted.rip, pieces.store_at);
+    let writable: IoWritable(s3.memory, read_gpr(R8, s3.gprs), 8) =
+        j(sym(formatted.base), λ address _ => IoWritable(s3.memory, address, 8),
+            ⟨Nat::le_refl(io_page_base()), Nat::leb_sound(io_page_base() + 8, io_page_base() + 4096, trivial)⟩);
+    let stored_step = store_step(fetch, writes, print_store(), s3, refl,
+        FetchedFrom(resident_readable(fetch, s3.memory, word_store_bytes(print_store()), s3.rip, store_at)), writable);
+    let s4 = word_store_after(writes, print_store(), s3);
+    let s4_memory: (s4.memory = after_store) =
+        trans(cong_fn<BitVec(64), IoMemory>(λ address => io_store(s3.memory, address, word_bytes(read_gpr(Rax, s3.gprs))), formatted.base),
+            trans(cong_fn<BitVec(64), IoMemory>(λ value => io_store(s3.memory, BitVec::ofNat(0x401000), word_bytes(value)), formatted.word_value),
+                cong_fn<IoMemory, IoMemory>(λ memory => io_store(memory, BitVec::ofNat(0x401000), wb), formatted.memory)));
+    let s4_rip: (s4.rip = print_rip(print_at_write(needle, loop_bytes, word, start, length))) =
+        rip_advance(entry, s3.rip, print_at_store(needle, loop_bytes, word, start, length), 3, formatted.rip);
+    // write(1, start, length).
+    let wrote = block_fetched(fetch, data, print_write_block(), s4, trivial,
+        resident_state(fetch, canonical_block_bytes(print_write_block()), after_store,
+            print_rip(print_at_write(needle, loop_bytes, word, start, length)), s4, s4_memory, s4_rip, later.write_at));
+    let s5 = execute_block_normal(print_write_block(), s4);
+    let s5_memory: (s5.memory = after_store) = trans(pure_block_memory(print_write_block(), s4), s4_memory);
+    let s5_rip: (s5.rip = print_rip(print_at_write_call(needle, loop_bytes, word, start, length))) =
+        trans(wrote.right, rip_advance(entry, s4.rip, print_at_write(needle, loop_bytes, word, start, length), print_write_len(), s4_rip));
+    let call: LinuxSyscallAt(io_linux(), s5) = FetchedFrom(resident_readable(fetch, s5.memory, linux_syscall_bytes(), s5.rip,
+        resident_state(fetch, linux_syscall_bytes(), after_store, print_rip(print_at_write_call(needle, loop_bytes, word, start, length)),
+            s5, s5_memory, s5_rip, later.write_call_at)));
+    let length_value: (read_gpr(Rdx, s5.gprs).toNat() = line.len()) =
+        trans(cong_fn<BitVec(64), Nat>(λ v => v.toNat(), formatted.length_value),
+            trans(line_length_value(count, small), sym(line_in_word(count, small).right)));
+    let start_value: (read_gpr(Rsi, s5.gprs).toNat() = 0x401000 + line_skip(count)) =
+        trans(cong_fn<BitVec(64), Nat>(λ v => v.toNat(), formatted.start_value), line_start_value(count, small));
+    let steps: LinuxSteps(io_linux(), s3, s5) =
+        linux_steps_trans(io_linux(), s3, s4, s5, linux_steps_store(io_linux(), s3, s4, stored_step),
+            linux_steps_of_fetched(io_linux(), s4, s5, wrote.left));
+    linux_runs_write(io_linux(), s3, s5, BitVec::ofNat(1), line, [ExitEvent(BitVec::ofNat(0))], steps, call, refl, refl,
+        length_value, print_sends(stored, count, small, s5.memory, s5_memory, read_gpr(Rsi, s5.gprs), start_value),
+        λ rcx r11 => {
+            let s6 = linux_write_return(s5, line, rcx, r11);
+            let s6_rip: (s6.rip = print_rip(print_at_exit(needle, loop_bytes, word, start, length))) =
+                rip_advance(entry, s5.rip, print_at_write_call(needle, loop_bytes, word, start, length), 2, s5_rip);
+            let exited = block_fetched(fetch, data, print_exit_block(), s6, trivial,
+                resident_state(fetch, canonical_block_bytes(print_exit_block()), after_store,
+                    print_rip(print_at_exit(needle, loop_bytes, word, start, length)), s6, s5_memory, s6_rip, later.exit_at));
+            let last = execute_block_normal(print_exit_block(), s6);
+            let last_memory: (last.memory = after_store) = trans(pure_block_memory(print_exit_block(), s6), s5_memory);
+            let last_rip: (last.rip = print_rip(print_at_exit_call(needle, loop_bytes, word, start, length))) =
+                trans(exited.right, rip_advance(entry, s6.rip, print_at_exit(needle, loop_bytes, word, start, length), print_exit_len(), s6_rip));
+            let exit_call: LinuxSyscallAt(io_linux(), last) = FetchedFrom(resident_readable(fetch, last.memory, linux_syscall_bytes(), last.rip,
+                resident_state(fetch, linux_syscall_bytes(), after_store,
+                    print_rip(print_at_exit_call(needle, loop_bytes, word, start, length)), last, last_memory, last_rip, later.exit_call_at)));
+            linux_runs_exit(io_linux(), s6, last, BitVec::ofNat(0), exited.left, exit_call, refl, refl)
+        })
+}
+
+// After the read returned `bytes`: count, format, store, write the line,
+// exit 0.
+theorem read_print_after_read(file: List<BitVec(8)>, page: Nat → BitVec(8), p: LoopPlacement, at: ReadLoopPlacement(p),
+    region: ReadonlyLoop<Nat>, loop_code: AccessCode, loop_bytes: List<BitVec(8)>,
+    source: ReadonlyBytes → BitVec(8) → Nat → Nat → Nat → LoopOutcome<Nat>, needle: BitVec(8), spec: List<BitVec(8)> → Nat,
+    agreement: (buffer: ReadonlyBytes) → (needle: BitVec(8)) → (budget, cursor, carry: Nat) →
+        loop_run(budget, region, buffer, needle, cursor, carry) = source(buffer, needle, budget, cursor, carry),
+    native: ReadLoopCertificate(p, region, loop_code, loop_bytes, source),
+    computes: ReadLoopComputes(source, needle, spec),
+    word, start, length: StructuredCode, word_keeps, start_keeps, length_keeps: Gpr → Type,
+    format: ReadPrintFormat(word, start, length, word_keeps, start_keeps, length_keeps),
+    resident: (page: Nat → BitVec(8)) → CodeResident(io_fetch_access(), IoMemory(file, page),
+        read_print_code(needle, loop_bytes, word, start, length), BitVec::ofNat(0x4000e8)),
+    bytes: List<BitVec(8)>, fits: bytes.len() <= read_capacity(), small: spec(bytes) < 10000, returned: MachineState<IoMemory>,
+    memory_is: returned.memory = io_store_offset(IoMemory(file, page), 0, bytes),
+    rip_is: returned.rip = next_rip(BitVec::ofNat(0x4000e8), (0 + read_entry_len()) + 2),
+    length_word: read_gpr(Rax, returned.gprs) = bitvec_nat::word_of_nat(64, bytes.len())):
+    LinuxRuns(io_linux(), [WriteEvent(BitVec::ofNat(1), decimal_line(spec(bytes))), ExitEvent(BitVec::ofNat(0))], returned) {
+    let stored = io_store_offset(IoMemory(file, page), 0, bytes);
+    let count = spec(bytes);
+    let pieces = read_print_resident(stored, needle, loop_bytes, word, start, length, resident(stored.page));
+    let counted = read_loop_counts(file, page, p, at, region, loop_code, loop_bytes, source, needle, spec, agreement, native,
+        computes, bytes, fits, returned, (0 + read_entry_len()) + 2, memory_is, rip_is, length_word, pieces.setup_at, pieces.loop_at);
+    let formatted = print_formats(stored, needle, loop_bytes, word, start, length, word_keeps, start_keeps, length_keeps, format, pieces,
+        count, counted.witness, counted.proof.right.left, counted.proof.right.right.left, counted.proof.right.right.right);
+    let after_store = io_store_offset(stored, 0, word_bytes(line_word(bitvec_nat::word_of_nat(64, count))));
+    linux_runs_after_steps(io_linux(), [WriteEvent(BitVec::ofNat(1), decimal_line(count)), ExitEvent(BitVec::ofNat(0))],
+        returned, formatted.witness,
+        fetched_steps_trans(io_fetch_access(), io_data_access(), returned, counted.witness, formatted.witness, counted.proof.left, formatted.proof.left),
+        print_writes(stored, needle, loop_bytes, word, start, length, count, small, formatted.witness, formatted.proof.right, pieces,
+            read_print_resident(after_store, needle, loop_bytes, word, start, length, resident(after_store.page))))
+}
+
+// The process claim: for every input a successful read may return, the file
+// has a run that reads it, writes the specification's count as a decimal line
+// to stdout, and exits 0.
+theorem read_print_runs(file: List<BitVec(8)>, p: LoopPlacement, at: ReadLoopPlacement(p),
+    region: ReadonlyLoop<Nat>, loop_code: AccessCode, loop_bytes: List<BitVec(8)>,
+    source: ReadonlyBytes → BitVec(8) → Nat → Nat → Nat → LoopOutcome<Nat>, needle: BitVec(8), spec: List<BitVec(8)> → Nat,
+    agreement: (buffer: ReadonlyBytes) → (needle: BitVec(8)) → (budget, cursor, carry: Nat) →
+        loop_run(budget, region, buffer, needle, cursor, carry) = source(buffer, needle, budget, cursor, carry),
+    native: ReadLoopCertificate(p, region, loop_code, loop_bytes, source),
+    computes: ReadLoopComputes(source, needle, spec),
+    bounded: (bytes: List<BitVec(8)>) → bytes.len() <= read_capacity() → spec(bytes) < 10000,
+    word, start, length: StructuredCode, word_keeps, start_keeps, length_keeps: Gpr → Type,
+    format: ReadPrintFormat(word, start, length, word_keeps, start_keeps, length_keeps),
+    resident: (page: Nat → BitVec(8)) → CodeResident(io_fetch_access(), IoMemory(file, page),
+        read_print_code(needle, loop_bytes, word, start, length), BitVec::ofNat(0x4000e8)),
+    bytes: List<BitVec(8)>, fits: bytes.len() <= read_capacity(), page: Nat → BitVec(8), gprs: Gprs, flags: Flags):
+    LinuxRuns(io_linux(), [ReadEvent(BitVec::ofNat(0), bytes), WriteEvent(BitVec::ofNat(1), decimal_line(spec(bytes))),
+        ExitEvent(BitVec::ofNat(0))], io_initial(file, page, gprs, flags)) {
+    let fetch = io_fetch_access();
+    let data = io_data_access();
+    let start_state = io_initial(file, page, gprs, flags);
+    let pieces = read_print_resident(IoMemory(file, page), needle, loop_bytes, word, start, length, resident(page));
+    let entered = block_fetched(fetch, data, read_entry_block(), start_state, trivial, pieces.entry_at);
+    let asked = execute_block_normal(read_entry_block(), start_state);
+    let writable: IoWritable(asked.memory, read_gpr(Rsi, asked.gprs), bytes.len()) =
+        ⟨Nat::le_refl(io_page_base()), Nat::add_le_mono_l(io_page_base(), bytes.len(), 4096, fits)⟩;
+    linux_runs_read(io_linux(), start_state, asked, BitVec::ofNat(0), bytes,
+        [WriteEvent(BitVec::ofNat(1), decimal_line(spec(bytes))), ExitEvent(BitVec::ofNat(0))],
+        entered.left, FetchedFrom(resident_readable(fetch, asked.memory, linux_syscall_bytes(), asked.rip, pieces.read_at)),
+        refl, refl, fits, writable,
+        λ rcx r11 => read_print_after_read(file, page, p, at, region, loop_code, loop_bytes, source, needle, spec,
+            agreement, native, computes, word, start, length, word_keeps, start_keeps, length_keeps, format, resident,
+            bytes, fits, bounded(bytes, fits), linux_read_return(io_linux(), asked, bytes, rcx, r11), refl, refl, refl))
+}
+
+// A file of the call profile's shape, a 232-byte header then the program.
+theorem read_print_file_resident(header: List<BitVec(8)>, needle: BitVec(8), loop_bytes: List<BitVec(8)>, word, start, length: StructuredCode,
+    header_length: header.len() = 232, fits: 232 + read_print_code(needle, loop_bytes, word, start, length).len() <= 4096):
+    (page: Nat → BitVec(8)) → CodeResident(io_fetch_access(), IoMemory(header ++ read_print_code(needle, loop_bytes, word, start, length), page),
+        read_print_code(needle, loop_bytes, word, start, length), BitVec::ofNat(0x4000e8)) {
+    λ page => {
+        let code = read_print_code(needle, loop_bytes, word, start, length);
+        let placed = io_code_resident(header, code, page, j(sym(header_length), λ n _ => n + code.len() <= 4096, fits));
+        let entry: (bitvec_nat::word_of_nat(64, 0x400000 + header.len()) = BitVec::ofNat(0x4000e8)) =
+            trans(cong_fn<Nat, BitVec(64)>(λ n => bitvec_nat::word_of_nat(64, 0x400000 + n), header_length),
+                bitvec_nat::word_of_nat_toNat(64, BitVec::ofNat(0x4000e8)));
+        j(entry, λ at _ => CodeResident(io_fetch_access(), IoMemory(header ++ code, page), code, at), placed)
+    }
+}

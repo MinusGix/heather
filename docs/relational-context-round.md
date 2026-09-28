@@ -2,7 +2,7 @@
 
 The next small slice after [manual Mergeable](manual-mergeable-round.md)
 is a library of proof constructors in `std/relation_context`.
-[The executable showcase](showcase/relational-contexts.hthr) builds a
+[The executable showcase](showcase/relational_contexts.hthr) builds a
 compatibility proof for an ordinary function:
 
 ```heather

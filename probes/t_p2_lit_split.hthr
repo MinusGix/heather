@@ -1,0 +1,40 @@
+// P2: the literal, separated from its packing. Per width:
+//   p2_def_n  a definition whose body is the literal — elaboration and the
+//             kernel check of a [Bool; n] literal, with NO vector-against-
+//             vector conversion at all. The CONTROL.
+//   p2_lit_n  the literal against itself: the control plus one Vec/Vec
+//             Sigma-eta conversion (the packing). `vid` is the identity on
+//             vectors; it exists only because a bare `[a, b] = [a, b]` in a
+//             theorem's type parses as a vector TYPE. One delta-step.
+//   p2_rec_n  the same inside the BitVec record, no .bits projection.
+// A3 (t_a3_literal.hthr) is p2_rec_n plus the .bits projection.
+// Re-measure with a FRESH --cache-dir (see probes/README.md).
+
+import bitvec;
+import bool;
+
+fn vid(n: Nat, x: [Bool; n]) → [Bool; n] { x }
+
+fn p2_def_8() → [Bool; 8] { [True, False, True, False, True, False, True, False] }
+
+theorem p2_lit_8(): vid(8, [True, False, True, False, True, False, True, False]) = [True, False, True, False, True, False, True, False] { refl }
+
+theorem p2_rec_8(): bitvec::from_bits(8, [True, False, True, False, True, False, True, False]) = bitvec::from_bits(8, [True, False, True, False, True, False, True, False]) { refl }
+
+fn p2_def_16() → [Bool; 16] { [True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False] }
+
+theorem p2_lit_16(): vid(16, [True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False]) = [True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False] { refl }
+
+theorem p2_rec_16(): bitvec::from_bits(16, [True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False]) = bitvec::from_bits(16, [True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False]) { refl }
+
+fn p2_def_32() → [Bool; 32] { [True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False] }
+
+theorem p2_lit_32(): vid(32, [True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False]) = [True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False] { refl }
+
+theorem p2_rec_32(): bitvec::from_bits(32, [True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False]) = bitvec::from_bits(32, [True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False]) { refl }
+
+fn p2_def_64() → [Bool; 64] { [True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False] }
+
+theorem p2_lit_64(): vid(64, [True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False]) = [True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False] { refl }
+
+theorem p2_rec_64(): bitvec::from_bits(64, [True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False]) = bitvec::from_bits(64, [True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False]) { refl }

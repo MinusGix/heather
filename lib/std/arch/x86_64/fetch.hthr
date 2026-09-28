@@ -97,6 +97,26 @@ record FetchedFrom<M>(access: FetchAccess<M>, memory: M, span: InstructionBytes)
     reads: ReadableBytes(access, memory, span.bytes, span.start),
 }
 
+theorem readable_tail<M>(access: FetchAccess<M>, memory: M, start: BitVec(64),
+    byte: BitVec(8), rest: List<BitVec(8)>,
+    reads: ReadableBytes(access, memory, Cons(byte, rest), start)):
+    ReadableBytes(access, memory, rest, next_rip(start, 1)) {
+    (match rest as λ remaining =>
+        ReadableBytes(access, memory, Cons(byte, remaining), start) →
+        ReadableBytes(access, memory, remaining, next_rip(start, 1)) {
+        Nil => λ _ => trivial,
+        Cons(_, _) => λ evidence => evidence.right.right.right,
+    })(reads)
+}
+
+theorem readable_head_same<M>(access: FetchAccess<M>, memory: M, start: BitVec(64),
+    left, right: BitVec(8), left_tail, right_tail: List<BitVec(8)>,
+    first: ReadableBytes(access, memory, Cons(left, left_tail), start),
+    second: ReadableBytes(access, memory, Cons(right, right_tail), start)):
+    left = right {
+    Option::some_inj(left, right, trans(sym(first.right.left), second.right.left))
+}
+
 // Memory comes from the same before-state used by ExecuteAt. Fetch failure,
 // unsupported decoding, and architectural execution outcomes remain distinct.
 fn ExecuteFetched<M>(access: FetchAccess<M>, span: InstructionBytes,
@@ -207,4 +227,52 @@ theorem fetched_result<M>(access: FetchAccess<M>, memory: M, span: InstructionBy
     fetch_instruction_bytes(access, memory, span.bytes.len(), span.start) = FetchedBytes(span.bytes)
 {
     readable_bytes_fetch(access, memory, span.bytes, span.start, certificate.reads)
+}
+
+// Fetching a fixed number of bytes from one memory and address has one result.
+// This is the byte-level premise of uniqueness for emitted instructions.
+theorem fetched_bytes_same_length<M>(access: FetchAccess<M>, memory: M,
+    start: BitVec(64), left, right: List<BitVec(8)>,
+    left_read: FetchedFrom(access, memory, InstructionBytes(start, left)),
+    right_read: FetchedFrom(access, memory, InstructionBytes(start, right)),
+    length: left.len() = right.len()): left = right {
+    let first = fetched_result(access, memory, InstructionBytes(start, left), left_read);
+    let second = fetched_result(access, memory, InstructionBytes(start, right), right_read);
+    let equal_fetches: (FetchedBytes(left) = FetchedBytes(right)) =
+        trans(sym(first),
+            trans(cong_fn(λ count => fetch_instruction_bytes(access, memory, count, start), length), second));
+    Option::some_inj(left, right,
+        cong_fn(λ result => match result {
+            FetchedBytes(bytes) => Some(bytes),
+            FetchDenied(_) => None<List<BitVec(8)>>,
+            FetchMissing(_) => None<List<BitVec(8)>>,
+            FetchAddressWrap => None<List<BitVec(8)>>,
+        }, equal_fetches))
+}
+
+theorem fetched_bytes_same_length_related<M>(access: FetchAccess<M>,
+    before_left, before_right: MachineState<M>,
+    same: SameDefinedState<M>(before_left, before_right),
+    left, right: List<BitVec(8)>,
+    left_read: FetchedFrom(access, before_left.memory, InstructionBytes(before_left.rip, left)),
+    right_read: FetchedFrom(access, before_right.memory, InstructionBytes(before_right.rip, right)),
+    length: left.len() = right.len()): left = right {
+    let first = fetched_result(access, before_left.memory,
+        InstructionBytes(before_left.rip, left), left_read);
+    let second = fetched_result(access, before_right.memory,
+        InstructionBytes(before_right.rip, right), right_read);
+    let same_fetch = trans(
+        cong_fn(λ (memory: M) => fetch_instruction_bytes(access, memory, left.len(), before_left.rip),
+            same.memory),
+        trans(cong_fn(λ (start: BitVec(64)) => fetch_instruction_bytes(access, before_right.memory,
+                left.len(), start), same.rip),
+            cong_fn(λ (count: Nat) => fetch_instruction_bytes(access, before_right.memory,
+                count, before_right.rip), length)));
+    Option::some_inj(left, right,
+        cong_fn(λ result => match result {
+            FetchedBytes(bytes) => Some(bytes),
+            FetchDenied(_) => None<List<BitVec(8)>>,
+            FetchMissing(_) => None<List<BitVec(8)>>,
+            FetchAddressWrap => None<List<BitVec(8)>>,
+        }, trans(sym(first), trans(same_fetch, second))))
 }

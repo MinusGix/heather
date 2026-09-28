@@ -1,0 +1,53 @@
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import char;
+import string;
+
+// Operations as a record (finite_set's SetOperations), laws as a class over it.
+record SeqOps<S, T> { view: S → List<T>, seq_len: S → Nat, seq_drop: S → Nat → S }
+
+class Sequence<S, T>(ops: SeqOps<S, T>) {
+    len_view: (s: S) → ops.seq_len(s) = list_len(ops.view(s)),
+    drop_view: (s: S) → (n: Nat) → ops.view(ops.seq_drop(s, n)) = list::drop(ops.view(s), n),
+}
+
+fn string_ops() → SeqOps<String, Char> {
+    SeqOps(λ (s: String) => s.chars, λ (s: String) => s.len(), λ (s: String) (n: Nat) => string::drop(s, n))
+}
+instance Sequence<String, Char>(string_ops) {
+    len_view := λ (s: String) => refl,
+    drop_view := λ (s: String) (n: Nat) => refl,
+}
+
+fn list_ops<A>() → SeqOps<List<A>, A> {
+    SeqOps(λ (xs: List<A>) => xs, λ (xs: List<A>) => list_len(xs), λ (xs: List<A>) (n: Nat) => list::drop(xs, n))
+}
+instance<A> Sequence<List<A>, A>(list_ops<A>) {
+    len_view := λ (xs: List<A>) => refl,
+    drop_view := λ (xs: List<A>) (n: Nat) => refl,
+}
+
+// A cursor indexed by the operations record, the way SetElement is by member.
+record Cursor<S, T>(ops: SeqOps<S, T>, source: S) {
+    offset: Nat,
+    within: nat::Le(offset, ops.seq_len(source)),
+}
+
+fn start<S, T>(ops: SeqOps<S, T>, source: S) → Cursor<S, T>(ops, source) {
+    Cursor(0, nat::zero_le(ops.seq_len(source)))
+}
+
+fn rest<S, T>(ops: SeqOps<S, T>, source: S, c: Cursor<S, T>(ops, source)) → List<T> {
+    list::drop(ops.view(source), c.offset)
+}
+
+// A token-fixed, source-polymorphic consumer using the law.
+fn digit_at<S>(ops: SeqOps<S, Char>, source: S, c: Cursor<S, Char>(ops, source)) → Option<Nat> {
+    match rest(ops, source, c) { Nil => None, Cons(ch, t) => Some(nat::sub(ch.code, 0x30)) }
+}
+
+theorem on_string(): digit_at(string_ops(), "7x", start(string_ops(), "7x")) = Some(7) { refl }
+theorem on_charlist(): digit_at(list_ops<Char>(), Cons('7', Nil<Char>), start(list_ops<Char>(), Cons('7', Nil<Char>))) = Some(7) { refl }

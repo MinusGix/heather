@@ -1,0 +1,22 @@
+// cp5 — the BASE with the two type parameters CLOSED (a local token type and
+// `Nat`). Same statement, same proof, no open `T`/`A`: the open-vs-closed
+// axis of docs/testing-generated-terms.md on this shape.
+import nat;
+import list;
+import logic;
+import result;
+import option;
+import pair;
+import int;
+import omega;
+import parser;
+
+inductive CTok { CA, CB }
+theorem cp_mono(source: List<CTok>, begin: Cursor<CTok>(source), r: Reply<CTok,Nat>(source,begin), expected: Nat,
+    relation: (source: List<CTok>) -> Cursor<CTok>(source) -> Cursor<CTok>(source) -> Nat -> Type):
+    Post(source,begin,relation,r) -> Post(source,begin,CompleteSpec<CTok,Nat>(relation),
+        bind_at<CTok,Nat,Nat>(source,begin,r,λ value middle forward => map_at(source,middle,eof_at(expected,source,middle),λ (ignored: Nat) => value))) {
+    match r { Err(e) => λ h => trivial, Ok(s) => λ h => match shape : rest(source,s.end) {
+        Nil => And(h,shape), Cons(head,tail) => trivial,
+    } }
+}

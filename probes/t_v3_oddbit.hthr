@@ -1,0 +1,27 @@
+// V3 (design §8.3): is a `Nat`-scrutinee fold into `Bool` classified today?
+// `odd_bit` is the two-successor course-of-values window `half` has, with a
+// `Bool` carrier. If `classify_step` returns `Opaque` for it, the fold peels
+// its argument one successor at a time and a machine-magnitude argument is
+// unreachable; if it is classified, the cost is flat in the magnitude.
+// `not_odd` is the negative control: the same parity by a one-successor
+// recursion through `bool::not`, whose step is a stuck case split on `ih`.
+// Fresh --cache-dir (probes/README.md).
+
+import bool;
+import nat;
+
+fn odd_bit(n: Nat) → Bool {
+    match n { Zero => False, Succ(k) => match k { Zero => True, Succ(l) => odd_bit(l) } }
+}
+
+fn not_odd(n: Nat) → Bool {
+    match n { Zero => False, Succ(k) => bool::not(not_odd(k)) }
+}
+
+theorem v3_odd_small(): odd_bit(7) = True { refl }
+theorem v3_odd_mid(): odd_bit(1000001) = True { refl }
+theorem v3_odd_big(): odd_bit(81985529216486895) = True { refl }
+theorem v3_odd_big_even(): odd_bit(81985529216486894) = False { refl }
+theorem v3_half_big(): nat::half(81985529216486895) = 40992764608243447 { refl }
+theorem v3_notodd_small(): not_odd(7) = True { refl }
+theorem v3_notodd_mid(): not_odd(100001) = True { refl }

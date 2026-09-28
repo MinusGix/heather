@@ -1,0 +1,14 @@
+// A3: the conversion floor — a literal against itself, no operation.
+// Probe file for docs/native-bitvector-values-design.md §2.
+// Re-measure with a FRESH --cache-dir (see probes/README.md).
+
+import bitvec;
+import bool;
+
+theorem a3_bits_8(): bitvec::from_bits(8, [True, False, True, False, True, False, True, False]).bits = [True, False, True, False, True, False, True, False] { refl }
+
+theorem a3_bits_16(): bitvec::from_bits(16, [True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False]).bits = [True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False] { refl }
+
+theorem a3_bits_32(): bitvec::from_bits(32, [True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False]).bits = [True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False] { refl }
+
+theorem a3_bits_64(): bitvec::from_bits(64, [True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False]).bits = [True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False] { refl }

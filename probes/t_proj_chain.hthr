@@ -1,0 +1,32 @@
+// Reduced reproducer: a value-parameterized dependent record (Certified's
+// shape) read through chained receivers, one binder deeper per item.
+import nat;
+import list;
+import logic;
+
+record Cur<T>(source: List<T>) { identity: source = source, offset: Nat, within: nat::Le(offset, list_len(source)) }
+fn Rel<T>(source: List<T>, begin,end: Cur<T>(source), value: Nat) -> Type { nat::Le(begin.offset, end.offset) }
+record Cert<T>(source: List<T>, begin: Cur<T>(source)) {
+    value: Nat,
+    end: Cur<T>(source),
+    forward: nat::Le(begin.offset, end.offset),
+    evidence: Rel(source, begin, end, value),
+}
+fn chain1(source: List<Nat>, begin: Cur<Nat>(source), a: Cert<Nat>(source,begin)) -> nat::Le(begin.offset, a.end.offset) {
+    a.forward
+}
+fn chain2(source: List<Nat>, begin: Cur<Nat>(source), a: Cert<Nat>(source,begin), b: Cert<Nat>(source,a.end)) -> nat::Le(begin.offset, b.end.offset) {
+    nat::le_trans(begin.offset, a.end.offset, b.end.offset, a.forward, b.forward)
+}
+fn chain3(source: List<Nat>, begin: Cur<Nat>(source), a: Cert<Nat>(source,begin), b: Cert<Nat>(source,a.end), c: Cert<Nat>(source,b.end)) -> nat::Le(begin.offset, c.end.offset) {
+    nat::le_trans(begin.offset, a.end.offset, c.end.offset, a.forward, nat::le_trans(a.end.offset, b.end.offset, c.end.offset, b.forward, c.forward))
+}
+fn chain4(source: List<Nat>, begin: Cur<Nat>(source), a: Cert<Nat>(source,begin), b: Cert<Nat>(source,a.end), c: Cert<Nat>(source,b.end), d: Cert<Nat>(source,c.end)) -> nat::Le(begin.offset, d.end.offset) {
+    nat::le_trans(begin.offset, a.end.offset, d.end.offset, a.forward,
+        nat::le_trans(a.end.offset, b.end.offset, d.end.offset, b.forward,
+            nat::le_trans(b.end.offset, c.end.offset, d.end.offset, c.forward, d.forward)))
+}
+// Evidence through the chain, as the grammar helpers do.
+fn ev3(source: List<Nat>, begin: Cur<Nat>(source), a: Cert<Nat>(source,begin), b: Cert<Nat>(source,a.end), c: Cert<Nat>(source,b.end)) -> Rel(source, b.end, c.end, c.value) {
+    c.evidence
+}

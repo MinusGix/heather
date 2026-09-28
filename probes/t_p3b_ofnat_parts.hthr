@@ -1,0 +1,65 @@
+// P3b: where ofNat's cost is. ofNat(n, x) is
+//   from_bit_list(n, bits_at_powers(powers_of_two_desc(n, 1, Nil),
+//                                   mod_succ(x, pred(pow(2, n))), Nil))
+// so the three suspects are the truncation (pow(2, n) does not fit a u64 run
+// at n = 64), the powers list, and the List-carried assembly fold.
+// ofNat2 drops the truncation; ofNat3 also hands it a LITERAL powers list.
+// Widths 8/16/32/63/64 separate the width law from the u64 overflow at 64.
+// Re-measure with a FRESH --cache-dir (see probes/README.md).
+
+import bitvec;
+import bool;
+import nat;
+import list;
+
+// ofNat without the modulus: same answer for every x below 2^n.
+fn ofNat2(n: Nat, x: Nat) → bitvec::BitVec(n) {
+    bitvec::from_bit_list(n,
+        bitvec::bits_at_powers(bitvec::powers_of_two_desc(n, 1, Nil), x, Nil))
+}
+
+// the powers list written out, so `powers_of_two_desc` is not run at all
+fn powers_lit_8() → List<Nat> { Cons(128, Cons(64, Cons(32, Cons(16, Cons(8, Cons(4, Cons(2, Cons(1, Nil)))))))) }
+
+fn ofNat3_8(x: Nat) → bitvec::BitVec(8) {
+    bitvec::from_bit_list(8, bitvec::bits_at_powers(powers_lit_8(), x, Nil))
+}
+
+// the powers list written out, so `powers_of_two_desc` is not run at all
+fn powers_lit_64() → List<Nat> { Cons(9223372036854775808, Cons(4611686018427387904, Cons(2305843009213693952, Cons(1152921504606846976, Cons(576460752303423488, Cons(288230376151711744, Cons(144115188075855872, Cons(72057594037927936, Cons(36028797018963968, Cons(18014398509481984, Cons(9007199254740992, Cons(4503599627370496, Cons(2251799813685248, Cons(1125899906842624, Cons(562949953421312, Cons(281474976710656, Cons(140737488355328, Cons(70368744177664, Cons(35184372088832, Cons(17592186044416, Cons(8796093022208, Cons(4398046511104, Cons(2199023255552, Cons(1099511627776, Cons(549755813888, Cons(274877906944, Cons(137438953472, Cons(68719476736, Cons(34359738368, Cons(17179869184, Cons(8589934592, Cons(4294967296, Cons(2147483648, Cons(1073741824, Cons(536870912, Cons(268435456, Cons(134217728, Cons(67108864, Cons(33554432, Cons(16777216, Cons(8388608, Cons(4194304, Cons(2097152, Cons(1048576, Cons(524288, Cons(262144, Cons(131072, Cons(65536, Cons(32768, Cons(16384, Cons(8192, Cons(4096, Cons(2048, Cons(1024, Cons(512, Cons(256, Cons(128, Cons(64, Cons(32, Cons(16, Cons(8, Cons(4, Cons(2, Cons(1, Nil)))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))) }
+
+fn ofNat3_64(x: Nat) → bitvec::BitVec(64) {
+    bitvec::from_bit_list(64, bitvec::bits_at_powers(powers_lit_64(), x, Nil))
+}
+
+theorem p3b_ofnat_w8(): bitvec::ofNat(8, 7) = bitvec::from_bits(8, [True, True, True, False, False, False, False, False]) { refl }
+
+theorem p3b_ofnat_w16(): bitvec::ofNat(16, 7) = bitvec::from_bits(16, [True, True, True, False, False, False, False, False, False, False, False, False, False, False, False, False]) { refl }
+
+theorem p3b_ofnat_w32(): bitvec::ofNat(32, 7) = bitvec::from_bits(32, [True, True, True, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False]) { refl }
+
+theorem p3b_ofnat_w63(): bitvec::ofNat(63, 7) = bitvec::from_bits(63, [True, True, True, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False]) { refl }
+
+theorem p3b_ofnat_w64(): bitvec::ofNat(64, 7) = bitvec::from_bits(64, [True, True, True, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False]) { refl }
+
+theorem p3b_trunc_w32(): bitvec::mod_succ(7, nat::pred(nat::pow(2, 32))) = 7 { refl }
+
+theorem p3b_trunc_w63(): bitvec::mod_succ(7, nat::pred(nat::pow(2, 63))) = 7 { refl }
+
+theorem p3b_trunc_w64(): bitvec::mod_succ(7, nat::pred(nat::pow(2, 64))) = 7 { refl }
+
+theorem p3b_powers_w32(): list::length(bitvec::powers_of_two_desc(32, 1, Nil)) = 32 { refl }
+
+theorem p3b_powers_w64(): list::length(bitvec::powers_of_two_desc(64, 1, Nil)) = 64 { refl }
+
+theorem p3b_ofnat2_w8(): ofNat2(8, 7) = bitvec::from_bits(8, [True, True, True, False, False, False, False, False]) { refl }
+
+theorem p3b_ofnat3_w8(): ofNat3_8(7) = bitvec::from_bits(8, [True, True, True, False, False, False, False, False]) { refl }
+
+theorem p3b_bitsonly_w8(): list::length(bitvec::bits_at_powers(powers_lit_8(), 7, Nil)) = 8 { refl }
+
+theorem p3b_ofnat2_w64(): ofNat2(64, 7) = bitvec::from_bits(64, [True, True, True, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False]) { refl }
+
+theorem p3b_ofnat3_w64(): ofNat3_64(7) = bitvec::from_bits(64, [True, True, True, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False]) { refl }
+
+theorem p3b_bitsonly_w64(): list::length(bitvec::bits_at_powers(powers_lit_64(), 7, Nil)) = 64 { refl }

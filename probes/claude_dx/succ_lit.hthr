@@ -1,0 +1,7 @@
+import bitvec;
+import bool;
+fn a(x: BitVec(1)) → Bool { x.head_bit() }
+fn b(x: BitVec(8)) → BitVec(64) { x.sign_extend(56) }
+fn c(k: Nat, x: BitVec(Succ(k))) → Bool { x.head_bit() }
+fn e(x: BitVec(8)) → BitVec(7) { x.tail_bits() }
+theorem f(): BitVec::ofNat(8).sign_extend(56) = BitVec::ofNat(8) { refl }

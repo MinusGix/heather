@@ -46,10 +46,179 @@ fn EmittedExecutes<M>(data: ByteReadAccess<M>, emitted: EmittedInstruction,
         EmitNear(control) => after = execute_near_control(control, before),
     }
 }
+
+theorem emitted_exec_same_defined<M>(data: ByteReadAccess<M>, emitted: EmittedInstruction,
+    before, first, second: MachineState<M>,
+    left: EmittedExecutes(data, emitted, before, first),
+    right: EmittedExecutes(data, emitted, before, second)):
+    SameDefinedState<M>(first, second) {
+    (match emitted as λ form => (a, b: MachineState<M>) →
+        EmittedExecutes(data, form, before, a) → EmittedExecutes(data, form, before, b) →
+        SameDefinedState<M>(a, b) {
+        EmitOrdinary(instruction) => λ a b p q =>
+            execute_pair_same_defined(instruction, canonical_length(instruction),
+                squash(canonical_length_valid(instruction)), before, a, b,
+                p.right.right, q.right.right),
+        EmitLoad(load) => λ a b p q => same_defined_of_equal(a, b,
+            byte_load_same(data, load, before, a, b, p.witness, q.witness,
+                p.proof, q.proof)),
+        EmitShort(control) => λ a b p q => same_defined_of_equal(a, b, trans(p, sym(q))),
+        EmitNear(control) => λ a b p q => same_defined_of_equal(a, b, trans(p, sym(q))),
+    })(first, second, left, right)
+}
+
+theorem emitted_exec_respects_defined<M>(data: ByteReadAccess<M>, emitted: EmittedInstruction,
+    before_left, before_right, after_left, after_right: MachineState<M>,
+    before_same: SameDefinedState<M>(before_left, before_right),
+    left: EmittedExecutes(data, emitted, before_left, after_left),
+    right: EmittedExecutes(data, emitted, before_right, after_right)):
+    SameDefinedState<M>(after_left, after_right) {
+    (match emitted as λ form => (a, b: MachineState<M>) →
+        SameDefinedState<M>(a, b) → (x, y: MachineState<M>) →
+        EmittedExecutes(data, form, a, x) → EmittedExecutes(data, form, b, y) →
+        SameDefinedState<M>(x, y) {
+        EmitOrdinary(instruction) => λ a b same x y p q =>
+            execute_canonical_respects_defined(instruction, a, b, x, y, same,
+                p.right.right, q.right.right),
+        EmitLoad(load) => λ a b same x y p q =>
+            byte_load_respects_defined(data, load, a, b, x, y,
+                p.witness, q.witness, same, p.proof, q.proof),
+        EmitShort(control) => λ a b same x y p q =>
+            same_defined_trans(x, execute_short_control(control, a), y,
+                same_defined_of_equal(x, execute_short_control(control, a), p),
+                same_defined_trans(execute_short_control(control, a),
+                    execute_short_control(control, b), y,
+                    short_control_respects_defined(control, a, b, same),
+                    same_defined_of_equal(execute_short_control(control, b), y, sym(q)))),
+        EmitNear(control) => λ a b same x y p q =>
+            same_defined_trans(x, execute_near_control(control, a), y,
+                same_defined_of_equal(x, execute_near_control(control, a), p),
+                same_defined_trans(execute_near_control(control, a),
+                    execute_near_control(control, b), y,
+                    near_control_respects_defined(control, a, b, same),
+                    same_defined_of_equal(execute_near_control(control, b), y, sym(q)))),
+    })(before_left, before_right, before_same, after_left, after_right, left, right)
+}
 fn FetchedStep<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, before, after: MachineState<M>) → Type {
     Exists<EmittedInstruction>(λ emitted =>
         FetchedFrom(fetch, before.memory, InstructionBytes(before.rip, emitted_bytes(emitted))) ∧
         EmittedExecutes(data, emitted, before, after))
+}
+
+theorem fetched_step_respects_same_witness<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>,
+    before_left, before_right, after_left, after_right: MachineState<M>,
+    before_same: SameDefinedState<M>(before_left, before_right),
+    left: FetchedStep(fetch, data, before_left, after_left),
+    right: FetchedStep(fetch, data, before_right, after_right),
+    same_emitted: left.witness = right.witness):
+    SameDefinedState<M>(after_left, after_right) {
+    let runner: (candidate: EmittedInstruction) → (left.witness = candidate) →
+        (FetchedFrom(fetch, before_right.memory,
+            InstructionBytes(before_right.rip, emitted_bytes(candidate))) ∧
+         EmittedExecutes(data, candidate, before_right, after_right)) →
+        SameDefinedState<M>(after_left, after_right) =
+        λ candidate same evidence =>
+            j(same, λ actual _ =>
+                (FetchedFrom(fetch, before_right.memory,
+                    InstructionBytes(before_right.rip, emitted_bytes(actual))) ∧
+                 EmittedExecutes(data, actual, before_right, after_right)) →
+                SameDefinedState<M>(after_left, after_right),
+                λ agreed => emitted_exec_respects_defined(data, left.witness,
+                    before_left, before_right, after_left, after_right, before_same,
+                    left.proof.right, agreed.right))(evidence);
+    runner(right.witness, same_emitted, right.proof)
+}
+
+// Equal-length canonical ordinary spans identify one instruction even when
+// their starting states differ in TEST's undefined AF.
+theorem ordinary_fetched_respects_defined<M>(fetch: FetchAccess<M>,
+    before_left, before_right, after_left, after_right: MachineState<M>,
+    before_same: SameDefinedState<M>(before_left, before_right),
+    left, right: Instruction,
+    left_fetch: FetchedFrom(fetch, before_left.memory,
+        InstructionBytes(before_left.rip, canonical_bytes(left))),
+    right_fetch: FetchedFrom(fetch, before_right.memory,
+        InstructionBytes(before_right.rip, canonical_bytes(right))),
+    length: canonical_bytes(left).len() = canonical_bytes(right).len(),
+    left_exec: ExecuteAt(encoded_at(before_left.rip, left), decoded_canonical(left), before_left, Returned(after_left)),
+    right_exec: ExecuteAt(encoded_at(before_right.rip, right), decoded_canonical(right), before_right, Returned(after_right))):
+    SameDefinedState<M>(after_left, after_right) {
+    let bytes = fetched_bytes_same_length_related(fetch, before_left, before_right, before_same,
+        canonical_bytes(left), canonical_bytes(right), left_fetch, right_fetch, length);
+    let instruction = canonical_bytes_unique(left, right, bytes);
+    let runner: (candidate: Instruction) → (left = candidate) →
+        ExecuteAt(encoded_at(before_right.rip, candidate), decoded_canonical(candidate),
+            before_right, Returned(after_right)) → SameDefinedState<M>(after_left, after_right) =
+        λ candidate same execution =>
+            j(same, λ actual _ =>
+                ExecuteAt(encoded_at(before_right.rip, actual), decoded_canonical(actual),
+                    before_right, Returned(after_right)) → SameDefinedState<M>(after_left, after_right),
+                λ agreed => execute_canonical_respects_defined(left,
+                    before_left, before_right, after_left, after_right, before_same,
+                    left_exec.right.right, agreed.right.right))(execution);
+    runner(right, instruction, right_exec)
+}
+
+theorem short_fetched_respects_defined<M>(fetch: FetchAccess<M>,
+    before_left, before_right, after_left, after_right: MachineState<M>,
+    before_same: SameDefinedState<M>(before_left, before_right),
+    left, right: ShortControl,
+    left_fetch: FetchedFrom(fetch, before_left.memory,
+        InstructionBytes(before_left.rip, short_control_bytes(left))),
+    right_fetch: FetchedFrom(fetch, before_right.memory,
+        InstructionBytes(before_right.rip, short_control_bytes(right))),
+    left_exec: after_left = execute_short_control(left, before_left),
+    right_exec: after_right = execute_short_control(right, before_right)):
+    SameDefinedState<M>(after_left, after_right) {
+    let bytes = fetched_bytes_same_length_related(fetch, before_left, before_right, before_same,
+        short_control_bytes(left), short_control_bytes(right), left_fetch, right_fetch,
+        trans(short_control_bytes_length(left), sym(short_control_bytes_length(right))));
+    let control = short_control_bytes_unique(left, right, bytes);
+    let runner: (candidate: ShortControl) → (left = candidate) →
+        (after_right = execute_short_control(candidate, before_right)) →
+        SameDefinedState<M>(after_left, after_right) =
+        λ candidate same execution =>
+            j(same, λ actual _ =>
+                (after_right = execute_short_control(actual, before_right)) →
+                SameDefinedState<M>(after_left, after_right),
+                λ agreed => same_defined_trans(after_left, execute_short_control(left, before_left),
+                    after_right, same_defined_of_equal(after_left, execute_short_control(left, before_left), left_exec),
+                    same_defined_trans(execute_short_control(left, before_left),
+                        execute_short_control(left, before_right), after_right,
+                        short_control_respects_defined(left, before_left, before_right, before_same),
+                        same_defined_of_equal(execute_short_control(left, before_right), after_right, sym(agreed)))))(execution);
+    runner(right, control, right_exec)
+}
+
+theorem near_fetched_respects_defined<M>(fetch: FetchAccess<M>,
+    before_left, before_right, after_left, after_right: MachineState<M>,
+    before_same: SameDefinedState<M>(before_left, before_right),
+    left, right: NearControl,
+    left_fetch: FetchedFrom(fetch, before_left.memory,
+        InstructionBytes(before_left.rip, near_control_bytes(left))),
+    right_fetch: FetchedFrom(fetch, before_right.memory,
+        InstructionBytes(before_right.rip, near_control_bytes(right))),
+    length: near_control_bytes(left).len() = near_control_bytes(right).len(),
+    left_exec: after_left = execute_near_control(left, before_left),
+    right_exec: after_right = execute_near_control(right, before_right)):
+    SameDefinedState<M>(after_left, after_right) {
+    let bytes = fetched_bytes_same_length_related(fetch, before_left, before_right, before_same,
+        near_control_bytes(left), near_control_bytes(right), left_fetch, right_fetch, length);
+    let control = near_control_bytes_unique(left, right, bytes);
+    let runner: (candidate: NearControl) → (left = candidate) →
+        (after_right = execute_near_control(candidate, before_right)) →
+        SameDefinedState<M>(after_left, after_right) =
+        λ candidate same execution =>
+            j(same, λ actual _ =>
+                (after_right = execute_near_control(actual, before_right)) →
+                SameDefinedState<M>(after_left, after_right),
+                λ agreed => same_defined_trans(after_left, execute_near_control(left, before_left),
+                    after_right, same_defined_of_equal(after_left, execute_near_control(left, before_left), left_exec),
+                    same_defined_trans(execute_near_control(left, before_left),
+                        execute_near_control(left, before_right), after_right,
+                        near_control_respects_defined(left, before_left, before_right, before_same),
+                        same_defined_of_equal(execute_near_control(left, before_right), after_right, sym(agreed)))))(execution);
+    runner(right, control, right_exec)
 }
 // `n` fetched steps, and a run of any length. Counting keeps concatenation a
 // plain induction, as LoopRuns does for iterations.

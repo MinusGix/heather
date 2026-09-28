@@ -1,0 +1,29 @@
+import logic;
+import bool;
+import nat;
+import list;
+import char;
+import string;
+
+fn List::all<A>(self xs: List<A>, p: A -> Bool) -> Type {
+    match xs { Nil => True, Cons(c, r) => IsTrue(p(c)) ∧ r.all(p) }
+}
+fn List::nonempty<A>(self xs: List<A>) -> Type { match xs { Nil => False, Cons(_, _) => True } }
+
+inductive Derivation { Number(digits: List<Char>, trail: List<Char>) }
+
+fn Derivation::tier(self d: Derivation) -> Nat { match d { Number(_, _) => 2 } }
+fn Derivation::WellFormed(self d: Derivation) -> Type {
+    match d { Number(ds, tr) => (ds.nonempty() ∧ ds.all(is_digit)) ∧ tr.all(is_space) }
+}
+
+// a receiver call in a record field's type, and in an index
+record Grammar(level: Nat) {
+    derivation: Derivation,
+    valid: derivation.WellFormed(),
+    at_level: derivation.tier() = level,
+}
+
+fn make() -> Grammar(2) {
+    Grammar(Number("7".chars, "".chars), And(And(trivial, And(trivial, trivial)), trivial), refl)
+}

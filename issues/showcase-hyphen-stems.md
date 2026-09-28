@@ -1,9 +1,9 @@
 ---
 title: Two showcase files cannot be modules at all: a hyphen in the stem
-status: open
+status: closed
 labels: [showcase,tooling,docs]
 created: 2026-09-19
-updated: 2026-09-19
+updated: 2026-09-28
 ---
 
 Two showcase files have a hyphen in their stem, so `heather check` refuses them
@@ -42,3 +42,7 @@ and that wants its own decision about which to do.
 - **[[showcase-harness]]** owns the manifest that found this. Assumed here:
   only that a `test-only` tier exists to mark these files until they are
   renamed.
+
+## Log
+
+- 2026-09-28: LANDED: renamed `result-parser.hthr` to `result_parser.hthr` and `relational-contexts.hthr` to `relational_contexts.hthr`, without changing their contents. Updated both `include_str!` paths, current documentation links and the result-propagation issue body. Historical issue log entries and the original failure descriptions retain the old filenames; this entry records the mapping rather than rewriting history. Both manifest rows now use the CLI tier, with one standalone CLI regression test each alongside the existing in-process tests. The showcase README gives `scripts/showcase check result_parser` and `scripts/showcase check relational_contexts`. Both standalone checks and all eight CLI showcase tests passed. Final plain `scripts/test`: 3,025 passed, 0 failed, 5 ignored.

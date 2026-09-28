@@ -1,0 +1,10 @@
+import bitvec;
+import logic;
+import nat;
+import omega;
+import bitvec_nat;
+import bitvec_omega;
+
+fn double(x: BitVec(64)) → BitVec(64) { x.add(x) }
+fn times256(x: BitVec(64)) → BitVec(64) { double(double(double(double(double(double(double(double(x)))))))) }
+theorem r(n: Nat, small: n < 16384): double(double(double(double(times256(times256(times256(times256(bitvec_nat::word_of_nat(64, n))))))))).toNat() = 68719476736 * n { bv_omega }

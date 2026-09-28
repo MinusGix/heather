@@ -1,0 +1,4 @@
+import nat;
+import list;
+import omega;
+theorem appended(f: List<Nat> → Nat, h: f(list::List::append(Nil, Nil)) = f(Nil) + f(Nil)): f(Nil) = 0 { omega }

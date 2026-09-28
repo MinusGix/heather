@@ -1,9 +1,9 @@
 ---
 title: Two checked showcase files do not parse: a char literal in parentheses, and a calc chain over ≈
-status: open
+status: closed
 labels: [tooling,editor,syntax]
 created: 2026-09-19
-updated: 2026-09-19
+updated: 2026-09-28
 ---
 
 Two showcase files that the compiler accepts do not parse under the Tree-sitter
@@ -66,3 +66,19 @@ does not exist yet, which is their job.
   the manifest's checkable rows as of that round, with these two files listed
   as known-failing in the script so the check stays green and the exclusion
   list is the thing that shrinks when this issue is fixed.
+- 2026-09-28: Reproduced both failures with a freshly generated parser, then fixed the
+  hand-maintained grammar: character and string tokens now work in expression,
+  declaration-type, and match-scrutinee positions, including the compiler's
+  escape spellings. Calc accepts homogeneous `≈` chains as well as `=` while
+  preserving the existing calc-step CST nodes. Regenerated the parser and added
+  literal highlighting to both query copies.
+
+  Added CST regression cases and a shared positive fixture covering parentheses,
+  arguments, nested constructors, escapes, Unicode, literal scrutinees and
+  propositions, and single/multiple relational steps. Removed both showcase
+  exclusions: every checkable manifest row now parses. All 13 Tree-sitter corpus
+  cases, positive fixtures, five queries, and both Heather editor-corpus tests
+  pass. The full repository check still reports parse errors in the already
+  modified `lib/std/arch/x86_64/fetched_code.hthr` and `store.hthr`; a scratch
+  parser generated from HEAD reproduces both at the same ranges, so those are
+  independent of this issue and this fix.

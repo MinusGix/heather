@@ -77,8 +77,12 @@ completeness, shell IO, and native compilation remain future work.
 Both realized files are checked by
 `crates/elab/tests/showcase_calculator.rs`, including controls that require the
 kernel to reject wrong precedence, association, arithmetic, leftover-input
-handling, and error priority. The smaller `result-parser.hthr` remains a
-standalone introduction to `?`.
+handling, and error priority. The smaller [`result_parser.hthr`](result_parser.hthr)
+remains a standalone introduction to `?`. Check it with:
+
+```sh
+scripts/showcase check result_parser
+```
 
 ## Scannerless text calculator
 
@@ -158,7 +162,7 @@ statement. The demo theorem computes `2 + 3 * 4 = 14` by kernel reduction.
 | no `cong_run` anywhere | congruence inferred from the goal's shape | `issues/congruence-by-anti-unification.md` |
 | `heather disprove '…'` at the shell | counterexample search before anyone pays for a proof | `issues/heather-disprove.md` |
 | `n :: s` cons notation | finite construction is now `[TPush(n)]`; infix open-tail cons remains absent | `issues/notation-extensibility.md` |
-| `Result`, `?`-chaining, `.map` | **landed 2026-09-14** via `import result;`, function/lambda-scoped propagation and explicit `Ok`; runnable parser and recursive collection in `result-parser.hthr` | `issues/result-propagation.md`; remaining Option chaining: `issues/prelude-option-and-friends.md` |
+| `Result`, `?`-chaining, `.map` | **landed 2026-09-14** via `import result;`, function/lambda-scoped propagation and explicit `Ok`; runnable parser and recursive collection in `result_parser.hthr` | `issues/result-propagation.md`; remaining Option chaining: `issues/prelude-option-and-friends.md` |
 | `let b :: a :: s2 = s else { … }` | let-else (the one-non-absurd-branch match) | `issues/let-else-sugar.md` |
 | `String`, `.chars()`, `[c, ..rest]`, `if c.is_digit()` guards | strings, slice patterns, match guards | no owner yet |
 | `decreases ts.len()` on mutually recursive parsers | **realized 2026-09-15** in `calc_parser.hthr`: three adjacent proof-carrying recursive functions use checked consuming recognition for their decrease. Production composition constructs independent source-span derivations; the public parser projects ordinary results. Certificate ergonomics and group unfolding equations retain their own owners. | `issues/showcase-token-parser.md`, `issues/group-unfolding-equations.md`, `issues/omega-renders-member-by-base-name.md` |
@@ -256,11 +260,15 @@ finite-set and subtype examples are still design sketches.
 
 ## Composed relational contexts
 
-[`relational-contexts.hthr`](relational-contexts.hthr) constructs a certificate
+[`relational_contexts.hthr`](relational_contexts.hthr) constructs a certificate
 for `known ++ (incoming ++ incoming)`, applies a local law beneath that whole
 context, and states the extra evidence required by a surrounding observer.
 It runs in `lib_setoid_mergeable`; [the round notes](../relational-context-round.md)
 explain the proof rules and remaining automation work.
+
+```sh
+scripts/showcase check relational_contexts
+```
 
 ## Bounded certificate-generation prototype
 

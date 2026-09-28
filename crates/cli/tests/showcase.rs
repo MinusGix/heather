@@ -51,7 +51,8 @@ fn check(row: &showcase::Showcase) -> (bool, String) {
 /// side: as one loop they were the fast lane's critical path.
 /// [`cli_tier_rows_each_have_a_test`] keeps this list and the manifest equal,
 /// so a new CLI row fails until it has its own test.
-const CLI_ROWS: &[&str] = &["calc_text", "contextual_rewrite_generated", "relational_generator_generated"];
+const CLI_ROWS: &[&str] = &["calc_text", "contextual_rewrite_generated", "relational_generator_generated",
+    "result_parser", "relational_contexts"];
 
 fn check_row(name: &str) {
     let rows = showcase::at_tier(Tier::Cli);
@@ -131,6 +132,8 @@ fn every_search_directory_exists_and_is_not_the_showcase_directory() {
 /// separate serial gate in `scripts/test` while it cost 334 CPU-s and 9.8 GiB
 /// and is an ordinary row since `docs/app-by-head-type-design.md` (16 s,
 /// 0.3 GiB at width one, 2026-09-22).
+/// The result parser and relational contexts also run here so their standalone
+/// module paths stay covered alongside their in-process tests.
 #[test]
 fn cli_tier_rows_each_have_a_test() {
     let mut manifest: Vec<String> = showcase::at_tier(Tier::Cli).into_iter().map(|r| r.name).collect();
@@ -153,4 +156,14 @@ fn cli_showcase_contextual_rewrite_generated() {
 #[test]
 fn cli_showcase_relational_generator_generated() {
     check_row("relational_generator_generated");
+}
+
+#[test]
+fn cli_showcase_result_parser() {
+    check_row("result_parser");
+}
+
+#[test]
+fn cli_showcase_relational_contexts() {
+    check_row("relational_contexts");
 }
