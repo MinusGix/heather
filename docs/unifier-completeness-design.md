@@ -203,6 +203,26 @@ domain zonks, and turns the never-zonks case into the §7.2 message instead
 of a junk instantiation. At a meta-free domain it is checked inline like
 every other member, which is the D2 path unchanged.
 
+**Amended 2026-09-28 ([[polymorphic-argument-with-unsolved-callee]]):** a
+blocked bare polymorphic argument may also teach the enclosing call. The
+obligation retry instantiates its leading implicit prefix in a separate
+scratch world and structurally matches its type against the partially solved
+parameter type. Solved outer slots are substituted before matching; an inner
+solution is recorded only when the corresponding subject subterm zonks to a
+committed term and survives binder strengthening. Unresolved outer slots,
+including withheld argument and dictionary slots, cannot become inner
+solutions. When every inner implicit is determined, ordinary checking emits
+the argument at its instantiated type, and that committed type teaches the
+enclosing call through the existing argument-type unifier. Otherwise the
+argument stays deferred. This covers global references and local/alias
+implicit skeletons, preserves the polymorphic-domain suppression rule, and
+keeps both scratch worlds local to their calls.
+
+For `map(zip(xs, ys), swap)`, `Pair<A, B>` in the parameter's known domain
+determines both of `swap`'s type arguments; its instantiated codomain
+`Pair<B, A>` then determines `map`'s output element type. No expected result
+type or eta-expansion is needed.
+
 **Rejected alternative: defer any argument whose domain has metas.** That
 would defer `a` in `sym(p)`… no: it would defer `p` in `@sym(a, b, p)`-less
 calls generally — the *inference* of ordinary arguments against meta-bearing
@@ -553,10 +573,10 @@ checking *and* computation position, negative controls).
   (`compose<Nat, Nat, Nat>(id, id, n)` — concrete domains, both bare `id`s
   down the checking route); both in computation position (`fn … -> Nat`) and
   in checking position under a `theorem` statement. The fully inferred
-  `compose(id, id, n)` is pinned as a *negative* with message 2: `compose`'s
-  `B` is determined by neither `n` nor the expected type, and solving it
-  from the deferred `id`s would be cross-call propagation, which §3.1
-  deliberately does not build.
+  `compose(id, id, n)` also checks after the 2026-09-28 partial-domain
+  amendment above: the second `id`'s instance teaches the intermediate
+  carrier, then the first `id` checks. The test also uses an unannotated
+  `let` at an open input type so no expected result type can hide the cycle.
 - A bare reference whose expected type is *another* polymorphic Π (open
   element type: `f: A -> A` parameter fed `id`).
 - Negative: bare `id` bound by unannotated `let` (inference position) keeps

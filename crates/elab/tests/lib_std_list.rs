@@ -154,7 +154,7 @@ theorem l_zip_map_snd<A, B>(xs: List<A>, ys: List<B>):
 { xs.zip_map_snd(ys) }
 
 theorem l_zip_swap<A, B>(xs: List<A>, ys: List<B>):
-    xs.zip(ys).map(λ (q: Pair<A, B>) => q.swap()) = ys.zip(xs)
+    xs.zip(ys).map(Pair::swap) = ys.zip(xs)
 { xs.zip_swap(ys) }
 "#;
     if let Err(err) = e.elab_module_source("probe", probe) {
@@ -368,7 +368,7 @@ theorem c_len_zip(): three().zip(Cons(4, Nil)).len() = 1 { refl }
 // exactly this in 2026-08-05 and wave L2′ is its first real customer;
 // `issues/type-owned-namespaces.md` owns the fix (`List::map`).
 theorem c_zip_swap(): list::List::map(three().zip(Cons(4, Nil)),
-                                λ (q: Pair<Nat, Nat>) => q.swap())
+                                Pair::swap)
     = Cons(4, Nil).zip(three()) { refl }
 theorem c_filter_filter(): three().filter(λ (n: Nat) => nat::Nat::leb(2, n)).filter(
                                   λ (n: Nat) => nat::Nat::leb(2, n)) = Cons(2, Cons(3, Nil)) { refl }

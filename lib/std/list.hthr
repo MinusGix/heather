@@ -481,7 +481,7 @@ theorem List::zip_map_snd<A, B>(self xs: List<A>):
 }
 
 theorem List::zip_swap<A, B>(self xs: List<A>):
-    (ys: List<B>) → xs.zip(ys).map(λ (q: Pair<A, B>) => q.swap()) = ys.zip(xs)
+    (ys: List<B>) → xs.zip(ys).map(Pair::swap) = ys.zip(xs)
 {
     match xs {
         Nil => λ ys => match ys {

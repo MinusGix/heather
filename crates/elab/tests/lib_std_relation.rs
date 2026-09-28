@@ -99,8 +99,8 @@ import nat;
 theorem assoc<A, B, C, D>(R: A -> B -> Type, S: B -> C -> Type,
     T: C -> D -> Type):
     RelEquivalent(
-        Compose<A, C, D>(Compose<A, B, C>(R, S), T),
-        Compose<A, B, D>(R, Compose<B, C, D>(S, T)))
+        Compose(Compose(R, S), T),
+        Compose(R, Compose(S, T)))
 { compose_assoc(R, S, T) }
 
 theorem left_unit<A, B>(R: A -> B -> Type):

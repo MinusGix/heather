@@ -16,6 +16,7 @@ use crate::unification::{DeferredArg, ResolveOb, Sol, zonked};
 use crate::{Cx, ElabError, R, err};
 
 mod callable;
+mod polymorphic;
 pub(crate) use callable::subject_index_in;
 mod named;
 pub(crate) use named::{
@@ -102,6 +103,12 @@ pub(crate) trait ImplicitApplicationElab: ExplicitArgElab {
     fn classify_application_argument(&self, cx: &Cx, argument: &Expr) -> ArgumentClass;
 
     fn infer_application_argument(&self, cx: &Cx, argument: &Expr) -> R<(Term, Type, Level)>;
+
+    /// Instantiate a bare polymorphic argument from the known parts of its
+    /// parameter type. The returned term and type are fully committed.
+    fn infer_polymorphic_argument(
+        &self, _cx: &Cx, _argument: &Expr, _parameter: &Type, _n: u32, _sols: &[Sol],
+    ) -> Option<R<(Term, Type, Level)>> { None }
 
     /// A generated propagation callback may infer its result once its input
     /// domain is known. Ordinary source lambdas retain the existing policy.
@@ -260,7 +267,9 @@ pub(crate) fn retry_obligations(
             if allow_fallback && blocked {
                 for obligation in deferred {
                     if !matches!(sols[obligation.slot], Sol::Withheld) { continue; }
-                    if let Some(inferred) = elab.infer_propagation_callback(cx,obligation.expr,&obligation.dom,n,sols) {
+                    let inferred = elab.infer_polymorphic_argument(cx, obligation.expr, &obligation.dom, n, sols)
+                        .or_else(|| elab.infer_propagation_callback(cx,obligation.expr,&obligation.dom,n,sols));
+                    if let Some(inferred) = inferred {
                         let (term,ty,_) = inferred?;
                         elab.unify_application_argument_type(cx,&obligation.dom,&ty,n,sols,obligation.expr.span);
                         sols[obligation.slot] = Sol::Solved(Rc::new(term));

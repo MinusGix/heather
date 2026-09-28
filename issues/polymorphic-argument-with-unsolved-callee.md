@@ -1,9 +1,9 @@
 ---
 title: A polymorphic function passed as an argument cannot be instantiated while the callee's own type argument is unsolved
-status: open
+status: closed
 labels: [frontend,elaboration,inference]
 created: 2026-08-17
-updated: 2026-09-21
+updated: 2026-09-28
 ---
 
 Found by wave L2′ ([[std-list-l2-prime-laws]]) writing `zip_swap`. Ranked
@@ -67,3 +67,8 @@ reports, and still names which implicit.
   check.  This is the same dependency shape—a polymorphic function-valued
   argument and an outer call whose own carriers are not yet fixed—so it stays
   here rather than becoming a relation-specific inference issue.
+- 2026-09-28: Fixed through partial-domain instantiation in the deferred-argument retry. A bare global or local/alias polymorphic function gets a separate scratch world; only committed, binder-independent parts of the outer parameter type may solve its implicits. Once its instance is complete, ordinary checking emits it and its type solves the outer call's remaining implicits. Unresolved and withheld outer slots cannot escape into inner solutions.
+
+  `List::zip_swap` now states `xs.zip(ys).map(Pair::swap)`. Regression coverage includes open and concrete pairs, inference without an expected result type, reversed argument order, local/alias skeletons, value implicits, named undetermined implicits, and binder-capture refusal. The former negative `compose(id, id, n)` test now checks, including an open-input inference case; nested relation composition also checks without explicit carriers. Updated the unifier design and [[elab-unifier-completeness]]'s former boundary.
+
+  Validation: full `scripts/test` — 3032 passed, 0 failed, 5 ignored.

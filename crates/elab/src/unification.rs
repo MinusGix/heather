@@ -135,6 +135,10 @@ impl Sol {
 /// so every pairing that learned before learns the same without it.
 pub(super) struct U<'a> {
     pub(super) gamma: &'a LocalCtx,
+    /// A partially known subject from an enclosing application. Congruence
+    /// may read its shape, but solutions and semantic queries must first
+    /// discharge this separate scratch world. No cross-call meta escapes.
+    pub(super) subject_metas: Option<(u32, &'a [Sol])>,
     pub(super) type_args: &'a dyn Fn(&Term, u32) -> Option<Vec<bool>>,
     pub(super) canonical_head: &'a dyn Fn(&Term, u32) -> Option<Term>,
     /// A rigid subject type re-spelled as a registered declaration's
@@ -147,11 +151,27 @@ pub(super) struct U<'a> {
 }
 
 impl<'a> U<'a> {
+    fn subject_ty(&self, t: &Type, d: u32) -> Option<Type> {
+        let t = strengthen_ty(self.gamma, t, d)?;
+        match self.subject_metas {
+            Some((n, sols)) => zonked(&t, n, sols),
+            None => Some(t),
+        }
+    }
+
+    fn subject_tm(&self, t: &Term, d: u32) -> Option<Term> {
+        let t = strengthen_tm(self.gamma, t, d)?;
+        match self.subject_metas {
+            Some((n, sols)) => zonked_tm(&t, n, sols),
+            None => Some(t),
+        }
+    }
+
     /// No head can be read: every `app@` spine is refused by
     /// [`matching_value_spine`], and nothing else changes.
     #[cfg(test)]
     pub(super) fn syntactic(gamma: &'a LocalCtx) -> Self {
-        U { gamma, type_args: &|_, _| None, canonical_head: &|_, _| None, respell: &|_| None }
+        U { gamma, subject_metas: None, type_args: &|_, _| None, canonical_head: &|_, _| None, respell: &|_| None }
     }
 }
 
@@ -194,7 +214,7 @@ pub(super) fn unify_ty(
         // dropping renamings — is declined, which learn-only always permits.
         if matches!(sols[var.0 as usize], Sol::Unsolved)
             && *subst == embed(u.gamma, d)
-            && let Some(s) = strengthen_ty(u.gamma, subj, d)
+            && let Some(s) = u.subject_ty(subj, d)
             && let Some(c) = code::code_of(&s)
         {
             sols[var.0 as usize] = Sol::Solved(Rc::new(c));
@@ -314,9 +334,13 @@ pub(super) fn unify_ty(
                 && committed_head(tm, n)
                 && zonked_tm(tm, n, sols).is_none() =>
         {
-            if let Some(s0) = strengthen_ty(u.gamma, s, d)
+            if let Some(s0) = u.subject_ty(s, d)
                 && let Some(r @ Type::El { .. }) = (u.respell)(&s0)
             {
+                let r = match u.subject_metas {
+                    Some((m, _)) => r.shift_global(m),
+                    None => r,
+                };
                 unify_ty(u, pat, &r.apply_local(&embed(u.gamma, d)), n, d, sols);
             }
         }
@@ -357,7 +381,13 @@ fn rigid_head(mut t: &Term) -> bool {
 /// Align value arguments, allowing only a leading type-argument prefix on
 /// the rigid side: `?op(x, y)` can learn `append<A>`, but `?f(x)` must not
 /// learn `add(a)` from `add(a, x)`.
-fn matching_value_spine(u: &U<'_>, pat: &Term, mut subj: &Term, d: u32) -> bool {
+fn matching_value_spine(u: &U<'_>, pat: &Term, subj: &Term, d: u32) -> bool {
+    let committed;
+    let mut subj = if let Some((n, sols)) = u.subject_metas {
+        let Some(t) = zonked_tm(subj, n, sols) else { return false; };
+        committed = t;
+        &committed
+    } else { subj };
     if !rigid_head(subj) {
         return false;
     }
@@ -400,7 +430,7 @@ fn unify_tm(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]
     {
         if matches!(sols[var.0 as usize], Sol::Unsolved)
             && *subst == embed(u.gamma, d)
-            && let Some(s) = strengthen_tm(u.gamma, subj, d)
+            && let Some(s) = u.subject_tm(subj, d)
         {
             sols[var.0 as usize] = Sol::Solved(Rc::new(s));
         }
@@ -501,9 +531,13 @@ fn unify_tm(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]
         // that weakening. Only a global head can unfold; a variable's never
         // does, so it is not asked.
         (p, s) if canonical_pattern(p) && !canonical(s) && global_head(s) => {
-            if let Some(s0) = strengthen_tm(u.gamma, s, d)
+            if let Some(s0) = u.subject_tm(s, d)
                 && let Some(w) = (u.canonical_head)(&s0, 0)
             {
+                let w = match u.subject_metas {
+                    Some((m, _)) => w.shift_global(m),
+                    None => w,
+                };
                 unify_tm(u, pat, &w.apply_local(&embed(u.gamma, d)), n, d, sols);
             }
         }
@@ -715,6 +749,21 @@ pub(super) fn zonked(dom: &Type, n: u32, sols: &[Sol]) -> Option<Type> {
     (a == with(Term::Succ(Rc::new(Term::Zero)))).then_some(a)
 }
 
+/// Substitute known solutions while keeping unresolved slots in their
+/// original scratch world. This exposes a solved domain's structure to a
+/// partial-subject harvest without disguising its remaining blockers.
+pub(super) fn partially_zonked(dom: &Type, n: u32, sols: &[Sol], gamma: &LocalCtx) -> Type {
+    let entries = (0..n).rev().map(|slot| GlobalEntry::Tm(Rc::new(
+        match sols[slot as usize].solved() {
+            Some(t) => t.shift_global(n),
+            None => Term::GlobalTm { var: heather_kernel::term::GlobalVar(slot), subst: LocalSubst::id(gamma) },
+        }
+    ))).collect();
+    // The substitution consumes n slots, so first weaken the identity region
+    // by n. Its payloads already live in the retained scratch world.
+    dom.shift_global_above(n, n).apply_global(&GlobalSubst { entries })
+}
+
 /// [`zonked`] for a *term* — same two-marker test, same guarantee: `Some`
 /// exactly when every metavariable the term mentions is already solved, in
 /// which case the result is scoped in the committed Ψ. Used by the congruence
@@ -905,5 +954,38 @@ mod tests {
     fn a_withheld_solution_keeps_a_domain_blocked() {
         let gamma = LocalCtx::nil();
         assert!(zonked(&meta(&gamma), 1, &[Sol::Withheld]).is_none());
+    }
+
+    #[test]
+    fn partial_subjects_learn_only_committed_solutions() {
+        let gamma = LocalCtx::nil();
+        for blocked in [Sol::Unsolved, Sol::Withheld] {
+            let outer = [blocked];
+            let mut u = U::syntactic(&gamma);
+            u.subject_metas = Some((1, &outer));
+            let mut inner = [Sol::Unsolved];
+            unify_ty(&u, &meta(&gamma), &meta(&gamma), 1, 0, &mut inner);
+            assert!(matches!(inner[0], Sol::Unsolved), "the two slot-zero occurrences belong to different calls");
+        }
+        // A solved outer slot contains a committed global at index zero.
+        // Partial substitution must keep it distinct from unsolved slot zero.
+        let code = Term::GlobalTm { var: GlobalVar(0), subst: embed(&gamma, 0) };
+        let outer = [Sol::Solved(Rc::new(code.clone()))];
+        let subject = partially_zonked(&meta(&gamma), 1, &outer, &gamma);
+        let Type::El { tm, .. } = &subject else { unreachable!() };
+        assert!(matches!(&**tm, Term::GlobalTm { var: GlobalVar(1), .. }));
+        let mut u = U::syntactic(&gamma);
+        u.subject_metas = Some((1, &outer));
+        let mut inner = [Sol::Unsolved];
+        unify_ty(&u, &meta(&gamma), &subject, 1, 0, &mut inner);
+        assert!(matches!(&inner[0], Sol::Solved(t) if **t == code));
+
+        let dependent = Type::Vec {
+            level: Level::Zero, elem: Rc::new(Type::Nat), len: Rc::new(Term::Var(LocalVar(0))),
+        };
+        let pattern = meta(&gamma).apply_local(&embed(&gamma, 1));
+        let mut inner = [Sol::Unsolved];
+        unify_ty(&u, &pattern, &dependent, 1, 1, &mut inner);
+        assert!(matches!(inner[0], Sol::Unsolved), "a solution cannot capture a callback binder");
     }
 }

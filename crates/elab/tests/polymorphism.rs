@@ -416,18 +416,15 @@ fn a_bare_reference_through_compose() {
 }
 
 #[test]
-fn a_fully_inferred_compose_of_bare_references_is_diagnosed() {
-    // The boundary, pinned: with `compose`'s own `B` determined by *neither*
-    // `n` nor the expected type, the deferred `id`s stay blocked — their
-    // instantiation would have to flow across call worlds, which is the
-    // cross-call postponement this round deliberately does not build
-    // (docs/unifier-completeness-design.md §3.1). The failure is the §7.2
-    // message naming the argument, not the old kernel `LevelMismatch` on a
-    // junk instantiation.
-    let e = bad("fn id<A>(x: A) -> A { x }
-                 fn compose<A, B, C>(g: B -> C, f: A -> B, x: A) -> C { g(f(x)) }
-                 fn probe(n: Nat) -> Nat { compose(id, id, n) }");
-    assert!(e.contains("was deferred"), "{e}");
+fn a_fully_inferred_compose_of_bare_references_checks() {
+    // The known input instantiates the second `id`; its committed type
+    // teaches the intermediate carrier, unblocking the first `id`. No
+    // expected result type or shared cross-call metavariables are needed.
+    ok("fn id<A>(x: A) -> A { x }
+        fn compose<A, B, C>(g: B -> C, f: A -> B, x: A) -> C { g(f(x)) }
+        fn probe(n: Nat) -> Nat { compose(id, id, n) }
+        fn open<A>(x: A) -> A { let y = compose(id, id, x); y }
+        theorem computes(): probe(3) = 3 { refl }");
 }
 
 #[test]

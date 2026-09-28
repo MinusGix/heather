@@ -483,3 +483,78 @@ fn a_congruence_lemma_solves_from_the_constructor_values_of_its_goal() {
     );
     assert!(r.is_err(), "a Cons against a Nil is no congruence, got {r:?}");
 }
+
+// A known input determines the bare argument's instance; its result then
+// determines the enclosing call's still-unknown output. The let binding has
+// no expected type, so result-type harvesting cannot hide the cycle.
+#[test]
+fn polymorphic_argument_teaches_an_unsolved_callee() {
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    e.elab_source(r#"
+        record Pair<A, B> { fst: A, snd: B }
+        fn swap<A, B>(p: Pair<A, B>) -> Pair<B, A> { Pair(p.snd, p.fst) }
+        fn apply<A, B>(x: A, f: A -> B) -> B { f(x) }
+        fn first<A, B>(f: A -> B, x: A) -> B { f(x) }
+        fn open<A, B>(p: Pair<A, B>) -> Pair<B, A> {
+            let q = apply(p, swap);
+            q
+        }
+        fn reordered<A, B>(p: Pair<A, B>) -> Pair<B, A> {
+            let q = first(swap, p);
+            q
+        }
+        fn concrete() -> Nat {
+            let q = apply(Pair(2, 3), swap);
+            q.fst
+        }
+        fn width({n: Nat}, xs: [Nat; n]) -> Nat { n }
+        fn vector(xs: [Nat; 2]) -> Nat {
+            let n = apply(xs, width);
+            n
+        }
+        theorem computes(): concrete() = 3 { refl }
+        theorem value_implicit(): vector([1, 2]) = 2 { refl }
+    "#).expect("partial parameter types must instantiate bare polymorphic arguments");
+}
+
+#[test]
+fn polymorphic_value_argument_teaches_an_unsolved_callee() {
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    e.elab_source(r#"
+        fn apply<A, B>(x: A, f: A -> B) -> B { f(x) }
+        fn local<A>(x: A, f: {T: Type<0>} -> T -> T) -> A {
+            let y = apply(x, f);
+            y
+        }
+        fn identity<T>(x: T) -> T { x }
+        fn alias<A>(x: A) -> A {
+            let f: {T: Type<0>} -> T -> T = identity;
+            let y = apply(x, f);
+            y
+        }
+    "#).expect("local and alias implicit skeletons must use the same inference route");
+}
+
+#[test]
+fn an_undetermined_polymorphic_argument_implicit_is_still_named() {
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    let result = e.elab_source(r#"
+        fn mystery<A, B>(x: A) -> A { x }
+        fn apply<A, B>(x: A, f: A -> B) -> B { f(x) }
+        fn bad(n: Nat) -> Nat { apply(n, mystery) }
+    "#);
+    let Err(ElabError::Elab { msg, .. }) = result else { panic!("expected an implicit diagnostic"); };
+    assert!(msg.contains("type argument `B` of `mystery`"), "{msg}");
+}
+
+#[test]
+fn a_polymorphic_argument_must_not_capture_a_callback_binder() {
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    let result = e.elab_source(r#"
+        fn identity<A>(x: A) -> A { x }
+        fn apply<A, B>(f: (n: Nat) -> [A; n], x: B) -> B { x }
+        fn bad() -> Nat { let y = apply(identity, 0); y }
+    "#);
+    assert!(matches!(&result, Err(ElabError::Elab { .. } | ElabError::Kernel { .. })),
+        "an implicit cannot be solved to a type depending on the callback binder: {result:?}");
+}
