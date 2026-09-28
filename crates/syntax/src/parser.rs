@@ -3939,17 +3939,33 @@ impl Parser {
                 span: at.join(end),
             });
         }
-        // `[a, b, c]` — an expected-type-directed collection literal.
+        // The first separator selects `[T; n]` (a type expression) or
+        // `[a, b, c]` (an expected-type-directed collection literal). Parse
+        // the head once and read it as a type only at `;`: no backtracking
+        // or expected-universe retry can reinterpret a malformed literal.
         if matches!(self.peek(), TokKind::LBracket) {
             let open = self.bump().span;
             return self.with_record_lit(false, |p| {
                 let mut elems = Vec::new();
-                while !matches!(p.peek(), TokKind::RBracket) {
-                    elems.push(p.expr()?);
-                    if !matches!(p.peek(), TokKind::Comma) {
+                if !matches!(p.peek(), TokKind::RBracket) {
+                    let first = p.expr()?;
+                    if matches!(p.peek(), TokKind::Semi) {
+                        p.bump();
+                        let elem = expr_as_ty(&first);
+                        let len = p.expr()?;
+                        let close = p.expect(&TokKind::RBracket, "`]` (a vector type is `[T; n]`)")?;
+                        let span = open.join(close);
+                        let ty = Ty { kind: TyKind::Vec { elem: Box::new(elem), len: Box::new(len) }, span };
+                        return Ok(Expr { kind: ExprKind::TyLit(Box::new(ty)), span });
+                    }
+                    elems.push(first);
+                }
+                while matches!(p.peek(), TokKind::Comma) {
+                    p.bump();
+                    if matches!(p.peek(), TokKind::RBracket) {
                         break;
                     }
-                    p.bump();
+                    elems.push(p.expr()?);
                 }
                 let close = p.expect(&TokKind::RBracket, "`]` (collection literal)")?;
                 Ok(Expr { kind: ExprKind::CollectionLit(elems), span: open.join(close) })
@@ -5091,6 +5107,39 @@ mod tests {
         let (outer, outer_args, _) = as_call(&args[0].kind);
         assert_eq!(outer, "-");
         assert_eq!(as_call(&outer_args[0].kind).0, "-");
+    }
+
+    #[test]
+    fn vector_types_are_expressions_without_reinterpreting_collection_literals() {
+        for src in ["[A; n]", "[[A; n]; m]", "[A -> B; n]", "[List<A>; n]"] {
+            let ExprKind::TyLit(ty) = body(src) else { panic!("{src}: expected a type") };
+            assert!(matches!(ty.kind, TyKind::Vec { .. }), "{src}");
+        }
+        let ExprKind::TyLit(ty) = body("[A; n] -> [A; m]") else { panic!("expected an arrow") };
+        let TyKind::Fn { dom, cod, .. } = ty.kind else { panic!("expected a function type") };
+        assert!(matches!(dom.kind, TyKind::Vec { .. }));
+        assert!(matches!(cod.kind, TyKind::Vec { .. }));
+        for (src, len) in [("[]", 0), ("[x]", 1), ("[x, y]", 2), ("[x,]", 1)] {
+            let ExprKind::CollectionLit(elems) = body(src) else { panic!("{src}: expected a literal") };
+            assert_eq!(elems.len(), len, "{src}");
+        }
+    }
+
+    #[test]
+    fn malformed_vector_expressions_report_the_relevant_delimiter() {
+        for (body, message, token) in [
+            ("[A; n, m]", "a vector type is `[T; n]`", ","),
+            ("[A; n; m]", "a vector type is `[T; n]`", ";"),
+            ("[x, y; n]", "collection literal", ";"),
+            ("[x,; n]", "expected an expression", ";"),
+            ("[; n]", "expected an expression", ";"),
+            ("[A;]", "expected an expression", "]"),
+        ] {
+            let src = format!("fn f() -> Type {{ {body} }}");
+            let err = parse_file(&src).unwrap_err();
+            assert!(err.msg.contains(message), "{body}: {}", err.msg);
+            assert_eq!(&src[err.span.start..err.span.end], token, "{body}");
+        }
     }
 
     #[test]

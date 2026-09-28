@@ -58,6 +58,53 @@ fn vectors_compose_with_the_other_type_formers() {
     );
 }
 
+// The abbreviation's element type and length are both open. Conversion is
+// exercised in both checking directions, before either can compute.
+#[test]
+fn vector_type_expressions_convert_at_neutral_lengths() {
+    elab(r#"
+        fn V<A>(n: Nat) -> Type { [A; n] }
+        fn to_named<A>(n: Nat, xs: [A; n]) -> V<A>(n) { xs }
+        fn from_named<A>(n: Nat, xs: V<A>(n)) -> [A; n] { xs }
+        theorem shape<A>(n: Nat): V<A>(n) = [A; n] { refl }
+        theorem round<A>(n: Nat, xs: [A; n]): from_named(n, to_named(n, xs)) = xs { refl }
+    "#);
+}
+
+#[test]
+fn vector_type_expressions_compose_and_check_literals() {
+    elab(r#"
+        fn V<A>(n: Nat) -> Type { [A; n] }
+        fn nested<A>(n, m: Nat) -> Type { [[A; n]; m] }
+        fn arrows<A>(n: Nat) -> Type { [A -> A; n] }
+        fn higher() -> Type<1> { [Type; 0] }
+        fn empty<A>() -> V<A>(0) { let xs: [A; 0] = []; xs }
+        fn one() -> V<Nat>(1) { let xs: [Nat; 1] = [1]; xs }
+        fn two() -> V<Nat>(2) { let xs: [Nat; 2] = [1, 2]; xs }
+        fn plain_two() -> [Nat; 2] { [1, 2] }
+        fn nested_value() -> nested<Nat>(2, 1) { let xs: [[Nat; 2]; 1] = [[1, 2]]; xs }
+        fn functions<A>() -> arrows<A>(1) { let xs: [A -> A; 1] = [λ x => x]; xs }
+        theorem empty_shape<A>(): V<A>(0) = [A; 0] { refl }
+        theorem closed_shape(): V<Nat>(2) = [Nat; 2] { refl }
+        theorem two_values(): two() = plain_two() { refl }
+    "#);
+}
+
+#[test]
+fn vector_type_expressions_reject_wrong_types_lengths_and_levels() {
+    let m = elab_err("fn V<A>(n: Nat) -> Type { [A; n] } fn bad(xs: [Nat; 1]) -> V<Nat>(2) { xs }");
+    assert!(m.contains("[Nat; 1]") && m.contains("[Nat; 2]"), "{m}");
+    for src in [
+        "fn bad() -> Type { [0; 2] }",
+        "fn bad() -> Type { [Nat; Type] }",
+        "fn bad() -> Type { [Type; 0] }",
+    ] {
+        // These must reach semantic checking rather than fail to parse.
+        heather_syntax::parse_file(src).expect("vector type expression parses");
+        elab_err(src);
+    }
+}
+
 #[test]
 fn rejections() {
     // wrong length

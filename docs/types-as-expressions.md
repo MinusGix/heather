@@ -169,6 +169,17 @@ change introduces no new precedence to remember.
   Not a regression — no such expression parsed before — and not worth a
   lookahead until something wants it.
 
+### 3.4 Vector types in expressions
+
+`[T; n]` is also an expression (2026-09-28,
+`issues/vector-types-as-expressions.md`): a type-valued function can return
+`[A; n]` with both its element type and length open. The expression parser
+reads the first bracketed expression once. A following `;` selects `TyLit`
+of `TyKind::Vec`, using `expr_as_ty` for the element; a comma or closing `]`
+keeps the collection-literal reading. There is no backtracking or elaboration
+retry, so a semicolon after a comma remains a malformed collection literal.
+The dedicated type-position production is unchanged.
+
 ## 4. Elaboration: lazy decode, and the four readers that had to learn it
 
 A named abbreviation is elaborated in one place and consumed in another:

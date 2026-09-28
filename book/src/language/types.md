@@ -41,6 +41,16 @@ Types are also expressions. A function may return a type, a record projection
 whose value is a type can be used in type position, and motives may be
 ordinary lambdas returning `Type`.
 
+Vector types can be returned directly, including at an unknown length:
+
+```heather
+fn V<A>(n: Nat) -> Type { [A; n] }
+fn pass<A>(n: Nat, xs: V<A>(n)) -> [A; n] { xs }
+```
+
+The semicolon distinguishes a vector type `[A; n]` from a collection literal
+such as `[x, y]`.
+
 ## Equality and propositions
 
 ```heather
