@@ -248,21 +248,20 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     let mut probes = Some(Vec::new());
     let (image, body_bytes) = if read_loop {
         let program = read_loop::Program { root: &root_name, source: symbol, advance: advance.as_deref().unwrap(),
-            needle: needle.unwrap(), spec: spec.as_deref().unwrap(), computes: computes.as_deref().unwrap(), adds: adds.as_deref().unwrap(), print };
+            needle: needle.unwrap(), spec: spec.as_deref().unwrap(), computes: computes.as_deref().unwrap(), adds: adds.as_deref().unwrap() };
         let context = format!("{prefix}_context");
         check_module(&mut elab, &mut session, &loader::Module {
             name: context.clone(), path: PathBuf::from(format!("{context}.hthr")), src: read_loop::context(&program),
         })?;
-        let emission = read_loop::generate_loop(&elab, &prefix, &program)?;
-        // Generated where the context resolves names, before another module is checked.
-        let generated = if print { Some(read_loop::generate_format(&elab, &prefix)?) } else { None };
+        let emission = read_loop::generate_loop(&elab, &context, &prefix, &program)?;
         // The loop's pieces are a module of their own, which its composition imports.
         let pieces = format!("{prefix}_pieces");
         check_module(&mut elab, &mut session, &loader::Module {
             name: pieces.clone(), path: PathBuf::from(format!("{pieces}.hthr")), src: emission.pieces.clone(),
         })?;
         // The formatter's three certificates, each a module of its own.
-        let format = if let Some(parts) = generated {
+        let format = if print {
+            let parts = read_loop::generate_format(&elab, &prefix)?;
             for part in &parts {
                 check_module(&mut elab, &mut session, &loader::Module {
                     name: part.module.clone(), path: PathBuf::from(format!("{}.hthr", part.module)), src: part.text.clone(),

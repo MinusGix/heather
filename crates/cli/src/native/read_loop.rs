@@ -62,19 +62,18 @@ pub(super) struct Program<'a> {
     pub spec: &'a str,
     pub computes: &'a str,
     pub adds: &'a str,
-    /// Write the count as a decimal line rather than exit with it.
-    pub print: bool,
 }
 
 // The context the loop generator resolves names in, elaborated before it runs.
 pub(super) fn context(program: &Program) -> String {
-    let format = if program.print { " import decimal_line;" } else { "" };
-    format!("import {}; import function_ir_loop; import function_ir_loop_x86; import bitvec; import bool;{format}", program.root)
+    format!("import {}; import function_ir_loop; import function_ir_loop_x86; import bitvec; import bool;", program.root)
 }
 
-pub(super) fn generate_loop(elab: &Elaborator, prefix: &str, program: &Program) -> Result<LoopX86Emission, String> {
-    generate_elaborated_loop_x86(elab, prefix, &format!("{}::{}", program.root, program.source), &placement(),
-        Some(&format!("{}::{}", program.root, program.advance))).map_err(|e| format!("{e:?}"))
+pub(super) fn generate_loop(elab: &Elaborator, scope: &str, prefix: &str, program: &Program) -> Result<LoopX86Emission, String> {
+    elab.with_module_scope(scope, |elab| {
+        generate_elaborated_loop_x86(elab, prefix, &format!("{}::{}", program.root, program.source), &placement(),
+            Some(&format!("{}::{}", program.root, program.advance))).map_err(|e| format!("{e:?}"))
+    })?
 }
 
 // A near jump's bytes: JZ (0F 84), JS (0F 88) or JMP (E9), then rel32.
@@ -257,12 +256,16 @@ pub(super) fn generate_format(elab: &Elaborator, prefix: &str) -> Result<Vec<For
         ("line_start", Placements::from([(0, R8), (1, R11)]), vec![R9, Rcx, Rdx, Rbx, R10, R12, R13, R14, R15], Placements::from([(2, R9)])),
         ("line_length", Placements::from([(0, R11)]), vec![R10, Rcx, Rdx, Rbx, R12, R13, R14, R15], Placements::from([(1, R10)])),
     ];
-    parts.into_iter().map(|(function, inputs, temporaries, outputs)| {
-        let part = format!("{prefix}_{function}");
-        let emission = generate_elaborated_typed_x86(elab, &part, &format!("decimal_line::{function}"), &inputs, &temporaries, &outputs)
-            .map_err(|e| format!("{function}: {e:?}"))?;
-        Ok(FormatPart { module: format!("{part}_format"), prefix: part, bytes: encode_structured(&emission.lowered), text: emission.text })
-    }).collect()
+    // Read the formatter in its checked declaration scope, independently of
+    // the last generated module checked by the native producer.
+    elab.with_module_scope("decimal_line", |elab| {
+        parts.into_iter().map(|(function, inputs, temporaries, outputs)| {
+            let part = format!("{prefix}_{function}");
+            let emission = generate_elaborated_typed_x86(elab, &part, &format!("decimal_line::{function}"), &inputs, &temporaries, &outputs)
+                .map_err(|e| format!("{function}: {e:?}"))?;
+            Ok(FormatPart { module: format!("{part}_format"), prefix: part, bytes: encode_structured(&emission.lowered), text: emission.text })
+        }).collect()
+    })?
 }
 
 /// The printing profile's certificate: read to the end, count, write the count
@@ -357,4 +360,39 @@ theorem {prefix}_runs(chunks: List<ReadStep>, ok: EofChunks(chunks), ending: Rea
 }}
 ", spec = program.spec, common = common_arguments(prefix, program)));
     Ok(file)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn formatter_generation_uses_its_checked_scope_after_an_unrelated_module() {
+        let mut elab = super::super::native_test_base();
+        let mut session = heather_cli::semantic::SemanticSession::new(Some(std::path::PathBuf::from(
+            concat!(env!("CARGO_MANIFEST_DIR"), "/../../target/native-test-images"),
+        )));
+        for &(name, src) in SUPPORT.iter().chain(PRINT_SUPPORT).filter(|(name, _)|
+            matches!(*name, "omega" | "bitvec_nat" | "x86_64_store" | "bitvec_omega" | "decimal_line"))
+        {
+            super::super::check_module(&mut elab, &mut session, &heather_cli::loader::Module {
+                name: name.into(), path: name.into(), src: src.into(),
+            }).unwrap();
+        }
+        let before = generate_format(&elab, "scope_probe").unwrap();
+        elab.elab_module_source("unrelated", "fn line_word(n: Nat) -> Nat { n }").unwrap();
+        // The current module has no import of decimal_line; qualification
+        // cannot bypass that restriction in ordinary source/reflection.
+        assert!(elab.fn_body_code("decimal_line::line_word").is_err());
+        let after = generate_format(&elab, "scope_probe").unwrap();
+        assert_eq!(before.len(), 3);
+        assert_eq!(after.len(), before.len());
+        for (a, b) in before.iter().zip(&after) {
+            assert_eq!(a.module, b.module);
+            assert_eq!(a.prefix, b.prefix);
+            assert_eq!(a.text, b.text);
+            assert_eq!(a.bytes, b.bytes);
+        }
+        assert!(elab.fn_body_code("decimal_line::line_word").is_err(), "generation must restore the caller's scope");
+    }
 }

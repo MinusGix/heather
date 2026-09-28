@@ -2348,6 +2348,21 @@ impl Elaborator {
             })
     }
 
+    /// Run reflection or generation with names resolved as if read in a
+    /// checked module. Bare names follow that module's imports and ambiguity
+    /// rules; qualification still requires visibility there. The scope is
+    /// restored on return (including an error or panic), and calls may nest.
+    /// This read-only context does not change the checked global environment.
+    pub fn with_module_scope<T>(
+        &self, module: &str, read: impl FnOnce(&Self) -> T,
+    ) -> Result<T, String> {
+        let scope = self.names.module_scope(module)
+            .ok_or_else(|| format!("unknown checked module `{module}`"))?;
+        self.resolution_scopes.borrow_mut().push(Rc::new(scope.clone()));
+        let _guard = ResolutionScope { stack: &self.resolution_scopes };
+        Ok(read(self))
+    }
+
     /// Install the declaration scope for one read of stored inductive syntax.
     /// The guard restores the caller's scope on every return path.
     fn use_inductive_scope<'a>(&'a self, ind: &inductive::Inductive) -> ResolutionScope<'a> {

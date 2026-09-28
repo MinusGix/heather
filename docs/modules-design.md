@@ -430,6 +430,20 @@ invalidate syntax already checked in an earlier declaration. The module
 acceptance suite crosses ordinary fields, recursive fields and matches, value
 parameters, and a forded result-index expression with same-name collisions.
 
+### 10.2 Host generators choose a checked module scope (2026-09-28)
+
+`Elaborator::with_module_scope(module, callback)` runs reflection and
+source generators with the named module's saved name-resolution environment.
+The module must already have been checked. Bare names follow its own
+declarations, imports and listed-name choices; qualified names still need
+visibility in that scope. Nested calls restore the enclosing scope, including
+on an error or panic, and the callback receives an immutable elaborator.
+Generators can therefore choose the context their certificate will import
+without depending on which module the session checked last. The native loop
+producer names its checked context module; its formatter reads in
+`decimal_line`'s declaration scope. This selects name resolution only, not
+instance or notation policy.
+
 ## Decisions (2026-08-05, with MinusGix)
 
 1. §4's regime signed off: ambiguity-at-use, locals-beat-imports, no

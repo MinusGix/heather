@@ -766,3 +766,48 @@ fn reexport_images_preserve_aliases_and_proof_provenance_without_new_bindings() 
     assert_eq!(audit.axioms[0].path, ["client::use_it", "origin::proved", "origin::assumed"]);
     assert!(replay.elab_module_source("bad", "import facade; theorem falsehood(): 0 = 1 { proved(0) }").is_err());
 }
+
+#[test]
+fn reflection_in_a_named_module_scope_preserves_visibility_and_import_choices() {
+    let e = ok(&[
+        ("a", "fn f(n: Nat) -> Nat { n }"),
+        ("b", "fn f(n: Nat) -> Nat { Succ(n) }"),
+        ("chosen", "import a; import b::{f};"),
+        ("ambiguous", "import a; import b;"),
+        ("unrelated", "fn f(n: Nat) -> Nat { 0 }"),
+    ]);
+    let body = |module: &str, name: &str| e.with_module_scope(module, |e| e.fn_body_code(name).map(|b| b.code)).unwrap();
+    let a = body("a", "f").unwrap();
+    let b = body("b", "f").unwrap();
+    assert_ne!(a, b);
+    assert_eq!(body("a", "a::f").unwrap(), a);
+    assert_eq!(body("chosen", "f").unwrap(), b);
+    assert!(body("a", "b::f").is_err(), "qualified names still require an import");
+    assert!(body("ambiguous", "f").is_err(), "bare names remain ambiguous");
+    assert!(e.with_module_scope("missing", |_| panic!("an unknown scope must not run the callback")).is_err());
+    assert!(e.fn_body_code("a::f").is_err(), "the caller's imports must not change");
+}
+
+#[test]
+fn named_reflection_scopes_nest_and_restore_on_error_and_panic() {
+    let e = ok(&[
+        ("a", "fn f(n: Nat) -> Nat { n }"),
+        ("b", "fn f(n: Nat) -> Nat { Succ(n) }"),
+        ("unrelated", "fn f(n: Nat) -> Nat { 0 }"),
+    ]);
+    let original = e.fn_body_code("f").unwrap().code;
+    e.with_module_scope("a", |e| {
+        let a = e.fn_body_code("f").unwrap().code;
+        let b = e.with_module_scope("b", |e| e.fn_body_code("f").unwrap().code).unwrap();
+        assert_ne!(a, b);
+        assert_eq!(e.fn_body_code("f").unwrap().code, a);
+        assert!(e.with_module_scope("b", |e| e.fn_body_code("missing")).unwrap().is_err());
+        assert_eq!(e.fn_body_code("f").unwrap().code, a);
+    }).unwrap();
+    assert_eq!(e.fn_body_code("f").unwrap().code, original);
+    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        e.with_module_scope("a", |_| panic!("scope restoration probe")).unwrap();
+    }));
+    assert!(panic.is_err());
+    assert_eq!(e.fn_body_code("f").unwrap().code, original);
+}
