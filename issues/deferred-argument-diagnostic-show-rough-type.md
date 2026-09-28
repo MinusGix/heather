@@ -1,9 +1,9 @@
 ---
 title: Show the rough parameter type in deferred-argument diagnostics
-status: open
+status: closed
 labels: [frontend,elaboration,diagnostics,ergonomics]
 created: 2026-09-21
-updated: 2026-09-21
+updated: 2026-09-28
 ---
 
 Found while changing parser `lookahead_at` from a `match` to a receiver call.
@@ -67,3 +67,23 @@ that explains the refusal.
 - **[[polymorphic-argument-with-unsolved-callee]]** owns whether genuinely
   deferred polymorphic arguments can be inferred. Assumed here: only that the
   deferred path remains possible and therefore needs an actionable diagnostic.
+
+## Log
+
+- 2026-09-28: Deferred-argument errors now include the selected callee's qualified name and
+  rough explicit parameter types, with inferred pieces substituted and remaining
+  implicits named as stable placeholders (for example, `f: Nat -> ?B`). The bounded
+  surface speller elides unsupported shapes and exhausted budgets rather than
+  printing raw kernel syntax. Existing type-argument and explicit-call advice is
+  retained, including for bare operator arguments.
+
+  The original `r.map(...)` repro now reaches the type-owned `Result::map` even
+  with a visible parser `map`, and already reports the callback's nested
+  `Result<Success<…>, Failure<…>>` versus the expected `Success<…>`. Regression
+  coverage preserves that refusal, the fully qualified `result::Result::map`
+  refusal, and successful `and_then`; explicitly selecting the visible parser
+  `map(r, ...)` covers the deferred diagnostic and its `Parser` receiver type.
+  An underdetermined polymorphic call checks partial substitution and retained
+  advice, and a display unit test covers kernel-only shapes and depth elision.
+- 2026-09-28: Validation: full `scripts/test` passed (3027 passed, 0 failed, 5 ignored);
+  `scripts/issue check` passed with one pre-existing unrelated warning.

@@ -92,6 +92,13 @@ pub(crate) enum ObligationProgress {
 /// dictionary search, expression elaboration, unification, and declaration
 /// goal creation.
 pub(crate) trait ImplicitApplicationElab: ExplicitArgElab {
+    /// Failure-only presentation of the selected head and partially solved
+    /// explicit domains. Scratch variables must never escape as kernel syntax.
+    fn deferred_argument_note(
+        &self, _cx: &Cx, _head: &Term, _params: &[ParamMeta],
+        _domains: &[(usize, Type)], _slot_param: &[usize], _sols: &[Sol],
+    ) -> String { String::new() }
+
     fn classify_application_argument(&self, cx: &Cx, argument: &Expr) -> ArgumentClass;
 
     fn infer_application_argument(&self, cx: &Cx, argument: &Expr) -> R<(Term, Type, Level)>;
@@ -726,6 +733,7 @@ fn apply_implicit_planned(
     let mut meta_doms = Vec::with_capacity(n as usize);
     let mut meta_lvls = Vec::with_capacity(n as usize);
     let mut slot_param = Vec::with_capacity(n as usize);
+    let mut explicit_doms = Vec::new();
     let mut deferred = Vec::new();
     let mut resolves = Vec::new();
     let mut next_meta = 0u32;
@@ -767,6 +775,7 @@ fn apply_implicit_planned(
             next_meta += 1;
             Rc::new(meta)
         } else {
+            explicit_doms.push((parameter, (*dom).clone()));
             let argument = arguments.next().ok_or_else(|| ElabError::Elab {
                 msg: format!("`{name}` is applied to too few arguments"),
                 span,
@@ -991,13 +1000,16 @@ fn apply_implicit_planned(
                  the call fully explicitly (`@{name}(…)`)"
             )
         };
+        let note = elab.deferred_argument_note(
+            cx, &head, &params, &explicit_doms, &slot_param, &sols,
+        );
         if let ExprKind::OpSymbol { symbol, .. } = &obligation.expr.kind {
             return err(
                 format!(
                     "`{symbol}` is a bare operator symbol, so it needs the carrier \
                      this position expects — and the type of `{name}`'s parameter \
                      `{parameter}` still mentions an implicit that could not be inferred \
-                     here. Name the operation instead of the symbol, or {escape}"
+                     here. Name the operation instead of the symbol, or {escape}{note}"
                 ),
                 obligation.expr.span,
             );
@@ -1006,7 +1018,7 @@ fn apply_implicit_planned(
             format!(
                 "this argument of `{name}` was deferred — the type of its parameter \
                  `{parameter}` still mentions an implicit that could not be inferred; \
-                 {escape}"
+                 {escape}{note}"
             ),
             obligation.expr.span,
         );

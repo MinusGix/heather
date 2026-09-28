@@ -325,6 +325,9 @@ fn an_undetermined_unannotated_lambda_is_diagnosed() {
                  fn go(xs: List<Nat>) -> Nat { let ys = map(λ x => Succ(x), xs); 0 }");
     assert!(e.contains("was deferred"), "{e}");
     assert!(e.contains("`f`"), "the message should name the parameter: {e}");
+    assert!(e.contains("`f: Nat -> ?B`"), "show solved and unsolved parts: {e}");
+    assert!(e.contains("map<…>(…)") && e.contains("@map(…)"), "retain the advice: {e}");
+    assert!(!e.contains("GlobalTm") && !e.contains("LocalSubst"), "{e}");
 }
 
 #[test]

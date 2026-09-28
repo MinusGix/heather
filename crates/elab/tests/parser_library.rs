@@ -40,6 +40,54 @@ fn library() -> Elaborator {
     e.set_kernel_workers(1);
     e
 }
+
+#[test]
+fn deferred_parser_map_reports_the_selected_callee_and_rough_types() {
+    // Selecting the visible parser `map` explicitly exercises the deferred
+    // path. Result's type-owned member now wins for the original r.map form.
+    let source = r#"
+        import parser_core; import parser_combinators; import list; import result;
+        fn map<T,A,B>(self p: Parser<T,A>, f: A -> B) -> Parser<T,B> {
+            parser_combinators::map(p,f)
+        }
+        fn lookahead_at<T,A>(source: List<T>, begin: Cursor<T>(source),
+            r: Reply<T,A>(source,begin)) -> Reply<T,A>(source,begin) {
+            map(r,λ s => pure_at(source,begin,s.value))
+        }
+    "#;
+    let msg = library().elab_module_source("deferred_parser", source)
+        .expect_err("parser map cannot map a Reply").render(source);
+    assert!(msg.contains("was deferred"), "{msg}");
+    assert!(msg.contains("selected callee: `deferred_parser::map`"), "{msg}");
+    assert!(msg.contains("`p: Parser<") && msg.contains("`f:") && msg.contains("->"), "{msg}");
+    assert!(!msg.contains("GlobalTm") && !msg.contains("LocalSubst") && !msg.contains("El("), "{msg}");
+
+    // Selecting Result::map reveals the nested Result returned by the callback;
+    // binding the callback result with and_then is the well-typed correction.
+    for call in [
+        "result::Result::map(r,λ s => pure_at(source,begin,s.value))",
+        "r.map(λ s => pure_at(source,begin,s.value))",
+        "r.and_then(λ s => pure_at(source,begin,s.value))",
+    ] {
+        let source = format!(r#"
+            import parser_core; import parser_combinators; import list; import result;
+            fn map<T,A,B>(self p: Parser<T,A>, f: A -> B) -> Parser<T,B> {{
+                parser_combinators::map(p,f)
+            }}
+            fn lookahead_at<T,A>(source: List<T>, begin: Cursor<T>(source),
+                r: Reply<T,A>(source,begin)) -> Reply<T,A>(source,begin) {{ {call} }}
+        "#);
+        let result = library().elab_module_source("qualified_parser", &source);
+        if !call.starts_with("r.and_then") {
+            let msg = result.expect_err("map nests the callback's Result").render(&source);
+            assert!(msg.contains("has type `Result<") && msg.contains("Success<"), "{msg}");
+            assert!(msg.contains("expected here") && !msg.contains("was deferred"), "{msg}");
+        } else {
+            result.unwrap_or_else(|err| panic!("{}", err.render(&source)));
+        }
+    }
+}
+
 #[test]
 fn generic_combinators_progress_and_error_semantics() {
     let mut e = library();
@@ -126,4 +174,3 @@ fn soundness_certificates_are_first_class() {
         assert!(e.axiom_report(name).unwrap().axioms.is_empty(),"{name} used an axiom");
     }
 }
-

@@ -30,10 +30,12 @@
 use std::cell::{Cell, RefCell};
 use std::sync::Arc as Rc;
 
+use heather_kernel::subst::{GlobalEntry, GlobalSubst};
 use heather_kernel::term::{CtxBase, GlobalVar, LocalSubst, LocalVar, SubstTail, Term, Type};
 
 use crate::diagnostics::DISPLAY_DECODE_STEPS;
-use crate::{Cx, Elaborator, dress_true, show_level};
+use crate::unification::Sol;
+use crate::{Cx, Elaborator, ParamMeta, dress_true, show_level};
 
 /// Nodes the walk may visit. Generous next to `fmt.rs`'s 512, because a
 /// spelled node is a handful of characters where a raw one is a record.
@@ -47,6 +49,42 @@ const SPELL_FALLBACKS: u32 = 4;
 const RAW_NODE_CHARS: usize = 96;
 
 impl Elaborator {
+    /// Substitute known scratch solutions and give the remaining slots stable
+    /// display-only names. The markers are outside Ψ and are consumed by the
+    /// bounded speller; they are never sent to reduction or type checking.
+    pub(crate) fn display_deferred_argument(
+        &self, cx: &Cx, head: &Term, params: &[ParamMeta],
+        domains: &[(usize, Type)], slot_param: &[usize], sols: &[Sol],
+    ) -> String {
+        let selected = match head {
+            Term::GlobalTm { var, .. } => self.global_abs_of(*var)
+                .and_then(|abs| self.global_qualified_name_at(abs)),
+            _ => self.spell_term_clean(cx, head),
+        }.unwrap_or_else(|| "…".to_string());
+        let first = self.psi.bindings.len() as u32 + self.global_padding()
+            + self.meta_pushed.borrow().len() as u32;
+        let placeholders: Vec<_> = slot_param.iter().enumerate().map(|(slot, &p)| {
+            let name = params.get(p).map(|p| p.name.as_str()).unwrap_or("_");
+            (GlobalVar(first + slot as u32), format!("?{name}"))
+        }).collect();
+        let entries = sols.iter().enumerate().rev().map(|(slot, sol)| {
+            GlobalEntry::Tm(sol.solved().cloned().unwrap_or_else(|| Rc::new(Term::GlobalTm {
+                var: placeholders[slot].0,
+                subst: LocalSubst::id(&cx.gamma),
+            })))
+        }).collect();
+        let sigma = GlobalSubst { entries };
+        let shown = domains.iter().map(|(p, dom)| {
+            let dom = dom.apply_global(&sigma);
+            let mut sp = self.speller(cx);
+            sp.rough = Some(&placeholders);
+            let ty = sp.ty(&dom, 0);
+            let name = params.get(*p).map(|p| p.name.as_str()).unwrap_or("_");
+            format!("`{name}: {ty}`")
+        }).collect::<Vec<_>>().join(", ");
+        format!("\nselected callee: `{selected}`; rough parameter types: {shown}")
+    }
+
     /// A type as a human should read it: best-effort decoded head, surface
     /// spelling, then the bounded kernel form.
     pub(crate) fn display_type(&self, cx: &Cx, ty: &Type) -> String {
@@ -149,6 +187,7 @@ impl Elaborator {
             fallbacks: Cell::new(0),
             qualified: false,
             annotations: false,
+            rough: None,
         }
     }
 }
@@ -165,6 +204,8 @@ struct Speller<'a> {
     /// Spell globals so the result can be **re-parsed** rather than only read.
     qualified: bool,
     annotations: bool,
+    /// Presentation-only scratch placeholders; this mode elides raw nodes.
+    rough: Option<&'a [(GlobalVar, String)]>,
 }
 
 impl Speller<'_> {
@@ -181,6 +222,7 @@ impl Speller<'_> {
     }
 
     fn raw_ty(&self, ty: &Type) -> String {
+        if self.rough.is_some() { return "…".to_string(); }
         self.fallbacks.set(self.fallbacks.get() + 1);
         elide(&format!("{ty:?}"))
     }
@@ -189,6 +231,7 @@ impl Speller<'_> {
         if let Some(name) = self.alias(t) {
             return name;
         }
+        if self.rough.is_some() { return "…".to_string(); }
         self.fallbacks.set(self.fallbacks.get() + 1);
         elide(&format!("{t:?}"))
     }
@@ -315,7 +358,7 @@ impl Speller<'_> {
         if !self.charge(d) {
             return self.raw_ty(ty);
         }
-        if self.annotations && let std::borrow::Cow::Owned(decoded) = crate::inductive::decoded(ty) {
+        if (self.annotations || self.rough.is_some()) && let std::borrow::Cow::Owned(decoded) = crate::inductive::decoded(ty) {
             return self.ty(&decoded, d + 1);
         }
         if self.annotations && let Type::El { tm, .. } = ty
@@ -405,6 +448,10 @@ impl Speller<'_> {
         if !self.charge(d) {
             return self.raw_tm(t);
         }
+        if let Some(placeholders) = self.rough
+            && let Term::GlobalTm { var, .. } = t
+            && let Some((_, name)) = placeholders.iter().find(|(v, _)| v == var)
+        { return name.clone(); }
         if self.annotations
             && let Some((crate::gendefs::GenDef::TyCodeFn(tag), args)) = self.el.gen_app_of(t)
             && let Some(ind) = self.el.types.by_tag(tag)
@@ -763,6 +810,27 @@ fn elide(s: &str) -> String {
 mod tests {
     use super::*;
     use heather_kernel::level::Level;
+
+    #[test]
+    fn rough_parameter_types_elide_kernel_only_nodes_and_exhausted_budgets() {
+        let el = Elaborator::with_prelude().expect("prelude");
+        let cx = Cx::empty();
+        let mut ty = Type::SEmpty { level: Level::Zero };
+        let note = el.display_deferred_argument(
+            &cx, &Term::Zero, &[], &[(0, ty.clone())], &[], &[],
+        );
+        assert!(note.contains("`_: …`"), "{note}");
+        for _ in 0..64 {
+            ty = Type::Pi {
+                dom_level: Level::Zero, cod_level: Level::Zero,
+                dom: Rc::new(Type::Nat), cod: Rc::new(ty),
+            };
+        }
+        let note = el.display_deferred_argument(&cx, &Term::Zero, &[], &[(0, ty)], &[], &[]);
+        assert!(note.contains("Nat ->") && note.contains('…'), "{note}");
+        assert!(!note.contains("sEmpty") && !note.contains("Pi("), "{note}");
+        assert!(note.len() < 512, "rough type must stay bounded: {note}");
+    }
 
     /// The negative control the design asks for, and the reason it lives here:
     /// the surface language makes an unspellable type hard to *write*, since

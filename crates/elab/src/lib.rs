@@ -1175,6 +1175,13 @@ impl vec::SurfaceVecElab for Elaborator {
 }
 
 impl application::ImplicitApplicationElab for Elaborator {
+    fn deferred_argument_note(
+        &self, cx: &Cx, head: &Term, params: &[ParamMeta],
+        domains: &[(usize, Type)], slot_param: &[usize], sols: &[Sol],
+    ) -> String {
+        self.display_deferred_argument(cx, head, params, domains, slot_param, sols)
+    }
+
     fn respell_solution(&self, cx: &Cx, dom: &Type, solution: &Term) -> Option<Term> {
         // Only a *type* argument is a code: the metavariable's declared
         // domain is `Ty l` exactly there.
