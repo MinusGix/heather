@@ -389,6 +389,13 @@ linear spelling, never a reduct. The `Snd(a)` argument is the *term* `a`,
 evaluated per query in the identity environment, so the description stays
 arena-free.
 
+Contiguous `fst@` / `snd@` chains use `Tc::projection_at_spine`: infer the
+non-projection head once, then view and select each receiver in one arena
+local to that chain. Every intermediate receiver must still expose a Σ.
+Only the levels and the final arena-free `Sel` description return to typing;
+no value survives the call. Fuel is granted per view, as in the per-node
+rules. The eager oracle and quotation translator retain those per-node rules.
+
 ### 3.5 The three Λ inference arms, and completeness
 
 `ULam`/`CtxLam`/`TyLam` inference wraps the body's inferred type in
@@ -413,15 +420,16 @@ on the `@` forms (the reduct spelled by the rewriter), and `typing::oracle`
 is that mode. `tests/typing_differential.rs` runs both modes over
 `wt.rs`'s streams with the `@` option on, both Ψ and `opaque(Ψ)`, ≥ 4 seed
 streams plus a fuel sweep, seed-only reporting, `OutOfFuel` from either
-side never a disagreement. Because the two modes share every arm and differ
-only in when a `Sel` is spelled, the differential tests precisely the new
-thing: that evaluating a description and rewriting it agree — which is
+side never a disagreement. The modes implement the same typing rules;
+projection spines batch their value-domain views only in deferred mode,
+while the eager mode spells each selection at its original per-node boundary.
+The differential tests that evaluating a description and rewriting it agree — which is
 machine adequacy (`nbe-conversion-design.md` §11.2) applied at the typing
 seam, and already the property `conv_differential.rs` holds conversion to.
 
 ### 3.7 Cost, and what is measured before it is optimized
 
-Every miss and every `Sel` view evaluates the tower's type afresh in a
+Every miss and isolated `Sel` view evaluates the tower's type afresh in a
 per-query arena. Per query that is the value graph, linear in the nesting
 (`projected-tuple-tower-design.md` §3); across a declaration it is
 `queries × depth`, against today's `3.5ⁿ` per query. Whether that
@@ -431,7 +439,13 @@ forced heads — which needs an arena that outlives a query and therefore a
 representation whose memoized values can never dangle — and that is a
 separate design, priced against this section's number, not a thing to
 slip into stage 2. The per-query arena is kept because stage 1b measured
-what abandoning it costs.
+what abandoning it costs. A contiguous projection chain is one such query:
+its intermediate views reuse the preceding value instead of replaying the
+selection prefix at each link. This removes quadratic prefix replay without
+retaining an arena across independent typing or conversion queries. Source
+projection preparation can still traverse the remaining type per field;
+[conjunction-projection-chain-cost](../issues/conjunction-projection-chain-cost.md) records that separate cost and its
+measured family.
 
 ### 3.8 The value forms for the unannotated spellings
 

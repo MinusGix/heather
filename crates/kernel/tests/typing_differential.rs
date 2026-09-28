@@ -443,6 +443,47 @@ fn nested_projection_chains() {
     );
 }
 
+/// Long projection spines view every intermediate receiver, including a
+/// dependent final tail. An extra projection past that tail must be refused.
+#[test]
+fn long_projection_spines_agree_with_the_eager_checker() {
+    use heather_kernel::term::LocalVar;
+    let psi = GlobalCtx::new(vec![]);
+    let z = Level::Zero;
+    for depth in [1, 4, 16, 32] {
+        let final_ty = Type::Sigma {
+            fst_level: z.clone(), snd_level: z.clone(), fst: Rc::new(Type::Nat),
+            snd: Rc::new(Type::Id {
+                level: z.clone(), ty: Rc::new(Type::Nat),
+                lhs: Rc::new(Term::Var(LocalVar(0))), rhs: Rc::new(Term::Var(LocalVar(0))),
+            }),
+        };
+        let mut ty = final_ty;
+        for _ in 0..depth {
+            ty = Type::Sigma {
+                fst_level: z.clone(), snd_level: z.clone(),
+                fst: Rc::new(Type::Nat), snd: Rc::new(ty.shift_local(1)),
+            };
+        }
+        let gamma = LocalCtx::nil().extended(Rc::new(ty), z.clone());
+        let mut term = Rc::new(Term::Var(LocalVar(0)));
+        for _ in 0..depth {
+            term = Rc::new(Term::SndAt { pair: term });
+        }
+        let value = Rc::new(Term::FstAt { pair: Rc::clone(&term) });
+        let proof = Rc::new(Term::SndAt { pair: term });
+        let expected = Type::Id { level: z.clone(), ty: Rc::new(Type::Nat), lhs: Rc::clone(&value), rhs: value };
+        let invalid = Term::FstAt { pair: Rc::clone(&proof) };
+        for layer in [Layer::Prog, Layer::Meta] {
+            assert_eq!(check_term(&psi, 0, layer, &gamma, &proof, &expected, &z, FUEL), Ok(()));
+            check_tm(depth as u64, "dependent long projection", &psi, 0, layer, &gamma, &proof, &expected, &z, FUEL);
+            infer_tm(depth as u64, "dependent long projection", &psi, 0, layer, &gamma, &proof, FUEL);
+            assert!(infer_term(&psi, 0, layer, &gamma, &invalid, FUEL).is_err());
+            infer_tm(depth as u64, "projection past a non-Sigma", &psi, 0, layer, &gamma, &invalid, FUEL);
+        }
+    }
+}
+
 /// `app@` spines over a head whose Π needs reduction
 /// (`docs/app-by-head-type-design.md` §3.2): a two-argument function stored
 /// as a record field, `fst@(pair@^{T}(λx. λy. x; 0))` with

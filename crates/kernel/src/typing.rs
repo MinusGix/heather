@@ -94,7 +94,7 @@ pub(crate) mod ity;
 
 use ity::{ITy, ITyRef, Sel, SndOf, TyForm};
 
-use crate::conv::{conv_ity_cached, head_ity_cached, ConvError, ITyHead};
+use crate::conv::{conv_ity_cached, head_ity_cached, projection_heads_cached, ConvError, ITyHead};
 #[cfg(not(feature = "value-metrics"))]
 use crate::conv::{conv_local_ctx_cached, conv_type_cached};
 #[cfg(feature = "value-metrics")]
@@ -2105,6 +2105,9 @@ impl Tc {
             // first draft's `fst@(T; p)` unnecessary: `T` was always the type
             // `p` already infers.
             Term::FstAt { pair } => {
+                if !self.materialize_eagerly {
+                    return self.projection_at_spine(env, t);
+                }
                 self.checked_spelling_admitted(env)?;
                 let (pair_ty, _) = self.tm_infer(env, pair)?;
                 let form = self.view_v(env, &pair_ty)?;
@@ -2119,6 +2122,9 @@ impl Tc {
             // spelling again, so the inferred type stays source-shaped even
             // though `U` itself came out of the view.
             Term::SndAt { pair } => {
+                if !self.materialize_eagerly {
+                    return self.projection_at_spine(env, t);
+                }
                 self.checked_spelling_admitted(env)?;
                 let (pair_ty, _) = self.tm_infer(env, pair)?;
                 let form = self.view_v(env, &pair_ty)?;
@@ -2159,6 +2165,44 @@ impl Tc {
             // An unannotated intro: checking-only, exactly as `box` is.
             _ => Err(TypeError::NotInferable),
         }
+    }
+
+    /// Infer the head once and view the projection receivers in one arena.
+    /// The returned type remains an arena-free selection description; the
+    /// eager oracle and quote translator keep the original per-node rules.
+    fn projection_at_spine(&self, env: &Env, t: &Term) -> R<(ITy, Level)> {
+        self.checked_spelling_admitted(env)?;
+        let mut selections = Vec::new();
+        let mut head = t;
+        loop {
+            match head {
+                Term::FstAt { pair } => {
+                    selections.push(Sel::Fst);
+                    head = pair;
+                }
+                Term::SndAt { pair } => {
+                    selections.push(Sel::Snd(Rc::new(Term::FstAt { pair: Rc::clone(pair) })));
+                    head = pair;
+                }
+                _ => break,
+            }
+        }
+        selections.reverse();
+        let (mut ty, mut level) = self.tm_infer(env, head)?;
+        let levels = projection_heads_cached(
+            &env.psi, &env.gamma, env.layer.type_layer(), &ty, &selections, self.fuel,
+            #[cfg(feature = "value-metrics")]
+            env.value_metrics.as_ref(),
+            Rc::clone(&env.cache),
+        )?;
+        let levels = levels.ok_or(TypeError::HeadMismatch)?;
+        let depth = env.gamma.entries.len() as u32;
+        for (sel, (fst_level, snd_level)) in selections.into_iter().zip(levels) {
+            level = match &sel { Sel::Fst => fst_level, _ => snd_level };
+            ty = ITy::Sel { of: Rc::new(ty), sel, at_depth: depth };
+            crate::stats::intro_at_nodes(1);
+        }
+        Ok((ty, level))
     }
 
     /// An `app@` spine `f(a₁, …, aₖ)`, innermost node first. `base[delta]`

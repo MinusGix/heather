@@ -1993,39 +1993,57 @@ pub(crate) fn eval_ity<'v>(
         ITy::Sel { of, sel, at_depth } => {
             crate::stats::sel_evals(1);
             let w = eval_ity(cv, env, of, sel.of_depth(*at_depth), true)?;
-            let c: &'v TyClo<'v> = match (&*w, sel) {
-                (VTy::Sigma { fst, .. }, Sel::Fst) => fst,
-                (VTy::Sigma { snd, .. }, Sel::Snd(_)) => snd,
-                (VTy::Sum { lhs, .. }, Sel::Lhs) => lhs,
-                (VTy::Sum { rhs, .. }, Sel::Rhs) => rhs,
-                (VTy::Pi { dom, .. }, Sel::Dom) => dom,
-                (VTy::Pi { cod, .. }, Sel::Cod) => cod,
-                (VTy::Pi { cod, .. }, Sel::App(_)) => cod,
-                // The description was formed by a rule that had already
-                // viewed `of` and found the former; a different head here
-                // means the two disagree, which is a mismatch and not a
-                // panic.
-                _ => return Err(NC),
-            };
-            drop(w);
-            let arg: Option<&'v TmClo<'v>> = match sel {
-                Sel::Snd(a) | Sel::App(a) => {
-                    let rho = value::Env::identity(env.arena, *at_depth);
-                    let v = run(cv, env, |ev| ev.eval_tm_ref(a, &rho))?;
-                    Some(env.arena.tm(TmClo::val(v)))
-                }
-                Sel::Cod => Some(fresh(env.arena, at_depth.saturating_sub(1))),
-                _ => None,
-            };
-            run(cv, env, |ev| {
-                let v = match arg {
-                    Some(a) => ev.apply_ty(c, &[a])?,
-                    None => ev.force_ty(c)?,
-                };
-                if delta_final { ev.delta_whnf_ty(v) } else { Ok(v) }
-            })
+            select_ity(cv, env, w, sel, *at_depth, delta_final)
         }
     }
+}
+
+
+/// One selection from an already viewed type. Projection spines retain this
+/// value within one arena rather than evaluating their prefixes again.
+pub(crate) fn select_ity<'v>(
+    cv: &mut Conv<'v, Values>,
+    env: &Env<'v>,
+    w: Rc<VTy<'v>>,
+    sel: &Sel,
+    at_depth: u32,
+    delta_final: bool,
+) -> R<Rc<VTy<'v>>> {
+    let c: &'v TyClo<'v> = match (&*w, sel) {
+        (VTy::Sigma { fst, .. }, Sel::Fst) => fst,
+        (VTy::Sigma { snd, .. }, Sel::Snd(_)) => snd,
+        (VTy::Sum { lhs, .. }, Sel::Lhs) => lhs,
+        (VTy::Sum { rhs, .. }, Sel::Rhs) => rhs,
+        (VTy::Pi { dom, .. }, Sel::Dom) => dom,
+        (VTy::Pi { cod, .. }, Sel::Cod) => cod,
+        (VTy::Pi { cod, .. }, Sel::App(_)) => cod,
+        // The description was formed by a rule that had already
+        // viewed `of` and found the former; a different head here
+        // means the two disagree, which is a mismatch and not a
+        // panic.
+        _ => return Err(NC),
+    };
+    drop(w);
+    let arg: Option<&'v TmClo<'v>> = match sel {
+        Sel::Snd(a) | Sel::App(a) => {
+            let rho = if at_depth == glen(env) {
+                env.rho.clone()
+            } else {
+                value::Env::identity(env.arena, at_depth)
+            };
+            let v = run(cv, env, |ev| ev.eval_tm_ref(a, &rho))?;
+            Some(env.arena.tm(TmClo::val(v)))
+        }
+        Sel::Cod => Some(fresh(env.arena, at_depth.saturating_sub(1))),
+        _ => None,
+    };
+    run(cv, env, |ev| {
+        let v = match arg {
+            Some(a) => ev.apply_ty(c, &[a])?,
+            None => ev.force_ty(c)?,
+        };
+        if delta_final { ev.delta_whnf_ty(v) } else { Ok(v) }
+    })
 }
 
 /// [`eval_ity`] on the syntax case: evaluate in the identity environment of

@@ -99,3 +99,46 @@ theorem read<A>(seed: {ty}): make(seed).out{path} = seed{path} {{ make(seed).sam
         assert!(counts[5] <= 3 * counts[4], "projection cost growth: {counts:?}");
     }
 }
+
+/// A visible conjunction spine must not turn into a chain of deferred
+/// selections whose prefixes are normalized again at every projection.
+#[test]
+fn conjunction_projection_chain_cost() {
+    for alias in [false, true] {
+        let counts: Vec<_> = [8, 16, 32].into_iter().map(|depth| {
+            let ty = format!("{}A{}", "And<A, ".repeat(depth), ">".repeat(depth));
+            let path = ".right".repeat(depth);
+            let body = if alias { format!("let p = identity(facts); p{path}") } else { format!("facts{path}") };
+            measure(
+                "record And<P, Q> { left: P, right: Q }\ntheorem identity<A>(a: A): A { a }",
+                &format!("fn probe<A>(facts: {ty}) -> A {{ {body} }}"),
+                "probe", "",
+            )
+        }).collect();
+        eprintln!("conjunction depths 8/16/32, alias={alias}: {counts:?}");
+        assert!(counts.iter().all(|&n| n > 0));
+        assert!(counts[2] <= 3 * counts[1], "projection prefix replay returned: {counts:?}");
+    }
+}
+
+#[test]
+fn conjunction_projection_chains_preserve_fields_and_dependencies() {
+    let mut el = Elaborator::with_prelude().expect("prelude");
+    let source = "
+record And<P, Q> { left: P, right: Q }
+record Witness<A> { value: A, same: value = value }
+theorem identity<A>(a: A): A { a }
+fn read<A, B>(facts: And<B, And<B, Witness<A>>>) -> A { facts.right.right.value }
+theorem evidence<A, B>(facts: And<B, And<B, Witness<A>>>):
+    facts.right.right.value = facts.right.right.value { facts.right.right.same }
+fn aliased<A, B>(facts: And<B, And<B, A>>) -> A {
+    let p = identity(facts); p.right.right
+}
+theorem literal(): read(And(1, And(2, Witness(7, refl)))) = 7 { refl }
+theorem neutral<A>(a: A): read(And(1, And(2, Witness(a, refl)))) = a { refl }
+theorem left(): And(1, And(2, 3)).right.left = 2 { refl }
+";
+    el.elab_source(source).unwrap_or_else(|e| panic!("{}", e.render(source)));
+    assert!(el.elab_source("theorem wrong(): read(And(1, And(2, Witness(7, refl)))) = 8 { refl }").is_err());
+    assert!(el.elab_source("fn wrong_type<A, B>(facts: And<B, And<B, A>>) -> B { facts.right.right }").is_err());
+}

@@ -2980,6 +2980,30 @@ impl Elaborator {
                 "no-projection-def"
             }
         );
+        // Checked projections carry no component annotations. Walk only the
+        // structural type, and spell the selected field once at the end.
+        // Preparing a parallel emitted tail at every link re-walks all the
+        // conjunctions below it even though none of that syntax is emitted.
+        if self.emits_at_forms(cx) {
+            let mut cur = record_ty.clone();
+            let mut pair = value;
+            for step in 0..=idx + 1 {
+                let Type::Sigma { fst_level, fst, snd, .. } = self.whnf(cx, &cur, span)? else {
+                    return err(
+                        format!("internal: `{}` has no field spine entry {step} (malformed record encoding)", ind.name),
+                        span,
+                    );
+                };
+                let proj = Rc::new(Term::FstAt { pair: Rc::clone(&pair) });
+                if step == idx + 1 {
+                    let field = self.annotation_type(cx, &fst, 0);
+                    return Ok(((*proj).clone(), field, fst_level));
+                }
+                cur = snd.apply_local(&LocalSubst::id(&cx.gamma).extended(proj));
+                pair = Rc::new(Term::SndAt { pair });
+            }
+            unreachable!("the loop returns at step idx + 1");
+        }
         let mut cur = record_ty.clone();
         // Compute the declaration-binder spelling once, then walk it beside
         // the inline structural copy. Most fallback records have nothing to
@@ -3078,34 +3102,24 @@ impl Elaborator {
                     decode_deep(&snd).map_or_else(|| Rc::clone(&snd), Rc::new),
                 ),
             };
-            // The checked spellings of the projection chain (§2.1, §4.1):
-            // no annotation at all — the receiver infers its own type. The
-            // chain below still needs `fst_e`/`snd_e` — `snd_e` carries
-            // `cur_emit` forward and `fst_e` is the field's inferred type
-            // this function returns — but neither is written into the term.
-            let at = self.emits_at_forms(cx);
-            let proj = Rc::new(match at {
-                true => Term::FstAt { pair: Rc::clone(&pair) },
-                false => Term::Fst {
-                    fst_level: fst_level.clone(),
-                    snd_level: snd_level.clone(),
-                    fst_ty: Rc::clone(&fst_e),
-                    snd_ty: Rc::clone(&snd_e),
-                    pair: Rc::clone(&pair),
-                },
+            // Component projections (inside quotes) still carry annotations,
+            // so their links need the parallel emission spelling above.
+            let proj = Rc::new(Term::Fst {
+                fst_level: fst_level.clone(),
+                snd_level: snd_level.clone(),
+                fst_ty: Rc::clone(&fst_e),
+                snd_ty: Rc::clone(&snd_e),
+                pair: Rc::clone(&pair),
             });
             if step == idx + 1 {
                 return Ok(((*proj).clone(), (*fst_e).clone(), fst_level));
             }
-            let rest = Rc::new(match at {
-                true => Term::SndAt { pair: Rc::clone(&pair) },
-                false => Term::Snd {
-                    fst_level,
-                    snd_level,
-                    fst_ty: Rc::clone(&fst_e),
-                    snd_ty: Rc::clone(&snd_e),
-                    pair: Rc::clone(&pair),
-                },
+            let rest = Rc::new(Term::Snd {
+                fst_level,
+                snd_level,
+                fst_ty: Rc::clone(&fst_e),
+                snd_ty: Rc::clone(&snd_e),
+                pair: Rc::clone(&pair),
             });
             cur = snd.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(&proj)));
             if cur_emit.is_some() {
