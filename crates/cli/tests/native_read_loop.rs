@@ -90,7 +90,7 @@ fn wc_l_counts_every_line() {
     assert!(output.status.success(), "build-x86 {}: {}", output.status, String::from_utf8_lossy(&output.stderr));
     let executable = directory.join("wc_l");
     let certificate = std::fs::read_to_string(directory.join("wc_l.certificate.hthr")).unwrap();
-    for claim in ["_runs(", "_written(", "_file_correct(", "_loop_written("] {
+    for claim in ["_runs(", "_runs_every(", "_written(", "_file_correct(", "_loop_written("] {
         assert!(certificate.contains(claim), "missing {claim}");
     }
     for (index, input) in inputs().iter().enumerate() {
@@ -129,7 +129,7 @@ fn wc_l_prints_every_line() {
     let executable = directory.join("wc_l");
     let certificate = std::fs::read_to_string(directory.join("wc_l.certificate.hthr")).unwrap();
     assert!(!certificate.contains("Nat::le_antisym"), "size equality must use refl");
-    for claim in ["_runs(", "write_events(", "decimal_line(", "_code_written(", "_file_correct("] {
+    for claim in ["_runs(", "_runs_every(", "write_events(", "decimal_line(", "_code_written(", "_file_correct("] {
         assert!(certificate.contains(claim), "missing {claim}");
     }
     for (index, input) in inputs().iter().enumerate() {

@@ -12,8 +12,8 @@ use heather_elab::heather_emit::Module;
 use heather_elab::Elaborator;
 
 // Bundled after the base support, only for this profile: the loop contract and
-// its native certificates, fetched execution, the Linux trace and the
-// profile's memory view.
+// its native certificates, fetched execution, the Linux trace and its
+// determinism, and the profile's memory view.
 pub(super) const SUPPORT: &[(&str, &str)] = &[
     ("omega", include_str!("../../../../lib/std/omega.hthr")),
     ("bitvec_nat", include_str!("../../../../lib/std/bitvec/nat.hthr")),
@@ -25,7 +25,9 @@ pub(super) const SUPPORT: &[(&str, &str)] = &[
     ("function_ir_loop_x86", include_str!("../../../../lib/function_ir_loop_x86.hthr")),
     ("function_ir_loop_trace", include_str!("../../../../lib/function_ir_loop_trace.hthr")),
     ("x86_64_store", include_str!("../../../../lib/std/arch/x86_64/store.hthr")),
+    ("x86_64_step_forms", include_str!("../../../../lib/std/arch/x86_64/step_forms.hthr")),
     ("linux_x86_64_io", include_str!("../../../../lib/linux_x86_64_io.hthr")),
+    ("linux_x86_64_determinism", include_str!("../../../../lib/linux_x86_64_determinism.hthr")),
     ("elf64_io", include_str!("../../../../lib/elf64_io.hthr")),
     ("elf64_read_loop", include_str!("../../../../lib/elf64_read_loop.hthr")),
 ];
@@ -236,11 +238,28 @@ theorem {prefix}_runs(chunks: List<ReadStep>, ok: EofChunks(chunks), ending: Rea
     read_loop_runs({common}, {prefix}_jumps(), {prefix}_exit_reads(), {prefix}_fail_reads(), {prefix}_back_closes(),
         {prefix}_retry_closes(), {prefix}_resident(), chunks, ok, ending, ending_ok, room, page, gprs, flags)
 }}
+
+// And that run is the run: every run of the file from that start which got
+// the same answers from Linux, whatever Linux left in RCX, R11 and a failed
+// read's buffer, made exactly those events (linux_x86_64_determinism). The
+// claim is proved again here, not named, so a refused claim is reported once.
+theorem {prefix}_runs_every(chunks: List<ReadStep>, ok: EofChunks(chunks), ending: ReadEnding, ending_ok: EofEnding(ending),
+    room: {root}::{spec}(eof_input(chunks)) + 4096 < Nat::pow(2, 64), page: Nat → BitVec(8), gprs: Gprs, flags: Flags,
+    run: List<LinuxEvent>, ran: LinuxRun(io_linux(), run, io_initial({prefix}_file(), page, gprs, flags)),
+    answers: SameResponses(eof_events(chunks, ending, [ExitEvent(bitvec_nat::word_of_nat(64, {root}::{spec}(eof_input(chunks))))]), run)):
+    run = eof_events(chunks, ending, [ExitEvent(bitvec_nat::word_of_nat(64, {root}::{spec}(eof_input(chunks))))]) {{
+    linux_runs_every(io_linux(), eof_events(chunks, ending, [ExitEvent(bitvec_nat::word_of_nat(64, {root}::{spec}(eof_input(chunks))))]),
+        run, io_initial({prefix}_file(), page, gprs, flags),
+        read_loop_runs({common}, {prefix}_jumps(), {prefix}_exit_reads(), {prefix}_fail_reads(), {prefix}_back_closes(),
+            {prefix}_retry_closes(), {prefix}_resident(), chunks, ok, ending, ending_ok, room, page, gprs, flags),
+        ran, answers)
+}}
 ", spec = program.spec, common = common_arguments(prefix, program)));
     Ok(file)
 }
 
-pub(super) const IMPORTS: &[&str] = &["elf64_read_loop", "elf64_io", "elf64_calls", "elf64", "linux_x86_64_entry", "linux_x86_64_io", "function_ir_loop",
+pub(super) const IMPORTS: &[&str] = &["elf64_read_loop", "elf64_io", "elf64_calls", "elf64", "linux_x86_64_entry", "linux_x86_64_io",
+    "linux_x86_64_determinism", "function_ir_loop",
     "function_ir_loop_trace", "x86_64_fetched_code", "x86_64_fetch", "bitvec_nat", "x86_64", "bitvec", "list", "logic", "nat"];
 
 /// One of the formatter's certificates: a module of its own, and its bytes.
@@ -357,6 +376,33 @@ theorem {prefix}_runs(chunks: List<ReadStep>, ok: EofChunks(chunks), ending: Rea
         {prefix}_print_jumps(), {prefix}_write_fail_reads(), {prefix}_write_exit_reads(), {prefix}_write_back_closes(),
         {prefix}_write_retry_closes(), {prefix}_resident(),
         chunks, ok, ending, ending_ok, small, writes, writes_ok, written, written_ok, page, gprs, flags)
+}}
+
+// And that run is the run: every run of the file from that start which got
+// the same answers from Linux, whatever Linux left in RCX, R11 and a failed
+// read's buffer, made exactly those events (linux_x86_64_determinism). The
+// claim is proved again here, not named, so a refused claim is reported once.
+theorem {prefix}_runs_every(chunks: List<ReadStep>, ok: EofChunks(chunks), ending: ReadEnding, ending_ok: EofEnding(ending),
+    small: {root}::{spec}(eof_input(chunks)) < 10000,
+    writes: List<WriteStep>, writes_ok: WriteSteps(writes)(decimal_line({root}::{spec}(eof_input(chunks)))),
+    written: WriteEnding, written_ok: WriteEndingOk(written),
+    page: Nat → BitVec(8), gprs: Gprs, flags: Flags,
+    run: List<LinuxEvent>, ran: LinuxRun(io_linux(), run, io_initial({prefix}_file(), page, gprs, flags)),
+    answers: SameResponses(eof_events(chunks, ending, write_events(decimal_line({root}::{spec}(eof_input(chunks))), writes, written)), run)):
+    run = eof_events(chunks, ending, write_events(decimal_line({root}::{spec}(eof_input(chunks))), writes, written)) {{
+    linux_runs_every(io_linux(), eof_events(chunks, ending, write_events(decimal_line({root}::{spec}(eof_input(chunks))), writes, written)),
+        run, io_initial({prefix}_file(), page, gprs, flags),
+        read_print_runs({common},
+            {w}_code(), {st}_code(), {ln}_code(), {w}_Protected, {st}_Protected, {ln}_Protected,
+            ReadPrintFormat(λ before n placed => {w}_typed_artifact(n, before, placed),
+                λ before base n at_base at_n => {st}_typed_artifact(base, n, before, at_base, at_n),
+                λ before n placed => {ln}_typed_artifact(n, before, placed),
+                trivial, trivial, trivial, trivial, trivial, trivial, trivial, trivial),
+            {prefix}_jumps(), {prefix}_exit_reads(), {prefix}_fail_reads(), {prefix}_back_closes(), {prefix}_retry_closes(),
+            {prefix}_print_jumps(), {prefix}_write_fail_reads(), {prefix}_write_exit_reads(), {prefix}_write_back_closes(),
+            {prefix}_write_retry_closes(), {prefix}_resident(),
+            chunks, ok, ending, ending_ok, small, writes, writes_ok, written, written_ok, page, gprs, flags),
+        ran, answers)
 }}
 ", spec = program.spec, common = common_arguments(prefix, program)));
     Ok(file)

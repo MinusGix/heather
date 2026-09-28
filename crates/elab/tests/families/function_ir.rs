@@ -33,6 +33,8 @@ mod function_ir_loop_trace;
 mod read_loop_process;
 #[path = "../read_print_process.rs"]
 mod read_print_process;
+#[path = "../linux_determinism.rs"]
+mod linux_determinism;
 #[path = "../crossing_link_cost.rs"]
 mod crossing_link_cost;
 #[path = "../function_ir_narrow_certificates.rs"]

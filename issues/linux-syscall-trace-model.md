@@ -3,7 +3,7 @@ title: Flesh out the Linux syscall trace beyond read-once and exit
 status: open
 labels: [x86,semantics,runtime,design]
 created: 2026-09-24
-updated: 2026-09-27
+updated: 2026-09-28
 ---
 
 ## Scope
@@ -21,10 +21,12 @@ process's interaction with Linux.
 - **write** as an event, with the partial-write return.
 - **Syscalls inside loops.** Read-until-EOF needs a loop whose body is a
   syscall, not a `LoopReadable` buffer loop.
-- **Determinism.** Current claims (this one and `LinuxFetchedTrace`) are
-  existential: there is a run with this trace. Uniqueness of decoding for the
-  supported byte forms makes it the run. Decide whether that is a theorem
-  about `FetchedStep` or built into the trace relation.
+- ~~**Determinism.**~~ Landed 2026-09-28 as a theorem about the step
+  relation ([[fetched-step-deterministic]]); the trace relation is unchanged.
+- **Partial runs.** Claims compare complete runs (ending at an exit). A
+  relation for a run cut off anywhere would let a claim say no run of the
+  file diverges or stops between syscalls; `linux_steps_meet` is the
+  ingredient.
 - **RCX/R11 and the rest of the syscall ABI's register effects.**
 - **Shape.** An event list over a relation, or an interaction tree, which
   [[effects-direction]] has open for the surface language. The machine-level
@@ -40,3 +42,4 @@ process's interaction with Linux.
 - 2026-09-27: Syscalls inside loops: read-until-EOF needs no new rule. The loop is an induction over the chunks in the process proof ([[native-read-until-eof]]).
 - 2026-09-27: 2026-09-27: Decisions for the failure-paths round (with the user): (1) **shape**: keep `LinuxRuns` as a relation over an event list, not tier-2 plus container ITrees first. Each event becomes a command with its response (read: bytes or errno; write: count or errno), so a later move to Cmd/Resp is mechanical. (2) **wc -l's policy**: EINTR on read or write retries the call; any other error exits with status 1; a short write loops until the rest is written. (3) **Determinism** is its own later round (a FetchedStep uniqueness theorem), not part of this one. Motivation found while scoping: the built binary tests only RAX = 0, so a negative read return is counted as a huge byte count. The certificate is silent there, and the program is wrong there.
 - 2026-09-27: 2026-09-27: Landed (docs/native-syscall-failures-design.md, §9 amendments, §10 probes). Read and write events carry Linux's response (`ReadResult`, `WriteResult`); a failed read's buffer is quantified junk. wc -l retries EINTR on read and write, exits 1 on any other failure, and loops over short writes. Both claims are universal over the histories (read steps + ending, write steps + ending); `prints_the_line` gives stdout on a run that ends well. New x86 form `JumpSignNear`. Still open here: determinism (filed [[fetched-step-deterministic]]), the syscall ABI's other register effects, the shape question (ITrees need tier-2 inductives), other syscalls and signals beyond EINTR.
+- 2026-09-28: Determinism landed ([[fetched-step-deterministic]]): claims are universal over complete runs with the same responses (linux_x86_64_determinism). New open item owned here: a relation for partial runs, so that 'no run of the file diverges or stops between syscalls' can be stated; linux_steps_meet is the ingredient.
