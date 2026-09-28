@@ -28,15 +28,48 @@ fn elab_err(src: &str) -> String {
 #[test]
 fn depth_refusal_does_not_poison_the_next_declaration() {
     let mut e = Elaborator::with_prelude().expect("prelude");
-    e.elab_source("inductive L { Nil, Cons(Nat, L) }").expect("list type");
+    e.elab_source("inductive Box<A> { Wrap(A) }").expect("box type");
     let source = format!(
-        "fn deep() -> L {{ {}Nil{} }}",
-        "Cons(0, ".repeat(1000), ")".repeat(1000),
+        "fn deep() -> Nat {{ let x = {}0{}; 0 }}",
+        "Wrap(".repeat(1000), ")".repeat(1000),
     );
     let err = e.elab_source(&source).expect_err("deep expression refused");
     assert!(err.to_string().contains("expression elaboration depth limit exceeded"), "{err}");
-    e.elab_source("fn shallow() -> L { Cons(0, Nil) }")
+    e.elab_source("fn shallow() -> Box<Nat> { Wrap(0) }")
         .expect("depth restored after failure");
+}
+
+#[test]
+fn deep_branching_constructors_keep_open_types_and_expected_resolution() {
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    e.elab_module_source("tree", "inductive Tree<A> { Leaf(A), Branch(Tree<A>, Tree<A>) }")
+        .expect("tree type");
+    e.elab_module_source("other", "inductive Other<A> { Leaf(A), Branch(Other<A>, Other<A>) }")
+        .expect("other type");
+    e.elab_source("import tree; import other;").expect("ambiguous constructors");
+    for (name, prefix, suffix) in [
+        ("left", "Branch(", ", Leaf(x))"),
+        ("right", "Branch(Leaf(x), ", ")"),
+    ] {
+        let source = format!(
+            "fn {name}<A>(x: A) -> Tree<A> {{ {}Leaf(x){} }}",
+            prefix.repeat(1000), suffix.repeat(1000),
+        );
+        e.elab_source(&source).unwrap_or_else(|err| panic!("{name}: {err}"));
+    }
+    e.elab_source("fn first<A>(t: Tree<A>) -> Tree<A> { match t {\n\
+        Leaf(x) => Leaf(x), Branch(l, r) => l } }\n\
+        theorem order(): first<Nat>(Branch(Leaf(1), Leaf(2))) = Leaf(1) { refl }")
+        .expect("children retain declaration order");
+    for bad in [
+        "fn wrong() -> Tree<Nat> { Branch(Leaf(⟨⟩), Leaf(0)) }",
+        "fn wrong() -> Tree<Nat> { Branch(Tree::Leaf(0), Other::Leaf(0)) }",
+    ] {
+        assert!(e.elab_source(bad).is_err(), "accepted {bad}");
+    }
+    e.elab_source("fn shadowed<A>(Leaf: A -> Tree<A>, x: A) -> Tree<A> {\n\
+        Branch(Leaf(x), Leaf(x)) }")
+        .expect("a local constructor-shaped function remains a local");
 }
 
 // §4.1–2 — the builtin. `Succ` passed as an argument, written at an annotated

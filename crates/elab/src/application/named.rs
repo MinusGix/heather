@@ -215,7 +215,7 @@ pub(crate) fn refuse_named(what: &str, why: &str, named: &[NamedArg]) -> R<()> {
 
 /// Named arguments at a **constructor** (docs/named-arguments-design.md
 /// §6): permute by field name into field order. Shares
-/// [`permute_by_name`] with the record literal, so
+/// [`permute_by_name_refs`] with the record literal, so
 /// `Monoid(unit := 0)` and `Monoid { unit: 0 }` cannot drift into
 /// disagreeing about what is unknown, duplicated or missing.
 ///
@@ -223,13 +223,13 @@ pub(crate) fn refuse_named(what: &str, why: &str, named: &[NamedArg]) -> R<()> {
 /// leaves a partially applied constructor (`Cons(1)`, η-expanded against
 /// an expected Π) on exactly the path it was on before. Naming an
 /// argument *does* require saturating, for §4.3's reason.
-pub(crate) fn resolve_constructor_arguments(
+pub(crate) fn resolve_constructor_arguments<'a>(
     ind: &Inductive,
     i: usize,
-    args: &[Expr],
-    named: &[NamedArg],
+    args: &[&'a Expr],
+    named: &[&'a NamedArg],
     span: Span,
-) -> R<Option<Vec<Expr>>> {
+) -> R<Option<Vec<&'a Expr>>> {
     if named.is_empty() {
         return Ok(None);
     }
@@ -243,7 +243,7 @@ pub(crate) fn resolve_constructor_arguments(
         .iter()
         .map(|na| (na.name.as_str(), &na.expr, na.name_span))
         .collect();
-    permute_by_name(&cname, "field", &decl, args, &written, span).map(Some)
+    permute_by_name_refs(&cname, "field", &decl, args, &written, span).map(Some)
 }
 
 /// Permute a by-name argument list into declaration order: the one
@@ -257,14 +257,14 @@ pub(crate) fn resolve_constructor_arguments(
 ///
 /// `positional` is the prefix given without names (always empty for a
 /// literal); `written` is `(name, value, span-of-the-name)`.
-pub(crate) fn permute_by_name(
+pub(crate) fn permute_by_name_refs<'a>(
     owner: &str,
     noun: &str,
     decl: &[&str],
-    positional: &[Expr],
-    written: &[(&str, &Expr, Span)],
+    positional: &[&'a Expr],
+    written: &[(&str, &'a Expr, Span)],
     span: Span,
-) -> R<Vec<Expr>> {
+) -> R<Vec<&'a Expr>> {
     let mut slots: Vec<Option<&Expr>> = vec![None; decl.len()];
     if positional.len() > decl.len() {
         return err(
@@ -277,7 +277,7 @@ pub(crate) fn permute_by_name(
         );
     }
     for (i, a) in positional.iter().enumerate() {
-        slots[i] = Some(a);
+        slots[i] = Some(*a);
     }
     for (name, value, nsp) in written {
         let Some(i) = decl.iter().position(|d| d == name) else {
@@ -311,7 +311,7 @@ pub(crate) fn permute_by_name(
     }
     Ok(slots
         .into_iter()
-        .map(|s| s.expect("checked above").clone())
+        .map(|s| s.expect("checked above"))
         .collect())
 }
 
@@ -403,8 +403,10 @@ mod tests {
         let first = expression(1);
         let second = expression(2);
         let written = [("right", &second, SPAN), ("left", &first, SPAN)];
-        let ordered = permute_by_name("Pair", "field", &["left", "right"], &[], &written, SPAN)
+        let ordered = permute_by_name_refs("Pair", "field", &["left", "right"], &[], &written, SPAN)
             .expect("field permutation");
+        assert!(std::ptr::eq(ordered[0], &first));
+        assert!(std::ptr::eq(ordered[1], &second));
         assert!(matches!(&ordered[0].kind, ExprKind::Num(__n) if __n.as_u64() == Some(1)));
         assert!(matches!(&ordered[1].kind, ExprKind::Num(__n) if __n.as_u64() == Some(2)));
     }

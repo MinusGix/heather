@@ -25,6 +25,7 @@
 //! the arm's head, §8.3). Which form a constructor gets is §8.4's rule: form A
 //! exactly when the constructor would have been route-1-eligible on its own.
 
+use std::borrow::Borrow;
 use std::sync::Arc as Rc;
 
 #[cfg(test)]
@@ -681,12 +682,12 @@ impl Elaborator {
     /// The written result index `e_c` at a constructor's *arguments* — what
     /// §7's index check compares against the expected family's index, and what
     /// [`Elaborator::infer_ctor`] needs to build the family at all.
-    pub(crate) fn forded_ctor_index(
+    pub(crate) fn forded_ctor_index<A: Borrow<Expr>>(
         &self,
         cx: &Cx,
         ind: &Inductive,
         i: usize,
-        args: &[Expr],
+        args: &[A],
         span: Span,
     ) -> R<(Term, Type, Level)> {
         let (ity, ilvl) = self.index_type_of(cx, ind, span)?;
@@ -704,12 +705,12 @@ impl Elaborator {
     /// values when the caller already has them typed (the checking path);
     /// otherwise a payload the index mentions is inferred.
     #[allow(clippy::too_many_arguments)]
-    fn res_arg_cx(
+    fn res_arg_cx<A: Borrow<Expr>>(
         &self,
         cx: &Cx,
         ind: &Inductive,
         i: usize,
-        args: &[Expr],
+        args: &[A],
         ity: &Type,
         ilvl: &Level,
         pays: &[(usize, Rc<Term>, Type, Level)],
@@ -724,7 +725,7 @@ impl Elaborator {
             let Some(name) = name.clone() else { continue };
             match ctor.kind[k] {
                 FieldKind::IndexVar => {
-                    let term = self.elab_check(cx, &args[k], ity, ilvl)?;
+                    let term = self.elab_check(cx, args[k].borrow(), ity, ilvl)?;
                     acx.aliases.push(Rc::new(Alias {
                         skel: None,
                         name,
@@ -745,7 +746,7 @@ impl Elaborator {
                             level: level.clone(),
                         }));
                     } else if crate::inductive::expr_mentions(e, &name) {
-                        let (term, ty, level) = self.elab_infer(cx, &args[k])?;
+                        let (term, ty, level) = self.elab_infer(cx, args[k].borrow())?;
                         acx.aliases.push(Rc::new(Alias {
                             skel: None,
                             name,
@@ -764,12 +765,12 @@ impl Elaborator {
 
     /// `⟦c(b̄)⟧ = ⟨ skel_c(stored b̄ ; fst v̄) , π_c ⟩` (§7).
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn build_forded_ctor(
+    pub(crate) fn build_forded_ctor<A: Borrow<Expr>>(
         &self,
         cx: &Cx,
         ind: &Inductive,
         i: usize,
-        args: &[Expr],
+        args: &[A],
         expected: &Type,
         expected_lvl: &Level,
         span: Span,
@@ -801,11 +802,11 @@ impl Elaborator {
         // The label: the tag and the stored (payload) arguments, tier 0 §4
         // verbatim — with the field values kept, because the written result
         // index may mention them.
-        let payload: Vec<Expr> = args
+        let payload: Vec<&Expr> = args
             .iter()
             .zip(&ctor.kind)
             .filter(|(_, k)| **k == FieldKind::Payload)
-            .map(|(a, _)| a.clone())
+            .map(|(a, _)| a.borrow())
             .collect();
         let mut pay_vals: Vec<(Rc<Term>, Type, Level)> = Vec::new();
         let label_fields =
@@ -829,9 +830,9 @@ impl Elaborator {
                 continue;
             }
             let ix = ctor.rec_at[k].expect("a child records its index variable");
-            let x = self.elab_check(cx, &args[ix], &fam.ity, &fam.ilvl)?;
+            let x = self.elab_check(cx, args[ix].borrow(), &fam.ity, &fam.ilvl)?;
             let child_ty = fam.ty_at(x.clone(), 0);
-            let v = self.elab_check(cx, &args[k], &child_ty, &fam.lvl())?;
+            let v = self.elab_check(cx, args[k].borrow(), &child_ty, &fam.lvl())?;
             xs.push(x);
             kids.push(v);
         }
@@ -1007,11 +1008,11 @@ impl Elaborator {
     /// [`Elaborator::build_fields`], keeping each field's value: §7 needs the
     /// payload terms twice, once in the label and once in the written result
     /// index.
-    fn build_fields_collect(
+    fn build_fields_collect<A: Borrow<Expr>>(
         &self,
         cx: &Cx,
         ctor_ty: &Type,
-        args: &[Expr],
+        args: &[A],
         tag: bool,
         out: &mut Vec<(Rc<Term>, Type, Level)>,
         span: Span,
@@ -1040,7 +1041,7 @@ impl Elaborator {
                 msg: "too few arguments".into(),
                 span,
             })?;
-            let v = Rc::new(self.elab_check(cx, arg, &fst, &fst_level)?);
+            let v = Rc::new(self.elab_check(cx, arg.borrow(), &fst, &fst_level)?);
             out.push((Rc::clone(&v), (*fst).clone(), fst_level.clone()));
             v
         };
@@ -3166,7 +3167,7 @@ inductive H : (s: Shp) -> Type {
             .lower_instance(&cx, &shp, &[], &[], SPAN)
             .expect("lowers");
         let sa = el
-            .build_ctor(&cx, &shp, 0, &[], &ity, &ilvl, SPAN)
+            .build_ctor(&cx, &shp, 0, &[] as &[Expr], &ity, &ilvl, SPAN)
             .expect("SA builds");
         let (ty, _) = el
             .lower_forded_instance(&cx, &h, &[], sa, SPAN)

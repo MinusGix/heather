@@ -1,4 +1,4 @@
-//! A constructor elaboration refusal must survive as an exit status, even
+//! Deep constructors must check, and unsupported deep elaboration must refuse, even
 //! when the CLI runs without the suite's RUST_MIN_STACK setting.
 
 use std::process::Command;
@@ -27,7 +27,7 @@ fn spine(depth: usize) -> String {
 }
 
 #[test]
-fn deep_checking_and_inference_refuse_without_aborting() {
+fn deep_checking_and_inference_kernel_check_without_aborting() {
     for (tag, body) in [
         ("checking", spine(1000)),
         ("inference", format!("let xs = {}; xs", spine(1000))),
@@ -35,10 +35,12 @@ fn deep_checking_and_inference_refuse_without_aborting() {
         let source = format!(
             "inductive L {{ Nil, Cons(Nat, L) }}\nfn l() -> L {{ {body} }}",
         );
-        let stderr = check(tag, &source, 1);
-        assert!(stderr.contains("expression elaboration depth limit exceeded"), "{stderr}");
-        assert!(stderr.contains("probe.hthr:"), "refusal needs a source span: {stderr}");
+        check(tag, &source, 0);
     }
+}
+
+#[test]
+fn deep_parameter_inference_still_refuses_without_aborting() {
     // Parameter inference descends before build_ctor is entered: a budget on
     // the constructor builder alone would miss this recursive route.
     let source = format!(
@@ -47,6 +49,7 @@ fn deep_checking_and_inference_refuse_without_aborting() {
     );
     let stderr = check("parameter_inference", &source, 1);
     assert!(stderr.contains("expression elaboration depth limit exceeded"), "{stderr}");
+    assert!(stderr.contains("probe.hthr:"), "refusal needs a source span: {stderr}");
 }
 
 #[test]

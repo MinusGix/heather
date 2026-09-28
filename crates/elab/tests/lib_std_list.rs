@@ -56,6 +56,18 @@ fn a_large_bracket_literal_avoids_constructor_elaboration_recursion() {
         .expect("a flat literal does not consume one elaboration frame per element");
 }
 
+#[test]
+fn a_deep_manual_list_spine_kernel_checks() {
+    let mut e = elaborated();
+    let source = format!(
+        "import list; fn xs() -> List<Nat> {{ {}list::Nil{} }}",
+        "list::Cons(0, ".repeat(1000), ")".repeat(1000),
+    );
+    e.elab_module_source("deep_manual_list", &source).expect("iterative constructors");
+    let warnings = e.take_warnings();
+    assert_eq!(warnings.iter().filter(|w| w.lint == heather_elab::Lint::ManualListConstruction).count(), 1);
+}
+
 /// The seven laws `issues/std-api-waves.md` named as wave L2, plus the three
 /// this round proved on top of them. Named one by one rather than counted:
 /// the point is which facts the library states, and a count would go on

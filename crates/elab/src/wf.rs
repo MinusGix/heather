@@ -357,7 +357,8 @@ pub(crate) fn chain_shaped(ind: &Inductive) -> bool {
 impl Elaborator {
     // -- constructors (§5) --------------------------------------------------
 
-    /// The children tuple `(r₁, (r₂, … (r_m, ⟨⟩)))` at `Vec^l(⟦D⟧; m)`, built
+    /// The children tuple terminator, before plain children are prepended.
+    /// The complete tuple `(r₁, (r₂, … (r_m, ⟨⟩)))` is at `Vec^l(⟦D⟧; m)`, built
     /// at the *literal* arity `m` rather than at `n[ℓᵢ/x]`. The two are
     /// convertible — the arity is a `Case` on an injection, so it β-reduces to
     /// the literal, and `Vec` reduces on the whnf of its length — and the
@@ -371,26 +372,11 @@ impl Elaborator {
     /// constructor against the expected type), so `elab_check` keeps the
     /// inline `Wf`; the `Vec`/`Pair` annotations the tuple carries are pure
     /// emission and take the reference.
-    pub(crate) fn build_children(
-        &self,
-        cx: &Cx,
-        d_ty: &Type,
-        level: &Level,
-        args: &[Expr],
-        container: Option<(&Expr, Rc<Term>)>,
-        span: Span,
-    ) -> R<Term> {
-        let _ = span;
-        // Emitted tuple annotations use the same naming policy as matches;
-        // structural checking below still reads d_ty.
-        let (emit, emit_under) = self.children_annotation(cx, d_ty);
-        // The tuple's terminator. Tier 1 ends with `⟨⟩ : Unit^l` — which
-        // `Vec^l(T; 0) ⇝ Unit^l` makes the *zero* case of a container tail,
-        // so the two are one code path (docs/container-fields.md §3.4).
-        // (`Triv` carries the level since route (a) of
-        // issues/unit-level-and-vec-preservation.md; a `Triv` at 0 here would
-        // be exactly the defect that round closed.)
-        let (mut acc, mut tail_len) = match &container {
+    pub(crate) fn constructor_children_tail(
+        &self, cx: &Cx, d_ty: &Type, level: &Level,
+        container: Option<(&Expr, Rc<Term>)>, _span: Span,
+    ) -> R<(Term, Term)> {
+        let result = match &container {
             Some((arg, len)) => {
                 // A **checking** position (the container argument is written
                 // at the surface), so the element type stays inline: checking
@@ -410,27 +396,32 @@ impl Elaborator {
                 Term::Zero,
             ),
         };
-        for arg in args.iter().rev() {
-            let child = self.elab_check(cx, arg, d_ty, level)?;
-            let tail = tail_len.clone();
-            acc = Term::Pair {
-                fst_level: level.clone(),
-                snd_level: level.clone(),
-                fst_ty: Rc::clone(&emit),
-                // `Vec(T; S k) ⇝ Σ(_ : T). Vec(T; k)` and a Σ's second
-                // component *binds*, so the tail type sits one level deeper
-                // than the ambient (§5).
-                snd_ty: Rc::new(Type::Vec {
-                    level: level.clone(),
-                    elem: Rc::clone(&emit_under),
-                    len: Rc::new(tail.shift_local(1)),
-                }),
-                fst: Rc::new(child),
-                snd: Rc::new(acc),
-            };
-            tail_len = Term::Succ(Rc::new(tail_len));
+        Ok(result)
+    }
+
+    /// Add an already checked child; both recursive and iterative descent use
+    /// the declaration's shared emission annotations and the literal arity.
+    pub(crate) fn prepend_constructor_child(
+        &self, cx: &Cx, d_ty: &Type, level: &Level,
+        child: Term, acc: Term, tail_len: &Term,
+    ) -> Term {
+        let (emit, emit_under) = self.children_annotation(cx, d_ty);
+        let tail = tail_len.clone();
+        Term::Pair {
+            fst_level: level.clone(),
+            snd_level: level.clone(),
+            fst_ty: Rc::clone(&emit),
+            // `Vec(T; S k) ⇝ Σ(_ : T). Vec(T; k)` and a Σ's second
+            // component *binds*, so the tail type sits one level deeper
+            // than the ambient (§5).
+            snd_ty: Rc::new(Type::Vec {
+                level: level.clone(),
+                elem: Rc::clone(&emit_under),
+                len: Rc::new(tail.shift_local(1)),
+            }),
+            fst: Rc::new(child),
+            snd: Rc::new(acc),
         }
-        Ok(acc)
     }
 
     /// The children tuple's annotation for `d_ty` and its copy one binder

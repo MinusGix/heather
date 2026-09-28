@@ -32,6 +32,7 @@
 //! arity is refined — `cs` and `ih` are threaded **through the `Case`
 //! motive**, and each branch receives them at its constructor-refined arity.
 
+use std::borrow::Borrow;
 use std::cell::RefCell;
 use std::sync::Arc as Rc;
 
@@ -464,12 +465,12 @@ impl Elaborator {
     /// index type's own constructor at a declared index — where the *index
     /// type's* constructor lowering does the checking, so a pattern variable
     /// of the wrong type is a rejection there and not a mis-built index.
-    pub(crate) fn indexed_ctor_index(
+    pub(crate) fn indexed_ctor_index<A: Borrow<Expr>>(
         &self,
         cx: &Cx,
         ind: &Inductive,
         i: usize,
-        args: &[Expr],
+        args: &[A],
         span: Span,
     ) -> R<(Term, Type, Level)> {
         let pat = ind.ctors[i].res.as_ref().expect("indexed ctor");
@@ -483,7 +484,7 @@ impl Elaborator {
                     None => Term::Zero,
                     Some(&f) => Term::Succ(Rc::new(self.elab_check(
                         cx,
-                        &args[f],
+                        args[f].borrow(),
                         &Type::Nat,
                         &Level::Zero,
                     )?)),
@@ -492,7 +493,7 @@ impl Elaborator {
             }
             IdxTy::Decl(iind) => {
                 let (ity, ilvl) = self.lower_instance(cx, iind, &[], &[], span)?;
-                let pargs: Vec<Expr> = pat.vars.iter().map(|&k| args[k].clone()).collect();
+                let pargs: Vec<&Expr> = pat.vars.iter().map(|&k| args[k].borrow()).collect();
                 let t = self.build_ctor(cx, iind, pat.ctor, &pargs, &ity, &ilvl, span)?;
                 Ok((t, ity, ilvl))
             }
@@ -940,12 +941,12 @@ impl Elaborator {
     /// because a canonical index target only converts with an index whose whnf
     /// is constructor-headed.
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn build_indexed_ctor(
+    pub(crate) fn build_indexed_ctor<A: Borrow<Expr>>(
         &self,
         cx: &Cx,
         ind: &Inductive,
         i: usize,
-        args: &[Expr],
+        args: &[A],
         expected: &Type,
         expected_lvl: &Level,
         span: Span,
@@ -1020,11 +1021,11 @@ impl Elaborator {
             .position(|&j| j == i)
             .expect("member of its own class");
         let spine = self.spine(&head, expected_lvl, class.len(), span)?;
-        let stored: Vec<Expr> = args
+        let stored: Vec<&Expr> = args
             .iter()
             .zip(&ctor.kind)
             .filter(|(_, k)| !matches!(k, FieldKind::IndexVar))
-            .map(|(a, _)| a.clone())
+            .map(|(a, _)| a.borrow())
             .collect();
         let fields = self.build_fields(cx, &spine.ctors[pos].0, &stored, true, span)?;
         Ok(inject(&spine, pos, class.len(), fields, 0))
@@ -2103,7 +2104,7 @@ inductive Bal : (s: Shape) -> Type {
                 .lower_instance(&cx, &iind, &[], &[], SPAN)
                 .expect("lowers");
             let idx = el
-                .build_ctor(&cx, &iind, 0, &[], &ity, &ilvl, SPAN)
+                .build_ctor(&cx, &iind, 0, &[] as &[Expr], &ity, &ilvl, SPAN)
                 .expect("builds");
             let (ty, _) = el
                 .lower_indexed_instance(&cx, &ind, &[], idx, SPAN)

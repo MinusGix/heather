@@ -5,6 +5,7 @@
 //! instantiation comes from. The `inductive` module remains the owner of the
 //! actual kernel encoding and constructor term construction.
 
+use std::borrow::Borrow;
 use std::sync::Arc as Rc;
 
 use heather_kernel::level::Level;
@@ -60,21 +61,20 @@ impl Elaborator {
         nil: usize,
         cons: usize,
     ) -> bool {
-        match &expr.kind {
-            ExprKind::Var(name) => self
-                .ctor_here(cx, name)
-                .is_some_and(|(ind, ctor)| ind.tag == list_tag && ctor == nil),
-            ExprKind::App { head, args, named, explicit: false, goal_oriented: false }
-                if named.is_empty()
-                    && matches!(&head.kind, ExprKind::Var(name) if self
+        let mut expr = expr;
+        loop {
+            match &expr.kind {
+                ExprKind::Var(name) => return self.ctor_here(cx, name)
+                    .is_some_and(|(ind, ctor)| ind.tag == list_tag && ctor == nil),
+                ExprKind::App { head, args, named, explicit: false, goal_oriented: false }
+                    if named.is_empty() && matches!(&head.kind, ExprKind::Var(name) if self
                         .ctor_here(cx, name)
-                        .is_some_and(|(ind, ctor)| ind.tag == list_tag && ctor == cons)) =>
-            {
-                matches!(args.as_slice(), [_, tail] if self.manual_list_spine(
-                    cx, tail, list_tag, nil, cons,
-                ))
+                        .is_some_and(|(ind, ctor)| ind.tag == list_tag && ctor == cons)) => {
+                    let [_, tail] = args.as_slice() else { return false };
+                    expr = tail;
+                }
+                _ => return false,
             }
-            _ => false,
         }
     }
 
@@ -92,7 +92,7 @@ impl Elaborator {
             return;
         }
         let Some((nil, cons)) = Self::list_ctor_indices(ind) else { return };
-        if ctor != cons || !self.manual_list_spine(cx, expr, ind.tag, nil, cons) {
+        if ctor != cons {
             return;
         }
         if self.warnings.borrow().iter().any(|warning| {
@@ -102,6 +102,7 @@ impl Elaborator {
         }) {
             return;
         }
+        if !self.manual_list_spine(cx, expr, ind.tag, nil, cons) { return; }
         self.emit_lint(
             crate::Lint::ManualListConstruction,
             "this builds a concrete list with a manual `Cons`/`Nil` spine; write `[…]` instead (your parentheses have suffered enough)",
@@ -113,12 +114,12 @@ impl Elaborator {
     /// order and hand the result to the ordinary tier-0 constructor path.
     /// Every diagnostic about *which* fields were written lives here, since
     /// the constructor path only ever sees a positional list.
-    pub(super) fn record_lit_args(
+    pub(super) fn record_lit_args<'a>(
         &self,
         name: &str,
-        fields: &[RecordLitField],
+        fields: &'a [RecordLitField],
         span: Span,
-    ) -> R<Vec<Expr>> {
+    ) -> R<Vec<&'a Expr>> {
         let Some(ind) = self.lookup_inductive(name) else {
             return Err(self.name_miss(name, format!("unknown type `{name}`"), span));
         };
@@ -141,7 +142,7 @@ impl Elaborator {
             .iter()
             .map(|f| (f.name.as_str(), &f.expr, f.span))
             .collect();
-        application::permute_by_name(name, "field", &decl, &[], &written, span)
+        application::permute_by_name_refs(name, "field", &decl, &[], &written, span)
     }
 
     /// The constructor this name refers to *here* — `None` when it is not a
@@ -333,11 +334,11 @@ impl Elaborator {
     /// (docs/named-arguments-design.md §6); the caller permutes the whole lot
     /// into field order at once, so a name written at an inner level of a
     /// curried spelling lands where it says rather than being dropped.
-    pub(super) fn ctor_spine(
+    pub(super) fn ctor_spine<'a>(
         &self,
         cx: &Cx,
-        e: &Expr,
-    ) -> Option<(Rc<Inductive>, usize, Vec<Expr>, Vec<NamedArg>)> {
+        e: &'a Expr,
+    ) -> Option<(Rc<Inductive>, usize, Vec<&'a Expr>, Vec<&'a NamedArg>)> {
         let ExprKind::App {
             head,
             args,
@@ -354,12 +355,12 @@ impl Elaborator {
         match &head.kind {
             ExprKind::Var(name) => {
                 let (ind, i) = self.ctor_here(cx, name)?;
-                Some((ind, i, args.clone(), named.clone()))
+                Some((ind, i, args.iter().collect(), named.iter().collect()))
             }
             ExprKind::App { .. } => {
                 let (ind, i, mut prefix, mut pnamed) = self.ctor_spine(cx, head)?;
-                prefix.extend(args.iter().cloned());
-                pnamed.extend(named.iter().cloned());
+                prefix.extend(args.iter());
+                pnamed.extend(named.iter());
                 Some((ind, i, prefix, pnamed))
             }
             _ => None,
@@ -371,12 +372,12 @@ impl Elaborator {
     /// against their field types downstream, and a curried spelling
     /// (`Cons(1)(xs)`) flattens before the head is read, so the expected type
     /// is the saturated result either way.
-    pub(super) fn ctor_spine_expected(
+    pub(super) fn ctor_spine_expected<'a>(
         &self,
         cx: &Cx,
-        e: &Expr,
+        e: &'a Expr,
         expected: &Type,
-    ) -> Option<(Rc<Inductive>, usize, Vec<Expr>, Vec<NamedArg>)> {
+    ) -> Option<(Rc<Inductive>, usize, Vec<&'a Expr>, Vec<&'a NamedArg>)> {
         let ExprKind::App {
             head,
             args,
@@ -393,29 +394,58 @@ impl Elaborator {
         match &head.kind {
             ExprKind::Var(name) => {
                 let (ind, i) = self.ctor_here_expected(cx, name, expected)?;
-                Some((ind, i, args.clone(), named.clone()))
+                Some((ind, i, args.iter().collect(), named.iter().collect()))
             }
             ExprKind::App { .. } => {
                 let (ind, i, mut prefix, mut pnamed) =
                     self.ctor_spine_expected(cx, head, expected)?;
-                prefix.extend(args.iter().cloned());
-                pnamed.extend(named.iter().cloned());
+                prefix.extend(args.iter());
+                pnamed.extend(named.iter());
                 Some((ind, i, prefix, pnamed))
             }
             _ => None,
         }
     }
 
+    /// Only the checking route for saturated constructors of the same plain
+    /// recursive family can be suspended on the constructor work stack.
+    pub(super) fn recursive_ctor_call<'a>(
+        &self, cx: &Cx, expr: &'a Expr, family: &Inductive, expected: &Type,
+    ) -> R<Option<(usize, Vec<&'a Expr>)>> {
+        let call = match &expr.kind {
+            ExprKind::Var(name) => self.ctor_here_expected(cx, name, expected)
+                .map(|(ind, i)| (ind, i, Vec::new(), Vec::new())),
+            ExprKind::App { head, args, named, explicit: false, goal_oriented: false }
+                if named.is_empty() && matches!(&head.kind, ExprKind::Var(name) if matches!(
+                    name.as_str(), ANON_CTOR_ONLY | ANON_CTOR_LEFT | ANON_CTOR_RIGHT,
+                )) => {
+                let ExprKind::Var(name) = &head.kind else { unreachable!() };
+                let (ind, i) = self.anonymous_ctor_expected(cx, name, expected, expr.span)?;
+                Some((ind, i, args.iter().collect(), Vec::new()))
+            }
+            ExprKind::App { explicit: false, goal_oriented: false, .. } =>
+                self.ctor_spine_expected(cx, expr, expected),
+            _ => None,
+        };
+        let Some((ind, i, args, named)) = call else { return Ok(None) };
+        if ind.tag != family.tag { return Ok(None); }
+        let args = application::resolve_constructor_arguments(&ind, i, &args, &named, expr.span)?
+            .unwrap_or(args);
+        if args.len() != ind.ctors[i].fields.len() { return Ok(None); }
+        self.lint_manual_list_construction(cx, expr, &ind, i);
+        Ok(Some((i, args)))
+    }
+
     /// A constructor used where nothing is checking it. Only possible when the
     /// declaration has no type parameters — otherwise there is nothing to
     /// determine the instantiation, and an annotation is required (§2:
     /// parameters are monomorphized, not inferred).
-    pub(super) fn infer_ctor(
+    pub(super) fn infer_ctor<A: Borrow<Expr>>(
         &self,
         cx: &Cx,
         ind: &Rc<Inductive>,
         i: usize,
-        args: &[Expr],
+        args: &[A],
         span: Span,
     ) -> R<(Term, Type, Level)> {
         // Type arguments are recovered only from a field whose type *is* a
@@ -455,7 +485,7 @@ impl Elaborator {
                 continue;
             };
             if sols[p].is_none() {
-                let (_, ty, lvl) = self.elab_infer(cx, arg)?;
+                let (_, ty, lvl) = self.elab_infer(cx, arg.borrow())?;
                 sols[p] = Some((ty, lvl));
             }
         }
@@ -521,12 +551,12 @@ impl Elaborator {
     /// there is nothing to *solve*: the instance comes back whole and the
     /// written result index says where to put it. `None` when no argument is a
     /// child, or when the first child's type is not this family.
-    fn ctor_from_child(
+    fn ctor_from_child<A: Borrow<Expr>>(
         &self,
         cx: &Cx,
         ind: &Rc<Inductive>,
         i: usize,
-        args: &[Expr],
+        args: &[A],
         span: Span,
     ) -> Option<R<(Term, Type, Level)>> {
         if ind.index.is_none() || args.len() != ind.ctors[i].fields.len() {
@@ -536,7 +566,7 @@ impl Elaborator {
             .kind
             .iter()
             .position(|f| *f == inductive::FieldKind::Plain)?;
-        let (_, cty, _) = self.elab_infer(cx, &args[k]).ok()?;
+        let (_, cty, _) = self.elab_infer(cx, args[k].borrow()).ok()?;
         let (ty, lvl) = if ind.skel.is_some() {
             let (found, fam) = self.forded_of_at(cx, &cty)?;
             if found.tag != ind.tag {
@@ -571,12 +601,12 @@ impl Elaborator {
     /// This is the direct spelling of what `infer_ctor` can only recover
     /// narrowly (from a field whose type *is* a parameter) and otherwise
     /// refuses to guess: `Nil` alone is genuinely ambiguous, `Nil<Nat>` is not.
-    pub(super) fn ctor_at(
+    pub(super) fn ctor_at<A: Borrow<Expr>>(
         &self,
         cx: &Cx,
         callee: &Expr,
         tyargs: &[Ty],
-        args: &[Expr],
+        args: &[A],
         span: Span,
     ) -> Option<R<(Term, Type, Level)>> {
         let ExprKind::Var(name) = &callee.kind else {
@@ -654,5 +684,35 @@ impl Elaborator {
             let t = self.build_ctor_value(cx, &ind, i, args, &ty, &lvl, span)?;
             Ok((t, ty, lvl))
         })())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn curried_constructor_spines_borrow_the_original_arguments() {
+        let mut e = Elaborator::with_prelude().expect("prelude");
+        e.elab_source("inductive L { Nil, Cons(Nat, L) }").expect("type");
+        let span = Span { start: 0, end: 1 };
+        let var = |name: &str| Expr { kind: ExprKind::Var(name.into()), span };
+        let app = |head: Expr, arg: Expr| Expr {
+            kind: ExprKind::App {
+                head: Box::new(head), args: vec![arg], named: Vec::new(),
+                explicit: false, goal_oriented: false,
+            }, span,
+        };
+        let expr = app(app(var("Cons"), Expr { kind: ExprKind::Num(0.into()), span }), var("Nil"));
+        let ExprKind::App { head, args: outer, .. } = &expr.kind else { unreachable!() };
+        let ExprKind::App { args: inner, .. } = &head.kind else { unreachable!() };
+        let cx = Cx::empty();
+        let (ind, _, args, _) = e.ctor_spine(&cx, &expr).expect("curried constructor");
+        assert!(std::ptr::eq(args[0], &inner[0]));
+        assert!(std::ptr::eq(args[1], &outer[0]));
+        let (expected, _) = e.lower_instance(&cx, &ind, &[], &[], span).expect("instance");
+        let (_, _, args, _) = e.ctor_spine_expected(&cx, &expr, &expected).expect("checking spine");
+        assert!(std::ptr::eq(args[0], &inner[0]));
+        assert!(std::ptr::eq(args[1], &outer[0]));
     }
 }

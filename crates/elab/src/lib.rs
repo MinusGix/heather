@@ -4961,7 +4961,7 @@ impl Elaborator {
                 let (ind, i) = self
                     .ctor_here_expected(cx, name, expected)
                     .expect("just checked");
-                self.build_ctor_value(cx, &ind, i, &[], expected, lvl, e.span)
+                self.build_ctor_value(cx, &ind, i, &[] as &[Expr], expected, lvl, e.span)
             }
             ExprKind::App { .. } if self.ctor_spine_expected(cx, e, expected).is_some() => {
                 let (ind, i, args, named) = self
@@ -5817,7 +5817,7 @@ impl Elaborator {
             // `f<T, …>` — explicit type application, with or without a call
             // after it (docs/surface-polymorphism.md §1).
             ExprKind::TyApp { head, args } => {
-                if let Some(r) = self.ctor_at(cx, head, args, &[], e.span) {
+                if let Some(r) = self.ctor_at(cx, head, args, &[] as &[Expr], e.span) {
                     return r;
                 }
                 let (name, t, ty, lvl, mask) = self.elab_ty_app(cx, head, args, e.span)?;
@@ -5904,9 +5904,11 @@ impl Elaborator {
                 if let ExprKind::Var(cn) = &callee.kind
                     && let Some((ind, ci)) = self.ctor_here(cx, cn)
                 {
+                    let borrowed: Vec<&Expr> = args.iter().collect();
+                    let named: Vec<_> = named.iter().collect();
                     let permuted =
-                        application::resolve_constructor_arguments(&ind, ci, args, named, e.span)?;
-                    let args = permuted.as_deref().unwrap_or(args);
+                        application::resolve_constructor_arguments(&ind, ci, &borrowed, &named, e.span)?;
+                    let args = permuted.as_deref().unwrap_or(&borrowed);
                     if let Some(r) = self.ctor_at(cx, callee, tyargs, args, e.span) {
                         return r;
                     }
@@ -6223,9 +6225,11 @@ impl Elaborator {
                 }
                 if let Some((ind, i)) = self.ctor_here(cx, name) {
                     self.lint_manual_list_construction(cx, e, &ind, i);
+                    let borrowed: Vec<&Expr> = args.iter().collect();
+                    let named: Vec<_> = named.iter().collect();
                     let permuted =
-                        application::resolve_constructor_arguments(&ind, i, args, named, e.span)?;
-                    let args = permuted.as_deref().unwrap_or(args);
+                        application::resolve_constructor_arguments(&ind, i, &borrowed, &named, e.span)?;
+                    let args = permuted.as_deref().unwrap_or(&borrowed);
                     return self.infer_ctor(cx, &ind, i, args, e.span);
                 }
                 if cx.selfref.as_ref().is_some_and(|s| s.matches(name)) {
@@ -7993,7 +7997,7 @@ impl Elaborator {
             (None, None) => {}
         }
         if let Some((ind, i)) = self.ctor_of(name) {
-            return self.infer_ctor(cx, &ind, i, &[], span);
+            return self.infer_ctor(cx, &ind, i, &[] as &[Expr], span);
         }
         // The enclosing declaration's own name: only a saturated, guarded
         // *call* means anything (it is the induction hypothesis, not a value).

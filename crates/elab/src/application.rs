@@ -20,7 +20,7 @@ mod polymorphic;
 pub(crate) use callable::subject_index_in;
 mod named;
 pub(crate) use named::{
-    permute_by_name, refuse_named, resolve_constructor_arguments, resolve_named,
+    permute_by_name_refs, refuse_named, resolve_constructor_arguments, resolve_named,
 };
 
 /// The state-free schedule for one implicit-inserting call.

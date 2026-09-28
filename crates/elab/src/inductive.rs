@@ -19,7 +19,7 @@
 //! Not here yet: nested recursion (`Rose`) and tier 2 (W). Both are
 //! classified and rejected, not mis-lowered.
 
-use std::borrow::Cow;
+use std::borrow::{Borrow, Cow};
 use std::sync::Arc as Rc;
 
 use heather_kernel::layer::Layer;
@@ -42,6 +42,20 @@ type CtorEquation = (
     (usize, Vec<Rc<Term>>),
     (usize, Vec<Rc<Term>>),
 );
+
+/// A constructor shell whose plain recursive children have yet to be checked.
+/// Expressions stay borrowed from the caller's surface tree.
+struct PreparedCtor<'a> {
+    term: Term,
+    children: Vec<&'a Expr>,
+    container: Option<(&'a Expr, Rc<Term>)>,
+}
+
+struct CtorWorkFrame<'a> {
+    prepared: PreparedCtor<'a>,
+    children: Term,
+    tail_len: Term,
+}
 
 /// A declared inductive, kept in surface form: the field types are lowered
 /// afresh at each instantiation, since type parameters are monomorphized
@@ -2049,12 +2063,12 @@ impl Elaborator {
     /// that disagrees with the field it fills is a kernel rejection, not a
     /// mis-lowering (§2.2).
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn build_ctor_value(
+    pub(crate) fn build_ctor_value<A: Borrow<Expr>>(
         &self,
         cx: &Cx,
         ind: &Inductive,
         i: usize,
-        args: &[Expr],
+        args: &[A],
         expected: &Type,
         expected_lvl: &Level,
         span: Span,
@@ -2065,7 +2079,10 @@ impl Elaborator {
             return self.build_ctor(cx, ind, i, args, expected, expected_lvl, span);
         }
         let mut cx = cx.clone();
-        let mut args = args.to_vec();
+        let missing_args: Vec<Expr> = (0..missing).map(|k| Expr {
+            kind: ExprKind::Var(format!("#arg{k}")), span,
+        }).collect();
+        let mut args: Vec<&Expr> = args.iter().map(|a| a.borrow()).collect();
         let mut peeled = Vec::with_capacity(missing);
         let mut ty = expected.clone();
         let mut lvl = expected_lvl.clone();
@@ -2099,10 +2116,7 @@ impl Elaborator {
             // goal listing.
             let name = format!("#arg{k}");
             cx.push(name.clone(), (*dom).clone(), dom_level.clone());
-            args.push(Expr {
-                kind: ExprKind::Var(name),
-                span,
-            });
+            args.push(&missing_args[k]);
             // The codomain is scoped under the binder just pushed, which is
             // what makes a *dependent* expected type work.
             ty = (*cod).clone();
@@ -2125,12 +2139,12 @@ impl Elaborator {
     /// tuple. Every annotation comes from `expected`, so this is total on a
     /// well-formed encoding and produces a kernel-rejected term otherwise.
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn build_ctor(
+    pub(crate) fn build_ctor<A: Borrow<Expr>>(
         &self,
         cx: &Cx,
         ind: &Inductive,
         i: usize,
-        args: &[Expr],
+        args: &[A],
         expected: &Type,
         expected_lvl: &Level,
         span: Span,
@@ -2156,6 +2170,74 @@ impl Elaborator {
             }
             return self.build_indexed_ctor(cx, ind, i, args, expected, expected_lvl, span);
         }
+        let args: Vec<&Expr> = args.iter().map(|a| a.borrow()).collect();
+        let prepared = self.prepare_ctor(cx, ind, i, &args, expected, expected_lvl, span)?;
+        if !ind.recursive { return Ok(prepared.term); }
+        let child_ty = self.whnf(cx, expected, span)?;
+        let Type::Wf { level: child_lvl, .. } = &child_ty else { unreachable!() };
+        let iterative = !args.iter().any(|arg| crate::surface::has_free_slots(arg));
+        let mut frames = vec![self.ctor_work_frame(cx, prepared, &child_ty, span)?];
+        loop {
+            let frame = frames.last_mut().expect("the root is returned, not popped empty");
+            if let Some(child) = frame.prepared.children.pop() {
+                // Plain recursive fields have exactly this family's type and
+                // context. Other expressions retain the ordinary checker.
+                let call = if iterative {
+                    self.recursive_ctor_call(cx, child, ind, &child_ty)?
+                } else { None };
+                if let Some((i, args)) = call {
+                    let prepared = self.prepare_ctor(
+                        cx, ind, i, &args, &child_ty, child_lvl, child.span,
+                    )?;
+                    frames.push(self.ctor_work_frame(cx, prepared, &child_ty, child.span)?);
+                    continue;
+                }
+                let term = self.elab_check(cx, child, &child_ty, child_lvl)?;
+                self.add_ctor_child(cx, frame, &child_ty, term);
+                continue;
+            }
+            let frame = frames.pop().expect("just inspected");
+            let mut term = frame.prepared.term;
+            if let Term::Supf { children, .. } = &mut term {
+                *children = Rc::new(frame.children);
+            }
+            match frames.last_mut() {
+                Some(parent) => self.add_ctor_child(cx, parent, &child_ty, term),
+                None => return Ok(term),
+            }
+        }
+    }
+
+    fn ctor_work_frame<'a>(
+        &self, cx: &Cx, prepared: PreparedCtor<'a>, expected: &Type, span: Span,
+    ) -> R<CtorWorkFrame<'a>> {
+        let (children, tail_len) = match &prepared.term {
+            Term::Supf { level, .. } => self.constructor_children_tail(
+                cx, expected, level,
+                prepared.container.as_ref().map(|(a, len)| (*a, Rc::clone(len))), span,
+            )?,
+            _ => (Term::Triv { level: Level::Zero }, Term::Zero),
+        };
+        Ok(CtorWorkFrame { prepared, children, tail_len })
+    }
+
+    fn add_ctor_child(&self, cx: &Cx, frame: &mut CtorWorkFrame<'_>, expected: &Type, child: Term) {
+        let Term::Supf { level, .. } = &frame.prepared.term else { unreachable!() };
+        let children = std::mem::replace(&mut frame.children, Term::Zero);
+        frame.children = self.prepend_constructor_child(
+            cx, expected, level, child, children, &frame.tail_len,
+        );
+        frame.tail_len = Term::Succ(Rc::new(std::mem::replace(&mut frame.tail_len, Term::Zero)));
+    }
+
+    /// Prepare the label and emission slots using the same structural reads
+    /// as the recursive builder. The work stack only changes child descent.
+    #[allow(clippy::too_many_arguments)]
+    fn prepare_ctor<'a>(
+        &self, cx: &Cx, ind: &Inductive, i: usize, args: &[&'a Expr],
+        expected: &Type, expected_lvl: &Level, span: Span,
+    ) -> R<PreparedCtor<'a>> {
+        let ctor = &ind.ctors[i];
         let pre_whnf = expected;
         let expected = self.whnf(cx, expected, span)?;
         match self.tag_of(&expected) {
@@ -2173,21 +2255,21 @@ impl Elaborator {
         let spine = self.spine(&expected, expected_lvl, ind.ctors.len(), span)?;
         // Tier 1 (§5): the payload arguments build the *label*, the recursive
         // ones build the children tuple. Both keep declaration order.
-        let payload: Vec<Expr> = args
+        let payload: Vec<&Expr> = args
             .iter()
             .zip(&ctor.kind)
             .filter(|(_, k)| !k.is_child())
-            .map(|(a, _)| a.clone())
+            .map(|(a, _)| *a)
             .collect();
         // The *plain* children, in order; the container argument, if any, is
         // the tuple's tail rather than an element (container-fields §3.4).
-        let children: Vec<Expr> = args
+        let children: Vec<&Expr> = args
             .iter()
             .zip(&ctor.kind)
             .filter(|(_, k)| **k == FieldKind::Plain)
-            .map(|(a, _)| a.clone())
+            .map(|(a, _)| *a)
             .collect();
-        let container: Option<Expr> = ctor.container().map(|(k, _)| args[k].clone());
+        let container: Option<&Expr> = ctor.container().map(|(k, _)| args[k]);
         // The payload fields' skeletons, from their stored surface types —
         // filtered exactly as `payload` was, so the two stay aligned.
         let payload_skels: Vec<Option<Rc<crate::Skel>>> = ctor
@@ -2219,7 +2301,7 @@ impl Elaborator {
                 };
                 let (len, _, _) =
                     self.projection(cx, &spine.ctors[i].0, &Rc::new(receiver), p, span)?;
-                Some((arg, len))
+                Some((*arg, len))
             }
             _ => None,
         };
@@ -2278,7 +2360,7 @@ impl Elaborator {
         };
         let val = inject_at(&spine_e, i, ind.ctors.len(), fields, 0, at);
         if !ind.recursive {
-            return Ok(val);
+            return Ok(PreparedCtor { term: val, children: Vec::new(), container: None });
         }
         // `val` is the label `ℓᵢ : S`; wrap it in `sup_f` with the children
         // (§5). Shape and arity are read off the type being built, never
@@ -2301,7 +2383,7 @@ impl Elaborator {
         // what the value costs. The slots are the former's components rather
         // than annotations, so the kernel rebuilds `Wf(shape). arity` from
         // them and hands the agreement to conversion — a spelling choice like
-        // every other one here. `build_children` below keeps reading the
+        // every other one here. Child checking keeps reading the
         // *inline* `expected`, per §4's line.
         //
         // A **monomorphized** `Wf` (`List<Node>`) has no slots to name; its
@@ -2335,19 +2417,12 @@ impl Elaborator {
                 }
             }
         };
-        Ok(Term::Supf {
-            level: level.clone(),
-            shape: shape_e,
-            arity: arity_e,
-            label: Rc::new(val),
-            children: Rc::new(self.build_children(
-                cx,
-                &expected,
-                level,
-                &children,
-                container.as_ref().map(|(a, l)| (*a, Rc::clone(l))),
-                span,
-            )?),
+        Ok(PreparedCtor {
+            term: Term::Supf {
+                level: level.clone(), shape: shape_e, arity: arity_e,
+                label: Rc::new(val), children: Rc::new(Term::Triv { level: level.clone() }),
+            },
+            children, container,
         })
     }
 
@@ -2355,11 +2430,11 @@ impl Elaborator {
     /// the Σ spine of `⟦c_i⟧` and checking each argument against the component
     /// the spine says it must have. `tag` marks the first component, which is
     /// the nominal tag rather than a field.
-    pub(crate) fn build_fields(
+    pub(crate) fn build_fields<A: Borrow<Expr>>(
         &self,
         cx: &Cx,
         ctor_ty: &Type,
-        args: &[Expr],
+        args: &[A],
         tag: bool,
         span: Span,
     ) -> R<Term> {
@@ -2371,11 +2446,11 @@ impl Elaborator {
     /// (docs/implicit-binders-design.md §6.1's third site) — what lets a
     /// record literal's field be an implicit lambda. Empty for every caller
     /// that has no surface fields at hand.
-    pub(crate) fn build_fields_skel(
+    pub(crate) fn build_fields_skel<A: Borrow<Expr>>(
         &self,
         cx: &Cx,
         ctor_ty: &Type,
-        args: &[Expr],
+        args: &[A],
         tag: bool,
         skels: &[Option<Rc<crate::Skel>>],
         span: Span,
@@ -2413,7 +2488,7 @@ impl Elaborator {
             })?;
             let skel = skels.first().and_then(|s| s.as_deref());
             (
-                self.elab_check_skel(cx, arg, &fst, &fst_level, None, skel)?,
+                self.elab_check_skel(cx, arg.borrow(), &fst, &fst_level, None, skel)?,
                 rest,
                 skels.get(1..).unwrap_or(&[]),
             )

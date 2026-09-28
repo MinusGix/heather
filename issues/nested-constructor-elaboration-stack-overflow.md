@@ -55,3 +55,8 @@ literals take the same path.
   that pre-existing harness failure; the constructor regressions, standard-list
   literal acceptance, generated certificates, and native read/print gates all
   pass. No caps or skip lists changed.
+- 2026-09-28: Follow-up: [[constructor-argument-subtree-copying]] removes constructor
+  argument subtree copies, and [[iterative-constructor-elaboration]] makes
+  plain unindexed recursive constructor descent iterative. The original
+  1,000-deep standard-list case now kernel-checks. This issue's depth guard
+  remains for other expression elaboration routes.
