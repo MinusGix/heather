@@ -288,7 +288,7 @@ theorem print_formats(stored: IoMemory, needle: BitVec(8), loop_bytes: List<BitV
         trans(based.right, rip_advance(entry, done.rip, print_at_base(needle, loop_bytes), print_base_len(), done_rip));
     let s0_r11: (read_gpr(R11, s0.gprs) = n) = done_count;
     // The line's word.
-    let w = format.word_cert(s0, read_gpr(R11, s0.gprs), refl);
+    have w = format.word_cert(s0, read_gpr(R11, s0.gprs), refl);
     let w_run = artifact_fetched(word, s0, Rax, line_word(read_gpr(R11, s0.gprs)), word_keeps, w,
         resident_state(fetch, structured_bytes(word), stored, print_rip(print_at_word(needle, loop_bytes)), s0, s0_memory, s0_rip, pieces.word_at));
     let s1 = w.after;
@@ -300,7 +300,7 @@ theorem print_formats(stored: IoMemory, needle: BitVec(8), loop_bytes: List<BitV
     let s1_rax: (read_gpr(Rax, s1.gprs) = line_word(n)) =
         trans(w.result_correct, cong_fn<BitVec(64), BitVec(64)>(λ v => line_word(v), s0_r11));
     // Where the line starts.
-    let st = format.start_cert(s1, read_gpr(R8, s1.gprs), read_gpr(R11, s1.gprs), refl, refl);
+    have st = format.start_cert(s1, read_gpr(R8, s1.gprs), read_gpr(R11, s1.gprs), refl, refl);
     let st_run = artifact_fetched(start, s1, R9, line_start(read_gpr(R8, s1.gprs), read_gpr(R11, s1.gprs)), start_keeps, st,
         resident_state(fetch, structured_bytes(start), stored, print_rip(print_at_start(needle, loop_bytes, word)), s1, s1_memory, s1_rip, pieces.start_at));
     let s2 = st.after;
@@ -314,7 +314,7 @@ theorem print_formats(stored: IoMemory, needle: BitVec(8), loop_bytes: List<BitV
         trans(st.result_correct, trans(cong_fn<BitVec(64), BitVec(64)>(λ b => line_start(b, read_gpr(R11, s1.gprs)), s1_r8),
             cong_fn<BitVec(64), BitVec(64)>(λ v => line_start(BitVec::ofNat(0x401000), v), s1_r11)));
     // How long it is.
-    let ln = format.length_cert(s2, read_gpr(R11, s2.gprs), refl);
+    have ln = format.length_cert(s2, read_gpr(R11, s2.gprs), refl);
     let ln_run = artifact_fetched(length, s2, R10, line_length(read_gpr(R11, s2.gprs)), length_keeps, ln,
         resident_state(fetch, structured_bytes(length), stored, print_rip(print_at_length(needle, loop_bytes, word, start)), s2, s2_memory, s2_rip, pieces.length_at));
     let s3 = ln.after;

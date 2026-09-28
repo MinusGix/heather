@@ -280,7 +280,7 @@ theorem eof_counts(file: List<BitVec(8)>, page: Nat → BitVec(8), p: LoopPlacem
     let low: (buffer.base + buffer.length <= Nat::pow(2, 47)) =
         (io_page_base() + n).le_trans(io_page_base() + 4096, Nat::pow(2, 47), Nat::add_le_mono_l(io_page_base(), n, 4096, fits),
             Nat::leb_sound(io_page_base() + 4096, Nat::pow(2, 47), trivial));
-    let ran = native(data, ready, buffer, needle, n, 0, carry, bounded, low,
+    have ran = native(data, ready, buffer, needle, n, 0, carry, bounded, low,
         eof_loop_head(p, at, needle, bytes, fits, carry, carry_small, ready_in, length_word, carry_word), readable, room);
     let done = ran.witness;
     let looped = access_artifact_fetched(fetch, data, loop_code, loop_bytes, ready, done, ran.proof.left,
@@ -790,7 +790,7 @@ theorem eof_from(file: List<BitVec(8)>, p: LoopPlacement, at: ReadLoopPlacement(
                         cong_fn<IoMemory, IoMemory>(λ m => io_store(m, BitVec::ofNat(0x401000), chunk), asked_memory);
                     let returned_rip: (returned.rip = eof_rip(eof_at_test())) = rip_advance(entry, asked.rip, eof_at_call(), 2, asked_rip);
                     let there = pieces(stored.page);
-                    let back = eof_chunk(file, page, p, at, region, loop_code, loop_bytes, source, needle, spec, agreement, native, computes,
+                    have back = eof_chunk(file, page, p, at, region, loop_code, loop_bytes, source, needle, spec, agreement, native, computes,
                         jumps.ed, jumps.sd, jumps.bd, eof_at_read(), eof_at_test(), back_target, chunk, some, fits, carry, room_here, returned,
                         returned_memory, returned_rip, refl, carry_word,
                         there.test_at, there.jz_at, there.js_at, there.setup_at, there.loop_at, there.save_at, there.jmp_at);
@@ -819,7 +819,7 @@ theorem eof_from(file: List<BitVec(8)>, p: LoopPlacement, at: ReadLoopPlacement(
                         let returned_rip: (returned.rip = eof_rip(eof_at_test())) =
                             rip_advance(entry, asked.rip, eof_at_call(), 2, read.right.right.left);
                         let there = pieces(stored.page);
-                        let back = eof_retry(stored, needle, loop_bytes, jumps, tail_code, there, retry_target, returned,
+                        have back = eof_retry(stored, needle, loop_bytes, jumps, tail_code, there, retry_target, returned,
                             eof_failed(stored, needle, loop_bytes, jumps, tail_code, there, js_target, eintr(), eintr_errno, returned,
                                 returned_memory, returned_rip, refl));
                         let kept: (read_gpr(R13, back.witness.gprs) = bitvec_nat::word_of_nat(64, carry)) =

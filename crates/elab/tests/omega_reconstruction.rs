@@ -6,3 +6,8 @@ use crate::omega_cases;
 fn omega_reconstruction_suite() {
     omega_cases::omega_reconstruction_suite();
 }
+
+#[test]
+fn atom_list_repetition_cost_is_bounded() {
+    omega_cases::atom_list_repetition_cost_is_bounded();
+}

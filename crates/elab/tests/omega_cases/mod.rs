@@ -935,3 +935,49 @@ pub fn omega_reconstruction_suite() {
     stuck_diagnostics_use_source_level_atom_names();
     a_written_omega_binding_wins_over_the_checking_form();
 }
+
+/// The six-atom, five-fact probe from
+/// issues/omega-certificate-atom-list-repetition.md. Checking its inline
+/// atom lists used to take about 152k evaluator steps. Include the lifted
+/// definition's gate in the count, and exclude loading the library prefix.
+pub fn atom_list_repetition_cost_is_bounded() {
+    let source = r#"
+import logic;
+import nat;
+import omega;
+theorem shared_atoms(sv, r, h, c, rest, b: Nat,
+    value: sv = 1099511627776 * r + h, low: h < 1099511627776,
+    parts: r = c * 0 + rest, remainder: rest < c,
+    bv: b = 1099511627776 * c): Succ(sv) <= b + 0 { omega }
+"#;
+    let mut elab = elaborator();
+    elab.set_kernel_workers(1);
+    elab.take_item_timings();
+    elab.enable_item_timings();
+    let result = elab.elab_module_source("probe", source);
+    let rows = elab.take_item_timings();
+    stats::disable();
+    result.unwrap_or_else(|error| panic!("{}", error.render(source)));
+    let reports = elab.take_omega_reports();
+    assert!(
+        reports.iter().any(|report| report.atoms == 6),
+        "the certificate must still exercise all six atoms"
+    );
+    let steps: u64 = rows
+        .iter()
+        .filter(|row| row.kind == stats::ScopeKind::Item)
+        .map(|row| row.kernel.eval_steps)
+        .sum();
+    let source_len: usize = reports.iter().map(|report| report.phases.source_len).sum();
+    eprintln!("shared atom list: {steps} evaluator steps, {source_len} certificate bytes");
+    // A coarse deterministic rail: headroom over the shared certificate,
+    // well below its former cost. A timing assertion would depend on load.
+    assert!(
+        steps > 0 && steps < 50_000,
+        "atom list copies returned: {steps} steps"
+    );
+    assert!(
+        source_len > 0 && source_len < 25_000,
+        "atom list copies returned: {source_len} certificate bytes"
+    );
+}

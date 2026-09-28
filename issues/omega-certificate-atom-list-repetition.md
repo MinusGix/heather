@@ -1,9 +1,9 @@
 ---
 title: omega certificates spell their atom list at every use; bind it once
-status: open
+status: closed
 labels: [omega,performance,proofs]
 created: 2026-09-26
-updated: 2026-09-26
+updated: 2026-09-28
 ---
 
 `omega`'s certificate for a small goal (five Nat facts, six atoms) is 203 KB
@@ -147,3 +147,38 @@ fraction of the size.
   4.8 s → 1.3 s. Full suite: 2998 passed. The acceptance's "an order of
   magnitude" is met on the fixture's hand-side items (−67–73%), and not quite
   on the probe item (6×): its remaining steps are the certificate's own rows.
+- 2026-09-28: Completion audit: the implementation already landed in
+  `c26e5d46`, but this issue remained open. The atom list is parsed and
+  elaborated once, named by a transparent goal-arena slot, and lifted as a
+  checked definition; a capacity restart is discarded before the gate.
+
+  Added `omega_reconstruction::atom_list_repetition_cost_is_bounded` over
+  the original six-atom, five-fact goal. It asserts that reflection still
+  uses all six atoms, counts the entire declaration including the atom
+  definition's gate, and bounds evaluator steps below 50,000 and total
+  generated certificate source below 25,000 bytes. Current result: 17,021
+  steps and 11,997 bytes, with the library prefix excluded. The focused
+  regression and every Omega suite pass, including bitvectors, logical
+  splits, CutSat, division/modulo and wide constants.
+
+  Repeated the original-fix A/B with the existing `86de9b67` and `c26e5d46`
+  release binaries, the same historical library sources, width 1 and three
+  interleaved cold samples. The probe's evaluator count is 151,583 → 24,288
+  in all three pairs; the whole Omega-library count is 695,119 → 427,717
+  (−38.5%). Local report: `target/perf-ab/omega-atom-list-sharing.json`.
+  Current bitvector sources cannot be checked by the historical before
+  binary, so that fixture's earlier A/B remains the evidence recorded above.
+
+  Correction to the previous entry: a 67–73% reduction is not an order of
+  magnitude. The original fix achieves 6.2× on the probe, and the current
+  tree about 8.9× in steps and 17× in source against the original report.
+  The repeated atom list is removed; the stronger overall certificate-cost
+  target belongs to [[omega-per-goal-elaboration-cost]] and
+  [[arithmetic-certificate-dag-sharing]]. Close this repetition scope.
+
+  Full `scripts/test` records 3,054 passed and zero failed but remains
+  INCOMPLETE because the unchanged read-loop process hits its 300 CPU-second
+  rail, owned by [[read-loop-process-test-cpu-rail]]. All three of that
+  group's tests pass in separate bounded runs: library 54.67 s, fetched
+  counting 17.39 s, and mutation controls 260.64 s. The combined-process
+  rail remains a separate issue; no caps or coverage were changed.
