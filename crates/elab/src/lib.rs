@@ -5832,6 +5832,23 @@ impl Elaborator {
             // `f<T, …>` — explicit type application, with or without a call
             // after it (docs/surface-polymorphism.md §1).
             ExprKind::TyApp { head, args } => {
+                // A fully instantiated type such as `And<P, Q>` also has a
+                // code in inference position (`let result = P ∧ Q`). A
+                // same-named constructor with fields cannot infer without
+                // arguments; a nullary constructor can, and keeps its term
+                // reading. Checking at a universe already chooses the type
+                // reading, including that ambiguous nullary case.
+                if let ExprKind::Var(name) = &head.kind
+                    && let Some(shape) = expr::UniverseElab::visible_type_former(self, cx, name)
+                    && !shape.indexed && shape.value_parameters == 0
+                    && self.ctor_here(cx, name)
+                        .is_none_or(|(ind, i)| !ind.ctors[i].fields.is_empty())
+                {
+                    let written = surface::expression_as_type(e).expect("named type application");
+                    let (ty, level) = self.elab_ty(cx, &written)?;
+                    let term = expr::ExprElab::quote_type_at(self, cx, &ty, &level, &level, e.span)?;
+                    return Ok((term, Type::Ty(level.clone()), Level::succ(level)));
+                }
                 if let Some(r) = self.ctor_at(cx, head, args, &[] as &[Expr], e.span) {
                     return r;
                 }

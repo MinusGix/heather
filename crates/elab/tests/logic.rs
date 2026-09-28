@@ -71,6 +71,54 @@ theorem e(P: Type): Iff<P, P> { iff_refl() }
 ");
 }
 
+#[test]
+fn let_bound_propositions_are_type_values() {
+    ok("
+fn EqAt<A>(x: A) -> Type { x = x }
+theorem conjunction<A>(x: A, h: And<EqAt(x), x = x>, n: Nat):
+    EqAt(x) ∧ x = x {
+    let result = EqAt(x) ∧ x = x;
+    let named = And<EqAt(x), x = x>;
+    let annotated: Type = EqAt(x) ∧ x = x;
+    let p: result = h;
+    let q: named = p;
+    let r: annotated = q;
+    match n as λ z => result { Zero => r, Succ(k) => r }
+}
+theorem disjunction(P: Type, Q: Type, h: Or<P, Q>): P ∨ Q {
+    let result = P ∨ Q;
+    let p: result = h;
+    p
+}
+theorem equivalence(P: Type, Q: Type, h: Iff<P, Q>): P ↔ Q {
+    let result = P ↔ Q;
+    let p: result = h;
+    p
+}
+theorem constructor(P: Type, Q: Type, p: P, q: Q): P ∧ Q {
+    let proof = And<P, Q>(p, q);
+    proof
+}
+inductive Opt<A> { None, Some(A) }
+fn nullary<A>() -> Opt<A> { let x = None<A>; x }
+record Empty<A> {}
+fn empty<A>() -> Empty<A> { let x = Empty<A>; x }
+fn empty_type<A>() -> Type { let t: Type = Empty<A>; t }
+record Higher<A> { carrier: Type, value: A }
+fn higher_type<A>() -> Type<1> { let t = Higher<A>; t }
+fn id<A>(x: A) -> A { x }
+fn function_value() -> Nat { let f = id<Nat>; f(3) }
+");
+    let msg = bad("fn shadowed(And: Nat) -> Type { let t = And<Nat, Nat>; t }");
+    assert!(msg.contains("takes no type arguments"), "{msg}");
+    let msg = bad("fn wrong(P: Type) -> Type { let result = And<P>; result }");
+    assert!(msg.contains("type argument"), "{msg}");
+    let msg = bad("theorem wrong(P: Type, Q: Type, p: P): P ∧ Q {
+        let result = P ∧ Q; let h: result = p; h
+    }");
+    assert!(msg.contains("this has type `P`") && msg.contains("`And<P, Q>` is expected"), "{msg}");
+}
+
 /// **`logic::False` the type and `bool::False` the constructor coexist**, in
 /// one declaration, with neither shadowing the other and neither qualified
 /// (`issues/false-collides-with-bools-constructor.md`, fixed 2026-08-16).

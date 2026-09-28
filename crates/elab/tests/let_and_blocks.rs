@@ -125,6 +125,36 @@ fn a_let_value_may_still_be_an_equation() {
     ok("fn f(a: Nat, b: Nat) -> Nat { let x: Type<0> = a = b; 0 }");
 }
 
+#[test]
+fn a_type_valued_alias_can_be_used_as_a_type() {
+    ok("theorem t<A>(x: A): x = x {
+        let result = x = x;
+        let proof: result = refl;
+        match 0 as λ n => result { Zero => proof, Succ(k) => proof }
+    }");
+    ok("record Box<A> { value: A }
+    fn f<A>(x: A) -> Box<A> {
+        let A: Type = Nat;
+        let p: Box<A> = Box(x);
+        p
+    }");
+    ok("record Payload { n: Nat }
+    record Wrap { payload: Payload }
+    fn f(x: Payload) -> Wrap {
+        let Payload: Type = Nat;
+        Wrap(x)
+    }");
+    ok("fn f() -> Nat {
+        let T: Type = Nat;
+        let id: (T: Type) -> T -> T = λ (T: Type) (x: T) => x;
+        id(Nat, 3)
+    }");
+    let msg = bad("fn f() -> Nat { let T = 0; let n: T = 0; n }");
+    assert!(msg.contains("not a type"), "{msg}");
+    let msg = bad("fn f() -> Nat { let T: Type = Nat; let n: T<Nat> = 0; n }");
+    assert!(msg.contains("takes no type arguments"), "{msg}");
+}
+
 /// §8 item 4(c): the parenthesis escape hatch `no_eq`'s doc comment promised.
 /// Until this round `a = (b = c)` was a parse error, which made the `CHAIN`
 /// diagnostic's own advice false (`docs/let-and-blocks-design.md` §1.1(3)).

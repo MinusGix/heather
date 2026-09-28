@@ -1195,6 +1195,18 @@ impl Elaborator {
             if name == "True" && args.is_empty() {
                 return Ok((Type::Unit { level: Level::Zero }, Level::Zero));
             }
+            // A type-valued `let` is a term alias at a universe. Decode its
+            // resolved value, with the ordinary weakening and local/alias
+            // shadowing rules. Type parameters and declared types retain
+            // their existing precedence, including in declaration fields
+            // lowered over a use site's context.
+            if cx.aliases.iter().any(|alias| alias.name == name) {
+                if !args.is_empty() {
+                    return err(format!("type alias `{name}` takes no type arguments"), span);
+                }
+                let expression = Expr { kind: ExprKind::Var(name.to_string()), span };
+                return self.expr_elab().lower_expression_type(self, cx, &expression, span);
+            }
             return Err(self.name_miss(name, format!("unknown type `{name}`"), span));
         };
         if args.len() != ind.params.len() {

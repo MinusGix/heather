@@ -76,6 +76,18 @@ connective is a *type former*, like `=`, not an operation a carrier can have,
 and there is nothing a designation could say about `∧` at a carrier because
 its operands are propositions rather than values of one.
 
+A proposition can be named locally: `let result = P ∧ Q;` infers a type
+value, and `result` can then appear in a proof annotation or a match motive.
+The named spelling `let result = And<P, Q>;` has the same meaning. This uses
+the ordinary type code and `let` alias mechanisms. Fully instantiated
+declared types in a bare `TyApp` infer this way when no nullary constructor
+competes; a same-named nullary constructor retains its term reading in
+inference position, so use `let result: Type = Empty<P>;` to select its type.
+Type parameters, declared type names and builtins keep their existing
+precedence over term aliases in type position.
+Types with value parameters or indices still need their existing formation
+spelling and checking context.
+
 ### 4.1 Introduction and pattern notation
 
 Constructor terms remain visibly terms and are selected by the expected type:
