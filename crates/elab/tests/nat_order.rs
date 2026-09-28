@@ -270,3 +270,23 @@ fn a_bare_comparison_inside_type_arguments_now_parses() {
     ok("theorem c(n, m: Nat, h: Or<n < m, m <= n>): Nat { 0 }
 theorem d(n, m: Nat, h: Or<(n < m), (m <= n)>): Nat { 0 }");
 }
+
+/// Literal size must not unroll the delayed induction hypotheses when the
+/// two sides differ only by one successor reduction (le-lt-conversion-linear-in-literal).
+#[test]
+fn large_literal_successor_conversion() {
+    for k in [16, 1024, 0xD800, 0x10FFFF] {
+        ok(&format!("theorem down(n: Nat, h: {k} < Succ(n)): {k} <= n {{ h }}
+            theorem up(n: Nat, h: {k} <= n): {k} < Succ(n) {{ h }}
+            theorem le_down(n: Nat, h: Succ({k}) <= Succ(n)): {k} <= n {{ h }}
+            theorem mid(n: Nat, h: ¬(Succ(n) <= {k})): {k} <= n {{
+                Nat::lt_of_not_le({k}, Succ(n), h)
+            }}"));
+    }
+}
+
+#[test]
+fn large_literal_successor_conversion_preserves_the_arguments() {
+    bad("theorem shifted(n: Nat, h: 0xD800 < Succ(n)): 0xD801 <= n { h }");
+    bad("theorem other(n, m: Nat, h: 0xD800 < Succ(n)): 0xD800 <= m { h }");
+}

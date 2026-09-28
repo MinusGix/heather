@@ -247,6 +247,16 @@ thread_local! {
     static CACHE: RefCell<Cache> = RefCell::new(Cache::new());
 }
 
+/// Captures read by evaluation of a syntactic closure. Substitution tails
+/// depend on the ambient base/global shift, not on captured local values.
+pub(crate) fn term_captures(t: &Rc<Term>) -> u32 {
+    CACHE.with(|c| c.borrow_mut().term_use(t).bound)
+}
+
+pub(crate) fn type_captures(t: &Rc<Type>) -> u32 {
+    CACHE.with(|c| c.borrow_mut().type_use(t).bound)
+}
+
 /// Should a local-namespace operation at binder depth `d` skip this subtree?
 ///
 /// The leaf cases are answered inline — recomputing them is cheaper than a

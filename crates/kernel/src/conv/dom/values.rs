@@ -237,6 +237,72 @@ mod tests {
     }
 
     #[test]
+    fn suspended_identity_counts_pending_binders_and_only_reads_used_captures() {
+        let arena = ValueArena::new();
+        let z = arena.tm(TmClo::val(Rc::new(Val::Zero)));
+        let same_z = arena.tm(TmClo::val(Rc::new(Val::Zero)));
+        let x = fresh(&arena, 0);
+        let y = fresh(&arena, 1);
+        let rho = |outer, inner| value::Env::empty().push(&arena, outer).push(&arena, inner);
+        let body = Rc::new(Term::AppAt {
+            fun: Rc::new(Term::Var(LocalVar(3))),
+            arg: Rc::new(Term::Var(LocalVar(1))),
+        });
+        let mk = |env, sat| TmC {
+            clo: arena.tm(TmClo::syn(env, Rc::clone(&body))), home: 2, sat,
+        };
+        // Under two pending binders x3 reads captured index 1; x1 is a
+        // pending binder. Captured index 0 is unused and may differ.
+        let a = mk(rho(z, x), 4);
+        assert!(Values::tm_identity_fast(&a, &mk(rho(same_z, y), 4)));
+        assert!(!Values::tm_identity_fast(&a, &mk(rho(y, x), 4)));
+        assert!(!Values::tm_identity_fast(&a, &mk(rho(same_z, y), 3)));
+        assert!(!clo_identity(a.clo, mk(rho(same_z, y), 4).clo, 1, &mut 64));
+        assert!(!clo_identity(a.clo, mk(rho(same_z, y), 4).clo, 2, &mut 0));
+    }
+
+    #[test]
+    fn suspended_nat_fold_identity_checks_every_component_without_reducing() {
+        let psi = crate::term::GlobalCtx::default();
+        let gamma = LocalCtx::nil();
+        let arena = ValueArena::new();
+        let env = Env::new(&arena, &psi, &gamma, crate::layer::Layer::Prog);
+        let rho = value::Env::empty();
+        let program = || value::program::ContextProgram::run((), NonZeroU64::new(u64::MAX).unwrap());
+        let zero = || arena.tm(TmClo::val(Rc::new(Val::Zero)));
+        let head = || arena.tm(TmClo::val(Rc::new(Val::NatRun { program: program(), tail: zero() })));
+        let motive = || arena.ty(TyClo::new(rho, Rc::new(Type::Nat)));
+        let base = || arena.tm(TmClo::syn(rho, Rc::new(Term::Zero)));
+        let step = || arena.tm(TmClo::syn(rho, Rc::new(Term::Var(LocalVar(1)))));
+        let fold = |head, level, motive, base, step| TmC::here(&env, arena.tm(TmClo::elim(
+            head, Rc::new(Elim::ElimNat { level, motive, base, step }),
+        )));
+        let a = fold(head(), Level::Zero, motive(), base(), step());
+        let b = fold(head(), Level::Zero, motive(), base(), step());
+        // One conversion node suffices, even at the saturated numeral.
+        let mut cv = Conv::<Values>::new(1, &psi);
+        assert_eq!(cv.tm(&env, &a, &b, &Values::nat(&env), &Level::Zero), Ok(()));
+        assert_eq!(cv.fuel, 0);
+        for different in [
+            fold(zero(), Level::Zero, motive(), base(), step()),
+            fold(head(), Level::succ(Level::Zero), motive(), base(), step()),
+            fold(head(), Level::Zero, arena.ty(TyClo::new(rho, Rc::new(Type::Ty(Level::Zero)))), base(), step()),
+            fold(head(), Level::Zero, motive(), arena.tm(TmClo::syn(rho, Rc::new(Term::Succ(Rc::new(Term::Zero))))), step()),
+            fold(head(), Level::Zero, motive(), base(), arena.tm(TmClo::syn(rho, Rc::new(Term::Var(LocalVar(0)))))),
+        ] {
+            assert!(!Values::tm_identity_fast(&a, &different));
+        }
+        // Captures in a motive still count *outside* its one pending binder.
+        let ty = Rc::new(Type::El { level: Level::Zero, tm: Rc::new(Term::Var(LocalVar(1))) });
+        let m1 = arena.ty(TyClo::new(rho.push(&arena, fresh(&arena, 0)), Rc::clone(&ty)));
+        let m2 = arena.ty(TyClo::new(rho.push(&arena, fresh(&arena, 1)), ty));
+        assert!(!ty_clo_identity(m1, m2, 1, &mut 64));
+        let shifted = rho.with_gshift(1);
+        let t = Rc::new(Term::GlobalTm { var: GlobalVar(0), subst: crate::term::LocalSubst::id(&gamma) });
+        assert!(!clo_identity(&TmClo::syn(rho, Rc::clone(&t)), &TmClo::syn(shifted, t), 0, &mut 64));
+    }
+
+    #[test]
     fn one_shared_nat_program_is_reflexive_without_expansion() {
         let arena = value::ValueArena::new();
         let tail = arena.tm(TmClo::val(Rc::new(Val::Zero)));
@@ -504,6 +570,90 @@ thread_local! {
     /// syntax (`Env<'v>::vtys` carries the domain object), only the length and
     /// the base.
     static FILLER: Rc<Type> = Rc::new(Type::Nat);
+}
+
+// Bounded structural identity of suspended computations. Nat induction
+// hypotheses can denote the same fold without forcing its literal scrutinee.
+// `pending` binders are in the syntax but not yet in the captured environment.
+// A miss always falls back to ordinary conversion.
+fn clo_identity<'v>(a: &TmClo<'v>, b: &TmClo<'v>, pending: u32, budget: &mut u32) -> bool {
+    if std::ptr::eq(a, b) { return true; }
+    if *budget == 0 { return false; }
+    *budget -= 1;
+    if pending == 0 {
+        if let Some((rho, body)) = a.as_syn()
+            && let Term::Var(v) = &**body
+            && let value::Lookup::Bound(x) = rho.lookup(v.0)
+        { return clo_identity(x, b, 0, budget); }
+        if let Some((rho, body)) = b.as_syn()
+            && let Term::Var(v) = &**body
+            && let value::Lookup::Bound(y) = rho.lookup(v.0)
+        { return clo_identity(a, y, 0, budget); }
+    }
+    match (a, b) {
+        (TmClo::Syn { env: e1, body: b1 }, TmClo::Syn { env: e2, body: b2 }) => {
+            (Rc::ptr_eq(b1, b2) || b1 == b2)
+                && (value::Env::ptr_eq(e1, e2) || match &**b1 {
+                    Term::Var(v) if v.0 < pending => true,
+                    Term::Var(v) => match (e1.lookup(v.0 - pending), e2.lookup(v.0 - pending)) {
+                        (value::Lookup::Bound(x), value::Lookup::Bound(y)) => clo_identity(x, y, 0, budget),
+                        (value::Lookup::Base(x), value::Lookup::Base(y)) => x == y,
+                        _ => false,
+                    },
+                    Term::AppAt { fun, arg } => {
+                        // Only the captures this application reads matter;
+                        // unused predecessor slots can differ legitimately.
+                        clo_identity(&TmClo::syn(*e1, Rc::clone(fun)), &TmClo::syn(*e2, Rc::clone(fun)), pending, budget)
+                            && clo_identity(&TmClo::syn(*e1, Rc::clone(arg)), &TmClo::syn(*e2, Rc::clone(arg)), pending, budget)
+                    }
+                    _ => env_identity(e1, e2, crate::bounds::term_captures(b1).saturating_sub(pending), budget),
+                })
+        }
+        (TmClo::Val(v1), TmClo::Val(v2)) if pending == 0 => Rc::ptr_eq(v1, v2) || match (&**v1, &**v2) {
+            (Val::Zero, Val::Zero) => true,
+            (Val::NatRun { program: p1, tail: t1 }, Val::NatRun { program: p2, tail: t2 }) => {
+                value::program::ContextProgram::equivalent_fast(p1, p2)
+                    && clo_identity(t1, t2, 0, budget)
+            }
+            _ => false,
+        },
+        (TmClo::Elim { head: h1, elim: e1 }, TmClo::Elim { head: h2, elim: e2 }) if pending == 0 => {
+            clo_identity(h1, h2, 0, budget) && (Rc::ptr_eq(e1, e2) || match (&**e1, &**e2) {
+                (Elim::ElimNat { level: l1, motive: m1, base: z1, step: s1 },
+                 Elim::ElimNat { level: l2, motive: m2, base: z2, step: s2 }) => {
+                    l1 == l2 && ty_clo_identity(m1, m2, 1, budget)
+                        && clo_identity(z1, z2, 0, budget) && clo_identity(s1, s2, 2, budget)
+                }
+                _ => false,
+            })
+        }
+        _ => false,
+    }
+}
+
+fn ty_clo_identity<'v>(a: &TyClo<'v>, b: &TyClo<'v>, pending: u32, budget: &mut u32) -> bool {
+    if std::ptr::eq(a, b) { return true; }
+    match (a.as_syn(), b.as_syn()) {
+        (Some((e1, b1)), Some((e2, b2))) => {
+            (Rc::ptr_eq(b1, b2) || b1 == b2)
+                && (value::Env::ptr_eq(e1, e2)
+                    || env_identity(e1, e2, crate::bounds::type_captures(b1).saturating_sub(pending), budget))
+        }
+        _ => false,
+    }
+}
+
+fn env_identity<'v>(a: &value::Env<'v>, b: &value::Env<'v>, used: u32, budget: &mut u32) -> bool {
+    if a.len() != b.len() || a.gshift() != b.gshift() { return false; }
+    if value::Env::ptr_eq(a, b) { return true; }
+    (0..used.min(a.len())).all(|i| {
+        if *budget == 0 { return false; }
+        *budget -= 1;
+        match (a.lookup(i), b.lookup(i)) {
+            (value::Lookup::Bound(x), value::Lookup::Bound(y)) => clo_identity(x, y, 0, budget),
+            _ => false,
+        }
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1281,19 +1431,23 @@ impl<'v> Dom<'v> for Values {
                 })
     }
 
-    /// Scoped identity ([`Values::ty_eq_fast`]) for terms: one closure — or
-    /// one (environment, body) denotation — opened with the same pending
-    /// binders denotes the same term on both sides.
+    /// Scoped identity for terms, including bounded congruence of suspended
+    /// Nat folds and the syntactic closures that use their hypotheses. The
+    /// same pending binders must be opened on both sides.
     fn tm_identity_fast(a: &TmC<'v>, b: &TmC<'v>) -> bool {
-        a.home == b.home
-            && a.sat == b.sat
+        a.home == b.home && a.sat == b.sat
             && (std::ptr::eq(a.clo, b.clo)
                 || match (a.clo.as_syn(), b.clo.as_syn()) {
                     (Some((e1, b1)), Some((e2, b2))) => {
                         value::Env::ptr_eq(e1, e2) && (Rc::ptr_eq(b1, b2) || b1 == b2)
                     }
                     _ => false,
-                })
+                }
+                // Ordinary closed computations retain the normal fuel/depth
+                // path. Look through captures only for a branch with pending
+                // binders or for an explicitly suspended elimination.
+                || (a.sat > a.home || matches!((a.clo, b.clo), (TmClo::Elim { .. }, TmClo::Elim { .. })))
+                    && clo_identity(a.clo, b.clo, a.sat - a.home, &mut 64))
     }
 
     /// The same scoped identity is also the commonest endpoint equality the
