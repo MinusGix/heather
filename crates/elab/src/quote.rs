@@ -1343,6 +1343,7 @@ fn writable_branches() -> String {
 /// `meta fn` body must mean the same thing inside an arm as outside it.
 fn shift_cx(cx: &Cx, univs: u32, globals: u32) -> Cx {
     let mut out = cx.clone();
+    out.dot_receiver = None;
     out.gamma = cx.gamma.shift_univ(univs).shift_global(globals);
     out.aliases = cx
         .aliases

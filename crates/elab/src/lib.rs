@@ -4301,6 +4301,13 @@ impl Elaborator {
         capture_slots: bool,
     ) -> R<Term> {
         let _depth = expr::ExprDepthGuard::enter(&self.expr_depth, e.span)?;
+        if let Some(receiver) = cx.dot_receiver.as_ref().and_then(|r| r.inference(cx, e))
+            && let Some(Ok((t, got, _))) = receiver.get()
+        {
+            stats::count(stats::Counter::DotReceiverReuses);
+            self.note_check_mismatch(cx, got, expected, lvl, e.span);
+            return Ok(t.clone());
+        }
         if capture_slots && has_free_slots(e) {
             let probe = self.clone();
             match probe.elab_check_skel_slots(cx, e, expected, lvl, hint, skel, false) {
@@ -5014,6 +5021,8 @@ impl Elaborator {
                 args,
                 named,
             } => {
+                let receiver_cx = cx.with_dot_receiver(recv);
+                let cx = &receiver_cx;
                 let resolution =
                     self.resolve_dot(cx, recv, name, tyargs, args, named, e.span)?;
                 if !tyargs.is_empty() && !matches!(&resolution, DotResolution::Method(_)) {
@@ -5538,6 +5547,25 @@ impl Elaborator {
     /// other arm ignores it; inference stays inference, and this is a hint
     /// for one hook rather than a second checking mode.
     fn elab_infer_at(&self, cx: &Cx, e: &Expr, expected: Option<&Type>) -> R<(Term, Type, Level)> {
+        if let Some(receiver) = cx.dot_receiver.as_ref().and_then(|r| r.inference(cx, e)) {
+            if let Some(result) = receiver.get() {
+                // A failed inference must still be allowed to check against
+                // a domain supplied by the enclosing call.
+                if result.is_ok() || expected.is_none() {
+                    stats::count(stats::Counter::DotReceiverReuses);
+                    return result.clone();
+                }
+            } else if expected.is_none() {
+                stats::count(stats::Counter::DotReceiverInferences);
+                let result = self.elab_infer_uncached(cx, e, None);
+                let _ = receiver.set(result.clone());
+                return result;
+            }
+        }
+        self.elab_infer_uncached(cx, e, expected)
+    }
+
+    fn elab_infer_uncached(&self, cx: &Cx, e: &Expr, expected: Option<&Type>) -> R<(Term, Type, Level)> {
         let _depth = expr::ExprDepthGuard::enter(&self.expr_depth, e.span)?;
         // An operator symbol resolves to a name *first*, and then this whole
         // function is the path the written name already took
@@ -5773,6 +5801,8 @@ impl Elaborator {
                 args,
                 named,
             } => {
+                let receiver_cx = cx.with_dot_receiver(recv);
+                let cx = &receiver_cx;
                 let resolution =
                     self.resolve_dot(cx, recv, name, tyargs, args, named, e.span)?;
                 if !tyargs.is_empty() && !matches!(&resolution, DotResolution::Method(_)) {

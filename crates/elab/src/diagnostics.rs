@@ -10,7 +10,7 @@ use heather_syntax::{ParseError, Span};
 use crate::lint::Lint;
 use crate::resolve;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ElabError {
     Parse(ParseError),
     /// A surface-level elaboration failure (unbound name, unsupported form,
@@ -44,7 +44,7 @@ pub enum ElabError {
 }
 
 /// One entry of the unsolved-goal listing.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct GoalReport {
     pub name: String,
     pub statement: String,

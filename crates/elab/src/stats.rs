@@ -132,6 +132,8 @@ registry! {
         ProjectionNamed = "projection_named",
         ProjectionStructural = "projection_structural",
         InstanceMatchCalls = "instance_match_calls",
+        DotReceiverInferences = "dot_receiver_inferences",
+        DotReceiverReuses = "dot_receiver_reuses",
     }
 }
 

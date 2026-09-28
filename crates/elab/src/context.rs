@@ -1,18 +1,25 @@
 //! The kernel local context and its parallel surface-level bindings.
 
 use std::sync::Arc as Rc;
+use std::cell::{OnceCell, RefCell};
+use std::collections::BTreeMap;
+use std::borrow::Cow;
 
 use heather_kernel::level::Level;
 use heather_kernel::term::{CtxEntry, LocalCtx, Term, Type};
-use heather_syntax::{Expr, Ty};
+use heather_syntax::{Expr, ExprKind, Ty};
 
 use crate::recursion::{Guard, SelfRef};
-use crate::{Skel, quote};
+use crate::{R, Skel, quote};
 
 /// Elaboration context: kernel Γ plus the parallel name list
 /// (`names[j]` names `gamma.entries[j]`, outermost first).
 #[derive(Clone)]
 pub(crate) struct Cx {
+    /// One enclosing dot call's chain, shared by lookup and its cloned
+    /// desugared argument. Only source dots are keyed by span: desugaring
+    /// builds applications, so generated nodes cannot alias this key.
+    pub(crate) dot_receiver: Option<Rc<DotReceivers>>,
     pub(crate) names: Vec<String>,
     pub(crate) gamma: LocalCtx,
     /// Parallel to `names`/`gamma.entries`: the implicitness skeleton of the
@@ -82,6 +89,33 @@ pub(crate) struct Cx {
     pub(crate) quoted: bool,
 }
 
+type ReceiverInference = OnceCell<R<(Term, Type, Level)>>;
+
+pub(crate) struct DotReceivers {
+    gamma: LocalCtx,
+    aliases: Vec<Rc<Alias>>,
+    inferred: RefCell<BTreeMap<(usize, usize), Rc<ReceiverInference>>>,
+}
+
+impl DotReceivers {
+    fn matches(&self, cx: &Cx) -> bool {
+        cx.gamma == self.gamma && cx.aliases.len() == self.aliases.len()
+            && cx.aliases.iter().zip(&self.aliases).all(|(a, b)| Rc::ptr_eq(a, b))
+    }
+
+    pub(crate) fn inference(&self, cx: &Cx, e: &Expr) -> Option<Rc<ReceiverInference>> {
+        if !matches!(e.kind, ExprKind::Dot { .. }) || !self.matches(cx) {
+            return None;
+        }
+        self.inferred.borrow().get(&(e.span.start, e.span.end)).cloned()
+    }
+
+    fn register(&self, e: &Expr) {
+        self.inferred.borrow_mut().entry((e.span.start, e.span.end))
+            .or_insert_with(|| Rc::new(OnceCell::new()));
+    }
+}
+
 /// One type parameter, bound to the type it is instantiated at
 /// (`docs/inductive-tier0-lowering.md` §3.1).
 ///
@@ -123,6 +157,7 @@ pub(crate) struct Alias {
 impl Cx {
     pub(crate) fn empty() -> Cx {
         Cx {
+            dot_receiver: None,
             names: vec![],
             gamma: LocalCtx::nil(),
             skels: vec![],
@@ -137,6 +172,29 @@ impl Cx {
             meta: None,
             quoted: false,
         }
+    }
+
+    pub(crate) fn with_dot_receiver(&self, recv: &Expr) -> Cow<'_, Cx> {
+        if !matches!(recv.kind, ExprKind::Dot { .. }) || crate::has_free_slots(recv) {
+            return Cow::Borrowed(self);
+        }
+        // Keep all prefix outcomes through checking retries of this chain,
+        // rather than recreating each inner receiver's cache on every retry.
+        if let Some(receivers) = &self.dot_receiver
+            && receivers.matches(self)
+        {
+            receivers.register(recv);
+            return Cow::Borrowed(self);
+        }
+        let mut cx = self.clone();
+        let receivers = Rc::new(DotReceivers {
+            gamma: self.gamma.clone(),
+            aliases: self.aliases.clone(),
+            inferred: RefCell::new(BTreeMap::new()),
+        });
+        receivers.register(recv);
+        cx.dot_receiver = Some(receivers);
+        Cow::Owned(cx)
     }
 
     pub(crate) fn push(&mut self, name: String, ty: Type, level: Level) {
@@ -154,6 +212,7 @@ impl Cx {
     /// path indexes into those positionally.
     pub(crate) fn prefix(&self, n: usize) -> Cx {
         let mut out = self.clone();
+        out.dot_receiver = None;
         out.names.truncate(n);
         out.gamma.entries = self.gamma.entries.prefix(n);
         out.skels.truncate(n);
@@ -170,6 +229,7 @@ impl Cx {
         level: Level,
         skel: Option<Rc<Skel>>,
     ) {
+        self.dot_receiver = None;
         self.names.push(name);
         self.gamma.entries.push(CtxEntry {
             ty: Rc::new(ty),
@@ -200,6 +260,42 @@ pub(crate) struct DictBinder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use heather_syntax::Span;
+
+    #[test]
+    fn receiver_outcomes_are_shared_only_in_their_original_scope() {
+        let recv = Expr {
+            kind: ExprKind::Dot {
+                recv: Box::new(Expr { kind: ExprKind::Var("x".into()), span: Span { start: 0, end: 1 } }),
+                name: "f".into(), tyargs: vec![], args: Some(vec![]), named: vec![],
+            },
+            span: Span { start: 0, end: 5 },
+        };
+        let mut cx = Cx::empty();
+        cx.push("x".into(), Type::Nat, Level::Zero);
+        let scoped = cx.with_dot_receiver(&recv).into_owned();
+        let receivers = scoped.dot_receiver.as_ref().unwrap();
+        let first = receivers.inference(&scoped, &recv).unwrap();
+        first.set(Ok((Term::Var(heather_kernel::term::LocalVar(0)), Type::Nat, Level::Zero))).unwrap();
+        let retry = scoped.with_dot_receiver(&recv);
+        let second = retry.dot_receiver.as_ref().unwrap().inference(&retry, &recv.clone()).unwrap();
+        assert!(Rc::ptr_eq(&first, &second));
+        assert!(second.get().unwrap().is_ok());
+
+        let mut changed = scoped.clone();
+        changed.gamma.base = heather_kernel::term::CtxBase::Var(heather_kernel::term::GlobalVar(0));
+        assert!(receivers.inference(&changed, &recv).is_none());
+        changed = scoped.clone();
+        changed.aliases.push(Rc::new(Alias {
+            name: "x".into(), depth: 1, term: Rc::new(Term::Zero),
+            ty: Type::Nat, level: Level::Zero, skel: None,
+        }));
+        assert!(receivers.inference(&changed, &recv).is_none());
+        changed = scoped.clone();
+        changed.push("y".into(), Type::Nat, Level::Zero);
+        assert!(changed.dot_receiver.is_none());
+        assert!(scoped.prefix(1).dot_receiver.is_none());
+    }
 
     #[test]
     fn every_kernel_push_keeps_surface_metadata_parallel() {

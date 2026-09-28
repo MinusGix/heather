@@ -334,6 +334,66 @@ fn the_receiver_of_a_method_chain_is_owned_by_the_inner_members_result() {
     }
 }
 
+// Deep chains would duplicate the entire prefix at every method call. Count
+// actual receiver inferences rather than relying on a wall-clock threshold.
+fn measured_chain(src: &str) -> (Result<(), String>, u64, u64) {
+    use heather_elab::stats::{self, Counter, ScopeKind};
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    stats::enable();
+    let scope = stats::scope(ScopeKind::Run, "chain", "");
+    let result = e.elab_source(src).map_err(|err| err.render(src));
+    drop(scope);
+    let rows = stats::take_rows();
+    stats::disable();
+    let row = rows.iter().find(|r| r.kind == ScopeKind::Run).unwrap();
+    (result, row.counters[Counter::DotReceiverInferences as usize],
+        row.counters[Counter::DotReceiverReuses as usize])
+}
+
+#[test]
+fn inferable_method_chains_reuse_each_receiver() {
+    for depth in [8, 28] {
+        let chain = ".bump()".repeat(depth);
+        for receiver in ["r", "R::mk(n := n)"] {
+            let src = format!("{REC} fn c(n: Nat, r: R(n)) -> R(n) {{ {receiver}{chain} }}");
+            let (result, inferred, reused) = measured_chain(&src);
+            result.unwrap();
+            assert_eq!(inferred, (depth - 1) as u64);
+            assert!(reused >= inferred, "each inferred prefix must be reused: {reused}/{inferred}");
+        }
+    }
+    let depth = 12;
+    let chain = ".bump(n := n)".repeat(depth);
+    let (result, inferred, reused) = measured_chain(&format!(
+        "{REC} fn c(n: Nat, r: R(n)) -> R(n) {{ r{chain} }}"
+    ));
+    result.unwrap();
+    assert_eq!(inferred, (depth - 1) as u64);
+    assert!(reused >= inferred);
+
+    let chain = ".stay()".repeat(depth);
+    ok(&format!("{LIST}
+        fn List::stay<A>(self xs: List<A>) -> List<A> {{ xs }}
+        fn c<A>(xs: List<A>) -> List<A> {{ xs{chain} }}"));
+}
+
+#[test]
+fn failed_receiver_inference_is_reused_but_checking_can_still_pin_it() {
+    let depth = 20;
+    let chain = ".bump()".repeat(depth);
+    let src = format!("{REC} fn c() -> Nat {{ R::mk(){chain}.get() }}");
+    let (result, inferred, reused) = measured_chain(&src);
+    let error = result.unwrap_err();
+    assert!(error.contains("could not infer the implicit argument `n` of `R::mk`"), "{error}");
+    assert!(!error.contains("unbound name"), "{error}");
+    assert_eq!(inferred, depth as u64, "each failed prefix is inferred once");
+    assert!(reused > 0);
+
+    ok(&format!("{REC} fn c(n: Nat) -> R(n) {{ R::mk(){chain} }}"));
+    let error = bad(&format!("{REC} fn c(n: Nat, r: R(n)) -> R(Succ(n)) {{ r{chain} }}"));
+    assert!(error.contains("kernel"), "an incompatible result must still fail: {error}");
+}
+
 // A constructor with no written type arguments names its inductive: the gate
 // on written type arguments is lifted on this path. `Nil` at an **open**
 // element type reaches `List::rev` and, like `List::rev(Nil)`, waits for the
