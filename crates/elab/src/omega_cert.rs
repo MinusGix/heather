@@ -745,6 +745,37 @@ fn coefficient_source(source: &str) -> Option<Vec<Z>> {
     (parser.cursor == parser.input.len()).then_some(out)
 }
 
+/// Give shadowed binders source names for both reconstruction and checking.
+/// Only the surface name table changes: the kernel context, alias terms and
+/// goal keep their original de Bruijn indices. This lets a certificate use an
+/// outer fact without spelling its variable as an unrelated inner binder.
+pub(crate) fn source_context(cx: &Cx) -> std::borrow::Cow<'_, Cx> {
+    let shadowed: Vec<_> = cx.names.iter().enumerate().filter_map(|(pos, name)| {
+        (!name.starts_with('#')
+            && (cx.names[pos + 1..].contains(name)
+                || cx.aliases.iter().any(|alias| alias.name == *name && alias.depth > pos)))
+            .then_some(pos)
+    }).collect();
+    if shadowed.is_empty() {
+        return std::borrow::Cow::Borrowed(cx);
+    }
+    let mut used: std::collections::HashSet<_> = cx.names.iter().cloned()
+        .chain(cx.aliases.iter().map(|alias| alias.name.clone())).collect();
+    let mut named = cx.clone();
+    let mut next = 0;
+    for pos in shadowed {
+        loop {
+            let name = format!("__omega_local_{next}");
+            next += 1;
+            if used.insert(name.clone()) {
+                named.names[pos] = name;
+                break;
+            }
+        }
+    }
+    std::borrow::Cow::Owned(named)
+}
+
 // Resolve each visible name once through the same binder/alias precedence as
 // ordinary expressions. Alias types are weakened to this context by resolve.
 // A hidden binder (`#ih`, a `match`'s induction hypothesis) is left out: a

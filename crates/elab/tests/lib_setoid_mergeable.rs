@@ -187,10 +187,12 @@ theorem collisions(n, OfNat, Cons, Nil: Nat, Not: Nat, h: 0 < n):
 "#,
     );
     let shadowed = "import nat; import omega;
-        theorem bad(n: Nat, positive: 0 < n): 0 < n {
+        theorem shadowed_positive(n: Nat, positive: 0 < n): 0 < n {
             let positive = 0; omega
         }";
-    assert!(e.elab_module_source("omega_shadowed", shadowed).is_err());
+    // Certificate-local names keep the outer evidence available even though
+    // the user's alias shadows its written name.
+    check(&mut e, "omega_shadowed", shadowed);
     let irrelevant = "import nat; import omega;
         theorem bad(n: Nat, h: n = n): 0 < n { let irrelevant = h; omega }";
     assert!(

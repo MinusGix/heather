@@ -4692,6 +4692,8 @@ impl Elaborator {
                     );
                 }
                 let outer_depth = self.omega_depth.get();
+                let source_cx = omega_cert::source_context(cx);
+                let cx = source_cx.as_ref();
                 let _certificate_scope = omega_cert::CertificateScope::enter(&self.omega_depth);
                 omega_cert::reset_phases();
                 let reconstruct_guard = stats::guard(stats::Timer::OmegaReconstruct);

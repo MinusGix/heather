@@ -727,6 +727,62 @@ pub fn omega_core_suite() {
     reflects_negated_integer_relations();
 }
 
+pub fn omega_shadowed_binder_certificates() {
+    let source = format!(
+        r#"{PREFIX}
+theorem shadow(n: Nat, small: n < 5): n < 10 {{
+    let g: ((n: Nat) → n < 5 → n < 10) = λ n s => omega;
+    g(n, small)
+}}
+theorem outer_fact_needed(n: Nat, small: n < 5): n < 10 {{
+    let saved = n;
+    let g: ((n: Nat) → saved < 10) = λ n => omega;
+    g(100)
+}}
+theorem alias_shadows_binder(n: Nat, small: n < 5): n < 10 {{
+    let saved = n;
+    let n = 100;
+    have result: (saved < 10) = omega;
+    result
+}}
+theorem shadowed_proof(n: Nat, small: n < 5): n < 10 {{
+    let g: ((small: n < 100) → n < 10) = λ small => omega;
+    g(omega)
+}}
+theorem integer_shadow(x: Int, small: x < OfNat(5)): x < OfNat(10) {{
+    let saved = x;
+    let g: ((x: Int) → saved < OfNat(10)) = λ x => omega;
+    g(OfNat(100))
+}}
+theorem fresh_name_collision(n: Nat, small: n < 5, __omega_local_0: Nat): n < 10 {{
+    let saved = n;
+    let __omega_local_1 = 100;
+    let g: ((n: Nat) → saved < 10) = λ n => omega;
+    g(__omega_local_1)
+}}
+theorem nested_shadow(n: Nat, small: n < 5): n < 10 {{
+    let saved = n;
+    let g: ((n: Nat) → (n: Nat) → saved < 10) = λ n n => omega;
+    g(100, 200)
+}}
+"#
+    );
+    elaborator().elab_module_source("probe", &source)
+        .unwrap_or_else(|error| panic!("shadowed locals must reach the kernel gate: {}", message(error)));
+
+    let source = format!(
+        r#"{PREFIX}
+theorem unrelated(n: Nat, small: n < 5): n < 10 {{
+    let g: ((n: Nat) → n < 10) = λ n => omega;
+    g(n)
+}}
+"#
+    );
+    let error = elaborator().elab_module_source("probe", &source)
+        .expect_err("an outer bound must not prove a bound on an unrelated inner variable");
+    assert!(message(error).contains("`omega` got stuck"));
+}
+
 pub fn omega_logic_suite() {
     splits_integer_disequality_by_trichotomy();
     expands_a_conjunctive_hypothesis();
