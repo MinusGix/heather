@@ -48,6 +48,11 @@ fn on_deep_stack(args: &[String], executable: bool) -> Result<(), String> {
 fn report(result: Result<(), String>) -> ExitCode {
     match result {
         Ok(()) => ExitCode::SUCCESS,
+        // A diagnostic with its file's snippet (`check_file`) is headed already.
+        Err(error) if error.starts_with("error: ") => {
+            eprintln!("{error}");
+            ExitCode::from(1)
+        }
         Err(error) => {
             eprintln!("error: {error}");
             ExitCode::from(1)
@@ -156,6 +161,11 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
         name.push(".certificate.hthr");
         PathBuf::from(name)
     } else { output.with_extension("certificate.hthr") };
+    // What is checked is written first, under a name that is not the
+    // published one: a refusal or a build killed mid-check points into a file
+    // that exists. Replaced on every build, and removed once the certificate
+    // is published.
+    let unchecked = certificate.with_extension("unchecked.hthr");
     // Refuse replacement, including symlinks: failed builds cannot leave a
     // previous executable body looking like the newly checked result.
     for path in [&output, &certificate] {
@@ -185,8 +195,11 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     // it on here rather than at the certificate separates a module actually
     // elaborated (a cache miss, or the root source) from the generated
     // certificate by the `module` column.
-    if timings.is_some() {
+    if let Some(path) = &timings {
         elab.enable_item_timings();
+        // Live from here: a build killed at the CPU rail leaves the rows of
+        // every scope that closed and, beside them, the ones still open.
+        heather_elab::stats::live_table(path).map_err(|e| format!("{}: {e}", path.display()))?;
         // The same opt-in also turns on the value-machine counters (the
         // TSV's last four columns) and, under the `value-metrics` feature,
         // the typing seam's conversion-miss sampler with its item column
@@ -272,7 +285,7 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
                 return Err(format!("source module `{}` differs from the compiler's bundled proof library", module.name));
             }
         } else {
-            check_module(&mut elab, &mut session, module)?;
+            check_file(&mut elab, &mut session, module)?;
         }
     }
     let prefix = format!("{symbol}_native");
@@ -391,7 +404,7 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
         Some(probes) => order::inputs_last(&proof.render(), &probes),
         None => proof.render(),
     };
-    eprintln!("checking source refinement, exported bytes, and execution certificate");
+    eprintln!("checking source refinement, exported bytes, and execution certificate in {}", unchecked.display());
     let certificate_module = format!("{prefix}_certificate");
     // The certificate is a module like any other, and goes through the
     // session like one: a repeated build at the same compiler, sources and
@@ -402,9 +415,13 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     // journalled delta path, which costs what `elab_module_source` does since
     // a clone stopped copying the journal
     // (issues/check-module-delta-certificate-cost.md).
-    let checked = check_module(&mut elab, &mut session, &loader::Module {
+    if unchecked.symlink_metadata().is_ok() {
+        std::fs::remove_file(&unchecked).map_err(|e| format!("{}: {e}", unchecked.display()))?;
+    }
+    write_new(&unchecked, proof.as_bytes())?;
+    let checked = check_file(&mut elab, &mut session, &loader::Module {
         name: certificate_module.clone(),
-        path: certificate.clone(),
+        path: unchecked.clone(),
         src: proof.clone(),
     });
     drop(run_scope);
@@ -431,6 +448,7 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     }
     checked?;
     write_new(&certificate, proof.as_bytes())?;
+    std::fs::remove_file(&unchecked).map_err(|e| format!("{}: {e}", unchecked.display()))?;
     if let Some(image) = image {
         write_new(&output, &image)?;
         #[cfg(unix)]
@@ -499,6 +517,17 @@ fn check_module(elab: &mut Elaborator, session: &mut SemanticSession, module: &l
     for notice in outcome.notices { eprintln!("{notice}"); }
     if outcome.errors.is_empty() { Ok(()) } else {
         Err(outcome.errors.iter().map(|e| e.render(&module.src)).collect::<Vec<_>>().join("\n"))
+    }
+}
+
+/// [`check_module`] for a module that is a file on disk: its diagnostics
+/// name the file, with the offending line quoted.
+fn check_file(elab: &mut Elaborator, session: &mut SemanticSession, module: &loader::Module) -> Result<(), String> {
+    let outcome = session.check(elab, module, LintProfile::Default);
+    for notice in outcome.notices { eprintln!("{notice}"); }
+    if outcome.errors.is_empty() { Ok(()) } else {
+        let file = module.path.display().to_string();
+        Err(outcome.errors.iter().map(|e| e.render_snippet(&module.src, &file)).collect::<Vec<_>>().join("\n"))
     }
 }
 

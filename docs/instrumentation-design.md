@@ -181,6 +181,24 @@ columns carry the kernel's names plus the elaborator's own
 Rows are written in completion order, so a module's declarations precede its
 module row and the run row is last.
 
+**A file table is live** (2026-09-29,
+`issues/native-build-no-partial-diagnostics.md`): `heather check`,
+`build-x86` and `compile-x86` write the header when the run starts and append
+each row as its scope closes, so a run killed at the CPU rail leaves every
+closed scope's row. Beside it, `<stem>.open.tsv` (`scope`, `module`, `item`)
+lists the scopes open right now, outermost first; after a kill its last line
+is the declaration that was running, which has no row. It is removed when the
+run scope closes. The end-of-run dump rewrites the table with the final rows,
+because two things change a row after it closed: a deferred kernel check
+patches its item's row at the module's join
+(`docs/parallel-kernel-gate-design.md` §7), and
+the serial fallback discards a pass's rows. So in a table a killed run left,
+item rows at width > 1 lack their kernel time, and a module the fallback
+re-ran can have two rows for one declaration; at `HEATHER_KERNEL_WORKERS=1`
+the gate runs inside its item's scope and the lines are final. No signal
+handler is involved: nothing is buffered (zsh's `ulimit -t` kills with
+SIGXCPU, bash's with SIGKILL, which no handler sees).
+
 **Reading it: `scripts/timings <file.tsv> [item…]`,** which looks every column
 up *by name* and prints the five that the attribution docs quote — total ms,
 gate ms, misses, queries, evaluator steps — plus `--diff a.tsv b.tsv` for

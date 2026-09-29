@@ -34,3 +34,7 @@ shrink the evaluation, not remove it.
 
 Next: `--timings` on a cut certificate with only `_code_split` restored, and
 the value-machine counters, to find which step evaluates.
+
+## Log
+
+- 2026-09-29: The attribution tooling this needed has landed ([[native-build-no-partial-diagnostics]]): a build killed at the rail now leaves its `--timings` rows, `<stem>.open.tsv` naming the declaration that was running, and the certificate as `<out>.certificate.unchecked.hthr`, so the bisection by rebuilds is no longer needed to find the slow step.

@@ -174,6 +174,74 @@ fn replay_phases_are_attributed() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A run killed mid-check (the CPU rail's SIGXCPU or SIGKILL) still leaves
+/// its table: the header and every closed scope's row, and beside it
+/// `<stem>.open.tsv` naming the scopes that were open, the running
+/// declaration last (`issues/native-build-no-partial-diagnostics.md`).
+#[test]
+fn a_killed_run_leaves_its_rows_and_what_was_running() {
+    let dir = std::env::temp_dir().join(format!("heather-killed-timings-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("scratch dir");
+    let tsv = dir.join("t.tsv");
+    let open = dir.join("t.open.tsv");
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    // The standard library: long enough, unit tests' profile, to be caught
+    // with one declaration done and another running.
+    let mut child = Command::new(env!("CARGO_BIN_EXE_heather"))
+        .current_dir(&root)
+        .args(["check".as_ref(), "--timings".as_ref(), tsv.as_os_str(), "lib/std".as_ref()])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("run heather");
+    // Look only at a stopped process, so what is seen is what the kill finds:
+    // a declaration can close between a look and a kill.
+    let pid = child.id().to_string();
+    let signal = |name: &str| {
+        let sent = Command::new("kill").args([name, &pid]).status().expect("kill");
+        assert!(sent.success(), "kill {name}");
+    };
+    // Stopped when a declaration is running whose name has no row yet (names
+    // repeat: `bool` has several `instance Decide`), with another done.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    let (seen_table, seen_open) = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            panic!("the check ended ({status}) before a declaration was seen running");
+        }
+        signal("-STOP");
+        let table = std::fs::read_to_string(&tsv).unwrap_or_default();
+        let open_scopes = std::fs::read_to_string(&open).unwrap_or_default();
+        let running = open_scopes.lines().last().and_then(|l| l.strip_prefix("item\t"));
+        let has_row = |name: &str| table.lines().any(|l| l.strip_prefix("item\t").is_some_and(|r| r.starts_with(&format!("{name}\t"))));
+        if table.lines().any(|l| l.starts_with("item\t")) && running.is_some_and(|name| !has_row(name)) {
+            break (table, open_scopes);
+        }
+        signal("-CONT");
+        if std::time::Instant::now() > deadline {
+            let _ = child.kill();
+            panic!("no declaration was seen running within the deadline");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    child.kill().unwrap();
+    child.wait().unwrap();
+
+    // What the kill left is what stood when it landed: nothing was waiting in
+    // a buffer.
+    assert_eq!(std::fs::read_to_string(&tsv).unwrap(), seen_table, "the table as it stood");
+    assert_eq!(std::fs::read_to_string(&open).expect("the open scopes, beside the table"), seen_open);
+    let table = Table::read(&tsv);
+    assert_eq!(&table.columns[..5], ["scope", "module", "item", "total_ns", "other_ns"]);
+    assert!(table.of_kind("item").next().is_some(), "the declarations that closed have rows");
+    assert!(table.of_kind("run").next().is_none(), "the run never closed, so it has no row");
+    let scopes: Vec<Vec<&str>> = seen_open.lines().map(|l| l.split('\t').collect()).collect();
+    assert_eq!(scopes[0], ["scope", "module", "item"]);
+    assert_eq!(scopes[1], ["run", "", ""], "outermost first");
+    assert_eq!(scopes[2][0], "module", "{seen_open}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Attribution is opt-in: without the flag nothing is written and the output
 /// is byte-for-byte what it always was.
 #[test]

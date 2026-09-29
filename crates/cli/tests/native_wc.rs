@@ -116,6 +116,7 @@ fn wc_counts_lines_words_and_bytes() {
     assert!(output.status.success(), "build-x86 {}: {}", output.status, String::from_utf8_lossy(&output.stderr));
     let executable = directory.join("wc");
     let certificate = std::fs::read_to_string(directory.join("wc.certificate.hthr")).unwrap();
+    assert!(!directory.join("wc.certificate.unchecked.hthr").exists(), "the refused build's unchecked copy is replaced, then removed");
     for claim in ["_runs(", "_runs_every(", "three_fields_line(", "_code_written(", "_file_correct("] {
         assert!(certificate.contains(claim), "missing {claim}");
     }

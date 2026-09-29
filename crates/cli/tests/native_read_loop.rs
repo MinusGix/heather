@@ -106,7 +106,8 @@ fn wc_l_counts_every_line() {
 
 // The loop given a byte its specification does not count: the program's
 // ReadEofComputes fact is about newlines, so the certificate is refused and
-// nothing is published.
+// nothing is published. What was checked stays, under its unchecked name, and
+// the refusal points into it.
 #[test]
 fn a_needle_the_specification_does_not_count_is_refused() {
     let directory = scratch("read-loop-refused");
@@ -115,6 +116,9 @@ fn a_needle_the_specification_does_not_count_is_refused() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!stderr.contains("unbound") && !stderr.contains("ambiguous"), "{stderr}");
     assert!(!directory.join("wc_l").exists() && !directory.join("wc_l.certificate.hthr").exists());
+    let unchecked = std::fs::read_to_string(directory.join("wc_l.certificate.unchecked.hthr")).unwrap();
+    assert!(unchecked.contains("count_lines_native_runs"), "the certificate that was checked");
+    assert!(stderr.contains("--> ") && stderr.contains("wc_l.certificate.unchecked.hthr:"), "{stderr}");
     std::fs::remove_dir_all(directory).unwrap();
 }
 

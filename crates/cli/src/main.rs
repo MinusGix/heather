@@ -268,6 +268,13 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
     if opts.timings.is_some() {
         stats::enable();
     }
+    // A file table is live: a run killed at the CPU rail leaves the rows of
+    // every scope that closed, and the scopes still open beside them.
+    if let Some(stats::Dest::File(path)) = &opts.timings
+        && let Err(e) = stats::live_table(path)
+    {
+        eprintln!("timings: could not write: {e}");
+    }
     // A `--only` run's row is labelled, so `scripts/timings` can refuse to
     // read its numbers as a whole run's (`docs/check-only-design.md` §3).
     let run_label = opts.only.as_ref().map(|names| format!("only={}", names.join(","))).unwrap_or_default();

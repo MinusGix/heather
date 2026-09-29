@@ -18,6 +18,8 @@ fn source_to_native_binary() {
         .output().unwrap();
     assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
     item_timings_cover_the_certificate(&tsv, &output.join("mix.certificate.hthr"));
+    assert!(!output.join("mix.certificate.unchecked.hthr").exists(), "a published certificate has no unchecked copy");
+    assert!(!output.join("timings.open.tsv").exists(), "and a finished build no open scopes");
     let binary = output.join("mix");
     let linked = Command::new("cc").current_dir(&root)
         .args(["-std=c11", "-Wall", "-Wextra", "-Werror", "examples/x86-native/main.c"])
