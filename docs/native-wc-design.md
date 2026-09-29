@@ -1,6 +1,6 @@
 # `wc`: a program the `wc -l` template can't express — design
 
-Status: **decisions taken 2026-09-28 (§8); slice A landed 2026-09-28 (§3.1); slice B landed 2026-09-29 (§4.5–4.8); slice C landed 2026-09-29 (§5.1–5.2); slice D landed 2026-09-29 (§6.1).** Owner: `issues/native-wc.md`.
+Status: **decisions taken 2026-09-28 (§8); slice A landed 2026-09-28 (§3.1); slice B landed 2026-09-29 (§4.5–4.8); slice C landed 2026-09-29 (§5.1–5.2); slice D landed 2026-09-29 (§6.1); `wc -l` moved onto the state process 2026-09-29 (§9).** Owner: `issues/native-wc.md`.
 Builds on `docs/native-read-until-eof-design.md` (the read loop and its
 additive contract), `docs/native-syscall-failures-design.md` (failure paths),
 `docs/fetched-step-determinism-design.md` (claims universal over runs) and
@@ -510,6 +510,39 @@ words; failed reads and writes exit 1).
   `line_word`'s (linear in nodes; about 44 declarations per node today).
 - **V5** (slice D): the `words` spec and its fold proof, with bv_omega and
   tactics, before any generator work depends on it.
+
+## 9. `wc -l` on the state process (2026-09-29)
+
+The round's success test (§1) asked for `wc -l` to be an instance of what
+`wc` needs. It is now: both run on `elf64_read_state`.
+
+- **The loop is unchanged in kind.** `wc -l`'s Nat-carry loop certificate
+  was already a `ReadStateCertificate`: the old `ReadLoopCertificate` is it
+  at `rep = loop_in(p.carry, loop_nat_rep)`. The profile's placement swaps
+  two registers, the count to R13 and the loop's flag to R11, so the count is
+  the state and nothing is copied or saved around the loop.
+- **A Nat state's facts** are library lemmas at the end of
+  `elf64_read_state` (`count_rep`, `count_framed`, `count_initialised`,
+  `count_room` from `LoopAdvancesByAtMostOne`, `count_word`), with the exit
+  claim `read_count_runs` over the program's `ReadEofComputes`.
+- **The printing tail** is `lib/elf64_count_print.hthr`: elf64_read_print's
+  base block, formatter and store restated at the tail's offset
+  (`count_tail`, `count_formats`, `count_writes`), then elf64_write_loop's
+  write loop, the way the fields tail uses it. `read_count_print_runs` is
+  the claim.
+- **The producer** (`native/read_loop.rs`) lays out the state head and the
+  write loop once (`state_head`, `write_loop`) for `--read-loop`, `--print`
+  and `--fields`. The loop's bytes stay its published literal tree in all
+  three, so the flat `_loop_written` comparison is gone.
+- **What went away:** the old process in `elf64_read_loop` (`eof_code`, the
+  save block, `eof_from`, `read_loop_runs`, about 850 lines) and the tail
+  bound to its layout in `elf64_read_print` (`print_at_*`,
+  `ReadPrintResident`, its own copy of the write loop, `read_print_runs`,
+  about 800). What remains of both is the read and write profiles' pieces.
+  Their refusal tests now mutate those pieces and are refused by the library
+  that uses them (the state process, the write loop, the count's tail).
+- **Cost:** the `wc -l` builds bundle `elf64_read_state` now, and `--print`
+  also bundles elf64_write_loop and elf64_count_print.
 
 ## 8. Decisions (2026-09-28, with the user)
 

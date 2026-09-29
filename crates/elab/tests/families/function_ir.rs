@@ -37,6 +37,8 @@ mod read_state_process;
 mod field_line_format;
 #[path = "../field_line_high_format.rs"]
 mod field_line_high_format;
+#[path = "../count_print_process.rs"]
+mod count_print_process;
 #[path = "../read_fields_process.rs"]
 mod read_fields_process;
 #[path = "../read_print_process.rs"]

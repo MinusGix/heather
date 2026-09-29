@@ -164,6 +164,7 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
         }
     }
     let bundle: Vec<(&str, &str)> = SUPPORT.iter().chain(if read_loop { read_loop::SUPPORT } else { &[] })
+        .chain(if print || fields { read_loop::WRITE_SUPPORT } else { &[] })
         .chain(if print { read_loop::PRINT_SUPPORT } else { &[] })
         .chain(if fields { read_fields::SUPPORT } else { &[] }).copied().collect();
     // A program may import the bundled proof library by its bundled names,
@@ -302,8 +303,9 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
             name: pieces.clone(), path: PathBuf::from(format!("{pieces}.hthr")), src: emission.pieces.clone(),
         })?;
         proof = Module::default();
+        let mut imported = std::collections::BTreeSet::new();
         for name in read_loop::IMPORTS.iter().chain(read_fields::IMPORTS).filter(|name| !emission.text.contains(&format!("import {name};"))) {
-            proof.raw(format!("import {name};"));
+            if imported.insert(*name) { proof.raw(format!("import {name};")); }
         }
         if !emission.text.contains(&format!("import {root_name};")) { proof.raw(format!("import {root_name};")); }
         for part in format.iter().flatten() { proof.raw(format!("import {};", part.module)); }

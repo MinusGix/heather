@@ -1,27 +1,30 @@
 use crate::read_loop_fixture::checker;
 
-// A process of its own: the refusals re-check the print module seven times,
-// and beside read_loop_process's tests they passed the CPU rail.
-const PROCESS: &str = include_str!("../../../lib/elf64_read_loop.hthr");
+// A process of its own: each refusal re-checks the print pieces and what
+// stands on them.
+const READ_LOOP: &str = include_str!("../../../lib/elf64_read_loop.hthr");
+const STATE: &str = include_str!("../../../lib/elf64_read_state.hthr");
 const PRINT: &str = include_str!("../../../lib/elf64_read_print.hthr");
 const BV_OMEGA: &str = include_str!("../../../lib/std/bitvec/omega.hthr");
 const DECIMAL: &str = include_str!("../../../lib/decimal_line.hthr");
+const WRITE: &str = include_str!("../../../lib/elf64_write_loop.hthr");
+const COUNT: &str = include_str!("../../../lib/elf64_count_print.hthr");
 
-// The print profile (design §10.3), refused the same way: the claim can't be
-// restated over a program that writes with another syscall, to another
-// descriptor, from the length register or with the start as the length,
-// stores its word off the page or stores another register, exits nonzero, or
-// formats a count other than the loop's total; nor over a write loop that
-// advances by the length instead of what was sent, never counts down, or
+// The print pieces (design §10.3) are refused where they are used, the write
+// loop (elf64_write_loop) or the count's tail (elf64_count_print): the claim
+// can't be restated over a program that writes with another syscall, to
+// another descriptor, from the length register or with the start as the
+// length, stores its word off the page or stores another register, exits
+// nonzero, or formats a count other than the state's; nor over a write loop
+// that advances by the length instead of what was sent, never counts down, or
 // jumps from the wrong distance (docs/native-syscall-failures-design.md).
 #[test]
 fn slow_acceptance_read_print_refusals() {
     let mut elab = checker();
-    elab.elab_module_source("elf64_read_loop", PROCESS).unwrap_or_else(|e| panic!("{}", e.render(PROCESS)));
-    elab.elab_module_source("bitvec_omega", BV_OMEGA).unwrap_or_else(|e| panic!("{}", e.render(BV_OMEGA)));
-    elab.elab_module_source("decimal_line", DECIMAL).unwrap_or_else(|e| panic!("{}", e.render(DECIMAL)));
+    for (name, source) in [("elf64_read_loop", READ_LOOP), ("elf64_read_state", STATE), ("bitvec_omega", BV_OMEGA), ("decimal_line", DECIMAL)] {
+        elab.elab_module_source(name, source).unwrap_or_else(|e| panic!("{name}: {}", e.render(source)));
+    }
     let library = elab.semantic_image();
-    library.elaborator().elab_module_source("elf64_read_print", PRINT).unwrap_or_else(|e| panic!("{}", e.render(PRINT)));
     for (name, from, to) in [
         ("write_number", "MovRI(Rdi, BitVec::ofNat(1)), MovRI(Rax, BitVec::ofNat(1))]", "MovRI(Rdi, BitVec::ofNat(1)), MovRI(Rax, BitVec::ofNat(2))]"),
         ("write_descriptor", "MovRI(Rdi, BitVec::ofNat(1)), MovRI(Rax", "MovRI(Rdi, BitVec::ofNat(2)), MovRI(Rax"),
@@ -38,7 +41,14 @@ fn slow_acceptance_read_print_refusals() {
     ] {
         let bad = PRINT.replacen(from, to, 1);
         assert_ne!(bad, PRINT, "{name}");
-        let error = library.elaborator().elab_module_source("elf64_read_print", &bad).expect_err(name).render(&bad);
+        let mut elab = library.elaborator();
+        let error = match elab.elab_module_source("elf64_read_print", &bad) {
+            Err(error) => error.render(&bad),
+            Ok(_) => match elab.elab_module_source("elf64_write_loop", WRITE) {
+                Err(error) => error.render(WRITE),
+                Ok(_) => elab.elab_module_source("elf64_count_print", COUNT).expect_err(name).render(COUNT),
+            },
+        };
         assert!(!error.contains("unbound") && !error.contains("ambiguous"), "{name}: {error}");
     }
 }

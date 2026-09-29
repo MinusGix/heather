@@ -884,3 +884,54 @@ theorem read_state_runs<C>(file: List<BitVec(8)>, p: LoopPlacement, at: ReadStat
         eof_exit_code(), pieces, chunks, ok, ending, ending_ok, room, [ExitEvent(bitvec_nat::word_of_nat(64, status(total)))],
         state_exit_tail(file, needle, loop_bytes, rep, status, status_word, total, λ page => pieces(page).tail_at), page, gprs, flags)
 }
+
+// ---------------------------------------------------------------------------
+// A Nat state (`wc -l`'s shape): the count in R13, as the Nat loop generator
+// places it when its carry is R13.
+
+// The count, as a word in R13.
+fn count_rep() → Gprs → Nat → Type { loop_in(R13, loop_nat_rep) }
+
+theorem count_framed(): StateFramed(count_rep()) {
+    λ before after carry kept placed => j(sym(kept.left), λ word _ => loop_nat_rep(word, carry), placed)
+}
+theorem count_initialised(): StateInitialised(count_rep(), 0) { λ state => refl }
+// A step that grows the count by at most one per byte leaves room for the
+// next chunk.
+theorem count_room(region: ReadonlyLoop<Nat>, needle: BitVec(8), advance: LoopAdvancesByAtMostOne(region)):
+    StateRoom(loop_fits, region, needle, 0) {
+    λ seen n room => loop_fits_from(step_fold(region, needle, seen, 0), 0, seen.len(), n,
+        step_fold_advances(region, advance, needle, seen)(0), refl, room)
+}
+theorem count_word(gprs: Gprs, carry: Nat, placed: count_rep()(gprs, carry)): read_gpr(R13, gprs) = bitvec_nat::word_of_nat(64, carry) {
+    sym(loop_nat_placed(read_gpr(R13, gprs), carry, placed))
+}
+
+// The exit claim: for every history of reads, a run that exits with the
+// program's specification of the input (ReadEofComputes: the step folded
+// from zero), or with 1 at a failed read.
+theorem read_count_runs(file: List<BitVec(8)>, p: LoopPlacement, at: ReadStatePlacement(p),
+    region: ReadonlyLoop<Nat>, loop_code: AccessCode, loop_bytes: List<BitVec(8)>,
+    source: ReadonlyBytes → BitVec(8) → Nat → Nat → Nat → LoopOutcome<Nat>, needle: BitVec(8), spec: List<BitVec(8)> → Nat,
+    agreement: (buffer: ReadonlyBytes) → (needle: BitVec(8)) → (budget, cursor, carry: Nat) →
+        loop_run(budget, region, buffer, needle, cursor, carry) = source(buffer, needle, budget, cursor, carry),
+    native: ReadStateCertificate(p, count_rep(), loop_fits, region, loop_code, loop_bytes, source),
+    computes: ReadEofComputes(region, needle, spec), folds: LoopFolds(region), advance: LoopAdvancesByAtMostOne(region),
+    jumps: EofJumps,
+    exit_reads: jumps.ed.sign_extend(32).toNat() = state_exit_skip(needle, loop_bytes),
+    fail_reads: jumps.sd.sign_extend(32).toNat() = state_fail_skip(needle, loop_bytes),
+    back_closes: state_loop_span(needle, loop_bytes) + 5 + jumps.bd.sign_extend(32).toNat() = Nat::pow(2, 64),
+    retry_closes: state_retry_span(needle, loop_bytes) + 6 + jumps.rd.sign_extend(32).toNat() = Nat::pow(2, 64),
+    resident: (page: Nat → BitVec(8)) → CodeResident(io_fetch_access(), IoMemory(file, page), read_state_code(needle, loop_bytes, jumps),
+        BitVec::ofNat(0x4000e8)),
+    chunks: List<ReadStep>, ok: EofChunks(chunks), ending: ReadEnding, ending_ok: EofEnding(ending),
+    room: eof_input(chunks).len() + 4096 < Nat::pow(2, 64),
+    page: Nat → BitVec(8), gprs: Gprs, flags: Flags):
+    LinuxRuns(io_linux(), eof_events(chunks, ending, [ExitEvent(bitvec_nat::word_of_nat(64, spec(eof_input(chunks))))]),
+        io_initial(file, page, gprs, flags)) {
+    j(sym(computes(eof_input(chunks))), λ n _ => LinuxRuns(io_linux(), eof_events(chunks, ending, [ExitEvent(bitvec_nat::word_of_nat(64, n))]),
+            io_initial(file, page, gprs, flags)),
+        read_state_runs(file, p, at, count_rep(), loop_fits, count_framed(), region, loop_code, loop_bytes, source, needle, agreement, native,
+            folds, 0, count_initialised(), count_room(region, needle, advance), λ (c: Nat) => c, count_word,
+            jumps, exit_reads, fail_reads, back_closes, retry_closes, resident, chunks, ok, ending, ending_ok, room, page, gprs, flags))
+}

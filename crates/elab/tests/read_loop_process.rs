@@ -10,19 +10,17 @@ fn read_loop_library_checks() {
     elab.elab_module_source("elf64_read_loop", PROCESS).unwrap_or_else(|e| panic!("{}", e.render(PROCESS)));
 }
 
-// Each change to the process shape is refused where it is wrong, not by a
-// missing name: the claim can't be restated over a program that reads
-// elsewhere, asks for more than the page, issues another syscall, reads
-// another descriptor, or hands the loop the wrong buffer; nor over one that
-// restarts the count at every chunk, keeps it where the next chunk's setup
-// overwrites it, tests another register for the end of file, exits with the
-// register SYSCALL clobbers, or jumps back to somewhere other than the read
+// Each change to the read profile's pieces is refused where it is used, not
+// by a missing name: the state process (elf64_read_state) can't be proved
+// over a program that reads elsewhere, asks for more than the page, issues
+// another syscall, reads another descriptor, tests another register for the
+// end of file or exits with the register SYSCALL clobbers
 // (docs/native-read-until-eof-design.md); nor over one that takes another
-// errno for EINTR, exits 0 on a failed read, loses the count on a retry, or
-// jumps to the failure path from the wrong distance
+// errno for EINTR, exits 0 on a failed read or loses the count on a retry
 // (docs/native-syscall-failures-design.md).
 #[test]
 fn slow_acceptance_read_loop_refusals() {
+    const STATE: &str = include_str!("../../../lib/elf64_read_state.hthr");
     let library = checker().semantic_image();
     for (name, from, to) in [
         ("buffer_outside_page", "MovRI(Rsi, BitVec::ofNat(0x410000)),\n", "MovRI(Rsi, BitVec::ofNat(0x411000)),\n"),
@@ -30,23 +28,21 @@ fn slow_acceptance_read_loop_refusals() {
         ("read_number", "[MovRI(Rax, BitVec::ofNat(0)), MovRI(Rdi", "[MovRI(Rax, BitVec::ofNat(1)), MovRI(Rdi"),
         ("descriptor", "MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rsi", "MovRI(Rdi, BitVec::ofNat(1)), MovRI(Rsi"),
         ("exit_number", "MovRI(Rax, BitVec::ofNat(60))", "MovRI(Rax, BitVec::ofNat(61))"),
-        ("loop_base", "MovRI(Rdi, BitVec::ofNat(0x410000)), MovRI(Rcx", "MovRI(Rdi, BitVec::ofNat(0x410001)), MovRI(Rcx"),
-        ("count_reset", "MovRI(Rsi, BitVec::ofNat(0)), MovRR(R11, R13)]", "MovRI(Rsi, BitVec::ofNat(0)), MovRI(R11, BitVec::ofNat(0))]"),
-        ("count_saved_where_setup_writes", "{ [MovRR(R13, R11)] }", "{ [MovRR(R12, R11)] }"),
         ("end_tested_elsewhere", "[TestRR(Rax, Rax)]", "[TestRR(Rdx, Rdx)]"),
         ("exit_with_clobbered", "[MovRR(Rdi, R13), MovRI(Rax", "[MovRR(Rdi, R11), MovRI(Rax"),
-        ("back_span", "(((((read_entry_len() + 2) + eof_test_len())", "(((((read_entry_len() + 3) + eof_test_len())"),
         ("eintr_tested_as_other", "fn eof_retry_block() → List<Instruction> { [MovRI(Rbx, BitVec::ofNat(4))",
             "fn eof_retry_block() → List<Instruction> { [MovRI(Rbx, BitVec::ofNat(5))"),
         ("failure_exits_zero", "fn eof_fail_block() → List<Instruction> { [MovRI(Rdi, BitVec::ofNat(1))",
             "fn eof_fail_block() → List<Instruction> { [MovRI(Rdi, BitVec::ofNat(0))"),
         ("retry_clobbers_count", "[MovRI(Rbx, BitVec::ofNat(4)), AddRR(Rax, Rbx)]", "[MovRI(R13, BitVec::ofNat(4)), AddRR(Rax, R13)]"),
-        ("failure_span", "    ((eof_setup_len(needle) + loop_bytes.len()) + eof_save_len()) + 5\n}",
-            "    ((eof_setup_len(needle) + loop_bytes.len()) + eof_save_len()) + 4\n}"),
     ] {
         let bad = PROCESS.replacen(from, to, 1);
         assert_ne!(bad, PROCESS, "{name}");
-        let error = library.elaborator().elab_module_source("elf64_read_loop", &bad).expect_err(name).render(&bad);
+        let mut elab = library.elaborator();
+        let error = match elab.elab_module_source("elf64_read_loop", &bad) {
+            Err(error) => error.render(&bad),
+            Ok(_) => elab.elab_module_source("elf64_read_state", STATE).expect_err(name).render(STATE),
+        };
         assert!(!error.contains("unbound") && !error.contains("ambiguous"), "{name}: {error}");
     }
 }

@@ -237,8 +237,8 @@ protects the parent return word.
 ## A program with input: `wc -l`
 
 `wc_l.hthr` is a whole program. It reads stdin a page at a time, counts each
-chunk's newlines with a certified loop into a running total, stops at the
-empty read (end of file), and exits with the total. A read interrupted by a
+chunk's newlines with a certified loop into a running total kept in R13 across
+the reads, stops at the empty read (end of file), and exits with the total. A read interrupted by a
 signal (EINTR) is retried; any other failed read exits with status 1.
 
 ```sh
@@ -264,7 +264,8 @@ alone: it grows by at most one per byte (`line_body_advances`), it always
 continues, the same way at every cursor (`line_body_folds`), and folded over
 the input from zero it is `wc_l` (`count_lines_input`). Buffers, chunks and
 everything machine-shaped come from the shared generators and the library's
-process theorem (`lib/elf64_read_loop.hthr`,
+process theorem (`lib/elf64_read_state.hthr`, the same process `wc` runs on,
+with a Nat state; the read's pieces are `lib/elf64_read_loop.hthr`'s;
 [its design](../../docs/native-read-until-eof-design.md), and
 [the fold contract](../../docs/native-wc-design.md) §3).
 
@@ -304,7 +305,8 @@ multiply, so they use a restoring chain of subtract-if-fits steps. The
 library proves that for every count below 10000 the stored word holds exactly
 that line past its leading zeros. The word is stored with a `mov [r8], rax`
 (`lib/std/arch/x86_64/store.hthr`) and written with `write(1, …)`
-(`lib/elf64_read_print.hthr`).
+(`lib/elf64_read_print.hthr`); the tail that runs them after the read is
+`lib/elf64_count_print.hthr`.
 
 ## `wc`: lines, words and bytes
 
