@@ -1,0 +1,24 @@
+---
+title: Certify plain wc: carried state across reads, a multi-field state, a three-field line
+status: open
+labels: [x86,native,compiler,design]
+created: 2026-09-28
+updated: 2026-09-28
+---
+
+Second certified program, chosen to break the `wc -l` template
+(2026-09-28 discussion): words straddle reads, so `--adds` can't be stated;
+the state has four fields; the output is GNU's three-field pipe line.
+
+Design: `docs/native-wc-design.md` (draft; §8 holds the open decisions).
+
+Slices: A, the fold contract (library `loop_run_folds`, `--folds` replaces
+`--computes`/`--adds`, `wc -l` migrates); B, record carries (reflector,
+`LoopHead` placement over the register file, register budget, probe V3 first);
+C, the `%7d %7d %7d\n` formatter; D, the program.
+
+## What it assumes from elsewhere
+- **[[linux-syscall-trace-model]]** owns the trace. Assumed here: only that
+  `LinuxRuns` and the write loop are unchanged.
+- **[[function-ir-x86-join-placement]]** owns parallel copies. Assumed here:
+  only that in-place state update would need it (relief 4).
