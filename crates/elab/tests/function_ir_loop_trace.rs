@@ -108,7 +108,7 @@ fn slow_acceptance_loop_refusals() {
         ("exit_edge", format!("ofNat(32, {exit})"), format!("ofNat(32, {})", exit - 1)),
         ("flag_placement", "flag := R13".to_string(), "flag := Rbx".to_string()),
         ("swapped_counters", "cursor := Rsi, budget := R12".to_string(), "cursor := R12, budget := Rsi".to_string()),
-        ("carry_placement", "carry := R11".to_string(), "carry := Rax".to_string()),
+        ("carry_placement", "loop_in(R11, ".to_string(), "loop_in(Rax, ".to_string()),
     ] {
         let bad = emission.text.replace(&from, &to);
         assert_ne!(bad, emission.text, "{name}");

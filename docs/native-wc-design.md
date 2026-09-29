@@ -162,6 +162,14 @@ its own register (`LoopWord` for `Nat` fields, `loop_bit` for `Bool` fields).
 The fits invariant becomes per-`Nat`-field, with an advance premise per
 field: the generalisation of `LoopAdvancesByAtMostOne`.
 
+**As landed (2026-09-28).** `rep: Gprs → C → Type`, `carry_placed:
+rep(state.gprs, carry)`. The transport lemma takes the placement at the
+after state (`carry_kept: rep(after.gprs, carry)`) and the advance lemma the
+next one. A one-register carry is `loop_in(register, loop_nat_rep)`, which
+unfolds to the old statement, so existing proofs convert unchanged; only the
+spelling of `rep` at each use changed. The loop refusal test's carry
+mutation moved from the placement record to `loop_in`'s register.
+
 ### 4.3 Registers: the risk that needs a probe
 
 Today's placement uses all 15 usable registers. The step body gets seven:
@@ -210,6 +218,18 @@ Updating the state in place (relief 4) remains the general capability for a
 state that doesn't fit. It is filed as
 `issues/native-loop-state-in-place.md`, with V3's arithmetic, and not built
 here.
+
+**Correction (later the same day).** Counted exactly, three fields fill the
+file too: 5 for loop control, 3 for the state, 1 shared by the byte and the
+load address, the flag (it must survive the step, since the exit reads it to
+tell a Break), the step's discriminator, 3 payload registers and 1 low-byte
+scratch make 15 of 15, with the next cursor and budget already computed in
+the freed payload registers. The process's byte total has no register. So
+relief 4 is built after all (§4.6): the fields are updated one at a time, in
+dependency order, each through a certificate for that field alone, into one
+scratch register and then home. That frees two payload registers, and the
+byte total goes back into the state (`bytes`) or to the process, whichever
+is simpler once the loop fits.
 
 ## 5. Slice C: the three-field line
 

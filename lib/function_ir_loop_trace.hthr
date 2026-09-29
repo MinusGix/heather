@@ -77,27 +77,36 @@ theorem loop_nat_word(word: BitVec(64), count: Nat, computed: word = bitvec_nat:
 
 // Where a loop keeps its values. `flag` is the guard's result and survives
 // the body, so at the exit it tells a Break from the other outcomes; `step`
-// is the body's Continue/Break discriminator.
+// is the body's Continue/Break discriminator. `carry` names the register of
+// a one-register carry; a carry's placement is `rep`, over the register file
+// (docs/native-wc-design.md §4.2), so a record's fields sit in several.
 record LoopPlacement {
     base: Gpr, length: Gpr, needle: Gpr, cursor: Gpr, budget: Gpr, carry: Gpr, flag: Gpr, step: Gpr,
 }
 
-// The invariant at the loop's head. `rep` says how a carry sits in a word;
-// memory agreement is restated each iteration because execution preserves it.
-record LoopHead<M, C>(p: LoopPlacement, rep: BitVec(64) → C → Type, access: ByteReadAccess<M>,
+// A one-register carry's placement over the register file.
+fn loop_in<C>(register: Gpr, rep: BitVec(64) → C → Type) → Gprs → C → Type {
+    λ gprs carry => rep(read_gpr(register, gprs), carry)
+}
+
+// The invariant at the loop's head. `rep` says how a carry sits in the
+// registers; memory agreement is restated each iteration because execution
+// preserves it.
+record LoopHead<M, C>(p: LoopPlacement, rep: Gprs → C → Type, access: ByteReadAccess<M>,
     buffer: ReadonlyBytes, needle: BitVec(8), state: MachineState<M>, cursor, budget: Nat, carry: C) {
     base_placed: LoopWord(64, read_gpr(p.base, state.gprs), buffer.base),
     length_placed: LoopWord(64, read_gpr(p.length, state.gprs), buffer.length),
     needle_placed: read_gpr(p.needle, state.gprs) = needle.zero_extend(56),
     cursor_placed: LoopWord(64, read_gpr(p.cursor, state.gprs), cursor),
     budget_placed: LoopWord(64, read_gpr(p.budget, state.gprs), budget),
-    carry_placed: rep(read_gpr(p.carry, state.gprs), carry),
+    carry_placed: rep(state.gprs, carry),
     inside: LoopBounds(buffer, cursor),
     memory_agrees: (word: BitVec(64)) → access.read(state.memory, word) = buffer.read(word.toNat()),
 }
 
-// A step that kept the six head registers and memory keeps the invariant.
-theorem loop_head_transport<M, C>(p: LoopPlacement, rep: BitVec(64) → C → Type, access: ByteReadAccess<M>,
+// A step that kept the five head registers, the carry's placement and memory
+// keeps the invariant.
+theorem loop_head_transport<M, C>(p: LoopPlacement, rep: Gprs → C → Type, access: ByteReadAccess<M>,
     buffer: ReadonlyBytes, needle: BitVec(8), before, after: MachineState<M>, cursor, budget: Nat, carry: C,
     head: LoopHead<M, C>(p, rep, access, buffer, needle, before, cursor, budget, carry),
     base: read_gpr(p.base, after.gprs) = read_gpr(p.base, before.gprs),
@@ -105,7 +114,7 @@ theorem loop_head_transport<M, C>(p: LoopPlacement, rep: BitVec(64) → C → Ty
     needle_kept: read_gpr(p.needle, after.gprs) = read_gpr(p.needle, before.gprs),
     cursor_kept: read_gpr(p.cursor, after.gprs) = read_gpr(p.cursor, before.gprs),
     budget_kept: read_gpr(p.budget, after.gprs) = read_gpr(p.budget, before.gprs),
-    carry_kept: read_gpr(p.carry, after.gprs) = read_gpr(p.carry, before.gprs),
+    carry_kept: rep(after.gprs, carry),
     memory: after.memory = before.memory):
     LoopHead<M, C>(p, rep, access, buffer, needle, after, cursor, budget, carry) {
     let value = λ (word: BitVec(64)) => word.toNat();
@@ -115,7 +124,7 @@ theorem loop_head_transport<M, C>(p: LoopPlacement, rep: BitVec(64) → C → Ty
         needle_placed := trans(needle_kept, head.needle_placed),
         cursor_placed := trans(cong_fn(value, cursor_kept), head.cursor_placed),
         budget_placed := trans(cong_fn(value, budget_kept), head.budget_placed),
-        carry_placed := j(sym(carry_kept), λ word _ => rep(word, carry), head.carry_placed),
+        carry_placed := carry_kept,
         inside := head.inside,
         memory_agrees := λ word => trans(cong_fn(λ (state: M) => access.read(state, word), memory),
             head.memory_agrees(word)))
@@ -123,7 +132,7 @@ theorem loop_head_transport<M, C>(p: LoopPlacement, rep: BitVec(64) → C → Ty
 
 // The invariant one iteration later: the fixed registers kept, the counters
 // and carry at their new words, memory unchanged.
-theorem loop_head_advance<M, C>(p: LoopPlacement, rep: BitVec(64) → C → Type, access: ByteReadAccess<M>,
+theorem loop_head_advance<M, C>(p: LoopPlacement, rep: Gprs → C → Type, access: ByteReadAccess<M>,
     buffer: ReadonlyBytes, needle: BitVec(8), before, after: MachineState<M>, cursor, budget, rest: Nat, carry, next: C,
     head: LoopHead<M, C>(p, rep, access, buffer, needle, before, cursor, budget, carry),
     base: read_gpr(p.base, after.gprs) = read_gpr(p.base, before.gprs),
@@ -131,7 +140,7 @@ theorem loop_head_advance<M, C>(p: LoopPlacement, rep: BitVec(64) → C → Type
     needle_kept: read_gpr(p.needle, after.gprs) = read_gpr(p.needle, before.gprs),
     cursor_next: LoopWord(64, read_gpr(p.cursor, after.gprs), Succ(cursor)),
     budget_next: LoopWord(64, read_gpr(p.budget, after.gprs), rest),
-    carry_next: rep(read_gpr(p.carry, after.gprs), next),
+    carry_next: rep(after.gprs, next),
     open: buffer.length.leb(cursor) = False,
     memory: after.memory = before.memory):
     LoopHead<M, C>(p, rep, access, buffer, needle, after, Succ(cursor), rest, next) {
@@ -149,7 +158,7 @@ theorem loop_head_advance<M, C>(p: LoopPlacement, rep: BitVec(64) → C → Type
 }
 
 // The two per-iteration obligations a compilation discharges (design §4).
-fn LoopGuardStep<M, C>(p: LoopPlacement, rep: BitVec(64) → C → Type, access: ByteReadAccess<M>,
+fn LoopGuardStep<M, C>(p: LoopPlacement, rep: Gprs → C → Type, access: ByteReadAccess<M>,
     buffer: ReadonlyBytes, needle: BitVec(8), guard: AccessCode) → Type {
     (before: MachineState<M>) → (cursor, budget: Nat) → (carry: C) →
     LoopHead<M, C>(p, rep, access, buffer, needle, before, cursor, budget, carry) →
@@ -158,7 +167,7 @@ fn LoopGuardStep<M, C>(p: LoopPlacement, rep: BitVec(64) → C → Type, access:
         LoopHead<M, C>(p, rep, access, buffer, needle, tested, cursor, budget, carry)))
 }
 
-fn LoopStepped<M, C>(p: LoopPlacement, rep: BitVec(64) → C → Type, Inv: Nat → Nat → C → Type,
+fn LoopStepped<M, C>(p: LoopPlacement, rep: Gprs → C → Type, Inv: Nat → Nat → C → Type,
     access: ByteReadAccess<M>, buffer: ReadonlyBytes, needle: BitVec(8), before, done: MachineState<M>,
     cursor, rest: Nat, step: LoopStep<C>) → Type {
     (read_gpr(p.flag, done.gprs) = read_gpr(p.flag, before.gprs)) ∧
@@ -171,7 +180,7 @@ fn LoopStepped<M, C>(p: LoopPlacement, rep: BitVec(64) → C → Type, Inv: Nat 
 }
 
 // LoopStepped from the body's two observed ports, whichever the step was.
-theorem loop_stepped<M, C>(p: LoopPlacement, rep: BitVec(64) → C → Type, Inv: Nat → Nat → C → Type,
+theorem loop_stepped<M, C>(p: LoopPlacement, rep: Gprs → C → Type, Inv: Nat → Nat → C → Type,
     access: ByteReadAccess<M>, buffer: ReadonlyBytes, needle: BitVec(8), before, done: MachineState<M>,
     cursor, rest: Nat, kept: read_gpr(p.flag, done.gprs) = read_gpr(p.flag, before.gprs)):
     (step: LoopStep<C>) → read_gpr(p.step, done.gprs) = loop_bit(loop_step_breaks(step)) →
@@ -187,7 +196,7 @@ theorem loop_stepped<M, C>(p: LoopPlacement, rep: BitVec(64) → C → Type, Inv
     }
 }
 
-fn LoopBodyStep<M, C>(p: LoopPlacement, rep: BitVec(64) → C → Type, Inv: Nat → Nat → C → Type,
+fn LoopBodyStep<M, C>(p: LoopPlacement, rep: Gprs → C → Type, Inv: Nat → Nat → C → Type,
     access: ByteReadAccess<M>, buffer: ReadonlyBytes, needle: BitVec(8), region: ReadonlyLoop<C>,
     body: AccessCode) → Type {
     (before: MachineState<M>) → (cursor, rest: Nat) → (carry: C) → (byte: BitVec(8)) →
@@ -201,14 +210,14 @@ fn LoopBodyStep<M, C>(p: LoopPlacement, rep: BitVec(64) → C → Type, Inv: Nat
 // The exit interface (design §2). `flag` is set only after a Break; End and
 // Exhausted are told apart by cursor against length, as loop_run orders them.
 // Denied has no machine exit: LoopReadable rules it out.
-fn LoopExitRegisters<M, C>(p: LoopPlacement, rep: BitVec(64) → C → Type, state: MachineState<M>,
+fn LoopExitRegisters<M, C>(p: LoopPlacement, rep: Gprs → C → Type, state: MachineState<M>,
     broke: Bool, cursor, remaining: Nat, carry: C) → Type {
     (read_gpr(p.flag, state.gprs) = loop_bit(broke)) ∧
     (LoopWord(64, read_gpr(p.cursor, state.gprs), cursor) ∧
-    (LoopWord(64, read_gpr(p.budget, state.gprs), remaining) ∧ rep(read_gpr(p.carry, state.gprs), carry)))
+    (LoopWord(64, read_gpr(p.budget, state.gprs), remaining) ∧ rep(state.gprs, carry)))
 }
 
-fn LoopObserved<M, C>(p: LoopPlacement, rep: BitVec(64) → C → Type, state: MachineState<M>,
+fn LoopObserved<M, C>(p: LoopPlacement, rep: Gprs → C → Type, state: MachineState<M>,
     outcome: LoopOutcome<C>) → Type {
     match outcome {
         End(cursor, remaining, carry) => LoopExitRegisters<M, C>(p, rep, state, False, cursor, remaining, carry),
@@ -218,7 +227,7 @@ fn LoopObserved<M, C>(p: LoopPlacement, rep: BitVec(64) → C → Type, state: M
     }
 }
 
-theorem loop_exit_registers<M, C>(p: LoopPlacement, rep: BitVec(64) → C → Type, access: ByteReadAccess<M>,
+theorem loop_exit_registers<M, C>(p: LoopPlacement, rep: Gprs → C → Type, access: ByteReadAccess<M>,
     buffer: ReadonlyBytes, needle: BitVec(8), state: MachineState<M>, cursor, budget: Nat, carry: C, broke: Bool,
     head: LoopHead<M, C>(p, rep, access, buffer, needle, state, cursor, budget, carry),
     flag: read_gpr(p.flag, state.gprs) = loop_bit(broke)):
@@ -233,7 +242,7 @@ fn LoopExecutes<M>(access: ByteReadAccess<M>, guard: AccessCode, flag: Gpr, exit
 }
 
 // Every iteration runs the guard; this is the path out through its edge.
-theorem loop_trace_stop<M, C>(p: LoopPlacement, rep: BitVec(64) → C → Type, access: ByteReadAccess<M>,
+theorem loop_trace_stop<M, C>(p: LoopPlacement, rep: Gprs → C → Type, access: ByteReadAccess<M>,
     buffer: ReadonlyBytes, needle: BitVec(8), guard, body: AccessCode, exit, back: BitVec(32),
     before, tested: MachineState<M>, cursor, budget: Nat, carry: C, outcome: LoopOutcome<C>,
     checked: ExecuteAccess(access, guard, before, tested),
@@ -249,7 +258,7 @@ theorem loop_trace_stop<M, C>(p: LoopPlacement, rep: BitVec(64) → C → Type, 
         observed(loop_exit_registers(p, rep, access, buffer, needle, tested, cursor, budget, carry, False, head, stopped))⟩)
 }
 
-theorem loop_trace<M, C>(p: LoopPlacement, rep: BitVec(64) → C → Type, Inv: Nat → Nat → C → Type,
+theorem loop_trace<M, C>(p: LoopPlacement, rep: Gprs → C → Type, Inv: Nat → Nat → C → Type,
     access: ByteReadAccess<M>, buffer: ReadonlyBytes, needle: BitVec(8), region: ReadonlyLoop<C>,
     guard, body: AccessCode, exit, back: BitVec(32),
     guard_step: LoopGuardStep<M, C>(p, rep, access, buffer, needle, guard),

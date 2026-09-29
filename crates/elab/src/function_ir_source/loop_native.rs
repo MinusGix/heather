@@ -50,8 +50,10 @@ pub fn generate_elaborated_loop_x86(elaborator: &Elaborator, prefix: &str, sourc
         (true, None) => return unsupported("a Nat carry needs its step's LoopAdvancesByAtMostOne theorem"),
         (false, _) => "",
     };
-    let (carry_type, rep_name, invariant) = if counted { ("Nat", "loop_nat_rep", "loop_fits") }
+    let (carry_type, word_rep, invariant) = if counted { ("Nat", "loop_nat_rep", "loop_fits") }
         else { ("Bool", "loop_bool_rep", "loop_no_invariant<Bool>") };
+    // The carry's placement over the register file (function_ir_loop_trace).
+    let rep_name = format!("loop_in({}, {word_rep})", p.carry.heather_name());
     let step_body = reflect_elaborated_structured(elaborator, &reflected.body_name)?;
     let [payload_port, step_port] = step_body.region.outputs() else {
         return unsupported("a loop step observes exactly a payload and a discriminator");
@@ -111,7 +113,8 @@ pub fn generate_elaborated_loop_x86(elaborator: &Elaborator, prefix: &str, sourc
     // The guard: its typed result is loop_run's decision; nothing else moves.
     let (g, cw, lw, bw) = (name("guard"), format!("read_gpr({}, before.gprs)", reg(p.cursor)),
         format!("read_gpr({}, before.gprs)", reg(p.length)), format!("read_gpr({}, before.gprs)", reg(p.budget)));
-    let kept = [p.base, p.length, p.needle, p.cursor, p.budget, p.carry].map(|r| format!("{g}_preserves({}, before, trivial)", reg(r))).join(", ");
+    let kept = [p.base, p.length, p.needle, p.cursor, p.budget].map(|r| format!("{g}_preserves({}, before, trivial)", reg(r))).join(", ");
+    let kept = format!("{kept}, j(sym({g}_preserves({c}, before, trivial)), λ word _ => {word_rep}(word, carry), head.carry_placed)", c = reg(p.carry));
     module.declaration(Declaration::theorem(name("guard_step"),
         HeatherExpr::raw(format!("LoopGuardStep<M, {carry_type}>({placement}(), {rep_name}, access, buffer, needle, {guard_code})")),
         Block::expression(HeatherExpr::raw(format!("λ before cursor budget carry head => Exists({g}_after(before), ⟨refl, ⟨\

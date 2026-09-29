@@ -178,10 +178,10 @@ fn ReadLoopCertificate(p: LoopPlacement, region: ReadonlyLoop<Nat>, loop_code: A
     (access: ByteReadAccess<IoMemory>) → (before: MachineState<IoMemory>) → (buffer: ReadonlyBytes) →
     (needle: BitVec(8)) → (budget, cursor, carry: Nat) →
     LoopAddressBound(64, buffer) → buffer.base + buffer.length <= Nat::pow(2, 47) →
-    LoopHead<IoMemory, Nat>(p, loop_nat_rep, access, buffer, needle, before, cursor, budget, carry) →
+    LoopHead<IoMemory, Nat>(p, loop_in(p.carry, loop_nat_rep), access, buffer, needle, before, cursor, budget, carry) →
     LoopReadable(budget, region, buffer, needle, cursor, carry) → loop_fits(cursor, budget, carry) →
     Exists<MachineState<IoMemory>>(λ after => AccessArtifact<IoMemory>(access, loop_code, loop_bytes, before, after) ∧
-        LoopObserved<IoMemory, Nat>(p, loop_nat_rep, after, source(buffer, needle, budget, cursor, carry)))
+        LoopObserved<IoMemory, Nat>(p, loop_in(p.carry, loop_nat_rep), after, source(buffer, needle, budget, cursor, carry)))
 }
 
 // What a program proves (docs/native-wc-design.md §3): its specification is
@@ -216,7 +216,7 @@ theorem eof_loop_head(p: LoopPlacement, at: ReadLoopPlacement(p), needle: BitVec
     fits: bytes.len() <= 4096, carry: Nat, carry_small: carry < Nat::pow(2, 64), state: MachineState<IoMemory>,
     length_word: read_gpr(Rax, state.gprs) = bitvec_nat::word_of_nat(64, bytes.len()),
     carry_word: read_gpr(R13, state.gprs) = bitvec_nat::word_of_nat(64, carry)):
-    LoopHead<IoMemory, Nat>(p, loop_nat_rep, io_data_access(), io_buffer(state.memory, bytes.len()), needle,
+    LoopHead<IoMemory, Nat>(p, loop_in(p.carry, loop_nat_rep), io_data_access(), io_buffer(state.memory, bytes.len()), needle,
         eof_after_setup(needle, state), 0, bytes.len(), carry) {
     let ready = eof_after_setup(needle, state);
     let n = bytes.len();
@@ -304,7 +304,7 @@ theorem eof_counts(file: List<BitVec(8)>, page: Nat → BitVec(8), p: LoopPlacem
     let done_memory: (done.memory = stored) = trans(access_memory(data, loop_code, ready, done, ran.proof.left.execution), ready_memory);
     let done_rip: (done.rip = eof_rip(at_exit)) =
         trans(looped.right, rip_advance(entry, ready.rip, at_loop, loop_bytes.len(), ready_rip));
-    let observed = j(computed, λ outcome _ => LoopObserved<IoMemory, Nat>(p, loop_nat_rep, done, outcome), ran.proof.right);
+    let observed = j(computed, λ outcome _ => LoopObserved<IoMemory, Nat>(p, loop_in(p.carry, loop_nat_rep), done, outcome), ran.proof.right);
     let carried: (read_gpr(R11, done.gprs).toNat() = step_fold(region, needle, bytes, carry)) =
         j(at.carry, λ r _ => read_gpr(r, done.gprs).toNat() = step_fold(region, needle, bytes, carry), observed.right.right.right);
     let word: (read_gpr(R11, done.gprs) = bitvec_nat::word_of_nat(64, step_fold(region, needle, bytes, carry))) =

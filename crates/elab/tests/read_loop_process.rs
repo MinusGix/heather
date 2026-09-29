@@ -70,12 +70,12 @@ fn count_fetched(resident: &str) -> String {
 theorem count_fetched<M>(fetch: FetchAccess<M>, access: ByteReadAccess<M>, before: MachineState<M>,
     buffer: ReadonlyBytes, needle: BitVec(8), budget, cursor, carry: Nat,
     bounded: LoopAddressBound(64, buffer), low: buffer.base + buffer.length <= Nat::pow(2, 47),
-    head: LoopHead<M, Nat>(count_placement(), loop_nat_rep, access, buffer, needle, before, cursor, budget, carry),
+    head: LoopHead<M, Nat>(count_placement(), loop_in(count_placement().carry, loop_nat_rep), access, buffer, needle, before, cursor, budget, carry),
     readable: LoopReadable(budget, count_loop_region(), buffer, needle, cursor, carry),
     fits: loop_fits(cursor, budget, carry), resident: {resident}):
     Exists<MachineState<M>>(λ after => (FetchedSteps(fetch, access, before, after) ∧
         after.rip = next_rip(before.rip, count_bytes().len())) ∧
-        LoopObserved<M, Nat>(count_placement(), loop_nat_rep, after,
+        LoopObserved<M, Nat>(count_placement(), loop_in(count_placement().carry, loop_nat_rep), after,
             readonly_loops::count_occurrences(buffer, needle, budget, cursor, carry))) {{
     let native = count_native(access, before, buffer, needle, budget, cursor, carry, bounded, low, head, readable, fits);
     Exists(native.witness, ⟨access_artifact_fetched(fetch, access, count_code(), count_bytes(), before, native.witness,
