@@ -5,7 +5,7 @@
 //! not a trusted validation path: a stale model, renderer bug, or dishonest
 //! caller produces a theorem that the ordinary elaborator/kernel rejects.
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Port {
     pub id: u64,
     pub width: u64,
@@ -245,6 +245,78 @@ impl StructuredRegion {
     }
 }
 
+/// The region restricted to the `wanted` outputs (docs/native-wc-design.md
+/// §4.6): each dataflow keeps the cone of what is wanted from it, a branch or
+/// producer nobody reads is dropped, and every interface narrows to what the
+/// kept computation reads, in its original order. A region that owns an
+/// interface also keeps `through`: the inputs a continuation reads past it.
+/// Narrowing a region to one of its outputs gives a certificate for that
+/// output alone, which reads only the inputs that output depends on.
+pub fn narrow_structured_region(region: &StructuredRegion, wanted: &[Port]) -> StructuredRegion {
+    narrow(region, wanted, &std::collections::BTreeSet::new())
+}
+
+fn keep(ports: &[Port], set: &std::collections::BTreeSet<Port>) -> Vec<Port> {
+    ports.iter().copied().filter(|port| set.contains(port)).collect()
+}
+
+/// A dataflow region's cone: the nodes `wanted` depends on, in order, and the
+/// inputs they read.
+fn cone(region: &Region, wanted: &[Port], through: &std::collections::BTreeSet<Port>) -> Region {
+    use std::collections::BTreeSet;
+    let mut live: BTreeSet<u64> = wanted.iter().map(|port| port.id).collect();
+    let mut nodes = Vec::new();
+    for node in region.nodes.iter().rev() {
+        if live.contains(&node.output().id) {
+            for operand in node.operands() { live.insert(operand.id); }
+            nodes.push(*node);
+        }
+    }
+    nodes.reverse();
+    let read: BTreeSet<Port> = region.inputs.iter().copied().filter(|port| live.contains(&port.id) || through.contains(port)).collect();
+    Region { inputs: keep(&region.inputs, &read), nodes, outputs: wanted.to_vec() }
+}
+
+fn narrow(region: &StructuredRegion, wanted: &[Port], through: &std::collections::BTreeSet<Port>) -> StructuredRegion {
+    use std::collections::BTreeSet;
+    match region {
+        StructuredRegion::Dataflow(body) => StructuredRegion::Dataflow(cone(body, wanted, through)),
+        StructuredRegion::Sequence { prefix, continuation } => {
+            let next = narrow(continuation, wanted, &BTreeSet::new());
+            let needed: BTreeSet<Port> = next.inputs().iter().copied().collect();
+            let produced = keep(&prefix.outputs, &needed);
+            if produced.is_empty() { return narrow(continuation, wanted, through); }
+            let mut passing = through.clone();
+            passing.extend(needed.iter().copied().filter(|port| !prefix.outputs.contains(port)));
+            StructuredRegion::Sequence { prefix: cone(prefix, &produced, &passing), continuation: Box::new(next) }
+        }
+        StructuredRegion::Compose { prefix, continuation } => {
+            let next = narrow(continuation, wanted, &BTreeSet::new());
+            let needed: BTreeSet<Port> = next.inputs().iter().copied().collect();
+            let produced = keep(prefix.outputs(), &needed);
+            if produced.is_empty() { return narrow(continuation, wanted, through); }
+            let mut passing = through.clone();
+            passing.extend(needed.iter().copied().filter(|port| !prefix.outputs().contains(port)));
+            StructuredRegion::Compose { prefix: Box::new(narrow(prefix, &produced, &passing)), continuation: Box::new(next) }
+        }
+        StructuredRegion::Conditional { inputs, condition, arguments, when_true, when_false, .. } => {
+            let (yes, no) = (narrow(when_true, wanted, &BTreeSet::new()), narrow(when_false, wanted, &BTreeSet::new()));
+            let read: BTreeSet<Port> = yes.inputs().iter().chain(no.inputs()).copied().collect();
+            let arguments = keep(arguments, &read);
+            let shared: BTreeSet<Port> = arguments.iter().copied().collect();
+            let mut available = shared.clone();
+            available.extend(through.iter().copied());
+            available.extend(inputs.iter().copied().filter(|port| port.id == *condition));
+            StructuredRegion::Conditional {
+                inputs: keep(inputs, &available), condition: *condition, arguments,
+                outputs: wanted.to_vec(),
+                when_true: Box::new(narrow(when_true, wanted, &shared)),
+                when_false: Box::new(narrow(when_false, wanted, &shared)),
+            }
+        }
+    }
+}
+
 pub fn validate_structured_region(region: &StructuredRegion) -> Result<(), String> {
     match region {
         StructuredRegion::Dataflow(region) => {
@@ -433,7 +505,7 @@ impl Node {
         }
     }
 
-    fn operands(self) -> Vec<Port> {
+    pub(crate) fn operands(self) -> Vec<Port> {
         match self {
             Node::Const { .. } => Vec::new(),
             Node::ShiftLeft { width, value, .. }

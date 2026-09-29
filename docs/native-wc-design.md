@@ -231,6 +231,26 @@ scratch register and then home. That frees two payload registers, and the
 byte total goes back into the state (`bytes`) or to the process, whichever
 is simpler once the loop fits.
 
+### 4.6 Fields one at a time (relief 4, 2026-09-28)
+
+`narrow_structured_region` (function_ir_cert) cuts a region down to some of
+its outputs. Each dataflow keeps the cone of what is wanted, a producer or
+branch nobody reads is dropped, and every interface narrows to what the kept
+computation reads, plus what a continuation reads past it, in the original
+order (validation wants a conditional's arms to list exactly its
+arguments). Branches are kept, so a field reads what its branches test:
+`wc`'s line count reads `inside`, because its non-space arm tests it.
+`generate_elaborated_typed_fields_x86` publishes several outputs of one
+source, each alone. The reflection, the source expansion and the
+observation of the whole result are shared; each piece gets the narrowed
+region, lowered and certified, and a typed artifact whose premises name only
+the inputs it reads. The loop then orders the fields so that no field reads
+a register an earlier field was written back to (a field reading itself is
+harmless), computes each into one scratch register and copies it home, and
+computes the discriminator last so the pieces can borrow its register.
+`wc`'s step certifies this way with four temporaries: one result register
+and three scratch.
+
 ## 5. Slice C: the three-field line
 
 - `field_word(n, separator)`, for `n < 10^7`: the seven right-aligned

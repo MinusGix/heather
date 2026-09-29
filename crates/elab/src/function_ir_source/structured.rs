@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 mod publication;
 mod read;
 pub use read::{generate_elaborated_read_x86, ReadX86Emission};
-pub use publication::generate_elaborated_typed_x86;
+pub use publication::{generate_elaborated_typed_x86, generate_elaborated_typed_fields_x86, FieldPiece, FieldEmission};
 
 /// Source types remain distinct even when their FunctionIR ports have the same
 /// width: Bool is represented by BitVec(1), but is not a BitVec(1) parameter.

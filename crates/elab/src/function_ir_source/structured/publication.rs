@@ -243,3 +243,121 @@ pub fn generate_elaborated_typed_x86(
     emission.text = module.render();
     Ok(emission)
 }
+
+/// One output of a record-valued step with a certificate of its own
+/// (docs/native-wc-design.md §4.6): its result port, its placements and its
+/// result register. It reads only the inputs its output depends on.
+pub struct FieldPiece<'a> {
+    pub prefix: String,
+    pub port: u64,
+    pub inputs: &'a x86::Placements,
+    pub temporaries: &'a [Gpr],
+    pub output: Gpr,
+}
+
+/// A field piece's physical code and the inputs it reads.
+#[derive(Clone, Debug)]
+pub struct FieldEmission {
+    pub prefix: String,
+    pub lowered: x86::LoweredStructured,
+    pub inputs: Vec<Port>,
+}
+
+/// Several outputs of one source, each alone: one reflection, one source
+/// expansion and one observation of the whole result, shared; per piece, the
+/// region narrowed to its output, lowered and certified, and a typed artifact
+/// stating its register against the source's observed output. A piece placed
+/// after another that overwrote a register the first read needs nothing from
+/// that register, since its interface doesn't name it.
+pub fn generate_elaborated_typed_fields_x86(
+    elaborator: &Elaborator, prefix: &str, source_name: &str, pieces: &[FieldPiece<'_>],
+) -> Result<(String, Vec<FieldEmission>), SourceError> {
+    let reflected = reflect_elaborated_structured(elaborator, source_name)?;
+    let mut module = Module::default();
+    module.raw("import x86_64_structured_block; import function_ir; import function_ir_x86_support; import x86_64; import x86_64_block; import bitvec; import bool; import list; import logic; import nat;");
+    module.raw(generate_structured_source_expansion(&format!("{prefix}_source"), &reflected)?
+        .replace("import bitvec;\n", "").replace("import bool;\n", ""));
+    let parameters = reflected.declared_parameters();
+    let arguments = reflected.declared_arguments();
+    let args = arguments.iter().map(|a| a.render()).collect::<Vec<_>>().join(", ");
+    let result_type = reflected.result_type_name();
+    let ports = reflected.region.outputs().to_vec();
+    let components = reflected.result_components();
+    let record = reflected.record.as_ref().ok_or_else(|| SourceError::Unsupported("field pieces need a record result".into()))?;
+    let observers: Vec<_> = ports.iter().map(|port| format!("{prefix}_observe_{}", port.id)).collect();
+    let observation_types: Vec<String> = ports.iter().map(|port| if port.width == 1 { "Bool".into() } else { format!("BitVec({})", port.width) }).collect();
+    let names = reflected.choice.as_ref().map(|choice| choice.constructors.clone().map(|name| name.rsplit("::").next().unwrap().to_string()));
+    for (i, observer) in observers.iter().enumerate() {
+        let body = match (components.get(i), &names) {
+            (Some(ty), _) => {
+                let field = &record.fields[i].0;
+                let observe = |value: &str| match ty {
+                    StructuredSourceType::Word(1) => bit(value),
+                    StructuredSourceType::NatWord => vector(StructuredSourceType::NatWord, value),
+                    _ => value.into(),
+                };
+                match &names {
+                    Some([no, yes]) => observe(&format!("match result {{ {no}(payload) => payload.{field}, {yes}(payload) => payload.{field} }}")),
+                    None => observe(&format!("result.{field}")),
+                }
+            }
+            (None, Some([no, yes])) => format!("match result {{ {no}(payload) => False, {yes}(payload) => True }}"),
+            (None, None) => return unsupported("a record result has no port past its fields"),
+        };
+        module.declaration(Declaration::function(observer, HeatherExpr::raw(&observation_types[i]), Block::expression(HeatherExpr::raw(body)))
+            .parameters(vec![Parameter::explicit("result", HeatherExpr::raw(&result_type))]));
+    }
+    let initial = reflected.initial_values();
+    let mut expansion = Expansion { prefix: &format!("{prefix}_publication"), module: &mut module, next_name: 0, parameters: &parameters, arguments: &arguments, result: reflected.result, choice: reflected.choice.as_ref(),
+        record: reflected.record.as_ref(), naturals: natural_inputs(&reflected), constants: BTreeMap::new(), sources: &reflected.sources, zeros: Default::default(), tests: Default::default() };
+    let observed = observe_tree(&mut expansion, &reflected.region, initial, &observers, &result_type, &observation_types)?;
+    let mut cases = "@bitvec::BitVec::zero(width)".to_string();
+    for (id, ty) in reflected.parameters.iter().enumerate().rev() {
+        let value = ty.width().map_or_else(|| "@bitvec::BitVec::zero(width)".into(), |width| at_width(width, &vector(*ty, &reflected.spelling(id)), 0));
+        cases = format!("match id{id} {{ Zero => {value}, Succ(id{}) => {cases} }}", id + 1);
+    }
+    module.declaration(Declaration::function(format!("{prefix}_typed_values"), HeatherExpr::raw("Valuation()"), Block::expression(HeatherExpr::raw(format!("λ width id0 => {cases}")))).parameters(parameters.clone()));
+    let vals = format!("{prefix}_typed_values({args})");
+    for (i, port) in ports.iter().enumerate() {
+        let observer = &observers[i];
+        let source_agreement = format!("trans(cong_fn<{result_type}, {}>({observer}, sym({prefix}_source_source_expands({args}))), {})", observation_types[i], observed.proofs[i]);
+        module.declaration(Declaration::theorem(format!("{prefix}_output_{}_source_observed", port.id),
+            HeatherExpr::raw(format!("{observer}({}({args})) = {}", reflected.source_name, observed.values[i])), Block::expression(HeatherExpr::raw(source_agreement))).parameters(parameters.clone()));
+    }
+    let mut artifacts = Module::default();
+    let mut emissions = Vec::new();
+    for piece in pieces {
+        let i = ports.iter().position(|port| port.id == piece.port).ok_or_else(|| SourceError::Unsupported(format!("no result port {}", piece.port)))?;
+        let port = ports[i];
+        let narrowed = cert::narrow_structured_region(&reflected.region, &[port]);
+        let inputs: x86::Placements = narrowed.inputs().iter().map(|input| piece.inputs.get(&input.id).copied().map(|r| (input.id, r))
+            .ok_or_else(|| SourceError::Unsupported(format!("piece {} reads input {} with no register", piece.prefix, input.id)))).collect::<Result<_, _>>()?;
+        let emission = x86::generate_structured_sourced(&piece.prefix, &narrowed, &reflected.sources, &reflected.bodies, &inputs, piece.temporaries,
+            &x86::Placements::from([(port.id, piece.output)])).map_err(SourceError::Lowering)?;
+        let name = &piece.prefix;
+        let mut public = parameters.clone();
+        public.push(Parameter::explicit("before", HeatherExpr::raw("MachineState<M>")));
+        let mut call_args = if args.is_empty() { "before".into() } else { format!("{args}, before") };
+        let mut placed_args = String::new();
+        for input in narrowed.inputs() {
+            let id = input.id;
+            let placed = format!("placed_{id}");
+            public.push(Parameter::explicit(&placed, HeatherExpr::raw(format!("{} = read_gpr({}, before.gprs)", encode(input.width, &vector(reflected.parameters[id as usize], &reflected.spelling(id as usize))), inputs[&id].heather_name()))));
+            placed_args.push_str(&format!(", {placed}"));
+            call_args.push_str(&format!(", {placed}"));
+        }
+        let observed_value = format!("{observer}({}({args}))", reflected.source_name, observer = observers[i]);
+        let normalized = |v: &str| encode(port.width, &if port.width == 1 { format!("bitvec::BitVec::ofBool({v})") } else { v.into() });
+        let expected = normalized(&observed_value);
+        let correct = if emission.text.contains(&format!("theorem {name}_meaning(")) {
+            format!("trans({name}_correct({vals}, before{placed_args}), {name}_meaning({vals}))")
+        } else { format!("{name}_correct({vals}, before{placed_args})") };
+        let proof = format!("trans({correct}, sym(cong_fn<{}, BitVec(64)>(λ value => {}, {prefix}_output_{}_source_observed({args}))))", observation_types[i], normalized("value"), port.id);
+        artifacts.declaration(Declaration::theorem(format!("{name}_typed_correct"), HeatherExpr::raw(format!("read_gpr({}, {name}_after(before).gprs) = {expected}", piece.output.heather_name())), Block::expression(HeatherExpr::raw(proof))).generic("M").parameters(public.clone()));
+        artifacts.declaration(Declaration::theorem(format!("{name}_typed_artifact"), HeatherExpr::raw(format!("StructuredArtifact<M>({name}_code(), before, {}, {expected}, {name}_Protected)", piece.output.heather_name())), Block::expression(HeatherExpr::raw(format!("StructuredArtifact(after := {name}_after(before), execution := refl, layout := {name}_layout(), decoding := {name}_decodes(before.rip), result_correct := {name}_typed_correct({call_args}), memory_preserved := {name}_memory(before), rip_correct := {name}_rip(before), registers_preserved := λ register protected => {name}_preserves(register, before, protected))")))).generic("M").parameters(public.clone()));
+        module.raw(emission.text.clone());
+        emissions.push(FieldEmission { prefix: piece.prefix.clone(), lowered: emission.lowered, inputs: narrowed.inputs().to_vec() });
+    }
+    module.raw(artifacts.render());
+    Ok((module.render(), emissions))
+}

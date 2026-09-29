@@ -140,3 +140,33 @@ fn record_state_step_certificate_refuses_other_sources() {
         assert!(!error.contains("unbound") && !error.contains("ambiguous"), "{name}: {error}");
     }
 }
+
+// The same step one field at a time (docs/native-wc-design.md §4.6): each
+// output's certificate reads only what that output depends on, so a field
+// computed after another was written back needs nothing from the register
+// that other one overwrote.
+#[test]
+fn record_state_fields_publish_alone() {
+    use heather_elab::function_ir_source::{generate_elaborated_typed_fields_x86, FieldPiece};
+    let mut elab = checker();
+    let model = include_str!("../../../lib/function_ir_loop.hthr");
+    elab.elab_module_source("function_ir_loop", model).unwrap_or_else(|e| panic!("{}", e.render(model)));
+    let nat = include_str!("../../../lib/std/bitvec/nat.hthr");
+    elab.elab_module_source("bitvec_nat", nat).unwrap_or_else(|e| panic!("{}", e.render(nat)));
+    elab.elab_module_source("record_step", RECORD_STEP).unwrap_or_else(|e| panic!("{}", e.render(RECORD_STEP)));
+    let inputs = Placements::from([(0, Gpr::Rdi), (2, Gpr::Rsi), (3, Gpr::R8), (4, Gpr::R9), (5, Gpr::R10)]);
+    let temps = [Gpr::Rax, Gpr::Rdx, Gpr::Rcx, Gpr::Rbx];
+    let pieces: Vec<_> = [(6, "lines"), (7, "words"), (8, "inside"), (9, "step")].into_iter().map(|(port, field)| FieldPiece {
+        prefix: format!("wc_{field}"), port, inputs: &inputs, temporaries: &temps, output: Gpr::Rax }).collect();
+    let (text, emissions) = generate_elaborated_typed_fields_x86(&elab, "wc_fields", "record_step::wc_body", &pieces).unwrap_or_else(|e| panic!("{e:?}"));
+    elab.elab_module_source("typed_wc_fields", &text).unwrap_or_else(|e| panic!("{}", e.render(&text)));
+    let reads = |field: &str| emissions.iter().find(|e| e.prefix == format!("wc_{field}")).unwrap().inputs.iter().map(|p| p.id).collect::<Vec<_>>();
+    // Branches are kept, so a field reads what its branches test: the line
+    // count reads the flag too (its non-space arm tests it), and the flag
+    // reads itself the same way, which is harmless: a field is computed
+    // before its own register is written. So the flag goes last; nothing
+    // reads the needle.
+    assert_eq!(reads("lines"), vec![2, 3, 5]);
+    assert_eq!(reads("words"), vec![2, 4, 5]);
+    assert_eq!(reads("inside"), vec![2, 5]);
+}
