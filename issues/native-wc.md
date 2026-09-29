@@ -22,3 +22,7 @@ C, the `%7d %7d %7d\n` formatter; D, the program.
   `LinuxRuns` and the write loop are unchanged.
 - **[[function-ir-x86-join-placement]]** owns parallel copies. Assumed here:
   only that in-place state update would need it (relief 4).
+
+## Log
+
+- 2026-09-28: Decisions (design §8): GNU pipe format now, POSIX minimal and a proven C-style API filed as [[native-proven-formatting-api]]; slice A (fold contract) first. The register fallback stays open until probe V3.

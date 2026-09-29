@@ -1,6 +1,6 @@
 # `wc`: a program the `wc -l` template can't express — design
 
-Status: **draft for discussion, 2026-09-28.** Owner: `issues/native-wc.md`.
+Status: **decisions taken 2026-09-28 (§8); slice A next.** Owner: `issues/native-wc.md`.
 Builds on `docs/native-read-until-eof-design.md` (the read loop and its
 additive contract), `docs/native-syscall-failures-design.md` (failure paths),
 `docs/fetched-step-determinism-design.md` (claims universal over runs) and
@@ -178,19 +178,16 @@ state goes back to the user; see §8, question 2.
 - **V5** (slice D): the `words` spec and its fold proof, with bv_omega and
   tactics, before any generator work depends on it.
 
-## 8. Decisions for the user
+## 8. Decisions (2026-09-28, with the user)
 
-1. **Output format.** Recommended: GNU's pipe format `"%7d %7d %7d\n"`,
-   counts below 10^7. It matches the system `wc` byte for byte on a pipe,
-   and one word per field is a gift to the formatter. Alternative: POSIX's
-   minimal `"%d %d %d\n"`. That is harder: variable-width fields make the
-   stores unaligned.
-2. **If the registers don't fit** (V3): update the state in place (relief
-   4, a general generator capability, the bigger round), or let the process
-   count the bytes itself (the sum of the reads' returns; a process-level
-   accumulator every program gets, but a special case in the contract).
-   Recommended: decide after V3; lean towards relief 4 if it is needed,
-   since the library should rank features rather than route around them.
-3. **Order.** Recommended: slice A first and landed on its own (it migrates
-   `wc -l` and retires `--adds`), then B with its probe, then C and D.
-   C doesn't depend on B and could go in parallel.
+1. **Output format: GNU's pipe format for now**, `"%7d %7d %7d\n"`, counts
+   below 10^7. POSIX's minimal `"%d %d %d\n"` is wanted too, as a basic
+   capability. The user's longer direction is a C-style API, proven in
+   Heather, for easier conversion of existing programs. Both are filed as
+   `issues/native-proven-formatting-api.md`, not in this round.
+2. **If the registers don't fit** (V3): still open. The choice is between
+   updating the state in place (relief 4) and letting the process count the
+   bytes, and it goes back to the user with V3's numbers. Leaning towards
+   relief 4.
+3. **Order: slice A first**, landed on its own. Then B with its probe, then C
+   and D.
