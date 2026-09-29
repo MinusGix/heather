@@ -127,6 +127,32 @@ places several results with one certificate each
   (`LoopStep<WcState>`): one output port per field plus the discriminator.
 - Nested records and records in any other position stay out of scope.
 
+**As landed (2026-09-28).** A record parameter's fields are ports in
+declaration order (`ReflectedStructuredFunction::leaves` maps each port to
+its parameter and field). `fst@(snd@ⁱ⁺¹(x))` over a record-bound variable
+reads field `i`'s port, and a leaf may return the parameter itself (Σ-η
+closes it against the constructor the expansion writes). A record result,
+or a choice whose payload is a record, has one output port per field, then
+the discriminator. Publication observes field `i` as `payload.fᵢ` in either
+constructor. Record fields are `Nat` (always carried), `Bool` or
+`BitVec(w)`, read from the declaration's field types. The test is
+`record_state_step_publication_checks`: `wc`'s step with its certificate,
+and two mutated sources that the same certificate refuses.
+
+### 4.5 Near conditionals (found by B1's test, 2026-09-28)
+
+`wc`'s step is past rel8's reach: 188 bytes of arms. A comparison costs 16
+bytes and each constant 10, and a helper's test inside an arm counts
+towards that arm. Short jumps would decline any realistic step, so
+structured code gained `CodeBranchNear` (TEST, `JZ rel32` over the true arm,
+`JMP rel32` over the false one). The lowering picks it when either distance
+is past rel8. Library: its bytes, execution, layout and decoding
+(`structured_block.hthr`), the near twins of the branch lemmas, the fetched
+bridge (`fetched_code.hthr`) and memory purity (`access_memory.hthr`); the
+certificate generator emits either form from one parameterised block. Tighter
+instruction selection (a `mov` for a passthrough, `xor` for zero) would
+shrink code, but it isn't needed for correctness and isn't done.
+
 ### 4.2 Loop library
 
 `LoopHead`'s `carry_placed: rep(read_gpr(p.carry, …), carry)` becomes a

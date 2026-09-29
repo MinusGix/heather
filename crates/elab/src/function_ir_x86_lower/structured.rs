@@ -31,8 +31,11 @@ pub enum StructuredPlan {
         condition_register: Gpr,
         when_true: Box<LoweredStructured>,
         when_false: Box<LoweredStructured>,
-        false_displacement: u8,
-        join_displacement: u8,
+        /// Short: rel8 JZ/JMP. Near: rel32, when either arm is past rel8's
+        /// reach (docs/native-wc-design.md §4.5).
+        false_displacement: u32,
+        join_displacement: u32,
+        near: bool,
     },
 }
 
@@ -200,17 +203,20 @@ fn select_here(
             let scratch = temporaries.to_vec();
             let yes = select(when_true, &branch_inputs, &scratch, requested, &format!("{path}.true"))?;
             let no = select(when_false, &branch_inputs, &scratch, requested, &format!("{path}.false"))?;
-            // TEST r,r; JZ false; true; JMP join; false.
-            let false_distance = yes.byte_length + 2;
+            // TEST r,r; JZ false; true; JMP join; false. Short jumps while
+            // both distances fit rel8, near (JZ rel32, JMP rel32) otherwise.
+            let near = yes.byte_length + 2 > 127 || no.byte_length > 127;
+            let (jz_length, jmp_length) = if near { (6, 5) } else { (2, 2) };
+            let false_distance = yes.byte_length + jmp_length;
             let join_distance = no.byte_length;
             for bytes in [false_distance, join_distance] {
-                if bytes > 127 { return Err(LoweringError::ShortBranchOutOfRange { bytes }); }
+                if bytes > i32::MAX as usize { return Err(LoweringError::ShortBranchOutOfRange { bytes }); }
             }
-            let length = 3 + 2 + yes.byte_length + 2 + no.byte_length;
+            let length = 3 + jz_length + yes.byte_length + jmp_length + no.byte_length;
             let clobbered = yes.clobbered.union(&no.clobbered).copied().collect();
             (StructuredPlan::Conditional {
                 condition_register, when_true: Box::new(yes), when_false: Box::new(no),
-                false_displacement: false_distance as u8, join_displacement: join_distance as u8,
+                false_displacement: false_distance as u32, join_displacement: join_distance as u32, near,
             }, clobbered, length)
         }
     };

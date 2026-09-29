@@ -228,12 +228,29 @@ fn emit(n: &str, r: &StructuredRegion, p: &LoweredStructured, incoming: &Values,
         (StructuredRegion::Dataflow(_), StructuredPlan::MultiDataflow(parts)) => {
             return emit_parts(n, r, p, parts, incoming, m, sources);
         }
-        (StructuredRegion::Conditional { condition, when_true, when_false, .. }, StructuredPlan::Conditional { condition_register, when_true: yes, when_false: no, false_displacement, join_displacement }) => {
+        (StructuredRegion::Conditional { condition, when_true, when_false, .. }, StructuredPlan::Conditional { condition_register, when_true: yes, when_false: no, false_displacement, join_displacement, near }) => {
             let t = format!("{n}_true"); let f = format!("{n}_false");
             let tv = emit(&t, when_true, yes, incoming, m, sources)?; let fv = emit(&f, when_false, no, incoming, m, sources)?;
             let register = condition_register.heather_name();
-            let fd = format!("@bitvec::BitVec::ofNat(8, {false_displacement})"); let jd = format!("@bitvec::BitVec::ofNat(8, {join_displacement})");
-            let entry = format!("structured_branch_entry({register}, {fd}, before)");
+            // The two encodings differ in their jumps only: rel8 JZ/JMP (2
+            // bytes each), or JZ rel32 (6) and JMP rel32 (5).
+            let (jz, jmp) = if *near { (6usize, 5usize) } else { (2, 2) };
+            let (fdn, jdn) = (*false_displacement as usize, *join_displacement as usize);
+            let (fd, jd) = if *near { (format!("@bitvec::BitVec::ofNat(32, {fdn})"), format!("@bitvec::BitVec::ofNat(32, {jdn})")) }
+                else { (format!("@bitvec::BitVec::ofNat(8, {fdn})"), format!("@bitvec::BitVec::ofNat(8, {jdn})")) };
+            let (entry_fn, read_fn, property_fn, cases_fn, constructor) = if *near {
+                ("structured_near_entry", "structured_near_branch_read", "structured_near_branch_property", "structured_near_branch_cases", "CodeBranchNear")
+            } else { ("structured_branch_entry", "structured_branch_read", "structured_branch_property", "structured_branch_cases", "CodeBranch") };
+            let (jz_bytes, jmp_bytes, jz_decodes, jmp_decodes) = if *near {
+                (format!("near_control_bytes(JumpZeroNear({fd}))"), format!("near_control_bytes(JumpNear({jd}))"),
+                    format!("decode_near_control_complete(JumpZeroNear({fd}))"), format!("decode_near_control_complete(JumpNear({jd}))"))
+            } else {
+                (format!("short_control_bytes(JumpZero({fd}))"), format!("short_control_bytes(Jump({jd}))"),
+                    format!("decode_short_control_complete(JumpZero({fd}))"), format!("decode_short_control_complete(Jump({jd}))"))
+            };
+            let target = |start: &str, length: usize, displacement: &str| if *near { format!("near_branch_target({start}, {length}, {displacement})") }
+                else { format!("short_branch_target({start}, {displacement})") };
+            let entry = format!("{entry_fn}({register}, {fd}, before)");
             let branch_args = format!("{register}, {fd}, {jd}, {t}_code(), {f}_code(), before");
             let bit = test_of(&incoming[condition]).unwrap_or_else(|| format!("@bitvec::BitVec::head_bit(0, {})", val(incoming, *condition, 1)));
             let placed = format!("test_bit_value_placed_zf(λ width _ => {}, {condition}, {register}, before, placed_{condition})", incoming[condition]);
@@ -250,55 +267,68 @@ fn emit(n: &str, r: &StructuredRegion, p: &LoweredStructured, incoming: &Values,
                 let selected_result = placed_value(&Values::from([(port.id,
                     branch_value("selected", port, &tv, &fv))]), port);
                 let agree = format!("match {bit} as λ selected => (match selected {{ False => {rf}, True => {rt} }}) = ({selected_result}) {{ False => {child_f}, True => {child_t} }}");
-                let correct = trans(&format!("structured_branch_read({branch_args}, {output})"), &trans(&choice, &agree));
+                let correct = trans(&format!("{read_fn}({branch_args}, {output})"), &trans(&choice, &agree));
                 proofs.push(correct);
                 results.insert(port.id, branch_value(&bit, port, &tv, &fv));
             }
-            let memory = format!("structured_branch_property({branch_args}, λ after => after.memory = before.memory, {t}_memory({entry}), {f}_memory({entry}))");
-            for (tag, d) in [("false", *false_displacement as usize), ("join", *join_displacement as usize)] {
-                let body = trans(&format!("sym(bitvec::BitVec::iter_add_eq_add(64, next_rip(start, 2), @bitvec::BitVec::sign_extend(7, 56, @bitvec::BitVec::ofNat(8, {d}))))"), &compose("start", 2, d));
-                thm(m, format!("{n}_{tag}_target"), false, start(), format!("short_branch_target(start, @bitvec::BitVec::ofNat(8, {d})) = next_rip(start, {})", 2 + d), body);
+            let memory = format!("{property_fn}({branch_args}, λ after => after.memory = before.memory, {t}_memory({entry}), {f}_memory({entry}))");
+            for (tag, length, d, displacement) in [("false", jz, fdn, &fd), ("join", jmp, jdn, &jd)] {
+                let body = if *near { format!("near_branch_forward(start, {length}, {d}, {displacement}, refl)") }
+                    else { trans(&format!("sym(bitvec::BitVec::iter_add_eq_add(64, next_rip(start, 2), @bitvec::BitVec::sign_extend(7, 56, {displacement})))"), &compose("start", 2, d)) };
+                thm(m, format!("{n}_{tag}_target"), false, start(), format!("{} = next_rip(start, {})", target("start", length, displacement), length + d), body);
             }
             let test_rip = step("before.rip", 3);
-            let entry_t = trans(&format!("jump_zero_not_taken_rip(structured_test({register}, before).flags.zf, {test_rip}, {fd}, selected)"), &compose("before.rip", 3, 2));
-            let entry_f = trans(&format!("jump_zero_taken_rip(structured_test({register}, before).flags.zf, {test_rip}, {fd}, selected)"), &trans(&format!("{n}_false_target({test_rip})"), &compose("before.rip", 3, 2 + *false_displacement as usize)));
+            let tested = format!("structured_test({register}, before)");
+            let (not_taken, taken) = if *near {
+                (format!("near_not_taken_rip({fd}, {tested}, selected)"), format!("near_taken_rip({fd}, {tested}, selected)"))
+            } else {
+                (format!("jump_zero_not_taken_rip({tested}.flags.zf, {test_rip}, {fd}, selected)"), format!("jump_zero_taken_rip({tested}.flags.zf, {test_rip}, {fd}, selected)"))
+            };
+            let entry_t = trans(&not_taken, &compose("before.rip", 3, jz));
+            let entry_f = trans(&taken, &trans(&format!("{n}_false_target({test_rip})"), &compose("before.rip", 3, jz + fdn)));
             let en_rip = format!("{entry}.rip");
             let after_t_rip = step(&en_rip, yes.byte_length);
-            let jump_cong = format!("cong_fn<BitVec(64), BitVec(64)>(λ rip => short_branch_target(rip, {jd}), {t}_span({entry}))");
-            let true_tail = yes.byte_length + 2 + no.byte_length;
-            let true_span = trans(&jump_cong, &trans(&format!("{n}_join_target({after_t_rip})"), &trans(&compose(&en_rip, yes.byte_length, 2 + no.byte_length), &trans(&congr_step(true_tail, &entry_t), &compose("before.rip", 5, true_tail)))));
-            let false_span = trans(&format!("{f}_span({entry})"), &trans(&congr_step(no.byte_length, &entry_f), &compose("before.rip", 5 + yes.byte_length + 2, no.byte_length)));
-            let span = format!("structured_branch_cases({branch_args}, λ after => after.rip = next_rip(before.rip, {length}), λ selected => {true_span}, λ selected => {false_span})");
+            let jump_cong = format!("cong_fn<BitVec(64), BitVec(64)>(λ rip => {}, {t}_span({entry}))", target("rip", jmp, &jd));
+            let true_tail = yes.byte_length + jmp + no.byte_length;
+            let head = 3 + jz;
+            let true_span = trans(&jump_cong, &trans(&format!("{n}_join_target({after_t_rip})"), &trans(&compose(&en_rip, yes.byte_length, jmp + no.byte_length), &trans(&congr_step(true_tail, &entry_t), &compose("before.rip", head, true_tail)))));
+            let false_span = trans(&format!("{f}_span({entry})"), &trans(&congr_step(no.byte_length, &entry_f), &compose("before.rip", head + yes.byte_length + jmp, no.byte_length)));
+            let span = format!("{cases_fn}({branch_args}, λ after => after.rip = next_rip(before.rip, {length}), λ selected => {true_span}, λ selected => {false_span})");
             let frame_branch_args = branch_args.clone(); let frame_entry = entry.clone(); let frame_t = t.clone(); let frame_f = f.clone();
-            let fixed = [("test", format!("canonical_bytes(TestRR({register}, {register}))"), 3), ("jump_zero", format!("short_control_bytes(JumpZero({fd}))"), 2), ("jump", format!("short_control_bytes(Jump({jd}))"), 2)];
+            let frame_property = property_fn.to_string();
+            let fixed = [("test", format!("canonical_bytes(TestRR({register}, {register}))"), 3), ("jump_zero", jz_bytes.clone(), jz), ("jump", jmp_bytes.clone(), jmp)];
             for (tag, bytes, size) in &fixed {
                 thm(m, format!("{n}_{tag}_length"), false, vec![], format!("{bytes}.len() = {size}"), "refl".into());
             }
             let byte_length = appended_length(&[
-                (fixed[0].1.clone(), format!("{n}_test_length()"), 3), (fixed[1].1.clone(), format!("{n}_jump_zero_length()"), 2),
-                (length_of(&t), format!("{t}_byte_length()"), yes.byte_length), (fixed[2].1.clone(), format!("{n}_jump_length()"), 2),
+                (fixed[0].1.clone(), format!("{n}_test_length()"), 3), (fixed[1].1.clone(), format!("{n}_jump_zero_length()"), jz),
+                (length_of(&t), format!("{t}_byte_length()"), yes.byte_length), (fixed[2].1.clone(), format!("{n}_jump_length()"), jmp),
                 (length_of(&f), format!("{f}_byte_length()"), no.byte_length)]);
-            let false_layout = transported(&t, &format!("short_branch_target(start, {fd}) = next_rip(start, 2 + (y + 2))"), &format!("{n}_false_target(start)"));
-            let join_layout = transported(&f, &format!("short_branch_target(start, {jd}) = next_rip(start, 2 + y)"), &format!("{n}_join_target(start)"));
-            let false_decodes = format!("j(cong_fn<Nat, Nat>(λ k => 5 + k + 2, sym({t}_byte_length())), λ y _ => StructuredDecodes({f}_code(), next_rip(start, y)), {f}_decodes(next_rip(start, 5 + {} + 2)))", yes.byte_length);
-            (format!("CodeBranch({register}, {fd}, {jd}, {t}_code(), {f}_code())"),
+            let false_layout = transported(&t, &format!("{} = next_rip(start, {jz} + (y + {jmp}))", target("start", jz, &fd)), &format!("{n}_false_target(start)"));
+            let join_layout = transported(&f, &format!("{} = next_rip(start, {jmp} + y)", target("start", jmp, &jd)), &format!("{n}_join_target(start)"));
+            let false_decodes = format!("j(cong_fn<Nat, Nat>(λ k => {head} + k + {jmp}, sym({t}_byte_length())), λ y _ => StructuredDecodes({f}_code(), next_rip(start, y)), {f}_decodes(next_rip(start, {head} + {} + {jmp})))", yes.byte_length);
+            (format!("{constructor}({register}, {fd}, {jd}, {t}_code(), {f}_code())"),
                 results, proofs, memory, span,
                 format!("⟨λ start => {false_layout}, ⟨λ start => {join_layout}, ⟨{t}_layout(), {f}_layout()⟩⟩⟩"),
-                format!("⟨canonical_encoding_decodes(start, TestRR({register}, {register})), ⟨decode_short_control_complete(JumpZero({fd})), ⟨{t}_decodes(next_rip(start, 5)), ⟨decode_short_control_complete(Jump({jd})), {false_decodes}⟩⟩⟩⟩"),
+                format!("⟨canonical_encoding_decodes(start, TestRR({register}, {register})), ⟨{jz_decodes}, ⟨{t}_decodes(next_rip(start, {head})), ⟨{jmp_decodes}, {false_decodes}⟩⟩⟩⟩"),
                 byte_length,
                 {
                     // The fixed pieces are literal too; conversion checks each
                     // against its few-byte encoding.
                     let r = encoding::register_code(*condition_register);
-                    let literal = [literal_bytes(&[0x48 | (r >> 3) | ((r >> 3) << 2), 0x85, 0xc0 | ((r & 7) << 3) | (r & 7)]),
-                        literal_bytes(&[0x74, *false_displacement]), literal_bytes(&[0xeb, *join_displacement])];
+                    let (jz_literal, jmp_literal) = if *near {
+                        let mut jz = vec![0x0f, 0x84]; jz.extend((fdn as u32).to_le_bytes());
+                        let mut jmp = vec![0xe9]; jmp.extend((jdn as u32).to_le_bytes());
+                        (literal_bytes(&jz), literal_bytes(&jmp))
+                    } else { (literal_bytes(&[0x74, fdn as u8]), literal_bytes(&[0xeb, jdn as u8])) };
+                    let literal = [literal_bytes(&[0x48 | (r >> 3) | ((r >> 3) << 2), 0x85, 0xc0 | ((r & 7) << 3) | (r & 7)]), jz_literal, jmp_literal];
                     let lit = |pieces: &[String; 3], yes: &str, no: &str| format!("{} ++ ({} ++ ({yes} ++ ({} ++ {no})))", pieces[0], pieces[1], pieces[2]);
                     let code = [fixed[0].1.clone(), fixed[1].1.clone(), fixed[2].1.clone()];
                     (lit(&literal, &format!("{t}_lit()"), &format!("{f}_lit()")),
                         trans(&format!("cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ ys => {}, {t}_bytes_are())", lit(&code, "ys", &format!("{f}_bytes()"))),
                             &format!("cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ zs => {}, {f}_bytes_are())", lit(&code, &format!("{t}_lit()"), "zs"))))
                 },
-                Box::new(move |reg| format!("structured_branch_property({frame_branch_args}, λ after => read_gpr({}, after.gprs) = read_gpr({}, before.gprs), {frame_t}_preserves({}, {frame_entry}, trivial), {frame_f}_preserves({}, {frame_entry}, trivial))", reg.heather_name(), reg.heather_name(), reg.heather_name(), reg.heather_name())))
+                Box::new(move |reg| format!("{frame_property}({frame_branch_args}, λ after => read_gpr({}, after.gprs) = read_gpr({}, before.gprs), {frame_t}_preserves({}, {frame_entry}, trivial), {frame_f}_preserves({}, {frame_entry}, trivial))", reg.heather_name(), reg.heather_name(), reg.heather_name(), reg.heather_name())))
         }
         _ => return Err(LoweringError::InvalidStructuredRegion("selected plan disagrees with region shape".into())),
     };

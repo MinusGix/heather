@@ -54,11 +54,14 @@ pub fn encode_structured(plan: &super::LoweredStructured) -> Vec<u8> {
             bytes.extend(encode_structured(continuation));
             bytes
         }
-        StructuredPlan::Conditional { condition_register, when_true, when_false, false_displacement, join_displacement } => {
+        StructuredPlan::Conditional { condition_register, when_true, when_false, false_displacement, join_displacement, near } => {
             let r = register_code(*condition_register);
-            let mut bytes = vec![0x48 | (r >> 3) | ((r >> 3) << 2), 0x85, 0xc0 | ((r & 7) << 3) | (r & 7), 0x74, *false_displacement];
+            let mut bytes = vec![0x48 | (r >> 3) | ((r >> 3) << 2), 0x85, 0xc0 | ((r & 7) << 3) | (r & 7)];
+            if *near { bytes.extend([0x0f, 0x84]); bytes.extend(false_displacement.to_le_bytes()); }
+            else { bytes.extend([0x74, *false_displacement as u8]); }
             bytes.extend(encode_structured(when_true));
-            bytes.extend([0xeb, *join_displacement]);
+            if *near { bytes.push(0xe9); bytes.extend(join_displacement.to_le_bytes()); }
+            else { bytes.extend([0xeb, *join_displacement as u8]); }
             bytes.extend(encode_structured(when_false));
             bytes
         }

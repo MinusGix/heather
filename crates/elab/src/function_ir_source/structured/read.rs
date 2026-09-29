@@ -46,12 +46,12 @@ pub fn generate_elaborated_read_x86(
     let literal = published.iter().map(|b| format!("@bitvec::BitVec::ofNat(8, {b})")).collect::<Vec<_>>().join(", ");
     declaration(&mut module, format!("{prefix}_published_bytes"), false, vec![], "List<BitVec(8)>".into(), format!("[{literal}]"), false);
     declaration(&mut module, format!("{prefix}_published_agrees"), false, vec![], format!("{prefix}_published_bytes() = {prefix}_bytes()"), "refl".into(), true);
-    let mut public: Vec<_> = reflected.parameters.iter().enumerate().map(|(id, ty)| Parameter::explicit(format!("arg{id}"), HeatherExpr::raw(ty.name()))).collect();
+    let mut public = reflected.declared_parameters();
     public.push(Parameter::explicit("access", HeatherExpr::raw("ByteReadAccess<M>")));
     public.push(Parameter::explicit("before", HeatherExpr::raw("MachineState<M>")));
-    let byte = format!("arg{byte_parameter}");
+    let byte = reflected.spelling(byte_parameter as usize);
     let entry = format!("byte_load_after({prefix}_load(), {byte}, before)");
-    let arguments = (0..reflected.parameters.len()).map(|id| format!("arg{id}")).collect::<Vec<_>>().join(", ");
+    let arguments = reflected.declared_arguments().iter().map(|a| a.render()).collect::<Vec<_>>().join(", ");
     let mut placements = Vec::new();
     for port in reflected.region.inputs() {
         let id = port.id;
@@ -60,7 +60,7 @@ pub fn generate_elaborated_read_x86(
             placements.push(format!("sym(byte_load_result({prefix}_load(), {byte}, before))"));
         } else {
             let name = format!("placed_{id}");
-            public.push(Parameter::explicit(&name, HeatherExpr::raw(format!("{} = read_gpr({register}, before.gprs)", encode(port.width, &vector(reflected.parameters[id as usize], &format!("arg{id}")))))));
+            public.push(Parameter::explicit(&name, HeatherExpr::raw(format!("{} = read_gpr({register}, before.gprs)", encode(port.width, &vector(reflected.parameters[id as usize], &reflected.spelling(id as usize)))))));
             placements.push(format!("trans({name}, sym(byte_load_preserves({prefix}_load(), {byte}, before, {register}, refl)))"));
         }
     }

@@ -87,8 +87,8 @@ fn run(plan: &LoweredStructured, regs: &mut BTreeMap<Gpr, u64>) {
         StructuredPlan::MultiDataflow(parts) => { for (_, dag) in parts { run_dag(dag, regs); } }
         StructuredPlan::Compose { prefix, continuation } => { run(prefix, regs); run(continuation, regs); }
         StructuredPlan::Sequence { prefix, continuation } => { run_dag(prefix, regs); run(continuation, regs); }
-        StructuredPlan::Conditional { condition_register, when_true, when_false, false_displacement, join_displacement } => {
-            assert_eq!(*false_displacement as usize, when_true.byte_length + 2);
+        StructuredPlan::Conditional { condition_register, when_true, when_false, false_displacement, join_displacement, near } => {
+            assert_eq!(*false_displacement as usize, when_true.byte_length + if *near { 5 } else { 2 });
             assert_eq!(*join_displacement as usize, when_false.byte_length);
             run(if regs[condition_register] != 0 { when_true } else { when_false }, regs);
         }
@@ -152,8 +152,10 @@ fn placement_ids_and_refusals_are_explicit() {
     }
 }
 
+// Register pressure declines at the boundary; an arm past rel8's reach takes
+// the near conditional (JZ rel32 / JMP rel32) instead of declining.
 #[test]
-fn nested_branch_range_and_pressure_decline_at_the_boundary() {
+fn nested_branch_pressure_declines_and_a_long_arm_goes_near() {
     let elab = source_elaborator();
     let reflected = reflect_elaborated_structured(&elab, "nested_true").unwrap();
     let error = lower_structured(&reflected.region, &placement(), &[Gpr::Rax], Gpr::Rax).unwrap_err().to_string();
@@ -169,8 +171,12 @@ fn nested_branch_range_and_pressure_decline_at_the_boundary() {
         previous = id;
     }
     leaf.nodes.push(Node::Sub { width: 64, output: 2, left: previous, right: 1 });
-    let error = lower_structured(&region, &placement(), SCRATCH, Gpr::Rax).unwrap_err().to_string();
-    assert!(error.contains("root.continuation:") && error.contains("rel8"), "{error}");
+    let plan = lower_structured(&region, &placement(), SCRATCH, Gpr::Rax).unwrap_or_else(|e| panic!("{e}"));
+    let StructuredPlan::Sequence { continuation, .. } = &plan.body else { panic!("expected a sequence") };
+    let StructuredPlan::Conditional { near, false_displacement, join_displacement, when_true, when_false, .. } = &continuation.body else { panic!("expected a conditional") };
+    assert!(*near, "a false arm of {} bytes is past rel8", when_false.byte_length);
+    assert_eq!(*false_displacement as usize, when_true.byte_length + 5);
+    assert_eq!(*join_displacement as usize, when_false.byte_length);
 }
 
 #[test]

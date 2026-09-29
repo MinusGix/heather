@@ -361,16 +361,6 @@ theorem resident_split_at<M>(fetch: FetchAccess<M>, memory: M, prefix, tail: Lis
     let parts = resident_split(fetch, memory, prefix, tail, next_rip(origin, offset), resident);
     ⟨parts.left, j(rip_compose(origin, offset, prefix.len()), λ address _ => CodeResident(fetch, memory, tail, address), parts.right)⟩
 }
-theorem near_not_taken_rip<M>(displacement: BitVec(32), state: MachineState<M>, selected: state.flags.zf = False):
-    execute_near_control(JumpZeroNear(displacement), state).rip = next_rip(state.rip, 6) {
-    j(sym(selected), λ zf _ => (match zf { False => next_rip(state.rip, 6), True => near_branch_target(state.rip, 6, displacement) }) =
-        next_rip(state.rip, 6), refl)
-}
-theorem near_taken_rip<M>(displacement: BitVec(32), state: MachineState<M>, selected: state.flags.zf = True):
-    execute_near_control(JumpZeroNear(displacement), state).rip = near_branch_target(state.rip, 6, displacement) {
-    j(sym(selected), λ zf _ => (match zf { False => next_rip(state.rip, 6), True => near_branch_target(state.rip, 6, displacement) }) =
-        near_branch_target(state.rip, 6, displacement), refl)
-}
 // TEST of a register with itself sets ZF exactly when its value is zero: the
 // test a loop over syscall returns makes of RAX.
 theorem test_self_zero(n: Nat): (x: BitVec(n)) → x.toNat() = 0 → is_zero_bits(n, x.band(x)) = True {
@@ -642,6 +632,115 @@ theorem branch_taken_close<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, re
                 rip_count(before.rip, sym(branch_bytes_len(register, fd, jd, yes, no)))))))⟩
 }
 
+// The near conditional's pieces: TEST, JZ rel32, the true arm, JMP rel32, the
+// false arm; the same lemmas at lengths 6 and 5.
+fn branch_near_bytes(register: Gpr, fd, jd: BitVec(32), yes, no: List<BitVec(8)>) → List<BitVec(8)> {
+    canonical_bytes(TestRR(register, register)) ++ (near_control_bytes(JumpZeroNear(fd)) ++
+        (yes ++ (near_control_bytes(JumpNear(jd)) ++ no)))
+}
+theorem branch_near_bytes_len(register: Gpr, fd, jd: BitVec(32), yes, no: List<BitVec(8)>):
+    branch_near_bytes(register, fd, jd, yes, no).len() = 3 + (6 + (yes.len() + (5 + no.len()))) {
+    let tail = near_control_bytes(JumpNear(jd)) ++ no;
+    let body = yes ++ tail;
+    let rest = near_control_bytes(JumpZeroNear(fd)) ++ body;
+    trans(List::len_append(canonical_bytes(TestRR(register, register)), rest),
+        cong_fn<Nat, Nat>(λ n => 3 + n, trans(List::len_append(near_control_bytes(JumpZeroNear(fd)), body),
+            cong_fn<Nat, Nat>(λ n => 6 + n, trans(List::len_append(yes, tail),
+                cong_fn<Nat, Nat>(λ n => yes.len() + n, List::len_append(near_control_bytes(JumpNear(jd)), no)))))))
+}
+theorem branch_near_count_fallthrough(y, n: Nat): ((3 + 6) + y) + (5 + n) = 3 + (6 + (y + (5 + n))) { omega }
+theorem branch_near_count_taken(y, n: Nat): (3 + (6 + (y + 5))) + n = 3 + (6 + (y + (5 + n))) { omega }
+
+fn branch_near_yes_at<M>(register: Gpr, before: MachineState<M>) → BitVec(64) {
+    next_rip(structured_test(register, before).rip, 6)
+}
+fn branch_near_jump_at<M>(register: Gpr, yes: List<BitVec(8)>, before: MachineState<M>) → BitVec(64) {
+    next_rip(branch_near_yes_at(register, before), yes.len())
+}
+fn branch_near_no_at<M>(register: Gpr, yes: List<BitVec(8)>, before: MachineState<M>) → BitVec(64) {
+    next_rip(branch_near_jump_at(register, yes, before), 5)
+}
+
+theorem branch_near_entry_fetched<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, register: Gpr, fd, jd: BitVec(32),
+    yes, no: List<BitVec(8)>, before: MachineState<M>,
+    resident: CodeResident(fetch, before.memory, branch_near_bytes(register, fd, jd, yes, no), before.rip)):
+    FetchedSteps(fetch, data, before, structured_near_entry(register, fd, before)) ∧
+    (CodeResident(fetch, before.memory, yes, branch_near_yes_at(register, before)) ∧
+    (CodeResident(fetch, before.memory, near_control_bytes(JumpNear(jd)), branch_near_jump_at(register, yes, before)) ∧
+    CodeResident(fetch, before.memory, no, branch_near_no_at(register, yes, before)))) {
+    let test_bytes = canonical_bytes(TestRR(register, register));
+    let jz = near_control_bytes(JumpZeroNear(fd));
+    let jmp = near_control_bytes(JumpNear(jd));
+    let r0 = resident_split(fetch, before.memory, test_bytes, jz ++ (yes ++ (jmp ++ no)), before.rip, resident);
+    let tested = structured_test(register, before);
+    let r1 = resident_split(fetch, before.memory, jz, yes ++ (jmp ++ no), tested.rip, r0.right);
+    let r2 = resident_split(fetch, before.memory, yes, jmp ++ no, next_rip(tested.rip, 6), r1.right);
+    let r3 = resident_split(fetch, before.memory, jmp, no, next_rip(next_rip(tested.rip, 6), yes.len()), r2.right);
+    let entry = structured_near_entry(register, fd, before);
+    ⟨fetched_steps_cons(fetch, data, before, tested, entry,
+        ordinary_fetched_step(fetch, data, TestRR(register, register), before, r0.left),
+        fetched_steps_one(fetch, data, tested, entry, near_fetched_step(fetch, data, JumpZeroNear(fd), tested, r1.left))),
+     ⟨r2.left, ⟨r3.left, r3.right⟩⟩⟩
+}
+
+theorem branch_near_taken_entry<M>(register: Gpr, fd: BitVec(32), yes: List<BitVec(8)>, before: MachineState<M>,
+    over: (start: BitVec(64)) → near_branch_target(start, 6, fd) = next_rip(start, 6 + (yes.len() + 5)),
+    taken: structured_test(register, before).flags.zf = True):
+    structured_near_entry(register, fd, before).rip = branch_near_no_at(register, yes, before) {
+    let tested = structured_test(register, before);
+    trans(near_taken_rip(fd, tested, taken),
+        trans(over(tested.rip), sym(trans(rip_compose(next_rip(tested.rip, 6), yes.len(), 5),
+            rip_compose(tested.rip, 6, yes.len() + 5)))))
+}
+
+theorem branch_near_fallthrough_close<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, register: Gpr, fd, jd: BitVec(32),
+    yes, no: List<BitVec(8)>, join: (start: BitVec(64)) → near_branch_target(start, 5, jd) = next_rip(start, 5 + no.len()),
+    before, done: MachineState<M>,
+    entry_steps: FetchedSteps(fetch, data, before, structured_near_entry(register, fd, before)),
+    arm_steps: FetchedSteps(fetch, data, structured_near_entry(register, fd, before), done),
+    jump_resident: CodeResident(fetch, before.memory, near_control_bytes(JumpNear(jd)), branch_near_jump_at(register, yes, before)),
+    done_memory: done.memory = before.memory, done_rip: done.rip = branch_near_jump_at(register, yes, before)):
+    FetchedSteps(fetch, data, before, execute_near_control(JumpNear(jd), done)) ∧
+    execute_near_control(JumpNear(jd), done).rip = next_rip(before.rip, branch_near_bytes(register, fd, jd, yes, no).len()) {
+    let entry = structured_near_entry(register, fd, before);
+    let after = execute_near_control(JumpNear(jd), done);
+    let y = yes.len();
+    let n = no.len();
+    let jump = near_fetched_step(fetch, data, JumpNear(jd), done,
+        resident_state(fetch, near_control_bytes(JumpNear(jd)), before.memory, branch_near_jump_at(register, yes, before), done,
+            done_memory, done_rip, jump_resident));
+    ⟨fetched_steps_trans(fetch, data, before, entry, after, entry_steps,
+        fetched_steps_trans(fetch, data, entry, done, after, arm_steps, fetched_steps_one(fetch, data, done, after, jump))),
+     trans(join(done.rip),
+        trans(cong_fn<BitVec(64), BitVec(64)>(λ address => next_rip(address, 5 + n), done_rip),
+        trans(cong_fn<BitVec(64), BitVec(64)>(λ address => next_rip(address, 5 + n),
+                trans(cong_fn<BitVec(64), BitVec(64)>(λ address => next_rip(address, y), rip_compose(before.rip, 3, 6)),
+                    rip_compose(before.rip, 3 + 6, y))),
+        trans(rip_compose(before.rip, (3 + 6) + y, 5 + n),
+            trans(rip_count(before.rip, branch_near_count_fallthrough(y, n)),
+                rip_count(before.rip, sym(branch_near_bytes_len(register, fd, jd, yes, no))))))))⟩
+}
+
+theorem branch_near_taken_close<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, register: Gpr, fd, jd: BitVec(32),
+    yes, no: List<BitVec(8)>, before, after: MachineState<M>,
+    entry_steps: FetchedSteps(fetch, data, before, structured_near_entry(register, fd, before)),
+    arm_steps: FetchedSteps(fetch, data, structured_near_entry(register, fd, before), after),
+    after_rip: after.rip = next_rip(branch_near_no_at(register, yes, before), no.len())):
+    FetchedSteps(fetch, data, before, after) ∧
+    after.rip = next_rip(before.rip, branch_near_bytes(register, fd, jd, yes, no).len()) {
+    let y = yes.len();
+    let n = no.len();
+    let tested = structured_test(register, before);
+    ⟨fetched_steps_trans(fetch, data, before, structured_near_entry(register, fd, before), after, entry_steps, arm_steps),
+     trans(after_rip,
+        trans(cong_fn<BitVec(64), BitVec(64)>(λ address => next_rip(address, n),
+            trans(rip_compose(next_rip(tested.rip, 6), y, 5), trans(rip_compose(tested.rip, 6, y + 5),
+                rip_compose(before.rip, 3, 6 + (y + 5))))),
+        trans(rip_compose(before.rip, 3 + (6 + (y + 5)), n),
+            trans(rip_count(before.rip, branch_near_count_taken(y, n)),
+                rip_count(before.rip, sym(branch_near_bytes_len(register, fd, jd, yes, no)))))))⟩
+}
+
 // ---- StructuredCode ----
 
 // A pure tree runs fetched from its start to `structured_after`, ending just
@@ -714,6 +813,32 @@ theorem structured_fetched<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, co
                         resident_state(fetch, structured_bytes(no), before.memory, branch_no_at(register, structured_bytes(yes), before),
                             entry, refl, entry_rip, parts.right.right.right));
                     branch_taken_close(fetch, data, register, fd, jd, structured_bytes(yes), structured_bytes(no), before,
+                        structured_after(no, entry), parts.left, arm.left,
+                        trans(arm.right, cong_fn<BitVec(64), BitVec(64)>(λ address => next_rip(address, structured_bytes(no).len()), entry_rip)))
+                })
+        },
+        CodeBranchNear(register, fd, jd, yes, no) => λ before layout resident => {
+            let parts = branch_near_entry_fetched(fetch, data, register, fd, jd, structured_bytes(yes), structured_bytes(no), before, resident);
+            let entry = structured_near_entry(register, fd, before);
+            let tested = structured_test(register, before);
+            structured_near_branch_cases(register, fd, jd, yes, no, before,
+                λ state => FetchedSteps(fetch, data, before, state) ∧
+                    state.rip = next_rip(before.rip, structured_bytes(CodeBranchNear(register, fd, jd, yes, no)).len()),
+                λ not_taken => {
+                    let entry_rip: (entry.rip = branch_near_yes_at(register, before)) = near_not_taken_rip(fd, tested, not_taken);
+                    let arm = structured_fetched(fetch, data, yes, entry, layout.right.right.left,
+                        resident_state(fetch, structured_bytes(yes), before.memory, branch_near_yes_at(register, before), entry, refl, entry_rip, parts.right.left));
+                    branch_near_fallthrough_close(fetch, data, register, fd, jd, structured_bytes(yes), structured_bytes(no), layout.right.left,
+                        before, structured_after(yes, entry), parts.left, arm.left, parts.right.right.left,
+                        pure_structured_memory(yes, entry),
+                        trans(arm.right, cong_fn<BitVec(64), BitVec(64)>(λ address => next_rip(address, structured_bytes(yes).len()), entry_rip)))
+                },
+                λ taken => {
+                    let entry_rip = branch_near_taken_entry(register, fd, structured_bytes(yes), before, layout.left, taken);
+                    let arm = structured_fetched(fetch, data, no, entry, layout.right.right.right,
+                        resident_state(fetch, structured_bytes(no), before.memory, branch_near_no_at(register, structured_bytes(yes), before),
+                            entry, refl, entry_rip, parts.right.right.right));
+                    branch_near_taken_close(fetch, data, register, fd, jd, structured_bytes(yes), structured_bytes(no), before,
                         structured_after(no, entry), parts.left, arm.left,
                         trans(arm.right, cong_fn<BitVec(64), BitVec(64)>(λ address => next_rip(address, structured_bytes(no).len()), entry_rip)))
                 })

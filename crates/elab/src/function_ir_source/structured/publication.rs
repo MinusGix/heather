@@ -26,6 +26,45 @@ fn observe_tree(expansion: &mut Expansion<'_>, region: &StructuredRegion, mut va
     observers: &[String], result_type: &str, observation_types: &[String]) -> Result<Observed, SourceError>
 {
     match region {
+        StructuredRegion::Dataflow(body) if expansion.record.is_some() => {
+            expansion.dataflow(body, &mut values)?;
+            let components = expansion.components();
+            let mut observed = Vec::new();
+            let mut scalars = Vec::new();
+            let mut leaves = Vec::new();
+            for (ty, port) in components.iter().zip(&body.outputs) {
+                let payload = operand(&values, port.id, ty.scalar_width()?)?.render();
+                observed.push(if port.width == 1 { bit(&payload) } else { payload.clone() });
+                let (scalar, leaf) = match ty {
+                    StructuredSourceType::Boolean => (bit(&payload), "refl".to_string()),
+                    StructuredSourceType::NatWord => {
+                        let (natural, proof) = expansion.natural(port.id)?;
+                        (natural.render(), proof.map_or_else(|| "refl".into(), |proof| proof.render()))
+                    }
+                    _ => (payload, "refl".to_string()),
+                };
+                scalars.push(HeatherExpr::raw(scalar));
+                leaves.push(leaf);
+            }
+            let value = expansion.assemble(&scalars).render();
+            match expansion.choice {
+                Some(choice) => {
+                    let tag = bit(&operand(&values, body.outputs[components.len()].id, 1)?.render());
+                    let payload = expansion.payload_name();
+                    let yes = format!("{}<{payload}>({value})", choice.constructors[1]);
+                    let no = format!("{}<{payload}>({value})", choice.constructors[0]);
+                    let expression = format!("match {tag} {{ False => {no}, True => {yes} }}");
+                    let proofs = observers.iter().enumerate().map(|(i, observer)| {
+                        let rhs = observed.get(i).cloned().unwrap_or_else(|| "selected".into());
+                        let leaf = leaves.get(i).map_or("refl", |leaf| leaf.as_str());
+                        format!("match {tag} as λ selected => {observer}(match selected {{ False => {no}, True => {yes} }}) = {rhs} {{ False => {leaf}, True => {leaf} }}")
+                    }).collect();
+                    observed.push(tag);
+                    Ok(Observed { expression, values: observed, proofs })
+                }
+                None => Ok(Observed { expression: value, values: observed, proofs: leaves }),
+            }
+        }
         StructuredRegion::Dataflow(body) => {
             expansion.dataflow(body, &mut values)?;
             let payload = operand(&values, body.outputs[0].id, expansion.result.scalar_width()?)?.render();
@@ -69,10 +108,12 @@ fn observe_tree(expansion: &mut Expansion<'_>, region: &StructuredRegion, mut va
             }
             let saved_result = expansion.result;
             let saved_choice = expansion.choice.take();
+            let saved_record = expansion.record.take();
             expansion.result = if port.width == 1 { StructuredSourceType::Boolean } else { StructuredSourceType::Word(port.width) };
             let result = expansion.region(prefix, values.clone())?;
             expansion.result = saved_result;
             expansion.choice = saved_choice;
+            expansion.record = saved_record;
             let result = if port.width == 1 { HeatherExpr::call("bitvec::BitVec::ofBool", [result]) } else { result };
             values.insert(port.id, (port.width, result));
             observe_tree(expansion, continuation, values, observers, result_type, observation_types)
@@ -105,14 +146,39 @@ pub fn generate_elaborated_typed_x86(
     module.raw("import x86_64_structured_block; import function_ir; import function_ir_x86_support; import x86_64; import x86_64_block; import bitvec; import bool; import list; import logic; import nat;");
     module.raw(generate_structured_source_expansion(&format!("{prefix}_source"), &reflected)?
         .replace("import bitvec;\n", "").replace("import bool;\n", ""));
-    let parameters: Vec<_> = reflected.parameters.iter().enumerate().map(|(i, ty)| Parameter::explicit(format!("arg{i}"), HeatherExpr::raw(ty.name()))).collect();
-    let arguments: Vec<_> = (0..parameters.len()).map(|i| HeatherExpr::name(format!("arg{i}"))).collect();
+    let parameters = reflected.declared_parameters();
+    let arguments = reflected.declared_arguments();
     let args = arguments.iter().map(|a| a.render()).collect::<Vec<_>>().join(", ");
-    let result_type = reflected.choice.as_ref().map_or_else(|| reflected.result.name(), |choice| format!("{}<{}>", choice.type_name, reflected.result.name()));
+    let result_type = reflected.result_type_name();
     let ports = reflected.region.outputs();
+    let components = reflected.result_components();
     let observers: Vec<_> = ports.iter().map(|port| format!("{prefix}_observe_{}", port.id)).collect();
     let observation_types: Vec<String> = ports.iter().map(|port| if port.width == 1 { "Bool".into() } else { format!("BitVec({})", port.width) }).collect();
     for (i, observer) in observers.iter().enumerate() {
+        if let Some(record) = &reflected.record {
+            // A record's field `i`, whichever constructor carries it; the
+            // port after the fields is the choice's discriminator.
+            let names = reflected.choice.as_ref().map(|choice| choice.constructors.clone().map(|name| name.rsplit("::").next().unwrap().to_string()));
+            let body = match (components.get(i), &names) {
+                (Some(ty), _) => {
+                    let field = &record.fields[i].0;
+                    let observe = |value: &str| match ty {
+                        StructuredSourceType::Word(1) => bit(value),
+                        StructuredSourceType::NatWord => vector(StructuredSourceType::NatWord, value),
+                        _ => value.into(),
+                    };
+                    match &names {
+                        Some([no, yes]) => observe(&format!("match result {{ {no}(payload) => payload.{field}, {yes}(payload) => payload.{field} }}")),
+                        None => observe(&format!("result.{field}")),
+                    }
+                }
+                (None, Some([no, yes])) => format!("match result {{ {no}(payload) => False, {yes}(payload) => True }}"),
+                (None, None) => return unsupported("a record result has no port past its fields"),
+            };
+            module.declaration(Declaration::function(observer, HeatherExpr::raw(&observation_types[i]), Block::expression(HeatherExpr::raw(body)))
+                .parameters(vec![Parameter::explicit("result", HeatherExpr::raw(&result_type))]));
+            continue;
+        }
         let observe = |value: &str| match reflected.result {
             StructuredSourceType::Word(1) => bit(value),
             StructuredSourceType::NatWord => vector(StructuredSourceType::NatWord, value),
@@ -132,14 +198,13 @@ pub fn generate_elaborated_typed_x86(
         module.declaration(Declaration::function(observer, HeatherExpr::raw(&observation_types[i]), Block::expression(HeatherExpr::raw(body)))
             .parameters(vec![Parameter::explicit("result", HeatherExpr::raw(&result_type))]));
     }
-    let initial = reflected.parameters.iter().enumerate().filter_map(|(id, ty)| ty.width().map(|width|
-        (id as u64, (width, HeatherExpr::raw(vector(*ty, &format!("arg{id}"))))))).collect();
+    let initial = reflected.initial_values();
     let mut expansion = Expansion { prefix: &format!("{prefix}_publication"), module: &mut module, next_name: 0, parameters: &parameters, arguments: &arguments, result: reflected.result, choice: reflected.choice.as_ref(),
-        naturals: natural_inputs(&reflected.parameters), constants: BTreeMap::new(), sources: &reflected.sources, zeros: Default::default(), tests: Default::default() };
+        record: reflected.record.as_ref(), naturals: natural_inputs(&reflected), constants: BTreeMap::new(), sources: &reflected.sources, zeros: Default::default(), tests: Default::default() };
     let observed = observe_tree(&mut expansion, &reflected.region, initial, &observers, &result_type, &observation_types)?;
     let mut cases = "@bitvec::BitVec::zero(width)".to_string();
     for (id, ty) in reflected.parameters.iter().enumerate().rev() {
-        let value = ty.width().map_or_else(|| "@bitvec::BitVec::zero(width)".into(), |width| at_width(width, &vector(*ty, &format!("arg{id}")), 0));
+        let value = ty.width().map_or_else(|| "@bitvec::BitVec::zero(width)".into(), |width| at_width(width, &vector(*ty, &reflected.spelling(id)), 0));
         cases = format!("match id{id} {{ Zero => {value}, Succ(id{}) => {cases} }}", id + 1);
     }
     module.declaration(Declaration::function(format!("{prefix}_typed_values"), HeatherExpr::raw("Valuation()"), Block::expression(HeatherExpr::raw(format!("λ width id0 => {cases}")))).parameters(parameters.clone()));
@@ -151,7 +216,7 @@ pub fn generate_elaborated_typed_x86(
     for port in reflected.region.inputs() {
         let id = port.id;
         let name = format!("placed_{id}");
-        public.push(Parameter::explicit(&name, HeatherExpr::raw(format!("{} = read_gpr({}, before.gprs)", encode(port.width, &vector(reflected.parameters[id as usize], &format!("arg{id}"))), inputs[&id].heather_name()))));
+        public.push(Parameter::explicit(&name, HeatherExpr::raw(format!("{} = read_gpr({}, before.gprs)", encode(port.width, &vector(reflected.parameters[id as usize], &reflected.spelling(id as usize))), inputs[&id].heather_name()))));
         placed_args.push_str(&format!(", {name}"));
         call_args.push_str(&format!(", {name}"));
     }

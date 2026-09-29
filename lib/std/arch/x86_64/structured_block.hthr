@@ -13,6 +13,10 @@ inductive StructuredCode {
     CodeSequence(prefix: StructuredCode, continuation: StructuredCode),
     CodeBranch(register: Gpr, false_displacement: BitVec(8),
         join_displacement: BitVec(8), when_true: StructuredCode, when_false: StructuredCode),
+    // The same conditional over arms too long for rel8: JZ rel32 over the true
+    // arm and JMP rel32 over the false one (docs/native-wc-design.md §4.5).
+    CodeBranchNear(register: Gpr, false_displacement: BitVec(32),
+        join_displacement: BitVec(32), when_true: StructuredCode, when_false: StructuredCode),
 }
 
 fn structured_bytes(code: StructuredCode) → List<BitVec(8)> {
@@ -23,6 +27,10 @@ fn structured_bytes(code: StructuredCode) → List<BitVec(8)> {
             canonical_bytes(TestRR(register, register)) ++
             short_control_bytes(JumpZero(false_displacement)) ++ structured_bytes(yes) ++
             short_control_bytes(Jump(join_displacement)) ++ structured_bytes(no),
+        CodeBranchNear(register, false_displacement, join_displacement, yes, no) =>
+            canonical_bytes(TestRR(register, register)) ++
+            near_control_bytes(JumpZeroNear(false_displacement)) ++ structured_bytes(yes) ++
+            near_control_bytes(JumpNear(join_displacement)) ++ structured_bytes(no),
     }
 }
 
@@ -45,6 +53,12 @@ fn structured_branch_entry<M>(register: Gpr, displacement: BitVec(8),
     execute_short_control(JumpZero(displacement), structured_test(register, before))
 }
 
+fn structured_near_entry<M>(register: Gpr, displacement: BitVec(32),
+    before: MachineState<M>) → MachineState<M>
+{
+    execute_near_control(JumpZeroNear(displacement), structured_test(register, before))
+}
+
 fn structured_after<M>(code: StructuredCode, before: MachineState<M>) → MachineState<M> {
     match code {
         CodeBlock(instructions) => execute_block_normal(instructions, before),
@@ -53,6 +67,13 @@ fn structured_after<M>(code: StructuredCode, before: MachineState<M>) → Machin
             let entry = structured_branch_entry(register, false_displacement, before);
             match structured_test(register, before).flags.zf {
                 False => execute_short_control(Jump(join_displacement), structured_after(yes, entry)),
+                True => structured_after(no, entry),
+            }
+        },
+        CodeBranchNear(register, false_displacement, join_displacement, yes, no) => {
+            let entry = structured_near_entry(register, false_displacement, before);
+            match structured_test(register, before).flags.zf {
+                False => execute_near_control(JumpNear(join_displacement), structured_after(yes, entry)),
                 True => structured_after(no, entry),
             }
         },
@@ -76,6 +97,12 @@ fn StructuredLayout(code: StructuredCode) → Type {
             (((start: BitVec(64)) → short_branch_target(start, join_displacement) =
                 next_rip(start, 2 + structured_bytes(no).len())) ∧
             (StructuredLayout(yes) ∧ StructuredLayout(no))),
+        CodeBranchNear(_, false_displacement, join_displacement, yes, no) =>
+            ((start: BitVec(64)) → near_branch_target(start, 6, false_displacement) =
+                next_rip(start, 6 + (structured_bytes(yes).len() + 5))) ∧
+            (((start: BitVec(64)) → near_branch_target(start, 5, join_displacement) =
+                next_rip(start, 5 + structured_bytes(no).len())) ∧
+            (StructuredLayout(yes) ∧ StructuredLayout(no))),
     }
 }
 
@@ -91,6 +118,13 @@ fn StructuredDecodes(code: StructuredCode) → BitVec(64) → Type {
             (StructuredDecodes(yes, next_rip(start, 5)) ∧
             (ShortControlDecodes(Jump(join_displacement)) ∧
             StructuredDecodes(no, next_rip(start, 5 + structured_bytes(yes).len() + 2))))),
+        CodeBranchNear(register, false_displacement, join_displacement, yes, no) => λ start =>
+            DecodedAt(encoded_at(start, TestRR(register, register)),
+                decoded_canonical(TestRR(register, register))) ∧
+            (NearControlDecodes(JumpZeroNear(false_displacement)) ∧
+            (StructuredDecodes(yes, next_rip(start, 9)) ∧
+            (NearControlDecodes(JumpNear(join_displacement)) ∧
+            StructuredDecodes(no, next_rip(start, 9 + structured_bytes(yes).len() + 5))))),
     }
 }
 
@@ -161,6 +195,61 @@ theorem structured_branch_read<M>(register: Gpr, fd, jd: BitVec(8),
         }).gprs) = match selected {
             False => read_gpr(output, structured_after(yes, structured_branch_entry(register, fd, before)).gprs),
             True => read_gpr(output, structured_after(no, structured_branch_entry(register, fd, before)).gprs),
+        }
+    { False => refl, True => refl }
+}
+
+// The near conditional's twins of the three lemmas above.
+theorem structured_near_branch_property<M>(register: Gpr, fd, jd: BitVec(32),
+    yes, no: StructuredCode, before: MachineState<M>,
+    property: MachineState<M> → Type,
+    true_case: property(execute_near_control(JumpNear(jd),
+        structured_after(yes, structured_near_entry(register, fd, before)))),
+    false_case: property(structured_after(no, structured_near_entry(register, fd, before)))):
+    property(structured_after(CodeBranchNear(register, fd, jd, yes, no), before))
+{
+    match structured_test(register, before).flags.zf as λ selected =>
+        property(match selected {
+            False => execute_near_control(JumpNear(jd),
+                structured_after(yes, structured_near_entry(register, fd, before))),
+            True => structured_after(no, structured_near_entry(register, fd, before)),
+        }) { False => true_case, True => false_case }
+}
+
+theorem structured_near_branch_cases<M>(register: Gpr, fd, jd: BitVec(32),
+    yes, no: StructuredCode, before: MachineState<M>,
+    property: MachineState<M> → Type,
+    true_case: (structured_test(register, before).flags.zf = False) →
+        property(execute_near_control(JumpNear(jd),
+            structured_after(yes, structured_near_entry(register, fd, before)))),
+    false_case: (structured_test(register, before).flags.zf = True) →
+        property(structured_after(no, structured_near_entry(register, fd, before)))):
+    property(structured_after(CodeBranchNear(register, fd, jd, yes, no), before))
+{
+    (match structured_test(register, before).flags.zf as λ selected =>
+        (structured_test(register, before).flags.zf = selected) →
+        property(match selected {
+            False => execute_near_control(JumpNear(jd),
+                structured_after(yes, structured_near_entry(register, fd, before))),
+            True => structured_after(no, structured_near_entry(register, fd, before)),
+        }) { False => true_case, True => false_case })(refl)
+}
+
+theorem structured_near_branch_read<M>(register: Gpr, fd, jd: BitVec(32),
+    yes, no: StructuredCode, before: MachineState<M>, output: Gpr):
+    read_gpr(output, structured_after(CodeBranchNear(register, fd, jd, yes, no), before).gprs) =
+        match structured_test(register, before).flags.zf {
+            False => read_gpr(output, structured_after(yes, structured_near_entry(register, fd, before)).gprs),
+            True => read_gpr(output, structured_after(no, structured_near_entry(register, fd, before)).gprs),
+        }
+{
+    match structured_test(register, before).flags.zf as λ selected =>
+        read_gpr(output, (match selected {
+            False => execute_near_control(JumpNear(jd), structured_after(yes, structured_near_entry(register, fd, before))),
+            True => structured_after(no, structured_near_entry(register, fd, before)),
+        }).gprs) = match selected {
+            False => read_gpr(output, structured_after(yes, structured_near_entry(register, fd, before)).gprs),
+            True => read_gpr(output, structured_after(no, structured_near_entry(register, fd, before)).gprs),
         }
     { False => refl, True => refl }
 }
