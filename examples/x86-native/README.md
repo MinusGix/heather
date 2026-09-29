@@ -305,3 +305,32 @@ library proves that for every count below 10000 the stored word holds exactly
 that line past its leading zeros. The word is stored with a `mov [r8], rax`
 (`lib/std/arch/x86_64/store.hthr`) and written with `write(1, …)`
 (`lib/elf64_read_print.hthr`).
+
+## `wc`: lines, words and bytes
+
+`wc.hthr` is plain `wc` (docs/native-wc-design.md). Its step folds a record,
+`WcState { lines, words, bytes, inside }`, over each chunk; the state stays in
+R13, R14, R15 and R8 across the reads, so a word split between two reads is
+counted once. At the end the program prints the first three fields as GNU
+`wc` prints them on a pipe, seven columns each:
+
+```sh
+(ulimit -v 8388608 -t 3600 -c 0; target/release/heather build-x86 \
+  examples/x86-native/wc.hthr count_wc --read-loop --fields --needle 10 \
+  --advance wc_body_advances --spec wc_lines --spec wc_words --spec wc_bytes \
+  --computes count_wc_input --folds wc_body_folds -o target/x86-native/wc \
+  --cache-dir target/native-images)
+printf 'one two\nthree\n' | ./target/x86-native/wc
+```
+
+Expected output: `      2       3      14`, and exit status 0.
+
+`--fields` takes `--spec` three times, in the order printed. What they mean is
+stated as a reader checks it: `wc_lines` counts the newlines, `wc_words` the
+non-empty pieces of the input cut at every whitespace byte (the C locale's
+POSIX set, as `POSIXLY_CORRECT` has it), and `wc_bytes` the length.
+`count_wc_input` proves the fold from the zero state computes them. The
+certificate's `count_wc_native_runs` ends the trace with
+`write_events(three_fields_line(wc_lines(input), wc_words(input), wc_bytes(input)), …)`
+for counts below 10^7. The program may import the bundled proof library by
+its bundled names (here `bitvec_omega`), which need not exist as files.

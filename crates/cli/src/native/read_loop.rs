@@ -79,20 +79,20 @@ pub(super) fn generate_loop(elab: &Elaborator, scope: &str, prefix: &str, progra
 }
 
 // A near jump's bytes: JZ (0F 84), JS (0F 88) or JMP (E9), then rel32.
-fn near(opcode: &[u8], displacement: u32) -> Vec<u8> { [opcode, &displacement.to_le_bytes()[..]].concat() }
-fn forward(distance: usize) -> u32 { u32::try_from(distance).expect("the program fits a page") }
-fn backward(distance: usize) -> u32 { 0u32.wrapping_sub(forward(distance)) }
+pub(super) fn near(opcode: &[u8], displacement: u32) -> Vec<u8> { [opcode, &displacement.to_le_bytes()[..]].concat() }
+pub(super) fn forward(distance: usize) -> u32 { u32::try_from(distance).expect("the program fits a page") }
+pub(super) fn backward(distance: usize) -> u32 { 0u32.wrapping_sub(forward(distance)) }
 
 // TEST RAX, RAX: the lowering's encoder has no TEST of its own; the
 // certificate checks these bytes against the model's encoding.
-const TEST: [u8; 3] = [0x48, 0x85, 0xc0];
+pub(super) const TEST: [u8; 3] = [0x48, 0x85, 0xc0];
 
 // A failed syscall's path (docs/native-syscall-failures-design.md §4):
 // RAX + 4 is zero exactly at -EINTR, which retries; otherwise exit(1).
-fn retry_block() -> Vec<u8> {
+pub(super) fn retry_block() -> Vec<u8> {
     super::encode(&[Instruction::MovRI { destination: Gpr::Rbx, immediate: 4 }, Instruction::AddRR { destination: Gpr::Rax, source: Gpr::Rbx }])
 }
-fn fail_block() -> Vec<u8> {
+pub(super) fn fail_block() -> Vec<u8> {
     super::encode(&[Instruction::MovRI { destination: Gpr::Rdi, immediate: 1 }, Instruction::MovRI { destination: Gpr::Rax, immediate: 60 }])
 }
 
@@ -124,7 +124,7 @@ fn pieces(needle: u8, loop_len: usize) -> Pieces {
         retry, rjz: near(&[0x0f, 0x84], rd), fail, ed, sd, bd, rd }
 }
 
-fn literal(bytes: &[u8]) -> String {
+pub(super) fn literal(bytes: &[u8]) -> String {
     format!("[{}]", bytes.iter().map(|b| format!("@bitvec::BitVec::ofNat(8, {b})")).collect::<Vec<_>>().join(", "))
 }
 
@@ -149,35 +149,11 @@ fn certify_file(module: &mut Module, prefix: &str, program: &Program, parts: &Pi
     for (name, bytes) in fixed.iter().map(|(n, b)| (*n, b.as_slice())).chain(tail.iter().copied()) {
         module.raw(format!("fn {prefix}_{name}_written() → List<BitVec(8)> {{ {} }}", literal(bytes)));
     }
-    let size = file.len();
-    super::byte_chain(module, &format!("{prefix}_header"), &file[..232]);
+    module.raw(format!("fn {prefix}_jumps() → EofJumps {{ EofJumps(@bitvec::BitVec::ofNat(32, {}), @bitvec::BitVec::ofNat(32, {}), \
+        @bitvec::BitVec::ofNat(32, {}), @bitvec::BitVec::ofNat(32, {})) }}", parts.ed, parts.sd, parts.bd, parts.rd));
+    module.raw(format!("theorem {prefix}_loop_written(): {prefix}_bytes() = {prefix}_loop_bytes_written() {{ refl }}"));
+    image_facts(module, prefix, code_term, spelled, chain, file, None);
     module.raw(format!("\
-fn {prefix}_jumps() → EofJumps {{ EofJumps(@bitvec::BitVec::ofNat(32, {ed}), @bitvec::BitVec::ofNat(32, {sd}),
-    @bitvec::BitVec::ofNat(32, {bd}), @bitvec::BitVec::ofNat(32, {rd})) }}
-theorem {prefix}_header_length(): {prefix}_header().len() = 232 {{ refl }}
-theorem {prefix}_loop_written(): {prefix}_bytes() = {prefix}_loop_bytes_written() {{ refl }}
-// The code as the producer wrote it: each fixed piece's encoding, and the
-// published bytes of what it generated.
-theorem {prefix}_code_written(): {code_term} = {spelled} {{ {chain} }}
-theorem {prefix}_fits(): 232 + {code_term}.len() <= 65536 {{
-    j(sym({prefix}_code_written()), λ code _ => 232 + code.len() <= 65536, Nat::leb_sound(232 + ({spelled}).len(), 65536, trivial))
-}}
-// The file is the read profile's header, then the program.
-fn {prefix}_file() → List<BitVec(8)> {{ {prefix}_header() ++ {code_term} }}
-fn {prefix}_image() → IoElfImage({code_term}) {{
-    IoElfImage(j(sym({prefix}_code_written()), λ code _ => 0 < code.len(), Nat::leb_sound(1, ({spelled}).len(), trivial)),
-        elf_byte({low}), elf_byte({high}),
-        refl)
-}}
-theorem {prefix}_file_correct(): {prefix}_file() = io_elf_bytes({code_term}, {prefix}_image()) {{ refl }}
-theorem {prefix}_written(): {prefix}_file() = {prefix}_header() ++ ({spelled}) {{
-    cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ code => {prefix}_header() ++ code, {prefix}_code_written())
-}}
-theorem {prefix}_resident(): (page: Nat → BitVec(8)) → CodeResident(io_fetch_access(), IoMemory({prefix}_file(), page), {code_term},
-    @bitvec::BitVec::ofNat(64, 0x4000e8)) {{
-    eof_file_resident({prefix}_header(), {code_term}, {prefix}_header_length(), {prefix}_fits())
-}}
-
 // Where the jumps land: JZ past the chunk's code and the failure path to the
 // tail, JS past the chunk's code to the failure path, JMP and the retry's JZ
 // back to the read. Closed facts about the written displacements.
@@ -197,7 +173,55 @@ theorem {prefix}_retry_closes(): eof_retry_span({needle}, {prefix}_bytes()) + 6 
     j(sym({prefix}_loop_written()), λ b _ => eof_retry_span({needle}, b) + 6 + {prefix}_jumps().rd.sign_extend(32).toNat() = Nat::pow(2, 64),
         refl)
 }}
-", low = size & 255, high = size >> 8, ed = parts.ed, sd = parts.sd, bd = parts.bd, rd = parts.rd));
+"));
+}
+
+/// The written file's facts, for any layout of the read profile: the header
+/// the producer wrote, the code as written (`chain` proves `code_term =
+/// spelled`), that it fits the file's window, the image, and residency.
+///
+/// `length` is the code's length and a proof of `code_term.len() = length`,
+/// for code too long to measure by evaluation; without it the length is
+/// read off the spelled code.
+pub(super) fn image_facts(module: &mut Module, prefix: &str, code_term: &str, spelled: &str, chain: &str, file: &[u8],
+    length: Option<(usize, String)>) {
+    let size = file.len();
+    super::byte_chain(module, &format!("{prefix}_header"), &file[..232]);
+    let (measured, fits, nonempty, sized) = match length {
+        Some((total, proof)) => (
+            format!("theorem {prefix}_code_len(): {code_term}.len() = {total} {{ {proof} }}\n"),
+            format!("j(sym({prefix}_code_len()), λ n _ => 232 + n <= 65536, Nat::leb_sound(232 + {total}, 65536, trivial))"),
+            format!("j(sym({prefix}_code_len()), λ n _ => 0 < n, Nat::leb_sound(1, {total}, trivial))"),
+            format!("j(sym({prefix}_code_len()), λ n _ => 232 + n = elf_size16(elf_byte({}), elf_byte({})), refl)", size & 255, size >> 8)),
+        None => (String::new(),
+            format!("j(sym({prefix}_code_written()), λ code _ => 232 + code.len() <= 65536, Nat::leb_sound(232 + ({spelled}).len(), 65536, trivial))"),
+            format!("j(sym({prefix}_code_written()), λ code _ => 0 < code.len(), Nat::leb_sound(1, ({spelled}).len(), trivial))"),
+            format!("j(sym({prefix}_code_written()), λ code _ => 232 + code.len() = elf_size16(elf_byte({}), elf_byte({})), refl)", size & 255, size >> 8)),
+    };
+    module.raw(format!("\
+theorem {prefix}_header_length(): {prefix}_header().len() = 232 {{ refl }}
+// The code as the producer wrote it: each fixed piece's encoding, and the
+// published bytes of what it generated.
+theorem {prefix}_code_written(): {code_term} = {spelled} {{ {chain} }}
+{measured}theorem {prefix}_code_fits(): 232 + {code_term}.len() <= 65536 {{
+    {fits}
+}}
+// The file is the read profile's header, then the program.
+fn {prefix}_file() → List<BitVec(8)> {{ {prefix}_header() ++ {code_term} }}
+fn {prefix}_image() → IoElfImage({code_term}) {{
+    IoElfImage({nonempty},
+        elf_byte({low}), elf_byte({high}),
+        {sized})
+}}
+theorem {prefix}_file_correct(): {prefix}_file() = io_elf_bytes({code_term}, {prefix}_image()) {{ refl }}
+theorem {prefix}_written(): {prefix}_file() = {prefix}_header() ++ ({spelled}) {{
+    cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ code => {prefix}_header() ++ code, {prefix}_code_written())
+}}
+theorem {prefix}_resident(): (page: Nat → BitVec(8)) → CodeResident(io_fetch_access(), IoMemory({prefix}_file(), page), {code_term},
+    @bitvec::BitVec::ofNat(64, 0x4000e8)) {{
+    eof_file_resident({prefix}_header(), {code_term}, {prefix}_header_length(), {prefix}_code_fits())
+}}
+", low = size & 255, high = size >> 8));
 }
 
 // The arguments both claims pass the library, up to the program's facts.

@@ -1,6 +1,6 @@
 # `wc`: a program the `wc -l` template can't express — design
 
-Status: **decisions taken 2026-09-28 (§8); slice A landed 2026-09-28 (§3.1); slice B landed 2026-09-29 (§4.5–4.8); slice C landed 2026-09-29 (§5.1–5.2); slice D next.** Owner: `issues/native-wc.md`.
+Status: **decisions taken 2026-09-28 (§8); slice A landed 2026-09-28 (§3.1); slice B landed 2026-09-29 (§4.5–4.8); slice C landed 2026-09-29 (§5.1–5.2); slice D landed 2026-09-29 (§6.1).** Owner: `issues/native-wc.md`.
 Builds on `docs/native-read-until-eof-design.md` (the read loop and its
 additive contract), `docs/native-syscall-failures-design.md` (failure paths),
 `docs/fetched-step-determinism-design.md` (claims universal over runs) and
@@ -432,15 +432,68 @@ stores the high word one byte early, or puts the tail in R12).
 
 `examples/x86-native/wc.hthr`:
 
-- `WcState { lines: Nat, words: Nat, inside: Bool }`, starting at zeros and
-  `False` (bytes are the process's total, §4.4).
+- `WcState { lines, words, bytes: Nat, inside: Bool }`, starting at zeros
+  and `False`. The bytes stay a field (§4.8 keeps the whole state in
+  place); the three counts come first, in the order printed.
 - `wc_body`: on whitespace, `inside := False`, and `lines += 1` at a newline;
-  otherwise `words += 1` when not `inside`, then `inside := True`. It is
-  cursor-free and never breaks.
-- The specs: `lines`, `words` (split at whitespace, count the non-empty
-  pieces), and `len`; `--folds` proves they are the fold's fields.
-- The build: `--read-loop --fields` (the name is open), from one source file,
-  with no count-specific flags.
+  otherwise `words += 1` when not `inside`, then `inside := True`; `bytes += 1`
+  always. It is cursor-free and never breaks.
+- The specs, as a reader checks them: `wc_lines` (the newlines, a `filter`),
+  `wc_words` (the pieces of `wc_split`, the input cut at every whitespace
+  byte, that aren't empty) and `wc_bytes` (the length). `count_wc_input`
+  proves they are the first three fields of the fold from the zero state.
+
+### 6.1 As landed (2026-09-29)
+
+**V5.** The fold proof is structural over the input with the state general:
+`wc_step_is` rewrites the loop's step to `wc_next(space, newline, s)`, a
+function of the two classifications, so each case lemma matches on plain
+`Bool`s. Lines need `newline_is_space` (by `bitvec_omega`'s bridges and
+`omega`). Words carry the invariant
+`fold.words + inside_words(s.inside, pieces) = s.words + words(pieces)`: a
+word the state is already inside continues in the first piece and was
+counted when it began. `omega` can't use a record field of a local as an
+atom (`issues/omega-record-projection-atoms.md`), so the arithmetic goes through
+five helper lemmas over plain numbers. The file checks in seconds.
+
+**The build: `--read-loop --fields`**, with `--spec` given three times in
+the order printed (`crates/cli/src/native/read_fields.rs`). The producer:
+
+- reflects the loop's record (three `Nat` counts and at most one more field,
+  in R13, R14, R15 and R8) and generates the record loop at the process's
+  registers;
+- generates `field_low` and `field_high` at the tail's registers as two
+  fixed-name modules, checked before the program's, like `--print`'s;
+- states what every record gives the process: `_framed` (from `_rep_moves`),
+  `_init` and `_initialised`, `_counts` (the three words in R13–R15);
+- lays out `read_fields_code`. The loop's bytes stay its published literal
+  tree: the code is spelled around `_bytes()`, so no flat literal is
+  compared against the tree (the depth trap) and the jump facts are `refl`;
+- measures the code without evaluating it. The read profile read the file's
+  size off the spelled code, which walks every byte; with three copies of the
+  formatter that ran past the fuel, and a length chain generated over the
+  closed pieces was no better (unification whnf'd the closed sums, which
+  evaluates the formatter's encoding). The library proves the length once
+  over open parts (`read_fields_code_len`, from `len_append`), and the
+  certificate instantiates it with the formatter's `_byte_length` lemmas
+  (`_code_len`); `image_facts` takes that proof. `_fits` was renamed
+  `_code_fits`: the record loop's invariant already has the name;
+- concludes with `read_fields_spec_runs`, the library claim restated over the
+  three specs through the program's `computes`.
+
+Replaying the certificate's image decodes the loop's byte tree recursively;
+in the test profile that overflowed the 8 MiB main thread, so `build-x86` now
+runs on a thread with its own large stack
+(`issues/module-image-decode-depth-vs-stack.md`).
+
+A program may import the bundled proof library by its bundled names
+(`bitvec_omega`), which the loader leaves to the builder when no file
+answers them (`loader::load_providing`).
+
+Test: `crates/cli/tests/native_wc.rs` (a build naming the specs in another
+order is refused; the executable is compared with the counts and the host's
+`LC_ALL=C POSIXLY_CORRECT=1 wc` on files, pipes and bursts that split
+words; failed reads and writes exit 1).
 
 ## 7. Probes, before any design text is final
 

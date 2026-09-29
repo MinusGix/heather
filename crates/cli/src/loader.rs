@@ -52,6 +52,26 @@ pub fn load(root: &Path, search: &[PathBuf]) -> Result<Vec<Module>, LoadError> {
     load_many(std::slice::from_ref(&root), search)
 }
 
+/// Load one root whose imports may also name modules the caller supplies
+/// itself (the native builder's bundled proof library): an import of a
+/// `provided` name that no file answers is left for the caller, which checks
+/// those modules before the closure. A file that does answer is loaded as
+/// usual, so the caller can still compare it with its own copy.
+pub fn load_providing(root: &Path, search: &[PathBuf], provided: &[&str]) -> Result<Vec<Module>, LoadError> {
+    let mut w = Walk {
+        search,
+        search_fallback: &[],
+        overlays: &HashMap::new(),
+        provided,
+        done: HashMap::new(),
+        stack: Vec::new(),
+        out: Vec::new(),
+        by_name: HashMap::new(),
+    };
+    w.visit(root)?;
+    Ok(w.out)
+}
+
 /// Load one root from an in-memory source buffer while reading its imports
 /// from disk. Resident editor clients use this so diagnostics describe the
 /// text the user can see, including changes that have not been saved yet.
@@ -101,6 +121,7 @@ fn load_many_inner(
         search,
         search_fallback: fallback,
         overlays,
+        provided: &[],
         done: HashMap::new(),
         stack: Vec::new(),
         out: Vec::new(),
@@ -118,6 +139,8 @@ struct Walk<'a> {
     /// Canonical path → editor buffer. At present the public editor API
     /// overlays one root; keeping it a map makes recursive visits unambiguous.
     overlays: &'a HashMap<PathBuf, String>,
+    /// Module names supplied by the caller, never resolved to files.
+    provided: &'a [&'a str],
     /// Canonical path → module name. Dedup is by **path**, so a diamond costs
     /// one elaboration and two spellings of one file are one module.
     done: HashMap<PathBuf, String>,
@@ -179,7 +202,11 @@ impl Walk<'_> {
                     if imp.module == heather_elab::PRELUDE_MODULE {
                         continue;
                     }
-                    v.push((imp.module.clone(), self.resolve(&imp.module, &canon)?));
+                    match self.resolve(&imp.module, &canon) {
+                        Ok(path) => v.push((imp.module.clone(), path)),
+                        Err(_) if self.provided.contains(&imp.module.as_str()) => {}
+                        Err(e) => return Err(e),
+                    }
                 }
                 v
             }

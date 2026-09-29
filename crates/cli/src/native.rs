@@ -17,16 +17,32 @@ mod elf;
 mod calls;
 mod order;
 mod read_loop;
+mod read_fields;
 
 mod support;
 use support::SUPPORT;
 
 pub fn run(args: &[String]) -> ExitCode {
-    report(compile(args, false))
+    report(on_deep_stack(args, false))
 }
 
 pub fn build(args: &[String]) -> ExitCode {
-    report(compile(args, true))
+    report(on_deep_stack(args, true))
+}
+
+/// The main thread's stack is the platform's (8 MiB on Linux), and replaying a
+/// certificate's image decodes each term recursively, to the image format's
+/// depth budget. A program's published byte tree is a right spine hundreds of
+/// appends deep, and in the test profile its decoding overflowed that stack
+/// (issues/module-image-decode-depth-vs-stack.md). The whole build runs on a
+/// thread whose stack is sized for the budget.
+const COMPILE_STACK_BYTES: usize = 256 << 20;
+
+fn on_deep_stack(args: &[String], executable: bool) -> Result<(), String> {
+    let args = args.to_vec();
+    std::thread::Builder::new().name("build-x86".into()).stack_size(COMPILE_STACK_BYTES)
+        .spawn(move || compile(&args, executable)).map_err(|e| format!("cannot start the build thread: {e}"))?
+        .join().unwrap_or_else(|panic| std::panic::resume_unwind(panic))
 }
 
 fn report(result: Result<(), String>) -> ExitCode {
@@ -54,7 +70,9 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     let mut callable_caller = false;
     let mut read_loop = false;
     let mut print = false;
-    let (mut needle, mut advance, mut spec, mut computes, mut folds) = (None, None, None, None, None);
+    let mut fields = false;
+    let (mut needle, mut advance, mut computes, mut folds) = (None, None, None, None);
+    let mut specs: Vec<String> = Vec::new();
     let mut timings = None;
     let mut kernel_workers = None;
     let mut search = vec![PathBuf::from("lib/std"), PathBuf::from("lib")];
@@ -64,12 +82,13 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
             "--callable-caller" if executable => { callable_caller = true; }
             "--read-loop" if executable => { read_loop = true; }
             "--print" if executable => { print = true; }
+            "--fields" if executable => { fields = true; }
             "--needle" | "--advance" | "--spec" | "--computes" | "--folds" if executable => {
                 let value = args.next().ok_or_else(|| format!("{arg} needs a value"))?.clone();
                 match arg.as_str() {
                     "--needle" => needle = Some(u8::try_from(elf::parse_argument(&value)?).map_err(|_| "--needle must be a byte".to_string())?),
                     "--advance" => advance = Some(value),
-                    "--spec" => spec = Some(value),
+                    "--spec" => specs.push(value),
                     "--folds" => folds = Some(value),
                     _ => computes = Some(value),
                 }
@@ -105,17 +124,20 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     }
     if read_loop {
         if !inputs.is_empty() || callee.is_some() { return Err("--read-loop takes its input from stdin: no --arg or --callee".into()); }
-        if needle.is_none() || advance.is_none() || spec.is_none() || computes.is_none() || folds.is_none() {
+        if needle.is_none() || advance.is_none() || specs.is_empty() || computes.is_none() || folds.is_none() {
             return Err("--read-loop needs --needle <byte>, --advance <theorem>, --spec <function>, --computes <theorem> and --folds <theorem>".into());
         }
-    } else if print || needle.is_some() || advance.is_some() || spec.is_some() || computes.is_some() || folds.is_some() {
-        return Err("--needle, --advance, --spec, --computes, --folds and --print belong to --read-loop".into());
+        if print && fields { return Err("--print and --fields are two outputs: give one".into()); }
+        if fields && specs.len() != 3 { return Err("--fields prints three counts: give --spec three times, in the order printed".into()); }
+        if !fields && specs.len() != 1 { return Err("--read-loop takes one --spec (three with --fields)".into()); }
+    } else if print || fields || needle.is_some() || advance.is_some() || !specs.is_empty() || computes.is_some() || folds.is_some() {
+        return Err("--needle, --advance, --spec, --computes, --folds, --print and --fields belong to --read-loop".into());
     } else if executable && inputs.len() != 2 {
         return Err("build-x86 needs exactly two --arg values for the source function".into());
     }
     if positional.len() != 2 || output.is_none() {
         if executable {
-            return Err("usage: heather build-x86 <file.hthr> <function> (--arg <u64> --arg <u64> [--callee <function> [--callable-caller]] | --read-loop --needle <byte> --advance <theorem> --spec <function> --computes <theorem> --folds <theorem> [--print]) -o <executable> [-L <dir>]... [--cache-dir <dir>] [--timings <file.tsv>] [--kernel-workers <n>]".into());
+            return Err("usage: heather build-x86 <file.hthr> <function> (--arg <u64> --arg <u64> [--callee <function> [--callable-caller]] | --read-loop --needle <byte> --advance <theorem> --spec <function> --computes <theorem> --folds <theorem> [--print | --fields]) -o <executable> [-L <dir>]... [--cache-dir <dir>] [--timings <file.tsv>] [--kernel-workers <n>]".into());
         }
         return Err("usage: heather compile-x86 <file.hthr> <function> -o <output.s> [-L <dir>]... [--cache-dir <dir>] [--timings <file.tsv>] [--kernel-workers <n>]".into());
     }
@@ -141,7 +163,13 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
             return Err(format!("output already exists: {}", path.display()));
         }
     }
-    let sources = loader::load(source, &search).map_err(|e| e.msg)?;
+    let bundle: Vec<(&str, &str)> = SUPPORT.iter().chain(if read_loop { read_loop::SUPPORT } else { &[] })
+        .chain(if print { read_loop::PRINT_SUPPORT } else { &[] })
+        .chain(if fields { read_fields::SUPPORT } else { &[] }).copied().collect();
+    // A program may import the bundled proof library by its bundled names,
+    // which need not be files on the search path.
+    let bundled: Vec<&str> = bundle.iter().map(|(name, _)| *name).collect();
+    let sources = loader::load_providing(source, &search, &bundled).map_err(|e| e.msg)?;
     let root_name = sources.last().ok_or("empty source closure")?.name.clone();
     let mut elab = Elaborator::with_prelude().map_err(|e| format!("prelude: {e}"))?;
     // The deferred kernel gate (`docs/parallel-kernel-gate-design.md`). Set
@@ -217,8 +245,6 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
         elab.set_gate(Rc::clone(store) as Rc<dyn heather_elab::gate::KernelGate>);
     }
     let mut session = SemanticSession::new(cache);
-    let bundle: Vec<(&str, &str)> = SUPPORT.iter().chain(if read_loop { read_loop::SUPPORT } else { &[] })
-        .chain(if print { read_loop::PRINT_SUPPORT } else { &[] }).copied().collect();
     for &(name, src) in &bundle {
         check_module(&mut elab, &mut session, &loader::Module {
             name: name.into(), path: PathBuf::from(format!("{name}.hthr")), src: src.into(),
@@ -229,8 +255,9 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     // program, and they are checked before any of its modules: an image's
     // cache key covers every module checked before it, so a second program
     // replays them instead of re-proving them.
-    let format = if read_loop && print {
-        let parts = read_loop::generate_format(&elab, read_loop::FORMAT_PREFIX)?;
+    let format = if read_loop && (print || fields) {
+        let parts = if fields { read_fields::generate_format(&elab, read_fields::FORMAT_PREFIX)? }
+            else { read_loop::generate_format(&elab, read_loop::FORMAT_PREFIX)? };
         for part in &parts {
             check_module(&mut elab, &mut session, &loader::Module {
                 name: part.module.clone(), path: PathBuf::from(format!("{}.hthr", part.module)), src: part.text.clone(),
@@ -260,9 +287,34 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     let probe_inputs = [[!input(0), !input(1)],
         [input(0).wrapping_add(0x9e37_79b9_7f4a_7c15), input(1).wrapping_add(0x6a09_e667_f3bc_c909)]];
     let mut probes = Some(Vec::new());
-    let (image, body_bytes) = if read_loop {
+    let (image, body_bytes) = if read_loop && fields {
+        let [s0, s1, s2] = [&specs[0], &specs[1], &specs[2]].map(|s| s.as_str());
+        let program = read_fields::Program { root: &root_name, source: symbol, advance: advance.as_deref().unwrap(),
+            needle: needle.unwrap(), specs: [s0, s1, s2], computes: computes.as_deref().unwrap(), folds: folds.as_deref().unwrap() };
+        let context = format!("{prefix}_context");
+        check_module(&mut elab, &mut session, &loader::Module {
+            name: context.clone(), path: PathBuf::from(format!("{context}.hthr")), src: read_fields::context(&program),
+        })?;
+        let record = read_fields::record(&elab, &context, &program)?;
+        let emission = read_fields::generate_loop(&elab, &context, &prefix, &program, &record)?;
+        let pieces = format!("{prefix}_pieces");
+        check_module(&mut elab, &mut session, &loader::Module {
+            name: pieces.clone(), path: PathBuf::from(format!("{pieces}.hthr")), src: emission.pieces.clone(),
+        })?;
+        proof = Module::default();
+        for name in read_loop::IMPORTS.iter().chain(read_fields::IMPORTS).filter(|name| !emission.text.contains(&format!("import {name};"))) {
+            proof.raw(format!("import {name};"));
+        }
+        if !emission.text.contains(&format!("import {root_name};")) { proof.raw(format!("import {root_name};")); }
+        for part in format.iter().flatten() { proof.raw(format!("import {};", part.module)); }
+        proof.raw(emission.text.clone());
+        probes = None;
+        let parts = format.as_deref().expect("the fields profile generated its formatter");
+        (Some(read_fields::certify(&mut proof, &prefix, &program, &record, &emission, parts)?), None)
+    } else if read_loop {
+        let spec = specs[0].as_str();
         let program = read_loop::Program { root: &root_name, source: symbol, advance: advance.as_deref().unwrap(),
-            needle: needle.unwrap(), spec: spec.as_deref().unwrap(), computes: computes.as_deref().unwrap(), folds: folds.as_deref().unwrap() };
+            needle: needle.unwrap(), spec, computes: computes.as_deref().unwrap(), folds: folds.as_deref().unwrap() };
         let context = format!("{prefix}_context");
         check_module(&mut elab, &mut session, &loader::Module {
             name: context.clone(), path: PathBuf::from(format!("{context}.hthr")), src: read_loop::context(&program),
@@ -385,10 +437,12 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
             std::fs::set_permissions(&output, std::fs::Permissions::from_mode(0o755))
                 .map_err(|e| format!("{}: {e}", output.display()))?;
         }
-        if print {
-            println!("{}: {}-byte ELF64 executable; checked read-until-EOF process trace printing `{}` as a decimal line", output.display(), image.len(), spec.as_deref().unwrap());
+        if fields {
+            println!("{}: {}-byte ELF64 executable; checked read-until-EOF process trace printing `{}` as a three-field line", output.display(), image.len(), specs.join("`, `"));
+        } else if print {
+            println!("{}: {}-byte ELF64 executable; checked read-until-EOF process trace printing `{}` as a decimal line", output.display(), image.len(), specs[0]);
         } else if read_loop {
-            println!("{}: {}-byte ELF64 executable; checked read-until-EOF process trace against `{}`", output.display(), image.len(), spec.as_deref().unwrap());
+            println!("{}: {}-byte ELF64 executable; checked read-until-EOF process trace against `{}`", output.display(), image.len(), specs[0]);
         } else {
             println!("{}: {}-byte ELF64 executable; checked loaded-memory trace and Linux exit request", output.display(), image.len());
         }
