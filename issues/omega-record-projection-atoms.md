@@ -1,6 +1,6 @@
 ---
 title: omega can't use a record field of a local as an atom
-status: open
+status: closed
 labels: [omega, proofs, elaboration, ergonomics]
 created: 2026-09-29
 updated: 2026-09-29
@@ -32,3 +32,25 @@ no longer has the generated-definition head. Not investigated further.
 Shape of a fix: key and spell an atom by the term as written when its reduct
 has no spelling, and skip (rather than fail on) a fact in scope that doesn't
 spell. Then drop wc's helper theorems for inline `omega`s.
+
+## Log
+
+- 2026-09-29: Done (docs/omega-measure-reduction-design.md §10). The term omega met was not a
+  reduct: `WcState` is closed and not dependent, so it registers no projection
+  definitions and `s.words` *is* the inline walk `fst(snd(snd(s)))`, which the
+  speller had no case for. Fixed in the speller: a field read spells as `r.name`
+  from the receiver's type (`field_read`), and a record value spells as its
+  constructor (`ctor_value`). In source spellings only, a projection nothing
+  else names spells as its bounded weak head (`projection_reduct`). In omega, a
+  projection whose weak head is arithmetic is reflected as that reduct, and
+  `convertible_atom` compares field reads by receiver. An unrelated unspellable
+  fact was already declined rather than fatal
+  (omega-inside-match-arms, 2026-09-28), so v5 closed as soon as the fact spelled.
+
+  Dogfooding: examples/x86-native/wc.hthr loses `add_grown`, `words_grown`,
+  `joins_word`, `starts_word`, `from_zero`, `from_zero_outside`. Its folds and
+  `wc_next_words` use inline `omega`, the latter at the arms' reduced statements.
+  `count_wc_input` states `wc_words`/`wc_bytes` in typed `let`s, because omega
+  does not unfold one head into another (§5). Tests:
+  crates/elab/tests/omega_record_fields.rs (10 rows; 9 fail on the old
+  elaborator, and the tenth is the already-fixed unrelated fact).

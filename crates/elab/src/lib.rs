@@ -7521,6 +7521,20 @@ impl Elaborator {
         t: &Term,
         span: Span,
     ) -> Option<Vec<(Rc<Type>, Level)>> {
+        self.app_walk(cx, t, span).map(|(domains, _)| domains)
+    }
+
+    /// The type of the application spine `t` in `cx`, read the way
+    /// [`Self::app_domains`] reads its domains: the head inferred, then one Π
+    /// instantiated per argument. For a caller that only needs to know what
+    /// `t` is — the speller naming a field read off it — this costs the
+    /// head's inference and the substitutions, never a check of the
+    /// arguments.
+    pub(crate) fn spine_type(&self, cx: &Cx, t: &Term, span: Span) -> Option<Type> {
+        self.app_walk(cx, t, span).map(|(_, ty)| ty)
+    }
+
+    fn app_walk(&self, cx: &Cx, t: &Term, span: Span) -> Option<(Vec<(Rc<Type>, Level)>, Type)> {
         let (head, args) = spelling::app_spine(t);
         let oracle = self.semantic_oracle();
         let (mut ty, _) =
@@ -7536,7 +7550,7 @@ impl Elaborator {
             out.push((dom, dom_level));
             ty = cod.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(a)));
         }
-        Some(out)
+        Some((out, ty))
     }
 
     /// [`unification::U::canonical_head`]: the weak head of a rigid term,

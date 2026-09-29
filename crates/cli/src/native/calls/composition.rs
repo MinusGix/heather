@@ -321,6 +321,11 @@ mod tests {
         assert!(source.contains(original));
         let wrong = source.replace(original, "read_gpr(Rbx, probe_state_2(gprs, flags, stack).gprs) = probe_word_c()");
         let error = base.fork().elab_module_source("wrong_ledger", &wrong).expect_err("accepted a stale register value");
-        assert!(format!("{error:?}").contains("NotConvertible"), "{}", error.render(&wrong));
+        // Refused at the register fact, naming the value the ledger carries
+        // and the stale one (the state's `.gprs` field reads spell since
+        // issues/omega-record-projection-atoms.md; before, the note had no
+        // spelling and the kernel's bare `NotConvertible` stood).
+        let rendered = error.render(&wrong);
+        assert!(rendered.contains("= probe_word_b`, but `") && rendered.contains("= probe_word_c` is expected"), "{rendered}");
     }
 }

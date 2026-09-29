@@ -1130,6 +1130,23 @@ pub(crate) fn nat_term_source(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>) -> Resu
         .ok_or_else(|| "Omega could not spell a natural expression".to_string())
 }
 
+/// The arithmetic a projection out of a value computes to
+/// (docs/omega-measure-reduction-design.md §10): a field read off a
+/// constructor, or off a `match` on one — what a motive instantiated at
+/// `False` leaves, `(match False { … }).words` — whose bounded weak head is
+/// `Succ(s.words)` or `0`. Kept only on an arithmetic head whose leaves spell,
+/// as §2 keeps a call's reduct: a projection out of a neutral is its own weak
+/// head, and one out of a call that unfolds (`step_fold(…).bytes`) reduces to
+/// an eliminator, and both intern as they always did (§5).
+fn projection_reduct(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>, depth: u32) -> Option<Rc<Term>> {
+    crate::spelling::proj_of(tm)?;
+    let reduct = Rc::new(elab.goal_oracle().whnf_term_bounded(&cx.gamma, tm).ok()?);
+    if matches!(&*reduct, Term::NatLit(_)) {
+        return Some(reduct);
+    }
+    named_arithmetic_shape(elab, cx, &reduct, &[], depth)
+}
+
 /// The most kernel steps a closed power may cost to be read as its value.
 const POWER_EVALUATION_STEPS: Z = 4096;
 
@@ -1172,6 +1189,13 @@ fn nat_affine_syntax_within(
     atoms: &mut AtomTable<ReflectedAtom>,
     depth: u32,
 ) -> Result<AffineSyntax, String> {
+    // A projection out of a value is reflected as its reduct, so that a
+    // field computing to `Succ(…)` or a sum keeps its arithmetic (§10).
+    if depth > 0
+        && let Some(reduct) = projection_reduct(elab, cx, tm, depth)
+    {
+        return nat_affine_syntax_within(elab, cx, &reduct, atoms, depth - 1);
+    }
     let nat_source = nat_term_source(elab, cx, tm)?;
     if let Some(value) = integer_source(&nat_source)
         .filter(|value| *value >= 0)
@@ -1387,7 +1411,9 @@ fn head_is_global(tm: &Rc<Term>) -> bool {
 /// (`f(append(Nil, Nil))` against `f(Nil)`). Arguments that are distinct
 /// variables on both sides cannot meet by computation, so a pair differing
 /// only there is never asked — every `toNat(w)` against `toNat(v)` in a word
-/// proof.
+/// proof. A field read is compared by its receiver, along the same
+/// projection path: `step_fold(wc_region(), …).lines` against
+/// `step_fold(ReadonlyLoop(wc_body), …).lines`.
 fn convertible_atom(
     elab: &Elaborator,
     cx: &Cx,
@@ -1395,7 +1421,8 @@ fn convertible_atom(
     atoms: &AtomTable<ReflectedAtom>,
     carrier: Carrier,
 ) -> Option<AtomId> {
-    let (head, args) = app_spine(tm);
+    let (path, receiver) = projection_path(tm);
+    let (head, args) = app_spine(receiver);
     if args.is_empty() {
         return None;
     }
@@ -1405,7 +1432,11 @@ fn convertible_atom(
         if atom.nat_source.is_some() != (carrier == Carrier::Nat) || atom.division.is_some() {
             return false;
         }
-        let (other_head, other_args) = app_spine(&atom.term);
+        let (other_path, other_receiver) = projection_path(&atom.term);
+        if other_path != path {
+            return false;
+        }
+        let (other_head, other_args) = app_spine(other_receiver);
         if *other_head != *head || other_args.len() != args.len() {
             return false;
         }
@@ -1426,6 +1457,18 @@ fn convertible_atom(
         };
         oracle.convert_term(&cx.gamma, Layer::Prog, tm, &atom.term, ty, level).is_ok()
     })
+}
+
+/// The projections `tm` reads, outermost first (`true` for `fst`), and the
+/// term they read from.
+fn projection_path(tm: &Rc<Term>) -> (Vec<bool>, &Rc<Term>) {
+    let mut path = Vec::new();
+    let mut cur = tm;
+    while let Some((first, pair)) = crate::spelling::proj_of(cur) {
+        path.push(first);
+        cur = pair;
+    }
+    (path, cur)
 }
 
 /// Which side of the table an atom lives on: a Nat atom carries its Nat

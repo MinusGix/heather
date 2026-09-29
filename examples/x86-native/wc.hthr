@@ -303,20 +303,6 @@ theorem inside_empty(inside: Bool, pieces: List<List<BitVec(8)>>): inside_words(
     match inside as λ i => inside_words(i, Cons(Nil, pieces)) = 0 { True => refl, False => refl }
 }
 
-// The arithmetic the fold's proofs share, over plain numbers.
-theorem add_grown(folded, next, start, grown, rest: Nat, ih: folded = next + rest, grew: next = start + grown):
-    folded = start + (grown + rest) { omega }
-theorem words_grown(folded, rest_inside, next, rest_words, inside, start, words: Nat,
-    ih: folded + rest_inside = next + rest_words, step: (next + rest_words) + inside = (start + words) + rest_inside):
-    folded + inside = start + words { omega }
-theorem joins_word(counted, rest_words, joined_words, first, joined_first: Nat,
-    joined: joined_words + first = Succ(rest_words), starts: joined_first = 1):
-    (counted + rest_words) + joined_first = (counted + joined_words) + first { omega }
-theorem starts_word(counted, rest_words, joined_words, first: Nat, joined: joined_words + first = Succ(rest_words)):
-    ((counted + 1) + rest_words) + 0 = (counted + joined_words) + first { omega }
-theorem from_zero(folded, spec: Nat, counted: folded = 0 + spec): spec = folded { omega }
-theorem from_zero_outside(folded, spec: Nat, counted: folded + 0 = 0 + spec): spec = folded { omega }
-
 // One step's words: what the state counts and is inside, against what the
 // pieces count and start with.
 theorem wc_next_words(space, newline: Bool, s: WcState, byte: BitVec(8), pieces: List<List<BitVec(8)>>):
@@ -343,9 +329,16 @@ theorem wc_next_words(space, newline: Bool, s: WcState, byte: BitVec(8), pieces:
                         True => WcState(s.lines, s.words, Succ(s.bytes), True),
                         False => WcState(s.lines, Succ(s.words), Succ(s.bytes), True),
                     }).inside, pieces) {
-                True => joins_word(s.words, words_of(pieces), words_of(onto_first(byte, pieces)), first_word(pieces),
-                    first_word(onto_first(byte, pieces)), joined, starts),
-                False => starts_word(s.words, words_of(pieces), words_of(onto_first(byte, pieces)), first_word(pieces), joined),
+                True => {
+                    let joins: ((s.words + words_of(pieces)) + first_word(onto_first(byte, pieces)) =
+                        (s.words + words_of(onto_first(byte, pieces))) + first_word(pieces)) = omega;
+                    joins
+                },
+                False => {
+                    let starts: (((s.words + 1) + words_of(pieces)) + 0 =
+                        (s.words + words_of(onto_first(byte, pieces))) + first_word(pieces)) = omega;
+                    starts
+                },
             }
         },
     }
@@ -360,11 +353,9 @@ theorem wc_fold_bytes(bytes: List<BitVec(8)>): (needle: BitVec(8)) → (s: WcSta
                 wc_next(space_byte(byte), newline_byte(byte), s).bytes + rest.len()) =
                 wc_fold_bytes(rest, needle, wc_next(space_byte(byte), newline_byte(byte), s));
             let grew: (wc_next(space_byte(byte), newline_byte(byte), s).bytes = s.bytes + 1) = wc_next_bytes(space_byte(byte), newline_byte(byte), s);
-            let sum = add_grown(step_fold(wc_region(), needle, rest, wc_next(space_byte(byte), newline_byte(byte), s)).bytes,
-                wc_next(space_byte(byte), newline_byte(byte), s).bytes, s.bytes, 1, rest.len(), ih, grew);
-            j(sym(wc_step_is(needle, byte, s)), λ u _ => step_fold(wc_region(), needle, rest, u).bytes = s.bytes + Succ(rest.len()),
-                j(Nat::add_comm(1, rest.len()), λ n _ => step_fold(wc_region(), needle, rest, wc_next(space_byte(byte), newline_byte(byte), s)).bytes =
-                    s.bytes + n, sum))
+            let sum: (step_fold(wc_region(), needle, rest, wc_next(space_byte(byte), newline_byte(byte), s)).bytes =
+                s.bytes + Succ(rest.len())) = omega;
+            j(sym(wc_step_is(needle, byte, s)), λ u _ => step_fold(wc_region(), needle, rest, u).bytes = s.bytes + Succ(rest.len()), sum)
         },
     }
 }
@@ -387,11 +378,9 @@ theorem wc_fold_lines(bytes: List<BitVec(8)>): (needle: BitVec(8)) → (s: WcSta
                 wc_fold_lines(rest, needle, wc_next(space_byte(byte), newline_byte(byte), s));
             let grew = wc_next_lines(space_byte(byte), newline_byte(byte), s, newline_is_space(byte));
             let counted = wc_lines_cons(byte, rest);
-            let sum = add_grown(step_fold(wc_region(), needle, rest, wc_next(space_byte(byte), newline_byte(byte), s)).lines,
-                wc_next(space_byte(byte), newline_byte(byte), s).lines, s.lines, bit(newline_byte(byte)), wc_lines(rest), ih, grew);
-            j(sym(wc_step_is(needle, byte, s)), λ u _ => step_fold(wc_region(), needle, rest, u).lines = s.lines + wc_lines(Cons(byte, rest)),
-                j(sym(counted), λ n _ => step_fold(wc_region(), needle, rest, wc_next(space_byte(byte), newline_byte(byte), s)).lines = s.lines + n,
-                    sum))
+            let sum: (step_fold(wc_region(), needle, rest, wc_next(space_byte(byte), newline_byte(byte), s)).lines =
+                s.lines + wc_lines(Cons(byte, rest))) = omega;
+            j(sym(wc_step_is(needle, byte, s)), λ u _ => step_fold(wc_region(), needle, rest, u).lines = s.lines + wc_lines(Cons(byte, rest)), sum)
         },
     }
 }
@@ -408,11 +397,9 @@ theorem wc_fold_words(bytes: List<BitVec(8)>): (needle: BitVec(8)) → (s: WcSta
                 wc_next(space_byte(byte), newline_byte(byte), s).words + words_of(wc_split(rest))) =
                 wc_fold_words(rest, needle, wc_next(space_byte(byte), newline_byte(byte), s));
             let step = wc_next_words(space_byte(byte), newline_byte(byte), s, byte, wc_split(rest));
-            let sum = words_grown(step_fold(wc_region(), needle, rest, wc_next(space_byte(byte), newline_byte(byte), s)).words,
-                inside_words(wc_next(space_byte(byte), newline_byte(byte), s).inside, wc_split(rest)),
-                wc_next(space_byte(byte), newline_byte(byte), s).words, words_of(wc_split(rest)),
-                inside_words(s.inside, split_at(space_byte(byte), byte, wc_split(rest))), s.words,
-                words_of(split_at(space_byte(byte), byte, wc_split(rest))), ih, step);
+            let sum: (step_fold(wc_region(), needle, rest, wc_next(space_byte(byte), newline_byte(byte), s)).words +
+                inside_words(s.inside, split_at(space_byte(byte), byte, wc_split(rest))) =
+                    s.words + words_of(split_at(space_byte(byte), byte, wc_split(rest)))) = omega;
             j(sym(wc_step_is(needle, byte, s)), λ u _ =>
                 step_fold(wc_region(), needle, rest, u).words + inside_words(s.inside, split_at(space_byte(byte), byte, wc_split(rest))) =
                     s.words + words_of(split_at(space_byte(byte), byte, wc_split(rest))), sum)
@@ -427,8 +414,13 @@ theorem count_wc_input(bytes: List<BitVec(8)>):
     ((wc_words(bytes) = step_fold(ReadonlyLoop<WcState>(wc_body), BitVec::ofNat(10), bytes, WcState(0, 0, 0, False)).words) ∧
     (wc_bytes(bytes) = step_fold(ReadonlyLoop<WcState>(wc_body), BitVec::ofNat(10), bytes, WcState(0, 0, 0, False)).bytes)) {
     let zero = WcState(0, 0, 0, False);
-    let region = ReadonlyLoop<WcState>(wc_body);
-    ⟨from_zero(step_fold(region, BitVec::ofNat(10), bytes, zero).lines, wc_lines(bytes), wc_fold_lines(bytes, BitVec::ofNat(10), zero)),
-        ⟨from_zero_outside(step_fold(region, BitVec::ofNat(10), bytes, zero).words, wc_words(bytes), wc_fold_words(bytes, BitVec::ofNat(10), zero)),
-        from_zero(step_fold(region, BitVec::ofNat(10), bytes, zero).bytes, wc_bytes(bytes), wc_fold_bytes(bytes, BitVec::ofNat(10), zero))⟩⟩
+    // The folds count `words_of(wc_split(bytes))` and `bytes.len()`, which are
+    // `wc_words` and `wc_bytes` by definition: stated at the specifications'
+    // names, since `omega` names atoms without unfolding them.
+    let lines = wc_fold_lines(bytes, BitVec::ofNat(10), zero);
+    let words: (step_fold(wc_region(), BitVec::ofNat(10), bytes, zero).words + 0 = 0 + wc_words(bytes)) =
+        wc_fold_words(bytes, BitVec::ofNat(10), zero);
+    let counted: (step_fold(wc_region(), BitVec::ofNat(10), bytes, zero).bytes = 0 + wc_bytes(bytes)) =
+        wc_fold_bytes(bytes, BitVec::ofNat(10), zero);
+    ⟨omega, ⟨omega, omega⟩⟩
 }
