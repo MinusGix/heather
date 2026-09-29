@@ -1,6 +1,6 @@
 # `wc`: a program the `wc -l` template can't express — design
 
-Status: **decisions taken 2026-09-28 (§8); slice A landed 2026-09-28 (§3.1); slice B landed 2026-09-29 (§4.5–4.8); slice C next.** Owner: `issues/native-wc.md`.
+Status: **decisions taken 2026-09-28 (§8); slice A landed 2026-09-28 (§3.1); slice B landed 2026-09-29 (§4.5–4.8); slice C landed 2026-09-29 (§5.1–5.2); slice D next.** Owner: `issues/native-wc.md`.
 Builds on `docs/native-read-until-eof-design.md` (the read loop and its
 additive contract), `docs/native-syscall-failures-design.md` (failure paths),
 `docs/fetched-step-determinism-design.md` (claims universal over runs) and
@@ -379,7 +379,7 @@ modules of the helpers a source calls (`owners`), which `decimal_line`'s own
 formatter never needed.
 
 **V4's answer: the words are too big to place.** Both certify (tests
-`field_words_certify`, `slow_acceptance_field_line_refusals`), but
+`field_low_certifies`, `field_high_certifies`, `slow_acceptance_field_line_refusals`), but
 `field_low` lowers to 1,911 bytes and `field_high` to 2,792; three inline
 copies are 14 KB, and the program must fit one page (the call profile's RW
 page is at 0x401000), with `wc`'s loop already 890 bytes. The size is the
@@ -388,6 +388,45 @@ lowering's, not the algorithm's: a mark is 68 bytes where about 20 would do
 flags, a copy is `movabs 0; or`, a zero is a 10-byte immediate), and
 `raise32` is 288 bytes of `mov`/`add`/`mov`. Certification costs about
 36 s and 65 s. Placement: §8, question 4.
+
+### 5.2 The tail (C2, 2026-09-29)
+
+`lib/elf64_read_fields.hthr` is the tail over `elf64_read_state` (§4.8): for
+each count, in R13, R14 and R15, copy it to R11, run `field_low` into RAX,
+set R9 to the page at `8k` and R10 to the separator's tail, store, run
+`field_high`, set R9 four bytes on, store; then R9 and R10 to the 24-byte
+line and the write loop. `read_fields_runs` states the claim over the final
+state `step_fold(eof_input(chunks), init)` and three projections the program
+names (`first`, `second`, `third`, with `counts`: its placement puts them in
+R13–R15); relating them to `lines`/`words`/`len` is slice D's.
+
+- **The write loop at an offset.** `lib/elf64_write_loop.hthr` is
+  `elf64_read_print`'s loop restated at an offset `at` (`wl_from`,
+  `WriteLoopResident`, `write_targets`), derived mechanically from its text;
+  the blocks, trace and arithmetic are imported. `wc -l` could move to it
+  later.
+- **What the page holds.** `StoredList(page, offset, bytes)` (curried over the
+  offset, which varies in the recursion) with four lemmas: a store's first
+  four bytes land (`stored_four`), earlier runs survive stores that start past
+  them (`stored_kept`, `field_kept`), runs join (`stored_join`), and a run
+  from the page's start is what a write from there sends (`stored_sends`).
+  Each field leaves `field(n) ++ [sep]` at `8k`; the three runs joined are
+  `three_fields_line(a, b, c)` by computation (`line_stored`).
+- **One field** (`field_prints`) is generic in its count register, offset and
+  separator, and is used three times; it composes fetched runs and the two
+  store steps as Linux steps and keeps R13–R15 (`CountsKept`).
+- **The formatter's certificates** are parameters (`FieldsFormat`, over
+  field_line's `FieldLowCert`/`FieldHighCert`: the generated artifacts at
+  R11/R10 → RAX, each keeping R11 and R13–R15). `field_low_certifies` and
+  `field_high_certifies` check the generated ones against them, each in a
+  process of its own: together, with the libraries a `FieldsFormat` check
+  would load, they passed the 300 CPU-s rail.
+
+Tests: `read_fields_process` (library; `wc`'s loop composed into
+`read_fields_runs` with the certificates abstract; refusals of a tail that
+stores another register, formats one count twice, overlaps two fields, ends
+the line with a space, writes 23 bytes or from the page's second byte,
+stores the high word one byte early, or puts the tail in R12).
 
 ## 6. Slice D: the program
 

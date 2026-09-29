@@ -22,7 +22,7 @@ fn read_state_library_checks() {
 // §4.8): its step folds, its placement moves with the state registers, init's
 // zeros place the zero state, its state fits every chunk, and the line count
 // is in R13 for the exit.
-const WC_PROCESS: &str = r#"
+pub(crate) const WC_PROCESS: &str = r#"
 import elf64_read_state; import elf64_read_loop; import elf64_io; import linux_x86_64_io; import linux_x86_64_entry;
 import function_ir_loop; import function_ir_loop_trace; import x86_64; import x86_64_fetch; import x86_64_fetched_code;
 import bitvec; import bitvec_nat; import bool; import list; import logic; import nat;

@@ -35,6 +35,10 @@ mod read_loop_process;
 mod read_state_process;
 #[path = "../field_line_format.rs"]
 mod field_line_format;
+#[path = "../field_line_high_format.rs"]
+mod field_line_high_format;
+#[path = "../read_fields_process.rs"]
+mod read_fields_process;
 #[path = "../read_print_process.rs"]
 mod read_print_process;
 #[path = "../linux_determinism.rs"]

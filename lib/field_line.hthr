@@ -19,6 +19,7 @@ import bitvec_nat;
 import bitvec_omega;
 import x86_64;
 import x86_64_store;
+import x86_64_structured_block;
 
 // The count moved above a field's four bytes: `n * 2^32`.
 fn raise32(n: BitVec(64)) → BitVec(64) { times256(times256(times256(times256(n)))) }
@@ -42,6 +43,18 @@ fn field_low(n: BitVec(64)) → BitVec(64) {
 // digits are taken away first, weighing nothing.
 fn field_high(n, tail: BitVec(64)) → BitVec(64) {
     place(place(place(place(place(place(place(place(place(place(place(place(place(place(place(place(place(place(place(place(place(place(place(place(place(place(place(place(mark(mark(raise32(n).add(BitVec::ofNat(3153952)).add(tail), BitVec::ofNat(429496729600), BitVec::ofNat(16)), BitVec::ofNat(42949672960), BitVec::ofNat(4096)), BitVec::ofNat(34359738368000000), BitVec::ofNat(0)), BitVec::ofNat(17179869184000000), BitVec::ofNat(0)), BitVec::ofNat(8589934592000000), BitVec::ofNat(0)), BitVec::ofNat(4294967296000000), BitVec::ofNat(0)), BitVec::ofNat(3435973836800000), BitVec::ofNat(0)), BitVec::ofNat(1717986918400000), BitVec::ofNat(0)), BitVec::ofNat(858993459200000), BitVec::ofNat(0)), BitVec::ofNat(429496729600000), BitVec::ofNat(0)), BitVec::ofNat(343597383680000), BitVec::ofNat(0)), BitVec::ofNat(171798691840000), BitVec::ofNat(0)), BitVec::ofNat(85899345920000), BitVec::ofNat(0)), BitVec::ofNat(42949672960000), BitVec::ofNat(0)), BitVec::ofNat(34359738368000), BitVec::ofNat(0)), BitVec::ofNat(17179869184000), BitVec::ofNat(0)), BitVec::ofNat(8589934592000), BitVec::ofNat(0)), BitVec::ofNat(4294967296000), BitVec::ofNat(0)), BitVec::ofNat(3435973836800), BitVec::ofNat(8)), BitVec::ofNat(1717986918400), BitVec::ofNat(4)), BitVec::ofNat(858993459200), BitVec::ofNat(2)), BitVec::ofNat(429496729600), BitVec::ofNat(1)), BitVec::ofNat(343597383680), BitVec::ofNat(2048)), BitVec::ofNat(171798691840), BitVec::ofNat(1024)), BitVec::ofNat(85899345920), BitVec::ofNat(512)), BitVec::ofNat(42949672960), BitVec::ofNat(256)), BitVec::ofNat(34359738368), BitVec::ofNat(524288)), BitVec::ofNat(17179869184), BitVec::ofNat(262144)), BitVec::ofNat(8589934592), BitVec::ofNat(131072)), BitVec::ofNat(4294967296), BitVec::ofNat(65536))
+}
+
+// The words' certificates at the registers a program's tail gives them: the
+// count in R11, the high word's tail in R10, each word to RAX; `keeps` says
+// which registers each leaves alone.
+fn FieldLowCert<M>(low: StructuredCode, keeps: Gpr → Type) → Type {
+    (before: MachineState<M>) → (n: BitVec(64)) → n = read_gpr(R11, before.gprs) →
+        StructuredArtifact<M>(low, before, Rax, field_low(n), keeps)
+}
+fn FieldHighCert<M>(high: StructuredCode, keeps: Gpr → Type) → Type {
+    (before: MachineState<M>) → (n, tail: BitVec(64)) → n = read_gpr(R11, before.gprs) → tail = read_gpr(R10, before.gprs) →
+        StructuredArtifact<M>(high, before, Rax, field_high(n, tail), keeps)
 }
 
 // ---------------------------------------------------------------------------

@@ -1,0 +1,596 @@
+// The read-until-end-of-file process that prints three counts in GNU `wc`'s
+// pipe format (docs/native-wc-design.md §5): elf64_read_state folds stdin into
+// a state whose first three registers hold the counts; this tail formats each
+// count as seven right-aligned columns and a separator (field_line's two
+// words, stored four bytes apart), writes the 24-byte line to stdout through
+// elf64_write_loop and exits 0, or exits 1 at a failure. As in the process
+// it extends, nothing here is about one program: the state, its loop and its
+// facts are parameters, and so are the formatter's two certificates, which
+// the producer generates from field_line's source functions. The profile
+// fixes their registers: the count in R11, the high word's tail in R10, each
+// word to RAX, stored through R9.
+import elf64_write_loop;
+import elf64_read_state;
+import elf64_read_print;
+import elf64_read_loop;
+import field_line;
+import decimal_line;
+import elf64_io;
+import linux_x86_64_entry;
+import linux_x86_64_io;
+import function_ir_loop;
+import function_ir_loop_trace;
+import x86_64;
+import x86_64_block;
+import x86_64_fetch;
+import x86_64_data_read;
+import x86_64_access_code;
+import x86_64_access_memory;
+import x86_64_fetched_code;
+import x86_64_structured_block;
+import x86_64_store;
+import bitvec;
+import bitvec_nat;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+import omega;
+
+// A word stored where R9 points.
+fn fields_store() → WordStore { WordStore(R9, Rax) }
+// One field's blocks: its count into R11; the low word's address and the
+// high word's tail; the high word's address, four bytes on.
+fn field_count_block(count: Gpr) → List<Instruction> { [MovRR(R11, count)] }
+fn field_low_block(offset, separator: Nat) → List<Instruction> {
+    [MovRI(R9, BitVec::ofNat(0x410000 + offset)), MovRI(R10, BitVec::ofNat(16777216 * separator))]
+}
+fn field_high_block(offset: Nat) → List<Instruction> { [MovRI(R9, BitVec::ofNat(0x410000 + (offset + 4)))] }
+// The line: 24 bytes from the page's start.
+fn fields_line_block() → List<Instruction> { [MovRI(R9, BitVec::ofNat(0x410000)), MovRI(R10, BitVec::ofNat(24))] }
+
+// One field, then what follows it.
+fn field_code(count: Gpr, offset, separator: Nat, low, high: StructuredCode, rest: List<BitVec(8)>) → List<BitVec(8)> {
+    canonical_block_bytes(field_count_block(count)) ++ (structured_bytes(low) ++ (canonical_block_bytes(field_low_block(offset, separator)) ++
+    (word_store_bytes(fields_store()) ++ (structured_bytes(high) ++ (canonical_block_bytes(field_high_block(offset)) ++
+    (word_store_bytes(fields_store()) ++ rest))))))
+}
+// The tail after the loop: the three fields, the line's registers, the write
+// loop.
+fn fields_tail(low, high: StructuredCode, pj: PrintJumps) → List<BitVec(8)> {
+    field_code(R13, 0, 32, low, high, field_code(R14, 8, 32, low, high, field_code(R15, 16, 10, low, high,
+        canonical_block_bytes(fields_line_block()) ++ write_loop_code(pj))))
+}
+fn read_fields_code(needle: BitVec(8), loop_bytes: List<BitVec(8)>, jumps: EofJumps, low, high: StructuredCode, pj: PrintJumps) → List<BitVec(8)> {
+    state_code(needle, loop_bytes, jumps, fields_tail(low, high, pj))
+}
+
+// A field's pieces' offsets from the entry, from the field's start `at`.
+fn fc_low(count: Gpr, at: Nat) → Nat { at + canonical_block_bytes(field_count_block(count)).len() }
+fn fc_block(count: Gpr, low: StructuredCode, at: Nat) → Nat { fc_low(count, at) + structured_bytes(low).len() }
+fn fc_store(count: Gpr, offset, separator: Nat, low: StructuredCode, at: Nat) → Nat {
+    fc_block(count, low, at) + canonical_block_bytes(field_low_block(offset, separator)).len()
+}
+fn fc_high(count: Gpr, offset, separator: Nat, low: StructuredCode, at: Nat) → Nat {
+    fc_store(count, offset, separator, low, at) + word_store_bytes(fields_store()).len()
+}
+fn fc_block2(count: Gpr, offset, separator: Nat, low, high: StructuredCode, at: Nat) → Nat {
+    fc_high(count, offset, separator, low, at) + structured_bytes(high).len()
+}
+fn fc_store2(count: Gpr, offset, separator: Nat, low, high: StructuredCode, at: Nat) → Nat {
+    fc_block2(count, offset, separator, low, high, at) + canonical_block_bytes(field_high_block(offset)).len()
+}
+fn fc_end(count: Gpr, offset, separator: Nat, low, high: StructuredCode, at: Nat) → Nat {
+    fc_store2(count, offset, separator, low, high, at) + word_store_bytes(fields_store()).len()
+}
+
+// The tail's pieces' offsets.
+fn fields_at1(needle: BitVec(8), loop_bytes: List<BitVec(8)>, low, high: StructuredCode) → Nat {
+    fc_end(R13, 0, 32, low, high, state_at_done(needle, loop_bytes))
+}
+fn fields_at2(needle: BitVec(8), loop_bytes: List<BitVec(8)>, low, high: StructuredCode) → Nat {
+    fc_end(R14, 8, 32, low, high, fields_at1(needle, loop_bytes, low, high))
+}
+fn fields_at_line(needle: BitVec(8), loop_bytes: List<BitVec(8)>, low, high: StructuredCode) → Nat {
+    fc_end(R15, 16, 10, low, high, fields_at2(needle, loop_bytes, low, high))
+}
+fn fields_at_write(needle: BitVec(8), loop_bytes: List<BitVec(8)>, low, high: StructuredCode) → Nat {
+    fields_at_line(needle, loop_bytes, low, high) + canonical_block_bytes(fields_line_block()).len()
+}
+
+// One field's pieces, resident at their offsets.
+record FieldPieces(memory: IoMemory, count: Gpr, offset, separator: Nat, low, high: StructuredCode, at: Nat) {
+    count_at: CodeResident(io_fetch_access(), memory, canonical_block_bytes(field_count_block(count)), eof_rip(at)),
+    low_at: CodeResident(io_fetch_access(), memory, structured_bytes(low), eof_rip(fc_low(count, at))),
+    block_at: CodeResident(io_fetch_access(), memory, canonical_block_bytes(field_low_block(offset, separator)), eof_rip(fc_block(count, low, at))),
+    store_at: CodeResident(io_fetch_access(), memory, word_store_bytes(fields_store()), eof_rip(fc_store(count, offset, separator, low, at))),
+    high_at: CodeResident(io_fetch_access(), memory, structured_bytes(high), eof_rip(fc_high(count, offset, separator, low, at))),
+    block2_at: CodeResident(io_fetch_access(), memory, canonical_block_bytes(field_high_block(offset)),
+        eof_rip(fc_block2(count, offset, separator, low, high, at))),
+    store2_at: CodeResident(io_fetch_access(), memory, word_store_bytes(fields_store()), eof_rip(fc_store2(count, offset, separator, low, high, at))),
+}
+
+theorem field_pieces(memory: IoMemory, count: Gpr, offset, separator: Nat, low, high: StructuredCode, rest: List<BitVec(8)>, at: Nat,
+    resident: CodeResident(io_fetch_access(), memory, field_code(count, offset, separator, low, high, rest), eof_rip(at))):
+    FieldPieces(memory, count, offset, separator, low, high, at) ∧
+    CodeResident(io_fetch_access(), memory, rest, eof_rip(fc_end(count, offset, separator, low, high, at))) {
+    let fetch = io_fetch_access();
+    let entry: BitVec(64) = BitVec::ofNat(0x4000e8);
+    let c = canonical_block_bytes(field_count_block(count));
+    let l = structured_bytes(low);
+    let b = canonical_block_bytes(field_low_block(offset, separator));
+    let s = word_store_bytes(fields_store());
+    let h = structured_bytes(high);
+    let b2 = canonical_block_bytes(field_high_block(offset));
+    let r0 = resident_split_at(fetch, memory, c, l ++ (b ++ (s ++ (h ++ (b2 ++ (s ++ rest))))), entry, at, resident);
+    let r1 = resident_split_at(fetch, memory, l, b ++ (s ++ (h ++ (b2 ++ (s ++ rest)))), entry, fc_low(count, at), r0.right);
+    let r2 = resident_split_at(fetch, memory, b, s ++ (h ++ (b2 ++ (s ++ rest))), entry, fc_block(count, low, at), r1.right);
+    let r3 = resident_split_at(fetch, memory, s, h ++ (b2 ++ (s ++ rest)), entry, fc_store(count, offset, separator, low, at), r2.right);
+    let r4 = resident_split_at(fetch, memory, h, b2 ++ (s ++ rest), entry, fc_high(count, offset, separator, low, at), r3.right);
+    let r5 = resident_split_at(fetch, memory, b2, s ++ rest, entry, fc_block2(count, offset, separator, low, high, at), r4.right);
+    let r6 = resident_split_at(fetch, memory, s, rest, entry, fc_store2(count, offset, separator, low, high, at), r5.right);
+    ⟨FieldPieces(r0.left, r1.left, r2.left, r3.left, r4.left, r5.left, r6.left), r6.right⟩
+}
+
+// The tail's pieces.
+record FieldsPieces(memory: IoMemory, needle: BitVec(8), loop_bytes: List<BitVec(8)>, low, high: StructuredCode, pj: PrintJumps) {
+    first: FieldPieces(memory, R13, 0, 32, low, high, state_at_done(needle, loop_bytes)),
+    second: FieldPieces(memory, R14, 8, 32, low, high, fields_at1(needle, loop_bytes, low, high)),
+    third: FieldPieces(memory, R15, 16, 10, low, high, fields_at2(needle, loop_bytes, low, high)),
+    line_at: CodeResident(io_fetch_access(), memory, canonical_block_bytes(fields_line_block()), eof_rip(fields_at_line(needle, loop_bytes, low, high))),
+    write: WriteLoopResident(memory, fields_at_write(needle, loop_bytes, low, high), pj),
+}
+
+theorem fields_pieces(memory: IoMemory, needle: BitVec(8), loop_bytes: List<BitVec(8)>, low, high: StructuredCode, pj: PrintJumps,
+    resident: CodeResident(io_fetch_access(), memory, fields_tail(low, high, pj), eof_rip(state_at_done(needle, loop_bytes)))):
+    FieldsPieces(memory, needle, loop_bytes, low, high, pj) {
+    let line = canonical_block_bytes(fields_line_block());
+    let f0 = field_pieces(memory, R13, 0, 32, low, high, field_code(R14, 8, 32, low, high, field_code(R15, 16, 10, low, high, line ++ write_loop_code(pj))),
+        state_at_done(needle, loop_bytes), resident);
+    let f1 = field_pieces(memory, R14, 8, 32, low, high, field_code(R15, 16, 10, low, high, line ++ write_loop_code(pj)),
+        fields_at1(needle, loop_bytes, low, high), f0.right);
+    let f2 = field_pieces(memory, R15, 16, 10, low, high, line ++ write_loop_code(pj), fields_at2(needle, loop_bytes, low, high), f1.right);
+    let r = resident_split_at(io_fetch_access(), memory, line, write_loop_code(pj), BitVec::ofNat(0x4000e8),
+        fields_at_line(needle, loop_bytes, low, high), f2.right);
+    FieldsPieces(f0.left, f1.left, f2.left, r.left,
+        write_loop_resident(memory, fields_at_write(needle, loop_bytes, low, high), pj, r.right))
+}
+
+// ---------------------------------------------------------------------------
+// The formatter's certificates (field_line's FieldLowCert and FieldHighCert),
+// as the producer generates them from field_line's source functions, and the
+// registers each keeps: the count for the high word, and the counts still to
+// print.
+record FieldsFormat(low, high: StructuredCode, low_keeps, high_keeps: Gpr → Type) {
+    low_cert: FieldLowCert<IoMemory>(low, low_keeps),
+    high_cert: FieldHighCert<IoMemory>(high, high_keeps),
+    low_r11: low_keeps(R11), low_r13: low_keeps(R13), low_r14: low_keeps(R14), low_r15: low_keeps(R15),
+    high_r13: high_keeps(R13), high_r14: high_keeps(R14), high_r15: high_keeps(R15),
+}
+
+// The counts' registers agree.
+fn CountsKept(after, before: Gprs) → Type {
+    (read_gpr(R13, after) = read_gpr(R13, before)) ∧ ((read_gpr(R14, after) = read_gpr(R14, before)) ∧ (read_gpr(R15, after) = read_gpr(R15, before)))
+}
+theorem counts_kept_trans(a, b, c: Gprs, first: CountsKept(b, a), second: CountsKept(c, b)): CountsKept(c, a) {
+    ⟨trans(second.left, first.left), ⟨trans(second.right.left, first.right.left), trans(second.right.right, first.right.right)⟩⟩
+}
+
+// A count's two words, stored.
+fn field_stored(memory: IoMemory, n, offset, separator: Nat) → IoMemory {
+    io_store_offset(io_store_offset(memory, offset, word_bytes(field_low(bitvec_nat::word_of_nat(64, n)))), offset + 4,
+        word_bytes(field_high(bitvec_nat::word_of_nat(64, n), BitVec::ofNat(16777216 * separator))))
+}
+
+// A store to the page at `offset`.
+theorem page_address(offset: Nat, room: offset + 8 <= 4096): BitVec::ofNat(0x410000 + offset, n := 64).toNat() = 0x410000 + offset {
+    BitVec::toNat_ofNat(64, 0x410000 + offset, { omega })
+}
+theorem page_store(memory: IoMemory, offset: Nat, bytes: List<BitVec(8)>, room: offset + 8 <= 4096):
+    io_store(memory, BitVec::ofNat(0x410000 + offset), bytes) = io_store_offset(memory, offset, bytes) {
+    let back: ((0x410000 + offset) -io_page_base() = offset) =
+        trans(cong_fn<Nat, Nat>(λ a => a -io_page_base(), Nat::add_comm(0x410000, offset)), Nat::add_sub_cancel(offset, 0x410000));
+    cong_fn<Nat, IoMemory>(λ start => io_store_offset(memory, start, bytes),
+        trans(cong_fn<Nat, Nat>(λ a => a -io_page_base(), page_address(offset, room)), back))
+}
+theorem page_writable(memory: IoMemory, offset: Nat, room: offset + 8 <= 4096): IoWritable(memory, BitVec::ofNat(0x410000 + offset), 8) {
+    let value = page_address(offset, room);
+    ⟨j(sym(value), λ a _ => io_page_base() <= a, { omega }), j(sym(value), λ a _ => a + 8 <= io_page_base() + 4096, { omega })⟩
+}
+
+// One field: its count's two words formatted and stored, the counts still in
+// their registers.
+theorem field_prints(file: List<BitVec(8)>, count: Gpr, offset, separator: Nat, low, high: StructuredCode,
+    low_keeps, high_keeps: Gpr → Type, format: FieldsFormat(low, high, low_keeps, high_keeps), at: Nat,
+    pieces: (page: Nat → BitVec(8)) → FieldPieces(IoMemory(file, page), count, offset, separator, low, high, at),
+    n: Nat, room: offset + 12 <= 4096, page: Nat → BitVec(8), state: MachineState<IoMemory>,
+    memory_is: state.memory = IoMemory(file, page), rip_is: state.rip = eof_rip(at),
+    counted: read_gpr(count, state.gprs) = bitvec_nat::word_of_nat(64, n)):
+    Exists<MachineState<IoMemory>>(λ after => LinuxSteps(io_linux(), state, after) ∧
+        ((after.memory = field_stored(IoMemory(file, page), n, offset, separator)) ∧
+        ((after.rip = eof_rip(fc_end(count, offset, separator, low, high, at))) ∧ CountsKept(after.gprs, state.gprs)))) {
+    let fetch = io_fetch_access();
+    let data = io_data_access();
+    let entry: BitVec(64) = BitVec::ofNat(0x4000e8);
+    let writes = linux_writes(io_linux());
+    let word = bitvec_nat::word_of_nat(64, n);
+    let tail: BitVec(64) = BitVec::ofNat(16777216 * separator);
+    let here = pieces(page);
+    let m0 = IoMemory(file, page);
+    // The count into R11.
+    let counted_in = block_fetched(fetch, data, field_count_block(count), state, trivial,
+        resident_state(fetch, canonical_block_bytes(field_count_block(count)), m0, eof_rip(at), state, memory_is, rip_is, here.count_at));
+    let s1 = execute_block_normal(field_count_block(count), state);
+    let s1_memory: (s1.memory = m0) = trans(pure_block_memory(field_count_block(count), state), memory_is);
+    let s1_rip: (s1.rip = eof_rip(fc_low(count, at))) =
+        trans(counted_in.right, rip_advance(entry, state.rip, at, canonical_block_bytes(field_count_block(count)).len(), rip_is));
+    let s1_r11: (read_gpr(R11, s1.gprs) = word) = counted;
+    // The low word.
+    have lw = format.low_cert(s1, read_gpr(R11, s1.gprs), refl);
+    let lw_run = artifact_fetched(low, s1, Rax, field_low(read_gpr(R11, s1.gprs)), low_keeps, lw,
+        resident_state(fetch, structured_bytes(low), m0, eof_rip(fc_low(count, at)), s1, s1_memory, s1_rip, here.low_at));
+    let s2 = lw.after;
+    let s2_memory: (s2.memory = m0) = trans(lw.memory_preserved, s1_memory);
+    let s2_rip: (s2.rip = eof_rip(fc_block(count, low, at))) =
+        trans(lw.rip_correct, rip_advance(entry, s1.rip, fc_low(count, at), structured_bytes(low).len(), s1_rip));
+    let s2_r11: (read_gpr(R11, s2.gprs) = word) = trans(lw.registers_preserved(R11, format.low_r11), s1_r11);
+    let s2_rax: (read_gpr(Rax, s2.gprs) = field_low(word)) = trans(lw.result_correct, cong_fn<BitVec(64), BitVec(64)>(λ v => field_low(v), s1_r11));
+    let k2: CountsKept(s2.gprs, s1.gprs) = ⟨lw.registers_preserved(R13, format.low_r13), ⟨lw.registers_preserved(R14, format.low_r14),
+        lw.registers_preserved(R15, format.low_r15)⟩⟩;
+    // Its address, and the high word's tail.
+    let blocked = block_fetched(fetch, data, field_low_block(offset, separator), s2, trivial,
+        resident_state(fetch, canonical_block_bytes(field_low_block(offset, separator)), m0, eof_rip(fc_block(count, low, at)), s2, s2_memory, s2_rip,
+            here.block_at));
+    let s3 = execute_block_normal(field_low_block(offset, separator), s2);
+    let s3_memory: (s3.memory = m0) = trans(pure_block_memory(field_low_block(offset, separator), s2), s2_memory);
+    let s3_rip: (s3.rip = eof_rip(fc_store(count, offset, separator, low, at))) =
+        trans(blocked.right, rip_advance(entry, s2.rip, fc_block(count, low, at), canonical_block_bytes(field_low_block(offset, separator)).len(), s2_rip));
+    let s3_rax: (read_gpr(Rax, s3.gprs) = field_low(word)) = s2_rax;
+    let s3_r11: (read_gpr(R11, s3.gprs) = word) = s2_r11;
+    // The low word stored.
+    let low_room: (offset + 8 <= 4096) = omega;
+    let stored = store_step(fetch, writes, fields_store(), s3, refl,
+        FetchedFrom(resident_readable(fetch, s3.memory, word_store_bytes(fields_store()), s3.rip,
+            resident_state(fetch, word_store_bytes(fields_store()), m0, eof_rip(fc_store(count, offset, separator, low, at)), s3, s3_memory, s3_rip,
+                here.store_at))),
+        j(sym(s3_memory), λ m _ => IoWritable(m, BitVec::ofNat(0x410000 + offset), 8), page_writable(m0, offset, low_room)));
+    let s4 = word_store_after(writes, fields_store(), s3);
+    let m1 = io_store_offset(m0, offset, word_bytes(field_low(word)));
+    let s4_memory: (s4.memory = m1) =
+        trans(cong_fn<BitVec(64), IoMemory>(λ value => io_store(s3.memory, BitVec::ofNat(0x410000 + offset), word_bytes(value)), s3_rax),
+            trans(cong_fn<IoMemory, IoMemory>(λ m => io_store(m, BitVec::ofNat(0x410000 + offset), word_bytes(field_low(word))), s3_memory),
+                page_store(m0, offset, word_bytes(field_low(word)), low_room)));
+    let s4_rip: (s4.rip = eof_rip(fc_high(count, offset, separator, low, at))) =
+        rip_advance(entry, s3.rip, fc_store(count, offset, separator, low, at), 3, s3_rip);
+    let there = pieces(m1.page);
+    // The high word.
+    have hw = format.high_cert(s4, read_gpr(R11, s4.gprs), read_gpr(R10, s4.gprs), refl, refl);
+    let hw_run = artifact_fetched(high, s4, Rax, field_high(read_gpr(R11, s4.gprs), read_gpr(R10, s4.gprs)), high_keeps, hw,
+        resident_state(fetch, structured_bytes(high), m1, eof_rip(fc_high(count, offset, separator, low, at)), s4, s4_memory, s4_rip, there.high_at));
+    let s5 = hw.after;
+    let s5_memory: (s5.memory = m1) = trans(hw.memory_preserved, s4_memory);
+    let s5_rip: (s5.rip = eof_rip(fc_block2(count, offset, separator, low, high, at))) =
+        trans(hw.rip_correct, rip_advance(entry, s4.rip, fc_high(count, offset, separator, low, at), structured_bytes(high).len(), s4_rip));
+    let s5_rax: (read_gpr(Rax, s5.gprs) = field_high(word, tail)) =
+        trans(hw.result_correct, cong_fn<BitVec(64), BitVec(64)>(λ v => field_high(v, tail), s3_r11));
+    let k5: CountsKept(s5.gprs, s4.gprs) = ⟨hw.registers_preserved(R13, format.high_r13), ⟨hw.registers_preserved(R14, format.high_r14),
+        hw.registers_preserved(R15, format.high_r15)⟩⟩;
+    // Its address.
+    let blocked2 = block_fetched(fetch, data, field_high_block(offset), s5, trivial,
+        resident_state(fetch, canonical_block_bytes(field_high_block(offset)), m1, eof_rip(fc_block2(count, offset, separator, low, high, at)), s5,
+            s5_memory, s5_rip, there.block2_at));
+    let s6 = execute_block_normal(field_high_block(offset), s5);
+    let s6_memory: (s6.memory = m1) = trans(pure_block_memory(field_high_block(offset), s5), s5_memory);
+    let s6_rip: (s6.rip = eof_rip(fc_store2(count, offset, separator, low, high, at))) =
+        trans(blocked2.right, rip_advance(entry, s5.rip, fc_block2(count, offset, separator, low, high, at),
+            canonical_block_bytes(field_high_block(offset)).len(), s5_rip));
+    let s6_rax: (read_gpr(Rax, s6.gprs) = field_high(word, tail)) = s5_rax;
+    // The high word stored.
+    let high_room: ((offset + 4) + 8 <= 4096) = omega;
+    let stored2 = store_step(fetch, writes, fields_store(), s6, refl,
+        FetchedFrom(resident_readable(fetch, s6.memory, word_store_bytes(fields_store()), s6.rip,
+            resident_state(fetch, word_store_bytes(fields_store()), m1, eof_rip(fc_store2(count, offset, separator, low, high, at)), s6, s6_memory, s6_rip,
+                there.store2_at))),
+        j(sym(s6_memory), λ m _ => IoWritable(m, BitVec::ofNat(0x410000 + (offset + 4)), 8), page_writable(m1, offset + 4, high_room)));
+    let s7 = word_store_after(writes, fields_store(), s6);
+    let s7_memory: (s7.memory = field_stored(m0, n, offset, separator)) =
+        trans(cong_fn<BitVec(64), IoMemory>(λ value => io_store(s6.memory, BitVec::ofNat(0x410000 + (offset + 4)), word_bytes(value)), s6_rax),
+            trans(cong_fn<IoMemory, IoMemory>(λ m => io_store(m, BitVec::ofNat(0x410000 + (offset + 4)), word_bytes(field_high(word, tail))), s6_memory),
+                page_store(m1, offset + 4, word_bytes(field_high(word, tail)), high_room)));
+    let s7_rip: (s7.rip = eof_rip(fc_end(count, offset, separator, low, high, at))) =
+        rip_advance(entry, s6.rip, fc_store2(count, offset, separator, low, high, at), 3, s6_rip);
+    let k1: CountsKept(s1.gprs, state.gprs) = ⟨refl, ⟨refl, refl⟩⟩;
+    let k4: CountsKept(s4.gprs, s2.gprs) = ⟨refl, ⟨refl, refl⟩⟩;
+    let k7: CountsKept(s7.gprs, s5.gprs) = ⟨refl, ⟨refl, refl⟩⟩;
+    let steps = linux_steps_trans(io_linux(), state, s3, s7,
+        linux_steps_of_fetched(io_linux(), state, s3, fetched_steps_trans(fetch, data, state, s1, s3, counted_in.left,
+            fetched_steps_trans(fetch, data, s1, s2, s3, lw_run, blocked.left))),
+        linux_steps_trans(io_linux(), s3, s4, s7, linux_steps_store(io_linux(), s3, s4, stored),
+            linux_steps_trans(io_linux(), s4, s6, s7,
+                linux_steps_of_fetched(io_linux(), s4, s6, fetched_steps_trans(fetch, data, s4, s5, s6, hw_run, blocked2.left)),
+                linux_steps_store(io_linux(), s6, s7, stored2))));
+    Exists(s7, ⟨steps, ⟨s7_memory, ⟨s7_rip,
+        counts_kept_trans(state.gprs, s5.gprs, s7.gprs,
+            counts_kept_trans(state.gprs, s4.gprs, s5.gprs,
+                counts_kept_trans(state.gprs, s2.gprs, s4.gprs, counts_kept_trans(state.gprs, s1.gprs, s2.gprs, k1, k2), k4), k5), k7)⟩⟩⟩)
+}
+
+// ---------------------------------------------------------------------------
+// What the page holds.
+
+theorem take_nth<A>(xs: List<A>): (k, i: Nat) → (x: A) → xs.take(k).nth(i) = Some(x) → xs.nth(i) = Some(x) {
+    match xs as λ ys => (k, i: Nat) → (x: A) → ys.take(k).nth(i) = Some(x) → ys.nth(i) = Some(x) {
+        Nil => λ k i x present => absurd(present),
+        Cons(h, t) => λ k => match k as λ m => (i: Nat) → (x: A) → Cons(h, t).take(m).nth(i) = Some(x) → Cons(h, t).nth(i) = Some(x) {
+            Zero => λ i x present => absurd(present),
+            Succ(m) => λ i => match i as λ q => (x: A) → Cons(h, t).take(Succ(m)).nth(q) = Some(x) → Cons(h, t).nth(q) = Some(x) {
+                Zero => λ x present => present,
+                Succ(q) => λ x present => take_nth(t, m, q, x, present),
+            },
+        },
+    }
+}
+
+theorem trans_le_succ(offset, len, start: Nat, below: offset + Succ(len) <= start): Succ(offset) + len <= start { omega }
+
+theorem option_some_inj(a, b: BitVec(8), same: Some(a) = Some(b)): a = b {
+    j(same, λ o _ => a = (match o { None => a, Some(x) => x }), refl)
+}
+
+// The page holds `bytes` from `offset`.
+// (The offset varies in the recursion, so it is taken after the match.)
+fn stored_from(page: Nat → BitVec(8), bytes: List<BitVec(8)>) → Nat → Type {
+    match bytes { Nil => λ _ => True, Cons(byte, rest) => λ offset => (page(offset) = byte) ∧ stored_from(page, rest)(Succ(offset)) }
+}
+fn StoredList(page: Nat → BitVec(8), offset: Nat, bytes: List<BitVec(8)>) → Type { stored_from(page, bytes)(offset) }
+
+theorem store_reads(memory: IoMemory, offset, j: Nat, bytes: List<BitVec(8)>, byte: BitVec(8), present: bytes.nth(j) = Some(byte)):
+    io_store_offset(memory, offset, bytes).page(offset + j) = byte {
+    let reached = eq_true_of_is_true(offset.leb(offset + j), Nat::leb_complete(offset, offset + j, Nat::le_add_l(offset, j)));
+    let back: ((offset + j) -offset = j) = trans(cong_fn<Nat, Nat>(λ a => a -offset, Nat::add_comm(offset, j)), Nat::add_sub_cancel(j, offset));
+    let found: (bytes.nth((offset + j) -offset) = Some(byte)) = trans(cong_fn<Nat, Option<BitVec(8)>>(λ k => bytes.nth(k), back), present);
+    j(sym(reached), λ b _ => (match b {
+            False => memory.page(offset + j),
+            True => match bytes.nth((offset + j) -offset) { None => memory.page(offset + j), Some(byte) => byte },
+        }) = byte,
+        j(sym(found), λ o _ => (match o { None => memory.page(offset + j), Some(byte) => byte }) = byte, refl))
+}
+
+// A store's first four bytes.
+theorem stored_four(memory: IoMemory, offset: Nat, word: List<BitVec(8)>, c0, c1, c2, c3: BitVec(8),
+    taken: word.take(4) = [c0, c1, c2, c3]):
+    StoredList(io_store_offset(memory, offset, word).page, offset, [c0, c1, c2, c3]) {
+    let at = λ (k: Nat) (c: BitVec(8)) (present: word.take(4).nth(k) = Some(c)) => store_reads(memory, offset, k, word, c, take_nth(word, 4, k, c, present));
+    let t = λ (k: Nat) (c: BitVec(8)) (listed: Cons(c0, Cons(c1, Cons(c2, Cons(c3, Nil)))).nth(k) = Some(c)) => j(sym(taken), λ xs _ => xs.nth(k) = Some(c), listed);
+    ⟨at(0, c0, t(0, c0, refl)), ⟨at(1, c1, t(1, c1, refl)), ⟨at(2, c2, t(2, c2, refl)), ⟨at(3, c3, t(3, c3, refl)), trivial⟩⟩⟩⟩
+}
+
+// Bytes below a store are untouched by it.
+theorem stored_kept(memory: IoMemory, start: Nat, word: List<BitVec(8)>, bytes: List<BitVec(8)>):
+    (offset: Nat) → offset + bytes.len() <= start → StoredList(memory.page, offset, bytes) →
+    StoredList(io_store_offset(memory, start, word).page, offset, bytes) {
+    match bytes as λ bs => (offset: Nat) → offset + bs.len() <= start → StoredList(memory.page, offset, bs) →
+        StoredList(io_store_offset(memory, start, word).page, offset, bs) {
+        Nil => λ offset below held => trivial,
+        Cons(byte, rest) => λ offset below held => {
+            let under: (offset < start) = omega;
+            let skipped = io_leb_false(start, offset, under);
+            let same: (io_store_offset(memory, start, word).page(offset) = memory.page(offset)) =
+                j(sym(skipped), λ b _ => (match b {
+                        False => memory.page(offset),
+                        True => match word.nth(offset -start) { None => memory.page(offset), Some(x) => x },
+                    }) = memory.page(offset), refl);
+            let later: (Succ(offset) + rest.len() <= start) = trans_le_succ(offset, rest.len(), start, below);
+            ⟨trans(same, held.left), stored_kept(memory, start, word, rest, Succ(offset), later, held.right)⟩
+        },
+    }
+}
+
+// Two stored runs, one after the other, are one.
+theorem stored_join(page: Nat → BitVec(8), front: List<BitVec(8)>): (back: List<BitVec(8)>) → (offset: Nat) →
+    StoredList(page, offset, front) → StoredList(page, offset + front.len(), back) → StoredList(page, offset, front ++ back) {
+    match front as λ fs => (back: List<BitVec(8)>) → (offset: Nat) →
+        StoredList(page, offset, fs) → StoredList(page, offset + fs.len(), back) → StoredList(page, offset, fs ++ back) {
+        Nil => λ back offset held rest => rest,
+        Cons(byte, more) => λ back offset held rest =>
+            ⟨held.left, stored_join(page, more, back, Succ(offset), held.right,
+                j(sym(Nat::add_succ_left(offset, more.len())), λ at _ => StoredList(page, at, back), rest))⟩,
+    }
+}
+
+// A run stored from the page's start is what a write from there sends.
+theorem stored_nth(page: Nat → BitVec(8), bytes: List<BitVec(8)>): (offset, i: Nat) → (byte: BitVec(8)) →
+    StoredList(page, offset, bytes) → bytes.nth(i) = Some(byte) → page(offset + i) = byte {
+    match bytes as λ bs => (offset, i: Nat) → (byte: BitVec(8)) → StoredList(page, offset, bs) → bs.nth(i) = Some(byte) → page(offset + i) = byte {
+        Nil => λ offset i byte held present => absurd(present),
+        Cons(first, rest) => λ offset i => match i as λ k => (byte: BitVec(8)) → StoredList(page, offset, Cons(first, rest)) →
+                Cons(first, rest).nth(k) = Some(byte) → page(offset + k) = byte {
+            Zero => λ byte held present => trans(held.left, option_some_inj(first, byte, present)),
+            Succ(k) => λ byte held present => j(Nat::add_succ_left(offset, k), λ at _ => page(at) = byte,
+                stored_nth(page, rest, Succ(offset), k, byte, held.right, present)),
+        },
+    }
+}
+theorem stored_sends(memory: IoMemory, bytes: List<BitVec(8)>, held: StoredList(memory.page, 0, bytes), fits: bytes.len() <= 4096):
+    LinuxWritesFrom(io_linux(), memory, BitVec::ofNat(0x410000), bytes) {
+    λ i byte present => {
+        let inside: (i < 4096) = Succ(i).le_trans(bytes.len(), 4096, nth_some_below(bytes, i, byte, present), fits);
+        let below: (Succ(io_page_base() + i) <= io_page_base() + 4096) = omega;
+        let bound: (io_page_base() + i < Nat::pow(2, 64)) =
+            Succ(io_page_base() + i).le_trans(io_page_base() + 4096, Nat::pow(2, 64), below, Nat::leb_sound(io_page_base() + 4096, Nat::pow(2, 64), trivial));
+        let value = bitvec_nat::toNat_word_of_nat(64, io_page_base() + i, bound);
+        let offset = trans(cong_fn<Nat, Option<Nat>>(λ a => io_offset_of(a), value), io_offset_in_page(i, inside));
+        let read: (io_read(memory, bitvec_nat::word_of_nat(64, io_page_base() + i)) = Some(memory.page(i))) =
+            j(sym(offset), λ found _ => (match found {
+                    Some(k) => Some(memory.page(k)),
+                    None => io_file_read(memory.file, bitvec_nat::word_of_nat(64, io_page_base() + i)),
+                }) = Some(memory.page(i)), refl);
+        let held_i: (memory.page(0 + i) = byte) = stored_nth(memory.page, bytes, 0, i, byte, held, present);
+        let byte_i: (memory.page(i) = byte) = j(Nat::add_left_zero(i), λ k _ => memory.page(k) = byte, held_i);
+        trans(read, cong_fn<BitVec(8), Option<BitVec(8)>>(λ b => Some(b), byte_i))
+    }
+}
+
+// A field's eight bytes: its seven columns and its separator.
+fn field_run(n, separator: Nat) → List<BitVec(8)> { field(n) ++ [BitVec::ofNat(separator)] }
+
+theorem field_run_stored(memory: IoMemory, n, offset, separator: Nat, small: n < 10000000, sep_small: separator < 256, room: offset + 12 <= 4096):
+    StoredList(field_stored(memory, n, offset, separator).page, offset, field_run(n, separator)) {
+    let word = bitvec_nat::word_of_nat(64, n);
+    let tail: BitVec(64) = BitVec::ofNat(16777216 * separator);
+    let tail_value: (tail.toNat() = 16777216 * separator) = BitVec::toNat_ofNat(64, 16777216 * separator, { omega });
+    let m1 = io_store_offset(memory, offset, word_bytes(field_low(word)));
+    let low = stored_four(memory, offset, word_bytes(field_low(word)), column(n, 1000000), column(n, 100000), column(n, 10000), column(n, 1000),
+        field_low_bytes(n, small));
+    let high = stored_four(m1, offset + 4, word_bytes(field_high(word, tail)), column(n, 100), column(n, 10), digit(n.mod(10)), BitVec::ofNat(separator),
+        field_high_bytes(n, separator, tail, small, tail_value, sep_small));
+    let kept = stored_kept(m1, offset + 4, word_bytes(field_high(word, tail)), [column(n, 1000000), column(n, 100000), column(n, 10000), column(n, 1000)],
+        offset, Nat::le_refl(offset + 4), low);
+    stored_join(field_stored(memory, n, offset, separator).page, [column(n, 1000000), column(n, 100000), column(n, 10000), column(n, 1000)],
+        [column(n, 100), column(n, 10), digit(n.mod(10)), BitVec::ofNat(separator)], offset, kept, high)
+}
+
+// Runs below a field's stores are untouched by them.
+theorem field_kept(memory: IoMemory, n, start, separator, offset: Nat, bytes: List<BitVec(8)>, below: offset + bytes.len() <= start,
+    held: StoredList(memory.page, offset, bytes)):
+    StoredList(field_stored(memory, n, start, separator).page, offset, bytes) {
+    let word = bitvec_nat::word_of_nat(64, n);
+    let m1 = io_store_offset(memory, start, word_bytes(field_low(word)));
+    let further: (offset + bytes.len() <= start + 4) = Nat::le_trans(offset + bytes.len(), start, start + 4, below, Nat::le_add_l(start, 4));
+    stored_kept(m1, start + 4, word_bytes(field_high(word, BitVec::ofNat(16777216 * separator))), bytes, offset, further,
+        stored_kept(memory, start, word_bytes(field_low(word)), bytes, offset, below, held))
+}
+
+// The three fields' stores hold the line.
+theorem line_stored(memory: IoMemory, a, b, c: Nat, sa: a < 10000000, sb: b < 10000000, sc: c < 10000000):
+    StoredList(field_stored(field_stored(field_stored(memory, a, 0, 32), b, 8, 32), c, 16, 10).page, 0, three_fields_line(a, b, c)) {
+    let m1 = field_stored(memory, a, 0, 32);
+    let m2 = field_stored(m1, b, 8, 32);
+    let m3 = field_stored(m2, c, 16, 10);
+    let first = field_kept(m2, c, 16, 10, 0, field_run(a, 32), trivial,
+        field_kept(m1, b, 8, 32, 0, field_run(a, 32), trivial, field_run_stored(memory, a, 0, 32, sa, trivial, trivial)));
+    let second = field_kept(m2, c, 16, 10, 8, field_run(b, 32), trivial, field_run_stored(m1, b, 8, 32, sb, trivial, trivial));
+    let third = field_run_stored(m2, c, 16, 10, sc, trivial, trivial);
+    stored_join(m3.page, field_run(a, 32), field_run(b, 32) ++ field_run(c, 10), 0, first,
+        stored_join(m3.page, field_run(b, 32), field_run(c, 10), 8, second, third))
+}
+
+// ---------------------------------------------------------------------------
+// The tail.
+
+// From the loop's end with the counts in R13, R14 and R15: format and store
+// each, write the line, exit 0 (or exit 1 at a failed write).
+theorem fields_tail_runs<C>(file: List<BitVec(8)>, needle: BitVec(8), loop_bytes: List<BitVec(8)>, rep: Gprs → C → Type,
+    first, second, third: C → Nat,
+    counts: (gprs: Gprs) → (carry: C) → rep(gprs, carry) → (read_gpr(R13, gprs) = bitvec_nat::word_of_nat(64, first(carry))) ∧
+        ((read_gpr(R14, gprs) = bitvec_nat::word_of_nat(64, second(carry))) ∧ (read_gpr(R15, gprs) = bitvec_nat::word_of_nat(64, third(carry)))),
+    low, high: StructuredCode, low_keeps, high_keeps: Gpr → Type, format: FieldsFormat(low, high, low_keeps, high_keeps), pj: PrintJumps,
+    resident: (page: Nat → BitVec(8)) → CodeResident(io_fetch_access(), IoMemory(file, page), fields_tail(low, high, pj),
+        eof_rip(state_at_done(needle, loop_bytes))),
+    targets: WriteTargets(fields_at_write(needle, loop_bytes, low, high), pj),
+    total: C, small: (first(total) < 10000000) ∧ ((second(total) < 10000000) ∧ (third(total) < 10000000)),
+    ending: WriteEnding, ending_ok: WriteEndingOk(ending), steps: List<WriteStep>,
+    steps_ok: WriteSteps(steps)(three_fields_line(first(total), second(total), third(total)))):
+    StateTail(file, needle, loop_bytes, rep, total, write_events(three_fields_line(first(total), second(total), third(total)), steps, ending)) {
+    λ page state at_done memory_is placed => {
+        let a = first(total);
+        let b = second(total);
+        let c = third(total);
+        let line = three_fields_line(a, b, c);
+        let held = counts(state.gprs, total, placed);
+        let pieces = λ (p: Nat → BitVec(8)) => fields_pieces(IoMemory(file, p), needle, loop_bytes, low, high, pj, resident(p));
+        have f0 = field_prints(file, R13, 0, 32, low, high, low_keeps, high_keeps, format, state_at_done(needle, loop_bytes),
+            λ p => pieces(p).first, a, trivial, page, state, memory_is, at_done, held.left);
+        let m1 = field_stored(IoMemory(file, page), a, 0, 32);
+        let s1 = f0.witness;
+        have f1 = field_prints(file, R14, 8, 32, low, high, low_keeps, high_keeps, format, fields_at1(needle, loop_bytes, low, high),
+            λ p => pieces(p).second, b, trivial, m1.page, s1, f0.proof.right.left, f0.proof.right.right.left,
+            trans(f0.proof.right.right.right.right.left, held.right.left));
+        let m2 = field_stored(m1, b, 8, 32);
+        let s2 = f1.witness;
+        have f2 = field_prints(file, R15, 16, 10, low, high, low_keeps, high_keeps, format, fields_at2(needle, loop_bytes, low, high),
+            λ p => pieces(p).third, c, trivial, m2.page, s2, f1.proof.right.left, f1.proof.right.right.left,
+            trans(f1.proof.right.right.right.right.right, trans(f0.proof.right.right.right.right.right, held.right.right)));
+        let m3 = field_stored(m2, c, 16, 10);
+        let s3 = f2.witness;
+        // The line's registers.
+        let there = pieces(m3.page);
+        let fetch = io_fetch_access();
+        let data = io_data_access();
+        let lined = block_fetched(fetch, data, fields_line_block(), s3, trivial,
+            resident_state(fetch, canonical_block_bytes(fields_line_block()), m3, eof_rip(fields_at_line(needle, loop_bytes, low, high)), s3,
+                f2.proof.right.left, f2.proof.right.right.left, there.line_at));
+        let s4 = execute_block_normal(fields_line_block(), s3);
+        let s4_memory: (s4.memory = m3) = trans(pure_block_memory(fields_line_block(), s3), f2.proof.right.left);
+        let s4_rip: (s4.rip = eof_rip(fields_at_write(needle, loop_bytes, low, high))) =
+            trans(lined.right, rip_advance(BitVec::ofNat(0x4000e8), s3.rip, fields_at_line(needle, loop_bytes, low, high),
+                canonical_block_bytes(fields_line_block()).len(), f2.proof.right.right.left));
+        let stored = line_stored(IoMemory(file, page), a, b, c, small.left, small.right.left, small.right.right);
+        let sends: LinuxWritesFrom(io_linux(), m3, read_gpr(R9, s4.gprs), line) = stored_sends(m3, line, stored, trivial);
+        linux_runs_after_linux_steps(io_linux(), write_events(line, steps, ending), state, s3,
+            linux_steps_trans(io_linux(), state, s1, s3, f0.proof.left, linux_steps_trans(io_linux(), s1, s2, s3, f1.proof.left, f2.proof.left)),
+            linux_runs_after_steps(io_linux(), write_events(line, steps, ending), s3, s4, lined.left,
+                wl_from(m3, fields_at_write(needle, loop_bytes, low, high), pj, there.write, targets, ending, ending_ok, steps)(
+                    line, steps_ok, s4, trivial, trivial, s4_rip, s4_memory, sends, refl, trivial)))
+    }
+}
+
+// The process claim: for every way the reads may split the input into
+// non-empty chunks, with EINTRs between them, ending at the empty read or at
+// a failed read, and every way the writes may return, the file has a run that
+// reads and folds the chunks, then either writes the three counts of the
+// final state to stdout as GNU `wc` prints them on a pipe and exits 0, or
+// exits 1 at the failure. The counts are below 10^7 and the input shorter
+// than 2^64 - 4096 bytes.
+theorem read_fields_runs<C>(file: List<BitVec(8)>, p: LoopPlacement, at: ReadStatePlacement(p),
+    rep: Gprs → C → Type, fits_of: Nat → Nat → C → Type, framed: StateFramed(rep),
+    region: ReadonlyLoop<C>, loop_code: AccessCode, loop_bytes: List<BitVec(8)>,
+    source: ReadonlyBytes → BitVec(8) → Nat → Nat → C → LoopOutcome<C>, needle: BitVec(8),
+    agreement: (buffer: ReadonlyBytes) → (needle: BitVec(8)) → (budget, cursor: Nat) → (carry: C) →
+        loop_run(budget, region, buffer, needle, cursor, carry) = source(buffer, needle, budget, cursor, carry),
+    native: ReadStateCertificate(p, rep, fits_of, region, loop_code, loop_bytes, source),
+    folds: LoopFolds(region), init: C, initialised: StateInitialised(rep, init), room_for: StateRoom(fits_of, region, needle, init),
+    first, second, third: C → Nat,
+    counts: (gprs: Gprs) → (carry: C) → rep(gprs, carry) → (read_gpr(R13, gprs) = bitvec_nat::word_of_nat(64, first(carry))) ∧
+        ((read_gpr(R14, gprs) = bitvec_nat::word_of_nat(64, second(carry))) ∧ (read_gpr(R15, gprs) = bitvec_nat::word_of_nat(64, third(carry)))),
+    low, high: StructuredCode, low_keeps, high_keeps: Gpr → Type, format: FieldsFormat(low, high, low_keeps, high_keeps),
+    jumps: EofJumps,
+    exit_reads: jumps.ed.sign_extend(32).toNat() = state_exit_skip(needle, loop_bytes),
+    fail_reads: jumps.sd.sign_extend(32).toNat() = state_fail_skip(needle, loop_bytes),
+    back_closes: state_loop_span(needle, loop_bytes) + 5 + jumps.bd.sign_extend(32).toNat() = Nat::pow(2, 64),
+    retry_closes: state_retry_span(needle, loop_bytes) + 6 + jumps.rd.sign_extend(32).toNat() = Nat::pow(2, 64),
+    pj: PrintJumps,
+    write_fail_reads: pj.sd.sign_extend(32).toNat() = print_fail_skip(),
+    write_exit_reads: pj.zd.sign_extend(32).toNat() = print_exit_skip(),
+    write_back_closes: print_loop_span() + 5 + pj.bd.sign_extend(32).toNat() = Nat::pow(2, 64),
+    write_retry_closes: print_retry_span() + 6 + pj.rd.sign_extend(32).toNat() = Nat::pow(2, 64),
+    resident: (page: Nat → BitVec(8)) → CodeResident(io_fetch_access(), IoMemory(file, page),
+        read_fields_code(needle, loop_bytes, jumps, low, high, pj), BitVec::ofNat(0x4000e8)),
+    chunks: List<ReadStep>, ok: EofChunks(chunks), ending: ReadEnding, ending_ok: EofEnding(ending),
+    room: eof_input(chunks).len() + 4096 < Nat::pow(2, 64),
+    small: (first(step_fold(region, needle, eof_input(chunks), init)) < 10000000) ∧
+        ((second(step_fold(region, needle, eof_input(chunks), init)) < 10000000) ∧ (third(step_fold(region, needle, eof_input(chunks), init)) < 10000000)),
+    writes: List<WriteStep>,
+    writes_ok: WriteSteps(writes)(three_fields_line(first(step_fold(region, needle, eof_input(chunks), init)),
+        second(step_fold(region, needle, eof_input(chunks), init)), third(step_fold(region, needle, eof_input(chunks), init)))),
+    written: WriteEnding, written_ok: WriteEndingOk(written),
+    page: Nat → BitVec(8), gprs: Gprs, flags: Flags):
+    LinuxRuns(io_linux(), eof_events(chunks, ending, write_events(three_fields_line(first(step_fold(region, needle, eof_input(chunks), init)),
+        second(step_fold(region, needle, eof_input(chunks), init)), third(step_fold(region, needle, eof_input(chunks), init))), writes, written)),
+        io_initial(file, page, gprs, flags)) {
+    let total = step_fold(region, needle, eof_input(chunks), init);
+    let tail = fields_tail(low, high, pj);
+    let pieces = λ (page: Nat → BitVec(8)) => state_pieces(IoMemory(file, page), needle, loop_bytes, jumps, tail, resident(page));
+    state_start(file, p, at, rep, fits_of, framed, region, loop_code, loop_bytes, source, needle, agreement, native, folds,
+        init, initialised, room_for, jumps,
+        state_exit_target(needle, loop_bytes, jumps.ed, exit_reads), state_js_target(needle, loop_bytes, jumps.sd, fail_reads),
+        state_back_target(needle, loop_bytes, jumps.bd, back_closes), state_retry_target(needle, loop_bytes, jumps.rd, retry_closes),
+        tail, pieces, chunks, ok, ending, ending_ok, room,
+        write_events(three_fields_line(first(total), second(total), third(total)), writes, written),
+        fields_tail_runs(file, needle, loop_bytes, rep, first, second, third, counts, low, high, low_keeps, high_keeps, format, pj,
+            λ page => pieces(page).tail_at,
+            write_targets(fields_at_write(needle, loop_bytes, low, high), pj, write_fail_reads, write_exit_reads, write_back_closes, write_retry_closes),
+            total, small, written, written_ok, writes, writes_ok),
+        page, gprs, flags)
+}
