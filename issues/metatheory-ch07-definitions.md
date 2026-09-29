@@ -1,6 +1,6 @@
 ---
 title: Ch. 07 obligations for bodied globals: glueing at p, neutral at c
-status: open
+status: closed
 labels: [kernel,delam,metatheory]
 created: 2026-07-31
 updated: 2026-09-29
