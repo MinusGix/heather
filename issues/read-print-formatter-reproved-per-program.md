@@ -1,6 +1,6 @@
 ---
 title: Name the print formatter's certificates independently of the program
-status: open
+status: closed
 labels: [x86,native,performance]
 created: 2026-09-28
 updated: 2026-09-28
@@ -36,3 +36,7 @@ prefixes end in `_native`, so the names can't collide. The certificate
 already reads the parts' names from `FormatPart::prefix`. Measure with
 `scripts/perf ab` on a renamed program, as above; the formatter share should
 drop to the image-replay cost.
+
+## Log
+
+- 2026-09-28: Fixed. Renaming alone was not enough: a module image's cache key covers the interfaces of every module checked before it (ModuleCacheKey::for_source over the session's dependency list), and the formatter was checked after the program's source, context and pieces. The formatter now takes a fixed prefix (read_loop::FORMAT_PREFIX, print_format) and is checked straight after the bundled library, before any program module. Measured by hand, since scripts/perf ab's corpus has no second-program-over-warm-cache workload: over one cache, wc -l --print cold then the same program with count_lines renamed. Before: the renamed build 36 s with the formatter re-proved (~30 s). After: 6.7 s, the formatter replayed in 1.3 s; the first cold build is unchanged (the same declarations). Release CLI, one kernel worker.

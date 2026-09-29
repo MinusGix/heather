@@ -262,6 +262,10 @@ pub(super) const IMPORTS: &[&str] = &["elf64_read_loop", "elf64_io", "elf64_call
     "linux_x86_64_determinism", "function_ir_loop",
     "function_ir_loop_trace", "x86_64_fetched_code", "x86_64_fetch", "bitvec_nat", "x86_64", "bitvec", "list", "logic", "nat"];
 
+/// The formatter certificates' prefix. Program prefixes end in `_native`, so
+/// no program's declarations can share it.
+pub(super) const FORMAT_PREFIX: &str = "print_format";
+
 /// One of the formatter's certificates: a module of its own, and its bytes.
 pub(super) struct FormatPart { pub module: String, pub prefix: String, pub text: String, pub bytes: Vec<u8> }
 

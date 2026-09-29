@@ -224,6 +224,20 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
             name: name.into(), path: PathBuf::from(format!("{name}.hthr")), src: src.into(),
         })?;
     }
+    // The formatter's three certificates, each a module of its own. They
+    // depend on the profile, not the program, so their names do not name the
+    // program, and they are checked before any of its modules: an image's
+    // cache key covers every module checked before it, so a second program
+    // replays them instead of re-proving them.
+    let format = if read_loop && print {
+        let parts = read_loop::generate_format(&elab, read_loop::FORMAT_PREFIX)?;
+        for part in &parts {
+            check_module(&mut elab, &mut session, &loader::Module {
+                name: part.module.clone(), path: PathBuf::from(format!("{}.hthr", part.module)), src: part.text.clone(),
+            })?;
+        }
+        Some(parts)
+    } else { None };
     for module in &sources {
         if let Some((_, bundled)) = bundle.iter().find(|(name, _)| *name == module.name) {
             if module.src != *bundled {
@@ -259,16 +273,6 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
         check_module(&mut elab, &mut session, &loader::Module {
             name: pieces.clone(), path: PathBuf::from(format!("{pieces}.hthr")), src: emission.pieces.clone(),
         })?;
-        // The formatter's three certificates, each a module of its own.
-        let format = if print {
-            let parts = read_loop::generate_format(&elab, &prefix)?;
-            for part in &parts {
-                check_module(&mut elab, &mut session, &loader::Module {
-                    name: part.module.clone(), path: PathBuf::from(format!("{}.hthr", part.module)), src: part.text.clone(),
-                })?;
-            }
-            Some(parts)
-        } else { None };
         proof = Module::default();
         let imports = read_loop::IMPORTS.iter().chain(if print { read_loop::PRINT_IMPORTS } else { &[] });
         for name in imports.filter(|name| !emission.text.contains(&format!("import {name};"))) {
