@@ -33,6 +33,8 @@ mod function_ir_loop_trace;
 mod read_loop_process;
 #[path = "../read_state_process.rs"]
 mod read_state_process;
+#[path = "../field_line_format.rs"]
+mod field_line_format;
 #[path = "../read_print_process.rs"]
 mod read_print_process;
 #[path = "../linux_determinism.rs"]

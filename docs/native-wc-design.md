@@ -360,6 +360,35 @@ copy and save; nothing needs that yet.
 - The meaning lemma: the 24 bytes are `wc_line(l, w, c)`. `decimal_line`'s
   lemmas are the model.
 
+### 5.1 The formatter (C1, 2026-09-29)
+
+**Amended: a field is two words.** Seven columns and a separator fill the
+word, which leaves no room for the value the restoring chain works on, so
+`lib/field_line.hthr` computes each field as two words with the value above
+bit 32: `field_low(n)` (columns for 10^6 down to 10^3; the rest of the
+count stays above them) and `field_high(n, tail)` (the top four digits taken
+away at weight zero, then the columns for 100, 10 and 1, then `tail`'s byte,
+the separator). Stored at +0 and +4, the second overwrites what is left of
+the first, and each later field's low word overwrites the previous high
+word's zero tail. A column left of the count's first digit is a space: a
+`mark` step adds `'0' − ' '` to its byte when the count reaches its place
+value. The spec is stated per column (`column(n, place)`: the digit there,
+or a space left of the first digit; `field`, `three_fields_line`). The kit
+is `decimal_line`'s at 2^32 (`field_*`). The generator now imports the
+modules of the helpers a source calls (`owners`), which `decimal_line`'s own
+formatter never needed.
+
+**V4's answer: the words are too big to place.** Both certify (tests
+`field_words_certify`, `slow_acceptance_field_line_refusals`), but
+`field_low` lowers to 1,911 bytes and `field_high` to 2,792; three inline
+copies are 14 KB, and the program must fit one page (the call profile's RW
+page is at 0x401000), with `wc`'s loop already 890 bytes. The size is the
+lowering's, not the algorithm's: a mark is 68 bytes where about 20 would do
+(a comparison's bit is materialised and tested instead of branching on the
+flags, a copy is `movabs 0; or`, a zero is a 10-byte immediate), and
+`raise32` is 288 bytes of `mov`/`add`/`mov`. Certification costs about
+36 s and 65 s. Placement: §8, question 4.
+
 ## 6. Slice D: the program
 
 `examples/x86-native/wc.hthr`:
@@ -402,3 +431,9 @@ copy and save; nothing needs that yet.
    later.
 3. **Order: slice A first**, landed on its own. Then B with its probe, then C
    and D.
+4. **Where the formatter's code goes (2026-09-29, §5.1): lift the one-page
+   limit.** The read profile's RW page moves up so a program image can fill
+   the file's 64-KiB window, and the formatter goes inline three times. The
+   alternatives, a tighter structured lowering and one copy shared by a call
+   or a loop, are left for later; the lowering's size is filed with §5.1's
+   measurements.

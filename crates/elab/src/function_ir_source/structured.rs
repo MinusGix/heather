@@ -763,9 +763,25 @@ impl ReflectedStructuredFunction {
     fn owners(&self) -> Vec<String> {
         let own = self.source_name.rsplit_once("::").map(|(owner, _)| owner.to_string());
         let mut owners: Vec<String> = Vec::new();
+        // Helpers the source calls are named where the composition crosses
+        // them, so their modules are imported too.
+        fn calls(value: &cert::SourceValue, into: &mut Vec<String>) {
+            match value {
+                cert::SourceValue::Call { name, arguments, .. } => {
+                    into.push(name.clone());
+                    for (_, argument) in arguments { calls(argument, into); }
+                }
+                cert::SourceValue::Binary { left, right, .. } | cert::SourceValue::Less { left, right, .. } => { calls(left, into); calls(right, into); }
+                cert::SourceValue::Produced { value, .. } => calls(value, into),
+                cert::SourceValue::Port(_) | cert::SourceValue::Constant { .. } => {}
+            }
+        }
+        let mut called = Vec::new();
+        for value in self.sources.values().chain(self.bodies.values().flatten()) { calls(value, &mut called); }
         let names = self.choice.iter().map(|choice| choice.type_name.clone())
             .chain(self.record.iter().map(|record| record.type_name.clone()))
-            .chain(self.signature.iter().flatten().map(|record| record.type_name.clone()));
+            .chain(self.signature.iter().flatten().map(|record| record.type_name.clone()))
+            .chain(called);
         for name in names {
             if let Some((owner, _)) = name.rsplit_once("::") {
                 if own.as_deref() != Some(owner) && !owners.iter().any(|o| o == owner) { owners.push(owner.to_string()); }

@@ -1,0 +1,520 @@
+// Printing a count right-aligned in seven columns, as `printf("%7d")` does,
+// with a separator after it: GNU `wc`'s fields on a pipe
+// (docs/native-wc-design.md §5). The formatter is decimal_line's restoring
+// chain, but eight bytes of output leave no room in the word for the value,
+// so a field is two words: `field_low` holds its first four columns and
+// `field_high` the last three and the separator. Each keeps the value above
+// bit 32 while it works; stored four bytes apart, the second overwrites
+// what is left of the first. A column left of the count's first digit is a
+// space: a `mark` step adds the difference between '0' and ' ' to the
+// column's byte when the count reaches its place value.
+import decimal_line;
+import bitvec;
+import bool;
+import logic;
+import nat;
+import list;
+import omega;
+import bitvec_nat;
+import bitvec_omega;
+import x86_64;
+import x86_64_store;
+
+// The count moved above a field's four bytes: `n * 2^32`.
+fn raise32(n: BitVec(64)) → BitVec(64) { times256(times256(times256(times256(n)))) }
+
+// When at least `threshold` is there, add `weight`; take nothing away.
+fn mark(state, threshold, weight: BitVec(64)) → BitVec(64) {
+    match state.unsigned_lt_bit(threshold) {
+        True => state,
+        False => state.add(weight),
+    }
+}
+
+// For `n < 10^7`: the columns for millions down to thousands, spaces left of
+// the first digit, low first; the rest of the count is left above them.
+fn field_low(n: BitVec(64)) → BitVec(64) {
+    place(place(place(place(place(place(place(place(place(place(place(place(place(place(place(place(mark(mark(mark(mark(raise32(n).add(BitVec::ofNat(538976288)), BitVec::ofNat(4294967296000000), BitVec::ofNat(16)), BitVec::ofNat(429496729600000), BitVec::ofNat(4096)), BitVec::ofNat(42949672960000), BitVec::ofNat(1048576)), BitVec::ofNat(4294967296000), BitVec::ofNat(268435456)), BitVec::ofNat(34359738368000000), BitVec::ofNat(8)), BitVec::ofNat(17179869184000000), BitVec::ofNat(4)), BitVec::ofNat(8589934592000000), BitVec::ofNat(2)), BitVec::ofNat(4294967296000000), BitVec::ofNat(1)), BitVec::ofNat(3435973836800000), BitVec::ofNat(2048)), BitVec::ofNat(1717986918400000), BitVec::ofNat(1024)), BitVec::ofNat(858993459200000), BitVec::ofNat(512)), BitVec::ofNat(429496729600000), BitVec::ofNat(256)), BitVec::ofNat(343597383680000), BitVec::ofNat(524288)), BitVec::ofNat(171798691840000), BitVec::ofNat(262144)), BitVec::ofNat(85899345920000), BitVec::ofNat(131072)), BitVec::ofNat(42949672960000), BitVec::ofNat(65536)), BitVec::ofNat(34359738368000), BitVec::ofNat(134217728)), BitVec::ofNat(17179869184000), BitVec::ofNat(67108864)), BitVec::ofNat(8589934592000), BitVec::ofNat(33554432)), BitVec::ofNat(4294967296000), BitVec::ofNat(16777216))
+}
+
+// For `n < 10^7`: the columns for hundreds, tens and units, then `tail`'s
+// byte (the separator, placed at bit 24), with nothing above. The top four
+// digits are taken away first, weighing nothing.
+fn field_high(n, tail: BitVec(64)) → BitVec(64) {
+    place(place(place(place(place(place(place(place(place(place(place(place(place(place(place(place(place(place(place(place(place(place(place(place(place(place(place(place(mark(mark(raise32(n).add(BitVec::ofNat(3153952)).add(tail), BitVec::ofNat(429496729600), BitVec::ofNat(16)), BitVec::ofNat(42949672960), BitVec::ofNat(4096)), BitVec::ofNat(34359738368000000), BitVec::ofNat(0)), BitVec::ofNat(17179869184000000), BitVec::ofNat(0)), BitVec::ofNat(8589934592000000), BitVec::ofNat(0)), BitVec::ofNat(4294967296000000), BitVec::ofNat(0)), BitVec::ofNat(3435973836800000), BitVec::ofNat(0)), BitVec::ofNat(1717986918400000), BitVec::ofNat(0)), BitVec::ofNat(858993459200000), BitVec::ofNat(0)), BitVec::ofNat(429496729600000), BitVec::ofNat(0)), BitVec::ofNat(343597383680000), BitVec::ofNat(0)), BitVec::ofNat(171798691840000), BitVec::ofNat(0)), BitVec::ofNat(85899345920000), BitVec::ofNat(0)), BitVec::ofNat(42949672960000), BitVec::ofNat(0)), BitVec::ofNat(34359738368000), BitVec::ofNat(0)), BitVec::ofNat(17179869184000), BitVec::ofNat(0)), BitVec::ofNat(8589934592000), BitVec::ofNat(0)), BitVec::ofNat(4294967296000), BitVec::ofNat(0)), BitVec::ofNat(3435973836800), BitVec::ofNat(8)), BitVec::ofNat(1717986918400), BitVec::ofNat(4)), BitVec::ofNat(858993459200), BitVec::ofNat(2)), BitVec::ofNat(429496729600), BitVec::ofNat(1)), BitVec::ofNat(343597383680), BitVec::ofNat(2048)), BitVec::ofNat(171798691840), BitVec::ofNat(1024)), BitVec::ofNat(85899345920), BitVec::ofNat(512)), BitVec::ofNat(42949672960), BitVec::ofNat(256)), BitVec::ofNat(34359738368), BitVec::ofNat(524288)), BitVec::ofNat(17179869184), BitVec::ofNat(262144)), BitVec::ofNat(8589934592), BitVec::ofNat(131072)), BitVec::ofNat(4294967296), BitVec::ofNat(65536))
+}
+
+// ---------------------------------------------------------------------------
+// What a field means.
+
+// The column for place value `place` (1, 10, 100, …) of a count printed
+// right-aligned: the count's digit there, or a space left of its first digit.
+fn column(n, place: Nat) → BitVec(8) {
+    match Succ(n).leb(place) { True => BitVec::ofNat(32), False => digit(n.div(place).mod(10)) }
+}
+// `printf("%7d", n)` for `n < 10^7`: seven columns; the units always show.
+fn field(n: Nat) → List<BitVec(8)> {
+    [column(n, 1000000), column(n, 100000), column(n, 10000), column(n, 1000), column(n, 100), column(n, 10), digit(n.mod(10))]
+}
+// `printf("%7d %7d %7d\n", a, b, c)`: GNU `wc`'s line on a pipe.
+fn three_fields_line(a, b, c: Nat) → List<BitVec(8)> {
+    field(a) ++ Cons(BitVec::ofNat(32), field(b) ++ Cons(BitVec::ofNat(32), field(c) ++ [BitVec::ofNat(10)]))
+}
+
+// ---------------------------------------------------------------------------
+// decimal_line's restoring kit, with the value above bit 32 instead of 40.
+
+theorem field_low_part(h, w: Nat, low: h + w < 4294967296): h < 4294967296 {
+    Succ(h).le_trans(Succ(h + w), 4294967296, h.le_add_l(w), low)
+}
+
+// One restoring step, with its outcome named: `q` is whether `c` fitted
+// into what is left, `rest` what is left after.
+theorem field_place_step(s: BitVec(64), r, h, c, w, q, rest: Nat,
+    value: s.toNat() = 4294967296 * r + h, low: h + w < 4294967296,
+    parts: r = c * q + rest, remainder: rest < c, one: q <= 1,
+    fits: 4294967296 * r + h < 1152921504606846976, c_fits: 4294967296 * c < 1152921504606846976):
+    place(s, BitVec::ofNat(4294967296 * c), BitVec::ofNat(w)).toNat() = 4294967296 * rest + (h + w * q) {
+    let big = BitVec::ofNat(4294967296 * c, n := 64);
+    let weight = BitVec::ofNat(w, n := 64);
+    (match q as λ k => (r = c * k + rest) → (k <= 1) →
+        place(s, big, weight).toNat() = 4294967296 * rest + (h + w * k) {
+        Zero => λ parts one => {
+            let kept: (s.unsigned_lt_bit(big) = True) = bv_omega;
+            let same: (place(s, big, weight) = s) =
+                j(sym(kept), λ b _ => (match b { True => s, False => s.sub(big).add(weight) }) = s, refl);
+            let moved: (place(s, big, weight).toNat() = s.toNat()) = @cong(λ (v: BitVec(64)) => v.toNat(), place(s, big, weight), s, same);
+            bv_omega
+        },
+        Succ(k) => (match k as λ k2 => (r = c * Succ(k2) + rest) → (Succ(k2) <= 1) →
+            place(s, big, weight).toNat() = 4294967296 * rest + (h + w * Succ(k2)) {
+            Zero => λ parts one => {
+                let taken: (s.unsigned_lt_bit(big) = False) = bv_omega;
+                let stepped: (place(s, big, weight) = s.sub(big).add(weight)) =
+                    j(sym(taken), λ b _ => (match b { True => s, False => s.sub(big).add(weight) }) = s.sub(big).add(weight), refl);
+                let moved: (place(s, big, weight).toNat() = s.sub(big).add(weight).toNat()) =
+                    @cong(λ (v: BitVec(64)) => v.toNat(), place(s, big, weight), s.sub(big).add(weight), stepped);
+                let sum: (s.sub(big).add(weight).toNat() = 4294967296 * rest + (h + w * 1)) = bv_omega;
+                trans(moved, sum)
+            },
+            Succ(_) => λ parts one => false_elim(one),
+        }),
+    })(parts, one)
+}
+
+theorem field_restate(t, a, b, c, d: Nat, value: t = 4294967296 * a + b, ea: a = c, eb: b = d): t = 4294967296 * c + d { omega }
+
+// A digit group's arithmetic: each step's outcome and bounds, and what the
+// four add up to. A record, so a step reads its facts by name.
+record FieldGroupFacts(r, h, c1, w1, c2, w2, c3, w3, c4, w4: Nat) {
+    low1: h + w1 < 4294967296,
+    parts1: r = c1 * r.div(c1) + r.mod(c1),
+    rem1: r.mod(c1) < c1,
+    one1: r.div(c1) <= 1,
+    fits1: 4294967296 * r + h < 1152921504606846976,
+    big1: 4294967296 * c1 < 1152921504606846976,
+    low2: (h + w1 * r.div(c1)) + w2 < 4294967296,
+    parts2: r.mod(c1) = c2 * r.mod(c1).div(c2) + r.mod(c1).mod(c2),
+    rem2: r.mod(c1).mod(c2) < c2,
+    one2: r.mod(c1).div(c2) <= 1,
+    fits2: 4294967296 * r.mod(c1) + (h + w1 * r.div(c1)) < 1152921504606846976,
+    big2: 4294967296 * c2 < 1152921504606846976,
+    low3: ((h + w1 * r.div(c1)) + w2 * r.mod(c1).div(c2)) + w3 < 4294967296,
+    parts3: r.mod(c1).mod(c2) = c3 * r.mod(c1).mod(c2).div(c3) + r.mod(c1).mod(c2).mod(c3),
+    rem3: r.mod(c1).mod(c2).mod(c3) < c3,
+    one3: r.mod(c1).mod(c2).div(c3) <= 1,
+    fits3: 4294967296 * r.mod(c1).mod(c2) + ((h + w1 * r.div(c1)) + w2 * r.mod(c1).div(c2)) < 1152921504606846976,
+    big3: 4294967296 * c3 < 1152921504606846976,
+    low4: (((h + w1 * r.div(c1)) + w2 * r.mod(c1).div(c2)) + w3 * r.mod(c1).mod(c2).div(c3)) + w4 < 4294967296,
+    parts4: r.mod(c1).mod(c2).mod(c3) = c4 * r.mod(c1).mod(c2).mod(c3).div(c4) + r.mod(c1).mod(c2).mod(c3).mod(c4),
+    rem4: r.mod(c1).mod(c2).mod(c3).mod(c4) < c4,
+    one4: r.mod(c1).mod(c2).mod(c3).div(c4) <= 1,
+    fits4: 4294967296 * r.mod(c1).mod(c2).mod(c3) + (((h + w1 * r.div(c1)) + w2 * r.mod(c1).div(c2)) + w3 * r.mod(c1).mod(c2).div(c3)) < 1152921504606846976,
+    big4: 4294967296 * c4 < 1152921504606846976,
+    rest: r.mod(c1).mod(c2).mod(c3).mod(c4) = r.mod(c4),
+    sum: ((((h + w1 * r.div(c1)) + w2 * r.mod(c1).div(c2)) + w3 * r.mod(c1).mod(c2).div(c3)) + w4 * r.mod(c1).mod(c2).mod(c3).div(c4)) = h + w4 * r.div(c4),
+}
+
+// Four restoring steps: one digit, weighed 8, 4, 2, 1.
+theorem field_four_steps(s: BitVec(64), r, h, c1, w1, c2, w2, c3, w3, c4, w4: Nat, value: s.toNat() = 4294967296 * r + h,
+    facts: FieldGroupFacts(r, h, c1, w1, c2, w2, c3, w3, c4, w4)):
+    place(place(place(place(s, BitVec::ofNat(4294967296 * c1), BitVec::ofNat(w1)), BitVec::ofNat(4294967296 * c2), BitVec::ofNat(w2)), BitVec::ofNat(4294967296 * c3), BitVec::ofNat(w3)), BitVec::ofNat(4294967296 * c4), BitVec::ofNat(w4)).toNat() = 4294967296 * r.mod(c4) + (h + w4 * r.div(c4)) {
+    let v1: (place(s, BitVec::ofNat(4294967296 * c1), BitVec::ofNat(w1)).toNat() = 4294967296 * r.mod(c1) + (h + w1 * r.div(c1))) =
+        field_place_step(s, r, h, c1, w1, r.div(c1), r.mod(c1), value, facts.low1, facts.parts1, facts.rem1, facts.one1, facts.fits1, facts.big1);
+    let v2: (place(place(s, BitVec::ofNat(4294967296 * c1), BitVec::ofNat(w1)), BitVec::ofNat(4294967296 * c2), BitVec::ofNat(w2)).toNat() = 4294967296 * r.mod(c1).mod(c2) + ((h + w1 * r.div(c1)) + w2 * r.mod(c1).div(c2))) =
+        field_place_step(place(s, BitVec::ofNat(4294967296 * c1), BitVec::ofNat(w1)), r.mod(c1), (h + w1 * r.div(c1)), c2, w2, r.mod(c1).div(c2), r.mod(c1).mod(c2), v1, facts.low2, facts.parts2, facts.rem2, facts.one2, facts.fits2, facts.big2);
+    let v3: (place(place(place(s, BitVec::ofNat(4294967296 * c1), BitVec::ofNat(w1)), BitVec::ofNat(4294967296 * c2), BitVec::ofNat(w2)), BitVec::ofNat(4294967296 * c3), BitVec::ofNat(w3)).toNat() = 4294967296 * r.mod(c1).mod(c2).mod(c3) + (((h + w1 * r.div(c1)) + w2 * r.mod(c1).div(c2)) + w3 * r.mod(c1).mod(c2).div(c3))) =
+        field_place_step(place(place(s, BitVec::ofNat(4294967296 * c1), BitVec::ofNat(w1)), BitVec::ofNat(4294967296 * c2), BitVec::ofNat(w2)), r.mod(c1).mod(c2), ((h + w1 * r.div(c1)) + w2 * r.mod(c1).div(c2)), c3, w3, r.mod(c1).mod(c2).div(c3), r.mod(c1).mod(c2).mod(c3), v2, facts.low3, facts.parts3, facts.rem3, facts.one3, facts.fits3, facts.big3);
+    let v4: (place(place(place(place(s, BitVec::ofNat(4294967296 * c1), BitVec::ofNat(w1)), BitVec::ofNat(4294967296 * c2), BitVec::ofNat(w2)), BitVec::ofNat(4294967296 * c3), BitVec::ofNat(w3)), BitVec::ofNat(4294967296 * c4), BitVec::ofNat(w4)).toNat() = 4294967296 * r.mod(c1).mod(c2).mod(c3).mod(c4) + ((((h + w1 * r.div(c1)) + w2 * r.mod(c1).div(c2)) + w3 * r.mod(c1).mod(c2).div(c3)) + w4 * r.mod(c1).mod(c2).mod(c3).div(c4))) =
+        field_place_step(place(place(place(s, BitVec::ofNat(4294967296 * c1), BitVec::ofNat(w1)), BitVec::ofNat(4294967296 * c2), BitVec::ofNat(w2)), BitVec::ofNat(4294967296 * c3), BitVec::ofNat(w3)), r.mod(c1).mod(c2).mod(c3), (((h + w1 * r.div(c1)) + w2 * r.mod(c1).div(c2)) + w3 * r.mod(c1).mod(c2).div(c3)), c4, w4, r.mod(c1).mod(c2).mod(c3).div(c4), r.mod(c1).mod(c2).mod(c3).mod(c4), v3, facts.low4, facts.parts4, facts.rem4, facts.one4, facts.fits4, facts.big4);
+    field_restate(place(place(place(place(s, BitVec::ofNat(4294967296 * c1), BitVec::ofNat(w1)), BitVec::ofNat(4294967296 * c2), BitVec::ofNat(w2)), BitVec::ofNat(4294967296 * c3), BitVec::ofNat(w3)), BitVec::ofNat(4294967296 * c4), BitVec::ofNat(w4)).toNat(), r.mod(c1).mod(c2).mod(c3).mod(c4), ((((h + w1 * r.div(c1)) + w2 * r.mod(c1).div(c2)) + w3 * r.mod(c1).mod(c2).div(c3)) + w4 * r.mod(c1).mod(c2).mod(c3).div(c4)), r.mod(c4), h + w4 * r.div(c4), v4, facts.rest, facts.sum)
+}
+
+theorem field_step_big(c: Nat, h: Succ(4294967296 * c).leb(1152921504606846976).IsTrue()): 4294967296 * c < 1152921504606846976 { Nat::leb_sound(Succ(4294967296 * c), 1152921504606846976, h) }
+
+// The bounds a group's steps need, by the order's kit: the digit so far plus
+// what the steps still to come may add stays below the line's bytes.
+theorem field_low_here(s, u, t: Nat, room: s + (u + t) < 4294967296): s + u < 4294967296 {
+    Succ(s + u).le_trans(Succ(s + (u + t)), 4294967296, s.add_le_mono_l(u, u + t, u.le_add_l(t)), room)
+}
+theorem field_low_next(s, u, q, t: Nat, room: s + (u + t) < 4294967296, one: q <= 1): (s + u * q) + t < 4294967296 {
+    let less: (u * q <= u) = j(u.add_left_zero(), λ y _ => u * q <= y, u.mul_le_mono_l(q, 1, one));
+    Succ((s + u * q) + t).le_trans(Succ(s + (u + t)), 4294967296,
+        j(sym(s.add_assoc(u * q, t)), λ y _ => y <= s + (u + t), s.add_le_mono_l(u * q + t, u + t, t.add_le_mono_r(u * q, u, less))),
+        room)
+}
+theorem field_step_fits(rest, s, c: Nat, remainder: rest < c, low: s < 4294967296, big: 4294967296 * c < 1152921504606846976):
+    4294967296 * rest + s < 1152921504606846976 {
+    // Scaled with the literal on the left throughout: `mul` recurses on its
+    // second argument, and `rest * 2^32` unfolds once per unit of it.
+    Succ(4294967296 * rest + s).le_trans(4294967296 * Succ(rest), 1152921504606846976,
+        (4294967296 * rest).add_le_mono_l(Succ(s), 4294967296, low),
+        (4294967296 * Succ(rest)).le_trans(4294967296 * c, 1152921504606846976, Nat::mul_le_mono_l(4294967296, Succ(rest), c, remainder),
+            (4294967296 * c).le_of_lt(1152921504606846976, big)))
+}
+
+// A digit group's arithmetic at any place value `c` and byte weight `w`:
+// four restoring steps take `c * 8`, `c * 4`, `c * 2` and `c`, and their
+// outcomes are the bits of `r / c`. Every fact is a kit lemma; the group
+// lemmas below only supply the bounds, at literals.
+theorem field_group_facts(r, h, c, w: Nat, positive: 0 < c, small: r < (c * 8) * 2, room: h + w * 15 < 4294967296,
+    fits: 4294967296 * r + h < 1152921504606846976, big1: 4294967296 * (c * 8) < 1152921504606846976, big2: 4294967296 * (c * 4) < 1152921504606846976,
+    big3: 4294967296 * (c * 2) < 1152921504606846976, big4: 4294967296 * c < 1152921504606846976):
+    FieldGroupFacts(r, h, c * 8, w * 8, c * 4, w * 4, c * 2, w * 2, c, w) {
+    let p2: (0 < c * 2) = (1).le_trans(c, c * 2, positive, (c * 1).le_add_r(c));
+    let p4: (0 < c * 4) = (1).le_trans(c, c * 4, positive, (c * 3).le_add_r(c));
+    let p8: (0 < c * 8) = (1).le_trans(c, c * 8, positive, (c * 7).le_add_r(c));
+    let rem1: (r.mod(c * 8) < c * 8) = r.mod_lt(c * 8, p8);
+    let rem2: (r.mod(c * 8).mod(c * 4) < c * 4) = r.mod(c * 8).mod_lt(c * 4, p4);
+    let rem3: (r.mod(c * 8).mod(c * 4).mod(c * 2) < c * 2) = r.mod(c * 8).mod(c * 4).mod_lt(c * 2, p2);
+    let rem4: (r.mod(c * 8).mod(c * 4).mod(c * 2).mod(c) < c) = r.mod(c * 8).mod(c * 4).mod(c * 2).mod_lt(c, positive);
+    let one1: (r.div(c * 8) <= 1) = r.div_lt_of_lt_mul(c * 8, 2, small);
+    let one2: (r.mod(c * 8).div(c * 4) <= 1) = r.mod(c * 8).div_lt_of_lt_mul(c * 4, 2,
+        j(sym(c.mul_assoc(4, 2)), λ y _ => r.mod(c * 8) < y, rem1));
+    let one3: (r.mod(c * 8).mod(c * 4).div(c * 2) <= 1) = r.mod(c * 8).mod(c * 4).div_lt_of_lt_mul(c * 2, 2,
+        j(sym(c.mul_assoc(2, 2)), λ y _ => r.mod(c * 8).mod(c * 4) < y, rem2));
+    let one4: (r.mod(c * 8).mod(c * 4).mod(c * 2).div(c) <= 1) = r.mod(c * 8).mod(c * 4).mod(c * 2).div_lt_of_lt_mul(c, 2, rem3);
+    let inv0: (h + (w * 8 + w * 7) < 4294967296) = j(w.mul_add_distr(8, 7), λ y _ => h + y < 4294967296, room);
+    let inv1: ((h + (w * 8) * r.div(c * 8)) + (w * 4 + w * 3) < 4294967296) =
+        j(w.mul_add_distr(4, 3), λ y _ => (h + (w * 8) * r.div(c * 8)) + y < 4294967296,
+            field_low_next(h, w * 8, r.div(c * 8), w * 7, inv0, one1));
+    let inv2: (((h + (w * 8) * r.div(c * 8)) + (w * 4) * r.mod(c * 8).div(c * 4)) + (w * 2 + w * 1) < 4294967296) =
+        j(w.mul_add_distr(2, 1), λ y _ => ((h + (w * 8) * r.div(c * 8)) + (w * 4) * r.mod(c * 8).div(c * 4)) + y < 4294967296,
+            field_low_next(h + (w * 8) * r.div(c * 8), w * 4, r.mod(c * 8).div(c * 4), w * 3, inv1, one2));
+    let low2 = field_low_here(h + (w * 8) * r.div(c * 8), w * 4, w * 3, inv1);
+    let low3 = field_low_here((h + (w * 8) * r.div(c * 8)) + (w * 4) * r.mod(c * 8).div(c * 4), w * 2, w * 1, inv2);
+    let low4: ((((h + (w * 8) * r.div(c * 8)) + (w * 4) * r.mod(c * 8).div(c * 4)) + (w * 2) * r.mod(c * 8).mod(c * 4).div(c * 2)) + w < 4294967296) =
+        j(w.add_left_zero(), λ y _ => (((h + (w * 8) * r.div(c * 8)) + (w * 4) * r.mod(c * 8).div(c * 4)) + (w * 2) * r.mod(c * 8).mod(c * 4).div(c * 2)) + y < 4294967296,
+            field_low_next((h + (w * 8) * r.div(c * 8)) + (w * 4) * r.mod(c * 8).div(c * 4), w * 2, r.mod(c * 8).mod(c * 4).div(c * 2), w * 1, inv2, one3));
+    let rest1: (r.mod(c * 8).mod(c * 4) = r.mod(c * 4)) =
+        j(c.mul_assoc(4, 2), λ y _ => r.mod(y).mod(c * 4) = r.mod(c * 4), r.mod_mul_mod(c * 4, 2, p4, trivial));
+    let rest2: (r.mod(c * 4).mod(c * 2) = r.mod(c * 2)) =
+        j(c.mul_assoc(2, 2), λ y _ => r.mod(y).mod(c * 2) = r.mod(c * 2), r.mod_mul_mod(c * 2, 2, p2, trivial));
+    let rest: (r.mod(c * 8).mod(c * 4).mod(c * 2).mod(c) = r.mod(c)) =
+        trans(Nat::cong(λ (x: Nat) => x.mod(c * 2).mod(c), rest1), trans(Nat::cong(λ (x: Nat) => x.mod(c), rest2), r.mod_mul_mod(c, 2, positive, trivial)));
+    let bits: (r.div(c) = r.div(c * 8) * 8 + (r.mod(c * 8).div(c * 4) * 4 + (r.mod(c * 8).mod(c * 4).div(c * 2) * 2 + r.mod(c * 8).mod(c * 4).mod(c * 2).div(c)))) =
+        trans(r.div_split(c, 8, positive, trivial), Nat::cong(λ (y: Nat) => r.div(c * 8) * 8 + y,
+            trans(r.mod(c * 8).div_split(c, 4, positive, trivial), Nat::cong(λ (y: Nat) => r.mod(c * 8).div(c * 4) * 4 + y,
+                r.mod(c * 8).mod(c * 4).div_split(c, 2, positive, trivial)))));
+    let sum = trans(weigh(h, w, r.div(c * 8), r.mod(c * 8).div(c * 4), r.mod(c * 8).mod(c * 4).div(c * 2), r.mod(c * 8).mod(c * 4).mod(c * 2).div(c)),
+        Nat::cong(λ (y: Nat) => h + w * y, sym(bits)));
+    FieldGroupFacts(field_low_here(h, w * 8, w * 7, inv0), step_parts(r, c * 8), rem1, one1, fits, big1,
+        low2, step_parts(r.mod(c * 8), c * 4), rem2, one2,
+        field_step_fits(r.mod(c * 8), h + (w * 8) * r.div(c * 8), c * 8, rem1, field_low_part(h + (w * 8) * r.div(c * 8), w * 4, low2), big1), big2,
+        low3, step_parts(r.mod(c * 8).mod(c * 4), c * 2), rem3, one3,
+        field_step_fits(r.mod(c * 8).mod(c * 4), (h + (w * 8) * r.div(c * 8)) + (w * 4) * r.mod(c * 8).div(c * 4), c * 4, rem2,
+            field_low_part((h + (w * 8) * r.div(c * 8)) + (w * 4) * r.mod(c * 8).div(c * 4), w * 2, low3), big2), big3,
+        low4, step_parts(r.mod(c * 8).mod(c * 4).mod(c * 2), c), rem4, one4,
+        field_step_fits(r.mod(c * 8).mod(c * 4).mod(c * 2), ((h + (w * 8) * r.div(c * 8)) + (w * 4) * r.mod(c * 8).div(c * 4)) + (w * 2) * r.mod(c * 8).mod(c * 4).div(c * 2), c * 2, rem3,
+            field_low_part(((h + (w * 8) * r.div(c * 8)) + (w * 4) * r.mod(c * 8).div(c * 4)) + (w * 2) * r.mod(c * 8).mod(c * 4).div(c * 2), w, low4), big3), big4,
+        rest, sum)
+}
+
+// ---------------------------------------------------------------------------
+// Marks.
+
+// One when `n` reaches `c`.
+fn at_least(n, c: Nat) → Nat { match Succ(n).leb(c) { True => 0, False => 1 } }
+
+theorem at_least_yes(n, c: Nat, h: c <= n): at_least(n, c) = 1 {
+    j(sym(leb_no(Succ(n), c, h)), λ b _ => (match b { True => 0, False => 1 }) = 1, refl)
+}
+theorem at_least_no(n, c: Nat, h: n < c): at_least(n, c) = 0 {
+    j(sym(leb_yes(Succ(n), c, h)), λ b _ => (match b { True => 0, False => 1 }) = 0, refl)
+}
+theorem at_least_le(n, c: Nat): at_least(n, c) <= 1 {
+    match Succ(n).leb(c) as λ b => (match b { True => 0, False => 1 }) <= 1 { True => trivial, False => trivial }
+}
+
+// One mark, with its outcome named.
+theorem mark_step(s: BitVec(64), r, h, c, w: Nat, value: s.toNat() = 4294967296 * r + h, low: h + w < 4294967296,
+    fits: 4294967296 * r + h < 1152921504606846976, c_fits: 4294967296 * c < 1152921504606846976):
+    mark(s, BitVec::ofNat(4294967296 * c), BitVec::ofNat(w)).toNat() = 4294967296 * r + (h + w * at_least(r, c)) {
+    let big = BitVec::ofNat(4294967296 * c, n := 64);
+    let weight = BitVec::ofNat(w, n := 64);
+    match Nat::le_dec(c, r) {
+        Inl(reached) => {
+            let one: (at_least(r, c) = 1) = at_least_yes(r, c, reached);
+            let taken: (s.unsigned_lt_bit(big) = False) = bv_omega;
+            let stepped: (mark(s, big, weight) = s.add(weight)) =
+                j(sym(taken), λ b _ => (match b { True => s, False => s.add(weight) }) = s.add(weight), refl);
+            let moved: (mark(s, big, weight).toNat() = s.add(weight).toNat()) =
+                @cong(λ (v: BitVec(64)) => v.toNat(), mark(s, big, weight), s.add(weight), stepped);
+            let sum: (s.add(weight).toNat() = 4294967296 * r + (h + w * 1)) = bv_omega;
+            trans(moved, trans(sum, @cong(λ (k: Nat) => 4294967296 * r + (h + w * k), 1, at_least(r, c), sym(one))))
+        },
+        Inr(short) => {
+            let under: (r < c) = omega;
+            let zero: (at_least(r, c) = 0) = at_least_no(r, c, under);
+            let kept: (s.unsigned_lt_bit(big) = True) = bv_omega;
+            let same: (mark(s, big, weight) = s) =
+                j(sym(kept), λ b _ => (match b { True => s, False => s.add(weight) }) = s, refl);
+            let moved: (mark(s, big, weight).toNat() = s.toNat()) = @cong(λ (v: BitVec(64)) => v.toNat(), mark(s, big, weight), s, same);
+            let sum: (s.toNat() = 4294967296 * r + (h + w * 0)) = bv_omega;
+            trans(moved, trans(sum, @cong(λ (k: Nat) => 4294967296 * r + (h + w * k), 0, at_least(r, c), sym(zero))))
+        },
+    }
+}
+
+// A digit group at place value `c`, from a bound on what is left.
+theorem field_group_at(r, h, c, w: Nat, positive: 0 < c, small: r < c * 10, wide: (c * 10).leb((c * 8) * 2).IsTrue(),
+    room: h + w * 15 < 4294967296, big0: 4294967296 * (c * 10) < 1152921504606846976,
+    big1: 4294967296 * (c * 8) < 1152921504606846976, big2: 4294967296 * (c * 4) < 1152921504606846976,
+    big3: 4294967296 * (c * 2) < 1152921504606846976, big4: 4294967296 * c < 1152921504606846976):
+    FieldGroupFacts(r, h, c * 8, w * 8, c * 4, w * 4, c * 2, w * 2, c, w) {
+    field_group_facts(r, h, c, w, positive, below_wider(r, c * 10, (c * 8) * 2, small, wide), room,
+        field_step_fits(r, h, c * 10, small, field_low_part(h, w * 15, room), big0), big1, big2, big3, big4)
+}
+
+// A mark's arithmetic on a count below 10^7.
+theorem mark_fits(n, h, w: Nat, small: n < 10000000, room: h + w < 4294967296):
+    4294967296 * n + h < 1152921504606846976 {
+    field_step_fits(n, h, 10000000, small, field_low_part(h, w, room), field_step_big(10000000, trivial))
+}
+
+// The word after each stage, named so that proofs mention one state.
+fn low_start(n: Nat) → BitVec(64) { raise32(bitvec_nat::word_of_nat(64, n)).add(BitVec::ofNat(538976288)) }
+fn low_marked(n: Nat) → BitVec(64) { mark(mark(mark(mark(low_start(n), BitVec::ofNat(4294967296 * 1000000), BitVec::ofNat(16)), BitVec::ofNat(4294967296 * 100000), BitVec::ofNat(4096)), BitVec::ofNat(4294967296 * 10000), BitVec::ofNat(1048576)), BitVec::ofNat(4294967296 * 1000), BitVec::ofNat(268435456)) }
+fn low_group1(n: Nat) → BitVec(64) { place(place(place(place(low_marked(n), BitVec::ofNat(4294967296 * 8000000), BitVec::ofNat(8)), BitVec::ofNat(4294967296 * 4000000), BitVec::ofNat(4)), BitVec::ofNat(4294967296 * 2000000), BitVec::ofNat(2)), BitVec::ofNat(4294967296 * 1000000), BitVec::ofNat(1)) }
+fn low_group2(n: Nat) → BitVec(64) { place(place(place(place(low_group1(n), BitVec::ofNat(4294967296 * 800000), BitVec::ofNat(2048)), BitVec::ofNat(4294967296 * 400000), BitVec::ofNat(1024)), BitVec::ofNat(4294967296 * 200000), BitVec::ofNat(512)), BitVec::ofNat(4294967296 * 100000), BitVec::ofNat(256)) }
+fn low_group3(n: Nat) → BitVec(64) { place(place(place(place(low_group2(n), BitVec::ofNat(4294967296 * 80000), BitVec::ofNat(524288)), BitVec::ofNat(4294967296 * 40000), BitVec::ofNat(262144)), BitVec::ofNat(4294967296 * 20000), BitVec::ofNat(131072)), BitVec::ofNat(4294967296 * 10000), BitVec::ofNat(65536)) }
+fn low_group4(n: Nat) → BitVec(64) { place(place(place(place(low_group3(n), BitVec::ofNat(4294967296 * 8000), BitVec::ofNat(134217728)), BitVec::ofNat(4294967296 * 4000), BitVec::ofNat(67108864)), BitVec::ofNat(4294967296 * 2000), BitVec::ofNat(33554432)), BitVec::ofNat(4294967296 * 1000), BitVec::ofNat(16777216)) }
+fn high_start(n: Nat, tail: BitVec(64)) → BitVec(64) { raise32(bitvec_nat::word_of_nat(64, n)).add(BitVec::ofNat(3153952)).add(tail) }
+fn high_marked(n: Nat, tail: BitVec(64)) → BitVec(64) { mark(mark(high_start(n, tail), BitVec::ofNat(4294967296 * 100), BitVec::ofNat(16)), BitVec::ofNat(4294967296 * 10), BitVec::ofNat(4096)) }
+fn high_group1(n: Nat, tail: BitVec(64)) → BitVec(64) { place(place(place(place(high_marked(n, tail), BitVec::ofNat(4294967296 * 8000000), BitVec::ofNat(0)), BitVec::ofNat(4294967296 * 4000000), BitVec::ofNat(0)), BitVec::ofNat(4294967296 * 2000000), BitVec::ofNat(0)), BitVec::ofNat(4294967296 * 1000000), BitVec::ofNat(0)) }
+fn high_group2(n: Nat, tail: BitVec(64)) → BitVec(64) { place(place(place(place(high_group1(n, tail), BitVec::ofNat(4294967296 * 800000), BitVec::ofNat(0)), BitVec::ofNat(4294967296 * 400000), BitVec::ofNat(0)), BitVec::ofNat(4294967296 * 200000), BitVec::ofNat(0)), BitVec::ofNat(4294967296 * 100000), BitVec::ofNat(0)) }
+fn high_group3(n: Nat, tail: BitVec(64)) → BitVec(64) { place(place(place(place(high_group2(n, tail), BitVec::ofNat(4294967296 * 80000), BitVec::ofNat(0)), BitVec::ofNat(4294967296 * 40000), BitVec::ofNat(0)), BitVec::ofNat(4294967296 * 20000), BitVec::ofNat(0)), BitVec::ofNat(4294967296 * 10000), BitVec::ofNat(0)) }
+fn high_group4(n: Nat, tail: BitVec(64)) → BitVec(64) { place(place(place(place(high_group3(n, tail), BitVec::ofNat(4294967296 * 8000), BitVec::ofNat(0)), BitVec::ofNat(4294967296 * 4000), BitVec::ofNat(0)), BitVec::ofNat(4294967296 * 2000), BitVec::ofNat(0)), BitVec::ofNat(4294967296 * 1000), BitVec::ofNat(0)) }
+fn high_group5(n: Nat, tail: BitVec(64)) → BitVec(64) { place(place(place(place(high_group4(n, tail), BitVec::ofNat(4294967296 * 800), BitVec::ofNat(8)), BitVec::ofNat(4294967296 * 400), BitVec::ofNat(4)), BitVec::ofNat(4294967296 * 200), BitVec::ofNat(2)), BitVec::ofNat(4294967296 * 100), BitVec::ofNat(1)) }
+fn high_group6(n: Nat, tail: BitVec(64)) → BitVec(64) { place(place(place(place(high_group5(n, tail), BitVec::ofNat(4294967296 * 80), BitVec::ofNat(2048)), BitVec::ofNat(4294967296 * 40), BitVec::ofNat(1024)), BitVec::ofNat(4294967296 * 20), BitVec::ofNat(512)), BitVec::ofNat(4294967296 * 10), BitVec::ofNat(256)) }
+fn high_group7(n: Nat, tail: BitVec(64)) → BitVec(64) { place(place(place(place(high_group6(n, tail), BitVec::ofNat(4294967296 * 8), BitVec::ofNat(524288)), BitVec::ofNat(4294967296 * 4), BitVec::ofNat(262144)), BitVec::ofNat(4294967296 * 2), BitVec::ofNat(131072)), BitVec::ofNat(4294967296 * 1), BitVec::ofNat(65536)) }
+
+theorem raise32_value(n: Nat, small: n < 16777216): raise32(bitvec_nat::word_of_nat(64, n)).toNat() = n * 4294967296 { bv_omega }
+
+// `raise32`'s value in scope makes it a leaf for `bv_omega`.
+theorem low_start_value(n: Nat, small: n < 10000000): low_start(n).toNat() = 4294967296 * n + 538976288 {
+    let raised = raise32_value(n, omega);
+    bv_omega
+}
+theorem high_start_value(n, sep: Nat, tail: BitVec(64), small: n < 10000000, placed: tail.toNat() = 16777216 * sep, sep_small: sep < 256):
+    high_start(n, tail).toNat() = 4294967296 * n + (3153952 + 16777216 * sep) {
+    let raised = raise32_value(n, omega);
+    bv_omega
+}
+
+// The room each step needs, over variables.
+theorem low_mark_rooms(a0, a1, a2: Nat, h0: a0 <= 1, h1: a1 <= 1, h2: a2 <= 1):
+    (538976288 + 16 < 4294967296) ∧ (((538976288 + 16 * a0) + 4096 < 4294967296) ∧ ((((538976288 + 16 * a0) + 4096 * a1) + 1048576 < 4294967296) ∧
+    (((((538976288 + 16 * a0) + 4096 * a1) + 1048576 * a2) + 268435456 < 4294967296)))) { ⟨omega, ⟨omega, ⟨omega, omega⟩⟩⟩ }
+theorem low_group_rooms(a0, a1, a2, a3, d0, d1, d2: Nat, h0: a0 <= 1, h1: a1 <= 1, h2: a2 <= 1, h3: a3 <= 1, e0: d0 < 10, e1: d1 < 10, e2: d2 < 10):
+    (((((538976288 + 16 * a0) + 4096 * a1) + 1048576 * a2) + 268435456 * a3) + 1 * 15 < 4294967296) ∧ (((((((538976288 + 16 * a0) + 4096 * a1) + 1048576 * a2) + 268435456 * a3) + 1 * d0) + 256 * 15 < 4294967296) ∧
+    ((((((((538976288 + 16 * a0) + 4096 * a1) + 1048576 * a2) + 268435456 * a3) + 1 * d0) + 256 * d1) + 65536 * 15 < 4294967296) ∧ ((((((((538976288 + 16 * a0) + 4096 * a1) + 1048576 * a2) + 268435456 * a3) + 1 * d0) + 256 * d1) + 65536 * d2) + 16777216 * 15 < 4294967296))) {
+    ⟨omega, ⟨omega, ⟨omega, omega⟩⟩⟩
+}
+theorem high_mark_rooms(sep, a4: Nat, s: sep < 256, h4: a4 <= 1):
+    ((3153952 + 16777216 * sep) + 16 < 4294967296) ∧ (((3153952 + 16777216 * sep) + 16 * a4) + 4096 < 4294967296) { ⟨omega, omega⟩ }
+theorem high_group_rooms(sep, a4, a5, z1, z2, z3, z4, e0, e1: Nat, s: sep < 256, h4: a4 <= 1, h5: a5 <= 1, f0: e0 < 10, f1: e1 < 10):
+    ((((3153952 + 16777216 * sep) + 16 * a4) + 4096 * a5) + 0 * 15 < 4294967296) ∧ ((((((3153952 + 16777216 * sep) + 16 * a4) + 4096 * a5) + 0 * z1) + 0 * 15 < 4294967296) ∧ (((((((3153952 + 16777216 * sep) + 16 * a4) + 4096 * a5) + 0 * z1) + 0 * z2) + 0 * 15 < 4294967296) ∧
+    ((((((((3153952 + 16777216 * sep) + 16 * a4) + 4096 * a5) + 0 * z1) + 0 * z2) + 0 * z3) + 0 * 15 < 4294967296) ∧ (((((((((3153952 + 16777216 * sep) + 16 * a4) + 4096 * a5) + 0 * z1) + 0 * z2) + 0 * z3) + 0 * z4) + 1 * 15 < 4294967296) ∧
+    ((((((((((3153952 + 16777216 * sep) + 16 * a4) + 4096 * a5) + 0 * z1) + 0 * z2) + 0 * z3) + 0 * z4) + 1 * e0) + 256 * 15 < 4294967296) ∧ ((((((((((3153952 + 16777216 * sep) + 16 * a4) + 4096 * a5) + 0 * z1) + 0 * z2) + 0 * z3) + 0 * z4) + 1 * e0) + 256 * e1) + 65536 * 15 < 4294967296)))))) {
+    ⟨omega, ⟨omega, ⟨omega, ⟨omega, ⟨omega, ⟨omega, omega⟩⟩⟩⟩⟩⟩
+}
+// The bytes of each word, restated from its value.
+theorem low_restate(v, a0, a1, a2, a3, d0, d1, d2, d3, r: Nat,
+    value: v = 4294967296 * r + ((((((((538976288 + 16 * a0) + 4096 * a1) + 1048576 * a2) + 268435456 * a3) + 1 * d0) + 256 * d1) + 65536 * d2) + 16777216 * d3)):
+    v = ((32 + 16 * a0) + d0) + 256 * (((32 + 16 * a1) + d1) + 256 * (((32 + 16 * a2) + d2) + 256 * (((32 + 16 * a3) + d3) + 256 * r))) { omega }
+theorem high_restate(v, sep, a4, a5, z1, z2, z3, z4, e0, e1, e2, r: Nat, zero: r = 0,
+    value: v = 4294967296 * r + ((((((((((3153952 + 16777216 * sep) + 16 * a4) + 4096 * a5) + 0 * z1) + 0 * z2) + 0 * z3) + 0 * z4) + 1 * e0) + 256 * e1) + 65536 * e2)):
+    v = ((32 + 16 * a4) + e0) + 256 * (((32 + 16 * a5) + e1) + 256 * ((48 + e2) + 256 * (sep + 256 * 0))) { omega }
+theorem column_small(a, d: Nat, h: a <= 1, e: d < 10): (32 + 16 * a) + d < 256 { omega }
+theorem units_small(d: Nat, e: d < 10): 48 + d < 256 { omega }
+
+// The low word's value: its four columns' bytes, and what is left above.
+theorem field_low_value(n: Nat, small: n < 10000000):
+    field_low(bitvec_nat::word_of_nat(64, n)).toNat() = ((32 + 16 * at_least(n, 1000000)) + n.div(1000000)) + 256 * (((32 + 16 * at_least(n, 100000)) + n.mod(1000000).div(100000)) +
+        256 * (((32 + 16 * at_least(n, 10000)) + n.mod(1000000).mod(100000).div(10000)) + 256 * (((32 + 16 * at_least(n, 1000)) + n.mod(1000000).mod(100000).mod(10000).div(1000)) + 256 * n.mod(1000000).mod(100000).mod(10000).mod(1000)))) {
+    let a0 = at_least_le(n, 1000000);
+    let a1 = at_least_le(n, 100000);
+    let a2 = at_least_le(n, 10000);
+    let a3 = at_least_le(n, 1000);
+    let mr = low_mark_rooms(at_least(n, 1000000), at_least(n, 100000), at_least(n, 10000), a0, a1, a2);
+    let s0 = low_start_value(n, small);
+    let m1 = mark_step(low_start(n), n, 538976288, 1000000, 16, s0, mr.left, mark_fits(n, 538976288, 16, small, mr.left), field_step_big(1000000, trivial));
+    let m2 = mark_step(mark(low_start(n), BitVec::ofNat(4294967296 * 1000000), BitVec::ofNat(16)), n, 538976288 + 16 * at_least(n, 1000000), 100000, 4096, m1, mr.right.left, mark_fits(n, 538976288 + 16 * at_least(n, 1000000), 4096, small, mr.right.left), field_step_big(100000, trivial));
+    let m3 = mark_step(mark(mark(low_start(n), BitVec::ofNat(4294967296 * 1000000), BitVec::ofNat(16)), BitVec::ofNat(4294967296 * 100000), BitVec::ofNat(4096)), n, (538976288 + 16 * at_least(n, 1000000)) + 4096 * at_least(n, 100000), 10000, 1048576, m2, mr.right.right.left, mark_fits(n, (538976288 + 16 * at_least(n, 1000000)) + 4096 * at_least(n, 100000), 1048576, small, mr.right.right.left), field_step_big(10000, trivial));
+    let m4 = mark_step(mark(mark(mark(low_start(n), BitVec::ofNat(4294967296 * 1000000), BitVec::ofNat(16)), BitVec::ofNat(4294967296 * 100000), BitVec::ofNat(4096)), BitVec::ofNat(4294967296 * 10000), BitVec::ofNat(1048576)), n, ((538976288 + 16 * at_least(n, 1000000)) + 4096 * at_least(n, 100000)) + 1048576 * at_least(n, 10000), 1000, 268435456, m3, mr.right.right.right, mark_fits(n, ((538976288 + 16 * at_least(n, 1000000)) + 4096 * at_least(n, 100000)) + 1048576 * at_least(n, 10000), 268435456, small, mr.right.right.right), field_step_big(1000, trivial));
+    let d0: (n.div(1000000) < 10) = n.div_lt_of_lt_mul(1000000, 10, small);
+    let d1: (n.mod(1000000).div(100000) < 10) = n.mod(1000000).div_lt_of_lt_mul(100000, 10, n.mod_lt(1000000, trivial));
+    let d2: (n.mod(1000000).mod(100000).div(10000) < 10) = n.mod(1000000).mod(100000).div_lt_of_lt_mul(10000, 10, n.mod(1000000).mod_lt(100000, trivial));
+    let gr = low_group_rooms(at_least(n, 1000000), at_least(n, 100000), at_least(n, 10000), at_least(n, 1000), n.div(1000000), n.mod(1000000).div(100000), n.mod(1000000).mod(100000).div(10000), a0, a1, a2, a3, d0, d1, d2);
+    let g1 = field_four_steps(low_marked(n), n, (((538976288 + 16 * at_least(n, 1000000)) + 4096 * at_least(n, 100000)) + 1048576 * at_least(n, 10000)) + 268435456 * at_least(n, 1000), 8000000, 8, 4000000, 4, 2000000, 2, 1000000, 1, m4, field_group_at(n, (((538976288 + 16 * at_least(n, 1000000)) + 4096 * at_least(n, 100000)) + 1048576 * at_least(n, 10000)) + 268435456 * at_least(n, 1000), 1000000, 1, trivial, small, trivial, gr.left, field_step_big(10000000, trivial), field_step_big(8000000, trivial), field_step_big(4000000, trivial), field_step_big(2000000, trivial), field_step_big(1000000, trivial)));
+    let g2 = field_four_steps(low_group1(n), n.mod(1000000), ((((538976288 + 16 * at_least(n, 1000000)) + 4096 * at_least(n, 100000)) + 1048576 * at_least(n, 10000)) + 268435456 * at_least(n, 1000)) + 1 * n.div(1000000), 800000, 2048, 400000, 1024, 200000, 512, 100000, 256, g1, field_group_at(n.mod(1000000), ((((538976288 + 16 * at_least(n, 1000000)) + 4096 * at_least(n, 100000)) + 1048576 * at_least(n, 10000)) + 268435456 * at_least(n, 1000)) + 1 * n.div(1000000), 100000, 256, trivial, n.mod_lt(1000000, trivial), trivial, gr.right.left, field_step_big(1000000, trivial), field_step_big(800000, trivial), field_step_big(400000, trivial), field_step_big(200000, trivial), field_step_big(100000, trivial)));
+    let g3 = field_four_steps(low_group2(n), n.mod(1000000).mod(100000), (((((538976288 + 16 * at_least(n, 1000000)) + 4096 * at_least(n, 100000)) + 1048576 * at_least(n, 10000)) + 268435456 * at_least(n, 1000)) + 1 * n.div(1000000)) + 256 * n.mod(1000000).div(100000), 80000, 524288, 40000, 262144, 20000, 131072, 10000, 65536, g2, field_group_at(n.mod(1000000).mod(100000), (((((538976288 + 16 * at_least(n, 1000000)) + 4096 * at_least(n, 100000)) + 1048576 * at_least(n, 10000)) + 268435456 * at_least(n, 1000)) + 1 * n.div(1000000)) + 256 * n.mod(1000000).div(100000), 10000, 65536, trivial, n.mod(1000000).mod_lt(100000, trivial), trivial, gr.right.right.left, field_step_big(100000, trivial), field_step_big(80000, trivial), field_step_big(40000, trivial), field_step_big(20000, trivial), field_step_big(10000, trivial)));
+    let g4 = field_four_steps(low_group3(n), n.mod(1000000).mod(100000).mod(10000), ((((((538976288 + 16 * at_least(n, 1000000)) + 4096 * at_least(n, 100000)) + 1048576 * at_least(n, 10000)) + 268435456 * at_least(n, 1000)) + 1 * n.div(1000000)) + 256 * n.mod(1000000).div(100000)) + 65536 * n.mod(1000000).mod(100000).div(10000), 8000, 134217728, 4000, 67108864, 2000, 33554432, 1000, 16777216, g3, field_group_at(n.mod(1000000).mod(100000).mod(10000), ((((((538976288 + 16 * at_least(n, 1000000)) + 4096 * at_least(n, 100000)) + 1048576 * at_least(n, 10000)) + 268435456 * at_least(n, 1000)) + 1 * n.div(1000000)) + 256 * n.mod(1000000).div(100000)) + 65536 * n.mod(1000000).mod(100000).div(10000), 1000, 16777216, trivial, n.mod(1000000).mod(100000).mod_lt(10000, trivial), trivial, gr.right.right.right, field_step_big(10000, trivial), field_step_big(8000, trivial), field_step_big(4000, trivial), field_step_big(2000, trivial), field_step_big(1000, trivial)));
+    low_restate(field_low(bitvec_nat::word_of_nat(64, n)).toNat(), at_least(n, 1000000), at_least(n, 100000), at_least(n, 10000), at_least(n, 1000), n.div(1000000), n.mod(1000000).div(100000), n.mod(1000000).mod(100000).div(10000), n.mod(1000000).mod(100000).mod(10000).div(1000), n.mod(1000000).mod(100000).mod(10000).mod(1000), g4)
+}
+
+// The high word's value: its three columns' bytes and the separator.
+theorem field_high_value(n, sep: Nat, tail: BitVec(64), small: n < 10000000, placed: tail.toNat() = 16777216 * sep, sep_small: sep < 256):
+    field_high(bitvec_nat::word_of_nat(64, n), tail).toNat() = ((32 + 16 * at_least(n, 100)) + n.mod(1000000).mod(100000).mod(10000).mod(1000).div(100)) + 256 * (((32 + 16 * at_least(n, 10)) + n.mod(1000000).mod(100000).mod(10000).mod(1000).mod(100).div(10)) +
+        256 * ((48 + n.mod(1000000).mod(100000).mod(10000).mod(1000).mod(100).mod(10).div(1)) + 256 * (sep + 256 * 0))) {
+    let a4 = at_least_le(n, 100);
+    let a5 = at_least_le(n, 10);
+    let mr = high_mark_rooms(sep, at_least(n, 100), sep_small, a4);
+    let s0 = high_start_value(n, sep, tail, small, placed, sep_small);
+    let m1 = mark_step(high_start(n, tail), n, 3153952 + 16777216 * sep, 100, 16, s0, mr.left, mark_fits(n, 3153952 + 16777216 * sep, 16, small, mr.left), field_step_big(100, trivial));
+    let m2 = mark_step(mark(high_start(n, tail), BitVec::ofNat(4294967296 * 100), BitVec::ofNat(16)), n, (3153952 + 16777216 * sep) + 16 * at_least(n, 100), 10, 4096, m1, mr.right, mark_fits(n, (3153952 + 16777216 * sep) + 16 * at_least(n, 100), 4096, small, mr.right), field_step_big(10, trivial));
+    let e0: (n.mod(1000000).mod(100000).mod(10000).mod(1000).div(100) < 10) = n.mod(1000000).mod(100000).mod(10000).mod(1000).div_lt_of_lt_mul(100, 10, n.mod(1000000).mod(100000).mod(10000).mod_lt(1000, trivial));
+    let e1: (n.mod(1000000).mod(100000).mod(10000).mod(1000).mod(100).div(10) < 10) = n.mod(1000000).mod(100000).mod(10000).mod(1000).mod(100).div_lt_of_lt_mul(10, 10, n.mod(1000000).mod(100000).mod(10000).mod(1000).mod_lt(100, trivial));
+    let gr = high_group_rooms(sep, at_least(n, 100), at_least(n, 10), n.div(1000000), n.mod(1000000).div(100000), n.mod(1000000).mod(100000).div(10000), n.mod(1000000).mod(100000).mod(10000).div(1000), n.mod(1000000).mod(100000).mod(10000).mod(1000).div(100), n.mod(1000000).mod(100000).mod(10000).mod(1000).mod(100).div(10), sep_small, a4, a5, e0, e1);
+    let g1 = field_four_steps(high_marked(n, tail), n, ((3153952 + 16777216 * sep) + 16 * at_least(n, 100)) + 4096 * at_least(n, 10), 8000000, 0, 4000000, 0, 2000000, 0, 1000000, 0, m2, field_group_at(n, ((3153952 + 16777216 * sep) + 16 * at_least(n, 100)) + 4096 * at_least(n, 10), 1000000, 0, trivial, small, trivial, gr.left, field_step_big(10000000, trivial), field_step_big(8000000, trivial), field_step_big(4000000, trivial), field_step_big(2000000, trivial), field_step_big(1000000, trivial)));
+    let g2 = field_four_steps(high_group1(n, tail), n.mod(1000000), (((3153952 + 16777216 * sep) + 16 * at_least(n, 100)) + 4096 * at_least(n, 10)) + 0 * n.div(1000000), 800000, 0, 400000, 0, 200000, 0, 100000, 0, g1, field_group_at(n.mod(1000000), (((3153952 + 16777216 * sep) + 16 * at_least(n, 100)) + 4096 * at_least(n, 10)) + 0 * n.div(1000000), 100000, 0, trivial, n.mod_lt(1000000, trivial), trivial, gr.right.left, field_step_big(1000000, trivial), field_step_big(800000, trivial), field_step_big(400000, trivial), field_step_big(200000, trivial), field_step_big(100000, trivial)));
+    let g3 = field_four_steps(high_group2(n, tail), n.mod(1000000).mod(100000), ((((3153952 + 16777216 * sep) + 16 * at_least(n, 100)) + 4096 * at_least(n, 10)) + 0 * n.div(1000000)) + 0 * n.mod(1000000).div(100000), 80000, 0, 40000, 0, 20000, 0, 10000, 0, g2, field_group_at(n.mod(1000000).mod(100000), ((((3153952 + 16777216 * sep) + 16 * at_least(n, 100)) + 4096 * at_least(n, 10)) + 0 * n.div(1000000)) + 0 * n.mod(1000000).div(100000), 10000, 0, trivial, n.mod(1000000).mod_lt(100000, trivial), trivial, gr.right.right.left, field_step_big(100000, trivial), field_step_big(80000, trivial), field_step_big(40000, trivial), field_step_big(20000, trivial), field_step_big(10000, trivial)));
+    let g4 = field_four_steps(high_group3(n, tail), n.mod(1000000).mod(100000).mod(10000), (((((3153952 + 16777216 * sep) + 16 * at_least(n, 100)) + 4096 * at_least(n, 10)) + 0 * n.div(1000000)) + 0 * n.mod(1000000).div(100000)) + 0 * n.mod(1000000).mod(100000).div(10000), 8000, 0, 4000, 0, 2000, 0, 1000, 0, g3, field_group_at(n.mod(1000000).mod(100000).mod(10000), (((((3153952 + 16777216 * sep) + 16 * at_least(n, 100)) + 4096 * at_least(n, 10)) + 0 * n.div(1000000)) + 0 * n.mod(1000000).div(100000)) + 0 * n.mod(1000000).mod(100000).div(10000), 1000, 0, trivial, n.mod(1000000).mod(100000).mod_lt(10000, trivial), trivial, gr.right.right.right.left, field_step_big(10000, trivial), field_step_big(8000, trivial), field_step_big(4000, trivial), field_step_big(2000, trivial), field_step_big(1000, trivial)));
+    let g5 = field_four_steps(high_group4(n, tail), n.mod(1000000).mod(100000).mod(10000).mod(1000), ((((((3153952 + 16777216 * sep) + 16 * at_least(n, 100)) + 4096 * at_least(n, 10)) + 0 * n.div(1000000)) + 0 * n.mod(1000000).div(100000)) + 0 * n.mod(1000000).mod(100000).div(10000)) + 0 * n.mod(1000000).mod(100000).mod(10000).div(1000), 800, 8, 400, 4, 200, 2, 100, 1, g4, field_group_at(n.mod(1000000).mod(100000).mod(10000).mod(1000), ((((((3153952 + 16777216 * sep) + 16 * at_least(n, 100)) + 4096 * at_least(n, 10)) + 0 * n.div(1000000)) + 0 * n.mod(1000000).div(100000)) + 0 * n.mod(1000000).mod(100000).div(10000)) + 0 * n.mod(1000000).mod(100000).mod(10000).div(1000), 100, 1, trivial, n.mod(1000000).mod(100000).mod(10000).mod_lt(1000, trivial), trivial, gr.right.right.right.right.left, field_step_big(1000, trivial), field_step_big(800, trivial), field_step_big(400, trivial), field_step_big(200, trivial), field_step_big(100, trivial)));
+    let g6 = field_four_steps(high_group5(n, tail), n.mod(1000000).mod(100000).mod(10000).mod(1000).mod(100), (((((((3153952 + 16777216 * sep) + 16 * at_least(n, 100)) + 4096 * at_least(n, 10)) + 0 * n.div(1000000)) + 0 * n.mod(1000000).div(100000)) + 0 * n.mod(1000000).mod(100000).div(10000)) + 0 * n.mod(1000000).mod(100000).mod(10000).div(1000)) + 1 * n.mod(1000000).mod(100000).mod(10000).mod(1000).div(100), 80, 2048, 40, 1024, 20, 512, 10, 256, g5, field_group_at(n.mod(1000000).mod(100000).mod(10000).mod(1000).mod(100), (((((((3153952 + 16777216 * sep) + 16 * at_least(n, 100)) + 4096 * at_least(n, 10)) + 0 * n.div(1000000)) + 0 * n.mod(1000000).div(100000)) + 0 * n.mod(1000000).mod(100000).div(10000)) + 0 * n.mod(1000000).mod(100000).mod(10000).div(1000)) + 1 * n.mod(1000000).mod(100000).mod(10000).mod(1000).div(100), 10, 256, trivial, n.mod(1000000).mod(100000).mod(10000).mod(1000).mod_lt(100, trivial), trivial, gr.right.right.right.right.right.left, field_step_big(100, trivial), field_step_big(80, trivial), field_step_big(40, trivial), field_step_big(20, trivial), field_step_big(10, trivial)));
+    let g7 = field_four_steps(high_group6(n, tail), n.mod(1000000).mod(100000).mod(10000).mod(1000).mod(100).mod(10), ((((((((3153952 + 16777216 * sep) + 16 * at_least(n, 100)) + 4096 * at_least(n, 10)) + 0 * n.div(1000000)) + 0 * n.mod(1000000).div(100000)) + 0 * n.mod(1000000).mod(100000).div(10000)) + 0 * n.mod(1000000).mod(100000).mod(10000).div(1000)) + 1 * n.mod(1000000).mod(100000).mod(10000).mod(1000).div(100)) + 256 * n.mod(1000000).mod(100000).mod(10000).mod(1000).mod(100).div(10), 8, 524288, 4, 262144, 2, 131072, 1, 65536, g6, field_group_at(n.mod(1000000).mod(100000).mod(10000).mod(1000).mod(100).mod(10), ((((((((3153952 + 16777216 * sep) + 16 * at_least(n, 100)) + 4096 * at_least(n, 10)) + 0 * n.div(1000000)) + 0 * n.mod(1000000).div(100000)) + 0 * n.mod(1000000).mod(100000).div(10000)) + 0 * n.mod(1000000).mod(100000).mod(10000).div(1000)) + 1 * n.mod(1000000).mod(100000).mod(10000).mod(1000).div(100)) + 256 * n.mod(1000000).mod(100000).mod(10000).mod(1000).mod(100).div(10), 1, 65536, trivial, n.mod(1000000).mod(100000).mod(10000).mod(1000).mod(100).mod_lt(10, trivial), trivial, gr.right.right.right.right.right.right, field_step_big(10, trivial), field_step_big(8, trivial), field_step_big(4, trivial), field_step_big(2, trivial), field_step_big(1, trivial)));
+    high_restate(field_high(bitvec_nat::word_of_nat(64, n), tail).toNat(), sep, at_least(n, 100), at_least(n, 10), n.div(1000000), n.mod(1000000).div(100000), n.mod(1000000).mod(100000).div(10000), n.mod(1000000).mod(100000).mod(10000).div(1000), n.mod(1000000).mod(100000).mod(10000).mod(1000).div(100), n.mod(1000000).mod(100000).mod(10000).mod(1000).mod(100).div(10), n.mod(1000000).mod(100000).mod(10000).mod(1000).mod(100).mod(10).div(1), n.mod(1000000).mod(100000).mod(10000).mod(1000).mod(100).mod(10).mod(1), n.mod(1000000).mod(100000).mod(10000).mod(1000).mod(100).mod(10).mod_one(), g7)
+}
+
+// ---------------------------------------------------------------------------
+// The words' bytes.
+
+theorem four_cong<A>(a0, a1, a2, a3, c0, c1, c2, c3: A, e0: a0 = c0, e1: a1 = c1, e2: a2 = c2, e3: a3 = c3):
+    Cons(a0, Cons(a1, Cons(a2, Cons(a3, Nil)))) = Cons(c0, Cons(c1, Cons(c2, Cons(c3, Nil)))) {
+    let r0 = j(e0, λ y _ => Cons(a0, Cons(a1, Cons(a2, Cons(a3, Nil)))) = Cons(y, Cons(a1, Cons(a2, Cons(a3, Nil)))), refl);
+    let r1 = j(e1, λ y _ => Cons(a0, Cons(a1, Cons(a2, Cons(a3, Nil)))) = Cons(c0, Cons(y, Cons(a2, Cons(a3, Nil)))), r0);
+    let r2 = j(e2, λ y _ => Cons(a0, Cons(a1, Cons(a2, Cons(a3, Nil)))) = Cons(c0, Cons(c1, Cons(y, Cons(a3, Nil)))), r1);
+    j(e3, λ y _ => Cons(a0, Cons(a1, Cons(a2, Cons(a3, Nil)))) = Cons(c0, Cons(c1, Cons(c2, Cons(y, Nil)))), r2)
+}
+
+// A word's first four bytes are its first four base-256 digits.
+theorem word_low_bytes_of(v: BitVec(64), b0, b1, b2, b3, rest: Nat,
+    value: v.toNat() = b0 + 256 * (b1 + 256 * (b2 + 256 * (b3 + 256 * rest))),
+    s0: b0 < 256, s1: b1 < 256, s2: b2 < 256, s3: b3 < 256):
+    word_bytes(v).take(4) = [BitVec::ofNat(b0), BitVec::ofNat(b1), BitVec::ofNat(b2), BitVec::ofNat(b3)] {
+    let e0 = byte_parts(56, v, b0, b1 + 256 * (b2 + 256 * (b3 + 256 * rest)), value, s0);
+    let e1 = byte_parts(48, imm_rest0(v), b1, b2 + 256 * (b3 + 256 * rest), e0.right, s1);
+    let e2 = byte_parts(40, imm_rest1(v), b2, b3 + 256 * rest, e1.right, s2);
+    let e3 = byte_parts(32, imm_rest2(v), b3, rest, e2.right, s3);
+    four_cong<BitVec(8)>(imm_byte0(v), imm_byte1(v), imm_byte2(v), imm_byte3(v),
+        BitVec::ofNat(b0, n := 8), BitVec::ofNat(b1, n := 8), BitVec::ofNat(b2, n := 8), BitVec::ofNat(b3, n := 8), e0.left, e1.left, e2.left, e3.left)
+}
+
+// A column's byte, from its mark and its digit.
+theorem column_byte(n, p, d: Nat, positive: 0 < p, is: d = n.div(p).mod(10)):
+    BitVec::ofNat((32 + 16 * at_least(n, p)) + d, n := 8) = column(n, p) {
+    match Nat::le_dec(p, n) {
+        Inl(reached) => {
+            let shown: (column(n, p) = digit(n.div(p).mod(10))) =
+                j(sym(leb_no(Succ(n), p, reached)), λ b _ => (match b { True => BitVec::ofNat(32, n := 8), False => digit(n.div(p).mod(10)) }) = digit(n.div(p).mod(10)), refl);
+            trans(@cong(λ (k: Nat) => BitVec::ofNat((32 + 16 * k) + d, n := 8), at_least(n, p), 1, at_least_yes(n, p, reached)),
+                trans(@cong(λ (e: Nat) => BitVec::ofNat(48 + e, n := 8), d, n.div(p).mod(10), is), sym(shown)))
+        },
+        Inr(short) => {
+            let under: (n < p) = omega;
+            let blank: (column(n, p) = BitVec::ofNat(32, n := 8)) =
+                j(sym(leb_yes(Succ(n), p, under)), λ b _ => (match b { True => BitVec::ofNat(32, n := 8), False => digit(n.div(p).mod(10)) }) = BitVec::ofNat(32, n := 8), refl);
+            let none: (d = 0) = trans(is, @cong(λ (q: Nat) => q.mod(10), n.div(p), 0, n.div_of_lt(p, under)));
+            trans(@cong(λ (k: Nat) => BitVec::ofNat((32 + 16 * k) + d, n := 8), at_least(n, p), 0, at_least_no(n, p, under)),
+                trans(@cong(λ (e: Nat) => BitVec::ofNat(32 + e, n := 8), d, 0, none), sym(blank)))
+        },
+    }
+}
+
+// The chain's remainders are the count's.
+theorem field_mods(n: Nat):
+    (n.mod(1000000).mod(100000) = n.mod(100000)) ∧ ((n.mod(1000000).mod(100000).mod(10000) = n.mod(10000)) ∧ ((n.mod(1000000).mod(100000).mod(10000).mod(1000) = n.mod(1000)) ∧
+    ((n.mod(1000000).mod(100000).mod(10000).mod(1000).mod(100) = n.mod(100)) ∧ (n.mod(1000000).mod(100000).mod(10000).mod(1000).mod(100).mod(10) = n.mod(10))))) {
+    let m5 = n.mod_mul_mod(100000, 10, trivial, trivial);
+    let m4 = trans(@cong(λ (x: Nat) => x.mod(10000), n.mod(1000000).mod(100000), n.mod(100000), m5), n.mod_mul_mod(10000, 10, trivial, trivial));
+    let m3 = trans(@cong(λ (x: Nat) => x.mod(1000), n.mod(1000000).mod(100000).mod(10000), n.mod(10000), m4), n.mod_mul_mod(1000, 10, trivial, trivial));
+    let m2 = trans(@cong(λ (x: Nat) => x.mod(100), n.mod(1000000).mod(100000).mod(10000).mod(1000), n.mod(1000), m3), n.mod_mul_mod(100, 10, trivial, trivial));
+    let m1 = trans(@cong(λ (x: Nat) => x.mod(10), n.mod(1000000).mod(100000).mod(10000).mod(1000).mod(100), n.mod(100), m2), n.mod_mul_mod(10, 10, trivial, trivial));
+    ⟨m5, ⟨m4, ⟨m3, ⟨m2, m1⟩⟩⟩⟩
+}
+
+// The chain's digits are the columns'.
+theorem field_digits(n: Nat, small: n < 10000000):
+    (n.div(1000000) = n.div(1000000).mod(10)) ∧ ((n.mod(1000000).div(100000) = n.div(100000).mod(10)) ∧ ((n.mod(1000000).mod(100000).div(10000) = n.div(10000).mod(10)) ∧
+    ((n.mod(1000000).mod(100000).mod(10000).div(1000) = n.div(1000).mod(10)) ∧ ((n.mod(1000000).mod(100000).mod(10000).mod(1000).div(100) = n.div(100).mod(10)) ∧ ((n.mod(1000000).mod(100000).mod(10000).mod(1000).mod(100).div(10) = n.div(10).mod(10)) ∧
+    (n.mod(1000000).mod(100000).mod(10000).mod(1000).mod(100).mod(10).div(1) = n.mod(10))))))) {
+    let m = field_mods(n);
+    let top: (n.div(1000000) = n.div(1000000).mod(10)) = sym(n.div(1000000).mod_of_lt(10, n.div_lt_of_lt_mul(1000000, 10, small)));
+    let d5: (n.mod(1000000).div(100000) = n.div(100000).mod(10)) = sym(n.div_mod_eq_mod_div(100000, 10, trivial, trivial));
+    let d4: (n.mod(1000000).mod(100000).div(10000) = n.div(10000).mod(10)) =
+        trans(@cong(λ (x: Nat) => x.div(10000), n.mod(1000000).mod(100000), n.mod(100000), m.left), sym(n.div_mod_eq_mod_div(10000, 10, trivial, trivial)));
+    let d3: (n.mod(1000000).mod(100000).mod(10000).div(1000) = n.div(1000).mod(10)) =
+        trans(@cong(λ (x: Nat) => x.div(1000), n.mod(1000000).mod(100000).mod(10000), n.mod(10000), m.right.left), sym(n.div_mod_eq_mod_div(1000, 10, trivial, trivial)));
+    let d2: (n.mod(1000000).mod(100000).mod(10000).mod(1000).div(100) = n.div(100).mod(10)) =
+        trans(@cong(λ (x: Nat) => x.div(100), n.mod(1000000).mod(100000).mod(10000).mod(1000), n.mod(1000), m.right.right.left), sym(n.div_mod_eq_mod_div(100, 10, trivial, trivial)));
+    let d1: (n.mod(1000000).mod(100000).mod(10000).mod(1000).mod(100).div(10) = n.div(10).mod(10)) =
+        trans(@cong(λ (x: Nat) => x.div(10), n.mod(1000000).mod(100000).mod(10000).mod(1000).mod(100), n.mod(100), m.right.right.right.left), sym(n.div_mod_eq_mod_div(10, 10, trivial, trivial)));
+    let d0: (n.mod(1000000).mod(100000).mod(10000).mod(1000).mod(100).mod(10).div(1) = n.mod(10)) = trans(n.mod(1000000).mod(100000).mod(10000).mod(1000).mod(100).mod(10).div_one(), m.right.right.right.right);
+    ⟨top, ⟨d5, ⟨d4, ⟨d3, ⟨d2, ⟨d1, d0⟩⟩⟩⟩⟩⟩
+}
+
+// What the formatter stores, byte by byte: the low word's first four bytes
+// are the field's first four columns; the high word's first four its last
+// three and the separator.
+theorem field_low_bytes(n: Nat, small: n < 10000000):
+    word_bytes(field_low(bitvec_nat::word_of_nat(64, n))).take(4) = [column(n, 1000000), column(n, 100000), column(n, 10000), column(n, 1000)] {
+    let dg = field_digits(n, small);
+    let d0: (n.div(1000000) < 10) = n.div_lt_of_lt_mul(1000000, 10, small);
+    let d1: (n.mod(1000000).div(100000) < 10) = n.mod(1000000).div_lt_of_lt_mul(100000, 10, n.mod_lt(1000000, trivial));
+    let d2: (n.mod(1000000).mod(100000).div(10000) < 10) = n.mod(1000000).mod(100000).div_lt_of_lt_mul(10000, 10, n.mod(1000000).mod_lt(100000, trivial));
+    let d3: (n.mod(1000000).mod(100000).mod(10000).div(1000) < 10) = n.mod(1000000).mod(100000).mod(10000).div_lt_of_lt_mul(1000, 10, n.mod(1000000).mod(100000).mod_lt(10000, trivial));
+    let bytes = word_low_bytes_of(field_low(bitvec_nat::word_of_nat(64, n)),
+        (32 + 16 * at_least(n, 1000000)) + n.div(1000000), (32 + 16 * at_least(n, 100000)) + n.mod(1000000).div(100000),
+        (32 + 16 * at_least(n, 10000)) + n.mod(1000000).mod(100000).div(10000), (32 + 16 * at_least(n, 1000)) + n.mod(1000000).mod(100000).mod(10000).div(1000), n.mod(1000000).mod(100000).mod(10000).mod(1000),
+        field_low_value(n, small), column_small(at_least(n, 1000000), n.div(1000000), at_least_le(n, 1000000), d0),
+        column_small(at_least(n, 100000), n.mod(1000000).div(100000), at_least_le(n, 100000), d1),
+        column_small(at_least(n, 10000), n.mod(1000000).mod(100000).div(10000), at_least_le(n, 10000), d2),
+        column_small(at_least(n, 1000), n.mod(1000000).mod(100000).mod(10000).div(1000), at_least_le(n, 1000), d3));
+    trans(bytes, four_cong<BitVec(8)>(
+        BitVec::ofNat((32 + 16 * at_least(n, 1000000)) + n.div(1000000), n := 8), BitVec::ofNat((32 + 16 * at_least(n, 100000)) + n.mod(1000000).div(100000), n := 8),
+        BitVec::ofNat((32 + 16 * at_least(n, 10000)) + n.mod(1000000).mod(100000).div(10000), n := 8), BitVec::ofNat((32 + 16 * at_least(n, 1000)) + n.mod(1000000).mod(100000).mod(10000).div(1000), n := 8),
+        column(n, 1000000), column(n, 100000), column(n, 10000), column(n, 1000),
+        column_byte(n, 1000000, n.div(1000000), trivial, dg.left), column_byte(n, 100000, n.mod(1000000).div(100000), trivial, dg.right.left),
+        column_byte(n, 10000, n.mod(1000000).mod(100000).div(10000), trivial, dg.right.right.left), column_byte(n, 1000, n.mod(1000000).mod(100000).mod(10000).div(1000), trivial, dg.right.right.right.left)))
+}
+
+theorem field_high_bytes(n, sep: Nat, tail: BitVec(64), small: n < 10000000, placed: tail.toNat() = 16777216 * sep, sep_small: sep < 256):
+    word_bytes(field_high(bitvec_nat::word_of_nat(64, n), tail)).take(4) = [column(n, 100), column(n, 10), digit(n.mod(10)), BitVec::ofNat(sep)] {
+    let dg = field_digits(n, small);
+    let e0: (n.mod(1000000).mod(100000).mod(10000).mod(1000).div(100) < 10) = n.mod(1000000).mod(100000).mod(10000).mod(1000).div_lt_of_lt_mul(100, 10, n.mod(1000000).mod(100000).mod(10000).mod_lt(1000, trivial));
+    let e1: (n.mod(1000000).mod(100000).mod(10000).mod(1000).mod(100).div(10) < 10) = n.mod(1000000).mod(100000).mod(10000).mod(1000).mod(100).div_lt_of_lt_mul(10, 10, n.mod(1000000).mod(100000).mod(10000).mod(1000).mod_lt(100, trivial));
+    let e2: (n.mod(1000000).mod(100000).mod(10000).mod(1000).mod(100).mod(10).div(1) < 10) = n.mod(1000000).mod(100000).mod(10000).mod(1000).mod(100).mod(10).div_lt_of_lt_mul(1, 10, n.mod(1000000).mod(100000).mod(10000).mod(1000).mod(100).mod_lt(10, trivial));
+    let bytes = word_low_bytes_of(field_high(bitvec_nat::word_of_nat(64, n), tail),
+        (32 + 16 * at_least(n, 100)) + n.mod(1000000).mod(100000).mod(10000).mod(1000).div(100), (32 + 16 * at_least(n, 10)) + n.mod(1000000).mod(100000).mod(10000).mod(1000).mod(100).div(10), 48 + n.mod(1000000).mod(100000).mod(10000).mod(1000).mod(100).mod(10).div(1), sep, 0,
+        field_high_value(n, sep, tail, small, placed, sep_small),
+        column_small(at_least(n, 100), n.mod(1000000).mod(100000).mod(10000).mod(1000).div(100), at_least_le(n, 100), e0),
+        column_small(at_least(n, 10), n.mod(1000000).mod(100000).mod(10000).mod(1000).mod(100).div(10), at_least_le(n, 10), e1), units_small(n.mod(1000000).mod(100000).mod(10000).mod(1000).mod(100).mod(10).div(1), e2), sep_small);
+    trans(bytes, four_cong<BitVec(8)>(
+        BitVec::ofNat((32 + 16 * at_least(n, 100)) + n.mod(1000000).mod(100000).mod(10000).mod(1000).div(100), n := 8), BitVec::ofNat((32 + 16 * at_least(n, 10)) + n.mod(1000000).mod(100000).mod(10000).mod(1000).mod(100).div(10), n := 8),
+        BitVec::ofNat(48 + n.mod(1000000).mod(100000).mod(10000).mod(1000).mod(100).mod(10).div(1), n := 8), BitVec::ofNat(sep, n := 8),
+        column(n, 100), column(n, 10), digit(n.mod(10)), BitVec::ofNat(sep, n := 8),
+        column_byte(n, 100, n.mod(1000000).mod(100000).mod(10000).mod(1000).div(100), trivial, dg.right.right.right.right.left),
+        column_byte(n, 10, n.mod(1000000).mod(100000).mod(10000).mod(1000).mod(100).div(10), trivial, dg.right.right.right.right.right.left),
+        @cong(λ (e: Nat) => BitVec::ofNat(48 + e, n := 8), n.mod(1000000).mod(100000).mod(10000).mod(1000).mod(100).mod(10).div(1), n.mod(10), dg.right.right.right.right.right.right), refl))
+}
