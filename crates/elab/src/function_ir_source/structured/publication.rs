@@ -20,6 +20,17 @@ struct Observed {
     expression: String,
     values: Vec<String>,
     proofs: Vec<String>,
+    /// Each port's value with the branches its narrowed region collapses
+    /// taken as their false arm, and a proof that `values[i]` equals it
+    /// (cert::narrow_structured_region).
+    collapsed: Vec<String>,
+    collapse_proofs: Vec<String>,
+}
+impl Observed {
+    fn leaf(expression: String, values: Vec<String>, proofs: Vec<String>) -> Self {
+        let collapse_proofs = values.iter().map(|_| "refl".to_string()).collect();
+        Self { expression, collapsed: values.clone(), values, proofs, collapse_proofs }
+    }
 }
 
 fn observe_tree(expansion: &mut Expansion<'_>, region: &StructuredRegion, mut values: Expressions,
@@ -60,9 +71,9 @@ fn observe_tree(expansion: &mut Expansion<'_>, region: &StructuredRegion, mut va
                         format!("match {tag} as λ selected => {observer}(match selected {{ False => {no}, True => {yes} }}) = {rhs} {{ False => {leaf}, True => {leaf} }}")
                     }).collect();
                     observed.push(tag);
-                    Ok(Observed { expression, values: observed, proofs })
+                    Ok(Observed::leaf(expression, observed, proofs))
                 }
-                None => Ok(Observed { expression: value, values: observed, proofs: leaves }),
+                None => Ok(Observed::leaf(value, observed, leaves)),
             }
         }
         StructuredRegion::Dataflow(body) => {
@@ -89,9 +100,9 @@ fn observe_tree(expansion: &mut Expansion<'_>, region: &StructuredRegion, mut va
                     let leaf = if i == 0 { leaf.as_str() } else { "refl" };
                     format!("match {tag} as λ selected => {observer}(match selected {{ False => {no}, True => {yes} }}) = {rhs} {{ False => {leaf}, True => {leaf} }}")
                 }).collect();
-                Ok(Observed { expression, values: vec![observed, tag], proofs })
+                Ok(Observed::leaf(expression, vec![observed, tag], proofs))
             } else {
-                Ok(Observed { expression: scalar, values: vec![observed], proofs: vec![leaf] })
+                Ok(Observed::leaf(scalar, vec![observed], vec![leaf]))
             }
         }
         StructuredRegion::Sequence { prefix, continuation } => {
@@ -126,8 +137,24 @@ fn observe_tree(expansion: &mut Expansion<'_>, region: &StructuredRegion, mut va
             let proofs = observers.iter().enumerate().map(|(i, observer)| format!(
                 "selected_computation_agrees<{result_type}, {}>({condition}, {}, {}, {observer}, {}, {}, {}, {})",
                 observation_types[i], no.expression, yes.expression, no.values[i], yes.values[i], no.proofs[i], yes.proofs[i])).collect();
-            let values = no.values.iter().zip(&yes.values).map(|(no, yes)| format!("match {condition} {{ False => {no}, True => {yes} }}")).collect();
-            Ok(Observed { expression, values, proofs })
+            let values: Vec<String> = no.values.iter().zip(&yes.values).map(|(no, yes)| format!("match {condition} {{ False => {no}, True => {yes} }}")).collect();
+            let ports = region.outputs();
+            let mut collapsed = Vec::new();
+            let mut collapse_proofs = Vec::new();
+            for i in 0..values.len() {
+                let (nv, yv, nc, yc, np, yp) = (&no.values[i], &yes.values[i], &no.collapsed[i], &yes.collapsed[i], &no.collapse_proofs[i], &yes.collapse_proofs[i]);
+                let same = cert::structured_alpha_eq(&cert::narrow_structured_region(when_true, &[ports[i]]), &cert::narrow_structured_region(when_false, &[ports[i]]));
+                if same {
+                    // The true arm's collapsed value is the false arm's up to
+                    // the names of their value definitions: conversion.
+                    collapse_proofs.push(format!("match {condition} as λ selected => (match selected {{ False => {nv}, True => {yv} }}) = ({nc}) {{ False => {np}, True => {yp} }}"));
+                    collapsed.push(nc.clone());
+                } else {
+                    collapse_proofs.push(format!("match {condition} as λ selected => (match selected {{ False => {nv}, True => {yv} }}) = (match selected {{ False => {nc}, True => {yc} }}) {{ False => {np}, True => {yp} }}"));
+                    collapsed.push(format!("match {condition} {{ False => {nc}, True => {yc} }}"));
+                }
+            }
+            Ok(Observed { expression, values, proofs, collapsed, collapse_proofs })
         }
     }
 }
@@ -168,7 +195,9 @@ pub fn generate_elaborated_typed_x86(
                         _ => value.into(),
                     };
                     match &names {
-                        Some([no, yes]) => observe(&format!("match result {{ {no}(payload) => payload.{field}, {yes}(payload) => payload.{field} }}")),
+                        // Projected after the match, so the observer is
+                    // `loop_step_payload(result).f` itself for a loop step.
+                    Some([no, yes]) => observe(&format!("{{ let chosen: {} = match result {{ {no}(payload) => payload, {yes}(payload) => payload }}; chosen.{field} }}", record.type_name)),
                         None => observe(&format!("result.{field}")),
                     }
                 }
@@ -297,7 +326,9 @@ pub fn generate_elaborated_typed_fields_x86(
                     _ => value.into(),
                 };
                 match &names {
-                    Some([no, yes]) => observe(&format!("match result {{ {no}(payload) => payload.{field}, {yes}(payload) => payload.{field} }}")),
+                    // Projected after the match, so the observer is
+                    // `loop_step_payload(result).f` itself for a loop step.
+                    Some([no, yes]) => observe(&format!("{{ let chosen: {} = match result {{ {no}(payload) => payload, {yes}(payload) => payload }}; chosen.{field} }}", record.type_name)),
                     None => observe(&format!("result.{field}")),
                 }
             }
@@ -323,6 +354,11 @@ pub fn generate_elaborated_typed_fields_x86(
         let source_agreement = format!("trans(cong_fn<{result_type}, {}>({observer}, sym({prefix}_source_source_expands({args}))), {})", observation_types[i], observed.proofs[i]);
         module.declaration(Declaration::theorem(format!("{prefix}_output_{}_source_observed", port.id),
             HeatherExpr::raw(format!("{observer}({}({args})) = {}", reflected.source_name, observed.values[i])), Block::expression(HeatherExpr::raw(source_agreement))).parameters(parameters.clone()));
+        // The same, with the branches the piece's narrowed region collapses
+        // decided: what the piece's code computes.
+        module.declaration(Declaration::theorem(format!("{prefix}_output_{}_collapsed", port.id),
+            HeatherExpr::raw(format!("{observer}({}({args})) = {}", reflected.source_name, observed.collapsed[i])),
+            Block::expression(HeatherExpr::raw(format!("trans({prefix}_output_{}_source_observed({args}), {})", port.id, observed.collapse_proofs[i])))).parameters(parameters.clone()));
     }
     let mut artifacts = Module::default();
     let mut emissions = Vec::new();
@@ -352,7 +388,7 @@ pub fn generate_elaborated_typed_fields_x86(
         let correct = if emission.text.contains(&format!("theorem {name}_meaning(")) {
             format!("trans({name}_correct({vals}, before{placed_args}), {name}_meaning({vals}))")
         } else { format!("{name}_correct({vals}, before{placed_args})") };
-        let proof = format!("trans({correct}, sym(cong_fn<{}, BitVec(64)>(λ value => {}, {prefix}_output_{}_source_observed({args}))))", observation_types[i], normalized("value"), port.id);
+        let proof = format!("trans({correct}, sym(cong_fn<{}, BitVec(64)>(λ value => {}, {prefix}_output_{}_collapsed({args}))))", observation_types[i], normalized("value"), port.id);
         artifacts.declaration(Declaration::theorem(format!("{name}_typed_correct"), HeatherExpr::raw(format!("read_gpr({}, {name}_after(before).gprs) = {expected}", piece.output.heather_name())), Block::expression(HeatherExpr::raw(proof))).generic("M").parameters(public.clone()));
         artifacts.declaration(Declaration::theorem(format!("{name}_typed_artifact"), HeatherExpr::raw(format!("StructuredArtifact<M>({name}_code(), before, {}, {expected}, {name}_Protected)", piece.output.heather_name())), Block::expression(HeatherExpr::raw(format!("StructuredArtifact(after := {name}_after(before), execution := refl, layout := {name}_layout(), decoding := {name}_decodes(before.rip), result_correct := {name}_typed_correct({call_args}), memory_preserved := {name}_memory(before), rip_correct := {name}_rip(before), registers_preserved := λ register protected => {name}_preserves(register, before, protected))")))).generic("M").parameters(public.clone()));
         module.raw(emission.text.clone());

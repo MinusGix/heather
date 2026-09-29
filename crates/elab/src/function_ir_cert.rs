@@ -256,6 +256,54 @@ pub fn narrow_structured_region(region: &StructuredRegion, wanted: &[Port]) -> S
     narrow(region, wanted, &std::collections::BTreeSet::new())
 }
 
+/// Two regions compute alike, up to the names of their own nodes' outputs:
+/// the same inputs, the same nodes in the same order over renamed operands,
+/// the same outputs.
+pub fn structured_alpha_eq(left: &StructuredRegion, right: &StructuredRegion) -> bool {
+    alpha(left, right, &mut std::collections::BTreeMap::new())
+}
+fn renamed(node: Node, f: &impl Fn(u64) -> u64) -> Node {
+    match node {
+        Node::Const { width, output, value } => Node::Const { width, output: f(output), value },
+        Node::Add { width, output, left, right } => Node::Add { width, output: f(output), left: f(left), right: f(right) },
+        Node::Sub { width, output, left, right } => Node::Sub { width, output: f(output), left: f(left), right: f(right) },
+        Node::BitAnd { width, output, left, right } => Node::BitAnd { width, output: f(output), left: f(left), right: f(right) },
+        Node::BitOr { width, output, left, right } => Node::BitOr { width, output: f(output), left: f(left), right: f(right) },
+        Node::BitXor { width, output, left, right } => Node::BitXor { width, output: f(output), left: f(left), right: f(right) },
+        Node::ShiftLeft { width, output, value, amount } => Node::ShiftLeft { width, output: f(output), value: f(value), amount: f(amount) },
+        Node::LogicalShiftRight { width, output, value, amount } => Node::LogicalShiftRight { width, output: f(output), value: f(value), amount: f(amount) },
+        Node::ArithmeticShiftRight { width, output, value, amount } => Node::ArithmeticShiftRight { width, output: f(output), value: f(value), amount: f(amount) },
+        Node::UnsignedLessThan { width, output, left, right } => Node::UnsignedLessThan { width, output: f(output), left: f(left), right: f(right) },
+        Node::SignedLessThan { width, output, left, right } => Node::SignedLessThan { width, output: f(output), left: f(left), right: f(right) },
+    }
+}
+fn alpha_ports(left: &[Port], right: &[Port], map: &std::collections::BTreeMap<u64, u64>) -> bool {
+    left.len() == right.len() && left.iter().zip(right).all(|(l, r)| l.width == r.width && l.id == *map.get(&r.id).unwrap_or(&r.id))
+}
+fn alpha_region(left: &Region, right: &Region, map: &mut std::collections::BTreeMap<u64, u64>) -> bool {
+    if !alpha_ports(&left.inputs, &right.inputs, map) || left.nodes.len() != right.nodes.len() { return false; }
+    for (l, r) in left.nodes.iter().zip(&right.nodes) {
+        map.insert(r.output().id, l.output().id);
+        let m = map.clone();
+        if renamed(*r, &|id| *m.get(&id).unwrap_or(&id)) != *l { return false; }
+    }
+    alpha_ports(&left.outputs, &right.outputs, map)
+}
+fn alpha(left: &StructuredRegion, right: &StructuredRegion, map: &mut std::collections::BTreeMap<u64, u64>) -> bool {
+    match (left, right) {
+        (StructuredRegion::Dataflow(l), StructuredRegion::Dataflow(r)) => alpha_region(l, r, map),
+        (StructuredRegion::Sequence { prefix: lp, continuation: lc }, StructuredRegion::Sequence { prefix: rp, continuation: rc }) =>
+            alpha_region(lp, rp, map) && alpha(lc, rc, map),
+        (StructuredRegion::Compose { prefix: lp, continuation: lc }, StructuredRegion::Compose { prefix: rp, continuation: rc }) =>
+            alpha(lp, rp, map) && alpha(lc, rc, map),
+        (StructuredRegion::Conditional { inputs: li, condition: lcnd, arguments: la, outputs: lo, when_true: lt, when_false: lf },
+         StructuredRegion::Conditional { inputs: ri, condition: rcnd, arguments: ra, outputs: ro, when_true: rt, when_false: rf }) =>
+            alpha_ports(li, ri, map) && *lcnd == *map.get(rcnd).unwrap_or(rcnd) && alpha_ports(la, ra, map) && alpha_ports(lo, ro, map)
+                && alpha(lt, rt, map) && alpha(lf, rf, map),
+        _ => false,
+    }
+}
+
 fn keep(ports: &[Port], set: &std::collections::BTreeSet<Port>) -> Vec<Port> {
     ports.iter().copied().filter(|port| set.contains(port)).collect()
 }
@@ -301,6 +349,9 @@ fn narrow(region: &StructuredRegion, wanted: &[Port], through: &std::collections
         }
         StructuredRegion::Conditional { inputs, condition, arguments, when_true, when_false, .. } => {
             let (yes, no) = (narrow(when_true, wanted, &BTreeSet::new()), narrow(when_false, wanted, &BTreeSet::new()));
+            // Both arms compute the wanted outputs alike: the test is not
+            // needed, and the false arm stands for the branch.
+            if structured_alpha_eq(&yes, &no) { return narrow(when_false, wanted, through); }
             let read: BTreeSet<Port> = yes.inputs().iter().chain(no.inputs()).copied().collect();
             let arguments = keep(arguments, &read);
             let shared: BTreeSet<Port> = arguments.iter().copied().collect();

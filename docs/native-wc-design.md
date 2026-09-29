@@ -251,6 +251,53 @@ computes the discriminator last so the pieces can borrow its register.
 `wc`'s step certifies this way with four temporaries: one result register
 and three scratch.
 
+### 4.7 The record loop (B3, 2026-09-28)
+
+`generate_elaborated_record_loop_x86` (`crates/elab/src/function_ir_source/loop_record.rs`)
+compiles a `bounded_readonly` over a record carry. It keeps the Nat/Bool
+loop's shape (the same guard, library induction and final theorem) with
+the iteration as a list of typed pieces:
+
+- the address into `byte`, then `movzx byte, [byte]` (the load reuses its
+  address register);
+- each field, alone, into scratch, then copied home, in write order;
+- the discriminator;
+- the next cursor and budget into freed scratch, then copied home.
+
+The state's placement (`{prefix}_rep`) is a conjunction per field: a Nat
+field as its word, a Bool field as its placed bit. The invariant
+(`{prefix}_fits`) says every Nat field fits a word with the budget still to
+run. `--advance` is the right-nested conjunction "each Nat field grows by at
+most one", in declaration order.
+
+Three findings came out of building it:
+
+- **Collapse.** Narrowing now collapses a branch whose narrowed arms compute
+  alike (alpha-equal up to their own nodes' names). A folding step's
+  discriminator then reads nothing (it's the constant `Continue`) and can go
+  last, so the field pieces borrow its register. `lines` stops reading
+  `inside`, and the loop shrank from 1,667 bytes to 890. The source side
+  follows: the observation gives each port's collapsed spelling with a proof
+  (one Bool case per collapsed branch, the other arm by conversion), and a
+  piece's artifact goes through it. A discriminator that does read fields
+  goes first instead.
+- **Depth, not fuel.** A loop of a thousand bytes or more has a byte list the
+  kernel cannot compare element by element against an appended tree: the
+  comparison recurses once per byte, past the 1,024-frame depth budget,
+  which reports as OutOfFuel. Access fragments now carry their bytes as
+  their children's literals appended, with a proof (`lit`, `lit_proof`).
+  `{prefix}_bytes()` is that tree, the encoding lemma is the composed
+  proof, and both loop edges read the children's lengths through it. The CLI
+  producer compares the loop's bytes with its own flat literal and will need
+  the same treatment for `wc`.
+- **Registers.** `wc`'s placement: base RDI, length RBP, needle RCX,
+  cursor RSI, budget R12, flag R10, discriminator RBX (borrowed as scratch),
+  byte R9, fields R13 R14 R15 R8, scratch R11 RAX RDX. Every register the
+  loop keeps across reads (the fields) survives SYSCALL and the read's
+  setup.
+
+Test: `record_state_loop_certificate_checks` (function_ir_loop_trace).
+
 ## 5. Slice C: the three-field line
 
 - `field_word(n, separator)`, for `n < 10^7`: the seven right-aligned

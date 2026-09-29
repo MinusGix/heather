@@ -44,6 +44,7 @@ pub fn generate_elaborated_loop_x86(elaborator: &Elaborator, prefix: &str, sourc
         return unsupported("loop registers must be distinct");
     }
     let reflected = reflect_elaborated_readonly_loop(elaborator, source)?;
+    if matches!(reflected.carry, LoopCarry::Record(_)) { return unsupported("a record carry uses generate_elaborated_record_loop_x86"); }
     let counted = reflected.carry == LoopCarry::Natural;
     let advance = match (counted, advance) {
         (true, Some(name)) => name,

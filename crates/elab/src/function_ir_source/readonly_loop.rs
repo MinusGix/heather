@@ -2,10 +2,14 @@
 //! not native body selection: the body retains its resolved checked identity.
 use super::*;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LoopCarry { Natural, Boolean }
+/// A carry: one Nat or Bool, or a record of scalar fields, each in a register
+/// of its own (docs/native-wc-design.md §4).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LoopCarry { Natural, Boolean, Record(super::structured::StructuredSourceRecord) }
 impl LoopCarry {
-    fn name(self) -> &'static str { match self { Self::Natural => "Nat", Self::Boolean => "Bool" } }
+    pub fn name(&self) -> String {
+        match self { Self::Natural => "Nat".into(), Self::Boolean => "Bool".into(), Self::Record(record) => record.type_name.clone() }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -51,7 +55,10 @@ pub fn reflect_elaborated_readonly_loop(elaborator: &Elaborator, source: &str)
     let carry = match args[0] {
         Term::TmNat => LoopCarry::Natural,
         term if boolean_code.is_some() && resolved(term) == boolean_code => LoopCarry::Boolean,
-        _ => return unsupported("bounded loop reflection currently supports Nat or Bool carries"),
+        term => match super::structured::record_code_at(elaborator, caller, term)? {
+            Some(record) => LoopCarry::Record(record),
+            None => return unsupported("bounded loop reflection supports Nat, Bool, or record carries"),
+        },
     };
     let body = resolved(args[6]).ok_or_else(|| SourceError::Unsupported("loop body must be a resolved global function".into()))?;
     let body_name = elaborator.global_qualified_name_at(body).ok_or_else(|| SourceError::Unsupported("loop body has no qualified identity".into()))?;
@@ -76,7 +83,7 @@ pub fn generate_readonly_loop_certificate(prefix: &str, reflected: &ReflectedRea
         Block::expression(HeatherExpr::raw(format!("ReadonlyLoop<{carry}>({})", reflected.body_name)))));
     let parameters = || [
         ("buffer", "ReadonlyBytes"), ("needle", "BitVec(8)"), ("budget", "Nat"),
-        ("cursor", "Nat"), ("carry", carry),
+        ("cursor", "Nat"), ("carry", carry.as_str()),
     ].into_iter().map(|(name, ty)| Parameter::explicit(name, HeatherExpr::name(ty))).collect::<Vec<_>>();
     module.declaration(Declaration::theorem(format!("{prefix}_source_agreement"),
         HeatherExpr::raw(format!("loop_run(budget, {region}(), buffer, needle, cursor, carry) = {}(buffer, needle, budget, cursor, carry)", reflected.source_name)),

@@ -161,12 +161,14 @@ fn record_state_fields_publish_alone() {
     let (text, emissions) = generate_elaborated_typed_fields_x86(&elab, "wc_fields", "record_step::wc_body", &pieces).unwrap_or_else(|e| panic!("{e:?}"));
     elab.elab_module_source("typed_wc_fields", &text).unwrap_or_else(|e| panic!("{}", e.render(&text)));
     let reads = |field: &str| emissions.iter().find(|e| e.prefix == format!("wc_{field}")).unwrap().inputs.iter().map(|p| p.id).collect::<Vec<_>>();
-    // Branches are kept, so a field reads what its branches test: the line
-    // count reads the flag too (its non-space arm tests it), and the flag
-    // reads itself the same way, which is harmless: a field is computed
-    // before its own register is written. So the flag goes last; nothing
-    // reads the needle.
-    assert_eq!(reads("lines"), vec![2, 3, 5]);
+    // A branch whose arms compute a field alike is collapsed, so a field
+    // reads only what it depends on: the lines don't read the flag, and
+    // nothing reads the needle. The flag still reads itself here, since one
+    // arm passes the state through and the other writes `True`: equal
+    // values, not alike computations. The words read the flag, which is why
+    // the flag is written back after them.
+    assert_eq!(reads("lines"), vec![2, 3]);
     assert_eq!(reads("words"), vec![2, 4, 5]);
     assert_eq!(reads("inside"), vec![2, 5]);
+    assert!(reads("step").is_empty(), "a folding step's discriminator is a constant");
 }

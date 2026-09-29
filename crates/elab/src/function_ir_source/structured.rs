@@ -152,6 +152,9 @@ fn record_code(elaborator: &Elaborator, caller: usize, tm: &Term) -> Result<Opti
     let qualify = |name: &str| if ind.scope.module.is_empty() { name.to_string() } else { format!("{}::{name}", ind.scope.module) };
     Ok(Some(StructuredSourceRecord { type_name: qualify(&ind.name), constructor: qualify(&ctor.name), fields }))
 }
+pub(super) fn record_code_at(elaborator: &Elaborator, caller: usize, tm: &Term) -> Result<Option<StructuredSourceRecord>, SourceError> {
+    record_code(elaborator, caller, tm)
+}
 fn record_type(elaborator: &Elaborator, caller: usize, ty: &Type) -> Result<Option<StructuredSourceRecord>, SourceError> {
     match ty { Type::El { tm, .. } => record_code(elaborator, caller, tm), _ => Ok(None) }
 }

@@ -1,5 +1,5 @@
 use crate::common;
-use heather_elab::function_ir_source::{generate_elaborated_loop_x86, generate_elaborated_typed_x86, NativeLoopPlacement};
+use heather_elab::function_ir_source::{generate_elaborated_loop_x86, generate_elaborated_record_loop_x86, generate_elaborated_typed_x86, NativeLoopPlacement, RecordLoopPlacement};
 use heather_elab::function_ir_x86_lower::{Gpr, Placements};
 
 fn checker() -> heather_elab::Elaborator {
@@ -279,4 +279,104 @@ fn stitch(text: &str) -> String {
         else { body.push_str(line); body.push('\n'); }
     }
     format!("{}\n{body}", imports.into_iter().collect::<Vec<_>>().join("\n"))
+}
+
+// A loop over a record state (docs/native-wc-design.md §4): `wc`'s step over
+// { lines, words, bytes, inside }. The fields sit in registers of their own
+// and one iteration updates them in place, one at a time.
+const WC_SOURCE: &str = r#"
+import bitvec; import bool; import logic; import nat; import function_ir_loop;
+record WcState { lines: Nat, words: Nat, bytes: Nat, inside: Bool }
+fn newline_byte(b: BitVec(8)) → Bool {
+    match b.unsigned_lt_bit(BitVec::ofNat(10)) { True => False, False => b.unsigned_lt_bit(BitVec::ofNat(11)) }
+}
+fn space_byte(b: BitVec(8)) → Bool {
+    match b.unsigned_lt_bit(BitVec::ofNat(14)) {
+        True => match b.unsigned_lt_bit(BitVec::ofNat(9)) { True => False, False => True },
+        False => match b.unsigned_lt_bit(BitVec::ofNat(32)) { True => False, False => b.unsigned_lt_bit(BitVec::ofNat(33)) },
+    }
+}
+fn wc_body(needle: BitVec(8), cursor: Nat, byte: BitVec(8), s: WcState) → LoopStep<WcState> {
+    match space_byte(byte) {
+        True => match newline_byte(byte) {
+            True => Continue(WcState(Succ(s.lines), s.words, Succ(s.bytes), False)),
+            False => Continue(WcState(s.lines, s.words, Succ(s.bytes), False)),
+        },
+        False => match s.inside {
+            True => Continue(WcState(s.lines, s.words, Succ(s.bytes), True)),
+            False => Continue(WcState(s.lines, Succ(s.words), Succ(s.bytes), True)),
+        },
+    }
+}
+fn count_wc(buffer: ReadonlyBytes, needle: BitVec(8), budget: Nat, cursor: Nat, carry: WcState) → LoopOutcome<WcState> {
+    bounded_readonly<WcState>(buffer, needle, budget, cursor, carry, wc_body)
+}
+fn WcAdvances(step: LoopStep<WcState>, s: WcState) → Type {
+    (loop_step_payload(step).lines <= Succ(s.lines)) ∧ ((loop_step_payload(step).words <= Succ(s.words)) ∧
+        (loop_step_payload(step).bytes <= Succ(s.bytes)))
+}
+theorem wc_inside_advances(s: WcState): WcAdvances(match s.inside {
+        True => Continue(WcState(s.lines, s.words, Succ(s.bytes), True)),
+        False => Continue(WcState(s.lines, Succ(s.words), Succ(s.bytes), True)),
+    }, s) {
+    match s.inside as λ i => WcAdvances(match i {
+            True => Continue(WcState(s.lines, s.words, Succ(s.bytes), True)),
+            False => Continue(WcState(s.lines, Succ(s.words), Succ(s.bytes), True)),
+        }, s) {
+        True => ⟨s.lines.le_succ_r(s.lines, s.lines.le_refl()), ⟨s.words.le_succ_r(s.words, s.words.le_refl()), Succ(s.bytes).le_refl()⟩⟩,
+        False => ⟨s.lines.le_succ_r(s.lines, s.lines.le_refl()), ⟨Succ(s.words).le_refl(), Succ(s.bytes).le_refl()⟩⟩,
+    }
+}
+theorem wc_newline_advances(byte: BitVec(8), s: WcState): WcAdvances(match newline_byte(byte) {
+        True => Continue(WcState(Succ(s.lines), s.words, Succ(s.bytes), False)),
+        False => Continue(WcState(s.lines, s.words, Succ(s.bytes), False)),
+    }, s) {
+    match newline_byte(byte) as λ n => WcAdvances(match n {
+            True => Continue(WcState(Succ(s.lines), s.words, Succ(s.bytes), False)),
+            False => Continue(WcState(s.lines, s.words, Succ(s.bytes), False)),
+        }, s) {
+        True => ⟨Succ(s.lines).le_refl(), ⟨s.words.le_succ_r(s.words, s.words.le_refl()), Succ(s.bytes).le_refl()⟩⟩,
+        False => ⟨s.lines.le_succ_r(s.lines, s.lines.le_refl()), ⟨s.words.le_succ_r(s.words, s.words.le_refl()), Succ(s.bytes).le_refl()⟩⟩,
+    }
+}
+// Every Nat field grows by at most one per byte, in declaration order: the
+// shape the record loop's invariant reads.
+theorem wc_body_advances(): (needle: BitVec(8)) → (cursor: Nat) → (byte: BitVec(8)) → (s: WcState) →
+    (loop_step_payload(wc_body(needle, cursor, byte, s)).lines <= Succ(s.lines)) ∧
+    ((loop_step_payload(wc_body(needle, cursor, byte, s)).words <= Succ(s.words)) ∧
+        (loop_step_payload(wc_body(needle, cursor, byte, s)).bytes <= Succ(s.bytes))) {
+    λ needle cursor byte s => match space_byte(byte) as λ sp => WcAdvances(match sp {
+            True => match newline_byte(byte) {
+                True => Continue(WcState(Succ(s.lines), s.words, Succ(s.bytes), False)),
+                False => Continue(WcState(s.lines, s.words, Succ(s.bytes), False)),
+            },
+            False => match s.inside {
+                True => Continue(WcState(s.lines, s.words, Succ(s.bytes), True)),
+                False => Continue(WcState(s.lines, Succ(s.words), Succ(s.bytes), True)),
+            },
+        }, s) {
+        True => wc_newline_advances(byte, s),
+        False => wc_inside_advances(s),
+    }
+}
+"#;
+
+fn wc_placement() -> RecordLoopPlacement {
+    RecordLoopPlacement {
+        base: Gpr::Rdi, length: Gpr::Rbp, needle: Gpr::Rcx, cursor: Gpr::Rsi, budget: Gpr::R12,
+        flag: Gpr::R10, step: Gpr::Rbx, byte: Gpr::R9,
+        fields: vec![Gpr::R13, Gpr::R14, Gpr::R15, Gpr::R8],
+        scratch: vec![Gpr::R11, Gpr::Rax, Gpr::Rdx],
+    }
+}
+
+#[test]
+fn record_state_loop_certificate_checks() {
+    let mut elab = checker().semantic_image().elaborator();
+    elab.elab_module_source("wc_loop", WC_SOURCE).unwrap_or_else(|e| panic!("{}", e.render(WC_SOURCE)));
+    elab.elab_module_source("wc_context", "import function_ir_loop; import function_ir_loop_x86; import wc_loop; import bitvec; import bool;").unwrap();
+    let emission = generate_elaborated_record_loop_x86(&elab, "wc", "wc_loop::count_wc", &wc_placement(), "wc_loop::wc_body_advances")
+        .unwrap_or_else(|e| panic!("{e:?}"));
+    elab.elab_module_source("wc_pieces", &emission.pieces).unwrap_or_else(|e| panic!("{}", e.render(&emission.pieces)));
+    elab.elab_module_source("wc_native", &emission.text).unwrap_or_else(|e| panic!("{}", e.render(&emission.text)));
 }
