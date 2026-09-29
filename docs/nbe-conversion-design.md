@@ -527,7 +527,11 @@ customers checked one by one.
   (`issues/elaborator-whnf-probes-on-computing-types.md`). The oracle now
   asks the value machine first and lets it *decide*: a neutral means the
   reducer gets a small step budget for the spelling and past it the input is
-  the answer; a former means the reducer runs as before to spell it. The only
+  the answer; a former means the reducer runs as before to spell it; out of
+  fuel is the answer too (2026-09-29: the reducer, sharing nothing, never
+  finishes on less fuel than the machine ran out of, and asked anyway it
+  copied a generated program's code for twenty CPU-minutes to agree —
+  `issues/closed-length-facts-evaluate-encodings.md`). The only
   value→syntax step is a former with no sub-structure (`Nat`, `Ty l`,
   `Unit`, `Empty`, `sEmpty`, and their codes), which is its own readback and
   is never evaluated again — the invariant below holds as stated.

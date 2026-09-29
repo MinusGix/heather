@@ -477,7 +477,12 @@ the order printed (`crates/cli/src/native/read_fields.rs`). The producer:
   over open parts (`read_fields_code_len`, from `len_append`), and the
   certificate instantiates it with the formatter's `_byte_length` lemmas
   (`_code_len`); `image_facts` takes that proof. `_fits` was renamed
-  `_code_fits`: the record loop's invariant already has the name;
+  `_code_fits`: the record loop's invariant already has the name.
+  (Attributed afterwards: the spelled length needs more than the default
+  fuel, and the twenty CPU-minutes were the elaborator's whnf oracle
+  re-asking the substitution reducer after the value machine ran out; it
+  now refuses in about a second. Closed in
+  `issues/closed-length-facts-evaluate-encodings.md`.);
 - concludes with `read_fields_spec_runs`, the library claim restated over the
   three specs through the program's `computes`.
 

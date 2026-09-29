@@ -237,7 +237,9 @@ fn a_killed_run_leaves_its_rows_and_what_was_running() {
     let scopes: Vec<Vec<&str>> = seen_open.lines().map(|l| l.split('\t').collect()).collect();
     assert_eq!(scopes[0], ["scope", "module", "item"]);
     assert_eq!(scopes[1], ["run", "", ""], "outermost first");
-    assert_eq!(scopes[2][0], "module", "{seen_open}");
+    // A module's items sit inside its module row; the prelude's, directly
+    // inside the run.
+    assert_eq!(scopes.last().unwrap()[0], "item", "{seen_open}");
 
     let _ = std::fs::remove_dir_all(&dir);
 }

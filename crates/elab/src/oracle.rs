@@ -72,7 +72,12 @@ impl SemanticOracle {
     ///   stays exactly what it was, and past that budget the input itself is
     ///   returned — convertible to every reduct, and the spelling every
     ///   diagnostic and unifier consumer read before the probe anyway;
-    /// - out of fuel in the value domain: the reducer decides on its own.
+    /// - **out of fuel** in the value domain: out of fuel. The reducer shares
+    ///   nothing, so it takes at least the steps the machine ran out of, and
+    ///   each of its steps copies the term: asked again, it spent tens of
+    ///   CPU-minutes reaching the same verdict on a closed length fact over a
+    ///   generated program's code
+    ///   (issues/closed-length-facts-evaluate-encodings.md).
     ///
     /// Adequacy of the machine against ch. 06 reduction (the kernel's
     /// differential tests) is what makes the first bullet's "same former"
@@ -105,7 +110,8 @@ impl SemanticOracle {
                 Ok(VTy::Unit { level }) => return Ok(Type::Unit { level: level.clone() }),
                 Ok(VTy::Empty { level }) => return Ok(Type::Empty { level: level.clone() }),
                 Ok(VTy::SEmpty { level }) => return Ok(Type::SEmpty { level: level.clone() }),
-                Ok(_) | Err(OutOfFuel) => false,
+                Err(OutOfFuel) => return Err(OutOfFuel),
+                Ok(_) => false,
             };
             if stuck {
                 let budget = self.fuel.min(STUCK_SPELLING_STEPS);
@@ -136,7 +142,8 @@ impl SemanticOracle {
                 Ok(Val::TmUnit { level }) => return Ok(Term::TmUnit { level: level.clone() }),
                 Ok(Val::TmEmpty { level }) => return Ok(Term::TmEmpty { level: level.clone() }),
                 Ok(Val::TmSEmpty { level }) => return Ok(Term::TmSEmpty { level: level.clone() }),
-                Ok(_) | Err(OutOfFuel) => false,
+                Err(OutOfFuel) => return Err(OutOfFuel),
+                Ok(_) => false,
             };
             if stuck {
                 let budget = self.fuel.min(STUCK_SPELLING_STEPS);
@@ -560,5 +567,41 @@ mod tests {
                 .unwrap();
         assert_eq!(reducer, Term::Var(LocalVar(0)));
         assert_eq!(oracle.whnf_term(&one_nat(), &near).unwrap(), reducer);
+    }
+
+    /// Out of fuel in the value domain is the answer: the reducer, which
+    /// shares nothing, never finishes on less fuel than the machine ran out
+    /// of, and asking it anyway once spent tens of CPU-minutes copying a
+    /// generated program's code to say the same thing
+    /// (issues/closed-length-facts-evaluate-encodings.md).
+    #[test]
+    fn out_of_fuel_in_the_value_domain_is_the_verdict() {
+        // `P(elim_Nat(⌜40⌝; 1; λ _ ih. ih))`: forty ι-steps to `P(1)`, `Unit`.
+        let arg = Term::ElimNat {
+            level: Level::Zero,
+            motive: Rc::new(Type::Nat),
+            base: Rc::new(Term::Succ(Rc::new(Term::Zero))),
+            step: Rc::new(Term::Var(LocalVar(0))),
+            scrut: Rc::new(Term::NatLit(40u64.into())),
+        };
+        let ty = p_of(arg);
+        let world = computing_world();
+        let (mut short, mut enough) = (0, 0);
+        for fuel in 0..64 {
+            let arena = ValueArena::new();
+            let machine =
+                eval::whnf_value_ty(&arena, &Rc::new(ty.clone()), &one_nat(), Defs::transparent(&world), fuel);
+            let reducer = reduce::whnf_type_delta(&ty, &one_nat(), Defs::transparent(&world), fuel);
+            let got = SemanticOracle::in_world(world.clone(), fuel).whnf_type(&one_nat(), &ty);
+            if machine.is_err() {
+                short += 1;
+                assert!(reducer.is_err(), "fuel {fuel}: the reducer finished where the machine ran out");
+                assert!(got.is_err(), "fuel {fuel}");
+            } else {
+                enough += 1;
+                assert_eq!(got.unwrap(), Type::Unit { level: Level::Zero }, "fuel {fuel}");
+            }
+        }
+        assert!(short > 0 && enough > 0, "both sides of the machine's threshold are exercised");
     }
 }
