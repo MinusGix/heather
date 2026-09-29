@@ -34,7 +34,7 @@ import omega;
 
 // The count where the formatter reads it, and where the line's word is
 // stored: the page's base.
-fn print_base_block() → List<Instruction> { [MovRR(R11, R13), MovRI(R8, BitVec::ofNat(0x401000))] }
+fn print_base_block() → List<Instruction> { [MovRR(R11, R13), MovRI(R8, BitVec::ofNat(0x410000))] }
 fn print_store() → WordStore { WordStore(R8, Rax) }
 // write(1, start, length).
 fn print_write_block() → List<Instruction> {
@@ -244,9 +244,9 @@ theorem artifact_fetched(code: StructuredCode, before: MachineState<IoMemory>, r
 }
 
 theorem page_write_reads(i, skip: Nat):
-    bitvec_nat::word_of_nat(64, (0x401000 + skip) + i) = bitvec_nat::word_of_nat(64, io_page_base() + (i + skip)) {
-    let base: (io_page_base() = 0x401000) = refl;
-    let same: ((0x401000 + skip) + i = io_page_base() + (i + skip)) = omega;
+    bitvec_nat::word_of_nat(64, (0x410000 + skip) + i) = bitvec_nat::word_of_nat(64, io_page_base() + (i + skip)) {
+    let base: (io_page_base() = 0x410000) = refl;
+    let same: ((0x410000 + skip) + i = io_page_base() + (i + skip)) = omega;
     cong_fn<Nat, BitVec(64)>(λ at => bitvec_nat::word_of_nat(64, at), same)
 }
 
@@ -260,9 +260,9 @@ record PrintFormatted(stored: IoMemory, needle: BitVec(8), loop_bytes: List<BitV
     count: Nat, state: MachineState<IoMemory>) {
     memory: state.memory = stored,
     rip: state.rip = print_rip(print_at_store(needle, loop_bytes, word, start, length)),
-    base: read_gpr(R8, state.gprs) = BitVec::ofNat(0x401000),
+    base: read_gpr(R8, state.gprs) = BitVec::ofNat(0x410000),
     word_value: read_gpr(Rax, state.gprs) = line_word(bitvec_nat::word_of_nat(64, count)),
-    start_value: read_gpr(R9, state.gprs) = line_start(BitVec::ofNat(0x401000), bitvec_nat::word_of_nat(64, count)),
+    start_value: read_gpr(R9, state.gprs) = line_start(BitVec::ofNat(0x410000), bitvec_nat::word_of_nat(64, count)),
     length_value: read_gpr(R10, state.gprs) = line_length(bitvec_nat::word_of_nat(64, count)),
 }
 
@@ -295,7 +295,7 @@ theorem print_formats(stored: IoMemory, needle: BitVec(8), loop_bytes: List<BitV
     let s1_memory: (s1.memory = stored) = trans(w.memory_preserved, s0_memory);
     let s1_rip: (s1.rip = print_rip(print_at_start(needle, loop_bytes, word))) =
         trans(w.rip_correct, rip_advance(entry, s0.rip, print_at_word(needle, loop_bytes), structured_bytes(word).len(), s0_rip));
-    let s1_r8: (read_gpr(R8, s1.gprs) = BitVec::ofNat(0x401000)) = w.registers_preserved(R8, format.word_r8);
+    let s1_r8: (read_gpr(R8, s1.gprs) = BitVec::ofNat(0x410000)) = w.registers_preserved(R8, format.word_r8);
     let s1_r11: (read_gpr(R11, s1.gprs) = n) = trans(w.registers_preserved(R11, format.word_r11), s0_r11);
     let s1_rax: (read_gpr(Rax, s1.gprs) = line_word(n)) =
         trans(w.result_correct, cong_fn<BitVec(64), BitVec(64)>(λ v => line_word(v), s0_r11));
@@ -307,12 +307,12 @@ theorem print_formats(stored: IoMemory, needle: BitVec(8), loop_bytes: List<BitV
     let s2_memory: (s2.memory = stored) = trans(st.memory_preserved, s1_memory);
     let s2_rip: (s2.rip = print_rip(print_at_length(needle, loop_bytes, word, start))) =
         trans(st.rip_correct, rip_advance(entry, s1.rip, print_at_start(needle, loop_bytes, word), structured_bytes(start).len(), s1_rip));
-    let s2_r8: (read_gpr(R8, s2.gprs) = BitVec::ofNat(0x401000)) = trans(st.registers_preserved(R8, format.start_r8), s1_r8);
+    let s2_r8: (read_gpr(R8, s2.gprs) = BitVec::ofNat(0x410000)) = trans(st.registers_preserved(R8, format.start_r8), s1_r8);
     let s2_r11: (read_gpr(R11, s2.gprs) = n) = trans(st.registers_preserved(R11, format.start_r11), s1_r11);
     let s2_rax: (read_gpr(Rax, s2.gprs) = line_word(n)) = trans(st.registers_preserved(Rax, format.start_rax), s1_rax);
-    let s2_r9: (read_gpr(R9, s2.gprs) = line_start(BitVec::ofNat(0x401000), n)) =
+    let s2_r9: (read_gpr(R9, s2.gprs) = line_start(BitVec::ofNat(0x410000), n)) =
         trans(st.result_correct, trans(cong_fn<BitVec(64), BitVec(64)>(λ b => line_start(b, read_gpr(R11, s1.gprs)), s1_r8),
-            cong_fn<BitVec(64), BitVec(64)>(λ v => line_start(BitVec::ofNat(0x401000), v), s1_r11)));
+            cong_fn<BitVec(64), BitVec(64)>(λ v => line_start(BitVec::ofNat(0x410000), v), s1_r11)));
     // How long it is.
     have ln = format.length_cert(s2, read_gpr(R11, s2.gprs), refl);
     let ln_run = artifact_fetched(length, s2, R10, line_length(read_gpr(R11, s2.gprs)), length_keeps, ln,
@@ -333,7 +333,7 @@ theorem print_formats(stored: IoMemory, needle: BitVec(8), loop_bytes: List<BitV
 // leading zeros.
 theorem print_sends(stored: IoMemory, count: Nat, small: count < 10000, memory: IoMemory,
     memory_is: memory = io_store_offset(stored, 0, word_bytes(line_word(bitvec_nat::word_of_nat(64, count)))),
-    buffer: BitVec(64), buffer_is: buffer.toNat() = 0x401000 + line_skip(count)):
+    buffer: BitVec(64), buffer_is: buffer.toNat() = 0x410000 + line_skip(count)):
     LinuxWritesFrom(io_linux(), memory, buffer, decimal_line(count)) {
     λ i b present => {
         let line = decimal_line(count);
@@ -383,7 +383,7 @@ theorem rest_fits(d, c, n: Nat, h: d + c = n, fits: n <= 4096): d <= 4096 { omeg
 theorem rest_room(m, a, c, d, n, top: Nat, hm: m = a + c, h: d + c = n, room: a + n < top): m + d < top { omega }
 theorem line_some(n, skip: Nat, total: n + skip = 5, small: skip <= 3): 0 < n { omega }
 theorem line_fits(n, skip: Nat, total: n + skip = 5): n <= 4096 { omega }
-theorem line_room(a, n, skip: Nat, at: a = 0x401000 + skip, total: n + skip = 5): a + n < Nat::pow(2, 64) { omega }
+theorem line_room(a, n, skip: Nat, at: a = 0x410000 + skip, total: n + skip = 5): a + n < Nat::pow(2, 64) { omega }
 
 theorem drop_nth<A>(xs: List<A>): (k, i: Nat) → xs.drop(k).nth(i) = xs.nth(i + k) {
     match xs as λ ys => (k, i: Nat) → ys.drop(k).nth(i) = ys.nth(i + k) {
@@ -901,8 +901,8 @@ theorem print_writes(stored: IoMemory, needle: BitVec(8), loop_bytes: List<BitVe
     let s4 = word_store_after(writes, print_store(), s3);
     let s4_memory: (s4.memory = after_store) =
         trans(cong_fn<BitVec(64), IoMemory>(λ address => io_store(s3.memory, address, word_bytes(read_gpr(Rax, s3.gprs))), formatted.base),
-            trans(cong_fn<BitVec(64), IoMemory>(λ value => io_store(s3.memory, BitVec::ofNat(0x401000), word_bytes(value)), formatted.word_value),
-                cong_fn<IoMemory, IoMemory>(λ memory => io_store(memory, BitVec::ofNat(0x401000), wb), formatted.memory)));
+            trans(cong_fn<BitVec(64), IoMemory>(λ value => io_store(s3.memory, BitVec::ofNat(0x410000), word_bytes(value)), formatted.word_value),
+                cong_fn<IoMemory, IoMemory>(λ memory => io_store(memory, BitVec::ofNat(0x410000), wb), formatted.memory)));
     let s4_rip: (s4.rip = print_rip(print_at_write(needle, loop_bytes, word, start, length))) =
         rip_advance(entry, s3.rip, print_at_store(needle, loop_bytes, word, start, length), 3, formatted.rip);
     let within = line_in_word(count, small);
@@ -913,7 +913,7 @@ theorem print_writes(stored: IoMemory, needle: BitVec(8), loop_bytes: List<BitVe
     let length_value: (read_gpr(R10, s4.gprs).toNat() = line.len()) =
         trans(cong_fn<BitVec(64), Nat>(λ v => v.toNat(), formatted.length_value),
             trans(line_length_value(count, small), sym(within.right)));
-    let start_value: (read_gpr(R9, s4.gprs).toNat() = 0x401000 + skip) =
+    let start_value: (read_gpr(R9, s4.gprs).toNat() = 0x410000 + skip) =
         trans(cong_fn<BitVec(64), Nat>(λ v => v.toNat(), formatted.start_value), line_start_value(count, small));
     linux_runs_after_linux_steps(io_linux(), write_events(line, steps, ending), s3, s4, linux_steps_store(io_linux(), s3, s4, stored_step),
         write_from(after_store, needle, loop_bytes, word, start, length, pj, later, targets, ending, ending_ok, steps)(

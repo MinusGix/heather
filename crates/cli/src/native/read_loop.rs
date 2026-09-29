@@ -107,8 +107,8 @@ fn pieces(needle: u8, loop_len: usize) -> Pieces {
     let mov = |destination, immediate| Instruction::MovRI { destination, immediate };
     let rr = |destination, source| Instruction::MovRR { destination, source };
     let init = super::encode(&[mov(R13, 0)]);
-    let entry = super::encode(&[mov(Rax, 0), mov(Rdi, 0), mov(Rsi, 0x401000), mov(Rdx, 4096)]);
-    let setup = super::encode(&[rr(Rbp, Rax), rr(R12, Rax), mov(Rdi, 0x401000), mov(Rcx, u64::from(needle)), mov(Rsi, 0), rr(R11, R13)]);
+    let entry = super::encode(&[mov(Rax, 0), mov(Rdi, 0), mov(Rsi, 0x410000), mov(Rdx, 4096)]);
+    let setup = super::encode(&[rr(Rbp, Rax), rr(R12, Rax), mov(Rdi, 0x410000), mov(Rcx, u64::from(needle)), mov(Rsi, 0), rr(R11, R13)]);
     let save = super::encode(&[rr(R13, R11)]);
     let (retry, fail) = (retry_block(), fail_block());
     // JS skips the chunk's setup, loop, save and jump back to the failure
@@ -159,17 +159,17 @@ theorem {prefix}_loop_written(): {prefix}_bytes() = {prefix}_loop_bytes_written(
 // The code as the producer wrote it: each fixed piece's encoding, and the
 // published bytes of what it generated.
 theorem {prefix}_code_written(): {code_term} = {spelled} {{ {chain} }}
-theorem {prefix}_fits(): 232 + {code_term}.len() <= 4096 {{
-    j(sym({prefix}_code_written()), λ code _ => 232 + code.len() <= 4096, Nat::leb_sound(232 + ({spelled}).len(), 4096, trivial))
+theorem {prefix}_fits(): 232 + {code_term}.len() <= 65536 {{
+    j(sym({prefix}_code_written()), λ code _ => 232 + code.len() <= 65536, Nat::leb_sound(232 + ({spelled}).len(), 65536, trivial))
 }}
-// The file is the call profile's header, then the program.
+// The file is the read profile's header, then the program.
 fn {prefix}_file() → List<BitVec(8)> {{ {prefix}_header() ++ {code_term} }}
-fn {prefix}_image() → CallElfImage({code_term}) {{
-    CallElfImage(j(sym({prefix}_code_written()), λ code _ => 0 < code.len(), Nat::leb_sound(1, ({spelled}).len(), trivial)),
+fn {prefix}_image() → IoElfImage({code_term}) {{
+    IoElfImage(j(sym({prefix}_code_written()), λ code _ => 0 < code.len(), Nat::leb_sound(1, ({spelled}).len(), trivial)),
         elf_byte({low}), elf_byte({high}),
-        refl, trivial)
+        refl)
 }}
-theorem {prefix}_file_correct(): {prefix}_file() = call_elf_bytes({code_term}, {prefix}_image()) {{ refl }}
+theorem {prefix}_file_correct(): {prefix}_file() = io_elf_bytes({code_term}, {prefix}_image()) {{ refl }}
 theorem {prefix}_written(): {prefix}_file() = {prefix}_header() ++ ({spelled}) {{
     cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ code => {prefix}_header() ++ code, {prefix}_code_written())
 }}
@@ -219,7 +219,7 @@ pub(super) fn certify(module: &mut Module, prefix: &str, program: &Program, emis
     let exit = super::encode(&[Instruction::MovRR { destination: Gpr::Rdi, source: Gpr::R13 }, Instruction::MovRI { destination: Gpr::Rax, immediate: 60 }]);
     let code = [parts.init.as_slice(), &parts.entry, &[0x0f, 0x05], &TEST, &parts.jz, &parts.js, &parts.setup, &emission.bytes, &parts.save,
         &parts.jmp, &parts.retry, &parts.rjz, &parts.fail, &[0x0f, 0x05], &exit, &[0x0f, 0x05]].concat();
-    let file = super::calls::image(&code)?;
+    let file = super::calls::io_image(&code)?;
     let needle = format!("@bitvec::BitVec::ofNat(8, {})", program.needle);
     let root = program.root;
     let code_term = format!("read_loop_code({needle}, {prefix}_bytes(), {prefix}_jumps())");
@@ -298,7 +298,7 @@ pub(super) fn certify_print(module: &mut Module, prefix: &str, program: &Program
     use Gpr::*;
     let parts = pieces(program.needle, emission.bytes.len());
     let mov = |destination, immediate| Instruction::MovRI { destination, immediate };
-    let base = super::encode(&[Instruction::MovRR { destination: R11, source: R13 }, mov(R8, 0x401000)]);
+    let base = super::encode(&[Instruction::MovRR { destination: R11, source: R13 }, mov(R8, 0x410000)]);
     let store = vec![0x49, 0x89, 0x00];
     let write = super::encode(&[Instruction::MovRR { destination: Rsi, source: R9 }, Instruction::MovRR { destination: Rdx, source: R10 },
         mov(Rdi, 1), mov(Rax, 1)]);
@@ -319,7 +319,7 @@ pub(super) fn certify_print(module: &mut Module, prefix: &str, program: &Program
         &parts.jmp, &parts.retry, &parts.rjz, &parts.fail, &[0x0f, 0x05],
         &base, &word.bytes, &start.bytes, &length.bytes, &store, &write, &[0x0f, 0x05], &TEST, &wjs, &advance, &wjz, &wjmp,
         &retry, &wrjz, &fail, &[0x0f, 0x05], &exit, &[0x0f, 0x05]].concat();
-    let file = super::calls::image(&code)?;
+    let file = super::calls::io_image(&code)?;
     let needle = format!("@bitvec::BitVec::ofNat(8, {})", program.needle);
     let root = program.root;
     let (w, st, ln) = (&word.prefix, &start.prefix, &length.prefix);

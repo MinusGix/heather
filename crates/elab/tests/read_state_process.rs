@@ -134,7 +134,7 @@ fn slow_acceptance_read_state_refusals() {
     let library = base().semantic_image();
     for (name, from, to) in [
         ("setup_writes_state", "     MovRI(Rsi, BitVec::ofNat(0))]\n}", "     MovRI(Rsi, BitVec::ofNat(0)), MovRI(R15, BitVec::ofNat(0))]\n}"),
-        ("setup_base", "MovRI(Rdi, BitVec::ofNat(0x401000)), MovRI(Rcx", "MovRI(Rdi, BitVec::ofNat(0x401001)), MovRI(Rcx"),
+        ("setup_base", "MovRI(Rdi, BitVec::ofNat(0x410000)), MovRI(Rcx", "MovRI(Rdi, BitVec::ofNat(0x410001)), MovRI(Rcx"),
         ("back_span", "(((((read_entry_len() + 2) + eof_test_len())", "(((((read_entry_len() + 3) + eof_test_len())"),
         ("failure_span", "    (state_setup_len(needle) + loop_bytes.len()) + 5\n}", "    (state_setup_len(needle) + loop_bytes.len()) + 4\n}"),
         ("init_left_out", "    canonical_block_bytes(state_init_block()) ++ (canonical_block_bytes(read_entry_block())",

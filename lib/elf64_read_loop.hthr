@@ -39,7 +39,7 @@ fn read_capacity() → Nat { 4096 }
 
 // read(0, page, capacity).
 fn read_entry_block() → List<Instruction> {
-    [MovRI(Rax, BitVec::ofNat(0)), MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rsi, BitVec::ofNat(0x401000)),
+    [MovRI(Rax, BitVec::ofNat(0)), MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rsi, BitVec::ofNat(0x410000)),
      MovRI(Rdx, BitVec::ofNat(read_capacity()))]
 }
 // The outer loop's blocks. The total starts at zero; each chunk's setup
@@ -48,7 +48,7 @@ fn read_entry_block() → List<Instruction> {
 fn eof_init_block() → List<Instruction> { [MovRI(R13, BitVec::ofNat(0))] }
 fn eof_test_block() → List<Instruction> { [TestRR(Rax, Rax)] }
 fn eof_setup_block(needle: BitVec(8)) → List<Instruction> {
-    [MovRR(Rbp, Rax), MovRR(R12, Rax), MovRI(Rdi, BitVec::ofNat(0x401000)), MovRI(Rcx, needle.zero_extend(56)),
+    [MovRR(Rbp, Rax), MovRR(R12, Rax), MovRI(Rdi, BitVec::ofNat(0x410000)), MovRI(Rcx, needle.zero_extend(56)),
      MovRI(Rsi, BitVec::ofNat(0)), MovRR(R11, R13)]
 }
 fn eof_save_block() → List<Instruction> { [MovRR(R13, R11)] }
@@ -732,7 +732,7 @@ theorem eof_from(file: List<BitVec(8)>, p: LoopPlacement, at: ReadLoopPlacement(
                     let returned = linux_read_return(io_linux(), asked, Nil, rcx, r11);
                     let stored = io_store_offset(IoMemory(file, page), 0, Nil);
                     let returned_memory: (returned.memory = stored) =
-                        cong_fn<IoMemory, IoMemory>(λ m => io_store(m, BitVec::ofNat(0x401000), Nil), asked_memory);
+                        cong_fn<IoMemory, IoMemory>(λ m => io_store(m, BitVec::ofNat(0x410000), Nil), asked_memory);
                     let returned_rip: (returned.rip = eof_rip(eof_at_test())) = rip_advance(entry, asked.rip, eof_at_call(), 2, asked_rip);
                     let there = pieces(stored.page);
                     let test = block_fetched(fetch, data, eof_test_block(), returned, trivial,
@@ -769,7 +769,7 @@ theorem eof_from(file: List<BitVec(8)>, p: LoopPlacement, at: ReadLoopPlacement(
                             let returned = linux_read_failed_return(io_linux(), asked, errno, junk, rcx, r11);
                             let stored = io_store_offset(IoMemory(file, page), 0, junk);
                             let returned_memory: (returned.memory = stored) =
-                                cong_fn<IoMemory, IoMemory>(λ m => io_store(m, BitVec::ofNat(0x401000), junk), read.right.left);
+                                cong_fn<IoMemory, IoMemory>(λ m => io_store(m, BitVec::ofNat(0x410000), junk), read.right.left);
                             let returned_rip: (returned.rip = eof_rip(eof_at_test())) =
                                 rip_advance(entry, asked.rip, eof_at_call(), 2, read.right.right.left);
                             let there = pieces(stored.page);
@@ -812,7 +812,7 @@ theorem eof_from(file: List<BitVec(8)>, p: LoopPlacement, at: ReadLoopPlacement(
                     let returned = linux_read_return(io_linux(), asked, chunk, rcx, r11);
                     let stored = io_store_offset(IoMemory(file, page), 0, chunk);
                     let returned_memory: (returned.memory = stored) =
-                        cong_fn<IoMemory, IoMemory>(λ m => io_store(m, BitVec::ofNat(0x401000), chunk), asked_memory);
+                        cong_fn<IoMemory, IoMemory>(λ m => io_store(m, BitVec::ofNat(0x410000), chunk), asked_memory);
                     let returned_rip: (returned.rip = eof_rip(eof_at_test())) = rip_advance(entry, asked.rip, eof_at_call(), 2, asked_rip);
                     let there = pieces(stored.page);
                     have back = eof_chunk(file, page, p, at, region, loop_code, loop_bytes, source, needle, agreement, native, folds,
@@ -838,7 +838,7 @@ theorem eof_from(file: List<BitVec(8)>, p: LoopPlacement, at: ReadLoopPlacement(
                         let returned = linux_read_failed_return(io_linux(), asked, eintr(), junk, rcx, r11);
                         let stored = io_store_offset(IoMemory(file, page), 0, junk);
                         let returned_memory: (returned.memory = stored) =
-                            cong_fn<IoMemory, IoMemory>(λ m => io_store(m, BitVec::ofNat(0x401000), junk), read.right.left);
+                            cong_fn<IoMemory, IoMemory>(λ m => io_store(m, BitVec::ofNat(0x410000), junk), read.right.left);
                         let returned_rip: (returned.rip = eof_rip(eof_at_test())) =
                             rip_advance(entry, asked.rip, eof_at_call(), 2, read.right.right.left);
                         let there = pieces(stored.page);
@@ -1023,10 +1023,10 @@ theorem read_loop_runs(file: List<BitVec(8)>, p: LoopPlacement, at: ReadLoopPlac
 
 // A file of the call profile's shape, a 232-byte header then the program:
 // the program is resident at the entry (elf64_io's io_code_resident).
-theorem eof_file_resident(header, code: List<BitVec(8)>, header_length: header.len() = 232, fits: 232 + code.len() <= 4096):
+theorem eof_file_resident(header, code: List<BitVec(8)>, header_length: header.len() = 232, fits: 232 + code.len() <= 65536):
     (page: Nat → BitVec(8)) → CodeResident(io_fetch_access(), IoMemory(header ++ code, page), code, BitVec::ofNat(0x4000e8)) {
     λ page => {
-        let placed = io_code_resident(header, code, page, j(sym(header_length), λ n _ => n + code.len() <= 4096, fits));
+        let placed = io_code_resident(header, code, page, j(sym(header_length), λ n _ => n + code.len() <= 65536, fits));
         let entry: (bitvec_nat::word_of_nat(64, 0x400000 + header.len()) = BitVec::ofNat(0x4000e8)) =
             trans(cong_fn<Nat, BitVec(64)>(λ n => bitvec_nat::word_of_nat(64, 0x400000 + n), header_length),
                 bitvec_nat::word_of_nat_toNat(64, BitVec::ofNat(0x4000e8)));

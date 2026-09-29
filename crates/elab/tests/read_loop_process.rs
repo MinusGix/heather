@@ -25,12 +25,12 @@ fn read_loop_library_checks() {
 fn slow_acceptance_read_loop_refusals() {
     let library = checker().semantic_image();
     for (name, from, to) in [
-        ("buffer_outside_page", "MovRI(Rsi, BitVec::ofNat(0x401000)),\n", "MovRI(Rsi, BitVec::ofNat(0x402000)),\n"),
+        ("buffer_outside_page", "MovRI(Rsi, BitVec::ofNat(0x410000)),\n", "MovRI(Rsi, BitVec::ofNat(0x411000)),\n"),
         ("capacity_past_page", "fn read_capacity() → Nat { 4096 }", "fn read_capacity() → Nat { 4097 }"),
         ("read_number", "[MovRI(Rax, BitVec::ofNat(0)), MovRI(Rdi", "[MovRI(Rax, BitVec::ofNat(1)), MovRI(Rdi"),
         ("descriptor", "MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rsi", "MovRI(Rdi, BitVec::ofNat(1)), MovRI(Rsi"),
         ("exit_number", "MovRI(Rax, BitVec::ofNat(60))", "MovRI(Rax, BitVec::ofNat(61))"),
-        ("loop_base", "MovRI(Rdi, BitVec::ofNat(0x401000)), MovRI(Rcx", "MovRI(Rdi, BitVec::ofNat(0x401001)), MovRI(Rcx"),
+        ("loop_base", "MovRI(Rdi, BitVec::ofNat(0x410000)), MovRI(Rcx", "MovRI(Rdi, BitVec::ofNat(0x410001)), MovRI(Rcx"),
         ("count_reset", "MovRI(Rsi, BitVec::ofNat(0)), MovRR(R11, R13)]", "MovRI(Rsi, BitVec::ofNat(0)), MovRI(R11, BitVec::ofNat(0))]"),
         ("count_saved_where_setup_writes", "{ [MovRR(R13, R11)] }", "{ [MovRR(R12, R11)] }"),
         ("end_tested_elsewhere", "[TestRR(Rax, Rax)]", "[TestRR(Rdx, Rdx)]"),

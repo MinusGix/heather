@@ -38,7 +38,7 @@ fn state_init_block() → List<Instruction> {
     [MovRI(R13, BitVec::ofNat(0)), MovRI(R14, BitVec::ofNat(0)), MovRI(R15, BitVec::ofNat(0)), MovRI(R8, BitVec::ofNat(0))]
 }
 fn state_setup_block(needle: BitVec(8)) → List<Instruction> {
-    [MovRR(Rbp, Rax), MovRR(R12, Rax), MovRI(Rdi, BitVec::ofNat(0x401000)), MovRI(Rcx, needle.zero_extend(56)),
+    [MovRR(Rbp, Rax), MovRR(R12, Rax), MovRI(Rdi, BitVec::ofNat(0x410000)), MovRI(Rcx, needle.zero_extend(56)),
      MovRI(Rsi, BitVec::ofNat(0))]
 }
 fn state_init_len() → Nat { canonical_block_bytes(state_init_block()).len() }
@@ -565,7 +565,7 @@ theorem state_from<C>(file: List<BitVec(8)>, p: LoopPlacement, at: ReadStatePlac
                     let returned = linux_read_return(io_linux(), asked, Nil, rcx, r11);
                     let stored = io_store_offset(IoMemory(file, page), 0, Nil);
                     let returned_memory: (returned.memory = stored) =
-                        cong_fn<IoMemory, IoMemory>(λ m => io_store(m, BitVec::ofNat(0x401000), Nil), asked_memory);
+                        cong_fn<IoMemory, IoMemory>(λ m => io_store(m, BitVec::ofNat(0x410000), Nil), asked_memory);
                     let returned_rip: (returned.rip = eof_rip(state_at_test())) = rip_advance(entry, asked.rip, state_at_call(), 2, asked_rip);
                     let there = pieces(stored.page);
                     let test = block_fetched(fetch, data, eof_test_block(), returned, trivial,
@@ -612,7 +612,7 @@ theorem state_from<C>(file: List<BitVec(8)>, p: LoopPlacement, at: ReadStatePlac
                             let returned = linux_read_failed_return(io_linux(), asked, errno, junk, rcx, r11);
                             let stored = io_store_offset(IoMemory(file, page), 0, junk);
                             let returned_memory: (returned.memory = stored) =
-                                cong_fn<IoMemory, IoMemory>(λ m => io_store(m, BitVec::ofNat(0x401000), junk), asked_memory);
+                                cong_fn<IoMemory, IoMemory>(λ m => io_store(m, BitVec::ofNat(0x410000), junk), asked_memory);
                             let returned_rip: (returned.rip = eof_rip(state_at_test())) =
                                 rip_advance(entry, asked.rip, state_at_call(), 2, asked_rip);
                             let there = pieces(stored.page);
@@ -653,7 +653,7 @@ theorem state_from<C>(file: List<BitVec(8)>, p: LoopPlacement, at: ReadStatePlac
                     let returned = linux_read_return(io_linux(), asked, chunk, rcx, r11);
                     let stored = io_store_offset(IoMemory(file, page), 0, chunk);
                     let returned_memory: (returned.memory = stored) =
-                        cong_fn<IoMemory, IoMemory>(λ m => io_store(m, BitVec::ofNat(0x401000), chunk), asked_memory);
+                        cong_fn<IoMemory, IoMemory>(λ m => io_store(m, BitVec::ofNat(0x410000), chunk), asked_memory);
                     let returned_rip: (returned.rip = eof_rip(state_at_test())) = rip_advance(entry, asked.rip, state_at_call(), 2, asked_rip);
                     let there = pieces(stored.page);
                     have back = state_chunk(file, page, p, at, rep, fits_of, framed, region, loop_code, loop_bytes, source, needle, agreement,
@@ -692,7 +692,7 @@ theorem state_from<C>(file: List<BitVec(8)>, p: LoopPlacement, at: ReadStatePlac
                         let returned = linux_read_failed_return(io_linux(), asked, eintr(), junk, rcx, r11);
                         let stored = io_store_offset(IoMemory(file, page), 0, junk);
                         let returned_memory: (returned.memory = stored) =
-                            cong_fn<IoMemory, IoMemory>(λ m => io_store(m, BitVec::ofNat(0x401000), junk), asked_memory);
+                            cong_fn<IoMemory, IoMemory>(λ m => io_store(m, BitVec::ofNat(0x410000), junk), asked_memory);
                         let returned_rip: (returned.rip = eof_rip(state_at_test())) =
                             rip_advance(entry, asked.rip, state_at_call(), 2, asked_rip);
                         let there = pieces(stored.page);

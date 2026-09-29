@@ -27,7 +27,7 @@ fn slow_acceptance_read_print_refusals() {
         ("write_descriptor", "MovRI(Rdi, BitVec::ofNat(1)), MovRI(Rax", "MovRI(Rdi, BitVec::ofNat(2)), MovRI(Rax"),
         ("write_buffer", "[MovRR(Rsi, R9), ", "[MovRR(Rsi, R10), "),
         ("write_length", "MovRR(Rdx, R10), ", "MovRR(Rdx, R9), "),
-        ("store_outside_page", "MovRI(R8, BitVec::ofNat(0x401000))", "MovRI(R8, BitVec::ofNat(0x402000))"),
+        ("store_outside_page", "MovRI(R8, BitVec::ofNat(0x410000))", "MovRI(R8, BitVec::ofNat(0x411000))"),
         ("stored_register", "WordStore(R8, Rax)", "WordStore(R8, R9)"),
         ("exit_status", "MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))", "MovRI(Rdi, BitVec::ofNat(1)), MovRI(Rax, BitVec::ofNat(60))"),
         ("count_from_elsewhere", "[MovRR(R11, R13), MovRI(R8", "[MovRR(R11, R12), MovRI(R8"),

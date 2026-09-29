@@ -1,9 +1,10 @@
-// The read-once program's view of the call profile's image
-// (docs/native-first-program-design.md §5): the RX file at 0x400000 and the
-// RW page at 0x401000, which holds what stdin supplies. The image and header
-// are the call profile's; only the logical view is new. It classifies an
-// address by its value rather than its bits, so a fact about the page at an
-// open offset is arithmetic, not bit slicing.
+// The read profile's view of its image (docs/native-first-program-design.md
+// §5): the RX file at 0x400000, which may fill its 64-KiB window, and the RW
+// page just past the window at 0x410000, which holds what stdin supplies
+// (docs/native-wc-design.md §8.4). The header is the call profile's with the
+// RW page moved (elf64_calls' `io_elf_header`); only the logical view is
+// new. It classifies an address by its value rather than its bits, so a fact
+// about the page at an open offset is arithmetic, not bit slicing.
 import linux_x86_64_io;
 import function_ir_loop;
 import x86_64;
@@ -21,7 +22,7 @@ import omega;
 
 record IoMemory { file: List<BitVec(8)>, page: Nat → BitVec(8) }
 
-fn io_page_base() → Nat { 0x401000 }
+fn io_page_base() → Nat { 0x410000 }
 
 // A page offset, for an address inside the page.
 fn io_offset_of(address: Nat) → Option<Nat> {
@@ -141,7 +142,7 @@ theorem io_leb_false(a, b: Nat, below: b < a): a.leb(b) = False {
     })(refl)
 }
 
-theorem io_file_offset_at(k: Nat, inside: k < 4096): io_file_offset(0x400000 + k) = Some(k) {
+theorem io_file_offset_at(k: Nat, inside: k < 65536): io_file_offset(0x400000 + k) = Some(k) {
     let low = eq_true_of_is_true(Nat::leb(0x400000, 0x400000 + k), Nat::leb_complete(0x400000, 0x400000 + k, Nat::le_add_l(0x400000, k)));
     let fits: (Succ(0x400000 + k) <= 0x400000 + 65536) = omega;
     let high = eq_true_of_is_true(Succ(0x400000 + k).leb(0x400000 + 65536), Nat::leb_complete(Succ(0x400000 + k), 0x400000 + 65536, fits));
@@ -155,23 +156,23 @@ theorem io_file_offset_at(k: Nat, inside: k < 4096): io_file_offset(0x400000 + k
             cong_fn<Nat, Option<Nat>>(λ n => Some(n), offset)))
 }
 
-theorem io_code_bound(k: Nat, inside: k < 4096): 0x400000 + k < Nat::pow(2, 64) {
-    let below: (Succ(0x400000 + k) <= 0x400000 + 4096) = omega;
-    Succ(0x400000 + k).le_trans(0x400000 + 4096, Nat::pow(2, 64), below, Nat::leb_sound(0x400000 + 4096, Nat::pow(2, 64), trivial))
+theorem io_code_bound(k: Nat, inside: k < 65536): 0x400000 + k < Nat::pow(2, 64) {
+    let below: (Succ(0x400000 + k) <= 0x400000 + 65536) = omega;
+    Succ(0x400000 + k).le_trans(0x400000 + 65536, Nat::pow(2, 64), below, Nat::leb_sound(0x400000 + 65536, Nat::pow(2, 64), trivial))
 }
 
-theorem io_file_read_at(file: List<BitVec(8)>, k: Nat, byte: BitVec(8), inside: k < 4096, present: file.nth(k) = Some(byte)):
+theorem io_file_read_at(file: List<BitVec(8)>, k: Nat, byte: BitVec(8), inside: k < 65536, present: file.nth(k) = Some(byte)):
     io_file_read(file, bitvec_nat::word_of_nat(64, 0x400000 + k)) = Some(byte) {
     let value = bitvec_nat::toNat_word_of_nat(64, 0x400000 + k, io_code_bound(k, inside));
     let file_offset = trans(cong_fn<Nat, Option<Nat>>(λ a => io_file_offset(a), value), io_file_offset_at(k, inside));
     j(sym(file_offset), λ found _ => (match found as λ _ => Option<BitVec(8)> { None => None, Some(offset) => file.nth(offset) }) = Some(byte), present)
 }
 
-// A byte of the file below the page reads back, whatever the page holds.
-theorem io_read_file(file: List<BitVec(8)>, page: Nat → BitVec(8), k: Nat, byte: BitVec(8), inside: k < 4096,
+// A byte of the file reads back, whatever the page holds.
+theorem io_read_file(file: List<BitVec(8)>, page: Nat → BitVec(8), k: Nat, byte: BitVec(8), inside: k < 65536,
     present: file.nth(k) = Some(byte)):
     io_read(IoMemory(file, page), bitvec_nat::word_of_nat(64, 0x400000 + k)) = Some(byte) {
-    let below: (Succ(0x400000 + k) <= 0x400000 + 4096) = omega;
+    let below: (Succ(0x400000 + k) <= 0x400000 + 65536) = omega;
     let value = bitvec_nat::toNat_word_of_nat(64, 0x400000 + k, io_code_bound(k, inside));
     let outside = io_leb_false(io_page_base(), 0x400000 + k, below);
     let page_offset: (io_offset_of(bitvec_nat::word_of_nat(64, 0x400000 + k).toNat()) = None) =
@@ -187,22 +188,22 @@ theorem io_read_file(file: List<BitVec(8)>, page: Nat → BitVec(8), k: Nat, byt
         io_file_read_at(file, k, byte, inside, present))
 }
 
-theorem io_no_carry(k: Nat, inside: k < 4096):
+theorem io_no_carry(k: Nat, inside: k < 65536):
     bitvec_nat::word_of_nat(64, 0x400000 + k).carry_add_bit(BitVec::ofNat(1)) = False {
     let word = bitvec_nat::word_of_nat(64, 0x400000 + k);
-    let below: (Succ(0x400000 + k) <= 0x400000 + 4096) = omega;
+    let below: (Succ(0x400000 + k) <= 0x400000 + 65536) = omega;
     let bound: (0x400000 + k < Nat::pow(2, 64)) =
-        Succ(0x400000 + k).le_trans(0x400000 + 4096, Nat::pow(2, 64), below, Nat::leb_sound(0x400000 + 4096, Nat::pow(2, 64), trivial));
+        Succ(0x400000 + k).le_trans(0x400000 + 65536, Nat::pow(2, 64), below, Nat::leb_sound(0x400000 + 65536, Nat::pow(2, 64), trivial));
     let value = bitvec_nat::toNat_word_of_nat(64, 0x400000 + k, bound);
-    let room: (Succ(0x400000 + k) + 1 <= 0x400000 + 4097) = omega;
+    let room: (Succ(0x400000 + k) + 1 <= 0x400000 + 65537) = omega;
     (match word.carry_add_bit(BitVec::ofNat(1)) as λ found => (word.carry_add_bit(BitVec::ofNat(1)) = found) → found = False {
         False => λ _ => refl,
         True => λ carried => {
             let over = BitVec::carry_add_of_bit_true(64, word, BitVec::ofNat(1), carried);
             let spelled = j(value, λ a _ => Nat::pow(2, 64) <= a + 1, over);
-            false_elim(Nat::lt_irrefl(Nat::pow(2, 64), Nat::le_trans(Succ(Nat::pow(2, 64)), 0x400000 + 4097, Nat::pow(2, 64),
-                Nat::le_trans(Succ(Nat::pow(2, 64)), Succ(0x400000 + k) + 1, 0x400000 + 4097, Nat::le_succ_succ(Nat::pow(2, 64), (0x400000 + k) + 1, spelled), room),
-                Nat::leb_sound(0x400000 + 4097, Nat::pow(2, 64), trivial))))
+            false_elim(Nat::lt_irrefl(Nat::pow(2, 64), Nat::le_trans(Succ(Nat::pow(2, 64)), 0x400000 + 65537, Nat::pow(2, 64),
+                Nat::le_trans(Succ(Nat::pow(2, 64)), Succ(0x400000 + k) + 1, 0x400000 + 65537, Nat::le_succ_succ(Nat::pow(2, 64), (0x400000 + k) + 1, spelled), room),
+                Nat::leb_sound(0x400000 + 65537, Nat::pow(2, 64), trivial))))
         },
     })(refl)
 }
@@ -210,16 +211,16 @@ theorem io_no_carry(k: Nat, inside: k < 4096):
 // Code placed at file offset `k` onward is resident at `0x400000 + k`, whatever
 // the page holds: one induction over the code, with no byte evaluated.
 theorem io_suffix_resident(file: List<BitVec(8)>, page: Nat → BitVec(8), code: List<BitVec(8)>): (k: Nat) →
-    k + code.len() <= 4096 →
+    k + code.len() <= 65536 →
     ((i: Nat) → (byte: BitVec(8)) → code.nth(i) = Some(byte) → file.nth(k + i) = Some(byte)) →
     CodeResident(io_fetch_access(), IoMemory(file, page), code, bitvec_nat::word_of_nat(64, 0x400000 + k)) {
     match code {
         Nil => λ k fits placed => trivial,
         Cons(byte, rest) => λ k fits placed => {
-            let inside: (k < 4096) = Nat::le_trans(Succ(k), k + Succ(rest.len()), 4096, Nat::le_succ_succ(k, k + rest.len(), Nat::le_add_l(k, rest.len())), fits);
+            let inside: (k < 65536) = Nat::le_trans(Succ(k), k + Succ(rest.len()), 65536, Nat::le_succ_succ(k, k + rest.len(), Nat::le_add_l(k, rest.len())), fits);
             let read = io_read_file(file, page, k, byte, inside, placed(0, byte, refl));
             let fetched = io_file_read_at(file, k, byte, inside, placed(0, byte, refl));
-            let later = io_suffix_resident(file, page, rest, Succ(k), j(sym(Nat::add_succ_left(k, rest.len())), λ n _ => n <= 4096, fits),
+            let later = io_suffix_resident(file, page, rest, Succ(k), j(sym(Nat::add_succ_left(k, rest.len())), λ n _ => n <= 65536, fits),
                 λ i found present => j(sym(Nat::add_succ_left(k, i)), λ at _ => file.nth(at) = Some(found), placed(Succ(i), found, present)));
             ⟨j(sym(fetched), λ found _ => (match found as λ _ => bool::Bool { None => False, Some(_) => True }) = True, refl),
              ⟨read, ⟨io_no_carry(k, inside), later⟩⟩⟩
@@ -227,7 +228,7 @@ theorem io_suffix_resident(file: List<BitVec(8)>, page: Nat → BitVec(8), code:
     }
 }
 
-theorem io_code_resident(header, code: List<BitVec(8)>, page: Nat → BitVec(8), fits: header.len() + code.len() <= 4096):
+theorem io_code_resident(header, code: List<BitVec(8)>, page: Nat → BitVec(8), fits: header.len() + code.len() <= 65536):
     CodeResident(io_fetch_access(), IoMemory(header ++ code, page), code, bitvec_nat::word_of_nat(64, 0x400000 + header.len())) {
     io_suffix_resident(header ++ code, page, code, header.len(), fits, λ i byte present => trans(cong_fn<Nat, Option<BitVec(8)>>(λ at => (header ++ code).nth(at), Nat::add_comm(header.len(), i)),
         trans(header.nth_append_r(code, i), present)))

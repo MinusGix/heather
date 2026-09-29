@@ -616,7 +616,7 @@ theorem line_skip_le(n: Nat): line_skip(n) <= 3 {
 }
 
 theorem line_start_value(n: Nat, small: n < 10000):
-    line_start(BitVec::ofNat(0x401000), bitvec_nat::word_of_nat(64, n)).toNat() = 0x401000 + line_skip(n) {
+    line_start(BitVec::ofNat(0x410000), bitvec_nat::word_of_nat(64, n)).toNat() = 0x410000 + line_skip(n) {
     let zeros = leading_zeros_value(n, small);
     let skip = line_skip_le(n);
     bv_omega
