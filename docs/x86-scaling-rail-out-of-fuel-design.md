@@ -34,7 +34,7 @@ same pair one field over (`u717`), differing at byte 1237 where
 **Why each side is spelled the way it is.**
 
 - The *expected* side is `BlockArtifact`'s own field type
-  (`lib/std/arch/x86_64/block.hthr`: `result_correct`, `memory_preserved`,
+  (`lib/std/arch/x86_64/x86_64_block.hthr`: `result_correct`, `memory_preserved`,
   `rip_correct`, `registers_preserved` — the four `Id`-typed fields, and the
   four misses), elaborated once at the declaration where `after` is a
   **local binder**. `receiver_is_neutral` says yes, so §13.4's telescoped
@@ -214,7 +214,7 @@ looked safe.
 
 **Where the decision actually lands.** Worth recording, because it was a
 surprise and it is what makes the rule work: the spelling that decides this is
-the one `project_field` wrote into `lib/std/arch/x86_64/block.hthr`'s
+the one `project_field` wrote into `lib/std/arch/x86_64/x86_64_block.hthr`'s
 **declaration**, not the one at any use. A record is a Σ-tuple, so the kernel
 substitutes the constructor's earlier components into the declaration's own
 field type, and the elaborator's annotations get no vote. The measurement

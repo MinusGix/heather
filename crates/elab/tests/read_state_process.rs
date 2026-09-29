@@ -1,14 +1,14 @@
-use crate::function_ir_loop_trace::{wc_placement, WC_SOURCE};
+use crate::function_ir_loop_trace::wc_record_loop;
 use crate::read_loop_fixture::checker;
-use heather_elab::function_ir_source::generate_elaborated_record_loop_x86;
 
-const READ_LOOP: &str = include_str!("../../../lib/elf64_read_loop.hthr");
+const READ_PIECES: &str = include_str!("../../../lib/elf64_read_pieces.hthr");
 const PROCESS: &str = include_str!("../../../lib/elf64_read_state.hthr");
+const BV_OMEGA: &str = include_str!("../../../lib/std/bitvec/bitvec_omega.hthr");
 
 // The Nat process, whose blocks and read trace this one reuses.
 fn base() -> heather_elab::Elaborator {
     let mut elab = checker();
-    elab.elab_module_source("elf64_read_loop", READ_LOOP).unwrap_or_else(|e| panic!("{}", e.render(READ_LOOP)));
+    elab.elab_module_source("elf64_read_pieces", READ_PIECES).unwrap_or_else(|e| panic!("{}", e.render(READ_PIECES)));
     elab
 }
 
@@ -19,51 +19,15 @@ fn read_state_library_checks() {
 }
 
 // What `wc` supplies beside its loop certificate (docs/native-wc-design.md
-// §4.8): its step folds, its placement moves with the state registers, init's
-// zeros place the zero state, its state fits every chunk, and the line count
-// is in R13 for the exit.
+// §4.8): its step folds (the program's own `wc_body_folds`), its placement
+// moves with the state registers, init's zeros place the zero state, its
+// state fits every chunk, and the line count is in R13 for the exit.
 pub(crate) const WC_PROCESS: &str = r#"
-import elf64_read_state; import elf64_read_loop; import elf64_io; import linux_x86_64_io; import linux_x86_64_entry;
+import elf64_read_state; import elf64_read_pieces; import elf64_io; import linux_x86_64_io; import linux_x86_64_entry;
 import function_ir_loop; import function_ir_loop_trace; import x86_64; import x86_64_fetch; import x86_64_fetched_code;
 import bitvec; import bitvec_nat; import bool; import list; import logic; import nat;
-import wc_loop; import wc_pieces; import wc_native;
-
-theorem wc_body_folds(): LoopFolds(wc_loop_region()) {
-    λ needle cursor byte s => match space_byte(byte) as λ sp => match sp as λ _ => LoopStep<WcState> {
-            True => match newline_byte(byte) as λ _ => LoopStep<WcState> {
-                True => Continue(WcState(Succ(s.lines), s.words, Succ(s.bytes), False)),
-                False => Continue(WcState(s.lines, s.words, Succ(s.bytes), False)),
-            },
-            False => match s.inside as λ _ => LoopStep<WcState> {
-                True => Continue(WcState(s.lines, s.words, Succ(s.bytes), True)),
-                False => Continue(WcState(s.lines, Succ(s.words), Succ(s.bytes), True)),
-            },
-        } = Continue(loop_step_payload(match sp as λ _ => LoopStep<WcState> {
-            True => match newline_byte(byte) as λ _ => LoopStep<WcState> {
-                True => Continue(WcState(Succ(s.lines), s.words, Succ(s.bytes), False)),
-                False => Continue(WcState(s.lines, s.words, Succ(s.bytes), False)),
-            },
-            False => match s.inside as λ _ => LoopStep<WcState> {
-                True => Continue(WcState(s.lines, s.words, Succ(s.bytes), True)),
-                False => Continue(WcState(s.lines, Succ(s.words), Succ(s.bytes), True)),
-            },
-        })) {
-        True => match newline_byte(byte) as λ nl => match nl as λ _ => LoopStep<WcState> {
-                True => Continue(WcState(Succ(s.lines), s.words, Succ(s.bytes), False)),
-                False => Continue(WcState(s.lines, s.words, Succ(s.bytes), False)),
-            } = Continue(loop_step_payload(match nl as λ _ => LoopStep<WcState> {
-                True => Continue(WcState(Succ(s.lines), s.words, Succ(s.bytes), False)),
-                False => Continue(WcState(s.lines, s.words, Succ(s.bytes), False)),
-            })) { True => refl, False => refl },
-        False => match s.inside as λ i => match i as λ _ => LoopStep<WcState> {
-                True => Continue(WcState(s.lines, s.words, Succ(s.bytes), True)),
-                False => Continue(WcState(s.lines, Succ(s.words), Succ(s.bytes), True)),
-            } = Continue(loop_step_payload(match i as λ _ => LoopStep<WcState> {
-                True => Continue(WcState(s.lines, s.words, Succ(s.bytes), True)),
-                False => Continue(WcState(s.lines, Succ(s.words), Succ(s.bytes), True)),
-            })) { True => refl, False => refl },
-    }
-}
+// `wc_bytes` is also the program's byte count; here it is the loop's code.
+import wc; import wc_pieces; import wc_native::{wc_bytes};
 
 theorem wc_framed(): StateFramed(wc_rep) {
     λ before after carry kept placed =>
@@ -106,12 +70,8 @@ theorem wc_runs(file: List<BitVec(8)>, needle: BitVec(8), jumps: EofJumps,
 fn wc_with(process: &str) -> Result<heather_elab::Elaborator, String> {
     let mut elab = base();
     elab.elab_module_source("elf64_read_state", process).map_err(|e| e.render(process))?;
-    elab.elab_module_source("wc_loop", WC_SOURCE).unwrap_or_else(|e| panic!("{}", e.render(WC_SOURCE)));
-    elab.elab_module_source("wc_context", "import function_ir_loop; import function_ir_loop_x86; import wc_loop; import bitvec; import bool;").unwrap();
-    let emission = generate_elaborated_record_loop_x86(&elab, "wc", "wc_loop::count_wc", &wc_placement(), "wc_loop::wc_body_advances")
-        .unwrap_or_else(|e| panic!("{e:?}"));
-    elab.elab_module_source("wc_pieces", &emission.pieces).unwrap_or_else(|e| panic!("{}", e.render(&emission.pieces)));
-    elab.elab_module_source("wc_native", &emission.text).unwrap_or_else(|e| panic!("{}", e.render(&emission.text)));
+    elab.elab_module_source("bitvec_omega", BV_OMEGA).unwrap_or_else(|e| panic!("{}", e.render(BV_OMEGA)));
+    wc_record_loop(&mut elab);
     Ok(elab)
 }
 

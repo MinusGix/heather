@@ -21,8 +21,8 @@ const MODULES: &[(&str, &str)] = &[
     ("int", include_str!("../../../lib/std/int.hthr")),
     ("omega", include_str!("../../../lib/std/omega.hthr")),
     ("bitvec", include_str!("../../../lib/std/bitvec.hthr")),
-    ("bitvec_nat", include_str!("../../../lib/std/bitvec/nat.hthr")),
-    ("bitvec_omega", include_str!("../../../lib/std/bitvec/omega.hthr")),
+    ("bitvec_nat", include_str!("../../../lib/std/bitvec/bitvec_nat.hthr")),
+    ("bitvec_omega", include_str!("../../../lib/std/bitvec/bitvec_omega.hthr")),
 ];
 
 const PREFIX: &str = "import bool;\nimport logic;\nimport nat;\nimport list;\nimport omega;\nimport bitvec;\nimport bitvec_nat;\nimport bitvec_omega;\n\n\

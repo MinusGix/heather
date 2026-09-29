@@ -5,8 +5,8 @@ use heather_elab::function_ir_x86_lower::{ByteLoad, Gpr, Placements};
 fn checker() -> heather_elab::Elaborator {
     let mut elab = common::base_image(common::MODULES.len());
     for (name, source) in [
-        ("x86_64_structured_block", include_str!("../../../lib/std/arch/x86_64/structured_block.hthr")),
-        ("x86_64_data_read", include_str!("../../../lib/std/arch/x86_64/data_read.hthr")),
+        ("x86_64_structured_block", include_str!("../../../lib/std/arch/x86_64/x86_64_structured_block.hthr")),
+        ("x86_64_data_read", include_str!("../../../lib/std/arch/x86_64/x86_64_data_read.hthr")),
     ] {
         elab.elab_module_source(name, source).unwrap_or_else(|e| panic!("{}", e.render(source)));
     }

@@ -19,36 +19,36 @@ use heather_elab::Elaborator;
 // determinism, the profile's memory view and the state process.
 pub(super) const SUPPORT: &[(&str, &str)] = &[
     ("omega", include_str!("../../../../lib/std/omega.hthr")),
-    ("bitvec_nat", include_str!("../../../../lib/std/bitvec/nat.hthr")),
-    ("x86_64_data_read", include_str!("../../../../lib/std/arch/x86_64/data_read.hthr")),
-    ("x86_64_access_code", include_str!("../../../../lib/std/arch/x86_64/access_code.hthr")),
-    ("x86_64_access_memory", include_str!("../../../../lib/std/arch/x86_64/access_memory.hthr")),
-    ("x86_64_fetched_code", include_str!("../../../../lib/std/arch/x86_64/fetched_code.hthr")),
+    ("bitvec_nat", include_str!("../../../../lib/std/bitvec/bitvec_nat.hthr")),
+    ("x86_64_data_read", include_str!("../../../../lib/std/arch/x86_64/x86_64_data_read.hthr")),
+    ("x86_64_access_code", include_str!("../../../../lib/std/arch/x86_64/x86_64_access_code.hthr")),
+    ("x86_64_access_memory", include_str!("../../../../lib/std/arch/x86_64/x86_64_access_memory.hthr")),
+    ("x86_64_fetched_code", include_str!("../../../../lib/std/arch/x86_64/x86_64_fetched_code.hthr")),
     ("function_ir_loop", include_str!("../../../../lib/function_ir_loop.hthr")),
     ("function_ir_loop_x86", include_str!("../../../../lib/function_ir_loop_x86.hthr")),
     ("function_ir_loop_trace", include_str!("../../../../lib/function_ir_loop_trace.hthr")),
-    ("x86_64_store", include_str!("../../../../lib/std/arch/x86_64/store.hthr")),
-    ("x86_64_step_forms", include_str!("../../../../lib/std/arch/x86_64/step_forms.hthr")),
+    ("x86_64_store", include_str!("../../../../lib/std/arch/x86_64/x86_64_store.hthr")),
+    ("x86_64_step_forms", include_str!("../../../../lib/std/arch/x86_64/x86_64_step_forms.hthr")),
     ("linux_x86_64_io", include_str!("../../../../lib/linux_x86_64_io.hthr")),
     ("linux_x86_64_determinism", include_str!("../../../../lib/linux_x86_64_determinism.hthr")),
     ("elf64_io", include_str!("../../../../lib/elf64_io.hthr")),
-    ("elf64_read_loop", include_str!("../../../../lib/elf64_read_loop.hthr")),
+    ("elf64_read_pieces", include_str!("../../../../lib/elf64_read_pieces.hthr")),
     ("elf64_read_state", include_str!("../../../../lib/elf64_read_state.hthr")),
 ];
 
 // The formatter's source and meaning, and the write loop: `--print` and
 // `--fields` both write a line through it.
 pub(super) const WRITE_SUPPORT: &[(&str, &str)] = &[
-    ("bitvec_omega", include_str!("../../../../lib/std/bitvec/omega.hthr")),
+    ("bitvec_omega", include_str!("../../../../lib/std/bitvec/bitvec_omega.hthr")),
     ("decimal_line", include_str!("../../../../lib/decimal_line.hthr")),
-    ("elf64_read_print", include_str!("../../../../lib/elf64_read_print.hthr")),
+    ("elf64_print_pieces", include_str!("../../../../lib/elf64_print_pieces.hthr")),
     ("elf64_write_loop", include_str!("../../../../lib/elf64_write_loop.hthr")),
 ];
 // For `--print`: the tail that prints the count (docs/native-first-program-design.md §10).
 pub(super) const PRINT_SUPPORT: &[(&str, &str)] = &[
     ("elf64_count_print", include_str!("../../../../lib/elf64_count_print.hthr")),
 ];
-pub(super) const PRINT_IMPORTS: &[&str] = &["elf64_count_print", "elf64_write_loop", "elf64_read_print", "decimal_line", "x86_64_structured_block"];
+pub(super) const PRINT_IMPORTS: &[&str] = &["elf64_count_print", "elf64_write_loop", "elf64_print_pieces", "decimal_line", "x86_64_structured_block"];
 
 // The profile's head registers are fixed (elf64_read_state's
 // ReadStatePlacement); the count is the state, in R13; the rest is the loop's
@@ -193,7 +193,7 @@ pub(super) fn write_loop(head: &StateHead) -> WriteLoop {
     let exit = encode(&[mov(Rdi, 0), mov(Rax, 60)]);
     let (retry, fail) = (head.piece("retry").len(), head.piece("fail").len());
     // JS to the failure path, JZ to exit(0) past it, JMP and the retry's JZ
-    // back to the write (elf64_read_print's `PrintJumps`).
+    // back to the write (elf64_print_pieces's `PrintJumps`).
     let psd = forward(advance.len() + 6 + 5);
     let pzd = forward(5 + retry + 6 + fail + 2);
     let span = write.len() + 2 + TEST.len() + 6 + advance.len() + 6;
@@ -345,7 +345,7 @@ pub(super) fn certify(module: &mut Module, prefix: &str, program: &Program, emis
     Ok(file)
 }
 
-pub(super) const IMPORTS: &[&str] = &["elf64_read_state", "elf64_read_loop", "elf64_io", "elf64_calls", "elf64", "linux_x86_64_entry",
+pub(super) const IMPORTS: &[&str] = &["elf64_read_state", "elf64_read_pieces", "elf64_io", "elf64_calls", "elf64", "linux_x86_64_entry",
     "linux_x86_64_io", "linux_x86_64_determinism", "function_ir_loop",
     "function_ir_loop_trace", "x86_64_fetched_code", "x86_64_fetch", "bitvec_nat", "x86_64", "bitvec", "list", "logic", "nat"];
 
@@ -356,7 +356,7 @@ pub(super) const FORMAT_PREFIX: &str = "print_format";
 /// One of the formatter's certificates: a module of its own, and its bytes.
 pub(super) struct FormatPart { pub module: String, pub prefix: String, pub text: String, pub bytes: Vec<u8> }
 
-// The formatter at the profile's registers (elf64_read_print): the count in
+// The formatter at the profile's registers (elf64_print_pieces): the count in
 // R11 and the page's base in R8 are read, never written; the word goes to
 // RAX, the start to R9, the length to R10, each kept by what runs after it.
 pub(super) fn generate_format(elab: &Elaborator, prefix: &str) -> Result<Vec<FormatPart>, String> {

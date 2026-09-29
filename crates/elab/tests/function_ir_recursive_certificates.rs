@@ -3,7 +3,7 @@ use crate::common;
 #[test]
 fn recursive_physical_model_checks() {
     let mut elab = common::base_image(common::MODULES.len());
-    let model = include_str!("../../../lib/std/arch/x86_64/structured_block.hthr");
+    let model = include_str!("../../../lib/std/arch/x86_64/x86_64_structured_block.hthr");
     elab.elab_module_source("x86_64_structured_block", model)
         .unwrap_or_else(|e| panic!("{}", e.render(model)));
 }
@@ -13,7 +13,7 @@ fn recursive_leaf_certificate_checks() {
     use heather_elab::function_ir_cert::{Node, Port, Region, StructuredRegion};
     use heather_elab::function_ir_x86_lower::{generate_structured, Gpr, Placements};
     let mut elab = common::base_image(common::MODULES.len());
-    let model = include_str!("../../../lib/std/arch/x86_64/structured_block.hthr");
+    let model = include_str!("../../../lib/std/arch/x86_64/x86_64_structured_block.hthr");
     elab.elab_module_source("x86_64_structured_block", model).unwrap_or_else(|e| panic!("{}", e.render(model)));
     let region = StructuredRegion::Dataflow(Region { inputs: vec![Port { id: 0, width: 64 }, Port { id: 1, width: 64 }], nodes: vec![Node::Add { width: 64, output: 2, left: 0, right: 1 }], outputs: vec![Port { id: 2, width: 64 }] });
     let emission = generate_structured("recursive", &region, &Placements::from([(0, Gpr::Rdi), (1, Gpr::Rsi)]), &[Gpr::Rax, Gpr::Rcx, Gpr::Rdx], Gpr::Rax).unwrap();
@@ -26,7 +26,7 @@ fn nested_source_physical_certificate_checks() {
     use heather_elab::function_ir_source::generate_elaborated_structured_x86;
     use heather_elab::function_ir_x86_lower::Gpr;
     let mut elab = common::base_image(common::MODULES.len());
-    let model = include_str!("../../../lib/std/arch/x86_64/structured_block.hthr");
+    let model = include_str!("../../../lib/std/arch/x86_64/x86_64_structured_block.hthr");
     elab.elab_module_source("x86_64_structured_block", model).unwrap_or_else(|e| panic!("{}", e.render(model)));
     let source = include_str!("../../../examples/x86-native/branches.hthr");
     elab.elab_module_source("branches", source).unwrap_or_else(|e| panic!("{}", e.render(source)));

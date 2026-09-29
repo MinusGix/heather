@@ -2,10 +2,10 @@
 // program puts it (docs/native-wc-design.md §5): write R10 bytes from R9 to
 // stdout, advance past what was sent and stop when nothing is left, retry
 // EINTR, exit 1 at any other failure, and exit 0 once all is sent. The code
-// and its proof are elf64_read_print's, restated at an offset `at` from the
+// and its proof are elf64_print_pieces's, restated at an offset `at` from the
 // entry instead of past that program's formatter.
-import elf64_read_print;
-import elf64_read_loop;
+import elf64_print_pieces;
+import elf64_read_pieces;
 import elf64_io;
 import linux_x86_64_entry;
 import linux_x86_64_io;

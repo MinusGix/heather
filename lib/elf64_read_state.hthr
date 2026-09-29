@@ -4,13 +4,13 @@
 // hand the state to a tail. The state lives in its own registers, R13, R14,
 // R15 and R8, which nothing between reads writes, so the loop updates it in
 // place and nothing is copied or saved around a read. Failed reads are
-// elf64_read_loop's: EINTR retries, anything else exits 1.
+// elf64_read_pieces's: EINTR retries, anything else exits 1.
 // Nothing here is about any one program. The state's type, its placement
 // over the registers and its invariant are parameters; a program supplies its
 // loop certificate, that its step folds, and three facts about the placement:
 // it reads only the state registers, init's zeros place the initial state,
 // and the state folded over any input fits the next chunk's budget.
-import elf64_read_loop;
+import elf64_read_pieces;
 import elf64_io;
 import linux_x86_64_entry;
 import linux_x86_64_io;
@@ -32,7 +32,7 @@ import nat;
 import option;
 import omega;
 
-// Init zeroes the state registers. The chunk's setup is elf64_read_loop's,
+// Init zeroes the state registers. The chunk's setup is elf64_read_pieces's,
 // less the carry's copy: the loop reads its state where it already is.
 fn state_init_block() → List<Instruction> {
     [MovRI(R13, BitVec::ofNat(0)), MovRI(R14, BitVec::ofNat(0)), MovRI(R15, BitVec::ofNat(0)), MovRI(R8, BitVec::ofNat(0))]

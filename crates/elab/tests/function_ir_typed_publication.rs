@@ -5,7 +5,7 @@ use heather_elab::function_ir_x86_lower::{Gpr, Placements};
 
 fn checker() -> heather_elab::Elaborator {
     let mut elab = common::base_image(common::MODULES.len());
-    let model = include_str!("../../../lib/std/arch/x86_64/structured_block.hthr");
+    let model = include_str!("../../../lib/std/arch/x86_64/x86_64_structured_block.hthr");
     elab.elab_module_source("x86_64_structured_block", model).unwrap_or_else(|e| panic!("{}", e.render(model)));
     elab
 }
@@ -95,7 +95,7 @@ fn record_state_step_publication_checks() {
     let mut elab = checker();
     let model = include_str!("../../../lib/function_ir_loop.hthr");
     elab.elab_module_source("function_ir_loop", model).unwrap_or_else(|e| panic!("{}", e.render(model)));
-    let nat = include_str!("../../../lib/std/bitvec/nat.hthr");
+    let nat = include_str!("../../../lib/std/bitvec/bitvec_nat.hthr");
     elab.elab_module_source("bitvec_nat", nat).unwrap_or_else(|e| panic!("{}", e.render(nat)));
     elab.elab_module_source("record_step", RECORD_STEP).unwrap_or_else(|e| panic!("{}", e.render(RECORD_STEP)));
     let emission = generate_elaborated_typed_x86(&elab, "wc_step", "record_step::wc_body",
@@ -121,7 +121,7 @@ fn record_state_step_certificate_refuses_other_sources() {
         let mut elab = checker();
         let model = include_str!("../../../lib/function_ir_loop.hthr");
         elab.elab_module_source("function_ir_loop", model).unwrap_or_else(|e| panic!("{}", e.render(model)));
-        let nat = include_str!("../../../lib/std/bitvec/nat.hthr");
+        let nat = include_str!("../../../lib/std/bitvec/bitvec_nat.hthr");
         elab.elab_module_source("bitvec_nat", nat).unwrap_or_else(|e| panic!("{}", e.render(nat)));
         elab.elab_module_source("record_step", source).unwrap_or_else(|e| panic!("{}", e.render(source)));
         elab
@@ -151,7 +151,7 @@ fn record_state_fields_publish_alone() {
     let mut elab = checker();
     let model = include_str!("../../../lib/function_ir_loop.hthr");
     elab.elab_module_source("function_ir_loop", model).unwrap_or_else(|e| panic!("{}", e.render(model)));
-    let nat = include_str!("../../../lib/std/bitvec/nat.hthr");
+    let nat = include_str!("../../../lib/std/bitvec/bitvec_nat.hthr");
     elab.elab_module_source("bitvec_nat", nat).unwrap_or_else(|e| panic!("{}", e.render(nat)));
     elab.elab_module_source("record_step", RECORD_STEP).unwrap_or_else(|e| panic!("{}", e.render(RECORD_STEP)));
     let inputs = Placements::from([(0, Gpr::Rdi), (2, Gpr::Rsi), (3, Gpr::R8), (4, Gpr::R9), (5, Gpr::R10)]);

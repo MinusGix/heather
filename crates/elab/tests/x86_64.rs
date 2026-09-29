@@ -17,7 +17,7 @@ const BITVEC: &str = include_str!("../../../lib/std/bitvec.hthr");
 const RELATION: &str = include_str!("../../../lib/std/relation.hthr");
 const LOCATION: &str = include_str!("../../../lib/std/location.hthr");
 const CERTIFIED_LOOKUP: &str = include_str!("../../../lib/std/certified_lookup.hthr");
-const X86_64: &str = include_str!("../../../lib/std/arch/x86_64/model.hthr");
+const X86_64: &str = include_str!("../../../lib/std/arch/x86_64/x86_64.hthr");
 
 const X86_MODULES: &[(&str, &str)] = &[
     ("logic", LOGIC),
@@ -773,7 +773,7 @@ fn impossible(start: BitVec(64)) -> DecodedAt(
 
 fn fetched_instruction_boundary_checks(base: &Elaborator) {
     let mut e = base.clone();
-    let library = include_str!("../../../lib/std/arch/x86_64/fetch.hthr");
+    let library = include_str!("../../../lib/std/arch/x86_64/x86_64_fetch.hthr");
     if let Err(err) = e.elab_module_source("x86_64_fetch", library) {
         panic!("fetch library: {}", err.render(library));
     }

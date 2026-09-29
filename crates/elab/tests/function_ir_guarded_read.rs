@@ -6,10 +6,10 @@ use heather_elab::function_ir_x86_lower::{AccessFragment, Gpr, Placements};
 fn selected_bounds_read_checks_and_executes() {
     let mut elab = common::base_image(common::MODULES.len());
     for (name, source) in [
-        ("x86_64_structured_block", include_str!("../../../lib/std/arch/x86_64/structured_block.hthr")),
-        ("x86_64_data_read", include_str!("../../../lib/std/arch/x86_64/data_read.hthr")),
-        ("x86_64_access_code", include_str!("../../../lib/std/arch/x86_64/access_code.hthr")),
-        ("bitvec_nat", include_str!("../../../lib/std/bitvec/nat.hthr")),
+        ("x86_64_structured_block", include_str!("../../../lib/std/arch/x86_64/x86_64_structured_block.hthr")),
+        ("x86_64_data_read", include_str!("../../../lib/std/arch/x86_64/x86_64_data_read.hthr")),
+        ("x86_64_access_code", include_str!("../../../lib/std/arch/x86_64/x86_64_access_code.hthr")),
+        ("bitvec_nat", include_str!("../../../lib/std/bitvec/bitvec_nat.hthr")),
         ("function_ir_loop", include_str!("../../../lib/function_ir_loop.hthr")),
         ("function_ir_loop_x86", include_str!("../../../lib/function_ir_loop_x86.hthr")),
     ] { elab.elab_module_source(name, source).unwrap_or_else(|e| panic!("{}", e.render(source))); }

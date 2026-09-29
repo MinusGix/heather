@@ -299,7 +299,7 @@ fn typed_structured_interfaces_and_source_agreement() {
     // §9a); a match on a Nat is not a supported Nat form.
     let natural = reflect_elaborated_structured(&elab, "natural").unwrap();
     assert_eq!(natural.result, heather_elab::function_ir_source::StructuredSourceType::NatWord);
-    let bitvec_nat = include_str!("../../../lib/std/bitvec/nat.hthr");
+    let bitvec_nat = include_str!("../../../lib/std/bitvec/bitvec_nat.hthr");
     elab.elab_module_source("bitvec_nat", bitvec_nat).unwrap_or_else(|e| panic!("{}", e.render(bitvec_nat)));
     elab.elab_module_source("typed_source_again", "import typed_source; import bitvec; import bool; import nat;").unwrap();
     let text = generate_structured_source_expansion("natural", &natural).unwrap();

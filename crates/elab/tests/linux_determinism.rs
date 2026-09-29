@@ -4,7 +4,7 @@ use crate::read_loop_fixture::checker;
 // form reads back from the front of its bytes, so a step is a function of
 // the defined state and none runs at a SYSCALL; a claimed run is then every
 // run that got the same answers from Linux.
-const FORMS: &str = include_str!("../../../lib/std/arch/x86_64/step_forms.hthr");
+const FORMS: &str = include_str!("../../../lib/std/arch/x86_64/x86_64_step_forms.hthr");
 const DETERMINISM: &str = include_str!("../../../lib/linux_x86_64_determinism.hthr");
 
 #[test]

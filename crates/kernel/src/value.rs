@@ -1275,7 +1275,7 @@ pub enum VTy<'v> {
 /// §11.1's own fallback rule decides otherwise: a `u128` field raises
 /// `Val`'s alignment to 16 and rounds the whole enum from 88 to 96 bytes —
 /// eight bytes on *every* value in the machine to widen one variant. 64
-/// covers every operation in `lib/std/arch/x86_64/model.hthr` today; a
+/// covers every operation in `lib/std/arch/x86_64/x86_64.hthr` today; a
 /// wider word, if round 3 wants one, is a second `tail_len`-linked run and
 /// not a wider field.
 pub const BIT_RUN_WIDTH_CAP: u32 = 64;

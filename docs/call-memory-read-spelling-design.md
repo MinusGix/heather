@@ -198,7 +198,7 @@ State the leaf contract's memory effect over `stack_observation` rather than
 `call_memory_read`, and carry the file's constancy as its own field so the
 interface is not weakened:
 
-1. `lib/std/arch/x86_64/call_frame.hthr`: `NativeIntegerCallContract<M, A>` is
+1. `lib/std/arch/x86_64/x86_64_call_frame.hthr`: `NativeIntegerCallContract<M, A>` is
    already parametric in `read`, so no change is needed there for the
    observation itself. Add nothing to that record; the file field belongs to
    the `CallMemory` instance, not to the generic contract (see §3.4).

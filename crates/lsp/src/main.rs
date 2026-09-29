@@ -179,7 +179,10 @@ impl Server {
     fn search_paths(&self, path: &Path) -> Vec<PathBuf> {
         let mut paths = Vec::new();
         if let Some(root) = &self.root {
-            for candidate in [root.join("lib/std"), root.join("lib"), root.clone()] {
+            // Not the root itself: the loader also searches below every
+            // search directory, and below a workspace root lie build trees
+            // and scratch copies of the library (docs/modules-design.md §3.2).
+            for candidate in [root.join("lib/std"), root.join("lib")] {
                 if candidate.is_dir() && !paths.contains(&candidate) {
                     paths.push(candidate);
                 }

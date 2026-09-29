@@ -2,11 +2,11 @@ use crate::read_loop_fixture::checker;
 use heather_elab::function_ir_source::{generate_elaborated_loop_x86, NativeLoopPlacement};
 use heather_elab::function_ir_x86_lower::Gpr;
 
-const READ_LOOP: &str = include_str!("../../../lib/elf64_read_loop.hthr");
+const READ_PIECES: &str = include_str!("../../../lib/elf64_read_pieces.hthr");
 const STATE: &str = include_str!("../../../lib/elf64_read_state.hthr");
-const BV_OMEGA: &str = include_str!("../../../lib/std/bitvec/omega.hthr");
+const BV_OMEGA: &str = include_str!("../../../lib/std/bitvec/bitvec_omega.hthr");
 const DECIMAL: &str = include_str!("../../../lib/decimal_line.hthr");
-const PRINT: &str = include_str!("../../../lib/elf64_read_print.hthr");
+const PRINT: &str = include_str!("../../../lib/elf64_print_pieces.hthr");
 const WRITE: &str = include_str!("../../../lib/elf64_write_loop.hthr");
 const COUNT: &str = include_str!("../../../lib/elf64_count_print.hthr");
 const WC_L: &str = include_str!("../../../examples/x86-native/wc_l.hthr");
@@ -14,8 +14,8 @@ const WC_L: &str = include_str!("../../../examples/x86-native/wc_l.hthr");
 // Everything the count process and its printing tail stand on.
 fn base() -> heather_elab::Elaborator {
     let mut elab = checker();
-    for (name, source) in [("elf64_read_loop", READ_LOOP), ("elf64_read_state", STATE), ("bitvec_omega", BV_OMEGA),
-        ("decimal_line", DECIMAL), ("elf64_read_print", PRINT), ("elf64_write_loop", WRITE)] {
+    for (name, source) in [("elf64_read_pieces", READ_PIECES), ("elf64_read_state", STATE), ("bitvec_omega", BV_OMEGA),
+        ("decimal_line", DECIMAL), ("elf64_print_pieces", PRINT), ("elf64_write_loop", WRITE)] {
         elab.elab_module_source(name, source).unwrap_or_else(|e| panic!("{name}: {}", e.render(source)));
     }
     elab
@@ -37,7 +37,7 @@ pub(crate) fn count_placement() -> NativeLoopPlacement {
 // printing claim over any file holding the code; the formatter's
 // certificates are parameters (read_print_process checks decimal_line's).
 const WC_L_COUNT: &str = r#"
-import elf64_count_print; import elf64_write_loop; import elf64_read_print; import elf64_read_state; import elf64_read_loop;
+import elf64_count_print; import elf64_write_loop; import elf64_print_pieces; import elf64_read_state; import elf64_read_pieces;
 import elf64_io; import linux_x86_64_io; import linux_x86_64_entry; import x86_64_structured_block;
 import function_ir_loop; import function_ir_loop_trace; import x86_64; import x86_64_fetch; import x86_64_fetched_code;
 import bitvec; import bitvec_nat; import bool; import list; import logic; import nat;

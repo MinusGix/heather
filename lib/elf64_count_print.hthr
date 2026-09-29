@@ -3,11 +3,11 @@
 // with a Nat state in R13 (its `count_rep`, the shape of `wc -l`), and a tail
 // that formats the count with decimal_line's three words, stores it, writes
 // the line through elf64_write_loop and exits 0, or exits 1 at a failure. The
-// formatter's certificates are parameters, as elf64_read_print states them.
+// formatter's certificates are parameters, as elf64_print_pieces states them.
 import elf64_write_loop;
 import elf64_read_state;
-import elf64_read_print;
-import elf64_read_loop;
+import elf64_print_pieces;
+import elf64_read_pieces;
 import decimal_line;
 import elf64_io;
 import linux_x86_64_entry;

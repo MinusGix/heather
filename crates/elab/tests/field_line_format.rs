@@ -2,7 +2,7 @@ use crate::read_loop_fixture::checker;
 use heather_elab::function_ir_source::generate_elaborated_typed_x86;
 use heather_elab::function_ir_x86_lower::{Gpr, Placements};
 
-const BV_OMEGA: &str = include_str!("../../../lib/std/bitvec/omega.hthr");
+const BV_OMEGA: &str = include_str!("../../../lib/std/bitvec/bitvec_omega.hthr");
 const DECIMAL: &str = include_str!("../../../lib/decimal_line.hthr");
 pub(crate) const FIELD: &str = include_str!("../../../lib/field_line.hthr");
 

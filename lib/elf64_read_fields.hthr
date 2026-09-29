@@ -11,8 +11,8 @@
 // word to RAX, stored through R9.
 import elf64_write_loop;
 import elf64_read_state;
-import elf64_read_print;
-import elf64_read_loop;
+import elf64_print_pieces;
+import elf64_read_pieces;
 import field_line;
 import decimal_line;
 import elf64_io;

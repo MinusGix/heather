@@ -506,7 +506,7 @@ The first implementation lands in `lib/function_ir.hthr`:
 - `add64_function` is the first checked region, with `add64_denotes` pinning
   its output to modular bitvector addition.
 
-`lib/std/arch/x86_64/block.hthr` adds concatenated canonical bytes, placed
+`lib/std/arch/x86_64/x86_64_block.hthr` adds concatenated canonical bytes, placed
 canonical decoding, functional normal block execution, and authoritative
 relational block execution. `lib/function_ir_x86.hthr` selects
 `MOV RAX,RDI; ADD RAX,RSI`, proves its six-byte canonical layout, decoding,

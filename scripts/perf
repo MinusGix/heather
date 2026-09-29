@@ -109,7 +109,7 @@ CORPUS = {
         showcase("calc_parser"),
         ("lib/ir_v1.hthr", ["lib/std"]),
         ("lib/function_ir.hthr", ["lib/std"]),
-        ("lib/std/arch/x86_64/model.hthr", ["lib/std"]),
+        ("lib/std/arch/x86_64/x86_64.hthr", ["lib/std"]),
         X86_CERTIFICATE,
         # lib/certgen_code.hthr is not in the corpus: it has no imports and
         # elaborates only after a test-only support prelude and ir_v1 in

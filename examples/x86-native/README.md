@@ -265,7 +265,7 @@ continues, the same way at every cursor (`line_body_folds`), and folded over
 the input from zero it is `wc_l` (`count_lines_input`). Buffers, chunks and
 everything machine-shaped come from the shared generators and the library's
 process theorem (`lib/elf64_read_state.hthr`, the same process `wc` runs on,
-with a Nat state; the read's pieces are `lib/elf64_read_loop.hthr`'s;
+with a Nat state; the read's pieces are `lib/elf64_read_pieces.hthr`'s;
 [its design](../../docs/native-read-until-eof-design.md), and
 [the fold contract](../../docs/native-wc-design.md) §3).
 
@@ -304,8 +304,8 @@ The line is computed by code the native compiler generates from
 multiply, so they use a restoring chain of subtract-if-fits steps. The
 library proves that for every count below 10000 the stored word holds exactly
 that line past its leading zeros. The word is stored with a `mov [r8], rax`
-(`lib/std/arch/x86_64/store.hthr`) and written with `write(1, …)`
-(`lib/elf64_read_print.hthr`); the tail that runs them after the read is
+(`lib/std/arch/x86_64/x86_64_store.hthr`) and written with `write(1, …)`
+(`lib/elf64_print_pieces.hthr`); the tail that runs them after the read is
 `lib/elf64_count_print.hthr`.
 
 ## `wc`: lines, words and bytes

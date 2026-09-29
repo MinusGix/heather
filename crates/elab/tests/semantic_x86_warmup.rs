@@ -19,7 +19,7 @@ const MODULES: &[(&str, &str)] = &[
         "certified_lookup",
         include_str!("../../../lib/std/certified_lookup.hthr"),
     ),
-    ("x86_64", include_str!("../../../lib/std/arch/x86_64/model.hthr")),
+    ("x86_64", include_str!("../../../lib/std/arch/x86_64/x86_64.hthr")),
 ];
 
 #[test]

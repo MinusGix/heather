@@ -6,7 +6,7 @@ use crate::composed_fixture;
 fn composed_multiple_result_certificates_check() {
     use heather_elab::function_ir_x86_lower::{generate_structured_results, Gpr, Placements};
     let mut elab = common::base_image(common::MODULES.len());
-    let model = include_str!("../../../lib/std/arch/x86_64/structured_block.hthr");
+    let model = include_str!("../../../lib/std/arch/x86_64/x86_64_structured_block.hthr");
     elab.elab_module_source("x86_64_structured_block", model).unwrap_or_else(|e| panic!("{}", e.render(model)));
     let emission = generate_structured_results("composed", &composed_fixture::fixture(), &Placements::from([(0, Gpr::Rdi), (1, Gpr::Rsi)]),
         &[Gpr::Rax, Gpr::Rdx, Gpr::Rcx, Gpr::Rbx, Gpr::R8, Gpr::R9], &Placements::from([(5, Gpr::Rax), (6, Gpr::Rdx)])).unwrap();

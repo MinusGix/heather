@@ -22,7 +22,7 @@ pub(super) const SUPPORT: &[(&str, &str)] = &[
     ("field_line", include_str!("../../../../lib/field_line.hthr")),
     ("elf64_read_fields", include_str!("../../../../lib/elf64_read_fields.hthr")),
 ];
-pub(super) const IMPORTS: &[&str] = &["elf64_read_fields", "elf64_write_loop", "elf64_read_print", "field_line",
+pub(super) const IMPORTS: &[&str] = &["elf64_read_fields", "elf64_write_loop", "elf64_print_pieces", "field_line",
     "x86_64_structured_block"];
 
 /// The formatter certificates' prefix, as `read_loop::FORMAT_PREFIX`.

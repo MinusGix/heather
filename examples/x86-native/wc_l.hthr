@@ -75,7 +75,7 @@ theorem count_lines_fold(bytes: List<BitVec(8)>): (count: Nat) →
     }
 }
 
-// The fact the profile asks of a program (elf64_read_loop's `computes`): its
+// The fact the profile asks of a program (elf64_read_pieces's `computes`): its
 // specification is the fold from zero.
 theorem count_lines_input(bytes: List<BitVec(8)>): wc_l(bytes) = step_fold(ReadonlyLoop<Nat>(line_body), newline(), bytes, 0) {
     sym(trans(count_lines_fold(bytes, 0), Nat::add_left_zero(wc_l(bytes))))

@@ -296,7 +296,7 @@ is refused with "`And` takes 2 argument(s), found 0".
 
 ## 8. Slices
 
-- **A — fetched execution, landed.** `lib/std/arch/x86_64/fetched_code.hthr`
+- **A — fetched execution, landed.** `lib/std/arch/x86_64/x86_64_fetched_code.hthr`
   (`x86_64_fetched_code`): `FetchedStep`/`FetchedSteps`, `CodeResident` and its
   split law, the branch lemmas once over byte lists (`branch_bytes`),
   `structured_fetched`, `access_fetched` with the loop by induction on

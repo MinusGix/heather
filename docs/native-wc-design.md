@@ -538,7 +538,8 @@ The round's success test (§1) asked for `wc -l` to be an instance of what
   save block, `eof_from`, `read_loop_runs`, about 850 lines) and the tail
   bound to its layout in `elf64_read_print` (`print_at_*`,
   `ReadPrintResident`, its own copy of the write loop, `read_print_runs`,
-  about 800). What remains of both is the read and write profiles' pieces.
+  about 800). What remains of both is the read and write profiles' pieces,
+  renamed for it the same day: `elf64_read_pieces` and `elf64_print_pieces`.
   Their refusal tests now mutate those pieces and are refused by the library
   that uses them (the state process, the write loop, the count's tail).
 - **Cost:** the `wc -l` builds bundle `elf64_read_state` now, and `--print`

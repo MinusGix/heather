@@ -11,8 +11,11 @@ The initial layout is:
 ```text
 arch/
   x86_64/
-    model.hthr       decoded register instructions and typed execution
+    x86_64.hthr      decoded register instructions and typed execution
+    x86_64_*.hthr    blocks, fetch, calls, stores, … over that model
 ```
 
-The public Heather module name is currently chosen by the loader (`x86_64` in
-the integration test), independently of the source file's repository path.
+Module names are flat file stems (docs/modules-design.md §3.2), so each
+module carries its architecture in its name: `x86_64_fetch.hthr` is the
+module `x86_64_fetch` for the CLI, the editor and the native builder alike.
+The loader finds it below `lib/std` without a `-L` of its own.

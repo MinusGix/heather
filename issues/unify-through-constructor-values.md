@@ -22,7 +22,7 @@ theorem t0(): Cons(1, Cons(2, Nil)) = Cons(1, Cons(2, Nil)) { cc(refl, cc(refl, 
 ```
 
 Found by the #1b unifier slice's library sweep (2026-09-24). It is why
-`lib/std/arch/x86_64/model.hthr`'s three `@byte_cons_cong(…)` calls (~1526)
+`lib/std/arch/x86_64/x86_64.hthr`'s three `@byte_cons_cong(…)` calls (~1526)
 still write every endpoint, and it is the last feature-shaped `@` in `lib/`
 besides the `Decide` instance heads
 ([[instance-binder-occurrence-through-binder-types]]). Those sites also need

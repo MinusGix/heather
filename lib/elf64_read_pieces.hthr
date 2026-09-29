@@ -6,8 +6,9 @@
 // and otherwise exits with status 1. `ReadEofComputes` is what a counting
 // program proves: its specification is its step folded from zero
 // (docs/native-wc-design.md §3). The process that counted into R11 and saved
-// the total to R13 between reads lived here until 2026-09-29; `wc -l` now runs
-// on elf64_read_state with its count in R13 (docs/native-wc-design.md §9).
+// the total to R13 between reads lived here until 2026-09-29, when this module
+// was elf64_read_loop; `wc -l` now runs on elf64_read_state with its count in
+// R13 (docs/native-wc-design.md §9).
 import elf64_io;
 import linux_x86_64_entry;
 import linux_x86_64_io;

@@ -140,6 +140,38 @@ fn a_module_in_two_search_directories_is_an_error_not_a_precedence() {
 }
 
 #[test]
+fn a_search_directory_exposes_the_modules_below_it() {
+    // A file target gets the directory-target rule for its `-L` dirs: the
+    // facade's `child` lives in `nestedset/components`, and `child`'s own
+    // `import base` still finds the public `nestedset/base.hthr` rather than
+    // colliding with `nestedset/shadow/base.hthr`; and `nestedset/.copy`'s
+    // `child` is not a second hit, since dot-directories are not searched.
+    let out = heather(&["check", "-L", "nestedset", "nestedset/facade.hthr"]);
+    assert_eq!(out.status.code(), Some(0), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "nestedset/facade.hthr: ok\n");
+    // The negative control: the importing file's own directory is not
+    // searched below.
+    let out = heather(&["check", "nestedset/facade.hthr"]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("cannot find module `child`"));
+}
+
+#[test]
+fn a_provided_name_covers_a_missing_module_but_not_an_ambiguous_one() {
+    // The native builder's bundled names (`loader::load_providing`): a name no
+    // file answers is left to the caller, but a name two search directories
+    // answer is refused, not silently replaced by the caller's copy.
+    let fixtures = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures"));
+    let root = fixtures.join("uses_shared.hthr");
+    let modules = heather_cli::loader::load_providing(&root, &[], &["shared"])
+        .unwrap_or_else(|e| panic!("{}", e.msg));
+    assert_eq!(modules.iter().map(|m| m.name.as_str()).collect::<Vec<_>>(), ["uses_shared"]);
+    let search = [fixtures.join("ldir"), fixtures.join("ldir2")];
+    let err = heather_cli::loader::load_providing(&root, &search, &["shared"]).err().expect("ambiguous");
+    assert!(err.msg.contains("two search directories"), "{}", err.msg);
+}
+
+#[test]
 fn an_error_in_an_imported_module_is_reported_against_that_file() {
     let out = heather(&["check", "uses_broken.hthr"]);
     assert_eq!(out.status.code(), Some(1));

@@ -1,22 +1,21 @@
-use crate::function_ir_loop_trace::{wc_placement, WC_SOURCE};
+use crate::function_ir_loop_trace::wc_record_loop;
 use crate::read_loop_fixture::checker;
 use crate::read_state_process::WC_PROCESS;
-use heather_elab::function_ir_source::generate_elaborated_record_loop_x86;
 
-const READ_LOOP: &str = include_str!("../../../lib/elf64_read_loop.hthr");
+const READ_PIECES: &str = include_str!("../../../lib/elf64_read_pieces.hthr");
 const STATE: &str = include_str!("../../../lib/elf64_read_state.hthr");
-const BV_OMEGA: &str = include_str!("../../../lib/std/bitvec/omega.hthr");
+const BV_OMEGA: &str = include_str!("../../../lib/std/bitvec/bitvec_omega.hthr");
 const DECIMAL: &str = include_str!("../../../lib/decimal_line.hthr");
 const FIELD: &str = include_str!("../../../lib/field_line.hthr");
-const PRINT: &str = include_str!("../../../lib/elf64_read_print.hthr");
+const PRINT: &str = include_str!("../../../lib/elf64_print_pieces.hthr");
 const WRITE: &str = include_str!("../../../lib/elf64_write_loop.hthr");
 const FIELDS: &str = include_str!("../../../lib/elf64_read_fields.hthr");
 
 // Everything the three-field tail stands on (docs/native-wc-design.md §5).
 fn base() -> heather_elab::Elaborator {
     let mut elab = checker();
-    for (name, source) in [("elf64_read_loop", READ_LOOP), ("elf64_read_state", STATE), ("bitvec_omega", BV_OMEGA),
-        ("decimal_line", DECIMAL), ("field_line", FIELD), ("elf64_read_print", PRINT), ("elf64_write_loop", WRITE)] {
+    for (name, source) in [("elf64_read_pieces", READ_PIECES), ("elf64_read_state", STATE), ("bitvec_omega", BV_OMEGA),
+        ("decimal_line", DECIMAL), ("field_line", FIELD), ("elf64_print_pieces", PRINT), ("elf64_write_loop", WRITE)] {
         elab.elab_module_source(name, source).unwrap_or_else(|e| panic!("{name}: {}", e.render(source)));
     }
     elab
@@ -32,11 +31,12 @@ fn read_fields_library_checks() {
 // in R13, R14 and R15. The formatter's certificates are parameters here;
 // field_line_format checks the generated ones against `FieldsFormat`.
 const WC_FIELDS: &str = r#"
-import elf64_read_fields; import elf64_write_loop; import elf64_read_print; import elf64_read_state; import elf64_read_loop; import field_line;
+import elf64_read_fields; import elf64_write_loop; import elf64_print_pieces; import elf64_read_state; import elf64_read_pieces; import field_line;
 import elf64_io; import linux_x86_64_io; import linux_x86_64_entry; import x86_64_structured_block;
 import function_ir_loop; import function_ir_loop_trace; import x86_64; import x86_64_fetch; import x86_64_fetched_code;
 import bitvec; import bitvec_nat; import bool; import list; import logic; import nat;
-import wc_loop; import wc_pieces; import wc_native; import wc_process;
+// `wc_bytes` is also the program's byte count; here it is the loop's code.
+import wc; import wc_pieces; import wc_native::{wc_bytes}; import wc_process;
 
 theorem wc_counts(gprs: Gprs, carry: WcState, placed: wc_rep(gprs, carry)):
     (read_gpr(R13, gprs) = bitvec_nat::word_of_nat(64, carry.lines)) ∧ ((read_gpr(R14, gprs) = bitvec_nat::word_of_nat(64, carry.words)) ∧
@@ -95,12 +95,7 @@ theorem wc_prints(file: List<BitVec(8)>, needle: BitVec(8), jumps: EofJumps,
 fn wc_fields_process_composes() {
     let mut elab = base();
     elab.elab_module_source("elf64_read_fields", FIELDS).unwrap_or_else(|e| panic!("{}", e.render(FIELDS)));
-    elab.elab_module_source("wc_loop", WC_SOURCE).unwrap_or_else(|e| panic!("{}", e.render(WC_SOURCE)));
-    elab.elab_module_source("wc_context", "import function_ir_loop; import function_ir_loop_x86; import wc_loop; import bitvec; import bool;").unwrap();
-    let emission = generate_elaborated_record_loop_x86(&elab, "wc", "wc_loop::count_wc", &wc_placement(), "wc_loop::wc_body_advances")
-        .unwrap_or_else(|e| panic!("{e:?}"));
-    elab.elab_module_source("wc_pieces", &emission.pieces).unwrap_or_else(|e| panic!("{}", e.render(&emission.pieces)));
-    elab.elab_module_source("wc_native", &emission.text).unwrap_or_else(|e| panic!("{}", e.render(&emission.text)));
+    wc_record_loop(&mut elab);
     elab.elab_module_source("wc_process", WC_PROCESS).unwrap_or_else(|e| panic!("{}", e.render(WC_PROCESS)));
     elab.elab_module_source("wc_fields", WC_FIELDS).unwrap_or_else(|e| panic!("{}", e.render(WC_FIELDS)));
 }
@@ -111,7 +106,7 @@ fn wc_fields_process_composes() {
 // with another separator, writes another length or from elsewhere, stores
 // the high word one byte early, or hands the high word its tail in another
 // register than its certificate reads. The write loop's blocks are
-// elf64_read_print's, refused there.
+// elf64_print_pieces's, refused there.
 #[test]
 fn slow_acceptance_read_fields_refusals() {
     let library = base().semantic_image();

@@ -8,7 +8,9 @@
 // a count and elf64_read_fields the one that prints three. The profile fixes
 // the registers: the count in R11 (copied from the state's R13), the page's
 // base in R8, the line's word in RAX, its start in R9 and its length in R10.
-import elf64_read_loop;
+// (elf64_read_print until 2026-09-29, when its process moved to
+// elf64_count_print.)
+import elf64_read_pieces;
 import decimal_line;
 import elf64_io;
 import linux_x86_64_entry;

@@ -73,8 +73,21 @@ spelling.
 
 `import nat` resolves `nat.hthr` against, in order: the importing file's
 directory, then each `-L <dir>` given to the CLI (the standard library is
-`-L lib/std`, defaulted by the CLI when the directory exists). First hit
-wins; a name found in two search dirs is an error, not a precedence.
+`-L lib/std`, defaulted by the CLI when the directory exists), then the
+directories below those `-L` dirs. First hit wins; a name found in two
+search dirs of one tier is an error, not a precedence.
+
+The lower tier (2026-09-29) is how the library keeps modules in
+subdirectories — `lib/std/parser/`, `lib/std/arch/x86_64/`,
+`lib/std/bitvec/` — without every client naming them. Names stay flat, so a
+nested module carries its family in its stem (`parser_core`, `x86_64_fetch`,
+`bitvec_omega`): the stem is the name every build uses, the CLI's and the
+native builder's bundle alike. The tier is only consulted on a miss above
+it, so a module below cannot shadow or conflict with a public one of the
+same name. It leaves out dot-directories (`.git`, caches, worktree
+checkouts that hold a second copy of the library), and it is why the editor
+server searches `lib/std` and `lib` but not the workspace root: below a root
+lie build trees and scratch copies, each a second hit for a library name.
 
 Semantics: the import DAG is walked depth-first from the root file,
 **each module elaborated exactly once** (dedup by canonical path), in
@@ -108,9 +121,10 @@ heather check lib/std
 
 Directory checking is deliberately non-recursive because module names are
 file stems rather than hierarchical paths. Its immediate `.hthr` files are
-the roots, but descendant directories are fallback search locations for their
-import closure. The target directory and explicit `-L` paths are searched
-first; only a miss there searches descendants. This permits a public facade
+the roots, and the target directory joins the search directories, so its
+descendants are the lower tier of §3.2 for their import closure: the target
+directory and explicit `-L` paths are searched first; only a miss there
+searches below them. This permits a public facade
 such as `lib/std/parser.hthr` to keep implementation modules below it without
 making callers enumerate internal directories, while a private nested module
 cannot conflict with a public top-level module of the same name:

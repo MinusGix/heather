@@ -2,12 +2,12 @@ use crate::read_loop_fixture::checker;
 use heather_elab::function_ir_source::{generate_elaborated_loop_x86, NativeLoopPlacement};
 use heather_elab::function_ir_x86_lower::Gpr;
 
-const PROCESS: &str = include_str!("../../../lib/elf64_read_loop.hthr");
+const PROCESS: &str = include_str!("../../../lib/elf64_read_pieces.hthr");
 
 #[test]
 fn read_loop_library_checks() {
     let mut elab = checker();
-    elab.elab_module_source("elf64_read_loop", PROCESS).unwrap_or_else(|e| panic!("{}", e.render(PROCESS)));
+    elab.elab_module_source("elf64_read_pieces", PROCESS).unwrap_or_else(|e| panic!("{}", e.render(PROCESS)));
 }
 
 // Each change to the read profile's pieces is refused where it is used, not
@@ -39,7 +39,7 @@ fn slow_acceptance_read_loop_refusals() {
         let bad = PROCESS.replacen(from, to, 1);
         assert_ne!(bad, PROCESS, "{name}");
         let mut elab = library.elaborator();
-        let error = match elab.elab_module_source("elf64_read_loop", &bad) {
+        let error = match elab.elab_module_source("elf64_read_pieces", &bad) {
             Err(error) => error.render(&bad),
             Ok(_) => elab.elab_module_source("elf64_read_state", STATE).expect_err(name).render(STATE),
         };

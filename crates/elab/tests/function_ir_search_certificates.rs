@@ -6,7 +6,7 @@ const IMPORTS: &str = "import x86_64_structured_block; import function_ir; impor
 
 fn checker() -> heather_elab::Elaborator {
     let mut elab = common::base_image(common::MODULES.len());
-    let model = include_str!("../../../lib/std/arch/x86_64/structured_block.hthr");
+    let model = include_str!("../../../lib/std/arch/x86_64/x86_64_structured_block.hthr");
     elab.elab_module_source("x86_64_structured_block", model).unwrap_or_else(|e| panic!("{}", e.render(model)));
     elab
 }

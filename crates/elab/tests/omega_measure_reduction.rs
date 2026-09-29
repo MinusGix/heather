@@ -258,7 +258,7 @@ fn Short(chunks: List<List<Nat>>) → Type {
 
 #[test]
 fn a_payload_binder_spells_by_its_name() {
-    // `lib/elf64_read_loop.hthr`'s `eof_room` shape: a fact about the payload
+    // `lib/elf64_read_pieces.hthr`'s `eof_room` shape: a fact about the payload
     // field from the arm's motive, used by `omega` in the arm.
     ok(&format!(
         "{SHORT}\n\
