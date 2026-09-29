@@ -21,7 +21,7 @@ fn scratch(name: &str) -> PathBuf {
 fn build(directory: &Path, needle: &str) -> Output { build_with(directory, needle, &[]) }
 
 fn build_with(directory: &Path, needle: &str, extra: &[&str]) -> Output {
-    build_raw(directory, needle, &[&["--adds", "wc_l_append"], extra].concat())
+    build_raw(directory, needle, &[&["--folds", "line_body_folds"], extra].concat())
 }
 
 fn build_raw(directory: &Path, needle: &str, extra: &[&str]) -> Output {
@@ -151,13 +151,20 @@ fn wc_l_prints_every_line() {
     std::fs::remove_dir_all(directory).unwrap();
 }
 
-// Counting chunk by chunk needs the program's proof that its specification
-// adds over concatenation.
+// Counting chunk by chunk needs the program's proof that its step folds
+// (docs/native-wc-design.md §3): without it the build is refused, and with
+// another theorem in its place the certificate is refused where the fact is
+// used, not by a missing name.
 #[test]
-fn read_loop_needs_its_additivity() {
-    let directory = scratch("read-loop-no-adds");
+fn read_loop_needs_its_folds() {
+    let directory = scratch("read-loop-no-folds");
     let output = build_raw(&directory, "10", &[]);
-    assert!(!output.status.success() && String::from_utf8_lossy(&output.stderr).contains("--adds"));
+    assert!(!output.status.success() && String::from_utf8_lossy(&output.stderr).contains("--folds"));
+    assert!(!directory.join("wc_l").exists());
+    let output = build_raw(&directory, "10", &["--folds", "line_body_advances"]);
+    assert!(!output.status.success(), "a theorem that is not LoopFolds was accepted as --folds");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("unbound") && !stderr.contains("ambiguous"), "{stderr}");
     assert!(!directory.join("wc_l").exists());
     std::fs::remove_dir_all(directory).unwrap();
 }

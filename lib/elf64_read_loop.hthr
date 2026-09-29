@@ -6,7 +6,9 @@
 // is EINTR and otherwise exits with status 1.
 // Nothing here is about any one program: the loop, its source function, and
 // the specification its count meets are parameters, and a program supplies
-// its loop certificate and two facts about its source. The profile fixes the
+// its loop certificate and three facts about its step: it folds, it grows by
+// at most one per byte, and folded over the input from zero it is the
+// specification (docs/native-wc-design.md §3). The profile fixes the
 // loop's head registers (base RDI, length RBP, needle RCX, cursor RSI, budget
 // R12, carry R11); between reads the total lives in R13, since SYSCALL
 // clobbers R11.
@@ -182,14 +184,28 @@ fn ReadLoopCertificate(p: LoopPlacement, region: ReadonlyLoop<Nat>, loop_code: A
         LoopObserved<IoMemory, Nat>(p, loop_nat_rep, after, source(buffer, needle, budget, cursor, carry)))
 }
 
-// What a counting program proves: from any count, the loop over a buffer
-// holding `bytes` adds `spec(bytes)`; and the specification adds over
-// concatenation, so counting chunk by chunk counts the whole input.
-fn ReadEofComputes(source: ReadonlyBytes → BitVec(8) → Nat → Nat → Nat → LoopOutcome<Nat>, needle: BitVec(8),
-    spec: List<BitVec(8)> → Nat) → Type {
-    (carry: Nat) → (bytes: List<BitVec(8)>) → (buffer: ReadonlyBytes) → buffer.length = bytes.len() →
-    ((i: Nat) → (byte: BitVec(8)) → bytes.nth(i) = Some(byte) → buffer.read(buffer.base + i) = Some(byte)) →
-    source(buffer, needle, bytes.len(), 0, carry) = End(bytes.len(), 0, carry + spec(bytes))
+// What a program proves (docs/native-wc-design.md §3): its specification is
+// its step folded over the input from zero. With a step that folds
+// (LoopFolds) and grows by at most one per byte (LoopAdvancesByAtMostOne),
+// the chunks compose by `step_fold_append`, whatever the reads return.
+fn ReadEofComputes(region: ReadonlyLoop<Nat>, needle: BitVec(8), spec: List<BitVec(8)> → Nat) → Type {
+    (bytes: List<BitVec(8)>) → spec(bytes) = step_fold(region, needle, bytes, 0)
+}
+
+// The loop over one chunk, from the start of a buffer holding it: the fold
+// from the count so far.
+theorem eof_chunk_folds(region: ReadonlyLoop<Nat>, source: ReadonlyBytes → BitVec(8) → Nat → Nat → Nat → LoopOutcome<Nat>,
+    needle: BitVec(8),
+    agreement: (buffer: ReadonlyBytes) → (needle: BitVec(8)) → (budget, cursor, carry: Nat) →
+        loop_run(budget, region, buffer, needle, cursor, carry) = source(buffer, needle, budget, cursor, carry),
+    folds: LoopFolds(region), carry: Nat, bytes: List<BitVec(8)>, buffer: ReadonlyBytes, length: buffer.length = bytes.len(),
+    reads: (i: Nat) → (byte: BitVec(8)) → bytes.nth(i) = Some(byte) → buffer.read(buffer.base + i) = Some(byte)):
+    source(buffer, needle, bytes.len(), 0, carry) = End(bytes.len(), 0, step_fold(region, needle, bytes, carry)) {
+    let from_start = Nat::add_left_zero(bytes.len());
+    let ran = loop_run_folds(region, folds, needle, bytes, buffer, 0, carry, trans(length, sym(from_start)),
+        λ i byte present => j(sym(Nat::add_left_zero(i)), λ at _ => buffer.read(buffer.base + at) = Some(byte), reads(i, byte, present)));
+    trans(sym(agreement(buffer, needle, bytes.len(), 0, carry)),
+        trans(ran, cong_fn<Nat, LoopOutcome<Nat>>(λ at => End(at, 0, step_fold(region, needle, bytes, carry)), from_start)))
 }
 
 fn eof_after_setup(needle: BitVec(8), state: MachineState<IoMemory>) → MachineState<IoMemory> {
@@ -232,11 +248,11 @@ fn ReadLoopCounted(returned: MachineState<IoMemory>, stored: IoMemory, count: Na
 // the count in R13, run the loop. R11 then holds the count plus the chunk's.
 theorem eof_counts(file: List<BitVec(8)>, page: Nat → BitVec(8), p: LoopPlacement, at: ReadLoopPlacement(p),
     region: ReadonlyLoop<Nat>, loop_code: AccessCode, loop_bytes: List<BitVec(8)>,
-    source: ReadonlyBytes → BitVec(8) → Nat → Nat → Nat → LoopOutcome<Nat>, needle: BitVec(8), spec: List<BitVec(8)> → Nat,
+    source: ReadonlyBytes → BitVec(8) → Nat → Nat → Nat → LoopOutcome<Nat>, needle: BitVec(8),
     agreement: (buffer: ReadonlyBytes) → (needle: BitVec(8)) → (budget, cursor, carry: Nat) →
         loop_run(budget, region, buffer, needle, cursor, carry) = source(buffer, needle, budget, cursor, carry),
     native: ReadLoopCertificate(p, region, loop_code, loop_bytes, source),
-    computes: ReadEofComputes(source, needle, spec),
+    folds: LoopFolds(region),
     bytes: List<BitVec(8)>, fits: bytes.len() <= read_capacity(), carry: Nat, room: carry + bytes.len() < Nat::pow(2, 64),
     ready_in: MachineState<IoMemory>, at_setup: Nat,
     memory_is: ready_in.memory = io_store_offset(IoMemory(file, page), 0, bytes),
@@ -247,7 +263,7 @@ theorem eof_counts(file: List<BitVec(8)>, page: Nat → BitVec(8), p: LoopPlacem
         canonical_block_bytes(eof_setup_block(needle)), eof_rip(at_setup)),
     loop_at: CodeResident(io_fetch_access(), io_store_offset(IoMemory(file, page), 0, bytes),
         loop_bytes, eof_rip(at_setup + eof_setup_len(needle)))):
-    ReadLoopCounted(ready_in, io_store_offset(IoMemory(file, page), 0, bytes), carry + spec(bytes),
+    ReadLoopCounted(ready_in, io_store_offset(IoMemory(file, page), 0, bytes), step_fold(region, needle, bytes, carry),
         eof_rip((at_setup + eof_setup_len(needle)) + loop_bytes.len())) {
     let fetch = io_fetch_access();
     let data = io_data_access();
@@ -270,7 +286,7 @@ theorem eof_counts(file: List<BitVec(8)>, page: Nat → BitVec(8), p: LoopPlacem
         j(sym(memory_is), λ memory _ => io_read(memory, bitvec_nat::word_of_nat(64, io_page_base() + i)) = Some(byte),
             io_read_stored(IoMemory(file, page), bytes, i, byte,
                 Succ(i).le_trans(n, 4096, nth_some_below(bytes, i, byte, present), fits), present));
-    let computed = computes(carry, bytes, buffer, refl, reads);
+    let computed = eof_chunk_folds(region, source, needle, agreement, folds, carry, bytes, buffer, refl, reads);
     let readable: LoopReadable(n, region, buffer, needle, 0, carry) =
         j(sym(trans(agreement(buffer, needle, n, 0, carry), computed)), λ outcome _ => LoopFinishedNormally(outcome), trivial);
     let within: (Succ(io_page_base() + n) <= io_page_base() + 4097) = omega;
@@ -289,9 +305,9 @@ theorem eof_counts(file: List<BitVec(8)>, page: Nat → BitVec(8), p: LoopPlacem
     let done_rip: (done.rip = eof_rip(at_exit)) =
         trans(looped.right, rip_advance(entry, ready.rip, at_loop, loop_bytes.len(), ready_rip));
     let observed = j(computed, λ outcome _ => LoopObserved<IoMemory, Nat>(p, loop_nat_rep, done, outcome), ran.proof.right);
-    let carried: (read_gpr(R11, done.gprs).toNat() = carry + spec(bytes)) =
-        j(at.carry, λ r _ => read_gpr(r, done.gprs).toNat() = carry + spec(bytes), observed.right.right.right);
-    let word: (read_gpr(R11, done.gprs) = bitvec_nat::word_of_nat(64, carry + spec(bytes))) =
+    let carried: (read_gpr(R11, done.gprs).toNat() = step_fold(region, needle, bytes, carry)) =
+        j(at.carry, λ r _ => read_gpr(r, done.gprs).toNat() = step_fold(region, needle, bytes, carry), observed.right.right.right);
+    let word: (read_gpr(R11, done.gprs) = bitvec_nat::word_of_nat(64, step_fold(region, needle, bytes, carry))) =
         trans(sym(bitvec_nat::word_of_nat_toNat(64, read_gpr(R11, done.gprs))),
             cong_fn<Nat, BitVec(64)>(λ count => bitvec_nat::word_of_nat(64, count), carried));
     Exists(done, ⟨fetched_steps_trans(fetch, data, ready_in, ready, done, setup.left, looped.left), ⟨done_memory, ⟨done_rip, word⟩⟩⟩)
@@ -401,11 +417,11 @@ theorem eof_chunk_close(returned, going: MachineState<IoMemory>, stored: IoMemor
 // One chunk, from the read's return: back at the read with the chunk counted.
 theorem eof_chunk(file: List<BitVec(8)>, page: Nat → BitVec(8), p: LoopPlacement, at: ReadLoopPlacement(p),
     region: ReadonlyLoop<Nat>, loop_code: AccessCode, loop_bytes: List<BitVec(8)>,
-    source: ReadonlyBytes → BitVec(8) → Nat → Nat → Nat → LoopOutcome<Nat>, needle: BitVec(8), spec: List<BitVec(8)> → Nat,
+    source: ReadonlyBytes → BitVec(8) → Nat → Nat → Nat → LoopOutcome<Nat>, needle: BitVec(8),
     agreement: (buffer: ReadonlyBytes) → (needle: BitVec(8)) → (budget, cursor, carry: Nat) →
         loop_run(budget, region, buffer, needle, cursor, carry) = source(buffer, needle, budget, cursor, carry),
     native: ReadLoopCertificate(p, region, loop_code, loop_bytes, source),
-    computes: ReadEofComputes(source, needle, spec),
+    folds: LoopFolds(region),
     ed, sd, bd: BitVec(32), at_read, at_test: Nat,
     back_target: near_branch_target(eof_rip(((((((at_test + eof_test_len()) + 6) + 6) + eof_setup_len(needle)) + loop_bytes.len()) + eof_save_len())), 5, bd)
         = eof_rip(at_read),
@@ -429,7 +445,7 @@ theorem eof_chunk(file: List<BitVec(8)>, page: Nat → BitVec(8), p: LoopPlaceme
         canonical_block_bytes(eof_save_block()), eof_rip(((((at_test + eof_test_len()) + 6) + 6) + eof_setup_len(needle)) + loop_bytes.len())),
     jmp_at: CodeResident(io_fetch_access(), io_store_offset(IoMemory(file, page), 0, bytes),
         near_control_bytes(JumpNear(bd)), eof_rip((((((at_test + eof_test_len()) + 6) + 6) + eof_setup_len(needle)) + loop_bytes.len()) + eof_save_len()))):
-    EofBack(returned, io_store_offset(IoMemory(file, page), 0, bytes), carry + spec(bytes), eof_rip(at_read)) {
+    EofBack(returned, io_store_offset(IoMemory(file, page), 0, bytes), step_fold(region, needle, bytes, carry), eof_rip(at_read)) {
     let fetch = io_fetch_access();
     let data = io_data_access();
     let entry: BitVec(64) = BitVec::ofNat(0x4000e8);
@@ -438,8 +454,8 @@ theorem eof_chunk(file: List<BitVec(8)>, page: Nat → BitVec(8), p: LoopPlaceme
     let at_save = (at_setup + eof_setup_len(needle)) + loop_bytes.len();
     let entered = eof_enter(file, page, ed, sd, at_test, bytes, some, fits, returned, memory_is, rip_is, length_word, test_at, jz_at, js_at);
     let going = execute_near_control(JumpSignNear(sd), execute_near_control(JumpZeroNear(ed), execute_block_normal(eof_test_block(), returned)));
-    eof_chunk_close(returned, going, stored, carry + spec(bytes), bd, at_save, at_read, back_target, entered.left,
-        eof_counts(file, page, p, at, region, loop_code, loop_bytes, source, needle, spec, agreement, native, computes,
+    eof_chunk_close(returned, going, stored, step_fold(region, needle, bytes, carry), bd, at_save, at_read, back_target, entered.left,
+        eof_counts(file, page, p, at, region, loop_code, loop_bytes, source, needle, agreement, native, folds,
             bytes, fits, carry, room, going, at_setup, entered.right.left, entered.right.right,
             length_word, carry_word, setup_at, loop_at),
         save_at, jmp_at)
@@ -498,7 +514,6 @@ fn EofTail(file: List<BitVec(8)>, needle: BitVec(8), loop_bytes: List<BitVec(8)>
 }
 
 // The count's arithmetic.
-theorem eof_later(carry, first, rest, total: Nat, sum: carry + (first + rest) = total): carry + first + rest = total { omega }
 
 // ---------------------------------------------------------------------------
 // A failed read.
@@ -627,14 +642,23 @@ theorem eof_fail_exit(stored: IoMemory, needle: BitVec(8), loop_bytes: List<BitV
 // ---------------------------------------------------------------------------
 // The loop.
 
-// From the read with the count so far in R13, the rest of the run.
-fn EofFrom(file: List<BitVec(8)>, spec: List<BitVec(8)> → Nat, total: Nat, ending: ReadEnding, tail_events: List<LinuxEvent>,
-    steps: List<ReadStep>) → Type {
+// From the read with the count so far in R13, the rest of the run: the step
+// folded over the rest of the input from that count reaches `total`, and the
+// count plus the input still to come stays within `limit`.
+fn EofFrom(file: List<BitVec(8)>, region: ReadonlyLoop<Nat>, needle: BitVec(8), total, limit: Nat, ending: ReadEnding,
+    tail_events: List<LinuxEvent>, steps: List<ReadStep>) → Type {
     EofChunks(steps) → (page: Nat → BitVec(8)) → (carry: Nat) → (state: MachineState<IoMemory>) →
     state.rip = eof_rip(eof_at_read()) → state.memory = IoMemory(file, page) →
-    read_gpr(R13, state.gprs) = bitvec_nat::word_of_nat(64, carry) → carry + spec(eof_input(steps)) = total →
+    read_gpr(R13, state.gprs) = bitvec_nat::word_of_nat(64, carry) → step_fold(region, needle, eof_input(steps), carry) = total →
+    carry + eof_input(steps).len() <= limit →
     LinuxRuns(io_linux(), eof_events(steps, ending, tail_events), state)
 }
+
+// A chunk's count fits, and so does the next state with the rest to come.
+theorem eof_room_here(carry, c, r, whole, limit: Nat, span: whole = c + r, bounded: carry + whole <= limit,
+    room: limit + 4096 < Nat::pow(2, 64)): carry + c < Nat::pow(2, 64) { omega }
+theorem eof_bound_next(carry, next, c, r, whole, limit: Nat, span: whole = c + r, bounded: carry + whole <= limit,
+    grown: next <= carry + c): next + r <= limit { omega }
 
 // The read, from the read label: the entry block runs, and the SYSCALL is
 // fetched where the next step starts.
@@ -667,28 +691,26 @@ theorem eof_ask(file: List<BitVec(8)>, needle: BitVec(8), loop_bytes: List<BitVe
 // EINTR retried, and then the empty read runs the tail or the failure exits 1.
 theorem eof_from(file: List<BitVec(8)>, p: LoopPlacement, at: ReadLoopPlacement(p),
     region: ReadonlyLoop<Nat>, loop_code: AccessCode, loop_bytes: List<BitVec(8)>,
-    source: ReadonlyBytes → BitVec(8) → Nat → Nat → Nat → LoopOutcome<Nat>, needle: BitVec(8), spec: List<BitVec(8)> → Nat,
+    source: ReadonlyBytes → BitVec(8) → Nat → Nat → Nat → LoopOutcome<Nat>, needle: BitVec(8),
     agreement: (buffer: ReadonlyBytes) → (needle: BitVec(8)) → (budget, cursor, carry: Nat) →
         loop_run(budget, region, buffer, needle, cursor, carry) = source(buffer, needle, budget, cursor, carry),
     native: ReadLoopCertificate(p, region, loop_code, loop_bytes, source),
-    computes: ReadEofComputes(source, needle, spec),
-    adds: (a, b: List<BitVec(8)>) → spec(a ++ b) = spec(a) + spec(b),
+    folds: LoopFolds(region), advance: LoopAdvancesByAtMostOne(region),
     jumps: EofJumps,
     exit_target: near_branch_target(eof_rip(eof_at_jz()), 6, jumps.ed) = eof_rip(eof_at_done(needle, loop_bytes)),
     js_target: near_branch_target(eof_rip(eof_at_js()), 6, jumps.sd) = eof_rip(eof_at_failed(needle, loop_bytes)),
     back_target: near_branch_target(eof_rip(eof_at_jmp(needle, loop_bytes)), 5, jumps.bd) = eof_rip(eof_at_read()),
     retry_target: near_branch_target(eof_rip(eof_at_retry(needle, loop_bytes)), 6, jumps.rd) = eof_rip(eof_at_read()),
     tail_code: List<BitVec(8)>, pieces: (page: Nat → BitVec(8)) → EofPieces(IoMemory(file, page), needle, loop_bytes, jumps, tail_code),
-    total: Nat, room: total + 4096 < Nat::pow(2, 64), tail_events: List<LinuxEvent>,
+    total, limit: Nat, room: limit + 4096 < Nat::pow(2, 64), tail_events: List<LinuxEvent>,
     tail: EofTail(file, needle, loop_bytes, total, tail_events), ending: ReadEnding, ending_ok: EofEnding(ending),
     chunks: List<ReadStep>):
-    EofFrom(file, spec, total, ending, tail_events, chunks) {
+    EofFrom(file, region, needle, total, limit, ending, tail_events, chunks) {
     let fetch = io_fetch_access();
     let data = io_data_access();
     let entry: BitVec(64) = BitVec::ofNat(0x4000e8);
-    let spec_nil: (spec(Nil) = 0) = { let twice = adds(Nil, Nil); omega };
-    match chunks as λ cs => EofFrom(file, spec, total, ending, tail_events, cs) {
-        Nil => λ ok page carry state at_read memory_is carry_word counted =>
+    match chunks as λ cs => EofFrom(file, region, needle, total, limit, ending, tail_events, cs) {
+        Nil => λ ok page carry state at_read memory_is carry_word counted bounded =>
             (match ending as λ en => EofEnding(en) → LinuxRuns(io_linux(), eof_events(Nil, en, tail_events), state) {
                 AtEnd => λ _ => {
             let here = pieces(page);
@@ -728,7 +750,7 @@ theorem eof_from(file: List<BitVec(8)>, p: LoopPlacement, at: ReadLoopPlacement(
                     let ended_rip: (ended.rip = eof_rip(eof_at_done(needle, loop_bytes))) =
                         trans(near_taken_rip(jumps.ed, tested, set),
                             trans(cong_fn<BitVec(64), BitVec(64)>(λ address => near_branch_target(address, 6, jumps.ed), tested_rip), exit_target));
-                    let finished: (carry = total) = { omega };
+                    let finished: (carry = total) = counted;
                     let kept: (read_gpr(R13, ended.gprs) = bitvec_nat::word_of_nat(64, total)) =
                         trans(carry_word, cong_fn<Nat, BitVec(64)>(λ n => bitvec_nat::word_of_nat(64, n), finished));
                     linux_runs_after_steps(io_linux(), tail_events, returned, ended,
@@ -757,18 +779,21 @@ theorem eof_from(file: List<BitVec(8)>, p: LoopPlacement, at: ReadLoopPlacement(
                         })
                 },
             })(ending_ok),
-        Cons(step, rest) => (match step as λ st => EofFrom(file, spec, total, ending, tail_events, Cons(st, rest)) {
-            Chunk(chunk) => λ ok page carry state at_read memory_is carry_word counted => {
+        Cons(step, rest) => (match step as λ st => EofFrom(file, region, needle, total, limit, ending, tail_events, Cons(st, rest)) {
+            Chunk(chunk) => λ ok page carry state at_read memory_is carry_word counted bounded => {
             let here = pieces(page);
             let some: (0 < chunk.len()) = ok.left;
             let fits: (chunk.len() <= read_capacity()) = ok.right.left;
             let capped: (chunk.len() <= 4096) = fits;
-            let parts = adds(chunk, eof_input(rest));
-            let whole: (carry + spec(chunk ++ eof_input(rest)) = total) = counted;
-            let sum: (carry + (spec(chunk) + spec(eof_input(rest))) = total) =
-                trans(sym(cong_fn<Nat, Nat>(λ v => carry + v, parts)), whole);
+            let whole: (step_fold(region, needle, chunk ++ eof_input(rest), carry) = total) = counted;
+            let later: (step_fold(region, needle, eof_input(rest), step_fold(region, needle, chunk, carry)) = total) =
+                trans(sym(step_fold_append(region, needle, chunk, eof_input(rest), carry)), whole);
+            let span = List::len_append(chunk, eof_input(rest));
             let room_here: (carry + chunk.len() < Nat::pow(2, 64)) =
-                { omega };
+                eof_room_here(carry, chunk.len(), eof_input(rest).len(), (chunk ++ eof_input(rest)).len(), limit, span, bounded, room);
+            let bounded_next: (step_fold(region, needle, chunk, carry) + eof_input(rest).len() <= limit) =
+                eof_bound_next(carry, step_fold(region, needle, chunk, carry), chunk.len(), eof_input(rest).len(),
+                    (chunk ++ eof_input(rest)).len(), limit, span, bounded, step_fold_advances(region, advance, needle, chunk, carry));
             let entered = block_fetched(fetch, data, read_entry_block(), state, trivial,
                 resident_state(fetch, canonical_block_bytes(read_entry_block()), IoMemory(file, page), eof_rip(eof_at_read()),
                     state, memory_is, at_read, here.entry_at));
@@ -790,20 +815,18 @@ theorem eof_from(file: List<BitVec(8)>, p: LoopPlacement, at: ReadLoopPlacement(
                         cong_fn<IoMemory, IoMemory>(λ m => io_store(m, BitVec::ofNat(0x401000), chunk), asked_memory);
                     let returned_rip: (returned.rip = eof_rip(eof_at_test())) = rip_advance(entry, asked.rip, eof_at_call(), 2, asked_rip);
                     let there = pieces(stored.page);
-                    have back = eof_chunk(file, page, p, at, region, loop_code, loop_bytes, source, needle, spec, agreement, native, computes,
+                    have back = eof_chunk(file, page, p, at, region, loop_code, loop_bytes, source, needle, agreement, native, folds,
                         jumps.ed, jumps.sd, jumps.bd, eof_at_read(), eof_at_test(), back_target, chunk, some, fits, carry, room_here, returned,
                         returned_memory, returned_rip, refl, carry_word,
                         there.test_at, there.jz_at, there.js_at, there.setup_at, there.loop_at, there.save_at, there.jmp_at);
-                    let later: (carry + spec(chunk) + spec(eof_input(rest)) = total) =
-                        eof_later(carry, spec(chunk), spec(eof_input(rest)), total, sum);
                     linux_runs_after_steps(io_linux(), eof_events(rest, ending, tail_events), returned, back.witness, back.proof.left,
-                        eof_from(file, p, at, region, loop_code, loop_bytes, source, needle, spec, agreement, native, computes, adds,
-                            jumps, exit_target, js_target, back_target, retry_target, tail_code, pieces, total, room, tail_events, tail,
-                            ending, ending_ok, rest)(ok.right.right, stored.page, carry + spec(chunk), back.witness, back.proof.right.right.left,
-                            back.proof.right.left, back.proof.right.right.right, later))
+                        eof_from(file, p, at, region, loop_code, loop_bytes, source, needle, agreement, native, folds, advance,
+                            jumps, exit_target, js_target, back_target, retry_target, tail_code, pieces, total, limit, room, tail_events, tail,
+                            ending, ending_ok, rest)(ok.right.right, stored.page, step_fold(region, needle, chunk, carry), back.witness,
+                            back.proof.right.right.left, back.proof.right.left, back.proof.right.right.right, later, bounded_next))
                 })
         },
-            Interrupted => λ ok page carry state at_read memory_is carry_word counted => {
+            Interrupted => λ ok page carry state at_read memory_is carry_word counted bounded => {
                 let asked = execute_block_normal(read_entry_block(), state);
                 let read = eof_ask(file, needle, loop_bytes, jumps, tail_code, page, pieces(page), state, at_read, memory_is);
                 let writable: IoWritable(asked.memory, read_gpr(Rsi, asked.gprs), read_gpr(Rdx, asked.gprs).toNat()) =
@@ -825,10 +848,10 @@ theorem eof_from(file: List<BitVec(8)>, p: LoopPlacement, at: ReadLoopPlacement(
                         let kept: (read_gpr(R13, back.witness.gprs) = bitvec_nat::word_of_nat(64, carry)) =
                             trans(back.proof.right.right.right, carry_word);
                         linux_runs_after_steps(io_linux(), eof_events(rest, ending, tail_events), returned, back.witness, back.proof.left,
-                            eof_from(file, p, at, region, loop_code, loop_bytes, source, needle, spec, agreement, native, computes, adds,
-                                jumps, exit_target, js_target, back_target, retry_target, tail_code, pieces, total, room, tail_events, tail,
+                            eof_from(file, p, at, region, loop_code, loop_bytes, source, needle, agreement, native, folds, advance,
+                                jumps, exit_target, js_target, back_target, retry_target, tail_code, pieces, total, limit, room, tail_events, tail,
                                 ending, ending_ok, rest)(ok, stored.page, carry, back.witness, back.proof.right.right.left,
-                                back.proof.right.left, kept, counted))
+                                back.proof.right.left, kept, counted, bounded))
                     })
             },
         }),
@@ -941,8 +964,7 @@ theorem eof_start(file: List<BitVec(8)>, p: LoopPlacement, at: ReadLoopPlacement
     agreement: (buffer: ReadonlyBytes) → (needle: BitVec(8)) → (budget, cursor, carry: Nat) →
         loop_run(budget, region, buffer, needle, cursor, carry) = source(buffer, needle, budget, cursor, carry),
     native: ReadLoopCertificate(p, region, loop_code, loop_bytes, source),
-    computes: ReadEofComputes(source, needle, spec),
-    adds: (a, b: List<BitVec(8)>) → spec(a ++ b) = spec(a) + spec(b),
+    computes: ReadEofComputes(region, needle, spec), folds: LoopFolds(region), advance: LoopAdvancesByAtMostOne(region),
     jumps: EofJumps,
     exit_target: near_branch_target(eof_rip(eof_at_jz()), 6, jumps.ed) = eof_rip(eof_at_done(needle, loop_bytes)),
     js_target: near_branch_target(eof_rip(eof_at_js()), 6, jumps.sd) = eof_rip(eof_at_failed(needle, loop_bytes)),
@@ -950,7 +972,7 @@ theorem eof_start(file: List<BitVec(8)>, p: LoopPlacement, at: ReadLoopPlacement
     retry_target: near_branch_target(eof_rip(eof_at_retry(needle, loop_bytes)), 6, jumps.rd) = eof_rip(eof_at_read()),
     tail_code: List<BitVec(8)>, pieces: (page: Nat → BitVec(8)) → EofPieces(IoMemory(file, page), needle, loop_bytes, jumps, tail_code),
     chunks: List<ReadStep>, ok: EofChunks(chunks), ending: ReadEnding, ending_ok: EofEnding(ending),
-    room: spec(eof_input(chunks)) + 4096 < Nat::pow(2, 64),
+    room: eof_input(chunks).len() + 4096 < Nat::pow(2, 64),
     tail_events: List<LinuxEvent>, tail: EofTail(file, needle, loop_bytes, spec(eof_input(chunks)), tail_events),
     page: Nat → BitVec(8), gprs: Gprs, flags: Flags):
     LinuxRuns(io_linux(), eof_events(chunks, ending, tail_events), io_initial(file, page, gprs, flags)) {
@@ -960,10 +982,11 @@ theorem eof_start(file: List<BitVec(8)>, p: LoopPlacement, at: ReadLoopPlacement
     let started = block_fetched(fetch, data, eof_init_block(), start, trivial, pieces(page).init_at);
     let ready = execute_block_normal(eof_init_block(), start);
     linux_runs_after_steps(io_linux(), eof_events(chunks, ending, tail_events), start, ready, started.left,
-        eof_from(file, p, at, region, loop_code, loop_bytes, source, needle, spec, agreement, native, computes, adds,
-            jumps, exit_target, js_target, back_target, retry_target, tail_code, pieces, spec(eof_input(chunks)), room, tail_events, tail,
-            ending, ending_ok, chunks)(
-            ok, page, 0, ready, started.right, refl, refl, Nat::add_left_zero(spec(eof_input(chunks)))))
+        eof_from(file, p, at, region, loop_code, loop_bytes, source, needle, agreement, native, folds, advance,
+            jumps, exit_target, js_target, back_target, retry_target, tail_code, pieces, spec(eof_input(chunks)), eof_input(chunks).len(),
+            room, tail_events, tail, ending, ending_ok, chunks)(
+            ok, page, 0, ready, started.right, refl, refl, sym(computes(eof_input(chunks))),
+            j(sym(Nat::add_left_zero(eof_input(chunks).len())), λ n _ => n <= eof_input(chunks).len(), eof_input(chunks).len().le_refl())))
 }
 
 // The process claim: for every way the reads may split the input into
@@ -977,8 +1000,7 @@ theorem read_loop_runs(file: List<BitVec(8)>, p: LoopPlacement, at: ReadLoopPlac
     agreement: (buffer: ReadonlyBytes) → (needle: BitVec(8)) → (budget, cursor, carry: Nat) →
         loop_run(budget, region, buffer, needle, cursor, carry) = source(buffer, needle, budget, cursor, carry),
     native: ReadLoopCertificate(p, region, loop_code, loop_bytes, source),
-    computes: ReadEofComputes(source, needle, spec),
-    adds: (a, b: List<BitVec(8)>) → spec(a ++ b) = spec(a) + spec(b),
+    computes: ReadEofComputes(region, needle, spec), folds: LoopFolds(region), advance: LoopAdvancesByAtMostOne(region),
     jumps: EofJumps,
     exit_reads: jumps.ed.sign_extend(32).toNat() = eof_exit_skip(needle, loop_bytes),
     fail_reads: jumps.sd.sign_extend(32).toNat() = eof_fail_skip(needle, loop_bytes),
@@ -987,12 +1009,12 @@ theorem read_loop_runs(file: List<BitVec(8)>, p: LoopPlacement, at: ReadLoopPlac
     resident: (page: Nat → BitVec(8)) → CodeResident(io_fetch_access(), IoMemory(file, page), read_loop_code(needle, loop_bytes, jumps),
         BitVec::ofNat(0x4000e8)),
     chunks: List<ReadStep>, ok: EofChunks(chunks), ending: ReadEnding, ending_ok: EofEnding(ending),
-    room: spec(eof_input(chunks)) + 4096 < Nat::pow(2, 64),
+    room: eof_input(chunks).len() + 4096 < Nat::pow(2, 64),
     page: Nat → BitVec(8), gprs: Gprs, flags: Flags):
     LinuxRuns(io_linux(), eof_events(chunks, ending, [ExitEvent(bitvec_nat::word_of_nat(64, spec(eof_input(chunks))))]),
         io_initial(file, page, gprs, flags)) {
     let pieces = λ (page: Nat → BitVec(8)) => eof_pieces(IoMemory(file, page), needle, loop_bytes, jumps, eof_exit_code(), resident(page));
-    eof_start(file, p, at, region, loop_code, loop_bytes, source, needle, spec, agreement, native, computes, adds, jumps,
+    eof_start(file, p, at, region, loop_code, loop_bytes, source, needle, spec, agreement, native, computes, folds, advance, jumps,
         eof_exit_target(needle, loop_bytes, jumps.ed, exit_reads), eof_js_target(needle, loop_bytes, jumps.sd, fail_reads),
         eof_back_target(needle, loop_bytes, jumps.bd, back_closes), eof_retry_target(needle, loop_bytes, jumps.rd, retry_closes),
         eof_exit_code(), pieces, chunks, ok, ending, ending_ok, room, [ExitEvent(bitvec_nat::word_of_nat(64, spec(eof_input(chunks))))],

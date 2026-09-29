@@ -62,7 +62,10 @@ placement. The loop certificate and its placement are unchanged.
 
 ## 4. The contract a program proves
 
-Additive (decision 2026-09-27):
+**Superseded 2026-09-28** by the fold contract (`docs/native-wc-design.md`
+§3): a program proves its step folds and its specification is the fold from
+zero; `--adds` and additivity are gone, and the room premise is on the
+input's length. The additive version, as it landed:
 
 - `ReadEofComputes(source, needle, spec)`: from **any** count `c`, the loop
   over a buffer holding `bytes` ends at `End(|bytes|, 0, c + spec(bytes))`.

@@ -54,7 +54,7 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     let mut callable_caller = false;
     let mut read_loop = false;
     let mut print = false;
-    let (mut needle, mut advance, mut spec, mut computes, mut adds) = (None, None, None, None, None);
+    let (mut needle, mut advance, mut spec, mut computes, mut folds) = (None, None, None, None, None);
     let mut timings = None;
     let mut kernel_workers = None;
     let mut search = vec![PathBuf::from("lib/std"), PathBuf::from("lib")];
@@ -64,13 +64,13 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
             "--callable-caller" if executable => { callable_caller = true; }
             "--read-loop" if executable => { read_loop = true; }
             "--print" if executable => { print = true; }
-            "--needle" | "--advance" | "--spec" | "--computes" | "--adds" if executable => {
+            "--needle" | "--advance" | "--spec" | "--computes" | "--folds" if executable => {
                 let value = args.next().ok_or_else(|| format!("{arg} needs a value"))?.clone();
                 match arg.as_str() {
                     "--needle" => needle = Some(u8::try_from(elf::parse_argument(&value)?).map_err(|_| "--needle must be a byte".to_string())?),
                     "--advance" => advance = Some(value),
                     "--spec" => spec = Some(value),
-                    "--adds" => adds = Some(value),
+                    "--folds" => folds = Some(value),
                     _ => computes = Some(value),
                 }
             }
@@ -105,17 +105,17 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     }
     if read_loop {
         if !inputs.is_empty() || callee.is_some() { return Err("--read-loop takes its input from stdin: no --arg or --callee".into()); }
-        if needle.is_none() || advance.is_none() || spec.is_none() || computes.is_none() || adds.is_none() {
-            return Err("--read-loop needs --needle <byte>, --advance <theorem>, --spec <function>, --computes <theorem> and --adds <theorem>".into());
+        if needle.is_none() || advance.is_none() || spec.is_none() || computes.is_none() || folds.is_none() {
+            return Err("--read-loop needs --needle <byte>, --advance <theorem>, --spec <function>, --computes <theorem> and --folds <theorem>".into());
         }
-    } else if print || needle.is_some() || advance.is_some() || spec.is_some() || computes.is_some() || adds.is_some() {
-        return Err("--needle, --advance, --spec, --computes, --adds and --print belong to --read-loop".into());
+    } else if print || needle.is_some() || advance.is_some() || spec.is_some() || computes.is_some() || folds.is_some() {
+        return Err("--needle, --advance, --spec, --computes, --folds and --print belong to --read-loop".into());
     } else if executable && inputs.len() != 2 {
         return Err("build-x86 needs exactly two --arg values for the source function".into());
     }
     if positional.len() != 2 || output.is_none() {
         if executable {
-            return Err("usage: heather build-x86 <file.hthr> <function> (--arg <u64> --arg <u64> [--callee <function> [--callable-caller]] | --read-loop --needle <byte> --advance <theorem> --spec <function> --computes <theorem> --adds <theorem> [--print]) -o <executable> [-L <dir>]... [--cache-dir <dir>] [--timings <file.tsv>] [--kernel-workers <n>]".into());
+            return Err("usage: heather build-x86 <file.hthr> <function> (--arg <u64> --arg <u64> [--callee <function> [--callable-caller]] | --read-loop --needle <byte> --advance <theorem> --spec <function> --computes <theorem> --folds <theorem> [--print]) -o <executable> [-L <dir>]... [--cache-dir <dir>] [--timings <file.tsv>] [--kernel-workers <n>]".into());
         }
         return Err("usage: heather compile-x86 <file.hthr> <function> -o <output.s> [-L <dir>]... [--cache-dir <dir>] [--timings <file.tsv>] [--kernel-workers <n>]".into());
     }
@@ -262,7 +262,7 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     let mut probes = Some(Vec::new());
     let (image, body_bytes) = if read_loop {
         let program = read_loop::Program { root: &root_name, source: symbol, advance: advance.as_deref().unwrap(),
-            needle: needle.unwrap(), spec: spec.as_deref().unwrap(), computes: computes.as_deref().unwrap(), adds: adds.as_deref().unwrap() };
+            needle: needle.unwrap(), spec: spec.as_deref().unwrap(), computes: computes.as_deref().unwrap(), folds: folds.as_deref().unwrap() };
         let context = format!("{prefix}_context");
         check_module(&mut elab, &mut session, &loader::Module {
             name: context.clone(), path: PathBuf::from(format!("{context}.hthr")), src: read_loop::context(&program),

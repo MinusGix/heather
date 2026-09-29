@@ -54,8 +54,8 @@ pub(super) fn placement() -> NativeLoopPlacement {
 
 /// What a program names: its loop's source function and step-advance theorem,
 /// the byte the loop is given, its specification, its `ReadEofComputes` fact
-/// and the specification's additivity. Names are relative to the program's
-/// module.
+/// (the specification is the step folded from zero) and its step's
+/// `LoopFolds` fact. Names are relative to the program's module.
 pub(super) struct Program<'a> {
     pub root: &'a str,
     pub source: &'a str,
@@ -63,7 +63,7 @@ pub(super) struct Program<'a> {
     pub needle: u8,
     pub spec: &'a str,
     pub computes: &'a str,
-    pub adds: &'a str,
+    pub folds: &'a str,
 }
 
 // The context the loop generator resolves names in, elaborated before it runs.
@@ -208,7 +208,8 @@ fn common_arguments(prefix: &str, program: &Program) -> String {
         λ buffer needle budget cursor carry => {prefix}_loop_source_agreement(buffer, needle, budget, cursor, carry),
         λ access before buffer needle budget cursor carry bounded low head readable fits =>
             {prefix}_native(access, before, buffer, needle, budget, cursor, carry, bounded, low, head, readable, fits),
-        {root}::{computes}, {root}::{adds}", source = program.source, spec = program.spec, computes = program.computes, adds = program.adds)
+        {root}::{computes}, {root}::{folds}, {root}::{advance}", source = program.source, spec = program.spec,
+        computes = program.computes, folds = program.folds, advance = program.advance)
 }
 
 /// Lay out the program and write its certificate after the loop's (which the
@@ -232,7 +233,7 @@ pub(super) fn certify(module: &mut Module, prefix: &str, program: &Program, emis
 // read or at a failed read, a run that reads them all and exits with
 // `{root}::{spec}` of their concatenation, or with 1 after the failure.
 theorem {prefix}_runs(chunks: List<ReadStep>, ok: EofChunks(chunks), ending: ReadEnding, ending_ok: EofEnding(ending),
-    room: {root}::{spec}(eof_input(chunks)) + 4096 < Nat::pow(2, 64), page: Nat → BitVec(8), gprs: Gprs, flags: Flags):
+    room: eof_input(chunks).len() + 4096 < Nat::pow(2, 64), page: Nat → BitVec(8), gprs: Gprs, flags: Flags):
     LinuxRuns(io_linux(), eof_events(chunks, ending, [ExitEvent(bitvec_nat::word_of_nat(64, {root}::{spec}(eof_input(chunks))))]),
         io_initial({prefix}_file(), page, gprs, flags)) {{
     read_loop_runs({common}, {prefix}_jumps(), {prefix}_exit_reads(), {prefix}_fail_reads(), {prefix}_back_closes(),
@@ -244,7 +245,7 @@ theorem {prefix}_runs(chunks: List<ReadStep>, ok: EofChunks(chunks), ending: Rea
 // read's buffer, made exactly those events (linux_x86_64_determinism). The
 // claim is proved again here, not named, so a refused claim is reported once.
 theorem {prefix}_runs_every(chunks: List<ReadStep>, ok: EofChunks(chunks), ending: ReadEnding, ending_ok: EofEnding(ending),
-    room: {root}::{spec}(eof_input(chunks)) + 4096 < Nat::pow(2, 64), page: Nat → BitVec(8), gprs: Gprs, flags: Flags,
+    room: eof_input(chunks).len() + 4096 < Nat::pow(2, 64), page: Nat → BitVec(8), gprs: Gprs, flags: Flags,
     run: List<LinuxEvent>, ran: LinuxRun(io_linux(), run, io_initial({prefix}_file(), page, gprs, flags)),
     answers: SameResponses(eof_events(chunks, ending, [ExitEvent(bitvec_nat::word_of_nat(64, {root}::{spec}(eof_input(chunks))))]), run)):
     run = eof_events(chunks, ending, [ExitEvent(bitvec_nat::word_of_nat(64, {root}::{spec}(eof_input(chunks))))]) {{
@@ -364,7 +365,7 @@ theorem {prefix}_write_retry_closes(): print_retry_span() + 6 + {pj}.rd.sign_ext
 // `{root}::{spec}` of their concatenation to stdout as a decimal line and
 // exits 0, or exits 1 at the failure. The formatter covers counts below 10000.
 theorem {prefix}_runs(chunks: List<ReadStep>, ok: EofChunks(chunks), ending: ReadEnding, ending_ok: EofEnding(ending),
-    small: {root}::{spec}(eof_input(chunks)) < 10000,
+    room: eof_input(chunks).len() + 4096 < Nat::pow(2, 64), small: {root}::{spec}(eof_input(chunks)) < 10000,
     writes: List<WriteStep>, writes_ok: WriteSteps(writes)(decimal_line({root}::{spec}(eof_input(chunks)))),
     written: WriteEnding, written_ok: WriteEndingOk(written),
     page: Nat → BitVec(8), gprs: Gprs, flags: Flags):
@@ -379,7 +380,7 @@ theorem {prefix}_runs(chunks: List<ReadStep>, ok: EofChunks(chunks), ending: Rea
         {prefix}_jumps(), {prefix}_exit_reads(), {prefix}_fail_reads(), {prefix}_back_closes(), {prefix}_retry_closes(),
         {prefix}_print_jumps(), {prefix}_write_fail_reads(), {prefix}_write_exit_reads(), {prefix}_write_back_closes(),
         {prefix}_write_retry_closes(), {prefix}_resident(),
-        chunks, ok, ending, ending_ok, small, writes, writes_ok, written, written_ok, page, gprs, flags)
+        chunks, ok, ending, ending_ok, room, small, writes, writes_ok, written, written_ok, page, gprs, flags)
 }}
 
 // And that run is the run: every run of the file from that start which got
@@ -387,7 +388,7 @@ theorem {prefix}_runs(chunks: List<ReadStep>, ok: EofChunks(chunks), ending: Rea
 // read's buffer, made exactly those events (linux_x86_64_determinism). The
 // claim is proved again here, not named, so a refused claim is reported once.
 theorem {prefix}_runs_every(chunks: List<ReadStep>, ok: EofChunks(chunks), ending: ReadEnding, ending_ok: EofEnding(ending),
-    small: {root}::{spec}(eof_input(chunks)) < 10000,
+    room: eof_input(chunks).len() + 4096 < Nat::pow(2, 64), small: {root}::{spec}(eof_input(chunks)) < 10000,
     writes: List<WriteStep>, writes_ok: WriteSteps(writes)(decimal_line({root}::{spec}(eof_input(chunks)))),
     written: WriteEnding, written_ok: WriteEndingOk(written),
     page: Nat → BitVec(8), gprs: Gprs, flags: Flags,
@@ -405,7 +406,7 @@ theorem {prefix}_runs_every(chunks: List<ReadStep>, ok: EofChunks(chunks), endin
             {prefix}_jumps(), {prefix}_exit_reads(), {prefix}_fail_reads(), {prefix}_back_closes(), {prefix}_retry_closes(),
             {prefix}_print_jumps(), {prefix}_write_fail_reads(), {prefix}_write_exit_reads(), {prefix}_write_back_closes(),
             {prefix}_write_retry_closes(), {prefix}_resident(),
-            chunks, ok, ending, ending_ok, small, writes, writes_ok, written, written_ok, page, gprs, flags),
+            chunks, ok, ending, ending_ok, room, small, writes, writes_ok, written, written_ok, page, gprs, flags),
         ran, answers)
 }}
 ", spec = program.spec, common = common_arguments(prefix, program)));

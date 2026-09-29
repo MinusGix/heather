@@ -2,10 +2,11 @@
 // docs/native-read-until-eof-design.md). The program is the counting loop
 // below, run over each chunk the reads of stdin return until the empty one;
 // the process exits with (or prints) the total. `wc_l` is the specification
-// the total is stated against, and this client's facts about its own loop
-// are two: over a buffer holding `bytes`, it adds `wc_l(bytes)` to the count
-// (`count_lines_input`), and `wc_l` adds over concatenation (`wc_l_append`).
-// Everything machine-shaped comes from the shared generators.
+// the total is stated against. This client's facts are about its step
+// alone (docs/native-wc-design.md §3): it grows by at most one per byte
+// (`line_body_advances`), it always continues, the same at every cursor
+// (`line_body_folds`), and folded over the input from zero it is `wc_l`
+// (`count_lines_input`). Buffers, chunks and machines are the library's.
 import function_ir_loop;
 import bitvec;
 import bool;
@@ -48,68 +49,34 @@ fn count_lines(buffer: ReadonlyBytes, needle: BitVec(8), budget: Nat, cursor: Na
     bounded_readonly<Nat>(buffer, needle, budget, cursor, count, line_body)
 }
 
-theorem past_cursor(cursor: Nat): (k: Nat) → Succ(cursor + k).leb(cursor) = False {
-    match cursor {
-        Zero => λ k => refl,
-        Succ(c) => λ k => trans(cong_fn<Nat, Bool>(λ n => Succ(n).leb(Succ(c)), Nat::add_succ_left(c, k)), past_cursor(c, k)),
+// The loop always continues, the same way at every cursor: it folds
+// `line_body` over the bytes (function_ir_loop's LoopFolds).
+theorem line_body_folds(): LoopFolds(ReadonlyLoop<Nat>(line_body)) {
+    λ needle cursor byte count => match byte_equal(needle, byte) as λ equal =>
+            match equal { False => Continue(count), True => Continue(Succ(count)) } =
+            Continue(loop_step_payload(match equal { False => Continue(count), True => Continue(Succ(count)) })) {
+        False => refl,
+        True => refl,
     }
 }
 
-// Over any buffer holding `tail` from `cursor` on, and ending there, the
-// loop counts `tail`'s newlines onto `count`.
-theorem count_lines_reads(tail: List<BitVec(8)>): (buffer: ReadonlyBytes) → (cursor, count: Nat) →
-    buffer.length = cursor + tail.len() →
-    ((i: Nat) → (byte: BitVec(8)) → tail.nth(i) = Some(byte) → buffer.read(buffer.base + (cursor + i)) = Some(byte)) →
-    count_lines(buffer, newline(), tail.len(), cursor, count) = End(cursor + tail.len(), 0, count + wc_l(tail)) {
-    match tail {
-        Nil => λ buffer cursor count length reads =>
-            loop_run_end(ReadonlyLoop<Nat>(line_body), buffer, newline(), cursor, count,
-                trans(cong_fn<Nat, Bool>(λ n => n.leb(cursor), length),
-                    eq_true_of_is_true(cursor.leb(cursor), Nat::leb_complete(cursor, cursor, cursor.le_refl()))), 0),
-        Cons(byte, rest) => λ buffer cursor count length reads => {
-            let region = ReadonlyLoop<Nat>(line_body);
-            let open: (buffer.length.leb(cursor) = False) =
-                trans(cong_fn<Nat, Bool>(λ n => n.leb(cursor), length), past_cursor(cursor, rest.len()));
-            let moved: (Succ(cursor) + rest.len() = cursor + Succ(rest.len())) = Nat::add_succ_left(cursor, rest.len());
-            let later = λ (next: Nat) => count_lines_reads(rest, buffer, Succ(cursor), next, trans(length, sym(moved)),
-                λ i found present => j(sym(Nat::add_succ_left(cursor, i)), λ at _ => buffer.read(buffer.base + at) = Some(found),
-                    reads(Succ(i), found, present)));
-            (match byte_equal(newline(), byte) as λ equal => (byte_equal(newline(), byte) = equal) →
-                    count_lines(buffer, newline(), Succ(rest.len()), cursor, count) =
-                        End(cursor + Succ(rest.len()), 0, count + (match equal { False => wc_l(rest), True => Succ(wc_l(rest)) })) {
-                False => λ equal => trans(loop_run_step(rest.len(), region, buffer, newline(), cursor, count, byte, Continue(count),
-                        open, reads(0, byte, refl), cong_fn<Bool, LoopStep<Nat>>(λ e => match e { False => Continue(count), True => Continue(Succ(count)) }, equal)),
-                    trans(later(count), cong_fn<Nat, LoopOutcome<Nat>>(λ at => End(at, 0, count + wc_l(rest)), moved))),
-                True => λ equal => trans(loop_run_step(rest.len(), region, buffer, newline(), cursor, count, byte, Continue(Succ(count)),
-                        open, reads(0, byte, refl), cong_fn<Bool, LoopStep<Nat>>(λ e => match e { False => Continue(count), True => Continue(Succ(count)) }, equal)),
-                    trans(later(Succ(count)), trans(cong_fn<Nat, LoopOutcome<Nat>>(λ at => End(at, 0, Succ(count) + wc_l(rest)), moved),
-                        cong_fn<Nat, LoopOutcome<Nat>>(λ total => End(cursor + Succ(rest.len()), 0, total), Nat::add_succ_left(count, wc_l(rest)))))),
-            })(refl)
-        },
-    }
-}
-
-// The fact the profile asks of its loop (elf64_read_loop's ReadEofComputes):
-// from the start of a buffer holding `bytes`, the loop adds `wc_l(bytes)` to
-// whatever count it starts from.
-theorem count_lines_input(carry: Nat, bytes: List<BitVec(8)>, buffer: ReadonlyBytes, length: buffer.length = bytes.len(),
-    reads: (i: Nat) → (byte: BitVec(8)) → bytes.nth(i) = Some(byte) → buffer.read(buffer.base + i) = Some(byte)):
-    count_lines(buffer, newline(), bytes.len(), 0, carry) = End(bytes.len(), 0, carry + wc_l(bytes)) {
-    let from_start = Nat::add_left_zero(bytes.len());
-    let counted = count_lines_reads(bytes, buffer, 0, carry, trans(length, sym(from_start)),
-        λ i byte present => j(sym(Nat::add_left_zero(i)), λ at _ => buffer.read(buffer.base + at) = Some(byte), reads(i, byte, present)));
-    trans(counted, cong_fn<Nat, LoopOutcome<Nat>>(λ at => End(at, 0, carry + wc_l(bytes)), from_start))
-}
-
-// Counting chunk by chunk counts the whole input.
-theorem wc_l_append(front: List<BitVec(8)>, back: List<BitVec(8)>): wc_l(front ++ back) = wc_l(front) + wc_l(back) {
-    match front {
-        Nil => sym(Nat::add_left_zero(wc_l(back))),
-        Cons(byte, rest) => (match byte_equal(newline(), byte) as λ equal =>
-                (match equal { False => wc_l(rest ++ back), True => Succ(wc_l(rest ++ back)) }) =
-                (match equal { False => wc_l(rest), True => Succ(wc_l(rest)) }) + wc_l(back) {
-            False => wc_l_append(rest, back),
-            True => trans(cong_fn<Nat, Nat>(λ n => Succ(n), wc_l_append(rest, back)), sym(Nat::add_succ_left(wc_l(rest), wc_l(back)))),
+// From any count, the fold adds the newlines.
+theorem count_lines_fold(bytes: List<BitVec(8)>): (count: Nat) →
+    step_fold(ReadonlyLoop<Nat>(line_body), newline(), bytes, count) = count + wc_l(bytes) {
+    match bytes {
+        Nil => λ count => refl,
+        Cons(byte, rest) => λ count => (match byte_equal(newline(), byte) as λ equal =>
+                step_fold(ReadonlyLoop<Nat>(line_body), newline(), rest,
+                    loop_step_payload(match equal { False => Continue(count), True => Continue(Succ(count)) })) =
+                count + (match equal { False => wc_l(rest), True => Succ(wc_l(rest)) }) {
+            False => count_lines_fold(rest, count),
+            True => trans(count_lines_fold(rest, Succ(count)), Nat::add_succ_left(count, wc_l(rest))),
         }),
     }
+}
+
+// The fact the profile asks of a program (elf64_read_loop's `computes`): its
+// specification is the fold from zero.
+theorem count_lines_input(bytes: List<BitVec(8)>): wc_l(bytes) = step_fold(ReadonlyLoop<Nat>(line_body), newline(), bytes, 0) {
+    sym(trans(count_lines_fold(bytes, 0), Nat::add_left_zero(wc_l(bytes))))
 }

@@ -246,7 +246,7 @@ cargo build --release -p heather-cli
 (ulimit -v 8388608 -t 900 -c 0; target/release/heather build-x86 \
   examples/x86-native/wc_l.hthr count_lines --read-loop --needle 10 \
   --advance line_body_advances --spec wc_l --computes count_lines_input \
-  --adds wc_l_append -o target/x86-native/wc_l --cache-dir target/native-images)
+  --folds line_body_folds -o target/x86-native/wc_l --cache-dir target/native-images)
 printf 'one\ntwo\nthree\n' | ./target/x86-native/wc_l; echo $?
 ```
 
@@ -257,19 +257,23 @@ the source. For every way the reads may split stdin into non-empty chunks,
 with EINTRs anywhere between them, and ending at the empty read or at a
 failed read, the written file has a run that reads them all and exits with
 `wc_l` of their concatenation (the parent sees the low eight bits), or with 1
-after the failure. `wc_l` is an ordinary Heather function; the program supplies it, the
-counting step, and two lemmas: `count_lines_input`, that its loop adds `wc_l`
-of a buffer's contents to whatever count it starts from, and `wc_l_append`,
-that `wc_l` adds over concatenation. Everything machine-shaped comes from the
-shared generators and the library's process theorem
-(`lib/elf64_read_loop.hthr`, [its design](../../docs/native-read-until-eof-design.md)).
+after the failure; `count_lines_native_runs_every` adds that every run with
+those answers from Linux is that run. `wc_l` is an ordinary Heather function;
+the program supplies it, the counting step, and three facts about the step
+alone: it grows by at most one per byte (`line_body_advances`), it always
+continues, the same way at every cursor (`line_body_folds`), and folded over
+the input from zero it is `wc_l` (`count_lines_input`). Buffers, chunks and
+everything machine-shaped come from the shared generators and the library's
+process theorem (`lib/elf64_read_loop.hthr`,
+[its design](../../docs/native-read-until-eof-design.md), and
+[the fold contract](../../docs/native-wc-design.md) §3).
 
 The trace (`lib/linux_x86_64_io.hthr`) records each syscall with Linux's
 response: a read returns bytes or fails with an errno, and a write sends some
 prefix of what it asked or fails. A failed read may leave anything in the
-buffer. Read, write and exit are the only syscalls with rules, and the claim
-is existential: a run with this trace exists
+buffer. Read, write and exit are the only syscalls with rules
 (`issues/linux-syscall-trace-model.md`, `docs/native-syscall-failures-design.md`).
+The claims cover inputs shorter than 2^64 − 4096 bytes, so no count wraps.
 
 ### Printing the count
 
@@ -280,7 +284,7 @@ instead of exiting with it:
 (ulimit -v 12582912 -t 3600 -c 0; target/release/heather build-x86 \
   examples/x86-native/wc_l.hthr count_lines --read-loop --needle 10 \
   --advance line_body_advances --spec wc_l --computes count_lines_input \
-  --adds wc_l_append --print -o target/x86-native/wc_l_print \
+  --folds line_body_folds --print -o target/x86-native/wc_l_print \
   --cache-dir target/native-images)
 printf 'one\ntwo\nthree\n' | ./target/x86-native/wc_l_print
 ```

@@ -1,6 +1,6 @@
 # `wc`: a program the `wc -l` template can't express — design
 
-Status: **decisions taken 2026-09-28 (§8); slice A next.** Owner: `issues/native-wc.md`.
+Status: **decisions taken 2026-09-28 (§8); slice A landed 2026-09-28 (§3.1); slice B next.** Owner: `issues/native-wc.md`.
 Builds on `docs/native-read-until-eof-design.md` (the read loop and its
 additive contract), `docs/native-syscall-failures-design.md` (failure paths),
 `docs/fetched-step-determinism-design.md` (claims universal over runs) and
@@ -83,6 +83,33 @@ Replace "the loop adds `spec(bytes)` to any count" plus additivity with
 `wc -l` migrates in this slice: `--adds` and `--computes` go, `--folds`
 comes in, and `count_lines_reads` disappears into the library lemma. This
 slice stands alone and pays for itself whatever happens to the others.
+
+### 3.1 As landed (2026-09-28)
+
+Probes V1 and V2 held as written, with two amendments:
+
+- **Two facts, two flags.** `--folds` names the step's `LoopFolds` theorem
+  (always continues, and the same way at every cursor, as one equation:
+  `body(needle, cursor, byte, carry) = Continue(loop_fold_step(…))`).
+  `--computes` keeps its name but now names `ReadEofComputes(region, needle,
+  spec)`: `spec(bytes) = step_fold(region, needle, bytes, 0)`. The existing
+  `--advance` theorem is now also a premise of the process theorem, because
+  it bounds the intermediate states.
+- **The room premise is on the input, not the specification.** A general
+  fold needn't grow with the input, so `count ≤ total` no longer bounds the
+  running count. Instead the count stays within the bytes consumed
+  (`step_fold_advances`), and both claims take
+  `eof_input(chunks).len() + 4096 < 2^64`. The print profile gains this
+  premise beside `small`. `EofFrom` carries `carry + |rest| ≤ limit`.
+
+Library: `lib/function_ir_loop.hthr` (`loop_fold_step`, `LoopFolds`,
+`step_fold`, `step_fold_append`, `step_fold_advances`, `loop_run_folds`) and
+`lib/elf64_read_loop.hthr` (`eof_chunk_folds`, the fold invariant in
+`eof_from`). `wc_l`'s loop facts went from about 70 lines of buffer
+induction to about 25 lines about lists (`line_body_folds`,
+`count_lines_fold`). The test `read_loop_needs_its_folds` refuses a build
+without `--folds`, and one with another theorem in its place, where the fact
+is used.
 
 ## 4. Slice B: a state of several fields
 

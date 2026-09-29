@@ -26,3 +26,4 @@ C, the `%7d %7d %7d\n` formatter; D, the program.
 ## Log
 
 - 2026-09-28: Decisions (design §8): GNU pipe format now, POSIX minimal and a proven C-style API filed as [[native-proven-formatting-api]]; slice A (fold contract) first. The register fallback stays open until probe V3.
+- 2026-09-28: Slice A landed (design §3.1): library fold contract (LoopFolds, step_fold, loop_run_folds, step_fold_advances), --folds replaces --adds, --computes now states spec = fold from zero, room premise on the input length; wc -l migrated. Full suite 3085 passed. Next: slice B, probe V3 (registers) first.

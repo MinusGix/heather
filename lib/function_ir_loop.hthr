@@ -3,6 +3,7 @@
 // assumption. Addresses and control counters are mathematical Nats here.
 import bitvec;
 import bool;
+import list;
 import logic;
 import nat;
 import option;
@@ -244,4 +245,86 @@ theorem loop_readable_byte<C>(rest: Nat, region: ReadonlyLoop<C>, buffer: Readon
             λ outcome _ => LoopFinishedNormally(outcome), readable)),
         Some(byte) => λ present => Exists(byte, present),
     })(refl)
+}
+
+// ---------------------------------------------------------------------------
+// Folding loops (docs/native-wc-design.md §3). A step that always continues,
+// and the same way at every cursor, makes the loop a left fold of the step
+// over the bytes it reads. Chunks then compose by list reasoning alone,
+// whatever reads split the input into: a program states its specification
+// against `step_fold` and never argues about buffers.
+
+fn loop_fold_step<C>(region: ReadonlyLoop<C>, needle: BitVec(8), byte: BitVec(8), carry: C) → C {
+    loop_step_payload(region.body(needle, 0, byte, carry))
+}
+fn LoopFolds<C>(region: ReadonlyLoop<C>) → Type {
+    (needle: BitVec(8)) → (cursor: Nat) → (byte: BitVec(8)) → (carry: C) →
+        region.body(needle, cursor, byte, carry) = Continue(loop_fold_step(region, needle, byte, carry))
+}
+
+fn step_fold<C>(region: ReadonlyLoop<C>, needle: BitVec(8), bytes: List<BitVec(8)>) → C → C {
+    match bytes {
+        Nil => λ carry => carry,
+        Cons(byte, rest) => λ carry => step_fold(region, needle, rest, loop_fold_step(region, needle, byte, carry)),
+    }
+}
+
+theorem step_fold_append<C>(region: ReadonlyLoop<C>, needle: BitVec(8), front: List<BitVec(8)>):
+    (back: List<BitVec(8)>) → (carry: C) →
+    step_fold(region, needle, front ++ back, carry) = step_fold(region, needle, back, step_fold(region, needle, front, carry)) {
+    match front {
+        Nil => λ back carry => refl,
+        Cons(byte, rest) => λ back carry => step_fold_append(region, needle, rest, back, loop_fold_step(region, needle, byte, carry)),
+    }
+}
+
+// A counting fold stays within one per byte of where it started.
+theorem step_fold_advances(region: ReadonlyLoop<Nat>, advance: LoopAdvancesByAtMostOne(region), needle: BitVec(8),
+    bytes: List<BitVec(8)>): (carry: Nat) → step_fold(region, needle, bytes, carry) <= carry + bytes.len() {
+    match bytes {
+        Nil => λ carry => carry.le_refl(),
+        Cons(byte, rest) => λ carry => {
+            let next = loop_fold_step(region, needle, byte, carry);
+            let later = step_fold_advances(region, advance, needle, rest, next);
+            let grew: (next <= Succ(carry)) = advance(needle, 0, byte, carry);
+            let moved: (next + rest.len() <= Succ(carry) + rest.len()) = Nat::add_le_mono_r(rest.len(), next, Succ(carry), grew);
+            let shifted: (Succ(carry) + rest.len() = carry + Succ(rest.len())) = Nat::add_succ_left(carry, rest.len());
+            step_fold(region, needle, rest, next).le_trans(next + rest.len(), carry + Succ(rest.len()), later,
+                j(shifted, λ total _ => next + rest.len() <= total, moved))
+        },
+    }
+}
+
+theorem loop_past_cursor(cursor: Nat): (k: Nat) → Succ(cursor + k).leb(cursor) = False {
+    match cursor {
+        Zero => λ k => refl,
+        Succ(c) => λ k => trans(cong_fn<Nat, Bool>(λ n => Succ(n).leb(Succ(c)), Nat::add_succ_left(c, k)), loop_past_cursor(c, k)),
+    }
+}
+
+// Over a buffer holding `bytes` from `cursor` to its end, a folding loop ends
+// there with the fold of its step over the bytes.
+theorem loop_run_folds<C>(region: ReadonlyLoop<C>, folds: LoopFolds(region), needle: BitVec(8), bytes: List<BitVec(8)>):
+    (buffer: ReadonlyBytes) → (cursor: Nat) → (carry: C) → buffer.length = cursor + bytes.len() →
+    ((i: Nat) → (byte: BitVec(8)) → bytes.nth(i) = Some(byte) → buffer.read(buffer.base + (cursor + i)) = Some(byte)) →
+    loop_run(bytes.len(), region, buffer, needle, cursor, carry) =
+        End(cursor + bytes.len(), 0, step_fold(region, needle, bytes, carry)) {
+    match bytes {
+        Nil => λ buffer cursor carry length reads =>
+            loop_run_end(region, buffer, needle, cursor, carry,
+                trans(cong_fn<Nat, Bool>(λ n => n.leb(cursor), length),
+                    eq_true_of_is_true(cursor.leb(cursor), Nat::leb_complete(cursor, cursor, cursor.le_refl()))), 0),
+        Cons(byte, rest) => λ buffer cursor carry length reads => {
+            let next = loop_fold_step(region, needle, byte, carry);
+            let open: (buffer.length.leb(cursor) = False) =
+                trans(cong_fn<Nat, Bool>(λ n => n.leb(cursor), length), loop_past_cursor(cursor, rest.len()));
+            let moved: (Succ(cursor) + rest.len() = cursor + Succ(rest.len())) = Nat::add_succ_left(cursor, rest.len());
+            let later = loop_run_folds(region, folds, needle, rest, buffer, Succ(cursor), next, trans(length, sym(moved)),
+                λ i found present => j(sym(Nat::add_succ_left(cursor, i)), λ at _ => buffer.read(buffer.base + at) = Some(found),
+                    reads(Succ(i), found, present)));
+            trans(loop_run_step(rest.len(), region, buffer, needle, cursor, carry, byte, Continue(next),
+                    open, reads(0, byte, refl), folds(needle, cursor, byte, carry)),
+                trans(later, cong_fn<Nat, LoopOutcome<C>>(λ at => End(at, 0, step_fold(region, needle, rest, next)), moved)))
+        },
+    }
 }
