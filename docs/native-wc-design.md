@@ -160,6 +160,31 @@ Probe V3 (§7) counts what `wc`'s body actually needs under 1–3. If 1–3 are
 not enough, the choice between 4 and moving the byte counter out of the
 state goes back to the user; see §8, question 2.
 
+### 4.4 V3's answer (2026-09-28)
+
+1–3 are not enough for four fields. The typed generator protects every
+input: a result's register must be a temporary, and temporaries may not
+overlap inputs (`lower_structured_results`: `InputOverlapsTemporary`,
+`OutputRegisterUnavailable`). A comparison bit also needs a low-byte
+register (RAX, RCX, RDX or RBX). During the step, base, length, needle,
+cursor, budget, byte and four state fields are protected: that's 10 of 15.
+The step's five outputs take the other five, leaving no scratch.
+
+**Decision (Claude, delegated by the user): the process counts the bytes.**
+The read loop already knows each chunk's length (the read's return in RAX),
+so the profile keeps a byte total across reads, as real `wc`
+implementations do, and gives it to the tail beside the state. The
+specification is unchanged: the claim still states `input.len()`, now proved
+from the running total instead of a per-byte field. The state drops to
+`lines`, `words` and `inside`. Then 9 registers are protected and the step
+has 6: 4 outputs and 2 scratch. That fits the current generator with relief
+2 only.
+
+Updating the state in place (relief 4) remains the general capability for a
+state that doesn't fit. It is filed as
+`issues/native-loop-state-in-place.md`, with V3's arithmetic, and not built
+here.
+
 ## 5. Slice C: the three-field line
 
 - `field_word(n, separator)`, for `n < 10^7`: the seven right-aligned
@@ -179,11 +204,11 @@ state goes back to the user; see §8, question 2.
 
 `examples/x86-native/wc.hthr`:
 
-- `WcState { lines: Nat, words: Nat, bytes: Nat, inside: Bool }`, starting
-  at zeros and `False`.
+- `WcState { lines: Nat, words: Nat, inside: Bool }`, starting at zeros and
+  `False` (bytes are the process's total, §4.4).
 - `wc_body`: on whitespace, `inside := False`, and `lines += 1` at a newline;
-  otherwise `words += 1` when not `inside`, then `inside := True`; always
-  `bytes += 1`. It is cursor-free and never breaks.
+  otherwise `words += 1` when not `inside`, then `inside := True`. It is
+  cursor-free and never breaks.
 - The specs: `lines`, `words` (split at whitespace, count the non-empty
   pieces), and `len`; `--folds` proves they are the fold's fields.
 - The build: `--read-loop --fields` (the name is open), from one source file,
@@ -212,9 +237,8 @@ state goes back to the user; see §8, question 2.
    capability. The user's longer direction is a C-style API, proven in
    Heather, for easier conversion of existing programs. Both are filed as
    `issues/native-proven-formatting-api.md`, not in this round.
-2. **If the registers don't fit** (V3): still open. The choice is between
-   updating the state in place (relief 4) and letting the process count the
-   bytes, and it goes back to the user with V3's numbers. Leaning towards
-   relief 4.
+2. **The registers don't fit** (V3, §4.4). The user delegated the choice:
+   the process counts the bytes; updating the state in place is filed for
+   later.
 3. **Order: slice A first**, landed on its own. Then B with its probe, then C
    and D.
