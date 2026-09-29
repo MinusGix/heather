@@ -1,6 +1,6 @@
 # `wc`: a program the `wc -l` template can't express — design
 
-Status: **decisions taken 2026-09-28 (§8); slice A landed 2026-09-28 (§3.1); slice B next.** Owner: `issues/native-wc.md`.
+Status: **decisions taken 2026-09-28 (§8); slice A landed 2026-09-28 (§3.1); slice B landed 2026-09-29 (§4.5–4.8); slice C next.** Owner: `issues/native-wc.md`.
 Builds on `docs/native-read-until-eof-design.md` (the read loop and its
 additive contract), `docs/native-syscall-failures-design.md` (failure paths),
 `docs/fetched-step-determinism-design.md` (claims universal over runs) and
@@ -297,6 +297,53 @@ Three findings came out of building it:
   setup.
 
 Test: `record_state_loop_certificate_checks` (function_ir_loop_trace).
+
+### 4.8 The reading process (B4)
+
+`lib/elf64_read_state.hthr`, beside `elf64_read_loop`, whose blocks, read
+trace (`ReadStep`, `eof_events`, `eof_input`, `EofChunks`, `EofEnding`) and
+jump record it reuses. It is polymorphic in the state type `C`, its placement
+`rep: Gprs → C → Type` and its invariant `fits`, and differs from the Nat
+process in three places:
+
+- **No copy, no save.** The state registers are R13, R14, R15 and R8, which
+  nothing between reads writes (the read's setup, SYSCALL's RCX and R11,
+  the retry's RBX). The chunk's setup is the Nat setup without `R11 ← R13`,
+  and the save block is gone: the loop is followed directly by the jump
+  back. Init zeroes all four.
+- **The state is a fold of what was read.** The outer induction is indexed
+  by the bytes read so far, `seen`: at the read, `rep(gprs, step_fold(seen,
+  init))`. After a chunk the placement moves along `step_fold_append`.
+- **The program supplies three facts about its placement**, each small:
+  `rep` reads only the four state registers (`StateFramed`); init's zeros
+  place the initial state (`StateInitialised`); and folding any `seen` from
+  `init` fits the next chunk's budget while `seen` and the chunk together
+  stay below 2^64 (`StateRoom`). The record generator emits the first and
+  the last (`{prefix}_rep_moves`, `{prefix}_room`, the latter from the
+  advance theorem through a library lemma bounding one measure of the fold,
+  `step_fold_measure`); the second is a conversion for zero initial fields.
+
+The tail is a parameter as before (`StateTail` gets the final state in its
+registers). The library's own profile is `exit(R13)` given a `status: C →
+Nat` that the first register holds; the claim is stated over the final
+state `step_fold(eof_input(chunks), init)`, with no specification — relating
+it to `lines`/`words`/`len` is the program's work (slice D).
+
+Test: `crates/elab/tests/read_state_process.rs` checks the library, refuses
+mutations of the process shape, and instantiates the claim with the record
+generator's certificate for `wc`'s loop at an abstract file.
+
+**As landed (2026-09-29).** As above. The fits helper is
+`loop_fits_from` (function_ir_loop_trace); a chunk's run is
+`ReadStateFolded`. The failure path's theorems are restated over this
+layout (`state_failed`, `state_retry`, `state_fail_exit`), since
+elf64_read_loop's take its own pieces record; they differ only in offsets
+and in keeping `StateKept` where the Nat ones keep R13. The refusals: a
+setup writing a state register, a moved base, both jump spans, init left
+out of the code, the exit reading another register than the status premise;
+and, at `wc`, an init zeroing R9 for R8 (refused at `wc_initialised`).
+`wc -l` could become a one-field instance of this process, retiring the
+copy and save; nothing needs that yet.
 
 ## 5. Slice C: the three-field line
 

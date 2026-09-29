@@ -295,6 +295,27 @@ theorem step_fold_advances(region: ReadonlyLoop<Nat>, advance: LoopAdvancesByAtM
     }
 }
 
+// The same bound for one measure of a state that is not a Nat, such as one
+// field of a record (docs/native-wc-design.md §4.8).
+theorem step_fold_measure<C>(region: ReadonlyLoop<C>, measure: C → Nat,
+    grows: (needle: BitVec(8)) → (cursor: Nat) → (byte: BitVec(8)) → (carry: C) →
+        measure(loop_step_payload(region.body(needle, cursor, byte, carry))) <= Succ(measure(carry)),
+    needle: BitVec(8), bytes: List<BitVec(8)>): (carry: C) → measure(step_fold(region, needle, bytes, carry)) <= measure(carry) + bytes.len() {
+    match bytes {
+        Nil => λ carry => measure(carry).le_refl(),
+        Cons(byte, rest) => λ carry => {
+            let next = loop_fold_step(region, needle, byte, carry);
+            let later = step_fold_measure(region, measure, grows, needle, rest, next);
+            let grew: (measure(next) <= Succ(measure(carry))) = grows(needle, 0, byte, carry);
+            let moved: (measure(next) + rest.len() <= Succ(measure(carry)) + rest.len()) =
+                Nat::add_le_mono_r(rest.len(), measure(next), Succ(measure(carry)), grew);
+            let shifted: (Succ(measure(carry)) + rest.len() = measure(carry) + Succ(rest.len())) = Nat::add_succ_left(measure(carry), rest.len());
+            measure(step_fold(region, needle, rest, next)).le_trans(measure(next) + rest.len(), measure(carry) + Succ(rest.len()), later,
+                j(shifted, λ total _ => measure(next) + rest.len() <= total, moved))
+        },
+    }
+}
+
 theorem loop_past_cursor(cursor: Nat): (k: Nat) → Succ(cursor + k).leb(cursor) = False {
     match cursor {
         Zero => λ k => refl,

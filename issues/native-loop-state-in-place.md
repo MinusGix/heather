@@ -1,9 +1,9 @@
 ---
 title: Let a loop step update its state in place
-status: open
+status: closed
 labels: [compiler,function-ir,x86,native]
 created: 2026-09-28
-updated: 2026-09-28
+updated: 2026-09-29
 ---
 
 The typed generator protects every input register: a result's register must
@@ -25,3 +25,7 @@ overwrites it". This is related to parallel copies and join placement
 cycle needs a swap.
 
 Owner of the need: [[native-wc]].
+
+## Log
+
+- 2026-09-29: Built by the record loop generator (docs/native-wc-design.md §4.6–4.7, ce46cd60 and 9c1b2321): each field is certified alone into scratch and copied home in a write order where none reads a register already written back; a cycle is refused. Closing.

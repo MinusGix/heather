@@ -183,6 +183,40 @@ pub fn generate_elaborated_record_loop_x86(elaborator: &Elaborator, prefix: &str
         .parameters(vec![Parameter::explicit("cursor", HeatherExpr::name("Nat")), Parameter::explicit("budget", HeatherExpr::name("Nat")),
             Parameter::explicit("carry", HeatherExpr::raw(&carry_type))]));
     let region = format!("{}_region()", name("loop"));
+    // The placement reads only the fields' registers: it moves to any
+    // register file that agrees on them (docs/native-wc-design.md §4.8).
+    let moves_kept: Vec<Parameter> = (0..k).map(|i| Parameter::explicit(&format!("kept_{}", fields[i].0),
+        HeatherExpr::raw(format!("read_gpr({r}, after) = read_gpr({r}, before)", r = reg(p.fields[i]))))).collect();
+    let moved = tuple(&(0..k).map(|i| {
+        let motive = match fields[i].1 {
+            StructuredSourceType::Boolean => format!("word = loop_bit(carry.{})", fields[i].0),
+            _ => format!("LoopWord(64, word, carry.{})", fields[i].0),
+        };
+        format!("j(sym(kept_{}), λ word _ => {motive}, {})", fields[i].0, component("placed", i, k))
+    }).collect::<Vec<_>>());
+    module.declaration(Declaration::theorem(name("rep_moves"), HeatherExpr::raw(format!("{rep_name}(after, carry)")),
+        Block::expression(HeatherExpr::raw(moved))).parameters(
+        [Parameter::explicit("before", HeatherExpr::name("Gprs")), Parameter::explicit("after", HeatherExpr::name("Gprs")),
+            Parameter::explicit("carry", HeatherExpr::raw(&carry_type))].into_iter().chain(moves_kept)
+            .chain(std::iter::once(Parameter::explicit("placed", HeatherExpr::raw(format!("{rep_name}(before, carry)"))))).collect::<Vec<_>>()));
+    // The state folded over any input from one whose Nat fields are zero fits
+    // a loop over the next `budget` bytes, each field having grown by at most
+    // one per byte read.
+    let room_fields: Vec<String> = nat_fields.iter().enumerate().map(|(j, &i)| {
+        let f = &fields[i].0;
+        format!("loop_fits_from(step_fold({region}, needle, seen, init).{f}, init.{f}, seen.len(), budget, \
+            step_fold_measure({region}, λ (state: {carry_type}) => state.{f}, \
+                λ needle cursor byte carry => {}, needle, seen)(init), {}, room)",
+            component(&format!("{advance}()(needle, cursor, byte, carry)"), j, nat_fields.len()), component("zero", j, nat_fields.len()))
+    }).collect();
+    module.declaration(Declaration::theorem(name("room"), HeatherExpr::raw(format!("{invariant}(0, budget, step_fold({region}, needle, seen, init))")),
+        Block::expression(HeatherExpr::raw(tuple(&room_fields)))).parameters(vec![
+        Parameter::explicit("needle", HeatherExpr::raw("BitVec(8)")),
+        Parameter::explicit("init", HeatherExpr::raw(&carry_type)),
+        Parameter::explicit("zero", HeatherExpr::raw(conjunction(&nat_fields.iter().map(|&i| format!("init.{} = 0", fields[i].0)).collect::<Vec<_>>()))),
+        Parameter::explicit("seen", HeatherExpr::raw("List<BitVec(8)>")),
+        Parameter::explicit("budget", HeatherExpr::name("Nat")),
+        Parameter::explicit("room", HeatherExpr::raw("seen.len() + budget < nat::Nat::pow(2, 64)"))]));
     let guard_code = guard_fragment.code();
 
     // The guard: its typed result is loop_run's decision; nothing else moves.

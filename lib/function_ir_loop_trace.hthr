@@ -62,6 +62,16 @@ theorem loop_fits_step(cursor, rest, carry, next: Nat, fits: loop_fits(cursor, S
     Succ(next + rest).le_trans(Succ(carry + Succ(rest)), Nat::pow(2, 64), shifted, fits)
 }
 
+// A count that grew by at most the bytes read from zero fits a loop over the
+// next `budget` bytes while the two are shorter than 2^64.
+theorem loop_fits_from(carry, start, seen, budget: Nat, grown: carry <= start + seen, zero: start = 0,
+    room: seen + budget < Nat::pow(2, 64)): loop_fits(0, budget, carry) {
+    let moved = Nat::add_le_mono_r(budget, carry, start + seen, grown);
+    let started = j(zero, λ s _ => carry + budget <= (s + seen) + budget, moved);
+    let shifted = j(Nat::add_left_zero(seen), λ s _ => carry + budget <= s + budget, started);
+    Succ(carry + budget).le_trans(Succ(seen + budget), Nat::pow(2, 64), shifted, room)
+}
+
 // The typed certificate's Nat premise from the head's word, and the head's
 // word from the certificate's result under the bound.
 theorem loop_nat_placed(word: BitVec(64), count: Nat, placed: LoopWord(64, word, count)):

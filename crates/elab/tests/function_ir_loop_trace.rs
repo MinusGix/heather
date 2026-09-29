@@ -284,7 +284,7 @@ fn stitch(text: &str) -> String {
 // A loop over a record state (docs/native-wc-design.md §4): `wc`'s step over
 // { lines, words, bytes, inside }. The fields sit in registers of their own
 // and one iteration updates them in place, one at a time.
-const WC_SOURCE: &str = r#"
+pub(crate) const WC_SOURCE: &str = r#"
 import bitvec; import bool; import logic; import nat; import function_ir_loop;
 record WcState { lines: Nat, words: Nat, bytes: Nat, inside: Bool }
 fn newline_byte(b: BitVec(8)) → Bool {
@@ -361,7 +361,7 @@ theorem wc_body_advances(): (needle: BitVec(8)) → (cursor: Nat) → (byte: Bit
 }
 "#;
 
-fn wc_placement() -> RecordLoopPlacement {
+pub(crate) fn wc_placement() -> RecordLoopPlacement {
     RecordLoopPlacement {
         base: Gpr::Rdi, length: Gpr::Rbp, needle: Gpr::Rcx, cursor: Gpr::Rsi, budget: Gpr::R12,
         flag: Gpr::R10, step: Gpr::Rbx, byte: Gpr::R9,
