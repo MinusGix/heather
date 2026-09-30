@@ -14,8 +14,8 @@ mod data_read;
 pub use data_read::ByteLoad;
 mod structured;
 mod structured_cert;
-pub use structured_cert::{at_width, generate_structured, generate_structured_results, generate_structured_sourced, StructuredX86Emission};
-pub use structured::{lower_structured, lower_structured_results, LoweredStructured, Placements, PlannedTest, StructuredPlan};
+pub use structured_cert::{at_width, generate_structured, generate_structured_consuming, generate_structured_results, generate_structured_sourced, StructuredX86Emission};
+pub use structured::{lower_structured, lower_structured_consuming, lower_structured_results, LoweredStructured, Placements, PlannedTest, StructuredPlan};
 pub(crate) use structured::share_compared_constant;
 
 use crate::function_ir_cert::{
@@ -458,6 +458,7 @@ pub enum LoweringError {
     },
     DuplicateRegister(Gpr),
     InputOverlapsTemporary(Gpr),
+    ConsumableNotInput(Gpr),
     OutputRegisterUnavailable(Gpr),
     UnsupportedWidth {
         value: u64,
@@ -508,6 +509,7 @@ impl fmt::Display for LoweringError {
                 "input register {} also appears in the temporary pool",
                 register.heather_name(),
             ),
+            LoweringError::ConsumableNotInput(register) => write!(f, "consumable register {} holds no input", register.heather_name()),
             LoweringError::OutputRegisterUnavailable(register) => write!(
                 f,
                 "output register {} is not an assignable temporary",
@@ -2675,6 +2677,20 @@ pub fn lower_dag(
     temporary_registers: &[Gpr],
     requested_output: Gpr,
 ) -> Result<LoweredDag, LoweringError> {
+    lower_dag_consuming(region, input_registers, temporary_registers, &BTreeSet::new(), requested_output)
+}
+
+/// `lower_dag`, where the inputs in `consumable` registers are dead after the
+/// region and unprotected: a node may overwrite one at its last use, and a
+/// result may land in one (docs/structured-lowering-code-size-design.md §3).
+/// Every other input survives.
+pub fn lower_dag_consuming(
+    region: &Region,
+    input_registers: &[Gpr],
+    temporary_registers: &[Gpr],
+    consumable: &BTreeSet<Gpr>,
+    requested_output: Gpr,
+) -> Result<LoweredDag, LoweringError> {
     if region.inputs.len() != input_registers.len() {
         return Err(LoweringError::InputPlacementCount {
             inputs: region.inputs.len(),
@@ -2700,7 +2716,10 @@ pub fn lower_dag(
             return Err(LoweringError::InputOverlapsTemporary(register));
         }
     }
-    if !temporary_set.contains(&requested_output) {
+    if let Some(&register) = consumable.iter().find(|register| !all_registers.contains(register)) {
+        return Err(LoweringError::ConsumableNotInput(register));
+    }
+    if !temporary_set.contains(&requested_output) && !consumable.contains(&requested_output) {
         return Err(LoweringError::OutputRegisterUnavailable(requested_output));
     }
 
@@ -2732,7 +2751,16 @@ pub fn lower_dag(
         *uses.entry(output.id).or_default() += 1;
     }
 
+    // A consumable input is owned like a temporary until its last use, and
+    // its register is a temporary after that.
     let mut owners = BTreeMap::<Gpr, u64>::new();
+    for (port, register) in region.inputs.iter().zip(input_registers) {
+        if consumable.contains(register) && uses.get(&port.id).copied().unwrap_or(0) > 0 {
+            owners.insert(*register, port.id);
+        }
+    }
+    let pool = temporary_registers.iter().copied().chain(input_registers.iter().copied().filter(|register| consumable.contains(register))).collect::<Vec<_>>();
+    let temporary_registers = &pool[..];
     let mut instructions = Vec::new();
     let mut node_plans = Vec::with_capacity(region.nodes.len());
     let mut clobbered = BTreeSet::new();
@@ -2830,9 +2858,11 @@ pub fn lower_dag(
                         )
                     }
                     None => {
-                        let destination = temporary_registers
-                            .iter()
-                            .copied()
+                        let destination = produces_output
+                            .then_some(requested_output)
+                            .filter(|register| !owners.contains_key(register))
+                            .into_iter()
+                            .chain(temporary_registers.iter().copied())
                             .find(|register| !owners.contains_key(register))
                             .ok_or(LoweringError::RegisterPressure {
                                 node_index,
@@ -4355,6 +4385,36 @@ mod tests {
             },
             outputs: vec![Port { id: 6, width: 64 }],
         }
+    }
+
+    // A consumable input is overwritten at its last use and no earlier, and
+    // a result may land in its register; an input that is not consumable
+    // never is (docs/structured-lowering-code-size-design.md §3).
+    #[test]
+    fn a_consumable_input_is_overwritten_only_at_its_last_use() {
+        let word = |id| Port { id, width: 64 };
+        // (x + y) - x, with x consumable: x is read again, so the sum needs
+        // a register of its own, and the difference takes x's.
+        let region = Region { inputs: vec![word(0), word(1)], nodes: vec![
+            Node::Add { width: 64, output: 2, left: 0, right: 1 },
+            Node::Sub { width: 64, output: 3, left: 2, right: 0 },
+        ], outputs: vec![word(3)] };
+        let consumable = BTreeSet::from([Gpr::Rdi]);
+        let lowered = lower_dag_consuming(&region, &[Gpr::Rdi, Gpr::Rsi], &[Gpr::Rax], &consumable, Gpr::Rdi).unwrap();
+        assert_eq!(lowered.instructions, vec![
+            Instruction::MovRR { destination: Gpr::Rax, source: Gpr::Rdi },
+            Instruction::AddRR { destination: Gpr::Rax, source: Gpr::Rsi },
+            Instruction::SubRR { destination: Gpr::Rax, source: Gpr::Rdi },
+            Instruction::MovRR { destination: Gpr::Rdi, source: Gpr::Rax },
+        ]);
+        assert!(!lowered.clobbered.contains(&Gpr::Rsi));
+        // x + y alone: in place in x's register.
+        let sum = Region { inputs: vec![word(0), word(1)], nodes: vec![Node::Add { width: 64, output: 2, left: 0, right: 1 }], outputs: vec![word(2)] };
+        let lowered = lower_dag_consuming(&sum, &[Gpr::Rdi, Gpr::Rsi], &[Gpr::Rax], &consumable, Gpr::Rdi).unwrap();
+        assert_eq!(lowered.instructions, vec![Instruction::AddRR { destination: Gpr::Rdi, source: Gpr::Rsi }]);
+        assert_eq!(lower_dag_consuming(&sum, &[Gpr::Rdi, Gpr::Rsi], &[Gpr::Rax], &BTreeSet::from([Gpr::Rcx]), Gpr::Rax),
+            Err(LoweringError::ConsumableNotInput(Gpr::Rcx)));
+        assert_eq!(lower_dag(&sum, &[Gpr::Rdi, Gpr::Rsi], &[Gpr::Rax], Gpr::Rdi), Err(LoweringError::OutputRegisterUnavailable(Gpr::Rdi)));
     }
 
     #[test]

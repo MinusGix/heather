@@ -1,6 +1,6 @@
 # A tighter structured x86 lowering — design
 
-Status: **decisions taken 2026-09-29 (§6, all as recommended); probes V2–V5 done 2026-09-29 (§7.1); slice F landed 2026-09-30 (§2.4), F′ the same day (§2.5). P next, then I.** Owner:
+Status: **decisions taken 2026-09-29 (§6, all as recommended); probes V2–V5 done 2026-09-29 (§7.1); slice F landed 2026-09-30 (§2.4), F′ the same day (§2.5), P's in-place results too (§3.1); P's `Move` node and `CodeWhen` next (§6 Q6), then I.** Owner:
 `issues/structured-lowering-code-size.md`. Also lands
 `issues/function-ir-x86-fused-compare-branch.md`. Builds on
 `docs/native-wc-design.md` §4.5 (near conditionals) and §5.1 (the measurement
@@ -259,6 +259,50 @@ IR alone, which makes a copy 6 bytes. `BitOr(0, x)` should not be matched as
 a `mov`, because that is a special case keyed on shape rather than value.
 §6 Q3.
 
+### 3.1 In-place results as landed (2026-09-30)
+
+`select` threads a *consumable* set: the input registers nothing after the
+region reads and no caller protects. The root's is empty
+(`lower_structured_consuming` lets a caller name some). `lower_dag_consuming`
+treats a consumable input as a temporary it owns until its last use, so the
+existing reuse rule (a destructive two-operand step at an operand's last
+use) now applies to inputs, and a result may land in the input's register.
+A child's pool is recomputed at each boundary (`child_pool`): the consumable
+registers it takes and nothing after it reads are its to consume, and the
+ones it does not take are temporaries again. A `Compose` places a lone
+result where the whole region's result goes, and its continuation consumes
+it there, so a helper chain keeps its value in one register. A fresh
+destination prefers the requested register, which saves the final `mov`.
+Nothing in the certificate changed. A consumed register leaves the region's
+`_Protected` set through its clobbered set.
+
+"Live after" is the continuation's interface, not what it reads. Each
+region's certificate takes a placement fact for every input its interface
+names, read or not, and a helper body's interface names every value in scope.
+Liveness by reads alone put two values in one register and was refused as
+`DuplicateRegister`. The cost is one `mov` pair where a `times256` call hands
+over (four in `raise32`). Trimming a helper body's interface to what it reads
+would remove it, as a reflector change.
+
+`field_low` 1,374 → 1,038 bytes (329 → 217 instructions), `field_high`
+1,945 → 1,507 (456 → 310). A doubling is `add rax, rax`, a place's false arm
+`sub rax, r8 ; movabs rcx, w ; add rax, rcx`, and the state stays in RAX from
+the first step to the last.
+
+The passthrough arm is not empty yet. It is still `movabs rcx, 0 ; or rax,
+rcx`, because FunctionIR has no copy node and the reflector spells an input
+returned as a result as `BitOr(Const 0, x)`. §3 claimed the arm becomes empty
+without saying how. A probe found `bor(0, x) = x` holds by `refl` (with the
+zero on the left; `bor(x, 0) = x` does not), so an empty arm's proof needs
+no lemma. What remains is a choice (§6 Q6: a `Move` node).
+
+Tests: `lower_dag` overwrites a consumable input only at its last use and
+refuses a consumable register that holds no input. A helper's result lands
+in the caller's register and the caller adds in place. The same wrapper
+theorem, a caller keeping RDI, checks when RDI is kept and is refused
+(`trivial` proves `True`, `False` expected) when RDI was consumed. The field
+words certify.
+
 ## 4. I: short immediates
 
 New ordinary `Instruction` forms. Each costs the same list: `canonical_bytes`
@@ -318,6 +362,16 @@ simplification with its own certificate story, filed separately if wanted.
    mechanical and independent, and could run in parallel on its own branch.
 5. **Does the round take on shifts (§5)?** *Recommended: no.* After P a
    doubling is 3 bytes, and the shift is a library-proof round.
+6. **(2026-09-30, reopening Q3.) How does the passthrough arm become
+   empty?** Q3's premise that copies are rare after P missed these arms:
+   every mark and place returns its state in one arm, 20 in `field_low` and
+   30 in `field_high`. *Taken with the user: a FunctionIR `Move(width, output,
+   source)` node.* The reflector spells an input returned as a result with it,
+   instead of `BitOr(Const 0, x)`. It lowers to nothing when its source is
+   consumable and already in the result's register, and to a 3-byte `mov`
+   otherwise. Its value is its source's, so its proof is `refl`. Matching
+   `BitOr(0, x)` in the lowering was rejected as shape-keyed: only the
+   zero-on-the-left spelling reduces.
 
 ## 7. Probes, before this design is final
 

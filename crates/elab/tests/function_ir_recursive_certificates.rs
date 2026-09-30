@@ -136,3 +136,51 @@ fn a_carried_constant_certifies_and_another_value_is_refused() {
     let message = error.render(&mutant);
     assert!(!message.contains("unknown") && !message.contains("not in scope") && !message.contains("unbound"), "failed on a name: {message}");
 }
+
+// A helper's result lands where its caller wants it, and the caller consumes
+// it in place (docs/structured-lowering-code-size-design.md §3): `x + x`
+// then `+ y` is two instructions into RAX. An input the caller says it reads
+// no more may be overwritten too, and the certificate then no longer
+// protects it: a caller keeping RDI is refused exactly when RDI was
+// consumed.
+#[test]
+fn a_consumed_input_is_no_longer_protected() {
+    use heather_elab::function_ir_cert::{Node, Port, Region, StructuredRegion};
+    use heather_elab::function_ir_x86_lower::{generate_structured_consuming, Gpr, Instruction, Placements, StructuredPlan};
+    use std::collections::BTreeSet;
+    let mut elab = common::base_image(common::MODULES.len());
+    let model = include_str!("../../../lib/std/arch/x86_64/x86_64_structured_block.hthr");
+    elab.elab_module_source("x86_64_structured_block", model).unwrap_or_else(|e| panic!("{}", e.render(model)));
+    let word = |id| Port { id, width: 64 };
+    let region = StructuredRegion::Compose {
+        prefix: Box::new(StructuredRegion::Dataflow(Region { inputs: vec![word(0), word(1)], nodes: vec![Node::Add { width: 64, output: 2, left: 0, right: 0 }], outputs: vec![word(2)] })),
+        continuation: Box::new(StructuredRegion::Dataflow(Region { inputs: vec![word(1), word(2)], nodes: vec![Node::Add { width: 64, output: 3, left: 2, right: 1 }], outputs: vec![word(3)] })),
+    };
+    let inputs = Placements::from([(0, Gpr::Rdi), (1, Gpr::Rsi)]);
+    let outputs = Placements::from([(3, Gpr::Rax)]);
+    for consumable in [BTreeSet::new(), BTreeSet::from([Gpr::Rdi])] {
+        let name = if consumable.is_empty() { "kept" } else { "consumed" };
+        let emission = generate_structured_consuming(name, &region, &Default::default(), &Default::default(), &inputs, &[Gpr::Rax, Gpr::Rcx, Gpr::R8], &consumable, &outputs)
+            .unwrap_or_else(|e| panic!("{name}: {e:?}"));
+        let StructuredPlan::Compose { prefix, continuation } = &emission.lowered.body else { panic!("{name}: expected a composition") };
+        assert_eq!(prefix.outputs[0].1, Gpr::Rax, "{name}: the helper's result goes where the caller's does");
+        let StructuredPlan::Dataflow(dag) = &continuation.body else { panic!("{name}: expected a dataflow continuation") };
+        assert_eq!(dag.instructions, vec![Instruction::AddRR { destination: Gpr::Rax, source: Gpr::Rsi }], "{name}: the caller adds in place");
+        assert_eq!(emission.lowered.clobbered.contains(&Gpr::Rdi), !consumable.is_empty(), "{name}");
+        assert!(!emission.lowered.clobbered.contains(&Gpr::Rsi), "{name}: y is read after the helper");
+        let text = format!("import x86_64_structured_block; import function_ir; import function_ir_x86_support; import x86_64; import x86_64_block; import bitvec; import bool; import list; import logic; import nat;\n{}\n\
+            theorem {name}_keeps_rdi<M>(values: Valuation(), before: MachineState<M>,\n\
+                placed_0: values(64, 0) = read_gpr(Rdi, before.gprs), placed_1: values(64, 1) = read_gpr(Rsi, before.gprs)):\n\
+                read_gpr(Rdi, {name}_artifact(values, before, placed_0, placed_1).after.gprs) = read_gpr(Rdi, before.gprs)\n\
+            {{ {name}_artifact(values, before, placed_0, placed_1).registers_preserved(Rdi, trivial) }}\n", emission.text);
+        let checked = elab.semantic_image().elaborator().elab_module_source(&format!("{name}_certificate"), &text);
+        if consumable.is_empty() {
+            checked.unwrap_or_else(|e| panic!("{}", e.render(&text)));
+        } else {
+            let message = checked.expect_err("a caller keeping a consumed input must be refused").render(&text);
+            assert!(message.contains("but `False` is expected"), "refused for another reason: {message}");
+            let body = &text[..text.find("theorem consumed_keeps_rdi").unwrap()];
+            elab.semantic_image().elaborator().elab_module_source("consumed_body", body).unwrap_or_else(|e| panic!("{}", e.render(body)));
+        }
+    }
+}

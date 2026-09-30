@@ -96,18 +96,32 @@ pub fn lower_structured(
 pub fn lower_structured_results(
     region: &StructuredRegion, inputs: &Placements, temporaries: &[Gpr], outputs: &Placements,
 ) -> Result<LoweredStructured, LoweringError> {
-    cert::validate_structured_region(region).map_err(LoweringError::InvalidStructuredRegion)?;
-    select(region, inputs, temporaries, outputs, "root")
+    lower_structured_consuming(region, inputs, temporaries, &BTreeSet::new(), outputs)
 }
 
+/// As `lower_structured_results`, where the caller reads the inputs in
+/// `consumable` registers no more: the code may overwrite them, and its
+/// certificate protects them no longer.
+pub fn lower_structured_consuming(
+    region: &StructuredRegion, inputs: &Placements, temporaries: &[Gpr], consumable: &BTreeSet<Gpr>, outputs: &Placements,
+) -> Result<LoweredStructured, LoweringError> {
+    cert::validate_structured_region(region).map_err(LoweringError::InvalidStructuredRegion)?;
+    select(region, inputs, temporaries, consumable, outputs, "root")
+}
+
+/// `consumable` holds the input registers whose values nothing after the
+/// region reads and that no caller protects: the region may overwrite them
+/// once it is done with them (docs/structured-lowering-code-size-design.md
+/// §3). The root's is empty.
 fn select(
     region: &StructuredRegion,
     inputs: &Placements,
     temporaries: &[Gpr],
+    consumable: &BTreeSet<Gpr>,
     requested: &Placements,
     path: &str,
 ) -> Result<LoweredStructured, LoweringError> {
-    select_here(region, inputs, temporaries, requested, path).map_err(|error| {
+    select_here(region, inputs, temporaries, consumable, requested, path).map_err(|error| {
         if matches!(error, LoweringError::StructuredPath { .. }) { error }
         else { LoweringError::StructuredPath { path: path.into(), reason: Box::new(error) } }
     })
@@ -117,6 +131,7 @@ fn select_here(
     region: &StructuredRegion,
     inputs: &Placements,
     temporaries: &[Gpr],
+    consumable: &BTreeSet<Gpr>,
     requested: &Placements,
     path: &str,
 ) -> Result<LoweredStructured, LoweringError> {
@@ -137,13 +152,16 @@ fn select_here(
         if assigned.contains(&register) { return Err(LoweringError::InputOverlapsTemporary(register)); }
         if !available.insert(register) { return Err(LoweringError::DuplicateRegister(register)); }
     }
+    if let Some(&register) = consumable.iter().find(|register| !assigned.contains(register)) {
+        return Err(LoweringError::ConsumableNotInput(register));
+    }
     if requested.len() != region.outputs().len() || requested.is_empty() {
         return Err(LoweringError::OutputPlacementCount { outputs: region.outputs().len(), registers: requested.len() });
     }
     let mut destinations = BTreeSet::new();
     let outputs = region.outputs().iter().map(|port| {
         let register = *requested.get(&port.id).ok_or(LoweringError::UndefinedValue(port.id))?;
-        if !available.contains(&register) { return Err(LoweringError::OutputRegisterUnavailable(register)); }
+        if !available.contains(&register) && !consumable.contains(&register) { return Err(LoweringError::OutputRegisterUnavailable(register)); }
         if !destinations.insert(register) { return Err(LoweringError::DuplicateRegister(register)); }
         Ok((*port, register))
     }).collect::<Result<Vec<_>, LoweringError>>()?;
@@ -151,9 +169,22 @@ fn select_here(
     let requested_output = output.1;
     let (body, clobbered, byte_length) = match region {
         StructuredRegion::Compose { prefix, continuation } => {
+            // Every value the continuation's interface names stays in place: its
+            // certificate is told where each one is, read or not.
+            let live_after = continuation.inputs().iter().filter_map(|port| inputs.get(&port.id).copied()).collect();
+            let (prefix_temporaries, prefix_consumable) = child_pool(temporaries, consumable, &registers, &live_after);
             let mut prefix_outputs = Placements::new();
+            // A lone result goes where the whole region's does, so a chain of
+            // helpers keeps its value in one register: the continuation then
+            // consumes it in place.
+            if let ([port], [(_, register)]) = (prefix.outputs(), &outputs[..]) {
+                if port.width != 1 && (prefix_temporaries.contains(register) || prefix_consumable.contains(register)) {
+                    prefix_outputs.insert(port.id, *register);
+                }
+            }
             let mut free = temporaries.iter().copied().filter(|r| !destinations.contains(r)).collect::<Vec<_>>();
             for port in prefix.outputs() {
+                if prefix_outputs.contains_key(&port.id) { continue; }
                 // A comparison bit needs a byte register; a wide value leaves
                 // those to the comparisons downstream when it can.
                 let index = if port.width == 1 { free.iter().position(|r| LowByteGpr::from_gpr(*r).is_some()) }
@@ -161,14 +192,17 @@ fn select_here(
                     .ok_or(LoweringError::RegisterPressure { node_index: 0, live_temporaries: inputs.len() + prefix_outputs.len() })?;
                 prefix_outputs.insert(port.id, free.remove(index));
             }
-            let first = select(prefix, inputs, temporaries, &prefix_outputs, &format!("{path}.prefix"))?;
+            let prefix_inputs = prefix.inputs().iter().map(|port| (port.id, inputs[&port.id])).collect::<Placements>();
+            let first = select(prefix, &prefix_inputs, &prefix_temporaries, &prefix_consumable, &prefix_outputs, &format!("{path}.prefix"))?;
             let mut carried = inputs.clone();
+            let mut next_consumable = consumable.clone();
+            next_consumable.extend(prefix_outputs.values().copied());
             carried.extend(prefix_outputs);
             let next_inputs = continuation.inputs().iter().map(|port| {
                 carried.get(&port.id).copied().map(|r| (port.id, r)).ok_or(LoweringError::UndefinedValue(port.id))
             }).collect::<Result<Placements, _>>()?;
-            let scratch = temporaries.iter().copied().filter(|r| !next_inputs.values().any(|v| v == r)).collect::<Vec<_>>();
-            let next = select(continuation, &next_inputs, &scratch, requested, &format!("{path}.continuation"))?;
+            let (scratch, next_consumable) = child_pool(temporaries, &next_consumable, &next_inputs.values().copied().collect::<Vec<_>>(), &BTreeSet::new());
+            let next = select(continuation, &next_inputs, &scratch, &next_consumable, requested, &format!("{path}.continuation"))?;
             let clobbered = first.clobbered.union(&next.clobbered).copied().collect();
             let length = first.byte_length + next.byte_length;
             (StructuredPlan::Compose { prefix: Box::new(first), continuation: Box::new(next) }, clobbered, length)
@@ -204,7 +238,7 @@ fn select_here(
             (StructuredPlan::MultiDataflow(parts), clobbered, length)
         }
         StructuredRegion::Dataflow(region) => {
-            let dag = lower_dag(region, &registers, temporaries, requested_output)?;
+            let dag = lower_dag_consuming(region, &registers, temporaries, consumable, requested_output)?;
             let length = dag.instructions.iter().map(|i| i.canonical_length()).sum();
             let clobbered = dag.clobbered.clone();
             (StructuredPlan::Dataflow(dag), clobbered, length)
@@ -216,7 +250,9 @@ fn select_here(
             let operand_register = candidates().find(|r| LowByteGpr::from_gpr(*r).is_none()).or_else(|| candidates().next())
                 .ok_or(LoweringError::RegisterPressure { node_index: 0, live_temporaries: inputs.len() })?;
             let operands = Region { inputs: prefix.inputs.clone(), nodes: cone(prefix, fused.computed.id)?, outputs: vec![fused.computed] };
-            let dag = lower_dag(&operands, &registers, temporaries, operand_register)?;
+            let live_after = fused_inputs(&fused, arguments).iter().filter_map(|port| inputs.get(&port.id).copied()).collect::<BTreeSet<_>>();
+            let operand_consumable = consumable.difference(&live_after).copied().collect();
+            let dag = lower_dag_consuming(&operands, &registers, temporaries, &operand_consumable, operand_register)?;
             let mut carried = inputs.clone();
             carried.insert(fused.computed.id, dag.output_register);
             let place = |id: u64| carried.get(&id).copied().ok_or(LoweringError::UndefinedValue(id));
@@ -225,9 +261,10 @@ fn select_here(
                 left_port: compare.left, right_port: compare.right };
             let next_inputs = fused_inputs(&fused, arguments).iter().map(|port| Ok((port.id, place(port.id)?)))
                 .collect::<Result<Placements, LoweringError>>()?;
-            let next_temporaries = temporaries.iter().copied()
-                .filter(|r| !next_inputs.values().any(|placed| placed == r)).collect::<Vec<_>>();
-            let (body, clobbered, length) = branch(test, arguments, when_true, when_false, &next_inputs, &next_temporaries, requested, &format!("{path}.continuation"))?;
+            let mut next_consumable = consumable.clone();
+            next_consumable.insert(dag.output_register);
+            let (next_temporaries, next_consumable) = child_pool(temporaries, &next_consumable, &next_inputs.values().copied().collect::<Vec<_>>(), &BTreeSet::new());
+            let (body, clobbered, length) = branch(test, arguments, when_true, when_false, &next_inputs, &next_temporaries, &next_consumable, requested, &format!("{path}.continuation"))?;
             let next_outputs = continuation.outputs().iter().map(|port| (*port, requested[&port.id])).collect::<Vec<_>>();
             let next = LoweredStructured { inputs: next_inputs, output: next_outputs[0], outputs: next_outputs, clobbered, byte_length: length, body };
             let clobbered = dag.clobbered.union(&next.clobbered).copied().collect();
@@ -236,7 +273,7 @@ fn select_here(
         }
         StructuredRegion::Sequence { prefix, continuation } => {
             if prefix.outputs.len() != 1 {
-                return select_here(&StructuredRegion::Compose { prefix: Box::new(StructuredRegion::Dataflow(prefix.clone())), continuation: continuation.clone() }, inputs, temporaries, requested, path);
+                return select_here(&StructuredRegion::Compose { prefix: Box::new(StructuredRegion::Dataflow(prefix.clone())), continuation: continuation.clone() }, inputs, temporaries, consumable, requested, path);
             }
             // Reserve the final result register for the continuation. A low
             // byte register is preferred for a materialized comparison bit.
@@ -244,23 +281,26 @@ fn select_here(
             let prefix_register = if prefix.outputs[0].width == 1 { candidates().find(|r| LowByteGpr::from_gpr(*r).is_some()) }
                 else { candidates().find(|r| LowByteGpr::from_gpr(*r).is_none()).or_else(|| candidates().next()) }
                 .ok_or(LoweringError::RegisterPressure { node_index: 0, live_temporaries: inputs.len() })?;
-            let dag = lower_dag(prefix, &registers, temporaries, prefix_register)?;
+            let live_after = continuation.inputs().iter().filter_map(|port| inputs.get(&port.id).copied()).collect::<BTreeSet<_>>();
+            let prefix_consumable = consumable.difference(&live_after).copied().collect();
+            let dag = lower_dag_consuming(prefix, &registers, temporaries, &prefix_consumable, prefix_register)?;
             let mut carried = inputs.clone();
             carried.insert(dag.output_id, dag.output_register);
             let next_inputs = continuation.inputs().iter().map(|port| {
                 carried.get(&port.id).copied().map(|r| (port.id, r))
                     .ok_or(LoweringError::UndefinedValue(port.id))
             }).collect::<Result<Placements, _>>()?;
-            let next_temporaries = temporaries.iter().copied()
-                .filter(|r| !next_inputs.values().any(|placed| placed == r)).collect::<Vec<_>>();
-            let next = select(continuation, &next_inputs, &next_temporaries,
+            let mut next_consumable = consumable.clone();
+            next_consumable.insert(dag.output_register);
+            let (next_temporaries, next_consumable) = child_pool(temporaries, &next_consumable, &next_inputs.values().copied().collect::<Vec<_>>(), &BTreeSet::new());
+            let next = select(continuation, &next_inputs, &next_temporaries, &next_consumable,
                 requested, &format!("{path}.continuation"))?;
             let clobbered = dag.clobbered.union(&next.clobbered).copied().collect();
             let length = dag.instructions.iter().map(|i| i.canonical_length()).sum::<usize>() + next.byte_length;
             (StructuredPlan::Sequence { prefix: dag, continuation: Box::new(next) }, clobbered, length)
         }
         StructuredRegion::Conditional { condition, arguments, when_true, when_false, .. } =>
-            branch(PlannedTest::NonZero(inputs[condition]), arguments, when_true, when_false, inputs, temporaries, requested, path)?,
+            branch(PlannedTest::NonZero(inputs[condition]), arguments, when_true, when_false, inputs, temporaries, consumable, requested, path)?,
     };
     Ok(LoweredStructured { inputs: inputs.clone(), output, outputs, clobbered, byte_length, body })
 }
@@ -269,14 +309,15 @@ fn select_here(
 #[allow(clippy::too_many_arguments)]
 fn branch(
     test: PlannedTest, arguments: &[Port], when_true: &StructuredRegion, when_false: &StructuredRegion,
-    inputs: &Placements, temporaries: &[Gpr], requested: &Placements, path: &str,
+    inputs: &Placements, temporaries: &[Gpr], consumable: &BTreeSet<Gpr>, requested: &Placements, path: &str,
 ) -> Result<(StructuredPlan, BTreeSet<Gpr>, usize), LoweringError> {
-    let branch_inputs = arguments.iter().map(|port| (port.id, inputs[&port.id])).collect();
-    // Preserve every inherited register across the branch. A caller
-    // may still carry a selector omitted from the branch interface.
-    let scratch = temporaries.to_vec();
-    let yes = select(when_true, &branch_inputs, &scratch, requested, &format!("{path}.true"))?;
-    let no = select(when_false, &branch_inputs, &scratch, requested, &format!("{path}.false"))?;
+    let branch_inputs: Placements = arguments.iter().map(|port| (port.id, inputs[&port.id])).collect();
+    // Preserve every inherited register across the branch but the ones the
+    // caller says are dead: it may still carry a selector omitted from the
+    // branch interface. One arm runs, so each may consume the same inputs.
+    let (scratch, consumed) = child_pool(temporaries, consumable, &branch_inputs.values().copied().collect::<Vec<_>>(), &BTreeSet::new());
+    let yes = select(when_true, &branch_inputs, &scratch, &consumed, requested, &format!("{path}.true"))?;
+    let no = select(when_false, &branch_inputs, &scratch, &consumed, requested, &format!("{path}.false"))?;
     // TEST r,r or CMP l,r; Jcc false; true; JMP join; false. Short jumps
     // while both distances fit rel8, near (Jcc rel32, JMP rel32) otherwise.
     let near = yes.byte_length + 2 > 127 || no.byte_length > 127;
@@ -292,6 +333,19 @@ fn branch(
         test, when_true: Box::new(yes), when_false: Box::new(no),
         false_displacement: false_distance as u32, join_displacement: join_distance as u32, near,
     }, clobbered, length))
+}
+
+/// What a child region may use, given the registers read after it: the
+/// consumable registers it takes and nothing after it reads are its to
+/// consume, and the consumable ones it does not take are temporaries again.
+fn child_pool(temporaries: &[Gpr], consumable: &BTreeSet<Gpr>, child_inputs: &[Gpr], live_after: &BTreeSet<Gpr>) -> (Vec<Gpr>, BTreeSet<Gpr>) {
+    let dead = |register: &Gpr| !live_after.contains(register);
+    let mut pool = temporaries.iter().copied().filter(|register| !child_inputs.contains(register)).collect::<Vec<_>>();
+    for &register in consumable {
+        if dead(&register) && !child_inputs.contains(&register) && !pool.contains(&register) { pool.push(register); }
+    }
+    let consumed = consumable.iter().copied().filter(|register| dead(register) && child_inputs.contains(register)).collect();
+    (pool, consumed)
 }
 
 /// A `Sequence` whose prefix ends in a 64-bit comparison that only the

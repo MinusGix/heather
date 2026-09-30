@@ -55,7 +55,17 @@ pub fn generate_structured_sourced(
     prefix: &str, region: &StructuredRegion, sources: &cert::SourceValues, bodies: &cert::SourceBodies, inputs: &Placements,
     temporaries: &[Gpr], outputs: &Placements,
 ) -> Result<StructuredX86Emission, LoweringError> {
-    let lowered = lower_structured_results(region, inputs, temporaries, outputs)?;
+    generate_structured_consuming(prefix, region, sources, bodies, inputs, temporaries, &BTreeSet::new(), outputs)
+}
+
+/// As `generate_structured_sourced`, where the caller reads the inputs in
+/// `consumable` registers no more (`lower_structured_consuming`).
+#[allow(clippy::too_many_arguments)]
+pub fn generate_structured_consuming(
+    prefix: &str, region: &StructuredRegion, sources: &cert::SourceValues, bodies: &cert::SourceBodies, inputs: &Placements,
+    temporaries: &[Gpr], consumable: &BTreeSet<Gpr>, outputs: &Placements,
+) -> Result<StructuredX86Emission, LoweringError> {
+    let lowered = lower_structured_consuming(region, inputs, temporaries, consumable, outputs)?;
     let mut module = Module::default();
     let values = region.inputs().iter().map(|p| (p.id, format!("values(width, {})", p.id))).collect();
     let crossings = Crossings { values: sources, bodies, named: Default::default(), scope: Default::default(), scopes: Default::default() };
