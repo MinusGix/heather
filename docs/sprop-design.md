@@ -1,5 +1,16 @@
 # `sEq`/`transp`: strict equality and definitional irrelevance in the kernel
 
+> **Revision, 2026-09-30: `transp` and the strip are removed** (not yet
+> implemented). A computing `transp` into relevant motives proves UIP for
+> `Id`, and the strip is Werner's rule, whose normalization in a
+> predicative theory is open ([[sprop-strip-normalization-open]]). Its only
+> producer, route 2b's fording, is replaced by the `IWf` former
+> (`docs/iwf-former-design.md`, §7 there has the argument). `sEq`,
+> `srefl`, `sEmpty`, `elim_sEmpty` and both irrelevance laws stay, and
+> `sEq` then has no eliminator. §4–§5's `transp`, β and strip text below
+> is historical from here on. Re-adding `transp` at strict motives only
+> (`sEq`, `sEmpty`) stays possible: it is UIP-free and needs no strip.
+
 Status: **reviewed 2026-07-28, rule set frozen** (§8 steps 1–2 done; no
 kernel code yet). The ch. 07 sketch is part III of
 `docs/metatheory-ch07-extensions.md`; its two findings were folded back

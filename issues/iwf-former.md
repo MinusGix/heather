@@ -60,3 +60,7 @@ which is a new elaborator piece.
   question.
 - **[[wf-former]]** owns `Wf`/`Vec`/`Fin`. Assumed here: their rules as in
   `docs/wf-former-design.md`, which this former extends.
+
+## Log
+
+- 2026-09-30: Decided with the user: (1) `transp` and the strip are removed, with the argument in doc §7; `docs/sprop-design.md` carries a revision note. (2) The family level is `l ⊔ li`, forced by the codes (§1.2). (3) `match` ships tiers 1–2: form A's motive inversion, and index abstraction with no equations. Tier 3, unification without K with deletion only at index types with decidable equality (Hedberg-generated K), comes when an example needs it (§8.3). What remains open before freezing is §12: inversion at wider index types, mutual families, the no-UIP model argument, and migration.

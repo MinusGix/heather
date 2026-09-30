@@ -69,10 +69,16 @@ constructor's result index is a function of its shape (`o`), and each
 child's index is a function of the shape and the position (`c`). `Wf` is
 the instance `I := Unit` with trivial `o` and `c`.
 
-The level is `l ⊔ li`, which is what the forded family `Σ^{l,li}(s). sEq^{li}(…)`
-has today. So no user-visible level changes. In CIC indices do not raise
-the level; whether Heather's code universe allows `l` alone is §12's
-first open question.
+**The level is `l ⊔ li`** (decided 2026-09-30). The codes force it:
+`TmIWf` carries the index type's code, at `li`, and a code at `Ty l` cannot
+contain one from a higher level. The same reason puts `Σ^{l,li}` at
+`l ⊔ li` and `Id` at its carrier's level. In practice it is `l`: index
+types are `Nat` or declared data at level 0, and today's forded families
+(`Σ^{l,li}(s). sEq^{li}(…)`) already sit at `l ⊔ li`, so no user-visible
+level changes. CIC's `l` alone (indices do not raise the level) would only
+matter for a large-indexed family, such as an `HList` over a list of codes.
+None exists, and getting `l` alone would mean taking the index out of the
+code. Revisit only if such a family appears.
 
 ---
 
@@ -195,14 +201,31 @@ expensive part, as it was for `Wf`.
   is how a `match` at a specific index gets definitional inversion (§8.3).
   Its `transp`-based recovery of child indices (`child_projection`) goes,
   since the child indices are now fields.
-- **`transp` into relevant motives, and the strip rule.** `sEq`/`srefl`/
-  `sEmpty`/`elim_sEmpty` and their irrelevance laws **stay** as strict
-  propositions (the part the Coq formalization checked, M10a, which has no
-  UIP). `transp` either goes, or its motive is restricted to strict
-  propositions (`sEq`, `sEmpty`). GCST allow that elimination without K,
-  and it needs no strip: at a strict motive every equation is irrelevance.
-  Which of the two is `docs/sprop-design.md`'s call, and a revision of its
-  frozen §4–§5.
+- **`transp`, and with it the strip rule, is removed** (decided
+  2026-09-30). `sEq`/`srefl`/`sEmpty`/`elim_sEmpty` and their irrelevance
+  laws **stay** as strict propositions. That is the part the Coq
+  formalization checked (M10a), and it has no UIP. After this round:
+  - `sEq` has no eliminator;
+  - `sEq` is a type inhabited exactly when its endpoints convert, with one
+    proof up to conversion;
+  - that is all the nominal tag uses (`Tag_D = sEq(Nat; k; k)`,
+    `docs/inductive-tier0-lowering.md` §3.3);
+  - `absurd`'s no-confusion goes through `J` (`inductive.rs`), not
+    `transp`.
+
+  Fording is `transp`'s only producer. Every other mention is a generic
+  term walk: display, module image, emission walk, `lgg`, the oracle's
+  head search.
+
+  Keeping `transp` restricted to strict motives (`sEq`, `sEmpty`) would buy
+  `sEq`'s symmetry, transitivity and congruence, and `sEq(0; 1) → sEmpty`.
+  Nothing needs these. Re-adding them is additive and cheap: GCST allow
+  that elimination without K, and it needs no strip, because at a strict
+  motive every equation is irrelevance. The removal therefore costs
+  nothing that cannot be had back. It deletes `Conv::strip`, `transp`'s
+  reduction step and its code-recursor branch (`Branches` has 56 today,
+  `term.rs:800`; 55 before §6's additions). It is a revision of `docs/sprop-design.md`'s frozen
+  §4–§5, recorded there.
 - **`issues/seq-strip-type-former-negatives.md`** and the head-only strip
   gap become moot: nothing generated contains a cast.
 
@@ -263,16 +286,31 @@ is at a variable index needs nothing more. At a **specific** index `D(e)`:
   payload with β definitional. Checked in Coq for
   `vhead : V(S n) → A` (§11), whose β holds by `reflexivity` on
   `vcons n x y xs` with everything open.
-- **Non-invertible `e`** (such as `plus(n, m)`): the motive is generalized over
-  the index with an `Id(I; j; e)` premise, instantiated at the call site
-  with `refl`. The arm's `J` meets that `refl` whenever the scrutinee is a
-  constructor application, so β still computes there. Using the index
-  equation inside an arm is dependent pattern matching without K (Cockx et
-  al.). The generator has nothing for it yet: fording never needed it,
-  because its stored proof played this role. So this is a new elaborator
-  piece, scoped by what surface `match` accepts. Its residue is mechanical,
-  and is exactly the "residue, not contamination" of the 2026-07-28
-  currency bar.
+- **Non-invertible `e`** (such as `plus(n, m)`): **index abstraction, no
+  equations.** This is Coq's `match … in D j return …` inference. Abstract
+  `e` out of the expected type to get the motive `j z. M[j/e]`. If that
+  motive is well-typed, each arm is checked at its constructor's index
+  `o[a]` and β stays definitional. It covers every `match` whose result
+  type depends on the index only through `e`. It is a small elaborator
+  addition, and it ships with `IWf`.
+
+Decided 2026-09-30: the two tiers above ship with `IWf`. A third tier is
+the documented next step, built when an example needs it and not before.
+
+- **Equations, unification without K.** Some arms need a fact abstraction
+  cannot give, such as `n = n'` from `S n = S n'`. For these, generalize
+  the motive over the index with an `Id(I; j; e)` premise, instantiated at
+  the call site with `refl`, and solve the equations in the arm. This is
+  the Equations-plugin design (Cockx et al.): solution, injectivity and
+  conflict steps, with no-confusion derived for the index type. The
+  arm's `J` meets the call site's `refl` whenever the scrutinee is a
+  constructor application, so β still computes there.
+
+  The one step that needs K is deleting a reflexive equation `x = x`. It is
+  allowed only at index types with decidable equality, justified by a K
+  lemma generated from Hedberg's theorem for that type. UIP stays local and
+  provable, never assumed. Fording never needed any of this, because its
+  stored proof played the equation's role.
 
 ### 8.4 Value equality, no-confusion, injectivity
 
@@ -351,34 +389,34 @@ representation. The one that does (value equality through Σ/Unit η) is
 
 ## 12. Open questions
 
-1. **Level.** `l ⊔ li` matches today's forded families. CIC's `l` alone is
-   sound for the family, but a code `TmIWf` at `Ty l` would name an index
-   code at `li`. Settle it with the code-recursor round.
-2. **`transp`: removed or restricted to strict motives** (§7). This needs
-   the Heather decision recorded in `docs/sprop-design.md`, and it shapes
-   the Coq formalization's M10b.
-3. **Inversion at a parameterized or container index type.** The motive's
+Decided 2026-09-30:
+- the level is `l ⊔ li` (§1.2);
+- `transp` is removed (§7);
+- `match` is tiers 1–2 now and tier 3 on demand (§8.3).
+
+1. **Inversion at a parameterized or container index type.** The motive's
    index case is `I`'s eliminator, so it is as available as that
    eliminator is. It is probably free, but the generator's form A device
    was written against the restricted index types.
-4. **Mutual families.** They come as one family indexed by `Σ(tag). I_tag`,
+2. **Mutual families.** They come as one family indexed by `Σ(tag). I_tag`,
    as for tier 0. Unexamined.
-5. **No-UIP, checked.** The claim in §7 rests on the absence of the known
+3. **No-UIP, checked.** The claim in §7 rests on the absence of the known
    derivation and on Coq/Agda precedent. A model argument (families
    without K, strict propositions interpreted as the trivial fibrations) is
    owed before the rule set freezes.
-6. **Migration of existing 2b declarations.** The acceptance suites
+4. **Migration of existing 2b declarations.** The acceptance suites
    (`indexed_route_2b*.rs`) re-run against the new lowering. Their
    form-B negatives should flip to positives.
 
 ## 13. Sequencing
 
-1. This document reviewed and the rule set frozen (with §12.1–2 settled).
+1. This document reviewed and the rule set frozen (§12.3's model argument
+   first).
 2. `DVec` lands, with `dnth`'s materialization and the neutral-tuple
    projection test.
 3. `IWf`/`sup_i`/`elim_IWf`, with β on open data at a computed index as
    the headline test, and value equality with no irrelevance arm.
 4. The rec.rs round (§6).
 5. The ch. 07 round (§9).
-6. The generator: route 2b's declarations re-lowered, F1–F3 lifted, and
-   `transp` retired or restricted.
+6. The generator: route 2b's declarations re-lowered, F1–F3 lifted,
+   `match` tiers 1–2, and `transp` removed from the kernel.
