@@ -349,7 +349,8 @@ copy and save; nothing needs that yet.
 
 ## 5. Slice C: the three-field line
 
-- `field_word(n, separator)`, for `n < 10^7`: the seven right-aligned
+- `field_word(n, separator)` (as designed; §5.1 amends it to two words,
+  `field_low` and `field_high`), for `n < 10^7`: the seven right-aligned
   characters of `n`, leading zeros as spaces, then the separator byte, as one
   word. It uses the same restoring-division scheme as `line_word`, over
   seven digits: 28 `place` steps against `line_word`'s 16, and nothing

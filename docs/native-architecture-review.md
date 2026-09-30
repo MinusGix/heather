@@ -1,6 +1,6 @@
 # The native program stack: an architecture review
 
-Status: **review, 2026-09-30; no refactor chosen yet (§6).** Read-only
+Status: **review, 2026-09-30. R0 and R1 chosen and landed the same day (§8); R2 onward open.** Read-only
 survey of what `wc -l`, `wc` and `tr` left behind, taken before a fourth
 program (`tr -s`/`-d`, `issues/native-loop-emitting-stores.md`) adds another
 process. The question is engineering, not speed: what is repeated, what is
@@ -387,3 +387,101 @@ Decisions for the user:
   suite should be watched against the rail, not assumed.
 - **Register pressure.** Only the conventions that aren't forced by the
   15-register budget can become parameters.
+
+## 8. As landed
+
+### R0 (2026-09-30)
+
+- **One SYSCALL encoding.** `syscall_bytes()` now lives in `x86_64_block`,
+  beside the blocks it sits between. The copies in `x86_64_step_forms` and
+  `linux_x86_64_entry` (`linux_syscall_bytes`) are gone, and every use was
+  renamed.
+- **`FetchedOrStore` and `LinuxStep` stay two definitions.** Neither module
+  imports the other: `x86_64_step_forms` is below the Linux trace, and
+  merging them would reorder the determinism test's fixtures. `LinuxStep`
+  now says it is `FetchedOrStore` at the profile's accesses, which the
+  determinism proof relies on by conversion.
+- **Stale header corrected.** `x86_64_fetched_code`'s header now says a
+  fetched step never writes, and that a profile keeps residency across its
+  stores by stating it for every value of the data it never fetches from.
+- **The write loop's duplicate targets are retired.** `WriteTargets`,
+  `exit_targets` and `WlFrom` are gone. `write_targets` returns
+  `WriteLoopTargets(at, wl_at_exit(at), pj)`, and `wl_from` (the instance
+  that exits 0) takes it. `write_events` stays, since the claims state their
+  traces with it.
+- **Small lemmas.**
+  - `option_some_inj` was a copy of `Option::some_inj` and is removed.
+  - `nth_below` is not a copy: it is the converse of `nth_some_below`.
+  - The page-store lemmas differ in shape and wait for R7.
+- **Named constants.** `io_entry()` names the entry in every process module
+  and in `io_initial`. The page base is `BitVec::ofNat(io_page_base())` in the
+  read and map processes' instruction blocks and store addresses. The
+  formatter tails (`elf64_count_print`, `elf64_read_fields`,
+  `elf64_print_pieces`, `decimal_line`) keep the literal where `omega` or a
+  closed evaluation reads it: omega takes a named constant as an opaque
+  atom. R7 reworks those proofs anyway. `4096` beside `read_capacity()` is
+  left as it is.
+- **Older execution paths are not retired.** Both are live:
+  - `ExecuteFetchedBlock`/`LinuxFetchedTrace` serve the exit-only arithmetic
+    profile (`crates/cli/src/native/elf.rs`).
+  - The `Linked*` block family serves the older FunctionIR lowering.
+
+  That is the `x86-64-machine-model` round's question.
+- **Stale text fixed.** `issues/native-proven-formatting-api.md`,
+  native-wc-design §5 and native-first-program-design's status note.
+
+### R1 (2026-09-30)
+
+`elf64_read_pieces` holds two relocatable pieces, each with its code, its
+length lemma, offsets from its start, a residency record proved once, and
+one lemma per path through it:
+
+- **The failure tail at `af`** (`fail_tail_code`, `FailTail`, `fail_tail`):
+  - `fail_retry`, where EINTR goes back to a target given as a premise;
+  - `fail_exit`, where any other errno exits 1.
+- **The read head at `ar`** (`read_head_code`, `ReadHead`, `read_head`):
+  - `head_read` and `head_read_failed` take the run from the head's start
+    through the SYSCALL to a continuation, at the state Linux returns to;
+  - `head_enter` handles a chunk, falling through past the JS;
+  - `head_at_end` handles the empty read, where JZ goes to a target;
+  - `head_failed` is the JS to a failure tail;
+  - `read_retries` and `read_fails` compose the head with the tail.
+- **One-step helpers.** `block_ran` and `near_ran` step a block or a near
+  jump at an offset.
+
+Every lemma names the state it reaches (`head_asked`, `head_going`,
+`fail_back`, …) instead of hiding it behind an existential. A client's
+register facts therefore still hold by conversion. For example, the state
+process's `StateKept` across a retried read is `refl`, where it used to be
+a conjunct threaded through a result type.
+
+The processes use them:
+
+- **State process (wc, wc -l).** `state_code` places `read_head_code` and
+  `fail_tail_code`, and `StatePieces` holds a `ReadHead` and a `FailTail`.
+  `state_failed`, `state_retry`, `state_fail_exit` and their result types
+  are gone. `state_from`'s four arms are each a call to a head lemma
+  around what is specific to the process.
+- **Map process (tr).** The same: `map_ask`, `map_failed`, `map_retry`,
+  `map_fail_exit` and `MapFailedAt` are gone, and `map_end` is `head_read`,
+  `head_at_end` and `wl_exit`.
+- **Write loop.** Its failure path is the failure tail
+  (`WriteLoopResident.fail`). `wl_failed` is now TEST and JS only, and
+  `wl_retry`, `wl_fail_exit`, `WriteFailedAt` and `WriteKept` are gone.
+
+The names the producers and claims use stay: `map_at_retry`, `wl_at_wjz`,
+the skip and span functions, `state_code_len` and `map_code_len`. Where an
+offset is a head's or a tail's, it is now defined through theirs (for
+example `state_at_setup() = rh_at_end(state_at_read())`). Each definition
+unfolds to the same sum as before, so the jump-sum lemmas did not change.
+Neither did the bytes or anything in `crates/cli`, apart from import lists
+for `syscall_bytes`.
+
+**Size.** The three processes lost 559 lines (state 949 → 693, map
+1157 → 928, write loop 566 → 492) and the shared pieces gained 313, less
+than §4's estimate. The gain is mostly that there is now one proof of the
+failure path, the read request and the end-of-file test instead of two or
+three. A fourth process that reads until end of file writes none of them.
+
+**Tests.** Four library mutation controls followed the text they mutate:
+`buffer_outside_page`, `setup_base`, `init_left_out` and `write_past_page`.

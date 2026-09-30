@@ -160,7 +160,7 @@ pub(super) fn certify(module: &mut Module, prefix: &str, emission: &SourceX86Emi
     for (suffix, actual, expected) in [
         ("entry_bytes", entry.as_slice(), format!("canonical_block_bytes(linux_entry_instructions({left}, {right}))")),
         ("exit_bytes", exit.as_slice(), "canonical_block_bytes(linux_exit_instructions())".into()),
-        ("syscall_bytes", &[0x0f, 0x05][..], "linux_syscall_bytes()".into()),
+        ("syscall_bytes", &[0x0f, 0x05][..], "syscall_bytes()".into()),
     ] {
         function(module, &format!("{prefix}_{suffix}"), "List<BitVec(8)>", byte_list(actual));
         theorem(module, &format!("{prefix}_{suffix}_correct"), Expr::equal(
@@ -337,8 +337,8 @@ fn certify_loaded_trace(module: &mut Module, prefix: &str, body: &[Instruction],
     for (name, ty, proof) in [
         ("loaded_execution", format!("ExecuteFetchedBlock(static_elf64_access(), {instructions}, {start}, {final_state})"),
             format!("fetched_block_instructions_cong(static_elf64_access(), {}(), {instructions}, {start}, {final_state}, {prefix}_loaded_instructions_agree(), {prefix}_loaded_execution_0(gprs, flags))", suffix(0))),
-        ("loaded_syscall", format!("FetchedFrom(static_elf64_access(), ({final_state}).memory, InstructionBytes(({final_state}).rip, linux_syscall_bytes()))"),
-            format!("fetched_span_at_state(static_elf64_access(), {prefix}_elf_file(), {}, {prefix}_loaded_span_{}(), linux_syscall_bytes(), {final_state}, refl, refl, refl, {prefix}_loaded_byte_{}_0())", loaded_address(offsets[selected.len()]), selected.len(), selected.len())),
+        ("loaded_syscall", format!("FetchedFrom(static_elf64_access(), ({final_state}).memory, InstructionBytes(({final_state}).rip, syscall_bytes()))"),
+            format!("fetched_span_at_state(static_elf64_access(), {prefix}_elf_file(), {}, {prefix}_loaded_span_{}(), syscall_bytes(), {final_state}, refl, refl, refl, {prefix}_loaded_byte_{}_0())", loaded_address(offsets[selected.len()]), selected.len(), selected.len())),
         ("loaded_request", format!("LinuxExitRequest<List<BitVec(8)>>({final_state}, {result})"),
             format!("linux_exit_request_at_equal_state({original_final}, {final_state}, {result}, {prefix}_loaded_final_state_agrees(gprs, flags), {prefix}_exit_request({start}))")),
     ] {
@@ -387,6 +387,7 @@ import elf64;
 import elf64_load;
 import linux_x86_64_entry;
 import x86_64;
+import x86_64_block;
 import x86_64_fetch;
 import bitvec;
 import bool;
@@ -394,7 +395,7 @@ import list;
 import option;
 import logic;
 fn code() -> List<BitVec(8)> {
-    canonical_bytes(MovRR(Rax, Rbx)) ++ linux_syscall_bytes()
+    canonical_bytes(MovRR(Rax, Rbx)) ++ syscall_bytes()
 }
 fn image() -> StaticElf64Image(code()) {
     StaticElf64Image(trivial, elf_byte(181), elf_byte(0), refl)
@@ -422,13 +423,13 @@ theorem neutral_byte(byte: BitVec(8)):
             ("entry_mismatch", "file()", "address(177)", "code()", "static_elf64_access()"),
             ("wrong_base", "file()", "@bitvec::BitVec::concat(16, 48, @bitvec::BitVec::ofNat(16, 176), @bitvec::BitVec::ofNat(48, 65))", "code()", "static_elf64_access()"),
             ("missing_tail", "static_elf64_header(elf_byte(180), elf_byte(0)) ++ canonical_bytes(MovRR(Rax, Rbx)) ++ [elf_byte(15)]", "static_elf64_entry()", "code()", "static_elf64_access()"),
-            ("syscall_mismatch", "static_elf64_header(elf_byte(181), elf_byte(0)) ++ canonical_bytes(MovRR(Rax, Rbx)) ++ [elf_byte(15), elf_byte(4)]", "address(179)", "linux_syscall_bytes()", "static_elf64_access()"),
+            ("syscall_mismatch", "static_elf64_header(elf_byte(181), elf_byte(0)) ++ canonical_bytes(MovRR(Rax, Rbx)) ++ [elf_byte(15), elf_byte(4)]", "address(179)", "syscall_bytes()", "static_elf64_access()"),
             ("non_executable", "file()", "static_elf64_entry()", "code()", "FetchAccess<List<BitVec(8)>>(static_elf64_read, λ file address => False)"),
         ] {
-            let count = if expected == "linux_syscall_bytes()" { 2 } else { 5 };
+            let count = if expected == "syscall_bytes()" { 2 } else { 5 };
             let mut witness = "⟨refl, ⟨refl, trivial⟩⟩".to_string();
             for _ in 1..count { witness = format!("⟨refl, ⟨refl, ⟨refl, {witness}⟩⟩⟩"); }
-            let source = format!("import loaded_checks;\nimport elf64;\nimport elf64_load;\nimport linux_x86_64_entry;\nimport x86_64;\nimport x86_64_fetch;\nimport bitvec;\nimport list;\nimport bool;\ntheorem bad(): FetchedFrom({access}, {memory}, InstructionBytes({address}, {expected})) {{ FetchedFrom({witness}) }}");
+            let source = format!("import loaded_checks;\nimport elf64;\nimport elf64_load;\nimport linux_x86_64_entry;\nimport x86_64;\nimport x86_64_block;\nimport x86_64_fetch;\nimport bitvec;\nimport list;\nimport bool;\ntheorem bad(): FetchedFrom({access}, {memory}, InstructionBytes({address}, {expected})) {{ FetchedFrom({witness}) }}");
             let error = elab.fork().elab_module_source(name, &source).expect_err("invalid loaded fetch accepted");
             assert!(format!("{error:?}").contains("NotConvertible"), "{name}: {}", error.render(&source));
         }

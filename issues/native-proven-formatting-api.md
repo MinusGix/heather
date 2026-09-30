@@ -19,5 +19,6 @@ because one field per 8-byte word keeps the formatter and the stores simple
   such as `decimal_digits`.
 
 Nothing here is designed yet. The native formatter today is
-`lib/decimal_line.hthr` (four digits in one word, below 10000) and the
-three-field `field_word` of the wc round.
+`lib/decimal_line.hthr` (four digits in one word, below 10000) and
+`lib/field_line.hthr` (`%7d` plus a separator as two words, `field_low` and
+`field_high`, below 10^7) of the wc round.

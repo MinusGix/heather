@@ -23,6 +23,8 @@ import omega;
 record IoMemory { file: List<BitVec(8)>, page: Nat → BitVec(8) }
 
 fn io_page_base() → Nat { 0x410000 }
+// Where the program starts: its first byte, past the 232-byte header.
+fn io_entry() → BitVec(64) { BitVec::ofNat(0x4000e8) }
 
 // A page offset, for an address inside the page.
 fn io_offset_of(address: Nat) → Option<Nat> {
@@ -76,7 +78,7 @@ fn io_linux() → LinuxIo<IoMemory> {
 // The process at its entry: the file as loaded, anything at all in the page,
 // registers and flags arbitrary.
 fn io_initial(file: List<BitVec(8)>, page: Nat → BitVec(8), gprs: Gprs, flags: Flags) → MachineState<IoMemory> {
-    MachineState(gprs, flags, BitVec::ofNat(0x4000e8), IoMemory(file, page))
+    MachineState(gprs, flags, io_entry(), IoMemory(file, page))
 }
 
 theorem io_offset_in_page(i: Nat, inside: i < 4096): io_offset_of(io_page_base() + i) = Some(i) {

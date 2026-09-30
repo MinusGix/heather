@@ -875,7 +875,7 @@ fn certify_trace(module: &mut Module, words: &Words, prefix: &str, caller: &str,
     }
     let (syscall_fetch, _) = certify_fetch(module, words, prefix, n, &format!("{end}.memory"), pc, &[0x0f, 0x05], HEADER);
     state_decl(module, &format!("{prefix}_syscall_fetched"),
-        format!("FetchedFrom(call_fetch_access(), {end}.memory, InstructionBytes({end}.rip, linux_syscall_bytes()))"), syscall_fetch, true);
+        format!("FetchedFrom(call_fetch_access(), {end}.memory, InstructionBytes({end}.rip, syscall_bytes()))"), syscall_fetch, true);
     state_decl(module, &format!("{prefix}_stack_restored"), format!("read_gpr(Rsp, {end}.gprs) = {}", word(STACK_TOP)), format!("{prefix}_rsp_{n}(gprs, flags, stack)"), true);
     Ok(())
 }

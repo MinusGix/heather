@@ -2,8 +2,11 @@
 // One step fetches the bytes at RIP and runs them as one of the forms the
 // compiler emits; a run is a count of such steps. The bridges below turn the
 // structural relations (`structured_after`, `ExecuteAccess`) into fetched
-// runs, given layout and code resident at the start. Execution never writes
-// memory, so residency proved at the start holds on every later state.
+// runs, given layout and code resident at the start. A fetched step never
+// writes memory, so residency proved at the start holds on every later state
+// of a fetched run. Stores are steps of their own (x86_64_store); a profile
+// whose stores reach only data it never fetches from (elf64_io's page) keeps
+// residency across them by stating it for every value of that data.
 import x86_64;
 import x86_64_block;
 import x86_64_fetch;

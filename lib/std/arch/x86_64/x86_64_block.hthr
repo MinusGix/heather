@@ -11,6 +11,10 @@ import nat;
 import option;
 import relation;
 
+// SYSCALL, 0F 05: not a block instruction (it leaves the machine for the
+// kernel), but every profile's code places it between blocks.
+fn syscall_bytes() → List<BitVec(8)> { [BitVec::ofNat(15), BitVec::ofNat(5)] }
+
 fn canonical_block_bytes(instructions: List<Instruction>) → List<BitVec(8)> {
     match instructions {
         Nil => Nil,

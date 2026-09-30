@@ -172,7 +172,7 @@ pub(super) fn nested(parts: &[String]) -> String {
     }
 }
 
-pub(super) fn syscall() -> String { "linux_syscall_bytes()".into() }
+pub(super) fn syscall() -> String { "syscall_bytes()".into() }
 
 /// elf64_read_state's `state_code` up to its tail: init, the read, its test
 /// and jumps, the chunk's setup, loop and jump back, the failure path.
@@ -403,7 +403,7 @@ pub(super) fn certify(module: &mut Module, prefix: &str, program: &Program, emis
 
 pub(super) const IMPORTS: &[&str] = &["elf64_read_state", "elf64_read_pieces", "elf64_io", "elf64_calls", "elf64", "linux_x86_64_entry",
     "linux_x86_64_io", "linux_x86_64_determinism", "function_ir_loop",
-    "function_ir_loop_trace", "x86_64_fetched_code", "x86_64_fetch", "bitvec_nat", "x86_64", "bitvec", "list", "logic", "nat"];
+    "function_ir_loop_trace", "x86_64_fetched_code", "x86_64_fetch", "bitvec_nat", "x86_64", "x86_64_block", "bitvec", "list", "logic", "nat"];
 
 /// The formatter certificates' prefix. Program prefixes end in `_native`, so
 /// no program's declarations can share it.

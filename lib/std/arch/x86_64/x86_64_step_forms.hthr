@@ -18,10 +18,6 @@ import list;
 import logic;
 import option;
 
-// SYSCALL, 0F 05. The Linux trace names the same bytes
-// (`linux_syscall_bytes`); this module stays below it.
-fn syscall_bytes() → List<BitVec(8)> { [BitVec::ofNat(15), BitVec::ofNat(5)] }
-
 inductive StepForm {
     FormEmitted(emitted: EmittedInstruction),
     FormStore(store: MemoryStore),

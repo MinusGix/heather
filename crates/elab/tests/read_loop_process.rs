@@ -23,7 +23,7 @@ fn slow_acceptance_read_loop_refusals() {
     const STATE: &str = include_str!("../../../lib/elf64_read_state.hthr");
     let library = checker().semantic_image();
     for (name, from, to) in [
-        ("buffer_outside_page", "MovRI(Rsi, BitVec::ofNat(0x410000)),\n", "MovRI(Rsi, BitVec::ofNat(0x411000)),\n"),
+        ("buffer_outside_page", "MovRI(Rsi, BitVec::ofNat(io_page_base())),\n", "MovRI(Rsi, BitVec::ofNat(0x411000)),\n"),
         ("capacity_past_page", "fn read_capacity() → Nat { 4096 }", "fn read_capacity() → Nat { 4097 }"),
         ("read_number", "[MovRI(Rax, BitVec::ofNat(0)), MovRI(Rdi", "[MovRI(Rax, BitVec::ofNat(1)), MovRI(Rdi"),
         ("descriptor", "MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rsi", "MovRI(Rdi, BitVec::ofNat(1)), MovRI(Rsi"),

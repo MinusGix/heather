@@ -84,7 +84,7 @@ theorem count_pieces(memory: IoMemory, at: Nat, word, start, length: StructuredC
     resident: CodeResident(io_fetch_access(), memory, count_tail(word, start, length, pj), eof_rip(at))):
     CountPieces(memory, at, word, start, length, pj) {
     let fetch = io_fetch_access();
-    let entry: BitVec(64) = BitVec::ofNat(0x4000e8);
+    let entry = io_entry();
     let b = canonical_block_bytes(print_base_block());
     let w = structured_bytes(word);
     let st = structured_bytes(start);
@@ -121,7 +121,7 @@ theorem count_formats(stored: IoMemory, at: Nat, word, start, length: Structured
         CountFormatted(stored, at, word, start, length, count, last)) {
     let fetch = io_fetch_access();
     let data = io_data_access();
-    let entry: BitVec(64) = BitVec::ofNat(0x4000e8);
+    let entry = io_entry();
     let n = bitvec_nat::word_of_nat(64, count);
     let based = block_fetched(fetch, data, print_base_block(), done, trivial,
         resident_state(fetch, canonical_block_bytes(print_base_block()), stored, eof_rip(at), done, done_memory, done_rip, pieces.base_at));
@@ -178,11 +178,11 @@ theorem count_writes(stored: IoMemory, at: Nat, word, start, length: StructuredC
     formatted: CountFormatted(stored, at, word, start, length, count, s3),
     pieces: CountPieces(stored, at, word, start, length, pj),
     later: CountPieces(io_store_offset(stored, 0, word_bytes(line_word(bitvec_nat::word_of_nat(64, count)))), at, word, start, length, pj),
-    targets: WriteTargets(ct_write(at, word, start, length), pj),
+    targets: WriteLoopTargets(ct_write(at, word, start, length), wl_at_exit(ct_write(at, word, start, length)), pj),
     ending: WriteEnding, ending_ok: WriteEndingOk(ending), steps: List<WriteStep>, steps_ok: WriteSteps(steps)(decimal_line(count))):
     LinuxRuns(io_linux(), write_events(decimal_line(count), steps, ending), s3) {
     let fetch = io_fetch_access();
-    let entry: BitVec(64) = BitVec::ofNat(0x4000e8);
+    let entry = io_entry();
     let n = bitvec_nat::word_of_nat(64, count);
     let line = decimal_line(count);
     let wb = word_bytes(line_word(n));
@@ -227,7 +227,8 @@ theorem count_tail_runs(file: List<BitVec(8)>, needle: BitVec(8), loop_bytes: Li
     format: ReadPrintFormat(word, start, length, word_keeps, start_keeps, length_keeps), pj: PrintJumps,
     resident: (page: Nat → BitVec(8)) → CodeResident(io_fetch_access(), IoMemory(file, page), count_tail(word, start, length, pj),
         eof_rip(state_at_done(needle, loop_bytes))),
-    targets: WriteTargets(ct_write(state_at_done(needle, loop_bytes), word, start, length), pj),
+    targets: WriteLoopTargets(ct_write(state_at_done(needle, loop_bytes), word, start, length),
+        wl_at_exit(ct_write(state_at_done(needle, loop_bytes), word, start, length)), pj),
     total: Nat, small: total < 10000,
     ending: WriteEnding, ending_ok: WriteEndingOk(ending), steps: List<WriteStep>, steps_ok: WriteSteps(steps)(decimal_line(total))):
     StateTail(file, needle, loop_bytes, rep, total, write_events(decimal_line(total), steps, ending)) {
@@ -272,7 +273,7 @@ theorem read_count_print_runs(file: List<BitVec(8)>, p: LoopPlacement, at: ReadS
     write_back_closes: print_loop_span() + 5 + pj.bd.sign_extend(32).toNat() = Nat::pow(2, 64),
     write_retry_closes: print_retry_span() + 6 + pj.rd.sign_extend(32).toNat() = Nat::pow(2, 64),
     resident: (page: Nat → BitVec(8)) → CodeResident(io_fetch_access(), IoMemory(file, page),
-        read_count_code(needle, loop_bytes, jumps, word, start, length, pj), BitVec::ofNat(0x4000e8)),
+        read_count_code(needle, loop_bytes, jumps, word, start, length, pj), io_entry()),
     chunks: List<ReadStep>, ok: EofChunks(chunks), ending: ReadEnding, ending_ok: EofEnding(ending),
     room: eof_input(chunks).len() + 4096 < Nat::pow(2, 64), small: spec(eof_input(chunks)) < 10000,
     writes: List<WriteStep>, writes_ok: WriteSteps(writes)(decimal_line(spec(eof_input(chunks)))),

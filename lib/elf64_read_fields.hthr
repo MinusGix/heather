@@ -163,7 +163,7 @@ theorem field_pieces(memory: IoMemory, count: Gpr, offset, separator: Nat, low, 
     FieldPieces(memory, count, offset, separator, low, high, at) ∧
     CodeResident(io_fetch_access(), memory, rest, eof_rip(fc_end(count, offset, separator, low, high, at))) {
     let fetch = io_fetch_access();
-    let entry: BitVec(64) = BitVec::ofNat(0x4000e8);
+    let entry = io_entry();
     let c = canonical_block_bytes(field_count_block(count));
     let l = structured_bytes(low);
     let b = canonical_block_bytes(field_low_block(offset, separator));
@@ -198,7 +198,7 @@ theorem fields_pieces(memory: IoMemory, needle: BitVec(8), loop_bytes: List<BitV
     let f1 = field_pieces(memory, R14, 8, 32, low, high, field_code(R15, 16, 10, low, high, line ++ write_loop_code(pj)),
         fields_at1(needle, loop_bytes, low, high), f0.right);
     let f2 = field_pieces(memory, R15, 16, 10, low, high, line ++ write_loop_code(pj), fields_at2(needle, loop_bytes, low, high), f1.right);
-    let r = resident_split_at(io_fetch_access(), memory, line, write_loop_code(pj), BitVec::ofNat(0x4000e8),
+    let r = resident_split_at(io_fetch_access(), memory, line, write_loop_code(pj), io_entry(),
         fields_at_line(needle, loop_bytes, low, high), f2.right);
     FieldsPieces(f0.left, f1.left, f2.left, r.left,
         write_loop_resident(memory, fields_at_write(needle, loop_bytes, low, high), pj, r.right))
@@ -259,7 +259,7 @@ theorem field_prints(file: List<BitVec(8)>, count: Gpr, offset, separator: Nat, 
         ((after.rip = eof_rip(fc_end(count, offset, separator, low, high, at))) ∧ CountsKept(after.gprs, state.gprs)))) {
     let fetch = io_fetch_access();
     let data = io_data_access();
-    let entry: BitVec(64) = BitVec::ofNat(0x4000e8);
+    let entry = io_entry();
     let writes = linux_writes(io_linux());
     let word = bitvec_nat::word_of_nat(64, n);
     let tail: BitVec(64) = BitVec::ofNat(16777216 * separator);
@@ -381,10 +381,6 @@ theorem take_nth<A>(xs: List<A>): (k, i: Nat) → (x: A) → xs.take(k).nth(i) =
 
 theorem trans_le_succ(offset, len, start: Nat, below: offset + Succ(len) <= start): Succ(offset) + len <= start { omega }
 
-theorem option_some_inj(a, b: BitVec(8), same: Some(a) = Some(b)): a = b {
-    j(same, λ o _ => a = (match o { None => a, Some(x) => x }), refl)
-}
-
 // The page holds `bytes` from `offset`.
 // (The offset varies in the recursion, so it is taken after the match.)
 fn stored_from(page: Nat → BitVec(8), bytes: List<BitVec(8)>) → Nat → Type {
@@ -453,7 +449,7 @@ theorem stored_nth(page: Nat → BitVec(8), bytes: List<BitVec(8)>): (offset, i:
         Nil => λ offset i byte held present => absurd(present),
         Cons(first, rest) => λ offset i => match i as λ k => (byte: BitVec(8)) → StoredList(page, offset, Cons(first, rest)) →
                 Cons(first, rest).nth(k) = Some(byte) → page(offset + k) = byte {
-            Zero => λ byte held present => trans(held.left, option_some_inj(first, byte, present)),
+            Zero => λ byte held present => trans(held.left, Option::some_inj<BitVec(8)>(first, byte, present)),
             Succ(k) => λ byte held present => j(Nat::add_succ_left(offset, k), λ at _ => page(at) = byte,
                 stored_nth(page, rest, Succ(offset), k, byte, held.right, present)),
         },
@@ -535,7 +531,7 @@ theorem fields_tail_runs<C>(file: List<BitVec(8)>, needle: BitVec(8), loop_bytes
     low, high: StructuredCode, low_keeps, high_keeps: Gpr → Type, format: FieldsFormat(low, high, low_keeps, high_keeps), pj: PrintJumps,
     resident: (page: Nat → BitVec(8)) → CodeResident(io_fetch_access(), IoMemory(file, page), fields_tail(low, high, pj),
         eof_rip(state_at_done(needle, loop_bytes))),
-    targets: WriteTargets(fields_at_write(needle, loop_bytes, low, high), pj),
+    targets: WriteLoopTargets(fields_at_write(needle, loop_bytes, low, high), wl_at_exit(fields_at_write(needle, loop_bytes, low, high)), pj),
     total: C, small: (first(total) < 10000000) ∧ ((second(total) < 10000000) ∧ (third(total) < 10000000)),
     ending: WriteEnding, ending_ok: WriteEndingOk(ending), steps: List<WriteStep>,
     steps_ok: WriteSteps(steps)(three_fields_line(first(total), second(total), third(total)))):
@@ -571,7 +567,7 @@ theorem fields_tail_runs<C>(file: List<BitVec(8)>, needle: BitVec(8), loop_bytes
         let s4 = execute_block_normal(fields_line_block(), s3);
         let s4_memory: (s4.memory = m3) = trans(pure_block_memory(fields_line_block(), s3), f2.proof.right.left);
         let s4_rip: (s4.rip = eof_rip(fields_at_write(needle, loop_bytes, low, high))) =
-            trans(lined.right, rip_advance(BitVec::ofNat(0x4000e8), s3.rip, fields_at_line(needle, loop_bytes, low, high),
+            trans(lined.right, rip_advance(io_entry(), s3.rip, fields_at_line(needle, loop_bytes, low, high),
                 canonical_block_bytes(fields_line_block()).len(), f2.proof.right.right.left));
         let stored = line_stored(IoMemory(file, page), a, b, c, small.left, small.right.left, small.right.right);
         let sends: LinuxWritesFrom(io_linux(), m3, read_gpr(R9, s4.gprs), line) = stored_sends(m3, line, stored, trivial);
@@ -613,7 +609,7 @@ theorem read_fields_runs<C>(file: List<BitVec(8)>, p: LoopPlacement, at: ReadSta
     write_back_closes: print_loop_span() + 5 + pj.bd.sign_extend(32).toNat() = Nat::pow(2, 64),
     write_retry_closes: print_retry_span() + 6 + pj.rd.sign_extend(32).toNat() = Nat::pow(2, 64),
     resident: (page: Nat → BitVec(8)) → CodeResident(io_fetch_access(), IoMemory(file, page),
-        read_fields_code(needle, loop_bytes, jumps, low, high, pj), BitVec::ofNat(0x4000e8)),
+        read_fields_code(needle, loop_bytes, jumps, low, high, pj), io_entry()),
     chunks: List<ReadStep>, ok: EofChunks(chunks), ending: ReadEnding, ending_ok: EofEnding(ending),
     room: eof_input(chunks).len() + 4096 < Nat::pow(2, 64),
     small: (first(step_fold(region, needle, eof_input(chunks), init)) < 10000000) ∧
@@ -670,7 +666,7 @@ theorem read_fields_spec_runs<C>(file: List<BitVec(8)>, p: LoopPlacement, at: Re
     write_back_closes: print_loop_span() + 5 + pj.bd.sign_extend(32).toNat() = Nat::pow(2, 64),
     write_retry_closes: print_retry_span() + 6 + pj.rd.sign_extend(32).toNat() = Nat::pow(2, 64),
     resident: (page: Nat → BitVec(8)) → CodeResident(io_fetch_access(), IoMemory(file, page),
-        read_fields_code(needle, loop_bytes, jumps, low, high, pj), BitVec::ofNat(0x4000e8)),
+        read_fields_code(needle, loop_bytes, jumps, low, high, pj), io_entry()),
     chunks: List<ReadStep>, ok: EofChunks(chunks), ending: ReadEnding, ending_ok: EofEnding(ending),
     room: eof_input(chunks).len() + 4096 < Nat::pow(2, 64),
     small: (first_spec(eof_input(chunks)) < 10000000) ∧ ((second_spec(eof_input(chunks)) < 10000000) ∧ (third_spec(eof_input(chunks)) < 10000000)),

@@ -19,7 +19,7 @@ pub(super) const SUPPORT: &[(&str, &str)] = &[
 ];
 pub(super) const IMPORTS: &[&str] = &["elf64_read_map", "elf64_write_loop", "elf64_print_pieces", "elf64_read_pieces", "elf64_io",
     "elf64_calls", "elf64", "linux_x86_64_entry", "linux_x86_64_io", "linux_x86_64_determinism", "x86_64_structured_block",
-    "x86_64_fetched_code", "x86_64_fetch", "bitvec_nat", "x86_64", "bitvec", "list", "logic", "nat"];
+    "x86_64_fetched_code", "x86_64_fetch", "bitvec_nat", "x86_64", "x86_64_block", "bitvec", "list", "logic", "nat"];
 
 /// The byte map's certificate: a module of its own, and its bytes.
 pub(super) struct Piece { pub module: String, pub prefix: String, pub text: String, pub bytes: Vec<u8> }

@@ -107,7 +107,7 @@ fn slow_acceptance_read_map_refusals() {
         ("store_elsewhere", "fn map_store() → ByteStore { ByteStore(base := Rsi, source := Rdx) }",
             "fn map_store() → ByteStore { ByteStore(base := Rsi, source := Rax) }"),
         ("jnz_inverted", "near_control_bytes(JumpIfNear(NE, jumps.ld)) ++", "near_control_bytes(JumpIfNear(E, jumps.ld)) ++"),
-        ("write_past_page", "MovRI(R9, BitVec::ofNat(0x410000))", "MovRI(R9, BitVec::ofNat(0x410001))"),
+        ("write_past_page", "MovRI(R9, BitVec::ofNat(io_page_base()))", "MovRI(R9, BitVec::ofNat(0x410001))"),
         ("loop_span", "fn map_loop_span(p: Nat) → Nat { ((map_load_len() + p) + 3) + map_step_len() }",
             "fn map_loop_span(p: Nat) → Nat { ((map_load_len() + p) + 2) + map_step_len() }"),
     ] {

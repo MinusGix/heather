@@ -243,7 +243,7 @@ pub(super) fn finish(module: &mut Module, words: &Words, prefix: &str, caller: &
         format!("LinuxExitRequest(number := refl, status := {prefix}_exit_status(gprs, flags, stack))"), true);
     let (fetch, _) = certify_fetch(module, words, prefix, n, &format!("{end}.memory"), pc, &[0x0f, 0x05], HEADER);
     state_decl(module, &format!("{prefix}_syscall_fetched"),
-        format!("FetchedFrom(call_fetch_access(), {end}.memory, InstructionBytes({end}.rip, linux_syscall_bytes()))"), fetch, true);
+        format!("FetchedFrom(call_fetch_access(), {end}.memory, InstructionBytes({end}.rip, syscall_bytes()))"), fetch, true);
     state_decl(module, &format!("{prefix}_stack_restored"), format!("read_gpr(Rsp, {end}.gprs) = {}", words.get(STACK_TOP)), format!("{prefix}_rsp_{n}(gprs, flags, stack)"), true);
     Ok(())
 }
