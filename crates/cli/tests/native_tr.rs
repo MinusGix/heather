@@ -5,23 +5,14 @@
 //! reading the same input.
 #![cfg(all(target_arch = "x86_64", target_os = "linux"))]
 use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Output, Stdio};
 
-fn root() -> PathBuf { Path::new(env!("CARGO_MANIFEST_DIR")).join("../..") }
+mod native_support;
+use native_support::*;
 
-fn scratch(name: &str) -> PathBuf {
-    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-    let directory = root().join(format!("target/native-{name}-{}-{nonce}", std::process::id()));
-    std::fs::create_dir_all(&directory).unwrap();
-    directory
-}
-
-fn build(directory: &Path, function: &str, extra: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_heather")).current_dir(root()).env("PATH", directory)
-        .args(["build-x86", "examples/x86-native/tr.hthr", function, "--map"]).args(extra).arg("-o")
-        .arg(directory.join("tr")).args(["--cache-dir", "target/native-test-images"]).output().unwrap()
-}
+// A byte map is all a build names.
+fn build(directory: &Path, function: &str, extra: &[&str]) -> Output { build_x86(directory, &example("tr"), function, extra, "tr") }
 
 fn upcase(input: &[u8]) -> Vec<u8> { input.iter().map(|b| b.to_ascii_uppercase()).collect() }
 
@@ -38,16 +29,6 @@ fn inputs() -> Vec<Vec<u8>> {
         inputs.push(random(len));
     }
     inputs
-}
-
-fn piped(executable: &Path, input: &[u8]) -> Output {
-    let mut child = Command::new(executable).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
-    let mut stdin = child.stdin.take().unwrap();
-    let input = input.to_vec();
-    let writer = std::thread::spawn(move || { let _ = stdin.write_all(&input); });
-    let output = child.wait_with_output().unwrap();
-    writer.join().unwrap();
-    output
 }
 
 // The host's `tr` on the same input, when there is one.
@@ -80,19 +61,13 @@ fn streams(executable: &Path) -> (Vec<u8>, Output) {
     (early, child.wait_with_output().unwrap())
 }
 
-fn unwritable_stdout(executable: &Path, stdout: Stdio) -> Output {
-    let mut child = Command::new(executable).stdin(Stdio::piped()).stdout(stdout).spawn().unwrap();
-    child.stdin.take().unwrap().write_all(b"one two\n").unwrap();
-    child.wait_with_output().unwrap()
-}
-
-// A function that is not a byte map, and a map with inputs of its own, are
-// refused before anything is certified, and nothing is published. Then the
-// program itself, run.
+// A function of one argument that is not a byte map, and a byte map given
+// `--arg`s (a function of two arguments), are refused before anything is
+// certified, and nothing is published. Then the program itself, run.
 #[test]
 fn tr_maps_stdin_to_stdout() {
     let directory = scratch("tr");
-    for (function, extra, reason) in [("lower_byte", &[][..], "--map needs a byte map"), ("upcase", &["--arg", "1"][..], "--map maps stdin")] {
+    for (function, extra, reason) in [("lower_byte", &[][..], "is not a byte map"), ("upcase", &["--arg", "1"][..], "two --arg values")] {
         let output = build(&directory, function, extra);
         assert!(!output.status.success(), "{function} {extra:?} was certified");
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -126,8 +101,8 @@ fn tr_maps_stdin_to_stdout() {
     assert_eq!((run.status.code(), streamed.as_slice()), (Some(0), b"FIRST BURST\nSECOND\n".as_slice()));
     let run = Command::new(&executable).stdin(std::fs::File::open("/").unwrap()).output().unwrap();
     assert_eq!((run.status.code(), run.stdout.as_slice()), (Some(1), b"".as_slice()));
-    assert_eq!(unwritable_stdout(&executable, Stdio::null()).status.code(), Some(0));
+    assert_eq!(unwritable_stdout(&executable, Stdio::null(), b"one two\n").status.code(), Some(0));
     let full = std::fs::OpenOptions::new().write(true).open("/dev/full").unwrap();
-    assert_eq!(unwritable_stdout(&executable, Stdio::from(full)).status.code(), Some(1));
+    assert_eq!(unwritable_stdout(&executable, Stdio::from(full), b"one two\n").status.code(), Some(1));
     std::fs::remove_dir_all(directory).unwrap();
 }

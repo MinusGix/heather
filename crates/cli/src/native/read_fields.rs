@@ -8,14 +8,13 @@
 //! formatter's two words, lays out the code, states the program-facing facts
 //! every record needs, and instantiates the library theorem at the written
 //! file. Nothing in it is about any one program.
-use heather_elab::function_ir_source::{generate_elaborated_loop_x86, generate_elaborated_piece_x86, reflect_elaborated_readonly_loop,
-    LoopCarry, LoopX86Emission, StructuredSourceRecord, StructuredSourceType};
+use heather_elab::function_ir_source::{generate_elaborated_piece_x86, LoopCarry, LoopX86Emission, StructuredSourceRecord, StructuredSourceType};
 use heather_elab::function_ir_x86_lower::{encode_structured, Gpr, Instruction, Placements};
 use heather_elab::heather_emit::Module;
 use heather_elab::Elaborator;
 
-use super::read_loop::{image_facts, nested, placement, print_facts, print_jumps, state_facts, state_jumps, state_layout, tuple, write_loop, FormatPart,
-    StateShape};
+use super::read_loop::{claims, image_facts, nested, print_facts, print_jumps, state_facts, state_jumps, state_layout, tuple, write_loop, FormatPart,
+    Program, StateShape};
 
 // Bundled after the read profile's and the write loop's, only for this one:
 // the field formatter and the three-field tail.
@@ -29,50 +28,20 @@ pub(super) const IMPORTS: &[&str] = &["elf64_read_fields", "elf64_write_loop", "
 /// The formatter certificates' prefix, as `read_loop::FORMAT_PREFIX`.
 pub(super) const FORMAT_PREFIX: &str = "fields_format";
 
-/// What a program names: its loop's source function and step-advance theorem,
-/// the byte the loop is given, the three specifications printed, its fact that
-/// they are the first three fields folded from the zero state, and its step's
-/// `LoopFolds` fact. Names are relative to the program's module.
-pub(super) struct Program<'a> {
-    pub root: &'a str,
-    pub source: &'a str,
-    pub advance: &'a str,
-    pub needle: u8,
-    pub specs: [&'a str; 3],
-    pub computes: &'a str,
-    pub folds: &'a str,
-}
-
-// The context the loop generator resolves names in, elaborated before it runs.
-pub(super) fn context(program: &Program) -> String {
-    format!("import {}; import function_ir_loop; import function_ir_loop_x86; import bitvec; import bool;", program.root)
-}
-
-/// The loop's state: a record of three counts, printed, and at most one more
-/// field, each in one of the process's state registers.
-pub(super) fn record(elab: &Elaborator, scope: &str, program: &Program) -> Result<StructuredSourceRecord, String> {
-    let reflected = elab.with_module_scope(scope, |elab| {
-        reflect_elaborated_readonly_loop(elab, &format!("{}::{}", program.root, program.source)).map_err(|e| format!("{e:?}"))
-    })??;
-    let LoopCarry::Record(record) = reflected.carry else {
-        return Err("--fields needs a loop whose state is a record".into());
+/// The loop's state, as the program's bundle gives it: a record of three
+/// counts, printed, and at most one more field, each in one of the process's
+/// state registers.
+pub(super) fn record(program: &Program) -> Result<StructuredSourceRecord, String> {
+    let LoopCarry::Record(record) = &program.bundle.carry else {
+        return Err("a FieldsProgram's state must be a record".into());
     };
     if !(3..=4).contains(&record.fields.len()) {
-        return Err("--fields keeps a record of three or four fields in R13, R14, R15 and R8".into());
+        return Err("a FieldsProgram keeps a record of three or four fields in R13, R14, R15 and R8".into());
     }
     if record.fields[..3].iter().any(|(_, ty)| *ty != StructuredSourceType::NatWord) {
-        return Err("--fields prints the record's first three fields, which must be Nat".into());
+        return Err("a FieldsProgram prints its record's first three fields, which must be Nat".into());
     }
-    Ok(record)
-}
-
-pub(super) fn generate_loop(elab: &Elaborator, scope: &str, prefix: &str, program: &Program, record: &StructuredSourceRecord)
-    -> Result<LoopX86Emission, String>
-{
-    elab.with_module_scope(scope, |elab| {
-        generate_elaborated_loop_x86(elab, prefix, &format!("{}::{}", program.root, program.source), &placement(record.fields.len()),
-            Some(&format!("{}::{}", program.root, program.advance))).map_err(|e| format!("{e:?}"))
-    })?
+    Ok(record.clone())
 }
 
 // The formatter's two words at the tail's registers (field_line's `FieldLow`
@@ -110,7 +79,7 @@ pub(super) fn certify(module: &mut Module, prefix: &str, program: &Program, reco
     // stored as two words at 8k, then the 24-byte line's registers and the
     // write loop (elf64_write_loop).
     let (lo, hi) = (&low.prefix, &high.prefix);
-    let mut layout = state_layout(prefix, program.needle, &emission.bytes);
+    let mut layout = state_layout(prefix, program.bundle.needle, &emission.bytes);
     for (k, (count, offset, separator)) in [(R13, 0u64, 32u64), (R14, 8, 32), (R15, 16, 10)].into_iter().enumerate() {
         layout = layout.fixed(format!("field{k}_count"), encode(&[rr(R11, count)]))
             .generated("low", format!("{lo}_bytes()"), low.bytes.clone())
@@ -124,8 +93,7 @@ pub(super) fn certify(module: &mut Module, prefix: &str, program: &Program, reco
     let code = layout.code();
     let file = super::calls::io_image(&code)?;
 
-    let needle = format!("@bitvec::BitVec::ofNat(8, {})", program.needle);
-    let root = program.root;
+    let needle = format!("@bitvec::BitVec::ofNat(8, {})", program.bundle.needle);
     layout.declare(module, prefix);
     state_jumps(module, prefix, &layout, &needle);
     print_jumps(module, prefix, &layout);
@@ -160,14 +128,14 @@ theorem {prefix}_counts(gprs: Gprs, carry: {ty}, placed: {prefix}_rep(gprs, carr
 }}
 ", f0 = name(0), f1 = name(1), f2 = name(2)));
 
-    let [s0, s1, s2] = program.specs.map(|spec| format!("{root}::{spec}"));
+    let [s0, s1, s2] = [0, 1, 2].map(|i| program.bundle.specs[i].clone());
     let input = "eof_input(chunks)";
     let printed = format!("three_fields_line({s0}({input}), {s1}({input}), {s2}({input}))");
     let nat_zero = tuple(&vec!["refl".to_string(); 3]);
-    super::read_loop::state_bundle(module, prefix, ty, root, program.source, &needle, &format!("{prefix}_init()"), &nat_zero);
+    super::read_loop::state_bundle(module, prefix, ty, &needle, &format!("{prefix}_init()"), &nat_zero);
     // The three counts and the formatter (elf64_read_fields's `ThreeCounts`
     // and `FieldsFormat`). What the counts mean (`ThreeSpecs`) is the
-    // program's, so the claim builds it, and a mismatch is refused there.
+    // program's, from its bundle.
     module.raw(format!("\
 fn {prefix}_three() → ThreeCounts<{ty}>({prefix}_rep) {{
     ThreeCounts(λ (s: {ty}) => s.{f0}, λ (s: {ty}) => s.{f1}, λ (s: {ty}) => s.{f2}, {prefix}_counts)
@@ -175,41 +143,23 @@ fn {prefix}_three() → ThreeCounts<{ty}>({prefix}_rep) {{
 fn {prefix}_fields_codes() → FieldsCodes {{ FieldsCodes({lo}_code(), {hi}_code()) }}
 fn {prefix}_fields_format() → FieldsFormat({prefix}_fields_codes()) {{ FieldsFormat({lo}_computes<IoMemory>(), {hi}_computes<IoMemory>()) }}
 ", f0 = name(0), f1 = name(1), f2 = name(2)));
-    let folds = format!("{root}::{}", program.folds);
-    let arguments = format!("{prefix}_file(), {prefix}_state_shape(), {prefix}_state_loop({folds}), {prefix}_init(), {prefix}_state_start(),
-        {prefix}_three(), ThreeSpecs({s0}, {s1}, {s2}, {root}::{computes}),
+    let arguments = format!("{prefix}_file(), {prefix}_state_shape(), {prefix}_state_loop({prefix}_program_folds()), {prefix}_init(), {prefix}_state_start(),
+        {prefix}_three(), ThreeSpecs({s0}, {s1}, {s2}, {prefix}_program_computes),
         {prefix}_fields_codes(), {prefix}_fields_format(), {prefix}_jumps(), {prefix}_jump_facts(), {pj}, {prefix}_print_facts(),
-        {prefix}_resident(), chunks, ok, ending, ending_ok, room, small, writes, writes_ok, written, written_ok, page, gprs, flags", computes = program.computes);
+        {prefix}_resident(), chunks, ok, ending, ending_ok, room, small, writes, writes_ok, written, written_ok, page, gprs, flags");
     let premises = format!("chunks: List<EofStep<True>>, ok: EofChunks(chunks), ending: EofEnd<False>, ending_ok: EofEnding(ending),
     room: {input}.len() + 4096 < Nat::pow(2, 64),
     small: ({s0}({input}) < 10000000) ∧ (({s1}({input}) < 10000000) ∧ ({s2}({input}) < 10000000)),
     writes: List<WriteStep>, writes_ok: WriteSteps(writes)({printed}), written: WriteEnding, written_ok: WriteEndingOk(written),
     page: Nat → BitVec(8), gprs: Gprs, flags: Flags");
     let events = format!("eof_events(chunks, ending, write_events({printed}, writes, written))");
-    module.raw(format!("\
+    claims(module, prefix, &format!("\
 // The process claim for the written file: for every way the reads may split
 // stdin into non-empty chunks, with EINTRs between them, ending at the empty
 // read or at a failed read, and every way the writes may return (short counts
 // and EINTRs, then the rest or a failure), a run that reads them all, writes
 // `{s0}`, `{s1}` and `{s2}` of their concatenation to stdout as a
 // `%7d %7d %7d` line and exits 0, or exits 1 at the failure. The line covers
-// counts below 10^7.
-theorem {prefix}_runs({premises}):
-    LinuxRuns(io_linux(), {events}, io_initial({prefix}_file(), page, gprs, flags)) {{
-    read_fields_spec_runs({arguments})
-}}
-
-// And that run is the run: every run of the file from that start which got
-// the same answers from Linux, whatever Linux left in RCX, R11 and a failed
-// read's buffer, made exactly those events (linux_x86_64_determinism). The
-// claim is proved again here, not named, so a refused claim is reported once.
-theorem {prefix}_runs_every({premises},
-    run: List<LinuxEvent>, ran: LinuxRun(io_linux(), run, io_initial({prefix}_file(), page, gprs, flags)),
-    answers: SameResponses({events}, run)):
-    run = {events} {{
-    linux_runs_every(io_linux(), {events}, run, io_initial({prefix}_file(), page, gprs, flags),
-        read_fields_spec_runs({arguments}), ran, answers)
-}}
-"));
+// counts below 10^7."), &premises, &events, &format!("read_fields_spec_runs({arguments})"));
     Ok(file)
 }

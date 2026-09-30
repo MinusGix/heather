@@ -6,11 +6,14 @@
 //! proof are the library's (`lib/elf64_read_state.hthr`,
 //! `lib/elf64_count_print.hthr`); this producer generates the loop through the
 //! loop generator, lays out the code, and instantiates the library theorem at
-//! the written file. The state process's head, the write loop, the facts a
-//! state gives the process and the image's facts are laid out here for
-//! `--fields` too. Nothing in it is about any one program.
-use heather_elab::function_ir_source::{generate_elaborated_loop_x86, generate_elaborated_piece_x86, LoopX86Emission, NativeLoopPlacement,
-    StructuredSourceType};
+//! the written file. The program is a `CountProgram` or a `FieldsProgram`
+//! (function_ir_loop), read off its bundle's type (`Program`) and restated
+//! where the generator and the claim read it (`context`). The state process's
+//! head, the write loop, the facts a state gives the process, the image's
+//! facts and the claims are laid out here for the three-field profile too.
+//! Nothing in it is about any one program.
+use heather_elab::function_ir_source::{generate_elaborated_loop_x86, generate_elaborated_piece_x86, LoopCarry, LoopX86Emission, NativeLoopPlacement,
+    ReflectedReadProgram, StructuredSourceType};
 use heather_elab::function_ir_x86_lower::{encode_structured, Gpr, Instruction, Placements};
 use heather_elab::heather_emit::Module;
 use heather_elab::Elaborator;
@@ -40,8 +43,8 @@ pub(super) const SUPPORT: &[(&str, &str)] = &[
     ("elf64_read_state", include_str!("../../../../lib/elf64_read_state.hthr")),
 ];
 
-// The formatter's source and meaning, and the write loop: `--print` and
-// `--fields` both write a line through it.
+// The formatter's source and meaning, and the write loop: a printed count
+// and printed fields both write a line through it.
 pub(super) const WRITE_SUPPORT: &[(&str, &str)] = &[
     ("bitvec_omega", include_str!("../../../../lib/std/bitvec/bitvec_omega.hthr")),
     ("decimal_line", include_str!("../../../../lib/decimal_line.hthr")),
@@ -123,29 +126,63 @@ theorem {prefix}_word_{i}(gprs: Gprs, carry: {ty}, placed: {prefix}_rep(gprs, ca
     }
 }
 
-/// What a program names: its loop's source function and step-advance theorem,
-/// the byte the loop is given, its specification, its `ReadEofComputes` fact
-/// (the specification is the step folded from zero) and its step's
-/// `LoopFolds` fact. Names are relative to the program's module.
+/// A program as its bundle states it (function_ir_loop's `CountProgram` or
+/// `FieldsProgram`), read off the bundle's type: the root module it is in,
+/// and its step, byte, specifications and state, by resolved name.
 pub(super) struct Program<'a> {
     pub root: &'a str,
-    pub source: &'a str,
-    pub advance: &'a str,
-    pub needle: u8,
-    pub spec: &'a str,
-    pub computes: &'a str,
-    pub folds: &'a str,
+    pub bundle: &'a ReflectedReadProgram,
 }
 
-// The context the loop generator resolves names in, elaborated before it runs.
-pub(super) fn context(program: &Program) -> String {
-    format!("import {}; import function_ir_loop; import function_ir_loop_x86; import bitvec; import bool;", program.root)
+/// `(a) ∧ ((b) ∧ …)`.
+pub(super) fn conjunction(parts: &[String]) -> String {
+    match parts {
+        [only] => only.clone(),
+        [first, rest @ ..] => format!("({first}) ∧ ({})", conjunction(rest)),
+        [] => "True".into(),
+    }
 }
 
-pub(super) fn generate_loop(elab: &Elaborator, scope: &str, prefix: &str, program: &Program) -> Result<LoopX86Emission, String> {
+/// The module the loop generator and the claim read the program through,
+/// checked before either is generated: its step as the loop over one chunk,
+/// and its facts restated at the shapes they read. A program whose facts are
+/// not these (counts that are not its Nat fields in order, a state that does
+/// not start at zeros) is refused here, before anything is generated.
+pub(super) fn context(prefix: &str, program: &Program) -> String {
+    let bundle = program.bundle;
+    let (name, step) = (&bundle.name, &bundle.step);
+    let needle = format!("@bitvec::BitVec::ofNat(8, {})", bundle.needle);
+    let ty = bundle.carry.name();
+    let fold = |init: &str| format!("step_fold(ReadonlyLoop<{ty}>({step}), {needle}, bytes, {init})");
+    let (advances, computes) = match &bundle.carry {
+        LoopCarry::Record(record) => {
+            let counts: Vec<String> = record.fields.iter().filter(|(_, kind)| *kind == StructuredSourceType::NatWord)
+                .map(|(field, _)| format!("loop_step_payload({step}(needle, cursor, byte, s)).{field} <= Succ(s.{field})")).collect();
+            let zeros = record.fields.iter().map(|(_, kind)| if *kind == StructuredSourceType::Boolean { "False" } else { "0" }).collect::<Vec<_>>().join(", ");
+            let init = format!("{}({zeros})", record.constructor);
+            let printed: Vec<String> = bundle.specs.iter().zip(&record.fields).map(|(spec, (field, _))| format!("{spec}(bytes) = {}.{field}", fold(&init))).collect();
+            (format!("(needle: BitVec(8)) → (cursor: Nat) → (byte: BitVec(8)) → (s: {ty}) → {}", conjunction(&counts)), conjunction(&printed))
+        }
+        _ => (format!("LoopAdvancesByAtMostOne(ReadonlyLoop<Nat>({step}))"), format!("{}(bytes) = {}", bundle.specs[0], fold("0"))),
+    };
+    format!("\
+import {root}; import function_ir_loop; import function_ir_loop_x86; import bitvec; import bool; import list; import logic; import nat;
+// `{name}` as the read profile builds it (docs/native-architecture-review.md
+// R6): its step as the loop over one chunk, and its facts where the loop
+// generator and the process claim read them.
+fn {prefix}_program_source(buffer: ReadonlyBytes, needle: BitVec(8), budget: Nat, cursor: Nat, carry: {ty}) → LoopOutcome<{ty}> {{
+    bounded_readonly<{ty}>(buffer, needle, budget, cursor, carry, {step})
+}}
+theorem {prefix}_program_advances(): {advances} {{ {name}().advances }}
+theorem {prefix}_program_folds(): LoopFolds(ReadonlyLoop<{ty}>({step})) {{ {name}().folds }}
+theorem {prefix}_program_computes(bytes: List<BitVec(8)>): {computes} {{ {name}().computes(bytes) }}
+", root = program.root)
+}
+
+pub(super) fn generate_loop(elab: &Elaborator, scope: &str, prefix: &str, fields: usize) -> Result<LoopX86Emission, String> {
     elab.with_module_scope(scope, |elab| {
-        generate_elaborated_loop_x86(elab, prefix, &format!("{}::{}", program.root, program.source), &placement(1),
-            Some(&format!("{}::{}", program.root, program.advance))).map_err(|e| format!("{e:?}"))
+        generate_elaborated_loop_x86(elab, prefix, &format!("{scope}::{prefix}_program_source"), &placement(fields),
+            Some(&format!("{scope}::{prefix}_program_advances"))).map_err(|e| format!("{e:?}"))
     })?
 }
 
@@ -286,12 +323,12 @@ theorem {prefix}_resident(): (page: Nat → BitVec(8)) → CodeResident(io_fetch
 /// `{prefix}_state_start()`; `init` is the initial state and `zeros` proves
 /// it is init's zeros in the room fact. What the generator proved is here;
 /// the program's own fact, that its step folds, is a parameter the claim
-/// supplies, so a wrong one is refused there and nowhere else.
-pub(super) fn state_bundle(module: &mut Module, prefix: &str, ty: &str, root: &str, source: &str, needle: &str, init: &str, zeros: &str) {
+/// supplies.
+pub(super) fn state_bundle(module: &mut Module, prefix: &str, ty: &str, needle: &str, init: &str, zeros: &str) {
     module.raw(format!("\
 fn {prefix}_state_shape() → StateShape<{ty}> {{
-    StateShape({prefix}_placement(), {prefix}_rep, {prefix}_fits, {prefix}_loop_region(), {prefix}_code(), {prefix}_bytes(), {root}::{source},
-        {needle})
+    StateShape({prefix}_placement(), {prefix}_rep, {prefix}_fits, {prefix}_loop_region(), {prefix}_code(), {prefix}_bytes(),
+        {prefix}_program_source, {needle})
 }}
 fn {prefix}_state_loop(folds: LoopFolds({prefix}_loop_region())) → StateLoop<{ty}>({prefix}_state_shape()) {{
     StateLoop(ReadStatePlacement(refl, refl, refl, refl, refl), {prefix}_framed(),
@@ -309,11 +346,11 @@ fn {prefix}_state_start() → StateStart<{ty}>({prefix}_state_shape(), {init}) {
 // The count's facts (`state_facts`) and bundles, and the arguments both
 // claims pass the library before their format.
 fn common_arguments(module: &mut Module, prefix: &str, program: &Program) -> String {
-    let (root, needle) = (program.root, format!("@bitvec::BitVec::ofNat(8, {})", program.needle));
+    let needle = format!("@bitvec::BitVec::ofNat(8, {})", program.bundle.needle);
     state_facts(module, prefix, &StateShape { type_name: "Nat", constructor: None, fields: &[("count".into(), StructuredSourceType::NatWord)] });
-    state_bundle(module, prefix, "Nat", root, program.source, &needle, "0", "refl");
-    format!("{prefix}_file(), {prefix}_state_shape(), {prefix}_state_loop({root}::{folds}), {root}::{spec}, {root}::{computes},
-        {prefix}_state_start(), {prefix}_word_0", spec = program.spec, computes = program.computes, folds = program.folds)
+    state_bundle(module, prefix, "Nat", &needle, "0", "refl");
+    format!("{prefix}_file(), {prefix}_state_shape(), {prefix}_state_loop({prefix}_program_folds()), {spec}, {prefix}_program_computes,
+        {prefix}_state_start(), {prefix}_word_0", spec = program.bundle.specs[0])
 }
 
 // A claim and its `_runs_every`: every run of the file from that start which
@@ -343,11 +380,11 @@ theorem {prefix}_runs_every({premises},
 /// caller has already put in `module`). Returns the file to publish.
 pub(super) fn certify(module: &mut Module, prefix: &str, program: &Program, emission: &LoopX86Emission) -> Result<Vec<u8>, String> {
     let exit = super::encode(&[copy(Gpr::Rdi, Gpr::R13), mov(Gpr::Rax, 60)]);
-    let layout = state_layout(prefix, program.needle, &emission.bytes).fixed("exit", exit.clone()).syscall();
+    let layout = state_layout(prefix, program.bundle.needle, &emission.bytes).fixed("exit", exit.clone()).syscall();
     let code = layout.code();
     let file = super::calls::io_image(&code)?;
-    let needle = format!("@bitvec::BitVec::ofNat(8, {})", program.needle);
-    let root = program.root;
+    let needle = format!("@bitvec::BitVec::ofNat(8, {})", program.bundle.needle);
+    let spec = &program.bundle.specs[0];
     layout.declare(module, prefix);
     state_jumps(module, prefix, &layout, &needle);
     let code_term = format!("read_state_code({needle}, {prefix}_bytes(), {prefix}_jumps())");
@@ -358,14 +395,14 @@ pub(super) fn certify(module: &mut Module, prefix: &str, program: &Program, emis
     image_facts(module, prefix, &code_term, &spelled, "refl", &file, code.len(), &length);
     let premises = "chunks: List<EofStep<True>>, ok: EofChunks(chunks), ending: EofEnd<False>, ending_ok: EofEnding(ending),
     room: eof_input(chunks).len() + 4096 < Nat::pow(2, 64), page: Nat → BitVec(8), gprs: Gprs, flags: Flags";
-    let events = format!("eof_events(chunks, ending, [ExitEvent(bitvec_nat::word_of_nat(64, {root}::{spec}(eof_input(chunks))))])", spec = program.spec);
+    let events = format!("eof_events(chunks, ending, [ExitEvent(bitvec_nat::word_of_nat(64, {spec}(eof_input(chunks))))])");
     let proof = format!("read_count_runs({common}, {prefix}_jumps(), {prefix}_jump_facts(), {prefix}_resident(),
         chunks, ok, ending, ending_ok, room, page, gprs, flags)", common = common_arguments(module, prefix, program));
     claims(module, prefix, &format!("\
 // The process claim for the written file: for every way the reads may split
 // stdin into non-empty chunks, with EINTRs between them, ending at the empty
 // read or at a failed read, a run that reads them all and exits with
-// `{root}::{spec}` of their concatenation, or with 1 after the failure.", spec = program.spec), premises, &events, &proof);
+// `{spec}` of their concatenation, or with 1 after the failure."), premises, &events, &proof);
     Ok(file)
 }
 
@@ -411,7 +448,7 @@ pub(super) fn certify_print(module: &mut Module, prefix: &str, program: &Program
     // The tail (elf64_count_print's `count_tail`): the count to R11 and the
     // page to R8, the formatter, the store, then the write loop.
     let (w, st, ln) = (&word.prefix, &start.prefix, &length.prefix);
-    let layout = state_layout(prefix, program.needle, &emission.bytes)
+    let layout = state_layout(prefix, program.bundle.needle, &emission.bytes)
         .fixed("base", super::encode(&[copy(R11, R13), mov(R8, 0x410000)]))
         .generated("word", format!("{w}_bytes()"), word.bytes.clone())
         .generated("start", format!("{st}_bytes()"), start.bytes.clone())
@@ -420,8 +457,8 @@ pub(super) fn certify_print(module: &mut Module, prefix: &str, program: &Program
         .then(write_loop("wexit"));
     let code = layout.code();
     let file = super::calls::io_image(&code)?;
-    let needle = format!("@bitvec::BitVec::ofNat(8, {})", program.needle);
-    let root = program.root;
+    let needle = format!("@bitvec::BitVec::ofNat(8, {})", program.bundle.needle);
+    let spec = &program.bundle.specs[0];
     layout.declare(module, prefix);
     state_jumps(module, prefix, &layout, &needle);
     print_jumps(module, prefix, &layout);
@@ -445,11 +482,11 @@ pub(super) fn certify_print(module: &mut Module, prefix: &str, program: &Program
         emission.bytes.len(), word.bytes.len(), start.bytes.len(), length.bytes.len());
     image_facts(module, prefix, &code_term, &spelled(&lw, &lst, &lln), &chain, &file, code.len(), &measure);
     let premises = format!("chunks: List<EofStep<True>>, ok: EofChunks(chunks), ending: EofEnd<False>, ending_ok: EofEnding(ending),
-    room: eof_input(chunks).len() + 4096 < Nat::pow(2, 64), small: {root}::{spec}(eof_input(chunks)) < 10000,
-    writes: List<WriteStep>, writes_ok: WriteSteps(writes)(decimal_line({root}::{spec}(eof_input(chunks)))),
+    room: eof_input(chunks).len() + 4096 < Nat::pow(2, 64), small: {spec}(eof_input(chunks)) < 10000,
+    writes: List<WriteStep>, writes_ok: WriteSteps(writes)(decimal_line({spec}(eof_input(chunks)))),
     written: WriteEnding, written_ok: WriteEndingOk(written),
-    page: Nat → BitVec(8), gprs: Gprs, flags: Flags", spec = program.spec);
-    let events = format!("eof_events(chunks, ending, write_events(decimal_line({root}::{spec}(eof_input(chunks))), writes, written))", spec = program.spec);
+    page: Nat → BitVec(8), gprs: Gprs, flags: Flags");
+    let events = format!("eof_events(chunks, ending, write_events(decimal_line({spec}(eof_input(chunks))), writes, written))");
     // The formatter's codes and certificates (elf64_print_pieces's
     // `PrintCodes` and `PrintFormat`).
     module.raw(format!("\
@@ -464,8 +501,8 @@ fn {prefix}_print_format() → PrintFormat({prefix}_print_codes()) {{ PrintForma
 // stdin into non-empty chunks, with EINTRs between them, ending at the empty
 // read or at a failed read, and every way the writes may return (short counts
 // and EINTRs, then the rest or a failure), a run that reads them all, writes
-// `{root}::{spec}` of their concatenation to stdout as a decimal line and
-// exits 0, or exits 1 at the failure. The formatter covers counts below 10000.", spec = program.spec), &premises, &events, &proof);
+// `{spec}` of their concatenation to stdout as a decimal line and
+// exits 0, or exits 1 at the failure. The formatter covers counts below 10000."), &premises, &events, &proof);
     Ok(file)
 }
 

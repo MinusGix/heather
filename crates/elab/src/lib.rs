@@ -2980,6 +2980,12 @@ impl Elaborator {
         self.lookup_global(name).is_some_and(|i| i.abs as usize == abs)
     }
 
+    /// A name as the current module resolves it, qualified: what a producer
+    /// asks of a name an author wrote.
+    pub fn qualified_global(&self, name: &str) -> Option<String> {
+        self.global_qualified_name_at(self.global_abs(name)?)
+    }
+
     /// The canonical qualified spelling of a global. Generated modules use
     /// this rather than [`Self::global_name_at`]'s deliberately presentation-
     /// oriented base name when they refer across a module boundary.

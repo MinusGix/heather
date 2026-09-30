@@ -349,3 +349,69 @@ theorem loop_run_folds<C>(region: ReadonlyLoop<C>, folds: LoopFolds(region), nee
         },
     }
 }
+
+// ---------------------------------------------------------------------------
+// A program: a step folded over its input (docs/native-architecture-review.md
+// R6).
+
+// Each of `counts` grows by at most one from `carry` to `next`, one conjunct
+// per count, right-nested.
+fn counts_advance<C>(counts: List<C → Nat>) → C → C → Type {
+    match counts {
+        Nil => λ next carry => True,
+        Cons(count, rest) => match rest {
+            Nil => λ next carry => count(next) <= Succ(count(carry)),
+            Cons(_, _) => λ next carry => (count(next) <= Succ(count(carry))) ∧ counts_advance(rest)(next, carry),
+        },
+    }
+}
+// A counting step's representability obligation for a state of several
+// counts, such as a record's Nat fields: each grows by at most one per byte.
+// For one count that is the state, `[λ count => count]`, it is
+// `LoopAdvancesByAtMostOne`.
+fn LoopCountsAdvance<C>(region: ReadonlyLoop<C>, counts: List<C → Nat>) → Type {
+    (needle: BitVec(8)) → (cursor: Nat) → (byte: BitVec(8)) → (carry: C) →
+        counts_advance(counts)(loop_step_payload(region.body(needle, cursor, byte, carry)), carry)
+}
+
+// Each of `specs` is the count beside it of `state`, from the front, one
+// conjunct per spec, right-nested.
+fn specs_counted<C>(specs: List<List<BitVec(8)> → Nat>) → List<C → Nat> → List<BitVec(8)> → C → Type {
+    match specs {
+        Nil => λ counts bytes state => True,
+        Cons(spec, more) => λ counts bytes state => match counts {
+            Nil => False,
+            Cons(count, rest) => match more {
+                Nil => spec(bytes) = count(state),
+                Cons(_, _) => (spec(bytes) = count(state)) ∧ specs_counted<C>(more)(rest, bytes, state),
+            },
+        },
+    }
+}
+fn SpecsCounted<C>(specs: List<List<BitVec(8)> → Nat>, counts: List<C → Nat>, bytes: List<BitVec(8)>, state: C) → Type {
+    specs_counted<C>(specs)(counts, bytes, state)
+}
+
+// A program as the read profile takes it: `step` folded over stdin, given
+// `needle`, and what it states about itself. It is checked when its module
+// is, so a program that is wrong is refused at its own source. The data are
+// the record's parameters, so the CLI reads them off its type, and a record
+// whose fields' types depend on its other fields costs the kernel at every
+// projection.
+
+// One count, from zero, which `spec` says what it means.
+record CountProgram(step: BitVec(8) → Nat → BitVec(8) → Nat → LoopStep<Nat>, needle: BitVec(8), spec: List<BitVec(8)> → Nat) {
+    advances: LoopAdvancesByAtMostOne(ReadonlyLoop<Nat>(step)),
+    folds: LoopFolds(ReadonlyLoop<Nat>(step)),
+    computes: (bytes: List<BitVec(8)>) → spec(bytes) = step_fold(ReadonlyLoop<Nat>(step), needle, bytes, 0),
+}
+
+// A state from `init` whose `counts` are its Nat fields in order, the first
+// three printed: `first`, `second` and `third` say what they mean.
+record FieldsProgram<C>(step: BitVec(8) → Nat → BitVec(8) → C → LoopStep<C>, needle: BitVec(8), init: C, counts: List<C → Nat>,
+    first, second, third: List<BitVec(8)> → Nat) {
+    advances: LoopCountsAdvance<C>(ReadonlyLoop<C>(step), counts),
+    folds: LoopFolds(ReadonlyLoop<C>(step)),
+    computes: (bytes: List<BitVec(8)>) →
+        SpecsCounted<C>([first, second, third], counts, bytes, step_fold(ReadonlyLoop<C>(step), needle, bytes, init)),
+}

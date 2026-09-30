@@ -244,20 +244,26 @@ signal (EINTR) is retried; any other failed read exits with status 1.
 ```sh
 cargo build --release -p heather-cli
 (ulimit -v 8388608 -t 900 -c 0; target/release/heather build-x86 \
-  examples/x86-native/wc_l.hthr count_lines --read-loop --needle 10 \
-  --advance line_body_advances --spec wc_l --computes count_lines_input \
-  --folds line_body_folds -o target/x86-native/wc_l --cache-dir target/native-images)
+  examples/x86-native/wc_l.hthr wc_l_program -o target/x86-native/wc_l \
+  --cache-dir target/native-images)
 printf 'one\ntwo\nthree\n' | ./target/x86-native/wc_l; echo $?
 ```
 
 Expected output: `3`.
 
-The certificate's `count_lines_native_runs` states the whole process against
+The program is the bundle `wc_l_program`, a `CountProgram` (lib/function_ir_loop.hthr):
+its type names the step, the byte the step is given and the specification,
+`CountProgram(line_body, newline(), wc_l)`, and its value is the three facts
+below. It is checked with the rest of the file, so a program whose facts
+don't fit its step is refused at `wc_l.hthr`, before anything is generated.
+What is built follows from the bundle's type; there are no flags per program.
+
+The certificate's `wc_l_program_native_runs` states the whole process against
 the source. For every way the reads may split stdin into non-empty chunks,
 with EINTRs anywhere between them, and ending at the empty read or at a
 failed read, the written file has a run that reads them all and exits with
 `wc_l` of their concatenation (the parent sees the low eight bits), or with 1
-after the failure; `count_lines_native_runs_every` adds that every run with
+after the failure; `wc_l_program_native_runs_every` adds that every run with
 those answers from Linux is that run. `wc_l` is an ordinary Heather function;
 the program supplies it, the counting step, and three facts about the step
 alone: it grows by at most one per byte (`line_body_advances`), it always
@@ -283,16 +289,14 @@ instead of exiting with it:
 
 ```sh
 (ulimit -v 12582912 -t 3600 -c 0; target/release/heather build-x86 \
-  examples/x86-native/wc_l.hthr count_lines --read-loop --needle 10 \
-  --advance line_body_advances --spec wc_l --computes count_lines_input \
-  --folds line_body_folds --print -o target/x86-native/wc_l_print \
-  --cache-dir target/native-images)
+  examples/x86-native/wc_l.hthr wc_l_program --print \
+  -o target/x86-native/wc_l_print --cache-dir target/native-images)
 printf 'one\ntwo\nthree\n' | ./target/x86-native/wc_l_print
 ```
 
 Expected output: `3`, and exit status 0.
 
-The certificate's `count_lines_native_runs` now ends the trace with the write
+The certificate's `wc_l_program_native_runs` now ends the trace with the write
 loop's events, `write_events(decimal_line(n), writes, written)` for the total
 `n`, for inputs with fewer than 10000 lines. It covers every way the writes
 may return. Short writes resume after what was sent, EINTR retries, and any
@@ -318,21 +322,21 @@ counted once. At the end the program prints the first three fields as GNU
 
 ```sh
 (ulimit -v 8388608 -t 3600 -c 0; target/release/heather build-x86 \
-  examples/x86-native/wc.hthr count_wc --read-loop --fields --needle 10 \
-  --advance wc_body_advances --spec wc_lines --spec wc_words --spec wc_bytes \
-  --computes count_wc_input --folds wc_body_folds -o target/x86-native/wc \
+  examples/x86-native/wc.hthr wc_program -o target/x86-native/wc \
   --cache-dir target/native-images)
 printf 'one two\nthree\n' | ./target/x86-native/wc
 ```
 
 Expected output: `      2       3      14`, and exit status 0.
 
-`--fields` takes `--spec` three times, in the order printed. What they mean is
+`wc_program` is a `FieldsProgram`: its type names the step, the byte, the zero
+state, the state's counts (its Nat fields, in order) and the three
+specifications printed, in order. What they mean is
 stated as a reader checks it: `wc_lines` counts the newlines, `wc_words` the
 non-empty pieces of the input cut at every whitespace byte (the C locale's
 POSIX set, as `POSIXLY_CORRECT` has it), and `wc_bytes` the length.
 `count_wc_input` proves the fold from the zero state computes them. The
-certificate's `count_wc_native_runs` ends the trace with
+certificate's `wc_program_native_runs` ends the trace with
 `write_events(three_fields_line(wc_lines(input), wc_words(input), wc_bytes(input)), …)`
 for counts below 10^7. The program may import the bundled proof library by
 its bundled names (here `bitvec_omega`), which need not exist as files.
@@ -346,14 +350,14 @@ write the chunk, and read again, until the empty read.
 
 ```sh
 (ulimit -v 8388608 -t 900 -c 0; target/release/heather build-x86 \
-  examples/x86-native/tr.hthr upcase --map -o target/x86-native/tr \
+  examples/x86-native/tr.hthr upcase -o target/x86-native/tr \
   --cache-dir target/native-images)
 printf 'Hello, world!\n' | ./target/x86-native/tr
 ```
 
 Expected output: `HELLO, WORLD!`, and exit status 0.
 
-`--map` names a function `BitVec(8) → BitVec(8)`. The certificate's
+A function `BitVec(8) → BitVec(8)` is built as a byte map. The certificate's
 `upcase_native_runs` covers every history of reads and writes, interleaved:
 chunks and EINTRs on the read, and each chunk's short writes and EINTRs. The
 run ends at the empty read (exit 0), or at a failed read or write (exit 1).

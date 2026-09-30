@@ -288,6 +288,10 @@ fn stitch(text: &str) -> String {
 // time. The program imports `omega` and `bitvec_omega`, which the caller
 // supplies.
 pub(crate) const WC_SOURCE: &str = include_str!("../../../examples/x86-native/wc.hthr");
+const WC_CONTEXT: &str = "import function_ir_loop; import function_ir_loop_x86; import wc; import bitvec; import bool; import nat;
+fn count_wc(buffer: ReadonlyBytes, needle: BitVec(8), budget: Nat, cursor: Nat, carry: WcState) → LoopOutcome<WcState> {
+    bounded_readonly<WcState>(buffer, needle, budget, cursor, carry, wc_body)
+}";
 
 pub(crate) fn wc_placement() -> NativeLoopPlacement {
     NativeLoopPlacement {
@@ -312,8 +316,10 @@ fn record_state_loop_certificate_checks() {
 // `wc_pieces` and `wc_native`.
 pub(crate) fn wc_record_loop(elab: &mut heather_elab::Elaborator) {
     elab.elab_module_source("wc", WC_SOURCE).unwrap_or_else(|e| panic!("{}", e.render(WC_SOURCE)));
-    elab.elab_module_source("wc_context", "import function_ir_loop; import function_ir_loop_x86; import wc; import bitvec; import bool;").unwrap();
-    let emission = generate_elaborated_loop_x86(elab, "wc", "wc::count_wc", &wc_placement(), Some("wc::wc_body_advances"))
+    // The step as the loop over one chunk, as the read profile's producer
+    // writes it beside a program (`count_wc`).
+    elab.elab_module_source("wc_context", WC_CONTEXT).unwrap_or_else(|e| panic!("{}", e.render(WC_CONTEXT)));
+    let emission = generate_elaborated_loop_x86(elab, "wc", "wc_context::count_wc", &wc_placement(), Some("wc::wc_body_advances"))
         .unwrap_or_else(|e| panic!("{e:?}"));
     elab.elab_module_source("wc_pieces", &emission.pieces).unwrap_or_else(|e| panic!("{}", e.render(&emission.pieces)));
     elab.elab_module_source("wc_native", &emission.text).unwrap_or_else(|e| panic!("{}", e.render(&emission.text)));

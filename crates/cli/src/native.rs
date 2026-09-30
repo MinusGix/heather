@@ -53,6 +53,89 @@ fn symbol_ok(name: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
+/// What `build-x86` makes of a name: a function of two `--arg`s, a byte map
+/// read over stdin (`tr`), or a read-profile program's bundle
+/// (function_ir_loop's `CountProgram` or `FieldsProgram`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Profile { Call, Map, Count, Fields }
+
+/// The profile a name's written declaration asks for, from its return type,
+/// and a bundle's written arguments: they choose the proof library to load,
+/// and `read_program` reads the bundle's data from them once its module is
+/// checked.
+fn profile_of(source: &Path, symbol: &str) -> Result<(Profile, Vec<heather_syntax::ast::Expr>), String> {
+    use heather_syntax::ast::{ExprKind, TyKind};
+    let text = std::fs::read_to_string(source).map_err(|e| format!("{}: {e}", source.display()))?;
+    let Ok(file) = heather_syntax::parse_file(&text) else { return Ok((Profile::Call, Vec::new())) };
+    let declaration = file.items.iter().find_map(|item| match item {
+        heather_syntax::Item::Decl(declaration) if declaration.name == symbol => Some(declaration),
+        _ => None,
+    }).ok_or_else(|| format!("`{symbol}` is not declared in {}", source.display()))?;
+    // The written type's head and its value arguments.
+    fn head(expr: &heather_syntax::ast::Expr) -> Option<(&str, &[heather_syntax::ast::Expr])> {
+        match &expr.kind {
+            ExprKind::Var(name) => Some((name.rsplit("::").next().unwrap_or(name), &[])),
+            ExprKind::App { head: inner, args, .. } => head(inner).map(|(name, _)| (name, args.as_slice())),
+            ExprKind::TyApp { head: inner, .. } => head(inner),
+            _ => None,
+        }
+    }
+    let written = match &declaration.result.kind {
+        TyKind::Named { name, .. } => Some((name.rsplit("::").next().unwrap_or(name), &[][..])),
+        TyKind::OfExpr(expr) => head(expr),
+        _ => None,
+    };
+    Ok(match written {
+        Some(("CountProgram", args)) => (Profile::Count, args.to_vec()),
+        Some(("FieldsProgram", args)) => (Profile::Fields, args.to_vec()),
+        _ if declaration.params.len() == 1 => (Profile::Map, Vec::new()),
+        _ => return Err(format!("`{symbol}` is not a CountProgram, a FieldsProgram or a byte map `(b: BitVec(8)) → BitVec(8)`; \
+            a function of two u64 arguments takes `--arg` twice")),
+    })
+}
+
+/// A bundle's data from its written arguments (`CountProgram(step, needle,
+/// spec)`, `FieldsProgram<C>(step, needle, init, counts, first, second,
+/// third)`), each name resolved where the program's module resolves it. The
+/// context module restates the program's facts over them, so an argument
+/// read wrongly is refused there.
+fn read_program(elab: &Elaborator, root: &str, symbol: &str, fields: bool, args: &[heather_syntax::ast::Expr])
+    -> Result<function_ir_source::ReflectedReadProgram, String>
+{
+    use heather_syntax::ast::ExprKind;
+    let kind = if fields { "FieldsProgram" } else { "CountProgram" };
+    if args.len() != if fields { 7 } else { 3 } { return Err(format!("`{symbol}`: a {kind} takes its data as arguments of its type")); }
+    let resolve = |written: &str| elab.with_module_scope(root, |elab| elab.qualified_global(written)).ok().flatten();
+    let name = |expr: &heather_syntax::ast::Expr, what: &str| match &expr.kind {
+        ExprKind::Var(written) => resolve(written).ok_or_else(|| format!("`{symbol}`'s {what} `{written}` is not a function `{root}` sees")),
+        _ => Err(format!("`{symbol}`'s {what} is written as a function's name")),
+    };
+    // The byte: `BitVec::ofNat(n)`, or a function of no arguments that is.
+    let needle = match &args[1].kind {
+        ExprKind::App { head, args, .. } if matches!(&head.kind, ExprKind::Var(f) if f.ends_with("ofNat")) => match args.first().map(|value| &value.kind) {
+            Some(ExprKind::Num(n)) => n.as_u64().and_then(|n| u8::try_from(n).ok()),
+            _ => None,
+        },
+        ExprKind::App { head, args, .. } if args.is_empty() => match &head.kind {
+            ExprKind::Var(written) => resolve(written).and_then(|global| function_ir_source::byte_constant(elab, &global)),
+            _ => None,
+        },
+        ExprKind::Var(written) => resolve(written).and_then(|global| function_ir_source::byte_constant(elab, &global)),
+        _ => None,
+    }.ok_or_else(|| format!("`{symbol}`'s needle is written as `BitVec::ofNat(n)` for a byte n, or a function of no arguments that is"))?;
+    let step = name(&args[0], "step")?;
+    let specs = if fields { &args[4..7] } else { &args[2..3] };
+    let specs = specs.iter().map(|spec| name(spec, "specification")).collect::<Result<Vec<_>, _>>()?;
+    let carry = if fields {
+        function_ir_source::LoopCarry::Record(function_ir_source::reflect_step_record(elab, &step).map_err(|e| e.to_string())?)
+    } else { function_ir_source::LoopCarry::Natural };
+    Ok(function_ir_source::ReflectedReadProgram {
+        name: format!("{root}::{symbol}"),
+        kind: if fields { function_ir_source::ReadProgramKind::Fields } else { function_ir_source::ReadProgramKind::Count },
+        step, needle, specs, carry,
+    })
+}
+
 fn compile(args: &[String], executable: bool) -> Result<(), String> {
     let mut positional = Vec::new();
     let mut output = None;
@@ -60,12 +143,7 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     let mut cache = None;
     let mut callee = None;
     let mut callable_caller = false;
-    let mut read_loop = false;
     let mut print = false;
-    let mut fields = false;
-    let mut map = false;
-    let (mut needle, mut advance, mut computes, mut folds) = (None, None, None, None);
-    let mut specs: Vec<String> = Vec::new();
     let mut timings = None;
     let mut kernel_workers = None;
     let mut search = vec![PathBuf::from("lib/std"), PathBuf::from("lib")];
@@ -73,20 +151,7 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--callable-caller" if executable => { callable_caller = true; }
-            "--read-loop" if executable => { read_loop = true; }
             "--print" if executable => { print = true; }
-            "--fields" if executable => { fields = true; }
-            "--map" if executable => { map = true; }
-            "--needle" | "--advance" | "--spec" | "--computes" | "--folds" if executable => {
-                let value = args.next().ok_or_else(|| format!("{arg} needs a value"))?.clone();
-                match arg.as_str() {
-                    "--needle" => needle = Some(u8::try_from(elf::parse_argument(&value)?).map_err(|_| "--needle must be a byte".to_string())?),
-                    "--advance" => advance = Some(value),
-                    "--spec" => specs.push(value),
-                    "--folds" => folds = Some(value),
-                    _ => computes = Some(value),
-                }
-            }
             "--callee" if executable => {
                 callee = Some(args.next().ok_or("--callee needs a source function name")?.clone());
             }
@@ -116,30 +181,27 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
             _ => positional.push(arg.as_str()),
         }
     }
-    if map {
-        if read_loop || print || fields || needle.is_some() || advance.is_some() || !specs.is_empty() || computes.is_some() || folds.is_some()
-            || !inputs.is_empty() || callee.is_some() {
-            return Err("--map maps stdin to stdout through the byte map it names: no other profile, --arg or --callee".into());
-        }
-    } else if read_loop {
-        if !inputs.is_empty() || callee.is_some() { return Err("--read-loop takes its input from stdin: no --arg or --callee".into()); }
-        if needle.is_none() || advance.is_none() || specs.is_empty() || computes.is_none() || folds.is_none() {
-            return Err("--read-loop needs --needle <byte>, --advance <theorem>, --spec <function>, --computes <theorem> and --folds <theorem>".into());
-        }
-        if print && fields { return Err("--print and --fields are two outputs: give one".into()); }
-        if fields && specs.len() != 3 { return Err("--fields prints three counts: give --spec three times, in the order printed".into()); }
-        if !fields && specs.len() != 1 { return Err("--read-loop takes one --spec (three with --fields)".into()); }
-    } else if print || fields || needle.is_some() || advance.is_some() || !specs.is_empty() || computes.is_some() || folds.is_some() {
-        return Err("--needle, --advance, --spec, --computes, --folds, --print and --fields belong to --read-loop".into());
-    } else if executable && inputs.len() != 2 {
-        return Err("build-x86 needs exactly two --arg values for the source function".into());
-    }
     if positional.len() != 2 || output.is_none() {
         if executable {
-            return Err("usage: heather build-x86 <file.hthr> <function> (--arg <u64> --arg <u64> [--callee <function> [--callable-caller]] | --read-loop --needle <byte> --advance <theorem> --spec <function> --computes <theorem> --folds <theorem> [--print | --fields] | --map) -o <executable> [-L <dir>]... [--cache-dir <dir>] [--timings <file.tsv>] [--kernel-workers <n>]".into());
+            return Err("usage: heather build-x86 <file.hthr> <name> [--arg <u64> --arg <u64> [--callee <function> [--callable-caller]] | --print] -o <executable> [-L <dir>]... [--cache-dir <dir>] [--timings <file.tsv>] [--kernel-workers <n>]".into());
         }
         return Err("usage: heather compile-x86 <file.hthr> <function> -o <output.s> [-L <dir>]... [--cache-dir <dir>] [--timings <file.tsv>] [--kernel-workers <n>]".into());
     }
+    // What is built follows from what the name is (docs/native-architecture-review.md
+    // R6): a function of two `--arg`s, a byte map, or a program for the read
+    // profile. The declaration's written type chooses the proof library to
+    // load; the checked program is read again, off its elaborated type, before
+    // anything is generated.
+    let (profile, written) = if executable && inputs.is_empty() && callee.is_none() { profile_of(Path::new(positional[0]), positional[1])? }
+        else { (Profile::Call, Vec::new()) };
+    if print && profile != Profile::Count {
+        return Err("--print prints a CountProgram's count; a FieldsProgram prints its fields, and other builds print nothing".into());
+    }
+    if profile == Profile::Call && executable && inputs.len() != 2 {
+        return Err("build-x86 needs exactly two --arg values for the source function".into());
+    }
+    let (map, fields) = (profile == Profile::Map, profile == Profile::Fields);
+    let read_loop = matches!(profile, Profile::Count | Profile::Fields);
     let source = Path::new(positional[0]);
     let symbol = positional[1];
     if !symbol_ok(symbol) {
@@ -299,6 +361,7 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     let probe_inputs = [[!input(0), !input(1)],
         [input(0).wrapping_add(0x9e37_79b9_7f4a_7c15), input(1).wrapping_add(0x6a09_e667_f3bc_c909)]];
     let mut probes = Some(Vec::new());
+    let mut specs: Vec<String> = Vec::new();
     let (image, body_bytes) = if map {
         // The byte map's certificate is a module of its own, which the
         // program's composition imports.
@@ -311,56 +374,41 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
         proof.raw(format!("import {root_name}; import {};", piece.module));
         probes = None;
         (Some(read_map::certify(&mut proof, &prefix, &root_name, symbol, &piece)?), None)
-    } else if read_loop && fields {
-        let [s0, s1, s2] = [&specs[0], &specs[1], &specs[2]].map(|s| s.as_str());
-        let program = read_fields::Program { root: &root_name, source: symbol, advance: advance.as_deref().unwrap(),
-            needle: needle.unwrap(), specs: [s0, s1, s2], computes: computes.as_deref().unwrap(), folds: folds.as_deref().unwrap() };
-        let context = format!("{prefix}_context");
-        check_module(&mut elab, &mut session, &loader::Module {
-            name: context.clone(), path: PathBuf::from(format!("{context}.hthr")), src: read_fields::context(&program),
-        })?;
-        let record = read_fields::record(&elab, &context, &program)?;
-        let emission = read_fields::generate_loop(&elab, &context, &prefix, &program, &record)?;
-        let pieces = format!("{prefix}_pieces");
-        check_module(&mut elab, &mut session, &loader::Module {
-            name: pieces.clone(), path: PathBuf::from(format!("{pieces}.hthr")), src: emission.pieces.clone(),
-        })?;
-        proof = Module::default();
-        let mut imported = std::collections::BTreeSet::new();
-        for name in read_loop::IMPORTS.iter().chain(read_fields::IMPORTS).filter(|name| !emission.text.contains(&format!("import {name};"))) {
-            if imported.insert(*name) { proof.raw(format!("import {name};")); }
-        }
-        if !emission.text.contains(&format!("import {root_name};")) { proof.raw(format!("import {root_name};")); }
-        for part in format.iter().flatten() { proof.raw(format!("import {};", part.module)); }
-        proof.raw(emission.text.clone());
-        probes = None;
-        let parts = format.as_deref().expect("the fields profile generated its formatter");
-        (Some(read_fields::certify(&mut proof, &prefix, &program, &record, &emission, parts)?), None)
     } else if read_loop {
-        let spec = specs[0].as_str();
-        let program = read_loop::Program { root: &root_name, source: symbol, advance: advance.as_deref().unwrap(),
-            needle: needle.unwrap(), spec, computes: computes.as_deref().unwrap(), folds: folds.as_deref().unwrap() };
+        // The program, read off its bundle's written type, then restated where
+        // the loop generator and the claim read it: a program whose facts are
+        // not what the profile needs is refused there, before any generation.
+        let bundle = read_program(&elab, &root_name, symbol, fields, &written)?;
+        specs = bundle.specs.clone();
+        let program = read_loop::Program { root: &root_name, bundle: &bundle };
         let context = format!("{prefix}_context");
         check_module(&mut elab, &mut session, &loader::Module {
-            name: context.clone(), path: PathBuf::from(format!("{context}.hthr")), src: read_loop::context(&program),
-        })?;
-        let emission = read_loop::generate_loop(&elab, &context, &prefix, &program)?;
+            name: context.clone(), path: PathBuf::from(format!("{context}.hthr")), src: read_loop::context(&prefix, &program),
+        }).map_err(|e| format!("{e}\nnote: `{symbol}`'s facts, as the read profile needs them: its counts are its state's Nat fields \
+            in order, and its state starts at zeros"))?;
+        let record = if fields { Some(read_fields::record(&program)?) } else { None };
+        let emission = read_loop::generate_loop(&elab, &context, &prefix, record.as_ref().map_or(1, |record| record.fields.len()))?;
         // The loop's pieces are a module of their own, which its composition imports.
         let pieces = format!("{prefix}_pieces");
         check_module(&mut elab, &mut session, &loader::Module {
             name: pieces.clone(), path: PathBuf::from(format!("{pieces}.hthr")), src: emission.pieces.clone(),
         })?;
         proof = Module::default();
-        let imports = read_loop::IMPORTS.iter().chain(if print { read_loop::PRINT_IMPORTS } else { &[] });
+        let mut imported = std::collections::BTreeSet::new();
+        let imports = read_loop::IMPORTS.iter().chain(if print { read_loop::PRINT_IMPORTS } else { &[] })
+            .chain(if fields { read_fields::IMPORTS } else { &[] });
         for name in imports.filter(|name| !emission.text.contains(&format!("import {name};"))) {
-            proof.raw(format!("import {name};"));
+            if imported.insert(*name) { proof.raw(format!("import {name};")); }
         }
+        if !emission.text.contains(&format!("import {root_name};")) { proof.raw(format!("import {root_name};")); }
+        if !emission.text.contains(&format!("import {context};")) { proof.raw(format!("import {context};")); }
         for part in format.iter().flatten() { proof.raw(format!("import {};", part.module)); }
         proof.raw(emission.text.clone());
         probes = None;
-        (Some(match &format {
-            Some(parts) => read_loop::certify_print(&mut proof, &prefix, &program, &emission, parts)?,
-            None => read_loop::certify(&mut proof, &prefix, &program, &emission)?,
+        (Some(match (&record, &format) {
+            (Some(record), Some(parts)) => read_fields::certify(&mut proof, &prefix, &program, record, &emission, parts)?,
+            (None, Some(parts)) => read_loop::certify_print(&mut proof, &prefix, &program, &emission, parts)?,
+            _ => read_loop::certify(&mut proof, &prefix, &program, &emission)?,
         }), None)
     } else if let Some(callee) = callee {
         if !symbol_ok(&callee) { return Err("callee must be a source identifier".into()); }

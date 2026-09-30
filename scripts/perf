@@ -94,11 +94,11 @@ WC_BUILD = ("examples/x86-native/wc.hthr", [])
 WC_L_BUILD = ("examples/x86-native/wc_l.hthr", [])
 BUILD_X86 = {
     X86_CERTIFICATE[0]: ["caller", "--callee", "leaf", "--arg", "21", "--arg", "1"],
-    WC_BUILD[0]: ["count_wc", "--read-loop", "--fields", "--needle", "10", "--advance", "wc_body_advances",
-                  "--computes", "count_wc_input", "--folds", "wc_body_folds",
-                  "--spec", "wc_lines", "--spec", "wc_words", "--spec", "wc_bytes"],
-    WC_L_BUILD[0]: ["count_lines", "--read-loop", "--needle", "10", "--advance", "line_body_advances", "--spec", "wc_l",
-                    "--computes", "count_lines_input", "--folds", "line_body_folds", "--print"],
+    # Named by their bundles since 2026-09-30 (docs/native-architecture-review.md
+    # R6), so their certificates' items are `wc_program_native_*` and
+    # `wc_l_program_native_*` from then on.
+    WC_BUILD[0]: ["wc_program"],
+    WC_L_BUILD[0]: ["wc_l_program", "--print"],
 }
 
 # The corpus: (path, search dirs). `quick` is the inner-loop set; `full` is

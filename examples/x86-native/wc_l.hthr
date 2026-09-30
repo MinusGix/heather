@@ -1,12 +1,14 @@
 // `wc -l`, as a certified static executable (docs/native-first-program-design.md,
-// docs/native-read-until-eof-design.md). The program is the counting loop
-// below, run over each chunk the reads of stdin return until the empty one;
-// the process exits with (or prints) the total. `wc_l` is the specification
-// the total is stated against. This client's facts are about its step
-// alone (docs/native-wc-design.md §3): it grows by at most one per byte
+// docs/native-read-until-eof-design.md). The program is `wc_l_program` at
+// the end: the step `line_body`, folded over each chunk the reads of stdin
+// return until the empty one, and what its count means, `wc_l`. The process
+// exits with (or, with `--print`, prints) the total. Its facts are about its
+// step alone (docs/native-wc-design.md §3): it grows by at most one per byte
 // (`line_body_advances`), it always continues, the same at every cursor
 // (`line_body_folds`), and folded over the input from zero it is `wc_l`
 // (`count_lines_input`). Buffers, chunks and machines are the library's.
+//
+//     heather build-x86 examples/x86-native/wc_l.hthr wc_l_program --print -o wc_l
 import function_ir_loop;
 import bitvec;
 import bool;
@@ -45,10 +47,6 @@ theorem line_body_advances(): LoopAdvancesByAtMostOne(ReadonlyLoop<Nat>(line_bod
     }
 }
 
-fn count_lines(buffer: ReadonlyBytes, needle: BitVec(8), budget: Nat, cursor: Nat, count: Nat) → LoopOutcome<Nat> {
-    bounded_readonly<Nat>(buffer, needle, budget, cursor, count, line_body)
-}
-
 // The loop always continues, the same way at every cursor: it folds
 // `line_body` over the bytes (function_ir_loop's LoopFolds).
 theorem line_body_folds(): LoopFolds(ReadonlyLoop<Nat>(line_body)) {
@@ -79,4 +77,10 @@ theorem count_lines_fold(bytes: List<BitVec(8)>): (count: Nat) →
 // specification is the fold from zero.
 theorem count_lines_input(bytes: List<BitVec(8)>): wc_l(bytes) = step_fold(ReadonlyLoop<Nat>(line_body), newline(), bytes, 0) {
     sym(trans(count_lines_fold(bytes, 0), Nat::add_left_zero(wc_l(bytes))))
+}
+
+// The program: the step, the byte it is given, and what its count means;
+// with the facts above. `heather build-x86` builds it by this name.
+fn wc_l_program() → CountProgram(line_body, newline(), wc_l) {
+    CountProgram(line_body_advances(), line_body_folds(), count_lines_input)
 }

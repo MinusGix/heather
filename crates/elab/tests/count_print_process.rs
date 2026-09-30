@@ -10,6 +10,10 @@ const PRINT: &str = include_str!("../../../lib/elf64_print_pieces.hthr");
 const WRITE: &str = include_str!("../../../lib/elf64_write_loop.hthr");
 const COUNT: &str = include_str!("../../../lib/elf64_count_print.hthr");
 const WC_L: &str = include_str!("../../../examples/x86-native/wc_l.hthr");
+const LINES_CONTEXT: &str = "import function_ir_loop; import function_ir_loop_x86; import wc_l; import bitvec; import bool; import nat;
+fn count_lines(buffer: ReadonlyBytes, needle: BitVec(8), budget: Nat, cursor: Nat, count: Nat) → LoopOutcome<Nat> {
+    bounded_readonly<Nat>(buffer, needle, budget, cursor, count, line_body)
+}";
 
 // Everything the count process and its printing tail stand on.
 fn base() -> heather_elab::Elaborator {
@@ -39,7 +43,7 @@ import elf64_count_print; import elf64_write_loop; import elf64_print_pieces; im
 import elf64_io; import linux_x86_64_io; import linux_x86_64_entry; import x86_64_structured_block;
 import function_ir_loop; import function_ir_loop_trace; import x86_64; import x86_64_fetch; import x86_64_fetched_code;
 import bitvec; import bitvec_nat; import bool; import list; import logic; import nat;
-import decimal_line; import wc_l; import lines_pieces; import lines_native;
+import decimal_line; import wc_l; import lines_context; import lines_pieces; import lines_native;
 
 // The facts the count gives the process, as the producer states them.
 theorem lines_framed(): StateFramed(lines_rep) { λ before after carry kept placed => lines_rep_moves(before, after, carry, kept.left, placed) }
@@ -96,8 +100,10 @@ fn wc_l_count_process_composes() {
     let mut elab = base();
     elab.elab_module_source("elf64_count_print", COUNT).unwrap_or_else(|e| panic!("{}", e.render(COUNT)));
     elab.elab_module_source("wc_l", WC_L).unwrap_or_else(|e| panic!("{}", e.render(WC_L)));
-    elab.elab_module_source("lines_context", "import function_ir_loop; import function_ir_loop_x86; import wc_l; import bitvec; import bool;").unwrap();
-    let emission = generate_elaborated_loop_x86(&elab, "lines", "wc_l::count_lines", &count_placement(), Some("wc_l::line_body_advances"))
+    // The step as the loop over one chunk, as the read profile's producer
+    // writes it beside a program (`count_lines`).
+    elab.elab_module_source("lines_context", LINES_CONTEXT).unwrap_or_else(|e| panic!("{}", e.render(LINES_CONTEXT)));
+    let emission = generate_elaborated_loop_x86(&elab, "lines", "lines_context::count_lines", &count_placement(), Some("wc_l::line_body_advances"))
         .unwrap_or_else(|e| panic!("{e:?}"));
     elab.elab_module_source("lines_pieces", &emission.pieces).unwrap_or_else(|e| panic!("{}", e.render(&emission.pieces)));
     elab.elab_module_source("lines_native", &emission.text).unwrap_or_else(|e| panic!("{}", e.render(&emission.text)));

@@ -27,7 +27,7 @@ import elf64_read_state; import elf64_read_pieces; import elf64_io; import linux
 import function_ir_loop; import function_ir_loop_trace; import x86_64; import x86_64_fetch; import x86_64_fetched_code;
 import bitvec; import bitvec_nat; import bool; import list; import logic; import nat;
 // `wc_bytes` is also the program's byte count; here it is the loop's code.
-import wc; import wc_pieces; import wc_native::{wc_bytes};
+import wc; import wc_context; import wc_pieces; import wc_native::{wc_bytes};
 
 theorem wc_framed(): StateFramed(wc_rep) {
     λ before after carry kept placed =>

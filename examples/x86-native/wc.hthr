@@ -5,7 +5,10 @@
 // then prints the first three fields as a `%7d %7d %7d` line. What the counts
 // mean is stated the way a reader would check them: the newlines, the
 // non-empty pieces of the input split at whitespace, and the length.
-// `count_wc_input` proves the fold from the zero state computes all three.
+// `count_wc_input` proves the fold from the zero state computes all three,
+// and `wc_program` at the end is the program.
+//
+//     heather build-x86 examples/x86-native/wc.hthr wc_program -o wc
 import function_ir_loop;
 import bitvec;
 import bool;
@@ -81,10 +84,6 @@ fn wc_body(needle: BitVec(8), cursor: Nat, byte: BitVec(8), s: WcState) → Loop
             False => Continue(WcState(s.lines, Succ(s.words), Succ(s.bytes), True)),
         },
     }
-}
-
-fn count_wc(buffer: ReadonlyBytes, needle: BitVec(8), budget: Nat, cursor: Nat, carry: WcState) → LoopOutcome<WcState> {
-    bounded_readonly<WcState>(buffer, needle, budget, cursor, carry, wc_body)
 }
 
 fn WcAdvances(step: LoopStep<WcState>, s: WcState) → Type {
@@ -423,4 +422,12 @@ theorem count_wc_input(bytes: List<BitVec(8)>):
     let counted: (step_fold(wc_region(), BitVec::ofNat(10), bytes, zero).bytes = 0 + wc_bytes(bytes)) =
         wc_fold_bytes(bytes, BitVec::ofNat(10), zero);
     ⟨omega, ⟨omega, omega⟩⟩
+}
+
+// The program: the step, the byte it is given (unused), the zero state, its
+// counts in order, and what the three printed mean; with the facts above.
+// `heather build-x86` builds it by this name.
+fn wc_program() → FieldsProgram<WcState>(wc_body, BitVec::ofNat(10), WcState(0, 0, 0, False),
+    [λ s => s.lines, λ s => s.words, λ s => s.bytes], wc_lines, wc_words, wc_bytes) {
+    FieldsProgram(wc_body_advances(), wc_body_folds(), count_wc_input)
 }

@@ -4,7 +4,7 @@
 // maps it in place, writes it and reads again, and its claim, are the
 // library's (lib/elf64_read_map.hthr), for any byte map the compiler lowers.
 //
-//     heather build-x86 examples/x86-native/tr.hthr upcase --map -o tr
+//     heather build-x86 examples/x86-native/tr.hthr upcase -o tr
 import bitvec;
 import bool;
 import logic;

@@ -5,25 +5,14 @@
 //! with `LC_ALL=C POSIXLY_CORRECT=1 wc` reading the same pipe.
 #![cfg(all(target_arch = "x86_64", target_os = "linux"))]
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Output, Stdio};
 
-fn root() -> PathBuf { Path::new(env!("CARGO_MANIFEST_DIR")).join("../..") }
+mod native_support;
+use native_support::*;
 
-fn scratch(name: &str) -> PathBuf {
-    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-    let directory = root().join(format!("target/native-{name}-{}-{nonce}", std::process::id()));
-    std::fs::create_dir_all(&directory).unwrap();
-    directory
-}
-
-fn build(directory: &Path, specs: [&str; 3]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_heather")).current_dir(root()).env("PATH", directory)
-        .args(["build-x86", "examples/x86-native/wc.hthr", "count_wc", "--read-loop", "--fields", "--needle", "10",
-            "--advance", "wc_body_advances", "--computes", "count_wc_input", "--folds", "wc_body_folds"])
-        .args(specs.iter().flat_map(|spec| ["--spec", spec])).arg("-o")
-        .arg(directory.join("wc")).args(["--cache-dir", "target/native-test-images"]).output().unwrap()
-}
+// `wc_program`, the program's bundle, is all a build names.
+fn build(directory: &Path, source: &Path) -> Output { build_x86(directory, source, "wc_program", &[], "wc") }
 
 // Whitespace in the C locale, as POSIX has it: GNU also splits at 0xA0 unless
 // POSIXLY_CORRECT is set.
@@ -58,20 +47,6 @@ fn inputs() -> Vec<Vec<u8>> {
     inputs
 }
 
-// A pipe written in bursts, so the reads return pieces, one of them in the
-// middle of a word: the in-word flag has to survive the read between.
-fn bursts(executable: &Path) -> Output {
-    let mut child = Command::new(executable).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
-    let mut stdin = child.stdin.take().unwrap();
-    for piece in [&b"one tw"[..], b"o\nthr", b"", b"ee  ", b"four\n\n"] {
-        stdin.write_all(piece).unwrap();
-        stdin.flush().unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(30));
-    }
-    drop(stdin);
-    child.wait_with_output().unwrap()
-}
-
 // The host's `wc` on a pipe, when there is one.
 fn host_wc(input: &[u8]) -> Option<String> {
     let mut child = Command::new("wc").env("LC_ALL", "C").env("POSIXLY_CORRECT", "1")
@@ -84,35 +59,26 @@ fn host_wc(input: &[u8]) -> Option<String> {
     output.status.success().then(|| String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
-fn piped(executable: &Path, input: &[u8]) -> Output {
-    let mut child = Command::new(executable).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
-    let mut stdin = child.stdin.take().unwrap();
-    let input = input.to_vec();
-    let writer = std::thread::spawn(move || { let _ = stdin.write_all(&input); });
-    let output = child.wait_with_output().unwrap();
-    writer.join().unwrap();
-    output
-}
+// Bursts, one of them in the middle of a word: the in-word flag has to
+// survive the read between.
+const BURSTS: &[&[u8]] = &[b"one tw", b"o\nthr", b"", b"ee  ", b"four\n\n"];
 
-fn unwritable_stdout(executable: &Path, stdout: Stdio) -> Output {
-    let mut child = Command::new(executable).stdin(Stdio::piped()).stdout(stdout).spawn().unwrap();
-    child.stdin.take().unwrap().write_all(b"one two\n").unwrap();
-    child.wait_with_output().unwrap()
-}
-
-// The build is refused, and not by a missing name, when the printed counts
-// are named in another order than the program's proof states them; nothing
-// is published. Then the program itself, run.
+// A program whose printed counts are named in another order than its proof
+// states them, or whose counts are listed in another order than its proof
+// bounds them, is refused at its own source, and nothing is published. Then
+// the program itself, run.
 #[test]
 fn wc_counts_lines_words_and_bytes() {
     let directory = scratch("wc");
-    let output = build(&directory, ["wc_words", "wc_lines", "wc_bytes"]);
-    assert!(!output.status.success(), "words and lines printed in each other's columns were certified");
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(!stderr.contains("unbound") && !stderr.contains("ambiguous"), "{stderr}");
-    assert!(!directory.join("wc").exists() && !directory.join("wc.certificate.hthr").exists());
+    for edits in [
+        &[("wc_lines, wc_words, wc_bytes) {", "wc_words, wc_lines, wc_bytes) {")][..],
+        &[("[λ s => s.lines, λ s => s.words, λ s => s.bytes]", "[λ s => s.words, λ s => s.lines, λ s => s.bytes]")][..],
+    ] {
+        let source = mistaken(&directory, "wc", edits);
+        assert_refused_at(&build(&directory, &source), &source, &[directory.join("wc"), directory.join("wc.certificate.hthr")]);
+    }
 
-    let output = build(&directory, ["wc_lines", "wc_words", "wc_bytes"]);
+    let output = build(&directory, &example("wc"));
     assert!(output.status.success(), "build-x86 {}: {}", output.status, String::from_utf8_lossy(&output.stderr));
     let executable = directory.join("wc");
     let certificate = std::fs::read_to_string(directory.join("wc.certificate.hthr")).unwrap();
@@ -135,12 +101,12 @@ fn wc_counts_lines_words_and_bytes() {
         }
     }
     eprintln!("compared with the host's wc on {compared} inputs");
-    let run = bursts(&executable);
+    let run = bursts(&executable, BURSTS);
     assert_eq!((run.status.code(), String::from_utf8_lossy(&run.stdout).into_owned()), (Some(0), expected(b"one two\nthree  four\n\n")));
     let run = Command::new(&executable).stdin(std::fs::File::open("/").unwrap()).output().unwrap();
     assert_eq!((run.status.code(), run.stdout.as_slice()), (Some(1), b"".as_slice()));
-    assert_eq!(unwritable_stdout(&executable, Stdio::null()).status.code(), Some(0));
+    assert_eq!(unwritable_stdout(&executable, Stdio::null(), b"one two\n").status.code(), Some(0));
     let full = std::fs::OpenOptions::new().write(true).open("/dev/full").unwrap();
-    assert_eq!(unwritable_stdout(&executable, Stdio::from(full)).status.code(), Some(1));
+    assert_eq!(unwritable_stdout(&executable, Stdio::from(full), b"one two\n").status.code(), Some(1));
     std::fs::remove_dir_all(directory).unwrap();
 }

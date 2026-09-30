@@ -1,6 +1,6 @@
 # The native program stack: an architecture review
 
-Status: **review, 2026-09-30. R0–R5 chosen and landed the same day (§8); R6 onward open.** Read-only
+Status: **review, 2026-09-30. R0–R6 chosen and landed the same day (§8); R7 open.** Read-only
 survey of what `wc -l`, `wc` and `tr` left behind, taken before a fourth
 program (`tr -s`/`-d`, `issues/native-loop-emitting-stores.md`) adds another
 process. The question is engineering, not speed: what is repeated, what is
@@ -879,3 +879,109 @@ field is written before every field that reads it is done. `wc -l` goes from
 654 to 630 bytes and `wc` from 5,946 to 5,898, three and six copies fewer per
 iteration. `tr` has no loop and is unchanged. Both still count as GNU `wc`
 does, on input longer than one read.
+
+### R6 (2026-09-30)
+
+**A program is one checked declaration** (`function_ir_loop`). A read-profile
+program is a bundle whose type holds its data and whose value holds its
+facts:
+
+- `CountProgram(step, needle, spec)` has `advances`, `folds` and `computes`
+  (the spec is the step folded from zero).
+- `FieldsProgram<C>(step, needle, init, counts, first, second, third)` has
+  the same three fields, with `advances` stated over `counts`. `computes`
+  pairs the printed specifications with the first three counts.
+
+```
+fn wc_l_program() → CountProgram(line_body, newline(), wc_l) {
+    CountProgram(line_body_advances(), line_body_folds(), count_lines_input)
+}
+```
+
+The bundle is checked with the author's module. So a wrong program is
+refused at its own source, before anything is generated, and the error
+points at the fact that doesn't fit. With a `BitVec::ofNat(32)` needle,
+`wc_l.hthr`'s `count_lines_input` is refused as stepping over `newline`
+where `ofNat(32)` was expected. A theorem that isn't the step's `LoopFolds`
+is refused likewise. So are specifications printed in another order than
+the proof states them, and counts listed in another order than the step's
+advance bounds them. The data are parameters rather than fields, because a
+record whose fields' types depend on its other fields costs the kernel at
+every projection (R2).
+
+**A library type for record advance.** `LoopCountsAdvance<C>(region,
+counts)`: each of the state's counts grows by at most one per byte, one
+right-nested conjunct per count. `LoopAdvancesByAtMostOne` is its one-count
+case by conversion, and `wc`'s positional conjunction is its three-count
+case. Neither example's theorems changed; they convert into the bundles as
+written. `SpecsCounted` pairs specifications with counts the same way.
+
+**What is built follows from what the name is.**
+
+```
+heather build-x86 wc_l.hthr wc_l_program [--print] -o wc_l
+heather build-x86 wc.hthr wc_program -o wc
+heather build-x86 tr.hthr upcase -o tr
+```
+
+The profile comes from the named declaration's type:
+
+- a `CountProgram` exits with its count, or prints it with `--print`;
+- a `FieldsProgram` prints its three fields;
+- a function of one argument is a byte map;
+- two `--arg`s build the call profile, as before.
+
+`--read-loop`, `--fields`, `--map`, `--needle`, `--advance`, `--spec`,
+`--computes` and `--folds` are gone. `--print` is the one output choice
+left. The examples lost their `bounded_readonly` wrappers
+(`count_lines`, `count_wc`); the producer writes the wrapper itself.
+
+**How the producer reads a bundle.** The kernel type of a record with value
+parameters is its Σ-encoding, with no record head. The display code says
+the same: value arguments aren't recoverable from it. So the CLI reads the
+bundle's *written* type from the parsed source, which also chooses the proof
+library to load before the program's module is checked:
+
+- names are resolved where the program's module resolves them;
+- the needle is `BitVec::ofNat(n)` or a function of no arguments that is one;
+- a `FieldsProgram`'s record comes from its step's signature.
+
+Then a context module (`{p}_context`) holds:
+
+- the step as the loop over one chunk (`{p}_program_source`);
+- the program's facts restated at the shapes the loop generator and the
+  claim read: `_program_advances` (every Nat field of the state, in order),
+  `_program_folds` and `_program_computes` (from the zero state, at the
+  byte read).
+
+It is checked before anything is generated. A misread argument, or a program
+that fits its own facts but not the profile (counts that aren't its Nat
+fields in order, a state that doesn't start at zeros), is refused there,
+with a note saying what the profile needs.
+
+**One producer skeleton for the read programs.** The count and three-field
+producers share `Program`, `context`, `generate_loop` and `claims`, and
+`native.rs` has one branch for both. The fields producer lost its copies of
+`Program`, `context`, `generate_loop` and the claim text. `read_map.rs` stays
+apart: it is a different process, and its program is one function.
+
+**Shared test support.** `native_support` gained the stdin programs' helpers:
+a scratch directory, a build by name, a copy of an example with an author's
+mistake in it, `assert_refused_at` (refused at that file, not by a missing
+name, nothing published), pipes, bursts and failing descriptors.
+`native_read_loop`, `native_wc` and `native_tr` use them instead of their own
+copies. Their refusal controls are now author mistakes in the program's
+source, refused there. The elab process tests keep their wrappers in their
+own context modules, as the producer does.
+
+**Not done.** The elab process tests still restate each claim's
+instantiation by hand instead of checking the producer's. They are the
+library's controls (mutations of the process modules) and don't run the
+producer. The producers live in the `heather` binary (`native/` is private
+to it), not in the `heather_cli` library the elab tests can use, so checking
+against them means moving `native/` into the library first. That is its own
+change. The certificates' item
+names follow the bundle (`wc_l_program_native_*`, `wc_program_native_*`),
+so the perf diary's items for the two builds change names at this commit.
+
+**Unchanged.** The four executables are byte-identical to R5's.

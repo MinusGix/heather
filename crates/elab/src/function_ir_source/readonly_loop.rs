@@ -66,6 +66,61 @@ pub fn reflect_elaborated_readonly_loop(elaborator: &Elaborator, source: &str)
     Ok(ReflectedReadonlyLoop { source_name, body_name, carry })
 }
 
+/// What a program for the read profile says about itself
+/// (`function_ir_loop`'s `CountProgram` and `FieldsProgram`,
+/// docs/native-architecture-review.md R6).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ReadProgramKind {
+    /// One count: the process exits with it or prints it.
+    Count,
+    /// A record state whose first three fields are printed.
+    Fields,
+}
+
+/// A program read off its bundle's type: the step, the byte it is given, and
+/// what its printed counts mean, each by its resolved name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReflectedReadProgram {
+    pub name: String,
+    pub kind: ReadProgramKind,
+    pub step: String,
+    pub needle: u8,
+    pub specs: Vec<String>,
+    /// The state: a count, or the `FieldsProgram`'s record.
+    pub carry: LoopCarry,
+}
+
+/// The record a `FieldsProgram`'s step folds: its fourth parameter's type.
+pub fn reflect_step_record(elaborator: &Elaborator, step: &str) -> Result<super::structured::StructuredSourceRecord, SourceError> {
+    let reflected = super::structured::reflect_elaborated_structured(elaborator, step)?;
+    reflected.signature.get(3).cloned().flatten()
+        .ok_or_else(|| SourceError::Unsupported("a FieldsProgram's state must be a record of scalar fields".into()))
+}
+
+/// A global byte constant, `BitVec::ofNat(n)` through functions of no
+/// arguments, by name.
+pub fn byte_constant(elaborator: &Elaborator, name: &str) -> Option<u8> {
+    let at = elaborator.global_abs(name)?;
+    let (_, body) = elaborator.global_body_at(at)?;
+    byte_value(elaborator, &body, at)
+}
+
+// A closed byte: `BitVec::ofNat(n)`, through functions of no arguments.
+fn byte_value(elaborator: &Elaborator, term: &Term, at: usize) -> Option<u8> {
+    let (head, args) = application_spine(term);
+    let abs = absolute(head, at)?;
+    if Some(abs) == elaborator.global_abs("bitvec::BitVec::ofNat") {
+        return match args.last() { Some(Term::NatLit(value)) => value.as_u64().and_then(|n| u8::try_from(n).ok()), _ => None };
+    }
+    if !args.is_empty() { return None; }
+    let (_, body) = elaborator.global_body_at(abs)?;
+    byte_value(elaborator, &body, abs)
+}
+
+fn absolute(term: &Term, caller: usize) -> Option<usize> {
+    match term { Term::GlobalTm { var, .. } => caller.checked_sub(1 + var.0 as usize), _ => None }
+}
+
 /// The kernel checks both the typed body interface and equality with the actual
 /// source over open buffer, byte, counters, and carry. Rebinding either source
 /// or body in a stale descriptor cannot turn into an accepted certificate.

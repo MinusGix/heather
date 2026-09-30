@@ -36,7 +36,7 @@ pub(super) fn generate_piece(elab: &Elaborator, root: &str, symbol: &str, prefix
         let reflected = reflect_elaborated_structured(elab, &source).map_err(|e| format!("{symbol}: {e:?}"))?;
         if reflected.parameters != [StructuredSourceType::Word(8)] || reflected.result != StructuredSourceType::Word(8)
             || reflected.record.is_some() || reflected.choice.is_some() {
-            return Err(format!("--map needs a byte map `{symbol}(b: BitVec(8)) → BitVec(8)`"));
+            return Err(format!("`{symbol}` is not a byte map `(b: BitVec(8)) → BitVec(8)`, a CountProgram or a FieldsProgram"));
         }
         let emission = generate_elaborated_piece_x86(elab, &part, &source, &Placements::from([(0, Rax)]), &[Rdx, Rbx, Rdi, R8], Rdx)
             .map_err(|e| format!("{symbol}: {e:?}"))?;

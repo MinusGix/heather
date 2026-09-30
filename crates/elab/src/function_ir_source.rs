@@ -8,7 +8,8 @@
 use std::collections::BTreeMap;
 
 mod readonly_loop;
-pub use readonly_loop::{LoopCarry, ReflectedReadonlyLoop, reflect_elaborated_readonly_loop, generate_readonly_loop_certificate};
+pub use readonly_loop::{LoopCarry, ReflectedReadonlyLoop, reflect_elaborated_readonly_loop, generate_readonly_loop_certificate,
+    ReadProgramKind, ReflectedReadProgram, reflect_step_record, byte_constant};
 
 mod loop_native;
 pub use loop_native::{generate_elaborated_loop_x86, LoopX86Emission, NativeLoopPlacement};
