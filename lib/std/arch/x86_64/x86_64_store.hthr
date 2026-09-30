@@ -1,10 +1,11 @@
-// A word store the compiler emits (docs/native-first-program-design.md §10):
-// `mov qword [base], source`, for a base that needs neither a SIB byte nor a
-// displacement. It writes the source's eight bytes, low first, through a
-// write model the profile supplies; the model says which spans are writable
-// and what memory looks like after. `FetchedStep` stays the read-only
-// relation the loop and branch bridges run on; a profile whose programs
-// store adds this step beside it.
+// The stores the compiler emits (docs/native-first-program-design.md §10,
+// docs/native-tr-design.md §3.1): `mov qword [base], source`, and
+// `mov byte [base], source` for the source's low byte, each for a base that
+// needs neither a SIB byte nor a displacement. A store writes its bytes, low
+// first, through a write model the profile supplies; the model says which
+// spans are writable and what memory looks like after. `FetchedStep` stays
+// the read-only relation the loop and branch bridges run on; a profile whose
+// programs store adds this step beside it.
 import x86_64;
 import x86_64_fetch;
 import bitvec;
@@ -37,29 +38,69 @@ fn word_bytes(value: BitVec(64)) → List<BitVec(8)> {
      imm_byte4(value), imm_byte5(value), imm_byte6(value), imm_byte7(value)]
 }
 
+// The byte store always carries a REX, without W, so the low byte of every
+// register is encodable (SIL and DIL need one; AH to BH are never meant).
+record ByteStore { base: Gpr, source: Gpr }
+
+fn rex_plain_rr(rm, reg: Gpr) → BitVec(8) {
+    byte_from_fields(gpr_extended(rm), False, gpr_extended(reg), False, False, False, True, False)
+}
+fn byte_store_bytes(store: ByteStore) → List<BitVec(8)> {
+    [rex_plain_rr(store.base, store.source), BitVec::ofNat(0x88),
+     byte_from_fields(gpr_bit0(store.base), gpr_bit1(store.base), gpr_bit2(store.base),
+        gpr_bit0(store.source), gpr_bit1(store.source), gpr_bit2(store.source), False, False)]
+}
+
+inductive MemoryStore {
+    StoreWord(store: WordStore),
+    StoreByte(store: ByteStore),
+}
+fn memory_store_bytes(store: MemoryStore) → List<BitVec(8)> {
+    match store { StoreWord(word) => word_store_bytes(word), StoreByte(byte) => byte_store_bytes(byte) }
+}
+fn memory_store_base(store: MemoryStore) → Gpr {
+    match store { StoreWord(word) => word.base, StoreByte(byte) => byte.base }
+}
+fn memory_store_width(store: MemoryStore) → Nat {
+    match store { StoreWord(_) => 8, StoreByte(_) => 1 }
+}
+// What a store writes: the source's eight bytes, or its low one.
+fn memory_store_data(store: MemoryStore, gprs: Gprs) → List<BitVec(8)> {
+    match store {
+        StoreWord(word) => word_bytes(read_gpr(word.source, gprs)),
+        StoreByte(byte) => [imm_byte0(read_gpr(byte.source, gprs))],
+    }
+}
+
 record ByteWrites<M> {
     writable: M → BitVec(64) → Nat → Type,
     store: M → BitVec(64) → List<BitVec(8)> → M,
 }
 
-fn word_store_after<M>(writes: ByteWrites<M>, store: WordStore, before: MachineState<M>) → MachineState<M> {
+fn memory_store_after<M>(writes: ByteWrites<M>, store: MemoryStore, before: MachineState<M>) → MachineState<M> {
     MachineState(before.gprs, before.flags, next_rip(before.rip, 3),
-        writes.store(before.memory, read_gpr(store.base, before.gprs), word_bytes(read_gpr(store.source, before.gprs))))
+        writes.store(before.memory, read_gpr(memory_store_base(store), before.gprs), memory_store_data(store, before.gprs)))
+}
+fn word_store_after<M>(writes: ByteWrites<M>, store: WordStore, before: MachineState<M>) → MachineState<M> {
+    memory_store_after(writes, StoreWord(store), before)
+}
+fn byte_store_after<M>(writes: ByteWrites<M>, store: ByteStore, before: MachineState<M>) → MachineState<M> {
+    memory_store_after(writes, StoreByte(store), before)
 }
 
-theorem word_store_respects_defined<M>(writes: ByteWrites<M>, store: WordStore,
+theorem memory_store_respects_defined<M>(writes: ByteWrites<M>, store: MemoryStore,
     left, right: MachineState<M>, same: SameDefinedState<M>(left, right)):
-    SameDefinedState<M>(word_store_after(writes, store, left),
-        word_store_after(writes, store, right)) {
-    let base = cong_fn(λ (gprs: Gprs) => read_gpr(store.base, gprs), same.gprs);
-    let bytes = cong_fn(λ (gprs: Gprs) => word_bytes(read_gpr(store.source, gprs)), same.gprs);
+    SameDefinedState<M>(memory_store_after(writes, store, left),
+        memory_store_after(writes, store, right)) {
+    let base = cong_fn(λ (gprs: Gprs) => read_gpr(memory_store_base(store), gprs), same.gprs);
+    let bytes = cong_fn(λ (gprs: Gprs) => memory_store_data(store, gprs), same.gprs);
     let memory = trans(
         cong_fn(λ (value: M) => writes.store(value,
-            read_gpr(store.base, left.gprs), word_bytes(read_gpr(store.source, left.gprs))), same.memory),
+            read_gpr(memory_store_base(store), left.gprs), memory_store_data(store, left.gprs)), same.memory),
         trans(cong_fn(λ (address: BitVec(64)) => writes.store(right.memory,
-                address, word_bytes(read_gpr(store.source, left.gprs))), base),
+                address, memory_store_data(store, left.gprs)), base),
             cong_fn(λ (contents: List<BitVec(8)>) => writes.store(right.memory,
-                read_gpr(store.base, right.gprs), contents), bytes)));
+                read_gpr(memory_store_base(store), right.gprs), contents), bytes)));
     SameDefinedState(same.gprs,
         cong_fn(λ (rip: BitVec(64)) => next_rip(rip, 3), same.rip),
         memory, same.cf, same.pf, same.zf, same.sf, same.of)
@@ -67,10 +108,10 @@ theorem word_store_respects_defined<M>(writes: ByteWrites<M>, store: WordStore,
 
 // One fetched store: the exact bytes at RIP, a plain base, a writable span.
 fn StoreStep<M>(fetch: FetchAccess<M>, writes: ByteWrites<M>, before, after: MachineState<M>) → Type {
-    Exists<WordStore>(λ store => (store_base_plain(store.base) = True) ∧
-        (FetchedFrom(fetch, before.memory, InstructionBytes(before.rip, word_store_bytes(store))) ∧
-        (writes.writable(before.memory, read_gpr(store.base, before.gprs), 8) ∧
-        after = word_store_after(writes, store, before))))
+    Exists<MemoryStore>(λ store => (store_base_plain(memory_store_base(store)) = True) ∧
+        (FetchedFrom(fetch, before.memory, InstructionBytes(before.rip, memory_store_bytes(store))) ∧
+        (writes.writable(before.memory, read_gpr(memory_store_base(store), before.gprs), memory_store_width(store)) ∧
+        after = memory_store_after(writes, store, before))))
 }
 
 theorem store_step_respects_same_witness<M>(fetch: FetchAccess<M>, writes: ByteWrites<M>,
@@ -80,27 +121,27 @@ theorem store_step_respects_same_witness<M>(fetch: FetchAccess<M>, writes: ByteW
     right: StoreStep(fetch, writes, before_right, after_right),
     same_store: left.witness = right.witness):
     SameDefinedState<M>(after_left, after_right) {
-    let runner: (candidate: WordStore) → (left.witness = candidate) →
-        ((store_base_plain(candidate.base) = True) ∧
-         (FetchedFrom(fetch, before_right.memory, InstructionBytes(before_right.rip, word_store_bytes(candidate))) ∧
-         (writes.writable(before_right.memory, read_gpr(candidate.base, before_right.gprs), 8) ∧
-          after_right = word_store_after(writes, candidate, before_right)))) →
+    let runner: (candidate: MemoryStore) → (left.witness = candidate) →
+        ((store_base_plain(memory_store_base(candidate)) = True) ∧
+         (FetchedFrom(fetch, before_right.memory, InstructionBytes(before_right.rip, memory_store_bytes(candidate))) ∧
+         (writes.writable(before_right.memory, read_gpr(memory_store_base(candidate), before_right.gprs), memory_store_width(candidate)) ∧
+          after_right = memory_store_after(writes, candidate, before_right)))) →
         SameDefinedState<M>(after_left, after_right) =
         λ candidate same evidence =>
             j(same, λ actual _ =>
-                ((store_base_plain(actual.base) = True) ∧
-                 (FetchedFrom(fetch, before_right.memory, InstructionBytes(before_right.rip, word_store_bytes(actual))) ∧
-                 (writes.writable(before_right.memory, read_gpr(actual.base, before_right.gprs), 8) ∧
-                  after_right = word_store_after(writes, actual, before_right)))) →
+                ((store_base_plain(memory_store_base(actual)) = True) ∧
+                 (FetchedFrom(fetch, before_right.memory, InstructionBytes(before_right.rip, memory_store_bytes(actual))) ∧
+                 (writes.writable(before_right.memory, read_gpr(memory_store_base(actual), before_right.gprs), memory_store_width(actual)) ∧
+                  after_right = memory_store_after(writes, actual, before_right)))) →
                 SameDefinedState<M>(after_left, after_right),
                 λ agreed =>
-                    same_defined_trans(after_left, word_store_after(writes, left.witness, before_left), after_right,
-                        same_defined_of_equal(after_left, word_store_after(writes, left.witness, before_left),
+                    same_defined_trans(after_left, memory_store_after(writes, left.witness, before_left), after_right,
+                        same_defined_of_equal(after_left, memory_store_after(writes, left.witness, before_left),
                             left.proof.right.right.right),
-                        same_defined_trans(word_store_after(writes, left.witness, before_left),
-                            word_store_after(writes, left.witness, before_right), after_right,
-                            word_store_respects_defined(writes, left.witness, before_left, before_right, before_same),
-                            same_defined_of_equal(word_store_after(writes, left.witness, before_right), after_right,
+                        same_defined_trans(memory_store_after(writes, left.witness, before_left),
+                            memory_store_after(writes, left.witness, before_right), after_right,
+                            memory_store_respects_defined(writes, left.witness, before_left, before_right, before_same),
+                            same_defined_of_equal(memory_store_after(writes, left.witness, before_right), after_right,
                                 sym(agreed.right.right.right)))))(evidence);
     runner(right.witness, same_store, right.proof)
 }
@@ -110,5 +151,13 @@ theorem store_step<M>(fetch: FetchAccess<M>, writes: ByteWrites<M>, store: WordS
     fetched: FetchedFrom(fetch, before.memory, InstructionBytes(before.rip, word_store_bytes(store))),
     writable: writes.writable(before.memory, read_gpr(store.base, before.gprs), 8)):
     StoreStep(fetch, writes, before, word_store_after(writes, store, before)) {
-    Exists(store, ⟨plain, ⟨fetched, ⟨writable, refl⟩⟩⟩)
+    Exists(StoreWord(store), ⟨plain, ⟨fetched, ⟨writable, refl⟩⟩⟩)
+}
+
+theorem byte_store_step<M>(fetch: FetchAccess<M>, writes: ByteWrites<M>, store: ByteStore, before: MachineState<M>,
+    plain: store_base_plain(store.base) = True,
+    fetched: FetchedFrom(fetch, before.memory, InstructionBytes(before.rip, byte_store_bytes(store))),
+    writable: writes.writable(before.memory, read_gpr(store.base, before.gprs), 1)):
+    StoreStep(fetch, writes, before, byte_store_after(writes, store, before)) {
+    Exists(StoreByte(store), ⟨plain, ⟨fetched, ⟨writable, refl⟩⟩⟩)
 }

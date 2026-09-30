@@ -82,6 +82,13 @@ the rest are still the chunk's, RSI = page + i and RCX = n − i.
   `WordStore` in `x86_64_store`. `StoreStep` becomes either store. The step
   decoder and the determinism proof gain the form (`FormByteStore`); it is
   told apart from the word store by REX.W and the opcode.
+  *As landed (2026-09-30):* `ByteStore` and `byte_store_bytes` (REX
+  0100 0RXB, `88`, ModRM mod 00), and a `MemoryStore` sum over the two.
+  `StoreStep` quantifies over the sum, so a word-store client's
+  `store_step` and `word_store_after` are unchanged (the latter is now
+  `memory_store_after` of `StoreWord`). The decoder tells the forms apart
+  at mod 00 by the opcode, and a determinism control mutating 88 to 89 is
+  refused (`byte_store_read_as_word`).
 - **The write loop with a continuation** (slice B). Today `wl_from` ends in
   `write_events(bytes, steps, ending)`, whose `Finished` case is
   `[…, ExitEvent(0)]`. It becomes `write_events_then(bytes, steps, ending,

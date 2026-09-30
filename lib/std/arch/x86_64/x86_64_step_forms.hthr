@@ -24,13 +24,13 @@ fn syscall_bytes() → List<BitVec(8)> { [BitVec::ofNat(15), BitVec::ofNat(5)] }
 
 inductive StepForm {
     FormEmitted(emitted: EmittedInstruction),
-    FormStore(store: WordStore),
+    FormStore(store: MemoryStore),
     FormSyscall,
 }
 fn step_form_bytes(form: StepForm) → List<BitVec(8)> {
     match form {
         FormEmitted(emitted) => emitted_bytes(emitted),
-        FormStore(store) => word_store_bytes(store),
+        FormStore(store) => memory_store_bytes(store),
         FormSyscall => syscall_bytes(),
     }
 }
@@ -116,13 +116,16 @@ fn decode_register_form(opcode: BitVec(8), rm, reg: Gpr, rest: List<BitVec(8)>) 
 }
 
 // After REX and an opcode that is not 0F or B8+r: mod 11 is a register form,
-// mod 00 the word store (89 /r into [base]).
+// mod 00 a store into [base], of a byte (88 /r) or a word (89 /r).
 fn decode_modrm_form(rex, opcode: BitVec(8), rest: List<BitVec(8)>) → Option<StepForm> {
     match rest {
         Nil => None,
         Cons(modrm, tail) => match byte_bit7(modrm) {
             True => decode_register_form(opcode, rm_of(rex, modrm), reg_of(rex, modrm), tail),
-            False => Some(FormStore(WordStore(base := rm_of(rex, modrm), source := reg_of(rex, modrm)))),
+            False => match opcode.eq_dec(BitVec::ofNat(0x88)) {
+                Inl(_) => Some(FormStore(StoreByte(ByteStore(base := rm_of(rex, modrm), source := reg_of(rex, modrm))))),
+                Inr(_) => Some(FormStore(StoreWord(WordStore(base := rm_of(rex, modrm), source := reg_of(rex, modrm))))),
+            },
         },
     }
 }
@@ -172,7 +175,7 @@ fn decode_load_form(rex: BitVec(8), rest: List<BitVec(8)>) → Option<StepForm> 
 
 fn decode_rex_form(rex, opcode: BitVec(8), rest: List<BitVec(8)>) → Option<StepForm> {
     match byte_bit7(opcode) {
-        // B8+r, 89 or 85.
+        // B8+r, 88, 89 or 85.
         True => match byte_bit5(opcode) {
             True => decode_mov_ri_form(rex, opcode, rest),
             False => decode_modrm_form(rex, opcode, rest),
@@ -333,15 +336,46 @@ theorem load_form_complete(load: ByteLoad, rest: List<BitVec(8)>):
             rm_of_fields(load.base, load.destination, byte_load_displaced(load.base), False)))
 }
 
-theorem store_form_complete(store: WordStore, rest: List<BitVec(8)>):
-    decode_step_form(word_store_bytes(store) ++ rest) = Some(FormStore(store)) {
+theorem word_store_form_complete(store: WordStore, rest: List<BitVec(8)>):
+    decode_step_form(word_store_bytes(store) ++ rest) = Some(FormStore(StoreWord(store))) {
     let modrm = byte_from_fields(gpr_bit0(store.base), gpr_bit1(store.base), gpr_bit2(store.base),
         gpr_bit0(store.source), gpr_bit1(store.source), gpr_bit2(store.source), False, False);
     let rex = rex_w_rr(store.base, store.source);
-    trans(cong_fn(λ (b: Gpr) => Some(FormStore(WordStore(base := b, source := reg_of(rex, modrm)))),
+    trans(cong_fn(λ (b: Gpr) => Some(FormStore(StoreWord(WordStore(base := b, source := reg_of(rex, modrm))))),
             rm_of_fields(store.base, store.source, False, False)),
-        cong_fn(λ (s: Gpr) => Some(FormStore(WordStore(base := store.base, source := s))),
+        cong_fn(λ (s: Gpr) => Some(FormStore(StoreWord(WordStore(base := store.base, source := s)))),
             reg_of_fields(store.base, store.source, False, False)))
+}
+
+// The byte store's REX has no W; the decoder reads only its B and R bits.
+theorem rm_of_plain_fields(a, b: Gpr, x, y: Bool):
+    rm_of(rex_plain_rr(a, b),
+        byte_from_fields(gpr_bit0(a), gpr_bit1(a), gpr_bit2(a), gpr_bit0(b), gpr_bit1(b), gpr_bit2(b), x, y)) = a {
+    gpr_fields_roundtrip(a)
+}
+theorem reg_of_plain_fields(a, b: Gpr, x, y: Bool):
+    reg_of(rex_plain_rr(a, b),
+        byte_from_fields(gpr_bit0(a), gpr_bit1(a), gpr_bit2(a), gpr_bit0(b), gpr_bit1(b), gpr_bit2(b), x, y)) = b {
+    gpr_fields_roundtrip(b)
+}
+
+theorem byte_store_form_complete(store: ByteStore, rest: List<BitVec(8)>):
+    decode_step_form(byte_store_bytes(store) ++ rest) = Some(FormStore(StoreByte(store))) {
+    let modrm = byte_from_fields(gpr_bit0(store.base), gpr_bit1(store.base), gpr_bit2(store.base),
+        gpr_bit0(store.source), gpr_bit1(store.source), gpr_bit2(store.source), False, False);
+    let rex = rex_plain_rr(store.base, store.source);
+    trans(cong_fn(λ (b: Gpr) => Some(FormStore(StoreByte(ByteStore(base := b, source := reg_of(rex, modrm))))),
+            rm_of_plain_fields(store.base, store.source, False, False)),
+        cong_fn(λ (s: Gpr) => Some(FormStore(StoreByte(ByteStore(base := store.base, source := s)))),
+            reg_of_plain_fields(store.base, store.source, False, False)))
+}
+
+theorem store_form_complete(store: MemoryStore, rest: List<BitVec(8)>):
+    decode_step_form(memory_store_bytes(store) ++ rest) = Some(FormStore(store)) {
+    match store {
+        StoreWord(word) => word_store_form_complete(word, rest),
+        StoreByte(byte) => byte_store_form_complete(byte, rest),
+    }
 }
 
 theorem short_form_complete(control: ShortControl, rest: List<BitVec(8)>):
@@ -455,7 +489,7 @@ theorem fetched_from_related<M>(access: FetchAccess<M>, left, right: MachineStat
 fn emitted_of(form: StepForm, fallback: EmittedInstruction) → EmittedInstruction {
     match form { FormEmitted(emitted) => emitted, _ => fallback }
 }
-fn store_of(form: StepForm, fallback: WordStore) → WordStore {
+fn store_of(form: StepForm, fallback: MemoryStore) → MemoryStore {
     match form { FormStore(store) => store, _ => fallback }
 }
 fn IsEmitted(form: StepForm) → Type { match form { FormEmitted(_) => True, _ => False } }

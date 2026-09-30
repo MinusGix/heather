@@ -16,8 +16,8 @@ fn claimed_runs_are_every_run() {
 
 // Each change is refused where it is wrong, not by a missing name: a decoder
 // that reads ADD as SUB, takes a store for a register form, drops an ADD's
-// immediate, or looks for SYSCALL at another opcode is not complete on the
-// forms; a run in which a
+// immediate, looks for SYSCALL at another opcode, or reads a byte store's
+// opcode as the word store's is not complete on the forms; a run in which a
 // failed read may leave more junk than it asked for, or whose answers are
 // compared by kind alone, is not the claimed run.
 #[test]
@@ -28,6 +28,7 @@ fn determinism_refusals() {
         ("store_read_as_register", "Cons(modrm, tail) => match byte_bit7(modrm) {", "Cons(modrm, tail) => match !byte_bit7(modrm) {"),
         ("immediate_dropped", "Cons(b0, _) => emitted_form(AddRI8(rm, b0)),", "Cons(_, _) => emitted_form(AddRI8(rm, BitVec::ofNat(0))),"),
         ("syscall_elsewhere", "match opcode.eq_dec(BitVec::ofNat(0x05)) {", "match opcode.eq_dec(BitVec::ofNat(0x06)) {"),
+        ("byte_store_read_as_word", "match opcode.eq_dec(BitVec::ofNat(0x88)) {", "match opcode.eq_dec(BitVec::ofNat(0x89)) {"),
     ] {
         let bad = FORMS.replacen(from, to, 1);
         assert_ne!(bad, FORMS, "{name}");
