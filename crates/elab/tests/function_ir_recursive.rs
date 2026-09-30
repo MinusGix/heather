@@ -573,10 +573,35 @@ fn narrow_placement_widths_constants_and_declines() {
         let mut regs = BTreeMap::new(); run_dag(&dag, &mut regs);
         assert_eq!(regs[&Gpr::Rax], if width == 64 { u64::MAX } else { (1u64 << width) - 1 });
     }
-    for node in [Node::Add { width: 8, output: 2, left: 0, right: 1 }, Node::SignedLessThan { width: 8, output: 2, left: 0, right: 1 }] {
-        let output = node.output();
-        let region = Region { inputs: vec![Port { id: 0, width: 8 }, Port { id: 1, width: 8 }], nodes: vec![node], outputs: vec![output] };
-        assert!(lower_dag(&region, &[Gpr::Rdi, Gpr::Rsi], SCRATCH, Gpr::Rax).is_err());
+    let node = Node::SignedLessThan { width: 8, output: 2, left: 0, right: 1 };
+    let region = Region { inputs: vec![Port { id: 0, width: 8 }, Port { id: 1, width: 8 }], nodes: vec![node], outputs: vec![node.output()] };
+    assert!(lower_dag(&region, &[Gpr::Rdi, Gpr::Rsi], SCRATCH, Gpr::Rax).is_err());
+}
+
+// A narrow sum or difference wraps at its width: the word's result is masked
+// (docs/native-tr-design.md §4.1). Every width below the word, at the values
+// that carry or borrow out of the low columns and at the width's extremes.
+#[test]
+fn narrow_sums_and_differences_wrap_at_their_width() {
+    use heather_elab::function_ir_x86_lower::lower_dag;
+    for width in [0u64, 1, 8, 16, 32, 63] {
+        let top = if width == 0 { 0 } else { (1u64 << width) - 1 };
+        let values = [0, 1, top / 2, top / 2 + 1, top.saturating_sub(1), top];
+        for subtract in [false, true] {
+            let node = if subtract { Node::Sub { width, output: 2, left: 0, right: 1 } } else { Node::Add { width, output: 2, left: 0, right: 1 } };
+            let region = Region { inputs: vec![Port { id: 0, width }, Port { id: 1, width }], nodes: vec![node], outputs: vec![Port { id: 2, width }] };
+            let dag = lower_dag(&region, &[Gpr::Rdi, Gpr::Rsi], SCRATCH, Gpr::Rax).unwrap_or_else(|e| panic!("width {width}: {e}"));
+            for &a in &values {
+                for &b in &values {
+                    let mut regs = BTreeMap::from([(Gpr::Rdi, a), (Gpr::Rsi, b)]);
+                    for r in SCRATCH { regs.insert(*r, u64::MAX); }
+                    run_dag(&dag, &mut regs);
+                    let word = if subtract { a.wrapping_sub(b) } else { a.wrapping_add(b) };
+                    assert_eq!(regs[&Gpr::Rax], word & top, "width {width}: {a} {} {b}", if subtract { "-" } else { "+" });
+                    assert_eq!((regs[&Gpr::Rdi], regs[&Gpr::Rsi]), (a, b), "the inputs are kept");
+                }
+            }
+        }
     }
 }
 

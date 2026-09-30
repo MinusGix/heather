@@ -2847,10 +2847,8 @@ pub fn lower_dag_consuming(
             continue;
         }
         let mut immediate_operand = None;
-        match selected {
-            SelectedNode::Binary(BinaryNode { operation: BinaryOperation::Add | BinaryOperation::Sub, .. }) => require_width(selected.output(), selected.width())?,
-            _ => require_placement_width(selected.output(), selected.width())?,
-        }
+        require_placement_width(selected.output(), selected.width())?;
+        let mut scratch = None;
         if placements.contains_key(&selected.output()) {
             return Err(LoweringError::DuplicateValue(selected.output()));
         }
@@ -3021,6 +3019,16 @@ pub fn lower_dag_consuming(
                         }
                     }
                 }
+                let mut step_instructions = step_instructions;
+                // A narrow sum or difference is the word's, masked to its
+                // width in a scratch register (docs/native-tr-design.md §4.1).
+                if node.width != 64 && matches!(node.operation, BinaryOperation::Add | BinaryOperation::Sub) {
+                    let mask = temporary_registers.iter().copied().find(|register| *register != destination && !owners.contains_key(register))
+                        .ok_or(LoweringError::RegisterPressure { node_index, live_temporaries: owners.len() })?;
+                    step_instructions.push(Instruction::MovRI { destination: mask, immediate: (1u64 << node.width).wrapping_sub(1) });
+                    step_instructions.push(Instruction::AndRR { destination, source: mask });
+                    scratch = Some(mask);
+                }
                 (
                     Some(left_register),
                     Some(right_register),
@@ -3127,6 +3135,7 @@ pub fn lower_dag_consuming(
         placements.insert(selected.output(), destination);
         widths.insert(selected.output(), selected.width());
         clobbered.insert(destination);
+        clobbered.extend(scratch);
         instructions.extend(step_instructions.iter().copied());
         node_plans.push(NodePlan {
             node_index,
@@ -3740,6 +3749,58 @@ fn emit_placement_proofs(
                 text.push_str(&format!("theorem {output_name}<M>({parameters}): {} {{ {proof} }}\n",
                     placement_type(node.width, node.output, plan.destination, &format!("{prefix}_state_{after_index}(before)"))));
                 consume_known_use(&mut remaining, node.source);
+            }
+            // A narrow sum or difference: the word's, masked. The law turns
+            // the logical result into the word operation under the mask; the
+            // mask's MOV keeps the destination; the AND is the result.
+            SelectedNode::Binary(node) if node.width != 64 && matches!(node.operation, BinaryOperation::Add | BinaryOperation::Sub) => {
+                let left_register = plan.left_register.expect("binary left");
+                let right_register = plan.right_register.expect("binary right");
+                let mut left_proof = placement_at_state(prefix, node.left, left_register, before_index, &live[&node.left].1, &input_indices);
+                let mut right_proof = placement_at_state(prefix, node.right, right_register, before_index, &live[&node.right].1, &input_indices);
+                let mut actual_left = left_register;
+                let binary_index = after_index - 3;
+                let mask_index = after_index - 2;
+                let and_index = after_index - 1;
+                if plan.instructions.len() == 4 {
+                    left_proof = format!("trans({left_proof}, sym({prefix}_step_{before_index}_result({prefix}_state_{before_index}(before))))");
+                    let frame = emit_step_frame_fact(prefix, before_index, plan.instructions[0], right_register, &mut frame_facts, text);
+                    right_proof = format!("trans({right_proof}, sym({frame}({prefix}_state_{before_index}(before))))");
+                    actual_left = plan.destination;
+                }
+                let Instruction::MovRI { destination: mask_register, immediate: mask } = plan.instructions[mask_index - before_index] else {
+                    panic!("a narrow sum's mask");
+                };
+                let width = node.width;
+                let pad = 64 - width;
+                let op = node.operation.semantic_function();
+                let band = BinaryOperation::BitAnd.semantic_function();
+                let state = |index: usize| format!("{prefix}_state_{index}(before)");
+                let destination = plan.destination.heather_name();
+                let logical_mask = format!("@bitvec::BitVec::zero_extend({width}, {pad}, @bitvec::BitVec::all_ones({width}))");
+                let logical_right = placed_expression(width, &format!("values({width}, {})", node.right));
+                let machine_left = format!("read_gpr({}, {}.gprs)", actual_left.heather_name(), state(binary_index));
+                let machine_right = format!("read_gpr({}, {}.gprs)", right_register.heather_name(), state(binary_index));
+                let law = match node.operation { BinaryOperation::Add => "bitvec::BitVec::add_zero_extend_mask", _ => "bitvec::BitVec::sub_zero_extend_mask" };
+                let lifted = format!("sym({law}({width}, {pad}, values({width}, {}), values({width}, {})))", node.left, node.right);
+                let left_agrees = format!("cong_fn<BitVec(64), BitVec(64)>(λ found => @{op}(64, found, {logical_right}), {left_proof})");
+                let right_agrees = format!("cong_fn<BitVec(64), BitVec(64)>(λ found => @{op}(64, {machine_left}, found), {right_proof})");
+                let word = format!("trans({left_agrees}, {right_agrees})");
+                let word = if plan.orientation == OperandOrientation::Reversed {
+                    format!("trans({word}, {}(64, {machine_left}, {machine_right}))", node.operation.commutativity_theorem().unwrap())
+                } else { word };
+                let word = format!("trans({word}, sym({prefix}_step_{binary_index}_result({})))", state(binary_index));
+                let summed = format!("read_gpr({destination}, {}.gprs)", state(mask_index));
+                let masked = format!("read_gpr({}, {}.gprs)", mask_register.heather_name(), state(and_index));
+                let frame = emit_step_frame_fact(prefix, mask_index, plan.instructions[mask_index - before_index], plan.destination, &mut frame_facts, text);
+                let under_mask = format!("cong_fn<BitVec(64), BitVec(64)>(λ w => @{band}(64, w, {logical_mask}), {word})");
+                let mask_placed = format!("cong_fn<BitVec(64), BitVec(64)>(λ m => @{band}(64, {summed}, m), trans(equality_refl(@bitvec::BitVec::ofNat(64, {mask})), sym({prefix}_step_{mask_index}_result({}))))", state(mask_index));
+                let kept = format!("cong_fn<BitVec(64), BitVec(64)>(λ w => @{band}(64, w, {masked}), sym({frame}({})))", state(mask_index));
+                let lifted_equation = format!("cong_fn<BitVec({width}), BitVec(64)>(λ value => {}, {equation})", placed_expression(width, "value"));
+                text.push_str(&format!("theorem {output_name}<M>({parameters}): {} {{ trans({lifted_equation}, trans({lifted}, trans({under_mask}, trans({mask_placed}, trans({kept}, sym({prefix}_step_{and_index}_result({}))))))) }}\n",
+                    placement_type(width, node.output, plan.destination, &state(after_index)), state(and_index)));
+                consume_known_use(&mut remaining, node.left);
+                consume_known_use(&mut remaining, node.right);
             }
             SelectedNode::Binary(node) if node.width != 64 => {
                 let left_register = plan.left_register.expect("binary left");
@@ -4398,13 +4459,6 @@ fn placement_type(width: u64, id: u64, register: Gpr, state: &str) -> String {
     format!("{} = read_gpr({}, {state}.gprs)", placed_expression(width, &format!("values({width}, {id})")), register.heather_name())
 }
 
-fn require_width(value: u64, width: u64) -> Result<(), LoweringError> {
-    if width == 64 {
-        Ok(())
-    } else {
-        Err(LoweringError::UnsupportedWidth { value, width })
-    }
-}
 
 fn last_use_in_node(uses: &BTreeMap<u64, usize>, value: u64, left: u64, right: u64) -> bool {
     let uses_here = usize::from(left == value) + usize::from(right == value);

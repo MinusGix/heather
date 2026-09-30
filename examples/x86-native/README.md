@@ -111,8 +111,8 @@ This certificate API still stops before a complete bounded-loop trace and does
 not change the native CLI calling convention.
 
 Leaf selection supports word arithmetic and zero-extended narrow constants,
-copies, bitwise operations, and unsigned comparisons. Narrow modular arithmetic
-and signed comparisons remain future work. Register pressure
+copies, bitwise operations, unsigned comparisons and modular add/subtract (the
+word's result, masked). Narrow signed comparisons remain future work. Register pressure
 and branches outside the forward rel8 range are refused. Structured bodies are
 currently assembly exports; `build-x86` retains its existing arithmetic/call
 fragment. The native branch and structured-composition tests assemble all

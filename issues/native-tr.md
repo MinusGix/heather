@@ -18,3 +18,5 @@ the map loop and the process are library code proved once. `tr -d` and
 `tr -s` are [[native-loop-emitting-stores]].
 
 ## Log
+
+- 2026-09-30: 2026-09-30: Decisions (user): translate only; the byte map lowered through the compiler (the 256-byte table recorded as the alternative, design §6). Probe V2 found narrow add/subtract refused; slice N added it (design §4.2, [[function-ir-narrow-arithmetic]]).

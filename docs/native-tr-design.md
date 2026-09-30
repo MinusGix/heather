@@ -129,14 +129,33 @@ in a scratch test:
   comparisons, but narrow add/subtract has no normalisation rule. This is
   `issues/function-ir-narrow-arithmetic.md`, open since 2026-09-20.
 - With the subtraction spelled as `b.band(0xdf)` (for a lowercase byte the
-  same value), everything else goes through. The piece is 98 bytes, and its
-  certificate checks in about a second.
+  same value), everything else goes through. The piece is 98 bytes.
 
 So the round gains **slice N**: narrow add/subtract in the lowering (a word
 operation, then a mask to the width), certified by a generic zero-extension
 law, as the bitwise operations are. That closes the add/subtract half of the
 issue; signed comparisons stay open there. The example is then spelled
 `b.sub(0x20)`, not around the gap.
+
+### 4.2 Slice N as landed (2026-09-30)
+
+- **Lowering.** A narrow `Add`/`Sub` selects as the word's (in place, copied
+  or reversed, as before), then `MOV scratch, 2^w − 1` and `AND dest,
+  scratch`. The scratch is any free temporary other than the destination,
+  and it joins the clobbered set. No new instruction.
+- **Law** (`lib/std/bitvec.hthr`): `add_zero_extend_mask` and
+  `sub_zero_extend_mask`, `(zext a ± zext b) band zext(all_ones) = zext(a ±
+  b)`, structural in the width through the carry and borrow, as
+  `borrow_zero_extend` is. The certificate chains the law, the operands'
+  placements, the word step, the mask's MOV (which keeps the destination)
+  and the AND. The literal mask meets `zext(all_ones(w))` by conversion.
+- **Tests.** Execution at every width from 0 to 63, at the carry and borrow
+  edges (`narrow_sums_and_differences_wrap_at_their_width`). Certificates
+  for copied, constant, reversed, width-0 and chained forms, plus a negative
+  control: the unmasked word sum is refused
+  (`function_ir_narrow_certificates`). `upcase` and ROT13 publish at the
+  map loop's registers (`byte_maps_with_narrow_arithmetic_publish`): 117
+  and 353 bytes.
 
 ## 5. What is not in this round
 

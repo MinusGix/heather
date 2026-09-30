@@ -1895,3 +1895,61 @@ theorem BitVec::bxor_zero_extend(n: Nat): (extra: Nat) → (a, b: BitVec(n)) →
             a := (a.bxor(b)).head_bit(), b := (a.bxor(b)).head_bit()),
     }
 }
+
+// Narrow sums and differences on a wider word: the word's result, masked to
+// the narrow width, is the narrow result zero-extended. The carry or borrow
+// out of the low columns lands in the high ones, which the mask clears.
+theorem BitVec::band_zero_r(n: Nat): (x: BitVec(n)) → x.band(BitVec::zero()) = BitVec::zero() {
+    match n as λ k => (x: BitVec(k)) → x.band(BitVec::zero()) = BitVec::zero() {
+        Zero => λ x => refl,
+        Succ(k, ih) => λ x => BitVec::cons_bit_cong(k, match x.head_bit() as λ h => (h && False) = False { False => refl, True => refl },
+            ih(x.tail_bits())),
+    }
+}
+
+theorem BitVec::add_bits_zero_extend_mask(n: Nat): (extra: Nat) → (a, b: BitVec(n)) → (carry: Bool) →
+    ((a.zero_extend(extra)).add_bits(b.zero_extend(extra), carry)).band(BitVec::all_ones(n := n).zero_extend(extra)) =
+        (a.add_bits(b, carry)).zero_extend(extra) {
+    match n as λ k => (extra: Nat) → (a, b: BitVec(k)) → (carry: Bool) →
+        ((a.zero_extend(extra)).add_bits(b.zero_extend(extra), carry)).band(BitVec::all_ones(n := k).zero_extend(extra)) =
+            (a.add_bits(b, carry)).zero_extend(extra) {
+        Zero => λ extra a b carry => BitVec::band_zero_r(extra, (a.zero_extend(extra)).add_bits(b.zero_extend(extra), carry)),
+        Succ(k, ih) => λ extra a b carry => BitVec::cons_bit_cong(extra + k,
+            Bool::and_true_r(BitVec::sum_bit(a.head_bit(), b.head_bit(), carry)),
+            match BitVec::carry_majority(a.head_bit(), b.head_bit(), carry) as λ next =>
+                (BitVec::add_bits_next((a.tail_bits()).zero_extend(extra), (b.tail_bits()).zero_extend(extra), next,
+                    λ x y c => x.add_bits(y, c))).band(BitVec::all_ones(n := k).zero_extend(extra)) =
+                (BitVec::add_bits_next(a.tail_bits(), b.tail_bits(), next, λ x y c => x.add_bits(y, c))).zero_extend(extra) {
+                False => ih(extra, a.tail_bits(), b.tail_bits(), False),
+                True => ih(extra, a.tail_bits(), b.tail_bits(), True),
+            }),
+    }
+}
+
+theorem BitVec::sub_bits_zero_extend_mask(n: Nat): (extra: Nat) → (a, b: BitVec(n)) → (borrow: Bool) →
+    ((a.zero_extend(extra)).sub_bits(b.zero_extend(extra), borrow)).band(BitVec::all_ones(n := n).zero_extend(extra)) =
+        (a.sub_bits(b, borrow)).zero_extend(extra) {
+    match n as λ k => (extra: Nat) → (a, b: BitVec(k)) → (borrow: Bool) →
+        ((a.zero_extend(extra)).sub_bits(b.zero_extend(extra), borrow)).band(BitVec::all_ones(n := k).zero_extend(extra)) =
+            (a.sub_bits(b, borrow)).zero_extend(extra) {
+        Zero => λ extra a b borrow => BitVec::band_zero_r(extra, (a.zero_extend(extra)).sub_bits(b.zero_extend(extra), borrow)),
+        Succ(k, ih) => λ extra a b borrow => BitVec::cons_bit_cong(extra + k,
+            Bool::and_true_r(BitVec::sum_bit(a.head_bit(), b.head_bit(), borrow)),
+            match BitVec::borrow_next(a.head_bit(), b.head_bit(), borrow) as λ next =>
+                (BitVec::sub_bits_next((a.tail_bits()).zero_extend(extra), (b.tail_bits()).zero_extend(extra), next,
+                    λ x y c => x.sub_bits(y, c))).band(BitVec::all_ones(n := k).zero_extend(extra)) =
+                (BitVec::sub_bits_next(a.tail_bits(), b.tail_bits(), next, λ x y c => x.sub_bits(y, c))).zero_extend(extra) {
+                False => ih(extra, a.tail_bits(), b.tail_bits(), False),
+                True => ih(extra, a.tail_bits(), b.tail_bits(), True),
+            }),
+    }
+}
+
+theorem BitVec::add_zero_extend_mask(n, extra: Nat, a, b: BitVec(n)):
+    ((a.zero_extend(extra)).add(b.zero_extend(extra))).band(BitVec::all_ones(n := n).zero_extend(extra)) = (a.add(b)).zero_extend(extra) {
+    BitVec::add_bits_zero_extend_mask(n, extra, a, b, False)
+}
+theorem BitVec::sub_zero_extend_mask(n, extra: Nat, a, b: BitVec(n)):
+    ((a.zero_extend(extra)).sub(b.zero_extend(extra))).band(BitVec::all_ones(n := n).zero_extend(extra)) = (a.sub(b)).zero_extend(extra) {
+    BitVec::sub_bits_zero_extend_mask(n, extra, a, b, False)
+}
