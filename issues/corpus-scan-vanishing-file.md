@@ -1,6 +1,6 @@
 ---
 title: every_gt_is_accounted_for races a test that deletes .hthr files in the tree
-status: open
+status: closed
 labels: [tests,flaky]
 created: 2026-09-30
 updated: 2026-09-30
@@ -22,3 +22,11 @@ Fix: have the writing tests use a temp dir outside `lib/`, `examples/` and
 `NotFound` when read instead of unwrapping.
 
 ## Log
+- 2026-09-30: Fixed. The writer was `check.rs`'s
+  `an_edited_module_replays_its_unchanged_declarations_from_the_previous_image`,
+  which wrote and deleted `crates/cli/tests/fixtures/slice_edit.hthr`. Its
+  edited copy now lives in a temp directory and is checked by absolute path.
+  The other in-tree writers (`UPDATE_FUNCTION_IR_*` blessing,
+  `HEATHER_FUNCTION_IR_X86_DUMP`, `target/` refusal dumps) are env-gated or
+  outside the scanned trees. The scan stays strict: a file vanishing under it
+  is a racing test worth hearing about.

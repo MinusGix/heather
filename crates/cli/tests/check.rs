@@ -502,18 +502,24 @@ fn deny_axioms_is_a_check_policy() {
 fn an_edited_module_replays_its_unchanged_declarations_from_the_previous_image() {
     let dir = cache_dir("slice-replay");
     let arg = dir.display().to_string();
+    // The edited copy lives outside the repository: a source written and
+    // deleted under `crates/` races the corpus scans that list the tree
+    // (issues/corpus-scan-vanishing-file.md).
+    let sources = cache_dir("slice-replay-sources");
+    std::fs::create_dir_all(&sources).unwrap();
+    let edited = sources.join("slice_edit.hthr");
+    let edited_arg = edited.display().to_string();
     let fixtures = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
-    let edited = std::path::Path::new(fixtures).join("slice_edit.hthr");
     let original = std::fs::read_to_string(std::path::Path::new(fixtures).join("good.hthr")).unwrap();
     std::fs::write(&edited, &original).unwrap();
 
-    let cold = heather(&["check", "--cache-dir", &arg, "slice_edit.hthr"]);
+    let cold = heather(&["check", "--cache-dir", &arg, &edited_arg]);
     assert_eq!(cold.status.code(), Some(0), "{}", String::from_utf8_lossy(&cold.stderr));
     let cold_out = String::from_utf8_lossy(&cold.stdout).to_string();
     assert!(cold_out.contains("0 declarations replayed after an edit"), "{cold_out}");
 
     std::fs::write(&edited, format!("{original}\nfn one_more() -> Nat {{ double(1) }}\n")).unwrap();
-    let edit = heather(&["check", "--cache-dir", &arg, "slice_edit.hthr"]);
+    let edit = heather(&["check", "--cache-dir", &arg, &edited_arg]);
     assert_eq!(edit.status.code(), Some(0), "{}", String::from_utf8_lossy(&edit.stderr));
     let edit_out = String::from_utf8_lossy(&edit.stdout).to_string();
     let items = original.matches("\nfn ").count() + original.matches("\ntheorem ").count();
@@ -523,7 +529,7 @@ fn an_edited_module_replays_its_unchanged_declarations_from_the_previous_image()
     );
     assert!(edit_out.contains("1 declaration kernel-checked"), "the appended one faces the kernel: {edit_out}");
 
-    let _ = std::fs::remove_file(&edited);
+    let _ = std::fs::remove_dir_all(sources);
     let _ = std::fs::remove_dir_all(dir);
 }
 
