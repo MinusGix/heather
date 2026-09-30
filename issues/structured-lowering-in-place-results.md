@@ -1,9 +1,9 @@
 ---
 title: Structured lowering refuses a result placed in one of its own input registers
-status: open
+status: closed
 labels: [compiler,function-ir,x86,register-allocation]
 created: 2026-09-24
-updated: 2026-09-24
+updated: 2026-09-30
 ---
 
 Found 2026-09-24 by the bounded-loop probes (`docs/native-bounded-loops-design.md` §8 V2).
@@ -22,3 +22,7 @@ fresh temporary, end with one move into the requested register, and drop that
 register from the certificate's protected frame (it is clobbered by design).
 The frame proof needs only that the move is the last write. Not a prerequisite
 for the loop certificates; worth doing when code size or glue length matters.
+
+## Log
+
+- 2026-09-30: 2026-09-30: resolved by native-architecture-review R5. The lowering's consumable set (6b7353cf) already let a result take a dead input's register; the loop generator now computes each field, the cursor and the budget straight into their own registers (FieldPiece.consumable, generate_elaborated_typed_consuming_x86), and the copy pieces are gone: wc -l 654 → 630 bytes, wc 5946 → 5898.

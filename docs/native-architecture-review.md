@@ -857,3 +857,25 @@ format lambdas and keep lists.
 **Cost.** The process tests ran at the same order of CPU as at R4, a little
 lower each, on a machine under load, so no claim beyond "no worse". The
 fields test is still the one nearest the rail.
+
+**In-place results** (a second commit). The lowering already let a result
+take a dead input's register (`generate_structured_consuming`, landed the
+same day by the structured-lowering size line), so what was left was the
+loop generator's use of it:
+
+- `FieldPiece` takes `consumable`, the inputs dead once read.
+- `generate_elaborated_typed_consuming_x86` is the whole-region entry with
+  one.
+- Each field is computed straight into its own register. The register is
+  consumable when the field reads itself, and one more register the piece
+  may write when it doesn't.
+- The next cursor and budget are computed in place.
+- The `keep_*` copy pieces, their certificates and their steps in the
+  iteration are gone. A field's word is its piece's result, kept to the
+  iteration's end; the cursor's and budget's are the same.
+
+The write order that made copying home sound makes writing home sound: no
+field is written before every field that reads it is done. `wc -l` goes from
+654 to 630 bytes and `wc` from 5,946 to 5,898, three and six copies fewer per
+iteration. `tr` has no loop and is unchanged. Both still count as GNU `wc`
+does, on input longer than one read.

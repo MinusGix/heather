@@ -266,6 +266,10 @@ the iteration as a list of typed pieces:
 - the discriminator;
 - the next cursor and budget into freed scratch, then copied home.
 
+(Since 2026-09-30, docs/native-architecture-review.md R5: each field, and
+the cursor and the budget, are computed straight into their own registers,
+whose old values are dead once read; the copies are gone.)
+
 The state's placement (`{prefix}_rep`) is a conjunction per field: a Nat
 field as its word, a Bool field as its placed bit. The invariant
 (`{prefix}_fits`) says every Nat field fits a word with the budget still to

@@ -7,10 +7,11 @@
 //! stated against the source loop itself.
 //!
 //! The state's fields sit in registers of their own, and one iteration
-//! updates them in place, one at a time: each field is computed alone into a
-//! scratch register (`generate_elaborated_typed_fields_x86`) and copied home,
-//! in an order where no field reads a register an earlier field was written
-//! back to. The discriminator comes last when it reads no field (so the field
+//! updates them in place, one at a time: each field is computed alone
+//! (`generate_elaborated_typed_fields_x86`) straight into its own register,
+//! whose old value is dead once the field's piece has read it
+//! (structured-lowering-in-place-results), in an order where no field reads a
+//! register an earlier field was written to. The discriminator comes last when it reads no field (so the field
 //! pieces may borrow its register), first otherwise. A Nat or Bool state is
 //! a record of one field, which is the state itself
 //! (docs/native-loop-generator-fold-design.md §3.1).
@@ -20,9 +21,8 @@ use crate::function_ir_x86_lower::{near_loop_edges, AccessFragment, ByteLoad};
 
 /// Registers for a loop. The head registers carry its position from one
 /// iteration to the next and `fields` its state; `byte` holds the load's
-/// address, then the byte. `scratch` needs three registers: the first carries
-/// each field's new value home, and comparisons need byte-addressable ones
-/// among them.
+/// address, then the byte. `scratch` needs three registers, the pieces'
+/// temporaries: comparisons need byte-addressable ones among them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NativeLoopPlacement {
     pub base: Gpr, pub length: Gpr, pub needle: Gpr, pub cursor: Gpr, pub budget: Gpr,
@@ -144,18 +144,23 @@ pub fn generate_elaborated_loop_x86(elaborator: &Elaborator, prefix: &str, sourc
     let mut field_temps = p.scratch.clone();
     if !discriminator_reads_fields { field_temps.push(p.step); }
     let step_temps: Vec<Gpr> = std::iter::once(p.step).chain(p.scratch.iter().copied()).collect();
-    let discriminator_piece = FieldPiece { prefix: name("discriminator"), port: outputs[k].id, inputs: &placements, temporaries: &step_temps, output: p.step };
+    let discriminator_piece = FieldPiece { prefix: name("discriminator"), port: outputs[k].id, inputs: &placements, temporaries: &step_temps, consumable: &[], output: p.step };
+    // Each field into its own register: an input it reads last, or else one
+    // more register it may write.
+    let homes: Vec<[Gpr; 1]> = p.fields.iter().map(|&home| [home]).collect();
+    let temps_writing: Vec<Vec<Gpr>> = (0..k).map(|i| field_temps.iter().copied().chain(if reads[i].contains(&i) { None } else { Some(p.fields[i]) }).collect()).collect();
     let field_pieces = order.iter().map(|&i| FieldPiece { prefix: name(&format!("field_{}", fields[i].0)), port: outputs[i].id,
-        inputs: &placements, temporaries: &field_temps, output: t });
+        inputs: &placements, temporaries: &temps_writing[i], consumable: if reads[i].contains(&i) { &homes[i] } else { &[] }, output: p.fields[i] });
     let pieces: Vec<FieldPiece> = if discriminator_reads_fields { std::iter::once(discriminator_piece).chain(field_pieces).collect() }
         else { field_pieces.chain(std::iter::once(discriminator_piece)).collect() };
     let (fields_text, emissions) = generate_elaborated_typed_fields_x86(elaborator, &name("fields"), &reflected.body_name, &pieces)?;
-    let copies = order.iter().map(|&i| typed(&format!("keep_{}", fields[i].0), "loop_copy", &[(0, t)], &[p.fields[i]], (1, p.fields[i])))
-        .collect::<Result<Vec<_>, _>>()?;
-    let next_cursor = typed("next_cursor", "loop_next_cursor", &[(0, p.cursor)], &[t, s2r], (1, t))?;
-    let next_budget = typed("next_budget", "loop_next_budget", &[(0, p.budget)], &[s1r, s2r], (1, s1r))?;
-    let keep_cursor = typed("keep_cursor", "loop_copy", &[(0, t)], &[p.cursor], (1, p.cursor))?;
-    let keep_budget = typed("keep_budget", "loop_copy", &[(0, s1r)], &[p.budget], (1, p.budget))?;
+    // The cursor and the budget, in place.
+    let in_place = |part: &str, function: &str, register: Gpr, temps: &[Gpr]| {
+        generate_elaborated_typed_consuming_x86(elaborator, &name(part), &format!("function_ir_loop_x86::{function}"),
+            &[(0, register)].into_iter().collect(), temps, &[register], &[(1, register)].into_iter().collect())
+    };
+    let next_cursor = in_place("next_cursor", "loop_next_cursor", p.cursor, &[t, s2r])?;
+    let next_budget = in_place("next_budget", "loop_next_budget", p.budget, &[s1r, s2r])?;
 
     // The iteration's pure steps after the load, in order, by name; each is
     // one state further along.
@@ -163,13 +168,11 @@ pub fn generate_elaborated_loop_x86(elaborator: &Elaborator, prefix: &str, sourc
     let mut steps: Vec<(String, AccessFragment)> = Vec::new();
     let discriminator_step = (discriminator.prefix.clone(), AccessFragment::structured(&discriminator.prefix, &discriminator.lowered));
     if discriminator_reads_fields { steps.push(discriminator_step.clone()); }
-    for (n, &i) in order.iter().enumerate() {
-        let piece = &field_emissions[n];
+    for piece in field_emissions {
         steps.push((piece.prefix.clone(), AccessFragment::structured(&piece.prefix, &piece.lowered)));
-        steps.push((name(&format!("keep_{}", fields[i].0)), AccessFragment::structured(&name(&format!("keep_{}", fields[i].0)), &copies[n].lowered)));
     }
     if !discriminator_reads_fields { steps.push(discriminator_step); }
-    for (part, emission) in [("next_cursor", &next_cursor), ("next_budget", &next_budget), ("keep_cursor", &keep_cursor), ("keep_budget", &keep_budget)] {
+    for (part, emission) in [("next_cursor", &next_cursor), ("next_budget", &next_budget)] {
         steps.push((name(part), AccessFragment::structured(&name(part), &emission.lowered)));
     }
     // States: s0 at the head, s1 after the address, s2 after the load, then
@@ -186,8 +189,7 @@ pub fn generate_elaborated_loop_x86(elaborator: &Elaborator, prefix: &str, sourc
     pieces_module.raw("import x86_64_data_read; import x86_64;");
     pieces_module.raw(format!("fn {}() → ByteLoad {{ {} }}", name("load"), load.render()));
     for text in [&guard.text, &address.text, &fields_text] { pieces_module.raw(text.clone()); }
-    for copy in &copies { pieces_module.raw(copy.text.clone()); }
-    for emission in [&next_cursor, &next_budget, &keep_cursor, &keep_budget] { pieces_module.raw(emission.text.clone()); }
+    for emission in [&next_cursor, &next_budget] { pieces_module.raw(emission.text.clone()); }
     pieces_module.raw(generate_readonly_loop_certificate(&name("loop"), &reflected));
     let pieces_text = stitch_imports(&pieces_module.render());
     let mut module = Module::default();
@@ -321,7 +323,7 @@ pub fn generate_elaborated_loop_x86(elaborator: &Elaborator, prefix: &str, sourc
     let s_end = state(end);
     lets.push(("step".into(), format!("{region}.body(needle, cursor, byte, carry)")));
     lets.push(("next".into(), "loop_step_payload(step)".into()));
-    // Each field's new word: its piece's result, copied home, kept since.
+    // Each field's new word: its piece's result, kept since.
     let mut field_words = vec![String::new(); k];
     for (n, &i) in order.iter().enumerate() {
         let piece = &field_emissions[n];
@@ -329,31 +331,25 @@ pub fn generate_elaborated_loop_x86(elaborator: &Elaborator, prefix: &str, sourc
         let entry = before_step(at);
         let placed = piece.inputs.iter().map(|port| premise(port.id, entry)).collect::<Vec<_>>().join(", ");
         let result = format!("{}_typed_correct(needle, cursor, byte, carry, {}{}{placed})", piece.prefix, state(entry), if placed.is_empty() { "" } else { ", " });
-        let copy_at = at + 1;
-        let copied = format!("{}_typed_correct(read_gpr({}, {}.gprs), {}, refl)", steps[copy_at].0, reg(t), state(before_step(copy_at)), state(before_step(copy_at)));
-        field_words[i] = seq(chain(p.fields[i], before_step(copy_at) + 1, end), format!("trans({copied}, {result})"));
+        field_words[i] = seq(chain(p.fields[i], before_step(at) + 1, end), result);
         lets.push((format!("word_{}", fields[i].0), field_words[i].clone()));
     }
     let d_at = step_index(&discriminator.prefix);
     let d_placed = discriminator.inputs.iter().map(|port| premise(port.id, before_step(d_at))).collect::<Vec<_>>().join(", ");
     lets.push(("step_reg".into(), seq(chain(p.step, before_step(d_at) + 1, end), format!("{}_typed_correct(needle, cursor, byte, carry, {}{}{d_placed})",
         discriminator.prefix, state(before_step(d_at)), if d_placed.is_empty() { "" } else { ", " }))));
-    let (nc, nb, kcur, kb) = (step_index(&name("next_cursor")), step_index(&name("next_budget")), step_index(&name("keep_cursor")), step_index(&name("keep_budget")));
+    let (nc, nb) = (step_index(&name("next_cursor")), step_index(&name("next_budget")));
     lets.push(("value".into(), "λ (word: BitVec(64)) => word.toNat()".into()));
     lets.push(("cursor_word".into(), format!("trans(cong_fn(value, {}), head.cursor_placed)", chain(p.cursor, 0, before_step(nc)))));
     lets.push(("length_word".into(), format!("trans(cong_fn(value, {}), head.length_placed)", chain(p.length, 0, before_step(nc)))));
-    let computed_cursor = seq(chain(t, before_step(nc) + 1, before_step(kcur)), format!("{}_typed_correct(read_gpr({cur}, {n}.gprs), {n}, refl)", steps[nc].0,
+    let kept_cursor = seq(chain(p.cursor, before_step(nc) + 1, end), format!("{}_typed_correct(read_gpr({cur}, {n}.gprs), {n}, refl)", steps[nc].0,
         cur = reg(p.cursor), n = state(before_step(nc))));
-    let kept_cursor = seq(chain(p.cursor, before_step(kcur) + 1, end), format!("trans({}_typed_correct(read_gpr({tr}, {e}.gprs), {e}, refl), {computed_cursor})",
-        steps[kcur].0, tr = reg(t), e = state(before_step(kcur))));
     lets.push(("cursor_next".into(), format!("trans(cong_fn(value, {kept_cursor}), \
         loop_cursor_increment(read_gpr({cur}, {n}.gprs), read_gpr({len}, {n}.gprs), cursor, buffer.length, cursor_word, length_word, open))",
         n = state(before_step(nc)), cur = reg(p.cursor), len = reg(p.length))));
     lets.push(("budget_word".into(), format!("trans(cong_fn(value, {}), head.budget_placed)", chain(p.budget, 0, before_step(nb)))));
-    let computed_budget = seq(chain(s1r, before_step(nb) + 1, before_step(kb)), format!("{}_typed_correct(read_gpr({bud}, {n}.gprs), {n}, refl)", steps[nb].0,
+    let kept_budget = seq(chain(p.budget, before_step(nb) + 1, end), format!("{}_typed_correct(read_gpr({bud}, {n}.gprs), {n}, refl)", steps[nb].0,
         bud = reg(p.budget), n = state(before_step(nb))));
-    let kept_budget = seq(chain(p.budget, before_step(kb) + 1, end), format!("trans({}_typed_correct(read_gpr({sr}, {e}.gprs), {e}, refl), {computed_budget})",
-        steps[kb].0, sr = reg(s1r), e = state(before_step(kb))));
     lets.push(("budget_next".into(), format!("trans(cong_fn(value, {kept_budget}), loop_budget_decrement(read_gpr({bud}, {n}.gprs), rest, budget_word))",
         n = state(before_step(nb)), bud = reg(p.budget))));
     // after.memory = before.memory, the last step outermost; the load keeps

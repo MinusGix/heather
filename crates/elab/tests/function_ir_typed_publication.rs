@@ -157,7 +157,7 @@ fn record_state_fields_publish_alone() {
     let inputs = Placements::from([(0, Gpr::Rdi), (2, Gpr::Rsi), (3, Gpr::R8), (4, Gpr::R9), (5, Gpr::R10)]);
     let temps = [Gpr::Rax, Gpr::Rdx, Gpr::Rcx, Gpr::Rbx];
     let pieces: Vec<_> = [(6, "lines"), (7, "words"), (8, "inside"), (9, "step")].into_iter().map(|(port, field)| FieldPiece {
-        prefix: format!("wc_{field}"), port, inputs: &inputs, temporaries: &temps, output: Gpr::Rax }).collect();
+        prefix: format!("wc_{field}"), port, inputs: &inputs, temporaries: &temps, consumable: &[], output: Gpr::Rax }).collect();
     let (text, emissions) = generate_elaborated_typed_fields_x86(&elab, "wc_fields", "record_step::wc_body", &pieces).unwrap_or_else(|e| panic!("{e:?}"));
     elab.elab_module_source("typed_wc_fields", &text).unwrap_or_else(|e| panic!("{}", e.render(&text)));
     let reads = |field: &str| emissions.iter().find(|e| e.prefix == format!("wc_{field}")).unwrap().inputs.iter().map(|p| p.id).collect::<Vec<_>>();

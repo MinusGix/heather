@@ -317,10 +317,11 @@ impl Publication {
 
 fn typed_whole(
     elaborator: &Elaborator, prefix: &str, source_name: &str,
-    inputs: &x86::Placements, temporaries: &[Gpr], outputs: &x86::Placements, contract: bool,
+    inputs: &x86::Placements, temporaries: &[Gpr], consumable: &[Gpr], outputs: &x86::Placements, contract: bool,
 ) -> Result<x86::StructuredX86Emission, SourceError> {
     let mut publication = publication(elaborator, prefix, source_name, contract)?;
-    let mut emission = x86::generate_structured_sourced(prefix, &publication.reflected.region, &publication.reflected.sources, &publication.reflected.bodies, inputs, temporaries, outputs).map_err(SourceError::Lowering)?;
+    let mut emission = x86::generate_structured_consuming(prefix, &publication.reflected.region, &publication.reflected.sources, &publication.reflected.bodies, inputs, temporaries,
+        &consumable.iter().copied().collect(), outputs).map_err(SourceError::Lowering)?;
     let region_inputs = publication.reflected.region.inputs().to_vec();
     let (public, placed_args) = publication.placed(&region_inputs, inputs);
     let (args, vals) = (publication.args.clone(), publication.vals.clone());
@@ -359,7 +360,17 @@ pub fn generate_elaborated_typed_x86(
     elaborator: &Elaborator, prefix: &str, source_name: &str,
     inputs: &x86::Placements, temporaries: &[Gpr], outputs: &x86::Placements,
 ) -> Result<x86::StructuredX86Emission, SourceError> {
-    typed_whole(elaborator, prefix, source_name, inputs, temporaries, outputs, false)
+    typed_whole(elaborator, prefix, source_name, inputs, temporaries, &[], outputs, false)
+}
+
+/// The same, where the inputs in `consumable` registers are dead once read,
+/// so a result may take one's register (structured-lowering-in-place-results):
+/// a value updated in place.
+pub fn generate_elaborated_typed_consuming_x86(
+    elaborator: &Elaborator, prefix: &str, source_name: &str,
+    inputs: &x86::Placements, temporaries: &[Gpr], consumable: &[Gpr], outputs: &x86::Placements,
+) -> Result<x86::StructuredX86Emission, SourceError> {
+    typed_whole(elaborator, prefix, source_name, inputs, temporaries, consumable, outputs, false)
 }
 
 /// One generated piece of a process (docs/native-architecture-review.md R5):
@@ -372,17 +383,20 @@ pub fn generate_elaborated_piece_x86(
 ) -> Result<x86::StructuredX86Emission, SourceError> {
     let reflected = reflect_elaborated_structured(elaborator, source_name)?;
     let [port] = reflected.region.outputs() else { return unsupported("a process's piece has one result") };
-    typed_whole(elaborator, prefix, source_name, inputs, temporaries, &x86::Placements::from([(port.id, output)]), true)
+    typed_whole(elaborator, prefix, source_name, inputs, temporaries, &[], &x86::Placements::from([(port.id, output)]), true)
 }
 
 /// One output of a record-valued step with a certificate of its own
 /// (docs/native-wc-design.md §4.6): its result port, its placements and its
-/// result register. It reads only the inputs its output depends on.
+/// result register. It reads only the inputs its output depends on; those in
+/// `consumable` registers are dead once it has, so its result may take one's
+/// register.
 pub struct FieldPiece<'a> {
     pub prefix: String,
     pub port: u64,
     pub inputs: &'a x86::Placements,
     pub temporaries: &'a [Gpr],
+    pub consumable: &'a [Gpr],
     pub output: Gpr,
 }
 
@@ -427,8 +441,8 @@ pub fn generate_elaborated_typed_fields_x86(
         let narrowed = cert::narrow_structured_region(&reflected.region, &[port]);
         let inputs: x86::Placements = narrowed.inputs().iter().map(|input| piece.inputs.get(&input.id).copied().map(|r| (input.id, r))
             .ok_or_else(|| SourceError::Unsupported(format!("piece {} reads input {} with no register", piece.prefix, input.id)))).collect::<Result<_, _>>()?;
-        let emission = x86::generate_structured_sourced(&piece.prefix, &narrowed, &reflected.sources, &reflected.bodies, &inputs, piece.temporaries,
-            &x86::Placements::from([(port.id, piece.output)])).map_err(SourceError::Lowering)?;
+        let emission = x86::generate_structured_consuming(&piece.prefix, &narrowed, &reflected.sources, &reflected.bodies, &inputs, piece.temporaries,
+            &piece.consumable.iter().copied().collect(), &x86::Placements::from([(port.id, piece.output)])).map_err(SourceError::Lowering)?;
         let name = &piece.prefix;
         let (public, placed_args) = publication.placed(narrowed.inputs(), &inputs);
         let correct = if emission.text.contains(&format!("theorem {name}_meaning(")) {
