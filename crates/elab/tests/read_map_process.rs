@@ -49,23 +49,15 @@ import byte_maps; import upcase_publication;
 theorem upcase_map_piece(): MapPiece(upcase, upcase_code(), upcase_Protected) { λ before b placed => upcase_typed_artifact(b, before, placed) }
 theorem upcase_keeps(): MapKeeps(upcase_Protected) { MapKeeps(trivial, trivial, trivial, trivial, trivial) }
 
-theorem upcase_runs(file: List<BitVec(8)>, jumps: MapJumps, pj: PrintJumps,
-    exit_reads: jumps.ed.sign_extend(32).toNat() = map_exit_skip(upcase_bytes().len()),
-    fail_reads: jumps.sd.sign_extend(32).toNat() = map_fail_skip(upcase_bytes().len()),
-    again_closes: map_loop_span(upcase_bytes().len()) + 6 + jumps.ld.sign_extend(32).toNat() = Nat::pow(2, 64),
-    retry_closes: map_at_retry(upcase_bytes().len()) + 6 + jumps.rd.sign_extend(32).toNat() = Nat::pow(2, 64),
-    write_fail_reads: pj.sd.sign_extend(32).toNat() = print_fail_skip(),
-    write_read_closes: wl_at_wjz(map_at_write(upcase_bytes().len())) + 6 + pj.zd.sign_extend(32).toNat() = Nat::pow(2, 64),
-    write_back_closes: print_loop_span() + 5 + pj.bd.sign_extend(32).toNat() = Nat::pow(2, 64),
-    write_retry_closes: print_retry_span() + 6 + pj.rd.sign_extend(32).toNat() = Nat::pow(2, 64),
+fn upcase_map_byte() → MapByte(upcase) { MapByte(upcase_code(), upcase_Protected, upcase_map_piece(), upcase_keeps()) }
+
+theorem upcase_runs(file: List<BitVec(8)>, jumps: MapJumps, pj: PrintJumps, facts: MapJumpFacts(upcase_bytes().len(), jumps, pj),
     resident: (page: Nat → BitVec(8)) → CodeResident(io_fetch_access(), IoMemory(file, page), map_code(upcase_code(), jumps, pj),
         BitVec::ofNat(0x4000e8)),
     steps: List<MapStep>, ok: MapSteps(upcase, steps), ending: MapEnding, ending_ok: MapEndingOk(upcase, ending),
     page: Nat → BitVec(8), gprs: Gprs, flags: Flags):
     LinuxRuns(io_linux(), map_events(upcase, steps, ending), io_initial(file, page, gprs, flags)) {
-    read_map_runs(file, upcase, upcase_code(), upcase_Protected, upcase_map_piece(), upcase_keeps(), jumps, pj,
-        exit_reads, fail_reads, again_closes, retry_closes, write_fail_reads, write_read_closes, write_back_closes, write_retry_closes,
-        resident, steps, ok, ending, ending_ok, page, gprs, flags)
+    read_map_runs(file, upcase, upcase_map_byte(), jumps, pj, facts, resident, steps, ok, ending, ending_ok, page, gprs, flags)
 }
 
 theorem upcase_sends(steps: List<MapStep>, ok: MapSteps(upcase, steps)):

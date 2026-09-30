@@ -186,23 +186,26 @@ theorem {prefix}_counts(gprs: Gprs, carry: {ty}, placed: {prefix}_rep(gprs, carr
     let input = "eof_input(chunks)";
     let printed = format!("three_fields_line({s0}({input}), {s1}({input}), {s2}({input}))");
     let nat_zero = tuple(&vec!["refl".to_string(); 3]);
-    let arguments = format!("{prefix}_file(), {prefix}_placement(), ReadStatePlacement(refl, refl, refl, refl, refl),
-        {prefix}_rep, {prefix}_fits, {prefix}_framed(), {prefix}_loop_region(), {prefix}_code(), {prefix}_bytes(), {root}::{source}, {needle},
-        λ buffer needle budget cursor carry => {prefix}_loop_source_agreement(buffer, needle, budget, cursor, carry),
-        λ access before buffer needle budget cursor carry bounded low head readable fits =>
-            {prefix}_native(access, before, buffer, needle, budget, cursor, carry, bounded, low, head, readable, fits),
-        {root}::{folds}, {prefix}_init(), {prefix}_initialised(),
-        λ seen budget fits => {prefix}_room({needle}, {prefix}_init(), {nat_zero}, seen, budget, fits),
-        λ (s: {ty}) => s.{f0}, λ (s: {ty}) => s.{f1}, λ (s: {ty}) => s.{f2}, {prefix}_counts,
-        {s0}, {s1}, {s2}, {root}::{computes},
-        {lo}_code(), {hi}_code(), {lo}_Protected, {hi}_Protected,
-        FieldsFormat(λ before n placed => {lo}_typed_artifact(n, before, placed),
-            λ before n tail at_n at_tail => {hi}_typed_artifact(n, tail, before, at_n, at_tail),
-            trivial, trivial, trivial, trivial, trivial, trivial, trivial),
-        {prefix}_jumps(), {prefix}_exit_reads(), {prefix}_fail_reads(), {prefix}_back_closes(), {prefix}_retry_closes(),
-        {pj}, {prefix}_write_fail_reads(), {prefix}_write_exit_reads(), {prefix}_write_back_closes(), {prefix}_write_retry_closes(),
-        {prefix}_resident(), chunks, ok, ending, ending_ok, room, small, writes, writes_ok, written, written_ok, page, gprs, flags",
-        source = program.source, folds = program.folds, computes = program.computes, f0 = name(0), f1 = name(1), f2 = name(2));
+    super::read_loop::state_bundle(module, prefix, ty, root, program.source, &needle, &format!("{prefix}_init()"), &nat_zero);
+    // The three counts and the formatter (elf64_read_fields's `ThreeCounts`
+    // and `FieldsFormat`). What the counts mean (`ThreeSpecs`) is the
+    // program's, so the claim builds it, and a mismatch is refused there.
+    module.raw(format!("\
+fn {prefix}_three() → ThreeCounts<{ty}>({prefix}_rep) {{
+    ThreeCounts(λ (s: {ty}) => s.{f0}, λ (s: {ty}) => s.{f1}, λ (s: {ty}) => s.{f2}, {prefix}_counts)
+}}
+fn {prefix}_fields_codes() → FieldsCodes {{ FieldsCodes({lo}_code(), {hi}_code(), {lo}_Protected, {hi}_Protected) }}
+fn {prefix}_fields_format() → FieldsFormat({prefix}_fields_codes()) {{
+    FieldsFormat(λ before n placed => {lo}_typed_artifact(n, before, placed),
+        λ before n tail at_n at_tail => {hi}_typed_artifact(n, tail, before, at_n, at_tail),
+        trivial, trivial, trivial, trivial, trivial, trivial, trivial)
+}}
+", f0 = name(0), f1 = name(1), f2 = name(2)));
+    let folds = format!("{root}::{}", program.folds);
+    let arguments = format!("{prefix}_file(), {prefix}_state_shape(), {prefix}_state_loop({folds}), {prefix}_init(), {prefix}_state_start(),
+        {prefix}_three(), ThreeSpecs({s0}, {s1}, {s2}, {root}::{computes}),
+        {prefix}_fields_codes(), {prefix}_fields_format(), {prefix}_jumps(), {prefix}_jump_facts(), {pj}, {prefix}_print_facts(),
+        {prefix}_resident(), chunks, ok, ending, ending_ok, room, small, writes, writes_ok, written, written_ok, page, gprs, flags", computes = program.computes);
     let premises = format!("chunks: List<ReadStep>, ok: EofChunks(chunks), ending: ReadEnding, ending_ok: EofEnding(ending),
     room: {input}.len() + 4096 < Nat::pow(2, 64),
     small: ({s0}({input}) < 10000000) ∧ (({s1}({input}) < 10000000) ∧ ({s2}({input}) < 10000000)),

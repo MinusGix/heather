@@ -137,10 +137,19 @@ theorem {prefix}_write_retry_closes(): print_retry_span() + 6 + {pj}.rd.sign_ext
     let premises = format!("steps: List<MapStep>, ok: MapSteps({f}, steps), ending: MapEnding, ending_ok: MapEndingOk({f}, ending),
     page: Nat → BitVec(8), gprs: Gprs, flags: Flags");
     let events = format!("map_events({f}, steps, ending)");
-    let proof = format!("read_map_runs({prefix}_file(), {f}, {m}_code(), {m}_Protected,
-        λ before b placed => {m}_typed_artifact(b, before, placed), MapKeeps(trivial, trivial, trivial, trivial, trivial),
-        {jumps}, {pj}, {prefix}_exit_reads(), {prefix}_fail_reads(), {prefix}_again_closes(), {prefix}_retry_closes(),
-        {prefix}_write_fail_reads(), {prefix}_write_read_closes(), {prefix}_write_back_closes(), {prefix}_write_retry_closes(),
+    // The byte map's certificate and the jump facts (elf64_read_map's
+    // `MapByte` and `MapJumpFacts`).
+    module.raw(format!("\
+fn {prefix}_map_byte() → MapByte({f}) {{
+    MapByte({m}_code(), {m}_Protected, λ before b placed => {m}_typed_artifact(b, before, placed),
+        MapKeeps(trivial, trivial, trivial, trivial, trivial))
+}}
+fn {prefix}_jump_facts() → MapJumpFacts(structured_bytes({m}_code()).len(), {jumps}, {pj}) {{
+    MapJumpFacts({prefix}_exit_reads(), {prefix}_fail_reads(), {prefix}_again_closes(), {prefix}_retry_closes(),
+        {prefix}_write_fail_reads(), {prefix}_write_read_closes(), {prefix}_write_back_closes(), {prefix}_write_retry_closes())
+}}
+"));
+    let proof = format!("read_map_runs({prefix}_file(), {f}, {prefix}_map_byte(), {jumps}, {pj}, {prefix}_jump_facts(),
         {prefix}_resident(), steps, ok, ending, ending_ok, page, gprs, flags)");
     claims(module, prefix, &format!("\
 // The process claim for the written file: for every way the reads may split

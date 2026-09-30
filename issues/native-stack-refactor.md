@@ -25,3 +25,4 @@ Emitting stores ([[native-loop-emitting-stores]]) waits on R3, which makes
 ## Log
 
 - 2026-09-30: R0 and R1 landed (review §8): one SYSCALL encoding, the write loop's duplicate targets retired, io_entry named; the read head and failure tail proved once in elf64_read_pieces and used by the state and map processes and the write loop. R2 next when chosen.
+- 2026-09-30: R2 landed (review §8): StateLoop/StateStart, per-piece jump-fact records with target lemmas, EofTail at an offset, formats carrying their codes, ThreeCounts/ThreeSpecs/MapByte; claims 33→17, 50→24–25, 24→14 parameters; producers emit each bundle once as a transparent fn. R3 (the read-until-EOF driver) next when chosen.

@@ -45,20 +45,16 @@ theorem wc_counts(gprs: Gprs, carry: WcState, placed: wc_rep(gprs, carry)):
         sym(loop_nat_placed(read_gpr(R15, gprs), carry.bytes, placed.right.right.left))⟩⟩
 }
 
+fn wc_three() → ThreeCounts<WcState>(wc_rep) {
+    ThreeCounts(λ (s: WcState) => s.lines, λ (s: WcState) => s.words, λ (s: WcState) => s.bytes, wc_counts)
+}
+
 // Any file holding the process's code: for every history of reads and
 // writes, a run that prints the line of the state folded over the input.
-theorem wc_prints(file: List<BitVec(8)>, needle: BitVec(8), jumps: EofJumps,
-    exit_reads: jumps.ed.sign_extend(32).toNat() = state_exit_skip(needle, wc_bytes()),
-    fail_reads: jumps.sd.sign_extend(32).toNat() = state_fail_skip(needle, wc_bytes()),
-    back_closes: state_loop_span(needle, wc_bytes()) + 5 + jumps.bd.sign_extend(32).toNat() = Nat::pow(2, 64),
-    retry_closes: state_retry_span(needle, wc_bytes()) + 6 + jumps.rd.sign_extend(32).toNat() = Nat::pow(2, 64),
-    low, high: StructuredCode, low_keeps, high_keeps: Gpr → Type, format: FieldsFormat(low, high, low_keeps, high_keeps), pj: PrintJumps,
-    write_fail_reads: pj.sd.sign_extend(32).toNat() = print_fail_skip(),
-    write_exit_reads: pj.zd.sign_extend(32).toNat() = print_exit_skip(),
-    write_back_closes: print_loop_span() + 5 + pj.bd.sign_extend(32).toNat() = Nat::pow(2, 64),
-    write_retry_closes: print_retry_span() + 6 + pj.rd.sign_extend(32).toNat() = Nat::pow(2, 64),
+theorem wc_prints(file: List<BitVec(8)>, needle: BitVec(8), jumps: EofJumps, facts: StateJumpFacts(needle, wc_bytes(), jumps),
+    codes: FieldsCodes, format: FieldsFormat(codes), pj: PrintJumps, print_facts: PrintJumpFacts(pj),
     resident: (page: Nat → BitVec(8)) → CodeResident(io_fetch_access(), IoMemory(file, page),
-        read_fields_code(needle, wc_bytes(), jumps, low, high, pj), BitVec::ofNat(0x4000e8)),
+        read_fields_code(needle, wc_bytes(), jumps, codes.low, codes.high, pj), BitVec::ofNat(0x4000e8)),
     chunks: List<ReadStep>, ok: EofChunks(chunks), ending: ReadEnding, ending_ok: EofEnding(ending),
     room: eof_input(chunks).len() + 4096 < Nat::pow(2, 64),
     small: (step_fold(wc_loop_region(), needle, eof_input(chunks), WcState(0, 0, 0, False)).lines < 10000000) ∧
@@ -75,17 +71,8 @@ theorem wc_prints(file: List<BitVec(8)>, needle: BitVec(8), jumps: EofJumps,
         step_fold(wc_loop_region(), needle, eof_input(chunks), WcState(0, 0, 0, False)).words,
         step_fold(wc_loop_region(), needle, eof_input(chunks), WcState(0, 0, 0, False)).bytes), writes, written)),
         io_initial(file, page, gprs, flags)) {
-    read_fields_runs(file, wc_placement(), ReadStatePlacement(refl, refl, refl, refl, refl), wc_rep, wc_fits, wc_framed(),
-        wc_loop_region(), wc_code(), wc_bytes(), count_wc, needle,
-        λ buffer needle budget cursor carry => wc_loop_source_agreement(buffer, needle, budget, cursor, carry),
-        λ access before buffer needle budget cursor carry bounded low head readable fits =>
-            wc_native(access, before, buffer, needle, budget, cursor, carry, bounded, low, head, readable, fits),
-        wc_body_folds(), WcState(0, 0, 0, False), wc_initialised(),
-        λ seen budget fits => wc_room(needle, WcState(0, 0, 0, False), ⟨refl, ⟨refl, refl⟩⟩, seen, budget, fits),
-        λ (s: WcState) => s.lines, λ (s: WcState) => s.words, λ (s: WcState) => s.bytes, wc_counts,
-        low, high, low_keeps, high_keeps, format, jumps, exit_reads, fail_reads, back_closes, retry_closes,
-        pj, write_fail_reads, write_exit_reads, write_back_closes, write_retry_closes, resident,
-        chunks, ok, ending, ending_ok, room, small, writes, writes_ok, written, written_ok, page, gprs, flags)
+    read_fields_runs(file, wc_state_shape(needle), wc_state_loop(needle), WcState(0, 0, 0, False), wc_state_start(needle), wc_three(), codes, format,
+        jumps, facts, pj, print_facts, resident, chunks, ok, ending, ending_ok, room, small, writes, writes_ok, written, written_ok, page, gprs, flags)
 }
 "#;
 

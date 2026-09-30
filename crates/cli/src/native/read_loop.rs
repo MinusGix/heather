@@ -234,6 +234,9 @@ theorem {prefix}_exit_reads(): {prefix}_jumps().ed.sign_extend(32).toNat() = sta
 theorem {prefix}_fail_reads(): {prefix}_jumps().sd.sign_extend(32).toNat() = state_fail_skip({needle}, {prefix}_bytes()) {{ refl }}
 theorem {prefix}_back_closes(): state_loop_span({needle}, {prefix}_bytes()) + 5 + {prefix}_jumps().bd.sign_extend(32).toNat() = Nat::pow(2, 64) {{ refl }}
 theorem {prefix}_retry_closes(): state_retry_span({needle}, {prefix}_bytes()) + 6 + {prefix}_jumps().rd.sign_extend(32).toNat() = Nat::pow(2, 64) {{ refl }}
+fn {prefix}_jump_facts() → StateJumpFacts({needle}, {prefix}_bytes(), {prefix}_jumps()) {{
+    StateJumpFacts({prefix}_exit_reads(), {prefix}_fail_reads(), {prefix}_back_closes(), {prefix}_retry_closes())
+}}
 "));
     }
 }
@@ -288,6 +291,9 @@ theorem {prefix}_write_fail_reads(): {pj}.sd.sign_extend(32).toNat() = print_fai
 theorem {prefix}_write_exit_reads(): {pj}.zd.sign_extend(32).toNat() = print_exit_skip() {{ refl }}
 theorem {prefix}_write_back_closes(): print_loop_span() + 5 + {pj}.bd.sign_extend(32).toNat() = Nat::pow(2, 64) {{ refl }}
 theorem {prefix}_write_retry_closes(): print_retry_span() + 6 + {pj}.rd.sign_extend(32).toNat() = Nat::pow(2, 64) {{ refl }}
+fn {prefix}_print_facts() → PrintJumpFacts({pj}) {{
+    PrintJumpFacts({prefix}_write_fail_reads(), {prefix}_write_exit_reads(), {prefix}_write_back_closes(), {prefix}_write_retry_closes())
+}}
 ", psd = self.psd, pzd = self.pzd, pbd = self.pbd, prd = self.prd));
     }
 }
@@ -331,20 +337,40 @@ theorem {prefix}_resident(): (page: Nat → BitVec(8)) → CodeResident(io_fetch
 ", low = size & 255, high = size >> 8));
 }
 
-// The count's facts (`state_facts`), and the arguments both claims pass the
-// library, up to the tail's.
-fn common_arguments(module: &mut Module, prefix: &str, program: &Program) -> String {
-    let (root, needle) = (program.root, format!("@bitvec::BitVec::ofNat(8, {})", program.needle));
-    state_facts(module, prefix, &StateShape { type_name: "Nat", constructor: None, fields: &[("count".into(), StructuredSourceType::NatWord)] });
-    format!("{prefix}_file(), {prefix}_placement(), ReadStatePlacement(refl, refl, refl, refl, refl),
-        {prefix}_rep, {prefix}_fits, {prefix}_framed(),
-        {prefix}_loop_region(), {prefix}_code(), {prefix}_bytes(), {root}::{source}, {needle}, {root}::{spec},
+/// The loop's data, what is proved about it, and the state's start
+/// (elf64_read_state's `StateShape`, `StateLoop` and `StateStart`), as
+/// `{prefix}_state_shape()`, `{prefix}_state_loop(folds)` and
+/// `{prefix}_state_start()`; `init` is the initial state and `zeros` proves
+/// it is init's zeros in the room fact. What the generator proved is here;
+/// the program's own fact, that its step folds, is a parameter the claim
+/// supplies, so a wrong one is refused there and nowhere else.
+pub(super) fn state_bundle(module: &mut Module, prefix: &str, ty: &str, root: &str, source: &str, needle: &str, init: &str, zeros: &str) {
+    module.raw(format!("\
+fn {prefix}_state_shape() → StateShape<{ty}> {{
+    StateShape({prefix}_placement(), {prefix}_rep, {prefix}_fits, {prefix}_loop_region(), {prefix}_code(), {prefix}_bytes(), {root}::{source},
+        {needle})
+}}
+fn {prefix}_state_loop(folds: LoopFolds({prefix}_loop_region())) → StateLoop<{ty}>({prefix}_state_shape()) {{
+    StateLoop(ReadStatePlacement(refl, refl, refl, refl, refl), {prefix}_framed(),
         λ buffer needle budget cursor carry => {prefix}_loop_source_agreement(buffer, needle, budget, cursor, carry),
         λ access before buffer needle budget cursor carry bounded low head readable fits =>
             {prefix}_native(access, before, buffer, needle, budget, cursor, carry, bounded, low, head, readable, fits),
-        {root}::{computes}, {root}::{folds}, {prefix}_initialised(),
-        λ seen budget fits => {prefix}_room({needle}, {prefix}_init(), refl, seen, budget, fits), {prefix}_word_0",
-        source = program.source, spec = program.spec, computes = program.computes, folds = program.folds)
+        folds)
+}}
+fn {prefix}_state_start() → StateStart<{ty}>({prefix}_state_shape(), {init}) {{
+    StateStart({prefix}_initialised(), λ seen budget fits => {prefix}_room({needle}, {prefix}_init(), {zeros}, seen, budget, fits))
+}}
+"));
+}
+
+// The count's facts (`state_facts`) and bundles, and the arguments both
+// claims pass the library before their format.
+fn common_arguments(module: &mut Module, prefix: &str, program: &Program) -> String {
+    let (root, needle) = (program.root, format!("@bitvec::BitVec::ofNat(8, {})", program.needle));
+    state_facts(module, prefix, &StateShape { type_name: "Nat", constructor: None, fields: &[("count".into(), StructuredSourceType::NatWord)] });
+    state_bundle(module, prefix, "Nat", root, program.source, &needle, "0", "refl");
+    format!("{prefix}_file(), {prefix}_state_shape(), {prefix}_state_loop({root}::{folds}), {root}::{spec}, {root}::{computes},
+        {prefix}_state_start(), {prefix}_word_0", spec = program.spec, computes = program.computes, folds = program.folds)
 }
 
 // A claim and its `_runs_every`: every run of the file from that start which
@@ -391,8 +417,8 @@ pub(super) fn certify(module: &mut Module, prefix: &str, program: &Program, emis
     let premises = "chunks: List<ReadStep>, ok: EofChunks(chunks), ending: ReadEnding, ending_ok: EofEnding(ending),
     room: eof_input(chunks).len() + 4096 < Nat::pow(2, 64), page: Nat → BitVec(8), gprs: Gprs, flags: Flags";
     let events = format!("eof_events(chunks, ending, [ExitEvent(bitvec_nat::word_of_nat(64, {root}::{spec}(eof_input(chunks))))])", spec = program.spec);
-    let proof = format!("read_count_runs({common}, {prefix}_jumps(), {prefix}_exit_reads(), {prefix}_fail_reads(), {prefix}_back_closes(),
-        {prefix}_retry_closes(), {prefix}_resident(), chunks, ok, ending, ending_ok, room, page, gprs, flags)", common = common_arguments(module, prefix, program));
+    let proof = format!("read_count_runs({common}, {prefix}_jumps(), {prefix}_jump_facts(), {prefix}_resident(),
+        chunks, ok, ending, ending_ok, room, page, gprs, flags)", common = common_arguments(module, prefix, program));
     claims(module, prefix, &format!("\
 // The process claim for the written file: for every way the reads may split
 // stdin into non-empty chunks, with EINTRs between them, ending at the empty
@@ -483,15 +509,21 @@ pub(super) fn certify_print(module: &mut Module, prefix: &str, program: &Program
     written: WriteEnding, written_ok: WriteEndingOk(written),
     page: Nat → BitVec(8), gprs: Gprs, flags: Flags", spec = program.spec);
     let events = format!("eof_events(chunks, ending, write_events(decimal_line({root}::{spec}(eof_input(chunks))), writes, written))", spec = program.spec);
-    let proof = format!("read_count_print_runs({common},
-        {w}_code(), {st}_code(), {ln}_code(), {w}_Protected, {st}_Protected, {ln}_Protected,
-        ReadPrintFormat(λ before n placed => {w}_typed_artifact(n, before, placed),
-            λ before base n at_base at_n => {st}_typed_artifact(base, n, before, at_base, at_n),
-            λ before n placed => {ln}_typed_artifact(n, before, placed),
-            trivial, trivial, trivial, trivial, trivial, trivial, trivial, trivial),
-        {prefix}_jumps(), {prefix}_exit_reads(), {prefix}_fail_reads(), {prefix}_back_closes(), {prefix}_retry_closes(),
-        {pj}, {prefix}_write_fail_reads(), {prefix}_write_exit_reads(), {prefix}_write_back_closes(),
-        {prefix}_write_retry_closes(), {prefix}_resident(),
+    // The formatter's certificates and what each keeps (elf64_print_pieces's
+    // `PrintFormat`).
+    module.raw(format!("\
+fn {prefix}_print_codes() → PrintCodes {{
+    PrintCodes({w}_code(), {st}_code(), {ln}_code(), {w}_Protected, {st}_Protected, {ln}_Protected)
+}}
+fn {prefix}_print_format() → PrintFormat({prefix}_print_codes()) {{
+    PrintFormat(λ before n placed => {w}_typed_artifact(n, before, placed),
+        λ before base n at_base at_n => {st}_typed_artifact(base, n, before, at_base, at_n),
+        λ before n placed => {ln}_typed_artifact(n, before, placed),
+        trivial, trivial, trivial, trivial, trivial, trivial, trivial, trivial)
+}}
+"));
+    let proof = format!("read_count_print_runs({common}, {prefix}_print_codes(), {prefix}_print_format(), {prefix}_jumps(), {prefix}_jump_facts(),
+        {pj}, {prefix}_print_facts(), {prefix}_resident(),
         chunks, ok, ending, ending_ok, room, small, writes, writes_ok, written, written_ok, page, gprs, flags)", common = common_arguments(module, prefix, program));
     claims(module, prefix, &format!("\
 // The process claim for the written file: for every way the reads may split

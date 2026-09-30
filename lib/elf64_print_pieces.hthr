@@ -1,7 +1,7 @@
 // The printing pieces (docs/native-first-program-design.md §10,
 // docs/native-syscall-failures-design.md §4): the blocks that hand a count to
 // decimal_line's formatter and store its word, the write loop's blocks and
-// jumps, the formatter's certificate shapes (`ReadPrintFormat`), the bytes a
+// jumps, the formatter's certificate shapes (`PrintFormat`), the bytes a
 // stored line sends, and the trace of a write loop (`write_events`) with what
 // it means for stdout (`prints_the_line`). The write loop runs from
 // elf64_write_loop, at any offset; elf64_count_print is the tail that prints
@@ -73,13 +73,26 @@ fn PrintLength(length: StructuredCode, keeps: Gpr → Type) → Type {
     (before: MachineState<IoMemory>) → (n: BitVec(64)) → n = read_gpr(R11, before.gprs) →
         StructuredArtifact<IoMemory>(length, before, R10, line_length(n), keeps)
 }
-record ReadPrintFormat(word, start, length: StructuredCode, word_keeps, start_keeps, length_keeps: Gpr → Type) {
-    word_cert: PrintWord(word, word_keeps),
-    start_cert: PrintStart(start, start_keeps),
-    length_cert: PrintLength(length, length_keeps),
-    word_r8: word_keeps(R8), word_r11: word_keeps(R11),
-    start_rax: start_keeps(Rax), start_r8: start_keeps(R8), start_r11: start_keeps(R11),
-    length_rax: length_keeps(Rax), length_r8: length_keeps(R8), length_r9: length_keeps(R9),
+// The formatter's three codes and what each keeps: plain data, none of it
+// depending on the rest, so a client carries it as one value.
+record PrintCodes {
+    word: StructuredCode,
+    start: StructuredCode,
+    length: StructuredCode,
+    word_keeps: Gpr → Type,
+    start_keeps: Gpr → Type,
+    length_keeps: Gpr → Type,
+}
+// Their certificates and the registers each keeps for what runs after it.
+// Stated over the codes as a parameter: a record whose later fields depend
+// on its earlier ones costs the kernel far more at every projection.
+record PrintFormat(codes: PrintCodes) {
+    word_cert: PrintWord(codes.word, codes.word_keeps),
+    start_cert: PrintStart(codes.start, codes.start_keeps),
+    length_cert: PrintLength(codes.length, codes.length_keeps),
+    word_r8: codes.word_keeps(R8), word_r11: codes.word_keeps(R11),
+    start_rax: codes.start_keeps(Rax), start_r8: codes.start_keeps(R8), start_r11: codes.start_keeps(R11),
+    length_rax: codes.length_keeps(Rax), length_r8: codes.length_keeps(R8), length_r9: codes.length_keeps(R9),
 }
 
 // One artifact, fetched where its bytes are resident: the run, its end, and

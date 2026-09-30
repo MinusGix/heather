@@ -39,13 +39,25 @@ theorem wc_lines_word(gprs: Gprs, carry: WcState, placed: wc_rep(gprs, carry)):
     sym(loop_nat_placed(read_gpr(R13, gprs), carry.lines, placed.left))
 }
 
+// The loop at any needle, what is proved about it, and where the state
+// starts.
+fn wc_state_shape(needle: BitVec(8)) → StateShape<WcState> {
+    StateShape(wc_placement(), wc_rep, wc_fits, wc_loop_region(), wc_code(), wc_bytes(), count_wc, needle)
+}
+fn wc_state_loop(needle: BitVec(8)) → StateLoop<WcState>(wc_state_shape(needle)) {
+    StateLoop(ReadStatePlacement(refl, refl, refl, refl, refl), wc_framed(),
+        λ buffer needle budget cursor carry => wc_loop_source_agreement(buffer, needle, budget, cursor, carry),
+        λ access before buffer needle budget cursor carry bounded low head readable fits =>
+            wc_native(access, before, buffer, needle, budget, cursor, carry, bounded, low, head, readable, fits),
+        wc_body_folds())
+}
+fn wc_state_start(needle: BitVec(8)) → StateStart<WcState>(wc_state_shape(needle), WcState(0, 0, 0, False)) {
+    StateStart(wc_initialised(), λ seen budget fits => wc_room(needle, WcState(0, 0, 0, False), ⟨refl, ⟨refl, refl⟩⟩, seen, budget, fits))
+}
+
 // Any file holding the process's code: for every history of reads, a run
 // that exits with the lines of the state folded over the input.
-theorem wc_runs(file: List<BitVec(8)>, needle: BitVec(8), jumps: EofJumps,
-    exit_reads: jumps.ed.sign_extend(32).toNat() = state_exit_skip(needle, wc_bytes()),
-    fail_reads: jumps.sd.sign_extend(32).toNat() = state_fail_skip(needle, wc_bytes()),
-    back_closes: state_loop_span(needle, wc_bytes()) + 5 + jumps.bd.sign_extend(32).toNat() = Nat::pow(2, 64),
-    retry_closes: state_retry_span(needle, wc_bytes()) + 6 + jumps.rd.sign_extend(32).toNat() = Nat::pow(2, 64),
+theorem wc_runs(file: List<BitVec(8)>, needle: BitVec(8), jumps: EofJumps, facts: StateJumpFacts(needle, wc_bytes(), jumps),
     resident: (page: Nat → BitVec(8)) → CodeResident(io_fetch_access(), IoMemory(file, page), read_state_code(needle, wc_bytes(), jumps),
         BitVec::ofNat(0x4000e8)),
     chunks: List<ReadStep>, ok: EofChunks(chunks), ending: ReadEnding, ending_ok: EofEnding(ending),
@@ -53,15 +65,8 @@ theorem wc_runs(file: List<BitVec(8)>, needle: BitVec(8), jumps: EofJumps,
     LinuxRuns(io_linux(), eof_events(chunks, ending,
         [ExitEvent(bitvec_nat::word_of_nat(64, step_fold(wc_loop_region(), needle, eof_input(chunks), WcState(0, 0, 0, False)).lines))]),
         io_initial(file, page, gprs, flags)) {
-    read_state_runs(file, wc_placement(), ReadStatePlacement(refl, refl, refl, refl, refl), wc_rep, wc_fits, wc_framed(),
-        wc_loop_region(), wc_code(), wc_bytes(), count_wc, needle,
-        λ buffer needle budget cursor carry => wc_loop_source_agreement(buffer, needle, budget, cursor, carry),
-        λ access before buffer needle budget cursor carry bounded low head readable fits =>
-            wc_native(access, before, buffer, needle, budget, cursor, carry, bounded, low, head, readable, fits),
-        wc_body_folds(), WcState(0, 0, 0, False), wc_initialised(),
-        λ seen budget fits => wc_room(needle, WcState(0, 0, 0, False), ⟨refl, ⟨refl, refl⟩⟩, seen, budget, fits),
-        λ (s: WcState) => s.lines, wc_lines_word,
-        jumps, exit_reads, fail_reads, back_closes, retry_closes, resident, chunks, ok, ending, ending_ok, room, page, gprs, flags)
+    read_state_runs(file, wc_state_shape(needle), wc_state_loop(needle), WcState(0, 0, 0, False), wc_state_start(needle), λ (s: WcState) => s.lines, wc_lines_word,
+        jumps, facts, resident, chunks, ok, ending, ending_ok, room, page, gprs, flags)
 }
 "#;
 

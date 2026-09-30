@@ -49,58 +49,45 @@ theorem lines_word_0(gprs: Gprs, carry: Nat, placed: lines_rep(gprs, carry)): re
     sym(loop_nat_placed(read_gpr(R13, gprs), carry, placed))
 }
 
-theorem lines_exit(file: List<BitVec(8)>, jumps: EofJumps,
-    exit_reads: jumps.ed.sign_extend(32).toNat() = state_exit_skip(newline(), lines_bytes()),
-    fail_reads: jumps.sd.sign_extend(32).toNat() = state_fail_skip(newline(), lines_bytes()),
-    back_closes: state_loop_span(newline(), lines_bytes()) + 5 + jumps.bd.sign_extend(32).toNat() = Nat::pow(2, 64),
-    retry_closes: state_retry_span(newline(), lines_bytes()) + 6 + jumps.rd.sign_extend(32).toNat() = Nat::pow(2, 64),
+// The loop's contract and where the count starts, as the producer states
+// them.
+fn lines_state_shape() → StateShape<Nat> {
+    StateShape(lines_placement(), lines_rep, lines_fits, lines_loop_region(), lines_code(), lines_bytes(), count_lines, newline())
+}
+fn lines_state_loop() → StateLoop<Nat>(lines_state_shape()) {
+    StateLoop(ReadStatePlacement(refl, refl, refl, refl, refl), lines_framed(),
+        λ buffer needle budget cursor carry => lines_loop_source_agreement(buffer, needle, budget, cursor, carry),
+        λ access before buffer needle budget cursor carry bounded low head readable fits =>
+            lines_native(access, before, buffer, needle, budget, cursor, carry, bounded, low, head, readable, fits),
+        line_body_folds())
+}
+fn lines_state_start() → StateStart<Nat>(lines_state_shape(), 0) {
+    StateStart(lines_initialised(), λ seen budget fits => lines_room(newline(), lines_init(), refl, seen, budget, fits))
+}
+
+theorem lines_exit(file: List<BitVec(8)>, jumps: EofJumps, facts: StateJumpFacts(newline(), lines_bytes(), jumps),
     resident: (page: Nat → BitVec(8)) → CodeResident(io_fetch_access(), IoMemory(file, page), read_state_code(newline(), lines_bytes(), jumps),
         BitVec::ofNat(0x4000e8)),
     chunks: List<ReadStep>, ok: EofChunks(chunks), ending: ReadEnding, ending_ok: EofEnding(ending),
     room: eof_input(chunks).len() + 4096 < Nat::pow(2, 64), page: Nat → BitVec(8), gprs: Gprs, flags: Flags):
     LinuxRuns(io_linux(), eof_events(chunks, ending, [ExitEvent(bitvec_nat::word_of_nat(64, wc_l(eof_input(chunks))))]),
         io_initial(file, page, gprs, flags)) {
-    read_count_runs(file, lines_placement(), ReadStatePlacement(refl, refl, refl, refl, refl),
-        lines_rep, lines_fits, lines_framed(),
-        lines_loop_region(), lines_code(), lines_bytes(), count_lines, newline(), wc_l,
-        λ buffer needle budget cursor carry => lines_loop_source_agreement(buffer, needle, budget, cursor, carry),
-        λ access before buffer needle budget cursor carry bounded low head readable fits =>
-            lines_native(access, before, buffer, needle, budget, cursor, carry, bounded, low, head, readable, fits),
-        count_lines_input, line_body_folds(), lines_initialised(),
-        λ seen budget fits => lines_room(newline(), lines_init(), refl, seen, budget, fits), lines_word_0,
-        jumps, exit_reads, fail_reads, back_closes, retry_closes, resident, chunks, ok, ending, ending_ok, room, page, gprs, flags)
+    read_count_runs(file, lines_state_shape(), lines_state_loop(), wc_l, count_lines_input, lines_state_start(), lines_word_0,
+        jumps, facts, resident, chunks, ok, ending, ending_ok, room, page, gprs, flags)
 }
 
-theorem lines_print(file: List<BitVec(8)>, jumps: EofJumps,
-    exit_reads: jumps.ed.sign_extend(32).toNat() = state_exit_skip(newline(), lines_bytes()),
-    fail_reads: jumps.sd.sign_extend(32).toNat() = state_fail_skip(newline(), lines_bytes()),
-    back_closes: state_loop_span(newline(), lines_bytes()) + 5 + jumps.bd.sign_extend(32).toNat() = Nat::pow(2, 64),
-    retry_closes: state_retry_span(newline(), lines_bytes()) + 6 + jumps.rd.sign_extend(32).toNat() = Nat::pow(2, 64),
-    word, start, length: StructuredCode, word_keeps, start_keeps, length_keeps: Gpr → Type,
-    format: ReadPrintFormat(word, start, length, word_keeps, start_keeps, length_keeps), pj: PrintJumps,
-    write_fail_reads: pj.sd.sign_extend(32).toNat() = print_fail_skip(),
-    write_exit_reads: pj.zd.sign_extend(32).toNat() = print_exit_skip(),
-    write_back_closes: print_loop_span() + 5 + pj.bd.sign_extend(32).toNat() = Nat::pow(2, 64),
-    write_retry_closes: print_retry_span() + 6 + pj.rd.sign_extend(32).toNat() = Nat::pow(2, 64),
+theorem lines_print(file: List<BitVec(8)>, jumps: EofJumps, facts: StateJumpFacts(newline(), lines_bytes(), jumps),
+    codes: PrintCodes, format: PrintFormat(codes), pj: PrintJumps, print_facts: PrintJumpFacts(pj),
     resident: (page: Nat → BitVec(8)) → CodeResident(io_fetch_access(), IoMemory(file, page),
-        read_count_code(newline(), lines_bytes(), jumps, word, start, length, pj), BitVec::ofNat(0x4000e8)),
+        read_count_code(newline(), lines_bytes(), jumps, codes.word, codes.start, codes.length, pj), BitVec::ofNat(0x4000e8)),
     chunks: List<ReadStep>, ok: EofChunks(chunks), ending: ReadEnding, ending_ok: EofEnding(ending),
     room: eof_input(chunks).len() + 4096 < Nat::pow(2, 64), small: wc_l(eof_input(chunks)) < 10000,
     writes: List<WriteStep>, writes_ok: WriteSteps(writes)(decimal_line(wc_l(eof_input(chunks)))),
     written: WriteEnding, written_ok: WriteEndingOk(written), page: Nat → BitVec(8), gprs: Gprs, flags: Flags):
     LinuxRuns(io_linux(), eof_events(chunks, ending, write_events(decimal_line(wc_l(eof_input(chunks))), writes, written)),
         io_initial(file, page, gprs, flags)) {
-    read_count_print_runs(file, lines_placement(), ReadStatePlacement(refl, refl, refl, refl, refl),
-        lines_rep, lines_fits, lines_framed(),
-        lines_loop_region(), lines_code(), lines_bytes(), count_lines, newline(), wc_l,
-        λ buffer needle budget cursor carry => lines_loop_source_agreement(buffer, needle, budget, cursor, carry),
-        λ access before buffer needle budget cursor carry bounded low head readable fits =>
-            lines_native(access, before, buffer, needle, budget, cursor, carry, bounded, low, head, readable, fits),
-        count_lines_input, line_body_folds(), lines_initialised(),
-        λ seen budget fits => lines_room(newline(), lines_init(), refl, seen, budget, fits), lines_word_0,
-        word, start, length, word_keeps, start_keeps, length_keeps, format,
-        jumps, exit_reads, fail_reads, back_closes, retry_closes, pj, write_fail_reads, write_exit_reads, write_back_closes,
-        write_retry_closes, resident, chunks, ok, ending, ending_ok, room, small, writes, writes_ok, written, written_ok, page, gprs, flags)
+    read_count_print_runs(file, lines_state_shape(), lines_state_loop(), wc_l, count_lines_input, lines_state_start(), lines_word_0, codes, format,
+        jumps, facts, pj, print_facts, resident, chunks, ok, ending, ending_ok, room, small, writes, writes_ok, written, written_ok, page, gprs, flags)
 }
 "#;
 

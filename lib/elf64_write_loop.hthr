@@ -475,18 +475,21 @@ theorem write_targets_to(at, done: Nat, pj: PrintJumps,
             near_branch_returns(eof_rip(at_w), print_retry_span(), 6, pj.rd, retry_closes)))
 }
 
-theorem write_targets(at: Nat, pj: PrintJumps,
+// The four displacements of a write loop whose last send exits 0, as the
+// producer proves them at the written bytes.
+record PrintJumpFacts(pj: PrintJumps) {
     fail_reads: pj.sd.sign_extend(32).toNat() = print_fail_skip(),
     exit_reads: pj.zd.sign_extend(32).toNat() = print_exit_skip(),
     back_closes: print_loop_span() + 5 + pj.bd.sign_extend(32).toNat() = Nat::pow(2, 64),
-    retry_closes: print_retry_span() + 6 + pj.rd.sign_extend(32).toNat() = Nat::pow(2, 64)):
-    WriteLoopTargets(at, wl_at_exit(at), pj) {
+    retry_closes: print_retry_span() + 6 + pj.rd.sign_extend(32).toNat() = Nat::pow(2, 64),
+}
+theorem write_targets(at: Nat, pj: PrintJumps, facts: PrintJumpFacts(pj)): WriteLoopTargets(at, wl_at_exit(at), pj) {
     let entry = io_entry();
     let at_jz = wl_at_wjz(at);
     let exit_lands: (at_jz + (6 + print_exit_skip()) = wl_at_exit(at)) =
         print_exit_sum(at_jz, eof_retry_len(), eof_fail_len());
-    write_targets_to(at, wl_at_exit(at), pj, fail_reads,
-        trans(near_branch_forward(eof_rip(at_jz), 6, print_exit_skip(), pj.zd, exit_reads),
+    write_targets_to(at, wl_at_exit(at), pj, facts.fail_reads,
+        trans(near_branch_forward(eof_rip(at_jz), 6, print_exit_skip(), pj.zd, facts.exit_reads),
             trans(rip_compose(entry, at_jz, 6 + print_exit_skip()), rip_count(entry, exit_lands))),
-        back_closes, retry_closes)
+        facts.back_closes, facts.retry_closes)
 }

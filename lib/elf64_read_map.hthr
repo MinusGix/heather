@@ -896,33 +896,52 @@ theorem map_to_read_target(offset: Nat, displacement: BitVec(32),
     near_branch_returns(io_entry(), offset, 6, displacement, closes)
 }
 
+// The byte map as the producer certifies it: its code, the registers it
+// keeps, its certificate, and that it keeps the loop's.
+record MapByte(f: BitVec(8) → BitVec(8)) {
+    code: StructuredCode,
+    keeps: Gpr → Type,
+    piece: MapPiece(f, code, keeps),
+    kept: MapKeeps(keeps),
+}
+
+// The eight displacements, for a byte map `p` bytes long, as the producer
+// proves them at the written bytes: the process's four, and the write loop's
+// (whose all-sent JZ returns to the read).
+record MapJumpFacts(p: Nat, jumps: MapJumps, pj: PrintJumps) {
+    exit_reads: jumps.ed.sign_extend(32).toNat() = map_exit_skip(p),
+    fail_reads: jumps.sd.sign_extend(32).toNat() = map_fail_skip(p),
+    again_closes: map_loop_span(p) + 6 + jumps.ld.sign_extend(32).toNat() = Nat::pow(2, 64),
+    retry_closes: map_at_retry(p) + 6 + jumps.rd.sign_extend(32).toNat() = Nat::pow(2, 64),
+    write_fail_reads: pj.sd.sign_extend(32).toNat() = print_fail_skip(),
+    write_read_closes: wl_at_wjz(map_at_write(p)) + 6 + pj.zd.sign_extend(32).toNat() = Nat::pow(2, 64),
+    write_back_closes: print_loop_span() + 5 + pj.bd.sign_extend(32).toNat() = Nat::pow(2, 64),
+    write_retry_closes: print_retry_span() + 6 + pj.rd.sign_extend(32).toNat() = Nat::pow(2, 64),
+}
+theorem map_targets(code: StructuredCode, jumps: MapJumps, pj: PrintJumps, facts: MapJumpFacts(structured_bytes(code).len(), jumps, pj)):
+    MapTargets(code, jumps, pj) {
+    let p = structured_bytes(code).len();
+    MapTargets(
+        exit := map_exit_target(code, jumps.ed, facts.exit_reads),
+        fail := map_fail_target(code, jumps.sd, facts.fail_reads),
+        again := map_again_target(code, jumps.ld, facts.again_closes),
+        retry := map_to_read_target(map_at_retry(p), jumps.rd, facts.retry_closes),
+        write := write_targets_to(map_at_write(p), map_at_read(), pj, facts.write_fail_reads,
+            map_to_read_target(wl_at_wjz(map_at_write(p)), pj.zd, facts.write_read_closes), facts.write_back_closes, facts.write_retry_closes))
+}
+
 // The process claim: for every history of reads and writes (chunks and
 // EINTRs, each chunk's short writes and EINTRs), ending at the empty read or
 // at a failed read or write, the file has a run that reads each chunk and
 // writes its image under `f`, then exits 0, or 1 at the failure. What
 // stdout received on a run that ends well is `map_sends`'s.
-theorem read_map_runs(file: List<BitVec(8)>, f: BitVec(8) → BitVec(8), code: StructuredCode, keeps: Gpr → Type,
-    piece: MapPiece(f, code, keeps), kept: MapKeeps(keeps), jumps: MapJumps, pj: PrintJumps,
-    exit_reads: jumps.ed.sign_extend(32).toNat() = map_exit_skip(structured_bytes(code).len()),
-    fail_reads: jumps.sd.sign_extend(32).toNat() = map_fail_skip(structured_bytes(code).len()),
-    again_closes: map_loop_span(structured_bytes(code).len()) + 6 + jumps.ld.sign_extend(32).toNat() = Nat::pow(2, 64),
-    retry_closes: map_at_retry(structured_bytes(code).len()) + 6 + jumps.rd.sign_extend(32).toNat() = Nat::pow(2, 64),
-    write_fail_reads: pj.sd.sign_extend(32).toNat() = print_fail_skip(),
-    write_read_closes: wl_at_wjz(map_at_write(structured_bytes(code).len())) + 6 + pj.zd.sign_extend(32).toNat() = Nat::pow(2, 64),
-    write_back_closes: print_loop_span() + 5 + pj.bd.sign_extend(32).toNat() = Nat::pow(2, 64),
-    write_retry_closes: print_retry_span() + 6 + pj.rd.sign_extend(32).toNat() = Nat::pow(2, 64),
-    resident: (page: Nat → BitVec(8)) → CodeResident(io_fetch_access(), IoMemory(file, page), map_code(code, jumps, pj), io_entry()),
+theorem read_map_runs(file: List<BitVec(8)>, f: BitVec(8) → BitVec(8), byte: MapByte(f), jumps: MapJumps, pj: PrintJumps,
+    facts: MapJumpFacts(structured_bytes(byte.code).len(), jumps, pj),
+    resident: (page: Nat → BitVec(8)) → CodeResident(io_fetch_access(), IoMemory(file, page), map_code(byte.code, jumps, pj), io_entry()),
     steps: List<MapStep>, ok: MapSteps(f, steps), ending: MapEnding, ending_ok: MapEndingOk(f, ending),
     page: Nat → BitVec(8), gprs: Gprs, flags: Flags):
     LinuxRuns(io_linux(), map_events(f, steps, ending), io_initial(file, page, gprs, flags)) {
-    let targets: MapTargets(code, jumps, pj) = MapTargets(
-        exit := map_exit_target(code, jumps.ed, exit_reads),
-        fail := map_fail_target(code, jumps.sd, fail_reads),
-        again := map_again_target(code, jumps.ld, again_closes),
-        retry := map_to_read_target(map_at_retry(structured_bytes(code).len()), jumps.rd, retry_closes),
-        write := write_targets_to(map_at_write(structured_bytes(code).len()), map_at_read(), pj, write_fail_reads,
-            map_to_read_target(wl_at_wjz(map_at_write(structured_bytes(code).len())), pj.zd, write_read_closes), write_back_closes, write_retry_closes));
-    map_from(f, code, keeps, piece, kept, jumps, pj, targets, file,
-        λ page => map_pieces(IoMemory(file, page), code, jumps, pj, resident(page)), ending, ending_ok, steps,
+    map_from(f, byte.code, byte.keeps, byte.piece, byte.kept, jumps, pj, map_targets(byte.code, jumps, pj, facts), file,
+        λ page => map_pieces(IoMemory(file, page), byte.code, jumps, pj, resident(page)), ending, ending_ok, steps,
         ok, page, io_initial(file, page, gprs, flags), refl, refl)
 }

@@ -1,6 +1,6 @@
 # The native program stack: an architecture review
 
-Status: **review, 2026-09-30. R0 and R1 chosen and landed the same day (§8); R2 onward open.** Read-only
+Status: **review, 2026-09-30. R0, R1 and R2 chosen and landed the same day (§8); R3 onward open.** Read-only
 survey of what `wc -l`, `wc` and `tr` left behind, taken before a fourth
 program (`tr -s`/`-d`, `issues/native-loop-emitting-stores.md`) adds another
 process. The question is engineering, not speed: what is repeated, what is
@@ -485,3 +485,98 @@ three. A fourth process that reads until end of file writes none of them.
 
 **Tests.** Four library mutation controls followed the text they mutate:
 `buffer_outside_page`, `setup_base`, `init_left_out` and `write_past_page`.
+
+### R2 (2026-09-30)
+
+**Records.** Each group of values that travelled together became records,
+split by one rule the round measured (below): data a type depends on goes in
+a record whose fields don't depend on each other, and what is proved about
+that data goes in a record parameterised by it.
+
+- **The loop (elf64_read_state).**
+  - `StateShape<C>`: the loop's data (placement, `rep`, `fits`, step, code,
+    bytes, source, needle).
+  - `StateLoop<C>(shape)`: what is proved about it (`ReadStatePlacement`,
+    `framed`, agreement, the certificate, `LoopFolds`).
+  - `StateStart<C>(shape, init)`: where the state starts.
+
+  These replace 13 values every state lemma used to take one by one.
+- **Jump facts, one record per piece.** Each is the closed facts the
+  producer proves at the written bytes, plus a lemma giving the piece's
+  targets:
+  - `StateJumpFacts` with `state_targets`, which returns a `StateTargets`
+    record;
+  - `PrintJumpFacts` with `write_targets`;
+  - `MapJumpFacts` with `map_targets`.
+- **`EofTail(file, at, rep, total, events)`** replaces `StateTail`, which
+  fixed the tail at `state_at_done(needle, loop_bytes)`. The count and
+  fields tails take a start offset `at` (`fields_at_*` are now relative to
+  it), so a tail can follow any process that reads to end of file.
+- **Formats, split the same way.**
+  - `PrintCodes` (the formatter's three codes and what each keeps) and
+    `PrintFormat(codes)` (their certificates and keep facts). This replaces
+    `ReadPrintFormat`'s six parameters.
+  - `FieldsCodes` and `FieldsFormat(codes)`, likewise.
+- **Small bundles.**
+  - `ThreeCounts<C>(rep)`: wc's counts.
+  - `ThreeSpecs<C>(shape, init, three)`: what the counts mean.
+  - `MapByte(f)`: the byte map's code, keeps, certificate and `MapKeeps`.
+
+  These have dependent fields, but are small enough that it doesn't show.
+
+**Where the bundles are used.** Inside the state process, `state_folds`,
+`state_chunk`, `state_from` and `state_start` take `shape` and `l` and name
+their fields once at the top of the body. The map process's inner lemmas
+keep their loose parameters: only its claim unpacks `MapByte`.
+
+**Claims, by parameter count:**
+
+| claim | before | after |
+|---|---|---|
+| `read_state_runs` | 33 | 18 |
+| `read_count_runs` | 33 | 18 |
+| `read_count_print_runs` | 50 | 27 |
+| `read_fields_runs` | 50 | 26 |
+| `read_fields_spec_runs` | 54 | 27 |
+| `read_map_runs` | 24 | 14 |
+
+What remains is mostly the run itself: the history and how it ends, stdin's
+page, and the initial registers and flags. That part stays, since it is
+what each claim is about.
+
+**Cost.** The first cut made each bundle one record with dependent fields:
+codes and keeps beside the certificates that mention them, and the loop's
+data beside its proofs. The process tests then outgrew the CPU rail: the
+fields test was killed at 300 CPU-s after 216 before, and the count test went
+33 → 80. `--timings` against the previous commit named the declarations:
+
+- the new `PrintFormat` record cost 6.4 s to declare;
+- `FieldsFormat` went 42 ms → 3.0 s, `field_prints` 1.1 → 17.9 s and
+  `fields_tail_runs` 0.2 → 16.9 s;
+- `StateLoop` cost 0.8 s, and `state_folds` went 0.2 → 1.3 s.
+
+A record whose later fields depend on its earlier ones costs the kernel far
+more to declare and at every projection. After the split, `field_prints`,
+`fields_tail_runs` and `state_folds` are back at their old cost, and
+`FieldsFormat` costs less than before (7.6 ms). `StateShape` costs 0.4 s to
+declare.
+
+**Refusals stay where the author is wrong.** A bundle's `fn` holds only what
+the generator proved. What the program's author names is passed at the
+claim: `LoopFolds` as `{prefix}_state_loop(folds)`, and `ThreeSpecs` built
+inline. So a wrong `--folds` or a mis-ordered `--spec` is refused at the
+claim, not at a bundle, whose refusal would cascade into unbound names (the
+CLI refusal tests check for that).
+
+**Producers.** Each bundle is emitted once as a transparent `fn`:
+`{prefix}_state_shape`, `_state_loop(folds)`, `_state_start`, `_jump_facts`,
+`_print_facts`, `_print_codes`, `_print_format`, `_three`, `_fields_codes`,
+`_fields_format` and `_map_byte`. The claim passes them by name.
+`read_loop.rs`'s `state_bundle` is shared by the count and fields producers.
+The positional argument lists in `common_arguments` and `read_fields.rs`,
+and their duplicate, are gone. The elab process tests restate the claims
+over the same bundles.
+
+**Found along the way.** A `have` whose right-hand side names a let-shadowed
+variable is elaborated against the outer binding and rejected by the kernel
+with a bare `HeadMismatch` (`issues/have-rhs-ignores-let-shadowing.md`).

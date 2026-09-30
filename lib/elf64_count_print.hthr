@@ -112,13 +112,18 @@ record CountFormatted(stored: IoMemory, at: Nat, word, start, length: Structured
 
 // From the tail, with the count in R13: the base block copies it to R11,
 // then the formatter.
-theorem count_formats(stored: IoMemory, at: Nat, word, start, length: StructuredCode, pj: PrintJumps,
-    word_keeps, start_keeps, length_keeps: Gpr → Type, format: ReadPrintFormat(word, start, length, word_keeps, start_keeps, length_keeps),
-    pieces: CountPieces(stored, at, word, start, length, pj), count: Nat, done: MachineState<IoMemory>,
+theorem count_formats(stored: IoMemory, at: Nat, codes: PrintCodes, format: PrintFormat(codes), pj: PrintJumps,
+    pieces: CountPieces(stored, at, codes.word, codes.start, codes.length, pj), count: Nat, done: MachineState<IoMemory>,
     done_memory: done.memory = stored, done_rip: done.rip = eof_rip(at),
     done_count: read_gpr(R13, done.gprs) = bitvec_nat::word_of_nat(64, count)):
     Exists<MachineState<IoMemory>>(λ last => FetchedSteps(io_fetch_access(), io_data_access(), done, last) ∧
-        CountFormatted(stored, at, word, start, length, count, last)) {
+        CountFormatted(stored, at, codes.word, codes.start, codes.length, count, last)) {
+    let word = codes.word;
+    let start = codes.start;
+    let length = codes.length;
+    let word_keeps = codes.word_keeps;
+    let start_keeps = codes.start_keeps;
+    let length_keeps = codes.length_keeps;
     let fetch = io_fetch_access();
     let data = io_data_access();
     let entry = io_entry();
@@ -222,22 +227,22 @@ theorem count_writes(stored: IoMemory, at: Nat, word, start, length: StructuredC
 
 // The tail, from the loop's end with the count in R13: format, store, write
 // the line, exit 0 (or exit 1 at a failed write).
-theorem count_tail_runs(file: List<BitVec(8)>, needle: BitVec(8), loop_bytes: List<BitVec(8)>,
-    rep: Gprs → Nat → Type, counted: CountWord(rep), word, start, length: StructuredCode, word_keeps, start_keeps, length_keeps: Gpr → Type,
-    format: ReadPrintFormat(word, start, length, word_keeps, start_keeps, length_keeps), pj: PrintJumps,
-    resident: (page: Nat → BitVec(8)) → CodeResident(io_fetch_access(), IoMemory(file, page), count_tail(word, start, length, pj),
-        eof_rip(state_at_done(needle, loop_bytes))),
-    targets: WriteLoopTargets(ct_write(state_at_done(needle, loop_bytes), word, start, length),
-        wl_at_exit(ct_write(state_at_done(needle, loop_bytes), word, start, length)), pj),
+theorem count_tail_runs(file: List<BitVec(8)>, at: Nat, rep: Gprs → Nat → Type, counted: CountWord(rep), codes: PrintCodes, format: PrintFormat(codes),
+    pj: PrintJumps,
+    resident: (page: Nat → BitVec(8)) → CodeResident(io_fetch_access(), IoMemory(file, page), count_tail(codes.word, codes.start, codes.length, pj),
+        eof_rip(at)),
+    targets: WriteLoopTargets(ct_write(at, codes.word, codes.start, codes.length),
+        wl_at_exit(ct_write(at, codes.word, codes.start, codes.length)), pj),
     total: Nat, small: total < 10000,
     ending: WriteEnding, ending_ok: WriteEndingOk(ending), steps: List<WriteStep>, steps_ok: WriteSteps(steps)(decimal_line(total))):
-    StateTail(file, needle, loop_bytes, rep, total, write_events(decimal_line(total), steps, ending)) {
+    EofTail(file, at, rep, total, write_events(decimal_line(total), steps, ending)) {
     λ page state at_done memory_is placed => {
-        let at = state_at_done(needle, loop_bytes);
+        let word = codes.word;
+        let start = codes.start;
+        let length = codes.length;
         let stored = IoMemory(file, page);
         let pieces = count_pieces(stored, at, word, start, length, pj, resident(page));
-        let formatted = count_formats(stored, at, word, start, length, pj, word_keeps, start_keeps, length_keeps, format,
-            pieces, total, state, memory_is, at_done, counted(state.gprs, total, placed));
+        let formatted = count_formats(stored, at, codes, format, pj, pieces, total, state, memory_is, at_done, counted(state.gprs, total, placed));
         let after_store = io_store_offset(stored, 0, word_bytes(line_word(bitvec_nat::word_of_nat(64, total))));
         linux_runs_after_steps(io_linux(), write_events(decimal_line(total), steps, ending),
             state, formatted.witness, formatted.proof.left,
@@ -251,29 +256,12 @@ theorem count_tail_runs(file: List<BitVec(8)>, needle: BitVec(8), loop_bytes: Li
 // reads the input, writes the program's specification of it to stdout as a
 // decimal line and exits 0, or exits 1 at a failure. The line covers counts
 // below 10000.
-theorem read_count_print_runs(file: List<BitVec(8)>, p: LoopPlacement, at: ReadStatePlacement(p),
-    rep: Gprs → Nat → Type, fits: Nat → Nat → Nat → Type, framed: StateFramed(rep),
-    region: ReadonlyLoop<Nat>, loop_code: AccessCode, loop_bytes: List<BitVec(8)>,
-    source: ReadonlyBytes → BitVec(8) → Nat → Nat → Nat → LoopOutcome<Nat>, needle: BitVec(8), spec: List<BitVec(8)> → Nat,
-    agreement: (buffer: ReadonlyBytes) → (needle: BitVec(8)) → (budget, cursor, carry: Nat) →
-        loop_run(budget, region, buffer, needle, cursor, carry) = source(buffer, needle, budget, cursor, carry),
-    native: ReadStateCertificate(p, rep, fits, region, loop_code, loop_bytes, source),
-    computes: ReadEofComputes(region, needle, spec), folds: LoopFolds(region),
-    initialised: StateInitialised(rep, 0), roomy: StateRoom(fits, region, needle, 0), counted: CountWord(rep),
-    word, start, length: StructuredCode, word_keeps, start_keeps, length_keeps: Gpr → Type,
-    format: ReadPrintFormat(word, start, length, word_keeps, start_keeps, length_keeps),
-    jumps: EofJumps,
-    exit_reads: jumps.ed.sign_extend(32).toNat() = state_exit_skip(needle, loop_bytes),
-    fail_reads: jumps.sd.sign_extend(32).toNat() = state_fail_skip(needle, loop_bytes),
-    back_closes: state_loop_span(needle, loop_bytes) + 5 + jumps.bd.sign_extend(32).toNat() = Nat::pow(2, 64),
-    retry_closes: state_retry_span(needle, loop_bytes) + 6 + jumps.rd.sign_extend(32).toNat() = Nat::pow(2, 64),
-    pj: PrintJumps,
-    write_fail_reads: pj.sd.sign_extend(32).toNat() = print_fail_skip(),
-    write_exit_reads: pj.zd.sign_extend(32).toNat() = print_exit_skip(),
-    write_back_closes: print_loop_span() + 5 + pj.bd.sign_extend(32).toNat() = Nat::pow(2, 64),
-    write_retry_closes: print_retry_span() + 6 + pj.rd.sign_extend(32).toNat() = Nat::pow(2, 64),
+theorem read_count_print_runs(file: List<BitVec(8)>, shape: StateShape<Nat>, l: StateLoop<Nat>(shape), spec: List<BitVec(8)> → Nat,
+    computes: ReadEofComputes(shape.region, shape.needle, spec), start: StateStart<Nat>(shape, 0), counted: CountWord(shape.rep),
+    codes: PrintCodes, format: PrintFormat(codes), jumps: EofJumps, facts: StateJumpFacts(shape.needle, shape.bytes, jumps), pj: PrintJumps,
+    print_facts: PrintJumpFacts(pj),
     resident: (page: Nat → BitVec(8)) → CodeResident(io_fetch_access(), IoMemory(file, page),
-        read_count_code(needle, loop_bytes, jumps, word, start, length, pj), io_entry()),
+        read_count_code(shape.needle, shape.bytes, jumps, codes.word, codes.start, codes.length, pj), io_entry()),
     chunks: List<ReadStep>, ok: EofChunks(chunks), ending: ReadEnding, ending_ok: EofEnding(ending),
     room: eof_input(chunks).len() + 4096 < Nat::pow(2, 64), small: spec(eof_input(chunks)) < 10000,
     writes: List<WriteStep>, writes_ok: WriteSteps(writes)(decimal_line(spec(eof_input(chunks)))),
@@ -282,22 +270,18 @@ theorem read_count_print_runs(file: List<BitVec(8)>, p: LoopPlacement, at: ReadS
     LinuxRuns(io_linux(), eof_events(chunks, ending, write_events(decimal_line(spec(eof_input(chunks))), writes, written)),
         io_initial(file, page, gprs, flags)) {
     let input = eof_input(chunks);
-    let total = step_fold(region, needle, input, 0);
+    let total = step_fold(shape.region, shape.needle, input, 0);
     let meant: (spec(input) = total) = computes(input);
-    let tail = count_tail(word, start, length, pj);
-    let pieces = λ (page: Nat → BitVec(8)) => state_pieces(IoMemory(file, page), needle, loop_bytes, jumps, tail, resident(page));
+    let tail = count_tail(codes.word, codes.start, codes.length, pj);
+    let at = state_at_done(shape.needle, shape.bytes);
+    let pieces = λ (page: Nat → BitVec(8)) => state_pieces(IoMemory(file, page), shape.needle, shape.bytes, jumps, tail, resident(page));
     j(sym(meant), λ n _ => LinuxRuns(io_linux(), eof_events(chunks, ending, write_events(decimal_line(n), writes, written)),
             io_initial(file, page, gprs, flags)),
-        state_start(file, p, at, rep, fits, framed, region, loop_code, loop_bytes, source, needle, agreement, native, folds,
-            0, initialised, roomy, jumps,
-            state_exit_target(needle, loop_bytes, jumps.ed, exit_reads), state_js_target(needle, loop_bytes, jumps.sd, fail_reads),
-            state_back_target(needle, loop_bytes, jumps.bd, back_closes), state_retry_target(needle, loop_bytes, jumps.rd, retry_closes),
+        state_start(file, shape, l, 0, start, jumps, state_targets(shape.needle, shape.bytes, jumps, facts),
             tail, pieces, chunks, ok, ending, ending_ok, room,
             write_events(decimal_line(total), writes, written),
-            count_tail_runs(file, needle, loop_bytes, rep, counted, word, start, length, word_keeps, start_keeps, length_keeps, format, pj,
-                λ page => pieces(page).tail_at,
-                write_targets(ct_write(state_at_done(needle, loop_bytes), word, start, length), pj,
-                    write_fail_reads, write_exit_reads, write_back_closes, write_retry_closes),
+            count_tail_runs(file, at, shape.rep, counted, codes, format, pj, λ page => pieces(page).tail_at,
+                write_targets(ct_write(at, codes.word, codes.start, codes.length), pj, print_facts),
                 total, j(meant, λ n _ => n < 10000, small), written, written_ok, writes,
                 j(meant, λ n _ => WriteSteps(writes)(decimal_line(n)), writes_ok)),
             page, gprs, flags))
