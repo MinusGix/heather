@@ -1,9 +1,10 @@
 # UIP is not derivable without `transp`: a groupoid-model argument
 
-Status: **paper argument, 2026-09-30**, not reviewed. §3 and the two
-counterexamples of §3.4 and §5 are **mechanized**:
-`../Lean/delam/probes/NoUipComponents.v`, closed under the global context.
-§4 is argued only.
+Status: **paper argument, 2026-09-30**. §3 and the two counterexamples of
+§3.4 and §5 are **mechanized** (`../Lean/delam/probes/NoUipComponents.v`,
+closed under the global context). §4 is argued, and was self-reviewed
+against the Coq formalization's rules the same day (§4.4). It has not
+been independently reviewed.
 Owed by `docs/iwf-former-design.md` §12.3 before that rule set freezes.
 The rule set in question is the revised one: `docs/sprop-design.md` with
 its 2026-09-30 revision (no `transp`, no strip), plus `IWf`/`DVec`.
@@ -177,42 +178,122 @@ naturally in `Γ` and strictly `id` at `srefl`.
 ## 4. DeLaM's layers, globals and `□`: by stratification
 
 DeLaM has no published semantic model. Hu and Pientka's own argument is a
-logical relation. The interpretation here uses only the property their
-proof also relies on, the **layering restriction**: code (layer C)
-contains no `□`, no code recursor and no layer-M construct, and a layer-D
-judgment contains no `□` either (`Layer::Prog` is "vanilla MLTT with
-computation", `crates/kernel/src/layer.rs`).
+logical relation. This section is checked against the declarative rules
+of the Coq formalization (`../Lean/delam/theories/Typing/Declarative.v`,
+cited by rule name below); it is not mechanized. The review of
+2026-09-30 is recorded at the end of the section.
 
-- **Global contexts.** A global variable `u : (Δ ⊢_i T @ l)` stands for
-  *syntax*: global substitutions replace it by a term. Interpret a
-  global context `Ψ` by the **set** `Inst(Ψ)` of closed well-typed
-  instantiations (for layer-D type globals, taken up to D-conversion).
-  Interpret a judgment under `Ψ` as an `Inst(Ψ)`-indexed family of
-  groupoid-model data. `Inst(Ψ)` is a set, so no naturality across
-  instantiations is needed. Global weakening and substitution are
-  reindexing along maps of sets, and are strict.
-- **A global used in a term** (`u^δ`, or `U` in type position) at
-  instantiation `ρ` is interpreted as `⟦ρ(u)⟧`. That is well-founded:
-  `ρ(u)` is closed code, with no global variables. Closed code is
-  interpreted first, as a layer-D derivation (code lifts to D,
-  `Typing/Lifting.v` in the Coq formalization), before any
-  instantiation-dependent judgment.
-- **`□(Δ ⊢ Ty l)` and `□(Δ ⊢ T @ l)`**: the *discrete* groupoid of closed,
-  well-typed code at that type, up to α. Conversion at `□` is syntactic,
-  which matches (`conv.rs`: box conversion is syntactic). `box t` is
-  `t`. `letbox` extends the instantiation.
-- **Code recursors** (`ElimCodeTy`, `ElimCodeTm`): structural recursion
-  on the syntax, with β by definition and one branch per code former
-  (the per-former branches of `rec.rs`).
-- **`CΠ`, `TΠ`** (meta-level abstraction over local contexts and layer-P
-  types): products over the set of local contexts, and over layer-P types
-  up to conversion. A layer-P global never appears inside code, by the
-  layering restriction, so only its interpretation is used.
-- **Bodied globals** (δ): interpreted by their bodies.
+### 4.1 The layer facts the construction uses
 
-This is the least standard part. It is argued, not checked. The
-constructions are set-indexed and never interact with the groupoid
-structure of `Id`, which is all the UIP question needs.
+Each fact is a side condition of the cited rule, so none is an
+assumption:
+
+- **A global declared at layer `i'` is usable only at layers `i ≥ i'`**
+  (`wft_gvar`, `wf_gvar`: premise `lle i' i`).
+- **`□` and everything that eliminates it are layer M only.**
+  `wf_boxT`, `wf_boxt`, `wf_letboxT`/`wf_letboxt`, `wf_elimT`/`wf_elimt`,
+  and the meta-functions `wft_cpi`/`wft_tpi` all conclude at `lM`. No
+  C- or D-layer rule mentions them.
+- **Box contents are layer-C code** (`wf_boxT`: `Δ ⊢[lC] T`). `letbox`
+  binds a **layer-C** global (`gdTy Δ lC l`, `gdTm Δ lC T l`). `TΠ` binds
+  a **layer-D** type global (`gdTy Δ lD l`), and `CΠ` binds a context
+  global (`gdCtx`).
+- Hence **a layer-D global never occurs in code**: code is checked at
+  `lC`, and `lle lD lC` is false. A layer-C global can occur in code, and
+  that is how `letbox`'s body splices it.
+- **Conversion at layer C is syntactic, up to level equivalence**
+  (`static_code_eqty`, `static_code_eqtm`, `Typing/StaticCodeEq.v`). This
+  is what makes `□` a discrete set. It is the declarative fact;
+  `conv.rs`'s syntactic box comparison implements it.
+
+### 4.2 The construction, in three stages
+
+- **Stage 1: closed C/D.** Judgments at layers C and D with an empty
+  global context contain no global, no `□` and no layer-M construct. So
+  the fragment is ordinary type theory with Heather's formers, interpreted
+  as in §2 and §3. Layer C is interpreted through its lifting to D
+  (`Typing/Lifting.v`). The model identifies more code than C-conversion
+  does, which is sound. As usual for interpreting derivations, the
+  interpretation is defined on raw syntax (Streicher's partial
+  interpretation), so it does not depend on the derivation chosen.
+- **Stage 2: open C/D, under an environment.** An environment `ρ` for a
+  global context `Ψ` assigns:
+  - a level to each universe variable;
+  - a closed syntactic context to each context global;
+  - to each layer-C global, a pair: a closed code `c` of its type, and
+    `c`'s stage-1 interpretation;
+  - to each layer-D type global, a closed D-type up to D-conversion,
+    with its stage-1 interpretation.
+
+  A global's use at a local substitution `d` is its stage-1 value
+  reindexed along `⟦d⟧`. `Inst(Ψ)`, the set of environments, is a set.
+- **Stage 3: layer M under an environment.**
+  - `□(Δ ⊢ T)` at `ρ` is the discrete groupoid of closed code of type
+    `T[ρ]`, modulo level equivalence. `box t` at `ρ` is the syntax
+    `t[ρ]`, which uses the syntax components of `ρ`.
+  - A term of `□`-type in an M-context `Γ` is a section of a discrete
+    family. It is therefore **constant on connected components** of
+    `⟦Γ⟧ρ`.
+  - `letbox u = t in t'` at an object `γ` is `t'` at the environment
+    `(ρ, u ↦ t(γ))`, and at the same object. That object exists because
+    `Γ` does not mention `u`, so the weakened context has the same
+    interpretation. It is natural because `t(γ)` is constant along
+    `Γ`'s morphisms.
+  - Code recursors recurse on the syntax `t(γ)` in the same way, with β
+    by definition.
+  - `CΠ` and `TΠ` are products over context globals and over D-types up
+    to conversion. `TΠ(U : (Δ ⊢ @l)). T @ l'` ranges over syntax, a
+    countable set, so no size question arises, even though `l'` is
+    independent of `l`. (No code former exists for `CΠ`/`TΠ`, so a
+    product over semantic families would also do.)
+  - Bodied globals are instantiated by their bodies.
+
+**The obligation that ties the stages together** is the semantic global
+substitution lemma:
+
+```
+⟦t⟧(ρ, u ↦ (c, ⟦c⟧)) = ⟦t⦃c/u⦄⟧ρ
+```
+
+together with its variants for context and type globals. It validates
+`letbox`'s β (`eqtm_letboxT_beta`, `eqtm_letboxt_beta`) and the
+meta-functions' β. It holds because the environment stores the syntax,
+so every syntax-reading construct (`box`, the recursors) sees `c` on
+both sides, while every semantic use of `u` sees `⟦c⟧`. The proof is by
+induction on `t`, and it is the standard substitution lemma with one
+syntactic case per construct that reads code.
+
+### 4.3 Scope
+
+The claim of this document is about the **empty global context**, or a
+global context of definitions only. A module that postulates a global of
+an empty type makes `Inst(Ψ)` empty and the interpretation vacuous. A
+module that postulates UIP proves it. Neither says anything about the
+rule set.
+
+### 4.4 Review record (2026-09-30)
+
+This is a self-review against the Coq rules, not an independent one. The
+draft of this section was right in outline, and three things in it were
+wrong or missing:
+
+1. **"Conversion at `□` is syntactic" cited the implementation.** The
+   declarative fact is Static Code (`StaticCodeEq.v`), and it is
+   syntactic only **up to level equivalence**. `□` is code modulo level
+   equivalence.
+2. **The well-foundedness sentence** ("a global is interpreted as
+   `⟦ρ(u)⟧`; closed code is interpreted first") hid two obligations. The
+   environment must carry syntax and semantics together. And the semantic
+   global substitution lemma above is what makes `letbox`'s β sound.
+   Both are now explicit.
+3. **Scope**: postulated globals were not excluded (§4.3).
+
+It also added two facts the draft used without stating: sections of
+`□`-types are constant on connected components, which `letbox` and the
+recursors need to be natural; and environments include level
+assignments. Nothing found contradicts the construction. What remains
+unchecked is the substitution lemma's proof, which is routine but has not
+been written out case by case.
 
 ---
 
@@ -248,7 +329,7 @@ its identities are isomorphisms of groupoids, not equivalences.
 | `Wf`/`IWf` (finitary), `W` | initial algebras: ω-colimit for the finitary ones, accessibility for `W` |
 | `ΠΠ` at `ω` | products over level assignments |
 | strict propositions `sEq`/`sEmpty`/`Squash` | **new lemma, proved in §3.1, mechanized** (`NoUipComponents.v`: `conn_transport`, `sEq_subst`, `sec_irrelevant`, `ElimSquash`, `transp_strict`, `no_relevant_transp`, `no_uip0`) |
-| DeLaM globals, `□`, code recursors, `CΠ`/`TΠ`, δ | **argued by stratification (§4)**; no published model of DeLaM |
+| DeLaM globals, `□`, code recursors, `CΠ`/`TΠ`, δ | **argued by stratification (§4)**; the layer facts it uses are side conditions of the Coq rules (§4.1); the semantic global substitution lemma is stated, not written out |
 
 The mechanization states contexts as reflexive graphs (morphisms and
 identities only) and fibres as groupoid data. None of the groupoid laws is
@@ -258,6 +339,8 @@ uniqueness the model provides. Sections of a strict family are then an
 `SProp`, and their irrelevance is checked by conversion alone.
 
 What would strengthen it:
-- A review of §4 by whoever next touches DeLaM's metatheory: the
-  instantiation sets for layer-D type globals (up to conversion) are
-  where the argument has the least slack.
+- An independent review of §4, and the semantic global substitution
+  lemma (§4.2) written out case by case. That lemma is now where the
+  argument has the least slack. The layer-D type globals, flagged here
+  before the review, turned out fine: they range over syntax, which is a
+  countable set, and never occur in code (§4.1).
