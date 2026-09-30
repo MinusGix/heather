@@ -1,6 +1,6 @@
 # The native program stack: an architecture review
 
-Status: **review, 2026-09-30. R0, R1 and R2 chosen and landed the same day (§8); R3 onward open.** Read-only
+Status: **review, 2026-09-30. R0–R3 chosen and landed the same day (§8); R4 onward open.** Read-only
 survey of what `wc -l`, `wc` and `tr` left behind, taken before a fourth
 program (`tr -s`/`-d`, `issues/native-loop-emitting-stores.md`) adds another
 process. The question is engineering, not speed: what is repeated, what is
@@ -580,3 +580,72 @@ over the same bundles.
 **Found along the way.** A `have` whose right-hand side names a let-shadowed
 variable is elaborated against the outer binding and rejected by the kernel
 with a bare `HeadMismatch` (`issues/have-rhs-ignores-let-shadowing.md`).
+
+### R3 (2026-09-30)
+
+**The driver.** `eof_from` (elf64_read_pieces) is the one
+read-until-end-of-file induction. Every process now instantiates it rather
+than proving its own. It reads through the head and dispatches on the
+history:
+
+- a chunk goes to the process's body;
+- an EINTR is retried through the failure tail;
+- the empty read goes to the process's tail;
+- a failed read exits 1;
+- a chunk the body ends the run in goes to the body's ending.
+
+**History.** It is generic in what the body does with a chunk:
+
+- `EofStep<X> { Chunk(bytes, x), Interrupted }`, where `X` is `True` for a
+  fold and the chunk's writes for `tr`;
+- `EofEnd<Y> { AtEnd, FailedWith(errno), EndedIn(bytes, y) }`, where `Y` is
+  `False` for a fold and a `WriteFailure` for `tr`.
+
+Its trace is `eof_run(body, ended, steps, ending, tail)`. `eof_input`,
+`EofSteps(ok, …)` and `EofEndOk(ok, …)` are the input and the validity, over
+the body's own `ok`. `eof_events`, `EofChunks` and `EofEnding` are the fold's
+instances. `map_events`, `MapSteps`, `MapEndingOk` and `map_input` are
+`tr`'s. `ReadStep`, `ReadEnding`, `MapStep` and `MapEnding` are gone.
+
+**The process's side** is an `EofProcess` record over an `EofLayout` (where
+the head and failure tail are, and the three jump facts):
+
+- **`inv(seen, gprs)`,** the invariant at the read. `framed` says the read
+  leaves it standing, through `ReadKept`: the nine registers a read and its
+  retry never write.
+- **`chunk`** (`EofBody`): from past the head, with the chunk at the page's
+  start and its length in RAX, the run makes the body's events and hands a
+  continuation `next` back at the read. The body also learns where the chunk
+  sits in the input (`seen ++ (bytes ++ rest) = input`); that is how the
+  fold derives its room fact without a separate bound.
+- **`ends`** (`EofBodyEnds`): a chunk in which the body ends the run.
+- **`at_end`** (`EofAtEnd`): the tail, with the invariant over the whole
+  input.
+
+**Where each process lands.**
+
+- **The state process.** `state_inv` is the state folded over what has been
+  read. `state_body` sets up, folds the chunk in and jumps back. `ends` is
+  vacuous (`Y = False`). `state_start` is init, then `eof_from`.
+  `state_from`, the old `state_chunk`, `StateFrom`, `state_bound_next`,
+  `state_fold_on` and `eof_room_here` are gone.
+- **The map process.** Its invariant is `True`, since the setup sets every
+  register the chunk needs. `map_chunk` starts past the head. `ends` is a
+  failed write. `at_end` is the write loop's exit(0). `map_from`, `map_end`
+  and `MapFrom` are gone.
+- **Write loop.** Its continuation is now `FinishedThen(ending, …)`: a
+  `WriteThen` for writes that finish, `True` for writes that fail, which
+  exit and need nothing after them. So a body that ends the run in a failed
+  write supplies no continuation it could never use. `finished_then` wraps
+  a `WriteThen` for either ending.
+
+**Size.** `elf64_read_state` 702 → 609 lines and `elf64_read_map` 947 → 837,
+while `elf64_read_pieces` grew 526 → 714 with the history, the driver and
+its contracts. The gain is again structural. The chunk induction, the
+end-of-file and failure dispatch and the history types exist once, and the
+next process (`tr -s`/`-d`) is an `EofProcess`: a body, its ending and its
+tail.
+
+**Claims.** The claims keep their shape. Only the history types in them
+changed: `EofStep<True>`/`EofEnd<False>` for the folds, and
+`EofStep<List<WriteStep>>`/`EofEnd<WriteFailure>` for `tr`.

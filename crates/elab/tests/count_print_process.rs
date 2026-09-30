@@ -68,7 +68,7 @@ fn lines_state_start() → StateStart<Nat>(lines_state_shape(), 0) {
 theorem lines_exit(file: List<BitVec(8)>, jumps: EofJumps, facts: StateJumpFacts(newline(), lines_bytes(), jumps),
     resident: (page: Nat → BitVec(8)) → CodeResident(io_fetch_access(), IoMemory(file, page), read_state_code(newline(), lines_bytes(), jumps),
         BitVec::ofNat(0x4000e8)),
-    chunks: List<ReadStep>, ok: EofChunks(chunks), ending: ReadEnding, ending_ok: EofEnding(ending),
+    chunks: List<EofStep<True>>, ok: EofChunks(chunks), ending: EofEnd<False>, ending_ok: EofEnding(ending),
     room: eof_input(chunks).len() + 4096 < Nat::pow(2, 64), page: Nat → BitVec(8), gprs: Gprs, flags: Flags):
     LinuxRuns(io_linux(), eof_events(chunks, ending, [ExitEvent(bitvec_nat::word_of_nat(64, wc_l(eof_input(chunks))))]),
         io_initial(file, page, gprs, flags)) {
@@ -80,7 +80,7 @@ theorem lines_print(file: List<BitVec(8)>, jumps: EofJumps, facts: StateJumpFact
     codes: PrintCodes, format: PrintFormat(codes), pj: PrintJumps, print_facts: PrintJumpFacts(pj),
     resident: (page: Nat → BitVec(8)) → CodeResident(io_fetch_access(), IoMemory(file, page),
         read_count_code(newline(), lines_bytes(), jumps, codes.word, codes.start, codes.length, pj), BitVec::ofNat(0x4000e8)),
-    chunks: List<ReadStep>, ok: EofChunks(chunks), ending: ReadEnding, ending_ok: EofEnding(ending),
+    chunks: List<EofStep<True>>, ok: EofChunks(chunks), ending: EofEnd<False>, ending_ok: EofEnding(ending),
     room: eof_input(chunks).len() + 4096 < Nat::pow(2, 64), small: wc_l(eof_input(chunks)) < 10000,
     writes: List<WriteStep>, writes_ok: WriteSteps(writes)(decimal_line(wc_l(eof_input(chunks)))),
     written: WriteEnding, written_ok: WriteEndingOk(written), page: Nat → BitVec(8), gprs: Gprs, flags: Flags):

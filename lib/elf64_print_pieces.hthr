@@ -305,12 +305,12 @@ theorem stdout_then(steps: List<WriteStep>, after: List<LinuxEvent>): (bytes: Li
 }
 
 // Reads send nothing.
-theorem reads_send_nothing(steps: List<ReadStep>, tail: List<LinuxEvent>):
+theorem reads_send_nothing(steps: List<EofStep<True>>, tail: List<LinuxEvent>):
     sent_to(BitVec::ofNat(1), eof_events(steps, AtEnd, tail)) = sent_to(BitVec::ofNat(1), tail) {
     match steps as λ ss => sent_to(BitVec::ofNat(1), eof_events(ss, AtEnd, tail)) = sent_to(BitVec::ofNat(1), tail) {
         Nil => refl,
         Cons(step, rest) => match step as λ st => sent_to(BitVec::ofNat(1), eof_events(Cons(st, rest), AtEnd, tail)) = sent_to(BitVec::ofNat(1), tail) {
-            Chunk(_) => reads_send_nothing(rest, tail),
+            Chunk(_, _) => reads_send_nothing(rest, tail),
             Interrupted => reads_send_nothing(rest, tail),
         },
     }
@@ -318,7 +318,7 @@ theorem reads_send_nothing(steps: List<ReadStep>, tail: List<LinuxEvent>):
 
 // What stdout receives on a run that ends at the empty read and a finished
 // write: exactly the count's line, whatever the reads and writes returned.
-theorem prints_the_line(steps: List<ReadStep>, writes: List<WriteStep>, total: Nat, ok: WriteSteps(writes)(decimal_line(total))):
+theorem prints_the_line(steps: List<EofStep<True>>, writes: List<WriteStep>, total: Nat, ok: WriteSteps(writes)(decimal_line(total))):
     sent_to(BitVec::ofNat(1), eof_events(steps, AtEnd, write_events(decimal_line(total), writes, Finished))) = decimal_line(total) {
     trans(reads_send_nothing(steps, write_events(decimal_line(total), writes, Finished)), stdout_is_bytes(writes, decimal_line(total), ok))
 }

@@ -341,40 +341,6 @@ theorem state_chunk_close<C>(rep: Gprs → C → Type, framed: StateFramed(rep),
             framed(done.gprs, back.gprs, carry, ⟨refl, ⟨refl, ⟨refl, refl⟩⟩⟩, folded.proof.right.right.right)⟩⟩⟩)
 }
 
-// One chunk, from the read's return: back at the read with the chunk folded
-// into the state.
-theorem state_chunk<C>(file: List<BitVec(8)>, page: Nat → BitVec(8), shape: StateShape<C>, l: StateLoop<C>(shape),
-    ed, sd, bd: BitVec(32), at_read: Nat,
-    back_target: near_branch_target(eof_rip((rh_at_end(at_read) + state_setup_len(shape.needle)) + shape.bytes.len()), 5, bd) = eof_rip(at_read),
-    bytes: List<BitVec(8)>, some: 0 < bytes.len(), fits: bytes.len() <= read_capacity(), carry: C,
-    room: shape.fits(0, bytes.len(), carry), returned: MachineState<IoMemory>,
-    memory_is: returned.memory = io_store_offset(IoMemory(file, page), 0, bytes),
-    rip_is: returned.rip = eof_rip(rh_at_test(at_read)),
-    length_word: read_gpr(Rax, returned.gprs) = bitvec_nat::word_of_nat(64, bytes.len()),
-    placed: shape.rep(returned.gprs, carry),
-    head: ReadHead(io_store_offset(IoMemory(file, page), 0, bytes), at_read, ed, sd),
-    setup_at: CodeResident(io_fetch_access(), io_store_offset(IoMemory(file, page), 0, bytes),
-        canonical_block_bytes(state_setup_block(shape.needle)), eof_rip(rh_at_end(at_read))),
-    loop_at: CodeResident(io_fetch_access(), io_store_offset(IoMemory(file, page), 0, bytes),
-        shape.bytes, eof_rip(rh_at_end(at_read) + state_setup_len(shape.needle))),
-    jmp_at: CodeResident(io_fetch_access(), io_store_offset(IoMemory(file, page), 0, bytes),
-        near_control_bytes(JumpNear(bd)), eof_rip((rh_at_end(at_read) + state_setup_len(shape.needle)) + shape.bytes.len()))):
-    StateBack(shape.rep, returned, io_store_offset(IoMemory(file, page), 0, bytes), step_fold(shape.region, shape.needle, bytes, carry), eof_rip(at_read)) {
-    let rep = shape.rep;
-    let framed = l.framed;
-    let region = shape.region;
-    let needle = shape.needle;
-    let stored = io_store_offset(IoMemory(file, page), 0, bytes);
-    let at_setup = rh_at_end(at_read);
-    let at_jmp = (at_setup + state_setup_len(needle)) + shape.bytes.len();
-    have entered = head_enter(stored, at_read, ed, sd, head, bytes.len(), some, fits, returned, memory_is, rip_is, length_word);
-    let going = head_going(returned, ed, sd);
-    state_chunk_close(rep, framed, returned, going, stored, step_fold(region, needle, bytes, carry), bd, at_jmp, at_read, back_target, entered.steps,
-        state_folds(file, page, shape, l, bytes, fits, carry, room, going, at_setup, entered.memory_is, entered.rip_is,
-            length_word, framed(returned.gprs, going.gprs, carry, ⟨refl, ⟨refl, ⟨refl, refl⟩⟩⟩, placed), setup_at, loop_at),
-        jmp_at)
-}
-
 // ---------------------------------------------------------------------------
 // The loop.
 
@@ -395,128 +361,65 @@ record StateTargets(needle: BitVec(8), loop_bytes: List<BitVec(8)>, jumps: EofJu
     retry: near_branch_target(eof_rip(state_at_retry(needle, loop_bytes)), 6, jumps.rd) = eof_rip(state_at_read()),
 }
 
-// From the read, having read `seen` so far, the rest of the run: the state
-// is the step folded over `seen` from `init`; folding the rest of the input
-// on from there reaches `total`; and `seen` with the input still to come
-// stays within `limit`.
-fn StateFrom<C>(file: List<BitVec(8)>, rep: Gprs → C → Type, region: ReadonlyLoop<C>, needle: BitVec(8), init, total: C, limit: Nat,
-    ending: ReadEnding, tail_events: List<LinuxEvent>, steps: List<ReadStep>) → Type {
-    EofChunks(steps) → (page: Nat → BitVec(8)) → (seen: List<BitVec(8)>) → (state: MachineState<IoMemory>) →
-    state.rip = eof_rip(state_at_read()) → state.memory = IoMemory(file, page) →
-    rep(state.gprs, step_fold(region, needle, seen, init)) →
-    step_fold(region, needle, eof_input(steps), step_fold(region, needle, seen, init)) = total →
-    seen.len() + eof_input(steps).len() <= limit →
-    LinuxRuns(io_linux(), eof_events(steps, ending, tail_events), state)
+// The fold's invariant at the read: the state folded over what has been read
+// sits in its registers.
+fn state_inv<C>(shape: StateShape<C>, init: C) → List<BitVec(8)> → Gprs → Type {
+    λ seen gprs => shape.rep(gprs, step_fold(shape.region, shape.needle, seen, init))
 }
 
-theorem state_bound_next(s, c, r, sc, cr, limit: Nat, front: sc = s + c, back: cr = c + r, bounded: s + cr <= limit):
-    sc + r <= limit { omega }
-
-// The state after `seen` then `chunk` is the state after both, and so is
-// the rest of the fold.
-theorem state_fold_on<C>(region: ReadonlyLoop<C>, needle: BitVec(8), init, total: C, seen, chunk, rest: List<BitVec(8)>,
-    counted: step_fold(region, needle, chunk ++ rest, step_fold(region, needle, seen, init)) = total):
-    step_fold(region, needle, rest, step_fold(region, needle, seen ++ chunk, init)) = total {
-    trans(cong_fn<C, C>(λ carry => step_fold(region, needle, rest, carry), step_fold_append(region, needle, seen, chunk, init)),
-        trans(sym(step_fold_append(region, needle, chunk, rest, step_fold(region, needle, seen, init))), counted))
+// What has been read with the chunk is shorter than 2^64, since the whole
+// input is shorter still.
+theorem state_room_arith(s, b, r, n: Nat, whole: n = s + (b + r), room: n + 4096 < Nat::pow(2, 64)): s + b < Nat::pow(2, 64) { omega }
+theorem state_room_here(seen, bytes, rest, input: List<BitVec(8)>, prefix: seen ++ (bytes ++ rest) = input,
+    room: input.len() + 4096 < Nat::pow(2, 64)): seen.len() + bytes.len() < Nat::pow(2, 64) {
+    let whole: (input.len() = seen.len() + (bytes.len() + rest.len())) =
+        trans(cong_fn<List<BitVec(8)>, Nat>(λ xs => xs.len(), sym(prefix)),
+            trans(List::len_append(seen, bytes ++ rest), cong_fn<Nat, Nat>(λ n => seen.len() + n, List::len_append(bytes, rest))));
+    state_room_arith(seen.len(), bytes.len(), rest.len(), input.len(), whole, room)
 }
 
-// The read, by recursion on the steps: every chunk is read and folded in,
-// every EINTR retried, and then the empty read runs the tail or the failure
-// exits 1.
-theorem state_from<C>(file: List<BitVec(8)>, shape: StateShape<C>, l: StateLoop<C>(shape), init: C, room_for: StateRoom(shape.fits, shape.region, shape.needle, init),
-    jumps: EofJumps, targets: StateTargets(shape.needle, shape.bytes, jumps),
+// One chunk, from past the head: set up, fold the chunk into the state,
+// jump back to the read, and go on from there.
+theorem state_body<C>(file: List<BitVec(8)>, shape: StateShape<C>, l: StateLoop<C>(shape), init: C,
+    room_for: StateRoom(shape.fits, shape.region, shape.needle, init), jumps: EofJumps,
+    back_target: near_branch_target(eof_rip(state_at_jmp(shape.needle, shape.bytes)), 5, jumps.bd) = eof_rip(state_at_read()),
     tail_code: List<BitVec(8)>, pieces: (page: Nat → BitVec(8)) → StatePieces(IoMemory(file, page), shape.needle, shape.bytes, jumps, tail_code),
-    total: C, limit: Nat, room: limit + 4096 < Nat::pow(2, 64), tail_events: List<LinuxEvent>,
-    tail: EofTail(file, state_at_done(shape.needle, shape.bytes), shape.rep, total, tail_events), ending: ReadEnding, ending_ok: EofEnding(ending),
-    chunks: List<ReadStep>):
-    StateFrom(file, shape.rep, shape.region, shape.needle, init, total, limit, ending, tail_events, chunks) {
-    let rep = shape.rep;
-    let framed = l.framed;
-    let region = shape.region;
-    let needle = shape.needle;
-    let loop_bytes = shape.bytes;
-    let exit_target = targets.exit;
-    let js_target = targets.fail;
-    let back_target = targets.back;
-    let retry_target = targets.retry;
-    let head = λ (page: Nat → BitVec(8)) => pieces(page).head;
-    let af = state_at_failed(needle, loop_bytes);
-    match chunks as λ cs => StateFrom(file, rep, region, needle, init, total, limit, ending, tail_events, cs) {
-        Nil => λ ok page seen state at_read memory_is placed counted bounded =>
-            (match ending as λ en => EofEnding(en) → LinuxRuns(io_linux(), eof_events(Nil, en, tail_events), state) {
-                AtEnd => λ _ =>
-                    head_read(file, page, state_at_read(), jumps.ed, jumps.sd, head(page), state, at_read, memory_is, Nil, trivial, tail_events,
-                        λ rcx r11 back => {
-                            let returned = linux_read_return(io_linux(), head_asked(state), Nil, rcx, r11);
-                            let stored = io_store_offset(IoMemory(file, page), 0, Nil);
-                            have ended = head_at_end(stored, state_at_read(), jumps.ed, jumps.sd, head(stored.page), state_at_done(needle, loop_bytes),
-                                exit_target, returned, back.memory_is, back.rip_is, refl);
-                            let last = head_passed(returned, jumps.ed);
-                            let kept: rep(last.gprs, total) =
-                                j(counted, λ carry _ => rep(last.gprs, carry),
-                                    framed(state.gprs, last.gprs, step_fold(region, needle, seen, init), ⟨refl, ⟨refl, ⟨refl, refl⟩⟩⟩, placed));
-                            linux_runs_after_steps(io_linux(), tail_events, returned, last, ended.steps,
-                                tail(stored.page, last, ended.rip_is, ended.memory_is, kept))
-                        }),
-                FailedWith(errno) => λ bad =>
-                    head_read_failed(file, page, state_at_read(), jumps.ed, jumps.sd, head(page), state, at_read, memory_is,
-                        errno, bad.left, [ExitEvent(BitVec::ofNat(1))],
-                        λ junk rcx r11 back => {
-                            let returned = linux_read_failed_return(io_linux(), head_asked(state), errno, junk, rcx, r11);
-                            let stored = io_store_offset(IoMemory(file, page), 0, junk);
-                            read_fails(stored, state_at_read(), jumps.ed, jumps.sd, head(stored.page), af, jumps.rd, pieces(stored.page).fail,
-                                js_target, errno, bad.left, bad.right, returned, back.memory_is, back.rip_is, refl)
-                        }),
-            })(ending_ok),
-        Cons(step, rest) => (match step as λ st => StateFrom(file, rep, region, needle, init, total, limit, ending, tail_events, Cons(st, rest)) {
-            Chunk(chunk) => λ ok page seen state at_read memory_is placed counted bounded => {
-                let some: (0 < chunk.len()) = ok.left;
-                let fits: (chunk.len() <= read_capacity()) = ok.right.left;
-                let carry = step_fold(region, needle, seen, init);
-                let span = List::len_append(chunk, eof_input(rest));
-                let room_here: (seen.len() + chunk.len() < Nat::pow(2, 64)) =
-                    eof_room_here(seen.len(), chunk.len(), eof_input(rest).len(), (chunk ++ eof_input(rest)).len(), limit, span, bounded, room);
-                let bounded_next: ((seen ++ chunk).len() + eof_input(rest).len() <= limit) =
-                    state_bound_next(seen.len(), chunk.len(), eof_input(rest).len(), (seen ++ chunk).len(), (chunk ++ eof_input(rest)).len(), limit,
-                        List::len_append(seen, chunk), span, bounded);
-                let later = state_fold_on(region, needle, init, total, seen, chunk, eof_input(rest), counted);
-                head_read(file, page, state_at_read(), jumps.ed, jumps.sd, head(page), state, at_read, memory_is, chunk, fits,
-                    eof_events(rest, ending, tail_events),
-                    λ rcx r11 ret => {
-                        let returned = linux_read_return(io_linux(), head_asked(state), chunk, rcx, r11);
-                        let stored = io_store_offset(IoMemory(file, page), 0, chunk);
-                        let there = pieces(stored.page);
-                        have back = state_chunk(file, page, shape, l, jumps.ed, jumps.sd, jumps.bd, state_at_read(), back_target, chunk, some, fits, carry,
-                            room_for(seen, chunk.len(), room_here), returned, ret.memory_is, ret.rip_is, refl,
-                            framed(state.gprs, returned.gprs, carry, ⟨refl, ⟨refl, ⟨refl, refl⟩⟩⟩, placed),
-                            there.head, there.setup_at, there.loop_at, there.jmp_at);
-                        let moved: rep(back.witness.gprs, step_fold(region, needle, seen ++ chunk, init)) =
-                            j(sym(step_fold_append(region, needle, seen, chunk, init)), λ c _ => rep(back.witness.gprs, c), back.proof.right.right.right);
-                        linux_runs_after_steps(io_linux(), eof_events(rest, ending, tail_events), returned, back.witness, back.proof.left,
-                            state_from(file, shape, l, init, room_for, jumps, targets, tail_code, pieces, total, limit, room,
-                                tail_events, tail, ending, ending_ok, rest)(ok.right.right, stored.page, seen ++ chunk, back.witness,
-                                back.proof.right.right.left, back.proof.right.left, moved, later, bounded_next))
-                    })
-            },
-            Interrupted => λ ok page seen state at_read memory_is placed counted bounded =>
-                head_read_failed(file, page, state_at_read(), jumps.ed, jumps.sd, head(page), state, at_read, memory_is,
-                    eintr(), ⟨trivial, trivial⟩, eof_events(rest, ending, tail_events),
-                    λ junk rcx r11 ret => {
-                        let returned = linux_read_failed_return(io_linux(), head_asked(state), eintr(), junk, rcx, r11);
-                        let stored = io_store_offset(IoMemory(file, page), 0, junk);
-                        have retried = read_retries(stored, state_at_read(), jumps.ed, jumps.sd, head(stored.page), af, jumps.rd,
-                            pieces(stored.page).fail, js_target, retry_target, returned, ret.memory_is, ret.rip_is, refl);
-                        let again = fail_back(head_going(returned, jumps.ed, jumps.sd), jumps.rd);
-                        let carry = step_fold(region, needle, seen, init);
-                        let kept: rep(again.gprs, carry) = framed(state.gprs, again.gprs, carry, ⟨refl, ⟨refl, ⟨refl, refl⟩⟩⟩, placed);
-                        linux_runs_after_steps(io_linux(), eof_events(rest, ending, tail_events), returned, again, retried.steps,
-                            state_from(file, shape, l, init, room_for, jumps, targets, tail_code, pieces, total, limit, room,
-                                tail_events, tail, ending, ending_ok, rest)(ok, stored.page, seen, again, retried.rip_is,
-                                retried.memory_is, kept, counted, bounded))
-                    }),
-        }),
+    input: List<BitVec(8)>, room: input.len() + 4096 < Nat::pow(2, 64)):
+    EofBody<True>(file, state_at_read(), state_inv(shape, init), input, λ _ _ => True, λ _ _ after => after) {
+    λ page seen bytes rest x some fits _ prefix going at_setup memory_is length_word held after next => {
+        let stored = io_store_offset(IoMemory(file, page), 0, bytes);
+        let there = pieces(stored.page);
+        let carry = step_fold(shape.region, shape.needle, seen, init);
+        let room_here = state_room_here(seen, bytes, rest, input, prefix, room);
+        have folded = state_folds(file, page, shape, l, bytes, fits, carry, room_for(seen, bytes.len(), room_here), going, state_at_setup(),
+            memory_is, at_setup, length_word, held, there.setup_at, there.loop_at);
+        have back = state_chunk_close(shape.rep, l.framed, going, going, stored, step_fold(shape.region, shape.needle, bytes, carry), jumps.bd,
+            state_at_jmp(shape.needle, shape.bytes), state_at_read(), back_target,
+            fetched_steps_refl(io_fetch_access(), io_data_access(), going), folded, there.jmp_at);
+        let moved: shape.rep(back.witness.gprs, step_fold(shape.region, shape.needle, seen ++ bytes, init)) =
+            j(sym(step_fold_append(shape.region, shape.needle, seen, bytes, init)), λ c _ => shape.rep(back.witness.gprs, c),
+                back.proof.right.right.right);
+        linux_runs_after_steps(io_linux(), after, going, back.witness, back.proof.left,
+            next(stored.page, back.witness, back.proof.right.right.left, back.proof.right.left, moved))
     }
+}
+
+// The process for the driver: the fold's invariant, the chunk as above, no
+// chunk ending the run, and the tail at `state_at_done`.
+theorem state_process<C>(file: List<BitVec(8)>, shape: StateShape<C>, l: StateLoop<C>(shape), init: C,
+    room_for: StateRoom(shape.fits, shape.region, shape.needle, init), jumps: EofJumps, targets: StateTargets(shape.needle, shape.bytes, jumps),
+    tail_code: List<BitVec(8)>, pieces: (page: Nat → BitVec(8)) → StatePieces(IoMemory(file, page), shape.needle, shape.bytes, jumps, tail_code),
+    input: List<BitVec(8)>, room: input.len() + 4096 < Nat::pow(2, 64), tail_events: List<LinuxEvent>,
+    tail: EofTail(file, state_at_done(shape.needle, shape.bytes), shape.rep, step_fold(shape.region, shape.needle, input, init), tail_events)):
+    EofProcess<True, False>(file, state_at_read(), state_at_done(shape.needle, shape.bytes), state_inv(shape, init), input,
+        λ _ _ => True, λ _ _ after => after, λ _ _ => True, λ _ _ => Nil, tail_events) {
+    EofProcess(
+        framed := λ seen before after kept held => l.framed(before, after, step_fold(shape.region, shape.needle, seen, init),
+            ⟨kept.right.right.right.right.right.right.left, ⟨kept.right.right.right.right.right.right.right.left,
+                ⟨kept.right.right.right.right.right.right.right.right, kept.right.right.left⟩⟩⟩, held),
+        chunk := state_body(file, shape, l, init, room_for, jumps, targets.back, tail_code, pieces, input, room),
+        ends := λ page seen bytes y => false_elim(y),
+        at_end := tail)
 }
 
 // ---------------------------------------------------------------------------
@@ -632,7 +535,7 @@ theorem state_exit_tail<C>(file: List<BitVec(8)>, at: Nat, rep: Gprs → C → T
 theorem state_start<C>(file: List<BitVec(8)>, shape: StateShape<C>, l: StateLoop<C>(shape), init: C, start: StateStart<C>(shape, init),
     jumps: EofJumps, targets: StateTargets(shape.needle, shape.bytes, jumps),
     tail_code: List<BitVec(8)>, pieces: (page: Nat → BitVec(8)) → StatePieces(IoMemory(file, page), shape.needle, shape.bytes, jumps, tail_code),
-    chunks: List<ReadStep>, ok: EofChunks(chunks), ending: ReadEnding, ending_ok: EofEnding(ending),
+    chunks: List<EofStep<True>>, ok: EofChunks(chunks), ending: EofEnd<False>, ending_ok: EofEnding(ending),
     room: eof_input(chunks).len() + 4096 < Nat::pow(2, 64),
     tail_events: List<LinuxEvent>,
     tail: EofTail(file, state_at_done(shape.needle, shape.bytes), shape.rep, step_fold(shape.region, shape.needle, eof_input(chunks), init), tail_events),
@@ -643,11 +546,15 @@ theorem state_start<C>(file: List<BitVec(8)>, shape: StateShape<C>, l: StateLoop
     let begin = io_initial(file, page, gprs, flags);
     let started = block_fetched(fetch, data, state_init_block(), begin, trivial, pieces(page).init_at);
     let ready = execute_block_normal(state_init_block(), begin);
+    let input = eof_input(chunks);
+    let layout: EofLayout(file, state_at_read(), state_at_failed(shape.needle, shape.bytes), state_at_done(shape.needle, shape.bytes),
+        jumps.ed, jumps.sd, jumps.rd) = EofLayout(λ p => pieces(p).head, λ p => pieces(p).fail, targets.exit, targets.fail, targets.retry);
     linux_runs_after_steps(io_linux(), eof_events(chunks, ending, tail_events), begin, ready, started.left,
-        state_from(file, shape, l, init, start.room, jumps, targets, tail_code, pieces,
-            step_fold(shape.region, shape.needle, eof_input(chunks), init), eof_input(chunks).len(), room, tail_events, tail, ending, ending_ok, chunks)(
-            ok, page, Nil, ready, started.right, refl, start.initialised(begin), refl,
-            j(sym(Nat::add_left_zero(eof_input(chunks).len())), λ n _ => n <= eof_input(chunks).len(), eof_input(chunks).len().le_refl())))
+        eof_from(file, state_at_read(), state_at_failed(shape.needle, shape.bytes), state_at_done(shape.needle, shape.bytes),
+            jumps.ed, jumps.sd, jumps.rd, layout, state_inv(shape, init), input, λ _ _ => True, λ _ _ after => after,
+            λ _ _ => True, λ _ _ => Nil, tail_events,
+            state_process(file, shape, l, init, start.room, jumps, targets, tail_code, pieces, input, room, tail_events, tail),
+            ending, ending_ok, chunks)(ok, page, Nil, refl, ready, started.right, refl, start.initialised(begin)))
 }
 
 // The process claim: for every way the reads may split the input into
@@ -660,7 +567,7 @@ theorem read_state_runs<C>(file: List<BitVec(8)>, shape: StateShape<C>, l: State
     jumps: EofJumps, facts: StateJumpFacts(shape.needle, shape.bytes, jumps),
     resident: (page: Nat → BitVec(8)) → CodeResident(io_fetch_access(), IoMemory(file, page), read_state_code(shape.needle, shape.bytes, jumps),
         io_entry()),
-    chunks: List<ReadStep>, ok: EofChunks(chunks), ending: ReadEnding, ending_ok: EofEnding(ending),
+    chunks: List<EofStep<True>>, ok: EofChunks(chunks), ending: EofEnd<False>, ending_ok: EofEnding(ending),
     room: eof_input(chunks).len() + 4096 < Nat::pow(2, 64),
     page: Nat → BitVec(8), gprs: Gprs, flags: Flags):
     LinuxRuns(io_linux(), eof_events(chunks, ending,
@@ -691,7 +598,7 @@ theorem read_count_runs(file: List<BitVec(8)>, shape: StateShape<Nat>, l: StateL
     jumps: EofJumps, facts: StateJumpFacts(shape.needle, shape.bytes, jumps),
     resident: (page: Nat → BitVec(8)) → CodeResident(io_fetch_access(), IoMemory(file, page), read_state_code(shape.needle, shape.bytes, jumps),
         io_entry()),
-    chunks: List<ReadStep>, ok: EofChunks(chunks), ending: ReadEnding, ending_ok: EofEnding(ending),
+    chunks: List<EofStep<True>>, ok: EofChunks(chunks), ending: EofEnd<False>, ending_ok: EofEnding(ending),
     room: eof_input(chunks).len() + 4096 < Nat::pow(2, 64),
     page: Nat → BitVec(8), gprs: Gprs, flags: Flags):
     LinuxRuns(io_linux(), eof_events(chunks, ending, [ExitEvent(bitvec_nat::word_of_nat(64, spec(eof_input(chunks))))]),

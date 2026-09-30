@@ -60,7 +60,7 @@ fn wc_state_start(needle: BitVec(8)) → StateStart<WcState>(wc_state_shape(need
 theorem wc_runs(file: List<BitVec(8)>, needle: BitVec(8), jumps: EofJumps, facts: StateJumpFacts(needle, wc_bytes(), jumps),
     resident: (page: Nat → BitVec(8)) → CodeResident(io_fetch_access(), IoMemory(file, page), read_state_code(needle, wc_bytes(), jumps),
         BitVec::ofNat(0x4000e8)),
-    chunks: List<ReadStep>, ok: EofChunks(chunks), ending: ReadEnding, ending_ok: EofEnding(ending),
+    chunks: List<EofStep<True>>, ok: EofChunks(chunks), ending: EofEnd<False>, ending_ok: EofEnding(ending),
     room: eof_input(chunks).len() + 4096 < Nat::pow(2, 64), page: Nat → BitVec(8), gprs: Gprs, flags: Flags):
     LinuxRuns(io_linux(), eof_events(chunks, ending,
         [ExitEvent(bitvec_nat::word_of_nat(64, step_fold(wc_loop_region(), needle, eof_input(chunks), WcState(0, 0, 0, False)).lines))]),

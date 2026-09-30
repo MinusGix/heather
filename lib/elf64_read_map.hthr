@@ -571,36 +571,34 @@ theorem map_sends_page(f: BitVec(8) → BitVec(8), file, bytes: List<BitVec(8)>,
     }
 }
 
-// From the read's return with a chunk: TEST, JZ and JS not taken, the
-// setup, the chunk mapped in place, then the write loop, whose end goes on
-// from the read with `then`.
+// One chunk, from past the head: the setup, the chunk mapped in place, then
+// the write loop, whose end goes on from the read with `then`.
 theorem map_chunk(f: BitVec(8) → BitVec(8), code: StructuredCode, keeps: Gpr → Type, piece: MapPiece(f, code, keeps), kept: MapKeeps(keeps),
     jumps: MapJumps, pj: PrintJumps,
     loop_target: near_branch_target(eof_rip(map_at_jnz(structured_bytes(code).len())), 6, jumps.ld) = eof_rip(map_at_load()),
     targets: WriteLoopTargets(map_at_write(structured_bytes(code).len()), map_at_read(), pj),
     file: List<BitVec(8)>, pieces: (page: Nat → BitVec(8)) → MapPieces(IoMemory(file, page), code, jumps, pj),
     page: Nat → BitVec(8), bytes: List<BitVec(8)>, some: 0 < bytes.len(), fits: bytes.len() <= 4096,
-    returned: MachineState<IoMemory>, memory_is: returned.memory = io_store_offset(IoMemory(file, page), 0, bytes),
-    rip_is: returned.rip = eof_rip(map_at_test()),
-    length_word: read_gpr(Rax, returned.gprs) = bitvec_nat::word_of_nat(64, bytes.len()),
-    after: List<LinuxEvent>, then: (next: Nat → BitVec(8)) → WriteThen(IoMemory(file, next), map_at_read(), after),
-    ending: WriteEnding, ending_ok: WriteEndingOk(ending), writes: List<WriteStep>, writes_ok: WriteSteps(writes, bytes.map(f))):
-    LinuxRuns(io_linux(), write_events_then(bytes.map(f), writes, ending, after), returned) {
+    going: MachineState<IoMemory>, memory_is: going.memory = io_store_offset(IoMemory(file, page), 0, bytes),
+    rip_is: going.rip = eof_rip(map_at_setup()),
+    length_word: read_gpr(Rax, going.gprs) = bitvec_nat::word_of_nat(64, bytes.len()),
+    after: List<LinuxEvent>, ending: WriteEnding, ending_ok: WriteEndingOk(ending),
+    then: (next: Nat → BitVec(8)) → FinishedThen(ending, IoMemory(file, next), map_at_read(), after),
+    writes: List<WriteStep>, writes_ok: WriteSteps(writes, bytes.map(f))):
+    LinuxRuns(io_linux(), write_events_then(bytes.map(f), writes, ending, after), going) {
     let fetch = io_fetch_access();
     let data = io_data_access();
     let entry = io_entry();
     let n = bytes.len();
     let stored = io_store_offset(IoMemory(file, page), 0, bytes);
     let there = pieces(stored.page);
-    have entered = head_enter(stored, map_at_read(), jumps.ed, jumps.sd, there.head, n, some, fits, returned, memory_is, rip_is, length_word);
-    let going = head_going(returned, jumps.ed, jumps.sd);
     let set = block_fetched(fetch, data, map_setup_block(), going, trivial,
         resident_state(fetch, canonical_block_bytes(map_setup_block()), stored, eof_rip(map_at_setup()), going,
-            entered.memory_is, entered.rip_is, there.setup_at));
+            memory_is, rip_is, there.setup_at));
     let ready = execute_block_normal(map_setup_block(), going);
-    let ready_memory: (ready.memory = IoMemory(file, stored.page)) = trans(pure_block_memory(map_setup_block(), going), entered.memory_is);
+    let ready_memory: (ready.memory = IoMemory(file, stored.page)) = trans(pure_block_memory(map_setup_block(), going), memory_is);
     let ready_rip: (ready.rip = eof_rip(map_at_load())) =
-        trans(set.right, rip_advance(entry, going.rip, map_at_setup(), map_setup_len(), entered.rip_is));
+        trans(set.right, rip_advance(entry, going.rip, map_at_setup(), map_setup_len(), rip_is));
     let counted: (read_gpr(Rax, going.gprs).toNat() = n) =
         trans(cong_fn<BitVec(64), Nat>(λ v => v.toNat(), length_word), bitvec_nat::toNat_word_of_nat(64, n, count_below_word(n, fits)));
     let page_value: (BitVec::ofNat(io_page_base(), n := 64).toNat() = io_page_base()) = BitVec::toNat_ofNat(64, io_page_base(), trivial);
@@ -623,134 +621,65 @@ theorem map_chunk(f: BitVec(8) → BitVec(8), code: StructuredCode, keeps: Gpr �
         λ j b at_j below => at.mapped(j, b, at_j, below));
     let image_len: (bytes.map(f).len() = n) = List::len_map(bytes, f);
     have runs = wl_from_then(IoMemory(file, at.page), map_at_write(structured_bytes(code).len()), pj, map_at_read(), pieces(at.page).write, targets,
-        after, then(at.page), ending, ending_ok, writes,
+        after, ending, ending_ok, then(at.page), writes,
         bytes.map(f), writes_ok, last, j(sym(image_len), λ v _ => 0 < v, some), j(sym(image_len), λ v _ => v <= 4096, fits),
         at.rip_is, at.memory_is, sends, trans(at.length, sym(image_len)),
         j(sym(image_len), λ v _ => read_gpr(R9, last.gprs).toNat() + v < Nat::pow(2, 64),
             j(sym(at.base), λ v _ => v + n < Nat::pow(2, 64), map_page_end(n, fits))));
-    linux_runs_after_linux_steps(io_linux(), write_events_then(bytes.map(f), writes, ending, after), returned, last,
-        linux_steps_trans(io_linux(), returned, ready, last,
-            linux_steps_of_fetched(io_linux(), returned, ready, fetched_steps_trans(fetch, data, returned, going, ready, entered.steps, set.left)),
-            done.proof.left),
+    linux_runs_after_linux_steps(io_linux(), write_events_then(bytes.map(f), writes, ending, after), going, last,
+        linux_steps_trans(io_linux(), going, ready, last, linux_steps_of_fetched(io_linux(), going, ready, set.left), done.proof.left),
         runs)
 }
 
 // ---------------------------------------------------------------------------
 // The histories, and what the run sends.
 
-// What the reads and writes return, in order: a chunk and how its writes
-// went, all sent; an EINTR on the read, retried. Then how the run ended: at
-// the empty read, at a failed read, or at a failed write of a last chunk.
-inductive MapStep {
-    Mapped(bytes: List<BitVec(8)>, writes: List<WriteStep>),
-    ReadInterrupted,
-}
-inductive MapEnding {
-    MapAtEnd,
-    MapReadFailed(errno: Nat),
-    MapWriteFailed(bytes: List<BitVec(8)>, writes: List<WriteStep>, errno: Nat),
-}
+// The driver's history (elf64_read_pieces's `EofStep` and `EofEnd`): each
+// chunk carries how its image's writes went, all sent; a chunk may end the
+// run in a failed write, with the writes before it and the errno.
+record WriteFailure { writes: List<WriteStep>, errno: Nat }
 
-fn map_end_events() → List<LinuxEvent> { [ReadEvent(BitVec::ofNat(0), ReadBytes(Nil)), ExitEvent(BitVec::ofNat(0))] }
+// A chunk is read, then its image written; once all of it is sent, the next
+// read follows. A failed write exits 1 before anything after it.
+fn map_writes(f: BitVec(8) → BitVec(8)) → List<BitVec(8)> → List<WriteStep> → List<LinuxEvent> → List<LinuxEvent> {
+    λ bytes writes after => write_events_then(bytes.map(f), writes, Finished, after)
+}
+fn map_failed_write(f: BitVec(8) → BitVec(8)) → List<BitVec(8)> → WriteFailure → List<LinuxEvent> {
+    λ bytes failure => write_events_then(bytes.map(f), failure.writes, WriteFailedWith(failure.errno), Nil)
+}
+fn map_events(f: BitVec(8) → BitVec(8), steps: List<EofStep<List<WriteStep>>>, ending: EofEnd<WriteFailure>) → List<LinuxEvent> {
+    eof_run(map_writes(f), map_failed_write(f), steps, ending, [ExitEvent(BitVec::ofNat(0))])
+}
+fn map_input(steps: List<EofStep<List<WriteStep>>>) → List<BitVec(8)> { eof_input(steps) }
 
-// The trace. A chunk is read, then its image written; once all of it is
-// sent, the next read follows. A failed write exits 1 before anything after
-// it; `map_end_events` stands in that position only as what the write loop
-// would go on to.
-fn map_events(f: BitVec(8) → BitVec(8), steps: List<MapStep>, ending: MapEnding) → List<LinuxEvent> {
-    match steps {
-        Nil => match ending {
-            MapAtEnd => map_end_events(),
-            MapReadFailed(errno) => [ReadEvent(BitVec::ofNat(0), ReadFailed(errno)), ExitEvent(BitVec::ofNat(1))],
-            MapWriteFailed(bytes, writes, errno) => Cons(ReadEvent(BitVec::ofNat(0), ReadBytes(bytes)),
-                write_events_then(bytes.map(f), writes, WriteFailedWith(errno), map_end_events())),
-        },
-        Cons(step, rest) => match step {
-            Mapped(bytes, writes) => Cons(ReadEvent(BitVec::ofNat(0), ReadBytes(bytes)),
-                write_events_then(bytes.map(f), writes, Finished, map_events(f, rest, ending))),
-            ReadInterrupted => Cons(ReadEvent(BitVec::ofNat(0), ReadFailed(eintr())), map_events(f, rest, ending)),
-        },
-    }
+// A chunk's writes are short ones of its image; a failed write is one of
+// them, then an errno other than EINTR.
+fn map_writes_ok(f: BitVec(8) → BitVec(8)) → List<BitVec(8)> → List<WriteStep> → Type {
+    λ bytes writes => WriteSteps(writes, bytes.map(f))
 }
-
-// The input: the chunks, in order.
-fn map_input(steps: List<MapStep>) → List<BitVec(8)> {
-    match steps {
-        Nil => Nil,
-        Cons(step, rest) => match step { Mapped(bytes, _) => bytes ++ map_input(rest), ReadInterrupted => map_input(rest) },
-    }
+fn map_failure_ok(f: BitVec(8) → BitVec(8)) → List<BitVec(8)> → WriteFailure → Type {
+    λ bytes failure => WriteSteps(failure.writes, bytes.map(f)) ∧ (Errno(failure.errno) ∧ Not(failure.errno = eintr()))
 }
-
-// A chunk is not empty and fits the page, and its writes are short ones.
-fn MapChunk(f: BitVec(8) → BitVec(8), bytes: List<BitVec(8)>, writes: List<WriteStep>) → Type {
-    (0 < bytes.len()) ∧ ((bytes.len() <= read_capacity()) ∧ WriteSteps(writes, bytes.map(f)))
-}
-fn MapSteps(f: BitVec(8) → BitVec(8), steps: List<MapStep>) → Type {
-    match steps {
-        Nil => True,
-        Cons(step, rest) => match step {
-            Mapped(bytes, writes) => MapChunk(f, bytes, writes) ∧ MapSteps(f, rest),
-            ReadInterrupted => MapSteps(f, rest),
-        },
-    }
-}
-// A failure that ends the run is an errno, and not EINTR, which retries.
-fn MapEndingOk(f: BitVec(8) → BitVec(8), ending: MapEnding) → Type {
-    match ending {
-        MapAtEnd => True,
-        MapReadFailed(errno) => Errno(errno) ∧ Not(errno = eintr()),
-        MapWriteFailed(bytes, writes, errno) => MapChunk(f, bytes, writes) ∧ (Errno(errno) ∧ Not(errno = eintr())),
-    }
-}
+fn MapSteps(f: BitVec(8) → BitVec(8), steps: List<EofStep<List<WriteStep>>>) → Type { EofSteps(map_writes_ok(f), steps) }
+fn MapEndingOk(f: BitVec(8) → BitVec(8), ending: EofEnd<WriteFailure>) → Type { EofEndOk(map_failure_ok(f), ending) }
 
 // On a run that ends at the empty read, stdout received the input's image.
-theorem map_sends(f: BitVec(8) → BitVec(8), steps: List<MapStep>): MapSteps(f, steps) →
-    sent_to(BitVec::ofNat(1), map_events(f, steps, MapAtEnd)) = map_input(steps).map(f) {
-    match steps as λ ss => MapSteps(f, ss) → sent_to(BitVec::ofNat(1), map_events(f, ss, MapAtEnd)) = map_input(ss).map(f) {
+theorem map_sends(f: BitVec(8) → BitVec(8), steps: List<EofStep<List<WriteStep>>>): MapSteps(f, steps) →
+    sent_to(BitVec::ofNat(1), map_events(f, steps, AtEnd)) = map_input(steps).map(f) {
+    match steps as λ ss => MapSteps(f, ss) → sent_to(BitVec::ofNat(1), map_events(f, ss, AtEnd)) = map_input(ss).map(f) {
         Nil => λ _ => refl,
         Cons(step, rest) => match step as λ st => MapSteps(f, Cons(st, rest)) →
-                sent_to(BitVec::ofNat(1), map_events(f, Cons(st, rest), MapAtEnd)) = map_input(Cons(st, rest)).map(f) {
-            Mapped(bytes, writes) => λ ok => trans(stdout_then(writes, map_events(f, rest, MapAtEnd), bytes.map(f), ok.left.right.right),
-                trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ tail => bytes.map(f) ++ tail, map_sends(f, rest, ok.right)),
+                sent_to(BitVec::ofNat(1), map_events(f, Cons(st, rest), AtEnd)) = map_input(Cons(st, rest)).map(f) {
+            Chunk(bytes, writes) => λ ok => trans(stdout_then(writes, map_events(f, rest, AtEnd), bytes.map(f), ok.right.right.left),
+                trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ tail => bytes.map(f) ++ tail, map_sends(f, rest, ok.right.right.right)),
                     sym(List::map_append(bytes, map_input(rest), f)))),
-            ReadInterrupted => λ ok => map_sends(f, rest, ok),
+            Interrupted => λ ok => map_sends(f, rest, ok),
         },
     }
-}
-
-// ---------------------------------------------------------------------------
-// At end of file.
-
-// From the read: the empty read, JZ to the write loop's exit(0).
-theorem map_end(code: StructuredCode, jumps: MapJumps, pj: PrintJumps, file: List<BitVec(8)>,
-    pieces: (page: Nat → BitVec(8)) → MapPieces(IoMemory(file, page), code, jumps, pj),
-    exit_target: near_branch_target(eof_rip(map_at_jz()), 6, jumps.ed) = eof_rip(wl_at_exit(map_at_write(structured_bytes(code).len()))),
-    page: Nat → BitVec(8)): WriteThen(IoMemory(file, page), map_at_read(), map_end_events()) {
-    λ state at_read memory_is =>
-        head_read(file, page, map_at_read(), jumps.ed, jumps.sd, pieces(page).head, state, at_read, memory_is, Nil, trivial,
-            [ExitEvent(BitVec::ofNat(0))],
-            λ rcx r11 back => {
-                let returned = linux_read_return(io_linux(), head_asked(state), Nil, rcx, r11);
-                let stored = io_store_offset(IoMemory(file, page), 0, Nil);
-                let there = pieces(stored.page);
-                let at_exit = wl_at_exit(map_at_write(structured_bytes(code).len()));
-                have ended = head_at_end(stored, map_at_read(), jumps.ed, jumps.sd, there.head, at_exit, exit_target,
-                    returned, back.memory_is, back.rip_is, refl);
-                linux_runs_after_steps(io_linux(), [ExitEvent(BitVec::ofNat(0))], returned, head_passed(returned, jumps.ed), ended.steps,
-                    wl_exit(stored, map_at_write(structured_bytes(code).len()), pj, there.write, head_passed(returned, jumps.ed),
-                        ended.rip_is, ended.memory_is))
-            })
 }
 
 // ---------------------------------------------------------------------------
 // The run.
-
-// From the read, the rest of the run, whatever page the last chunk left.
-fn MapFrom(f: BitVec(8) → BitVec(8), file: List<BitVec(8)>, ending: MapEnding, steps: List<MapStep>) → Type {
-    MapSteps(f, steps) → (page: Nat → BitVec(8)) → (state: MachineState<IoMemory>) →
-    state.rip = eof_rip(map_at_read()) → state.memory = IoMemory(file, page) →
-    LinuxRuns(io_linux(), map_events(f, steps, ending), state)
-}
 
 // Where the jumps land.
 record MapTargets(code: StructuredCode, jumps: MapJumps, pj: PrintJumps) {
@@ -761,72 +690,26 @@ record MapTargets(code: StructuredCode, jumps: MapJumps, pj: PrintJumps) {
     write: WriteLoopTargets(map_at_write(structured_bytes(code).len()), map_at_read(), pj),
 }
 
-// The reads, by recursion on the history: every chunk is read, mapped and
-// written, every EINTR retried; then the empty read exits 0 and a failure
-// exits 1.
-theorem map_from(f: BitVec(8) → BitVec(8), code: StructuredCode, keeps: Gpr → Type, piece: MapPiece(f, code, keeps), kept: MapKeeps(keeps),
+// The process for the driver: no invariant beyond where the read is (the
+// setup sets every register the chunk needs), a chunk mapped and written, a
+// chunk whose write fails, and at end of file the write loop's exit(0).
+theorem map_process(f: BitVec(8) → BitVec(8), code: StructuredCode, keeps: Gpr → Type, piece: MapPiece(f, code, keeps), kept: MapKeeps(keeps),
     jumps: MapJumps, pj: PrintJumps, targets: MapTargets(code, jumps, pj), file: List<BitVec(8)>,
-    pieces: (page: Nat → BitVec(8)) → MapPieces(IoMemory(file, page), code, jumps, pj),
-    ending: MapEnding, ending_ok: MapEndingOk(f, ending), steps: List<MapStep>):
-    MapFrom(f, file, ending, steps) {
-    let af = map_at_failed(structured_bytes(code).len());
-    match steps as λ ss => MapFrom(f, file, ending, ss) {
-        Nil => λ ok page state at_read memory_is =>
-            (match ending as λ en => MapEndingOk(f, en) → LinuxRuns(io_linux(), map_events(f, Nil, en), state) {
-                MapAtEnd => λ _ => map_end(code, jumps, pj, file, pieces, targets.exit, page, state, at_read, memory_is),
-                MapReadFailed(errno) => λ bad =>
-                    head_read_failed(file, page, map_at_read(), jumps.ed, jumps.sd, pieces(page).head, state, at_read, memory_is,
-                        errno, bad.left, [ExitEvent(BitVec::ofNat(1))],
-                        λ junk rcx r11 back => {
-                            let returned = linux_read_failed_return(io_linux(), head_asked(state), errno, junk, rcx, r11);
-                            let stored = io_store_offset(IoMemory(file, page), 0, junk);
-                            let there = pieces(stored.page);
-                            read_fails(stored, map_at_read(), jumps.ed, jumps.sd, there.head, af, jumps.rd, there.fail, targets.fail,
-                                errno, bad.left, bad.right, returned, back.memory_is, back.rip_is, refl)
-                        }),
-                MapWriteFailed(bytes, writes, errno) => λ bad => {
-                    let fits: (bytes.len() <= read_capacity()) = bad.left.right.left;
-                    let failing: WriteEndingOk(WriteFailedWith(errno)) = bad.right;
-                    head_read(file, page, map_at_read(), jumps.ed, jumps.sd, pieces(page).head, state, at_read, memory_is, bytes, fits,
-                        write_events_then(bytes.map(f), writes, WriteFailedWith(errno), map_end_events()),
-                        λ rcx r11 back =>
-                            map_chunk(f, code, keeps, piece, kept, jumps, pj, targets.again, targets.write, file, pieces, page, bytes,
-                                bad.left.left, fits, linux_read_return(io_linux(), head_asked(state), bytes, rcx, r11),
-                                back.memory_is, back.rip_is, refl, map_end_events(),
-                                λ next => map_end(code, jumps, pj, file, pieces, targets.exit, next),
-                                WriteFailedWith(errno), failing, writes, bad.left.right.right))
-                },
-            })(ending_ok),
-        Cons(step, rest) => (match step as λ st => MapFrom(f, file, ending, Cons(st, rest)) {
-            Mapped(bytes, writes) => λ ok page state at_read memory_is => {
-                let fits: (bytes.len() <= read_capacity()) = ok.left.right.left;
-                head_read(file, page, map_at_read(), jumps.ed, jumps.sd, pieces(page).head, state, at_read, memory_is, bytes, fits,
-                    write_events_then(bytes.map(f), writes, Finished, map_events(f, rest, ending)),
-                    λ rcx r11 back =>
-                        map_chunk(f, code, keeps, piece, kept, jumps, pj, targets.again, targets.write, file, pieces, page, bytes,
-                            ok.left.left, fits, linux_read_return(io_linux(), head_asked(state), bytes, rcx, r11),
-                            back.memory_is, back.rip_is, refl, map_events(f, rest, ending),
-                            λ next next_state next_rip next_memory =>
-                                map_from(f, code, keeps, piece, kept, jumps, pj, targets, file, pieces, ending, ending_ok, rest,
-                                    ok.right, next, next_state, next_rip, next_memory),
-                            Finished, trivial, writes, ok.left.right.right))
-            },
-            ReadInterrupted => λ ok page state at_read memory_is =>
-                head_read_failed(file, page, map_at_read(), jumps.ed, jumps.sd, pieces(page).head, state, at_read, memory_is,
-                    eintr(), ⟨trivial, trivial⟩, map_events(f, rest, ending),
-                    λ junk rcx r11 back => {
-                        let returned = linux_read_failed_return(io_linux(), head_asked(state), eintr(), junk, rcx, r11);
-                        let stored = io_store_offset(IoMemory(file, page), 0, junk);
-                        let there = pieces(stored.page);
-                        have retried = read_retries(stored, map_at_read(), jumps.ed, jumps.sd, there.head, af, jumps.rd, there.fail,
-                            targets.fail, targets.retry, returned, back.memory_is, back.rip_is, refl);
-                        let again = fail_back(head_going(returned, jumps.ed, jumps.sd), jumps.rd);
-                        linux_runs_after_steps(io_linux(), map_events(f, rest, ending), returned, again, retried.steps,
-                            map_from(f, code, keeps, piece, kept, jumps, pj, targets, file, pieces, ending, ending_ok, rest,
-                                ok, stored.page, again, retried.rip_is, retried.memory_is))
-                    }),
-        }),
-    }
+    pieces: (page: Nat → BitVec(8)) → MapPieces(IoMemory(file, page), code, jumps, pj), input: List<BitVec(8)>):
+    EofProcess<List<WriteStep>, WriteFailure>(file, map_at_read(), wl_at_exit(map_at_write(structured_bytes(code).len())), λ _ _ => True, input,
+        map_writes_ok(f), map_writes(f), map_failure_ok(f), map_failed_write(f), [ExitEvent(BitVec::ofNat(0))]) {
+    EofProcess(
+        framed := λ seen before after kept held => trivial,
+        chunk := λ page seen bytes rest writes some fits writes_ok prefix going rip_is memory_is length_word held after next =>
+            map_chunk(f, code, keeps, piece, kept, jumps, pj, targets.again, targets.write, file, pieces, page, bytes, some, fits,
+                going, memory_is, rip_is, length_word, after, Finished, trivial,
+                λ next_page state at_read in_page => next(next_page, state, at_read, in_page, trivial), writes, writes_ok),
+        ends := λ page seen bytes failure some fits failure_ok going rip_is memory_is length_word held =>
+            map_chunk(f, code, keeps, piece, kept, jumps, pj, targets.again, targets.write, file, pieces, page, bytes, some, fits,
+                going, memory_is, rip_is, length_word, Nil, WriteFailedWith(failure.errno), failure_ok.right,
+                λ _ => trivial, failure.writes, failure_ok.left),
+        at_end := λ page state at_done in_page _ =>
+            wl_exit(IoMemory(file, page), map_at_write(structured_bytes(code).len()), pj, pieces(page).write, state, at_done, in_page))
 }
 
 // ---------------------------------------------------------------------------
@@ -938,10 +821,17 @@ theorem map_targets(code: StructuredCode, jumps: MapJumps, pj: PrintJumps, facts
 theorem read_map_runs(file: List<BitVec(8)>, f: BitVec(8) → BitVec(8), byte: MapByte(f), jumps: MapJumps, pj: PrintJumps,
     facts: MapJumpFacts(structured_bytes(byte.code).len(), jumps, pj),
     resident: (page: Nat → BitVec(8)) → CodeResident(io_fetch_access(), IoMemory(file, page), map_code(byte.code, jumps, pj), io_entry()),
-    steps: List<MapStep>, ok: MapSteps(f, steps), ending: MapEnding, ending_ok: MapEndingOk(f, ending),
+    steps: List<EofStep<List<WriteStep>>>, ok: MapSteps(f, steps), ending: EofEnd<WriteFailure>, ending_ok: MapEndingOk(f, ending),
     page: Nat → BitVec(8), gprs: Gprs, flags: Flags):
     LinuxRuns(io_linux(), map_events(f, steps, ending), io_initial(file, page, gprs, flags)) {
-    map_from(f, byte.code, byte.keeps, byte.piece, byte.kept, jumps, pj, map_targets(byte.code, jumps, pj, facts), file,
-        λ page => map_pieces(IoMemory(file, page), byte.code, jumps, pj, resident(page)), ending, ending_ok, steps,
-        ok, page, io_initial(file, page, gprs, flags), refl, refl)
+    let p = structured_bytes(byte.code).len();
+    let done = wl_at_exit(map_at_write(p));
+    let pieces = λ (page: Nat → BitVec(8)) => map_pieces(IoMemory(file, page), byte.code, jumps, pj, resident(page));
+    let targets = map_targets(byte.code, jumps, pj, facts);
+    let layout: EofLayout(file, map_at_read(), map_at_failed(p), done, jumps.ed, jumps.sd, jumps.rd) =
+        EofLayout(λ pg => pieces(pg).head, λ pg => pieces(pg).fail, targets.exit, targets.fail, targets.retry);
+    eof_from(file, map_at_read(), map_at_failed(p), done, jumps.ed, jumps.sd, jumps.rd, layout, λ _ _ => True, eof_input(steps),
+        map_writes_ok(f), map_writes(f), map_failure_ok(f), map_failed_write(f), [ExitEvent(BitVec::ofNat(0))],
+        map_process(f, byte.code, byte.keeps, byte.piece, byte.kept, jumps, pj, targets, file, pieces, eof_input(steps)),
+        ending, ending_ok, steps)(ok, page, Nil, refl, io_initial(file, page, gprs, flags), refl, refl, trivial)
 }

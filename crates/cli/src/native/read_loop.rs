@@ -414,7 +414,7 @@ pub(super) fn certify(module: &mut Module, prefix: &str, program: &Program, emis
         emission.bytes.len(), exit.len() + SYSCALL.len());
     image_facts(module, prefix, &code_term, &spelled, "refl", &file, code.len(), &length);
     head.jump_facts(module, prefix, &needle);
-    let premises = "chunks: List<ReadStep>, ok: EofChunks(chunks), ending: ReadEnding, ending_ok: EofEnding(ending),
+    let premises = "chunks: List<EofStep<True>>, ok: EofChunks(chunks), ending: EofEnd<False>, ending_ok: EofEnding(ending),
     room: eof_input(chunks).len() + 4096 < Nat::pow(2, 64), page: Nat → BitVec(8), gprs: Gprs, flags: Flags";
     let events = format!("eof_events(chunks, ending, [ExitEvent(bitvec_nat::word_of_nat(64, {root}::{spec}(eof_input(chunks))))])", spec = program.spec);
     let proof = format!("read_count_runs({common}, {prefix}_jumps(), {prefix}_jump_facts(), {prefix}_resident(),
@@ -503,7 +503,7 @@ pub(super) fn certify_print(module: &mut Module, prefix: &str, program: &Program
         emission.bytes.len(), word.bytes.len(), start.bytes.len(), length.bytes.len());
     image_facts(module, prefix, &code_term, &layout(&lw, &lst, &lln), &chain, &file, code.len(), &measure);
     head.jump_facts(module, prefix, &needle);
-    let premises = format!("chunks: List<ReadStep>, ok: EofChunks(chunks), ending: ReadEnding, ending_ok: EofEnding(ending),
+    let premises = format!("chunks: List<EofStep<True>>, ok: EofChunks(chunks), ending: EofEnd<False>, ending_ok: EofEnding(ending),
     room: eof_input(chunks).len() + 4096 < Nat::pow(2, 64), small: {root}::{spec}(eof_input(chunks)) < 10000,
     writes: List<WriteStep>, writes_ok: WriteSteps(writes)(decimal_line({root}::{spec}(eof_input(chunks)))),
     written: WriteEnding, written_ok: WriteEndingOk(written),

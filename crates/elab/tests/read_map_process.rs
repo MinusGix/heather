@@ -54,14 +54,14 @@ fn upcase_map_byte() → MapByte(upcase) { MapByte(upcase_code(), upcase_Protect
 theorem upcase_runs(file: List<BitVec(8)>, jumps: MapJumps, pj: PrintJumps, facts: MapJumpFacts(upcase_bytes().len(), jumps, pj),
     resident: (page: Nat → BitVec(8)) → CodeResident(io_fetch_access(), IoMemory(file, page), map_code(upcase_code(), jumps, pj),
         BitVec::ofNat(0x4000e8)),
-    steps: List<MapStep>, ok: MapSteps(upcase, steps), ending: MapEnding, ending_ok: MapEndingOk(upcase, ending),
+    steps: List<EofStep<List<WriteStep>>>, ok: MapSteps(upcase, steps), ending: EofEnd<WriteFailure>, ending_ok: MapEndingOk(upcase, ending),
     page: Nat → BitVec(8), gprs: Gprs, flags: Flags):
     LinuxRuns(io_linux(), map_events(upcase, steps, ending), io_initial(file, page, gprs, flags)) {
     read_map_runs(file, upcase, upcase_map_byte(), jumps, pj, facts, resident, steps, ok, ending, ending_ok, page, gprs, flags)
 }
 
-theorem upcase_sends(steps: List<MapStep>, ok: MapSteps(upcase, steps)):
-    sent_to(BitVec::ofNat(1), map_events(upcase, steps, MapAtEnd)) = map_input(steps).map(upcase) {
+theorem upcase_sends(steps: List<EofStep<List<WriteStep>>>, ok: MapSteps(upcase, steps)):
+    sent_to(BitVec::ofNat(1), map_events(upcase, steps, AtEnd)) = map_input(steps).map(upcase) {
     map_sends(upcase, steps, ok)
 }
 "#;

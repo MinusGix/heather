@@ -22,3 +22,4 @@ filters have the same shape (`cat -s`, `dos2unix`).
 ## Log
 
 - 2026-09-30: paused for [[native-stack-refactor]] (user's call). The design direction put to the user then was a library per-byte loop around a generated step (next state in place, an emit flag and byte), storing at an output cursor advanced by the flag; after the review's R3 that is a body for the read-until-EOF driver rather than a new process.
+- 2026-09-30: R3 landed: the filter is now an EofProcess for elf64_read_pieces's eof_from (body with next, EndedIn for a failed write), no new induction.

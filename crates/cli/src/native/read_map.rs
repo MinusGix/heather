@@ -134,7 +134,7 @@ theorem {prefix}_write_back_closes(): print_loop_span() + 5 + {pj}.bd.sign_exten
 theorem {prefix}_write_retry_closes(): print_retry_span() + 6 + {pj}.rd.sign_extend(32).toNat() = Nat::pow(2, 64) {{ refl }}
 "));
     let f = format!("{root}::{symbol}");
-    let premises = format!("steps: List<MapStep>, ok: MapSteps({f}, steps), ending: MapEnding, ending_ok: MapEndingOk({f}, ending),
+    let premises = format!("steps: List<EofStep<List<WriteStep>>>, ok: MapSteps({f}, steps), ending: EofEnd<WriteFailure>, ending_ok: MapEndingOk({f}, ending),
     page: Nat → BitVec(8), gprs: Gprs, flags: Flags");
     let events = format!("map_events({f}, steps, ending)");
     // The byte map's certificate and the jump facts (elf64_read_map's
@@ -161,8 +161,8 @@ fn {prefix}_jump_facts() → MapJumpFacts(structured_bytes({m}_code()).len(), {j
     module.raw(format!("\
 // What stdout receives on a run that ends at the empty read: the input,
 // mapped byte by byte.
-theorem {prefix}_sends(steps: List<MapStep>, ok: MapSteps({f}, steps)):
-    sent_to(@bitvec::BitVec::ofNat(64, 1), map_events({f}, steps, MapAtEnd)) = map_input(steps).map({f}) {{
+theorem {prefix}_sends(steps: List<EofStep<List<WriteStep>>>, ok: MapSteps({f}, steps)):
+    sent_to(@bitvec::BitVec::ofNat(64, 1), map_events({f}, steps, AtEnd)) = map_input(steps).map({f}) {{
     map_sends({f}, steps, ok)
 }}
 "));

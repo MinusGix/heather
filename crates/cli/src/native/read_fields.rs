@@ -206,7 +206,7 @@ fn {prefix}_fields_format() → FieldsFormat({prefix}_fields_codes()) {{
         {prefix}_three(), ThreeSpecs({s0}, {s1}, {s2}, {root}::{computes}),
         {prefix}_fields_codes(), {prefix}_fields_format(), {prefix}_jumps(), {prefix}_jump_facts(), {pj}, {prefix}_print_facts(),
         {prefix}_resident(), chunks, ok, ending, ending_ok, room, small, writes, writes_ok, written, written_ok, page, gprs, flags", computes = program.computes);
-    let premises = format!("chunks: List<ReadStep>, ok: EofChunks(chunks), ending: ReadEnding, ending_ok: EofEnding(ending),
+    let premises = format!("chunks: List<EofStep<True>>, ok: EofChunks(chunks), ending: EofEnd<False>, ending_ok: EofEnding(ending),
     room: {input}.len() + 4096 < Nat::pow(2, 64),
     small: ({s0}({input}) < 10000000) ∧ (({s1}({input}) < 10000000) ∧ ({s2}({input}) < 10000000)),
     writes: List<WriteStep>, writes_ok: WriteSteps(writes)({printed}), written: WriteEnding, written_ok: WriteEndingOk(written),

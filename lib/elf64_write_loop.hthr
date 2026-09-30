@@ -289,16 +289,27 @@ theorem wl_failed(memory: IoMemory, at: Nat, pj: PrintJumps,
 // The loop, by recursion on the writes: every short write advances, every
 // EINTR retries, and the last write sends the rest (then `after`) or fails
 // (exit 1).
+// What runs once all is sent, for writes that finish; writes that fail exit
+// 1 and need nothing after them.
+fn FinishedThen(ending: WriteEnding, memory: IoMemory, done: Nat, after: List<LinuxEvent>) → Type {
+    match ending { Finished => WriteThen(memory, done, after), WriteFailedWith(_) => True }
+}
+theorem finished_then(ending: WriteEnding, memory: IoMemory, done: Nat, after: List<LinuxEvent>, then: WriteThen(memory, done, after)):
+    FinishedThen(ending, memory, done, after) {
+    match ending as λ en => FinishedThen(en, memory, done, after) { Finished => then, WriteFailedWith(_) => trivial }
+}
+
 theorem wl_from_then(memory: IoMemory, at: Nat, pj: PrintJumps,
     done: Nat, pieces: WriteLoopResident(memory, at, pj), targets: WriteLoopTargets(at, done, pj),
-    after: List<LinuxEvent>, then: WriteThen(memory, done, after),
-    ending: WriteEnding, ending_ok: WriteEndingOk(ending), steps: List<WriteStep>):
+    after: List<LinuxEvent>, ending: WriteEnding, ending_ok: WriteEndingOk(ending), then: FinishedThen(ending, memory, done, after),
+    steps: List<WriteStep>):
     WlThen(memory, at, after, ending, steps) {
     let entry = io_entry();
     match steps as λ ss => WlThen(memory, at, after, ending, ss) {
         Nil => λ bytes ok state some fits at_write memory_is sends counted room =>
-            (match ending as λ en => WriteEndingOk(en) → LinuxRuns(io_linux(), write_events_then(bytes, Nil, en, after), state) {
-                Finished => λ _ => {
+            (match ending as λ en => WriteEndingOk(en) → FinishedThen(en, memory, done, after) →
+                    LinuxRuns(io_linux(), write_events_then(bytes, Nil, en, after), state) {
+                Finished => λ _ then => {
                     let asked = execute_block_normal(print_write_block(), state);
                     let w = wl_ask(memory, at, pj, pieces, state, at_write, memory_is);
                     let sends_there: LinuxWritesFrom(io_linux(), asked.memory, read_gpr(Rsi, asked.gprs), bytes) =
@@ -327,7 +338,7 @@ theorem wl_from_then(memory: IoMemory, at: Nat, pj: PrintJumps,
                                 then(finished.witness, finished.proof.right.right, finished.proof.right.left))
                         })
                 },
-                WriteFailedWith(errno) => λ bad => {
+                WriteFailedWith(errno) => λ bad _ => {
                     let asked = execute_block_normal(print_write_block(), state);
                     let w = wl_ask(memory, at, pj, pieces, state, at_write, memory_is);
                     let sends_there: LinuxWritesFrom(io_linux(), asked.memory, read_gpr(Rsi, asked.gprs), bytes) =
@@ -346,7 +357,7 @@ theorem wl_from_then(memory: IoMemory, at: Nat, pj: PrintJumps,
                                     failing.memory_is, failing.rip_is, refl))
                         })
                 },
-            })(ending_ok),
+            })(ending_ok, then),
         Cons(step, rest) => (match step as λ st => WlThen(memory, at, after, ending, Cons(st, rest)) {
             Partial(count) => λ bytes ok state some fits at_write memory_is sends counted room => {
                 let short: (count < bytes.len()) = ok.left;
@@ -396,7 +407,7 @@ theorem wl_from_then(memory: IoMemory, at: Nat, pj: PrintJumps,
                                     sends(i + count, b, whole))
                             };
                         linux_runs_after_steps(io_linux(), write_events_then(bytes.drop(count), rest, ending, after), returned, moved, back.proof.left,
-                            wl_from_then(memory, at, pj, done, pieces, targets, after, then, ending, ending_ok, rest)(
+                            wl_from_then(memory, at, pj, done, pieces, targets, after, ending, ending_ok, then, rest)(
                                 bytes.drop(count), ok.right, moved, rest_some(bytes.drop(count).len(), count, bytes.len(), rest_len, short),
                                 rest_fits(bytes.drop(count).len(), count, bytes.len(), rest_len, fits),
                                 back.proof.right.right.left, back.proof.right.left, sends_rest, moved_left,
@@ -426,7 +437,7 @@ theorem wl_from_then(memory: IoMemory, at: Nat, pj: PrintJumps,
                         let same_left: (read_gpr(R10, kept.gprs) = read_gpr(R10, state.gprs)) = refl;
                         linux_runs_after_steps(io_linux(), write_events_then(bytes, rest, ending, after), returned, kept,
                             fetched_steps_trans(io_fetch_access(), io_data_access(), returned, wl_failing(returned, pj), kept, failing.steps, back.steps),
-                            wl_from_then(memory, at, pj, done, pieces, targets, after, then, ending, ending_ok, rest)(
+                            wl_from_then(memory, at, pj, done, pieces, targets, after, ending, ending_ok, then, rest)(
                                 bytes, ok, kept, some, fits, back.rip_is, back.memory_is,
                                 j(sym(same_at), λ v _ => LinuxWritesFrom(io_linux(), memory, v, bytes), sends),
                                 trans(cong_fn<BitVec(64), Nat>(λ v => v.toNat(), same_left), counted),
@@ -442,8 +453,8 @@ theorem wl_from(memory: IoMemory, at: Nat, pj: PrintJumps,
     pieces: WriteLoopResident(memory, at, pj), targets: WriteLoopTargets(at, wl_at_exit(at), pj),
     ending: WriteEnding, ending_ok: WriteEndingOk(ending), steps: List<WriteStep>):
     WlThen(memory, at, [ExitEvent(BitVec::ofNat(0))], ending, steps) {
-    wl_from_then(memory, at, pj, wl_at_exit(at), pieces, targets, [ExitEvent(BitVec::ofNat(0))],
-        wl_exit(memory, at, pj, pieces), ending, ending_ok, steps)
+    wl_from_then(memory, at, pj, wl_at_exit(at), pieces, targets, [ExitEvent(BitVec::ofNat(0))], ending, ending_ok,
+        finished_then(ending, memory, wl_at_exit(at), [ExitEvent(BitVec::ofNat(0))], wl_exit(memory, at, pj, pieces)), steps)
 }
 
 // The targets from the displacements the producer proves at the written
