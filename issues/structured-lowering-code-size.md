@@ -26,3 +26,7 @@ Not blocking: [[native-wc]] lifted the one-page program limit instead
 (design §8.4). The fix is a set of new certified lowering shapes (flag
 branches, register copies, sign-extended immediates, in-place two-operand
 arithmetic), each with its own execution lemma.
+
+## Log
+
+- 2026-09-29: Design drafted: docs/structured-lowering-code-size-design.md (decisions open, §6). V1 measured the words as they lower today: field_low 424 instructions (97 movabs, 138 mov), field_high 603. A mark is 68 bytes where 19 would do, a place 84 where 18–25 would. Three capabilities, each one cause: F branches on the comparison's flags through a condition-code family (JumpIf/JumpIfNear over the manual's 16 cc's, absorbing JumpZero/JumpZeroNear/JumpSignNear) and a CodeBranch generalised over a BranchTest, with CMP inside the branch; P lets a result take a dead unprotected input's register and makes the passthrough arm empty (CodeWhen); I adds sign-extended short immediates (83/81 /0 /5, B8+r imm32) and xor for zero. Estimate: field_low about 600 bytes, field_high about 800. Shifts, a shared formatter copy and constant folding are out of scope.
