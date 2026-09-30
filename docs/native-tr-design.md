@@ -96,6 +96,13 @@ the rest are still the chunk's, RSI = page + i and RCX = n − i.
   parameters. `write_events` is the instance `after = [ExitEvent(0)]` at the
   adjacent exit block, so existing clients don't change. `tr`'s EOF jump
   reuses that exit block.
+  *As landed (2026-09-30):* `write_events_then(bytes, steps, ending,
+  after)`, with `write_events` its instance at `[ExitEvent(0)]`, and
+  `stdout_then` for what it sends. The loop is `wl_from_then`, taking the JZ's
+  target `done` (`WriteLoopTargets`) and a `WriteThen` continuation from
+  there. `wl_done` now only reaches `done`, and `wl_exit` is the old exit(0)
+  continuation. `wl_from` keeps its signature as the instance, so the `wc`
+  and `wc -l` tails did not change.
 - **The map process** (slice C, `lib/elf64_read_map.hthr`). Histories:
 
   ```text

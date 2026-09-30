@@ -190,19 +190,23 @@ inductive WriteEnding {
     WriteFailedWith(errno: Nat),
 }
 
-// The trace of writing `bytes` to stdout: exit 0 once all is sent, exit 1 at
-// a failure.
-fn write_events(bytes: List<BitVec(8)>, steps: List<WriteStep>, ending: WriteEnding) → List<LinuxEvent> {
+// The trace of writing `bytes` to stdout: `after` once all is sent, exit 1
+// at a failure (docs/native-tr-design.md §3.1).
+fn write_events_then(bytes: List<BitVec(8)>, steps: List<WriteStep>, ending: WriteEnding, after: List<LinuxEvent>) → List<LinuxEvent> {
     match steps {
         Nil => match ending {
-            Finished => [WriteEvent(BitVec::ofNat(1), bytes, Wrote(bytes.len())), ExitEvent(BitVec::ofNat(0))],
+            Finished => Cons(WriteEvent(BitVec::ofNat(1), bytes, Wrote(bytes.len())), after),
             WriteFailedWith(errno) => [WriteEvent(BitVec::ofNat(1), bytes, WriteFailed(errno)), ExitEvent(BitVec::ofNat(1))],
         },
         Cons(step, rest) => match step {
-            Partial(count) => Cons(WriteEvent(BitVec::ofNat(1), bytes, Wrote(count)), write_events(bytes.drop(count), rest, ending)),
-            WriteInterrupted => Cons(WriteEvent(BitVec::ofNat(1), bytes, WriteFailed(eintr())), write_events(bytes, rest, ending)),
+            Partial(count) => Cons(WriteEvent(BitVec::ofNat(1), bytes, Wrote(count)), write_events_then(bytes.drop(count), rest, ending, after)),
+            WriteInterrupted => Cons(WriteEvent(BitVec::ofNat(1), bytes, WriteFailed(eintr())), write_events_then(bytes, rest, ending, after)),
         },
     }
+}
+// Writing `bytes` as a program's last output: exit 0 once all is sent.
+fn write_events(bytes: List<BitVec(8)>, steps: List<WriteStep>, ending: WriteEnding) → List<LinuxEvent> {
+    write_events_then(bytes, steps, ending, [ExitEvent(BitVec::ofNat(0))])
 }
 // A short write sends less than what is left.
 fn WriteSteps(steps: List<WriteStep>) → List<BitVec(8)> → Type {
@@ -279,6 +283,23 @@ theorem stdout_is_bytes(steps: List<WriteStep>): (bytes: List<BitVec(8)>) → Wr
                 cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ tail => bytes.take(count) ++ tail, stdout_is_bytes(rest, bytes.drop(count), ok.right)),
                 bytes.take_append_drop(count)),
             WriteInterrupted => λ bytes ok => stdout_is_bytes(rest, bytes, ok),
+        },
+    }
+}
+
+// A finished write loop sends exactly the bytes, then whatever follows does.
+theorem stdout_then(steps: List<WriteStep>, after: List<LinuxEvent>): (bytes: List<BitVec(8)>) → WriteSteps(steps)(bytes) →
+    sent_to(BitVec::ofNat(1), write_events_then(bytes, steps, Finished, after)) = bytes ++ sent_to(BitVec::ofNat(1), after) {
+    match steps as λ ss => (bytes: List<BitVec(8)>) → WriteSteps(ss)(bytes) →
+            sent_to(BitVec::ofNat(1), write_events_then(bytes, ss, Finished, after)) = bytes ++ sent_to(BitVec::ofNat(1), after) {
+        Nil => λ bytes _ => cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ sent => sent ++ sent_to(BitVec::ofNat(1), after), take_whole(bytes)),
+        Cons(step, rest) => match step as λ st => (bytes: List<BitVec(8)>) → WriteSteps(Cons(st, rest))(bytes) →
+                sent_to(BitVec::ofNat(1), write_events_then(bytes, Cons(st, rest), Finished, after)) = bytes ++ sent_to(BitVec::ofNat(1), after) {
+            Partial(count) => λ bytes ok => trans(
+                cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ tail => bytes.take(count) ++ tail, stdout_then(rest, after, bytes.drop(count), ok.right)),
+                trans(sym(List::append_assoc(bytes.take(count), bytes.drop(count), sent_to(BitVec::ofNat(1), after))),
+                    cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ front => front ++ sent_to(BitVec::ofNat(1), after), bytes.take_append_drop(count)))),
+            WriteInterrupted => λ bytes ok => stdout_then(rest, after, bytes, ok),
         },
     }
 }
