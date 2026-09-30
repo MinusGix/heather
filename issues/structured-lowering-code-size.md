@@ -1,6 +1,6 @@
 ---
 title: Tighten the structured x86 lowering's code size
-status: open
+status: closed
 labels: [compiler,x86,native,perf]
 created: 2026-09-29
 updated: 2026-09-30
@@ -35,3 +35,4 @@ arithmetic), each with its own execution lemma.
 - 2026-09-30: Slice F′ landed (design §2.5): where a fused comparison's constant is loaded again by an arm, the reflector passes the prefix's port to the arms instead (share_compared_constant), so the place's false arm reads the threshold's register. field_low 1,534 → 1,374 bytes, field_high 2,225 → 1,945. P is next, then I.
 - 2026-09-30: P, first half (design §3.1): results in place. select threads a consumable set (input registers dead after a region and unprotected); lower_dag_consuming owns them like temporaries until their last use; a Compose places a lone result where the region's goes. field_low 1,374 → 1,038 bytes, field_high 1,945 → 1,507. The passthrough arm is still a BitOr(Const 0, x) copy; decided with the user (design §6 Q6, reopening Q3): a FunctionIR Move node, which lowers to nothing in place. That and CodeWhen are P's second half.
 - 2026-09-30: P, Move node landed (design §3.2): FunctionIR Move(width, output, source); an input returned unchanged is a Move, lowered to nothing where its source dies in the join's register. field_low 1,038 → 778 bytes, field_high 1,507 → 1,117. CodeWhen deferred until after I, to be weighed against the acceptance numbers.
+- 2026-09-30: Round closed. Slice I landed (85d9f4d4, design §4.1): AddRI8/AddRI32 and constant folding into ADD. field_low 637 bytes and field_high 868, 33% and 31% of 1,911 and 2,792 (acceptance ≤40%). scripts/perf ab --base 08d77938 --whole-tree (new mode, 82ae72b1) on the wc build: counters down 14–21% (decls_gated −16.8%, eval_steps −16.9%, conv_misses −18.4%), max RSS −12%; seconds −15% wall, −17% gate with samples separate, but the box was loaded (loadavg 7.6), so the seconds are indicative only. One item regressed: field-prints-gate-after-lowering-round. Deferred: structured-lowering-codewhen, helper-body-interface-trim.
