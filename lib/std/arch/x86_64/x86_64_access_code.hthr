@@ -118,9 +118,9 @@ fn ExecuteAccess<M>(access: ByteReadAccess<M>, code: AccessCode) → MachineStat
         AccessBranch(register, fd, jd, yes, no) => λ before after =>
             match structured_test(register, before).flags.zf {
                 False => Exists<MachineState<M>>(λ middle =>
-                    ExecuteAccess(access, yes, structured_branch_entry(register, fd, before), middle) ∧
+                    ExecuteAccess(access, yes, structured_branch_entry(NonZero(register), fd, before), middle) ∧
                     (after = execute_short_control(Jump(jd), middle))),
-                True => ExecuteAccess(access, no, structured_branch_entry(register, fd, before), after),
+                True => ExecuteAccess(access, no, structured_branch_entry(NonZero(register), fd, before), after),
             },
         AccessLoop(guard, flag, ed, body, step, bd) => λ before after => Exists<Nat>(λ n =>
             LoopRuns(ExecuteAccess(access, guard), ExecuteAccess(access, body), flag, ed, step, bd, n, before, after)),
@@ -163,23 +163,23 @@ theorem loop_runs_continue<M>(guard, body: MachineState<M> → MachineState<M> �
 theorem access_branch_true<M>(access: ByteReadAccess<M>, register: Gpr, fd, jd: BitVec(8),
     yes, no: AccessCode, before, middle: MachineState<M>,
     selected: structured_test(register, before).flags.zf = False,
-    step: ExecuteAccess(access, yes, structured_branch_entry(register, fd, before), middle)):
+    step: ExecuteAccess(access, yes, structured_branch_entry(NonZero(register), fd, before), middle)):
     ExecuteAccess(access, AccessBranch(register, fd, jd, yes, no), before, execute_short_control(Jump(jd), middle)) {
     j(sym(selected), λ flag _ => match flag {
-        False => Exists<MachineState<M>>(λ next => ExecuteAccess(access, yes, structured_branch_entry(register, fd, before), next) ∧
+        False => Exists<MachineState<M>>(λ next => ExecuteAccess(access, yes, structured_branch_entry(NonZero(register), fd, before), next) ∧
             (execute_short_control(Jump(jd), middle) = execute_short_control(Jump(jd), next))),
-        True => ExecuteAccess(access, no, structured_branch_entry(register, fd, before), execute_short_control(Jump(jd), middle)),
+        True => ExecuteAccess(access, no, structured_branch_entry(NonZero(register), fd, before), execute_short_control(Jump(jd), middle)),
     }, Exists(middle, ⟨step, refl⟩))
 }
 theorem access_branch_false<M>(access: ByteReadAccess<M>, register: Gpr, fd, jd: BitVec(8),
     yes, no: AccessCode, before, after: MachineState<M>,
     selected: structured_test(register, before).flags.zf = True,
-    step: ExecuteAccess(access, no, structured_branch_entry(register, fd, before), after)):
+    step: ExecuteAccess(access, no, structured_branch_entry(NonZero(register), fd, before), after)):
     ExecuteAccess(access, AccessBranch(register, fd, jd, yes, no), before, after) {
     j(sym(selected), λ flag _ => match flag {
-        False => Exists<MachineState<M>>(λ middle => ExecuteAccess(access, yes, structured_branch_entry(register, fd, before), middle) ∧
+        False => Exists<MachineState<M>>(λ middle => ExecuteAccess(access, yes, structured_branch_entry(NonZero(register), fd, before), middle) ∧
             (after = execute_short_control(Jump(jd), middle))),
-        True => ExecuteAccess(access, no, structured_branch_entry(register, fd, before), after),
+        True => ExecuteAccess(access, no, structured_branch_entry(NonZero(register), fd, before), after),
     }, step)
 }
 

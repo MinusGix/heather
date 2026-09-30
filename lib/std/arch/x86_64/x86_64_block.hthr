@@ -735,6 +735,20 @@ theorem near_taken_rip<M>(displacement: BitVec(32), state: MachineState<M>, sele
         near_branch_target(state.rip, 6, displacement), refl)
 }
 
+// The same for any condition code: where Jcc rel32 leaves RIP.
+theorem near_if_not_taken_rip<M>(cc: ConditionCode, displacement: BitVec(32), state: MachineState<M>,
+    selected: condition_holds(cc, state.flags) = False):
+    execute_near_control(JumpIfNear(cc, displacement), state).rip = next_rip(state.rip, 6) {
+    j(sym(selected), λ holds _ => (match holds { False => next_rip(state.rip, 6), True => near_branch_target(state.rip, 6, displacement) }) =
+        next_rip(state.rip, 6), refl)
+}
+theorem near_if_taken_rip<M>(cc: ConditionCode, displacement: BitVec(32), state: MachineState<M>,
+    selected: condition_holds(cc, state.flags) = True):
+    execute_near_control(JumpIfNear(cc, displacement), state).rip = near_branch_target(state.rip, 6, displacement) {
+    j(sym(selected), λ holds _ => (match holds { False => next_rip(state.rip, 6), True => near_branch_target(state.rip, 6, displacement) }) =
+        near_branch_target(state.rip, 6, displacement), refl)
+}
+
 theorem erase_af_short_commute<M>(control: ShortControl, before: MachineState<M>):
     erase_af(execute_short_control(control, before)) =
     erase_af(execute_short_control(control, erase_af(before))) {

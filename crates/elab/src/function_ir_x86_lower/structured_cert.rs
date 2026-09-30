@@ -250,8 +250,10 @@ fn emit(n: &str, r: &StructuredRegion, p: &LoweredStructured, incoming: &Values,
             };
             let target = |start: &str, length: usize, displacement: &str| if *near { format!("near_branch_target({start}, {length}, {displacement})") }
                 else { format!("short_branch_target({start}, {displacement})") };
-            let entry = format!("{entry_fn}({register}, {fd}, before)");
-            let branch_args = format!("{register}, {fd}, {jd}, {t}_code(), {f}_code(), before");
+            // What the branch tests, as `StructuredCode` spells it.
+            let test = format!("NonZero({register})");
+            let entry = format!("{entry_fn}({test}, {fd}, before)");
+            let branch_args = format!("{test}, {fd}, {jd}, {t}_code(), {f}_code(), before");
             let bit = test_of(&incoming[condition]).unwrap_or_else(|| format!("@bitvec::BitVec::head_bit(0, {})", val(incoming, *condition, 1)));
             let placed = format!("test_bit_value_placed_zf(λ width _ => {}, {condition}, {register}, before, placed_{condition})", incoming[condition]);
             let child_args = args(when_true);
@@ -307,7 +309,7 @@ fn emit(n: &str, r: &StructuredRegion, p: &LoweredStructured, incoming: &Values,
             let false_layout = transported(&t, &format!("{} = next_rip(start, {jz} + (y + {jmp}))", target("start", jz, &fd)), &format!("{n}_false_target(start)"));
             let join_layout = transported(&f, &format!("{} = next_rip(start, {jmp} + y)", target("start", jmp, &jd)), &format!("{n}_join_target(start)"));
             let false_decodes = format!("j(cong_fn<Nat, Nat>(λ k => {head} + k + {jmp}, sym({t}_byte_length())), λ y _ => StructuredDecodes({f}_code(), next_rip(start, y)), {f}_decodes(next_rip(start, {head} + {} + {jmp})))", yes.byte_length);
-            (format!("{constructor}({register}, {fd}, {jd}, {t}_code(), {f}_code())"),
+            (format!("{constructor}({test}, {fd}, {jd}, {t}_code(), {f}_code())"),
                 results, proofs, memory, span,
                 format!("⟨λ start => {false_layout}, ⟨λ start => {join_layout}, ⟨{t}_layout(), {f}_layout()⟩⟩⟩"),
                 format!("⟨canonical_encoding_decodes(start, TestRR({register}, {register})), ⟨{jz_decodes}, ⟨{t}_decodes(next_rip(start, {head})), ⟨{jmp_decodes}, {false_decodes}⟩⟩⟩⟩"),

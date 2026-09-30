@@ -11,14 +11,14 @@ theorem end_path<M>(access: ByteReadAccess<M>, before: MachineState<M>,
     pc: cursor_word = read_gpr(Rsi, before.gprs), pl: length_word = read_gpr(Rdx, before.gprs),
     ended: nat::Nat::leb(length, cursor) = True):
     ExecuteAccess(access, whole_code(), before,
-        zero_after(structured_branch_entry(Rax, @bitvec::BitVec::ofNat(8, $FD), guard_after(before)))) {
+        zero_after(structured_branch_entry(NonZero(Rax), @bitvec::BitVec::ofNat(8, $FD), guard_after(before)))) {
     let guarded = guard_after(before);
     let selected = trans(loop_bounds_zf(Rax, guarded, cursor_word, length_word, cursor, length, cw, lw,
         guard_typed_correct(cursor_word, length_word, before, pc, pl)), ended);
     access_sequence(access, AccessPure(guard_code()), branch_code(), before, guarded,
-        zero_after(structured_branch_entry(Rax, @bitvec::BitVec::ofNat(8, $FD), guarded)), refl,
+        zero_after(structured_branch_entry(NonZero(Rax), @bitvec::BitVec::ofNat(8, $FD), guarded)), refl,
         access_branch_false(access, Rax, @bitvec::BitVec::ofNat(8, $FD), @bitvec::BitVec::ofNat(8, $JD), yes_code(), AccessPure(zero_code()),
-            guarded, zero_after(structured_branch_entry(Rax, @bitvec::BitVec::ofNat(8, $FD), guarded)), selected, refl))
+            guarded, zero_after(structured_branch_entry(NonZero(Rax), @bitvec::BitVec::ofNat(8, $FD), guarded)), selected, refl))
 }
 
 theorem read_path<M>(access: ByteReadAccess<M>, before: MachineState<M>, buffer: ReadonlyBytes,
@@ -32,7 +32,7 @@ theorem read_path<M>(access: ByteReadAccess<M>, before: MachineState<M>, buffer:
     Exists<MachineState<M>>(λ after => AccessArtifact<M>(access, whole_code(), whole_bytes(), before, after) ∧
         (read_gpr(Rax, after.gprs) = @bitvec::BitVec::zero_extend(8, 56, byte))) {
     let guarded = guard_after(before);
-    let entry = structured_branch_entry(Rax, @bitvec::BitVec::ofNat(8, $FD), guarded);
+    let entry = structured_branch_entry(NonZero(Rax), @bitvec::BitVec::ofNat(8, $FD), guarded);
     let addressed = address_after(entry);
     let address_correct = address_typed_correct(base_word, cursor_word, entry,
         trans(pb, sym(guard_preserves(Rdi, before, trivial))), trans(pc, sym(guard_preserves(Rsi, before, trivial))));
@@ -64,7 +64,7 @@ theorem end_artifact<M>(access: ByteReadAccess<M>, before: MachineState<M>,
     ended: nat::Nat::leb(length, cursor) = True):
     Exists<MachineState<M>>(λ after => AccessArtifact<M>(access, whole_code(), whole_bytes(), before, after) ∧
         (read_gpr(Rax, after.gprs) = @bitvec::BitVec::zero(64))) {
-    let entry = structured_branch_entry(Rax, @bitvec::BitVec::ofNat(8, $FD), guard_after(before));
+    let entry = structured_branch_entry(NonZero(Rax), @bitvec::BitVec::ofNat(8, $FD), guard_after(before));
     Exists(zero_after(entry), ⟨AccessArtifact(encoding := whole_encoding(), layout := whole_layout(),
         execution := end_path(access, before, cursor_word, length_word, cursor, length, cw, lw, pc, pl, ended)),
         zero_typed_correct(entry)⟩)

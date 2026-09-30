@@ -37,7 +37,7 @@ fn nested_source_physical_certificate_checks() {
     use heather_elab::function_ir_x86_lower::StructuredPlan;
     let StructuredPlan::Sequence { continuation, .. } = &emission.lowered.body else { panic!() };
     let StructuredPlan::Conditional { condition_register, false_displacement, join_displacement, .. } = &continuation.body else { panic!() };
-    let wrong_code = format!("CodeBranch({}, @bitvec::BitVec::ofNat(8, {}), @bitvec::BitVec::ofNat(8, {}), nested_continuation_true_code(), nested_continuation_false_code())", condition_register.heather_name(), false_displacement + 1, join_displacement);
+    let wrong_code = format!("CodeBranch(NonZero({}), @bitvec::BitVec::ofNat(8, {}), @bitvec::BitVec::ofNat(8, {}), nested_continuation_true_code(), nested_continuation_false_code())", condition_register.heather_name(), false_displacement + 1, join_displacement);
     let imports = "import nested_certificate; import branches; import x86_64_structured_block; import x86_64; import function_ir; import bitvec; import logic;";
     for (name, claim) in [
         ("wrong_target", format!("theorem wrong_target(): StructuredLayout({wrong_code}) {{ nested_continuation_layout() }}")),
