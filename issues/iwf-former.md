@@ -1,0 +1,62 @@
+---
+title: IWf: finitary inductive families as a former, with no stored index equation
+status: open
+labels: [kernel,design,delam,metatheory]
+created: 2026-09-30
+updated: 2026-09-30
+---
+
+Owns the `IWf` former round: `docs/iwf-former-design.md` (design sketch,
+2026-09-30, not yet reviewed). This is [[indexed-families]]'s route 4,
+extended with an output-index function. It is Dybjer's finitary inductive
+families in `Wf`'s shape:
+- `IWf(I; x:S. n; x. o; x i. c)(m)`;
+- `sup_i(a; cs) : IWf(…)(o[a])`;
+- children in a dependent tuple `DVec(k; i. F)`.
+
+## Why now
+
+Route 2b stores an index equation in every value, and uses it through
+`transp` with the strip. [[sprop-strip-normalization-open]] found two costs
+the round had not priced:
+- The strip is Werner's rule, open predicatively.
+- A computing `transp` into relevant motives gives UIP for `Id`.
+
+A constructor that *is* at its result index stores nothing, so neither
+cost arises.
+
+## What the design claims
+
+The full argument is in the doc. Items marked checked have a Coq probe:
+`../Lean/delam/probes/IwfProbe.v`.
+
+- β fires on every constructor on open data, including at a computed
+  result index. There is no form B. (checked)
+- Value equality is equality of the shape and the children, with no
+  proof component. Cross-spelling holds by conversion.
+- Fording's F1–F3 rejections lift, because child indices are stored, not
+  recomputed. (F2, F3 checked)
+- `dnth` is derivable in the kernel's first-order style: a fixed family,
+  with the motive quantifying over an embedding `Fin k → Fin n`. It
+  reduces to projections on a neutral tuple. (checked)
+- Inversion at a constructor-headed index is form A's motive device,
+  kept. (checked on `vhead`)
+- There is no negative premise, conversion premise or strip in
+  reduction, and no stored proof.
+
+## Open, before freezing (doc §12)
+
+The family's level (`l ⊔ li` or `l`); whether `transp` is removed or
+restricted to strict motives (a `docs/sprop-design.md` revision); a model
+argument for no-UIP; and matching without K at non-invertible indices,
+which is a new elaborator piece.
+
+## What it assumes from elsewhere
+
+- **[[indexed-families]]** owns the route choice. Assumed here: only that
+  route 4 was set aside for its cost, not for a defect.
+- **[[sprop-strip-normalization-open]]** owns the findings about `transp`.
+  Assumed here: only its two conclusions, UIP and the open normalization
+  question.
+- **[[wf-former]]** owns `Wf`/`Vec`/`Fin`. Assumed here: their rules as in
+  `docs/wf-former-design.md`, which this former extends.

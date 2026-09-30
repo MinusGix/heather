@@ -98,3 +98,4 @@ These were checked on paper in the formalization (S5 there).
 ## Log
 
 - 2026-09-30: Independent of normalization: `transp` into relevant motives with β at `srefl` (even propositional β), together with `sEq`'s irrelevance, proves UIP for `Id`. `fromS e := transp(z. Id(u; z); e; refl)` and `toS` by J satisfy `fromS (toS p) = p` by J, and `toS p ≡ toS q` by irrelevance. Checked in Coq with an abstract interface (delam `M10_DESIGN.md` S6); this is GCST's "without K" point. The frozen rule set therefore has UIP for `Id`, and so does any CCobs-style variant. Avoiding UIP means `sEq` eliminates only into strict propositions, and route 2b's form-B arm needs another shape.
+- 2026-09-30: Proposed resolution: remove the need for a relevant `transp` rather than justify it. Indexed families become a former with no stored equation, [[iwf-former]]. The strict propositions stay, eliminating only into strict propositions.
