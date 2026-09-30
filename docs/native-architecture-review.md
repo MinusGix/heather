@@ -1,6 +1,6 @@
 # The native program stack: an architecture review
 
-Status: **review, 2026-09-30. R0–R4 chosen and landed the same day (§8); R5 onward open.** Read-only
+Status: **review, 2026-09-30. R0–R5 chosen and landed the same day (§8); R6 onward open.** Read-only
 survey of what `wc -l`, `wc` and `tr` left behind, taken before a fourth
 program (`tr -s`/`-d`, `issues/native-loop-emitting-stores.md`) adds another
 process. The question is engineering, not speed: what is repeated, what is
