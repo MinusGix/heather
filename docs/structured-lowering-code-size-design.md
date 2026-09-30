@@ -1,6 +1,6 @@
 # A tighter structured x86 lowering — design
 
-Status: **decisions taken 2026-09-29 (§6, all as recommended); probes V2–V5 done 2026-09-29 (§7.1); slice F landed 2026-09-30 (§2.4), F′ the same day (§2.5), P's in-place results too (§3.1); P's `Move` node and `CodeWhen` next (§6 Q6), then I.** Owner:
+Status: **decisions taken 2026-09-29 (§6, all as recommended); probes V2–V5 done 2026-09-29 (§7.1); slice F landed 2026-09-30 (§2.4), F′ the same day (§2.5), P's in-place results (§3.1) and `Move` node (§3.2) too; `CodeWhen` next, then I.** Owner:
 `issues/structured-lowering-code-size.md`. Also lands
 `issues/function-ir-x86-fused-compare-branch.md`. Builds on
 `docs/native-wc-design.md` §4.5 (near conditionals) and §5.1 (the measurement
@@ -294,7 +294,7 @@ rcx`, because FunctionIR has no copy node and the reflector spells an input
 returned as a result as `BitOr(Const 0, x)`. §3 claimed the arm becomes empty
 without saying how. A probe found `bor(0, x) = x` holds by `refl` (with the
 zero on the left; `bor(x, 0) = x` does not), so an empty arm's proof needs
-no lemma. What remains is a choice (§6 Q6: a `Move` node).
+no lemma. What remains is a choice (§6 Q6: a `Move` node, landed as §3.2).
 
 Tests: `lower_dag` overwrites a consumable input only at its last use and
 refuses a consumable register that holds no input. A helper's result lands
@@ -302,6 +302,37 @@ in the caller's register and the caller adds in place. The same wrapper
 theorem, a caller keeping RDI, checks when RDI is kept and is refused
 (`trivial` proves `True`, `False` expected) when RDI was consumed. The field
 words certify.
+
+### 3.2 The `Move` node as landed (2026-09-30)
+
+FunctionIR gains `Move(width, output, source)`, whose `NodeHolds` is
+`values(width, output) = values(width, source)`. Its validity is a unary
+node's (`node_indexed_move`). The reflector spells an input returned as a
+result with it. The source expansion and the certificate spell its value as
+the source's, as they spelled `0 | x` before, and a carried natural follows
+it. That removed the zero-tracking both kept for the old idiom.
+
+`lower_dag` lowers a `Move` to nothing when the source is at its last use in
+a register the DAG owns, a consumable input or a temporary. The copy is then
+the source's register. Anywhere else it is a `mov`. Its proof is the node's
+equation chained onto the source's placement, and through the `mov`'s step
+result when there is one. A leaf of no instructions is an empty
+`CodeBlock`, and its certificate needed only the empty instruction list.
+
+`field_low` 1,038 → 778 bytes (217 → 177 instructions), `field_high` 1,507
+→ 1,117 (310 → 250). A mark's passthrough arm is now empty:
+`cmp ; jae +2 ; jmp join ; movabs rcx, w ; add rax, rcx`. `CodeWhen` (§2.3)
+turns `jae +2 ; jmp join` into one `jb join`.
+
+Tests: `keep_twice` (a threshold step applied to its own result).
+- Reflection: its reflected region has two `Move`s and no `BitOr`. The
+  outer step's true arm plans to no instructions. The inner step's is
+  `mov rax, rdi`, because the caller's `a` stays.
+- Interpreter and source expansion: the interpreter agrees at the edges,
+  and the source expansion checks.
+- Certificate: it checks, and a region whose `Move` copies `b` there is
+  refused.
+- Native: it runs against C in `native_branches`.
 
 ## 4. I: short immediates
 

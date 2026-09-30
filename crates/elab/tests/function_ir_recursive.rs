@@ -40,6 +40,13 @@ fn take_threshold(a, b: BitVec(64)) → BitVec(64) {
         True => @bitvec::BitVec::add(64, a, b),
     }
 }
+fn keep_below(a, b: BitVec(64)) → BitVec(64) {
+    match @bitvec::BitVec::unsigned_lt_bit(64, a, @bitvec::BitVec::ofNat(64, 4294967296)) {
+        True => a,
+        False => @bitvec::BitVec::add(64, @bitvec::BitVec::sub(64, a, @bitvec::BitVec::ofNat(64, 4294967296)), b),
+    }
+}
+fn keep_twice(a, b: BitVec(64)) → BitVec(64) { keep_below(keep_below(a, b), b) }
 fn wrong_condition(a, b: BitVec(64)) → BitVec(64) {
     match @bitvec::BitVec::signed_lt_bit(64, a, b) {
         False => @bitvec::BitVec::sub(64, a, b), True => @bitvec::BitVec::add(64, a, b),
@@ -661,4 +668,51 @@ fn a_constant_its_comparison_loads_is_carried_into_the_arm() {
     for node in &mut arm.nodes { if let Node::Sub { right, .. } = node { assert_eq!(*right, loaded); *right = 1; } }
     let text = generate_structured_source_expansion("uncarried", &wrong).unwrap();
     assert!(image.elaborator().elab_module_source("uncarried_agreement", &text).is_err());
+}
+
+// An input returned unchanged is a Move, and where it is dead after the arm
+// and already in the join's register the arm is empty
+// (docs/structured-lowering-code-size-design.md §6 Q6): the outer step's
+// state is the inner step's result. The inner step's state is the caller's
+// `a`, which stays, so there the Move is a `mov`.
+#[test]
+fn a_dead_state_passed_through_is_an_empty_arm() {
+    let elab = source_elaborator();
+    let reflected = reflect_elaborated_structured(&elab, "keep_twice").unwrap_or_else(|e| panic!("{e}"));
+    fn nodes(region: &StructuredRegion, out: &mut Vec<Node>) {
+        match region {
+            StructuredRegion::Dataflow(region) => out.extend(region.nodes.iter().copied()),
+            StructuredRegion::Sequence { prefix, continuation } => { out.extend(prefix.nodes.iter().copied()); nodes(continuation, out); }
+            StructuredRegion::Compose { prefix, continuation } => { nodes(prefix, out); nodes(continuation, out); }
+            StructuredRegion::Conditional { when_true, when_false, .. } => { nodes(when_true, out); nodes(when_false, out); }
+        }
+    }
+    let mut all = Vec::new();
+    nodes(&reflected.region, &mut all);
+    assert_eq!(all.iter().filter(|node| matches!(node, Node::Move { .. })).count(), 2, "{all:?}");
+    assert!(!all.iter().any(|node| matches!(node, Node::BitOr { .. })), "a passthrough is no longer 0 | x");
+    let plan = lower_structured(&reflected.region, &placement(), SCRATCH, Gpr::Rax).unwrap_or_else(|e| panic!("{e}"));
+    let StructuredPlan::Compose { prefix, continuation } = &plan.body else { panic!("expected a composition, got {:?}", plan.body) };
+    let true_arm = |plan: &LoweredStructured| {
+        let StructuredPlan::FusedSequence { continuation, .. } = &plan.body else { panic!("expected a fused step, got {:?}", plan.body) };
+        let StructuredPlan::Conditional { when_true, .. } = &continuation.body else { panic!("expected a branch") };
+        let StructuredPlan::Dataflow(dag) = &when_true.body else { panic!("expected a dataflow arm") };
+        dag.instructions.clone()
+    };
+    assert_eq!(true_arm(prefix), vec![Instruction::MovRR { destination: Gpr::Rax, source: Gpr::Rdi }], "the caller's a stays");
+    assert_eq!(true_arm(continuation), vec![], "the inner result passes through in place");
+    assert!(!plan.clobbered.contains(&Gpr::Rdi) && !plan.clobbered.contains(&Gpr::Rsi));
+    let threshold = 1u64 << 32;
+    let step = |a: u64, b: u64| if a < threshold { a } else { a.wrapping_sub(threshold).wrapping_add(b) };
+    for a in [0u64, 1, threshold - 1, threshold, threshold + 1, 2 * threshold, u64::MAX] {
+        for b in [0u64, 7, threshold, u64::MAX] {
+            let mut regs = BTreeMap::from([(Gpr::Rdi, a), (Gpr::Rsi, b)]);
+            for r in SCRATCH { regs.insert(*r, u64::MAX); }
+            run(&plan, &mut regs);
+            assert_eq!(regs[&Gpr::Rax], step(step(a, b), b), "keep_twice({a}, {b})");
+        }
+    }
+    let image = elab.semantic_image();
+    let text = generate_structured_source_expansion("kept", &reflected).unwrap();
+    image.elaborator().elab_module_source("kept_agreement", &text).unwrap_or_else(|error| panic!("{}", error.render(&text)));
 }

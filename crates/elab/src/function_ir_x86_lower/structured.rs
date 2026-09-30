@@ -223,6 +223,7 @@ fn select_here(
                     match selected_node(*node, index)? {
                         SelectedNode::Binary(n) => { needed.insert(n.left); needed.insert(n.right); }
                         SelectedNode::Comparison(n) => { needed.insert(n.left); needed.insert(n.right); }
+                        SelectedNode::Move(n) => { needed.insert(n.source); }
                         SelectedNode::Constant(_) => {}
                     }
                     nodes.push(*node);
@@ -432,6 +433,7 @@ pub(crate) fn cone(region: &Region, wanted: u64) -> Result<Vec<Node>, LoweringEr
         match selected_node(*node, index)? {
             SelectedNode::Binary(n) => { needed.insert(n.left); needed.insert(n.right); }
             SelectedNode::Comparison(n) => { needed.insert(n.left); needed.insert(n.right); }
+            SelectedNode::Move(n) => { needed.insert(n.source); }
             SelectedNode::Constant(_) => {}
         }
         nodes.push(*node);

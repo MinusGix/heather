@@ -91,6 +91,7 @@ pub(super) fn valuation_expressions(module: &mut Module, prefix: &str, graph_pre
     for &node in &region.nodes {
         let expr = match node {
             Node::Const { value: constant, .. } => Expr::explicit_call("bitvec::BitVec::ofNat", [Expr::name("width"), Expr::nat(constant)]),
+            Node::Move { source, .. } => value(source),
             Node::Add { left, right, .. } => Expr::explicit_call("bitvec::BitVec::add", [Expr::name("width"), value(left), value(right)]),
             Node::Sub { left, right, .. } => Expr::explicit_call("bitvec::BitVec::sub", [Expr::name("width"), value(left), value(right)]),
             Node::BitAnd { left, right, .. } => Expr::explicit_call("bitvec::BitVec::band", [Expr::name("width"), value(left), value(right)]),

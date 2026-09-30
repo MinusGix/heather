@@ -317,6 +317,7 @@ struct Dag { nodes: Vec<Node>, values: BTreeMap<DagKey, Port> }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum DagKey {
     Constant(u64, u64),
+    Move(u64, u64),
     Binary(SourceBinaryOperation, u64, u64, u64),
     UnsignedLessThan(u64, u64, u64),
 }
@@ -338,6 +339,7 @@ fn read_back(nodes: &[Node], port: Port, produced: &cert::SourceValues) -> Optio
     let operand = |id: u64, width: u64| read_back(nodes, Port { id, width }, produced).map(Box::new);
     Some(match *node {
         Node::Const { width, value, .. } => SourceValue::Constant { width, value },
+        Node::Move { width, source, .. } => return read_back(nodes, Port { id: source, width }, produced),
         Node::UnsignedLessThan { width, left, right, .. } => SourceValue::Less { width, left: operand(left, width)?, right: operand(right, width)? },
         Node::Add { width, left, right, .. } | Node::Sub { width, left, right, .. } | Node::BitAnd { width, left, right, .. }
         | Node::BitOr { width, left, right, .. } | Node::BitXor { width, left, right, .. } => {
@@ -381,10 +383,7 @@ impl Builder<'_> {
     /// An input as a result: the port itself, or a copy into `target`.
     fn place(&mut self, dag: &mut Dag, width: u64, input: Port, target: Option<u64>) -> Result<Port, SourceError> {
         match target {
-            Some(output) => {
-                let zero = self.constant(dag, width, 0, None)?;
-                self.node(dag, DagKey::Binary(SourceBinaryOperation::BitOr, width, zero.id, input.id), width, Some(output), |output| Node::BitOr { width, output, left: zero.id, right: input.id })
-            }
+            Some(output) => self.node(dag, DagKey::Move(width, input.id), width, Some(output), |output| Node::Move { width, output, source: input.id }),
             None => Ok(input),
         }
     }
@@ -722,7 +721,7 @@ pub fn generate_structured_source_expansion(prefix: &str, reflected: &ReflectedS
     let arguments = reflected.declared_arguments();
     let initial = reflected.initial_values();
     let mut expansion = Expansion { prefix, module: &mut module, next_name: 0, parameters: &parameters, arguments: &arguments, result: reflected.result, choice: reflected.choice.as_ref(),
-        record: reflected.record.as_ref(), naturals: natural_inputs(reflected), constants: BTreeMap::new(), sources: &reflected.sources, zeros: BTreeSet::new(), tests: BTreeMap::new() };
+        record: reflected.record.as_ref(), naturals: natural_inputs(reflected), constants: BTreeMap::new(), sources: &reflected.sources, tests: BTreeMap::new() };
     let result = expansion.region(&reflected.region, initial)?;
     let name = format!("{prefix}_expression");
     let result_name = reflected.result_type_name();
@@ -751,9 +750,6 @@ struct Expansion<'a> {
     constants: BTreeMap<u64, u64>,
     /// Composed results cross at their source spelling (cert::SourceValue).
     sources: &'a cert::SourceValues,
-    /// Zero constants, any width: `x | 0` is spelled `x`, as the source
-    /// spells a passthrough.
-    zeros: BTreeSet<u64>,
     /// A one-bit value's Boolean, where it has one (a comparison, a Bool
     /// helper's call): a branch reads it rather than `head_bit` of the bit,
     /// which conversion would evaluate, and through it everything below.
@@ -839,13 +835,11 @@ impl Expansion<'_> {
     }
     fn dataflow(&mut self, region: &Region, values: &mut Expressions) -> Result<(), SourceError> {
         for node in &region.nodes {
-            if let Node::Const { output, value: 0, .. } = *node { self.zeros.insert(output); }
             let (id, width, expression) = match *node {
                 Node::Const { width, output, value } => (output, width, HeatherExpr::explicit_call("bitvec::BitVec::ofNat", [HeatherExpr::nat(width), HeatherExpr::nat(value)])),
-                // A passthrough is spelled as the value it passes, as the
-                // source spells it: `0 | x` would make conversion evaluate `x`
-                // bit by bit, and through it everything that computed `x`.
-                Node::BitOr { width, output, left, right } if self.zeros.contains(&left) => (output, width, operand(values, right, width)?),
+                // A copy is spelled as the value it copies, as the source
+                // spells it.
+                Node::Move { width, output, source } => (output, width, operand(values, source, width)?),
                 Node::Add { width, output, left, right } | Node::Sub { width, output, left, right }
                 | Node::BitAnd { width, output, left, right } | Node::BitOr { width, output, left, right }
                 | Node::BitXor { width, output, left, right } | Node::UnsignedLessThan { width, output, left, right } => {
@@ -870,7 +864,7 @@ impl Expansion<'_> {
         Ok(())
     }
     /// Follow a Nat through the only nodes a carried Nat reflects to: `Succ` as
-    /// `Add(n, 1)`, and a passthrough as `BitOr(0, n)`.
+    /// `Add(n, 1)`, and a passthrough as `Move`.
     fn track_natural(&mut self, node: &Node) {
         match *node {
             Node::Const { width: 64, output, value } => { self.constants.insert(output, value); }
@@ -884,8 +878,8 @@ impl Expansion<'_> {
                     self.naturals.insert(output, (HeatherExpr::raw(format!("Succ({})", natural.render())), Some(HeatherExpr::raw(proof))));
                 }
             }
-            Node::BitOr { width: 64, output, left, right } if self.constants.get(&left) == Some(&0) => {
-                if let Some(carried) = self.naturals.get(&right).cloned() { self.naturals.insert(output, carried); }
+            Node::Move { width: 64, output, source } => {
+                if let Some(carried) = self.naturals.get(&source).cloned() { self.naturals.insert(output, carried); }
             }
             _ => {}
         }

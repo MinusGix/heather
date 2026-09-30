@@ -229,7 +229,7 @@ pub fn generate_elaborated_typed_x86(
     }
     let initial = reflected.initial_values();
     let mut expansion = Expansion { prefix: &format!("{prefix}_publication"), module: &mut module, next_name: 0, parameters: &parameters, arguments: &arguments, result: reflected.result, choice: reflected.choice.as_ref(),
-        record: reflected.record.as_ref(), naturals: natural_inputs(&reflected), constants: BTreeMap::new(), sources: &reflected.sources, zeros: Default::default(), tests: Default::default() };
+        record: reflected.record.as_ref(), naturals: natural_inputs(&reflected), constants: BTreeMap::new(), sources: &reflected.sources, tests: Default::default() };
     let observed = observe_tree(&mut expansion, &reflected.region, initial, &observers, &result_type, &observation_types)?;
     let mut cases = "@bitvec::BitVec::zero(width)".to_string();
     for (id, ty) in reflected.parameters.iter().enumerate().rev() {
@@ -340,7 +340,7 @@ pub fn generate_elaborated_typed_fields_x86(
     }
     let initial = reflected.initial_values();
     let mut expansion = Expansion { prefix: &format!("{prefix}_publication"), module: &mut module, next_name: 0, parameters: &parameters, arguments: &arguments, result: reflected.result, choice: reflected.choice.as_ref(),
-        record: reflected.record.as_ref(), naturals: natural_inputs(&reflected), constants: BTreeMap::new(), sources: &reflected.sources, zeros: Default::default(), tests: Default::default() };
+        record: reflected.record.as_ref(), naturals: natural_inputs(&reflected), constants: BTreeMap::new(), sources: &reflected.sources, tests: Default::default() };
     let observed = observe_tree(&mut expansion, &reflected.region, initial, &observers, &result_type, &observation_types)?;
     let mut cases = "@bitvec::BitVec::zero(width)".to_string();
     for (id, ty) in reflected.parameters.iter().enumerate().rev() {

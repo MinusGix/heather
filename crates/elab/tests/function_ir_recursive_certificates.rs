@@ -184,3 +184,34 @@ fn a_consumed_input_is_no_longer_protected() {
         }
     }
 }
+
+// The outer step's passthrough arm is empty, and its certificate checks; a
+// region whose Move copies another value there is refused.
+#[test]
+fn an_empty_passthrough_arm_certifies_and_another_copy_is_refused() {
+    use heather_elab::function_ir_source::generate_elaborated_structured_x86;
+    use heather_elab::function_ir_x86_lower::Gpr;
+    let mut elab = common::base_image(common::MODULES.len());
+    let model = include_str!("../../../lib/std/arch/x86_64/x86_64_structured_block.hthr");
+    elab.elab_module_source("x86_64_structured_block", model).unwrap_or_else(|e| panic!("{}", e.render(model)));
+    let source = include_str!("../../../examples/x86-native/branches.hthr");
+    elab.elab_module_source("branches", source).unwrap_or_else(|e| panic!("{}", e.render(source)));
+    let scratch = [Gpr::Rax, Gpr::Rcx, Gpr::Rdx, Gpr::R8];
+    let emission = generate_elaborated_structured_x86(&elab, "keep_twice", "branches::keep_twice", [Gpr::Rdi, Gpr::Rsi], &scratch, Gpr::Rax)
+        .unwrap_or_else(|e| panic!("keep_twice: {e:?}"));
+    let text = format!("import x86_64_structured_block; import function_ir; import function_ir_x86_support; import x86_64; import x86_64_block; import bitvec; import bool; import list; import logic; import nat;\n{}", emission.text);
+    assert!(text.contains("CodeBlock([])") || text.contains("_leaf_instructions() → List<Instruction>\n{\n    []"), "an arm should be an empty block");
+    elab.semantic_image().elaborator().elab_module_source("keep_twice_certificate", &text).unwrap_or_else(|e| panic!("{}", e.render(&text)));
+    let moves = text.match_indices("Move(width := 64, output := ").map(|(at, _)| at).collect::<Vec<_>>();
+    assert!(!moves.is_empty(), "the passthrough should be a Move");
+    let at = moves[moves.len() - 1];
+    let end = at + text[at..].find(')').unwrap();
+    let node = &text[at..=end];
+    let source = node.rsplit("source := ").next().unwrap().trim_end_matches(')');
+    let mutant = format!("{}{}{}", &text[..at], node.replace(&format!("source := {source})"), "source := 1)"), &text[end + 1..]);
+    assert_ne!(source, "1", "the mutant must copy another value");
+    let error = elab.semantic_image().elaborator().elab_module_source("keep_twice_another_copy", &mutant)
+        .expect_err("a Move of another value must be refused");
+    let message = error.render(&mutant);
+    assert!(!message.contains("unknown") && !message.contains("not in scope") && !message.contains("unbound"), "failed on a name: {message}");
+}

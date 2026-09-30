@@ -35,8 +35,11 @@ fn push_port(port: Port, ports: Ports) → Ports {
 // operation's input and output arities explicit. Shift counts are immediate
 // mathematical Nats at this layer; target masking is a lowering concern.
 // Comparisons consume `width`-bit operands and produce a one-bit BitVec.
+// `Move` is a copy: a value produced again under another ID, as a branch arm
+// returns an input unchanged.
 inductive Node {
     Const(width: Nat, output: Nat, value: Nat),
+    Move(width: Nat, output: Nat, source: Nat),
     Add(width: Nat, output: Nat, left: Nat, right: Nat),
     Sub(width: Nat, output: Nat, left: Nat, right: Nat),
     BitAnd(width: Nat, output: Nat, left: Nat, right: Nat),
@@ -58,6 +61,7 @@ record Region {
 fn node_output(node: Node) → Port {
     match node {
         Const(width, output, _) => Port(output, width),
+        Move(width, output, _) => Port(output, width),
         Add(width, output, _, _) => Port(output, width),
         Sub(width, output, _, _) => Port(output, width),
         BitAnd(width, output, _, _) => Port(output, width),
@@ -292,6 +296,8 @@ fn CompareNodeIndexed(directory: PortDirectory, index, width, output,
 fn NodeIndexedIn(directory: PortDirectory, index: Nat, node: Node) → Type {
     match node {
         Const(width, output, _) => ProducedAt(directory, index, output, width),
+        Move(width, output, source) =>
+            UnaryImmediateNodeIndexed(directory, index, width, output, source),
         Add(width, output, left, right) =>
             BinaryNodeIndexed(directory, index, width, output, left, right),
         Sub(width, output, left, right) =>
@@ -409,6 +415,15 @@ theorem node_indexed_bitxor(
     NodeIndexedIn(directory, index, BitXor(width, output, left, right))
 {
     node_indexed_binary(output_found, left_found, right_found)
+}
+
+theorem node_indexed_move(
+    {directory: PortDirectory}, {index, width, output, source: Nat},
+    output_found: ProducedAt(directory, index, output, width),
+    source_found: HasAvailableDirectoryPort(directory, source, width, index)):
+    NodeIndexedIn(directory, index, Move(width, output, source))
+{
+    node_indexed_unary_immediate(output_found, source_found)
 }
 
 theorem node_indexed_shift_left(
@@ -544,6 +559,8 @@ fn NodeHolds(values: Valuation(), node: Node) → Type {
     match node {
         Const(width, output, value) =>
             values(width, output) = BitVec::ofNat(value),
+        Move(width, output, source) =>
+            values(width, output) = values(width, source),
         Add(width, output, left, right) =>
             values(width, output) =
                 values(width, left).add(values(width, right)),

@@ -86,9 +86,19 @@ impl ConstantNode {
     }
 }
 
+/// A copy of `source` (FunctionIR `Move`). It costs nothing where the source
+/// dies into the register the copy is wanted in, and a `mov` elsewhere.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MoveNode {
+    pub width: u64,
+    pub output: u64,
+    pub source: u64,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SelectedNode {
     Constant(ConstantNode),
+    Move(MoveNode),
     Binary(BinaryNode),
     Comparison(ComparisonNode),
 }
@@ -97,6 +107,7 @@ impl SelectedNode {
     fn render(self) -> String {
         match self {
             SelectedNode::Constant(node) => node.render(),
+            SelectedNode::Move(node) => format!("Move(width := {}, output := {}, source := {})", node.width, node.output, node.source),
             SelectedNode::Binary(node) => node.render(),
             SelectedNode::Comparison(node) => node.render(),
         }
@@ -105,6 +116,7 @@ impl SelectedNode {
     fn output(self) -> u64 {
         match self {
             SelectedNode::Constant(node) => node.output,
+            SelectedNode::Move(node) => node.output,
             SelectedNode::Binary(node) => node.output,
             SelectedNode::Comparison(node) => node.output,
         }
@@ -113,6 +125,7 @@ impl SelectedNode {
     fn width(self) -> u64 {
         match self {
             SelectedNode::Constant(node) => node.width,
+            SelectedNode::Move(node) => node.width,
             SelectedNode::Binary(node) => node.width,
             SelectedNode::Comparison(_) => 1,
         }
@@ -2744,6 +2757,7 @@ pub fn lower_dag_consuming(
                 *uses.entry(node.left).or_default() += 1;
                 *uses.entry(node.right).or_default() += 1;
             }
+            SelectedNode::Move(node) => *uses.entry(node.source).or_default() += 1,
             SelectedNode::Constant(_) => {}
         }
     }
@@ -2810,6 +2824,28 @@ pub fn lower_dag_consuming(
                         immediate: if node.width == 64 { node.value } else { node.value & ((1u64 << node.width) - 1) },
                     }],
                 )
+            }
+            SelectedNode::Move(node) => {
+                let Some(&source_register) = placements.get(&node.source) else {
+                    return Err(LoweringError::UndefinedValue(node.source));
+                };
+                if widths.get(&node.source) != Some(&node.width) {
+                    return Err(LoweringError::UnsupportedWidth { value: node.source, width: *widths.get(&node.source).unwrap_or(&0) });
+                }
+                // At the source's last use, where the source is ours to
+                // overwrite, the copy is the source's register itself.
+                let aliased = uses.get(&node.source) == Some(&1) && owners.get(&source_register) == Some(&node.source);
+                let destination = if aliased { source_register } else {
+                    produces_output.then_some(requested_output).into_iter().chain(temporary_registers.iter().copied())
+                        .find(|register| !owners.contains_key(register))
+                        .ok_or(LoweringError::RegisterPressure { node_index, live_temporaries: owners.len() })?
+                };
+                consume_use(&mut uses, node.source)?;
+                if uses.get(&node.source) == Some(&0) && destination != source_register && owners.get(&source_register) == Some(&node.source) {
+                    owners.remove(&source_register);
+                }
+                let step = if aliased { Vec::new() } else { vec![Instruction::MovRR { destination, source: source_register }] };
+                (Some(source_register), None, destination, aliased.then_some(node.source), OperandOrientation::Original, step)
             }
             SelectedNode::Binary(node) => {
                 let Some(&left_register) = placements.get(&node.left) else {
@@ -3082,7 +3118,8 @@ pub(super) fn generate_selected(
     header.declaration(Declaration::function(
         &instructions_name,
         Expr::name("List<Instruction>"),
-        Block::expression(instruction_cons(prefix, &lowered.instructions, 0)),
+        // A copy into its source's own register lowers to no instruction.
+        Block::expression(if lowered.instructions.is_empty() { Expr::list([]) } else { instruction_cons(prefix, &lowered.instructions, 0) }),
     ));
     header.declaration(Declaration::function(
         &bytes_name,
@@ -3511,6 +3548,7 @@ fn emit_placement_proofs(
                 *remaining.entry(node.left).or_default() += 1;
                 *remaining.entry(node.right).or_default() += 1;
             }
+            SelectedNode::Move(node) => *remaining.entry(node.source).or_default() += 1,
             SelectedNode::Constant(_) => {}
         }
     }
@@ -3563,6 +3601,21 @@ fn emit_placement_proofs(
                 };
                 text.push_str(&format!("theorem {output_name}<M>({parameters}): {} {{ trans({equation}, sym({prefix}_step_{before_index}_result({prefix}_state_{before_index}(before)))) }}\n",
                     placement_type(node.width, node.output, plan.destination, &format!("{prefix}_state_{after_index}(before)"))));
+            }
+            SelectedNode::Move(node) => {
+                let source_register = plan.left_register.expect("move source");
+                let source_proof = placement_at_state(prefix, node.source, source_register, before_index, &live[&node.source].1, &input_indices);
+                let equation = if node.width == 64 { equation } else {
+                    format!("cong_fn<BitVec({}), BitVec(64)>(λ value => {}, {equation})", node.width, placed_expression(node.width, "value"))
+                };
+                // Aliased, the copy is where the source was; moved, it is
+                // where the `mov` put it.
+                let proof = if plan.instructions.is_empty() { format!("trans({equation}, {source_proof})") } else {
+                    format!("trans({equation}, trans({source_proof}, sym({prefix}_step_{before_index}_result({prefix}_state_{before_index}(before)))))")
+                };
+                text.push_str(&format!("theorem {output_name}<M>({parameters}): {} {{ {proof} }}\n",
+                    placement_type(node.width, node.output, plan.destination, &format!("{prefix}_state_{after_index}(before)"))));
+                consume_known_use(&mut remaining, node.source);
             }
             SelectedNode::Binary(node) if node.width != 64 => {
                 let left_register = plan.left_register.expect("binary left");
@@ -4089,6 +4142,7 @@ fn selected_node(node: Node, node_index: usize) -> Result<SelectedNode, Lowering
             output,
             value,
         })),
+        Node::Move { width, output, source } => Ok(SelectedNode::Move(MoveNode { width, output, source })),
         Node::Add {
             width,
             output,

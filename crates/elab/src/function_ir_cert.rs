@@ -18,6 +18,12 @@ pub enum Node {
         output: u64,
         value: u64,
     },
+    /// A copy: `source`'s value under another ID.
+    Move {
+        width: u64,
+        output: u64,
+        source: u64,
+    },
     Add {
         width: u64,
         output: u64,
@@ -265,6 +271,7 @@ pub fn structured_alpha_eq(left: &StructuredRegion, right: &StructuredRegion) ->
 fn renamed(node: Node, f: &impl Fn(u64) -> u64) -> Node {
     match node {
         Node::Const { width, output, value } => Node::Const { width, output: f(output), value },
+        Node::Move { width, output, source } => Node::Move { width, output: f(output), source: f(source) },
         Node::Add { width, output, left, right } => Node::Add { width, output: f(output), left: f(left), right: f(right) },
         Node::Sub { width, output, left, right } => Node::Sub { width, output: f(output), left: f(left), right: f(right) },
         Node::BitAnd { width, output, left, right } => Node::BitAnd { width, output: f(output), left: f(left), right: f(right) },
@@ -541,6 +548,7 @@ impl Node {
     pub fn output(self) -> Port {
         match self {
             Node::Const { width, output, .. }
+            | Node::Move { width, output, .. }
             | Node::Add { width, output, .. }
             | Node::Sub { width, output, .. }
             | Node::BitAnd { width, output, .. }
@@ -559,6 +567,7 @@ impl Node {
     pub(crate) fn operands(self) -> Vec<Port> {
         match self {
             Node::Const { .. } => Vec::new(),
+            Node::Move { width, source, .. } => vec![Port { id: source, width }],
             Node::ShiftLeft { width, value, .. }
             | Node::LogicalShiftRight { width, value, .. }
             | Node::ArithmeticShiftRight { width, value, .. } => {
@@ -595,6 +604,7 @@ impl Node {
         let rename = |id: &mut u64| if *id == from { *id = to };
         match &mut self {
             Node::Const { .. } => {}
+            Node::Move { source, .. } => rename(source),
             Node::ShiftLeft { value, .. } | Node::LogicalShiftRight { value, .. } | Node::ArithmeticShiftRight { value, .. } => rename(value),
             Node::Add { left, right, .. } | Node::Sub { left, right, .. } | Node::BitAnd { left, right, .. }
             | Node::BitOr { left, right, .. } | Node::BitXor { left, right, .. }
@@ -1032,6 +1042,7 @@ fn render_node(node: Node) -> String {
         } => {
             format!("Const(width := {width}, output := {output}, value := {value})")
         }
+        Node::Move { width, output, source } => format!("Move(width := {width}, output := {output}, source := {source})"),
         Node::Add {
             width,
             output,
@@ -1125,6 +1136,10 @@ fn render_node_indexed_proof(
         Node::Const { value, .. } => Ok(format!(
             "node_indexed_const({common}, value := {value}, output_found := {output})"
         )),
+        Node::Move { width, source, .. } => {
+            let found = prove_available_from_fact(entries, theorem_name, source, width, rank)?;
+            Ok(format!("node_indexed_move({common}, source := {source}, output_found := {output}, source_found := {found})"))
+        }
         Node::ShiftLeft {
             width,
             value,

@@ -173,9 +173,8 @@ fn dataflow_values(n: &str, r: &Region, incoming: &Values, m: &mut Module) -> Va
                 let bit = format!("{test}(values)");
                 format!("match width as λ n => BitVec(n) {{ Zero => @bitvec::BitVec::zero(0), Succ(k) => match k as λ m => BitVec(Succ(m)) {{ Zero => bitvec::BitVec::ofBool({bit}), Succ(j) => @bitvec::BitVec::cons_bit(Succ(j), {bit}, @bitvec::BitVec::zero(Succ(j))) }} }}")
             }
-            // A passthrough is spelled as the value it passes, as the source
-            // spells it; `0 | x` makes conversion evaluate `x` bit by bit.
-            Node::BitOr { left, right, .. } if r.nodes.iter().any(|n| matches!(*n, Node::Const { output, value: 0, .. } if output == left)) => values[&right].clone(),
+            // A copy is spelled as the value it copies, as the source does.
+            Node::Move { source, .. } => values[&source].clone(),
             Node::Add { left, right, .. } | Node::Sub { left, right, .. }
             | Node::BitAnd { left, right, .. } | Node::BitOr { left, right, .. } | Node::BitXor { left, right, .. } => {
                 let op = match node { Node::Add { .. } => "add", Node::Sub { .. } => "sub", Node::BitAnd { .. } => "band", Node::BitOr { .. } => "bor", _ => "bxor" };

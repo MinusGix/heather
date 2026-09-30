@@ -109,6 +109,7 @@ fn execute_region(
         let output = node.output();
         let result = match *node {
             Node::Const { value, .. } => value,
+            Node::Move { source, .. } => read(values, Port { id: source, width: output.width })?.bits,
             Node::Add { left, right, .. } => {
                 binary(values, output.width, left, right, u64::wrapping_add)?
             }
