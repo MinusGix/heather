@@ -215,3 +215,37 @@ fn an_empty_passthrough_arm_certifies_and_another_copy_is_refused() {
     let message = error.render(&mutant);
     assert!(!message.contains("unknown") && !message.contains("not in scope") && !message.contains("unbound"), "failed on a name: {message}");
 }
+
+// An ADD of a constant an immediate extends to certifies, and the kernel
+// holds the processor to its sign extension: a certificate claiming the
+// imm32 0x80000000 adds +2^31 (it adds -2^31) is refused, with every other
+// spelling of the constant changed alike.
+#[test]
+fn an_immediate_add_certifies_at_its_sign_extension() {
+    use heather_elab::function_ir_cert::{Node, Port, Region, StructuredRegion};
+    use heather_elab::function_ir_x86_lower::{generate_structured, Gpr, Instruction, Placements, StructuredPlan};
+    let mut elab = common::base_image(common::MODULES.len());
+    let model = include_str!("../../../lib/std/arch/x86_64/x86_64_structured_block.hthr");
+    elab.elab_module_source("x86_64_structured_block", model).unwrap_or_else(|e| panic!("{}", e.render(model)));
+    let word = |id| Port { id, width: 64 };
+    let negative = 0xffff_ffff_8000_0000u64;
+    for (name, value, form) in [("minus_one", u64::MAX, Instruction::AddRI8 { destination: Gpr::Rax, immediate: 0xff }),
+        ("minus_two_pow_31", negative, Instruction::AddRI32 { destination: Gpr::Rax, immediate: 0x8000_0000 })] {
+        let region = StructuredRegion::Dataflow(Region { inputs: vec![word(0)], nodes: vec![Node::Const { width: 64, output: 1, value },
+            Node::Add { width: 64, output: 2, left: 0, right: 1 }], outputs: vec![word(2)] });
+        let emission = generate_structured(name, &region, &Placements::from([(0, Gpr::Rdi)]), &[Gpr::Rax, Gpr::Rcx], Gpr::Rax)
+            .unwrap_or_else(|e| panic!("{name}: {e:?}"));
+        let StructuredPlan::Dataflow(dag) = &emission.lowered.body else { panic!("{name}: expected a dataflow") };
+        assert_eq!(dag.instructions, vec![Instruction::MovRR { destination: Gpr::Rax, source: Gpr::Rdi }, form], "{name}");
+        let text = format!("import x86_64_structured_block; import function_ir; import function_ir_x86_support; import x86_64; import x86_64_block; import bitvec; import bool; import list; import logic; import nat;\n{}", emission.text);
+        elab.semantic_image().elaborator().elab_module_source(&format!("{name}_certificate"), &text).unwrap_or_else(|e| panic!("{}", e.render(&text)));
+        if value == negative {
+            let mutant = text.replace(&value.to_string(), &(1u64 << 31).to_string());
+            assert!(mutant.contains("AddRI32(Rax, @bitvec::BitVec::ofNat(32, 2147483648))"), "the instruction keeps its imm32");
+            let error = elab.semantic_image().elaborator().elab_module_source("positive_two_pow_31", &mutant)
+                .expect_err("an imm32 read as unsigned must be refused");
+            let message = error.render(&mutant);
+            assert!(message.contains("step_1_result") && message.contains("NotConvertible"), "refused elsewhere: {message}");
+        }
+    }
+}

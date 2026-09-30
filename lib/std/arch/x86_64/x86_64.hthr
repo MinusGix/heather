@@ -119,6 +119,10 @@ inductive Instruction {
     SetBelow(destination: LowByteGpr),
     SetLess(destination: LowByteGpr),
     TestRR(left: Gpr, right: Gpr),
+    // ADD of an immediate the processor sign-extends to 64 bits
+    // (docs/structured-lowering-code-size-design.md §4).
+    AddRI8(destination: Gpr, immediate: BitVec(8)),
+    AddRI32(destination: Gpr, immediate: BitVec(32)),
 }
 
 // X86 instructions occupy 1 through 15 bytes. Squashing makes the fact
@@ -446,6 +450,30 @@ fn setcc_bytes(opcode: Nat, destination: LowByteGpr) → List<BitVec(8)> {
         setcc_modrm(destination)]
 }
 
+// A four-byte immediate, low byte first.
+fn imm32_byte0(immediate: BitVec(32)) → BitVec(8) { immediate.take_low(8, 24) }
+fn imm32_byte1(immediate: BitVec(32)) → BitVec(8) { immediate.drop_low(8, 24).take_low(8, 16) }
+fn imm32_byte2(immediate: BitVec(32)) → BitVec(8) { immediate.drop_low(8, 24).drop_low(8, 16).take_low(8, 8) }
+fn imm32_byte3(immediate: BitVec(32)) → BitVec(8) { immediate.drop_low(8, 24).drop_low(8, 16).drop_low(8, 8) }
+fn imm32_from_bytes(b0, b1, b2, b3: BitVec(8)) → BitVec(32) { b0.concat(b1.concat(b2.concat(b3))) }
+
+theorem imm32_bytes_roundtrip(immediate: BitVec(32)):
+    imm32_from_bytes(imm32_byte0(immediate), imm32_byte1(immediate),
+        imm32_byte2(immediate), imm32_byte3(immediate)) = immediate
+{
+    rebuild_imm32_identity(immediate)
+}
+
+// REX.W 83 /0 ib and REX.W 81 /0 id: the destination is ModRM.r/m, and
+// ModRM.reg holds the /0 that selects ADD, spelled as RAX's code.
+fn add_ri8_bytes(destination: Gpr, immediate: BitVec(8)) → List<BitVec(8)> {
+    [rex_w_rr(destination, Rax), BitVec::ofNat(0x83), modrm_rr(destination, Rax), immediate]
+}
+fn add_ri32_bytes(destination: Gpr, immediate: BitVec(32)) → List<BitVec(8)> {
+    [rex_w_rr(destination, Rax), BitVec::ofNat(0x81), modrm_rr(destination, Rax),
+        imm32_byte0(immediate), imm32_byte1(immediate), imm32_byte2(immediate), imm32_byte3(immediate)]
+}
+
 fn canonical_bytes(instruction: Instruction) → List<BitVec(8)> {
     match instruction {
         // 89 /r: MOV r64 into r/m64.
@@ -477,6 +505,8 @@ fn canonical_bytes(instruction: Instruction) → List<BitVec(8)> {
         // 85 /r: TEST r64 against r/m64.
         TestRR(left, right) =>
             rr_bytes(0x85, left, right),
+        AddRI8(destination, immediate) => add_ri8_bytes(destination, immediate),
+        AddRI32(destination, immediate) => add_ri32_bytes(destination, immediate),
     }
 }
 
@@ -506,7 +536,7 @@ fn decoded_rr(instruction: Instruction) → DecodedInstruction {
 }
 
 fn canonical_length(instruction: Instruction) → Nat {
-    match instruction { MovRI(_, _) => 10, _ => 3 }
+    match instruction { MovRI(_, _) => 10, AddRI8(_, _) => 4, AddRI32(_, _) => 7, _ => 3 }
 }
 
 fn canonical_length_valid(instruction: Instruction) →
@@ -524,6 +554,8 @@ fn canonical_length_valid(instruction: Instruction) →
         SetBelow(_) => And(trivial, trivial),
         SetLess(_) => And(trivial, trivial),
         TestRR(_, _) => And(trivial, trivial),
+        AddRI8(_, _) => And(trivial, trivial),
+        AddRI32(_, _) => And(trivial, trivial),
     }
 }
 
@@ -605,6 +637,8 @@ fn DecodesInstruction(bytes: List<BitVec(8)>, instruction: Instruction) → Type
         SetBelow(destination) => SetccEncoding(bytes, 0x92, destination),
         SetLess(destination) => SetccEncoding(bytes, 0x9c, destination),
         TestRR(left, right) => RrEncoding(bytes, 0x85, left, right),
+        AddRI8(destination, immediate) => bytes = add_ri8_bytes(destination, immediate),
+        AddRI32(destination, immediate) => bytes = add_ri32_bytes(destination, immediate),
     }
 }
 
@@ -1469,14 +1503,69 @@ fn decode_mov_ri(bytes: List<BitVec(8)>) → Option<DecodedInstruction> {
     }
 }
 
+// REX.W, the opcode, a register-direct ModRM whose reg is /0, then the
+// immediate.
+fn decode_add_ri_head(rex, opcode, modrm, expected: BitVec(8),
+    make: Gpr → Instruction) → Option<DecodedInstruction>
+{
+    let destination = gpr_from_fields(byte_bit0(modrm), byte_bit1(modrm),
+        byte_bit2(modrm), byte_bit0(rex));
+    match opcode.eq_dec(expected) {
+        Inr(_) => None,
+        Inl(_) => match rex.eq_dec(rex_w_rr(destination, Rax)) {
+            Inr(_) => None,
+            Inl(_) => match modrm.eq_dec(modrm_rr(destination, Rax)) {
+                Inr(_) => None,
+                Inl(_) => Some(decoded_canonical(make(destination))),
+            },
+        },
+    }
+}
+
+// Four bytes are 83 /0 ib, seven 81 /0 id; every other length is refused
+// by its shape, so no other form's decoding changes.
+fn decode_add_ri(bytes: List<BitVec(8)>) → Option<DecodedInstruction> {
+    match bytes {
+        Nil => None,
+        Cons(rex, t1) => match t1 {
+            Nil => None,
+            Cons(opcode, t2) => match t2 {
+                Nil => None,
+                Cons(modrm, t3) => match t3 {
+                    Nil => None,
+                    Cons(b0, t4) => match t4 {
+                        Nil => decode_add_ri_head(rex, opcode, modrm,
+                            BitVec::ofNat(0x83), λ d => AddRI8(d, b0)),
+                        Cons(b1, t5) => match t5 {
+                            Nil => None,
+                            Cons(b2, t6) => match t6 {
+                                Nil => None,
+                                Cons(b3, t7) => match t7 {
+                                    Nil => decode_add_ri_head(rex, opcode, modrm,
+                                        BitVec::ofNat(0x81),
+                                        λ d => AddRI32(d, imm32_from_bytes(b0, b1, b2, b3))),
+                                    Cons(_, _) => None,
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    }
+}
+
 fn decode_instruction(bytes: List<BitVec(8)>) → Option<DecodedInstruction> {
     match decode_mov_ri(bytes) {
         Some(decoded) => Some(decoded),
         None => match decode_setcc(bytes) {
             Some(decoded) => Some(decoded),
-            None => match decode_bytes(bytes) {
-                None => None,
-                Some(result) => Some(decoded_canonical(result.instruction)),
+            None => match decode_add_ri(bytes) {
+                Some(decoded) => Some(decoded),
+                None => match decode_bytes(bytes) {
+                    None => None,
+                    Some(result) => Some(decoded_canonical(result.instruction)),
+                },
             },
         },
     }
@@ -1627,6 +1716,54 @@ theorem decode_set_less_complete(destination: LowByteGpr):
     match destination { Al => refl, Cl => refl, Dl => refl, Bl => refl }
 }
 
+theorem decode_add_ri8_complete(destination: Gpr, immediate: BitVec(8)):
+    decode_instruction(add_ri8_bytes(destination, immediate)) =
+        Some(decoded_canonical(AddRI8(destination, immediate)))
+{
+    match destination {
+        Rax => refl,
+        Rcx => refl,
+        Rdx => refl,
+        Rbx => refl,
+        Rsp => refl,
+        Rbp => refl,
+        Rsi => refl,
+        Rdi => refl,
+        R8 => refl,
+        R9 => refl,
+        R10 => refl,
+        R11 => refl,
+        R12 => refl,
+        R13 => refl,
+        R14 => refl,
+        R15 => refl,
+    }
+}
+
+theorem decode_add_ri32_complete(destination: Gpr, immediate: BitVec(32)):
+    decode_instruction(add_ri32_bytes(destination, immediate)) =
+        Some(decoded_canonical(AddRI32(destination, immediate)))
+{
+    match destination {
+        Rax => cong_fn(λ (value: BitVec(32)) => Some(decoded_canonical(AddRI32(Rax, value))), imm32_bytes_roundtrip(immediate)),
+        Rcx => cong_fn(λ (value: BitVec(32)) => Some(decoded_canonical(AddRI32(Rcx, value))), imm32_bytes_roundtrip(immediate)),
+        Rdx => cong_fn(λ (value: BitVec(32)) => Some(decoded_canonical(AddRI32(Rdx, value))), imm32_bytes_roundtrip(immediate)),
+        Rbx => cong_fn(λ (value: BitVec(32)) => Some(decoded_canonical(AddRI32(Rbx, value))), imm32_bytes_roundtrip(immediate)),
+        Rsp => cong_fn(λ (value: BitVec(32)) => Some(decoded_canonical(AddRI32(Rsp, value))), imm32_bytes_roundtrip(immediate)),
+        Rbp => cong_fn(λ (value: BitVec(32)) => Some(decoded_canonical(AddRI32(Rbp, value))), imm32_bytes_roundtrip(immediate)),
+        Rsi => cong_fn(λ (value: BitVec(32)) => Some(decoded_canonical(AddRI32(Rsi, value))), imm32_bytes_roundtrip(immediate)),
+        Rdi => cong_fn(λ (value: BitVec(32)) => Some(decoded_canonical(AddRI32(Rdi, value))), imm32_bytes_roundtrip(immediate)),
+        R8 => cong_fn(λ (value: BitVec(32)) => Some(decoded_canonical(AddRI32(R8, value))), imm32_bytes_roundtrip(immediate)),
+        R9 => cong_fn(λ (value: BitVec(32)) => Some(decoded_canonical(AddRI32(R9, value))), imm32_bytes_roundtrip(immediate)),
+        R10 => cong_fn(λ (value: BitVec(32)) => Some(decoded_canonical(AddRI32(R10, value))), imm32_bytes_roundtrip(immediate)),
+        R11 => cong_fn(λ (value: BitVec(32)) => Some(decoded_canonical(AddRI32(R11, value))), imm32_bytes_roundtrip(immediate)),
+        R12 => cong_fn(λ (value: BitVec(32)) => Some(decoded_canonical(AddRI32(R12, value))), imm32_bytes_roundtrip(immediate)),
+        R13 => cong_fn(λ (value: BitVec(32)) => Some(decoded_canonical(AddRI32(R13, value))), imm32_bytes_roundtrip(immediate)),
+        R14 => cong_fn(λ (value: BitVec(32)) => Some(decoded_canonical(AddRI32(R14, value))), imm32_bytes_roundtrip(immediate)),
+        R15 => cong_fn(λ (value: BitVec(32)) => Some(decoded_canonical(AddRI32(R15, value))), imm32_bytes_roundtrip(immediate)),
+    }
+}
+
 theorem decode_instruction_of_setcc_encoding(bytes: List<BitVec(8)>,
     opcode: Nat, destination: LowByteGpr, instruction: Instruction,
     encoding: SetccEncoding(bytes, opcode, destination),
@@ -1713,6 +1850,14 @@ theorem decode_instruction_complete(bytes: List<BitVec(8)>,
             decode_instruction_of_rr_encoding(bytes, 0x85, left, right,
                 TestRR(left, right), encoding,
                 decode_instruction_rr_complete(TestRmReg, left, right)),
+        AddRI8(destination, immediate) => λ encoding =>
+            j(sym(encoding), λ actual q => decode_instruction(actual) =
+                Some(decoded_canonical(AddRI8(destination, immediate))),
+                decode_add_ri8_complete(destination, immediate)),
+        AddRI32(destination, immediate) => λ encoding =>
+            j(sym(encoding), λ actual q => decode_instruction(actual) =
+                Some(decoded_canonical(AddRI32(destination, immediate))),
+                decode_add_ri32_complete(destination, immediate)),
     }(decoding)
 }
 
@@ -1753,7 +1898,7 @@ theorem decoded_canonical_length(instruction: Instruction):
         AddRR(_, _) => refl, SubRR(_, _) => refl,
         AndRR(_, _) => refl, OrRR(_, _) => refl, XorRR(_, _) => refl,
         CmpRR(_, _) => refl, SetBelow(_) => refl, SetLess(_) => refl,
-        TestRR(_, _) => refl,
+        TestRR(_, _) => refl, AddRI8(_, _) => refl, AddRI32(_, _) => refl,
     }
 }
 
@@ -1780,6 +1925,8 @@ theorem canonical_encoding_decodes(start: BitVec(64), instruction: Instruction):
         SetBelow(_) => And(refl, refl),
         SetLess(_) => And(refl, refl),
         TestRR(_, _) => And(And(refl, And(refl, refl)), refl),
+        AddRI8(_, _) => And(refl, refl),
+        AddRI32(_, _) => And(refl, refl),
     }
 }
 
@@ -1885,6 +2032,8 @@ theorem canonical_bytes_length(instruction: Instruction):
         SetBelow(_) => refl,
         SetLess(_) => refl,
         TestRR(_, _) => refl,
+        AddRI8(_, _) => refl,
+        AddRI32(_, _) => refl,
     }
 }
 
@@ -2056,6 +2205,16 @@ fn execute_set_less(destination: LowByteGpr, before: Gprs,
         flags.sf.xor(flags.of), before), flags := flags)
 }
 
+// ADD of an immediate already extended to 64 bits.
+fn execute_add_immediate(destination: Gpr, immediate: BitVec(64), before: Gprs) → RegisterEffect
+{
+    let left = read_gpr(destination, before);
+    RegisterEffect(
+        gprs := write_gpr(destination, left.add(immediate), before),
+        flags := add_flags(left, immediate),
+    )
+}
+
 fn execute_register(instruction: Instruction, before: Gprs, flags: Flags) →
     RegisterEffect
 {
@@ -2082,6 +2241,10 @@ fn execute_register(instruction: Instruction, before: Gprs, flags: Flags) →
             gprs := before,
             flags := test_flags(read_gpr(left, before), read_gpr(right, before), False),
         ),
+        AddRI8(destination, immediate) =>
+            execute_add_immediate(destination, immediate.sign_extend(56), before),
+        AddRI32(destination, immediate) =>
+            execute_add_immediate(destination, immediate.sign_extend(32), before),
     }
 }
 
@@ -2182,7 +2345,7 @@ theorem erase_af_normal_commute<M>(instruction: Instruction, before: MachineStat
         AddRR(_, _) => refl, SubRR(_, _) => refl,
         AndRR(_, _) => refl, OrRR(_, _) => refl, XorRR(_, _) => refl,
         CmpRR(_, _) => refl, SetBelow(_) => refl, SetLess(_) => refl,
-        TestRR(_, _) => refl,
+        TestRR(_, _) => refl, AddRI8(_, _) => refl, AddRI32(_, _) => refl,
     }
 }
 
@@ -2257,6 +2420,8 @@ fn Execute<M>(decoded: DecodedInstruction, before: MachineState<M>,
         SetLess(_) => outcome = Returned(execute_normal(decoded, before)),
         TestRR(left, right) => ∃ af: Bool,
             outcome = Returned(execute_test(left, right, decoded.length, before, af)),
+        AddRI8(_, _) => outcome = Returned(execute_normal(decoded, before)),
+        AddRI32(_, _) => outcome = Returned(execute_normal(decoded, before)),
     }
 }
 
@@ -2288,6 +2453,8 @@ theorem execute_same_defined<M>(instruction: Instruction, length: Nat,
         CmpRR(d, s) => λ result proof => execute_fixed_same_defined(CmpRR(d, s), length, valid, before, result, proof),
         SetBelow(d) => λ result proof => execute_fixed_same_defined(SetBelow(d), length, valid, before, result, proof),
         SetLess(d) => λ result proof => execute_fixed_same_defined(SetLess(d), length, valid, before, result, proof),
+        AddRI8(d, value) => λ result proof => execute_fixed_same_defined(AddRI8(d, value), length, valid, before, result, proof),
+        AddRI32(d, value) => λ result proof => execute_fixed_same_defined(AddRI32(d, value), length, valid, before, result, proof),
         TestRR(left, right) => λ result proof =>
             j(sym(returned_machine_inj(result,
                 execute_test(left, right, length, before, proof.witness), proof.proof)),
@@ -2354,6 +2521,8 @@ theorem canonical_execute_normal_is_allowed<M>(instruction: Instruction,
         SetBelow(_) => refl,
         SetLess(_) => refl,
         TestRR(_, _) => Exists(False, refl),
+        AddRI8(_, _) => refl,
+        AddRI32(_, _) => refl,
     }
 }
 
@@ -2569,6 +2738,8 @@ theorem execute_normal_advances_rip<M>(decoded: DecodedInstruction,
         SetBelow(_) => refl,
         SetLess(_) => refl,
         TestRR(_, _) => refl,
+        AddRI8(_, _) => refl,
+        AddRI32(_, _) => refl,
     }
 }
 

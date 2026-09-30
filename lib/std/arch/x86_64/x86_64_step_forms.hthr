@@ -88,13 +88,40 @@ fn decode_rr_form(opcode: BitVec(8), rm, reg: Gpr) → Option<StepForm> {
     }
 }
 
+// 83 /0 ib and 81 /0 id: ADD of a sign-extended immediate into r/m, read
+// from the bytes after ModRM; any other opcode is a two-register form.
+fn decode_register_form(opcode: BitVec(8), rm, reg: Gpr, rest: List<BitVec(8)>) → Option<StepForm> {
+    match opcode.eq_dec(BitVec::ofNat(0x83)) {
+        Inl(_) => match rest {
+            Nil => None,
+            Cons(b0, _) => emitted_form(AddRI8(rm, b0)),
+        },
+        Inr(_) => match opcode.eq_dec(BitVec::ofNat(0x81)) {
+            Inr(_) => decode_rr_form(opcode, rm, reg),
+            Inl(_) => match rest {
+                Nil => None,
+                Cons(b0, t1) => match t1 {
+                    Nil => None,
+                    Cons(b1, t2) => match t2 {
+                        Nil => None,
+                        Cons(b2, t3) => match t3 {
+                            Nil => None,
+                            Cons(b3, _) => emitted_form(AddRI32(rm, imm32_from_bytes(b0, b1, b2, b3))),
+                        },
+                    },
+                },
+            },
+        },
+    }
+}
+
 // After REX and an opcode that is not 0F or B8+r: mod 11 is a register form,
 // mod 00 the word store (89 /r into [base]).
 fn decode_modrm_form(rex, opcode: BitVec(8), rest: List<BitVec(8)>) → Option<StepForm> {
     match rest {
         Nil => None,
-        Cons(modrm, _) => match byte_bit7(modrm) {
-            True => decode_rr_form(opcode, rm_of(rex, modrm), reg_of(rex, modrm)),
+        Cons(modrm, tail) => match byte_bit7(modrm) {
+            True => decode_register_form(opcode, rm_of(rex, modrm), reg_of(rex, modrm), tail),
             False => Some(FormStore(WordStore(base := rm_of(rex, modrm), source := reg_of(rex, modrm)))),
         },
     }
@@ -285,6 +312,12 @@ theorem ordinary_form_complete(instruction: Instruction, rest: List<BitVec(8)>):
         SetBelow(destination) => cong_fn(λ (d: LowByteGpr) => emitted_form(SetBelow(d)), low_byte_back(destination)),
         SetLess(destination) => cong_fn(λ (d: LowByteGpr) => emitted_form(SetLess(d)), low_byte_back(destination)),
         TestRR(a, b) => rr_form_back(λ x y => TestRR(x, y), a, b),
+        AddRI8(destination, immediate) =>
+            cong_fn(λ (d: Gpr) => emitted_form(AddRI8(d, immediate)), rm_of_fields(destination, Rax, True, True)),
+        AddRI32(destination, immediate) =>
+            trans(cong_fn(λ (d: Gpr) => emitted_form(AddRI32(d, imm32_from_bytes(imm32_byte0(immediate), imm32_byte1(immediate),
+                    imm32_byte2(immediate), imm32_byte3(immediate)))), rm_of_fields(destination, Rax, True, True)),
+                cong_fn(λ (v: BitVec(32)) => emitted_form(AddRI32(destination, v)), imm32_bytes_roundtrip(immediate))),
     }
 }
 

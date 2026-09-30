@@ -25,6 +25,18 @@ pub fn encode_instructions(instructions: &[Instruction]) -> Vec<u8> {
                 bytes.extend([0x0f, if matches!(instruction, Instruction::SetBelow { .. }) { 0x92 } else { 0x9c }, 0xc0 | r]);
                 continue;
             }
+            // REX.W 83 /0 ib and REX.W 81 /0 id.
+            Instruction::AddRI8 { destination, immediate } => {
+                let r = register_code(destination);
+                bytes.extend([0x48 | (r >> 3), 0x83, 0xc0 | (r & 7), immediate]);
+                continue;
+            }
+            Instruction::AddRI32 { destination, immediate } => {
+                let r = register_code(destination);
+                bytes.extend([0x48 | (r >> 3), 0x81, 0xc0 | (r & 7)]);
+                bytes.extend(immediate.to_le_bytes());
+                continue;
+            }
             Instruction::MovRR { destination, source } => (0x89, destination, source),
             Instruction::AddRR { destination, source } => (0x01, destination, source),
             Instruction::SubRR { destination, source } => (0x29, destination, source),

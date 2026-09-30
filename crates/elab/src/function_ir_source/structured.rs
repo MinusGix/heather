@@ -2,7 +2,6 @@
 //! source agreement with the shared physical execution artifact.
 use super::*;
 use cert::StructuredRegion;
-use std::collections::BTreeSet;
 mod publication;
 mod read;
 pub use read::{generate_elaborated_read_x86, ReadX86Emission};

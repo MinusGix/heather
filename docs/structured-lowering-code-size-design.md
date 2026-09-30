@@ -1,6 +1,6 @@
 # A tighter structured x86 lowering — design
 
-Status: **decisions taken 2026-09-29 (§6, all as recommended); probes V2–V5 done 2026-09-29 (§7.1); slice F landed 2026-09-30 (§2.4), F′ the same day (§2.5), P's in-place results (§3.1) and `Move` node (§3.2) too; `CodeWhen` next, then I.** Owner:
+Status: **decisions taken 2026-09-29 (§6, all as recommended); probes V2–V5 done 2026-09-29 (§7.1); slices landed 2026-09-30: F (§2.4), F′ (§2.5), P's in-place results (§3.1) and `Move` node (§3.2), and I (§4.1). `CodeWhen` (§2.3) deferred.** Owner:
 `issues/structured-lowering-code-size.md`. Also lands
 `issues/function-ir-x86-fused-compare-branch.md`. Builds on
 `docs/native-wc-design.md` §4.5 (near conditionals) and §5.1 (the measurement
@@ -362,6 +362,48 @@ The thresholds (all at least 2^32) stay `movabs`. They are genuinely 64-bit.
 source choice (`place(…, 0)` states "take the top digits away, weigh them
 nothing"). An `add r, 0` costs 4 bytes after I. Folding is a DAG
 simplification with its own certificate story, filed separately if wanted.
+
+### 4.1 As landed (2026-09-30)
+
+Two forms, `AddRI8(r, imm8)` and `AddRI32(r, imm32)`, because the field
+words' constants reach only an ADD. `SubRI`, `MovR32I` and a `xor` zero have
+no consumer here and wait for one. Their bytes reuse the register-pair
+helpers: `rex_w_rr(r, Rax)` and `modrm_rr(r, Rax)` spell REX.W and a ModRM
+whose reg field is the `/0`. `execute_add_immediate` adds
+`immediate.sign_extend(56)` (or `(32)`) with `add_flags`. The direct decoder
+gains `decode_add_ri` in its chain, and every other form's list shape
+refuses it, so the existing completeness proofs are unchanged. The new ones
+are sixteen `refl` cases, through `imm32_bytes_roundtrip` for the imm32. The
+step-form decoder reads the immediate after ModRM for opcodes 81 and 83.
+`gpr_only_add_ri8` and `gpr_only_add_ri32` join the support lemmas.
+
+`lower_dag` folds a 64-bit constant into its one reader, a 64-bit ADD beside
+a value, when the processor's sign extension of some imm8 or imm32 is the
+constant. The constant keeps a plan with no instructions, so the certificate
+still rebuilds the region's node list, and it gets no register. The ADD's
+proof chains four things:
+- the node's equation;
+- the constant's own equation, `values(c) = ofNat(v)`;
+- the operand's placement, through a `mov` when there is one;
+- the step result, spelled `add(read_gpr(r), ofNat(64, v))`, which `refl`
+  proves because conversion evaluates the sign extension of the literal.
+
+`field_low` 778 → 637 bytes (177 → 163 instructions), `field_high` 1,117 →
+868 (250 → 219). That is 33% and 31% of §1's bytes, under §8's 40%. What
+is left is the thresholds' `movabs` (genuinely 64-bit), the `cmp`, `jae +2 ;
+jmp` around each empty arm (the two bytes `CodeWhen` would save), and seven
+`mov`s at the helper hand-overs (§3.1).
+
+Tests:
+- A probe states `AddRI8(0xff)` adds −1 and `AddRI32(0x80000000)` adds
+  −2^31 by `refl`, and the kernel refuses the claim that the imm32 adds
+  +2^31.
+- `lower_dag` adds −1 as an imm8 and 2^31 − 1 as an imm32, and loads 2^31.
+- The encoder's bytes are pinned.
+- An immediate ADD's certificate checks. With every spelling of −2^31
+  changed to +2^31, it is refused at that ADD's step result
+  (`NotConvertible`), which is §8's sign-extension control.
+- `nudged` runs natively against C, and its certificate uses both forms.
 
 ## 5. Out of scope, filed
 

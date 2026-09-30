@@ -56,3 +56,12 @@ fn keep_below(a, b: BitVec(64)) → BitVec(64) {
     }
 }
 fn keep_twice(a, b: BitVec(64)) → BitVec(64) { keep_below(keep_below(a, b), b) }
+// Constants an ADD takes as an immediate the processor sign-extends: 16 and
+// -1 as imm8, 65536 as imm32; 2^31, which an imm32 would read as negative,
+// is loaded.
+fn nudged(a, b: BitVec(64)) → BitVec(64) {
+    match a.unsigned_lt_bit(b) {
+        True => a.add(BitVec::ofNat(16)).add(b.add(BitVec::ofNat(18446744073709551615))),
+        False => a.add(BitVec::ofNat(65536)).add(BitVec::ofNat(2147483648)),
+    }
+}

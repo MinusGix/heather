@@ -268,6 +268,9 @@ pub enum Instruction {
     CmpRR { left: Gpr, right: Gpr },
     SetBelow { destination: LowByteGpr },
     SetLess { destination: LowByteGpr },
+    /// ADD of an immediate the processor sign-extends to 64 bits.
+    AddRI8 { destination: Gpr, immediate: u8 },
+    AddRI32 { destination: Gpr, immediate: u32 },
 }
 
 impl Instruction {
@@ -318,7 +321,29 @@ impl Instruction {
             Instruction::SetLess { destination } => {
                 Expr::call("SetLess", [Expr::name(destination.heather_name())])
             }
+            Instruction::AddRI8 { destination, immediate } => Expr::call("AddRI8", [Expr::name(destination.heather_name()),
+                Expr::explicit_call("bitvec::BitVec::ofNat", [Expr::nat(8), Expr::nat(u64::from(immediate))])]),
+            Instruction::AddRI32 { destination, immediate } => Expr::call("AddRI32", [Expr::name(destination.heather_name()),
+                Expr::explicit_call("bitvec::BitVec::ofNat", [Expr::nat(32), Expr::nat(u64::from(immediate))])]),
         }
+    }
+
+    /// The 64-bit value an immediate ADD adds, as the processor extends it.
+    pub fn added_immediate(self) -> Option<u64> {
+        match self {
+            Instruction::AddRI8 { immediate, .. } => Some(immediate as i8 as i64 as u64),
+            Instruction::AddRI32 { immediate, .. } => Some(immediate as i32 as i64 as u64),
+            _ => None,
+        }
+    }
+
+    /// The shortest immediate ADD of `value` into `destination`, when the
+    /// processor's sign extension of some immediate is `value`.
+    pub fn add_immediate(destination: Gpr, value: u64) -> Option<Instruction> {
+        let signed = value as i64;
+        if (-128..=127).contains(&signed) { Some(Instruction::AddRI8 { destination, immediate: signed as i8 as u8 }) }
+        else if (i32::MIN as i64..=i32::MAX as i64).contains(&signed) { Some(Instruction::AddRI32 { destination, immediate: signed as i32 as u32 }) }
+        else { None }
     }
 
     pub fn destination(self) -> Option<Gpr> {
@@ -329,7 +354,9 @@ impl Instruction {
             | Instruction::SubRR { destination, .. }
             | Instruction::AndRR { destination, .. }
             | Instruction::OrRR { destination, .. }
-            | Instruction::XorRR { destination, .. } => Some(destination),
+            | Instruction::XorRR { destination, .. }
+            | Instruction::AddRI8 { destination, .. }
+            | Instruction::AddRI32 { destination, .. } => Some(destination),
             Instruction::CmpRR { .. } => None,
             Instruction::SetBelow { destination } | Instruction::SetLess { destination } => {
                 Some(destination.gpr())
@@ -340,6 +367,8 @@ impl Instruction {
     pub fn canonical_length(self) -> usize {
         match self {
             Instruction::MovRI { .. } => 10,
+            Instruction::AddRI8 { .. } => 4,
+            Instruction::AddRI32 { .. } => 7,
             _ => 3,
         }
     }
@@ -361,10 +390,22 @@ pub struct NodePlan {
     pub node: SelectedNode,
     pub left_register: Option<Gpr>,
     pub right_register: Option<Gpr>,
+    /// A constant folded into its ADD has no register and no instructions;
+    /// this is then the requested output, unused.
     pub destination: Gpr,
     pub reused_value: Option<u64>,
     pub orientation: OperandOrientation,
     pub instructions: Vec<Instruction>,
+    /// An ADD whose other operand is a constant it adds as an immediate.
+    pub immediate: Option<ImmediateOperand>,
+}
+
+/// The constant an ADD folds in: its port, its node, and its value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ImmediateOperand {
+    pub port: u64,
+    pub node_index: usize,
+    pub value: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -2779,8 +2820,33 @@ pub fn lower_dag_consuming(
     let mut node_plans = Vec::with_capacity(region.nodes.len());
     let mut clobbered = BTreeSet::new();
 
+    // A 64-bit constant whose one use is a 64-bit ADD, beside a value that
+    // is not folded too, becomes that ADD's immediate when the processor's
+    // sign extension of some imm8 or imm32 is the constant
+    // (docs/structured-lowering-code-size-design.md §4).
+    let mut folded = BTreeMap::<u64, ImmediateOperand>::new();
+    for (node_index, node) in region.nodes.iter().enumerate() {
+        let Node::Const { width: 64, output, value } = *node else { continue };
+        if uses.get(&output) != Some(&1) || Instruction::add_immediate(Gpr::Rax, value).is_none() { continue; }
+        let beside = region.nodes.iter().find_map(|reader| match *reader {
+            Node::Add { width: 64, left, right, .. } if left == output && right != output => Some(right),
+            Node::Add { width: 64, left, right, .. } if right == output && left != output => Some(left),
+            _ => None,
+        });
+        if beside.is_some_and(|other| !folded.contains_key(&other)) {
+            folded.insert(output, ImmediateOperand { port: output, node_index, value });
+        }
+    }
+
     for (node_index, &raw_node) in region.nodes.iter().enumerate() {
         let selected = selected_node(raw_node, node_index)?;
+        if let Some(&immediate) = folded.get(&selected.output()) {
+            widths.insert(immediate.port, 64);
+            node_plans.push(NodePlan { node_index, node: selected, left_register: None, right_register: None, destination: requested_output,
+                reused_value: None, orientation: OperandOrientation::Original, instructions: Vec::new(), immediate: None });
+            continue;
+        }
+        let mut immediate_operand = None;
         match selected {
             SelectedNode::Binary(BinaryNode { operation: BinaryOperation::Add | BinaryOperation::Sub, .. }) => require_width(selected.output(), selected.width())?,
             _ => require_placement_width(selected.output(), selected.width())?,
@@ -2824,6 +2890,34 @@ pub fn lower_dag_consuming(
                         immediate: if node.width == 64 { node.value } else { node.value & ((1u64 << node.width) - 1) },
                     }],
                 )
+            }
+            SelectedNode::Binary(node) if node.operation == BinaryOperation::Add
+                && (folded.contains_key(&node.left) || folded.contains_key(&node.right)) => {
+                let (operand, immediate, orientation) = match folded.get(&node.right) {
+                    Some(immediate) => (node.left, *immediate, OperandOrientation::Original),
+                    None => (node.right, folded[&node.left], OperandOrientation::Reversed),
+                };
+                let Some(&source_register) = placements.get(&operand) else {
+                    return Err(LoweringError::UndefinedValue(operand));
+                };
+                if widths.get(&operand) != Some(&64) {
+                    return Err(LoweringError::UnsupportedWidth { value: operand, width: *widths.get(&operand).unwrap_or(&0) });
+                }
+                let in_place = uses.get(&operand) == Some(&1) && owners.get(&source_register) == Some(&operand);
+                let destination = if in_place { source_register } else {
+                    produces_output.then_some(requested_output).into_iter().chain(temporary_registers.iter().copied())
+                        .find(|register| !owners.contains_key(register))
+                        .ok_or(LoweringError::RegisterPressure { node_index, live_temporaries: owners.len() })?
+                };
+                let add = Instruction::add_immediate(destination, immediate.value).expect("a folded constant fits an immediate");
+                consume_use(&mut uses, operand)?;
+                consume_use(&mut uses, immediate.port)?;
+                if uses.get(&operand) == Some(&0) && destination != source_register && owners.get(&source_register) == Some(&operand) {
+                    owners.remove(&source_register);
+                }
+                immediate_operand = Some(immediate);
+                let step = if in_place { vec![add] } else { vec![Instruction::MovRR { destination, source: source_register }, add] };
+                (Some(source_register), None, destination, in_place.then_some(operand), orientation, step)
             }
             SelectedNode::Move(node) => {
                 let Some(&source_register) = placements.get(&node.source) else {
@@ -3043,6 +3137,7 @@ pub fn lower_dag_consuming(
             reused_value,
             orientation,
             instructions: step_instructions,
+            immediate: immediate_operand,
         });
     }
 
@@ -3427,6 +3522,8 @@ fn render_gpr_only_step(instruction: Instruction) -> Option<String> {
             destination.heather_name(),
             source.heather_name(),
         )),
+        Instruction::AddRI8 { destination, immediate } => Some(format!("gpr_only_add_ri8({}, @bitvec::BitVec::ofNat(8, {immediate}))", destination.heather_name())),
+        Instruction::AddRI32 { destination, immediate } => Some(format!("gpr_only_add_ri32({}, @bitvec::BitVec::ofNat(32, {immediate}))", destination.heather_name())),
         Instruction::CmpRR { .. } | Instruction::SetBelow { .. } | Instruction::SetLess { .. } => {
             None
         }
@@ -3594,6 +3691,33 @@ fn emit_placement_proofs(
             }
         }
         match plan.node {
+            // Folded into its ADD: the ADD's proof reads its equation.
+            SelectedNode::Constant(_) if plan.instructions.is_empty() => {}
+            SelectedNode::Binary(node) if plan.immediate.is_some() => {
+                let immediate = plan.immediate.expect("an immediate ADD");
+                let operand = if plan.orientation == OperandOrientation::Original { node.left } else { node.right };
+                let source = plan.left_register.expect("the ADD's register operand");
+                let mut operand_proof = placement_at_state(prefix, operand, source, before_index, &live[&operand].1, &input_indices);
+                let add_index = after_index - 1;
+                if plan.instructions.len() == 2 {
+                    operand_proof = format!("trans({operand_proof}, sym({prefix}_step_{before_index}_result({prefix}_state_{before_index}(before))))");
+                }
+                // values(out) = values(operand) + values(constant), commuted
+                // when the constant is the left operand.
+                let equation = if plan.orientation == OperandOrientation::Original { equation } else {
+                    format!("trans({equation}, bitvec::BitVec::add_comm(64, values(64, {}), values(64, {})))", node.left, node.right)
+                };
+                let constant = format!("{prefix}_graph_{}(values, before, context).left", immediate.node_index);
+                let add = BinaryOperation::Add.semantic_function();
+                text.push_str(&format!("theorem {output_name}<M>({parameters}): {} {{\n\
+                    \x20   trans({equation},\n\
+                    \x20   trans(cong_fn<BitVec(64), BitVec(64)>(λ k => {add}(values(64, {operand}), k), {constant}),\n\
+                    \x20   trans(cong_fn<BitVec(64), BitVec(64)>(λ w => {add}(w, @bitvec::BitVec::ofNat(64, {})), {operand_proof}),\n\
+                    \x20       sym({prefix}_step_{add_index}_result({prefix}_state_{add_index}(before))))))\n}}\n",
+                    placement_type(64, node.output, plan.destination, &format!("{prefix}_state_{after_index}(before)")), immediate.value));
+                consume_known_use(&mut remaining, node.left);
+                consume_known_use(&mut remaining, node.right);
+            }
             SelectedNode::Constant(node) => {
                 debug_assert_eq!(plan.instructions.len(), 1);
                 let equation = if node.width == 64 { equation } else {
@@ -3962,7 +4086,8 @@ fn emit_placement_proofs(
             }
             next_live.insert(value, (register, frame_proof));
         }
-        if remaining.get(&plan.node.output()).copied().unwrap_or(0) > 0 {
+        let folded = matches!(plan.node, SelectedNode::Constant(_)) && plan.instructions.is_empty();
+        if !folded && remaining.get(&plan.node.output()).copied().unwrap_or(0) > 0 {
             next_live.insert(
                 plan.node.output(),
                 (plan.destination, format!("{output_name}({arguments})")),
@@ -4046,6 +4171,11 @@ fn emit_step_result_fact(prefix: &str, step: usize, instruction: Instruction, te
             destination,
             source,
         } => render_binary_result(BinaryOperation::BitXor, destination, source),
+        // The immediate as the processor extends it: conversion evaluates
+        // the sign extension of the literal.
+        Instruction::AddRI8 { destination, .. } | Instruction::AddRI32 { destination, .. } => (destination,
+            format!("{}(read_gpr({}, state.gprs), @bitvec::BitVec::ofNat(64, {}))", BinaryOperation::Add.semantic_function(),
+                destination.heather_name(), instruction.added_immediate().expect("an immediate ADD"))),
         Instruction::CmpRR { .. } | Instruction::SetBelow { .. } | Instruction::SetLess { .. } => {
             panic!("comparison instructions use their composed result fact")
         }
@@ -4499,6 +4629,27 @@ mod tests {
         );
     }
 
+    // A constant no immediate reaches (2^40) is loaded; one whose sign
+    // extension an immediate is (-1, 2^31 - 1) is added as one, and 2^31,
+    // which an imm32 would read as negative, is loaded.
+    #[test]
+    fn a_constant_an_immediate_extends_to_is_added_as_one() {
+        let add = |value: u64| {
+            let region = Region { inputs: vec![Port { id: 0, width: 64 }], nodes: vec![
+                Node::Const { width: 64, output: 1, value },
+                Node::Add { width: 64, output: 2, left: 1, right: 0 },
+            ], outputs: vec![Port { id: 2, width: 64 }] };
+            lower_dag(&region, &[Gpr::Rdi], &[Gpr::Rax], Gpr::Rax).unwrap().instructions
+        };
+        let moved = Instruction::MovRR { destination: Gpr::Rax, source: Gpr::Rdi };
+        assert_eq!(add(u64::MAX), vec![moved, Instruction::AddRI8 { destination: Gpr::Rax, immediate: 0xff }]);
+        assert_eq!(add(0x7fff_ffff), vec![moved, Instruction::AddRI32 { destination: Gpr::Rax, immediate: 0x7fff_ffff }]);
+        assert!(matches!(add(1 << 31)[0], Instruction::MovRI { immediate, .. } if immediate == 1 << 31));
+        assert_eq!(Instruction::AddRI32 { destination: Gpr::Rax, immediate: 0x8000_0000 }.added_immediate(), Some(0xffff_ffff_8000_0000));
+        assert_eq!(encoding::encode_instructions(&[Instruction::AddRI8 { destination: Gpr::R9, immediate: 0xff },
+            Instruction::AddRI32 { destination: Gpr::Rax, immediate: 0x1000 }]), vec![0x49, 0x83, 0xc1, 0xff, 0x48, 0x81, 0xc0, 0x00, 0x10, 0x00, 0x00]);
+    }
+
     #[test]
     fn constant_and_add_use_real_lengths_and_one_temporary() {
         let region = Region {
@@ -4507,7 +4658,7 @@ mod tests {
                 Node::Const {
                     width: 64,
                     output: 1,
-                    value: u64::MAX,
+                    value: 1 << 40,
                 },
                 Node::Add {
                     width: 64,
@@ -4524,7 +4675,7 @@ mod tests {
             vec![
                 Instruction::MovRI {
                     destination: Gpr::Rax,
-                    immediate: u64::MAX,
+                    immediate: 1 << 40,
                 },
                 Instruction::AddRR {
                     destination: Gpr::Rax,
