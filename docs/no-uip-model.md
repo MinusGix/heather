@@ -1,6 +1,9 @@
 # UIP is not derivable without `transp`: a groupoid-model argument
 
-Status: **paper argument, 2026-09-30**, not reviewed, not mechanized.
+Status: **paper argument, 2026-09-30**, not reviewed. §3 and the two
+counterexamples of §3.4 and §5 are **mechanized**:
+`../Lean/delam/probes/NoUipComponents.v`, closed under the global context.
+§4 is argued only.
 Owed by `docs/iwf-former-design.md` §12.3 before that rule set freezes.
 The rule set in question is the revised one: `docs/sprop-design.md` with
 its 2026-09-30 revision (no `transp`, no strip), plus `IWf`/`DVec`.
@@ -244,12 +247,17 @@ its identities are isomorphisms of groupoids, not equivalences.
 | `Unit`/`Empty`/`+`/`Nat`, `Vec`/`Fin`/`DVec` | routine: pointwise, and by recursion on discrete ℕ |
 | `Wf`/`IWf` (finitary), `W` | initial algebras: ω-colimit for the finitary ones, accessibility for `W` |
 | `ΠΠ` at `ω` | products over level assignments |
-| strict propositions `sEq`/`sEmpty`/`Squash` | **new lemma, proved in §3.1** |
+| strict propositions `sEq`/`sEmpty`/`Squash` | **new lemma, proved in §3.1, mechanized** (`NoUipComponents.v`: `conn_transport`, `sEq_subst`, `sec_irrelevant`, `ElimSquash`, `transp_strict`, `no_relevant_transp`, `no_uip0`) |
 | DeLaM globals, `□`, code recursors, `CΠ`/`TΠ`, δ | **argued by stratification (§4)**; no published model of DeLaM |
 
+The mechanization states contexts as reflexive graphs (morphisms and
+identities only) and fibres as groupoid data. None of the groupoid laws is
+used, so the results hold for groupoids in particular. Strict propositions
+are Coq's `SProp`, whose definitional irrelevance is exactly the strict
+uniqueness the model provides. Sections of a strict family are then an
+`SProp`, and their irrelevance is checked by conversion alone.
+
 What would strengthen it:
-- A mechanization of §3's lemma. It is small, and a Coq development of the
-  groupoid model's families would do.
 - A review of §4 by whoever next touches DeLaM's metatheory: the
   instantiation sets for layer-D type globals (up to conversion) are
   where the argument has the least slack.
