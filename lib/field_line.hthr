@@ -72,8 +72,14 @@ fn column(n, place: Nat) → BitVec(8) {
 fn field(n: Nat) → List<BitVec(8)> {
     [column(n, 1000000), column(n, 100000), column(n, 10000), column(n, 1000), column(n, 100), column(n, 10), digit(n.mod(10))]
 }
-// `printf("%7d %7d %7d\n", a, b, c)`: GNU `wc`'s line on a pipe.
+// `printf("%7d %7d %7d\n", a, b, c)`: GNU `wc`'s line on a pipe, each count
+// decimal_line's `decimal`, right-aligned in seven columns.
 fn three_fields_line(a, b, c: Nat) → List<BitVec(8)> {
+    pad_left(7, BitVec::ofNat(32), decimal(a)) ++ Cons(BitVec::ofNat(32), pad_left(7, BitVec::ofNat(32), decimal(b)) ++
+        Cons(BitVec::ofNat(32), pad_left(7, BitVec::ofNat(32), decimal(c)) ++ [BitVec::ofNat(10)]))
+}
+// The same line in the formatter's columns (`field_is_decimal`).
+fn three_columns_line(a, b, c: Nat) → List<BitVec(8)> {
     field(a) ++ Cons(BitVec::ofNat(32), field(b) ++ Cons(BitVec::ofNat(32), field(c) ++ [BitVec::ofNat(10)]))
 }
 
@@ -533,4 +539,169 @@ theorem field_high_bytes(n, sep: Nat, tail: BitVec(64), small: n < 10000000, pla
         column_byte(n, 100, n.mod(1000000).mod(100000).mod(10000).mod(1000).div(100), trivial, dg.right.right.right.right.left),
         column_byte(n, 10, n.mod(1000000).mod(100000).mod(10000).mod(1000).mod(100).div(10), trivial, dg.right.right.right.right.right.left),
         @cong(λ (e: Nat) => BitVec::ofNat(48 + e, n := 8), n.mod(1000000).mod(100000).mod(10000).mod(1000).mod(100).mod(10).div(1), n.mod(10), dg.right.right.right.right.right.right), refl))
+}
+
+// ---------------------------------------------------------------------------
+// `%7d` is `decimal`, padded (docs/native-architecture-review.md R7): the
+// columns a field prints are decimal_line's `decimal` of the count,
+// right-aligned in seven, so `%d` and `%7d` have one meaning.
+
+theorem column_blank(n, p: Nat, under: n < p): column(n, p) = BitVec::ofNat(32) {
+    j(sym(leb_yes(Succ(n), p, under)), λ b _ => (match b { True => BitVec::ofNat(32, n := 8), False => digit(n.div(p).mod(10)) }) = BitVec::ofNat(32, n := 8), refl)
+}
+theorem column_shown(n, p: Nat, reached: p <= n): column(n, p) = digit(n.div(p).mod(10)) {
+    j(sym(leb_no(Succ(n), p, reached)), λ b _ => (match b { True => BitVec::ofNat(32, n := 8), False => digit(n.div(p).mod(10)) }) = digit(n.div(p).mod(10)), refl)
+}
+theorem seven_cong<A>(a0, a1, a2, a3, a4, a5, a6, c0, c1, c2, c3, c4, c5, c6: A,
+    e0: a0 = c0, e1: a1 = c1, e2: a2 = c2, e3: a3 = c3, e4: a4 = c4, e5: a5 = c5, e6: a6 = c6):
+    Cons(a0, Cons(a1, Cons(a2, Cons(a3, Cons(a4, Cons(a5, Cons(a6, Nil))))))) = Cons(c0, Cons(c1, Cons(c2, Cons(c3, Cons(c4, Cons(c5, Cons(c6, Nil))))))) {
+    let r0 = j(e0, λ y _ => Cons(a0, Cons(a1, Cons(a2, Cons(a3, Cons(a4, Cons(a5, Cons(a6, Nil))))))) = Cons(y, Cons(a1, Cons(a2, Cons(a3, Cons(a4, Cons(a5, Cons(a6, Nil))))))), refl);
+    let r1 = j(e1, λ y _ => Cons(a0, Cons(a1, Cons(a2, Cons(a3, Cons(a4, Cons(a5, Cons(a6, Nil))))))) = Cons(c0, Cons(y, Cons(a2, Cons(a3, Cons(a4, Cons(a5, Cons(a6, Nil))))))), r0);
+    let r2 = j(e2, λ y _ => Cons(a0, Cons(a1, Cons(a2, Cons(a3, Cons(a4, Cons(a5, Cons(a6, Nil))))))) = Cons(c0, Cons(c1, Cons(y, Cons(a3, Cons(a4, Cons(a5, Cons(a6, Nil))))))), r1);
+    let r3 = j(e3, λ y _ => Cons(a0, Cons(a1, Cons(a2, Cons(a3, Cons(a4, Cons(a5, Cons(a6, Nil))))))) = Cons(c0, Cons(c1, Cons(c2, Cons(y, Cons(a4, Cons(a5, Cons(a6, Nil))))))), r2);
+    let r4 = j(e4, λ y _ => Cons(a0, Cons(a1, Cons(a2, Cons(a3, Cons(a4, Cons(a5, Cons(a6, Nil))))))) = Cons(c0, Cons(c1, Cons(c2, Cons(c3, Cons(y, Cons(a5, Cons(a6, Nil))))))), r3);
+    let r5 = j(e5, λ y _ => Cons(a0, Cons(a1, Cons(a2, Cons(a3, Cons(a4, Cons(a5, Cons(a6, Nil))))))) = Cons(c0, Cons(c1, Cons(c2, Cons(c3, Cons(c4, Cons(y, Cons(a6, Nil))))))), r4);
+    j(e6, λ y _ => Cons(a0, Cons(a1, Cons(a2, Cons(a3, Cons(a4, Cons(a5, Cons(a6, Nil))))))) = Cons(c0, Cons(c1, Cons(c2, Cons(c3, Cons(c4, Cons(c5, Cons(y, Nil))))))), r5)
+}
+// 1 digit.
+theorem field_width_1(n: Nat, hi: n < 10): field(n) = pad_left(7, BitVec::ofNat(32), decimal(n)) {
+    let spaced: (field(n) = pad_left(7, BitVec::ofNat(32), places(1)(n))) = seven_cong<BitVec(8)>(
+        column(n, 1000000), column(n, 100000), column(n, 10000), column(n, 1000), column(n, 100), column(n, 10), digit(n.mod(10)),
+        BitVec::ofNat(32, n := 8), BitVec::ofNat(32, n := 8), BitVec::ofNat(32, n := 8), BitVec::ofNat(32, n := 8), BitVec::ofNat(32, n := 8), BitVec::ofNat(32, n := 8), digit(n.mod(10)),
+        column_blank(n, 1000000, { omega }),
+        column_blank(n, 100000, { omega }),
+        column_blank(n, 10000, { omega }),
+        column_blank(n, 1000, { omega }),
+        column_blank(n, 100, { omega }),
+        column_blank(n, 10, { omega }),
+        refl);
+    let single: (tens(0)(n) <= 9) = j(sym(tens_is_div(0, n)), λ t _ => t <= 9, { let d: (n.div(Nat::pow(10, 0)) < 10) = Nat::div_lt_of_lt_mul(n, Nat::pow(10, 0), 10, hi); omega });
+    let lead: Leads(0, n) = trivial;
+    trans(spaced, cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ xs => pad_left(7, BitVec::ofNat(32), xs), sym(decimal_places(0, n, n, { omega }, single, lead))))
+}
+// 2 digits.
+theorem field_width_2(n: Nat, lo: 10 <= n, hi: n < 100): field(n) = pad_left(7, BitVec::ofNat(32), decimal(n)) {
+    let spaced: (field(n) = pad_left(7, BitVec::ofNat(32), places(2)(n))) = seven_cong<BitVec(8)>(
+        column(n, 1000000), column(n, 100000), column(n, 10000), column(n, 1000), column(n, 100), column(n, 10), digit(n.mod(10)),
+        BitVec::ofNat(32, n := 8), BitVec::ofNat(32, n := 8), BitVec::ofNat(32, n := 8), BitVec::ofNat(32, n := 8), BitVec::ofNat(32, n := 8), digit(tens(1)(n).mod(10)), digit(n.mod(10)),
+        column_blank(n, 1000000, { omega }),
+        column_blank(n, 100000, { omega }),
+        column_blank(n, 10000, { omega }),
+        column_blank(n, 1000, { omega }),
+        column_blank(n, 100, { omega }),
+        trans(column_shown(n, 10, { omega }), cong_fn<Nat, BitVec(8)>(λ q => digit(q.mod(10)), sym(tens_is_div(1, n)))),
+        refl);
+    let single: (tens(1)(n) <= 9) = j(sym(tens_is_div(1, n)), λ t _ => t <= 9, { let d: (n.div(Nat::pow(10, 1)) < 10) = Nat::div_lt_of_lt_mul(n, Nat::pow(10, 1), 10, hi); omega });
+    let lead: Leads(1, n) = j(sym(tens_is_div(1, n)), λ t _ => 1 <= t, Nat::le_div_of_mul_le(n, 10, 1, trivial, { omega }));
+    trans(spaced, cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ xs => pad_left(7, BitVec::ofNat(32), xs), sym(decimal_places(1, n, n, { omega }, single, lead))))
+}
+// 3 digits.
+theorem field_width_3(n: Nat, lo: 100 <= n, hi: n < 1000): field(n) = pad_left(7, BitVec::ofNat(32), decimal(n)) {
+    let spaced: (field(n) = pad_left(7, BitVec::ofNat(32), places(3)(n))) = seven_cong<BitVec(8)>(
+        column(n, 1000000), column(n, 100000), column(n, 10000), column(n, 1000), column(n, 100), column(n, 10), digit(n.mod(10)),
+        BitVec::ofNat(32, n := 8), BitVec::ofNat(32, n := 8), BitVec::ofNat(32, n := 8), BitVec::ofNat(32, n := 8), digit(tens(2)(n).mod(10)), digit(tens(1)(n).mod(10)), digit(n.mod(10)),
+        column_blank(n, 1000000, { omega }),
+        column_blank(n, 100000, { omega }),
+        column_blank(n, 10000, { omega }),
+        column_blank(n, 1000, { omega }),
+        trans(column_shown(n, 100, { omega }), cong_fn<Nat, BitVec(8)>(λ q => digit(q.mod(10)), sym(tens_is_div(2, n)))),
+        trans(column_shown(n, 10, { omega }), cong_fn<Nat, BitVec(8)>(λ q => digit(q.mod(10)), sym(tens_is_div(1, n)))),
+        refl);
+    let single: (tens(2)(n) <= 9) = j(sym(tens_is_div(2, n)), λ t _ => t <= 9, { let d: (n.div(Nat::pow(10, 2)) < 10) = Nat::div_lt_of_lt_mul(n, Nat::pow(10, 2), 10, hi); omega });
+    let lead: Leads(2, n) = j(sym(tens_is_div(2, n)), λ t _ => 1 <= t, Nat::le_div_of_mul_le(n, 100, 1, trivial, { omega }));
+    trans(spaced, cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ xs => pad_left(7, BitVec::ofNat(32), xs), sym(decimal_places(2, n, n, { omega }, single, lead))))
+}
+// 4 digits.
+theorem field_width_4(n: Nat, lo: 1000 <= n, hi: n < 10000): field(n) = pad_left(7, BitVec::ofNat(32), decimal(n)) {
+    let spaced: (field(n) = pad_left(7, BitVec::ofNat(32), places(4)(n))) = seven_cong<BitVec(8)>(
+        column(n, 1000000), column(n, 100000), column(n, 10000), column(n, 1000), column(n, 100), column(n, 10), digit(n.mod(10)),
+        BitVec::ofNat(32, n := 8), BitVec::ofNat(32, n := 8), BitVec::ofNat(32, n := 8), digit(tens(3)(n).mod(10)), digit(tens(2)(n).mod(10)), digit(tens(1)(n).mod(10)), digit(n.mod(10)),
+        column_blank(n, 1000000, { omega }),
+        column_blank(n, 100000, { omega }),
+        column_blank(n, 10000, { omega }),
+        trans(column_shown(n, 1000, { omega }), cong_fn<Nat, BitVec(8)>(λ q => digit(q.mod(10)), sym(tens_is_div(3, n)))),
+        trans(column_shown(n, 100, { omega }), cong_fn<Nat, BitVec(8)>(λ q => digit(q.mod(10)), sym(tens_is_div(2, n)))),
+        trans(column_shown(n, 10, { omega }), cong_fn<Nat, BitVec(8)>(λ q => digit(q.mod(10)), sym(tens_is_div(1, n)))),
+        refl);
+    let single: (tens(3)(n) <= 9) = j(sym(tens_is_div(3, n)), λ t _ => t <= 9, { let d: (n.div(Nat::pow(10, 3)) < 10) = Nat::div_lt_of_lt_mul(n, Nat::pow(10, 3), 10, hi); omega });
+    let lead: Leads(3, n) = j(sym(tens_is_div(3, n)), λ t _ => 1 <= t, Nat::le_div_of_mul_le(n, 1000, 1, trivial, { omega }));
+    trans(spaced, cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ xs => pad_left(7, BitVec::ofNat(32), xs), sym(decimal_places(3, n, n, { omega }, single, lead))))
+}
+// 5 digits.
+theorem field_width_5(n: Nat, lo: 10000 <= n, hi: n < 100000): field(n) = pad_left(7, BitVec::ofNat(32), decimal(n)) {
+    let spaced: (field(n) = pad_left(7, BitVec::ofNat(32), places(5)(n))) = seven_cong<BitVec(8)>(
+        column(n, 1000000), column(n, 100000), column(n, 10000), column(n, 1000), column(n, 100), column(n, 10), digit(n.mod(10)),
+        BitVec::ofNat(32, n := 8), BitVec::ofNat(32, n := 8), digit(tens(4)(n).mod(10)), digit(tens(3)(n).mod(10)), digit(tens(2)(n).mod(10)), digit(tens(1)(n).mod(10)), digit(n.mod(10)),
+        column_blank(n, 1000000, { omega }),
+        column_blank(n, 100000, { omega }),
+        trans(column_shown(n, 10000, { omega }), cong_fn<Nat, BitVec(8)>(λ q => digit(q.mod(10)), sym(tens_is_div(4, n)))),
+        trans(column_shown(n, 1000, { omega }), cong_fn<Nat, BitVec(8)>(λ q => digit(q.mod(10)), sym(tens_is_div(3, n)))),
+        trans(column_shown(n, 100, { omega }), cong_fn<Nat, BitVec(8)>(λ q => digit(q.mod(10)), sym(tens_is_div(2, n)))),
+        trans(column_shown(n, 10, { omega }), cong_fn<Nat, BitVec(8)>(λ q => digit(q.mod(10)), sym(tens_is_div(1, n)))),
+        refl);
+    let single: (tens(4)(n) <= 9) = j(sym(tens_is_div(4, n)), λ t _ => t <= 9, { let d: (n.div(Nat::pow(10, 4)) < 10) = Nat::div_lt_of_lt_mul(n, Nat::pow(10, 4), 10, hi); omega });
+    let lead: Leads(4, n) = j(sym(tens_is_div(4, n)), λ t _ => 1 <= t, Nat::le_div_of_mul_le(n, 10000, 1, trivial, { omega }));
+    trans(spaced, cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ xs => pad_left(7, BitVec::ofNat(32), xs), sym(decimal_places(4, n, n, { omega }, single, lead))))
+}
+// 6 digits.
+theorem field_width_6(n: Nat, lo: 100000 <= n, hi: n < 1000000): field(n) = pad_left(7, BitVec::ofNat(32), decimal(n)) {
+    let spaced: (field(n) = pad_left(7, BitVec::ofNat(32), places(6)(n))) = seven_cong<BitVec(8)>(
+        column(n, 1000000), column(n, 100000), column(n, 10000), column(n, 1000), column(n, 100), column(n, 10), digit(n.mod(10)),
+        BitVec::ofNat(32, n := 8), digit(tens(5)(n).mod(10)), digit(tens(4)(n).mod(10)), digit(tens(3)(n).mod(10)), digit(tens(2)(n).mod(10)), digit(tens(1)(n).mod(10)), digit(n.mod(10)),
+        column_blank(n, 1000000, { omega }),
+        trans(column_shown(n, 100000, { omega }), cong_fn<Nat, BitVec(8)>(λ q => digit(q.mod(10)), sym(tens_is_div(5, n)))),
+        trans(column_shown(n, 10000, { omega }), cong_fn<Nat, BitVec(8)>(λ q => digit(q.mod(10)), sym(tens_is_div(4, n)))),
+        trans(column_shown(n, 1000, { omega }), cong_fn<Nat, BitVec(8)>(λ q => digit(q.mod(10)), sym(tens_is_div(3, n)))),
+        trans(column_shown(n, 100, { omega }), cong_fn<Nat, BitVec(8)>(λ q => digit(q.mod(10)), sym(tens_is_div(2, n)))),
+        trans(column_shown(n, 10, { omega }), cong_fn<Nat, BitVec(8)>(λ q => digit(q.mod(10)), sym(tens_is_div(1, n)))),
+        refl);
+    let single: (tens(5)(n) <= 9) = j(sym(tens_is_div(5, n)), λ t _ => t <= 9, { let d: (n.div(Nat::pow(10, 5)) < 10) = Nat::div_lt_of_lt_mul(n, Nat::pow(10, 5), 10, hi); omega });
+    let lead: Leads(5, n) = j(sym(tens_is_div(5, n)), λ t _ => 1 <= t, Nat::le_div_of_mul_le(n, 100000, 1, trivial, { omega }));
+    trans(spaced, cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ xs => pad_left(7, BitVec::ofNat(32), xs), sym(decimal_places(5, n, n, { omega }, single, lead))))
+}
+// 7 digits.
+theorem field_width_7(n: Nat, lo: 1000000 <= n, hi: n < 10000000): field(n) = pad_left(7, BitVec::ofNat(32), decimal(n)) {
+    let spaced: (field(n) = pad_left(7, BitVec::ofNat(32), places(7)(n))) = seven_cong<BitVec(8)>(
+        column(n, 1000000), column(n, 100000), column(n, 10000), column(n, 1000), column(n, 100), column(n, 10), digit(n.mod(10)),
+        digit(tens(6)(n).mod(10)), digit(tens(5)(n).mod(10)), digit(tens(4)(n).mod(10)), digit(tens(3)(n).mod(10)), digit(tens(2)(n).mod(10)), digit(tens(1)(n).mod(10)), digit(n.mod(10)),
+        trans(column_shown(n, 1000000, { omega }), cong_fn<Nat, BitVec(8)>(λ q => digit(q.mod(10)), sym(tens_is_div(6, n)))),
+        trans(column_shown(n, 100000, { omega }), cong_fn<Nat, BitVec(8)>(λ q => digit(q.mod(10)), sym(tens_is_div(5, n)))),
+        trans(column_shown(n, 10000, { omega }), cong_fn<Nat, BitVec(8)>(λ q => digit(q.mod(10)), sym(tens_is_div(4, n)))),
+        trans(column_shown(n, 1000, { omega }), cong_fn<Nat, BitVec(8)>(λ q => digit(q.mod(10)), sym(tens_is_div(3, n)))),
+        trans(column_shown(n, 100, { omega }), cong_fn<Nat, BitVec(8)>(λ q => digit(q.mod(10)), sym(tens_is_div(2, n)))),
+        trans(column_shown(n, 10, { omega }), cong_fn<Nat, BitVec(8)>(λ q => digit(q.mod(10)), sym(tens_is_div(1, n)))),
+        refl);
+    let single: (tens(6)(n) <= 9) = j(sym(tens_is_div(6, n)), λ t _ => t <= 9, { let d: (n.div(Nat::pow(10, 6)) < 10) = Nat::div_lt_of_lt_mul(n, Nat::pow(10, 6), 10, hi); omega });
+    let lead: Leads(6, n) = j(sym(tens_is_div(6, n)), λ t _ => 1 <= t, Nat::le_div_of_mul_le(n, 1000000, 1, trivial, { omega }));
+    trans(spaced, cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ xs => pad_left(7, BitVec::ofNat(32), xs), sym(decimal_places(6, n, n, { omega }, single, lead))))
+}
+theorem field_is_decimal(n: Nat, small: n < 10000000): field(n) = pad_left(7, BitVec::ofNat(32), decimal(n)) {
+    match Nat::le_dec(1000000, n) {
+        Inl(lo) => field_width_7(n, lo, small),
+        Inr(_) => match Nat::le_dec(100000, n) {
+            Inl(lo) => field_width_6(n, lo, omega),
+            Inr(_) => match Nat::le_dec(10000, n) {
+                Inl(lo) => field_width_5(n, lo, omega),
+                Inr(_) => match Nat::le_dec(1000, n) {
+                    Inl(lo) => field_width_4(n, lo, omega),
+                    Inr(_) => match Nat::le_dec(100, n) {
+                        Inl(lo) => field_width_3(n, lo, omega),
+                        Inr(_) => match Nat::le_dec(10, n) {
+                            Inl(lo) => field_width_2(n, lo, omega),
+                            Inr(_) => field_width_1(n, omega),
+                        },
+                    },
+                },
+            },
+        },
+    }
+}
+
+// The line in columns is the line.
+theorem three_fields_columns(a, b, c: Nat, sa: a < 10000000, sb: b < 10000000, sc: c < 10000000): three_columns_line(a, b, c) = three_fields_line(a, b, c) {
+    let sp: BitVec(8) = BitVec::ofNat(32);
+    let pad = λ (n: Nat) => pad_left(7, BitVec::ofNat(32), decimal(n));
+    trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ x => x ++ Cons(sp, field(b) ++ Cons(sp, field(c) ++ [BitVec::ofNat(10)])), field_is_decimal(a, sa)),
+        trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ y => pad(a) ++ Cons(sp, y ++ Cons(sp, field(c) ++ [BitVec::ofNat(10)])), field_is_decimal(b, sb)),
+            cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ z => pad(a) ++ Cons(sp, pad(b) ++ Cons(sp, z ++ [BitVec::ofNat(10)])), field_is_decimal(c, sc))))
 }

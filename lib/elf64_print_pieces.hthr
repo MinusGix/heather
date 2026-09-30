@@ -93,13 +93,14 @@ record PrintFormat(codes: PrintCodes) {
     length: PrintLength(codes.length),
 }
 
-// A piece of the code run from offset `at`, where its bytes are resident:
-// its steps, memory as it was, and RIP at its end, `to` (which a client names
-// by its label).
+// A generated piece of the code run from offset `at`, where its bytes are
+// resident: its steps, memory as it was, and RIP at its end, `to` (which a
+// client names by its label). elf64_read_pieces's `BlockRan` is the same for
+// a fixed block.
 record PieceRan(stored: IoMemory, to: Nat, before, after: MachineState<IoMemory>) {
     steps: FetchedSteps(io_fetch_access(), io_data_access(), before, after),
-    memory: after.memory = stored,
-    rip: after.rip = eof_rip(to),
+    memory_is: after.memory = stored,
+    rip_is: after.rip = eof_rip(to),
 }
 
 // A generated piece's run, from its certificate (`Computes`).
@@ -114,57 +115,30 @@ theorem piece_runs({code: StructuredCode}, {before: MachineState<IoMemory>}, {ou
         resident_state(fetch, structured_bytes(code), stored, eof_rip(at), before, memory_is, rip_is, resident));
     PieceRan(
         steps := j(sym(artifact.execution), λ after _ => FetchedSteps(fetch, data, before, after), ran.left),
-        memory := trans(artifact.memory_preserved, memory_is),
-        rip := trans(artifact.rip_correct, rip_advance(io_entry(), before.rip, at, structured_bytes(code).len(), rip_is)))
+        memory_is := trans(artifact.memory_preserved, memory_is),
+        rip_is := trans(artifact.rip_correct, rip_advance(io_entry(), before.rip, at, structured_bytes(code).len(), rip_is)))
 }
 
-// A fixed block's run.
-theorem block_runs(instructions: List<Instruction>, before: MachineState<IoMemory>, stored: IoMemory, at: Nat,
-    resident: CodeResident(io_fetch_access(), stored, canonical_block_bytes(instructions), eof_rip(at)),
-    memory_is: before.memory = stored, rip_is: before.rip = eof_rip(at)):
-    PieceRan(stored, at + canonical_block_bytes(instructions).len(), before, execute_block_normal(instructions, before)) {
-    let fetch = io_fetch_access();
-    let ran = block_fetched(fetch, io_data_access(), instructions, before, trivial,
-        resident_state(fetch, canonical_block_bytes(instructions), stored, eof_rip(at), before, memory_is, rip_is, resident));
-    PieceRan(
-        steps := ran.left,
-        memory := trans(pure_block_memory(instructions, before), memory_is),
-        rip := trans(ran.right, rip_advance(io_entry(), before.rip, at, canonical_block_bytes(instructions).len(), rip_is)))
-}
-
-theorem page_write_reads(i, skip: Nat):
-    bitvec_nat::word_of_nat(64, (0x410000 + skip) + i) = bitvec_nat::word_of_nat(64, io_page_base() + (i + skip)) {
-    let base: (io_page_base() = 0x410000) = refl;
-    let same: ((0x410000 + skip) + i = io_page_base() + (i + skip)) = omega;
-    cong_fn<Nat, BitVec(64)>(λ at => bitvec_nat::word_of_nat(64, at), same)
-}
-
-// A byte of the line is within the stored word.
-theorem write_room(i, skip, len: Nat, short: i < len, total: len + skip = 5):
-    (i + skip < 8) ∧ (i + skip < 4096) { ⟨omega, omega⟩ }
-
-// The write's bytes: the line, read back from the stored word past its
-// leading zeros.
+// The write's bytes: the line, which the stored word holds past its leading
+// zeros (elf64_io's stored-bytes kit).
 theorem print_sends(stored: IoMemory, count: Nat, small: count < 10000, memory: IoMemory,
     memory_is: memory = io_store_offset(stored, 0, word_bytes(line_word(bitvec_nat::word_of_nat(64, count)))),
     buffer: BitVec(64), buffer_is: buffer.toNat() = 0x410000 + line_skip(count)):
     LinuxWritesFrom(io_linux(), memory, buffer, decimal_line(count)) {
-    λ i b present => {
-        let line = decimal_line(count);
-        let skip = line_skip(count);
-        let wb = word_bytes(line_word(bitvec_nat::word_of_nat(64, count)));
-        let within = line_in_word(count, small);
-        let total: (line.len() + skip = 5) = trans(cong_fn<Nat, Nat>(λ l => l + skip, within.right),
-            Nat::sub_add_cancel(skip, 5, Nat::le_trans(skip, 3, 5, line_skip_le(count), trivial)));
-        let room = write_room(i, skip, line.len(), nth_some_below(line, i, b, present), total);
-        let in_word: (wb.nth(i + skip) = Some(b)) =
-            j(sym(line_word_bytes(count, small)), λ list _ => list.nth(i + skip) = Some(b), within.left(i, b, present));
-        let read: (io_read(io_store_offset(stored, 0, wb), bitvec_nat::word_of_nat(64, io_page_base() + (i + skip))) = Some(b)) =
-            io_read_stored(stored, wb, i + skip, b, room.right, in_word);
-        j(sym(memory_is), λ current _ => io_read(current, bitvec_nat::word_of_nat(64, buffer.toNat() + i)) = Some(b),
-            trans(cong_fn<Nat, Option<BitVec(8)>>(λ at => io_read(io_store_offset(stored, 0, wb), bitvec_nat::word_of_nat(64, at + i)), buffer_is),
-                trans(cong_fn<BitVec(64), Option<BitVec(8)>>(λ address => io_read(io_store_offset(stored, 0, wb), address), page_write_reads(i, skip)), read)))
-    }
+    let line = decimal_line(count);
+    let skip = line_skip(count);
+    let wb = word_bytes(line_word(bitvec_nat::word_of_nat(64, count)));
+    let within = line_in_word(count, small);
+    let total: (line.len() + skip = 5) = trans(cong_fn<Nat, Nat>(λ l => l + skip, within.right),
+        Nat::sub_add_cancel(skip, 5, Nat::le_trans(skip, 3, 5, line_skip_le(count), trivial)));
+    let held: Stored(io_store_offset(stored, 0, wb).page, skip, line) =
+        stored_part(io_store_offset(stored, 0, wb).page, 0, wb, line, skip, skip, Nat::add_left_zero(skip),
+            λ i b present => j(sym(line_word_bytes(count, small)), λ bytes _ => bytes.nth(i + skip) = Some(b), within.left(i, b, present)),
+            stored_store(stored, 0, wb));
+    let at: (buffer.toNat() = 0x410000 + skip) = buffer_is;
+    let fits: (skip + line.len() <= 4096) = omega;
+    j(sym(memory_is), λ current _ => LinuxWritesFrom(io_linux(), current, buffer, line),
+        stored_sends(io_store_offset(stored, 0, wb), skip, line, held, buffer, at, fits))
 }
 
 // ---------------------------------------------------------------------------

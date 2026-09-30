@@ -130,31 +130,31 @@ theorem count_formats(stored: IoMemory, at: Nat, codes: PrintCodes, format: Prin
     let data = io_data_access();
     let n = bitvec_nat::word_of_nat(64, count);
     let s0 = execute_block_normal(print_base_block(), done);
-    let based: PieceRan(stored, ct_word(at, word, start, length), done, s0) =
-        block_runs(print_base_block(), done, stored, at, pieces.base_at, done_memory, done_rip);
+    let based: BlockRan(done, print_base_block(), stored, ct_word(at, word, start, length)) =
+        block_ran(print_base_block(), stored, at, pieces.base_at, done, done_memory, done_rip);
     let s0_r11: (read_gpr(R11, s0.gprs) = n) = done_count;
     // The line's word.
     have w = format.word(s0, n, sym(s0_r11));
     let s1 = w.after;
     let worded: PieceRan(stored, ct_start(at, word, start, length), s0, s1) =
-        piece_runs(w, stored, ct_word(at, word, start, length), pieces.word_at, based.memory, based.rip);
+        piece_runs(w, stored, ct_word(at, word, start, length), pieces.word_at, based.memory_is, based.rip_is);
     let s1_r8: (read_gpr(R8, s1.gprs) = BitVec::ofNat(0x410000)) = w.registers_preserved(R8, trivial);
     let s1_r11: (read_gpr(R11, s1.gprs) = n) = trans(w.registers_preserved(R11, trivial), s0_r11);
     // Where the line starts.
     have st = format.start(s1, Pair(BitVec::ofNat(0x410000), n), ⟨sym(s1_r8), sym(s1_r11)⟩);
     let s2 = st.after;
     let started: PieceRan(stored, ct_length(at, word, start, length), s1, s2) =
-        piece_runs(st, stored, ct_start(at, word, start, length), pieces.start_at, worded.memory, worded.rip);
+        piece_runs(st, stored, ct_start(at, word, start, length), pieces.start_at, worded.memory_is, worded.rip_is);
     // How long it is.
     have ln = format.length(s2, n, sym(trans(st.registers_preserved(R11, trivial), s1_r11)));
     let s3 = ln.after;
     let measured: PieceRan(stored, ct_store(at, word, start, length), s2, s3) =
-        piece_runs(ln, stored, ct_length(at, word, start, length), pieces.length_at, started.memory, started.rip);
+        piece_runs(ln, stored, ct_length(at, word, start, length), pieces.length_at, started.memory_is, started.rip_is);
     Exists(s3, ⟨fetched_steps_trans(fetch, data, done, s0, s3, based.steps,
             fetched_steps_trans(fetch, data, s0, s1, s3, worded.steps, fetched_steps_trans(fetch, data, s1, s2, s3, started.steps, measured.steps))),
         CountFormatted(
-            memory := measured.memory,
-            rip := measured.rip,
+            memory := measured.memory_is,
+            rip := measured.rip_is,
             base := trans(ln.registers_preserved(R8, trivial), trans(st.registers_preserved(R8, trivial), s1_r8)),
             word_value := trans(ln.registers_preserved(Rax, trivial), trans(st.registers_preserved(Rax, trivial), w.result_correct)),
             start_value := trans(ln.registers_preserved(R9, trivial), st.result_correct),

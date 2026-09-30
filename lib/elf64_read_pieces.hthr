@@ -76,9 +76,6 @@ fn eof_exit_code() → List<BitVec(8)> { canonical_block_bytes(eof_exit_block())
 
 // A piece's address, from its offset from the entry.
 fn eof_rip(at: Nat) → BitVec(64) { next_rip(io_entry(), at) }
-theorem nth_some_below<A>(xs: List<A>, i: Nat, x: A, present: xs.nth(i) = Some(x)): i < xs.len() {
-    Nat::lt_of_not_le(i, xs.len(), λ past => absurd(trans(sym(present), xs.nth_past_end(i, past))))
-}
 
 // What a program proves (docs/native-wc-design.md §3): its specification is
 // its step folded over the input from zero. With a step that folds

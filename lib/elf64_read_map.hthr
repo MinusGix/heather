@@ -100,54 +100,8 @@ fn map_at_failed(p: Nat) → Nat { map_at(p, 8) }
 fn map_at_retry(p: Nat) → Nat { ft_at_jz(map_at_failed(p)) }
 
 // ---------------------------------------------------------------------------
-// One byte stored into the page.
-
-theorem store_byte_here(memory: IoMemory, i: Nat, x: BitVec(8)): io_store_offset(memory, i, [x]).page(i) = x {
-    let reached = eq_true_of_is_true(i.leb(i), Nat::leb_complete(i, i, i.le_refl()));
-    j(sym(reached), λ c _ => (match c {
-            False => memory.page(i),
-            True => match List::nth<BitVec(8)>([x], i -i) { None => memory.page(i), Some(byte) => byte },
-        }) = x,
-        j(sym(Nat::sub_self(i)), λ d _ => (match List::nth<BitVec(8)>([x], d) { None => memory.page(i), Some(byte) => byte }) = x, refl))
-}
-
-theorem store_byte_other(memory: IoMemory, i: Nat, x: BitVec(8), k: Nat, other: Not(k = i)):
-    io_store_offset(memory, i, [x]).page(k) = memory.page(k) {
-    (match i.leb(k) as λ c => (i.leb(k) = c) → (match c {
-            False => memory.page(k),
-            True => match List::nth<BitVec(8)>([x], k -i) { None => memory.page(k), Some(byte) => byte },
-        }) = memory.page(k) {
-        False => λ _ => refl,
-        True => λ below => {
-            let le: (i <= k) = Nat::leb_sound(i, k, j(sym(below), λ c _ => c.IsTrue(), trivial));
-            (match k -i as λ d => (k -i = d) → (match List::nth<BitVec(8)>([x], d) { None => memory.page(k), Some(byte) => byte }) = memory.page(k) {
-                Zero => λ none => {
-                    let back: ((k -i) + i = k) = Nat::sub_add_cancel(i, k, le);
-                    false_elim(other({ omega }))
-                },
-                Succ(_) => λ _ => refl,
-            })(refl)
-        },
-    })(refl)
-}
-
-// A byte store at the page's i-th byte is a store at offset i.
-theorem store_at_offset(memory: IoMemory, address: BitVec(64), i: Nat, bytes: List<BitVec(8)>,
-    at: address.toNat() = io_page_base() + i): io_store(memory, address, bytes) = io_store_offset(memory, i, bytes) {
-    cong_fn<Nat, IoMemory>(λ offset => io_store_offset(memory, offset, bytes),
-        trans(cong_fn<Nat, Nat>(λ a => a -io_page_base(), at),
-            trans(cong_fn<Nat, Nat>(λ a => a -io_page_base(), Nat::add_comm(io_page_base(), i)), Nat::add_sub_cancel(i, io_page_base()))))
-}
-
-// The page read at an address in it.
-theorem read_in_page(file: List<BitVec(8)>, page: Nat → BitVec(8), address: BitVec(64), i: Nat, inside: i < 4096,
-    at: address.toNat() = io_page_base() + i): io_read(IoMemory(file, page), address) = Some(page(i)) {
-    j(sym(trans(cong_fn<Nat, Option<Nat>>(λ a => io_offset_of(a), at), io_offset_in_page(i, inside))),
-        λ found _ => (match found {
-            Some(k) => Some(page(k)),
-            None => io_file_read(file, address),
-        }) = Some(page(i)), refl)
-}
+// One byte stored into the page: elf64_io's stored-bytes kit
+// (`store_byte_here`, `store_byte_other`, `store_at_offset`, `io_read_page`).
 
 // The low byte of a zero-extended byte is the byte.
 theorem low_of_extended(x: BitVec(8)): imm_byte0(x.zero_extend(56)) = x {
@@ -271,7 +225,7 @@ theorem map_fetched(f: BitVec(8) → BitVec(8), code: StructuredCode, piece: Map
     let loaded: (head.page(i) = b) = head.left(i, b, at_byte, i.le_refl());
     let present: (io_data_access().read(state.memory, rsi) = Some(b)) =
         j(sym(head.memory_is), λ m _ => io_read(m, rsi) = Some(b),
-            trans(read_in_page(file, head.page, rsi, i, inside, head.cursor), cong_fn<BitVec(8), Option<BitVec(8)>>(λ x => Some(x), loaded)));
+            trans(io_read_page(file, head.page, rsi, i, inside, head.cursor), cong_fn<BitVec(8), Option<BitVec(8)>>(λ x => Some(x), loaded)));
     let canonical: (rsi.drop_low(47, 17) = BitVec::zero()) =
         BitVec::drop_low_zero_of_lt(47, 17, rsi, j(sym(head.cursor), λ v _ => v < Nat::pow(2, 47), map_low(i, inside)));
     let s1 = byte_load_after(map_load(), b, state);
@@ -287,7 +241,7 @@ theorem map_fetched(f: BitVec(8) → BitVec(8), code: StructuredCode, piece: Map
     Exists(artifact.after, MapLoaded(
         steps := fetched_steps_cons(fetch, data, state, s1, artifact.after, load_step, ran.steps),
         memory_is := artifact.memory_preserved,
-        rip_is := ran.rip,
+        rip_is := ran.rip_is,
         image := artifact.result_correct,
         rsi := artifact.registers_preserved(Rsi, trivial),
         rcx := artifact.registers_preserved(Rcx, trivial),
@@ -532,21 +486,19 @@ theorem map_page_end(n: Nat, fits: n <= 4096): io_page_base() + n < Nat::pow(2, 
     omega
 }
 
-// Once the chunk is mapped, the page from R9 holds its image.
+// Once the chunk is mapped, the page from R9 holds its image, which is what
+// the write sends.
 theorem map_sends_page(f: BitVec(8) → BitVec(8), file, bytes: List<BitVec(8)>, fits: bytes.len() <= 4096, page: Nat → BitVec(8),
     r9: BitVec(64), base: r9.toNat() = io_page_base(),
     mapped: (j: Nat) → (b: BitVec(8)) → bytes.nth(j) = Some(b) → j < bytes.len() → page(j) = f(b)):
     LinuxWritesFrom(io_linux(), IoMemory(file, page), r9, bytes.map(f)) {
-    λ k y at_k => {
+    let held: Stored(page, 0, bytes.map(f)) = λ k y at_k => {
         let found = nth_map_of(f, bytes, k, y, at_k);
-        let below: (k < bytes.len()) = nth_some_below(bytes, k, found.witness, found.proof.left);
-        let inside = map_below_page(k, bytes.len(), below, fits);
-        let value: (bitvec_nat::word_of_nat(64, r9.toNat() + k).toNat() = io_page_base() + k) =
-            trans(bitvec_nat::toNat_word_of_nat(64, r9.toNat() + k, j(sym(base), λ v _ => v + k < Nat::pow(2, 64), map_page_word(k, inside))),
-                cong_fn<Nat, Nat>(λ v => v + k, base));
-        trans(read_in_page(file, page, bitvec_nat::word_of_nat(64, r9.toNat() + k), k, inside, value),
-            cong_fn<BitVec(8), Option<BitVec(8)>>(λ x => Some(x), trans(mapped(k, found.witness, found.proof.left, below), sym(found.proof.right))))
-    }
+        trans(mapped(k, found.witness, found.proof.left, nth_some_below(bytes, k, found.witness, found.proof.left)), sym(found.proof.right))
+    };
+    let same = List::len_map(bytes, f);
+    let room: (0 + bytes.map(f).len() <= 4096) = omega;
+    stored_sends(IoMemory(file, page), 0, bytes.map(f), held, r9, base, room)
 }
 
 // One chunk, from past the head: the setup, the chunk mapped in place, then

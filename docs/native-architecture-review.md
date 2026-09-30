@@ -1,6 +1,6 @@
 # The native program stack: an architecture review
 
-Status: **review, 2026-09-30. R0–R6 chosen and landed the same day (§8); R7 open.** Read-only
+Status: **review, 2026-09-30. R0–R7 chosen and landed the same day (§8).** Read-only
 survey of what `wc -l`, `wc` and `tr` left behind, taken before a fourth
 program (`tr -s`/`-d`, `issues/native-loop-emitting-stores.md`) adds another
 process. The question is engineering, not speed: what is repeated, what is
@@ -985,3 +985,98 @@ names follow the bundle (`wc_l_program_native_*`, `wc_program_native_*`),
 so the perf diary's items for the two builds change names at this commit.
 
 **Unchanged.** The four executables are byte-identical to R5's.
+
+### R7 (2026-09-30)
+
+**One stored-bytes kit** (`elf64_io`, the memory view every process
+imports). `Stored(page, offset, bytes)` says the page holds `bytes` from
+`offset`. It is pointwise, `bytes.nth(i) = Some(b) → page(i + offset) = b`,
+indexed so that a run from the page's start is `page(i)` itself. Around it:
+
+- `stored_store`: a store holds what it stored;
+- `stored_kept`: a store past a run leaves the run;
+- `stored_join`: two runs side by side are one;
+- `stored_part`: part of a run is a run, from a given byte on;
+- `stored_sends`: a run is what a write from its first byte sends
+  (`LinuxWritesFrom`);
+- the single-byte store facts, the page address, `IoWritable` and the
+  page read.
+
+The three copies are gone:
+
+- **`wc -l`'s** `print_sends` is the stored word, its part past the leading
+  zeros, and `stored_sends`, with no address arithmetic of its own.
+  `write_room` and `page_write_reads` are gone.
+- **`wc`'s** `StoredList` family (a per-byte conjunction with its own
+  `stored_four`, `stored_kept`, `stored_join`, `stored_nth`, `stored_sends`)
+  is replaced by the kit. A word's first four bytes are `stored_part` of the
+  store (`stored_first_four`). `page_address`, `page_writable` and
+  `page_store`'s body moved to the kit.
+- **`tr`'s** `store_byte_here`, `store_byte_other`, `store_at_offset` and
+  `read_in_page` moved to the kit (`read_in_page` as `io_read_page`).
+  `map_sends_page` is `stored_sends` of the mapped chunk.
+
+The kit is 161 lines, and the three clients lost 169.
+
+**R5's run lemma, deduplicated.** R5 added `block_runs` and did not notice
+R1's `block_ran`, which is the same lemma. `block_runs` is gone, the count
+and fields tails use `block_ran`, and `PieceRan` (a generated piece's run)
+uses `BlockRan`'s field names.
+
+**One formatting spec.**
+
+- `decimal_line` gains:
+  - `places(k)(n)`, the last `k` digits;
+  - `tens(k)(n)`, `n` divided by ten `k` times, which `tens_is_div`
+    shows is `n / 10^k`;
+  - `pad_left(width, fill, bytes)`.
+- `decimal_places` says: a count whose `k`-th division by ten is a single
+  nonzero digit has `decimal` equal to its last `k + 1` places. It is
+  proved once, by induction, for every width.
+- `field_line`'s `field_is_decimal`, proved once:
+
+  ```
+  field(n) = pad_left(7, ' ', decimal(n))    for n < 10^7
+  ```
+
+  The seven columns the formatter computes are `decimal`, right-aligned.
+  One case per width uses `decimal_places` and the column's blank-or-digit
+  facts.
+- `three_fields_line(a, b, c)`, the line `wc`'s claim states, is now
+  `%7d %7d %7d\n` over `pad_left` and `decimal`. The formatter's columns
+  are `three_columns_line`, and `three_fields_columns` joins the two. The
+  fields tail proves the write over the columns, whose length is concrete,
+  and crosses once.
+
+So `wc -l`'s line, `decimal(n) ++ "\n"`, and `wc`'s three fields are the
+same `decimal`. `%d` and `%7d` differ only in the padding.
+
+**Not done, and why.**
+
+- **The restoring kit over the shift.** `field_line`'s place-value lemmas
+  repeat `decimal_line`'s with 2^32 where they have 2^40. They lean on
+  `omega` with the constant as a literal. Over a symbolic shift the
+  products are nonlinear, which `omega` doesn't decide, so sharing them
+  needs another arithmetic route first. That's a tactic question, not a
+  refactor.
+- **Cursor stores in the tails.** Having the count and fields tails store
+  through a cursor and write `[base, cursor)` would change both tails' code
+  and every proof over them, for no program that needs it now. The step
+  every process shares, *stored runs, then a write of what is stored*, is
+  now the kit's `stored_sends` in all three. The cursor-based emitter
+  belongs to the first program that emits a variable amount (`tr -s`/`-d`,
+  and later a variable-width `%d`), written over this kit.
+
+**Cost.** Checking `elf64_read_fields` from scratch does a few percent more
+work than at R6: evaluator steps +2.4%, conversion misses +4%, from the kit's
+general lemmas and `field_is_decimal`'s seven cases. `field_prints`' counts
+are identical. The new spec proofs are tens of milliseconds each.
+
+The first full suite ran at a load average near 16, from other sessions. It
+lost `read_fields_process` at the per-test CPU limit, which the test already
+sits closest to. Every process test ran about a quarter slower that run,
+including `read_state_process`, which R7 barely touched. Alone, at lower
+load, the test passes, and so does the full suite that followed. The fields
+test's margin to the limit is thin enough that load alone can cross it.
+
+**Unchanged.** The four executables are byte-identical to R6's.

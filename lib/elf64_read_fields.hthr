@@ -222,20 +222,10 @@ fn field_stored(memory: IoMemory, n, offset, separator: Nat) → IoMemory {
         word_bytes(field_high(bitvec_nat::word_of_nat(64, n), BitVec::ofNat(16777216 * separator))))
 }
 
-// A store to the page at `offset`.
-theorem page_address(offset: Nat, room: offset + 8 <= 4096): BitVec::ofNat(0x410000 + offset, n := 64).toNat() = 0x410000 + offset {
-    BitVec::toNat_ofNat(64, 0x410000 + offset, { omega })
-}
+// A store to the page at `offset` (elf64_io's `store_at_offset`).
 theorem page_store(memory: IoMemory, offset: Nat, bytes: List<BitVec(8)>, room: offset + 8 <= 4096):
     io_store(memory, BitVec::ofNat(0x410000 + offset), bytes) = io_store_offset(memory, offset, bytes) {
-    let back: ((0x410000 + offset) -io_page_base() = offset) =
-        trans(cong_fn<Nat, Nat>(λ a => a -io_page_base(), Nat::add_comm(0x410000, offset)), Nat::add_sub_cancel(offset, 0x410000));
-    cong_fn<Nat, IoMemory>(λ start => io_store_offset(memory, start, bytes),
-        trans(cong_fn<Nat, Nat>(λ a => a -io_page_base(), page_address(offset, room)), back))
-}
-theorem page_writable(memory: IoMemory, offset: Nat, room: offset + 8 <= 4096): IoWritable(memory, BitVec::ofNat(0x410000 + offset), 8) {
-    let value = page_address(offset, room);
-    ⟨j(sym(value), λ a _ => io_page_base() <= a, { omega }), j(sym(value), λ a _ => a + 8 <= io_page_base() + 4096, { omega })⟩
+    store_at_offset(memory, BitVec::ofNat(0x410000 + offset), offset, bytes, page_address(offset, room))
 }
 
 // One field: its count's two words formatted and stored, the counts still in
@@ -260,38 +250,38 @@ theorem field_prints(file: List<BitVec(8)>, count: Gpr, offset, separator: Nat, 
     let m0 = IoMemory(file, page);
     // The count into R11.
     let s1 = execute_block_normal(field_count_block(count), state);
-    let counted_in: PieceRan(m0, fc_low(count, offset, separator, low, high, at), state, s1) =
-        block_runs(field_count_block(count), state, m0, at, here.count_at, memory_is, rip_is);
+    let counted_in: BlockRan(state, field_count_block(count), m0, fc_low(count, offset, separator, low, high, at)) =
+        block_ran(field_count_block(count), m0, at, here.count_at, state, memory_is, rip_is);
     let s1_r11: (read_gpr(R11, s1.gprs) = word) = counted;
     // The low word.
     have lw = format.low(s1, word, sym(s1_r11));
     let s2 = lw.after;
     let lowered: PieceRan(m0, fc_block(count, offset, separator, low, high, at), s1, s2) =
-        piece_runs(lw, m0, fc_low(count, offset, separator, low, high, at), here.low_at, counted_in.memory, counted_in.rip);
+        piece_runs(lw, m0, fc_low(count, offset, separator, low, high, at), here.low_at, counted_in.memory_is, counted_in.rip_is);
     let s2_r11: (read_gpr(R11, s2.gprs) = word) = trans(lw.registers_preserved(R11, trivial), s1_r11);
     let k2: CountsKept(s2.gprs, s1.gprs) = ⟨lw.registers_preserved(R13, trivial), ⟨lw.registers_preserved(R14, trivial),
         lw.registers_preserved(R15, trivial)⟩⟩;
     // Its address, and the high word's tail.
     let s3 = execute_block_normal(field_low_block(offset, separator), s2);
-    let blocked: PieceRan(m0, fc_store(count, offset, separator, low, high, at), s2, s3) =
-        block_runs(field_low_block(offset, separator), s2, m0, fc_block(count, offset, separator, low, high, at), here.block_at, lowered.memory, lowered.rip);
+    let blocked: BlockRan(s2, field_low_block(offset, separator), m0, fc_store(count, offset, separator, low, high, at)) =
+        block_ran(field_low_block(offset, separator), m0, fc_block(count, offset, separator, low, high, at), here.block_at, s2, lowered.memory_is, lowered.rip_is);
     let s3_rax: (read_gpr(Rax, s3.gprs) = field_low(word)) = lw.result_correct;
     let s3_r11: (read_gpr(R11, s3.gprs) = word) = s2_r11;
     // The low word stored.
     let low_room: (offset + 8 <= 4096) = omega;
     let stored = store_step(fetch, writes, fields_store(), s3, refl,
         FetchedFrom(resident_readable(fetch, s3.memory, word_store_bytes(fields_store()), s3.rip,
-            resident_state(fetch, word_store_bytes(fields_store()), m0, eof_rip(fc_store(count, offset, separator, low, high, at)), s3, blocked.memory, blocked.rip,
+            resident_state(fetch, word_store_bytes(fields_store()), m0, eof_rip(fc_store(count, offset, separator, low, high, at)), s3, blocked.memory_is, blocked.rip_is,
                 here.store_at))),
-        j(sym(blocked.memory), λ m _ => IoWritable(m, BitVec::ofNat(0x410000 + offset), 8), page_writable(m0, offset, low_room)));
+        j(sym(blocked.memory_is), λ m _ => IoWritable(m, BitVec::ofNat(0x410000 + offset), 8), page_writable(m0, offset, low_room)));
     let s4 = word_store_after(writes, fields_store(), s3);
     let m1 = io_store_offset(m0, offset, word_bytes(field_low(word)));
     let s4_memory: (s4.memory = m1) =
         trans(cong_fn<BitVec(64), IoMemory>(λ value => io_store(s3.memory, BitVec::ofNat(0x410000 + offset), word_bytes(value)), s3_rax),
-            trans(cong_fn<IoMemory, IoMemory>(λ m => io_store(m, BitVec::ofNat(0x410000 + offset), word_bytes(field_low(word))), blocked.memory),
+            trans(cong_fn<IoMemory, IoMemory>(λ m => io_store(m, BitVec::ofNat(0x410000 + offset), word_bytes(field_low(word))), blocked.memory_is),
                 page_store(m0, offset, word_bytes(field_low(word)), low_room)));
     let s4_rip: (s4.rip = eof_rip(fc_high(count, offset, separator, low, high, at))) =
-        rip_advance(entry, s3.rip, fc_store(count, offset, separator, low, high, at), 3, blocked.rip);
+        rip_advance(entry, s3.rip, fc_store(count, offset, separator, low, high, at), 3, blocked.rip_is);
     let there = pieces(m1.page);
     // The high word.
     have hw = format.high(s4, Pair(word, tail), ⟨sym(s3_r11), refl⟩);
@@ -302,23 +292,23 @@ theorem field_prints(file: List<BitVec(8)>, count: Gpr, offset, separator: Nat, 
         hw.registers_preserved(R15, trivial)⟩⟩;
     // Its address.
     let s6 = execute_block_normal(field_high_block(offset), s5);
-    let blocked2: PieceRan(m1, fc_store2(count, offset, separator, low, high, at), s5, s6) =
-        block_runs(field_high_block(offset), s5, m1, fc_block2(count, offset, separator, low, high, at), there.block2_at, highed.memory, highed.rip);
+    let blocked2: BlockRan(s5, field_high_block(offset), m1, fc_store2(count, offset, separator, low, high, at)) =
+        block_ran(field_high_block(offset), m1, fc_block2(count, offset, separator, low, high, at), there.block2_at, s5, highed.memory_is, highed.rip_is);
     let s6_rax: (read_gpr(Rax, s6.gprs) = field_high(word, tail)) = hw.result_correct;
     // The high word stored.
     let high_room: ((offset + 4) + 8 <= 4096) = omega;
     let stored2 = store_step(fetch, writes, fields_store(), s6, refl,
         FetchedFrom(resident_readable(fetch, s6.memory, word_store_bytes(fields_store()), s6.rip,
-            resident_state(fetch, word_store_bytes(fields_store()), m1, eof_rip(fc_store2(count, offset, separator, low, high, at)), s6, blocked2.memory,
-                blocked2.rip, there.store2_at))),
-        j(sym(blocked2.memory), λ m _ => IoWritable(m, BitVec::ofNat(0x410000 + (offset + 4)), 8), page_writable(m1, offset + 4, high_room)));
+            resident_state(fetch, word_store_bytes(fields_store()), m1, eof_rip(fc_store2(count, offset, separator, low, high, at)), s6, blocked2.memory_is,
+                blocked2.rip_is, there.store2_at))),
+        j(sym(blocked2.memory_is), λ m _ => IoWritable(m, BitVec::ofNat(0x410000 + (offset + 4)), 8), page_writable(m1, offset + 4, high_room)));
     let s7 = word_store_after(writes, fields_store(), s6);
     let s7_memory: (s7.memory = field_stored(m0, n, offset, separator)) =
         trans(cong_fn<BitVec(64), IoMemory>(λ value => io_store(s6.memory, BitVec::ofNat(0x410000 + (offset + 4)), word_bytes(value)), s6_rax),
-            trans(cong_fn<IoMemory, IoMemory>(λ m => io_store(m, BitVec::ofNat(0x410000 + (offset + 4)), word_bytes(field_high(word, tail))), blocked2.memory),
+            trans(cong_fn<IoMemory, IoMemory>(λ m => io_store(m, BitVec::ofNat(0x410000 + (offset + 4)), word_bytes(field_high(word, tail))), blocked2.memory_is),
                 page_store(m1, offset + 4, word_bytes(field_high(word, tail)), high_room)));
     let s7_rip: (s7.rip = eof_rip(fc_end(count, offset, separator, low, high, at))) =
-        rip_advance(entry, s6.rip, fc_store2(count, offset, separator, low, high, at), 3, blocked2.rip);
+        rip_advance(entry, s6.rip, fc_store2(count, offset, separator, low, high, at), 3, blocked2.rip_is);
     let k1: CountsKept(s1.gprs, state.gprs) = ⟨refl, ⟨refl, refl⟩⟩;
     let k4: CountsKept(s4.gprs, s2.gprs) = ⟨refl, ⟨refl, refl⟩⟩;
     let k7: CountsKept(s7.gprs, s5.gprs) = ⟨refl, ⟨refl, refl⟩⟩;
@@ -351,125 +341,35 @@ theorem take_nth<A>(xs: List<A>): (k, i: Nat) → (x: A) → xs.take(k).nth(i) =
     }
 }
 
-theorem trans_le_succ(offset, len, start: Nat, below: offset + Succ(len) <= start): Succ(offset) + len <= start { omega }
-
-// The page holds `bytes` from `offset`.
-// (The offset varies in the recursion, so it is taken after the match.)
-fn stored_from(page: Nat → BitVec(8), bytes: List<BitVec(8)>) → Nat → Type {
-    match bytes { Nil => λ _ => True, Cons(byte, rest) => λ offset => (page(offset) = byte) ∧ stored_from(page, rest)(Succ(offset)) }
-}
-fn StoredList(page: Nat → BitVec(8), offset: Nat, bytes: List<BitVec(8)>) → Type { stored_from(page, bytes)(offset) }
-
-theorem store_reads(memory: IoMemory, offset, j: Nat, bytes: List<BitVec(8)>, byte: BitVec(8), present: bytes.nth(j) = Some(byte)):
-    io_store_offset(memory, offset, bytes).page(offset + j) = byte {
-    let reached = eq_true_of_is_true(offset.leb(offset + j), Nat::leb_complete(offset, offset + j, Nat::le_add_l(offset, j)));
-    let back: ((offset + j) -offset = j) = trans(cong_fn<Nat, Nat>(λ a => a -offset, Nat::add_comm(offset, j)), Nat::add_sub_cancel(j, offset));
-    let found: (bytes.nth((offset + j) -offset) = Some(byte)) = trans(cong_fn<Nat, Option<BitVec(8)>>(λ k => bytes.nth(k), back), present);
-    j(sym(reached), λ b _ => (match b {
-            False => memory.page(offset + j),
-            True => match bytes.nth((offset + j) -offset) { None => memory.page(offset + j), Some(byte) => byte },
-        }) = byte,
-        j(sym(found), λ o _ => (match o { None => memory.page(offset + j), Some(byte) => byte }) = byte, refl))
-}
-
-// A store's first four bytes.
-theorem stored_four(memory: IoMemory, offset: Nat, word: List<BitVec(8)>, c0, c1, c2, c3: BitVec(8),
-    taken: word.take(4) = [c0, c1, c2, c3]):
-    StoredList(io_store_offset(memory, offset, word).page, offset, [c0, c1, c2, c3]) {
-    let at = λ (k: Nat) (c: BitVec(8)) (present: word.take(4).nth(k) = Some(c)) => store_reads(memory, offset, k, word, c, take_nth(word, 4, k, c, present));
-    let t = λ (k: Nat) (c: BitVec(8)) (listed: Cons(c0, Cons(c1, Cons(c2, Cons(c3, Nil)))).nth(k) = Some(c)) => j(sym(taken), λ xs _ => xs.nth(k) = Some(c), listed);
-    ⟨at(0, c0, t(0, c0, refl)), ⟨at(1, c1, t(1, c1, refl)), ⟨at(2, c2, t(2, c2, refl)), ⟨at(3, c3, t(3, c3, refl)), trivial⟩⟩⟩⟩
-}
-
-// Bytes below a store are untouched by it.
-theorem stored_kept(memory: IoMemory, start: Nat, word: List<BitVec(8)>, bytes: List<BitVec(8)>):
-    (offset: Nat) → offset + bytes.len() <= start → StoredList(memory.page, offset, bytes) →
-    StoredList(io_store_offset(memory, start, word).page, offset, bytes) {
-    match bytes as λ bs => (offset: Nat) → offset + bs.len() <= start → StoredList(memory.page, offset, bs) →
-        StoredList(io_store_offset(memory, start, word).page, offset, bs) {
-        Nil => λ offset below held => trivial,
-        Cons(byte, rest) => λ offset below held => {
-            let under: (offset < start) = omega;
-            let skipped = io_leb_false(start, offset, under);
-            let same: (io_store_offset(memory, start, word).page(offset) = memory.page(offset)) =
-                j(sym(skipped), λ b _ => (match b {
-                        False => memory.page(offset),
-                        True => match word.nth(offset -start) { None => memory.page(offset), Some(x) => x },
-                    }) = memory.page(offset), refl);
-            let later: (Succ(offset) + rest.len() <= start) = trans_le_succ(offset, rest.len(), start, below);
-            ⟨trans(same, held.left), stored_kept(memory, start, word, rest, Succ(offset), later, held.right)⟩
-        },
-    }
-}
-
-// Two stored runs, one after the other, are one.
-theorem stored_join(page: Nat → BitVec(8), front: List<BitVec(8)>): (back: List<BitVec(8)>) → (offset: Nat) →
-    StoredList(page, offset, front) → StoredList(page, offset + front.len(), back) → StoredList(page, offset, front ++ back) {
-    match front as λ fs => (back: List<BitVec(8)>) → (offset: Nat) →
-        StoredList(page, offset, fs) → StoredList(page, offset + fs.len(), back) → StoredList(page, offset, fs ++ back) {
-        Nil => λ back offset held rest => rest,
-        Cons(byte, more) => λ back offset held rest =>
-            ⟨held.left, stored_join(page, more, back, Succ(offset), held.right,
-                j(sym(Nat::add_succ_left(offset, more.len())), λ at _ => StoredList(page, at, back), rest))⟩,
-    }
-}
-
-// A run stored from the page's start is what a write from there sends.
-theorem stored_nth(page: Nat → BitVec(8), bytes: List<BitVec(8)>): (offset, i: Nat) → (byte: BitVec(8)) →
-    StoredList(page, offset, bytes) → bytes.nth(i) = Some(byte) → page(offset + i) = byte {
-    match bytes as λ bs => (offset, i: Nat) → (byte: BitVec(8)) → StoredList(page, offset, bs) → bs.nth(i) = Some(byte) → page(offset + i) = byte {
-        Nil => λ offset i byte held present => absurd(present),
-        Cons(first, rest) => λ offset i => match i as λ k => (byte: BitVec(8)) → StoredList(page, offset, Cons(first, rest)) →
-                Cons(first, rest).nth(k) = Some(byte) → page(offset + k) = byte {
-            Zero => λ byte held present => trans(held.left, Option::some_inj<BitVec(8)>(first, byte, present)),
-            Succ(k) => λ byte held present => j(Nat::add_succ_left(offset, k), λ at _ => page(at) = byte,
-                stored_nth(page, rest, Succ(offset), k, byte, held.right, present)),
-        },
-    }
-}
-theorem stored_sends(memory: IoMemory, bytes: List<BitVec(8)>, held: StoredList(memory.page, 0, bytes), fits: bytes.len() <= 4096):
-    LinuxWritesFrom(io_linux(), memory, BitVec::ofNat(0x410000), bytes) {
-    λ i byte present => {
-        let inside: (i < 4096) = Succ(i).le_trans(bytes.len(), 4096, nth_some_below(bytes, i, byte, present), fits);
-        let below: (Succ(io_page_base() + i) <= io_page_base() + 4096) = omega;
-        let bound: (io_page_base() + i < Nat::pow(2, 64)) =
-            Succ(io_page_base() + i).le_trans(io_page_base() + 4096, Nat::pow(2, 64), below, Nat::leb_sound(io_page_base() + 4096, Nat::pow(2, 64), trivial));
-        let value = bitvec_nat::toNat_word_of_nat(64, io_page_base() + i, bound);
-        let offset = trans(cong_fn<Nat, Option<Nat>>(λ a => io_offset_of(a), value), io_offset_in_page(i, inside));
-        let read: (io_read(memory, bitvec_nat::word_of_nat(64, io_page_base() + i)) = Some(memory.page(i))) =
-            j(sym(offset), λ found _ => (match found {
-                    Some(k) => Some(memory.page(k)),
-                    None => io_file_read(memory.file, bitvec_nat::word_of_nat(64, io_page_base() + i)),
-                }) = Some(memory.page(i)), refl);
-        let held_i: (memory.page(0 + i) = byte) = stored_nth(memory.page, bytes, 0, i, byte, held, present);
-        let byte_i: (memory.page(i) = byte) = j(Nat::add_left_zero(i), λ k _ => memory.page(k) = byte, held_i);
-        trans(read, cong_fn<BitVec(8), Option<BitVec(8)>>(λ b => Some(b), byte_i))
-    }
+// A word's first four bytes, where the word was stored.
+theorem stored_first_four(memory: IoMemory, offset: Nat, word: List<BitVec(8)>, four: List<BitVec(8)>, taken: word.take(4) = four):
+    Stored(io_store_offset(memory, offset, word).page, offset, four) {
+    stored_part(io_store_offset(memory, offset, word).page, offset, word, four, 0, offset, refl,
+        λ i b present => take_nth(word, 4, i, b, j(sym(taken), λ xs _ => xs.nth(i) = Some(b), present)), stored_store(memory, offset, word))
 }
 
 // A field's eight bytes: its seven columns and its separator.
 fn field_run(n, separator: Nat) → List<BitVec(8)> { field(n) ++ [BitVec::ofNat(separator)] }
 
 theorem field_run_stored(memory: IoMemory, n, offset, separator: Nat, small: n < 10000000, sep_small: separator < 256, room: offset + 12 <= 4096):
-    StoredList(field_stored(memory, n, offset, separator).page, offset, field_run(n, separator)) {
+    Stored(field_stored(memory, n, offset, separator).page, offset, field_run(n, separator)) {
     let word = bitvec_nat::word_of_nat(64, n);
     let tail: BitVec(64) = BitVec::ofNat(16777216 * separator);
     let tail_value: (tail.toNat() = 16777216 * separator) = BitVec::toNat_ofNat(64, 16777216 * separator, { omega });
     let m1 = io_store_offset(memory, offset, word_bytes(field_low(word)));
-    let low = stored_four(memory, offset, word_bytes(field_low(word)), column(n, 1000000), column(n, 100000), column(n, 10000), column(n, 1000),
-        field_low_bytes(n, small));
-    let high = stored_four(m1, offset + 4, word_bytes(field_high(word, tail)), column(n, 100), column(n, 10), digit(n.mod(10)), BitVec::ofNat(separator),
+    let lows: List<BitVec(8)> = [column(n, 1000000), column(n, 100000), column(n, 10000), column(n, 1000)];
+    let low = stored_first_four(memory, offset, word_bytes(field_low(word)), lows, field_low_bytes(n, small));
+    let high = stored_first_four(m1, offset + 4, word_bytes(field_high(word, tail)), [column(n, 100), column(n, 10), digit(n.mod(10)), BitVec::ofNat(separator)],
         field_high_bytes(n, separator, tail, small, tail_value, sep_small));
-    let kept = stored_kept(m1, offset + 4, word_bytes(field_high(word, tail)), [column(n, 1000000), column(n, 100000), column(n, 10000), column(n, 1000)],
-        offset, Nat::le_refl(offset + 4), low);
-    stored_join(field_stored(memory, n, offset, separator).page, [column(n, 1000000), column(n, 100000), column(n, 10000), column(n, 1000)],
-        [column(n, 100), column(n, 10), digit(n.mod(10)), BitVec::ofNat(separator)], offset, kept, high)
+    let kept = stored_kept(m1, offset + 4, word_bytes(field_high(word, tail)), lows, offset, Nat::le_refl(offset + 4), low);
+    stored_join(field_stored(memory, n, offset, separator).page, offset, lows,
+        [column(n, 100), column(n, 10), digit(n.mod(10)), BitVec::ofNat(separator)], kept, high)
 }
 
 // Runs below a field's stores are untouched by them.
 theorem field_kept(memory: IoMemory, n, start, separator, offset: Nat, bytes: List<BitVec(8)>, below: offset + bytes.len() <= start,
-    held: StoredList(memory.page, offset, bytes)):
-    StoredList(field_stored(memory, n, start, separator).page, offset, bytes) {
+    held: Stored(memory.page, offset, bytes)):
+    Stored(field_stored(memory, n, start, separator).page, offset, bytes) {
     let word = bitvec_nat::word_of_nat(64, n);
     let m1 = io_store_offset(memory, start, word_bytes(field_low(word)));
     let further: (offset + bytes.len() <= start + 4) = Nat::le_trans(offset + bytes.len(), start, start + 4, below, Nat::le_add_l(start, 4));
@@ -479,7 +379,7 @@ theorem field_kept(memory: IoMemory, n, start, separator, offset: Nat, bytes: Li
 
 // The three fields' stores hold the line.
 theorem line_stored(memory: IoMemory, a, b, c: Nat, sa: a < 10000000, sb: b < 10000000, sc: c < 10000000):
-    StoredList(field_stored(field_stored(field_stored(memory, a, 0, 32), b, 8, 32), c, 16, 10).page, 0, three_fields_line(a, b, c)) {
+    Stored(field_stored(field_stored(field_stored(memory, a, 0, 32), b, 8, 32), c, 16, 10).page, 0, three_columns_line(a, b, c)) {
     let m1 = field_stored(memory, a, 0, 32);
     let m2 = field_stored(m1, b, 8, 32);
     let m3 = field_stored(m2, c, 16, 10);
@@ -487,8 +387,8 @@ theorem line_stored(memory: IoMemory, a, b, c: Nat, sa: a < 10000000, sb: b < 10
         field_kept(m1, b, 8, 32, 0, field_run(a, 32), trivial, field_run_stored(memory, a, 0, 32, sa, trivial, trivial)));
     let second = field_kept(m2, c, 16, 10, 8, field_run(b, 32), trivial, field_run_stored(m1, b, 8, 32, sb, trivial, trivial));
     let third = field_run_stored(m2, c, 16, 10, sc, trivial, trivial);
-    stored_join(m3.page, field_run(a, 32), field_run(b, 32) ++ field_run(c, 10), 0, first,
-        stored_join(m3.page, field_run(b, 32), field_run(c, 10), 8, second, third))
+    stored_join(m3.page, 0, field_run(a, 32), field_run(b, 32) ++ field_run(c, 10), first,
+        stored_join(m3.page, 8, field_run(b, 32), field_run(c, 10), second, third))
 }
 
 // ---------------------------------------------------------------------------
@@ -511,7 +411,10 @@ theorem fields_tail_runs<C>(file: List<BitVec(8)>, at: Nat, rep: Gprs → C → 
         let a = three.first(total);
         let b = three.second(total);
         let c = three.third(total);
-        let line = three_fields_line(a, b, c);
+        // The line as the formatter's columns hold it, which is `%7d`'s
+        // (`three_fields_columns`).
+        let line = three_columns_line(a, b, c);
+        let same: (line = three_fields_line(a, b, c)) = three_fields_columns(a, b, c, small.left, small.right.left, small.right.right);
         let held = three.counts(state.gprs, total, placed);
         let pieces = λ (p: Nat → BitVec(8)) => fields_pieces(IoMemory(file, p), at, low, high, pj, resident(p));
         have f0 = field_prints(file, R13, 0, 32, codes, format, at, λ p => pieces(p).first, a, trivial, page, state, memory_is, at_done, held.left);
@@ -533,12 +436,14 @@ theorem fields_tail_runs<C>(file: List<BitVec(8)>, at: Nat, rep: Gprs → C → 
             f2.proof.right.left, f2.proof.right.right.left);
         let s4 = execute_block_normal(fields_line_block(), s3);
         let stored = line_stored(IoMemory(file, page), a, b, c, small.left, small.right.left, small.right.right);
-        let sends: LinuxWritesFrom(io_linux(), m3, read_gpr(R9, s4.gprs), line) = stored_sends(m3, line, stored, trivial);
-        linux_runs_after_linux_steps(io_linux(), write_events(line, steps, ending), state, s3,
-            linux_steps_trans(io_linux(), state, s1, s3, f0.proof.left, linux_steps_trans(io_linux(), s1, s2, s3, f1.proof.left, f2.proof.left)),
-            linux_runs_after_steps(io_linux(), write_events(line, steps, ending), s3, s4, lined.steps,
-                wl_from(m3, fields_at_write(at, low, high), pj, there.write, targets, ending, ending_ok, steps)(
-                    line, steps_ok, s4, trivial, trivial, lined.rip_is, lined.memory_is, sends, refl, trivial)))
+        let sends: LinuxWritesFrom(io_linux(), m3, read_gpr(R9, s4.gprs), line) = stored_sends(m3, 0, line, stored, read_gpr(R9, s4.gprs), refl, trivial);
+        let written: WriteSteps(steps)(line) = j(sym(same), λ l _ => WriteSteps(steps)(l), steps_ok);
+        j(same, λ l _ => LinuxRuns(io_linux(), write_events(l, steps, ending), state),
+            linux_runs_after_linux_steps(io_linux(), write_events(line, steps, ending), state, s3,
+                linux_steps_trans(io_linux(), state, s1, s3, f0.proof.left, linux_steps_trans(io_linux(), s1, s2, s3, f1.proof.left, f2.proof.left)),
+                linux_runs_after_steps(io_linux(), write_events(line, steps, ending), s3, s4, lined.steps,
+                    wl_from(m3, fields_at_write(at, low, high), pj, there.write, targets, ending, ending_ok, steps)(
+                        line, written, s4, trivial, trivial, lined.rip_is, lined.memory_is, sends, refl, trivial))))
     }
 }
 
