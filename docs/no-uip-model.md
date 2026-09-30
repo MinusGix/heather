@@ -519,9 +519,12 @@ each is checked against §2's clause.
   - `square` is the equation above;
   - `J_beta_ob` and `J_beta_hom` are β on the nose.
 
+  - `J_stab_ob` and `J_stab_hom` are stability under a substitution
+    `σ`: `J(M; c; u; e)[σ] = J(M[σ⁺⁺]; c[σ]; u[σ]; e[σ])`. `Id` and
+    `refl` are stable by conversion.
+
   The groupoids there have sets of objects and morphisms, as here. The
-  comprehensions are used only as category data. Stability of `J` under
-  substitution is not mechanized; it holds because `J` is pointwise.
+  comprehensions are used only as category data.
 - **`eqtm_J_beta`** (D, M). At `u = a` and `e = refl`, the morphism is the
   identity, and `M(id) = id` strictly because families are split. So
   `J = c` on the nose.
@@ -618,7 +621,7 @@ its identities are isomorphisms of groupoids, not equivalences.
 
 | piece | status |
 |---|---|
-| Π, Σ, `Id`, universe of sets, strict η and J | Hofmann–Streicher 1998; `Id` and Paulin-Mohring `J` with strict β **mechanized** (`NoUipJ.v`), except stability under substitution |
+| Π, Σ, `Id`, universe of sets, strict η and J | Hofmann–Streicher 1998; `Id` and Paulin-Mohring `J`, with strict β and stability under substitution, **mechanized** (`NoUipJ.v`) |
 | `Ty (l+1)` as groupoids with isomorphisms, hierarchy by inaccessibles | routine extension, stated in §2 |
 | `Unit`/`Empty`/`+`/`Nat`, `Vec`/`Fin`/`DVec` | routine: pointwise, and by recursion on discrete ℕ |
 | `Wf`/`IWf` (finitary), `W` | initial algebras: ω-colimit for the finitary ones, accessibility for `W` |
