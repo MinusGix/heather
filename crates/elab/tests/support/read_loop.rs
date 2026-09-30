@@ -17,6 +17,7 @@ pub fn checker() -> heather_elab::Elaborator {
         ("omega", include_str!("../../../../lib/std/omega.hthr")),
         ("x86_64_fetch", include_str!("../../../../lib/std/arch/x86_64/x86_64_fetch.hthr")),
         ("x86_64_fetched_code", include_str!("../../../../lib/std/arch/x86_64/x86_64_fetched_code.hthr")),
+        ("x86_64_layout", include_str!("../../../../lib/std/arch/x86_64/x86_64_layout.hthr")),
         ("elf64", include_str!("../../../../lib/elf64.hthr")),
         ("linux_x86_64_entry", include_str!("../../../../lib/linux_x86_64_entry.hthr")),
         ("x86_64_store", include_str!("../../../../lib/std/arch/x86_64/x86_64_store.hthr")),

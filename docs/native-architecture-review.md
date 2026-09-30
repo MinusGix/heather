@@ -1,6 +1,6 @@
 # The native program stack: an architecture review
 
-Status: **review, 2026-09-30. R0–R3 chosen and landed the same day (§8); R4 onward open.** Read-only
+Status: **review, 2026-09-30. R0–R4 chosen and landed the same day (§8); R5 onward open.** Read-only
 survey of what `wc -l`, `wc` and `tr` left behind, taken before a fourth
 program (`tr -s`/`-d`, `issues/native-loop-emitting-stores.md`) adds another
 process. The question is engineering, not speed: what is repeated, what is
@@ -649,3 +649,115 @@ tail.
 **Claims.** The claims keep their shape. Only the history types in them
 changed: `EofStep<True>`/`EofEnd<False>` for the folds, and
 `EofStep<List<WriteStep>>`/`EofEnd<WriteFailure>` for `tr`.
+
+### R4 (2026-09-30)
+
+**The layout** (`x86_64_layout`, new, arch-generic). A program's code is a
+list of pieces, the last one apart, and the lengths the pieces before it are
+measured by:
+
+- `layout_code(pieces, last)` is their concatenation, in the right-nested
+  shape the hand-written code had, so the producer's spelled code still
+  converts to it piece by piece.
+- `layout_at(at, lens, i)` is where piece `i` starts: `at` plus the lengths
+  before it, left to right. A generated piece's length stays the atom its
+  lemma supplies; nothing evaluates its bytes to place what follows.
+- `LayoutMeasured(pieces, lens)` is one conjunction per piece. A process
+  proves it once, with `refl` for fixed pieces and the length lemma for
+  sub-layouts and generated ones.
+- `layout_resident` gives each piece's residency at its offset from the
+  residency of the whole, and `layout_len` gives the length of the whole.
+  These replace every `resident_split_at` chain and every `len_app` chain.
+- `JumpsForward(from, size, d, to)` and `JumpsBack(…)` say a near jump at
+  `from` lands on `to`: a closed sum about the displacement's unsigned
+  reading, around 2^64 for a jump back. `jumps_forward` and `jumps_back`
+  turn one into the RIP equation. The `_at` forms take a piece placed at a
+  symbolic `at` whose facts are about its own offsets
+  (`layout_shift`: `layout_at(at + base, …) = at + layout_at(base, …)`).
+
+**Every process is a layout.**
+
+- **Read head and failure tail** (`read_head_parts`, `fail_tail_parts`).
+  `rh_at_*` and `ft_at_*` are now indices into them and unfold to the same
+  sums as before.
+- **State process.** `state_parts`, `state_lens(needle, loop_len)`, and
+  labels `state_at_read` … `state_at_done` defined by index. `state_len`, the
+  skip and span functions, the four sum lemmas and the four target theorems
+  are gone. `StateJumpFacts` is four `JumpsForward`/`JumpsBack` facts over
+  the labels, and `state_targets` is four one-line applications.
+- **Write loop.** `write_loop_parts` and `wl_at(at, i)`. Its own three jumps
+  are `WriteJumpFacts(pj)`, closed facts about the loop at 0, lifted to
+  wherever it is placed by `wl_shift`. `PrintJumpFacts` adds the all-sent
+  JZ to its exit(0). `print_*_sum`, `print_*_skip` and `print_*_span` are
+  gone.
+- **Map process.** `map_parts`, `map_lens(p)`, labels `map_at_*(p)`. Every
+  label now takes the byte map's length `p`, including those before it,
+  since they are indices into one list. `MapJumpFacts(p, …)` is the
+  process's four facts, the write loop's three, and the write loop's
+  all-sent JZ back to the read.
+- **Count and fields tails.** `count_tail_parts` and `field_parts` (one
+  field, then `rest`). `ct_*` and `fc_*` are labels. All of a tail's labels
+  take all of its generated codes, for the same reason.
+
+**The producer** (`crates/cli/src/native/layout.rs`). One `Layout` table per
+program: fixed pieces, generated pieces, labels, and near jumps named by the
+label they land on. From it come the code, each piece's `_written()`
+literal, the spelled code for the image facts, and every displacement. The
+arithmetic that mirrored the library's offsets is gone from
+`read_loop.rs`, `read_fields.rs` and `read_map.rs`.
+`read_head`, `fail_tail`, `state_layout` and `write_loop` are the shared
+sub-tables.
+
+The jump facts are now library records filled with `refl`
+(`StateJumpFacts(refl, refl, refl, refl)`, and `MapJumpFacts` under the byte
+map's length lemma). So the producer restates neither the library's sums nor
+its offsets. The kernel checks the table's displacements against the
+library's layout by evaluation.
+
+**Decision 2 (§6), taken.** The layout lives in Heather, and the producer
+keeps a table of its own. Nothing is generated from either: the certificate
+is what checks that the two agree, and the control below shows it does.
+
+**Controls.**
+
+- **Producer mutation control**, new
+  (`state_layout_agrees_with_the_library_and_mutations_are_refused`). The
+  state table as written proves its jump facts. Retargeting the jump back to
+  the failure tail, or padding the setup by a byte, is refused at
+  `_jump_facts`.
+- **Library mutation controls** whose text was deleted were restated over
+  the layout:
+  - state: `back_measured_long` (a lens entry), `fail_to_tail` (a fact's
+    label) and `init_left_out` (a part);
+  - map: `jnz_inverted` and `store_measured_short`;
+  - write loop: `syscall_measured_short` and `exit_past_exit`.
+
+**Unchanged.** The four executables are byte-identical to R3's, and the
+claims' shapes are unchanged.
+
+**Size.** The seven process modules lost 207 lines (state 609 → 532, map
+837 → 757, write loop 506 → 490, fields 672 → 658), and the generic module
+is 160. The three producers lost 94, and the table module is 181 lines,
+including its tests. What a new
+process writes for its layout is:
+
+- a parts list;
+- a lens list;
+- one `LayoutMeasured` tuple;
+- labels;
+- a jump-facts record.
+
+It writes no offset arithmetic, no residency chain and no sum lemma, and
+the producer writes a table.
+
+**Cost.** A probe of the state layout at `wc -l`'s real numbers came first,
+as §7 asked. The generic residency and the `refl` jump facts cost the same
+order as the split chains and the facts they replace. Labels defined by
+index unfold to the same left-nested sums the hand-written offsets were, so
+the process proofs' conversions did not change shape. They do take a few
+more unfolding steps each (a label, then `layout_at` over the lens list),
+and the process tests' CPU rose by a similar fraction across the board,
+about a sixth. The fields test is again the one nearest the CPU rail. That
+was measured on a loaded machine, not by `scripts/perf ab`. If it matters,
+the place to look is the label unfolding in `field_prints` and
+`state_folds`.

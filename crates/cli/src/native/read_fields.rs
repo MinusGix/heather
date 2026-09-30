@@ -14,7 +14,8 @@ use heather_elab::function_ir_x86_lower::{encode_structured, Gpr, Instruction, P
 use heather_elab::heather_emit::Module;
 use heather_elab::Elaborator;
 
-use super::read_loop::{image_facts, literal, nested, placement, state_facts, state_head, tuple, write_loop, FormatPart, StateShape};
+use super::read_loop::{image_facts, nested, placement, print_facts, print_jumps, state_facts, state_jumps, state_layout, tuple, write_loop, FormatPart,
+    StateShape};
 
 // Bundled after the read profile's and the write loop's, only for this one:
 // the field formatter and the three-field tail.
@@ -105,69 +106,46 @@ pub(super) fn certify(module: &mut Module, prefix: &str, program: &Program, reco
     let rr = |destination, source| Instruction::MovRR { destination, source };
     let encode = super::encode;
 
-    let head = state_head(program.needle, emission.bytes.len());
-    let writes = write_loop(&head);
-
     // The tail (elf64_read_fields' `fields_tail`): each count formatted and
     // stored as two words at 8k, then the 24-byte line's registers and the
     // write loop (elf64_write_loop).
-    let fields = [(R13, 0u64, 32u64), (R14, 8, 32), (R15, 16, 10)];
-    let store = vec![0x49, 0x89, 0x01];
-    let counts: Vec<Vec<u8>> = fields.iter().map(|&(count, _, _)| encode(&[rr(R11, count)])).collect();
-    let lows: Vec<Vec<u8>> = fields.iter().map(|&(_, offset, separator)| encode(&[mov(R9, 0x410000 + offset), mov(R10, 16777216 * separator)])).collect();
-    let highs: Vec<Vec<u8>> = fields.iter().map(|&(_, offset, _)| encode(&[mov(R9, 0x410000 + offset + 4)])).collect();
-    let line = encode(&[mov(R9, 0x410000), mov(R10, 24)]);
-
-    let mut code = head.code(&emission.bytes);
-    for k in 0..3 {
-        code.extend([counts[k].as_slice(), &low.bytes, &lows[k], &store, &high.bytes, &highs[k], &store].concat());
+    let (lo, hi) = (&low.prefix, &high.prefix);
+    let mut layout = state_layout(prefix, program.needle, &emission.bytes);
+    for (k, (count, offset, separator)) in [(R13, 0u64, 32u64), (R14, 8, 32), (R15, 16, 10)].into_iter().enumerate() {
+        layout = layout.fixed(format!("field{k}_count"), encode(&[rr(R11, count)]))
+            .generated("low", format!("{lo}_bytes()"), low.bytes.clone())
+            .fixed(format!("field{k}_low"), encode(&[mov(R9, 0x410000 + offset), mov(R10, 16777216 * separator)]))
+            .fixed("store", vec![0x49, 0x89, 0x01])
+            .generated("high", format!("{hi}_bytes()"), high.bytes.clone())
+            .fixed(format!("field{k}_high"), encode(&[mov(R9, 0x410000 + offset + 4)]))
+            .fixed("store", vec![0x49, 0x89, 0x01]);
     }
-    code.extend([line.clone(), writes.code(&head)].concat());
+    let layout = layout.fixed("line", encode(&[mov(R9, 0x410000), mov(R10, 24)])).then(write_loop("wexit"));
+    let code = layout.code();
     let file = super::calls::io_image(&code)?;
 
     let needle = format!("@bitvec::BitVec::ofNat(8, {})", program.needle);
     let root = program.root;
-    let (lo, hi) = (&low.prefix, &high.prefix);
-    let written = |name: &str| format!("{prefix}_{name}_written()");
-    head.declare(module, prefix);
-    writes.declare(module, prefix);
-    for (name, bytes) in [("store", &store), ("line", &line)] {
-        module.raw(format!("fn {} → List<BitVec(8)> {{ {} }}", written(name), literal(bytes)));
-    }
-    for k in 0..3 {
-        for (name, bytes) in [("count", &counts[k]), ("low", &lows[k]), ("high", &highs[k])] {
-            module.raw(format!("fn {prefix}_field{k}_{name}_written() → List<BitVec(8)> {{ {} }}", literal(bytes)));
-        }
-    }
+    layout.declare(module, prefix);
+    state_jumps(module, prefix, &layout, &needle);
+    print_jumps(module, prefix, &layout);
+    print_facts(module, prefix);
 
     let pj = format!("{prefix}_print_jumps()");
     let code_term = format!("read_fields_code({needle}, {prefix}_bytes(), {prefix}_jumps(), {lo}_code(), {hi}_code(), {prefix}_print_jumps())");
     // The code's pieces in order, right-nested as `read_fields_code` unfolds.
-    let pieces = |l: &str, h: &str| -> Vec<String> {
-        let mut all = head.spelled(prefix);
-        for k in 0..3 {
-            all.extend([format!("{prefix}_field{k}_count_written()"), l.to_string(), format!("{prefix}_field{k}_low_written()"),
-                written("store"), h.to_string(), format!("{prefix}_field{k}_high_written()"), written("store")]);
-        }
-        all.push(written("line"));
-        all.extend(writes.spelled(prefix));
-        all
-    };
-    let layout = |l: &str, h: &str| nested(&pieces(l, h));
+    let spelled = |l: &str, h: &str| nested(&layout.spelled_with(prefix, &[("low", l), ("high", h)]));
     let hi_bytes = format!("{hi}_bytes()");
     let (lo_lit, hi_lit) = (format!("{lo}_lit()"), format!("{hi}_lit()"));
     let chain = format!("j({hi}_bytes_are(), λ y _ => {code_term} = {}, j({lo}_bytes_are(), λ y _ => {code_term} = {}, refl))",
-        layout(&lo_lit, "y"), layout("y", &hi_bytes));
-    let spelled = layout(&lo_lit, &hi_lit);
+        spelled(&lo_lit, "y"), spelled("y", &hi_bytes));
     // The code's length, from the library's lemma over its parts: the
     // formatter's words by their `_byte_length` lemmas, the loop's by
     // evaluation. Evaluating the whole code walks the formatter's encoding.
     let total = code.len();
     let length = format!("read_fields_code_len({needle}, {prefix}_bytes(), {prefix}_jumps(), {lo}_code(), {hi}_code(), {pj}, {}, {}, {}, \
         refl, {lo}_byte_length(), {hi}_byte_length())", emission.bytes.len(), low.bytes.len(), high.bytes.len());
-    image_facts(module, prefix, &code_term, &spelled, &chain, &file, total, &length);
-
-    head.jump_facts(module, prefix, &needle);
+    image_facts(module, prefix, &code_term, &spelled(&lo_lit, &hi_lit), &chain, &file, total, &length);
 
     // The facts every state gives the process, and the three counts as the
     // words in R13, R14 and R15.

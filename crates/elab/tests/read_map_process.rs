@@ -89,8 +89,7 @@ fn upcase_map_process_composes() {
 // Each change to the process is refused where it is wrong, not by a missing
 // name: a step that moves the cursor by the wrong amount, a store at another
 // register's byte, a JNZ that tests the other way, a write that starts past
-// the page, or a chunk loop that falls back to its load from the wrong
-// distance.
+// the page, or a layout that measures the store a byte short.
 #[test]
 fn slow_acceptance_read_map_refusals() {
     let library = base().semantic_image();
@@ -98,10 +97,9 @@ fn slow_acceptance_read_map_refusals() {
         ("step_by_two", "MovRI(R11, BitVec::ofNat(1))]", "MovRI(R11, BitVec::ofNat(2))]"),
         ("store_elsewhere", "fn map_store() → ByteStore { ByteStore(base := Rsi, source := Rdx) }",
             "fn map_store() → ByteStore { ByteStore(base := Rsi, source := Rax) }"),
-        ("jnz_inverted", "near_control_bytes(JumpIfNear(NE, jumps.ld)) ++", "near_control_bytes(JumpIfNear(E, jumps.ld)) ++"),
+        ("jnz_inverted", "near_control_bytes(JumpIfNear(NE, jumps.ld)), write_loop_code(pj)]", "near_control_bytes(JumpIfNear(E, jumps.ld)), write_loop_code(pj)]"),
         ("write_past_page", "MovRI(R9, BitVec::ofNat(io_page_base()))", "MovRI(R9, BitVec::ofNat(0x410001))"),
-        ("loop_span", "fn map_loop_span(p: Nat) → Nat { ((map_load_len() + p) + 3) + map_step_len() }",
-            "fn map_loop_span(p: Nat) → Nat { ((map_load_len() + p) + 2) + map_step_len() }"),
+        ("store_measured_short", "map_load_len(), p, 3, map_step_len()", "map_load_len(), p, 2, map_step_len()"),
     ] {
         let bad = PROCESS.replacen(from, to, 1);
         assert_ne!(bad, PROCESS, "{name}");

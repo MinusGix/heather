@@ -25,6 +25,7 @@ import x86_64_data_read;
 import x86_64_access_code;
 import x86_64_access_memory;
 import x86_64_fetched_code;
+import x86_64_layout;
 import bitvec;
 import bitvec_nat;
 import bool;
@@ -221,20 +222,20 @@ theorem jump_sign_near_len(sd: BitVec(32)): near_control_bytes(JumpSignNear(sd))
 // whose JZ goes back to retry; anything else is exit(1). The read's failure
 // path and the write loop's are this tail at their own offsets.
 
-fn fail_tail_code(rd: BitVec(32)) → List<BitVec(8)> {
-    canonical_block_bytes(eof_retry_block()) ++ (near_control_bytes(JumpZeroNear(rd)) ++
-    (canonical_block_bytes(eof_fail_block()) ++ syscall_bytes()))
+fn fail_tail_parts(rd: BitVec(32)) → List<List<BitVec(8)>> {
+    [canonical_block_bytes(eof_retry_block()), near_control_bytes(JumpZeroNear(rd)), canonical_block_bytes(eof_fail_block())]
 }
+fn fail_tail_lens() → List<Nat> { [eof_retry_len(), 6, eof_fail_len()] }
+fn fail_tail_code(rd: BitVec(32)) → List<BitVec(8)> { layout_code(fail_tail_parts(rd), syscall_bytes()) }
 fn fail_tail_len() → Nat { eof_retry_len() + (6 + (eof_fail_len() + 2)) }
 theorem fail_tail_code_len(rd: BitVec(32)): fail_tail_code(rd).len() = fail_tail_len() {
-    len_app(canonical_block_bytes(eof_retry_block()), len_app(near_control_bytes(JumpZeroNear(rd)),
-        len_app(canonical_block_bytes(eof_fail_block()), syscall_len())))
+    layout_len(fail_tail_parts(rd), syscall_bytes(), fail_tail_lens(), ⟨refl, ⟨refl, ⟨refl, trivial⟩⟩⟩, 2, refl)
 }
 
 // Offsets from the entry, for a tail at `af`.
-fn ft_at_jz(af: Nat) → Nat { af + eof_retry_len() }
-fn ft_at_fail(af: Nat) → Nat { ft_at_jz(af) + 6 }
-fn ft_at_call(af: Nat) → Nat { ft_at_fail(af) + eof_fail_len() }
+fn ft_at_jz(af: Nat) → Nat { layout_at(af, fail_tail_lens(), 1) }
+fn ft_at_fail(af: Nat) → Nat { layout_at(af, fail_tail_lens(), 2) }
+fn ft_at_call(af: Nat) → Nat { layout_at(af, fail_tail_lens(), 3) }
 
 record FailTail(memory: IoMemory, af: Nat, rd: BitVec(32)) {
     retry_at: CodeResident(io_fetch_access(), memory, canonical_block_bytes(eof_retry_block()), eof_rip(af)),
@@ -244,15 +245,9 @@ record FailTail(memory: IoMemory, af: Nat, rd: BitVec(32)) {
 }
 theorem fail_tail(memory: IoMemory, af: Nat, rd: BitVec(32),
     resident: CodeResident(io_fetch_access(), memory, fail_tail_code(rd), eof_rip(af))): FailTail(memory, af, rd) {
-    let fetch = io_fetch_access();
-    let entry = io_entry();
-    let rt = canonical_block_bytes(eof_retry_block());
-    let rz = near_control_bytes(JumpZeroNear(rd));
-    let fl = canonical_block_bytes(eof_fail_block());
-    let r0 = resident_split_at(fetch, memory, rt, rz ++ (fl ++ syscall_bytes()), entry, af, resident);
-    let r1 = resident_split_at(fetch, memory, rz, fl ++ syscall_bytes(), entry, ft_at_jz(af), r0.right);
-    let r2 = resident_split_at(fetch, memory, fl, syscall_bytes(), entry, ft_at_fail(af), r1.right);
-    FailTail(r0.left, r1.left, r2.left, r2.right)
+    let piece = layout_resident(io_fetch_access(), memory, io_entry(), syscall_bytes(), fail_tail_parts(rd), fail_tail_lens(),
+        ⟨refl, ⟨refl, ⟨refl, trivial⟩⟩⟩, af, resident);
+    FailTail(piece(0), piece(1), piece(2), piece(3))
 }
 
 // The retry test's state, and where EINTR's JZ takes it: the retry block
@@ -314,21 +309,22 @@ theorem fail_exit(memory: IoMemory, af: Nat, rd: BitVec(32), tail: FailTail(memo
 // puts it: read(0, page, capacity), TEST RAX, JZ to the end-of-file code, JS
 // to the failure tail; a chunk falls through past the JS.
 
-fn read_head_code(ed, sd: BitVec(32)) → List<BitVec(8)> {
-    canonical_block_bytes(read_entry_block()) ++ (syscall_bytes() ++ (canonical_block_bytes(eof_test_block()) ++
-    (near_control_bytes(JumpZeroNear(ed)) ++ near_control_bytes(JumpSignNear(sd)))))
+fn read_head_parts(ed: BitVec(32)) → List<List<BitVec(8)>> {
+    [canonical_block_bytes(read_entry_block()), syscall_bytes(), canonical_block_bytes(eof_test_block()), near_control_bytes(JumpZeroNear(ed))]
 }
+fn read_head_lens() → List<Nat> { [read_entry_len(), 2, eof_test_len(), 6] }
+fn read_head_code(ed, sd: BitVec(32)) → List<BitVec(8)> { layout_code(read_head_parts(ed), near_control_bytes(JumpSignNear(sd))) }
 fn read_head_len() → Nat { read_entry_len() + (2 + (eof_test_len() + (6 + 6))) }
 theorem read_head_code_len(ed, sd: BitVec(32)): read_head_code(ed, sd).len() = read_head_len() {
-    len_app(canonical_block_bytes(read_entry_block()), len_app(syscall_bytes(), len_app(canonical_block_bytes(eof_test_block()),
-        len_app(near_control_bytes(JumpZeroNear(ed)), jump_sign_near_len(sd)))))
+    layout_len(read_head_parts(ed), near_control_bytes(JumpSignNear(sd)), read_head_lens(), ⟨refl, ⟨refl, ⟨refl, ⟨refl, trivial⟩⟩⟩⟩, 6,
+        jump_sign_near_len(sd))
 }
 
 // Offsets from the entry, for a head at `ar`.
-fn rh_at_call(ar: Nat) → Nat { ar + read_entry_len() }
-fn rh_at_test(ar: Nat) → Nat { rh_at_call(ar) + 2 }
-fn rh_at_jz(ar: Nat) → Nat { rh_at_test(ar) + eof_test_len() }
-fn rh_at_js(ar: Nat) → Nat { rh_at_jz(ar) + 6 }
+fn rh_at_call(ar: Nat) → Nat { layout_at(ar, read_head_lens(), 1) }
+fn rh_at_test(ar: Nat) → Nat { layout_at(ar, read_head_lens(), 2) }
+fn rh_at_jz(ar: Nat) → Nat { layout_at(ar, read_head_lens(), 3) }
+fn rh_at_js(ar: Nat) → Nat { layout_at(ar, read_head_lens(), 4) }
 fn rh_at_end(ar: Nat) → Nat { rh_at_js(ar) + 6 }
 
 record ReadHead(memory: IoMemory, ar: Nat, ed, sd: BitVec(32)) {
@@ -340,17 +336,9 @@ record ReadHead(memory: IoMemory, ar: Nat, ed, sd: BitVec(32)) {
 }
 theorem read_head(memory: IoMemory, ar: Nat, ed, sd: BitVec(32),
     resident: CodeResident(io_fetch_access(), memory, read_head_code(ed, sd), eof_rip(ar))): ReadHead(memory, ar, ed, sd) {
-    let fetch = io_fetch_access();
-    let entry = io_entry();
-    let e = canonical_block_bytes(read_entry_block());
-    let t = canonical_block_bytes(eof_test_block());
-    let z = near_control_bytes(JumpZeroNear(ed));
-    let sg = near_control_bytes(JumpSignNear(sd));
-    let r0 = resident_split_at(fetch, memory, e, syscall_bytes() ++ (t ++ (z ++ sg)), entry, ar, resident);
-    let r1 = resident_split_at(fetch, memory, syscall_bytes(), t ++ (z ++ sg), entry, rh_at_call(ar), r0.right);
-    let r2 = resident_split_at(fetch, memory, t, z ++ sg, entry, rh_at_test(ar), r1.right);
-    let r3 = resident_split_at(fetch, memory, z, sg, entry, rh_at_jz(ar), r2.right);
-    ReadHead(r0.left, r1.left, r2.left, r3.left, r3.right)
+    let piece = layout_resident(io_fetch_access(), memory, io_entry(), near_control_bytes(JumpSignNear(sd)), read_head_parts(ed),
+        read_head_lens(), ⟨refl, ⟨refl, ⟨refl, ⟨refl, trivial⟩⟩⟩⟩, ar, resident);
+    ReadHead(piece(0), piece(1), piece(2), piece(3), piece(4))
 }
 
 // The states the head's steps reach, named: what the read asks with, and

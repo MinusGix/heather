@@ -15,6 +15,7 @@ use heather_cli::{loader, semantic::SemanticSession};
 
 mod elf;
 mod calls;
+mod layout;
 mod order;
 mod read_loop;
 mod read_fields;

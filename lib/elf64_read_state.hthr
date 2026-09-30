@@ -23,6 +23,7 @@ import x86_64_data_read;
 import x86_64_access_code;
 import x86_64_access_memory;
 import x86_64_fetched_code;
+import x86_64_layout;
 import bitvec;
 import bitvec_nat;
 import bool;
@@ -45,50 +46,50 @@ fn state_init_len() → Nat { canonical_block_bytes(state_init_block()).len() }
 fn state_setup_len(needle: BitVec(8)) → Nat { canonical_block_bytes(state_setup_block(needle)).len() }
 
 // The program: init, the read head (elf64_read_pieces), the chunk's setup
-// and loop and the jump back, the failure tail, then the tail.
+// and loop and the jump back, the failure tail, then the tail; a layout
+// (x86_64_layout) whose loop is measured by its length, never by its bytes.
+fn state_parts(needle: BitVec(8), loop_bytes: List<BitVec(8)>, jumps: EofJumps) → List<List<BitVec(8)>> {
+    [canonical_block_bytes(state_init_block()), read_head_code(jumps.ed, jumps.sd), canonical_block_bytes(state_setup_block(needle)),
+     loop_bytes, near_control_bytes(JumpNear(jumps.bd)), fail_tail_code(jumps.rd)]
+}
+fn state_lens(needle: BitVec(8), loop_len: Nat) → List<Nat> {
+    [state_init_len(), read_head_len(), state_setup_len(needle), loop_len, 5, fail_tail_len()]
+}
 fn state_code(needle: BitVec(8), loop_bytes: List<BitVec(8)>, jumps: EofJumps, tail: List<BitVec(8)>) → List<BitVec(8)> {
-    canonical_block_bytes(state_init_block()) ++ (read_head_code(jumps.ed, jumps.sd) ++
-    (canonical_block_bytes(state_setup_block(needle)) ++ (loop_bytes ++ (near_control_bytes(JumpNear(jumps.bd)) ++
-    (fail_tail_code(jumps.rd) ++ tail)))))
+    layout_code(state_parts(needle, loop_bytes, jumps), tail)
 }
 fn read_state_code(needle: BitVec(8), loop_bytes: List<BitVec(8)>, jumps: EofJumps) → List<BitVec(8)> {
     state_code(needle, loop_bytes, jumps, eof_exit_code())
 }
-
+theorem state_measured(needle: BitVec(8), loop_bytes: List<BitVec(8)>, jumps: EofJumps, loop_len: Nat, loop_is: loop_bytes.len() = loop_len):
+    LayoutMeasured(state_parts(needle, loop_bytes, jumps), state_lens(needle, loop_len)) {
+    ⟨refl, ⟨read_head_code_len(jumps.ed, jumps.sd), ⟨refl, ⟨loop_is, ⟨refl, ⟨fail_tail_code_len(jumps.rd), trivial⟩⟩⟩⟩⟩⟩
+}
 // The code's length from its loop's and tail's, over open parts: a
 // certificate measures its generated pieces by their own lemmas instead of
-// evaluating their encodings (docs/native-loop-generator-fold-design.md §3.3;
-// `len_app` is elf64_read_pieces's).
-fn state_len(needle: BitVec(8), jumps: EofJumps, loop_len, tail_len: Nat) → Nat {
-    state_init_len() + (read_head_len() + (state_setup_len(needle) + (loop_len + (near_control_bytes(JumpNear(jumps.bd)).len() +
-    (fail_tail_len() + tail_len)))))
-}
+// evaluating their encodings (docs/native-loop-generator-fold-design.md §3.3).
 theorem state_code_len(needle: BitVec(8), loop_bytes: List<BitVec(8)>, jumps: EofJumps, tail: List<BitVec(8)>, loop_len, tail_len: Nat,
     loop_is: loop_bytes.len() = loop_len, tail_is: tail.len() = tail_len):
-    state_code(needle, loop_bytes, jumps, tail).len() = state_len(needle, jumps, loop_len, tail_len) {
-    len_app(canonical_block_bytes(state_init_block()), len_app_is(read_head_code(jumps.ed, jumps.sd), read_head_code_len(jumps.ed, jumps.sd),
-        len_app(canonical_block_bytes(state_setup_block(needle)), len_app_is(loop_bytes, loop_is,
-        len_app(near_control_bytes(JumpNear(jumps.bd)), len_app_is(fail_tail_code(jumps.rd), fail_tail_code_len(jumps.rd), tail_is))))))
+    state_code(needle, loop_bytes, jumps, tail).len() = layout_end(0, state_lens(needle, loop_len)) + tail_len {
+    layout_len(state_parts(needle, loop_bytes, jumps), tail, state_lens(needle, loop_len), state_measured(needle, loop_bytes, jumps, loop_len, loop_is),
+        tail_len, tail_is)
 }
 
-// Offsets from the entry, piece by piece.
-fn state_at_read() → Nat { 0 + state_init_len() }
-fn state_at_test() → Nat { rh_at_test(state_at_read()) }
-fn state_at_jz() → Nat { rh_at_jz(state_at_read()) }
-fn state_at_js() → Nat { rh_at_js(state_at_read()) }
-fn state_at_setup() → Nat { rh_at_end(state_at_read()) }
-fn state_at_loop(needle: BitVec(8)) → Nat { state_at_setup() + state_setup_len(needle) }
-fn state_at_jmp(needle: BitVec(8), loop_bytes: List<BitVec(8)>) → Nat { state_at_loop(needle) + loop_bytes.len() }
-fn state_at_failed(needle: BitVec(8), loop_bytes: List<BitVec(8)>) → Nat { state_at_jmp(needle, loop_bytes) + 5 }
-fn state_at_retry(needle: BitVec(8), loop_bytes: List<BitVec(8)>) → Nat { ft_at_jz(state_at_failed(needle, loop_bytes)) }
-fn state_at_done(needle: BitVec(8), loop_bytes: List<BitVec(8)>) → Nat { ft_at_call(state_at_failed(needle, loop_bytes)) + 2 }
+// Where each piece starts, from the entry.
+fn state_at(needle: BitVec(8), loop_bytes: List<BitVec(8)>, i: Nat) → Nat { layout_at(0, state_lens(needle, loop_bytes.len()), i) }
+fn state_at_read(needle: BitVec(8), loop_bytes: List<BitVec(8)>) → Nat { state_at(needle, loop_bytes, 1) }
+fn state_at_setup(needle: BitVec(8), loop_bytes: List<BitVec(8)>) → Nat { state_at(needle, loop_bytes, 2) }
+fn state_at_loop(needle: BitVec(8), loop_bytes: List<BitVec(8)>) → Nat { state_at(needle, loop_bytes, 3) }
+fn state_at_jmp(needle: BitVec(8), loop_bytes: List<BitVec(8)>) → Nat { state_at(needle, loop_bytes, 4) }
+fn state_at_failed(needle: BitVec(8), loop_bytes: List<BitVec(8)>) → Nat { state_at(needle, loop_bytes, 5) }
+fn state_at_done(needle: BitVec(8), loop_bytes: List<BitVec(8)>) → Nat { state_at(needle, loop_bytes, 6) }
 
 // The program's pieces, resident at their offsets from the entry.
 record StatePieces(memory: IoMemory, needle: BitVec(8), loop_bytes: List<BitVec(8)>, jumps: EofJumps, tail: List<BitVec(8)>) {
-    init_at: CodeResident(io_fetch_access(), memory, canonical_block_bytes(state_init_block()), eof_rip(0)),
-    head: ReadHead(memory, state_at_read(), jumps.ed, jumps.sd),
-    setup_at: CodeResident(io_fetch_access(), memory, canonical_block_bytes(state_setup_block(needle)), eof_rip(state_at_setup())),
-    loop_at: CodeResident(io_fetch_access(), memory, loop_bytes, eof_rip(state_at_loop(needle))),
+    init_at: CodeResident(io_fetch_access(), memory, canonical_block_bytes(state_init_block()), eof_rip(state_at(needle, loop_bytes, 0))),
+    head: ReadHead(memory, state_at_read(needle, loop_bytes), jumps.ed, jumps.sd),
+    setup_at: CodeResident(io_fetch_access(), memory, canonical_block_bytes(state_setup_block(needle)), eof_rip(state_at_setup(needle, loop_bytes))),
+    loop_at: CodeResident(io_fetch_access(), memory, loop_bytes, eof_rip(state_at_loop(needle, loop_bytes))),
     jmp_at: CodeResident(io_fetch_access(), memory, near_control_bytes(JumpNear(jumps.bd)), eof_rip(state_at_jmp(needle, loop_bytes))),
     fail: FailTail(memory, state_at_failed(needle, loop_bytes), jumps.rd),
     tail_at: CodeResident(io_fetch_access(), memory, tail, eof_rip(state_at_done(needle, loop_bytes))),
@@ -97,21 +98,10 @@ record StatePieces(memory: IoMemory, needle: BitVec(8), loop_bytes: List<BitVec(
 theorem state_pieces(memory: IoMemory, needle: BitVec(8), loop_bytes: List<BitVec(8)>, jumps: EofJumps, tail: List<BitVec(8)>,
     resident: CodeResident(io_fetch_access(), memory, state_code(needle, loop_bytes, jumps, tail), io_entry())):
     StatePieces(memory, needle, loop_bytes, jumps, tail) {
-    let fetch = io_fetch_access();
-    let entry = io_entry();
-    let i = canonical_block_bytes(state_init_block());
-    let rh = read_head_code(jumps.ed, jumps.sd);
-    let s = canonical_block_bytes(state_setup_block(needle));
-    let b = near_control_bytes(JumpNear(jumps.bd));
-    let ft = fail_tail_code(jumps.rd);
-    let r0 = resident_split_at(fetch, memory, i, rh ++ (s ++ (loop_bytes ++ (b ++ (ft ++ tail)))), entry, 0, resident);
-    let r1 = resident_split_at(fetch, memory, rh, s ++ (loop_bytes ++ (b ++ (ft ++ tail))), entry, state_at_read(), r0.right);
-    let r2 = resident_split_at(fetch, memory, s, loop_bytes ++ (b ++ (ft ++ tail)), entry, state_at_setup(), r1.right);
-    let r3 = resident_split_at(fetch, memory, loop_bytes, b ++ (ft ++ tail), entry, state_at_loop(needle), r2.right);
-    let r4 = resident_split_at(fetch, memory, b, ft ++ tail, entry, state_at_jmp(needle, loop_bytes), r3.right);
-    let r5 = resident_split_at(fetch, memory, ft, tail, entry, state_at_failed(needle, loop_bytes), r4.right);
-    StatePieces(r0.left, read_head(memory, state_at_read(), jumps.ed, jumps.sd, r1.left), r2.left, r3.left, r4.left,
-        fail_tail(memory, state_at_failed(needle, loop_bytes), jumps.rd, r5.left), r5.right)
+    let piece = layout_resident(io_fetch_access(), memory, io_entry(), tail, state_parts(needle, loop_bytes, jumps),
+        state_lens(needle, loop_bytes.len()), state_measured(needle, loop_bytes, jumps, loop_bytes.len(), refl), 0, resident);
+    StatePieces(piece(0), read_head(memory, state_at_read(needle, loop_bytes), jumps.ed, jumps.sd, piece(1)), piece(2), piece(3), piece(4),
+        fail_tail(memory, state_at_failed(needle, loop_bytes), jumps.rd, piece(5)), piece(6))
 }
 
 // ---------------------------------------------------------------------------
@@ -355,10 +345,10 @@ fn EofTail<C>(file: List<BitVec(8)>, at: Nat, rep: Gprs → C → Type, total: C
 // the failure tail, JMP back to the read after a chunk, and the retry's JZ
 // back to the read.
 record StateTargets(needle: BitVec(8), loop_bytes: List<BitVec(8)>, jumps: EofJumps) {
-    exit: near_branch_target(eof_rip(state_at_jz()), 6, jumps.ed) = eof_rip(state_at_done(needle, loop_bytes)),
-    fail: near_branch_target(eof_rip(state_at_js()), 6, jumps.sd) = eof_rip(state_at_failed(needle, loop_bytes)),
-    back: near_branch_target(eof_rip(state_at_jmp(needle, loop_bytes)), 5, jumps.bd) = eof_rip(state_at_read()),
-    retry: near_branch_target(eof_rip(state_at_retry(needle, loop_bytes)), 6, jumps.rd) = eof_rip(state_at_read()),
+    exit: near_branch_target(eof_rip(rh_at_jz(state_at_read(needle, loop_bytes))), 6, jumps.ed) = eof_rip(state_at_done(needle, loop_bytes)),
+    fail: near_branch_target(eof_rip(rh_at_js(state_at_read(needle, loop_bytes))), 6, jumps.sd) = eof_rip(state_at_failed(needle, loop_bytes)),
+    back: near_branch_target(eof_rip(state_at_jmp(needle, loop_bytes)), 5, jumps.bd) = eof_rip(state_at_read(needle, loop_bytes)),
+    retry: near_branch_target(eof_rip(ft_at_jz(state_at_failed(needle, loop_bytes))), 6, jumps.rd) = eof_rip(state_at_read(needle, loop_bytes)),
 }
 
 // The fold's invariant at the read: the state folded over what has been read
@@ -382,19 +372,19 @@ theorem state_room_here(seen, bytes, rest, input: List<BitVec(8)>, prefix: seen 
 // jump back to the read, and go on from there.
 theorem state_body<C>(file: List<BitVec(8)>, shape: StateShape<C>, l: StateLoop<C>(shape), init: C,
     room_for: StateRoom(shape.fits, shape.region, shape.needle, init), jumps: EofJumps,
-    back_target: near_branch_target(eof_rip(state_at_jmp(shape.needle, shape.bytes)), 5, jumps.bd) = eof_rip(state_at_read()),
+    back_target: near_branch_target(eof_rip(state_at_jmp(shape.needle, shape.bytes)), 5, jumps.bd) = eof_rip(state_at_read(shape.needle, shape.bytes)),
     tail_code: List<BitVec(8)>, pieces: (page: Nat → BitVec(8)) → StatePieces(IoMemory(file, page), shape.needle, shape.bytes, jumps, tail_code),
     input: List<BitVec(8)>, room: input.len() + 4096 < Nat::pow(2, 64)):
-    EofBody<True>(file, state_at_read(), state_inv(shape, init), input, λ _ _ => True, λ _ _ after => after) {
+    EofBody<True>(file, state_at_read(shape.needle, shape.bytes), state_inv(shape, init), input, λ _ _ => True, λ _ _ after => after) {
     λ page seen bytes rest x some fits _ prefix going at_setup memory_is length_word held after next => {
         let stored = io_store_offset(IoMemory(file, page), 0, bytes);
         let there = pieces(stored.page);
         let carry = step_fold(shape.region, shape.needle, seen, init);
         let room_here = state_room_here(seen, bytes, rest, input, prefix, room);
-        have folded = state_folds(file, page, shape, l, bytes, fits, carry, room_for(seen, bytes.len(), room_here), going, state_at_setup(),
+        have folded = state_folds(file, page, shape, l, bytes, fits, carry, room_for(seen, bytes.len(), room_here), going, state_at_setup(shape.needle, shape.bytes),
             memory_is, at_setup, length_word, held, there.setup_at, there.loop_at);
         have back = state_chunk_close(shape.rep, l.framed, going, going, stored, step_fold(shape.region, shape.needle, bytes, carry), jumps.bd,
-            state_at_jmp(shape.needle, shape.bytes), state_at_read(), back_target,
+            state_at_jmp(shape.needle, shape.bytes), state_at_read(shape.needle, shape.bytes), back_target,
             fetched_steps_refl(io_fetch_access(), io_data_access(), going), folded, there.jmp_at);
         let moved: shape.rep(back.witness.gprs, step_fold(shape.region, shape.needle, seen ++ bytes, init)) =
             j(sym(step_fold_append(shape.region, shape.needle, seen, bytes, init)), λ c _ => shape.rep(back.witness.gprs, c),
@@ -411,7 +401,7 @@ theorem state_process<C>(file: List<BitVec(8)>, shape: StateShape<C>, l: StateLo
     tail_code: List<BitVec(8)>, pieces: (page: Nat → BitVec(8)) → StatePieces(IoMemory(file, page), shape.needle, shape.bytes, jumps, tail_code),
     input: List<BitVec(8)>, room: input.len() + 4096 < Nat::pow(2, 64), tail_events: List<LinuxEvent>,
     tail: EofTail(file, state_at_done(shape.needle, shape.bytes), shape.rep, step_fold(shape.region, shape.needle, input, init), tail_events)):
-    EofProcess<True, False>(file, state_at_read(), state_at_done(shape.needle, shape.bytes), state_inv(shape, init), input,
+    EofProcess<True, False>(file, state_at_read(shape.needle, shape.bytes), state_at_done(shape.needle, shape.bytes), state_inv(shape, init), input,
         λ _ _ => True, λ _ _ after => after, λ _ _ => True, λ _ _ => Nil, tail_events) {
     EofProcess(
         framed := λ seen before after kept held => l.framed(before, after, step_fold(shape.region, shape.needle, seen, init),
@@ -426,86 +416,19 @@ theorem state_process<C>(file: List<BitVec(8)>, shape: StateShape<C>, l: StateLo
 // The four jumps' targets, from a closed fact about each displacement that the
 // producer proves at the written bytes.
 
-theorem state_skip_sum(z, s, l: Nat): z + (6 + ((s + l) + 5)) = (((z + 6) + s) + l) + 5 { omega }
-theorem state_exit_sum(z, s, l, r, f: Nat):
-    z + (6 + (((((((6 + s) + l) + 5) + r) + 6) + f) + 2)) = ((((((((z + 6) + 6) + s) + l) + 5) + r) + 6) + f) + 2 { omega }
-theorem state_back_sum(r, e, t, s, l: Nat):
-    r + ((((((e + 2) + t) + 6) + 6) + s) + l) = ((((((r + e) + 2) + t) + 6) + 6) + s) + l { omega }
-theorem state_retry_sum(r, e, t, s, l, q: Nat):
-    r + ((((((((e + 2) + t) + 6) + 6) + s) + l) + 5) + q) = ((((((((r + e) + 2) + t) + 6) + 6) + s) + l) + 5) + q { omega }
-
-// What JZ skips at end of file: the JS, the chunk, and the failure path.
-fn state_exit_skip(needle: BitVec(8), loop_bytes: List<BitVec(8)>) → Nat {
-    ((((((6 + state_setup_len(needle)) + loop_bytes.len()) + 5) + eof_retry_len()) + 6) + eof_fail_len()) + 2
-}
-// What JS skips on a failed read: the chunk's setup, loop and jump back.
-fn state_fail_skip(needle: BitVec(8), loop_bytes: List<BitVec(8)>) → Nat {
-    (state_setup_len(needle) + loop_bytes.len()) + 5
-}
-
-theorem state_exit_target(needle: BitVec(8), loop_bytes: List<BitVec(8)>, ed: BitVec(32),
-    reads: ed.sign_extend(32).toNat() = state_exit_skip(needle, loop_bytes)):
-    near_branch_target(eof_rip(state_at_jz()), 6, ed) = eof_rip(state_at_done(needle, loop_bytes)) {
-    let skip = state_exit_skip(needle, loop_bytes);
-    let lands: (state_at_jz() + (6 + skip) = state_at_done(needle, loop_bytes)) =
-        state_exit_sum(state_at_jz(), state_setup_len(needle), loop_bytes.len(), eof_retry_len(), eof_fail_len());
-    trans(near_branch_forward(eof_rip(state_at_jz()), 6, skip, ed, reads),
-        trans(rip_compose(io_entry(), state_at_jz(), 6 + skip), rip_count(io_entry(), lands)))
-}
-
-theorem state_js_target(needle: BitVec(8), loop_bytes: List<BitVec(8)>, sd: BitVec(32),
-    reads: sd.sign_extend(32).toNat() = state_fail_skip(needle, loop_bytes)):
-    near_branch_target(eof_rip(state_at_js()), 6, sd) = eof_rip(state_at_failed(needle, loop_bytes)) {
-    let skip = state_fail_skip(needle, loop_bytes);
-    let lands: (state_at_js() + (6 + skip) = state_at_failed(needle, loop_bytes)) =
-        state_skip_sum(state_at_js(), state_setup_len(needle), loop_bytes.len());
-    trans(near_branch_forward(eof_rip(state_at_js()), 6, skip, sd, reads),
-        trans(rip_compose(io_entry(), state_at_js(), 6 + skip), rip_count(io_entry(), lands)))
-}
-
-// From the read to the jump back, and to the retry's JZ.
-fn state_loop_span(needle: BitVec(8), loop_bytes: List<BitVec(8)>) → Nat {
-    (((((read_entry_len() + 2) + eof_test_len()) + 6) + 6) + state_setup_len(needle)) + loop_bytes.len()
-}
-fn state_retry_span(needle: BitVec(8), loop_bytes: List<BitVec(8)>) → Nat {
-    (state_loop_span(needle, loop_bytes) + 5) + eof_retry_len()
-}
-
-// JMP returns to the read: its displacement completes the span to 2^64.
-theorem state_back_target(needle: BitVec(8), loop_bytes: List<BitVec(8)>, bd: BitVec(32),
-    closes: state_loop_span(needle, loop_bytes) + 5 + bd.sign_extend(32).toNat() = Nat::pow(2, 64)):
-    near_branch_target(eof_rip(state_at_jmp(needle, loop_bytes)), 5, bd) = eof_rip(state_at_read()) {
-    let at_jmp: (eof_rip(state_at_jmp(needle, loop_bytes)) = next_rip(eof_rip(state_at_read()), state_loop_span(needle, loop_bytes))) =
-        trans(rip_count(io_entry(), sym(state_back_sum(state_at_read(), read_entry_len(), eof_test_len(), state_setup_len(needle),
-            loop_bytes.len()))), sym(rip_compose(io_entry(), state_at_read(), state_loop_span(needle, loop_bytes))));
-    trans(cong_fn<BitVec(64), BitVec(64)>(λ address => near_branch_target(address, 5, bd), at_jmp),
-        near_branch_returns(eof_rip(state_at_read()), state_loop_span(needle, loop_bytes), 5, bd, closes))
-}
-
-// The retry's JZ returns to the read the same way.
-theorem state_retry_target(needle: BitVec(8), loop_bytes: List<BitVec(8)>, rd: BitVec(32),
-    closes: state_retry_span(needle, loop_bytes) + 6 + rd.sign_extend(32).toNat() = Nat::pow(2, 64)):
-    near_branch_target(eof_rip(state_at_retry(needle, loop_bytes)), 6, rd) = eof_rip(state_at_read()) {
-    let at_retry: (eof_rip(state_at_retry(needle, loop_bytes)) = next_rip(eof_rip(state_at_read()), state_retry_span(needle, loop_bytes))) =
-        trans(rip_count(io_entry(), sym(state_retry_sum(state_at_read(), read_entry_len(), eof_test_len(), state_setup_len(needle),
-            loop_bytes.len(), eof_retry_len()))),
-            sym(rip_compose(io_entry(), state_at_read(), state_retry_span(needle, loop_bytes))));
-    trans(cong_fn<BitVec(64), BitVec(64)>(λ address => near_branch_target(address, 6, rd), at_retry),
-        near_branch_returns(eof_rip(state_at_read()), state_retry_span(needle, loop_bytes), 6, rd, closes))
-}
-
-// The producer proves each displacement at the written bytes, closed; these
-// are the facts the claim takes, and the targets they give.
 record StateJumpFacts(needle: BitVec(8), loop_bytes: List<BitVec(8)>, jumps: EofJumps) {
-    exit_reads: jumps.ed.sign_extend(32).toNat() = state_exit_skip(needle, loop_bytes),
-    fail_reads: jumps.sd.sign_extend(32).toNat() = state_fail_skip(needle, loop_bytes),
-    back_closes: state_loop_span(needle, loop_bytes) + 5 + jumps.bd.sign_extend(32).toNat() = Nat::pow(2, 64),
-    retry_closes: state_retry_span(needle, loop_bytes) + 6 + jumps.rd.sign_extend(32).toNat() = Nat::pow(2, 64),
+    exit: JumpsForward(rh_at_jz(state_at_read(needle, loop_bytes)), 6, jumps.ed, state_at_done(needle, loop_bytes)),
+    fail: JumpsForward(rh_at_js(state_at_read(needle, loop_bytes)), 6, jumps.sd, state_at_failed(needle, loop_bytes)),
+    back: JumpsBack(state_at_jmp(needle, loop_bytes), 5, jumps.bd, state_at_read(needle, loop_bytes)),
+    retry: JumpsBack(ft_at_jz(state_at_failed(needle, loop_bytes)), 6, jumps.rd, state_at_read(needle, loop_bytes)),
 }
 theorem state_targets(needle: BitVec(8), loop_bytes: List<BitVec(8)>, jumps: EofJumps, facts: StateJumpFacts(needle, loop_bytes, jumps)):
     StateTargets(needle, loop_bytes, jumps) {
-    StateTargets(state_exit_target(needle, loop_bytes, jumps.ed, facts.exit_reads), state_js_target(needle, loop_bytes, jumps.sd, facts.fail_reads),
-        state_back_target(needle, loop_bytes, jumps.bd, facts.back_closes), state_retry_target(needle, loop_bytes, jumps.rd, facts.retry_closes))
+    let at_read = state_at_read(needle, loop_bytes);
+    StateTargets(jumps_forward(io_entry(), rh_at_jz(at_read), 6, jumps.ed, state_at_done(needle, loop_bytes), facts.exit),
+        jumps_forward(io_entry(), rh_at_js(at_read), 6, jumps.sd, state_at_failed(needle, loop_bytes), facts.fail),
+        jumps_back(io_entry(), state_at_jmp(needle, loop_bytes), 5, jumps.bd, at_read, facts.back),
+        jumps_back(io_entry(), ft_at_jz(state_at_failed(needle, loop_bytes)), 6, jumps.rd, at_read, facts.retry))
 }
 
 // ---------------------------------------------------------------------------
@@ -547,10 +470,10 @@ theorem state_start<C>(file: List<BitVec(8)>, shape: StateShape<C>, l: StateLoop
     let started = block_fetched(fetch, data, state_init_block(), begin, trivial, pieces(page).init_at);
     let ready = execute_block_normal(state_init_block(), begin);
     let input = eof_input(chunks);
-    let layout: EofLayout(file, state_at_read(), state_at_failed(shape.needle, shape.bytes), state_at_done(shape.needle, shape.bytes),
+    let layout: EofLayout(file, state_at_read(shape.needle, shape.bytes), state_at_failed(shape.needle, shape.bytes), state_at_done(shape.needle, shape.bytes),
         jumps.ed, jumps.sd, jumps.rd) = EofLayout(λ p => pieces(p).head, λ p => pieces(p).fail, targets.exit, targets.fail, targets.retry);
     linux_runs_after_steps(io_linux(), eof_events(chunks, ending, tail_events), begin, ready, started.left,
-        eof_from(file, state_at_read(), state_at_failed(shape.needle, shape.bytes), state_at_done(shape.needle, shape.bytes),
+        eof_from(file, state_at_read(shape.needle, shape.bytes), state_at_failed(shape.needle, shape.bytes), state_at_done(shape.needle, shape.bytes),
             jumps.ed, jumps.sd, jumps.rd, layout, state_inv(shape, init), input, λ _ _ => True, λ _ _ after => after,
             λ _ _ => True, λ _ _ => Nil, tail_events,
             state_process(file, shape, l, init, start.room, jumps, targets, tail_code, pieces, input, room, tail_events, tail),

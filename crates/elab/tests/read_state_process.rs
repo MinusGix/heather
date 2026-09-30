@@ -90,8 +90,8 @@ fn wc_state_process_composes() {
 
 // Each change to the process shape is refused where it is wrong, not by a
 // missing name: the claim can't be restated over a setup that writes a state
-// register, a jump back or a failure jump from the wrong distance, a program
-// that leaves out init, or an exit that reads another register than the
+// register, a layout that measures its jump back a byte long, a failure jump
+// said to land on the tail, a program that leaves out init, or an exit that reads another register than the
 // status premise names; nor, for wc, over an init that zeroes the wrong
 // register.
 #[test]
@@ -100,10 +100,10 @@ fn slow_acceptance_read_state_refusals() {
     for (name, from, to) in [
         ("setup_writes_state", "     MovRI(Rsi, BitVec::ofNat(0))]\n}", "     MovRI(Rsi, BitVec::ofNat(0)), MovRI(R15, BitVec::ofNat(0))]\n}"),
         ("setup_base", "MovRI(Rdi, BitVec::ofNat(io_page_base())), MovRI(Rcx", "MovRI(Rdi, BitVec::ofNat(0x410001)), MovRI(Rcx"),
-        ("back_span", "(((((read_entry_len() + 2) + eof_test_len())", "(((((read_entry_len() + 3) + eof_test_len())"),
-        ("failure_span", "    (state_setup_len(needle) + loop_bytes.len()) + 5\n}", "    (state_setup_len(needle) + loop_bytes.len()) + 4\n}"),
-        ("init_left_out", "    canonical_block_bytes(state_init_block()) ++ (read_head_code(jumps.ed, jumps.sd) ++",
-            "    (read_head_code(jumps.ed, jumps.sd) ++"),
+        ("back_measured_long", "loop_len, 5, fail_tail_len()]", "loop_len, 6, fail_tail_len()]"),
+        ("fail_to_tail", "6, jumps.sd, state_at_failed(needle, loop_bytes)),\n", "6, jumps.sd, state_at_done(needle, loop_bytes)),\n"),
+        ("init_left_out", "    [canonical_block_bytes(state_init_block()), read_head_code(jumps.ed, jumps.sd), ",
+            "    [read_head_code(jumps.ed, jumps.sd), "),
         ("status_elsewhere", "rep(gprs, carry) → read_gpr(R13, gprs) = bitvec_nat::word_of_nat(64, status(carry)),\n    total: C,",
             "rep(gprs, carry) → read_gpr(R14, gprs) = bitvec_nat::word_of_nat(64, status(carry)),\n    total: C,"),
     ] {

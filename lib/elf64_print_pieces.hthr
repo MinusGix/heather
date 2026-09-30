@@ -252,18 +252,6 @@ fn WriteBack(returned: MachineState<IoMemory>, memory: IoMemory, count: Nat, at:
         ((read_gpr(R9, back.gprs) = read_gpr(R9, returned.gprs).add(bitvec_nat::word_of_nat(64, count))) ∧
         (read_gpr(R10, back.gprs) = read_gpr(R10, returned.gprs).sub(bitvec_nat::word_of_nat(64, count)))))))
 }
-theorem print_fail_sum(g, a: Nat): g + (6 + ((a + 6) + 5)) = (((g + 6) + a) + 6) + 5 { omega }
-theorem print_exit_sum(z, r, f: Nat): z + (6 + ((((5 + r) + 6) + f) + 2)) = (((((z + 6) + 5) + r) + 6) + f) + 2 { omega }
-theorem print_back_sum(w, l, t, a: Nat): w + (((((l + 2) + t) + 6) + a) + 6) = (((((w + l) + 2) + t) + 6) + a) + 6 { omega }
-theorem print_retry_sum(w, l, t, a, r: Nat):
-    w + (((((((l + 2) + t) + 6) + a) + 6) + 5) + r) = (((((((w + l) + 2) + t) + 6) + a) + 6) + 5) + r { omega }
-
-// JS skips the advance, JZ and JMP; JZ skips the failure path.
-fn print_fail_skip() → Nat { (print_advance_len() + 6) + 5 }
-fn print_exit_skip() → Nat { (((5 + eof_retry_len()) + 6) + eof_fail_len()) + 2 }
-// From the write to the end of the JMP back, and to the retry's JZ.
-fn print_loop_span() → Nat { ((((print_write_len() + 2) + eof_test_len()) + 6) + print_advance_len()) + 6 }
-fn print_retry_span() → Nat { (print_loop_span() + 5) + eof_retry_len() }
 
 theorem take_whole<A>(xs: List<A>): xs.take(xs.len()) = xs {
     match xs as λ ys => ys.take(ys.len()) = ys {

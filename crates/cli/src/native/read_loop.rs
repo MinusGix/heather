@@ -15,6 +15,8 @@ use heather_elab::function_ir_x86_lower::{encode_structured, Gpr, Instruction, P
 use heather_elab::heather_emit::Module;
 use heather_elab::Elaborator;
 
+use super::layout::{Layout, JMP, JS, JZ};
+
 // Bundled after the base support, only for this profile: the loop contract and
 // its native certificates, fetched execution, the Linux trace and its
 // determinism, the profile's memory view and the state process.
@@ -25,6 +27,7 @@ pub(super) const SUPPORT: &[(&str, &str)] = &[
     ("x86_64_access_code", include_str!("../../../../lib/std/arch/x86_64/x86_64_access_code.hthr")),
     ("x86_64_access_memory", include_str!("../../../../lib/std/arch/x86_64/x86_64_access_memory.hthr")),
     ("x86_64_fetched_code", include_str!("../../../../lib/std/arch/x86_64/x86_64_fetched_code.hthr")),
+    ("x86_64_layout", include_str!("../../../../lib/std/arch/x86_64/x86_64_layout.hthr")),
     ("function_ir_loop", include_str!("../../../../lib/function_ir_loop.hthr")),
     ("function_ir_loop_x86", include_str!("../../../../lib/function_ir_loop_x86.hthr")),
     ("function_ir_loop_trace", include_str!("../../../../lib/function_ir_loop_trace.hthr")),
@@ -146,11 +149,6 @@ pub(super) fn generate_loop(elab: &Elaborator, scope: &str, prefix: &str, progra
     })?
 }
 
-// A near jump's bytes: JZ (0F 84), JS (0F 88) or JMP (E9), then rel32.
-pub(super) fn near(opcode: &[u8], displacement: u32) -> Vec<u8> { [opcode, &displacement.to_le_bytes()[..]].concat() }
-pub(super) fn forward(distance: usize) -> u32 { u32::try_from(distance).expect("the program fits the file's window") }
-pub(super) fn backward(distance: usize) -> u32 { 0u32.wrapping_sub(forward(distance)) }
-
 // TEST RAX, RAX: the lowering's encoder has no TEST of its own; the
 // certificate checks these bytes against the model's encoding.
 pub(super) const TEST: [u8; 3] = [0x48, 0x85, 0xc0];
@@ -172,130 +170,75 @@ pub(super) fn nested(parts: &[String]) -> String {
     }
 }
 
-pub(super) fn syscall() -> String { "syscall_bytes()".into() }
-
-/// elf64_read_state's `state_code` up to its tail: init, the read, its test
-/// and jumps, the chunk's setup, loop and jump back, the failure path.
-pub(super) struct StateHead { pieces: Vec<(&'static str, Vec<u8>)>, ed: u32, sd: u32, bd: u32, rd: u32 }
-
-pub(super) fn state_head(needle: u8, loop_len: usize) -> StateHead {
+/// elf64_read_pieces's read head at `read`: read(0, page, 4096), TEST, JZ to
+/// `end` at end of file, JS to `failed` at a failed read.
+pub(super) fn read_head(end: &'static str, failed: &'static str) -> Layout {
     use Gpr::*;
-    let encode = super::encode;
-    let init = encode(&[mov(R13, 0), mov(R14, 0), mov(R15, 0), mov(R8, 0)]);
-    let entry = encode(&[mov(Rax, 0), mov(Rdi, 0), mov(Rsi, 0x410000), mov(Rdx, 4096)]);
-    let setup = encode(&[copy(Rbp, Rax), copy(R12, Rax), mov(Rdi, 0x410000), mov(Rcx, u64::from(needle)), mov(Rsi, 0)]);
-    // A failed read (docs/native-syscall-failures-design.md §4): RAX + 4 is
-    // zero exactly at -EINTR, which retries; otherwise exit(1).
-    let retry = encode(&[mov(Rbx, 4), Instruction::AddRR { destination: Rax, source: Rbx }]);
-    let fail = encode(&[mov(Rdi, 1), mov(Rax, 60)]);
-    // JS skips the chunk's setup, loop and jump back to the failure path; JZ
-    // skips that and the failure path too. The jump back and the retry's JZ
-    // return to the read, each from its own end.
-    let chunk = setup.len() + loop_len + 5;
-    let (sd, ed) = (forward(chunk), forward(6 + chunk + retry.len() + 6 + fail.len() + 2));
-    let span = entry.len() + 2 + TEST.len() + 6 + 6 + setup.len() + loop_len;
-    let (bd, rd) = (backward(span + 5), backward(span + 5 + retry.len() + 6));
-    let pieces = vec![("init", init), ("entry", entry), ("test", TEST.to_vec()), ("jz", near(&[0x0f, 0x84], ed)),
-        ("js", near(&[0x0f, 0x88], sd)), ("setup", setup), ("jmp", near(&[0xe9], bd)), ("retry", retry),
-        ("rjz", near(&[0x0f, 0x84], rd)), ("fail", fail)];
-    StateHead { pieces, ed, sd, bd, rd }
+    Layout::default().label("read").fixed("entry", super::encode(&[mov(Rax, 0), mov(Rdi, 0), mov(Rsi, 0x410000), mov(Rdx, 4096)])).syscall()
+        .fixed("test", TEST.to_vec()).jump("jz", JZ, end).jump("js", JS, failed)
 }
 
-impl StateHead {
-    fn piece(&self, name: &str) -> &[u8] { &self.pieces.iter().find(|(n, _)| *n == name).expect("a head piece").1 }
-    /// The head's bytes around the loop's.
-    pub(super) fn code(&self, loop_bytes: &[u8]) -> Vec<u8> {
-        let p = |n| self.piece(n);
-        [p("init"), p("entry"), &SYSCALL, p("test"), p("jz"), p("js"), p("setup"), loop_bytes, p("jmp"), p("retry"), p("rjz"), p("fail"), &SYSCALL].concat()
-    }
-    /// The pieces as the certificate spells them, in order; the loop's bytes
-    /// are its published literal tree (a flat literal compared against that
-    /// tree recurses once per byte, past the kernel's depth budget).
-    pub(super) fn spelled(&self, prefix: &str) -> Vec<String> {
-        let w = |n: &str| format!("{prefix}_{n}_written()");
-        vec![w("init"), w("entry"), syscall(), w("test"), w("jz"), w("js"), w("setup"), format!("{prefix}_bytes()"), w("jmp"),
-            w("retry"), w("rjz"), w("fail"), syscall()]
-    }
-    /// Each piece's literal and the jumps.
-    pub(super) fn declare(&self, module: &mut Module, prefix: &str) {
-        for (name, bytes) in &self.pieces {
-            module.raw(format!("fn {prefix}_{name}_written() → List<BitVec(8)> {{ {} }}", literal(bytes)));
-        }
-        module.raw(format!("fn {prefix}_jumps() → EofJumps {{ EofJumps(@bitvec::BitVec::ofNat(32, {}), @bitvec::BitVec::ofNat(32, {}), \
-            @bitvec::BitVec::ofNat(32, {}), @bitvec::BitVec::ofNat(32, {})) }}", self.ed, self.sd, self.bd, self.rd));
-    }
-    /// Where the jumps land: JZ past the chunk's code and the failure path to
-    /// the tail, JS past the chunk's code to the failure path, JMP and the
-    /// retry's JZ back to the read. Closed facts about the written
-    /// displacements.
-    pub(super) fn jump_facts(&self, module: &mut Module, prefix: &str, needle: &str) {
-        module.raw(format!("\
-theorem {prefix}_exit_reads(): {prefix}_jumps().ed.sign_extend(32).toNat() = state_exit_skip({needle}, {prefix}_bytes()) {{ refl }}
-theorem {prefix}_fail_reads(): {prefix}_jumps().sd.sign_extend(32).toNat() = state_fail_skip({needle}, {prefix}_bytes()) {{ refl }}
-theorem {prefix}_back_closes(): state_loop_span({needle}, {prefix}_bytes()) + 5 + {prefix}_jumps().bd.sign_extend(32).toNat() = Nat::pow(2, 64) {{ refl }}
-theorem {prefix}_retry_closes(): state_retry_span({needle}, {prefix}_bytes()) + 6 + {prefix}_jumps().rd.sign_extend(32).toNat() = Nat::pow(2, 64) {{ refl }}
-fn {prefix}_jump_facts() → StateJumpFacts({needle}, {prefix}_bytes(), {prefix}_jumps()) {{
-    StateJumpFacts({prefix}_exit_reads(), {prefix}_fail_reads(), {prefix}_back_closes(), {prefix}_retry_closes())
-}}
+/// elf64_read_pieces's failure tail at `at` (docs/native-syscall-failures-design.md
+/// §4): RAX + 4 is zero exactly at -EINTR, whose JZ (`jump`) goes back to
+/// `retry`; otherwise exit(1).
+pub(super) fn fail_tail(at: &'static str, jump: &'static str, retry: &'static str) -> Layout {
+    use Gpr::*;
+    Layout::default().label(at).fixed("retry", super::encode(&[mov(Rbx, 4), Instruction::AddRR { destination: Rax, source: Rbx }]))
+        .jump(jump, JZ, retry).fixed("fail", super::encode(&[mov(Rdi, 1), mov(Rax, 60)])).syscall()
+}
+
+/// elf64_read_state's `state_parts`: init, the read head, the chunk's setup,
+/// loop and jump back, the failure tail; the tail goes at `done`.
+pub(super) fn state_layout(prefix: &str, needle: u8, loop_bytes: &[u8]) -> Layout {
+    use Gpr::*;
+    let encode = super::encode;
+    Layout::default().fixed("init", encode(&[mov(R13, 0), mov(R14, 0), mov(R15, 0), mov(R8, 0)]))
+        .then(read_head("done", "failed"))
+        .fixed("setup", encode(&[copy(Rbp, Rax), copy(R12, Rax), mov(Rdi, 0x410000), mov(Rcx, u64::from(needle)), mov(Rsi, 0)]))
+        // The loop's bytes are its published literal tree (a flat literal
+        // compared against that tree recurses once per byte, past the
+        // kernel's depth budget).
+        .generated("loop", format!("{prefix}_bytes()"), loop_bytes.to_vec())
+        .jump("jmp", JMP, "read")
+        .then(fail_tail("failed", "rjz", "read"))
+        .label("done")
+}
+
+/// The state process's jumps and the facts that they land where
+/// elf64_read_state's layout says, each by evaluation at the written bytes.
+pub(super) fn state_jumps(module: &mut Module, prefix: &str, layout: &Layout, needle: &str) {
+    let d = |jump| format!("@bitvec::BitVec::ofNat(32, {})", layout.displacement(jump));
+    module.raw(format!("\
+fn {prefix}_jumps() → EofJumps {{ EofJumps({}, {}, {}, {}) }}
+fn {prefix}_jump_facts() → StateJumpFacts({needle}, {prefix}_bytes(), {prefix}_jumps()) {{ StateJumpFacts(refl, refl, refl, refl) }}
+", d("jz"), d("js"), d("jmp"), d("rjz")));
+}
+
+/// elf64_write_loop's `write_loop_parts`: write(1, R9, R10) until nothing is
+/// left, EINTR retried, any other failure exit 1; the all-sent JZ goes to
+/// `done`, the loop's own exit(0) at `wexit` for a program's last write.
+pub(super) fn write_loop(done: &'static str) -> Layout {
+    use Gpr::*;
+    let encode = super::encode;
+    Layout::default().label("write").fixed("write", encode(&[copy(Rsi, R9), copy(Rdx, R10), mov(Rdi, 1), mov(Rax, 1)])).syscall()
+        .fixed("test", TEST.to_vec()).jump("wjs", JS, "wfailed")
+        .fixed("advance", encode(&[Instruction::AddRR { destination: R9, source: Rax }, Instruction::SubRR { destination: R10, source: Rax }]))
+        .jump("wjz", JZ, done).jump("wjmp", JMP, "write")
+        .then(fail_tail("wfailed", "wrjz", "write"))
+        .label("wexit").fixed("exit", encode(&[mov(Rdi, 0), mov(Rax, 60)])).syscall()
+}
+
+/// The write loop's jumps, `{prefix}_print_jumps()`.
+pub(super) fn print_jumps(module: &mut Module, prefix: &str, layout: &Layout) {
+    let d = |jump| format!("@bitvec::BitVec::ofNat(32, {})", layout.displacement(jump));
+    module.raw(format!("fn {prefix}_print_jumps() → PrintJumps {{ PrintJumps({}, {}, {}, {}) }}", d("wjs"), d("wjz"), d("wjmp"), d("wrjz")));
+}
+/// And, for a program's last write, that they land where elf64_write_loop
+/// says: closed facts about its offsets from its start.
+pub(super) fn print_facts(module: &mut Module, prefix: &str) {
+    module.raw(format!("\
+fn {prefix}_print_facts() → PrintJumpFacts({prefix}_print_jumps()) {{ PrintJumpFacts(WriteJumpFacts(refl, refl, refl), refl) }}
 "));
-    }
-}
-
-/// elf64_write_loop's `write_loop_code`: write(1, R9, R10) until nothing is
-/// left, then exit(0); EINTR retries, any other failure exits 1. The head's
-/// test, retry and fail pieces are shared.
-pub(super) struct WriteLoop { pieces: Vec<(&'static str, Vec<u8>)>, psd: u32, pzd: u32, pbd: u32, prd: u32, retry: usize, fail: usize }
-
-pub(super) fn write_loop(head: &StateHead) -> WriteLoop {
-    use Gpr::*;
-    let encode = super::encode;
-    let write = encode(&[copy(Rsi, R9), copy(Rdx, R10), mov(Rdi, 1), mov(Rax, 1)]);
-    let advance = encode(&[Instruction::AddRR { destination: R9, source: Rax }, Instruction::SubRR { destination: R10, source: Rax }]);
-    let exit = encode(&[mov(Rdi, 0), mov(Rax, 60)]);
-    let (retry, fail) = (head.piece("retry").len(), head.piece("fail").len());
-    // JS to the failure path, JZ to exit(0) past it, JMP and the retry's JZ
-    // back to the write (elf64_print_pieces's `PrintJumps`).
-    let psd = forward(advance.len() + 6 + 5);
-    let pzd = forward(5 + retry + 6 + fail + 2);
-    let span = write.len() + 2 + TEST.len() + 6 + advance.len() + 6;
-    let (pbd, prd) = (backward(span + 5), backward(span + 5 + retry + 6));
-    let pieces = vec![("write", write), ("wjs", near(&[0x0f, 0x88], psd)), ("advance", advance), ("wjz", near(&[0x0f, 0x84], pzd)),
-        ("wjmp", near(&[0xe9], pbd)), ("wrjz", near(&[0x0f, 0x84], prd)), ("exit", exit)];
-    WriteLoop { pieces, psd, pzd, pbd, prd, retry, fail }
-}
-
-impl WriteLoop {
-    fn piece(&self, name: &str) -> &[u8] { &self.pieces.iter().find(|(n, _)| *n == name).expect("a write piece").1 }
-    pub(super) fn code(&self, head: &StateHead) -> Vec<u8> {
-        let p = |n| self.piece(n);
-        [p("write"), &SYSCALL, &TEST, p("wjs"), p("advance"), p("wjz"), p("wjmp"), head.piece("retry"), p("wrjz"), head.piece("fail"),
-            &SYSCALL, p("exit"), &SYSCALL].concat()
-    }
-    /// As `write_loop_code` unfolds, ending in a parenthesised syscall.
-    pub(super) fn spelled(&self, prefix: &str) -> Vec<String> {
-        let w = |n: &str| format!("{prefix}_{n}_written()");
-        vec![w("write"), syscall(), w("test"), w("wjs"), w("advance"), w("wjz"), w("wjmp"), w("retry"), w("wrjz"), w("fail"), syscall(),
-            w("exit"), format!("({})", syscall())]
-    }
-    /// Its pieces' literals, its jumps and where they land.
-    pub(super) fn declare(&self, module: &mut Module, prefix: &str) {
-        debug_assert!(self.retry > 0 && self.fail > 0);
-        for (name, bytes) in &self.pieces {
-            module.raw(format!("fn {prefix}_{name}_written() → List<BitVec(8)> {{ {} }}", literal(bytes)));
-        }
-        let pj = format!("{prefix}_print_jumps()");
-        module.raw(format!("\
-fn {prefix}_print_jumps() → PrintJumps {{ PrintJumps(@bitvec::BitVec::ofNat(32, {psd}), @bitvec::BitVec::ofNat(32, {pzd}), \
-    @bitvec::BitVec::ofNat(32, {pbd}), @bitvec::BitVec::ofNat(32, {prd})) }}
-theorem {prefix}_write_fail_reads(): {pj}.sd.sign_extend(32).toNat() = print_fail_skip() {{ refl }}
-theorem {prefix}_write_exit_reads(): {pj}.zd.sign_extend(32).toNat() = print_exit_skip() {{ refl }}
-theorem {prefix}_write_back_closes(): print_loop_span() + 5 + {pj}.bd.sign_extend(32).toNat() = Nat::pow(2, 64) {{ refl }}
-theorem {prefix}_write_retry_closes(): print_retry_span() + 6 + {pj}.rd.sign_extend(32).toNat() = Nat::pow(2, 64) {{ refl }}
-fn {prefix}_print_facts() → PrintJumpFacts({pj}) {{
-    PrintJumpFacts({prefix}_write_fail_reads(), {prefix}_write_exit_reads(), {prefix}_write_back_closes(), {prefix}_write_retry_closes())
-}}
-", psd = self.psd, pzd = self.pzd, pbd = self.pbd, prd = self.prd));
-    }
 }
 
 /// The written file's facts, for any layout of the read profile: the header
@@ -399,21 +342,20 @@ theorem {prefix}_runs_every({premises},
 /// Lay out the program and write its certificate after the loop's (which the
 /// caller has already put in `module`). Returns the file to publish.
 pub(super) fn certify(module: &mut Module, prefix: &str, program: &Program, emission: &LoopX86Emission) -> Result<Vec<u8>, String> {
-    let head = state_head(program.needle, emission.bytes.len());
     let exit = super::encode(&[copy(Gpr::Rdi, Gpr::R13), mov(Gpr::Rax, 60)]);
-    let code = [head.code(&emission.bytes), exit.clone(), SYSCALL.to_vec()].concat();
+    let layout = state_layout(prefix, program.needle, &emission.bytes).fixed("exit", exit.clone()).syscall();
+    let code = layout.code();
     let file = super::calls::io_image(&code)?;
     let needle = format!("@bitvec::BitVec::ofNat(8, {})", program.needle);
     let root = program.root;
-    head.declare(module, prefix);
-    module.raw(format!("fn {prefix}_exit_written() → List<BitVec(8)> {{ {} }}", literal(&exit)));
+    layout.declare(module, prefix);
+    state_jumps(module, prefix, &layout, &needle);
     let code_term = format!("read_state_code({needle}, {prefix}_bytes(), {prefix}_jumps())");
-    let spelled = nested(&[head.spelled(prefix), vec![format!("({prefix}_exit_written() ++ {})", syscall())]].concat());
+    let spelled = nested(&layout.spelled(prefix));
     // The loop's length by evaluating its bytes alone; the exit's too.
     let length = format!("state_code_len({needle}, {prefix}_bytes(), {prefix}_jumps(), eof_exit_code(), {}, {}, refl, refl)",
         emission.bytes.len(), exit.len() + SYSCALL.len());
     image_facts(module, prefix, &code_term, &spelled, "refl", &file, code.len(), &length);
-    head.jump_facts(module, prefix, &needle);
     let premises = "chunks: List<EofStep<True>>, ok: EofChunks(chunks), ending: EofEnd<False>, ending_ok: EofEnding(ending),
     room: eof_input(chunks).len() + 4096 < Nat::pow(2, 64), page: Nat → BitVec(8), gprs: Gprs, flags: Flags";
     let events = format!("eof_events(chunks, ending, [ExitEvent(bitvec_nat::word_of_nat(64, {root}::{spec}(eof_input(chunks))))])", spec = program.spec);
@@ -465,35 +407,34 @@ pub(super) fn generate_format(elab: &Elaborator, prefix: &str) -> Result<Vec<For
 pub(super) fn certify_print(module: &mut Module, prefix: &str, program: &Program, emission: &LoopX86Emission, format: &[FormatPart]) -> Result<Vec<u8>, String> {
     use Gpr::*;
     let [word, start, length] = format else { return Err("the formatter has three parts".into()) };
-    let head = state_head(program.needle, emission.bytes.len());
-    let writes = write_loop(&head);
     // The tail (elf64_count_print's `count_tail`): the count to R11 and the
     // page to R8, the formatter, the store, then the write loop.
-    let base = super::encode(&[copy(R11, R13), mov(R8, 0x410000)]);
-    let store = vec![0x49, 0x89, 0x00];
-    let code = [head.code(&emission.bytes), base.clone(), word.bytes.clone(), start.bytes.clone(), length.bytes.clone(), store.clone(),
-        writes.code(&head)].concat();
+    let (w, st, ln) = (&word.prefix, &start.prefix, &length.prefix);
+    let layout = state_layout(prefix, program.needle, &emission.bytes)
+        .fixed("base", super::encode(&[copy(R11, R13), mov(R8, 0x410000)]))
+        .generated("word", format!("{w}_bytes()"), word.bytes.clone())
+        .generated("start", format!("{st}_bytes()"), start.bytes.clone())
+        .generated("length", format!("{ln}_bytes()"), length.bytes.clone())
+        .fixed("store", vec![0x49, 0x89, 0x00])
+        .then(write_loop("wexit"));
+    let code = layout.code();
     let file = super::calls::io_image(&code)?;
     let needle = format!("@bitvec::BitVec::ofNat(8, {})", program.needle);
     let root = program.root;
-    head.declare(module, prefix);
-    writes.declare(module, prefix);
-    for (name, bytes) in [("base", &base), ("store", &store)] {
-        module.raw(format!("fn {prefix}_{name}_written() → List<BitVec(8)> {{ {} }}", literal(bytes)));
-    }
-    let (w, st, ln) = (&word.prefix, &start.prefix, &length.prefix);
+    layout.declare(module, prefix);
+    state_jumps(module, prefix, &layout, &needle);
+    print_jumps(module, prefix, &layout);
+    print_facts(module, prefix);
     let pj = format!("{prefix}_print_jumps()");
     let code_term = format!("read_count_code({needle}, {prefix}_bytes(), {prefix}_jumps(), {w}_code(), {st}_code(), {ln}_code(), {pj})");
-    let layout = |a: &str, b: &str, c: &str| nested(&[head.spelled(prefix),
-        vec![format!("{prefix}_base_written()"), a.to_string(), b.to_string(), c.to_string(), format!("{prefix}_store_written()")],
-        writes.spelled(prefix)].concat());
+    let spelled = |a: &str, b: &str, c: &str| nested(&layout.spelled_with(prefix, &[("word", a), ("start", b), ("length", c)]));
     // The code, spelled as the pieces the producer wrote: fixed pieces by
     // evaluation, the formatter's bytes by their lemmas.
     let (ost, oln) = (format!("{st}_bytes()"), format!("{ln}_bytes()"));
     let (lw, lst, lln) = (format!("{w}_lit()"), format!("{st}_lit()"), format!("{ln}_lit()"));
     let mut chain = "refl".to_string();
-    for (lemma, motive) in [(format!("{w}_bytes_are()"), layout("y", &ost, &oln)), (format!("{st}_bytes_are()"), layout(&lw, "y", &oln)),
-        (format!("{ln}_bytes_are()"), layout(&lw, &lst, "y"))] {
+    for (lemma, motive) in [(format!("{w}_bytes_are()"), spelled("y", &ost, &oln)), (format!("{st}_bytes_are()"), spelled(&lw, "y", &oln)),
+        (format!("{ln}_bytes_are()"), spelled(&lw, &lst, "y"))] {
         chain = format!("j({lemma}, λ y _ => {code_term} = {motive}, {chain})");
     }
     // The loop's length by evaluating its bytes alone, the formatter's by its
@@ -501,8 +442,7 @@ pub(super) fn certify_print(module: &mut Module, prefix: &str, program: &Program
     let measure = format!("read_count_code_len({needle}, {prefix}_bytes(), {prefix}_jumps(), {w}_code(), {st}_code(), {ln}_code(), {pj}, \
         {}, {}, {}, {}, refl, {w}_byte_length(), {st}_byte_length(), {ln}_byte_length())",
         emission.bytes.len(), word.bytes.len(), start.bytes.len(), length.bytes.len());
-    image_facts(module, prefix, &code_term, &layout(&lw, &lst, &lln), &chain, &file, code.len(), &measure);
-    head.jump_facts(module, prefix, &needle);
+    image_facts(module, prefix, &code_term, &spelled(&lw, &lst, &lln), &chain, &file, code.len(), &measure);
     let premises = format!("chunks: List<EofStep<True>>, ok: EofChunks(chunks), ending: EofEnd<False>, ending_ok: EofEnding(ending),
     room: eof_input(chunks).len() + 4096 < Nat::pow(2, 64), small: {root}::{spec}(eof_input(chunks)) < 10000,
     writes: List<WriteStep>, writes_ok: WriteSteps(writes)(decimal_line({root}::{spec}(eof_input(chunks)))),
@@ -538,6 +478,45 @@ fn {prefix}_print_format() → PrintFormat({prefix}_print_codes()) {{
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The producer's layout against the library's (docs/native-architecture-review.md
+    // R4): the state process's jump facts, proved by evaluation at the
+    // displacements the table computes, hold for the table as written, and are
+    // refused for one whose jump back lands on the failure tail or whose setup
+    // is a byte longer than the library's.
+    #[test]
+    fn state_layout_agrees_with_the_library_and_mutations_are_refused() {
+        let mut elab = super::super::native_test_base();
+        let mut session = heather_cli::semantic::SemanticSession::new(Some(std::path::PathBuf::from(
+            concat!(env!("CARGO_MANIFEST_DIR"), "/../../target/native-test-images"),
+        )));
+        for &(name, src) in SUPPORT {
+            super::super::check_module(&mut elab, &mut session, &heather_cli::loader::Module {
+                name: name.into(), path: name.into(), src: src.into(),
+            }).unwrap();
+        }
+        let library = elab.semantic_image();
+        let loop_bytes = vec![0u8; 40];
+        let needle = "@bitvec::BitVec::ofNat(8, 10)";
+        for (name, layout, holds) in [
+            ("as written", state_layout("t", 10, &loop_bytes), true),
+            ("jump back to the failure tail", state_layout("t", 10, &loop_bytes).retarget("jmp", "failed"), false),
+            ("setup a byte longer", state_layout("t", 10, &loop_bytes).pad("setup"), false),
+        ] {
+            let mut module = Module::default();
+            module.raw("import elf64_read_state; import elf64_read_pieces; import bitvec; import list; import logic; import nat;");
+            module.raw(format!("fn t_bytes() → List<BitVec(8)> {{ {} }}", literal(&loop_bytes)));
+            state_jumps(&mut module, "t", &layout, needle);
+            let text = module.render();
+            let result = library.elaborator().elab_module_source("layout_control", &text);
+            if holds {
+                result.unwrap_or_else(|e| panic!("{name}: {}", e.render(&text)));
+            } else {
+                let error = result.expect_err(name).render(&text);
+                assert!(error.contains("t_jump_facts") && !error.contains("unbound"), "{name}: {error}");
+            }
+        }
+    }
 
     #[test]
     fn formatter_generation_uses_its_checked_scope_after_an_unrelated_module() {

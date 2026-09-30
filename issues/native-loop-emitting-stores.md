@@ -23,3 +23,4 @@ filters have the same shape (`cat -s`, `dos2unix`).
 
 - 2026-09-30: paused for [[native-stack-refactor]] (user's call). The design direction put to the user then was a library per-byte loop around a generated step (next state in place, an emit flag and byte), storing at an output cursor advanced by the flag; after the review's R3 that is a body for the read-until-EOF driver rather than a new process.
 - 2026-09-30: R3 landed: the filter is now an EofProcess for elf64_read_pieces's eof_from (body with next, EndedIn for a failed write), no new induction.
+- 2026-09-30: After R4 (native-stack-refactor): the filter's code is a layout (x86_64_layout) — a parts list, measured lens and a jump-facts record in the library, a Layout table in the producer — with no offset arithmetic, residency chain or sum lemma of its own.
