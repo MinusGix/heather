@@ -83,6 +83,10 @@ pub enum ModuleImageDecodeError {
     TrailingBytes,
     DependencyPrefixLength { expected: usize, actual: usize },
     InvalidStructure(&'static str),
+    /// The OS would not give the decoder the stack its depth budget needs
+    /// ([`decode_on_own_stack`]). Refused rather than decoded on the
+    /// caller's stack, which the budget was not sized for.
+    NoStack,
 }
 
 impl fmt::Display for ModuleImageDecodeError {
@@ -103,6 +107,7 @@ impl fmt::Display for ModuleImageDecodeError {
                 f, "module image expects {expected} dependency bindings, but the accepted prefix has {actual}"
             ),
             Self::InvalidStructure(message) => write!(f, "invalid module-image structure: {message}"),
+            Self::NoStack => write!(f, "cannot start a thread with the module-image decoder's stack"),
         }
     }
 }
@@ -190,6 +195,10 @@ struct Reader<'a> {
     /// at the position its text now has in the edited source
     /// (`docs/declaration-slice-replay-design.md` §4). Zero for an image.
     span_offset: i64,
+    /// The lowest stack address a node was decoded at, for the frame-cost
+    /// tests.
+    #[cfg(test)]
+    low_water: usize,
 }
 
 impl<'a> Reader<'a> {
@@ -204,6 +213,8 @@ impl<'a> Reader<'a> {
             nodes_left: limits.max_nodes,
             depth: 0,
             span_offset: 0,
+            #[cfg(test)]
+            low_water: usize::MAX,
         })
     }
 
@@ -305,6 +316,11 @@ impl<'a> Reader<'a> {
             return Err(ModuleImageDecodeError::DepthBudget);
         }
         self.depth += 1;
+        #[cfg(test)]
+        {
+            let here = 0_u8;
+            self.low_water = self.low_water.min(std::hint::black_box(&here) as *const u8 as usize);
+        }
         let result = get(self);
         self.depth -= 1;
         result
@@ -423,7 +439,7 @@ fn get_ctx(r: &mut Reader<'_>) -> Result<LocalCtx, ModuleImageDecodeError> {
     let base = get_base(r)?;
     let entries = r.vec(|r| {
         Ok(CtxEntry {
-            ty: Rc::new(get_type(r)?),
+            ty: type_rc(r)?,
             level: get_level(r)?,
         })
     })?;
@@ -458,7 +474,7 @@ fn get_subst(r: &mut Reader<'_>) -> Result<LocalSubst, ModuleImageDecodeError> {
         },
         tag => return Err(ModuleImageDecodeError::InvalidTag { sort: "substitution tail", tag }),
     };
-    let terms = r.vec(|r| Ok(Rc::new(get_term(r)?)))?;
+    let terms = r.vec(|r| Ok(term_rc(r)?))?;
     Ok(LocalSubst { tail, terms })
 }
 
@@ -516,30 +532,43 @@ fn put_type(w: &mut Writer, ty: &Type) {
     }
 }
 
+// A term's or type's children are decoded out of line. Inlined into
+// `get_term`'s match, every arm's decoded fields got stack of their own, and
+// a level of term nesting cost 16 KiB (`DECODE_FRAME_BYTES`).
+#[inline(never)]
+fn term_rc(r: &mut Reader<'_>) -> Result<Rc<Term>, ModuleImageDecodeError> {
+    Ok(Rc::new(get_term(r)?))
+}
+
+#[inline(never)]
+fn type_rc(r: &mut Reader<'_>) -> Result<Rc<Type>, ModuleImageDecodeError> {
+    Ok(Rc::new(get_type(r)?))
+}
+
 fn get_type(r: &mut Reader<'_>) -> Result<Type, ModuleImageDecodeError> {
     r.node(|r| Ok(match r.byte()? {
         0 => Type::Nat,
-        1 => Type::Pi { dom_level: get_level(r)?, cod_level: get_level(r)?, dom: Rc::new(get_type(r)?), cod: Rc::new(get_type(r)?) },
+        1 => Type::Pi { dom_level: get_level(r)?, cod_level: get_level(r)?, dom: type_rc(r)?, cod: type_rc(r)? },
         2 => Type::Ty(get_level(r)?),
-        3 => Type::UPi { num_vars: r.u32()?, level: get_level(r)?, body: Rc::new(get_type(r)?) },
-        4 => Type::El { level: get_level(r)?, tm: Rc::new(get_term(r)?) },
-        5 => Type::Id { level: get_level(r)?, ty: Rc::new(get_type(r)?), lhs: Rc::new(get_term(r)?), rhs: Rc::new(get_term(r)?) },
-        6 => Type::SEq { level: get_level(r)?, ty: Rc::new(get_type(r)?), lhs: Rc::new(get_term(r)?), rhs: Rc::new(get_term(r)?) },
+        3 => Type::UPi { num_vars: r.u32()?, level: get_level(r)?, body: type_rc(r)? },
+        4 => Type::El { level: get_level(r)?, tm: term_rc(r)? },
+        5 => Type::Id { level: get_level(r)?, ty: type_rc(r)?, lhs: term_rc(r)?, rhs: term_rc(r)? },
+        6 => Type::SEq { level: get_level(r)?, ty: type_rc(r)?, lhs: term_rc(r)?, rhs: term_rc(r)? },
         7 => Type::SEmpty { level: get_level(r)? },
-        8 => Type::Squash { level: get_level(r)?, ty: Rc::new(get_type(r)?) },
-        9 => Type::Sigma { fst_level: get_level(r)?, snd_level: get_level(r)?, fst: Rc::new(get_type(r)?), snd: Rc::new(get_type(r)?) },
+        8 => Type::Squash { level: get_level(r)?, ty: type_rc(r)? },
+        9 => Type::Sigma { fst_level: get_level(r)?, snd_level: get_level(r)?, fst: type_rc(r)?, snd: type_rc(r)? },
         10 => Type::Unit { level: get_level(r)? },
         11 => Type::Empty { level: get_level(r)? },
-        12 => Type::Sum { lhs_level: get_level(r)?, rhs_level: get_level(r)?, lhs: Rc::new(get_type(r)?), rhs: Rc::new(get_type(r)?) },
-        13 => Type::W { shape_level: get_level(r)?, pos_level: get_level(r)?, shape: Rc::new(get_type(r)?), pos: Rc::new(get_type(r)?) },
-        14 => Type::Vec { level: get_level(r)?, elem: Rc::new(get_type(r)?), len: Rc::new(get_term(r)?) },
-        15 => Type::Fin { len: Rc::new(get_term(r)?) },
-        16 => Type::Wf { level: get_level(r)?, shape: Rc::new(get_type(r)?), arity: Rc::new(get_term(r)?) },
+        12 => Type::Sum { lhs_level: get_level(r)?, rhs_level: get_level(r)?, lhs: type_rc(r)?, rhs: type_rc(r)? },
+        13 => Type::W { shape_level: get_level(r)?, pos_level: get_level(r)?, shape: type_rc(r)?, pos: type_rc(r)? },
+        14 => Type::Vec { level: get_level(r)?, elem: type_rc(r)?, len: term_rc(r)? },
+        15 => Type::Fin { len: term_rc(r)? },
+        16 => Type::Wf { level: get_level(r)?, shape: type_rc(r)?, arity: term_rc(r)? },
         17 => Type::GlobalTy { var: GlobalVar(r.u32()?), subst: get_subst(r)? },
-        18 => Type::CtxPi { level: get_level(r)?, body: Rc::new(get_type(r)?) },
-        19 => Type::TyPi { ctx: get_ctx(r)?, arg_level: get_level(r)?, body_level: get_level(r)?, body: Rc::new(get_type(r)?) },
+        18 => Type::CtxPi { level: get_level(r)?, body: type_rc(r)? },
+        19 => Type::TyPi { ctx: get_ctx(r)?, arg_level: get_level(r)?, body_level: get_level(r)?, body: type_rc(r)? },
         20 => Type::CodeTy { ctx: get_ctx(r)?, level: get_level(r)? },
-        21 => Type::CodeTm { ctx: get_ctx(r)?, ty: Rc::new(get_type(r)?), level: get_level(r)? },
+        21 => Type::CodeTm { ctx: get_ctx(r)?, ty: type_rc(r)?, level: get_level(r)? },
         tag => return Err(ModuleImageDecodeError::InvalidTag { sort: "type", tag }),
     }))
 }
@@ -698,67 +727,67 @@ fn get_term(r: &mut Reader<'_>) -> Result<Term, ModuleImageDecodeError> {
     r.node(|r| Ok(match r.byte()? {
         0 => Term::Var(LocalVar(r.u32()?)),
         1 => Term::TmNat,
-        2 => Term::TmPi { dom_level: get_level(r)?, cod_level: get_level(r)?, dom: Rc::new(get_term(r)?), cod: Rc::new(get_term(r)?) },
+        2 => Term::TmPi { dom_level: get_level(r)?, cod_level: get_level(r)?, dom: term_rc(r)?, cod: term_rc(r)? },
         3 => Term::TmTy(get_level(r)?),
-        4 => Term::TmId { level: get_level(r)?, ty: Rc::new(get_term(r)?), lhs: Rc::new(get_term(r)?), rhs: Rc::new(get_term(r)?) },
-        5 => Term::TmSEq { level: get_level(r)?, ty: Rc::new(get_term(r)?), lhs: Rc::new(get_term(r)?), rhs: Rc::new(get_term(r)?) },
+        4 => Term::TmId { level: get_level(r)?, ty: term_rc(r)?, lhs: term_rc(r)?, rhs: term_rc(r)? },
+        5 => Term::TmSEq { level: get_level(r)?, ty: term_rc(r)?, lhs: term_rc(r)?, rhs: term_rc(r)? },
         6 => Term::TmSEmpty { level: get_level(r)? },
-        7 => Term::TmSquash { level: get_level(r)?, ty: Rc::new(get_term(r)?) },
-        8 => Term::TmSigma { fst_level: get_level(r)?, snd_level: get_level(r)?, fst: Rc::new(get_term(r)?), snd: Rc::new(get_term(r)?) },
+        7 => Term::TmSquash { level: get_level(r)?, ty: term_rc(r)? },
+        8 => Term::TmSigma { fst_level: get_level(r)?, snd_level: get_level(r)?, fst: term_rc(r)?, snd: term_rc(r)? },
         9 => Term::TmUnit { level: get_level(r)? },
         10 => Term::TmEmpty { level: get_level(r)? },
-        11 => Term::TmSum { lhs_level: get_level(r)?, rhs_level: get_level(r)?, lhs: Rc::new(get_term(r)?), rhs: Rc::new(get_term(r)?) },
-        12 => Term::TmW { shape_level: get_level(r)?, pos_level: get_level(r)?, shape: Rc::new(get_term(r)?), pos: Rc::new(get_term(r)?) },
-        13 => Term::TmVec { level: get_level(r)?, elem: Rc::new(get_term(r)?), len: Rc::new(get_term(r)?) },
-        14 => Term::TmFin { len: Rc::new(get_term(r)?) },
-        15 => Term::TmWf { level: get_level(r)?, shape: Rc::new(get_term(r)?), arity: Rc::new(get_term(r)?) },
+        11 => Term::TmSum { lhs_level: get_level(r)?, rhs_level: get_level(r)?, lhs: term_rc(r)?, rhs: term_rc(r)? },
+        12 => Term::TmW { shape_level: get_level(r)?, pos_level: get_level(r)?, shape: term_rc(r)?, pos: term_rc(r)? },
+        13 => Term::TmVec { level: get_level(r)?, elem: term_rc(r)?, len: term_rc(r)? },
+        14 => Term::TmFin { len: term_rc(r)? },
+        15 => Term::TmWf { level: get_level(r)?, shape: term_rc(r)?, arity: term_rc(r)? },
         16 => Term::Zero,
-        17 => Term::Succ(Rc::new(get_term(r)?)),
-        18 => Term::ElimNat { level: get_level(r)?, motive: Rc::new(get_type(r)?), base: Rc::new(get_term(r)?), step: Rc::new(get_term(r)?), scrut: Rc::new(get_term(r)?) },
-        19 => Term::Refl { level: get_level(r)?, ty: Rc::new(get_type(r)?), tm: Rc::new(get_term(r)?) },
-        20 => Term::J { ty_level: get_level(r)?, motive_level: get_level(r)?, ty: Rc::new(get_type(r)?), lhs: Rc::new(get_term(r)?), motive: Rc::new(get_type(r)?), case: Rc::new(get_term(r)?), rhs: Rc::new(get_term(r)?), proof: Rc::new(get_term(r)?) },
-        21 => Term::SRefl { level: get_level(r)?, ty: Rc::new(get_type(r)?), tm: Rc::new(get_term(r)?) },
-        22 => Term::Squash { level: get_level(r)?, ty: Rc::new(get_type(r)?), tm: Rc::new(get_term(r)?) },
-        23 => Term::Transp { ty_level: get_level(r)?, motive_level: get_level(r)?, ty: Rc::new(get_type(r)?), motive: Rc::new(get_type(r)?), lhs: Rc::new(get_term(r)?), rhs: Rc::new(get_term(r)?), proof: Rc::new(get_term(r)?), tm: Rc::new(get_term(r)?) },
-        24 => Term::ElimSEmpty { level: get_level(r)?, scrut_level: get_level(r)?, motive: Rc::new(get_type(r)?), scrut: Rc::new(get_term(r)?) },
-        25 => Term::ElimSquash { src_level: get_level(r)?, dst_level: get_level(r)?, src_ty: Rc::new(get_type(r)?), motive: Rc::new(get_type(r)?), case: Rc::new(get_term(r)?), scrut: Rc::new(get_term(r)?) },
-        26 => Term::Pair { fst_level: get_level(r)?, snd_level: get_level(r)?, fst_ty: Rc::new(get_type(r)?), snd_ty: Rc::new(get_type(r)?), fst: Rc::new(get_term(r)?), snd: Rc::new(get_term(r)?) },
-        27 => Term::Fst { fst_level: get_level(r)?, snd_level: get_level(r)?, fst_ty: Rc::new(get_type(r)?), snd_ty: Rc::new(get_type(r)?), pair: Rc::new(get_term(r)?) },
-        28 => Term::Snd { fst_level: get_level(r)?, snd_level: get_level(r)?, fst_ty: Rc::new(get_type(r)?), snd_ty: Rc::new(get_type(r)?), pair: Rc::new(get_term(r)?) },
+        17 => Term::Succ(term_rc(r)?),
+        18 => Term::ElimNat { level: get_level(r)?, motive: type_rc(r)?, base: term_rc(r)?, step: term_rc(r)?, scrut: term_rc(r)? },
+        19 => Term::Refl { level: get_level(r)?, ty: type_rc(r)?, tm: term_rc(r)? },
+        20 => Term::J { ty_level: get_level(r)?, motive_level: get_level(r)?, ty: type_rc(r)?, lhs: term_rc(r)?, motive: type_rc(r)?, case: term_rc(r)?, rhs: term_rc(r)?, proof: term_rc(r)? },
+        21 => Term::SRefl { level: get_level(r)?, ty: type_rc(r)?, tm: term_rc(r)? },
+        22 => Term::Squash { level: get_level(r)?, ty: type_rc(r)?, tm: term_rc(r)? },
+        23 => Term::Transp { ty_level: get_level(r)?, motive_level: get_level(r)?, ty: type_rc(r)?, motive: type_rc(r)?, lhs: term_rc(r)?, rhs: term_rc(r)?, proof: term_rc(r)?, tm: term_rc(r)? },
+        24 => Term::ElimSEmpty { level: get_level(r)?, scrut_level: get_level(r)?, motive: type_rc(r)?, scrut: term_rc(r)? },
+        25 => Term::ElimSquash { src_level: get_level(r)?, dst_level: get_level(r)?, src_ty: type_rc(r)?, motive: type_rc(r)?, case: term_rc(r)?, scrut: term_rc(r)? },
+        26 => Term::Pair { fst_level: get_level(r)?, snd_level: get_level(r)?, fst_ty: type_rc(r)?, snd_ty: type_rc(r)?, fst: term_rc(r)?, snd: term_rc(r)? },
+        27 => Term::Fst { fst_level: get_level(r)?, snd_level: get_level(r)?, fst_ty: type_rc(r)?, snd_ty: type_rc(r)?, pair: term_rc(r)? },
+        28 => Term::Snd { fst_level: get_level(r)?, snd_level: get_level(r)?, fst_ty: type_rc(r)?, snd_ty: type_rc(r)?, pair: term_rc(r)? },
         29 => Term::Triv { level: get_level(r)? },
-        30 => Term::ElimEmpty { level: get_level(r)?, scrut_level: get_level(r)?, motive: Rc::new(get_type(r)?), scrut: Rc::new(get_term(r)?) },
-        31 => Term::Inl { lhs_level: get_level(r)?, rhs_level: get_level(r)?, lhs: Rc::new(get_type(r)?), rhs: Rc::new(get_type(r)?), val: Rc::new(get_term(r)?) },
-        32 => Term::Inr { lhs_level: get_level(r)?, rhs_level: get_level(r)?, lhs: Rc::new(get_type(r)?), rhs: Rc::new(get_type(r)?), val: Rc::new(get_term(r)?) },
-        33 => Term::Case { lhs_level: get_level(r)?, rhs_level: get_level(r)?, motive_level: get_level(r)?, lhs: Rc::new(get_type(r)?), rhs: Rc::new(get_type(r)?), motive: Rc::new(get_type(r)?), case_l: Rc::new(get_term(r)?), case_r: Rc::new(get_term(r)?), scrut: Rc::new(get_term(r)?) },
-        34 => Term::Sup { shape_level: get_level(r)?, pos_level: get_level(r)?, shape_ty: Rc::new(get_type(r)?), pos_ty: Rc::new(get_type(r)?), label: Rc::new(get_term(r)?), children: Rc::new(get_term(r)?) },
-        35 => Term::ElimW { shape_level: get_level(r)?, pos_level: get_level(r)?, motive_level: get_level(r)?, shape: Rc::new(get_type(r)?), pos: Rc::new(get_type(r)?), motive: Rc::new(get_type(r)?), step: Rc::new(get_term(r)?), scrut: Rc::new(get_term(r)?) },
-        36 => Term::Supf { level: get_level(r)?, shape: Rc::new(get_type(r)?), arity: Rc::new(get_term(r)?), label: Rc::new(get_term(r)?), children: Rc::new(get_term(r)?) },
-        37 => Term::ElimWf { level: get_level(r)?, motive_level: get_level(r)?, shape: Rc::new(get_type(r)?), arity: Rc::new(get_term(r)?), motive: Rc::new(get_type(r)?), step: Rc::new(get_term(r)?), scrut: Rc::new(get_term(r)?) },
-        38 => Term::Lam { dom_level: get_level(r)?, cod_level: get_level(r)?, dom: Rc::new(get_type(r)?), body: Rc::new(get_term(r)?) },
-        39 => Term::App { fun: Rc::new(get_term(r)?), dom_level: get_level(r)?, cod_level: get_level(r)?, dom: Rc::new(get_type(r)?), cod: Rc::new(get_type(r)?), arg: Rc::new(get_term(r)?) },
-        40 => Term::ULam { num_vars: r.u32()?, level: get_level(r)?, body: Rc::new(get_term(r)?) },
-        41 => Term::UApp { fun: Rc::new(get_term(r)?), levels: r.vec(get_level)? },
+        30 => Term::ElimEmpty { level: get_level(r)?, scrut_level: get_level(r)?, motive: type_rc(r)?, scrut: term_rc(r)? },
+        31 => Term::Inl { lhs_level: get_level(r)?, rhs_level: get_level(r)?, lhs: type_rc(r)?, rhs: type_rc(r)?, val: term_rc(r)? },
+        32 => Term::Inr { lhs_level: get_level(r)?, rhs_level: get_level(r)?, lhs: type_rc(r)?, rhs: type_rc(r)?, val: term_rc(r)? },
+        33 => Term::Case { lhs_level: get_level(r)?, rhs_level: get_level(r)?, motive_level: get_level(r)?, lhs: type_rc(r)?, rhs: type_rc(r)?, motive: type_rc(r)?, case_l: term_rc(r)?, case_r: term_rc(r)?, scrut: term_rc(r)? },
+        34 => Term::Sup { shape_level: get_level(r)?, pos_level: get_level(r)?, shape_ty: type_rc(r)?, pos_ty: type_rc(r)?, label: term_rc(r)?, children: term_rc(r)? },
+        35 => Term::ElimW { shape_level: get_level(r)?, pos_level: get_level(r)?, motive_level: get_level(r)?, shape: type_rc(r)?, pos: type_rc(r)?, motive: type_rc(r)?, step: term_rc(r)?, scrut: term_rc(r)? },
+        36 => Term::Supf { level: get_level(r)?, shape: type_rc(r)?, arity: term_rc(r)?, label: term_rc(r)?, children: term_rc(r)? },
+        37 => Term::ElimWf { level: get_level(r)?, motive_level: get_level(r)?, shape: type_rc(r)?, arity: term_rc(r)?, motive: type_rc(r)?, step: term_rc(r)?, scrut: term_rc(r)? },
+        38 => Term::Lam { dom_level: get_level(r)?, cod_level: get_level(r)?, dom: type_rc(r)?, body: term_rc(r)? },
+        39 => Term::App { fun: term_rc(r)?, dom_level: get_level(r)?, cod_level: get_level(r)?, dom: type_rc(r)?, cod: type_rc(r)?, arg: term_rc(r)? },
+        40 => Term::ULam { num_vars: r.u32()?, level: get_level(r)?, body: term_rc(r)? },
+        41 => Term::UApp { fun: term_rc(r)?, levels: r.vec(get_level)? },
         42 => Term::GlobalTm { var: GlobalVar(r.u32()?), subst: get_subst(r)? },
-        43 => Term::CtxLam { level: get_level(r)?, body: Rc::new(get_term(r)?) },
-        44 => Term::CtxApp { fun: Rc::new(get_term(r)?), ctx: get_ctx(r)? },
-        45 => Term::TyLam { ctx: get_ctx(r)?, arg_level: get_level(r)?, body_level: get_level(r)?, body: Rc::new(get_term(r)?) },
-        46 => Term::TyApp { fun: Rc::new(get_term(r)?), arg: Rc::new(get_type(r)?) },
-        47 => Term::BoxTy(Rc::new(get_type(r)?)),
-        48 => Term::BoxTm(Rc::new(get_term(r)?)),
-        49 => Term::LetBoxTy { motive_level: get_level(r)?, code_level: get_level(r)?, ctx: get_ctx(r)?, motive: Rc::new(get_type(r)?), body: Rc::new(get_term(r)?), scrut: Rc::new(get_term(r)?) },
-        50 => Term::LetBoxTm { motive_level: get_level(r)?, code_level: get_level(r)?, ctx: get_ctx(r)?, ty: Rc::new(get_type(r)?), motive: Rc::new(get_type(r)?), body: Rc::new(get_term(r)?), scrut: Rc::new(get_term(r)?) },
-        51 => Term::ElimCodeTy { ty_motive_level: get_level(r)?, tm_motive_level: get_level(r)?, motives: Rc::new(get_motives(r)?), branches: Rc::new(get_branches(r)?), code_level: get_level(r)?, ctx: get_ctx(r)?, scrut: Rc::new(get_term(r)?) },
-        52 => Term::ElimCodeTm { ty_motive_level: get_level(r)?, tm_motive_level: get_level(r)?, motives: Rc::new(get_motives(r)?), branches: Rc::new(get_branches(r)?), code_level: get_level(r)?, ctx: get_ctx(r)?, ty: Rc::new(get_type(r)?), scrut: Rc::new(get_term(r)?) },
+        43 => Term::CtxLam { level: get_level(r)?, body: term_rc(r)? },
+        44 => Term::CtxApp { fun: term_rc(r)?, ctx: get_ctx(r)? },
+        45 => Term::TyLam { ctx: get_ctx(r)?, arg_level: get_level(r)?, body_level: get_level(r)?, body: term_rc(r)? },
+        46 => Term::TyApp { fun: term_rc(r)?, arg: type_rc(r)? },
+        47 => Term::BoxTy(type_rc(r)?),
+        48 => Term::BoxTm(term_rc(r)?),
+        49 => Term::LetBoxTy { motive_level: get_level(r)?, code_level: get_level(r)?, ctx: get_ctx(r)?, motive: type_rc(r)?, body: term_rc(r)?, scrut: term_rc(r)? },
+        50 => Term::LetBoxTm { motive_level: get_level(r)?, code_level: get_level(r)?, ctx: get_ctx(r)?, ty: type_rc(r)?, motive: type_rc(r)?, body: term_rc(r)?, scrut: term_rc(r)? },
+        51 => Term::ElimCodeTy { ty_motive_level: get_level(r)?, tm_motive_level: get_level(r)?, motives: Rc::new(get_motives(r)?), branches: Rc::new(get_branches(r)?), code_level: get_level(r)?, ctx: get_ctx(r)?, scrut: term_rc(r)? },
+        52 => Term::ElimCodeTm { ty_motive_level: get_level(r)?, tm_motive_level: get_level(r)?, motives: Rc::new(get_motives(r)?), branches: Rc::new(get_branches(r)?), code_level: get_level(r)?, ctx: get_ctx(r)?, ty: type_rc(r)?, scrut: term_rc(r)? },
         53 => Term::NatLit(r.numeral()?),
-        54 => Term::PairAt { ty: Some(Rc::new(get_type(r)?)), fst: Rc::new(get_term(r)?), snd: Rc::new(get_term(r)?) },
-        55 => Term::InlAt { ty: Some(Rc::new(get_type(r)?)), val: Rc::new(get_term(r)?) },
-        56 => Term::InrAt { ty: Some(Rc::new(get_type(r)?)), val: Rc::new(get_term(r)?) },
-        57 => Term::FstAt { pair: Rc::new(get_term(r)?) },
-        58 => Term::SndAt { pair: Rc::new(get_term(r)?) },
-        59 => Term::PairAt { ty: None, fst: Rc::new(get_term(r)?), snd: Rc::new(get_term(r)?) },
-        60 => Term::InlAt { ty: None, val: Rc::new(get_term(r)?) },
-        61 => Term::InrAt { ty: None, val: Rc::new(get_term(r)?) },
-        62 => Term::AppAt { fun: Rc::new(get_term(r)?), arg: Rc::new(get_term(r)?) },
+        54 => Term::PairAt { ty: Some(type_rc(r)?), fst: term_rc(r)?, snd: term_rc(r)? },
+        55 => Term::InlAt { ty: Some(type_rc(r)?), val: term_rc(r)? },
+        56 => Term::InrAt { ty: Some(type_rc(r)?), val: term_rc(r)? },
+        57 => Term::FstAt { pair: term_rc(r)? },
+        58 => Term::SndAt { pair: term_rc(r)? },
+        59 => Term::PairAt { ty: None, fst: term_rc(r)?, snd: term_rc(r)? },
+        60 => Term::InlAt { ty: None, val: term_rc(r)? },
+        61 => Term::InrAt { ty: None, val: term_rc(r)? },
+        62 => Term::AppAt { fun: term_rc(r)?, arg: term_rc(r)? },
         tag => return Err(ModuleImageDecodeError::InvalidTag { sort: "term", tag }),
     }))
 }
@@ -770,8 +799,8 @@ fn put_motives(w: &mut Writer, motives: &Motives) {
 
 fn get_motives(r: &mut Reader<'_>) -> Result<Motives, ModuleImageDecodeError> {
     Ok(Motives {
-        ty_motive: Rc::new(get_type(r)?),
-        tm_motive: Rc::new(get_type(r)?),
+        ty_motive: type_rc(r)?,
+        tm_motive: type_rc(r)?,
     })
 }
 
@@ -805,7 +834,7 @@ fn put_branches(w: &mut Writer, branches: &Branches) {
 fn get_branches(r: &mut Reader<'_>) -> Result<Branches, ModuleImageDecodeError> {
     let mut terms = Vec::with_capacity(56);
     for _ in 0..56 {
-        terms.push(Rc::new(get_term(r)?));
+        terms.push(term_rc(r)?);
     }
     let [
         ty_nat, ty_pi, ty_ty, ty_el, ty_id, ty_sigma, ty_unit, ty_empty,
@@ -850,9 +879,9 @@ fn get_binding(r: &mut Reader<'_>) -> Result<GlobalBinding, ModuleImageDecodeErr
         tag::BINDING_TM => GlobalBinding::Tm {
             ctx: get_ctx(r)?,
             layer: get_layer(r)?,
-            ty: Rc::new(get_type(r)?),
+            ty: type_rc(r)?,
             level: get_level(r)?,
-            body: r.option(|r| Ok(Rc::new(get_term(r)?)))?,
+            body: r.option(|r| Ok(term_rc(r)?))?,
         },
         tag => return Err(ModuleImageDecodeError::InvalidTag { sort: "global binding", tag }),
     }))
@@ -1578,7 +1607,7 @@ fn put_meta(w: &mut Writer, definition: &MetaDef) {
 
 fn get_meta(r: &mut Reader<'_>) -> Result<MetaDef, ModuleImageDecodeError> {
     Ok(MetaDef {
-        term: Rc::new(get_term(r)?), stmt: Rc::new(get_type(r)?), psi_len: r.u32()?,
+        term: term_rc(r)?, stmt: type_rc(r)?, psi_len: r.u32()?,
         order: r.vec(Reader::usize)?,
     })
 }
@@ -1589,7 +1618,7 @@ fn get_meta(r: &mut Reader<'_>) -> Result<MetaDef, ModuleImageDecodeError> {
 /// zeroed, theorem proofs and proof dependency edges dropped — which is what
 /// "the same contribution" means for the declarations after it.
 pub(crate) fn encode_events(events: &[DeltaEvent], interface: bool) -> Vec<u8> {
-    let mut w = Writer { bytes: Vec::new(), interface, nodes: 0 };
+    let mut w = Writer { interface, ..Writer::default() };
     w.vec(events, put_event);
     w.bytes
 }
@@ -1606,11 +1635,14 @@ pub(crate) fn relocate_events(
         return Ok(events.to_vec());
     }
     let bytes = encode_events(events, false);
-    let mut r = Reader::new(&bytes, ModuleImageLimits::default())?;
-    r.span_offset = offset;
-    let events = r.vec(get_event)?;
-    r.finish()?;
-    Ok(events)
+    let limits = ModuleImageLimits::default();
+    decode_on_own_stack(&limits, || {
+        let mut r = Reader::new(&bytes, limits)?;
+        r.span_offset = offset;
+        let events = r.vec(get_event)?;
+        r.finish()?;
+        Ok(events)
+    })
 }
 
 fn put_event(w: &mut Writer, event: &DeltaEvent) {
@@ -1685,10 +1717,10 @@ fn get_event(r: &mut Reader<'_>) -> Result<DeltaEvent, ModuleImageDecodeError> {
             direct_dependencies: r.vec(Reader::string)?,
         },
         2 => DeltaEvent::GenDef { key: get_gen_def(r)?, abs: r.u32()? },
-        3 => DeltaEvent::GenTyCode { tag: r.u32()?, inline: Rc::new(get_type(r)?), level: get_level(r)? },
+        3 => DeltaEvent::GenTyCode { tag: r.u32()?, inline: type_rc(r)?, level: get_level(r)? },
         4 => DeltaEvent::GenWfSlots { tag: r.u32()?, slots: WfSlots {
-            shape: Rc::new(get_type(r)?), shape_decoded: Rc::new(get_type(r)?),
-            arity: Rc::new(get_term(r)?), level: get_level(r)?,
+            shape: type_rc(r)?, shape_decoded: type_rc(r)?,
+            arity: term_rc(r)?, level: get_level(r)?,
         } },
         5 => DeltaEvent::GenFamLevels { tag: r.u32()?, level: get_level(r)?, index_level: get_level(r)? },
         6 => DeltaEvent::Inductive { module: r.string()?, info: Rc::new(get_inductive(r)?) },
@@ -1715,12 +1747,12 @@ fn get_event(r: &mut Reader<'_>) -> Result<DeltaEvent, ModuleImageDecodeError> {
             module: r.string()?, name: r.string()?, slot: r.option(get_slot)?, definition: get_meta(r)?,
         },
         17 => DeltaEvent::GenTyCodeFn { tag: r.u32()?, entry: TyCodeFn {
-            template: Rc::new(get_type(r)?), stmt: Rc::new(get_type(r)?),
+            template: type_rc(r)?, stmt: type_rc(r)?,
             param_levels: r.vec(get_level)?, level: get_level(r)?,
         } },
         16 => DeltaEvent::GenSpineCodes { tag: r.u32()?, codes: SpineCodes {
-            ctors: r.vec(|r| Ok((Rc::new(get_type(r)?), get_level(r)?)))?,
-            tails: r.vec(|r| Ok((Rc::new(get_type(r)?), get_level(r)?)))?,
+            ctors: r.vec(|r| Ok((type_rc(r)?, get_level(r)?)))?,
+            tails: r.vec(|r| Ok((type_rc(r)?, get_level(r)?)))?,
         } },
         tag => return Err(ModuleImageDecodeError::InvalidTag { sort: "module event", tag }),
     })
@@ -1912,7 +1944,7 @@ pub(crate) fn encode_delta_counted(delta: &ModuleDelta) -> (Vec<u8>, u64) {
 }
 
 pub(crate) fn encode_delta_interface(delta: &ModuleDelta) -> Vec<u8> {
-    let mut w = Writer { bytes: Vec::new(), interface: true, nodes: 0 };
+    let mut w = Writer { interface: true, ..Writer::default() };
     encode_delta_into(&mut w, delta, INTERFACE_MAGIC);
     w.bytes
 }
@@ -1957,7 +1989,52 @@ fn get_slice(r: &mut Reader<'_>) -> Result<crate::module_delta::ItemSlice, Modul
     Ok(crate::module_delta::ItemSlice { source, start, psi, events, warnings })
 }
 
+/// The stack one nesting level of decoding stands on, at most. `node` is the
+/// only recursion the decoder has, so a thread with `max_depth` of these
+/// (plus [`DECODE_BASE_BYTES`]) answers `DepthBudget` before it can overflow.
+/// Measured by `tests::every_nesting_level_fits_the_decoders_frame_bound`,
+/// which fails when a level outgrows it;
+/// the deepest shape today is a surface block's `let`, at about 2.5 KiB.
+/// A kernel term level was 16 KiB until its children were decoded through
+/// [`term_rc`]/[`type_rc`], out of line, so that the one large match holds
+/// pointers rather than every arm's decoded fields.
+const DECODE_FRAME_BYTES: usize = 4 << 10;
+
+/// The decoder's frames outside any node (the envelope, an event, a
+/// declaration) and the thread's own start.
+const DECODE_BASE_BYTES: usize = 1 << 20;
+
+/// Run a decode on a thread whose stack is sized from `limits.max_depth`, so
+/// the depth budget holds whatever stack the caller has: the main thread's
+/// 8 MiB, a spawned thread's 2 MiB default, or a test runner's
+/// (issues/module-image-decode-depth-vs-stack.md).
+fn decode_on_own_stack<T: Send>(
+    limits: &ModuleImageLimits,
+    decode: impl FnOnce() -> Result<T, ModuleImageDecodeError> + Send,
+) -> Result<T, ModuleImageDecodeError> {
+    let stack = (limits.max_depth as usize)
+        .saturating_mul(DECODE_FRAME_BYTES)
+        .saturating_add(DECODE_BASE_BYTES);
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .name("module-image".into())
+            .stack_size(stack)
+            .spawn_scoped(scope, decode)
+            .map_err(|_| ModuleImageDecodeError::NoStack)?
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+    })
+}
+
 pub(crate) fn decode_delta(
+    bytes: &[u8],
+    dependency_psi: GlobalCtx,
+    limits: ModuleImageLimits,
+) -> Result<ModuleDelta, ModuleImageDecodeError> {
+    decode_on_own_stack(&limits, || decode_delta_here(bytes, dependency_psi, limits))
+}
+
+fn decode_delta_here(
     bytes: &[u8],
     dependency_psi: GlobalCtx,
     limits: ModuleImageLimits,
@@ -2014,17 +2091,109 @@ mod tests {
     use super::*;
     use crate::Elaborator;
 
-    #[test]
-    fn the_envelope_magic_and_basic_budgets_are_total() {
-        assert_eq!(MAGIC.len(), 8);
-        let limits = ModuleImageLimits { max_bytes: 3, ..ModuleImageLimits::default() };
-        assert_eq!(
-            Reader::new(&[0; 4], limits).err().expect("byte budget must fail"),
-            ModuleImageDecodeError::TooLarge
-        );
+    /// Deep spines through each recursive path of the decoder, for the stack
+    /// tests below. Each returns the spine's image and its depth in nodes.
+    mod deep {
+        use super::*;
 
-        let mut r = Reader::new(&[2], ModuleImageLimits::default()).unwrap();
-        assert_eq!(r.bool().unwrap_err(), ModuleImageDecodeError::InvalidBool(2));
+        fn sp() -> Span { Span { start: 0, end: 0 } }
+        fn var() -> Expr { Expr { kind: ExprKind::Var("x".into()), span: sp() } }
+
+        fn terms(levels: u32, per: u32, wrap: impl Fn(Term) -> Term) -> (Vec<u8>, u32) {
+            let mut t = Term::Zero;
+            for _ in 0..levels / per { t = wrap(t); }
+            let mut w = Writer::default();
+            put_term(&mut w, &t);
+            (w.bytes, levels / per * per + 1)
+        }
+
+        fn exprs(levels: u32, per: u32, wrap: impl Fn(Expr) -> Expr) -> (Vec<u8>, u32) {
+            let mut e = var();
+            for _ in 0..levels / per { e = wrap(e); }
+            let mut w = Writer::default();
+            put_expr(&mut w, &e);
+            (w.bytes, levels / per * per + 1)
+        }
+
+        pub(super) type Decode = fn(&mut Reader<'_>) -> Result<(), ModuleImageDecodeError>;
+
+        /// Every spine at about `levels` nodes deep: its name, image, depth
+        /// and the decoder for its root sort.
+        pub(super) fn spines(levels: u32) -> Vec<(&'static str, Vec<u8>, u32, Decode)> {
+            let term: Decode = |r| get_term(r).map(drop);
+            let expr: Decode = |r| get_expr(r).map(drop);
+            let (block, block_depth) = exprs(levels, 1, |e| Expr { kind: ExprKind::Block(Box::new(Block {
+                stmts: vec![Stmt::Let { name: "x".into(), ty: None, expr: e, span: sp(), opaque: false }],
+                result: Box::new(var()), ons: vec![], span: sp() })), span: sp() });
+            let (arm, arm_depth) = exprs(levels, 1, |e| Expr { kind: ExprKind::Match {
+                form: MatchForm::Match, generated: false, scrut: Box::new(var()), eqbind: None, motive: None,
+                arms: vec![Arm { ctor: "C".into(), default: false, binders: vec![], body: e, span: sp() }] }, span: sp() });
+            let (arg, arg_depth) = exprs(levels, 1, |e| Expr { kind: ExprKind::App {
+                head: Box::new(var()), args: vec![e], named: vec![], explicit: false, goal_oriented: false }, span: sp() });
+            let (ty, ty_depth) = exprs(levels, 2, |e| Expr {
+                kind: ExprKind::TyLit(Box::new(Ty { kind: TyKind::OfExpr(Box::new(e)), span: sp() })), span: sp() });
+            let (succ, succ_depth) = terms(levels, 1, |t| Term::Succ(Rc::new(t)));
+            let (fun, fun_depth) = terms(levels, 1, |t| Term::AppAt { fun: Rc::new(t), arg: Rc::new(Term::Zero) });
+            let (subst, subst_depth) = terms(levels, 1, |t| Term::GlobalTm { var: GlobalVar(0), subst: LocalSubst {
+                tail: SubstTail::Wk { len: 0, ctx_var: GlobalVar(0) }, terms: vec![Rc::new(t)] } });
+            let (el, el_depth) = terms(levels, 2, |t| Term::BoxTy(Rc::new(Type::El { level: Level::Zero, tm: Rc::new(t) })));
+            vec![
+                ("term succ", succ, succ_depth, term),
+                ("term application head", fun, fun_depth, term),
+                ("term substitution", subst, subst_depth, term),
+                ("type through term", el, el_depth, term),
+                ("block let", block, block_depth, expr),
+                ("match arm", arm, arm_depth, expr),
+                ("call argument", arg, arg_depth, expr),
+                ("type through expression", ty, ty_depth, expr),
+            ]
+        }
+    }
+
+    /// Run `f` where a frame past the bound fails an assertion rather than
+    /// the process.
+    fn on_large_stack<R: Send + 'static>(f: impl FnOnce() -> R + Send + 'static) -> R {
+        std::thread::Builder::new().stack_size(256 << 20).spawn(f).unwrap().join().unwrap()
+    }
+
+    #[test]
+    fn every_nesting_level_fits_the_decoders_frame_bound() {
+        on_large_stack(|| {
+            for (name, bytes, depth, decode) in deep::spines(ModuleImageLimits::default().max_depth - 1) {
+                let mut r = Reader::new(&bytes, ModuleImageLimits::default()).unwrap();
+                let top = 0_u8;
+                let top = std::hint::black_box(&top) as *const u8 as usize;
+                decode(&mut r).unwrap();
+                let per_level = (top - r.low_water) / depth as usize;
+                r.finish().unwrap();
+                assert!(
+                    per_level <= DECODE_FRAME_BYTES,
+                    "a {name} level decodes on {per_level} bytes of stack, past DECODE_FRAME_BYTES ({DECODE_FRAME_BYTES})"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn the_depth_budget_holds_on_a_small_callers_stack() {
+        let limits = ModuleImageLimits::default();
+        let (at_budget, over_budget) = on_large_stack(move || (deep::spines(limits.max_depth - 1), deep::spines(limits.max_depth + 2)));
+        // A quarter of a megabyte: far below what any spine needs natively.
+        std::thread::Builder::new().stack_size(256 << 10).spawn(move || {
+            for (name, bytes, depth, decode) in at_budget {
+                assert!(depth <= limits.max_depth, "{name}");
+                decode_on_own_stack(&limits, || {
+                    let mut r = Reader::new(&bytes, limits)?;
+                    decode(&mut r)?;
+                    r.finish()
+                }).unwrap_or_else(|e| panic!("{name} at depth {depth}: {e}"));
+            }
+            for (name, bytes, depth, decode) in over_budget {
+                assert!(depth > limits.max_depth, "{name}");
+                let refused = decode_on_own_stack(&limits, || decode(&mut Reader::new(&bytes, limits)?));
+                assert_eq!(refused, Err(ModuleImageDecodeError::DepthBudget), "{name}");
+            }
+        }).unwrap().join().unwrap();
     }
 
     fn ordinary_delta() -> (GlobalCtx, ModuleDelta) {

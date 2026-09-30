@@ -23,26 +23,11 @@ mod support;
 use support::SUPPORT;
 
 pub fn run(args: &[String]) -> ExitCode {
-    report(on_deep_stack(args, false))
+    report(compile(args, false))
 }
 
 pub fn build(args: &[String]) -> ExitCode {
-    report(on_deep_stack(args, true))
-}
-
-/// The main thread's stack is the platform's (8 MiB on Linux), and replaying a
-/// certificate's image decodes each term recursively, to the image format's
-/// depth budget. A program's published byte tree is a right spine hundreds of
-/// appends deep, and in the test profile its decoding overflowed that stack
-/// (issues/module-image-decode-depth-vs-stack.md). The whole build runs on a
-/// thread whose stack is sized for the budget.
-const COMPILE_STACK_BYTES: usize = 256 << 20;
-
-fn on_deep_stack(args: &[String], executable: bool) -> Result<(), String> {
-    let args = args.to_vec();
-    std::thread::Builder::new().name("build-x86".into()).stack_size(COMPILE_STACK_BYTES)
-        .spawn(move || compile(&args, executable)).map_err(|e| format!("cannot start the build thread: {e}"))?
-        .join().unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+    report(compile(args, true))
 }
 
 fn report(result: Result<(), String>) -> ExitCode {
