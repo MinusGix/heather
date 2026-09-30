@@ -41,6 +41,8 @@ mod field_line_high_format;
 mod count_print_process;
 #[path = "../read_fields_process.rs"]
 mod read_fields_process;
+#[path = "../read_map_process.rs"]
+mod read_map_process;
 #[path = "../read_print_process.rs"]
 mod read_print_process;
 #[path = "../linux_determinism.rs"]

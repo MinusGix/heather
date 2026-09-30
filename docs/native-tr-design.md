@@ -106,9 +106,9 @@ the rest are still the chunk's, RSI = page + i and RCX = n − i.
 - **The map process** (slice C, `lib/elf64_read_map.hthr`). Histories:
 
   ```text
-  inductive MapStep   { Mapped(bytes, writes: List<WriteStep>), Interrupted }
-  inductive MapEnding { AtEnd, ReadFailedWith(errno),
-                        WriteFailedAt(bytes, writes, errno) }
+  inductive MapStep   { Mapped(bytes, writes: List<WriteStep>), ReadInterrupted }
+  inductive MapEnding { MapAtEnd, MapReadFailed(errno),
+                        MapWriteFailed(bytes, writes, errno) }
   ```
 
   `map_events(f, steps, ending)` interleaves each chunk's read with its
@@ -116,6 +116,34 @@ the rest are still the chunk's, RSI = page + i and RCX = n − i.
   map_input(steps).map(f)`. The claim `read_map_runs` is universal over
   histories, and its only premises are about the code: residency, jump
   displacements and the byte map's certificate. It has no input bound.
+
+  *As landed (2026-09-30):* as designed, with these names and choices.
+  - **Names.** The history is `MapStep { Mapped(bytes, writes),
+    ReadInterrupted }` and `MapEnding { MapAtEnd, MapReadFailed(errno),
+    MapWriteFailed(bytes, writes, errno) }`.
+  - **The loop's step.** The loop steps with `R11 = 1` (`ADD RSI, R11; SUB
+    RCX, R11`), not an immediate, because `toNat_add`/`toNat_sub` state the
+    words without a wraparound law.
+  - **The loop's proof.** It is `map_byte` (one byte, over `LinuxSteps`,
+    since the store is a step of its own) and `map_loop` (induction on what
+    is left). The invariant `MapAt` carries the page as a field: its first
+    `i` bytes are images, the rest are still the chunk's.
+  - **One chunk.** `map_chunk` runs from the read's return to the write
+    loop's `WriteThen`. The EOF jump reuses the write loop's exit(0), and a
+    failed write's events end in `map_end_events`, the continuation the
+    write loop would have taken.
+  - **Cost.** Written as one proof with `let`-bound states, `map_byte`
+    took minutes of kernel time: the states were inlined into every later
+    type. Split into `map_fetched`, `map_stored` and the step, each
+    returning a record behind `have`, it is a small fraction of the
+    module's check.
+  - **Moved.** `len_app` moved down to `elf64_read_pieces`, and
+    `write_targets_to` factors the write loop's targets over its `done`.
+  - **Test.** `read_map_process` composes the claim with the real `upcase`
+    piece. Its controls: a piece that may clobber R11 has no `MapKeeps`,
+    stdout does not receive another map's image, and five library
+    mutations are refused (the step, the store's source, the JNZ's
+    condition, the write's base, the loop's span).
 - **The program and profile** (slice D). `build-x86 … --map NAME` names
   `f`. The CLI emits the image, the certificate and `_runs_every`, and the
   tests compare against host `tr`, with refusal controls and a mutation

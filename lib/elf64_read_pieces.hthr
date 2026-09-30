@@ -53,6 +53,16 @@ fn eof_exit_len() → Nat { canonical_block_bytes(eof_exit_block()).len() }
 fn eof_retry_len() → Nat { canonical_block_bytes(eof_retry_block()).len() }
 fn eof_fail_len() → Nat { canonical_block_bytes(eof_fail_block()).len() }
 
+// A program's length from its parts' over open parts: a certificate measures
+// its generated pieces by their own lemmas instead of evaluating their
+// encodings (docs/native-loop-generator-fold-design.md §3.3).
+theorem len_app<A>(xs: List<A>, {ys: List<A>}, {n: Nat}, h: ys.len() = n): (xs ++ ys).len() = xs.len() + n {
+    trans(List::len_append(xs, ys), cong_fn<Nat, Nat>(λ m => xs.len() + m, h))
+}
+theorem len_app_is<A>(xs: List<A>, {ys: List<A>}, {m, n: Nat}, hx: xs.len() = m, hy: ys.len() = n): (xs ++ ys).len() = m + n {
+    j(hx, λ k _ => (xs ++ ys).len() = k + n, len_app(xs, hy))
+}
+
 // The jumps' displacements: JZ to the tail at end of file, JS to the failure
 // path, JMP back after a chunk, JZ back to the read after EINTR.
 record EofJumps { ed: BitVec(32), sd: BitVec(32), bd: BitVec(32), rd: BitVec(32) }

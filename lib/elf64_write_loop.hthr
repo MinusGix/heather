@@ -519,6 +519,35 @@ theorem wl_from(memory: IoMemory, at: Nat, pj: PrintJumps,
         wl_exit(memory, at, pj, pieces), ending, ending_ok, steps)
 }
 
+// The targets from the displacements the producer proves at the written
+// bytes, the all-sent JZ's target given.
+theorem write_targets_to(at, done: Nat, pj: PrintJumps,
+    fail_reads: pj.sd.sign_extend(32).toNat() = print_fail_skip(),
+    to_done: near_branch_target(eof_rip(wl_at_wjz(at)), 6, pj.zd) = eof_rip(done),
+    back_closes: print_loop_span() + 5 + pj.bd.sign_extend(32).toNat() = Nat::pow(2, 64),
+    retry_closes: print_retry_span() + 6 + pj.rd.sign_extend(32).toNat() = Nat::pow(2, 64)):
+    WriteLoopTargets(at, done, pj) {
+    let entry: BitVec(64) = BitVec::ofNat(0x4000e8);
+    let at_w = wl_at_write(at);
+    let at_js = wl_at_wjs(at);
+    let fail_lands: (at_js + (6 + print_fail_skip()) = wl_at_wfail(at)) =
+        print_fail_sum(at_js, print_advance_len());
+    let at_jmp: (eof_rip(wl_at_wjmp(at)) = next_rip(eof_rip(at_w), print_loop_span())) =
+        trans(rip_count(entry, sym(print_back_sum(at_w, print_write_len(), eof_test_len(), print_advance_len()))),
+            sym(rip_compose(entry, at_w, print_loop_span())));
+    let at_retry: (eof_rip(wl_at_wretry(at)) = next_rip(eof_rip(at_w), print_retry_span())) =
+        trans(rip_count(entry, sym(print_retry_sum(at_w, print_write_len(), eof_test_len(), print_advance_len(), eof_retry_len()))),
+            sym(rip_compose(entry, at_w, print_retry_span())));
+    WriteLoopTargets(
+        to_fail := trans(near_branch_forward(eof_rip(at_js), 6, print_fail_skip(), pj.sd, fail_reads),
+            trans(rip_compose(entry, at_js, 6 + print_fail_skip()), rip_count(entry, fail_lands))),
+        to_done := to_done,
+        back := trans(cong_fn<BitVec(64), BitVec(64)>(λ address => near_branch_target(address, 5, pj.bd), at_jmp),
+            near_branch_returns(eof_rip(at_w), print_loop_span(), 5, pj.bd, back_closes)),
+        retry := trans(cong_fn<BitVec(64), BitVec(64)>(λ address => near_branch_target(address, 6, pj.rd), at_retry),
+            near_branch_returns(eof_rip(at_w), print_retry_span(), 6, pj.rd, retry_closes)))
+}
+
 theorem write_targets(at: Nat, pj: PrintJumps,
     fail_reads: pj.sd.sign_extend(32).toNat() = print_fail_skip(),
     exit_reads: pj.zd.sign_extend(32).toNat() = print_exit_skip(),
@@ -526,26 +555,12 @@ theorem write_targets(at: Nat, pj: PrintJumps,
     retry_closes: print_retry_span() + 6 + pj.rd.sign_extend(32).toNat() = Nat::pow(2, 64)):
     WriteTargets(at, pj) {
     let entry: BitVec(64) = BitVec::ofNat(0x4000e8);
-    let at_w = wl_at_write(at);
-    let at_js = wl_at_wjs(at);
     let at_jz = wl_at_wjz(at);
-    let fail_lands: (at_js + (6 + print_fail_skip()) = wl_at_wfail(at)) =
-        print_fail_sum(at_js, print_advance_len());
     let exit_lands: (at_jz + (6 + print_exit_skip()) = wl_at_exit(at)) =
         print_exit_sum(at_jz, eof_retry_len(), eof_fail_len());
-    let at_jmp: (eof_rip(wl_at_wjmp(at)) = next_rip(eof_rip(at_w), print_loop_span())) =
-        trans(rip_count(entry, sym(print_back_sum(at_w, print_write_len(), eof_test_len(), print_advance_len()))),
-            sym(rip_compose(entry, at_w, print_loop_span())));
-    let at_retry: (eof_rip(wl_at_wretry(at)) = next_rip(eof_rip(at_w), print_retry_span())) =
-        trans(rip_count(entry, sym(print_retry_sum(at_w, print_write_len(), eof_test_len(), print_advance_len(), eof_retry_len()))),
-            sym(rip_compose(entry, at_w, print_retry_span())));
-    WriteTargets(
-        to_fail := trans(near_branch_forward(eof_rip(at_js), 6, print_fail_skip(), pj.sd, fail_reads),
-            trans(rip_compose(entry, at_js, 6 + print_fail_skip()), rip_count(entry, fail_lands))),
-        to_exit := trans(near_branch_forward(eof_rip(at_jz), 6, print_exit_skip(), pj.zd, exit_reads),
+    let t = write_targets_to(at, wl_at_exit(at), pj, fail_reads,
+        trans(near_branch_forward(eof_rip(at_jz), 6, print_exit_skip(), pj.zd, exit_reads),
             trans(rip_compose(entry, at_jz, 6 + print_exit_skip()), rip_count(entry, exit_lands))),
-        back := trans(cong_fn<BitVec(64), BitVec(64)>(λ address => near_branch_target(address, 5, pj.bd), at_jmp),
-            near_branch_returns(eof_rip(at_w), print_loop_span(), 5, pj.bd, back_closes)),
-        retry := trans(cong_fn<BitVec(64), BitVec(64)>(λ address => near_branch_target(address, 6, pj.rd), at_retry),
-            near_branch_returns(eof_rip(at_w), print_retry_span(), 6, pj.rd, retry_closes)))
+        back_closes, retry_closes);
+    WriteTargets(to_fail := t.to_fail, to_exit := t.to_done, back := t.back, retry := t.retry)
 }

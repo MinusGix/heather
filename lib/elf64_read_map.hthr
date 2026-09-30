@@ -1,0 +1,1157 @@
+// A read loop that writes (docs/native-tr-design.md): read stdin a page at a
+// time, translate each chunk in place with a byte map, write it to stdout,
+// and go back to the read; exit 0 at the empty read. Failed reads and writes
+// are elf64_read_pieces's and elf64_write_loop's: EINTR retries, anything
+// else exits 1. The byte map is the program's, a certified piece of
+// structured code (`MapPiece`); the loop around it, the process and the
+// claim are proved here once. Nothing is carried across chunks, so the claim
+// has no bound on the input.
+import elf64_write_loop;
+import elf64_print_pieces;
+import elf64_read_pieces;
+import elf64_io;
+import linux_x86_64_entry;
+import linux_x86_64_io;
+import x86_64;
+import x86_64_block;
+import x86_64_fetch;
+import x86_64_data_read;
+import x86_64_access_code;
+import x86_64_access_memory;
+import x86_64_fetched_code;
+import x86_64_structured_block;
+import x86_64_store;
+import bitvec;
+import bitvec_nat;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+import omega;
+
+// ---------------------------------------------------------------------------
+// The byte map: from its first byte with the byte in RAX, its code runs to
+// its end with the mapped byte in RDX, memory untouched, and the loop's five
+// registers kept.
+
+fn MapPiece(f: BitVec(8) → BitVec(8), code: StructuredCode, keeps: Gpr → Type) → Type {
+    (before: MachineState<IoMemory>) → (b: BitVec(8)) → b.zero_extend(56) = read_gpr(Rax, before.gprs) →
+        StructuredArtifact<IoMemory>(code, before, Rdx, f(b).zero_extend(56), keeps)
+}
+record MapKeeps(keeps: Gpr → Type) {
+    rsi: keeps(Rsi), rcx: keeps(Rcx), r9: keeps(R9), r10: keeps(R10), r11: keeps(R11),
+}
+
+// ---------------------------------------------------------------------------
+// The code.
+
+// After a read of n > 0 bytes: the cursor at the page, n to go, the page and
+// n again for the write loop, and the step's 1.
+fn map_setup_block() → List<Instruction> {
+    [MovRI(Rsi, BitVec::ofNat(0x410000)), MovRI(R9, BitVec::ofNat(0x410000)), MovRR(Rcx, Rax), MovRR(R10, Rax),
+     MovRI(R11, BitVec::ofNat(1))]
+}
+fn map_load() → ByteLoad { ByteLoad(destination := Rax, base := Rsi) }
+fn map_store() → ByteStore { ByteStore(base := Rsi, source := Rdx) }
+// The cursor on, one fewer to go; ZF says whether none is.
+fn map_step_block() → List<Instruction> { [AddRR(Rsi, R11), SubRR(Rcx, R11)] }
+
+fn map_setup_len() → Nat { canonical_block_bytes(map_setup_block()).len() }
+fn map_load_len() → Nat { byte_load_bytes(map_load()).len() }
+fn map_step_len() → Nat { canonical_block_bytes(map_step_block()).len() }
+
+// The jumps: JZ to exit(0) at end of file, JS to the failure path, JNZ back
+// to the next byte, JZ back to the read after EINTR.
+record MapJumps { ed: BitVec(32), sd: BitVec(32), ld: BitVec(32), rd: BitVec(32) }
+
+// The program: the read, its test and jumps, the setup, the loop over the
+// chunk (load, map, store, step, JNZ), the write loop (whose end jumps back
+// to the read and whose exit(0) ends the run), then the failure path.
+fn map_code(code: StructuredCode, jumps: MapJumps, pj: PrintJumps) → List<BitVec(8)> {
+    canonical_block_bytes(read_entry_block()) ++ (linux_syscall_bytes() ++
+    (canonical_block_bytes(eof_test_block()) ++ (near_control_bytes(JumpZeroNear(jumps.ed)) ++
+    (near_control_bytes(JumpSignNear(jumps.sd)) ++ (canonical_block_bytes(map_setup_block()) ++
+    (byte_load_bytes(map_load()) ++ (structured_bytes(code) ++ (byte_store_bytes(map_store()) ++
+    (canonical_block_bytes(map_step_block()) ++ (near_control_bytes(JumpIfNear(NE, jumps.ld)) ++
+    (write_loop_code(pj) ++ (canonical_block_bytes(eof_retry_block()) ++ (near_control_bytes(JumpZeroNear(jumps.rd)) ++
+    (canonical_block_bytes(eof_fail_block()) ++ linux_syscall_bytes()))))))))))))))
+}
+
+// The code's length from the byte map's, over open parts.
+fn map_len(piece_len: Nat) → Nat {
+    read_entry_len() + (2 + (eof_test_len() + (6 + (6 + (map_setup_len() + (map_load_len() + (piece_len + (3 +
+    (map_step_len() + (6 + ((wl_at_exit_call(0) + 2) + (eof_retry_len() + (6 + (eof_fail_len() + 2))))))))))))))
+}
+theorem map_syscall_len(): linux_syscall_bytes().len() = 2 { refl }
+theorem map_code_len(code: StructuredCode, jumps: MapJumps, pj: PrintJumps, piece_len: Nat,
+    piece_is: structured_bytes(code).len() = piece_len): map_code(code, jumps, pj).len() = map_len(piece_len) {
+    len_app(canonical_block_bytes(read_entry_block()), len_app(linux_syscall_bytes(), len_app(canonical_block_bytes(eof_test_block()),
+        len_app(near_control_bytes(JumpZeroNear(jumps.ed)), len_app(near_control_bytes(JumpSignNear(jumps.sd)),
+        len_app(canonical_block_bytes(map_setup_block()), len_app(byte_load_bytes(map_load()),
+        len_app_is(structured_bytes(code), piece_is, len_app(byte_store_bytes(map_store()), len_app(canonical_block_bytes(map_step_block()),
+        len_app(near_control_bytes(JumpIfNear(NE, jumps.ld)), len_app(write_loop_code(pj), len_app(canonical_block_bytes(eof_retry_block()),
+        len_app(near_control_bytes(JumpZeroNear(jumps.rd)), len_app(canonical_block_bytes(eof_fail_block()), map_syscall_len())))))))))))))))
+}
+
+// Offsets from the entry, piece by piece.
+fn map_at_read() → Nat { 0 }
+fn map_at_call() → Nat { map_at_read() + read_entry_len() }
+fn map_at_test() → Nat { map_at_call() + 2 }
+fn map_at_jz() → Nat { map_at_test() + eof_test_len() }
+fn map_at_js() → Nat { map_at_jz() + 6 }
+fn map_at_setup() → Nat { map_at_js() + 6 }
+fn map_at_load() → Nat { map_at_setup() + map_setup_len() }
+fn map_at_piece() → Nat { map_at_load() + map_load_len() }
+fn map_at_store(code: StructuredCode) → Nat { map_at_piece() + structured_bytes(code).len() }
+fn map_at_step(code: StructuredCode) → Nat { map_at_store(code) + 3 }
+fn map_at_jnz(code: StructuredCode) → Nat { map_at_step(code) + map_step_len() }
+fn map_at_write(code: StructuredCode) → Nat { map_at_jnz(code) + 6 }
+fn map_at_failed(code: StructuredCode) → Nat { wl_at_exit_call(map_at_write(code)) + 2 }
+fn map_at_retry(code: StructuredCode) → Nat { map_at_failed(code) + eof_retry_len() }
+fn map_at_fail(code: StructuredCode) → Nat { map_at_retry(code) + 6 }
+fn map_at_fail_call(code: StructuredCode) → Nat { map_at_fail(code) + eof_fail_len() }
+
+// ---------------------------------------------------------------------------
+// One byte stored into the page.
+
+theorem store_byte_here(memory: IoMemory, i: Nat, x: BitVec(8)): io_store_offset(memory, i, [x]).page(i) = x {
+    let reached = eq_true_of_is_true(i.leb(i), Nat::leb_complete(i, i, i.le_refl()));
+    j(sym(reached), λ c _ => (match c {
+            False => memory.page(i),
+            True => match List::nth<BitVec(8)>([x], i -i) { None => memory.page(i), Some(byte) => byte },
+        }) = x,
+        j(sym(Nat::sub_self(i)), λ d _ => (match List::nth<BitVec(8)>([x], d) { None => memory.page(i), Some(byte) => byte }) = x, refl))
+}
+
+theorem store_byte_other(memory: IoMemory, i: Nat, x: BitVec(8), k: Nat, other: Not(k = i)):
+    io_store_offset(memory, i, [x]).page(k) = memory.page(k) {
+    (match i.leb(k) as λ c => (i.leb(k) = c) → (match c {
+            False => memory.page(k),
+            True => match List::nth<BitVec(8)>([x], k -i) { None => memory.page(k), Some(byte) => byte },
+        }) = memory.page(k) {
+        False => λ _ => refl,
+        True => λ below => {
+            let le: (i <= k) = Nat::leb_sound(i, k, j(sym(below), λ c _ => c.IsTrue(), trivial));
+            (match k -i as λ d => (k -i = d) → (match List::nth<BitVec(8)>([x], d) { None => memory.page(k), Some(byte) => byte }) = memory.page(k) {
+                Zero => λ none => {
+                    let back: ((k -i) + i = k) = Nat::sub_add_cancel(i, k, le);
+                    false_elim(other({ omega }))
+                },
+                Succ(_) => λ _ => refl,
+            })(refl)
+        },
+    })(refl)
+}
+
+// A byte store at the page's i-th byte is a store at offset i.
+theorem store_at_offset(memory: IoMemory, address: BitVec(64), i: Nat, bytes: List<BitVec(8)>,
+    at: address.toNat() = io_page_base() + i): io_store(memory, address, bytes) = io_store_offset(memory, i, bytes) {
+    cong_fn<Nat, IoMemory>(λ offset => io_store_offset(memory, offset, bytes),
+        trans(cong_fn<Nat, Nat>(λ a => a -io_page_base(), at),
+            trans(cong_fn<Nat, Nat>(λ a => a -io_page_base(), Nat::add_comm(io_page_base(), i)), Nat::add_sub_cancel(i, io_page_base()))))
+}
+
+// The page read at an address in it.
+theorem read_in_page(file: List<BitVec(8)>, page: Nat → BitVec(8), address: BitVec(64), i: Nat, inside: i < 4096,
+    at: address.toNat() = io_page_base() + i): io_read(IoMemory(file, page), address) = Some(page(i)) {
+    j(sym(trans(cong_fn<Nat, Option<Nat>>(λ a => io_offset_of(a), at), io_offset_in_page(i, inside))),
+        λ found _ => (match found {
+            Some(k) => Some(page(k)),
+            None => io_file_read(file, address),
+        }) = Some(page(i)), refl)
+}
+
+// The low byte of a zero-extended byte is the byte.
+theorem low_of_extended(x: BitVec(8)): imm_byte0(x.zero_extend(56)) = x {
+    BitVec::split_concat_low(8, 56, x, BitVec::zero())
+}
+
+// What a mapped list holds at `i`.
+theorem nth_map_of<A, B>(f: A → B, xs: List<A>): (i: Nat) → (y: B) → xs.map(f).nth(i) = Some(y) →
+    Exists<A>(λ x => (xs.nth(i) = Some(x)) ∧ (y = f(x))) {
+    match xs as λ ys => (i: Nat) → (y: B) → ys.map(f).nth(i) = Some(y) → Exists<A>(λ x => (ys.nth(i) = Some(x)) ∧ (y = f(x))) {
+        Nil => λ i y none => false_elim(j(none, λ o _ => match o as λ _ => Type { None => True, Some(_) => False }, trivial)),
+        Cons(h, t) => λ i => match i as λ k => (y: B) → Cons(h, t).map(f).nth(k) = Some(y) →
+                Exists<A>(λ x => (Cons(h, t).nth(k) = Some(x)) ∧ (y = f(x))) {
+            Zero => λ y found => Exists(h, ⟨refl, sym(Option::some_inj(f(h), y, found))⟩),
+            Succ(k) => λ y found => nth_map_of(f, t, k, y, found),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The pieces, resident at their offsets.
+
+record MapPieces(memory: IoMemory, code: StructuredCode, jumps: MapJumps, pj: PrintJumps) {
+    entry_at: CodeResident(io_fetch_access(), memory, canonical_block_bytes(read_entry_block()), eof_rip(map_at_read())),
+    call_at: CodeResident(io_fetch_access(), memory, linux_syscall_bytes(), eof_rip(map_at_call())),
+    test_at: CodeResident(io_fetch_access(), memory, canonical_block_bytes(eof_test_block()), eof_rip(map_at_test())),
+    jz_at: CodeResident(io_fetch_access(), memory, near_control_bytes(JumpZeroNear(jumps.ed)), eof_rip(map_at_jz())),
+    js_at: CodeResident(io_fetch_access(), memory, near_control_bytes(JumpSignNear(jumps.sd)), eof_rip(map_at_js())),
+    setup_at: CodeResident(io_fetch_access(), memory, canonical_block_bytes(map_setup_block()), eof_rip(map_at_setup())),
+    load_at: CodeResident(io_fetch_access(), memory, byte_load_bytes(map_load()), eof_rip(map_at_load())),
+    piece_at: CodeResident(io_fetch_access(), memory, structured_bytes(code), eof_rip(map_at_piece())),
+    store_at: CodeResident(io_fetch_access(), memory, byte_store_bytes(map_store()), eof_rip(map_at_store(code))),
+    step_at: CodeResident(io_fetch_access(), memory, canonical_block_bytes(map_step_block()), eof_rip(map_at_step(code))),
+    jnz_at: CodeResident(io_fetch_access(), memory, near_control_bytes(JumpIfNear(NE, jumps.ld)), eof_rip(map_at_jnz(code))),
+    write: WriteLoopResident(memory, map_at_write(code), pj),
+    retry_at: CodeResident(io_fetch_access(), memory, canonical_block_bytes(eof_retry_block()), eof_rip(map_at_failed(code))),
+    retry_jz_at: CodeResident(io_fetch_access(), memory, near_control_bytes(JumpZeroNear(jumps.rd)), eof_rip(map_at_retry(code))),
+    fail_at: CodeResident(io_fetch_access(), memory, canonical_block_bytes(eof_fail_block()), eof_rip(map_at_fail(code))),
+    fail_call_at: CodeResident(io_fetch_access(), memory, linux_syscall_bytes(), eof_rip(map_at_fail_call(code))),
+}
+
+theorem map_pieces(memory: IoMemory, code: StructuredCode, jumps: MapJumps, pj: PrintJumps,
+    resident: CodeResident(io_fetch_access(), memory, map_code(code, jumps, pj), BitVec::ofNat(0x4000e8))):
+    MapPieces(memory, code, jumps, pj) {
+    let fetch = io_fetch_access();
+    let entry: BitVec(64) = BitVec::ofNat(0x4000e8);
+    let e = canonical_block_bytes(read_entry_block());
+    let call = linux_syscall_bytes();
+    let t = canonical_block_bytes(eof_test_block());
+    let z = near_control_bytes(JumpZeroNear(jumps.ed));
+    let sg = near_control_bytes(JumpSignNear(jumps.sd));
+    let su = canonical_block_bytes(map_setup_block());
+    let ld = byte_load_bytes(map_load());
+    let pc = structured_bytes(code);
+    let st = byte_store_bytes(map_store());
+    let sp = canonical_block_bytes(map_step_block());
+    let nz = near_control_bytes(JumpIfNear(NE, jumps.ld));
+    let wl = write_loop_code(pj);
+    let rt = canonical_block_bytes(eof_retry_block());
+    let rz = near_control_bytes(JumpZeroNear(jumps.rd));
+    let fl = canonical_block_bytes(eof_fail_block());
+    let r0 = resident_split_at(fetch, memory, e, call ++ (t ++ (z ++ (sg ++ (su ++ (ld ++ (pc ++ (st ++ (sp ++ (nz ++ (wl ++ (rt ++ (rz ++ (fl ++ call))))))))))))), entry, 0, resident);
+    let r1 = resident_split_at(fetch, memory, call, t ++ (z ++ (sg ++ (su ++ (ld ++ (pc ++ (st ++ (sp ++ (nz ++ (wl ++ (rt ++ (rz ++ (fl ++ call)))))))))))), entry, map_at_call(), r0.right);
+    let r2 = resident_split_at(fetch, memory, t, z ++ (sg ++ (su ++ (ld ++ (pc ++ (st ++ (sp ++ (nz ++ (wl ++ (rt ++ (rz ++ (fl ++ call))))))))))), entry, map_at_test(), r1.right);
+    let r3 = resident_split_at(fetch, memory, z, sg ++ (su ++ (ld ++ (pc ++ (st ++ (sp ++ (nz ++ (wl ++ (rt ++ (rz ++ (fl ++ call)))))))))), entry, map_at_jz(), r2.right);
+    let r4 = resident_split_at(fetch, memory, sg, su ++ (ld ++ (pc ++ (st ++ (sp ++ (nz ++ (wl ++ (rt ++ (rz ++ (fl ++ call))))))))), entry, map_at_js(), r3.right);
+    let r5 = resident_split_at(fetch, memory, su, ld ++ (pc ++ (st ++ (sp ++ (nz ++ (wl ++ (rt ++ (rz ++ (fl ++ call)))))))), entry, map_at_setup(), r4.right);
+    let r6 = resident_split_at(fetch, memory, ld, pc ++ (st ++ (sp ++ (nz ++ (wl ++ (rt ++ (rz ++ (fl ++ call))))))), entry, map_at_load(), r5.right);
+    let r7 = resident_split_at(fetch, memory, pc, st ++ (sp ++ (nz ++ (wl ++ (rt ++ (rz ++ (fl ++ call)))))), entry, map_at_piece(), r6.right);
+    let r8 = resident_split_at(fetch, memory, st, sp ++ (nz ++ (wl ++ (rt ++ (rz ++ (fl ++ call))))), entry, map_at_store(code), r7.right);
+    let r9 = resident_split_at(fetch, memory, sp, nz ++ (wl ++ (rt ++ (rz ++ (fl ++ call)))), entry, map_at_step(code), r8.right);
+    let r10 = resident_split_at(fetch, memory, nz, wl ++ (rt ++ (rz ++ (fl ++ call))), entry, map_at_jnz(code), r9.right);
+    let r11 = resident_split_at(fetch, memory, wl, rt ++ (rz ++ (fl ++ call)), entry, map_at_write(code), r10.right);
+    let r12 = resident_split_at(fetch, memory, rt, rz ++ (fl ++ call), entry, map_at_failed(code), r11.right);
+    let r13 = resident_split_at(fetch, memory, rz, fl ++ call, entry, map_at_retry(code), r12.right);
+    let r14 = resident_split_at(fetch, memory, fl, call, entry, map_at_fail(code), r13.right);
+    MapPieces(r0.left, r1.left, r2.left, r3.left, r4.left, r5.left, r6.left, r7.left, r8.left, r9.left, r10.left,
+        write_loop_resident(memory, map_at_write(code), pj, r11.left), r12.left, r13.left, r14.left, r14.right)
+}
+
+// ---------------------------------------------------------------------------
+// The loop over one chunk.
+
+// Some byte is at every index below the length.
+theorem nth_below<A>(xs: List<A>): (i: Nat) → i < xs.len() → Exists<A>(λ x => xs.nth(i) = Some(x)) {
+    match xs as λ ys => (i: Nat) → i < ys.len() → Exists<A>(λ x => ys.nth(i) = Some(x)) {
+        Nil => λ i below => false_elim(below),
+        Cons(h, t) => λ i => match i as λ k => k < Cons(h, t).len() → Exists<A>(λ x => Cons(h, t).nth(k) = Some(x)) {
+            Zero => λ _ => Exists(h, refl),
+            Succ(k) => λ below => nth_below(t, k, below),
+        },
+    }
+}
+
+// The arithmetic of one byte, over Nats.
+theorem map_inside(i, rest, n: Nat, count: i + Succ(rest) = n, fits: n <= 4096): i < 4096 { omega }
+theorem map_low(i: Nat, inside: i < 4096): io_page_base() + i < Nat::pow(2, 47) {
+    let page: (io_page_base() + 4096 <= Nat::pow(2, 47)) = Nat::leb_sound(io_page_base() + 4096, Nat::pow(2, 47), trivial);
+    omega
+}
+theorem map_word(i: Nat, inside: i < 4096): Succ(io_page_base() + i) < Nat::pow(2, 64) {
+    let page: (io_page_base() + 4097 <= Nat::pow(2, 64)) = Nat::leb_sound(io_page_base() + 4097, Nat::pow(2, 64), trivial);
+    omega
+}
+theorem map_writable(i: Nat, inside: i < 4096):
+    (io_page_base() <= io_page_base() + i) ∧ ((io_page_base() + i) + 1 <= io_page_base() + 4096) { ⟨omega, omega⟩ }
+theorem map_count_left(c, i, rest, n: Nat, counted: c + i = n, count: i + Succ(rest) = n): 1 <= c { omega }
+theorem map_count_next(c, d, i, rest, n: Nat, counted: c + i = n, count: i + Succ(rest) = n, less: d = c -1): (d = rest) ∧ (d + Succ(i) = n) {
+    let back: ((c -1) + 1 = c) = Nat::sub_add_cancel(1, c, { omega });
+    ⟨omega, omega⟩
+}
+theorem map_next_byte(j, i: Nat, below: j < Succ(i), other: Not(j = i)): j < i { Nat::lt_of_le_of_ne(j, i, { omega }, other) }
+theorem map_past_byte(j, i: Nat, past: Succ(i) <= j): (i <= j) ∧ Not(j = i) {
+    ⟨omega, λ same => { let x: (j = i) = same; let never: (Succ(j) <= j) = j(sym(x), λ k _ => Succ(k) <= j, past); false_elim(Nat::lt_irrefl(j, never)) }⟩
+}
+
+// At `at` with `i` bytes of the chunk mapped: the page holds their images
+// and then the rest of the chunk, RSI is at byte `i`, RCX counts what is
+// left, and R9, R10 and R11 hold what the write loop and the step need.
+record MapAt(f: BitVec(8) → BitVec(8), file, bytes: List<BitVec(8)>, i, at: Nat, state: MachineState<IoMemory>) {
+    page: Nat → BitVec(8),
+    memory_is: state.memory = IoMemory(file, page),
+    rip_is: state.rip = eof_rip(at),
+    mapped: (j: Nat) → (b: BitVec(8)) → bytes.nth(j) = Some(b) → j < i → page(j) = f(b),
+    left: (j: Nat) → (b: BitVec(8)) → bytes.nth(j) = Some(b) → i <= j → page(j) = b,
+    cursor: read_gpr(Rsi, state.gprs).toNat() = io_page_base() + i,
+    count: read_gpr(Rcx, state.gprs).toNat() + i = bytes.len(),
+    base: read_gpr(R9, state.gprs).toNat() = io_page_base(),
+    length: read_gpr(R10, state.gprs).toNat() = bytes.len(),
+    one: read_gpr(R11, state.gprs) = BitVec::ofNat(1),
+}
+
+// Byte `i` loaded and mapped: the image in RDX, memory untouched, the
+// loop's registers kept, at the store.
+record MapLoaded(f: BitVec(8) → BitVec(8), code: StructuredCode, byte: BitVec(8), state, loaded: MachineState<IoMemory>) {
+    steps: FetchedSteps(io_fetch_access(), io_data_access(), state, loaded),
+    memory_is: loaded.memory = state.memory,
+    rip_is: loaded.rip = eof_rip(map_at_store(code)),
+    image: read_gpr(Rdx, loaded.gprs) = f(byte).zero_extend(56),
+    rsi: read_gpr(Rsi, loaded.gprs) = read_gpr(Rsi, state.gprs),
+    rcx: read_gpr(Rcx, loaded.gprs) = read_gpr(Rcx, state.gprs),
+    r9: read_gpr(R9, loaded.gprs) = read_gpr(R9, state.gprs),
+    r10: read_gpr(R10, loaded.gprs) = read_gpr(R10, state.gprs),
+    r11: read_gpr(R11, loaded.gprs) = read_gpr(R11, state.gprs),
+}
+
+theorem map_fetched(f: BitVec(8) → BitVec(8), code: StructuredCode, keeps: Gpr → Type, piece: MapPiece(f, code, keeps), kept: MapKeeps(keeps),
+    jumps: MapJumps, pj: PrintJumps, file, bytes: List<BitVec(8)>, i: Nat, inside: i < 4096, b: BitVec(8), at_byte: bytes.nth(i) = Some(b),
+    pieces: (page: Nat → BitVec(8)) → MapPieces(IoMemory(file, page), code, jumps, pj),
+    state: MachineState<IoMemory>, head: MapAt(f, file, bytes, i, map_at_load(), state)):
+    Exists<MachineState<IoMemory>>(λ loaded => MapLoaded(f, code, b, state, loaded)) {
+    let fetch = io_fetch_access();
+    let data = io_data_access();
+    let entry: BitVec(64) = BitVec::ofNat(0x4000e8);
+    let here = pieces(head.page);
+    let rsi = read_gpr(Rsi, state.gprs);
+    let loaded: (head.page(i) = b) = head.left(i, b, at_byte, i.le_refl());
+    let present: (io_data_access().read(state.memory, rsi) = Some(b)) =
+        j(sym(head.memory_is), λ m _ => io_read(m, rsi) = Some(b),
+            trans(read_in_page(file, head.page, rsi, i, inside, head.cursor), cong_fn<BitVec(8), Option<BitVec(8)>>(λ x => Some(x), loaded)));
+    let canonical: (rsi.drop_low(47, 17) = BitVec::zero()) =
+        BitVec::drop_low_zero_of_lt(47, 17, rsi, j(sym(head.cursor), λ v _ => v < Nat::pow(2, 47), map_low(i, inside)));
+    let s1 = byte_load_after(map_load(), b, state);
+    let load_step: FetchedStep(fetch, data, state, s1) = Exists(EmitLoad(map_load()),
+        ⟨FetchedFrom(resident_readable(fetch, state.memory, byte_load_bytes(map_load()), state.rip,
+            resident_state(fetch, byte_load_bytes(map_load()), IoMemory(file, head.page), eof_rip(map_at_load()), state, head.memory_is, head.rip_is,
+                here.load_at))),
+         Exists(b, ByteLoadStep(canonical := canonical, present := present, execution := refl))⟩);
+    let s1_rip: (s1.rip = eof_rip(map_at_piece())) = rip_advance(entry, state.rip, map_at_load(), map_load_len(), head.rip_is);
+    have artifact = piece(s1, b, refl);
+    Exists(artifact.after, MapLoaded(
+        steps := fetched_steps_cons(fetch, data, state, s1, artifact.after, load_step,
+            artifact_fetched(code, s1, Rdx, f(b).zero_extend(56), keeps, artifact,
+                resident_state(fetch, structured_bytes(code), IoMemory(file, head.page), eof_rip(map_at_piece()), s1, head.memory_is, s1_rip,
+                    here.piece_at))),
+        memory_is := artifact.memory_preserved,
+        rip_is := trans(artifact.rip_correct, rip_advance(entry, s1.rip, map_at_piece(), structured_bytes(code).len(), s1_rip)),
+        image := artifact.result_correct,
+        rsi := artifact.registers_preserved(Rsi, kept.rsi),
+        rcx := artifact.registers_preserved(Rcx, kept.rcx),
+        r9 := artifact.registers_preserved(R9, kept.r9),
+        r10 := artifact.registers_preserved(R10, kept.r10),
+        r11 := artifact.registers_preserved(R11, kept.r11)))
+}
+
+// The image stored over byte `i`.
+record MapStored(code: StructuredCode, file: List<BitVec(8)>, page: Nat → BitVec(8), loaded, stored: MachineState<IoMemory>) {
+    step: StoreStep(io_fetch_access(), linux_writes(io_linux()), loaded, stored),
+    memory_is: stored.memory = IoMemory(file, page),
+    rip_is: stored.rip = eof_rip(map_at_step(code)),
+    gprs_is: stored.gprs = loaded.gprs,
+    flags_is: stored.flags = loaded.flags,
+}
+
+theorem map_stored(f: BitVec(8) → BitVec(8), code: StructuredCode, jumps: MapJumps, pj: PrintJumps, file: List<BitVec(8)>,
+    page: Nat → BitVec(8), i: Nat, inside: i < 4096, b: BitVec(8),
+    pieces: (page: Nat → BitVec(8)) → MapPieces(IoMemory(file, page), code, jumps, pj),
+    loaded: MachineState<IoMemory>, memory_is: loaded.memory = IoMemory(file, page), rip_is: loaded.rip = eof_rip(map_at_store(code)),
+    at: read_gpr(Rsi, loaded.gprs).toNat() = io_page_base() + i, image: read_gpr(Rdx, loaded.gprs) = f(b).zero_extend(56)):
+    Exists<MachineState<IoMemory>>(λ stored => MapStored(code, file, io_store_offset(IoMemory(file, page), i, [f(b)]).page, loaded, stored)) {
+    let fetch = io_fetch_access();
+    let writes = linux_writes(io_linux());
+    let entry: BitVec(64) = BitVec::ofNat(0x4000e8);
+    let memory = IoMemory(file, page);
+    let room = map_writable(i, inside);
+    let writable: IoWritable(loaded.memory, read_gpr(Rsi, loaded.gprs), 1) =
+        ⟨j(sym(at), λ v _ => io_page_base() <= v, room.left), j(sym(at), λ v _ => v + 1 <= io_page_base() + 4096, room.right)⟩;
+    let stored = byte_store_after(writes, map_store(), loaded);
+    let low: (imm_byte0(read_gpr(Rdx, loaded.gprs)) = f(b)) =
+        trans(cong_fn<BitVec(64), BitVec(8)>(λ v => imm_byte0(v), image), low_of_extended(f(b)));
+    Exists(stored, MapStored(
+        step := byte_store_step(fetch, writes, map_store(), loaded, refl,
+            FetchedFrom(resident_readable(fetch, loaded.memory, byte_store_bytes(map_store()), loaded.rip,
+                resident_state(fetch, byte_store_bytes(map_store()), memory, eof_rip(map_at_store(code)), loaded, memory_is, rip_is,
+                    pieces(page).store_at))),
+            writable),
+        memory_is := trans(cong_fn<IoMemory, IoMemory>(λ m => io_store(m, read_gpr(Rsi, loaded.gprs), [imm_byte0(read_gpr(Rdx, loaded.gprs))]), memory_is),
+            trans(cong_fn<BitVec(8), IoMemory>(λ x => io_store(memory, read_gpr(Rsi, loaded.gprs), [x]), low),
+                store_at_offset(memory, read_gpr(Rsi, loaded.gprs), i, [f(b)], at))),
+        rip_is := rip_advance(entry, loaded.rip, map_at_store(code), 3, rip_is),
+        gprs_is := refl,
+        flags_is := refl))
+}
+
+// The page after the store: byte `i`'s image, then the rest as before.
+theorem map_page_mapped(f: BitVec(8) → BitVec(8), bytes: List<BitVec(8)>, memory: IoMemory, i: Nat, b: BitVec(8),
+    at_byte: bytes.nth(i) = Some(b),
+    mapped: (j: Nat) → (c: BitVec(8)) → bytes.nth(j) = Some(c) → j < i → memory.page(j) = f(c)):
+    (j: Nat) → (c: BitVec(8)) → bytes.nth(j) = Some(c) → j < Succ(i) → io_store_offset(memory, i, [f(b)]).page(j) = f(c) {
+    λ j c at_j below => (match Nat::eq_dec(j, i) as λ _ => io_store_offset(memory, i, [f(b)]).page(j) = f(c) {
+        Inl(same) => {
+            let same_byte: (c = b) = Option::some_inj(c, b, trans(sym(at_j), j(sym(same), λ k _ => bytes.nth(k) = Some(b), at_byte)));
+            trans(j(sym(same), λ k _ => io_store_offset(memory, i, [f(b)]).page(k) = f(b), store_byte_here(memory, i, f(b))),
+                cong_fn<BitVec(8), BitVec(8)>(λ x => f(x), sym(same_byte)))
+        },
+        Inr(other) => trans(store_byte_other(memory, i, f(b), j, other), mapped(j, c, at_j, map_next_byte(j, i, below, other))),
+    })
+}
+theorem map_page_left(bytes: List<BitVec(8)>, memory: IoMemory, i: Nat, x: BitVec(8),
+    left: (j: Nat) → (c: BitVec(8)) → bytes.nth(j) = Some(c) → i <= j → memory.page(j) = c):
+    (j: Nat) → (c: BitVec(8)) → bytes.nth(j) = Some(c) → Succ(i) <= j → io_store_offset(memory, i, [x]).page(j) = c {
+    λ j c at_j past => {
+        let apart = map_past_byte(j, i, past);
+        trans(store_byte_other(memory, i, x, j, apart.right), left(j, c, at_j, apart.left))
+    }
+}
+
+// One byte: load it, map it, store the image over it, step. ZF says whether
+// the chunk is done.
+theorem map_byte(f: BitVec(8) → BitVec(8), code: StructuredCode, keeps: Gpr → Type, piece: MapPiece(f, code, keeps), kept: MapKeeps(keeps),
+    jumps: MapJumps, pj: PrintJumps, file, bytes: List<BitVec(8)>, fits: bytes.len() <= 4096, i, rest: Nat,
+    counting: i + Succ(rest) = bytes.len(),
+    pieces: (page: Nat → BitVec(8)) → MapPieces(IoMemory(file, page), code, jumps, pj),
+    state: MachineState<IoMemory>, head: MapAt(f, file, bytes, i, map_at_load(), state)):
+    Exists<MachineState<IoMemory>>(λ body => LinuxSteps(io_linux(), state, body) ∧
+        (MapAt(f, file, bytes, Succ(i), map_at_jnz(code), body) ∧ (body.flags.zf = is_zero_bits(64, read_gpr(Rcx, body.gprs))))) {
+    let fetch = io_fetch_access();
+    let data = io_data_access();
+    let entry: BitVec(64) = BitVec::ofNat(0x4000e8);
+    let inside = map_inside(i, rest, bytes.len(), counting, fits);
+    have found = nth_below(bytes, i, { omega });
+    let b = found.witness;
+    have fetched = map_fetched(f, code, keeps, piece, kept, jumps, pj, file, bytes, i, inside, b, found.proof, pieces, state, head);
+    let s2 = fetched.witness;
+    let l = fetched.proof;
+    let at_byte: (read_gpr(Rsi, s2.gprs).toNat() = io_page_base() + i) = trans(cong_fn<BitVec(64), Nat>(λ v => v.toNat(), l.rsi), head.cursor);
+    have stored = map_stored(f, code, jumps, pj, file, head.page, i, inside, b, pieces, s2, trans(l.memory_is, head.memory_is), l.rip_is,
+        at_byte, l.image);
+    let s3 = stored.witness;
+    let st = stored.proof;
+    let next = io_store_offset(IoMemory(file, head.page), i, [f(b)]).page;
+    let stepped = block_fetched(fetch, data, map_step_block(), s3, trivial,
+        resident_state(fetch, canonical_block_bytes(map_step_block()), IoMemory(file, next), eof_rip(map_at_step(code)), s3, st.memory_is, st.rip_is,
+            pieces(next).step_at));
+    let s4 = execute_block_normal(map_step_block(), s3);
+    let rsi3: (read_gpr(Rsi, s3.gprs) = read_gpr(Rsi, s2.gprs)) = cong_fn<Gprs, BitVec(64)>(λ g => read_gpr(Rsi, g), st.gprs_is);
+    let rcx3: (read_gpr(Rcx, s3.gprs) = read_gpr(Rcx, s2.gprs)) = cong_fn<Gprs, BitVec(64)>(λ g => read_gpr(Rcx, g), st.gprs_is);
+    let one: (read_gpr(R11, s3.gprs) = BitVec::ofNat(1)) = trans(cong_fn<Gprs, BitVec(64)>(λ g => read_gpr(R11, g), st.gprs_is), trans(l.r11, head.one));
+    let one_value: (read_gpr(R11, s3.gprs).toNat() = 1) =
+        trans(cong_fn<BitVec(64), Nat>(λ v => v.toNat(), one), BitVec::toNat_ofNat(64, 1, trivial));
+    let at3: (read_gpr(Rsi, s3.gprs).toNat() = io_page_base() + i) = trans(cong_fn<BitVec(64), Nat>(λ v => v.toNat(), rsi3), at_byte);
+    let rsi4: (read_gpr(Rsi, s4.gprs).toNat() = io_page_base() + Succ(i)) =
+        trans(bitvec_nat::toNat_add(64, read_gpr(Rsi, s3.gprs), read_gpr(R11, s3.gprs),
+            j(sym(one_value), λ v _ => read_gpr(Rsi, s3.gprs).toNat() + v < Nat::pow(2, 64),
+                j(sym(at3), λ v _ => v + 1 < Nat::pow(2, 64), map_word(i, inside)))),
+            trans(cong_fn<Nat, Nat>(λ v => read_gpr(Rsi, s3.gprs).toNat() + v, one_value), cong_fn<Nat, Nat>(λ v => v + 1, at3)));
+    let rcx_count: (read_gpr(Rcx, s3.gprs).toNat() + i = bytes.len()) =
+        trans(cong_fn<BitVec(64), Nat>(λ v => v.toNat() + i, trans(rcx3, l.rcx)), head.count);
+    let some_left: (1 <= read_gpr(Rcx, s3.gprs).toNat()) = map_count_left(read_gpr(Rcx, s3.gprs).toNat(), i, rest, bytes.len(), rcx_count, counting);
+    let rcx4_value: (read_gpr(Rcx, s4.gprs).toNat() = read_gpr(Rcx, s3.gprs).toNat() -1) =
+        trans(bitvec_nat::toNat_sub(64, read_gpr(Rcx, s3.gprs), read_gpr(R11, s3.gprs),
+                j(sym(one_value), λ v _ => v <= read_gpr(Rcx, s3.gprs).toNat(), some_left)),
+            cong_fn<Nat, Nat>(λ v => read_gpr(Rcx, s3.gprs).toNat() -v, one_value));
+    let counted = map_count_next(read_gpr(Rcx, s3.gprs).toNat(), read_gpr(Rcx, s4.gprs).toNat(), i, rest, bytes.len(), rcx_count, counting, rcx4_value);
+    Exists(s4, ⟨linux_steps_trans(io_linux(), state, s2, s4, linux_steps_of_fetched(io_linux(), state, s2, l.steps),
+            linux_steps_trans(io_linux(), s2, s3, s4, linux_steps_store(io_linux(), s2, s3, st.step),
+                linux_steps_of_fetched(io_linux(), s3, s4, stepped.left))),
+        ⟨MapAt(
+            page := next,
+            memory_is := trans(pure_block_memory(map_step_block(), s3), st.memory_is),
+            rip_is := trans(stepped.right, rip_advance(entry, s3.rip, map_at_step(code), map_step_len(), st.rip_is)),
+            mapped := map_page_mapped(f, bytes, IoMemory(file, head.page), i, b, found.proof, head.mapped),
+            left := map_page_left(bytes, IoMemory(file, head.page), i, f(b), head.left),
+            cursor := rsi4,
+            count := counted.right,
+            base := trans(cong_fn<BitVec(64), Nat>(λ v => v.toNat(), trans(cong_fn<Gprs, BitVec(64)>(λ g => read_gpr(R9, g), st.gprs_is), l.r9)), head.base),
+            length := trans(cong_fn<BitVec(64), Nat>(λ v => v.toNat(), trans(cong_fn<Gprs, BitVec(64)>(λ g => read_gpr(R10, g), st.gprs_is), l.r10)),
+                head.length),
+            one := one),
+         refl⟩⟩)
+}
+
+// The JNZ, taken while bytes are left.
+theorem map_again(f: BitVec(8) → BitVec(8), code: StructuredCode, jumps: MapJumps, pj: PrintJumps, file, bytes: List<BitVec(8)>,
+    loop_target: near_branch_target(eof_rip(map_at_jnz(code)), 6, jumps.ld) = eof_rip(map_at_load()),
+    pieces: (page: Nat → BitVec(8)) → MapPieces(IoMemory(file, page), code, jumps, pj),
+    i: Nat, state: MachineState<IoMemory>, body: MapAt(f, file, bytes, i, map_at_jnz(code), state),
+    flag: state.flags.zf = False):
+    Exists<MachineState<IoMemory>>(λ next => FetchedStep(io_fetch_access(), io_data_access(), state, next) ∧
+        MapAt(f, file, bytes, i, map_at_load(), next)) {
+    let fetch = io_fetch_access();
+    let data = io_data_access();
+    let jump = near_fetched_step(fetch, data, JumpIfNear(NE, jumps.ld), state,
+        resident_state(fetch, near_control_bytes(JumpIfNear(NE, jumps.ld)), IoMemory(file, body.page), eof_rip(map_at_jnz(code)), state,
+            body.memory_is, body.rip_is, pieces(body.page).jnz_at));
+    let next = execute_near_control(JumpIfNear(NE, jumps.ld), state);
+    let taken: (condition_holds(NE, state.flags) = True) = cong_fn<Bool, Bool>(λ z => !z, flag);
+    let next_rip_is: (next.rip = eof_rip(map_at_load())) =
+        trans(near_if_taken_rip(NE, jumps.ld, state, taken),
+            trans(cong_fn<BitVec(64), BitVec(64)>(λ address => near_branch_target(address, 6, jumps.ld), body.rip_is), loop_target));
+    Exists(next, ⟨jump, MapAt(page := body.page, memory_is := body.memory_is, rip_is := next_rip_is, mapped := body.mapped,
+        left := body.left, cursor := body.cursor, count := body.count, base := body.base, length := body.length, one := body.one)⟩)
+}
+
+// The JNZ, falling through to the write loop once the chunk is done.
+theorem map_done(f: BitVec(8) → BitVec(8), code: StructuredCode, jumps: MapJumps, pj: PrintJumps, file, bytes: List<BitVec(8)>,
+    pieces: (page: Nat → BitVec(8)) → MapPieces(IoMemory(file, page), code, jumps, pj),
+    i: Nat, state: MachineState<IoMemory>, body: MapAt(f, file, bytes, i, map_at_jnz(code), state),
+    flag: state.flags.zf = True):
+    Exists<MachineState<IoMemory>>(λ next => FetchedStep(io_fetch_access(), io_data_access(), state, next) ∧
+        MapAt(f, file, bytes, i, map_at_write(code), next)) {
+    let fetch = io_fetch_access();
+    let data = io_data_access();
+    let entry: BitVec(64) = BitVec::ofNat(0x4000e8);
+    let jump = near_fetched_step(fetch, data, JumpIfNear(NE, jumps.ld), state,
+        resident_state(fetch, near_control_bytes(JumpIfNear(NE, jumps.ld)), IoMemory(file, body.page), eof_rip(map_at_jnz(code)), state,
+            body.memory_is, body.rip_is, pieces(body.page).jnz_at));
+    let next = execute_near_control(JumpIfNear(NE, jumps.ld), state);
+    let passed: (condition_holds(NE, state.flags) = False) = cong_fn<Bool, Bool>(λ z => !z, flag);
+    let next_rip_is: (next.rip = eof_rip(map_at_write(code))) =
+        trans(near_if_not_taken_rip(NE, jumps.ld, state, passed), rip_advance(entry, state.rip, map_at_jnz(code), 6, body.rip_is));
+    Exists(next, ⟨jump, MapAt(page := body.page, memory_is := body.memory_is, rip_is := next_rip_is, mapped := body.mapped,
+        left := body.left, cursor := body.cursor, count := body.count, base := body.base, length := body.length, one := body.one)⟩)
+}
+
+theorem map_left_word(c, i, rest, n: Nat, counted: c + Succ(i) = n, count: i + Succ(rest) = n): c = rest { omega }
+theorem map_next_count(i, r, n: Nat, count: i + Succ(Succ(r)) = n): Succ(i) + Succ(r) = n { omega }
+theorem map_last_count(i, n: Nat, count: i + Succ(Zero) = n): Succ(i) = n { omega }
+
+// The chunk, by recursion on the bytes left: every byte mapped in place, and
+// the write loop reached.
+theorem map_loop(f: BitVec(8) → BitVec(8), code: StructuredCode, keeps: Gpr → Type, piece: MapPiece(f, code, keeps), kept: MapKeeps(keeps),
+    jumps: MapJumps, pj: PrintJumps,
+    loop_target: near_branch_target(eof_rip(map_at_jnz(code)), 6, jumps.ld) = eof_rip(map_at_load()),
+    file, bytes: List<BitVec(8)>, fits: bytes.len() <= 4096,
+    pieces: (page: Nat → BitVec(8)) → MapPieces(IoMemory(file, page), code, jumps, pj), rest: Nat):
+    (i: Nat) → (state: MachineState<IoMemory>) → i + Succ(rest) = bytes.len() → MapAt(f, file, bytes, i, map_at_load(), state) →
+    Exists<MachineState<IoMemory>>(λ done => LinuxSteps(io_linux(), state, done) ∧ MapAt(f, file, bytes, bytes.len(), map_at_write(code), done)) {
+    match rest as λ r => (i: Nat) → (state: MachineState<IoMemory>) → i + Succ(r) = bytes.len() → MapAt(f, file, bytes, i, map_at_load(), state) →
+            Exists<MachineState<IoMemory>>(λ done => LinuxSteps(io_linux(), state, done) ∧ MapAt(f, file, bytes, bytes.len(), map_at_write(code), done)) {
+        Zero => λ i state count head => {
+            have stepped = map_byte(f, code, keeps, piece, kept, jumps, pj, file, bytes, fits, i, Zero, count, pieces, state, head);
+            let body = stepped.witness;
+            let at = stepped.proof.right.left;
+            let none: (read_gpr(Rcx, body.gprs).toNat() = 0) = map_left_word(read_gpr(Rcx, body.gprs).toNat(), i, Zero, bytes.len(), at.count, count);
+            have out = map_done(f, code, jumps, pj, file, bytes, pieces, Succ(i), body, at,
+                trans(stepped.proof.right.right, zero_bits_of_zero(64, read_gpr(Rcx, body.gprs), none)));
+            Exists(out.witness, ⟨linux_steps_trans(io_linux(), state, body, out.witness, stepped.proof.left,
+                    linux_steps_of_fetched(io_linux(), body, out.witness, fetched_steps_one(io_fetch_access(), io_data_access(), body, out.witness, out.proof.left))),
+                j(map_last_count(i, bytes.len(), count), λ k _ => MapAt(f, file, bytes, k, map_at_write(code), out.witness), out.proof.right)⟩)
+        },
+        Succ(r, ih) => λ i state count head => {
+            have stepped = map_byte(f, code, keeps, piece, kept, jumps, pj, file, bytes, fits, i, Succ(r), count, pieces, state, head);
+            let body = stepped.witness;
+            let at = stepped.proof.right.left;
+            let some: (read_gpr(Rcx, body.gprs).toNat() = Succ(r)) =
+                map_left_word(read_gpr(Rcx, body.gprs).toNat(), i, Succ(r), bytes.len(), at.count, count);
+            have again = map_again(f, code, jumps, pj, file, bytes, loop_target, pieces, Succ(i), body, at,
+                trans(stepped.proof.right.right, zero_bits_of_pos(64, read_gpr(Rcx, body.gprs), j(sym(some), λ v _ => 0 < v, trivial))));
+            have later = ih(Succ(i), again.witness, map_next_count(i, r, bytes.len(), count), again.proof.right);
+            Exists(later.witness, ⟨linux_steps_trans(io_linux(), state, body, later.witness, stepped.proof.left,
+                    linux_steps_cons(io_linux(), body, again.witness, later.witness, Inl(again.proof.left), later.proof.left)),
+                later.proof.right⟩)
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// One chunk: read, mapped in place, written.
+
+// What the read left in the page, at an index of the chunk.
+theorem stored_page_at(memory: IoMemory, bytes: List<BitVec(8)>, k: Nat, b: BitVec(8), present: bytes.nth(k) = Some(b)):
+    io_store_offset(memory, 0, bytes).page(k) = b {
+    j(sym(trans(cong_fn<Nat, Option<BitVec(8)>>(λ m => bytes.nth(m), Nat::sub_zero(k)), present)),
+        λ found _ => (match found { None => memory.page(k), Some(x) => x }) = b, refl)
+}
+
+theorem map_first_count(n: Nat, some: 0 < n): 0 + Succ(n -1) = n {
+    let back: ((n -1) + 1 = n) = Nat::sub_add_cancel(1, n, { omega });
+    omega
+}
+theorem map_page_word(k: Nat, inside: k < 4096): io_page_base() + k < Nat::pow(2, 64) {
+    let page: (io_page_base() + 4096 <= Nat::pow(2, 64)) = Nat::leb_sound(io_page_base() + 4096, Nat::pow(2, 64), trivial);
+    omega
+}
+theorem map_below_page(k, n: Nat, below: k < n, fits: n <= 4096): k < 4096 { omega }
+theorem map_page_end(n: Nat, fits: n <= 4096): io_page_base() + n < Nat::pow(2, 64) {
+    let page: (io_page_base() + 4097 <= Nat::pow(2, 64)) = Nat::leb_sound(io_page_base() + 4097, Nat::pow(2, 64), trivial);
+    omega
+}
+
+// Once the chunk is mapped, the page from R9 holds its image.
+theorem map_sends_page(f: BitVec(8) → BitVec(8), file, bytes: List<BitVec(8)>, fits: bytes.len() <= 4096, page: Nat → BitVec(8),
+    r9: BitVec(64), base: r9.toNat() = io_page_base(),
+    mapped: (j: Nat) → (b: BitVec(8)) → bytes.nth(j) = Some(b) → j < bytes.len() → page(j) = f(b)):
+    LinuxWritesFrom(io_linux(), IoMemory(file, page), r9, bytes.map(f)) {
+    λ k y at_k => {
+        let found = nth_map_of(f, bytes, k, y, at_k);
+        let below: (k < bytes.len()) = nth_some_below(bytes, k, found.witness, found.proof.left);
+        let inside = map_below_page(k, bytes.len(), below, fits);
+        let value: (bitvec_nat::word_of_nat(64, r9.toNat() + k).toNat() = io_page_base() + k) =
+            trans(bitvec_nat::toNat_word_of_nat(64, r9.toNat() + k, j(sym(base), λ v _ => v + k < Nat::pow(2, 64), map_page_word(k, inside))),
+                cong_fn<Nat, Nat>(λ v => v + k, base));
+        trans(read_in_page(file, page, bitvec_nat::word_of_nat(64, r9.toNat() + k), k, inside, value),
+            cong_fn<BitVec(8), Option<BitVec(8)>>(λ x => Some(x), trans(mapped(k, found.witness, found.proof.left, below), sym(found.proof.right))))
+    }
+}
+
+// From the read's return with a chunk: TEST, JZ and JS not taken, the
+// setup, the chunk mapped in place, then the write loop, whose end goes on
+// from the read with `then`.
+theorem map_chunk(f: BitVec(8) → BitVec(8), code: StructuredCode, keeps: Gpr → Type, piece: MapPiece(f, code, keeps), kept: MapKeeps(keeps),
+    jumps: MapJumps, pj: PrintJumps,
+    loop_target: near_branch_target(eof_rip(map_at_jnz(code)), 6, jumps.ld) = eof_rip(map_at_load()),
+    targets: WriteLoopTargets(map_at_write(code), map_at_read(), pj),
+    file: List<BitVec(8)>, pieces: (page: Nat → BitVec(8)) → MapPieces(IoMemory(file, page), code, jumps, pj),
+    page: Nat → BitVec(8), bytes: List<BitVec(8)>, some: 0 < bytes.len(), fits: bytes.len() <= 4096,
+    returned: MachineState<IoMemory>, memory_is: returned.memory = io_store_offset(IoMemory(file, page), 0, bytes),
+    rip_is: returned.rip = eof_rip(map_at_test()),
+    length_word: read_gpr(Rax, returned.gprs) = bitvec_nat::word_of_nat(64, bytes.len()),
+    after: List<LinuxEvent>, then: (next: Nat → BitVec(8)) → WriteThen(IoMemory(file, next), map_at_read(), after),
+    ending: WriteEnding, ending_ok: WriteEndingOk(ending), writes: List<WriteStep>, writes_ok: WriteSteps(writes, bytes.map(f))):
+    LinuxRuns(io_linux(), write_events_then(bytes.map(f), writes, ending, after), returned) {
+    let fetch = io_fetch_access();
+    let data = io_data_access();
+    let entry: BitVec(64) = BitVec::ofNat(0x4000e8);
+    let n = bytes.len();
+    let stored = io_store_offset(IoMemory(file, page), 0, bytes);
+    let there = pieces(stored.page);
+    let entered = eof_enter(file, page, jumps.ed, jumps.sd, map_at_test(), bytes, some, fits, returned, memory_is, rip_is, length_word,
+        there.test_at, there.jz_at, there.js_at);
+    let going = execute_near_control(JumpSignNear(jumps.sd), execute_near_control(JumpZeroNear(jumps.ed), execute_block_normal(eof_test_block(), returned)));
+    let set = block_fetched(fetch, data, map_setup_block(), going, trivial,
+        resident_state(fetch, canonical_block_bytes(map_setup_block()), stored, eof_rip(map_at_setup()), going,
+            entered.right.left, entered.right.right, there.setup_at));
+    let ready = execute_block_normal(map_setup_block(), going);
+    let ready_memory: (ready.memory = IoMemory(file, stored.page)) = trans(pure_block_memory(map_setup_block(), going), entered.right.left);
+    let ready_rip: (ready.rip = eof_rip(map_at_load())) =
+        trans(set.right, rip_advance(entry, going.rip, map_at_setup(), map_setup_len(), entered.right.right));
+    let counted: (read_gpr(Rax, going.gprs).toNat() = n) =
+        trans(cong_fn<BitVec(64), Nat>(λ v => v.toNat(), length_word), bitvec_nat::toNat_word_of_nat(64, n, count_below_word(n, fits)));
+    let page_value: (BitVec::ofNat(0x410000, n := 64).toNat() = io_page_base()) = BitVec::toNat_ofNat(64, 0x410000, trivial);
+    let head: MapAt(f, file, bytes, 0, map_at_load(), ready) = MapAt(
+        page := stored.page,
+        memory_is := ready_memory,
+        rip_is := ready_rip,
+        mapped := λ j b _ past => false_elim(past),
+        left := λ j b at_j _ => stored_page_at(IoMemory(file, page), bytes, j, b, at_j),
+        cursor := page_value,
+        count := counted,
+        base := page_value,
+        length := counted,
+        one := refl);
+    have done = map_loop(f, code, keeps, piece, kept, jumps, pj, loop_target, file, bytes, fits, pieces, n -1,
+        0, ready, map_first_count(n, some), head);
+    let last = done.witness;
+    let at = done.proof.right;
+    let sends = map_sends_page(f, file, bytes, fits, at.page, read_gpr(R9, last.gprs), at.base,
+        λ j b at_j below => at.mapped(j, b, at_j, below));
+    let image_len: (bytes.map(f).len() = n) = List::len_map(bytes, f);
+    have runs = wl_from_then(IoMemory(file, at.page), map_at_write(code), pj, map_at_read(), pieces(at.page).write, targets,
+        after, then(at.page), ending, ending_ok, writes,
+        bytes.map(f), writes_ok, last, j(sym(image_len), λ v _ => 0 < v, some), j(sym(image_len), λ v _ => v <= 4096, fits),
+        at.rip_is, at.memory_is, sends, trans(at.length, sym(image_len)),
+        j(sym(image_len), λ v _ => read_gpr(R9, last.gprs).toNat() + v < Nat::pow(2, 64),
+            j(sym(at.base), λ v _ => v + n < Nat::pow(2, 64), map_page_end(n, fits))));
+    linux_runs_after_linux_steps(io_linux(), write_events_then(bytes.map(f), writes, ending, after), returned, last,
+        linux_steps_trans(io_linux(), returned, ready, last,
+            linux_steps_of_fetched(io_linux(), returned, ready, fetched_steps_trans(fetch, data, returned, going, ready, entered.left, set.left)),
+            done.proof.left),
+        runs)
+}
+
+// ---------------------------------------------------------------------------
+// The histories, and what the run sends.
+
+// What the reads and writes return, in order: a chunk and how its writes
+// went, all sent; an EINTR on the read, retried. Then how the run ended: at
+// the empty read, at a failed read, or at a failed write of a last chunk.
+inductive MapStep {
+    Mapped(bytes: List<BitVec(8)>, writes: List<WriteStep>),
+    ReadInterrupted,
+}
+inductive MapEnding {
+    MapAtEnd,
+    MapReadFailed(errno: Nat),
+    MapWriteFailed(bytes: List<BitVec(8)>, writes: List<WriteStep>, errno: Nat),
+}
+
+fn map_end_events() → List<LinuxEvent> { [ReadEvent(BitVec::ofNat(0), ReadBytes(Nil)), ExitEvent(BitVec::ofNat(0))] }
+
+// The trace. A chunk is read, then its image written; once all of it is
+// sent, the next read follows. A failed write exits 1 before anything after
+// it; `map_end_events` stands in that position only as what the write loop
+// would go on to.
+fn map_events(f: BitVec(8) → BitVec(8), steps: List<MapStep>, ending: MapEnding) → List<LinuxEvent> {
+    match steps {
+        Nil => match ending {
+            MapAtEnd => map_end_events(),
+            MapReadFailed(errno) => [ReadEvent(BitVec::ofNat(0), ReadFailed(errno)), ExitEvent(BitVec::ofNat(1))],
+            MapWriteFailed(bytes, writes, errno) => Cons(ReadEvent(BitVec::ofNat(0), ReadBytes(bytes)),
+                write_events_then(bytes.map(f), writes, WriteFailedWith(errno), map_end_events())),
+        },
+        Cons(step, rest) => match step {
+            Mapped(bytes, writes) => Cons(ReadEvent(BitVec::ofNat(0), ReadBytes(bytes)),
+                write_events_then(bytes.map(f), writes, Finished, map_events(f, rest, ending))),
+            ReadInterrupted => Cons(ReadEvent(BitVec::ofNat(0), ReadFailed(eintr())), map_events(f, rest, ending)),
+        },
+    }
+}
+
+// The input: the chunks, in order.
+fn map_input(steps: List<MapStep>) → List<BitVec(8)> {
+    match steps {
+        Nil => Nil,
+        Cons(step, rest) => match step { Mapped(bytes, _) => bytes ++ map_input(rest), ReadInterrupted => map_input(rest) },
+    }
+}
+
+// A chunk is not empty and fits the page, and its writes are short ones.
+fn MapChunk(f: BitVec(8) → BitVec(8), bytes: List<BitVec(8)>, writes: List<WriteStep>) → Type {
+    (0 < bytes.len()) ∧ ((bytes.len() <= read_capacity()) ∧ WriteSteps(writes, bytes.map(f)))
+}
+fn MapSteps(f: BitVec(8) → BitVec(8), steps: List<MapStep>) → Type {
+    match steps {
+        Nil => True,
+        Cons(step, rest) => match step {
+            Mapped(bytes, writes) => MapChunk(f, bytes, writes) ∧ MapSteps(f, rest),
+            ReadInterrupted => MapSteps(f, rest),
+        },
+    }
+}
+// A failure that ends the run is an errno, and not EINTR, which retries.
+fn MapEndingOk(f: BitVec(8) → BitVec(8), ending: MapEnding) → Type {
+    match ending {
+        MapAtEnd => True,
+        MapReadFailed(errno) => Errno(errno) ∧ Not(errno = eintr()),
+        MapWriteFailed(bytes, writes, errno) => MapChunk(f, bytes, writes) ∧ (Errno(errno) ∧ Not(errno = eintr())),
+    }
+}
+
+// On a run that ends at the empty read, stdout received the input's image.
+theorem map_sends(f: BitVec(8) → BitVec(8), steps: List<MapStep>): MapSteps(f, steps) →
+    sent_to(BitVec::ofNat(1), map_events(f, steps, MapAtEnd)) = map_input(steps).map(f) {
+    match steps as λ ss => MapSteps(f, ss) → sent_to(BitVec::ofNat(1), map_events(f, ss, MapAtEnd)) = map_input(ss).map(f) {
+        Nil => λ _ => refl,
+        Cons(step, rest) => match step as λ st => MapSteps(f, Cons(st, rest)) →
+                sent_to(BitVec::ofNat(1), map_events(f, Cons(st, rest), MapAtEnd)) = map_input(Cons(st, rest)).map(f) {
+            Mapped(bytes, writes) => λ ok => trans(stdout_then(writes, map_events(f, rest, MapAtEnd), bytes.map(f), ok.left.right.right),
+                trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ tail => bytes.map(f) ++ tail, map_sends(f, rest, ok.right)),
+                    sym(List::map_append(bytes, map_input(rest), f)))),
+            ReadInterrupted => λ ok => map_sends(f, rest, ok),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The read, and a failed one.
+
+// read(0, page, 4096), asked: the block, then SYSCALL.
+record MapAsked(file: List<BitVec(8)>, page: Nat → BitVec(8), state, asked: MachineState<IoMemory>) {
+    steps: FetchedSteps(io_fetch_access(), io_data_access(), state, asked),
+    memory_is: asked.memory = IoMemory(file, page),
+    rip_is: asked.rip = eof_rip(map_at_call()),
+    call: LinuxSyscallAt(io_linux(), asked),
+}
+theorem map_ask(code: StructuredCode, jumps: MapJumps, pj: PrintJumps, file: List<BitVec(8)>, page: Nat → BitVec(8),
+    pieces: MapPieces(IoMemory(file, page), code, jumps, pj), state: MachineState<IoMemory>,
+    at_read: state.rip = eof_rip(map_at_read()), memory_is: state.memory = IoMemory(file, page)):
+    MapAsked(file, page, state, execute_block_normal(read_entry_block(), state)) {
+    let fetch = io_fetch_access();
+    let data = io_data_access();
+    let entry: BitVec(64) = BitVec::ofNat(0x4000e8);
+    let entered = block_fetched(fetch, data, read_entry_block(), state, trivial,
+        resident_state(fetch, canonical_block_bytes(read_entry_block()), IoMemory(file, page), eof_rip(map_at_read()),
+            state, memory_is, at_read, pieces.entry_at));
+    let asked = execute_block_normal(read_entry_block(), state);
+    let asked_memory: (asked.memory = IoMemory(file, page)) = trans(pure_block_memory(read_entry_block(), state), memory_is);
+    let asked_rip: (asked.rip = eof_rip(map_at_call())) =
+        trans(entered.right, rip_advance(entry, state.rip, map_at_read(), read_entry_len(), at_read));
+    MapAsked(steps := entered.left, memory_is := asked_memory, rip_is := asked_rip,
+        call := FetchedFrom(resident_readable(fetch, asked.memory, linux_syscall_bytes(), asked.rip,
+            resident_state(fetch, linux_syscall_bytes(), IoMemory(file, page), eof_rip(map_at_call()), asked,
+                asked_memory, asked_rip, pieces.call_at))))
+}
+
+// From the read's return with a negated errno in RAX: TEST, JZ not taken, JS
+// taken, the retry test.
+fn MapFailedAt(returned: MachineState<IoMemory>, stored: IoMemory, errno: Nat, at: BitVec(64)) → Type {
+    Exists<MachineState<IoMemory>>(λ fixed => FetchedSteps(io_fetch_access(), io_data_access(), returned, fixed) ∧
+        ((fixed.memory = stored) ∧ ((fixed.rip = at) ∧ (fixed.flags.zf = is_zero_bits(64, errno_word(errno).add(BitVec::ofNat(4)))))))
+}
+
+theorem map_failed(stored: IoMemory, code: StructuredCode, jumps: MapJumps, pj: PrintJumps,
+    pieces: MapPieces(stored, code, jumps, pj),
+    js_target: near_branch_target(eof_rip(map_at_js()), 6, jumps.sd) = eof_rip(map_at_failed(code)),
+    errno: Nat, error: Errno(errno), returned: MachineState<IoMemory>,
+    memory_is: returned.memory = stored, rip_is: returned.rip = eof_rip(map_at_test()),
+    rax: read_gpr(Rax, returned.gprs) = errno_word(errno)):
+    MapFailedAt(returned, stored, errno, eof_rip(map_at_retry(code))) {
+    let fetch = io_fetch_access();
+    let data = io_data_access();
+    let entry: BitVec(64) = BitVec::ofNat(0x4000e8);
+    let w = errno_word(errno);
+    let test = block_fetched(fetch, data, eof_test_block(), returned, trivial,
+        resident_state(fetch, canonical_block_bytes(eof_test_block()), stored, eof_rip(map_at_test()), returned, memory_is, rip_is,
+            pieces.test_at));
+    let tested = execute_block_normal(eof_test_block(), returned);
+    let tested_memory: (tested.memory = stored) = trans(pure_block_memory(eof_test_block(), returned), memory_is);
+    let tested_rip: (tested.rip = eof_rip(map_at_jz())) =
+        trans(test.right, rip_advance(entry, returned.rip, map_at_test(), eof_test_len(), rip_is));
+    let nonzero: (tested.flags.zf = False) =
+        j(sym(rax), λ v _ => is_zero_bits(64, v.band(v)) = False, test_self_nonzero(64, w, errno_nonzero(errno, error)));
+    let negative: (tested.flags.sf = True) =
+        j(sym(rax), λ v _ => v.band(v).sign_bit() = True, test_self_negative(w, errno_negative(errno, error)));
+    let jz = near_fetched_step(fetch, data, JumpZeroNear(jumps.ed), tested,
+        resident_state(fetch, near_control_bytes(JumpZeroNear(jumps.ed)), stored, eof_rip(map_at_jz()), tested, tested_memory, tested_rip,
+            pieces.jz_at));
+    let passed = execute_near_control(JumpZeroNear(jumps.ed), tested);
+    let passed_rip: (passed.rip = eof_rip(map_at_js())) =
+        trans(near_not_taken_rip(jumps.ed, tested, nonzero), rip_advance(entry, tested.rip, map_at_jz(), 6, tested_rip));
+    let js = near_fetched_step(fetch, data, JumpSignNear(jumps.sd), passed,
+        resident_state(fetch, near_control_bytes(JumpSignNear(jumps.sd)), stored, eof_rip(map_at_js()), passed, tested_memory, passed_rip,
+            pieces.js_at));
+    let failing = execute_near_control(JumpSignNear(jumps.sd), passed);
+    let failing_rip: (failing.rip = eof_rip(map_at_failed(code))) =
+        trans(near_sign_taken_rip(jumps.sd, passed, negative),
+            trans(cong_fn<BitVec(64), BitVec(64)>(λ address => near_branch_target(address, 6, jumps.sd), passed_rip), js_target));
+    let retry = block_fetched(fetch, data, eof_retry_block(), failing, trivial,
+        resident_state(fetch, canonical_block_bytes(eof_retry_block()), stored, eof_rip(map_at_failed(code)), failing,
+            tested_memory, failing_rip, pieces.retry_at));
+    let fixed = execute_block_normal(eof_retry_block(), failing);
+    let fixed_memory: (fixed.memory = stored) = trans(pure_block_memory(eof_retry_block(), failing), tested_memory);
+    let fixed_rip: (fixed.rip = eof_rip(map_at_retry(code))) =
+        trans(retry.right, rip_advance(entry, failing.rip, map_at_failed(code), eof_retry_len(), failing_rip));
+    let flag: (fixed.flags.zf = is_zero_bits(64, w.add(BitVec::ofNat(4)))) =
+        cong_fn<BitVec(64), Bool>(λ v => is_zero_bits(64, v.add(BitVec::ofNat(4))), rax);
+    Exists(fixed, ⟨fetched_steps_trans(fetch, data, returned, tested, fixed, test.left,
+            fetched_steps_trans(fetch, data, tested, passed, fixed, fetched_steps_one(fetch, data, tested, passed, jz),
+                fetched_steps_trans(fetch, data, passed, failing, fixed, fetched_steps_one(fetch, data, passed, failing, js), retry.left))),
+        ⟨fixed_memory, ⟨fixed_rip, flag⟩⟩⟩)
+}
+
+// EINTR: back to the read.
+theorem map_retry(stored: IoMemory, code: StructuredCode, jumps: MapJumps, pj: PrintJumps,
+    pieces: MapPieces(stored, code, jumps, pj),
+    retry_target: near_branch_target(eof_rip(map_at_retry(code)), 6, jumps.rd) = eof_rip(map_at_read()),
+    returned: MachineState<IoMemory>, failed: MapFailedAt(returned, stored, eintr(), eof_rip(map_at_retry(code)))):
+    Exists<MachineState<IoMemory>>(λ back => FetchedSteps(io_fetch_access(), io_data_access(), returned, back) ∧
+        ((back.memory = stored) ∧ (back.rip = eof_rip(map_at_read())))) {
+    let fetch = io_fetch_access();
+    let data = io_data_access();
+    let fixed = failed.witness;
+    let set: (fixed.flags.zf = True) = trans(failed.proof.right.right.right, eintr_plus_four());
+    let jz = near_fetched_step(fetch, data, JumpZeroNear(jumps.rd), fixed,
+        resident_state(fetch, near_control_bytes(JumpZeroNear(jumps.rd)), stored, eof_rip(map_at_retry(code)), fixed,
+            failed.proof.right.left, failed.proof.right.right.left, pieces.retry_jz_at));
+    let back = execute_near_control(JumpZeroNear(jumps.rd), fixed);
+    let back_rip: (back.rip = eof_rip(map_at_read())) =
+        trans(near_taken_rip(jumps.rd, fixed, set),
+            trans(cong_fn<BitVec(64), BitVec(64)>(λ address => near_branch_target(address, 6, jumps.rd), failed.proof.right.right.left),
+                retry_target));
+    Exists(back, ⟨fetched_steps_trans(fetch, data, returned, fixed, back, failed.proof.left, fetched_steps_one(fetch, data, fixed, back, jz)),
+        ⟨failed.proof.right.left, back_rip⟩⟩)
+}
+
+// Any other errno: exit(1).
+theorem map_fail_exit(stored: IoMemory, code: StructuredCode, jumps: MapJumps, pj: PrintJumps,
+    pieces: MapPieces(stored, code, jumps, pj),
+    errno: Nat, error: Errno(errno), other: Not(errno = eintr()),
+    returned: MachineState<IoMemory>, failed: MapFailedAt(returned, stored, errno, eof_rip(map_at_retry(code)))):
+    LinuxRuns(io_linux(), [ExitEvent(BitVec::ofNat(1))], returned) {
+    let fetch = io_fetch_access();
+    let data = io_data_access();
+    let entry: BitVec(64) = BitVec::ofNat(0x4000e8);
+    let fixed = failed.witness;
+    let fixed_memory: (fixed.memory = stored) = failed.proof.right.left;
+    let fixed_rip: (fixed.rip = eof_rip(map_at_retry(code))) = failed.proof.right.right.left;
+    let clear: (fixed.flags.zf = False) = trans(failed.proof.right.right.right, other_errno_plus_four(errno, error, other));
+    let jz = near_fetched_step(fetch, data, JumpZeroNear(jumps.rd), fixed,
+        resident_state(fetch, near_control_bytes(JumpZeroNear(jumps.rd)), stored, eof_rip(map_at_retry(code)), fixed,
+            fixed_memory, fixed_rip, pieces.retry_jz_at));
+    let going = execute_near_control(JumpZeroNear(jumps.rd), fixed);
+    let going_rip: (going.rip = eof_rip(map_at_fail(code))) =
+        trans(near_not_taken_rip(jumps.rd, fixed, clear), rip_advance(entry, fixed.rip, map_at_retry(code), 6, fixed_rip));
+    let exiting = block_fetched(fetch, data, eof_fail_block(), going, trivial,
+        resident_state(fetch, canonical_block_bytes(eof_fail_block()), stored, eof_rip(map_at_fail(code)), going,
+            fixed_memory, going_rip, pieces.fail_at));
+    let last = execute_block_normal(eof_fail_block(), going);
+    let last_memory: (last.memory = stored) = trans(pure_block_memory(eof_fail_block(), going), fixed_memory);
+    let last_rip: (last.rip = eof_rip(map_at_fail_call(code))) =
+        trans(exiting.right, rip_advance(entry, going.rip, map_at_fail(code), eof_fail_len(), going_rip));
+    let call: LinuxSyscallAt(io_linux(), last) = FetchedFrom(resident_readable(fetch, last.memory, linux_syscall_bytes(), last.rip,
+        resident_state(fetch, linux_syscall_bytes(), stored, eof_rip(map_at_fail_call(code)), last, last_memory, last_rip,
+            pieces.fail_call_at)));
+    linux_runs_exit(io_linux(), returned, last, BitVec::ofNat(1),
+        fetched_steps_trans(fetch, data, returned, fixed, last, failed.proof.left,
+            fetched_steps_trans(fetch, data, fixed, going, last, fetched_steps_one(fetch, data, fixed, going, jz), exiting.left)),
+        call, refl, refl)
+}
+
+// From the read, at end of file: the empty read, JZ to the write loop's
+// exit(0).
+theorem map_end(code: StructuredCode, jumps: MapJumps, pj: PrintJumps, file: List<BitVec(8)>,
+    pieces: (page: Nat → BitVec(8)) → MapPieces(IoMemory(file, page), code, jumps, pj),
+    exit_target: near_branch_target(eof_rip(map_at_jz()), 6, jumps.ed) = eof_rip(wl_at_exit(map_at_write(code))),
+    page: Nat → BitVec(8)): WriteThen(IoMemory(file, page), map_at_read(), map_end_events()) {
+    λ state at_read memory_is => {
+        let fetch = io_fetch_access();
+        let data = io_data_access();
+        let entry: BitVec(64) = BitVec::ofNat(0x4000e8);
+        let asked = map_ask(code, jumps, pj, file, page, pieces(page), state, at_read, memory_is);
+        let a = execute_block_normal(read_entry_block(), state);
+        let writable: IoWritable(a.memory, read_gpr(Rsi, a.gprs), 0) =
+            ⟨Nat::le_refl(io_page_base()), Nat::add_le_mono_l(io_page_base(), 0, 4096, trivial)⟩;
+        linux_runs_read(io_linux(), state, a, BitVec::ofNat(0), Nil, [ExitEvent(BitVec::ofNat(0))], asked.steps, asked.call,
+            refl, refl, trivial, writable,
+            λ rcx r11 => {
+                let returned = linux_read_return(io_linux(), a, Nil, rcx, r11);
+                let stored = io_store_offset(IoMemory(file, page), 0, Nil);
+                let returned_memory: (returned.memory = stored) =
+                    cong_fn<IoMemory, IoMemory>(λ m => io_store(m, BitVec::ofNat(0x410000), Nil), asked.memory_is);
+                let returned_rip: (returned.rip = eof_rip(map_at_test())) = rip_advance(entry, a.rip, map_at_call(), 2, asked.rip_is);
+                let there = pieces(stored.page);
+                let test = block_fetched(fetch, data, eof_test_block(), returned, trivial,
+                    resident_state(fetch, canonical_block_bytes(eof_test_block()), stored, eof_rip(map_at_test()), returned,
+                        returned_memory, returned_rip, there.test_at));
+                let tested = execute_block_normal(eof_test_block(), returned);
+                let tested_memory: (tested.memory = stored) = trans(pure_block_memory(eof_test_block(), returned), returned_memory);
+                let tested_rip: (tested.rip = eof_rip(map_at_jz())) =
+                    trans(test.right, rip_advance(entry, returned.rip, map_at_test(), eof_test_len(), returned_rip));
+                let set: (tested.flags.zf = True) = test_self_zero(64, bitvec_nat::word_of_nat(64, 0), refl);
+                let jz = near_fetched_step(fetch, data, JumpZeroNear(jumps.ed), tested,
+                    resident_state(fetch, near_control_bytes(JumpZeroNear(jumps.ed)), stored, eof_rip(map_at_jz()), tested,
+                        tested_memory, tested_rip, there.jz_at));
+                let ended = execute_near_control(JumpZeroNear(jumps.ed), tested);
+                let ended_rip: (ended.rip = eof_rip(wl_at_exit(map_at_write(code)))) =
+                    trans(near_taken_rip(jumps.ed, tested, set),
+                        trans(cong_fn<BitVec(64), BitVec(64)>(λ address => near_branch_target(address, 6, jumps.ed), tested_rip), exit_target));
+                linux_runs_after_steps(io_linux(), [ExitEvent(BitVec::ofNat(0))], returned, ended,
+                    fetched_steps_trans(fetch, data, returned, tested, ended, test.left, fetched_steps_one(fetch, data, tested, ended, jz)),
+                    wl_exit(stored, map_at_write(code), pj, there.write, ended, ended_rip, tested_memory))
+            })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The run.
+
+// From the read, the rest of the run, whatever page the last chunk left.
+fn MapFrom(f: BitVec(8) → BitVec(8), file: List<BitVec(8)>, ending: MapEnding, steps: List<MapStep>) → Type {
+    MapSteps(f, steps) → (page: Nat → BitVec(8)) → (state: MachineState<IoMemory>) →
+    state.rip = eof_rip(map_at_read()) → state.memory = IoMemory(file, page) →
+    LinuxRuns(io_linux(), map_events(f, steps, ending), state)
+}
+
+// Where the jumps land.
+record MapTargets(code: StructuredCode, jumps: MapJumps, pj: PrintJumps) {
+    exit: near_branch_target(eof_rip(map_at_jz()), 6, jumps.ed) = eof_rip(wl_at_exit(map_at_write(code))),
+    fail: near_branch_target(eof_rip(map_at_js()), 6, jumps.sd) = eof_rip(map_at_failed(code)),
+    again: near_branch_target(eof_rip(map_at_jnz(code)), 6, jumps.ld) = eof_rip(map_at_load()),
+    retry: near_branch_target(eof_rip(map_at_retry(code)), 6, jumps.rd) = eof_rip(map_at_read()),
+    write: WriteLoopTargets(map_at_write(code), map_at_read(), pj),
+}
+
+// The reads, by recursion on the history: every chunk is read, mapped and
+// written, every EINTR retried; then the empty read exits 0 and a failure
+// exits 1.
+theorem map_from(f: BitVec(8) → BitVec(8), code: StructuredCode, keeps: Gpr → Type, piece: MapPiece(f, code, keeps), kept: MapKeeps(keeps),
+    jumps: MapJumps, pj: PrintJumps, targets: MapTargets(code, jumps, pj), file: List<BitVec(8)>,
+    pieces: (page: Nat → BitVec(8)) → MapPieces(IoMemory(file, page), code, jumps, pj),
+    ending: MapEnding, ending_ok: MapEndingOk(f, ending), steps: List<MapStep>):
+    MapFrom(f, file, ending, steps) {
+    let entry: BitVec(64) = BitVec::ofNat(0x4000e8);
+    match steps as λ ss => MapFrom(f, file, ending, ss) {
+        Nil => λ ok page state at_read memory_is =>
+            (match ending as λ en => MapEndingOk(f, en) → LinuxRuns(io_linux(), map_events(f, Nil, en), state) {
+                MapAtEnd => λ _ => map_end(code, jumps, pj, file, pieces, targets.exit, page, state, at_read, memory_is),
+                MapReadFailed(errno) => λ bad => {
+                    let asked = map_ask(code, jumps, pj, file, page, pieces(page), state, at_read, memory_is);
+                    let a = execute_block_normal(read_entry_block(), state);
+                    let writable: IoWritable(a.memory, read_gpr(Rsi, a.gprs), read_gpr(Rdx, a.gprs).toNat()) =
+                        ⟨Nat::le_refl(io_page_base()), Nat::le_refl(io_page_base() + 4096)⟩;
+                    linux_runs_read_failed(io_linux(), state, a, BitVec::ofNat(0), errno, [ExitEvent(BitVec::ofNat(1))],
+                        linux_steps_of_fetched(io_linux(), state, a, asked.steps), asked.call, refl, refl, bad.left, writable,
+                        λ junk short rcx r11 => {
+                            let returned = linux_read_failed_return(io_linux(), a, errno, junk, rcx, r11);
+                            let stored = io_store_offset(IoMemory(file, page), 0, junk);
+                            let returned_memory: (returned.memory = stored) =
+                                cong_fn<IoMemory, IoMemory>(λ m => io_store(m, BitVec::ofNat(0x410000), junk), asked.memory_is);
+                            let returned_rip: (returned.rip = eof_rip(map_at_test())) = rip_advance(entry, a.rip, map_at_call(), 2, asked.rip_is);
+                            let there = pieces(stored.page);
+                            map_fail_exit(stored, code, jumps, pj, there, errno, bad.left, bad.right, returned,
+                                map_failed(stored, code, jumps, pj, there, targets.fail, errno, bad.left, returned, returned_memory, returned_rip, refl))
+                        })
+                },
+                MapWriteFailed(bytes, writes, errno) => λ bad => {
+                    let asked = map_ask(code, jumps, pj, file, page, pieces(page), state, at_read, memory_is);
+                    let a = execute_block_normal(read_entry_block(), state);
+                    let fits: (bytes.len() <= read_capacity()) = bad.left.right.left;
+                    let writable: IoWritable(a.memory, read_gpr(Rsi, a.gprs), bytes.len()) =
+                        ⟨Nat::le_refl(io_page_base()), Nat::add_le_mono_l(io_page_base(), bytes.len(), 4096, fits)⟩;
+                    let failing: WriteEndingOk(WriteFailedWith(errno)) = bad.right;
+                    linux_runs_read(io_linux(), state, a, BitVec::ofNat(0), bytes,
+                        write_events_then(bytes.map(f), writes, WriteFailedWith(errno), map_end_events()),
+                        asked.steps, asked.call, refl, refl, fits, writable,
+                        λ rcx r11 => {
+                            let returned = linux_read_return(io_linux(), a, bytes, rcx, r11);
+                            let returned_memory: (returned.memory = io_store_offset(IoMemory(file, page), 0, bytes)) =
+                                cong_fn<IoMemory, IoMemory>(λ m => io_store(m, BitVec::ofNat(0x410000), bytes), asked.memory_is);
+                            let returned_rip: (returned.rip = eof_rip(map_at_test())) = rip_advance(entry, a.rip, map_at_call(), 2, asked.rip_is);
+                            map_chunk(f, code, keeps, piece, kept, jumps, pj, targets.again, targets.write, file, pieces, page, bytes,
+                                bad.left.left, fits, returned, returned_memory, returned_rip, refl, map_end_events(),
+                                λ next => map_end(code, jumps, pj, file, pieces, targets.exit, next),
+                                WriteFailedWith(errno), failing, writes, bad.left.right.right)
+                        })
+                },
+            })(ending_ok),
+        Cons(step, rest) => (match step as λ st => MapFrom(f, file, ending, Cons(st, rest)) {
+            Mapped(bytes, writes) => λ ok page state at_read memory_is => {
+                let asked = map_ask(code, jumps, pj, file, page, pieces(page), state, at_read, memory_is);
+                let a = execute_block_normal(read_entry_block(), state);
+                let fits: (bytes.len() <= read_capacity()) = ok.left.right.left;
+                let writable: IoWritable(a.memory, read_gpr(Rsi, a.gprs), bytes.len()) =
+                    ⟨Nat::le_refl(io_page_base()), Nat::add_le_mono_l(io_page_base(), bytes.len(), 4096, fits)⟩;
+                linux_runs_read(io_linux(), state, a, BitVec::ofNat(0), bytes,
+                    write_events_then(bytes.map(f), writes, Finished, map_events(f, rest, ending)),
+                    asked.steps, asked.call, refl, refl, fits, writable,
+                    λ rcx r11 => {
+                        let returned = linux_read_return(io_linux(), a, bytes, rcx, r11);
+                        let returned_memory: (returned.memory = io_store_offset(IoMemory(file, page), 0, bytes)) =
+                            cong_fn<IoMemory, IoMemory>(λ m => io_store(m, BitVec::ofNat(0x410000), bytes), asked.memory_is);
+                        let returned_rip: (returned.rip = eof_rip(map_at_test())) = rip_advance(entry, a.rip, map_at_call(), 2, asked.rip_is);
+                        map_chunk(f, code, keeps, piece, kept, jumps, pj, targets.again, targets.write, file, pieces, page, bytes,
+                            ok.left.left, fits, returned, returned_memory, returned_rip, refl, map_events(f, rest, ending),
+                            λ next next_state next_rip next_memory =>
+                                map_from(f, code, keeps, piece, kept, jumps, pj, targets, file, pieces, ending, ending_ok, rest,
+                                    ok.right, next, next_state, next_rip, next_memory),
+                            Finished, trivial, writes, ok.left.right.right)
+                    })
+            },
+            ReadInterrupted => λ ok page state at_read memory_is => {
+                let asked = map_ask(code, jumps, pj, file, page, pieces(page), state, at_read, memory_is);
+                let a = execute_block_normal(read_entry_block(), state);
+                let writable: IoWritable(a.memory, read_gpr(Rsi, a.gprs), read_gpr(Rdx, a.gprs).toNat()) =
+                    ⟨Nat::le_refl(io_page_base()), Nat::le_refl(io_page_base() + 4096)⟩;
+                let eintr_errno: Errno(eintr()) = ⟨trivial, trivial⟩;
+                linux_runs_read_failed(io_linux(), state, a, BitVec::ofNat(0), eintr(), map_events(f, rest, ending),
+                    linux_steps_of_fetched(io_linux(), state, a, asked.steps), asked.call, refl, refl, eintr_errno, writable,
+                    λ junk short rcx r11 => {
+                        let returned = linux_read_failed_return(io_linux(), a, eintr(), junk, rcx, r11);
+                        let stored = io_store_offset(IoMemory(file, page), 0, junk);
+                        let returned_memory: (returned.memory = stored) =
+                            cong_fn<IoMemory, IoMemory>(λ m => io_store(m, BitVec::ofNat(0x410000), junk), asked.memory_is);
+                        let returned_rip: (returned.rip = eof_rip(map_at_test())) = rip_advance(entry, a.rip, map_at_call(), 2, asked.rip_is);
+                        let there = pieces(stored.page);
+                        have back = map_retry(stored, code, jumps, pj, there, targets.retry, returned,
+                            map_failed(stored, code, jumps, pj, there, targets.fail, eintr(), eintr_errno, returned, returned_memory, returned_rip, refl));
+                        linux_runs_after_steps(io_linux(), map_events(f, rest, ending), returned, back.witness, back.proof.left,
+                            map_from(f, code, keeps, piece, kept, jumps, pj, targets, file, pieces, ending, ending_ok, rest,
+                                ok, stored.page, back.witness, back.proof.right.right, back.proof.right.left))
+                    })
+            },
+        }),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The jumps' targets, from a closed fact about each displacement that the
+// producer proves at the written bytes.
+
+// What JZ skips at end of file: the JS, the chunk's loop, and the write loop
+// up to its exit(0).
+fn map_exit_skip(code: StructuredCode) → Nat {
+    ((((((((((((((((6 + map_setup_len()) + map_load_len()) + structured_bytes(code).len()) + 3) + map_step_len()) + 6) + print_write_len()) + 2) + eof_test_len()) + 6) + print_advance_len()) + 6) + 5) + eof_retry_len()) + 6) + eof_fail_len()) + 2
+}
+// What JS skips on a failed read: the chunk's setup and loop and the whole
+// write loop.
+fn map_fail_skip(code: StructuredCode) → Nat {
+    (((((((((((((((((map_setup_len() + map_load_len()) + structured_bytes(code).len()) + 3) + map_step_len()) + 6) + print_write_len()) + 2) + eof_test_len()) + 6) + print_advance_len()) + 6) + 5) + eof_retry_len()) + 6) + eof_fail_len()) + 2) + print_exit_len()) + 2
+}
+// From the load to the JNZ.
+fn map_loop_span(code: StructuredCode) → Nat { ((map_load_len() + structured_bytes(code).len()) + 3) + map_step_len() }
+
+theorem map_exit_sum(z, su, ld, p, st, w, t, a, r, f: Nat):
+    z + (6 + (((((((((((((((((6 + su) + ld) + p) + 3) + st) + 6) + w) + 2) + t) + 6) + a) + 6) + 5) + r) + 6) + f) + 2)) =
+        ((((((((((((((((((z + 6) + 6) + su) + ld) + p) + 3) + st) + 6) + w) + 2) + t) + 6) + a) + 6) + 5) + r) + 6) + f) + 2 { omega }
+theorem map_fail_sum(y, su, ld, p, st, w, t, a, r, f, x: Nat):
+    y + (6 + ((((((((((((((((((su + ld) + p) + 3) + st) + 6) + w) + 2) + t) + 6) + a) + 6) + 5) + r) + 6) + f) + 2) + x) + 2)) =
+        (((((((((((((((((((y + 6) + su) + ld) + p) + 3) + st) + 6) + w) + 2) + t) + 6) + a) + 6) + 5) + r) + 6) + f) + 2) + x) + 2 { omega }
+theorem map_loop_sum(l, ld, p, st: Nat): l + (((ld + p) + 3) + st) = (((l + ld) + p) + 3) + st { omega }
+
+theorem map_exit_target(code: StructuredCode, ed: BitVec(32), reads: ed.sign_extend(32).toNat() = map_exit_skip(code)):
+    near_branch_target(eof_rip(map_at_jz()), 6, ed) = eof_rip(wl_at_exit(map_at_write(code))) {
+    let entry: BitVec(64) = BitVec::ofNat(0x4000e8);
+    let skip = map_exit_skip(code);
+    let lands: (map_at_jz() + (6 + skip) = wl_at_exit(map_at_write(code))) =
+        map_exit_sum(map_at_jz(), map_setup_len(), map_load_len(), structured_bytes(code).len(), map_step_len(),
+            print_write_len(), eof_test_len(), print_advance_len(), eof_retry_len(), eof_fail_len());
+    trans(near_branch_forward(eof_rip(map_at_jz()), 6, skip, ed, reads),
+        trans(rip_compose(entry, map_at_jz(), 6 + skip), rip_count(entry, lands)))
+}
+
+theorem map_fail_target(code: StructuredCode, sd: BitVec(32), reads: sd.sign_extend(32).toNat() = map_fail_skip(code)):
+    near_branch_target(eof_rip(map_at_js()), 6, sd) = eof_rip(map_at_failed(code)) {
+    let entry: BitVec(64) = BitVec::ofNat(0x4000e8);
+    let skip = map_fail_skip(code);
+    let lands: (map_at_js() + (6 + skip) = map_at_failed(code)) =
+        map_fail_sum(map_at_js(), map_setup_len(), map_load_len(), structured_bytes(code).len(), map_step_len(),
+            print_write_len(), eof_test_len(), print_advance_len(), eof_retry_len(), eof_fail_len(), print_exit_len());
+    trans(near_branch_forward(eof_rip(map_at_js()), 6, skip, sd, reads),
+        trans(rip_compose(entry, map_at_js(), 6 + skip), rip_count(entry, lands)))
+}
+
+// The JNZ returns to the load: its displacement completes the span to 2^64.
+theorem map_again_target(code: StructuredCode, ld: BitVec(32),
+    closes: map_loop_span(code) + 6 + ld.sign_extend(32).toNat() = Nat::pow(2, 64)):
+    near_branch_target(eof_rip(map_at_jnz(code)), 6, ld) = eof_rip(map_at_load()) {
+    let entry: BitVec(64) = BitVec::ofNat(0x4000e8);
+    let at_jnz: (eof_rip(map_at_jnz(code)) = next_rip(eof_rip(map_at_load()), map_loop_span(code))) =
+        trans(rip_count(entry, sym(map_loop_sum(map_at_load(), map_load_len(), structured_bytes(code).len(), map_step_len()))),
+            sym(rip_compose(entry, map_at_load(), map_loop_span(code))));
+    trans(cong_fn<BitVec(64), BitVec(64)>(λ address => near_branch_target(address, 6, ld), at_jnz),
+        near_branch_returns(eof_rip(map_at_load()), map_loop_span(code), 6, ld, closes))
+}
+
+// The retry's JZ and the write loop's all-sent JZ return to the read, at the
+// entry.
+theorem map_to_read_target(offset: Nat, displacement: BitVec(32),
+    closes: offset + 6 + displacement.sign_extend(32).toNat() = Nat::pow(2, 64)):
+    near_branch_target(eof_rip(offset), 6, displacement) = eof_rip(map_at_read()) {
+    near_branch_returns(BitVec::ofNat(0x4000e8), offset, 6, displacement, closes)
+}
+
+// The process claim: for every history of reads and writes (chunks and
+// EINTRs, each chunk's short writes and EINTRs), ending at the empty read or
+// at a failed read or write, the file has a run that reads each chunk and
+// writes its image under `f`, then exits 0, or 1 at the failure. What
+// stdout received on a run that ends well is `map_sends`'s.
+theorem read_map_runs(file: List<BitVec(8)>, f: BitVec(8) → BitVec(8), code: StructuredCode, keeps: Gpr → Type,
+    piece: MapPiece(f, code, keeps), kept: MapKeeps(keeps), jumps: MapJumps, pj: PrintJumps,
+    exit_reads: jumps.ed.sign_extend(32).toNat() = map_exit_skip(code),
+    fail_reads: jumps.sd.sign_extend(32).toNat() = map_fail_skip(code),
+    again_closes: map_loop_span(code) + 6 + jumps.ld.sign_extend(32).toNat() = Nat::pow(2, 64),
+    retry_closes: map_at_retry(code) + 6 + jumps.rd.sign_extend(32).toNat() = Nat::pow(2, 64),
+    write_fail_reads: pj.sd.sign_extend(32).toNat() = print_fail_skip(),
+    write_read_closes: wl_at_wjz(map_at_write(code)) + 6 + pj.zd.sign_extend(32).toNat() = Nat::pow(2, 64),
+    write_back_closes: print_loop_span() + 5 + pj.bd.sign_extend(32).toNat() = Nat::pow(2, 64),
+    write_retry_closes: print_retry_span() + 6 + pj.rd.sign_extend(32).toNat() = Nat::pow(2, 64),
+    resident: (page: Nat → BitVec(8)) → CodeResident(io_fetch_access(), IoMemory(file, page), map_code(code, jumps, pj), BitVec::ofNat(0x4000e8)),
+    steps: List<MapStep>, ok: MapSteps(f, steps), ending: MapEnding, ending_ok: MapEndingOk(f, ending),
+    page: Nat → BitVec(8), gprs: Gprs, flags: Flags):
+    LinuxRuns(io_linux(), map_events(f, steps, ending), io_initial(file, page, gprs, flags)) {
+    let targets: MapTargets(code, jumps, pj) = MapTargets(
+        exit := map_exit_target(code, jumps.ed, exit_reads),
+        fail := map_fail_target(code, jumps.sd, fail_reads),
+        again := map_again_target(code, jumps.ld, again_closes),
+        retry := map_to_read_target(map_at_retry(code), jumps.rd, retry_closes),
+        write := write_targets_to(map_at_write(code), map_at_read(), pj, write_fail_reads,
+            map_to_read_target(wl_at_wjz(map_at_write(code)), pj.zd, write_read_closes), write_back_closes, write_retry_closes));
+    map_from(f, code, keeps, piece, kept, jumps, pj, targets, file,
+        λ page => map_pieces(IoMemory(file, page), code, jumps, pj, resident(page)), ending, ending_ok, steps,
+        ok, page, io_initial(file, page, gprs, flags), refl, refl)
+}
