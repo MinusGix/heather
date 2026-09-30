@@ -1,6 +1,6 @@
 # A tighter structured x86 lowering — design
 
-Status: **draft 2026-09-29, decisions open (§6).** Owner:
+Status: **decisions taken 2026-09-29 (§6, all as recommended); probes V2–V5 done 2026-09-29 (§7.1). Slice F next.** Owner:
 `issues/structured-lowering-code-size.md`. Also lands
 `issues/function-ir-x86-fused-compare-branch.md`. Builds on
 `docs/native-wc-design.md` §4.5 (near conditionals) and §5.1 (the measurement
@@ -63,13 +63,13 @@ Each shape has one cause, and each cause is one lowering capability:
 
 | capability | what it removes | `field_low` bytes saved (estimate) |
 |---|---|---|
-| **F** branch on the comparison's flags | the materialised bit (21 → 2 a step), and the threshold's re-materialisation it causes | ~540 |
+| **F** branch on the comparison's flags | the materialised bit (21 → 2 a step) | ~380 |
+| **F′** a constant the comparison loaded stays live into the arm (V5) | the threshold's second `movabs` in a place's false arm | ~160 |
 | **P** a result may take a dead input's register; a passthrough arm is empty | the arms' copy-in/copy-out, the copy arm, its `jmp`; a doubling 9 → 3 | ~630 |
 | **I** short immediates and a zero | a small weight 13 → 4 or 7; `movabs r, 0` → nothing or `xor` | ~150 |
 
 Together they bring `field_low` to about 600 bytes and `field_high` to about
-800, which is 3–3.5× smaller. F's estimate counts the threshold's
-re-materialisation as F's to remove, and V5 checks that. Instruction count falls by about the same factor.
+800, which is 3–3.5× smaller. Instruction count falls by about the same factor.
 
 **Certificate cost follows the instruction count.** `generate_selected` emits
 per instruction a spine definition, a state, an `_execute_from_i` theorem, a
@@ -108,11 +108,16 @@ AF. The step-form decoder gains two byte ranges, not sixteen cases:
 `decode_plain_form` for `0x70–0x7F` and `decode_two_byte_form` for
 `0x80–0x8F`.
 
-`JumpZero`, `JumpZeroNear` and `JumpSignNear` become `JumpIf(E, _)`,
-`JumpIfNear(E, _)` and `JumpIfNear(S, _)`. They must be migrated rather than
-kept beside the family: the step decoder has to read byte `0x74` as exactly
-one form. The migration is about 150 lines in 15 files (library, generators,
-tests). §6 Q1 asks whether it goes in this round.
+`JumpZero`, `JumpZeroNear` and `JumpSignNear` stop being constructors and
+become functions: `JumpZeroNear(d) = JumpIfNear(E, d)`, and likewise for the
+other two. They can't stay beside the family as constructors, because the
+step decoder has to read byte `0x74` as exactly one form. Clients only ever
+*construct* these forms (no `match` outside `x86_64_block`), so the functions
+keep every client library and generated certificate textually unchanged. V3
+shows the family is definitionally the old forms, so their proofs re-check.
+The edits fall in the control layer: `x86_64_block`, `x86_64_step_forms`,
+`x86_64_fetched_code`, `x86_64_structured_block`, `x86_64_access_code`, and
+the Rust encoder.
 
 ### 2.2 The fused branch in `StructuredCode`
 
@@ -227,7 +232,7 @@ simplification with its own certificate story, filed separately if wanted.
   (`docs/native-wc-design.md` §8 Q4's other alternative).
 - **Constant folding** (`x + 0`, `x | 0`) in the DAG.
 
-## 6. Decisions for the user
+## 6. Decisions (2026-09-29, with the user: each as recommended)
 
 1. **Migrate `JumpZero`/`JumpZeroNear`/`JumpSignNear` into the family in this
    round?** *Recommended: yes, as slice F's first commit.* The decoder cannot
@@ -240,7 +245,7 @@ simplification with its own certificate story, filed separately if wanted.
 3. **A copy: `xor` + `or` (6 bytes, no IR change) or a FunctionIR `Move` node
    (3 bytes, `lib/function_ir.hthr` and its consumers)?** *Recommended: `xor`
    now.* After P, copies are rare in these words.
-4. **Order.** *Recommended: F, then P, then I.* F lands the family and removes
+4. **Order.** *Recommended: F, then P, then I* (F′ after F, V5). F lands the family and removes
    the most per step. P's empty arms need F's negated jumps (§2.3). I is
    mechanical and independent, and could run in parallel on its own branch.
 5. **Does the round take on shifts (§5)?** *Recommended: no.* After P a
@@ -260,6 +265,72 @@ simplification with its own certificate story, filed separately if wanted.
 - **V5**: why the place's false arm re-materialises the threshold: only
   `mov rax, rcx` clobbering RAX, or does an arm re-emit its `Const` nodes
   anyway? If the latter, a constant port carried into an arm is part of F.
+
+### 7.1 Results (2026-09-29)
+
+Each probe was checked with the release CLI under the usual caps. The two
+library probes each had a mutated control that the kernel refused
+(`NotConvertible`).
+
+**V2 holds.** With `condition_holds` written out from the manual's table,
+`condition_holds(B, sub_flags(l, r)) = l.unsigned_lt_bit(r)`,
+`condition_holds(L, sub_flags(l, r)) = l.signed_lt_bit(r)` and
+`condition_holds(AE, …) = !l.unsigned_lt_bit(r)` are all `refl` at open
+`l, r`. `sub_flags` states CF as `borrow_sub_bit`, SF as the difference's
+sign bit and OF as `signed_overflow_sub`, which are the library's
+definitions. `negate_holds` (`condition_holds(negate(cc), f) =
+!condition_holds(cc, f)`) is sixteen cases: each is `refl` or `sym(not_not)`.
+
+**V3 holds, and the migration is smaller than feared.** Defined beside the
+old forms, the family is definitionally the old forms at E and S. Short and
+near bytes, and short and near RIP (`JumpIf(E, d)` against `JumpZero(d)`,
+`JumpIfNear(S, d)` against `JumpSignNear(d)`), are all `refl` at an open
+state and displacement. A sixteen-entry opcode table (`short_cc`, one
+`eq_dec` per code, literal bytes and no arithmetic) reads back every code by
+`refl` (`short_cc_complete`). The fused test after CMP
+(`JumpIf(AE, d)` falls through exactly when `l.unsigned_lt_bit(r)`) is one
+`cong_fn` from the flags equation. Clients never match on the old
+constructors, so keeping the old names as functions leaves them unchanged
+(§2.1).
+
+**V4: feasible, with no new lemma kind.** From the code, not a prototype:
+
+- Every region is selected under a contract that its inputs and its
+  temporaries are disjoint and its outputs are temporaries
+  (`select_here`, structured.rs:88–101; `lower_dag`, 2698). A `Compose`
+  places each prefix output in a fresh free temporary (structured.rs:111–118).
+  That is the doubling chain's ping-pong between R8 and R9, and it is a
+  selector rule, not a proof obligation.
+- The certificate derives `_Protected(r)` from the region's clobbered set,
+  and the composition proofs ask only for the preservation of values the
+  continuation reads (structured_cert.rs:406, 523, 579). Clobbering a dead
+  input is therefore already expressible, and a wrong one is refused
+  (`false_elim(protected)`).
+- Inside a DAG, an input read at a later step is justified by conversion
+  seeing through the writes to other registers
+  (`placement_at_state`, function_ir_x86_lower.rs:3925). An input overwritten
+  at or after its last read keeps every such proof valid, because its last
+  read is at the state before the overwriting step.
+
+P is therefore a selector change. `select` gains the set of input registers
+the parent does not need afterwards (*consumable*). A `Compose` prefix
+output, a `lower_dag` destination (the left operand's register, for a
+two-operand `add`/`sub`) and a `Conditional`'s join may take a consumable
+input's register at or after its last use. The root's consumable set is
+empty unless the caller says otherwise; the field words keep R11, so they
+start with one `mov`.
+
+**V5: the arms re-emit their constants.** A constant argument to a helper
+(`place(state, threshold, weight)`) is not passed as a port. The reflector
+propagates it into the body as a known constant (`known`,
+function_ir_source/structured.rs:537), so every region that uses `threshold`
+builds its own `Const` node and loads its own `movabs`. F alone does not
+remove the second load. **F′**: when a `Conditional`'s prefix loads a
+constant that an arm needs again, the arm takes it as an argument port bound
+to the prefix's register instead of a `Const` node of its own. The
+source-value machinery already carries `SourceValue::Constant` for crossings.
+F′ is a region rewrite before selection, lands after F, and is worth about
+10 bytes a place.
 
 ## 8. Acceptance
 
