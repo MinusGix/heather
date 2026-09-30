@@ -5,8 +5,10 @@ Status: **paper argument, 2026-09-30**. §3 and the two counterexamples of
 closed under the global context). §4 is argued, and was self-reviewed
 against the Coq formalization's rules the same day (§4.4). Once the
 formalization had `Id` (its M11), `UIP₀` was stated there and the model's
-`Id` was checked rule by rule against it (§4.5, §5.1). It has not been
-independently reviewed.
+`Id` was checked rule by rule against it (§4.5, §5.1). The model's `J`,
+in the formalization's Paulin-Mohring form, is **mechanized**
+(`../Lean/delam/probes/NoUipJ.v`). It has not been independently
+reviewed.
 Owed by `docs/iwf-former-design.md` §12.3 before that rule set freezes.
 The rule set in question is the revised one: `docs/sprop-design.md` with
 its 2026-09-30 revision (no `transp`, no strip), plus `IWf`/`DVec`.
@@ -508,6 +510,18 @@ each is checked against §2's clause.
   an equation because the `Id` fibres are discrete. They then agree in
   `Γ.A.Id` too, whose last component is an equation. So `J(α)` is
   `c(α)` transported by `M`'s functoriality.
+
+  **Mechanized** in `../Lean/delam/probes/NoUipJ.v`, closed under the
+  global context:
+  - `IdF` is `Id(a↑; var 0)` as a split family over `Γ.A`;
+  - `reflS` is `refl`;
+  - `J` is a section of `M[u/y, e/p]`, with both functor laws;
+  - `square` is the equation above;
+  - `J_beta_ob` and `J_beta_hom` are β on the nose.
+
+  The groupoids there have sets of objects and morphisms, as here. The
+  comprehensions are used only as category data. Stability of `J` under
+  substitution is not mechanized; it holds because `J` is pointwise.
 - **`eqtm_J_beta`** (D, M). At `u = a` and `e = refl`, the morphism is the
   identity, and `M(id) = id` strictly because families are split. So
   `J = c` on the nose.
@@ -604,7 +618,7 @@ its identities are isomorphisms of groupoids, not equivalences.
 
 | piece | status |
 |---|---|
-| Π, Σ, `Id`, universe of sets, strict η and J | Hofmann–Streicher 1998 |
+| Π, Σ, `Id`, universe of sets, strict η and J | Hofmann–Streicher 1998; `Id` and Paulin-Mohring `J` with strict β **mechanized** (`NoUipJ.v`), except stability under substitution |
 | `Ty (l+1)` as groupoids with isomorphisms, hierarchy by inaccessibles | routine extension, stated in §2 |
 | `Unit`/`Empty`/`+`/`Nat`, `Vec`/`Fin`/`DVec` | routine: pointwise, and by recursion on discrete ℕ |
 | `Wf`/`IWf` (finitary), `W` | initial algebras: ω-colimit for the finitary ones, accessibility for `W` |
