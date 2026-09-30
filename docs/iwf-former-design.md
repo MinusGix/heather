@@ -400,18 +400,21 @@ Decided 2026-09-30:
    was written against the restricted index types.
 2. **Mutual families.** They come as one family indexed by `Σ(tag). I_tag`,
    as for tier 0. Unexamined.
-3. **No-UIP, checked.** The claim in §7 rests on the absence of the known
-   derivation and on Coq/Agda precedent. A model argument (families
-   without K, strict propositions interpreted as the trivial fibrations) is
-   owed before the rule set freezes.
+3. ~~**No-UIP, checked.**~~ Paper argument done, 2026-09-30:
+   `docs/no-uip-model.md`. The model is the groupoid model, with `Ty 0` as
+   sets and bijections. The strict propositions are unions of connected
+   components of the context, proved there. DeLaM's globals and `□` are
+   interpreted in stages, argued rather than checked. `UIP₀` at `Ty 0` is
+   empty. The same model validates `transp` at strict motives and refutes
+   a relevant `transp`. Review of §4 of that document is still owed.
 4. **Migration of existing 2b declarations.** The acceptance suites
    (`indexed_route_2b*.rs`) re-run against the new lowering. Their
    form-B negatives should flip to positives.
 
 ## 13. Sequencing
 
-1. This document reviewed and the rule set frozen (§12.3's model argument
-   first).
+1. This document reviewed and the rule set frozen (with
+   `docs/no-uip-model.md` reviewed alongside).
 2. `DVec` lands, with `dnth`'s materialization and the neutral-tuple
    projection test.
 3. `IWf`/`sup_i`/`elim_IWf`, with β on open data at a computed index as

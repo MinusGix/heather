@@ -10,6 +10,7 @@
 > `sEq` then has no eliminator. §4–§5's `transp`, β and strip text below
 > is historical from here on. Re-adding `transp` at strict motives only
 > (`sEq`, `sEmpty`) stays possible: it is UIP-free and needs no strip.
+> The model argument for no-UIP is in `docs/no-uip-model.md`.
 
 Status: **reviewed 2026-07-28, rule set frozen** (§8 steps 1–2 done; no
 kernel code yet). The ch. 07 sketch is part III of
