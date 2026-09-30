@@ -106,3 +106,33 @@ fn fused_compare_certificates_check_and_refuse_another_test() {
         }
     }
 }
+
+// The false arm takes away the constant the fused comparison loaded, from
+// the comparison's register (docs/structured-lowering-code-size-design.md
+// §7.1, V5): the certificate checks, loads the constant once, and an arm
+// claiming to take away another value is refused.
+#[test]
+fn a_carried_constant_certifies_and_another_value_is_refused() {
+    use heather_elab::function_ir_source::generate_elaborated_structured_x86;
+    use heather_elab::function_ir_x86_lower::Gpr;
+    let mut elab = common::base_image(common::MODULES.len());
+    let model = include_str!("../../../lib/std/arch/x86_64/x86_64_structured_block.hthr");
+    elab.elab_module_source("x86_64_structured_block", model).unwrap_or_else(|e| panic!("{}", e.render(model)));
+    let source = include_str!("../../../examples/x86-native/branches.hthr");
+    elab.elab_module_source("branches", source).unwrap_or_else(|e| panic!("{}", e.render(source)));
+    let scratch = [Gpr::Rax, Gpr::Rcx, Gpr::Rdx, Gpr::R8];
+    let emission = generate_elaborated_structured_x86(&elab, "take_threshold", "branches::take_threshold", [Gpr::Rdi, Gpr::Rsi], &scratch, Gpr::Rax)
+        .unwrap_or_else(|e| panic!("take_threshold: {e:?}"));
+    let text = format!("import x86_64_structured_block; import function_ir; import function_ir_x86_support; import x86_64; import x86_64_block; import bitvec; import bool; import list; import logic; import nat;\n{}", emission.text);
+    // Each block's instruction list spells a load on a line of its own.
+    let loads = text.lines().filter(|line| line.trim_start().starts_with("MovRI(") && line.ends_with("ofNat(64, 4294967296)),")).count();
+    assert_eq!(loads, 1, "the threshold is loaded once");
+    elab.semantic_image().elaborator().elab_module_source("take_threshold_certificate", &text).unwrap_or_else(|e| panic!("{}", e.render(&text)));
+    let claim = "@bitvec::BitVec::sub(width, values(width, 0), take_threshold_prefix_value(values, width))";
+    assert!(text.contains(claim), "the false arm should take away the carried constant");
+    let mutant = text.replacen(claim, "@bitvec::BitVec::sub(width, values(width, 0), values(width, 1))", 1);
+    let error = elab.semantic_image().elaborator().elab_module_source("take_threshold_another_value", &mutant)
+        .expect_err("an arm taking away another value must be refused");
+    let message = error.render(&mutant);
+    assert!(!message.contains("unknown") && !message.contains("not in scope") && !message.contains("unbound"), "failed on a name: {message}");
+}

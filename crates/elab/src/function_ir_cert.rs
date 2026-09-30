@@ -589,6 +589,19 @@ impl Node {
             }
         }
     }
+
+    /// The node reading `to` wherever it read `from`.
+    pub(crate) fn renamed(mut self, from: u64, to: u64) -> Node {
+        let rename = |id: &mut u64| if *id == from { *id = to };
+        match &mut self {
+            Node::Const { .. } => {}
+            Node::ShiftLeft { value, .. } | Node::LogicalShiftRight { value, .. } | Node::ArithmeticShiftRight { value, .. } => rename(value),
+            Node::Add { left, right, .. } | Node::Sub { left, right, .. } | Node::BitAnd { left, right, .. }
+            | Node::BitOr { left, right, .. } | Node::BitXor { left, right, .. }
+            | Node::UnsignedLessThan { left, right, .. } | Node::SignedLessThan { left, right, .. } => { rename(left); rename(right); }
+        }
+        self
+    }
 }
 
 #[derive(Debug)]

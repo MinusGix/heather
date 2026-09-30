@@ -1,6 +1,6 @@
 # A tighter structured x86 lowering — design
 
-Status: **decisions taken 2026-09-29 (§6, all as recommended); probes V2–V5 done 2026-09-29 (§7.1); slice F landed 2026-09-30 (§2.4). F′ next, then P, then I.** Owner:
+Status: **decisions taken 2026-09-29 (§6, all as recommended); probes V2–V5 done 2026-09-29 (§7.1); slice F landed 2026-09-30 (§2.4), F′ the same day (§2.5). P next, then I.** Owner:
 `issues/structured-lowering-code-size.md`. Also lands
 `issues/function-ir-x86-fused-compare-branch.md`. Builds on
 `docs/native-wc-design.md` §4.5 (near conditionals) and §5.1 (the measurement
@@ -198,6 +198,35 @@ reflector reads no signed condition from source yet ("Boolean values require
 an input, constant, or `unsigned_lt_bit`"), so the signed fused path is
 covered by hand-built regions only.
 
+### 2.5 F′ as landed (2026-09-30)
+
+The reflector rewrites the region where it builds a conditional
+(`share_compared_constant`, beside `fusable` in the x86 lowering), so the
+selector, the certificate and the source expansion all see the same region.
+The rewrite applies when the prefix is fusable, its computed operand is a
+lone `Const`, both arms are dataflow, and an arm loads the same constant again
+for a node to read. The prefix then outputs the constant's port as well as
+the bit, the conditional passes the port to both arms, and the arm's own
+`Const` is dropped, with its readers renamed to the port. `fusable` accepts
+the computed operand as a second prefix output. The fused plan already
+carried that operand's register into the branch, so selection and the
+certificate needed no change: the arm's placement fact for the port is the
+one the operand DAG proves. A constant an arm returns as it is stays that
+arm's own load, since a dataflow output cannot be an input.
+
+`field_low` 1,534 → 1,374 bytes (345 → 329 instructions) and `field_high`
+2,225 → 1,945 (484 → 456): one `movabs` fewer a place, and `sub r, r10` in
+place of `movabs rax, t ; sub r, rax`.
+
+Tests: `take_threshold` (`a < 2^32 ? a + b : a - 2^32 + b`). Its reflected
+false arm reads the prefix's port and loads nothing, the plan interpreter
+agrees at the edges, and the source expansion checks. With the arm reading
+`b` there instead, the expansion is refused. Its certificate checks, loads
+the constant once, and refuses a false arm claiming to take away `b`. It
+also runs natively in `native_branches` against C. A unit test pins where
+the rewrite does not apply: another constant, an arm that returns the
+constant, and a narrow comparison.
+
 ## 3. P: results in place
 
 `lower_dag` refuses to let a temporary coincide with an input
@@ -369,7 +398,7 @@ constant that an arm needs again, the arm takes it as an argument port bound
 to the prefix's register instead of a `Const` node of its own. The
 source-value machinery already carries `SourceValue::Constant` for crossings.
 F′ is a region rewrite before selection, lands after F, and is worth about
-10 bytes a place.
+10 bytes a place (landed as §2.5).
 
 ## 8. Acceptance
 

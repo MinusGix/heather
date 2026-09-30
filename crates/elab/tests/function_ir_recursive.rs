@@ -34,6 +34,12 @@ fn unsigned_threshold(a, b: BitVec(64)) → BitVec(64) {
         False => @bitvec::BitVec::sub(64, a, b), True => @bitvec::BitVec::add(64, a, b),
     }
 }
+fn take_threshold(a, b: BitVec(64)) → BitVec(64) {
+    match @bitvec::BitVec::unsigned_lt_bit(64, a, @bitvec::BitVec::ofNat(64, 4294967296)) {
+        False => @bitvec::BitVec::add(64, @bitvec::BitVec::sub(64, a, @bitvec::BitVec::ofNat(64, 4294967296)), b),
+        True => @bitvec::BitVec::add(64, a, b),
+    }
+}
 fn wrong_condition(a, b: BitVec(64)) → BitVec(64) {
     match @bitvec::BitVec::signed_lt_bit(64, a, b) {
         False => @bitvec::BitVec::sub(64, a, b), True => @bitvec::BitVec::add(64, a, b),
@@ -612,4 +618,47 @@ fn a_comparison_only_its_branch_reads_is_fused() {
     let plan = lower_structured(&reflected.region, &placement(), SCRATCH, Gpr::Rax).unwrap();
     let StructuredPlan::Sequence { continuation, .. } = &plan.body else { panic!("expected a sequence") };
     assert!(matches!(continuation.body, StructuredPlan::Conditional { test: PlannedTest::NonZero(_), .. }));
+}
+
+// The constant a fused comparison loads, taken away again by the false arm:
+// the arm reads it from the comparison's register, so the plan loads it once
+// (docs/structured-lowering-code-size-design.md §7.1, V5).
+#[test]
+fn a_constant_its_comparison_loads_is_carried_into_the_arm() {
+    let elab = source_elaborator();
+    let threshold = 1u64 << 32;
+    let reflected = reflect_elaborated_structured(&elab, "take_threshold").unwrap_or_else(|e| panic!("{e}"));
+    let region = reflected.region.clone();
+    let StructuredRegion::Sequence { prefix, continuation } = &region else { panic!("expected a sequence, got {region:?}") };
+    let StructuredRegion::Conditional { arguments, when_false, .. } = &**continuation else { panic!("expected a branch") };
+    let StructuredRegion::Dataflow(arm) = &**when_false else { panic!("expected a dataflow arm") };
+    let loaded = prefix.nodes.iter().find_map(|node| match *node { Node::Const { output, value, .. } if value == threshold => Some(output), _ => None }).unwrap();
+    assert!(prefix.outputs.iter().any(|port| port.id == loaded) && arguments.iter().any(|port| port.id == loaded) && arm.inputs.iter().any(|port| port.id == loaded));
+    assert!(!arm.nodes.iter().any(|node| matches!(node, Node::Const { value, .. } if *value == threshold)), "the arm must not load the threshold again");
+    let plan = lower_structured(&region, &placement(), SCRATCH, Gpr::Rax).unwrap_or_else(|e| panic!("{e}"));
+    let StructuredPlan::FusedSequence { continuation, .. } = &plan.body else { panic!("expected a fused sequence, got {:?}", plan.body) };
+    let StructuredPlan::Conditional { when_false, .. } = &continuation.body else { panic!("expected a branch") };
+    let StructuredPlan::Dataflow(dag) = &when_false.body else { panic!("expected a dataflow arm") };
+    assert!(!dag.instructions.iter().any(|i| matches!(i, Instruction::MovRI { immediate, .. } if *immediate == threshold)), "{:?}", dag.instructions);
+    for a in [0u64, 1, threshold - 1, threshold, threshold + 1, u64::MAX] {
+        for b in [0u64, 7, u64::MAX] {
+            let expected = if a < threshold { a.wrapping_add(b) } else { a.wrapping_sub(threshold).wrapping_add(b) };
+            let mut regs = BTreeMap::from([(Gpr::Rdi, a), (Gpr::Rsi, b)]);
+            for r in SCRATCH { regs.insert(*r, u64::MAX); }
+            run(&plan, &mut regs);
+            assert_eq!(regs[&Gpr::Rax], expected, "take_threshold({a}, {b})");
+        }
+    }
+    // The carried region still agrees with the source, and an arm reading
+    // another argument where it read the constant does not.
+    let image = elab.semantic_image();
+    let text = generate_structured_source_expansion("carried", &reflected).unwrap();
+    image.elaborator().elab_module_source("carried_agreement", &text).unwrap_or_else(|error| panic!("{}", error.render(&text)));
+    let mut wrong = reflected;
+    let StructuredRegion::Sequence { continuation, .. } = &mut wrong.region else { panic!() };
+    let StructuredRegion::Conditional { when_false, .. } = &mut **continuation else { panic!() };
+    let StructuredRegion::Dataflow(arm) = &mut **when_false else { panic!() };
+    for node in &mut arm.nodes { if let Node::Sub { right, .. } = node { assert_eq!(*right, loaded); *right = 1; } }
+    let text = generate_structured_source_expansion("uncarried", &wrong).unwrap();
+    assert!(image.elaborator().elab_module_source("uncarried_agreement", &text).is_err());
 }

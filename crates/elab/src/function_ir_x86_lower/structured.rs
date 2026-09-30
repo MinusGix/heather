@@ -306,7 +306,7 @@ pub(crate) struct Fusable {
 
 pub(crate) fn fusable(prefix: &Region, continuation: &StructuredRegion) -> Result<Option<Fusable>, LoweringError> {
     let StructuredRegion::Conditional { condition, arguments, .. } = continuation else { return Ok(None) };
-    if prefix.outputs.len() != 1 || prefix.outputs[0].id != *condition || arguments.iter().any(|port| port.id == *condition) {
+    if prefix.outputs.first().map(|port| port.id) != Some(*condition) || arguments.iter().any(|port| port.id == *condition) {
         return Ok(None);
     }
     let mut compare = None;
@@ -323,7 +323,40 @@ pub(crate) fn fusable(prefix: &Region, continuation: &StructuredRegion) -> Resul
     let input = |id: u64| prefix.inputs.iter().any(|port| port.id == id);
     let computed: BTreeSet<u64> = [compare.left, compare.right].into_iter().filter(|id| !input(*id)).collect();
     if computed.len() != 1 { return Ok(None); }
-    Ok(Some(Fusable { compare, computed: Port { id: *computed.iter().next().unwrap(), width: 64 } }))
+    let computed = Port { id: *computed.iter().next().unwrap(), width: 64 };
+    // The computed operand may also be carried to the arms, as a shared
+    // constant is; nothing else leaves the prefix.
+    if prefix.outputs[1..].iter().any(|port| *port != computed) { return Ok(None); }
+    Ok(Some(Fusable { compare, computed }))
+}
+
+/// A constant the fused comparison loads that an arm loads again: the arms
+/// take the comparison's register as an argument instead of a load of their
+/// own (docs/structured-lowering-code-size-design.md §7.1, V5). Only both
+/// arms being dataflow is rewritten, and a constant an arm returns as it is
+/// stays its own.
+pub(crate) fn share_compared_constant(prefix: &mut Region, branch: &mut StructuredRegion) -> Result<(), LoweringError> {
+    let Some(fused) = fusable(prefix, branch)? else { return Ok(()) };
+    if prefix.outputs.len() != 1 { return Ok(()); }
+    let [Node::Const { width, value, .. }] = cone(prefix, fused.computed.id)?[..] else { return Ok(()) };
+    let StructuredRegion::Conditional { inputs, arguments, when_true, when_false, .. } = branch else { return Ok(()) };
+    let (StructuredRegion::Dataflow(yes), StructuredRegion::Dataflow(no)) = (&mut **when_true, &mut **when_false) else { return Ok(()) };
+    let again = |arm: &Region| arm.nodes.iter().find_map(|node| match *node {
+        Node::Const { width: w, value: v, output } if (w, v) == (width, value) && !arm.outputs.iter().any(|port| port.id == output) => Some(output),
+        _ => None,
+    });
+    if again(yes).is_none() && again(no).is_none() { return Ok(()); }
+    for arm in [yes, no] {
+        if let Some(load) = again(arm) {
+            arm.nodes.retain(|node| node.output().id != load);
+            for node in &mut arm.nodes { *node = node.renamed(load, fused.computed.id); }
+        }
+        arm.inputs.push(fused.computed);
+    }
+    prefix.outputs.push(fused.computed);
+    inputs.push(fused.computed);
+    arguments.push(fused.computed);
+    Ok(())
 }
 
 /// The fused branch's interface: its comparison's operands, then the arms'
@@ -376,5 +409,42 @@ mod tests {
         assert!(fusable(&prefix(64), &branch(vec![word(0)])).unwrap().is_some());
         assert!(fusable(&prefix(64), &branch(vec![word(0), bit])).unwrap().is_none(), "the arms read the bit");
         assert!(fusable(&prefix(32), &branch(vec![word(0)])).unwrap().is_none(), "a narrow comparison");
+    }
+
+    // Only a constant the fused comparison loads, loaded again by an arm
+    // that computes with it, moves into the arms' arguments.
+    #[test]
+    fn only_a_constant_the_fused_comparison_loads_is_carried() {
+        let word = |id| Port { id, width: 64 };
+        let bit = Port { id: 3, width: 1 };
+        let prefix = |width| Region { inputs: vec![word(0)], nodes: vec![Node::Const { width, output: 2, value: 16 },
+            Node::UnsignedLessThan { width, output: 3, left: 0, right: 2 }], outputs: vec![bit] };
+        let reads = |value| StructuredRegion::Dataflow(Region { inputs: vec![word(0)], nodes: vec![Node::Const { width: 64, output: 4, value },
+            Node::Sub { width: 64, output: 5, left: 0, right: 4 }], outputs: vec![word(5)] });
+        let returns = StructuredRegion::Dataflow(Region { inputs: vec![word(0)], nodes: vec![Node::Const { width: 64, output: 5, value: 16 }], outputs: vec![word(5)] });
+        let keeps = StructuredRegion::Dataflow(Region { inputs: vec![word(0)], nodes: vec![Node::Const { width: 64, output: 6, value: 0 },
+            Node::BitOr { width: 64, output: 5, left: 6, right: 0 }], outputs: vec![word(5)] });
+        let branch = |when_false: StructuredRegion| StructuredRegion::Conditional { inputs: vec![word(0), bit], condition: 3, arguments: vec![word(0)],
+            outputs: vec![word(5)], when_true: Box::new(keeps.clone()), when_false: Box::new(when_false) };
+        let carried = |width, when_false| {
+            let (mut prefix, mut branch) = (prefix(width), branch(when_false));
+            share_compared_constant(&mut prefix, &mut branch).unwrap();
+            (prefix, branch)
+        };
+        let (prefix, branch) = carried(64, reads(16));
+        cert::validate_structured_region(&StructuredRegion::Sequence { prefix: prefix.clone(), continuation: Box::new(branch.clone()) }).unwrap();
+        assert_eq!(prefix.outputs, vec![bit, word(2)]);
+        assert!(fusable(&prefix, &branch).unwrap().is_some(), "carrying the constant keeps the branch fused");
+        let StructuredRegion::Conditional { arguments, when_true, when_false, .. } = branch else { unreachable!() };
+        assert_eq!(arguments, vec![word(0), word(2)]);
+        assert_eq!(when_true.inputs(), &[word(0), word(2)]);
+        let StructuredRegion::Dataflow(arm) = *when_false else { unreachable!() };
+        assert_eq!(arm.nodes, vec![Node::Sub { width: 64, output: 5, left: 0, right: 2 }]);
+        for (width, when_false, why) in [(64, reads(17), "another constant"), (64, returns, "an arm returning it"), (32, reads(16), "a narrow comparison")] {
+            let (prefix, branch) = carried(width, when_false.clone());
+            assert_eq!(prefix.outputs, vec![bit], "{why}");
+            let StructuredRegion::Conditional { when_false: kept, .. } = branch else { unreachable!() };
+            assert_eq!(*kept, when_false, "{why}");
+        }
     }
 }

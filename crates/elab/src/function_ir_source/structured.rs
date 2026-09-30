@@ -647,10 +647,15 @@ impl Builder<'_> {
             let when_true = Box::new(self.region(case_r, depth + 1)?);
             let mut available = inputs.clone();
             if !available.contains(&condition) { available.push(condition); }
-            let branch = StructuredRegion::Conditional { inputs: available, condition: condition.id, arguments: inputs.clone(), outputs, when_true, when_false };
+            let mut branch = StructuredRegion::Conditional { inputs: available, condition: condition.id, arguments: inputs.clone(), outputs, when_true, when_false };
             Ok(match producer {
                 None => branch,
-                Some(StructuredRegion::Dataflow(prefix)) => StructuredRegion::Sequence { prefix, continuation: Box::new(branch) },
+                Some(StructuredRegion::Dataflow(mut prefix)) => {
+                    // Here, not in selection, so the certificate and the
+                    // source expansion read the same region the plan does.
+                    crate::function_ir_x86_lower::share_compared_constant(&mut prefix, &mut branch).map_err(SourceError::Lowering)?;
+                    StructuredRegion::Sequence { prefix, continuation: Box::new(branch) }
+                }
                 Some(prefix) => {
                     if let Some(value) = value { self.sources.insert(condition.id, value); }
                     StructuredRegion::Compose { prefix: Box::new(prefix), continuation: Box::new(branch) }
