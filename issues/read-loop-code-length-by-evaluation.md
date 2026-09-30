@@ -1,9 +1,9 @@
 ---
 title: The read-loop and print profiles measure their code by evaluating it
-status: open
+status: closed
 labels: [native,elaboration]
 created: 2026-09-29
-updated: 2026-09-29
+updated: 2026-09-30
 ---
 
 `image_facts` (crates/cli/src/native/read_loop.rs) proves `_code_fits`,
@@ -22,3 +22,7 @@ of `read_count_code`/the print code over open parts (`len_append`, as
 generated piece's `_byte_length`. Worth doing when a tail grows, or
 whenever the profiles are next touched: the three profiles would then
 share one `image_facts` path.
+
+## Log
+
+- 2026-09-30: Landed with the loop-generator fold (06044391, design §3.3): state_code_len states the process code's length over an open loop and tail; --read-loop, --print and --fields all prove their length through it (read_count_code_len and read_fields_code_len), and image_facts has one path, which always takes a length and its proof.
