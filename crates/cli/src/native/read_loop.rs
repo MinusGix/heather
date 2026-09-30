@@ -147,17 +147,17 @@ pub(super) fn generate_loop(elab: &Elaborator, scope: &str, prefix: &str, progra
 }
 
 // A near jump's bytes: JZ (0F 84), JS (0F 88) or JMP (E9), then rel32.
-fn near(opcode: &[u8], displacement: u32) -> Vec<u8> { [opcode, &displacement.to_le_bytes()[..]].concat() }
-fn forward(distance: usize) -> u32 { u32::try_from(distance).expect("the program fits the file's window") }
-fn backward(distance: usize) -> u32 { 0u32.wrapping_sub(forward(distance)) }
+pub(super) fn near(opcode: &[u8], displacement: u32) -> Vec<u8> { [opcode, &displacement.to_le_bytes()[..]].concat() }
+pub(super) fn forward(distance: usize) -> u32 { u32::try_from(distance).expect("the program fits the file's window") }
+pub(super) fn backward(distance: usize) -> u32 { 0u32.wrapping_sub(forward(distance)) }
 
 // TEST RAX, RAX: the lowering's encoder has no TEST of its own; the
 // certificate checks these bytes against the model's encoding.
-const TEST: [u8; 3] = [0x48, 0x85, 0xc0];
-const SYSCALL: [u8; 2] = [0x0f, 0x05];
+pub(super) const TEST: [u8; 3] = [0x48, 0x85, 0xc0];
+pub(super) const SYSCALL: [u8; 2] = [0x0f, 0x05];
 
-fn mov(destination: Gpr, immediate: u64) -> Instruction { Instruction::MovRI { destination, immediate } }
-fn copy(destination: Gpr, source: Gpr) -> Instruction { Instruction::MovRR { destination, source } }
+pub(super) fn mov(destination: Gpr, immediate: u64) -> Instruction { Instruction::MovRI { destination, immediate } }
+pub(super) fn copy(destination: Gpr, source: Gpr) -> Instruction { Instruction::MovRR { destination, source } }
 
 pub(super) fn literal(bytes: &[u8]) -> String {
     format!("[{}]", bytes.iter().map(|b| format!("@bitvec::BitVec::ofNat(8, {b})")).collect::<Vec<_>>().join(", "))
@@ -172,7 +172,7 @@ pub(super) fn nested(parts: &[String]) -> String {
     }
 }
 
-fn syscall() -> String { "linux_syscall_bytes()".into() }
+pub(super) fn syscall() -> String { "linux_syscall_bytes()".into() }
 
 /// elf64_read_state's `state_code` up to its tail: init, the read, its test
 /// and jumps, the chunk's setup, loop and jump back, the failure path.
@@ -352,7 +352,7 @@ fn common_arguments(module: &mut Module, prefix: &str, program: &Program) -> Str
 // failed read's buffer, made exactly those events (linux_x86_64_determinism).
 // The claim is proved again there, not named, so a refused claim is reported
 // once.
-fn claims(module: &mut Module, prefix: &str, comment: &str, premises: &str, events: &str, proof: &str) {
+pub(super) fn claims(module: &mut Module, prefix: &str, comment: &str, premises: &str, events: &str, proof: &str) {
     module.raw(format!("\
 {comment}
 theorem {prefix}_runs({premises}):

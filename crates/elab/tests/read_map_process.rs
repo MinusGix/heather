@@ -50,12 +50,12 @@ theorem upcase_map_piece(): MapPiece(upcase, upcase_code(), upcase_Protected) { 
 theorem upcase_keeps(): MapKeeps(upcase_Protected) { MapKeeps(trivial, trivial, trivial, trivial, trivial) }
 
 theorem upcase_runs(file: List<BitVec(8)>, jumps: MapJumps, pj: PrintJumps,
-    exit_reads: jumps.ed.sign_extend(32).toNat() = map_exit_skip(upcase_code()),
-    fail_reads: jumps.sd.sign_extend(32).toNat() = map_fail_skip(upcase_code()),
-    again_closes: map_loop_span(upcase_code()) + 6 + jumps.ld.sign_extend(32).toNat() = Nat::pow(2, 64),
-    retry_closes: map_at_retry(upcase_code()) + 6 + jumps.rd.sign_extend(32).toNat() = Nat::pow(2, 64),
+    exit_reads: jumps.ed.sign_extend(32).toNat() = map_exit_skip(upcase_bytes().len()),
+    fail_reads: jumps.sd.sign_extend(32).toNat() = map_fail_skip(upcase_bytes().len()),
+    again_closes: map_loop_span(upcase_bytes().len()) + 6 + jumps.ld.sign_extend(32).toNat() = Nat::pow(2, 64),
+    retry_closes: map_at_retry(upcase_bytes().len()) + 6 + jumps.rd.sign_extend(32).toNat() = Nat::pow(2, 64),
     write_fail_reads: pj.sd.sign_extend(32).toNat() = print_fail_skip(),
-    write_read_closes: wl_at_wjz(map_at_write(upcase_code())) + 6 + pj.zd.sign_extend(32).toNat() = Nat::pow(2, 64),
+    write_read_closes: wl_at_wjz(map_at_write(upcase_bytes().len())) + 6 + pj.zd.sign_extend(32).toNat() = Nat::pow(2, 64),
     write_back_closes: print_loop_span() + 5 + pj.bd.sign_extend(32).toNat() = Nat::pow(2, 64),
     write_retry_closes: print_retry_span() + 6 + pj.rd.sign_extend(32).toNat() = Nat::pow(2, 64),
     resident: (page: Nat → BitVec(8)) → CodeResident(io_fetch_access(), IoMemory(file, page), map_code(upcase_code(), jumps, pj),
@@ -108,8 +108,8 @@ fn slow_acceptance_read_map_refusals() {
             "fn map_store() → ByteStore { ByteStore(base := Rsi, source := Rax) }"),
         ("jnz_inverted", "near_control_bytes(JumpIfNear(NE, jumps.ld)) ++", "near_control_bytes(JumpIfNear(E, jumps.ld)) ++"),
         ("write_past_page", "MovRI(R9, BitVec::ofNat(0x410000))", "MovRI(R9, BitVec::ofNat(0x410001))"),
-        ("loop_span", "fn map_loop_span(code: StructuredCode) → Nat { ((map_load_len() + structured_bytes(code).len()) + 3) + map_step_len() }",
-            "fn map_loop_span(code: StructuredCode) → Nat { ((map_load_len() + structured_bytes(code).len()) + 2) + map_step_len() }"),
+        ("loop_span", "fn map_loop_span(p: Nat) → Nat { ((map_load_len() + p) + 3) + map_step_len() }",
+            "fn map_loop_span(p: Nat) → Nat { ((map_load_len() + p) + 2) + map_step_len() }"),
     ] {
         let bad = PROCESS.replacen(from, to, 1);
         assert_ne!(bad, PROCESS, "{name}");

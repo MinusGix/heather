@@ -103,14 +103,14 @@ fn map_at_js() → Nat { map_at_jz() + 6 }
 fn map_at_setup() → Nat { map_at_js() + 6 }
 fn map_at_load() → Nat { map_at_setup() + map_setup_len() }
 fn map_at_piece() → Nat { map_at_load() + map_load_len() }
-fn map_at_store(code: StructuredCode) → Nat { map_at_piece() + structured_bytes(code).len() }
-fn map_at_step(code: StructuredCode) → Nat { map_at_store(code) + 3 }
-fn map_at_jnz(code: StructuredCode) → Nat { map_at_step(code) + map_step_len() }
-fn map_at_write(code: StructuredCode) → Nat { map_at_jnz(code) + 6 }
-fn map_at_failed(code: StructuredCode) → Nat { wl_at_exit_call(map_at_write(code)) + 2 }
-fn map_at_retry(code: StructuredCode) → Nat { map_at_failed(code) + eof_retry_len() }
-fn map_at_fail(code: StructuredCode) → Nat { map_at_retry(code) + 6 }
-fn map_at_fail_call(code: StructuredCode) → Nat { map_at_fail(code) + eof_fail_len() }
+fn map_at_store(p: Nat) → Nat { map_at_piece() + p }
+fn map_at_step(p: Nat) → Nat { map_at_store(p) + 3 }
+fn map_at_jnz(p: Nat) → Nat { map_at_step(p) + map_step_len() }
+fn map_at_write(p: Nat) → Nat { map_at_jnz(p) + 6 }
+fn map_at_failed(p: Nat) → Nat { wl_at_exit_call(map_at_write(p)) + 2 }
+fn map_at_retry(p: Nat) → Nat { map_at_failed(p) + eof_retry_len() }
+fn map_at_fail(p: Nat) → Nat { map_at_retry(p) + 6 }
+fn map_at_fail_call(p: Nat) → Nat { map_at_fail(p) + eof_fail_len() }
 
 // ---------------------------------------------------------------------------
 // One byte stored into the page.
@@ -192,14 +192,14 @@ record MapPieces(memory: IoMemory, code: StructuredCode, jumps: MapJumps, pj: Pr
     setup_at: CodeResident(io_fetch_access(), memory, canonical_block_bytes(map_setup_block()), eof_rip(map_at_setup())),
     load_at: CodeResident(io_fetch_access(), memory, byte_load_bytes(map_load()), eof_rip(map_at_load())),
     piece_at: CodeResident(io_fetch_access(), memory, structured_bytes(code), eof_rip(map_at_piece())),
-    store_at: CodeResident(io_fetch_access(), memory, byte_store_bytes(map_store()), eof_rip(map_at_store(code))),
-    step_at: CodeResident(io_fetch_access(), memory, canonical_block_bytes(map_step_block()), eof_rip(map_at_step(code))),
-    jnz_at: CodeResident(io_fetch_access(), memory, near_control_bytes(JumpIfNear(NE, jumps.ld)), eof_rip(map_at_jnz(code))),
-    write: WriteLoopResident(memory, map_at_write(code), pj),
-    retry_at: CodeResident(io_fetch_access(), memory, canonical_block_bytes(eof_retry_block()), eof_rip(map_at_failed(code))),
-    retry_jz_at: CodeResident(io_fetch_access(), memory, near_control_bytes(JumpZeroNear(jumps.rd)), eof_rip(map_at_retry(code))),
-    fail_at: CodeResident(io_fetch_access(), memory, canonical_block_bytes(eof_fail_block()), eof_rip(map_at_fail(code))),
-    fail_call_at: CodeResident(io_fetch_access(), memory, linux_syscall_bytes(), eof_rip(map_at_fail_call(code))),
+    store_at: CodeResident(io_fetch_access(), memory, byte_store_bytes(map_store()), eof_rip(map_at_store(structured_bytes(code).len()))),
+    step_at: CodeResident(io_fetch_access(), memory, canonical_block_bytes(map_step_block()), eof_rip(map_at_step(structured_bytes(code).len()))),
+    jnz_at: CodeResident(io_fetch_access(), memory, near_control_bytes(JumpIfNear(NE, jumps.ld)), eof_rip(map_at_jnz(structured_bytes(code).len()))),
+    write: WriteLoopResident(memory, map_at_write(structured_bytes(code).len()), pj),
+    retry_at: CodeResident(io_fetch_access(), memory, canonical_block_bytes(eof_retry_block()), eof_rip(map_at_failed(structured_bytes(code).len()))),
+    retry_jz_at: CodeResident(io_fetch_access(), memory, near_control_bytes(JumpZeroNear(jumps.rd)), eof_rip(map_at_retry(structured_bytes(code).len()))),
+    fail_at: CodeResident(io_fetch_access(), memory, canonical_block_bytes(eof_fail_block()), eof_rip(map_at_fail(structured_bytes(code).len()))),
+    fail_call_at: CodeResident(io_fetch_access(), memory, linux_syscall_bytes(), eof_rip(map_at_fail_call(structured_bytes(code).len()))),
 }
 
 theorem map_pieces(memory: IoMemory, code: StructuredCode, jumps: MapJumps, pj: PrintJumps,
@@ -230,15 +230,15 @@ theorem map_pieces(memory: IoMemory, code: StructuredCode, jumps: MapJumps, pj: 
     let r5 = resident_split_at(fetch, memory, su, ld ++ (pc ++ (st ++ (sp ++ (nz ++ (wl ++ (rt ++ (rz ++ (fl ++ call)))))))), entry, map_at_setup(), r4.right);
     let r6 = resident_split_at(fetch, memory, ld, pc ++ (st ++ (sp ++ (nz ++ (wl ++ (rt ++ (rz ++ (fl ++ call))))))), entry, map_at_load(), r5.right);
     let r7 = resident_split_at(fetch, memory, pc, st ++ (sp ++ (nz ++ (wl ++ (rt ++ (rz ++ (fl ++ call)))))), entry, map_at_piece(), r6.right);
-    let r8 = resident_split_at(fetch, memory, st, sp ++ (nz ++ (wl ++ (rt ++ (rz ++ (fl ++ call))))), entry, map_at_store(code), r7.right);
-    let r9 = resident_split_at(fetch, memory, sp, nz ++ (wl ++ (rt ++ (rz ++ (fl ++ call)))), entry, map_at_step(code), r8.right);
-    let r10 = resident_split_at(fetch, memory, nz, wl ++ (rt ++ (rz ++ (fl ++ call))), entry, map_at_jnz(code), r9.right);
-    let r11 = resident_split_at(fetch, memory, wl, rt ++ (rz ++ (fl ++ call)), entry, map_at_write(code), r10.right);
-    let r12 = resident_split_at(fetch, memory, rt, rz ++ (fl ++ call), entry, map_at_failed(code), r11.right);
-    let r13 = resident_split_at(fetch, memory, rz, fl ++ call, entry, map_at_retry(code), r12.right);
-    let r14 = resident_split_at(fetch, memory, fl, call, entry, map_at_fail(code), r13.right);
+    let r8 = resident_split_at(fetch, memory, st, sp ++ (nz ++ (wl ++ (rt ++ (rz ++ (fl ++ call))))), entry, map_at_store(structured_bytes(code).len()), r7.right);
+    let r9 = resident_split_at(fetch, memory, sp, nz ++ (wl ++ (rt ++ (rz ++ (fl ++ call)))), entry, map_at_step(structured_bytes(code).len()), r8.right);
+    let r10 = resident_split_at(fetch, memory, nz, wl ++ (rt ++ (rz ++ (fl ++ call))), entry, map_at_jnz(structured_bytes(code).len()), r9.right);
+    let r11 = resident_split_at(fetch, memory, wl, rt ++ (rz ++ (fl ++ call)), entry, map_at_write(structured_bytes(code).len()), r10.right);
+    let r12 = resident_split_at(fetch, memory, rt, rz ++ (fl ++ call), entry, map_at_failed(structured_bytes(code).len()), r11.right);
+    let r13 = resident_split_at(fetch, memory, rz, fl ++ call, entry, map_at_retry(structured_bytes(code).len()), r12.right);
+    let r14 = resident_split_at(fetch, memory, fl, call, entry, map_at_fail(structured_bytes(code).len()), r13.right);
     MapPieces(r0.left, r1.left, r2.left, r3.left, r4.left, r5.left, r6.left, r7.left, r8.left, r9.left, r10.left,
-        write_loop_resident(memory, map_at_write(code), pj, r11.left), r12.left, r13.left, r14.left, r14.right)
+        write_loop_resident(memory, map_at_write(structured_bytes(code).len()), pj, r11.left), r12.left, r13.left, r14.left, r14.right)
 }
 
 // ---------------------------------------------------------------------------
@@ -298,7 +298,7 @@ record MapAt(f: BitVec(8) → BitVec(8), file, bytes: List<BitVec(8)>, i, at: Na
 record MapLoaded(f: BitVec(8) → BitVec(8), code: StructuredCode, byte: BitVec(8), state, loaded: MachineState<IoMemory>) {
     steps: FetchedSteps(io_fetch_access(), io_data_access(), state, loaded),
     memory_is: loaded.memory = state.memory,
-    rip_is: loaded.rip = eof_rip(map_at_store(code)),
+    rip_is: loaded.rip = eof_rip(map_at_store(structured_bytes(code).len())),
     image: read_gpr(Rdx, loaded.gprs) = f(byte).zero_extend(56),
     rsi: read_gpr(Rsi, loaded.gprs) = read_gpr(Rsi, state.gprs),
     rcx: read_gpr(Rcx, loaded.gprs) = read_gpr(Rcx, state.gprs),
@@ -350,7 +350,7 @@ theorem map_fetched(f: BitVec(8) → BitVec(8), code: StructuredCode, keeps: Gpr
 record MapStored(code: StructuredCode, file: List<BitVec(8)>, page: Nat → BitVec(8), loaded, stored: MachineState<IoMemory>) {
     step: StoreStep(io_fetch_access(), linux_writes(io_linux()), loaded, stored),
     memory_is: stored.memory = IoMemory(file, page),
-    rip_is: stored.rip = eof_rip(map_at_step(code)),
+    rip_is: stored.rip = eof_rip(map_at_step(structured_bytes(code).len())),
     gprs_is: stored.gprs = loaded.gprs,
     flags_is: stored.flags = loaded.flags,
 }
@@ -358,7 +358,7 @@ record MapStored(code: StructuredCode, file: List<BitVec(8)>, page: Nat → BitV
 theorem map_stored(f: BitVec(8) → BitVec(8), code: StructuredCode, jumps: MapJumps, pj: PrintJumps, file: List<BitVec(8)>,
     page: Nat → BitVec(8), i: Nat, inside: i < 4096, b: BitVec(8),
     pieces: (page: Nat → BitVec(8)) → MapPieces(IoMemory(file, page), code, jumps, pj),
-    loaded: MachineState<IoMemory>, memory_is: loaded.memory = IoMemory(file, page), rip_is: loaded.rip = eof_rip(map_at_store(code)),
+    loaded: MachineState<IoMemory>, memory_is: loaded.memory = IoMemory(file, page), rip_is: loaded.rip = eof_rip(map_at_store(structured_bytes(code).len())),
     at: read_gpr(Rsi, loaded.gprs).toNat() = io_page_base() + i, image: read_gpr(Rdx, loaded.gprs) = f(b).zero_extend(56)):
     Exists<MachineState<IoMemory>>(λ stored => MapStored(code, file, io_store_offset(IoMemory(file, page), i, [f(b)]).page, loaded, stored)) {
     let fetch = io_fetch_access();
@@ -374,13 +374,13 @@ theorem map_stored(f: BitVec(8) → BitVec(8), code: StructuredCode, jumps: MapJ
     Exists(stored, MapStored(
         step := byte_store_step(fetch, writes, map_store(), loaded, refl,
             FetchedFrom(resident_readable(fetch, loaded.memory, byte_store_bytes(map_store()), loaded.rip,
-                resident_state(fetch, byte_store_bytes(map_store()), memory, eof_rip(map_at_store(code)), loaded, memory_is, rip_is,
+                resident_state(fetch, byte_store_bytes(map_store()), memory, eof_rip(map_at_store(structured_bytes(code).len())), loaded, memory_is, rip_is,
                     pieces(page).store_at))),
             writable),
         memory_is := trans(cong_fn<IoMemory, IoMemory>(λ m => io_store(m, read_gpr(Rsi, loaded.gprs), [imm_byte0(read_gpr(Rdx, loaded.gprs))]), memory_is),
             trans(cong_fn<BitVec(8), IoMemory>(λ x => io_store(memory, read_gpr(Rsi, loaded.gprs), [x]), low),
                 store_at_offset(memory, read_gpr(Rsi, loaded.gprs), i, [f(b)], at))),
-        rip_is := rip_advance(entry, loaded.rip, map_at_store(code), 3, rip_is),
+        rip_is := rip_advance(entry, loaded.rip, map_at_store(structured_bytes(code).len()), 3, rip_is),
         gprs_is := refl,
         flags_is := refl))
 }
@@ -416,7 +416,7 @@ theorem map_byte(f: BitVec(8) → BitVec(8), code: StructuredCode, keeps: Gpr �
     pieces: (page: Nat → BitVec(8)) → MapPieces(IoMemory(file, page), code, jumps, pj),
     state: MachineState<IoMemory>, head: MapAt(f, file, bytes, i, map_at_load(), state)):
     Exists<MachineState<IoMemory>>(λ body => LinuxSteps(io_linux(), state, body) ∧
-        (MapAt(f, file, bytes, Succ(i), map_at_jnz(code), body) ∧ (body.flags.zf = is_zero_bits(64, read_gpr(Rcx, body.gprs))))) {
+        (MapAt(f, file, bytes, Succ(i), map_at_jnz(structured_bytes(code).len()), body) ∧ (body.flags.zf = is_zero_bits(64, read_gpr(Rcx, body.gprs))))) {
     let fetch = io_fetch_access();
     let data = io_data_access();
     let entry: BitVec(64) = BitVec::ofNat(0x4000e8);
@@ -433,7 +433,7 @@ theorem map_byte(f: BitVec(8) → BitVec(8), code: StructuredCode, keeps: Gpr �
     let st = stored.proof;
     let next = io_store_offset(IoMemory(file, head.page), i, [f(b)]).page;
     let stepped = block_fetched(fetch, data, map_step_block(), s3, trivial,
-        resident_state(fetch, canonical_block_bytes(map_step_block()), IoMemory(file, next), eof_rip(map_at_step(code)), s3, st.memory_is, st.rip_is,
+        resident_state(fetch, canonical_block_bytes(map_step_block()), IoMemory(file, next), eof_rip(map_at_step(structured_bytes(code).len())), s3, st.memory_is, st.rip_is,
             pieces(next).step_at));
     let s4 = execute_block_normal(map_step_block(), s3);
     let rsi3: (read_gpr(Rsi, s3.gprs) = read_gpr(Rsi, s2.gprs)) = cong_fn<Gprs, BitVec(64)>(λ g => read_gpr(Rsi, g), st.gprs_is);
@@ -461,7 +461,7 @@ theorem map_byte(f: BitVec(8) → BitVec(8), code: StructuredCode, keeps: Gpr �
         ⟨MapAt(
             page := next,
             memory_is := trans(pure_block_memory(map_step_block(), s3), st.memory_is),
-            rip_is := trans(stepped.right, rip_advance(entry, s3.rip, map_at_step(code), map_step_len(), st.rip_is)),
+            rip_is := trans(stepped.right, rip_advance(entry, s3.rip, map_at_step(structured_bytes(code).len()), map_step_len(), st.rip_is)),
             mapped := map_page_mapped(f, bytes, IoMemory(file, head.page), i, b, found.proof, head.mapped),
             left := map_page_left(bytes, IoMemory(file, head.page), i, f(b), head.left),
             cursor := rsi4,
@@ -475,16 +475,16 @@ theorem map_byte(f: BitVec(8) → BitVec(8), code: StructuredCode, keeps: Gpr �
 
 // The JNZ, taken while bytes are left.
 theorem map_again(f: BitVec(8) → BitVec(8), code: StructuredCode, jumps: MapJumps, pj: PrintJumps, file, bytes: List<BitVec(8)>,
-    loop_target: near_branch_target(eof_rip(map_at_jnz(code)), 6, jumps.ld) = eof_rip(map_at_load()),
+    loop_target: near_branch_target(eof_rip(map_at_jnz(structured_bytes(code).len())), 6, jumps.ld) = eof_rip(map_at_load()),
     pieces: (page: Nat → BitVec(8)) → MapPieces(IoMemory(file, page), code, jumps, pj),
-    i: Nat, state: MachineState<IoMemory>, body: MapAt(f, file, bytes, i, map_at_jnz(code), state),
+    i: Nat, state: MachineState<IoMemory>, body: MapAt(f, file, bytes, i, map_at_jnz(structured_bytes(code).len()), state),
     flag: state.flags.zf = False):
     Exists<MachineState<IoMemory>>(λ next => FetchedStep(io_fetch_access(), io_data_access(), state, next) ∧
         MapAt(f, file, bytes, i, map_at_load(), next)) {
     let fetch = io_fetch_access();
     let data = io_data_access();
     let jump = near_fetched_step(fetch, data, JumpIfNear(NE, jumps.ld), state,
-        resident_state(fetch, near_control_bytes(JumpIfNear(NE, jumps.ld)), IoMemory(file, body.page), eof_rip(map_at_jnz(code)), state,
+        resident_state(fetch, near_control_bytes(JumpIfNear(NE, jumps.ld)), IoMemory(file, body.page), eof_rip(map_at_jnz(structured_bytes(code).len())), state,
             body.memory_is, body.rip_is, pieces(body.page).jnz_at));
     let next = execute_near_control(JumpIfNear(NE, jumps.ld), state);
     let taken: (condition_holds(NE, state.flags) = True) = cong_fn<Bool, Bool>(λ z => !z, flag);
@@ -498,20 +498,20 @@ theorem map_again(f: BitVec(8) → BitVec(8), code: StructuredCode, jumps: MapJu
 // The JNZ, falling through to the write loop once the chunk is done.
 theorem map_done(f: BitVec(8) → BitVec(8), code: StructuredCode, jumps: MapJumps, pj: PrintJumps, file, bytes: List<BitVec(8)>,
     pieces: (page: Nat → BitVec(8)) → MapPieces(IoMemory(file, page), code, jumps, pj),
-    i: Nat, state: MachineState<IoMemory>, body: MapAt(f, file, bytes, i, map_at_jnz(code), state),
+    i: Nat, state: MachineState<IoMemory>, body: MapAt(f, file, bytes, i, map_at_jnz(structured_bytes(code).len()), state),
     flag: state.flags.zf = True):
     Exists<MachineState<IoMemory>>(λ next => FetchedStep(io_fetch_access(), io_data_access(), state, next) ∧
-        MapAt(f, file, bytes, i, map_at_write(code), next)) {
+        MapAt(f, file, bytes, i, map_at_write(structured_bytes(code).len()), next)) {
     let fetch = io_fetch_access();
     let data = io_data_access();
     let entry: BitVec(64) = BitVec::ofNat(0x4000e8);
     let jump = near_fetched_step(fetch, data, JumpIfNear(NE, jumps.ld), state,
-        resident_state(fetch, near_control_bytes(JumpIfNear(NE, jumps.ld)), IoMemory(file, body.page), eof_rip(map_at_jnz(code)), state,
+        resident_state(fetch, near_control_bytes(JumpIfNear(NE, jumps.ld)), IoMemory(file, body.page), eof_rip(map_at_jnz(structured_bytes(code).len())), state,
             body.memory_is, body.rip_is, pieces(body.page).jnz_at));
     let next = execute_near_control(JumpIfNear(NE, jumps.ld), state);
     let passed: (condition_holds(NE, state.flags) = False) = cong_fn<Bool, Bool>(λ z => !z, flag);
-    let next_rip_is: (next.rip = eof_rip(map_at_write(code))) =
-        trans(near_if_not_taken_rip(NE, jumps.ld, state, passed), rip_advance(entry, state.rip, map_at_jnz(code), 6, body.rip_is));
+    let next_rip_is: (next.rip = eof_rip(map_at_write(structured_bytes(code).len()))) =
+        trans(near_if_not_taken_rip(NE, jumps.ld, state, passed), rip_advance(entry, state.rip, map_at_jnz(structured_bytes(code).len()), 6, body.rip_is));
     Exists(next, ⟨jump, MapAt(page := body.page, memory_is := body.memory_is, rip_is := next_rip_is, mapped := body.mapped,
         left := body.left, cursor := body.cursor, count := body.count, base := body.base, length := body.length, one := body.one)⟩)
 }
@@ -524,13 +524,13 @@ theorem map_last_count(i, n: Nat, count: i + Succ(Zero) = n): Succ(i) = n { omeg
 // the write loop reached.
 theorem map_loop(f: BitVec(8) → BitVec(8), code: StructuredCode, keeps: Gpr → Type, piece: MapPiece(f, code, keeps), kept: MapKeeps(keeps),
     jumps: MapJumps, pj: PrintJumps,
-    loop_target: near_branch_target(eof_rip(map_at_jnz(code)), 6, jumps.ld) = eof_rip(map_at_load()),
+    loop_target: near_branch_target(eof_rip(map_at_jnz(structured_bytes(code).len())), 6, jumps.ld) = eof_rip(map_at_load()),
     file, bytes: List<BitVec(8)>, fits: bytes.len() <= 4096,
     pieces: (page: Nat → BitVec(8)) → MapPieces(IoMemory(file, page), code, jumps, pj), rest: Nat):
     (i: Nat) → (state: MachineState<IoMemory>) → i + Succ(rest) = bytes.len() → MapAt(f, file, bytes, i, map_at_load(), state) →
-    Exists<MachineState<IoMemory>>(λ done => LinuxSteps(io_linux(), state, done) ∧ MapAt(f, file, bytes, bytes.len(), map_at_write(code), done)) {
+    Exists<MachineState<IoMemory>>(λ done => LinuxSteps(io_linux(), state, done) ∧ MapAt(f, file, bytes, bytes.len(), map_at_write(structured_bytes(code).len()), done)) {
     match rest as λ r => (i: Nat) → (state: MachineState<IoMemory>) → i + Succ(r) = bytes.len() → MapAt(f, file, bytes, i, map_at_load(), state) →
-            Exists<MachineState<IoMemory>>(λ done => LinuxSteps(io_linux(), state, done) ∧ MapAt(f, file, bytes, bytes.len(), map_at_write(code), done)) {
+            Exists<MachineState<IoMemory>>(λ done => LinuxSteps(io_linux(), state, done) ∧ MapAt(f, file, bytes, bytes.len(), map_at_write(structured_bytes(code).len()), done)) {
         Zero => λ i state count head => {
             have stepped = map_byte(f, code, keeps, piece, kept, jumps, pj, file, bytes, fits, i, Zero, count, pieces, state, head);
             let body = stepped.witness;
@@ -540,7 +540,7 @@ theorem map_loop(f: BitVec(8) → BitVec(8), code: StructuredCode, keeps: Gpr �
                 trans(stepped.proof.right.right, zero_bits_of_zero(64, read_gpr(Rcx, body.gprs), none)));
             Exists(out.witness, ⟨linux_steps_trans(io_linux(), state, body, out.witness, stepped.proof.left,
                     linux_steps_of_fetched(io_linux(), body, out.witness, fetched_steps_one(io_fetch_access(), io_data_access(), body, out.witness, out.proof.left))),
-                j(map_last_count(i, bytes.len(), count), λ k _ => MapAt(f, file, bytes, k, map_at_write(code), out.witness), out.proof.right)⟩)
+                j(map_last_count(i, bytes.len(), count), λ k _ => MapAt(f, file, bytes, k, map_at_write(structured_bytes(code).len()), out.witness), out.proof.right)⟩)
         },
         Succ(r, ih) => λ i state count head => {
             have stepped = map_byte(f, code, keeps, piece, kept, jumps, pj, file, bytes, fits, i, Succ(r), count, pieces, state, head);
@@ -604,8 +604,8 @@ theorem map_sends_page(f: BitVec(8) → BitVec(8), file, bytes: List<BitVec(8)>,
 // from the read with `then`.
 theorem map_chunk(f: BitVec(8) → BitVec(8), code: StructuredCode, keeps: Gpr → Type, piece: MapPiece(f, code, keeps), kept: MapKeeps(keeps),
     jumps: MapJumps, pj: PrintJumps,
-    loop_target: near_branch_target(eof_rip(map_at_jnz(code)), 6, jumps.ld) = eof_rip(map_at_load()),
-    targets: WriteLoopTargets(map_at_write(code), map_at_read(), pj),
+    loop_target: near_branch_target(eof_rip(map_at_jnz(structured_bytes(code).len())), 6, jumps.ld) = eof_rip(map_at_load()),
+    targets: WriteLoopTargets(map_at_write(structured_bytes(code).len()), map_at_read(), pj),
     file: List<BitVec(8)>, pieces: (page: Nat → BitVec(8)) → MapPieces(IoMemory(file, page), code, jumps, pj),
     page: Nat → BitVec(8), bytes: List<BitVec(8)>, some: 0 < bytes.len(), fits: bytes.len() <= 4096,
     returned: MachineState<IoMemory>, memory_is: returned.memory = io_store_offset(IoMemory(file, page), 0, bytes),
@@ -651,7 +651,7 @@ theorem map_chunk(f: BitVec(8) → BitVec(8), code: StructuredCode, keeps: Gpr �
     let sends = map_sends_page(f, file, bytes, fits, at.page, read_gpr(R9, last.gprs), at.base,
         λ j b at_j below => at.mapped(j, b, at_j, below));
     let image_len: (bytes.map(f).len() = n) = List::len_map(bytes, f);
-    have runs = wl_from_then(IoMemory(file, at.page), map_at_write(code), pj, map_at_read(), pieces(at.page).write, targets,
+    have runs = wl_from_then(IoMemory(file, at.page), map_at_write(structured_bytes(code).len()), pj, map_at_read(), pieces(at.page).write, targets,
         after, then(at.page), ending, ending_ok, writes,
         bytes.map(f), writes_ok, last, j(sym(image_len), λ v _ => 0 < v, some), j(sym(image_len), λ v _ => v <= 4096, fits),
         at.rip_is, at.memory_is, sends, trans(at.length, sym(image_len)),
@@ -786,11 +786,11 @@ fn MapFailedAt(returned: MachineState<IoMemory>, stored: IoMemory, errno: Nat, a
 
 theorem map_failed(stored: IoMemory, code: StructuredCode, jumps: MapJumps, pj: PrintJumps,
     pieces: MapPieces(stored, code, jumps, pj),
-    js_target: near_branch_target(eof_rip(map_at_js()), 6, jumps.sd) = eof_rip(map_at_failed(code)),
+    js_target: near_branch_target(eof_rip(map_at_js()), 6, jumps.sd) = eof_rip(map_at_failed(structured_bytes(code).len())),
     errno: Nat, error: Errno(errno), returned: MachineState<IoMemory>,
     memory_is: returned.memory = stored, rip_is: returned.rip = eof_rip(map_at_test()),
     rax: read_gpr(Rax, returned.gprs) = errno_word(errno)):
-    MapFailedAt(returned, stored, errno, eof_rip(map_at_retry(code))) {
+    MapFailedAt(returned, stored, errno, eof_rip(map_at_retry(structured_bytes(code).len()))) {
     let fetch = io_fetch_access();
     let data = io_data_access();
     let entry: BitVec(64) = BitVec::ofNat(0x4000e8);
@@ -816,16 +816,16 @@ theorem map_failed(stored: IoMemory, code: StructuredCode, jumps: MapJumps, pj: 
         resident_state(fetch, near_control_bytes(JumpSignNear(jumps.sd)), stored, eof_rip(map_at_js()), passed, tested_memory, passed_rip,
             pieces.js_at));
     let failing = execute_near_control(JumpSignNear(jumps.sd), passed);
-    let failing_rip: (failing.rip = eof_rip(map_at_failed(code))) =
+    let failing_rip: (failing.rip = eof_rip(map_at_failed(structured_bytes(code).len()))) =
         trans(near_sign_taken_rip(jumps.sd, passed, negative),
             trans(cong_fn<BitVec(64), BitVec(64)>(λ address => near_branch_target(address, 6, jumps.sd), passed_rip), js_target));
     let retry = block_fetched(fetch, data, eof_retry_block(), failing, trivial,
-        resident_state(fetch, canonical_block_bytes(eof_retry_block()), stored, eof_rip(map_at_failed(code)), failing,
+        resident_state(fetch, canonical_block_bytes(eof_retry_block()), stored, eof_rip(map_at_failed(structured_bytes(code).len())), failing,
             tested_memory, failing_rip, pieces.retry_at));
     let fixed = execute_block_normal(eof_retry_block(), failing);
     let fixed_memory: (fixed.memory = stored) = trans(pure_block_memory(eof_retry_block(), failing), tested_memory);
-    let fixed_rip: (fixed.rip = eof_rip(map_at_retry(code))) =
-        trans(retry.right, rip_advance(entry, failing.rip, map_at_failed(code), eof_retry_len(), failing_rip));
+    let fixed_rip: (fixed.rip = eof_rip(map_at_retry(structured_bytes(code).len()))) =
+        trans(retry.right, rip_advance(entry, failing.rip, map_at_failed(structured_bytes(code).len()), eof_retry_len(), failing_rip));
     let flag: (fixed.flags.zf = is_zero_bits(64, w.add(BitVec::ofNat(4)))) =
         cong_fn<BitVec(64), Bool>(λ v => is_zero_bits(64, v.add(BitVec::ofNat(4))), rax);
     Exists(fixed, ⟨fetched_steps_trans(fetch, data, returned, tested, fixed, test.left,
@@ -837,8 +837,8 @@ theorem map_failed(stored: IoMemory, code: StructuredCode, jumps: MapJumps, pj: 
 // EINTR: back to the read.
 theorem map_retry(stored: IoMemory, code: StructuredCode, jumps: MapJumps, pj: PrintJumps,
     pieces: MapPieces(stored, code, jumps, pj),
-    retry_target: near_branch_target(eof_rip(map_at_retry(code)), 6, jumps.rd) = eof_rip(map_at_read()),
-    returned: MachineState<IoMemory>, failed: MapFailedAt(returned, stored, eintr(), eof_rip(map_at_retry(code)))):
+    retry_target: near_branch_target(eof_rip(map_at_retry(structured_bytes(code).len())), 6, jumps.rd) = eof_rip(map_at_read()),
+    returned: MachineState<IoMemory>, failed: MapFailedAt(returned, stored, eintr(), eof_rip(map_at_retry(structured_bytes(code).len())))):
     Exists<MachineState<IoMemory>>(λ back => FetchedSteps(io_fetch_access(), io_data_access(), returned, back) ∧
         ((back.memory = stored) ∧ (back.rip = eof_rip(map_at_read())))) {
     let fetch = io_fetch_access();
@@ -846,7 +846,7 @@ theorem map_retry(stored: IoMemory, code: StructuredCode, jumps: MapJumps, pj: P
     let fixed = failed.witness;
     let set: (fixed.flags.zf = True) = trans(failed.proof.right.right.right, eintr_plus_four());
     let jz = near_fetched_step(fetch, data, JumpZeroNear(jumps.rd), fixed,
-        resident_state(fetch, near_control_bytes(JumpZeroNear(jumps.rd)), stored, eof_rip(map_at_retry(code)), fixed,
+        resident_state(fetch, near_control_bytes(JumpZeroNear(jumps.rd)), stored, eof_rip(map_at_retry(structured_bytes(code).len())), fixed,
             failed.proof.right.left, failed.proof.right.right.left, pieces.retry_jz_at));
     let back = execute_near_control(JumpZeroNear(jumps.rd), fixed);
     let back_rip: (back.rip = eof_rip(map_at_read())) =
@@ -861,30 +861,30 @@ theorem map_retry(stored: IoMemory, code: StructuredCode, jumps: MapJumps, pj: P
 theorem map_fail_exit(stored: IoMemory, code: StructuredCode, jumps: MapJumps, pj: PrintJumps,
     pieces: MapPieces(stored, code, jumps, pj),
     errno: Nat, error: Errno(errno), other: Not(errno = eintr()),
-    returned: MachineState<IoMemory>, failed: MapFailedAt(returned, stored, errno, eof_rip(map_at_retry(code)))):
+    returned: MachineState<IoMemory>, failed: MapFailedAt(returned, stored, errno, eof_rip(map_at_retry(structured_bytes(code).len())))):
     LinuxRuns(io_linux(), [ExitEvent(BitVec::ofNat(1))], returned) {
     let fetch = io_fetch_access();
     let data = io_data_access();
     let entry: BitVec(64) = BitVec::ofNat(0x4000e8);
     let fixed = failed.witness;
     let fixed_memory: (fixed.memory = stored) = failed.proof.right.left;
-    let fixed_rip: (fixed.rip = eof_rip(map_at_retry(code))) = failed.proof.right.right.left;
+    let fixed_rip: (fixed.rip = eof_rip(map_at_retry(structured_bytes(code).len()))) = failed.proof.right.right.left;
     let clear: (fixed.flags.zf = False) = trans(failed.proof.right.right.right, other_errno_plus_four(errno, error, other));
     let jz = near_fetched_step(fetch, data, JumpZeroNear(jumps.rd), fixed,
-        resident_state(fetch, near_control_bytes(JumpZeroNear(jumps.rd)), stored, eof_rip(map_at_retry(code)), fixed,
+        resident_state(fetch, near_control_bytes(JumpZeroNear(jumps.rd)), stored, eof_rip(map_at_retry(structured_bytes(code).len())), fixed,
             fixed_memory, fixed_rip, pieces.retry_jz_at));
     let going = execute_near_control(JumpZeroNear(jumps.rd), fixed);
-    let going_rip: (going.rip = eof_rip(map_at_fail(code))) =
-        trans(near_not_taken_rip(jumps.rd, fixed, clear), rip_advance(entry, fixed.rip, map_at_retry(code), 6, fixed_rip));
+    let going_rip: (going.rip = eof_rip(map_at_fail(structured_bytes(code).len()))) =
+        trans(near_not_taken_rip(jumps.rd, fixed, clear), rip_advance(entry, fixed.rip, map_at_retry(structured_bytes(code).len()), 6, fixed_rip));
     let exiting = block_fetched(fetch, data, eof_fail_block(), going, trivial,
-        resident_state(fetch, canonical_block_bytes(eof_fail_block()), stored, eof_rip(map_at_fail(code)), going,
+        resident_state(fetch, canonical_block_bytes(eof_fail_block()), stored, eof_rip(map_at_fail(structured_bytes(code).len())), going,
             fixed_memory, going_rip, pieces.fail_at));
     let last = execute_block_normal(eof_fail_block(), going);
     let last_memory: (last.memory = stored) = trans(pure_block_memory(eof_fail_block(), going), fixed_memory);
-    let last_rip: (last.rip = eof_rip(map_at_fail_call(code))) =
-        trans(exiting.right, rip_advance(entry, going.rip, map_at_fail(code), eof_fail_len(), going_rip));
+    let last_rip: (last.rip = eof_rip(map_at_fail_call(structured_bytes(code).len()))) =
+        trans(exiting.right, rip_advance(entry, going.rip, map_at_fail(structured_bytes(code).len()), eof_fail_len(), going_rip));
     let call: LinuxSyscallAt(io_linux(), last) = FetchedFrom(resident_readable(fetch, last.memory, linux_syscall_bytes(), last.rip,
-        resident_state(fetch, linux_syscall_bytes(), stored, eof_rip(map_at_fail_call(code)), last, last_memory, last_rip,
+        resident_state(fetch, linux_syscall_bytes(), stored, eof_rip(map_at_fail_call(structured_bytes(code).len())), last, last_memory, last_rip,
             pieces.fail_call_at)));
     linux_runs_exit(io_linux(), returned, last, BitVec::ofNat(1),
         fetched_steps_trans(fetch, data, returned, fixed, last, failed.proof.left,
@@ -896,7 +896,7 @@ theorem map_fail_exit(stored: IoMemory, code: StructuredCode, jumps: MapJumps, p
 // exit(0).
 theorem map_end(code: StructuredCode, jumps: MapJumps, pj: PrintJumps, file: List<BitVec(8)>,
     pieces: (page: Nat → BitVec(8)) → MapPieces(IoMemory(file, page), code, jumps, pj),
-    exit_target: near_branch_target(eof_rip(map_at_jz()), 6, jumps.ed) = eof_rip(wl_at_exit(map_at_write(code))),
+    exit_target: near_branch_target(eof_rip(map_at_jz()), 6, jumps.ed) = eof_rip(wl_at_exit(map_at_write(structured_bytes(code).len()))),
     page: Nat → BitVec(8)): WriteThen(IoMemory(file, page), map_at_read(), map_end_events()) {
     λ state at_read memory_is => {
         let fetch = io_fetch_access();
@@ -927,12 +927,12 @@ theorem map_end(code: StructuredCode, jumps: MapJumps, pj: PrintJumps, file: Lis
                     resident_state(fetch, near_control_bytes(JumpZeroNear(jumps.ed)), stored, eof_rip(map_at_jz()), tested,
                         tested_memory, tested_rip, there.jz_at));
                 let ended = execute_near_control(JumpZeroNear(jumps.ed), tested);
-                let ended_rip: (ended.rip = eof_rip(wl_at_exit(map_at_write(code)))) =
+                let ended_rip: (ended.rip = eof_rip(wl_at_exit(map_at_write(structured_bytes(code).len())))) =
                     trans(near_taken_rip(jumps.ed, tested, set),
                         trans(cong_fn<BitVec(64), BitVec(64)>(λ address => near_branch_target(address, 6, jumps.ed), tested_rip), exit_target));
                 linux_runs_after_steps(io_linux(), [ExitEvent(BitVec::ofNat(0))], returned, ended,
                     fetched_steps_trans(fetch, data, returned, tested, ended, test.left, fetched_steps_one(fetch, data, tested, ended, jz)),
-                    wl_exit(stored, map_at_write(code), pj, there.write, ended, ended_rip, tested_memory))
+                    wl_exit(stored, map_at_write(structured_bytes(code).len()), pj, there.write, ended, ended_rip, tested_memory))
             })
     }
 }
@@ -949,11 +949,11 @@ fn MapFrom(f: BitVec(8) → BitVec(8), file: List<BitVec(8)>, ending: MapEnding,
 
 // Where the jumps land.
 record MapTargets(code: StructuredCode, jumps: MapJumps, pj: PrintJumps) {
-    exit: near_branch_target(eof_rip(map_at_jz()), 6, jumps.ed) = eof_rip(wl_at_exit(map_at_write(code))),
-    fail: near_branch_target(eof_rip(map_at_js()), 6, jumps.sd) = eof_rip(map_at_failed(code)),
-    again: near_branch_target(eof_rip(map_at_jnz(code)), 6, jumps.ld) = eof_rip(map_at_load()),
-    retry: near_branch_target(eof_rip(map_at_retry(code)), 6, jumps.rd) = eof_rip(map_at_read()),
-    write: WriteLoopTargets(map_at_write(code), map_at_read(), pj),
+    exit: near_branch_target(eof_rip(map_at_jz()), 6, jumps.ed) = eof_rip(wl_at_exit(map_at_write(structured_bytes(code).len()))),
+    fail: near_branch_target(eof_rip(map_at_js()), 6, jumps.sd) = eof_rip(map_at_failed(structured_bytes(code).len())),
+    again: near_branch_target(eof_rip(map_at_jnz(structured_bytes(code).len())), 6, jumps.ld) = eof_rip(map_at_load()),
+    retry: near_branch_target(eof_rip(map_at_retry(structured_bytes(code).len())), 6, jumps.rd) = eof_rip(map_at_read()),
+    write: WriteLoopTargets(map_at_write(structured_bytes(code).len()), map_at_read(), pj),
 }
 
 // The reads, by recursion on the history: every chunk is read, mapped and
@@ -1064,16 +1064,16 @@ theorem map_from(f: BitVec(8) → BitVec(8), code: StructuredCode, keeps: Gpr �
 
 // What JZ skips at end of file: the JS, the chunk's loop, and the write loop
 // up to its exit(0).
-fn map_exit_skip(code: StructuredCode) → Nat {
-    ((((((((((((((((6 + map_setup_len()) + map_load_len()) + structured_bytes(code).len()) + 3) + map_step_len()) + 6) + print_write_len()) + 2) + eof_test_len()) + 6) + print_advance_len()) + 6) + 5) + eof_retry_len()) + 6) + eof_fail_len()) + 2
+fn map_exit_skip(p: Nat) → Nat {
+    ((((((((((((((((6 + map_setup_len()) + map_load_len()) + p) + 3) + map_step_len()) + 6) + print_write_len()) + 2) + eof_test_len()) + 6) + print_advance_len()) + 6) + 5) + eof_retry_len()) + 6) + eof_fail_len()) + 2
 }
 // What JS skips on a failed read: the chunk's setup and loop and the whole
 // write loop.
-fn map_fail_skip(code: StructuredCode) → Nat {
-    (((((((((((((((((map_setup_len() + map_load_len()) + structured_bytes(code).len()) + 3) + map_step_len()) + 6) + print_write_len()) + 2) + eof_test_len()) + 6) + print_advance_len()) + 6) + 5) + eof_retry_len()) + 6) + eof_fail_len()) + 2) + print_exit_len()) + 2
+fn map_fail_skip(p: Nat) → Nat {
+    (((((((((((((((((map_setup_len() + map_load_len()) + p) + 3) + map_step_len()) + 6) + print_write_len()) + 2) + eof_test_len()) + 6) + print_advance_len()) + 6) + 5) + eof_retry_len()) + 6) + eof_fail_len()) + 2) + print_exit_len()) + 2
 }
 // From the load to the JNZ.
-fn map_loop_span(code: StructuredCode) → Nat { ((map_load_len() + structured_bytes(code).len()) + 3) + map_step_len() }
+fn map_loop_span(p: Nat) → Nat { ((map_load_len() + p) + 3) + map_step_len() }
 
 theorem map_exit_sum(z, su, ld, p, st, w, t, a, r, f: Nat):
     z + (6 + (((((((((((((((((6 + su) + ld) + p) + 3) + st) + 6) + w) + 2) + t) + 6) + a) + 6) + 5) + r) + 6) + f) + 2)) =
@@ -1083,22 +1083,22 @@ theorem map_fail_sum(y, su, ld, p, st, w, t, a, r, f, x: Nat):
         (((((((((((((((((((y + 6) + su) + ld) + p) + 3) + st) + 6) + w) + 2) + t) + 6) + a) + 6) + 5) + r) + 6) + f) + 2) + x) + 2 { omega }
 theorem map_loop_sum(l, ld, p, st: Nat): l + (((ld + p) + 3) + st) = (((l + ld) + p) + 3) + st { omega }
 
-theorem map_exit_target(code: StructuredCode, ed: BitVec(32), reads: ed.sign_extend(32).toNat() = map_exit_skip(code)):
-    near_branch_target(eof_rip(map_at_jz()), 6, ed) = eof_rip(wl_at_exit(map_at_write(code))) {
+theorem map_exit_target(code: StructuredCode, ed: BitVec(32), reads: ed.sign_extend(32).toNat() = map_exit_skip(structured_bytes(code).len())):
+    near_branch_target(eof_rip(map_at_jz()), 6, ed) = eof_rip(wl_at_exit(map_at_write(structured_bytes(code).len()))) {
     let entry: BitVec(64) = BitVec::ofNat(0x4000e8);
-    let skip = map_exit_skip(code);
-    let lands: (map_at_jz() + (6 + skip) = wl_at_exit(map_at_write(code))) =
+    let skip = map_exit_skip(structured_bytes(code).len());
+    let lands: (map_at_jz() + (6 + skip) = wl_at_exit(map_at_write(structured_bytes(code).len()))) =
         map_exit_sum(map_at_jz(), map_setup_len(), map_load_len(), structured_bytes(code).len(), map_step_len(),
             print_write_len(), eof_test_len(), print_advance_len(), eof_retry_len(), eof_fail_len());
     trans(near_branch_forward(eof_rip(map_at_jz()), 6, skip, ed, reads),
         trans(rip_compose(entry, map_at_jz(), 6 + skip), rip_count(entry, lands)))
 }
 
-theorem map_fail_target(code: StructuredCode, sd: BitVec(32), reads: sd.sign_extend(32).toNat() = map_fail_skip(code)):
-    near_branch_target(eof_rip(map_at_js()), 6, sd) = eof_rip(map_at_failed(code)) {
+theorem map_fail_target(code: StructuredCode, sd: BitVec(32), reads: sd.sign_extend(32).toNat() = map_fail_skip(structured_bytes(code).len())):
+    near_branch_target(eof_rip(map_at_js()), 6, sd) = eof_rip(map_at_failed(structured_bytes(code).len())) {
     let entry: BitVec(64) = BitVec::ofNat(0x4000e8);
-    let skip = map_fail_skip(code);
-    let lands: (map_at_js() + (6 + skip) = map_at_failed(code)) =
+    let skip = map_fail_skip(structured_bytes(code).len());
+    let lands: (map_at_js() + (6 + skip) = map_at_failed(structured_bytes(code).len())) =
         map_fail_sum(map_at_js(), map_setup_len(), map_load_len(), structured_bytes(code).len(), map_step_len(),
             print_write_len(), eof_test_len(), print_advance_len(), eof_retry_len(), eof_fail_len(), print_exit_len());
     trans(near_branch_forward(eof_rip(map_at_js()), 6, skip, sd, reads),
@@ -1107,14 +1107,14 @@ theorem map_fail_target(code: StructuredCode, sd: BitVec(32), reads: sd.sign_ext
 
 // The JNZ returns to the load: its displacement completes the span to 2^64.
 theorem map_again_target(code: StructuredCode, ld: BitVec(32),
-    closes: map_loop_span(code) + 6 + ld.sign_extend(32).toNat() = Nat::pow(2, 64)):
-    near_branch_target(eof_rip(map_at_jnz(code)), 6, ld) = eof_rip(map_at_load()) {
+    closes: map_loop_span(structured_bytes(code).len()) + 6 + ld.sign_extend(32).toNat() = Nat::pow(2, 64)):
+    near_branch_target(eof_rip(map_at_jnz(structured_bytes(code).len())), 6, ld) = eof_rip(map_at_load()) {
     let entry: BitVec(64) = BitVec::ofNat(0x4000e8);
-    let at_jnz: (eof_rip(map_at_jnz(code)) = next_rip(eof_rip(map_at_load()), map_loop_span(code))) =
+    let at_jnz: (eof_rip(map_at_jnz(structured_bytes(code).len())) = next_rip(eof_rip(map_at_load()), map_loop_span(structured_bytes(code).len()))) =
         trans(rip_count(entry, sym(map_loop_sum(map_at_load(), map_load_len(), structured_bytes(code).len(), map_step_len()))),
-            sym(rip_compose(entry, map_at_load(), map_loop_span(code))));
+            sym(rip_compose(entry, map_at_load(), map_loop_span(structured_bytes(code).len()))));
     trans(cong_fn<BitVec(64), BitVec(64)>(λ address => near_branch_target(address, 6, ld), at_jnz),
-        near_branch_returns(eof_rip(map_at_load()), map_loop_span(code), 6, ld, closes))
+        near_branch_returns(eof_rip(map_at_load()), map_loop_span(structured_bytes(code).len()), 6, ld, closes))
 }
 
 // The retry's JZ and the write loop's all-sent JZ return to the read, at the
@@ -1132,12 +1132,12 @@ theorem map_to_read_target(offset: Nat, displacement: BitVec(32),
 // stdout received on a run that ends well is `map_sends`'s.
 theorem read_map_runs(file: List<BitVec(8)>, f: BitVec(8) → BitVec(8), code: StructuredCode, keeps: Gpr → Type,
     piece: MapPiece(f, code, keeps), kept: MapKeeps(keeps), jumps: MapJumps, pj: PrintJumps,
-    exit_reads: jumps.ed.sign_extend(32).toNat() = map_exit_skip(code),
-    fail_reads: jumps.sd.sign_extend(32).toNat() = map_fail_skip(code),
-    again_closes: map_loop_span(code) + 6 + jumps.ld.sign_extend(32).toNat() = Nat::pow(2, 64),
-    retry_closes: map_at_retry(code) + 6 + jumps.rd.sign_extend(32).toNat() = Nat::pow(2, 64),
+    exit_reads: jumps.ed.sign_extend(32).toNat() = map_exit_skip(structured_bytes(code).len()),
+    fail_reads: jumps.sd.sign_extend(32).toNat() = map_fail_skip(structured_bytes(code).len()),
+    again_closes: map_loop_span(structured_bytes(code).len()) + 6 + jumps.ld.sign_extend(32).toNat() = Nat::pow(2, 64),
+    retry_closes: map_at_retry(structured_bytes(code).len()) + 6 + jumps.rd.sign_extend(32).toNat() = Nat::pow(2, 64),
     write_fail_reads: pj.sd.sign_extend(32).toNat() = print_fail_skip(),
-    write_read_closes: wl_at_wjz(map_at_write(code)) + 6 + pj.zd.sign_extend(32).toNat() = Nat::pow(2, 64),
+    write_read_closes: wl_at_wjz(map_at_write(structured_bytes(code).len())) + 6 + pj.zd.sign_extend(32).toNat() = Nat::pow(2, 64),
     write_back_closes: print_loop_span() + 5 + pj.bd.sign_extend(32).toNat() = Nat::pow(2, 64),
     write_retry_closes: print_retry_span() + 6 + pj.rd.sign_extend(32).toNat() = Nat::pow(2, 64),
     resident: (page: Nat → BitVec(8)) → CodeResident(io_fetch_access(), IoMemory(file, page), map_code(code, jumps, pj), BitVec::ofNat(0x4000e8)),
@@ -1148,9 +1148,9 @@ theorem read_map_runs(file: List<BitVec(8)>, f: BitVec(8) → BitVec(8), code: S
         exit := map_exit_target(code, jumps.ed, exit_reads),
         fail := map_fail_target(code, jumps.sd, fail_reads),
         again := map_again_target(code, jumps.ld, again_closes),
-        retry := map_to_read_target(map_at_retry(code), jumps.rd, retry_closes),
-        write := write_targets_to(map_at_write(code), map_at_read(), pj, write_fail_reads,
-            map_to_read_target(wl_at_wjz(map_at_write(code)), pj.zd, write_read_closes), write_back_closes, write_retry_closes));
+        retry := map_to_read_target(map_at_retry(structured_bytes(code).len()), jumps.rd, retry_closes),
+        write := write_targets_to(map_at_write(structured_bytes(code).len()), map_at_read(), pj, write_fail_reads,
+            map_to_read_target(wl_at_wjz(map_at_write(structured_bytes(code).len())), pj.zd, write_read_closes), write_back_closes, write_retry_closes));
     map_from(f, code, keeps, piece, kept, jumps, pj, targets, file,
         λ page => map_pieces(IoMemory(file, page), code, jumps, pj, resident(page)), ending, ending_ok, steps,
         ok, page, io_initial(file, page, gprs, flags), refl, refl)

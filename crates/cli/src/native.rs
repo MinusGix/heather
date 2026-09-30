@@ -18,6 +18,7 @@ mod calls;
 mod order;
 mod read_loop;
 mod read_fields;
+mod read_map;
 
 mod support;
 use support::SUPPORT;
@@ -61,6 +62,7 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     let mut read_loop = false;
     let mut print = false;
     let mut fields = false;
+    let mut map = false;
     let (mut needle, mut advance, mut computes, mut folds) = (None, None, None, None);
     let mut specs: Vec<String> = Vec::new();
     let mut timings = None;
@@ -73,6 +75,7 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
             "--read-loop" if executable => { read_loop = true; }
             "--print" if executable => { print = true; }
             "--fields" if executable => { fields = true; }
+            "--map" if executable => { map = true; }
             "--needle" | "--advance" | "--spec" | "--computes" | "--folds" if executable => {
                 let value = args.next().ok_or_else(|| format!("{arg} needs a value"))?.clone();
                 match arg.as_str() {
@@ -112,7 +115,12 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
             _ => positional.push(arg.as_str()),
         }
     }
-    if read_loop {
+    if map {
+        if read_loop || print || fields || needle.is_some() || advance.is_some() || !specs.is_empty() || computes.is_some() || folds.is_some()
+            || !inputs.is_empty() || callee.is_some() {
+            return Err("--map maps stdin to stdout through the byte map it names: no other profile, --arg or --callee".into());
+        }
+    } else if read_loop {
         if !inputs.is_empty() || callee.is_some() { return Err("--read-loop takes its input from stdin: no --arg or --callee".into()); }
         if needle.is_none() || advance.is_none() || specs.is_empty() || computes.is_none() || folds.is_none() {
             return Err("--read-loop needs --needle <byte>, --advance <theorem>, --spec <function>, --computes <theorem> and --folds <theorem>".into());
@@ -127,7 +135,7 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     }
     if positional.len() != 2 || output.is_none() {
         if executable {
-            return Err("usage: heather build-x86 <file.hthr> <function> (--arg <u64> --arg <u64> [--callee <function> [--callable-caller]] | --read-loop --needle <byte> --advance <theorem> --spec <function> --computes <theorem> --folds <theorem> [--print | --fields]) -o <executable> [-L <dir>]... [--cache-dir <dir>] [--timings <file.tsv>] [--kernel-workers <n>]".into());
+            return Err("usage: heather build-x86 <file.hthr> <function> (--arg <u64> --arg <u64> [--callee <function> [--callable-caller]] | --read-loop --needle <byte> --advance <theorem> --spec <function> --computes <theorem> --folds <theorem> [--print | --fields] | --map) -o <executable> [-L <dir>]... [--cache-dir <dir>] [--timings <file.tsv>] [--kernel-workers <n>]".into());
         }
         return Err("usage: heather compile-x86 <file.hthr> <function> -o <output.s> [-L <dir>]... [--cache-dir <dir>] [--timings <file.tsv>] [--kernel-workers <n>]".into());
     }
@@ -158,8 +166,12 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
             return Err(format!("output already exists: {}", path.display()));
         }
     }
-    let bundle: Vec<(&str, &str)> = SUPPORT.iter().chain(if read_loop { read_loop::SUPPORT } else { &[] })
-        .chain(if print || fields { read_loop::WRITE_SUPPORT } else { &[] })
+    // The map profile stands on the read profile's pieces but not its state
+    // process.
+    let read_support = read_loop::SUPPORT.iter().filter(|(name, _)| !map || *name != "elf64_read_state");
+    let bundle: Vec<(&str, &str)> = SUPPORT.iter().chain(read_support.filter(|_| read_loop || map))
+        .chain(if print || fields || map { read_loop::WRITE_SUPPORT } else { &[] })
+        .chain(if map { read_map::SUPPORT } else { &[] })
         .chain(if print { read_loop::PRINT_SUPPORT } else { &[] })
         .chain(if fields { read_fields::SUPPORT } else { &[] }).copied().collect();
     // A program may import the bundled proof library by its bundled names,
@@ -286,7 +298,19 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     let probe_inputs = [[!input(0), !input(1)],
         [input(0).wrapping_add(0x9e37_79b9_7f4a_7c15), input(1).wrapping_add(0x6a09_e667_f3bc_c909)]];
     let mut probes = Some(Vec::new());
-    let (image, body_bytes) = if read_loop && fields {
+    let (image, body_bytes) = if map {
+        // The byte map's certificate is a module of its own, which the
+        // program's composition imports.
+        let piece = read_map::generate_piece(&elab, &root_name, symbol, &prefix)?;
+        check_module(&mut elab, &mut session, &loader::Module {
+            name: piece.module.clone(), path: PathBuf::from(format!("{}.hthr", piece.module)), src: piece.text.clone(),
+        })?;
+        proof = Module::default();
+        for name in read_map::IMPORTS { proof.raw(format!("import {name};")); }
+        proof.raw(format!("import {root_name}; import {};", piece.module));
+        probes = None;
+        (Some(read_map::certify(&mut proof, &prefix, &root_name, symbol, &piece)?), None)
+    } else if read_loop && fields {
         let [s0, s1, s2] = [&specs[0], &specs[1], &specs[2]].map(|s| s.as_str());
         let program = read_fields::Program { root: &root_name, source: symbol, advance: advance.as_deref().unwrap(),
             needle: needle.unwrap(), specs: [s0, s1, s2], computes: computes.as_deref().unwrap(), folds: folds.as_deref().unwrap() };
@@ -442,7 +466,9 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
             std::fs::set_permissions(&output, std::fs::Permissions::from_mode(0o755))
                 .map_err(|e| format!("{}: {e}", output.display()))?;
         }
-        if fields {
+        if map {
+            println!("{}: {}-byte ELF64 executable; checked read-until-EOF process trace writing stdin mapped through `{symbol}`", output.display(), image.len());
+        } else if fields {
             println!("{}: {}-byte ELF64 executable; checked read-until-EOF process trace printing `{}` as a three-field line", output.display(), image.len(), specs.join("`, `"));
         } else if print {
             println!("{}: {}-byte ELF64 executable; checked read-until-EOF process trace printing `{}` as a decimal line", output.display(), image.len(), specs[0]);

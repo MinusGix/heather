@@ -336,3 +336,29 @@ certificate's `count_wc_native_runs` ends the trace with
 `write_events(three_fields_line(wc_lines(input), wc_words(input), wc_bytes(input)), …)`
 for counts below 10^7. The program may import the bundled proof library by
 its bundled names (here `bitvec_omega`), which need not exist as files.
+
+## `tr a-z A-Z`: writing after every chunk
+
+`tr.hthr` is `tr a-z A-Z` (docs/native-tr-design.md). The program is one byte
+map, `upcase`, an ordinary Heather function the compiler lowers. The process
+around it is the library's: read a page, map each byte of the chunk in place,
+write the chunk, and read again, until the empty read.
+
+```sh
+(ulimit -v 8388608 -t 900 -c 0; target/release/heather build-x86 \
+  examples/x86-native/tr.hthr upcase --map -o target/x86-native/tr \
+  --cache-dir target/native-images)
+printf 'Hello, world!\n' | ./target/x86-native/tr
+```
+
+Expected output: `HELLO, WORLD!`, and exit status 0.
+
+`--map` names a function `BitVec(8) → BitVec(8)`. The certificate's
+`upcase_native_runs` covers every history of reads and writes, interleaved:
+chunks and EINTRs on the read, and each chunk's short writes and EINTRs. The
+run ends at the empty read (exit 0), or at a failed read or write (exit 1).
+`upcase_native_sends` shows that on a run that ends well, stdout receives the
+input with `upcase` applied to every byte. Nothing is carried across chunks,
+so unlike `wc` the claim has no bound on the input. The byte is stored with a
+`mov [rsi], dl` (`ByteStore`), and the process and its proof are
+`lib/elf64_read_map.hthr`.

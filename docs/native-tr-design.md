@@ -1,6 +1,6 @@
 # `tr`: output inside the read loop — design
 
-Status: **decisions taken 2026-09-30 (§6); probe V2 §4.1.** Owner: `issues/native-tr.md`.
+Status: **decisions taken 2026-09-30 (§6); probe V2 §4.1; slices N, A, B, C, D landed 2026-09-30 (§4.2, §3.1).** Owner: `issues/native-tr.md`.
 Builds on `docs/native-wc-design.md` (the state process, §4.8; the write loop
 at an offset, §5.2), `docs/native-syscall-failures-design.md` (failure paths
 and histories) and `docs/fetched-step-determinism-design.md` (claims universal
@@ -148,6 +148,30 @@ the rest are still the chunk's, RSI = page + i and RCX = n − i.
   `f`. The CLI emits the image, the certificate and `_runs_every`, and the
   tests compare against host `tr`, with refusal controls and a mutation
   control.
+
+  *As landed (2026-09-30):*
+  - **The command.** `build-x86 <file> <function> --map`: the positional
+    function is the byte map, and `--map` takes no other profile's flags.
+    The producer (`crates/cli/src/native/read_map.rs`) refuses a function
+    that is not `BitVec(8) → BitVec(8)` before generating anything. It
+    lowers the map to its own module (`<prefix>_map_piece`), lays out
+    `map_code`, and emits the image facts. The claim `_runs` instantiates
+    `read_map_runs`, `_runs_every` is the determinism corollary, and
+    `_sends` is `map_sends`.
+  - **Offsets.** The library's offsets and jump facts take the byte map's
+    length (`map_at_store(p)`, `map_exit_skip(p)`, …), so the producer
+    proves each jump fact by rewriting with the piece's `_byte_length` and
+    evaluating closed numbers only.
+  - **The build.** `examples/x86-native/tr.hthr` builds to a 619-byte ELF.
+  - **Tests.** `native_tr` compares the output with the mapped input and
+    with host `tr a-z A-Z`, over sizes on each side of the page boundaries
+    and past them. It checks that a chunk's image arrives while stdin is
+    still open, that a failed read exits 1, and that `/dev/full` exits 1.
+    A non-byte-map function and `--map` with `--arg` are both refused with
+    nothing published.
+  - **Mutation controls.** The library's are in `read_map_process` (§3.1
+    slice C) and the byte store's in `linux_determinism`, so none is added
+    here.
 
 ## 4. The byte map
 
