@@ -84,6 +84,7 @@ different measurement, and it is the one that keeps going wrong by hand:
     scripts/perf ab --patch round.patch --touch             # on a box without git (furnace)
     scripts/perf ab --replay                                # re-render the last report, measuring nothing
     scripts/perf ab --source-patch showcase.patch           # a change to lib/ or a showcase: one binary, two source trees
+    scripts/perf ab --base REV --whole-tree --file F        # compiler and lib/ changed together: each binary over its own tree
 
 It builds both binaries, parks a copy of each (a `cargo build` writes one
 path, and an A/B builds twice), interleaves `--samples` cold checks of each,
@@ -119,6 +120,17 @@ What it refuses to let you get wrong, each because it happened:
   the heaviest N items plus the per-step outliers, so an item near that cut
   drifts in and out between samples and its "delta" is the cut moving. What was
   dropped, and why, is printed.
+
+### A round that changed both: `--whole-tree`
+
+When a round changes the compiler and `lib/` together, neither mode above
+applies. The before binary cannot check the after tree's library, because it
+emits constructors the library no longer has, and the after binary cannot
+check the before tree's. `--whole-tree` (with `--base`) runs the before binary
+inside its worktree, over that commit's sources. Each side is then one whole
+tree, and a moved counter is the round's combined result. The native build
+workloads (`BUILD_X86`, e.g. `examples/x86-native/wc.hthr`) are the usual
+reason to use it.
 
 ### A source change: `--source-patch`
 
