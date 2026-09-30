@@ -38,6 +38,7 @@ import logic;
 import nat;
 import option;
 import omega;
+import pair;
 
 // A word stored where R9 points.
 fn fields_store() → WordStore { WordStore(R9, Rax) }
@@ -185,22 +186,17 @@ theorem fields_pieces(memory: IoMemory, at: Nat, low, high: StructuredCode, pj: 
 }
 
 // ---------------------------------------------------------------------------
-// The formatter's certificates (field_line's FieldLowCert and FieldHighCert),
-// as the producer generates them from field_line's source functions, and the
-// registers each keeps: the count for the high word, and the counts still to
-// print.
+// The formatter's two codes, and their certificates (field_line's `FieldLow`
+// and `FieldHigh`) as the producer generates them from field_line's source
+// functions; over the codes as a parameter, as elf64_print_pieces's
+// `PrintFormat`.
 record FieldsCodes {
     low: StructuredCode,
     high: StructuredCode,
-    low_keeps: Gpr → Type,
-    high_keeps: Gpr → Type,
 }
-// Over the codes as a parameter, as elf64_print_pieces's `PrintFormat`.
 record FieldsFormat(codes: FieldsCodes) {
-    low_cert: FieldLowCert<IoMemory>(codes.low, codes.low_keeps),
-    high_cert: FieldHighCert<IoMemory>(codes.high, codes.high_keeps),
-    low_r11: codes.low_keeps(R11), low_r13: codes.low_keeps(R13), low_r14: codes.low_keeps(R14), low_r15: codes.low_keeps(R15),
-    high_r13: codes.high_keeps(R13), high_r14: codes.high_keeps(R14), high_r15: codes.high_keeps(R15),
+    low: FieldLow<IoMemory>(codes.low),
+    high: FieldHigh<IoMemory>(codes.high),
 }
 
 // The first three fields of a state, as the counts R13, R14 and R15 hold.
@@ -254,8 +250,6 @@ theorem field_prints(file: List<BitVec(8)>, count: Gpr, offset, separator: Nat, 
         ((after.rip = eof_rip(fc_end(count, offset, separator, codes.low, codes.high, at))) ∧ CountsKept(after.gprs, state.gprs)))) {
     let low = codes.low;
     let high = codes.high;
-    let low_keeps = codes.low_keeps;
-    let high_keeps = codes.high_keeps;
     let fetch = io_fetch_access();
     let data = io_data_access();
     let entry = io_entry();
@@ -265,96 +259,75 @@ theorem field_prints(file: List<BitVec(8)>, count: Gpr, offset, separator: Nat, 
     let here = pieces(page);
     let m0 = IoMemory(file, page);
     // The count into R11.
-    let counted_in = block_fetched(fetch, data, field_count_block(count), state, trivial,
-        resident_state(fetch, canonical_block_bytes(field_count_block(count)), m0, eof_rip(at), state, memory_is, rip_is, here.count_at));
     let s1 = execute_block_normal(field_count_block(count), state);
-    let s1_memory: (s1.memory = m0) = trans(pure_block_memory(field_count_block(count), state), memory_is);
-    let s1_rip: (s1.rip = eof_rip(fc_low(count, offset, separator, low, high, at))) =
-        trans(counted_in.right, rip_advance(entry, state.rip, at, canonical_block_bytes(field_count_block(count)).len(), rip_is));
+    let counted_in: PieceRan(m0, fc_low(count, offset, separator, low, high, at), state, s1) =
+        block_runs(field_count_block(count), state, m0, at, here.count_at, memory_is, rip_is);
     let s1_r11: (read_gpr(R11, s1.gprs) = word) = counted;
     // The low word.
-    have lw = format.low_cert(s1, read_gpr(R11, s1.gprs), refl);
-    let lw_run = artifact_fetched(low, s1, Rax, field_low(read_gpr(R11, s1.gprs)), low_keeps, lw,
-        resident_state(fetch, structured_bytes(low), m0, eof_rip(fc_low(count, offset, separator, low, high, at)), s1, s1_memory, s1_rip, here.low_at));
+    have lw = format.low(s1, word, sym(s1_r11));
     let s2 = lw.after;
-    let s2_memory: (s2.memory = m0) = trans(lw.memory_preserved, s1_memory);
-    let s2_rip: (s2.rip = eof_rip(fc_block(count, offset, separator, low, high, at))) =
-        trans(lw.rip_correct, rip_advance(entry, s1.rip, fc_low(count, offset, separator, low, high, at), structured_bytes(low).len(), s1_rip));
-    let s2_r11: (read_gpr(R11, s2.gprs) = word) = trans(lw.registers_preserved(R11, format.low_r11), s1_r11);
-    let s2_rax: (read_gpr(Rax, s2.gprs) = field_low(word)) = trans(lw.result_correct, cong_fn<BitVec(64), BitVec(64)>(λ v => field_low(v), s1_r11));
-    let k2: CountsKept(s2.gprs, s1.gprs) = ⟨lw.registers_preserved(R13, format.low_r13), ⟨lw.registers_preserved(R14, format.low_r14),
-        lw.registers_preserved(R15, format.low_r15)⟩⟩;
+    let lowered: PieceRan(m0, fc_block(count, offset, separator, low, high, at), s1, s2) =
+        piece_runs(lw, m0, fc_low(count, offset, separator, low, high, at), here.low_at, counted_in.memory, counted_in.rip);
+    let s2_r11: (read_gpr(R11, s2.gprs) = word) = trans(lw.registers_preserved(R11, trivial), s1_r11);
+    let k2: CountsKept(s2.gprs, s1.gprs) = ⟨lw.registers_preserved(R13, trivial), ⟨lw.registers_preserved(R14, trivial),
+        lw.registers_preserved(R15, trivial)⟩⟩;
     // Its address, and the high word's tail.
-    let blocked = block_fetched(fetch, data, field_low_block(offset, separator), s2, trivial,
-        resident_state(fetch, canonical_block_bytes(field_low_block(offset, separator)), m0, eof_rip(fc_block(count, offset, separator, low, high, at)), s2, s2_memory, s2_rip,
-            here.block_at));
     let s3 = execute_block_normal(field_low_block(offset, separator), s2);
-    let s3_memory: (s3.memory = m0) = trans(pure_block_memory(field_low_block(offset, separator), s2), s2_memory);
-    let s3_rip: (s3.rip = eof_rip(fc_store(count, offset, separator, low, high, at))) =
-        trans(blocked.right, rip_advance(entry, s2.rip, fc_block(count, offset, separator, low, high, at), canonical_block_bytes(field_low_block(offset, separator)).len(), s2_rip));
-    let s3_rax: (read_gpr(Rax, s3.gprs) = field_low(word)) = s2_rax;
+    let blocked: PieceRan(m0, fc_store(count, offset, separator, low, high, at), s2, s3) =
+        block_runs(field_low_block(offset, separator), s2, m0, fc_block(count, offset, separator, low, high, at), here.block_at, lowered.memory, lowered.rip);
+    let s3_rax: (read_gpr(Rax, s3.gprs) = field_low(word)) = lw.result_correct;
     let s3_r11: (read_gpr(R11, s3.gprs) = word) = s2_r11;
     // The low word stored.
     let low_room: (offset + 8 <= 4096) = omega;
     let stored = store_step(fetch, writes, fields_store(), s3, refl,
         FetchedFrom(resident_readable(fetch, s3.memory, word_store_bytes(fields_store()), s3.rip,
-            resident_state(fetch, word_store_bytes(fields_store()), m0, eof_rip(fc_store(count, offset, separator, low, high, at)), s3, s3_memory, s3_rip,
+            resident_state(fetch, word_store_bytes(fields_store()), m0, eof_rip(fc_store(count, offset, separator, low, high, at)), s3, blocked.memory, blocked.rip,
                 here.store_at))),
-        j(sym(s3_memory), λ m _ => IoWritable(m, BitVec::ofNat(0x410000 + offset), 8), page_writable(m0, offset, low_room)));
+        j(sym(blocked.memory), λ m _ => IoWritable(m, BitVec::ofNat(0x410000 + offset), 8), page_writable(m0, offset, low_room)));
     let s4 = word_store_after(writes, fields_store(), s3);
     let m1 = io_store_offset(m0, offset, word_bytes(field_low(word)));
     let s4_memory: (s4.memory = m1) =
         trans(cong_fn<BitVec(64), IoMemory>(λ value => io_store(s3.memory, BitVec::ofNat(0x410000 + offset), word_bytes(value)), s3_rax),
-            trans(cong_fn<IoMemory, IoMemory>(λ m => io_store(m, BitVec::ofNat(0x410000 + offset), word_bytes(field_low(word))), s3_memory),
+            trans(cong_fn<IoMemory, IoMemory>(λ m => io_store(m, BitVec::ofNat(0x410000 + offset), word_bytes(field_low(word))), blocked.memory),
                 page_store(m0, offset, word_bytes(field_low(word)), low_room)));
     let s4_rip: (s4.rip = eof_rip(fc_high(count, offset, separator, low, high, at))) =
-        rip_advance(entry, s3.rip, fc_store(count, offset, separator, low, high, at), 3, s3_rip);
+        rip_advance(entry, s3.rip, fc_store(count, offset, separator, low, high, at), 3, blocked.rip);
     let there = pieces(m1.page);
     // The high word.
-    have hw = format.high_cert(s4, read_gpr(R11, s4.gprs), read_gpr(R10, s4.gprs), refl, refl);
-    let hw_run = artifact_fetched(high, s4, Rax, field_high(read_gpr(R11, s4.gprs), read_gpr(R10, s4.gprs)), high_keeps, hw,
-        resident_state(fetch, structured_bytes(high), m1, eof_rip(fc_high(count, offset, separator, low, high, at)), s4, s4_memory, s4_rip, there.high_at));
+    have hw = format.high(s4, Pair(word, tail), ⟨sym(s3_r11), refl⟩);
     let s5 = hw.after;
-    let s5_memory: (s5.memory = m1) = trans(hw.memory_preserved, s4_memory);
-    let s5_rip: (s5.rip = eof_rip(fc_block2(count, offset, separator, low, high, at))) =
-        trans(hw.rip_correct, rip_advance(entry, s4.rip, fc_high(count, offset, separator, low, high, at), structured_bytes(high).len(), s4_rip));
-    let s5_rax: (read_gpr(Rax, s5.gprs) = field_high(word, tail)) =
-        trans(hw.result_correct, cong_fn<BitVec(64), BitVec(64)>(λ v => field_high(v, tail), s3_r11));
-    let k5: CountsKept(s5.gprs, s4.gprs) = ⟨hw.registers_preserved(R13, format.high_r13), ⟨hw.registers_preserved(R14, format.high_r14),
-        hw.registers_preserved(R15, format.high_r15)⟩⟩;
+    let highed: PieceRan(m1, fc_block2(count, offset, separator, low, high, at), s4, s5) =
+        piece_runs(hw, m1, fc_high(count, offset, separator, low, high, at), there.high_at, s4_memory, s4_rip);
+    let k5: CountsKept(s5.gprs, s4.gprs) = ⟨hw.registers_preserved(R13, trivial), ⟨hw.registers_preserved(R14, trivial),
+        hw.registers_preserved(R15, trivial)⟩⟩;
     // Its address.
-    let blocked2 = block_fetched(fetch, data, field_high_block(offset), s5, trivial,
-        resident_state(fetch, canonical_block_bytes(field_high_block(offset)), m1, eof_rip(fc_block2(count, offset, separator, low, high, at)), s5,
-            s5_memory, s5_rip, there.block2_at));
     let s6 = execute_block_normal(field_high_block(offset), s5);
-    let s6_memory: (s6.memory = m1) = trans(pure_block_memory(field_high_block(offset), s5), s5_memory);
-    let s6_rip: (s6.rip = eof_rip(fc_store2(count, offset, separator, low, high, at))) =
-        trans(blocked2.right, rip_advance(entry, s5.rip, fc_block2(count, offset, separator, low, high, at),
-            canonical_block_bytes(field_high_block(offset)).len(), s5_rip));
-    let s6_rax: (read_gpr(Rax, s6.gprs) = field_high(word, tail)) = s5_rax;
+    let blocked2: PieceRan(m1, fc_store2(count, offset, separator, low, high, at), s5, s6) =
+        block_runs(field_high_block(offset), s5, m1, fc_block2(count, offset, separator, low, high, at), there.block2_at, highed.memory, highed.rip);
+    let s6_rax: (read_gpr(Rax, s6.gprs) = field_high(word, tail)) = hw.result_correct;
     // The high word stored.
     let high_room: ((offset + 4) + 8 <= 4096) = omega;
     let stored2 = store_step(fetch, writes, fields_store(), s6, refl,
         FetchedFrom(resident_readable(fetch, s6.memory, word_store_bytes(fields_store()), s6.rip,
-            resident_state(fetch, word_store_bytes(fields_store()), m1, eof_rip(fc_store2(count, offset, separator, low, high, at)), s6, s6_memory, s6_rip,
-                there.store2_at))),
-        j(sym(s6_memory), λ m _ => IoWritable(m, BitVec::ofNat(0x410000 + (offset + 4)), 8), page_writable(m1, offset + 4, high_room)));
+            resident_state(fetch, word_store_bytes(fields_store()), m1, eof_rip(fc_store2(count, offset, separator, low, high, at)), s6, blocked2.memory,
+                blocked2.rip, there.store2_at))),
+        j(sym(blocked2.memory), λ m _ => IoWritable(m, BitVec::ofNat(0x410000 + (offset + 4)), 8), page_writable(m1, offset + 4, high_room)));
     let s7 = word_store_after(writes, fields_store(), s6);
     let s7_memory: (s7.memory = field_stored(m0, n, offset, separator)) =
         trans(cong_fn<BitVec(64), IoMemory>(λ value => io_store(s6.memory, BitVec::ofNat(0x410000 + (offset + 4)), word_bytes(value)), s6_rax),
-            trans(cong_fn<IoMemory, IoMemory>(λ m => io_store(m, BitVec::ofNat(0x410000 + (offset + 4)), word_bytes(field_high(word, tail))), s6_memory),
+            trans(cong_fn<IoMemory, IoMemory>(λ m => io_store(m, BitVec::ofNat(0x410000 + (offset + 4)), word_bytes(field_high(word, tail))), blocked2.memory),
                 page_store(m1, offset + 4, word_bytes(field_high(word, tail)), high_room)));
     let s7_rip: (s7.rip = eof_rip(fc_end(count, offset, separator, low, high, at))) =
-        rip_advance(entry, s6.rip, fc_store2(count, offset, separator, low, high, at), 3, s6_rip);
+        rip_advance(entry, s6.rip, fc_store2(count, offset, separator, low, high, at), 3, blocked2.rip);
     let k1: CountsKept(s1.gprs, state.gprs) = ⟨refl, ⟨refl, refl⟩⟩;
     let k4: CountsKept(s4.gprs, s2.gprs) = ⟨refl, ⟨refl, refl⟩⟩;
     let k7: CountsKept(s7.gprs, s5.gprs) = ⟨refl, ⟨refl, refl⟩⟩;
     let steps = linux_steps_trans(io_linux(), state, s3, s7,
-        linux_steps_of_fetched(io_linux(), state, s3, fetched_steps_trans(fetch, data, state, s1, s3, counted_in.left,
-            fetched_steps_trans(fetch, data, s1, s2, s3, lw_run, blocked.left))),
+        linux_steps_of_fetched(io_linux(), state, s3, fetched_steps_trans(fetch, data, state, s1, s3, counted_in.steps,
+            fetched_steps_trans(fetch, data, s1, s2, s3, lowered.steps, blocked.steps))),
         linux_steps_trans(io_linux(), s3, s4, s7, linux_steps_store(io_linux(), s3, s4, stored),
             linux_steps_trans(io_linux(), s4, s6, s7,
-                linux_steps_of_fetched(io_linux(), s4, s6, fetched_steps_trans(fetch, data, s4, s5, s6, hw_run, blocked2.left)),
+                linux_steps_of_fetched(io_linux(), s4, s6, fetched_steps_trans(fetch, data, s4, s5, s6, highed.steps, blocked2.steps)),
                 linux_steps_store(io_linux(), s6, s7, stored2))));
     Exists(s7, ⟨steps, ⟨s7_memory, ⟨s7_rip,
         counts_kept_trans(state.gprs, s5.gprs, s7.gprs,

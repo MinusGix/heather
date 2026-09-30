@@ -34,6 +34,7 @@ import logic;
 import nat;
 import option;
 import omega;
+import pair;
 
 // The count where the formatter reads it, and where the line's word is
 // stored: the page's base.
@@ -59,50 +60,76 @@ fn print_advance_len() → Nat { canonical_block_bytes(print_advance_block()).le
 fn print_exit_len() → Nat { canonical_block_bytes(print_exit_block()).len() }
 
 // The formatter's certificates, as the producer generates them from
-// decimal_line's source functions at the profile's registers, and the
-// registers each keeps for what runs after it.
-fn PrintWord(word: StructuredCode, keeps: Gpr → Type) → Type {
-    (before: MachineState<IoMemory>) → (n: BitVec(64)) → n = read_gpr(R11, before.gprs) →
-        StructuredArtifact<IoMemory>(word, before, Rax, line_word(n), keeps)
+// decimal_line's source functions at the profile's registers: the count read
+// from R11 and the page's base from R8, the word to RAX, the start to R9 and
+// the length to R10. Each writes only its scratch, so the registers what runs
+// after it reads are kept.
+fn print_word_scratch() → List<Gpr> { [Rax, Rcx, Rdx, Rbx, R9, R10, R12, R13, R14, R15] }
+fn print_start_scratch() → List<Gpr> { [R9, Rcx, Rdx, Rbx, R10, R12, R13, R14, R15] }
+fn print_length_scratch() → List<Gpr> { [R10, Rcx, Rdx, Rbx, R12, R13, R14, R15] }
+fn PrintWord(word: StructuredCode) → Type {
+    Computes<IoMemory, BitVec(64)>(word, λ n g => n = read_gpr(R11, g), Rax, λ n => line_word(n), print_word_scratch())
 }
-fn PrintStart(start: StructuredCode, keeps: Gpr → Type) → Type {
-    (before: MachineState<IoMemory>) → (base, n: BitVec(64)) → base = read_gpr(R8, before.gprs) → n = read_gpr(R11, before.gprs) →
-        StructuredArtifact<IoMemory>(start, before, R9, line_start(base, n), keeps)
+fn PrintStart(start: StructuredCode) → Type {
+    Computes<IoMemory, Pair<BitVec(64), BitVec(64)>>(start, λ x g => (x.fst = read_gpr(R8, g)) ∧ (x.snd = read_gpr(R11, g)), R9,
+        λ x => line_start(x.fst, x.snd), print_start_scratch())
 }
-fn PrintLength(length: StructuredCode, keeps: Gpr → Type) → Type {
-    (before: MachineState<IoMemory>) → (n: BitVec(64)) → n = read_gpr(R11, before.gprs) →
-        StructuredArtifact<IoMemory>(length, before, R10, line_length(n), keeps)
+fn PrintLength(length: StructuredCode) → Type {
+    Computes<IoMemory, BitVec(64)>(length, λ n g => n = read_gpr(R11, g), R10, λ n => line_length(n), print_length_scratch())
 }
-// The formatter's three codes and what each keeps: plain data, none of it
-// depending on the rest, so a client carries it as one value.
+// The formatter's three codes: plain data, so a client carries them as one
+// value.
 record PrintCodes {
     word: StructuredCode,
     start: StructuredCode,
     length: StructuredCode,
-    word_keeps: Gpr → Type,
-    start_keeps: Gpr → Type,
-    length_keeps: Gpr → Type,
 }
-// Their certificates and the registers each keeps for what runs after it.
-// Stated over the codes as a parameter: a record whose later fields depend
-// on its earlier ones costs the kernel far more at every projection.
+// Their certificates, stated over the codes as a parameter: a record whose
+// later fields depend on its earlier ones costs the kernel far more at every
+// projection.
 record PrintFormat(codes: PrintCodes) {
-    word_cert: PrintWord(codes.word, codes.word_keeps),
-    start_cert: PrintStart(codes.start, codes.start_keeps),
-    length_cert: PrintLength(codes.length, codes.length_keeps),
-    word_r8: codes.word_keeps(R8), word_r11: codes.word_keeps(R11),
-    start_rax: codes.start_keeps(Rax), start_r8: codes.start_keeps(R8), start_r11: codes.start_keeps(R11),
-    length_rax: codes.length_keeps(Rax), length_r8: codes.length_keeps(R8), length_r9: codes.length_keeps(R9),
+    word: PrintWord(codes.word),
+    start: PrintStart(codes.start),
+    length: PrintLength(codes.length),
 }
 
-// One artifact, fetched where its bytes are resident: the run, its end, and
-// that memory is untouched.
-theorem artifact_fetched(code: StructuredCode, before: MachineState<IoMemory>, result_register: Gpr, result: BitVec(64),
-    keeps: Gpr → Type, artifact: StructuredArtifact<IoMemory>(code, before, result_register, result, keeps),
-    resident: CodeResident(io_fetch_access(), before.memory, structured_bytes(code), before.rip)):
-    FetchedSteps(io_fetch_access(), io_data_access(), before, artifact.after) {
-    j(sym(artifact.execution), λ after _ => FetchedSteps(io_fetch_access(), io_data_access(), before, after),
-        structured_fetched(io_fetch_access(), io_data_access(), code, before, artifact.layout, resident).left)
+// A piece of the code run from offset `at`, where its bytes are resident:
+// its steps, memory as it was, and RIP at its end, `to` (which a client names
+// by its label).
+record PieceRan(stored: IoMemory, to: Nat, before, after: MachineState<IoMemory>) {
+    steps: FetchedSteps(io_fetch_access(), io_data_access(), before, after),
+    memory: after.memory = stored,
+    rip: after.rip = eof_rip(to),
+}
+
+// A generated piece's run, from its certificate (`Computes`).
+theorem piece_runs({code: StructuredCode}, {before: MachineState<IoMemory>}, {output: Gpr}, {result: BitVec(64)}, {scratch: List<Gpr>},
+    artifact: StructuredArtifact<IoMemory>(code, before, output, result, λ (register: Gpr) => Kept(scratch, register)), stored: IoMemory, at: Nat,
+    resident: CodeResident(io_fetch_access(), stored, structured_bytes(code), eof_rip(at)),
+    memory_is: before.memory = stored, rip_is: before.rip = eof_rip(at)):
+    PieceRan(stored, at + structured_bytes(code).len(), before, artifact.after) {
+    let fetch = io_fetch_access();
+    let data = io_data_access();
+    let ran = structured_fetched(fetch, data, code, before, artifact.layout,
+        resident_state(fetch, structured_bytes(code), stored, eof_rip(at), before, memory_is, rip_is, resident));
+    PieceRan(
+        steps := j(sym(artifact.execution), λ after _ => FetchedSteps(fetch, data, before, after), ran.left),
+        memory := trans(artifact.memory_preserved, memory_is),
+        rip := trans(artifact.rip_correct, rip_advance(io_entry(), before.rip, at, structured_bytes(code).len(), rip_is)))
+}
+
+// A fixed block's run.
+theorem block_runs(instructions: List<Instruction>, before: MachineState<IoMemory>, stored: IoMemory, at: Nat,
+    resident: CodeResident(io_fetch_access(), stored, canonical_block_bytes(instructions), eof_rip(at)),
+    memory_is: before.memory = stored, rip_is: before.rip = eof_rip(at)):
+    PieceRan(stored, at + canonical_block_bytes(instructions).len(), before, execute_block_normal(instructions, before)) {
+    let fetch = io_fetch_access();
+    let ran = block_fetched(fetch, io_data_access(), instructions, before, trivial,
+        resident_state(fetch, canonical_block_bytes(instructions), stored, eof_rip(at), before, memory_is, rip_is, resident));
+    PieceRan(
+        steps := ran.left,
+        memory := trans(pure_block_memory(instructions, before), memory_is),
+        rip := trans(ran.right, rip_advance(io_entry(), before.rip, at, canonical_block_bytes(instructions).len(), rip_is)))
 }
 
 theorem page_write_reads(i, skip: Nat):

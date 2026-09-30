@@ -32,6 +32,7 @@ import logic;
 import nat;
 import option;
 import omega;
+import pair;
 
 // ---------------------------------------------------------------------------
 // The printing tail: the count to R11 and the page to R8, the formatter's
@@ -125,59 +126,39 @@ theorem count_formats(stored: IoMemory, at: Nat, codes: PrintCodes, format: Prin
     let word = codes.word;
     let start = codes.start;
     let length = codes.length;
-    let word_keeps = codes.word_keeps;
-    let start_keeps = codes.start_keeps;
-    let length_keeps = codes.length_keeps;
     let fetch = io_fetch_access();
     let data = io_data_access();
-    let entry = io_entry();
     let n = bitvec_nat::word_of_nat(64, count);
-    let based = block_fetched(fetch, data, print_base_block(), done, trivial,
-        resident_state(fetch, canonical_block_bytes(print_base_block()), stored, eof_rip(at), done, done_memory, done_rip, pieces.base_at));
     let s0 = execute_block_normal(print_base_block(), done);
-    let s0_memory: (s0.memory = stored) = trans(pure_block_memory(print_base_block(), done), done_memory);
-    let s0_rip: (s0.rip = eof_rip(ct_word(at, word, start, length))) = trans(based.right, rip_advance(entry, done.rip, at, print_base_len(), done_rip));
+    let based: PieceRan(stored, ct_word(at, word, start, length), done, s0) =
+        block_runs(print_base_block(), done, stored, at, pieces.base_at, done_memory, done_rip);
     let s0_r11: (read_gpr(R11, s0.gprs) = n) = done_count;
     // The line's word.
-    have w = format.word_cert(s0, read_gpr(R11, s0.gprs), refl);
-    let w_run = artifact_fetched(word, s0, Rax, line_word(read_gpr(R11, s0.gprs)), word_keeps, w,
-        resident_state(fetch, structured_bytes(word), stored, eof_rip(ct_word(at, word, start, length)), s0, s0_memory, s0_rip, pieces.word_at));
+    have w = format.word(s0, n, sym(s0_r11));
     let s1 = w.after;
-    let s1_memory: (s1.memory = stored) = trans(w.memory_preserved, s0_memory);
-    let s1_rip: (s1.rip = eof_rip(ct_start(at, word, start, length))) =
-        trans(w.rip_correct, rip_advance(entry, s0.rip, ct_word(at, word, start, length), structured_bytes(word).len(), s0_rip));
-    let s1_r8: (read_gpr(R8, s1.gprs) = BitVec::ofNat(0x410000)) = w.registers_preserved(R8, format.word_r8);
-    let s1_r11: (read_gpr(R11, s1.gprs) = n) = trans(w.registers_preserved(R11, format.word_r11), s0_r11);
-    let s1_rax: (read_gpr(Rax, s1.gprs) = line_word(n)) =
-        trans(w.result_correct, cong_fn<BitVec(64), BitVec(64)>(λ v => line_word(v), s0_r11));
+    let worded: PieceRan(stored, ct_start(at, word, start, length), s0, s1) =
+        piece_runs(w, stored, ct_word(at, word, start, length), pieces.word_at, based.memory, based.rip);
+    let s1_r8: (read_gpr(R8, s1.gprs) = BitVec::ofNat(0x410000)) = w.registers_preserved(R8, trivial);
+    let s1_r11: (read_gpr(R11, s1.gprs) = n) = trans(w.registers_preserved(R11, trivial), s0_r11);
     // Where the line starts.
-    have st = format.start_cert(s1, read_gpr(R8, s1.gprs), read_gpr(R11, s1.gprs), refl, refl);
-    let st_run = artifact_fetched(start, s1, R9, line_start(read_gpr(R8, s1.gprs), read_gpr(R11, s1.gprs)), start_keeps, st,
-        resident_state(fetch, structured_bytes(start), stored, eof_rip(ct_start(at, word, start, length)), s1, s1_memory, s1_rip, pieces.start_at));
+    have st = format.start(s1, Pair(BitVec::ofNat(0x410000), n), ⟨sym(s1_r8), sym(s1_r11)⟩);
     let s2 = st.after;
-    let s2_memory: (s2.memory = stored) = trans(st.memory_preserved, s1_memory);
-    let s2_rip: (s2.rip = eof_rip(ct_length(at, word, start, length))) =
-        trans(st.rip_correct, rip_advance(entry, s1.rip, ct_start(at, word, start, length), structured_bytes(start).len(), s1_rip));
-    let s2_r8: (read_gpr(R8, s2.gprs) = BitVec::ofNat(0x410000)) = trans(st.registers_preserved(R8, format.start_r8), s1_r8);
-    let s2_r11: (read_gpr(R11, s2.gprs) = n) = trans(st.registers_preserved(R11, format.start_r11), s1_r11);
-    let s2_rax: (read_gpr(Rax, s2.gprs) = line_word(n)) = trans(st.registers_preserved(Rax, format.start_rax), s1_rax);
-    let s2_r9: (read_gpr(R9, s2.gprs) = line_start(BitVec::ofNat(0x410000), n)) =
-        trans(st.result_correct, trans(cong_fn<BitVec(64), BitVec(64)>(λ b => line_start(b, read_gpr(R11, s1.gprs)), s1_r8),
-            cong_fn<BitVec(64), BitVec(64)>(λ v => line_start(BitVec::ofNat(0x410000), v), s1_r11)));
+    let started: PieceRan(stored, ct_length(at, word, start, length), s1, s2) =
+        piece_runs(st, stored, ct_start(at, word, start, length), pieces.start_at, worded.memory, worded.rip);
     // How long it is.
-    have ln = format.length_cert(s2, read_gpr(R11, s2.gprs), refl);
-    let ln_run = artifact_fetched(length, s2, R10, line_length(read_gpr(R11, s2.gprs)), length_keeps, ln,
-        resident_state(fetch, structured_bytes(length), stored, eof_rip(ct_length(at, word, start, length)), s2, s2_memory, s2_rip, pieces.length_at));
+    have ln = format.length(s2, n, sym(trans(st.registers_preserved(R11, trivial), s1_r11)));
     let s3 = ln.after;
-    Exists(s3, ⟨fetched_steps_trans(fetch, data, done, s0, s3, based.left,
-            fetched_steps_trans(fetch, data, s0, s1, s3, w_run, fetched_steps_trans(fetch, data, s1, s2, s3, st_run, ln_run))),
+    let measured: PieceRan(stored, ct_store(at, word, start, length), s2, s3) =
+        piece_runs(ln, stored, ct_length(at, word, start, length), pieces.length_at, started.memory, started.rip);
+    Exists(s3, ⟨fetched_steps_trans(fetch, data, done, s0, s3, based.steps,
+            fetched_steps_trans(fetch, data, s0, s1, s3, worded.steps, fetched_steps_trans(fetch, data, s1, s2, s3, started.steps, measured.steps))),
         CountFormatted(
-            memory := trans(ln.memory_preserved, s2_memory),
-            rip := trans(ln.rip_correct, rip_advance(entry, s2.rip, ct_length(at, word, start, length), structured_bytes(length).len(), s2_rip)),
-            base := trans(ln.registers_preserved(R8, format.length_r8), s2_r8),
-            word_value := trans(ln.registers_preserved(Rax, format.length_rax), s2_rax),
-            start_value := trans(ln.registers_preserved(R9, format.length_r9), s2_r9),
-            length_value := trans(ln.result_correct, cong_fn<BitVec(64), BitVec(64)>(λ v => line_length(v), s2_r11)))⟩)
+            memory := measured.memory,
+            rip := measured.rip,
+            base := trans(ln.registers_preserved(R8, trivial), trans(st.registers_preserved(R8, trivial), s1_r8)),
+            word_value := trans(ln.registers_preserved(Rax, trivial), trans(st.registers_preserved(Rax, trivial), w.result_correct)),
+            start_value := trans(ln.registers_preserved(R9, trivial), st.result_correct),
+            length_value := ln.result_correct)⟩)
 }
 
 // The formatted word stored at the page's base, then the write loop from the

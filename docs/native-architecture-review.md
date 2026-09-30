@@ -761,3 +761,99 @@ about a sixth. The fields test is again the one nearest the CPU rail. That
 was measured on a loaded machine, not by `scripts/perf ab`. If it matters,
 the place to look is the label unfolding in `field_prints` and
 `state_folds`.
+
+### R5 (2026-09-30)
+
+**One contract** (`x86_64_structured_block`). A generated straight-line
+piece enters a process one way:
+
+- `Kept(scratch, r)`: `r` is none of `scratch`. It is closed at a named
+  register, so "R8 is kept" is `trivial`.
+- `Computes<M, A>(code, placed, output, result, scratch)`: from any state
+  whose registers hold the input `x` (`placed(x, gprs)`), the code runs to
+  its end with `result(x)` in `output`, memory untouched, and every register
+  outside `scratch` as it was. The input is one value, a `Pair` chain when
+  the source takes more than one argument.
+- `computes_within`: a certificate that protects `protected` is one for
+  `scratch` when every register outside `scratch` is protected.
+
+Every generated piece of a process is now a `Computes`, with its scratch
+fixed by the library:
+
+- `PrintWord`, `PrintStart`, `PrintLength` (`print_*_scratch`);
+- `FieldLow`, `FieldHigh` (`field_*_scratch`);
+- `MapPiece` (`map_scratch`).
+
+So the keeps records are gone: `PrintFormat`'s eight keep facts,
+`FieldsFormat`'s seven and `MapKeeps`' five. `PrintCodes` and `FieldsCodes`
+are just codes, `MapByte` is a code and its certificate, and the map
+process's lemmas take two parameters fewer. A result arrives stated at the
+value rather than at a register read (`format.word(s0, n, …)` gives
+`line_word(n)`), so the `cong_fn` restatements after each piece are gone too.
+
+**Running a piece.** `PieceRan(stored, to, before, after)` is a piece's
+steps, memory as it was, and RIP at its end, named by the label `to`.
+`piece_runs` gives it for a generated piece from its certificate, and
+`block_runs` for a fixed block. Each replaces a three- or four-statement
+pattern (the fetched run over `resident_state`, then memory and RIP through
+`trans` and `rip_advance`), and `piece_runs` replaces `artifact_fetched`.
+`count_formats`, `field_prints` and `map_fetched` use them.
+
+**The register frame stays per register.** With the scratch fixed by the
+library, each kept register is one `trans` with `trivial`, and a relational
+frame like `CountsKept` is three of them. A list-valued frame with a generic
+frame lemma was considered and not taken: it would add list unfolding at
+every step of the proofs nearest the CPU rail, to save a few lines.
+
+**The generator publishes the contract.** `generate_elaborated_piece_x86(…,
+output)` is a process piece, published with:
+
+- `{p}_scratch()`: its temporaries and output;
+- `{p}_within`: every register outside the scratch is one the physical
+  certificate protects, as a match over the sixteen registers;
+- `{p}_inputs_at` and `{p}_computed`: the placement and result over the
+  source's arguments as one value;
+- `{p}_computes<M>()`, through `computes_within`.
+
+The producers name `{p}_computes<IoMemory>()`, and their lambdas and
+`trivial` lists are gone. The library's scratch lists and the producers'
+temporaries are the same lists written twice, and the certificate checks
+that they agree, as it does for R4's layout table. A scratch that differs is
+refused, even a smaller one. Accepting any sub-list would need a subset lemma
+and the scratch back as a parameter, which isn't worth it while each piece
+has one producer.
+
+**One generator.** The two typed generators share one implementation:
+
+- `publication`: the reflection, the source expansion, the observers, the
+  observation and the valuation;
+- `Publication::artifact`: the typed correctness theorem and artifact;
+- `Publication::contract`: the contract above.
+
+`generate_elaborated_typed_x86` (the whole region as one code),
+`generate_elaborated_piece_x86` (the same, with its contract) and
+`generate_elaborated_typed_fields_x86` (one narrowed code per output) are
+entry points over it. The observers were written twice with one difference,
+a one-bit scalar under a choice; they are now written once, in the whole
+region's spelling.
+
+**Controls.**
+
+- `read_map_process`'s clobbering control, a piece whose scratch includes
+  R11, is refused at `upcase_map_byte`. It used to be refused by a `False`
+  keep fact; now the scratch lists differ.
+- `field_line_format` checks each word's generated contract against
+  `FieldLow` and `FieldHigh`.
+
+**Unchanged.** The four executables are byte-identical to R4's.
+
+**Size.** The contract and its run lemmas are 34 lines in
+`x86_64_structured_block` and 27 net in `elf64_print_pieces`. The three
+clients lost 53 (`count_formats` 292 → 273, the fields module 658 → 631, the
+map module 757 → 750). The generator grew by 45 lines, the contract's
+emitter, while the merge took out the duplicate. The producers lost their
+format lambdas and keep lists.
+
+**Cost.** The process tests ran at the same order of CPU as at R4, a little
+lower each, on a machine under load, so no claim beyond "no worse". The
+fields test is still the one nearest the rail.

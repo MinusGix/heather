@@ -8,7 +8,7 @@
 //! formatter's two words, lays out the code, states the program-facing facts
 //! every record needs, and instantiates the library theorem at the written
 //! file. Nothing in it is about any one program.
-use heather_elab::function_ir_source::{generate_elaborated_loop_x86, generate_elaborated_typed_x86, reflect_elaborated_readonly_loop,
+use heather_elab::function_ir_source::{generate_elaborated_loop_x86, generate_elaborated_piece_x86, reflect_elaborated_readonly_loop,
     LoopCarry, LoopX86Emission, StructuredSourceRecord, StructuredSourceType};
 use heather_elab::function_ir_x86_lower::{encode_structured, Gpr, Instruction, Placements};
 use heather_elab::heather_emit::Module;
@@ -75,9 +75,10 @@ pub(super) fn generate_loop(elab: &Elaborator, scope: &str, prefix: &str, progra
     })?
 }
 
-// The formatter's two words at the tail's registers (elf64_read_fields'
-// `FieldsFormat`): the count in R11, the high word's tail in R10, the word to
-// RAX; R11 and R13–R15 are never written.
+// The formatter's two words at the tail's registers (field_line's `FieldLow`
+// and `FieldHigh`): the count in R11, the high word's tail in R10, the word to
+// RAX, over the scratch the library fixes for each; R11 and R13–R15 are never
+// written.
 pub(super) fn generate_format(elab: &Elaborator, prefix: &str) -> Result<Vec<FormatPart>, String> {
     use Gpr::*;
     let parts: [(&str, Placements, Vec<Gpr>); 2] = [
@@ -87,8 +88,7 @@ pub(super) fn generate_format(elab: &Elaborator, prefix: &str) -> Result<Vec<For
     elab.with_module_scope("field_line", |elab| {
         parts.into_iter().map(|(function, inputs, temporaries)| {
             let part = format!("{prefix}_{function}");
-            let outputs = Placements::from([(inputs.len() as u64, Rax)]);
-            let emission = generate_elaborated_typed_x86(elab, &part, &format!("field_line::{function}"), &inputs, &temporaries, &outputs)
+            let emission = generate_elaborated_piece_x86(elab, &part, &format!("field_line::{function}"), &inputs, &temporaries, Rax)
                 .map_err(|e| format!("{function}: {e:?}"))?;
             Ok(FormatPart { module: format!("{part}_format"), prefix: part, bytes: encode_structured(&emission.lowered), text: emission.text })
         }).collect()
@@ -172,12 +172,8 @@ theorem {prefix}_counts(gprs: Gprs, carry: {ty}, placed: {prefix}_rep(gprs, carr
 fn {prefix}_three() → ThreeCounts<{ty}>({prefix}_rep) {{
     ThreeCounts(λ (s: {ty}) => s.{f0}, λ (s: {ty}) => s.{f1}, λ (s: {ty}) => s.{f2}, {prefix}_counts)
 }}
-fn {prefix}_fields_codes() → FieldsCodes {{ FieldsCodes({lo}_code(), {hi}_code(), {lo}_Protected, {hi}_Protected) }}
-fn {prefix}_fields_format() → FieldsFormat({prefix}_fields_codes()) {{
-    FieldsFormat(λ before n placed => {lo}_typed_artifact(n, before, placed),
-        λ before n tail at_n at_tail => {hi}_typed_artifact(n, tail, before, at_n, at_tail),
-        trivial, trivial, trivial, trivial, trivial, trivial, trivial)
-}}
+fn {prefix}_fields_codes() → FieldsCodes {{ FieldsCodes({lo}_code(), {hi}_code()) }}
+fn {prefix}_fields_format() → FieldsFormat({prefix}_fields_codes()) {{ FieldsFormat({lo}_computes<IoMemory>(), {hi}_computes<IoMemory>()) }}
 ", f0 = name(0), f1 = name(1), f2 = name(2)));
     let folds = format!("{root}::{}", program.folds);
     let arguments = format!("{prefix}_file(), {prefix}_state_shape(), {prefix}_state_loop({folds}), {prefix}_init(), {prefix}_state_start(),

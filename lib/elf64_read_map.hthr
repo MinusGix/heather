@@ -33,15 +33,12 @@ import omega;
 
 // ---------------------------------------------------------------------------
 // The byte map: from its first byte with the byte in RAX, its code runs to
-// its end with the mapped byte in RDX, memory untouched, and the loop's five
-// registers kept.
+// its end with the mapped byte in RDX, memory untouched. It writes only its
+// scratch, so the loop's five registers (RSI, RCX, R9–R11) are kept.
 
-fn MapPiece(f: BitVec(8) → BitVec(8), code: StructuredCode, keeps: Gpr → Type) → Type {
-    (before: MachineState<IoMemory>) → (b: BitVec(8)) → b.zero_extend(56) = read_gpr(Rax, before.gprs) →
-        StructuredArtifact<IoMemory>(code, before, Rdx, f(b).zero_extend(56), keeps)
-}
-record MapKeeps(keeps: Gpr → Type) {
-    rsi: keeps(Rsi), rcx: keeps(Rcx), r9: keeps(R9), r10: keeps(R10), r11: keeps(R11),
+fn map_scratch() → List<Gpr> { [Rdx, Rbx, Rdi, R8] }
+fn MapPiece(f: BitVec(8) → BitVec(8), code: StructuredCode) → Type {
+    Computes<IoMemory, BitVec(8)>(code, λ b g => b.zero_extend(56) = read_gpr(Rax, g), Rdx, λ b => f(b).zero_extend(56), map_scratch())
 }
 
 // ---------------------------------------------------------------------------
@@ -261,7 +258,7 @@ record MapLoaded(f: BitVec(8) → BitVec(8), code: StructuredCode, byte: BitVec(
     r11: read_gpr(R11, loaded.gprs) = read_gpr(R11, state.gprs),
 }
 
-theorem map_fetched(f: BitVec(8) → BitVec(8), code: StructuredCode, keeps: Gpr → Type, piece: MapPiece(f, code, keeps), kept: MapKeeps(keeps),
+theorem map_fetched(f: BitVec(8) → BitVec(8), code: StructuredCode, piece: MapPiece(f, code),
     jumps: MapJumps, pj: PrintJumps, file, bytes: List<BitVec(8)>, i: Nat, inside: i < 4096, b: BitVec(8), at_byte: bytes.nth(i) = Some(b),
     pieces: (page: Nat → BitVec(8)) → MapPieces(IoMemory(file, page), code, jumps, pj),
     state: MachineState<IoMemory>, head: MapAt(f, file, bytes, i, map_at_load(structured_bytes(code).len()), state)):
@@ -285,19 +282,18 @@ theorem map_fetched(f: BitVec(8) → BitVec(8), code: StructuredCode, keeps: Gpr
          Exists(b, ByteLoadStep(canonical := canonical, present := present, execution := refl))⟩);
     let s1_rip: (s1.rip = eof_rip(map_at_piece(structured_bytes(code).len()))) = rip_advance(entry, state.rip, map_at_load(structured_bytes(code).len()), map_load_len(), head.rip_is);
     have artifact = piece(s1, b, refl);
+    let ran: PieceRan(IoMemory(file, head.page), map_at_store(structured_bytes(code).len()), s1, artifact.after) =
+        piece_runs(artifact, IoMemory(file, head.page), map_at_piece(structured_bytes(code).len()), here.piece_at, head.memory_is, s1_rip);
     Exists(artifact.after, MapLoaded(
-        steps := fetched_steps_cons(fetch, data, state, s1, artifact.after, load_step,
-            artifact_fetched(code, s1, Rdx, f(b).zero_extend(56), keeps, artifact,
-                resident_state(fetch, structured_bytes(code), IoMemory(file, head.page), eof_rip(map_at_piece(structured_bytes(code).len())), s1, head.memory_is, s1_rip,
-                    here.piece_at))),
+        steps := fetched_steps_cons(fetch, data, state, s1, artifact.after, load_step, ran.steps),
         memory_is := artifact.memory_preserved,
-        rip_is := trans(artifact.rip_correct, rip_advance(entry, s1.rip, map_at_piece(structured_bytes(code).len()), structured_bytes(code).len(), s1_rip)),
+        rip_is := ran.rip,
         image := artifact.result_correct,
-        rsi := artifact.registers_preserved(Rsi, kept.rsi),
-        rcx := artifact.registers_preserved(Rcx, kept.rcx),
-        r9 := artifact.registers_preserved(R9, kept.r9),
-        r10 := artifact.registers_preserved(R10, kept.r10),
-        r11 := artifact.registers_preserved(R11, kept.r11)))
+        rsi := artifact.registers_preserved(Rsi, trivial),
+        rcx := artifact.registers_preserved(Rcx, trivial),
+        r9 := artifact.registers_preserved(R9, trivial),
+        r10 := artifact.registers_preserved(R10, trivial),
+        r11 := artifact.registers_preserved(R11, trivial)))
 }
 
 // The image stored over byte `i`.
@@ -364,7 +360,7 @@ theorem map_page_left(bytes: List<BitVec(8)>, memory: IoMemory, i: Nat, x: BitVe
 
 // One byte: load it, map it, store the image over it, step. ZF says whether
 // the chunk is done.
-theorem map_byte(f: BitVec(8) → BitVec(8), code: StructuredCode, keeps: Gpr → Type, piece: MapPiece(f, code, keeps), kept: MapKeeps(keeps),
+theorem map_byte(f: BitVec(8) → BitVec(8), code: StructuredCode, piece: MapPiece(f, code),
     jumps: MapJumps, pj: PrintJumps, file, bytes: List<BitVec(8)>, fits: bytes.len() <= 4096, i, rest: Nat,
     counting: i + Succ(rest) = bytes.len(),
     pieces: (page: Nat → BitVec(8)) → MapPieces(IoMemory(file, page), code, jumps, pj),
@@ -377,7 +373,7 @@ theorem map_byte(f: BitVec(8) → BitVec(8), code: StructuredCode, keeps: Gpr �
     let inside = map_inside(i, rest, bytes.len(), counting, fits);
     have found = nth_below(bytes, i, { omega });
     let b = found.witness;
-    have fetched = map_fetched(f, code, keeps, piece, kept, jumps, pj, file, bytes, i, inside, b, found.proof, pieces, state, head);
+    have fetched = map_fetched(f, code, piece, jumps, pj, file, bytes, i, inside, b, found.proof, pieces, state, head);
     let s2 = fetched.witness;
     let l = fetched.proof;
     let at_byte: (read_gpr(Rsi, s2.gprs).toNat() = io_page_base() + i) = trans(cong_fn<BitVec(64), Nat>(λ v => v.toNat(), l.rsi), head.cursor);
@@ -476,7 +472,7 @@ theorem map_last_count(i, n: Nat, count: i + Succ(Zero) = n): Succ(i) = n { omeg
 
 // The chunk, by recursion on the bytes left: every byte mapped in place, and
 // the write loop reached.
-theorem map_loop(f: BitVec(8) → BitVec(8), code: StructuredCode, keeps: Gpr → Type, piece: MapPiece(f, code, keeps), kept: MapKeeps(keeps),
+theorem map_loop(f: BitVec(8) → BitVec(8), code: StructuredCode, piece: MapPiece(f, code),
     jumps: MapJumps, pj: PrintJumps,
     loop_target: near_branch_target(eof_rip(map_at_jnz(structured_bytes(code).len())), 6, jumps.ld) = eof_rip(map_at_load(structured_bytes(code).len())),
     file, bytes: List<BitVec(8)>, fits: bytes.len() <= 4096,
@@ -486,7 +482,7 @@ theorem map_loop(f: BitVec(8) → BitVec(8), code: StructuredCode, keeps: Gpr �
     match rest as λ r => (i: Nat) → (state: MachineState<IoMemory>) → i + Succ(r) = bytes.len() → MapAt(f, file, bytes, i, map_at_load(structured_bytes(code).len()), state) →
             Exists<MachineState<IoMemory>>(λ done => LinuxSteps(io_linux(), state, done) ∧ MapAt(f, file, bytes, bytes.len(), map_at_write(structured_bytes(code).len()), done)) {
         Zero => λ i state count head => {
-            have stepped = map_byte(f, code, keeps, piece, kept, jumps, pj, file, bytes, fits, i, Zero, count, pieces, state, head);
+            have stepped = map_byte(f, code, piece, jumps, pj, file, bytes, fits, i, Zero, count, pieces, state, head);
             let body = stepped.witness;
             let at = stepped.proof.right.left;
             let none: (read_gpr(Rcx, body.gprs).toNat() = 0) = map_left_word(read_gpr(Rcx, body.gprs).toNat(), i, Zero, bytes.len(), at.count, count);
@@ -497,7 +493,7 @@ theorem map_loop(f: BitVec(8) → BitVec(8), code: StructuredCode, keeps: Gpr �
                 j(map_last_count(i, bytes.len(), count), λ k _ => MapAt(f, file, bytes, k, map_at_write(structured_bytes(code).len()), out.witness), out.proof.right)⟩)
         },
         Succ(r, ih) => λ i state count head => {
-            have stepped = map_byte(f, code, keeps, piece, kept, jumps, pj, file, bytes, fits, i, Succ(r), count, pieces, state, head);
+            have stepped = map_byte(f, code, piece, jumps, pj, file, bytes, fits, i, Succ(r), count, pieces, state, head);
             let body = stepped.witness;
             let at = stepped.proof.right.left;
             let some: (read_gpr(Rcx, body.gprs).toNat() = Succ(r)) =
@@ -555,7 +551,7 @@ theorem map_sends_page(f: BitVec(8) → BitVec(8), file, bytes: List<BitVec(8)>,
 
 // One chunk, from past the head: the setup, the chunk mapped in place, then
 // the write loop, whose end goes on from the read with `then`.
-theorem map_chunk(f: BitVec(8) → BitVec(8), code: StructuredCode, keeps: Gpr → Type, piece: MapPiece(f, code, keeps), kept: MapKeeps(keeps),
+theorem map_chunk(f: BitVec(8) → BitVec(8), code: StructuredCode, piece: MapPiece(f, code),
     jumps: MapJumps, pj: PrintJumps,
     loop_target: near_branch_target(eof_rip(map_at_jnz(structured_bytes(code).len())), 6, jumps.ld) = eof_rip(map_at_load(structured_bytes(code).len())),
     targets: WriteLoopTargets(map_at_write(structured_bytes(code).len()), map_at_read(structured_bytes(code).len()), pj),
@@ -595,7 +591,7 @@ theorem map_chunk(f: BitVec(8) → BitVec(8), code: StructuredCode, keeps: Gpr �
         base := page_value,
         length := counted,
         one := refl);
-    have done = map_loop(f, code, keeps, piece, kept, jumps, pj, loop_target, file, bytes, fits, pieces, n -1,
+    have done = map_loop(f, code, piece, jumps, pj, loop_target, file, bytes, fits, pieces, n -1,
         0, ready, map_first_count(n, some), head);
     let last = done.witness;
     let at = done.proof.right;
@@ -677,7 +673,7 @@ record MapTargets(code: StructuredCode, jumps: MapJumps, pj: PrintJumps) {
 // The process for the driver: no invariant beyond where the read is (the
 // setup sets every register the chunk needs), a chunk mapped and written, a
 // chunk whose write fails, and at end of file the write loop's exit(0).
-theorem map_process(f: BitVec(8) → BitVec(8), code: StructuredCode, keeps: Gpr → Type, piece: MapPiece(f, code, keeps), kept: MapKeeps(keeps),
+theorem map_process(f: BitVec(8) → BitVec(8), code: StructuredCode, piece: MapPiece(f, code),
     jumps: MapJumps, pj: PrintJumps, targets: MapTargets(code, jumps, pj), file: List<BitVec(8)>,
     pieces: (page: Nat → BitVec(8)) → MapPieces(IoMemory(file, page), code, jumps, pj), input: List<BitVec(8)>):
     EofProcess<List<WriteStep>, WriteFailure>(file, map_at_read(structured_bytes(code).len()), wl_at_exit(map_at_write(structured_bytes(code).len())), λ _ _ => True, input,
@@ -685,11 +681,11 @@ theorem map_process(f: BitVec(8) → BitVec(8), code: StructuredCode, keeps: Gpr
     EofProcess(
         framed := λ seen before after kept held => trivial,
         chunk := λ page seen bytes rest writes some fits writes_ok prefix going rip_is memory_is length_word held after next =>
-            map_chunk(f, code, keeps, piece, kept, jumps, pj, targets.again, targets.write, file, pieces, page, bytes, some, fits,
+            map_chunk(f, code, piece, jumps, pj, targets.again, targets.write, file, pieces, page, bytes, some, fits,
                 going, memory_is, rip_is, length_word, after, Finished, trivial,
                 λ next_page state at_read in_page => next(next_page, state, at_read, in_page, trivial), writes, writes_ok),
         ends := λ page seen bytes failure some fits failure_ok going rip_is memory_is length_word held =>
-            map_chunk(f, code, keeps, piece, kept, jumps, pj, targets.again, targets.write, file, pieces, page, bytes, some, fits,
+            map_chunk(f, code, piece, jumps, pj, targets.again, targets.write, file, pieces, page, bytes, some, fits,
                 going, memory_is, rip_is, length_word, Nil, WriteFailedWith(failure.errno), failure_ok.right,
                 λ _ => trivial, failure.writes, failure_ok.left),
         at_end := λ page state at_done in_page _ =>
@@ -724,13 +720,10 @@ theorem map_targets(code: StructuredCode, jumps: MapJumps, pj: PrintJumps, facts
             jumps_back(entry, wl_at_wjz(map_at_write(p)), 6, pj.zd, map_at_read(p), facts.write_read)))
 }
 
-// The byte map as the producer certifies it: its code, the registers it
-// keeps, its certificate, and that it keeps the loop's.
+// The byte map as the producer certifies it: its code and its certificate.
 record MapByte(f: BitVec(8) → BitVec(8)) {
     code: StructuredCode,
-    keeps: Gpr → Type,
-    piece: MapPiece(f, code, keeps),
-    kept: MapKeeps(keeps),
+    piece: MapPiece(f, code),
 }
 
 // The process claim: for every history of reads and writes (chunks and
@@ -752,6 +745,6 @@ theorem read_map_runs(file: List<BitVec(8)>, f: BitVec(8) → BitVec(8), byte: M
         EofLayout(λ pg => pieces(pg).head, λ pg => pieces(pg).fail, targets.exit, targets.fail, targets.retry);
     eof_from(file, map_at_read(p), map_at_failed(p), done, jumps.ed, jumps.sd, jumps.rd, layout, λ _ _ => True, eof_input(steps),
         map_writes_ok(f), map_writes(f), map_failure_ok(f), map_failed_write(f), [ExitEvent(BitVec::ofNat(0))],
-        map_process(f, byte.code, byte.keeps, byte.piece, byte.kept, jumps, pj, targets, file, pieces, eof_input(steps)),
+        map_process(f, byte.code, byte.piece, jumps, pj, targets, file, pieces, eof_input(steps)),
         ending, ending_ok, steps)(ok, page, Nil, refl, io_initial(file, page, gprs, flags), refl, refl, trivial)
 }

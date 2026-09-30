@@ -1,5 +1,5 @@
 use crate::read_loop_fixture::checker;
-use heather_elab::function_ir_source::generate_elaborated_typed_x86;
+use heather_elab::function_ir_source::generate_elaborated_piece_x86;
 use heather_elab::function_ir_x86_lower::{Gpr, Placements};
 
 const BV_OMEGA: &str = include_str!("../../../lib/std/bitvec/bitvec_omega.hthr");
@@ -17,33 +17,25 @@ pub(crate) fn base() -> heather_elab::Elaborator {
 // gives it (docs/native-wc-design.md §5): the count in R11, the high word's
 // tail in R10, the word to RAX; R11 and R13–R15, which hold the counts still
 // to print, are never touched. Its certificate checks against the source
-// function and is what the tail asks of it (field_line's FieldLowCert or
-// FieldHighCert, and the registers elf64_read_fields' FieldsFormat needs
-// kept); it is refused by a library whose function differs in one threshold.
+// function and its contract is what the tail asks of it (field_line's
+// `FieldLow` or `FieldHigh`, over the scratch the library fixes); it is
+// refused by a library whose function differs in one threshold.
 // Each word runs in a process of its own: together they pass the CPU rail.
 pub(crate) fn word_certifies(function: &str) {
     use Gpr::*;
-    let (inputs, temporaries, cert, keeps, kept, lambda) = match function {
-        "field_low" => (Placements::from([(0, R11)]), vec![Rax, Rcx, Rdx, Rbx, R8, R9, R10, R12, Rsi, Rdi, Rbp], "FieldLowCert",
-            "field_low_Protected(R11) ∧ (field_low_Protected(R13) ∧ (field_low_Protected(R14) ∧ field_low_Protected(R15)))",
-            "⟨trivial, ⟨trivial, ⟨trivial, trivial⟩⟩⟩",
-            "λ before n placed => field_low_typed_artifact(n, before, placed)"),
-        _ => (Placements::from([(0, R11), (1, R10)]), vec![Rax, Rcx, Rdx, Rbx, R8, R9, R12, Rsi, Rdi, Rbp], "FieldHighCert",
-            "field_high_Protected(R13) ∧ (field_high_Protected(R14) ∧ field_high_Protected(R15))",
-            "⟨trivial, ⟨trivial, trivial⟩⟩",
-            "λ before n tail at_n at_tail => field_high_typed_artifact(n, tail, before, at_n, at_tail)"),
+    let (inputs, temporaries, cert) = match function {
+        "field_low" => (Placements::from([(0, R11)]), vec![Rax, Rcx, Rdx, Rbx, R8, R9, R10, R12, Rsi, Rdi, Rbp], "FieldLow"),
+        _ => (Placements::from([(0, R11), (1, R10)]), vec![Rax, Rcx, Rdx, Rbx, R8, R9, R12, Rsi, Rdi, Rbp], "FieldHigh"),
     };
-    let outputs = Placements::from([(inputs.len() as u64, Rax)]);
     let mut elab = base();
     elab.elab_module_source("field_line", FIELD).unwrap_or_else(|e| panic!("{}", e.render(FIELD)));
     elab.elab_module_source("field_context", "import field_line; import decimal_line; import bitvec; import bool;").unwrap();
-    let emission = generate_elaborated_typed_x86(&elab, function, &format!("field_line::{function}"), &inputs, &temporaries, &outputs)
+    let emission = generate_elaborated_piece_x86(&elab, function, &format!("field_line::{function}"), &inputs, &temporaries, Rax)
         .unwrap_or_else(|e| panic!("{function}: {e:?}"));
     let module = format!("{function}_format");
     elab.elab_module_source(&module, &emission.text).unwrap_or_else(|e| panic!("{}", e.render(&emission.text)));
     let fits = format!("import field_line; import {module}; import x86_64_structured_block; import x86_64; import logic;
-theorem {function}_fits<M>(): {cert}<M>({function}_code(), {function}_Protected) {{ {lambda} }}
-theorem {function}_keeps(): {keeps} {{ {kept} }}");
+theorem {function}_fits<M>(): {cert}<M>({function}_code()) {{ {function}_computes<M>() }}");
     elab.elab_module_source(&format!("{function}_fits"), &fits).unwrap_or_else(|e| panic!("{}", e.render(&fits)));
     let bad = FIELD.replace("BitVec::ofNat(4294967296000), ", "BitVec::ofNat(4294967296001), ");
     assert_ne!(bad, FIELD);

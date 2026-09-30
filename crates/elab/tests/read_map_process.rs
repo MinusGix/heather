@@ -1,5 +1,5 @@
 use crate::read_loop_fixture::checker;
-use heather_elab::function_ir_source::generate_elaborated_typed_x86;
+use heather_elab::function_ir_source::generate_elaborated_piece_x86;
 use heather_elab::function_ir_x86_lower::{Gpr, Placements};
 
 const READ_PIECES: &str = include_str!("../../../lib/elf64_read_pieces.hthr");
@@ -31,14 +31,14 @@ fn upcase(b: BitVec(8)) → BitVec(8) { match lower_byte(b) { True => b.sub(BitV
 // RDX, and the scratch the loop leaves free.
 fn upcase_piece(elab: &mut heather_elab::Elaborator, temporaries: &[Gpr]) {
     elab.elab_module_source("byte_maps", BYTE_MAPS).unwrap_or_else(|e| panic!("{}", e.render(BYTE_MAPS)));
-    let emission = generate_elaborated_typed_x86(elab, "upcase", "byte_maps::upcase", &Placements::from([(0, Gpr::Rax)]),
-        temporaries, &Placements::from([(1, Gpr::Rdx)])).unwrap_or_else(|e| panic!("{e}"));
+    let emission = generate_elaborated_piece_x86(elab, "upcase", "byte_maps::upcase", &Placements::from([(0, Gpr::Rax)]),
+        temporaries, Gpr::Rdx).unwrap_or_else(|e| panic!("{e}"));
     elab.elab_module_source("upcase_publication", &emission.text).unwrap_or_else(|e| panic!("{}", e.render(&emission.text)));
 }
 
-// The piece's typed artifact is a `MapPiece`, what it keeps covers the loop's
-// registers, and the process claim and what stdout receives follow for any
-// file holding the code.
+// The piece's contract is a `MapPiece`, over the scratch the library fixes,
+// and the process claim and what stdout receives follow for any file holding
+// the code.
 const UPCASE_PROCESS: &str = r#"
 import elf64_read_map; import elf64_write_loop; import elf64_print_pieces; import elf64_read_pieces;
 import elf64_io; import linux_x86_64_io; import linux_x86_64_entry; import x86_64_structured_block;
@@ -46,10 +46,7 @@ import x86_64; import x86_64_fetch; import x86_64_fetched_code;
 import bitvec; import bitvec_nat; import bool; import list; import logic; import nat;
 import byte_maps; import upcase_publication;
 
-theorem upcase_map_piece(): MapPiece(upcase, upcase_code(), upcase_Protected) { λ before b placed => upcase_typed_artifact(b, before, placed) }
-theorem upcase_keeps(): MapKeeps(upcase_Protected) { MapKeeps(trivial, trivial, trivial, trivial, trivial) }
-
-fn upcase_map_byte() → MapByte(upcase) { MapByte(upcase_code(), upcase_Protected, upcase_map_piece(), upcase_keeps()) }
+fn upcase_map_byte() → MapByte(upcase) { MapByte(upcase_code(), upcase_computes<IoMemory>()) }
 
 theorem upcase_runs(file: List<BitVec(8)>, jumps: MapJumps, pj: PrintJumps, facts: MapJumpFacts(upcase_bytes().len(), jumps, pj),
     resident: (page: Nat → BitVec(8)) → CodeResident(io_fetch_access(), IoMemory(file, page), map_code(upcase_code(), jumps, pj),
@@ -73,12 +70,12 @@ fn upcase_map_process_composes() {
     upcase_piece(&mut elab, &[Gpr::Rdx, Gpr::Rbx, Gpr::Rdi, Gpr::R8]);
     elab.elab_module_source("upcase_process", UPCASE_PROCESS).unwrap_or_else(|e| panic!("{}", e.render(UPCASE_PROCESS)));
     // A piece that may overwrite the loop's step register is not a piece the
-    // loop can keep going over.
+    // loop can keep going over: its scratch is not the library's.
     let mut clobbering = base();
     clobbering.elab_module_source("elf64_read_map", PROCESS).unwrap_or_else(|e| panic!("{}", e.render(PROCESS)));
     upcase_piece(&mut clobbering, &[Gpr::Rdx, Gpr::R11, Gpr::Rbx, Gpr::Rdi]);
     let error = clobbering.elab_module_source("upcase_process", UPCASE_PROCESS).expect_err("a piece clobbering R11").render(UPCASE_PROCESS);
-    assert!(error.contains("but `False` is expected") && !error.contains("unbound"), "{error}");
+    assert!(error.contains("upcase_map_byte") && !error.contains("unbound"), "{error}");
     // Nor does stdout receive the input under another map.
     let other = UPCASE_PROCESS.replace("= map_input(steps).map(upcase) {", "= map_input(steps).map(lower_image) {")
         .replace("theorem upcase_sends(", "fn lower_image(b: BitVec(8)) → BitVec(8) { b.bor(BitVec::ofNat(0x20)) }\ntheorem upcase_sends(");

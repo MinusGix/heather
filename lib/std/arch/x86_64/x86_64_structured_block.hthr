@@ -208,6 +208,40 @@ record StructuredArtifact<M>(code: StructuredCode, before: MachineState<M>,
         read_gpr(register, after.gprs) = read_gpr(register, before.gprs),
 }
 
+// `register` is none of `scratch`: a register a piece allowed to write only
+// `scratch` keeps. Closed at a named register, so a client's "R8 is kept" is
+// `trivial`.
+fn Kept(scratch: List<Gpr>, register: Gpr) → Type {
+    match scratch {
+        Nil => True,
+        Cons(s, rest) => match nat_same(gpr_index(s), gpr_index(register)) { True => False, False => Kept(rest, register) },
+    }
+}
+
+// A generated straight-line piece, as a process takes it
+// (docs/native-architecture-review.md R5): from any state whose registers
+// hold its input `x` (`placed`), its code runs to its end with `result(x)` in
+// `output`, memory untouched, and every register outside `scratch` as it
+// was. The client fixes `scratch`, so what it keeps needs no premise.
+fn Computes<M, A>(code: StructuredCode, placed: A → Gprs → Type, output: Gpr, result: A → BitVec(64), scratch: List<Gpr>) → Type {
+    (before: MachineState<M>) → (x: A) → placed(x, before.gprs) →
+        StructuredArtifact<M>(code, before, output, result(x), λ (register: Gpr) => Kept(scratch, register))
+}
+
+// A certificate that protects `protected` is one for `scratch` when every
+// register outside `scratch` is protected.
+theorem computes_within<M, A>(code: StructuredCode, placed: A → Gprs → Type, output: Gpr, result: A → BitVec(64), scratch: List<Gpr>,
+    protected: Gpr → Type, within: (register: Gpr) → Kept(scratch, register) → protected(register),
+    certificate: (before: MachineState<M>) → (x: A) → placed(x, before.gprs) → StructuredArtifact<M>(code, before, output, result(x), protected)):
+    Computes<M, A>(code, placed, output, result, scratch) {
+    λ before x at => {
+        have artifact = certificate(before, x, at);
+        StructuredArtifact(after := artifact.after, execution := artifact.execution, layout := artifact.layout, decoding := artifact.decoding,
+            result_correct := artifact.result_correct, memory_preserved := artifact.memory_preserved, rip_correct := artifact.rip_correct,
+            registers_preserved := λ register kept => artifact.registers_preserved(register, within(register, kept)))
+    }
+}
+
 // Fold a property over the actual machine selector without evaluating either
 // unselected child. Generated proofs supply the local child obligations.
 theorem structured_branch_property<M>(test: BranchTest, fd, jd: BitVec(8),

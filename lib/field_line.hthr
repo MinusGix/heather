@@ -20,6 +20,7 @@ import bitvec_omega;
 import x86_64;
 import x86_64_store;
 import x86_64_structured_block;
+import pair;
 
 // The count moved above a field's four bytes: `n * 2^32`.
 fn raise32(n: BitVec(64)) → BitVec(64) { times256(times256(times256(times256(n)))) }
@@ -46,15 +47,17 @@ fn field_high(n, tail: BitVec(64)) → BitVec(64) {
 }
 
 // The words' certificates at the registers a program's tail gives them: the
-// count in R11, the high word's tail in R10, each word to RAX; `keeps` says
-// which registers each leaves alone.
-fn FieldLowCert<M>(low: StructuredCode, keeps: Gpr → Type) → Type {
-    (before: MachineState<M>) → (n: BitVec(64)) → n = read_gpr(R11, before.gprs) →
-        StructuredArtifact<M>(low, before, Rax, field_low(n), keeps)
+// count in R11, the high word's tail in R10, each word to RAX. Each writes
+// only its scratch, so the count and the counts still to print (R13–R15) are
+// kept.
+fn field_low_scratch() → List<Gpr> { [Rax, Rcx, Rdx, Rbx, R8, R9, R10, R12, Rsi, Rdi, Rbp] }
+fn field_high_scratch() → List<Gpr> { [Rax, Rcx, Rdx, Rbx, R8, R9, R12, Rsi, Rdi, Rbp] }
+fn FieldLow<M>(low: StructuredCode) → Type {
+    Computes<M, BitVec(64)>(low, λ n g => n = read_gpr(R11, g), Rax, λ n => field_low(n), field_low_scratch())
 }
-fn FieldHighCert<M>(high: StructuredCode, keeps: Gpr → Type) → Type {
-    (before: MachineState<M>) → (n, tail: BitVec(64)) → n = read_gpr(R11, before.gprs) → tail = read_gpr(R10, before.gprs) →
-        StructuredArtifact<M>(high, before, Rax, field_high(n, tail), keeps)
+fn FieldHigh<M>(high: StructuredCode) → Type {
+    Computes<M, Pair<BitVec(64), BitVec(64)>>(high, λ x g => (x.fst = read_gpr(R11, g)) ∧ (x.snd = read_gpr(R10, g)), Rax,
+        λ x => field_high(x.fst, x.snd), field_high_scratch())
 }
 
 // ---------------------------------------------------------------------------

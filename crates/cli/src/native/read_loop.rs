@@ -9,7 +9,7 @@
 //! the written file. The state process's head, the write loop, the facts a
 //! state gives the process and the image's facts are laid out here for
 //! `--fields` too. Nothing in it is about any one program.
-use heather_elab::function_ir_source::{generate_elaborated_loop_x86, generate_elaborated_typed_x86, LoopX86Emission, NativeLoopPlacement,
+use heather_elab::function_ir_source::{generate_elaborated_loop_x86, generate_elaborated_piece_x86, LoopX86Emission, NativeLoopPlacement,
     StructuredSourceType};
 use heather_elab::function_ir_x86_lower::{encode_structured, Gpr, Instruction, Placements};
 use heather_elab::heather_emit::Module;
@@ -382,20 +382,21 @@ pub(super) struct FormatPart { pub module: String, pub prefix: String, pub text:
 
 // The formatter at the profile's registers (elf64_print_pieces): the count in
 // R11 and the page's base in R8 are read, never written; the word goes to
-// RAX, the start to R9, the length to R10, each kept by what runs after it.
+// RAX, the start to R9, the length to R10, each over the scratch the library
+// fixes for it (`print_word_scratch` …), so what runs after it keeps it.
 pub(super) fn generate_format(elab: &Elaborator, prefix: &str) -> Result<Vec<FormatPart>, String> {
     use Gpr::*;
-    let parts: [(&str, Placements, Vec<Gpr>, Placements); 3] = [
-        ("line_word", Placements::from([(0, R11)]), vec![Rax, Rcx, Rdx, Rbx, R9, R10, R12, R13, R14, R15], Placements::from([(1, Rax)])),
-        ("line_start", Placements::from([(0, R8), (1, R11)]), vec![R9, Rcx, Rdx, Rbx, R10, R12, R13, R14, R15], Placements::from([(2, R9)])),
-        ("line_length", Placements::from([(0, R11)]), vec![R10, Rcx, Rdx, Rbx, R12, R13, R14, R15], Placements::from([(1, R10)])),
+    let parts: [(&str, Placements, Vec<Gpr>, Gpr); 3] = [
+        ("line_word", Placements::from([(0, R11)]), vec![Rax, Rcx, Rdx, Rbx, R9, R10, R12, R13, R14, R15], Rax),
+        ("line_start", Placements::from([(0, R8), (1, R11)]), vec![R9, Rcx, Rdx, Rbx, R10, R12, R13, R14, R15], R9),
+        ("line_length", Placements::from([(0, R11)]), vec![R10, Rcx, Rdx, Rbx, R12, R13, R14, R15], R10),
     ];
     // Read the formatter in its checked declaration scope, independently of
     // the last generated module checked by the native producer.
     elab.with_module_scope("decimal_line", |elab| {
-        parts.into_iter().map(|(function, inputs, temporaries, outputs)| {
+        parts.into_iter().map(|(function, inputs, temporaries, output)| {
             let part = format!("{prefix}_{function}");
-            let emission = generate_elaborated_typed_x86(elab, &part, &format!("decimal_line::{function}"), &inputs, &temporaries, &outputs)
+            let emission = generate_elaborated_piece_x86(elab, &part, &format!("decimal_line::{function}"), &inputs, &temporaries, output)
                 .map_err(|e| format!("{function}: {e:?}"))?;
             Ok(FormatPart { module: format!("{part}_format"), prefix: part, bytes: encode_structured(&emission.lowered), text: emission.text })
         }).collect()
@@ -449,18 +450,11 @@ pub(super) fn certify_print(module: &mut Module, prefix: &str, program: &Program
     written: WriteEnding, written_ok: WriteEndingOk(written),
     page: Nat → BitVec(8), gprs: Gprs, flags: Flags", spec = program.spec);
     let events = format!("eof_events(chunks, ending, write_events(decimal_line({root}::{spec}(eof_input(chunks))), writes, written))", spec = program.spec);
-    // The formatter's certificates and what each keeps (elf64_print_pieces's
-    // `PrintFormat`).
+    // The formatter's codes and certificates (elf64_print_pieces's
+    // `PrintCodes` and `PrintFormat`).
     module.raw(format!("\
-fn {prefix}_print_codes() → PrintCodes {{
-    PrintCodes({w}_code(), {st}_code(), {ln}_code(), {w}_Protected, {st}_Protected, {ln}_Protected)
-}}
-fn {prefix}_print_format() → PrintFormat({prefix}_print_codes()) {{
-    PrintFormat(λ before n placed => {w}_typed_artifact(n, before, placed),
-        λ before base n at_base at_n => {st}_typed_artifact(base, n, before, at_base, at_n),
-        λ before n placed => {ln}_typed_artifact(n, before, placed),
-        trivial, trivial, trivial, trivial, trivial, trivial, trivial, trivial)
-}}
+fn {prefix}_print_codes() → PrintCodes {{ PrintCodes({w}_code(), {st}_code(), {ln}_code()) }}
+fn {prefix}_print_format() → PrintFormat({prefix}_print_codes()) {{ PrintFormat({w}_computes<IoMemory>(), {st}_computes<IoMemory>(), {ln}_computes<IoMemory>()) }}
 "));
     let proof = format!("read_count_print_runs({common}, {prefix}_print_codes(), {prefix}_print_format(), {prefix}_jumps(), {prefix}_jump_facts(),
         {pj}, {prefix}_print_facts(), {prefix}_resident(),

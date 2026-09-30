@@ -5,7 +5,7 @@
 //! producer lowers the program's byte map through the typed generator, lays
 //! out the code, and instantiates the library theorem at the written file.
 //! Nothing in it is about any one program.
-use heather_elab::function_ir_source::{generate_elaborated_typed_x86, reflect_elaborated_structured, StructuredSourceType};
+use heather_elab::function_ir_source::{generate_elaborated_piece_x86, reflect_elaborated_structured, StructuredSourceType};
 use heather_elab::function_ir_x86_lower::{encode_structured, Gpr, Instruction, Placements};
 use heather_elab::heather_emit::Module;
 use heather_elab::Elaborator;
@@ -38,8 +38,8 @@ pub(super) fn generate_piece(elab: &Elaborator, root: &str, symbol: &str, prefix
             || reflected.record.is_some() || reflected.choice.is_some() {
             return Err(format!("--map needs a byte map `{symbol}(b: BitVec(8)) → BitVec(8)`"));
         }
-        let emission = generate_elaborated_typed_x86(elab, &part, &source, &Placements::from([(0, Rax)]), &[Rdx, Rbx, Rdi, R8],
-            &Placements::from([(1, Rdx)])).map_err(|e| format!("{symbol}: {e:?}"))?;
+        let emission = generate_elaborated_piece_x86(elab, &part, &source, &Placements::from([(0, Rax)]), &[Rdx, Rbx, Rdi, R8], Rdx)
+            .map_err(|e| format!("{symbol}: {e:?}"))?;
         Ok(Piece { module: format!("{part}_piece"), prefix: part, bytes: encode_structured(&emission.lowered), text: emission.text })
     })?
 }
@@ -88,10 +88,7 @@ pub(super) fn certify(module: &mut Module, prefix: &str, root: &str, symbol: &st
     // The byte map's certificate and the jump facts (elf64_read_map's
     // `MapByte` and `MapJumpFacts`).
     module.raw(format!("\
-fn {prefix}_map_byte() → MapByte({f}) {{
-    MapByte({m}_code(), {m}_Protected, λ before b placed => {m}_typed_artifact(b, before, placed),
-        MapKeeps(trivial, trivial, trivial, trivial, trivial))
-}}
+fn {prefix}_map_byte() → MapByte({f}) {{ MapByte({m}_code(), {m}_computes<IoMemory>()) }}
 // Where the jumps land, from the written displacements: closed facts once
 // the byte map's length is its lemma's.
 fn {prefix}_jump_facts() → MapJumpFacts(structured_bytes({m}_code()).len(), {jumps}, {pj}) {{
