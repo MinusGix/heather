@@ -8,13 +8,13 @@
 //! formatter's two words, lays out the code, states the program-facing facts
 //! every record needs, and instantiates the library theorem at the written
 //! file. Nothing in it is about any one program.
-use heather_elab::function_ir_source::{generate_elaborated_record_loop_x86, generate_elaborated_typed_x86, reflect_elaborated_readonly_loop,
-    LoopCarry, LoopX86Emission, RecordLoopPlacement, StructuredSourceRecord, StructuredSourceType};
+use heather_elab::function_ir_source::{generate_elaborated_loop_x86, generate_elaborated_typed_x86, reflect_elaborated_readonly_loop,
+    LoopCarry, LoopX86Emission, StructuredSourceRecord, StructuredSourceType};
 use heather_elab::function_ir_x86_lower::{encode_structured, Gpr, Instruction, Placements};
 use heather_elab::heather_emit::Module;
 use heather_elab::Elaborator;
 
-use super::read_loop::{image_facts, literal, nested, state_head, write_loop, FormatPart};
+use super::read_loop::{image_facts, literal, nested, placement, state_facts, state_head, tuple, write_loop, FormatPart, StateShape};
 
 // Bundled after the read profile's and the write loop's, only for this one:
 // the field formatter and the three-field tail.
@@ -27,17 +27,6 @@ pub(super) const IMPORTS: &[&str] = &["elf64_read_fields", "elf64_write_loop", "
 
 /// The formatter certificates' prefix, as `read_loop::FORMAT_PREFIX`.
 pub(super) const FORMAT_PREFIX: &str = "fields_format";
-
-/// The state's registers are the process's (elf64_read_state's `state_init_block`
-/// zeroes R13, R14, R15 and R8); the head's are the read profile's.
-fn placement(fields: usize) -> RecordLoopPlacement {
-    RecordLoopPlacement {
-        base: Gpr::Rdi, length: Gpr::Rbp, needle: Gpr::Rcx, cursor: Gpr::Rsi, budget: Gpr::R12,
-        flag: Gpr::R10, step: Gpr::Rbx, byte: Gpr::R9,
-        fields: [Gpr::R13, Gpr::R14, Gpr::R15, Gpr::R8][..fields].to_vec(),
-        scratch: vec![Gpr::R11, Gpr::Rax, Gpr::Rdx],
-    }
-}
 
 /// What a program names: its loop's source function and step-advance theorem,
 /// the byte the loop is given, the three specifications printed, its fact that
@@ -80,8 +69,8 @@ pub(super) fn generate_loop(elab: &Elaborator, scope: &str, prefix: &str, progra
     -> Result<LoopX86Emission, String>
 {
     elab.with_module_scope(scope, |elab| {
-        generate_elaborated_record_loop_x86(elab, prefix, &format!("{}::{}", program.root, program.source), &placement(record.fields.len()),
-            &format!("{}::{}", program.root, program.advance)).map_err(|e| format!("{e:?}"))
+        generate_elaborated_loop_x86(elab, prefix, &format!("{}::{}", program.root, program.source), &placement(record.fields.len()),
+            Some(&format!("{}::{}", program.root, program.advance))).map_err(|e| format!("{e:?}"))
     })?
 }
 
@@ -103,21 +92,6 @@ pub(super) fn generate_format(elab: &Elaborator, prefix: &str) -> Result<Vec<For
             Ok(FormatPart { module: format!("{part}_format"), prefix: part, bytes: encode_structured(&emission.lowered), text: emission.text })
         }).collect()
     })?
-}
-
-/// A right-nested conjunction's component `i` of `count`.
-fn component(value: &str, i: usize, count: usize) -> String {
-    let mut path = value.to_string();
-    for _ in 0..i { path.push_str(".right"); }
-    if i + 1 < count { path.push_str(".left"); }
-    path
-}
-fn tuple(items: &[String]) -> String {
-    match items {
-        [only] => only.clone(),
-        [first, rest @ ..] => format!("⟨{first}, {}⟩", tuple(rest)),
-        [] => "trivial".into(),
-    }
 }
 
 /// Lay out the program and write its certificate after the loop's (which the
@@ -191,32 +165,22 @@ pub(super) fn certify(module: &mut Module, prefix: &str, program: &Program, reco
     let total = code.len();
     let length = format!("read_fields_code_len({needle}, {prefix}_bytes(), {prefix}_jumps(), {lo}_code(), {hi}_code(), {pj}, {}, {}, {}, \
         refl, {lo}_byte_length(), {hi}_byte_length())", emission.bytes.len(), low.bytes.len(), high.bytes.len());
-    image_facts(module, prefix, &code_term, &spelled, &chain, &file, Some((total, length)));
+    image_facts(module, prefix, &code_term, &spelled, &chain, &file, total, &length);
 
     head.jump_facts(module, prefix, &needle);
 
-    // The facts every record state gives the process: it reads only its
-    // registers, init's zeros place the zero state, and the three counts are
-    // the words in R13, R14 and R15.
-    let k = record.fields.len();
+    // The facts every state gives the process, and the three counts as the
+    // words in R13, R14 and R15.
     let ty = &record.type_name;
     let name = |i: usize| &record.fields[i].0;
-    let kept = ["kept.left", "kept.right.left", "kept.right.right.left", "kept.right.right.right"][..k].join(", ");
-    let zeros = record.fields.iter().map(|(_, ty)| if *ty == StructuredSourceType::Boolean { "False" } else { "0" }).collect::<Vec<_>>().join(", ");
-    let counted = |i: usize, r: &str| format!("sym(loop_nat_placed(read_gpr({r}, gprs), carry.{}, {}))", name(i), component("placed", i, k));
+    state_facts(module, prefix, &StateShape { type_name: ty, constructor: Some(&record.constructor), fields: &record.fields });
     module.raw(format!("\
-theorem {prefix}_framed(): StateFramed({prefix}_rep) {{
-    λ before after carry kept placed => {prefix}_rep_moves(before, after, carry, {kept}, placed)
-}}
-fn {prefix}_init() → {ty} {{ {ctor}({zeros}) }}
-theorem {prefix}_initialised(): StateInitialised({prefix}_rep, {prefix}_init()) {{ λ state => {refls} }}
 theorem {prefix}_counts(gprs: Gprs, carry: {ty}, placed: {prefix}_rep(gprs, carry)):
     (read_gpr(R13, gprs) = bitvec_nat::word_of_nat(64, carry.{f0})) ∧ ((read_gpr(R14, gprs) = bitvec_nat::word_of_nat(64, carry.{f1})) ∧
     (read_gpr(R15, gprs) = bitvec_nat::word_of_nat(64, carry.{f2}))) {{
-    ⟨{c0}, ⟨{c1}, {c2}⟩⟩
+    ⟨{prefix}_word_0(gprs, carry, placed), ⟨{prefix}_word_1(gprs, carry, placed), {prefix}_word_2(gprs, carry, placed)⟩⟩
 }}
-", ctor = record.constructor, refls = tuple(&vec!["refl".to_string(); k]), f0 = name(0), f1 = name(1), f2 = name(2),
-        c0 = counted(0, "R13"), c1 = counted(1, "R14"), c2 = counted(2, "R15")));
+", f0 = name(0), f1 = name(1), f2 = name(2)));
 
     let [s0, s1, s2] = program.specs.map(|spec| format!("{root}::{spec}"));
     let input = "eof_input(chunks)";

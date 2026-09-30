@@ -5,11 +5,12 @@
 //! empty read exit with the count or print it. The process shape and its
 //! proof are the library's (`lib/elf64_read_state.hthr`,
 //! `lib/elf64_count_print.hthr`); this producer generates the loop through the
-//! shared loop generator, lays out the code, and instantiates the library
-//! theorem at the written file. The state process's head and the write loop
-//! are laid out here for `--fields` too. Nothing in it is about any one
-//! program.
-use heather_elab::function_ir_source::{generate_elaborated_loop_x86, generate_elaborated_typed_x86, LoopX86Emission, NativeLoopPlacement};
+//! loop generator, lays out the code, and instantiates the library theorem at
+//! the written file. The state process's head, the write loop, the facts a
+//! state gives the process and the image's facts are laid out here for
+//! `--fields` too. Nothing in it is about any one program.
+use heather_elab::function_ir_source::{generate_elaborated_loop_x86, generate_elaborated_typed_x86, LoopX86Emission, NativeLoopPlacement,
+    StructuredSourceType};
 use heather_elab::function_ir_x86_lower::{encode_structured, Gpr, Instruction, Placements};
 use heather_elab::heather_emit::Module;
 use heather_elab::Elaborator;
@@ -51,14 +52,71 @@ pub(super) const PRINT_SUPPORT: &[(&str, &str)] = &[
 pub(super) const PRINT_IMPORTS: &[&str] = &["elf64_count_print", "elf64_write_loop", "elf64_print_pieces", "decimal_line", "x86_64_structured_block"];
 
 // The profile's head registers are fixed (elf64_read_state's
-// ReadStatePlacement); the count is the state, in R13; the rest is the loop's
-// own scratch.
-pub(super) fn placement() -> NativeLoopPlacement {
+// ReadStatePlacement); the state's fields are the process's state registers
+// (`state_init_block` zeroes R13, R14, R15 and R8), a count being one field
+// in R13; the rest is the loop's own scratch.
+const STATE: [Gpr; 4] = [Gpr::R13, Gpr::R14, Gpr::R15, Gpr::R8];
+pub(super) fn placement(fields: usize) -> NativeLoopPlacement {
     NativeLoopPlacement {
         base: Gpr::Rdi, length: Gpr::Rbp, needle: Gpr::Rcx, cursor: Gpr::Rsi, budget: Gpr::R12,
-        carry: Gpr::R13, flag: Gpr::R11, step: Gpr::Rbx,
-        address: Gpr::R8, byte: Gpr::R9, payload: Gpr::Rax, next_cursor: Gpr::R10, next_budget: Gpr::R14,
-        extra: vec![Gpr::Rdx, Gpr::R15],
+        flag: Gpr::R10, step: Gpr::Rbx, byte: Gpr::R9,
+        fields: STATE[..fields].to_vec(),
+        scratch: vec![Gpr::R11, Gpr::Rax, Gpr::Rdx],
+    }
+}
+
+/// A right-nested conjunction's component `i` of `count`.
+pub(super) fn component(value: &str, i: usize, count: usize) -> String {
+    let mut path = value.to_string();
+    for _ in 0..i { path.push_str(".right"); }
+    if i + 1 < count { path.push_str(".left"); }
+    path
+}
+/// A right-nested pair of the items, `trivial` for none.
+pub(super) fn tuple(items: &[String]) -> String {
+    match items {
+        [only] => only.clone(),
+        [first, rest @ ..] => format!("⟨{first}, {}⟩", tuple(rest)),
+        [] => "trivial".into(),
+    }
+}
+
+/// A loop's state as the process sees it: a record's fields, or a count as
+/// one field that is the state itself.
+pub(super) struct StateShape<'a> {
+    pub type_name: &'a str,
+    /// The record's constructor; `None` for a count.
+    pub constructor: Option<&'a str>,
+    pub fields: &'a [(String, StructuredSourceType)],
+}
+
+/// The facts every state gives the process (elf64_read_state), from the loop
+/// generator's `_rep_moves`: it reads only its registers (`_framed`), init's
+/// zeros place the zero state (`_init`, `_initialised`), and each Nat field
+/// is its word in its register (`_word_{i}`).
+pub(super) fn state_facts(module: &mut Module, prefix: &str, state: &StateShape) {
+    let k = state.fields.len();
+    // StateKept is over the four state registers; the fields hold the first k.
+    let kept = (0..k).map(|i| component("kept", i, STATE.len())).collect::<Vec<_>>().join(", ");
+    let ty = state.type_name;
+    let zeros = state.fields.iter().map(|(_, ty)| if *ty == StructuredSourceType::Boolean { "False" } else { "0" }).collect::<Vec<_>>().join(", ");
+    let init = match state.constructor { Some(ctor) => format!("{ctor}({zeros})"), None => zeros };
+    module.raw(format!("\
+theorem {prefix}_framed(): StateFramed({prefix}_rep) {{
+    λ before after carry kept placed => {prefix}_rep_moves(before, after, carry, {kept}, placed)
+}}
+fn {prefix}_init() → {ty} {{ {init} }}
+theorem {prefix}_initialised(): StateInitialised({prefix}_rep, {prefix}_init()) {{ λ state => {} }}
+", tuple(&vec!["refl".to_string(); k])));
+    for (i, (name, kind)) in state.fields.iter().enumerate() {
+        if *kind != StructuredSourceType::NatWord { continue; }
+        let r = STATE[i].heather_name();
+        let value = match state.constructor { Some(_) => format!("carry.{name}"), None => "carry".into() };
+        module.raw(format!("\
+theorem {prefix}_word_{i}(gprs: Gprs, carry: {ty}, placed: {prefix}_rep(gprs, carry)): read_gpr({r}, gprs) = bitvec_nat::word_of_nat(64, {value}) {{
+    sym(loop_nat_placed(read_gpr({r}, gprs), {value}, {}))
+}}
+", component("placed", i, k)));
     }
 }
 
@@ -83,7 +141,7 @@ pub(super) fn context(program: &Program) -> String {
 
 pub(super) fn generate_loop(elab: &Elaborator, scope: &str, prefix: &str, program: &Program) -> Result<LoopX86Emission, String> {
     elab.with_module_scope(scope, |elab| {
-        generate_elaborated_loop_x86(elab, prefix, &format!("{}::{}", program.root, program.source), &placement(),
+        generate_elaborated_loop_x86(elab, prefix, &format!("{}::{}", program.root, program.source), &placement(1),
             Some(&format!("{}::{}", program.root, program.advance))).map_err(|e| format!("{e:?}"))
     })?
 }
@@ -236,26 +294,17 @@ theorem {prefix}_write_retry_closes(): print_retry_span() + 6 + {pj}.rd.sign_ext
 
 /// The written file's facts, for any layout of the read profile: the header
 /// the producer wrote, the code as written (`chain` proves `code_term =
-/// spelled`), that it fits the file's window, the image, and residency.
-///
-/// `length` is the code's length and a proof of `code_term.len() = length`,
-/// for code too long to measure by evaluation; without it the length is
-/// read off the spelled code.
+/// spelled`), its length (`length` proves `code_term.len() = total` over open
+/// parts: evaluating the code's length would walk every generated byte), that
+/// it fits the file's window, the image, and residency.
 pub(super) fn image_facts(module: &mut Module, prefix: &str, code_term: &str, spelled: &str, chain: &str, file: &[u8],
-    length: Option<(usize, String)>) {
+    total: usize, length: &str) {
     let size = file.len();
     super::byte_chain(module, &format!("{prefix}_header"), &file[..232]);
-    let (measured, fits, nonempty, sized) = match length {
-        Some((total, proof)) => (
-            format!("theorem {prefix}_code_len(): {code_term}.len() = {total} {{ {proof} }}\n"),
-            format!("j(sym({prefix}_code_len()), λ n _ => 232 + n <= 65536, Nat::leb_sound(232 + {total}, 65536, trivial))"),
-            format!("j(sym({prefix}_code_len()), λ n _ => 0 < n, Nat::leb_sound(1, {total}, trivial))"),
-            format!("j(sym({prefix}_code_len()), λ n _ => 232 + n = elf_size16(elf_byte({}), elf_byte({})), refl)", size & 255, size >> 8)),
-        None => (String::new(),
-            format!("j(sym({prefix}_code_written()), λ code _ => 232 + code.len() <= 65536, Nat::leb_sound(232 + ({spelled}).len(), 65536, trivial))"),
-            format!("j(sym({prefix}_code_written()), λ code _ => 0 < code.len(), Nat::leb_sound(1, ({spelled}).len(), trivial))"),
-            format!("j(sym({prefix}_code_written()), λ code _ => 232 + code.len() = elf_size16(elf_byte({}), elf_byte({})), refl)", size & 255, size >> 8)),
-    };
+    let measured = format!("theorem {prefix}_code_len(): {code_term}.len() = {total} {{ {length} }}\n");
+    let fits = format!("j(sym({prefix}_code_len()), λ n _ => 232 + n <= 65536, Nat::leb_sound(232 + {total}, 65536, trivial))");
+    let nonempty = format!("j(sym({prefix}_code_len()), λ n _ => 0 < n, Nat::leb_sound(1, {total}, trivial))");
+    let sized = format!("j(sym({prefix}_code_len()), λ n _ => 232 + n = elf_size16(elf_byte({}), elf_byte({})), refl)", size & 255, size >> 8);
     module.raw(format!("\
 theorem {prefix}_header_length(): {prefix}_header().len() = 232 {{ refl }}
 // The code as the producer wrote it: each fixed piece's encoding, and the
@@ -282,16 +331,20 @@ theorem {prefix}_resident(): (page: Nat → BitVec(8)) → CodeResident(io_fetch
 ", low = size & 255, high = size >> 8));
 }
 
-// The arguments both claims pass the library, up to the tail's.
-fn common_arguments(prefix: &str, program: &Program) -> String {
+// The count's facts (`state_facts`), and the arguments both claims pass the
+// library, up to the tail's.
+fn common_arguments(module: &mut Module, prefix: &str, program: &Program) -> String {
     let (root, needle) = (program.root, format!("@bitvec::BitVec::ofNat(8, {})", program.needle));
+    state_facts(module, prefix, &StateShape { type_name: "Nat", constructor: None, fields: &[("count".into(), StructuredSourceType::NatWord)] });
     format!("{prefix}_file(), {prefix}_placement(), ReadStatePlacement(refl, refl, refl, refl, refl),
+        {prefix}_rep, {prefix}_fits, {prefix}_framed(),
         {prefix}_loop_region(), {prefix}_code(), {prefix}_bytes(), {root}::{source}, {needle}, {root}::{spec},
         λ buffer needle budget cursor carry => {prefix}_loop_source_agreement(buffer, needle, budget, cursor, carry),
         λ access before buffer needle budget cursor carry bounded low head readable fits =>
             {prefix}_native(access, before, buffer, needle, budget, cursor, carry, bounded, low, head, readable, fits),
-        {root}::{computes}, {root}::{folds}, {root}::{advance}", source = program.source, spec = program.spec,
-        computes = program.computes, folds = program.folds, advance = program.advance)
+        {root}::{computes}, {root}::{folds}, {prefix}_initialised(),
+        λ seen budget fits => {prefix}_room({needle}, {prefix}_init(), refl, seen, budget, fits), {prefix}_word_0",
+        source = program.source, spec = program.spec, computes = program.computes, folds = program.folds)
 }
 
 // A claim and its `_runs_every`: every run of the file from that start which
@@ -330,13 +383,16 @@ pub(super) fn certify(module: &mut Module, prefix: &str, program: &Program, emis
     module.raw(format!("fn {prefix}_exit_written() → List<BitVec(8)> {{ {} }}", literal(&exit)));
     let code_term = format!("read_state_code({needle}, {prefix}_bytes(), {prefix}_jumps())");
     let spelled = nested(&[head.spelled(prefix), vec![format!("({prefix}_exit_written() ++ {})", syscall())]].concat());
-    image_facts(module, prefix, &code_term, &spelled, "refl", &file, None);
+    // The loop's length by evaluating its bytes alone; the exit's too.
+    let length = format!("state_code_len({needle}, {prefix}_bytes(), {prefix}_jumps(), eof_exit_code(), {}, {}, refl, refl)",
+        emission.bytes.len(), exit.len() + SYSCALL.len());
+    image_facts(module, prefix, &code_term, &spelled, "refl", &file, code.len(), &length);
     head.jump_facts(module, prefix, &needle);
     let premises = "chunks: List<ReadStep>, ok: EofChunks(chunks), ending: ReadEnding, ending_ok: EofEnding(ending),
     room: eof_input(chunks).len() + 4096 < Nat::pow(2, 64), page: Nat → BitVec(8), gprs: Gprs, flags: Flags";
     let events = format!("eof_events(chunks, ending, [ExitEvent(bitvec_nat::word_of_nat(64, {root}::{spec}(eof_input(chunks))))])", spec = program.spec);
     let proof = format!("read_count_runs({common}, {prefix}_jumps(), {prefix}_exit_reads(), {prefix}_fail_reads(), {prefix}_back_closes(),
-        {prefix}_retry_closes(), {prefix}_resident(), chunks, ok, ending, ending_ok, room, page, gprs, flags)", common = common_arguments(prefix, program));
+        {prefix}_retry_closes(), {prefix}_resident(), chunks, ok, ending, ending_ok, room, page, gprs, flags)", common = common_arguments(module, prefix, program));
     claims(module, prefix, &format!("\
 // The process claim for the written file: for every way the reads may split
 // stdin into non-empty chunks, with EINTRs between them, ending at the empty
@@ -414,7 +470,12 @@ pub(super) fn certify_print(module: &mut Module, prefix: &str, program: &Program
         (format!("{ln}_bytes_are()"), layout(&lw, &lst, "y"))] {
         chain = format!("j({lemma}, λ y _ => {code_term} = {motive}, {chain})");
     }
-    image_facts(module, prefix, &code_term, &layout(&lw, &lst, &lln), &chain, &file, None);
+    // The loop's length by evaluating its bytes alone, the formatter's by its
+    // lemmas.
+    let measure = format!("read_count_code_len({needle}, {prefix}_bytes(), {prefix}_jumps(), {w}_code(), {st}_code(), {ln}_code(), {pj}, \
+        {}, {}, {}, {}, refl, {w}_byte_length(), {st}_byte_length(), {ln}_byte_length())",
+        emission.bytes.len(), word.bytes.len(), start.bytes.len(), length.bytes.len());
+    image_facts(module, prefix, &code_term, &layout(&lw, &lst, &lln), &chain, &file, code.len(), &measure);
     head.jump_facts(module, prefix, &needle);
     let premises = format!("chunks: List<ReadStep>, ok: EofChunks(chunks), ending: ReadEnding, ending_ok: EofEnding(ending),
     room: eof_input(chunks).len() + 4096 < Nat::pow(2, 64), small: {root}::{spec}(eof_input(chunks)) < 10000,
@@ -431,7 +492,7 @@ pub(super) fn certify_print(module: &mut Module, prefix: &str, program: &Program
         {prefix}_jumps(), {prefix}_exit_reads(), {prefix}_fail_reads(), {prefix}_back_closes(), {prefix}_retry_closes(),
         {pj}, {prefix}_write_fail_reads(), {prefix}_write_exit_reads(), {prefix}_write_back_closes(),
         {prefix}_write_retry_closes(), {prefix}_resident(),
-        chunks, ok, ending, ending_ok, room, small, writes, writes_ok, written, written_ok, page, gprs, flags)", common = common_arguments(prefix, program));
+        chunks, ok, ending, ending_ok, room, small, writes, writes_ok, written, written_ok, page, gprs, flags)", common = common_arguments(module, prefix, program));
     claims(module, prefix, &format!("\
 // The process claim for the written file: for every way the reads may split
 // stdin into non-empty chunks, with EINTRs between them, ending at the empty

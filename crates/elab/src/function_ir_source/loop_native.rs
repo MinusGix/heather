@@ -1,22 +1,71 @@
 //! Native certificates for a bounded read-only loop
-//! (docs/native-bounded-loops-design.md). Every piece is an ordinary typed
-//! certificate from the shared generators. This module chooses their
-//! placements, composes the loop's code, and emits the two per-iteration
-//! proofs the library induction (`function_ir_loop_trace::loop_trace`)
-//! consumes, plus the final theorem stated against the source loop itself.
+//! (docs/native-bounded-loops-design.md, docs/native-wc-design.md §4). Every
+//! piece is an ordinary typed certificate from the shared generators; this
+//! module chooses their placements, composes the loop's code, and emits the
+//! two per-iteration proofs the library induction
+//! (`function_ir_loop_trace::loop_trace`) consumes, plus the final theorem
+//! stated against the source loop itself.
+//!
+//! The state's fields sit in registers of their own, and one iteration
+//! updates them in place, one at a time: each field is computed alone into a
+//! scratch register (`generate_elaborated_typed_fields_x86`) and copied home,
+//! in an order where no field reads a register an earlier field was written
+//! back to. The discriminator comes last when it reads no field (so the field
+//! pieces may borrow its register), first otherwise. A Nat or Bool state is
+//! a record of one field, which is the state itself
+//! (docs/native-loop-generator-fold-design.md §3.1).
 use super::*;
-use crate::function_ir_x86_lower::{near_loop_edges, AccessFragment};
+use super::structured::{FieldPiece, StructuredSourceRecord};
+use crate::function_ir_x86_lower::{near_loop_edges, AccessFragment, ByteLoad};
 
-/// Registers for one loop. The eight head registers carry its state from one
-/// iteration to the next; the rest are scratch within an iteration. `extra`
-/// widens the guard's and body's temporaries (their selection may need a
-/// byte-addressable register beyond these).
+/// Registers for a loop. The head registers carry its position from one
+/// iteration to the next and `fields` its state; `byte` holds the load's
+/// address, then the byte. `scratch` needs three registers: the first carries
+/// each field's new value home, and comparisons need byte-addressable ones
+/// among them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NativeLoopPlacement {
     pub base: Gpr, pub length: Gpr, pub needle: Gpr, pub cursor: Gpr, pub budget: Gpr,
-    pub carry: Gpr, pub flag: Gpr, pub step: Gpr,
-    pub address: Gpr, pub byte: Gpr, pub payload: Gpr, pub next_cursor: Gpr, pub next_budget: Gpr,
-    pub extra: Vec<Gpr>,
+    pub flag: Gpr, pub step: Gpr, pub byte: Gpr,
+    /// One register per field, in declaration order; one for a Nat or Bool.
+    pub fields: Vec<Gpr>,
+    pub scratch: Vec<Gpr>,
+}
+
+/// Fields in an order that writes none back before every other field that
+/// reads it is done. A field reading itself is fine: it is computed before
+/// its own register is written.
+fn write_order(reads: &[Vec<usize>]) -> Result<Vec<usize>, SourceError> {
+    let count = reads.len();
+    let mut order = Vec::new();
+    let mut done = vec![false; count];
+    while order.len() < count {
+        let next = (0..count).find(|&i| !done[i] && (0..count).all(|j| j == i || done[j] || !reads[j].contains(&i)))
+            .ok_or_else(|| SourceError::Unsupported("the step's fields read each other in a cycle; in-place update needs a spare register".into()))?;
+        done[next] = true;
+        order.push(next);
+    }
+    Ok(order)
+}
+
+/// A right-nested conjunction's component `i` of `count`.
+fn component(value: &str, i: usize, count: usize) -> String {
+    let mut path = value.to_string();
+    for _ in 0..i { path.push_str(".right"); }
+    if i + 1 < count { path.push_str(".left"); }
+    path
+}
+fn conjunction(parts: &[String]) -> String {
+    match parts.split_last() {
+        None => "True".into(),
+        Some((last, rest)) => rest.iter().rev().fold(last.clone(), |acc, part| format!("({part}) ∧ ({acc})")),
+    }
+}
+fn tuple(parts: &[String]) -> String {
+    match parts.split_last() {
+        None => "trivial".into(),
+        Some((last, rest)) => rest.iter().rev().fold(last.clone(), |acc, part| format!("⟨{part}, {acc}⟩")),
+    }
 }
 
 /// `pieces` is the per-step typed certificates, to be elaborated as module
@@ -30,207 +79,335 @@ pub struct LoopX86Emission {
     pub text: String,
 }
 
-/// One loop, generated and composed. A Nat carry is counted: its certificate
-/// keeps `loop_fits` (carry + budget < 2^64), and `advance` names the client's
-/// `LoopAdvancesByAtMostOne` theorem about the step (design §9a). A Bool
-/// carry needs neither.
-pub fn generate_elaborated_loop_x86(elaborator: &Elaborator, prefix: &str, source: &str, p: &NativeLoopPlacement,
-    advance: Option<&str>) -> Result<LoopX86Emission, SourceError>
+/// One loop, generated and composed. Every Nat field is counted: the
+/// certificate keeps it below 2^64 with the budget still to run (`_fits`),
+/// and `advance` names the client's theorem that the step grows each by at
+/// most one (docs/native-bounded-loops-design.md §9a).
+pub fn generate_elaborated_loop_x86(elaborator: &Elaborator, prefix: &str, source: &str, p: &NativeLoopPlacement, advance: Option<&str>)
+    -> Result<LoopX86Emission, SourceError>
 {
-    let mut registers = vec![p.base, p.length, p.needle, p.cursor, p.budget, p.carry, p.flag, p.step,
-        p.address, p.byte, p.payload, p.next_cursor, p.next_budget];
-    registers.extend(&p.extra);
+    let reflected = reflect_elaborated_readonly_loop(elaborator, source)?;
+    // A Nat or Bool is a state of one field, which is the state itself.
+    let (carry_type, fields, scalar) = match reflected.carry.clone() {
+        LoopCarry::Record(StructuredSourceRecord { type_name, fields, .. }) => (type_name, fields, false),
+        LoopCarry::Natural => ("Nat".to_string(), vec![("count".to_string(), StructuredSourceType::NatWord)], true),
+        LoopCarry::Boolean => ("Bool".to_string(), vec![("flag".to_string(), StructuredSourceType::Boolean)], true),
+    };
+    // Field `i` of a state spelled `value`.
+    let field_of = |value: &str, i: usize| if scalar { value.to_string() } else { format!("{value}.{}", fields[i].0) };
+    let k = fields.len();
+    if p.fields.len() != k { return unsupported("one register per record field"); }
+    if p.scratch.len() < 3 { return unsupported("the record loop needs three scratch registers"); }
+    let mut registers = vec![p.base, p.length, p.needle, p.cursor, p.budget, p.flag, p.step, p.byte];
+    registers.extend(&p.fields);
+    registers.extend(&p.scratch);
     if registers.iter().collect::<std::collections::BTreeSet<_>>().len() != registers.len() {
         return unsupported("loop registers must be distinct");
     }
-    let reflected = reflect_elaborated_readonly_loop(elaborator, source)?;
-    if matches!(reflected.carry, LoopCarry::Record(_)) { return unsupported("a record carry uses generate_elaborated_record_loop_x86"); }
-    let counted = reflected.carry == LoopCarry::Natural;
-    let advance = match (counted, advance) {
-        (true, Some(name)) => name,
-        (true, None) => return unsupported("a Nat carry needs its step's LoopAdvancesByAtMostOne theorem"),
-        (false, _) => "",
+    let body = reflect_elaborated_structured(elaborator, &reflected.body_name)?;
+    // The body's ports: needle 0, the unused cursor, byte 2, then the fields.
+    let field_leaf = |f: &str| body.leaves.iter().position(|(parameter, field)| *parameter == 3 && if scalar { field.is_none() } else { field.as_deref() == Some(f) });
+    let leaves: Vec<u64> = fields.iter().map(|(f, _)| field_leaf(f).map(|l| l as u64)
+        .ok_or_else(|| SourceError::Unsupported(format!("the step's carry has no field `{f}`")))).collect::<Result<_, _>>()?;
+    let outputs = body.region.outputs().to_vec();
+    if outputs.len() != k + 1 { return unsupported("a record step observes each field and a discriminator"); }
+    let reads: Vec<Vec<usize>> = (0..k).map(|i| {
+        let narrowed = cert::narrow_structured_region(&body.region, &[outputs[i]]);
+        narrowed.inputs().iter().filter_map(|port| leaves.iter().position(|leaf| *leaf == port.id)).collect()
+    }).collect();
+    let order = write_order(&reads)?;
+    let nat_fields: Vec<usize> = (0..k).filter(|&i| fields[i].1 == StructuredSourceType::NatWord).collect();
+    let advance = match advance {
+        Some(advance) => advance,
+        None if nat_fields.is_empty() => "",
+        None => return unsupported("a Nat field needs the step's advance theorem"),
     };
-    let (carry_type, word_rep, invariant) = if counted { ("Nat", "loop_nat_rep", "loop_fits") }
-        else { ("Bool", "loop_bool_rep", "loop_no_invariant<Bool>") };
-    // The carry's placement over the register file (function_ir_loop_trace).
-    let rep_name = format!("loop_in({}, {word_rep})", p.carry.heather_name());
-    let step_body = reflect_elaborated_structured(elaborator, &reflected.body_name)?;
-    let [payload_port, step_port] = step_body.region.outputs() else {
-        return unsupported("a loop step observes exactly a payload and a discriminator");
-    };
-    let (payload_port, step_port) = (payload_port.id, step_port.id);
+
     let name = |part: &str| format!("{prefix}_{part}");
-    let mut scratch = vec![p.payload, p.step, p.address, p.next_cursor, p.next_budget];
-    scratch.extend(&p.extra);
-    let mut guard_temps = vec![p.flag];
-    guard_temps.extend(&scratch);
+    let reg = |g: Gpr| g.heather_name();
+    let (t, s1r, s2r) = (p.scratch[0], p.scratch[1], p.scratch[2]);
     let typed = |part: &str, function: &str, inputs: &[(u64, Gpr)], temps: &[Gpr], output: (u64, Gpr)| {
         generate_elaborated_typed_x86(elaborator, &name(part), &format!("function_ir_loop_x86::{function}"),
             &inputs.iter().copied().collect(), temps, &[output].into_iter().collect())
     };
+    let mut guard_temps = vec![p.flag, p.step, p.byte];
+    guard_temps.extend(&p.scratch);
     let guard = typed("guard", "loop_guard", &[(0, p.cursor), (1, p.length), (2, p.budget)], &guard_temps, (3, p.flag))?;
-    let address = typed("address", "loop_address", &[(0, p.base), (1, p.cursor)], &[p.address], (2, p.address))?;
-    let step = generate_elaborated_read_x86(elaborator, &name("step"), &reflected.body_name, 2, p.address,
-        &[(0, p.needle), (2, p.byte), (3, p.carry)].into_iter().collect(), &scratch,
-        &[(payload_port, p.payload), (step_port, p.step)].into_iter().collect())?;
-    let next_cursor = typed("next_cursor", "loop_next_cursor", &[(0, p.cursor)], &[p.next_cursor, p.address], (1, p.next_cursor))?;
-    let next_budget = typed("next_budget", "loop_next_budget", &[(0, p.budget)], &[p.next_budget, p.address], (1, p.next_budget))?;
-    let keep_carry = typed("keep_carry", "loop_copy", &[(0, p.payload)], &[p.carry], (1, p.carry))?;
-    let keep_cursor = typed("keep_cursor", "loop_copy", &[(0, p.next_cursor)], &[p.cursor], (1, p.cursor))?;
-    let keep_budget = typed("keep_budget", "loop_copy", &[(0, p.next_budget)], &[p.budget], (1, p.budget))?;
+    let address = typed("address", "loop_address", &[(0, p.base), (1, p.cursor)], &[p.byte], (2, p.byte))?;
+    let load = ByteLoad { destination: p.byte, base: p.byte };
+    let mut placements: x86::Placements = [(0, p.needle), (2, p.byte)].into_iter().collect();
+    for (i, leaf) in leaves.iter().enumerate() { placements.insert(*leaf, p.fields[i]); }
+    // The discriminator goes last when it reads no field (a folding step's
+    // collapses to a constant), so the field pieces may borrow its register;
+    // otherwise first, before any field is written back.
+    let discriminator_reads_fields = cert::narrow_structured_region(&body.region, &[outputs[k]]).inputs().iter().any(|port| leaves.contains(&port.id));
+    let mut field_temps = p.scratch.clone();
+    if !discriminator_reads_fields { field_temps.push(p.step); }
+    let step_temps: Vec<Gpr> = std::iter::once(p.step).chain(p.scratch.iter().copied()).collect();
+    let discriminator_piece = FieldPiece { prefix: name("discriminator"), port: outputs[k].id, inputs: &placements, temporaries: &step_temps, output: p.step };
+    let field_pieces = order.iter().map(|&i| FieldPiece { prefix: name(&format!("field_{}", fields[i].0)), port: outputs[i].id,
+        inputs: &placements, temporaries: &field_temps, output: t });
+    let pieces: Vec<FieldPiece> = if discriminator_reads_fields { std::iter::once(discriminator_piece).chain(field_pieces).collect() }
+        else { field_pieces.chain(std::iter::once(discriminator_piece)).collect() };
+    let (fields_text, emissions) = generate_elaborated_typed_fields_x86(elaborator, &name("fields"), &reflected.body_name, &pieces)?;
+    let copies = order.iter().map(|&i| typed(&format!("keep_{}", fields[i].0), "loop_copy", &[(0, t)], &[p.fields[i]], (1, p.fields[i])))
+        .collect::<Result<Vec<_>, _>>()?;
+    let next_cursor = typed("next_cursor", "loop_next_cursor", &[(0, p.cursor)], &[t, s2r], (1, t))?;
+    let next_budget = typed("next_budget", "loop_next_budget", &[(0, p.budget)], &[s1r, s2r], (1, s1r))?;
+    let keep_cursor = typed("keep_cursor", "loop_copy", &[(0, t)], &[p.cursor], (1, p.cursor))?;
+    let keep_budget = typed("keep_budget", "loop_copy", &[(0, s1r)], &[p.budget], (1, p.budget))?;
 
-    let pure = |part: &str, emission: &x86::StructuredX86Emission| AccessFragment::structured(&name(part), &emission.lowered);
-    let read = AccessFragment::read(step.load).sequence(AccessFragment::structured(&name("step_body"), &step.body));
-    let tail5 = pure("keep_cursor", &keep_cursor).sequence(pure("keep_budget", &keep_budget));
-    let tail4 = pure("keep_carry", &keep_carry).sequence(tail5.clone());
-    let tail3 = pure("next_budget", &next_budget).sequence(tail4.clone());
-    let tail2 = pure("next_cursor", &next_cursor).sequence(tail3.clone());
-    let tail1 = read.clone().sequence(tail2.clone());
-    let body = pure("address", &address).sequence(tail1.clone());
-    let guard_fragment = pure("guard", &guard);
-    let (exit, _, back) = near_loop_edges(guard_fragment.bytes.len(), body.bytes.len()).map_err(SourceError::Unsupported)?;
-    let looped = AccessFragment::looped(guard_fragment.clone(), p.flag, body.clone(), p.step).map_err(SourceError::Unsupported)?;
+    // The iteration's pure steps after the load, in order, by name; each is
+    // one state further along.
+    let (discriminator, field_emissions) = if discriminator_reads_fields { (&emissions[0], &emissions[1..]) } else { (&emissions[k], &emissions[..k]) };
+    let mut steps: Vec<(String, AccessFragment)> = Vec::new();
+    let discriminator_step = (discriminator.prefix.clone(), AccessFragment::structured(&discriminator.prefix, &discriminator.lowered));
+    if discriminator_reads_fields { steps.push(discriminator_step.clone()); }
+    for (n, &i) in order.iter().enumerate() {
+        let piece = &field_emissions[n];
+        steps.push((piece.prefix.clone(), AccessFragment::structured(&piece.prefix, &piece.lowered)));
+        steps.push((name(&format!("keep_{}", fields[i].0)), AccessFragment::structured(&name(&format!("keep_{}", fields[i].0)), &copies[n].lowered)));
+    }
+    if !discriminator_reads_fields { steps.push(discriminator_step); }
+    for (part, emission) in [("next_cursor", &next_cursor), ("next_budget", &next_budget), ("keep_cursor", &keep_cursor), ("keep_budget", &keep_budget)] {
+        steps.push((name(part), AccessFragment::structured(&name(part), &emission.lowered)));
+    }
+    // States: s0 at the head, s1 after the address, s2 after the load, then
+    // s{3 + n} after pure step n.
+    let fragments: Vec<AccessFragment> = [AccessFragment::structured(&name("address"), &address.lowered), AccessFragment::read(load)]
+        .into_iter().chain(steps.iter().map(|(_, fragment)| fragment.clone())).collect();
+    let last = fragments.len();
+    let body_fragment = fragments.iter().rev().cloned().reduce(|tail, fragment| fragment.sequence(tail)).expect("fragments");
+    let guard_fragment = AccessFragment::structured(&name("guard"), &guard.lowered);
+    let (exit, _, back) = near_loop_edges(guard_fragment.bytes.len(), body_fragment.bytes.len()).map_err(SourceError::Unsupported)?;
+    let looped = AccessFragment::looped(guard_fragment.clone(), p.flag, body_fragment.clone(), p.step).map_err(SourceError::Unsupported)?;
 
-    let mut pieces = Module::default();
-    for text in [&guard.text, &address.text, &step.text, &next_cursor.text, &next_budget.text,
-        &keep_carry.text, &keep_cursor.text, &keep_budget.text] { pieces.raw(text.clone()); }
-    pieces.raw(generate_readonly_loop_certificate(&name("loop"), &reflected));
-    let pieces = stitch_imports(&pieces.render());
+    let mut pieces_module = Module::default();
+    pieces_module.raw("import x86_64_data_read; import x86_64;");
+    pieces_module.raw(format!("fn {}() → ByteLoad {{ {} }}", name("load"), load.render()));
+    for text in [&guard.text, &address.text, &fields_text] { pieces_module.raw(text.clone()); }
+    for copy in &copies { pieces_module.raw(copy.text.clone()); }
+    for emission in [&next_cursor, &next_budget, &keep_cursor, &keep_budget] { pieces_module.raw(emission.text.clone()); }
+    pieces_module.raw(generate_readonly_loop_certificate(&name("loop"), &reflected));
+    let pieces_text = stitch_imports(&pieces_module.render());
     let mut module = Module::default();
-    module.raw(pieces.lines().take_while(|line| line.starts_with("import ")).collect::<Vec<_>>().join("\n"));
+    module.raw(pieces_text.lines().take_while(|line| line.starts_with("import ")).collect::<Vec<_>>().join("\n"));
     module.raw(format!("import {prefix}_pieces; import function_ir_loop_trace; import x86_64_access_code; import x86_64_data_read; import x86_64_block; import list; import logic; import option;"));
     module.raw(looped.publish(prefix));
-    let reg = |g: Gpr| g.heather_name();
     let placement = name("placement");
     module.declaration(Declaration::function(&placement, HeatherExpr::name("LoopPlacement"), Block::expression(HeatherExpr::raw(format!(
         "LoopPlacement(base := {}, length := {}, needle := {}, cursor := {}, budget := {}, carry := {}, flag := {}, step := {})",
-        reg(p.base), reg(p.length), reg(p.needle), reg(p.cursor), reg(p.budget), reg(p.carry), reg(p.flag), reg(p.step))))));
+        reg(p.base), reg(p.length), reg(p.needle), reg(p.cursor), reg(p.budget), reg(p.fields[0]), reg(p.flag), reg(p.step))))));
     let body_code = name("body_code");
-    module.declaration(Declaration::function(&body_code, HeatherExpr::name("AccessCode"), Block::expression(HeatherExpr::raw(body.code()))));
+    module.declaration(Declaration::function(&body_code, HeatherExpr::name("AccessCode"), Block::expression(HeatherExpr::raw(body_fragment.code()))));
+    // Where the state sits: each field in its register, a Nat as its word
+    // and a Bool as its placed bit.
+    let rep_name = name("rep");
+    let field_rep = |i: usize, gprs: &str, state: &str| match fields[i].1 {
+        StructuredSourceType::Boolean => format!("read_gpr({}, {gprs}) = loop_bit({})", reg(p.fields[i]), field_of(state, i)),
+        _ => format!("LoopWord(64, read_gpr({}, {gprs}), {})", reg(p.fields[i]), field_of(state, i)),
+    };
+    let rep_body = conjunction(&(0..k).map(|i| field_rep(i, "gprs", "carry")).collect::<Vec<_>>());
+    module.declaration(Declaration::function(&rep_name, HeatherExpr::raw("Type"), Block::expression(HeatherExpr::raw(rep_body)))
+        .parameters(vec![Parameter::explicit("gprs", HeatherExpr::name("Gprs")), Parameter::explicit("carry", HeatherExpr::raw(&carry_type))]));
+    // The invariant: every Nat field fits a word with the budget still to run.
+    let invariant = name("fits");
+    let fits_body = conjunction(&nat_fields.iter().map(|&i| format!("loop_fits(cursor, budget, {})", field_of("carry", i))).collect::<Vec<_>>());
+    module.declaration(Declaration::function(&invariant, HeatherExpr::raw("Type"), Block::expression(HeatherExpr::raw(fits_body)))
+        .parameters(vec![Parameter::explicit("cursor", HeatherExpr::name("Nat")), Parameter::explicit("budget", HeatherExpr::name("Nat")),
+            Parameter::explicit("carry", HeatherExpr::raw(&carry_type))]));
     let region = format!("{}_region()", name("loop"));
+    // The placement reads only the fields' registers: it moves to any
+    // register file that agrees on them (docs/native-wc-design.md §4.8).
+    let moves_kept: Vec<Parameter> = (0..k).map(|i| Parameter::explicit(&format!("kept_{}", fields[i].0),
+        HeatherExpr::raw(format!("read_gpr({r}, after) = read_gpr({r}, before)", r = reg(p.fields[i]))))).collect();
+    let moved = tuple(&(0..k).map(|i| {
+        let motive = match fields[i].1 {
+            StructuredSourceType::Boolean => format!("word = loop_bit({})", field_of("carry", i)),
+            _ => format!("LoopWord(64, word, {})", field_of("carry", i)),
+        };
+        format!("j(sym(kept_{}), λ word _ => {motive}, {})", fields[i].0, component("placed", i, k))
+    }).collect::<Vec<_>>());
+    module.declaration(Declaration::theorem(name("rep_moves"), HeatherExpr::raw(format!("{rep_name}(after, carry)")),
+        Block::expression(HeatherExpr::raw(moved))).parameters(
+        [Parameter::explicit("before", HeatherExpr::name("Gprs")), Parameter::explicit("after", HeatherExpr::name("Gprs")),
+            Parameter::explicit("carry", HeatherExpr::raw(&carry_type))].into_iter().chain(moves_kept)
+            .chain(std::iter::once(Parameter::explicit("placed", HeatherExpr::raw(format!("{rep_name}(before, carry)"))))).collect::<Vec<_>>()));
+    // The state folded over any input from one whose Nat fields are zero fits
+    // a loop over the next `budget` bytes, each field having grown by at most
+    // one per byte read.
+    let room_fields: Vec<String> = nat_fields.iter().enumerate().map(|(j, &i)| {
+        let (folded, initial, state) = (field_of(&format!("step_fold({region}, needle, seen, init)"), i), field_of("init", i), field_of("state", i));
+        format!("loop_fits_from({folded}, {initial}, seen.len(), budget, \
+            step_fold_measure({region}, λ (state: {carry_type}) => {state}, \
+                λ needle cursor byte carry => {}, needle, seen)(init), {}, room)",
+            component(&format!("{advance}()(needle, cursor, byte, carry)"), j, nat_fields.len()), component("zero", j, nat_fields.len()))
+    }).collect();
+    module.declaration(Declaration::theorem(name("room"), HeatherExpr::raw(format!("{invariant}(0, budget, step_fold({region}, needle, seen, init))")),
+        Block::expression(HeatherExpr::raw(tuple(&room_fields)))).parameters(vec![
+        Parameter::explicit("needle", HeatherExpr::raw("BitVec(8)")),
+        Parameter::explicit("init", HeatherExpr::raw(&carry_type)),
+        Parameter::explicit("zero", HeatherExpr::raw(conjunction(&nat_fields.iter().map(|&i| format!("{} = 0", field_of("init", i))).collect::<Vec<_>>()))),
+        Parameter::explicit("seen", HeatherExpr::raw("List<BitVec(8)>")),
+        Parameter::explicit("budget", HeatherExpr::name("Nat")),
+        Parameter::explicit("room", HeatherExpr::raw("seen.len() + budget < nat::Nat::pow(2, 64)"))]));
     let guard_code = guard_fragment.code();
 
     // The guard: its typed result is loop_run's decision; nothing else moves.
     let (g, cw, lw, bw) = (name("guard"), format!("read_gpr({}, before.gprs)", reg(p.cursor)),
         format!("read_gpr({}, before.gprs)", reg(p.length)), format!("read_gpr({}, before.gprs)", reg(p.budget)));
     let kept = [p.base, p.length, p.needle, p.cursor, p.budget].map(|r| format!("{g}_preserves({}, before, trivial)", reg(r))).join(", ");
-    let kept = format!("{kept}, j(sym({g}_preserves({c}, before, trivial)), λ word _ => {word_rep}(word, carry), head.carry_placed)", c = reg(p.carry));
+    let carry_kept = tuple(&(0..k).map(|i| {
+        let motive = match fields[i].1 {
+            StructuredSourceType::Boolean => format!("word = loop_bit({})", field_of("carry", i)),
+            _ => format!("LoopWord(64, word, {})", field_of("carry", i)),
+        };
+        format!("j(sym({g}_preserves({}, before, trivial)), λ word _ => {motive}, {})", reg(p.fields[i]), component("head.carry_placed", i, k))
+    }).collect::<Vec<_>>());
     module.declaration(Declaration::theorem(name("guard_step"),
         HeatherExpr::raw(format!("LoopGuardStep<M, {carry_type}>({placement}(), {rep_name}, access, buffer, needle, {guard_code})")),
         Block::expression(HeatherExpr::raw(format!("λ before cursor budget carry head => Exists({g}_after(before), ⟨refl, ⟨\
             trans({g}_typed_correct({cw}, {lw}, {bw}, before, refl, refl, refl), cong_fn<Bool, BitVec(64)>(loop_bit, \
             loop_guard_word({cw}, {lw}, {bw}, cursor, buffer.length, budget, head.cursor_placed, head.length_placed, head.budget_placed))), \
             loop_head_transport({placement}(), {rep_name}, access, buffer, needle, before, {g}_after(before), cursor, budget, carry, head, \
-            {kept}, {g}_memory(before))⟩⟩)")))).generic("M").parameters(vec![
+            {kept}, {carry_kept}, {g}_memory(before))⟩⟩)")))).generic("M").parameters(vec![
         Parameter::explicit("access", HeatherExpr::raw("ByteReadAccess<M>")),
         Parameter::explicit("buffer", HeatherExpr::name("ReadonlyBytes")),
         Parameter::explicit("needle", HeatherExpr::raw("BitVec(8)"))]));
 
-    // One iteration: s0 -address-> s1 -load, step-> s2 -next cursor-> s3
-    // -next budget-> s4 -keep carry-> s5 -keep cursor-> s6 -keep budget-> s7.
-    let (a, st, nc, nb, kc, kcur, kb) = (name("address"), name("step"), name("next_cursor"), name("next_budget"),
-        name("keep_carry"), name("keep_cursor"), name("keep_budget"));
+    // One iteration.
+    let a = name("address");
+    let state = |i: usize| format!("s{i}");
     let kept_by = |r: Gpr, index: usize| -> String {
         let r = reg(r);
         match index {
             0 => format!("{a}_preserves({r}, s0, trivial)"),
-            1 => format!("trans({st}_body_preserves({r}, loaded, trivial), byte_load_preserves({st}_load(), byte, s1, {r}, refl))"),
-            i => format!("{}_preserves({r}, s{i}, trivial)", [&nc, &nb, &kc, &kcur, &kb][i - 2]),
+            1 => format!("byte_load_preserves({}(), byte, s1, {r}, refl)", name("load")),
+            i => format!("{}_preserves({r}, s{i}, trivial)", steps[i - 2].0),
         }
     };
-    // read_gpr(r, s_to) = read_gpr(r, s_from), one step at a time.
+    // read_gpr(r, s_to) = read_gpr(r, s_from).
     let chain = |r: Gpr, from: usize, to: usize| -> String {
+        if from == to { return "refl".into(); }
         (from + 1..to).fold(kept_by(r, from), |inner, i| format!("trans({}, {inner})", kept_by(r, i)))
     };
-    let chain7 = |r: Gpr| chain(r, 0, 7);
-    let observed = format!("needle, cursor, byte, carry, access, s1, placed_needle, placed_carry, canonical, present1");
-    let execution = format!("access_sequence(access, AccessPure({a}_code()), {t1}, s0, s1, s7, refl, \
-        access_sequence(access, {r}, {t2}, s1, s2, s7, \
-            access_sequence(access, AccessRead({st}_load()), AccessPure({st}_body_code()), s1, loaded, s2, \
-                Exists(byte, ByteLoadStep(canonical := canonical, present := present1, execution := refl)), refl), \
-        access_sequence(access, AccessPure({nc}_code()), {t3}, s2, s3, s7, refl, \
-        access_sequence(access, AccessPure({nb}_code()), {t4}, s3, s4, s7, refl, \
-        access_sequence(access, AccessPure({kc}_code()), {t5}, s4, s5, s7, refl, \
-        access_sequence(access, AccessPure({kcur}_code()), AccessPure({kb}_code()), s5, s6, s7, refl, refl))))))",
-        t1 = tail1.code(), r = read.code(), t2 = tail2.code(), t3 = tail3.code(), t4 = tail4.code(), t5 = tail5.code());
-    let lets = [
-        ("s1", format!("{a}_after(s0)")),
-        ("address_word", format!("loop_placed_address({addr}, s1, buffer, cursor, read_gpr({base}, s0.gprs), read_gpr({cur}, s0.gprs), \
+    // `trans(first, second)`, leaving out an empty chain.
+    let seq = |first: String, second: String| if first == "refl" { second } else { format!("trans({first}, {second})") };
+    // The state before pure step n is s{2 + n}, after it s{3 + n}.
+    let before_step = |n: usize| 2 + n;
+    let step_index = |part: &str| steps.iter().position(|(prefix, _)| prefix == part).expect("step");
+    let head_field = |i: usize| component("head.carry_placed", i, k);
+    let premise = |port: u64, entry: usize| -> String {
+        if port == 0 { return format!("sym(trans({}, head.needle_placed))", chain(p.needle, 0, entry)); }
+        if port == 2 { return format!("sym(trans({}, byte_load_result({}(), byte, s1)))", chain(p.byte, 2, entry), name("load")); }
+        let i = leaves.iter().position(|leaf| *leaf == port).expect("a field port");
+        match fields[i].1 {
+            StructuredSourceType::Boolean => format!("sym(trans({}, {}))", chain(p.fields[i], 0, entry), head_field(i)),
+            _ => format!("trans(loop_nat_placed(read_gpr({r}, s0.gprs), {f}, {h}), sym({c}))", r = reg(p.fields[i]), f = field_of("carry", i), h = head_field(i), c = chain(p.fields[i], 0, entry)),
+        }
+    };
+    let mut lets: Vec<(String, String)> = vec![
+        ("s1".into(), format!("{a}_after(s0)")),
+        ("address_word".into(), format!("loop_placed_address({b}, s1, buffer, cursor, read_gpr({base}, s0.gprs), read_gpr({cur}, s0.gprs), \
             head.base_placed, head.cursor_placed, head.inside, bounded, {a}_typed_correct(read_gpr({base}, s0.gprs), read_gpr({cur}, s0.gprs), s0, refl, refl))",
-            addr = reg(p.address), base = reg(p.base), cur = reg(p.cursor))),
-        ("present1", format!("j(sym({a}_memory(s0)), λ m _ => access.read(m, read_gpr({addr}, s1.gprs)) = Some(byte), \
-            loop_read_address(access, s0.memory, buffer, cursor, read_gpr({addr}, s1.gprs), byte, head.memory_agrees, address_word, present))", addr = reg(p.address))),
-        ("canonical", format!("loop_address_canonical(buffer, cursor, read_gpr({}, s1.gprs), address_word, open, low)", reg(p.address))),
-        ("placed_needle", format!("sym(trans({}, head.needle_placed))", kept_by(p.needle, 0))),
-        ("placed_carry", if counted {
-            format!("trans(loop_nat_placed(read_gpr({c}, s0.gprs), carry, head.carry_placed), sym({}))", kept_by(p.carry, 0), c = reg(p.carry))
-        } else { format!("sym(trans({}, head.carry_placed))", kept_by(p.carry, 0)) }),
-        ("payload", format!("{st}_read_correct({observed})")),
-        ("stepped", format!("{st}_output_{step_port}_read_correct({observed})")),
-        ("loaded", format!("byte_load_after({st}_load(), byte, s1)")),
-        ("s2", format!("{st}_body_after(loaded)")),
-        ("s3", format!("{nc}_after(s2)")),
-        ("s4", format!("{nb}_after(s3)")),
-        ("s5", format!("{kc}_after(s4)")),
-        ("s6", format!("{kcur}_after(s5)")),
-        ("s7", format!("{kb}_after(s6)")),
-        ("value", "λ (word: BitVec(64)) => word.toNat()".to_string()),
-        ("cursor_word", format!("trans(cong_fn(value, {}), head.cursor_placed)", chain(p.cursor, 0, 2))),
-        ("length_word", format!("trans(cong_fn(value, {}), head.length_placed)", chain(p.length, 0, 2))),
-        ("cursor_next", format!("trans(cong_fn(value, trans({}, trans({kcur}_typed_correct(read_gpr({ncr}, s5.gprs), s5, refl), \
-            trans({}, {nc}_typed_correct(read_gpr({cur}, s2.gprs), s2, refl))))), \
-            loop_cursor_increment(read_gpr({cur}, s2.gprs), read_gpr({len}, s2.gprs), cursor, buffer.length, cursor_word, length_word, open))",
-            chain(p.cursor, 6, 7), chain(p.next_cursor, 3, 5), ncr = reg(p.next_cursor), cur = reg(p.cursor), len = reg(p.length))),
-        ("budget_word", format!("trans(cong_fn(value, {}), head.budget_placed)", chain(p.budget, 0, 3))),
-        ("budget_next", format!("trans(cong_fn(value, trans({kb}_typed_correct(read_gpr({nbr}, s6.gprs), s6, refl), \
-            trans({}, {nb}_typed_correct(read_gpr({bud}, s3.gprs), s3, refl)))), loop_budget_decrement(read_gpr({bud}, s3.gprs), rest, budget_word))",
-            chain(p.next_budget, 4, 6), nbr = reg(p.next_budget), bud = reg(p.budget))),
-        ("carry_word", format!("trans({}, trans({kc}_typed_correct(read_gpr({pay}, s4.gprs), s4, refl), trans({}, payload)))",
-            chain(p.carry, 5, 7), chain(p.payload, 2, 4), pay = reg(p.payload))),
-        ("step_reg", format!("trans({}, stepped)", chain(p.step, 2, 7))),
-        ("memory", format!("trans({kb}_memory(s6), trans({kcur}_memory(s5), trans({kc}_memory(s4), trans({nb}_memory(s3), \
-            trans({nc}_memory(s2), trans({st}_body_memory(loaded), {a}_memory(s0)))))))")),
-        ("step", format!("{region}.body(needle, cursor, byte, carry)")),
-        // A counted carry is read back as its Nat under the invariant the
-        // step keeps; a Bool carry is its placed bit already.
-        ("next_invariant", if counted {
-            format!("loop_fits_step(cursor, rest, carry, loop_step_payload(step), inv, {advance}()(needle, cursor, byte, carry))")
-        } else { "trivial".to_string() }),
-        ("carry_next", if counted {
-            format!("loop_nat_word(read_gpr({}, s7.gprs), loop_step_payload(step), carry_word, loop_fits_bound(Succ(cursor), rest, loop_step_payload(step), next_invariant))", reg(p.carry))
-        } else { "carry_word".to_string() }),
-        ("next_head", format!("loop_head_advance({placement}(), {rep_name}, access, buffer, needle, s0, s7, cursor, Succ(rest), rest, carry, \
-            loop_step_payload(step), head, {}, {}, {}, cursor_next, budget_next, carry_next, open, memory)",
-            chain7(p.base), chain7(p.length), chain7(p.needle))),
-        ("execution", execution),
+            b = reg(p.byte), base = reg(p.base), cur = reg(p.cursor))),
+        ("present1".into(), format!("j(sym({a}_memory(s0)), λ m _ => access.read(m, read_gpr({b}, s1.gprs)) = Some(byte), \
+            loop_read_address(access, s0.memory, buffer, cursor, read_gpr({b}, s1.gprs), byte, head.memory_agrees, address_word, present))", b = reg(p.byte))),
+        ("canonical".into(), format!("loop_address_canonical(buffer, cursor, read_gpr({}, s1.gprs), address_word, open, low)", reg(p.byte))),
+        ("s2".into(), format!("byte_load_after({}(), byte, s1)", name("load"))),
     ];
+    for (n, (part, _)) in steps.iter().enumerate() { lets.push((state(3 + n), format!("{part}_after({})", state(before_step(n))))); }
+    let end = 2 + steps.len();
+    let s_end = state(end);
+    lets.push(("step".into(), format!("{region}.body(needle, cursor, byte, carry)")));
+    lets.push(("next".into(), "loop_step_payload(step)".into()));
+    // Each field's new word: its piece's result, copied home, kept since.
+    let mut field_words = vec![String::new(); k];
+    for (n, &i) in order.iter().enumerate() {
+        let piece = &field_emissions[n];
+        let at = step_index(&piece.prefix);
+        let entry = before_step(at);
+        let placed = piece.inputs.iter().map(|port| premise(port.id, entry)).collect::<Vec<_>>().join(", ");
+        let result = format!("{}_typed_correct(needle, cursor, byte, carry, {}{}{placed})", piece.prefix, state(entry), if placed.is_empty() { "" } else { ", " });
+        let copy_at = at + 1;
+        let copied = format!("{}_typed_correct(read_gpr({}, {}.gprs), {}, refl)", steps[copy_at].0, reg(t), state(before_step(copy_at)), state(before_step(copy_at)));
+        field_words[i] = seq(chain(p.fields[i], before_step(copy_at) + 1, end), format!("trans({copied}, {result})"));
+        lets.push((format!("word_{}", fields[i].0), field_words[i].clone()));
+    }
+    let d_at = step_index(&discriminator.prefix);
+    let d_placed = discriminator.inputs.iter().map(|port| premise(port.id, before_step(d_at))).collect::<Vec<_>>().join(", ");
+    lets.push(("step_reg".into(), seq(chain(p.step, before_step(d_at) + 1, end), format!("{}_typed_correct(needle, cursor, byte, carry, {}{}{d_placed})",
+        discriminator.prefix, state(before_step(d_at)), if d_placed.is_empty() { "" } else { ", " }))));
+    let (nc, nb, kcur, kb) = (step_index(&name("next_cursor")), step_index(&name("next_budget")), step_index(&name("keep_cursor")), step_index(&name("keep_budget")));
+    lets.push(("value".into(), "λ (word: BitVec(64)) => word.toNat()".into()));
+    lets.push(("cursor_word".into(), format!("trans(cong_fn(value, {}), head.cursor_placed)", chain(p.cursor, 0, before_step(nc)))));
+    lets.push(("length_word".into(), format!("trans(cong_fn(value, {}), head.length_placed)", chain(p.length, 0, before_step(nc)))));
+    let computed_cursor = seq(chain(t, before_step(nc) + 1, before_step(kcur)), format!("{}_typed_correct(read_gpr({cur}, {n}.gprs), {n}, refl)", steps[nc].0,
+        cur = reg(p.cursor), n = state(before_step(nc))));
+    let kept_cursor = seq(chain(p.cursor, before_step(kcur) + 1, end), format!("trans({}_typed_correct(read_gpr({tr}, {e}.gprs), {e}, refl), {computed_cursor})",
+        steps[kcur].0, tr = reg(t), e = state(before_step(kcur))));
+    lets.push(("cursor_next".into(), format!("trans(cong_fn(value, {kept_cursor}), \
+        loop_cursor_increment(read_gpr({cur}, {n}.gprs), read_gpr({len}, {n}.gprs), cursor, buffer.length, cursor_word, length_word, open))",
+        n = state(before_step(nc)), cur = reg(p.cursor), len = reg(p.length))));
+    lets.push(("budget_word".into(), format!("trans(cong_fn(value, {}), head.budget_placed)", chain(p.budget, 0, before_step(nb)))));
+    let computed_budget = seq(chain(s1r, before_step(nb) + 1, before_step(kb)), format!("{}_typed_correct(read_gpr({bud}, {n}.gprs), {n}, refl)", steps[nb].0,
+        bud = reg(p.budget), n = state(before_step(nb))));
+    let kept_budget = seq(chain(p.budget, before_step(kb) + 1, end), format!("trans({}_typed_correct(read_gpr({sr}, {e}.gprs), {e}, refl), {computed_budget})",
+        steps[kb].0, sr = reg(s1r), e = state(before_step(kb))));
+    lets.push(("budget_next".into(), format!("trans(cong_fn(value, {kept_budget}), loop_budget_decrement(read_gpr({bud}, {n}.gprs), rest, budget_word))",
+        n = state(before_step(nb)), bud = reg(p.budget))));
+    // after.memory = before.memory, the last step outermost; the load keeps
+    // memory by definition.
+    let memory = (0..steps.len()).fold(format!("{a}_memory(s0)"), |inner, n| format!("trans({}_memory({}), {inner})", steps[n].0, state(before_step(n))));
+    lets.push(("memory".into(), memory));
+    // Every Nat field fits after the step: the client's advance, field by field.
+    let adv = format!("{advance}()(needle, cursor, byte, carry)");
+    let invs: Vec<String> = nat_fields.iter().enumerate().map(|(j, &i)| format!("loop_fits_step(cursor, rest, {}, {}, {}, {})",
+        field_of("carry", i), field_of("next", i), component("inv", j, nat_fields.len()), component(&adv, j, nat_fields.len()))).collect();
+    lets.push((format!("next_invariant: {invariant}(Succ(cursor), rest, next)"), tuple(&invs)));
+    let carry_next = tuple(&(0..k).map(|i| match fields[i].1 {
+        StructuredSourceType::Boolean => format!("word_{}", fields[i].0),
+        _ => {
+            let j = nat_fields.iter().position(|&n| n == i).expect("a Nat field");
+            format!("loop_nat_word(read_gpr({}, {s_end}.gprs), {n}, word_{f}, loop_fits_bound(Succ(cursor), rest, {n}, {}))",
+                reg(p.fields[i]), component("next_invariant", j, nat_fields.len()), f = fields[i].0, n = field_of("next", i))
+        }
+    }).collect::<Vec<_>>());
+    lets.push((format!("carry_next: {rep_name}({s_end}.gprs, next)"), carry_next));
+    lets.push(("next_head".into(), format!("loop_head_advance({placement}(), {rep_name}, access, buffer, needle, s0, {s_end}, cursor, Succ(rest), rest, carry, \
+        next, head, {}, {}, {}, cursor_next, budget_next, carry_next, open, memory)", chain(p.base, 0, end), chain(p.length, 0, end), chain(p.needle, 0, end))));
+    // The execution follows the fragments' right-nested sequence.
+    let codes: Vec<String> = fragments.iter().map(|f| f.code().to_string()).collect();
+    let rest_code = |from: usize| -> String {
+        (from..last).rev().map(|i| codes[i].clone()).reduce(|tail, code| format!("AccessSequence({code}, {tail})")).expect("code")
+    };
+    let exec = |i: usize| if i == 1 { "Exists(byte, ByteLoadStep(canonical := canonical, present := present1, execution := refl))".to_string() } else { "refl".into() };
+    let execution = (0..last - 1).rev().fold(exec(last - 1), |inner, i| format!("access_sequence(access, {}, {}, {}, {}, {s_end}, {}, {inner})",
+        codes[i], rest_code(i + 1), state(i), state(i + 1), exec(i)));
+    lets.push(("execution".into(), execution));
     let lets = lets.iter().map(|(name, value)| format!("let {name} = {value};")).collect::<Vec<_>>().join("\n        ");
     module.declaration(Declaration::theorem(name("body_step"),
         HeatherExpr::raw(format!("LoopBodyStep<M, {carry_type}>({placement}(), {rep_name}, {invariant}, access, buffer, needle, {region}, {body_code}())")),
         Block::expression(HeatherExpr::raw(format!("λ s0 cursor rest carry byte head inv open present => {{\n        {lets}\n        \
-            Exists(s7, ⟨execution, loop_stepped({placement}(), {rep_name}, {invariant}, access, buffer, needle, s0, s7, cursor, rest, \
-            {}, step, step_reg, next_head, next_invariant)⟩)\n    }}", chain7(p.flag))))).generic("M").parameters(vec![
+            Exists({s_end}, ⟨execution, loop_stepped({placement}(), {rep_name}, {invariant}, access, buffer, needle, s0, {s_end}, cursor, rest, \
+            {}, step, step_reg, next_head, next_invariant)⟩)\n    }}", chain(p.flag, 0, end))))).generic("M").parameters(vec![
         Parameter::explicit("access", HeatherExpr::raw("ByteReadAccess<M>")),
         Parameter::explicit("buffer", HeatherExpr::name("ReadonlyBytes")),
         Parameter::explicit("needle", HeatherExpr::raw("BitVec(8)")),
         Parameter::explicit("bounded", HeatherExpr::raw("LoopAddressBound(64, buffer)")),
         Parameter::explicit("low", HeatherExpr::raw("buffer.base + buffer.length <= nat::Nat::pow(2, 47)"))]));
 
-    // The whole loop, stated against the named source function. Premises are
-    // the explicit export boundary: placement (LoopHead), the address bounds,
-    // and the reads the chosen path makes. ABI entry, RET and fetch are outside.
+    // The whole loop, stated against the named source function.
     let exit = format!("@bitvec::BitVec::ofNat(32, {exit})");
     let back = format!("@bitvec::BitVec::ofNat(32, {back})");
     let observed = |outcome: &str| format!("LoopObserved<M, {carry_type}>({placement}(), {rep_name}, {outcome})");
-    let invariant_proof = if counted { "fits" } else { "trivial" };
     module.declaration(Declaration::theorem(name("native"),
         HeatherExpr::raw(format!("Exists<MachineState<M>>(λ after => AccessArtifact<M>(access, {prefix}_code(), {prefix}_bytes(), before, after) ∧ \
             {})", observed(&format!("after, {}(buffer, needle, budget, cursor, carry)", reflected.source_name)))),
         Block::expression(HeatherExpr::raw(format!("{{
         let traced = loop_trace({placement}(), {rep_name}, {invariant}, access, buffer, needle, {region}, \
             {guard_code}, {body_code}(), {exit}, {back}, {prefix}_guard_step(access, buffer, needle), \
-            {prefix}_body_step(access, buffer, needle, bounded, low), budget, before, cursor, carry, head, {invariant_proof}, readable);
+            {prefix}_body_step(access, buffer, needle, bounded, low), budget, before, cursor, carry, head, fits, readable);
         Exists(traced.witness, ⟨AccessArtifact(encoding := {prefix}_encoding(), layout := {prefix}_layout(), execution := traced.proof.left), \
             j({}_source_agreement(buffer, needle, budget, cursor, carry), λ outcome _ => {}, traced.proof.right)⟩)
     }}", name("loop"), observed("traced.witness, outcome"))))).generic("M").parameters(vec![
@@ -240,13 +417,13 @@ pub fn generate_elaborated_loop_x86(elaborator: &Elaborator, prefix: &str, sourc
         Parameter::explicit("needle", HeatherExpr::raw("BitVec(8)")),
         Parameter::explicit("budget", HeatherExpr::name("Nat")),
         Parameter::explicit("cursor", HeatherExpr::name("Nat")),
-        Parameter::explicit("carry", HeatherExpr::name(carry_type)),
+        Parameter::explicit("carry", HeatherExpr::raw(&carry_type)),
         Parameter::explicit("bounded", HeatherExpr::raw("LoopAddressBound(64, buffer)")),
         Parameter::explicit("low", HeatherExpr::raw("buffer.base + buffer.length <= nat::Nat::pow(2, 47)")),
         Parameter::explicit("head", HeatherExpr::raw(format!("LoopHead<M, {carry_type}>({placement}(), {rep_name}, access, buffer, needle, before, cursor, budget, carry)"))),
-        Parameter::explicit("readable", HeatherExpr::raw(format!("LoopReadable(budget, {region}, buffer, needle, cursor, carry)")))]
-        .into_iter().chain(counted.then(|| Parameter::explicit("fits", HeatherExpr::raw("loop_fits(cursor, budget, carry)")))).collect::<Vec<_>>()));
-    Ok(LoopX86Emission { bytes: looped.bytes, pieces, text: stitch_imports(&module.render()) })
+        Parameter::explicit("readable", HeatherExpr::raw(format!("LoopReadable(budget, {region}, buffer, needle, cursor, carry)"))),
+        Parameter::explicit("fits", HeatherExpr::raw(format!("{invariant}(cursor, budget, carry)")))]));
+    Ok(LoopX86Emission { bytes: looped.bytes, pieces: pieces_text, text: stitch_imports(&module.render()) })
 }
 
 /// One `import m;` per module, first, whatever line the pieces wrote them on.

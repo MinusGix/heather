@@ -66,15 +66,9 @@ fn read_fields_code(needle: BitVec(8), loop_bytes: List<BitVec(8)>, jumps: EofJu
     state_code(needle, loop_bytes, jumps, fields_tail(low, high, pj))
 }
 
-// The code's length from its parts' lengths, stated over open parts: a
-// certificate measures its loop and formatter by their own lemmas instead of
-// evaluating the encodings.
-theorem len_app<A>(xs: List<A>, {ys: List<A>}, {n: Nat}, h: ys.len() = n): (xs ++ ys).len() = xs.len() + n {
-    trans(List::len_append(xs, ys), cong_fn<Nat, Nat>(λ m => xs.len() + m, h))
-}
-theorem len_app_is<A>(xs: List<A>, {ys: List<A>}, {m, n: Nat}, hx: xs.len() = m, hy: ys.len() = n): (xs ++ ys).len() = m + n {
-    j(hx, λ k _ => (xs ++ ys).len() = k + n, len_app(xs, hy))
-}
+// The code's length from its parts' lengths, over open parts (state_code_len):
+// a certificate measures its loop and formatter by their own lemmas instead
+// of evaluating the encodings.
 fn field_len(count: Gpr, offset, separator, low_len, high_len, rest_len: Nat) → Nat {
     canonical_block_bytes(field_count_block(count)).len() + (low_len + (canonical_block_bytes(field_low_block(offset, separator)).len() +
     (word_store_bytes(fields_store()).len() + (high_len + (canonical_block_bytes(field_high_block(offset)).len() +
@@ -88,20 +82,13 @@ theorem field_code_len(count: Gpr, offset, separator: Nat, low, high: Structured
         len_app_is(structured_bytes(high), high_is, len_app(canonical_block_bytes(field_high_block(offset)),
         len_app(word_store_bytes(fields_store()), rest_is)))))))
 }
-fn read_fields_len(needle: BitVec(8), jumps: EofJumps, pj: PrintJumps, loop_len, low_len, high_len: Nat) → Nat {
-    canonical_block_bytes(state_init_block()).len() + (canonical_block_bytes(read_entry_block()).len() + (linux_syscall_bytes().len() +
-    (canonical_block_bytes(eof_test_block()).len() + (near_control_bytes(JumpZeroNear(jumps.ed)).len() +
-    (near_control_bytes(JumpSignNear(jumps.sd)).len() +
-    (canonical_block_bytes(state_setup_block(needle)).len() + (loop_len + (near_control_bytes(JumpNear(jumps.bd)).len() +
-    (canonical_block_bytes(eof_retry_block()).len() + (near_control_bytes(JumpZeroNear(jumps.rd)).len() +
-    (canonical_block_bytes(eof_fail_block()).len() + (linux_syscall_bytes().len() +
+fn fields_tail_len(pj: PrintJumps, low_len, high_len: Nat) → Nat {
     field_len(R13, 0, 32, low_len, high_len, field_len(R14, 8, 32, low_len, high_len, field_len(R15, 16, 10, low_len, high_len,
-        canonical_block_bytes(fields_line_block()).len() + write_loop_code(pj).len())))))))))))))))
+        canonical_block_bytes(fields_line_block()).len() + write_loop_code(pj).len())))
 }
-theorem read_fields_code_len(needle: BitVec(8), loop_bytes: List<BitVec(8)>, jumps: EofJumps, low, high: StructuredCode, pj: PrintJumps,
-    loop_len, low_len, high_len: Nat, loop_is: loop_bytes.len() = loop_len,
+theorem fields_tail_code_len(low, high: StructuredCode, pj: PrintJumps, low_len, high_len: Nat,
     low_is: structured_bytes(low).len() = low_len, high_is: structured_bytes(high).len() = high_len):
-    read_fields_code(needle, loop_bytes, jumps, low, high, pj).len() = read_fields_len(needle, jumps, pj, loop_len, low_len, high_len) {
+    fields_tail(low, high, pj).len() = fields_tail_len(pj, low_len, high_len) {
     let line: ((canonical_block_bytes(fields_line_block()) ++ write_loop_code(pj)).len() =
         canonical_block_bytes(fields_line_block()).len() + write_loop_code(pj).len()) = List::len_append(canonical_block_bytes(fields_line_block()), write_loop_code(pj));
     let third = field_code_len(R15, 16, 10, low, high, canonical_block_bytes(fields_line_block()) ++ write_loop_code(pj),
@@ -109,17 +96,21 @@ theorem read_fields_code_len(needle: BitVec(8), loop_bytes: List<BitVec(8)>, jum
     let second = field_code_len(R14, 8, 32, low, high, field_code(R15, 16, 10, low, high, canonical_block_bytes(fields_line_block()) ++ write_loop_code(pj)),
         low_len, high_len, field_len(R15, 16, 10, low_len, high_len, canonical_block_bytes(fields_line_block()).len() + write_loop_code(pj).len()),
         low_is, high_is, third);
-    let first = field_code_len(R13, 0, 32, low, high, field_code(R14, 8, 32, low, high,
+    field_code_len(R13, 0, 32, low, high, field_code(R14, 8, 32, low, high,
             field_code(R15, 16, 10, low, high, canonical_block_bytes(fields_line_block()) ++ write_loop_code(pj))),
         low_len, high_len, field_len(R14, 8, 32, low_len, high_len,
             field_len(R15, 16, 10, low_len, high_len, canonical_block_bytes(fields_line_block()).len() + write_loop_code(pj).len())),
-        low_is, high_is, second);
-    len_app(canonical_block_bytes(state_init_block()), len_app(canonical_block_bytes(read_entry_block()), len_app(linux_syscall_bytes(),
-        len_app(canonical_block_bytes(eof_test_block()), len_app(near_control_bytes(JumpZeroNear(jumps.ed)),
-        len_app(near_control_bytes(JumpSignNear(jumps.sd)), len_app(canonical_block_bytes(state_setup_block(needle)),
-        len_app_is(loop_bytes, loop_is, len_app(near_control_bytes(JumpNear(jumps.bd)), len_app(canonical_block_bytes(eof_retry_block()),
-        len_app(near_control_bytes(JumpZeroNear(jumps.rd)), len_app(canonical_block_bytes(eof_fail_block()),
-        len_app(linux_syscall_bytes(), first)))))))))))))
+        low_is, high_is, second)
+}
+fn read_fields_len(needle: BitVec(8), jumps: EofJumps, pj: PrintJumps, loop_len, low_len, high_len: Nat) → Nat {
+    state_len(needle, jumps, loop_len, fields_tail_len(pj, low_len, high_len))
+}
+theorem read_fields_code_len(needle: BitVec(8), loop_bytes: List<BitVec(8)>, jumps: EofJumps, low, high: StructuredCode, pj: PrintJumps,
+    loop_len, low_len, high_len: Nat, loop_is: loop_bytes.len() = loop_len,
+    low_is: structured_bytes(low).len() = low_len, high_is: structured_bytes(high).len() = high_len):
+    read_fields_code(needle, loop_bytes, jumps, low, high, pj).len() = read_fields_len(needle, jumps, pj, loop_len, low_len, high_len) {
+    state_code_len(needle, loop_bytes, jumps, fields_tail(low, high, pj), loop_len, fields_tail_len(pj, low_len, high_len), loop_is,
+        fields_tail_code_len(low, high, pj, low_len, high_len, low_is, high_is))
 }
 
 // A field's pieces' offsets from the entry, from the field's start `at`.

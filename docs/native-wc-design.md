@@ -254,7 +254,9 @@ and three scratch.
 ### 4.7 The record loop (B3, 2026-09-28)
 
 `generate_elaborated_record_loop_x86` (`crates/elab/src/function_ir_source/loop_record.rs`)
-compiles a `bounded_readonly` over a record carry. It keeps the Nat/Bool
+compiles a `bounded_readonly` over a record carry. (Since 2026-09-30 it is the
+only loop generator, `generate_elaborated_loop_x86`, with a Nat or Bool carry
+as a one-field state: docs/native-loop-generator-fold-design.md.) It keeps the Nat/Bool
 loop's shape (the same guard, library induction and final theorem) with
 the iteration as a list of typed pieces:
 
@@ -529,7 +531,9 @@ The round's success test (§1) asked for `wc -l` to be an instance of what
 - **A Nat state's facts** are library lemmas at the end of
   `elf64_read_state` (`count_rep`, `count_framed`, `count_initialised`,
   `count_room` from `LoopAdvancesByAtMostOne`, `count_word`), with the exit
-  claim `read_count_runs` over the program's `ReadEofComputes`.
+  claim `read_count_runs` over the program's `ReadEofComputes`. (Since
+  2026-09-30 the loop generator emits them, as for a record, and the claims
+  take them as parameters: docs/native-loop-generator-fold-design.md §3.2.)
 - **The printing tail** is `lib/elf64_count_print.hthr`: elf64_read_print's
   base block, formatter and store restated at the tail's offset
   (`count_tail`, `count_formats`, `count_writes`), then elf64_write_loop's

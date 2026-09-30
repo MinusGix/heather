@@ -21,15 +21,13 @@ fn base() -> heather_elab::Elaborator {
     elab
 }
 
-// The read profile's counting loop over the state process: the count in R13,
-// where the state's first register is, and the loop's flag in R11, which only
-// the loop uses.
+// The read profile's counting loop over the state process: the count one
+// field, in R13, where the state's first register is.
 pub(crate) fn count_placement() -> NativeLoopPlacement {
     NativeLoopPlacement {
         base: Gpr::Rdi, length: Gpr::Rbp, needle: Gpr::Rcx, cursor: Gpr::Rsi, budget: Gpr::R12,
-        carry: Gpr::R13, flag: Gpr::R11, step: Gpr::Rbx,
-        address: Gpr::R8, byte: Gpr::R9, payload: Gpr::Rax, next_cursor: Gpr::R10, next_budget: Gpr::R14,
-        extra: vec![Gpr::Rdx, Gpr::R15],
+        flag: Gpr::R10, step: Gpr::Rbx, byte: Gpr::R9,
+        fields: vec![Gpr::R13], scratch: vec![Gpr::R11, Gpr::Rax, Gpr::Rdx],
     }
 }
 
@@ -43,6 +41,14 @@ import function_ir_loop; import function_ir_loop_trace; import x86_64; import x8
 import bitvec; import bitvec_nat; import bool; import list; import logic; import nat;
 import decimal_line; import wc_l; import lines_pieces; import lines_native;
 
+// The facts the count gives the process, as the producer states them.
+theorem lines_framed(): StateFramed(lines_rep) { λ before after carry kept placed => lines_rep_moves(before, after, carry, kept.left, placed) }
+fn lines_init() → Nat { 0 }
+theorem lines_initialised(): StateInitialised(lines_rep, lines_init()) { λ state => refl }
+theorem lines_word_0(gprs: Gprs, carry: Nat, placed: lines_rep(gprs, carry)): read_gpr(R13, gprs) = bitvec_nat::word_of_nat(64, carry) {
+    sym(loop_nat_placed(read_gpr(R13, gprs), carry, placed))
+}
+
 theorem lines_exit(file: List<BitVec(8)>, jumps: EofJumps,
     exit_reads: jumps.ed.sign_extend(32).toNat() = state_exit_skip(newline(), lines_bytes()),
     fail_reads: jumps.sd.sign_extend(32).toNat() = state_fail_skip(newline(), lines_bytes()),
@@ -55,11 +61,13 @@ theorem lines_exit(file: List<BitVec(8)>, jumps: EofJumps,
     LinuxRuns(io_linux(), eof_events(chunks, ending, [ExitEvent(bitvec_nat::word_of_nat(64, wc_l(eof_input(chunks))))]),
         io_initial(file, page, gprs, flags)) {
     read_count_runs(file, lines_placement(), ReadStatePlacement(refl, refl, refl, refl, refl),
+        lines_rep, lines_fits, lines_framed(),
         lines_loop_region(), lines_code(), lines_bytes(), count_lines, newline(), wc_l,
         λ buffer needle budget cursor carry => lines_loop_source_agreement(buffer, needle, budget, cursor, carry),
         λ access before buffer needle budget cursor carry bounded low head readable fits =>
             lines_native(access, before, buffer, needle, budget, cursor, carry, bounded, low, head, readable, fits),
-        count_lines_input, line_body_folds(), line_body_advances(),
+        count_lines_input, line_body_folds(), lines_initialised(),
+        λ seen budget fits => lines_room(newline(), lines_init(), refl, seen, budget, fits), lines_word_0,
         jumps, exit_reads, fail_reads, back_closes, retry_closes, resident, chunks, ok, ending, ending_ok, room, page, gprs, flags)
 }
 
@@ -83,11 +91,13 @@ theorem lines_print(file: List<BitVec(8)>, jumps: EofJumps,
     LinuxRuns(io_linux(), eof_events(chunks, ending, write_events(decimal_line(wc_l(eof_input(chunks))), writes, written)),
         io_initial(file, page, gprs, flags)) {
     read_count_print_runs(file, lines_placement(), ReadStatePlacement(refl, refl, refl, refl, refl),
+        lines_rep, lines_fits, lines_framed(),
         lines_loop_region(), lines_code(), lines_bytes(), count_lines, newline(), wc_l,
         λ buffer needle budget cursor carry => lines_loop_source_agreement(buffer, needle, budget, cursor, carry),
         λ access before buffer needle budget cursor carry bounded low head readable fits =>
             lines_native(access, before, buffer, needle, budget, cursor, carry, bounded, low, head, readable, fits),
-        count_lines_input, line_body_folds(), line_body_advances(),
+        count_lines_input, line_body_folds(), lines_initialised(),
+        λ seen budget fits => lines_room(newline(), lines_init(), refl, seen, budget, fits), lines_word_0,
         word, start, length, word_keeps, start_keeps, length_keeps, format,
         jumps, exit_reads, fail_reads, back_closes, retry_closes, pj, write_fail_reads, write_exit_reads, write_back_closes,
         write_retry_closes, resident, chunks, ok, ending, ending_ok, room, small, writes, writes_ok, written, written_ok, page, gprs, flags)

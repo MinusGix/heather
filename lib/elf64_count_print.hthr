@@ -1,6 +1,6 @@
 // A count read to the end of stdin, then printed (docs/native-first-program-design.md
 // §10, docs/native-wc-design.md §9): the state process of elf64_read_state
-// with a Nat state in R13 (its `count_rep`, the shape of `wc -l`), and a tail
+// with a Nat state read in R13 (its `CountWord`, the shape of `wc -l`), and a tail
 // that formats the count with decimal_line's three words, stores it, writes
 // the line through elf64_write_loop and exits 0, or exits 1 at a failure. The
 // formatter's certificates are parameters, as elf64_print_pieces states them.
@@ -44,6 +44,24 @@ fn count_tail(word, start, length: StructuredCode, pj: PrintJumps) → List<BitV
 fn read_count_code(needle: BitVec(8), loop_bytes: List<BitVec(8)>, jumps: EofJumps, word, start, length: StructuredCode, pj: PrintJumps)
     → List<BitVec(8)> {
     state_code(needle, loop_bytes, jumps, count_tail(word, start, length, pj))
+}
+
+// The code's length over open parts (state_code_len), the formatter's words
+// measured by their own lemmas.
+fn count_tail_len(pj: PrintJumps, word_len, start_len, length_len: Nat) → Nat {
+    canonical_block_bytes(print_base_block()).len() + (word_len + (start_len + (length_len +
+    (word_store_bytes(print_store()).len() + write_loop_code(pj).len()))))
+}
+theorem read_count_code_len(needle: BitVec(8), loop_bytes: List<BitVec(8)>, jumps: EofJumps, word, start, length: StructuredCode, pj: PrintJumps,
+    loop_len, word_len, start_len, length_len: Nat, loop_is: loop_bytes.len() = loop_len,
+    word_is: structured_bytes(word).len() = word_len, start_is: structured_bytes(start).len() = start_len,
+    length_is: structured_bytes(length).len() = length_len):
+    read_count_code(needle, loop_bytes, jumps, word, start, length, pj).len() =
+        state_len(needle, jumps, loop_len, count_tail_len(pj, word_len, start_len, length_len)) {
+    state_code_len(needle, loop_bytes, jumps, count_tail(word, start, length, pj), loop_len, count_tail_len(pj, word_len, start_len, length_len),
+        loop_is, len_app(canonical_block_bytes(print_base_block()), len_app_is(structured_bytes(word), word_is,
+            len_app_is(structured_bytes(start), start_is, len_app_is(structured_bytes(length), length_is,
+            List::len_append(word_store_bytes(print_store()), write_loop_code(pj)))))))
 }
 
 // The tail's pieces' offsets, from its start `at`.
@@ -205,20 +223,20 @@ theorem count_writes(stored: IoMemory, at: Nat, word, start, length: StructuredC
 // The tail, from the loop's end with the count in R13: format, store, write
 // the line, exit 0 (or exit 1 at a failed write).
 theorem count_tail_runs(file: List<BitVec(8)>, needle: BitVec(8), loop_bytes: List<BitVec(8)>,
-    word, start, length: StructuredCode, word_keeps, start_keeps, length_keeps: Gpr → Type,
+    rep: Gprs → Nat → Type, counted: CountWord(rep), word, start, length: StructuredCode, word_keeps, start_keeps, length_keeps: Gpr → Type,
     format: ReadPrintFormat(word, start, length, word_keeps, start_keeps, length_keeps), pj: PrintJumps,
     resident: (page: Nat → BitVec(8)) → CodeResident(io_fetch_access(), IoMemory(file, page), count_tail(word, start, length, pj),
         eof_rip(state_at_done(needle, loop_bytes))),
     targets: WriteTargets(ct_write(state_at_done(needle, loop_bytes), word, start, length), pj),
     total: Nat, small: total < 10000,
     ending: WriteEnding, ending_ok: WriteEndingOk(ending), steps: List<WriteStep>, steps_ok: WriteSteps(steps)(decimal_line(total))):
-    StateTail(file, needle, loop_bytes, count_rep(), total, write_events(decimal_line(total), steps, ending)) {
+    StateTail(file, needle, loop_bytes, rep, total, write_events(decimal_line(total), steps, ending)) {
     λ page state at_done memory_is placed => {
         let at = state_at_done(needle, loop_bytes);
         let stored = IoMemory(file, page);
         let pieces = count_pieces(stored, at, word, start, length, pj, resident(page));
         let formatted = count_formats(stored, at, word, start, length, pj, word_keeps, start_keeps, length_keeps, format,
-            pieces, total, state, memory_is, at_done, count_word(state.gprs, total, placed));
+            pieces, total, state, memory_is, at_done, counted(state.gprs, total, placed));
         let after_store = io_store_offset(stored, 0, word_bytes(line_word(bitvec_nat::word_of_nat(64, total))));
         linux_runs_after_steps(io_linux(), write_events(decimal_line(total), steps, ending),
             state, formatted.witness, formatted.proof.left,
@@ -233,12 +251,14 @@ theorem count_tail_runs(file: List<BitVec(8)>, needle: BitVec(8), loop_bytes: Li
 // decimal line and exits 0, or exits 1 at a failure. The line covers counts
 // below 10000.
 theorem read_count_print_runs(file: List<BitVec(8)>, p: LoopPlacement, at: ReadStatePlacement(p),
+    rep: Gprs → Nat → Type, fits: Nat → Nat → Nat → Type, framed: StateFramed(rep),
     region: ReadonlyLoop<Nat>, loop_code: AccessCode, loop_bytes: List<BitVec(8)>,
     source: ReadonlyBytes → BitVec(8) → Nat → Nat → Nat → LoopOutcome<Nat>, needle: BitVec(8), spec: List<BitVec(8)> → Nat,
     agreement: (buffer: ReadonlyBytes) → (needle: BitVec(8)) → (budget, cursor, carry: Nat) →
         loop_run(budget, region, buffer, needle, cursor, carry) = source(buffer, needle, budget, cursor, carry),
-    native: ReadStateCertificate(p, count_rep(), loop_fits, region, loop_code, loop_bytes, source),
-    computes: ReadEofComputes(region, needle, spec), folds: LoopFolds(region), advance: LoopAdvancesByAtMostOne(region),
+    native: ReadStateCertificate(p, rep, fits, region, loop_code, loop_bytes, source),
+    computes: ReadEofComputes(region, needle, spec), folds: LoopFolds(region),
+    initialised: StateInitialised(rep, 0), roomy: StateRoom(fits, region, needle, 0), counted: CountWord(rep),
     word, start, length: StructuredCode, word_keeps, start_keeps, length_keeps: Gpr → Type,
     format: ReadPrintFormat(word, start, length, word_keeps, start_keeps, length_keeps),
     jumps: EofJumps,
@@ -267,13 +287,13 @@ theorem read_count_print_runs(file: List<BitVec(8)>, p: LoopPlacement, at: ReadS
     let pieces = λ (page: Nat → BitVec(8)) => state_pieces(IoMemory(file, page), needle, loop_bytes, jumps, tail, resident(page));
     j(sym(meant), λ n _ => LinuxRuns(io_linux(), eof_events(chunks, ending, write_events(decimal_line(n), writes, written)),
             io_initial(file, page, gprs, flags)),
-        state_start(file, p, at, count_rep(), loop_fits, count_framed(), region, loop_code, loop_bytes, source, needle, agreement, native, folds,
-            0, count_initialised(), count_room(region, needle, advance), jumps,
+        state_start(file, p, at, rep, fits, framed, region, loop_code, loop_bytes, source, needle, agreement, native, folds,
+            0, initialised, roomy, jumps,
             state_exit_target(needle, loop_bytes, jumps.ed, exit_reads), state_js_target(needle, loop_bytes, jumps.sd, fail_reads),
             state_back_target(needle, loop_bytes, jumps.bd, back_closes), state_retry_target(needle, loop_bytes, jumps.rd, retry_closes),
             tail, pieces, chunks, ok, ending, ending_ok, room,
             write_events(decimal_line(total), writes, written),
-            count_tail_runs(file, needle, loop_bytes, word, start, length, word_keeps, start_keeps, length_keeps, format, pj,
+            count_tail_runs(file, needle, loop_bytes, rep, counted, word, start, length, word_keeps, start_keeps, length_keeps, format, pj,
                 λ page => pieces(page).tail_at,
                 write_targets(ct_write(state_at_done(needle, loop_bytes), word, start, length), pj,
                     write_fail_reads, write_exit_reads, write_back_closes, write_retry_closes),

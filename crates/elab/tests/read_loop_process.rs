@@ -50,9 +50,8 @@ fn slow_acceptance_read_loop_refusals() {
 fn search_placement() -> NativeLoopPlacement {
     NativeLoopPlacement {
         base: Gpr::Rdi, length: Gpr::Rbp, needle: Gpr::Rcx, cursor: Gpr::Rsi, budget: Gpr::R12,
-        carry: Gpr::R11, flag: Gpr::R13, step: Gpr::Rbx,
-        address: Gpr::R8, byte: Gpr::R9, payload: Gpr::Rax, next_cursor: Gpr::R10, next_budget: Gpr::R14,
-        extra: vec![Gpr::Rdx, Gpr::R15],
+        flag: Gpr::R13, step: Gpr::Rbx, byte: Gpr::R9,
+        fields: vec![Gpr::R11], scratch: vec![Gpr::Rax, Gpr::Rdx, Gpr::R10],
     }
 }
 
@@ -66,12 +65,12 @@ fn count_fetched(resident: &str) -> String {
 theorem count_fetched<M>(fetch: FetchAccess<M>, access: ByteReadAccess<M>, before: MachineState<M>,
     buffer: ReadonlyBytes, needle: BitVec(8), budget, cursor, carry: Nat,
     bounded: LoopAddressBound(64, buffer), low: buffer.base + buffer.length <= Nat::pow(2, 47),
-    head: LoopHead<M, Nat>(count_placement(), loop_in(count_placement().carry, loop_nat_rep), access, buffer, needle, before, cursor, budget, carry),
+    head: LoopHead<M, Nat>(count_placement(), count_rep, access, buffer, needle, before, cursor, budget, carry),
     readable: LoopReadable(budget, count_loop_region(), buffer, needle, cursor, carry),
-    fits: loop_fits(cursor, budget, carry), resident: {resident}):
+    fits: count_fits(cursor, budget, carry), resident: {resident}):
     Exists<MachineState<M>>(λ after => (FetchedSteps(fetch, access, before, after) ∧
         after.rip = next_rip(before.rip, count_bytes().len())) ∧
-        LoopObserved<M, Nat>(count_placement(), loop_in(count_placement().carry, loop_nat_rep), after,
+        LoopObserved<M, Nat>(count_placement(), count_rep, after,
             readonly_loops::count_occurrences(buffer, needle, budget, cursor, carry))) {{
     let native = count_native(access, before, buffer, needle, budget, cursor, carry, bounded, low, head, readable, fits);
     Exists(native.witness, ⟨access_artifact_fetched(fetch, access, count_code(), count_bytes(), before, native.witness,

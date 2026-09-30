@@ -1,5 +1,5 @@
 use crate::common;
-use heather_elab::function_ir_source::{generate_elaborated_loop_x86, generate_elaborated_record_loop_x86, generate_elaborated_typed_x86, NativeLoopPlacement, RecordLoopPlacement};
+use heather_elab::function_ir_source::{generate_elaborated_loop_x86, generate_elaborated_typed_x86, NativeLoopPlacement};
 use heather_elab::function_ir_x86_lower::{Gpr, Placements};
 
 fn checker() -> heather_elab::Elaborator {
@@ -40,12 +40,13 @@ fn loop_steps_select_through_the_shared_generator() {
     elab.elab_module_source("loop_step_certificates", &text).unwrap_or_else(|e| panic!("{}", e.render(&text)));
 }
 
+// The state, one field, in R11 and the flag in R13, where `native_loop`
+// reads them.
 fn search_placement() -> NativeLoopPlacement {
     NativeLoopPlacement {
         base: Gpr::Rdi, length: Gpr::Rbp, needle: Gpr::Rcx, cursor: Gpr::Rsi, budget: Gpr::R12,
-        carry: Gpr::R11, flag: Gpr::R13, step: Gpr::Rbx,
-        address: Gpr::R8, byte: Gpr::R9, payload: Gpr::Rax, next_cursor: Gpr::R10, next_budget: Gpr::R14,
-        extra: vec![Gpr::Rdx, Gpr::R15],
+        flag: Gpr::R13, step: Gpr::Rbx, byte: Gpr::R9,
+        fields: vec![Gpr::R11], scratch: vec![Gpr::Rax, Gpr::Rdx, Gpr::R10],
     }
 }
 
@@ -108,7 +109,7 @@ fn slow_acceptance_loop_refusals() {
         ("exit_edge", format!("ofNat(32, {exit})"), format!("ofNat(32, {})", exit - 1)),
         ("flag_placement", "flag := R13".to_string(), "flag := Rbx".to_string()),
         ("swapped_counters", "cursor := Rsi, budget := R12".to_string(), "cursor := R12, budget := Rsi".to_string()),
-        ("carry_placement", "loop_in(R11, ".to_string(), "loop_in(Rax, ".to_string()),
+        ("carry_placement", "read_gpr(R11, gprs) = loop_bit(carry)".to_string(), "read_gpr(Rax, gprs) = loop_bit(carry)".to_string()),
     ] {
         let bad = emission.text.replace(&from, &to);
         assert_ne!(bad, emission.text, "{name}");
@@ -288,8 +289,8 @@ fn stitch(text: &str) -> String {
 // supplies.
 pub(crate) const WC_SOURCE: &str = include_str!("../../../examples/x86-native/wc.hthr");
 
-pub(crate) fn wc_placement() -> RecordLoopPlacement {
-    RecordLoopPlacement {
+pub(crate) fn wc_placement() -> NativeLoopPlacement {
+    NativeLoopPlacement {
         base: Gpr::Rdi, length: Gpr::Rbp, needle: Gpr::Rcx, cursor: Gpr::Rsi, budget: Gpr::R12,
         flag: Gpr::R10, step: Gpr::Rbx, byte: Gpr::R9,
         fields: vec![Gpr::R13, Gpr::R14, Gpr::R15, Gpr::R8],
@@ -312,8 +313,9 @@ fn record_state_loop_certificate_checks() {
 pub(crate) fn wc_record_loop(elab: &mut heather_elab::Elaborator) {
     elab.elab_module_source("wc", WC_SOURCE).unwrap_or_else(|e| panic!("{}", e.render(WC_SOURCE)));
     elab.elab_module_source("wc_context", "import function_ir_loop; import function_ir_loop_x86; import wc; import bitvec; import bool;").unwrap();
-    let emission = generate_elaborated_record_loop_x86(elab, "wc", "wc::count_wc", &wc_placement(), "wc::wc_body_advances")
+    let emission = generate_elaborated_loop_x86(elab, "wc", "wc::count_wc", &wc_placement(), Some("wc::wc_body_advances"))
         .unwrap_or_else(|e| panic!("{e:?}"));
     elab.elab_module_source("wc_pieces", &emission.pieces).unwrap_or_else(|e| panic!("{}", e.render(&emission.pieces)));
     elab.elab_module_source("wc_native", &emission.text).unwrap_or_else(|e| panic!("{}", e.render(&emission.text)));
 }
+

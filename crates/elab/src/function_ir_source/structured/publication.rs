@@ -312,24 +312,26 @@ pub fn generate_elaborated_typed_fields_x86(
     let result_type = reflected.result_type_name();
     let ports = reflected.region.outputs().to_vec();
     let components = reflected.result_components();
-    let record = reflected.record.as_ref().ok_or_else(|| SourceError::Unsupported("field pieces need a record result".into()))?;
     let observers: Vec<_> = ports.iter().map(|port| format!("{prefix}_observe_{}", port.id)).collect();
     let observation_types: Vec<String> = ports.iter().map(|port| if port.width == 1 { "Bool".into() } else { format!("BitVec({})", port.width) }).collect();
     let names = reflected.choice.as_ref().map(|choice| choice.constructors.clone().map(|name| name.rsplit("::").next().unwrap().to_string()));
     for (i, observer) in observers.iter().enumerate() {
         let body = match (components.get(i), &names) {
             (Some(ty), _) => {
-                let field = &record.fields[i].0;
                 let observe = |value: &str| match ty {
                     StructuredSourceType::Word(1) => bit(value),
                     StructuredSourceType::NatWord => vector(StructuredSourceType::NatWord, value),
                     _ => value.into(),
                 };
-                match &names {
+                // A scalar result is its one field.
+                match (&reflected.record, &names) {
                     // Projected after the match, so the observer is
                     // `loop_step_payload(result).f` itself for a loop step.
-                    Some([no, yes]) => observe(&format!("{{ let chosen: {} = match result {{ {no}(payload) => payload, {yes}(payload) => payload }}; chosen.{field} }}", record.type_name)),
-                    None => observe(&format!("result.{field}")),
+                    (Some(record), Some([no, yes])) => observe(&format!("{{ let chosen: {} = match result {{ {no}(payload) => payload, {yes}(payload) => payload }}; chosen.{} }}",
+                        record.type_name, record.fields[i].0)),
+                    (Some(record), None) => observe(&format!("result.{}", record.fields[i].0)),
+                    (None, Some([no, yes])) => observe(&format!("match result {{ {no}(payload) => payload, {yes}(payload) => payload }}")),
+                    (None, None) => observe("result"),
                 }
             }
             (None, Some([no, yes])) => format!("match result {{ {no}(payload) => False, {yes}(payload) => True }}"),
