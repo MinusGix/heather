@@ -94,3 +94,7 @@ These were checked on paper in the formalization (S5 there).
   that `transp`'s strip is a declarative equation with premise
   `Γ ⊢ a ≈ b : I @ l` at every motive type, and that it has an endpoint
   congruence.
+
+## Log
+
+- 2026-09-30: Independent of normalization: `transp` into relevant motives with β at `srefl` (even propositional β), together with `sEq`'s irrelevance, proves UIP for `Id`. `fromS e := transp(z. Id(u; z); e; refl)` and `toS` by J satisfy `fromS (toS p) = p` by J, and `toS p ≡ toS q` by irrelevance. Checked in Coq with an abstract interface (delam `M10_DESIGN.md` S6); this is GCST's "without K" point. The frozen rule set therefore has UIP for `Id`, and so does any CCobs-style variant. Avoiding UIP means `sEq` eliminates only into strict propositions, and route 2b's form-B arm needs another shape.
