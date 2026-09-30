@@ -228,10 +228,47 @@ fn emit(n: &str, r: &StructuredRegion, p: &LoweredStructured, incoming: &Values,
         (StructuredRegion::Dataflow(_), StructuredPlan::MultiDataflow(parts)) => {
             return emit_parts(n, r, p, parts, incoming, m, sources);
         }
-        (StructuredRegion::Conditional { condition, when_true, when_false, .. }, StructuredPlan::Conditional { condition_register, when_true: yes, when_false: no, false_displacement, join_displacement, near }) => {
+        (StructuredRegion::Sequence { prefix, continuation }, StructuredPlan::FusedSequence { operands, continuation: next }) => {
+            // The prefix without its comparison, which computes the one
+            // operand the prefix owns; the branch compares it with the other.
+            let fused = structured::fusable(prefix, continuation)?
+                .ok_or_else(|| LoweringError::InvalidStructuredRegion("a fused plan over a sequence that does not fuse".into()))?;
+            let StructuredRegion::Conditional { condition, arguments, outputs, when_true, when_false, .. } = &**continuation else { unreachable!("fusable checked") };
+            let first_region = StructuredRegion::Dataflow(Region { inputs: prefix.inputs.clone(), nodes: structured::cone(prefix, fused.computed.id)?, outputs: vec![fused.computed] });
+            let first_plan = LoweredStructured { inputs: p.inputs.clone(), output: (fused.computed, operands.output_register), outputs: vec![(fused.computed, operands.output_register)], clobbered: operands.clobbered.clone(), byte_length: operands.instructions.iter().map(|i| i.canonical_length()).sum(), body: StructuredPlan::Dataflow(operands.clone()) };
+            let branch = StructuredRegion::Conditional { inputs: structured::fused_inputs(&fused, arguments), condition: *condition, arguments: arguments.clone(),
+                outputs: outputs.clone(), when_true: when_true.clone(), when_false: when_false.clone() };
+            return emit_sequence(n, r, p, &first_region, &first_plan, &branch, next, incoming, m, sources);
+        }
+        (StructuredRegion::Conditional { condition, when_true, when_false, .. }, StructuredPlan::Conditional { test: planned, when_true: yes, when_false: no, false_displacement, join_displacement, near }) => {
             let t = format!("{n}_true"); let f = format!("{n}_false");
             let tv = emit(&t, when_true, yes, incoming, m, sources)?; let fv = emit(&f, when_false, no, incoming, m, sources)?;
-            let register = condition_register.heather_name();
+            // What the branch tests, as `StructuredCode` spells it, its
+            // instruction, the Boolean that picks the true arm, and why the
+            // machine's selector is that Boolean's zero test.
+            let (test, test_instruction, bit, placed, selector) = match *planned {
+                PlannedTest::NonZero(register) => {
+                    let register = register.heather_name();
+                    let bit = test_of(&incoming[condition]).unwrap_or_else(|| format!("@bitvec::BitVec::head_bit(0, {})", val(incoming, *condition, 1)));
+                    (format!("NonZero({register})"), format!("TestRR({register}, {register})"), bit,
+                        format!("test_bit_value_placed_zf(λ width _ => {}, {condition}, {register}, before, placed_{condition})", incoming[condition]),
+                        format!("structured_test({register}, before).flags.zf"))
+                }
+                PlannedTest::Compare { left, right, operation, left_port, right_port } => {
+                    let (l, rr) = (left.heather_name(), right.heather_name());
+                    let (a, b) = (val(incoming, left_port, 64), val(incoming, right_port, 64));
+                    let (op, cc, lemma) = match operation {
+                        ComparisonOperation::UnsignedLessThan => ("unsigned_lt_bit", "B", "unsigned_compare_skips"),
+                        ComparisonOperation::SignedLessThan => ("signed_lt_bit", "L", "signed_compare_skips"),
+                    };
+                    fun(m, format!("{n}_test"), false, logical(), "Bool".into(), format!("@bitvec::BitVec::{op}(64, {a}, {b})"));
+                    let test = format!("Compare({l}, {rr}, {cc})");
+                    (test.clone(), format!("CmpRR({l}, {rr})"), format!("{n}_test(values)"),
+                        format!("{lemma}({l}, {rr}, {a}, {b}, before, placed_{left_port}, placed_{right_port})"),
+                        format!("branch_skips({test}, before)"))
+                }
+            };
+            let compare = matches!(planned, PlannedTest::Compare { .. });
             // The two encodings differ in their jumps only: rel8 JZ/JMP (2
             // bytes each), or JZ rel32 (6) and JMP rel32 (5).
             let (jz, jmp) = if *near { (6usize, 5usize) } else { (2, 2) };
@@ -241,21 +278,21 @@ fn emit(n: &str, r: &StructuredRegion, p: &LoweredStructured, incoming: &Values,
             let (entry_fn, read_fn, property_fn, cases_fn, constructor) = if *near {
                 ("structured_near_entry", "structured_near_branch_read", "structured_near_branch_property", "structured_near_branch_cases", "CodeBranchNear")
             } else { ("structured_branch_entry", "structured_branch_read", "structured_branch_property", "structured_branch_cases", "CodeBranch") };
+            let skip_jump = match (compare, *near) {
+                (false, true) => format!("JumpZeroNear({fd})"), (false, false) => format!("JumpZero({fd})"),
+                (true, true) => format!("JumpIfNear(branch_skip({test}), {fd})"), (true, false) => format!("JumpIf(branch_skip({test}), {fd})"),
+            };
             let (jz_bytes, jmp_bytes, jz_decodes, jmp_decodes) = if *near {
-                (format!("near_control_bytes(JumpZeroNear({fd}))"), format!("near_control_bytes(JumpNear({jd}))"),
-                    format!("decode_near_control_complete(JumpZeroNear({fd}))"), format!("decode_near_control_complete(JumpNear({jd}))"))
+                (format!("near_control_bytes({skip_jump})"), format!("near_control_bytes(JumpNear({jd}))"),
+                    format!("decode_near_control_complete({skip_jump})"), format!("decode_near_control_complete(JumpNear({jd}))"))
             } else {
-                (format!("short_control_bytes(JumpZero({fd}))"), format!("short_control_bytes(Jump({jd}))"),
-                    format!("decode_short_control_complete(JumpZero({fd}))"), format!("decode_short_control_complete(Jump({jd}))"))
+                (format!("short_control_bytes({skip_jump})"), format!("short_control_bytes(Jump({jd}))"),
+                    format!("decode_short_control_complete({skip_jump})"), format!("decode_short_control_complete(Jump({jd}))"))
             };
             let target = |start: &str, length: usize, displacement: &str| if *near { format!("near_branch_target({start}, {length}, {displacement})") }
                 else { format!("short_branch_target({start}, {displacement})") };
-            // What the branch tests, as `StructuredCode` spells it.
-            let test = format!("NonZero({register})");
             let entry = format!("{entry_fn}({test}, {fd}, before)");
             let branch_args = format!("{test}, {fd}, {jd}, {t}_code(), {f}_code(), before");
-            let bit = test_of(&incoming[condition]).unwrap_or_else(|| format!("@bitvec::BitVec::head_bit(0, {})", val(incoming, *condition, 1)));
-            let placed = format!("test_bit_value_placed_zf(λ width _ => {}, {condition}, {register}, before, placed_{condition})", incoming[condition]);
             let child_args = args(when_true);
             let mut results = Values::new();
             let mut proofs = Vec::new();
@@ -265,7 +302,7 @@ fn emit(n: &str, r: &StructuredRegion, p: &LoweredStructured, incoming: &Values,
                 let child_t = normalize_bit_result(format!("{t}{suffix}_correct(values, {entry}{child_args})"), &tv, port);
                 let child_f = normalize_bit_result(format!("{f}{suffix}_correct(values, {entry}{child_args})"), &fv, port);
                 let rt = format!("read_gpr({output}, {t}_after({entry}).gprs)"); let rf = format!("read_gpr({output}, {f}_after({entry}).gprs)");
-                let choice = format!("select_zero_test({bit}, structured_test({register}, before).flags.zf, {rt}, {rf}, {placed})");
+                let choice = format!("select_zero_test({bit}, {selector}, {rt}, {rf}, {placed})");
                 let selected_result = placed_value(&Values::from([(port.id,
                     branch_value("selected", port, &tv, &fv))]), port);
                 let agree = format!("match {bit} as λ selected => (match selected {{ False => {rf}, True => {rt} }}) = ({selected_result}) {{ False => {child_f}, True => {child_t} }}");
@@ -280,11 +317,12 @@ fn emit(n: &str, r: &StructuredRegion, p: &LoweredStructured, incoming: &Values,
                 thm(m, format!("{n}_{tag}_target"), false, start(), format!("{} = next_rip(start, {})", target("start", length, displacement), length + d), body);
             }
             let test_rip = step("before.rip", 3);
-            let tested = format!("structured_test({register}, before)");
-            let (not_taken, taken) = if *near {
-                (format!("near_not_taken_rip({fd}, {tested}, selected)"), format!("near_taken_rip({fd}, {tested}, selected)"))
-            } else {
-                (format!("jump_zero_not_taken_rip({tested}.flags.zf, {test_rip}, {fd}, selected)"), format!("jump_zero_taken_rip({tested}.flags.zf, {test_rip}, {fd}, selected)"))
+            let tested = format!("branch_test_state({test}, before)");
+            let (not_taken, taken) = match (compare, *near) {
+                (false, true) => (format!("near_not_taken_rip({fd}, {tested}, selected)"), format!("near_taken_rip({fd}, {tested}, selected)")),
+                (false, false) => (format!("jump_zero_not_taken_rip({selector}, {test_rip}, {fd}, selected)"), format!("jump_zero_taken_rip({selector}, {test_rip}, {fd}, selected)")),
+                (true, true) => (format!("near_if_not_taken_rip(branch_skip({test}), {fd}, {tested}, selected)"), format!("near_if_taken_rip(branch_skip({test}), {fd}, {tested}, selected)")),
+                (true, false) => (format!("jump_zero_not_taken_rip({selector}, {test_rip}, {fd}, selected)"), format!("jump_zero_taken_rip({selector}, {test_rip}, {fd}, selected)")),
             };
             let entry_t = trans(&not_taken, &compose("before.rip", 3, jz));
             let entry_f = trans(&taken, &trans(&format!("{n}_false_target({test_rip})"), &compose("before.rip", 3, jz + fdn)));
@@ -298,7 +336,7 @@ fn emit(n: &str, r: &StructuredRegion, p: &LoweredStructured, incoming: &Values,
             let span = format!("{cases_fn}({branch_args}, λ after => after.rip = next_rip(before.rip, {length}), λ selected => {true_span}, λ selected => {false_span})");
             let frame_branch_args = branch_args.clone(); let frame_entry = entry.clone(); let frame_t = t.clone(); let frame_f = f.clone();
             let frame_property = property_fn.to_string();
-            let fixed = [("test", format!("canonical_bytes(TestRR({register}, {register}))"), 3), ("jump_zero", jz_bytes.clone(), jz), ("jump", jmp_bytes.clone(), jmp)];
+            let fixed = [("test", format!("canonical_bytes({test_instruction})"), 3), ("jump_zero", jz_bytes.clone(), jz), ("jump", jmp_bytes.clone(), jmp)];
             for (tag, bytes, size) in &fixed {
                 thm(m, format!("{n}_{tag}_length"), false, vec![], format!("{bytes}.len() = {size}"), "refl".into());
             }
@@ -312,18 +350,24 @@ fn emit(n: &str, r: &StructuredRegion, p: &LoweredStructured, incoming: &Values,
             (format!("{constructor}({test}, {fd}, {jd}, {t}_code(), {f}_code())"),
                 results, proofs, memory, span,
                 format!("⟨λ start => {false_layout}, ⟨λ start => {join_layout}, ⟨{t}_layout(), {f}_layout()⟩⟩⟩"),
-                format!("⟨canonical_encoding_decodes(start, TestRR({register}, {register})), ⟨{jz_decodes}, ⟨{t}_decodes(next_rip(start, {head})), ⟨{jmp_decodes}, {false_decodes}⟩⟩⟩⟩"),
+                format!("⟨canonical_encoding_decodes(start, {test_instruction}), ⟨{jz_decodes}, ⟨{t}_decodes(next_rip(start, {head})), ⟨{jmp_decodes}, {false_decodes}⟩⟩⟩⟩"),
                 byte_length,
                 {
                     // The fixed pieces are literal too; conversion checks each
                     // against its few-byte encoding.
-                    let r = encoding::register_code(*condition_register);
                     let (jz_literal, jmp_literal) = if *near {
-                        let mut jz = vec![0x0f, 0x84]; jz.extend((fdn as u32).to_le_bytes());
+                        let mut jz = vec![0x0f, 0x80 | planned.skip_code()]; jz.extend((fdn as u32).to_le_bytes());
                         let mut jmp = vec![0xe9]; jmp.extend((jdn as u32).to_le_bytes());
                         (literal_bytes(&jz), literal_bytes(&jmp))
-                    } else { (literal_bytes(&[0x74, fdn as u8]), literal_bytes(&[0xeb, jdn as u8])) };
-                    let literal = [literal_bytes(&[0x48 | (r >> 3) | ((r >> 3) << 2), 0x85, 0xc0 | ((r & 7) << 3) | (r & 7)]), jz_literal, jmp_literal];
+                    } else { (literal_bytes(&[0x70 | planned.skip_code(), fdn as u8]), literal_bytes(&[0xeb, jdn as u8])) };
+                    let test_literal = match *planned {
+                        PlannedTest::NonZero(register) => {
+                            let r = encoding::register_code(register);
+                            vec![0x48 | (r >> 3) | ((r >> 3) << 2), 0x85, 0xc0 | ((r & 7) << 3) | (r & 7)]
+                        }
+                        PlannedTest::Compare { .. } => encoding::encode_instructions(&[planned.instruction().expect("a comparison's instruction")]),
+                    };
+                    let literal = [literal_bytes(&test_literal), jz_literal, jmp_literal];
                     let lit = |pieces: &[String; 3], yes: &str, no: &str| format!("{} ++ ({} ++ ({yes} ++ ({} ++ {no})))", pieces[0], pieces[1], pieces[2]);
                     let code = [fixed[0].1.clone(), fixed[1].1.clone(), fixed[2].1.clone()];
                     (lit(&literal, &format!("{t}_lit()"), &format!("{f}_lit()")),

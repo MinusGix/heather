@@ -15,7 +15,7 @@ pub use data_read::ByteLoad;
 mod structured;
 mod structured_cert;
 pub use structured_cert::{at_width, generate_structured, generate_structured_results, generate_structured_sourced, StructuredX86Emission};
-pub use structured::{lower_structured, lower_structured_results, LoweredStructured, Placements, StructuredPlan};
+pub use structured::{lower_structured, lower_structured_results, LoweredStructured, Placements, PlannedTest, StructuredPlan};
 
 use crate::function_ir_cert::{
     self as cert, BlockArgument, ControlRegion, Node, Region, StructuredRegion,

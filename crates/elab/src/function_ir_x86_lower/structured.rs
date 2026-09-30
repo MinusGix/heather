@@ -2,6 +2,7 @@
 //! checks their physical execution, layout, and frames before publication.
 
 use super::*;
+use cert::Port;
 
 /// Stable FunctionIR value IDs, independent of interface ordering.
 pub type Placements = BTreeMap<u64, Gpr>;
@@ -18,6 +19,36 @@ pub struct LoweredStructured {
     pub body: StructuredPlan,
 }
 
+/// What a planned conditional tests (x86_64_structured_block's `BranchTest`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PlannedTest {
+    /// TEST r, r on a materialised comparison bit.
+    NonZero(Gpr),
+    /// CMP left, right on the region's comparison of `left_port` with
+    /// `right_port`, whose bit is never materialised
+    /// (docs/structured-lowering-code-size-design.md §2.2).
+    Compare { left: Gpr, right: Gpr, operation: ComparisonOperation, left_port: u64, right_port: u64 },
+}
+
+impl PlannedTest {
+    /// The Jcc condition code of the edge over the true arm: the test's
+    /// failure (`branch_skip`), as the manual numbers it.
+    pub fn skip_code(self) -> u8 {
+        match self {
+            PlannedTest::NonZero(_) => 0x4,
+            PlannedTest::Compare { operation: ComparisonOperation::UnsignedLessThan, .. } => 0x3,
+            PlannedTest::Compare { operation: ComparisonOperation::SignedLessThan, .. } => 0xd,
+        }
+    }
+    /// The test instruction: TEST r, r or CMP left, right.
+    pub fn instruction(self) -> Option<Instruction> {
+        match self {
+            PlannedTest::NonZero(_) => None,
+            PlannedTest::Compare { left, right, .. } => Some(Instruction::CmpRR { left, right }),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StructuredPlan {
     Dataflow(LoweredDag),
@@ -27,8 +58,16 @@ pub enum StructuredPlan {
         prefix: LoweredDag,
         continuation: Box<LoweredStructured>,
     },
+    /// A `Sequence` whose comparison moved into the branch after it: the
+    /// prefix computes the comparison's one computed operand, and the
+    /// continuation is a `Conditional` testing `Compare`. Its region is the
+    /// `Sequence` it replaces.
+    FusedSequence {
+        operands: LoweredDag,
+        continuation: Box<LoweredStructured>,
+    },
     Conditional {
-        condition_register: Gpr,
+        test: PlannedTest,
         when_true: Box<LoweredStructured>,
         when_false: Box<LoweredStructured>,
         /// Short: rel8 JZ/JMP. Near: rel32, when either arm is past rel8's
@@ -170,6 +209,31 @@ fn select_here(
             let clobbered = dag.clobbered.clone();
             (StructuredPlan::Dataflow(dag), clobbered, length)
         }
+        StructuredRegion::Sequence { prefix, continuation } if fusable(prefix, continuation)?.is_some() => {
+            let fused = fusable(prefix, continuation)?.unwrap();
+            let StructuredRegion::Conditional { arguments, when_true, when_false, .. } = &**continuation else { unreachable!("fusable checked") };
+            let candidates = || temporaries.iter().copied().filter(|r| !destinations.contains(r));
+            let operand_register = candidates().find(|r| LowByteGpr::from_gpr(*r).is_none()).or_else(|| candidates().next())
+                .ok_or(LoweringError::RegisterPressure { node_index: 0, live_temporaries: inputs.len() })?;
+            let operands = Region { inputs: prefix.inputs.clone(), nodes: cone(prefix, fused.computed.id)?, outputs: vec![fused.computed] };
+            let dag = lower_dag(&operands, &registers, temporaries, operand_register)?;
+            let mut carried = inputs.clone();
+            carried.insert(fused.computed.id, dag.output_register);
+            let place = |id: u64| carried.get(&id).copied().ok_or(LoweringError::UndefinedValue(id));
+            let compare = fused.compare;
+            let test = PlannedTest::Compare { left: place(compare.left)?, right: place(compare.right)?, operation: compare.operation,
+                left_port: compare.left, right_port: compare.right };
+            let next_inputs = fused_inputs(&fused, arguments).iter().map(|port| Ok((port.id, place(port.id)?)))
+                .collect::<Result<Placements, LoweringError>>()?;
+            let next_temporaries = temporaries.iter().copied()
+                .filter(|r| !next_inputs.values().any(|placed| placed == r)).collect::<Vec<_>>();
+            let (body, clobbered, length) = branch(test, arguments, when_true, when_false, &next_inputs, &next_temporaries, requested, &format!("{path}.continuation"))?;
+            let next_outputs = continuation.outputs().iter().map(|port| (*port, requested[&port.id])).collect::<Vec<_>>();
+            let next = LoweredStructured { inputs: next_inputs, output: next_outputs[0], outputs: next_outputs, clobbered, byte_length: length, body };
+            let clobbered = dag.clobbered.union(&next.clobbered).copied().collect();
+            let length = dag.instructions.iter().map(|i| i.canonical_length()).sum::<usize>() + next.byte_length;
+            (StructuredPlan::FusedSequence { operands: dag, continuation: Box::new(next) }, clobbered, length)
+        }
         StructuredRegion::Sequence { prefix, continuation } => {
             if prefix.outputs.len() != 1 {
                 return select_here(&StructuredRegion::Compose { prefix: Box::new(StructuredRegion::Dataflow(prefix.clone())), continuation: continuation.clone() }, inputs, temporaries, requested, path);
@@ -195,30 +259,122 @@ fn select_here(
             let length = dag.instructions.iter().map(|i| i.canonical_length()).sum::<usize>() + next.byte_length;
             (StructuredPlan::Sequence { prefix: dag, continuation: Box::new(next) }, clobbered, length)
         }
-        StructuredRegion::Conditional { condition, arguments, when_true, when_false, .. } => {
-            let condition_register = inputs[condition];
-            let branch_inputs = arguments.iter().map(|port| (port.id, inputs[&port.id])).collect();
-            // Preserve every inherited register across the branch. A caller
-            // may still carry a selector omitted from the branch interface.
-            let scratch = temporaries.to_vec();
-            let yes = select(when_true, &branch_inputs, &scratch, requested, &format!("{path}.true"))?;
-            let no = select(when_false, &branch_inputs, &scratch, requested, &format!("{path}.false"))?;
-            // TEST r,r; JZ false; true; JMP join; false. Short jumps while
-            // both distances fit rel8, near (JZ rel32, JMP rel32) otherwise.
-            let near = yes.byte_length + 2 > 127 || no.byte_length > 127;
-            let (jz_length, jmp_length) = if near { (6, 5) } else { (2, 2) };
-            let false_distance = yes.byte_length + jmp_length;
-            let join_distance = no.byte_length;
-            for bytes in [false_distance, join_distance] {
-                if bytes > i32::MAX as usize { return Err(LoweringError::ShortBranchOutOfRange { bytes }); }
-            }
-            let length = 3 + jz_length + yes.byte_length + jmp_length + no.byte_length;
-            let clobbered = yes.clobbered.union(&no.clobbered).copied().collect();
-            (StructuredPlan::Conditional {
-                condition_register, when_true: Box::new(yes), when_false: Box::new(no),
-                false_displacement: false_distance as u32, join_displacement: join_distance as u32, near,
-            }, clobbered, length)
-        }
+        StructuredRegion::Conditional { condition, arguments, when_true, when_false, .. } =>
+            branch(PlannedTest::NonZero(inputs[condition]), arguments, when_true, when_false, inputs, temporaries, requested, path)?,
     };
     Ok(LoweredStructured { inputs: inputs.clone(), output, outputs, clobbered, byte_length, body })
+}
+
+/// A conditional's two arms and its jumps, over whichever test decides it.
+#[allow(clippy::too_many_arguments)]
+fn branch(
+    test: PlannedTest, arguments: &[Port], when_true: &StructuredRegion, when_false: &StructuredRegion,
+    inputs: &Placements, temporaries: &[Gpr], requested: &Placements, path: &str,
+) -> Result<(StructuredPlan, BTreeSet<Gpr>, usize), LoweringError> {
+    let branch_inputs = arguments.iter().map(|port| (port.id, inputs[&port.id])).collect();
+    // Preserve every inherited register across the branch. A caller
+    // may still carry a selector omitted from the branch interface.
+    let scratch = temporaries.to_vec();
+    let yes = select(when_true, &branch_inputs, &scratch, requested, &format!("{path}.true"))?;
+    let no = select(when_false, &branch_inputs, &scratch, requested, &format!("{path}.false"))?;
+    // TEST r,r or CMP l,r; Jcc false; true; JMP join; false. Short jumps
+    // while both distances fit rel8, near (Jcc rel32, JMP rel32) otherwise.
+    let near = yes.byte_length + 2 > 127 || no.byte_length > 127;
+    let (jz_length, jmp_length) = if near { (6, 5) } else { (2, 2) };
+    let false_distance = yes.byte_length + jmp_length;
+    let join_distance = no.byte_length;
+    for bytes in [false_distance, join_distance] {
+        if bytes > i32::MAX as usize { return Err(LoweringError::ShortBranchOutOfRange { bytes }); }
+    }
+    let length = 3 + jz_length + yes.byte_length + jmp_length + no.byte_length;
+    let clobbered = yes.clobbered.union(&no.clobbered).copied().collect();
+    Ok((StructuredPlan::Conditional {
+        test, when_true: Box::new(yes), when_false: Box::new(no),
+        false_displacement: false_distance as u32, join_displacement: join_distance as u32, near,
+    }, clobbered, length))
+}
+
+/// A `Sequence` whose prefix ends in a 64-bit comparison that only the
+/// `Conditional` after it reads, with exactly one operand computed by the
+/// prefix: the comparison can move into the branch
+/// (docs/structured-lowering-code-size-design.md §2.2). Otherwise the bit is
+/// materialised and tested, which stays the rule for every other shape.
+pub(crate) struct Fusable {
+    pub(crate) compare: ComparisonNode,
+    pub(crate) computed: Port,
+}
+
+pub(crate) fn fusable(prefix: &Region, continuation: &StructuredRegion) -> Result<Option<Fusable>, LoweringError> {
+    let StructuredRegion::Conditional { condition, arguments, .. } = continuation else { return Ok(None) };
+    if prefix.outputs.len() != 1 || prefix.outputs[0].id != *condition || arguments.iter().any(|port| port.id == *condition) {
+        return Ok(None);
+    }
+    let mut compare = None;
+    for (index, node) in prefix.nodes.iter().enumerate() {
+        match selected_node(*node, index)? {
+            SelectedNode::Comparison(n) if n.output == *condition => compare = Some(n),
+            SelectedNode::Comparison(n) if n.left == *condition || n.right == *condition => return Ok(None),
+            SelectedNode::Binary(n) if n.left == *condition || n.right == *condition => return Ok(None),
+            _ => {}
+        }
+    }
+    let Some(compare) = compare else { return Ok(None) };
+    if compare.operand_width != 64 { return Ok(None); }
+    let input = |id: u64| prefix.inputs.iter().any(|port| port.id == id);
+    let computed: BTreeSet<u64> = [compare.left, compare.right].into_iter().filter(|id| !input(*id)).collect();
+    if computed.len() != 1 { return Ok(None); }
+    Ok(Some(Fusable { compare, computed: Port { id: *computed.iter().next().unwrap(), width: 64 } }))
+}
+
+/// The fused branch's interface: its comparison's operands, then the arms'
+/// arguments, each once.
+pub(crate) fn fused_inputs(fused: &Fusable, arguments: &[Port]) -> Vec<Port> {
+    let mut ports = Vec::new();
+    for port in [Port { id: fused.compare.left, width: 64 }, Port { id: fused.compare.right, width: 64 }].into_iter().chain(arguments.iter().copied()) {
+        if !ports.contains(&port) { ports.push(port); }
+    }
+    ports
+}
+
+/// The nodes `wanted` depends on, in order.
+pub(crate) fn cone(region: &Region, wanted: u64) -> Result<Vec<Node>, LoweringError> {
+    let mut needed = BTreeSet::from([wanted]);
+    let mut nodes = Vec::new();
+    for (index, node) in region.nodes.iter().enumerate().rev() {
+        if !needed.contains(&node.output().id) { continue; }
+        match selected_node(*node, index)? {
+            SelectedNode::Binary(n) => { needed.insert(n.left); needed.insert(n.right); }
+            SelectedNode::Comparison(n) => { needed.insert(n.left); needed.insert(n.right); }
+            SelectedNode::Constant(_) => {}
+        }
+        nodes.push(*node);
+    }
+    nodes.reverse();
+    Ok(nodes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cert::Node;
+
+    // The branch must be the comparison's only reader, at 64 bits, with one
+    // operand the prefix computes; anything else keeps the bit materialised.
+    #[test]
+    fn only_a_comparison_its_branch_alone_reads_is_fused() {
+        let word = |id| Port { id, width: 64 };
+        let bit = Port { id: 3, width: 1 };
+        let prefix = |width| Region { inputs: vec![word(0)], nodes: vec![Node::Const { width, output: 2, value: 16 },
+            Node::UnsignedLessThan { width, output: 3, left: 0, right: 2 }], outputs: vec![bit] };
+        let arm = |inputs: Vec<Port>| Box::new(StructuredRegion::Dataflow(Region { inputs, nodes: vec![Node::Const { width: 64, output: 4, value: 0 }], outputs: vec![word(4)] }));
+        let branch = |arguments: Vec<Port>| {
+            let mut inputs = vec![bit];
+            inputs.extend(arguments.iter().copied().filter(|port| *port != bit));
+            StructuredRegion::Conditional { inputs, condition: 3, arguments: arguments.clone(), outputs: vec![word(4)],
+                when_true: arm(arguments.clone()), when_false: arm(arguments) }
+        };
+        assert!(fusable(&prefix(64), &branch(vec![word(0)])).unwrap().is_some());
+        assert!(fusable(&prefix(64), &branch(vec![word(0), bit])).unwrap().is_none(), "the arms read the bit");
+        assert!(fusable(&prefix(32), &branch(vec![word(0)])).unwrap().is_none(), "a narrow comparison");
+    }
 }

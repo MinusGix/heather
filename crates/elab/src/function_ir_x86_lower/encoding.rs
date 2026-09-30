@@ -54,11 +54,22 @@ pub fn encode_structured(plan: &super::LoweredStructured) -> Vec<u8> {
             bytes.extend(encode_structured(continuation));
             bytes
         }
-        StructuredPlan::Conditional { condition_register, when_true, when_false, false_displacement, join_displacement, near } => {
-            let r = register_code(*condition_register);
-            let mut bytes = vec![0x48 | (r >> 3) | ((r >> 3) << 2), 0x85, 0xc0 | ((r & 7) << 3) | (r & 7)];
-            if *near { bytes.extend([0x0f, 0x84]); bytes.extend(false_displacement.to_le_bytes()); }
-            else { bytes.extend([0x74, *false_displacement as u8]); }
+        StructuredPlan::FusedSequence { operands, continuation } => {
+            let mut bytes = encode_instructions(&operands.instructions);
+            bytes.extend(encode_structured(continuation));
+            bytes
+        }
+        StructuredPlan::Conditional { test, when_true, when_false, false_displacement, join_displacement, near } => {
+            let mut bytes = match (test, test.instruction()) {
+                (_, Some(instruction)) => encode_instructions(&[instruction]),
+                (super::PlannedTest::NonZero(register), None) => {
+                    let r = register_code(*register);
+                    vec![0x48 | (r >> 3) | ((r >> 3) << 2), 0x85, 0xc0 | ((r & 7) << 3) | (r & 7)]
+                }
+                (super::PlannedTest::Compare { .. }, None) => unreachable!("a comparison has its instruction"),
+            };
+            if *near { bytes.extend([0x0f, 0x80 | test.skip_code()]); bytes.extend(false_displacement.to_le_bytes()); }
+            else { bytes.extend([0x70 | test.skip_code(), *false_displacement as u8]); }
             bytes.extend(encode_structured(when_true));
             if *near { bytes.push(0xe9); bytes.extend(join_displacement.to_le_bytes()); }
             else { bytes.extend([0xeb, *join_displacement as u8]); }

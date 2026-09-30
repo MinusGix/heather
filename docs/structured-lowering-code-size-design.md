@@ -1,6 +1,6 @@
 # A tighter structured x86 lowering — design
 
-Status: **decisions taken 2026-09-29 (§6, all as recommended); probes V2–V5 done 2026-09-29 (§7.1). Slice F next.** Owner:
+Status: **decisions taken 2026-09-29 (§6, all as recommended); probes V2–V5 done 2026-09-29 (§7.1); slice F landed 2026-09-30 (§2.4). F′ next, then P, then I.** Owner:
 `issues/structured-lowering-code-size.md`. Also lands
 `issues/function-ir-x86-fused-compare-branch.md`. Builds on
 `docs/native-wc-design.md` §4.5 (near conditionals) and §5.1 (the measurement
@@ -158,6 +158,45 @@ so that bytes remain a function of the constructor and never depend on
 whether an arm happens to be empty. The lowering uses it when one arm is
 empty. If the empty arm is the false one, it negates `cc`, which the family
 makes free.
+
+### 2.4 As landed (2026-09-30)
+
+Three commits:
+
+1. **The condition-code family** (`x86_64_block`, `x86_64_step_forms`),
+   as §2.1 describes. No client changed.
+2. **`CodeBranch` over a `BranchTest`** (`x86_64_structured_block`, the
+   shared helpers in `x86_64_fetched_code`, `AccessBranch`'s callers).
+   `branch_test_state` is a record literal whose RIP, registers and memory
+   don't depend on the test, so the fetched-code arithmetic reads off for an
+   open test. At `NonZero(r)` it is `structured_test(r, …)`, so no loop
+   proof changed. Where TEST's length used to reduce, the proofs now go
+   through `branch_test_bytes_len` and a transport by `branch_test_canonical`.
+3. **The fused lowering.** Fusion lives in the x86 lowering, not in the
+   shared IR: `StructuredRegion` is unchanged, and a `Sequence` whose prefix
+   ends in the comparison becomes the plan `FusedSequence`. That plan is an
+   operand DAG (the prefix minus the comparison, computing the one operand
+   the prefix owns) followed by a `Conditional` testing `PlannedTest::Compare`.
+   The certificate reuses `emit_sequence` over the operand region and a copy
+   of the `Conditional` whose inputs are the two operands, so their placement
+   facts come for free. The bit is a named `_test` Boolean over the operands'
+   values, and `unsigned_compare_skips` / `signed_compare_skips` tie
+   `branch_skips` to it. The materialised rule stays for every other shape:
+   two inputs compared, two computed operands, a narrower width, or the bit
+   read anywhere else.
+
+Measured the same way as §1: `field_low` 1,911 → 1,534 bytes (424 → 345
+instructions) and `field_high` 2,792 → 2,225 (603 → 484). Every step is now
+`cmp r, r ; jae`, which is F's share of the §1 estimate.
+
+Tests: the plan interpreter runs a fused unsigned plan (from source) and a
+signed one (hand-built, with the constant on the left) at the values either
+side of the constant and at the signed extremes. Both certify, and each
+refuses a code that tests the other condition or swaps the operands.
+`unsigned_threshold` also runs natively in `native_branches` against C. The
+reflector reads no signed condition from source yet ("Boolean values require
+an input, constant, or `unsigned_lt_bit`"), so the signed fused path is
+covered by hand-built regions only.
 
 ## 3. P: results in place
 

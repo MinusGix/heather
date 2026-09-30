@@ -95,6 +95,24 @@ fn branch_skips<M>(test: BranchTest, before: MachineState<M>) → Bool {
     condition_holds(branch_skip(test), branch_test_state(test, before).flags)
 }
 
+// A compared branch skips its true arm exactly when the comparison of the
+// values its registers hold is false: CF (or SF ≠ OF) after CMP is the
+// library's comparison, by definition.
+theorem unsigned_compare_skips<M>(left, right: Gpr, a, b: BitVec(64), state: MachineState<M>,
+    pa: a = read_gpr(left, state.gprs), pb: b = read_gpr(right, state.gprs)):
+    branch_skips(Compare(left, right, B), state) = !a.unsigned_lt_bit(b)
+{
+    j(sym(pa), λ x _ => branch_skips(Compare(left, right, B), state) = !x.unsigned_lt_bit(b),
+        j(sym(pb), λ y _ => branch_skips(Compare(left, right, B), state) = !read_gpr(left, state.gprs).unsigned_lt_bit(y), refl))
+}
+theorem signed_compare_skips<M>(left, right: Gpr, a, b: BitVec(64), state: MachineState<M>,
+    pa: a = read_gpr(left, state.gprs), pb: b = read_gpr(right, state.gprs)):
+    branch_skips(Compare(left, right, L), state) = !a.signed_lt_bit(b)
+{
+    j(sym(pa), λ x _ => branch_skips(Compare(left, right, L), state) = !x.signed_lt_bit(b),
+        j(sym(pb), λ y _ => branch_skips(Compare(left, right, L), state) = !read_gpr(left, state.gprs).signed_lt_bit(y), refl))
+}
+
 fn structured_branch_entry<M>(test: BranchTest, displacement: BitVec(8),
     before: MachineState<M>) → MachineState<M>
 {

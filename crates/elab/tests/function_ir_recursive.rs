@@ -29,6 +29,11 @@ fn nested_false(a, b: BitVec(64)) → BitVec(64) {
         True => @bitvec::BitVec::add(64, b, a),
     }
 }
+fn unsigned_threshold(a, b: BitVec(64)) → BitVec(64) {
+    match @bitvec::BitVec::unsigned_lt_bit(64, a, @bitvec::BitVec::ofNat(64, 4294967296)) {
+        False => @bitvec::BitVec::sub(64, a, b), True => @bitvec::BitVec::add(64, a, b),
+    }
+}
 fn wrong_condition(a, b: BitVec(64)) → BitVec(64) {
     match @bitvec::BitVec::signed_lt_bit(64, a, b) {
         False => @bitvec::BitVec::sub(64, a, b), True => @bitvec::BitVec::add(64, a, b),
@@ -87,10 +92,17 @@ fn run(plan: &LoweredStructured, regs: &mut BTreeMap<Gpr, u64>) {
         StructuredPlan::MultiDataflow(parts) => { for (_, dag) in parts { run_dag(dag, regs); } }
         StructuredPlan::Compose { prefix, continuation } => { run(prefix, regs); run(continuation, regs); }
         StructuredPlan::Sequence { prefix, continuation } => { run_dag(prefix, regs); run(continuation, regs); }
-        StructuredPlan::Conditional { condition_register, when_true, when_false, false_displacement, join_displacement, near } => {
+        StructuredPlan::FusedSequence { operands, continuation } => { run_dag(operands, regs); run(continuation, regs); }
+        StructuredPlan::Conditional { test, when_true, when_false, false_displacement, join_displacement, near } => {
             assert_eq!(*false_displacement as usize, when_true.byte_length + if *near { 5 } else { 2 });
             assert_eq!(*join_displacement as usize, when_false.byte_length);
-            run(if regs[condition_register] != 0 { when_true } else { when_false }, regs);
+            use heather_elab::function_ir_x86_lower::{ComparisonOperation, PlannedTest};
+            let holds = match *test {
+                PlannedTest::NonZero(register) => regs[&register] != 0,
+                PlannedTest::Compare { left, right, operation: ComparisonOperation::UnsignedLessThan, .. } => regs[&left] < regs[&right],
+                PlannedTest::Compare { left, right, operation: ComparisonOperation::SignedLessThan, .. } => (regs[&left] as i64) < (regs[&right] as i64),
+            };
+            run(if holds { when_true } else { when_false }, regs);
         }
     }
 }
@@ -553,4 +565,51 @@ fn narrow_placement_widths_constants_and_declines() {
         let region = Region { inputs: vec![Port { id: 0, width: 8 }, Port { id: 1, width: 8 }], nodes: vec![node], outputs: vec![output] };
         assert!(lower_dag(&region, &[Gpr::Rdi, Gpr::Rsi], SCRATCH, Gpr::Rax).is_err());
     }
+}
+
+// A comparison that only its branch reads, against a constant, moves into
+// the branch: CMP and a Jcc on its flags, no materialised bit
+// (docs/structured-lowering-code-size-design.md §2.2). Unsigned from source
+// with the constant on the right; signed from a hand-built region (the
+// reflector reads no signed condition yet) with it on the left; both at the
+// values either side of the constant and at the signed extremes.
+#[test]
+fn a_comparison_only_its_branch_reads_is_fused() {
+    use heather_elab::function_ir_x86_lower::{ComparisonOperation, PlannedTest};
+    let elab = source_elaborator();
+    let word = |id| Port { id, width: 64 };
+    let arm = |node| StructuredRegion::Dataflow(Region { inputs: vec![word(0), word(1)], nodes: vec![node], outputs: vec![word(4)] });
+    let signed = StructuredRegion::Sequence {
+        prefix: Region { inputs: vec![word(0), word(1)], nodes: vec![Node::Const { width: 64, output: 2, value: 16 },
+            Node::SignedLessThan { width: 64, output: 3, left: 2, right: 0 }], outputs: vec![Port { id: 3, width: 1 }] },
+        continuation: Box::new(StructuredRegion::Conditional { inputs: vec![Port { id: 3, width: 1 }, word(0), word(1)], condition: 3,
+            arguments: vec![word(0), word(1)], outputs: vec![word(4)],
+            when_true: Box::new(arm(Node::Sub { width: 64, output: 4, left: 1, right: 0 })),
+            when_false: Box::new(arm(Node::BitXor { width: 64, output: 4, left: 0, right: 1 })) }),
+    };
+    let unsigned = reflect_elaborated_structured(&elab, "unsigned_threshold").unwrap_or_else(|e| panic!("{e}")).region;
+    for (name, region, operation) in [("unsigned_threshold", unsigned, ComparisonOperation::UnsignedLessThan), ("signed_threshold", signed, ComparisonOperation::SignedLessThan)] {
+        let plan = lower_structured(&region, &placement(), SCRATCH, Gpr::Rax).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let StructuredPlan::FusedSequence { continuation, .. } = &plan.body else { panic!("{name}: expected a fused sequence, got {:?}", plan.body) };
+        let StructuredPlan::Conditional { test: PlannedTest::Compare { operation: planned, .. }, .. } = continuation.body else { panic!("{name}: expected a compared branch") };
+        assert_eq!(planned, operation, "{name}");
+        let edges = [0u64, 1, 15, 16, 17, (1 << 32) - 1, 1 << 32, (1 << 32) + 1, i64::MAX as u64, i64::MIN as u64, u64::MAX];
+        for &a in &edges {
+            for b in [0u64, 7, u64::MAX] {
+                let expected = if name == "unsigned_threshold" {
+                    if a < 1 << 32 { a.wrapping_add(b) } else { a.wrapping_sub(b) }
+                } else if 16 < a as i64 { b.wrapping_sub(a) } else { a ^ b };
+                let mut regs = BTreeMap::from([(Gpr::Rdi, a), (Gpr::Rsi, b)]);
+                for r in SCRATCH { regs.insert(*r, u64::MAX); }
+                run(&plan, &mut regs);
+                assert_eq!(regs[&Gpr::Rax], expected, "{name}({a}, {b})");
+            }
+        }
+    }
+    // Two inputs compared: nothing for the prefix to compute, so the bit is
+    // materialised and tested as before.
+    let reflected = reflect_elaborated_structured(&elab, "nested_true").unwrap();
+    let plan = lower_structured(&reflected.region, &placement(), SCRATCH, Gpr::Rax).unwrap();
+    let StructuredPlan::Sequence { continuation, .. } = &plan.body else { panic!("expected a sequence") };
+    assert!(matches!(continuation.body, StructuredPlan::Conditional { test: PlannedTest::NonZero(_), .. }));
 }
