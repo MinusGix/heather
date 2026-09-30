@@ -3,8 +3,10 @@
 Status: **paper argument, 2026-09-30**. §3 and the two counterexamples of
 §3.4 and §5 are **mechanized** (`../Lean/delam/probes/NoUipComponents.v`,
 closed under the global context). §4 is argued, and was self-reviewed
-against the Coq formalization's rules the same day (§4.4). It has not
-been independently reviewed.
+against the Coq formalization's rules the same day (§4.4). Once the
+formalization had `Id` (its M11), `UIP₀` was stated there and the model's
+`Id` was checked rule by rule against it (§4.5, §5.1). It has not been
+independently reviewed.
 Owed by `docs/iwf-former-design.md` §12.3 before that rule set freezes.
 The rule set in question is the revised one: `docs/sprop-design.md` with
 its 2026-09-30 revision (no `transp`, no strip), plus `IWf`/`DVec`.
@@ -58,7 +60,10 @@ just unique ones up to isomorphism.
 
 - **Π, Σ, `Id`**: as in Hofmann–Streicher. `Id_A(a, b)` at `γ` is the
   hom-set `A(γ)(a(γ), b(γ))`, as a discrete groupoid. J's β holds strictly.
-  Σ-η and Π-η hold strictly.
+  Σ-η and Π-η hold strictly. `J` is Paulin-Mohring's, with the left
+  endpoint fixed, as in the rules: at `γ`, `J(y p. M; c; u; e)` is `M`'s
+  action on `c(γ)` along the morphism `(id_γ, e(γ)) : (γ, a(γ), id) →
+  (γ, u(γ), e(γ))` of the motive's context `Γ.A.Id(a↑; y)` (§4.5).
 - **`Unit^l`, `Empty^l`, `+`, `Nat`**: the terminal, initial, coproduct and
   discrete-ℕ families. `Unit`-η is strict because the fibre has one object
   and one morphism. Level indexing is bookkeeping: each is the same family
@@ -468,6 +473,74 @@ lemma, unchecked at the review, is now written out case by case (§4.2a).
 Its syntactic half rests on lemmas checked in Coq. Its semantic half rests
 on the standard local substitution lemma (M1).
 
+### 4.5 The formal `Id` rules against the model (2026-09-30)
+
+The formalization gained `Id` in its milestone M11
+(`../Lean/delam/M11_DESIGN.md`). Each rule below is from `Declarative.v`;
+each is checked against §2's clause.
+
+- **Layers.** Formation, `refl`, `J`, the code `TmId` and their
+  congruences hold at every layer but V (C, D, M). The two computation
+  rules, `eqtm_J_beta` and `eqty_El_id`, hold at D and M only. So Static
+  Code still holds with `Id` at C (it was extended in Coq: `sc_id`,
+  `sc_idrefl`, `sc_code_id`, `sc_J`, `StaticCode.v`). The §4.1 fact that
+  C-conversion is syntactic up to level equivalence is unchanged, and `□`
+  stays discrete.
+- **`wft_id`.** `⟦Id^l(A; a; b)⟧(γ)` is the discrete hom-set. Along
+  `α : γ → γ'` it acts by `f ↦ b(α) ∘ A(α)(f) ∘ a(α)⁻¹`, which is §3.1's
+  map, now keeping the morphism. It is κ_l-small because `A(γ)` is.
+- **`wf_idrefl`.** `refl(γ) := id_{a(γ)}`. It is a section because
+  `A(α)` preserves identities.
+- **`wf_J`.** In the motive's context `Γ.A.Id(a↑; var 0)`, the pair
+  `(id_γ, e(γ))` is a morphism from `(γ, a(γ), id)` to `(γ, u(γ), e(γ))`:
+  - its `A` component `e(γ) : a(γ) → u(γ)` is the orientation of the
+    rules' `Id(a↑; y)`, left endpoint `a`;
+  - its `Id` component must satisfy the discrete fibre's equation
+    `e(γ) ∘ id ∘ id⁻¹ = e(γ)`, which holds.
+
+  `J(γ) := M(id_γ, e(γ))(c(γ))`. Its result type `M[u/y, e/p]` is `M`
+  reindexed along `γ ↦ (γ, u(γ), e(γ))`, which is `lsingle2 u e`. The
+  rule's extra premise (the motive context's `Id` entry is a type) is a
+  presupposition, and the model needs nothing from it. Naturality in `γ`
+  is Hofmann–Streicher's argument. For `α : γ → γ'`, the two composites
+  `(id, e(γ')) ∘ (α, a(α))` and `(α, u(α)) ∘ (id, e(γ))` agree in `Γ.A`.
+  That is `e`'s section condition `e(γ') = u(α) ∘ A(α)(e(γ)) ∘ a(α)⁻¹`,
+  an equation because the `Id` fibres are discrete. They then agree in
+  `Γ.A.Id` too, whose last component is an equation. So `J(α)` is
+  `c(α)` transported by `M`'s functoriality.
+- **`eqtm_J_beta`** (D, M). At `u = a` and `e = refl`, the morphism is the
+  identity, and `M(id) = id` strictly because families are split. So
+  `J = c` on the nose.
+- **`wf_code_id`, `eqty_El_id`.**
+  - At `Ty 0`, `El s(γ)` is a set, and the code denotes `1` or `∅`, a set.
+  - At `Ty (l+1)`, it denotes a hom-set of a groupoid, which is a small
+    discrete groupoid.
+  - Along `α`, it acts by the induced bijection of hom-sets.
+  - `El` of it is `Id` by definition of the code former, strictly.
+- **Congruences** (`eqty_id`, `eqtm_idrefl`, `eqtm_J`, `eqtm_code_id`).
+  The interpretations are functions of the components. Level
+  annotations related by `lequiv` denote the same level under every
+  assignment. `eqtm_idrefl` compares the carriers and the points, which is
+  exactly the data of `id_{a(γ)}`.
+- **No η at `Id`.** There is no such rule, and the model refutes it
+  (§5). The formalization's algorithm identifies any two `refl`s at one
+  `Id` type (`actmnf_refl`). That is admissible, not a rule: its
+  soundness derives the declarative judgment from `eqtm_idrefl`, after
+  inversion and `Id` injectivity. The model has to validate only the
+  derivation, and it does.
+- **The code recursor's four branches** (`t_Id`, `t'_Id`, `t_refl`,
+  `t_J`). Stage 3 recurses on code syntax (§4.2). The branches add four
+  clauses, and their β is the defining equation.
+  - `t_J`'s motive sub-code lives in a context with an `Id` entry over two
+    other sub-codes, `cvar ,, A ,, Id(A↑; a↑; var 0)`. That is a layer-C
+    type global whose context mentions globals. The environment closes it
+    like any other (§4.2a, S3).
+  - Case 7 of §4.2a is unchanged: the branch sits under `wrapG`'s seven
+    global binders and six local ones, the same pattern as the other
+    branches.
+
+Nothing found contradicts the construction.
+
 ---
 
 ## 5. UIP fails, and where it holds
@@ -477,6 +550,41 @@ At the empty context, `⟦Id^1(Ty 0; ⌜Bool⌝; ⌜Bool⌝)⟧` is the hom-set 
 `{*}` if the two morphisms are equal and `∅` otherwise. So
 `⟦UIP₀⟧ ∋ s` would need `s(id, swap) ∈ ∅`. There is no such `s`, so
 `UIP₀` has no closed term (soundness of the interpretation).
+
+### 5.1 In the formalization
+
+The formalization has no `+`, so its statement takes `⌜Nat⌝` for
+`⌜Bool⌝`:
+
+```
+UIP0 := Π(p q : Id^1(Ty 0; ⌜Nat⌝; ⌜Nat⌝)). Id(p; q)
+```
+
+(`../Lean/delam/theories/Validity/Uip.v`). This changes nothing: `ℕ`
+has non-identity bijections, and one suffices.
+
+Checked in Coq, all closed under the global context:
+- `UIP0_wf`: `UIP0` is a closed type at every layer but V, in any global
+  context. `uip_pt_wf` is the same for any carrier and endpoints.
+- `no_uip0_nat` (probe): the model's interpretation of `UIP0` at the
+  empty context, `∀ p q : bij ℕ ℕ. p = q`, is refuted by the
+  transposition of `0` and `1`.
+- `uip_unit_wf`: UIP at `Unit` is *proved in the syntax*. The model
+  predicts this, since `Unit`'s fibre is discrete. The proof is two `J`s,
+  and `Unit` enters only through its η, which turns the motive's variable
+  endpoint back into `tt`. At `Ty 0` the same step would need
+  `y ≅ ⌜Nat⌝` for a variable `y : Ty 0`. No rule gives that, since
+  `Ty l` has no eliminator and no η. That is the freedom the model's
+  non-discrete universe uses.
+- `closed_id_uip`: any two **closed** proofs of an `Id` type are
+  convertible, by canonicity (both compute to `refl`) and `Id`
+  injectivity. This is UIP as a metatheorem for closed terms. The model
+  agrees: a closed proof denotes an identity morphism. So the
+  counterexample is the semantic `swap`, which no closed term denotes.
+  `UIP₀` fails because its `Π` ranges over all elements of the fibre, not
+  over closed syntax.
+
+### 5.2 Where UIP holds
 
 UIP *does* hold in the model at every type whose interpretation is a
 discrete groupoid: `Nat`, first-order data, `□` code, and the strict
@@ -502,6 +610,7 @@ its identities are isomorphisms of groupoids, not equivalences.
 | `Wf`/`IWf` (finitary), `W` | initial algebras: ω-colimit for the finitary ones, accessibility for `W` |
 | `ΠΠ` at `ω` | products over level assignments |
 | strict propositions `sEq`/`sEmpty`/`Squash` | **new lemma, proved in §3.1, mechanized** (`NoUipComponents.v`: `conn_transport`, `sEq_subst`, `sec_irrelevant`, `ElimSquash`, `transp_strict`, `no_relevant_transp`, `no_uip0`) |
+| `Id` as formalized (M11: every layer but V, Paulin-Mohring `J`, code, four recursor branches) | **checked rule by rule, §4.5**; `UIP0` stated and well-formed in Coq, its interpretation refuted in the probe, the model's positive predictions checked in Coq (§5.1) |
 | DeLaM globals, `□`, code recursors, `CΠ`/`TΠ`, δ | **argued by stratification (§4)**; the layer facts it uses are side conditions of the Coq rules (§4.1); the semantic global substitution lemma is written out (§4.2a), its syntactic half on Coq-checked lemmas |
 
 The mechanization states contexts as reflexive graphs (morphisms and
