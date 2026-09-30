@@ -231,18 +231,102 @@ theorem execute_prefixed_conditional<M>(block: PrefixedConditionalBlock,
     Exists(middle, ⟨prefix, continuation⟩)
 }
 
+// The sixteen x86 condition codes (Jcc, SETcc), in the manual's encoding
+// order: each odd code is its even neighbour negated. `condition_holds` is the
+// manual's table over the flags; no code reads AF.
+inductive ConditionCode { O, NO, B, AE, E, NE, BE, A, S, NS, P, NP, L, GE, LE, G }
+
+fn condition_holds(cc: ConditionCode, f: Flags) → Bool {
+    match cc {
+        O => f.of, NO => !f.of,
+        B => f.cf, AE => !f.cf,
+        E => f.zf, NE => !f.zf,
+        BE => f.cf || f.zf, A => !(f.cf || f.zf),
+        S => f.sf, NS => !f.sf,
+        P => f.pf, NP => !f.pf,
+        L => f.sf.xor(f.of), GE => !f.sf.xor(f.of),
+        LE => f.zf || f.sf.xor(f.of), G => !(f.zf || f.sf.xor(f.of)),
+    }
+}
+
+fn negate_condition(cc: ConditionCode) → ConditionCode {
+    match cc {
+        O => NO, NO => O, B => AE, AE => B, E => NE, NE => E, BE => A, A => BE,
+        S => NS, NS => S, P => NP, NP => P, L => GE, GE => L, LE => G, G => LE,
+    }
+}
+
+theorem not_not_bool(b: Bool): !(!b) = b { match b { True => refl, False => refl } }
+
+theorem negate_condition_holds(cc: ConditionCode, f: Flags):
+    condition_holds(negate_condition(cc), f) = !condition_holds(cc, f)
+{
+    match cc {
+        O => refl, NO => sym(not_not_bool(f.of)),
+        B => refl, AE => sym(not_not_bool(f.cf)),
+        E => refl, NE => sym(not_not_bool(f.zf)),
+        BE => refl, A => sym(not_not_bool(f.cf || f.zf)),
+        S => refl, NS => sym(not_not_bool(f.sf)),
+        P => refl, NP => sym(not_not_bool(f.pf)),
+        L => refl, GE => sym(not_not_bool(f.sf.xor(f.of))),
+        LE => refl, G => sym(not_not_bool(f.zf || f.sf.xor(f.of))),
+    }
+}
+
+// The opcode bytes: 70+cc (rel8) and 0F 80+cc (rel32), each spelled as a
+// literal rather than as arithmetic on the code.
+fn short_condition_opcode(cc: ConditionCode) → BitVec(8) {
+    match cc {
+        O => BitVec::ofNat(0x70), NO => BitVec::ofNat(0x71), B => BitVec::ofNat(0x72), AE => BitVec::ofNat(0x73),
+        E => BitVec::ofNat(0x74), NE => BitVec::ofNat(0x75), BE => BitVec::ofNat(0x76), A => BitVec::ofNat(0x77),
+        S => BitVec::ofNat(0x78), NS => BitVec::ofNat(0x79), P => BitVec::ofNat(0x7a), NP => BitVec::ofNat(0x7b),
+        L => BitVec::ofNat(0x7c), GE => BitVec::ofNat(0x7d), LE => BitVec::ofNat(0x7e), G => BitVec::ofNat(0x7f),
+    }
+}
+
+fn near_condition_opcode(cc: ConditionCode) → BitVec(8) {
+    match cc {
+        O => BitVec::ofNat(0x80), NO => BitVec::ofNat(0x81), B => BitVec::ofNat(0x82), AE => BitVec::ofNat(0x83),
+        E => BitVec::ofNat(0x84), NE => BitVec::ofNat(0x85), BE => BitVec::ofNat(0x86), A => BitVec::ofNat(0x87),
+        S => BitVec::ofNat(0x88), NS => BitVec::ofNat(0x89), P => BitVec::ofNat(0x8a), NP => BitVec::ofNat(0x8b),
+        L => BitVec::ofNat(0x8c), GE => BitVec::ofNat(0x8d), LE => BitVec::ofNat(0x8e), G => BitVec::ofNat(0x8f),
+    }
+}
+
+// Which code an opcode byte names in `table`, with the equation that says so.
+record ConditionOpcode(b: BitVec(8), table: ConditionCode → BitVec(8)) {
+    cc: ConditionCode,
+    exact: b = table(cc),
+}
+
+fn cc_at(b: BitVec(8), table: ConditionCode → BitVec(8), cc: ConditionCode,
+    rest: Option<ConditionOpcode(b, table)>) → Option<ConditionOpcode(b, table)>
+{
+    match b.eq_dec(table(cc)) {
+        Inl(exact) => Some(ConditionOpcode(cc := cc, exact := exact)),
+        Inr(_) => rest,
+    }
+}
+
+fn read_condition_opcode(b: BitVec(8), table: ConditionCode → BitVec(8)) → Option<ConditionOpcode(b, table)> {
+    cc_at(b, table, O, cc_at(b, table, NO, cc_at(b, table, B, cc_at(b, table, AE, cc_at(b, table, E, cc_at(b, table, NE, cc_at(b, table, BE, cc_at(b, table, A, cc_at(b, table, S, cc_at(b, table, NS, cc_at(b, table, P, cc_at(b, table, NP, cc_at(b, table, L, cc_at(b, table, GE, cc_at(b, table, LE, cc_at(b, table, G, None))))))))))))))))
+}
+
 // Canonical short control transfers used by the first physically linked
 // conditional layout. Keeping terminators distinct from straight-line
 // `Instruction` lists prevents ExecuteBlock from pretending that execution
 // continues linearly after a taken jump.
 inductive ShortControl {
-    JumpZero(displacement: BitVec(8)),
+    JumpIf(cc: ConditionCode, displacement: BitVec(8)),
     Jump(displacement: BitVec(8)),
 }
 
+// JZ rel8, the form the first linked conditionals were written with.
+fn JumpZero(displacement: BitVec(8)) → ShortControl { JumpIf(E, displacement) }
+
 fn short_control_bytes(control: ShortControl) → List<BitVec(8)> {
     match control {
-        JumpZero(displacement) => [BitVec::ofNat(0x74), displacement],
+        JumpIf(cc, displacement) => [short_condition_opcode(cc), displacement],
         Jump(displacement) => [BitVec::ofNat(0xeb), displacement],
     }
 }
@@ -264,18 +348,17 @@ fn decode_short_control(bytes: List<BitVec(8)>) →
                     Option<ShortControlDecode(
                         Cons(opcode, Cons(displacement, rest)))> {
                 Cons(_, _) => None,
-                Nil => match opcode.eq_dec(BitVec::ofNat(0x74)) {
+                Nil => match opcode.eq_dec(BitVec::ofNat(0xeb)) {
                     Inl(opcode_exact) => Some(ShortControlDecode(
-                        control := JumpZero(displacement),
+                        control := Jump(displacement),
                         decoding := cong_fn(
                             λ found => [found, displacement], opcode_exact))),
-                    Inr(_) => match opcode.eq_dec(
-                            BitVec::ofNat(0xeb)) {
-                        Inl(opcode_exact) => Some(ShortControlDecode(
-                            control := Jump(displacement),
+                    Inr(_) => match read_condition_opcode(opcode, short_condition_opcode) {
+                        None => None,
+                        Some(found) => Some(ShortControlDecode(
+                            control := JumpIf(found.cc, displacement),
                             decoding := cong_fn(
-                                λ found => [found, displacement], opcode_exact))),
-                        Inr(_) => None,
+                                λ byte => [byte, displacement], found.exact))),
                     },
                 },
             },
@@ -293,7 +376,13 @@ theorem decode_short_control_complete(control: ShortControl):
     erase_short_control_decode(short_control_bytes(control),
         decode_short_control(short_control_bytes(control))) = Some(control)
 {
-    match control { JumpZero(_) => refl, Jump(_) => refl }
+    match control {
+        JumpIf(cc, _) => match cc {
+            O => refl, NO => refl, B => refl, AE => refl, E => refl, NE => refl, BE => refl, A => refl,
+            S => refl, NS => refl, P => refl, NP => refl, L => refl, GE => refl, LE => refl, G => refl,
+        },
+        Jump(_) => refl,
+    }
 }
 
 theorem short_control_bytes_unique(left, right: ShortControl,
@@ -305,7 +394,7 @@ theorem short_control_bytes_unique(left, right: ShortControl,
 }
 
 theorem short_control_bytes_length(control: ShortControl): short_control_bytes(control).len() = 2 {
-    match control { JumpZero(_) => refl, Jump(_) => refl }
+    match control { JumpIf(_, _) => refl, Jump(_) => refl }
 }
 
 theorem decode_short_control_rejects_empty():
@@ -326,9 +415,9 @@ theorem decode_short_control_rejects_trailing():
 { refl }
 
 theorem decode_short_control_rejects_unknown_opcode():
-    erase_short_control_decode([BitVec::ofNat(0x75), BitVec::ofNat(0)],
+    erase_short_control_decode([BitVec::ofNat(0x90), BitVec::ofNat(0)],
         decode_short_control(
-            [BitVec::ofNat(0x75), BitVec::ofNat(0)])) = None
+            [BitVec::ofNat(0x90), BitVec::ofNat(0)])) = None
 { refl }
 
 fn short_branch_target(start: BitVec(64), displacement: BitVec(8)) →
@@ -389,7 +478,7 @@ fn short_control_rip<M>(control: ShortControl,
     before: MachineState<M>) → BitVec(64)
 {
     match control {
-        JumpZero(displacement) => jump_zero_rip(before.flags.zf, before.rip,
+        JumpIf(cc, displacement) => jump_zero_rip(condition_holds(cc, before.flags), before.rip,
             displacement),
         Jump(displacement) => short_branch_target(before.rip, displacement),
     }
@@ -428,10 +517,13 @@ theorem execute_short_control_preserves_gprs<M>(control: ShortControl,
 // (JS) is how a program tells a syscall's error return, a negative word,
 // from a count (docs/native-syscall-failures-design.md §4).
 inductive NearControl {
-    JumpZeroNear(displacement: BitVec(32)),
+    JumpIfNear(cc: ConditionCode, displacement: BitVec(32)),
     JumpNear(displacement: BitVec(32)),
-    JumpSignNear(displacement: BitVec(32)),
 }
+
+// JZ rel32 and JS rel32, the forms the loops were written with.
+fn JumpZeroNear(displacement: BitVec(32)) → NearControl { JumpIfNear(E, displacement) }
+fn JumpSignNear(displacement: BitVec(32)) → NearControl { JumpIfNear(S, displacement) }
 
 fn rel16_bytes(value: BitVec(16)) → List<BitVec(8)> {
     [value.take_low(8, 8), value.drop_low(8, 8)]
@@ -448,11 +540,9 @@ fn rel32_of_bytes(b0, b1, b2, b3: BitVec(8)) → BitVec(32) {
 
 fn near_control_bytes(control: NearControl) → List<BitVec(8)> {
     match control {
-        JumpZeroNear(displacement) =>
-            Cons(BitVec::ofNat(0x0f), Cons(BitVec::ofNat(0x84), rel32_bytes(displacement))),
+        JumpIfNear(cc, displacement) =>
+            Cons(BitVec::ofNat(0x0f), Cons(near_condition_opcode(cc), rel32_bytes(displacement))),
         JumpNear(displacement) => Cons(BitVec::ofNat(0xe9), rel32_bytes(displacement)),
-        JumpSignNear(displacement) =>
-            Cons(BitVec::ofNat(0x0f), Cons(BitVec::ofNat(0x88), rel32_bytes(displacement))),
     }
 }
 
@@ -538,25 +628,15 @@ fn decode_near_control(bytes: List<BitVec(8)>) → Option<NearControlDecode(byte
                 Inr(_) => None,
                 Inl(first_exact) => match tail as λ rest => Option<NearControlDecode(Cons(opcode, rest))> {
                     Nil => None,
-                    Cons(second, rest) => match second.eq_dec(BitVec::ofNat(0x84)) {
-                        Inl(second_exact) => match decode_rel32(rest) {
+                    Cons(second, rest) => match read_condition_opcode(second, near_condition_opcode) {
+                        None => None,
+                        Some(code) => match decode_rel32(rest) {
                             None => None,
-                            Some(found) => Some(NearControlDecode(control := JumpZeroNear(found.displacement),
+                            Some(found) => Some(NearControlDecode(control := JumpIfNear(code.cc, found.displacement),
                                 decoding := trans(cong_fn<BitVec(8), List<BitVec(8)>>(λ first => Cons(first, Cons(second, rest)), first_exact),
-                                    trans(cong_fn<BitVec(8), List<BitVec(8)>>(λ next => Cons(BitVec::ofNat(0x0f), Cons(next, rest)), second_exact),
-                                        cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ tail => Cons(BitVec::ofNat(0x0f), Cons(BitVec::ofNat(0x84), tail)),
+                                    trans(cong_fn<BitVec(8), List<BitVec(8)>>(λ next => Cons(BitVec::ofNat(0x0f), Cons(next, rest)), code.exact),
+                                        cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ tail => Cons(BitVec::ofNat(0x0f), Cons(near_condition_opcode(code.cc), tail)),
                                             found.decoding))))),
-                        },
-                        Inr(_) => match second.eq_dec(BitVec::ofNat(0x88)) {
-                            Inr(_) => None,
-                            Inl(second_exact) => match decode_rel32(rest) {
-                                None => None,
-                                Some(found) => Some(NearControlDecode(control := JumpSignNear(found.displacement),
-                                    decoding := trans(cong_fn<BitVec(8), List<BitVec(8)>>(λ first => Cons(first, Cons(second, rest)), first_exact),
-                                        trans(cong_fn<BitVec(8), List<BitVec(8)>>(λ next => Cons(BitVec::ofNat(0x0f), Cons(next, rest)), second_exact),
-                                            cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ tail => Cons(BitVec::ofNat(0x0f), Cons(BitVec::ofNat(0x88), tail)),
-                                                found.decoding))))),
-                            },
                         },
                     },
                 },
@@ -578,11 +658,25 @@ fn NearControlDecodes(control: NearControl) → Type {
 
 theorem decode_near_control_complete(control: NearControl): NearControlDecodes(control) {
     match control as λ found => NearControlDecodes(found) {
-        JumpZeroNear(displacement) => cong_fn(λ (value: BitVec(32)) => Some(JumpZeroNear(value)),
-            rel32_round_trip(displacement)),
+        JumpIfNear(cc, displacement) => match cc as λ k => NearControlDecodes(JumpIfNear(k, displacement)) {
+            O => cong_fn(λ (value: BitVec(32)) => Some(JumpIfNear(O, value)), rel32_round_trip(displacement)),
+            NO => cong_fn(λ (value: BitVec(32)) => Some(JumpIfNear(NO, value)), rel32_round_trip(displacement)),
+            B => cong_fn(λ (value: BitVec(32)) => Some(JumpIfNear(B, value)), rel32_round_trip(displacement)),
+            AE => cong_fn(λ (value: BitVec(32)) => Some(JumpIfNear(AE, value)), rel32_round_trip(displacement)),
+            E => cong_fn(λ (value: BitVec(32)) => Some(JumpIfNear(E, value)), rel32_round_trip(displacement)),
+            NE => cong_fn(λ (value: BitVec(32)) => Some(JumpIfNear(NE, value)), rel32_round_trip(displacement)),
+            BE => cong_fn(λ (value: BitVec(32)) => Some(JumpIfNear(BE, value)), rel32_round_trip(displacement)),
+            A => cong_fn(λ (value: BitVec(32)) => Some(JumpIfNear(A, value)), rel32_round_trip(displacement)),
+            S => cong_fn(λ (value: BitVec(32)) => Some(JumpIfNear(S, value)), rel32_round_trip(displacement)),
+            NS => cong_fn(λ (value: BitVec(32)) => Some(JumpIfNear(NS, value)), rel32_round_trip(displacement)),
+            P => cong_fn(λ (value: BitVec(32)) => Some(JumpIfNear(P, value)), rel32_round_trip(displacement)),
+            NP => cong_fn(λ (value: BitVec(32)) => Some(JumpIfNear(NP, value)), rel32_round_trip(displacement)),
+            L => cong_fn(λ (value: BitVec(32)) => Some(JumpIfNear(L, value)), rel32_round_trip(displacement)),
+            GE => cong_fn(λ (value: BitVec(32)) => Some(JumpIfNear(GE, value)), rel32_round_trip(displacement)),
+            LE => cong_fn(λ (value: BitVec(32)) => Some(JumpIfNear(LE, value)), rel32_round_trip(displacement)),
+            G => cong_fn(λ (value: BitVec(32)) => Some(JumpIfNear(G, value)), rel32_round_trip(displacement)),
+        },
         JumpNear(displacement) => cong_fn(λ (value: BitVec(32)) => Some(JumpNear(value)),
-            rel32_round_trip(displacement)),
-        JumpSignNear(displacement) => cong_fn(λ (value: BitVec(32)) => Some(JumpSignNear(value)),
             rel32_round_trip(displacement)),
     }
 }
@@ -606,9 +700,9 @@ theorem decode_near_control_rejects_truncated():
 
 theorem decode_near_control_rejects_short_opcode():
     erase_near_control_decode(
-        [BitVec::ofNat(0x0f), BitVec::ofNat(0x85), BitVec::ofNat(0), BitVec::ofNat(0), BitVec::ofNat(0), BitVec::ofNat(0)],
+        [BitVec::ofNat(0x0f), BitVec::ofNat(0x90), BitVec::ofNat(0), BitVec::ofNat(0), BitVec::ofNat(0), BitVec::ofNat(0)],
         decode_near_control(
-            [BitVec::ofNat(0x0f), BitVec::ofNat(0x85), BitVec::ofNat(0), BitVec::ofNat(0), BitVec::ofNat(0), BitVec::ofNat(0)])) = None
+            [BitVec::ofNat(0x0f), BitVec::ofNat(0x90), BitVec::ofNat(0), BitVec::ofNat(0), BitVec::ofNat(0), BitVec::ofNat(0)])) = None
 { refl }
 
 fn near_branch_target(start: BitVec(64), length: Nat, displacement: BitVec(32)) → BitVec(64) {
@@ -617,15 +711,11 @@ fn near_branch_target(start: BitVec(64), length: Nat, displacement: BitVec(32)) 
 
 fn near_control_rip<M>(control: NearControl, before: MachineState<M>) → BitVec(64) {
     match control {
-        JumpZeroNear(displacement) => match before.flags.zf {
+        JumpIfNear(cc, displacement) => match condition_holds(cc, before.flags) {
             False => next_rip(before.rip, 6),
             True => near_branch_target(before.rip, 6, displacement),
         },
         JumpNear(displacement) => near_branch_target(before.rip, 5, displacement),
-        JumpSignNear(displacement) => match before.flags.sf {
-            False => next_rip(before.rip, 6),
-            True => near_branch_target(before.rip, 6, displacement),
-        },
     }
 }
 
@@ -648,13 +738,25 @@ theorem near_taken_rip<M>(displacement: BitVec(32), state: MachineState<M>, sele
 theorem erase_af_short_commute<M>(control: ShortControl, before: MachineState<M>):
     erase_af(execute_short_control(control, before)) =
     erase_af(execute_short_control(control, erase_af(before))) {
-    match control { JumpZero(_) => refl, Jump(_) => refl }
+    match control {
+        JumpIf(cc, _) => match cc {
+            O => refl, NO => refl, B => refl, AE => refl, E => refl, NE => refl, BE => refl, A => refl,
+            S => refl, NS => refl, P => refl, NP => refl, L => refl, GE => refl, LE => refl, G => refl,
+        },
+        Jump(_) => refl,
+    }
 }
 
 theorem erase_af_near_commute<M>(control: NearControl, before: MachineState<M>):
     erase_af(execute_near_control(control, before)) =
     erase_af(execute_near_control(control, erase_af(before))) {
-    match control { JumpZeroNear(_) => refl, JumpNear(_) => refl, JumpSignNear(_) => refl }
+    match control {
+        JumpIfNear(cc, _) => match cc {
+            O => refl, NO => refl, B => refl, AE => refl, E => refl, NE => refl, BE => refl, A => refl,
+            S => refl, NS => refl, P => refl, NP => refl, L => refl, GE => refl, LE => refl, G => refl,
+        },
+        JumpNear(_) => refl,
+    }
 }
 
 theorem short_control_respects_defined<M>(control: ShortControl,

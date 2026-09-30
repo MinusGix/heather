@@ -179,7 +179,7 @@ fn decode_near_form(make: BitVec(32) → NearControl, rest: List<BitVec(8)>) →
     match decode_rel32(rest) { None => None, Some(displacement) => near_form(make(displacement)) }
 }
 
-// 0F then: 05 SYSCALL, 92/9C SETcc, 84/88 Jcc rel32.
+// 0F then: 05 SYSCALL, 92/9C SETcc, 80–8F Jcc rel32.
 fn decode_two_byte_form(opcode: BitVec(8), rest: List<BitVec(8)>) → Option<StepForm> {
     match opcode.eq_dec(BitVec::ofNat(0x05)) {
         Inl(_) => Some(FormSyscall),
@@ -193,29 +193,26 @@ fn decode_two_byte_form(opcode: BitVec(8), rest: List<BitVec(8)>) → Option<Ste
                     Nil => None,
                     Cons(modrm, _) => emitted_form(SetLess(low_byte_from_modrm(modrm))),
                 },
-                Inr(_) => match opcode.eq_dec(BitVec::ofNat(0x84)) {
-                    Inl(_) => decode_near_form(λ d => JumpZeroNear(d), rest),
-                    Inr(_) => match opcode.eq_dec(BitVec::ofNat(0x88)) {
-                        Inl(_) => decode_near_form(λ d => JumpSignNear(d), rest),
-                        Inr(_) => None,
-                    },
+                Inr(_) => match read_condition_opcode(opcode, near_condition_opcode) {
+                    Some(code) => decode_near_form(λ d => JumpIfNear(code.cc, d), rest),
+                    None => None,
                 },
             },
         },
     }
 }
 
-// No REX: 0F-prefixed forms, E9 rel32, and the short 74/EB rel8.
+// No REX: 0F-prefixed forms, E9 rel32, EB rel8 and the short Jcc 70–7F rel8.
 fn decode_plain_form(first, second: BitVec(8), rest: List<BitVec(8)>) → Option<StepForm> {
     match first.eq_dec(BitVec::ofNat(0x0f)) {
         Inl(_) => decode_two_byte_form(second, rest),
         Inr(_) => match first.eq_dec(BitVec::ofNat(0xe9)) {
             Inl(_) => decode_near_form(λ d => JumpNear(d), Cons(second, rest)),
-            Inr(_) => match first.eq_dec(BitVec::ofNat(0x74)) {
-                Inl(_) => Some(FormEmitted(EmitShort(JumpZero(second)))),
-                Inr(_) => match first.eq_dec(BitVec::ofNat(0xeb)) {
-                    Inl(_) => Some(FormEmitted(EmitShort(Jump(second)))),
-                    Inr(_) => None,
+            Inr(_) => match first.eq_dec(BitVec::ofNat(0xeb)) {
+                Inl(_) => Some(FormEmitted(EmitShort(Jump(second)))),
+                Inr(_) => match read_condition_opcode(first, short_condition_opcode) {
+                    Some(code) => Some(FormEmitted(EmitShort(JumpIf(code.cc, second)))),
+                    None => None,
                 },
             },
         },
@@ -316,15 +313,37 @@ theorem store_form_complete(store: WordStore, rest: List<BitVec(8)>):
 
 theorem short_form_complete(control: ShortControl, rest: List<BitVec(8)>):
     decode_step_form(short_control_bytes(control) ++ rest) = Some(FormEmitted(EmitShort(control))) {
-    match control { JumpZero(_) => refl, Jump(_) => refl }
+    match control {
+        JumpIf(cc, _) => match cc {
+            O => refl, NO => refl, B => refl, AE => refl, E => refl, NE => refl, BE => refl, A => refl,
+            S => refl, NS => refl, P => refl, NP => refl, L => refl, GE => refl, LE => refl, G => refl,
+        },
+        Jump(_) => refl,
+    }
 }
 
 theorem near_form_complete(control: NearControl, rest: List<BitVec(8)>):
     decode_step_form(near_control_bytes(control) ++ rest) = near_form(control) {
     match control {
-        JumpZeroNear(d) => near_form_back(λ x => JumpZeroNear(x), d),
+        JumpIfNear(cc, d) => match cc as λ k => decode_step_form(near_control_bytes(JumpIfNear(k, d)) ++ rest) = near_form(JumpIfNear(k, d)) {
+            O => near_form_back(λ x => JumpIfNear(O, x), d),
+            NO => near_form_back(λ x => JumpIfNear(NO, x), d),
+            B => near_form_back(λ x => JumpIfNear(B, x), d),
+            AE => near_form_back(λ x => JumpIfNear(AE, x), d),
+            E => near_form_back(λ x => JumpIfNear(E, x), d),
+            NE => near_form_back(λ x => JumpIfNear(NE, x), d),
+            BE => near_form_back(λ x => JumpIfNear(BE, x), d),
+            A => near_form_back(λ x => JumpIfNear(A, x), d),
+            S => near_form_back(λ x => JumpIfNear(S, x), d),
+            NS => near_form_back(λ x => JumpIfNear(NS, x), d),
+            P => near_form_back(λ x => JumpIfNear(P, x), d),
+            NP => near_form_back(λ x => JumpIfNear(NP, x), d),
+            L => near_form_back(λ x => JumpIfNear(L, x), d),
+            GE => near_form_back(λ x => JumpIfNear(GE, x), d),
+            LE => near_form_back(λ x => JumpIfNear(LE, x), d),
+            G => near_form_back(λ x => JumpIfNear(G, x), d),
+        },
         JumpNear(d) => near_form_back(λ x => JumpNear(x), d),
-        JumpSignNear(d) => near_form_back(λ x => JumpSignNear(x), d),
     }
 }
 
