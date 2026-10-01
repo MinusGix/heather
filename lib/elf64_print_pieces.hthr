@@ -293,16 +293,23 @@ theorem stdout_then(steps: List<WriteStep>, after: List<LinuxEvent>): (bytes: Li
     }
 }
 
-// Reads send nothing.
-theorem reads_send_nothing(steps: List<EofStep<True>>, tail: List<LinuxEvent>):
-    sent_to(BitVec::ofNat(1), eof_events(steps, AtEnd, tail)) = sent_to(BitVec::ofNat(1), tail) {
-    match steps as λ ss => sent_to(BitVec::ofNat(1), eof_events(ss, AtEnd, tail)) = sent_to(BitVec::ofNat(1), tail) {
-        Nil => refl,
-        Cons(step, rest) => match step as λ st => sent_to(BitVec::ofNat(1), eof_events(Cons(st, rest), AtEnd, tail)) = sent_to(BitVec::ofNat(1), tail) {
-            Chunk(_, _) => reads_send_nothing(rest, tail),
-            Interrupted => reads_send_nothing(rest, tail),
+// Reads send nothing, whatever was read before the history starts.
+theorem reads_send_nothing_from(steps: List<EofStep<True>>, tail: List<LinuxEvent>): (seen: List<BitVec(8)>) →
+    sent_to(BitVec::ofNat(1), eof_run<True, False>(λ _ _ _ rest => rest, λ _ _ _ => Nil, steps, AtEnd, tail, seen)) = sent_to(BitVec::ofNat(1), tail) {
+    match steps as λ ss => (seen: List<BitVec(8)>) →
+            sent_to(BitVec::ofNat(1), eof_run<True, False>(λ _ _ _ rest => rest, λ _ _ _ => Nil, ss, AtEnd, tail, seen)) = sent_to(BitVec::ofNat(1), tail) {
+        Nil => λ seen => refl,
+        Cons(step, rest) => match step as λ st => (seen: List<BitVec(8)>) →
+                sent_to(BitVec::ofNat(1), eof_run<True, False>(λ _ _ _ rest => rest, λ _ _ _ => Nil, Cons(st, rest), AtEnd, tail, seen)) =
+                    sent_to(BitVec::ofNat(1), tail) {
+            Chunk(bytes, _) => λ seen => reads_send_nothing_from(rest, tail, seen ++ bytes),
+            Interrupted => λ seen => reads_send_nothing_from(rest, tail, seen),
         },
     }
+}
+theorem reads_send_nothing(steps: List<EofStep<True>>, tail: List<LinuxEvent>):
+    sent_to(BitVec::ofNat(1), eof_events(steps, AtEnd, tail)) = sent_to(BitVec::ofNat(1), tail) {
+    reads_send_nothing_from(steps, tail, Nil)
 }
 
 // What stdout receives on a run that ends at the empty read and a finished

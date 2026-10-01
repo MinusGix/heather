@@ -1,0 +1,73 @@
+// A program as the read profile takes it (docs/native-stream-filter-design.md
+// §2): a stream filter. A step folds a state over stdin and emits at most one
+// byte per byte; at end of file the finish prints from the final state; and
+// `spec` is the whole of stdout. It is checked when its module is, so a
+// program that is wrong is refused at its own source. The data are the
+// record's parameters, so the CLI reads them off its type. A module of its
+// own because a bundle's defaults run tactics, whose certificates name
+// `omega`, and because the finishes' meanings are the formatters'.
+import stream_filter;
+import function_ir_loop;
+import decimal_line;
+import field_line;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+import omega;
+
+// What a program prints after end of file: nothing, the first count as a
+// decimal line, or the first three as `%7d` fields. Each is one of the
+// library's proved tails, which read the counts from the state's first
+// registers.
+inductive Finish<C> {
+    Quiet,
+    Line(count: C → Nat),
+    Fields(first: C → Nat, second: C → Nat, third: C → Nat),
+}
+fn finish_bytes<C>(finish: Finish<C>, state: C) → List<BitVec(8)> {
+    match finish {
+        Quiet => Nil,
+        Line(count) => decimal_line(count(state)),
+        Fields(first, second, third) => three_fields_line(first(state), second(state), third(state)),
+    }
+}
+// What the tails print correctly: counts below their columns.
+fn FinishFits<C>(finish: Finish<C>, state: C) → Type {
+    match finish {
+        Quiet => True,
+        Line(count) => count(state) < 10000,
+        Fields(first, second, third) => (first(state) < 10000000) ∧ ((second(state) < 10000000) ∧ (third(state) < 10000000)),
+    }
+}
+
+// All of stdout: what the bytes emit from `init`, then the finish.
+fn filter_output<C>(step: C → BitVec(8) → Filtered<C>, init: C, finish: Finish<C>, bytes: List<BitVec(8)>) → List<BitVec(8)> {
+    filter_emitted(step, bytes, init) ++ finish_bytes(finish, filter_state(step, bytes, init))
+}
+
+// A program: the step from `init`, whose Nat fields are `counts` in order, and
+// its finish; `spec` says what stdout is. Each count grows by at most one per
+// byte, so it fits a word for any input a process can read: case analysis
+// and `omega` show it for the usual step, and a program that needs more gives
+// `advances := …` itself.
+record Filter<C>(step: C → BitVec(8) → Filtered<C>, init: C, counts: List<C → Nat>, finish: Finish<C>,
+    spec: List<BitVec(8)> → List<BitVec(8)>) {
+    advances: (state: C) → (byte: BitVec(8)) → counts_advance(counts, step(state, byte).next, state) := { split_all; all_goals { omega } },
+    computes: (bytes: List<BitVec(8)>) → spec(bytes) = filter_output(step, init, finish, bytes),
+}
+
+// A step that only counts prints the finish of its fold and nothing else.
+theorem counting_output<C>(g: C → BitVec(8) → C, init: C, finish: Finish<C>, bytes: List<BitVec(8)>):
+    filter_output(counting(g), init, finish, bytes) = finish_bytes(finish, fold_bytes(g, bytes, init)) {
+    trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ e => e ++ finish_bytes(finish, filter_state(counting(g), bytes, init)),
+            counting_emitted(g, bytes, init)),
+        cong_fn<C, List<BitVec(8)>>(λ s => finish_bytes(finish, s), counting_state(g, bytes, init)))
+}
+// A byte map prints the input's image.
+theorem mapping_output(f: BitVec(8) → BitVec(8), bytes: List<BitVec(8)>):
+    filter_output(mapping(f), Stateless(), Quiet, bytes) = bytes.map(f) {
+    trans(List::append_nil(filter_emitted(mapping(f), bytes, Stateless())), mapping_emitted(f, bytes, Stateless()))
+}

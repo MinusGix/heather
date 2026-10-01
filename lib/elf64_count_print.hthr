@@ -204,10 +204,10 @@ theorem count_writes(stored: IoMemory, at: Nat, word, start, length: StructuredC
     let start_value: (read_gpr(R9, s4.gprs).toNat() = 0x410000 + skip) =
         trans(cong_fn<BitVec(64), Nat>(λ v => v.toNat(), formatted.start_value), line_start_value(count, small));
     linux_runs_after_linux_steps(io_linux(), write_events(line, steps, ending), s3, s4, linux_steps_store(io_linux(), s3, s4, stored_step),
-        wl_from(after_store, ct_write(at, word, start, length), pj, later.write, targets, ending, ending_ok, steps)(
+        wl_from(after_store, ct_write(at, word, start, length), pj, later.write, targets, ending, ending_ok, steps, s4.gprs)(
             line, steps_ok, s4, line_some(line.len(), skip, total, skip_small), line_fits(line.len(), skip, total), s4_rip, s4_memory,
             print_sends(stored, count, small, after_store, refl, read_gpr(R9, s4.gprs), start_value), length_value,
-            line_room(read_gpr(R9, s4.gprs).toNat(), line.len(), skip, start_value, total)))
+            line_room(read_gpr(R9, s4.gprs).toNat(), line.len(), skip, start_value, total), write_kept_refl(s4.gprs)))
 }
 
 // The tail, from the loop's end with the count in R13: format, store, write

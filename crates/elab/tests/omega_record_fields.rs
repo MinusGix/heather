@@ -150,3 +150,26 @@ fn a_false_claim_over_fields_is_refused_and_names_them() {
     assert!(msg.contains("got stuck"), "{msg}");
     assert!(msg.contains("s.words") && msg.contains("s.bytes"), "{msg}");
 }
+
+/// A goal a definition unfolds to (docs/native-stream-filter-design.md §2.4):
+/// `read_program`'s `advances` default meets `counts_advance` at no count and
+/// at one, which omega reads only once the head is unfolded, stopping at the
+/// relation rather than inside `Le`'s recursor, with the count applied.
+const ADVANCE: &str = "fn advance<C>(counts: List<C → Nat>) → C → C → Type {\n\
+        match counts {\n\
+            Nil => λ next carry => True,\n\
+            Cons(count, rest) => match rest {\n\
+                Nil => λ next carry => count(next) <= Succ(count(carry)),\n\
+                Cons(_, _) => λ next carry => (count(next) <= Succ(count(carry))) ∧ advance(rest)(next, carry),\n\
+            },\n\
+        }\n\
+    }\n";
+
+#[test]
+fn a_goal_a_definition_unfolds_to_is_read_unfolded() {
+    ok(&format!("{ADVANCE}theorem none(s: WcState): advance<WcState>(Nil)(wc_next(True, s), s) {{ omega }}"));
+    ok(&format!("{ADVANCE}theorem one(s: WcState, sp: Bool): advance<WcState>([λ t => t.bytes])(wc_next(sp, s), s) {{ \
+        match sp as λ b => advance<WcState>([λ t => t.bytes])(wc_next(b, s), s) {{ True => omega, False => omega }} }}"));
+    let msg = elab_err(&format!("{ADVANCE}theorem two(s: WcState): advance<WcState>([λ t => t.bytes])(WcState(0, 0, Succ(Succ(s.bytes)), False), s) {{ omega }}"));
+    assert!(msg.contains("got stuck"), "{msg}");
+}

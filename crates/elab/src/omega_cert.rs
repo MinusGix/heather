@@ -3402,6 +3402,40 @@ pub(crate) fn reconstruct(
         });
     }
     if elab.display_type(cx, expected) != "False" {
+        // A goal a definition unfolds to (`counts_advance([c], next, s)` is
+        // `c(next) <= Succ(c(s))`, and `counts_advance(Nil, …)` is `True`):
+        // unfold its head step by step until it is a goal this frontend
+        // reads, stopping there rather than at weak head normal form, which
+        // would unfold `Le` itself into its recursor. `True` closes outright.
+        if let Type::El { level, tm } = expected {
+            let oracle = elab.goal_oracle();
+            for reduct in oracle.term_reducts(&cx.gamma, tm, 64) {
+                if matches!(&reduct, Term::TmUnit { .. }) {
+                    let source = "trivial".to_string();
+                    return Ok(Certificate {
+                        atoms: None,
+                        expr: parse_generated_expr(&source)?,
+                        source,
+                        report: wrapper_report("trivial", 0),
+                    });
+                }
+                let unfolded = Type::El { level: level.clone(), tm: Rc::new(reduct) };
+                let reads = elab.display_tag_of(&unfolded).is_some_and(|tag| tag.name == "And")
+                    || relation_args(elab, &unfolded).is_some()
+                    || strict_relation_args(elab, &unfolded).is_some()
+                    || nat_relation_args(elab, &unfolded).is_some()
+                    || nat_strict_relation_args(elab, &unfolded).is_some()
+                    || equality_args(elab, cx, &unfolded).is_some()
+                    || nat_equality_args(elab, cx, &unfolded).is_some()
+                    || elab.display_type(cx, &unfolded) == "False";
+                if reads {
+                    // The definition's arguments arrive as passed: a count
+                    // `λ s => s.lines` applied, a projection of a pair.
+                    let unfolded = crate::goal_combinators::simplify_goal(elab, cx, &unfolded);
+                    return reconstruct(elab, cx, &unfolded, allow_disequality_split, allow_connective_split, allow_cutsat);
+                }
+            }
+        }
         return Err(format!(
             "Omega currently expects `False` or an affine `Int`/`Nat` relation goal, got `{}`",
             elab.display_type(cx, expected)

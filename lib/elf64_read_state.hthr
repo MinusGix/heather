@@ -33,16 +33,10 @@ import nat;
 import option;
 import omega;
 
-// Init zeroes the state registers. The chunk's setup is elf64_read_pieces's,
-// less the carry's copy: the loop reads its state where it already is.
-fn state_init_block() → List<Instruction> {
-    [MovRI(R13, BitVec::ofNat(0)), MovRI(R14, BitVec::ofNat(0)), MovRI(R15, BitVec::ofNat(0)), MovRI(R8, BitVec::ofNat(0))]
-}
 fn state_setup_block(needle: BitVec(8)) → List<Instruction> {
     [MovRR(Rbp, Rax), MovRR(R12, Rax), MovRI(Rdi, BitVec::ofNat(io_page_base())), MovRI(Rcx, needle.zero_extend(56)),
      MovRI(Rsi, BitVec::ofNat(0))]
 }
-fn state_init_len() → Nat { canonical_block_bytes(state_init_block()).len() }
 fn state_setup_len(needle: BitVec(8)) → Nat { canonical_block_bytes(state_setup_block(needle)).len() }
 
 // The program: init, the read head (elf64_read_pieces), the chunk's setup
@@ -113,19 +107,6 @@ record ReadStatePlacement(p: LoopPlacement) {
     base: p.base = Rdi, length: p.length = Rbp, needle: p.needle = Rcx, cursor: p.cursor = Rsi, budget: p.budget = R12,
 }
 
-// Two register files agree on the state registers.
-fn StateKept(after, before: Gprs) → Type {
-    (read_gpr(R13, after) = read_gpr(R13, before)) ∧ ((read_gpr(R14, after) = read_gpr(R14, before)) ∧
-    ((read_gpr(R15, after) = read_gpr(R15, before)) ∧ (read_gpr(R8, after) = read_gpr(R8, before))))
-}
-// The placement reads only the state registers.
-fn StateFramed<C>(rep: Gprs → C → Type) → Type {
-    (before, after: Gprs) → (carry: C) → StateKept(after, before) → rep(before, carry) → rep(after, carry)
-}
-// Init's zeros place the initial state.
-fn StateInitialised<C>(rep: Gprs → C → Type, init: C) → Type {
-    (state: MachineState<IoMemory>) → rep(execute_block_normal(state_init_block(), state).gprs, init)
-}
 // The state folded over any input read so far fits a loop over the next
 // chunk, while the two together are shorter than 2^64.
 fn StateRoom<C>(fits: Nat → Nat → C → Type, region: ReadonlyLoop<C>, needle: BitVec(8), init: C) → Type {
@@ -334,13 +315,6 @@ theorem state_chunk_close<C>(rep: Gprs → C → Type, framed: StateFramed(rep),
 // ---------------------------------------------------------------------------
 // The loop.
 
-// A tail placed at `at`, from there with the final state in its registers:
-// what runs after the empty read, whatever process read to it.
-fn EofTail<C>(file: List<BitVec(8)>, at: Nat, rep: Gprs → C → Type, total: C, events: List<LinuxEvent>) → Type {
-    (page: Nat → BitVec(8)) → (state: MachineState<IoMemory>) → state.rip = eof_rip(at) →
-    state.memory = IoMemory(file, page) → rep(state.gprs, total) → LinuxRuns(io_linux(), events, state)
-}
-
 // Where the process's four jumps land: JZ to the tail at end of file, JS to
 // the failure tail, JMP back to the read after a chunk, and the retry's JZ
 // back to the read.
@@ -375,7 +349,7 @@ theorem state_body<C>(file: List<BitVec(8)>, shape: StateShape<C>, l: StateLoop<
     back_target: near_branch_target(eof_rip(state_at_jmp(shape.needle, shape.bytes)), 5, jumps.bd) = eof_rip(state_at_read(shape.needle, shape.bytes)),
     tail_code: List<BitVec(8)>, pieces: (page: Nat → BitVec(8)) → StatePieces(IoMemory(file, page), shape.needle, shape.bytes, jumps, tail_code),
     input: List<BitVec(8)>, room: input.len() + 4096 < Nat::pow(2, 64)):
-    EofBody<True>(file, state_at_read(shape.needle, shape.bytes), state_inv(shape, init), input, λ _ _ => True, λ _ _ after => after) {
+    EofBody<True>(file, state_at_read(shape.needle, shape.bytes), state_inv(shape, init), input, λ _ _ _ => True, λ _ _ _ after => after) {
     λ page seen bytes rest x some fits _ prefix going at_setup memory_is length_word held after next => {
         let stored = io_store_offset(IoMemory(file, page), 0, bytes);
         let there = pieces(stored.page);
@@ -402,7 +376,7 @@ theorem state_process<C>(file: List<BitVec(8)>, shape: StateShape<C>, l: StateLo
     input: List<BitVec(8)>, room: input.len() + 4096 < Nat::pow(2, 64), tail_events: List<LinuxEvent>,
     tail: EofTail(file, state_at_done(shape.needle, shape.bytes), shape.rep, step_fold(shape.region, shape.needle, input, init), tail_events)):
     EofProcess<True, False>(file, state_at_read(shape.needle, shape.bytes), state_at_done(shape.needle, shape.bytes), state_inv(shape, init), input,
-        λ _ _ => True, λ _ _ after => after, λ _ _ => True, λ _ _ => Nil, tail_events) {
+        λ _ _ _ => True, λ _ _ _ after => after, λ _ _ _ => True, λ _ _ _ => Nil, tail_events) {
     EofProcess(
         framed := λ seen before after kept held => l.framed(before, after, step_fold(shape.region, shape.needle, seen, init),
             ⟨kept.right.right.right.right.right.right.left, ⟨kept.right.right.right.right.right.right.right.left,
@@ -474,10 +448,10 @@ theorem state_start<C>(file: List<BitVec(8)>, shape: StateShape<C>, l: StateLoop
         jumps.ed, jumps.sd, jumps.rd) = EofLayout(λ p => pieces(p).head, λ p => pieces(p).fail, targets.exit, targets.fail, targets.retry);
     linux_runs_after_steps(io_linux(), eof_events(chunks, ending, tail_events), begin, ready, started.left,
         eof_from(file, state_at_read(shape.needle, shape.bytes), state_at_failed(shape.needle, shape.bytes), state_at_done(shape.needle, shape.bytes),
-            jumps.ed, jumps.sd, jumps.rd, layout, state_inv(shape, init), input, λ _ _ => True, λ _ _ after => after,
-            λ _ _ => True, λ _ _ => Nil, tail_events,
+            jumps.ed, jumps.sd, jumps.rd, layout, state_inv(shape, init), input, λ _ _ _ => True, λ _ _ _ after => after,
+            λ _ _ _ => True, λ _ _ _ => Nil, tail_events,
             state_process(file, shape, l, init, start.room, jumps, targets, tail_code, pieces, input, room, tail_events, tail),
-            ending, ending_ok, chunks)(ok, page, Nil, refl, ready, started.right, refl, start.initialised(begin)))
+            ending, ending_ok, chunks)(Nil, ok, page, refl, ready, started.right, refl, start.initialised(begin)))
 }
 
 // The process claim: for every way the reads may split the input into
@@ -508,10 +482,6 @@ theorem read_state_runs<C>(file: List<BitVec(8)>, shape: StateShape<C>, l: State
 // A Nat state (`wc -l`'s shape): a count, read in R13 as its word. How the
 // count is placed is the loop generator's, a parameter
 // (docs/native-loop-generator-fold-design.md §3.2).
-
-fn CountWord(rep: Gprs → Nat → Type) → Type {
-    (gprs: Gprs) → (carry: Nat) → rep(gprs, carry) → read_gpr(R13, gprs) = bitvec_nat::word_of_nat(64, carry)
-}
 
 // The exit claim: for every history of reads, a run that exits with the
 // program's specification of the input (ReadEofComputes: the step folded

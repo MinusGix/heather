@@ -92,8 +92,7 @@ fn wc_state_process_composes() {
 // missing name: the claim can't be restated over a setup that writes a state
 // register, a layout that measures its jump back a byte long, a failure jump
 // said to land on the tail, a program that leaves out init, or an exit that reads another register than the
-// status premise names; nor, for wc, over an init that zeroes the wrong
-// register.
+// status premise names.
 #[test]
 fn slow_acceptance_read_state_refusals() {
     let library = base().semantic_image();
@@ -112,9 +111,6 @@ fn slow_acceptance_read_state_refusals() {
         let error = library.elaborator().elab_module_source("elf64_read_state", &bad).expect_err(name).render(&bad);
         assert!(!error.contains("unbound") && !error.contains("ambiguous"), "{name}: {error}");
     }
-    let bad = PROCESS.replacen("MovRI(R8, BitVec::ofNat(0))]", "MovRI(R9, BitVec::ofNat(0))]", 1);
-    assert_ne!(bad, PROCESS);
-    let mut elab = wc_with(&bad).unwrap_or_else(|e| panic!("{e}"));
-    let error = elab.elab_module_source("wc_process", WC_PROCESS).expect_err("init_misses_state").render(WC_PROCESS);
-    assert!(error.contains("wc_initialised") && !error.contains("unbound"), "{error}");
+    // The init block moved to elf64_read_pieces (docs/native-stream-filter-design.md
+    // §4.1); its wrong-register control is the stream filter's.
 }

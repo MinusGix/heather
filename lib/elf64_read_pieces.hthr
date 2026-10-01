@@ -105,7 +105,10 @@ theorem eof_test_count(returned: MachineState<IoMemory>, n: Nat, fits: n <= 4096
 // chunks, each with what the process's body did with it (`X`: nothing for a
 // fold, its writes for a filter), and EINTRs that are retried; then how the
 // reading ended: at the empty read, at a failed read other than EINTR, or in
-// a chunk whose body ended the run (`Y`: a failed write, say).
+// a chunk whose body ended the run (`Y`: a failed write, say). The body sees
+// what was read before its chunk (`seen`): a filter's output for a chunk
+// depends on the state the earlier chunks left
+// (docs/native-stream-filter-design.md §3.1).
 inductive EofStep<X> {
     Chunk(bytes: List<BitVec(8)>, x: X),
     Interrupted,
@@ -118,17 +121,19 @@ inductive EofEnd<Y> {
 
 // The trace: each read, then what the body did with its chunk; at end of
 // file the tail follows; a failed read exits 1.
-fn eof_run<X, Y>(body: List<BitVec(8)> → X → List<LinuxEvent> → List<LinuxEvent>, ended: List<BitVec(8)> → Y → List<LinuxEvent>,
-    steps: List<EofStep<X>>, ending: EofEnd<Y>, tail: List<LinuxEvent>) → List<LinuxEvent> {
+fn eof_run<X, Y>(body: List<BitVec(8)> → List<BitVec(8)> → X → List<LinuxEvent> → List<LinuxEvent>,
+    ended: List<BitVec(8)> → List<BitVec(8)> → Y → List<LinuxEvent>,
+    steps: List<EofStep<X>>, ending: EofEnd<Y>, tail: List<LinuxEvent>) → List<BitVec(8)> → List<LinuxEvent> {
     match steps {
-        Nil => match ending {
+        Nil => λ seen => match ending {
             AtEnd => Cons(ReadEvent(BitVec::ofNat(0), ReadBytes(Nil)), tail),
             FailedWith(errno) => [ReadEvent(BitVec::ofNat(0), ReadFailed(errno)), ExitEvent(BitVec::ofNat(1))],
-            EndedIn(bytes, y) => Cons(ReadEvent(BitVec::ofNat(0), ReadBytes(bytes)), ended(bytes, y)),
+            EndedIn(bytes, y) => Cons(ReadEvent(BitVec::ofNat(0), ReadBytes(bytes)), ended(seen, bytes, y)),
         },
-        Cons(step, rest) => match step {
-            Chunk(bytes, x) => Cons(ReadEvent(BitVec::ofNat(0), ReadBytes(bytes)), body(bytes, x, eof_run(body, ended, rest, ending, tail))),
-            Interrupted => Cons(ReadEvent(BitVec::ofNat(0), ReadFailed(eintr())), eof_run(body, ended, rest, ending, tail)),
+        Cons(step, rest) => λ seen => match step {
+            Chunk(bytes, x) => Cons(ReadEvent(BitVec::ofNat(0), ReadBytes(bytes)),
+                body(seen, bytes, x, eof_run(body, ended, rest, ending, tail, seen ++ bytes))),
+            Interrupted => Cons(ReadEvent(BitVec::ofNat(0), ReadFailed(eintr())), eof_run(body, ended, rest, ending, tail, seen)),
         },
     }
 }
@@ -140,32 +145,32 @@ fn eof_input<X>(steps: List<EofStep<X>>) → List<BitVec(8)> {
 }
 // A read before end of file returns at least one byte, and at most the page,
 // and the body's part of the history is one it can have (`ok`).
-fn EofSteps<X>(ok: List<BitVec(8)> → X → Type, steps: List<EofStep<X>>) → Type {
+fn EofSteps<X>(ok: List<BitVec(8)> → List<BitVec(8)> → X → Type, steps: List<EofStep<X>>) → List<BitVec(8)> → Type {
     match steps {
-        Nil => True,
-        Cons(step, rest) => match step {
-            Chunk(bytes, x) => (0 < bytes.len()) ∧ ((bytes.len() <= read_capacity()) ∧ (ok(bytes, x) ∧ EofSteps(ok, rest))),
-            Interrupted => EofSteps(ok, rest),
+        Nil => λ seen => True,
+        Cons(step, rest) => λ seen => match step {
+            Chunk(bytes, x) => (0 < bytes.len()) ∧ ((bytes.len() <= read_capacity()) ∧ (ok(seen, bytes, x) ∧ EofSteps(ok, rest, seen ++ bytes))),
+            Interrupted => EofSteps(ok, rest, seen),
         },
     }
 }
 // A failure that ends the reading is an errno, and not EINTR, which retries;
 // a chunk the body ended the run in is a chunk the body could have had.
-fn EofEndOk<Y>(ok: List<BitVec(8)> → Y → Type, ending: EofEnd<Y>) → Type {
+fn EofEndOk<Y>(ok: List<BitVec(8)> → List<BitVec(8)> → Y → Type, seen: List<BitVec(8)>, ending: EofEnd<Y>) → Type {
     match ending {
         AtEnd => True,
         FailedWith(errno) => Errno(errno) ∧ Not(errno = eintr()),
-        EndedIn(bytes, y) => (0 < bytes.len()) ∧ ((bytes.len() <= read_capacity()) ∧ ok(bytes, y)),
+        EndedIn(bytes, y) => (0 < bytes.len()) ∧ ((bytes.len() <= read_capacity()) ∧ ok(seen, bytes, y)),
     }
 }
 
 // A process whose body only reads (a fold): nothing per chunk, and no chunk
 // ends the run.
 fn eof_events(steps: List<EofStep<True>>, ending: EofEnd<False>, tail: List<LinuxEvent>) → List<LinuxEvent> {
-    eof_run<True, False>(λ _ _ rest => rest, λ _ _ => Nil, steps, ending, tail)
+    eof_run<True, False>(λ _ _ _ rest => rest, λ _ _ _ => Nil, steps, ending, tail, Nil)
 }
-fn EofChunks(steps: List<EofStep<True>>) → Type { EofSteps<True>(λ _ _ => True, steps) }
-fn EofEnding(ending: EofEnd<False>) → Type { EofEndOk<False>(λ _ _ => True, ending) }
+fn EofChunks(steps: List<EofStep<True>>) → Type { EofSteps<True>(λ _ _ _ => True, steps, Nil) }
+fn EofEnding(ending: EofEnd<False>) → Type { EofEndOk<False>(λ _ _ _ => True, Nil, ending) }
 
 // A file of the call profile's shape, a 232-byte header then the program:
 // the program is resident at the entry (elf64_io's io_code_resident).
@@ -528,6 +533,44 @@ theorem read_fails(memory: IoMemory, ar: Nat, ed, sd: BitVec(32), head: ReadHead
 }
 
 // ---------------------------------------------------------------------------
+// A state carried across reads (docs/native-wc-design.md §4.8): it lives in
+// R13, R14, R15 and R8, which nothing between reads writes, so a loop updates
+// it in place and nothing is copied or saved around a read. How a state is
+// placed over them (`rep`) is the program's.
+
+// Init zeroes the state registers.
+fn state_init_block() → List<Instruction> {
+    [MovRI(R13, BitVec::ofNat(0)), MovRI(R14, BitVec::ofNat(0)), MovRI(R15, BitVec::ofNat(0)), MovRI(R8, BitVec::ofNat(0))]
+}
+fn state_init_len() → Nat { canonical_block_bytes(state_init_block()).len() }
+
+// Two register files agree on the state registers.
+fn StateKept(after, before: Gprs) → Type {
+    (read_gpr(R13, after) = read_gpr(R13, before)) ∧ ((read_gpr(R14, after) = read_gpr(R14, before)) ∧
+    ((read_gpr(R15, after) = read_gpr(R15, before)) ∧ (read_gpr(R8, after) = read_gpr(R8, before))))
+}
+// The placement reads only the state registers.
+fn StateFramed<C>(rep: Gprs → C → Type) → Type {
+    (before, after: Gprs) → (carry: C) → StateKept(after, before) → rep(before, carry) → rep(after, carry)
+}
+// Init's zeros place the initial state.
+fn StateInitialised<C>(rep: Gprs → C → Type, init: C) → Type {
+    (state: MachineState<IoMemory>) → rep(execute_block_normal(state_init_block(), state).gprs, init)
+}
+
+// A tail placed at `at`, from there with the final state in its registers:
+// what runs after the empty read, whatever process read to it.
+fn EofTail<C>(file: List<BitVec(8)>, at: Nat, rep: Gprs → C → Type, total: C, events: List<LinuxEvent>) → Type {
+    (page: Nat → BitVec(8)) → (state: MachineState<IoMemory>) → state.rip = eof_rip(at) →
+    state.memory = IoMemory(file, page) → rep(state.gprs, total) → LinuxRuns(io_linux(), events, state)
+}
+
+// A count placed as its word in R13 (`wc -l`'s state).
+fn CountWord(rep: Gprs → Nat → Type) → Type {
+    (gprs: Gprs) → (carry: Nat) → rep(gprs, carry) → read_gpr(R13, gprs) = bitvec_nat::word_of_nat(64, carry)
+}
+
+// ---------------------------------------------------------------------------
 // The read-until-end-of-file driver (docs/native-architecture-review.md R3):
 // the induction over the history that every process shares, over a contract
 // for what the process does with each chunk.
@@ -565,20 +608,20 @@ fn EofNext(file: List<BitVec(8)>, ar: Nat, inv: List<BitVec(8)> → Gprs → Typ
 // after)`, handing over to `next` back at the read. `rest` is the input still
 // to come.
 fn EofBody<X>(file: List<BitVec(8)>, ar: Nat, inv: List<BitVec(8)> → Gprs → Type, input: List<BitVec(8)>,
-    ok: List<BitVec(8)> → X → Type, body: List<BitVec(8)> → X → List<LinuxEvent> → List<LinuxEvent>) → Type {
+    ok: List<BitVec(8)> → List<BitVec(8)> → X → Type, body: List<BitVec(8)> → List<BitVec(8)> → X → List<LinuxEvent> → List<LinuxEvent>) → Type {
     (page: Nat → BitVec(8)) → (seen, bytes, rest: List<BitVec(8)>) → (x: X) →
-    0 < bytes.len() → bytes.len() <= read_capacity() → ok(bytes, x) → seen ++ (bytes ++ rest) = input →
+    0 < bytes.len() → bytes.len() <= read_capacity() → ok(seen, bytes, x) → seen ++ (bytes ++ rest) = input →
     (state: MachineState<IoMemory>) → state.rip = eof_rip(rh_at_end(ar)) → state.memory = io_store_offset(IoMemory(file, page), 0, bytes) →
     read_gpr(Rax, state.gprs) = bitvec_nat::word_of_nat(64, bytes.len()) → inv(seen, state.gprs) →
-    (after: List<LinuxEvent>) → EofNext(file, ar, inv, seen ++ bytes, after) → LinuxRuns(io_linux(), body(bytes, x, after), state)
+    (after: List<LinuxEvent>) → EofNext(file, ar, inv, seen ++ bytes, after) → LinuxRuns(io_linux(), body(seen, bytes, x, after), state)
 }
 // A chunk the body ends the run in.
 fn EofBodyEnds<Y>(file: List<BitVec(8)>, ar: Nat, inv: List<BitVec(8)> → Gprs → Type,
-    ok: List<BitVec(8)> → Y → Type, ended: List<BitVec(8)> → Y → List<LinuxEvent>) → Type {
+    ok: List<BitVec(8)> → List<BitVec(8)> → Y → Type, ended: List<BitVec(8)> → List<BitVec(8)> → Y → List<LinuxEvent>) → Type {
     (page: Nat → BitVec(8)) → (seen, bytes: List<BitVec(8)>) → (y: Y) →
-    0 < bytes.len() → bytes.len() <= read_capacity() → ok(bytes, y) →
+    0 < bytes.len() → bytes.len() <= read_capacity() → ok(seen, bytes, y) →
     (state: MachineState<IoMemory>) → state.rip = eof_rip(rh_at_end(ar)) → state.memory = io_store_offset(IoMemory(file, page), 0, bytes) →
-    read_gpr(Rax, state.gprs) = bitvec_nat::word_of_nat(64, bytes.len()) → inv(seen, state.gprs) → LinuxRuns(io_linux(), ended(bytes, y), state)
+    read_gpr(Rax, state.gprs) = bitvec_nat::word_of_nat(64, bytes.len()) → inv(seen, state.gprs) → LinuxRuns(io_linux(), ended(seen, bytes, y), state)
 }
 // At end of file: from `done` with all the input read.
 fn EofAtEnd(file: List<BitVec(8)>, done: Nat, inv: List<BitVec(8)> → Gprs → Type, input: List<BitVec(8)>, tail: List<LinuxEvent>) → Type {
@@ -589,8 +632,8 @@ fn EofAtEnd(file: List<BitVec(8)>, done: Nat, inv: List<BitVec(8)> → Gprs → 
 // A process, as the driver takes it: an invariant the read leaves standing,
 // what it does with a chunk, how a chunk may end the run, and its tail.
 record EofProcess<X, Y>(file: List<BitVec(8)>, ar, done: Nat, inv: List<BitVec(8)> → Gprs → Type, input: List<BitVec(8)>,
-    ok: List<BitVec(8)> → X → Type, body: List<BitVec(8)> → X → List<LinuxEvent> → List<LinuxEvent>,
-    ended_ok: List<BitVec(8)> → Y → Type, ended: List<BitVec(8)> → Y → List<LinuxEvent>, tail: List<LinuxEvent>) {
+    ok: List<BitVec(8)> → List<BitVec(8)> → X → Type, body: List<BitVec(8)> → List<BitVec(8)> → X → List<LinuxEvent> → List<LinuxEvent>,
+    ended_ok: List<BitVec(8)> → List<BitVec(8)> → Y → Type, ended: List<BitVec(8)> → List<BitVec(8)> → Y → List<LinuxEvent>, tail: List<LinuxEvent>) {
     framed: (seen: List<BitVec(8)>) → (before, after: Gprs) → ReadKept(after, before) → inv(seen, before) → inv(seen, after),
     chunk: EofBody<X>(file, ar, inv, input, ok, body),
     ends: EofBodyEnds<Y>(file, ar, inv, ended_ok, ended),
@@ -599,26 +642,28 @@ record EofProcess<X, Y>(file: List<BitVec(8)>, ar, done: Nat, inv: List<BitVec(8
 
 // From the read, having read `seen` of `input`, the rest of the run.
 fn EofFrom<X, Y>(file: List<BitVec(8)>, ar: Nat, inv: List<BitVec(8)> → Gprs → Type, input: List<BitVec(8)>,
-    ok: List<BitVec(8)> → X → Type, body: List<BitVec(8)> → X → List<LinuxEvent> → List<LinuxEvent>,
-    ended: List<BitVec(8)> → Y → List<LinuxEvent>, tail: List<LinuxEvent>, ending: EofEnd<Y>, steps: List<EofStep<X>>) → Type {
-    EofSteps(ok, steps) → (page: Nat → BitVec(8)) → (seen: List<BitVec(8)>) → seen ++ eof_input(steps) = input →
+    ok: List<BitVec(8)> → List<BitVec(8)> → X → Type, body: List<BitVec(8)> → List<BitVec(8)> → X → List<LinuxEvent> → List<LinuxEvent>,
+    ended: List<BitVec(8)> → List<BitVec(8)> → Y → List<LinuxEvent>, tail: List<LinuxEvent>, ending: EofEnd<Y>, steps: List<EofStep<X>>) → Type {
+    (seen: List<BitVec(8)>) → EofSteps(ok, steps, seen) → (page: Nat → BitVec(8)) → seen ++ eof_input(steps) = input →
     (state: MachineState<IoMemory>) → state.rip = eof_rip(ar) → state.memory = IoMemory(file, page) → inv(seen, state.gprs) →
-    LinuxRuns(io_linux(), eof_run(body, ended, steps, ending, tail), state)
+    LinuxRuns(io_linux(), eof_run(body, ended, steps, ending, tail, seen), state)
 }
 
 // The reads, by recursion on the history: every chunk read and handed to the
 // body, every EINTR retried; then the empty read goes to the tail, a failed
-// read exits 1, and a chunk the body ends in ends the run.
+// read exits 1, and a chunk the body ends in ends the run. How the run ended
+// is checked against all of the input, which is what was read by then.
 theorem eof_from<X, Y>(file: List<BitVec(8)>, ar, af, done: Nat, ed, sd, rd: BitVec(32), layout: EofLayout(file, ar, af, done, ed, sd, rd),
     inv: List<BitVec(8)> → Gprs → Type, input: List<BitVec(8)>,
-    ok: List<BitVec(8)> → X → Type, body: List<BitVec(8)> → X → List<LinuxEvent> → List<LinuxEvent>,
-    ended_ok: List<BitVec(8)> → Y → Type, ended: List<BitVec(8)> → Y → List<LinuxEvent>, tail: List<LinuxEvent>,
+    ok: List<BitVec(8)> → List<BitVec(8)> → X → Type, body: List<BitVec(8)> → List<BitVec(8)> → X → List<LinuxEvent> → List<LinuxEvent>,
+    ended_ok: List<BitVec(8)> → List<BitVec(8)> → Y → Type, ended: List<BitVec(8)> → List<BitVec(8)> → Y → List<LinuxEvent>, tail: List<LinuxEvent>,
     process: EofProcess<X, Y>(file, ar, done, inv, input, ok, body, ended_ok, ended, tail),
-    ending: EofEnd<Y>, ending_ok: EofEndOk(ended_ok, ending), steps: List<EofStep<X>>):
+    ending: EofEnd<Y>, ending_ok: EofEndOk(ended_ok, input, ending), steps: List<EofStep<X>>):
     EofFrom(file, ar, inv, input, ok, body, ended, tail, ending, steps) {
     match steps as λ ss => EofFrom(file, ar, inv, input, ok, body, ended, tail, ending, ss) {
-        Nil => λ steps_ok page seen prefix state at_read memory_is held =>
-            (match ending as λ en => EofEndOk(ended_ok, en) → LinuxRuns(io_linux(), eof_run(body, ended, Nil, en, tail), state) {
+        Nil => λ seen steps_ok page prefix state at_read memory_is held => {
+            let all: (seen = input) = trans(sym(List::append_nil(seen)), prefix);
+            (match ending as λ en => EofEndOk(ended_ok, input, en) → LinuxRuns(io_linux(), eof_run(body, ended, Nil, en, tail, seen), state) {
                 AtEnd => λ _ =>
                     head_read(file, page, ar, ed, sd, layout.head(page), state, at_read, memory_is, Nil, trivial, tail,
                         λ rcx r11 back => {
@@ -629,7 +674,6 @@ theorem eof_from<X, Y>(file: List<BitVec(8)>, ar, af, done: Nat, ed, sd, rd: Bit
                             let last = head_passed(returned, ed);
                             let kept: inv(seen, last.gprs) = process.framed(seen, state.gprs, last.gprs,
                                 ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, refl⟩⟩⟩⟩⟩⟩⟩⟩, held);
-                            let all: (seen = input) = trans(sym(List::append_nil(seen)), prefix);
                             linux_runs_after_steps(io_linux(), tail, returned, last, ended_at.steps,
                                 process.at_end(stored.page, last, ended_at.rip_is, ended_at.memory_is, j(all, λ s _ => inv(s, last.gprs), kept)))
                         }),
@@ -643,54 +687,56 @@ theorem eof_from<X, Y>(file: List<BitVec(8)>, ar, af, done: Nat, ed, sd, rd: Bit
                                 errno, bad.left, bad.right, returned, back.memory_is, back.rip_is, refl)
                         }),
                 EndedIn(bytes, y) => λ bad =>
-                    head_read(file, page, ar, ed, sd, layout.head(page), state, at_read, memory_is, bytes, bad.right.left, ended(bytes, y),
+                    head_read(file, page, ar, ed, sd, layout.head(page), state, at_read, memory_is, bytes, bad.right.left, ended(seen, bytes, y),
                         λ rcx r11 back => {
                             let returned = linux_read_return(io_linux(), head_asked(state), bytes, rcx, r11);
                             let stored = io_store_offset(IoMemory(file, page), 0, bytes);
                             have entered = head_enter(stored, ar, ed, sd, layout.head(stored.page), bytes.len(), bad.left, bad.right.left,
                                 returned, back.memory_is, back.rip_is, refl);
                             let going = head_going(returned, ed, sd);
-                            linux_runs_after_steps(io_linux(), ended(bytes, y), returned, going, entered.steps,
-                                process.ends(page, seen, bytes, y, bad.left, bad.right.left, bad.right.right, going, entered.rip_is,
+                            linux_runs_after_steps(io_linux(), ended(seen, bytes, y), returned, going, entered.steps,
+                                process.ends(page, seen, bytes, y, bad.left, bad.right.left,
+                                    j(sym(all), λ s _ => ended_ok(s, bytes, y), bad.right.right), going, entered.rip_is,
                                     entered.memory_is, refl, process.framed(seen, state.gprs, going.gprs,
                                         ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, refl⟩⟩⟩⟩⟩⟩⟩⟩, held)))
                         }),
-            })(ending_ok),
+            })(ending_ok)
+        },
         Cons(step, rest) => (match step as λ st => EofFrom(file, ar, inv, input, ok, body, ended, tail, ending, Cons(st, rest)) {
-            Chunk(bytes, x) => λ steps_ok page seen prefix state at_read memory_is held =>
+            Chunk(bytes, x) => λ seen steps_ok page prefix state at_read memory_is held =>
                 head_read(file, page, ar, ed, sd, layout.head(page), state, at_read, memory_is, bytes, steps_ok.right.left,
-                    body(bytes, x, eof_run(body, ended, rest, ending, tail)),
+                    body(seen, bytes, x, eof_run(body, ended, rest, ending, tail, seen ++ bytes)),
                     λ rcx r11 back => {
                         let returned = linux_read_return(io_linux(), head_asked(state), bytes, rcx, r11);
                         let stored = io_store_offset(IoMemory(file, page), 0, bytes);
                         have entered = head_enter(stored, ar, ed, sd, layout.head(stored.page), bytes.len(), steps_ok.left, steps_ok.right.left,
                             returned, back.memory_is, back.rip_is, refl);
                         let going = head_going(returned, ed, sd);
-                        let later = eof_run(body, ended, rest, ending, tail);
+                        let later = eof_run(body, ended, rest, ending, tail, seen ++ bytes);
                         let prefix_next: ((seen ++ bytes) ++ eof_input(rest) = input) =
                             trans(List::append_assoc(seen, bytes, eof_input(rest)), prefix);
-                        linux_runs_after_steps(io_linux(), body(bytes, x, later), returned, going, entered.steps,
+                        linux_runs_after_steps(io_linux(), body(seen, bytes, x, later), returned, going, entered.steps,
                             process.chunk(page, seen, bytes, eof_input(rest), x, steps_ok.left, steps_ok.right.left, steps_ok.right.right.left,
                                 prefix, going, entered.rip_is, entered.memory_is, refl,
                                 process.framed(seen, state.gprs, going.gprs, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, refl⟩⟩⟩⟩⟩⟩⟩⟩, held),
                                 later,
                                 λ next_page next_state next_rip next_memory next_held =>
                                     eof_from(file, ar, af, done, ed, sd, rd, layout, inv, input, ok, body, ended_ok, ended, tail, process,
-                                        ending, ending_ok, rest)(steps_ok.right.right.right, next_page, seen ++ bytes, prefix_next,
+                                        ending, ending_ok, rest)(seen ++ bytes, steps_ok.right.right.right, next_page, prefix_next,
                                         next_state, next_rip, next_memory, next_held)))
                     }),
-            Interrupted => λ steps_ok page seen prefix state at_read memory_is held =>
+            Interrupted => λ seen steps_ok page prefix state at_read memory_is held =>
                 head_read_failed(file, page, ar, ed, sd, layout.head(page), state, at_read, memory_is, eintr(), ⟨trivial, trivial⟩,
-                    eof_run(body, ended, rest, ending, tail),
+                    eof_run(body, ended, rest, ending, tail, seen),
                     λ junk rcx r11 back => {
                         let returned = linux_read_failed_return(io_linux(), head_asked(state), eintr(), junk, rcx, r11);
                         let stored = io_store_offset(IoMemory(file, page), 0, junk);
                         have retried = read_retries(stored, ar, ed, sd, layout.head(stored.page), af, rd, layout.fail(stored.page),
                             layout.to_fail, layout.to_read, returned, back.memory_is, back.rip_is, refl);
                         let again = fail_back(head_going(returned, ed, sd), rd);
-                        linux_runs_after_steps(io_linux(), eof_run(body, ended, rest, ending, tail), returned, again, retried.steps,
+                        linux_runs_after_steps(io_linux(), eof_run(body, ended, rest, ending, tail, seen), returned, again, retried.steps,
                             eof_from(file, ar, af, done, ed, sd, rd, layout, inv, input, ok, body, ended_ok, ended, tail, process,
-                                ending, ending_ok, rest)(steps_ok, stored.page, seen, prefix, again, retried.rip_is, retried.memory_is,
+                                ending, ending_ok, rest)(seen, steps_ok, stored.page, prefix, again, retried.rip_is, retried.memory_is,
                                 process.framed(seen, state.gprs, again.gprs, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, refl⟩⟩⟩⟩⟩⟩⟩⟩, held)))
                     }),
         }),

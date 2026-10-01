@@ -1,0 +1,65 @@
+// A stream filter's step as generated code (docs/native-stream-filter-design.md
+// §5.1): the contract between the generator, which certifies a program's step
+// as one straight-line piece, and elf64_read_filter's per-byte loop, which
+// runs it. From a state whose registers hold `s` with the byte in RAX, the
+// piece runs to its end with the next state in the same registers, whether
+// the byte emits in RBX and what it emits in RDX, memory untouched, and every
+// register outside `filter_step_scratch()` as it was. A module of its own so
+// the generator's output imports the contract without the process.
+import stream_filter;
+import function_ir_loop_trace;
+import x86_64;
+import x86_64_block;
+import x86_64_structured_block;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+
+// Whether a byte emits, and the byte, as the piece leaves them in RBX and RDX:
+// a flag of 0 or 1, and the byte zero-extended (0 when nothing is emitted).
+fn emits(emit: Option<BitVec(8)>) → Bool { match emit { None => False, Some(_) => True } }
+fn emit_flag(emit: Option<BitVec(8)>) → BitVec(64) { loop_bit(emits(emit)) }
+fn emit_word(emit: Option<BitVec(8)>) → BitVec(64) {
+    match emit { None => BitVec::ofNat(0), Some(byte) => byte.zero_extend(56) }
+}
+
+// Each of `counts` fits a word: what a state's Nat fields must satisfy to be
+// held in their registers.
+fn CountsFit<C>(counts: List<C → Nat>, s: C) → Type {
+    match counts {
+        Nil => True,
+        Cons(count, rest) => (count(s) < Nat::pow(2, 64)) ∧ CountsFit(rest, s),
+    }
+}
+
+// What the piece may write: the byte's register, its two results, the
+// state's four registers, and its own scratch. The per-byte loop's cursors
+// and constant (RSI, RCX, RDI, R12) are none of them.
+fn filter_step_scratch() → List<Gpr> { [Rax, Rdx, Rbx, R9, R10, R11, Rbp, R13, R14, R15, R8] }
+
+// One run of the piece: StructuredArtifact's facts, with the step's three
+// results in place of one.
+record StepRan<M, C>(code: StructuredCode, before: MachineState<M>, rep: Gprs → C → Type, out: Filtered<C>) {
+    after: MachineState<M>,
+    execution: ExecuteStructured(code, before, after),
+    layout: StructuredLayout(code),
+    decoding: StructuredDecodes(code, before.rip),
+    next_held: rep(after.gprs, out.next),
+    flag_is: read_gpr(Rbx, after.gprs) = emit_flag(out.emit),
+    byte_is: read_gpr(Rdx, after.gprs) = emit_word(out.emit),
+    memory_preserved: after.memory = before.memory,
+    rip_correct: after.rip = next_rip(before.rip, structured_bytes(code).len()),
+    registers_preserved: (register: Gpr) → Kept(filter_step_scratch(), register) →
+        read_gpr(register, after.gprs) = read_gpr(register, before.gprs),
+}
+
+// The step piece: from any state holding `s` (`rep`) and the byte, whose
+// next state's counts fit.
+fn StepPiece<M, C>(code: StructuredCode, rep: Gprs → C → Type, counts: List<C → Nat>, step: C → BitVec(8) → Filtered<C>) → Type {
+    (before: MachineState<M>) → (s: C) → (b: BitVec(8)) →
+        rep(before.gprs, s) → read_gpr(Rax, before.gprs) = b.zero_extend(56) → CountsFit(counts, step(s, b).next) →
+        StepRan<M, C>(code, before, rep, step(s, b))
+}

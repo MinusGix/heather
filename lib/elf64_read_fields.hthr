@@ -442,8 +442,8 @@ theorem fields_tail_runs<C>(file: List<BitVec(8)>, at: Nat, rep: Gprs → C → 
             linux_runs_after_linux_steps(io_linux(), write_events(line, steps, ending), state, s3,
                 linux_steps_trans(io_linux(), state, s1, s3, f0.proof.left, linux_steps_trans(io_linux(), s1, s2, s3, f1.proof.left, f2.proof.left)),
                 linux_runs_after_steps(io_linux(), write_events(line, steps, ending), s3, s4, lined.steps,
-                    wl_from(m3, fields_at_write(at, low, high), pj, there.write, targets, ending, ending_ok, steps)(
-                        line, written, s4, trivial, trivial, lined.rip_is, lined.memory_is, sends, refl, trivial))))
+                    wl_from(m3, fields_at_write(at, low, high), pj, there.write, targets, ending, ending_ok, steps, s4.gprs)(
+                        line, written, s4, trivial, trivial, lined.rip_is, lined.memory_is, sends, refl, trivial, write_kept_refl(s4.gprs)))))
     }
 }
 

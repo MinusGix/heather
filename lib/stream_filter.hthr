@@ -1,0 +1,126 @@
+// What a stream filter computes (docs/native-stream-filter-design.md §2.1):
+// a step that, from a state and a byte, gives the next state and the byte it
+// emits, if any, folded over the input. Nothing here is about machines; the
+// read profile's process (elf64_read_filter) runs a filter and its claim is
+// stated in these terms.
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+import omega;
+import function_ir_loop;
+
+// What one byte does: the next state, and the byte it emits, if any.
+record Filtered<C> { next: C, emit: Option<BitVec(8)> }
+
+// A filter that keeps nothing between bytes.
+record Stateless {}
+
+// The bytes an emit is: none, or the one.
+fn emitted_byte(emit: Option<BitVec(8)>) → List<BitVec(8)> {
+    match emit { None => Nil, Some(byte) => [byte] }
+}
+
+// The state after the bytes, and what they emit, from a state `s`.
+fn filter_state<C>(step: C → BitVec(8) → Filtered<C>, bytes: List<BitVec(8)>) → C → C {
+    match bytes {
+        Nil => λ s => s,
+        Cons(byte, rest) => λ s => filter_state(step, rest, step(s, byte).next),
+    }
+}
+fn filter_emitted<C>(step: C → BitVec(8) → Filtered<C>, bytes: List<BitVec(8)>) → C → List<BitVec(8)> {
+    match bytes {
+        Nil => λ s => Nil,
+        Cons(byte, rest) => λ s => emitted_byte(step(s, byte).emit) ++ filter_emitted(step, rest, step(s, byte).next),
+    }
+}
+
+// Input read in two parts: the second part starts from the state the first
+// left.
+theorem filter_state_append<C>(step: C → BitVec(8) → Filtered<C>, front, back: List<BitVec(8)>):
+    (s: C) → filter_state(step, front ++ back, s) = filter_state(step, back, filter_state(step, front, s)) {
+    match front {
+        Nil => λ s => refl,
+        Cons(byte, rest) => λ s => filter_state_append(step, rest, back, step(s, byte).next),
+    }
+}
+theorem filter_emitted_append<C>(step: C → BitVec(8) → Filtered<C>, front, back: List<BitVec(8)>):
+    (s: C) → filter_emitted(step, front ++ back, s) = filter_emitted(step, front, s) ++ filter_emitted(step, back, filter_state(step, front, s)) {
+    match front {
+        Nil => λ s => refl,
+        Cons(byte, rest) => λ s => {
+            let here = emitted_byte(step(s, byte).emit);
+            let next = step(s, byte).next;
+            trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ tail => here ++ tail, filter_emitted_append(step, rest, back, next)),
+                sym(List::append_assoc(here, filter_emitted(step, rest, next), filter_emitted(step, back, filter_state(step, rest, next)))))
+        },
+    }
+}
+
+// One byte: what it emits, then the rest from the state it leaves. The
+// process stores byte by byte, so it reads the input as front and one more.
+theorem filter_emitted_snoc<C>(step: C → BitVec(8) → Filtered<C>, front: List<BitVec(8)>, byte: BitVec(8), s: C):
+    filter_emitted(step, front ++ [byte], s) =
+        filter_emitted(step, front, s) ++ emitted_byte(step(filter_state(step, front, s), byte).emit) {
+    trans(filter_emitted_append(step, front, [byte], s),
+        cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ tail => filter_emitted(step, front, s) ++ tail,
+            List::append_nil(emitted_byte(step(filter_state(step, front, s), byte).emit))))
+}
+theorem filter_state_snoc<C>(step: C → BitVec(8) → Filtered<C>, front: List<BitVec(8)>, byte: BitVec(8), s: C):
+    filter_state(step, front ++ [byte], s) = step(filter_state(step, front, s), byte).next {
+    filter_state_append(step, front, [byte], s)
+}
+
+// A byte emits at most one byte, so the output is never longer than the
+// input: the process writes it in place, behind the read.
+theorem emitted_byte_len(emit: Option<BitVec(8)>): emitted_byte(emit).len() <= 1 {
+    match emit as λ e => emitted_byte(e).len() <= 1 { None => trivial, Some(_) => trivial }
+}
+theorem filter_emitted_len<C>(step: C → BitVec(8) → Filtered<C>, bytes: List<BitVec(8)>):
+    (s: C) → filter_emitted(step, bytes, s).len() <= bytes.len() {
+    match bytes {
+        Nil => λ s => trivial,
+        Cons(byte, rest) => λ s => {
+            let here = emitted_byte_len(step(s, byte).emit);
+            let after = filter_emitted_len(step, rest, step(s, byte).next);
+            // At the goal's spelling: omega reads atoms as written.
+            let whole: (filter_emitted(step, Cons(byte, rest), s).len() =
+                    emitted_byte(step(s, byte).emit).len() + filter_emitted(step, rest, step(s, byte).next).len()) =
+                List::len_append(emitted_byte(step(s, byte).emit), filter_emitted(step, rest, step(s, byte).next));
+            let input: (Cons(byte, rest).len() = Succ(rest.len())) = refl;
+            omega
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The old shapes, as steps.
+
+// A step that only counts: the fold of `g`, emitting nothing.
+fn counting<C>(g: C → BitVec(8) → C) → C → BitVec(8) → Filtered<C> { λ s byte => Filtered(g(s, byte), None) }
+
+theorem counting_state<C>(g: C → BitVec(8) → C, bytes: List<BitVec(8)>):
+    (s: C) → filter_state(counting(g), bytes, s) = fold_bytes(g, bytes, s) {
+    match bytes {
+        Nil => λ s => refl,
+        Cons(byte, rest) => λ s => counting_state(g, rest, g(s, byte)),
+    }
+}
+theorem counting_emitted<C>(g: C → BitVec(8) → C, bytes: List<BitVec(8)>): (s: C) → filter_emitted(counting(g), bytes, s) = Nil {
+    match bytes {
+        Nil => λ s => refl,
+        Cons(byte, rest) => λ s => counting_emitted(g, rest, g(s, byte)),
+    }
+}
+
+// A byte map: every byte emits its image, and nothing is kept.
+fn mapping(f: BitVec(8) → BitVec(8)) → Stateless → BitVec(8) → Filtered<Stateless> { λ s byte => Filtered(s, Some(f(byte))) }
+
+theorem mapping_emitted(f: BitVec(8) → BitVec(8), bytes: List<BitVec(8)>): (s: Stateless) → filter_emitted(mapping(f), bytes, s) = bytes.map(f) {
+    match bytes {
+        Nil => λ s => refl,
+        Cons(byte, rest) => λ s => cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ tail => Cons(f(byte), tail), mapping_emitted(f, rest, s)),
+    }
+}
