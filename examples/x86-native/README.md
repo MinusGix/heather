@@ -252,11 +252,13 @@ printf 'one\ntwo\nthree\n' | ./target/x86-native/wc_l; echo $?
 Expected output: `3`.
 
 The program is the bundle `wc_l_program`, a `CountProgram` (lib/function_ir_loop.hthr):
-its type names the step, the byte the step is given and the specification,
-`CountProgram(line_body, newline(), wc_l)`, and its value is the three facts
-below. It is checked with the rest of the file, so a program whose facts
-don't fit its step is refused at `wc_l.hthr`, before anything is generated.
-What is built follows from the bundle's type; there are no flags per program.
+its type names the step and the specification, `CountProgram(line_step, wc_l)`,
+and its value is the facts below. The step has its own type, the next count
+from a count and a byte (`line_step(count: Nat, byte: BitVec(8)) → Nat`); the
+library makes it the loop's body (`fold_body`). It is checked with the rest of
+the file, so a program whose facts don't fit its step is refused at
+`wc_l.hthr`, before anything is generated. What is built follows from the
+bundle's type; there are no flags per program.
 
 The certificate's `wc_l_program_native_runs` states the whole process against
 the source. For every way the reads may split stdin into non-empty chunks,
@@ -265,10 +267,12 @@ failed read, the written file has a run that reads them all and exits with
 `wc_l` of their concatenation (the parent sees the low eight bits), or with 1
 after the failure; `wc_l_program_native_runs_every` adds that every run with
 those answers from Linux is that run. `wc_l` is an ordinary Heather function;
-the program supplies it, the counting step, and three facts about the step
-alone: it grows by at most one per byte (`line_body_advances`), it always
-continues, the same way at every cursor (`line_body_folds`), and folded over
-the input from zero it is `wc_l` (`count_lines_input`). Buffers, chunks and
+the program supplies it, the counting step, and two facts about the step
+alone: it grows by at most one per byte, which the bundle's `advances` field
+shows by default (case analysis, then `omega`; a step it cannot show gets an
+error naming the case left, and `advances := …` by hand), and folded over the
+input from zero it is `wc_l` (`count_lines_input`, about the plain left fold
+`fold_bytes`). Buffers, chunks and
 everything machine-shaped come from the shared generators and the library's
 process theorem (`lib/elf64_read_state.hthr`, the same process `wc` runs on,
 with a Nat state; the read's pieces are `lib/elf64_read_pieces.hthr`'s;
@@ -329,9 +333,11 @@ printf 'one two\nthree\n' | ./target/x86-native/wc
 
 Expected output: `      2       3      14`, and exit status 0.
 
-`wc_program` is a `FieldsProgram`: its type names the step, the byte, the zero
-state, the state's counts (its Nat fields, in order) and the three
-specifications printed, in order. What they mean is
+`wc_program` is a `FieldsProgram`: its type names the step (`wc_step(s:
+WcState, byte: BitVec(8)) → WcState`), the zero state, the state's counts (its
+Nat fields, in order) and the three specifications printed, in order; each
+count's growth by at most one per byte is the bundle's default, as for
+`wc -l`. What they mean is
 stated as a reader checks it: `wc_lines` counts the newlines, `wc_words` the
 non-empty pieces of the input cut at every whitespace byte (the C locale's
 POSIX set, as `POSIXLY_CORRECT` has it), and `wc_bytes` the length.

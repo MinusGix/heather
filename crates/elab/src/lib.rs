@@ -4479,21 +4479,32 @@ impl Elaborator {
                 self.elab_check_skel_slots(cx, &split, expected, lvl, hint, skel, capture_slots)
             }
             ExprKind::App { head, args, named, explicit: false, goal_oriented: false }
+                if matches!(&head.kind, ExprKind::Var(name) if name == constructor::FIELD_DEFAULT)
+                    && named.is_empty() =>
+            {
+                self.elab_field_default(cx, args, expected, lvl, e.span)
+            }
+            ExprKind::App { head, args, named, explicit: false, goal_oriented: false }
                 if matches!(&head.kind, ExprKind::Var(name) if name == goal_combinators::SPLIT_STUCK)
                     && named.is_empty() =>
             {
                 let [body] = args.as_slice() else {
-                    return err("internal comparison splitter has the wrong arity", e.span);
+                    return err("internal case splitter has the wrong arity", e.span);
                 };
-                let goal = goal_combinators::simplify_goal(self, cx, expected);
-                let Some(split) = goal_combinators::split_stuck(self, cx, &goal, body, e.span) else {
-                    return self.elab_check_skel_slots(cx, body, &goal, lvl, hint, skel, capture_slots);
-                };
-                let (scrut, ty, level) = self.elab_infer(cx, &split.scrut)?;
-                self.elab_convoy(
-                    cx, heather_syntax::MatchForm::Match, true, &split.equation, &split.arms,
-                    scrut, &ty, &level, split.motive, lvl, &goal, e.span,
-                )
+                match goal_combinators::next_step(self, cx, expected, body, e.span) {
+                    goal_combinators::Step::Intro(expr) | goal_combinators::Step::Conjoin(expr) => {
+                        self.elab_check_skel_slots(cx, &expr, expected, lvl, hint, skel, capture_slots)
+                    }
+                    goal_combinators::Step::Split(split) => {
+                        let goal = goal_combinators::simplify_goal(self, cx, &inductive::decoded(expected));
+                        let (scrut, ty, level) = self.elab_infer(cx, &split.scrut)?;
+                        self.elab_convoy(
+                            cx, heather_syntax::MatchForm::Match, true, &split.equation, &split.arms,
+                            scrut, &ty, &level, split.motive, lvl, &goal, e.span,
+                        )
+                    }
+                    goal_combinators::Step::Leaf(goal) => self.elab_check_skel_slots(cx, body, &goal, lvl, hint, skel, capture_slots),
+                }
             }
             // **Rule 2** (docs/let-and-blocks-design.md §5.2): `refl` is a
             // *nullary* special form, so its node carries no name to
@@ -4996,6 +5007,10 @@ impl Elaborator {
                     .ctor_spine_expected(cx, e, expected)
                     .expect("just checked");
                 self.lint_manual_list_construction(cx, e, &ind, i);
+                let written: Vec<(&str, &Expr, Span)> = named.iter().map(|na| (na.name.as_str(), &na.expr, na.name_span)).collect();
+                if let Some(filled) = self.with_field_defaults(&ind, i, &args, &written, e.span)? {
+                    return self.build_ctor_value(cx, &ind, i, &filled, expected, lvl, e.span);
+                }
                 let permuted =
                     application::resolve_constructor_arguments(&ind, i, &args, &named, e.span)?;
                 let args = permuted.unwrap_or(args);
@@ -5011,6 +5026,12 @@ impl Elaborator {
                 tyargs,
                 fields,
             } if tyargs.is_empty() => {
+                if let Some(ind) = self.lookup_inductive(name).cloned().filter(|ind| ind.is_record) {
+                    let written: Vec<(&str, &Expr, Span)> = fields.iter().map(|f| (f.name.as_str(), &f.expr, f.span)).collect();
+                    if let Some(filled) = self.with_field_defaults(&ind, 0, &[], &written, e.span)? {
+                        return self.build_ctor_value(cx, &ind, 0, &filled, expected, lvl, e.span);
+                    }
+                }
                 let args = self.record_lit_args(name, fields, e.span)?;
                 let Some(ind) = self.lookup_inductive(name).cloned() else {
                     return Err(self.name_miss(name, format!("unknown type `{name}`"), e.span));

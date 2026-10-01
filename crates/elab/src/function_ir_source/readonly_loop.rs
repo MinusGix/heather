@@ -15,13 +15,25 @@ impl LoopCarry {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReflectedReadonlyLoop {
     pub source_name: String,
+    /// The body's global: a full step `(needle, cursor, byte, carry) →
+    /// LoopStep<C>`, or, when `folds`, a fold step `(carry, byte) → C` that
+    /// `function_ir_loop::fold_body` makes the body of.
     pub body_name: String,
     pub carry: LoopCarry,
+    pub folds: bool,
+}
+
+impl ReflectedReadonlyLoop {
+    /// The body as the loop's region spells it.
+    pub fn body(&self) -> String {
+        if self.folds { format!("function_ir_loop::fold_body<{}>({})", self.carry.name(), self.body_name) } else { self.body_name.clone() }
+    }
 }
 
 /// Five explicit source parameters, in order: buffer, needle, budget, cursor,
-/// carry. The sixth combinator argument must be a resolved global definition.
-/// Neither positional rebinding nor source spelling can choose another op.
+/// carry. The sixth combinator argument must be a resolved global definition,
+/// or `fold_body` applied to one. Neither positional rebinding nor source
+/// spelling can choose another op.
 pub fn reflect_elaborated_readonly_loop(elaborator: &Elaborator, source: &str)
     -> Result<ReflectedReadonlyLoop, SourceError>
 {
@@ -60,14 +72,24 @@ pub fn reflect_elaborated_readonly_loop(elaborator: &Elaborator, source: &str)
             None => return unsupported("bounded loop reflection supports Nat, Bool, or record carries"),
         },
     };
-    let body = resolved(args[6]).ok_or_else(|| SourceError::Unsupported("loop body must be a resolved global function".into()))?;
+    // `fold_body<C>(step)`: the type argument, then the step.
+    let fold = elaborator.global_abs("function_ir_loop::fold_body");
+    let (body, folds) = match resolved(args[6]) {
+        Some(body) => (Some(body), false),
+        None => {
+            let (head, fold_args) = application_spine(args[6]);
+            let step = fold_args.last().and_then(|step| resolved(step));
+            (step.filter(|_| fold.is_some() && resolved(head) == fold && fold_args.len() == 2), true)
+        }
+    };
+    let body = body.ok_or_else(|| SourceError::Unsupported("loop body must be a resolved global function, or fold_body applied to one".into()))?;
     let body_name = elaborator.global_qualified_name_at(body).ok_or_else(|| SourceError::Unsupported("loop body has no qualified identity".into()))?;
     if elaborator.global_body(&body_name).is_none() { return unsupported("loop body must be a transparent definition"); }
-    Ok(ReflectedReadonlyLoop { source_name, body_name, carry })
+    Ok(ReflectedReadonlyLoop { source_name, body_name, carry, folds })
 }
 
 /// What a program for the read profile says about itself
-/// (`function_ir_loop`'s `CountProgram` and `FieldsProgram`,
+/// (`read_program`'s `CountProgram` and `FieldsProgram`,
 /// docs/native-architecture-review.md R6).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ReadProgramKind {
@@ -90,10 +112,10 @@ pub struct ReflectedReadProgram {
     pub carry: LoopCarry,
 }
 
-/// The record a `FieldsProgram`'s step folds: its fourth parameter's type.
+/// The record a `FieldsProgram`'s step folds: its first parameter's type.
 pub fn reflect_step_record(elaborator: &Elaborator, step: &str) -> Result<super::structured::StructuredSourceRecord, SourceError> {
     let reflected = super::structured::reflect_elaborated_structured(elaborator, step)?;
-    reflected.signature.get(3).cloned().flatten()
+    reflected.signature.first().cloned().flatten()
         .ok_or_else(|| SourceError::Unsupported("a FieldsProgram's state must be a record of scalar fields".into()))
 }
 
@@ -135,7 +157,7 @@ pub fn generate_readonly_loop_certificate(prefix: &str, reflected: &ReflectedRea
     let carry = reflected.carry.name();
     let region = format!("{prefix}_region");
     module.declaration(Declaration::function(&region, HeatherExpr::raw(format!("ReadonlyLoop<{carry}>")),
-        Block::expression(HeatherExpr::raw(format!("ReadonlyLoop<{carry}>({})", reflected.body_name)))));
+        Block::expression(HeatherExpr::raw(format!("ReadonlyLoop<{carry}>({})", reflected.body())))));
     let parameters = || [
         ("buffer", "ReadonlyBytes"), ("needle", "BitVec(8)"), ("budget", "Nat"),
         ("cursor", "Nat"), ("carry", carry.as_str()),

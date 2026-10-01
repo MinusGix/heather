@@ -107,6 +107,8 @@ fn loop_guard(cursor, length, budget: BitVec(64)) → Bool {
 fn loop_address(base, cursor: BitVec(64)) → BitVec(64) { base.add(cursor) }
 fn loop_next_cursor(cursor: BitVec(64)) → BitVec(64) { cursor.add(BitVec::ofNat(1)) }
 fn loop_next_budget(budget: BitVec(64)) → BitVec(64) { budget.sub(BitVec::ofNat(1)) }
+// A fold step's discriminator: it always continues (`function_ir_loop::fold_body`).
+fn loop_continues() → Bool { False }
 // Moves a finished value into its head register. A certificate may not write
 // one of its own inputs (issues/structured-lowering-in-place-results.md).
 fn loop_copy(word: BitVec(64)) → BitVec(64) { word }

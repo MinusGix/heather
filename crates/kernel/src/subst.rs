@@ -1609,6 +1609,15 @@ impl Type {
         self.abstract_pats(&[(pat.clone(), rep.clone())])
     }
 
+    /// [`Self::abstract_local_with`] for several patterns at once, each
+    /// planting its own term, all under the one binder `z`: one scrutinee a
+    /// goal reaches through several spellings, each rebuilt around `z`. The
+    /// `[pat/z]` instance is again the original only up to each
+    /// `rep[pat/z] ≡ pat`, so the result is to be checked, not trusted.
+    pub fn abstract_local_with_all(&self, pats: &[(Term, Term)]) -> Option<Type> {
+        self.abstract_pats(pats)
+    }
+
     fn abstract_pats(&self, pats: &[(Term, Term)]) -> Option<Type> {
         let mut m = AbstractLocal { pats, witness: Vec::new(), hits: 0, changes: 0 };
         let out = map_type(&self.shift_local(1), &mut m, Depths::default());

@@ -55,7 +55,7 @@ fn symbol_ok(name: &str) -> bool {
 
 /// What `build-x86` makes of a name: a function of two `--arg`s, a byte map
 /// read over stdin (`tr`), or a read-profile program's bundle
-/// (function_ir_loop's `CountProgram` or `FieldsProgram`).
+/// (read_program's `CountProgram` or `FieldsProgram`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Profile { Call, Map, Count, Fields }
 
@@ -94,45 +94,33 @@ fn profile_of(source: &Path, symbol: &str) -> Result<(Profile, Vec<heather_synta
     })
 }
 
-/// A bundle's data from its written arguments (`CountProgram(step, needle,
-/// spec)`, `FieldsProgram<C>(step, needle, init, counts, first, second,
-/// third)`), each name resolved where the program's module resolves it. The
-/// context module restates the program's facts over them, so an argument
-/// read wrongly is refused there.
+/// A bundle's data from its written arguments (`CountProgram(step, spec)`,
+/// `FieldsProgram<C>(step, init, counts, first, second, third)`), each name
+/// resolved where the program's module resolves it. The context module
+/// restates the program's facts over them, so an argument read wrongly is
+/// refused there.
 fn read_program(elab: &Elaborator, root: &str, symbol: &str, fields: bool, args: &[heather_syntax::ast::Expr])
     -> Result<function_ir_source::ReflectedReadProgram, String>
 {
     use heather_syntax::ast::ExprKind;
     let kind = if fields { "FieldsProgram" } else { "CountProgram" };
-    if args.len() != if fields { 7 } else { 3 } { return Err(format!("`{symbol}`: a {kind} takes its data as arguments of its type")); }
+    if args.len() != if fields { 6 } else { 2 } { return Err(format!("`{symbol}`: a {kind} takes its data as arguments of its type")); }
     let resolve = |written: &str| elab.with_module_scope(root, |elab| elab.qualified_global(written)).ok().flatten();
     let name = |expr: &heather_syntax::ast::Expr, what: &str| match &expr.kind {
         ExprKind::Var(written) => resolve(written).ok_or_else(|| format!("`{symbol}`'s {what} `{written}` is not a function `{root}` sees")),
         _ => Err(format!("`{symbol}`'s {what} is written as a function's name")),
     };
-    // The byte: `BitVec::ofNat(n)`, or a function of no arguments that is.
-    let needle = match &args[1].kind {
-        ExprKind::App { head, args, .. } if matches!(&head.kind, ExprKind::Var(f) if f.ends_with("ofNat")) => match args.first().map(|value| &value.kind) {
-            Some(ExprKind::Num(n)) => n.as_u64().and_then(|n| u8::try_from(n).ok()),
-            _ => None,
-        },
-        ExprKind::App { head, args, .. } if args.is_empty() => match &head.kind {
-            ExprKind::Var(written) => resolve(written).and_then(|global| function_ir_source::byte_constant(elab, &global)),
-            _ => None,
-        },
-        ExprKind::Var(written) => resolve(written).and_then(|global| function_ir_source::byte_constant(elab, &global)),
-        _ => None,
-    }.ok_or_else(|| format!("`{symbol}`'s needle is written as `BitVec::ofNat(n)` for a byte n, or a function of no arguments that is"))?;
     let step = name(&args[0], "step")?;
-    let specs = if fields { &args[4..7] } else { &args[2..3] };
+    let specs = if fields { &args[3..6] } else { &args[1..2] };
     let specs = specs.iter().map(|spec| name(spec, "specification")).collect::<Result<Vec<_>, _>>()?;
     let carry = if fields {
         function_ir_source::LoopCarry::Record(function_ir_source::reflect_step_record(elab, &step).map_err(|e| e.to_string())?)
     } else { function_ir_source::LoopCarry::Natural };
+    // A fold step reads no needle: the loop's register holds zero.
     Ok(function_ir_source::ReflectedReadProgram {
         name: format!("{root}::{symbol}"),
         kind: if fields { function_ir_source::ReadProgramKind::Fields } else { function_ir_source::ReadProgramKind::Count },
-        step, needle, specs, carry,
+        step, needle: 0, specs, carry,
     })
 }
 

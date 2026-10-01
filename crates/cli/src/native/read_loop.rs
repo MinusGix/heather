@@ -32,6 +32,7 @@ pub(super) const SUPPORT: &[(&str, &str)] = &[
     ("x86_64_fetched_code", include_str!("../../../../lib/std/arch/x86_64/x86_64_fetched_code.hthr")),
     ("x86_64_layout", include_str!("../../../../lib/std/arch/x86_64/x86_64_layout.hthr")),
     ("function_ir_loop", include_str!("../../../../lib/function_ir_loop.hthr")),
+    ("read_program", include_str!("../../../../lib/read_program.hthr")),
     ("function_ir_loop_x86", include_str!("../../../../lib/function_ir_loop_x86.hthr")),
     ("function_ir_loop_trace", include_str!("../../../../lib/function_ir_loop_trace.hthr")),
     ("x86_64_store", include_str!("../../../../lib/std/arch/x86_64/x86_64_store.hthr")),
@@ -153,29 +154,35 @@ pub(super) fn context(prefix: &str, program: &Program) -> String {
     let (name, step) = (&bundle.name, &bundle.step);
     let needle = format!("@bitvec::BitVec::ofNat(8, {})", bundle.needle);
     let ty = bundle.carry.name();
-    let fold = |init: &str| format!("step_fold(ReadonlyLoop<{ty}>({step}), {needle}, bytes, {init})");
-    let (advances, computes) = match &bundle.carry {
+    let body = format!("fold_body<{ty}>({step})");
+    let fold = |init: &str| format!("step_fold(ReadonlyLoop<{ty}>({body}), {needle}, bytes, {init})");
+    let (advances, computes, advanced, computed) = match &bundle.carry {
         LoopCarry::Record(record) => {
             let counts: Vec<String> = record.fields.iter().filter(|(_, kind)| *kind == StructuredSourceType::NatWord)
-                .map(|(field, _)| format!("loop_step_payload({step}(needle, cursor, byte, s)).{field} <= Succ(s.{field})")).collect();
+                .map(|(field, _)| format!("loop_step_payload({body}(needle, cursor, byte, s)).{field} <= Succ(s.{field})")).collect();
             let zeros = record.fields.iter().map(|(_, kind)| if *kind == StructuredSourceType::Boolean { "False" } else { "0" }).collect::<Vec<_>>().join(", ");
             let init = format!("{}({zeros})", record.constructor);
             let printed: Vec<String> = bundle.specs.iter().zip(&record.fields).map(|(spec, (field, _))| format!("{spec}(bytes) = {}.{field}", fold(&init))).collect();
-            (format!("(needle: BitVec(8)) → (cursor: Nat) → (byte: BitVec(8)) → (s: {ty}) → {}", conjunction(&counts)), conjunction(&printed))
+            let state: Vec<String> = bundle.specs.iter().zip(&record.fields).map(|(spec, (field, _))| format!("{spec}(bytes) = state.{field}")).collect();
+            (format!("(needle: BitVec(8)) → (cursor: Nat) → (byte: BitVec(8)) → (s: {ty}) → {}", conjunction(&counts)), conjunction(&printed),
+                format!("λ needle cursor byte s => {name}().advances(s, byte)"),
+                format!("j(sym(fold_body_fold<{ty}>({step}, {needle}, bytes, {init})), λ state _ => {}, {name}().computes(bytes))", conjunction(&state)))
         }
-        _ => (format!("LoopAdvancesByAtMostOne(ReadonlyLoop<Nat>({step}))"), format!("{}(bytes) = {}", bundle.specs[0], fold("0"))),
+        _ => (format!("LoopAdvancesByAtMostOne(ReadonlyLoop<Nat>({body}))"), format!("{}(bytes) = {}", bundle.specs[0], fold("0")),
+            format!("λ needle cursor byte count => {name}().advances(count, byte)"),
+            format!("trans({name}().computes(bytes), sym(fold_body_fold<Nat>({step}, {needle}, bytes, 0)))")),
     };
     format!("\
-import {root}; import function_ir_loop; import function_ir_loop_x86; import bitvec; import bool; import list; import logic; import nat;
+import {root}; import function_ir_loop; import read_program; import function_ir_loop_x86; import bitvec; import bool; import list; import logic; import nat;
 // `{name}` as the read profile builds it (docs/native-architecture-review.md
 // R6): its step as the loop over one chunk, and its facts where the loop
 // generator and the process claim read them.
 fn {prefix}_program_source(buffer: ReadonlyBytes, needle: BitVec(8), budget: Nat, cursor: Nat, carry: {ty}) → LoopOutcome<{ty}> {{
-    bounded_readonly<{ty}>(buffer, needle, budget, cursor, carry, {step})
+    bounded_readonly<{ty}>(buffer, needle, budget, cursor, carry, {body})
 }}
-theorem {prefix}_program_advances(): {advances} {{ {name}().advances }}
-theorem {prefix}_program_folds(): LoopFolds(ReadonlyLoop<{ty}>({step})) {{ {name}().folds }}
-theorem {prefix}_program_computes(bytes: List<BitVec(8)>): {computes} {{ {name}().computes(bytes) }}
+theorem {prefix}_program_advances(): {advances} {{ {advanced} }}
+theorem {prefix}_program_folds(): LoopFolds(ReadonlyLoop<{ty}>({body})) {{ fold_body_folds<{ty}>({step}) }}
+theorem {prefix}_program_computes(bytes: List<BitVec(8)>): {computes} {{ {computed} }}
 ", root = program.root)
 }
 
@@ -407,7 +414,7 @@ pub(super) fn certify(module: &mut Module, prefix: &str, program: &Program, emis
 }
 
 pub(super) const IMPORTS: &[&str] = &["elf64_read_state", "elf64_read_pieces", "elf64_io", "elf64_calls", "elf64", "linux_x86_64_entry",
-    "linux_x86_64_io", "linux_x86_64_determinism", "function_ir_loop",
+    "linux_x86_64_io", "linux_x86_64_determinism", "function_ir_loop", "read_program",
     "function_ir_loop_trace", "x86_64_fetched_code", "x86_64_fetch", "bitvec_nat", "x86_64", "x86_64_block", "bitvec", "list", "logic", "nat"];
 
 /// The formatter certificates' prefix. Program prefixes end in `_native`, so

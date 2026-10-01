@@ -16,7 +16,7 @@
 //! a record of one field, which is the state itself
 //! (docs/native-loop-generator-fold-design.md §3.1).
 use super::*;
-use super::structured::{FieldPiece, StructuredSourceRecord};
+use super::structured::{FieldEmission, FieldPiece, StructuredSourceRecord};
 use crate::function_ir_x86_lower::{near_loop_edges, AccessFragment, ByteLoad};
 
 /// Registers for a loop. The head registers carry its position from one
@@ -105,12 +105,19 @@ pub fn generate_elaborated_loop_x86(elaborator: &Elaborator, prefix: &str, sourc
         return unsupported("loop registers must be distinct");
     }
     let body = reflect_elaborated_structured(elaborator, &reflected.body_name)?;
-    // The body's ports: needle 0, the unused cursor, byte 2, then the fields.
-    let field_leaf = |f: &str| body.leaves.iter().position(|(parameter, field)| *parameter == 3 && if scalar { field.is_none() } else { field.as_deref() == Some(f) });
+    // The body's ports. A full step's: needle 0, the unused cursor, byte 2,
+    // then its carry's fields. A fold step's: its carry's fields, then the
+    // byte; it reads no needle, and it always continues.
+    let (state_parameter, byte_port, needle_port) = if reflected.folds {
+        let byte = body.leaves.iter().position(|leaf| *leaf == (1, None))
+            .ok_or_else(|| SourceError::Unsupported("a fold step takes its state, then a byte".into()))?;
+        (0, byte as u64, None)
+    } else { (3, 2, Some(0)) };
+    let field_leaf = |f: &str| body.leaves.iter().position(|(parameter, field)| *parameter == state_parameter && if scalar { field.is_none() } else { field.as_deref() == Some(f) });
     let leaves: Vec<u64> = fields.iter().map(|(f, _)| field_leaf(f).map(|l| l as u64)
         .ok_or_else(|| SourceError::Unsupported(format!("the step's carry has no field `{f}`")))).collect::<Result<_, _>>()?;
     let outputs = body.region.outputs().to_vec();
-    if outputs.len() != k + 1 { return unsupported("a record step observes each field and a discriminator"); }
+    if outputs.len() != k + usize::from(!reflected.folds) { return unsupported("a record step observes each field, and a full step a discriminator"); }
     let reads: Vec<Vec<usize>> = (0..k).map(|i| {
         let narrowed = cert::narrow_structured_region(&body.region, &[outputs[i]]);
         narrowed.inputs().iter().filter_map(|port| leaves.iter().position(|leaf| *leaf == port.id)).collect()
@@ -135,25 +142,33 @@ pub fn generate_elaborated_loop_x86(elaborator: &Elaborator, prefix: &str, sourc
     let guard = typed("guard", "loop_guard", &[(0, p.cursor), (1, p.length), (2, p.budget)], &guard_temps, (3, p.flag))?;
     let address = typed("address", "loop_address", &[(0, p.base), (1, p.cursor)], &[p.byte], (2, p.byte))?;
     let load = ByteLoad { destination: p.byte, base: p.byte };
-    let mut placements: x86::Placements = [(0, p.needle), (2, p.byte)].into_iter().collect();
+    let mut placements: x86::Placements = needle_port.map(|port| (port, p.needle)).into_iter().chain([(byte_port, p.byte)]).collect();
     for (i, leaf) in leaves.iter().enumerate() { placements.insert(*leaf, p.fields[i]); }
     // The discriminator goes last when it reads no field (a folding step's
     // collapses to a constant), so the field pieces may borrow its register;
     // otherwise first, before any field is written back.
-    let discriminator_reads_fields = cert::narrow_structured_region(&body.region, &[outputs[k]]).inputs().iter().any(|port| leaves.contains(&port.id));
+    let discriminator_reads_fields = !reflected.folds
+        && cert::narrow_structured_region(&body.region, &[outputs[k]]).inputs().iter().any(|port| leaves.contains(&port.id));
     let mut field_temps = p.scratch.clone();
     if !discriminator_reads_fields { field_temps.push(p.step); }
     let step_temps: Vec<Gpr> = std::iter::once(p.step).chain(p.scratch.iter().copied()).collect();
-    let discriminator_piece = FieldPiece { prefix: name("discriminator"), port: outputs[k].id, inputs: &placements, temporaries: &step_temps, consumable: &[], output: p.step };
+    let discriminator_piece = outputs.get(k).map(|output| FieldPiece { prefix: name("discriminator"), port: output.id, inputs: &placements, temporaries: &step_temps, consumable: &[], output: p.step });
     // Each field into its own register: an input it reads last, or else one
     // more register it may write.
     let homes: Vec<[Gpr; 1]> = p.fields.iter().map(|&home| [home]).collect();
     let temps_writing: Vec<Vec<Gpr>> = (0..k).map(|i| field_temps.iter().copied().chain(if reads[i].contains(&i) { None } else { Some(p.fields[i]) }).collect()).collect();
     let field_pieces = order.iter().map(|&i| FieldPiece { prefix: name(&format!("field_{}", fields[i].0)), port: outputs[i].id,
         inputs: &placements, temporaries: &temps_writing[i], consumable: if reads[i].contains(&i) { &homes[i] } else { &[] }, output: p.fields[i] });
-    let pieces: Vec<FieldPiece> = if discriminator_reads_fields { std::iter::once(discriminator_piece).chain(field_pieces).collect() }
-        else { field_pieces.chain(std::iter::once(discriminator_piece)).collect() };
-    let (fields_text, emissions) = generate_elaborated_typed_fields_x86(elaborator, &name("fields"), &reflected.body_name, &pieces)?;
+    // A fold step has no discriminator of its own: the loop's is the
+    // library's constant `Continue`.
+    let pieces: Vec<FieldPiece> = if discriminator_reads_fields { discriminator_piece.into_iter().chain(field_pieces).collect() }
+        else { field_pieces.chain(discriminator_piece).collect() };
+    let (fields_text, mut emissions) = generate_elaborated_typed_fields_x86(elaborator, &name("fields"), &reflected.body_name, &pieces)?;
+    let continues = if reflected.folds {
+        let piece = typed("discriminator", "loop_continues", &[], &step_temps, (0, p.step))?;
+        emissions.push(FieldEmission { prefix: name("discriminator"), lowered: piece.lowered, inputs: Vec::new() });
+        Some(piece.text)
+    } else { None };
     // The cursor and the budget, in place.
     let in_place = |part: &str, function: &str, register: Gpr, temps: &[Gpr]| {
         generate_elaborated_typed_consuming_x86(elaborator, &name(part), &format!("function_ir_loop_x86::{function}"),
@@ -189,6 +204,7 @@ pub fn generate_elaborated_loop_x86(elaborator: &Elaborator, prefix: &str, sourc
     pieces_module.raw("import x86_64_data_read; import x86_64;");
     pieces_module.raw(format!("fn {}() → ByteLoad {{ {} }}", name("load"), load.render()));
     for text in [&guard.text, &address.text, &fields_text] { pieces_module.raw(text.clone()); }
+    if let Some(text) = &continues { pieces_module.raw(text.clone()); }
     for emission in [&next_cursor, &next_budget] { pieces_module.raw(emission.text.clone()); }
     pieces_module.raw(generate_readonly_loop_certificate(&name("loop"), &reflected));
     let pieces_text = stitch_imports(&pieces_module.render());
@@ -299,9 +315,11 @@ pub fn generate_elaborated_loop_x86(elaborator: &Elaborator, prefix: &str, sourc
     let before_step = |n: usize| 2 + n;
     let step_index = |part: &str| steps.iter().position(|(prefix, _)| prefix == part).expect("step");
     let head_field = |i: usize| component("head.carry_placed", i, k);
+    // The step's own arguments, as each piece's typed artifact takes them.
+    let source_arguments = if reflected.folds { "carry, byte" } else { "needle, cursor, byte, carry" };
     let premise = |port: u64, entry: usize| -> String {
-        if port == 0 { return format!("sym(trans({}, head.needle_placed))", chain(p.needle, 0, entry)); }
-        if port == 2 { return format!("sym(trans({}, byte_load_result({}(), byte, s1)))", chain(p.byte, 2, entry), name("load")); }
+        if Some(port) == needle_port { return format!("sym(trans({}, head.needle_placed))", chain(p.needle, 0, entry)); }
+        if port == byte_port { return format!("sym(trans({}, byte_load_result({}(), byte, s1)))", chain(p.byte, 2, entry), name("load")); }
         let i = leaves.iter().position(|leaf| *leaf == port).expect("a field port");
         match fields[i].1 {
             StructuredSourceType::Boolean => format!("sym(trans({}, {}))", chain(p.fields[i], 0, entry), head_field(i)),
@@ -330,13 +348,16 @@ pub fn generate_elaborated_loop_x86(elaborator: &Elaborator, prefix: &str, sourc
         let at = step_index(&piece.prefix);
         let entry = before_step(at);
         let placed = piece.inputs.iter().map(|port| premise(port.id, entry)).collect::<Vec<_>>().join(", ");
-        let result = format!("{}_typed_correct(needle, cursor, byte, carry, {}{}{placed})", piece.prefix, state(entry), if placed.is_empty() { "" } else { ", " });
+        let result = format!("{}_typed_correct({source_arguments}, {}{}{placed})", piece.prefix, state(entry), if placed.is_empty() { "" } else { ", " });
         field_words[i] = seq(chain(p.fields[i], before_step(at) + 1, end), result);
         lets.push((format!("word_{}", fields[i].0), field_words[i].clone()));
     }
     let d_at = step_index(&discriminator.prefix);
     let d_placed = discriminator.inputs.iter().map(|port| premise(port.id, before_step(d_at))).collect::<Vec<_>>().join(", ");
-    lets.push(("step_reg".into(), seq(chain(p.step, before_step(d_at) + 1, end), format!("{}_typed_correct(needle, cursor, byte, carry, {}{}{d_placed})",
+    // The library's `Continue` reads nothing; a full step's discriminator
+    // is the step's own.
+    let d_arguments = if reflected.folds { String::new() } else { format!("{source_arguments}, ") };
+    lets.push(("step_reg".into(), seq(chain(p.step, before_step(d_at) + 1, end), format!("{}_typed_correct({d_arguments}{}{}{d_placed})",
         discriminator.prefix, state(before_step(d_at)), if d_placed.is_empty() { "" } else { ", " }))));
     let (nc, nb) = (step_index(&name("next_cursor")), step_index(&name("next_budget")));
     lets.push(("value".into(), "λ (word: BitVec(64)) => word.toNat()".into()));

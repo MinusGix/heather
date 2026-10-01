@@ -1288,6 +1288,7 @@ impl Elaborator {
                         parent.index.clone(),
                         parent.span,
                     ),
+                    default: None,
                     span: parent.span,
                 });
                 owner.push(None);
@@ -1317,6 +1318,7 @@ impl Elaborator {
                 fields.push(FieldDecl {
                     name: f.name.clone(),
                     ty: rename_ty(&rename, &f.ty),
+                    default: None,
                     span: parent.span,
                 });
                 owner.push(Some(from));

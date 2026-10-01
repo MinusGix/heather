@@ -239,6 +239,10 @@ pub(crate) struct Ctor {
     /// route 1 (where [`Self::res`] carries the pattern instead) and on every
     /// unindexed declaration.
     pub res_expr: Option<Expr>,
+    /// Parallel to [`Self::fields`]: a record field's default
+    /// (`name: T := e`), what fills it when a construction leaves it out.
+    /// It has no positional slot (docs/named-arguments-design.md §9.2).
+    pub defaults: Vec<Option<Expr>>,
 }
 
 /// A constructor's result index, decomposed: depth-one, constructor-headed,
@@ -969,6 +973,13 @@ impl Elaborator {
                     (None, Some(e), kind, rec_at)
                 }
             };
+            // A default fills a record's field; a constructor of a family
+            // has no construction site that could leave one out by name.
+            if let Some(field) = c.fields.iter().find(|f| f.default.is_some())
+                && (!d.is_record || index.is_some())
+            {
+                return err("only a record's fields take a default (`name: T := e`)", field.span);
+            }
             ctors.push(Ctor {
                 name: c.name.clone(),
                 fields: c
@@ -980,6 +991,7 @@ impl Elaborator {
                 res,
                 rec_at,
                 res_expr,
+                defaults: c.fields.iter().map(|f| f.default.as_deref().cloned()).collect(),
             });
         }
         // *Any* child-contributing field, not just a plain one: a constructor
@@ -4136,6 +4148,7 @@ fn skeleton_of(d: &InductiveDecl, ctors: &[Ctor], tag: u32, scope: Rc<Scope>) ->
                 }
             }
             let rec_at = vec![None; kind.len()];
+            let defaults = vec![None; kind.len()];
             Ctor {
                 name: format!("{}#skel", c.name),
                 fields,
@@ -4143,6 +4156,7 @@ fn skeleton_of(d: &InductiveDecl, ctors: &[Ctor], tag: u32, scope: Rc<Scope>) ->
                 res: None,
                 rec_at,
                 res_expr: None,
+                defaults,
             }
         })
         .collect();

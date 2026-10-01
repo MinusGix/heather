@@ -392,26 +392,29 @@ fn SpecsCounted<C>(specs: List<List<BitVec(8)> → Nat>, counts: List<C → Nat>
     specs_counted<C>(specs)(counts, bytes, state)
 }
 
-// A program as the read profile takes it: `step` folded over stdin, given
-// `needle`, and what it states about itself. It is checked when its module
-// is, so a program that is wrong is refused at its own source. The data are
-// the record's parameters, so the CLI reads them off its type, and a record
-// whose fields' types depend on its other fields costs the kernel at every
-// projection.
-
-// One count, from zero, which `spec` says what it means.
-record CountProgram(step: BitVec(8) → Nat → BitVec(8) → Nat → LoopStep<Nat>, needle: BitVec(8), spec: List<BitVec(8)> → Nat) {
-    advances: LoopAdvancesByAtMostOne(ReadonlyLoop<Nat>(step)),
-    folds: LoopFolds(ReadonlyLoop<Nat>(step)),
-    computes: (bytes: List<BitVec(8)>) → spec(bytes) = step_fold(ReadonlyLoop<Nat>(step), needle, bytes, 0),
+// A step at its own type: the next state from the state and a byte. The
+// loop body it makes ignores the needle and the cursor and always continues,
+// so the loop is a left fold of the step (`fold_body_folds`), and what the
+// fold computes is the plain fold over the bytes (`fold_body_fold`).
+fn fold_body<C>(step: C → BitVec(8) → C) → BitVec(8) → Nat → BitVec(8) → C → LoopStep<C> {
+    λ needle cursor byte carry => Continue(step(carry, byte))
 }
 
-// A state from `init` whose `counts` are its Nat fields in order, the first
-// three printed: `first`, `second` and `third` say what they mean.
-record FieldsProgram<C>(step: BitVec(8) → Nat → BitVec(8) → C → LoopStep<C>, needle: BitVec(8), init: C, counts: List<C → Nat>,
-    first, second, third: List<BitVec(8)> → Nat) {
-    advances: LoopCountsAdvance<C>(ReadonlyLoop<C>(step), counts),
-    folds: LoopFolds(ReadonlyLoop<C>(step)),
-    computes: (bytes: List<BitVec(8)>) →
-        SpecsCounted<C>([first, second, third], counts, bytes, step_fold(ReadonlyLoop<C>(step), needle, bytes, init)),
+fn fold_bytes<C>(step: C → BitVec(8) → C, bytes: List<BitVec(8)>) → C → C {
+    match bytes {
+        Nil => λ carry => carry,
+        Cons(byte, rest) => λ carry => fold_bytes(step, rest, step(carry, byte)),
+    }
+}
+
+theorem fold_body_folds<C>(step: C → BitVec(8) → C): LoopFolds(ReadonlyLoop<C>(fold_body<C>(step))) {
+    λ needle cursor byte carry => refl
+}
+
+theorem fold_body_fold<C>(step: C → BitVec(8) → C, needle: BitVec(8), bytes: List<BitVec(8)>):
+    (carry: C) → step_fold(ReadonlyLoop<C>(fold_body<C>(step)), needle, bytes, carry) = fold_bytes(step, bytes, carry) {
+    match bytes {
+        Nil => λ carry => refl,
+        Cons(byte, rest) => λ carry => fold_body_fold(step, needle, rest, step(carry, byte)),
+    }
 }

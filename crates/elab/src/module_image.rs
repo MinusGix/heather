@@ -33,8 +33,8 @@ use crate::resolve::DerivedInst;
 use crate::slots::Slot;
 use crate::traits::{ClassInfo, DesignationInfo, InstanceInfo};
 
-const MAGIC: &[u8; 8] = b"HTHMOD\0\x09";
-const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x08";
+const MAGIC: &[u8; 8] = b"HTHMOD\0\x0a";
+const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x09";
 
 /// Hard limits applied before any decoded collection or string allocation.
 /// The loader may choose a smaller policy; these defaults are deliberately
@@ -1426,6 +1426,7 @@ fn put_ctor(w: &mut Writer, ctor: &Ctor) {
     });
     w.vec(&ctor.rec_at, |w, at| w.option(at.as_ref(), |w, at| w.usize(*at)));
     w.option(ctor.res_expr.as_ref(), put_expr);
+    w.vec(&ctor.defaults, |w, default| w.option(default.as_ref(), put_expr));
 }
 
 fn get_ctor(r: &mut Reader<'_>) -> Result<Ctor, ModuleImageDecodeError> {
@@ -1436,6 +1437,7 @@ fn get_ctor(r: &mut Reader<'_>) -> Result<Ctor, ModuleImageDecodeError> {
         res: r.option(|r| Ok(IdxPat { ctor: r.usize()?, vars: r.vec(Reader::usize)? }))?,
         rec_at: r.vec(|r| r.option(Reader::usize))?,
         res_expr: r.option(get_expr)?,
+        defaults: r.vec(|r| r.option(get_expr))?,
     })
 }
 
@@ -1471,11 +1473,12 @@ fn get_inductive(r: &mut Reader<'_>) -> Result<Inductive, ModuleImageDecodeError
 }
 
 fn put_field_decl(w: &mut Writer, field: &FieldDecl) {
-    w.option(field.name.as_ref(), |w, name| w.string(name)); put_ty(w, &field.ty); put_span(w, field.span);
+    w.option(field.name.as_ref(), |w, name| w.string(name)); put_ty(w, &field.ty);
+    w.option(field.default.as_deref(), put_expr); put_span(w, field.span);
 }
 
 fn get_field_decl(r: &mut Reader<'_>) -> Result<FieldDecl, ModuleImageDecodeError> {
-    Ok(FieldDecl { name: r.option(Reader::string)?, ty: get_ty(r)?, span: get_span(r)? })
+    Ok(FieldDecl { name: r.option(Reader::string)?, ty: get_ty(r)?, default: r.option(get_expr)?.map(Box::new), span: get_span(r)? })
 }
 
 fn put_class_ref(w: &mut Writer, class: &ClassRef) {

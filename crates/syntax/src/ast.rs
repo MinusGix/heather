@@ -346,6 +346,10 @@ pub struct CtorDecl {
 pub struct FieldDecl {
     pub name: Option<String>,
     pub ty: Ty,
+    /// `name: T := e` — what fills the field when a construction leaves it
+    /// out (docs/named-arguments-design.md §9): checked at the field's type
+    /// as the construction instantiates it, in the declaration's scope.
+    pub default: Option<Box<Expr>>,
     pub span: Span,
 }
 

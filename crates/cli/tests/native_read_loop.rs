@@ -66,16 +66,19 @@ fn wc_l_counts_every_line() {
 }
 
 // An author's mistakes are refused at the author's source, by the check of
-// the program's bundle, and nothing is published: the loop given a byte its
-// specification does not count (its ReadEofComputes fact is about newlines),
-// and a theorem that is not the step's LoopFolds in its place.
+// the program's bundle, and nothing is published: a specification its fact
+// is not about (`count_lines_input` is about newlines, not the length), and
+// an `advances` given by hand that is about something else than the step.
+// (A step its default cannot show is refused at the construction:
+// named_arguments's `a_default_that_fails_is_refused_at_the_construction`.)
 #[test]
 fn a_program_that_is_wrong_is_refused_at_its_source() {
     let directory = scratch("read-loop-refused");
     for (fact, edits) in [
-        ("count_lines_input", &[("CountProgram(line_body, newline(), wc_l)", "CountProgram(line_body, BitVec::ofNat(32), wc_l)")][..]),
-        ("line_body_advances", &[("CountProgram(line_body_advances(), line_body_folds(), count_lines_input)",
-            "CountProgram(line_body_advances(), line_body_advances(), count_lines_input)")][..]),
+        ("count_lines_input", &[("fn wc_l_program() → CountProgram(line_step, wc_l)",
+            "fn wc_l_program() → CountProgram(line_step, λ bytes => bytes.len())")][..]),
+        ("advances", &[("CountProgram(count_lines_input)",
+            "CountProgram(count_lines_input, advances := λ count byte => Nat::le_refl(Succ(count)))")][..]),
     ] {
         let source = mistaken(&directory, "wc_l", edits);
         let output = build(&directory, &source, &[]);

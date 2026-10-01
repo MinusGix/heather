@@ -19,7 +19,7 @@ fn read_state_library_checks() {
 }
 
 // What `wc` supplies beside its loop certificate (docs/native-wc-design.md
-// §4.8): its step folds (the program's own `wc_body_folds`), its placement
+// §4.8): its step folds (`fold_body_folds`, as every fold step does), its placement
 // moves with the state registers, init's zeros place the zero state, its
 // state fits every chunk, and the line count is in R13 for the exit.
 pub(crate) const WC_PROCESS: &str = r#"
@@ -49,7 +49,7 @@ fn wc_state_loop(needle: BitVec(8)) → StateLoop<WcState>(wc_state_shape(needle
         λ buffer needle budget cursor carry => wc_loop_source_agreement(buffer, needle, budget, cursor, carry),
         λ access before buffer needle budget cursor carry bounded low head readable fits =>
             wc_native(access, before, buffer, needle, budget, cursor, carry, bounded, low, head, readable, fits),
-        wc_body_folds())
+        fold_body_folds<WcState>(wc_step))
 }
 fn wc_state_start(needle: BitVec(8)) → StateStart<WcState>(wc_state_shape(needle), WcState(0, 0, 0, False)) {
     StateStart(wc_initialised(), λ seen budget fits => wc_room(needle, WcState(0, 0, 0, False), ⟨refl, ⟨refl, refl⟩⟩, seen, budget, fits))

@@ -590,6 +590,25 @@ Also unsettled, and belonging to that round: whether a default may mention a
 parameter may also be `{}`-implicit (no: it is already implicit, and two
 filling disciplines on one slot is the error `:= infer` already refuses).
 
+### 9.5 As landed for record fields (2026-10-01)
+
+Record **fields** came first, not parameters
+(docs/automatic-author-surface-design.md §2.3): `name: T := e` on a record's
+field. §9.2 holds as written. A defaulted field has no positional slot, so
+the other fields fill positionally in order, and a named argument overrides
+it; writing every field positionally also overrides it. §9.4 is answered for
+fields as it says it must be:
+
+- the default is stored on the constructor and checked at the field's type
+  as each construction instantiates it (the stored goal);
+- names resolve in the record's declaring scope, and none of the
+  construction's locals are visible to it.
+
+One restriction remains: a default runs only where the construction has no
+local bindings, because moving the goal out of a non-empty context needs it
+closed over those locals first (issues/field-defaults-under-locals.md).
+Parameter defaults, `fn f(b: Nat := 0)`, remain this section's.
+
 ## 10. Out of scope, with homes
 
 ### 10.1 Partial type application

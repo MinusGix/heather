@@ -1,86 +1,61 @@
 // `wc -l`, as a certified static executable (docs/native-first-program-design.md,
 // docs/native-read-until-eof-design.md). The program is `wc_l_program` at
-// the end: the step `line_body`, folded over each chunk the reads of stdin
+// the end: the step `line_step`, folded over each chunk the reads of stdin
 // return until the empty one, and what its count means, `wc_l`. The process
 // exits with (or, with `--print`, prints) the total. Its facts are about its
 // step alone (docs/native-wc-design.md §3): it grows by at most one per byte
-// (`line_body_advances`), it always continues, the same at every cursor
-// (`line_body_folds`), and folded over the input from zero it is `wc_l`
-// (`count_lines_input`). Buffers, chunks and machines are the library's.
+// (checked by the program's default), and folded over the input from zero it
+// is `wc_l` (`count_lines_input`). Buffers, chunks and machines are the
+// library's.
 //
 //     heather build-x86 examples/x86-native/wc_l.hthr wc_l_program --print -o wc_l
 import function_ir_loop;
+import read_program;
 import bitvec;
 import bool;
 import list;
 import logic;
 import nat;
-import option;
 import omega;
 
-fn byte_equal(left, right: BitVec(8)) → Bool {
-    match left.unsigned_lt_bit(right) {
-        True => False,
-        False => match right.unsigned_lt_bit(left) { True => False, False => True },
-    }
+// A newline: byte 10.
+fn newline(b: BitVec(8)) → Bool {
+    match b.unsigned_lt_bit(BitVec::ofNat(10)) { True => False, False => b.unsigned_lt_bit(BitVec::ofNat(11)) }
 }
 
-fn newline() → BitVec(8) { BitVec::ofNat(10) }
-
-// The number of newlines.
+// What the count means: the input's newlines.
 fn wc_l(bytes: List<BitVec(8)>) → Nat {
     match bytes {
         Nil => 0,
-        Cons(byte, rest) => match byte_equal(newline(), byte) { False => wc_l(rest), True => Succ(wc_l(rest)) },
+        Cons(byte, rest) => match newline(byte) { False => wc_l(rest), True => Succ(wc_l(rest)) },
     }
 }
 
-fn line_body(needle: BitVec(8), cursor: Nat, byte: BitVec(8), count: Nat) → LoopStep<Nat> {
-    match byte_equal(needle, byte) { False => Continue(count), True => Continue(Succ(count)) }
+// The step: one more at a newline.
+fn line_step(count: Nat, byte: BitVec(8)) → Nat {
+    match newline(byte) { False => count, True => Succ(count) }
 }
 
-theorem line_body_advances(): LoopAdvancesByAtMostOne(ReadonlyLoop<Nat>(line_body)) {
-    λ needle cursor byte count => match byte_equal(needle, byte) as λ equal =>
-            loop_step_payload(match equal { False => Continue(count), True => Continue(Succ(count)) }) <= Succ(count) {
-        False => count.le_succ_r(count, count.le_refl()),
-        True => Succ(count).le_refl(),
-    }
-}
-
-// The loop always continues, the same way at every cursor: it folds
-// `line_body` over the bytes (function_ir_loop's LoopFolds).
-theorem line_body_folds(): LoopFolds(ReadonlyLoop<Nat>(line_body)) {
-    λ needle cursor byte count => match byte_equal(needle, byte) as λ equal =>
-            match equal { False => Continue(count), True => Continue(Succ(count)) } =
-            Continue(loop_step_payload(match equal { False => Continue(count), True => Continue(Succ(count)) })) {
-        False => refl,
-        True => refl,
-    }
-}
-
-// From any count, the fold adds the newlines.
-theorem count_lines_fold(bytes: List<BitVec(8)>): (count: Nat) →
-    step_fold(ReadonlyLoop<Nat>(line_body), newline(), bytes, count) = count + wc_l(bytes) {
+theorem count_lines_fold(bytes: List<BitVec(8)>): (count: Nat) → fold_bytes(line_step, bytes, count) = count + wc_l(bytes) {
     match bytes {
         Nil => λ count => refl,
-        Cons(byte, rest) => λ count => (match byte_equal(newline(), byte) as λ equal =>
-                step_fold(ReadonlyLoop<Nat>(line_body), newline(), rest,
-                    loop_step_payload(match equal { False => Continue(count), True => Continue(Succ(count)) })) =
-                count + (match equal { False => wc_l(rest), True => Succ(wc_l(rest)) }) {
+        Cons(byte, rest) => λ count => match newline(byte) as λ nl =>
+                fold_bytes(line_step, rest, match nl { False => count, True => Succ(count) }) =
+                count + match nl { False => wc_l(rest), True => Succ(wc_l(rest)) } {
             False => count_lines_fold(rest, count),
             True => trans(count_lines_fold(rest, Succ(count)), Nat::add_succ_left(count, wc_l(rest))),
-        }),
+        },
     }
 }
 
-// The fact the profile asks of a program (elf64_read_pieces's `computes`): its
-// specification is the fold from zero.
-theorem count_lines_input(bytes: List<BitVec(8)>): wc_l(bytes) = step_fold(ReadonlyLoop<Nat>(line_body), newline(), bytes, 0) {
-    sym(trans(count_lines_fold(bytes, 0), Nat::add_left_zero(wc_l(bytes))))
+theorem count_lines_input(bytes: List<BitVec(8)>): wc_l(bytes) = fold_bytes(line_step, bytes, 0) {
+    let counted = count_lines_fold(bytes, 0);
+    omega
 }
 
-// The program: the step, the byte it is given, and what its count means;
-// with the facts above. `heather build-x86` builds it by this name.
-fn wc_l_program() → CountProgram(line_body, newline(), wc_l) {
-    CountProgram(line_body_advances(), line_body_folds(), count_lines_input)
+// The program: the step and what its count means, with the fact above; that
+// the count grows by at most one per byte is the program's default.
+// `heather build-x86` builds it by this name.
+fn wc_l_program() → CountProgram(line_step, wc_l) {
+    CountProgram(count_lines_input)
 }

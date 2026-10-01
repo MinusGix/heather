@@ -1,0 +1,35 @@
+// A program as the read profile takes it (docs/native-architecture-review.md
+// R6, docs/automatic-author-surface-design.md): a step at its own type, folded
+// over stdin by the library's loop (`function_ir_loop::fold_body`), and what
+// it states about itself. It is checked when its module is, so a program that
+// is wrong is refused at its own source. The data are the record's
+// parameters, so the CLI reads them off its type, and a record whose fields'
+// types depend on its other fields costs the kernel at every projection.
+// A module of its own because a bundle's defaults run tactics, whose
+// certificates name `omega`, `logic` and `nat`; the loop's semantics have no
+// need to import them.
+import function_ir_loop;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import omega;
+
+// One count, from zero, which `spec` says what it means. The count grows by
+// at most one per byte, so it fits a word for any input a process can read:
+// for a step that adds at most one in every case, case analysis and `omega`
+// show it, and a program that needs more gives `advances := …` itself.
+record CountProgram(step: Nat → BitVec(8) → Nat, spec: List<BitVec(8)> → Nat) {
+    advances: (count: Nat) → (byte: BitVec(8)) → step(count, byte) <= Succ(count) := { split_all; all_goals { omega } },
+    computes: (bytes: List<BitVec(8)>) → spec(bytes) = fold_bytes(step, bytes, 0),
+}
+
+// A state from `init` whose `counts` are its Nat fields in order, the first
+// three printed: `first`, `second` and `third` say what they mean. Each count
+// grows by at most one per byte, shown as `CountProgram`'s is.
+record FieldsProgram<C>(step: C → BitVec(8) → C, init: C, counts: List<C → Nat>,
+    first, second, third: List<BitVec(8)> → Nat) {
+    advances: (state: C) → (byte: BitVec(8)) → counts_advance(counts, step(state, byte), state) := { split_all; all_goals { omega } },
+    computes: (bytes: List<BitVec(8)>) → SpecsCounted<C>([first, second, third], counts, bytes, fold_bytes(step, bytes, init)),
+}

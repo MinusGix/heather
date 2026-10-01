@@ -3,7 +3,7 @@ title: Give the loop generator stores, for stateful loops that emit bytes
 status: open
 labels: [x86,native,function-ir,design]
 created: 2026-09-30
-updated: 2026-09-30
+updated: 2026-10-01
 ---
 
 Certified loops execute through `ExecuteAccess`, whose `AccessCode` has no
@@ -24,3 +24,4 @@ filters have the same shape (`cat -s`, `dos2unix`).
 - 2026-09-30: paused for [[native-stack-refactor]] (user's call). The design direction put to the user then was a library per-byte loop around a generated step (next state in place, an emit flag and byte), storing at an output cursor advanced by the flag; after the review's R3 that is a body for the read-until-EOF driver rather than a new process.
 - 2026-09-30: R3 landed: the filter is now an EofProcess for elf64_read_pieces's eof_from (body with next, EndedIn for a failed write), no new induction.
 - 2026-09-30: After R4 (native-stack-refactor): the filter's code is a layout (x86_64_layout) — a parts list, measured lens and a jump-facts record in the library, a Layout table in the producer — with no offset arithmetic, residency chain or sum lemma of its own.
+- 2026-10-01: Direction agreed with the user (2026-10-01, after [[automatic-author-surface]]). Emitting stores lands as one general program shape rather than a fourth bundle: a stream filter with an initial state, a fold step that also emits (`step: S → BitVec(8) → (S, emitted bytes)`) and a `finish`, specified as `stdout = spec(stdin)` for every run. It subsumes `CountProgram`, `FieldsProgram` and the map, and `tr -s`/`-d`, `cat -s` and `dos2unix` are instances. `finish` may start as a choice among the library's proved tails. Write it in the new style: a step at its own type, routine obligations as bundle defaults. Drop the needle while designing the process ([[fold-programs-carry-a-needle]]). Its claim is the observable an interaction-tree program over read/write events would denote ([[native-one-program-logic]]), so it is a special case later, not rework.

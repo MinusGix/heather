@@ -10,9 +10,17 @@ const PRINT: &str = include_str!("../../../lib/elf64_print_pieces.hthr");
 const WRITE: &str = include_str!("../../../lib/elf64_write_loop.hthr");
 const COUNT: &str = include_str!("../../../lib/elf64_count_print.hthr");
 const WC_L: &str = include_str!("../../../examples/x86-native/wc_l.hthr");
-const LINES_CONTEXT: &str = "import function_ir_loop; import function_ir_loop_x86; import wc_l; import bitvec; import bool; import nat;
+const LINES_CONTEXT: &str = "import function_ir_loop; import function_ir_loop_x86; import wc_l; import bitvec; import bool; import list; import logic; import nat;
 fn count_lines(buffer: ReadonlyBytes, needle: BitVec(8), budget: Nat, cursor: Nat, count: Nat) → LoopOutcome<Nat> {
-    bounded_readonly<Nat>(buffer, needle, budget, cursor, count, line_body)
+    bounded_readonly<Nat>(buffer, needle, budget, cursor, count, fold_body<Nat>(line_step))
+}
+// A fold step reads no needle: the loop's register holds zero.
+fn lines_needle() → BitVec(8) { BitVec::ofNat(0) }
+theorem line_advances(): LoopAdvancesByAtMostOne(ReadonlyLoop<Nat>(fold_body<Nat>(line_step))) {
+    λ needle cursor byte count => wc_l_program().advances(count, byte)
+}
+theorem lines_computes(bytes: List<BitVec(8)>): wc_l(bytes) = step_fold(ReadonlyLoop<Nat>(fold_body<Nat>(line_step)), lines_needle(), bytes, 0) {
+    trans(count_lines_input(bytes), sym(fold_body_fold<Nat>(line_step, lines_needle(), bytes, 0)))
 }";
 
 // Everything the count process and its printing tail stand on.
@@ -56,41 +64,41 @@ theorem lines_word_0(gprs: Gprs, carry: Nat, placed: lines_rep(gprs, carry)): re
 // The loop's contract and where the count starts, as the producer states
 // them.
 fn lines_state_shape() → StateShape<Nat> {
-    StateShape(lines_placement(), lines_rep, lines_fits, lines_loop_region(), lines_code(), lines_bytes(), count_lines, newline())
+    StateShape(lines_placement(), lines_rep, lines_fits, lines_loop_region(), lines_code(), lines_bytes(), count_lines, lines_needle())
 }
 fn lines_state_loop() → StateLoop<Nat>(lines_state_shape()) {
     StateLoop(ReadStatePlacement(refl, refl, refl, refl, refl), lines_framed(),
         λ buffer needle budget cursor carry => lines_loop_source_agreement(buffer, needle, budget, cursor, carry),
         λ access before buffer needle budget cursor carry bounded low head readable fits =>
             lines_native(access, before, buffer, needle, budget, cursor, carry, bounded, low, head, readable, fits),
-        line_body_folds())
+        fold_body_folds<Nat>(line_step))
 }
 fn lines_state_start() → StateStart<Nat>(lines_state_shape(), 0) {
-    StateStart(lines_initialised(), λ seen budget fits => lines_room(newline(), lines_init(), refl, seen, budget, fits))
+    StateStart(lines_initialised(), λ seen budget fits => lines_room(lines_needle(), lines_init(), refl, seen, budget, fits))
 }
 
-theorem lines_exit(file: List<BitVec(8)>, jumps: EofJumps, facts: StateJumpFacts(newline(), lines_bytes(), jumps),
-    resident: (page: Nat → BitVec(8)) → CodeResident(io_fetch_access(), IoMemory(file, page), read_state_code(newline(), lines_bytes(), jumps),
+theorem lines_exit(file: List<BitVec(8)>, jumps: EofJumps, facts: StateJumpFacts(lines_needle(), lines_bytes(), jumps),
+    resident: (page: Nat → BitVec(8)) → CodeResident(io_fetch_access(), IoMemory(file, page), read_state_code(lines_needle(), lines_bytes(), jumps),
         BitVec::ofNat(0x4000e8)),
     chunks: List<EofStep<True>>, ok: EofChunks(chunks), ending: EofEnd<False>, ending_ok: EofEnding(ending),
     room: eof_input(chunks).len() + 4096 < Nat::pow(2, 64), page: Nat → BitVec(8), gprs: Gprs, flags: Flags):
     LinuxRuns(io_linux(), eof_events(chunks, ending, [ExitEvent(bitvec_nat::word_of_nat(64, wc_l(eof_input(chunks))))]),
         io_initial(file, page, gprs, flags)) {
-    read_count_runs(file, lines_state_shape(), lines_state_loop(), wc_l, count_lines_input, lines_state_start(), lines_word_0,
+    read_count_runs(file, lines_state_shape(), lines_state_loop(), wc_l, lines_computes, lines_state_start(), lines_word_0,
         jumps, facts, resident, chunks, ok, ending, ending_ok, room, page, gprs, flags)
 }
 
-theorem lines_print(file: List<BitVec(8)>, jumps: EofJumps, facts: StateJumpFacts(newline(), lines_bytes(), jumps),
+theorem lines_print(file: List<BitVec(8)>, jumps: EofJumps, facts: StateJumpFacts(lines_needle(), lines_bytes(), jumps),
     codes: PrintCodes, format: PrintFormat(codes), pj: PrintJumps, print_facts: PrintJumpFacts(pj),
     resident: (page: Nat → BitVec(8)) → CodeResident(io_fetch_access(), IoMemory(file, page),
-        read_count_code(newline(), lines_bytes(), jumps, codes.word, codes.start, codes.length, pj), BitVec::ofNat(0x4000e8)),
+        read_count_code(lines_needle(), lines_bytes(), jumps, codes.word, codes.start, codes.length, pj), BitVec::ofNat(0x4000e8)),
     chunks: List<EofStep<True>>, ok: EofChunks(chunks), ending: EofEnd<False>, ending_ok: EofEnding(ending),
     room: eof_input(chunks).len() + 4096 < Nat::pow(2, 64), small: wc_l(eof_input(chunks)) < 10000,
     writes: List<WriteStep>, writes_ok: WriteSteps(writes)(decimal_line(wc_l(eof_input(chunks)))),
     written: WriteEnding, written_ok: WriteEndingOk(written), page: Nat → BitVec(8), gprs: Gprs, flags: Flags):
     LinuxRuns(io_linux(), eof_events(chunks, ending, write_events(decimal_line(wc_l(eof_input(chunks))), writes, written)),
         io_initial(file, page, gprs, flags)) {
-    read_count_print_runs(file, lines_state_shape(), lines_state_loop(), wc_l, count_lines_input, lines_state_start(), lines_word_0, codes, format,
+    read_count_print_runs(file, lines_state_shape(), lines_state_loop(), wc_l, lines_computes, lines_state_start(), lines_word_0, codes, format,
         jumps, facts, pj, print_facts, resident, chunks, ok, ending, ending_ok, room, small, writes, writes_ok, written, written_ok, page, gprs, flags)
 }
 "#;
@@ -99,11 +107,13 @@ theorem lines_print(file: List<BitVec(8)>, jumps: EofJumps, facts: StateJumpFact
 fn wc_l_count_process_composes() {
     let mut elab = base();
     elab.elab_module_source("elf64_count_print", COUNT).unwrap_or_else(|e| panic!("{}", e.render(COUNT)));
+    elab.elab_module_source("read_program", crate::function_ir_loop_trace::READ_PROGRAM)
+        .unwrap_or_else(|e| panic!("{}", e.render(crate::function_ir_loop_trace::READ_PROGRAM)));
     elab.elab_module_source("wc_l", WC_L).unwrap_or_else(|e| panic!("{}", e.render(WC_L)));
     // The step as the loop over one chunk, as the read profile's producer
     // writes it beside a program (`count_lines`).
     elab.elab_module_source("lines_context", LINES_CONTEXT).unwrap_or_else(|e| panic!("{}", e.render(LINES_CONTEXT)));
-    let emission = generate_elaborated_loop_x86(&elab, "lines", "lines_context::count_lines", &count_placement(), Some("wc_l::line_body_advances"))
+    let emission = generate_elaborated_loop_x86(&elab, "lines", "lines_context::count_lines", &count_placement(), Some("lines_context::line_advances"))
         .unwrap_or_else(|e| panic!("{e:?}"));
     elab.elab_module_source("lines_pieces", &emission.pieces).unwrap_or_else(|e| panic!("{}", e.render(&emission.pieces)));
     elab.elab_module_source("lines_native", &emission.text).unwrap_or_else(|e| panic!("{}", e.render(&emission.text)));

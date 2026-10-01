@@ -399,3 +399,40 @@ fn reconstructs_bounded_combinations() {
     refused("a false bound with the same ranges",
         "theorem t(s, t, v: Nat, value: s = v, small: v < 1000, first: t = v + v, r0: s < Nat::pow(2, 64), r1: t < Nat::pow(2, 64)): 2 * t < 1000 { omega }");
 }
+
+/// `split_all` over words (docs/goal-combinators.md): a word local is never
+/// split into its bits, and a comparison is found through the helpers that
+/// spell it, or through a match on another one, with its Nat fact at each
+/// leaf.
+#[test]
+fn split_all_finds_comparisons_through_helpers() {
+    checks("a comparison behind a helper", "
+fn low(x: BitVec(8)) → Bool { x.unsigned_lt_bit(BitVec::ofNat(10)) }
+fn pick(x: BitVec(8), n: Nat) → Nat { match low(x) { True => n, False => Succ(n) } }
+theorem pick_grows(x: BitVec(8), n: Nat): n <= pick(x, n) {
+    split_all;
+    all_goals { omega }
+}");
+    checks("a comparison under a match on another", "
+fn space(b: BitVec(8)) → Bool {
+    match b.unsigned_lt_bit(BitVec::ofNat(14)) { True => True, False => b.unsigned_lt_bit(BitVec::ofNat(33)) }
+}
+fn count(b: BitVec(8), n: Nat) → Nat { match space(b) { True => Succ(n), False => n } }
+theorem count_bounded(b: BitVec(8), n: Nat): count(b, n) <= Succ(n) {
+    split_all;
+    all_goals { omega }
+}");
+    checks("the leaf reads the comparison as Nats", "
+fn below(x: BitVec(8)) → Bool { x.unsigned_lt_bit(BitVec::ofNat(10)) }
+theorem small(x: BitVec(8)): match below(x) { True => x.toNat() < 10, False => 10 <= x.toNat() } {
+    split_all;
+    all_goals { bv_omega }
+}");
+    let error = refused("a leaf the comparison does not prove", "
+fn below(x: BitVec(8)) → Bool { x.unsigned_lt_bit(BitVec::ofNat(10)) }
+theorem wrong(x: BitVec(8)): match below(x) { True => x.toNat() < 9, False => 10 <= x.toNat() } {
+    split_all;
+    all_goals { bv_omega }
+}");
+    assert!(error.contains("bv_omega"), "{error}");
+}

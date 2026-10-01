@@ -1679,8 +1679,14 @@ impl Parser {
             None
         };
         let ty = self.ty()?;
-        let span = start.join(ty.span);
-        Ok(FieldDecl { name, ty, span })
+        // `:= e`: the field's default. Unambiguous here, as at a parameter:
+        // nothing else follows a field's type with `:=`.
+        let default = if name.is_some() && matches!(self.peek(), TokKind::ColonEq) {
+            self.bump();
+            Some(Box::new(self.expr()?))
+        } else { None };
+        let span = start.join(default.as_ref().map_or(ty.span, |e| e.span));
+        Ok(FieldDecl { name, ty, default, span })
     }
 
     fn decl(&mut self) -> R<Decl> {

@@ -368,3 +368,78 @@ theorem t(): k(1, 2, a := 3) = 1 { refl }
 ");
     assert!(e.contains("more arguments") || e.contains("given twice"), "{e}");
 }
+
+// -- field defaults (§9.5) ---------------------------------------------------
+
+/// A record whose second field has a default: positional arguments fill the
+/// field without one, and the default fills the other. The result is the
+/// same term as the full spelling, which overrides the default.
+#[test]
+fn a_defaulted_field_has_no_positional_slot() {
+    ok("
+record Pinned { value: Nat, same: value = value := refl }
+fn short() -> Pinned { Pinned(5) }
+fn named() -> Pinned { Pinned(value := 5) }
+fn literal() -> Pinned { Pinned { value: 5 } }
+theorem short_is_full(): short() = Pinned(5, refl) { refl }
+theorem named_is_full(): named() = Pinned(5, refl) { refl }
+theorem literal_is_full(): literal() = Pinned(5, refl) { refl }
+theorem overridden(): Pinned(value := 5, same := refl) = Pinned(5, refl) { refl }
+");
+}
+
+/// A default that does not prove the field's type here is refused at the
+/// construction, naming the field and the way out. (A default the
+/// elaborator leaves to the kernel, such as `refl`, is still refused at the
+/// record: issues/field-defaults-under-locals.md's log.)
+#[test]
+fn a_default_that_fails_is_refused_at_the_construction() {
+    let error = bad("
+inductive Yes { Holds }
+inductive No { Fails }
+fn IsZero(n: Nat) -> Type { match n { Zero => Yes, Succ(_) => No } }
+record Zeroed { value: Nat, zero: IsZero(value) := Holds }
+fn fine() -> Zeroed { Zeroed(0) }
+fn wrong() -> Zeroed { Zeroed(5) }
+");
+    assert!(error.contains("`zero` was left to its default") && error.contains("zero := "), "{error}");
+}
+
+/// Under local bindings the default does not run yet
+/// (issues/field-defaults-under-locals.md); naming the field still works.
+#[test]
+fn a_default_under_locals_asks_for_the_field() {
+    let error = bad("
+record Pinned { value: Nat, same: value = value := refl }
+fn local(k: Nat) -> Pinned { Pinned(k) }
+");
+    assert!(error.contains("under local bindings"), "{error}");
+    ok("
+record Pinned { value: Nat, same: value = value := refl }
+fn local(k: Nat) -> Pinned { Pinned(k, same := refl) }
+");
+}
+
+/// A default's names resolve where the record was declared, not where it is
+/// constructed: the user module's own `witness` does not change it.
+#[test]
+fn a_default_resolves_in_the_declaring_module() {
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    let declaring = "fn witness() -> Nat { 0 }\nrecord Holder { value: Nat, extra: Nat := witness() }";
+    e.elab_module_source("declaring", declaring).unwrap_or_else(|err| panic!("{}", err.render(declaring)));
+    let user = "import declaring::{Holder};\nfn witness() -> Nat { 1 }\nfn built() -> Holder { Holder(5) }\ntheorem extra_is_zero(): built().extra = 0 { refl }";
+    e.elab_module_source("user", user).unwrap_or_else(|err| panic!("{}", err.render(user)));
+}
+
+/// Only a record's fields take a default, and positional arguments past the
+/// fields without one are refused rather than read as the defaulted ones.
+#[test]
+fn defaults_are_a_records_and_positional_overflow_is_refused() {
+    let error = bad("inductive Box { Make(x: Nat := 0) }");
+    assert!(error.contains("only a record's fields take a default"), "{error}");
+    let error = bad("
+record Three { a: Nat, b: Nat := 0, c: Nat }
+fn two() -> Three { Three(1, 2, 3, 4) }
+");
+    assert!(error.contains("by position"), "{error}");
+}
