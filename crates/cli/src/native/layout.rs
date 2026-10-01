@@ -137,7 +137,6 @@ impl Layout {
             Part::Label(_) => None,
         }).collect()
     }
-    pub(super) fn spelled(&self, prefix: &str) -> Vec<String> { self.spelled_with(prefix, &[]) }
 
     /// A mutation for the controls: `jump` lands on `to` instead.
     #[cfg(test)]
@@ -176,6 +175,6 @@ mod tests {
         assert_eq!(read(3, 6), code.len() as i64);
         assert_eq!(read(10, 5), 0);
         assert_eq!(read(15, 6), 15);
-        assert_eq!(layout.spelled("p"), ["p_a_written()", "p_ahead_written()", "p_b_written()", "p_back_written()", "p_stay_written()"]);
+        assert_eq!(layout.spelled_with("p", &[]), ["p_a_written()", "p_ahead_written()", "p_b_written()", "p_back_written()", "p_stay_written()"]);
     }
 }

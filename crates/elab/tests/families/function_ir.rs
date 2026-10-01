@@ -31,18 +31,16 @@ mod function_ir_loop;
 mod function_ir_loop_trace;
 #[path = "../read_loop_process.rs"]
 mod read_loop_process;
-#[path = "../read_state_process.rs"]
-mod read_state_process;
 #[path = "../field_line_format.rs"]
 mod field_line_format;
 #[path = "../field_line_high_format.rs"]
 mod field_line_high_format;
-#[path = "../count_print_process.rs"]
-mod count_print_process;
 #[path = "../read_fields_process.rs"]
 mod read_fields_process;
-#[path = "../read_map_process.rs"]
-mod read_map_process;
+#[path = "../read_filter_process.rs"]
+mod read_filter_process;
+#[path = "../filter_step_generation.rs"]
+mod filter_step_generation;
 #[path = "../read_print_process.rs"]
 mod read_print_process;
 #[path = "../linux_determinism.rs"]

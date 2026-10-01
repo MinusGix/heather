@@ -1,8 +1,9 @@
 //! `tr a-z A-Z`, built as a certified executable that reads stdin a page at a
 //! time, maps each chunk in place through its byte map and writes it before
-//! the next read (docs/native-tr-design.md). The output is compared with the
-//! input mapped and, where the host has one, with `LC_ALL=C tr a-z A-Z`
-//! reading the same input.
+//! the next read (docs/native-tr-design.md, docs/native-stream-filter-design.md:
+//! a stream filter that keeps nothing). The output is compared with the input
+//! mapped and, where the host has one, with `LC_ALL=C tr a-z A-Z` reading the
+//! same input.
 #![cfg(all(target_arch = "x86_64", target_os = "linux"))]
 use std::io::{Read, Write};
 use std::path::Path;
@@ -11,7 +12,7 @@ use std::process::{Command, Output, Stdio};
 mod native_support;
 use native_support::*;
 
-// A byte map is all a build names.
+// The program's bundle is all a build names.
 fn build(directory: &Path, function: &str, extra: &[&str]) -> Output { build_x86(directory, &example("tr"), function, extra, "tr") }
 
 fn upcase(input: &[u8]) -> Vec<u8> { input.iter().map(|b| b.to_ascii_uppercase()).collect() }
@@ -61,13 +62,13 @@ fn streams(executable: &Path) -> (Vec<u8>, Output) {
     (early, child.wait_with_output().unwrap())
 }
 
-// A function of one argument that is not a byte map, and a byte map given
-// `--arg`s (a function of two arguments), are refused before anything is
-// certified, and nothing is published. Then the program itself, run.
+// A byte map named on its own (not a program), and a program given `--arg`s
+// (a function of two arguments), are refused before anything is certified,
+// and nothing is published. Then the program itself, run.
 #[test]
 fn tr_maps_stdin_to_stdout() {
     let directory = scratch("tr");
-    for (function, extra, reason) in [("lower_byte", &[][..], "is not a byte map"), ("upcase", &["--arg", "1"][..], "two --arg values")] {
+    for (function, extra, reason) in [("upcase", &[][..], "is not a Filter program"), ("tr_program", &["--arg", "1"][..], "two --arg values")] {
         let output = build(&directory, function, extra);
         assert!(!output.status.success(), "{function} {extra:?} was certified");
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -75,11 +76,11 @@ fn tr_maps_stdin_to_stdout() {
         assert!(!directory.join("tr").exists() && !directory.join("tr.certificate.hthr").exists());
     }
 
-    let output = build(&directory, "upcase", &[]);
+    let output = build(&directory, "tr_program", &[]);
     assert!(output.status.success(), "build-x86 {}: {}", output.status, String::from_utf8_lossy(&output.stderr));
     let executable = directory.join("tr");
     let certificate = std::fs::read_to_string(directory.join("tr.certificate.hthr")).unwrap();
-    for claim in ["_runs(", "_runs_every(", "_sends(", "read_map_runs(", "_code_written(", "_file_correct("] {
+    for claim in ["_runs(", "_runs_every(", "_sends(", "read_filter_runs(", "filter_quiet_tail(", "_code_written(", "_file_correct("] {
         assert!(certificate.contains(claim), "missing {claim}");
     }
     let mut compared = 0;

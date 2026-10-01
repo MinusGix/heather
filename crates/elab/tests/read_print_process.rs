@@ -3,7 +3,6 @@ use crate::read_loop_fixture::checker;
 // A process of its own: each refusal re-checks the print pieces and what
 // stands on them.
 const READ_PIECES: &str = include_str!("../../../lib/elf64_read_pieces.hthr");
-const STATE: &str = include_str!("../../../lib/elf64_read_state.hthr");
 const PRINT: &str = include_str!("../../../lib/elf64_print_pieces.hthr");
 const BV_OMEGA: &str = include_str!("../../../lib/std/bitvec/bitvec_omega.hthr");
 const DECIMAL: &str = include_str!("../../../lib/decimal_line.hthr");
@@ -22,7 +21,7 @@ const COUNT: &str = include_str!("../../../lib/elf64_count_print.hthr");
 #[test]
 fn slow_acceptance_read_print_refusals() {
     let mut elab = checker();
-    for (name, source) in [("elf64_read_pieces", READ_PIECES), ("elf64_read_state", STATE), ("bitvec_omega", BV_OMEGA), ("decimal_line", DECIMAL)] {
+    for (name, source) in [("elf64_read_pieces", READ_PIECES), ("bitvec_omega", BV_OMEGA), ("decimal_line", DECIMAL)] {
         elab.elab_module_source(name, source).unwrap_or_else(|e| panic!("{name}: {}", e.render(source)));
     }
     let library = elab.semantic_image();

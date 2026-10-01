@@ -85,12 +85,12 @@ def showcase(name):
 # with these arguments instead of `check`; everything else about the entry
 # (modes, cache, `--timings`, the report) is the same.
 X86_CERTIFICATE = ("examples/x86-native/reused_callee.hthr", [])
-# The `wc` program as `native_wc` builds it: the read loop, the three counts'
-# field formatters (docs/structured-lowering-code-size-design.md §8) and the
-# stores, each certified.
+# The `wc` program as `native_wc` builds it: a stream filter's step, the three
+# counts' field formatters (docs/structured-lowering-code-size-design.md §8)
+# and the stores, each certified.
 WC_BUILD = ("examples/x86-native/wc.hthr", [])
-# `wc -l` as `native_read_loop` builds it with --print: the count loop and
-# decimal_line's formatter.
+# `wc -l` as `native_read_loop` builds it: a stream filter's counting step and
+# decimal_line's formatter (docs/native-stream-filter-design.md).
 WC_L_BUILD = ("examples/x86-native/wc_l.hthr", [])
 BUILD_X86 = {
     X86_CERTIFICATE[0]: ["caller", "--callee", "leaf", "--arg", "21", "--arg", "1"],
@@ -98,7 +98,7 @@ BUILD_X86 = {
     # R6), so their certificates' items are `wc_program_native_*` and
     # `wc_l_program_native_*` from then on.
     WC_BUILD[0]: ["wc_program"],
-    WC_L_BUILD[0]: ["wc_l_program", "--print"],
+    WC_L_BUILD[0]: ["wc_l_program"],
 }
 
 # The corpus: (path, search dirs). `quick` is the inner-loop set; `full` is

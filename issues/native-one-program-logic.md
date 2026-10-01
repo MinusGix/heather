@@ -39,3 +39,7 @@ interaction tree t" comes out later as a lemma, not a re-founding. Questions:
   IR customer and does not decide it.
 - **[[native-loop-emitting-stores]]** owns the stream-filter program shape,
   whose `stdout = spec(stdin)` claim this logic must reproduce.
+
+## Log
+
+- 2026-10-01: The stream filter landed (docs/native-stream-filter-design.md): its claim is read_filter_runs over filter_events, and filter_prints says stdout is spec(stdin) — the observable this logic must reproduce.

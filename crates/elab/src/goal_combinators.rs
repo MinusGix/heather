@@ -454,7 +454,23 @@ pub(crate) fn simplify_goal(elab: &Elaborator, cx: &Cx, expected: &Type) -> Type
                     return term(elab, cx, &reduced, budget);
                 }
                 if let Term::Fst { pair, .. } | Term::FstAt { pair } | Term::Snd { pair, .. } | Term::SndAt { pair } = &mut output {
-                    *pair = Rc::new(term(elab, cx, pair, budget));
+                    // A field of a definition that unfolds to a constructor
+                    // (`counting(g)(s, b).next` is `Filtered(g(s, b), None).next`):
+                    // unfold the receiver as far as the constructor, and no
+                    // further, so the field reads as what was put there.
+                    if let Ok(unfolded) = elab.goal_oracle().bounded(64).whnf_term(&cx.gamma, pair)
+                        && matches!(unfolded, Term::Pair { .. } | Term::PairAt { .. })
+                    {
+                        *pair = Rc::new(unfolded);
+                        if let Ok(reduced) = elab.goal_oracle().bounded(64).whnf_term_opaque(&cx.gamma, &output)
+                            && reduced != *input
+                        {
+                            return term(elab, cx, &reduced, budget);
+                        }
+                    }
+                    if let Term::Fst { pair, .. } | Term::FstAt { pair } | Term::Snd { pair, .. } | Term::SndAt { pair } = &mut output {
+                        *pair = Rc::new(term(elab, cx, pair, budget));
+                    }
                 }
             }
             Term::Case { .. } | Term::ElimNat { .. } => {

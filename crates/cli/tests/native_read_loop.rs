@@ -1,9 +1,8 @@
 //! The first program with input: `wc -l` built as a certified executable that
 //! reads stdin to its end (docs/native-first-program-design.md,
-//! docs/native-read-until-eof-design.md) with no toolchain on PATH, then run
-//! on files and on pipes written in bursts. The status and the printed line
-//! are compared with the newline count of the whole input, as the certificate
-//! states it.
+//! docs/native-stream-filter-design.md) with no toolchain on PATH, then run
+//! on files and on pipes written in bursts. The printed line is compared with
+//! the newline count of the whole input, as the certificate states it.
 #![cfg(all(target_arch = "x86_64", target_os = "linux"))]
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -39,46 +38,20 @@ fn inputs() -> Vec<Vec<u8>> {
 // What `wc -l` prints: every newline, however many reads it took.
 fn newlines(input: &[u8]) -> usize { input.iter().filter(|&&b| b == b'\n').count() }
 
-// The status: the count's low byte.
-fn expected(input: &[u8]) -> i32 { (newlines(input) % 256) as i32 }
-
 const BURSTS: &[&[u8]] = &[b"one\ntw", b"o\n", b"", b"three", b"\n\n"];
 
-#[test]
-fn wc_l_counts_every_line() {
-    let directory = scratch("read-loop");
-    let output = build(&directory, &example("wc_l"), &[]);
-    assert!(output.status.success(), "build-x86 {}: {}", output.status, String::from_utf8_lossy(&output.stderr));
-    let executable = directory.join("wc_l");
-    let certificate = std::fs::read_to_string(directory.join("wc_l.certificate.hthr")).unwrap();
-    for claim in ["_runs(", "_runs_every(", "_written(", "_file_correct(", "_code_written(", "read_count_runs("] {
-        assert!(certificate.contains(claim), "missing {claim}");
-    }
-    for (index, input) in inputs().iter().enumerate() {
-        let path = directory.join(format!("input-{index}"));
-        std::fs::write(&path, input).unwrap();
-        let status = Command::new(&executable).stdin(std::fs::File::open(&path).unwrap()).status().unwrap();
-        assert_eq!(status.code(), Some(expected(input)), "input {index} ({} bytes)", input.len());
-    }
-    assert_eq!(bursts(&executable, BURSTS).status.code(), Some(4));
-    assert_eq!(unreadable_stdin(&executable).status.code(), Some(1));
-    std::fs::remove_dir_all(directory).unwrap();
-}
-
 // An author's mistakes are refused at the author's source, by the check of
-// the program's bundle, and nothing is published: a specification its fact
-// is not about (`count_lines_input` is about newlines, not the length), and
-// an `advances` given by hand that is about something else than the step.
+// the program's bundle, and nothing is published: a finish its fact is not
+// about (`wc_l_prints` prints the count, not one more), and an `advances`
+// given by hand that is about something else than the step.
 // (A step its default cannot show is refused at the construction:
 // named_arguments's `a_default_that_fails_is_refused_at_the_construction`.)
 #[test]
 fn a_program_that_is_wrong_is_refused_at_its_source() {
     let directory = scratch("read-loop-refused");
     for (fact, edits) in [
-        ("count_lines_input", &[("fn wc_l_program() → CountProgram(line_step, wc_l)",
-            "fn wc_l_program() → CountProgram(line_step, λ bytes => bytes.len())")][..]),
-        ("advances", &[("CountProgram(count_lines_input)",
-            "CountProgram(count_lines_input, advances := λ count byte => Nat::le_refl(Succ(count)))")][..]),
+        ("wc_l_prints", &[("[λ c => c], Line(λ c => c), wc_l_out) {", "[λ c => c], Line(λ c => Succ(c)), wc_l_out) {")][..]),
+        ("advances", &[("Filter(wc_l_prints)", "Filter(wc_l_prints, advances := λ count byte => Nat::le_refl(Succ(count)))")][..]),
     ] {
         let source = mistaken(&directory, "wc_l", edits);
         let output = build(&directory, &source, &[]);
@@ -88,18 +61,17 @@ fn a_program_that_is_wrong_is_refused_at_its_source() {
     std::fs::remove_dir_all(directory).unwrap();
 }
 
-// With `--print`, the count is the output: its decimal digits and a newline
-// on stdout, as `decimal_line(wc_l(eof_input(chunks)))` states it, and the
-// exit is 0; a failed read or write exits 1.
+// The count is the output: its decimal digits and a newline on stdout, as
+// `wc_l_out` states it, and the exit is 0; a failed read or write exits 1.
 #[test]
 fn wc_l_prints_every_line() {
     let directory = scratch("read-print");
-    let output = build(&directory, &example("wc_l"), &["--print"]);
+    let output = build(&directory, &example("wc_l"), &[]);
     assert!(output.status.success(), "build-x86 {}: {}", output.status, String::from_utf8_lossy(&output.stderr));
     let executable = directory.join("wc_l");
     let certificate = std::fs::read_to_string(directory.join("wc_l.certificate.hthr")).unwrap();
     assert!(!certificate.contains("Nat::le_antisym"), "size equality must use refl");
-    for claim in ["_runs(", "_runs_every(", "write_events(", "decimal_line(", "_code_written(", "_file_correct(", "read_count_print_runs("] {
+    for claim in ["_runs(", "_runs_every(", "_sends(", "write_events(", "filter_line_tail(", "_code_written(", "_file_correct(", "read_filter_runs("] {
         assert!(certificate.contains(claim), "missing {claim}");
     }
     for (index, input) in inputs().iter().enumerate() {

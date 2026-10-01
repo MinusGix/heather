@@ -283,24 +283,46 @@ fn stitch(text: &str) -> String {
 }
 
 // A loop over a record state (docs/native-wc-design.md §4): `wc`'s step over
-// { lines, words, bytes, inside }, from the program itself. The fields sit in
-// registers of their own and one iteration updates them in place, one at a
-// time. The program imports `omega` and `bitvec_omega`, which the caller
-// supplies.
-pub(crate) const WC_SOURCE: &str = include_str!("../../../examples/x86-native/wc.hthr");
-// The bundles the program is written as; they import `omega`, which the
-// caller supplies too.
-pub(crate) const READ_PROGRAM: &str = include_str!("../../../lib/read_program.hthr");
+// { lines, words, bytes, inside }, as examples/x86-native/wc.hthr writes it.
+// The fields sit in registers of their own and one iteration updates them in
+// place, one at a time. The step's growth is shown by case analysis, then
+// `omega`, which the caller supplies.
+pub(crate) const WC_SOURCE: &str = "import function_ir_loop; import bitvec; import bool; import list; import logic; import nat; import omega;
+record WcState { lines: Nat, words: Nat, bytes: Nat, inside: Bool }
+fn newline_byte(b: BitVec(8)) → Bool {
+    match b.unsigned_lt_bit(BitVec::ofNat(10)) { True => False, False => b.unsigned_lt_bit(BitVec::ofNat(11)) }
+}
+fn space_byte(b: BitVec(8)) → Bool {
+    match b.unsigned_lt_bit(BitVec::ofNat(14)) {
+        True => match b.unsigned_lt_bit(BitVec::ofNat(9)) { True => False, False => True },
+        False => match b.unsigned_lt_bit(BitVec::ofNat(32)) { True => False, False => b.unsigned_lt_bit(BitVec::ofNat(33)) },
+    }
+}
+fn wc_step(s: WcState, byte: BitVec(8)) → WcState {
+    match space_byte(byte) {
+        True => match newline_byte(byte) {
+            True => WcState(Succ(s.lines), s.words, Succ(s.bytes), False),
+            False => WcState(s.lines, s.words, Succ(s.bytes), False),
+        },
+        False => match s.inside {
+            True => WcState(s.lines, s.words, Succ(s.bytes), True),
+            False => WcState(s.lines, Succ(s.words), Succ(s.bytes), True),
+        },
+    }
+}
+theorem wc_step_advances(s: WcState, byte: BitVec(8)): counts_advance<WcState>([λ s => s.lines, λ s => s.words, λ s => s.bytes])(wc_step(s, byte), s) {
+    split_all; all_goals { omega }
+}";
 const WC_CONTEXT: &str = "import function_ir_loop; import function_ir_loop_x86; import wc; import bitvec; import bool; import logic; import nat;
 fn count_wc(buffer: ReadonlyBytes, needle: BitVec(8), budget: Nat, cursor: Nat, carry: WcState) → LoopOutcome<WcState> {
     bounded_readonly<WcState>(buffer, needle, budget, cursor, carry, fold_body<WcState>(wc_step))
 }
-// The program's `advances` at the loop body's shape, as the producer states it.
+// The step's growth at the loop body's shape.
 theorem wc_advances(): (needle: BitVec(8)) → (cursor: Nat) → (byte: BitVec(8)) → (s: WcState) →
     (loop_step_payload(fold_body<WcState>(wc_step)(needle, cursor, byte, s)).lines <= Succ(s.lines)) ∧
     ((loop_step_payload(fold_body<WcState>(wc_step)(needle, cursor, byte, s)).words <= Succ(s.words)) ∧
         (loop_step_payload(fold_body<WcState>(wc_step)(needle, cursor, byte, s)).bytes <= Succ(s.bytes))) {
-    λ needle cursor byte s => wc_program().advances(s, byte)
+    λ needle cursor byte s => wc_step_advances(s, byte)
 }";
 
 pub(crate) fn wc_placement() -> NativeLoopPlacement {
@@ -322,10 +344,9 @@ fn record_state_loop_certificate_checks() {
     wc_record_loop(&mut elab);
 }
 
-// The program as module `wc`, its record loop generated and checked as
+// The step as module `wc`, its record loop generated and checked as
 // `wc_pieces` and `wc_native`.
 pub(crate) fn wc_record_loop(elab: &mut heather_elab::Elaborator) {
-    elab.elab_module_source("read_program", READ_PROGRAM).unwrap_or_else(|e| panic!("{}", e.render(READ_PROGRAM)));
     elab.elab_module_source("wc", WC_SOURCE).unwrap_or_else(|e| panic!("{}", e.render(WC_SOURCE)));
     // The step as the loop over one chunk, as the read profile's producer
     // writes it beside a program (`count_wc`).

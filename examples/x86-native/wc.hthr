@@ -1,17 +1,20 @@
-// `wc`, as a certified static executable (docs/native-wc-design.md): lines,
-// words and bytes of stdin, printed as GNU prints them on a pipe. The program
-// is the step below, folded over each chunk the reads of stdin return until
-// the empty one, its state kept in registers across the reads; the process
-// then prints the first three fields as a `%7d %7d %7d` line. What the counts
-// mean is stated the way a reader would check them: the newlines, the
-// non-empty pieces of the input split at whitespace, and the length.
-// `count_wc_input` proves the fold from the zero state computes all three,
-// and `wc_program` at the end is the program; that each count grows by at
-// most one per byte is the program's default.
+// `wc`, as a certified static executable (docs/native-wc-design.md,
+// docs/native-stream-filter-design.md): lines, words and bytes of stdin,
+// printed as GNU prints them on a pipe. The program is a stream filter whose
+// step below counts and emits nothing, its state kept in registers across
+// the reads, and whose finish prints the first three fields as a
+// `%7d %7d %7d` line. What the counts mean is stated the way a reader would
+// check them: the newlines, the non-empty pieces of the input split at
+// whitespace, and the length. `count_wc_input` proves the fold from the zero
+// state computes all three, `wc_prints` that stdout is their line, and
+// `wc_program` at the end is the program; that each count grows by at most
+// one per byte is the program's default.
 //
 //     heather build-x86 examples/x86-native/wc.hthr wc_program -o wc
 import function_ir_loop;
-import read_program;
+import filter_program;
+import stream_filter;
+import field_line;
 import bitvec;
 import bool;
 import list;
@@ -289,10 +292,29 @@ theorem count_wc_input(bytes: List<BitVec(8)>):
     ⟨omega, ⟨omega, omega⟩⟩
 }
 
-// The program: the step, the zero state, its counts in order, and what the
-// three printed mean; with the facts above. `heather build-x86` builds it by
-// this name.
-fn wc_program() → FieldsProgram<WcState>(wc_step, WcState(0, 0, 0, False),
-    [λ s => s.lines, λ s => s.words, λ s => s.bytes], wc_lines, wc_words, wc_bytes) {
-    FieldsProgram(count_wc_input)
+// What `wc` prints: the three counts as GNU prints them on a pipe.
+fn wc_out(bytes: List<BitVec(8)>) → List<BitVec(8)> { three_fields_line(wc_lines(bytes), wc_words(bytes), wc_bytes(bytes)) }
+
+// What the program prints is that line: the fold from the zero state counts
+// what the specifications say.
+theorem wc_prints(bytes: List<BitVec(8)>): wc_out(bytes) = filter_output(counting(wc_step), WcState(0, 0, 0, False),
+    Fields(λ s => s.lines, λ s => s.words, λ s => s.bytes), bytes) {
+    let folded = fold_bytes(wc_step, bytes, WcState(0, 0, 0, False));
+    let counted = count_wc_input(bytes);
+    let lines = j(counted.left, λ n _ => three_fields_line(wc_lines(bytes), wc_words(bytes), wc_bytes(bytes)) =
+        three_fields_line(n, wc_words(bytes), wc_bytes(bytes)), refl);
+    let words = j(counted.right.left, λ n _ => three_fields_line(folded.lines, wc_words(bytes), wc_bytes(bytes)) =
+        three_fields_line(folded.lines, n, wc_bytes(bytes)), refl);
+    let all = j(counted.right.right, λ n _ => three_fields_line(folded.lines, folded.words, wc_bytes(bytes)) =
+        three_fields_line(folded.lines, folded.words, n), refl);
+    trans(lines, trans(words, trans(all, sym(counting_output(wc_step, WcState(0, 0, 0, False),
+        Fields(λ s => s.lines, λ s => s.words, λ s => s.bytes), bytes)))))
+}
+
+// The program: the step, the zero state, its counts in order, the line it
+// prints, and what stdout is; that each count grows by at most one per byte
+// is the program's default. `heather build-x86` builds it by this name.
+fn wc_program() → Filter<WcState>(counting(wc_step), WcState(0, 0, 0, False), [λ s => s.lines, λ s => s.words, λ s => s.bytes],
+    Fields(λ s => s.lines, λ s => s.words, λ s => s.bytes), wc_out) {
+    Filter(wc_prints)
 }

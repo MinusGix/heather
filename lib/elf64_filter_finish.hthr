@@ -1,0 +1,69 @@
+// A stream filter's finishes and what its stdout is
+// (docs/native-stream-filter-design.md §2.2, §4.1): the library's printing
+// tails placed after the filter's process (elf64_read_filter), each at the
+// program's state registers, and the fact that ties the run's stdout to the
+// program's `spec`. A module of its own so the process does not import the
+// formatters.
+import elf64_read_filter;
+import filter_program;
+import stream_filter;
+import elf64_count_print;
+import elf64_read_fields;
+import elf64_write_loop;
+import elf64_print_pieces;
+import elf64_read_pieces;
+import elf64_io;
+import decimal_line;
+import field_line;
+import linux_x86_64_io;
+import x86_64;
+import x86_64_fetch;
+import x86_64_fetched_code;
+import x86_64_structured_block;
+import x86_64_layout;
+import bitvec;
+import bitvec_nat;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+
+// The count tail's length over open parts: the formatter's three words by
+// their own lemmas, never by their encodings.
+theorem count_tail_code_len(word, start, length: StructuredCode, pj: PrintJumps, word_len, start_len, length_len: Nat,
+    word_is: structured_bytes(word).len() = word_len, start_is: structured_bytes(start).len() = start_len,
+    length_is: structured_bytes(length).len() = length_len):
+    count_tail(word, start, length, pj).len() = layout_end(0, count_tail_lens(word_len, start_len, length_len)) + write_loop_len() {
+    layout_len(count_tail_parts(word, start, length), write_loop_code(pj), count_tail_lens(word_len, start_len, length_len),
+        count_tail_measured(word, start, length, word_len, start_len, length_len, word_is, start_is, length_is), write_loop_len(),
+        write_loop_code_len(pj))
+}
+
+// One count printed: it is in R13 as its word.
+fn LineWord<C>(rep: Gprs → C → Type, count: C → Nat) → Type {
+    (gprs: Gprs) → (s: C) → rep(gprs, s) → read_gpr(R13, gprs) = bitvec_nat::word_of_nat(64, count(s))
+}
+theorem filter_line_tail<C>(shape: FilterShape<C>, count: C → Nat, word: LineWord(shape.rep, count), file: List<BitVec(8)>, at: Nat,
+    codes: PrintCodes, format: PrintFormat(codes), pj: PrintJumps, print_facts: PrintJumpFacts(pj),
+    resident: (page: Nat → BitVec(8)) → CodeResident(io_fetch_access(), IoMemory(file, page), count_tail(codes.word, codes.start, codes.length, pj), eof_rip(at)),
+    total: C, small: count(total) < 10000, ending: WriteEnding, ending_ok: WriteEndingOk(ending), steps: List<WriteStep>,
+    steps_ok: WriteSteps(steps)(decimal_line(count(total)))):
+    EofTail(file, at, shape.rep, total, write_events(decimal_line(count(total)), steps, ending)) {
+    λ page state at_done in_page placed =>
+        count_tail_runs(file, at, λ g n => read_gpr(R13, g) = bitvec_nat::word_of_nat(64, n), λ g n held => held, codes, format, pj, resident,
+            write_targets(ct_write(at, codes.word, codes.start, codes.length), pj, print_facts),
+            count(total), small, ending, ending_ok, steps, steps_ok)(page, state, at_done, in_page, word(state.gprs, total, placed))
+}
+
+// What the program says stdout is: on a run that ends at the empty read and
+// whose finish sent its bytes, stdout received `spec` of stdin.
+theorem filter_prints<C>(shape: FilterShape<C>, finish: Finish<C>, spec: List<BitVec(8)> → List<BitVec(8)>,
+    computes: (bytes: List<BitVec(8)>) → spec(bytes) = filter_output(shape.step, shape.init, finish, bytes),
+    tail: List<LinuxEvent>, steps: List<EofStep<List<WriteStep>>>, ok: FilterSteps(shape, steps),
+    finished: sent_to(BitVec::ofNat(1), tail) = finish_bytes(finish, filter_state(shape.step, eof_input(steps), shape.init))):
+    sent_to(BitVec::ofNat(1), filter_events(shape, steps, AtEnd, tail)) = spec(eof_input(steps)) {
+    trans(filter_sends(shape, tail, steps, ok),
+        trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ t => filter_emitted(shape.step, eof_input(steps), shape.init) ++ t, finished),
+            sym(computes(eof_input(steps)))))
+}

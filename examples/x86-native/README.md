@@ -234,141 +234,84 @@ using two distinct words in a 24-byte frame that preserves call alignment. Run i
 saved word through writes to the other slot and the child return word, and
 protects the parent return word.
 
-## A program with input: `wc -l`
+## Programs with input: stream filters
 
-`wc_l.hthr` is a whole program. It reads stdin a page at a time, counts each
-chunk's newlines with a certified loop into a running total kept in R13 across
-the reads, stops at the empty read (end of file), and exits with the total. A read interrupted by a
-signal (EINTR) is retried; any other failed read exits with status 1.
+Every program that reads stdin is a stream filter
+(docs/native-stream-filter-design.md). It has a step, which takes a state and a
+byte and gives the next state and the byte it emits, if any. It has an initial
+state, and a finish that prints from the final state after end of file. The
+process around it is the library's (`lib/elf64_read_filter.hthr`). The process
+reads a page, runs the step over each byte of the chunk with the state in R13,
+R14, R15 and R8, stores what each byte emits behind the read cursor in the
+same page, writes the chunk's output if there is any, and reads again until
+the empty read. Then it runs the finish. A read or write interrupted by a
+signal (EINTR) is retried; any other failure exits with status 1.
 
 ```sh
 cargo build --release -p heather-cli
-(ulimit -v 8388608 -t 900 -c 0; target/release/heather build-x86 \
-  examples/x86-native/wc_l.hthr wc_l_program -o target/x86-native/wc_l \
-  --cache-dir target/native-images)
-printf 'one\ntwo\nthree\n' | ./target/x86-native/wc_l; echo $?
+for p in wc_l:wc_l_program wc:wc_program tr:tr_program tr_s:tr_s_program tr_d:tr_d_program; do
+  (ulimit -v 8388608 -t 900 -c 0; target/release/heather build-x86 \
+    examples/x86-native/${p%%:*}.hthr ${p##*:} -o target/x86-native/${p%%:*} \
+    --cache-dir target/native-images)
+done
+printf 'one\ntwo\nthree\n' | ./target/x86-native/wc_l      # 3
+printf 'one two\nthree\n' | ./target/x86-native/wc          #       2       3      14
+printf 'Hello, world!\n' | ./target/x86-native/tr            # HELLO, WORLD!
+printf 'a\n\n\nb\n' | ./target/x86-native/tr_s              # a, b on two lines
+printf 'a\r\nb\r\n' | ./target/x86-native/tr_d              # a, b, no carriage returns
 ```
 
-Expected output: `3`.
+A program is a `Filter` bundle (`lib/filter_program.hthr`). Its type names the
+step, the initial state, the state's Nat fields (`counts`), the finish, and
+`spec`, which is all of stdout as an ordinary Heather function of stdin. Its
+value is the fact `spec(bytes) = filter_output(step, init, finish, bytes)`.
+That each count grows by at most one per byte is the bundle's `advances`
+field, shown by default (case analysis, then `omega`). A step the default
+cannot show gets an error naming the case left, and `advances := …` by hand.
+The file is checked as a whole, so a program whose facts don't fit its step is
+refused at its own source, before anything is generated.
 
-The program is the bundle `wc_l_program`, a `CountProgram` (lib/function_ir_loop.hthr):
-its type names the step and the specification, `CountProgram(line_step, wc_l)`,
-and its value is the facts below. The step has its own type, the next count
-from a count and a byte (`line_step(count: Nat, byte: BitVec(8)) → Nat`); the
-library makes it the loop's body (`fold_body`). It is checked with the rest of
-the file, so a program whose facts don't fit its step is refused at
-`wc_l.hthr`, before anything is generated. What is built follows from the
-bundle's type; there are no flags per program.
+- `wc_l.hthr` is `wc -l`: `counting(line_step)` over a `Nat`, finishing with
+  `Line`, which prints the count as a decimal line.
+- `wc.hthr` is `wc`: `counting(wc_step)` over `WcState { lines, words, bytes,
+  inside }`, finishing with `Fields`, which prints the first three fields as
+  GNU `wc` prints them on a pipe (`%7d %7d %7d`). The state stays in
+  registers across the reads, so a word split between two reads is counted
+  once. What the counts mean is stated as a reader checks it: `wc_lines`
+  counts the newlines, `wc_words` the non-empty pieces of the input cut at
+  every whitespace byte (the C locale's POSIX set), and `wc_bytes` the
+  length.
+- `tr.hthr` is `tr a-z A-Z`: `mapping(upcase)`, which keeps nothing between
+  bytes and emits each byte's image.
+- `tr_s.hthr` is `tr -s '\n'`: its state is whether the last byte was a
+  newline, and a newline after a newline emits nothing, across reads too.
+- `tr_d.hthr` is `tr -d '\r'`: a `Stateless` step that emits every byte but a
+  carriage return.
 
-The certificate's `wc_l_program_native_runs` states the whole process against
-the source. For every way the reads may split stdin into non-empty chunks,
-with EINTRs anywhere between them, and ending at the empty read or at a
-failed read, the written file has a run that reads them all and exits with
-`wc_l` of their concatenation (the parent sees the low eight bits), or with 1
-after the failure; `wc_l_program_native_runs_every` adds that every run with
-those answers from Linux is that run. `wc_l` is an ordinary Heather function;
-the program supplies it, the counting step, and two facts about the step
-alone: it grows by at most one per byte, which the bundle's `advances` field
-shows by default (case analysis, then `omega`; a step it cannot show gets an
-error naming the case left, and `advances := …` by hand), and folded over the
-input from zero it is `wc_l` (`count_lines_input`, about the plain left fold
-`fold_bytes`). Buffers, chunks and
-everything machine-shaped come from the shared generators and the library's
-process theorem (`lib/elf64_read_state.hthr`, the same process `wc` runs on,
-with a Nat state; the read's pieces are `lib/elf64_read_pieces.hthr`'s;
-[its design](../../docs/native-read-until-eof-design.md), and
-[the fold contract](../../docs/native-wc-design.md) §3).
+The certificate's `{name}_native_runs` covers every history of reads and
+writes, interleaved:
+- chunks and EINTRs on the read;
+- each chunk's short writes and EINTRs (a chunk that emitted nothing makes no
+  write);
+- the finish's own writes.
 
-The trace (`lib/linux_x86_64_io.hthr`) records each syscall with Linux's
-response: a read returns bytes or fails with an errno, and a write sends some
-prefix of what it asked or fails. A failed read may leave anything in the
-buffer. Read, write and exit are the only syscalls with rules
-(`issues/linux-syscall-trace-model.md`, `docs/native-syscall-failures-design.md`).
-The claims cover inputs shorter than 2^64 − 4096 bytes, so no count wraps.
+It ends at the empty read (exit 0), or at a failed read or write (exit 1).
+`{name}_native_runs_every` adds that every run with those answers from Linux
+is that run. `{name}_native_sends` shows that on a run that ends well, stdout
+receives exactly `spec(stdin)`. A program with counts is covered for inputs
+shorter than 2^64 − 4096 bytes, so no count wraps; one without counts (`tr`)
+has no bound on its input. The finishes' lines cover counts below 10000 (a
+decimal line) and 10^7 (three fields).
 
-### Printing the count
-
-Add `--print` (and a fresh output path) and the program prints the count
-instead of exiting with it:
-
-```sh
-(ulimit -v 12582912 -t 3600 -c 0; target/release/heather build-x86 \
-  examples/x86-native/wc_l.hthr wc_l_program --print \
-  -o target/x86-native/wc_l_print --cache-dir target/native-images)
-printf 'one\ntwo\nthree\n' | ./target/x86-native/wc_l_print
-```
-
-Expected output: `3`, and exit status 0.
-
-The certificate's `wc_l_program_native_runs` now ends the trace with the write
-loop's events, `write_events(decimal_line(n), writes, written)` for the total
-`n`, for inputs with fewer than 10000 lines. It covers every way the writes
-may return. Short writes resume after what was sent, EINTR retries, and any
-other failure exits 1; a finished loop exits 0. `prints_the_line` shows that
-on a run that ends well, stdout receives exactly `decimal_line(n)`. `decimal_line(n)` is `decimal(n) ++ [newline]`,
-and `decimal` is an ordinary function: the digits of `n / 10`, then `n % 10`.
-The line is computed by code the native compiler generates from
-`lib/decimal_line.hthr`'s source functions. The machine has no divide or
-multiply, so they use a restoring chain of subtract-if-fits steps. The
-library proves that for every count below 10000 the stored word holds exactly
-that line past its leading zeros. The word is stored with a `mov [r8], rax`
-(`lib/std/arch/x86_64/x86_64_store.hthr`) and written with `write(1, …)`
-(`lib/elf64_print_pieces.hthr`); the tail that runs them after the read is
-`lib/elf64_count_print.hthr`.
-
-## `wc`: lines, words and bytes
-
-`wc.hthr` is plain `wc` (docs/native-wc-design.md). Its step folds a record,
-`WcState { lines, words, bytes, inside }`, over each chunk; the state stays in
-R13, R14, R15 and R8 across the reads, so a word split between two reads is
-counted once. At the end the program prints the first three fields as GNU
-`wc` prints them on a pipe, seven columns each:
-
-```sh
-(ulimit -v 8388608 -t 3600 -c 0; target/release/heather build-x86 \
-  examples/x86-native/wc.hthr wc_program -o target/x86-native/wc \
-  --cache-dir target/native-images)
-printf 'one two\nthree\n' | ./target/x86-native/wc
-```
-
-Expected output: `      2       3      14`, and exit status 0.
-
-`wc_program` is a `FieldsProgram`: its type names the step (`wc_step(s:
-WcState, byte: BitVec(8)) → WcState`), the zero state, the state's counts (its
-Nat fields, in order) and the three specifications printed, in order; each
-count's growth by at most one per byte is the bundle's default, as for
-`wc -l`. What they mean is
-stated as a reader checks it: `wc_lines` counts the newlines, `wc_words` the
-non-empty pieces of the input cut at every whitespace byte (the C locale's
-POSIX set, as `POSIXLY_CORRECT` has it), and `wc_bytes` the length.
-`count_wc_input` proves the fold from the zero state computes them. The
-certificate's `wc_program_native_runs` ends the trace with
-`write_events(three_fields_line(wc_lines(input), wc_words(input), wc_bytes(input)), …)`
-for counts below 10^7. The program may import the bundled proof library by
-its bundled names (here `bitvec_omega`), which need not exist as files.
-
-## `tr a-z A-Z`: writing after every chunk
-
-`tr.hthr` is `tr a-z A-Z` (docs/native-tr-design.md). The program is one byte
-map, `upcase`, an ordinary Heather function the compiler lowers. The process
-around it is the library's: read a page, map each byte of the chunk in place,
-write the chunk, and read again, until the empty read.
-
-```sh
-(ulimit -v 8388608 -t 900 -c 0; target/release/heather build-x86 \
-  examples/x86-native/tr.hthr upcase -o target/x86-native/tr \
-  --cache-dir target/native-images)
-printf 'Hello, world!\n' | ./target/x86-native/tr
-```
-
-Expected output: `HELLO, WORLD!`, and exit status 0.
-
-A function `BitVec(8) → BitVec(8)` is built as a byte map. The certificate's
-`upcase_native_runs` covers every history of reads and writes, interleaved:
-chunks and EINTRs on the read, and each chunk's short writes and EINTRs. The
-run ends at the empty read (exit 0), or at a failed read or write (exit 1).
-`upcase_native_sends` shows that on a run that ends well, stdout receives the
-input with `upcase` applied to every byte. Nothing is carried across chunks,
-so unlike `wc` the claim has no bound on the input. The byte is stored with a
-`mov [rsi], dl` (`ByteStore`), and the process and its proof are
-`lib/elf64_read_map.hthr`.
+The step is compiled by the native compiler from the program's source
+(`crates/elab/src/function_ir_source/filter_step.rs`) into one straight-line
+piece. Its certificate is `lib/filter_step_piece.hthr`'s `StepPiece`: the next
+state in place, whether the byte emits in RBX, and the byte in RDX. The store
+is `mov [rdi], dl`, made whether or not the byte emits; the write cursor
+advances by the flag and never passes the byte just read. The trace
+(`lib/linux_x86_64_io.hthr`) records each syscall with Linux's response. Read,
+write and exit are the only syscalls with rules
+(`issues/linux-syscall-trace-model.md`). The printed line is computed by code
+the native compiler generates from `lib/decimal_line.hthr`'s and
+`lib/field_line.hthr`'s source functions. The machine has no divide or
+multiply, so they use restoring chains of subtract-if-fits steps.

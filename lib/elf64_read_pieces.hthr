@@ -1,18 +1,16 @@
 // The read profile's pieces (docs/native-read-until-eof-design.md): the
 // blocks that read stdin a page at a time, test what the read returned, retry
-// at EINTR and exit, the jumps between them, and the facts about one read and
-// one chunk's entry that elf64_read_state's process is built from. A failed
-// read (docs/native-syscall-failures-design.md) is retried when it is EINTR
-// and otherwise exits with status 1. `ReadEofComputes` is what a counting
-// program proves: its specification is its step folded from zero
-// (docs/native-wc-design.md §3). The process that counted into R11 and saved
-// the total to R13 between reads lived here until 2026-09-29, when this module
-// was elf64_read_loop; `wc -l` now runs on elf64_read_state with its count in
-// R13 (docs/native-wc-design.md §9).
-// Since 2026-09-30 (docs/native-architecture-review.md R1) the read head
-// (read, TEST, JZ, JS) and the failure tail (EINTR retries, else exit 1) are
-// proved here once, each at any offset, with a lemma per way through it; the
-// state and map processes and the write loop place and use them.
+// at EINTR and exit, the jumps between them, the facts about one read and
+// one chunk's entry, and the read-until-end-of-file driver every process is
+// an instance of (docs/native-architecture-review.md R3). A failed read
+// (docs/native-syscall-failures-design.md) is retried when it is EINTR and
+// otherwise exits with status 1. The read head (read, TEST, JZ, JS) and the
+// failure tail (EINTR retries, else exit 1) are proved here once, each at any
+// offset, with a lemma per way through it (R1); the stream filter's process
+// (elf64_read_filter, docs/native-stream-filter-design.md) and the write loop
+// place and use them. The state processes of wc -l and wc and tr's map
+// process lived beside it until 2026-10-01, when the stream filter replaced
+// them.
 import elf64_io;
 import linux_x86_64_entry;
 import linux_x86_64_io;
@@ -45,8 +43,6 @@ fn read_entry_block() → List<Instruction> {
      MovRI(Rdx, BitVec::ofNat(read_capacity()))]
 }
 fn eof_test_block() → List<Instruction> { [TestRR(Rax, Rax)] }
-// exit(total).
-fn eof_exit_block() → List<Instruction> { [MovRR(Rdi, R13), MovRI(Rax, BitVec::ofNat(60))] }
 // A failed read: RAX + 4 is zero exactly at -EINTR, which retries the read;
 // anything else is exit(1). RBX is free between reads.
 fn eof_retry_block() → List<Instruction> { [MovRI(Rbx, BitVec::ofNat(4)), AddRR(Rax, Rbx)] }
@@ -54,7 +50,6 @@ fn eof_fail_block() → List<Instruction> { [MovRI(Rdi, BitVec::ofNat(1)), MovRI
 
 fn read_entry_len() → Nat { canonical_block_bytes(read_entry_block()).len() }
 fn eof_test_len() → Nat { canonical_block_bytes(eof_test_block()).len() }
-fn eof_exit_len() → Nat { canonical_block_bytes(eof_exit_block()).len() }
 fn eof_retry_len() → Nat { canonical_block_bytes(eof_retry_block()).len() }
 fn eof_fail_len() → Nat { canonical_block_bytes(eof_fail_block()).len() }
 
@@ -72,18 +67,8 @@ theorem len_app_is<A>(xs: List<A>, {ys: List<A>}, {m, n: Nat}, hx: xs.len() = m,
 // path, JMP back after a chunk, JZ back to the read after EINTR.
 record EofJumps { ed: BitVec(32), sd: BitVec(32), bd: BitVec(32), rd: BitVec(32) }
 
-fn eof_exit_code() → List<BitVec(8)> { canonical_block_bytes(eof_exit_block()) ++ syscall_bytes() }
-
 // A piece's address, from its offset from the entry.
 fn eof_rip(at: Nat) → BitVec(64) { next_rip(io_entry(), at) }
-
-// What a program proves (docs/native-wc-design.md §3): its specification is
-// its step folded over the input from zero. With a step that folds
-// (LoopFolds) and grows by at most one per byte (LoopAdvancesByAtMostOne),
-// the chunks compose by `step_fold_append`, whatever the reads return.
-fn ReadEofComputes(region: ReadonlyLoop<Nat>, needle: BitVec(8), spec: List<BitVec(8)> → Nat) → Type {
-    (bytes: List<BitVec(8)>) → spec(bytes) = step_fold(region, needle, bytes, 0)
-}
 
 theorem eof_test_clear(returned: MachineState<IoMemory>, n: Nat, below: n < Nat::pow(2, 64), some: 0 < n,
     length_word: read_gpr(Rax, returned.gprs) = bitvec_nat::word_of_nat(64, n)):
@@ -615,11 +600,11 @@ fn EofBody<X>(file: List<BitVec(8)>, ar: Nat, inv: List<BitVec(8)> → Gprs → 
     read_gpr(Rax, state.gprs) = bitvec_nat::word_of_nat(64, bytes.len()) → inv(seen, state.gprs) →
     (after: List<LinuxEvent>) → EofNext(file, ar, inv, seen ++ bytes, after) → LinuxRuns(io_linux(), body(seen, bytes, x, after), state)
 }
-// A chunk the body ends the run in.
-fn EofBodyEnds<Y>(file: List<BitVec(8)>, ar: Nat, inv: List<BitVec(8)> → Gprs → Type,
+// A chunk the body ends the run in, read after all of the input.
+fn EofBodyEnds<Y>(file: List<BitVec(8)>, ar: Nat, inv: List<BitVec(8)> → Gprs → Type, input: List<BitVec(8)>,
     ok: List<BitVec(8)> → List<BitVec(8)> → Y → Type, ended: List<BitVec(8)> → List<BitVec(8)> → Y → List<LinuxEvent>) → Type {
     (page: Nat → BitVec(8)) → (seen, bytes: List<BitVec(8)>) → (y: Y) →
-    0 < bytes.len() → bytes.len() <= read_capacity() → ok(seen, bytes, y) →
+    0 < bytes.len() → bytes.len() <= read_capacity() → ok(seen, bytes, y) → seen = input →
     (state: MachineState<IoMemory>) → state.rip = eof_rip(rh_at_end(ar)) → state.memory = io_store_offset(IoMemory(file, page), 0, bytes) →
     read_gpr(Rax, state.gprs) = bitvec_nat::word_of_nat(64, bytes.len()) → inv(seen, state.gprs) → LinuxRuns(io_linux(), ended(seen, bytes, y), state)
 }
@@ -636,7 +621,7 @@ record EofProcess<X, Y>(file: List<BitVec(8)>, ar, done: Nat, inv: List<BitVec(8
     ended_ok: List<BitVec(8)> → List<BitVec(8)> → Y → Type, ended: List<BitVec(8)> → List<BitVec(8)> → Y → List<LinuxEvent>, tail: List<LinuxEvent>) {
     framed: (seen: List<BitVec(8)>) → (before, after: Gprs) → ReadKept(after, before) → inv(seen, before) → inv(seen, after),
     chunk: EofBody<X>(file, ar, inv, input, ok, body),
-    ends: EofBodyEnds<Y>(file, ar, inv, ended_ok, ended),
+    ends: EofBodyEnds<Y>(file, ar, inv, input, ended_ok, ended),
     at_end: EofAtEnd(file, done, inv, input, tail),
 }
 
@@ -696,7 +681,7 @@ theorem eof_from<X, Y>(file: List<BitVec(8)>, ar, af, done: Nat, ed, sd, rd: Bit
                             let going = head_going(returned, ed, sd);
                             linux_runs_after_steps(io_linux(), ended(seen, bytes, y), returned, going, entered.steps,
                                 process.ends(page, seen, bytes, y, bad.left, bad.right.left,
-                                    j(sym(all), λ s _ => ended_ok(s, bytes, y), bad.right.right), going, entered.rip_is,
+                                    j(sym(all), λ s _ => ended_ok(s, bytes, y), bad.right.right), all, going, entered.rip_is,
                                     entered.memory_is, refl, process.framed(seen, state.gprs, going.gprs,
                                         ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, refl⟩⟩⟩⟩⟩⟩⟩⟩, held)))
                         }),

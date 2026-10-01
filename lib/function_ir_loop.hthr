@@ -369,28 +369,6 @@ fn counts_advance<C>(counts: List<C → Nat>) → C → C → Type {
 // counts, such as a record's Nat fields: each grows by at most one per byte.
 // For one count that is the state, `[λ count => count]`, it is
 // `LoopAdvancesByAtMostOne`.
-fn LoopCountsAdvance<C>(region: ReadonlyLoop<C>, counts: List<C → Nat>) → Type {
-    (needle: BitVec(8)) → (cursor: Nat) → (byte: BitVec(8)) → (carry: C) →
-        counts_advance(counts)(loop_step_payload(region.body(needle, cursor, byte, carry)), carry)
-}
-
-// Each of `specs` is the count beside it of `state`, from the front, one
-// conjunct per spec, right-nested.
-fn specs_counted<C>(specs: List<List<BitVec(8)> → Nat>) → List<C → Nat> → List<BitVec(8)> → C → Type {
-    match specs {
-        Nil => λ counts bytes state => True,
-        Cons(spec, more) => λ counts bytes state => match counts {
-            Nil => False,
-            Cons(count, rest) => match more {
-                Nil => spec(bytes) = count(state),
-                Cons(_, _) => (spec(bytes) = count(state)) ∧ specs_counted<C>(more)(rest, bytes, state),
-            },
-        },
-    }
-}
-fn SpecsCounted<C>(specs: List<List<BitVec(8)> → Nat>, counts: List<C → Nat>, bytes: List<BitVec(8)>, state: C) → Type {
-    specs_counted<C>(specs)(counts, bytes, state)
-}
 
 // A step at its own type: the next state from the state and a byte. The
 // loop body it makes ignores the needle and the cursor and always continues,

@@ -1,0 +1,49 @@
+// `tr -d '\r'`, as a certified static executable
+// (docs/native-stream-filter-design.md): stdin to stdout with every carriage
+// return removed. The program is `tr_d_program` at the end: a step that keeps
+// nothing between bytes, and what stdout is, `stripped`.
+//
+//     heather build-x86 examples/x86-native/tr_d.hthr tr_d_program -o tr_d
+import filter_program;
+import stream_filter;
+import bitvec;
+import bool;
+import list;
+import logic;
+import option;
+
+// A carriage return: byte 13.
+fn carriage_return(b: BitVec(8)) → Bool {
+    match b.unsigned_lt_bit(BitVec::ofNat(13)) { True => False, False => b.unsigned_lt_bit(BitVec::ofNat(14)) }
+}
+
+// What stdout is: the input less its carriage returns.
+fn stripped(bytes: List<BitVec(8)>) → List<BitVec(8)> {
+    match bytes {
+        Nil => Nil,
+        Cons(b, rest) => match carriage_return(b) { True => stripped(rest), False => Cons(b, stripped(rest)) },
+    }
+}
+
+// The step: a carriage return emits nothing, any other byte itself.
+fn strip_step(s: Stateless, b: BitVec(8)) → Filtered<Stateless> {
+    match carriage_return(b) { True => Filtered(s, None), False => Filtered(s, Some(b)) }
+}
+
+theorem strip_emits(bytes: List<BitVec(8)>): (s: Stateless) → stripped(bytes) = filter_emitted(strip_step, bytes, s) {
+    match bytes {
+        Nil => λ s => refl,
+        Cons(b, rest) => λ s => match carriage_return(b) as λ cr =>
+                match cr { True => stripped(rest), False => Cons(b, stripped(rest)) } =
+                emitted_byte(match cr { True => Filtered(s, None), False => Filtered(s, Some(b)) }.emit) ++
+                filter_emitted(strip_step, rest, match cr { True => Filtered(s, None), False => Filtered(s, Some(b)) }.next) {
+            True => strip_emits(rest, s),
+            False => cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ t => Cons(b, t), strip_emits(rest, s)),
+        },
+    }
+}
+
+// The program. `heather build-x86` builds it by this name.
+fn tr_d_program() → Filter<Stateless>(strip_step, Stateless(), Nil, Quiet, stripped) {
+    Filter(λ bytes => trans(strip_emits(bytes, Stateless()), sym(List::append_nil(filter_emitted(strip_step, bytes, Stateless())))))
+}

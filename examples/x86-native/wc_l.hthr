@@ -1,16 +1,17 @@
-// `wc -l`, as a certified static executable (docs/native-first-program-design.md,
-// docs/native-read-until-eof-design.md). The program is `wc_l_program` at
-// the end: the step `line_step`, folded over each chunk the reads of stdin
-// return until the empty one, and what its count means, `wc_l`. The process
-// exits with (or, with `--print`, prints) the total. Its facts are about its
-// step alone (docs/native-wc-design.md §3): it grows by at most one per byte
-// (checked by the program's default), and folded over the input from zero it
-// is `wc_l` (`count_lines_input`). Buffers, chunks and machines are the
-// library's.
+// `wc -l`, as a certified static executable (docs/native-stream-filter-design.md):
+// the newlines of stdin, printed as a decimal line. The program is
+// `wc_l_program` at the end: a stream filter whose step `line_step` counts
+// and emits nothing, and whose finish prints the count, with what stdout is,
+// `wc_l_out`. Its facts are about its step alone (docs/native-wc-design.md
+// §3): the count grows by at most one per byte (the program's default), and
+// folded over the input from zero it is `wc_l` (`count_lines_input`).
+// Reading, writing and the claim are the library's.
 //
-//     heather build-x86 examples/x86-native/wc_l.hthr wc_l_program --print -o wc_l
+//     heather build-x86 examples/x86-native/wc_l.hthr wc_l_program -o wc_l
 import function_ir_loop;
-import read_program;
+import filter_program;
+import stream_filter;
+import decimal_line;
 import bitvec;
 import bool;
 import list;
@@ -53,9 +54,16 @@ theorem count_lines_input(bytes: List<BitVec(8)>): wc_l(bytes) = fold_bytes(line
     omega
 }
 
-// The program: the step and what its count means, with the fact above; that
-// the count grows by at most one per byte is the program's default.
-// `heather build-x86` builds it by this name.
-fn wc_l_program() → CountProgram(line_step, wc_l) {
-    CountProgram(count_lines_input)
+// What `wc -l` prints: the count as a decimal line.
+fn wc_l_out(bytes: List<BitVec(8)>) → List<BitVec(8)> { decimal_line(wc_l(bytes)) }
+
+theorem wc_l_prints(bytes: List<BitVec(8)>): wc_l_out(bytes) = filter_output(counting(line_step), 0, Line(λ c => c), bytes) {
+    trans(cong_fn<Nat, List<BitVec(8)>>(λ n => decimal_line(n), count_lines_input(bytes)), sym(counting_output(line_step, 0, Line(λ c => c), bytes)))
+}
+
+// The program: the step, its count from zero, the line it prints, and what
+// stdout is; that the count grows by at most one per byte is the program's
+// default. `heather build-x86` builds it by this name.
+fn wc_l_program() → Filter<Nat>(counting(line_step), 0, [λ c => c], Line(λ c => c), wc_l_out) {
+    Filter(wc_l_prints)
 }

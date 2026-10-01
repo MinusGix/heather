@@ -35,7 +35,7 @@ pub struct NativeLoopPlacement {
 /// Fields in an order that writes none back before every other field that
 /// reads it is done. A field reading itself is fine: it is computed before
 /// its own register is written.
-fn write_order(reads: &[Vec<usize>]) -> Result<Vec<usize>, SourceError> {
+pub(super) fn write_order(reads: &[Vec<usize>]) -> Result<Vec<usize>, SourceError> {
     let count = reads.len();
     let mut order = Vec::new();
     let mut done = vec![false; count];
@@ -444,7 +444,7 @@ pub fn generate_elaborated_loop_x86(elaborator: &Elaborator, prefix: &str, sourc
 }
 
 /// One `import m;` per module, first, whatever line the pieces wrote them on.
-fn stitch_imports(text: &str) -> String {
+pub(super) fn stitch_imports(text: &str) -> String {
     let mut imports: Vec<String> = Vec::new();
     let mut body = String::new();
     for line in text.lines() {

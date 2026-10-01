@@ -1,11 +1,11 @@
-// A count read to the end of stdin, then printed (docs/native-first-program-design.md
-// §10, docs/native-wc-design.md §9): the state process of elf64_read_state
-// with a Nat state read in R13 (its `CountWord`, the shape of `wc -l`), and a tail
-// that formats the count with decimal_line's three words, stores it, writes
-// the line through elf64_write_loop and exits 0, or exits 1 at a failure. The
-// formatter's certificates are parameters, as elf64_print_pieces states them.
+// A count printed after end of file (docs/native-first-program-design.md
+// §10, docs/native-stream-filter-design.md §4.1): from a state whose count is
+// in R13 as its word (`CountWord`), a tail that formats the count with
+// decimal_line's three words, stores it, writes the line through
+// elf64_write_loop and exits 0, or exits 1 at a failure. A stream filter's
+// `Line` finish runs it. The formatter's certificates are parameters, as
+// elf64_print_pieces states them.
 import elf64_write_loop;
-import elf64_read_state;
 import elf64_print_pieces;
 import elf64_read_pieces;
 import decimal_line;
@@ -49,30 +49,11 @@ fn count_tail_lens(word_len, start_len, length_len: Nat) → List<Nat> {
 fn count_tail(word, start, length: StructuredCode, pj: PrintJumps) → List<BitVec(8)> {
     layout_code(count_tail_parts(word, start, length), write_loop_code(pj))
 }
-fn read_count_code(needle: BitVec(8), loop_bytes: List<BitVec(8)>, jumps: EofJumps, word, start, length: StructuredCode, pj: PrintJumps)
-    → List<BitVec(8)> {
-    state_code(needle, loop_bytes, jumps, count_tail(word, start, length, pj))
-}
 theorem count_tail_measured(word, start, length: StructuredCode, word_len, start_len, length_len: Nat,
     word_is: structured_bytes(word).len() = word_len, start_is: structured_bytes(start).len() = start_len,
     length_is: structured_bytes(length).len() = length_len):
     LayoutMeasured(count_tail_parts(word, start, length), count_tail_lens(word_len, start_len, length_len)) {
     ⟨refl, ⟨word_is, ⟨start_is, ⟨length_is, ⟨refl, trivial⟩⟩⟩⟩⟩
-}
-
-// The code's length over open parts (state_code_len), the formatter's words
-// measured by their own lemmas.
-theorem read_count_code_len(needle: BitVec(8), loop_bytes: List<BitVec(8)>, jumps: EofJumps, word, start, length: StructuredCode, pj: PrintJumps,
-    loop_len, word_len, start_len, length_len: Nat, loop_is: loop_bytes.len() = loop_len,
-    word_is: structured_bytes(word).len() = word_len, start_is: structured_bytes(start).len() = start_len,
-    length_is: structured_bytes(length).len() = length_len):
-    read_count_code(needle, loop_bytes, jumps, word, start, length, pj).len() =
-        layout_end(0, state_lens(needle, loop_len)) + (layout_end(0, count_tail_lens(word_len, start_len, length_len)) + write_loop_len()) {
-    state_code_len(needle, loop_bytes, jumps, count_tail(word, start, length, pj), loop_len,
-        layout_end(0, count_tail_lens(word_len, start_len, length_len)) + write_loop_len(), loop_is,
-        layout_len(count_tail_parts(word, start, length), write_loop_code(pj), count_tail_lens(word_len, start_len, length_len),
-            count_tail_measured(word, start, length, word_len, start_len, length_len, word_is, start_is, length_is), write_loop_len(),
-            write_loop_code_len(pj)))
 }
 
 // Where each of the tail's pieces starts, for a tail at `at`.
@@ -235,39 +216,4 @@ theorem count_tail_runs(file: List<BitVec(8)>, at: Nat, rep: Gprs → Nat → Ty
                 count_pieces(after_store, at, word, start, length, pj, resident(after_store.page)),
                 targets, ending, ending_ok, steps, steps_ok))
     }
-}
-
-// The printing claim: for every history of reads and writes, a run that
-// reads the input, writes the program's specification of it to stdout as a
-// decimal line and exits 0, or exits 1 at a failure. The line covers counts
-// below 10000.
-theorem read_count_print_runs(file: List<BitVec(8)>, shape: StateShape<Nat>, l: StateLoop<Nat>(shape), spec: List<BitVec(8)> → Nat,
-    computes: ReadEofComputes(shape.region, shape.needle, spec), start: StateStart<Nat>(shape, 0), counted: CountWord(shape.rep),
-    codes: PrintCodes, format: PrintFormat(codes), jumps: EofJumps, facts: StateJumpFacts(shape.needle, shape.bytes, jumps), pj: PrintJumps,
-    print_facts: PrintJumpFacts(pj),
-    resident: (page: Nat → BitVec(8)) → CodeResident(io_fetch_access(), IoMemory(file, page),
-        read_count_code(shape.needle, shape.bytes, jumps, codes.word, codes.start, codes.length, pj), io_entry()),
-    chunks: List<EofStep<True>>, ok: EofChunks(chunks), ending: EofEnd<False>, ending_ok: EofEnding(ending),
-    room: eof_input(chunks).len() + 4096 < Nat::pow(2, 64), small: spec(eof_input(chunks)) < 10000,
-    writes: List<WriteStep>, writes_ok: WriteSteps(writes)(decimal_line(spec(eof_input(chunks)))),
-    written: WriteEnding, written_ok: WriteEndingOk(written),
-    page: Nat → BitVec(8), gprs: Gprs, flags: Flags):
-    LinuxRuns(io_linux(), eof_events(chunks, ending, write_events(decimal_line(spec(eof_input(chunks))), writes, written)),
-        io_initial(file, page, gprs, flags)) {
-    let input = eof_input(chunks);
-    let total = step_fold(shape.region, shape.needle, input, 0);
-    let meant: (spec(input) = total) = computes(input);
-    let tail = count_tail(codes.word, codes.start, codes.length, pj);
-    let at = state_at_done(shape.needle, shape.bytes);
-    let pieces = λ (page: Nat → BitVec(8)) => state_pieces(IoMemory(file, page), shape.needle, shape.bytes, jumps, tail, resident(page));
-    j(sym(meant), λ n _ => LinuxRuns(io_linux(), eof_events(chunks, ending, write_events(decimal_line(n), writes, written)),
-            io_initial(file, page, gprs, flags)),
-        state_start(file, shape, l, 0, start, jumps, state_targets(shape.needle, shape.bytes, jumps, facts),
-            tail, pieces, chunks, ok, ending, ending_ok, room,
-            write_events(decimal_line(total), writes, written),
-            count_tail_runs(file, at, shape.rep, counted, codes, format, pj, λ page => pieces(page).tail_at,
-                write_targets(ct_write(at, codes.word, codes.start, codes.length), pj, print_facts),
-                total, j(meant, λ n _ => n < 10000, small), written, written_ok, writes,
-                j(meant, λ n _ => WriteSteps(writes)(decimal_line(n)), writes_ok)),
-            page, gprs, flags))
 }

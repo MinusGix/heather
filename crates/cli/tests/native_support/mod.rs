@@ -10,7 +10,7 @@
 //! so the runner can schedule them independently (`native_summary` is the
 //! exclusive last target, issues/native-summary-test-cpu-margin.md).
 //! The rest is the stdin programs' (`native_read_loop`, `native_wc`,
-//! `native_tr`): a scratch directory, a build by the program's name, a
+//! `native_tr`, `native_filter`): a scratch directory, a build by the program's name, a
 //! program's source with an author's mistake in it, and the ways its stdin
 //! and stdout are fed and fail.
 #![allow(dead_code)] // each binary uses a different subset

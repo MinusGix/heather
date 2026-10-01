@@ -37,7 +37,7 @@ fn observe_tree(expansion: &mut Expansion<'_>, region: &StructuredRegion, mut va
     observers: &[String], result_type: &str, observation_types: &[String]) -> Result<Observed, SourceError>
 {
     match region {
-        StructuredRegion::Dataflow(body) if expansion.record.is_some() => {
+        StructuredRegion::Dataflow(body) if expansion.record.is_some() || expansion.filtered => {
             expansion.dataflow(body, &mut values)?;
             let components = expansion.components();
             let mut observed = Vec::new();
@@ -120,11 +120,13 @@ fn observe_tree(expansion: &mut Expansion<'_>, region: &StructuredRegion, mut va
             let saved_result = expansion.result;
             let saved_choice = expansion.choice.take();
             let saved_record = expansion.record.take();
+            let saved_filtered = std::mem::take(&mut expansion.filtered);
             expansion.result = if port.width == 1 { StructuredSourceType::Boolean } else { StructuredSourceType::Word(port.width) };
             let result = expansion.region(prefix, values.clone())?;
             expansion.result = saved_result;
             expansion.choice = saved_choice;
             expansion.record = saved_record;
+            expansion.filtered = saved_filtered;
             let result = if port.width == 1 { HeatherExpr::call("bitvec::BitVec::ofBool", [result]) } else { result };
             values.insert(port.id, (port.width, result));
             observe_tree(expansion, continuation, values, observers, result_type, observation_types)
@@ -178,8 +180,8 @@ struct Publication {
 fn publication(elaborator: &Elaborator, prefix: &str, source_name: &str, contract: bool) -> Result<Publication, SourceError> {
     let reflected = reflect_elaborated_structured(elaborator, source_name)?;
     let mut module = Module::default();
-    module.raw(format!("import x86_64_structured_block; import function_ir; import function_ir_x86_support; import x86_64; import x86_64_block; import bitvec; import bool; import list; import logic; import nat;{}",
-        if contract { " import pair;" } else { "" }));
+    module.raw(format!("import x86_64_structured_block; import function_ir; import function_ir_x86_support; import x86_64; import x86_64_block; import bitvec; import bool; import list; import logic; import nat;{}{}",
+        if contract { " import pair;" } else { "" }, if reflected.filtered { " import filter_step_piece;" } else { "" }));
     module.raw(generate_structured_source_expansion(&format!("{prefix}_source"), &reflected)?
         .replace("import bitvec;\n", "").replace("import bool;\n", ""));
     let parameters = reflected.declared_parameters();
@@ -191,8 +193,19 @@ fn publication(elaborator: &Elaborator, prefix: &str, source_name: &str, contrac
     let observers: Vec<_> = ports.iter().map(|port| format!("{prefix}_observe_{}", port.id)).collect();
     let observation_types: Vec<String> = ports.iter().map(|port| if port.width == 1 { "Bool".into() } else { format!("BitVec({})", port.width) }).collect();
     let names = reflected.choice.as_ref().map(|choice| choice.constructors.clone().map(|name| name.rsplit("::").next().unwrap().to_string()));
+    let states = reflected.state_components().len();
     for (i, observer) in observers.iter().enumerate() {
+        // A filter step's ports observe its state's fields, whether it emits
+        // and the byte (filter_step_piece's `emits` and `emit_byte`).
+        let carried = |value: String| if components[i] == StructuredSourceType::NatWord { vector(StructuredSourceType::NatWord, &value) } else { value };
+        let filtered = reflected.filtered.then(|| match (i.checked_sub(states), &reflected.record) {
+            (Some(0), _) => "filter_step_piece::emits(result.emit)".to_string(),
+            (Some(_), _) => "filter_step_piece::emit_byte(result.emit)".to_string(),
+            (None, Some(record)) => carried(format!("result.next.{}", record.fields[i].0)),
+            (None, None) => carried("result.next".into()),
+        });
         let body = match (components.get(i), &names) {
+            _ if filtered.is_some() => filtered.expect("guarded"),
             (Some(ty), _) => {
                 let observe = |value: &str| match ty {
                     StructuredSourceType::Word(1) => bit(value),
@@ -223,7 +236,7 @@ fn publication(elaborator: &Elaborator, prefix: &str, source_name: &str, contrac
     }
     let initial = reflected.initial_values();
     let mut expansion = Expansion { prefix: &format!("{prefix}_publication"), module: &mut module, next_name: 0, parameters: &parameters, arguments: &arguments, result: reflected.result, choice: reflected.choice.as_ref(),
-        record: reflected.record.as_ref(), naturals: natural_inputs(&reflected), constants: BTreeMap::new(), sources: &reflected.sources, tests: Default::default() };
+        record: reflected.record.as_ref(), filtered: reflected.filtered, naturals: natural_inputs(&reflected), constants: BTreeMap::new(), sources: &reflected.sources, tests: Default::default() };
     let observed = observe_tree(&mut expansion, &reflected.region, initial, &observers, &result_type, &observation_types)?;
     let mut cases = "@bitvec::BitVec::zero(width)".to_string();
     for (id, ty) in reflected.parameters.iter().enumerate().rev() {

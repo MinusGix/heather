@@ -152,7 +152,7 @@ fn a_false_claim_over_fields_is_refused_and_names_them() {
 }
 
 /// A goal a definition unfolds to (docs/native-stream-filter-design.md §2.4):
-/// `read_program`'s `advances` default meets `counts_advance` at no count and
+/// `filter_program`'s `advances` default meets `counts_advance` at no count and
 /// at one, which omega reads only once the head is unfolded, stopping at the
 /// relation rather than inside `Le`'s recursor, with the count applied.
 const ADVANCE: &str = "fn advance<C>(counts: List<C → Nat>) → C → C → Type {\n\
@@ -171,5 +171,18 @@ fn a_goal_a_definition_unfolds_to_is_read_unfolded() {
     ok(&format!("{ADVANCE}theorem one(s: WcState, sp: Bool): advance<WcState>([λ t => t.bytes])(wc_next(sp, s), s) {{ \
         match sp as λ b => advance<WcState>([λ t => t.bytes])(wc_next(b, s), s) {{ True => omega, False => omega }} }}"));
     let msg = elab_err(&format!("{ADVANCE}theorem two(s: WcState): advance<WcState>([λ t => t.bytes])(WcState(0, 0, Succ(Succ(s.bytes)), False), s) {{ omega }}"));
+    assert!(msg.contains("got stuck"), "{msg}");
+}
+
+/// A field of a definition that unfolds to a constructor reads as what was
+/// put there (docs/native-stream-filter-design.md §2.4): a counting step's
+/// `.next` is its fold's next count, which `split_all`'s leaf hands omega
+/// instead of a spelling of the projection omega can't re-elaborate.
+#[test]
+fn a_field_of_an_unfolding_definition_is_what_it_holds() {
+    let counting = "record Out { next: Nat, flag: Bool }\n\
+        fn counting(g: Nat → Nat) → Nat → Out { λ s => Out(g(s), False) }\n";
+    ok(&format!("{counting}theorem grows(x: Nat): counting(λ n => Succ(n))(x).next <= Succ(x) {{ split_all; all_goals {{ omega }} }}"));
+    let msg = elab_err(&format!("{counting}theorem leaps(x: Nat): counting(λ n => Succ(Succ(n)))(x).next <= Succ(x) {{ split_all; all_goals {{ omega }} }}"));
     assert!(msg.contains("got stuck"), "{msg}");
 }

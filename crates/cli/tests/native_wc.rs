@@ -1,6 +1,7 @@
 //! `wc`, built as a certified executable that reads stdin to its end with its
 //! state kept in registers across the reads, and prints lines, words and bytes
-//! as GNU `wc` prints them on a pipe (docs/native-wc-design.md). The output is
+//! as GNU `wc` prints them on a pipe (docs/native-wc-design.md,
+//! docs/native-stream-filter-design.md). The output is
 //! compared with the counts of the whole input and, where the host has one,
 //! with `LC_ALL=C POSIXLY_CORRECT=1 wc` reading the same pipe.
 #![cfg(all(target_arch = "x86_64", target_os = "linux"))]
@@ -63,16 +64,17 @@ fn host_wc(input: &[u8]) -> Option<String> {
 // survive the read between.
 const BURSTS: &[&[u8]] = &[b"one tw", b"o\nthr", b"", b"ee  ", b"four\n\n"];
 
-// A program whose printed counts are named in another order than its proof
-// states them, or whose counts are listed in another order than its proof
-// bounds them, is refused at its own source, and nothing is published. Then
-// the program itself, run.
+// A program whose specification prints its counts in another order than its
+// proof states them, or whose finish prints its fields in another order than
+// its proof does, is refused at its own source, and nothing is published.
+// Then the program itself, run.
 #[test]
 fn wc_counts_lines_words_and_bytes() {
     let directory = scratch("wc");
     for edits in [
-        &[("wc_lines, wc_words, wc_bytes) {", "wc_words, wc_lines, wc_bytes) {")][..],
-        &[("[λ s => s.lines, λ s => s.words, λ s => s.bytes]", "[λ s => s.words, λ s => s.lines, λ s => s.bytes]")][..],
+        &[("    Fields(λ s => s.lines, λ s => s.words, λ s => s.bytes), wc_out) {",
+            "    Fields(λ s => s.lines, λ s => s.words, λ s => s.bytes), λ bytes => three_fields_line(wc_words(bytes), wc_lines(bytes), wc_bytes(bytes))) {")][..],
+        &[("    Fields(λ s => s.lines, λ s => s.words, λ s => s.bytes), wc_out) {", "    Fields(λ s => s.words, λ s => s.lines, λ s => s.bytes), wc_out) {")][..],
     ] {
         let source = mistaken(&directory, "wc", edits);
         assert_refused_at(&build(&directory, &source), &source, &[directory.join("wc"), directory.join("wc.certificate.hthr")]);
@@ -83,7 +85,7 @@ fn wc_counts_lines_words_and_bytes() {
     let executable = directory.join("wc");
     let certificate = std::fs::read_to_string(directory.join("wc.certificate.hthr")).unwrap();
     assert!(!directory.join("wc.certificate.unchecked.hthr").exists(), "the refused build's unchecked copy is replaced, then removed");
-    for claim in ["_runs(", "_runs_every(", "three_fields_line(", "_code_written(", "_file_correct("] {
+    for claim in ["_runs(", "_runs_every(", "_sends(", "fields_tail_runs(", "read_filter_runs(", "_code_written(", "_file_correct("] {
         assert!(certificate.contains(claim), "missing {claim}");
     }
     let mut compared = 0;

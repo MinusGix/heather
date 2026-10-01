@@ -1,6 +1,6 @@
 ---
 title: Fold programs still carry the search loop's needle through the process
-status: open
+status: closed
 labels: [native,x86,cleanup]
 created: 2026-10-01
 updated: 2026-10-01
@@ -21,3 +21,7 @@ full-step path kept only for search loops (`Break`) that do read it. Five
 bytes per executable and a parameter on every claim. Worth doing when the
 next process is designed (the stream filter of [[native-loop-emitting-stores]])
 rather than as a refactor on its own.
+
+## Log
+
+- 2026-10-01: Closed by deletion (docs/native-stream-filter-design.md): every read-profile program is now a stream filter, whose process (elf64_read_filter) has no needle register, and the state process that carried it is gone.

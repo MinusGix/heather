@@ -123,6 +123,9 @@ fn WlThen(memory: IoMemory, at: Nat, after: List<LinuxEvent>,
     LinuxRuns(io_linux(), write_events_then(bytes, steps, ending, after), state)
 }
 
+// A run that ends in a failed write: the writes before it, and the errno.
+record WriteFailure { writes: List<WriteStep>, errno: Nat }
+
 // What runs once all is sent: from `done`, with the memory the loop wrote from
 // and the registers it keeps as `origin`'s.
 fn WriteThen(memory: IoMemory, done: Nat, after: List<LinuxEvent>, origin: Gprs) → Type {

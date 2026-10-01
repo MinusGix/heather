@@ -1,16 +1,16 @@
-// The read-until-end-of-file process that prints three counts in GNU `wc`'s
-// pipe format (docs/native-wc-design.md §5): elf64_read_state folds stdin into
-// a state whose first three registers hold the counts; this tail formats each
-// count as seven right-aligned columns and a separator (field_line's two
-// words, stored four bytes apart), writes the 24-byte line to stdout through
-// elf64_write_loop and exits 0, or exits 1 at a failure. As in the process
-// it extends, nothing here is about one program: the state, its loop and its
-// facts are parameters, and so are the formatter's two certificates, which
-// the producer generates from field_line's source functions. The profile
+// Three counts printed in GNU `wc`'s pipe format after end of file
+// (docs/native-wc-design.md §5, docs/native-stream-filter-design.md §4.1):
+// from a state whose first three registers hold the counts, this tail
+// formats each count as seven right-aligned columns and a separator
+// (field_line's two words, stored four bytes apart), writes the 24-byte line
+// to stdout through elf64_write_loop and exits 0, or exits 1 at a failure. A
+// stream filter's `Fields` finish runs it. Nothing here is about one
+// program: the state's placement is a parameter, and so are the formatter's
+// two certificates, which the producer generates from field_line's source
+// functions. The profile
 // fixes their registers: the count in R11, the high word's tail in R10, each
 // word to RAX, stored through R9.
 import elf64_write_loop;
-import elf64_read_state;
 import elf64_print_pieces;
 import elf64_read_pieces;
 import field_line;
@@ -70,18 +70,15 @@ fn fields_tail(low, high: StructuredCode, pj: PrintJumps) → List<BitVec(8)> {
     field_code(R13, 0, 32, low, high, field_code(R14, 8, 32, low, high, field_code(R15, 16, 10, low, high,
         canonical_block_bytes(fields_line_block()) ++ write_loop_code(pj))))
 }
-fn read_fields_code(needle: BitVec(8), loop_bytes: List<BitVec(8)>, jumps: EofJumps, low, high: StructuredCode, pj: PrintJumps) → List<BitVec(8)> {
-    state_code(needle, loop_bytes, jumps, fields_tail(low, high, pj))
-}
 theorem field_measured(count: Gpr, offset, separator: Nat, low, high: StructuredCode, low_len, high_len: Nat,
     low_is: structured_bytes(low).len() = low_len, high_is: structured_bytes(high).len() = high_len):
     LayoutMeasured(field_parts(count, offset, separator, low, high), field_lens(count, offset, separator, low_len, high_len)) {
     ⟨refl, ⟨low_is, ⟨refl, ⟨refl, ⟨high_is, ⟨refl, ⟨refl, trivial⟩⟩⟩⟩⟩⟩⟩
 }
 
-// The code's length from its parts' lengths, over open parts (state_code_len):
-// a certificate measures its loop and formatter by their own lemmas instead
-// of evaluating the encodings.
+// The code's length from its parts' lengths, over open parts: a certificate
+// measures the formatter by its own lemmas instead of evaluating the
+// encodings.
 fn field_len(count: Gpr, offset, separator, low_len, high_len, rest_len: Nat) → Nat {
     layout_end(0, field_lens(count, offset, separator, low_len, high_len)) + rest_len
 }
@@ -106,16 +103,6 @@ theorem fields_tail_code_len(low, high: StructuredCode, pj: PrintJumps, low_len,
         low_len, high_len, field_len(R15, 16, 10, low_len, high_len, line_len), low_is, high_is, third);
     field_code_len(R13, 0, 32, low, high, field_code(R14, 8, 32, low, high, field_code(R15, 16, 10, low, high, line ++ write_loop_code(pj))),
         low_len, high_len, field_len(R14, 8, 32, low_len, high_len, field_len(R15, 16, 10, low_len, high_len, line_len)), low_is, high_is, second)
-}
-fn read_fields_len(needle: BitVec(8), loop_len, low_len, high_len: Nat) → Nat {
-    layout_end(0, state_lens(needle, loop_len)) + fields_tail_len(low_len, high_len)
-}
-theorem read_fields_code_len(needle: BitVec(8), loop_bytes: List<BitVec(8)>, jumps: EofJumps, low, high: StructuredCode, pj: PrintJumps,
-    loop_len, low_len, high_len: Nat, loop_is: loop_bytes.len() = loop_len,
-    low_is: structured_bytes(low).len() = low_len, high_is: structured_bytes(high).len() = high_len):
-    read_fields_code(needle, loop_bytes, jumps, low, high, pj).len() = read_fields_len(needle, loop_len, low_len, high_len) {
-    state_code_len(needle, loop_bytes, jumps, fields_tail(low, high, pj), loop_len, fields_tail_len(low_len, high_len), loop_is,
-        fields_tail_code_len(low, high, pj, low_len, high_len, low_is, high_is))
 }
 
 // A field's pieces' offsets from the entry, for a field at `at`.
@@ -450,87 +437,4 @@ theorem fields_tail_runs<C>(file: List<BitVec(8)>, at: Nat, rep: Gprs → C → 
 // The line `wc` prints for a state: its three counts.
 fn fields_line<C>(rep: Gprs → C → Type, three: ThreeCounts<C>(rep), total: C) → List<BitVec(8)> {
     three_fields_line(three.first(total), three.second(total), three.third(total))
-}
-
-// The process claim: for every way the reads may split the input into
-// non-empty chunks, with EINTRs between them, ending at the empty read or at
-// a failed read, and every way the writes may return, the file has a run that
-// reads and folds the chunks, then either writes the three counts of the
-// final state to stdout as GNU `wc` prints them on a pipe and exits 0, or
-// exits 1 at the failure. The counts are below 10^7 and the input shorter
-// than 2^64 - 4096 bytes.
-theorem read_fields_runs<C>(file: List<BitVec(8)>, shape: StateShape<C>, l: StateLoop<C>(shape), init: C, start: StateStart<C>(shape, init), three: ThreeCounts<C>(shape.rep),
-    codes: FieldsCodes, format: FieldsFormat(codes), jumps: EofJumps, facts: StateJumpFacts(shape.needle, shape.bytes, jumps), pj: PrintJumps, print_facts: PrintJumpFacts(pj),
-    resident: (page: Nat → BitVec(8)) → CodeResident(io_fetch_access(), IoMemory(file, page),
-        read_fields_code(shape.needle, shape.bytes, jumps, codes.low, codes.high, pj), io_entry()),
-    chunks: List<EofStep<True>>, ok: EofChunks(chunks), ending: EofEnd<False>, ending_ok: EofEnding(ending),
-    room: eof_input(chunks).len() + 4096 < Nat::pow(2, 64),
-    small: (three.first(step_fold(shape.region, shape.needle, eof_input(chunks), init)) < 10000000) ∧
-        ((three.second(step_fold(shape.region, shape.needle, eof_input(chunks), init)) < 10000000) ∧
-        (three.third(step_fold(shape.region, shape.needle, eof_input(chunks), init)) < 10000000)),
-    writes: List<WriteStep>, writes_ok: WriteSteps(writes)(fields_line(shape.rep, three, step_fold(shape.region, shape.needle, eof_input(chunks), init))),
-    written: WriteEnding, written_ok: WriteEndingOk(written),
-    page: Nat → BitVec(8), gprs: Gprs, flags: Flags):
-    LinuxRuns(io_linux(), eof_events(chunks, ending, write_events(fields_line(shape.rep, three, step_fold(shape.region, shape.needle, eof_input(chunks), init)),
-        writes, written)), io_initial(file, page, gprs, flags)) {
-    let total = step_fold(shape.region, shape.needle, eof_input(chunks), init);
-    let tail = fields_tail(codes.low, codes.high, pj);
-    let at = state_at_done(shape.needle, shape.bytes);
-    let pieces = λ (page: Nat → BitVec(8)) => state_pieces(IoMemory(file, page), shape.needle, shape.bytes, jumps, tail, resident(page));
-    state_start(file, shape, l, init, start, jumps, state_targets(shape.needle, shape.bytes, jumps, facts),
-        tail, pieces, chunks, ok, ending, ending_ok, room, write_events(fields_line(shape.rep, three, total), writes, written),
-        fields_tail_runs(file, at, shape.rep, three, codes, format, pj, λ page => pieces(page).tail_at,
-            write_targets(fields_at_write(at, codes.low, codes.high), pj, print_facts),
-            total, small, written, written_ok, writes, writes_ok),
-        page, gprs, flags)
-}
-
-// What a program says its three counts mean: specifications of the input,
-// each its field of the state folded from `init`.
-record ThreeSpecs<C>(shape: StateShape<C>, init: C, three: ThreeCounts<C>(shape.rep)) {
-    first_spec: List<BitVec(8)> → Nat,
-    second_spec: List<BitVec(8)> → Nat,
-    third_spec: List<BitVec(8)> → Nat,
-    computes: (bytes: List<BitVec(8)>) → (first_spec(bytes) = three.first(step_fold(shape.region, shape.needle, bytes, init))) ∧
-        ((second_spec(bytes) = three.second(step_fold(shape.region, shape.needle, bytes, init))) ∧
-        (third_spec(bytes) = three.third(step_fold(shape.region, shape.needle, bytes, init)))),
-}
-fn specs_line<C>(shape: StateShape<C>, init: C, three: ThreeCounts<C>(shape.rep), specs: ThreeSpecs<C>(shape, init, three),
-    bytes: List<BitVec(8)>) → List<BitVec(8)> {
-    three_fields_line(specs.first_spec(bytes), specs.second_spec(bytes), specs.third_spec(bytes))
-}
-
-// The claim over what the counts mean: a program whose specifications are
-// its first three fields folded from `init` prints them.
-theorem read_fields_spec_runs<C>(file: List<BitVec(8)>, shape: StateShape<C>, l: StateLoop<C>(shape), init: C, start: StateStart<C>(shape, init),
-    three: ThreeCounts<C>(shape.rep), specs: ThreeSpecs<C>(shape, init, three),
-    codes: FieldsCodes, format: FieldsFormat(codes), jumps: EofJumps, facts: StateJumpFacts(shape.needle, shape.bytes, jumps), pj: PrintJumps, print_facts: PrintJumpFacts(pj),
-    resident: (page: Nat → BitVec(8)) → CodeResident(io_fetch_access(), IoMemory(file, page),
-        read_fields_code(shape.needle, shape.bytes, jumps, codes.low, codes.high, pj), io_entry()),
-    chunks: List<EofStep<True>>, ok: EofChunks(chunks), ending: EofEnd<False>, ending_ok: EofEnding(ending),
-    room: eof_input(chunks).len() + 4096 < Nat::pow(2, 64),
-    small: (specs.first_spec(eof_input(chunks)) < 10000000) ∧ ((specs.second_spec(eof_input(chunks)) < 10000000) ∧
-        (specs.third_spec(eof_input(chunks)) < 10000000)),
-    writes: List<WriteStep>, writes_ok: WriteSteps(writes)(specs_line(shape, init, three, specs, eof_input(chunks))),
-    written: WriteEnding, written_ok: WriteEndingOk(written),
-    page: Nat → BitVec(8), gprs: Gprs, flags: Flags):
-    LinuxRuns(io_linux(), eof_events(chunks, ending, write_events(specs_line(shape, init, three, specs, eof_input(chunks)), writes, written)),
-        io_initial(file, page, gprs, flags)) {
-    let input = eof_input(chunks);
-    let total = step_fold(shape.region, shape.needle, input, init);
-    let meant = specs.computes(input);
-    let line: (specs_line(shape, init, three, specs, input) = fields_line(shape.rep, three, total)) =
-        j(meant.left, λ a _ => specs_line(shape, init, three, specs, input) = three_fields_line(a, three.second(total), three.third(total)),
-            j(meant.right.left, λ b _ => specs_line(shape, init, three, specs, input) =
-                    three_fields_line(specs.first_spec(input), b, three.third(total)),
-                j(meant.right.right, λ c _ => specs_line(shape, init, three, specs, input) =
-                        three_fields_line(specs.first_spec(input), specs.second_spec(input), c),
-                    refl)));
-    let fold_small: ((three.first(total) < 10000000) ∧ ((three.second(total) < 10000000) ∧ (three.third(total) < 10000000))) =
-        ⟨j(meant.left, λ n _ => n < 10000000, small.left),
-            ⟨j(meant.right.left, λ n _ => n < 10000000, small.right.left), j(meant.right.right, λ n _ => n < 10000000, small.right.right)⟩⟩;
-    j(sym(line), λ printed _ => LinuxRuns(io_linux(), eof_events(chunks, ending, write_events(printed, writes, written)),
-            io_initial(file, page, gprs, flags)),
-        read_fields_runs(file, shape, l, init, start, three, codes, format, jumps, facts, pj, print_facts, resident, chunks, ok, ending, ending_ok, room,
-            fold_small, writes, j(line, λ printed _ => WriteSteps(writes)(printed), writes_ok), written, written_ok, page, gprs, flags))
 }

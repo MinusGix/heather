@@ -88,37 +88,6 @@ pub fn reflect_elaborated_readonly_loop(elaborator: &Elaborator, source: &str)
     Ok(ReflectedReadonlyLoop { source_name, body_name, carry, folds })
 }
 
-/// What a program for the read profile says about itself
-/// (`read_program`'s `CountProgram` and `FieldsProgram`,
-/// docs/native-architecture-review.md R6).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ReadProgramKind {
-    /// One count: the process exits with it or prints it.
-    Count,
-    /// A record state whose first three fields are printed.
-    Fields,
-}
-
-/// A program read off its bundle's type: the step, the byte it is given, and
-/// what its printed counts mean, each by its resolved name.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ReflectedReadProgram {
-    pub name: String,
-    pub kind: ReadProgramKind,
-    pub step: String,
-    pub needle: u8,
-    pub specs: Vec<String>,
-    /// The state: a count, or the `FieldsProgram`'s record.
-    pub carry: LoopCarry,
-}
-
-/// The record a `FieldsProgram`'s step folds: its first parameter's type.
-pub fn reflect_step_record(elaborator: &Elaborator, step: &str) -> Result<super::structured::StructuredSourceRecord, SourceError> {
-    let reflected = super::structured::reflect_elaborated_structured(elaborator, step)?;
-    reflected.signature.first().cloned().flatten()
-        .ok_or_else(|| SourceError::Unsupported("a FieldsProgram's state must be a record of scalar fields".into()))
-}
-
 /// A global byte constant, `BitVec::ofNat(n)` through functions of no
 /// arguments, by name.
 pub fn byte_constant(elaborator: &Elaborator, name: &str) -> Option<u8> {

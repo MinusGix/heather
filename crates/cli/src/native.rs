@@ -19,7 +19,7 @@ mod layout;
 mod order;
 mod read_loop;
 mod read_fields;
-mod read_map;
+mod read_filter;
 
 mod support;
 use support::SUPPORT;
@@ -53,11 +53,11 @@ fn symbol_ok(name: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-/// What `build-x86` makes of a name: a function of two `--arg`s, a byte map
-/// read over stdin (`tr`), or a read-profile program's bundle
-/// (read_program's `CountProgram` or `FieldsProgram`).
+/// What `build-x86` makes of a name: a function of two `--arg`s, or a
+/// program that reads stdin, a stream filter's bundle (filter_program's
+/// `Filter`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Profile { Call, Map, Count, Fields }
+enum Profile { Call, Filter }
 
 /// The profile a name's written declaration asks for, from its return type,
 /// and a bundle's written arguments: they choose the proof library to load,
@@ -86,41 +86,9 @@ fn profile_of(source: &Path, symbol: &str) -> Result<(Profile, Vec<heather_synta
         _ => None,
     };
     Ok(match written {
-        Some(("CountProgram", args)) => (Profile::Count, args.to_vec()),
-        Some(("FieldsProgram", args)) => (Profile::Fields, args.to_vec()),
-        _ if declaration.params.len() == 1 => (Profile::Map, Vec::new()),
-        _ => return Err(format!("`{symbol}` is not a CountProgram, a FieldsProgram or a byte map `(b: BitVec(8)) → BitVec(8)`; \
+        Some(("Filter", args)) => (Profile::Filter, args.to_vec()),
+        _ => return Err(format!("`{symbol}` is not a Filter program; \
             a function of two u64 arguments takes `--arg` twice")),
-    })
-}
-
-/// A bundle's data from its written arguments (`CountProgram(step, spec)`,
-/// `FieldsProgram<C>(step, init, counts, first, second, third)`), each name
-/// resolved where the program's module resolves it. The context module
-/// restates the program's facts over them, so an argument read wrongly is
-/// refused there.
-fn read_program(elab: &Elaborator, root: &str, symbol: &str, fields: bool, args: &[heather_syntax::ast::Expr])
-    -> Result<function_ir_source::ReflectedReadProgram, String>
-{
-    use heather_syntax::ast::ExprKind;
-    let kind = if fields { "FieldsProgram" } else { "CountProgram" };
-    if args.len() != if fields { 6 } else { 2 } { return Err(format!("`{symbol}`: a {kind} takes its data as arguments of its type")); }
-    let resolve = |written: &str| elab.with_module_scope(root, |elab| elab.qualified_global(written)).ok().flatten();
-    let name = |expr: &heather_syntax::ast::Expr, what: &str| match &expr.kind {
-        ExprKind::Var(written) => resolve(written).ok_or_else(|| format!("`{symbol}`'s {what} `{written}` is not a function `{root}` sees")),
-        _ => Err(format!("`{symbol}`'s {what} is written as a function's name")),
-    };
-    let step = name(&args[0], "step")?;
-    let specs = if fields { &args[3..6] } else { &args[1..2] };
-    let specs = specs.iter().map(|spec| name(spec, "specification")).collect::<Result<Vec<_>, _>>()?;
-    let carry = if fields {
-        function_ir_source::LoopCarry::Record(function_ir_source::reflect_step_record(elab, &step).map_err(|e| e.to_string())?)
-    } else { function_ir_source::LoopCarry::Natural };
-    // A fold step reads no needle: the loop's register holds zero.
-    Ok(function_ir_source::ReflectedReadProgram {
-        name: format!("{root}::{symbol}"),
-        kind: if fields { function_ir_source::ReadProgramKind::Fields } else { function_ir_source::ReadProgramKind::Count },
-        step, needle: 0, specs, carry,
     })
 }
 
@@ -131,7 +99,6 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     let mut cache = None;
     let mut callee = None;
     let mut callable_caller = false;
-    let mut print = false;
     let mut timings = None;
     let mut kernel_workers = None;
     let mut search = vec![PathBuf::from("lib/std"), PathBuf::from("lib")];
@@ -139,7 +106,6 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--callable-caller" if executable => { callable_caller = true; }
-            "--print" if executable => { print = true; }
             "--callee" if executable => {
                 callee = Some(args.next().ok_or("--callee needs a source function name")?.clone());
             }
@@ -171,7 +137,7 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     }
     if positional.len() != 2 || output.is_none() {
         if executable {
-            return Err("usage: heather build-x86 <file.hthr> <name> [--arg <u64> --arg <u64> [--callee <function> [--callable-caller]] | --print] -o <executable> [-L <dir>]... [--cache-dir <dir>] [--timings <file.tsv>] [--kernel-workers <n>]".into());
+            return Err("usage: heather build-x86 <file.hthr> <name> [--arg <u64> --arg <u64> [--callee <function> [--callable-caller]]] -o <executable> [-L <dir>]... [--cache-dir <dir>] [--timings <file.tsv>] [--kernel-workers <n>]".into());
         }
         return Err("usage: heather compile-x86 <file.hthr> <function> -o <output.s> [-L <dir>]... [--cache-dir <dir>] [--timings <file.tsv>] [--kernel-workers <n>]".into());
     }
@@ -182,14 +148,10 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     // anything is generated.
     let (profile, written) = if executable && inputs.is_empty() && callee.is_none() { profile_of(Path::new(positional[0]), positional[1])? }
         else { (Profile::Call, Vec::new()) };
-    if print && profile != Profile::Count {
-        return Err("--print prints a CountProgram's count; a FieldsProgram prints its fields, and other builds print nothing".into());
-    }
     if profile == Profile::Call && executable && inputs.len() != 2 {
         return Err("build-x86 needs exactly two --arg values for the source function".into());
     }
-    let (map, fields) = (profile == Profile::Map, profile == Profile::Fields);
-    let read_loop = matches!(profile, Profile::Count | Profile::Fields);
+    let filter = profile == Profile::Filter;
     let source = Path::new(positional[0]);
     let symbol = positional[1];
     if !symbol_ok(symbol) {
@@ -217,14 +179,11 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
             return Err(format!("output already exists: {}", path.display()));
         }
     }
-    // The map profile stands on the read profile's pieces but not its state
-    // process.
-    let read_support = read_loop::SUPPORT.iter().filter(|(name, _)| !map || *name != "elf64_read_state");
-    let bundle: Vec<(&str, &str)> = SUPPORT.iter().chain(read_support.filter(|_| read_loop || map))
-        .chain(if print || fields || map { read_loop::WRITE_SUPPORT } else { &[] })
-        .chain(if map { read_map::SUPPORT } else { &[] })
-        .chain(if print { read_loop::PRINT_SUPPORT } else { &[] })
-        .chain(if fields { read_fields::SUPPORT } else { &[] }).copied().collect();
+    // A program that reads stdin stands on the read profile's pieces, the
+    // write loop, the formatters' tails and the filter's library.
+    let bundle: Vec<(&str, &str)> = SUPPORT.iter()
+        .chain(if filter { [read_loop::SUPPORT, read_loop::WRITE_SUPPORT, read_loop::PRINT_SUPPORT, read_fields::SUPPORT, read_filter::SUPPORT].concat() }
+            else { Vec::new() }.iter()).copied().collect();
     // A program may import the bundled proof library by its bundled names,
     // which need not be files on the search path.
     let bundled: Vec<&str> = bundle.iter().map(|(name, _)| *name).collect();
@@ -317,8 +276,10 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     // program, and they are checked before any of its modules: an image's
     // cache key covers every module checked before it, so a second program
     // replays them instead of re-proving them.
-    let format = if read_loop && (print || fields) {
-        let parts = if fields { read_fields::generate_format(&elab, read_fields::FORMAT_PREFIX)? }
+    let finish = if filter { read_filter::finish_written(&written) } else { None };
+    let (line, three) = (finish == Some(read_filter::Finish::Line), finish == Some(read_filter::Finish::Fields));
+    let format = if line || three {
+        let parts = if three { read_fields::generate_format(&elab, read_fields::FORMAT_PREFIX)? }
             else { read_loop::generate_format(&elab, read_loop::FORMAT_PREFIX)? };
         for part in &parts {
             check_module(&mut elab, &mut session, &loader::Module {
@@ -350,54 +311,27 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
         [input(0).wrapping_add(0x9e37_79b9_7f4a_7c15), input(1).wrapping_add(0x6a09_e667_f3bc_c909)]];
     let mut probes = Some(Vec::new());
     let mut specs: Vec<String> = Vec::new();
-    let (image, body_bytes) = if map {
-        // The byte map's certificate is a module of its own, which the
-        // program's composition imports.
-        let piece = read_map::generate_piece(&elab, &root_name, symbol, &prefix)?;
-        check_module(&mut elab, &mut session, &loader::Module {
-            name: piece.module.clone(), path: PathBuf::from(format!("{}.hthr", piece.module)), src: piece.text.clone(),
-        })?;
-        proof = Module::default();
-        for name in read_map::IMPORTS { proof.raw(format!("import {name};")); }
-        proof.raw(format!("import {root_name}; import {};", piece.module));
-        probes = None;
-        (Some(read_map::certify(&mut proof, &prefix, &root_name, symbol, &piece)?), None)
-    } else if read_loop {
+    let (image, body_bytes) = if filter {
         // The program, read off its bundle's written type, then restated where
-        // the loop generator and the claim read it: a program whose facts are
-        // not what the profile needs is refused there, before any generation.
-        let bundle = read_program(&elab, &root_name, symbol, fields, &written)?;
-        specs = bundle.specs.clone();
-        let program = read_loop::Program { root: &root_name, bundle: &bundle };
+        // the generator and the claim read it: a program whose data are not
+        // what the profile needs is refused there, before any generation.
+        let program = read_filter::read_program(&elab, &root_name, symbol, &written)?;
+        specs = vec![program.spec.clone()];
         let context = format!("{prefix}_context");
         check_module(&mut elab, &mut session, &loader::Module {
-            name: context.clone(), path: PathBuf::from(format!("{context}.hthr")), src: read_loop::context(&prefix, &program),
-        }).map_err(|e| format!("{e}\nnote: `{symbol}`'s facts, as the read profile needs them: its counts are its state's Nat fields \
-            in order, and its state starts at zeros"))?;
-        let record = if fields { Some(read_fields::record(&program)?) } else { None };
-        let emission = read_loop::generate_loop(&elab, &context, &prefix, record.as_ref().map_or(1, |record| record.fields.len()))?;
-        // The loop's pieces are a module of their own, which its composition imports.
-        let pieces = format!("{prefix}_pieces");
-        check_module(&mut elab, &mut session, &loader::Module {
-            name: pieces.clone(), path: PathBuf::from(format!("{pieces}.hthr")), src: emission.pieces.clone(),
-        })?;
-        proof = Module::default();
-        let mut imported = std::collections::BTreeSet::new();
-        let imports = read_loop::IMPORTS.iter().chain(if print { read_loop::PRINT_IMPORTS } else { &[] })
-            .chain(if fields { read_fields::IMPORTS } else { &[] });
-        for name in imports.filter(|name| !emission.text.contains(&format!("import {name};"))) {
-            if imported.insert(*name) { proof.raw(format!("import {name};")); }
+            name: context.clone(), path: PathBuf::from(format!("{context}.hthr")), src: read_filter::context(&prefix, &root_name, &program),
+        }).map_err(|e| format!("{e}\nnote: `{symbol}`'s data, as the read profile needs them: its state starts at zeros, its counts are its \
+            state's Nat fields in order, and its finish prints its first fields"))?;
+        let step = read_filter::generate_step(&elab, &context, &prefix)?;
+        for (name, text) in [(format!("{prefix}_piece_pieces"), &step.pieces), (format!("{prefix}_piece_step"), &step.text)] {
+            check_module(&mut elab, &mut session, &loader::Module { name: name.clone(), path: PathBuf::from(format!("{name}.hthr")), src: text.clone() })?;
         }
-        if !emission.text.contains(&format!("import {root_name};")) { proof.raw(format!("import {root_name};")); }
-        if !emission.text.contains(&format!("import {context};")) { proof.raw(format!("import {context};")); }
+        proof = Module::default();
+        for name in read_filter::IMPORTS { proof.raw(format!("import {name};")); }
+        proof.raw(format!("import {root_name}; import {context}; import {prefix}_piece_pieces; import {prefix}_piece_step;"));
         for part in format.iter().flatten() { proof.raw(format!("import {};", part.module)); }
-        proof.raw(emission.text.clone());
         probes = None;
-        (Some(match (&record, &format) {
-            (Some(record), Some(parts)) => read_fields::certify(&mut proof, &prefix, &program, record, &emission, parts)?,
-            (None, Some(parts)) => read_loop::certify_print(&mut proof, &prefix, &program, &emission, parts)?,
-            _ => read_loop::certify(&mut proof, &prefix, &program, &emission)?,
-        }), None)
+        (Some(read_filter::certify(&mut proof, &prefix, &program, &step, format.as_deref())?), None)
     } else if let Some(callee) = callee {
         if !symbol_ok(&callee) { return Err("callee must be a source identifier".into()); }
         let generate = |module: &mut Module, inputs: [u64; 2]| calls::generate(&elab, module, &prefix,
@@ -503,14 +437,8 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
             std::fs::set_permissions(&output, std::fs::Permissions::from_mode(0o755))
                 .map_err(|e| format!("{}: {e}", output.display()))?;
         }
-        if map {
-            println!("{}: {}-byte ELF64 executable; checked read-until-EOF process trace writing stdin mapped through `{symbol}`", output.display(), image.len());
-        } else if fields {
-            println!("{}: {}-byte ELF64 executable; checked read-until-EOF process trace printing `{}` as a three-field line", output.display(), image.len(), specs.join("`, `"));
-        } else if print {
-            println!("{}: {}-byte ELF64 executable; checked read-until-EOF process trace printing `{}` as a decimal line", output.display(), image.len(), specs[0]);
-        } else if read_loop {
-            println!("{}: {}-byte ELF64 executable; checked read-until-EOF process trace against `{}`", output.display(), image.len(), specs[0]);
+        if filter {
+            println!("{}: {}-byte ELF64 executable; checked read-until-EOF process trace whose stdout is `{}` of stdin", output.display(), image.len(), specs[0]);
         } else {
             println!("{}: {}-byte ELF64 executable; checked loaded-memory trace and Linux exit request", output.display(), image.len());
         }

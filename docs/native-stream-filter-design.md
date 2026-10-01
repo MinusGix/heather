@@ -1,6 +1,7 @@
 # One program shape: the stream filter
 
-Status: **designed 2026-10-01**, not yet built. Anchor issue:
+Status: **landed 2026-10-01** (F0–F5 in one round; §10 lists how it was
+built). Anchor issue:
 `issues/native-loop-emitting-stores.md` (step 2 of the line agreed in
 `docs/automatic-author-surface-design.md`; step 3 is
 `issues/native-one-program-logic.md`).
@@ -358,3 +359,96 @@ and amend it before working around it.
   comparisons.
 - **One program logic over interaction trees** is step 3, where this
   process's claim becomes a lemma.
+
+## 10. As built (deviations, in the order they were found)
+
+- **§2.2, the bundle's module.** `Filter` and `Finish` live in
+  `lib/filter_program.hthr`, not `read_program`. Test harnesses load
+  `read_program` from source, and a bundle whose finishes mean the
+  formatters' lines would make every one of them check `field_line`. At F5
+  `read_program` goes and `filter_program` is the read profile's bundle.
+- **§2.4, F0 is two fixes.** `omega` unfolds a goal's head one δ-step at a
+  time and stops at the first spelling it reads (a relation, `∧`, `False`),
+  closing `True` outright. Weak head normal form went too far: it unfolds
+  `Le` into its recursor. The unfolded goal is passed through `split_all`'s
+  `simplify_goal`, so an applied count `λ s => s.lines` reads as the field.
+  Then `split_all`'s simplifier reduces a projection whose receiver unfolds,
+  within a bounded budget, to a constructor: `counting(g)(s, b).next` is
+  `g(s, b)`. Without it, a counting step with nothing to split (`wc -c`'s
+  `λ c b => Succ(c)`) left an atom `omega` spelled but could not
+  re-elaborate. Such a step still needs `advances := …`, because `omega`
+  does not unfold `g`. Its atoms are not read up to computation.
+- **§3.1, the driver.** `seen` is the curried last parameter of `eof_run`
+  and `EofSteps`, because a recursion that varies a parameter must curry it.
+  A chunk that ends the run (`EofBodyEnds`) also gets `seen = input`, since
+  the filter bounds its counts in that chunk too. The room premise's 4096 of
+  slack covers it.
+- **§4.1, the write loop.** Its reached states are named functions
+  (`wl_moved`, `wl_going`, `wl_back`), because a theorem's `Exists` witness
+  is opaque to conversion. `WlThen`, `WriteThen` and `FinishedThen` carry an
+  `origin` register file and hand their continuation `WriteKept(state,
+  origin)`.
+- **§4, the state's vocabulary.** `state_init_block`, `StateKept`,
+  `StateFramed`, `StateInitialised`, `EofTail` and `CountWord` moved from
+  `elf64_read_state` into `elf64_read_pieces`, where both the old process
+  and the filter use them.
+- **§4, the library's split.** `lib/elf64_read_filter.hthr` is the
+  process, its claim (`read_filter_runs`), its stdout lemma
+  (`filter_sends`) and the quiet finish. `lib/elf64_filter_finish.hthr`
+  holds the line finish and `filter_prints` (stdout is `spec(stdin)`), and
+  reuses `fields_tail_runs` as it stands. That way a test of the process
+  does not load the formatters. `WriteFailure` moved into the write loop.
+- **§4.2, counts that fit.** `CountsAtMost` and `counts_grow` (each count
+  after `n` bytes is at most `n`, from `advances` and a zero start) feed
+  `ChunkFits`. `FilterRoom(Nil, _)` is `True`, so a filter without counts
+  has a claim for any input. A count applied to a state is not an `omega`
+  atom (`count(next)` for a local `count`), so those steps go through Nat
+  lemmas.
+- **Programs.** `tr -s '\n'` keeps a `Bool` (after a newline), and
+  `tr -d '\r'` is `Stateless`. Their spec proofs restate the step's nested
+  matches in their motives, each inner match annotated (`as λ _ => T`).
+- **F3, the generator (§5.2).** V1 is refuted. The reflector does not see
+  through `step(s, b).next.f`, because it inlines only helpers that return
+  scalars and does not reduce projections of constructors. So `Filtered` is
+  a result kind of its own in reflection, recognised by its resolved
+  identity, whose ports are the state's, then the flag, then the byte.
+  `counting(g)` reflects `g`, and `mapping(f)` reflects `f`. Their emits are
+  library constants (`emits_never`, `emits_always`, `emitted_nothing`).
+- **F3, the lowering order (§5.2).** It is not "emit first, into RBX and
+  RDX". The lowering's byte registers for comparisons are only AL, CL, DL
+  and BL, and RAX and RCX are taken. So an emit read from the state is held
+  in R9/R10 while the fields are written in place, then copied into RBX/RDX
+  (`emit_copy`). Fields that read each other in a cycle (`tr -s`) are held
+  the same way. An emit that reads no state goes last, straight into place.
+  The contract is unchanged. The proper fix is
+  `issues/lowering-rex-byte-registers.md`.
+- **F4, the producer (§6).** The context module restates the program's data
+  as the profile needs them: the step (the written one, `counting<C>(g)` or
+  `mapping(f)`), the zero state, the Nat fields as counts, and the finish
+  over the first fields. Its `{p}_program` types the author's bundle at
+  those, so a program whose data differ is refused there. The step piece is
+  generated over the context's step, so the context imports
+  `filter_step_piece`, whose constants the generator reads. The zero
+  state's `CountsAtMost` is written as one `Nat::le_refl(0)` per count,
+  since `omega` does not spell an applied count. A finish's own write loop
+  is laid out under other names (`twrite` …), because one layout holds two
+  write loops. The filter's cursor block is `cursors` (the write loop has an
+  `advance`). `--print` is gone, since the finish says what is printed.
+- **F5, what stayed.** The loop generator's `fold_body` path stays,
+  because its record-state loops are generator coverage
+  (`function_ir_loop_trace`'s `record_state_loop_certificate_checks`, now
+  over a local copy of `wc`'s step) and search loops share the code. Only
+  the program bundles' Rust (`ReadProgramKind`, `ReflectedReadProgram`,
+  `reflect_step_record`) went. `fold_body_folds` and `fold_body_fold` stay
+  beside it. The tails' libraries (`elf64_count_print`, `elf64_read_fields`)
+  lost their process halves. Their mutation controls now run against the
+  tails alone (`read_print_process`, `read_fields_process`), and the read
+  pieces' controls against the filter (`read_loop_process`). The state
+  layout's producer test is now the filter layout's
+  (`read_filter::tests`).
+- **Sizes**, in bytes: `wc` 5954, `wc -l` 1630, `tr` 682, `tr -s` 878,
+  `tr -d` 755. `wc -l` used to exit with its count. It now always prints
+  its line, through the same tail as before.
+- **Filed:** `issues/hole-beside-a-splitting-field-default.md`,
+  `issues/lowering-rex-byte-registers.md`,
+  `issues/native-expanding-filters.md`.
