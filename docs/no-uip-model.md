@@ -608,10 +608,11 @@ propositions. That matches what the syntax proves: Hedberg's theorem at
 types with decidable equality. The formalization proves it
 (`../Lean/delam/theories/Validity/Hedberg.v`, closed under the global
 context): as a schema over any carrier with a decider, as one closed
-term of `Π(a : Ty l). DecEq(El a) → UIP(El a)`, and at `Bool`, whose
+term of `Π(a : Ty l). DecEq(El a) → UIP(El a)`, at `Bool`, whose
 decider uses `Unit`-η on the diagonal and a large elimination into
-`Ty l` off it. UIP at `Nat` by the same route needs a decider for `Nat`,
-which is not yet written. The model says nothing new there, and the
+`Ty l` off it, and at `Nat`, whose decider is a double `natrec`, with
+`succ`-injectivity through `pred` and `0 ≠ succ` by the same large
+elimination. The model says nothing new there, and the
 index-inversion tier 3 of `iwf-former-design.md` §8.3 (deletion only at
 decidable index types) stays inside what the model validates.
 
