@@ -5,7 +5,9 @@ Status: **paper argument, 2026-09-30**. §3 and the two counterexamples of
 closed under the global context). §4 is argued, and was self-reviewed
 against the Coq formalization's rules the same day (§4.4). Once the
 formalization had `Id` (its M11), `UIP₀` was stated there and the model's
-`Id` was checked rule by rule against it (§4.5, §5.1). The model's `J`,
+`Id` was checked rule by rule against it (§4.5, §5.1). Once it had `+`
+(its M12), `UIP₀` was restated at `⌜Bool⌝`, and Hedberg's theorem, the
+positive prediction of §5.2, was proved in its syntax. The model's `J`,
 in the formalization's Paulin-Mohring form, is **mechanized**
 (`../Lean/delam/probes/NoUipJ.v`). It has not been independently
 reviewed.
@@ -570,22 +572,19 @@ At the empty context, `⟦Id^1(Ty 0; ⌜Bool⌝; ⌜Bool⌝)⟧` is the hom-set 
 
 ### 5.1 In the formalization
 
-The formalization has no `+`, so its statement takes `⌜Nat⌝` for
-`⌜Bool⌝`:
-
-```
-UIP0 := Π(p q : Id^1(Ty 0; ⌜Nat⌝; ⌜Nat⌝)). Id(p; q)
-```
-
-(`../Lean/delam/theories/Validity/Uip.v`). This changes nothing: `ℕ`
-has non-identity bijections, and one suffices.
+The formalization states `UIP₀` as written above, with
+`⌜Bool⌝ := ⌜Unit⌝ + ⌜Unit⌝` (`UIP0`,
+`../Lean/delam/theories/Validity/Uip.v`, since its M12). Before it had
+`+` it took `⌜Nat⌝` for `⌜Bool⌝` (`UIP0_nat`). This changes nothing:
+`ℕ` has non-identity bijections, and one suffices.
 
 Checked in Coq, all closed under the global context:
-- `UIP0_wf`: `UIP0` is a closed type at every layer but V, in any global
-  context. `uip_pt_wf` is the same for any carrier and endpoints.
-- `no_uip0_nat` (probe): the model's interpretation of `UIP0` at the
-  empty context, `∀ p q : bij ℕ ℕ. p = q`, is refuted by the
-  transposition of `0` and `1`.
+- `UIP0_wf`, `UIP0_nat_wf`: both are closed types at every layer but V,
+  in any global context. `uip_pt_wf` is the same for any carrier and
+  endpoints.
+- `no_uip0`, `no_uip0_nat` (probe): the model's interpretations at the
+  empty context, `∀ p q : bij Bool Bool. p = q` and `∀ p q : bij ℕ ℕ. p = q`,
+  are refuted by `swap` and by the transposition of `0` and `1`.
 - `uip_unit_wf`: UIP at `Unit` is *proved in the syntax*. The model
   predicts this, since `Unit`'s fibre is discrete. The proof is two `J`s,
   and `Unit` enters only through its η, which turns the motive's variable
@@ -606,7 +605,13 @@ Checked in Coq, all closed under the global context:
 UIP *does* hold in the model at every type whose interpretation is a
 discrete groupoid: `Nat`, first-order data, `□` code, and the strict
 propositions. That matches what the syntax proves: Hedberg's theorem at
-types with decidable equality. The model says nothing new there, and the
+types with decidable equality. The formalization proves it
+(`../Lean/delam/theories/Validity/Hedberg.v`, closed under the global
+context): as a schema over any carrier with a decider, as one closed
+term of `Π(a : Ty l). DecEq(El a) → UIP(El a)`, and at `Bool`, whose
+decider uses `Unit`-η on the diagonal and a large elimination into
+`Ty l` off it. UIP at `Nat` by the same route needs a decider for `Nat`,
+which is not yet written. The model says nothing new there, and the
 index-inversion tier 3 of `iwf-former-design.md` §8.3 (deletion only at
 decidable index types) stays inside what the model validates.
 
@@ -627,7 +632,7 @@ its identities are isomorphisms of groupoids, not equivalences.
 | `Wf`/`IWf` (finitary), `W` | initial algebras: ω-colimit for the finitary ones, accessibility for `W` |
 | `ΠΠ` at `ω` | products over level assignments |
 | strict propositions `sEq`/`sEmpty`/`Squash` | **new lemma, proved in §3.1, mechanized** (`NoUipComponents.v`: `conn_transport`, `sEq_subst`, `sec_irrelevant`, `ElimSquash`, `transp_strict`, `no_relevant_transp`, `no_uip0`) |
-| `Id` as formalized (M11: every layer but V, Paulin-Mohring `J`, code, four recursor branches) | **checked rule by rule, §4.5**; `UIP0` stated and well-formed in Coq, its interpretation refuted in the probe, the model's positive predictions checked in Coq (§5.1) |
+| `Id` as formalized (M11: every layer but V, Paulin-Mohring `J`, code, four recursor branches) | **checked rule by rule, §4.5**; `UIP0` stated at `⌜Bool⌝` (M12) and well-formed in Coq, its interpretation refuted in the probe, the model's positive predictions checked in Coq (§5.1), Hedberg's theorem proved in the syntax (§5.2) |
 | DeLaM globals, `□`, code recursors, `CΠ`/`TΠ`, δ | **argued by stratification (§4)**; the layer facts it uses are side conditions of the Coq rules (§4.1); the semantic global substitution lemma is written out (§4.2a), its syntactic half on Coq-checked lemmas |
 
 The mechanization states contexts as reflexive graphs (morphisms and
