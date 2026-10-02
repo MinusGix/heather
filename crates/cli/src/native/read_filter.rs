@@ -108,7 +108,7 @@ pub(super) fn read_program(elab: &Elaborator, root: &str, symbol: &str, args: &[
         Some(head) if head == "Quiet" => Finish::Quiet,
         Some(head) if head == "Line" => Finish::Line,
         Some(head) if head == "Fields" => Finish::Fields,
-        _ => return Err(format!("`{symbol}`'s finish is written as `Quiet`, `Line(…)` or `Fields(…)`")),
+        _ => return Err(format!("`{symbol}`'s finish is written as `Quiet`, `Line` or `Fields`")),
     };
     let state = state_of(elab, &step)?;
     let nats = state.fields.iter().take_while(|(_, ty)| *ty == StructuredSourceType::NatWord).count();
@@ -173,8 +173,8 @@ pub(super) fn context(prefix: &str, root: &str, program: &Program) -> String {
     let counts = if nats.is_empty() { "Nil".to_string() } else { format!("[{}]", nats.iter().map(|&i| state.count(i)).collect::<Vec<_>>().join(", ")) };
     let finish = match program.finish {
         Finish::Quiet => "Quiet".to_string(),
-        Finish::Line => format!("Line({})", state.count(0)),
-        Finish::Fields => format!("Fields({}, {}, {})", state.count(0), state.count(1), state.count(2)),
+        Finish::Line => "Line".to_string(),
+        Finish::Fields => "Fields".to_string(),
     };
     // Each count of the zero state is at most 0: one `0 <= 0` per count, then
     // the list's end.
@@ -188,14 +188,14 @@ import list; import logic; import nat; import option; import omega;
 fn {prefix}_step() → {ty} → BitVec(8) → Filtered<{ty}> {{ {step} }}
 fn {prefix}_init() → {ty} {{ {init} }}
 fn {prefix}_counts() → List<{ty} → Nat> {{ {counts} }}
-fn {prefix}_finish() → Finish<{ty}> {{ {finish} }}
+fn {prefix}_finish() → Finish {{ {finish} }}
 // The program is a filter of these: its state starts at zeros, its counts are
 // its Nat fields in order, and its finish prints its first fields.
 fn {prefix}_program() → Filter<{ty}>({prefix}_step(), {prefix}_init(), {prefix}_counts(), {prefix}_finish(), {spec}) {{ {name}() }}
 theorem {prefix}_advances(): (state: {ty}) → (byte: BitVec(8)) → counts_advance({prefix}_counts(), {prefix}_step()(state, byte).next, state) {{
     λ state byte => {prefix}_program().advances(state, byte)
 }}
-theorem {prefix}_computes(bytes: List<BitVec(8)>): {spec}(bytes) = filter_output({prefix}_step(), {prefix}_init(), {prefix}_finish(), bytes) {{
+theorem {prefix}_computes(bytes: List<BitVec(8)>): {spec}(bytes) = filter_output({prefix}_step(), {prefix}_init(), {prefix}_counts(), {prefix}_finish(), bytes) {{
     {prefix}_program().computes(bytes)
 }}
 theorem {prefix}_zero(): CountsAtMost({prefix}_counts(), {prefix}_init(), 0) {{ {zero} }}
@@ -386,7 +386,7 @@ fn {prefix}_jump_facts() → FilterJumpFacts({p}, {done_p}, {jumps}, {pj}) {{
             format!("filter_quiet_tail({shape}, {jumps}, {pj}, {prefix}_file(), {pieces}, {final_state})"),
             "refl".to_string(), String::new()),
         _ => {
-            let printed = format!("finish_bytes({prefix}_finish(), {final_state})");
+            let printed = format!("finish_bytes({prefix}_finish(), {prefix}_counts(), {final_state})");
             let tail = match program.finish {
                 Finish::Line => {
                     module.raw(format!("\
@@ -416,7 +416,7 @@ fn {prefix}_fields_format() → FieldsFormat({prefix}_fields_codes()) {{ FieldsF
                         {final_state}, small, written, written_ok, writes, writes_ok)", lo = generated[1].1, hi = generated[2].1)
                 }
             };
-            (format!("{common}, small: FinishFits({prefix}_finish(), {final_state}),
+            (format!("{common}, small: FinishFits({prefix}_finish(), {prefix}_counts(), {final_state}),
     writes: List<WriteStep>, writes_ok: WriteSteps(writes)({printed}), written: WriteEnding, written_ok: WriteEndingOk(written),
     page: Nat → BitVec(8), gprs: Gprs, flags: Flags"),
                 format!("write_events({printed}, writes, written)"), tail,

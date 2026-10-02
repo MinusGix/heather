@@ -1,6 +1,6 @@
 # A native program reads like a program
 
-Status: **scoped 2026-10-02; V1–V5 run (§4.1); S6 landed, S1–S5 next.** Anchor issue:
+Status: **scoped 2026-10-02; V1–V5 run (§4.1); S6, S1 and S2 landed; S3–S5 next.** Anchor issue:
 `issues/native-programs-read-like-programs.md`. This round comes after step 2
 of `docs/automatic-author-surface-design.md` (the stream filter) and before
 step 3 (`issues/native-one-program-logic.md`, which waits on ITrees).
@@ -122,11 +122,34 @@ Issues: `fold-count-lemmas`, `filter-computes-from-count-facts`.
   `computes` field, with `spec` being the finish's line of the `spec_i`. This
   deletes `wc_prints` and `count_wc_input` from programs.
 
+**Built 2026-10-02.** Amendments to the text above:
+- The lemmas live in `lib/filter_program.hthr`, not `function_ir_loop`,
+  because they use `omega`, which `function_ir_loop` must not import.
+- `counts_filtered` states the count's growth as `+ Nat::of_bit(p(b))`.
+- `counts_runs_from` is the from-outside instance an author calls.
+- `Finish` lost its type parameter.
+- `line_computes` and `fields_computes` take the counts after the printed
+  ones (`rest`).
+- The program's `spec` stays a named function; the CLI reads it by name.
+
+Result: `wc.hthr` is 115 lines, down from 320. Its proofs are four per-byte
+facts (`split_all`, then `omega` or `refl`) and three two-line count
+theorems. `wc_l`'s proof is two theorems. Both executables match the host
+tools; wc differs only at 0xA0 (`wc-words-no-break-space`). The mutation
+controls moved to the new spellings: a `Quiet` finish for wc_l, and swapped
+counts and a swapped spec for wc.
+
 ### S2. `List::split_by`
 
 Issue: `list-split-by`. It goes in `lib/std/list.hthr`, with `non_empty` and
 the lemmas `counts_runs` needs (the cons equations, and the count of pieces).
 Its definition is the obvious recursion: `n` separators make `n + 1` pieces.
+
+**Built with S1 (2026-10-02).** `List::split_by` goes through a non-recursive
+`List::split_onto(cut, x, pieces)` (with `List::onto_first`), so a proof can
+case on one element's cut without unfolding the recursion. Also added:
+`List::non_empty` and `List::len_filter_cons`. The piece-count, append and
+concat lemmas are not written yet; they stay on `list-split-by`.
 
 ### S3. Byte tests a reader knows
 

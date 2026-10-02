@@ -1,6 +1,6 @@
 ---
 title: A counting Filter's stdout claim from per-count facts, counts named once
-status: open
+status: closed
 labels: [native,stdlib,ergonomics]
 created: 2026-10-02
 updated: 2026-10-02
@@ -29,3 +29,7 @@ Stdout stays the claim: per-count facts are how it is proved, not what is
 claimed.
 
 Related: [[native-programs-read-like-programs]], [[fold-count-lemmas]].
+
+## Log
+
+- 2026-10-02: Landed 2026-10-02: Finish { Quiet, Line, Fields } reads counts by position; line_computes / fields_computes build computes from per-count facts; wc_prints/count_wc_input gone. Suite 3156.

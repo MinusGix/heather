@@ -264,7 +264,12 @@ printf 'a\r\nb\r\n' | ./target/x86-native/tr_d              # a, b, no carriage 
 A program is a `Filter` bundle (`lib/filter_program.hthr`). Its type names the
 step, the initial state, the state's Nat fields (`counts`), the finish, and
 `spec`, which is all of stdout as an ordinary Heather function of stdin. Its
-value is the fact `spec(bytes) = filter_output(step, init, finish, bytes)`.
+value is the fact `spec(bytes) = filter_output(step, init, counts, finish,
+bytes)`. The finish names positions in `counts` (`Line` prints the first,
+`Fields` the first three), so the counts are written once. A counting program
+proves that fact from one fact per printed count (`line_computes`,
+`fields_computes`), and each of those from what one byte does to the count,
+by the library's fold lemmas (`counts_filtered`, `counts_len`, `counts_runs`).
 That each count grows by at most one per byte is the bundle's `advances`
 field, shown by default (case analysis, then `omega`). A step the default
 cannot show gets an error naming the case left, and `advances := …` by hand.
@@ -278,9 +283,10 @@ refused at its own source, before anything is generated.
   GNU `wc` prints them on a pipe (`%7d %7d %7d`). The state stays in
   registers across the reads, so a word split between two reads is counted
   once. What the counts mean is stated as a reader checks it: `wc_lines`
-  counts the newlines, `wc_words` the non-empty pieces of the input cut at
-  every whitespace byte (the C locale's POSIX set), and `wc_bytes` the
-  length.
+  counts the newlines, `wc_words` the non-empty pieces of
+  `bytes.split_by(space_byte)` (the C locale's POSIX whitespace), and
+  `wc_bytes` the length. Each count's proof is what one byte does to it, by
+  `split_all`.
 - `tr.hthr` is `tr a-z A-Z`: `mapping(upcase)`, which keeps nothing between
   bytes and emits each byte's image.
 - `tr_s.hthr` is `tr -s '\n'`: its state is whether the last byte was a

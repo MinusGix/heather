@@ -1,6 +1,6 @@
 ---
 title: Library lemmas for counting folds: a count's proof is one per-byte fact
-status: open
+status: closed
 labels: [native,stdlib,proofs]
 created: 2026-10-02
 updated: 2026-10-02
@@ -26,3 +26,7 @@ with no `wc_next` copy of the step and no `newline_is_space`).
 Where: next to `fold_bytes` (lib/function_ir_loop.hthr), or `stream_filter`.
 
 Related: [[native-programs-read-like-programs]], [[filter-computes-from-count-facts]].
+
+## Log
+
+- 2026-10-02: Landed 2026-10-02 in lib/filter_program.hthr (counts_filtered, counts_len, counts_runs, counts_runs_from); design S1. Suite 3156.

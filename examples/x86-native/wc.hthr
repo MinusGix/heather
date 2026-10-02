@@ -5,10 +5,9 @@
 // the reads, and whose finish prints the first three fields as a
 // `%7d %7d %7d` line. What the counts mean is stated the way a reader would
 // check them: the newlines, the non-empty pieces of the input split at
-// whitespace, and the length. `count_wc_input` proves the fold from the zero
-// state computes all three, `wc_prints` that stdout is their line, and
-// `wc_program` at the end is the program; that each count grows by at most
-// one per byte is the program's default.
+// whitespace, and the length. Each count's proof is what one byte does to it
+// (`lines_step` …, by case analysis), carried over the input by the
+// library's fold lemmas; `wc_program` at the end is the program.
 //
 //     heather build-x86 examples/x86-native/wc.hthr wc_program -o wc
 import function_ir_loop;
@@ -46,38 +45,16 @@ fn space_byte(b: BitVec(8)) → Bool {
 // The number of newlines.
 fn wc_lines(bytes: List<BitVec(8)>) → Nat { bytes.filter(newline_byte).len() }
 
-// A byte put at the front of the first piece.
-fn onto_first(byte: BitVec(8), pieces: List<List<BitVec(8)>>) → List<List<BitVec(8)>> {
-    match pieces { Nil => [[byte]], Cons(piece, rest) => Cons(Cons(byte, piece), rest) }
-}
-
-// A whitespace byte starts a new piece; any other byte goes at the front of
-// the first.
-fn split_at(space: Bool, byte: BitVec(8), pieces: List<List<BitVec(8)>>) → List<List<BitVec(8)>> {
-    match space { True => Cons(Nil, pieces), False => onto_first(byte, pieces) }
-}
-
-// The input's pieces between whitespace bytes, in order: `n` whitespace
-// bytes cut it into `n + 1` pieces, some of them empty.
-fn wc_split(bytes: List<BitVec(8)>) → List<List<BitVec(8)>> {
-    match bytes {
-        Nil => [Nil],
-        Cons(byte, rest) => split_at(space_byte(byte), byte, wc_split(rest)),
-    }
-}
-
-fn is_word(piece: List<BitVec(8)>) → Bool { match piece { Nil => False, Cons(_, _) => True } }
-
-fn words_of(pieces: List<List<BitVec(8)>>) → Nat { pieces.filter(is_word).len() }
-
-// The number of words: the pieces that aren't empty.
-fn wc_words(bytes: List<BitVec(8)>) → Nat { words_of(wc_split(bytes)) }
+// The number of words: the pieces between whitespace that aren't empty.
+fn wc_words(bytes: List<BitVec(8)>) → Nat { bytes.split_by(space_byte).filter(List::non_empty).len() }
 
 // The number of bytes.
 fn wc_bytes(bytes: List<BitVec(8)>) → Nat { bytes.len() }
 
-// The step: the next state from a state and a byte.
+// What `wc` prints: the three counts as GNU prints them on a pipe.
+fn wc_out(bytes: List<BitVec(8)>) → List<BitVec(8)> { three_fields_line(wc_lines(bytes), wc_words(bytes), wc_bytes(bytes)) }
 
+// The step: the next state from a state and a byte.
 fn wc_step(s: WcState, byte: BitVec(8)) → WcState {
     match space_byte(byte) {
         True => match newline_byte(byte) {
@@ -91,230 +68,48 @@ fn wc_step(s: WcState, byte: BitVec(8)) → WcState {
     }
 }
 
-// Why the fold counts what the specifications say.
-
-// The step's next state, from whether the byte is whitespace and whether it
-// is a newline: `wc_step(s, byte)` is `wc_next(space_byte(byte),
-// newline_byte(byte), s)` by definition.
-fn wc_next(space, newline: Bool, s: WcState) → WcState {
-    match space {
-        True => match newline {
-            True => WcState(Succ(s.lines), s.words, Succ(s.bytes), False),
-            False => WcState(s.lines, s.words, Succ(s.bytes), False),
-        },
-        False => match s.inside {
-            True => WcState(s.lines, s.words, Succ(s.bytes), True),
-            False => WcState(s.lines, Succ(s.words), Succ(s.bytes), True),
-        },
-    }
+// Why the fold counts what the specifications say: what one byte does to
+// each count. A newline is one more line; a byte that isn't whitespace starts
+// a word when the state isn't in one; every byte is one more byte.
+theorem lines_step(s: WcState, byte: BitVec(8)): wc_step(s, byte).lines = s.lines + Nat::of_bit(newline_byte(byte)) {
+    split_all;
+    all_goals { omega }
 }
-
-// A newline is whitespace.
-theorem newline_is_space(byte: BitVec(8)): (newline_byte(byte) = True) → space_byte(byte) = True {
-    (match byte.unsigned_lt_bit(BitVec::ofNat(10)) as λ below => (byte.unsigned_lt_bit(BitVec::ofNat(10)) = below) →
-            (match below { True => False, False => byte.unsigned_lt_bit(BitVec::ofNat(11)) } = True) → space_byte(byte) = True {
-        True => λ _ no => false_elim(j(sym(no), λ b _ => b.IsTrue(), trivial)),
-        False => λ from ten => {
-            let low: (10 <= byte.toNat()) = bitvec_omega::unsigned_false(8, byte, BitVec::ofNat(10), from);
-            let high: (byte.toNat() < 11) = bitvec_omega::unsigned_true(8, byte, BitVec::ofNat(11), ten);
-            let below: (byte.toNat() < 14) = omega;
-            let above: (9 <= byte.toNat()) = omega;
-            let fourteen = bitvec_omega::unsigned_of_true(8, byte, BitVec::ofNat(14), below);
-            let nine = bitvec_omega::unsigned_of_false(8, byte, BitVec::ofNat(9), above);
-            j(sym(fourteen), λ b _ => match b {
-                    True => match byte.unsigned_lt_bit(BitVec::ofNat(9)) { True => False, False => True },
-                    False => match byte.unsigned_lt_bit(BitVec::ofNat(32)) { True => False, False => byte.unsigned_lt_bit(BitVec::ofNat(33)) },
-                } = True,
-                j(sym(nine), λ b _ => match b { True => False, False => True } = True, refl))
-        },
-    })(refl)
+theorem words_step(s: WcState, byte: BitVec(8)): wc_step(s, byte).words = s.words + starts_run(space_byte(byte), s.inside) {
+    split_all;
+    all_goals { omega }
 }
-
-fn bit(b: Bool) → Nat { match b { True => 1, False => 0 } }
-
-theorem wc_next_bytes(space, newline: Bool, s: WcState): wc_next(space, newline, s).bytes = Succ(s.bytes) {
+theorem inside_step(s: WcState, byte: BitVec(8)): wc_step(s, byte).inside = !space_byte(byte) {
     split_all;
     all_goals { refl }
 }
-
-theorem wc_next_lines(space, newline: Bool, s: WcState, spaced: (newline = True) → space = True):
-    wc_next(space, newline, s).lines = s.lines + bit(newline) {
-    match newline as λ nl => ((nl = True) → space = True) → wc_next(space, nl, s).lines = s.lines + bit(nl) {
-        True => λ spaced => j(sym(spaced(refl)), λ sp _ => wc_next(sp, True, s).lines = s.lines + 1, refl),
-        False => λ _ => match space as λ sp => wc_next(sp, False, s).lines = s.lines {
-            True => refl,
-            False => match s.inside as λ i => (match i as λ _ => WcState {
-                    True => WcState(s.lines, s.words, Succ(s.bytes), True),
-                    False => WcState(s.lines, Succ(s.words), Succ(s.bytes), True),
-                }).lines = s.lines { True => refl, False => refl },
-        },
-    }(spaced)
+theorem bytes_step(s: WcState, byte: BitVec(8)): wc_step(s, byte).bytes = Succ(s.bytes) {
+    split_all;
+    all_goals { omega }
 }
 
-// Whether the first piece is a word: 1 when the input starts with a byte that
-// isn't whitespace.
-fn first_word(pieces: List<List<BitVec(8)>>) → Nat {
-    match pieces { Nil => 0, Cons(piece, _) => bit(is_word(piece)) }
+// Folded from the zero state, so each count is its specification.
+theorem count_lines(bytes: List<BitVec(8)>): wc_lines(bytes) = fold_bytes(wc_step, bytes, WcState(0, 0, 0, False)).lines {
+    let counted: (fold_bytes(wc_step, bytes, WcState(0, 0, 0, False)).lines = 0 + wc_lines(bytes)) =
+        counts_filtered(wc_step, λ s => s.lines, newline_byte, lines_step, bytes, WcState(0, 0, 0, False));
+    omega
 }
-
-// The words the state is already inside: a word the state is in continues
-// in the first piece, and was counted when it began.
-fn inside_words(inside: Bool, pieces: List<List<BitVec(8)>>) → Nat {
-    match inside { True => first_word(pieces), False => 0 }
+theorem count_words(bytes: List<BitVec(8)>): wc_words(bytes) = fold_bytes(wc_step, bytes, WcState(0, 0, 0, False)).words {
+    let counted: (fold_bytes(wc_step, bytes, WcState(0, 0, 0, False)).words = 0 + wc_words(bytes)) =
+        counts_runs_from(wc_step, λ s => s.words, λ s => s.inside, space_byte, words_step, inside_step, WcState(0, 0, 0, False), refl, bytes);
+    omega
 }
-
-// A byte that isn't whitespace starts a word, unless it joins the one the
-// rest starts with.
-theorem onto_first_words(byte: BitVec(8), pieces: List<List<BitVec(8)>>):
-    words_of(onto_first(byte, pieces)) + first_word(pieces) = Succ(words_of(pieces)) {
-    match pieces as λ ps => words_of(onto_first(byte, ps)) + first_word(ps) = Succ(words_of(ps)) {
-        Nil => refl,
-        Cons(piece, rest) => match piece as λ p =>
-                Succ(words_of(rest)) + first_word(Cons(p, rest)) = Succ(words_of(Cons(p, rest))) {
-            Nil => refl,
-            Cons(_, _) => refl,
-        },
-    }
-}
-
-theorem onto_first_inside(byte: BitVec(8), pieces: List<List<BitVec(8)>>): first_word(onto_first(byte, pieces)) = 1 {
-    match pieces as λ ps => first_word(onto_first(byte, ps)) = 1 { Nil => refl, Cons(_, _) => refl }
-}
-
-theorem inside_empty(inside: Bool, pieces: List<List<BitVec(8)>>): inside_words(inside, Cons(Nil, pieces)) = 0 {
-    match inside as λ i => inside_words(i, Cons(Nil, pieces)) = 0 { True => refl, False => refl }
-}
-
-// One step's words: what the state counts and is inside, against what the
-// pieces count and start with.
-theorem wc_next_words(space, newline: Bool, s: WcState, byte: BitVec(8), pieces: List<List<BitVec(8)>>):
-    (wc_next(space, newline, s).words + words_of(pieces)) + inside_words(s.inside, split_at(space, byte, pieces)) =
-        (s.words + words_of(split_at(space, byte, pieces))) + inside_words(wc_next(space, newline, s).inside, pieces) {
-    match space as λ sp => (wc_next(sp, newline, s).words + words_of(pieces)) + inside_words(s.inside, split_at(sp, byte, pieces)) =
-            (s.words + words_of(split_at(sp, byte, pieces))) + inside_words(wc_next(sp, newline, s).inside, pieces) {
-        True => {
-            let empty = inside_empty(s.inside, pieces);
-            match newline as λ nl => (wc_next(True, nl, s).words + words_of(pieces)) + inside_words(s.inside, Cons(Nil, pieces)) =
-                    (s.words + words_of(pieces)) + inside_words(wc_next(True, nl, s).inside, pieces) {
-                True => j(sym(empty), λ n _ => (s.words + words_of(pieces)) + n = (s.words + words_of(pieces)) + 0, refl),
-                False => j(sym(empty), λ n _ => (s.words + words_of(pieces)) + n = (s.words + words_of(pieces)) + 0, refl),
-            }
-        },
-        False => {
-            let joined = onto_first_words(byte, pieces);
-            let starts = onto_first_inside(byte, pieces);
-            match s.inside as λ i => ((match i as λ _ => WcState {
-                    True => WcState(s.lines, s.words, Succ(s.bytes), True),
-                    False => WcState(s.lines, Succ(s.words), Succ(s.bytes), True),
-                }).words + words_of(pieces)) + inside_words(i, onto_first(byte, pieces)) =
-                    (s.words + words_of(onto_first(byte, pieces))) + inside_words((match i as λ _ => WcState {
-                        True => WcState(s.lines, s.words, Succ(s.bytes), True),
-                        False => WcState(s.lines, Succ(s.words), Succ(s.bytes), True),
-                    }).inside, pieces) {
-                True => {
-                    let joins: ((s.words + words_of(pieces)) + first_word(onto_first(byte, pieces)) =
-                        (s.words + words_of(onto_first(byte, pieces))) + first_word(pieces)) = omega;
-                    joins
-                },
-                False => {
-                    let starts: (((s.words + 1) + words_of(pieces)) + 0 =
-                        (s.words + words_of(onto_first(byte, pieces))) + first_word(pieces)) = omega;
-                    starts
-                },
-            }
-        },
-    }
-}
-
-theorem wc_fold_bytes(bytes: List<BitVec(8)>): (s: WcState) → fold_bytes(wc_step, bytes, s).bytes = s.bytes + bytes.len() {
-    match bytes {
-        Nil => λ s => refl,
-        Cons(byte, rest) => λ s => {
-            let ih = wc_fold_bytes(rest, wc_next(space_byte(byte), newline_byte(byte), s));
-            let grew = wc_next_bytes(space_byte(byte), newline_byte(byte), s);
-            let sum: (fold_bytes(wc_step, rest, wc_next(space_byte(byte), newline_byte(byte), s)).bytes = s.bytes + Succ(rest.len())) = omega;
-            sum
-        },
-    }
-}
-
-theorem wc_lines_cons(byte: BitVec(8), rest: List<BitVec(8)>): wc_lines(Cons(byte, rest)) = bit(newline_byte(byte)) + wc_lines(rest) {
-    match newline_byte(byte) as λ nl => (match nl { True => Cons(byte, rest.filter(newline_byte)), False => rest.filter(newline_byte) }).len() =
-            bit(nl) + wc_lines(rest) {
-        True => { let one: (Succ(wc_lines(rest)) = 1 + wc_lines(rest)) = omega; one },
-        False => { let zero: (wc_lines(rest) = 0 + wc_lines(rest)) = omega; zero },
-    }
-}
-
-theorem wc_fold_lines(bytes: List<BitVec(8)>): (s: WcState) → fold_bytes(wc_step, bytes, s).lines = s.lines + wc_lines(bytes) {
-    match bytes {
-        Nil => λ s => refl,
-        Cons(byte, rest) => λ s => {
-            let ih = wc_fold_lines(rest, wc_next(space_byte(byte), newline_byte(byte), s));
-            let grew = wc_next_lines(space_byte(byte), newline_byte(byte), s, newline_is_space(byte));
-            let counted = wc_lines_cons(byte, rest);
-            let sum: (fold_bytes(wc_step, rest, wc_next(space_byte(byte), newline_byte(byte), s)).lines = s.lines + wc_lines(Cons(byte, rest))) = omega;
-            sum
-        },
-    }
-}
-
-// From any state, the fold adds the words, less the first when the state is
-// already inside it.
-theorem wc_fold_words(bytes: List<BitVec(8)>): (s: WcState) →
-    fold_bytes(wc_step, bytes, s).words + inside_words(s.inside, wc_split(bytes)) = s.words + words_of(wc_split(bytes)) {
-    match bytes {
-        Nil => λ s => j(sym(inside_empty(s.inside, Nil)), λ n _ => s.words + n = s.words + 0, refl),
-        Cons(byte, rest) => λ s => {
-            let ih = wc_fold_words(rest, wc_next(space_byte(byte), newline_byte(byte), s));
-            let step = wc_next_words(space_byte(byte), newline_byte(byte), s, byte, wc_split(rest));
-            let sum: (fold_bytes(wc_step, rest, wc_next(space_byte(byte), newline_byte(byte), s)).words +
-                inside_words(s.inside, split_at(space_byte(byte), byte, wc_split(rest))) =
-                    s.words + words_of(split_at(space_byte(byte), byte, wc_split(rest)))) = omega;
-            sum
-        },
-    }
-}
-
-// The fact the profile asks of a program: folded over the input from the
-// zero state, the step's first three fields are the specifications.
-theorem count_wc_input(bytes: List<BitVec(8)>):
-    (wc_lines(bytes) = fold_bytes(wc_step, bytes, WcState(0, 0, 0, False)).lines) ∧
-    ((wc_words(bytes) = fold_bytes(wc_step, bytes, WcState(0, 0, 0, False)).words) ∧
-    (wc_bytes(bytes) = fold_bytes(wc_step, bytes, WcState(0, 0, 0, False)).bytes)) {
-    let zero = WcState(0, 0, 0, False);
-    // The folds count `words_of(wc_split(bytes))` and `bytes.len()`, which are
-    // `wc_words` and `wc_bytes` by definition: stated at the specifications'
-    // names, since `omega` names atoms without unfolding them.
-    let lines = wc_fold_lines(bytes, zero);
-    let words: (fold_bytes(wc_step, bytes, zero).words + 0 = 0 + wc_words(bytes)) = wc_fold_words(bytes, zero);
-    let counted: (fold_bytes(wc_step, bytes, zero).bytes = 0 + wc_bytes(bytes)) = wc_fold_bytes(bytes, zero);
-    ⟨omega, ⟨omega, omega⟩⟩
-}
-
-// What `wc` prints: the three counts as GNU prints them on a pipe.
-fn wc_out(bytes: List<BitVec(8)>) → List<BitVec(8)> { three_fields_line(wc_lines(bytes), wc_words(bytes), wc_bytes(bytes)) }
-
-// What the program prints is that line: the fold from the zero state counts
-// what the specifications say.
-theorem wc_prints(bytes: List<BitVec(8)>): wc_out(bytes) = filter_output(counting(wc_step), WcState(0, 0, 0, False),
-    Fields(λ s => s.lines, λ s => s.words, λ s => s.bytes), bytes) {
-    let folded = fold_bytes(wc_step, bytes, WcState(0, 0, 0, False));
-    let counted = count_wc_input(bytes);
-    let lines = j(counted.left, λ n _ => three_fields_line(wc_lines(bytes), wc_words(bytes), wc_bytes(bytes)) =
-        three_fields_line(n, wc_words(bytes), wc_bytes(bytes)), refl);
-    let words = j(counted.right.left, λ n _ => three_fields_line(folded.lines, wc_words(bytes), wc_bytes(bytes)) =
-        three_fields_line(folded.lines, n, wc_bytes(bytes)), refl);
-    let all = j(counted.right.right, λ n _ => three_fields_line(folded.lines, folded.words, wc_bytes(bytes)) =
-        three_fields_line(folded.lines, folded.words, n), refl);
-    trans(lines, trans(words, trans(all, sym(counting_output(wc_step, WcState(0, 0, 0, False),
-        Fields(λ s => s.lines, λ s => s.words, λ s => s.bytes), bytes)))))
+theorem count_bytes(bytes: List<BitVec(8)>): wc_bytes(bytes) = fold_bytes(wc_step, bytes, WcState(0, 0, 0, False)).bytes {
+    let counted: (fold_bytes(wc_step, bytes, WcState(0, 0, 0, False)).bytes = 0 + wc_bytes(bytes)) =
+        counts_len(wc_step, λ s => s.bytes, bytes_step, bytes, WcState(0, 0, 0, False));
+    omega
 }
 
 // The program: the step, the zero state, its counts in order, the line it
 // prints, and what stdout is; that each count grows by at most one per byte
 // is the program's default. `heather build-x86` builds it by this name.
 fn wc_program() → Filter<WcState>(counting(wc_step), WcState(0, 0, 0, False), [λ s => s.lines, λ s => s.words, λ s => s.bytes],
-    Fields(λ s => s.lines, λ s => s.words, λ s => s.bytes), wc_out) {
-    Filter(wc_prints)
+    Fields, wc_out) {
+    Filter(fields_computes(wc_step, WcState(0, 0, 0, False), λ s => s.lines, λ s => s.words, λ s => s.bytes, Nil,
+        wc_lines, wc_words, wc_bytes, count_lines, count_words, count_bytes))
 }

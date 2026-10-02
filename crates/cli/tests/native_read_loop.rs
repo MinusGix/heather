@@ -42,7 +42,8 @@ const BURSTS: &[&[u8]] = &[b"one\ntw", b"o\n", b"", b"three", b"\n\n"];
 
 // An author's mistakes are refused at the author's source, by the check of
 // the program's bundle, and nothing is published: a finish its fact is not
-// about (`wc_l_prints` prints the count, not one more), and an `advances`
+// about (a program whose finish prints nothing, where `wc_l_out` is the
+// count's line), and an `advances`
 // given by hand that is about something else than the step.
 // (A step its default cannot show is refused at the construction:
 // named_arguments's `a_default_that_fails_is_refused_at_the_construction`.)
@@ -50,8 +51,9 @@ const BURSTS: &[&[u8]] = &[b"one\ntw", b"o\n", b"", b"three", b"\n\n"];
 fn a_program_that_is_wrong_is_refused_at_its_source() {
     let directory = scratch("read-loop-refused");
     for (fact, edits) in [
-        ("wc_l_prints", &[("[λ c => c], Line(λ c => c), wc_l_out) {", "[λ c => c], Line(λ c => Succ(c)), wc_l_out) {")][..]),
-        ("advances", &[("Filter(wc_l_prints)", "Filter(wc_l_prints, advances := λ count byte => Nat::le_refl(Succ(count)))")][..]),
+        ("wc_l_program", &[("[λ c => c], Line, wc_l_out) {", "[λ c => c], Quiet, wc_l_out) {")][..]),
+        ("advances", &[("Filter(line_computes(line_step, 0, λ c => c, Nil, wc_l, count_lines))",
+            "Filter(line_computes(line_step, 0, λ c => c, Nil, wc_l, count_lines), advances := λ count byte => Nat::le_refl(Succ(count)))")][..]),
     ] {
         let source = mistaken(&directory, "wc_l", edits);
         let output = build(&directory, &source, &[]);

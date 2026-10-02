@@ -18,56 +18,207 @@ import nat;
 import option;
 import omega;
 
-// What a program prints after end of file: nothing, the first count as a
-// decimal line, or the first three as `%7d` fields. Each is one of the
+// What a program prints after end of file: nothing, its first count as a
+// decimal line, or its first three as `%7d` fields. Each is one of the
 // library's proved tails, which read the counts from the state's first
-// registers.
-inductive Finish<C> {
-    Quiet,
-    Line(count: C → Nat),
-    Fields(first: C → Nat, second: C → Nat, third: C → Nat),
-}
-fn finish_bytes<C>(finish: Finish<C>, state: C) → List<BitVec(8)> {
+// registers. The counts are the program's own (`Filter`'s `counts`), named
+// once there.
+inductive Finish { Quiet, Line, Fields }
+fn finish_bytes<C>(finish: Finish, counts: List<C → Nat>, state: C) → List<BitVec(8)> {
     match finish {
         Quiet => Nil,
-        Line(count) => decimal_line(count(state)),
-        Fields(first, second, third) => three_fields_line(first(state), second(state), third(state)),
+        Line => match counts { Nil => Nil, Cons(count, _) => decimal_line(count(state)) },
+        Fields => match counts {
+            Nil => Nil,
+            Cons(first, more) => match more {
+                Nil => Nil,
+                Cons(second, rest) => match rest { Nil => Nil, Cons(third, _) => three_fields_line(first(state), second(state), third(state)) },
+            },
+        },
     }
 }
 // What the tails print correctly: counts below their columns.
-fn FinishFits<C>(finish: Finish<C>, state: C) → Type {
+fn FinishFits<C>(finish: Finish, counts: List<C → Nat>, state: C) → Type {
     match finish {
         Quiet => True,
-        Line(count) => count(state) < 10000,
-        Fields(first, second, third) => (first(state) < 10000000) ∧ ((second(state) < 10000000) ∧ (third(state) < 10000000)),
+        Line => match counts { Nil => True, Cons(count, _) => count(state) < 10000 },
+        Fields => match counts {
+            Nil => True,
+            Cons(first, more) => match more {
+                Nil => True,
+                Cons(second, rest) => match rest {
+                    Nil => True,
+                    Cons(third, _) => (first(state) < 10000000) ∧ ((second(state) < 10000000) ∧ (third(state) < 10000000)),
+                },
+            },
+        },
     }
 }
 
 // All of stdout: what the bytes emit from `init`, then the finish.
-fn filter_output<C>(step: C → BitVec(8) → Filtered<C>, init: C, finish: Finish<C>, bytes: List<BitVec(8)>) → List<BitVec(8)> {
-    filter_emitted(step, bytes, init) ++ finish_bytes(finish, filter_state(step, bytes, init))
+fn filter_output<C>(step: C → BitVec(8) → Filtered<C>, init: C, counts: List<C → Nat>, finish: Finish, bytes: List<BitVec(8)>) → List<BitVec(8)> {
+    filter_emitted(step, bytes, init) ++ finish_bytes(finish, counts, filter_state(step, bytes, init))
 }
 
 // A program: the step from `init`, whose Nat fields are `counts` in order, and
 // its finish; `spec` says what stdout is. Each count grows by at most one per
 // byte, so it fits a word for any input a process can read: case analysis
 // and `omega` show it for the usual step, and a program that needs more gives
-// `advances := …` itself.
-record Filter<C>(step: C → BitVec(8) → Filtered<C>, init: C, counts: List<C → Nat>, finish: Finish<C>,
+// `advances := …` itself. A counting program proves `computes` from one fact
+// per printed count (`line_computes`, `fields_computes` below).
+record Filter<C>(step: C → BitVec(8) → Filtered<C>, init: C, counts: List<C → Nat>, finish: Finish,
     spec: List<BitVec(8)> → List<BitVec(8)>) {
     advances: (state: C) → (byte: BitVec(8)) → counts_advance(counts, step(state, byte).next, state) := { split_all; all_goals { omega } },
-    computes: (bytes: List<BitVec(8)>) → spec(bytes) = filter_output(step, init, finish, bytes),
+    computes: (bytes: List<BitVec(8)>) → spec(bytes) = filter_output(step, init, counts, finish, bytes),
 }
 
 // A step that only counts prints the finish of its fold and nothing else.
-theorem counting_output<C>(g: C → BitVec(8) → C, init: C, finish: Finish<C>, bytes: List<BitVec(8)>):
-    filter_output(counting(g), init, finish, bytes) = finish_bytes(finish, fold_bytes(g, bytes, init)) {
-    trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ e => e ++ finish_bytes(finish, filter_state(counting(g), bytes, init)),
+theorem counting_output<C>(g: C → BitVec(8) → C, init: C, counts: List<C → Nat>, finish: Finish, bytes: List<BitVec(8)>):
+    filter_output(counting(g), init, counts, finish, bytes) = finish_bytes(finish, counts, fold_bytes(g, bytes, init)) {
+    trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ e => e ++ finish_bytes(finish, counts, filter_state(counting(g), bytes, init)),
             counting_emitted(g, bytes, init)),
-        cong_fn<C, List<BitVec(8)>>(λ s => finish_bytes(finish, s), counting_state(g, bytes, init)))
+        cong_fn<C, List<BitVec(8)>>(λ s => finish_bytes(finish, counts, s), counting_state(g, bytes, init)))
 }
 // A byte map prints the input's image.
 theorem mapping_output(f: BitVec(8) → BitVec(8), bytes: List<BitVec(8)>):
-    filter_output(mapping(f), Stateless(), Quiet, bytes) = bytes.map(f) {
+    filter_output(mapping(f), Stateless(), Nil, Quiet, bytes) = bytes.map(f) {
     trans(List::append_nil(filter_emitted(mapping(f), bytes, Stateless())), mapping_emitted(f, bytes, Stateless()))
+}
+
+// ---------------------------------------------------------------------------
+// What a counting step's fold computes, from what one byte does to a count
+// (docs/native-programs-read-like-programs-design.md §3, S1). A program proves
+// the per-byte fact, usually by `split_all`; these carry it over the input.
+
+// A count the step raises by one at each byte `p` holds of counts those bytes.
+theorem counts_filtered<C>(g: C → BitVec(8) → C, count: C → Nat, p: BitVec(8) → Bool,
+    grows: (s: C) → (b: BitVec(8)) → count(g(s, b)) = count(s) + Nat::of_bit(p(b)), bytes: List<BitVec(8)>):
+    (s: C) → count(fold_bytes(g, bytes, s)) = count(s) + bytes.filter(p).len() {
+    match bytes {
+        Nil => λ s => refl,
+        Cons(b, rest) => λ s => {
+            let ih = counts_filtered(g, count, p, grows, rest, g(s, b));
+            let grew = grows(s, b);
+            let kept = List::len_filter_cons(b, rest, p);
+            let sum: (count(fold_bytes(g, rest, g(s, b))) = count(s) + Cons(b, rest).filter(p).len()) = omega;
+            sum
+        },
+    }
+}
+
+// A count the step raises by one at every byte counts the bytes.
+theorem counts_len<C>(g: C → BitVec(8) → C, count: C → Nat,
+    grows: (s: C) → (b: BitVec(8)) → count(g(s, b)) = Succ(count(s)), bytes: List<BitVec(8)>):
+    (s: C) → count(fold_bytes(g, bytes, s)) = count(s) + bytes.len() {
+    match bytes {
+        Nil => λ s => refl,
+        Cons(b, rest) => λ s => {
+            let ih = counts_len(g, count, grows, rest, g(s, b));
+            let grew = grows(s, b);
+            let sum: (count(fold_bytes(g, rest, g(s, b))) = count(s) + Succ(rest.len())) = omega;
+            sum
+        },
+    }
+}
+
+// Runs: the non-empty pieces between separators, such as `wc`'s words.
+
+// What a byte adds to a run count: one when it is not a separator and the
+// state was not already in a run.
+fn starts_run(cut, inside: Bool) → Nat { match cut { True => 0, False => match inside { True => 0, False => 1 } } }
+
+fn runs_of<A>(pieces: List<List<A>>) → Nat { pieces.filter(List::non_empty).len() }
+
+// Whether the first piece is a run: the one a state already inside a run is
+// in, and counted when it began.
+fn first_run<A>(pieces: List<List<A>>) → Nat { match pieces { Nil => 0, Cons(piece, _) => Nat::of_bit(piece.non_empty()) } }
+fn inside_runs<A>(inside: Bool, pieces: List<List<A>>) → Nat { match inside { True => first_run(pieces), False => 0 } }
+
+theorem onto_first_runs<A>(x: A, pieces: List<List<A>>): runs_of(List::onto_first(x, pieces)) + first_run(pieces) = Succ(runs_of(pieces)) {
+    match pieces as λ ps => runs_of(List::onto_first(x, ps)) + first_run(ps) = Succ(runs_of(ps)) {
+        Nil => refl,
+        Cons(piece, rest) => match piece as λ p => Succ(runs_of(rest)) + first_run(Cons(p, rest)) = Succ(runs_of(Cons(p, rest))) {
+            Nil => refl, Cons(_, _) => refl,
+        },
+    }
+}
+theorem onto_first_starts<A>(x: A, pieces: List<List<A>>): first_run(List::onto_first(x, pieces)) = 1 {
+    match pieces as λ ps => first_run(List::onto_first(x, ps)) = 1 { Nil => refl, Cons(_, _) => refl }
+}
+
+// One byte: what the count and the flag do, against what the pieces count and
+// start with.
+theorem runs_one<A>(x: A, pieces: List<List<A>>, total, before: Nat): (cut, inside: Bool) →
+    (total + inside_runs(!cut, pieces) = (before + starts_run(cut, inside)) + runs_of(pieces)) →
+    total + inside_runs(inside, List::split_onto(cut, x, pieces)) = before + runs_of(List::split_onto(cut, x, pieces)) {
+    split_all;
+    all_goals {
+        let joined = onto_first_runs(x, pieces);
+        let starts = onto_first_starts(x, pieces);
+        let empty: (runs_of(Cons(Nil, pieces)) = runs_of(pieces)) = refl;
+        omega
+    }
+}
+
+// A count the step raises at each run's first byte, beside a flag saying
+// whether the state is in a run, counts the runs, less the first when the
+// state starts inside it.
+theorem counts_runs<C>(g: C → BitVec(8) → C, count: C → Nat, inside: C → Bool, sep: BitVec(8) → Bool,
+    grows: (s: C) → (b: BitVec(8)) → count(g(s, b)) = count(s) + starts_run(sep(b), inside(s)),
+    flag: (s: C) → (b: BitVec(8)) → inside(g(s, b)) = !sep(b), bytes: List<BitVec(8)>):
+    (s: C) → count(fold_bytes(g, bytes, s)) + inside_runs(inside(s), bytes.split_by(sep)) = count(s) + runs_of(bytes.split_by(sep)) {
+    match bytes {
+        Nil => λ s => match inside(s) as λ i => count(s) + inside_runs(i, Cons(Nil<BitVec(8)>, Nil)) = count(s) + 0 { True => refl, False => refl },
+        Cons(b, rest) => λ s => {
+            let ih = counts_runs(g, count, inside, sep, grows, flag, rest, g(s, b));
+            let flagged = j(flag(s, b), λ i _ => count(fold_bytes(g, rest, g(s, b))) + inside_runs(i, rest.split_by(sep)) =
+                count(g(s, b)) + runs_of(rest.split_by(sep)), ih);
+            let grown = j(grows(s, b), λ n _ => count(fold_bytes(g, rest, g(s, b))) + inside_runs(!sep(b), rest.split_by(sep)) =
+                n + runs_of(rest.split_by(sep)), flagged);
+            runs_one(b, rest.split_by(sep), count(fold_bytes(g, rest, g(s, b))), count(s), sep(b), inside(s), grown)
+        },
+    }
+}
+
+// From a state outside a run, the count is the runs.
+theorem counts_runs_from<C>(g: C → BitVec(8) → C, count: C → Nat, inside: C → Bool, sep: BitVec(8) → Bool,
+    grows: (s: C) → (b: BitVec(8)) → count(g(s, b)) = count(s) + starts_run(sep(b), inside(s)),
+    flag: (s: C) → (b: BitVec(8)) → inside(g(s, b)) = !sep(b), init: C, outside: inside(init) = False, bytes: List<BitVec(8)>):
+    count(fold_bytes(g, bytes, init)) = count(init) + runs_of(bytes.split_by(sep)) {
+    let all = counts_runs(g, count, inside, sep, grows, flag, bytes, init);
+    let none: (inside_runs(inside(init), bytes.split_by(sep)) = 0) = j(sym(outside), λ i _ => inside_runs(i, bytes.split_by(sep)) = 0, refl);
+    omega
+}
+
+// ---------------------------------------------------------------------------
+// What a counting program prints, from one fact per printed count.
+
+// A program that prints its first count as a line prints the line of what that
+// count means.
+theorem line_computes<C>(g: C → BitVec(8) → C, init: C, count: C → Nat, rest: List<C → Nat>, means: List<BitVec(8)> → Nat,
+    counted: (bytes: List<BitVec(8)>) → means(bytes) = count(fold_bytes(g, bytes, init))):
+    (bytes: List<BitVec(8)>) → decimal_line(means(bytes)) = filter_output(counting(g), init, Cons(count, rest), Line, bytes) {
+    λ bytes => trans(cong_fn<Nat, List<BitVec(8)>>(λ n => decimal_line(n), counted(bytes)),
+        sym(counting_output(g, init, Cons(count, rest), Line, bytes)))
+}
+
+// A program that prints its first three counts as fields prints the fields of
+// what they mean.
+theorem fields_computes<C>(g: C → BitVec(8) → C, init: C, first, second, third: C → Nat, rest: List<C → Nat>,
+    first_means, second_means, third_means: List<BitVec(8)> → Nat,
+    first_counted: (bytes: List<BitVec(8)>) → first_means(bytes) = first(fold_bytes(g, bytes, init)),
+    second_counted: (bytes: List<BitVec(8)>) → second_means(bytes) = second(fold_bytes(g, bytes, init)),
+    third_counted: (bytes: List<BitVec(8)>) → third_means(bytes) = third(fold_bytes(g, bytes, init))):
+    (bytes: List<BitVec(8)>) → three_fields_line(first_means(bytes), second_means(bytes), third_means(bytes)) =
+        filter_output(counting(g), init, Cons(first, Cons(second, Cons(third, rest))), Fields, bytes) {
+    λ bytes => {
+        let folded = fold_bytes(g, bytes, init);
+        let one = j(first_counted(bytes), λ n _ => three_fields_line(first_means(bytes), second_means(bytes), third_means(bytes)) =
+            three_fields_line(n, second_means(bytes), third_means(bytes)), refl);
+        let two = j(second_counted(bytes), λ n _ => three_fields_line(first(folded), second_means(bytes), third_means(bytes)) =
+            three_fields_line(first(folded), n, third_means(bytes)), refl);
+        let three = j(third_counted(bytes), λ n _ => three_fields_line(first(folded), second(folded), third_means(bytes)) =
+            three_fields_line(first(folded), second(folded), n), refl);
+        trans(one, trans(two, trans(three, sym(counting_output(g, init, Cons(first, Cons(second, Cons(third, rest))), Fields, bytes)))))
+    }
 }

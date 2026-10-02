@@ -58,10 +58,10 @@ theorem filter_line_tail<C>(shape: FilterShape<C>, count: C → Nat, word: LineW
 
 // What the program says stdout is: on a run that ends at the empty read and
 // whose finish sent its bytes, stdout received `spec` of stdin.
-theorem filter_prints<C>(shape: FilterShape<C>, finish: Finish<C>, spec: List<BitVec(8)> → List<BitVec(8)>,
-    computes: (bytes: List<BitVec(8)>) → spec(bytes) = filter_output(shape.step, shape.init, finish, bytes),
+theorem filter_prints<C>(shape: FilterShape<C>, finish: Finish, spec: List<BitVec(8)> → List<BitVec(8)>,
+    computes: (bytes: List<BitVec(8)>) → spec(bytes) = filter_output(shape.step, shape.init, shape.counts, finish, bytes),
     tail: List<LinuxEvent>, steps: List<EofStep<List<WriteStep>>>, ok: FilterSteps(shape, steps),
-    finished: sent_to(BitVec::ofNat(1), tail) = finish_bytes(finish, filter_state(shape.step, eof_input(steps), shape.init))):
+    finished: sent_to(BitVec::ofNat(1), tail) = finish_bytes(finish, shape.counts, filter_state(shape.step, eof_input(steps), shape.init))):
     sent_to(BitVec::ofNat(1), filter_events(shape, steps, AtEnd, tail)) = spec(eof_input(steps)) {
     trans(filter_sends(shape, tail, steps, ok),
         trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ t => filter_emitted(shape.step, eof_input(steps), shape.init) ++ t, finished),

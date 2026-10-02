@@ -72,9 +72,9 @@ const BURSTS: &[&[u8]] = &[b"one tw", b"o\nthr", b"", b"ee  ", b"four\n\n"];
 fn wc_counts_lines_words_and_bytes() {
     let directory = scratch("wc");
     for edits in [
-        &[("    Fields(λ s => s.lines, λ s => s.words, λ s => s.bytes), wc_out) {",
-            "    Fields(λ s => s.lines, λ s => s.words, λ s => s.bytes), λ bytes => three_fields_line(wc_words(bytes), wc_lines(bytes), wc_bytes(bytes))) {")][..],
-        &[("    Fields(λ s => s.lines, λ s => s.words, λ s => s.bytes), wc_out) {", "    Fields(λ s => s.words, λ s => s.lines, λ s => s.bytes), wc_out) {")][..],
+        &[("three_fields_line(wc_lines(bytes), wc_words(bytes), wc_bytes(bytes)) }",
+            "three_fields_line(wc_words(bytes), wc_lines(bytes), wc_bytes(bytes)) }")][..],
+        &[("[λ s => s.lines, λ s => s.words, λ s => s.bytes],", "[λ s => s.words, λ s => s.lines, λ s => s.bytes],")][..],
     ] {
         let source = mistaken(&directory, "wc", edits);
         assert_refused_at(&build(&directory, &source), &source, &[directory.join("wc"), directory.join("wc.certificate.hthr")]);

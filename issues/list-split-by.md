@@ -18,3 +18,7 @@ append, the count of pieces, and concatenation with the separators restoring
 the list. Also `non_empty` or `is_empty` on lists, if they are missing.
 
 Related: [[fold-count-lemmas]], whose run-count lemma is stated over it.
+
+## Log
+
+- 2026-10-02: 2026-10-02: List::split_by (via split_onto/onto_first), List::non_empty, List::len_filter_cons landed in std. Still wanted: piece count (len = filter(sep).len + 1), append, concat-with-separators lemmas.
