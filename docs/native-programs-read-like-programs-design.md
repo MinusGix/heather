@@ -1,6 +1,6 @@
 # A native program reads like a program
 
-Status: **scoped 2026-10-02; V1–V5 run (§4.1); S6, S1 and S2 landed; S3–S5 next.** Anchor issue:
+Status: **scoped 2026-10-02; V1–V5 run (§4.1); S6, S1, S2 and S3 parts 1–2 landed; S3's frontend is paused for a design round (`native-frontend-decided-matches`).** Anchor issue:
 `issues/native-programs-read-like-programs.md`. This round comes after step 2
 of `docs/automatic-author-surface-design.md` (the stream filter) and before
 step 3 (`issues/native-one-program-logic.md`, which waits on ITrees).
@@ -198,18 +198,22 @@ Issue: `byte-vocabulary-for-native-programs`. The shape depends on decision
 - **Imports.** Byte literals need `import algebra; import char; import byte;`
   (`literal-classes-need-importing`).
 
-**Frontend design (part 3).** A `decide<P>()` match, or a Bool match on
-`&&`, `||` or `!`, is reflected into a test tree whose leaves are comparison
-bits, and lowered as nested conditionals, which is short-circuit code. The
-source expansion keeps the source's own form at the tree's head, so
-`_source_expands` stays `refl`. The observation bridges to the nested form
-with library lemmas, all checked in a probe (`probes/ergo/t_s3_reflect.hthr`):
-- `Reflects(P, bit)`, with `reflects_lt`, `reflects_le` (bit
-  `!b.unsigned_lt_bit(a)`), `reflects_eq` and the connectives;
-- `decided_select`, a decision's match as the match on a reflecting bit, for
-  any `Decide` instance;
-- `and_select`, `or_select` and `not_select`, a connective's match as nested
-  matches on its operands.
+**Built, part 2 (2026-10-02, fd95e486): the `Equal` node.** FunctionIR
+`Equal`, x86 SETE, a fused CMP + JNE, and narrow operands compared
+zero-extended. CMP's zero flag is equality (`zero_bits_sub`), with no borrow
+law. `eq_bit` is a frontend producer. It was built by an agent from a brief;
+its deviations are in the commit, and two follow-ups are filed
+(`native-narrow-compare-fusion`, `filter-default-spells-program-names`).
+
+**Part 3, the frontend reading `decide` and connectives: paused
+(2026-10-02, user).** Reflection into short-circuit conditionals works
+(branch `s3-frontend-wip`). Tying the generated expansion to a source that
+branches on decisions does not: `split_all` cannot prove it (abstracting a
+bit inside a decision's proofs gives an ill-typed motive), and direct
+bridging or a `Decide` that carries its bit are both bigger decisions.
+`issues/native-frontend-decided-matches.md` owns them, with costs. Until
+then a step writes byte tests as `eq_bit`, `unsigned_lt_bit` and Bool
+matches, and specs and proofs can use decided propositions freely.
 
 ### S4. Migrate the examples
 

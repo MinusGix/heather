@@ -37,3 +37,4 @@ Out of scope:
 - 2026-10-02: S6 landed: split_all reduces defined heads at decided matches, restates later binders simplified, states literal facts; Cons(Nil, xs) infers. Residue: split-all-revise-hypotheses. Suite 3156 passed.
 - 2026-10-02: S1+S2 landed: wc.hthr 320 → 115 lines, wc_l proof two theorems; executables match host tools. Suite 3156. Next S3 (byte vocabulary).
 - 2026-10-02: Filed literal-classes-need-importing (S3 papercut).
+- 2026-10-02: S3: library + literals (5c32d454) and Equal node (fd95e486) landed; frontend decided matches paused for design (native-frontend-decided-matches, WIP on branch s3-frontend-wip). Filed split-all-through-decisions, filter-default-spells-program-names, native-narrow-compare-fusion.
