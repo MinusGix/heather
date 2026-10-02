@@ -1,6 +1,6 @@
 # A native program reads like a program
 
-Status: **scoped 2026-10-02; V1–V5 run (§4.1), building not started.** Anchor issue:
+Status: **scoped 2026-10-02; V1–V5 run (§4.1); S6 landed, S1–S5 next.** Anchor issue:
 `issues/native-programs-read-like-programs.md`. This round comes after step 2
 of `docs/automatic-author-surface-design.md` (the stream filter) and before
 step 3 (`issues/native-one-program-logic.md`, which waits on ITrees).
@@ -167,10 +167,35 @@ one.
 
 ### S6. `split_all` reduces defined heads and states literal facts
 
-Issues: `split-all-reduce-defined-heads` (required since V1/V2: a predicate
-built with `&&` fails the bundle's default without it) and
-`split-all-closed-tonat-literals` (literal widths with `k < 2^w` produce
-`14 <= toNat(byte)`).
+Issues: `split-all-reduce-defined-heads`, `split-all-closed-tonat-literals`,
+and `cons-nil-argument-inference`, which the S6 work ran into.
+
+**Built 2026-10-02.** Changes are in `crates/elab/src/goal_combinators.rs`
+and `constructor.rs`; the described behaviour is in `docs/goal-combinators.md`.
+
+- **Defined heads.** `simplify_goal` replaces a call by the arm its match
+  selects (`matched_at_constructor`), but only when the match ι-reduces to a
+  value that the source can spell, with no eliminator at its head. Any
+  eliminator counts as the match: `List`'s match is not a `Case`. A
+  match's scrutinee is simplified too, so `!b && c` reduces once `b` is
+  decided. A relation's head (`Le`) is never reduced, only its arguments;
+  the new test caught `0 <= 1` computing to `True`.
+- **Hypotheses.** A binder introduced after a split is restated by a typed
+  `let` at its simplified type. A λ annotation does not work, because the
+  binder keeps the expected domain. A hypothesis already in context is not
+  revised (`split-all-revise-hypotheses`).
+- **Literal facts.** A comparison against a closed `ofNat(w, k)` gets its
+  Nat fact at `k`.
+- **`Cons(Nil, xs)`.** `infer_ctor` defers a field it cannot infer, and
+  `ctor_from_child` reads a non-indexed family's instance off a child
+  argument. The original error stands when nothing determines the
+  instance. Omega's certificates spell such atoms, so the leaf needed this.
+
+Result on the probes: wc's step facts close with plain `omega`; wc_l written
+with `&&` passes the bundle's default `advances`; the run-count case lemma
+is `split_all` plus three facts (it was about 25 lines of motives). Two of
+those facts are real lemmas; the third, `words(Cons(Nil, ps)) = words(ps)`, is
+`refl` and waits on `split-all-through-recursive-definitions`.
 
 ## 4. Verification first (stop and report if one refutes the plan)
 

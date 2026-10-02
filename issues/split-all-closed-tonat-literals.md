@@ -1,6 +1,6 @@
 ---
 title: split_all's comparison facts leave closed toNat(ofNat(k)) as omega atoms
-status: open
+status: closed
 labels: [proofs,tactics,bitvec]
 created: 2026-10-02
 updated: 2026-10-02
@@ -19,3 +19,7 @@ Fix: when the width is a literal and `k < 2^w`, `split_all` states the fact
 at the literal (`14 <= toNat(byte)`), or `omega` reads a closed
 `toNat(ofNat(k))` as `k`. Small. `bv_omega` is the workaround, and arguably
 the right leaf for byte steps anyway.
+
+## Log
+
+- 2026-10-02: Fixed 2026-10-02 (S6 of native-programs-read-like-programs; docs/native-programs-read-like-programs-design.md S6, docs/goal-combinators.md). Suite 3156 passed.

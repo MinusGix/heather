@@ -36,15 +36,26 @@ Then, at each leaf, the goal is taken apart until nothing finite is left
   of a finite type that the source can spell (`s.inside`). Each branch gets
   an equation stating the scrutinee's constructor. For a comparison, with
   `bitvec_omega` imported, it also supplies the corresponding Nat order as an
-  ordinary `have`, usable by both `omega` and `bv_omega`.
+  ordinary `have`, usable by both `omega` and `bv_omega`. A closed literal
+  operand is stated at its value (`14 <= byte.toNat()`, not
+  `toNat(ofNat(14))`), so plain `omega` can compare the constants of two
+  splits and close a case they rule out.
 
 The split specializes every occurrence of what it splits. That includes an
 occurrence the goal reaches only through a definition, such as
 `wc_next(…, s)` beside a step that matched on `s.inside`; otherwise the two
 would be split independently. Between steps the goal is simplified alike
 everywhere: computed matches, projections of pairs and applied function
-literals are reduced, inside constructors too. The usual composition handles
-restoring steps:
+literals are reduced, inside constructors too. So is a call of a definition
+whose match the split decided: `Bool::and(False, b)` once a comparison is
+known, `split_at(False, x, ps)` once `cut` is. Such a call is replaced by the
+arm it selects, but only when the arm is a value that the source can spell,
+with no match left at its head. A call whose match is still stuck, or a
+library call such as `words(xs)` that unfolds to no deciding match, stays as
+written. A relation's head (`Le(a, b)`) is never reduced, only its arguments.
+A hypothesis introduced after a split is restated at its simplified type, as
+the goal is, so a leaf reads both at one spelling. The usual composition
+handles restoring steps:
 
 ```text
 fn place(s, threshold, weight: BitVec(8)) → BitVec(8) {
@@ -67,8 +78,10 @@ become visible. The leaf remains independent of the splitter: `refl` and other
 checking expressions work too. A match the bounded search cannot expose
 leaves the goal to the written leaf.
 
-What it does not do yet: split a hypothesis (only the goal is taken apart),
-and unfold a recursive definition to a spelling a leaf can read. Unfolding
+What it does not do yet: split a hypothesis, or revise one already in
+context when a split substitutes into it (only binders introduced after the
+split are simplified, so state such a premise as a binder of the goal); and
+unfold a recursive definition to a spelling a leaf can read. Unfolding
 `wc_l(Cons(byte, rest))` leaves the raw recursor where `wc_l(rest)` was,
 which `omega` cannot spell (issues/split-all-through-recursive-definitions.md).
 

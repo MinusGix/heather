@@ -584,6 +584,12 @@ impl Elaborator {
             );
         }
         let mut sols: Vec<Option<(Type, Level)>> = vec![None; ind.params.len()];
+        // A field that cannot be inferred on its own (`Nil` in `Cons(Nil,
+        // xs)`) may still be fixed by a later child argument: its error is
+        // kept and reported only if nothing else determines the instance.
+        // `build_ctor` checks every argument against its field afterwards,
+        // so an error in the argument itself is still reported, there.
+        let mut deferred = None;
         for (f, arg) in self.ctor_fields(ind, i).iter().zip(args) {
             let TyKind::Named { name, args: targs } = &f.kind else {
                 continue;
@@ -595,8 +601,12 @@ impl Elaborator {
                 continue;
             };
             if sols[p].is_none() {
-                let (_, ty, lvl) = self.elab_infer(cx, arg.borrow())?;
-                sols[p] = Some((ty, lvl));
+                match self.elab_infer(cx, arg.borrow()) {
+                    Ok((_, ty, lvl)) => sols[p] = Some((ty, lvl)),
+                    Err(e) => {
+                        deferred.get_or_insert(e);
+                    }
+                }
             }
         }
         let mut targs = Vec::with_capacity(sols.len());
@@ -616,6 +626,9 @@ impl Elaborator {
                 // issues/elab-unifier-completeness.md's and not this function's.
                 if let Some(r) = self.ctor_from_child(cx, ind, i, args, span) {
                     return r;
+                }
+                if let Some(e) = deferred {
+                    return Err(e);
                 }
                 return err(
                     format!(
@@ -669,7 +682,20 @@ impl Elaborator {
         args: &[A],
         span: Span,
     ) -> Option<R<(Term, Type, Level)>> {
-        if ind.index.is_none() || args.len() != ind.ctors[i].fields.len() {
+        if args.len() != ind.ctors[i].fields.len() {
+            return None;
+        }
+        // A family with no index: a child's type is the constructor's result
+        // type itself (`Cons(Nil, xs)` is at `xs`'s type).
+        if ind.index.is_none() && ind.skel.is_none() {
+            let k = ind.ctors[i].kind.iter().position(|f| *f == inductive::FieldKind::Plain)?;
+            let (_, ty, lvl) = self.elab_infer(cx, args[k].borrow()).ok()?;
+            if self.tag_of(&ty)?.tag != ind.tag {
+                return None;
+            }
+            return Some(self.build_ctor(cx, ind, i, args, &ty, &lvl, span).map(|t| (t, ty, lvl)));
+        }
+        if ind.index.is_none() {
             return None;
         }
         let k = ind.ctors[i]

@@ -373,12 +373,28 @@ pub(crate) fn next_step(elab: &Elaborator, cx: &Cx, expected: &Type, leaf: &Expr
         // `(x: A) → B`: introduce `x`, and split it when `A` is finite.
         Ok(Type::Pi { dom, .. }) => {
             let name = fresh(elab, cx, format!("__split_all_x{}", cx.names.len()));
-            let body = match type_inductive(elab, cx, &dom).filter(|inductive| finite_inductive(inductive)) {
+            let finite = type_inductive(elab, cx, &dom).filter(|inductive| finite_inductive(inductive));
+            let body = match finite {
                 Some(inductive) => {
                     let local = FiniteLocal { name: name.clone(), constructors: constructors(&inductive) };
                     tree(std::slice::from_ref(&local), &continuation(leaf, span), span, cx.names.len())
                 }
-                None => continuation(leaf, span),
+                // A hypothesis an earlier split decided in part is restated
+                // at its simplified type, as the goal is, so the leaf reads
+                // it at the spelling it reads the goal (`runs_start(False,
+                // False)` is `1`). The binder keeps the goal's own domain.
+                None => match simplified_binder(elab, cx, &dom, &name) {
+                    Some(ty) => Expr {
+                        kind: ExprKind::Block(Box::new(Block {
+                            stmts: vec![Stmt::Let { name: name.clone(), ty: Some(ty), expr: var(&name), span, opaque: true }],
+                            result: Box::new(continuation(leaf, span)),
+                            ons: vec![],
+                            span,
+                        })),
+                        span,
+                    },
+                    None => continuation(leaf, span),
+                },
             };
             return Step::Intro(Expr {
                 kind: ExprKind::Lam {
@@ -411,6 +427,84 @@ pub(crate) fn next_step(elab: &Elaborator, cx: &Cx, expected: &Type, leaf: &Expr
     }
 }
 
+/// A binder's type after the simplification the goal gets, spelled for an
+/// annotation, when it differs and the source can spell it.
+fn simplified_binder(elab: &Elaborator, cx: &Cx, dom: &Type, name: &str) -> Option<heather_syntax::ast::Ty> {
+    let decoded = crate::inductive::decoded(dom);
+    let simplified = simplify_goal(elab, cx, &decoded);
+    if simplified == *decoded {
+        return None;
+    }
+    let spelled = elab.spell_type_source(cx, &simplified)?;
+    let ExprKind::Lam { mut binders, .. } = crate::omega_cert::parse_generated_expr(&format!("λ ({name}: {spelled}) => {name}")).ok()?.kind else {
+        return None;
+    };
+    binders.pop()?.ty
+}
+
+/// A closed word literal's value, `ofNat(w, k)` with both literal and
+/// `k < 2^w`, so its `toNat` is `k` by computation.
+fn literal_word(elab: &Elaborator, term: &Term) -> Option<u64> {
+    fn nat(term: &Term) -> Option<u64> {
+        match term {
+            Term::Zero => Some(0),
+            Term::NatLit(value) => value.as_u64(),
+            Term::Succ(inner) => nat(inner)?.checked_add(1),
+            _ => None,
+        }
+    }
+    let args = crate::omega_cert::named_args(elab, term, "bitvec::BitVec::ofNat")?;
+    let [width, value] = args.as_slice() else { return None };
+    let (width, value) = (nat(width)?, nat(value)?);
+    (width == 64 || (width < 64 && value < (1u64 << width))).then_some(value)
+}
+
+/// A call of a definition whose body matches on an argument that is now a
+/// constructor (`split_at(False, x, ps)`, or `Bool::and(False, b)` once a
+/// split decided its operand): the arm the match selects, when the source can
+/// spell it. Anything else stays a call: a library call such as `words(xs)`
+/// unfolds to no match that selects an arm, and a recursive definition
+/// selects one whose recursive calls are the raw recursor, which no source
+/// spells (issues/split-all-through-recursive-definitions.md owns that case).
+fn matched_at_constructor(elab: &Elaborator, cx: &Cx, call: &Term) -> Option<Term> {
+    let (head, _) = crate::spelling::app_spine(call);
+    if !matches!(head, Term::GlobalTm { .. }) || word_operation(elab, call) {
+        return None;
+    }
+    let oracle = elab.goal_oracle();
+    for reduct in oracle.term_reducts(&cx.gamma, call, 16) {
+        if !eliminator_headed(&reduct) {
+            continue;
+        }
+        // The definition's match: it selects an arm only at a constructor,
+        // and the arm is taken only when it is a value the source spells,
+        // with no match left at its head. A match still stuck on a neutral
+        // leaves the call as written.
+        let selected = oracle.bounded(64).whnf_term_opaque(&cx.gamma, &reduct).ok()?;
+        if selected == reduct || eliminator_headed(&selected) {
+            return None;
+        }
+        elab.spell_term_source(cx, &selected)?;
+        return Some(selected);
+    }
+    None
+}
+
+/// A term whose head, below applications and projections, is an
+/// eliminator: a match, a recursor, or `J`.
+fn eliminator_headed(term: &Term) -> bool {
+    let mut head = head_match(term);
+    while let Some((fun, _)) = crate::spelling::app_of(head) {
+        head = head_match(fun);
+    }
+    matches!(
+        head,
+        Term::Case { .. } | Term::ElimNat { .. } | Term::ElimW { .. } | Term::ElimWf { .. } | Term::J { .. }
+            | Term::ElimEmpty { .. } | Term::ElimSEmpty { .. } | Term::ElimSquash { .. }
+            | Term::ElimCodeTy { .. } | Term::ElimCodeTm { .. }
+    )
+}
+
 /// Compute the constructor cases left by a previous split, including below
 /// applications, while keeping library calls spelled as library calls.
 pub(crate) fn simplify_goal(elab: &Elaborator, cx: &Cx, expected: &Type) -> Type {
@@ -433,6 +527,9 @@ pub(crate) fn simplify_goal(elab: &Elaborator, cx: &Cx, expected: &Type) -> Type
                     && let Ok(reduced) = elab.goal_oracle().bounded(64).whnf_term_opaque(&cx.gamma, &output)
                     && reduced != output
                 {
+                    return term(elab, cx, &reduced, budget);
+                }
+                if let Some(reduced) = matched_at_constructor(elab, cx, &output) {
                     return term(elab, cx, &reduced, budget);
                 }
             }
@@ -482,6 +579,20 @@ pub(crate) fn simplify_goal(elab: &Elaborator, cx: &Cx, expected: &Type) -> Type
                 {
                     return term(elab, cx, &reduced, budget);
                 }
+                // A scrutinee a split decided only in part (`!b && c` once
+                // `b` is known): simplify it, so the match selects its arm or
+                // stays stuck on what the next split decides.
+                if let Term::Case { scrut, .. } | Term::ElimNat { scrut, .. } = &mut output {
+                    let simplified = term(elab, cx, scrut, budget);
+                    if simplified != **scrut {
+                        *scrut = Rc::new(simplified);
+                        if let Ok(reduced) = elab.goal_oracle().bounded(64).whnf_term_opaque(&cx.gamma, &output)
+                            && reduced != output
+                        {
+                            return term(elab, cx, &reduced, budget);
+                        }
+                    }
+                }
             }
             _ => {}
         }
@@ -494,8 +605,24 @@ pub(crate) fn simplify_goal(elab: &Elaborator, cx: &Cx, expected: &Type) -> Type
             *lhs = Rc::new(term(elab, cx, lhs, &mut budget));
             *rhs = Rc::new(term(elab, cx, rhs, &mut budget));
         }
-        Type::El { tm, .. } => *tm = Rc::new(term(elab, cx, tm, &mut budget)),
+        // A relation (`Le(a, b)`) keeps its own spelling for the leaf: only
+        // its arguments are simplified, never the relation's head, which
+        // computes away at literals (`0 <= 1` is `True`).
+        Type::El { tm, .. } => *tm = Rc::new(arguments(elab, cx, tm, &mut budget)),
         _ => {}
+    }
+    // A goal that is not an application (a match on a split comparison)
+    // simplifies whole.
+    fn arguments(elab: &Elaborator, cx: &Cx, input: &Term, budget: &mut u32) -> Term {
+        let mut output = input.clone();
+        match &mut output {
+            Term::App { fun, arg, .. } | Term::AppAt { fun, arg } => {
+                *fun = Rc::new(arguments(elab, cx, fun, budget));
+                *arg = Rc::new(term(elab, cx, arg, budget));
+                output
+            }
+            _ => term(elab, cx, input, budget),
+        }
     }
     output
 }
@@ -548,6 +675,22 @@ fn split_stuck(
         .and_then(|comparison| crate::omega_cert::named_args(elab, comparison, "bitvec::BitVec::unsigned_lt_bit"))
         .and_then(|args| args.iter().map(|term| elab.spell_term_source(cx, term)).collect::<Option<Vec<_>>>())
         .map(|operands| operands.join(", "));
+    // Each word operand as the Nat the fact is stated at: a literal
+    // (`ofNat(8, 14)` is `14`) as its value, so that `omega`, which reads
+    // `toNat(ofNat(14))` as an unknown, can compare two splits' constants.
+    let sides = found
+        .comparison
+        .as_ref()
+        .and_then(|comparison| crate::omega_cert::named_args(elab, comparison, "bitvec::BitVec::unsigned_lt_bit"))
+        .filter(|args| args.len() == 3)
+        .and_then(|args| {
+            let side = |term: &Term| match literal_word(elab, term) {
+                Some(value) => Some(value.to_string()),
+                None => Some(format!("({}).toNat()", elab.spell_term_source(cx, term)?)),
+            };
+            let literal = literal_word(elab, args[1]).is_some() || literal_word(elab, args[2]).is_some();
+            literal.then(|| Some((side(args[1])?, side(args[2])?))).flatten()
+        });
     let depth = cx.names.len();
     let arms = found
         .constructors
@@ -560,10 +703,15 @@ fn split_stuck(
             // the Nat fact directly, including leaves such as `omega` that do
             // not read words.
             let outcome = match ctor.as_str() { "True" => Some("true"), "False" => Some("false"), _ => None };
+            let stated = |fact: String| match (&sides, outcome) {
+                (Some((left, right)), Some("true")) => format!("{{ let __split_fact: ({left} < {right}) = {fact}; __split_fact }}"),
+                (Some((left, right)), Some(_)) => format!("{{ let __split_fact: ({right} <= {left}) = {fact}; __split_fact }}"),
+                _ => fact,
+            };
             if let (Some(operands), Some(outcome)) = (&operands, outcome)
-                && let Ok(expr) = crate::omega_cert::parse_generated_expr(&format!(
+                && let Ok(expr) = crate::omega_cert::parse_generated_expr(&stated(format!(
                     "bitvec_omega::unsigned_{outcome}({operands}, {equation})"
-                ))
+                )))
             {
                 body = Expr {
                     kind: ExprKind::Block(Box::new(Block {

@@ -1,6 +1,6 @@
 ---
 title: split_all: reduce a non-recursive definition at the constructor a split substituted
-status: open
+status: closed
 labels: [tactics,proofs,elaboration]
 created: 2026-10-02
 updated: 2026-10-02
@@ -30,3 +30,7 @@ case is [[split-all-through-recursive-definitions]] (refolding needed). This
 case needs none, because the reduct contains no recursor.
 
 Related: [[native-programs-read-like-programs]].
+
+## Log
+
+- 2026-10-02: Fixed 2026-10-02 (S6 of native-programs-read-like-programs; docs/native-programs-read-like-programs-design.md S6, docs/goal-combinators.md). Suite 3156 passed.

@@ -71,6 +71,50 @@ fn bv_omega_suite() {
     names_atom_lists();
     proves_what_is_written_down_without_search();
     splits_stuck_comparisons();
+    splits_through_definitions();
+}
+
+/// What a split decides reaches the rest of the goal and the hypotheses
+/// (issues/split-all-reduce-defined-heads.md,
+/// issues/split-all-closed-tonat-literals.md): connectives and helpers at the
+/// constructor a split substituted reduce, a binder introduced after a split
+/// is restated simplified, and a comparison's fact against a literal is
+/// stated at the literal, so plain `omega` closes a case two splits rule out.
+fn splits_through_definitions() {
+    checks("a predicate built with connectives", r#"
+        fn newline(b: BitVec(8)) → Bool { !b.unsigned_lt_bit(BitVec::ofNat(10)) && b.unsigned_lt_bit(BitVec::ofNat(11)) }
+        fn blank(b: BitVec(8)) → Bool { newline(b) || !b.unsigned_lt_bit(BitVec::ofNat(32)) && b.unsigned_lt_bit(BitVec::ofNat(33)) }
+        fn step(count: Nat, b: BitVec(8)) → Nat { match newline(b) { False => count, True => Succ(count) } }
+        theorem advances(count: Nat, b: BitVec(8)): step(count, b) <= Succ(count) { split_all; all_goals { omega } }
+        theorem open_count(count: Nat): (b: BitVec(8)) → step(count, b) <= Succ(count) { split_all; all_goals { omega } }
+        fn bit(x: Bool) → Nat { match x { True => 1, False => 0 } }
+        theorem newline_blank(b: BitVec(8)): bit(newline(b)) <= bit(blank(b)) { split_all; all_goals { omega } }
+    "#);
+    checks("two splits' literals, compared by plain omega", r#"
+        fn ten(b: BitVec(8)) → Bool { match b.unsigned_lt_bit(BitVec::ofNat(10)) { True => False, False => b.unsigned_lt_bit(BitVec::ofNat(11)) } }
+        fn low(b: BitVec(8)) → Bool { match b.unsigned_lt_bit(BitVec::ofNat(14)) { True => match b.unsigned_lt_bit(BitVec::ofNat(9)) { True => False, False => True }, False => False } }
+        fn bit(x: Bool) → Nat { match x { True => 1, False => 0 } }
+        theorem ten_is_low(b: BitVec(8)): bit(ten(b)) <= bit(low(b)) { split_all; all_goals { omega } }
+    "#);
+    checks("a helper at the constructor a split chose, and a hypothesis after it", r#"
+        fn weight(cut: Bool) → Nat { match cut { True => 0, False => 1 } }
+        fn wrap<A>(cut: Bool, x: A) → List<A> { match cut { True => Cons(x, Nil), False => Nil } }
+        fn size<A>(xs: List<A>) → Nat { match xs { Nil => 0, Cons(_, _) => 1 } }
+        theorem balanced<A>(x: A, xs: List<A>, total: Nat): (cut: Bool) → (total = weight(cut) + size(xs)) →
+            total + size(wrap(cut, x)) = size(xs) + 1 {
+            split_all; all_goals { omega }
+        }
+    "#);
+    let error = refused("a false statement through a helper", r#"
+        fn weight(cut: Bool) → Nat { match cut { True => 0, False => 1 } }
+        fn wrap<A>(cut: Bool, x: A) → List<A> { match cut { True => Cons(x, Nil), False => Nil } }
+        fn size<A>(xs: List<A>) → Nat { match xs { Nil => 0, Cons(_, _) => 1 } }
+        theorem wrong<A>(x: A, xs: List<A>, total: Nat): (cut: Bool) → (total = weight(cut) + size(xs)) →
+            total + size(wrap(cut, x)) = size(xs) {
+            split_all; all_goals { omega }
+        }
+    "#);
+    assert!(error.contains("no contradiction"), "{error}");
 }
 
 fn splits_stuck_comparisons() {

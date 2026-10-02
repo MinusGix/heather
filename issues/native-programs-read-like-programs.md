@@ -34,3 +34,4 @@ Out of scope:
 
 - 2026-10-02: Decisions (user): byte tests are decided propositions (if b = '\n', Decide connectives, frontend recognises decide trees); record update is s with { f = e }. Design doc §5.
 - 2026-10-02: V1–V5 run (design §4.1): none refutes; S3 amended (connectives as short-circuit control flow — eager && hits RegisterPressure in the filter step); S6 now required (split-all-reduce-defined-heads); ZF⇔equality proved without a borrow law; literal reduction risk = Int literals library-wide.
+- 2026-10-02: S6 landed: split_all reduces defined heads at decided matches, restates later binders simplified, states literal facts; Cons(Nil, xs) infers. Residue: split-all-revise-hypotheses. Suite 3156 passed.
