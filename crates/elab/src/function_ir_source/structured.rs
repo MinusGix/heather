@@ -203,6 +203,7 @@ pub fn reflect_elaborated_structured(elaborator: &Elaborator, source_name: &str)
     }
     let (result, choice, record, filtered) = result_type(elaborator, caller, result)?;
     let comparison = elaborator.global_abs("bitvec::BitVec::unsigned_lt_bit").ok_or_else(|| SourceError::Unsupported("unsigned comparison is not loaded".into()))?;
+    let equal = elaborator.global_abs("bitvec::BitVec::eq_bit").ok_or_else(|| SourceError::Unsupported("equality is not loaded".into()))?;
     let payload = |slot| elaborator.lookup_inductive("bool::Bool")
         .and_then(|ind| elaborator.types.gdefs().abs_for(&crate::gendefs::GenDef::PayloadCode(ind.tag, slot)))
         .map(|abs| *abs as usize).ok_or_else(|| SourceError::Unsupported("Boolean payload identities are not loaded".into()));
@@ -237,7 +238,7 @@ pub fn reflect_elaborated_structured(elaborator: &Elaborator, source_name: &str)
                 None => bindings.push(ports[0]),
             }
         }
-        let mut builder = Builder { elaborator, caller, operations: OperationGlobals::resolve(elaborator)?, comparison, boolean_payloads,
+        let mut builder = Builder { elaborator, caller, operations: OperationGlobals::resolve(elaborator)?, comparison, equal, boolean_payloads,
             inputs: interface(&parameters), bindings, records, record_result: record_result.clone(), result, output, exit, emit, stack: vec![caller],
             next_id: first_free, needs_port: None, known: BTreeMap::new(), sources: BTreeMap::new(), bodies: BTreeMap::new() };
         match builder.region(term, 0) {
@@ -312,6 +313,7 @@ struct Builder<'a> {
     caller: usize,
     operations: OperationGlobals,
     comparison: usize,
+    equal: usize,
     boolean_payloads: [usize; 2],
     inputs: Vec<Port>,
     bindings: Vec<(StructuredSourceType, Option<Port>)>,
@@ -350,6 +352,7 @@ enum DagKey {
     Move(u64, u64),
     Binary(SourceBinaryOperation, u64, u64, u64),
     UnsignedLessThan(u64, u64, u64),
+    Equal(u64, u64, u64),
 }
 
 fn source_type_of(ty: StructuredSourceType) -> Option<cert::SourceType> {
@@ -371,6 +374,7 @@ fn read_back(nodes: &[Node], port: Port, produced: &cert::SourceValues) -> Optio
         Node::Const { width, value, .. } => SourceValue::Constant { width, value },
         Node::Move { width, source, .. } => return read_back(nodes, Port { id: source, width }, produced),
         Node::UnsignedLessThan { width, left, right, .. } => SourceValue::Less { width, left: operand(left, width)?, right: operand(right, width)? },
+        Node::Equal { width, left, right, .. } => SourceValue::Equal { width, left: operand(left, width)?, right: operand(right, width)? },
         Node::Add { width, left, right, .. } | Node::Sub { width, left, right, .. } | Node::BitAnd { width, left, right, .. }
         | Node::BitOr { width, left, right, .. } | Node::BitXor { width, left, right, .. } => {
             let operation = match node { Node::Add { .. } => "add", Node::Sub { .. } => "sub", Node::BitAnd { .. } => "band", Node::BitOr { .. } => "bor", _ => "bxor" };
@@ -502,11 +506,14 @@ impl Builder<'_> {
         }
         let (head, args) = application_spine(term);
         let abs = absolute(head, self.caller).ok_or_else(|| SourceError::Unsupported("source value must use a resolved pure operation".into()))?;
-        if abs == self.comparison && args.len() == 3 && expected == StructuredSourceType::Boolean {
+        if (abs == self.comparison || abs == self.equal) && args.len() == 3 && expected == StructuredSourceType::Boolean {
             let operand_width = nat_literal(args[0]).filter(|width| *width <= 64).ok_or_else(|| SourceError::Unsupported("comparison width must be a literal up to 64".into()))?;
             let ty = StructuredSourceType::Word(operand_width);
             let left = self.expression(args[1], depth, ty, dag, None)?.id;
             let right = self.expression(args[2], depth, ty, dag, None)?.id;
+            if abs == self.equal {
+                return self.node(dag, DagKey::Equal(operand_width, left, right), 1, target, |output| Node::Equal { width: operand_width, output, left, right });
+            }
             return self.node(dag, DagKey::UnsignedLessThan(operand_width, left, right), 1, target, |output| Node::UnsignedLessThan { width: operand_width, output, left, right });
         }
         if let StructuredSourceType::Word(width) = expected {
@@ -522,7 +529,7 @@ impl Builder<'_> {
             }
         }
         unsupported(if expected == StructuredSourceType::Boolean {
-            "Boolean values require an input, constant, or bitvec::BitVec::unsigned_lt_bit"
+            "Boolean values require an input, constant, bitvec::BitVec::unsigned_lt_bit or bitvec::BitVec::eq_bit"
         } else { "unsupported structured source operation or result type" })
     }
     /// A scalar value: a pure expression, or a call to a transparent helper
@@ -602,7 +609,7 @@ impl Builder<'_> {
         let mut stack = self.stack.clone();
         stack.push(callee);
         let mut nested = Builder { elaborator: self.elaborator, caller: callee,
-            operations: OperationGlobals::resolve(self.elaborator)?, comparison: self.comparison,
+            operations: OperationGlobals::resolve(self.elaborator)?, comparison: self.comparison, equal: self.equal,
             boolean_payloads: self.boolean_payloads, inputs: inputs.clone(), bindings, records: BTreeMap::new(), record_result: None,
             result: expected, output, exit: None, emit: None, next_id: self.next_id, stack, needs_port: None, known, sources: BTreeMap::new(), bodies: BTreeMap::new() };
         let mut region = nested.region(body, 0)?;
@@ -629,7 +636,7 @@ impl Builder<'_> {
         -> Result<Option<(Option<StructuredRegion>, Port, Option<cert::SourceValue>)>, SourceError>
     {
         let operation = self.operations.operations.get(&head).copied();
-        if args.len() != 3 || (operation.is_none() && head != self.comparison) { return Ok(None); }
+        if args.len() != 3 || (operation.is_none() && head != self.comparison && head != self.equal) { return Ok(None); }
         let Some(width) = nat_literal(args[0]).filter(|width| *width <= 64) else { return Ok(None); };
         let fits = match operation { Some(_) => expected == StructuredSourceType::Word(width), None => expected == StructuredSourceType::Boolean };
         if !fits { return Ok(None); }
@@ -656,6 +663,7 @@ impl Builder<'_> {
         let (left, right) = (ports[0].id, ports[1].id);
         let port = match operation {
             Some(operation) => self.node(&mut dag, DagKey::Binary(operation, width, left, right), width, target, |output| operation.node_at_width(width, output, left, right))?,
+            None if head == self.equal => self.node(&mut dag, DagKey::Equal(width, left, right), 1, target, |output| Node::Equal { width, output, left, right })?,
             None => self.node(&mut dag, DagKey::UnsignedLessThan(width, left, right), 1, target, |output| Node::UnsignedLessThan { width, output, left, right })?,
         };
         let value = read_back(&dag.nodes, port, &produced).filter(|_| producers.iter().all(|(_, _, value)| value.is_some()));
@@ -841,7 +849,8 @@ impl ReflectedStructuredFunction {
                     into.push(name.clone());
                     for (_, argument) in arguments { calls(argument, into); }
                 }
-                cert::SourceValue::Binary { left, right, .. } | cert::SourceValue::Less { left, right, .. } => { calls(left, into); calls(right, into); }
+                cert::SourceValue::Binary { left, right, .. } | cert::SourceValue::Less { left, right, .. }
+                | cert::SourceValue::Equal { left, right, .. } => { calls(left, into); calls(right, into); }
                 cert::SourceValue::Produced { value, .. } => calls(value, into),
                 cert::SourceValue::Port(_) | cert::SourceValue::Constant { .. } => {}
             }
@@ -913,11 +922,13 @@ impl Expansion<'_> {
                 Node::Move { width, output, source } => (output, width, operand(values, source, width)?),
                 Node::Add { width, output, left, right } | Node::Sub { width, output, left, right }
                 | Node::BitAnd { width, output, left, right } | Node::BitOr { width, output, left, right }
-                | Node::BitXor { width, output, left, right } | Node::UnsignedLessThan { width, output, left, right } => {
+                | Node::BitXor { width, output, left, right } | Node::UnsignedLessThan { width, output, left, right }
+                | Node::Equal { width, output, left, right } => {
                     let (function, comparison) = match node {
                         Node::Add { .. } => ("bitvec::BitVec::add", false), Node::Sub { .. } => ("bitvec::BitVec::sub", false),
                         Node::BitAnd { .. } => ("bitvec::BitVec::band", false), Node::BitOr { .. } => ("bitvec::BitVec::bor", false),
                         Node::BitXor { .. } => ("bitvec::BitVec::bxor", false), Node::UnsignedLessThan { .. } => ("bitvec::BitVec::unsigned_lt_bit", true),
+                        Node::Equal { .. } => ("bitvec::BitVec::eq_bit", true),
                         _ => unreachable!(),
                     };
                     let expression = HeatherExpr::explicit_call(function, [HeatherExpr::nat(width), operand(values, left, width)?, operand(values, right, width)?]);

@@ -45,6 +45,13 @@ fn narrow_constants_passthrough_and_comparisons_check() {
             Node::Sub { width: 16, output: 3, left: 2, right: 1 },
         ], outputs: vec![Port { id: 3, width: 16 }] }, Placements::from([(0, Gpr::Rdi), (1, Gpr::Rsi)])),
         ("byte_less", Region { inputs: vec![Port { id: 0, width: 8 }, Port { id: 1, width: 8 }], nodes: vec![Node::UnsignedLessThan { width: 8, output: 2, left: 0, right: 1 }], outputs: vec![Port { id: 2, width: 1 }] }, Placements::from([(0, Gpr::Rdi), (1, Gpr::Rsi)])),
+        // Narrow equality, of two open bytes and of a byte with a literal,
+        // compared zero-extended (`eq_bit_zero_extend`).
+        ("byte_equal", Region { inputs: vec![Port { id: 0, width: 8 }, Port { id: 1, width: 8 }], nodes: vec![Node::Equal { width: 8, output: 2, left: 0, right: 1 }], outputs: vec![Port { id: 2, width: 1 }] }, Placements::from([(0, Gpr::Rdi), (1, Gpr::Rsi)])),
+        ("byte_is_newline", Region { inputs: vec![Port { id: 0, width: 8 }], nodes: vec![
+            Node::Const { width: 8, output: 1, value: 10 },
+            Node::Equal { width: 8, output: 2, left: 0, right: 1 },
+        ], outputs: vec![Port { id: 2, width: 1 }] }, Placements::from([(0, Gpr::Rdi)])),
     ] {
         let emission = generate_structured(name, &StructuredRegion::Dataflow(region), &inputs, &[Gpr::Rax, Gpr::Rcx, Gpr::Rdx], Gpr::Rax).unwrap();
         if name == "byte_bitwise" || name == "byte_add_reversed" {
@@ -53,7 +60,15 @@ fn narrow_constants_passthrough_and_comparisons_check() {
         }
         let source = format!("{IMPORTS}\n{}", emission.text);
         elab.elab_module_source(name, &source).unwrap_or_else(|e| panic!("{}", e.render(&source)));
+        if name.starts_with("byte_equal") || name == "byte_is_newline" {
+            assert!(emission.text.contains("SetEqual(") && emission.text.contains("eq_bit_zero_extend(8, 56,"), "{}", emission.text);
+        }
     }
+    // Zero extension preserves equality but not a truncation: the law is
+    // refused at a wider operand truncated back.
+    let truncated = "import bitvec; import bool; import logic; theorem truncated_equal(a, b: BitVec(16)): @bitvec::BitVec::eq_bit(8, bitvec::BitVec::truncate(8, 8, a), bitvec::BitVec::truncate(8, 8, b)) = @bitvec::BitVec::eq_bit(16, a, b) { bitvec::BitVec::eq_bit_zero_extend(8, 8, bitvec::BitVec::truncate(8, 8, a), bitvec::BitVec::truncate(8, 8, b)) }";
+    let error = elab.elab_module_source("truncated_equal", truncated).expect_err("truncation does not preserve equality");
+    assert!(!error.render(truncated).contains("unknown"));
     let invalid = "import bitvec; import bool; import logic; theorem signed_is_unsigned(a, b: BitVec(8)): @bitvec::BitVec::signed_lt_bit(8, a, b) = @bitvec::BitVec::unsigned_lt_bit(64, @bitvec::BitVec::zero_extend(8, 56, a), @bitvec::BitVec::zero_extend(8, 56, b)) { sym(bitvec::BitVec::unsigned_lt_zero_extend(8, 56, a, b)) }";
     let error = elab.elab_module_source("wrong_signed_extension", invalid).expect_err("zero extension does not preserve signed comparison");
     assert!(!error.render(invalid).contains("unknown"));

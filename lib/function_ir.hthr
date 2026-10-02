@@ -50,6 +50,7 @@ inductive Node {
     ArithmeticShiftRight(width: Nat, output: Nat, value: Nat, amount: Nat),
     UnsignedLessThan(width: Nat, output: Nat, left: Nat, right: Nat),
     SignedLessThan(width: Nat, output: Nat, left: Nat, right: Nat),
+    Equal(width: Nat, output: Nat, left: Nat, right: Nat),
 }
 
 record Region {
@@ -72,6 +73,7 @@ fn node_output(node: Node) → Port {
         ArithmeticShiftRight(width, output, _, _) => Port(output, width),
         UnsignedLessThan(_, output, _, _) => Port(output, 1),
         SignedLessThan(_, output, _, _) => Port(output, 1),
+        Equal(_, output, _, _) => Port(output, 1),
     }
 }
 
@@ -318,6 +320,8 @@ fn NodeIndexedIn(directory: PortDirectory, index: Nat, node: Node) → Type {
             CompareNodeIndexed(directory, index, width, output, left, right),
         SignedLessThan(width, output, left, right) =>
             CompareNodeIndexed(directory, index, width, output, left, right),
+        Equal(width, output, left, right) =>
+            CompareNodeIndexed(directory, index, width, output, left, right),
     }
 }
 
@@ -477,6 +481,17 @@ theorem node_indexed_signed_less_than(
     node_indexed_compare(output_found, left_found, right_found)
 }
 
+theorem node_indexed_equal(
+    {directory: PortDirectory}, {index, width, output, left, right: Nat},
+    output_found: ProducedAt(directory, index, output, 1),
+    left_found: HasAvailableDirectoryPort(directory, left, width, index),
+    right_found: HasAvailableDirectoryPort(directory, right, width, index)):
+    NodeIndexedIn(directory, index,
+        Equal(width, output, left, right))
+{
+    node_indexed_compare(output_found, left_found, right_found)
+}
+
 fn NodesIndexed(directory: PortDirectory, nodes: List<Node>) → Nat → Type {
     match nodes {
         Nil => λ _ => True,
@@ -593,6 +608,9 @@ fn NodeHolds(values: Valuation(), node: Node) → Type {
             values(1, output) = BitVec::ofBool(
 
                     values(width, left).signed_lt_bit(values(width, right))),
+        Equal(width, output, left, right) =>
+            values(1, output) = BitVec::ofBool(
+                values(width, left).eq_bit(values(width, right))),
     }
 }
 

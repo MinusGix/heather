@@ -81,6 +81,18 @@ fn upcase(b: BitVec(8)) → BitVec(8) {
     match lower_byte(b) { True => b.sub(BitVec::ofNat(0x20)), False => b }
 }
 fn upcase_filter() → Stateless → BitVec(8) → Filtered<Stateless> { mapping(upcase) }
+// The newline as one equality test (`eq_bit`), as a step and as a count; the
+// keep step is a negative control's claim.
+fn eq_drop_step(s: Stateless, b: BitVec(8)) → Filtered<Stateless> {
+    match b.eq_bit(BitVec::ofNat(10)) { True => Filtered(s, None), False => Filtered(s, Some(b)) }
+}
+fn eq_keep_step(s: Stateless, b: BitVec(8)) → Filtered<Stateless> {
+    match b.eq_bit(BitVec::ofNat(10)) { True => Filtered(s, Some(b)), False => Filtered(s, None) }
+}
+fn eq_line_step(count: Nat, byte: BitVec(8)) → Nat {
+    match byte.eq_bit(BitVec::ofNat(10)) { False => count, True => Succ(count) }
+}
+fn eq_lines_filter() → Nat → BitVec(8) → Filtered<Nat> { counting(eq_line_step) }
 "#;
 
 // What every test stands on, built once per process.
@@ -199,6 +211,42 @@ fn lines_counting_piece_certifies() {
 #[test]
 fn upcase_mapping_piece_certifies() {
     certify("upcase", "filters::upcase_filter", None);
+}
+
+// `tr -d '\n'` with the newline tested by `eq_bit`: certified, at a literal
+// newline silent and at a letter kept; the same code claimed for the step
+// that keeps newlines is refused at the claim.
+#[test]
+fn equality_step_piece_certifies() {
+    let (elab, emission) = certify("eq_drop", "filters::eq_drop_step", None);
+    assert!(emission.pieces.contains("eq_bit") || emission.text.contains("eq_bit"), "{}", emission.pieces);
+    let client = "import eq_drop_step; import filter_step_piece; import stream_filter; import filters; import function_ir_loop_trace; \
+        import x86_64; import bitvec; import logic;
+theorem eq_drop_newline_silent<M>(before: MachineState<M>, rax: read_gpr(Rax, before.gprs) = @bitvec::BitVec::ofNat(8, 10).zero_extend(56)):
+    read_gpr(Rbx, eq_drop_step_piece<M>()(before, Stateless(), BitVec::ofNat(10), trivial, rax, trivial).after.gprs) = BitVec::ofNat(0) {
+    eq_drop_step_piece<M>()(before, Stateless(), BitVec::ofNat(10), trivial, rax, trivial).flag_is
+}
+theorem eq_drop_letter_kept<M>(before: MachineState<M>, rax: read_gpr(Rax, before.gprs) = @bitvec::BitVec::ofNat(8, 0x61).zero_extend(56)):
+    read_gpr(Rdx, eq_drop_step_piece<M>()(before, Stateless(), BitVec::ofNat(0x61), trivial, rax, trivial).after.gprs) = BitVec::ofNat(0x61) {
+    eq_drop_step_piece<M>()(before, Stateless(), BitVec::ofNat(0x61), trivial, rax, trivial).byte_is
+}";
+    elab.semantic_image().elaborator().elab_module_source("eq_drop_client", client).unwrap_or_else(|e| panic!("{}", e.render(client)));
+    let elab = library();
+    let emission = generate(&elab, "eq_drop", "filters::eq_drop_step", None);
+    let mut elab = elab;
+    elab.elab_module_source("eq_drop_pieces", &emission.pieces).unwrap_or_else(|e| panic!("{}", e.render(&emission.pieces)));
+    let claim = "eq_drop_counts(), filters::eq_drop_step)";
+    assert!(emission.text.contains(claim), "{}", emission.text);
+    let bad = emission.text.replace(claim, "eq_drop_counts(), filters::eq_keep_step)");
+    let error = elab.elab_module_source("eq_drop_step", &bad).expect_err("eq_keep_step's claim").render(&bad);
+    assert!(!error.contains("unbound") && !error.contains("ambiguous"), "{error}");
+}
+
+// `wc -l`'s count with the newline tested by `eq_bit`.
+#[test]
+fn equality_counting_piece_certifies() {
+    let (_, emission) = certify("eq_lines", "filters::eq_lines_filter", None);
+    assert!(emission.text.contains("[λ (s: Nat) => s]"), "{}", emission.text);
 }
 
 // Steps the generator does not take are refused when they are read, with a

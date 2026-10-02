@@ -580,6 +580,7 @@ mod tests {
             Instruction::CmpRR { left: Gpr::R14, right: Gpr::Rcx },
             Instruction::SetBelow { destination: LowByteGpr::Dl },
             Instruction::SetLess { destination: LowByteGpr::Bl },
+            Instruction::SetEqual { destination: LowByteGpr::Cl },
         ];
         for (index, instruction) in instructions.iter().enumerate() {
             let mut bytes = encode(&[*instruction]);

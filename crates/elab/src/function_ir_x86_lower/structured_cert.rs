@@ -160,8 +160,9 @@ fn dataflow_values(n: &str, r: &Region, incoming: &Values, m: &mut Module) -> Va
         let mut name = format!("{n}_value_{output}");
         let body = match *node {
             Node::Const { value, .. } => format!("@bitvec::BitVec::ofNat(width, {value})"),
-            Node::UnsignedLessThan { width: operand_width, left, right, .. } | Node::SignedLessThan { width: operand_width, left, right, .. } => {
-                let op = if matches!(node, Node::UnsignedLessThan { .. }) { "unsigned_lt_bit" } else { "signed_lt_bit" };
+            Node::UnsignedLessThan { width: operand_width, left, right, .. } | Node::SignedLessThan { width: operand_width, left, right, .. }
+            | Node::Equal { width: operand_width, left, right, .. } => {
+                let op = match node { Node::UnsignedLessThan { .. } => "unsigned_lt_bit", Node::SignedLessThan { .. } => "signed_lt_bit", _ => "eq_bit" };
                 // The comparison is its own Boolean (`_test_`), which a
                 // branch reads directly: `head_bit` of the word would make
                 // conversion evaluate the comparison, and through it every
@@ -269,6 +270,7 @@ fn emit(n: &str, r: &StructuredRegion, p: &LoweredStructured, incoming: &Values,
                     let (op, cc, lemma) = match operation {
                         ComparisonOperation::UnsignedLessThan => ("unsigned_lt_bit", "B", "unsigned_compare_skips"),
                         ComparisonOperation::SignedLessThan => ("signed_lt_bit", "L", "signed_compare_skips"),
+                        ComparisonOperation::Equal => ("eq_bit", "E", "equal_compare_skips"),
                     };
                     fun(m, format!("{n}_test"), false, logical(), "Bool".into(), format!("@bitvec::BitVec::{op}(64, {a}, {b})"));
                     let test = format!("Compare({l}, {rr}, {cc})");

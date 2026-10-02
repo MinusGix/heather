@@ -145,6 +145,7 @@ pub struct BinaryNode {
 pub enum ComparisonOperation {
     UnsignedLessThan,
     SignedLessThan,
+    Equal,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -161,6 +162,7 @@ impl ComparisonNode {
         let constructor = match self.operation {
             ComparisonOperation::UnsignedLessThan => "UnsignedLessThan",
             ComparisonOperation::SignedLessThan => "SignedLessThan",
+            ComparisonOperation::Equal => "Equal",
         };
         format!(
             "{constructor}(width := {}, output := {}, left := {}, right := {})",
@@ -268,6 +270,7 @@ pub enum Instruction {
     CmpRR { left: Gpr, right: Gpr },
     SetBelow { destination: LowByteGpr },
     SetLess { destination: LowByteGpr },
+    SetEqual { destination: LowByteGpr },
     /// ADD of an immediate the processor sign-extends to 64 bits.
     AddRI8 { destination: Gpr, immediate: u8 },
     AddRI32 { destination: Gpr, immediate: u32 },
@@ -321,6 +324,9 @@ impl Instruction {
             Instruction::SetLess { destination } => {
                 Expr::call("SetLess", [Expr::name(destination.heather_name())])
             }
+            Instruction::SetEqual { destination } => {
+                Expr::call("SetEqual", [Expr::name(destination.heather_name())])
+            }
             Instruction::AddRI8 { destination, immediate } => Expr::call("AddRI8", [Expr::name(destination.heather_name()),
                 Expr::explicit_call("bitvec::BitVec::ofNat", [Expr::nat(8), Expr::nat(u64::from(immediate))])]),
             Instruction::AddRI32 { destination, immediate } => Expr::call("AddRI32", [Expr::name(destination.heather_name()),
@@ -358,7 +364,7 @@ impl Instruction {
             | Instruction::AddRI8 { destination, .. }
             | Instruction::AddRI32 { destination, .. } => Some(destination),
             Instruction::CmpRR { .. } => None,
-            Instruction::SetBelow { destination } | Instruction::SetLess { destination } => {
+            Instruction::SetBelow { destination } | Instruction::SetLess { destination } | Instruction::SetEqual { destination } => {
                 Some(destination.gpr())
             }
         }
@@ -3106,6 +3112,9 @@ pub fn lower_dag_consuming(
                     ComparisonOperation::SignedLessThan => Instruction::SetLess {
                         destination: byte_destination,
                     },
+                    ComparisonOperation::Equal => Instruction::SetEqual {
+                        destination: byte_destination,
+                    },
                 };
                 (
                     Some(left_register),
@@ -3533,7 +3542,7 @@ fn render_gpr_only_step(instruction: Instruction) -> Option<String> {
         )),
         Instruction::AddRI8 { destination, immediate } => Some(format!("gpr_only_add_ri8({}, @bitvec::BitVec::ofNat(8, {immediate}))", destination.heather_name())),
         Instruction::AddRI32 { destination, immediate } => Some(format!("gpr_only_add_ri32({}, @bitvec::BitVec::ofNat(32, {immediate}))", destination.heather_name())),
-        Instruction::CmpRR { .. } | Instruction::SetBelow { .. } | Instruction::SetLess { .. } => {
+        Instruction::CmpRR { .. } | Instruction::SetBelow { .. } | Instruction::SetLess { .. } | Instruction::SetEqual { .. } => {
             None
         }
     }
@@ -4070,18 +4079,25 @@ fn emit_placement_proofs(
                 let condition = match node.operation {
                     ComparisonOperation::UnsignedLessThan => "@bitvec::BitVec::unsigned_lt_bit",
                     ComparisonOperation::SignedLessThan => "@bitvec::BitVec::signed_lt_bit",
+                    ComparisonOperation::Equal => "@bitvec::BitVec::eq_bit",
+                };
+                let machine_left = format!("read_gpr({}, {prefix}_state_{compare_state}(before).gprs)", left_register.heather_name());
+                let machine_right = format!("read_gpr({}, {prefix}_state_{compare_state}(before).gprs)", right_register.heather_name());
+                // SETB and SETL write the comparison's own definition; SETE
+                // writes ZF, which is `eq_bit` by the flag law.
+                let result_proof = match node.operation {
+                    ComparisonOperation::Equal => format!("zero_bits_sub_word({machine_left}, {machine_right})"),
+                    _ => "refl".to_string(),
                 };
                 let result_name = format!("{prefix}_comparison_{}_result", plan.node_index);
                 text.push_str(&format!(
                     "theorem {result_name}<M>(before: MachineState<M>):\n\
                      \x20   read_gpr({}, {prefix}_state_{after_index}(before).gprs) =\n\
                      \x20       @bitvec::BitVec::zero_extend(1, 63, bitvec::BitVec::ofBool(\n\
-                     \x20           {condition}(64, read_gpr({}, {prefix}_state_{compare_state}(before).gprs),\n\
-                     \x20               read_gpr({}, {prefix}_state_{compare_state}(before).gprs))))\n\
-                     {{ refl }}\n",
+                     \x20           {condition}(64, {machine_left},\n\
+                     \x20               {machine_right})))\n\
+                     {{ {result_proof} }}\n",
                     plan.destination.heather_name(),
-                    left_register.heather_name(),
-                    right_register.heather_name(),
                 ));
                 if node.operand_width == 64 {
                     text.push_str(&format!(
@@ -4104,8 +4120,11 @@ fn emit_placement_proofs(
                     ));
                 } else {
                     let logical_right = placed_expression(node.operand_width, &format!("values({}, {})", node.operand_width, node.right));
-                    let machine_left = format!("read_gpr({}, {prefix}_state_{compare_state}(before).gprs)", left_register.heather_name());
-                    let lifted = format!("sym(bitvec::BitVec::unsigned_lt_zero_extend({}, {}, values({}, {}), values({}, {})))", node.operand_width, 64 - node.operand_width, node.operand_width, node.left, node.operand_width, node.right);
+                    let zero_extend_law = match node.operation {
+                        ComparisonOperation::Equal => "eq_bit_zero_extend",
+                        _ => "unsigned_lt_zero_extend",
+                    };
+                    let lifted = format!("sym(bitvec::BitVec::{zero_extend_law}({}, {}, values({}, {}), values({}, {})))", node.operand_width, 64 - node.operand_width, node.operand_width, node.left, node.operand_width, node.right);
                     let left_agrees = format!("cong_fn<BitVec(64), bool::Bool>(λ found => {condition}(64, found, {logical_right}), {left_proof})");
                     let right_agrees = format!("cong_fn<BitVec(64), bool::Bool>(λ found => {condition}(64, {machine_left}, found), {right_proof})");
                     let agreement = format!("trans({lifted}, trans({left_agrees}, {right_agrees}))");
@@ -4237,7 +4256,7 @@ fn emit_step_result_fact(prefix: &str, step: usize, instruction: Instruction, te
         Instruction::AddRI8 { destination, .. } | Instruction::AddRI32 { destination, .. } => (destination,
             format!("{}(read_gpr({}, state.gprs), @bitvec::BitVec::ofNat(64, {}))", BinaryOperation::Add.semantic_function(),
                 destination.heather_name(), instruction.added_immediate().expect("an immediate ADD"))),
-        Instruction::CmpRR { .. } | Instruction::SetBelow { .. } | Instruction::SetLess { .. } => {
+        Instruction::CmpRR { .. } | Instruction::SetBelow { .. } | Instruction::SetLess { .. } | Instruction::SetEqual { .. } => {
             panic!("comparison instructions use their composed result fact")
         }
     };
@@ -4413,6 +4432,18 @@ fn selected_node(node: Node, node_index: usize) -> Result<SelectedNode, Lowering
             right,
         } => Ok(SelectedNode::Comparison(ComparisonNode {
             operation: ComparisonOperation::SignedLessThan,
+            operand_width: width,
+            output,
+            left,
+            right,
+        })),
+        Node::Equal {
+            width,
+            output,
+            left,
+            right,
+        } => Ok(SelectedNode::Comparison(ComparisonNode {
+            operation: ComparisonOperation::Equal,
             operand_width: width,
             output,
             left,

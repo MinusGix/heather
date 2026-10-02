@@ -1254,6 +1254,35 @@ theorem BitVec::iterate_add_sub_cancel(n: Nat, count: Nat): (x: BitVec(n)) →
     }
 }
 
+// The other order: decrementing then incrementing is the identity too, so a
+// subtraction undoes by counting back up (CMP's ZF law in x86_64 needs it).
+theorem BitVec::increment_decrement_step(n: Nat, b: Bool, x: BitVec(n),
+        tail_law: (x.decrement()).increment() = x):
+        ((x.cons_bit(b)).decrement()).increment() = x.cons_bit(b) {
+    match b {
+        False => BitVec::cons_bit_cong(n, refl, tail_law, a := False, b := False),
+        True => refl,
+    }
+}
+
+theorem BitVec::increment_decrement(n: Nat): (x: BitVec(n)) → (x.decrement()).increment() = x {
+    match n as λ k => (x: BitVec(k)) → (x.decrement()).increment() = x {
+        Zero => λ x => refl,
+        Succ(k, ih) => λ x => trans(BitVec::increment_decrement_step(k, x.head_bit(), x.tail_bits(), ih(x.tail_bits())),
+            BitVec::cons_head_tail(k, x)),
+    }
+}
+
+theorem BitVec::iterate_sub_add(n: Nat, count: Nat): (x: BitVec(n)) →
+        (x.iterate_decrement(count)).iterate_increment(count) = x {
+    match count as λ c => (x: BitVec(n)) → (x.iterate_decrement(c)).iterate_increment(c) = x {
+        Zero => λ x => refl,
+        Succ(k, ih) => λ x => trans(j(ih(x.decrement()),
+                λ y _ => ((x.decrement().iterate_decrement(k)).iterate_increment(k)).increment() = y.increment(), refl),
+            BitVec::increment_decrement(n, x)),
+    }
+}
+
 theorem BitVec::iter_add_sub_cancel(n: Nat, a, b: BitVec(n)):
         (a.iter_add(b)).iter_sub(b) = a {
     BitVec::iterate_add_sub_cancel(n, b.toNat(), a)
@@ -1917,6 +1946,27 @@ theorem BitVec::unsigned_lt_zero_extend(n, extra: Nat, a, b: BitVec(n)):
     (a.zero_extend(extra)).unsigned_lt_bit(b.zero_extend(extra)) =
         a.unsigned_lt_bit(b) {
     BitVec::borrow_zero_extend(n, extra, a, b, False)
+}
+
+// Zero extension is injective (`truncate_zero_extend`), so a narrow equality
+// may be compared in the wide register.
+theorem BitVec::eq_bit_zero_extend(n, extra: Nat, a, b: BitVec(n)):
+        (a.zero_extend(extra)).eq_bit(b.zero_extend(extra)) = a.eq_bit(b) {
+    match a.eq_bit(b) as λ c => (a.eq_bit(b) = c) → (a.zero_extend(extra)).eq_bit(b.zero_extend(extra)) = c {
+        True => λ same => BitVec::eq_bit_of_eq(extra + n, a.zero_extend(extra), b.zero_extend(extra),
+            j(BitVec::eq_of_eq_bit(n, a, b, same), λ y _ => a.zero_extend(extra) = y.zero_extend(extra), refl)),
+        False => λ differ => match (a.zero_extend(extra)).eq_bit(b.zero_extend(extra)) as λ d =>
+                ((a.zero_extend(extra)).eq_bit(b.zero_extend(extra)) = d) → d = False {
+            False => λ _ => refl,
+            True => λ wide => {
+                let narrow: (a = b) = trans(sym(BitVec::truncate_zero_extend(n, extra, a)),
+                    trans(j(BitVec::eq_of_eq_bit(extra + n, a.zero_extend(extra), b.zero_extend(extra), wide),
+                        λ y _ => BitVec::truncate(n, extra, a.zero_extend(extra)) = BitVec::truncate(n, extra, y),
+                        refl), BitVec::truncate_zero_extend(n, extra, b)));
+                absurd(trans(sym(differ), BitVec::eq_bit_of_eq(n, a, b, narrow)))
+            },
+        }(refl),
+    }(refl)
 }
 
 theorem BitVec::band_zero_columns(n: Nat): BitVec::zero(n := n).band(BitVec::zero()) = BitVec::zero() {

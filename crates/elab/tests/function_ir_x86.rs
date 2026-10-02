@@ -132,6 +132,7 @@ pub fn run_conditional_tests() {
 pub fn run_comparison_tests() {
     generated_mixed_unsigned_comparison_checks();
     generated_signed_comparison_checks();
+    generated_equal_comparison_checks();
 }
 
 fn function_ir_x86_suite() {
@@ -863,6 +864,40 @@ fn generated_signed_comparison_checks() {
     }
 }
 
+// Equality materialised by SETE: its bit is ZF, which is `eq_bit` by the
+// flag law and not by definition. The same code claimed for an unsigned
+// comparison is refused.
+fn generated_equal_comparison_checks() {
+    let base = base_image(MODULES.len() - 1);
+    let region = equal_comparison();
+    let raw = cert::render_region_function("equal_comparison_raw", &region);
+    let emission = lower::generate(
+        "equal_comparison_x86",
+        "equal_comparison_raw()",
+        &region,
+        &[Gpr::Rdi, Gpr::Rsi, Gpr::Rdx],
+        &[Gpr::Rax, Gpr::Rbx],
+        Gpr::Rax,
+    )
+    .expect("lower equality");
+    assert_eq!(emission.lowered.output_width, 1);
+    assert!(emission.text.contains("SetEqual(Bl)"), "{}", emission.text);
+    assert!(emission.text.contains("zero_bits_sub_word("), "{}", emission.text);
+    let source = generated_module(&format!("{raw}\n{}", emission.text));
+    let mut e = base.fork();
+    if let Err(error) = e.elab_module_source("function_ir_equal_comparison_x86", &source) {
+        panic!("generated equality artifact did not check: {}", error.render(&source));
+    }
+    let claim = "Equal(width := 64, output := 4, left := 3, right := 2)";
+    assert!(raw.contains(claim), "{raw}");
+    let wrong = raw.replace(claim, "UnsignedLessThan(width := 64, output := 4, left := 3, right := 2)");
+    let source = generated_module(&format!("{wrong}\n{}", emission.text));
+    let error = base.fork().elab_module_source("function_ir_equal_as_less_x86", &source)
+        .expect_err("SETE's bit is not an unsigned comparison");
+    let message = error.render(&source);
+    assert!(!message.contains("unknown") && !message.contains("unbound"), "{message}");
+}
+
 fn generated_structured_conditional_checks() {
     let base = base_image(MODULES.len() - 1);
     let branch = |node| Region {
@@ -1247,6 +1282,18 @@ fn mixed_unsigned_comparison() -> Region {
                 left: 3,
                 right: 2,
             },
+        ],
+        outputs: vec![Port { id: 4, width: 1 }],
+    }
+}
+
+// (a + b) = c over open words.
+fn equal_comparison() -> Region {
+    Region {
+        inputs: (0..3).map(|id| Port { id, width: 64 }).collect(),
+        nodes: vec![
+            Node::Add { width: 64, output: 3, left: 0, right: 1 },
+            Node::Equal { width: 64, output: 4, left: 3, right: 2 },
         ],
         outputs: vec![Port { id: 4, width: 1 }],
     }

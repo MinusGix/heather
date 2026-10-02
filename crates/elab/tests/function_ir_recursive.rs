@@ -76,7 +76,7 @@ fn placement() -> Placements { BTreeMap::from([(0, Gpr::Rdi), (1, Gpr::Rsi)]) }
 // Independent word-level execution of the selected instructions, including
 // partial-byte SETcc writes. This is a regression oracle, not a certificate.
 fn run_dag(dag: &LoweredDag, regs: &mut BTreeMap<Gpr, u64>) {
-    let mut below = false;
+    let (mut below, mut equal) = (false, false);
     for &instruction in &dag.instructions {
         let read = |r| regs[&r];
         let (destination, value) = match instruction {
@@ -87,11 +87,16 @@ fn run_dag(dag: &LoweredDag, regs: &mut BTreeMap<Gpr, u64>) {
             Instruction::AndRR { destination, source } => (destination, read(destination) & read(source)),
             Instruction::OrRR { destination, source } => (destination, read(destination) | read(source)),
             Instruction::XorRR { destination, source } => (destination, read(destination) ^ read(source)),
-            Instruction::CmpRR { left, right } => { below = read(left) < read(right); continue; }
+            Instruction::CmpRR { left, right } => { below = read(left) < read(right); equal = read(left) == read(right); continue; }
             Instruction::SetBelow { destination } => {
                 use heather_elab::function_ir_x86_lower::LowByteGpr;
                 let reg = match destination { LowByteGpr::Al => Gpr::Rax, LowByteGpr::Cl => Gpr::Rcx, LowByteGpr::Dl => Gpr::Rdx, LowByteGpr::Bl => Gpr::Rbx };
                 (reg, (read(reg) & !255) | u64::from(below))
+            }
+            Instruction::SetEqual { destination } => {
+                use heather_elab::function_ir_x86_lower::LowByteGpr;
+                let reg = match destination { LowByteGpr::Al => Gpr::Rax, LowByteGpr::Cl => Gpr::Rcx, LowByteGpr::Dl => Gpr::Rdx, LowByteGpr::Bl => Gpr::Rbx };
+                (reg, (read(reg) & !255) | u64::from(equal))
             }
             other => panic!("unexpected instruction {other:?}"),
         };
@@ -114,6 +119,7 @@ fn run(plan: &LoweredStructured, regs: &mut BTreeMap<Gpr, u64>) {
                 PlannedTest::NonZero(register) => regs[&register] != 0,
                 PlannedTest::Compare { left, right, operation: ComparisonOperation::UnsignedLessThan, .. } => regs[&left] < regs[&right],
                 PlannedTest::Compare { left, right, operation: ComparisonOperation::SignedLessThan, .. } => (regs[&left] as i64) < (regs[&right] as i64),
+                PlannedTest::Compare { left, right, operation: ComparisonOperation::Equal, .. } => regs[&left] == regs[&right],
             };
             run(if holds { when_true } else { when_false }, regs);
         }

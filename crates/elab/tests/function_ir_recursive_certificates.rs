@@ -107,6 +107,78 @@ fn fused_compare_certificates_check_and_refuse_another_test() {
     }
 }
 
+// Equality as a branch condition is CMP and JNE over the true arm: from
+// source (`eq_bit` of a word with a literal, and of a sum with an open word)
+// and from a hand-built region with the constant on the left. ZF is `eq_bit`
+// by a law (`equal_compare_skips`), not by unfolding. A code testing another
+// condition code is refused; the Boolean itself is materialised by SETE.
+#[test]
+fn fused_equal_certificates_check_and_refuse_another_test() {
+    use heather_elab::function_ir_cert::{Node, Port, Region, StructuredRegion};
+    use heather_elab::function_ir_source::generate_elaborated_structured_x86;
+    use heather_elab::function_ir_x86_lower::{generate_structured, Gpr, Placements, PlannedTest, StructuredPlan, StructuredX86Emission, ComparisonOperation};
+    let mut elab = common::base_image(common::MODULES.len());
+    let model = include_str!("../../../lib/std/arch/x86_64/x86_64_structured_block.hthr");
+    elab.elab_module_source("x86_64_structured_block", model).unwrap_or_else(|e| panic!("{}", e.render(model)));
+    let source = "import bitvec; import bool;
+fn equal_threshold(a, b: BitVec(64)) → BitVec(64) {
+    match a.eq_bit(BitVec::ofNat(10)) { False => a.sub(b), True => a.add(b) }
+}
+fn equal_sum(a, b: BitVec(64)) → BitVec(64) {
+    match (a.add(b)).eq_bit(b) { False => a.bxor(b), True => b }
+}
+fn equal_select(a, b: BitVec(64)) → BitVec(64) {
+    match a.eq_bit(b) { False => a.bxor(b), True => a }
+}
+";
+    elab.elab_module_source("equals", source).unwrap_or_else(|e| panic!("{}", e.render(source)));
+    let scratch = [Gpr::Rax, Gpr::Rcx, Gpr::Rdx, Gpr::R8];
+    let sourced = generate_elaborated_structured_x86(&elab, "equal_threshold", "equals::equal_threshold", [Gpr::Rdi, Gpr::Rsi], &scratch, Gpr::Rax)
+        .unwrap_or_else(|e| panic!("equal_threshold: {e:?}"));
+    let summed = generate_elaborated_structured_x86(&elab, "equal_sum", "equals::equal_sum", [Gpr::Rdi, Gpr::Rsi], &scratch, Gpr::Rax)
+        .unwrap_or_else(|e| panic!("equal_sum: {e:?}"));
+    // 16 = a ? b - a : a ^ b, over a and b in RDI and RSI.
+    let word = |id| Port { id, width: 64 };
+    let arm = |node| StructuredRegion::Dataflow(Region { inputs: vec![word(0), word(1)], nodes: vec![node], outputs: vec![word(4)] });
+    let region = StructuredRegion::Sequence {
+        prefix: Region { inputs: vec![word(0), word(1)], nodes: vec![Node::Const { width: 64, output: 2, value: 16 },
+            Node::Equal { width: 64, output: 3, left: 2, right: 0 }], outputs: vec![Port { id: 3, width: 1 }] },
+        continuation: Box::new(StructuredRegion::Conditional { inputs: vec![Port { id: 3, width: 1 }, word(0), word(1)], condition: 3,
+            arguments: vec![word(0), word(1)], outputs: vec![word(4)],
+            when_true: Box::new(arm(Node::Sub { width: 64, output: 4, left: 1, right: 0 })),
+            when_false: Box::new(arm(Node::BitXor { width: 64, output: 4, left: 0, right: 1 })) }),
+    };
+    let built = generate_structured("built_equal", &region, &Placements::from([(0, Gpr::Rdi), (1, Gpr::Rsi)]), &scratch, Gpr::Rax)
+        .unwrap_or_else(|e| panic!("built_equal: {e:?}"));
+    let imports = "import x86_64_structured_block; import function_ir; import function_ir_x86_support; import x86_64; import x86_64_block; import bitvec; import bool; import list; import logic; import nat;";
+    let emissions: [(&str, StructuredX86Emission); 3] = [("equal_threshold", sourced), ("equal_sum", summed), ("built_equal", built)];
+    for (name, emission) in emissions {
+        let text = format!("{imports}\n{}", emission.text);
+        elab.semantic_image().elaborator().elab_module_source(&format!("{name}_certificate"), &text).unwrap_or_else(|e| panic!("{}", e.render(&text)));
+        let StructuredPlan::FusedSequence { continuation, .. } = &emission.lowered.body else { panic!("{name}: expected a fused sequence") };
+        let StructuredPlan::Conditional { test, .. } = continuation.body else { panic!("{name}: expected a branch") };
+        let PlannedTest::Compare { left, right, operation, .. } = test else { panic!("{name}: expected a compared branch") };
+        assert_eq!(operation, ComparisonOperation::Equal);
+        assert_eq!(test.skip_code(), 0x5, "{name}: the skip is JNE");
+        let (l, r) = (left.heather_name(), right.heather_name());
+        let code = format!("CodeBranch(Compare({l}, {r}, E)");
+        assert!(text.contains(&code), "{name}: the code should branch on Compare({l}, {r}, E)");
+        for other in ["NE", "B", "LE"] {
+            let mutant = text.replacen(&code, &format!("CodeBranch(Compare({l}, {r}, {other})"), 1);
+            let error = elab.semantic_image().elaborator().elab_module_source(&format!("{name}_{other}"), &mutant)
+                .expect_err("a branch testing something else must be refused");
+            let message = error.render(&mutant);
+            assert!(!message.contains("unknown") && !message.contains("not in scope") && !message.contains("unbound"), "{name} {other} failed on a name: {message}");
+        }
+    }
+    // Two inputs compared: nothing to fuse, so the Boolean is materialised.
+    let bit = generate_elaborated_structured_x86(&elab, "equal_select", "equals::equal_select", [Gpr::Rdi, Gpr::Rsi], &scratch, Gpr::Rax)
+        .unwrap_or_else(|e| panic!("equal_select: {e:?}"));
+    let text = format!("{imports}\n{}", bit.text);
+    assert!(text.contains("SetEqual("), "{text}");
+    elab.semantic_image().elaborator().elab_module_source("equal_select_certificate", &text).unwrap_or_else(|e| panic!("{}", e.render(&text)));
+}
+
 // The false arm takes away the constant the fused comparison loaded, from
 // the comparison's register (docs/structured-lowering-code-size-design.md
 // §7.1, V5): the certificate checks, loads the constant once, and an arm

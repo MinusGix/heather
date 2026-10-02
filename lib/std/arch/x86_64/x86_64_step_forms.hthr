@@ -205,7 +205,7 @@ fn decode_near_form(make: BitVec(32) → NearControl, rest: List<BitVec(8)>) →
     match decode_rel32(rest) { None => None, Some(displacement) => near_form(make(displacement)) }
 }
 
-// 0F then: 05 SYSCALL, 92/9C SETcc, 80–8F Jcc rel32.
+// 0F then: 05 SYSCALL, 92/9C/94 SETcc, 80–8F Jcc rel32.
 fn decode_two_byte_form(opcode: BitVec(8), rest: List<BitVec(8)>) → Option<StepForm> {
     match opcode.eq_dec(BitVec::ofNat(0x05)) {
         Inl(_) => Some(FormSyscall),
@@ -219,9 +219,15 @@ fn decode_two_byte_form(opcode: BitVec(8), rest: List<BitVec(8)>) → Option<Ste
                     Nil => None,
                     Cons(modrm, _) => emitted_form(SetLess(low_byte_from_modrm(modrm))),
                 },
-                Inr(_) => match read_condition_opcode(opcode, near_condition_opcode) {
-                    Some(code) => decode_near_form(λ d => JumpIfNear(code.cc, d), rest),
-                    None => None,
+                Inr(_) => match opcode.eq_dec(BitVec::ofNat(0x94)) {
+                    Inl(_) => match rest {
+                        Nil => None,
+                        Cons(modrm, _) => emitted_form(SetEqual(low_byte_from_modrm(modrm))),
+                    },
+                    Inr(_) => match read_condition_opcode(opcode, near_condition_opcode) {
+                        Some(code) => decode_near_form(λ d => JumpIfNear(code.cc, d), rest),
+                        None => None,
+                    },
                 },
             },
         },
@@ -310,6 +316,7 @@ theorem ordinary_form_complete(instruction: Instruction, rest: List<BitVec(8)>):
         CmpRR(a, b) => rr_form_back(λ x y => CmpRR(x, y), a, b),
         SetBelow(destination) => cong_fn(λ (d: LowByteGpr) => emitted_form(SetBelow(d)), low_byte_back(destination)),
         SetLess(destination) => cong_fn(λ (d: LowByteGpr) => emitted_form(SetLess(d)), low_byte_back(destination)),
+        SetEqual(destination) => cong_fn(λ (d: LowByteGpr) => emitted_form(SetEqual(d)), low_byte_back(destination)),
         TestRR(a, b) => rr_form_back(λ x y => TestRR(x, y), a, b),
         AddRI8(destination, immediate) =>
             cong_fn(λ (d: Gpr) => emitted_form(AddRI8(d, immediate)), rm_of_fields(destination, Rax, True, True)),

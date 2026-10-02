@@ -38,6 +38,7 @@ impl PlannedTest {
             PlannedTest::NonZero(_) => 0x4,
             PlannedTest::Compare { operation: ComparisonOperation::UnsignedLessThan, .. } => 0x3,
             PlannedTest::Compare { operation: ComparisonOperation::SignedLessThan, .. } => 0xd,
+            PlannedTest::Compare { operation: ComparisonOperation::Equal, .. } => 0x5,
         }
     }
     /// The test instruction: TEST r, r or CMP left, right.

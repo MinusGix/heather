@@ -118,6 +118,7 @@ inductive Instruction {
     CmpRR(left: Gpr, right: Gpr),
     SetBelow(destination: LowByteGpr),
     SetLess(destination: LowByteGpr),
+    SetEqual(destination: LowByteGpr),
     TestRR(left: Gpr, right: Gpr),
     // ADD of an immediate the processor sign-extends to 64 bits
     // (docs/structured-lowering-code-size-design.md §4).
@@ -499,9 +500,10 @@ fn canonical_bytes(instruction: Instruction) → List<BitVec(8)> {
         // 39 /r: CMP r64 with r/m64.
         CmpRR(left, right) =>
             rr_bytes(0x39, left, right),
-        // 0F 92 /0 and 0F 9C /0: materialize CF and SF xor OF.
+        // 0F 92 /0, 0F 9C /0 and 0F 94 /0: materialize CF, SF xor OF and ZF.
         SetBelow(destination) => setcc_bytes(0x92, destination),
         SetLess(destination) => setcc_bytes(0x9c, destination),
+        SetEqual(destination) => setcc_bytes(0x94, destination),
         // 85 /r: TEST r64 against r/m64.
         TestRR(left, right) =>
             rr_bytes(0x85, left, right),
@@ -553,6 +555,7 @@ fn canonical_length_valid(instruction: Instruction) →
         CmpRR(_, _) => And(trivial, trivial),
         SetBelow(_) => And(trivial, trivial),
         SetLess(_) => And(trivial, trivial),
+        SetEqual(_) => And(trivial, trivial),
         TestRR(_, _) => And(trivial, trivial),
         AddRI8(_, _) => And(trivial, trivial),
         AddRI32(_, _) => And(trivial, trivial),
@@ -636,6 +639,7 @@ fn DecodesInstruction(bytes: List<BitVec(8)>, instruction: Instruction) → Type
             ∨ RrEncoding(bytes, 0x3b, right, left),
         SetBelow(destination) => SetccEncoding(bytes, 0x92, destination),
         SetLess(destination) => SetccEncoding(bytes, 0x9c, destination),
+        SetEqual(destination) => SetccEncoding(bytes, 0x94, destination),
         TestRR(left, right) => RrEncoding(bytes, 0x85, left, right),
         AddRI8(destination, immediate) => bytes = add_ri8_bytes(destination, immediate),
         AddRI32(destination, immediate) => bytes = add_ri32_bytes(destination, immediate),
@@ -1422,7 +1426,10 @@ fn decode_setcc_opcode(opcode, modrm: BitVec(8)) → Option<Instruction> {
             Inl(_) => Some(SetBelow(destination)),
             Inr(_) => match opcode.eq_dec(BitVec::ofNat(0x9c)) {
                 Inl(_) => Some(SetLess(destination)),
-                Inr(_) => None,
+                Inr(_) => match opcode.eq_dec(BitVec::ofNat(0x94)) {
+                    Inl(_) => Some(SetEqual(destination)),
+                    Inr(_) => None,
+                },
             },
         },
     }
@@ -1716,6 +1723,13 @@ theorem decode_set_less_complete(destination: LowByteGpr):
     match destination { Al => refl, Cl => refl, Dl => refl, Bl => refl }
 }
 
+theorem decode_set_equal_complete(destination: LowByteGpr):
+    decode_instruction(setcc_bytes(0x94, destination)) =
+        Some(decoded_canonical(SetEqual(destination)))
+{
+    match destination { Al => refl, Cl => refl, Dl => refl, Bl => refl }
+}
+
 theorem decode_add_ri8_complete(destination: Gpr, immediate: BitVec(8)):
     decode_instruction(add_ri8_bytes(destination, immediate)) =
         Some(decoded_canonical(AddRI8(destination, immediate)))
@@ -1846,6 +1860,10 @@ theorem decode_instruction_complete(bytes: List<BitVec(8)>,
             decode_instruction_of_setcc_encoding(bytes, 0x9c, destination,
                 SetLess(destination), encoding,
                 decode_set_less_complete(destination)),
+        SetEqual(destination) => λ encoding =>
+            decode_instruction_of_setcc_encoding(bytes, 0x94, destination,
+                SetEqual(destination), encoding,
+                decode_set_equal_complete(destination)),
         TestRR(left, right) => λ encoding =>
             decode_instruction_of_rr_encoding(bytes, 0x85, left, right,
                 TestRR(left, right), encoding,
@@ -1897,7 +1915,7 @@ theorem decoded_canonical_length(instruction: Instruction):
         MovRR(_, _) => refl, MovRI(_, _) => refl,
         AddRR(_, _) => refl, SubRR(_, _) => refl,
         AndRR(_, _) => refl, OrRR(_, _) => refl, XorRR(_, _) => refl,
-        CmpRR(_, _) => refl, SetBelow(_) => refl, SetLess(_) => refl,
+        CmpRR(_, _) => refl, SetBelow(_) => refl, SetLess(_) => refl, SetEqual(_) => refl,
         TestRR(_, _) => refl, AddRI8(_, _) => refl, AddRI32(_, _) => refl,
     }
 }
@@ -1924,6 +1942,7 @@ theorem canonical_encoding_decodes(start: BitVec(64), instruction: Instruction):
         CmpRR(_, _) => And(Inl(And(refl, And(refl, refl))), refl),
         SetBelow(_) => And(refl, refl),
         SetLess(_) => And(refl, refl),
+        SetEqual(_) => And(refl, refl),
         TestRR(_, _) => And(And(refl, And(refl, refl)), refl),
         AddRI8(_, _) => And(refl, refl),
         AddRI32(_, _) => And(refl, refl),
@@ -2031,6 +2050,7 @@ theorem canonical_bytes_length(instruction: Instruction):
         CmpRR(_, _) => refl,
         SetBelow(_) => refl,
         SetLess(_) => refl,
+        SetEqual(_) => refl,
         TestRR(_, _) => refl,
         AddRI8(_, _) => refl,
         AddRI32(_, _) => refl,
@@ -2086,6 +2106,62 @@ fn sub_flags(left, right: BitVec(64)) → Flags {
         sf := result.sign_bit(),
         of := left.signed_overflow_sub(right),
     )
+}
+
+// CMP's ZF is the library's equality: `is_zero_bits(n, a.sub(b))` is
+// `a.eq_bit(b)` at every width, with no borrow law, because a zero
+// difference counts back up to the subtrahend (`iterate_sub_add`).
+theorem zero_bits_zero(n: Nat): is_zero_bits(n, BitVec::zero(n := n)) = True {
+    match n as λ k => is_zero_bits(k, BitVec::zero(n := k)) = True { Zero => refl, Succ(_, ih) => ih }
+}
+
+theorem zero_of_zero_bits(n: Nat): (x: BitVec(n)) → is_zero_bits(n, x) = True → x = BitVec::zero() {
+    match n as λ k => (x: BitVec(k)) → is_zero_bits(k, x) = True → x = BitVec::zero() {
+        Zero => λ x _ => refl,
+        Succ(k, ih) => λ x zero => {
+            let rest = is_zero_bits(k, x.tail_bits());
+            let low: (x.head_bit() = False) = (match x.head_bit() as λ h => h.not() = True → h = bool::False {
+                False => λ _ => refl,
+                True => λ no => absurd(no),
+            })(BitVec::and_true_left(x.head_bit().not(), rest, zero));
+            trans(sym(BitVec::cons_head_tail(k, x)),
+                BitVec::cons_bit_cong(k, low, ih(x.tail_bits(), BitVec::and_true_right(x.head_bit().not(), rest, zero))))
+        },
+    }
+}
+
+theorem zero_bits_sub_self(n: Nat, a: BitVec(n)): is_zero_bits(n, a.sub(a)) = True {
+    let v = a.toNat();
+    let spec: (a.sub(a) = a.iterate_decrement(v)) = BitVec::sub_bits_spec(n, a, a, False);
+    let back: ((BitVec::zero(n := n).iterate_increment(v)).iterate_decrement(v) = BitVec::zero()) = BitVec::iterate_add_sub_cancel(n, v, BitVec::zero());
+    let from: (BitVec::zero(n := n).iterate_increment(v) = a) = BitVec::iterate_increment_toNat(n, a);
+    let at_a: (a.iterate_decrement(v) = BitVec::zero()) = j(from, λ y _ => y.iterate_decrement(v) = BitVec::zero(), back);
+    j(sym(trans(spec, at_a)), λ y _ => is_zero_bits(n, y) = True, zero_bits_zero(n))
+}
+
+theorem eq_of_zero_bits_sub(n: Nat, a, b: BitVec(n), zf: is_zero_bits(n, a.sub(b)) = True): a = b {
+    let v = b.toNat();
+    let is_zero: (BitVec::zero(n := n) = a.sub(b)) = sym(zero_of_zero_bits(n, a.sub(b), zf));
+    let spec: (a.sub(b) = a.iterate_decrement(v)) = BitVec::sub_bits_spec(n, a, b, False);
+    let undo: ((a.iterate_decrement(v)).iterate_increment(v) = a) = BitVec::iterate_sub_add(n, v, a);
+    let via: (BitVec::zero(n := n).iterate_increment(v) = a) = j(sym(trans(is_zero, spec)), λ y _ => y.iterate_increment(v) = a, undo);
+    trans(sym(via), BitVec::iterate_increment_toNat(n, b))
+}
+
+theorem zero_bits_sub(n: Nat, a, b: BitVec(n)): is_zero_bits(n, a.sub(b)) = a.eq_bit(b) {
+    match a.eq_bit(b) as λ c => (a.eq_bit(b) = c) → is_zero_bits(n, a.sub(b)) = c {
+        True => λ same => j(BitVec::eq_of_eq_bit(n, a, b, same), λ y _ => is_zero_bits(n, a.sub(y)) = True, zero_bits_sub_self(n, a)),
+        False => λ differ => match is_zero_bits(n, a.sub(b)) as λ d => (is_zero_bits(n, a.sub(b)) = d) → d = False {
+            False => λ _ => refl,
+            True => λ zf => absurd(trans(sym(differ), BitVec::eq_bit_of_eq(n, a, b, eq_of_zero_bits_sub(n, a, b, zf)))),
+        }(refl),
+    }(refl)
+}
+
+// SETE's word after `MOV r, 0`, as a materialised comparison states it.
+theorem zero_bits_sub_word(a, b: BitVec(64)):
+    BitVec::ofBool(is_zero_bits(64, a.sub(b))).zero_extend(63) = BitVec::ofBool(a.eq_bit(b)).zero_extend(63) {
+    j(zero_bits_sub(64, a, b), λ c _ => BitVec::ofBool(is_zero_bits(64, a.sub(b))).zero_extend(63) = BitVec::ofBool(c).zero_extend(63), refl)
 }
 
 // TEST defines five arithmetic flags from the discarded AND result. AF is
@@ -2205,6 +2281,13 @@ fn execute_set_less(destination: LowByteGpr, before: Gprs,
         flags.sf.xor(flags.of), before), flags := flags)
 }
 
+fn execute_set_equal(destination: LowByteGpr, before: Gprs,
+    flags: Flags) → RegisterEffect
+{
+    RegisterEffect(gprs := write_low_byte(destination, flags.zf, before),
+        flags := flags)
+}
+
 // ADD of an immediate already extended to 64 bits.
 fn execute_add_immediate(destination: Gpr, immediate: BitVec(64), before: Gprs) → RegisterEffect
 {
@@ -2235,6 +2318,7 @@ fn execute_register(instruction: Instruction, before: Gprs, flags: Flags) →
         CmpRR(left, right) => execute_cmp(left, right, before),
         SetBelow(destination) => execute_set_below(destination, before, flags),
         SetLess(destination) => execute_set_less(destination, before, flags),
+        SetEqual(destination) => execute_set_equal(destination, before, flags),
         // Canonical representative for functional clients. `Execute` below
         // is authoritative and admits both values of undefined AF.
         TestRR(left, right) => RegisterEffect(
@@ -2344,7 +2428,7 @@ theorem erase_af_normal_commute<M>(instruction: Instruction, before: MachineStat
         MovRR(_, _) => refl, MovRI(_, _) => refl,
         AddRR(_, _) => refl, SubRR(_, _) => refl,
         AndRR(_, _) => refl, OrRR(_, _) => refl, XorRR(_, _) => refl,
-        CmpRR(_, _) => refl, SetBelow(_) => refl, SetLess(_) => refl,
+        CmpRR(_, _) => refl, SetBelow(_) => refl, SetLess(_) => refl, SetEqual(_) => refl,
         TestRR(_, _) => refl, AddRI8(_, _) => refl, AddRI32(_, _) => refl,
     }
 }
@@ -2418,6 +2502,7 @@ fn Execute<M>(decoded: DecodedInstruction, before: MachineState<M>,
         CmpRR(_, _) => outcome = Returned(execute_normal(decoded, before)),
         SetBelow(_) => outcome = Returned(execute_normal(decoded, before)),
         SetLess(_) => outcome = Returned(execute_normal(decoded, before)),
+        SetEqual(_) => outcome = Returned(execute_normal(decoded, before)),
         TestRR(left, right) => ∃ af: Bool,
             outcome = Returned(execute_test(left, right, decoded.length, before, af)),
         AddRI8(_, _) => outcome = Returned(execute_normal(decoded, before)),
@@ -2453,6 +2538,7 @@ theorem execute_same_defined<M>(instruction: Instruction, length: Nat,
         CmpRR(d, s) => λ result proof => execute_fixed_same_defined(CmpRR(d, s), length, valid, before, result, proof),
         SetBelow(d) => λ result proof => execute_fixed_same_defined(SetBelow(d), length, valid, before, result, proof),
         SetLess(d) => λ result proof => execute_fixed_same_defined(SetLess(d), length, valid, before, result, proof),
+        SetEqual(d) => λ result proof => execute_fixed_same_defined(SetEqual(d), length, valid, before, result, proof),
         AddRI8(d, value) => λ result proof => execute_fixed_same_defined(AddRI8(d, value), length, valid, before, result, proof),
         AddRI32(d, value) => λ result proof => execute_fixed_same_defined(AddRI32(d, value), length, valid, before, result, proof),
         TestRR(left, right) => λ result proof =>
@@ -2520,6 +2606,7 @@ theorem canonical_execute_normal_is_allowed<M>(instruction: Instruction,
         CmpRR(_, _) => refl,
         SetBelow(_) => refl,
         SetLess(_) => refl,
+        SetEqual(_) => refl,
         TestRR(_, _) => Exists(False, refl),
         AddRI8(_, _) => refl,
         AddRI32(_, _) => refl,
@@ -2737,6 +2824,7 @@ theorem execute_normal_advances_rip<M>(decoded: DecodedInstruction,
         CmpRR(_, _) => refl,
         SetBelow(_) => refl,
         SetLess(_) => refl,
+        SetEqual(_) => refl,
         TestRR(_, _) => refl,
         AddRI8(_, _) => refl,
         AddRI32(_, _) => refl,

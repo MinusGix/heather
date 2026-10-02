@@ -169,6 +169,12 @@ fn execute_region(
                 as_signed(width, read(values, Port { id: left, width })?.bits)?
                     < as_signed(width, read(values, Port { id: right, width })?.bits)?,
             ),
+            Node::Equal {
+                width, left, right, ..
+            } => u64::from(
+                read(values, Port { id: left, width })?.bits
+                    == read(values, Port { id: right, width })?.bits,
+            ),
         };
         values.insert(
             output.id,
@@ -357,6 +363,18 @@ mod tests {
         assert_eq!(run(9, 4, 11), 20);
         assert_eq!(run(5, 5, 11), 16);
         assert_eq!(run(u64::MAX, 0, 1), 0);
+    }
+
+    // The same join selected by equality: only equal operands take b.
+    #[test]
+    fn conditional_join_selects_by_equality() {
+        let mut region = max_plus();
+        region.prefix.nodes = vec![Node::Equal { width: 64, output: 3, left: 0, right: 1 }];
+        let run = |a, b| interpret(&region, &[(port(0, 64), a), (port(1, 64), b), (port(2, 64), 11)]).unwrap()[0].1;
+        assert_eq!(run(5, 5), 16);
+        assert_eq!(run(3, 7), 14);
+        assert_eq!(run(9, 4), 20);
+        assert_eq!(run(u64::MAX, u64::MAX), 10);
     }
 
     #[test]

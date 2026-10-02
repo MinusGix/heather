@@ -20,9 +20,10 @@ pub fn encode_instructions(instructions: &[Instruction]) -> Vec<u8> {
                 bytes.extend(immediate.to_le_bytes());
                 continue;
             }
-            Instruction::SetBelow { destination } | Instruction::SetLess { destination } => {
+            Instruction::SetBelow { destination } | Instruction::SetLess { destination } | Instruction::SetEqual { destination } => {
                 let r = match destination { LowByteGpr::Al => 0, LowByteGpr::Cl => 1, LowByteGpr::Dl => 2, LowByteGpr::Bl => 3 };
-                bytes.extend([0x0f, if matches!(instruction, Instruction::SetBelow { .. }) { 0x92 } else { 0x9c }, 0xc0 | r]);
+                let opcode = match instruction { Instruction::SetBelow { .. } => 0x92, Instruction::SetLess { .. } => 0x9c, _ => 0x94 };
+                bytes.extend([0x0f, opcode, 0xc0 | r]);
                 continue;
             }
             // REX.W 83 /0 ib and REX.W 81 /0 id.

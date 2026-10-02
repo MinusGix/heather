@@ -113,6 +113,16 @@ theorem signed_compare_skips<M>(left, right: Gpr, a, b: BitVec(64), state: Machi
         j(sym(pb), λ y _ => branch_skips(Compare(left, right, L), state) = !read_gpr(left, state.gprs).signed_lt_bit(y), refl))
 }
 
+// ZF after CMP is `eq_bit` by a law, not by definition (`zero_bits_sub`).
+theorem equal_compare_skips<M>(left, right: Gpr, a, b: BitVec(64), state: MachineState<M>,
+    pa: a = read_gpr(left, state.gprs), pb: b = read_gpr(right, state.gprs)):
+    branch_skips(Compare(left, right, E), state) = !a.eq_bit(b)
+{
+    j(sym(pa), λ x _ => branch_skips(Compare(left, right, E), state) = !x.eq_bit(b),
+        j(sym(pb), λ y _ => branch_skips(Compare(left, right, E), state) = !read_gpr(left, state.gprs).eq_bit(y),
+            cong_fn(λ (bit: Bool) => !bit, zero_bits_sub(64, read_gpr(left, state.gprs), read_gpr(right, state.gprs)))))
+}
+
 fn structured_branch_entry<M>(test: BranchTest, displacement: BitVec(8),
     before: MachineState<M>) → MachineState<M>
 {
