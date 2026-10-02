@@ -279,11 +279,15 @@ pub(crate) fn retry_obligations(
                 }
                 if progressed { continue; }
             }
+            // A literal falls back first: it always has its own type (`Nat`,
+            // `Char`), and that may be what teaches an earlier argument its
+            // domain (`first_then(Nil, 3)`), where the earlier one alone
+            // would only fail.
+            let waiting = |obligation: &&DeferredArg<'_>| obligation.fallback_infer && matches!(sols[obligation.slot], Sol::Withheld);
+            let literal = |obligation: &&DeferredArg<'_>| matches!(obligation.expr.kind, ExprKind::Num(_) | ExprKind::Char(_));
             if allow_fallback
                 && blocked
-                && let Some(obligation) = deferred.iter().find(|obligation| {
-                    obligation.fallback_infer && matches!(sols[obligation.slot], Sol::Withheld)
-                })
+                && let Some(obligation) = deferred.iter().filter(waiting).find(literal).or_else(|| deferred.iter().find(waiting))
             {
                 let (term, ty, _) = match elab.infer_application_argument(cx, obligation.expr) {
                     Err(ElabError::Elab { msg, span: at }) if obligation.replanned => {

@@ -23,6 +23,8 @@ const MODULES: &[(&str, &str)] = &[
     ("bitvec", include_str!("../../../lib/std/bitvec.hthr")),
     ("bitvec_nat", include_str!("../../../lib/std/bitvec/bitvec_nat.hthr")),
     ("bitvec_omega", include_str!("../../../lib/std/bitvec/bitvec_omega.hthr")),
+    ("char", include_str!("../../../lib/std/char.hthr")),
+    ("byte", include_str!("../../../lib/std/bitvec/byte.hthr")),
 ];
 
 const PREFIX: &str = "import bool;\nimport logic;\nimport nat;\nimport list;\nimport omega;\nimport bitvec;\nimport bitvec_nat;\nimport bitvec_omega;\n\n\
@@ -72,6 +74,46 @@ fn bv_omega_suite() {
     proves_what_is_written_down_without_search();
     splits_stuck_comparisons();
     splits_through_definitions();
+    byte_tests_read_as_written();
+}
+
+/// Byte tests as a program writes them (S3 of
+/// docs/native-programs-read-like-programs-design.md): a numeral or a
+/// character at a byte is its `ofNat`, also on the left of an order and before
+/// the argument that fixes the width; `=`, `<` and `<=` at bytes decide, alone
+/// and under connectives; and the decision computes on closed bytes.
+fn byte_tests_read_as_written() {
+    let source = |body: &str| format!("import bool;\nimport logic;\nimport nat;\nimport algebra;\nimport bitvec;\nimport char;\nimport byte;\n\n{body}\n");
+    let check = |what: &str, body: &str| {
+        let source = source(body);
+        elaborator().elab_module_source("probe", &source).unwrap_or_else(|error| panic!("{what} did not check: {}", message(error)));
+    };
+    check("literals at a byte are their ofNat", r#"
+        fn ten() → BitVec(8) { 10 }
+        fn newline() → BitVec(8) { '\n' }
+        theorem same(): ten() = newline() { refl }
+        theorem spelled(): ten() = BitVec::ofNat(10) { refl }
+    "#);
+    check("decided byte tests", r#"
+        fn newline(b: BitVec(8)) → Bool { if b = '\n' { True } else { False } }
+        fn space(b: BitVec(8)) → Bool { if b = ' ' ∨ ('\t' <= b ∧ b <= '\r') { True } else { False } }
+        fn control(b: BitVec(8)) → Bool { if b < 32 ∧ ¬(9 <= b) { True } else { False } }
+        theorem closed(): (newline('\n') = True) ∧ ((newline('a') = False) ∧ ((space('\r') = True) ∧ ((space(' ') = True) ∧
+            ((space('x') = False) ∧ ((control(BitVec::ofNat(3)) = True) ∧ (control('\t') = False)))))) {
+            ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, refl⟩⟩⟩⟩⟩⟩
+        }
+    "#);
+    let refused = |what: &str, body: &str| {
+        let source = source(body);
+        assert!(elaborator().elab_module_source("probe", &source).is_err(), "{what} checked");
+    };
+    refused("a wrong closed decision", r#"
+        fn newline(b: BitVec(8)) → Bool { if b = '\n' { True } else { False } }
+        theorem wrong(): newline('\r') = True { refl }
+    "#);
+    refused("a character at a wider word", r#"
+        fn wide() → BitVec(16) { 'a' }
+    "#);
 }
 
 /// What a split decides reaches the rest of the goal and the hypotheses

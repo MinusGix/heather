@@ -175,6 +175,42 @@ Issue: `byte-vocabulary-for-native-programs`. The shape depends on decision
   from literal arguments when expanding a helper (`structured.rs`
   `produce`), so `unsigned_le_bit` and `eq_bit` expand.
 
+**Built, part 1 (2026-10-02): the library and the literals.**
+- **`BitVec::eq_bit`** is structural over the width, with `eq_of_eq_bit`,
+  `eq_bit_of_eq`, `ne_of_eq_bit` and `eq_bit_dec`, and `Decide<a = b>` at
+  `BitVec` decides by it.
+- **Orders.** `<` and `<=` at `BitVec` designate the unsigned orders.
+- **Literals.**
+  - `Numeral<BitVec(n)>` is in `bitvec`. `CharLiteral<BitVec(8)>` is in a new
+    `lib/std/bitvec/byte.hthr`, so `bitvec` does not import `char` (test
+    harnesses list their modules).
+  - A literal's embedding at a resolved instance is read as the carrier's own
+    construction (`reduced_embedding`, `crates/elab/src/literals.rs`): the
+    projection unfolds to the field's body and stops at the next definition,
+    and arguments that compute to a natural literal are computed.
+  - A numeral or character argument waits for a later argument to fix its
+    carrier (`unsigned_le(9, b)`), falling back to its own type first when
+    the call stalls (`first_then(Nil, 3)`).
+- **Operator carrier.** A character on the left of an operator is as flexible
+  as a numeral.
+- **Check.** `perf ab` (whole tree, calc_parser) moved no counter by more than
+  0.1% and found no change in seconds.
+- **Imports.** Byte literals need `import algebra; import char; import byte;`
+  (`literal-classes-need-importing`).
+
+**Frontend design (part 3).** A `decide<P>()` match, or a Bool match on
+`&&`, `||` or `!`, is reflected into a test tree whose leaves are comparison
+bits, and lowered as nested conditionals, which is short-circuit code. The
+source expansion keeps the source's own form at the tree's head, so
+`_source_expands` stays `refl`. The observation bridges to the nested form
+with library lemmas, all checked in a probe (`probes/ergo/t_s3_reflect.hthr`):
+- `Reflects(P, bit)`, with `reflects_lt`, `reflects_le` (bit
+  `!b.unsigned_lt_bit(a)`), `reflects_eq` and the connectives;
+- `decided_select`, a decision's match as the match on a reflecting bit, for
+  any `Decide` instance;
+- `and_select`, `or_select` and `not_select`, a connective's match as nested
+  matches on its operands.
+
 ### S4. Migrate the examples
 
 Rewrite `wc`, `wc_l`, `tr`, `tr_s` and `tr_d` in the new style. Delete what

@@ -73,7 +73,9 @@ pub(crate) fn expression_left_leaf_is_numeral(mut e: &Expr) -> bool {
     {
         e = first;
     }
-    matches!(e.kind, ExprKind::Num(_))
+    // A character literal is as flexible as a numeral: `'\t' <= b` at a
+    // byte takes its carrier from `b`, through `CharLiteral`.
+    matches!(e.kind, ExprKind::Num(_) | ExprKind::Char(_))
 }
 
 /// Read an expression as type syntax when its shape has that second reading.

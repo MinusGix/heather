@@ -36,3 +36,4 @@ Out of scope:
 - 2026-10-02: V1–V5 run (design §4.1): none refutes; S3 amended (connectives as short-circuit control flow — eager && hits RegisterPressure in the filter step); S6 now required (split-all-reduce-defined-heads); ZF⇔equality proved without a borrow law; literal reduction risk = Int literals library-wide.
 - 2026-10-02: S6 landed: split_all reduces defined heads at decided matches, restates later binders simplified, states literal facts; Cons(Nil, xs) infers. Residue: split-all-revise-hypotheses. Suite 3156 passed.
 - 2026-10-02: S1+S2 landed: wc.hthr 320 → 115 lines, wc_l proof two theorems; executables match host tools. Suite 3156. Next S3 (byte vocabulary).
+- 2026-10-02: Filed literal-classes-need-importing (S3 papercut).

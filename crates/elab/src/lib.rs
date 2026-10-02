@@ -1214,9 +1214,14 @@ impl application::ImplicitApplicationElab for Elaborator {
         // lambdas (including equality endpoints) still infer normally.
         let annotated_lambda = matches!(&argument.kind, ExprKind::Lam { binders, .. }
             if binders.iter().all(|b| b.ty.is_some()));
+        // A numeral or character literal waits for a later argument to fix
+        // its carrier, and falls back to its own type (`Nat`, `Char`) when
+        // nothing does: in `unsigned_le(9, b)` the width comes from `b`, so
+        // `9` is a byte (docs/native-programs-read-like-programs-design.md S3).
+        let literal = matches!(&argument.kind, ExprKind::Num(_) | ExprKind::Char(_));
         application::ArgumentClass {
-            checking_only: annotated_lambda || self.is_checking_only(cx, argument),
-            fallback_infer: annotated_lambda || self.deferral_can_fall_back(cx, argument),
+            checking_only: annotated_lambda || literal || self.is_checking_only(cx, argument),
+            fallback_infer: annotated_lambda || literal || self.deferral_can_fall_back(cx, argument),
         }
     }
 
@@ -6877,7 +6882,7 @@ impl Elaborator {
                 embed_level,
                 std::slice::from_ref(e),
             )?;
-            return Ok(out);
+            return Ok(self.reduced_embedding(cx, out));
         }
         // A numeral is the leaf case of
         // `issues/check-fallback-discards-expected-type.md`: its inferred type

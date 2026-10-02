@@ -19,6 +19,7 @@ import logic;
 import nat;
 import int;
 import pair;
+import algebra;
 
 record BitVec(n: Nat) { bits: [Bool; n] }
 
@@ -776,6 +777,16 @@ fn BitVec::signed_lt_bit({n: Nat}, self a, b: BitVec(n)) → Bool {
 
 fn BitVec::unsigned_le_bit({n: Nat}, self a, b: BitVec(n)) → Bool { !b.unsigned_lt_bit(a) }
 
+// Equality as a bit: every pair of bits agrees. Structural over the width,
+// so a closed comparison costs the width and never the operands' magnitude
+// (docs/native-programs-read-like-programs-design.md §3, S3).
+fn BitVec::eq_bit({n: Nat}, self a, b: BitVec(n)) → Bool {
+    (match n as λ k => BitVec(k) → BitVec(k) → Bool {
+        Zero => λ x y => True,
+        Succ(_, ih) => λ x y => BitVec::bool_eq(x.head_bit(), y.head_bit()) && ih(x.tail_bits(), y.tail_bits()),
+    })(a, b)
+}
+
 // ---------------------------------------------------------------------------
 // Decision instances (issues/reflection-through-decide-instances.md). The
 // specification stays the notion at every proof site — `a.unsigned_lt(b)`
@@ -1135,6 +1146,78 @@ fn BitVec::eq_dec({n: Nat}, self x, y: BitVec(n)) → x = y ∨ x ≠ y {
             },
     })(x, y)
 }
+
+// `eq_bit` is equality (S3 of docs/native-programs-read-like-programs-design.md).
+theorem BitVec::bool_eq_self(a: Bool): BitVec::bool_eq(a, a) = True { match a { False => refl, True => refl } }
+
+theorem BitVec::bool_eq_true(a: Bool): (b: Bool) → BitVec::bool_eq(a, b) = True → a = b {
+    match a as λ x => (b: Bool) → BitVec::bool_eq(x, b) = True → x = b {
+        False => λ b => match b as λ y => BitVec::bool_eq(bool::False, y) = True → bool::False = y {
+            False => λ _ => refl,
+            True => λ no => absurd(no),
+        },
+        True => λ b => match b as λ y => BitVec::bool_eq(bool::True, y) = True → bool::True = y {
+            False => λ no => absurd(no),
+            True => λ _ => refl,
+        },
+    }
+}
+
+theorem BitVec::and_true_left(a: Bool): (b: Bool) → a && b = True → a = True {
+    match a as λ x => (b: Bool) → x && b = True → x = bool::True { False => λ b no => no, True => λ b _ => refl }
+}
+
+theorem BitVec::and_true_right(a: Bool): (b: Bool) → a && b = True → b = True {
+    match a as λ x => (b: Bool) → x && b = True → b = True { False => λ b no => absurd(no), True => λ b yes => yes }
+}
+
+theorem BitVec::eq_bit_self(n: Nat): (x: BitVec(n)) → x.eq_bit(x) = True {
+    match n as λ k => (x: BitVec(k)) → x.eq_bit(x) = True {
+        Zero => λ x => refl,
+        Succ(k, ih) => λ x => j(sym(BitVec::bool_eq_self(x.head_bit())),
+            λ h _ => h && x.tail_bits().eq_bit(x.tail_bits()) = True, ih(x.tail_bits())),
+    }
+}
+
+theorem BitVec::eq_of_eq_bit(n: Nat): (x, y: BitVec(n)) → x.eq_bit(y) = True → x = y {
+    match n as λ k => (x, y: BitVec(k)) → x.eq_bit(y) = True → x = y {
+        Zero => λ x y _ => refl,
+        Succ(k, ih) => λ x y same => {
+            let heads = BitVec::and_true_left(BitVec::bool_eq(x.head_bit(), y.head_bit()), x.tail_bits().eq_bit(y.tail_bits()), same);
+            let tails = BitVec::and_true_right(BitVec::bool_eq(x.head_bit(), y.head_bit()), x.tail_bits().eq_bit(y.tail_bits()), same);
+            BitVec::cons_bit_cong(k, BitVec::bool_eq_true(x.head_bit(), y.head_bit(), heads), ih(x.tail_bits(), y.tail_bits(), tails))
+        },
+    }
+}
+
+// The bit is the proposition: `True` exactly at equal words.
+theorem BitVec::eq_bit_of_eq(n: Nat, x, y: BitVec(n), same: x = y): x.eq_bit(y) = True {
+    j(same, λ z _ => x.eq_bit(z) = True, BitVec::eq_bit_self(n, x))
+}
+theorem BitVec::ne_of_eq_bit(n: Nat, x, y: BitVec(n), differ: x.eq_bit(y) = False): x ≠ y {
+    λ same => absurd(trans(sym(differ), BitVec::eq_bit_of_eq(n, x, y, same)))
+}
+
+// Equality decides by `eq_bit`, the bit a step branches on, the way the
+// orders above decide by the borrow.
+fn BitVec::eq_bit_dec({n: Nat}, self a, b: BitVec(n)) → a = b ∨ a ≠ b {
+    match a.eq_bit(b) as λ c => (a.eq_bit(b) = c) → (a = b ∨ a ≠ b) {
+        True => λ h => Inl(BitVec::eq_of_eq_bit(n, a, b, h)),
+        False => λ h => Inr(BitVec::ne_of_eq_bit(n, a, b, h)),
+    }(refl)
+}
+
+instance(n: Nat, a, b: BitVec(n)) Decide<a = b> {
+    dec := a.eq_bit_dec(b)
+}
+
+// What a step writes about bytes (docs/native-programs-read-like-programs-design.md
+// §3, S3): `b < 32` and `'\t' <= b` are the unsigned orders, as Lean reads
+// `<` at a bit vector; a numeral at a word is its `ofNat` (a character at a
+// byte is, too: lib/std/bitvec/byte.hthr).
+designation <= at BitVec(n) := BitVec::unsigned_le
+designation < at BitVec(n) := BitVec::unsigned_lt
+instance(n: Nat) Numeral<BitVec(n)> { ofNat := λ (k: Nat) => BitVec::ofNat(k) }
 
 theorem BitVec::decrement_increment_step(n: Nat, b: Bool, x: BitVec(n),
         tail_law: (x.increment()).decrement() = x):
