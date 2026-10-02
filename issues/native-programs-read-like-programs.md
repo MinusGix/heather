@@ -29,3 +29,7 @@ Out of scope:
 - argv, files and flags ([[native-wc-as-a-command]]);
 - formatting beyond `%7d` ([[native-proven-formatting-api]]);
 - the 0xA0 word-break question ([[wc-words-no-break-space]]).
+
+## Log
+
+- 2026-10-02: Decisions (user): byte tests are decided propositions (if b = '\n', Decide connectives, frontend recognises decide trees); record update is s with { f = e }. Design doc §5.

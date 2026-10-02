@@ -32,7 +32,7 @@ refactor.
 
 ### 1.1 The target, as a sketch
 
-Spellings marked `?` are decisions (§5). Everything else follows from §3.
+Spellings marked `?` were decided in §5 (decided propositions, `s with { … }`); the sketch predates that and still shows Bool operators. Everything else follows from §3.
 
 ```
 record WcState { lines: Nat, words: Nat, bytes: Nat, inside: Bool }
@@ -206,7 +206,7 @@ Two coherent options:
   more: Decide for BitVec `=`, a frontend matcher for instance trees, and
   making the derived instances unfold for the kernel and `split_all`.
 
-Leaning: decided propositions. `if` already means decide in Heather, and
+**Decided 2026-10-02 (user): decided propositions.** `if` already means decide in Heather, and
 the reflection-through-decide-instances design exists for exactly this. If
 its cost in V1 and V4 runs large, Bool operations are the fallback, and the
 equality node is shared by both.
@@ -214,7 +214,7 @@ equality node is shared by both.
 ### 5.2 Record update spelling
 
 `s with { f = e }`, `s.with(f := e)` (named arguments), or
-`WcState(..s, f := e)`. Leaning: `s with { f = e }`. It reads like the
+`WcState(..s, f := e)`. **Decided 2026-10-02 (user): `s with { f = e }`.** It reads like the
 other languages, and the parser's record-literal guard at `if` shows `{`
 after an expression is already disambiguated.
 

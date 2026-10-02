@@ -40,3 +40,4 @@ projection would not match.
   - `Numeral<BitVec(n)>` / `CharLiteral<BitVec(8)>` would arrive as an unreduced instance projection, which the frontend refuses; needs a closed-instance reduction (elaborator or frontend recogniser).
   - `if P` desugars to `match decide<P>()`, refused (frontend branches on resolved Bool only).
   Proper path ≈12–15 files: eq_bit + its x86 laws, IR Equal node (~20 sites), SETE step form, literal reduction, optional decide recognition.
+- 2026-10-02: Decided (user, 2026-10-02): decided propositions — if b = '\n' through Decide instances; frontend recognises decide of BitVec comparison/equality and connective instances; specs use a Bool of a decidable prop. Equality is a real IR node. docs/native-programs-read-like-programs-design.md §3 S3, §5.1.

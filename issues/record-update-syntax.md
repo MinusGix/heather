@@ -28,3 +28,7 @@ is a dependent record, where a later field's type mentions a replaced one:
 either refuse it or require every dependent field to be given.
 
 Related: [[native-programs-read-like-programs]], [[surface-records]].
+
+## Log
+
+- 2026-10-02: Spelling decided (user, 2026-10-02): s with { f = e }.
