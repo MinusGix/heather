@@ -1,6 +1,6 @@
 # A native program reads like a program
 
-Status: **scoped 2026-10-02, not started.** Anchor issue:
+Status: **scoped 2026-10-02; V1–V5 run (§4.1), building not started.** Anchor issue:
 `issues/native-programs-read-like-programs.md`. This round comes after step 2
 of `docs/automatic-author-surface-design.md` (the stream filter) and before
 step 3 (`issues/native-one-program-logic.md`, which waits on ITrees).
@@ -96,8 +96,8 @@ Probe files are in `probes/ergo/`; byte-path costing is logged on
 ## 3. Slices
 
 Slices S1 and S2 are library-only and independent. S3 is the frontend and
-lowering. S4 migrates the examples and is where the measure is read. S5 and
-S6 ride along only if small.
+lowering. S4 migrates the examples and is where the measure is read. S6 is
+required (§4.1, V1); S5 rides along only if small.
 
 ### S1. Counting folds and stdout from count facts
 
@@ -165,10 +165,12 @@ constructor over the old value's projections. The frontend already reads
 that term. Refuse a dependent record whose later field mentions a replaced
 one.
 
-### S6. `split_all` states literal facts (rides along)
+### S6. `split_all` reduces defined heads and states literal facts
 
-Issue: `split-all-closed-tonat-literals`. Literal widths with `k < 2^w`
-produce `14 <= toNat(byte)`.
+Issues: `split-all-reduce-defined-heads` (required since V1/V2: a predicate
+built with `&&` fails the bundle's default without it) and
+`split-all-closed-tonat-literals` (literal widths with `k < 2^w` produce
+`14 <= toNat(byte)`).
 
 ## 4. Verification first (stop and report if one refutes the plan)
 
@@ -184,6 +186,73 @@ produce `14 <= toNat(byte)`.
   at the frontend as `ofNat(8, 10)`.
 - **V5.** `Finish` by position. The CLI context module still restates the
   bundle's facts, and a wrong finish is refused at the program's source.
+
+### 4.1 Results (2026-10-02)
+
+None refutes the plan. Two amend it: V1 changes S3, and V1 and V2 add a
+`split_all` fix. Probe files are in `probes/ergo/` (`v1_wc_l`, `t_v2_runs`,
+`t_v3_zf`, `v4_tr`, `t_wc_a`).
+
+- **V1, amended. `&&` reaches the frontend but cannot be lowered.**
+  1. The Filter's `advances` default refused the step first: after splitting
+     the comparison, `split_all` leaves `Bool::and(Bool::not(True), …)`
+     unreduced, and omega cannot spell it
+     (`issues/split-all-reduce-defined-heads.md`).
+  2. With `advances` given by hand, the frontend accepted the step. The x86
+     lowering then declined it:
+     `RegisterPressure { live_temporaries: 2 }` at the step's continuation.
+     `Bool::and` is expanded as a helper with both operands evaluated
+     eagerly, and the filter step has no room for two live comparison
+     results.
+
+  **Amendment to S3:** connectives are control flow. The frontend turns
+  `&&`, `||` and `!` (and the `Decide` instances for `∧`, `∨` and `¬`) into
+  short-circuit branches, never materialised Bools. This is also what
+  recognising a decide tree produces, so the decided-proposition route
+  needs it anyway.
+
+- **V2, holds.** The generic run-count lemma (`counts_runs` over a probe-local
+  `split_by`) is about 50 lines. The per-byte case lemma had to be written
+  with explicit motives, because `split_all` leaves
+  `words(split_at(False, …))` unreduced (the same gap as in V1).
+  `Cons(Nil, pieces)` needed `Nil<A>`
+  (`issues/cons-nil-argument-inference.md`). wc's step meets both premises
+  (`wc_step(s, b).words = s.words + runs_start(space(b), s.inside)`, and the
+  flag) in one `split_all` line each.
+
+  **Amendment:** S6 becomes "`split_all` reduces defined heads", taking in
+  `split-all-reduce-defined-heads` beside the literal-facts fix. Without
+  it, every connective-built predicate fails the bundle's own default.
+
+- **V3, holds, and no borrow law is needed.** `zf_sub_same` gives
+  `is_zero_bits(n, a.sub(a)) = True`, and `zf_sub_eq` gives that
+  `is_zero_bits(n, a.sub(b)) = True` implies `a = b`, at any width, in about
+  50 lines. They go through the iterated forms (`sub_bits_spec`,
+  `iterate_increment_toNat`, `zero_bits_of_pos`) plus one new inverse,
+  `increment_decrement`. The narrow form follows from `truncate_zero_extend`
+  (zero-extend is injective). `BitVec::eq_dec` already exists, so
+  `Decide<a = b>` at BitVec is an instance declaration.
+
+- **V4, refuted as the code stands, as predicted.** With `Numeral<BitVec(8)>`
+  and `CharLiteral<BitVec(8)>` instances, tr's `'a'` and `0x7b` elaborate,
+  but the frontend refuses them ("source value must use a resolved pure
+  operation"). The reduction goes after the dictionary projection in
+  `elab_overloaded_num_check` (`crates/elab/src/lib.rs`), and in its
+  char-literal twin (`literals.rs`): when the dictionary is a closed global
+  instance whose field is a λ, emit the β-reduced field body.
+
+  **Risk:** this changes every `Int` literal's elaborated term across the
+  library, because `Numeral<Int>` takes the same path. That means module
+  images rebuild, and possibly costs move. Measure it with
+  `scripts/perf ab --source-patch` before landing; this is a counter
+  change, not a design change.
+
+- **V5, holds by reading.** `Finish` is consumed in three places:
+  `filter_program` (`finish_bytes`, `FinishFits`, `filter_output`),
+  `elf64_filter_finish` (`filter_prints`, whose `FilterShape` already
+  carries `counts`), and the CLI context (`read_filter.rs`, where the
+  restated finish and two `finish_bytes(…)` spellings gain the counts
+  argument). `finish_written` already accepts a bare `Var` head.
 
 ## 5. Decisions for the user
 

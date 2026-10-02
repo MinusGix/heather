@@ -41,3 +41,4 @@ projection would not match.
   - `if P` desugars to `match decide<P>()`, refused (frontend branches on resolved Bool only).
   Proper path ≈12–15 files: eq_bit + its x86 laws, IR Equal node (~20 sites), SETE step form, literal reduction, optional decide recognition.
 - 2026-10-02: Decided (user, 2026-10-02): decided propositions — if b = '\n' through Decide instances; frontend recognises decide of BitVec comparison/equality and connective instances; specs use a Bool of a decidable prop. Equality is a real IR node. docs/native-programs-read-like-programs-design.md §3 S3, §5.1.
+- 2026-10-02: V1/V3/V4 (2026-10-02, design §4.1): && expands eagerly and the filter step declines it (RegisterPressure, 2 live temporaries) — connectives must lower as short-circuit branches; ZF of CMP = equality proved at any width (~50 lines, no borrow law); literal instances elaborate but arrive unreduced — reduce closed instance projections in elab_overloaded_num_check.
