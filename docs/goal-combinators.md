@@ -111,7 +111,7 @@ later without teaching individual solvers about finite case analysis.
 ## `decide`
 
 `decide` is a leaf, not a goal producer: at a goal `P` with a `Decide<P>`
-instance in scope it elaborates `logic::decide_yes(refl)`, so resolution picks
+instance in scope it elaborates `bool::decide_yes(refl)`, so resolution picks
 the instance and the kernel runs its decision to judge the `refl`
 (`docs/reflection-through-decide-instances-design.md` §4). It composes with
 the pair above like any other leaf:

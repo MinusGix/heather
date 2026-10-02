@@ -4698,9 +4698,9 @@ impl Elaborator {
             }
             // `decide` — proof by reflection at a decided goal
             // (docs/reflection-through-decide-instances-design.md §4). Sugar
-            // for `logic::decide_yes(refl)`: resolution picks the `Decide`
+            // for `bool::decide_yes(refl)`: resolution picks the `Decide`
             // instance, the kernel runs its decision and judges the `refl`.
-            // The name is also `logic::decide`'s, so the shadowing guard is
+            // The name is also `bool::decide`'s, so the shadowing guard is
             // narrower than `trivial`'s: a local, an alias, the declaration
             // itself, or a user global of that name wins; the library's own
             // `decide` does not, since a bare `decide` at a goal that is not
@@ -5598,6 +5598,70 @@ impl Elaborator {
     }
 
     fn elab_infer_uncached(&self, cx: &Cx, e: &Expr, expected: Option<&Type>) -> R<(Term, Type, Level)> {
+        let (term, ty, level) = self.elab_infer_written(cx, e, expected)?;
+        Ok((self.reduced_decision(cx, e, term), ty, level))
+    }
+
+    /// `decide_bit<P>()` at a resolved instance, read as the instance's own
+    /// bit (issues/native-frontend-decided-matches.md): `b.eq_bit(10)` for
+    /// `b = '\n'`, `x || y` for a disjunction with each operand read the same
+    /// way. An evidence-free `if` matches on this term, so the frontend, the
+    /// kernel and `split_all` see the comparisons a step branches on, never
+    /// the dictionary record whose proofs mention them. The way a literal's
+    /// embedding is read (`reduced_embedding`): the projection unfolds only
+    /// as far as the field's body. A local dictionary does not unfold.
+    fn reduced_decision(&self, cx: &Cx, e: &Expr, term: Term) -> Term {
+        let ExprKind::App { head, args, named, .. } = &e.kind else { return term };
+        let ExprKind::TyApp { head: callee, .. } = &head.kind else { return term };
+        if !matches!(&callee.kind, ExprKind::Var(name) if name == "decide_bit") || !args.is_empty() || !named.is_empty() {
+            return term;
+        }
+        let Term::GlobalTm { var, .. } = crate::spelling::app_spine(&term).0 else { return term };
+        if self.global_abs_of(*var).and_then(|abs| self.global_qualified_name_at(abs)).as_deref() != Some("bool::decide_bit") {
+            return term;
+        }
+        self.instance_bit(cx, &term).unwrap_or(term)
+    }
+
+    /// The first reduct of a bit that is a constructor or another
+    /// definition's call, with each projected argument (a connective's
+    /// operand, itself an instance's bit) read the same way.
+    fn instance_bit(&self, cx: &Cx, term: &Term) -> Option<Term> {
+        let oracle = self.goal_oracle();
+        for reduct in oracle.term_reducts(&cx.gamma, term, 32) {
+            if crate::spelling::is_inj(&reduct) {
+                return Some(reduct);
+            }
+            let (head, _) = crate::spelling::app_spine(&reduct);
+            // A global the source cannot name (a class field's accessor) is a
+            // step of the instance's own reduction.
+            if !self.named_head(head) {
+                continue;
+            }
+            fn operands(elab: &Elaborator, cx: &Cx, term: &Term) -> Term {
+                let mut output = term.clone();
+                if let Term::App { fun, arg, .. } | Term::AppAt { fun, arg } = &mut output {
+                    *fun = Rc::new(operands(elab, cx, fun));
+                    let (head, _) = crate::spelling::app_spine(arg);
+                    let accessor = matches!(head, Term::GlobalTm { .. }) && !elab.named_head(head);
+                    if (accessor || crate::spelling::proj_of(arg).is_some()) && let Some(bit) = elab.instance_bit(cx, arg) {
+                        *arg = Rc::new(bit);
+                    }
+                }
+                output
+            }
+            return Some(operands(self, cx, &reduct));
+        }
+        None
+    }
+
+    /// A global the source names: a declaration, not a minted accessor.
+    fn named_head(&self, head: &Term) -> bool {
+        let Term::GlobalTm { var, .. } = head else { return false };
+        self.global_abs_of(*var).and_then(|abs| self.global_qualified_name_at(abs)).is_some()
+    }
+
+    fn elab_infer_written(&self, cx: &Cx, e: &Expr, expected: Option<&Type>) -> R<(Term, Type, Level)> {
         let _depth = expr::ExprDepthGuard::enter(&self.expr_depth, e.span)?;
         // An operator symbol resolves to a name *first*, and then this whole
         // function is the path the written name already took
@@ -7119,7 +7183,7 @@ impl Elaborator {
     }
 
     /// Is a bare `decide` something the writer bound, rather than the goal
-    /// combinator? The library's own `logic::decide` is the one global that
+    /// combinator? The library's own `bool::decide` is the one global that
     /// does not count (see the checking arm).
     fn decide_shadowed(&self, cx: &Cx) -> bool {
         cx.names.iter().any(|n| n == "decide")
@@ -7127,17 +7191,17 @@ impl Elaborator {
             || cx.selfref.as_ref().is_some_and(|s| s.matches("decide"))
             || self
                 .key_of("decide")
-                .is_some_and(|key| key != names::qkey("logic", "decide"))
+                .is_some_and(|key| key != names::qkey("bool", "decide"))
     }
 
-    /// The `decide` goal combinator: elaborate `logic::decide_yes(refl)` at
+    /// The `decide` goal combinator: elaborate `bool::decide_yes(refl)` at
     /// the goal and remember what it resolved to, so a gate refusal can be
     /// reported at this `decide` with the instance named.
     fn elab_decide(&self, cx: &Cx, expected: &Type, lvl: &Level, span: Span) -> R<Term> {
-        let Some(yes) = self.key_of("logic::decide_yes") else {
+        let Some(yes) = self.key_of("bool::decide_yes") else {
             return err(
                 "`decide` proves a closed goal by running its `Decide` instance, and needs \
-                 the class in scope: add `import logic;`",
+                 the class in scope: add `import bool;`",
                 span,
             );
         };

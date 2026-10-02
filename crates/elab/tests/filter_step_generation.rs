@@ -12,6 +12,8 @@ use heather_elab::{Elaborator, SemanticImage};
 const READ_PIECES: &str = include_str!("../../../lib/elf64_read_pieces.hthr");
 const STREAM_FILTER: &str = include_str!("../../../lib/stream_filter.hthr");
 const STEP_PIECE: &str = include_str!("../../../lib/filter_step_piece.hthr");
+const CHAR: &str = include_str!("../../../lib/std/char.hthr");
+const BYTE: &str = include_str!("../../../lib/std/bitvec/byte.hthr");
 
 // The steps: `tr -d '\n'` (no state), `tr -s '\n'` (the last byte and
 // whether there was one), `wc` and `wc -l` as counting steps, and `tr a-z
@@ -95,12 +97,40 @@ fn eq_line_step(count: Nat, byte: BitVec(8)) → Nat {
 fn eq_lines_filter() → Nat → BitVec(8) → Filtered<Nat> { counting(eq_line_step) }
 "#;
 
+// The same steps with their byte tests as decided propositions
+// (issues/native-frontend-decided-matches.md): an `if` without evidence
+// matches on the decision's bit, a comparison's bit at a leaf and the Bool
+// connectives above. `if_keep_step` is a negative control's claim.
+const DECIDED: &str = r#"import stream_filter; import filter_step_piece; import filters; import bitvec; import bool; import nat; import option;
+import logic; import algebra; import char; import byte;
+fn if_drop_step(s: Stateless, b: BitVec(8)) → Filtered<Stateless> {
+    if b = '\n' { Filtered(s, None) } else { Filtered(s, Some(b)) }
+}
+fn if_keep_step(s: Stateless, b: BitVec(8)) → Filtered<Stateless> {
+    if b = '\n' { Filtered(s, Some(b)) } else { Filtered(s, None) }
+}
+fn if_space(b: BitVec(8)) → Bool { if b = ' ' ∨ ('\t' <= b ∧ b <= '\r') { True } else { False } }
+fn if_wc_step(s: WcState, byte: BitVec(8)) → WcState {
+    match if_space(byte) {
+        True => if byte = '\n' { WcState(Succ(s.lines), s.words, Succ(s.bytes), False) } else { WcState(s.lines, s.words, Succ(s.bytes), False) },
+        False => match s.inside {
+            True => WcState(s.lines, s.words, Succ(s.bytes), True),
+            False => WcState(s.lines, Succ(s.words), Succ(s.bytes), True),
+        },
+    }
+}
+fn if_wc_filter() → WcState → BitVec(8) → Filtered<WcState> { counting(if_wc_step) }
+fn if_upcase(b: BitVec(8)) → BitVec(8) { if ¬(b < 'a') ∧ b <= 'z' { b.sub(0x20) } else { b } }
+fn if_upcase_filter() → Stateless → BitVec(8) → Filtered<Stateless> { mapping(if_upcase) }
+"#;
+
 // What every test stands on, built once per process.
 fn library() -> Elaborator {
     static IMAGE: OnceLock<SemanticImage> = OnceLock::new();
     IMAGE.get_or_init(|| {
         let mut elab = checker();
-        for (name, source) in [("elf64_read_pieces", READ_PIECES), ("stream_filter", STREAM_FILTER), ("filter_step_piece", STEP_PIECE), ("filters", FILTERS)] {
+        for (name, source) in [("elf64_read_pieces", READ_PIECES), ("stream_filter", STREAM_FILTER), ("filter_step_piece", STEP_PIECE), ("filters", FILTERS),
+            ("char", CHAR), ("byte", BYTE), ("decided", DECIDED)] {
             elab.elab_module_source(name, source).unwrap_or_else(|e| panic!("{name}: {}", e.render(source)));
         }
         elab.semantic_image()
@@ -247,6 +277,53 @@ theorem eq_drop_letter_kept<M>(before: MachineState<M>, rax: read_gpr(Rax, befor
 fn equality_counting_piece_certifies() {
     let (_, emission) = certify("eq_lines", "filters::eq_lines_filter", None);
     assert!(emission.text.contains("[λ (s: Nat) => s]"), "{}", emission.text);
+}
+
+// `tr -d '\n'` with `if b = '\n'`: a match on `b.eq_bit(10)`, so the
+// expansion is the source by conversion. Certified, silent at a newline and
+// keeping a letter; the same code claimed for the step that keeps newlines is
+// refused at the claim.
+#[test]
+fn decided_step_piece_certifies() {
+    let (elab, emission) = certify("if_drop", "decided::if_drop_step", None);
+    let client = "import if_drop_step; import filter_step_piece; import stream_filter; import decided; import function_ir_loop_trace; \
+        import x86_64; import bitvec; import logic;
+theorem if_drop_newline_silent<M>(before: MachineState<M>, rax: read_gpr(Rax, before.gprs) = @bitvec::BitVec::ofNat(8, 10).zero_extend(56)):
+    read_gpr(Rbx, if_drop_step_piece<M>()(before, Stateless(), BitVec::ofNat(10), trivial, rax, trivial).after.gprs) = BitVec::ofNat(0) {
+    if_drop_step_piece<M>()(before, Stateless(), BitVec::ofNat(10), trivial, rax, trivial).flag_is
+}
+theorem if_drop_letter_kept<M>(before: MachineState<M>, rax: read_gpr(Rax, before.gprs) = @bitvec::BitVec::ofNat(8, 0x61).zero_extend(56)):
+    read_gpr(Rdx, if_drop_step_piece<M>()(before, Stateless(), BitVec::ofNat(0x61), trivial, rax, trivial).after.gprs) = BitVec::ofNat(0x61) {
+    if_drop_step_piece<M>()(before, Stateless(), BitVec::ofNat(0x61), trivial, rax, trivial).byte_is
+}";
+    elab.semantic_image().elaborator().elab_module_source("if_drop_client", client).unwrap_or_else(|e| panic!("{}", e.render(client)));
+    assert!(!emission.text.contains("split_all") && !emission.pieces.contains("split_all"), "one comparison needs no case analysis");
+    let elab = library();
+    let emission = generate(&elab, "if_drop", "decided::if_drop_step", None);
+    let mut elab = elab;
+    elab.elab_module_source("if_drop_pieces", &emission.pieces).unwrap_or_else(|e| panic!("{}", e.render(&emission.pieces)));
+    let claim = "if_drop_counts(), decided::if_drop_step)";
+    assert!(emission.text.contains(claim), "{}", emission.text);
+    let bad = emission.text.replace(claim, "if_drop_counts(), decided::if_keep_step)");
+    let error = elab.elab_module_source("if_drop_step", &bad).expect_err("if_keep_step's claim").render(&bad);
+    assert!(!error.contains("unbound") && !error.contains("ambiguous"), "{error}");
+}
+
+// `wc` with its space test a disjunction of a conjunction, in a helper, and
+// its newline test an `if` inside a branch: the connectives lower as
+// branches, an operand at a time, and the expansion is the source by case
+// analysis on those operands.
+#[test]
+fn decided_connective_counting_piece_certifies() {
+    let (_, emission) = certify("if_wc", "decided::if_wc_filter", None);
+    assert!(emission.pieces.contains("split_all") || emission.text.contains("split_all"), "a connective's expansion is proved by cases");
+}
+
+// `tr a-z A-Z` with `¬(b < 'a') ∧ b <= 'z'`: a negation under a conjunction
+// and an order whose bit is itself a negation.
+#[test]
+fn decided_mapping_piece_certifies() {
+    certify("if_upcase", "decided::if_upcase_filter", None);
 }
 
 // Steps the generator does not take are refused when they are read, with a

@@ -1,6 +1,6 @@
 # A native program reads like a program
 
-Status: **scoped 2026-10-02; V1–V5 run (§4.1); S6, S1, S2 and S3 parts 1–2 landed; S3's frontend is paused for a design round (`native-frontend-decided-matches`).** Anchor issue:
+Status: **scoped 2026-10-02; V1–V5 run (§4.1); S6, S1, S2 and S3 landed (part 3 after a design round: `Decide` carries its bit, `native-frontend-decided-matches`).** Anchor issue:
 `issues/native-programs-read-like-programs.md`. This round comes after step 2
 of `docs/automatic-author-surface-design.md` (the stream filter) and before
 step 3 (`issues/native-one-program-logic.md`, which waits on ITrees).
@@ -205,15 +205,33 @@ law. `eq_bit` is a frontend producer. It was built by an agent from a brief;
 its deviations are in the commit, and two follow-ups are filed
 (`native-narrow-compare-fusion`, `filter-default-spells-program-names`).
 
-**Part 3, the frontend reading `decide` and connectives: paused
-(2026-10-02, user).** Reflection into short-circuit conditionals works
-(branch `s3-frontend-wip`). Tying the generated expansion to a source that
-branches on decisions does not: `split_all` cannot prove it (abstracting a
-bit inside a decision's proofs gives an ill-typed motive), and direct
-bridging or a `Decide` that carries its bit are both bigger decisions.
-`issues/native-frontend-decided-matches.md` owns them, with costs. Until
-then a step writes byte tests as `eq_bit`, `unsigned_lt_bit` and Bool
-matches, and specs and proofs can use decided propositions freely.
+**Part 3, the frontend reading decided propositions (2026-10-02, after a
+design round).** The paused version reflected `match decide<P>()` through
+the instance tree, and could not tie its expansion to the source: the source
+branched on a decision whose instance matches on the comparison, and
+case-of-case is not definitional. `issues/native-frontend-decided-matches.md`
+weighed three ways out; the user chose (e), **a decision carries its bit**:
+
+- `Decide<P>` is `{ dec, bit: Bool, reflects: Reflects(P, bit) }`, in `bool`
+  (its bit is one). The BitVec instances' bits are `eq_bit` and
+  `unsigned_lt_bit` (`a <= b` is `!b.unsigned_lt_bit(a)`); the connectives'
+  are `&&`, `||` and `!`. Every other instance reads its bit off its `_dec`
+  (`or_bit`, `or_bit_reflects`).
+- An `if` without an evidence binder is `match decide_bit<P>() { True => …,
+  False => … }`; `if h: P` is unchanged. At a resolved instance the
+  elaborator reads `decide_bit<P>()` as the instance's bit
+  (`reduced_decision`), so a step's term is a match on `b.eq_bit(10)` or on
+  `x || y`, never on the dictionary.
+- The frontend reads Bool `&&`, `||` and `!` matches as short-circuit
+  branches, an operand at a time. One comparison's expansion is the source by
+  `refl`; a connective's is by `split_all; all_goals { refl }`, since only
+  Bools are split. A helper whose body branched on a connective is expanded
+  in place, and a Bool it computes is tested as itself (`split_all` takes
+  `head_bit(ofBool(x))` and `x` for different atoms).
+
+Tests: `filter_step_generation` (`decided_*`: `tr -d` with `if b = '\n'`
+and a negative control, `wc` with `b = ' ' ∨ ('\t' <= b ∧ b <= '\r')` in a
+helper, `tr a-z A-Z` with `¬(b < 'a') ∧ b <= 'z'`).
 
 ### S4. Migrate the examples
 
@@ -366,7 +384,7 @@ Two coherent options:
 **Decided 2026-10-02 (user): decided propositions.** `if` already means decide in Heather, and
 the reflection-through-decide-instances design exists for exactly this. If
 its cost in V1 and V4 runs large, Bool operations are the fallback, and the
-equality node is shared by both.
+equality node is shared by both. The library `⌊P⌋` is `decide_bit<P>()` since part 3 (S3).
 
 ### 5.2 Record update spelling
 

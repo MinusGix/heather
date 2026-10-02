@@ -500,7 +500,7 @@ fn DivMod::Spec(n, divisor: Nat, state: DivMod) → Type {
 // This is what lets `list_algos`'s `insert` decide through the class instead of
 // naming `le_dec`, which is the measurement issues/value-generic-instances.md
 // was filed to take.
-instance(n, m: Nat) Decide<Nat::Le(n, m)> { dec := Nat::le_dec(n, m) }
+instance(n, m: Nat) Decide<Nat::Le(n, m)> { dec := Nat::le_dec(n, m), bit := or_bit(Nat::le_dec(n, m)), reflects := or_bit_reflects(Nat::le_dec(n, m)) }
 
 // ---------------------------------------------------------------------------
 // The strict order. Every one of these is `Le`'s kit read at `Succ(n)`; the
@@ -779,7 +779,7 @@ fn Nat::eq_dec(self n: Nat) → (m: Nat) → n = m ∨ n ≠ m {
     }
 }
 
-instance(n, m: Nat) Decide<n = m> { dec := Nat::eq_dec(n, m) }
+instance(n, m: Nat) Decide<n = m> { dec := Nat::eq_dec(n, m), bit := or_bit(Nat::eq_dec(n, m)), reflects := or_bit_reflects(Nat::eq_dec(n, m)) }
 
 // The same decision as a property of the carrier, which is what a polymorphic
 // container's decider requires of its element type (`logic::DecEq`).
@@ -1387,7 +1387,7 @@ fn Nat::even_dec(self n: Nat) → Nat::Even(n) ∨ ¬Nat::Even(n) {
     }
 }
 
-instance(n: Nat) Decide<Nat::Even(n)> { dec := Nat::even_dec(n) }
+instance(n: Nat) Decide<Nat::Even(n)> { dec := Nat::even_dec(n), bit := or_bit(Nat::even_dec(n)), reflects := or_bit_reflects(Nat::even_dec(n)) }
 
 // ---------------------------------------------------------------------------
 // The bridge between the Boolean decision and the propositional order. `leb`

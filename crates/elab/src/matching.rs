@@ -174,7 +174,7 @@ pub(crate) fn if_resolution_error(
     let ExprKind::TyApp { head, args } = &head.kind else {
         return error;
     };
-    if !matches!(&head.kind, ExprKind::Var(name) if name == "decide") {
+    if !matches!(&head.kind, ExprKind::Var(name) if name == "decide" || name == "decide_bit") {
         return error;
     }
     let [condition] = args.as_slice() else {

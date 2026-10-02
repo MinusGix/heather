@@ -4278,12 +4278,22 @@ impl Parser {
 
     /// `if P { yes } else { no }` and `if h : P { yes } else { no }`.
     ///
-    /// Proposition-directed branching is exactly elimination of the decision
-    /// evidence, so the parser makes that identity structural:
+    /// Proposition-directed branching with evidence is exactly elimination of
+    /// the decision evidence, so the parser makes that identity structural:
     ///
     /// ```text
     /// match decide<P>() { Inl(h) => yes, Inr(h) => no }
     /// ```
+    ///
+    /// Without a binder there is no evidence to eliminate, and the `if`
+    /// branches on the decision's bit (issues/native-frontend-decided-matches.md):
+    ///
+    /// ```text
+    /// match decide_bit<P>() { True => yes, False => no }
+    /// ```
+    ///
+    /// so a decision built from a comparison is a match on that comparison's
+    /// bit, the way code branches on it.
     ///
     /// `MatchForm::If` is diagnostic provenance only. Everything that types or
     /// computes sees the same ordinary `Or` match as the explicit spelling.
@@ -4308,10 +4318,8 @@ impl Parser {
         let no = self.if_branch("the `else` branch")?;
 
         let ev_span = condition.span;
-        let yes_name = evidence.clone().unwrap_or_else(|| "#if_yes".into());
-        let no_name = evidence.unwrap_or_else(|| "#if_no".into());
         let decide_head = Expr {
-            kind: ExprKind::Var("decide".into()),
+            kind: ExprKind::Var(if evidence.is_some() { "decide" } else { "decide_bit" }.into()),
             span: condition.span,
         };
         let decide = Expr {
@@ -4331,18 +4339,22 @@ impl Parser {
             },
             span: condition.span,
         };
+        let (yes_ctor, no_ctor, binders) = match evidence {
+            Some(name) => ("Inl", "Inr", vec![Pat::Var { name, span: ev_span }]),
+            None => ("True", "False", vec![]),
+        };
         let arms = vec![
             Arm {
-                ctor: "Inl".into(),
+                ctor: yes_ctor.into(),
                 default: false,
-                binders: vec![Pat::Var { name: yes_name, span: ev_span }],
+                binders: binders.clone(),
                 span: yes.span,
                 body: yes,
             },
             Arm {
-                ctor: "Inr".into(),
+                ctor: no_ctor.into(),
                 default: false,
-                binders: vec![Pat::Var { name: no_name, span: ev_span }],
+                binders,
                 span: no.span,
                 body: no,
             },

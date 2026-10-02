@@ -67,6 +67,12 @@ pub struct ReflectedStructuredFunction {
     pub sources: cert::SourceValues,
     /// A composed helper body's result, spelled inside the body.
     pub bodies: cert::SourceBodies,
+    /// Some match was on a connective (`x || y`, which an `if` on `P ∨ Q`
+    /// is: issues/native-frontend-decided-matches.md), branched on one operand
+    /// at a time: the source expansion is then not the source by conversion
+    /// but by case analysis on those operands, and spells each one as the
+    /// source does.
+    pub decided: bool,
 }
 
 /// Two constructors with the same scalar payload use a discriminator and a
@@ -240,11 +246,11 @@ pub fn reflect_elaborated_structured(elaborator: &Elaborator, source_name: &str)
         }
         let mut builder = Builder { elaborator, caller, operations: OperationGlobals::resolve(elaborator)?, comparison, equal, boolean_payloads,
             inputs: interface(&parameters), bindings, records, record_result: record_result.clone(), result, output, exit, emit, stack: vec![caller],
-            next_id: first_free, needs_port: None, known: BTreeMap::new(), sources: BTreeMap::new(), bodies: BTreeMap::new() };
+            next_id: first_free, needs_port: None, known: BTreeMap::new(), sources: BTreeMap::new(), bodies: BTreeMap::new(), decided: false };
         match builder.region(term, 0) {
             Ok(region) => {
                 cert::validate_structured_region(&region).map_err(SourceError::InvalidRegion)?;
-                return Ok(ReflectedStructuredFunction { source_name, parameters, signature, leaves, record, result, region, choice, filtered, sources: builder.sources, bodies: builder.bodies });
+                return Ok(ReflectedStructuredFunction { source_name, parameters, signature, leaves, record, result, region, choice, filtered, sources: builder.sources, bodies: builder.bodies, decided: builder.decided });
             }
             Err(error) => match builder.needs_port.and_then(|index| leaves.iter().position(|(parameter, field)| *parameter == index && field.is_none())) {
                 Some(leaf) if parameters[leaf] == StructuredSourceType::Natural => parameters[leaf] = StructuredSourceType::NatWord,
@@ -340,6 +346,25 @@ struct Builder<'a> {
     /// a crossing's link reads when the helper's argument is plain but its
     /// body composes (`times256(x) = double(double(…))`).
     bodies: cert::SourceBodies,
+    /// A connective was branched on (ReflectedStructuredFunction::decided).
+    decided: bool,
+}
+
+/// What a match tests (Builder::branch): Bool values at the leaves (a
+/// comparison's bit among them), connectives above them.
+enum Test<'t> {
+    /// A Bool the source computes.
+    Value(&'t Term),
+    Not(Box<Test<'t>>),
+    And(Box<Test<'t>>, Box<Test<'t>>),
+    Or(Box<Test<'t>>, Box<Test<'t>>),
+}
+
+/// Where a test's outcome leads: one of the match's arms, or a further test.
+#[derive(Clone)]
+enum Arm<'t> {
+    Body(&'t Term),
+    Then(&'t Test<'t>, Box<Arm<'t>>, Box<Arm<'t>>),
 }
 
 // Local interning preserves DAG sharing. There is no parallel source AST;
@@ -611,9 +636,14 @@ impl Builder<'_> {
         let mut nested = Builder { elaborator: self.elaborator, caller: callee,
             operations: OperationGlobals::resolve(self.elaborator)?, comparison: self.comparison, equal: self.equal,
             boolean_payloads: self.boolean_payloads, inputs: inputs.clone(), bindings, records: BTreeMap::new(), record_result: None,
-            result: expected, output, exit: None, emit: None, next_id: self.next_id, stack, needs_port: None, known, sources: BTreeMap::new(), bodies: BTreeMap::new() };
+            result: expected, output, exit: None, emit: None, next_id: self.next_id, stack, needs_port: None, known, sources: BTreeMap::new(), bodies: BTreeMap::new(), decided: false };
         let mut region = nested.region(body, 0)?;
         self.next_id = nested.next_id;
+        // A body that branched on a connective is not its helper by conversion,
+        // so it does not cross at the call: it is expanded in place, and the
+        // case analysis that relates the expansion to the source reaches into
+        // it.
+        if nested.decided { self.decided = true; call = None; }
         self.sources.append(&mut nested.sources);
         for (port, values) in std::mem::take(&mut nested.bodies) { self.bodies.entry(port).or_default().extend(values); }
         if !arguments.nodes.is_empty() {
@@ -709,30 +739,70 @@ impl Builder<'_> {
         }
         Ok(())
     }
+    /// A match's test, as nested conditionals on its leaves: `a && b` is `b`
+    /// tested where `a` held, `a || b` is `b` tested where `a` failed, and
+    /// `!a` swaps the arms, so an operand is computed only where the
+    /// connective needs it. Arms are the match's, at `depth + 1`.
+    fn branch(&mut self, test: &Test<'_>, yes: &Arm<'_>, no: &Arm<'_>, depth: u32) -> Result<StructuredRegion, SourceError> {
+        let leaf = match test {
+            Test::Not(inner) => return self.branch(inner, no, yes, depth),
+            Test::And(first, second) => return self.branch(first, &Arm::Then(second, Box::new(yes.clone()), Box::new(no.clone())), no, depth),
+            Test::Or(first, second) => return self.branch(first, yes, &Arm::Then(second, Box::new(yes.clone()), Box::new(no.clone())), depth),
+            leaf => leaf,
+        };
+        let inputs = self.inputs.clone();
+        let outputs = self.outputs();
+        let Test::Value(scrut) = *leaf else { unreachable!("connectives were branched above") };
+        let (producer, condition, value) = self.produce(scrut, depth, StructuredSourceType::Boolean, None)?;
+        let when_false = Box::new(self.arm(no, depth)?);
+        let when_true = Box::new(self.arm(yes, depth)?);
+        let mut available = inputs.clone();
+        if !available.contains(&condition) { available.push(condition); }
+        let mut branch = StructuredRegion::Conditional { inputs: available, condition: condition.id, arguments: inputs.clone(), outputs, when_true, when_false };
+        Ok(match producer {
+            None => branch,
+            Some(StructuredRegion::Dataflow(mut prefix)) => {
+                // Here, not in selection, so the certificate and the
+                // source expansion read the same region the plan does.
+                crate::function_ir_x86_lower::share_compared_constant(&mut prefix, &mut branch).map_err(SourceError::Lowering)?;
+                StructuredRegion::Sequence { prefix, continuation: Box::new(branch) }
+            }
+            Some(prefix) => {
+                if let Some(value) = value { self.sources.insert(condition.id, value); }
+                StructuredRegion::Compose { prefix: Box::new(prefix), continuation: Box::new(branch) }
+            }
+        })
+    }
+    fn arm(&mut self, arm: &Arm<'_>, depth: u32) -> Result<StructuredRegion, SourceError> {
+        match arm {
+            Arm::Body(term) => self.region(term, depth + 1),
+            Arm::Then(test, yes, no) => self.branch(test, yes, no, depth),
+        }
+    }
+    fn qualified(&self, head: &Term) -> Option<String> {
+        absolute(head, self.caller).and_then(|abs| self.elaborator.global_qualified_name_at(abs))
+    }
+    /// A Bool scrutinee: a connective of tests, or a value to compute.
+    fn boolean_test<'t>(&self, scrut: &'t Term) -> Test<'t> {
+        let (head, args) = application_spine(scrut);
+        match (self.qualified(head).as_deref(), args.as_slice()) {
+            (Some("bool::Bool::and"), [first, second]) => Test::And(Box::new(self.boolean_test(first)), Box::new(self.boolean_test(second))),
+            (Some("bool::Bool::or"), [first, second]) => Test::Or(Box::new(self.boolean_test(first)), Box::new(self.boolean_test(second))),
+            (Some("bool::Bool::not"), [inner]) => Test::Not(Box::new(self.boolean_test(inner))),
+            _ => Test::Value(scrut),
+        }
+    }
     fn region(&mut self, term: &Term, depth: u32) -> Result<StructuredRegion, SourceError> {
         let inputs = self.inputs.clone();
         let outputs = self.outputs();
         if let Term::Case { lhs, rhs, scrut, case_l, case_r, .. } = term {
-            if !self.boolean_components(lhs, rhs) { return unsupported("structured matches must use the resolved Bool type"); }
-            let (producer, condition, value) = self.produce(scrut, depth, StructuredSourceType::Boolean, None)?;
-            let when_false = Box::new(self.region(case_l, depth + 1)?);
-            let when_true = Box::new(self.region(case_r, depth + 1)?);
-            let mut available = inputs.clone();
-            if !available.contains(&condition) { available.push(condition); }
-            let mut branch = StructuredRegion::Conditional { inputs: available, condition: condition.id, arguments: inputs.clone(), outputs, when_true, when_false };
-            Ok(match producer {
-                None => branch,
-                Some(StructuredRegion::Dataflow(mut prefix)) => {
-                    // Here, not in selection, so the certificate and the
-                    // source expansion read the same region the plan does.
-                    crate::function_ir_x86_lower::share_compared_constant(&mut prefix, &mut branch).map_err(SourceError::Lowering)?;
-                    StructuredRegion::Sequence { prefix, continuation: Box::new(branch) }
-                }
-                Some(prefix) => {
-                    if let Some(value) = value { self.sources.insert(condition.id, value); }
-                    StructuredRegion::Compose { prefix: Box::new(prefix), continuation: Box::new(branch) }
-                }
-            })
+            // A Bool match tests its scrutinee, which may be a connective
+            // (`if b = ' ' ∨ b = '\t'` is a match on `b.eq_bit(32) ||
+            // b.eq_bit(9)`), branched on one operand at a time.
+            if !self.boolean_components(lhs, rhs) { return unsupported("structured matches must use the resolved Bool type: an `if` with an evidence binder matches on the evidence"); }
+            let test = self.boolean_test(scrut);
+            if !matches!(test, Test::Value(_)) { self.decided = true; }
+            self.branch(&test, &Arm::Body(case_r), &Arm::Body(case_l), depth)
         } else {
             let mut dag = Dag::default();
             if let Some((flag, byte)) = self.emit {
@@ -796,14 +866,15 @@ pub fn generate_structured_source_expansion(prefix: &str, reflected: &ReflectedS
     let arguments = reflected.declared_arguments();
     let initial = reflected.initial_values();
     let mut expansion = Expansion { prefix, module: &mut module, next_name: 0, parameters: &parameters, arguments: &arguments, result: reflected.result, choice: reflected.choice.as_ref(),
-        record: reflected.record.as_ref(), filtered: reflected.filtered, naturals: natural_inputs(reflected), constants: BTreeMap::new(), sources: &reflected.sources, tests: BTreeMap::new() };
+        record: reflected.record.as_ref(), filtered: reflected.filtered, naturals: natural_inputs(reflected), constants: BTreeMap::new(), sources: &reflected.sources, tests: BTreeMap::new(),
+        inline: reflected.decided.then(BTreeMap::new) };
     let result = expansion.region(&reflected.region, initial)?;
     let name = format!("{prefix}_expression");
     let result_name = reflected.result_type_name();
     module.declaration(Declaration::function(&name, HeatherExpr::raw(result_name), Block::expression(result)).parameters(parameters.clone()));
     module.declaration(Declaration::theorem(format!("{prefix}_source_expands"),
         HeatherExpr::equal(HeatherExpr::call(name.as_str(), arguments.clone()), HeatherExpr::call(reflected.source_name.as_str(), arguments)),
-        Block::expression(HeatherExpr::name("refl"))).parameters(parameters));
+        if reflected.decided { Block::expression(HeatherExpr::raw("split_all;\nall_goals { refl }")) } else { Block::expression(HeatherExpr::name("refl")) }).parameters(parameters));
     Ok(module.render())
 }
 
@@ -831,6 +902,11 @@ struct Expansion<'a> {
     /// helper's call): a branch reads it rather than `head_bit` of the bit,
     /// which conversion would evaluate, and through it everything below.
     tests: BTreeMap<u64, String>,
+    /// For a source with connectives (ReflectedStructuredFunction::decided), each
+    /// word's spelling with constants and operations inline, as the source
+    /// spells it, so that a comparison test is syntactically the one the
+    /// source reaches and case analysis splits both at once.
+    inline: Option<BTreeMap<u64, String>>,
 }
 
 impl ReflectedStructuredFunction {
@@ -916,10 +992,16 @@ impl Expansion<'_> {
     fn dataflow(&mut self, region: &Region, values: &mut Expressions) -> Result<(), SourceError> {
         for node in &region.nodes {
             let (id, width, expression) = match *node {
-                Node::Const { width, output, value } => (output, width, HeatherExpr::explicit_call("bitvec::BitVec::ofNat", [HeatherExpr::nat(width), HeatherExpr::nat(value)])),
+                Node::Const { width, output, value } => {
+                    if let Some(inline) = self.inline.as_mut() { inline.insert(output, format!("@bitvec::BitVec::ofNat({width}, {value})")); }
+                    (output, width, HeatherExpr::explicit_call("bitvec::BitVec::ofNat", [HeatherExpr::nat(width), HeatherExpr::nat(value)]))
+                }
                 // A copy is spelled as the value it copies, as the source
                 // spells it.
-                Node::Move { width, output, source } => (output, width, operand(values, source, width)?),
+                Node::Move { width, output, source } => {
+                    if let Some(inline) = self.inline.as_mut() && let Some(copied) = inline.get(&source).cloned() { inline.insert(output, copied); }
+                    (output, width, operand(values, source, width)?)
+                }
                 Node::Add { width, output, left, right } | Node::Sub { width, output, left, right }
                 | Node::BitAnd { width, output, left, right } | Node::BitOr { width, output, left, right }
                 | Node::BitXor { width, output, left, right } | Node::UnsignedLessThan { width, output, left, right }
@@ -932,7 +1014,15 @@ impl Expansion<'_> {
                         _ => unreachable!(),
                     };
                     let expression = HeatherExpr::explicit_call(function, [HeatherExpr::nat(width), operand(values, left, width)?, operand(values, right, width)?]);
-                    if comparison { self.tests.insert(output, expression.render()); }
+                    let spelled = match &self.inline {
+                        Some(inline) => {
+                            let at = |port: u64| inline.get(&port).cloned().map_or_else(|| operand(values, port, width).map(|o| o.render()), Ok);
+                            Some(format!("@{function}({width}, {}, {})", at(left)?, at(right)?))
+                        }
+                        None => None,
+                    };
+                    if let (Some(inline), Some(spelled), false) = (self.inline.as_mut(), &spelled, comparison) { inline.insert(output, spelled.clone()); }
+                    if comparison { self.tests.insert(output, spelled.unwrap_or_else(|| expression.render())); }
                     (output, if comparison { 1 } else { width }, if comparison { HeatherExpr::call("bitvec::BitVec::ofBool", [expression]) } else { expression })
                 }
                 _ => return unsupported("unsupported source expansion node"),
@@ -1051,6 +1141,9 @@ impl Expansion<'_> {
                 self.next_name += 1;
                 self.module.declaration(Declaration::function(&name, HeatherExpr::raw(ty), Block::expression(result)).parameters(self.parameters.to_vec()));
                 let result = HeatherExpr::call(name.as_str(), self.arguments.to_vec());
+                // A Bool is tested as itself, not as `head_bit` of its bit:
+                // case analysis takes the two for different atoms.
+                if port.width == 1 { self.tests.insert(port.id, result.render()); }
                 let result = if port.width == 1 { HeatherExpr::call("bitvec::BitVec::ofBool", [result]) } else { result };
                 values.insert(port.id, (port.width, result));
                 self.region(continuation, values)

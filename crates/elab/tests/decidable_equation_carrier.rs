@@ -27,6 +27,7 @@ fn nat_equality_drives_if_and_computes_both_answers() {
     ok(
         r#"
         import logic;
+        import bool;
         import nat;
 
         fn same(n, m: Nat) -> Nat { if n = m { 1 } else { 0 } }
@@ -60,6 +61,7 @@ fn equality_decision_backchains_inside_a_composed_proposition() {
     ok(
         r#"
         import logic;
+        import bool;
         import nat;
 
         fn composed(n, m: Nat) -> Nat {
@@ -75,6 +77,7 @@ fn equality_decision_backchains_inside_a_composed_proposition() {
 fn an_unregistered_endpoint_type_is_not_answered_by_nat_or_bool() {
     let src = r#"
         import logic;
+        import bool;
         inductive Token { A, B }
         fn bad(x, y: Token) -> Nat { if x = y { 1 } else { 0 } }
     "#;

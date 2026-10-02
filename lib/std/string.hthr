@@ -8,6 +8,7 @@
 // decoding and the byte-level `Utf8` spec type are a later round's work.
 
 import logic;
+import bool;
 import nat;
 import list;
 import char;
@@ -71,7 +72,7 @@ fn string_eq_dec(s, t: String) → s = t ∨ ¬(s = t) {
     }
 }
 
-instance(s, t: String) Decide<s = t> { dec := string_eq_dec(s, t) }
+instance(s, t: String) Decide<s = t> { dec := string_eq_dec(s, t), bit := or_bit(string_eq_dec(s, t)), reflects := or_bit_reflects(string_eq_dec(s, t)) }
 
 // ---------------------------------------------------------------------------
 // The literal class, `char`'s `CharLiteral` at the sequence level: at any

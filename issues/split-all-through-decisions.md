@@ -1,5 +1,5 @@
 ---
-title: split_all: split through decide instances without ill-typed motives
+title: "split_all: split a match on decide<P>() (an evidence if) without ill-typed motives"
 status: open
 labels: [tactics,proofs,elaboration]
 created: 2026-10-02
@@ -25,3 +25,7 @@ motive stays well-typed for one-definition goals, or abstract at the decision
 
 The bundle default `advances` hits this for any step whose predicate uses
 `∨`, `¬` or a decision. See also [[filter-default-spells-program-names]].
+
+## Log
+
+- 2026-10-02: 2026-10-02: an evidence-free `if` no longer goes through a decision: since [[native-frontend-decided-matches]] it is a match on the decision's bit (`b.eq_bit(10)`, `x || y`), which split_all splits like any Bool, so the per-byte facts and the bundle's `advances` default over `if`-predicates need nothing from this issue. What remains is a match on `decide<P>()` itself (`if h: P`, explicit decisions): abstracting a comparison inside the instance's proofs still gives an ill-typed motive. Lower priority; the WIP's `_dec` unfolding and applied-match changes were not landed.

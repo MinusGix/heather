@@ -236,7 +236,7 @@ fn publication(elaborator: &Elaborator, prefix: &str, source_name: &str, contrac
     }
     let initial = reflected.initial_values();
     let mut expansion = Expansion { prefix: &format!("{prefix}_publication"), module: &mut module, next_name: 0, parameters: &parameters, arguments: &arguments, result: reflected.result, choice: reflected.choice.as_ref(),
-        record: reflected.record.as_ref(), filtered: reflected.filtered, naturals: natural_inputs(&reflected), constants: BTreeMap::new(), sources: &reflected.sources, tests: Default::default() };
+        record: reflected.record.as_ref(), filtered: reflected.filtered, naturals: natural_inputs(&reflected), constants: BTreeMap::new(), sources: &reflected.sources, tests: Default::default(), inline: reflected.decided.then(BTreeMap::new) };
     let observed = observe_tree(&mut expansion, &reflected.region, initial, &observers, &result_type, &observation_types)?;
     let mut cases = "@bitvec::BitVec::zero(width)".to_string();
     for (id, ty) in reflected.parameters.iter().enumerate().rev() {

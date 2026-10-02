@@ -9,7 +9,7 @@
 //! imported `std/char` is told to import it.
 //!
 //! Neither literal builds a kernel term of its own. A character is the
-//! *surface* `char::ofNat(code, logic::decide_yes(refl))` and a string is the
+//! *surface* `char::ofNat(code, bool::decide_yes(refl))` and a string is the
 //! *surface* `string::String([…])`, re-elaborated through the ordinary paths:
 //! the proof route is then the one `decide` already owns, and the list body is
 //! the collection-literal lowering `List` already owns, so there is no second
@@ -25,13 +25,13 @@ use crate::{application, Cx, ElabError, Elaborator, R};
 
 /// The surface name of the `Char` record, its introduction form, and the
 /// reflection lemma a literal's scalar proof goes through. Written as keys
-/// (`module::name`), the way `elab_decide` names `logic::decide_yes`: a key is
+/// (`module::name`), the way `elab_decide` names `bool::decide_yes`: a key is
 /// a writable name, and naming the declaration rather than the bare word is
 /// what keeps a local binder from capturing a generated call.
 const CHAR_TYPE: &str = "char::Char";
 const CHAR_INTRO: &str = "char::ofNat";
 const STRING_TYPE: &str = "string::String";
-const DECIDE_YES: &str = "logic::decide_yes";
+const DECIDE_YES: &str = "bool::decide_yes";
 
 fn var(name: &str, span: Span) -> Expr {
     Expr {
@@ -66,7 +66,7 @@ impl Elaborator {
             .is_some_and(|carrier| carrier.key == key)
     }
 
-    /// `char::ofNat(code, logic::decide_yes(refl))`. The proof is exactly the
+    /// `char::ofNat(code, bool::decide_yes(refl))`. The proof is exactly the
     /// term the `decide` goal combinator writes; the kernel judges the `refl`
     /// by running the `Decide<char::scalar(n)>` instance at the code, and it
     /// can only go the `Inl` way because the lexer already refused every

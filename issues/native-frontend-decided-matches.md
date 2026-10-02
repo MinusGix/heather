@@ -1,10 +1,37 @@
 ---
-title: Decided matches in the structured frontend (paused for a design round)
-status: open
+title: Decided matches in the structured frontend
+status: closed
 labels: [native,frontend,function-ir,design]
 created: 2026-10-02
 updated: 2026-10-02
 ---
+
+## Resolution (2026-10-02): (e), a decision carries its bit
+
+The user chose (e) ("a bit weird, but it will work"), with `bit` beside
+`dec` rather than replacing it. Landed:
+
+- `Decide<P> { dec, bit: Bool, reflects: Reflects(P, bit) }` moved from
+  `logic` to `bool`. BitVec bits are the comparison bits; `∧ ∨ ¬` are
+  `&& || !`; other instances use `or_bit`/`or_bit_reflects` of their `_dec`.
+- `if P` without a binder lowers to `match decide_bit<P>()`; the elaborator
+  reads `decide_bit` at a resolved instance as the instance's bit. `if h: P`
+  is unchanged.
+- The frontend reads Bool connective matches as short-circuit branches
+  (from branch `s3-frontend-wip`, minus its instance-tree reader and its
+  `split_all` changes, neither needed now). One comparison is `refl`; a
+  connective is `split_all; all_goals { refl }` over Bools.
+
+Probes for (e) before building (untracked, `probes/dbit/`): a single comparison is `refl`; an `∨`
+by hand-written motives or by `split_all` on the reduced spelling; `split_all` on the
+unreduced dictionary spelling is refused by the kernel, which is why the
+elaborator reduces it. Reasoning: docs/decidable-if-expression-design.md
+("Lowering and evidence") and docs/native-programs-read-like-programs-design.md
+§3 S3 part 3.
+
+---
+
+The issue as filed:
 
 A native step should test bytes with decided propositions (`if b = '\n'`,
 `if b = ' ' ∨ ('\t' <= b ∧ b <= '\r')`), which the user chose on 2026-10-02

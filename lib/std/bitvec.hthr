@@ -842,17 +842,51 @@ fn BitVec::signed_le_dec({n: Nat}, self a, b: BitVec(n)) → a.signed_le(b) ∨ 
     Int::le_dec(a.toInt(), b.toInt())
 }
 
+// The unsigned orders' bits are the borrow a step branches on: `a < b` is
+// `a.unsigned_lt_bit(b)`, and `a <= b` is `!b.unsigned_lt_bit(a)`, which is how
+// its decision reads it.
+theorem BitVec::reflects_lt(n: Nat, a, b: BitVec(n)): Reflects(a.unsigned_lt(b), a.unsigned_lt_bit(b)) {
+    And(λ e => BitVec::borrow_sub_bit_true_iff(n, a, b).mp(e),
+        λ e p => absurd(trans(sym(e), BitVec::borrow_sub_bit_true_iff(n, a, b).mpr(p))))
+}
+
+theorem BitVec::reflects_le(n: Nat, a, b: BitVec(n)): Reflects(a.unsigned_le(b), !b.unsigned_lt_bit(a)) {
+    And(λ e => match b.unsigned_lt_bit(a) as λ c => (b.unsigned_lt_bit(a) = c) → (!c = True) → a.unsigned_le(b) {
+            True => λ _ no => absurd(no),
+            False => λ h _ => match Nat::lt_trichotomy(a.toNat(), b.toNat()) {
+                Inl(lt) => Nat::le_of_lt(a.toNat())(b.toNat())(lt),
+                Inr(rest) => match rest {
+                    Inl(eq) => j(eq, λ z p => a.toNat() <= z, a.toNat().le_refl()),
+                    Inr(gt) => absurd(trans(sym(h), BitVec::borrow_sub_bit_true_iff(n, b, a).mpr(gt))),
+                },
+            },
+        }(refl, e),
+        λ e p => match b.unsigned_lt_bit(a) as λ c => (b.unsigned_lt_bit(a) = c) → (!c = False) → False {
+            True => λ h _ => Nat::lt_irrefl(b.toNat(), Nat::le_trans(Succ(b.toNat()), a.toNat(), b.toNat(),
+                BitVec::borrow_sub_bit_true_iff(n, b, a).mp(h), p)),
+            False => λ _ no => absurd(no),
+        }(refl, e))
+}
+
 instance(n: Nat, a, b: BitVec(n)) Decide<BitVec::unsigned_lt(a, b)> {
-    dec := a.unsigned_lt_dec(b)
+    dec := a.unsigned_lt_dec(b),
+    bit := a.unsigned_lt_bit(b),
+    reflects := BitVec::reflects_lt(n, a, b),
 }
 instance(n: Nat, a, b: BitVec(n)) Decide<BitVec::unsigned_le(a, b)> {
-    dec := a.unsigned_le_dec(b)
+    dec := a.unsigned_le_dec(b),
+    bit := !b.unsigned_lt_bit(a),
+    reflects := BitVec::reflects_le(n, a, b),
 }
 instance(n: Nat, a, b: BitVec(n)) Decide<BitVec::signed_lt(a, b)> {
-    dec := a.signed_lt_dec(b)
+    dec := a.signed_lt_dec(b),
+    bit := or_bit(a.signed_lt_dec(b)),
+    reflects := or_bit_reflects(a.signed_lt_dec(b)),
 }
 instance(n: Nat, a, b: BitVec(n)) Decide<BitVec::signed_le(a, b)> {
-    dec := a.signed_le_dec(b)
+    dec := a.signed_le_dec(b),
+    bit := or_bit(a.signed_le_dec(b)),
+    reflects := or_bit_reflects(a.signed_le_dec(b)),
 }
 
 // ---------------------------------------------------------------------------
@@ -1208,7 +1242,9 @@ fn BitVec::eq_bit_dec({n: Nat}, self a, b: BitVec(n)) → a = b ∨ a ≠ b {
 }
 
 instance(n: Nat, a, b: BitVec(n)) Decide<a = b> {
-    dec := a.eq_bit_dec(b)
+    dec := a.eq_bit_dec(b),
+    bit := a.eq_bit(b),
+    reflects := And(λ e => BitVec::eq_of_eq_bit(n, a, b, e), λ e => BitVec::ne_of_eq_bit(n, a, b, e)),
 }
 
 // What a step writes about bytes (docs/native-programs-read-like-programs-design.md

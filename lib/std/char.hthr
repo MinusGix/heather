@@ -37,7 +37,7 @@ theorem scalar_unique(code: Nat, p, q: scalar(code)): p = q {
 // twice and no refutation is wired by hand. A `fn` route, not a `theorem`,
 // because a literal's proof is `decide`, which the kernel judges by *running*
 // the instance.
-instance(code: Nat) Decide<scalar(code)> { dec := is_scalar(code).is_true_dec() }
+instance(code: Nat) Decide<scalar(code)> { dec := is_scalar(code).is_true_dec(), bit := or_bit(is_scalar(code).is_true_dec()), reflects := or_bit_reflects(is_scalar(code).is_true_dec()) }
 
 // ---------------------------------------------------------------------------
 // The type.
@@ -99,7 +99,7 @@ fn char_eq_dec(a, b: Char) → a = b ∨ ¬(a = b) {
     }
 }
 
-instance(a, b: Char) Decide<a = b> { dec := char_eq_dec(a, b) }
+instance(a, b: Char) Decide<a = b> { dec := char_eq_dec(a, b), bit := or_bit(char_eq_dec(a, b)), reflects := or_bit_reflects(char_eq_dec(a, b)) }
 
 // The carrier-level form, which is what a container generic in its element
 // type requires (`logic::DecEq`): `List<Char>` decides because `Char` does.
