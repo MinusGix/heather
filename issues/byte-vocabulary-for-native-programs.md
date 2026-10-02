@@ -3,7 +3,7 @@ title: Byte comparisons and literals a native step can write and the frontend lo
 status: open
 labels: [native,frontend,surface-syntax,function-ir,design]
 created: 2026-10-01
-updated: 2026-10-01
+updated: 2026-10-02
 ---
 
 A native program's step still spells byte tests as
@@ -31,3 +31,12 @@ The questions are design questions, not plumbing:
 
 The structured reflection matches the literal head, so an unreduced class
 projection would not match.
+
+## Log
+
+- 2026-10-02: Costed 2026-10-02 for [[native-programs-read-like-programs]] (read-only survey):
+  - Frontend (function_ir_source/structured.rs ~:459-527): Bool producers are inputs/fields/constants/Inl-Inr and `unsigned_lt_bit` with literal width only; literals must be literally `ofNat(w, k)`; no whnf. Helpers with literal-width BitVec params are expanded structurally (`produce`), so per-width helpers built from `unsigned_lt_bit` and `&&`/`||`/`!` (lib/std/bool.hthr) should expand today (untested); width-generic `{n}` helpers are not expanded.
+  - IR has UnsignedLessThan/SignedLessThan only; no Equal node. x86: all Jcc condition codes exist and decode generically; SETcc only SETB/SETL; CMP sets zf = is_zero_bits(sub); no proved `is_zero(sub a b) = eq_bit(a, b)` law, no `BitVec::eq_bit`.
+  - `Numeral<BitVec(n)>` / `CharLiteral<BitVec(8)>` would arrive as an unreduced instance projection, which the frontend refuses; needs a closed-instance reduction (elaborator or frontend recogniser).
+  - `if P` desugars to `match decide<P>()`, refused (frontend branches on resolved Bool only).
+  Proper path ≈12–15 files: eq_bit + its x86 laws, IR Equal node (~20 sites), SETE step form, literal reduction, optional decide recognition.
