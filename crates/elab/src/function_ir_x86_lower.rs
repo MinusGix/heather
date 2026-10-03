@@ -3264,12 +3264,22 @@ pub fn generate(
         temporary_registers,
         requested_output,
     )?;
-    generate_selected(prefix, region_expr, region, lowered)
+    generate_selected(prefix, region_expr, region, lowered, LeafUse::Standalone)
 }
 
+/// Who reads a block's certificate. A standalone block publishes its own
+/// `BlockArtifact`; a structured leaf is read by the fold in structured_cert,
+/// which states execution as `structured_after` by `refl` and its bytes from
+/// its own literals, so the execution chain, the artifact, the register
+/// congruence and the leaf's own byte facts would be declarations nothing
+/// uses (issues/structured-certificate-cost.md).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum LeafUse { Standalone, Structured }
+
 pub(super) fn generate_selected(
-    prefix: &str, region_expr: &str, region: &Region, lowered: LoweredDag,
+    prefix: &str, region_expr: &str, region: &Region, lowered: LoweredDag, used: LeafUse,
 ) -> Result<X86Emission, LoweringError> {
+    let standalone = used == LeafUse::Standalone;
     let input_registers = &lowered.input_registers;
     let instructions_name = format!("{prefix}_instructions");
     let bytes_name = format!("{prefix}_bytes");
@@ -3281,14 +3291,23 @@ pub(super) fn generate_selected(
     let context_arguments = context_constructor_arguments(region);
     let arguments = "values, before, context";
     let mut header = Module::default();
-    emit_instruction_spine(prefix, &lowered.instructions, &mut header);
-    header.declaration(Declaration::function(
-        &instructions_name,
-        Expr::name("List<Instruction>"),
-        // A copy into its source's own register lowers to no instruction.
-        Block::expression(if lowered.instructions.is_empty() { Expr::list([]) } else { instruction_cons(prefix, &lowered.instructions, 0) }),
-    ));
-    header.declaration(Declaration::function(
+    if standalone {
+        emit_instruction_spine(prefix, &lowered.instructions, &mut header);
+        header.declaration(Declaration::function(
+            &instructions_name,
+            Expr::name("List<Instruction>"),
+            // A copy into its source's own register lowers to no instruction.
+            Block::expression(if lowered.instructions.is_empty() { Expr::list([]) } else { instruction_cons(prefix, &lowered.instructions, 0) }),
+        ));
+    } else {
+        // No execution chain reads a suffix, so the list is one literal,
+        // an instruction to a line as the spine spells it.
+        let list = if lowered.instructions.is_empty() { Expr::list([]) } else {
+            Expr::name(lowered.instructions.iter().rev().fold("Nil<Instruction>".to_string(), |rest, instruction| format!("Cons(\n        {},\n        {rest})", instruction.render())))
+        };
+        header.declaration(Declaration::function(&instructions_name, Expr::name("List<Instruction>"), Block::expression(list)));
+    }
+    if standalone { header.declaration(Declaration::function(
         &bytes_name,
         Expr::name("List<BitVec(8)>"),
         Block::expression(Expr::call(
@@ -3309,7 +3328,7 @@ pub(super) fn generate_selected(
             ),
         ),
         Block::expression(Expr::name("refl")),
-    ));
+    )); }
     header.declaration(
         Declaration::theorem(
             format!("{prefix}_block_decodes"),
@@ -3352,6 +3371,7 @@ pub(super) fn generate_selected(
         lowered.instructions.len(),
     ));
 
+    if standalone {
     if let Some(congruence) = render_gpr_congruence(prefix, &lowered.instructions) {
         text.push_str(&congruence);
     }
@@ -3364,6 +3384,7 @@ pub(super) fn generate_selected(
          \x20   {prefix}_execute_from_0(before)\n\
          }}\n\n"
     ));
+    }
 
     text.push_str(&format!(
         "record {prefix}_Context<M>(values: Valuation(), before: MachineState<M>) {{\n\
@@ -3426,7 +3447,7 @@ pub(super) fn generate_selected(
         render_preservation_arms(&lowered.clobbered),
     ));
 
-    text.push_str(&format!(
+    if standalone { text.push_str(&format!(
         "theorem {prefix}_artifact<M>({public_parameters}):\n\
          \x20   BlockArtifact<M>({instructions_name}(), before, {},\n\
          \x20       {result_expression}, {protected_name},\n\
@@ -3442,7 +3463,7 @@ pub(super) fn generate_selected(
          \x20           {prefix}_preserves_protected(register, before, protected))\n\
          }}\n",
         lowered.output_register.heather_name(),
-    ));
+    )); }
 
     Ok(X86Emission { lowered, text })
 }

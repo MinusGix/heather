@@ -17,6 +17,11 @@ struct Crossings<'a> {
     named: std::cell::RefCell<BTreeMap<u64, (String, u32)>>,
     scope: std::cell::Cell<u32>,
     scopes: std::cell::Cell<u32>,
+    /// The root's name: only it publishes `_artifact` and `_rip`, which no
+    /// parent reads.
+    root: String,
+    /// The widths whose `{root}_at_width_W` placement is declared so far.
+    placements: std::cell::RefCell<BTreeSet<u64>>,
 }
 
 impl Crossings<'_> {
@@ -25,6 +30,17 @@ impl Crossings<'_> {
     fn spelled(&self, incoming: &Values, port: Port) -> Option<String> {
         if incoming.contains_key(&port.id) { return Some(val(incoming, port.id, port.width)); }
         self.named.borrow().get(&port.id).filter(|(_, scope)| *scope == self.scope.get()).map(|(name, _)| name.clone())
+    }
+
+    /// `value` (a `BitVec(width)`) as a valuation entry, through one
+    /// declaration per width: `at_width` spelled inline is quadratic in the
+    /// width, and every carry would elaborate it again.
+    fn at_width(&self, m: &mut Module, width: u64, value: &str) -> String {
+        let name = format!("{}_at_width_{width}", self.root);
+        if self.placements.borrow_mut().insert(width) {
+            fun(m, name.clone(), false, vec![emitted_parameter("width", "Nat"), emitted_parameter("s", format!("BitVec({width})"))], "BitVec(width)".into(), at_width(width, "s", 0));
+        }
+        format!("{name}(width, {value})")
     }
 }
 
@@ -68,7 +84,8 @@ pub fn generate_structured_consuming(
     let lowered = lower_structured_consuming(region, inputs, temporaries, consumable, outputs)?;
     let mut module = Module::default();
     let values = region.inputs().iter().map(|p| (p.id, format!("values(width, {})", p.id))).collect();
-    let crossings = Crossings { values: sources, bodies, named: Default::default(), scope: Default::default(), scopes: Default::default() };
+    let crossings = Crossings { values: sources, bodies, named: Default::default(), scope: Default::default(), scopes: Default::default(),
+        root: prefix.to_string(), placements: Default::default() };
     emit(prefix, region, &lowered, &values, &mut module, &crossings)?;
     Ok(StructuredX86Emission { lowered, text: module.render() })
 }
@@ -205,12 +222,12 @@ fn test_of(value: &str) -> Option<String> {
 fn emit(n: &str, r: &StructuredRegion, p: &LoweredStructured, incoming: &Values, m: &mut Module, sources: &Crossings) -> Result<Values, LoweringError> {
     let length = p.byte_length;
     let arguments = args(r);
-    let (code, results, proofs, memory, span, layout, decoding, byte_length, bytes, frame): (String, Values, Vec<String>, String, String, String, String, String, (String, String), Box<dyn Fn(Gpr) -> String>) = match (&r, &p.body) {
+    let (code, results, proofs, memory, span, layout, decoding, byte_length, bytes, frame): (String, Values, Vec<String>, String, String, String, String, String, (String, String), Frame) = match (&r, &p.body) {
         (StructuredRegion::Dataflow(region), StructuredPlan::Dataflow(dag)) => {
             m.raw(cert::render_region_function(&format!("{n}_raw"), region));
             let values = dataflow_values(n, region, incoming, m);
             let leaf = format!("{n}_leaf");
-            let emission = generate_selected(&leaf, &format!("{n}_raw()"), region, dag.clone())?;
+            let emission = generate_selected(&leaf, &format!("{n}_raw()"), region, dag.clone(), LeafUse::Structured)?;
             m.raw(emission.text);
             thm(m, format!("{n}_leaf_span"), false, start(), format!("{leaf}_final_rip(start) = next_rip(start, {length})"), render_block_span_proof(&dag.instructions));
             let proof = format!("{leaf}_refines_function_ir({n}_valuation(values), before{arguments}, {n}_graph(values))");
@@ -219,7 +236,7 @@ fn emit(n: &str, r: &StructuredRegion, p: &LoweredStructured, incoming: &Values,
                 format!("{leaf}_preserves_memory(before)"),
                 format!("trans({leaf}_advances_rip(before), {n}_leaf_span(before.rip))"),
                 "trivial".into(), format!("{leaf}_block_decodes(start)"), "refl".into(), (literal_bytes(&encoding::encode_instructions(&dag.instructions)), "refl".into()),
-                Box::new(move |reg| format!("{frame_leaf}_preserves_protected({}, before, trivial)", reg.heather_name())))
+                Frame::Each(Box::new(move |reg| format!("{frame_leaf}_preserves_protected({}, before, trivial)", reg.heather_name()))))
         }
         (StructuredRegion::Sequence { prefix, continuation }, StructuredPlan::Sequence { prefix: dag, continuation: next }) => {
             let first_region = StructuredRegion::Dataflow(prefix.clone());
@@ -393,11 +410,23 @@ fn emit(n: &str, r: &StructuredRegion, p: &LoweredStructured, incoming: &Values,
                         trans(&format!("cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ ys => {}, {t}_bytes_are())", lit(&code, "ys", &format!("{f}_bytes()"))),
                             &format!("cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ zs => {}, {f}_bytes_are())", lit(&code, &format!("{t}_lit()"), "zs"))))
                 },
-                Box::new(move |reg| format!("{frame_property}({frame_branch_args}, λ after => read_gpr({}, after.gprs) = read_gpr({}, before.gprs), {frame_t}_preserves({}, {frame_entry}, trivial), {frame_f}_preserves({}, {frame_entry}, trivial))", reg.heather_name(), reg.heather_name(), reg.heather_name(), reg.heather_name())))
+                Frame::Any { children: vec![frame_t.clone(), frame_f.clone()],
+                    proof: format!("{frame_property}({frame_branch_args}, λ after => read_gpr(register, after.gprs) = read_gpr(register, before.gprs), {frame_t}_preserves(register, {frame_entry}, {frame_t}_kept(register, protected)), {frame_f}_preserves(register, {frame_entry}, {frame_f}_kept(register, protected)))") })
         }
         _ => return Err(LoweringError::InvalidStructuredRegion("selected plan disagrees with region shape".into())),
     };
-    finish(n, r, p, incoming, m, code, results, proofs, memory, span, layout, decoding, byte_length, bytes, frame)
+    finish(n, r, p, incoming, m, sources, code, results, proofs, memory, span, layout, decoding, byte_length, bytes, frame)
+}
+
+/// How `_preserves` is proved. `Each` gives the proof for one register the
+/// node does not clobber, at that register: a leaf's block reaches a
+/// register's value only by evaluating its instructions. `Any` is one proof
+/// at a neutral `register` from the children's `_preserves`, given
+/// `protected`, with `{child}_kept(register, protected)` for each child's own
+/// premise: composite states convert by unfolding, register or not.
+enum Frame {
+    Each(Box<dyn Fn(Gpr) -> String>),
+    Any { children: Vec<String>, proof: String },
 }
 
 fn result_suffix(p: &LoweredStructured, id: u64) -> String {
@@ -405,10 +434,11 @@ fn result_suffix(p: &LoweredStructured, id: u64) -> String {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn finish(n: &str, r: &StructuredRegion, p: &LoweredStructured, incoming: &Values, m: &mut Module,
+fn finish(n: &str, r: &StructuredRegion, p: &LoweredStructured, incoming: &Values, m: &mut Module, sources: &Crossings,
     code: String, results: Values, proofs: Vec<String>, memory: String, span: String,
-    layout: String, decoding: String, byte_length: String, bytes: (String, String), frame: Box<dyn Fn(Gpr) -> String>,
+    layout: String, decoding: String, byte_length: String, bytes: (String, String), frame: Frame,
 ) -> Result<Values, LoweringError> {
+    let root = n == sources.root;
     let public = params(r, p, incoming);
     let arguments = args(r);
     let length = p.byte_length;
@@ -435,20 +465,36 @@ fn finish(n: &str, r: &StructuredRegion, p: &LoweredStructured, incoming: &Value
     // literals only, instead of evaluating every encoding in one proof.
     fun(m, format!("{n}_lit"), false, vec![], "List<BitVec(8)>".into(), bytes.0);
     thm(m, format!("{n}_bytes_are"), false, vec![], format!("{n}_bytes() = {n}_lit()"), bytes.1);
-    thm(m, format!("{n}_rip"), true, before(), format!("{n}_after(before).rip = next_rip(before.rip, {}.len())", length_of(n)),
-        transported(n, &format!("{n}_after(before).rip = next_rip(before.rip, y)"), &format!("{n}_span(before)")));
+    if root { thm(m, format!("{n}_rip"), true, before(), format!("{n}_after(before).rip = next_rip(before.rip, {}.len())", length_of(n)),
+        transported(n, &format!("{n}_after(before).rip = next_rip(before.rip, y)"), &format!("{n}_span(before)"))); }
     fun(m, format!("{n}_Protected"), false, vec![emitted_parameter("register", "Gpr")], "Type".into(), format!("match register {{ {} }}", render_protected_arms(&p.clobbered)));
-    let mut arms = Vec::new();
-    for reg in [Gpr::Rax, Gpr::Rcx, Gpr::Rdx, Gpr::Rbx, Gpr::Rsp, Gpr::Rbp, Gpr::Rsi, Gpr::Rdi, Gpr::R8, Gpr::R9, Gpr::R10, Gpr::R11, Gpr::R12, Gpr::R13, Gpr::R14, Gpr::R15] {
-        arms.push(format!("{} => {}", reg.heather_name(), if p.clobbered.contains(&reg) { "protected ⊢ false_elim(protected)".into() } else { format!("_ ⊢ {}", frame(reg)) }));
-    }
-    thm(m, format!("{n}_preserves"), true, vec![emitted_parameter("register", "Gpr"), emitted_parameter("before", "MachineState<M>")], format!("{n}_Protected(register) → read_gpr(register, {n}_after(before).gprs) = read_gpr(register, before.gprs)"), format!("match register {{ {} }}", arms.join(", ")));
-    for &(port, reg) in &p.outputs {
+    let preserved = match frame {
+        Frame::Each(frame) => {
+            let mut arms = Vec::new();
+            for reg in [Gpr::Rax, Gpr::Rcx, Gpr::Rdx, Gpr::Rbx, Gpr::Rsp, Gpr::Rbp, Gpr::Rsi, Gpr::Rdi, Gpr::R8, Gpr::R9, Gpr::R10, Gpr::R11, Gpr::R12, Gpr::R13, Gpr::R14, Gpr::R15] {
+                arms.push(format!("{} => {}", reg.heather_name(), if p.clobbered.contains(&reg) { "protected ⊢ false_elim(protected)".into() } else { format!("_ ⊢ {}", frame(reg)) }));
+            }
+            format!("match register {{ {} }}", arms.join(", "))
+        }
+        Frame::Any { children, proof } => {
+            // Each child protects what this node does: the one per-register
+            // case split, over `Protected` alone, which reduces to a
+            // constructor; the machine states are compared once, at a
+            // neutral register, rather than evaluated once per register.
+            for child in children {
+                thm(m, format!("{child}_kept"), false, vec![emitted_parameter("register", "Gpr")], format!("{n}_Protected(register) → {child}_Protected(register)"),
+                    format!("match register {{ {}_ => _ ⊢ trivial }}", p.clobbered.iter().map(|reg| format!("{} => protected ⊢ false_elim(protected), ", reg.heather_name())).collect::<String>()));
+            }
+            format!("λ protected => {proof}")
+        }
+    };
+    thm(m, format!("{n}_preserves"), true, vec![emitted_parameter("register", "Gpr"), emitted_parameter("before", "MachineState<M>")], format!("{n}_Protected(register) → read_gpr(register, {n}_after(before).gprs) = read_gpr(register, before.gprs)"), preserved);
+    if root { for &(port, reg) in &p.outputs {
         let name = format!("{n}{}", result_suffix(p, port.id));
         let output = reg.heather_name();
         thm(m, format!("{name}_artifact"), true, public.clone(), format!("StructuredArtifact<M>({n}_code(), before, {output}, {name}_result(values), {n}_Protected)"),
             format!("StructuredArtifact(after := {n}_after(before), execution := refl, layout := {n}_layout(), decoding := {n}_decodes(before.rip), result_correct := {name}_correct(values, before{arguments}), memory_preserved := {n}_memory(before), rip_correct := {n}_rip(before), registers_preserved := λ register protected => {n}_preserves(register, before, protected))"));
-    }
+    } }
     Ok(exported)
 }
 
@@ -475,13 +521,14 @@ fn emit_sequence(n: &str, r: &StructuredRegion, p: &LoweredStructured,
     let span = trans(&format!("{rest}_span({intermediate})"), &trans(&congr_step(next.byte_length, &format!("{first}_span(before)")), &compose("before.rip", first_plan.byte_length, next.byte_length)));
     let memory = format!("trans({rest}_memory({intermediate}), {first}_memory(before))");
     let ff = first.clone(); let fr = rest.clone();
-    finish(n, r, p, incoming, m, format!("CodeSequence({first}_code(), {rest}_code())"), results, proofs, memory, span,
+    finish(n, r, p, incoming, m, sources, format!("CodeSequence({first}_code(), {rest}_code())"), results, proofs, memory, span,
         format!("⟨{first}_layout(), {rest}_layout()⟩"),
         format!("⟨{first}_decodes(start), {}⟩", transported(&first, &format!("StructuredDecodes({rest}_code(), next_rip(start, y))"), &format!("{rest}_decodes(next_rip(start, {}))", first_plan.byte_length))),
         appended_length(&[(length_of(&first), format!("{first}_byte_length()"), first_plan.byte_length), (length_of(&rest), format!("{rest}_byte_length()"), next.byte_length)]),
         (format!("{first}_lit() ++ {rest}_lit()"), trans(&format!("cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ xs => xs ++ {rest}_bytes(), {first}_bytes_are())"),
             &format!("cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ ys => {first}_lit() ++ ys, {rest}_bytes_are())"))),
-        Box::new(move |reg| format!("trans({fr}_preserves({}, {ff}_after(before), trivial), {ff}_preserves({}, before, trivial))", reg.heather_name(), reg.heather_name())))
+        Frame::Any { children: vec![ff.clone(), fr.clone()],
+            proof: format!("trans({fr}_preserves(register, {ff}_after(before), {fr}_kept(register, protected)), {ff}_preserves(register, before, {ff}_kept(register, protected)))") })
 }
 
 /// A valuation's body over its populated entries (sorted by id), zero
@@ -570,7 +617,7 @@ fn emit_crossing(n: &str, r: &StructuredRegion, p: &LoweredStructured,
     // reads it back over a variable; a lookup is never converted against
     // the value's own name, which conversion would unfold first.
     let mut entries: Vec<_> = continuation.inputs().iter().map(|q|
-        (q.id, if q.id == port.id { at_width(width, "s", 0) } else { incoming[&q.id].clone() })).collect();
+        (q.id, if q.id == port.id { sources.at_width(m, width, "s") } else { incoming[&q.id].clone() })).collect();
     entries.sort_by_key(|(id, _)| *id);
     let mut carry_params = logical();
     carry_params.push(emitted_parameter("s", format!("BitVec({width})")));
@@ -593,13 +640,14 @@ fn emit_crossing(n: &str, r: &StructuredRegion, p: &LoweredStructured,
     let span = trans(&format!("{rest}_span({intermediate})"), &trans(&congr_step(next.byte_length, &format!("{first}_span(before)")), &compose("before.rip", first_plan.byte_length, next.byte_length)));
     let memory = format!("trans({rest}_memory({intermediate}), {first}_memory(before))");
     let ff = first.clone(); let fr = rest.clone();
-    let exported = finish(n, r, p, incoming, m, format!("CodeSequence({first}_code(), {rest}_code())"), results, proofs, memory, span,
+    let exported = finish(n, r, p, incoming, m, sources, format!("CodeSequence({first}_code(), {rest}_code())"), results, proofs, memory, span,
         format!("⟨{first}_layout(), {rest}_layout()⟩"),
         format!("⟨{first}_decodes(start), {}⟩", transported(&first, &format!("StructuredDecodes({rest}_code(), next_rip(start, y))"), &format!("{rest}_decodes(next_rip(start, {}))", first_plan.byte_length))),
         appended_length(&[(length_of(&first), format!("{first}_byte_length()"), first_plan.byte_length), (length_of(&rest), format!("{rest}_byte_length()"), next.byte_length)]),
         (format!("{first}_lit() ++ {rest}_lit()"), trans(&format!("cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ xs => xs ++ {rest}_bytes(), {first}_bytes_are())"),
             &format!("cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ ys => {first}_lit() ++ ys, {rest}_bytes_are())"))),
-        Box::new(move |reg| format!("trans({fr}_preserves({}, {ff}_after(before), trivial), {ff}_preserves({}, before, trivial))", reg.heather_name(), reg.heather_name())))?;
+        Frame::Any { children: vec![ff.clone(), fr.clone()],
+            proof: format!("trans({fr}_preserves(register, {ff}_after(before), {fr}_kept(register, protected)), {ff}_preserves(register, before, {ff}_kept(register, protected)))") })?;
     // The result as the source computes it from the crossing value, stated
     // over the value as a variable: what an exporter compares with the
     // source, instead of converting through the carry at the value's name.
@@ -668,13 +716,13 @@ fn emit_parts(n: &str, r: &StructuredRegion, p: &LoweredStructured, parts: &[(Re
     }
     let mut lit = format!("{}_lit()", names[0]);
     for name in &names[1..] { lit = format!("({lit}) ++ {name}_lit()"); }
-    finish(n, r, p, incoming, m, code, results, proofs, memory, span, layout, decodes, "refl".into(), (lit, "refl".into()),
-        Box::new(move |reg| {
+    finish(n, r, p, incoming, m, sources, code, results, proofs, memory, span, layout, decodes, "refl".into(), (lit, "refl".into()),
+        {
             let mut proof = "refl".to_string();
             for (i, name) in names.iter().enumerate() {
-                let fact = format!("{name}_preserves({}, {}, trivial)", reg.heather_name(), states[i]);
+                let fact = format!("{name}_preserves(register, {}, {name}_kept(register, protected))", states[i]);
                 proof = if i == 0 { fact } else { trans(&fact, &proof) };
             }
-            proof
-        }))
+            Frame::Any { children: names, proof }
+        })
 }
