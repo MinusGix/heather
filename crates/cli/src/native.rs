@@ -581,6 +581,11 @@ mod tests {
             Instruction::SetBelow { destination: LowByteGpr::Dl },
             Instruction::SetLess { destination: LowByteGpr::Bl },
             Instruction::SetEqual { destination: LowByteGpr::Cl },
+            // REX byte registers: an empty REX, and REX.B.
+            Instruction::SetBelow { destination: LowByteGpr::Sil },
+            Instruction::SetEqual { destination: LowByteGpr::Bpl },
+            Instruction::SetLess { destination: LowByteGpr::R9b },
+            Instruction::SetEqual { destination: LowByteGpr::R15b },
         ];
         for (index, instruction) in instructions.iter().enumerate() {
             let mut bytes = encode(&[*instruction]);

@@ -26,8 +26,9 @@ pub enum PlannedTest {
     NonZero(Gpr),
     /// CMP left, right on the region's comparison of `left_port` with
     /// `right_port`, whose bit is never materialised
-    /// (docs/structured-lowering-code-size-design.md §2.2).
-    Compare { left: Gpr, right: Gpr, operation: ComparisonOperation, left_port: u64, right_port: u64 },
+    /// (docs/structured-lowering-code-size-design.md §2.2). Below 64 bits the
+    /// operands are compared zero-extended, as their placements hold them.
+    Compare { left: Gpr, right: Gpr, operation: ComparisonOperation, left_port: u64, right_port: u64, width: u64 },
 }
 
 impl PlannedTest {
@@ -186,10 +187,11 @@ fn select_here(
             let mut free = temporaries.iter().copied().filter(|r| !destinations.contains(r)).collect::<Vec<_>>();
             for port in prefix.outputs() {
                 if prefix_outputs.contains_key(&port.id) { continue; }
-                // A comparison bit needs a byte register; a wide value leaves
-                // those to the comparisons downstream when it can.
-                let index = if port.width == 1 { free.iter().position(|r| LowByteGpr::from_gpr(*r).is_some()) }
-                    else { free.iter().position(|r| LowByteGpr::from_gpr(*r).is_none()).or_else(|| (!free.is_empty()).then_some(0)) }
+                // A comparison bit needs a byte register, best one with no
+                // REX; a wide value leaves those to the comparisons downstream
+                // when it can.
+                let index = if port.width == 1 { free.iter().position(|r| LowByteGpr::legacy(*r)).or_else(|| free.iter().position(|r| LowByteGpr::from_gpr(*r).is_some())) }
+                    else { free.iter().position(|r| !LowByteGpr::legacy(*r)).or_else(|| (!free.is_empty()).then_some(0)) }
                     .ok_or(LoweringError::RegisterPressure { node_index: 0, live_temporaries: inputs.len() + prefix_outputs.len() })?;
                 prefix_outputs.insert(port.id, free.remove(index));
             }
@@ -249,7 +251,7 @@ fn select_here(
             let fused = fusable(prefix, continuation)?.unwrap();
             let StructuredRegion::Conditional { arguments, when_true, when_false, .. } = &**continuation else { unreachable!("fusable checked") };
             let candidates = || temporaries.iter().copied().filter(|r| !destinations.contains(r));
-            let operand_register = candidates().find(|r| LowByteGpr::from_gpr(*r).is_none()).or_else(|| candidates().next())
+            let operand_register = candidates().find(|r| !LowByteGpr::legacy(*r)).or_else(|| candidates().next())
                 .ok_or(LoweringError::RegisterPressure { node_index: 0, live_temporaries: inputs.len() })?;
             let operands = Region { inputs: prefix.inputs.clone(), nodes: cone(prefix, fused.computed.id)?, outputs: vec![fused.computed] };
             let live_after = fused_inputs(&fused, arguments).iter().filter_map(|port| inputs.get(&port.id).copied()).collect::<BTreeSet<_>>();
@@ -260,7 +262,7 @@ fn select_here(
             let place = |id: u64| carried.get(&id).copied().ok_or(LoweringError::UndefinedValue(id));
             let compare = fused.compare;
             let test = PlannedTest::Compare { left: place(compare.left)?, right: place(compare.right)?, operation: compare.operation,
-                left_port: compare.left, right_port: compare.right };
+                left_port: compare.left, right_port: compare.right, width: compare.operand_width };
             let next_inputs = fused_inputs(&fused, arguments).iter().map(|port| Ok((port.id, place(port.id)?)))
                 .collect::<Result<Placements, LoweringError>>()?;
             let mut next_consumable = consumable.clone();
@@ -278,10 +280,11 @@ fn select_here(
                 return select_here(&StructuredRegion::Compose { prefix: Box::new(StructuredRegion::Dataflow(prefix.clone())), continuation: continuation.clone() }, inputs, temporaries, consumable, requested, path);
             }
             // Reserve the final result register for the continuation. A low
-            // byte register is preferred for a materialized comparison bit.
+            // byte register is preferred for a materialized comparison bit,
+            // a legacy one (no REX) first.
             let candidates = || temporaries.iter().copied().filter(|r| !destinations.contains(r));
-            let prefix_register = if prefix.outputs[0].width == 1 { candidates().find(|r| LowByteGpr::from_gpr(*r).is_some()) }
-                else { candidates().find(|r| LowByteGpr::from_gpr(*r).is_none()).or_else(|| candidates().next()) }
+            let prefix_register = if prefix.outputs[0].width == 1 { candidates().find(|r| LowByteGpr::legacy(*r)).or_else(|| candidates().find(|r| LowByteGpr::from_gpr(*r).is_some())) }
+                else { candidates().find(|r| !LowByteGpr::legacy(*r)).or_else(|| candidates().next()) }
                 .ok_or(LoweringError::RegisterPressure { node_index: 0, live_temporaries: inputs.len() })?;
             let live_after = continuation.inputs().iter().filter_map(|port| inputs.get(&port.id).copied()).collect::<BTreeSet<_>>();
             let prefix_consumable = consumable.difference(&live_after).copied().collect();
@@ -350,11 +353,13 @@ fn child_pool(temporaries: &[Gpr], consumable: &BTreeSet<Gpr>, child_inputs: &[G
     (pool, consumed)
 }
 
-/// A `Sequence` whose prefix ends in a 64-bit comparison that only the
+/// A `Sequence` whose prefix ends in a comparison that only the
 /// `Conditional` after it reads, with exactly one operand computed by the
 /// prefix: the comparison can move into the branch
-/// (docs/structured-lowering-code-size-design.md §2.2). Otherwise the bit is
-/// materialised and tested, which stays the rule for every other shape.
+/// (docs/structured-lowering-code-size-design.md §2.2). A narrow one fuses
+/// too, compared zero-extended, except a signed one: zero extension does not
+/// keep the signed order. Otherwise the bit is materialised and tested,
+/// which stays the rule for every other shape.
 pub(crate) struct Fusable {
     pub(crate) compare: ComparisonNode,
     pub(crate) computed: Port,
@@ -375,11 +380,11 @@ pub(crate) fn fusable(prefix: &Region, continuation: &StructuredRegion) -> Resul
         }
     }
     let Some(compare) = compare else { return Ok(None) };
-    if compare.operand_width != 64 { return Ok(None); }
+    if compare.operand_width > 64 || (compare.operand_width != 64 && compare.operation == ComparisonOperation::SignedLessThan) { return Ok(None); }
     let input = |id: u64| prefix.inputs.iter().any(|port| port.id == id);
     let computed: BTreeSet<u64> = [compare.left, compare.right].into_iter().filter(|id| !input(*id)).collect();
     if computed.len() != 1 { return Ok(None); }
-    let computed = Port { id: *computed.iter().next().unwrap(), width: 64 };
+    let computed = Port { id: *computed.iter().next().unwrap(), width: compare.operand_width };
     // The computed operand may also be carried to the arms, as a shared
     // constant is; nothing else leaves the prefix.
     if prefix.outputs[1..].iter().any(|port| *port != computed) { return Ok(None); }
@@ -419,7 +424,8 @@ pub(crate) fn share_compared_constant(prefix: &mut Region, branch: &mut Structur
 /// arguments, each once.
 pub(crate) fn fused_inputs(fused: &Fusable, arguments: &[Port]) -> Vec<Port> {
     let mut ports = Vec::new();
-    for port in [Port { id: fused.compare.left, width: 64 }, Port { id: fused.compare.right, width: 64 }].into_iter().chain(arguments.iter().copied()) {
+    let width = fused.compare.operand_width;
+    for port in [Port { id: fused.compare.left, width }, Port { id: fused.compare.right, width }].into_iter().chain(arguments.iter().copied()) {
         if !ports.contains(&port) { ports.push(port); }
     }
     ports
@@ -448,14 +454,16 @@ mod tests {
     use super::*;
     use cert::Node;
 
-    // The branch must be the comparison's only reader, at 64 bits, with one
-    // operand the prefix computes; anything else keeps the bit materialised.
+    // The branch must be the comparison's only reader, with one operand the
+    // prefix computes and, below 64 bits, not signed; anything else keeps
+    // the bit materialised.
     #[test]
     fn only_a_comparison_its_branch_alone_reads_is_fused() {
         let word = |id| Port { id, width: 64 };
         let bit = Port { id: 3, width: 1 };
-        let prefix = |width| Region { inputs: vec![word(0)], nodes: vec![Node::Const { width, output: 2, value: 16 },
-            Node::UnsignedLessThan { width, output: 3, left: 0, right: 2 }], outputs: vec![bit] };
+        let compared = |width, signed| Region { inputs: vec![Port { id: 0, width }], nodes: vec![Node::Const { width, output: 2, value: 16 },
+            if signed { Node::SignedLessThan { width, output: 3, left: 0, right: 2 } } else { Node::UnsignedLessThan { width, output: 3, left: 0, right: 2 } }], outputs: vec![bit] };
+        let prefix = |width| compared(width, false);
         let arm = |inputs: Vec<Port>| Box::new(StructuredRegion::Dataflow(Region { inputs, nodes: vec![Node::Const { width: 64, output: 4, value: 0 }], outputs: vec![word(4)] }));
         let branch = |arguments: Vec<Port>| {
             let mut inputs = vec![bit];
@@ -465,7 +473,11 @@ mod tests {
         };
         assert!(fusable(&prefix(64), &branch(vec![word(0)])).unwrap().is_some());
         assert!(fusable(&prefix(64), &branch(vec![word(0), bit])).unwrap().is_none(), "the arms read the bit");
-        assert!(fusable(&prefix(32), &branch(vec![word(0)])).unwrap().is_none(), "a narrow comparison");
+        let narrow = fusable(&prefix(8), &branch(vec![word(0)])).unwrap().expect("a byte comparison fuses");
+        assert_eq!(narrow.computed, Port { id: 2, width: 8 }, "the operand keeps its width");
+        assert_eq!(fused_inputs(&narrow, &[]), vec![Port { id: 0, width: 8 }, Port { id: 2, width: 8 }]);
+        assert!(fusable(&compared(64, true), &branch(vec![word(0)])).unwrap().is_some());
+        assert!(fusable(&compared(8, true), &branch(vec![word(0)])).unwrap().is_none(), "a narrow signed comparison");
     }
 
     // Only a constant the fused comparison loads, loaded again by an arm
@@ -497,7 +509,7 @@ mod tests {
         assert_eq!(when_true.inputs(), &[word(0), word(2)]);
         let StructuredRegion::Dataflow(arm) = *when_false else { unreachable!() };
         assert_eq!(arm.nodes, vec![Node::Sub { width: 64, output: 5, left: 0, right: 2 }]);
-        for (width, when_false, why) in [(64, reads(17), "another constant"), (64, returns, "an arm returning it"), (32, reads(16), "a narrow comparison")] {
+        for (width, when_false, why) in [(64, reads(17), "another constant"), (64, returns, "an arm returning it"), (32, reads(16), "a constant of another width")] {
             let (prefix, branch) = carried(width, when_false.clone());
             assert_eq!(prefix.outputs, vec![bit], "{why}");
             let StructuredRegion::Conditional { when_false: kept, .. } = branch else { unreachable!() };

@@ -107,8 +107,9 @@ fn record_state_step_publication_checks() {
     for field in ["wc_step_typed_artifact", "wc_step_output_7_typed_artifact", "wc_step_output_8_typed_artifact", "wc_step_output_9_typed_artifact"] {
         assert!(text.contains(&format!("theorem {field}<M>(")), "missing {field}");
     }
-    // Its arms are past rel8's reach, so this is also the near conditional's test.
-    assert!(text.contains("CodeBranchNear("), "expected a near conditional");
+    // Its byte tests branch on CMP's flags; the near conditional's test is
+    // `a_narrow_fused_branch_past_rel8_is_near` (function_ir_narrow_certificates).
+    assert!(text.contains("Compare("), "expected a fused byte test");
 }
 
 // The record step's certificate names its source: against a source whose one

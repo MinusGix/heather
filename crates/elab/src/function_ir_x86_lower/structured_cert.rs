@@ -264,18 +264,26 @@ fn emit(n: &str, r: &StructuredRegion, p: &LoweredStructured, incoming: &Values,
                         format!("test_bit_value_placed_zf(λ width _ => {}, {condition}, {register}, before, placed_{condition})", incoming[condition]),
                         format!("structured_test({register}, before).flags.zf"))
                 }
-                PlannedTest::Compare { left, right, operation, left_port, right_port } => {
+                PlannedTest::Compare { left, right, operation, left_port, right_port, width } => {
                     let (l, rr) = (left.heather_name(), right.heather_name());
-                    let (a, b) = (val(incoming, left_port, 64), val(incoming, right_port, 64));
-                    let (op, cc, lemma) = match operation {
-                        ComparisonOperation::UnsignedLessThan => ("unsigned_lt_bit", "B", "unsigned_compare_skips"),
-                        ComparisonOperation::SignedLessThan => ("signed_lt_bit", "L", "signed_compare_skips"),
-                        ComparisonOperation::Equal => ("eq_bit", "E", "equal_compare_skips"),
+                    let (a, b) = (val(incoming, left_port, width), val(incoming, right_port, width));
+                    let (op, cc, lemma, zero_extend_law) = match operation {
+                        ComparisonOperation::UnsignedLessThan => ("unsigned_lt_bit", "B", "unsigned_compare_skips", Some("unsigned_lt_zero_extend")),
+                        ComparisonOperation::SignedLessThan => ("signed_lt_bit", "L", "signed_compare_skips", None),
+                        ComparisonOperation::Equal => ("eq_bit", "E", "equal_compare_skips", Some("eq_bit_zero_extend")),
                     };
-                    fun(m, format!("{n}_test"), false, logical(), "Bool".into(), format!("@bitvec::BitVec::{op}(64, {a}, {b})"));
+                    fun(m, format!("{n}_test"), false, logical(), "Bool".into(), format!("@bitvec::BitVec::{op}({width}, {a}, {b})"));
                     let test = format!("Compare({l}, {rr}, {cc})");
-                    (test.clone(), format!("CmpRR({l}, {rr})"), format!("{n}_test(values)"),
-                        format!("{lemma}({l}, {rr}, {a}, {b}, before, placed_{left_port}, placed_{right_port})"),
+                    // CMP compares the placed words; below 64 bits those are
+                    // the operands zero-extended, whose comparison is the
+                    // narrow one by the zero-extension law.
+                    let (wide_a, wide_b) = (placed_expression(width, &a), placed_expression(width, &b));
+                    let skips = format!("{lemma}({l}, {rr}, {wide_a}, {wide_b}, before, placed_{left_port}, placed_{right_port})");
+                    let skips = if width == 64 { skips } else {
+                        let zero_extend_law = zero_extend_law.expect("fusable refuses a narrow signed comparison");
+                        trans(&skips, &format!("cong_fn<bool::Bool, bool::Bool>(λ bit => bool::Bool::not(bit), bitvec::BitVec::{zero_extend_law}({width}, {}, {a}, {b}))", 64 - width))
+                    };
+                    (test.clone(), format!("CmpRR({l}, {rr})"), format!("{n}_test(values)"), skips,
                         format!("branch_skips({test}, before)"))
                 }
             };

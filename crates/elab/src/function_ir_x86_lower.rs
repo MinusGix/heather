@@ -197,31 +197,72 @@ pub enum Gpr {
     R15,
 }
 
+/// A SETcc destination (the x86 model's `LowByteGpr`): every register's low
+/// byte but SPL's. AL, CL, DL and BL encode without REX; the rest take one,
+/// a byte longer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LowByteGpr {
     Al,
     Cl,
     Dl,
     Bl,
+    Bpl,
+    Sil,
+    Dil,
+    R8b,
+    R9b,
+    R10b,
+    R11b,
+    R12b,
+    R13b,
+    R14b,
+    R15b,
 }
 
 impl LowByteGpr {
-    fn from_gpr(register: Gpr) -> Option<Self> {
+    pub fn from_gpr(register: Gpr) -> Option<Self> {
         match register {
             Gpr::Rax => Some(Self::Al),
             Gpr::Rcx => Some(Self::Cl),
             Gpr::Rdx => Some(Self::Dl),
             Gpr::Rbx => Some(Self::Bl),
-            _ => None,
+            Gpr::Rsp => None,
+            Gpr::Rbp => Some(Self::Bpl),
+            Gpr::Rsi => Some(Self::Sil),
+            Gpr::Rdi => Some(Self::Dil),
+            Gpr::R8 => Some(Self::R8b),
+            Gpr::R9 => Some(Self::R9b),
+            Gpr::R10 => Some(Self::R10b),
+            Gpr::R11 => Some(Self::R11b),
+            Gpr::R12 => Some(Self::R12b),
+            Gpr::R13 => Some(Self::R13b),
+            Gpr::R14 => Some(Self::R14b),
+            Gpr::R15 => Some(Self::R15b),
         }
     }
 
-    fn gpr(self) -> Gpr {
+    /// AL, CL, DL or BL: a SETcc into it needs no REX.
+    pub fn legacy(register: Gpr) -> bool {
+        matches!(register, Gpr::Rax | Gpr::Rcx | Gpr::Rdx | Gpr::Rbx)
+    }
+
+    pub fn gpr(self) -> Gpr {
         match self {
             Self::Al => Gpr::Rax,
             Self::Cl => Gpr::Rcx,
             Self::Dl => Gpr::Rdx,
             Self::Bl => Gpr::Rbx,
+            Self::Bpl => Gpr::Rbp,
+            Self::Sil => Gpr::Rsi,
+            Self::Dil => Gpr::Rdi,
+            Self::R8b => Gpr::R8,
+            Self::R9b => Gpr::R9,
+            Self::R10b => Gpr::R10,
+            Self::R11b => Gpr::R11,
+            Self::R12b => Gpr::R12,
+            Self::R13b => Gpr::R13,
+            Self::R14b => Gpr::R14,
+            Self::R15b => Gpr::R15,
         }
     }
 
@@ -231,6 +272,17 @@ impl LowByteGpr {
             Self::Cl => "Cl",
             Self::Dl => "Dl",
             Self::Bl => "Bl",
+            Self::Bpl => "Bpl",
+            Self::Sil => "Sil",
+            Self::Dil => "Dil",
+            Self::R8b => "R8b",
+            Self::R9b => "R9b",
+            Self::R10b => "R10b",
+            Self::R11b => "R11b",
+            Self::R12b => "R12b",
+            Self::R13b => "R13b",
+            Self::R14b => "R14b",
+            Self::R15b => "R15b",
         }
     }
 }
@@ -375,6 +427,8 @@ impl Instruction {
             Instruction::MovRI { .. } => 10,
             Instruction::AddRI8 { .. } => 4,
             Instruction::AddRI32 { .. } => 7,
+            Instruction::SetBelow { destination } | Instruction::SetLess { destination } | Instruction::SetEqual { destination } =>
+                if LowByteGpr::legacy(destination.gpr()) { 3 } else { 4 },
             _ => 3,
         }
     }
@@ -3072,11 +3126,11 @@ pub fn lower_dag_consuming(
                     .then_some(requested_output)
                     .filter(|register| !owners.contains_key(register))
                     .and_then(|register| LowByteGpr::from_gpr(register).map(|_| register));
-                let destination = preferred.or_else(|| {
-                    temporary_registers.iter().copied().find(|register| {
-                        !owners.contains_key(register) && LowByteGpr::from_gpr(*register).is_some()
-                    })
+                // A legacy byte register first: its SETcc is a byte shorter.
+                let free_byte = |legacy: bool| temporary_registers.iter().copied().find(|register| {
+                    !owners.contains_key(register) && LowByteGpr::from_gpr(*register).is_some() && LowByteGpr::legacy(*register) == legacy
                 });
+                let destination = preferred.or_else(|| free_byte(true)).or_else(|| free_byte(false));
                 let destination = match destination {
                     Some(destination) => destination,
                     None if temporary_registers
@@ -4852,10 +4906,12 @@ mod tests {
             }],
             outputs: vec![Port { id: 2, width: 1 }],
         };
+        // Every register but RSP has a low byte a SETcc can name.
         assert_eq!(
-            lower_dag(&region, &[Gpr::Rdi, Gpr::Rsi], &[Gpr::R8], Gpr::R8),
+            lower_dag(&region, &[Gpr::Rdi, Gpr::Rsi], &[Gpr::Rsp], Gpr::Rsp),
             Err(LoweringError::NoSafeByteRegister { node_index: 0 }),
         );
+        assert!(lower_dag(&region, &[Gpr::Rdi, Gpr::Rsi], &[Gpr::R8], Gpr::R8).is_ok(), "R8B under REX.B");
     }
 
     #[test]

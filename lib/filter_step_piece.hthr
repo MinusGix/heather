@@ -80,9 +80,8 @@ theorem emit_byte_word(emit: Option<BitVec(8)>): emit_byte(emit).zero_extend(56)
 fn emits_never() → Bool { False }
 fn emits_always() → Bool { True }
 fn emitted_nothing() → BitVec(8) { BitVec::ofNat(0) }
-// An emit computed from the state is held in a register of its own while
-// the state is updated, then copied into place: comparisons need a byte
-// register, and RBX and RDX are the only ones the piece has.
+// A field that reads another in a cycle is computed into a register of its
+// own while the state is intact, then copied home.
 fn emit_copy(word: BitVec(64)) → BitVec(64) { word }
 
 // A sequence's facts from its two parts': where it leaves RIP, how long it

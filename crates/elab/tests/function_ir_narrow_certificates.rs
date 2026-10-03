@@ -81,3 +81,126 @@ fn narrow_constants_passthrough_and_comparisons_check() {
         "= bitvec::BitVec::band(bitvec::BitVec::add(@bitvec::BitVec::zero_extend(8, 56, a), @bitvec::BitVec::zero_extend(8, 56, b)), @bitvec::BitVec::ofNat(64, 255))");
     elab.elab_module_source("masked_sum", &masked).unwrap_or_else(|e| panic!("{}", e.render(&masked)));
 }
+
+// A byte comparison a branch alone reads fuses into CMP + Jcc on the
+// zero-extended words (`eq_bit_zero_extend`, `unsigned_lt_zero_extend`):
+// against a literal and against a computed sum, for equality and for the
+// unsigned order. A branch testing another condition, or the operands the
+// other way round, is refused; a narrow signed comparison is not fused.
+#[test]
+fn narrow_fused_branches_check_and_refuse_another_test() {
+    use heather_elab::function_ir_x86_lower::{ComparisonOperation, PlannedTest, StructuredPlan};
+    let elab = checker();
+    let byte = |id| Port { id, width: 8 };
+    let bit = Port { id: 3, width: 1 };
+    let arm = |node| Box::new(StructuredRegion::Dataflow(Region { inputs: vec![byte(0), byte(1)], nodes: vec![node], outputs: vec![byte(4)] }));
+    let branch = |when_true, when_false| Box::new(StructuredRegion::Conditional { inputs: vec![bit, byte(0), byte(1)], condition: 3,
+        arguments: vec![byte(0), byte(1)], outputs: vec![byte(4)], when_true, when_false });
+    let region = |operand: Node, compare: Node| StructuredRegion::Sequence {
+        prefix: Region { inputs: vec![byte(0), byte(1)], nodes: vec![operand, compare], outputs: vec![bit] },
+        continuation: branch(arm(Node::Sub { width: 8, output: 4, left: 1, right: 0 }), arm(Node::BitXor { width: 8, output: 4, left: 0, right: 1 })),
+    };
+    let newline = Node::Const { width: 8, output: 2, value: 10 };
+    let sum = Node::Add { width: 8, output: 2, left: 0, right: 1 };
+    let cases = [
+        ("byte_is_newline_branch", region(newline, Node::Equal { width: 8, output: 3, left: 0, right: 2 }), ComparisonOperation::Equal, "E", ["NE", "B", "LE"]),
+        ("byte_sum_equal_branch", region(sum, Node::Equal { width: 8, output: 3, left: 2, right: 1 }), ComparisonOperation::Equal, "E", ["NE", "B", "L"]),
+        ("byte_below_newline_branch", region(newline, Node::UnsignedLessThan { width: 8, output: 3, left: 0, right: 2 }), ComparisonOperation::UnsignedLessThan, "B", ["AE", "L", "E"]),
+        ("byte_sum_below_branch", region(sum, Node::UnsignedLessThan { width: 8, output: 3, left: 2, right: 0 }), ComparisonOperation::UnsignedLessThan, "B", ["AE", "L", "BE"]),
+    ];
+    for (name, region, expected, cc, others) in cases {
+        let emission = generate_structured(name, &region, &Placements::from([(0, Gpr::Rdi), (1, Gpr::Rsi)]), &[Gpr::Rax, Gpr::Rcx, Gpr::Rdx, Gpr::R8], Gpr::Rax)
+            .unwrap_or_else(|e| panic!("{name}: {e:?}"));
+        let StructuredPlan::FusedSequence { continuation, .. } = &emission.lowered.body else { panic!("{name}: expected a fused sequence, got {:?}", emission.lowered.body) };
+        let StructuredPlan::Conditional { test: PlannedTest::Compare { left, right, operation, width, .. }, .. } = continuation.body else { panic!("{name}: expected a compared branch") };
+        assert_eq!((operation, width), (expected, 8), "{name}");
+        let text = format!("{IMPORTS}\n{}", emission.text);
+        assert!(!text.contains("SetEqual(") && !text.contains("SetBelow("), "{name}: the bit is not materialised");
+        elab.semantic_image().elaborator().elab_module_source(&format!("{name}_certificate"), &text).unwrap_or_else(|e| panic!("{}", e.render(&text)));
+        let (l, r) = (left.heather_name(), right.heather_name());
+        let code = format!("CodeBranch(Compare({l}, {r}, {cc})");
+        assert!(text.contains(&code), "{name}: the code should branch on Compare({l}, {r}, {cc})");
+        let swapped = format!("CodeBranch(Compare({r}, {l}, {cc})");
+        for mutant in others.iter().map(|other| text.replacen(&code, &format!("CodeBranch(Compare({l}, {r}, {other})"), 1))
+            .chain((expected == ComparisonOperation::UnsignedLessThan).then(|| text.replacen(&code, &swapped, 1))) {
+            let error = elab.semantic_image().elaborator().elab_module_source(&format!("{name}_mutant"), &mutant)
+                .expect_err("a branch testing something else must be refused");
+            let message = error.render(&mutant);
+            assert!(!message.contains("unknown") && !message.contains("not in scope") && !message.contains("unbound"), "{name} failed on a name: {message}");
+        }
+    }
+    let signed = region(newline, Node::SignedLessThan { width: 8, output: 3, left: 0, right: 2 });
+    if let Ok(emission) = generate_structured("byte_signed_branch", &signed, &Placements::from([(0, Gpr::Rdi), (1, Gpr::Rsi)]), &[Gpr::Rax, Gpr::Rcx, Gpr::Rdx, Gpr::R8], Gpr::Rax) {
+        assert!(!matches!(emission.lowered.body, StructuredPlan::FusedSequence { .. }), "a narrow signed comparison is not fused");
+    }
+}
+
+// With only REX registers to spare, a materialised comparison lands in one
+// (SETcc into R8B–R15B under REX.B, into SIL, DIL or BPL under an empty
+// REX), a byte longer than into AL–BL, and its certificate checks; naming
+// another byte register in its place is refused.
+#[test]
+fn comparisons_materialise_into_rex_byte_registers() {
+    use heather_elab::function_ir_x86_lower::{encode_structured, StructuredPlan};
+    let elab = checker();
+    let byte = |id| Port { id, width: 8 };
+    let word = |id| Port { id, width: 64 };
+    for (name, region, inputs, temporaries, output, sets) in [
+        ("rex_byte_equal", Region { inputs: vec![byte(0), byte(1)], nodes: vec![Node::Equal { width: 8, output: 2, left: 0, right: 1 }], outputs: vec![Port { id: 2, width: 1 }] },
+            Placements::from([(0, Gpr::Rax), (1, Gpr::Rcx)]), vec![Gpr::R9, Gpr::R10], Gpr::R9, &["SetEqual(R9b)"][..]),
+        ("rex_word_below", Region { inputs: vec![word(0), word(1)], nodes: vec![Node::UnsignedLessThan { width: 64, output: 2, left: 0, right: 1 }], outputs: vec![Port { id: 2, width: 1 }] },
+            Placements::from([(0, Gpr::Rdi), (1, Gpr::Rdx)]), vec![Gpr::Rsi, Gpr::R15], Gpr::Rsi, &["SetBelow(Sil)"][..]),
+        ("rex_word_less", Region { inputs: vec![word(0), word(1)], nodes: vec![Node::SignedLessThan { width: 64, output: 2, left: 0, right: 1 }], outputs: vec![Port { id: 2, width: 1 }] },
+            Placements::from([(0, Gpr::Rdi), (1, Gpr::Rdx)]), vec![Gpr::R15, Gpr::Rbp], Gpr::R15, &["SetLess(R15b)"][..]),
+        ("rex_byte_newline", Region { inputs: vec![byte(0)], nodes: vec![Node::Const { width: 8, output: 1, value: 10 }, Node::Equal { width: 8, output: 2, left: 0, right: 1 }],
+            outputs: vec![Port { id: 2, width: 1 }] }, Placements::from([(0, Gpr::Rax)]), vec![Gpr::Rbp, Gpr::R11], Gpr::Rbp, &["SetEqual(Bpl)", "SetEqual(R11b)"][..]),
+    ] {
+        let emission = generate_structured(name, &StructuredRegion::Dataflow(region), &inputs, &temporaries, output).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+        let StructuredPlan::Dataflow(dag) = &emission.lowered.body else { panic!("{name}: a dataflow plan") };
+        let bytes = encode_structured(&emission.lowered);
+        assert_eq!(bytes.len(), emission.lowered.byte_length, "{name}: the planned length is the encoding's");
+        assert_eq!(dag.instructions.iter().map(|i| i.canonical_length()).sum::<usize>(), bytes.len(), "{name}");
+        let source = format!("{IMPORTS}\n{}", emission.text);
+        let set = *sets.iter().find(|set| source.contains(**set)).unwrap_or_else(|| panic!("{name}: expected one of {sets:?}"));
+        elab.semantic_image().elaborator().elab_module_source(name, &source).unwrap_or_else(|e| panic!("{}", e.render(&source)));
+        let other = if set.contains("R9b") { set.replace("R9b", "R10b") } else if set.contains("Sil") { set.replace("Sil", "Dil") } else if set.contains("R15b") { set.replace("R15b", "R14b") } else if set.contains("Bpl") { set.replace("Bpl", "Bl") } else { set.replace("R11b", "R12b") };
+        let mutant = source.replace(set, &other);
+        let error = elab.semantic_image().elaborator().elab_module_source(&format!("{name}_mutant"), &mutant).expect_err("another byte register must be refused");
+        let message = error.render(&mutant);
+        assert!(!message.contains("unknown") && !message.contains("not in scope") && !message.contains("unbound"), "{name} failed on a name: {message}");
+    }
+}
+
+// A fused byte test whose true arm is past rel8's reach takes the near
+// jumps (JNE rel32, JMP rel32), and its certificate checks.
+#[test]
+fn a_narrow_fused_branch_past_rel8_is_near() {
+    use heather_elab::function_ir_x86_lower::{encode_structured, PlannedTest, StructuredPlan};
+    let elab = checker();
+    let word = |id| Port { id, width: 64 };
+    let byte = |id| Port { id, width: 8 };
+    let bit = Port { id: 3, width: 1 };
+    // Sixteen constants past imm32, each a 10-byte load and an ADD.
+    let mut long = Vec::new();
+    let mut last = 0;
+    for k in 0..16u64 {
+        long.push(Node::Const { width: 64, output: 100 + 2 * k, value: (1 << 40) + k });
+        long.push(Node::Add { width: 64, output: 101 + 2 * k, left: last, right: 100 + 2 * k });
+        last = 101 + 2 * k;
+    }
+    long.push(Node::Move { width: 64, output: 4, source: last });
+    let arm = |nodes| Box::new(StructuredRegion::Dataflow(Region { inputs: vec![word(0), byte(1)], nodes, outputs: vec![word(4)] }));
+    let region = StructuredRegion::Sequence {
+        prefix: Region { inputs: vec![word(0), byte(1)], nodes: vec![Node::Const { width: 8, output: 2, value: 10 }, Node::Equal { width: 8, output: 3, left: 1, right: 2 }], outputs: vec![bit] },
+        continuation: Box::new(StructuredRegion::Conditional { inputs: vec![bit, word(0), byte(1)], condition: 3, arguments: vec![word(0), byte(1)], outputs: vec![word(4)],
+            when_true: arm(long), when_false: arm(vec![Node::Move { width: 64, output: 4, source: 0 }]) }),
+    };
+    let emission = generate_structured("near_byte_branch", &region, &Placements::from([(0, Gpr::Rdi), (1, Gpr::Rsi)]), &[Gpr::Rax, Gpr::Rcx, Gpr::Rdx, Gpr::R8], Gpr::Rax)
+        .unwrap_or_else(|e| panic!("{e:?}"));
+    let StructuredPlan::FusedSequence { continuation, .. } = &emission.lowered.body else { panic!("expected a fused sequence, got {:?}", emission.lowered.body) };
+    let StructuredPlan::Conditional { test: PlannedTest::Compare { width: 8, .. }, near: true, .. } = continuation.body else { panic!("expected a near byte comparison") };
+    assert_eq!(encode_structured(&emission.lowered).len(), emission.lowered.byte_length);
+    let text = format!("{IMPORTS}\n{}", emission.text);
+    assert!(text.contains("CodeBranchNear(Compare("), "expected a near compared branch");
+    elab.semantic_image().elaborator().elab_module_source("near_byte_branch_certificate", &text).unwrap_or_else(|e| panic!("{}", e.render(&text)));
+}
