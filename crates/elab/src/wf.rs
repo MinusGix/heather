@@ -2399,12 +2399,18 @@ theorem wrong(): peel(T1(1, T0)) = T1(1, T0) { refl }
         assert_eq!(**a2, aref);
         assert_eq!(e.el.unspell_wf_slots(&stepped), Some(t_ty.clone()));
         // One δ of the shape reference: `El` of the shape's code, which is
-        // the emission spelling of `S` (field types named, as a payload
-        // code's are).
-        let emitted = e.el.respell_ty_deep(&e.cx, shape, 0);
+        // spelled over the shape's spine names
+        // (`issues/recursive-spine-codes.md`): `El (T#payload₀^δ + T#suffix₀^δ)`.
+        let spine = e.el.spine(&t_ty, &l, 3, SPAN).expect("a spine");
+        let tag = e.ind("T").tag;
         let decoded_shape = Type::El {
             level: l.clone(),
-            tm: Rc::new(crate::code::code_of(emitted.as_ref().unwrap_or(shape)).expect("a shape has a code")),
+            tm: Rc::new(Term::TmSum {
+                lhs_level: spine.ctors[0].1.clone(),
+                rhs_level: spine.tails[0].1.clone(),
+                lhs: Rc::new(e.el.gen_ref(&e.cx, GenDef::PayloadCode(tag, 0)).expect("named")),
+                rhs: Rc::new(e.el.gen_ref(&e.cx, GenDef::SuffixCode(tag, 0)).expect("named")),
+            }),
         };
         assert!(e.el.wf_slot_refs(&e.cx, &decoded_shape, arity).is_some());
     }
@@ -2537,27 +2543,30 @@ theorem rmk_computes(): rlabel(rmk(9)) = 9 { refl }
     // -- a flat declaration's spine codes -----------------------------------
     // (`issues/inductive-spelling-codes-nonrecursive.md`)
 
-    /// The registration boundary: a **non-recursive** declaration with at
-    /// least two constructors names every payload and every suffix sum but
-    /// the last (which *is* the last payload); a recursive one keeps its
-    /// `D#shape`/`D#arity` pair and gets none of these (docs/wf-shape-code-
-    /// design.md §5.1's rejection stands); a parameterized one is `TyCode`'s
-    /// boundary, inherited.
+    /// The registration boundary: a closed declaration with at least two
+    /// constructors names every payload and every suffix sum but the last
+    /// (which *is* the last payload) — a flat one of its sum-of-Σs, a
+    /// recursive one of its `Wf`'s shape, beside its `D#shape`/`D#arity` pair
+    /// (`issues/recursive-spine-codes.md`, 2026-10-03; docs/wf-shape-code-
+    /// design.md §5.1's rejection was of the payloads' field mass, not of the
+    /// suffix sums). A parameterized one is `TyCode`'s boundary, inherited.
     #[test]
-    fn a_flat_declaration_names_its_payloads_and_suffixes_and_a_recursive_one_does_not() {
+    fn a_closed_declaration_names_its_payloads_and_suffixes_and_a_parameterized_one_does_not() {
         let e = env();
-        let flat = e.ind("Flat").tag;
-        for k in 0..3 {
-            assert!(
-                e.el.gen_ref(&e.cx, GenDef::PayloadCode(flat, k)).is_some(),
-                "`Flat` should have a `#payload{k}`"
-            );
+        for name in ["Flat", "T", "U"] {
+            let tag = e.ind(name).tag;
+            for k in 0..3 {
+                assert!(
+                    e.el.gen_ref(&e.cx, GenDef::PayloadCode(tag, k)).is_some(),
+                    "`{name}` should have a `#payload{k}`"
+                );
+            }
+            assert!(e.el.gen_ref(&e.cx, GenDef::SuffixCode(tag, 0)).is_some(), "`{name}`");
+            // `tails[1]` is the last payload itself: no definition of its own.
+            assert!(e.el.gen_ref(&e.cx, GenDef::SuffixCode(tag, 1)).is_none(), "`{name}`");
+            assert!(e.el.types.gdefs().has_spine_code_entry(tag), "`{name}`");
         }
-        assert!(e.el.gen_ref(&e.cx, GenDef::SuffixCode(flat, 0)).is_some());
-        // `tails[1]` is `⟦FC⟧` itself: no definition of its own.
-        assert!(e.el.gen_ref(&e.cx, GenDef::SuffixCode(flat, 1)).is_none());
-        assert!(e.el.types.gdefs().has_spine_code_entry(flat));
-        for name in ["T", "U", "Box"] {
+        for name in ["Box", "Box2"] {
             let tag = e.ind(name).tag;
             assert!(e.el.gen_ref(&e.cx, GenDef::PayloadCode(tag, 0)).is_none(), "`{name}`");
             assert!(e.el.gen_ref(&e.cx, GenDef::SuffixCode(tag, 0)).is_none(), "`{name}`");
@@ -2643,6 +2652,131 @@ theorem rmk_computes(): rlabel(rmk(9)) = 9 { refl }
         assert_eq!(e.el.whnf(&e.cx, &stepped, SPAN).expect("whnf"), flat_ty);
         assert_eq!(e.el.whnf(&e.cx, &whole, SPAN).expect("whnf"), flat_ty);
         assert_eq!(e.el.tag_of(&e.el.whnf(&e.cx, &stepped, SPAN).unwrap()).map(|i| i.tag), Some(flat));
+    }
+
+    /// A recursive declaration's shape code is spelled over its spine's names
+    /// (`issues/recursive-spine-codes.md`): the kernel's δ + decode of
+    /// `El (T#shape^δ)` stops at a sum of two **neutral** references, the
+    /// elaborator's `whnf` of that reduct is the inline shape again, and a
+    /// constructor value's emission spine takes the names by position — each
+    /// convertible with the inline component it replaces, both directions.
+    #[test]
+    fn a_recursive_shape_decodes_through_its_spine_and_unspells_at_whnf() {
+        let e = env();
+        let (t_ty, l) = e.lowered("T");
+        let tag = e.ind("T").tag;
+        let Type::Wf { shape, .. } = &t_ty else {
+            panic!("T is recursive")
+        };
+        let sref = e.el.gen_type_ref(&e.cx, GenDef::ShapeCode(tag), &l).expect("T has a shape code");
+        let stepped = heather_kernel::reduce::whnf_type_delta(
+            &sref,
+            &e.cx.gamma,
+            heather_kernel::reduce::Defs::transparent(&e.el.psi),
+            e.el.fuel,
+        )
+        .expect("the reference reduces");
+        let Type::Sum { lhs, rhs, .. } = &stepped else {
+            panic!("a shape decodes to a sum")
+        };
+        let (Type::El { tm: lt, .. }, Type::El { tm: rt, .. }) = (&**lhs, &**rhs) else {
+            panic!("both components are `El` of a code")
+        };
+        assert!(e.el.is_gen_ref(lt, GenDef::PayloadCode(tag, 0)));
+        assert!(e.el.is_gen_ref(rt, GenDef::SuffixCode(tag, 0)));
+        assert_eq!(e.el.whnf(&e.cx, &stepped, SPAN).expect("whnf"), **shape);
+        assert_eq!(e.el.tag_of(&e.el.whnf(&e.cx, &stepped, SPAN).unwrap()).map(|i| i.tag), Some(tag));
+        let spine = e.el.spine(&t_ty, &l, 3, SPAN).expect("a spine");
+        let emit = e.el.respell_spine(&e.cx, &spine);
+        for (k, ((inline, lk), (r, _))) in spine.ctors.iter().zip(&emit.ctors).enumerate() {
+            let Type::El { tm, .. } = &**r else {
+                panic!("payload {k} takes `El` of a code")
+            };
+            assert!(e.el.is_gen_ref(tm, GenDef::PayloadCode(tag, k)));
+            assert!(e.el.conv_types(&e.cx, r, inline, lk));
+            assert!(e.el.conv_types(&e.cx, inline, r, lk));
+        }
+        let Type::El { tm, .. } = &*emit.tails[0].0 else {
+            panic!("the first tail takes `El` of a code")
+        };
+        assert!(e.el.is_gen_ref(tm, GenDef::SuffixCode(tag, 0)));
+        // `U` is `T` but for its tag: `T`'s names never stand for `U`'s.
+        let (u_ty, ul) = e.lowered("U");
+        let uspine = e.el.spine(&u_ty, &ul, 3, SPAN).expect("a spine");
+        assert!(e.el.spine_type_ref(&e.cx, tag, &uspine.ctors[1].0).is_none());
+        assert!(e.el.spine_type_ref(&e.cx, tag, &uspine.tails[0].0).is_none());
+    }
+
+    /// The four axes over a recursive declaration whose labels and `match`
+    /// case trees now carry the shape's spine names: a literal and a neutral
+    /// scrutinee, a value built by a function and computed through, a value
+    /// in a checking position (an equation between two constructor values),
+    /// and a false equation as the negative control.
+    #[test]
+    fn recursive_spine_names_check_and_compute_across_the_axes() {
+        let mut e = env();
+        e.el.elab_source(
+            "
+fn tsum(t: T) -> Nat { match t { T0 => 0, T1(x, r) => tsum(r), T2(y, r) => y } }
+fn tmk(n: Nat) -> T { T1(n, T2(n, T0)) }
+theorem tsum_literal(): tsum(T1(2, T2(3, T0))) = 3 { refl }
+theorem tsum_neutral(n: Nat): tsum(T2(n, T0)) = n { refl }
+theorem tmk_computes(): tsum(tmk(4)) = 4 { refl }
+theorem tmk_checks(): tmk(1) = T1(1, T2(1, T0)) { refl }
+",
+        )
+        .expect("a recursive declaration's values and matches elaborate with spine names");
+        let r = e.el.elab_source("theorem tsum_wrong(): tsum(T2(2, T0)) = 3 { refl }");
+        assert!(r.is_err(), "a false equation must still be refused");
+    }
+
+    /// A `match code`'s motive is emitted through `annotation_type`
+    /// (`quote.rs`): with an inline motive, the kernel's check of every
+    /// branch — a value whose type is the emission spelling — walked the
+    /// whole lowering against `El (D#tycode^δ)`
+    /// (`issues/recursive-spine-codes.md`, 2026-10-03: `certgen_code.hthr`'s
+    /// `transcribe`, 67 misses to 1). The branch binding a recursive result
+    /// (`tm_succ`) checks against the reference at an extended local scope.
+    /// (A *recursive* motive with a constructor-valued arm is refused by the
+    /// kernel before and after this change —
+    /// `issues/match-code-recursive-motive-level-mismatch.md`.)
+    #[test]
+    fn a_match_code_motive_is_the_reference() {
+        let mut e = env();
+        e.el.elab_source(
+            "
+meta fn probe(g: Ctx, body: Code(g |- Nat)) -> Flat {
+    match code body as Flat { tm_zero => FA, tm_succ(t) => t, _ => FB(1) }
+}
+",
+        )
+        .expect("a `match code` at a declaration's motive elaborates");
+        fn find(t: &Term) -> Option<&heather_kernel::term::Motives> {
+            match t {
+                Term::ElimCodeTm { motives, .. } => Some(motives),
+                Term::CtxLam { body, .. } | Term::Lam { body, .. } => find(body),
+                _ => None,
+            }
+        }
+        // A `meta fn` registers in the meta-def table, not in Ψ; its
+        // `GlobalVar`s count from the end of the Ψ it was checked against.
+        let def = e.el.meta_programs.definition("main", "probe").expect("`probe` registered");
+        let motives = find(&def.term).expect("`probe`'s body is an `ElimCodeTm` under its binders");
+        let grew = e.el.psi.bindings.len() as u32 - def.psi_len;
+        // `tm_motive` lives under two more globals (`g`, `U_T`), `ty_motive`
+        // under one — and both under `probe`'s own `g : Ctx` binder.
+        for (m, under) in [(&motives.tm_motive, 2), (&motives.ty_motive, 1)] {
+            let Type::El { tm, .. } = &**m else {
+                panic!("the motive is the reference, not the inline lowering")
+            };
+            let Term::GlobalTm { var, .. } = &**tm else {
+                panic!("`El` of a generated global")
+            };
+            assert_eq!(
+                e.el.gen_def_of(GlobalVar(var.0 - under - 1 + grew)),
+                Some(GenDef::TyCode(e.ind("Flat").tag))
+            );
+        }
     }
 
     /// The look-alike negatives, in `mod fingerprint`'s discipline. `Flat2`

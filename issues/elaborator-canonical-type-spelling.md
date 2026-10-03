@@ -3,7 +3,7 @@ title: One canonical spelling for every type the kernel compares against itself
 status: open
 labels: [elaboration,inductives,representation,performance,design]
 created: 2026-09-06
-updated: 2026-09-24
+updated: 2026-10-03
 ---
 
 Filed from the 2026-09-06 x86 kernel round. Exact first-difference excerpts
@@ -128,3 +128,4 @@ where the fallbacks are paid for.
   nested `j` towers with hand-written motives for their `yields` fields because of
   it. A canonical spelling would retire that workaround, which is a
   readability payoff in addition to the kernel-cost one this issue is about.
+- 2026-10-03: 2026-10-03: Two more slices by [[recursive-spine-codes]]: a `match code`'s motive is emitted through `annotation_type` (the largest row of the ir_v1+certgen_code workload, `transcribe` 67 misses → 1), and a recursive declaration's `D#shape` is spelled over its spine's payload/suffix names. The Wf guard's decode copy is now rescoped before comparison.
