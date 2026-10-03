@@ -3300,8 +3300,11 @@ pub(super) fn generate_selected(
             Block::expression(if lowered.instructions.is_empty() { Expr::list([]) } else { instruction_cons(prefix, &lowered.instructions, 0) }),
         ));
     } else {
-        // No execution chain reads a suffix, so the list is one literal.
-        let list = lowered.instructions.iter().rev().fold(Expr::name("Nil<Instruction>"), |rest, instruction| Expr::call("Cons", [instruction.heather_expr(), rest]));
+        // No execution chain reads a suffix, so the list is one literal,
+        // an instruction to a line as the spine spells it.
+        let list = if lowered.instructions.is_empty() { Expr::list([]) } else {
+            Expr::name(lowered.instructions.iter().rev().fold("Nil<Instruction>".to_string(), |rest, instruction| format!("Cons(\n        {},\n        {rest})", instruction.render())))
+        };
         header.declaration(Declaration::function(&instructions_name, Expr::name("List<Instruction>"), Block::expression(list)));
     }
     if standalone { header.declaration(Declaration::function(
