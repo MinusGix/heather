@@ -259,22 +259,6 @@ theorem stack_word_matches<M>(access: StackAccess<M>, memory: M, address, value:
 // A backward rel32 must not normalize addition by an enormous unsigned count.
 // These laws keep the canonical modular-add semantics and certify the small
 // subtraction used to calculate the proposed target.
-theorem increment_decrement_step(n: Nat, bit: Bool, value: BitVec(n),
-    tail_law: value.decrement().increment() = value):
-    value.cons_bit(bit).decrement().increment() = value.cons_bit(bit)
-{
-    match bit {
-        False => BitVec::cons_bit_cong(n, refl, tail_law, a := False, b := False),
-        True => refl,
-    }
-}
-theorem increment_decrement(n: Nat): (value: BitVec(n)) → value.decrement().increment() = value {
-    match n as λ width => (value: BitVec(width)) → value.decrement().increment() = value {
-        Zero => λ value => refl,
-        Succ(width, ih) => λ value => increment_decrement_step(width, value.head_bit(),
-            value.tail_bits(), ih(value.tail_bits())),
-    }
-}
 theorem increments_decrement(n, count: Nat): (value: BitVec(n)) →
     value.decrement().iterate_increment(count) = value.iterate_increment(count).decrement()
 {
@@ -282,7 +266,7 @@ theorem increments_decrement(n, count: Nat): (value: BitVec(n)) →
         value.decrement().iterate_increment(steps) = value.iterate_increment(steps).decrement() {
         Zero => λ value => refl,
         Succ(steps, ih) => λ value => trans(BitVec::cong_increment(n, ih(value)),
-            trans(increment_decrement(n, value.iterate_increment(steps)),
+            trans(BitVec::increment_decrement(n, value.iterate_increment(steps)),
                 sym(BitVec::decrement_increment(n, value.iterate_increment(steps))))),
     }
 }
