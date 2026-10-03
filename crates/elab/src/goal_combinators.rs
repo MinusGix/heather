@@ -168,16 +168,45 @@ fn type_inductive(elab: &Elaborator, cx: &Cx, ty: &Type) -> Option<Rc<crate::ind
     elab.tag_of(ty).or_else(|| elab.tag_of(&elab.goal_oracle().diagnostics(64).decode_type(&cx.gamma, ty)?))
 }
 
+/// The word comparisons a split states a Nat fact for, each with its
+/// `bitvec_omega` readings at `True` and `False`.
+const COMPARISONS: [(&str, &str, &str); 2] = [
+    ("bitvec::BitVec::unsigned_lt_bit", "unsigned_true", "unsigned_false"),
+    ("bitvec::BitVec::eq_bit", "equal_true", "equal_false"),
+];
+
+/// A comparison's operands, with its entry in `COMPARISONS`.
+fn comparison_args<'a>(elab: &Elaborator, term: &'a Term) -> Option<(&'static (&'static str, &'static str, &'static str), Vec<&'a Rc<Term>>)> {
+    COMPARISONS.iter().find_map(|entry| Some((entry, crate::omega_cert::named_args(elab, term, entry.0)?)))
+}
+
 /// The comparison a scrutinee is, or becomes within a few transparent steps:
-/// a helper such as `lowb(x) = x.unsigned_lt_bit(10)` is its comparison.
+/// a helper such as `lowb(x) = x.unsigned_lt_bit(10)` is its comparison, and
+/// so is `newline(b) = b.eq_bit(10)`.
 fn comparison_of(elab: &Elaborator, cx: &Cx, scrut: &Term) -> Option<Rc<Term>> {
     let oracle = elab.goal_oracle();
     std::iter::once(scrut.clone())
         .chain(oracle.term_reducts(&cx.gamma, scrut, 8))
-        .find(|reduct| {
-            crate::omega_cert::named_args(elab, reduct, "bitvec::BitVec::unsigned_lt_bit").is_some()
-        })
-        .map(Rc::new)
+        .find(|reduct| comparison_args(elab, reduct).is_some())
+        .map(|comparison| Rc::new(settled(elab, cx, &comparison)))
+}
+
+/// A comparison with each projected operand read off the pair it projects: a
+/// recursive definition unfolded at `Cons(b, rest)` reaches its head as a
+/// projection of the constructor's encoding, which the goal's other side
+/// spells `b`. The split abstracts the comparison as the source spells it.
+fn settled(elab: &Elaborator, cx: &Cx, term: &Term) -> Term {
+    let mut output = term.clone();
+    if let Term::App { fun, arg, .. } | Term::AppAt { fun, arg } = &mut output {
+        *fun = Rc::new(settled(elab, cx, fun));
+        if crate::spelling::proj_of(arg).is_some()
+            && let Ok(whnf) = elab.goal_oracle().bounded(64).whnf_term(&cx.gamma, arg)
+            && crate::spelling::proj_of(&whnf).is_none()
+        {
+            *arg = Rc::new(whnf);
+        }
+    }
+    output
 }
 
 /// A `bitvec::BitVec` operation applied: the search's atoms.
@@ -240,6 +269,12 @@ fn stuck_scrutinee(elab: &Elaborator, cx: &Cx, term: &Term, budget: &mut u32) ->
             return None;
         }
         *budget -= 1;
+        // A helper that is a comparison (`newline(b) = b.eq_bit(10)`) stops
+        // at it, as the comparison itself does above: the match it heads is
+        // the enclosing one's to split.
+        if reduct != *term && word_operation(elab, &reduct) {
+            return None;
+        }
         let (scrut, domain) = match head_match(&reduct) {
             Term::Case { scrut, lhs, .. } => (scrut, case_domain(elab, cx, lhs)),
             Term::ElimNat { scrut, .. } => (scrut, None),
@@ -265,7 +300,7 @@ fn stuck_scrutinee(elab: &Elaborator, cx: &Cx, term: &Term, budget: &mut u32) ->
             return Some(Blocked {
                 original: term.clone(),
                 replacement: payload(term_type(Rc::new(reduct.clone())).abstract_local(scrut)?),
-                scrutinee: scrut.clone(),
+                scrutinee: comparison.clone(),
                 constructors: constructors(inductive),
                 comparison: Some(comparison),
             });
@@ -337,6 +372,16 @@ fn co_occurrences(elab: &Elaborator, cx: &Cx, term: &Term, found: &Term, scrut: 
             out.push((term.clone(), (*abstracted).clone()));
             return;
         }
+    }
+    // A recursive definition at a constructor reaches the comparison with
+    // its operand spelled through the constructor's encoding (`settled`):
+    // the search's own blocker for this position, when it is the same
+    // comparison once settled.
+    let mut search = 128;
+    if let Some(blocked) = stuck_scrutinee(elab, cx, term, &mut search)
+        && *blocked.scrutinee == *scrut
+    {
+        out.push((blocked.original, (*blocked.replacement).clone()));
     }
 }
 
@@ -668,20 +713,20 @@ fn split_stuck(
     let order = fresh(elab, cx, format!("{equation}_nat"));
     // The comparison's operands, when the bridge library is there to read
     // them as Nats.
-    let operands = found
-        .comparison
+    let compared = found.comparison.as_ref().and_then(|comparison| comparison_args(elab, comparison));
+    let readings = compared.as_ref().map(|(entry, _)| (entry.1, entry.2));
+    let equality = readings.is_some_and(|(yes, _)| yes == "equal_true");
+    let operands = compared
         .as_ref()
-        .filter(|_| elab.key_of("bitvec_omega::unsigned_true").is_some())
-        .and_then(|comparison| crate::omega_cert::named_args(elab, comparison, "bitvec::BitVec::unsigned_lt_bit"))
-        .and_then(|args| args.iter().map(|term| elab.spell_term_source(cx, term)).collect::<Option<Vec<_>>>())
+        .filter(|(entry, _)| elab.key_of(&format!("bitvec_omega::{}", entry.1)).is_some())
+        .and_then(|(_, args)| args.iter().map(|term| elab.spell_term_source(cx, term)).collect::<Option<Vec<_>>>())
         .map(|operands| operands.join(", "));
     // Each word operand as the Nat the fact is stated at: a literal
     // (`ofNat(8, 14)` is `14`) as its value, so that `omega`, which reads
     // `toNat(ofNat(14))` as an unknown, can compare two splits' constants.
-    let sides = found
-        .comparison
+    let sides = compared
         .as_ref()
-        .and_then(|comparison| crate::omega_cert::named_args(elab, comparison, "bitvec::BitVec::unsigned_lt_bit"))
+        .map(|(_, args)| args)
         .filter(|args| args.len() == 3)
         .and_then(|args| {
             let side = |term: &Term| match literal_word(elab, term) {
@@ -703,14 +748,17 @@ fn split_stuck(
             // the Nat fact directly, including leaves such as `omega` that do
             // not read words.
             let outcome = match ctor.as_str() { "True" => Some("true"), "False" => Some("false"), _ => None };
-            let stated = |fact: String| match (&sides, outcome) {
-                (Some((left, right)), Some("true")) => format!("{{ let __split_fact: ({left} < {right}) = {fact}; __split_fact }}"),
-                (Some((left, right)), Some(_)) => format!("{{ let __split_fact: ({right} <= {left}) = {fact}; __split_fact }}"),
+            let stated = |fact: String| match (&sides, outcome, equality) {
+                (Some((left, right)), Some("true"), false) => format!("{{ let __split_fact: ({left} < {right}) = {fact}; __split_fact }}"),
+                (Some((left, right)), Some(_), false) => format!("{{ let __split_fact: ({right} <= {left}) = {fact}; __split_fact }}"),
+                (Some((left, right)), Some("true"), true) => format!("{{ let __split_fact: ({left} = {right}) = {fact}; __split_fact }}"),
+                (Some((left, right)), Some(_), true) => format!("{{ let __split_fact: ({left} ≠ {right}) = {fact}; __split_fact }}"),
                 _ => fact,
             };
-            if let (Some(operands), Some(outcome)) = (&operands, outcome)
+            let reading = readings.zip(outcome).map(|((yes, no), outcome)| if outcome == "true" { yes } else { no });
+            if let (Some(operands), Some(reading)) = (&operands, reading)
                 && let Ok(expr) = crate::omega_cert::parse_generated_expr(&stated(format!(
-                    "bitvec_omega::unsigned_{outcome}({operands}, {equation})"
+                    "bitvec_omega::{reading}({operands}, {equation})"
                 )))
             {
                 body = Expr {

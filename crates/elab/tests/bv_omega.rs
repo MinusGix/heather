@@ -75,6 +75,7 @@ fn bv_omega_suite() {
     splits_stuck_comparisons();
     splits_through_definitions();
     byte_tests_read_as_written();
+    splits_decided_predicates();
 }
 
 /// Byte tests as a program writes them (S3 of
@@ -114,6 +115,46 @@ fn byte_tests_read_as_written() {
     refused("a character at a wider word", r#"
         fn wide() → BitVec(16) { 'a' }
     "#);
+}
+
+/// Predicates written as decisions' bits (S4 of
+/// docs/native-programs-read-like-programs-design.md): an equality splits like
+/// an order, with its Nat fact (`≠` on the false side, which omega splits); a
+/// helper that *is* a comparison is split at the comparison, under `of_bit`
+/// too; and a recursive definition at a constructor, which reaches the byte
+/// through the constructor's encoding, splits with the other side.
+fn splits_decided_predicates() {
+    let source = |body: &str| format!("import bool;\nimport logic;\nimport nat;\nimport list;\nimport omega;\nimport algebra;\n\
+        import bitvec;\nimport bitvec_nat;\nimport bitvec_omega;\nimport char;\nimport byte;\n\n{body}\n");
+    let check = |what: &str, body: &str| {
+        let source = source(body);
+        elaborator().elab_module_source("probe", &source).unwrap_or_else(|error| panic!("{what} did not check: {}", message(error)));
+    };
+    let refused = |what: &str, body: &str| message(elaborator().elab_module_source("probe", &source(body)).expect_err(what));
+    let predicates = r#"
+        fn newline(b: BitVec(8)) → Bool { decide_bit<b = '\n'>() }
+        fn space(b: BitVec(8)) → Bool { decide_bit<b = ' ' ∨ ('\t' <= b ∧ b <= '\r')>() }
+        fn kept(b: BitVec(8)) → Bool { decide_bit<b ≠ '\r'>() }
+        fn step(count: Nat, b: BitVec(8)) → Nat { match space(b) { True => count, False => Succ(count) } }
+    "#;
+    check("equalities, connectives and helpers", &format!("{predicates}
+        theorem newline_space(b: BitVec(8)): Nat::of_bit(newline(b)) <= Nat::of_bit(space(b)) {{ split_all; all_goals {{ omega }} }}
+        theorem lines(count: Nat, b: BitVec(8)): (if b = '\\n' {{ Succ(count) }} else {{ count }}) = count + Nat::of_bit(newline(b)) {{
+            split_all; all_goals {{ omega }}
+        }}
+        theorem advances(count: Nat, b: BitVec(8)): step(count, b) <= Succ(count) {{ split_all; all_goals {{ omega }} }}
+        theorem one(b: BitVec(8), rest: List<BitVec(8)>):
+            Cons(b, rest).filter(kept) = match kept(b) {{ True => Cons(b, rest.filter(kept)), False => rest.filter(kept) }} {{
+            split_all; all_goals {{ refl }}
+        }}
+        theorem single(b: BitVec(8)): Cons(b, Nil<BitVec(8)>).filter(kept) = (if b = '\\r' {{ Nil }} else {{ Cons(b, Nil) }}) {{
+            split_all; all_goals {{ refl }}
+        }}
+    "));
+    let error = refused("a newline counted at every space", &format!("{predicates}
+        theorem wrong(count: Nat, b: BitVec(8)): step(count, b) = count + Nat::of_bit(newline(b)) {{ split_all; all_goals {{ omega }} }}
+    "));
+    assert!(error.contains("no contradiction") || error.contains("stuck"), "{error}");
 }
 
 /// What a split decides reaches the rest of the goal and the hypotheses

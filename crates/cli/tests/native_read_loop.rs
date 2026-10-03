@@ -52,8 +52,8 @@ fn a_program_that_is_wrong_is_refused_at_its_source() {
     let directory = scratch("read-loop-refused");
     for (fact, edits) in [
         ("wc_l_program", &[("[λ c => c], Line, wc_l_out) {", "[λ c => c], Quiet, wc_l_out) {")][..]),
-        ("advances", &[("Filter(line_computes(line_step, 0, λ c => c, Nil, wc_l, count_lines))",
-            "Filter(line_computes(line_step, 0, λ c => c, Nil, wc_l, count_lines), advances := λ count byte => Nat::le_refl(Succ(count)))")][..]),
+        ("advances", &[("newline, line_grows, 0, refl)))",
+            "newline, line_grows, 0, refl)), advances := λ count byte => Nat::le_refl(Succ(count)))")][..]),
     ] {
         let source = mistaken(&directory, "wc_l", edits);
         let output = build(&directory, &source, &[]);

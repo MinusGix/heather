@@ -4,25 +4,25 @@
 // and emits nothing, and whose finish prints the count, with what stdout is,
 // `wc_l_out`. Its facts are about its step alone (docs/native-wc-design.md
 // §3): the count grows by at most one per byte (the program's default), and
-// folded over the input from zero it is `wc_l` (`count_lines_input`).
-// Reading, writing and the claim are the library's.
+// folded over the input from zero it is `wc_l`. Reading, writing and the
+// claim are the library's.
 //
 //     heather build-x86 examples/x86-native/wc_l.hthr wc_l_program -o wc_l
 import function_ir_loop;
 import filter_program;
 import stream_filter;
 import decimal_line;
+import algebra;
 import bitvec;
 import bool;
+import byte;
+import char;
 import list;
 import logic;
 import nat;
 import omega;
 
-// A newline: byte 10.
-fn newline(b: BitVec(8)) → Bool {
-    match b.unsigned_lt_bit(BitVec::ofNat(10)) { True => False, False => b.unsigned_lt_bit(BitVec::ofNat(11)) }
-}
+fn newline(b: BitVec(8)) → Bool { decide_bit<b = '\n'>() }
 
 // What the count means: the input's newlines.
 fn wc_l(bytes: List<BitVec(8)>) → Nat { bytes.filter(newline).len() }
@@ -31,25 +31,17 @@ fn wc_l(bytes: List<BitVec(8)>) → Nat { bytes.filter(newline).len() }
 fn wc_l_out(bytes: List<BitVec(8)>) → List<BitVec(8)> { decimal_line(wc_l(bytes)) }
 
 // The step: one more at a newline.
-fn line_step(count: Nat, byte: BitVec(8)) → Nat {
-    match newline(byte) { False => count, True => Succ(count) }
+fn line_step(count: Nat, b: BitVec(8)) → Nat {
+    if b = '\n' { Succ(count) } else { count }
 }
 
-// Why: a byte adds one to the count exactly when it is a newline, so the
-// fold from zero counts the newlines.
-theorem line_grows(count: Nat, byte: BitVec(8)): line_step(count, byte) = count + Nat::of_bit(newline(byte)) {
-    split_all;
-    all_goals { omega }
-}
-
-theorem count_lines(bytes: List<BitVec(8)>): wc_l(bytes) = fold_bytes(line_step, bytes, 0) {
-    let counted: (fold_bytes(line_step, bytes, 0) = 0 + wc_l(bytes)) = counts_filtered(line_step, λ c => c, newline, line_grows, bytes, 0);
-    omega
-}
+// Why: a byte adds one to the count exactly when it is a newline.
+theorem line_grows(count: Nat, b: BitVec(8)): line_step(count, b) = count + Nat::of_bit(newline(b)) { split_all; all_goals { omega } }
 
 // The program: the step, its count from zero, the line it prints, and what
-// stdout is; that the count grows by at most one per byte is the program's
-// default. `heather build-x86` builds it by this name.
+// stdout is, with the count folded from zero; that the count grows by at
+// most one per byte is the program's default. `heather build-x86` builds it
+// by this name.
 fn wc_l_program() → Filter<Nat>(counting(line_step), 0, [λ c => c], Line, wc_l_out) {
-    Filter(line_computes(line_step, 0, λ c => c, Nil, wc_l, count_lines))
+    Filter(line_computes(line_step, 0, λ c => c, Nil, wc_l, fold_counts_filtered(line_step, λ c => c, newline, line_grows, 0, refl)))
 }

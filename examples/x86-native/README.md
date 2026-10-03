@@ -269,7 +269,12 @@ bytes)`. The finish names positions in `counts` (`Line` prints the first,
 `Fields` the first three), so the counts are written once. A counting program
 proves that fact from one fact per printed count (`line_computes`,
 `fields_computes`), and each of those from what one byte does to the count,
-by the library's fold lemmas (`counts_filtered`, `counts_len`, `counts_runs`).
+by the library's fold lemmas (`fold_counts_filtered`, `fold_counts_len`,
+`fold_counts_runs`). A program that prints nothing after end of file
+(`tr -s`, `tr -d`) proves it from what one byte emits (`quiet_computes`).
+Byte tests are decided propositions: a step branches with `if b = '\n'` or
+`if 'a' <= b ∧ b <= 'z'`, and a predicate a specification passes to
+`filter` or `split_by` is the decision's bit, `decide_bit<b = '\n'>()`.
 That each count grows by at most one per byte is the bundle's `advances`
 field, shown by default (case analysis, then `omega`). A step the default
 cannot show gets an error naming the case left, and `advances := …` by hand.
@@ -284,15 +289,17 @@ refused at its own source, before anything is generated.
   registers across the reads, so a word split between two reads is counted
   once. What the counts mean is stated as a reader checks it: `wc_lines`
   counts the newlines, `wc_words` the non-empty pieces of
-  `bytes.split_by(space_byte)` (the C locale's POSIX whitespace), and
+  `bytes.split_by(space)` (the C locale's POSIX whitespace), and
   `wc_bytes` the length. Each count's proof is what one byte does to it, by
   `split_all`.
 - `tr.hthr` is `tr a-z A-Z`: `mapping(upcase)`, which keeps nothing between
   bytes and emits each byte's image.
 - `tr_s.hthr` is `tr -s '\n'`: its state is whether the last byte was a
   newline, and a newline after a newline emits nothing, across reads too.
+  Its specification is a recursion with the same state, and the proof is
+  what one byte emits, by `split_all`.
 - `tr_d.hthr` is `tr -d '\r'`: a `Stateless` step that emits every byte but a
-  carriage return.
+  carriage return; stdout is `bytes.filter(kept)`.
 
 The certificate's `{name}_native_runs` covers every history of reads and
 writes, interleaved:

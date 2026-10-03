@@ -14,8 +14,11 @@ import function_ir_loop;
 import filter_program;
 import stream_filter;
 import field_line;
+import algebra;
 import bitvec;
 import bool;
+import byte;
+import char;
 import list;
 import logic;
 import nat;
@@ -26,27 +29,18 @@ import bitvec_omega;
 // in the order they are printed.
 record WcState { lines: Nat, words: Nat, bytes: Nat, inside: Bool }
 
-// A newline: byte 10.
-fn newline_byte(b: BitVec(8)) → Bool {
-    match b.unsigned_lt_bit(BitVec::ofNat(10)) { True => False, False => b.unsigned_lt_bit(BitVec::ofNat(11)) }
-}
+fn newline(b: BitVec(8)) → Bool { decide_bit<b = '\n'>() }
 
-// Whitespace in the C locale: tab, newline, vertical tab, form feed,
-// carriage return (9 to 13) and space (32).
-fn space_byte(b: BitVec(8)) → Bool {
-    match b.unsigned_lt_bit(BitVec::ofNat(14)) {
-        True => match b.unsigned_lt_bit(BitVec::ofNat(9)) { True => False, False => True },
-        False => match b.unsigned_lt_bit(BitVec::ofNat(32)) { True => False, False => b.unsigned_lt_bit(BitVec::ofNat(33)) },
-    }
-}
+// Whitespace in the C locale: space, and tab to carriage return.
+fn space(b: BitVec(8)) → Bool { decide_bit<b = ' ' ∨ ('\t' <= b ∧ b <= '\r')>() }
 
 // What the counts mean.
 
 // The number of newlines.
-fn wc_lines(bytes: List<BitVec(8)>) → Nat { bytes.filter(newline_byte).len() }
+fn wc_lines(bytes: List<BitVec(8)>) → Nat { bytes.filter(newline).len() }
 
 // The number of words: the pieces between whitespace that aren't empty.
-fn wc_words(bytes: List<BitVec(8)>) → Nat { bytes.split_by(space_byte).filter(List::non_empty).len() }
+fn wc_words(bytes: List<BitVec(8)>) → Nat { bytes.split_by(space).filter(List::non_empty).len() }
 
 // The number of bytes.
 fn wc_bytes(bytes: List<BitVec(8)>) → Nat { bytes.len() }
@@ -55,9 +49,9 @@ fn wc_bytes(bytes: List<BitVec(8)>) → Nat { bytes.len() }
 fn wc_out(bytes: List<BitVec(8)>) → List<BitVec(8)> { three_fields_line(wc_lines(bytes), wc_words(bytes), wc_bytes(bytes)) }
 
 // The step: the next state from a state and a byte.
-fn wc_step(s: WcState, byte: BitVec(8)) → WcState {
-    match space_byte(byte) {
-        True => match newline_byte(byte) {
+fn wc_step(s: WcState, b: BitVec(8)) → WcState {
+    match space(b) {
+        True => match newline(b) {
             True => WcState(Succ(s.lines), s.words, Succ(s.bytes), False),
             False => WcState(s.lines, s.words, Succ(s.bytes), False),
         },
@@ -71,45 +65,20 @@ fn wc_step(s: WcState, byte: BitVec(8)) → WcState {
 // Why the fold counts what the specifications say: what one byte does to
 // each count. A newline is one more line; a byte that isn't whitespace starts
 // a word when the state isn't in one; every byte is one more byte.
-theorem lines_step(s: WcState, byte: BitVec(8)): wc_step(s, byte).lines = s.lines + Nat::of_bit(newline_byte(byte)) {
-    split_all;
-    all_goals { omega }
-}
-theorem words_step(s: WcState, byte: BitVec(8)): wc_step(s, byte).words = s.words + starts_run(space_byte(byte), s.inside) {
-    split_all;
-    all_goals { omega }
-}
-theorem inside_step(s: WcState, byte: BitVec(8)): wc_step(s, byte).inside = !space_byte(byte) {
-    split_all;
-    all_goals { refl }
-}
-theorem bytes_step(s: WcState, byte: BitVec(8)): wc_step(s, byte).bytes = Succ(s.bytes) {
-    split_all;
-    all_goals { omega }
-}
-
-// Folded from the zero state, so each count is its specification.
-theorem count_lines(bytes: List<BitVec(8)>): wc_lines(bytes) = fold_bytes(wc_step, bytes, WcState(0, 0, 0, False)).lines {
-    let counted: (fold_bytes(wc_step, bytes, WcState(0, 0, 0, False)).lines = 0 + wc_lines(bytes)) =
-        counts_filtered(wc_step, λ s => s.lines, newline_byte, lines_step, bytes, WcState(0, 0, 0, False));
-    omega
-}
-theorem count_words(bytes: List<BitVec(8)>): wc_words(bytes) = fold_bytes(wc_step, bytes, WcState(0, 0, 0, False)).words {
-    let counted: (fold_bytes(wc_step, bytes, WcState(0, 0, 0, False)).words = 0 + wc_words(bytes)) =
-        counts_runs_from(wc_step, λ s => s.words, λ s => s.inside, space_byte, words_step, inside_step, WcState(0, 0, 0, False), refl, bytes);
-    omega
-}
-theorem count_bytes(bytes: List<BitVec(8)>): wc_bytes(bytes) = fold_bytes(wc_step, bytes, WcState(0, 0, 0, False)).bytes {
-    let counted: (fold_bytes(wc_step, bytes, WcState(0, 0, 0, False)).bytes = 0 + wc_bytes(bytes)) =
-        counts_len(wc_step, λ s => s.bytes, bytes_step, bytes, WcState(0, 0, 0, False));
-    omega
-}
+theorem lines_step(s: WcState, b: BitVec(8)): wc_step(s, b).lines = s.lines + Nat::of_bit(newline(b)) { split_all; all_goals { omega } }
+theorem words_step(s: WcState, b: BitVec(8)): wc_step(s, b).words = s.words + starts_run(space(b), s.inside) { split_all; all_goals { omega } }
+theorem inside_step(s: WcState, b: BitVec(8)): wc_step(s, b).inside = !space(b) { split_all; all_goals { refl } }
+theorem bytes_step(s: WcState, b: BitVec(8)): wc_step(s, b).bytes = Succ(s.bytes) { split_all; all_goals { omega } }
 
 // The program: the step, the zero state, its counts in order, the line it
-// prints, and what stdout is; that each count grows by at most one per byte
-// is the program's default. `heather build-x86` builds it by this name.
+// prints, and what stdout is, with each printed count folded from zero; that
+// each count grows by at most one per byte is the program's default.
+// `heather build-x86` builds it by this name.
 fn wc_program() → Filter<WcState>(counting(wc_step), WcState(0, 0, 0, False), [λ s => s.lines, λ s => s.words, λ s => s.bytes],
     Fields, wc_out) {
-    Filter(fields_computes(wc_step, WcState(0, 0, 0, False), λ s => s.lines, λ s => s.words, λ s => s.bytes, Nil,
-        wc_lines, wc_words, wc_bytes, count_lines, count_words, count_bytes))
+    let zero = WcState(0, 0, 0, False);
+    Filter(fields_computes(wc_step, zero, λ s => s.lines, λ s => s.words, λ s => s.bytes, Nil, wc_lines, wc_words, wc_bytes,
+        fold_counts_filtered(wc_step, λ s => s.lines, newline, lines_step, zero, refl),
+        fold_counts_runs(wc_step, λ s => s.words, λ s => s.inside, space, words_step, inside_step, zero, refl, refl),
+        fold_counts_len(wc_step, λ s => s.bytes, bytes_step, zero, refl)))
 }

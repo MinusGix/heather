@@ -2683,6 +2683,13 @@ fn split_disequality(elab: &Elaborator, cx: &Cx) -> Result<Option<Certificate>, 
                     disequality.clone(),
                     "omega::diseq_elim",
                 )
+            } else if let Some((left, right)) = nat_equality_args(elab, cx, &decoded) {
+                (
+                    nat_term_source(elab, cx, left)?,
+                    nat_term_source(elab, cx, right)?,
+                    disequality.clone(),
+                    "omega::nat_diseq_elim",
+                )
             } else if let Some((divisor, dividend)) = int_divides_args(elab, &domain) {
                 let divisor = int_term_source(elab, cx, divisor)?;
                 let dividend = int_term_source(elab, cx, dividend)?;

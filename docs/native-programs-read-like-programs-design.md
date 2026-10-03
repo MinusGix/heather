@@ -1,6 +1,6 @@
 # A native program reads like a program
 
-Status: **scoped 2026-10-02; V1–V5 run (§4.1); S6, S1, S2 and S3 landed (part 3 after a design round: `Decide` carries its bit, `native-frontend-decided-matches`).** Anchor issue:
+Status: **scoped 2026-10-02; V1–V5 run (§4.1); S6, S1, S2 and S3 landed (part 3 after a design round: `Decide` carries its bit, `native-frontend-decided-matches`); S4 landed 2026-10-03.** Anchor issue:
 `issues/native-programs-read-like-programs.md`. This round comes after step 2
 of `docs/automatic-author-surface-design.md` (the stream filter) and before
 step 3 (`issues/native-one-program-logic.md`, which waits on ITrees).
@@ -238,6 +238,43 @@ helper, `tr a-z A-Z` with `¬(b < 'a') ∧ b <= 'z'`).
 Rewrite `wc`, `wc_l`, `tr`, `tr_s` and `tr_d` in the new style. Delete what
 the library now owns. Check that the executables still match the host tools
 (the existing `native_*` tests).
+
+**Built 2026-10-03.** Byte tests are decided propositions everywhere: a step
+branches with `if b = '\n'` (`wc_l`, `tr_s`, `tr_d`) or `if 'a' <= b ∧ b <=
+'z'` (`tr`), and a predicate a specification passes to `filter` or
+`split_by` is a decision's bit, `fn space(b) → Bool { decide_bit<b = ' ' ∨
+('\t' <= b ∧ b <= '\r')>() }`. Lines: `wc` 115 → 84, `wc_l` 55 → 47, `tr`
+39 → 36, `tr_s` 69 → 55, `tr_d` 49 → 35. Every proof left is one per-byte
+case analysis (`split_all`, then `omega` or `refl`) or a library lemma's
+call. What it took:
+
+- **Library.** `fold_counts_filtered`, `fold_counts_len` and
+  `fold_counts_runs` (replacing `counts_runs_from`) state a count folded
+  from zero in the shape `line_computes`/`fields_computes` take, so a
+  program's count theorems are arguments of its bundle. `quiet_computes`
+  (over `emits_from`) gives a program that prints nothing after end of file
+  its `computes` from one equation per byte, which deletes `tr_s`'s and
+  `tr_d`'s hand inductions under `match … as λ` motives. `bitvec_omega`
+  gains `equal_true`/`equal_false`.
+- **`split_all`.** `eq_bit` is a comparison, with its Nat fact (`=`, or `≠`
+  on the false side); a helper that is a comparison is split at the
+  comparison and stops the search there, which also makes the bundle's
+  `advances` default work for `decide_bit` predicates
+  (`filter-default-spells-program-names`); and a comparison reached through
+  a recursive definition at a constructor reads its operand off the
+  constructor's encoding, so `Cons(b, rest).filter(kept)` and the other
+  side's `kept(b)` are one split (it was a kernel refusal before: two
+  splits of one comparison).
+- **`omega`** splits a Nat `≠` by trichotomy, as it did an Int one.
+- **Frontend.** A Bool helper whose body *is* a connective (a decision's
+  bit) compiles as the connective's branches, each giving its outcome, so
+  `match space(b)` costs no materialised operands (the eager form hit
+  `RegisterPressure`). A Bool parameter or field is tested as itself in the
+  source expansion, as a produced Bool already was: `split_all` takes
+  `head_bit(0, ofBool(x))` and `x` for different atoms.
+
+S5 (`s with { … }`) did not ride along: `wc_step` still rebuilds its record
+in each arm.
 
 ### S5. Record update (rides along if small)
 

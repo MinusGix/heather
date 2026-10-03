@@ -7,16 +7,16 @@
 //     heather build-x86 examples/x86-native/tr_s.hthr tr_s_program -o tr_s
 import filter_program;
 import stream_filter;
+import algebra;
 import bitvec;
 import bool;
+import byte;
+import char;
 import list;
 import logic;
 import option;
 
-// A newline: byte 10.
-fn newline(b: BitVec(8)) → Bool {
-    match b.unsigned_lt_bit(BitVec::ofNat(10)) { True => False, False => b.unsigned_lt_bit(BitVec::ofNat(11)) }
-}
+fn newline(b: BitVec(8)) → Bool { decide_bit<b = '\n'>() }
 
 // What stdout is: the input less every newline that follows a newline.
 fn squeeze_after(after_newline: Bool, bytes: List<BitVec(8)>) → List<BitVec(8)> {
@@ -33,37 +33,23 @@ fn squeezed(bytes: List<BitVec(8)>) → List<BitVec(8)> { squeeze_after(False, b
 // The step: a newline after a newline emits nothing; every other byte emits
 // itself.
 fn squeeze_step(after_newline: Bool, b: BitVec(8)) → Filtered<Bool> {
-    match newline(b) {
-        False => Filtered(False, Some(b)),
-        True => match after_newline { True => Filtered(True, None), False => Filtered(True, Some(b)) },
+    if b = '\n' {
+        match after_newline { True => Filtered(True, None), False => Filtered(True, Some(b)) }
+    } else {
+        Filtered(False, Some(b))
     }
 }
 
-theorem squeeze_emits(bytes: List<BitVec(8)>): (after_newline: Bool) →
-    squeeze_after(after_newline, bytes) = filter_emitted(squeeze_step, bytes, after_newline) {
-    match bytes {
-        Nil => λ after_newline => refl,
-        Cons(b, rest) => λ after_newline => match newline(b) as λ nl =>
-                (match nl as λ _ => List<BitVec(8)> { False => Cons(b, squeeze_after(False, rest)),
-                    True => match after_newline as λ _ => List<BitVec(8)> { True => squeeze_after(True, rest), False => Cons(b, squeeze_after(True, rest)) } }) =
-                emitted_byte((match nl as λ _ => Filtered<Bool> { False => Filtered(False, Some(b)),
-                    True => match after_newline as λ _ => Filtered<Bool> { True => Filtered(True, None), False => Filtered(True, Some(b)) } }).emit) ++
-                filter_emitted(squeeze_step, rest, (match nl as λ _ => Filtered<Bool> { False => Filtered(False, Some(b)),
-                    True => match after_newline as λ _ => Filtered<Bool> { True => Filtered(True, None), False => Filtered(True, Some(b)) } }).next) {
-            False => cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ t => Cons(b, t), squeeze_emits(rest, False)),
-            True => match after_newline as λ a =>
-                    (match a as λ _ => List<BitVec(8)> { True => squeeze_after(True, rest), False => Cons(b, squeeze_after(True, rest)) }) =
-                    emitted_byte((match a as λ _ => Filtered<Bool> { True => Filtered(True, None), False => Filtered(True, Some(b)) }).emit) ++
-                    filter_emitted(squeeze_step, rest, (match a as λ _ => Filtered<Bool> { True => Filtered(True, None), False => Filtered(True, Some(b)) }).next) {
-                True => squeeze_emits(rest, True),
-                False => cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ t => Cons(b, t), squeeze_emits(rest, True)),
-            },
-        },
-    }
+// Why: one byte emits what the specification squeezes it to.
+theorem squeeze_one(after_newline: Bool, b: BitVec(8), rest: List<BitVec(8)>):
+    squeeze_after(after_newline, Cons(b, rest)) =
+        emitted_byte(squeeze_step(after_newline, b).emit) ++ squeeze_after(squeeze_step(after_newline, b).next, rest) {
+    split_all;
+    all_goals { refl }
 }
 
 // The program: the step from "not after a newline", and what stdout is.
 // `heather build-x86` builds it by this name.
 fn tr_s_program() → Filter<Bool>(squeeze_step, False, Nil, Quiet, squeezed) {
-    Filter(λ bytes => trans(squeeze_emits(bytes, False), sym(List::append_nil(filter_emitted(squeeze_step, bytes, False)))))
+    Filter(quiet_computes(squeeze_step, False, Nil, squeeze_after, λ _ => refl, squeeze_one))
 }

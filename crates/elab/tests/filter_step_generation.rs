@@ -120,6 +120,17 @@ fn if_wc_step(s: WcState, byte: BitVec(8)) → WcState {
     }
 }
 fn if_wc_filter() → WcState → BitVec(8) → Filtered<WcState> { counting(if_wc_step) }
+fn bit_space(b: BitVec(8)) → Bool { decide_bit<b = ' ' ∨ ('\t' <= b ∧ b <= '\r')>() }
+fn bit_wc_step(s: WcState, byte: BitVec(8)) → WcState {
+    match bit_space(byte) {
+        True => WcState(s.lines, s.words, Succ(s.bytes), False),
+        False => match s.inside {
+            True => WcState(s.lines, s.words, Succ(s.bytes), True),
+            False => WcState(s.lines, Succ(s.words), Succ(s.bytes), True),
+        },
+    }
+}
+fn bit_wc_filter() → WcState → BitVec(8) → Filtered<WcState> { counting(bit_wc_step) }
 fn if_upcase(b: BitVec(8)) → BitVec(8) { if ¬(b < 'a') ∧ b <= 'z' { b.sub(0x20) } else { b } }
 fn if_upcase_filter() → Stateless → BitVec(8) → Filtered<Stateless> { mapping(if_upcase) }
 "#;
@@ -316,6 +327,17 @@ theorem if_drop_letter_kept<M>(before: MachineState<M>, rax: read_gpr(Rax, befor
 #[test]
 fn decided_connective_counting_piece_certifies() {
     let (_, emission) = certify("if_wc", "decided::if_wc_filter", None);
+    assert!(emission.pieces.contains("split_all") || emission.text.contains("split_all"), "a connective's expansion is proved by cases");
+}
+
+// `wc` with its space test a helper whose body *is* the connective (a
+// decision's bit, as a specification's predicate is written): the helper is
+// the connective's branches, each giving its outcome, and the in-word flag a
+// field is tested as itself, so the expansion's case analysis splits it with
+// the source's.
+#[test]
+fn decided_bit_helper_counting_piece_certifies() {
+    let (_, emission) = certify("bit_wc", "decided::bit_wc_filter", None);
     assert!(emission.pieces.contains("split_all") || emission.text.contains("split_all"), "a connective's expansion is proved by cases");
 }
 

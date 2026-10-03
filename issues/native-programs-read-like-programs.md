@@ -3,7 +3,7 @@ title: A native program reads like a program: the author-ergonomics round
 status: open
 labels: [native,surface-syntax,stdlib,design]
 created: 2026-10-02
-updated: 2026-10-02
+updated: 2026-10-03
 ---
 
 Round anchor. A native program should read like a program in another
@@ -38,3 +38,5 @@ Out of scope:
 - 2026-10-02: S1+S2 landed: wc.hthr 320 → 115 lines, wc_l proof two theorems; executables match host tools. Suite 3156. Next S3 (byte vocabulary).
 - 2026-10-02: Filed literal-classes-need-importing (S3 papercut).
 - 2026-10-02: S3: library + literals (5c32d454) and Equal node (fd95e486) landed; frontend decided matches paused for design (native-frontend-decided-matches, WIP on branch s3-frontend-wip). Filed split-all-through-decisions, filter-default-spells-program-names, native-narrow-compare-fusion.
+- 2026-10-03: S4 landed: wc, wc_l, tr, tr_s, tr_d rewritten with decided byte tests (if b = '
+  '; predicates as decide_bit<…>()); wc 115 → 84 lines, tr_s/tr_d proofs are one per-byte split_all fact through quiet_computes; counts through fold_counts_*. split_all: eq_bit comparisons with Nat facts, comparison helpers split at the comparison, operands read through constructor encodings; omega splits Nat ≠; frontend compiles a Bool helper that is a connective as branches. S5 (record update) not taken.

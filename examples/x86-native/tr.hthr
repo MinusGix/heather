@@ -7,25 +7,22 @@
 //     heather build-x86 examples/x86-native/tr.hthr tr_program -o tr
 import filter_program;
 import stream_filter;
+import algebra;
 import bitvec;
 import bool;
+import byte;
+import char;
 import list;
 import logic;
-
-// A lowercase ASCII letter: 'a' (0x61) to 'z' (0x7a).
-fn lower_byte(b: BitVec(8)) → Bool {
-    match b.unsigned_lt_bit(BitVec::ofNat(0x61)) { True => False, False => b.unsigned_lt_bit(BitVec::ofNat(0x7b)) }
-}
 
 // A lowercase letter's uppercase one is 0x20 below it; every other byte is
 // itself.
 fn upcase(b: BitVec(8)) → BitVec(8) {
-    match lower_byte(b) { True => b.sub(BitVec::ofNat(0x20)), False => b }
+    if 'a' <= b ∧ b <= 'z' { b.sub(0x20) } else { b }
 }
 
-theorem upcase_letter(): upcase(BitVec::ofNat(0x71)) = BitVec::ofNat(0x51) { refl }
-theorem upcase_edges(): (upcase(BitVec::ofNat(0x60)) = BitVec::ofNat(0x60)) ∧ ((upcase(BitVec::ofNat(0x61)) = BitVec::ofNat(0x41)) ∧
-    ((upcase(BitVec::ofNat(0x7a)) = BitVec::ofNat(0x5a)) ∧ (upcase(BitVec::ofNat(0x7b)) = BitVec::ofNat(0x7b)))) {
+theorem upcase_letter(): upcase('q') = 'Q' { refl }
+theorem upcase_edges(): (upcase('`') = '`') ∧ ((upcase('a') = 'A') ∧ ((upcase('z') = 'Z') ∧ (upcase('{') = '{'))) {
     ⟨refl, ⟨refl, ⟨refl, refl⟩⟩⟩
 }
 

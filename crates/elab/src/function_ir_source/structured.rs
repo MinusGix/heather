@@ -364,6 +364,8 @@ enum Test<'t> {
 #[derive(Clone)]
 enum Arm<'t> {
     Body(&'t Term),
+    /// A Bool result that is a connective's outcome (`space(b) = x || y`).
+    Outcome(bool),
     Then(&'t Test<'t>, Box<Arm<'t>>, Box<Arm<'t>>),
 }
 
@@ -776,6 +778,11 @@ impl Builder<'_> {
     fn arm(&mut self, arm: &Arm<'_>, depth: u32) -> Result<StructuredRegion, SourceError> {
         match arm {
             Arm::Body(term) => self.region(term, depth + 1),
+            Arm::Outcome(value) => {
+                let mut dag = Dag::default();
+                self.constant(&mut dag, 1, u64::from(*value), Some(self.output.id))?;
+                Ok(StructuredRegion::Dataflow(Region { inputs: self.inputs.clone(), nodes: dag.nodes, outputs: self.outputs() }))
+            }
             Arm::Then(test, yes, no) => self.branch(test, yes, no, depth),
         }
     }
@@ -804,6 +811,17 @@ impl Builder<'_> {
             if !matches!(test, Test::Value(_)) { self.decided = true; }
             self.branch(&test, &Arm::Body(case_r), &Arm::Body(case_l), depth)
         } else {
+            // A Bool result that is a connective (a helper `space(b) = x ||
+            // y`) is the connective's branches, each giving its outcome: an
+            // operand is computed only where the connective needs it, as at
+            // a match.
+            if self.result == StructuredSourceType::Boolean && self.emit.is_none() && self.record_result.is_none() && self.exit.is_none() {
+                let test = self.boolean_test(term);
+                if !matches!(test, Test::Value(_)) {
+                    self.decided = true;
+                    return self.branch(&test, &Arm::Outcome(true), &Arm::Outcome(false), depth);
+                }
+            }
             let mut dag = Dag::default();
             if let Some((flag, byte)) = self.emit {
                 self.filtered_leaf(term, depth, &mut dag, flag, byte)?;
@@ -868,6 +886,11 @@ pub fn generate_structured_source_expansion(prefix: &str, reflected: &ReflectedS
     let mut expansion = Expansion { prefix, module: &mut module, next_name: 0, parameters: &parameters, arguments: &arguments, result: reflected.result, choice: reflected.choice.as_ref(),
         record: reflected.record.as_ref(), filtered: reflected.filtered, naturals: natural_inputs(reflected), constants: BTreeMap::new(), sources: &reflected.sources, tests: BTreeMap::new(),
         inline: reflected.decided.then(BTreeMap::new) };
+    // A Bool parameter or field is tested as itself, as a produced one is
+    // (Expansion::tests).
+    for (id, ty) in reflected.parameters.iter().enumerate() {
+        if *ty == StructuredSourceType::Boolean { expansion.tests.insert(id as u64, reflected.spelling(id)); }
+    }
     let result = expansion.region(&reflected.region, initial)?;
     let name = format!("{prefix}_expression");
     let result_name = reflected.result_type_name();

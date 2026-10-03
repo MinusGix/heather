@@ -3,7 +3,7 @@ title: Filter's advances default spells program names its scope cannot see
 status: open
 labels: [native,tactics,ergonomics]
 created: 2026-10-02
-updated: 2026-10-02
+updated: 2026-10-03
 ---
 
 `Filter`'s `advances` default (`{ split_all; all_goals { omega } }`) is
@@ -23,3 +23,7 @@ Wanted: split_all's spellings resolve wherever the goal came from, for
 example spelled in the construction's scope or through absolute names, or a
 default runs with the construction's module visible. The error should not
 print raw kernel terms.
+
+## Log
+
+- 2026-10-03: 2026-10-03 (S4): both cases reported here are fixed. A helper that is a comparison (`newline(b) = b.eq_bit(10)`, a decide_bit predicate) is now split at the comparison, which any scope spells, so wc's and wc_l's bundles take the default `advances`. What remains is a split on a program-defined neutral that is not a comparison (a Bool helper the search cannot see through), still spelled qualified by the program's module; and the error still prints a raw kernel term.

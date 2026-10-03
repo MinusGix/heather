@@ -85,6 +85,29 @@ theorem mapping_output(f: BitVec(8) → BitVec(8), bytes: List<BitVec(8)>):
     trans(List::append_nil(filter_emitted(mapping(f), bytes, Stateless())), mapping_emitted(f, bytes, Stateless()))
 }
 
+// A step that emits, one byte at a time, what `out` says from its state emits
+// all of `out` (`tr -d`, `tr -s`): the program proves the one-byte equation,
+// usually by `split_all`.
+theorem emits_from<C>(step: C → BitVec(8) → Filtered<C>, out: C → List<BitVec(8)> → List<BitVec(8)>,
+    nil: (s: C) → out(s, Nil) = Nil,
+    cons: (s: C) → (b: BitVec(8)) → (rest: List<BitVec(8)>) → out(s, Cons(b, rest)) = emitted_byte(step(s, b).emit) ++ out(step(s, b).next, rest),
+    bytes: List<BitVec(8)>): (s: C) → out(s, bytes) = filter_emitted(step, bytes, s) {
+    match bytes {
+        Nil => λ s => nil(s),
+        Cons(b, rest) => λ s => trans(cons(s, b, rest), cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ tail => emitted_byte(step(s, b).emit) ++ tail,
+            emits_from(step, out, nil, cons, rest, step(s, b).next))),
+    }
+}
+
+// A program that prints nothing after end of file prints what `out` says
+// from `init`.
+theorem quiet_computes<C>(step: C → BitVec(8) → Filtered<C>, init: C, counts: List<C → Nat>, out: C → List<BitVec(8)> → List<BitVec(8)>,
+    nil: (s: C) → out(s, Nil) = Nil,
+    cons: (s: C) → (b: BitVec(8)) → (rest: List<BitVec(8)>) → out(s, Cons(b, rest)) = emitted_byte(step(s, b).emit) ++ out(step(s, b).next, rest)):
+    (bytes: List<BitVec(8)>) → out(init, bytes) = filter_output(step, init, counts, Quiet, bytes) {
+    λ bytes => trans(emits_from(step, out, nil, cons, bytes, init), sym(List::append_nil(filter_emitted(step, bytes, init))))
+}
+
 // ---------------------------------------------------------------------------
 // What a counting step's fold computes, from what one byte does to a count
 // (docs/native-programs-read-like-programs-design.md §3, S1). A program proves
@@ -180,14 +203,36 @@ theorem counts_runs<C>(g: C → BitVec(8) → C, count: C → Nat, inside: C →
     }
 }
 
-// From a state outside a run, the count is the runs.
-theorem counts_runs_from<C>(g: C → BitVec(8) → C, count: C → Nat, inside: C → Bool, sep: BitVec(8) → Bool,
+// What an author calls: from a state whose count is zero (and, for runs,
+// outside a run), the fold's count is what the count means, in the shape
+// `line_computes` and `fields_computes` take.
+theorem fold_counts_filtered<C>(g: C → BitVec(8) → C, count: C → Nat, p: BitVec(8) → Bool,
+    grows: (s: C) → (b: BitVec(8)) → count(g(s, b)) = count(s) + Nat::of_bit(p(b)), init: C, zero: count(init) = 0):
+    (bytes: List<BitVec(8)>) → bytes.filter(p).len() = count(fold_bytes(g, bytes, init)) {
+    λ bytes => {
+        let counted = counts_filtered(g, count, p, grows, bytes, init);
+        omega
+    }
+}
+
+theorem fold_counts_len<C>(g: C → BitVec(8) → C, count: C → Nat,
+    grows: (s: C) → (b: BitVec(8)) → count(g(s, b)) = Succ(count(s)), init: C, zero: count(init) = 0):
+    (bytes: List<BitVec(8)>) → bytes.len() = count(fold_bytes(g, bytes, init)) {
+    λ bytes => {
+        let counted = counts_len(g, count, grows, bytes, init);
+        omega
+    }
+}
+
+theorem fold_counts_runs<C>(g: C → BitVec(8) → C, count: C → Nat, inside: C → Bool, sep: BitVec(8) → Bool,
     grows: (s: C) → (b: BitVec(8)) → count(g(s, b)) = count(s) + starts_run(sep(b), inside(s)),
-    flag: (s: C) → (b: BitVec(8)) → inside(g(s, b)) = !sep(b), init: C, outside: inside(init) = False, bytes: List<BitVec(8)>):
-    count(fold_bytes(g, bytes, init)) = count(init) + runs_of(bytes.split_by(sep)) {
-    let all = counts_runs(g, count, inside, sep, grows, flag, bytes, init);
-    let none: (inside_runs(inside(init), bytes.split_by(sep)) = 0) = j(sym(outside), λ i _ => inside_runs(i, bytes.split_by(sep)) = 0, refl);
-    omega
+    flag: (s: C) → (b: BitVec(8)) → inside(g(s, b)) = !sep(b), init: C, zero: count(init) = 0, outside: inside(init) = False):
+    (bytes: List<BitVec(8)>) → runs_of(bytes.split_by(sep)) = count(fold_bytes(g, bytes, init)) {
+    λ bytes => {
+        let all = counts_runs(g, count, inside, sep, grows, flag, bytes, init);
+        let none: (inside_runs(inside(init), bytes.split_by(sep)) = 0) = j(sym(outside), λ i _ => inside_runs(i, bytes.split_by(sep)) = 0, refl);
+        omega
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -30,13 +30,19 @@ Then, at each leaf, the goal is taken apart until nothing finite is left
 - **a stuck match** is split. A bounded search looks through application
   arguments, projections and transparent definition heads, and the arguments
   of a call a definition unfolds to, without entering unselected match arms.
-  It prefers, in order: a `BitVec::unsigned_lt_bit` comparison, the
-  scrutinee itself or a helper the scrutinee unfolds to (`low(x)`); something
-  deeper inside the scrutinee; and the scrutinee itself, when it is a neutral
-  of a finite type that the source can spell (`s.inside`). Each branch gets
-  an equation stating the scrutinee's constructor. For a comparison, with
-  `bitvec_omega` imported, it also supplies the corresponding Nat order as an
-  ordinary `have`, usable by both `omega` and `bv_omega`. A closed literal
+  It prefers, in order: a comparison (`BitVec::unsigned_lt_bit` or
+  `BitVec::eq_bit`), the scrutinee itself or a helper the scrutinee unfolds
+  to (`low(x)`, `newline(b) = decide_bit<b = '\n'>()`); something deeper
+  inside the scrutinee; and the scrutinee itself, when it is a neutral of a
+  finite type that the source can spell (`s.inside`). A helper that is a
+  comparison is split at the comparison, not at its call: the split then
+  spells only names any scope can see (a bundle's default runs in the
+  library's), and the search never unfolds past it into the comparison's
+  bit-level fold. Each branch gets an equation stating the scrutinee's
+  constructor. For a comparison, with `bitvec_omega` imported, it also
+  supplies the corresponding Nat fact as an ordinary `have`, usable by both
+  `omega` and `bv_omega`: an order for `unsigned_lt_bit`, and for `eq_bit` an
+  equation or a `≠`, which `omega` splits by trichotomy. A closed literal
   operand is stated at its value (`14 <= byte.toNat()`, not
   `toNat(ofNat(14))`), so plain `omega` can compare the constants of two
   splits and close a case they rule out.
@@ -44,7 +50,11 @@ Then, at each leaf, the goal is taken apart until nothing finite is left
 The split specializes every occurrence of what it splits. That includes an
 occurrence the goal reaches only through a definition, such as
 `wc_next(…, s)` beside a step that matched on `s.inside`; otherwise the two
-would be split independently. Between steps the goal is simplified alike
+would be split independently. A recursive definition at a constructor
+(`Cons(b, rest).filter(kept)`) reaches its element through the
+constructor's encoding, a projection out of a pair; a comparison's projected
+operands are read off the pair (`b`), so the occurrence there and the one
+the other side spells are one split. Between steps the goal is simplified alike
 everywhere: computed matches, projections of pairs and applied function
 literals are reduced, inside constructors too. So is a call of a definition
 whose match the split decided: `Bool::and(False, b)` once a comparison is

@@ -193,6 +193,16 @@ theorem unsigned_of_false(n: Nat, a, b: BitVec(n), h: b.toNat() <= a.toNat()): a
     })(refl)
 }
 
+// The equality bit, read the same way: what `split_all` states at a split of
+// `a.eq_bit(b)`.
+theorem equal_true(n: Nat, a, b: BitVec(n), h: a.eq_bit(b) = bool::True): a.toNat() = b.toNat() {
+    @cong(λ (w: BitVec(n)) => w.toNat(), a, b, BitVec::eq_of_eq_bit(n, a, b, h))
+}
+
+theorem equal_false(n: Nat, a, b: BitVec(n), h: a.eq_bit(b) = bool::False): a.toNat() ≠ b.toNat() {
+    λ same => BitVec::ne_of_eq_bit(n, a, b, h)(word_eq(n, a, b, same))
+}
+
 // A value equation already supplies the range needed for this word equality.
 theorem word_eq_value(n: Nat, a: BitVec(n), c: Nat, h: a.toNat() = c): a = BitVec::ofNat(c) {
     trans(sym(BitVec::ofNat_toNat(n, a)), @cong(λ (v: Nat) => BitVec::ofNat(v, n := n), a.toNat(), c, h))

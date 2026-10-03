@@ -1,9 +1,9 @@
 ---
 title: Byte comparisons and literals a native step can write and the frontend lowers
-status: open
+status: closed
 labels: [native,frontend,surface-syntax,function-ir,design]
 created: 2026-10-01
-updated: 2026-10-02
+updated: 2026-10-03
 ---
 
 A native program's step still spells byte tests as
@@ -44,3 +44,5 @@ projection would not match.
 - 2026-10-02: V1/V3/V4 (2026-10-02, design §4.1): && expands eagerly and the filter step declines it (RegisterPressure, 2 live temporaries) — connectives must lower as short-circuit branches; ZF of CMP = equality proved at any width (~50 lines, no borrow law); literal instances elaborate but arrive unreduced — reduce closed instance projections in elab_overloaded_num_check.
 - 2026-10-02: 2026-10-02 part 1 landed: eq_bit + Decide<a = b> at BitVec, <,<= designations, Numeral<BitVec(n)>, CharLiteral<BitVec(8)> (lib/std/bitvec/byte.hthr), literal embeddings reduced, literal arguments deferred. if b = '\n' / ∨ / ∧ / < elaborate and compute. Next: Equal IR node + SETE, frontend decide/connectives.
 - 2026-10-02: 2026-10-02 part 2 landed (fd95e486): Equal node + SETE + zf law; eq_bit is a frontend producer. Frontend reading of decide/connectives paused: native-frontend-decided-matches.
+- 2026-10-03: 2026-10-03: S4 landed: every example step spells its byte tests as decided propositions (if b = '
+  ', 'a' <= b ∧ b <= 'z'), and spec predicates as decide_bit<…>(). The frontend also compiles a Bool helper whose body is a connective as branches. Closing: the vocabulary exists, lowers, and the programs read with it.
