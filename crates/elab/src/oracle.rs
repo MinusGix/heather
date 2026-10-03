@@ -38,9 +38,7 @@ impl SemanticOracle {
         if dynamic.is_empty() {
             return Self::in_world(base.clone(), fuel);
         }
-        let mut bindings = base.bindings.to_vec();
-        bindings.extend(dynamic.iter().cloned());
-        Self::in_world(GlobalCtx::new(bindings), fuel)
+        Self::in_world(base.extended(dynamic.iter().cloned()), fuel)
     }
 
     pub(crate) fn world(&self) -> &GlobalCtx {

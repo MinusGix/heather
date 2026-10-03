@@ -1629,6 +1629,22 @@ impl GlobalBindings {
         self.iter().cloned().collect()
     }
 
+    /// The first `n` bindings, sharing every full chunk: a prefix copies at
+    /// most one chunk's worth of bindings, not the prefix itself.
+    fn prefix(&self, n: usize) -> Self {
+        if n >= self.len() {
+            return self.clone();
+        }
+        let full = n / GLOBAL_CHUNK;
+        let sealed_len = full * GLOBAL_CHUNK;
+        Self {
+            sealed: Rc::new(self.sealed[..full].to_vec()),
+            sealed_len,
+            tail: Rc::new((sealed_len..n).map(|i| self[i].clone()).collect()),
+            identity: Rc::new(()),
+        }
+    }
+
     pub(crate) fn identity(&self) -> Rc<()> {
         Rc::clone(&self.identity)
     }
@@ -1675,6 +1691,21 @@ impl GlobalCtx {
         for binding in bs {
             self.bindings.push(binding);
         }
+    }
+
+    /// Ψ followed by `bs`, sharing Ψ's chunks. Building the extended world
+    /// from `to_vec()` copies every binding of Ψ, which per goal query was
+    /// most of a split's elaboration once Ψ held a generated certificate
+    /// (issues/goal-world-copies-psi.md).
+    pub fn extended(&self, bs: impl IntoIterator<Item = GlobalBinding>) -> GlobalCtx {
+        let mut world = self.clone();
+        world.extend(bs);
+        world
+    }
+
+    /// The first `n` bindings of Ψ, sharing its full chunks.
+    pub fn prefix(&self, n: usize) -> GlobalCtx {
+        GlobalCtx { bindings: self.bindings.prefix(n) }
     }
 
     /// Share the bounded append tail for an immutable semantic image.
@@ -2010,5 +2041,25 @@ mod global_ctx_tests {
         assert_eq!(suffix.bindings.tail.len(), tail_len + 1);
         assert!(suffix.bindings.iter().all(|b| *b == GlobalBinding::Ctx));
         assert_eq!(suffix, GlobalCtx::new(vec![GlobalBinding::Ctx; 176]));
+    }
+
+    // A prefix and an extension are the worlds `new` builds from the same
+    // bindings, at and around chunk boundaries, and share the full chunks.
+    #[test]
+    fn prefix_and_extension_agree_with_rebuilding() {
+        let binding = |i: usize| GlobalBinding::opaque_tm(LocalCtx::nil(), Layer::Code, Rc::new(Type::Nat), Level::constant(i as u64));
+        let all: Vec<GlobalBinding> = (0..200).map(binding).collect();
+        let psi = GlobalCtx::new(all[..150].to_vec());
+        for n in [0, 1, 63, 64, 65, 128, 149, 150, 151] {
+            let prefix = psi.prefix(n);
+            assert_eq!(prefix, GlobalCtx::new(all[..n.min(150)].to_vec()), "prefix {n}");
+            assert!(prefix.bindings.tail.len() < GLOBAL_CHUNK || n >= 150, "prefix {n}");
+            assert!(prefix.bindings.sealed.iter().zip(psi.bindings.sealed.iter()).all(|(a, b)| Rc::ptr_eq(&a.bindings, &b.bindings)));
+            for extra in [0, 1, 50] {
+                let extended = prefix.extended(all[n.min(150)..n.min(150) + extra].iter().cloned());
+                assert_eq!(extended, GlobalCtx::new(all[..n.min(150) + extra].to_vec()), "prefix {n} + {extra}");
+            }
+        }
+        assert_eq!(psi.bindings.len(), 150);
     }
 }
