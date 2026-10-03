@@ -3,7 +3,7 @@ title: The x86 call certificate costs a per-declaration constant, half of it the
 status: open
 labels: [x86,performance,elaboration,compiler]
 created: 2026-09-23
-updated: 2026-09-23
+updated: 2026-10-03
 ---
 
 The generated x86 call certificate costs a **per-declaration constant**, not a
@@ -55,3 +55,19 @@ is a deliberate artifact.
 
 Related: [[function-ir-x86-proof-scaling]] (the earlier per-family rounds on
 this workload), [[frontend-large-proof-composition-cost]].
+
+## Log
+
+- 2026-10-03: **Re-attributed on the filter stack (2026-10-03, cold `build-x86` of `examples/x86-native/wc.hthr`, width one, `scripts/perf ab` raw tables).** The shape this issue describes moved:
+
+  | share of item time | before [[goal-world-copies-psi]] | after |
+  |---|---|---|
+  | the program's own proofs (`wc` module, 27 decls) | 39% | 12% |
+  | the `Fields` formatter's two certificates (15.7k decls) | 32% | 47% |
+  | bundled library (3.4k decls) | 23% | 32% |
+  | the step piece (2.5k decls) | 5% | 8% |
+  | the process certificate (333 decls) | 1% | 1% |
+
+  - The per-byte fetch families this issue names do not exist on the read profile: `read_filter.rs` states residency once (`x86_64_fetched_code`, `CodeResident`), and the whole process certificate is 333 declarations, ~1% of a build. They remain in `native/calls.rs` and `native/elf.rs` (the call and fixed-input profiles, `reused_callee`), which no program on the filter line uses; lever 1 as written is now a lever for those profiles only.
+  - The largest single line was not the certificate at all: the program's four `split_all; all_goals { omega }` proofs plus `Filter`'s default `advances` field, 39%, almost all frontend self time, and ~4x what the same declarations cost under `heather check` with identical counters. Cause and fix: [[goal-world-copies-psi]] (−29% on the whole build).
+  - What is left with the per-declaration shape is the formatter: 15.7k generated declarations at a few ms each, 43% frontend self time (`decl_type`/`decl_body`) and 31% gate, no family above ~12% of it (`*_preserves`, `*_carry`, `*_instructions_#`, `*_correct`, `*_decodes`). Its certificates are checked before any program module and keyed per profile, so an image store pays them once for every `Fields` program; a cold store (or a compiler change in the suite) pays them on the first. That is where lever 1 ("fewer, larger generated declarations") now applies — to `function_ir_x86_lower/structured_cert.rs`'s per-node families, not to fetch facts.
