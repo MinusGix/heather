@@ -4,7 +4,7 @@ status: open
 labels: [native, cli, design]
 code: crates/cli/src/native/read_fields.rs @ 357c0afa
 created: 2026-09-29
-updated: 2026-09-29
+updated: 2026-10-03
 ---
 
 `build-x86 --read-loop --fields` accepts a record of three or four fields
@@ -18,3 +18,7 @@ flags. The general answer is the formatting API filed as
 [[native-proven-formatting-api]]; until then, a tail generic in the number of
 fields (a list of (register, separator) pairs) and a state width taken from
 the record would cover the `wc` flag combinations.
+
+## Log
+
+- 2026-10-03: Superseded by [[native-wc-as-a-command]]'s design (docs/native-wc-command-design.md §6.2, §11): its row loop prints any subset of columns, and C4 deletes the `Fields` finish. Close this when C4 lands.
