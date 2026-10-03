@@ -89,13 +89,11 @@ fn run_dag(dag: &LoweredDag, regs: &mut BTreeMap<Gpr, u64>) {
             Instruction::XorRR { destination, source } => (destination, read(destination) ^ read(source)),
             Instruction::CmpRR { left, right } => { below = read(left) < read(right); equal = read(left) == read(right); continue; }
             Instruction::SetBelow { destination } => {
-                use heather_elab::function_ir_x86_lower::LowByteGpr;
-                let reg = match destination { LowByteGpr::Al => Gpr::Rax, LowByteGpr::Cl => Gpr::Rcx, LowByteGpr::Dl => Gpr::Rdx, LowByteGpr::Bl => Gpr::Rbx };
+                let reg = destination.gpr();
                 (reg, (read(reg) & !255) | u64::from(below))
             }
             Instruction::SetEqual { destination } => {
-                use heather_elab::function_ir_x86_lower::LowByteGpr;
-                let reg = match destination { LowByteGpr::Al => Gpr::Rax, LowByteGpr::Cl => Gpr::Rcx, LowByteGpr::Dl => Gpr::Rdx, LowByteGpr::Bl => Gpr::Rbx };
+                let reg = destination.gpr();
                 (reg, (read(reg) & !255) | u64::from(equal))
             }
             other => panic!("unexpected instruction {other:?}"),

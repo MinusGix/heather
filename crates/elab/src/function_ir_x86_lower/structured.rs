@@ -187,10 +187,11 @@ fn select_here(
             let mut free = temporaries.iter().copied().filter(|r| !destinations.contains(r)).collect::<Vec<_>>();
             for port in prefix.outputs() {
                 if prefix_outputs.contains_key(&port.id) { continue; }
-                // A comparison bit needs a byte register; a wide value leaves
-                // those to the comparisons downstream when it can.
-                let index = if port.width == 1 { free.iter().position(|r| LowByteGpr::from_gpr(*r).is_some()) }
-                    else { free.iter().position(|r| LowByteGpr::from_gpr(*r).is_none()).or_else(|| (!free.is_empty()).then_some(0)) }
+                // A comparison bit needs a byte register, best one with no
+                // REX; a wide value leaves those to the comparisons downstream
+                // when it can.
+                let index = if port.width == 1 { free.iter().position(|r| LowByteGpr::legacy(*r)).or_else(|| free.iter().position(|r| LowByteGpr::from_gpr(*r).is_some())) }
+                    else { free.iter().position(|r| !LowByteGpr::legacy(*r)).or_else(|| (!free.is_empty()).then_some(0)) }
                     .ok_or(LoweringError::RegisterPressure { node_index: 0, live_temporaries: inputs.len() + prefix_outputs.len() })?;
                 prefix_outputs.insert(port.id, free.remove(index));
             }
@@ -250,7 +251,7 @@ fn select_here(
             let fused = fusable(prefix, continuation)?.unwrap();
             let StructuredRegion::Conditional { arguments, when_true, when_false, .. } = &**continuation else { unreachable!("fusable checked") };
             let candidates = || temporaries.iter().copied().filter(|r| !destinations.contains(r));
-            let operand_register = candidates().find(|r| LowByteGpr::from_gpr(*r).is_none()).or_else(|| candidates().next())
+            let operand_register = candidates().find(|r| !LowByteGpr::legacy(*r)).or_else(|| candidates().next())
                 .ok_or(LoweringError::RegisterPressure { node_index: 0, live_temporaries: inputs.len() })?;
             let operands = Region { inputs: prefix.inputs.clone(), nodes: cone(prefix, fused.computed.id)?, outputs: vec![fused.computed] };
             let live_after = fused_inputs(&fused, arguments).iter().filter_map(|port| inputs.get(&port.id).copied()).collect::<BTreeSet<_>>();
@@ -279,10 +280,11 @@ fn select_here(
                 return select_here(&StructuredRegion::Compose { prefix: Box::new(StructuredRegion::Dataflow(prefix.clone())), continuation: continuation.clone() }, inputs, temporaries, consumable, requested, path);
             }
             // Reserve the final result register for the continuation. A low
-            // byte register is preferred for a materialized comparison bit.
+            // byte register is preferred for a materialized comparison bit,
+            // a legacy one (no REX) first.
             let candidates = || temporaries.iter().copied().filter(|r| !destinations.contains(r));
-            let prefix_register = if prefix.outputs[0].width == 1 { candidates().find(|r| LowByteGpr::from_gpr(*r).is_some()) }
-                else { candidates().find(|r| LowByteGpr::from_gpr(*r).is_none()).or_else(|| candidates().next()) }
+            let prefix_register = if prefix.outputs[0].width == 1 { candidates().find(|r| LowByteGpr::legacy(*r)).or_else(|| candidates().find(|r| LowByteGpr::from_gpr(*r).is_some())) }
+                else { candidates().find(|r| !LowByteGpr::legacy(*r)).or_else(|| candidates().next()) }
                 .ok_or(LoweringError::RegisterPressure { node_index: 0, live_temporaries: inputs.len() })?;
             let live_after = continuation.inputs().iter().filter_map(|port| inputs.get(&port.id).copied()).collect::<BTreeSet<_>>();
             let prefix_consumable = consumable.difference(&live_after).copied().collect();

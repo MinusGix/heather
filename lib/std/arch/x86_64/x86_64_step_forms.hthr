@@ -169,6 +169,23 @@ fn decode_load_form(rex: BitVec(8), rest: List<BitVec(8)>) → Option<StepForm> 
     }
 }
 
+// REX 0F 92/9C/94 /0: SETcc into a byte register that needs the prefix.
+fn decode_rex_setcc_form(rex: BitVec(8), rest: List<BitVec(8)>) → Option<StepForm> {
+    match rest {
+        Nil => None,
+        Cons(opcode, t1) => match t1 {
+            Nil => None,
+            Cons(modrm, _) => match opcode.eq_dec(BitVec::ofNat(0x92)) {
+                Inl(_) => emitted_form(SetBelow(low_byte_from_rex_modrm(rex, modrm))),
+                Inr(_) => match opcode.eq_dec(BitVec::ofNat(0x9c)) {
+                    Inl(_) => emitted_form(SetLess(low_byte_from_rex_modrm(rex, modrm))),
+                    Inr(_) => emitted_form(SetEqual(low_byte_from_rex_modrm(rex, modrm))),
+                },
+            },
+        },
+    }
+}
+
 fn decode_rex_form(rex, opcode: BitVec(8), rest: List<BitVec(8)>) → Option<StepForm> {
     match byte_bit7(opcode) {
         // B8+r, 88, 89 or 85.
@@ -176,8 +193,12 @@ fn decode_rex_form(rex, opcode: BitVec(8), rest: List<BitVec(8)>) → Option<Ste
             True => decode_mov_ri_form(rex, opcode, rest),
             False => decode_modrm_form(rex, opcode, rest),
         },
+        // 0F: the byte load under REX.W, SETcc under a REX without it.
         False => match opcode.eq_dec(BitVec::ofNat(0x0f)) {
-            Inl(_) => decode_load_form(rex, rest),
+            Inl(_) => match byte_bit3(rex) {
+                True => decode_load_form(rex, rest),
+                False => decode_rex_setcc_form(rex, rest),
+            },
             Inr(_) => decode_modrm_form(rex, opcode, rest),
         },
     }
@@ -288,8 +309,28 @@ theorem rr_form_back(make: Gpr → Gpr → Instruction, a, b: Gpr):
         cong_fn(λ (y: Gpr) => emitted_form(make(a, y)), reg_of_fields(a, b, True, True)))
 }
 
-theorem low_byte_back(destination: LowByteGpr): low_byte_from_modrm(setcc_modrm(destination)) = destination {
-    match destination { Al => refl, Cl => refl, Dl => refl, Bl => refl }
+// A SETcc reads back from its bytes, with or without REX, register by
+// register.
+theorem set_below_form_complete(destination: LowByteGpr, rest: List<BitVec(8)>):
+    decode_step_form(setcc_bytes(0x92, destination) ++ rest) = emitted_form(SetBelow(destination)) {
+    match destination {
+        Al => refl, Cl => refl, Dl => refl, Bl => refl, Bpl => refl, Sil => refl, Dil => refl,
+        R8b => refl, R9b => refl, R10b => refl, R11b => refl, R12b => refl, R13b => refl, R14b => refl, R15b => refl,
+    }
+}
+theorem set_less_form_complete(destination: LowByteGpr, rest: List<BitVec(8)>):
+    decode_step_form(setcc_bytes(0x9c, destination) ++ rest) = emitted_form(SetLess(destination)) {
+    match destination {
+        Al => refl, Cl => refl, Dl => refl, Bl => refl, Bpl => refl, Sil => refl, Dil => refl,
+        R8b => refl, R9b => refl, R10b => refl, R11b => refl, R12b => refl, R13b => refl, R14b => refl, R15b => refl,
+    }
+}
+theorem set_equal_form_complete(destination: LowByteGpr, rest: List<BitVec(8)>):
+    decode_step_form(setcc_bytes(0x94, destination) ++ rest) = emitted_form(SetEqual(destination)) {
+    match destination {
+        Al => refl, Cl => refl, Dl => refl, Bl => refl, Bpl => refl, Sil => refl, Dil => refl,
+        R8b => refl, R9b => refl, R10b => refl, R11b => refl, R12b => refl, R13b => refl, R14b => refl, R15b => refl,
+    }
 }
 
 theorem near_form_back(make: BitVec(32) → NearControl, displacement: BitVec(32)):
@@ -314,9 +355,9 @@ theorem ordinary_form_complete(instruction: Instruction, rest: List<BitVec(8)>):
         OrRR(a, b) => rr_form_back(λ x y => OrRR(x, y), a, b),
         XorRR(a, b) => rr_form_back(λ x y => XorRR(x, y), a, b),
         CmpRR(a, b) => rr_form_back(λ x y => CmpRR(x, y), a, b),
-        SetBelow(destination) => cong_fn(λ (d: LowByteGpr) => emitted_form(SetBelow(d)), low_byte_back(destination)),
-        SetLess(destination) => cong_fn(λ (d: LowByteGpr) => emitted_form(SetLess(d)), low_byte_back(destination)),
-        SetEqual(destination) => cong_fn(λ (d: LowByteGpr) => emitted_form(SetEqual(d)), low_byte_back(destination)),
+        SetBelow(destination) => set_below_form_complete(destination, rest),
+        SetLess(destination) => set_less_form_complete(destination, rest),
+        SetEqual(destination) => set_equal_form_complete(destination, rest),
         TestRR(a, b) => rr_form_back(λ x y => TestRR(x, y), a, b),
         AddRI8(destination, immediate) =>
             cong_fn(λ (d: Gpr) => emitted_form(AddRI8(d, immediate)), rm_of_fields(destination, Rax, True, True)),

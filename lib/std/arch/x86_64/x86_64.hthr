@@ -95,16 +95,36 @@ record MachineState<M> {
     memory: M,
 }
 
-// The first SETcc slice deliberately names only the four legacy low-byte
-// registers whose no-REX encodings cannot denote AH/CH/DH/BH by accident.
-inductive LowByteGpr { Al, Cl, Dl, Bl }
+// The low byte registers a SETcc writes. AL, CL, DL and BL are the legacy
+// encodings, with no REX prefix. BPL, SIL and DIL take an empty REX (40),
+// without which their codes would name CH, DH and BH; R8B–R15B take REX.B
+// (41). SPL is never a destination.
+inductive LowByteGpr { Al, Cl, Dl, Bl, Bpl, Sil, Dil, R8b, R9b, R10b, R11b, R12b, R13b, R14b, R15b }
 
 fn low_byte_gpr(register: LowByteGpr) → Gpr {
-    match register { Al => Rax, Cl => Rcx, Dl => Rdx, Bl => Rbx }
+    match register {
+        Al => Rax, Cl => Rcx, Dl => Rdx, Bl => Rbx, Bpl => Rbp, Sil => Rsi, Dil => Rdi,
+        R8b => R8, R9b => R9, R10b => R10, R11b => R11, R12b => R12, R13b => R13, R14b => R14, R15b => R15,
+    }
 }
 
+// ModRM.r/m's three bits.
 fn low_byte_code(register: LowByteGpr) → Nat {
-    match register { Al => 0, Cl => 1, Dl => 2, Bl => 3 }
+    match register {
+        Al => 0, Cl => 1, Dl => 2, Bl => 3, Bpl => 5, Sil => 6, Dil => 7,
+        R8b => 0, R9b => 1, R10b => 2, R11b => 3, R12b => 4, R13b => 5, R14b => 6, R15b => 7,
+    }
+}
+
+// The REX prefix a byte register needs, if any.
+fn low_byte_rex(register: LowByteGpr) → Option<BitVec(8)> {
+    match register {
+        Al => None, Cl => None, Dl => None, Bl => None,
+        Bpl => Some(BitVec::ofNat(0x40)), Sil => Some(BitVec::ofNat(0x40)), Dil => Some(BitVec::ofNat(0x40)),
+        R8b => Some(BitVec::ofNat(0x41)), R9b => Some(BitVec::ofNat(0x41)), R10b => Some(BitVec::ofNat(0x41)),
+        R11b => Some(BitVec::ofNat(0x41)), R12b => Some(BitVec::ofNat(0x41)), R13b => Some(BitVec::ofNat(0x41)),
+        R14b => Some(BitVec::ofNat(0x41)), R15b => Some(BitVec::ofNat(0x41)),
+    }
 }
 
 inductive Instruction {
@@ -447,8 +467,14 @@ fn setcc_modrm(destination: LowByteGpr) → BitVec(8) {
 }
 
 fn setcc_bytes(opcode: Nat, destination: LowByteGpr) → List<BitVec(8)> {
-    [BitVec::ofNat(15), BitVec::ofNat(opcode),
-        setcc_modrm(destination)]
+    match low_byte_rex(destination) {
+        None => [BitVec::ofNat(15), BitVec::ofNat(opcode), setcc_modrm(destination)],
+        Some(rex) => [rex, BitVec::ofNat(15), BitVec::ofNat(opcode), setcc_modrm(destination)],
+    }
+}
+
+fn setcc_length(destination: LowByteGpr) → Nat {
+    match low_byte_rex(destination) { None => 3, Some(_) => 4 }
 }
 
 // A four-byte immediate, low byte first.
@@ -500,7 +526,8 @@ fn canonical_bytes(instruction: Instruction) → List<BitVec(8)> {
         // 39 /r: CMP r64 with r/m64.
         CmpRR(left, right) =>
             rr_bytes(0x39, left, right),
-        // 0F 92 /0, 0F 9C /0 and 0F 94 /0: materialize CF, SF xor OF and ZF.
+        // 0F 92 /0, 0F 9C /0 and 0F 94 /0: materialize CF, SF xor OF and ZF,
+        // after REX for the registers that need one.
         SetBelow(destination) => setcc_bytes(0x92, destination),
         SetLess(destination) => setcc_bytes(0x9c, destination),
         SetEqual(destination) => setcc_bytes(0x94, destination),
@@ -538,7 +565,21 @@ fn decoded_rr(instruction: Instruction) → DecodedInstruction {
 }
 
 fn canonical_length(instruction: Instruction) → Nat {
-    match instruction { MovRI(_, _) => 10, AddRI8(_, _) => 4, AddRI32(_, _) => 7, _ => 3 }
+    match instruction {
+        MovRI(_, _) => 10, AddRI8(_, _) => 4, AddRI32(_, _) => 7,
+        SetBelow(destination) => setcc_length(destination), SetLess(destination) => setcc_length(destination),
+        SetEqual(destination) => setcc_length(destination),
+        _ => 3,
+    }
+}
+
+fn setcc_length_valid(destination: LowByteGpr) → 1 <= setcc_length(destination) ∧ setcc_length(destination) <= 15 {
+    match destination {
+        Al => And(trivial, trivial), Cl => And(trivial, trivial), Dl => And(trivial, trivial), Bl => And(trivial, trivial),
+        Bpl => And(trivial, trivial), Sil => And(trivial, trivial), Dil => And(trivial, trivial),
+        R8b => And(trivial, trivial), R9b => And(trivial, trivial), R10b => And(trivial, trivial), R11b => And(trivial, trivial),
+        R12b => And(trivial, trivial), R13b => And(trivial, trivial), R14b => And(trivial, trivial), R15b => And(trivial, trivial),
+    }
 }
 
 fn canonical_length_valid(instruction: Instruction) →
@@ -553,9 +594,9 @@ fn canonical_length_valid(instruction: Instruction) →
         OrRR(_, _) => And(trivial, trivial),
         XorRR(_, _) => And(trivial, trivial),
         CmpRR(_, _) => And(trivial, trivial),
-        SetBelow(_) => And(trivial, trivial),
-        SetLess(_) => And(trivial, trivial),
-        SetEqual(_) => And(trivial, trivial),
+        SetBelow(destination) => setcc_length_valid(destination),
+        SetLess(destination) => setcc_length_valid(destination),
+        SetEqual(destination) => setcc_length_valid(destination),
         TestRR(_, _) => And(trivial, trivial),
         AddRI8(_, _) => And(trivial, trivial),
         AddRI32(_, _) => And(trivial, trivial),
@@ -1418,8 +1459,29 @@ fn low_byte_from_modrm(byte: BitVec(8)) → LowByteGpr {
     }
 }
 
-fn decode_setcc_opcode(opcode, modrm: BitVec(8)) → Option<Instruction> {
-    let destination = low_byte_from_modrm(modrm);
+// After REX: REX.B picks R8B–R15B; without it codes 5–7 are BPL, SIL and
+// DIL. Any other code reads as one of these and is refused by the checks
+// after it.
+fn low_byte_from_rex_modrm(rex, byte: BitVec(8)) → LowByteGpr {
+    match byte_bit0(rex) {
+        True => match byte_bit2(byte) {
+            False => match byte_bit1(byte) {
+                False => match byte_bit0(byte) { False => R8b, True => R9b },
+                True => match byte_bit0(byte) { False => R10b, True => R11b },
+            },
+            True => match byte_bit1(byte) {
+                False => match byte_bit0(byte) { False => R12b, True => R13b },
+                True => match byte_bit0(byte) { False => R14b, True => R15b },
+            },
+        },
+        False => match byte_bit1(byte) {
+            False => Bpl,
+            True => match byte_bit0(byte) { False => Sil, True => Dil },
+        },
+    }
+}
+
+fn decode_setcc_opcode_at(destination: LowByteGpr, opcode, modrm: BitVec(8)) → Option<Instruction> {
     match modrm.eq_dec(setcc_modrm(destination)) {
         Inr(_) => None,
         Inl(_) => match opcode.eq_dec(BitVec::ofNat(0x92)) {
@@ -1435,13 +1497,53 @@ fn decode_setcc_opcode(opcode, modrm: BitVec(8)) → Option<Instruction> {
     }
 }
 
+fn decode_setcc_opcode(opcode, modrm: BitVec(8)) → Option<Instruction> {
+    decode_setcc_opcode_at(low_byte_from_modrm(modrm), opcode, modrm)
+}
+
+// REX, 0F, the opcode and ModRM, where the prefix is the one the register
+// needs.
+fn decode_rex_setcc(rex: BitVec(8), bytes: List<BitVec(8)>) → Option<DecodedInstruction> {
+    match bytes {
+        Nil => None,
+        Cons(escape, tail1) => match tail1 {
+            Nil => None,
+            Cons(opcode, tail2) => match tail2 {
+                Nil => None,
+                Cons(modrm, tail3) => match tail3 {
+                    Cons(_, _) => None,
+                    Nil => match escape.eq_dec(BitVec::ofNat(15)) {
+                        Inr(_) => None,
+                        Inl(_) => {
+                            let destination = low_byte_from_rex_modrm(rex, modrm);
+                            match low_byte_rex(destination) {
+                                None => None,
+                                Some(expected) => match rex.eq_dec(expected) {
+                                    Inr(_) => None,
+                                    Inl(_) => match decode_setcc_opcode_at(destination, opcode, modrm) {
+                                        None => None,
+                                        Some(instruction) => Some(decoded_canonical(instruction)),
+                                    },
+                                },
+                            }
+                        },
+                    },
+                },
+            },
+        },
+    }
+}
+
 fn decode_setcc(bytes: List<BitVec(8)>) → Option<DecodedInstruction> {
     match bytes {
         Nil => None,
         Cons(prefix, tail1) => match byte_bit6(prefix) {
-            // Every REX prefix takes this cheap arm, keeping RR decoding
-            // definitionally unchanged.
-            True => None,
+            // Every REX.W prefix takes this cheap arm, keeping RR decoding
+            // definitionally unchanged; a byte register's REX has no W.
+            True => match byte_bit3(prefix) {
+                True => None,
+                False => decode_rex_setcc(prefix, tail1),
+            },
             False => match tail1 {
                 Nil => None,
                 Cons(opcode, tail2) => match tail2 {
@@ -1713,21 +1815,30 @@ theorem decode_set_below_complete(destination: LowByteGpr):
     decode_instruction(setcc_bytes(0x92, destination)) =
         Some(decoded_canonical(SetBelow(destination)))
 {
-    match destination { Al => refl, Cl => refl, Dl => refl, Bl => refl }
+    match destination {
+        Al => refl, Cl => refl, Dl => refl, Bl => refl, Bpl => refl, Sil => refl, Dil => refl,
+        R8b => refl, R9b => refl, R10b => refl, R11b => refl, R12b => refl, R13b => refl, R14b => refl, R15b => refl,
+    }
 }
 
 theorem decode_set_less_complete(destination: LowByteGpr):
     decode_instruction(setcc_bytes(0x9c, destination)) =
         Some(decoded_canonical(SetLess(destination)))
 {
-    match destination { Al => refl, Cl => refl, Dl => refl, Bl => refl }
+    match destination {
+        Al => refl, Cl => refl, Dl => refl, Bl => refl, Bpl => refl, Sil => refl, Dil => refl,
+        R8b => refl, R9b => refl, R10b => refl, R11b => refl, R12b => refl, R13b => refl, R14b => refl, R15b => refl,
+    }
 }
 
 theorem decode_set_equal_complete(destination: LowByteGpr):
     decode_instruction(setcc_bytes(0x94, destination)) =
         Some(decoded_canonical(SetEqual(destination)))
 {
-    match destination { Al => refl, Cl => refl, Dl => refl, Bl => refl }
+    match destination {
+        Al => refl, Cl => refl, Dl => refl, Bl => refl, Bpl => refl, Sil => refl, Dil => refl,
+        R8b => refl, R9b => refl, R10b => refl, R11b => refl, R12b => refl, R13b => refl, R14b => refl, R15b => refl,
+    }
 }
 
 theorem decode_add_ri8_complete(destination: Gpr, immediate: BitVec(8)):
@@ -2036,6 +2147,15 @@ theorem decoded_at_length(span: InstructionBytes,
     evidence.right
 }
 
+theorem setcc_bytes_length(opcode: Nat, destination: LowByteGpr):
+    setcc_bytes(opcode, destination).len() = setcc_length(destination)
+{
+    match destination {
+        Al => refl, Cl => refl, Dl => refl, Bl => refl, Bpl => refl, Sil => refl, Dil => refl,
+        R8b => refl, R9b => refl, R10b => refl, R11b => refl, R12b => refl, R13b => refl, R14b => refl, R15b => refl,
+    }
+}
+
 theorem canonical_bytes_length(instruction: Instruction):
     canonical_bytes(instruction).len() = canonical_length(instruction)
 {
@@ -2048,9 +2168,9 @@ theorem canonical_bytes_length(instruction: Instruction):
         OrRR(_, _) => refl,
         XorRR(_, _) => refl,
         CmpRR(_, _) => refl,
-        SetBelow(_) => refl,
-        SetLess(_) => refl,
-        SetEqual(_) => refl,
+        SetBelow(destination) => setcc_bytes_length(0x92, destination),
+        SetLess(destination) => setcc_bytes_length(0x9c, destination),
+        SetEqual(destination) => setcc_bytes_length(0x94, destination),
         TestRR(_, _) => refl,
         AddRI8(_, _) => refl,
         AddRI32(_, _) => refl,

@@ -135,6 +135,42 @@ fn narrow_fused_branches_check_and_refuse_another_test() {
     }
 }
 
+// With only REX registers to spare, a materialised comparison lands in one
+// (SETcc into R8B–R15B under REX.B, into SIL, DIL or BPL under an empty
+// REX), a byte longer than into AL–BL, and its certificate checks; naming
+// another byte register in its place is refused.
+#[test]
+fn comparisons_materialise_into_rex_byte_registers() {
+    use heather_elab::function_ir_x86_lower::{encode_structured, StructuredPlan};
+    let elab = checker();
+    let byte = |id| Port { id, width: 8 };
+    let word = |id| Port { id, width: 64 };
+    for (name, region, inputs, temporaries, output, sets) in [
+        ("rex_byte_equal", Region { inputs: vec![byte(0), byte(1)], nodes: vec![Node::Equal { width: 8, output: 2, left: 0, right: 1 }], outputs: vec![Port { id: 2, width: 1 }] },
+            Placements::from([(0, Gpr::Rax), (1, Gpr::Rcx)]), vec![Gpr::R9, Gpr::R10], Gpr::R9, &["SetEqual(R9b)"][..]),
+        ("rex_word_below", Region { inputs: vec![word(0), word(1)], nodes: vec![Node::UnsignedLessThan { width: 64, output: 2, left: 0, right: 1 }], outputs: vec![Port { id: 2, width: 1 }] },
+            Placements::from([(0, Gpr::Rdi), (1, Gpr::Rdx)]), vec![Gpr::Rsi, Gpr::R15], Gpr::Rsi, &["SetBelow(Sil)"][..]),
+        ("rex_word_less", Region { inputs: vec![word(0), word(1)], nodes: vec![Node::SignedLessThan { width: 64, output: 2, left: 0, right: 1 }], outputs: vec![Port { id: 2, width: 1 }] },
+            Placements::from([(0, Gpr::Rdi), (1, Gpr::Rdx)]), vec![Gpr::R15, Gpr::Rbp], Gpr::R15, &["SetLess(R15b)"][..]),
+        ("rex_byte_newline", Region { inputs: vec![byte(0)], nodes: vec![Node::Const { width: 8, output: 1, value: 10 }, Node::Equal { width: 8, output: 2, left: 0, right: 1 }],
+            outputs: vec![Port { id: 2, width: 1 }] }, Placements::from([(0, Gpr::Rax)]), vec![Gpr::Rbp, Gpr::R11], Gpr::Rbp, &["SetEqual(Bpl)", "SetEqual(R11b)"][..]),
+    ] {
+        let emission = generate_structured(name, &StructuredRegion::Dataflow(region), &inputs, &temporaries, output).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+        let StructuredPlan::Dataflow(dag) = &emission.lowered.body else { panic!("{name}: a dataflow plan") };
+        let bytes = encode_structured(&emission.lowered);
+        assert_eq!(bytes.len(), emission.lowered.byte_length, "{name}: the planned length is the encoding's");
+        assert_eq!(dag.instructions.iter().map(|i| i.canonical_length()).sum::<usize>(), bytes.len(), "{name}");
+        let source = format!("{IMPORTS}\n{}", emission.text);
+        let set = *sets.iter().find(|set| source.contains(**set)).unwrap_or_else(|| panic!("{name}: expected one of {sets:?}"));
+        elab.semantic_image().elaborator().elab_module_source(name, &source).unwrap_or_else(|e| panic!("{}", e.render(&source)));
+        let other = if set.contains("R9b") { set.replace("R9b", "R10b") } else if set.contains("Sil") { set.replace("Sil", "Dil") } else if set.contains("R15b") { set.replace("R15b", "R14b") } else if set.contains("Bpl") { set.replace("Bpl", "Bl") } else { set.replace("R11b", "R12b") };
+        let mutant = source.replace(set, &other);
+        let error = elab.semantic_image().elaborator().elab_module_source(&format!("{name}_mutant"), &mutant).expect_err("another byte register must be refused");
+        let message = error.render(&mutant);
+        assert!(!message.contains("unknown") && !message.contains("not in scope") && !message.contains("unbound"), "{name} failed on a name: {message}");
+    }
+}
+
 // A fused byte test whose true arm is past rel8's reach takes the near
 // jumps (JNE rel32, JMP rel32), and its certificate checks.
 #[test]

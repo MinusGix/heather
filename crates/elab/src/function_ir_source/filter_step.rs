@@ -183,14 +183,11 @@ pub fn generate_elaborated_filter_step_x86(elaborator: &Elaborator, prefix: &str
         reflected.region.inputs().iter().filter_map(|port| meaning_of(reflected, port.id).map(|meaning| (port.id, home(meaning)))).collect()
     };
 
-    // A materialised comparison needs a byte register (AL, CL, DL or BL).
-    // RAX holds the byte throughout and RCX is the loop's, so RBX and RDX,
-    // the emit's own registers, are the only ones a piece can have. An emit
-    // computed from the state goes first, while the state is intact, into a
-    // holding register, so the fields after it can compare in RBX and RDX;
-    // it is copied into place at the end. An emit that reads no state
-    // (counting's constant nothing, mapping's flag and byte map) goes after
-    // the fields, straight into place.
+    // An emit computed from the state goes first, while the state is
+    // intact, straight into place (the flag in RBX, the byte in RDX); the
+    // fields after it compare in the pool's byte registers (R9B–R11B, BPL).
+    // An emit that reads no state (counting's constant nothing, mapping's
+    // flag and byte map) goes after the fields, also straight into place.
     let (field_ports, flag_port, byte_port): (Vec<Port>, Option<Port>, Option<Port>) = match &fields_source {
         Some(reflected) => {
             let outputs = reflected.region.outputs().to_vec();
@@ -223,13 +220,12 @@ pub fn generate_elaborated_filter_step_x86(elaborator: &Elaborator, prefix: &str
         }
     };
     let pool = [Gpr::R9, Gpr::R10, Gpr::R11, Gpr::Rbp];
-    let emit_held = usize::from(flag_port.is_some()) * 2;
-    if emit_held + held.len() > pool.len() { return unsupported("the step's outputs need more holding registers than the piece has"); }
-    let holder = |n: usize| pool[n];
-    let field_holder = |i: usize| held.iter().position(|&h| h == i).map(|n| holder(emit_held + n));
-    // What a piece may use: the pool less what is held past it, and RBX and
-    // RDX until the copies into place.
-    let free = pool[emit_held + held.len()..].iter().copied().chain([Gpr::Rbx, Gpr::Rdx]).collect::<Vec<_>>();
+    if held.len() > pool.len() { return unsupported("the step's outputs need more holding registers than the piece has"); }
+    let field_holder = |i: usize| held.iter().position(|&h| h == i).map(|n| pool[n]);
+    // What a field's piece may use: the pool less what is held past it, and
+    // RBX and RDX unless an emit computed first already sits there.
+    let emits_first = flag_port.is_some();
+    let free = pool[held.len()..].iter().copied().chain((!emits_first).then_some([Gpr::Rbx, Gpr::Rdx]).into_iter().flatten()).collect::<Vec<_>>();
     let all_temps: Vec<Gpr> = pool.iter().copied().chain([Gpr::Rbx, Gpr::Rdx]).collect();
 
     let mut texts: Vec<String> = Vec::new();
@@ -245,11 +241,11 @@ pub fn generate_elaborated_filter_step_x86(elaborator: &Elaborator, prefix: &str
             None => (!reads[i].contains(&i)).then_some(STATE[i]),
         }).collect()).collect();
         let flag_temps = all_temps.clone();
-        let byte_temps: Vec<Gpr> = all_temps.iter().copied().filter(|r| *r != holder(0)).collect();
+        let byte_temps: Vec<Gpr> = all_temps.iter().copied().filter(|r| *r != Gpr::Rbx).collect();
         let mut requested: Vec<FieldPiece> = Vec::new();
         if let (Some(flag), Some(byte)) = (flag_port, byte_port) {
-            requested.push(FieldPiece { prefix: name("flag"), port: flag.id, inputs: &inputs, temporaries: &flag_temps, consumable: &[], output: holder(0) });
-            requested.push(FieldPiece { prefix: name("byte"), port: byte.id, inputs: &inputs, temporaries: &byte_temps, consumable: &[], output: holder(1) });
+            requested.push(FieldPiece { prefix: name("flag"), port: flag.id, inputs: &inputs, temporaries: &flag_temps, consumable: &[], output: Gpr::Rbx });
+            requested.push(FieldPiece { prefix: name("byte"), port: byte.id, inputs: &inputs, temporaries: &byte_temps, consumable: &[], output: Gpr::Rdx });
         }
         for &i in held.iter().chain(&order) {
             let in_place = field_holder(i).is_none() && reads[i].contains(&i);
@@ -265,7 +261,7 @@ pub fn generate_elaborated_filter_step_x86(elaborator: &Elaborator, prefix: &str
     }
     // A piece of one result from a source of its own, of at most one
     // parameter: a constant, the byte map over the byte in RAX, or a copy of
-    // a holding register into place.
+    // a held field home.
     let mut whole = |part: &str, source: &str, input: Option<Gpr>, temps: &[Gpr], output: Gpr, copies: bool| -> Result<(), SourceError> {
         let reflected = reflect_elaborated_structured(elaborator, source)?;
         let [port] = reflected.region.outputs() else { return unsupported("an emit piece has one result") };
@@ -284,10 +280,7 @@ pub fn generate_elaborated_filter_step_x86(elaborator: &Elaborator, prefix: &str
         whole(&format!("field_{}_copy", state.fields[i].0), "filter_step_piece::emit_copy", field_holder(i), &[STATE[i]], STATE[i], true)?;
     }
     match step {
-        FilterStep::Step(_) => {
-            whole("flag_copy", "filter_step_piece::emit_copy", Some(holder(0)), &[Gpr::Rbx], Gpr::Rbx, true)?;
-            whole("byte_copy", "filter_step_piece::emit_copy", Some(holder(1)), &[Gpr::Rdx], Gpr::Rdx, true)?;
-        }
+        FilterStep::Step(_) => {}
         FilterStep::Counting(_) => {
             whole("flag", "filter_step_piece::emits_never", None, &[Gpr::Rbx], Gpr::Rbx, false)?;
             whole("byte", "filter_step_piece::emitted_nothing", None, &[Gpr::Rdx], Gpr::Rdx, false)?;

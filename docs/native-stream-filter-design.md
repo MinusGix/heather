@@ -421,7 +421,11 @@ and amend it before working around it.
   (`emit_copy`). Fields that read each other in a cycle (`tr -s`) are held
   the same way. An emit that reads no state goes last, straight into place.
   The contract is unchanged. The proper fix is
-  `issues/lowering-rex-byte-registers.md`.
+  `issues/lowering-rex-byte-registers.md`. Since it landed (2026-10-03) the
+  lowering compares into every byte register but SPL, so an emit read from
+  the state goes first, straight into RBX and RDX, and the fields after it
+  compare in the pool's R9B–R11B and BPL. Only a cycle's field is still held
+  and copied.
 - **F4, the producer (§6).** The context module restates the program's data
   as the profile needs them: the step (the written one, `counting<C>(g)` or
   `mapping(f)`), the zero state, the Nat fields as counts, and the finish
