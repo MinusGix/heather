@@ -429,14 +429,11 @@ impl GoalArena {
         if goals.iter().all(|goal| goal.transparent.is_none()) {
             return None;
         }
-        let mut bindings = padded.bindings.to_vec();
-        let committed = bindings.len() - self.base as usize;
-        for (k, goal) in goals.iter().enumerate() {
-            if let Some(named) = &goal.transparent {
-                bindings[committed + k] = self.definition(k, &goal.level, named);
-            }
-        }
-        let world = GlobalCtx::new(bindings);
+        let committed = padded.bindings.len() - self.base as usize;
+        let world = padded.prefix(committed).extended((0..self.base as usize).map(|k| match goals.get(k) {
+            Some(Goal { transparent: Some(named), level, .. }) => self.definition(k, level, named),
+            _ => padded.bindings[committed + k].clone(),
+        }));
         *self.delta_world.borrow_mut() = Some(world.clone());
         Some(world)
     }
@@ -558,17 +555,13 @@ impl GoalArena {
     /// Ψ as goal statements see it, including reserved-but-unused slots.
     pub(super) fn world(&self, psi: &GlobalCtx, meta_pushed: &[GlobalBinding]) -> GlobalCtx {
         if !meta_pushed.is_empty() {
-            let mut bindings = psi.bindings.to_vec();
-            bindings.extend(meta_pushed.iter().cloned());
-            return GlobalCtx::new(bindings);
+            return psi.extended(meta_pushed.iter().cloned());
         }
         if self.base == 0 {
             return psi.clone();
         }
         let goals = self.entries.borrow();
-        let mut bindings = psi.bindings.to_vec();
-        for k in 0..self.base as usize {
-            bindings.push(match goals.get(k) {
+        psi.extended((0..self.base as usize).map(|k| match goals.get(k) {
                 Some(Goal { transparent: Some(named), level, .. }) => self.definition(k, level, named),
                 Some(goal) => GlobalBinding::Tm {
                     ctx: goal.cx.gamma.clone(),
@@ -578,9 +571,7 @@ impl GoalArena {
                     body: None,
                 },
                 None => placeholder(),
-            });
-        }
-        GlobalCtx::new(bindings)
+            }))
     }
 
     pub(super) fn substitution(&self) -> GlobalSubst {

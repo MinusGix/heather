@@ -2826,7 +2826,7 @@ impl Elaborator {
     /// The binding at `abs`'s own world: the Ψ prefix its prefix-scoped
     /// statement and body resolve against.
     fn prefix_world(&self, abs: usize) -> GlobalCtx {
-        GlobalCtx::new(self.psi.bindings.iter().take(abs).cloned().collect())
+        self.psi.prefix(abs)
     }
 
     /// `ty`, a statement scoped at binding `abs`, with its checked spellings
@@ -8378,18 +8378,14 @@ impl Elaborator {
             self.delta_psi = self.psi.clone();
             return;
         }
-        let mut bindings = self.psi.bindings.to_vec();
-        bindings.resize(
-            bindings.len() + self.attempt.goal_arena.base() as usize,
-            GlobalBinding::Tm {
-                ctx: LocalCtx::nil(),
-                layer: Layer::Code,
-                ty: Rc::new(Type::Nat),
-                level: Level::Zero,
-                body: None,
-            },
-        );
-        *self.delta_psi = GlobalCtx::new(bindings);
+        let placeholder = GlobalBinding::Tm {
+            ctx: LocalCtx::nil(),
+            layer: Layer::Code,
+            ty: Rc::new(Type::Nat),
+            level: Level::Zero,
+            body: None,
+        };
+        *self.delta_psi = self.psi.extended(std::iter::repeat_n(placeholder, self.attempt.goal_arena.base() as usize));
     }
 }
 
