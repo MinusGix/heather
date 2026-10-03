@@ -55,7 +55,15 @@ flags too), where a `read_gpr` projection stays lazy.
 Standalone probes (each certificate dumped and checked with `heather check
 --cache --timings` over the same library, width one, cloud box):
 `field_low` 45.2 s → 25.1 s (6,712 → 5,759 declarations), `field_high`
-58.8 s → 35.6 s (8,969 → 7,692). The whole-build A/B is in the log below.
+58.8 s → 35.6 s (8,969 → 7,692).
+
+The whole build, `scripts/perf ab --base 200fb73 --file
+examples/x86-native/wc.hthr --samples 2 --kernel-workers 1` (cold, cloud box):
+wall 305 s → 228 s (−25%, samples separate), kernel gate −24%, peak RSS
+1.18 GB → 0.81 GB. The two formatter modules' item time 120 s → 70 s (−42%;
+15,681 → 13,451 declarations). Counters moved as a smaller certificate moves
+them (eval steps −21%, conversion misses −18%); no `conv_out_of_fuel` or
+`conv_not_convertible` change.
 
 ## What is left in the formatter after this
 
