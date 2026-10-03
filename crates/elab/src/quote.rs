@@ -1202,9 +1202,19 @@ impl Elaborator {
         // Motive scopes (rec.rs `motive_specs`): `M_Typ` under (ℓ; g),
         // `M_Trm` under (ℓ; g, U_T). A constant motive still has to be
         // *weakened* into them.
+        // The kernel checks every branch against the motive, and a branch is
+        // typically a call whose codomain is the emission spelling
+        // (`El (D#tycode^δ)`): an inline motive made each such check walk
+        // `⟦D⟧` against the reference — measured as the largest conversion-
+        // miss row of `lib/certgen_code.hthr`'s `transcribe`
+        // (`issues/recursive-spine-codes.md`, 2026-10-03). The elaborator's
+        // own checks below keep the inline `m_ty`. Minted at the motive's
+        // own local scope — the ambient Γ and the scrutinee binder `x` — since
+        // a reference's substitution tail is that context, not `mcx`'s.
+        let m_emit = self.annotation_type(cx, &m_ty, 1);
         let motives = Rc::new(heather_kernel::term::Motives {
-            ty_motive: Rc::new(m_ty.shift_univ(1).shift_global(1)),
-            tm_motive: Rc::new(m_ty.shift_univ(1).shift_global(2)),
+            ty_motive: Rc::new(m_emit.shift_univ(1).shift_global(1)),
+            tm_motive: Rc::new(m_emit.shift_univ(1).shift_global(2)),
         });
         let shapes = rec::branch_shapes(&motives, &m_lvl, &m_lvl, &cx.gamma);
 

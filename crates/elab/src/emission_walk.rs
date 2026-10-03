@@ -528,9 +528,10 @@ impl Walk<'_> {
 
             // The code recursors' motives and branches live under the ch. 04
             // branch telescopes (universe, global and local binders per
-            // branch), and every type in them is a code payload's. Nothing in
-            // the elaborator writes a registry-known lowering into one; the
-            // scrutinee is an ordinary term of this scope.
+            // branch), and every type in them is a code payload's. The one
+            // registry-known lowering the elaborator writes there, a `match
+            // code`'s motive, is emitted through `annotation_type`
+            // (`quote.rs`); the scrutinee is an ordinary term of this scope.
             Term::ElimCodeTy { motives, scrut, .. } => {
                 let _: &Motives = motives;
                 self.term(scrut, d);

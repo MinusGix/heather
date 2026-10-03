@@ -257,6 +257,10 @@ per branch.
   names flat declarations' payloads and suffix sums — `GenDef::PayloadCode`/
   `SuffixCode` — and spells the whole-type code over those names. Recursive
   declarations are unchanged.)*
+  *(2026-10-03: recursive declarations now take the same keys over their
+  `Wf`'s shape, and `D#shape` is spelled over them
+  (`issues/recursive-spine-codes.md`); the arity's case tree keeps its inline
+  annotations, measured as costing evaluator steps for no miss.)*
 
 ## 6. Correctness, and the tests
 

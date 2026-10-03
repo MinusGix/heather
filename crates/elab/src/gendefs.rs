@@ -164,8 +164,9 @@ pub(crate) enum GenDef {
     /// conversion actually needs the type behind them.
     RecFam(u32, usize),
     /// `D#payloadₖ : Trm_c(· ⊢ Ty lₖ) := ⌜⟦cₖ⟧⌝` — the `k`-th constructor's
-    /// **payload type** of a **non-recursive**, unparameterized declaration
-    /// with at least two constructors, consumed as `El (D#payloadₖ^δ)` in the
+    /// **payload type** of an unparameterized declaration (a recursive one's
+    /// `Wf` shape, since `issues/recursive-spine-codes.md`) with at least two
+    /// constructors, consumed as `El (D#payloadₖ^δ)` in the
     /// `Inl`/`Inr` annotations of a constructor value and in a `Case`'s
     /// component slots (`issues/inductive-spelling-codes-nonrecursive.md`).
     /// Keyed by the declaration's tag and the constructor's position.
@@ -176,6 +177,10 @@ pub(crate) enum GenDef {
     /// different in kind: it has no `Wf` and no `D#shape`, so without these
     /// the only name it has is the whole type, and every `inl`/`inr` level
     /// below the whole writes its suffix sum out — Θ(n²) per literal.
+    /// (2026-10-03: a recursive declaration's shape now takes them too, and
+    /// `D#shape` is spelled over them — the §5.1 rejection was about the
+    /// payloads' field mass, not the `inl`/`inr` suffix sums, which only
+    /// these name.)
     PayloadCode(u32, usize),
     /// `D#suffixₖ : Trm_c(· ⊢ Ty l) := D#payload_{k+1}^δ + D#suffix_{k+1}^δ`
     /// — the same declaration's **suffix sum** past constructor `k`, the
@@ -929,7 +934,8 @@ struct GenDefLayer {
     /// correct but is never useful, and the pairing is what lets every use
     /// site ask one question (design §2.3).
     wf_slots: HashMap<u32, WfSlots>,
-    /// Per non-recursive declaration tag whose whole spine registered
+    /// Per declaration tag whose whole spine registered (a recursive one's:
+    /// its shape's)
     /// ([`Elaborator::register_spine_codes`]), the inline spine the codes
     /// were minted from — the use-site guard, written all-or-nothing.
     spine_codes: HashMap<u32, SpineCodes>,
@@ -1465,16 +1471,18 @@ impl Elaborator {
     }
 
     /// `D#payloadₖ := ⌜⟦cₖ⟧⌝` per constructor and `D#suffixₖ :=
-    /// D#payload_{k+1}^δ + D#suffix_{k+1}^δ` per `+` of a **non-recursive**
-    /// declaration's sum-of-Σs (`issues/inductive-spelling-codes-nonrecursive.md`),
-    /// registered off [`Self::register_ty_code`]'s own lowering under its
+    /// D#payload_{k+1}^δ + D#suffix_{k+1}^δ` per `+` of a declaration's
+    /// sum-of-Σs (`issues/inductive-spelling-codes-nonrecursive.md`) — for a
+    /// **recursive** one, of its `Wf`'s shape (`spine` unwraps it;
+    /// `issues/recursive-spine-codes.md`) — registered off
+    /// [`Self::register_ty_code`]'s own lowering under its
     /// boundary (unparameterized, unindexed, `tag_of` routes back) and only
     /// for a declaration with at least two constructors — with one, the
     /// whole type already names the only payload there is.
     ///
-    /// Returns the **named** spelling of the whole type's code,
+    /// Returns the **named** spelling of the sum's code,
     /// `D#payload₀^δ + D#suffix₀^δ`, for the caller to register as
-    /// `D#tycode`'s body; `None` when anything declined, in which case the
+    /// `D#tycode`'s body (flat) or `D#shape`'s (recursive); `None` when anything declined, in which case the
     /// guard entry is not written and every use site keeps the inline spine
     /// exactly as before. Best-effort and **all-or-nothing** like the `Wf`
     /// slot pair: a definition that passed the gate before a later one
@@ -2160,9 +2168,27 @@ impl Elaborator {
         // reference expose the inline field lowerings instead, walked against
         // those names per constructor (`Instruction`: ~13 K kernel steps).
         let cx = Cx::empty();
-        let emitted = self.respell_ty_deep(&cx, shape, 0);
-        let Some(scode) = crate::code::code_of(emitted.as_ref().unwrap_or(shape)) else {
-            return;
+        // A shape with at least two constructors names its spine first and is
+        // spelled over those names (`issues/recursive-spine-codes.md`): the
+        // flat round's move one level down, since `S` *is* a flat sum-of-Σs —
+        // the recursive positions live in the arity, not in `S`. One δ of
+        // `D#shape` then exposes `D#payload₀^δ + D#suffix₀^δ`, which is what a
+        // constructor label's `inl`/`inr` chain carries (`respell_spine` takes
+        // the names by position), where the literal body made the kernel walk
+        // the inline suffix sums against the reference once per level. The
+        // arity's case tree keeps its inline annotations: respelling them
+        // moved no miss and cost evaluator steps (the δs are paid wherever
+        // the arity is *computed*, not only where it is compared).
+        // Measured on `lib/ir_v1.hthr` + `lib/certgen_code.hthr`, 2026-10-03.
+        let scode = match self.register_spine_codes(ind, d_ty, l, span) {
+            Some(named) => named,
+            None => {
+                let emitted = self.respell_ty_deep(&cx, shape, 0);
+                let Some(scode) = crate::code::code_of(emitted.as_ref().unwrap_or(shape)) else {
+                    return;
+                };
+                scode
+            }
         };
         if self
             .push_gen_def(
@@ -2229,11 +2255,35 @@ impl Elaborator {
         if !self.types.gdefs().has_wf_slots() {
             return None;
         }
-        let ind = self.tag_of(shape)?;
+        // A shape spelled over its spine's names decodes to a sum of neutral
+        // references, which `tag_of` cannot see through; the inline
+        // components behind them name the declaration.
+        let ind = self.tag_of(shape).or_else(|| {
+            let unspelled = self.unspell_sum_components(&crate::inductive::decoded(shape))?;
+            self.tag_of(&unspelled)
+        })?;
         let slots = self.types.gdefs().wf_slots(&ind.tag)?;
         let l = &slots.level;
-        if (*slots.shape != *shape && *slots.shape_decoded != *shape) || *slots.arity != *arity {
+        if *slots.arity != *arity {
             return None;
+        }
+        // The decode copy is `El` of `D#shape`'s *body*, which is scoped over
+        // the Ψ prefix before the definition (its `abs`): every reference in
+        // it — the spine's names, a named field type — counts from there,
+        // and the kernel's unfolding rescopes it to the current world. So the
+        // registry's copy is rescoped the same way before it is compared;
+        // compared raw, it stopped matching the first time Ψ grew past the
+        // declaration (`issues/recursive-spine-codes.md`, 2026-10-03).
+        if *slots.shape != *shape {
+            let gdefs = self.types.gdefs();
+            let Some(&abs) = gdefs.abs_for(&GenDef::ShapeCode(ind.tag)) else {
+                return None;
+            };
+            let now = self.psi.bindings.len() as u32 + self.global_padding() + self.meta_offset();
+            let by = now.checked_sub(abs)?;
+            if slots.shape_decoded.shift_global(by) != *shape {
+                return None;
+            }
         }
         let sref = self.gen_type_ref(cx, GenDef::ShapeCode(ind.tag), l)?;
         let fun = self.gen_ref_deeper(cx, GenDef::ArityFn(ind.tag), 1)?;
