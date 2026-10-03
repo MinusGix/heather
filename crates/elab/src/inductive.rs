@@ -4323,6 +4323,7 @@ pub(crate) fn expr_mentions(e: &Expr, name: &str) -> bool {
         ExprKind::TyLit(t) => occurs(t, name).is_some(),
         ExprKind::CollectionLit(es) => es.iter().any(|x| expr_mentions(x, name)),
         ExprKind::Index { recv, idx } => expr_mentions(recv, name) || expr_mentions(idx, name),
+        ExprKind::RecordUpdate { base, fields } => expr_mentions(base, name) || fields.iter().any(|f| expr_mentions(&f.expr, name)),
         ExprKind::Dot {
             recv, tyargs, args, named, ..
         } => {

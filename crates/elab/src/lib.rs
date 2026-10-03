@@ -5021,6 +5021,12 @@ impl Elaborator {
                 let args = permuted.unwrap_or(args);
                 self.build_ctor_value(cx, &ind, i, &args, expected, lvl, e.span)
             }
+            // A record update is the record literal that keeps the other
+            // fields (`record_update_expr`), checked as one.
+            ExprKind::RecordUpdate { base, fields } => {
+                let literal = self.record_update_expr(cx, base, fields, e.span)?;
+                self.elab_check_skel_slots(cx, &literal, expected, lvl, hint, skel, capture_slots)
+            }
             // A record literal *is* a constructor application once its fields
             // are put in declaration order, so checking mode is the tier-0
             // constructor path — which is what lets the expected type supply
@@ -5758,6 +5764,10 @@ impl Elaborator {
             ExprKind::Char(c) => self.elab_char_infer(cx, *c, e),
             ExprKind::Str(text) => self.elab_string_infer(cx, text, e),
             ExprKind::Block(block) => statements::infer_block(self, cx, block),
+            ExprKind::RecordUpdate { base, fields } => {
+                let literal = self.record_update_expr(cx, base, fields, e.span)?;
+                self.elab_infer(cx, &literal)
+            }
             // Intensional analysis: the result type is written, so unlike a
             // quote this one *infers*
             // (docs/certgen-transcriber-in-language-design.md §3).

@@ -1962,6 +1962,13 @@ impl Rewrite<'_> {
                 recv: Box::new(self.expr(recv)),
                 idx: Box::new(self.expr(idx)),
             },
+            ExprKind::RecordUpdate { base, fields } => ExprKind::RecordUpdate {
+                base: Box::new(self.expr(base)),
+                fields: fields
+                    .iter()
+                    .map(|f| heather_syntax::RecordLitField { name: f.name.clone(), expr: self.expr(&f.expr), span: f.span })
+                    .collect(),
+            },
             ExprKind::RecordLit {
                 name,
                 tyargs,

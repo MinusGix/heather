@@ -1051,6 +1051,13 @@ impl Expansion<'_> {
                 _ => return unsupported("unsupported source expansion node"),
             };
             self.track_natural(node);
+            // Under case analysis (a decided source), a copy stays the value
+            // it copies: a name would hide an input the split specialises
+            // (`s.inside` kept by `s with { … }`) behind a definition.
+            if self.inline.is_some() && matches!(node, Node::Move { .. }) {
+                values.insert(id, (width, expression));
+                continue;
+            }
             let name = format!("{}_value_{}", self.prefix, self.next_name);
             self.next_name += 1;
             self.module.declaration(Declaration::function(&name, HeatherExpr::raw(format!("BitVec({width})")), Block::expression(expression)).parameters(self.parameters.to_vec()));

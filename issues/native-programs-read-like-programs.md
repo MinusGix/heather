@@ -1,6 +1,6 @@
 ---
 title: A native program reads like a program: the author-ergonomics round
-status: open
+status: closed
 labels: [native,surface-syntax,stdlib,design]
 created: 2026-10-02
 updated: 2026-10-03
@@ -40,3 +40,5 @@ Out of scope:
 - 2026-10-02: S3: library + literals (5c32d454) and Equal node (fd95e486) landed; frontend decided matches paused for design (native-frontend-decided-matches, WIP on branch s3-frontend-wip). Filed split-all-through-decisions, filter-default-spells-program-names, native-narrow-compare-fusion.
 - 2026-10-03: S4 landed: wc, wc_l, tr, tr_s, tr_d rewritten with decided byte tests (if b = '
   '; predicates as decide_bit<…>()); wc 115 → 84 lines, tr_s/tr_d proofs are one per-byte split_all fact through quiet_computes; counts through fold_counts_*. split_all: eq_bit comparisons with Nat facts, comparison helpers split at the comparison, operands read through constructor encodings; omega splits Nat ≠; frontend compiles a Bool helper that is a connective as branches. S5 (record update) not taken.
+- 2026-10-03: S5 landed: `s with { f = v }` (record-update-syntax closed); wc_step's arms name only what they change.
+- 2026-10-03: 2026-10-03: Round complete: S1–S6 landed; every in-scope and riding-along item is closed. Next on this line: argv/files/flags (native-wc-as-a-command).

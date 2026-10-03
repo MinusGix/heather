@@ -310,6 +310,12 @@ fn expr_with_context(e: &Expr, context: ExprContext, out: &mut Vec<Finding>) {
             expr(a, out);
             expr(b, out);
         }
+        ExprKind::RecordUpdate { base, fields } => {
+            expr(base, out);
+            for f in fields {
+                expr(&f.expr, out);
+            }
+        }
         ExprKind::Match {
             scrut,
             motive,
@@ -690,6 +696,12 @@ impl BinderUses {
             ExprKind::Eq(a, b) | ExprKind::Index { recv: a, idx: b } => {
                 self.expr(a);
                 self.expr(b);
+            }
+            ExprKind::RecordUpdate { base, fields } => {
+                self.expr(base);
+                for f in fields {
+                    self.expr(&f.expr);
+                }
             }
             ExprKind::Match {
                 scrut,

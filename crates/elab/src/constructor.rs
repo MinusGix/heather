@@ -255,6 +255,76 @@ impl Elaborator {
         application::permute_by_name_refs(name, "field", &decl, &[], &written, span)
     }
 
+    /// `base with { f = e, … }` (issues/record-update-syntax.md): the record
+    /// literal that writes the given fields and keeps every other one as
+    /// `base`'s projection, so it elaborates on the literal's path, checking
+    /// and inference alike, and its term is the constructor over projections
+    /// that every reader of a record already takes. A base that is not a
+    /// local is bound once by a `let`, which is an alias: it is elaborated
+    /// once, and the term is the same. A kept field whose type mentions a
+    /// replaced one (a dependent record) is refused, since its old value is no
+    /// longer about the new one: the update has to give it too.
+    pub(super) fn record_update_expr(&self, cx: &Cx, base: &Expr, fields: &[RecordLitField], span: Span) -> R<Expr> {
+        let (_, ty, _) = self.elab_infer(cx, base)?;
+        let ty = self.whnf(cx, &ty, base.span)?;
+        let Some(ind) = self.tag_of(&ty).filter(|ind| ind.is_record) else {
+            return err(format!("`with` updates a record's fields, and this is `{}`", self.display_type(cx, &ty)), base.span);
+        };
+        let decl = &ind.ctors[0].fields;
+        for (index, field) in fields.iter().enumerate() {
+            if !decl.iter().any(|(name, _)| name.as_deref() == Some(field.name.as_str())) {
+                return err(format!("`{}` has no field `{}`", ind.name, field.name), field.span);
+            }
+            if fields[..index].iter().any(|earlier| earlier.name == field.name) {
+                return err(format!("`{}` is updated twice", field.name), field.span);
+            }
+        }
+        for (name, field_ty) in decl {
+            let Some(name) = name else {
+                return err(format!("`{}` has an unnamed field, which `with` cannot keep", ind.name), span);
+            };
+            if fields.iter().any(|f| f.name == *name) {
+                continue;
+            }
+            if let Some(replaced) = fields.iter().find(|f| crate::datarepr::mentions_free_ty(field_ty, std::slice::from_ref(&f.name), &mut Vec::new())) {
+                return err(
+                    format!("`{name}`'s type mentions `{}`, which this update replaces: give `{name}` a new value too", replaced.name),
+                    replaced.span,
+                );
+            }
+        }
+        let local = matches!(&base.kind, ExprKind::Var(name) if cx.names.iter().any(|n| n == name));
+        let bound = "__with_base";
+        let receiver = if local { base.clone() } else { Expr { kind: ExprKind::Var(bound.into()), span: base.span } };
+        let written = decl
+            .iter()
+            .map(|(name, _)| {
+                let name = name.clone().unwrap_or_default();
+                fields.iter().find(|f| f.name == name).cloned().unwrap_or_else(|| RecordLitField {
+                    expr: Expr {
+                        kind: ExprKind::Dot { recv: Box::new(receiver.clone()), name: name.clone(), tyargs: Vec::new(), args: None, named: Vec::new() },
+                        span: base.span,
+                    },
+                    name,
+                    span: base.span,
+                })
+            })
+            .collect();
+        let literal = Expr { kind: ExprKind::RecordLit { name: ind.name.clone(), tyargs: Vec::new(), fields: written }, span };
+        if local {
+            return Ok(literal);
+        }
+        Ok(Expr {
+            kind: ExprKind::Block(Box::new(heather_syntax::Block {
+                stmts: vec![heather_syntax::Stmt::Let { name: bound.into(), ty: None, expr: base.clone(), span: base.span, opaque: false }],
+                result: Box::new(literal),
+                ons: Vec::new(),
+                span,
+            })),
+            span,
+        })
+    }
+
     /// The constructor this name refers to *here* — `None` when it is not a
     /// constructor, or when a local binder or `let` alias shadows it.
     pub(super) fn ctor_here(&self, cx: &Cx, name: &str) -> Option<(Rc<Inductive>, usize)> {

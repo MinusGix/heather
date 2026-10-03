@@ -48,16 +48,18 @@ fn wc_bytes(bytes: List<BitVec(8)>) → Nat { bytes.len() }
 // What `wc` prints: the three counts as GNU prints them on a pipe.
 fn wc_out(bytes: List<BitVec(8)>) → List<BitVec(8)> { three_fields_line(wc_lines(bytes), wc_words(bytes), wc_bytes(bytes)) }
 
-// The step: the next state from a state and a byte.
+// The step: the next state from a state and a byte. Every byte is counted;
+// whitespace ends a word, and a newline is a line; any other byte starts a
+// word unless the state is already in one.
 fn wc_step(s: WcState, b: BitVec(8)) → WcState {
     match space(b) {
         True => match newline(b) {
-            True => WcState(Succ(s.lines), s.words, Succ(s.bytes), False),
-            False => WcState(s.lines, s.words, Succ(s.bytes), False),
+            True => s with { lines = Succ(s.lines), bytes = Succ(s.bytes), inside = False },
+            False => s with { bytes = Succ(s.bytes), inside = False },
         },
         False => match s.inside {
-            True => WcState(s.lines, s.words, Succ(s.bytes), True),
-            False => WcState(s.lines, Succ(s.words), Succ(s.bytes), True),
+            True => s with { bytes = Succ(s.bytes) },
+            False => s with { words = Succ(s.words), bytes = Succ(s.bytes), inside = True },
         },
     }
 }

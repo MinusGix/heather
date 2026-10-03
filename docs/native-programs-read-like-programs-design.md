@@ -1,6 +1,6 @@
 # A native program reads like a program
 
-Status: **scoped 2026-10-02; V1–V5 run (§4.1); S6, S1, S2 and S3 landed (part 3 after a design round: `Decide` carries its bit, `native-frontend-decided-matches`); S4 landed 2026-10-03.** Anchor issue:
+Status: **scoped 2026-10-02; V1–V5 run (§4.1); S6, S1, S2 and S3 landed (part 3 after a design round: `Decide` carries its bit, `native-frontend-decided-matches`); S4 and S5 landed 2026-10-03.** Anchor issue:
 `issues/native-programs-read-like-programs.md`. This round comes after step 2
 of `docs/automatic-author-surface-design.md` (the stream filter) and before
 step 3 (`issues/native-one-program-logic.md`, which waits on ITrees).
@@ -273,8 +273,7 @@ call. What it took:
   source expansion, as a produced Bool already was: `split_all` takes
   `head_bit(0, ofBool(x))` and `x` for different atoms.
 
-S5 (`s with { … }`) did not ride along: `wc_step` still rebuilds its record
-in each arm.
+S5 (`s with { … }`) did not ride along; it landed after, below.
 
 ### S5. Record update (rides along if small)
 
@@ -282,6 +281,14 @@ Issue: `record-update-syntax`. Parser and elaboration desugar to the
 constructor over the old value's projections. The frontend already reads
 that term. Refuse a dependent record whose later field mentions a replaced
 one.
+
+**Built 2026-10-03** (`docs/surface-records.md` §6.2). `wc_step`'s arms name
+only what they change (`s with { bytes = Succ(s.bytes), inside = False }`).
+One frontend change was needed: an arm that keeps a field now carries the
+input through, where every arm used to write a literal. In a decided
+source's expansion each dataflow node was a named function, so a kept
+`s.inside` sat behind a name the case analysis could not see through. A
+copy (`Move`) there is now spelled as the value it copies.
 
 ### S6. `split_all` reduces defined heads and states literal facts
 

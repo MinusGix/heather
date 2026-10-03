@@ -1468,6 +1468,13 @@ fn scan_splices(e: &Expr, menv: &MetaEnv, out: &mut Vec<(String, Span)>) -> R<()
             scan_splices(recv, menv, out)?;
             scan_splices(idx, menv, out)
         }
+        ExprKind::RecordUpdate { base, fields } => {
+            scan_splices(base, menv, out)?;
+            for f in fields {
+                scan_splices(&f.expr, menv, out)?;
+            }
+            Ok(())
+        }
         // `eqbind` is a binding *name*, so there is nothing in it to splice.
         ExprKind::Match {
             scrut,

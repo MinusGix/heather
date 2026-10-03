@@ -319,6 +319,12 @@ impl<'a> Walk<'a> {
                 self.expr(recv);
                 self.expr(idx);
             }
+            ExprKind::RecordUpdate { base, fields } => {
+                self.expr(base);
+                for f in fields {
+                    self.expr(&f.expr);
+                }
+            }
             ExprKind::RecordLit { tyargs, fields, .. } => {
                 if !tyargs.is_empty() {
                     self.list_spanned(

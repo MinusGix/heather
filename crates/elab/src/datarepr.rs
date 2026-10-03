@@ -1517,6 +1517,9 @@ fn mentions_free(e: &Expr, names: &[String], bound: &mut Vec<String>) -> bool {
         ExprKind::Index { recv, idx } => {
             mentions_free(recv, names, bound) || mentions_free(idx, names, bound)
         }
+        ExprKind::RecordUpdate { base, fields } => {
+            mentions_free(base, names, bound) || fields.iter().any(|f| mentions_free(&f.expr, names, bound))
+        }
         ExprKind::RecordLit { tyargs, fields, .. } => {
             tyargs.iter().any(|t| mentions_free_ty(t, names, bound))
                 || fields.iter().any(|f| mentions_free(&f.expr, names, bound))
@@ -1573,7 +1576,7 @@ fn mentions_free(e: &Expr, names: &[String], bound: &mut Vec<String>) -> bool {
     }
 }
 
-fn mentions_free_ty(t: &Ty, names: &[String], bound: &mut Vec<String>) -> bool {
+pub(crate) fn mentions_free_ty(t: &Ty, names: &[String], bound: &mut Vec<String>) -> bool {
     match &t.kind {
         TyKind::Nat
         | TyKind::Univ { .. }

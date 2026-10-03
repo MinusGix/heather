@@ -855,6 +855,13 @@ fn rename_expr(m: &Ren, e: &Expr) -> Expr {
             recv: Box::new(rename_expr(m, recv)),
             idx: Box::new(rename_expr(m, idx)),
         },
+        RecordUpdate { base, fields } => RecordUpdate {
+            base: Box::new(rename_expr(m, base)),
+            fields: fields
+                .iter()
+                .map(|f| RecordLitField { name: f.name.clone(), expr: rename_expr(m, &f.expr), span: f.span })
+                .collect(),
+        },
         RecordLit {
             name,
             tyargs,

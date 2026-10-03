@@ -131,6 +131,16 @@ fn bit_wc_step(s: WcState, byte: BitVec(8)) → WcState {
     }
 }
 fn bit_wc_filter() → WcState → BitVec(8) → Filtered<WcState> { counting(bit_wc_step) }
+fn with_wc_step(s: WcState, byte: BitVec(8)) → WcState {
+    match bit_space(byte) {
+        True => if byte = '\n' { s with { lines = Succ(s.lines), bytes = Succ(s.bytes), inside = False } } else { s with { bytes = Succ(s.bytes), inside = False } },
+        False => match s.inside {
+            True => s with { bytes = Succ(s.bytes) },
+            False => s with { words = Succ(s.words), bytes = Succ(s.bytes), inside = True },
+        },
+    }
+}
+fn with_wc_filter() → WcState → BitVec(8) → Filtered<WcState> { counting(with_wc_step) }
 fn if_upcase(b: BitVec(8)) → BitVec(8) { if ¬(b < 'a') ∧ b <= 'z' { b.sub(0x20) } else { b } }
 fn if_upcase_filter() → Stateless → BitVec(8) → Filtered<Stateless> { mapping(if_upcase) }
 "#;
@@ -339,6 +349,14 @@ fn decided_connective_counting_piece_certifies() {
 fn decided_bit_helper_counting_piece_certifies() {
     let (_, emission) = certify("bit_wc", "decided::bit_wc_filter", None);
     assert!(emission.pieces.contains("split_all") || emission.text.contains("split_all"), "a connective's expansion is proved by cases");
+}
+
+// The same step written with record updates (issues/record-update-syntax.md):
+// an arm that keeps the in-word flag keeps it as the input it copies, which
+// the expansion's case analysis splits with the source's `s.inside`.
+#[test]
+fn record_update_counting_piece_certifies() {
+    certify("with_wc", "decided::with_wc_filter", None);
 }
 
 // `tr a-z A-Z` with `¬(b < 'a') ∧ b <= 'z'`: a negation under a conjunction

@@ -1095,6 +1095,12 @@ fn put_expr(w: &mut Writer, expr: &Expr) {
         }
         ExprKind::Char(c) => { w.byte(23); w.u64(u64::from(u32::from(*c))); }
         ExprKind::Str(text) => { w.byte(24); w.string(text); }
+        ExprKind::RecordUpdate { base, fields } => {
+            w.byte(25); put_expr(w, base);
+            w.vec(fields, |w, field| {
+                w.string(&field.name); put_expr(w, &field.expr); put_span(w, field.span);
+            });
+        }
     }
 }
 
@@ -1154,6 +1160,11 @@ fn get_expr(r: &mut Reader<'_>) -> Result<Expr, ModuleImageDecodeError> {
                     .ok_or(ModuleImageDecodeError::InvalidTag { sort: "character literal", tag: 23 })?,
             ),
             24 => ExprKind::Str(r.string()?),
+            25 => ExprKind::RecordUpdate {
+                base: Box::new(get_expr(r)?), fields: r.vec(|r| Ok(RecordLitField {
+                    name: r.string()?, expr: get_expr(r)?, span: get_span(r)?,
+                }))?,
+            },
             tag => return Err(ModuleImageDecodeError::InvalidTag { sort: "expression", tag }),
         };
         Ok(Expr { kind, span })
