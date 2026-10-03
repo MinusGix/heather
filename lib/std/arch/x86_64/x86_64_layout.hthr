@@ -1,0 +1,160 @@
+// Code laid out as pieces (docs/native-architecture-review.md R4): a list of
+// pieces in order, the last one apart, and the lengths the pieces before it
+// are measured by. Where piece `i` starts is the sum of those lengths, left
+// to right from the layout's start, so a generated piece's length stays the
+// atom its lemma supplies and is never evaluated from its bytes. Residency of
+// the whole gives each piece's residency at its offset, and a near jump lands
+// on an offset when a closed sum about its displacement holds: the producer
+// proves each by evaluation at the bytes it wrote, and nothing restates the
+// offsets.
+import x86_64;
+import x86_64_block;
+import x86_64_fetch;
+import x86_64_fetched_code;
+import bitvec;
+import list;
+import logic;
+import nat;
+
+fn layout_code(pieces: List<List<BitVec(8)>>, last: List<BitVec(8)>) → List<BitVec(8)> {
+    match pieces { Nil => last, Cons(piece, rest) => piece ++ layout_code(rest, last) }
+}
+
+// Piece `i`, the last one at the pieces' count; nothing past it.
+fn layout_piece_of(pieces: List<List<BitVec(8)>>, last: List<BitVec(8)>) → Nat → List<BitVec(8)> {
+    match pieces {
+        Nil => λ i => match i { Zero => last, Succ(_) => Nil },
+        Cons(piece, rest) => λ i => match i { Zero => piece, Succ(k) => layout_piece_of(rest, last)(k) },
+    }
+}
+fn layout_piece(pieces: List<List<BitVec(8)>>, last: List<BitVec(8)>, i: Nat) → List<BitVec(8)> { layout_piece_of(pieces, last)(i) }
+
+// Where piece `i` starts, for a layout starting at `at`.
+fn layout_at_of(i: Nat) → Nat → List<Nat> → Nat {
+    match i { Zero => λ at lens => at, Succ(k) => λ at lens => match lens { Nil => at, Cons(len, rest) => layout_at_of(k)(at + len, rest) } }
+}
+fn layout_at(at: Nat, lens: List<Nat>, i: Nat) → Nat { layout_at_of(i)(at, lens) }
+// Where the last piece starts.
+fn layout_end_of(lens: List<Nat>) → Nat → Nat {
+    match lens { Nil => λ at => at, Cons(len, rest) => λ at => layout_end_of(rest)(at + len) }
+}
+fn layout_end(at: Nat, lens: List<Nat>) → Nat { layout_end_of(lens)(at) }
+
+// Each piece before the last is as long as its entry in `lens`.
+fn layout_measured(pieces: List<List<BitVec(8)>>) → List<Nat> → Type {
+    match pieces {
+        Nil => λ lens => match lens { Nil => True, Cons(_, _) => False },
+        Cons(piece, rest) => λ lens => match lens { Nil => False, Cons(len, more) => (piece.len() = len) ∧ layout_measured(rest)(more) },
+    }
+}
+fn LayoutMeasured(pieces: List<List<BitVec(8)>>, lens: List<Nat>) → Type { layout_measured(pieces)(lens) }
+
+// The code resident at `at` is each piece resident where it starts.
+theorem layout_resident<M>(fetch: FetchAccess<M>, memory: M, origin: BitVec(64), last: List<BitVec(8)>, pieces: List<List<BitVec(8)>>):
+    (lens: List<Nat>) → LayoutMeasured(pieces, lens) → (at: Nat) →
+    CodeResident(fetch, memory, layout_code(pieces, last), next_rip(origin, at)) →
+    (i: Nat) → CodeResident(fetch, memory, layout_piece(pieces, last, i), next_rip(origin, layout_at(at, lens, i))) {
+    match pieces {
+        Nil => λ lens measured at resident i => match i as λ k => CodeResident(fetch, memory, layout_piece(Nil, last, k),
+                next_rip(origin, layout_at(at, lens, k))) {
+            Zero => resident,
+            Succ(_) => trivial,
+        },
+        Cons(piece, rest) => λ lens => match lens as λ ls => LayoutMeasured(Cons(piece, rest), ls) → (at: Nat) →
+                CodeResident(fetch, memory, layout_code(Cons(piece, rest), last), next_rip(origin, at)) →
+                (i: Nat) → CodeResident(fetch, memory, layout_piece(Cons(piece, rest), last, i), next_rip(origin, layout_at(at, ls, i))) {
+            Nil => λ measured => false_elim(measured),
+            Cons(len, more) => λ measured at resident => {
+                let parts = resident_split_at(fetch, memory, piece, layout_code(rest, last), origin, at, resident);
+                let moved = j(measured.left, λ n _ => CodeResident(fetch, memory, layout_code(rest, last), next_rip(origin, at + n)), parts.right);
+                λ i => match i as λ k => CodeResident(fetch, memory, layout_piece(Cons(piece, rest), last, k),
+                        next_rip(origin, layout_at(at, Cons(len, more), k))) {
+                    Zero => parts.left,
+                    Succ(k) => layout_resident(fetch, memory, origin, last, rest, more, measured.right, at + len, moved, k),
+                }
+            },
+        },
+    }
+}
+
+// The code's length, from the lengths the pieces are measured by and the
+// last piece's.
+theorem layout_len_from(last: List<BitVec(8)>, pieces: List<List<BitVec(8)>>):
+    (lens: List<Nat>) → LayoutMeasured(pieces, lens) → (at: Nat) → at + layout_code(pieces, last).len() = layout_end(at, lens) + last.len() {
+    match pieces {
+        Nil => λ lens => match lens as λ ls => LayoutMeasured(Nil, ls) → (at: Nat) → at + last.len() = layout_end(at, ls) + last.len() {
+            Nil => λ measured at => refl,
+            Cons(_, _) => λ measured => false_elim(measured),
+        },
+        Cons(piece, rest) => λ lens => match lens as λ ls => LayoutMeasured(Cons(piece, rest), ls) → (at: Nat) →
+                at + (piece ++ layout_code(rest, last)).len() = layout_end(at, ls) + last.len() {
+            Nil => λ measured => false_elim(measured),
+            Cons(len, more) => λ measured at => {
+                let r = layout_code(rest, last).len();
+                trans(cong_fn<Nat, Nat>(λ n => at + n, List::len_append(piece, layout_code(rest, last))),
+                    trans(sym(Nat::add_assoc(at, piece.len(), r)),
+                        trans(cong_fn<Nat, Nat>(λ n => (at + n) + r, measured.left), layout_len_from(last, rest, more, measured.right, at + len))))
+            },
+        },
+    }
+}
+theorem layout_len(pieces: List<List<BitVec(8)>>, last: List<BitVec(8)>, lens: List<Nat>, measured: LayoutMeasured(pieces, lens),
+    last_len: Nat, last_is: last.len() = last_len): layout_code(pieces, last).len() = layout_end(0, lens) + last_len {
+    trans(sym(Nat::add_left_zero(layout_code(pieces, last).len())),
+        trans(layout_len_from(last, pieces, lens, measured, 0), cong_fn<Nat, Nat>(λ n => layout_end(0, lens) + n, last_is)))
+}
+
+// A layout placed further on: every offset moves by as much.
+theorem layout_shift(lens: List<Nat>): (at, base, i: Nat) → layout_at(at + base, lens, i) = at + layout_at(base, lens, i) {
+    match lens {
+        Nil => λ at base i => match i as λ k => layout_at(at + base, Nil, k) = at + layout_at(base, Nil, k) { Zero => refl, Succ(_) => refl },
+        Cons(len, more) => λ at base i => match i as λ k => layout_at(at + base, Cons(len, more), k) = at + layout_at(base, Cons(len, more), k) {
+            Zero => refl,
+            Succ(k) => trans(cong_fn<Nat, Nat>(λ b => layout_at(b, more, k), Nat::add_assoc(at, base, len)), layout_shift(more, at, base + len, k)),
+        },
+    }
+}
+
+// A near jump `size` bytes long at `from` lands on `to`, ahead of it or
+// behind it: its displacement's unsigned reading completes the distance, or
+// the distance around 2^64. Closed at a written file, so the producer proves
+// each by evaluation.
+fn JumpsForward(from, size: Nat, displacement: BitVec(32), to: Nat) → Type {
+    from + size + displacement.sign_extend(32).toNat() = to
+}
+fn JumpsBack(from, size: Nat, displacement: BitVec(32), to: Nat) → Type {
+    from + size + displacement.sign_extend(32).toNat() = to + Nat::pow(2, 64)
+}
+
+theorem jumps_forward(origin: BitVec(64), from, size: Nat, displacement: BitVec(32), to: Nat, lands: JumpsForward(from, size, displacement, to)):
+    near_branch_target(next_rip(origin, from), size, displacement) = next_rip(origin, to) {
+    let reading = displacement.sign_extend(32).toNat();
+    trans(near_branch_forward(next_rip(origin, from), size, reading, displacement, refl),
+        trans(rip_compose(origin, from, size + reading), rip_count(origin, trans(sym(Nat::add_assoc(from, size, reading)), lands))))
+}
+theorem jumps_back(origin: BitVec(64), from, size: Nat, displacement: BitVec(32), to: Nat, lands: JumpsBack(from, size, displacement, to)):
+    near_branch_target(next_rip(origin, from), size, displacement) = next_rip(origin, to) {
+    let reading = displacement.sign_extend(32).toNat();
+    trans(near_branch_forward(next_rip(origin, from), size, reading, displacement, refl),
+        trans(rip_compose(origin, from, size + reading),
+            trans(rip_count(origin, trans(sym(Nat::add_assoc(from, size, reading)), lands)),
+                trans(sym(rip_compose(origin, to, Nat::pow(2, 64))), BitVec::iterate_increment_period(64, next_rip(origin, to))))))
+}
+
+// The same for a piece placed at `at`, whose jumps are closed facts about
+// its own offsets from its start: `from_at` and `to_at` are where `from` and
+// `to` are once it is placed.
+theorem jumps_forward_at(origin: BitVec(64), at, from, size: Nat, displacement: BitVec(32), to, from_at, to_at: Nat,
+    from_is: from_at = at + from, to_is: to_at = at + to, lands: JumpsForward(from, size, displacement, to)):
+    near_branch_target(next_rip(origin, from_at), size, displacement) = next_rip(origin, to_at) {
+    trans(cong_fn<BitVec(64), BitVec(64)>(λ start => near_branch_target(start, size, displacement),
+            trans(rip_count(origin, from_is), sym(rip_compose(origin, at, from)))),
+        trans(jumps_forward(next_rip(origin, at), from, size, displacement, to, lands), trans(rip_compose(origin, at, to), rip_count(origin, sym(to_is)))))
+}
+theorem jumps_back_at(origin: BitVec(64), at, from, size: Nat, displacement: BitVec(32), to, from_at, to_at: Nat,
+    from_is: from_at = at + from, to_is: to_at = at + to, lands: JumpsBack(from, size, displacement, to)):
+    near_branch_target(next_rip(origin, from_at), size, displacement) = next_rip(origin, to_at) {
+    trans(cong_fn<BitVec(64), BitVec(64)>(λ start => near_branch_target(start, size, displacement),
+            trans(rip_count(origin, from_is), sym(rip_compose(origin, at, from)))),
+        trans(jumps_back(next_rip(origin, at), from, size, displacement, to, lands), trans(rip_compose(origin, at, to), rip_count(origin, sym(to_is)))))
+}

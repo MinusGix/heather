@@ -611,3 +611,20 @@ fn at_and_type_arguments_compose_on_a_self_call() {
     ok("fn twice<A>(a: A, {n: Nat}) -> A \
         { match n { Zero => a, Succ(k) => @twice<A>(a, k) } }");
 }
+
+#[test]
+fn a_later_child_argument_fixes_an_earlier_ones_type_argument() {
+    // issues/cons-nil-argument-inference.md: `Nil` alone determines nothing,
+    // but `Cons`'s child `xs` is at the constructor's own type, so the
+    // instance is read off it and `Nil` is checked against its field. Both
+    // in inference position (a `let`) and below a call whose implicit the
+    // argument must supply.
+    ok("inductive List<A> { Nil, Cons(A, List<A>) }
+        fn one<A>(xs: List<List<A>>) -> List<List<A>> { let ys = Cons(Nil, xs); ys }
+        fn first<A>(xs: List<List<A>>) -> List<List<A>> { xs }
+        fn two<A>(xs: List<List<A>>) -> List<List<A>> { first(Cons(Nil, xs)) }");
+    // The child at the wrong type is still refused, by the original reading.
+    let e = bad("inductive List<A> { Nil, Cons(A, List<A>) }
+                 fn go() -> Nat { let xs = Cons(Nil, 3); 0 }");
+    assert!(e.contains("cannot infer the type argument"), "{e}");
+}

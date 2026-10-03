@@ -18,6 +18,12 @@ pub enum Node {
         output: u64,
         value: u64,
     },
+    /// A copy: `source`'s value under another ID.
+    Move {
+        width: u64,
+        output: u64,
+        source: u64,
+    },
     Add {
         width: u64,
         output: u64,
@@ -78,6 +84,12 @@ pub enum Node {
         left: u64,
         right: u64,
     },
+    Equal {
+        width: u64,
+        output: u64,
+        left: u64,
+        right: u64,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -129,6 +141,7 @@ pub enum SourceValue {
     /// `operation` names the `bitvec::BitVec` function: add, sub, band, bor, bxor.
     Binary { operation: &'static str, width: u64, left: Box<SourceValue>, right: Box<SourceValue> },
     Less { width: u64, left: Box<SourceValue>, right: Box<SourceValue> },
+    Equal { width: u64, left: Box<SourceValue>, right: Box<SourceValue> },
     Call { name: String, arguments: Vec<(SourceType, SourceValue)>, result: SourceType },
     /// An argument another composed producer computed, at its result port.
     Produced { port: Port, value: Box<SourceValue> },
@@ -151,7 +164,7 @@ impl SourceValue {
         match self {
             Self::Port(port) => SourceType::Word(port.width),
             Self::Constant { width, .. } | Self::Binary { width, .. } => SourceType::Word(*width),
-            Self::Less { .. } => SourceType::Boolean,
+            Self::Less { .. } | Self::Equal { .. } => SourceType::Boolean,
             Self::Call { result, .. } => *result,
             Self::Produced { value, .. } => value.natural(),
         }
@@ -166,7 +179,7 @@ impl SourceValue {
     pub fn produces(&self, port: u64) -> bool {
         match self {
             Self::Port(_) | Self::Constant { .. } => false,
-            Self::Binary { left, right, .. } | Self::Less { left, right, .. } => left.produces(port) || right.produces(port),
+            Self::Binary { left, right, .. } | Self::Less { left, right, .. } | Self::Equal { left, right, .. } => left.produces(port) || right.produces(port),
             Self::Call { arguments, .. } => arguments.iter().any(|(_, value)| value.produces(port)),
             Self::Produced { port: produced, value } => produced.id == port || value.produces(port),
         }
@@ -182,6 +195,8 @@ impl SourceValue {
                 format!("@bitvec::BitVec::{operation}({width}, {}, {})", word(left, *width), word(right, *width)),
             Self::Less { width, left, right } =>
                 format!("@bitvec::BitVec::unsigned_lt_bit({width}, {}, {})", word(left, *width), word(right, *width)),
+            Self::Equal { width, left, right } =>
+                format!("@bitvec::BitVec::eq_bit({width}, {}, {})", word(left, *width), word(right, *width)),
             Self::Call { name, arguments, .. } => {
                 let arguments = arguments.iter().map(|(ty, value)| value.render_named(*ty, leaf, named)).collect::<Vec<_>>().join(", ");
                 format!("{name}({arguments})")
@@ -265,6 +280,7 @@ pub fn structured_alpha_eq(left: &StructuredRegion, right: &StructuredRegion) ->
 fn renamed(node: Node, f: &impl Fn(u64) -> u64) -> Node {
     match node {
         Node::Const { width, output, value } => Node::Const { width, output: f(output), value },
+        Node::Move { width, output, source } => Node::Move { width, output: f(output), source: f(source) },
         Node::Add { width, output, left, right } => Node::Add { width, output: f(output), left: f(left), right: f(right) },
         Node::Sub { width, output, left, right } => Node::Sub { width, output: f(output), left: f(left), right: f(right) },
         Node::BitAnd { width, output, left, right } => Node::BitAnd { width, output: f(output), left: f(left), right: f(right) },
@@ -275,6 +291,7 @@ fn renamed(node: Node, f: &impl Fn(u64) -> u64) -> Node {
         Node::ArithmeticShiftRight { width, output, value, amount } => Node::ArithmeticShiftRight { width, output: f(output), value: f(value), amount: f(amount) },
         Node::UnsignedLessThan { width, output, left, right } => Node::UnsignedLessThan { width, output: f(output), left: f(left), right: f(right) },
         Node::SignedLessThan { width, output, left, right } => Node::SignedLessThan { width, output: f(output), left: f(left), right: f(right) },
+        Node::Equal { width, output, left, right } => Node::Equal { width, output: f(output), left: f(left), right: f(right) },
     }
 }
 fn alpha_ports(left: &[Port], right: &[Port], map: &std::collections::BTreeMap<u64, u64>) -> bool {
@@ -541,6 +558,7 @@ impl Node {
     pub fn output(self) -> Port {
         match self {
             Node::Const { width, output, .. }
+            | Node::Move { width, output, .. }
             | Node::Add { width, output, .. }
             | Node::Sub { width, output, .. }
             | Node::BitAnd { width, output, .. }
@@ -549,7 +567,7 @@ impl Node {
             | Node::ShiftLeft { width, output, .. }
             | Node::LogicalShiftRight { width, output, .. }
             | Node::ArithmeticShiftRight { width, output, .. } => Port { id: output, width },
-            Node::UnsignedLessThan { output, .. } | Node::SignedLessThan { output, .. } => Port {
+            Node::UnsignedLessThan { output, .. } | Node::SignedLessThan { output, .. } | Node::Equal { output, .. } => Port {
                 id: output,
                 width: 1,
             },
@@ -559,6 +577,7 @@ impl Node {
     pub(crate) fn operands(self) -> Vec<Port> {
         match self {
             Node::Const { .. } => Vec::new(),
+            Node::Move { width, source, .. } => vec![Port { id: source, width }],
             Node::ShiftLeft { width, value, .. }
             | Node::LogicalShiftRight { width, value, .. }
             | Node::ArithmeticShiftRight { width, value, .. } => {
@@ -584,10 +603,28 @@ impl Node {
             }
             | Node::SignedLessThan {
                 width, left, right, ..
+            }
+            | Node::Equal {
+                width, left, right, ..
             } => {
                 vec![Port { id: left, width }, Port { id: right, width }]
             }
         }
+    }
+
+    /// The node reading `to` wherever it read `from`.
+    pub(crate) fn renamed(mut self, from: u64, to: u64) -> Node {
+        let rename = |id: &mut u64| if *id == from { *id = to };
+        match &mut self {
+            Node::Const { .. } => {}
+            Node::Move { source, .. } => rename(source),
+            Node::ShiftLeft { value, .. } | Node::LogicalShiftRight { value, .. } | Node::ArithmeticShiftRight { value, .. } => rename(value),
+            Node::Add { left, right, .. } | Node::Sub { left, right, .. } | Node::BitAnd { left, right, .. }
+            | Node::BitOr { left, right, .. } | Node::BitXor { left, right, .. }
+            | Node::UnsignedLessThan { left, right, .. } | Node::SignedLessThan { left, right, .. }
+            | Node::Equal { left, right, .. } => { rename(left); rename(right); }
+        }
+        self
     }
 }
 
@@ -1019,6 +1056,7 @@ fn render_node(node: Node) -> String {
         } => {
             format!("Const(width := {width}, output := {output}, value := {value})")
         }
+        Node::Move { width, output, source } => format!("Move(width := {width}, output := {output}, source := {source})"),
         Node::Add {
             width,
             output,
@@ -1079,6 +1117,12 @@ fn render_node(node: Node) -> String {
             left,
             right,
         } => render_binary("SignedLessThan", width, output, left, right),
+        Node::Equal {
+            width,
+            output,
+            left,
+            right,
+        } => render_binary("Equal", width, output, left, right),
     }
 }
 
@@ -1103,7 +1147,7 @@ fn render_node_indexed_proof(
     let common = format!(
         "directory := {directory_name}(), index := {index}, width := {}, output := {}",
         match node {
-            Node::UnsignedLessThan { width, .. } | Node::SignedLessThan { width, .. } => width,
+            Node::UnsignedLessThan { width, .. } | Node::SignedLessThan { width, .. } | Node::Equal { width, .. } => width,
             _ => output_port.width,
         },
         output_port.id,
@@ -1112,6 +1156,10 @@ fn render_node_indexed_proof(
         Node::Const { value, .. } => Ok(format!(
             "node_indexed_const({common}, value := {value}, output_found := {output})"
         )),
+        Node::Move { width, source, .. } => {
+            let found = prove_available_from_fact(entries, theorem_name, source, width, rank)?;
+            Ok(format!("node_indexed_move({common}, source := {source}, output_found := {output}, source_found := {found})"))
+        }
         Node::ShiftLeft {
             width,
             value,
@@ -1175,12 +1223,16 @@ fn render_node_indexed_proof(
         }
         | Node::SignedLessThan {
             width, left, right, ..
+        }
+        | Node::Equal {
+            width, left, right, ..
         } => {
             let left_found = prove_available_from_fact(entries, theorem_name, left, width, rank)?;
             let right_found = prove_available_from_fact(entries, theorem_name, right, width, rank)?;
             let theorem = match node {
                 Node::UnsignedLessThan { .. } => "node_indexed_unsigned_less_than",
                 Node::SignedLessThan { .. } => "node_indexed_signed_less_than",
+                Node::Equal { .. } => "node_indexed_equal",
                 _ => unreachable!(),
             };
             Ok(format!(

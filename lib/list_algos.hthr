@@ -31,6 +31,7 @@ import list;
 import nat;
 import option;
 import logic;
+import bool;
 
 // ---------------------------------------------------------------------------
 // insertion sort, and the proof that it sorts.

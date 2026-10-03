@@ -1,0 +1,559 @@
+// Every byte form a step of an emitted program can fetch, and one decoder
+// that reads each back from the front of any byte list
+// (docs/fetched-step-determinism-design.md). The decoder looks only at a
+// form's own bytes, never past them, so two forms fetched from one memory at
+// one address are the same form even when their lengths differ: the shorter
+// fetch is a prefix of the longer, and the decoder answers alike on both.
+// The decoder is complete on the forms and claims nothing else; soundness
+// on other bytes is not needed and not stated.
+import x86_64;
+import x86_64_block;
+import x86_64_fetch;
+import x86_64_data_read;
+import x86_64_fetched_code;
+import x86_64_store;
+import bitvec;
+import bool;
+import list;
+import logic;
+import option;
+
+inductive StepForm {
+    FormEmitted(emitted: EmittedInstruction),
+    FormStore(store: MemoryStore),
+    FormSyscall,
+}
+fn step_form_bytes(form: StepForm) → List<BitVec(8)> {
+    match form {
+        FormEmitted(emitted) => emitted_bytes(emitted),
+        FormStore(store) => memory_store_bytes(store),
+        FormSyscall => syscall_bytes(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The decoder. A REX prefix is 0100WRXB; every other first byte the forms
+// use (0F, 74, E9, EB) differs from it in bits 4 to 7.
+
+fn rex_like(byte: BitVec(8)) → Bool {
+    match byte_bit7(byte) {
+        True => False,
+        False => match byte_bit6(byte) {
+            False => False,
+            True => match byte_bit5(byte) { True => False, False => !byte_bit4(byte) },
+        },
+    }
+}
+
+// The register a ModRM names in r/m, extended by REX.B, and in reg, by REX.R.
+fn rm_of(rex, modrm: BitVec(8)) → Gpr {
+    gpr_from_fields(byte_bit0(modrm), byte_bit1(modrm), byte_bit2(modrm), byte_bit0(rex))
+}
+fn reg_of(rex, modrm: BitVec(8)) → Gpr {
+    gpr_from_fields(byte_bit3(modrm), byte_bit4(modrm), byte_bit5(modrm), byte_bit2(rex))
+}
+
+fn emitted_form(instruction: Instruction) → Option<StepForm> { Some(FormEmitted(EmitOrdinary(instruction))) }
+
+// REX.W with a register-direct ModRM (mod 11): the eight two-register forms.
+fn decode_rr_form(opcode: BitVec(8), rm, reg: Gpr) → Option<StepForm> {
+    match opcode.eq_dec(BitVec::ofNat(0x89)) {
+        Inl(_) => emitted_form(MovRR(rm, reg)),
+        Inr(_) => match opcode.eq_dec(BitVec::ofNat(0x01)) {
+            Inl(_) => emitted_form(AddRR(rm, reg)),
+            Inr(_) => match opcode.eq_dec(BitVec::ofNat(0x29)) {
+                Inl(_) => emitted_form(SubRR(rm, reg)),
+                Inr(_) => match opcode.eq_dec(BitVec::ofNat(0x21)) {
+                    Inl(_) => emitted_form(AndRR(rm, reg)),
+                    Inr(_) => match opcode.eq_dec(BitVec::ofNat(0x09)) {
+                        Inl(_) => emitted_form(OrRR(rm, reg)),
+                        Inr(_) => match opcode.eq_dec(BitVec::ofNat(0x31)) {
+                            Inl(_) => emitted_form(XorRR(rm, reg)),
+                            Inr(_) => match opcode.eq_dec(BitVec::ofNat(0x39)) {
+                                Inl(_) => emitted_form(CmpRR(rm, reg)),
+                                Inr(_) => match opcode.eq_dec(BitVec::ofNat(0x85)) {
+                                    Inl(_) => emitted_form(TestRR(rm, reg)),
+                                    Inr(_) => None,
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    }
+}
+
+// 83 /0 ib and 81 /0 id: ADD of a sign-extended immediate into r/m, read
+// from the bytes after ModRM; any other opcode is a two-register form.
+fn decode_register_form(opcode: BitVec(8), rm, reg: Gpr, rest: List<BitVec(8)>) → Option<StepForm> {
+    match opcode.eq_dec(BitVec::ofNat(0x83)) {
+        Inl(_) => match rest {
+            Nil => None,
+            Cons(b0, _) => emitted_form(AddRI8(rm, b0)),
+        },
+        Inr(_) => match opcode.eq_dec(BitVec::ofNat(0x81)) {
+            Inr(_) => decode_rr_form(opcode, rm, reg),
+            Inl(_) => match rest {
+                Nil => None,
+                Cons(b0, t1) => match t1 {
+                    Nil => None,
+                    Cons(b1, t2) => match t2 {
+                        Nil => None,
+                        Cons(b2, t3) => match t3 {
+                            Nil => None,
+                            Cons(b3, _) => emitted_form(AddRI32(rm, imm32_from_bytes(b0, b1, b2, b3))),
+                        },
+                    },
+                },
+            },
+        },
+    }
+}
+
+// After REX and an opcode that is not 0F or B8+r: mod 11 is a register form,
+// mod 00 a store into [base], of a byte (88 /r) or a word (89 /r).
+fn decode_modrm_form(rex, opcode: BitVec(8), rest: List<BitVec(8)>) → Option<StepForm> {
+    match rest {
+        Nil => None,
+        Cons(modrm, tail) => match byte_bit7(modrm) {
+            True => decode_register_form(opcode, rm_of(rex, modrm), reg_of(rex, modrm), tail),
+            False => match opcode.eq_dec(BitVec::ofNat(0x88)) {
+                Inl(_) => Some(FormStore(StoreByte(ByteStore(base := rm_of(rex, modrm), source := reg_of(rex, modrm))))),
+                Inr(_) => Some(FormStore(StoreWord(WordStore(base := rm_of(rex, modrm), source := reg_of(rex, modrm))))),
+            },
+        },
+    }
+}
+
+// REX.W B8+r io: the register is in the opcode's low bits, extended by REX.B.
+fn decode_mov_ri_form(rex, opcode: BitVec(8), rest: List<BitVec(8)>) → Option<StepForm> {
+    match rest {
+        Nil => None,
+        Cons(b0, t1) => match t1 {
+            Nil => None,
+            Cons(b1, t2) => match t2 {
+                Nil => None,
+                Cons(b2, t3) => match t3 {
+                    Nil => None,
+                    Cons(b3, t4) => match t4 {
+                        Nil => None,
+                        Cons(b4, t5) => match t5 {
+                            Nil => None,
+                            Cons(b5, t6) => match t6 {
+                                Nil => None,
+                                Cons(b6, t7) => match t7 {
+                                    Nil => None,
+                                    Cons(b7, _) => emitted_form(MovRI(
+                                        gpr_from_fields(byte_bit0(opcode), byte_bit1(opcode), byte_bit2(opcode), byte_bit0(rex)),
+                                        immediate_from_bytes(b0, b1, b2, b3, b4, b5, b6, b7))),
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    }
+}
+
+// REX.W 0F B6 /r: the byte load; its ModRM is the fourth byte.
+fn decode_load_form(rex: BitVec(8), rest: List<BitVec(8)>) → Option<StepForm> {
+    match rest {
+        Nil => None,
+        Cons(_, t1) => match t1 {
+            Nil => None,
+            Cons(modrm, _) => Some(FormEmitted(EmitLoad(ByteLoad(
+                destination := reg_of(rex, modrm), base := rm_of(rex, modrm))))),
+        },
+    }
+}
+
+fn decode_rex_form(rex, opcode: BitVec(8), rest: List<BitVec(8)>) → Option<StepForm> {
+    match byte_bit7(opcode) {
+        // B8+r, 88, 89 or 85.
+        True => match byte_bit5(opcode) {
+            True => decode_mov_ri_form(rex, opcode, rest),
+            False => decode_modrm_form(rex, opcode, rest),
+        },
+        False => match opcode.eq_dec(BitVec::ofNat(0x0f)) {
+            Inl(_) => decode_load_form(rex, rest),
+            Inr(_) => decode_modrm_form(rex, opcode, rest),
+        },
+    }
+}
+
+fn near_form(control: NearControl) → Option<StepForm> { Some(FormEmitted(EmitNear(control))) }
+
+// rel32 after one or two opcode bytes.
+fn decode_rel32(rest: List<BitVec(8)>) → Option<BitVec(32)> {
+    match rest {
+        Nil => None,
+        Cons(b0, t1) => match t1 {
+            Nil => None,
+            Cons(b1, t2) => match t2 {
+                Nil => None,
+                Cons(b2, t3) => match t3 {
+                    Nil => None,
+                    Cons(b3, _) => Some(rel32_of_bytes(b0, b1, b2, b3)),
+                },
+            },
+        },
+    }
+}
+fn decode_near_form(make: BitVec(32) → NearControl, rest: List<BitVec(8)>) → Option<StepForm> {
+    match decode_rel32(rest) { None => None, Some(displacement) => near_form(make(displacement)) }
+}
+
+// 0F then: 05 SYSCALL, 92/9C/94 SETcc, 80–8F Jcc rel32.
+fn decode_two_byte_form(opcode: BitVec(8), rest: List<BitVec(8)>) → Option<StepForm> {
+    match opcode.eq_dec(BitVec::ofNat(0x05)) {
+        Inl(_) => Some(FormSyscall),
+        Inr(_) => match opcode.eq_dec(BitVec::ofNat(0x92)) {
+            Inl(_) => match rest {
+                Nil => None,
+                Cons(modrm, _) => emitted_form(SetBelow(low_byte_from_modrm(modrm))),
+            },
+            Inr(_) => match opcode.eq_dec(BitVec::ofNat(0x9c)) {
+                Inl(_) => match rest {
+                    Nil => None,
+                    Cons(modrm, _) => emitted_form(SetLess(low_byte_from_modrm(modrm))),
+                },
+                Inr(_) => match opcode.eq_dec(BitVec::ofNat(0x94)) {
+                    Inl(_) => match rest {
+                        Nil => None,
+                        Cons(modrm, _) => emitted_form(SetEqual(low_byte_from_modrm(modrm))),
+                    },
+                    Inr(_) => match read_condition_opcode(opcode, near_condition_opcode) {
+                        Some(code) => decode_near_form(λ d => JumpIfNear(code.cc, d), rest),
+                        None => None,
+                    },
+                },
+            },
+        },
+    }
+}
+
+// No REX: 0F-prefixed forms, E9 rel32, EB rel8 and the short Jcc 70–7F rel8.
+fn decode_plain_form(first, second: BitVec(8), rest: List<BitVec(8)>) → Option<StepForm> {
+    match first.eq_dec(BitVec::ofNat(0x0f)) {
+        Inl(_) => decode_two_byte_form(second, rest),
+        Inr(_) => match first.eq_dec(BitVec::ofNat(0xe9)) {
+            Inl(_) => decode_near_form(λ d => JumpNear(d), Cons(second, rest)),
+            Inr(_) => match first.eq_dec(BitVec::ofNat(0xeb)) {
+                Inl(_) => Some(FormEmitted(EmitShort(Jump(second)))),
+                Inr(_) => match read_condition_opcode(first, short_condition_opcode) {
+                    Some(code) => Some(FormEmitted(EmitShort(JumpIf(code.cc, second)))),
+                    None => None,
+                },
+            },
+        },
+    }
+}
+
+fn decode_step_form(bytes: List<BitVec(8)>) → Option<StepForm> {
+    match bytes {
+        Nil => None,
+        Cons(first, t1) => match t1 {
+            Nil => None,
+            Cons(second, rest) => match rex_like(first) {
+                True => decode_rex_form(first, second, rest),
+                False => decode_plain_form(first, second, rest),
+            },
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Completeness: each form reads back from its bytes followed by anything.
+
+// The registers an encoder spread over REX and ModRM come back together,
+// whatever the ModRM's mod bits say.
+theorem rm_of_fields(a, b: Gpr, x, y: Bool):
+    rm_of(rex_from_extensions(gpr_extended(a), gpr_extended(b)),
+        byte_from_fields(gpr_bit0(a), gpr_bit1(a), gpr_bit2(a), gpr_bit0(b), gpr_bit1(b), gpr_bit2(b), x, y)) = a {
+    gpr_fields_roundtrip(a)
+}
+theorem reg_of_fields(a, b: Gpr, x, y: Bool):
+    reg_of(rex_from_extensions(gpr_extended(a), gpr_extended(b)),
+        byte_from_fields(gpr_bit0(a), gpr_bit1(a), gpr_bit2(a), gpr_bit0(b), gpr_bit1(b), gpr_bit2(b), x, y)) = b {
+    gpr_fields_roundtrip(b)
+}
+
+theorem rr_form_back(make: Gpr → Gpr → Instruction, a, b: Gpr):
+    emitted_form(make(rm_of(rex_w_rr(a, b), modrm_rr(a, b)), reg_of(rex_w_rr(a, b), modrm_rr(a, b)))) =
+        emitted_form(make(a, b)) {
+    trans(cong_fn(λ (x: Gpr) => emitted_form(make(x, reg_of(rex_w_rr(a, b), modrm_rr(a, b)))),
+            rm_of_fields(a, b, True, True)),
+        cong_fn(λ (y: Gpr) => emitted_form(make(a, y)), reg_of_fields(a, b, True, True)))
+}
+
+theorem low_byte_back(destination: LowByteGpr): low_byte_from_modrm(setcc_modrm(destination)) = destination {
+    match destination { Al => refl, Cl => refl, Dl => refl, Bl => refl }
+}
+
+theorem near_form_back(make: BitVec(32) → NearControl, displacement: BitVec(32)):
+    near_form(make(rel32_of_bytes(displacement.take_low(8, 24), displacement.drop_low(8, 24).take_low(8, 16),
+        displacement.drop_low(8, 24).drop_low(8, 16).take_low(8, 8),
+        displacement.drop_low(8, 24).drop_low(8, 16).drop_low(8, 8)))) = near_form(make(displacement)) {
+    cong_fn(λ (d: BitVec(32)) => near_form(make(d)), rel32_round_trip(displacement))
+}
+
+theorem ordinary_form_complete(instruction: Instruction, rest: List<BitVec(8)>):
+    decode_step_form(canonical_bytes(instruction) ++ rest) = emitted_form(instruction) {
+    match instruction {
+        MovRR(a, b) => rr_form_back(λ x y => MovRR(x, y), a, b),
+        MovRI(destination, immediate) =>
+            trans(cong_fn(λ (d: Gpr) => emitted_form(MovRI(d, immediate_from_bytes(imm_byte0(immediate), imm_byte1(immediate),
+                    imm_byte2(immediate), imm_byte3(immediate), imm_byte4(immediate), imm_byte5(immediate),
+                    imm_byte6(immediate), imm_byte7(immediate)))), gpr_fields_roundtrip(destination)),
+                cong_fn(λ (v: BitVec(64)) => emitted_form(MovRI(destination, v)), immediate_bytes_roundtrip(immediate))),
+        AddRR(a, b) => rr_form_back(λ x y => AddRR(x, y), a, b),
+        SubRR(a, b) => rr_form_back(λ x y => SubRR(x, y), a, b),
+        AndRR(a, b) => rr_form_back(λ x y => AndRR(x, y), a, b),
+        OrRR(a, b) => rr_form_back(λ x y => OrRR(x, y), a, b),
+        XorRR(a, b) => rr_form_back(λ x y => XorRR(x, y), a, b),
+        CmpRR(a, b) => rr_form_back(λ x y => CmpRR(x, y), a, b),
+        SetBelow(destination) => cong_fn(λ (d: LowByteGpr) => emitted_form(SetBelow(d)), low_byte_back(destination)),
+        SetLess(destination) => cong_fn(λ (d: LowByteGpr) => emitted_form(SetLess(d)), low_byte_back(destination)),
+        SetEqual(destination) => cong_fn(λ (d: LowByteGpr) => emitted_form(SetEqual(d)), low_byte_back(destination)),
+        TestRR(a, b) => rr_form_back(λ x y => TestRR(x, y), a, b),
+        AddRI8(destination, immediate) =>
+            cong_fn(λ (d: Gpr) => emitted_form(AddRI8(d, immediate)), rm_of_fields(destination, Rax, True, True)),
+        AddRI32(destination, immediate) =>
+            trans(cong_fn(λ (d: Gpr) => emitted_form(AddRI32(d, imm32_from_bytes(imm32_byte0(immediate), imm32_byte1(immediate),
+                    imm32_byte2(immediate), imm32_byte3(immediate)))), rm_of_fields(destination, Rax, True, True)),
+                cong_fn(λ (v: BitVec(32)) => emitted_form(AddRI32(destination, v)), imm32_bytes_roundtrip(immediate))),
+    }
+}
+
+theorem load_form_complete(load: ByteLoad, rest: List<BitVec(8)>):
+    decode_step_form(byte_load_bytes(load) ++ rest) = Some(FormEmitted(EmitLoad(load))) {
+    let modrm = byte_from_fields(gpr_bit0(load.base), gpr_bit1(load.base), gpr_bit2(load.base),
+        gpr_bit0(load.destination), gpr_bit1(load.destination), gpr_bit2(load.destination),
+        byte_load_displaced(load.base), False);
+    let rex = rex_w_rr(load.base, load.destination);
+    trans(cong_fn(λ (d: Gpr) => Some(FormEmitted(EmitLoad(ByteLoad(destination := d, base := rm_of(rex, modrm))))),
+            reg_of_fields(load.base, load.destination, byte_load_displaced(load.base), False)),
+        cong_fn(λ (b: Gpr) => Some(FormEmitted(EmitLoad(ByteLoad(destination := load.destination, base := b)))),
+            rm_of_fields(load.base, load.destination, byte_load_displaced(load.base), False)))
+}
+
+theorem word_store_form_complete(store: WordStore, rest: List<BitVec(8)>):
+    decode_step_form(word_store_bytes(store) ++ rest) = Some(FormStore(StoreWord(store))) {
+    let modrm = byte_from_fields(gpr_bit0(store.base), gpr_bit1(store.base), gpr_bit2(store.base),
+        gpr_bit0(store.source), gpr_bit1(store.source), gpr_bit2(store.source), False, False);
+    let rex = rex_w_rr(store.base, store.source);
+    trans(cong_fn(λ (b: Gpr) => Some(FormStore(StoreWord(WordStore(base := b, source := reg_of(rex, modrm))))),
+            rm_of_fields(store.base, store.source, False, False)),
+        cong_fn(λ (s: Gpr) => Some(FormStore(StoreWord(WordStore(base := store.base, source := s)))),
+            reg_of_fields(store.base, store.source, False, False)))
+}
+
+// The byte store's REX has no W; the decoder reads only its B and R bits.
+theorem rm_of_plain_fields(a, b: Gpr, x, y: Bool):
+    rm_of(rex_plain_rr(a, b),
+        byte_from_fields(gpr_bit0(a), gpr_bit1(a), gpr_bit2(a), gpr_bit0(b), gpr_bit1(b), gpr_bit2(b), x, y)) = a {
+    gpr_fields_roundtrip(a)
+}
+theorem reg_of_plain_fields(a, b: Gpr, x, y: Bool):
+    reg_of(rex_plain_rr(a, b),
+        byte_from_fields(gpr_bit0(a), gpr_bit1(a), gpr_bit2(a), gpr_bit0(b), gpr_bit1(b), gpr_bit2(b), x, y)) = b {
+    gpr_fields_roundtrip(b)
+}
+
+theorem byte_store_form_complete(store: ByteStore, rest: List<BitVec(8)>):
+    decode_step_form(byte_store_bytes(store) ++ rest) = Some(FormStore(StoreByte(store))) {
+    let modrm = byte_from_fields(gpr_bit0(store.base), gpr_bit1(store.base), gpr_bit2(store.base),
+        gpr_bit0(store.source), gpr_bit1(store.source), gpr_bit2(store.source), False, False);
+    let rex = rex_plain_rr(store.base, store.source);
+    trans(cong_fn(λ (b: Gpr) => Some(FormStore(StoreByte(ByteStore(base := b, source := reg_of(rex, modrm))))),
+            rm_of_plain_fields(store.base, store.source, False, False)),
+        cong_fn(λ (s: Gpr) => Some(FormStore(StoreByte(ByteStore(base := store.base, source := s)))),
+            reg_of_plain_fields(store.base, store.source, False, False)))
+}
+
+theorem store_form_complete(store: MemoryStore, rest: List<BitVec(8)>):
+    decode_step_form(memory_store_bytes(store) ++ rest) = Some(FormStore(store)) {
+    match store {
+        StoreWord(word) => word_store_form_complete(word, rest),
+        StoreByte(byte) => byte_store_form_complete(byte, rest),
+    }
+}
+
+theorem short_form_complete(control: ShortControl, rest: List<BitVec(8)>):
+    decode_step_form(short_control_bytes(control) ++ rest) = Some(FormEmitted(EmitShort(control))) {
+    match control {
+        JumpIf(cc, _) => match cc {
+            O => refl, NO => refl, B => refl, AE => refl, E => refl, NE => refl, BE => refl, A => refl,
+            S => refl, NS => refl, P => refl, NP => refl, L => refl, GE => refl, LE => refl, G => refl,
+        },
+        Jump(_) => refl,
+    }
+}
+
+theorem near_form_complete(control: NearControl, rest: List<BitVec(8)>):
+    decode_step_form(near_control_bytes(control) ++ rest) = near_form(control) {
+    match control {
+        JumpIfNear(cc, d) => match cc as λ k => decode_step_form(near_control_bytes(JumpIfNear(k, d)) ++ rest) = near_form(JumpIfNear(k, d)) {
+            O => near_form_back(λ x => JumpIfNear(O, x), d),
+            NO => near_form_back(λ x => JumpIfNear(NO, x), d),
+            B => near_form_back(λ x => JumpIfNear(B, x), d),
+            AE => near_form_back(λ x => JumpIfNear(AE, x), d),
+            E => near_form_back(λ x => JumpIfNear(E, x), d),
+            NE => near_form_back(λ x => JumpIfNear(NE, x), d),
+            BE => near_form_back(λ x => JumpIfNear(BE, x), d),
+            A => near_form_back(λ x => JumpIfNear(A, x), d),
+            S => near_form_back(λ x => JumpIfNear(S, x), d),
+            NS => near_form_back(λ x => JumpIfNear(NS, x), d),
+            P => near_form_back(λ x => JumpIfNear(P, x), d),
+            NP => near_form_back(λ x => JumpIfNear(NP, x), d),
+            L => near_form_back(λ x => JumpIfNear(L, x), d),
+            GE => near_form_back(λ x => JumpIfNear(GE, x), d),
+            LE => near_form_back(λ x => JumpIfNear(LE, x), d),
+            G => near_form_back(λ x => JumpIfNear(G, x), d),
+        },
+        JumpNear(d) => near_form_back(λ x => JumpNear(x), d),
+    }
+}
+
+theorem step_form_complete(form: StepForm, rest: List<BitVec(8)>):
+    decode_step_form(step_form_bytes(form) ++ rest) = Some(form) {
+    match form {
+        FormEmitted(emitted) => match emitted as λ e => decode_step_form(emitted_bytes(e) ++ rest) = Some(FormEmitted(e)) {
+            EmitOrdinary(instruction) => ordinary_form_complete(instruction, rest),
+            EmitLoad(load) => load_form_complete(load, rest),
+            EmitShort(control) => short_form_complete(control, rest),
+            EmitNear(control) => near_form_complete(control, rest),
+        },
+        FormStore(store) => store_form_complete(store, rest),
+        FormSyscall => refl,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// One fetch, one form. Two successful fetches from one memory at one address
+// agree byte for byte as far as the shorter goes.
+
+fn Prefix(short, long: List<BitVec(8)>) → Type {
+    Exists<List<BitVec(8)>>(λ rest => long = short ++ rest)
+}
+
+theorem readable_prefix<M>(access: FetchAccess<M>, memory: M, left: List<BitVec(8)>):
+    (right: List<BitVec(8)>) → (start: BitVec(64)) →
+    ReadableBytes(access, memory, left, start) → ReadableBytes(access, memory, right, start) →
+    Prefix(left, right) ∨ Prefix(right, left) {
+    match left {
+        Nil => λ right start _ _ => Inl(Exists(right, refl)),
+        Cons(x, xs) => λ right => match right as λ r => (start: BitVec(64)) →
+                ReadableBytes(access, memory, Cons(x, xs), start) → ReadableBytes(access, memory, r, start) →
+                Prefix(Cons(x, xs), r) ∨ Prefix(r, Cons(x, xs)) {
+            Nil => λ start _ _ => Inr(Exists(Cons(x, xs), refl)),
+            Cons(y, ys) => λ start first second => {
+                let head: (x = y) = readable_head_same(access, memory, start, x, y, xs, ys, first, second);
+                let tails = readable_prefix(access, memory, xs, ys, next_rip(start, 1), readable_tail(access, memory, start, x, xs, first),
+                    readable_tail(access, memory, start, y, ys, second));
+                or_elim(tails,
+                    λ (p: Prefix(xs, ys)) => Inl(Exists(p.witness, List::cons_eq(ys, xs ++ p.witness, y, x, sym(head), p.proof))),
+                    λ (p: Prefix(ys, xs)) => Inr(Exists(p.witness, List::cons_eq(xs, ys ++ p.witness, x, y, head, p.proof))))
+            },
+        },
+    }
+}
+
+theorem prefix_forms_equal(short, long: StepForm, rest: List<BitVec(8)>,
+    extends: step_form_bytes(long) = step_form_bytes(short) ++ rest): short = long {
+    Option::some_inj(short, long,
+        trans(sym(step_form_complete(short, rest)),
+        trans(cong_fn<List<BitVec(8)>, Option<StepForm>>(λ bytes => decode_step_form(bytes), sym(extends)),
+        trans(cong_fn<List<BitVec(8)>, Option<StepForm>>(λ bytes => decode_step_form(bytes), sym(List::append_nil(step_form_bytes(long)))),
+            step_form_complete(long, Nil)))))
+}
+
+theorem fetched_forms_equal<M>(access: FetchAccess<M>, memory: M, start: BitVec(64), left, right: StepForm,
+    left_read: FetchedFrom(access, memory, InstructionBytes(start, step_form_bytes(left))),
+    right_read: FetchedFrom(access, memory, InstructionBytes(start, step_form_bytes(right)))): left = right {
+    or_elim(readable_prefix(access, memory, step_form_bytes(left), step_form_bytes(right), start,
+            left_read.reads, right_read.reads),
+        λ (p: Prefix(step_form_bytes(left), step_form_bytes(right))) => prefix_forms_equal(left, right, p.witness, p.proof),
+        λ (p: Prefix(step_form_bytes(right), step_form_bytes(left))) => sym(prefix_forms_equal(right, left, p.witness, p.proof)))
+}
+
+// A fetch from a related state is a fetch from this one: memory and RIP are
+// defined components.
+theorem fetched_from_related<M>(access: FetchAccess<M>, left, right: MachineState<M>,
+    same: SameDefinedState<M>(left, right), bytes: List<BitVec(8)>,
+    read: FetchedFrom(access, right.memory, InstructionBytes(right.rip, bytes))):
+    FetchedFrom(access, left.memory, InstructionBytes(left.rip, bytes)) {
+    j(sym(same.rip), λ rip _ => FetchedFrom(access, left.memory, InstructionBytes(rip, bytes)),
+        j(sym(same.memory), λ memory _ => FetchedFrom(access, memory, InstructionBytes(right.rip, bytes)), read))
+}
+
+fn emitted_of(form: StepForm, fallback: EmittedInstruction) → EmittedInstruction {
+    match form { FormEmitted(emitted) => emitted, _ => fallback }
+}
+fn store_of(form: StepForm, fallback: MemoryStore) → MemoryStore {
+    match form { FormStore(store) => store, _ => fallback }
+}
+fn IsEmitted(form: StepForm) → Type { match form { FormEmitted(_) => True, _ => False } }
+fn IsStore(form: StepForm) → Type { match form { FormStore(_) => True, _ => False } }
+fn IsSyscall(form: StepForm) → Type { match form { FormSyscall => True, _ => False } }
+
+// ---------------------------------------------------------------------------
+// A step is a function of the defined state: two steps from related states
+// reach related states, whichever relation each came by.
+
+fn FetchedOrStore<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, writes: ByteWrites<M>,
+    before, after: MachineState<M>) → Type {
+    FetchedStep(fetch, data, before, after) ∨ StoreStep(fetch, writes, before, after)
+}
+
+theorem fetched_or_store_form<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, writes: ByteWrites<M>,
+    before, after: MachineState<M>, step: FetchedOrStore(fetch, data, writes, before, after)):
+    Exists<StepForm>(λ form => FetchedFrom(fetch, before.memory, InstructionBytes(before.rip, step_form_bytes(form))) ∧
+        Not(IsSyscall(form))) {
+    match step {
+        Inl(fetched) => Exists(FormEmitted(fetched.witness), ⟨fetched.proof.left, λ never => never⟩),
+        Inr(stored) => Exists(FormStore(stored.witness), ⟨stored.proof.right.left, λ never => never⟩),
+    }
+}
+
+theorem step_respects_defined<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, writes: ByteWrites<M>,
+    before_left, before_right, after_left, after_right: MachineState<M>,
+    same: SameDefinedState<M>(before_left, before_right),
+    left: FetchedOrStore(fetch, data, writes, before_left, after_left),
+    right: FetchedOrStore(fetch, data, writes, before_right, after_right)):
+    SameDefinedState<M>(after_left, after_right) {
+    let agree: (a, b: StepForm) →
+        FetchedFrom(fetch, before_left.memory, InstructionBytes(before_left.rip, step_form_bytes(a))) →
+        FetchedFrom(fetch, before_right.memory, InstructionBytes(before_right.rip, step_form_bytes(b))) → (a = b) =
+        λ a b first second => fetched_forms_equal(fetch, before_left.memory, before_left.rip, a, b, first,
+            fetched_from_related(fetch, before_left, before_right, same, step_form_bytes(b), second));
+    match left {
+        Inl(fl) => match right {
+            Inl(fr) => fetched_step_respects_same_witness(fetch, data, before_left, before_right, after_left, after_right,
+                same, fl, fr, cong_fn(λ form => emitted_of(form, fl.witness),
+                    agree(FormEmitted(fl.witness), FormEmitted(fr.witness), fl.proof.left, fr.proof.left))),
+            Inr(sr) => false_elim(j(agree(FormEmitted(fl.witness), FormStore(sr.witness), fl.proof.left, sr.proof.right.left),
+                λ form _ => IsEmitted(form), trivial)),
+        },
+        Inr(sl) => match right {
+            Inl(fr) => false_elim(j(agree(FormStore(sl.witness), FormEmitted(fr.witness), sl.proof.right.left, fr.proof.left),
+                λ form _ => IsStore(form), trivial)),
+            Inr(sr) => store_step_respects_same_witness(fetch, writes, before_left, before_right, after_left, after_right,
+                same, sl, sr, cong_fn(λ form => store_of(form, sl.witness),
+                    agree(FormStore(sl.witness), FormStore(sr.witness), sl.proof.right.left, sr.proof.right.left))),
+        },
+    }
+}
+
+// Where SYSCALL is fetched, no step runs, from this state or a related one.
+theorem syscall_excludes_step<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, writes: ByteWrites<M>,
+    at, before, after: MachineState<M>, same: SameDefinedState<M>(at, before),
+    syscall: FetchedFrom(fetch, at.memory, InstructionBytes(at.rip, syscall_bytes())),
+    step: FetchedOrStore(fetch, data, writes, before, after)): False {
+    let found = fetched_or_store_form(fetch, data, writes, before, after, step);
+    let equal: (FormSyscall = found.witness) = fetched_forms_equal(fetch, at.memory, at.rip, FormSyscall, found.witness,
+        syscall, fetched_from_related(fetch, at, before, same, step_form_bytes(found.witness), found.proof.left));
+    found.proof.right(j(equal, λ form _ => IsSyscall(form), trivial))
+}

@@ -18,7 +18,7 @@ const LIST: &str = include_str!("../../../lib/std/list.hthr");
 const CHAR: &str = include_str!("../../../lib/std/char.hthr");
 const STRING: &str = include_str!("../../../lib/std/string.hthr");
 
-const PREAMBLE: &str = "import logic;\nimport nat;\nimport list;\nimport char;\nimport string;\n";
+const PREAMBLE: &str = "import logic;\nimport bool;\nimport nat;\nimport list;\nimport char;\nimport string;\n";
 
 fn elaborated() -> Elaborator {
     let mut e = support::library(&[

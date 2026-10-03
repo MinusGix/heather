@@ -400,3 +400,49 @@ atoms it interned before the spelling failure. Other reflection errors still
 propagate. The final stuck diagnostic lists the declined facts by name and
 reason, while the relevance filter and certificate checker operate on the
 remaining facts. No discarded fact contributes evidence to a certificate.
+
+## 10. Record fields (2026-09-29)
+
+`issues/omega-record-projection-atoms.md`. A closed record whose spine is not
+dependent registers no projection definitions (`register_rec_projs`: they
+would be all cost), so `s.words` elaborates to the inline walk
+`fst(snd(snd(s)))` — entry 0 is the tag, field `j` is entry `j + 1`. The
+speller had no case for it, so every field of such a record was "could not
+spell a natural expression", and one in a fact in scope sank the call until
+the fact-declining of §9. Four pieces, three in the speller:
+
+- **A field read spells as `r.name`** (`Speller::field_read`,
+  `crates/elab/src/display.rs`) when the receiver's type, read off its spine
+  (`Elaborator::spine_type`: the head inferred, one Π instantiated per
+  argument, the walk `app_domains` makes), is a record. Only receivers whose
+  head is a variable, a global or another field read, and only at the
+  context's own scope. Re-elaborating the spelling walks the same spine.
+- **A record value spells as its constructor** (`ctor_value`): the checked
+  pair carries the record's type, and the value is the one constructor's
+  payload tuple itself.
+- **In a source spelling only, a projection nothing else names spells as its
+  bounded weak head** (`Speller::projection_reduct`): a field read off a
+  record value after a `let` inlined it, or off a `match` on a literal in a
+  motive's instance. The consumer re-elaborates and checks by conversion. A
+  projection out of a neutral is its own weak head and still falls back.
+- **In `omega`, a projection whose bounded weak head is arithmetic is
+  reflected as that reduct** (`projection_reduct` at the top of
+  `nat_affine_syntax_within`), by §2's rule: kept only on an arithmetic head
+  whose leaves spell (`named_arithmetic_shape` with no candidates). So
+  `(match False { … }).words` is `Succ(s.words)`, not an opaque atom, and
+  `step_fold(…).bytes`, whose reduct is an eliminator, interns as before.
+  `convertible_atom` (§5) compares a field read by its receiver along the
+  same projection path, so `step_fold(wc_region(), …).lines` meets
+  `step_fold(ReadonlyLoop(wc_body), …).lines`.
+
+§5's hazard does not arise: no atom that spelled before is re-spelled. The
+first three pieces give a spelling where there was none, and the fourth
+reduces only projections out of values, whose spelling was either absent or
+the reduct's own.
+
+Not covered: an atom equal to another only by unfolding a *different* head
+(`wc_words(bytes)` against `words_of(wc_split(bytes))`) stays two atoms, as
+§5 has always said. `examples/x86-native/wc.hthr` states those two facts at
+the specifications' names in typed `let`s. Its six Nat-only helper lemmas
+are gone. The module costs a few times its old cold check, which is the
+folds' certificates.

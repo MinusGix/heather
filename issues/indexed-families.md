@@ -3,7 +3,7 @@ title: "Indexed finitary families: how an index reaches the surface"
 status: open
 labels: [frontend,elaboration,inductives,design]
 created: 2026-07-26
-updated: 2026-08-10
+updated: 2026-09-30
 ---
 
 `inductive Vec<A> : Nat -> Ty { Nil : Vec<A>(0), Cons(n: Nat, x: A, xs: Vec<A>(n)) : Vec<A>(Succ(n)) }`
@@ -208,3 +208,4 @@ two rounds of postulated-interface tests before the decision).
 - 2026-08-06: Status note (updated 2026-08-10): open deliberately — the 'landed' entries are slices (latest: route 1's D#fam). Remaining as listed 2026-08-04/05: multi-index (§8.4), indexed absurd/inj (§7), form A at a payload-argument index constructor (§14.8), and value-equation induction. The level-heterogeneous class defect is closed by [[route1-class-level-join]].
 - 2026-08-06: Route 1's APPLICATION-side gap (logged 2026-08-04: len<A>(n, v: V<A>(n)) applied at a concrete instance cannot solve A because unify_ty finds nothing structural in El(elim ...)) was CLOSED EN PASSANT by [[type-arg-inference-through-index]] (closed 2026-08-05), not by the unifier-completeness round that went looking for it (docs/unifier-completeness-design.md §5.5): unify_tm's ElimNat and type-code-constructor congruences are exactly the missing structure, plus the kernel-def round's D#fam re-keying for the unparameterized class. Both the open-data and constructor-literal probes elaborate and kernel-check (capped runs, 2026-08-06).
 - 2026-08-10: Route 1's level-heterogeneous class defect closed — [[route1-class-level-join]] now builds every class at the family join and pins the asymmetric level fixture.
+- 2026-09-30: Route 4, extended with an output-index function, is proposed to replace route 2b: [[iwf-former]] (`docs/iwf-former-design.md`). 2b's `transp` turned out to cost UIP for `Id`, plus an open normalization question ([[sprop-strip-normalization-open]]).

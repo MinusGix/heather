@@ -21,6 +21,8 @@ mod omega_logic;
 mod omega_measure_reduction;
 #[path = "../omega_atoms_computation.rs"]
 mod omega_atoms_computation;
+#[path = "../omega_record_fields.rs"]
+mod omega_record_fields;
 #[path = "../omega_reconstruction.rs"]
 mod omega_reconstruction;
 #[path = "../omega_wide_constants.rs"]

@@ -1,9 +1,9 @@
 ---
 title: Read-loop process mutation controls exceed their CPU rail
-status: open
+status: closed
 labels: [testing,x86,performance]
 created: 2026-09-28
-updated: 2026-09-28
+updated: 2026-09-29
 ---
 
 The `read_loop_process` member of `family_function_ir` runs three tests under
@@ -47,3 +47,4 @@ mutation coverage to hide the incomplete result.
   whole-group run with old `conv.rs` reproduces the same rail failure.
   All caps and skip lists remain unchanged; the prefix-sharing experiment
   was reverted. This issue remains open and owns the incomplete suite result.
+- 2026-09-29: Resolved by moving wc -l onto the state process (0772b4df), which removed the old eof process and rewrote this group against lib/elf64_read_state. Full suites since have completed (3099 at 440a8573, 3100 at 0772b4df), and `scripts/test -p heather-elab --test read_loop_process` alone now passes all three tests in 28 s wall, well inside the 300 CPU-s limit. No limit raised and no mutation control skipped. Closing.

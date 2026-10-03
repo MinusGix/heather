@@ -20,9 +20,22 @@ pub fn encode_instructions(instructions: &[Instruction]) -> Vec<u8> {
                 bytes.extend(immediate.to_le_bytes());
                 continue;
             }
-            Instruction::SetBelow { destination } | Instruction::SetLess { destination } => {
+            Instruction::SetBelow { destination } | Instruction::SetLess { destination } | Instruction::SetEqual { destination } => {
                 let r = match destination { LowByteGpr::Al => 0, LowByteGpr::Cl => 1, LowByteGpr::Dl => 2, LowByteGpr::Bl => 3 };
-                bytes.extend([0x0f, if matches!(instruction, Instruction::SetBelow { .. }) { 0x92 } else { 0x9c }, 0xc0 | r]);
+                let opcode = match instruction { Instruction::SetBelow { .. } => 0x92, Instruction::SetLess { .. } => 0x9c, _ => 0x94 };
+                bytes.extend([0x0f, opcode, 0xc0 | r]);
+                continue;
+            }
+            // REX.W 83 /0 ib and REX.W 81 /0 id.
+            Instruction::AddRI8 { destination, immediate } => {
+                let r = register_code(destination);
+                bytes.extend([0x48 | (r >> 3), 0x83, 0xc0 | (r & 7), immediate]);
+                continue;
+            }
+            Instruction::AddRI32 { destination, immediate } => {
+                let r = register_code(destination);
+                bytes.extend([0x48 | (r >> 3), 0x81, 0xc0 | (r & 7)]);
+                bytes.extend(immediate.to_le_bytes());
                 continue;
             }
             Instruction::MovRR { destination, source } => (0x89, destination, source),
@@ -54,11 +67,22 @@ pub fn encode_structured(plan: &super::LoweredStructured) -> Vec<u8> {
             bytes.extend(encode_structured(continuation));
             bytes
         }
-        StructuredPlan::Conditional { condition_register, when_true, when_false, false_displacement, join_displacement, near } => {
-            let r = register_code(*condition_register);
-            let mut bytes = vec![0x48 | (r >> 3) | ((r >> 3) << 2), 0x85, 0xc0 | ((r & 7) << 3) | (r & 7)];
-            if *near { bytes.extend([0x0f, 0x84]); bytes.extend(false_displacement.to_le_bytes()); }
-            else { bytes.extend([0x74, *false_displacement as u8]); }
+        StructuredPlan::FusedSequence { operands, continuation } => {
+            let mut bytes = encode_instructions(&operands.instructions);
+            bytes.extend(encode_structured(continuation));
+            bytes
+        }
+        StructuredPlan::Conditional { test, when_true, when_false, false_displacement, join_displacement, near } => {
+            let mut bytes = match (test, test.instruction()) {
+                (_, Some(instruction)) => encode_instructions(&[instruction]),
+                (super::PlannedTest::NonZero(register), None) => {
+                    let r = register_code(*register);
+                    vec![0x48 | (r >> 3) | ((r >> 3) << 2), 0x85, 0xc0 | ((r & 7) << 3) | (r & 7)]
+                }
+                (super::PlannedTest::Compare { .. }, None) => unreachable!("a comparison has its instruction"),
+            };
+            if *near { bytes.extend([0x0f, 0x80 | test.skip_code()]); bytes.extend(false_displacement.to_le_bytes()); }
+            else { bytes.extend([0x70 | test.skip_code(), *false_displacement as u8]); }
             bytes.extend(encode_structured(when_true));
             if *near { bytes.push(0xe9); bytes.extend(join_displacement.to_le_bytes()); }
             else { bytes.extend([0xeb, *join_displacement as u8]); }

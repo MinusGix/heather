@@ -743,3 +743,77 @@ theorem line_in_word(n: Nat, small: n < 10000): LineInWord(n) {
         },
     }
 }
+
+// ---------------------------------------------------------------------------
+// `decimal` at any width (docs/native-architecture-review.md R7): a count
+// whose `k`-th division by ten is a single nonzero digit has `k + 1` digits,
+// the last `k + 1` places of the count. `%d` and `%7d` both print `decimal`;
+// field_line's `field_is_decimal` is `%7d`'s padding.
+
+// `n` divided by ten `k` times.
+fn tens(k: Nat) → Nat → Nat {
+    match k { Zero => λ n => n, Succ(j) => λ n => tens(j)(n.div(10)) }
+}
+// The last `k` decimal places of `n`, most significant first.
+fn places(k: Nat) → Nat → List<BitVec(8)> {
+    match k { Zero => λ n => Nil, Succ(j) => λ n => places(j)(n.div(10)) ++ [digit(n.mod(10))] }
+}
+// `bytes` right-aligned in `width` columns of `fill`, as `printf("%*d")`
+// pads.
+fn pad_left(width: Nat, fill: BitVec(8), bytes: List<BitVec(8)>) → List<BitVec(8)> {
+    List::replicate(fill, width -bytes.len()) ++ bytes
+}
+
+theorem tens_of_zero(k: Nat): tens(k)(0) = 0 {
+    match k { Zero => refl, Succ(j) => trans(cong_fn<Nat, Nat>(λ m => tens(j)(m), Nat::div_of_lt(0, 10, trivial)), tens_of_zero(j)) }
+}
+// Past the first place, the count is at least ten.
+theorem tens_lead(j, m: Nat, lead: 1 <= tens(j)(m.div(10))): 10 <= m {
+    match Nat::le_dec(10, m) {
+        Inl(big) => big,
+        Inr(small) => {
+            let none: (tens(j)(m.div(10)) = 0) = trans(cong_fn<Nat, Nat>(λ q => tens(j)(q), Nat::div_of_lt(m, 10, { omega })), tens_of_zero(j));
+            false_elim(j(none, λ t _ => 1 <= t, lead))
+        },
+    }
+}
+// Where the count's leading place is: not a zero, past the first.
+fn Leads(k, m: Nat) → Type { match k { Zero => True, Succ(_) => 1 <= tens(k)(m) } }
+
+theorem decimal_places(k: Nat): (fuel, m: Nat) → k <= fuel → tens(k)(m) <= 9 → Leads(k, m) → decimal_digits(fuel, m) = places(Succ(k))(m) {
+    match k as λ w => (fuel, m: Nat) → w <= fuel → tens(w)(m) <= 9 → Leads(w, m) → decimal_digits(fuel, m) = places(Succ(w))(m) {
+        Zero => λ fuel m room top lead => {
+            let single: (m <= 9) = top;
+            let below: (m < 10) = omega;
+            trans(decimal_one(fuel, m, single), cong_fn<Nat, List<BitVec(8)>>(λ d => [digit(d)], sym(Nat::mod_of_lt(m, 10, below))))
+        },
+        Succ(j) => λ fuel m => match fuel as λ f => Succ(j) <= f → tens(Succ(j))(m) <= 9 → Leads(Succ(j), m) →
+                decimal_digits(f, m) = places(Succ(Succ(j)))(m) {
+            Zero => λ room => false_elim(room),
+            Succ(rest) => λ room top lead => {
+                let inner: Leads(j, m.div(10)) = match j as λ i => (1 <= tens(i)(m.div(10))) → Leads(i, m.div(10)) {
+                    Zero => λ _ => trivial,
+                    Succ(_) => λ l => l,
+                }(lead);
+                trans(decimal_more(rest, m, tens_lead(j, m, lead)),
+                    cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ xs => xs ++ [digit(m.mod(10))], decimal_places(j, rest, m.div(10), room, top, inner)))
+            },
+        },
+    }
+}
+
+theorem ten_pow_positive(k: Nat): 0 < Nat::pow(10, k) {
+    match k as λ w => 0 < Nat::pow(10, w) {
+        Zero => trivial,
+        Succ(j) => { let below = ten_pow_positive(j); let grown: (0 < Nat::pow(10, j) * 10) = omega; grown },
+    }
+}
+// `tens` is division by a power of ten.
+theorem tens_is_div(k: Nat): (n: Nat) → tens(k)(n) = n.div(Nat::pow(10, k)) {
+    match k as λ w => (n: Nat) → tens(w)(n) = n.div(Nat::pow(10, w)) {
+        Zero => λ n => sym(Nat::div_one(n)),
+        Succ(j) => λ n => trans(tens_is_div(j, n.div(10)),
+            trans(Nat::div_div(n, 10, Nat::pow(10, j), trivial, ten_pow_positive(j)),
+                cong_fn<Nat, Nat>(λ d => n.div(d), Nat::mul_comm(10, Nat::pow(10, j))))),
+    }
+}

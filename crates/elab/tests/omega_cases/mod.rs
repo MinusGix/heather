@@ -390,6 +390,27 @@ theorem disequality(x, y: Int,
         .unwrap_or_else(|error| panic!("disequality split did not check: {}", message(error)));
 }
 
+// A Nat disequality splits the same way: what `split_all` states at an
+// equality bit's false side.
+fn splits_nat_disequality_by_trichotomy() {
+    let source = format!(
+        r#"{PREFIX}
+theorem disequality(x: Nat, different: x ≠ 10, above: 9 < x, below: x < 11): False
+{{ omega }}
+"#
+    );
+    elaborator()
+        .elab_module_source("probe", &source)
+        .unwrap_or_else(|error| panic!("Nat disequality split did not check: {}", message(error)));
+    let source = format!(
+        r#"{PREFIX}
+theorem disequality(x: Nat, different: x ≠ 10, above: 9 < x, below: x < 12): False
+{{ omega }}
+"#
+    );
+    elaborator().elab_module_source("probe", &source).expect_err("x = 11 satisfies the hypotheses");
+}
+
 fn expands_a_conjunctive_hypothesis() {
     let source = format!(
         r#"{PREFIX}
@@ -785,6 +806,7 @@ theorem unrelated(n: Nat, small: n < 5): n < 10 {{
 
 pub fn omega_logic_suite() {
     splits_integer_disequality_by_trichotomy();
+    splits_nat_disequality_by_trichotomy();
     expands_a_conjunctive_hypothesis();
     splits_a_disjunctive_hypothesis();
     constructs_a_conjunctive_goal();

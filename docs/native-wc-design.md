@@ -1,6 +1,6 @@
 # `wc`: a program the `wc -l` template can't express — design
 
-Status: **decisions taken 2026-09-28 (§8); slice A landed 2026-09-28 (§3.1); slice B landed 2026-09-29 (§4.5–4.8); slice C landed 2026-09-29 (§5.1–5.2); slice D next.** Owner: `issues/native-wc.md`.
+Status: **decisions taken 2026-09-28 (§8); slice A landed 2026-09-28 (§3.1); slice B landed 2026-09-29 (§4.5–4.8); slice C landed 2026-09-29 (§5.1–5.2); slice D landed 2026-09-29 (§6.1); `wc -l` moved onto the state process 2026-09-29 (§9).** Owner: `issues/native-wc.md`.
 Builds on `docs/native-read-until-eof-design.md` (the read loop and its
 additive contract), `docs/native-syscall-failures-design.md` (failure paths),
 `docs/fetched-step-determinism-design.md` (claims universal over runs) and
@@ -254,7 +254,9 @@ and three scratch.
 ### 4.7 The record loop (B3, 2026-09-28)
 
 `generate_elaborated_record_loop_x86` (`crates/elab/src/function_ir_source/loop_record.rs`)
-compiles a `bounded_readonly` over a record carry. It keeps the Nat/Bool
+compiles a `bounded_readonly` over a record carry. (Since 2026-09-30 it is the
+only loop generator, `generate_elaborated_loop_x86`, with a Nat or Bool carry
+as a one-field state: docs/native-loop-generator-fold-design.md.) It keeps the Nat/Bool
 loop's shape (the same guard, library induction and final theorem) with
 the iteration as a list of typed pieces:
 
@@ -263,6 +265,10 @@ the iteration as a list of typed pieces:
 - each field, alone, into scratch, then copied home, in write order;
 - the discriminator;
 - the next cursor and budget into freed scratch, then copied home.
+
+(Since 2026-09-30, docs/native-architecture-review.md R5: each field, and
+the cursor and the budget, are computed straight into their own registers,
+whose old values are dead once read; the copies are gone.)
 
 The state's placement (`{prefix}_rep`) is a conjunction per field: a Nat
 field as its word, a Bool field as its placed bit. The invariant
@@ -347,7 +353,8 @@ copy and save; nothing needs that yet.
 
 ## 5. Slice C: the three-field line
 
-- `field_word(n, separator)`, for `n < 10^7`: the seven right-aligned
+- `field_word(n, separator)` (as designed; §5.1 amends it to two words,
+  `field_low` and `field_high`), for `n < 10^7`: the seven right-aligned
   characters of `n`, leading zeros as spaces, then the separator byte, as one
   word. It uses the same restoring-division scheme as `line_word`, over
   seven digits: 28 `place` steps against `line_word`'s 16, and nothing
@@ -432,15 +439,73 @@ stores the high word one byte early, or puts the tail in R12).
 
 `examples/x86-native/wc.hthr`:
 
-- `WcState { lines: Nat, words: Nat, inside: Bool }`, starting at zeros and
-  `False` (bytes are the process's total, §4.4).
+- `WcState { lines, words, bytes: Nat, inside: Bool }`, starting at zeros
+  and `False`. The bytes stay a field (§4.8 keeps the whole state in
+  place); the three counts come first, in the order printed.
 - `wc_body`: on whitespace, `inside := False`, and `lines += 1` at a newline;
-  otherwise `words += 1` when not `inside`, then `inside := True`. It is
-  cursor-free and never breaks.
-- The specs: `lines`, `words` (split at whitespace, count the non-empty
-  pieces), and `len`; `--folds` proves they are the fold's fields.
-- The build: `--read-loop --fields` (the name is open), from one source file,
-  with no count-specific flags.
+  otherwise `words += 1` when not `inside`, then `inside := True`; `bytes += 1`
+  always. It is cursor-free and never breaks.
+- The specs, as a reader checks them: `wc_lines` (the newlines, a `filter`),
+  `wc_words` (the pieces of `wc_split`, the input cut at every whitespace
+  byte, that aren't empty) and `wc_bytes` (the length). `count_wc_input`
+  proves they are the first three fields of the fold from the zero state.
+
+### 6.1 As landed (2026-09-29)
+
+**V5.** The fold proof is structural over the input with the state general:
+`wc_step_is` rewrites the loop's step to `wc_next(space, newline, s)`, a
+function of the two classifications, so each case lemma matches on plain
+`Bool`s. Lines need `newline_is_space` (by `bitvec_omega`'s bridges and
+`omega`). Words carry the invariant
+`fold.words + inside_words(s.inside, pieces) = s.words + words(pieces)`: a
+word the state is already inside continues in the first piece and was
+counted when it began. `omega` can't use a record field of a local as an
+atom (`issues/omega-record-projection-atoms.md`), so the arithmetic goes through
+five helper lemmas over plain numbers. The file checks in seconds.
+
+**The build: `--read-loop --fields`**, with `--spec` given three times in
+the order printed (`crates/cli/src/native/read_fields.rs`). The producer:
+
+- reflects the loop's record (three `Nat` counts and at most one more field,
+  in R13, R14, R15 and R8) and generates the record loop at the process's
+  registers;
+- generates `field_low` and `field_high` at the tail's registers as two
+  fixed-name modules, checked before the program's, like `--print`'s;
+- states what every record gives the process: `_framed` (from `_rep_moves`),
+  `_init` and `_initialised`, `_counts` (the three words in R13–R15);
+- lays out `read_fields_code`. The loop's bytes stay its published literal
+  tree: the code is spelled around `_bytes()`, so no flat literal is
+  compared against the tree (the depth trap) and the jump facts are `refl`;
+- measures the code without evaluating it. The read profile read the file's
+  size off the spelled code, which walks every byte; with three copies of the
+  formatter that ran past the fuel, and a length chain generated over the
+  closed pieces was no better (unification whnf'd the closed sums, which
+  evaluates the formatter's encoding). The library proves the length once
+  over open parts (`read_fields_code_len`, from `len_append`), and the
+  certificate instantiates it with the formatter's `_byte_length` lemmas
+  (`_code_len`); `image_facts` takes that proof. `_fits` was renamed
+  `_code_fits`: the record loop's invariant already has the name.
+  (Attributed afterwards: the spelled length needs more than the default
+  fuel, and the twenty CPU-minutes were the elaborator's whnf oracle
+  re-asking the substitution reducer after the value machine ran out; it
+  now refuses in about a second. Closed in
+  `issues/closed-length-facts-evaluate-encodings.md`.);
+- concludes with `read_fields_spec_runs`, the library claim restated over the
+  three specs through the program's `computes`.
+
+Replaying the certificate's image decodes the loop's byte tree recursively;
+in the test profile that overflowed the 8 MiB main thread, so `build-x86` now
+runs on a thread with its own large stack
+(`issues/module-image-decode-depth-vs-stack.md`).
+
+A program may import the bundled proof library by its bundled names
+(`bitvec_omega`), which the loader leaves to the builder when no file
+answers them (`loader::load_providing`).
+
+Test: `crates/cli/tests/native_wc.rs` (a build naming the specs in another
+order is refused; the executable is compared with the counts and the host's
+`LC_ALL=C POSIXLY_CORRECT=1 wc` on files, pipes and bursts that split
+words; failed reads and writes exit 1).
 
 ## 7. Probes, before any design text is final
 
@@ -457,6 +522,42 @@ stores the high word one byte early, or puts the tail in R12).
   `line_word`'s (linear in nodes; about 44 declarations per node today).
 - **V5** (slice D): the `words` spec and its fold proof, with bv_omega and
   tactics, before any generator work depends on it.
+
+## 9. `wc -l` on the state process (2026-09-29)
+
+The round's success test (§1) asked for `wc -l` to be an instance of what
+`wc` needs. It is now: both run on `elf64_read_state`.
+
+- **The loop is unchanged in kind.** `wc -l`'s Nat-carry loop certificate
+  was already a `ReadStateCertificate`: the old `ReadLoopCertificate` is it
+  at `rep = loop_in(p.carry, loop_nat_rep)`. The profile's placement swaps
+  two registers, the count to R13 and the loop's flag to R11, so the count is
+  the state and nothing is copied or saved around the loop.
+- **A Nat state's facts** are library lemmas at the end of
+  `elf64_read_state` (`count_rep`, `count_framed`, `count_initialised`,
+  `count_room` from `LoopAdvancesByAtMostOne`, `count_word`), with the exit
+  claim `read_count_runs` over the program's `ReadEofComputes`. (Since
+  2026-09-30 the loop generator emits them, as for a record, and the claims
+  take them as parameters: docs/native-loop-generator-fold-design.md §3.2.)
+- **The printing tail** is `lib/elf64_count_print.hthr`: elf64_read_print's
+  base block, formatter and store restated at the tail's offset
+  (`count_tail`, `count_formats`, `count_writes`), then elf64_write_loop's
+  write loop, the way the fields tail uses it. `read_count_print_runs` is
+  the claim.
+- **The producer** (`native/read_loop.rs`) lays out the state head and the
+  write loop once (`state_head`, `write_loop`) for `--read-loop`, `--print`
+  and `--fields`. The loop's bytes stay its published literal tree in all
+  three, so the flat `_loop_written` comparison is gone.
+- **What went away:** the old process in `elf64_read_loop` (`eof_code`, the
+  save block, `eof_from`, `read_loop_runs`, about 850 lines) and the tail
+  bound to its layout in `elf64_read_print` (`print_at_*`,
+  `ReadPrintResident`, its own copy of the write loop, `read_print_runs`,
+  about 800). What remains of both is the read and write profiles' pieces,
+  renamed for it the same day: `elf64_read_pieces` and `elf64_print_pieces`.
+  Their refusal tests now mutate those pieces and are refused by the library
+  that uses them (the state process, the write loop, the count's tail).
+- **Cost:** the `wc -l` builds bundle `elf64_read_state` now, and `--print`
+  also bundles elf64_write_loop and elf64_count_print.
 
 ## 8. Decisions (2026-09-28, with the user)
 

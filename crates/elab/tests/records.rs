@@ -593,3 +593,58 @@ fn projections_chain_and_compose_with_methods() {
         theorem method_on_a_projection(o: Outer, p: o.i.a = 3): 3 = o.i.a { p.sym() }
         "#);
 }
+
+// -- Functional update (issues/record-update-syntax.md) --------------------
+
+// `s with { f = v }` is the record literal that keeps the other fields as
+// `s`'s projections: computed on a literal and on a neutral receiver, in
+// checking and inference position, at an open field type, chained, and with
+// a computed base (bound once).
+#[test]
+fn an_update_keeps_the_other_fields() {
+    ok(r#"
+record P { x: Nat, y: Nat, z: Nat }
+fn bump(p: P) -> P { p with { x = Succ(p.x) } }
+fn swap(p: P) -> P { p with { y = p.x, x = p.y } }
+fn make() -> P { P { x: 1, y: 2, z: 3 } }
+theorem neutral(p: P): bump(p) = P(Succ(p.x), p.y, p.z) { refl }
+theorem swapped(): swap(make()) = P(2, 1, 3) { refl }
+theorem computed(): (make() with { z = 0 }) = P(1, 2, 0) { refl }
+theorem chained(p: P): (p with { x = 0 } with { y = 0 }).z = p.z { refl }
+record Tagged<A> { val: A, tag: Nat }
+fn retag<A>(t: Tagged<A>) -> Tagged<A> { t with { tag = 7 } }
+theorem open_field<A>(t: Tagged<A>): retag(t).val = t.val { refl }
+"#);
+}
+
+// A dependent field whose type mentions a replaced one is refused at the
+// replaced field; giving the dependent field too is accepted.
+#[test]
+fn an_update_of_a_field_a_kept_field_depends_on_is_refused() {
+    let error = bad(&format!("{MONOID}{NAT_MONOID}
+fn reunit(m: Monoid<Nat>) -> Monoid<Nat> {{ m with {{ unit = 1 }} }}
+"));
+    assert!(error.contains("`unit_l`'s type mentions `unit`"), "{error}");
+    // Below `unit_l`'s binder too: it is a Π whose codomain mentions `op`.
+    let error = bad(&format!("{MONOID}{NAT_MONOID}
+fn reop(m: Monoid<Nat>) -> Monoid<Nat> {{ m with {{ op = λ (x: Nat) => λ (y: Nat) => y }} }}
+"));
+    assert!(error.contains("`unit_l`'s type mentions `op`"), "{error}");
+    ok(&format!("{MONOID}{NAT_MONOID}
+fn reunit(m: Monoid<Nat>) -> Monoid<Nat> {{ m with {{ unit = 1, op = λ (x: Nat) => λ (y: Nat) => y, unit_l = λ (x: Nat) => refl }} }}
+theorem reunit_unit(): reunit(nat_monoid()).unit = 1 {{ refl }}
+"));
+}
+
+#[test]
+fn an_update_names_fields_the_record_has_once() {
+    let record = "record P { x: Nat, y: Nat }\n";
+    let error = bad(&format!("{record}fn f(p: P) -> P {{ p with {{ w = 1 }} }}"));
+    assert!(error.contains("`P` has no field `w`"), "{error}");
+    let error = bad(&format!("{record}fn f(p: P) -> P {{ p with {{ x = 1, x = 2 }} }}"));
+    assert!(error.contains("`x` is updated twice"), "{error}");
+    let error = bad("fn f(n: Nat) -> Nat { n with { x = 1 } }");
+    assert!(error.contains("`with` updates a record"), "{error}");
+    let error = bad(&format!("{record}fn f(p: P) -> P {{ p with {{ x = 1 }} }}\ntheorem wrong(p: P): f(p).y = 1 {{ refl }}"));
+    assert!(!error.contains("updates"), "a kept field keeps its value: {error}");
+}

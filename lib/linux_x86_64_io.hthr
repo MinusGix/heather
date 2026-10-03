@@ -8,6 +8,7 @@
 // environment assumptions, not theorems here.
 import linux_x86_64_entry;
 import x86_64;
+import x86_64_block;
 import x86_64_fetch;
 import x86_64_data_read;
 import x86_64_fetched_code;
@@ -175,7 +176,7 @@ fn LinuxWritesFrom<M>(io: LinuxIo<M>, memory: M, buffer: BitVec(64), bytes: List
 }
 
 fn LinuxSyscallAt<M>(io: LinuxIo<M>, state: MachineState<M>) → Type {
-    FetchedFrom(io.fetch, state.memory, InstructionBytes(state.rip, linux_syscall_bytes()))
+    FetchedFrom(io.fetch, state.memory, InstructionBytes(state.rip, syscall_bytes()))
 }
 
 // ---------------------------------------------------------------------------
@@ -184,6 +185,9 @@ fn LinuxSyscallAt<M>(io: LinuxIo<M>, state: MachineState<M>) → Type {
 
 fn linux_writes<M>(io: LinuxIo<M>) → ByteWrites<M> { ByteWrites(io.writable, io.store) }
 
+// x86_64_step_forms's `FetchedOrStore` at the profile's accesses, spelled
+// again because neither module imports the other; the determinism proof
+// meets one as the other by conversion.
 fn LinuxStep<M>(io: LinuxIo<M>, before, after: MachineState<M>) → Type {
     FetchedStep(io.fetch, io.data, before, after) ∨ StoreStep(io.fetch, linux_writes(io), before, after)
 }

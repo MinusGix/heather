@@ -140,6 +140,38 @@ fn a_module_in_two_search_directories_is_an_error_not_a_precedence() {
 }
 
 #[test]
+fn a_search_directory_exposes_the_modules_below_it() {
+    // A file target gets the directory-target rule for its `-L` dirs: the
+    // facade's `child` lives in `nestedset/components`, and `child`'s own
+    // `import base` still finds the public `nestedset/base.hthr` rather than
+    // colliding with `nestedset/shadow/base.hthr`; and `nestedset/.copy`'s
+    // `child` is not a second hit, since dot-directories are not searched.
+    let out = heather(&["check", "-L", "nestedset", "nestedset/facade.hthr"]);
+    assert_eq!(out.status.code(), Some(0), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "nestedset/facade.hthr: ok\n");
+    // The negative control: the importing file's own directory is not
+    // searched below.
+    let out = heather(&["check", "nestedset/facade.hthr"]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("cannot find module `child`"));
+}
+
+#[test]
+fn a_provided_name_covers_a_missing_module_but_not_an_ambiguous_one() {
+    // The native builder's bundled names (`loader::load_providing`): a name no
+    // file answers is left to the caller, but a name two search directories
+    // answer is refused, not silently replaced by the caller's copy.
+    let fixtures = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures"));
+    let root = fixtures.join("uses_shared.hthr");
+    let modules = heather_cli::loader::load_providing(&root, &[], &["shared"])
+        .unwrap_or_else(|e| panic!("{}", e.msg));
+    assert_eq!(modules.iter().map(|m| m.name.as_str()).collect::<Vec<_>>(), ["uses_shared"]);
+    let search = [fixtures.join("ldir"), fixtures.join("ldir2")];
+    let err = heather_cli::loader::load_providing(&root, &search, &["shared"]).err().expect("ambiguous");
+    assert!(err.msg.contains("two search directories"), "{}", err.msg);
+}
+
+#[test]
 fn an_error_in_an_imported_module_is_reported_against_that_file() {
     let out = heather(&["check", "uses_broken.hthr"]);
     assert_eq!(out.status.code(), Some(1));
@@ -470,18 +502,24 @@ fn deny_axioms_is_a_check_policy() {
 fn an_edited_module_replays_its_unchanged_declarations_from_the_previous_image() {
     let dir = cache_dir("slice-replay");
     let arg = dir.display().to_string();
+    // The edited copy lives outside the repository: a source written and
+    // deleted under `crates/` races the corpus scans that list the tree
+    // (issues/corpus-scan-vanishing-file.md).
+    let sources = cache_dir("slice-replay-sources");
+    std::fs::create_dir_all(&sources).unwrap();
+    let edited = sources.join("slice_edit.hthr");
+    let edited_arg = edited.display().to_string();
     let fixtures = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
-    let edited = std::path::Path::new(fixtures).join("slice_edit.hthr");
     let original = std::fs::read_to_string(std::path::Path::new(fixtures).join("good.hthr")).unwrap();
     std::fs::write(&edited, &original).unwrap();
 
-    let cold = heather(&["check", "--cache-dir", &arg, "slice_edit.hthr"]);
+    let cold = heather(&["check", "--cache-dir", &arg, &edited_arg]);
     assert_eq!(cold.status.code(), Some(0), "{}", String::from_utf8_lossy(&cold.stderr));
     let cold_out = String::from_utf8_lossy(&cold.stdout).to_string();
     assert!(cold_out.contains("0 declarations replayed after an edit"), "{cold_out}");
 
     std::fs::write(&edited, format!("{original}\nfn one_more() -> Nat {{ double(1) }}\n")).unwrap();
-    let edit = heather(&["check", "--cache-dir", &arg, "slice_edit.hthr"]);
+    let edit = heather(&["check", "--cache-dir", &arg, &edited_arg]);
     assert_eq!(edit.status.code(), Some(0), "{}", String::from_utf8_lossy(&edit.stderr));
     let edit_out = String::from_utf8_lossy(&edit.stdout).to_string();
     let items = original.matches("\nfn ").count() + original.matches("\ntheorem ").count();
@@ -491,7 +529,7 @@ fn an_edited_module_replays_its_unchanged_declarations_from_the_previous_image()
     );
     assert!(edit_out.contains("1 declaration kernel-checked"), "the appended one faces the kernel: {edit_out}");
 
-    let _ = std::fs::remove_file(&edited);
+    let _ = std::fs::remove_dir_all(sources);
     let _ = std::fs::remove_dir_all(dir);
 }
 

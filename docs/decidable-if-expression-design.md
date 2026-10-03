@@ -44,10 +44,33 @@ match decide<P>() {
 ```
 
 The two occurrences of `h` inhabit separate scopes and have types `P` and
-`P -> False`, respectively. The form without a binder uses unspellable
-internal names. `MatchForm::If` is retained only as source provenance for
-diagnostics; computation and dependent elimination continue through the
-ordinary `Or` match implementation.
+`P -> False`, respectively. `MatchForm::If` is retained only as source
+provenance for diagnostics; computation and dependent elimination continue
+through the ordinary match implementation.
+
+**The form without a binder matches on the decision's bit** (2026-10-02,
+issues/native-frontend-decided-matches.md):
+
+```heather
+if P { yes } else { no }
+// is
+match decide_bit<P>() { True => yes, False => no }
+```
+
+`Decide<P>` carries `bit: Bool` and `reflects: Reflects(P, bit)` beside
+`dec`, and lives in `bool` for that reason. At a resolved instance the
+elaborator reads `decide_bit<P>()` as the instance's own bit
+(`b.eq_bit(10)` for `b = '\n'`, `x || y` for `P ∨ Q`), the way a literal's
+embedding is read. Why: matching on `dec` puts a match on a match (the
+instance's own match on the comparison) under every `if`, and case-of-case
+is not definitional, so a native step written with `if` could not be its
+generated expansion by conversion, and `split_all` had to abstract the
+comparison inside the instance's proofs. A match on the bit is the match a
+step's code makes.
+
+A proof about a function an evidence-free `if` defines cases on the bit:
+`decide_bit_split<P>(M, yes, no)` gives each side its evidence
+(`Int::le_max_l`).
 
 Normal implicit resolution supplies `Decide<P>`. Consequently an explicit
 local dictionary takes precedence in exactly the same way it does for a

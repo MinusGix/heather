@@ -1,0 +1,86 @@
+// `wc`, as a certified static executable (docs/native-wc-design.md,
+// docs/native-stream-filter-design.md): lines, words and bytes of stdin,
+// printed as GNU prints them on a pipe. The program is a stream filter whose
+// step below counts and emits nothing, its state kept in registers across
+// the reads, and whose finish prints the first three fields as a
+// `%7d %7d %7d` line. What the counts mean is stated the way a reader would
+// check them: the newlines, the non-empty pieces of the input split at
+// whitespace, and the length. Each count's proof is what one byte does to it
+// (`lines_step` …, by case analysis), carried over the input by the
+// library's fold lemmas; `wc_program` at the end is the program.
+//
+//     heather build-x86 examples/x86-native/wc.hthr wc_program -o wc
+import function_ir_loop;
+import filter_program;
+import stream_filter;
+import field_line;
+import algebra;
+import bitvec;
+import bool;
+import byte;
+import char;
+import list;
+import logic;
+import nat;
+import omega;
+import bitvec_omega;
+
+// The in-word flag is the fourth field: the three counts are the first three,
+// in the order they are printed.
+record WcState { lines: Nat, words: Nat, bytes: Nat, inside: Bool }
+
+fn newline(b: BitVec(8)) → Bool { decide_bit<b = '\n'>() }
+
+// Whitespace in the C locale: space, and tab to carriage return.
+fn space(b: BitVec(8)) → Bool { decide_bit<b = ' ' ∨ ('\t' <= b ∧ b <= '\r')>() }
+
+// What the counts mean.
+
+// The number of newlines.
+fn wc_lines(bytes: List<BitVec(8)>) → Nat { bytes.filter(newline).len() }
+
+// The number of words: the pieces between whitespace that aren't empty.
+fn wc_words(bytes: List<BitVec(8)>) → Nat { bytes.split_by(space).filter(List::non_empty).len() }
+
+// The number of bytes.
+fn wc_bytes(bytes: List<BitVec(8)>) → Nat { bytes.len() }
+
+// What `wc` prints: the three counts as GNU prints them on a pipe.
+fn wc_out(bytes: List<BitVec(8)>) → List<BitVec(8)> { three_fields_line(wc_lines(bytes), wc_words(bytes), wc_bytes(bytes)) }
+
+// The step: the next state from a state and a byte. Every byte is counted;
+// whitespace ends a word, and a newline is a line; any other byte starts a
+// word unless the state is already in one.
+fn wc_step(s: WcState, b: BitVec(8)) → WcState {
+    match space(b) {
+        True => match newline(b) {
+            True => s with { lines = Succ(s.lines), bytes = Succ(s.bytes), inside = False },
+            False => s with { bytes = Succ(s.bytes), inside = False },
+        },
+        False => match s.inside {
+            True => s with { bytes = Succ(s.bytes) },
+            False => s with { words = Succ(s.words), bytes = Succ(s.bytes), inside = True },
+        },
+    }
+}
+
+// Why the fold counts what the specifications say: what one byte does to
+// each count. A newline is one more line; a byte that isn't whitespace starts
+// a word when the state isn't in one; every byte is one more byte.
+theorem lines_step(s: WcState, b: BitVec(8)): wc_step(s, b).lines = s.lines + Nat::of_bit(newline(b)) { split_all; all_goals { omega } }
+theorem words_step(s: WcState, b: BitVec(8)): wc_step(s, b).words = s.words + starts_run(space(b), s.inside) { split_all; all_goals { omega } }
+theorem inside_step(s: WcState, b: BitVec(8)): wc_step(s, b).inside = !space(b) { split_all; all_goals { refl } }
+theorem bytes_step(s: WcState, b: BitVec(8)): wc_step(s, b).bytes = Succ(s.bytes) { split_all; all_goals { omega } }
+
+// The program: the step, the zero state, its counts in order, the line it
+// prints, and what stdout is, with each printed count folded from zero; that
+// each count grows by at most one per byte is the program's default.
+// `heather build-x86` builds it by this name.
+fn wc_program() → Filter<WcState>(counting(wc_step), WcState(0, 0, 0, False), [λ s => s.lines, λ s => s.words, λ s => s.bytes],
+    Fields, wc_out) {
+    let zero = WcState(0, 0, 0, False);
+    Filter(fields_computes(wc_step, zero, λ s => s.lines, λ s => s.words, λ s => s.bytes, Nil, wc_lines, wc_words, wc_bytes,
+        fold_counts_filtered(wc_step, λ s => s.lines, newline, lines_step, zero, refl),
+        fold_counts_runs(wc_step, λ s => s.words, λ s => s.inside, space, words_step, inside_step, zero, refl, refl),
+        fold_counts_len(wc_step, λ s => s.bytes, bytes_step, zero, refl)))
+}

@@ -168,10 +168,12 @@ RIP. Inherited registers, including consumed selectors, remain protected.
 Multi-result dataflow currently selects a dependency slice per result and
 protects each finished result while selecting the next. This can recompute
 shared nodes and decline avoidable register pressure; it does not invent
-spills or edge-copy reconciliation. Existing leaf restrictions still apply:
-64-bit arithmetic, with narrow add/subtract and signed comparisons still
-requiring their own normalization rules. Zero-extended placements now support
-widths 0–64 for constants, copies, bitwise AND/OR/XOR, and unsigned comparisons.
+spills or edge-copy reconciliation. Signed comparisons below 64 bits still
+decline: they need a signed normalization rule. Zero-extended placements
+support widths 0–64 for constants, copies, bitwise AND/OR/XOR, unsigned
+comparisons and (since 2026-09-30, `docs/native-tr-design.md` §4.1) add and
+subtract, which are the word's operation masked to the width in a scratch
+register (`BitVec::add_zero_extend_mask`).
 Constants are reduced modulo their logical width before materialization;
 comparison results remain normalized one-bit values. Generic bitvector
 zero-extension laws justify the physical word operations, and placement/frame

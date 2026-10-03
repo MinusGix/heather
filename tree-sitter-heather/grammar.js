@@ -384,6 +384,7 @@ module.exports = grammar({
       $.refl_expression,
       $.explicit_call_expression,
       $.record_expression,
+      $.record_update_expression,
       $.call_expression,
       $.decreasing_expression,
       $.member_expression,
@@ -514,6 +515,12 @@ module.exports = grammar({
       '{', commaSep1($.record_field), optional(','), '}',
     )),
     record_field: $ => seq(field('name', $.identifier), ':', field('value', $._expression)),
+    // `s with { f = v, … }` — functional record update; `with` is a word only
+    // before the `{`.
+    record_update_expression: $ => prec.left(PREC.POSTFIX, seq(
+      field('value', $._expression), 'with', '{', commaSep1($.record_update_field), optional(','), '}',
+    )),
+    record_update_field: $ => seq(field('name', $.identifier), '=', field('value', $._expression)),
 
     function_type: $ => prec.right(PREC.ARROW, seq(
       choice($.binder_group, $.implicit_binder_group, $._expression), choice('->', '→'), $._expression,
@@ -544,6 +551,7 @@ module.exports = grammar({
       alias('give', $.identifier),
       alias('refl', $.identifier),
       alias('have', $.identifier),
+      alias('with', $.identifier),
     ),
     // Keep plain and namespace-qualified names lexically disjoint. Declaration
     // name positions alias either spelling to the stable qualified-name node.

@@ -80,10 +80,10 @@ fn probe(name: &str, src: &str) {
 fn the_int_module_checks() {
     let mut e = elaborated(false);
     assert!(
-        INT.contains("match a.le_dec(b) as λ d => a <= or_pick(d, a, b)")
-            && INT.contains("match a.le_dec(b) as λ d => b <= or_pick(d, a, b)")
-            && INT.contains("match a.le_dec(b) as λ d => c <= or_pick(d, b, a)"),
-        "the three kernel-required motives remain explicit"
+        INT.contains("decide_bit_split<a <= b>(λ c => a <= match c { True => b, False => a }")
+            && INT.contains("decide_bit_split<a <= b>(λ c => b <= match c { True => b, False => a }")
+            && INT.contains("decide_bit_split<a <= b>(λ x => c <= match x { True => a, False => b }"),
+        "the three kernel-required motives remain explicit (over the bit an evidence-free `if` matches on)"
     );
     assert!(
         e.take_warnings().iter().all(|w| w.lint != Lint::RedundantMatchMotive),

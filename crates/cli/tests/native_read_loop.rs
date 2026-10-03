@@ -1,35 +1,19 @@
 //! The first program with input: `wc -l` built as a certified executable that
 //! reads stdin to its end (docs/native-first-program-design.md,
-//! docs/native-read-until-eof-design.md) with no toolchain on PATH, then run
-//! on files and on pipes written in bursts. The status and the printed line
-//! are compared with the newline count of the whole input, as the certificate
-//! states it.
+//! docs/native-stream-filter-design.md) with no toolchain on PATH, then run
+//! on files and on pipes written in bursts. The printed line is compared with
+//! the newline count of the whole input, as the certificate states it.
 #![cfg(all(target_arch = "x86_64", target_os = "linux"))]
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
-fn root() -> PathBuf { Path::new(env!("CARGO_MANIFEST_DIR")).join("../..") }
+mod native_support;
+use native_support::*;
 
-fn scratch(name: &str) -> PathBuf {
-    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-    let directory = root().join(format!("target/native-{name}-{}-{nonce}", std::process::id()));
-    std::fs::create_dir_all(&directory).unwrap();
-    directory
-}
+// `wc_l_program`, the program's bundle, is all a build names.
+fn build(directory: &Path, source: &Path, extra: &[&str]) -> Output { build_x86(directory, source, "wc_l_program", extra, "wc_l") }
 
-fn build(directory: &Path, needle: &str) -> Output { build_with(directory, needle, &[]) }
-
-fn build_with(directory: &Path, needle: &str, extra: &[&str]) -> Output {
-    build_raw(directory, needle, &[&["--folds", "line_body_folds"], extra].concat())
-}
-
-fn build_raw(directory: &Path, needle: &str, extra: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_heather")).current_dir(root()).env("PATH", directory)
-        .args(["build-x86", "examples/x86-native/wc_l.hthr", "count_lines", "--read-loop", "--needle", needle,
-            "--advance", "line_body_advances", "--spec", "wc_l", "--computes", "count_lines_input"]).args(extra).arg("-o")
-        .arg(directory.join("wc_l")).args(["--cache-dir", "target/native-test-images"]).output().unwrap()
-}
+fn published(directory: &Path) -> [PathBuf; 2] { [directory.join("wc_l"), directory.join("wc_l.certificate.hthr")] }
 
 fn inputs() -> Vec<Vec<u8>> {
     let mut seed = 0x9e37_79b9_7f4a_7c15u64;
@@ -54,82 +38,42 @@ fn inputs() -> Vec<Vec<u8>> {
 // What `wc -l` prints: every newline, however many reads it took.
 fn newlines(input: &[u8]) -> usize { input.iter().filter(|&&b| b == b'\n').count() }
 
-// The status: the count's low byte.
-fn expected(input: &[u8]) -> i32 { (newlines(input) % 256) as i32 }
+const BURSTS: &[&[u8]] = &[b"one\ntw", b"o\n", b"", b"three", b"\n\n"];
 
-// A pipe written in bursts, so the reads return pieces: the program must
-// keep reading until the writer closes it.
-fn bursts(executable: &Path) -> Output {
-    let mut child = Command::new(executable).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
-    let mut stdin = child.stdin.take().unwrap();
-    for piece in [&b"one\ntw"[..], b"o\n", b"", b"three", b"\n\n"] {
-        stdin.write_all(piece).unwrap();
-        stdin.flush().unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(30));
-    }
-    drop(stdin);
-    child.wait_with_output().unwrap()
-}
-
-// Failures (docs/native-syscall-failures-design.md): a read of a directory
-// fails with EISDIR, a write to a descriptor open only for reading with EBADF,
-// and a write to `/dev/full` with ENOSPC. Each exits 1.
-fn unreadable_stdin(executable: &Path) -> Output {
-    Command::new(executable).stdin(std::fs::File::open("/").unwrap()).output().unwrap()
-}
-fn unwritable_stdout(executable: &Path, stdout: Stdio) -> Output {
-    let mut child = Command::new(executable).stdin(Stdio::piped()).stdout(stdout).spawn().unwrap();
-    child.stdin.take().unwrap().write_all(b"one\n").unwrap();
-    child.wait_with_output().unwrap()
-}
-
+// An author's mistakes are refused at the author's source, by the check of
+// the program's bundle, and nothing is published: a finish its fact is not
+// about (a program whose finish prints nothing, where `wc_l_out` is the
+// count's line), and an `advances`
+// given by hand that is about something else than the step.
+// (A step its default cannot show is refused at the construction:
+// named_arguments's `a_default_that_fails_is_refused_at_the_construction`.)
 #[test]
-fn wc_l_counts_every_line() {
-    let directory = scratch("read-loop");
-    let output = build(&directory, "10");
-    assert!(output.status.success(), "build-x86 {}: {}", output.status, String::from_utf8_lossy(&output.stderr));
-    let executable = directory.join("wc_l");
-    let certificate = std::fs::read_to_string(directory.join("wc_l.certificate.hthr")).unwrap();
-    for claim in ["_runs(", "_runs_every(", "_written(", "_file_correct(", "_loop_written("] {
-        assert!(certificate.contains(claim), "missing {claim}");
-    }
-    for (index, input) in inputs().iter().enumerate() {
-        let path = directory.join(format!("input-{index}"));
-        std::fs::write(&path, input).unwrap();
-        let status = Command::new(&executable).stdin(std::fs::File::open(&path).unwrap()).status().unwrap();
-        assert_eq!(status.code(), Some(expected(input)), "input {index} ({} bytes)", input.len());
-    }
-    assert_eq!(bursts(&executable).status.code(), Some(4));
-    assert_eq!(unreadable_stdin(&executable).status.code(), Some(1));
-    std::fs::remove_dir_all(directory).unwrap();
-}
-
-// The loop given a byte its specification does not count: the program's
-// ReadEofComputes fact is about newlines, so the certificate is refused and
-// nothing is published.
-#[test]
-fn a_needle_the_specification_does_not_count_is_refused() {
+fn a_program_that_is_wrong_is_refused_at_its_source() {
     let directory = scratch("read-loop-refused");
-    let output = build(&directory, "32");
-    assert!(!output.status.success(), "a space-counting loop was certified against wc_l");
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(!stderr.contains("unbound") && !stderr.contains("ambiguous"), "{stderr}");
-    assert!(!directory.join("wc_l").exists() && !directory.join("wc_l.certificate.hthr").exists());
+    for (fact, edits) in [
+        ("wc_l_program", &[("[λ c => c], Line, wc_l_out) {", "[λ c => c], Quiet, wc_l_out) {")][..]),
+        ("advances", &[("newline, line_grows, 0, refl)))",
+            "newline, line_grows, 0, refl)), advances := λ count byte => Nat::le_refl(Succ(count)))")][..]),
+    ] {
+        let source = mistaken(&directory, "wc_l", edits);
+        let output = build(&directory, &source, &[]);
+        assert_refused_at(&output, &source, &published(&directory));
+        assert!(String::from_utf8_lossy(&output.stderr).contains(fact), "refused elsewhere than at `{fact}`");
+    }
     std::fs::remove_dir_all(directory).unwrap();
 }
 
-// With `--print`, the count is the output: its decimal digits and a newline
-// on stdout, as `decimal_line(wc_l(eof_input(chunks)))` states it, and the
-// exit is 0; a failed read or write exits 1.
+// The count is the output: its decimal digits and a newline on stdout, as
+// `wc_l_out` states it, and the exit is 0; a failed read or write exits 1.
 #[test]
 fn wc_l_prints_every_line() {
     let directory = scratch("read-print");
-    let output = build_with(&directory, "10", &["--print"]);
+    let output = build(&directory, &example("wc_l"), &[]);
     assert!(output.status.success(), "build-x86 {}: {}", output.status, String::from_utf8_lossy(&output.stderr));
     let executable = directory.join("wc_l");
     let certificate = std::fs::read_to_string(directory.join("wc_l.certificate.hthr")).unwrap();
     assert!(!certificate.contains("Nat::le_antisym"), "size equality must use refl");
-    for claim in ["_runs(", "_runs_every(", "write_events(", "decimal_line(", "_code_written(", "_file_correct("] {
+    for claim in ["_runs(", "_runs_every(", "_sends(", "write_events(", "filter_line_tail(", "_code_written(", "_file_correct(", "read_filter_runs("] {
         assert!(certificate.contains(claim), "missing {claim}");
     }
     for (index, input) in inputs().iter().enumerate() {
@@ -139,33 +83,14 @@ fn wc_l_prints_every_line() {
         assert_eq!(run.status.code(), Some(0), "input {index}");
         assert_eq!(String::from_utf8_lossy(&run.stdout), format!("{}\n", newlines(input)), "input {index} ({} bytes)", input.len());
     }
-    let run = bursts(&executable);
+    let run = bursts(&executable, BURSTS);
     assert_eq!((run.status.code(), run.stdout.as_slice()), (Some(0), b"4\n".as_slice()));
     let run = unreadable_stdin(&executable);
     assert_eq!((run.status.code(), run.stdout.as_slice()), (Some(1), b"".as_slice()));
-    assert_eq!(unwritable_stdout(&executable, Stdio::null()).status.code(), Some(0));
+    assert_eq!(unwritable_stdout(&executable, Stdio::null(), b"one\n").status.code(), Some(0));
     let full = std::fs::OpenOptions::new().write(true).open("/dev/full").unwrap();
-    assert_eq!(unwritable_stdout(&executable, Stdio::from(full)).status.code(), Some(1));
+    assert_eq!(unwritable_stdout(&executable, Stdio::from(full), b"one\n").status.code(), Some(1));
     let closed = std::fs::File::open("/").unwrap();
-    assert_eq!(unwritable_stdout(&executable, Stdio::from(closed)).status.code(), Some(1));
+    assert_eq!(unwritable_stdout(&executable, Stdio::from(closed), b"one\n").status.code(), Some(1));
     std::fs::remove_dir_all(directory).unwrap();
 }
-
-// Counting chunk by chunk needs the program's proof that its step folds
-// (docs/native-wc-design.md §3): without it the build is refused, and with
-// another theorem in its place the certificate is refused where the fact is
-// used, not by a missing name.
-#[test]
-fn read_loop_needs_its_folds() {
-    let directory = scratch("read-loop-no-folds");
-    let output = build_raw(&directory, "10", &[]);
-    assert!(!output.status.success() && String::from_utf8_lossy(&output.stderr).contains("--folds"));
-    assert!(!directory.join("wc_l").exists());
-    let output = build_raw(&directory, "10", &["--folds", "line_body_advances"]);
-    assert!(!output.status.success(), "a theorem that is not LoopFolds was accepted as --folds");
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(!stderr.contains("unbound") && !stderr.contains("ambiguous"), "{stderr}");
-    assert!(!directory.join("wc_l").exists());
-    std::fs::remove_dir_all(directory).unwrap();
-}
-

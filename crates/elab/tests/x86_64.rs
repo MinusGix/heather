@@ -17,7 +17,7 @@ const BITVEC: &str = include_str!("../../../lib/std/bitvec.hthr");
 const RELATION: &str = include_str!("../../../lib/std/relation.hthr");
 const LOCATION: &str = include_str!("../../../lib/std/location.hthr");
 const CERTIFIED_LOOKUP: &str = include_str!("../../../lib/std/certified_lookup.hthr");
-const X86_64: &str = include_str!("../../../lib/std/arch/x86_64/model.hthr");
+const X86_64: &str = include_str!("../../../lib/std/arch/x86_64/x86_64.hthr");
 
 const X86_MODULES: &[(&str, &str)] = &[
     ("logic", LOGIC),
@@ -130,8 +130,10 @@ theorem canonical_setcc_bytes():
         [@bitvec::BitVec::ofNat(8, 15), @bitvec::BitVec::ofNat(8, 146), @bitvec::BitVec::ofNat(8, 192)]
     ∧ canonical_bytes(SetLess(Bl)) =
         [@bitvec::BitVec::ofNat(8, 15), @bitvec::BitVec::ofNat(8, 156), @bitvec::BitVec::ofNat(8, 195)]
+    ∧ canonical_bytes(SetEqual(Cl)) =
+        [@bitvec::BitVec::ofNat(8, 15), @bitvec::BitVec::ofNat(8, 148), @bitvec::BitVec::ofNat(8, 193)]
 {
-    And(refl, refl)
+    And(refl, And(refl, refl))
 }
 
 theorem canonical_setcc_decodes():
@@ -139,8 +141,18 @@ theorem canonical_setcc_decodes():
         Some(decoded_canonical(SetBelow(Al)))
     ∧ decode_instruction(canonical_bytes(SetLess(Bl))) =
         Some(decoded_canonical(SetLess(Bl)))
+    ∧ decode_instruction(canonical_bytes(SetEqual(Cl))) =
+        Some(decoded_canonical(SetEqual(Cl)))
 {
-    And(refl, refl)
+    And(refl, And(refl, refl))
+}
+
+// 0F 95 (SETNE) is not modelled and must not decode as SETE.
+theorem unmodelled_setcc_is_rejected():
+    decode_instruction(
+        [@bitvec::BitVec::ofNat(8, 15), @bitvec::BitVec::ofNat(8, 149), @bitvec::BitVec::ofNat(8, 192)]) = None
+{
+    refl
 }
 
 theorem malformed_setcc_is_rejected():
@@ -163,6 +175,13 @@ theorem cmp_flags_are_function_ir_conditions(left, right: BitVec(64)):
         @bitvec::BitVec::signed_lt_bit(64, left, right)
 {
     And(refl, refl)
+}
+
+// ZF is equality by a law rather than by definition.
+theorem cmp_zero_flag_is_equality(left, right: BitVec(64)):
+    sub_flags(left, right).zf = @bitvec::BitVec::eq_bit(64, left, right)
+{
+    zero_bits_sub(64, left, right)
 }
 
 "#;
@@ -773,7 +792,7 @@ fn impossible(start: BitVec(64)) -> DecodedAt(
 
 fn fetched_instruction_boundary_checks(base: &Elaborator) {
     let mut e = base.clone();
-    let library = include_str!("../../../lib/std/arch/x86_64/fetch.hthr");
+    let library = include_str!("../../../lib/std/arch/x86_64/x86_64_fetch.hthr");
     if let Err(err) = e.elab_module_source("x86_64_fetch", library) {
         panic!("fetch library: {}", err.render(library));
     }

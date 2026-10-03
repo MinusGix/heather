@@ -1,0 +1,209 @@
+// The facts `bv_omega` builds, one per word (docs/bv-omega-design.md). A
+// word's value is `w.toNat() + Q = P`, where `P` and `Q` are *forms*: sums
+// `c₁ * a₁ + (c₂ * a₂ + (… + k))` over the call's atoms in a fixed order,
+// with literal coefficients. Adding two forms is one `form_*` step per atom,
+// and the coefficients add as literals, which the checker computes; so no
+// fact needs a search. A word's bound is `P < 2^n + Q`: the tactic proves the
+// outermost words' bounds with `omega` and passes them down with the lemmas
+// here, and a sign `Q <= P` is what a sibling's bound needs.
+//
+// Everything is Nat. An Omega row (`dot` over a list of coefficients) costs
+// the checker thousands of steps per application, a form a few dozen.
+import bitvec;
+import bool;
+import logic;
+import nat;
+import bitvec_nat;
+
+// ---------------------------------------------------------------------------
+// Forms.
+
+// One atom's coefficients meet.
+theorem form_step(c, d, a, x, y: Nat): (c * a + x) + (d * a + y) = (c + d) * a + (x + y) {
+    trans(Nat::add_swap_middle(c * a, x, d * a, y),
+        @cong(λ (t: Nat) => t + (x + y), c * a + d * a, (c + d) * a, sym(Nat::add_mul_distr(c, d, a))))
+}
+
+// An atom only the left form has.
+theorem form_left(c, a, x, g: Nat): (c * a + x) + g = c * a + (x + g) { Nat::add_assoc(c * a, x, g) }
+
+// An atom only the right form has.
+theorem form_right(f, d, a, y: Nat): f + (d * a + y) = d * a + (f + y) { Nat::add_left_comm(f, d * a, y) }
+
+// A literal factor into a form's first atom.
+theorem form_scale(k, c, a, x: Nat): k * (c * a + x) = (k * c) * a + k * x {
+    trans(Nat::mul_add_distr(k, c * a, x), @cong(λ (t: Nat) => t + k * x, k * (c * a), (k * c) * a, sym(Nat::mul_assoc(k, c, a))))
+}
+
+// An atom as a form.
+theorem form_atom(a: Nat): a = 1 * a + 0 { sym(Nat::mul_left_one(a)) }
+
+// A word as a leaf fact, in the facts' own shape `a + q = p`. Stated with the
+// `+ 0` rather than proved from `form_atom` at the use: `a + 0` reduces to `a`
+// in one step, but at a leaf `a` is `toNat` of a word, a newer definition than
+// `+`, and conversion unfolds the newer side first, so the use site paid for
+// computing the word before it met the one-step side.
+theorem form_leaf(a: Nat): a + 0 = 1 * a + 0 { sym(Nat::mul_left_one(a)) }
+
+// A leaf whose value a fact in scope states, `a = v`, as a fact over `v`'s
+// form.
+theorem leaf_value(a, v, p: Nat, h: a = v, hv: v = p): a + 0 = p { trans(h, hv) }
+
+// The goal is a word's fact itself: `x = r` where `r` has the fact's form,
+// or `x = a - b` where `a` and `b` have its two forms. No search.
+theorem fact_value(x, p, r: Nat, f: x + 0 = p, hr: r = p): x = r { trans(f, sym(hr)) }
+
+theorem fact_diff(x, q, p, a, b: Nat, f: x + q = p, ha: a = p, hb: b = q): x = a -b {
+    sym(trans(@cong(λ (t: Nat) => t -b, a, x + q, trans(ha, sym(f))),
+        trans(@cong(λ (t: Nat) => (x + q) -t, b, q, hb), Nat::add_sub_cancel(x, q))))
+}
+
+// A bound the writer stated, `x < k` or `x <= k` with `k` a literal within
+// the word's range, as a word's bound.
+theorem below_top(x, p, k, top: Nat, h: x < k, hx: x = p, small: k <= top): p < top + 0 {
+    j(hx, λ t _ => t < top + 0, Nat::le_trans(Succ(x), k, top, h, small))
+}
+
+theorem below_top_le(x, p, k, top: Nat, h: x <= k, hx: x = p, small: k < top): p < top + 0 {
+    j(hx, λ t _ => t < top + 0, Nat::le_trans(Succ(x), Succ(k), top, h, small))
+}
+
+// ---------------------------------------------------------------------------
+// The arithmetic behind the word lemmas, once, over variables, from the Nat
+// kit: `omega` proves each in a few hundred milliseconds, and every prefix
+// that loads this module would pay it.
+
+theorem le_cancel(a, b, k: Nat, h: a + k <= b + k): a <= b { k.le_of_add_le_add_r(a, b, h) }
+
+theorem lt_cancel(a, b, k: Nat, h: a + k < b + k): a < b {
+    k.le_of_add_le_add_r(Succ(a), b, j(sym(Nat::add_succ_left(a, k)), λ z _ => z <= b + k, h))
+}
+
+theorem lt_extend(a, b, k: Nat, h: a < b): a + k < b + k {
+    j(Nat::add_succ_left(a, k), λ z _ => z <= b + k, k.add_le_mono_r(Succ(a), b, h))
+}
+
+theorem add_arith(x, y, qa, pa, qb, pb, q, p, top: Nat, fa: x + qa = pa, fb: y + qb = pb, hp: pa + pb = p, hq: qa + qb = q,
+    bound: p < top + q): (x + y < top) ∧ ((x + y) + q = p) {
+    let pair: ((x + qa) + (y + qb) = p) =
+        trans(trans(@cong(λ (t: Nat) => t + (y + qb), x + qa, pa, fa), @cong(λ (t: Nat) => pa + t, y + qb, pb, fb)), hp);
+    let sum: ((x + y) + q = p) =
+        trans(@cong(λ (t: Nat) => (x + y) + t, q, qa + qb, sym(hq)), trans(Nat::add_swap_middle(x, y, qa, qb), pair));
+    ⟨lt_cancel(x + y, top, q, j(sym(sum), λ t _ => t < top + q, bound)), sum⟩
+}
+
+theorem sub_fits_arith(x, y, qa, pa, qb, pb, q, p: Nat, fa: x + qa = pa, fb: y + qb = pb, hp: pa + qb = p, hq: qa + pb = q,
+    fits: q <= p): y <= x {
+    let lhs: (y + (qa + qb) = q) = trans(sym(Nat::add_left_comm(qa, y, qb)), trans(@cong(λ (t: Nat) => qa + t, y + qb, pb, fb), hq));
+    let rhs: (x + (qa + qb) = p) = trans(sym(Nat::add_assoc(x, qa, qb)), trans(@cong(λ (t: Nat) => t + qb, x + qa, pa, fa), hp));
+    le_cancel(y, x, qa + qb, j(sym(lhs), λ t _ => t <= x + (qa + qb), j(sym(rhs), λ t _ => q <= t, fits)))
+}
+
+theorem sub_arith(x, y, d, qa, pa, qb, pb, q, p: Nat, fa: x + qa = pa, fb: y + qb = pb, hp: pa + qb = p, hq: qa + pb = q,
+    back: d + y = x): d + q = p {
+    trans(@cong(λ (t: Nat) => d + t, q, qa + (y + qb), trans(sym(hq), @cong(λ (t: Nat) => qa + t, pb, y + qb, sym(fb)))),
+    trans(@cong(λ (t: Nat) => d + t, qa + (y + qb), y + (qa + qb), Nat::add_left_comm(qa, y, qb)),
+    trans(sym(Nat::add_assoc(d, y, qa + qb)),
+    trans(@cong(λ (t: Nat) => t + (qa + qb), d + y, x, back),
+    trans(sym(Nat::add_assoc(x, qa, qb)),
+    trans(@cong(λ (t: Nat) => t + qb, x + qa, pa, fa), hp))))))
+}
+
+theorem below_arith(c, p, top: Nat, hc: c = p, bound: p < top + 0): c < top { j(sym(hc), λ t _ => t < top, bound) }
+
+theorem range_arith(x, q, p, top: Nat, f: x + q = p, h: x < top): p < top + q { j(f, λ t _ => t < top + q, lt_extend(x, top, q, h)) }
+
+theorem bound_left(pt, qt, ps, qs, pp, qp, top: Nat, hp: pt + ps = pp, hq: qt + qs = qp, bound: pp < top + qp, sign: qs <= ps):
+    pt < top + qt {
+    let whole: (pt + ps < top + (qt + qs)) = j(sym(hp), λ t _ => t < top + (qt + qs), j(sym(hq), λ t _ => pp < top + t, bound));
+    let regrouped: (pt + ps < (top + qt) + qs) = j(sym(Nat::add_assoc(top, qt, qs)), λ t _ => pt + ps < t, whole);
+    lt_cancel(pt, top + qt, qs, Nat::le_trans(Succ(pt + qs), Succ(pt + ps), (top + qt) + qs, Nat::add_le_mono_l(pt, qs, ps, sign), regrouped))
+}
+
+theorem bound_right(ps, qs, pt, qt, pp, qp, top: Nat, hp: ps + pt = pp, hq: qs + qt = qp, bound: pp < top + qp, sign: qs <= ps):
+    pt < top + qt {
+    bound_left(pt, qt, ps, qs, pp, qp, top, trans(Nat::add_comm(pt, ps), hp), trans(Nat::add_comm(qt, qs), hq), bound, sign)
+}
+
+theorem bound_sub(pa, qa, pb, qb, pp, qp, top: Nat, hp: pa + qb = pp, hq: qa + pb = qp, fits: qp <= pp, bound: pa < top + qa):
+    pb < top + qb {
+    let fits2: (qa + pb <= pa + qb) = j(sym(hp), λ t _ => qa + pb <= t, j(sym(hq), λ t _ => t <= pp, fits));
+    let below: (qa + pb < (top + qa) + qb) = Nat::le_trans(Succ(qa + pb), Succ(pa + qb), (top + qa) + qb, fits2, lt_extend(pa, top + qa, qb, bound));
+    let swap: ((top + qa) + qb = (top + qb) + qa) =
+        trans(Nat::add_assoc(top, qa, qb), trans(@cong(λ (t: Nat) => top + t, qa + qb, qb + qa, Nat::add_comm(qa, qb)), sym(Nat::add_assoc(top, qb, qa))));
+    lt_cancel(pb, top + qb, qa, j(Nat::add_comm(qa, pb), λ t _ => t < (top + qb) + qa, j(swap, λ t _ => qa + pb < t, below)))
+}
+
+theorem sign_add(pa, qa, pb, qb, p, q: Nat, hp: pa + pb = p, hq: qa + qb = q, sa: qa <= pa, sb: qb <= pb): q <= p {
+    j(hp, λ t _ => q <= t, j(hq, λ t _ => t <= pa + pb, Nat::add_le_mono(qa, pa, qb, pb, sa, sb)))
+}
+
+// ---------------------------------------------------------------------------
+// Words.
+
+theorem range(n: Nat, w: BitVec(n), q, p: Nat, f: w.toNat() + q = p): p < Nat::pow(2, n) + q {
+    range_arith(w.toNat(), q, p, Nat::pow(2, n), f, BitVec::toNat_lt_pow(n, w))
+}
+
+theorem ofNat_form(n, c, p: Nat, hc: c = p, bound: p < Nat::pow(2, n) + 0): BitVec::ofNat(c, n := n).toNat() + 0 = p {
+    trans(BitVec::toNat_ofNat(n, c, below_arith(c, p, Nat::pow(2, n), hc, bound)), hc)
+}
+
+theorem word_of_nat_form(n, c, p: Nat, hc: c = p, bound: p < Nat::pow(2, n) + 0): bitvec_nat::word_of_nat(n, c).toNat() + 0 = p {
+    trans(bitvec_nat::toNat_word_of_nat(n, c, below_arith(c, p, Nat::pow(2, n), hc, bound)), hc)
+}
+
+theorem add_form(n: Nat, a, b: BitVec(n), qa, pa, qb, pb, q, p: Nat, fa: a.toNat() + qa = pa, fb: b.toNat() + qb = pb,
+    hp: pa + pb = p, hq: qa + qb = q, bound: p < Nat::pow(2, n) + q): a.add(b).toNat() + q = p {
+    let facts = add_arith(a.toNat(), b.toNat(), qa, pa, qb, pb, q, p, Nat::pow(2, n), fa, fb, hp, hq, bound);
+    j(sym(bitvec_nat::toNat_add(n, a, b, facts.left)), λ v _ => v + q = p, facts.right)
+}
+
+theorem sub_form(n: Nat, a, b: BitVec(n), qa, pa, qb, pb, q, p: Nat, fa: a.toNat() + qa = pa, fb: b.toNat() + qb = pb,
+    hp: pa + qb = p, hq: qa + pb = q, fits: q <= p): a.sub(b).toNat() + q = p {
+    let le = sub_fits_arith(a.toNat(), b.toNat(), qa, pa, qb, pb, q, p, fa, fb, hp, hq, fits);
+    j(sym(bitvec_nat::toNat_sub(n, a, b, le)), λ v _ => v + q = p,
+        sub_arith(a.toNat(), b.toNat(), a.toNat() -b.toNat(), qa, pa, qb, pb, q, p, fa, fb, hp, hq, Nat::sub_add_cancel(b.toNat(), a.toNat(), le)))
+}
+
+// Equality and Boolean comparisons reduce to arithmetic over values.
+theorem word_eq(n: Nat, a, b: BitVec(n), h: a.toNat() = b.toNat()): a = b {
+    trans(sym(BitVec::ofNat_toNat(n, a)),
+        trans(@cong(λ (v: Nat) => BitVec::ofNat(v, n := n), a.toNat(), b.toNat(), h), BitVec::ofNat_toNat(n, b)))
+}
+
+theorem unsigned_true(n: Nat, a, b: BitVec(n), h: a.unsigned_lt_bit(b) = bool::True): a.toNat() < b.toNat() {
+    Nat::leb_sound(Succ(a.toNat()), b.toNat(),
+        j(sym(trans(sym(bitvec_nat::unsigned_lt_nat(n, a, b)), h)), λ flag _ => flag.IsTrue(), trivial))
+}
+
+theorem unsigned_false(n: Nat, a, b: BitVec(n), h: a.unsigned_lt_bit(b) = bool::False): b.toNat() <= a.toNat() {
+    Nat::le_of_not_lt(a.toNat(), b.toNat(), λ lt =>
+        j(trans(sym(bitvec_nat::unsigned_lt_nat(n, a, b)), h), λ flag _ => flag.IsTrue(), Nat::leb_complete(Succ(a.toNat()), b.toNat(), lt)))
+}
+
+theorem unsigned_of_true(n: Nat, a, b: BitVec(n), h: a.toNat() < b.toNat()): a.unsigned_lt_bit(b) = bool::True {
+    trans(bitvec_nat::unsigned_lt_nat(n, a, b), bool::eq_true_of_is_true(Succ(a.toNat()).leb(b.toNat()), Nat::leb_complete(Succ(a.toNat()), b.toNat(), h)))
+}
+
+theorem unsigned_of_false(n: Nat, a, b: BitVec(n), h: b.toNat() <= a.toNat()): a.unsigned_lt_bit(b) = bool::False {
+    (match a.unsigned_lt_bit(b) as λ flag => (a.unsigned_lt_bit(b) = flag) → flag = bool::False {
+        False => λ same => refl,
+        True => λ yes => false_elim(Nat::lt_irrefl(a.toNat(), Nat::le_trans(Succ(a.toNat()), b.toNat(), a.toNat(), unsigned_true(n, a, b, yes), h))),
+    })(refl)
+}
+
+// The equality bit, read the same way: what `split_all` states at a split of
+// `a.eq_bit(b)`.
+theorem equal_true(n: Nat, a, b: BitVec(n), h: a.eq_bit(b) = bool::True): a.toNat() = b.toNat() {
+    @cong(λ (w: BitVec(n)) => w.toNat(), a, b, BitVec::eq_of_eq_bit(n, a, b, h))
+}
+
+theorem equal_false(n: Nat, a, b: BitVec(n), h: a.eq_bit(b) = bool::False): a.toNat() ≠ b.toNat() {
+    λ same => BitVec::ne_of_eq_bit(n, a, b, h)(word_eq(n, a, b, same))
+}
+
+// A value equation already supplies the range needed for this word equality.
+theorem word_eq_value(n: Nat, a: BitVec(n), c: Nat, h: a.toNat() = c): a = BitVec::ofNat(c) {
+    trans(sym(BitVec::ofNat_toNat(n, a)), @cong(λ (v: Nat) => BitVec::ofNat(v, n := n), a.toNat(), c, h))
+}

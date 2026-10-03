@@ -1,6 +1,8 @@
 # Read until end of file — design
 
-Status: **landed 2026-09-27.** Probes in §6; the suite and the built programs are in §7. Owner:
+Status: **landed 2026-09-27.** Since 2026-09-29 `wc -l` runs on the state
+process instead of this document's R11-count-and-save shape (docs/native-wc-design.md §9);
+the process theorems described below (`eof_from`, `read_loop_runs`) were removed then. Probes in §6; the suite and the built programs are in §7. Owner:
 `issues/native-read-until-eof.md`. It builds on
 `docs/native-first-program-design.md` (the read-once `wc -l`, its trace, its
 memory view and its print slice), and replaces that program's single read.

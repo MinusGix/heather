@@ -10,6 +10,8 @@ of file, and the read-once profile is gone
 (`docs/native-read-until-eof-design.md`). §3 (fetched execution), §4 (the
 trace) and §10's formatter still stand as written. §5's code, the claims in
 §2 and §10, and the `read_loop_*` theorem names describe the read-once program.
+Addresses here are as designed: the RW page moved from `0x401000` to
+`0x410000` on 2026-09-29 (`docs/native-wc-design.md` §5.1).
 Owner: `issues/native-first-program.md`. Follow-up owner for the syscall
 model's proper form: `issues/linux-syscall-trace-model.md`.
 
@@ -296,7 +298,7 @@ is refused with "`And` takes 2 argument(s), found 0".
 
 ## 8. Slices
 
-- **A — fetched execution, landed.** `lib/std/arch/x86_64/fetched_code.hthr`
+- **A — fetched execution, landed.** `lib/std/arch/x86_64/x86_64_fetched_code.hthr`
   (`x86_64_fetched_code`): `FetchedStep`/`FetchedSteps`, `CodeResident` and its
   split law, the branch lemmas once over byte lists (`branch_bytes`),
   `structured_fetched`, `access_fetched` with the loop by induction on

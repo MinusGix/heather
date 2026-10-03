@@ -5,7 +5,7 @@ use heather_elab::function_ir_x86_lower::{Gpr, Placements};
 
 fn checker() -> heather_elab::Elaborator {
     let mut elab = common::base_image(common::MODULES.len());
-    let model = include_str!("../../../lib/std/arch/x86_64/structured_block.hthr");
+    let model = include_str!("../../../lib/std/arch/x86_64/x86_64_structured_block.hthr");
     elab.elab_module_source("x86_64_structured_block", model).unwrap_or_else(|e| panic!("{}", e.render(model)));
     elab
 }
@@ -50,4 +50,39 @@ fn choose(flag: Bool, x: BitVec(8)) → Outcome<BitVec(8)> {
     let swapped = consume.replace("First(_) => False, Second(_) => True", "First(_) => True, Second(_) => False");
     let error = elab.elab_module_source("wrong_constructor_encoding", &swapped).expect_err("reversed constructor encoding must be rejected");
     assert!(!error.render(&swapped).contains("unknown"));
+}
+
+// Byte maps with narrow arithmetic, at the registers tr's map loop gives its
+// piece (docs/native-tr-design.md §4): the byte in RAX, the result in RDX.
+#[test]
+fn byte_maps_with_narrow_arithmetic_publish() {
+    use heather_elab::function_ir_source::generate_elaborated_typed_x86;
+    let mut elab = checker();
+    let source = r#"import bitvec; import bool;
+fn lower_byte(b: BitVec(8)) → Bool {
+    match b.unsigned_lt_bit(BitVec::ofNat(0x61)) { True => False, False => b.unsigned_lt_bit(BitVec::ofNat(0x7b)) }
+}
+fn upper_byte(b: BitVec(8)) → Bool {
+    match b.unsigned_lt_bit(BitVec::ofNat(0x41)) { True => False, False => b.unsigned_lt_bit(BitVec::ofNat(0x5b)) }
+}
+fn upcase(b: BitVec(8)) → BitVec(8) {
+    match lower_byte(b) { True => b.sub(BitVec::ofNat(0x20)), False => b }
+}
+fn rot13(b: BitVec(8)) → BitVec(8) {
+    match lower_byte(b) {
+        True => match b.unsigned_lt_bit(BitVec::ofNat(0x6e)) { True => b.add(BitVec::ofNat(13)), False => b.sub(BitVec::ofNat(13)) },
+        False => match upper_byte(b) {
+            True => match b.unsigned_lt_bit(BitVec::ofNat(0x4e)) { True => b.add(BitVec::ofNat(13)), False => b.sub(BitVec::ofNat(13)) },
+            False => b,
+        },
+    }
+}
+"#;
+    elab.elab_module_source("byte_maps", source).unwrap_or_else(|e| panic!("{}", e.render(source)));
+    for name in ["upcase", "rot13"] {
+        let inputs = Placements::from([(0, Gpr::Rax)]);
+        let outputs = Placements::from([(1, Gpr::Rdx)]);
+        let emission = generate_elaborated_typed_x86(&elab, name, &format!("byte_maps::{name}"), &inputs, &[Gpr::Rdx, Gpr::Rbx, Gpr::Rdi, Gpr::R8], &outputs).unwrap_or_else(|e| panic!("{name}: {e}"));
+        elab.elab_module_source(&format!("{name}_publication"), &emission.text).unwrap_or_else(|e| panic!("{}", e.render(&emission.text)));
+    }
 }

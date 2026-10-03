@@ -203,7 +203,7 @@ today, with the η arm doing the work), and the eliminator cases in `eval.rs`.
 
 **`WIDTH_CAP = 128`, in a `u128`.** The x86 line needs 64-bit addresses and
 carries, 52-bit page tests and 48-bit windows; 64 would cover every operation
-in `lib/std/arch/x86_64/model.hthr` today. 128 is chosen because the shape
+in `lib/std/arch/x86_64/x86_64.hthr` today. 128 is chosen because the shape
 operations (§6) *widen*: `concat(n, m)` and `zero_extend(n, extra)` produce
 `m + n`, and a 64-bit `zero_extend` falling off the fast path would make the
 accelerated path silently disappear in the middle of a proof — the failure
@@ -688,7 +688,7 @@ field would raise the enum's alignment to 16, and 88 is not a multiple of
 16, so the enum would round to **96** — eight bytes on every value in the
 machine to widen one variant. §11.1's own fallback rule applies: `u64`,
 `BIT_RUN_WIDTH_CAP = 64`, which covers every operation in
-`lib/std/arch/x86_64/model.hthr` today. The widening argument §3.4 made for
+`lib/std/arch/x86_64/x86_64.hthr` today. The widening argument §3.4 made for
 128 is still real for round 3's `concat`/`zero_extend`; the answer there is
 a second run over the first's tail, not a wider field.
 

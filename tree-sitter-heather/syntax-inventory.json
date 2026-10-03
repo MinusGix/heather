@@ -4,7 +4,7 @@
     "all_goals", "datarepr", "designation", "else", "export", "extends", "fn", "for", "fun", "if",
     "give", "have", "impl", "import", "inductive", "infer", "instance", "j", "let", "match",
     "meta", "mk", "on", "prefix", "record", "refl", "requires", "assuming", "self", "split", "split_all",
-    "theorem", "Squash", "squash_ind", "decreases", "decreasing"
+    "theorem", "Squash", "squash_ind", "decreases", "decreasing", "with"
   ],
   "punctuation": [
     "(", ")", "{", "}", "[", "]", "⟨", "⟩", "|", ",", ":", ";", "@", "$", ".", "->", "→",

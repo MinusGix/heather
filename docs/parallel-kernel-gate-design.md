@@ -154,7 +154,7 @@ by reading two functions. Everything downstream is strictly after:
 | --- | --- |
 | `SemanticSession::check` publishing an image | runs `check_module_delta` → `check_module_source_inner`; the extension is read from Ψ *after* the join, and an error short-circuits before publication |
 | `Cache::accepted` recording a verdict | `accepted` is itself deferred and replayed at the join, in declaration order, and only when every queued check passed (§5.1) |
-| `build-x86` / `compile-x86` writing the ELF, the `.s` and the `.certificate.hthr` | every `write_new` is after `elab.elab_module_source(...)` has returned `Ok` |
+| `build-x86` / `compile-x86` writing the ELF, the `.s` and the `.certificate.hthr` | every publishing `write_new` is after the certificate's check has returned `Ok`; the `.certificate.unchecked.hthr` written before it is what is being checked, not a result |
 | `heather check` reporting a module accepted | the errors vector it reads is the one the join appended to |
 | `replay_module_delta` | replays a *stored* delta and rechecks it on the same pool (§5.3); it joins inside `recheck_extension`, before any metadata is installed |
 

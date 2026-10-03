@@ -1,0 +1,219 @@
+// A count printed after end of file (docs/native-first-program-design.md
+// §10, docs/native-stream-filter-design.md §4.1): from a state whose count is
+// in R13 as its word (`CountWord`), a tail that formats the count with
+// decimal_line's three words, stores it, writes the line through
+// elf64_write_loop and exits 0, or exits 1 at a failure. A stream filter's
+// `Line` finish runs it. The formatter's certificates are parameters, as
+// elf64_print_pieces states them.
+import elf64_write_loop;
+import elf64_print_pieces;
+import elf64_read_pieces;
+import decimal_line;
+import elf64_io;
+import linux_x86_64_entry;
+import linux_x86_64_io;
+import function_ir_loop;
+import function_ir_loop_trace;
+import x86_64;
+import x86_64_block;
+import x86_64_fetch;
+import x86_64_data_read;
+import x86_64_access_code;
+import x86_64_access_memory;
+import x86_64_fetched_code;
+import x86_64_layout;
+import x86_64_structured_block;
+import x86_64_store;
+import bitvec;
+import bitvec_nat;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+import omega;
+import pair;
+
+// ---------------------------------------------------------------------------
+// The printing tail: the count to R11 and the page to R8, the formatter's
+// three words (the line's word, where it starts, how long it is), the store,
+// then the write loop.
+
+fn count_tail_parts(word, start, length: StructuredCode) → List<List<BitVec(8)>> {
+    [canonical_block_bytes(print_base_block()), structured_bytes(word), structured_bytes(start), structured_bytes(length),
+     word_store_bytes(print_store())]
+}
+fn count_tail_lens(word_len, start_len, length_len: Nat) → List<Nat> {
+    [print_base_len(), word_len, start_len, length_len, word_store_bytes(print_store()).len()]
+}
+fn count_tail(word, start, length: StructuredCode, pj: PrintJumps) → List<BitVec(8)> {
+    layout_code(count_tail_parts(word, start, length), write_loop_code(pj))
+}
+theorem count_tail_measured(word, start, length: StructuredCode, word_len, start_len, length_len: Nat,
+    word_is: structured_bytes(word).len() = word_len, start_is: structured_bytes(start).len() = start_len,
+    length_is: structured_bytes(length).len() = length_len):
+    LayoutMeasured(count_tail_parts(word, start, length), count_tail_lens(word_len, start_len, length_len)) {
+    ⟨refl, ⟨word_is, ⟨start_is, ⟨length_is, ⟨refl, trivial⟩⟩⟩⟩⟩
+}
+
+// Where each of the tail's pieces starts, for a tail at `at`.
+fn ct_at(at: Nat, word, start, length: StructuredCode, i: Nat) → Nat {
+    layout_at(at, count_tail_lens(structured_bytes(word).len(), structured_bytes(start).len(), structured_bytes(length).len()), i)
+}
+fn ct_word(at: Nat, word, start, length: StructuredCode) → Nat { ct_at(at, word, start, length, 1) }
+fn ct_start(at: Nat, word, start, length: StructuredCode) → Nat { ct_at(at, word, start, length, 2) }
+fn ct_length(at: Nat, word, start, length: StructuredCode) → Nat { ct_at(at, word, start, length, 3) }
+fn ct_store(at: Nat, word, start, length: StructuredCode) → Nat { ct_at(at, word, start, length, 4) }
+fn ct_write(at: Nat, word, start, length: StructuredCode) → Nat { ct_at(at, word, start, length, 5) }
+
+record CountPieces(memory: IoMemory, at: Nat, word, start, length: StructuredCode, pj: PrintJumps) {
+    base_at: CodeResident(io_fetch_access(), memory, canonical_block_bytes(print_base_block()), eof_rip(at)),
+    word_at: CodeResident(io_fetch_access(), memory, structured_bytes(word), eof_rip(ct_word(at, word, start, length))),
+    start_at: CodeResident(io_fetch_access(), memory, structured_bytes(start), eof_rip(ct_start(at, word, start, length))),
+    length_at: CodeResident(io_fetch_access(), memory, structured_bytes(length), eof_rip(ct_length(at, word, start, length))),
+    store_at: CodeResident(io_fetch_access(), memory, word_store_bytes(print_store()), eof_rip(ct_store(at, word, start, length))),
+    write: WriteLoopResident(memory, ct_write(at, word, start, length), pj),
+}
+
+theorem count_pieces(memory: IoMemory, at: Nat, word, start, length: StructuredCode, pj: PrintJumps,
+    resident: CodeResident(io_fetch_access(), memory, count_tail(word, start, length, pj), eof_rip(at))):
+    CountPieces(memory, at, word, start, length, pj) {
+    let piece = layout_resident(io_fetch_access(), memory, io_entry(), write_loop_code(pj), count_tail_parts(word, start, length),
+        count_tail_lens(structured_bytes(word).len(), structured_bytes(start).len(), structured_bytes(length).len()),
+        count_tail_measured(word, start, length, structured_bytes(word).len(), structured_bytes(start).len(), structured_bytes(length).len(),
+            refl, refl, refl), at, resident);
+    CountPieces(piece(0), piece(1), piece(2), piece(3), piece(4), write_loop_resident(memory, ct_write(at, word, start, length), pj, piece(5)))
+}
+
+// The formatter has run: the line's word, start and length are in their
+// registers, the page's base still in R8, memory as the read left it.
+record CountFormatted(stored: IoMemory, at: Nat, word, start, length: StructuredCode, count: Nat, state: MachineState<IoMemory>) {
+    memory: state.memory = stored,
+    rip: state.rip = eof_rip(ct_store(at, word, start, length)),
+    base: read_gpr(R8, state.gprs) = BitVec::ofNat(0x410000),
+    word_value: read_gpr(Rax, state.gprs) = line_word(bitvec_nat::word_of_nat(64, count)),
+    start_value: read_gpr(R9, state.gprs) = line_start(BitVec::ofNat(0x410000), bitvec_nat::word_of_nat(64, count)),
+    length_value: read_gpr(R10, state.gprs) = line_length(bitvec_nat::word_of_nat(64, count)),
+}
+
+// From the tail, with the count in R13: the base block copies it to R11,
+// then the formatter.
+theorem count_formats(stored: IoMemory, at: Nat, codes: PrintCodes, format: PrintFormat(codes), pj: PrintJumps,
+    pieces: CountPieces(stored, at, codes.word, codes.start, codes.length, pj), count: Nat, done: MachineState<IoMemory>,
+    done_memory: done.memory = stored, done_rip: done.rip = eof_rip(at),
+    done_count: read_gpr(R13, done.gprs) = bitvec_nat::word_of_nat(64, count)):
+    Exists<MachineState<IoMemory>>(λ last => FetchedSteps(io_fetch_access(), io_data_access(), done, last) ∧
+        CountFormatted(stored, at, codes.word, codes.start, codes.length, count, last)) {
+    let word = codes.word;
+    let start = codes.start;
+    let length = codes.length;
+    let fetch = io_fetch_access();
+    let data = io_data_access();
+    let n = bitvec_nat::word_of_nat(64, count);
+    let s0 = execute_block_normal(print_base_block(), done);
+    let based: BlockRan(done, print_base_block(), stored, ct_word(at, word, start, length)) =
+        block_ran(print_base_block(), stored, at, pieces.base_at, done, done_memory, done_rip);
+    let s0_r11: (read_gpr(R11, s0.gprs) = n) = done_count;
+    // The line's word.
+    have w = format.word(s0, n, sym(s0_r11));
+    let s1 = w.after;
+    let worded: PieceRan(stored, ct_start(at, word, start, length), s0, s1) =
+        piece_runs(w, stored, ct_word(at, word, start, length), pieces.word_at, based.memory_is, based.rip_is);
+    let s1_r8: (read_gpr(R8, s1.gprs) = BitVec::ofNat(0x410000)) = w.registers_preserved(R8, trivial);
+    let s1_r11: (read_gpr(R11, s1.gprs) = n) = trans(w.registers_preserved(R11, trivial), s0_r11);
+    // Where the line starts.
+    have st = format.start(s1, Pair(BitVec::ofNat(0x410000), n), ⟨sym(s1_r8), sym(s1_r11)⟩);
+    let s2 = st.after;
+    let started: PieceRan(stored, ct_length(at, word, start, length), s1, s2) =
+        piece_runs(st, stored, ct_start(at, word, start, length), pieces.start_at, worded.memory_is, worded.rip_is);
+    // How long it is.
+    have ln = format.length(s2, n, sym(trans(st.registers_preserved(R11, trivial), s1_r11)));
+    let s3 = ln.after;
+    let measured: PieceRan(stored, ct_store(at, word, start, length), s2, s3) =
+        piece_runs(ln, stored, ct_length(at, word, start, length), pieces.length_at, started.memory_is, started.rip_is);
+    Exists(s3, ⟨fetched_steps_trans(fetch, data, done, s0, s3, based.steps,
+            fetched_steps_trans(fetch, data, s0, s1, s3, worded.steps, fetched_steps_trans(fetch, data, s1, s2, s3, started.steps, measured.steps))),
+        CountFormatted(
+            memory := measured.memory_is,
+            rip := measured.rip_is,
+            base := trans(ln.registers_preserved(R8, trivial), trans(st.registers_preserved(R8, trivial), s1_r8)),
+            word_value := trans(ln.registers_preserved(Rax, trivial), trans(st.registers_preserved(Rax, trivial), w.result_correct)),
+            start_value := trans(ln.registers_preserved(R9, trivial), st.result_correct),
+            length_value := ln.result_correct)⟩)
+}
+
+// The formatted word stored at the page's base, then the write loop from the
+// line's first digit.
+theorem count_writes(stored: IoMemory, at: Nat, word, start, length: StructuredCode, pj: PrintJumps,
+    count: Nat, small: count < 10000, s3: MachineState<IoMemory>,
+    formatted: CountFormatted(stored, at, word, start, length, count, s3),
+    pieces: CountPieces(stored, at, word, start, length, pj),
+    later: CountPieces(io_store_offset(stored, 0, word_bytes(line_word(bitvec_nat::word_of_nat(64, count)))), at, word, start, length, pj),
+    targets: WriteLoopTargets(ct_write(at, word, start, length), wl_at_exit(ct_write(at, word, start, length)), pj),
+    ending: WriteEnding, ending_ok: WriteEndingOk(ending), steps: List<WriteStep>, steps_ok: WriteSteps(steps)(decimal_line(count))):
+    LinuxRuns(io_linux(), write_events(decimal_line(count), steps, ending), s3) {
+    let fetch = io_fetch_access();
+    let entry = io_entry();
+    let n = bitvec_nat::word_of_nat(64, count);
+    let line = decimal_line(count);
+    let wb = word_bytes(line_word(n));
+    let after_store = io_store_offset(stored, 0, wb);
+    let writes = linux_writes(io_linux());
+    let store_at: CodeResident(fetch, s3.memory, word_store_bytes(print_store()), s3.rip) =
+        resident_state(fetch, word_store_bytes(print_store()), stored, eof_rip(ct_store(at, word, start, length)),
+            s3, formatted.memory, formatted.rip, pieces.store_at);
+    let writable: IoWritable(s3.memory, read_gpr(R8, s3.gprs), 8) =
+        j(sym(formatted.base), λ address _ => IoWritable(s3.memory, address, 8),
+            ⟨Nat::le_refl(io_page_base()), Nat::leb_sound(io_page_base() + 8, io_page_base() + 4096, trivial)⟩);
+    let stored_step = store_step(fetch, writes, print_store(), s3, refl,
+        FetchedFrom(resident_readable(fetch, s3.memory, word_store_bytes(print_store()), s3.rip, store_at)), writable);
+    let s4 = word_store_after(writes, print_store(), s3);
+    let s4_memory: (s4.memory = after_store) =
+        trans(cong_fn<BitVec(64), IoMemory>(λ address => io_store(s3.memory, address, word_bytes(read_gpr(Rax, s3.gprs))), formatted.base),
+            trans(cong_fn<BitVec(64), IoMemory>(λ value => io_store(s3.memory, BitVec::ofNat(0x410000), word_bytes(value)), formatted.word_value),
+                cong_fn<IoMemory, IoMemory>(λ memory => io_store(memory, BitVec::ofNat(0x410000), wb), formatted.memory)));
+    let s4_rip: (s4.rip = eof_rip(ct_write(at, word, start, length))) =
+        rip_advance(entry, s3.rip, ct_store(at, word, start, length), 3, formatted.rip);
+    let within = line_in_word(count, small);
+    let skip = line_skip(count);
+    let total: (line.len() + skip = 5) = trans(cong_fn<Nat, Nat>(λ l => l + skip, within.right),
+        Nat::sub_add_cancel(skip, 5, Nat::le_trans(skip, 3, 5, line_skip_le(count), trivial)));
+    let skip_small: (skip <= 3) = line_skip_le(count);
+    let length_value: (read_gpr(R10, s4.gprs).toNat() = line.len()) =
+        trans(cong_fn<BitVec(64), Nat>(λ v => v.toNat(), formatted.length_value),
+            trans(line_length_value(count, small), sym(within.right)));
+    let start_value: (read_gpr(R9, s4.gprs).toNat() = 0x410000 + skip) =
+        trans(cong_fn<BitVec(64), Nat>(λ v => v.toNat(), formatted.start_value), line_start_value(count, small));
+    linux_runs_after_linux_steps(io_linux(), write_events(line, steps, ending), s3, s4, linux_steps_store(io_linux(), s3, s4, stored_step),
+        wl_from(after_store, ct_write(at, word, start, length), pj, later.write, targets, ending, ending_ok, steps, s4.gprs)(
+            line, steps_ok, s4, line_some(line.len(), skip, total, skip_small), line_fits(line.len(), skip, total), s4_rip, s4_memory,
+            print_sends(stored, count, small, after_store, refl, read_gpr(R9, s4.gprs), start_value), length_value,
+            line_room(read_gpr(R9, s4.gprs).toNat(), line.len(), skip, start_value, total), write_kept_refl(s4.gprs)))
+}
+
+// The tail, from the loop's end with the count in R13: format, store, write
+// the line, exit 0 (or exit 1 at a failed write).
+theorem count_tail_runs(file: List<BitVec(8)>, at: Nat, rep: Gprs → Nat → Type, counted: CountWord(rep), codes: PrintCodes, format: PrintFormat(codes),
+    pj: PrintJumps,
+    resident: (page: Nat → BitVec(8)) → CodeResident(io_fetch_access(), IoMemory(file, page), count_tail(codes.word, codes.start, codes.length, pj),
+        eof_rip(at)),
+    targets: WriteLoopTargets(ct_write(at, codes.word, codes.start, codes.length),
+        wl_at_exit(ct_write(at, codes.word, codes.start, codes.length)), pj),
+    total: Nat, small: total < 10000,
+    ending: WriteEnding, ending_ok: WriteEndingOk(ending), steps: List<WriteStep>, steps_ok: WriteSteps(steps)(decimal_line(total))):
+    EofTail(file, at, rep, total, write_events(decimal_line(total), steps, ending)) {
+    λ page state at_done memory_is placed => {
+        let word = codes.word;
+        let start = codes.start;
+        let length = codes.length;
+        let stored = IoMemory(file, page);
+        let pieces = count_pieces(stored, at, word, start, length, pj, resident(page));
+        let formatted = count_formats(stored, at, codes, format, pj, pieces, total, state, memory_is, at_done, counted(state.gprs, total, placed));
+        let after_store = io_store_offset(stored, 0, word_bytes(line_word(bitvec_nat::word_of_nat(64, total))));
+        linux_runs_after_steps(io_linux(), write_events(decimal_line(total), steps, ending),
+            state, formatted.witness, formatted.proof.left,
+            count_writes(stored, at, word, start, length, pj, total, small, formatted.witness, formatted.proof.right, pieces,
+                count_pieces(after_store, at, word, start, length, pj, resident(after_store.page)),
+                targets, ending, ending_ok, steps, steps_ok))
+    }
+}

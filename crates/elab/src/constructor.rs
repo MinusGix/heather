@@ -23,8 +23,118 @@ use crate::{
     has_implicit_mark,
 };
 
+/// A defaulted field a construction left out: the marker's arguments are the
+/// record's tag, the constructor and the field, and checking it runs the
+/// field's default against the field's instantiated type. Like the parser's
+/// markers, this head cannot collide with a source name.
+pub(crate) const FIELD_DEFAULT: &str = "\0field-default";
+
 impl Elaborator {
     const STANDARD_LIST_MODULE: &'static str = "list";
+
+    /// A constructor's arguments with its defaulted fields filled
+    /// (docs/named-arguments-design.md §9.2): the positional arguments fill
+    /// the fields without a default, in order, or every field when they are
+    /// all written; a named argument fills its field; a defaulted field left
+    /// out gets [`FIELD_DEFAULT`]'s marker. `None` when the constructor has no
+    /// defaulted field, which leaves every other construction as it was.
+    pub(crate) fn with_field_defaults(
+        &self,
+        ind: &Inductive,
+        i: usize,
+        positional: &[&Expr],
+        named: &[(&str, &Expr, Span)],
+        span: Span,
+    ) -> R<Option<Vec<Expr>>> {
+        let ctor = &ind.ctors[i];
+        if ctor.defaults.iter().all(Option::is_none) {
+            return Ok(None);
+        }
+        let n = ctor.fields.len();
+        let name_of = |k: usize| ctor.fields[k].0.as_deref().unwrap_or("_");
+        let mut slots: Vec<Option<Expr>> = vec![None; n];
+        let open: Vec<usize> = if positional.len() == n { (0..n).collect() }
+            else { (0..n).filter(|&k| ctor.defaults[k].is_none()).collect() };
+        if positional.len() > open.len() {
+            return err(
+                format!(
+                    "`{}` takes {} field(s) by position, found {}; a field with a default is given by name (`{} := …`)",
+                    ctor.name, open.len(), positional.len(),
+                    (0..n).find(|&k| ctor.defaults[k].is_some()).map(name_of).unwrap_or("_"),
+                ),
+                span,
+            );
+        }
+        for (&k, arg) in open.iter().zip(positional) {
+            slots[k] = Some((*arg).clone());
+        }
+        for (name, value, at) in named {
+            let Some(k) = (0..n).find(|&k| name_of(k) == *name) else {
+                return err(format!("`{}` has no field `{name}`", ctor.name), *at);
+            };
+            if slots[k].is_some() {
+                return err(format!("field `{name}` is given twice"), *at);
+            }
+            slots[k] = Some((*value).clone());
+        }
+        let missing: Vec<&str> = (0..n).filter(|&k| slots[k].is_none() && ctor.defaults[k].is_none()).map(name_of).collect();
+        if !missing.is_empty() {
+            return err(format!("`{}` is missing field(s): {}", ctor.name, missing.join(", ")), span);
+        }
+        let number = |value: u64| Expr { kind: ExprKind::Num(value.into()), span };
+        Ok(Some(slots.into_iter().enumerate().map(|(k, slot)| slot.unwrap_or_else(|| Expr {
+            kind: ExprKind::App {
+                head: Box::new(Expr { kind: ExprKind::Var(FIELD_DEFAULT.into()), span }),
+                args: vec![number(u64::from(ind.tag)), number(i as u64), number(k as u64)],
+                named: vec![],
+                explicit: false,
+                goal_oriented: false,
+            },
+            span,
+        })).collect()))
+    }
+
+    /// A defaulted field, filled: its default checked at the field's type as
+    /// this construction instantiates it. The default sees that goal and
+    /// nothing else — no local of the construction is in its scope, and its
+    /// names resolve where the record was declared — so a caller's names
+    /// cannot change what it means (docs/named-arguments-design.md §9.4).
+    pub(crate) fn elab_field_default(&self, cx: &Cx, args: &[Expr], expected: &Type, lvl: &Level, span: Span) -> R<Term> {
+        let number = |k: usize| match args.get(k).map(|arg| &arg.kind) {
+            Some(ExprKind::Num(n)) => n.as_u64(),
+            _ => None,
+        };
+        let (Some(tag), Some(i), Some(k)) = (number(0), number(1), number(2)) else {
+            return err("internal field default has the wrong form", span);
+        };
+        let ind = u32::try_from(tag).ok().and_then(|tag| self.types.by_tag(tag)).cloned()
+            .ok_or_else(|| crate::ElabError::Elab { msg: "internal field default names no record".into(), span })?;
+        let ctor = &ind.ctors[i as usize];
+        let field = ctor.fields[k as usize].0.as_deref().unwrap_or("_");
+        let Some(default) = ctor.defaults[k as usize].as_ref() else {
+            return err("internal field default names a field with none", span);
+        };
+        let goal = self.spell_type_source(cx, expected).or_else(|| self.spell_type(cx, expected)).unwrap_or_else(|| "its type".into());
+        // The goal is moved into the empty context as it stands, which is
+        // right only when the construction has no locals: one with locals
+        // would need its type closed over them first.
+        if !cx.names.is_empty() {
+            return err(
+                format!("`{field}` was left to its default, but this construction is under local bindings, \
+                    where a default cannot run yet; give it by name (`{field} := …`)"),
+                span,
+            );
+        }
+        let _scope = self.use_inductive_scope(&ind);
+        self.elab_check(&Cx::empty(), default, expected, lvl).map_err(|error| crate::ElabError::Elab {
+            msg: format!("`{field}` was left to its default, which did not prove `{goal}` here: {}; \
+                give it by name (`{field} := …`)", match error {
+                    crate::ElabError::Elab { msg, .. } => msg,
+                    other => other.to_string(),
+                }),
+            span,
+        })
+    }
 
     fn standard_list_literal_instance_registered(&self) -> bool {
         let protocol = qkey(PRELUDE_MODULE, "CollectionLiteral");
@@ -143,6 +253,76 @@ impl Elaborator {
             .map(|f| (f.name.as_str(), &f.expr, f.span))
             .collect();
         application::permute_by_name_refs(name, "field", &decl, &[], &written, span)
+    }
+
+    /// `base with { f = e, … }` (issues/record-update-syntax.md): the record
+    /// literal that writes the given fields and keeps every other one as
+    /// `base`'s projection, so it elaborates on the literal's path, checking
+    /// and inference alike, and its term is the constructor over projections
+    /// that every reader of a record already takes. A base that is not a
+    /// local is bound once by a `let`, which is an alias: it is elaborated
+    /// once, and the term is the same. A kept field whose type mentions a
+    /// replaced one (a dependent record) is refused, since its old value is no
+    /// longer about the new one: the update has to give it too.
+    pub(super) fn record_update_expr(&self, cx: &Cx, base: &Expr, fields: &[RecordLitField], span: Span) -> R<Expr> {
+        let (_, ty, _) = self.elab_infer(cx, base)?;
+        let ty = self.whnf(cx, &ty, base.span)?;
+        let Some(ind) = self.tag_of(&ty).filter(|ind| ind.is_record) else {
+            return err(format!("`with` updates a record's fields, and this is `{}`", self.display_type(cx, &ty)), base.span);
+        };
+        let decl = &ind.ctors[0].fields;
+        for (index, field) in fields.iter().enumerate() {
+            if !decl.iter().any(|(name, _)| name.as_deref() == Some(field.name.as_str())) {
+                return err(format!("`{}` has no field `{}`", ind.name, field.name), field.span);
+            }
+            if fields[..index].iter().any(|earlier| earlier.name == field.name) {
+                return err(format!("`{}` is updated twice", field.name), field.span);
+            }
+        }
+        for (name, field_ty) in decl {
+            let Some(name) = name else {
+                return err(format!("`{}` has an unnamed field, which `with` cannot keep", ind.name), span);
+            };
+            if fields.iter().any(|f| f.name == *name) {
+                continue;
+            }
+            if let Some(replaced) = fields.iter().find(|f| crate::datarepr::mentions_free_ty(field_ty, std::slice::from_ref(&f.name), &mut Vec::new())) {
+                return err(
+                    format!("`{name}`'s type mentions `{}`, which this update replaces: give `{name}` a new value too", replaced.name),
+                    replaced.span,
+                );
+            }
+        }
+        let local = matches!(&base.kind, ExprKind::Var(name) if cx.names.iter().any(|n| n == name));
+        let bound = "__with_base";
+        let receiver = if local { base.clone() } else { Expr { kind: ExprKind::Var(bound.into()), span: base.span } };
+        let written = decl
+            .iter()
+            .map(|(name, _)| {
+                let name = name.clone().unwrap_or_default();
+                fields.iter().find(|f| f.name == name).cloned().unwrap_or_else(|| RecordLitField {
+                    expr: Expr {
+                        kind: ExprKind::Dot { recv: Box::new(receiver.clone()), name: name.clone(), tyargs: Vec::new(), args: None, named: Vec::new() },
+                        span: base.span,
+                    },
+                    name,
+                    span: base.span,
+                })
+            })
+            .collect();
+        let literal = Expr { kind: ExprKind::RecordLit { name: ind.name.clone(), tyargs: Vec::new(), fields: written }, span };
+        if local {
+            return Ok(literal);
+        }
+        Ok(Expr {
+            kind: ExprKind::Block(Box::new(heather_syntax::Block {
+                stmts: vec![heather_syntax::Stmt::Let { name: bound.into(), ty: None, expr: base.clone(), span: base.span, opaque: false }],
+                result: Box::new(literal),
+                ons: Vec::new(),
+                span,
+            })),
+            span,
+        })
     }
 
     /// The constructor this name refers to *here* — `None` when it is not a
@@ -474,6 +654,12 @@ impl Elaborator {
             );
         }
         let mut sols: Vec<Option<(Type, Level)>> = vec![None; ind.params.len()];
+        // A field that cannot be inferred on its own (`Nil` in `Cons(Nil,
+        // xs)`) may still be fixed by a later child argument: its error is
+        // kept and reported only if nothing else determines the instance.
+        // `build_ctor` checks every argument against its field afterwards,
+        // so an error in the argument itself is still reported, there.
+        let mut deferred = None;
         for (f, arg) in self.ctor_fields(ind, i).iter().zip(args) {
             let TyKind::Named { name, args: targs } = &f.kind else {
                 continue;
@@ -485,8 +671,12 @@ impl Elaborator {
                 continue;
             };
             if sols[p].is_none() {
-                let (_, ty, lvl) = self.elab_infer(cx, arg.borrow())?;
-                sols[p] = Some((ty, lvl));
+                match self.elab_infer(cx, arg.borrow()) {
+                    Ok((_, ty, lvl)) => sols[p] = Some((ty, lvl)),
+                    Err(e) => {
+                        deferred.get_or_insert(e);
+                    }
+                }
             }
         }
         let mut targs = Vec::with_capacity(sols.len());
@@ -506,6 +696,9 @@ impl Elaborator {
                 // issues/elab-unifier-completeness.md's and not this function's.
                 if let Some(r) = self.ctor_from_child(cx, ind, i, args, span) {
                     return r;
+                }
+                if let Some(e) = deferred {
+                    return Err(e);
                 }
                 return err(
                     format!(
@@ -559,7 +752,20 @@ impl Elaborator {
         args: &[A],
         span: Span,
     ) -> Option<R<(Term, Type, Level)>> {
-        if ind.index.is_none() || args.len() != ind.ctors[i].fields.len() {
+        if args.len() != ind.ctors[i].fields.len() {
+            return None;
+        }
+        // A family with no index: a child's type is the constructor's result
+        // type itself (`Cons(Nil, xs)` is at `xs`'s type).
+        if ind.index.is_none() && ind.skel.is_none() {
+            let k = ind.ctors[i].kind.iter().position(|f| *f == inductive::FieldKind::Plain)?;
+            let (_, ty, lvl) = self.elab_infer(cx, args[k].borrow()).ok()?;
+            if self.tag_of(&ty)?.tag != ind.tag {
+                return None;
+            }
+            return Some(self.build_ctor(cx, ind, i, args, &ty, &lvl, span).map(|t| (t, ty, lvl)));
+        }
+        if ind.index.is_none() {
             return None;
         }
         let k = ind.ctors[i]

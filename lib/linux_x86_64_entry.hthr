@@ -52,10 +52,6 @@ theorem linux_exit_value<M>(before: MachineState<M>):
     read_gpr(Rdi, linux_exit_state(before).gprs) = read_gpr(Rax, before.gprs)
 { refl }
 
-fn linux_syscall_bytes() → List<BitVec(8)> {
-    [BitVec::ofNat(15), BitVec::ofNat(5)]
-}
-
 // A request presented to Linux, before the SYSCALL transfer. The environment
 // contract is that executing 0F 05 with this request terminates the initial
 // thread and exposes the low eight status bits to the parent. No theorem

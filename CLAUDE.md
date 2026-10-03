@@ -36,6 +36,10 @@
     elaborates and gates just it over a replayed prefix
     (`docs/check-only-design.md`; the run is labelled and `scripts/timings`
     refuses to diff it against a whole run).
+  - **A run killed at the rail still leaves its attribution**: a `--timings`
+    table is appended as scopes close, and `<stem>.open.tsv` beside it names
+    the declaration that was running; `build-x86`/`compile-x86` leave the
+    certificate being checked as `<out>.certificate.unchecked.hthr`.
   - After editing the compiler's Rust, `--cache --accept-stale-images` replays
     the library's module images instead of re-elaborating them (the fast
     lane's trade; drop the flag for a final check).

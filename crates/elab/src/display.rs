@@ -474,9 +474,9 @@ impl Speller<'_> {
             Term::Succ(p) => format!("Succ({})", self.tm(p, d + 1)),
             Term::Refl { .. } => "refl".to_string(),
             Term::Triv { .. } => "trivial".to_string(),
-            Term::Pair { fst, snd, .. } | Term::PairAt { fst, snd, .. } => {
-                format!("({}, {})", self.tm(fst, d + 1), self.tm(snd, d + 1))
-            }
+            Term::Pair { fst, snd, .. } | Term::PairAt { fst, snd, .. } => self
+                .ctor_value(t, d)
+                .unwrap_or_else(|| format!("({}, {})", self.tm(fst, d + 1), self.tm(snd, d + 1))),
             Term::Lam { dom, body, .. } => {
                 let dom_s = self.ty(dom, d + 1);
                 let name = self.fresh();
@@ -507,6 +507,11 @@ impl Speller<'_> {
             | Term::InlAt { .. }
             | Term::InrAt { .. } => self.ctor_value(t, d).unwrap_or_else(|| self.raw_tm(t)),
             Term::App { .. } | Term::AppAt { .. } => self.call(t, d),
+            Term::Fst { .. } | Term::FstAt { .. } => self
+                .alias(t)
+                .or_else(|| self.field_read(t, d))
+                .or_else(|| self.projection_reduct(t, d))
+                .unwrap_or_else(|| self.raw_tm(t)),
             Term::GlobalTm { var, subst } => self
                 .global(*var, subst)
                 .map(|(n, _)| n)
@@ -549,6 +554,14 @@ impl Speller<'_> {
             Term::InlAt { ty, .. } | Term::InrAt { ty, .. } => {
                 (t, None, self.el.display_tag_of(ty.as_deref()?)?)
             }
+            // A record value is its one constructor's payload tuple itself —
+            // no injection, the tag at entry 0 — and the checked pair carries
+            // the record's type. Only a record: a payload tuple inside another
+            // inductive's value is not one.
+            Term::PairAt { ty: Some(ty), .. } => match self.el.display_tag_of(ty) {
+                Some(ind) if ind.is_record => (t, None, ind),
+                _ => return None,
+            },
             _ => return None,
         };
         // Walk the injection path: `Inr` steps past a constructor, `Inl`
@@ -606,6 +619,71 @@ impl Speller<'_> {
         } else {
             format!("{}({})", ctor.name, shown.join(", "))
         })
+    }
+
+    /// `r.name` for a field read a record's declaration left inline. A closed
+    /// record whose spine is not dependent registers no projection
+    /// definitions (`register_rec_projs` in `gendefs.rs`: they would be all
+    /// cost), so `s.words` elaborates to the walk itself, `fst(snd(snd(s)))`
+    /// — entry 0 of the spine is the tag, field `j` is entry `j + 1`
+    /// ([`Elaborator::project_field`]). Without this the speller met that
+    /// walk as raw nodes, and `omega` could not name `s.words` as an atom
+    /// (issues/omega-record-projection-atoms.md).
+    ///
+    /// The receiver's type decides it: read off the receiver's spine
+    /// ([`Elaborator::spine_type`]) when its head is a variable, a global or
+    /// another field read — the receivers a written `.name` leaves — and only
+    /// at the context's own scope, since a binder the walk descended under has
+    /// no type in `cx.gamma`. Re-elaborating the spelling walks the same
+    /// spine, so it comes back to `t`.
+    fn field_read(&self, t: &Term, d: u32) -> Option<String> {
+        if self.binders() != 0 {
+            return None;
+        }
+        let (true, mut pair) = crate::spelling::proj_of(t)? else {
+            return None;
+        };
+        let mut entry = 0usize;
+        while let Some((false, inner)) = crate::spelling::proj_of(pair) {
+            entry += 1;
+            pair = inner;
+        }
+        let idx = entry.checked_sub(1)?;
+        let (head, _) = crate::spelling::app_spine(pair);
+        if !matches!(head, Term::Var(_) | Term::GlobalTm { .. }) && crate::spelling::proj_of(head).is_none() {
+            return None;
+        }
+        let span = heather_syntax::Span { start: 0, end: 0 };
+        let ty = self.el.spine_type(self.cx, pair, span)?;
+        let record = self.el.record_of_at(self.cx, &ty, span)?;
+        let (Some(name), _) = record.ctors[0].fields.get(idx)? else {
+            return None;
+        };
+        let shown = self.tm(pair, d + 1);
+        Some(if matches!(&**pair, Term::Var(_) | Term::App { .. } | Term::AppAt { .. })
+            || crate::spelling::proj_of(pair).is_some()
+        {
+            format!("{shown}.{name}")
+        } else {
+            format!("({shown}).{name}")
+        })
+    }
+
+    /// A projection nothing above names, spelled as its bounded weak head —
+    /// for a *source* spelling only. A field read off a constructor value, or
+    /// off a `match` on one, has no written form the walk can recover
+    /// (`WcState(0, 0, 0, False).inside` after a `let` inlined it, `(match
+    /// True { … }).words` in a motive's instance), but its reduct is a value
+    /// or a neutral that spells. A source caller re-elaborates what it gets
+    /// and checks it by conversion, which redoes the reduction; a diagnostic
+    /// shows the term it holds, so it does not ask. A projection out of a
+    /// neutral is its own weak head and still falls back.
+    fn projection_reduct(&self, t: &Term, d: u32) -> Option<String> {
+        if !self.qualified || self.binders() != 0 {
+            return None;
+        }
+        let reduct = self.el.goal_oracle().whnf_term_bounded(&self.cx.gamma, t).ok()?;
+        (reduct != *t).then(|| self.tm(&reduct, d + 1))
     }
 
     /// An `App` spine as a call. The head's *implicit* parameters are dropped,

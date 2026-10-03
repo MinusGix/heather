@@ -240,7 +240,7 @@ Each amendment overrides the section it names.
 - **§5, where things live.** The SF and ZF readings of a word
   (`sign_bit_small/large`, `zero_bits_of_zero/pos`, `band_self_value`,
   `test_self_negative/nonnegative`, `near_sign_*_rip`) are in
-  `lib/std/arch/x86_64/fetched_code.hthr`. The errno facts (`errno_value`,
+  `lib/std/arch/x86_64/x86_64_fetched_code.hthr`. The errno facts (`errno_value`,
   `errno_negative`, `errno_nonzero`, `eintr_plus_four`,
   `other_errno_plus_four`) are in `lib/linux_x86_64_io.hthr`.
 - **§5, arithmetic in the loops.** Every Nat step inside `write_from`'s arms

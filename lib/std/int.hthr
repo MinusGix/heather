@@ -1,5 +1,6 @@
 import nat;
 import logic;
+import bool;
 import algebra;
 
 inductive Int { OfNat(n: Nat), NegSucc(n: Nat) }
@@ -823,7 +824,7 @@ fn Int::le_dec(self a, b: Int) → a <= b ∨ ¬(a <= b) {
     }
 }
 
-instance(a, b: Int) Decide<Int::Le(a, b)> { dec := Int::le_dec(a, b) }
+instance(a, b: Int) Decide<Int::Le(a, b)> { dec := Int::le_dec(a, b), bit := or_bit(Int::le_dec(a, b)), reflects := or_bit_reflects(Int::le_dec(a, b)) }
 
 theorem Int::le_of_not_le(self a, b: Int, h: ¬(a <= b)): b <= a {
     or_resolve(or_swap(a.le_total(b)), h)
@@ -1105,17 +1106,11 @@ fn Int::max(self a, b: Int) → Int { if a <= b { b } else { a } }
 fn Int::min(self a, b: Int) → Int { if a <= b { a } else { b } }
 
 theorem Int::le_max_l(self a, b: Int): a <= a.max(b) {
-    match a.le_dec(b) as λ d => a <= or_pick(d, a, b) {
-        Inl(h) => h,
-        Inr(_) => a.le_refl(),
-    }
+    decide_bit_split<a <= b>(λ c => a <= match c { True => b, False => a }, λ h => h, λ _ => a.le_refl())
 }
 
 theorem Int::le_max_r(self a, b: Int): b <= a.max(b) {
-    match a.le_dec(b) as λ d => b <= or_pick(d, a, b) {
-        Inl(_) => b.le_refl(),
-        Inr(h) => a.le_of_not_le(b, h),
-    }
+    decide_bit_split<a <= b>(λ c => b <= match c { True => b, False => a }, λ _ => b.le_refl(), λ h => a.le_of_not_le(b, h))
 }
 
 theorem Int::min_le_l(self a, b: Int): a.min(b) <= a {
@@ -1131,18 +1126,15 @@ theorem Int::max_le(self a, b, c: Int, h1: a <= c, h2: b <= c): a.max(b) <= c {
 }
 
 theorem Int::le_min(self a, b, c: Int, h1: c <= a, h2: c <= b): c <= a.min(b) {
-    match a.le_dec(b) as λ d => c <= or_pick(d, b, a) {
-        Inl(_) => h1,
-        Inr(_) => h2,
-    }
+    decide_bit_split<a <= b>(λ x => c <= match x { True => a, False => b }, λ _ => h1, λ _ => h2)
 }
 
 theorem Int::max_eq_r(self a, b: Int, h: a <= b): a.max(b) = b {
-    or_pick_dec(a.le_dec(b), a, b, h)
+    if yes: a <= b { refl } else { absurd_of(h, yes) }
 }
 
 theorem Int::min_eq_l(a, b: Int, h: a <= b): a.min(b) = a {
-    or_pick_dec(a.le_dec(b), b, a, h)
+    if yes: a <= b { refl } else { absurd_of(h, yes) }
 }
 
 theorem Int::max_eq_l(self a, b: Int, h: b <= a): a.max(b) = a {

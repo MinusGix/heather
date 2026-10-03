@@ -1,0 +1,365 @@
+// Recursive physical composition of canonical blocks and short branches.
+// The tree fixes both the byte stream and the selected machine execution.
+import x86_64;
+import x86_64_block;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+
+// What a conditional tests. `NonZero(r)` is TEST r, r: the true arm runs
+// when r is nonzero. `Compare(l, r, cc)` is CMP l, r: the true arm runs when
+// `cc` holds of the flags it sets, so a comparison's bit is never materialised
+// (docs/structured-lowering-code-size-design.md §2.2). Either way the edge
+// over the true arm jumps on the test's failure, `branch_skip`.
+inductive BranchTest {
+    NonZero(register: Gpr),
+    Compare(left: Gpr, right: Gpr, cc: ConditionCode),
+}
+
+fn branch_test_instruction(test: BranchTest) → Instruction {
+    match test { NonZero(register) => TestRR(register, register), Compare(left, right, _) => CmpRR(left, right) }
+}
+
+fn branch_skip(test: BranchTest) → ConditionCode {
+    match test { NonZero(_) => E, Compare(_, _, cc) => negate_condition(cc) }
+}
+
+fn branch_flags(test: BranchTest, gprs: Gprs) → Flags {
+    match test {
+        NonZero(register) => test_flags(read_gpr(register, gprs), read_gpr(register, gprs), False),
+        Compare(left, right, _) => sub_flags(read_gpr(left, gprs), read_gpr(right, gprs)),
+    }
+}
+
+inductive StructuredCode {
+    CodeBlock(instructions: List<Instruction>),
+    CodeSequence(prefix: StructuredCode, continuation: StructuredCode),
+    CodeBranch(test: BranchTest, false_displacement: BitVec(8),
+        join_displacement: BitVec(8), when_true: StructuredCode, when_false: StructuredCode),
+    // The same conditional over arms too long for rel8: Jcc rel32 over the
+    // true arm and JMP rel32 over the false one (docs/native-wc-design.md §4.5).
+    CodeBranchNear(test: BranchTest, false_displacement: BitVec(32),
+        join_displacement: BitVec(32), when_true: StructuredCode, when_false: StructuredCode),
+}
+
+fn structured_bytes(code: StructuredCode) → List<BitVec(8)> {
+    match code {
+        CodeBlock(instructions) => canonical_block_bytes(instructions),
+        CodeSequence(prefix, continuation) => structured_bytes(prefix) ++ structured_bytes(continuation),
+        CodeBranch(test, false_displacement, join_displacement, yes, no) =>
+            canonical_bytes(branch_test_instruction(test)) ++
+            short_control_bytes(JumpIf(branch_skip(test), false_displacement)) ++ structured_bytes(yes) ++
+            short_control_bytes(Jump(join_displacement)) ++ structured_bytes(no),
+        CodeBranchNear(test, false_displacement, join_displacement, yes, no) =>
+            canonical_bytes(branch_test_instruction(test)) ++
+            near_control_bytes(JumpIfNear(branch_skip(test), false_displacement)) ++ structured_bytes(yes) ++
+            near_control_bytes(JumpNear(join_displacement)) ++ structured_bytes(no),
+    }
+}
+
+fn structured_test<M>(register: Gpr, before: MachineState<M>) → MachineState<M> {
+    let value = read_gpr(register, before.gprs);
+    MachineState(gprs := before.gprs, flags := test_flags(value, value, False),
+        rip := next_rip(before.rip, 3), memory := before.memory)
+}
+
+theorem structured_test_canonical<M>(register: Gpr, before: MachineState<M>):
+    structured_test(register, before) =
+        execute_normal(decoded_canonical(TestRR(register, register)), before)
+{
+    refl
+}
+
+// The state after a branch's test: only the flags depend on which test, so
+// its RIP, registers and memory read off without knowing it. At `NonZero(r)`
+// it is `structured_test(r, before)`.
+fn branch_test_state<M>(test: BranchTest, before: MachineState<M>) → MachineState<M> {
+    MachineState(gprs := before.gprs, flags := branch_flags(test, before.gprs),
+        rip := next_rip(before.rip, 3), memory := before.memory)
+}
+
+theorem branch_test_canonical<M>(test: BranchTest, before: MachineState<M>):
+    branch_test_state(test, before) = execute_normal(decoded_canonical(branch_test_instruction(test)), before)
+{
+    match test { NonZero(_) => refl, Compare(_, _, _) => refl }
+}
+
+theorem branch_test_bytes_len(test: BranchTest): canonical_bytes(branch_test_instruction(test)).len() = 3 {
+    match test { NonZero(_) => refl, Compare(_, _, _) => refl }
+}
+
+// Whether the edge over the true arm is taken: the test failed.
+fn branch_skips<M>(test: BranchTest, before: MachineState<M>) → Bool {
+    condition_holds(branch_skip(test), branch_test_state(test, before).flags)
+}
+
+// A compared branch skips its true arm exactly when the comparison of the
+// values its registers hold is false: CF (or SF ≠ OF) after CMP is the
+// library's comparison, by definition.
+theorem unsigned_compare_skips<M>(left, right: Gpr, a, b: BitVec(64), state: MachineState<M>,
+    pa: a = read_gpr(left, state.gprs), pb: b = read_gpr(right, state.gprs)):
+    branch_skips(Compare(left, right, B), state) = !a.unsigned_lt_bit(b)
+{
+    j(sym(pa), λ x _ => branch_skips(Compare(left, right, B), state) = !x.unsigned_lt_bit(b),
+        j(sym(pb), λ y _ => branch_skips(Compare(left, right, B), state) = !read_gpr(left, state.gprs).unsigned_lt_bit(y), refl))
+}
+theorem signed_compare_skips<M>(left, right: Gpr, a, b: BitVec(64), state: MachineState<M>,
+    pa: a = read_gpr(left, state.gprs), pb: b = read_gpr(right, state.gprs)):
+    branch_skips(Compare(left, right, L), state) = !a.signed_lt_bit(b)
+{
+    j(sym(pa), λ x _ => branch_skips(Compare(left, right, L), state) = !x.signed_lt_bit(b),
+        j(sym(pb), λ y _ => branch_skips(Compare(left, right, L), state) = !read_gpr(left, state.gprs).signed_lt_bit(y), refl))
+}
+
+// ZF after CMP is `eq_bit` by a law, not by definition (`zero_bits_sub`).
+theorem equal_compare_skips<M>(left, right: Gpr, a, b: BitVec(64), state: MachineState<M>,
+    pa: a = read_gpr(left, state.gprs), pb: b = read_gpr(right, state.gprs)):
+    branch_skips(Compare(left, right, E), state) = !a.eq_bit(b)
+{
+    j(sym(pa), λ x _ => branch_skips(Compare(left, right, E), state) = !x.eq_bit(b),
+        j(sym(pb), λ y _ => branch_skips(Compare(left, right, E), state) = !read_gpr(left, state.gprs).eq_bit(y),
+            cong_fn(λ (bit: Bool) => !bit, zero_bits_sub(64, read_gpr(left, state.gprs), read_gpr(right, state.gprs)))))
+}
+
+fn structured_branch_entry<M>(test: BranchTest, displacement: BitVec(8),
+    before: MachineState<M>) → MachineState<M>
+{
+    execute_short_control(JumpIf(branch_skip(test), displacement), branch_test_state(test, before))
+}
+
+fn structured_near_entry<M>(test: BranchTest, displacement: BitVec(32),
+    before: MachineState<M>) → MachineState<M>
+{
+    execute_near_control(JumpIfNear(branch_skip(test), displacement), branch_test_state(test, before))
+}
+
+fn structured_after<M>(code: StructuredCode, before: MachineState<M>) → MachineState<M> {
+    match code {
+        CodeBlock(instructions) => execute_block_normal(instructions, before),
+        CodeSequence(prefix, continuation) => structured_after(continuation, structured_after(prefix, before)),
+        CodeBranch(test, false_displacement, join_displacement, yes, no) => {
+            let entry = structured_branch_entry(test, false_displacement, before);
+            match branch_skips(test, before) {
+                False => execute_short_control(Jump(join_displacement), structured_after(yes, entry)),
+                True => structured_after(no, entry),
+            }
+        },
+        CodeBranchNear(test, false_displacement, join_displacement, yes, no) => {
+            let entry = structured_near_entry(test, false_displacement, before);
+            match branch_skips(test, before) {
+                False => execute_near_control(JumpNear(join_displacement), structured_after(yes, entry)),
+                True => structured_after(no, entry),
+            }
+        },
+    }
+}
+
+fn ExecuteStructured<M>(code: StructuredCode, before, after: MachineState<M>) → Type {
+    after = structured_after(code, before)
+}
+
+// Layout ties actual displacement arithmetic to the emitted child lengths.
+// This is separate from execution: a malformed edge still executes, but
+// cannot be certified as entering its selected child or reaching the join.
+fn StructuredLayout(code: StructuredCode) → Type {
+    match code {
+        CodeBlock(_) => True,
+        CodeSequence(prefix, continuation) => StructuredLayout(prefix) ∧ StructuredLayout(continuation),
+        CodeBranch(_, false_displacement, join_displacement, yes, no) =>
+            ((start: BitVec(64)) → short_branch_target(start, false_displacement) =
+                next_rip(start, 2 + (structured_bytes(yes).len() + 2))) ∧
+            (((start: BitVec(64)) → short_branch_target(start, join_displacement) =
+                next_rip(start, 2 + structured_bytes(no).len())) ∧
+            (StructuredLayout(yes) ∧ StructuredLayout(no))),
+        CodeBranchNear(_, false_displacement, join_displacement, yes, no) =>
+            ((start: BitVec(64)) → near_branch_target(start, 6, false_displacement) =
+                next_rip(start, 6 + (structured_bytes(yes).len() + 5))) ∧
+            (((start: BitVec(64)) → near_branch_target(start, 5, join_displacement) =
+                next_rip(start, 5 + structured_bytes(no).len())) ∧
+            (StructuredLayout(yes) ∧ StructuredLayout(no))),
+    }
+}
+
+fn StructuredDecodes(code: StructuredCode) → BitVec(64) → Type {
+    match code {
+        CodeBlock(instructions) => λ start => CanonicalBlockDecodes(instructions, start),
+        CodeSequence(prefix, continuation) => λ start => StructuredDecodes(prefix, start) ∧
+            StructuredDecodes(continuation, next_rip(start, structured_bytes(prefix).len())),
+        CodeBranch(test, false_displacement, join_displacement, yes, no) => λ start =>
+            DecodedAt(encoded_at(start, branch_test_instruction(test)),
+                decoded_canonical(branch_test_instruction(test))) ∧
+            (ShortControlDecodes(JumpIf(branch_skip(test), false_displacement)) ∧
+            (StructuredDecodes(yes, next_rip(start, 5)) ∧
+            (ShortControlDecodes(Jump(join_displacement)) ∧
+            StructuredDecodes(no, next_rip(start, 5 + structured_bytes(yes).len() + 2))))),
+        CodeBranchNear(test, false_displacement, join_displacement, yes, no) => λ start =>
+            DecodedAt(encoded_at(start, branch_test_instruction(test)),
+                decoded_canonical(branch_test_instruction(test))) ∧
+            (NearControlDecodes(JumpIfNear(branch_skip(test), false_displacement)) ∧
+            (StructuredDecodes(yes, next_rip(start, 9)) ∧
+            (NearControlDecodes(JumpNear(join_displacement)) ∧
+            StructuredDecodes(no, next_rip(start, 9 + structured_bytes(yes).len() + 5))))),
+    }
+}
+
+record StructuredArtifact<M>(code: StructuredCode, before: MachineState<M>,
+    result_register: Gpr, result: BitVec(64), protected: Gpr → Type)
+{
+    after: MachineState<M>,
+    execution: ExecuteStructured(code, before, after),
+    layout: StructuredLayout(code),
+    decoding: StructuredDecodes(code, before.rip),
+    result_correct: read_gpr(result_register, after.gprs) = result,
+    memory_preserved: after.memory = before.memory,
+    rip_correct: after.rip = next_rip(before.rip, structured_bytes(code).len()),
+    registers_preserved: (register: Gpr) → protected(register) →
+        read_gpr(register, after.gprs) = read_gpr(register, before.gprs),
+}
+
+// `register` is none of `scratch`: a register a piece allowed to write only
+// `scratch` keeps. Closed at a named register, so a client's "R8 is kept" is
+// `trivial`.
+fn Kept(scratch: List<Gpr>, register: Gpr) → Type {
+    match scratch {
+        Nil => True,
+        Cons(s, rest) => match nat_same(gpr_index(s), gpr_index(register)) { True => False, False => Kept(rest, register) },
+    }
+}
+
+// A generated straight-line piece, as a process takes it
+// (docs/native-architecture-review.md R5): from any state whose registers
+// hold its input `x` (`placed`), its code runs to its end with `result(x)` in
+// `output`, memory untouched, and every register outside `scratch` as it
+// was. The client fixes `scratch`, so what it keeps needs no premise.
+fn Computes<M, A>(code: StructuredCode, placed: A → Gprs → Type, output: Gpr, result: A → BitVec(64), scratch: List<Gpr>) → Type {
+    (before: MachineState<M>) → (x: A) → placed(x, before.gprs) →
+        StructuredArtifact<M>(code, before, output, result(x), λ (register: Gpr) => Kept(scratch, register))
+}
+
+// A certificate that protects `protected` is one for `scratch` when every
+// register outside `scratch` is protected.
+theorem computes_within<M, A>(code: StructuredCode, placed: A → Gprs → Type, output: Gpr, result: A → BitVec(64), scratch: List<Gpr>,
+    protected: Gpr → Type, within: (register: Gpr) → Kept(scratch, register) → protected(register),
+    certificate: (before: MachineState<M>) → (x: A) → placed(x, before.gprs) → StructuredArtifact<M>(code, before, output, result(x), protected)):
+    Computes<M, A>(code, placed, output, result, scratch) {
+    λ before x at => {
+        have artifact = certificate(before, x, at);
+        StructuredArtifact(after := artifact.after, execution := artifact.execution, layout := artifact.layout, decoding := artifact.decoding,
+            result_correct := artifact.result_correct, memory_preserved := artifact.memory_preserved, rip_correct := artifact.rip_correct,
+            registers_preserved := λ register kept => artifact.registers_preserved(register, within(register, kept)))
+    }
+}
+
+// Fold a property over the actual machine selector without evaluating either
+// unselected child. Generated proofs supply the local child obligations.
+theorem structured_branch_property<M>(test: BranchTest, fd, jd: BitVec(8),
+    yes, no: StructuredCode, before: MachineState<M>,
+    property: MachineState<M> → Type,
+    true_case: property(execute_short_control(Jump(jd),
+        structured_after(yes, structured_branch_entry(test, fd, before)))),
+    false_case: property(structured_after(no, structured_branch_entry(test, fd, before)))):
+    property(structured_after(CodeBranch(test, fd, jd, yes, no), before))
+{
+    match branch_skips(test, before) as λ selected =>
+        property(match selected {
+            False => execute_short_control(Jump(jd),
+                structured_after(yes, structured_branch_entry(test, fd, before))),
+            True => structured_after(no, structured_branch_entry(test, fd, before)),
+        }) { False => true_case, True => false_case }
+}
+
+// Equality-directed branch reasoning also exposes the actual branch address.
+theorem structured_branch_cases<M>(test: BranchTest, fd, jd: BitVec(8),
+    yes, no: StructuredCode, before: MachineState<M>,
+    property: MachineState<M> → Type,
+    true_case: (branch_skips(test, before) = False) →
+        property(execute_short_control(Jump(jd),
+            structured_after(yes, structured_branch_entry(test, fd, before)))),
+    false_case: (branch_skips(test, before) = True) →
+        property(structured_after(no, structured_branch_entry(test, fd, before)))):
+    property(structured_after(CodeBranch(test, fd, jd, yes, no), before))
+{
+    (match branch_skips(test, before) as λ selected =>
+        (branch_skips(test, before) = selected) →
+        property(match selected {
+            False => execute_short_control(Jump(jd),
+                structured_after(yes, structured_branch_entry(test, fd, before))),
+            True => structured_after(no, structured_branch_entry(test, fd, before)),
+        }) { False => true_case, True => false_case })(refl)
+}
+
+theorem structured_branch_read<M>(test: BranchTest, fd, jd: BitVec(8),
+    yes, no: StructuredCode, before: MachineState<M>, output: Gpr):
+    read_gpr(output, structured_after(CodeBranch(test, fd, jd, yes, no), before).gprs) =
+        match branch_skips(test, before) {
+            False => read_gpr(output, structured_after(yes, structured_branch_entry(test, fd, before)).gprs),
+            True => read_gpr(output, structured_after(no, structured_branch_entry(test, fd, before)).gprs),
+        }
+{
+    match branch_skips(test, before) as λ selected =>
+        read_gpr(output, (match selected {
+            False => execute_short_control(Jump(jd), structured_after(yes, structured_branch_entry(test, fd, before))),
+            True => structured_after(no, structured_branch_entry(test, fd, before)),
+        }).gprs) = match selected {
+            False => read_gpr(output, structured_after(yes, structured_branch_entry(test, fd, before)).gprs),
+            True => read_gpr(output, structured_after(no, structured_branch_entry(test, fd, before)).gprs),
+        }
+    { False => refl, True => refl }
+}
+
+// The near conditional's twins of the three lemmas above.
+theorem structured_near_branch_property<M>(test: BranchTest, fd, jd: BitVec(32),
+    yes, no: StructuredCode, before: MachineState<M>,
+    property: MachineState<M> → Type,
+    true_case: property(execute_near_control(JumpNear(jd),
+        structured_after(yes, structured_near_entry(test, fd, before)))),
+    false_case: property(structured_after(no, structured_near_entry(test, fd, before)))):
+    property(structured_after(CodeBranchNear(test, fd, jd, yes, no), before))
+{
+    match branch_skips(test, before) as λ selected =>
+        property(match selected {
+            False => execute_near_control(JumpNear(jd),
+                structured_after(yes, structured_near_entry(test, fd, before))),
+            True => structured_after(no, structured_near_entry(test, fd, before)),
+        }) { False => true_case, True => false_case }
+}
+
+theorem structured_near_branch_cases<M>(test: BranchTest, fd, jd: BitVec(32),
+    yes, no: StructuredCode, before: MachineState<M>,
+    property: MachineState<M> → Type,
+    true_case: (branch_skips(test, before) = False) →
+        property(execute_near_control(JumpNear(jd),
+            structured_after(yes, structured_near_entry(test, fd, before)))),
+    false_case: (branch_skips(test, before) = True) →
+        property(structured_after(no, structured_near_entry(test, fd, before)))):
+    property(structured_after(CodeBranchNear(test, fd, jd, yes, no), before))
+{
+    (match branch_skips(test, before) as λ selected =>
+        (branch_skips(test, before) = selected) →
+        property(match selected {
+            False => execute_near_control(JumpNear(jd),
+                structured_after(yes, structured_near_entry(test, fd, before))),
+            True => structured_after(no, structured_near_entry(test, fd, before)),
+        }) { False => true_case, True => false_case })(refl)
+}
+
+theorem structured_near_branch_read<M>(test: BranchTest, fd, jd: BitVec(32),
+    yes, no: StructuredCode, before: MachineState<M>, output: Gpr):
+    read_gpr(output, structured_after(CodeBranchNear(test, fd, jd, yes, no), before).gprs) =
+        match branch_skips(test, before) {
+            False => read_gpr(output, structured_after(yes, structured_near_entry(test, fd, before)).gprs),
+            True => read_gpr(output, structured_after(no, structured_near_entry(test, fd, before)).gprs),
+        }
+{
+    match branch_skips(test, before) as λ selected =>
+        read_gpr(output, (match selected {
+            False => execute_near_control(JumpNear(jd), structured_after(yes, structured_near_entry(test, fd, before))),
+            True => structured_after(no, structured_near_entry(test, fd, before)),
+        }).gprs) = match selected {
+            False => read_gpr(output, structured_after(yes, structured_near_entry(test, fd, before)).gprs),
+            True => read_gpr(output, structured_after(no, structured_near_entry(test, fd, before)).gprs),
+        }
+    { False => refl, True => refl }
+}

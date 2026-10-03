@@ -21,8 +21,10 @@ const MODULES: &[(&str, &str)] = &[
     ("int", include_str!("../../../lib/std/int.hthr")),
     ("omega", include_str!("../../../lib/std/omega.hthr")),
     ("bitvec", include_str!("../../../lib/std/bitvec.hthr")),
-    ("bitvec_nat", include_str!("../../../lib/std/bitvec/nat.hthr")),
-    ("bitvec_omega", include_str!("../../../lib/std/bitvec/omega.hthr")),
+    ("bitvec_nat", include_str!("../../../lib/std/bitvec/bitvec_nat.hthr")),
+    ("bitvec_omega", include_str!("../../../lib/std/bitvec/bitvec_omega.hthr")),
+    ("char", include_str!("../../../lib/std/char.hthr")),
+    ("byte", include_str!("../../../lib/std/bitvec/byte.hthr")),
 ];
 
 const PREFIX: &str = "import bool;\nimport logic;\nimport nat;\nimport list;\nimport omega;\nimport bitvec;\nimport bitvec_nat;\nimport bitvec_omega;\n\n\
@@ -71,6 +73,131 @@ fn bv_omega_suite() {
     names_atom_lists();
     proves_what_is_written_down_without_search();
     splits_stuck_comparisons();
+    splits_through_definitions();
+    byte_tests_read_as_written();
+    splits_decided_predicates();
+}
+
+/// Byte tests as a program writes them (S3 of
+/// docs/native-programs-read-like-programs-design.md): a numeral or a
+/// character at a byte is its `ofNat`, also on the left of an order and before
+/// the argument that fixes the width; `=`, `<` and `<=` at bytes decide, alone
+/// and under connectives; and the decision computes on closed bytes.
+fn byte_tests_read_as_written() {
+    let source = |body: &str| format!("import bool;\nimport logic;\nimport nat;\nimport algebra;\nimport bitvec;\nimport char;\nimport byte;\n\n{body}\n");
+    let check = |what: &str, body: &str| {
+        let source = source(body);
+        elaborator().elab_module_source("probe", &source).unwrap_or_else(|error| panic!("{what} did not check: {}", message(error)));
+    };
+    check("literals at a byte are their ofNat", r#"
+        fn ten() → BitVec(8) { 10 }
+        fn newline() → BitVec(8) { '\n' }
+        theorem same(): ten() = newline() { refl }
+        theorem spelled(): ten() = BitVec::ofNat(10) { refl }
+    "#);
+    check("decided byte tests", r#"
+        fn newline(b: BitVec(8)) → Bool { if b = '\n' { True } else { False } }
+        fn space(b: BitVec(8)) → Bool { if b = ' ' ∨ ('\t' <= b ∧ b <= '\r') { True } else { False } }
+        fn control(b: BitVec(8)) → Bool { if b < 32 ∧ ¬(9 <= b) { True } else { False } }
+        theorem closed(): (newline('\n') = True) ∧ ((newline('a') = False) ∧ ((space('\r') = True) ∧ ((space(' ') = True) ∧
+            ((space('x') = False) ∧ ((control(BitVec::ofNat(3)) = True) ∧ (control('\t') = False)))))) {
+            ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, refl⟩⟩⟩⟩⟩⟩
+        }
+    "#);
+    let refused = |what: &str, body: &str| {
+        let source = source(body);
+        assert!(elaborator().elab_module_source("probe", &source).is_err(), "{what} checked");
+    };
+    refused("a wrong closed decision", r#"
+        fn newline(b: BitVec(8)) → Bool { if b = '\n' { True } else { False } }
+        theorem wrong(): newline('\r') = True { refl }
+    "#);
+    refused("a character at a wider word", r#"
+        fn wide() → BitVec(16) { 'a' }
+    "#);
+}
+
+/// Predicates written as decisions' bits (S4 of
+/// docs/native-programs-read-like-programs-design.md): an equality splits like
+/// an order, with its Nat fact (`≠` on the false side, which omega splits); a
+/// helper that *is* a comparison is split at the comparison, under `of_bit`
+/// too; and a recursive definition at a constructor, which reaches the byte
+/// through the constructor's encoding, splits with the other side.
+fn splits_decided_predicates() {
+    let source = |body: &str| format!("import bool;\nimport logic;\nimport nat;\nimport list;\nimport omega;\nimport algebra;\n\
+        import bitvec;\nimport bitvec_nat;\nimport bitvec_omega;\nimport char;\nimport byte;\n\n{body}\n");
+    let check = |what: &str, body: &str| {
+        let source = source(body);
+        elaborator().elab_module_source("probe", &source).unwrap_or_else(|error| panic!("{what} did not check: {}", message(error)));
+    };
+    let refused = |what: &str, body: &str| message(elaborator().elab_module_source("probe", &source(body)).expect_err(what));
+    let predicates = r#"
+        fn newline(b: BitVec(8)) → Bool { decide_bit<b = '\n'>() }
+        fn space(b: BitVec(8)) → Bool { decide_bit<b = ' ' ∨ ('\t' <= b ∧ b <= '\r')>() }
+        fn kept(b: BitVec(8)) → Bool { decide_bit<b ≠ '\r'>() }
+        fn step(count: Nat, b: BitVec(8)) → Nat { match space(b) { True => count, False => Succ(count) } }
+    "#;
+    check("equalities, connectives and helpers", &format!("{predicates}
+        theorem newline_space(b: BitVec(8)): Nat::of_bit(newline(b)) <= Nat::of_bit(space(b)) {{ split_all; all_goals {{ omega }} }}
+        theorem lines(count: Nat, b: BitVec(8)): (if b = '\\n' {{ Succ(count) }} else {{ count }}) = count + Nat::of_bit(newline(b)) {{
+            split_all; all_goals {{ omega }}
+        }}
+        theorem advances(count: Nat, b: BitVec(8)): step(count, b) <= Succ(count) {{ split_all; all_goals {{ omega }} }}
+        theorem one(b: BitVec(8), rest: List<BitVec(8)>):
+            Cons(b, rest).filter(kept) = match kept(b) {{ True => Cons(b, rest.filter(kept)), False => rest.filter(kept) }} {{
+            split_all; all_goals {{ refl }}
+        }}
+        theorem single(b: BitVec(8)): Cons(b, Nil<BitVec(8)>).filter(kept) = (if b = '\\r' {{ Nil }} else {{ Cons(b, Nil) }}) {{
+            split_all; all_goals {{ refl }}
+        }}
+    "));
+    let error = refused("a newline counted at every space", &format!("{predicates}
+        theorem wrong(count: Nat, b: BitVec(8)): step(count, b) = count + Nat::of_bit(newline(b)) {{ split_all; all_goals {{ omega }} }}
+    "));
+    assert!(error.contains("no contradiction") || error.contains("stuck"), "{error}");
+}
+
+/// What a split decides reaches the rest of the goal and the hypotheses
+/// (issues/split-all-reduce-defined-heads.md,
+/// issues/split-all-closed-tonat-literals.md): connectives and helpers at the
+/// constructor a split substituted reduce, a binder introduced after a split
+/// is restated simplified, and a comparison's fact against a literal is
+/// stated at the literal, so plain `omega` closes a case two splits rule out.
+fn splits_through_definitions() {
+    checks("a predicate built with connectives", r#"
+        fn newline(b: BitVec(8)) → Bool { !b.unsigned_lt_bit(BitVec::ofNat(10)) && b.unsigned_lt_bit(BitVec::ofNat(11)) }
+        fn blank(b: BitVec(8)) → Bool { newline(b) || !b.unsigned_lt_bit(BitVec::ofNat(32)) && b.unsigned_lt_bit(BitVec::ofNat(33)) }
+        fn step(count: Nat, b: BitVec(8)) → Nat { match newline(b) { False => count, True => Succ(count) } }
+        theorem advances(count: Nat, b: BitVec(8)): step(count, b) <= Succ(count) { split_all; all_goals { omega } }
+        theorem open_count(count: Nat): (b: BitVec(8)) → step(count, b) <= Succ(count) { split_all; all_goals { omega } }
+        fn bit(x: Bool) → Nat { match x { True => 1, False => 0 } }
+        theorem newline_blank(b: BitVec(8)): bit(newline(b)) <= bit(blank(b)) { split_all; all_goals { omega } }
+    "#);
+    checks("two splits' literals, compared by plain omega", r#"
+        fn ten(b: BitVec(8)) → Bool { match b.unsigned_lt_bit(BitVec::ofNat(10)) { True => False, False => b.unsigned_lt_bit(BitVec::ofNat(11)) } }
+        fn low(b: BitVec(8)) → Bool { match b.unsigned_lt_bit(BitVec::ofNat(14)) { True => match b.unsigned_lt_bit(BitVec::ofNat(9)) { True => False, False => True }, False => False } }
+        fn bit(x: Bool) → Nat { match x { True => 1, False => 0 } }
+        theorem ten_is_low(b: BitVec(8)): bit(ten(b)) <= bit(low(b)) { split_all; all_goals { omega } }
+    "#);
+    checks("a helper at the constructor a split chose, and a hypothesis after it", r#"
+        fn weight(cut: Bool) → Nat { match cut { True => 0, False => 1 } }
+        fn wrap<A>(cut: Bool, x: A) → List<A> { match cut { True => Cons(x, Nil), False => Nil } }
+        fn size<A>(xs: List<A>) → Nat { match xs { Nil => 0, Cons(_, _) => 1 } }
+        theorem balanced<A>(x: A, xs: List<A>, total: Nat): (cut: Bool) → (total = weight(cut) + size(xs)) →
+            total + size(wrap(cut, x)) = size(xs) + 1 {
+            split_all; all_goals { omega }
+        }
+    "#);
+    let error = refused("a false statement through a helper", r#"
+        fn weight(cut: Bool) → Nat { match cut { True => 0, False => 1 } }
+        fn wrap<A>(cut: Bool, x: A) → List<A> { match cut { True => Cons(x, Nil), False => Nil } }
+        fn size<A>(xs: List<A>) → Nat { match xs { Nil => 0, Cons(_, _) => 1 } }
+        theorem wrong<A>(x: A, xs: List<A>, total: Nat): (cut: Bool) → (total = weight(cut) + size(xs)) →
+            total + size(wrap(cut, x)) = size(xs) {
+            split_all; all_goals { omega }
+        }
+    "#);
+    assert!(error.contains("no contradiction"), "{error}");
 }
 
 fn splits_stuck_comparisons() {
@@ -398,4 +525,41 @@ fn reconstructs_bounded_combinations() {
         "theorem t(s, t, v: Nat, value: s = v, small: v < 1000, first: t = v + v, r0: s < Nat::pow(2, 64), r1: t < Nat::pow(2, 64)): 2 * t + 0 < Nat::pow(2, 64) + 0 { omega }");
     refused("a false bound with the same ranges",
         "theorem t(s, t, v: Nat, value: s = v, small: v < 1000, first: t = v + v, r0: s < Nat::pow(2, 64), r1: t < Nat::pow(2, 64)): 2 * t < 1000 { omega }");
+}
+
+/// `split_all` over words (docs/goal-combinators.md): a word local is never
+/// split into its bits, and a comparison is found through the helpers that
+/// spell it, or through a match on another one, with its Nat fact at each
+/// leaf.
+#[test]
+fn split_all_finds_comparisons_through_helpers() {
+    checks("a comparison behind a helper", "
+fn low(x: BitVec(8)) → Bool { x.unsigned_lt_bit(BitVec::ofNat(10)) }
+fn pick(x: BitVec(8), n: Nat) → Nat { match low(x) { True => n, False => Succ(n) } }
+theorem pick_grows(x: BitVec(8), n: Nat): n <= pick(x, n) {
+    split_all;
+    all_goals { omega }
+}");
+    checks("a comparison under a match on another", "
+fn space(b: BitVec(8)) → Bool {
+    match b.unsigned_lt_bit(BitVec::ofNat(14)) { True => True, False => b.unsigned_lt_bit(BitVec::ofNat(33)) }
+}
+fn count(b: BitVec(8), n: Nat) → Nat { match space(b) { True => Succ(n), False => n } }
+theorem count_bounded(b: BitVec(8), n: Nat): count(b, n) <= Succ(n) {
+    split_all;
+    all_goals { omega }
+}");
+    checks("the leaf reads the comparison as Nats", "
+fn below(x: BitVec(8)) → Bool { x.unsigned_lt_bit(BitVec::ofNat(10)) }
+theorem small(x: BitVec(8)): match below(x) { True => x.toNat() < 10, False => 10 <= x.toNat() } {
+    split_all;
+    all_goals { bv_omega }
+}");
+    let error = refused("a leaf the comparison does not prove", "
+fn below(x: BitVec(8)) → Bool { x.unsigned_lt_bit(BitVec::ofNat(10)) }
+theorem wrong(x: BitVec(8)): match below(x) { True => x.toNat() < 9, False => 10 <= x.toNat() } {
+    split_all;
+    all_goals { bv_omega }
+}");
+    assert!(error.contains("bv_omega"), "{error}");
 }

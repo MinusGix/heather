@@ -76,7 +76,7 @@ the architectural authority.
 
 ## First vertical slice
 
-`lib/std/arch/x86_64/model.hthr` begins with `MOV r64,r64` and `ADD r64,r64`, all sixteen GPRs,
+`lib/std/arch/x86_64/x86_64.hthr` begins with `MOV r64,r64` and `ADD r64,r64`, all sixteen GPRs,
 the six arithmetic flags, RIP, and an opaque memory parameter. The opaque
 parameter makes memory preservation a real statement without prematurely
 claiming a total byte store. Both operations are deterministic and fault-free
@@ -135,7 +135,7 @@ are owned by [the static ELF design](x86-64-static-elf.md). The restricted loade
 
 ## Exact-span memory fetch (2026-09-07)
 
-`lib/std/arch/x86_64/fetch.hthr` adds the first memory-to-byte-span adapter.
+`lib/std/arch/x86_64/x86_64_fetch.hthr` adds the first memory-to-byte-span adapter.
 `FetchAccess<M>` supplies a byte reader returning `Option<BitVec(8)>` and a
 separate execute-permission predicate, both applied to the actual memory value.
 The caller chooses these implementations; this interface does not itself prove
@@ -175,7 +175,7 @@ next-address equations explicitly and does not treat wrapping as valid.
 ## Restricted ELF loaded traces (2026-09-07)
 
 `lib/elf64_load.hthr` supplies the reader and execute policy for the fixed RX
-file mapping, with no zero-fill tail. `lib/std/arch/x86_64/fetch_block.hthr`
+file mapping, with no zero-fill tail. `lib/std/arch/x86_64/x86_64_fetch_block.hthr`
 composes canonical fetched steps, and `lib/linux_x86_64_fetch.hthr` ends the
 trace with fetched syscall bytes and an exit-request contract.
 

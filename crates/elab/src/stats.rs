@@ -601,6 +601,9 @@ impl Drop for ScopeGuard {
                 .zip(open.value_metrics)
                 .map(|(after, before)| after.saturating_sub(before)),
         };
+        if open.explicit {
+            live_closed(&row);
+        }
         REG.with(|r| {
             let push = |buf: &RefCell<Vec<ItemTiming>>, row| {
                 let mut buf = buf.borrow_mut();
@@ -658,6 +661,9 @@ pub fn scope(kind: ScopeKind, module: &str, item: &str) -> ScopeGuard {
     });
     if kind == ScopeKind::Item {
         ITEMS.with(|s| s.borrow_mut().push((module.to_string(), item.to_string())));
+    }
+    if explicit {
+        live_opened(kind, module, item);
     }
     ScopeGuard {
         open: Some(Open {
@@ -817,6 +823,7 @@ pub fn dump(dest: &Dest, rows: &[ItemTiming]) -> std::io::Result<()> {
             Ok(())
         }
         Dest::File(path) => {
+            end_live();
             std::fs::write(path, text)?;
             eprintln!("timings: {} rows in {}", rows.len(), path.display());
             // The copy-on-write sites behind the `cow_*` columns, beside it.
@@ -827,6 +834,111 @@ pub fn dump(dest: &Dest, rows: &[ItemTiming]) -> std::io::Result<()> {
             }
             Ok(())
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The live table
+// ---------------------------------------------------------------------------
+
+// A run killed at the CPU rail never reaches its dump, and a run that ran past
+// the rail is the one whose attribution is wanted
+// (`issues/native-build-no-partial-diagnostics.md`). So a file dump can be
+// opened as a live table first: the header at once, then one line per row as
+// its scope closes, each a `write` of its own, so the file is as current as
+// the last closed scope whatever kills the process. Beside it,
+// `<stem>.open.tsv` lists the scopes open right now, outermost first — after
+// a kill, its last line is the declaration that was running. It is rewritten
+// (to a temporary name, then renamed) whenever a scope opens or closes, and
+// removed when the last one closes.
+//
+// No signal handler: nothing is buffered, so there is nothing for one to
+// flush. (zsh's `ulimit -t` sets the soft limit alone, and the run dies of
+// SIGXCPU; bash's sets the hard limit too, and Linux then sends SIGKILL,
+// which no handler sees.)
+//
+// The live lines are provisional. A deferred kernel check patches its item's
+// row after the row closed (`fold_deferred_kernel`), and the serial fallback
+// discards rows it has already closed (`truncate_rows`); a line once written
+// stays. The dump that ends the run rewrites the file with the final rows, so
+// only a table a killed run left behind reads provisional lines — at width
+// one, the gate runs inside its item's scope and they are final.
+
+struct Live {
+    table: std::fs::File,
+    open_path: PathBuf,
+    open: Vec<(ScopeKind, String, String)>,
+}
+
+thread_local! {
+    static LIVE: RefCell<Option<Live>> = const { RefCell::new(None) };
+}
+
+/// Open `path` as this thread's live table: truncate it and write the header.
+/// Rows closed from here on are appended as they close, and [`dump`] to a file
+/// ends the live table before writing the final one.
+pub fn live_table(path: &std::path::Path) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut table = std::fs::File::create(path)?;
+    table.write_all(header().as_bytes())?;
+    let open_path = path.with_extension("open.tsv");
+    // A sidecar an earlier killed run left would otherwise name its scope
+    // until this run's first scope opened.
+    let _ = std::fs::remove_file(&open_path);
+    LIVE.with(|l| *l.borrow_mut() = Some(Live { table, open_path, open: Vec::new() }));
+    Ok(())
+}
+
+fn live_opened(kind: ScopeKind, module: &str, item: &str) {
+    LIVE.with(|l| {
+        let mut live = l.borrow_mut();
+        let Some(live) = live.as_mut() else { return };
+        live.open.push((kind, module.to_string(), item.to_string()));
+        write_open(live);
+    });
+}
+
+fn live_closed(row: &ItemTiming) {
+    use std::io::Write;
+    LIVE.with(|l| {
+        let mut live = l.borrow_mut();
+        let Some(live) = live.as_mut() else { return };
+        // Scopes close innermost first, except a guard dropped by hand; the
+        // last matching entry is the one this row closes either way.
+        if let Some(at) = live.open.iter().rposition(|(kind, module, item)| {
+            *kind == row.kind && *module == row.module && *item == row.item
+        }) {
+            live.open.remove(at);
+        }
+        // The sidecar first: a scope it names has no row yet, at every
+        // instant a kill can land on.
+        write_open(live);
+        let mut line = String::new();
+        row_line(row, &mut line);
+        // Best effort, like the thread dump: the final dump reports its own
+        // failure, and a run is not failed over a line of attribution.
+        let _ = live.table.write_all(line.as_bytes());
+    });
+}
+
+fn write_open(live: &Live) {
+    if live.open.is_empty() {
+        let _ = std::fs::remove_file(&live.open_path);
+        return;
+    }
+    let mut text = String::from("scope\tmodule\titem\n");
+    for (kind, module, item) in &live.open {
+        text.push_str(&format!("{}\t{module}\t{item}\n", kind.as_str()));
+    }
+    let staged = live.open_path.with_extension("tsv.partial");
+    if std::fs::write(&staged, text).is_ok() {
+        let _ = std::fs::rename(&staged, &live.open_path);
+    }
+}
+
+fn end_live() {
+    if let Some(live) = LIVE.with(|l| l.borrow_mut().take()) {
+        let _ = std::fs::remove_file(&live.open_path);
     }
 }
 
@@ -926,5 +1038,51 @@ mod tests {
         let sites = take_cow_sites();
         assert!(sites.starts_with("1\t") && sites.contains(file!()), "the copy names this file: {sites:?}");
         assert!(sites.contains("\tVec<u32>\t"), "and the type it copied: {sites:?}");
+    }
+
+    /// The live table is as current as the last closed scope, the sidecar
+    /// names what is open and nothing that has a row, and the dump ends both.
+    #[test]
+    fn a_live_table_holds_every_closed_row_and_names_the_open_ones() {
+        let dir = std::env::temp_dir().join(format!("heather-live-table-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("t.tsv");
+        let open = dir.join("t.open.tsv");
+        std::fs::write(&open, "left by a killed run\n").unwrap();
+        let lines = || std::fs::read_to_string(&path).unwrap().lines().map(str::to_string).collect::<Vec<_>>();
+        let opened = || std::fs::read_to_string(&open).ok();
+        enable();
+        live_table(&path).unwrap();
+        assert_eq!(lines(), [header().trim_end()], "the header at once");
+        assert_eq!(opened(), None, "an earlier run's sidecar is gone");
+
+        let run = scope(ScopeKind::Run, "", "");
+        let module = scope(ScopeKind::Module, "m", "");
+        drop(scope(ScopeKind::Item, "m", "done"));
+        let running = scope(ScopeKind::Item, "m", "running");
+        let table = lines();
+        assert_eq!(table.len(), 2, "one row per closed scope: {table:?}");
+        assert!(table[1].starts_with("item\tm\tdone\t"), "{table:?}");
+        assert_eq!(table[1].split('\t').count(), table[0].split('\t').count(), "a whole row");
+        assert_eq!(opened().as_deref(), Some("scope\tmodule\titem\nrun\t\t\nmodule\tm\t\nitem\tm\trunning\n"));
+
+        drop(running);
+        drop(module);
+        assert_eq!(opened().as_deref(), Some("scope\tmodule\titem\nrun\t\t\n"));
+        drop(run);
+        assert_eq!(opened(), None, "nothing open, no sidecar");
+        assert_eq!(lines().len(), 5);
+
+        let rows = take_rows();
+        std::fs::write(&open, "stale\n").unwrap();
+        dump(&Dest::File(path.clone()), &rows).unwrap();
+        assert_eq!(lines().len(), 5, "the dump rewrites the same rows");
+        assert_eq!(opened(), None, "and ends the live table");
+        let after = scope(ScopeKind::Item, "m", "later");
+        drop(after);
+        assert_eq!(lines().len(), 5, "a scope after the dump appends nothing");
+        disable();
+        take_rows();
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

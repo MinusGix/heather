@@ -8,15 +8,17 @@
 use std::collections::BTreeMap;
 
 mod readonly_loop;
-pub use readonly_loop::{LoopCarry, ReflectedReadonlyLoop, reflect_elaborated_readonly_loop, generate_readonly_loop_certificate};
+pub use readonly_loop::{LoopCarry, ReflectedReadonlyLoop, reflect_elaborated_readonly_loop, generate_readonly_loop_certificate,
+    byte_constant};
 
 mod loop_native;
-mod loop_record;
 pub use loop_native::{generate_elaborated_loop_x86, LoopX86Emission, NativeLoopPlacement};
-pub use loop_record::{generate_elaborated_record_loop_x86, RecordLoopPlacement};
+
+mod filter_step;
+pub use filter_step::{generate_elaborated_filter_step_x86, reflect_filter_step, FilterStep, FilterStepEmission};
 
 mod structured;
-pub use structured::{generate_elaborated_read_x86, ReadX86Emission, generate_elaborated_typed_x86, generate_elaborated_typed_fields_x86, FieldPiece, FieldEmission, generate_elaborated_structured_x86, generate_structured_source_expansion, reflect_elaborated_structured, ReflectedStructuredFunction, StructuredSourceType, StructuredSourceChoice, StructuredSourceRecord};
+pub use structured::{generate_elaborated_read_x86, ReadX86Emission, generate_elaborated_typed_x86, generate_elaborated_typed_consuming_x86, generate_elaborated_piece_x86, generate_elaborated_typed_fields_x86, FieldPiece, FieldEmission, generate_elaborated_structured_x86, generate_structured_source_expansion, reflect_elaborated_structured, ReflectedStructuredFunction, StructuredSourceType, StructuredSourceChoice, StructuredSourceRecord};
 
 use heather_kernel::term::{LocalVar, Term, Type};
 use heather_syntax::{Decl, DeclKind, Expr, ExprKind, Ty, TyKind};

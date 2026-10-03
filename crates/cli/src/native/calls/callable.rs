@@ -31,6 +31,7 @@ fn leaf_contract(module: &mut Module, name: &str, leaf_prefix: &str, leaf: &Sour
     for node in &leaf.reflected.region.nodes {
         let body = match *node {
             Node::Const { value: n, .. } => format!("@bitvec::BitVec::ofNat(width, {n})"),
+            Node::Move { source, .. } => value(source),
             Node::Add { left, right, .. } | Node::Sub { left, right, .. }
             | Node::BitAnd { left, right, .. } | Node::BitOr { left, right, .. } | Node::BitXor { left, right, .. } => {
                 let op = match node { Node::Add { .. } => "add", Node::Sub { .. } => "sub", Node::BitAnd { .. } => "band", Node::BitOr { .. } => "bor", _ => "bxor" };

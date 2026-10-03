@@ -281,6 +281,8 @@ impl Parameter {
         }
     }
 
+    pub fn ty(&self) -> &Expr { &self.ty }
+
     fn render(&self, indent: usize) -> String {
         format!(
             "{}: {}",

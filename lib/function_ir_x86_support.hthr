@@ -97,6 +97,20 @@ fn gpr_only_xor<M>(destination, source: Gpr) →
         correct := λ state => refl)
 }
 
+fn gpr_only_add_ri8<M>(destination: Gpr, immediate: BitVec(8)) →
+    GprOnlyStep<M>(AddRI8(destination, immediate))
+{
+    GprOnlyStep(run := λ before => execute_add_immediate(destination, immediate.sign_extend(56), before).gprs,
+        correct := λ state => refl)
+}
+
+fn gpr_only_add_ri32<M>(destination: Gpr, immediate: BitVec(32)) →
+    GprOnlyStep<M>(AddRI32(destination, immediate))
+{
+    GprOnlyStep(run := λ before => execute_add_immediate(destination, immediate.sign_extend(32), before).gprs,
+        correct := λ state => refl)
+}
+
 theorem execute_normal_gprs_congruent<M>(instruction: Instruction,
     left, right: MachineState<M>, effect: GprOnlyStep<M>(instruction),
     same: left.gprs = right.gprs):

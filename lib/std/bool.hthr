@@ -57,6 +57,189 @@ theorem Bool::or_comm(self a, b: Bool): a || b = b || a {
 }
 
 // ---------------------------------------------------------------------------
+// Decidability (issues/decide-class.md). `Decide<P>` is the Bool with its
+// evidence attached: there is no sort boundary to cross and no second object,
+// since Heather keeps proof relevance and a `match` on `dec` eliminates
+// straight into `Type`.
+//
+// The content of the class is *"this disjunction reduces"*. A classical
+// `lem : (P: Type) → P ∨ ¬P` would make every consumer below typecheck and
+// then compute nothing, because `lem(…)` is a neutral constant with no
+// reduction rule. That difference is the whole reason the class exists.
+//
+// A decision also carries its bit (issues/native-frontend-decided-matches.md):
+// `bit` is `True` exactly when `P` holds, and `reflects` says so. An `if P`
+// without an evidence binder is `match decide_bit<P>()`, so a decision built
+// from a comparison is a match on that comparison's bit, the way code
+// branches on it. `dec` stays for `if h: P` and every consumer that wants the
+// evidence. The class lives here, beside `Bool`, because its bit is one.
+
+// `bit` decides `P`: it is `True` exactly when `P` holds.
+fn Reflects(P: Type, bit: Bool) → Type { ((bit = True) → P) ∧ ((bit = False) → ¬P) }
+
+class Decide<P> { dec: P ∨ ¬P, bit: Bool, reflects: Reflects(P, bit) }
+
+// The bit of a decision that has none of its own: the side it took. An
+// instance over a `_dec` function spells its bit and reflection with these.
+fn or_bit<P, Q>(d: P ∨ Q) → Bool { match d { Inl(_) => True, Inr(_) => False } }
+
+theorem or_bit_reflects<P>(d: P ∨ ¬P): Reflects(P, or_bit(d)) {
+    match d {
+        Inl(p) => And(λ _ => p, λ (no: True = False) => absurd(no)),
+        Inr(np) => And(λ (no: False = True) => absurd(no), λ _ => np),
+    }
+}
+
+// The connectives' bits reflect the connectives.
+theorem reflects_and(P, Q: Type, x, y: Bool, p: Reflects(P, x), q: Reflects(Q, y)): Reflects(P ∧ Q, x && y) {
+    And(λ e => (match x as λ c => (x = c) → (c && y = True) → P ∧ Q {
+            True => λ hx hy => And(p.left(hx), q.left(hy)),
+            False => λ _ no => absurd(no),
+        })(refl, e),
+     λ e both => (match x as λ c => (x = c) → (c && y = False) → False {
+            True => λ _ hy => q.right(hy)(both.right),
+            False => λ hx _ => p.right(hx)(both.left),
+        })(refl, e))
+}
+
+theorem reflects_or(P, Q: Type, x, y: Bool, p: Reflects(P, x), q: Reflects(Q, y)): Reflects(P ∨ Q, x || y) {
+    And(λ e => (match x as λ c => (x = c) → (c || y = True) → P ∨ Q {
+            True => λ hx _ => Inl(p.left(hx)),
+            False => λ _ hy => Inr(q.left(hy)),
+        })(refl, e),
+     λ e either => (match x as λ c => (x = c) → (c || y = False) → False {
+            True => λ _ no => absurd(no),
+            False => λ hx hy => match either { Inl(a) => p.right(hx)(a), Inr(b) => q.right(hy)(b) },
+        })(refl, e))
+}
+
+theorem reflects_not(P: Type, x: Bool, p: Reflects(P, x)): Reflects(¬P, !x) {
+    And(λ e => (match x as λ c => (x = c) → (!c = True) → ¬P {
+            True => λ _ no => absurd(no),
+            False => λ hx _ => p.right(hx),
+        })(refl, e),
+     λ e notp => (match x as λ c => (x = c) → (!c = False) → False {
+            True => λ hx _ => notp(p.left(hx)),
+            False => λ _ no => absurd(no),
+        })(refl, e))
+}
+
+// The two constants. `True` is the kernel's `Unit^0`, so `Inl(trivial)` is the
+// only inhabitant there is; `False`'s refutation is the identity, exactly as
+// `not_succ_le_zero` is over in `nat`.
+instance Decide<True> {
+    dec := Inl(trivial),
+    bit := True,
+    reflects := And(λ _ => trivial, λ (no: True = False) => absurd(no)),
+}
+instance Decide<False> {
+    dec := Inr(λ (h: False) => h),
+    bit := False,
+    reflects := And(λ (no: False = True) => absurd(no), λ _ (h: False) => h),
+}
+
+// The composition instances — what earns this a class rather than a naming
+// convention. Resolution assembles them: a goal at `¬(P ∧ Q)` backchains
+// through `Not`, then `And`, then whatever decides `P` and `Q`, and no writer
+// names an intermediate.
+//
+// `¬P` can key an instance because canonical names may be attached to a type
+// former as well as to a declared type. `Not` remains a function into `Type`,
+// keeping negation definitionally equal to `P → False`.
+//
+// Their bits are the Bool connectives, which test the second operand only
+// where the first did not settle it: a native step lowers a match on one as
+// branches, an operand at a time.
+
+instance<P: Decide, Q: Decide> Decide<P ∧ Q> {
+    dec := match P.dec {
+        Inl(p) => match Q.dec {
+            Inl(q) => Inl(And(p, q)),
+            Inr(nq) => Inr(λ (h: P ∧ Q) => nq(h.right)),
+        },
+        Inr(np) => Inr(λ (h: P ∧ Q) => np(h.left)),
+    },
+    bit := P.bit && Q.bit,
+    reflects := reflects_and(P, Q, P.bit, Q.bit, P.reflects, Q.reflects),
+}
+
+instance<P: Decide, Q: Decide> Decide<P ∨ Q> {
+    dec := match P.dec {
+        Inl(p) => Inl(Inl(p)),
+        Inr(np) => match Q.dec {
+            Inl(q) => Inl(Inr(q)),
+            Inr(nq) => Inr(λ (h: P ∨ Q) =>
+                match h { Inl(p) => np(p), Inr(q) => nq(q) }),
+        },
+    },
+    bit := P.bit || Q.bit,
+    reflects := reflects_or(P, Q, P.bit, Q.bit, P.reflects, Q.reflects),
+}
+
+instance<P: Decide> Decide<¬P> {
+    dec := match P.dec {
+        Inl(p) => Inr(λ (np: ¬P) => np(p)),
+        Inr(np) => Inl(np),
+    },
+    bit := !P.bit,
+    reflects := reflects_not(P, P.bit, P.reflects),
+}
+
+// The consumers. `decide` is the projection a caller reaches for when it wants
+// the disjunction and will `match` on it itself; `decide_pick` is the same
+// branch made a value, and is `or_pick` with the dictionary found rather than
+// passed. `decide_bit` is the bit, which an `if` without evidence matches on
+// and which a specification passes where a Bool predicate is wanted
+// (`bytes.filter(λ b => decide_bit<b = '\n'>())`).
+//
+// A `fn` and not a `theorem`, all of them, for the reason `or_pick` carries:
+// a `theorem` is opaque, so a decision spelled as one never unfolds in
+// conversion and nothing downstream of it is `refl` any more.
+fn decide<P: Decide>() → P ∨ ¬P { P.dec }
+
+fn decide_bit<P: Decide>() → Bool { P.bit }
+
+fn decide_pick<P: Decide, A>(x, y: A) → A { or_pick(P.dec, x, y) }
+
+// The `or_pick_dec` lemma with the dictionary resolved — a proof of `P` makes
+// the decided branch compute, whichever way the decider happened to go.
+theorem decide_pick_yes<P: Decide, A>(x, y: A, p: P): decide_pick<P, A>(x, y) = y {
+    or_pick_dec(P.dec, x, y, p)
+}
+
+// What a decided bit says: `P` where it is `True`, `¬P` where it is `False`.
+theorem decide_bit_true<P: Decide>(h: decide_bit<P>() = True): P { P.reflects.left(h) }
+theorem decide_bit_false<P: Decide>(h: decide_bit<P>() = False): ¬P { P.reflects.right(h) }
+
+// Case analysis on a decided bit, with what each side says as evidence: the
+// proof shape for a function an evidence-free `if` defines.
+theorem decide_bit_split<P: Decide>(M: Bool → Type, yes: P → M(True), no: ¬P → M(False)): M(decide_bit<P>()) {
+    (match decide_bit<P>() as λ c => (decide_bit<P>() = c) → M(c) {
+        True => λ e => yes(decide_bit_true<P>(e)),
+        False => λ e => no(decide_bit_false<P>(e)),
+    })(refl)
+}
+
+// Reflection (issues/reflection-through-decide-instances.md): a closed
+// decided proposition is *proved* by running its decision and reading the
+// side it took. `or_index` is that reading (a `Nat`: it was written when the
+// class lived below `bool`), and `or_of_index_zero` is the elimination back
+// into `P`. `decide_yes` is the whole of what the `decide` goal combinator
+// writes: `decide_yes(refl)` at the goal, with the kernel judging the `refl`
+// by reducing the instance's `dec`. Nothing else is trusted, and the decision
+// procedure never appears at the proof site.
+fn or_index<P, Q>(d: P ∨ Q) → Nat { match d { Inl(_) => 0, Inr(_) => 1 } }
+
+theorem or_of_index_zero<P, Q>(d: P ∨ Q, h: or_index(d) = 0): P {
+    match d as λ x => or_index(x) = 0 → P {
+        Inl(p) => λ _ => p,
+        Inr(_) => λ bad => absurd(bad),
+    }(h)
+}
+
+theorem decide_yes<P: Decide>(h: or_index(P.dec) = 0): P { or_of_index_zero(P.dec, h) }
+
+// ---------------------------------------------------------------------------
 // Reflection into `Type`. `IsTrue(b)` is the proposition "`b` is `True`",
 
 fn Bool::IsTrue(self b: Bool) → Type { match b { False => False, True => True } }
@@ -72,7 +255,11 @@ fn Bool::is_true_dec(self b: Bool) → b.IsTrue() ∨ ¬b.IsTrue() {
     match b { False => Inr(·), True => Inl(trivial) }
 }
 
-instance(b: Bool) Decide<Bool::IsTrue(b)> { dec := b.is_true_dec() }
+instance(b: Bool) Decide<Bool::IsTrue(b)> {
+    dec := b.is_true_dec(),
+    bit := b,
+    reflects := And(λ e => j(sym(e), λ z _ => z.IsTrue(), trivial), λ e => j(sym(e), λ z _ => ¬z.IsTrue(), λ (u: False) => u)),
+}
 
 // The two rewrites a consumer of a reflected guard needs: a proved guard IS
 // `True`, and its decision DID go the `Inl` way. Both are what turns a stuck
@@ -132,7 +319,7 @@ fn Bool::eq_dec(self a, b: Bool) → a = b ∨ a ≠ b {
     }
 }
 
-instance(a, b: Bool) Decide<a = b> { dec := a.eq_dec(b) }
+instance(a, b: Bool) Decide<a = b> { dec := a.eq_dec(b), bit := or_bit(a.eq_dec(b)), reflects := or_bit_reflects(a.eq_dec(b)) }
 
 fn Bool::leb(self a: Bool) → Bool → Bool {
     match a { False => λ (b: Bool) => True, True => λ (b: Bool) => b }
@@ -165,4 +352,4 @@ fn Bool::le_dec(self a, b: Bool) → a <= b ∨ ¬(a <= b) {
     }
 }
 
-instance(a, b: Bool) Decide<Bool::Le(a, b)> { dec := a.le_dec(b) }
+instance(a, b: Bool) Decide<Bool::Le(a, b)> { dec := a.le_dec(b), bit := or_bit(a.le_dec(b)), reflects := or_bit_reflects(a.le_dec(b)) }

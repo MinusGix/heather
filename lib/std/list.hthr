@@ -415,6 +415,42 @@ theorem List::filter_map<A, B>(self xs: List<A>, f: A → B, p: B → Bool):
     }
 }
 
+// Filtering a list that starts with `h` keeps `h` exactly when `p` holds of
+// it: one more than the tail's, or as many.
+theorem List::len_filter_cons<A>(h: A, t: List<A>, p: A → Bool):
+    Cons(h, t).filter(p).len() = t.filter(p).len() + Nat::of_bit(p(h)) {
+    match p(h) as λ b => (match b { True => Cons(h, t.filter(p)), False => t.filter(p) }).len() = t.filter(p).len() + Nat::of_bit(b) {
+        True => refl,
+        False => refl,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Splitting at separators (issues/list-split-by.md)
+
+// `x` put at the front of the first piece.
+fn List::onto_first<A>(x: A, pieces: List<List<A>>) → List<List<A>> {
+    match pieces { Nil => Cons(Cons(x, Nil), Nil), Cons(piece, rest) => Cons(Cons(x, piece), rest) }
+}
+
+// One element's place among the pieces after it: a separator starts a new,
+// empty piece in front; any other element joins the first piece.
+fn List::split_onto<A>(cut: Bool, x: A, pieces: List<List<A>>) → List<List<A>> {
+    match cut { True => Cons(Nil, pieces), False => List::onto_first(x, pieces) }
+}
+
+// The pieces between the elements `sep` holds of, in order and without the
+// separators: `n` separators cut a list into `n + 1` pieces, some of them
+// empty (Rust's `split`, Haskell's `splitWhen`).
+fn List::split_by<A>(self xs: List<A>, sep: A → Bool) → List<List<A>> {
+    match xs {
+        Nil => Cons(Nil, Nil),
+        Cons(x, rest) => List::split_onto(sep(x), x, rest.split_by(sep)),
+    }
+}
+
+fn List::non_empty<A>(self xs: List<A>) → Bool { match xs { Nil => False, Cons(_, _) => True } }
+
 // ---------------------------------------------------------------------------
 
 fn List::replicate<A>(x: A, n: Nat) → List<A> {
@@ -745,7 +781,7 @@ fn List::list_eq_dec<A: DecEq>(self xs: List<A>) → (ys: List<A>) → xs = ys �
 
 instance<A: DecEq> DecEq<List<A>> { eq_dec := List::list_eq_dec }
 
-instance<A: DecEq>(xs, ys: List<A>) Decide<xs = ys> { dec := List::list_eq_dec(xs, ys) }
+instance<A: DecEq>(xs, ys: List<A>) Decide<xs = ys> { dec := List::list_eq_dec(xs, ys), bit := or_bit(List::list_eq_dec(xs, ys)), reflects := or_bit_reflects(List::list_eq_dec(xs, ys)) }
 
 // ---------------------------------------------------------------------------
 

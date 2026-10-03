@@ -1,6 +1,7 @@
 // The final OS boundary after an ordinary fetched x86 trace.
 import linux_x86_64_entry;
 import x86_64;
+import x86_64_block;
 import x86_64_fetch;
 import x86_64_fetch_block;
 import bitvec;
@@ -18,7 +19,7 @@ record LinuxFetchedTrace<M>(access: FetchAccess<M>, instructions: List<Instructi
     after: MachineState<M>,
     execution: ExecuteFetchedBlock(access, instructions, before, after),
     syscall_fetched: FetchedFrom(access, after.memory,
-        InstructionBytes(after.rip, linux_syscall_bytes())),
+        InstructionBytes(after.rip, syscall_bytes())),
     request: LinuxExitRequest<M>(after, result),
 }
 

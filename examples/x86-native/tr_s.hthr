@@ -1,0 +1,55 @@
+// `tr -s '\n'`, as a certified static executable
+// (docs/native-stream-filter-design.md): stdin to stdout with every run of
+// newlines squeezed to one. The program is `tr_s_program` at the end: the
+// step, whose state is whether the last byte was a newline, and what stdout
+// is, `squeezed`. Reading, writing and the claim are the library's.
+//
+//     heather build-x86 examples/x86-native/tr_s.hthr tr_s_program -o tr_s
+import filter_program;
+import stream_filter;
+import algebra;
+import bitvec;
+import bool;
+import byte;
+import char;
+import list;
+import logic;
+import option;
+
+fn newline(b: BitVec(8)) → Bool { decide_bit<b = '\n'>() }
+
+// What stdout is: the input less every newline that follows a newline.
+fn squeeze_after(after_newline: Bool, bytes: List<BitVec(8)>) → List<BitVec(8)> {
+    match bytes {
+        Nil => Nil,
+        Cons(b, rest) => match newline(b) {
+            False => Cons(b, squeeze_after(False, rest)),
+            True => match after_newline { True => squeeze_after(True, rest), False => Cons(b, squeeze_after(True, rest)) },
+        },
+    }
+}
+fn squeezed(bytes: List<BitVec(8)>) → List<BitVec(8)> { squeeze_after(False, bytes) }
+
+// The step: a newline after a newline emits nothing; every other byte emits
+// itself.
+fn squeeze_step(after_newline: Bool, b: BitVec(8)) → Filtered<Bool> {
+    if b = '\n' {
+        match after_newline { True => Filtered(True, None), False => Filtered(True, Some(b)) }
+    } else {
+        Filtered(False, Some(b))
+    }
+}
+
+// Why: one byte emits what the specification squeezes it to.
+theorem squeeze_one(after_newline: Bool, b: BitVec(8), rest: List<BitVec(8)>):
+    squeeze_after(after_newline, Cons(b, rest)) =
+        emitted_byte(squeeze_step(after_newline, b).emit) ++ squeeze_after(squeeze_step(after_newline, b).next, rest) {
+    split_all;
+    all_goals { refl }
+}
+
+// The program: the step from "not after a newline", and what stdout is.
+// `heather build-x86` builds it by this name.
+fn tr_s_program() → Filter<Bool>(squeeze_step, False, Nil, Quiet, squeezed) {
+    Filter(quiet_computes(squeeze_step, False, Nil, squeeze_after, λ _ => refl, squeeze_one))
+}

@@ -1214,9 +1214,14 @@ impl application::ImplicitApplicationElab for Elaborator {
         // lambdas (including equality endpoints) still infer normally.
         let annotated_lambda = matches!(&argument.kind, ExprKind::Lam { binders, .. }
             if binders.iter().all(|b| b.ty.is_some()));
+        // A numeral or character literal waits for a later argument to fix
+        // its carrier, and falls back to its own type (`Nat`, `Char`) when
+        // nothing does: in `unsigned_le(9, b)` the width comes from `b`, so
+        // `9` is a byte (docs/native-programs-read-like-programs-design.md S3).
+        let literal = matches!(&argument.kind, ExprKind::Num(_) | ExprKind::Char(_));
         application::ArgumentClass {
-            checking_only: annotated_lambda || self.is_checking_only(cx, argument),
-            fallback_infer: annotated_lambda || self.deferral_can_fall_back(cx, argument),
+            checking_only: annotated_lambda || literal || self.is_checking_only(cx, argument),
+            fallback_infer: annotated_lambda || literal || self.deferral_can_fall_back(cx, argument),
         }
     }
 
@@ -2980,6 +2985,12 @@ impl Elaborator {
         self.lookup_global(name).is_some_and(|i| i.abs as usize == abs)
     }
 
+    /// A name as the current module resolves it, qualified: what a producer
+    /// asks of a name an author wrote.
+    pub fn qualified_global(&self, name: &str) -> Option<String> {
+        self.global_qualified_name_at(self.global_abs(name)?)
+    }
+
     /// The canonical qualified spelling of a global. Generated modules use
     /// this rather than [`Self::global_name_at`]'s deliberately presentation-
     /// oriented base name when they refer across a module boundary.
@@ -4473,21 +4484,32 @@ impl Elaborator {
                 self.elab_check_skel_slots(cx, &split, expected, lvl, hint, skel, capture_slots)
             }
             ExprKind::App { head, args, named, explicit: false, goal_oriented: false }
+                if matches!(&head.kind, ExprKind::Var(name) if name == constructor::FIELD_DEFAULT)
+                    && named.is_empty() =>
+            {
+                self.elab_field_default(cx, args, expected, lvl, e.span)
+            }
+            ExprKind::App { head, args, named, explicit: false, goal_oriented: false }
                 if matches!(&head.kind, ExprKind::Var(name) if name == goal_combinators::SPLIT_STUCK)
                     && named.is_empty() =>
             {
                 let [body] = args.as_slice() else {
-                    return err("internal comparison splitter has the wrong arity", e.span);
+                    return err("internal case splitter has the wrong arity", e.span);
                 };
-                let goal = goal_combinators::simplify_goal(self, cx, expected);
-                let Some(split) = goal_combinators::split_stuck(self, cx, &goal, body, e.span) else {
-                    return self.elab_check_skel_slots(cx, body, &goal, lvl, hint, skel, capture_slots);
-                };
-                let (scrut, ty, level) = self.elab_infer(cx, &split.scrut)?;
-                self.elab_convoy(
-                    cx, heather_syntax::MatchForm::Match, true, &split.equation, &split.arms,
-                    scrut, &ty, &level, split.motive, lvl, &goal, e.span,
-                )
+                match goal_combinators::next_step(self, cx, expected, body, e.span) {
+                    goal_combinators::Step::Intro(expr) | goal_combinators::Step::Conjoin(expr) => {
+                        self.elab_check_skel_slots(cx, &expr, expected, lvl, hint, skel, capture_slots)
+                    }
+                    goal_combinators::Step::Split(split) => {
+                        let goal = goal_combinators::simplify_goal(self, cx, &inductive::decoded(expected));
+                        let (scrut, ty, level) = self.elab_infer(cx, &split.scrut)?;
+                        self.elab_convoy(
+                            cx, heather_syntax::MatchForm::Match, true, &split.equation, &split.arms,
+                            scrut, &ty, &level, split.motive, lvl, &goal, e.span,
+                        )
+                    }
+                    goal_combinators::Step::Leaf(goal) => self.elab_check_skel_slots(cx, body, &goal, lvl, hint, skel, capture_slots),
+                }
             }
             // **Rule 2** (docs/let-and-blocks-design.md §5.2): `refl` is a
             // *nullary* special form, so its node carries no name to
@@ -4676,9 +4698,9 @@ impl Elaborator {
             }
             // `decide` — proof by reflection at a decided goal
             // (docs/reflection-through-decide-instances-design.md §4). Sugar
-            // for `logic::decide_yes(refl)`: resolution picks the `Decide`
+            // for `bool::decide_yes(refl)`: resolution picks the `Decide`
             // instance, the kernel runs its decision and judges the `refl`.
-            // The name is also `logic::decide`'s, so the shadowing guard is
+            // The name is also `bool::decide`'s, so the shadowing guard is
             // narrower than `trivial`'s: a local, an alias, the declaration
             // itself, or a user global of that name wins; the library's own
             // `decide` does not, since a bare `decide` at a goal that is not
@@ -4990,10 +5012,20 @@ impl Elaborator {
                     .ctor_spine_expected(cx, e, expected)
                     .expect("just checked");
                 self.lint_manual_list_construction(cx, e, &ind, i);
+                let written: Vec<(&str, &Expr, Span)> = named.iter().map(|na| (na.name.as_str(), &na.expr, na.name_span)).collect();
+                if let Some(filled) = self.with_field_defaults(&ind, i, &args, &written, e.span)? {
+                    return self.build_ctor_value(cx, &ind, i, &filled, expected, lvl, e.span);
+                }
                 let permuted =
                     application::resolve_constructor_arguments(&ind, i, &args, &named, e.span)?;
                 let args = permuted.unwrap_or(args);
                 self.build_ctor_value(cx, &ind, i, &args, expected, lvl, e.span)
+            }
+            // A record update is the record literal that keeps the other
+            // fields (`record_update_expr`), checked as one.
+            ExprKind::RecordUpdate { base, fields } => {
+                let literal = self.record_update_expr(cx, base, fields, e.span)?;
+                self.elab_check_skel_slots(cx, &literal, expected, lvl, hint, skel, capture_slots)
             }
             // A record literal *is* a constructor application once its fields
             // are put in declaration order, so checking mode is the tier-0
@@ -5005,6 +5037,12 @@ impl Elaborator {
                 tyargs,
                 fields,
             } if tyargs.is_empty() => {
+                if let Some(ind) = self.lookup_inductive(name).cloned().filter(|ind| ind.is_record) {
+                    let written: Vec<(&str, &Expr, Span)> = fields.iter().map(|f| (f.name.as_str(), &f.expr, f.span)).collect();
+                    if let Some(filled) = self.with_field_defaults(&ind, 0, &[], &written, e.span)? {
+                        return self.build_ctor_value(cx, &ind, 0, &filled, expected, lvl, e.span);
+                    }
+                }
                 let args = self.record_lit_args(name, fields, e.span)?;
                 let Some(ind) = self.lookup_inductive(name).cloned() else {
                     return Err(self.name_miss(name, format!("unknown type `{name}`"), e.span));
@@ -5566,6 +5604,70 @@ impl Elaborator {
     }
 
     fn elab_infer_uncached(&self, cx: &Cx, e: &Expr, expected: Option<&Type>) -> R<(Term, Type, Level)> {
+        let (term, ty, level) = self.elab_infer_written(cx, e, expected)?;
+        Ok((self.reduced_decision(cx, e, term), ty, level))
+    }
+
+    /// `decide_bit<P>()` at a resolved instance, read as the instance's own
+    /// bit (issues/native-frontend-decided-matches.md): `b.eq_bit(10)` for
+    /// `b = '\n'`, `x || y` for a disjunction with each operand read the same
+    /// way. An evidence-free `if` matches on this term, so the frontend, the
+    /// kernel and `split_all` see the comparisons a step branches on, never
+    /// the dictionary record whose proofs mention them. The way a literal's
+    /// embedding is read (`reduced_embedding`): the projection unfolds only
+    /// as far as the field's body. A local dictionary does not unfold.
+    fn reduced_decision(&self, cx: &Cx, e: &Expr, term: Term) -> Term {
+        let ExprKind::App { head, args, named, .. } = &e.kind else { return term };
+        let ExprKind::TyApp { head: callee, .. } = &head.kind else { return term };
+        if !matches!(&callee.kind, ExprKind::Var(name) if name == "decide_bit") || !args.is_empty() || !named.is_empty() {
+            return term;
+        }
+        let Term::GlobalTm { var, .. } = crate::spelling::app_spine(&term).0 else { return term };
+        if self.global_abs_of(*var).and_then(|abs| self.global_qualified_name_at(abs)).as_deref() != Some("bool::decide_bit") {
+            return term;
+        }
+        self.instance_bit(cx, &term).unwrap_or(term)
+    }
+
+    /// The first reduct of a bit that is a constructor or another
+    /// definition's call, with each projected argument (a connective's
+    /// operand, itself an instance's bit) read the same way.
+    fn instance_bit(&self, cx: &Cx, term: &Term) -> Option<Term> {
+        let oracle = self.goal_oracle();
+        for reduct in oracle.term_reducts(&cx.gamma, term, 32) {
+            if crate::spelling::is_inj(&reduct) {
+                return Some(reduct);
+            }
+            let (head, _) = crate::spelling::app_spine(&reduct);
+            // A global the source cannot name (a class field's accessor) is a
+            // step of the instance's own reduction.
+            if !self.named_head(head) {
+                continue;
+            }
+            fn operands(elab: &Elaborator, cx: &Cx, term: &Term) -> Term {
+                let mut output = term.clone();
+                if let Term::App { fun, arg, .. } | Term::AppAt { fun, arg } = &mut output {
+                    *fun = Rc::new(operands(elab, cx, fun));
+                    let (head, _) = crate::spelling::app_spine(arg);
+                    let accessor = matches!(head, Term::GlobalTm { .. }) && !elab.named_head(head);
+                    if (accessor || crate::spelling::proj_of(arg).is_some()) && let Some(bit) = elab.instance_bit(cx, arg) {
+                        *arg = Rc::new(bit);
+                    }
+                }
+                output
+            }
+            return Some(operands(self, cx, &reduct));
+        }
+        None
+    }
+
+    /// A global the source names: a declaration, not a minted accessor.
+    fn named_head(&self, head: &Term) -> bool {
+        let Term::GlobalTm { var, .. } = head else { return false };
+        self.global_abs_of(*var).and_then(|abs| self.global_qualified_name_at(abs)).is_some()
+    }
+
+    fn elab_infer_written(&self, cx: &Cx, e: &Expr, expected: Option<&Type>) -> R<(Term, Type, Level)> {
         let _depth = expr::ExprDepthGuard::enter(&self.expr_depth, e.span)?;
         // An operator symbol resolves to a name *first*, and then this whole
         // function is the path the written name already took
@@ -5662,6 +5764,10 @@ impl Elaborator {
             ExprKind::Char(c) => self.elab_char_infer(cx, *c, e),
             ExprKind::Str(text) => self.elab_string_infer(cx, text, e),
             ExprKind::Block(block) => statements::infer_block(self, cx, block),
+            ExprKind::RecordUpdate { base, fields } => {
+                let literal = self.record_update_expr(cx, base, fields, e.span)?;
+                self.elab_infer(cx, &literal)
+            }
             // Intensional analysis: the result type is written, so unlike a
             // quote this one *infers*
             // (docs/certgen-transcriber-in-language-design.md §3).
@@ -6850,7 +6956,7 @@ impl Elaborator {
                 embed_level,
                 std::slice::from_ref(e),
             )?;
-            return Ok(out);
+            return Ok(self.reduced_embedding(cx, out));
         }
         // A numeral is the leaf case of
         // `issues/check-fallback-discards-expected-type.md`: its inferred type
@@ -7087,7 +7193,7 @@ impl Elaborator {
     }
 
     /// Is a bare `decide` something the writer bound, rather than the goal
-    /// combinator? The library's own `logic::decide` is the one global that
+    /// combinator? The library's own `bool::decide` is the one global that
     /// does not count (see the checking arm).
     fn decide_shadowed(&self, cx: &Cx) -> bool {
         cx.names.iter().any(|n| n == "decide")
@@ -7095,17 +7201,17 @@ impl Elaborator {
             || cx.selfref.as_ref().is_some_and(|s| s.matches("decide"))
             || self
                 .key_of("decide")
-                .is_some_and(|key| key != names::qkey("logic", "decide"))
+                .is_some_and(|key| key != names::qkey("bool", "decide"))
     }
 
-    /// The `decide` goal combinator: elaborate `logic::decide_yes(refl)` at
+    /// The `decide` goal combinator: elaborate `bool::decide_yes(refl)` at
     /// the goal and remember what it resolved to, so a gate refusal can be
     /// reported at this `decide` with the instance named.
     fn elab_decide(&self, cx: &Cx, expected: &Type, lvl: &Level, span: Span) -> R<Term> {
-        let Some(yes) = self.key_of("logic::decide_yes") else {
+        let Some(yes) = self.key_of("bool::decide_yes") else {
             return err(
                 "`decide` proves a closed goal by running its `Decide` instance, and needs \
-                 the class in scope: add `import logic;`",
+                 the class in scope: add `import bool;`",
                 span,
             );
         };
@@ -7521,6 +7627,20 @@ impl Elaborator {
         t: &Term,
         span: Span,
     ) -> Option<Vec<(Rc<Type>, Level)>> {
+        self.app_walk(cx, t, span).map(|(domains, _)| domains)
+    }
+
+    /// The type of the application spine `t` in `cx`, read the way
+    /// [`Self::app_domains`] reads its domains: the head inferred, then one Π
+    /// instantiated per argument. For a caller that only needs to know what
+    /// `t` is — the speller naming a field read off it — this costs the
+    /// head's inference and the substitutions, never a check of the
+    /// arguments.
+    pub(crate) fn spine_type(&self, cx: &Cx, t: &Term, span: Span) -> Option<Type> {
+        self.app_walk(cx, t, span).map(|(_, ty)| ty)
+    }
+
+    fn app_walk(&self, cx: &Cx, t: &Term, span: Span) -> Option<(Vec<(Rc<Type>, Level)>, Type)> {
         let (head, args) = spelling::app_spine(t);
         let oracle = self.semantic_oracle();
         let (mut ty, _) =
@@ -7536,7 +7656,7 @@ impl Elaborator {
             out.push((dom, dom_level));
             ty = cod.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(a)));
         }
-        Some(out)
+        Some((out, ty))
     }
 
     /// [`unification::U::canonical_head`]: the weak head of a rigid term,

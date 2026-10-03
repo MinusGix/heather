@@ -532,7 +532,7 @@ Honest costs and risks:
 | `[True, False, …]` vector literals | **0** |
 | `from_bits(n, <literal>)` at `n > 1` | 1 |
 
-`lib/elf64_calls.hthr` alone has 95; `lib/std/arch/x86_64/calls.hthr` 64;
+`lib/elf64_calls.hthr` alone has 95; `lib/std/arch/x86_64/x86_64_calls.hthr` 64;
 `lib/elf64.hthr:12` is `fn elf_byte(n) → BitVec(8) { bitvec::ofNat(8, n) }`,
 so every ELF byte in the certificate is an `ofNat`. And
 `crates/elab/src/function_ir_source.rs:320` *requires* it: "BitVec constants

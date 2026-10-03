@@ -1679,8 +1679,14 @@ impl Parser {
             None
         };
         let ty = self.ty()?;
-        let span = start.join(ty.span);
-        Ok(FieldDecl { name, ty, span })
+        // `:= e`: the field's default. Unambiguous here, as at a parameter:
+        // nothing else follows a field's type with `:=`.
+        let default = if name.is_some() && matches!(self.peek(), TokKind::ColonEq) {
+            self.bump();
+            Some(Box::new(self.expr()?))
+        } else { None };
+        let span = start.join(default.as_ref().map_or(ty.span, |e| e.span));
+        Ok(FieldDecl { name, ty, default, span })
     }
 
     fn decl(&mut self) -> R<Decl> {
@@ -3503,6 +3509,13 @@ impl Parser {
         }
         loop {
             match self.peek() {
+                // `e with { f = v, … }` — functional record update
+                // (issues/record-update-syntax.md). `with` is a word only
+                // here, before a `{`, so it names nothing else.
+                _ if self.at_kw("with") && matches!(self.nth(1), TokKind::LBrace) => {
+                    self.bump();
+                    e = self.record_update(e)?;
+                }
                 _ if self.at_kw("decreasing") => {
                     let start = self.bump().span;
                     let (label, end) = self.ident("decrease label")?;
@@ -4213,6 +4226,32 @@ impl Parser {
         })
     }
 
+    /// `{ f = v, … }` after `base with`, which the caller has consumed. Which
+    /// fields exist is the elaborator's to say, which knows the record.
+    fn record_update(&mut self, base: Expr) -> R<Expr> {
+        self.expect(&TokKind::LBrace, "`{` (record update)")?;
+        self.with_record_lit(false, |p| {
+            let mut fields = Vec::new();
+            while !matches!(p.peek(), TokKind::RBrace) {
+                let (fname, fsp) = p.ident("record field name")?;
+                p.expect(&TokKind::Eq, "`=` (record update: `s with { f = v }`)")?;
+                let expr = p.expr()?;
+                let span = fsp.join(expr.span);
+                fields.push(RecordLitField { name: fname, expr, span });
+                if !matches!(p.peek(), TokKind::Comma) {
+                    break;
+                }
+                p.bump();
+            }
+            let end = p.expect(&TokKind::RBrace, "`}` (record update)")?;
+            if fields.is_empty() {
+                return p.err("a record update replaces at least one field: `s with { f = v }`");
+            }
+            let span = base.span.join(end);
+            Ok(Expr { kind: ExprKind::RecordUpdate { base: Box::new(base), fields }, span })
+        })
+    }
+
     fn match_expr(&mut self) -> R<Expr> {
         let start = self.peek_span();
         self.bump(); // `match`
@@ -4272,12 +4311,22 @@ impl Parser {
 
     /// `if P { yes } else { no }` and `if h : P { yes } else { no }`.
     ///
-    /// Proposition-directed branching is exactly elimination of the decision
-    /// evidence, so the parser makes that identity structural:
+    /// Proposition-directed branching with evidence is exactly elimination of
+    /// the decision evidence, so the parser makes that identity structural:
     ///
     /// ```text
     /// match decide<P>() { Inl(h) => yes, Inr(h) => no }
     /// ```
+    ///
+    /// Without a binder there is no evidence to eliminate, and the `if`
+    /// branches on the decision's bit (issues/native-frontend-decided-matches.md):
+    ///
+    /// ```text
+    /// match decide_bit<P>() { True => yes, False => no }
+    /// ```
+    ///
+    /// so a decision built from a comparison is a match on that comparison's
+    /// bit, the way code branches on it.
     ///
     /// `MatchForm::If` is diagnostic provenance only. Everything that types or
     /// computes sees the same ordinary `Or` match as the explicit spelling.
@@ -4302,10 +4351,8 @@ impl Parser {
         let no = self.if_branch("the `else` branch")?;
 
         let ev_span = condition.span;
-        let yes_name = evidence.clone().unwrap_or_else(|| "#if_yes".into());
-        let no_name = evidence.unwrap_or_else(|| "#if_no".into());
         let decide_head = Expr {
-            kind: ExprKind::Var("decide".into()),
+            kind: ExprKind::Var(if evidence.is_some() { "decide" } else { "decide_bit" }.into()),
             span: condition.span,
         };
         let decide = Expr {
@@ -4325,18 +4372,22 @@ impl Parser {
             },
             span: condition.span,
         };
+        let (yes_ctor, no_ctor, binders) = match evidence {
+            Some(name) => ("Inl", "Inr", vec![Pat::Var { name, span: ev_span }]),
+            None => ("True", "False", vec![]),
+        };
         let arms = vec![
             Arm {
-                ctor: "Inl".into(),
+                ctor: yes_ctor.into(),
                 default: false,
-                binders: vec![Pat::Var { name: yes_name, span: ev_span }],
+                binders: binders.clone(),
                 span: yes.span,
                 body: yes,
             },
             Arm {
-                ctor: "Inr".into(),
+                ctor: no_ctor.into(),
                 default: false,
-                binders: vec![Pat::Var { name: no_name, span: ev_span }],
+                binders,
                 span: no.span,
                 body: no,
             },
@@ -5763,6 +5814,25 @@ mod tests {
         assert_eq!(args.as_ref().expect("a call").len(), 1);
         let ExprKind::Dot { name: inner, .. } = &recv.kind else { panic!("expected a Dot") };
         assert_eq!(inner, "a");
+    }
+
+    // `s with { f = v }` (issues/record-update-syntax.md): a postfix form on
+    // any expression, chaining left to right; `with` is a word only before
+    // `{`, and an update writes at least one field.
+    #[test]
+    fn record_update_parses_as_postfix() {
+        let src = "fn f(s: P) -> P { s.inner with { x = 1, y = s.y } with { z = 2 } }";
+        let d = parse_file(src).unwrap().items.remove(0).into_decl();
+        let ExprKind::RecordUpdate { base, fields } = &d.body.result.kind else {
+            panic!("expected a record update, got {:?}", d.body.result.kind)
+        };
+        assert_eq!(fields.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["z"]);
+        let ExprKind::RecordUpdate { base, fields } = &base.kind else { panic!("updates chain left to right") };
+        assert_eq!(fields.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["x", "y"]);
+        assert!(matches!(base.kind, ExprKind::Dot { .. }));
+        assert!(parse_file("fn f(with: Nat) -> Nat { with }").is_ok(), "`with` is still a name");
+        assert!(parse_file("fn f(s: P) -> P { s with { } }").is_err());
+        assert!(parse_file("fn f(s: P) -> P { s with { x: 1 } }").is_err(), "an update writes `=`");
     }
 
     #[test]

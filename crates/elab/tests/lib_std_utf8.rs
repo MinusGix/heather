@@ -40,7 +40,7 @@ const MODULES: &[(&str, &str)] = &[
 ];
 
 const PREAMBLE: &str = concat!(
-    "import logic;\nimport nat;\nimport option;\nimport pair;\n",
+    "import logic;\nimport bool;\nimport nat;\nimport option;\nimport pair;\n",
     "import list;\nimport bitvec;\nimport char;\nimport string;\nimport utf8;\n",
 );
 

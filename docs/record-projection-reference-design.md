@@ -186,7 +186,7 @@ text, elaborated by `project_field`. There is nothing to change in
 
 The three record families that pay are exactly the telescoped, non-dependent
 ones `docs/per-instantiation-type-codes-design.md` §13.6 already named as the
-measured payers — `MachineState<M>` (`lib/std/arch/x86_64/model.hthr:91`),
+measured payers — `MachineState<M>` (`lib/std/arch/x86_64/x86_64.hthr:91`),
 `StackAccess<M>` (`calls.hthr:12`), `NativeIntegerCallContract<M, A>`
 (`call_frame.hthr:67`) — and they are the ones for which `register_rec_projs`
 *did* register the simple device. The definitions exist. The certificate is

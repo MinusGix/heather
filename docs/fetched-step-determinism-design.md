@@ -75,7 +75,7 @@ argument.
 
 ## 5. One decoder, read from the front
 
-`lib/std/arch/x86_64/step_forms.hthr` (module `x86_64_step_forms`) names
+`lib/std/arch/x86_64/x86_64_step_forms.hthr` (module `x86_64_step_forms`) names
 every form a step can fetch, `StepForm`: an emitted instruction, a word
 store, or SYSCALL. `decode_step_form` reads a form back from the front of a
 byte list and never looks past the form's own bytes, so completeness is

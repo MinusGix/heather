@@ -2,10 +2,10 @@
 // program puts it (docs/native-wc-design.md §5): write R10 bytes from R9 to
 // stdout, advance past what was sent and stop when nothing is left, retry
 // EINTR, exit 1 at any other failure, and exit 0 once all is sent. The code
-// and its proof are elf64_read_print's, restated at an offset `at` from the
+// and its proof are elf64_print_pieces's, restated at an offset `at` from the
 // entry instead of past that program's formatter.
-import elf64_read_print;
-import elf64_read_loop;
+import elf64_print_pieces;
+import elf64_read_pieces;
 import elf64_io;
 import linux_x86_64_entry;
 import linux_x86_64_io;
@@ -17,6 +17,7 @@ import x86_64_data_read;
 import x86_64_structured_block;
 import x86_64_fetch;
 import x86_64_fetched_code;
+import x86_64_layout;
 import x86_64_store;
 import bitvec;
 import bitvec_nat;
@@ -27,81 +28,109 @@ import nat;
 import option;
 import omega;
 
-// The loop's code: write, test, JS to the failure path, advance, JZ to
-// exit(0), JMP back; the failure path's retry test, JZ back and exit(1); then
-// exit(0).
-fn write_loop_code(pj: PrintJumps) → List<BitVec(8)> {
-    canonical_block_bytes(print_write_block()) ++ (linux_syscall_bytes() ++ (canonical_block_bytes(eof_test_block()) ++ (near_control_bytes(JumpSignNear(pj.sd)) ++ (canonical_block_bytes(print_advance_block()) ++ (near_control_bytes(JumpZeroNear(pj.zd)) ++ (near_control_bytes(JumpNear(pj.bd)) ++ (canonical_block_bytes(eof_retry_block()) ++ (near_control_bytes(JumpZeroNear(pj.rd)) ++ (canonical_block_bytes(eof_fail_block()) ++ (linux_syscall_bytes() ++ (canonical_block_bytes(print_exit_block()) ++ (linux_syscall_bytes()))))))))))))
+// The loop's code: write, test, JS to the failure tail, advance, JZ to
+// exit(0), JMP back; the failure tail (elf64_read_pieces), whose JZ retries
+// the write; then exit(0). A layout (x86_64_layout) placed at `at`.
+fn write_loop_parts(pj: PrintJumps) → List<List<BitVec(8)>> {
+    [canonical_block_bytes(print_write_block()), syscall_bytes(), canonical_block_bytes(eof_test_block()),
+     near_control_bytes(JumpSignNear(pj.sd)), canonical_block_bytes(print_advance_block()), near_control_bytes(JumpZeroNear(pj.zd)),
+     near_control_bytes(JumpNear(pj.bd)), fail_tail_code(pj.rd), canonical_block_bytes(print_exit_block())]
+}
+fn write_loop_lens() → List<Nat> { [print_write_len(), 2, eof_test_len(), 6, print_advance_len(), 6, 5, fail_tail_len(), print_exit_len()] }
+fn write_loop_code(pj: PrintJumps) → List<BitVec(8)> { layout_code(write_loop_parts(pj), syscall_bytes()) }
+theorem write_loop_measured(pj: PrintJumps): LayoutMeasured(write_loop_parts(pj), write_loop_lens()) {
+    ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨fail_tail_code_len(pj.rd), ⟨refl, trivial⟩⟩⟩⟩⟩⟩⟩⟩⟩
+}
+fn write_loop_len() → Nat { layout_end(0, write_loop_lens()) + 2 }
+theorem write_loop_code_len(pj: PrintJumps): write_loop_code(pj).len() = write_loop_len() {
+    layout_len(write_loop_parts(pj), syscall_bytes(), write_loop_lens(), write_loop_measured(pj), 2, refl)
 }
 
-// Offsets from the entry, piece by piece.
-fn wl_at_write(at: Nat) → Nat { at }
-fn wl_at_write_call(at: Nat) → Nat { wl_at_write(at) + print_write_len() }
-fn wl_at_wtest(at: Nat) → Nat { wl_at_write_call(at) + 2 }
-fn wl_at_wjs(at: Nat) → Nat { wl_at_wtest(at) + eof_test_len() }
-fn wl_at_advance(at: Nat) → Nat { wl_at_wjs(at) + 6 }
-fn wl_at_wjz(at: Nat) → Nat { wl_at_advance(at) + print_advance_len() }
-fn wl_at_wjmp(at: Nat) → Nat { wl_at_wjz(at) + 6 }
-fn wl_at_wfail(at: Nat) → Nat { wl_at_wjmp(at) + 5 }
-fn wl_at_wretry(at: Nat) → Nat { wl_at_wfail(at) + eof_retry_len() }
-fn wl_at_wfail_block(at: Nat) → Nat { wl_at_wretry(at) + 6 }
-fn wl_at_wfail_call(at: Nat) → Nat { wl_at_wfail_block(at) + eof_fail_len() }
-fn wl_at_exit(at: Nat) → Nat { wl_at_wfail_call(at) + 2 }
-fn wl_at_exit_call(at: Nat) → Nat { wl_at_exit(at) + print_exit_len() }
+// Where each piece starts, for a loop at `at`.
+fn wl_at(at, i: Nat) → Nat { layout_at(at, write_loop_lens(), i) }
+fn wl_at_write(at: Nat) → Nat { wl_at(at, 0) }
+fn wl_at_write_call(at: Nat) → Nat { wl_at(at, 1) }
+fn wl_at_wtest(at: Nat) → Nat { wl_at(at, 2) }
+fn wl_at_wjs(at: Nat) → Nat { wl_at(at, 3) }
+fn wl_at_advance(at: Nat) → Nat { wl_at(at, 4) }
+fn wl_at_wjz(at: Nat) → Nat { wl_at(at, 5) }
+fn wl_at_wjmp(at: Nat) → Nat { wl_at(at, 6) }
+fn wl_at_wfail(at: Nat) → Nat { wl_at(at, 7) }
+fn wl_at_wretry(at: Nat) → Nat { ft_at_jz(wl_at_wfail(at)) }
+fn wl_at_exit(at: Nat) → Nat { wl_at(at, 8) }
+fn wl_at_exit_call(at: Nat) → Nat { wl_at(at, 9) }
 
 // The pieces, resident at their offsets.
 record WriteLoopResident(memory: IoMemory, at: Nat, pj: PrintJumps) {
     write_at: CodeResident(io_fetch_access(), memory, canonical_block_bytes(print_write_block()), eof_rip(wl_at_write(at))),
-    write_call_at: CodeResident(io_fetch_access(), memory, linux_syscall_bytes(), eof_rip(wl_at_write_call(at))),
+    write_call_at: CodeResident(io_fetch_access(), memory, syscall_bytes(), eof_rip(wl_at_write_call(at))),
     wtest_at: CodeResident(io_fetch_access(), memory, canonical_block_bytes(eof_test_block()), eof_rip(wl_at_wtest(at))),
     wjs_at: CodeResident(io_fetch_access(), memory, near_control_bytes(JumpSignNear(pj.sd)), eof_rip(wl_at_wjs(at))),
     advance_at: CodeResident(io_fetch_access(), memory, canonical_block_bytes(print_advance_block()), eof_rip(wl_at_advance(at))),
     wjz_at: CodeResident(io_fetch_access(), memory, near_control_bytes(JumpZeroNear(pj.zd)), eof_rip(wl_at_wjz(at))),
     wjmp_at: CodeResident(io_fetch_access(), memory, near_control_bytes(JumpNear(pj.bd)), eof_rip(wl_at_wjmp(at))),
-    wretry_at: CodeResident(io_fetch_access(), memory, canonical_block_bytes(eof_retry_block()), eof_rip(wl_at_wfail(at))),
-    wretry_jz_at: CodeResident(io_fetch_access(), memory, near_control_bytes(JumpZeroNear(pj.rd)), eof_rip(wl_at_wretry(at))),
-    wfail_at: CodeResident(io_fetch_access(), memory, canonical_block_bytes(eof_fail_block()), eof_rip(wl_at_wfail_block(at))),
-    wfail_call_at: CodeResident(io_fetch_access(), memory, linux_syscall_bytes(), eof_rip(wl_at_wfail_call(at))),
+    fail: FailTail(memory, wl_at_wfail(at), pj.rd),
     exit_at: CodeResident(io_fetch_access(), memory, canonical_block_bytes(print_exit_block()), eof_rip(wl_at_exit(at))),
-    exit_call_at: CodeResident(io_fetch_access(), memory, linux_syscall_bytes(), eof_rip(wl_at_exit_call(at))),
+    exit_call_at: CodeResident(io_fetch_access(), memory, syscall_bytes(), eof_rip(wl_at_exit_call(at))),
 }
 
 theorem write_loop_resident(memory: IoMemory, at: Nat, pj: PrintJumps,
     resident: CodeResident(io_fetch_access(), memory, write_loop_code(pj), eof_rip(at))): WriteLoopResident(memory, at, pj) {
-    let fetch = io_fetch_access();
-    let entry: BitVec(64) = BitVec::ofNat(0x4000e8);
-    let r0 = resident_split_at(fetch, memory, canonical_block_bytes(print_write_block()), linux_syscall_bytes() ++ (canonical_block_bytes(eof_test_block()) ++ (near_control_bytes(JumpSignNear(pj.sd)) ++ (canonical_block_bytes(print_advance_block()) ++ (near_control_bytes(JumpZeroNear(pj.zd)) ++ (near_control_bytes(JumpNear(pj.bd)) ++ (canonical_block_bytes(eof_retry_block()) ++ (near_control_bytes(JumpZeroNear(pj.rd)) ++ (canonical_block_bytes(eof_fail_block()) ++ (linux_syscall_bytes() ++ (canonical_block_bytes(print_exit_block()) ++ (linux_syscall_bytes()))))))))))), entry, wl_at_write(at), resident);
-    let r1 = resident_split_at(fetch, memory, linux_syscall_bytes(), canonical_block_bytes(eof_test_block()) ++ (near_control_bytes(JumpSignNear(pj.sd)) ++ (canonical_block_bytes(print_advance_block()) ++ (near_control_bytes(JumpZeroNear(pj.zd)) ++ (near_control_bytes(JumpNear(pj.bd)) ++ (canonical_block_bytes(eof_retry_block()) ++ (near_control_bytes(JumpZeroNear(pj.rd)) ++ (canonical_block_bytes(eof_fail_block()) ++ (linux_syscall_bytes() ++ (canonical_block_bytes(print_exit_block()) ++ (linux_syscall_bytes())))))))))), entry, wl_at_write_call(at), r0.right);
-    let r2 = resident_split_at(fetch, memory, canonical_block_bytes(eof_test_block()), near_control_bytes(JumpSignNear(pj.sd)) ++ (canonical_block_bytes(print_advance_block()) ++ (near_control_bytes(JumpZeroNear(pj.zd)) ++ (near_control_bytes(JumpNear(pj.bd)) ++ (canonical_block_bytes(eof_retry_block()) ++ (near_control_bytes(JumpZeroNear(pj.rd)) ++ (canonical_block_bytes(eof_fail_block()) ++ (linux_syscall_bytes() ++ (canonical_block_bytes(print_exit_block()) ++ (linux_syscall_bytes()))))))))), entry, wl_at_wtest(at), r1.right);
-    let r3 = resident_split_at(fetch, memory, near_control_bytes(JumpSignNear(pj.sd)), canonical_block_bytes(print_advance_block()) ++ (near_control_bytes(JumpZeroNear(pj.zd)) ++ (near_control_bytes(JumpNear(pj.bd)) ++ (canonical_block_bytes(eof_retry_block()) ++ (near_control_bytes(JumpZeroNear(pj.rd)) ++ (canonical_block_bytes(eof_fail_block()) ++ (linux_syscall_bytes() ++ (canonical_block_bytes(print_exit_block()) ++ (linux_syscall_bytes())))))))), entry, wl_at_wjs(at), r2.right);
-    let r4 = resident_split_at(fetch, memory, canonical_block_bytes(print_advance_block()), near_control_bytes(JumpZeroNear(pj.zd)) ++ (near_control_bytes(JumpNear(pj.bd)) ++ (canonical_block_bytes(eof_retry_block()) ++ (near_control_bytes(JumpZeroNear(pj.rd)) ++ (canonical_block_bytes(eof_fail_block()) ++ (linux_syscall_bytes() ++ (canonical_block_bytes(print_exit_block()) ++ (linux_syscall_bytes()))))))), entry, wl_at_advance(at), r3.right);
-    let r5 = resident_split_at(fetch, memory, near_control_bytes(JumpZeroNear(pj.zd)), near_control_bytes(JumpNear(pj.bd)) ++ (canonical_block_bytes(eof_retry_block()) ++ (near_control_bytes(JumpZeroNear(pj.rd)) ++ (canonical_block_bytes(eof_fail_block()) ++ (linux_syscall_bytes() ++ (canonical_block_bytes(print_exit_block()) ++ (linux_syscall_bytes())))))), entry, wl_at_wjz(at), r4.right);
-    let r6 = resident_split_at(fetch, memory, near_control_bytes(JumpNear(pj.bd)), canonical_block_bytes(eof_retry_block()) ++ (near_control_bytes(JumpZeroNear(pj.rd)) ++ (canonical_block_bytes(eof_fail_block()) ++ (linux_syscall_bytes() ++ (canonical_block_bytes(print_exit_block()) ++ (linux_syscall_bytes()))))), entry, wl_at_wjmp(at), r5.right);
-    let r7 = resident_split_at(fetch, memory, canonical_block_bytes(eof_retry_block()), near_control_bytes(JumpZeroNear(pj.rd)) ++ (canonical_block_bytes(eof_fail_block()) ++ (linux_syscall_bytes() ++ (canonical_block_bytes(print_exit_block()) ++ (linux_syscall_bytes())))), entry, wl_at_wfail(at), r6.right);
-    let r8 = resident_split_at(fetch, memory, near_control_bytes(JumpZeroNear(pj.rd)), canonical_block_bytes(eof_fail_block()) ++ (linux_syscall_bytes() ++ (canonical_block_bytes(print_exit_block()) ++ (linux_syscall_bytes()))), entry, wl_at_wretry(at), r7.right);
-    let r9 = resident_split_at(fetch, memory, canonical_block_bytes(eof_fail_block()), linux_syscall_bytes() ++ (canonical_block_bytes(print_exit_block()) ++ (linux_syscall_bytes())), entry, wl_at_wfail_block(at), r8.right);
-    let r10 = resident_split_at(fetch, memory, linux_syscall_bytes(), canonical_block_bytes(print_exit_block()) ++ (linux_syscall_bytes()), entry, wl_at_wfail_call(at), r9.right);
-    let r11 = resident_split_at(fetch, memory, canonical_block_bytes(print_exit_block()), linux_syscall_bytes(), entry, wl_at_exit(at), r10.right);
-    WriteLoopResident(r0.left, r1.left, r2.left, r3.left, r4.left, r5.left, r6.left, r7.left, r8.left, r9.left, r10.left, r11.left, r11.right)
+    let piece = layout_resident(io_fetch_access(), memory, io_entry(), syscall_bytes(), write_loop_parts(pj), write_loop_lens(),
+        write_loop_measured(pj), at, resident);
+    WriteLoopResident(piece(0), piece(1), piece(2), piece(3), piece(4), piece(5), piece(6), fail_tail(memory, wl_at_wfail(at), pj.rd, piece(7)),
+        piece(8), piece(9))
 }
 
-// Where the loop's four jumps land.
-record WriteTargets(at: Nat, pj: PrintJumps) {
+// Where the loop's four jumps land. All that was sent goes on at `done`: the
+// adjacent exit(0) (`wl_at_exit`) for a program's last write, or back to the
+// read for a program that writes inside its read loop
+// (docs/native-tr-design.md §3.1).
+record WriteLoopTargets(at, done: Nat, pj: PrintJumps) {
     to_fail: near_branch_target(eof_rip(wl_at_wjs(at)), 6, pj.sd) = eof_rip(wl_at_wfail(at)),
-    to_exit: near_branch_target(eof_rip(wl_at_wjz(at)), 6, pj.zd) = eof_rip(wl_at_exit(at)),
+    to_done: near_branch_target(eof_rip(wl_at_wjz(at)), 6, pj.zd) = eof_rip(done),
     back: near_branch_target(eof_rip(wl_at_wjmp(at)), 5, pj.bd) = eof_rip(wl_at_write(at)),
     retry: near_branch_target(eof_rip(wl_at_wretry(at)), 6, pj.rd) = eof_rip(wl_at_write(at)),
 }
 
-// The loop's head: `bytes` is what is left, readable at R9 and counted in R10.
-fn WlFrom(memory: IoMemory, at: Nat,
-    ending: WriteEnding, steps: List<WriteStep>) → Type {
+// The registers the loop leaves alone (docs/native-stream-filter-design.md
+// §4.1): its write block writes RSI, RDX, RDI and RAX, its advance R9 and
+// R10, its retry RBX, and Linux returns in RAX, RCX and R11. A program's state
+// in R8 and R13–R15 lives through its writes.
+fn WriteKept(after, before: Gprs) → Type {
+    (read_gpr(R8, after) = read_gpr(R8, before)) ∧ ((read_gpr(R12, after) = read_gpr(R12, before)) ∧
+    ((read_gpr(R13, after) = read_gpr(R13, before)) ∧ ((read_gpr(R14, after) = read_gpr(R14, before)) ∧
+    ((read_gpr(R15, after) = read_gpr(R15, before)) ∧ (read_gpr(Rbp, after) = read_gpr(Rbp, before))))))
+}
+theorem write_kept_refl(gprs: Gprs): WriteKept(gprs, gprs) { ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, refl⟩⟩⟩⟩⟩ }
+theorem write_kept_trans(after, middle, before: Gprs, late: WriteKept(after, middle), early: WriteKept(middle, before)): WriteKept(after, before) {
+    ⟨trans(late.left, early.left), ⟨trans(late.right.left, early.right.left), ⟨trans(late.right.right.left, early.right.right.left),
+        ⟨trans(late.right.right.right.left, early.right.right.right.left),
+            ⟨trans(late.right.right.right.right.left, early.right.right.right.right.left),
+                trans(late.right.right.right.right.right, early.right.right.right.right.right)⟩⟩⟩⟩⟩
+}
+
+// The loop's head: `bytes` is what is left, readable at R9 and counted in R10,
+// and the registers it keeps are still `origin`'s.
+fn WlThen(memory: IoMemory, at: Nat, after: List<LinuxEvent>,
+    ending: WriteEnding, steps: List<WriteStep>, origin: Gprs) → Type {
     (bytes: List<BitVec(8)>) → WriteSteps(steps)(bytes) → (state: MachineState<IoMemory>) →
     0 < bytes.len() → bytes.len() <= 4096 →
     state.rip = eof_rip(wl_at_write(at)) → state.memory = memory →
     LinuxWritesFrom(io_linux(), memory, read_gpr(R9, state.gprs), bytes) →
     read_gpr(R10, state.gprs).toNat() = bytes.len() → read_gpr(R9, state.gprs).toNat() + bytes.len() < Nat::pow(2, 64) →
-    LinuxRuns(io_linux(), write_events(bytes, steps, ending), state)
+    WriteKept(state.gprs, origin) →
+    LinuxRuns(io_linux(), write_events_then(bytes, steps, ending, after), state)
+}
+
+// A run that ends in a failed write: the writes before it, and the errno.
+record WriteFailure { writes: List<WriteStep>, errno: Nat }
+
+// What runs once all is sent: from `done`, with the memory the loop wrote from
+// and the registers it keeps as `origin`'s.
+fn WriteThen(memory: IoMemory, done: Nat, after: List<LinuxEvent>, origin: Gprs) → Type {
+    (state: MachineState<IoMemory>) → state.rip = eof_rip(done) → state.memory = memory → WriteKept(state.gprs, origin) →
+    LinuxRuns(io_linux(), after, state)
 }
 
 // write(1, R9, R10), asked: the block, then the SYSCALL.
@@ -119,7 +148,7 @@ theorem wl_ask(memory: IoMemory, at: Nat, pj: PrintJumps,
     WlAsked(memory, at, state) {
     let fetch = io_fetch_access();
     let data = io_data_access();
-    let entry: BitVec(64) = BitVec::ofNat(0x4000e8);
+    let entry = io_entry();
     let wrote = block_fetched(fetch, data, print_write_block(), state, trivial,
         resident_state(fetch, canonical_block_bytes(print_write_block()), memory,
             eof_rip(wl_at_write(at)), state, memory_is, at_write, pieces.write_at));
@@ -127,9 +156,25 @@ theorem wl_ask(memory: IoMemory, at: Nat, pj: PrintJumps,
     let asked_memory: (asked.memory = memory) = trans(pure_block_memory(print_write_block(), state), memory_is);
     let asked_rip: (asked.rip = eof_rip(wl_at_write_call(at))) =
         trans(wrote.right, rip_advance(entry, state.rip, wl_at_write(at), print_write_len(), at_write));
-    ⟨wrote.left, ⟨asked_memory, ⟨asked_rip, FetchedFrom(resident_readable(fetch, asked.memory, linux_syscall_bytes(), asked.rip,
-        resident_state(fetch, linux_syscall_bytes(), memory, eof_rip(wl_at_write_call(at)), asked,
+    ⟨wrote.left, ⟨asked_memory, ⟨asked_rip, FetchedFrom(resident_readable(fetch, asked.memory, syscall_bytes(), asked.rip,
+        resident_state(fetch, syscall_bytes(), memory, eof_rip(wl_at_write_call(at)), asked,
             asked_memory, asked_rip, pieces.write_call_at)))⟩⟩⟩
+}
+
+// After a write returned: TEST, JS not taken, the advance (named, so what a
+// client knows of the other registers it keeps by conversion).
+fn wl_moved(returned: MachineState<IoMemory>, pj: PrintJumps) → MachineState<IoMemory> {
+    execute_block_normal(print_advance_block(), execute_near_control(JumpSignNear(pj.sd), execute_block_normal(eof_test_block(), returned)))
+}
+// R9 has moved past what was sent, R10 counts what is left, and ZF says
+// whether anything is.
+record WlMoved(returned: MachineState<IoMemory>, memory: IoMemory, count: Nat, to: BitVec(64), pj: PrintJumps) {
+    steps: FetchedSteps(io_fetch_access(), io_data_access(), returned, wl_moved(returned, pj)),
+    memory_is: wl_moved(returned, pj).memory = memory,
+    rip_is: wl_moved(returned, pj).rip = to,
+    r9: read_gpr(R9, wl_moved(returned, pj).gprs) = read_gpr(R9, returned.gprs).add(bitvec_nat::word_of_nat(64, count)),
+    r10: read_gpr(R10, wl_moved(returned, pj).gprs) = read_gpr(R10, returned.gprs).sub(bitvec_nat::word_of_nat(64, count)),
+    flag: wl_moved(returned, pj).flags.zf = is_zero_bits(64, read_gpr(R10, returned.gprs).sub(bitvec_nat::word_of_nat(64, count))),
 }
 
 theorem wl_advance(memory: IoMemory, at: Nat, pj: PrintJumps,
@@ -137,10 +182,10 @@ theorem wl_advance(memory: IoMemory, at: Nat, pj: PrintJumps,
     returned: MachineState<IoMemory>, memory_is: returned.memory = memory,
     rip_is: returned.rip = eof_rip(wl_at_wtest(at)),
     rax: read_gpr(Rax, returned.gprs) = bitvec_nat::word_of_nat(64, count)):
-    WriteAdvanced(returned, memory, count, eof_rip(wl_at_wjz(at))) {
+    WlMoved(returned, memory, count, eof_rip(wl_at_wjz(at)), pj) {
     let fetch = io_fetch_access();
     let data = io_data_access();
-    let entry: BitVec(64) = BitVec::ofNat(0x4000e8);
+    let entry = io_entry();
     let test = block_fetched(fetch, data, eof_test_block(), returned, trivial,
         resident_state(fetch, canonical_block_bytes(eof_test_block()), memory, eof_rip(wl_at_wtest(at)),
             returned, memory_is, rip_is, pieces.wtest_at));
@@ -159,196 +204,158 @@ theorem wl_advance(memory: IoMemory, at: Nat, pj: PrintJumps,
         resident_state(fetch, canonical_block_bytes(print_advance_block()), memory,
             eof_rip(wl_at_advance(at)), passed, tested_memory, passed_rip, pieces.advance_at));
     let moved = execute_block_normal(print_advance_block(), passed);
-    let moved_memory: (moved.memory = memory) = trans(pure_block_memory(print_advance_block(), passed), tested_memory);
-    let moved_rip: (moved.rip = eof_rip(wl_at_wjz(at))) =
-        trans(advance.right, rip_advance(entry, passed.rip, wl_at_advance(at), print_advance_len(), passed_rip));
-    let r9: (read_gpr(R9, moved.gprs) = read_gpr(R9, returned.gprs).add(bitvec_nat::word_of_nat(64, count))) =
-        cong_fn<BitVec(64), BitVec(64)>(λ v => read_gpr(R9, returned.gprs).add(v), rax);
-    let r10: (read_gpr(R10, moved.gprs) = read_gpr(R10, returned.gprs).sub(bitvec_nat::word_of_nat(64, count))) =
-        cong_fn<BitVec(64), BitVec(64)>(λ v => read_gpr(R10, returned.gprs).sub(v), rax);
-    let flag: (moved.flags.zf = is_zero_bits(64, read_gpr(R10, returned.gprs).sub(bitvec_nat::word_of_nat(64, count)))) =
-        cong_fn<BitVec(64), Bool>(λ v => is_zero_bits(64, read_gpr(R10, returned.gprs).sub(v)), rax);
-    Exists(moved, ⟨fetched_steps_trans(fetch, data, returned, tested, moved, test.left,
+    WlMoved(
+        steps := fetched_steps_trans(fetch, data, returned, tested, moved, test.left,
             fetched_steps_trans(fetch, data, tested, passed, moved, fetched_steps_one(fetch, data, tested, passed, js), advance.left)),
-        ⟨moved_memory, ⟨moved_rip, ⟨r9, ⟨r10, flag⟩⟩⟩⟩⟩)
+        memory_is := trans(pure_block_memory(print_advance_block(), passed), tested_memory),
+        rip_is := trans(advance.right, rip_advance(entry, passed.rip, wl_at_advance(at), print_advance_len(), passed_rip)),
+        r9 := cong_fn<BitVec(64), BitVec(64)>(λ v => read_gpr(R9, returned.gprs).add(v), rax),
+        r10 := cong_fn<BitVec(64), BitVec(64)>(λ v => read_gpr(R10, returned.gprs).sub(v), rax),
+        flag := cong_fn<BitVec(64), Bool>(λ v => is_zero_bits(64, read_gpr(R10, returned.gprs).sub(v)), rax))
 }
 
-// All was sent: JZ to exit(0).
+// All was sent: JZ to `done`.
+fn wl_going(returned: MachineState<IoMemory>, pj: PrintJumps) → MachineState<IoMemory> {
+    execute_near_control(JumpZeroNear(pj.zd), wl_moved(returned, pj))
+}
+record WlGoing(returned: MachineState<IoMemory>, memory: IoMemory, done: Nat, pj: PrintJumps) {
+    steps: FetchedSteps(io_fetch_access(), io_data_access(), returned, wl_going(returned, pj)),
+    memory_is: wl_going(returned, pj).memory = memory,
+    rip_is: wl_going(returned, pj).rip = eof_rip(done),
+}
 theorem wl_done(memory: IoMemory, at: Nat, pj: PrintJumps,
-    pieces: WriteLoopResident(memory, at, pj), targets: WriteTargets(at, pj),
+    done: Nat, pieces: WriteLoopResident(memory, at, pj), targets: WriteLoopTargets(at, done, pj),
     returned: MachineState<IoMemory>, count: Nat,
-    advanced: WriteAdvanced(returned, memory, count, eof_rip(wl_at_wjz(at))),
-    none_left: advanced.witness.flags.zf = True):
-    LinuxRuns(io_linux(), [ExitEvent(BitVec::ofNat(0))], returned) {
+    advanced: WlMoved(returned, memory, count, eof_rip(wl_at_wjz(at)), pj),
+    none_left: wl_moved(returned, pj).flags.zf = True): WlGoing(returned, memory, done, pj) {
     let fetch = io_fetch_access();
     let data = io_data_access();
-    let entry: BitVec(64) = BitVec::ofNat(0x4000e8);
-    let moved = advanced.witness;
-    let moved_memory: (moved.memory = memory) = advanced.proof.right.left;
-    let moved_rip: (moved.rip = eof_rip(wl_at_wjz(at))) = advanced.proof.right.right.left;
+    let moved = wl_moved(returned, pj);
     let jz = near_fetched_step(fetch, data, JumpZeroNear(pj.zd), moved,
         resident_state(fetch, near_control_bytes(JumpZeroNear(pj.zd)), memory, eof_rip(wl_at_wjz(at)),
-            moved, moved_memory, moved_rip, pieces.wjz_at));
-    let going = execute_near_control(JumpZeroNear(pj.zd), moved);
-    let going_rip: (going.rip = eof_rip(wl_at_exit(at))) =
-        trans(near_taken_rip(pj.zd, moved, none_left),
-            trans(cong_fn<BitVec(64), BitVec(64)>(λ address => near_branch_target(address, 6, pj.zd), moved_rip), targets.to_exit));
-    let exited = block_fetched(fetch, data, print_exit_block(), going, trivial,
-        resident_state(fetch, canonical_block_bytes(print_exit_block()), memory, eof_rip(wl_at_exit(at)),
-            going, moved_memory, going_rip, pieces.exit_at));
-    let last = execute_block_normal(print_exit_block(), going);
-    let last_memory: (last.memory = memory) = trans(pure_block_memory(print_exit_block(), going), moved_memory);
-    let last_rip: (last.rip = eof_rip(wl_at_exit_call(at))) =
-        trans(exited.right, rip_advance(entry, going.rip, wl_at_exit(at), print_exit_len(), going_rip));
-    let call: LinuxSyscallAt(io_linux(), last) = FetchedFrom(resident_readable(fetch, last.memory, linux_syscall_bytes(), last.rip,
-        resident_state(fetch, linux_syscall_bytes(), memory, eof_rip(wl_at_exit_call(at)), last,
-            last_memory, last_rip, pieces.exit_call_at)));
-    linux_runs_exit(io_linux(), returned, last, BitVec::ofNat(0),
-        fetched_steps_trans(fetch, data, returned, moved, last, advanced.proof.left,
-            fetched_steps_trans(fetch, data, moved, going, last, fetched_steps_one(fetch, data, moved, going, jz), exited.left)),
-        call, refl, refl)
+            moved, advanced.memory_is, advanced.rip_is, pieces.wjz_at));
+    WlGoing(steps := fetched_steps_trans(fetch, data, returned, moved, wl_going(returned, pj), advanced.steps,
+            fetched_steps_one(fetch, data, moved, wl_going(returned, pj), jz)),
+        memory_is := advanced.memory_is,
+        rip_is := trans(near_taken_rip(pj.zd, moved, none_left),
+            trans(cong_fn<BitVec(64), BitVec(64)>(λ address => near_branch_target(address, 6, pj.zd), advanced.rip_is), targets.to_done)))
 }
 
+// A program's last write goes on to the adjacent exit(0).
+theorem wl_exit(memory: IoMemory, at: Nat, pj: PrintJumps, pieces: WriteLoopResident(memory, at, pj)):
+    (origin: Gprs) → WriteThen(memory, wl_at_exit(at), [ExitEvent(BitVec::ofNat(0))], origin) {
+    λ origin going going_rip going_memory _ => {
+        let fetch = io_fetch_access();
+        let data = io_data_access();
+        let entry = io_entry();
+        let exited = block_fetched(fetch, data, print_exit_block(), going, trivial,
+            resident_state(fetch, canonical_block_bytes(print_exit_block()), memory, eof_rip(wl_at_exit(at)),
+                going, going_memory, going_rip, pieces.exit_at));
+        let last = execute_block_normal(print_exit_block(), going);
+        let last_memory: (last.memory = memory) = trans(pure_block_memory(print_exit_block(), going), going_memory);
+        let last_rip: (last.rip = eof_rip(wl_at_exit_call(at))) =
+            trans(exited.right, rip_advance(entry, going.rip, wl_at_exit(at), print_exit_len(), going_rip));
+        let call: LinuxSyscallAt(io_linux(), last) = FetchedFrom(resident_readable(fetch, last.memory, syscall_bytes(), last.rip,
+            resident_state(fetch, syscall_bytes(), memory, eof_rip(wl_at_exit_call(at)), last,
+                last_memory, last_rip, pieces.exit_call_at)));
+        linux_runs_exit(io_linux(), going, last, BitVec::ofNat(0), exited.left, call, refl, refl)
+    }
+}
+
+// Something is left: JZ not taken, JMP back to the write.
+fn wl_back(returned: MachineState<IoMemory>, pj: PrintJumps) → MachineState<IoMemory> {
+    execute_near_control(JumpNear(pj.bd), execute_near_control(JumpZeroNear(pj.zd), wl_moved(returned, pj)))
+}
+record WlBack(returned: MachineState<IoMemory>, memory: IoMemory, count: Nat, to: BitVec(64), pj: PrintJumps) {
+    steps: FetchedSteps(io_fetch_access(), io_data_access(), returned, wl_back(returned, pj)),
+    memory_is: wl_back(returned, pj).memory = memory,
+    rip_is: wl_back(returned, pj).rip = to,
+    r9: read_gpr(R9, wl_back(returned, pj).gprs) = read_gpr(R9, returned.gprs).add(bitvec_nat::word_of_nat(64, count)),
+    r10: read_gpr(R10, wl_back(returned, pj).gprs) = read_gpr(R10, returned.gprs).sub(bitvec_nat::word_of_nat(64, count)),
+}
 theorem wl_more(memory: IoMemory, at: Nat, pj: PrintJumps,
-    pieces: WriteLoopResident(memory, at, pj), targets: WriteTargets(at, pj),
+    done: Nat, pieces: WriteLoopResident(memory, at, pj), targets: WriteLoopTargets(at, done, pj),
     returned: MachineState<IoMemory>, count: Nat,
-    advanced: WriteAdvanced(returned, memory, count, eof_rip(wl_at_wjz(at))),
-    some_left: advanced.witness.flags.zf = False):
-    WriteBack(returned, memory, count, eof_rip(wl_at_write(at))) {
+    advanced: WlMoved(returned, memory, count, eof_rip(wl_at_wjz(at)), pj),
+    some_left: wl_moved(returned, pj).flags.zf = False):
+    WlBack(returned, memory, count, eof_rip(wl_at_write(at)), pj) {
     let fetch = io_fetch_access();
     let data = io_data_access();
-    let entry: BitVec(64) = BitVec::ofNat(0x4000e8);
-    let moved = advanced.witness;
-    let moved_memory: (moved.memory = memory) = advanced.proof.right.left;
-    let moved_rip: (moved.rip = eof_rip(wl_at_wjz(at))) = advanced.proof.right.right.left;
+    let entry = io_entry();
+    let moved = wl_moved(returned, pj);
     let jz = near_fetched_step(fetch, data, JumpZeroNear(pj.zd), moved,
         resident_state(fetch, near_control_bytes(JumpZeroNear(pj.zd)), memory, eof_rip(wl_at_wjz(at)),
-            moved, moved_memory, moved_rip, pieces.wjz_at));
+            moved, advanced.memory_is, advanced.rip_is, pieces.wjz_at));
     let going = execute_near_control(JumpZeroNear(pj.zd), moved);
     let going_rip: (going.rip = eof_rip(wl_at_wjmp(at))) =
-        trans(near_not_taken_rip(pj.zd, moved, some_left), rip_advance(entry, moved.rip, wl_at_wjz(at), 6, moved_rip));
+        trans(near_not_taken_rip(pj.zd, moved, some_left), rip_advance(entry, moved.rip, wl_at_wjz(at), 6, advanced.rip_is));
     let jmp = near_fetched_step(fetch, data, JumpNear(pj.bd), going,
         resident_state(fetch, near_control_bytes(JumpNear(pj.bd)), memory, eof_rip(wl_at_wjmp(at)),
-            going, moved_memory, going_rip, pieces.wjmp_at));
-    let back = execute_near_control(JumpNear(pj.bd), going);
-    let back_rip: (back.rip = eof_rip(wl_at_write(at))) =
-        trans(cong_fn<BitVec(64), BitVec(64)>(λ address => near_branch_target(address, 5, pj.bd), going_rip), targets.back);
-    Exists(back, ⟨fetched_steps_trans(fetch, data, returned, moved, back, advanced.proof.left,
-            fetched_steps_trans(fetch, data, moved, going, back, fetched_steps_one(fetch, data, moved, going, jz),
-                fetched_steps_one(fetch, data, going, back, jmp))),
-        ⟨moved_memory, ⟨back_rip, ⟨advanced.proof.right.right.right.left, advanced.proof.right.right.right.right.left⟩⟩⟩⟩)
+            going, advanced.memory_is, going_rip, pieces.wjmp_at));
+    WlBack(
+        steps := fetched_steps_trans(fetch, data, returned, moved, wl_back(returned, pj), advanced.steps,
+            fetched_steps_trans(fetch, data, moved, going, wl_back(returned, pj), fetched_steps_one(fetch, data, moved, going, jz),
+                fetched_steps_one(fetch, data, going, wl_back(returned, pj), jmp))),
+        memory_is := advanced.memory_is,
+        rip_is := trans(cong_fn<BitVec(64), BitVec(64)>(λ address => near_branch_target(address, 5, pj.bd), going_rip), targets.back),
+        r9 := advanced.r9,
+        r10 := advanced.r10)
 }
 
+// A failed write: TEST, then JS to the failure tail.
+fn wl_failing(returned: MachineState<IoMemory>, pj: PrintJumps) → MachineState<IoMemory> {
+    execute_near_control(JumpSignNear(pj.sd), execute_block_normal(eof_test_block(), returned))
+}
+record WlFailing(returned: MachineState<IoMemory>, memory: IoMemory, at: Nat, pj: PrintJumps) {
+    steps: FetchedSteps(io_fetch_access(), io_data_access(), returned, wl_failing(returned, pj)),
+    memory_is: wl_failing(returned, pj).memory = memory,
+    rip_is: wl_failing(returned, pj).rip = eof_rip(wl_at_wfail(at)),
+}
 theorem wl_failed(memory: IoMemory, at: Nat, pj: PrintJumps,
-    pieces: WriteLoopResident(memory, at, pj), targets: WriteTargets(at, pj),
+    done: Nat, pieces: WriteLoopResident(memory, at, pj), targets: WriteLoopTargets(at, done, pj),
     errno: Nat, error: Errno(errno), returned: MachineState<IoMemory>, memory_is: returned.memory = memory,
     rip_is: returned.rip = eof_rip(wl_at_wtest(at)),
-    rax: read_gpr(Rax, returned.gprs) = errno_word(errno)):
-    WriteFailedAt(returned, memory, errno, eof_rip(wl_at_wretry(at))) {
-    let fetch = io_fetch_access();
-    let data = io_data_access();
-    let entry: BitVec(64) = BitVec::ofNat(0x4000e8);
-    let w = errno_word(errno);
-    let test = block_fetched(fetch, data, eof_test_block(), returned, trivial,
-        resident_state(fetch, canonical_block_bytes(eof_test_block()), memory, eof_rip(wl_at_wtest(at)),
-            returned, memory_is, rip_is, pieces.wtest_at));
+    rax: read_gpr(Rax, returned.gprs) = errno_word(errno)): WlFailing(returned, memory, at, pj) {
+    have test = block_ran(eof_test_block(), memory, wl_at_wtest(at), pieces.wtest_at, returned, memory_is, rip_is);
     let tested = execute_block_normal(eof_test_block(), returned);
-    let tested_memory: (tested.memory = memory) = trans(pure_block_memory(eof_test_block(), returned), memory_is);
-    let tested_rip: (tested.rip = eof_rip(wl_at_wjs(at))) =
-        trans(test.right, rip_advance(entry, returned.rip, wl_at_wtest(at), eof_test_len(), rip_is));
     let negative: (tested.flags.sf = True) =
-        j(sym(rax), λ v _ => v.band(v).sign_bit() = True, test_self_negative(w, errno_negative(errno, error)));
-    let js = near_fetched_step(fetch, data, JumpSignNear(pj.sd), tested,
-        resident_state(fetch, near_control_bytes(JumpSignNear(pj.sd)), memory, eof_rip(wl_at_wjs(at)),
-            tested, tested_memory, tested_rip, pieces.wjs_at));
-    let failing = execute_near_control(JumpSignNear(pj.sd), tested);
-    let failing_rip: (failing.rip = eof_rip(wl_at_wfail(at))) =
-        trans(near_sign_taken_rip(pj.sd, tested, negative),
-            trans(cong_fn<BitVec(64), BitVec(64)>(λ address => near_branch_target(address, 6, pj.sd), tested_rip), targets.to_fail));
-    let retry = block_fetched(fetch, data, eof_retry_block(), failing, trivial,
-        resident_state(fetch, canonical_block_bytes(eof_retry_block()), memory, eof_rip(wl_at_wfail(at)),
-            failing, tested_memory, failing_rip, pieces.wretry_at));
-    let fixed = execute_block_normal(eof_retry_block(), failing);
-    let fixed_memory: (fixed.memory = memory) = trans(pure_block_memory(eof_retry_block(), failing), tested_memory);
-    let fixed_rip: (fixed.rip = eof_rip(wl_at_wretry(at))) =
-        trans(retry.right, rip_advance(entry, failing.rip, wl_at_wfail(at), eof_retry_len(), failing_rip));
-    let flag: (fixed.flags.zf = is_zero_bits(64, w.add(BitVec::ofNat(4)))) =
-        cong_fn<BitVec(64), Bool>(λ v => is_zero_bits(64, v.add(BitVec::ofNat(4))), rax);
-    Exists(fixed, ⟨fetched_steps_trans(fetch, data, returned, tested, fixed, test.left,
-            fetched_steps_trans(fetch, data, tested, failing, fixed, fetched_steps_one(fetch, data, tested, failing, js), retry.left)),
-        ⟨fixed_memory, ⟨fixed_rip, ⟨flag, ⟨refl, refl⟩⟩⟩⟩⟩)
-}
-
-theorem wl_retry(memory: IoMemory, at: Nat, pj: PrintJumps,
-    pieces: WriteLoopResident(memory, at, pj), targets: WriteTargets(at, pj),
-    returned: MachineState<IoMemory>,
-    failed: WriteFailedAt(returned, memory, eintr(), eof_rip(wl_at_wretry(at)))):
-    WriteKept(returned, memory, eof_rip(wl_at_write(at))) {
-    let fetch = io_fetch_access();
-    let data = io_data_access();
-    let fixed = failed.witness;
-    let set: (fixed.flags.zf = True) = trans(failed.proof.right.right.right.left, eintr_plus_four());
-    let jz = near_fetched_step(fetch, data, JumpZeroNear(pj.rd), fixed,
-        resident_state(fetch, near_control_bytes(JumpZeroNear(pj.rd)), memory, eof_rip(wl_at_wretry(at)),
-            fixed, failed.proof.right.left, failed.proof.right.right.left, pieces.wretry_jz_at));
-    let back = execute_near_control(JumpZeroNear(pj.rd), fixed);
-    let back_rip: (back.rip = eof_rip(wl_at_write(at))) =
-        trans(near_taken_rip(pj.rd, fixed, set),
-            trans(cong_fn<BitVec(64), BitVec(64)>(λ address => near_branch_target(address, 6, pj.rd), failed.proof.right.right.left), targets.retry));
-    Exists(back, ⟨fetched_steps_trans(fetch, data, returned, fixed, back, failed.proof.left, fetched_steps_one(fetch, data, fixed, back, jz)),
-        ⟨failed.proof.right.left, ⟨back_rip, failed.proof.right.right.right.right⟩⟩⟩)
-}
-
-theorem wl_fail_exit(memory: IoMemory, at: Nat, pj: PrintJumps,
-    pieces: WriteLoopResident(memory, at, pj),
-    errno: Nat, error: Errno(errno), other: Not(errno = eintr()), returned: MachineState<IoMemory>,
-    failed: WriteFailedAt(returned, memory, errno, eof_rip(wl_at_wretry(at)))):
-    LinuxRuns(io_linux(), [ExitEvent(BitVec::ofNat(1))], returned) {
-    let fetch = io_fetch_access();
-    let data = io_data_access();
-    let entry: BitVec(64) = BitVec::ofNat(0x4000e8);
-    let fixed = failed.witness;
-    let fixed_memory: (fixed.memory = memory) = failed.proof.right.left;
-    let fixed_rip: (fixed.rip = eof_rip(wl_at_wretry(at))) = failed.proof.right.right.left;
-    let clear: (fixed.flags.zf = False) = trans(failed.proof.right.right.right.left, other_errno_plus_four(errno, error, other));
-    let jz = near_fetched_step(fetch, data, JumpZeroNear(pj.rd), fixed,
-        resident_state(fetch, near_control_bytes(JumpZeroNear(pj.rd)), memory, eof_rip(wl_at_wretry(at)),
-            fixed, fixed_memory, fixed_rip, pieces.wretry_jz_at));
-    let going = execute_near_control(JumpZeroNear(pj.rd), fixed);
-    let going_rip: (going.rip = eof_rip(wl_at_wfail_block(at))) =
-        trans(near_not_taken_rip(pj.rd, fixed, clear), rip_advance(entry, fixed.rip, wl_at_wretry(at), 6, fixed_rip));
-    let exiting = block_fetched(fetch, data, eof_fail_block(), going, trivial,
-        resident_state(fetch, canonical_block_bytes(eof_fail_block()), memory, eof_rip(wl_at_wfail_block(at)),
-            going, fixed_memory, going_rip, pieces.wfail_at));
-    let last = execute_block_normal(eof_fail_block(), going);
-    let last_memory: (last.memory = memory) = trans(pure_block_memory(eof_fail_block(), going), fixed_memory);
-    let last_rip: (last.rip = eof_rip(wl_at_wfail_call(at))) =
-        trans(exiting.right, rip_advance(entry, going.rip, wl_at_wfail_block(at), eof_fail_len(), going_rip));
-    let call: LinuxSyscallAt(io_linux(), last) = FetchedFrom(resident_readable(fetch, last.memory, linux_syscall_bytes(), last.rip,
-        resident_state(fetch, linux_syscall_bytes(), memory, eof_rip(wl_at_wfail_call(at)), last,
-            last_memory, last_rip, pieces.wfail_call_at)));
-    linux_runs_exit(io_linux(), returned, last, BitVec::ofNat(1),
-        fetched_steps_trans(fetch, data, returned, fixed, last, failed.proof.left,
-            fetched_steps_trans(fetch, data, fixed, going, last, fetched_steps_one(fetch, data, fixed, going, jz), exiting.left)),
-        call, refl, refl)
+        j(sym(rax), λ v _ => v.band(v).sign_bit() = True, test_self_negative(errno_word(errno), errno_negative(errno, error)));
+    let js = near_ran(JumpSignNear(pj.sd), memory, wl_at_wjs(at), pieces.wjs_at, tested, test.memory_is, test.rip_is);
+    WlFailing(steps := fetched_steps_trans(io_fetch_access(), io_data_access(), returned, tested, wl_failing(returned, pj), test.steps, js),
+        memory_is := test.memory_is,
+        rip_is := trans(near_sign_taken_rip(pj.sd, tested, negative),
+            trans(cong_fn<BitVec(64), BitVec(64)>(λ address => near_branch_target(address, 6, pj.sd), test.rip_is), targets.to_fail)))
 }
 
 // The loop, by recursion on the writes: every short write advances, every
-// EINTR retries, and the last write sends the rest (exit 0) or fails (exit 1).
-theorem wl_from(memory: IoMemory, at: Nat, pj: PrintJumps,
-    pieces: WriteLoopResident(memory, at, pj), targets: WriteTargets(at, pj),
-    ending: WriteEnding, ending_ok: WriteEndingOk(ending), steps: List<WriteStep>):
-    WlFrom(memory, at, ending, steps) {
-    let entry: BitVec(64) = BitVec::ofNat(0x4000e8);
-    match steps as λ ss => WlFrom(memory, at, ending, ss) {
-        Nil => λ bytes ok state some fits at_write memory_is sends counted room =>
-            (match ending as λ en => WriteEndingOk(en) → LinuxRuns(io_linux(), write_events(bytes, Nil, en), state) {
-                Finished => λ _ => {
+// EINTR retries, and the last write sends the rest (then `after`) or fails
+// (exit 1).
+// What runs once all is sent, for writes that finish; writes that fail exit
+// 1 and need nothing after them.
+fn FinishedThen(ending: WriteEnding, memory: IoMemory, done: Nat, after: List<LinuxEvent>, origin: Gprs) → Type {
+    match ending { Finished => WriteThen(memory, done, after, origin), WriteFailedWith(_) => True }
+}
+theorem finished_then(ending: WriteEnding, memory: IoMemory, done: Nat, after: List<LinuxEvent>, origin: Gprs,
+    then: WriteThen(memory, done, after, origin)): FinishedThen(ending, memory, done, after, origin) {
+    match ending as λ en => FinishedThen(en, memory, done, after, origin) { Finished => then, WriteFailedWith(_) => trivial }
+}
+
+theorem wl_from_then(memory: IoMemory, at: Nat, pj: PrintJumps,
+    done: Nat, pieces: WriteLoopResident(memory, at, pj), targets: WriteLoopTargets(at, done, pj),
+    after: List<LinuxEvent>, ending: WriteEnding, ending_ok: WriteEndingOk(ending), origin: Gprs,
+    then: FinishedThen(ending, memory, done, after, origin), steps: List<WriteStep>):
+    WlThen(memory, at, after, ending, steps, origin) {
+    let entry = io_entry();
+    match steps as λ ss => WlThen(memory, at, after, ending, ss, origin) {
+        Nil => λ bytes ok state some fits at_write memory_is sends counted room kept =>
+            (match ending as λ en => WriteEndingOk(en) → FinishedThen(en, memory, done, after, origin) →
+                    LinuxRuns(io_linux(), write_events_then(bytes, Nil, en, after), state) {
+                Finished => λ _ then => {
                     let asked = execute_block_normal(print_write_block(), state);
                     let w = wl_ask(memory, at, pj, pieces, state, at_write, memory_is);
                     let sends_there: LinuxWritesFrom(io_linux(), asked.memory, read_gpr(Rsi, asked.gprs), bytes) =
                         j(sym(w.right.left), λ m _ => LinuxWritesFrom(io_linux(), m, read_gpr(R9, state.gprs), bytes), sends);
-                    linux_runs_write(io_linux(), state, asked, BitVec::ofNat(1), bytes, [ExitEvent(BitVec::ofNat(0))],
+                    linux_runs_write(io_linux(), state, asked, BitVec::ofNat(1), bytes, after,
                         linux_steps_of_fetched(io_linux(), state, asked, w.left), w.right.right.right, refl, refl, counted, sends_there,
                         bytes.len(), Nat::le_refl(bytes.len()),
                         λ rcx r11 => {
@@ -366,11 +373,15 @@ theorem wl_from(memory: IoMemory, at: Nat, pj: PrintJumps,
                                     le_by_values(sent.toNat(), left.toNat(), bytes.len(), bytes.len(), sent_value, counted, Nat::le_refl(bytes.len())));
                             let nothing: (left.sub(sent).toNat() = 0) =
                                 all_sent(left.sub(sent).toNat(), left.toNat(), sent.toNat(), bytes.len(), remaining, counted, sent_value);
-                            wl_done(memory, at, pj, pieces, targets, returned, bytes.len(), advanced,
-                                trans(advanced.proof.right.right.right.right.right, zero_bits_of_zero(64, left.sub(sent), nothing)))
+                            have finished = wl_done(memory, at, pj, done, pieces, targets, returned, bytes.len(), advanced,
+                                trans(advanced.flag, zero_bits_of_zero(64, left.sub(sent), nothing)));
+                            let going = wl_going(returned, pj);
+                            linux_runs_after_steps(io_linux(), after, returned, going, finished.steps,
+                                then(going, finished.rip_is, finished.memory_is,
+                                    write_kept_trans(going.gprs, state.gprs, origin, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, refl⟩⟩⟩⟩⟩, kept)))
                         })
                 },
-                WriteFailedWith(errno) => λ bad => {
+                WriteFailedWith(errno) => λ bad _ => {
                     let asked = execute_block_normal(print_write_block(), state);
                     let w = wl_ask(memory, at, pj, pieces, state, at_write, memory_is);
                     let sends_there: LinuxWritesFrom(io_linux(), asked.memory, read_gpr(Rsi, asked.gprs), bytes) =
@@ -382,20 +393,22 @@ theorem wl_from(memory: IoMemory, at: Nat, pj: PrintJumps,
                             let returned = linux_write_return(asked, errno_word(errno), rcx, r11);
                             let returned_rip: (returned.rip = eof_rip(wl_at_wtest(at))) =
                                 rip_advance(entry, asked.rip, wl_at_write_call(at), 2, w.right.right.left);
-                            wl_fail_exit(memory, at, pj, pieces, errno, bad.left, bad.right, returned,
-                                wl_failed(memory, at, pj, pieces, targets, errno, bad.left, returned,
-                                    w.right.left, returned_rip, refl))
+                            have failing = wl_failed(memory, at, pj, done, pieces, targets, errno, bad.left, returned,
+                                w.right.left, returned_rip, refl);
+                            linux_runs_after_steps(io_linux(), [ExitEvent(BitVec::ofNat(1))], returned, wl_failing(returned, pj), failing.steps,
+                                fail_exit(memory, wl_at_wfail(at), pj.rd, pieces.fail, errno, bad.left, bad.right, wl_failing(returned, pj),
+                                    failing.memory_is, failing.rip_is, refl))
                         })
                 },
-            })(ending_ok),
-        Cons(step, rest) => (match step as λ st => WlFrom(memory, at, ending, Cons(st, rest)) {
-            Partial(count) => λ bytes ok state some fits at_write memory_is sends counted room => {
+            })(ending_ok, then),
+        Cons(step, rest) => (match step as λ st => WlThen(memory, at, after, ending, Cons(st, rest), origin) {
+            Partial(count) => λ bytes ok state some fits at_write memory_is sends counted room kept => {
                 let short: (count < bytes.len()) = ok.left;
                 let asked = execute_block_normal(print_write_block(), state);
                 let w = wl_ask(memory, at, pj, pieces, state, at_write, memory_is);
                 let sends_there: LinuxWritesFrom(io_linux(), asked.memory, read_gpr(Rsi, asked.gprs), bytes) =
                     j(sym(w.right.left), λ m _ => LinuxWritesFrom(io_linux(), m, read_gpr(R9, state.gprs), bytes), sends);
-                linux_runs_write(io_linux(), state, asked, BitVec::ofNat(1), bytes, write_events(bytes.drop(count), rest, ending),
+                linux_runs_write(io_linux(), state, asked, BitVec::ofNat(1), bytes, write_events_then(bytes.drop(count), rest, ending, after),
                     linux_steps_of_fetched(io_linux(), state, asked, w.left), w.right.right.right, refl, refl, counted, sends_there,
                     count, short_le(count, bytes.len(), short),
                     λ rcx r11 => {
@@ -412,20 +425,20 @@ theorem wl_from(memory: IoMemory, at: Nat, pj: PrintJumps,
                         let remaining: (left.sub(sent).toNat() = left.toNat() -sent.toNat()) =
                             bitvec_nat::toNat_sub(64, left, sent,
                                 le_by_values(sent.toNat(), left.toNat(), count, bytes.len(), sent_value, counted, short_le(count, bytes.len(), short)));
-                        let back = wl_more(memory, at, pj, pieces, targets, returned, count, advanced,
-                            trans(advanced.proof.right.right.right.right.right, zero_bits_of_pos(64, left.sub(sent),
+                        have back = wl_more(memory, at, pj, done, pieces, targets, returned, count, advanced,
+                            trans(advanced.flag, zero_bits_of_pos(64, left.sub(sent),
                                 some_left(left.sub(sent).toNat(), left.toNat(), sent.toNat(), bytes.len(), count, remaining, counted, sent_value, short))));
-                        let moved = back.witness;
+                        let moved = wl_back(returned, pj);
                         let rest_len: (bytes.drop(count).len() + count = bytes.len()) = drop_len(bytes, count, short_le(count, bytes.len(), short));
                         let moved_at: (read_gpr(R9, moved.gprs).toNat() = from.toNat() + sent.toNat()) =
-                            trans(cong_fn<BitVec(64), Nat>(λ v => v.toNat(), back.proof.right.right.right.left),
+                            trans(cong_fn<BitVec(64), Nat>(λ v => v.toNat(), back.r9),
                                 bitvec_nat::toNat_add(64, from, sent,
                                     sent_room(from.toNat(), sent.toNat(), count, bytes.len(), Nat::pow(2, 64), sent_value,
                                         short_le(count, bytes.len(), short), room)));
                         let moved_by: (read_gpr(R9, moved.gprs).toNat() = from.toNat() + count) =
                             trans(moved_at, cong_fn<Nat, Nat>(λ c => from.toNat() + c, sent_value));
                         let moved_left: (read_gpr(R10, moved.gprs).toNat() = bytes.drop(count).len()) =
-                            trans(cong_fn<BitVec(64), Nat>(λ v => v.toNat(), back.proof.right.right.right.right),
+                            trans(cong_fn<BitVec(64), Nat>(λ v => v.toNat(), back.r10),
                                 left_after(left.sub(sent).toNat(), left.toNat(), sent.toNat(), bytes.len(), count, bytes.drop(count).len(),
                                     remaining, counted, sent_value, rest_len));
                         let sends_rest: LinuxWritesFrom(io_linux(), memory, read_gpr(R9, moved.gprs), bytes.drop(count)) =
@@ -436,73 +449,95 @@ theorem wl_from(memory: IoMemory, at: Nat, pj: PrintJumps,
                                 j(place, λ n _ => io_linux().data.read(memory, bitvec_nat::word_of_nat(64, n)) = Some(b),
                                     sends(i + count, b, whole))
                             };
-                        linux_runs_after_steps(io_linux(), write_events(bytes.drop(count), rest, ending), returned, moved, back.proof.left,
-                            wl_from(memory, at, pj, pieces, targets, ending, ending_ok, rest)(
+                        linux_runs_after_steps(io_linux(), write_events_then(bytes.drop(count), rest, ending, after), returned, moved, back.steps,
+                            wl_from_then(memory, at, pj, done, pieces, targets, after, ending, ending_ok, origin, then, rest)(
                                 bytes.drop(count), ok.right, moved, rest_some(bytes.drop(count).len(), count, bytes.len(), rest_len, short),
                                 rest_fits(bytes.drop(count).len(), count, bytes.len(), rest_len, fits),
-                                back.proof.right.right.left, back.proof.right.left, sends_rest, moved_left,
+                                back.rip_is, back.memory_is, sends_rest, moved_left,
                                 rest_room(read_gpr(R9, moved.gprs).toNat(), from.toNat(), count, bytes.drop(count).len(), bytes.len(), Nat::pow(2, 64),
-                                    moved_by, rest_len, room)))
+                                    moved_by, rest_len, room),
+                                write_kept_trans(moved.gprs, state.gprs, origin, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, refl⟩⟩⟩⟩⟩, kept)))
                     })
             },
-            WriteInterrupted => λ bytes ok state some fits at_write memory_is sends counted room => {
+            WriteInterrupted => λ bytes ok state some fits at_write memory_is sends counted room kept => {
                 let asked = execute_block_normal(print_write_block(), state);
                 let w = wl_ask(memory, at, pj, pieces, state, at_write, memory_is);
                 let sends_there: LinuxWritesFrom(io_linux(), asked.memory, read_gpr(Rsi, asked.gprs), bytes) =
                     j(sym(w.right.left), λ m _ => LinuxWritesFrom(io_linux(), m, read_gpr(R9, state.gprs), bytes), sends);
                 let eintr_errno: Errno(eintr()) = ⟨trivial, trivial⟩;
-                linux_runs_write_failed(io_linux(), state, asked, BitVec::ofNat(1), bytes, write_events(bytes, rest, ending),
+                linux_runs_write_failed(io_linux(), state, asked, BitVec::ofNat(1), bytes, write_events_then(bytes, rest, ending, after),
                     linux_steps_of_fetched(io_linux(), state, asked, w.left), w.right.right.right, refl, refl, counted, sends_there,
                     eintr(), eintr_errno,
                     λ rcx r11 => {
                         let returned = linux_write_return(asked, errno_word(eintr()), rcx, r11);
                         let returned_rip: (returned.rip = eof_rip(wl_at_wtest(at))) =
                             rip_advance(entry, asked.rip, wl_at_write_call(at), 2, w.right.right.left);
-                        let back = wl_retry(memory, at, pj, pieces, targets, returned,
-                            wl_failed(memory, at, pj, pieces, targets, eintr(), eintr_errno, returned,
-                                w.right.left, returned_rip, refl));
-                        let kept = back.witness;
-                        let same_at: (read_gpr(R9, kept.gprs) = read_gpr(R9, state.gprs)) = back.proof.right.right.right.left;
-                        let same_left: (read_gpr(R10, kept.gprs) = read_gpr(R10, state.gprs)) = back.proof.right.right.right.right;
-                        linux_runs_after_steps(io_linux(), write_events(bytes, rest, ending), returned, kept, back.proof.left,
-                            wl_from(memory, at, pj, pieces, targets, ending, ending_ok, rest)(
-                                bytes, ok, kept, some, fits, back.proof.right.right.left, back.proof.right.left,
+                        have failing = wl_failed(memory, at, pj, done, pieces, targets, eintr(), eintr_errno, returned,
+                            w.right.left, returned_rip, refl);
+                        have back = fail_retry(memory, wl_at_wfail(at), pj.rd, pieces.fail, wl_at_write(at), targets.retry,
+                            wl_failing(returned, pj), failing.memory_is, failing.rip_is, refl);
+                        let again = fail_back(wl_failing(returned, pj), pj.rd);
+                        let same_at: (read_gpr(R9, again.gprs) = read_gpr(R9, state.gprs)) = refl;
+                        let same_left: (read_gpr(R10, again.gprs) = read_gpr(R10, state.gprs)) = refl;
+                        linux_runs_after_steps(io_linux(), write_events_then(bytes, rest, ending, after), returned, again,
+                            fetched_steps_trans(io_fetch_access(), io_data_access(), returned, wl_failing(returned, pj), again, failing.steps, back.steps),
+                            wl_from_then(memory, at, pj, done, pieces, targets, after, ending, ending_ok, origin, then, rest)(
+                                bytes, ok, again, some, fits, back.rip_is, back.memory_is,
                                 j(sym(same_at), λ v _ => LinuxWritesFrom(io_linux(), memory, v, bytes), sends),
                                 trans(cong_fn<BitVec(64), Nat>(λ v => v.toNat(), same_left), counted),
-                                j(sym(same_at), λ v _ => v.toNat() + bytes.len() < Nat::pow(2, 64), room)))
+                                j(sym(same_at), λ v _ => v.toNat() + bytes.len() < Nat::pow(2, 64), room),
+                                write_kept_trans(again.gprs, state.gprs, origin, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, refl⟩⟩⟩⟩⟩, kept)))
                     })
             },
         }),
     }
 }
 
-theorem write_targets(at: Nat, pj: PrintJumps,
-    fail_reads: pj.sd.sign_extend(32).toNat() = print_fail_skip(),
-    exit_reads: pj.zd.sign_extend(32).toNat() = print_exit_skip(),
-    back_closes: print_loop_span() + 5 + pj.bd.sign_extend(32).toNat() = Nat::pow(2, 64),
-    retry_closes: print_retry_span() + 6 + pj.rd.sign_extend(32).toNat() = Nat::pow(2, 64)):
-    WriteTargets(at, pj) {
-    let entry: BitVec(64) = BitVec::ofNat(0x4000e8);
-    let at_w = wl_at_write(at);
-    let at_js = wl_at_wjs(at);
-    let at_jz = wl_at_wjz(at);
-    let fail_lands: (at_js + (6 + print_fail_skip()) = wl_at_wfail(at)) =
-        print_fail_sum(at_js, print_advance_len());
-    let exit_lands: (at_jz + (6 + print_exit_skip()) = wl_at_exit(at)) =
-        print_exit_sum(at_jz, eof_retry_len(), eof_fail_len());
-    let at_jmp: (eof_rip(wl_at_wjmp(at)) = next_rip(eof_rip(at_w), print_loop_span())) =
-        trans(rip_count(entry, sym(print_back_sum(at_w, print_write_len(), eof_test_len(), print_advance_len()))),
-            sym(rip_compose(entry, at_w, print_loop_span())));
-    let at_retry: (eof_rip(wl_at_wretry(at)) = next_rip(eof_rip(at_w), print_retry_span())) =
-        trans(rip_count(entry, sym(print_retry_sum(at_w, print_write_len(), eof_test_len(), print_advance_len(), eof_retry_len()))),
-            sym(rip_compose(entry, at_w, print_retry_span())));
-    WriteTargets(
-        to_fail := trans(near_branch_forward(eof_rip(at_js), 6, print_fail_skip(), pj.sd, fail_reads),
-            trans(rip_compose(entry, at_js, 6 + print_fail_skip()), rip_count(entry, fail_lands))),
-        to_exit := trans(near_branch_forward(eof_rip(at_jz), 6, print_exit_skip(), pj.zd, exit_reads),
-            trans(rip_compose(entry, at_jz, 6 + print_exit_skip()), rip_count(entry, exit_lands))),
-        back := trans(cong_fn<BitVec(64), BitVec(64)>(λ address => near_branch_target(address, 5, pj.bd), at_jmp),
-            near_branch_returns(eof_rip(at_w), print_loop_span(), 5, pj.bd, back_closes)),
-        retry := trans(cong_fn<BitVec(64), BitVec(64)>(λ address => near_branch_target(address, 6, pj.rd), at_retry),
-            near_branch_returns(eof_rip(at_w), print_retry_span(), 6, pj.rd, retry_closes)))
+// A program's last write: all sent, exit 0.
+theorem wl_from(memory: IoMemory, at: Nat, pj: PrintJumps,
+    pieces: WriteLoopResident(memory, at, pj), targets: WriteLoopTargets(at, wl_at_exit(at), pj),
+    ending: WriteEnding, ending_ok: WriteEndingOk(ending), steps: List<WriteStep>, origin: Gprs):
+    WlThen(memory, at, [ExitEvent(BitVec::ofNat(0))], ending, steps, origin) {
+    wl_from_then(memory, at, pj, wl_at_exit(at), pieces, targets, [ExitEvent(BitVec::ofNat(0))], ending, ending_ok, origin,
+        finished_then(ending, memory, wl_at_exit(at), [ExitEvent(BitVec::ofNat(0))], origin, wl_exit(memory, at, pj, pieces, origin)), steps)
+}
+
+// The loop's own three jumps, as the producer proves them at the written
+// bytes: closed facts about the loop's offsets from its start, whatever the
+// program it is placed in. JS to the failure tail, JMP and the retry's JZ back
+// to the write.
+record WriteJumpFacts(pj: PrintJumps) {
+    fail: JumpsForward(wl_at_wjs(0), 6, pj.sd, wl_at_wfail(0)),
+    back: JumpsBack(wl_at_wjmp(0), 5, pj.bd, wl_at_write(0)),
+    retry: JumpsBack(wl_at_wretry(0), 6, pj.rd, wl_at_write(0)),
+}
+// And a program's last write, whose all-sent JZ goes to the adjacent exit(0).
+record PrintJumpFacts(pj: PrintJumps) {
+    write: WriteJumpFacts(pj),
+    exit: JumpsForward(wl_at_wjz(0), 6, pj.zd, wl_at_exit(0)),
+}
+
+// A loop at `at` is `at` past one at 0.
+theorem wl_shift(at, i: Nat): wl_at(at, i) = at + wl_at(0, i) { layout_shift(write_loop_lens(), at, 0, i) }
+theorem wl_retry_shift(at: Nat): wl_at_wretry(at) = at + wl_at_wretry(0) {
+    trans(cong_fn<Nat, Nat>(λ x => x + eof_retry_len(), wl_shift(at, 7)), Nat::add_assoc(at, wl_at(0, 7), eof_retry_len()))
+}
+
+// The targets at `at`, the all-sent JZ's target given.
+theorem write_targets_to(at, done: Nat, pj: PrintJumps, facts: WriteJumpFacts(pj),
+    to_done: near_branch_target(eof_rip(wl_at_wjz(at)), 6, pj.zd) = eof_rip(done)): WriteLoopTargets(at, done, pj) {
+    let entry = io_entry();
+    WriteLoopTargets(
+        to_fail := jumps_forward_at(entry, at, wl_at_wjs(0), 6, pj.sd, wl_at_wfail(0), wl_at_wjs(at), wl_at_wfail(at),
+            wl_shift(at, 3), wl_shift(at, 7), facts.fail),
+        to_done := to_done,
+        back := jumps_back_at(entry, at, wl_at_wjmp(0), 5, pj.bd, wl_at_write(0), wl_at_wjmp(at), wl_at_write(at),
+            wl_shift(at, 6), wl_shift(at, 0), facts.back),
+        retry := jumps_back_at(entry, at, wl_at_wretry(0), 6, pj.rd, wl_at_write(0), wl_at_wretry(at), wl_at_write(at),
+            wl_retry_shift(at), wl_shift(at, 0), facts.retry))
+}
+theorem write_targets(at: Nat, pj: PrintJumps, facts: PrintJumpFacts(pj)): WriteLoopTargets(at, wl_at_exit(at), pj) {
+    write_targets_to(at, wl_at_exit(at), pj, facts.write,
+        jumps_forward_at(io_entry(), at, wl_at_wjz(0), 6, pj.zd, wl_at_exit(0), wl_at_wjz(at), wl_at_exit(at), wl_shift(at, 5), wl_shift(at, 8),
+            facts.exit))
 }

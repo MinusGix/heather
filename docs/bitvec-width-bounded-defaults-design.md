@@ -55,11 +55,11 @@ is a small literal and the vector is open. Three consequences showed up.
   expected. It now transports with `j` over that lemma. (The symptom was
   `OutOfFuel`, not `NotConvertible` — the kernel spends the budget trying to
   reduce two 64-column ripples over an open vector before giving up.)
-- **`lib/std/arch/x86_64/block.hthr`'s `short_branch_target_8`/`_6`**
+- **`lib/std/arch/x86_64/x86_64_block.hthr`'s `short_branch_target_8`/`_6`**
   asserted `add(64, rip, sign_extend(…)) = iterate_increment(64, rip, k)` by
   `refl` over an open `rip`. They now transport through `iter_add_eq_add`;
   the statements are unchanged.
-- **`lib/std/arch/x86_64/calls.hthr`'s `add_negative`** did its
+- **`lib/std/arch/x86_64/x86_64_calls.hthr`'s `add_negative`** did its
   increment/decrement bookkeeping on the definitional unfolding of `add` and
   `sub`. Its argument is now stated over `iter_add`/`iter_sub`
   (`iter_add_comm`, `increments_decrements`, `iterate_increment_toNat`) and
@@ -111,7 +111,7 @@ comparison over an open vector.
 ## Deliberately left
 
 - `mul` and `ofNat` above `2^n`, as above.
-- The byte-offset idiom in `lib/std/arch/x86_64/calls.hthr` and
+- The byte-offset idiom in `lib/std/arch/x86_64/x86_64_calls.hthr` and
   `lib/elf64_calls.hthr` (`bitvec::add(64, pointer, ofNat(64, k))` for
   `k` under eight, over an open pointer) still names `add`. Re-pointing it at
   `iter_add` was tried and rejected: it has to be done consistently across

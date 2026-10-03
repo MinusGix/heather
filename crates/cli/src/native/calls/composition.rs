@@ -243,7 +243,7 @@ pub(super) fn finish(module: &mut Module, words: &Words, prefix: &str, caller: &
         format!("LinuxExitRequest(number := refl, status := {prefix}_exit_status(gprs, flags, stack))"), true);
     let (fetch, _) = certify_fetch(module, words, prefix, n, &format!("{end}.memory"), pc, &[0x0f, 0x05], HEADER);
     state_decl(module, &format!("{prefix}_syscall_fetched"),
-        format!("FetchedFrom(call_fetch_access(), {end}.memory, InstructionBytes({end}.rip, linux_syscall_bytes()))"), fetch, true);
+        format!("FetchedFrom(call_fetch_access(), {end}.memory, InstructionBytes({end}.rip, syscall_bytes()))"), fetch, true);
     state_decl(module, &format!("{prefix}_stack_restored"), format!("read_gpr(Rsp, {end}.gprs) = {}", words.get(STACK_TOP)), format!("{prefix}_rsp_{n}(gprs, flags, stack)"), true);
     Ok(())
 }
@@ -321,6 +321,11 @@ mod tests {
         assert!(source.contains(original));
         let wrong = source.replace(original, "read_gpr(Rbx, probe_state_2(gprs, flags, stack).gprs) = probe_word_c()");
         let error = base.fork().elab_module_source("wrong_ledger", &wrong).expect_err("accepted a stale register value");
-        assert!(format!("{error:?}").contains("NotConvertible"), "{}", error.render(&wrong));
+        // Refused at the register fact, naming the value the ledger carries
+        // and the stale one (the state's `.gprs` field reads spell since
+        // issues/omega-record-projection-atoms.md; before, the note had no
+        // spelling and the kernel's bare `NotConvertible` stood).
+        let rendered = error.render(&wrong);
+        assert!(rendered.contains("= probe_word_b`, but `") && rendered.contains("= probe_word_c` is expected"), "{rendered}");
     }
 }

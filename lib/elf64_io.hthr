@@ -23,6 +23,8 @@ import omega;
 record IoMemory { file: List<BitVec(8)>, page: Nat → BitVec(8) }
 
 fn io_page_base() → Nat { 0x410000 }
+// Where the program starts: its first byte, past the 232-byte header.
+fn io_entry() → BitVec(64) { BitVec::ofNat(0x4000e8) }
 
 // A page offset, for an address inside the page.
 fn io_offset_of(address: Nat) → Option<Nat> {
@@ -76,7 +78,7 @@ fn io_linux() → LinuxIo<IoMemory> {
 // The process at its entry: the file as loaded, anything at all in the page,
 // registers and flags arbitrary.
 fn io_initial(file: List<BitVec(8)>, page: Nat → BitVec(8), gprs: Gprs, flags: Flags) → MachineState<IoMemory> {
-    MachineState(gprs, flags, BitVec::ofNat(0x4000e8), IoMemory(file, page))
+    MachineState(gprs, flags, io_entry(), IoMemory(file, page))
 }
 
 theorem io_offset_in_page(i: Nat, inside: i < 4096): io_offset_of(io_page_base() + i) = Some(i) {
@@ -140,6 +142,167 @@ theorem io_leb_false(a, b: Nat, below: b < a): a.leb(b) = False {
         True => λ found => false_elim(Nat::lt_irrefl(b, Nat::le_trans(Succ(b), a, b, below,
             Nat::leb_sound(a, b, j(sym(found), λ decided _ => decided.IsTrue(), trivial))))),
     })(refl)
+}
+
+// ---------------------------------------------------------------------------
+// What the page holds (docs/native-architecture-review.md R7): the one kit
+// for a program that stores bytes and writes them. A store holds what it
+// stored and leaves the rest of the page; runs held side by side are one
+// run; part of a run is a run; and a run the page holds is what a write from
+// it sends.
+
+theorem nth_some_below<A>(xs: List<A>, i: Nat, x: A, present: xs.nth(i) = Some(x)): i < xs.len() {
+    Nat::lt_of_not_le(i, xs.len(), λ past => absurd(trans(sym(present), xs.nth_past_end(i, past))))
+}
+theorem nth_append_below<A>(xs, ys: List<A>): (i: Nat) → i < xs.len() → (xs ++ ys).nth(i) = xs.nth(i) {
+    match xs as λ zs => (i: Nat) → i < zs.len() → (zs ++ ys).nth(i) = zs.nth(i) {
+        Nil => λ i short => false_elim(short),
+        Cons(h, t) => λ i => match i as λ k => k < Succ(t.len()) → (Cons(h, t) ++ ys).nth(k) = Cons(h, t).nth(k) {
+            Zero => λ _ => refl,
+            Succ(k) => λ short => nth_append_below(t, ys, k, short),
+        },
+    }
+}
+
+// The page holds `bytes` from `offset`. (Indexed `i + offset`, so a run
+// from the page's start is `page(i)` itself.)
+fn Stored(page: Nat → BitVec(8), offset: Nat, bytes: List<BitVec(8)>) → Type {
+    (i: Nat) → (byte: BitVec(8)) → bytes.nth(i) = Some(byte) → page(i + offset) = byte
+}
+
+// The page read at an address in it.
+theorem io_read_page(file: List<BitVec(8)>, page: Nat → BitVec(8), address: BitVec(64), i: Nat, inside: i < 4096,
+    at: address.toNat() = io_page_base() + i): io_read(IoMemory(file, page), address) = Some(page(i)) {
+    j(sym(trans(cong_fn<Nat, Option<Nat>>(λ a => io_offset_of(a), at), io_offset_in_page(i, inside))),
+        λ found _ => (match found {
+            Some(k) => Some(page(k)),
+            None => io_file_read(file, address),
+        }) = Some(page(i)), refl)
+}
+
+// A store at the page's `i`-th byte is a store at offset `i`.
+theorem store_at_offset(memory: IoMemory, address: BitVec(64), i: Nat, bytes: List<BitVec(8)>,
+    at: address.toNat() = io_page_base() + i): io_store(memory, address, bytes) = io_store_offset(memory, i, bytes) {
+    cong_fn<Nat, IoMemory>(λ offset => io_store_offset(memory, offset, bytes),
+        trans(cong_fn<Nat, Nat>(λ a => a -io_page_base(), at),
+            trans(cong_fn<Nat, Nat>(λ a => a -io_page_base(), Nat::add_comm(io_page_base(), i)), Nat::add_sub_cancel(i, io_page_base()))))
+}
+theorem page_address(offset: Nat, room: offset + 8 <= 4096): BitVec::ofNat(0x410000 + offset, n := 64).toNat() = 0x410000 + offset {
+    BitVec::toNat_ofNat(64, 0x410000 + offset, { omega })
+}
+theorem page_writable(memory: IoMemory, offset: Nat, room: offset + 8 <= 4096): IoWritable(memory, BitVec::ofNat(0x410000 + offset), 8) {
+    let value = page_address(offset, room);
+    ⟨j(sym(value), λ a _ => io_page_base() <= a, { omega }), j(sym(value), λ a _ => a + 8 <= io_page_base() + 4096, { omega })⟩
+}
+
+// A store holds what it stored ...
+theorem store_reads(memory: IoMemory, offset, j: Nat, bytes: List<BitVec(8)>, byte: BitVec(8), present: bytes.nth(j) = Some(byte)):
+    io_store_offset(memory, offset, bytes).page(offset + j) = byte {
+    let reached = eq_true_of_is_true(offset.leb(offset + j), Nat::leb_complete(offset, offset + j, Nat::le_add_l(offset, j)));
+    let back: ((offset + j) -offset = j) = trans(cong_fn<Nat, Nat>(λ a => a -offset, Nat::add_comm(offset, j)), Nat::add_sub_cancel(j, offset));
+    let found: (bytes.nth((offset + j) -offset) = Some(byte)) = trans(cong_fn<Nat, Option<BitVec(8)>>(λ k => bytes.nth(k), back), present);
+    j(sym(reached), λ b _ => (match b {
+            False => memory.page(offset + j),
+            True => match bytes.nth((offset + j) -offset) { None => memory.page(offset + j), Some(byte) => byte },
+        }) = byte,
+        j(sym(found), λ o _ => (match o { None => memory.page(offset + j), Some(byte) => byte }) = byte, refl))
+}
+theorem stored_store(memory: IoMemory, offset: Nat, bytes: List<BitVec(8)>): Stored(io_store_offset(memory, offset, bytes).page, offset, bytes) {
+    λ i byte present => j(Nat::add_comm(offset, i), λ at _ => io_store_offset(memory, offset, bytes).page(at) = byte,
+        store_reads(memory, offset, i, bytes, byte, present))
+}
+theorem store_byte_here(memory: IoMemory, i: Nat, x: BitVec(8)): io_store_offset(memory, i, [x]).page(i) = x {
+    let reached = eq_true_of_is_true(i.leb(i), Nat::leb_complete(i, i, i.le_refl()));
+    j(sym(reached), λ c _ => (match c {
+            False => memory.page(i),
+            True => match List::nth<BitVec(8)>([x], i -i) { None => memory.page(i), Some(byte) => byte },
+        }) = x,
+        j(sym(Nat::sub_self(i)), λ d _ => (match List::nth<BitVec(8)>([x], d) { None => memory.page(i), Some(byte) => byte }) = x, refl))
+}
+
+// ... and leaves the rest of the page.
+theorem store_below(memory: IoMemory, start: Nat, bytes: List<BitVec(8)>, k: Nat, below: k < start):
+    io_store_offset(memory, start, bytes).page(k) = memory.page(k) {
+    j(sym(io_leb_false(start, k, below)), λ b _ => (match b {
+            False => memory.page(k),
+            True => match bytes.nth(k -start) { None => memory.page(k), Some(x) => x },
+        }) = memory.page(k), refl)
+}
+theorem store_byte_other(memory: IoMemory, i: Nat, x: BitVec(8), k: Nat, other: Not(k = i)):
+    io_store_offset(memory, i, [x]).page(k) = memory.page(k) {
+    (match i.leb(k) as λ c => (i.leb(k) = c) → (match c {
+            False => memory.page(k),
+            True => match List::nth<BitVec(8)>([x], k -i) { None => memory.page(k), Some(byte) => byte },
+        }) = memory.page(k) {
+        False => λ _ => refl,
+        True => λ below => {
+            let le: (i <= k) = Nat::leb_sound(i, k, j(sym(below), λ c _ => c.IsTrue(), trivial));
+            (match k -i as λ d => (k -i = d) → (match List::nth<BitVec(8)>([x], d) { None => memory.page(k), Some(byte) => byte }) = memory.page(k) {
+                Zero => λ none => {
+                    let back: ((k -i) + i = k) = Nat::sub_add_cancel(i, k, le);
+                    false_elim(other({ omega }))
+                },
+                Succ(_) => λ _ => refl,
+            })(refl)
+        },
+    })(refl)
+}
+theorem stored_kept(memory: IoMemory, start: Nat, stores, bytes: List<BitVec(8)>, offset: Nat, below: offset + bytes.len() <= start,
+    held: Stored(memory.page, offset, bytes)): Stored(io_store_offset(memory, start, stores).page, offset, bytes) {
+    λ i byte present => {
+        let inside: (i < bytes.len()) = nth_some_below(bytes, i, byte, present);
+        let under: (i + offset < start) = omega;
+        trans(store_below(memory, start, stores, i + offset, under), held(i, byte, present))
+    }
+}
+
+// Two runs, one after the other, are one.
+theorem stored_join(page: Nat → BitVec(8), offset: Nat, front, back: List<BitVec(8)>, first: Stored(page, offset, front),
+    second: Stored(page, offset + front.len(), back)): Stored(page, offset, front ++ back) {
+    λ i byte present => match Nat::le_dec(front.len(), i) {
+        Inl(past) => {
+            let back_at: ((i -front.len()) + front.len() = i) = Nat::sub_add_cancel(front.len(), i, past);
+            let found: (back.nth(i -front.len()) = Some(byte)) =
+                trans(sym(front.nth_append_r(back, i -front.len())), j(sym(back_at), λ k _ => (front ++ back).nth(k) = Some(byte), present));
+            let place: ((i -front.len()) + (offset + front.len()) = i + offset) = omega;
+            j(place, λ at _ => page(at) = byte, second(i -front.len(), byte, found))
+        },
+        Inr(short) => first(i, byte, trans(sym(nth_append_below(front, back, i, { omega })), present)),
+    }
+}
+
+// Part of a run is a run: `part` is `whole` from `skip`, so it is held from
+// `to`, `skip` past the run's start.
+theorem stored_part(page: Nat → BitVec(8), offset: Nat, whole, part: List<BitVec(8)>, skip, to: Nat, at: offset + skip = to,
+    agree: (i: Nat) → (byte: BitVec(8)) → part.nth(i) = Some(byte) → whole.nth(i + skip) = Some(byte),
+    held: Stored(page, offset, whole)): Stored(page, to, part) {
+    λ i byte present => {
+        let place: ((i + skip) + offset = i + to) = omega;
+        j(place, λ k _ => page(k) = byte, held(i + skip, byte, agree(i, byte, present)))
+    }
+}
+
+// A run the page holds is what a write from its first byte sends.
+theorem stored_sends(memory: IoMemory, offset: Nat, bytes: List<BitVec(8)>, held: Stored(memory.page, offset, bytes),
+    buffer: BitVec(64), at: buffer.toNat() = io_page_base() + offset, fits: offset + bytes.len() <= 4096):
+    LinuxWritesFrom(io_linux(), memory, buffer, bytes) {
+    λ i byte present => {
+        let below = nth_some_below(bytes, i, byte, present);
+        let inside: (i + offset < 4096) = omega;
+        let place: (buffer.toNat() + i = io_page_base() + (i + offset)) = omega;
+        let page: (io_page_base() + 4096 <= Nat::pow(2, 64)) = Nat::leb_sound(io_page_base() + 4096, Nat::pow(2, 64), trivial);
+        let bound: (io_page_base() + (i + offset) < Nat::pow(2, 64)) = omega;
+        let value: (bitvec_nat::word_of_nat(64, buffer.toNat() + i).toNat() = io_page_base() + (i + offset)) =
+            j(sym(place), λ a _ => bitvec_nat::word_of_nat(64, a).toNat() = io_page_base() + (i + offset),
+                bitvec_nat::toNat_word_of_nat(64, io_page_base() + (i + offset), bound));
+        let found = trans(cong_fn<Nat, Option<Nat>>(λ a => io_offset_of(a), value), io_offset_in_page(i + offset, inside));
+        let read: (io_read(memory, bitvec_nat::word_of_nat(64, buffer.toNat() + i)) = Some(memory.page(i + offset))) =
+            j(sym(found), λ o _ => (match o {
+                    Some(k) => Some(memory.page(k)),
+                    None => io_file_read(memory.file, bitvec_nat::word_of_nat(64, buffer.toNat() + i)),
+                }) = Some(memory.page(i + offset)), refl);
+        trans(read, cong_fn<BitVec(8), Option<BitVec(8)>>(λ b => Some(b), held(i, byte, present)))
+    }
 }
 
 theorem io_file_offset_at(k: Nat, inside: k < 65536): io_file_offset(0x400000 + k) = Some(k) {

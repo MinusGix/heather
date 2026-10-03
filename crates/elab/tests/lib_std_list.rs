@@ -433,6 +433,7 @@ fn list_equality_decides_at_a_literal_and_resolves_at_open_endpoints() {
 import list;
 import nat;
 import logic;
+import bool;
 
 fn three() -> List<Nat> { Cons(1, Cons(2, Cons(3, Nil))) }
 fn other() -> List<Nat> { Cons(1, Cons(2, Cons(4, Nil))) }
@@ -471,7 +472,7 @@ theorem open_cons_head<A: DecEq>(x: A, xs: List<A>): ¬(Nil<A> = Cons(x, xs)) {
         "theorem bad(): Cons(1, Nil) = Cons(2, Nil) { decide }\n",
         "theorem bad(xs: List<Nat>): xs = Cons(1, Nil) { decide }\n",
     ] {
-        let src = format!("import list;\nimport nat;\nimport logic;\n{bad}");
+        let src = format!("import list;\nimport nat;\nimport logic;\nimport bool;\n{bad}");
         let mut e = elaborated();
         assert!(
             e.elab_module_source("bad_probe", &src).is_err(),

@@ -17,7 +17,7 @@ error: `And` takes 2 argument(s), found 0
 ```
 
 The same proposition written inline in a `match … as` motive elaborates. Found
-building `lib/std/arch/x86_64/fetched_code.hthr` (2026-09-24), and worked around
+building `lib/std/arch/x86_64/x86_64_fetched_code.hthr` (2026-09-24), and worked around
 by inlining.
 
 Decide whether a type-valued `let` is meant to work (it would read better in

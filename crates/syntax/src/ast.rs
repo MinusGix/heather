@@ -346,6 +346,10 @@ pub struct CtorDecl {
 pub struct FieldDecl {
     pub name: Option<String>,
     pub ty: Ty,
+    /// `name: T := e` — what fills the field when a construction leaves it
+    /// out (docs/named-arguments-design.md §9): checked at the field's type
+    /// as the construction instantiates it, in the declaration's scope.
+    pub default: Option<Box<Expr>>,
     pub span: Span,
 }
 
@@ -1071,6 +1075,13 @@ pub enum ExprKind {
     /// are permuted into declaration order in front of the ordinary tier-0
     /// constructor path, which is what actually elaborates.
     RecordLit { name: String, tyargs: Vec<Ty>, fields: Vec<RecordLitField> },
+    /// `base with { f = e, … }` — functional record update
+    /// (issues/record-update-syntax.md): the record's constructor over
+    /// `base`'s projections, with the written fields replaced. The elaborator
+    /// knows the declaration, so it reports an unknown or repeated field, and
+    /// refuses a dependent record whose kept field's type mentions a replaced
+    /// one.
+    RecordUpdate { base: Box<Expr>, fields: Vec<RecordLitField> },
     /// `{ let x = e; … result }` — a **block in expression position**
     /// (docs/let-and-blocks-design.md §4).
     ///

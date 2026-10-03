@@ -1,0 +1,320 @@
+// The printing pieces (docs/native-first-program-design.md §10,
+// docs/native-syscall-failures-design.md §4): the blocks that hand a count to
+// decimal_line's formatter and store its word, the write loop's blocks and
+// jumps, the formatter's certificate shapes (`PrintFormat`), the bytes a
+// stored line sends, and the trace of a write loop (`write_events`) with what
+// it means for stdout (`prints_the_line`). The write loop runs from
+// elf64_write_loop, at any offset; elf64_count_print is the tail that prints
+// a count and elf64_read_fields the one that prints three. The profile fixes
+// the registers: the count in R11 (copied from the state's R13), the page's
+// base in R8, the line's word in RAX, its start in R9 and its length in R10.
+// (elf64_read_print until 2026-09-29, when its process moved to
+// elf64_count_print.)
+import elf64_read_pieces;
+import decimal_line;
+import elf64_io;
+import linux_x86_64_entry;
+import linux_x86_64_io;
+import function_ir_loop;
+import function_ir_loop_trace;
+import x86_64;
+import x86_64_block;
+import x86_64_fetch;
+import x86_64_data_read;
+import x86_64_access_code;
+import x86_64_access_memory;
+import x86_64_fetched_code;
+import x86_64_structured_block;
+import x86_64_store;
+import bitvec;
+import bitvec_nat;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+import omega;
+import pair;
+
+// The count where the formatter reads it, and where the line's word is
+// stored: the page's base.
+fn print_base_block() → List<Instruction> { [MovRR(R11, R13), MovRI(R8, BitVec::ofNat(0x410000))] }
+fn print_store() → WordStore { WordStore(R8, Rax) }
+// write(1, start, length).
+fn print_write_block() → List<Instruction> {
+    [MovRR(Rsi, R9), MovRR(Rdx, R10), MovRI(Rdi, BitVec::ofNat(1)), MovRI(Rax, BitVec::ofNat(1))]
+}
+// exit(0).
+fn print_exit_block() → List<Instruction> { [MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))] }
+// After a write returned a count: the buffer advances past what was sent, and
+// what remains is counted down, setting ZF when nothing does.
+fn print_advance_block() → List<Instruction> { [AddRR(R9, Rax), SubRR(R10, Rax)] }
+
+// The write loop's jumps: JS to its failure path, JZ to exit(0) when all is
+// sent, JMP back after a short write, JZ back after EINTR.
+record PrintJumps { sd: BitVec(32), zd: BitVec(32), bd: BitVec(32), rd: BitVec(32) }
+
+fn print_base_len() → Nat { canonical_block_bytes(print_base_block()).len() }
+fn print_write_len() → Nat { canonical_block_bytes(print_write_block()).len() }
+fn print_advance_len() → Nat { canonical_block_bytes(print_advance_block()).len() }
+fn print_exit_len() → Nat { canonical_block_bytes(print_exit_block()).len() }
+
+// The formatter's certificates, as the producer generates them from
+// decimal_line's source functions at the profile's registers: the count read
+// from R11 and the page's base from R8, the word to RAX, the start to R9 and
+// the length to R10. Each writes only its scratch, so the registers what runs
+// after it reads are kept.
+fn print_word_scratch() → List<Gpr> { [Rax, Rcx, Rdx, Rbx, R9, R10, R12, R13, R14, R15] }
+fn print_start_scratch() → List<Gpr> { [R9, Rcx, Rdx, Rbx, R10, R12, R13, R14, R15] }
+fn print_length_scratch() → List<Gpr> { [R10, Rcx, Rdx, Rbx, R12, R13, R14, R15] }
+fn PrintWord(word: StructuredCode) → Type {
+    Computes<IoMemory, BitVec(64)>(word, λ n g => n = read_gpr(R11, g), Rax, λ n => line_word(n), print_word_scratch())
+}
+fn PrintStart(start: StructuredCode) → Type {
+    Computes<IoMemory, Pair<BitVec(64), BitVec(64)>>(start, λ x g => (x.fst = read_gpr(R8, g)) ∧ (x.snd = read_gpr(R11, g)), R9,
+        λ x => line_start(x.fst, x.snd), print_start_scratch())
+}
+fn PrintLength(length: StructuredCode) → Type {
+    Computes<IoMemory, BitVec(64)>(length, λ n g => n = read_gpr(R11, g), R10, λ n => line_length(n), print_length_scratch())
+}
+// The formatter's three codes: plain data, so a client carries them as one
+// value.
+record PrintCodes {
+    word: StructuredCode,
+    start: StructuredCode,
+    length: StructuredCode,
+}
+// Their certificates, stated over the codes as a parameter: a record whose
+// later fields depend on its earlier ones costs the kernel far more at every
+// projection.
+record PrintFormat(codes: PrintCodes) {
+    word: PrintWord(codes.word),
+    start: PrintStart(codes.start),
+    length: PrintLength(codes.length),
+}
+
+// A generated piece of the code run from offset `at`, where its bytes are
+// resident: its steps, memory as it was, and RIP at its end, `to` (which a
+// client names by its label). elf64_read_pieces's `BlockRan` is the same for
+// a fixed block.
+record PieceRan(stored: IoMemory, to: Nat, before, after: MachineState<IoMemory>) {
+    steps: FetchedSteps(io_fetch_access(), io_data_access(), before, after),
+    memory_is: after.memory = stored,
+    rip_is: after.rip = eof_rip(to),
+}
+
+// A generated piece's run, from its certificate (`Computes`).
+theorem piece_runs({code: StructuredCode}, {before: MachineState<IoMemory>}, {output: Gpr}, {result: BitVec(64)}, {scratch: List<Gpr>},
+    artifact: StructuredArtifact<IoMemory>(code, before, output, result, λ (register: Gpr) => Kept(scratch, register)), stored: IoMemory, at: Nat,
+    resident: CodeResident(io_fetch_access(), stored, structured_bytes(code), eof_rip(at)),
+    memory_is: before.memory = stored, rip_is: before.rip = eof_rip(at)):
+    PieceRan(stored, at + structured_bytes(code).len(), before, artifact.after) {
+    let fetch = io_fetch_access();
+    let data = io_data_access();
+    let ran = structured_fetched(fetch, data, code, before, artifact.layout,
+        resident_state(fetch, structured_bytes(code), stored, eof_rip(at), before, memory_is, rip_is, resident));
+    PieceRan(
+        steps := j(sym(artifact.execution), λ after _ => FetchedSteps(fetch, data, before, after), ran.left),
+        memory_is := trans(artifact.memory_preserved, memory_is),
+        rip_is := trans(artifact.rip_correct, rip_advance(io_entry(), before.rip, at, structured_bytes(code).len(), rip_is)))
+}
+
+// The write's bytes: the line, which the stored word holds past its leading
+// zeros (elf64_io's stored-bytes kit).
+theorem print_sends(stored: IoMemory, count: Nat, small: count < 10000, memory: IoMemory,
+    memory_is: memory = io_store_offset(stored, 0, word_bytes(line_word(bitvec_nat::word_of_nat(64, count)))),
+    buffer: BitVec(64), buffer_is: buffer.toNat() = 0x410000 + line_skip(count)):
+    LinuxWritesFrom(io_linux(), memory, buffer, decimal_line(count)) {
+    let line = decimal_line(count);
+    let skip = line_skip(count);
+    let wb = word_bytes(line_word(bitvec_nat::word_of_nat(64, count)));
+    let within = line_in_word(count, small);
+    let total: (line.len() + skip = 5) = trans(cong_fn<Nat, Nat>(λ l => l + skip, within.right),
+        Nat::sub_add_cancel(skip, 5, Nat::le_trans(skip, 3, 5, line_skip_le(count), trivial)));
+    let held: Stored(io_store_offset(stored, 0, wb).page, skip, line) =
+        stored_part(io_store_offset(stored, 0, wb).page, 0, wb, line, skip, skip, Nat::add_left_zero(skip),
+            λ i b present => j(sym(line_word_bytes(count, small)), λ bytes _ => bytes.nth(i + skip) = Some(b), within.left(i, b, present)),
+            stored_store(stored, 0, wb));
+    let at: (buffer.toNat() = 0x410000 + skip) = buffer_is;
+    let fits: (skip + line.len() <= 4096) = omega;
+    j(sym(memory_is), λ current _ => LinuxWritesFrom(io_linux(), current, buffer, line),
+        stored_sends(io_store_offset(stored, 0, wb), skip, line, held, buffer, at, fits))
+}
+
+// ---------------------------------------------------------------------------
+// The write loop (docs/native-syscall-failures-design.md §4): write what is
+// left, advance past what was sent, and stop when nothing is left; EINTR
+// retries, and any other failure exits 1.
+
+// The write loop's arithmetic, kept to Nat.
+theorem nothing_below_zero(k: Nat, within: k <= 0): 0 + k = 0 { omega }
+theorem count_below_word(n: Nat, fits: n <= 4096): n < Nat::pow(2, 64) { omega }
+theorem short_le(a, b: Nat, h: a < b): a <= b { omega }
+theorem short_fits(c, n: Nat, short: c < n, fits: n <= 4096): c <= 4096 { omega }
+theorem le_by_values(a, b, x, y: Nat, ha: a = x, hb: b = y, h: x <= y): a <= b { omega }
+theorem all_sent(r, a, b, n: Nat, hr: r = a -b, ha: a = n, hb: b = n): r = 0 {
+    let back: ((a -b) + b = a) = Nat::sub_add_cancel(b, a, { omega });
+    omega
+}
+theorem some_left(r, a, b, x, y: Nat, hr: r = a -b, ha: a = x, hb: b = y, h: y < x): 0 < r {
+    let back: ((a -b) + b = a) = Nat::sub_add_cancel(b, a, { omega });
+    omega
+}
+theorem sent_room(a, s, x, n, top: Nat, hs: s = x, h: x <= n, room: a + n < top): a + s < top { omega }
+theorem left_after(r, a, b, n, c, d: Nat, hr: r = a -b, ha: a = n, hb: b = c, hd: d + c = n): r = d {
+    let back: ((a -b) + b = a) = Nat::sub_add_cancel(b, a, { omega });
+    omega
+}
+theorem moved_place(a, i, c, m: Nat, hm: m = a + c): a + (i + c) = m + i { omega }
+theorem rest_some(d, c, n: Nat, h: d + c = n, short: c < n): 0 < d { omega }
+theorem rest_fits(d, c, n: Nat, h: d + c = n, fits: n <= 4096): d <= 4096 { omega }
+theorem rest_room(m, a, c, d, n, top: Nat, hm: m = a + c, h: d + c = n, room: a + n < top): m + d < top { omega }
+theorem line_some(n, skip: Nat, total: n + skip = 5, small: skip <= 3): 0 < n { omega }
+theorem line_fits(n, skip: Nat, total: n + skip = 5): n <= 4096 { omega }
+theorem line_room(a, n, skip: Nat, at: a = 0x410000 + skip, total: n + skip = 5): a + n < Nat::pow(2, 64) { omega }
+
+theorem drop_nth<A>(xs: List<A>): (k, i: Nat) → xs.drop(k).nth(i) = xs.nth(i + k) {
+    match xs as λ ys => (k, i: Nat) → ys.drop(k).nth(i) = ys.nth(i + k) {
+        Nil => λ k i => refl,
+        Cons(h, t) => λ k i => match k as λ m => Cons(h, t).drop(m).nth(i) = Cons(h, t).nth(i + m) {
+            Zero => refl,
+            Succ(j) => drop_nth(t, j, i),
+        },
+    }
+}
+theorem drop_len<A>(xs: List<A>): (k: Nat) → k <= xs.len() → xs.drop(k).len() + k = xs.len() {
+    match xs as λ ys => (k: Nat) → k <= ys.len() → ys.drop(k).len() + k = ys.len() {
+        Nil => λ k within => nothing_below_zero(k, within),
+        Cons(h, t) => λ k => match k as λ m => m <= Cons(h, t).len() → Cons(h, t).drop(m).len() + m = Cons(h, t).len() {
+            Zero => λ _ => refl,
+            Succ(j) => λ within => cong_fn<Nat, Nat>(λ n => Succ(n), drop_len(t, j, { let w: (Succ(j) <= Succ(t.len())) = within; omega })),
+        },
+    }
+}
+
+// What the writes return, in order: short counts, and EINTRs that are
+// retried; then how the writing ended, with the rest sent whole or at a
+// failure other than EINTR.
+inductive WriteStep {
+    Partial(count: Nat),
+    WriteInterrupted,
+}
+inductive WriteEnding {
+    Finished,
+    WriteFailedWith(errno: Nat),
+}
+
+// The trace of writing `bytes` to stdout: `after` once all is sent, exit 1
+// at a failure (docs/native-tr-design.md §3.1).
+fn write_events_then(bytes: List<BitVec(8)>, steps: List<WriteStep>, ending: WriteEnding, after: List<LinuxEvent>) → List<LinuxEvent> {
+    match steps {
+        Nil => match ending {
+            Finished => Cons(WriteEvent(BitVec::ofNat(1), bytes, Wrote(bytes.len())), after),
+            WriteFailedWith(errno) => [WriteEvent(BitVec::ofNat(1), bytes, WriteFailed(errno)), ExitEvent(BitVec::ofNat(1))],
+        },
+        Cons(step, rest) => match step {
+            Partial(count) => Cons(WriteEvent(BitVec::ofNat(1), bytes, Wrote(count)), write_events_then(bytes.drop(count), rest, ending, after)),
+            WriteInterrupted => Cons(WriteEvent(BitVec::ofNat(1), bytes, WriteFailed(eintr())), write_events_then(bytes, rest, ending, after)),
+        },
+    }
+}
+// Writing `bytes` as a program's last output: exit 0 once all is sent.
+fn write_events(bytes: List<BitVec(8)>, steps: List<WriteStep>, ending: WriteEnding) → List<LinuxEvent> {
+    write_events_then(bytes, steps, ending, [ExitEvent(BitVec::ofNat(0))])
+}
+// A short write sends less than what is left.
+fn WriteSteps(steps: List<WriteStep>) → List<BitVec(8)> → Type {
+    match steps {
+        Nil => λ _ => True,
+        Cons(step, rest) => match step {
+            Partial(count) => λ bytes => (count < bytes.len()) ∧ WriteSteps(rest)(bytes.drop(count)),
+            WriteInterrupted => λ bytes => WriteSteps(rest)(bytes),
+        },
+    }
+}
+fn WriteEndingOk(ending: WriteEnding) → Type {
+    match ending { Finished => True, WriteFailedWith(errno) => Errno(errno) ∧ Not(errno = eintr()) }
+}
+
+// After a write returned `count`: TEST, JS not taken, the advance. R9 has
+// moved past what was sent, R10 counts what is left, and ZF says whether
+// anything is.
+fn WriteAdvanced(returned: MachineState<IoMemory>, memory: IoMemory, count: Nat, at: BitVec(64)) → Type {
+    Exists<MachineState<IoMemory>>(λ moved => FetchedSteps(io_fetch_access(), io_data_access(), returned, moved) ∧
+        ((moved.memory = memory) ∧ ((moved.rip = at) ∧
+        ((read_gpr(R9, moved.gprs) = read_gpr(R9, returned.gprs).add(bitvec_nat::word_of_nat(64, count))) ∧
+        ((read_gpr(R10, moved.gprs) = read_gpr(R10, returned.gprs).sub(bitvec_nat::word_of_nat(64, count))) ∧
+        (moved.flags.zf = is_zero_bits(64, read_gpr(R10, returned.gprs).sub(bitvec_nat::word_of_nat(64, count)))))))))
+}
+// Something is left: JZ not taken, JMP back to the write.
+fn WriteBack(returned: MachineState<IoMemory>, memory: IoMemory, count: Nat, at: BitVec(64)) → Type {
+    Exists<MachineState<IoMemory>>(λ back => FetchedSteps(io_fetch_access(), io_data_access(), returned, back) ∧
+        ((back.memory = memory) ∧ ((back.rip = at) ∧
+        ((read_gpr(R9, back.gprs) = read_gpr(R9, returned.gprs).add(bitvec_nat::word_of_nat(64, count))) ∧
+        (read_gpr(R10, back.gprs) = read_gpr(R10, returned.gprs).sub(bitvec_nat::word_of_nat(64, count)))))))
+}
+
+theorem take_whole<A>(xs: List<A>): xs.take(xs.len()) = xs {
+    match xs as λ ys => ys.take(ys.len()) = ys {
+        Nil => refl,
+        Cons(h, t) => List::cong_cons(h, take_whole(t)),
+    }
+}
+
+// On a finished write loop, stdout received exactly the bytes.
+theorem stdout_is_bytes(steps: List<WriteStep>): (bytes: List<BitVec(8)>) → WriteSteps(steps)(bytes) →
+    sent_to(BitVec::ofNat(1), write_events(bytes, steps, Finished)) = bytes {
+    match steps as λ ss => (bytes: List<BitVec(8)>) → WriteSteps(ss)(bytes) → sent_to(BitVec::ofNat(1), write_events(bytes, ss, Finished)) = bytes {
+        Nil => λ bytes _ => trans(List::append_nil(bytes.take(bytes.len())), take_whole(bytes)),
+        Cons(step, rest) => match step as λ st => (bytes: List<BitVec(8)>) → WriteSteps(Cons(st, rest))(bytes) →
+                sent_to(BitVec::ofNat(1), write_events(bytes, Cons(st, rest), Finished)) = bytes {
+            Partial(count) => λ bytes ok => trans(
+                cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ tail => bytes.take(count) ++ tail, stdout_is_bytes(rest, bytes.drop(count), ok.right)),
+                bytes.take_append_drop(count)),
+            WriteInterrupted => λ bytes ok => stdout_is_bytes(rest, bytes, ok),
+        },
+    }
+}
+
+// A finished write loop sends exactly the bytes, then whatever follows does.
+theorem stdout_then(steps: List<WriteStep>, after: List<LinuxEvent>): (bytes: List<BitVec(8)>) → WriteSteps(steps)(bytes) →
+    sent_to(BitVec::ofNat(1), write_events_then(bytes, steps, Finished, after)) = bytes ++ sent_to(BitVec::ofNat(1), after) {
+    match steps as λ ss => (bytes: List<BitVec(8)>) → WriteSteps(ss)(bytes) →
+            sent_to(BitVec::ofNat(1), write_events_then(bytes, ss, Finished, after)) = bytes ++ sent_to(BitVec::ofNat(1), after) {
+        Nil => λ bytes _ => cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ sent => sent ++ sent_to(BitVec::ofNat(1), after), take_whole(bytes)),
+        Cons(step, rest) => match step as λ st => (bytes: List<BitVec(8)>) → WriteSteps(Cons(st, rest))(bytes) →
+                sent_to(BitVec::ofNat(1), write_events_then(bytes, Cons(st, rest), Finished, after)) = bytes ++ sent_to(BitVec::ofNat(1), after) {
+            Partial(count) => λ bytes ok => trans(
+                cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ tail => bytes.take(count) ++ tail, stdout_then(rest, after, bytes.drop(count), ok.right)),
+                trans(sym(List::append_assoc(bytes.take(count), bytes.drop(count), sent_to(BitVec::ofNat(1), after))),
+                    cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ front => front ++ sent_to(BitVec::ofNat(1), after), bytes.take_append_drop(count)))),
+            WriteInterrupted => λ bytes ok => stdout_then(rest, after, bytes, ok),
+        },
+    }
+}
+
+// Reads send nothing, whatever was read before the history starts.
+theorem reads_send_nothing_from(steps: List<EofStep<True>>, tail: List<LinuxEvent>): (seen: List<BitVec(8)>) →
+    sent_to(BitVec::ofNat(1), eof_run<True, False>(λ _ _ _ rest => rest, λ _ _ _ => Nil, steps, AtEnd, tail, seen)) = sent_to(BitVec::ofNat(1), tail) {
+    match steps as λ ss => (seen: List<BitVec(8)>) →
+            sent_to(BitVec::ofNat(1), eof_run<True, False>(λ _ _ _ rest => rest, λ _ _ _ => Nil, ss, AtEnd, tail, seen)) = sent_to(BitVec::ofNat(1), tail) {
+        Nil => λ seen => refl,
+        Cons(step, rest) => match step as λ st => (seen: List<BitVec(8)>) →
+                sent_to(BitVec::ofNat(1), eof_run<True, False>(λ _ _ _ rest => rest, λ _ _ _ => Nil, Cons(st, rest), AtEnd, tail, seen)) =
+                    sent_to(BitVec::ofNat(1), tail) {
+            Chunk(bytes, _) => λ seen => reads_send_nothing_from(rest, tail, seen ++ bytes),
+            Interrupted => λ seen => reads_send_nothing_from(rest, tail, seen),
+        },
+    }
+}
+theorem reads_send_nothing(steps: List<EofStep<True>>, tail: List<LinuxEvent>):
+    sent_to(BitVec::ofNat(1), eof_events(steps, AtEnd, tail)) = sent_to(BitVec::ofNat(1), tail) {
+    reads_send_nothing_from(steps, tail, Nil)
+}
+
+// What stdout receives on a run that ends at the empty read and a finished
+// write: exactly the count's line, whatever the reads and writes returned.
+theorem prints_the_line(steps: List<EofStep<True>>, writes: List<WriteStep>, total: Nat, ok: WriteSteps(writes)(decimal_line(total))):
+    sent_to(BitVec::ofNat(1), eof_events(steps, AtEnd, write_events(decimal_line(total), writes, Finished))) = decimal_line(total) {
+    trans(reads_send_nothing(steps, write_events(decimal_line(total), writes, Finished)), stdout_is_bytes(writes, decimal_line(total), ok))
+}

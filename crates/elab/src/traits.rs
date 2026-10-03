@@ -138,7 +138,7 @@ mod designation_key_tests {
 /// (`docs/instance-resolved-key-design.md` §3).
 ///
 /// The first component is the class's qualified key, the second the carrier
-/// head's — `("logic::Decide", "int::Int::Le", "")` and `("logic::Decide",
+/// head's — `("bool::Decide", "int::Int::Le", "")` and `("bool::Decide",
 /// "nat::Nat::Le", "")` are two instances that coexist, where keying the head on
 /// the written name `Le` collided them
 /// (issues/instance-key-collides-across-modules.md).
@@ -855,6 +855,13 @@ fn rename_expr(m: &Ren, e: &Expr) -> Expr {
             recv: Box::new(rename_expr(m, recv)),
             idx: Box::new(rename_expr(m, idx)),
         },
+        RecordUpdate { base, fields } => RecordUpdate {
+            base: Box::new(rename_expr(m, base)),
+            fields: fields
+                .iter()
+                .map(|f| RecordLitField { name: f.name.clone(), expr: rename_expr(m, &f.expr), span: f.span })
+                .collect(),
+        },
         RecordLit {
             name,
             tyargs,
@@ -1288,6 +1295,7 @@ impl Elaborator {
                         parent.index.clone(),
                         parent.span,
                     ),
+                    default: None,
                     span: parent.span,
                 });
                 owner.push(None);
@@ -1317,6 +1325,7 @@ impl Elaborator {
                 fields.push(FieldDecl {
                     name: f.name.clone(),
                     ty: rename_ty(&rename, &f.ty),
+                    default: None,
                     span: parent.span,
                 });
                 owner.push(Some(from));

@@ -110,7 +110,7 @@ access; it does not claim x86 memory is total.
   `docs/x86-64-execution-boundary.md`. The eventual canonical `step` composes
   fetch/decode from bytes at RIP with one typed `execute` relation. Compiler
   encoding and raw-binary analysis prove into the same decoded object; neither
-  owns a second instruction meaning. `lib/std/arch/x86_64/model.hthr` begins the vertical
+  owns a second instruction meaning. `lib/std/arch/x86_64/x86_64.hthr` begins the vertical
   slice with all GPR names, arithmetic flags, opaque memory, decoded 1--15 byte
   length, RIP fallthrough, and register forms of `MOV` and `ADD`. The generic
   total-location vocabulary begins separately in `lib/std/location.hthr`.

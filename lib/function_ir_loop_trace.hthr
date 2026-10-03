@@ -36,17 +36,12 @@ theorem loop_bit_zf<M>(register: Gpr, state: MachineState<M>, bit: Bool,
         test_zero_extended_bool(bit))
 }
 
-// A Bool carry sits in its register as a placed bit; a loop with nothing to
-// keep invariant says so.
-fn loop_bool_rep(word: BitVec(64), bit: Bool) → Type { word = loop_bit(bit) }
-fn loop_no_invariant<C>(cursor, budget: Nat, carry: C) → Type { True }
-
-// A Nat carry sits in its register as its word (docs/native-bounded-loops-design.md
-// §9a). Reading it back needs a bound, which the counting invariant keeps:
-// carry and remaining budget together fit in a word, so no count can wrap.
-// A step keeps it when it advances by at most one (LoopAdvancesByAtMostOne,
-// function_ir_loop).
-fn loop_nat_rep(word: BitVec(64), count: Nat) → Type { LoopWord(64, word, count) }
+// A Bool sits in its register as a placed bit (`loop_bit`), a Nat as its word
+// (`LoopWord`, docs/native-bounded-loops-design.md §9a); the loop generator
+// states each state's placement from these. Reading a Nat back needs a bound,
+// which the counting invariant keeps: the count and the remaining budget
+// together fit in a word, so no count can wrap. A step keeps it when it
+// advances by at most one (LoopAdvancesByAtMostOne, function_ir_loop).
 fn loop_fits(cursor, budget, carry: Nat) → Type { carry + budget < Nat::pow(2, 64) }
 
 theorem loop_fits_bound(cursor, budget, carry: Nat, fits: loop_fits(cursor, budget, carry)):
@@ -87,16 +82,11 @@ theorem loop_nat_word(word: BitVec(64), count: Nat, computed: word = bitvec_nat:
 
 // Where a loop keeps its values. `flag` is the guard's result and survives
 // the body, so at the exit it tells a Break from the other outcomes; `step`
-// is the body's Continue/Break discriminator. `carry` names the register of
-// a one-register carry; a carry's placement is `rep`, over the register file
+// is the body's Continue/Break discriminator. `carry` names the state's first
+// register; a state's placement is `rep`, over the register file
 // (docs/native-wc-design.md §4.2), so a record's fields sit in several.
 record LoopPlacement {
     base: Gpr, length: Gpr, needle: Gpr, cursor: Gpr, budget: Gpr, carry: Gpr, flag: Gpr, step: Gpr,
-}
-
-// A one-register carry's placement over the register file.
-fn loop_in<C>(register: Gpr, rep: BitVec(64) → C → Type) → Gprs → C → Type {
-    λ gprs carry => rep(read_gpr(register, gprs), carry)
 }
 
 // The invariant at the loop's head. `rep` says how a carry sits in the

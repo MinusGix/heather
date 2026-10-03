@@ -2,11 +2,10 @@
 //! source agreement with the shared physical execution artifact.
 use super::*;
 use cert::StructuredRegion;
-use std::collections::BTreeSet;
 mod publication;
 mod read;
 pub use read::{generate_elaborated_read_x86, ReadX86Emission};
-pub use publication::{generate_elaborated_typed_x86, generate_elaborated_typed_fields_x86, FieldPiece, FieldEmission};
+pub use publication::{generate_elaborated_typed_x86, generate_elaborated_typed_consuming_x86, generate_elaborated_piece_x86, generate_elaborated_typed_fields_x86, FieldPiece, FieldEmission};
 
 /// Source types remain distinct even when their FunctionIR ports have the same
 /// width: Bool is represented by BitVec(1), but is not a BitVec(1) parameter.
@@ -28,7 +27,7 @@ impl StructuredSourceType {
             _ => self.width().ok_or_else(|| SourceError::Unsupported("Nat values need a representation proof before lowering".into())),
         }
     }
-    fn name(self) -> String { match self { Self::Word(width) => format!("BitVec({width})"), Self::Boolean => "Bool".into(), Self::Natural | Self::NatWord => "Nat".into(), Self::Record => "record".into() } }
+    pub(super) fn name(self) -> String { match self { Self::Word(width) => format!("BitVec({width})"), Self::Boolean => "Bool".into(), Self::Natural | Self::NatWord => "Nat".into(), Self::Record => "record".into() } }
     /// A Nat in a result position is always carried.
     fn carried(self) -> Self { if self == Self::Natural { Self::NatWord } else { self } }
 }
@@ -59,10 +58,21 @@ pub struct ReflectedStructuredFunction {
     pub result: StructuredSourceType,
     pub region: StructuredRegion,
     pub choice: Option<StructuredSourceChoice>,
+    /// A stream filter's step (`stream_filter::Filtered<C>`,
+    /// docs/native-stream-filter-design.md §5.2): `record` and `result` are
+    /// the state's, and two output ports follow its own, whether the byte
+    /// emits (a Bool) and the byte it emits (a `BitVec(8)`, 0 when none).
+    pub filtered: bool,
     /// Where a composition crosses at a helper call (cert::SourceValue).
     pub sources: cert::SourceValues,
     /// A composed helper body's result, spelled inside the body.
     pub bodies: cert::SourceBodies,
+    /// Some match was on a connective (`x || y`, which an `if` on `P ∨ Q`
+    /// is: issues/native-frontend-decided-matches.md), branched on one operand
+    /// at a time: the source expansion is then not the source by conversion
+    /// but by case analysis on those operands, and spells each one as the
+    /// source does.
+    pub decided: bool,
 }
 
 /// Two constructors with the same scalar payload use a discriminator and a
@@ -97,11 +107,18 @@ impl ReflectedStructuredFunction {
     /// The result's source type, as a declaration spells it.
     pub fn result_type_name(&self) -> String {
         let payload = self.record.as_ref().map_or_else(|| self.result.name(), |record| record.type_name.clone());
+        if self.filtered { return format!("stream_filter::Filtered<{payload}>"); }
         self.choice.as_ref().map_or_else(|| payload.clone(), |choice| format!("{}<{payload}>", choice.type_name))
     }
     /// The result's scalar components, in output port order before a choice's
     /// discriminator: the fields of a record result, else the one scalar.
     pub fn result_components(&self) -> Vec<StructuredSourceType> {
+        let mut components = self.state_components();
+        if self.filtered { components.extend([StructuredSourceType::Boolean, StructuredSourceType::Word(8)]); }
+        components
+    }
+    /// The state's components alone: a filter step's without its emit.
+    pub fn state_components(&self) -> Vec<StructuredSourceType> {
         self.record.as_ref().map_or_else(|| vec![self.result], |record| record.fields.iter().map(|(_, ty)| *ty).collect())
     }
     /// The output ports the source's types imply.
@@ -190,8 +207,9 @@ pub fn reflect_elaborated_structured(elaborator: &Elaborator, source_name: &str)
         let Term::Lam { body, .. } = term else { return unsupported("missing source parameter"); };
         term = body;
     }
-    let (result, choice, record) = result_type(elaborator, caller, result)?;
+    let (result, choice, record, filtered) = result_type(elaborator, caller, result)?;
     let comparison = elaborator.global_abs("bitvec::BitVec::unsigned_lt_bit").ok_or_else(|| SourceError::Unsupported("unsigned comparison is not loaded".into()))?;
+    let equal = elaborator.global_abs("bitvec::BitVec::eq_bit").ok_or_else(|| SourceError::Unsupported("equality is not loaded".into()))?;
     let payload = |slot| elaborator.lookup_inductive("bool::Bool")
         .and_then(|ind| elaborator.types.gdefs().abs_for(&crate::gendefs::GenDef::PayloadCode(ind.tag, slot)))
         .map(|abs| *abs as usize).ok_or_else(|| SourceError::Unsupported("Boolean payload identities are not loaded".into()));
@@ -199,9 +217,17 @@ pub fn reflect_elaborated_structured(elaborator: &Elaborator, source_name: &str)
     let components = record.as_ref().map_or_else(|| vec![result], |record| record.fields.iter().map(|(_, ty)| *ty).collect::<Vec<_>>());
     let fields = components.iter().enumerate().map(|(i, ty)| Ok(Port { id: parameters.len() as u64 + i as u64, width: ty.scalar_width()? }))
         .collect::<Result<Vec<_>, SourceError>>()?;
-    let output = fields[0];
     let exit = choice.as_ref().map(|_| Port { id: parameters.len() as u64 + fields.len() as u64, width: 1 });
+    // A filter's emit follows its state; a state of no fields (Stateless)
+    // has only these.
+    let emit = filtered.then(|| {
+        let base = parameters.len() as u64 + fields.len() as u64;
+        (Port { id: base, width: 1 }, Port { id: base + 1, width: 8 })
+    });
+    let output = fields.first().copied().or(emit.map(|(flag, _)| flag)).ok_or_else(|| SourceError::Unsupported("a result has no ports".into()))?;
     let record_result = record.clone().map(|record| (record, fields.clone()));
+    // A filter's intermediate values are numbered past all of its outputs.
+    let first_free = match emit { Some((_, byte)) => byte.id + 1, None => output.id + 1 + u64::from(exit.is_some()) };
     // Every Nat starts erased; one the body turns out to consume gets a port
     // and the reflection runs again.
     loop {
@@ -218,13 +244,13 @@ pub fn reflect_elaborated_structured(elaborator: &Elaborator, source_name: &str)
                 None => bindings.push(ports[0]),
             }
         }
-        let mut builder = Builder { elaborator, caller, operations: OperationGlobals::resolve(elaborator)?, comparison, boolean_payloads,
-            inputs: interface(&parameters), bindings, records, record_result: record_result.clone(), result, output, exit, stack: vec![caller],
-            next_id: output.id + 1 + u64::from(exit.is_some()), needs_port: None, known: BTreeMap::new(), sources: BTreeMap::new(), bodies: BTreeMap::new() };
+        let mut builder = Builder { elaborator, caller, operations: OperationGlobals::resolve(elaborator)?, comparison, equal, boolean_payloads,
+            inputs: interface(&parameters), bindings, records, record_result: record_result.clone(), result, output, exit, emit, stack: vec![caller],
+            next_id: first_free, needs_port: None, known: BTreeMap::new(), sources: BTreeMap::new(), bodies: BTreeMap::new(), decided: false };
         match builder.region(term, 0) {
             Ok(region) => {
                 cert::validate_structured_region(&region).map_err(SourceError::InvalidRegion)?;
-                return Ok(ReflectedStructuredFunction { source_name, parameters, signature, leaves, record, result, region, choice, sources: builder.sources, bodies: builder.bodies });
+                return Ok(ReflectedStructuredFunction { source_name, parameters, signature, leaves, record, result, region, choice, filtered, sources: builder.sources, bodies: builder.bodies, decided: builder.decided });
             }
             Err(error) => match builder.needs_port.and_then(|index| leaves.iter().position(|(parameter, field)| *parameter == index && field.is_none())) {
                 Some(leaf) if parameters[leaf] == StructuredSourceType::Natural => parameters[leaf] = StructuredSourceType::NatWord,
@@ -255,17 +281,26 @@ fn source_type(elaborator: &Elaborator, caller: usize, ty: &Type) -> Result<Stru
         _ => unsupported("unsupported structured source type"),
     }
 }
-fn result_type(elaborator: &Elaborator, caller: usize, ty: &Type) -> Result<(StructuredSourceType, Option<StructuredSourceChoice>, Option<StructuredSourceRecord>), SourceError> {
+fn result_type(elaborator: &Elaborator, caller: usize, ty: &Type) -> Result<(StructuredSourceType, Option<StructuredSourceChoice>, Option<StructuredSourceRecord>, bool), SourceError> {
     if let Ok(scalar) = source_type(elaborator, caller, ty) {
         let scalar = scalar.carried();
         scalar.scalar_width()?;
-        return Ok((scalar, None, None));
+        return Ok((scalar, None, None, false));
     }
-    if let Some(record) = record_type(elaborator, caller, ty)? { return Ok((StructuredSourceType::Record, None, Some(record))); }
+    if let Some(record) = record_type(elaborator, caller, ty)? { return Ok((StructuredSourceType::Record, None, Some(record), false)); }
     let Type::El { tm, .. } = ty else { return unsupported("unsupported result type"); };
     let (head, args) = application_spine(tm);
     let key = absolute(head, caller).and_then(|abs| elaborator.types.gdefs().key_for_abs(&(abs as u32)));
     let Some(crate::gendefs::GenDef::TyCodeFn(tag)) = key else { return unsupported("result must be scalar or a two-constructor scalar choice"); };
+    // A filter step's result, by its resolved identity: its state is a
+    // record of scalars or a scalar, as a loop's is.
+    if elaborator.lookup_inductive("stream_filter::Filtered").is_some_and(|ind| ind.tag == *tag) && args.len() == 1 {
+        if let Some(record) = record_code(elaborator, caller, args[0])? { return Ok((StructuredSourceType::Record, None, Some(record), true)); }
+        let scalar = source_code(elaborator, caller, args[0])
+            .map_err(|_| SourceError::Unsupported("a filter step's state must be Nat, Bool, BitVec(w), or a record of those".into()))?.carried();
+        scalar.scalar_width()?;
+        return Ok((scalar, None, None, true));
+    }
     let ind = elaborator.types.by_tag(*tag).ok_or_else(|| SourceError::Unsupported("missing result declaration".into()))?;
     if ind.recursive || ind.index.is_some() || !ind.valparams.is_empty() || ind.params.len() != 1 || args.len() != 1 || ind.ctors.len() != 2
         || !ind.ctors.iter().all(|ctor| ctor.fields.len() == 1 && matches!(&ctor.fields[0].1.kind, TyKind::Named { name, args } if name == &ind.params[0] && args.is_empty())) {
@@ -273,10 +308,10 @@ fn result_type(elaborator: &Elaborator, caller: usize, ty: &Type) -> Result<(Str
     }
     let qualify = |name: &str| if ind.scope.module.is_empty() { name.to_string() } else { format!("{}::{name}", ind.scope.module) };
     let choice = StructuredSourceChoice { type_name: qualify(&ind.name), constructors: [qualify(&ind.ctors[0].name), qualify(&ind.ctors[1].name)] };
-    if let Some(record) = record_code(elaborator, caller, args[0])? { return Ok((StructuredSourceType::Record, Some(choice), Some(record))); }
+    if let Some(record) = record_code(elaborator, caller, args[0])? { return Ok((StructuredSourceType::Record, Some(choice), Some(record), false)); }
     let scalar = source_code(elaborator, caller, args[0])?.carried();
     scalar.scalar_width()?;
-    Ok((scalar, Some(choice), None))
+    Ok((scalar, Some(choice), None, false))
 }
 
 struct Builder<'a> {
@@ -284,6 +319,7 @@ struct Builder<'a> {
     caller: usize,
     operations: OperationGlobals,
     comparison: usize,
+    equal: usize,
     boolean_payloads: [usize; 2],
     inputs: Vec<Port>,
     bindings: Vec<(StructuredSourceType, Option<Port>)>,
@@ -294,6 +330,8 @@ struct Builder<'a> {
     result: StructuredSourceType,
     output: Port,
     exit: Option<Port>,
+    /// A filter step's emit ports: the flag, then the byte.
+    emit: Option<(Port, Port)>,
     next_id: u64,
     stack: Vec<usize>,
     /// Set when the body consumes an erased Nat parameter: reflection retries
@@ -308,6 +346,27 @@ struct Builder<'a> {
     /// a crossing's link reads when the helper's argument is plain but its
     /// body composes (`times256(x) = double(double(…))`).
     bodies: cert::SourceBodies,
+    /// A connective was branched on (ReflectedStructuredFunction::decided).
+    decided: bool,
+}
+
+/// What a match tests (Builder::branch): Bool values at the leaves (a
+/// comparison's bit among them), connectives above them.
+enum Test<'t> {
+    /// A Bool the source computes.
+    Value(&'t Term),
+    Not(Box<Test<'t>>),
+    And(Box<Test<'t>>, Box<Test<'t>>),
+    Or(Box<Test<'t>>, Box<Test<'t>>),
+}
+
+/// Where a test's outcome leads: one of the match's arms, or a further test.
+#[derive(Clone)]
+enum Arm<'t> {
+    Body(&'t Term),
+    /// A Bool result that is a connective's outcome (`space(b) = x || y`).
+    Outcome(bool),
+    Then(&'t Test<'t>, Box<Arm<'t>>, Box<Arm<'t>>),
 }
 
 // Local interning preserves DAG sharing. There is no parallel source AST;
@@ -317,8 +376,10 @@ struct Dag { nodes: Vec<Node>, values: BTreeMap<DagKey, Port> }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum DagKey {
     Constant(u64, u64),
+    Move(u64, u64),
     Binary(SourceBinaryOperation, u64, u64, u64),
     UnsignedLessThan(u64, u64, u64),
+    Equal(u64, u64, u64),
 }
 
 fn source_type_of(ty: StructuredSourceType) -> Option<cert::SourceType> {
@@ -338,7 +399,9 @@ fn read_back(nodes: &[Node], port: Port, produced: &cert::SourceValues) -> Optio
     let operand = |id: u64, width: u64| read_back(nodes, Port { id, width }, produced).map(Box::new);
     Some(match *node {
         Node::Const { width, value, .. } => SourceValue::Constant { width, value },
+        Node::Move { width, source, .. } => return read_back(nodes, Port { id: source, width }, produced),
         Node::UnsignedLessThan { width, left, right, .. } => SourceValue::Less { width, left: operand(left, width)?, right: operand(right, width)? },
+        Node::Equal { width, left, right, .. } => SourceValue::Equal { width, left: operand(left, width)?, right: operand(right, width)? },
         Node::Add { width, left, right, .. } | Node::Sub { width, left, right, .. } | Node::BitAnd { width, left, right, .. }
         | Node::BitOr { width, left, right, .. } | Node::BitXor { width, left, right, .. } => {
             let operation = match node { Node::Add { .. } => "add", Node::Sub { .. } => "sub", Node::BitAnd { .. } => "band", Node::BitOr { .. } => "bor", _ => "bxor" };
@@ -361,6 +424,7 @@ impl Builder<'_> {
     fn outputs(&self) -> Vec<Port> {
         let mut outputs = self.record_result.as_ref().map_or_else(|| vec![self.output], |(_, fields)| fields.clone());
         if let Some(exit) = self.exit { outputs.push(exit); }
+        if let Some((flag, byte)) = self.emit { outputs.extend([flag, byte]); }
         outputs
     }
     /// `fst@(snd@ⁱ⁺¹(x))` over a record parameter `x`: its field `i`'s port.
@@ -381,10 +445,7 @@ impl Builder<'_> {
     /// An input as a result: the port itself, or a copy into `target`.
     fn place(&mut self, dag: &mut Dag, width: u64, input: Port, target: Option<u64>) -> Result<Port, SourceError> {
         match target {
-            Some(output) => {
-                let zero = self.constant(dag, width, 0, None)?;
-                self.node(dag, DagKey::Binary(SourceBinaryOperation::BitOr, width, zero.id, input.id), width, Some(output), |output| Node::BitOr { width, output, left: zero.id, right: input.id })
-            }
+            Some(output) => self.node(dag, DagKey::Move(width, input.id), width, Some(output), |output| Node::Move { width, output, source: input.id }),
             None => Ok(input),
         }
     }
@@ -472,11 +533,14 @@ impl Builder<'_> {
         }
         let (head, args) = application_spine(term);
         let abs = absolute(head, self.caller).ok_or_else(|| SourceError::Unsupported("source value must use a resolved pure operation".into()))?;
-        if abs == self.comparison && args.len() == 3 && expected == StructuredSourceType::Boolean {
+        if (abs == self.comparison || abs == self.equal) && args.len() == 3 && expected == StructuredSourceType::Boolean {
             let operand_width = nat_literal(args[0]).filter(|width| *width <= 64).ok_or_else(|| SourceError::Unsupported("comparison width must be a literal up to 64".into()))?;
             let ty = StructuredSourceType::Word(operand_width);
             let left = self.expression(args[1], depth, ty, dag, None)?.id;
             let right = self.expression(args[2], depth, ty, dag, None)?.id;
+            if abs == self.equal {
+                return self.node(dag, DagKey::Equal(operand_width, left, right), 1, target, |output| Node::Equal { width: operand_width, output, left, right });
+            }
             return self.node(dag, DagKey::UnsignedLessThan(operand_width, left, right), 1, target, |output| Node::UnsignedLessThan { width: operand_width, output, left, right });
         }
         if let StructuredSourceType::Word(width) = expected {
@@ -492,7 +556,7 @@ impl Builder<'_> {
             }
         }
         unsupported(if expected == StructuredSourceType::Boolean {
-            "Boolean values require an input, constant, or bitvec::BitVec::unsigned_lt_bit"
+            "Boolean values require an input, constant, bitvec::BitVec::unsigned_lt_bit or bitvec::BitVec::eq_bit"
         } else { "unsupported structured source operation or result type" })
     }
     /// A scalar value: a pure expression, or a call to a transparent helper
@@ -572,11 +636,16 @@ impl Builder<'_> {
         let mut stack = self.stack.clone();
         stack.push(callee);
         let mut nested = Builder { elaborator: self.elaborator, caller: callee,
-            operations: OperationGlobals::resolve(self.elaborator)?, comparison: self.comparison,
+            operations: OperationGlobals::resolve(self.elaborator)?, comparison: self.comparison, equal: self.equal,
             boolean_payloads: self.boolean_payloads, inputs: inputs.clone(), bindings, records: BTreeMap::new(), record_result: None,
-            result: expected, output, exit: None, next_id: self.next_id, stack, needs_port: None, known, sources: BTreeMap::new(), bodies: BTreeMap::new() };
+            result: expected, output, exit: None, emit: None, next_id: self.next_id, stack, needs_port: None, known, sources: BTreeMap::new(), bodies: BTreeMap::new(), decided: false };
         let mut region = nested.region(body, 0)?;
         self.next_id = nested.next_id;
+        // A body that branched on a connective is not its helper by conversion,
+        // so it does not cross at the call: it is expanded in place, and the
+        // case analysis that relates the expansion to the source reaches into
+        // it.
+        if nested.decided { self.decided = true; call = None; }
         self.sources.append(&mut nested.sources);
         for (port, values) in std::mem::take(&mut nested.bodies) { self.bodies.entry(port).or_default().extend(values); }
         if !arguments.nodes.is_empty() {
@@ -599,7 +668,7 @@ impl Builder<'_> {
         -> Result<Option<(Option<StructuredRegion>, Port, Option<cert::SourceValue>)>, SourceError>
     {
         let operation = self.operations.operations.get(&head).copied();
-        if args.len() != 3 || (operation.is_none() && head != self.comparison) { return Ok(None); }
+        if args.len() != 3 || (operation.is_none() && head != self.comparison && head != self.equal) { return Ok(None); }
         let Some(width) = nat_literal(args[0]).filter(|width| *width <= 64) else { return Ok(None); };
         let fits = match operation { Some(_) => expected == StructuredSourceType::Word(width), None => expected == StructuredSourceType::Boolean };
         if !fits { return Ok(None); }
@@ -626,6 +695,7 @@ impl Builder<'_> {
         let (left, right) = (ports[0].id, ports[1].id);
         let port = match operation {
             Some(operation) => self.node(&mut dag, DagKey::Binary(operation, width, left, right), width, target, |output| operation.node_at_width(width, output, left, right))?,
+            None if head == self.equal => self.node(&mut dag, DagKey::Equal(width, left, right), 1, target, |output| Node::Equal { width, output, left, right })?,
             None => self.node(&mut dag, DagKey::UnsignedLessThan(width, left, right), 1, target, |output| Node::UnsignedLessThan { width, output, left, right })?,
         };
         let value = read_back(&dag.nodes, port, &produced).filter(|_| producers.iter().all(|(_, _, value)| value.is_some()));
@@ -637,28 +707,125 @@ impl Builder<'_> {
         }
         Ok(Some((Some(region), port, value)))
     }
+    /// A filter step's leaf, `Filtered(next, emit)`: the state's ports from
+    /// `next`, as a record result's are, then the emit's. `None` is the flag
+    /// 0 and the byte a literal 0; `Some(e)` is the flag 1 and the byte `e`.
+    fn filtered_leaf(&mut self, term: &Term, depth: u32, dag: &mut Dag, flag: Port, byte: Port) -> Result<(), SourceError> {
+        let fields = crate::spelling::pair_of(term).and_then(|(_, rest)| crate::spelling::pair_of(rest))
+            .and_then(|(next, rest)| crate::spelling::pair_of(rest).map(|(emit, rest)| (next, emit, rest)));
+        let Some((next, emit, rest)) = fields else { return unsupported("a filter step's result must construct Filtered(next, emit)"); };
+        if !matches!(&**rest, Term::Triv { .. }) { return unsupported("Filtered has two fields"); }
+        match self.record_result.clone() {
+            Some((record, fields)) => {
+                let terms = self.record_fields(next, depth, fields.len())?;
+                for ((term, port), (_, ty)) in terms.iter().zip(&fields).zip(&record.fields) {
+                    self.expression(term, depth, *ty, dag, Some(port.id))?;
+                }
+            }
+            None => { self.expression(next, depth, self.result, dag, Some(self.output.id))?; }
+        }
+        match crate::spelling::inj_of(emit) {
+            Some((true, _)) => {
+                self.constant(dag, 1, 0, Some(flag.id))?;
+                self.constant(dag, 8, 0, Some(byte.id))?;
+            }
+            Some((false, value)) => {
+                let Some((value, rest)) = crate::spelling::pair_of(value).and_then(|(_, rest)| crate::spelling::pair_of(rest)) else {
+                    return unsupported("a filter step's Some has its byte");
+                };
+                if !matches!(&**rest, Term::Triv { .. }) { return unsupported("Some has one field"); }
+                self.constant(dag, 1, 1, Some(flag.id))?;
+                self.expression(value, depth, StructuredSourceType::Word(8), dag, Some(byte.id))?;
+            }
+            None => return unsupported("a filter step's emit must be None or Some(byte)"),
+        }
+        Ok(())
+    }
+    /// A match's test, as nested conditionals on its leaves: `a && b` is `b`
+    /// tested where `a` held, `a || b` is `b` tested where `a` failed, and
+    /// `!a` swaps the arms, so an operand is computed only where the
+    /// connective needs it. Arms are the match's, at `depth + 1`.
+    fn branch(&mut self, test: &Test<'_>, yes: &Arm<'_>, no: &Arm<'_>, depth: u32) -> Result<StructuredRegion, SourceError> {
+        let leaf = match test {
+            Test::Not(inner) => return self.branch(inner, no, yes, depth),
+            Test::And(first, second) => return self.branch(first, &Arm::Then(second, Box::new(yes.clone()), Box::new(no.clone())), no, depth),
+            Test::Or(first, second) => return self.branch(first, yes, &Arm::Then(second, Box::new(yes.clone()), Box::new(no.clone())), depth),
+            leaf => leaf,
+        };
+        let inputs = self.inputs.clone();
+        let outputs = self.outputs();
+        let Test::Value(scrut) = *leaf else { unreachable!("connectives were branched above") };
+        let (producer, condition, value) = self.produce(scrut, depth, StructuredSourceType::Boolean, None)?;
+        let when_false = Box::new(self.arm(no, depth)?);
+        let when_true = Box::new(self.arm(yes, depth)?);
+        let mut available = inputs.clone();
+        if !available.contains(&condition) { available.push(condition); }
+        let mut branch = StructuredRegion::Conditional { inputs: available, condition: condition.id, arguments: inputs.clone(), outputs, when_true, when_false };
+        Ok(match producer {
+            None => branch,
+            Some(StructuredRegion::Dataflow(mut prefix)) => {
+                // Here, not in selection, so the certificate and the
+                // source expansion read the same region the plan does.
+                crate::function_ir_x86_lower::share_compared_constant(&mut prefix, &mut branch).map_err(SourceError::Lowering)?;
+                StructuredRegion::Sequence { prefix, continuation: Box::new(branch) }
+            }
+            Some(prefix) => {
+                if let Some(value) = value { self.sources.insert(condition.id, value); }
+                StructuredRegion::Compose { prefix: Box::new(prefix), continuation: Box::new(branch) }
+            }
+        })
+    }
+    fn arm(&mut self, arm: &Arm<'_>, depth: u32) -> Result<StructuredRegion, SourceError> {
+        match arm {
+            Arm::Body(term) => self.region(term, depth + 1),
+            Arm::Outcome(value) => {
+                let mut dag = Dag::default();
+                self.constant(&mut dag, 1, u64::from(*value), Some(self.output.id))?;
+                Ok(StructuredRegion::Dataflow(Region { inputs: self.inputs.clone(), nodes: dag.nodes, outputs: self.outputs() }))
+            }
+            Arm::Then(test, yes, no) => self.branch(test, yes, no, depth),
+        }
+    }
+    fn qualified(&self, head: &Term) -> Option<String> {
+        absolute(head, self.caller).and_then(|abs| self.elaborator.global_qualified_name_at(abs))
+    }
+    /// A Bool scrutinee: a connective of tests, or a value to compute.
+    fn boolean_test<'t>(&self, scrut: &'t Term) -> Test<'t> {
+        let (head, args) = application_spine(scrut);
+        match (self.qualified(head).as_deref(), args.as_slice()) {
+            (Some("bool::Bool::and"), [first, second]) => Test::And(Box::new(self.boolean_test(first)), Box::new(self.boolean_test(second))),
+            (Some("bool::Bool::or"), [first, second]) => Test::Or(Box::new(self.boolean_test(first)), Box::new(self.boolean_test(second))),
+            (Some("bool::Bool::not"), [inner]) => Test::Not(Box::new(self.boolean_test(inner))),
+            _ => Test::Value(scrut),
+        }
+    }
     fn region(&mut self, term: &Term, depth: u32) -> Result<StructuredRegion, SourceError> {
         let inputs = self.inputs.clone();
         let outputs = self.outputs();
         if let Term::Case { lhs, rhs, scrut, case_l, case_r, .. } = term {
-            if !self.boolean_components(lhs, rhs) { return unsupported("structured matches must use the resolved Bool type"); }
-            let (producer, condition, value) = self.produce(scrut, depth, StructuredSourceType::Boolean, None)?;
-            let when_false = Box::new(self.region(case_l, depth + 1)?);
-            let when_true = Box::new(self.region(case_r, depth + 1)?);
-            let mut available = inputs.clone();
-            if !available.contains(&condition) { available.push(condition); }
-            let branch = StructuredRegion::Conditional { inputs: available, condition: condition.id, arguments: inputs.clone(), outputs, when_true, when_false };
-            Ok(match producer {
-                None => branch,
-                Some(StructuredRegion::Dataflow(prefix)) => StructuredRegion::Sequence { prefix, continuation: Box::new(branch) },
-                Some(prefix) => {
-                    if let Some(value) = value { self.sources.insert(condition.id, value); }
-                    StructuredRegion::Compose { prefix: Box::new(prefix), continuation: Box::new(branch) }
-                }
-            })
+            // A Bool match tests its scrutinee, which may be a connective
+            // (`if b = ' ' ∨ b = '\t'` is a match on `b.eq_bit(32) ||
+            // b.eq_bit(9)`), branched on one operand at a time.
+            if !self.boolean_components(lhs, rhs) { return unsupported("structured matches must use the resolved Bool type: an `if` with an evidence binder matches on the evidence"); }
+            let test = self.boolean_test(scrut);
+            if !matches!(test, Test::Value(_)) { self.decided = true; }
+            self.branch(&test, &Arm::Body(case_r), &Arm::Body(case_l), depth)
         } else {
+            // A Bool result that is a connective (a helper `space(b) = x ||
+            // y`) is the connective's branches, each giving its outcome: an
+            // operand is computed only where the connective needs it, as at
+            // a match.
+            if self.result == StructuredSourceType::Boolean && self.emit.is_none() && self.record_result.is_none() && self.exit.is_none() {
+                let test = self.boolean_test(term);
+                if !matches!(test, Test::Value(_)) {
+                    self.decided = true;
+                    return self.branch(&test, &Arm::Outcome(true), &Arm::Outcome(false), depth);
+                }
+            }
             let mut dag = Dag::default();
-            if let Some((record, fields)) = self.record_result.clone() {
+            if let Some((flag, byte)) = self.emit {
+                self.filtered_leaf(term, depth, &mut dag, flag, byte)?;
+            } else if let Some((record, fields)) = self.record_result.clone() {
                 let value = match self.exit {
                     Some(exit) => {
                         let (tag, payload) = match crate::spelling::inj_of(term) {
@@ -717,14 +884,20 @@ pub fn generate_structured_source_expansion(prefix: &str, reflected: &ReflectedS
     let arguments = reflected.declared_arguments();
     let initial = reflected.initial_values();
     let mut expansion = Expansion { prefix, module: &mut module, next_name: 0, parameters: &parameters, arguments: &arguments, result: reflected.result, choice: reflected.choice.as_ref(),
-        record: reflected.record.as_ref(), naturals: natural_inputs(reflected), constants: BTreeMap::new(), sources: &reflected.sources, zeros: BTreeSet::new(), tests: BTreeMap::new() };
+        record: reflected.record.as_ref(), filtered: reflected.filtered, naturals: natural_inputs(reflected), constants: BTreeMap::new(), sources: &reflected.sources, tests: BTreeMap::new(),
+        inline: reflected.decided.then(BTreeMap::new) };
+    // A Bool parameter or field is tested as itself, as a produced one is
+    // (Expansion::tests).
+    for (id, ty) in reflected.parameters.iter().enumerate() {
+        if *ty == StructuredSourceType::Boolean { expansion.tests.insert(id as u64, reflected.spelling(id)); }
+    }
     let result = expansion.region(&reflected.region, initial)?;
     let name = format!("{prefix}_expression");
     let result_name = reflected.result_type_name();
     module.declaration(Declaration::function(&name, HeatherExpr::raw(result_name), Block::expression(result)).parameters(parameters.clone()));
     module.declaration(Declaration::theorem(format!("{prefix}_source_expands"),
         HeatherExpr::equal(HeatherExpr::call(name.as_str(), arguments.clone()), HeatherExpr::call(reflected.source_name.as_str(), arguments)),
-        Block::expression(HeatherExpr::name("refl"))).parameters(parameters));
+        if reflected.decided { Block::expression(HeatherExpr::raw("split_all;\nall_goals { refl }")) } else { Block::expression(HeatherExpr::name("refl")) }).parameters(parameters));
     Ok(module.render())
 }
 
@@ -738,6 +911,8 @@ struct Expansion<'a> {
     choice: Option<&'a StructuredSourceChoice>,
     /// A record result: its fields are the leaf's outputs before the tag.
     record: Option<&'a StructuredSourceRecord>,
+    /// A filter step's result: the state, then the emit's flag and byte.
+    filtered: bool,
     /// For each port carrying a Nat: its source expression, and a proof that
     /// `word_of_nat(64, expression)` is the port's word (`None`: definitional).
     /// Port IDs are unique, and a branch reads its result right after writing
@@ -746,13 +921,15 @@ struct Expansion<'a> {
     constants: BTreeMap<u64, u64>,
     /// Composed results cross at their source spelling (cert::SourceValue).
     sources: &'a cert::SourceValues,
-    /// Zero constants, any width: `x | 0` is spelled `x`, as the source
-    /// spells a passthrough.
-    zeros: BTreeSet<u64>,
     /// A one-bit value's Boolean, where it has one (a comparison, a Bool
     /// helper's call): a branch reads it rather than `head_bit` of the bit,
     /// which conversion would evaluate, and through it everything below.
     tests: BTreeMap<u64, String>,
+    /// For a source with connectives (ReflectedStructuredFunction::decided), each
+    /// word's spelling with constants and operations inline, as the source
+    /// spells it, so that a comparison test is syntactically the one the
+    /// source reaches and case analysis splits both at once.
+    inline: Option<BTreeMap<u64, String>>,
 }
 
 impl ReflectedStructuredFunction {
@@ -771,14 +948,17 @@ impl ReflectedStructuredFunction {
                     into.push(name.clone());
                     for (_, argument) in arguments { calls(argument, into); }
                 }
-                cert::SourceValue::Binary { left, right, .. } | cert::SourceValue::Less { left, right, .. } => { calls(left, into); calls(right, into); }
+                cert::SourceValue::Binary { left, right, .. } | cert::SourceValue::Less { left, right, .. }
+                | cert::SourceValue::Equal { left, right, .. } => { calls(left, into); calls(right, into); }
                 cert::SourceValue::Produced { value, .. } => calls(value, into),
                 cert::SourceValue::Port(_) | cert::SourceValue::Constant { .. } => {}
             }
         }
         let mut called = Vec::new();
         for value in self.sources.values().chain(self.bodies.values().flatten()) { calls(value, &mut called); }
+        let filtered = self.filtered.then(|| ["stream_filter::Filtered".to_string(), "option::Option".to_string()]).into_iter().flatten();
         let names = self.choice.iter().map(|choice| choice.type_name.clone())
+            .chain(filtered)
             .chain(self.record.iter().map(|record| record.type_name.clone()))
             .chain(self.signature.iter().flatten().map(|record| record.type_name.clone()))
             .chain(called);
@@ -834,29 +1014,50 @@ impl Expansion<'_> {
     }
     fn dataflow(&mut self, region: &Region, values: &mut Expressions) -> Result<(), SourceError> {
         for node in &region.nodes {
-            if let Node::Const { output, value: 0, .. } = *node { self.zeros.insert(output); }
             let (id, width, expression) = match *node {
-                Node::Const { width, output, value } => (output, width, HeatherExpr::explicit_call("bitvec::BitVec::ofNat", [HeatherExpr::nat(width), HeatherExpr::nat(value)])),
-                // A passthrough is spelled as the value it passes, as the
-                // source spells it: `0 | x` would make conversion evaluate `x`
-                // bit by bit, and through it everything that computed `x`.
-                Node::BitOr { width, output, left, right } if self.zeros.contains(&left) => (output, width, operand(values, right, width)?),
+                Node::Const { width, output, value } => {
+                    if let Some(inline) = self.inline.as_mut() { inline.insert(output, format!("@bitvec::BitVec::ofNat({width}, {value})")); }
+                    (output, width, HeatherExpr::explicit_call("bitvec::BitVec::ofNat", [HeatherExpr::nat(width), HeatherExpr::nat(value)]))
+                }
+                // A copy is spelled as the value it copies, as the source
+                // spells it.
+                Node::Move { width, output, source } => {
+                    if let Some(inline) = self.inline.as_mut() && let Some(copied) = inline.get(&source).cloned() { inline.insert(output, copied); }
+                    (output, width, operand(values, source, width)?)
+                }
                 Node::Add { width, output, left, right } | Node::Sub { width, output, left, right }
                 | Node::BitAnd { width, output, left, right } | Node::BitOr { width, output, left, right }
-                | Node::BitXor { width, output, left, right } | Node::UnsignedLessThan { width, output, left, right } => {
+                | Node::BitXor { width, output, left, right } | Node::UnsignedLessThan { width, output, left, right }
+                | Node::Equal { width, output, left, right } => {
                     let (function, comparison) = match node {
                         Node::Add { .. } => ("bitvec::BitVec::add", false), Node::Sub { .. } => ("bitvec::BitVec::sub", false),
                         Node::BitAnd { .. } => ("bitvec::BitVec::band", false), Node::BitOr { .. } => ("bitvec::BitVec::bor", false),
                         Node::BitXor { .. } => ("bitvec::BitVec::bxor", false), Node::UnsignedLessThan { .. } => ("bitvec::BitVec::unsigned_lt_bit", true),
+                        Node::Equal { .. } => ("bitvec::BitVec::eq_bit", true),
                         _ => unreachable!(),
                     };
                     let expression = HeatherExpr::explicit_call(function, [HeatherExpr::nat(width), operand(values, left, width)?, operand(values, right, width)?]);
-                    if comparison { self.tests.insert(output, expression.render()); }
+                    let spelled = match &self.inline {
+                        Some(inline) => {
+                            let at = |port: u64| inline.get(&port).cloned().map_or_else(|| operand(values, port, width).map(|o| o.render()), Ok);
+                            Some(format!("@{function}({width}, {}, {})", at(left)?, at(right)?))
+                        }
+                        None => None,
+                    };
+                    if let (Some(inline), Some(spelled), false) = (self.inline.as_mut(), &spelled, comparison) { inline.insert(output, spelled.clone()); }
+                    if comparison { self.tests.insert(output, spelled.unwrap_or_else(|| expression.render())); }
                     (output, if comparison { 1 } else { width }, if comparison { HeatherExpr::call("bitvec::BitVec::ofBool", [expression]) } else { expression })
                 }
                 _ => return unsupported("unsupported source expansion node"),
             };
             self.track_natural(node);
+            // Under case analysis (a decided source), a copy stays the value
+            // it copies: a name would hide an input the split specialises
+            // (`s.inside` kept by `s with { … }`) behind a definition.
+            if self.inline.is_some() && matches!(node, Node::Move { .. }) {
+                values.insert(id, (width, expression));
+                continue;
+            }
             let name = format!("{}_value_{}", self.prefix, self.next_name);
             self.next_name += 1;
             self.module.declaration(Declaration::function(&name, HeatherExpr::raw(format!("BitVec({width})")), Block::expression(expression)).parameters(self.parameters.to_vec()));
@@ -865,7 +1066,7 @@ impl Expansion<'_> {
         Ok(())
     }
     /// Follow a Nat through the only nodes a carried Nat reflects to: `Succ` as
-    /// `Add(n, 1)`, and a passthrough as `BitOr(0, n)`.
+    /// `Add(n, 1)`, and a passthrough as `Move`.
     fn track_natural(&mut self, node: &Node) {
         match *node {
             Node::Const { width: 64, output, value } => { self.constants.insert(output, value); }
@@ -879,15 +1080,17 @@ impl Expansion<'_> {
                     self.naturals.insert(output, (HeatherExpr::raw(format!("Succ({})", natural.render())), Some(HeatherExpr::raw(proof))));
                 }
             }
-            Node::BitOr { width: 64, output, left, right } if self.constants.get(&left) == Some(&0) => {
-                if let Some(carried) = self.naturals.get(&right).cloned() { self.naturals.insert(output, carried); }
+            Node::Move { width: 64, output, source } => {
+                if let Some(carried) = self.naturals.get(&source).cloned() { self.naturals.insert(output, carried); }
             }
             _ => {}
         }
     }
     /// The leaf's scalar result types, in output order.
     pub(super) fn components(&self) -> Vec<StructuredSourceType> {
-        self.record.map_or_else(|| vec![self.result], |record| record.fields.iter().map(|(_, ty)| *ty).collect())
+        let mut components = self.record.map_or_else(|| vec![self.result], |record| record.fields.iter().map(|(_, ty)| *ty).collect::<Vec<_>>());
+        if self.filtered { components.extend([StructuredSourceType::Boolean, StructuredSourceType::Word(8)]); }
+        components
     }
     /// A choice's payload type name.
     pub(super) fn payload_name(&self) -> String {
@@ -904,9 +1107,17 @@ impl Expansion<'_> {
     }
     /// The result from its components: the scalar, or the record constructed.
     pub(super) fn assemble(&self, fields: &[HeatherExpr]) -> HeatherExpr {
-        match self.record {
-            Some(record) => HeatherExpr::raw(format!("{}({})", record.constructor, fields.iter().map(|f| f.render()).collect::<Vec<_>>().join(", "))),
-            None => fields[0].clone(),
+        // A filter's state, then `Filtered(state, emit)` with the emit read
+        // off its flag (a Boolean here) and byte.
+        let (state, emit) = if self.filtered { fields.split_at(fields.len() - 2) } else { (fields, &[][..]) };
+        let state = match self.record {
+            Some(record) => HeatherExpr::raw(format!("{}({})", record.constructor, state.iter().map(|f| f.render()).collect::<Vec<_>>().join(", "))),
+            None => state[0].clone(),
+        };
+        match emit {
+            [flag, byte] => HeatherExpr::raw(format!("stream_filter::Filtered<{}>({}, match {} {{ False => option::None<BitVec(8)>, True => option::Some<BitVec(8)>({}) }})",
+                self.payload_name(), state.render(), flag.render(), byte.render())),
+            _ => state,
         }
     }
     /// The Nat a result port carries. A literal's proof is definitional (a
@@ -945,12 +1156,14 @@ impl Expansion<'_> {
                 let saved_result = self.result;
                 let saved_choice = self.choice.take();
                 let saved_record = self.record.take();
+                let saved_filtered = std::mem::take(&mut self.filtered);
                 self.result = if port.width == 1 { StructuredSourceType::Boolean } else { StructuredSourceType::Word(port.width) };
                 let result = self.region(prefix, values.clone())?;
                 let ty = self.result.name();
                 self.result = saved_result;
                 self.choice = saved_choice;
                 self.record = saved_record;
+                self.filtered = saved_filtered;
                 // Named once: a continuation may read the result many times,
                 // and a chain of helpers would otherwise copy each link's
                 // expansion into every use of it.
@@ -958,6 +1171,9 @@ impl Expansion<'_> {
                 self.next_name += 1;
                 self.module.declaration(Declaration::function(&name, HeatherExpr::raw(ty), Block::expression(result)).parameters(self.parameters.to_vec()));
                 let result = HeatherExpr::call(name.as_str(), self.arguments.to_vec());
+                // A Bool is tested as itself, not as `head_bit` of its bit:
+                // case analysis takes the two for different atoms.
+                if port.width == 1 { self.tests.insert(port.id, result.render()); }
                 let result = if port.width == 1 { HeatherExpr::call("bitvec::BitVec::ofBool", [result]) } else { result };
                 values.insert(port.id, (port.width, result));
                 self.region(continuation, values)

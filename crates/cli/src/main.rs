@@ -268,6 +268,13 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
     if opts.timings.is_some() {
         stats::enable();
     }
+    // A file table is live: a run killed at the CPU rail leaves the rows of
+    // every scope that closed, and the scopes still open beside them.
+    if let Some(stats::Dest::File(path)) = &opts.timings
+        && let Err(e) = stats::live_table(path)
+    {
+        eprintln!("timings: could not write: {e}");
+    }
     // A `--only` run's row is labelled, so `scripts/timings` can refuse to
     // read its numbers as a whole run's (`docs/check-only-design.md` §3).
     let run_label = opts.only.as_ref().map(|names| format!("only={}", names.join(","))).unwrap_or_default();
@@ -334,19 +341,9 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
                 return ExitCode::from(2);
             }
         };
-        let (search, search_fallback) = match search_for_path(root_path, &opts.search) {
-            Ok(search) => search,
-            Err(msg) => {
-                eprintln!("{}: {msg}", color::error_label(stderr_color));
-                return ExitCode::from(2);
-            }
-        };
+        let search = search_for_path(root_path, &opts.search);
         let root_refs = roots.iter().map(PathBuf::as_path).collect::<Vec<_>>();
-        let modules = match loader::load_many_with_fallback(
-            &root_refs,
-            &search,
-            &search_fallback,
-        ) {
+        let modules = match loader::load_many(&root_refs, &search) {
             Ok(m) => m,
             Err(e) => {
                 eprintln!("{}: {}", color::error_label(stderr_color), e.msg);
@@ -596,19 +593,9 @@ fn axioms(opts: &Opts, target: &str, files: &[String]) -> ExitCode {
                 return ExitCode::from(2);
             }
         };
-        let (search, search_fallback) = match search_for_path(root_path, &opts.search) {
-            Ok(search) => search,
-            Err(msg) => {
-                eprintln!("{}: {msg}", color::error_label(stderr_color));
-                return ExitCode::from(2);
-            }
-        };
+        let search = search_for_path(root_path, &opts.search);
         let root_refs = roots.iter().map(PathBuf::as_path).collect::<Vec<_>>();
-        let modules = match loader::load_many_with_fallback(
-            &root_refs,
-            &search,
-            &search_fallback,
-        ) {
+        let modules = match loader::load_many(&root_refs, &search) {
             Ok(m) => m,
             Err(e) => {
                 eprintln!("{}: {}", color::error_label(stderr_color), e.msg);
@@ -843,39 +830,17 @@ fn roots_for_path(path: &Path) -> Result<Vec<PathBuf>, String> {
 }
 
 /// A directory target is still a non-recursive set of roots, but imports in
-/// those roots may name implementation modules kept below the public facade.
-/// Make every descendant directory a fallback lookup location for this
-/// target's closure. The target directory and explicit `-L` paths win as one
-/// tier, so a private `bitvec/nat.hthr` cannot shadow or conflict with the
-/// public `nat.hthr`. Module names remain flat: duplicate names within the
-/// fallback tier are still ambiguous.
-fn search_for_path(
-    path: &Path,
-    configured: &[PathBuf],
-) -> Result<(Vec<PathBuf>, Vec<PathBuf>), String> {
+/// those roots may name implementation modules kept below the public facade:
+/// the target joins the search directories, and the loader looks below every
+/// search directory after a miss in them (so a private `shadow/base.hthr`
+/// cannot shadow or conflict with the public `base.hthr`). Module names
+/// remain flat: duplicate names below are still ambiguous.
+fn search_for_path(path: &Path, configured: &[PathBuf]) -> Vec<PathBuf> {
     let mut search = configured.to_vec();
-    if !path.is_dir() {
-        return Ok((search, Vec::new()));
+    if path.is_dir() && !same_search_dir(&search, path) {
+        search.push(path.to_path_buf());
     }
-
-    push_search_dir(&mut search, path.to_path_buf());
-    let mut fallback = Vec::new();
-    let mut pending = child_directories(path)?;
-    pending.reverse();
-    while let Some(dir) = pending.pop() {
-        if !same_search_dir(&search, &dir) {
-            push_search_dir(&mut fallback, dir.clone());
-        }
-        let children = child_directories(&dir)?;
-        pending.extend(children.into_iter().rev());
-    }
-    Ok((search, fallback))
-}
-
-fn push_search_dir(search: &mut Vec<PathBuf>, dir: PathBuf) {
-    if !same_search_dir(search, &dir) {
-        search.push(dir);
-    }
+    search
 }
 
 fn same_search_dir(search: &[PathBuf], dir: &Path) -> bool {
@@ -886,23 +851,4 @@ fn same_search_dir(search: &[PathBuf], dir: &Path) -> bool {
                 .as_ref()
                 .is_some_and(|dir| existing.canonicalize().is_ok_and(|existing| existing == *dir))
     })
-}
-
-fn child_directories(dir: &Path) -> Result<Vec<PathBuf>, String> {
-    let mut children = std::fs::read_dir(dir)
-        .map_err(|e| format!("cannot read directory `{}`: {e}", dir.display()))?
-        .filter_map(|entry| match entry {
-            Ok(entry) => match entry.file_type() {
-                Ok(kind) if kind.is_dir() => Some(Ok(entry.path())),
-                Ok(_) => None,
-                Err(e) => Some(Err(format!(
-                    "cannot inspect entry in directory `{}`: {e}",
-                    dir.display()
-                ))),
-            },
-            Err(e) => Some(Err(format!("cannot read directory `{}`: {e}", dir.display()))),
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    children.sort();
-    Ok(children)
 }

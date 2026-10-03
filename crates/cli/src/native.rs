@@ -15,8 +15,11 @@ use heather_cli::{loader, semantic::SemanticSession};
 
 mod elf;
 mod calls;
+mod layout;
 mod order;
 mod read_loop;
+mod read_fields;
+mod read_filter;
 
 mod support;
 use support::SUPPORT;
@@ -32,6 +35,11 @@ pub fn build(args: &[String]) -> ExitCode {
 fn report(result: Result<(), String>) -> ExitCode {
     match result {
         Ok(()) => ExitCode::SUCCESS,
+        // A diagnostic with its file's snippet (`check_file`) is headed already.
+        Err(error) if error.starts_with("error: ") => {
+            eprintln!("{error}");
+            ExitCode::from(1)
+        }
         Err(error) => {
             eprintln!("error: {error}");
             ExitCode::from(1)
@@ -45,6 +53,45 @@ fn symbol_ok(name: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
+/// What `build-x86` makes of a name: a function of two `--arg`s, or a
+/// program that reads stdin, a stream filter's bundle (filter_program's
+/// `Filter`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Profile { Call, Filter }
+
+/// The profile a name's written declaration asks for, from its return type,
+/// and a bundle's written arguments: they choose the proof library to load,
+/// and `read_program` reads the bundle's data from them once its module is
+/// checked.
+fn profile_of(source: &Path, symbol: &str) -> Result<(Profile, Vec<heather_syntax::ast::Expr>), String> {
+    use heather_syntax::ast::{ExprKind, TyKind};
+    let text = std::fs::read_to_string(source).map_err(|e| format!("{}: {e}", source.display()))?;
+    let Ok(file) = heather_syntax::parse_file(&text) else { return Ok((Profile::Call, Vec::new())) };
+    let declaration = file.items.iter().find_map(|item| match item {
+        heather_syntax::Item::Decl(declaration) if declaration.name == symbol => Some(declaration),
+        _ => None,
+    }).ok_or_else(|| format!("`{symbol}` is not declared in {}", source.display()))?;
+    // The written type's head and its value arguments.
+    fn head(expr: &heather_syntax::ast::Expr) -> Option<(&str, &[heather_syntax::ast::Expr])> {
+        match &expr.kind {
+            ExprKind::Var(name) => Some((name.rsplit("::").next().unwrap_or(name), &[])),
+            ExprKind::App { head: inner, args, .. } => head(inner).map(|(name, _)| (name, args.as_slice())),
+            ExprKind::TyApp { head: inner, .. } => head(inner),
+            _ => None,
+        }
+    }
+    let written = match &declaration.result.kind {
+        TyKind::Named { name, .. } => Some((name.rsplit("::").next().unwrap_or(name), &[][..])),
+        TyKind::OfExpr(expr) => head(expr),
+        _ => None,
+    };
+    Ok(match written {
+        Some(("Filter", args)) => (Profile::Filter, args.to_vec()),
+        _ => return Err(format!("`{symbol}` is not a Filter program; \
+            a function of two u64 arguments takes `--arg` twice")),
+    })
+}
+
 fn compile(args: &[String], executable: bool) -> Result<(), String> {
     let mut positional = Vec::new();
     let mut output = None;
@@ -52,9 +99,6 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     let mut cache = None;
     let mut callee = None;
     let mut callable_caller = false;
-    let mut read_loop = false;
-    let mut print = false;
-    let (mut needle, mut advance, mut spec, mut computes, mut folds) = (None, None, None, None, None);
     let mut timings = None;
     let mut kernel_workers = None;
     let mut search = vec![PathBuf::from("lib/std"), PathBuf::from("lib")];
@@ -62,18 +106,6 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--callable-caller" if executable => { callable_caller = true; }
-            "--read-loop" if executable => { read_loop = true; }
-            "--print" if executable => { print = true; }
-            "--needle" | "--advance" | "--spec" | "--computes" | "--folds" if executable => {
-                let value = args.next().ok_or_else(|| format!("{arg} needs a value"))?.clone();
-                match arg.as_str() {
-                    "--needle" => needle = Some(u8::try_from(elf::parse_argument(&value)?).map_err(|_| "--needle must be a byte".to_string())?),
-                    "--advance" => advance = Some(value),
-                    "--spec" => spec = Some(value),
-                    "--folds" => folds = Some(value),
-                    _ => computes = Some(value),
-                }
-            }
             "--callee" if executable => {
                 callee = Some(args.next().ok_or("--callee needs a source function name")?.clone());
             }
@@ -103,22 +135,23 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
             _ => positional.push(arg.as_str()),
         }
     }
-    if read_loop {
-        if !inputs.is_empty() || callee.is_some() { return Err("--read-loop takes its input from stdin: no --arg or --callee".into()); }
-        if needle.is_none() || advance.is_none() || spec.is_none() || computes.is_none() || folds.is_none() {
-            return Err("--read-loop needs --needle <byte>, --advance <theorem>, --spec <function>, --computes <theorem> and --folds <theorem>".into());
-        }
-    } else if print || needle.is_some() || advance.is_some() || spec.is_some() || computes.is_some() || folds.is_some() {
-        return Err("--needle, --advance, --spec, --computes, --folds and --print belong to --read-loop".into());
-    } else if executable && inputs.len() != 2 {
-        return Err("build-x86 needs exactly two --arg values for the source function".into());
-    }
     if positional.len() != 2 || output.is_none() {
         if executable {
-            return Err("usage: heather build-x86 <file.hthr> <function> (--arg <u64> --arg <u64> [--callee <function> [--callable-caller]] | --read-loop --needle <byte> --advance <theorem> --spec <function> --computes <theorem> --folds <theorem> [--print]) -o <executable> [-L <dir>]... [--cache-dir <dir>] [--timings <file.tsv>] [--kernel-workers <n>]".into());
+            return Err("usage: heather build-x86 <file.hthr> <name> [--arg <u64> --arg <u64> [--callee <function> [--callable-caller]]] -o <executable> [-L <dir>]... [--cache-dir <dir>] [--timings <file.tsv>] [--kernel-workers <n>]".into());
         }
         return Err("usage: heather compile-x86 <file.hthr> <function> -o <output.s> [-L <dir>]... [--cache-dir <dir>] [--timings <file.tsv>] [--kernel-workers <n>]".into());
     }
+    // What is built follows from what the name is (docs/native-architecture-review.md
+    // R6): a function of two `--arg`s, a byte map, or a program for the read
+    // profile. The declaration's written type chooses the proof library to
+    // load; the checked program is read again, off its elaborated type, before
+    // anything is generated.
+    let (profile, written) = if executable && inputs.is_empty() && callee.is_none() { profile_of(Path::new(positional[0]), positional[1])? }
+        else { (Profile::Call, Vec::new()) };
+    if profile == Profile::Call && executable && inputs.len() != 2 {
+        return Err("build-x86 needs exactly two --arg values for the source function".into());
+    }
+    let filter = profile == Profile::Filter;
     let source = Path::new(positional[0]);
     let symbol = positional[1];
     if !symbol_ok(symbol) {
@@ -134,6 +167,11 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
         name.push(".certificate.hthr");
         PathBuf::from(name)
     } else { output.with_extension("certificate.hthr") };
+    // What is checked is written first, under a name that is not the
+    // published one: a refusal or a build killed mid-check points into a file
+    // that exists. Replaced on every build, and removed once the certificate
+    // is published.
+    let unchecked = certificate.with_extension("unchecked.hthr");
     // Refuse replacement, including symlinks: failed builds cannot leave a
     // previous executable body looking like the newly checked result.
     for path in [&output, &certificate] {
@@ -141,7 +179,15 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
             return Err(format!("output already exists: {}", path.display()));
         }
     }
-    let sources = loader::load(source, &search).map_err(|e| e.msg)?;
+    // A program that reads stdin stands on the read profile's pieces, the
+    // write loop, the formatters' tails and the filter's library.
+    let bundle: Vec<(&str, &str)> = SUPPORT.iter()
+        .chain(if filter { [read_loop::SUPPORT, read_loop::WRITE_SUPPORT, read_loop::PRINT_SUPPORT, read_fields::SUPPORT, read_filter::SUPPORT].concat() }
+            else { Vec::new() }.iter()).copied().collect();
+    // A program may import the bundled proof library by its bundled names,
+    // which need not be files on the search path.
+    let bundled: Vec<&str> = bundle.iter().map(|(name, _)| *name).collect();
+    let sources = loader::load_providing(source, &search, &bundled).map_err(|e| e.msg)?;
     let root_name = sources.last().ok_or("empty source closure")?.name.clone();
     let mut elab = Elaborator::with_prelude().map_err(|e| format!("prelude: {e}"))?;
     // The deferred kernel gate (`docs/parallel-kernel-gate-design.md`). Set
@@ -156,8 +202,11 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     // it on here rather than at the certificate separates a module actually
     // elaborated (a cache miss, or the root source) from the generated
     // certificate by the `module` column.
-    if timings.is_some() {
+    if let Some(path) = &timings {
         elab.enable_item_timings();
+        // Live from here: a build killed at the CPU rail leaves the rows of
+        // every scope that closed and, beside them, the ones still open.
+        heather_elab::stats::live_table(path).map_err(|e| format!("{}: {e}", path.display()))?;
         // The same opt-in also turns on the value-machine counters (the
         // TSV's last four columns) and, under the `value-metrics` feature,
         // the typing seam's conversion-miss sampler with its item column
@@ -217,8 +266,6 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
         elab.set_gate(Rc::clone(store) as Rc<dyn heather_elab::gate::KernelGate>);
     }
     let mut session = SemanticSession::new(cache);
-    let bundle: Vec<(&str, &str)> = SUPPORT.iter().chain(if read_loop { read_loop::SUPPORT } else { &[] })
-        .chain(if print { read_loop::PRINT_SUPPORT } else { &[] }).copied().collect();
     for &(name, src) in &bundle {
         check_module(&mut elab, &mut session, &loader::Module {
             name: name.into(), path: PathBuf::from(format!("{name}.hthr")), src: src.into(),
@@ -229,8 +276,11 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     // program, and they are checked before any of its modules: an image's
     // cache key covers every module checked before it, so a second program
     // replays them instead of re-proving them.
-    let format = if read_loop && print {
-        let parts = read_loop::generate_format(&elab, read_loop::FORMAT_PREFIX)?;
+    let finish = if filter { read_filter::finish_written(&written) } else { None };
+    let (line, three) = (finish == Some(read_filter::Finish::Line), finish == Some(read_filter::Finish::Fields));
+    let format = if line || three {
+        let parts = if three { read_fields::generate_format(&elab, read_fields::FORMAT_PREFIX)? }
+            else { read_loop::generate_format(&elab, read_loop::FORMAT_PREFIX)? };
         for part in &parts {
             check_module(&mut elab, &mut session, &loader::Module {
                 name: part.module.clone(), path: PathBuf::from(format!("{}.hthr", part.module)), src: part.text.clone(),
@@ -244,7 +294,7 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
                 return Err(format!("source module `{}` differs from the compiler's bundled proof library", module.name));
             }
         } else {
-            check_module(&mut elab, &mut session, module)?;
+            check_file(&mut elab, &mut session, module)?;
         }
     }
     let prefix = format!("{symbol}_native");
@@ -260,31 +310,28 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     let probe_inputs = [[!input(0), !input(1)],
         [input(0).wrapping_add(0x9e37_79b9_7f4a_7c15), input(1).wrapping_add(0x6a09_e667_f3bc_c909)]];
     let mut probes = Some(Vec::new());
-    let (image, body_bytes) = if read_loop {
-        let program = read_loop::Program { root: &root_name, source: symbol, advance: advance.as_deref().unwrap(),
-            needle: needle.unwrap(), spec: spec.as_deref().unwrap(), computes: computes.as_deref().unwrap(), folds: folds.as_deref().unwrap() };
+    let mut specs: Vec<String> = Vec::new();
+    let (image, body_bytes) = if filter {
+        // The program, read off its bundle's written type, then restated where
+        // the generator and the claim read it: a program whose data are not
+        // what the profile needs is refused there, before any generation.
+        let program = read_filter::read_program(&elab, &root_name, symbol, &written)?;
+        specs = vec![program.spec.clone()];
         let context = format!("{prefix}_context");
         check_module(&mut elab, &mut session, &loader::Module {
-            name: context.clone(), path: PathBuf::from(format!("{context}.hthr")), src: read_loop::context(&program),
-        })?;
-        let emission = read_loop::generate_loop(&elab, &context, &prefix, &program)?;
-        // The loop's pieces are a module of their own, which its composition imports.
-        let pieces = format!("{prefix}_pieces");
-        check_module(&mut elab, &mut session, &loader::Module {
-            name: pieces.clone(), path: PathBuf::from(format!("{pieces}.hthr")), src: emission.pieces.clone(),
-        })?;
-        proof = Module::default();
-        let imports = read_loop::IMPORTS.iter().chain(if print { read_loop::PRINT_IMPORTS } else { &[] });
-        for name in imports.filter(|name| !emission.text.contains(&format!("import {name};"))) {
-            proof.raw(format!("import {name};"));
+            name: context.clone(), path: PathBuf::from(format!("{context}.hthr")), src: read_filter::context(&prefix, &root_name, &program),
+        }).map_err(|e| format!("{e}\nnote: `{symbol}`'s data, as the read profile needs them: its state starts at zeros, its counts are its \
+            state's Nat fields in order, and its finish prints its first fields"))?;
+        let step = read_filter::generate_step(&elab, &context, &prefix)?;
+        for (name, text) in [(format!("{prefix}_piece_pieces"), &step.pieces), (format!("{prefix}_piece_step"), &step.text)] {
+            check_module(&mut elab, &mut session, &loader::Module { name: name.clone(), path: PathBuf::from(format!("{name}.hthr")), src: text.clone() })?;
         }
+        proof = Module::default();
+        for name in read_filter::IMPORTS { proof.raw(format!("import {name};")); }
+        proof.raw(format!("import {root_name}; import {context}; import {prefix}_piece_pieces; import {prefix}_piece_step;"));
         for part in format.iter().flatten() { proof.raw(format!("import {};", part.module)); }
-        proof.raw(emission.text.clone());
         probes = None;
-        (Some(match &format {
-            Some(parts) => read_loop::certify_print(&mut proof, &prefix, &program, &emission, parts)?,
-            None => read_loop::certify(&mut proof, &prefix, &program, &emission)?,
-        }), None)
+        (Some(read_filter::certify(&mut proof, &prefix, &program, &step, format.as_deref())?), None)
     } else if let Some(callee) = callee {
         if !symbol_ok(&callee) { return Err("callee must be a source identifier".into()); }
         let generate = |module: &mut Module, inputs: [u64; 2]| calls::generate(&elab, module, &prefix,
@@ -337,7 +384,7 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
         Some(probes) => order::inputs_last(&proof.render(), &probes),
         None => proof.render(),
     };
-    eprintln!("checking source refinement, exported bytes, and execution certificate");
+    eprintln!("checking source refinement, exported bytes, and execution certificate in {}", unchecked.display());
     let certificate_module = format!("{prefix}_certificate");
     // The certificate is a module like any other, and goes through the
     // session like one: a repeated build at the same compiler, sources and
@@ -348,9 +395,13 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     // journalled delta path, which costs what `elab_module_source` does since
     // a clone stopped copying the journal
     // (issues/check-module-delta-certificate-cost.md).
-    let checked = check_module(&mut elab, &mut session, &loader::Module {
+    if unchecked.symlink_metadata().is_ok() {
+        std::fs::remove_file(&unchecked).map_err(|e| format!("{}: {e}", unchecked.display()))?;
+    }
+    write_new(&unchecked, proof.as_bytes())?;
+    let checked = check_file(&mut elab, &mut session, &loader::Module {
         name: certificate_module.clone(),
-        path: certificate.clone(),
+        path: unchecked.clone(),
         src: proof.clone(),
     });
     drop(run_scope);
@@ -377,6 +428,7 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     }
     checked?;
     write_new(&certificate, proof.as_bytes())?;
+    std::fs::remove_file(&unchecked).map_err(|e| format!("{}: {e}", unchecked.display()))?;
     if let Some(image) = image {
         write_new(&output, &image)?;
         #[cfg(unix)]
@@ -385,10 +437,8 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
             std::fs::set_permissions(&output, std::fs::Permissions::from_mode(0o755))
                 .map_err(|e| format!("{}: {e}", output.display()))?;
         }
-        if print {
-            println!("{}: {}-byte ELF64 executable; checked read-until-EOF process trace printing `{}` as a decimal line", output.display(), image.len(), spec.as_deref().unwrap());
-        } else if read_loop {
-            println!("{}: {}-byte ELF64 executable; checked read-until-EOF process trace against `{}`", output.display(), image.len(), spec.as_deref().unwrap());
+        if filter {
+            println!("{}: {}-byte ELF64 executable; checked read-until-EOF process trace whose stdout is `{}` of stdin", output.display(), image.len(), specs[0]);
         } else {
             println!("{}: {}-byte ELF64 executable; checked loaded-memory trace and Linux exit request", output.display(), image.len());
         }
@@ -443,6 +493,17 @@ fn check_module(elab: &mut Elaborator, session: &mut SemanticSession, module: &l
     for notice in outcome.notices { eprintln!("{notice}"); }
     if outcome.errors.is_empty() { Ok(()) } else {
         Err(outcome.errors.iter().map(|e| e.render(&module.src)).collect::<Vec<_>>().join("\n"))
+    }
+}
+
+/// [`check_module`] for a module that is a file on disk: its diagnostics
+/// name the file, with the offending line quoted.
+fn check_file(elab: &mut Elaborator, session: &mut SemanticSession, module: &loader::Module) -> Result<(), String> {
+    let outcome = session.check(elab, module, LintProfile::Default);
+    for notice in outcome.notices { eprintln!("{notice}"); }
+    if outcome.errors.is_empty() { Ok(()) } else {
+        let file = module.path.display().to_string();
+        Err(outcome.errors.iter().map(|e| e.render_snippet(&module.src, &file)).collect::<Vec<_>>().join("\n"))
     }
 }
 
@@ -519,6 +580,7 @@ mod tests {
             Instruction::CmpRR { left: Gpr::R14, right: Gpr::Rcx },
             Instruction::SetBelow { destination: LowByteGpr::Dl },
             Instruction::SetLess { destination: LowByteGpr::Bl },
+            Instruction::SetEqual { destination: LowByteGpr::Cl },
         ];
         for (index, instruction) in instructions.iter().enumerate() {
             let mut bytes = encode(&[*instruction]);

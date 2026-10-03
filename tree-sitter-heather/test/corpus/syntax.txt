@@ -472,3 +472,33 @@ fn intensional(e: Code(g)) -> Nat {
               (identifier)
               (identifier))
             (identifier)))))))
+
+==================
+Record update
+==================
+
+fn f(s: P) -> P { s with { x = 1, y = s.y } }
+
+---
+
+(source_file
+  (function_declaration
+    (qualified_identifier)
+    (parameter_list
+      (parameter
+        (parameter_run
+          (parameter_name
+            (identifier))
+          (identifier))))
+    (identifier)
+    (block
+      (record_update_expression
+        (identifier)
+        (record_update_field
+          (identifier)
+          (number))
+        (record_update_field
+          (identifier)
+          (member_expression
+            (identifier)
+            (identifier)))))))

@@ -9,7 +9,7 @@
 //! imported `std/char` is told to import it.
 //!
 //! Neither literal builds a kernel term of its own. A character is the
-//! *surface* `char::ofNat(code, logic::decide_yes(refl))` and a string is the
+//! *surface* `char::ofNat(code, bool::decide_yes(refl))` and a string is the
 //! *surface* `string::String([…])`, re-elaborated through the ordinary paths:
 //! the proof route is then the one `decide` already owns, and the list body is
 //! the collection-literal lowering `List` already owns, so there is no second
@@ -25,13 +25,13 @@ use crate::{application, Cx, ElabError, Elaborator, R};
 
 /// The surface name of the `Char` record, its introduction form, and the
 /// reflection lemma a literal's scalar proof goes through. Written as keys
-/// (`module::name`), the way `elab_decide` names `logic::decide_yes`: a key is
+/// (`module::name`), the way `elab_decide` names `bool::decide_yes`: a key is
 /// a writable name, and naming the declaration rather than the bare word is
 /// what keeps a local binder from capturing a generated call.
 const CHAR_TYPE: &str = "char::Char";
 const CHAR_INTRO: &str = "char::ofNat";
 const STRING_TYPE: &str = "string::String";
-const DECIDE_YES: &str = "logic::decide_yes";
+const DECIDE_YES: &str = "bool::decide_yes";
 
 fn var(name: &str, span: Span) -> Expr {
     Expr {
@@ -66,7 +66,7 @@ impl Elaborator {
             .is_some_and(|carrier| carrier.key == key)
     }
 
-    /// `char::ofNat(code, logic::decide_yes(refl))`. The proof is exactly the
+    /// `char::ofNat(code, bool::decide_yes(refl))`. The proof is exactly the
     /// term the `decide` goal combinator writes; the kernel judges the `refl`
     /// by running the `Decide<char::scalar(n)>` instance at the code, and it
     /// can only go the `Inl` way because the lexer already refused every
@@ -153,8 +153,56 @@ impl Elaborator {
                 embed_level,
                 std::slice::from_ref(literal),
             )?;
-            Ok(out)
+            Ok(self.reduced_embedding(cx, out))
         })())
+    }
+
+    /// A literal's embedding at a carrier whose instance is known, read as
+    /// the carrier's own construction rather than a dictionary projection:
+    /// `ofNat(8, 10)` for `'\n'` or `10` at a byte, so the frontend, `split_all`
+    /// and instance search all see the spelling the carrier's library uses
+    /// (docs/native-programs-read-like-programs-design.md §3, S3). The
+    /// projection unfolds only as far as the field's body: the first reduct
+    /// headed by another definition (`BitVec::ofNat`), with each argument
+    /// that computes to a natural literal computed (`c.toNat()` of a closed
+    /// character), or the value the field returns when it is a constructor.
+    /// A dictionary that is a local (`<A: Numeral>`) does not unfold, and the
+    /// term stays as it was.
+    pub(crate) fn reduced_embedding(&self, cx: &Cx, out: Term) -> Term {
+        let oracle = self.goal_oracle();
+        let mut last = None;
+        for reduct in oracle.term_reducts(&cx.gamma, &out, 32) {
+            let (head, _) = crate::spelling::app_spine(&reduct);
+            if matches!(head, Term::GlobalTm { .. }) {
+                return self.literal_arguments(cx, &reduct);
+            }
+            last = Some(reduct);
+        }
+        match last {
+            Some(value) if crate::spelling::app_of(&value).is_none() => value,
+            _ => out,
+        }
+    }
+
+    fn literal_arguments(&self, cx: &Cx, term: &Term) -> Term {
+        let natural = |t: &Term| {
+            let mut t = t;
+            while let Term::Succ(inner) = t {
+                t = inner;
+            }
+            matches!(t, Term::Zero | Term::NatLit(_))
+        };
+        let mut output = term.clone();
+        if let Term::App { fun, arg, .. } | Term::AppAt { fun, arg } = &mut output {
+            *fun = Rc::new(self.literal_arguments(cx, fun));
+            if !natural(arg)
+                && let Ok(computed) = self.goal_oracle().bounded(256).whnf_term(&cx.gamma, arg)
+                && natural(&computed)
+            {
+                *arg = Rc::new(computed);
+            }
+        }
+        output
     }
 
     /// A character literal in checking position.

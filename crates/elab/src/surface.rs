@@ -73,7 +73,9 @@ pub(crate) fn expression_left_leaf_is_numeral(mut e: &Expr) -> bool {
     {
         e = first;
     }
-    matches!(e.kind, ExprKind::Num(_))
+    // A character literal is as flexible as a numeral: `'\t' <= b` at a
+    // byte takes its carrier from `b`, through `CharLiteral`.
+    matches!(e.kind, ExprKind::Num(_) | ExprKind::Char(_))
 }
 
 /// Read an expression as type syntax when its shape has that second reading.
@@ -184,6 +186,10 @@ pub(super) fn for_each_free_slot(e: &Expr, f: &mut impl FnMut(Option<u64>, Span)
             go(idx);
         }
         ExprKind::RecordLit { fields, .. } => fields.iter().for_each(|x| go(&x.expr)),
+        ExprKind::RecordUpdate { base, fields } => {
+            go(base);
+            fields.iter().for_each(|x| go(&x.expr));
+        }
         ExprKind::Block(b) => {
             for stmt in &b.stmts {
                 match stmt {
@@ -350,6 +356,10 @@ fn replace_free_slots(e: &mut Expr, style: SlotStyle, next: &mut usize, excluded
             go(idx);
         }
         ExprKind::RecordLit { fields, .. } => fields.iter_mut().for_each(|x| go(&mut x.expr)),
+        ExprKind::RecordUpdate { base, fields } => {
+            go(base);
+            fields.iter_mut().for_each(|x| go(&mut x.expr));
+        }
         ExprKind::Block(b) => {
             for stmt in &mut b.stmts {
                 match stmt {
@@ -486,6 +496,10 @@ mod count_holes_impl {
             ExprKind::Index { recv, idx } => {
                 expr(recv, n);
                 expr(idx, n);
+            }
+            ExprKind::RecordUpdate { base, fields } => {
+                expr(base, n);
+                fields.iter().for_each(|f| expr(&f.expr, n));
             }
             // The receiver counts whether or not `.f` turns out to be a
             // projection: the method fallback re-elaborates it as an argument,

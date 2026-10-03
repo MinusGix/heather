@@ -3,8 +3,8 @@
 //!
 //! One module is one file and its name is the file stem; there are no
 //! compound paths, so resolving `import nat;` is a search over directories:
-//! the importing file's own directory first, then each `-L <dir>`, then any
-//! fallback directories supplied for a directory target. The walk is
+//! the importing file's own directory first, then each `-L <dir>`, then the
+//! directories below those search directories. The walk is
 //! depth-first with a path stack, which is what makes a cycle reportable *as*
 //! a cycle rather than as a stack overflow.
 //!
@@ -52,6 +52,29 @@ pub fn load(root: &Path, search: &[PathBuf]) -> Result<Vec<Module>, LoadError> {
     load_many(std::slice::from_ref(&root), search)
 }
 
+/// Load one root whose imports may also name modules the caller supplies
+/// itself (the native builder's bundled proof library): an import of a
+/// `provided` name that no file answers is left for the caller, which checks
+/// those modules before the closure. A file that does answer is loaded as
+/// usual, so the caller can still compare it with its own copy; and a name
+/// that is ambiguous on the search path stays an error, since the caller's
+/// copy would otherwise stand in for files the program's author can't tell
+/// apart.
+pub fn load_providing(root: &Path, search: &[PathBuf], provided: &[&str]) -> Result<Vec<Module>, LoadError> {
+    let mut w = Walk {
+        search,
+        below: None,
+        overlays: &HashMap::new(),
+        provided,
+        done: HashMap::new(),
+        stack: Vec::new(),
+        out: Vec::new(),
+        by_name: HashMap::new(),
+    };
+    w.visit(root)?;
+    Ok(w.out)
+}
+
 /// Load one root from an in-memory source buffer while reading its imports
 /// from disk. Resident editor clients use this so diagnostics describe the
 /// text the user can see, including changes that have not been saved yet.
@@ -65,7 +88,7 @@ pub fn load_overlay(
         .map_err(|e| LoadError::at(format!("cannot read `{}`: {e}", root.display()), root))?;
     let mut overlays = HashMap::new();
     overlays.insert(root.clone(), source.to_string());
-    load_many_inner(&[root.as_path()], search, &[], &overlays)
+    load_many_inner(&[root.as_path()], search, &overlays)
 }
 
 /// Load several roots as one import closure.
@@ -75,32 +98,19 @@ pub fn load_overlay(
 /// neither duplicated. Roots retain their supplied order, modulo dependencies
 /// appearing before the root that needs them.
 pub fn load_many(roots: &[&Path], search: &[PathBuf]) -> Result<Vec<Module>, LoadError> {
-    load_many_with_fallback(roots, search, &[])
-}
-
-/// Load several roots, consulting `fallback` only when neither the importing
-/// file's directory nor an explicit search directory contains the module.
-/// Directory targets use this for implementation modules below a facade:
-/// their descendants must be discoverable without competing with public
-/// modules in the target's own directory.
-pub fn load_many_with_fallback(
-    roots: &[&Path],
-    search: &[PathBuf],
-    fallback: &[PathBuf],
-) -> Result<Vec<Module>, LoadError> {
-    load_many_inner(roots, search, fallback, &HashMap::new())
+    load_many_inner(roots, search, &HashMap::new())
 }
 
 fn load_many_inner(
     roots: &[&Path],
     search: &[PathBuf],
-    fallback: &[PathBuf],
     overlays: &HashMap<PathBuf, String>,
 ) -> Result<Vec<Module>, LoadError> {
     let mut w = Walk {
         search,
-        search_fallback: fallback,
+        below: None,
         overlays,
+        provided: &[],
         done: HashMap::new(),
         stack: Vec::new(),
         out: Vec::new(),
@@ -114,10 +124,15 @@ fn load_many_inner(
 
 struct Walk<'a> {
     search: &'a [PathBuf],
-    search_fallback: &'a [PathBuf],
+    /// The directories below the search directories, walked on the first
+    /// import the search directories themselves miss (a hit never pays for
+    /// the walk).
+    below: Option<Vec<PathBuf>>,
     /// Canonical path → editor buffer. At present the public editor API
     /// overlays one root; keeping it a map makes recursive visits unambiguous.
     overlays: &'a HashMap<PathBuf, String>,
+    /// Module names supplied by the caller, never resolved to files.
+    provided: &'a [&'a str],
     /// Canonical path → module name. Dedup is by **path**, so a diamond costs
     /// one elaboration and two spellings of one file are one module.
     done: HashMap<PathBuf, String>,
@@ -179,7 +194,11 @@ impl Walk<'_> {
                     if imp.module == heather_elab::PRELUDE_MODULE {
                         continue;
                     }
-                    v.push((imp.module.clone(), self.resolve(&imp.module, &canon)?));
+                    match self.resolve(&imp.module, &canon) {
+                        Ok(path) => v.push((imp.module.clone(), path)),
+                        Err(Unresolved::Missing(_)) if self.provided.contains(&imp.module.as_str()) => {}
+                        Err(Unresolved::Missing(e) | Unresolved::Refused(e)) => return Err(e),
+                    }
                 }
                 v
             }
@@ -197,12 +216,13 @@ impl Walk<'_> {
     }
 
     /// `import m;` from `from`: the importing file's directory, then the `-L`
-    /// dirs, then the directory target's descendant fallback dirs. A fallback
-    /// tier is consulted only after a miss in the primary tier. Within either
+    /// dirs, then the directories below them. The lower tier is consulted only
+    /// after a miss in the upper one, so a module kept below a facade can't
+    /// shadow or conflict with a public module of the same name. Within either
     /// tier, a module found in **two** dirs is an error rather than a
     /// precedence, since which one a build got would otherwise depend on
     /// directory enumeration or flag order.
-    fn resolve(&self, module: &str, from: &Path) -> Result<PathBuf, LoadError> {
+    fn resolve(&mut self, module: &str, from: &Path) -> Result<PathBuf, Unresolved> {
         let file = format!("{module}.hthr");
         if let Some(dir) = from.parent() {
             let p = dir.join(&file);
@@ -213,26 +233,23 @@ impl Walk<'_> {
         let mut hits: Vec<PathBuf> =
             self.search.iter().map(|d| d.join(&file)).filter(|p| p.is_file()).collect();
         if hits.is_empty() {
-            hits = self
-                .search_fallback
-                .iter()
-                .map(|d| d.join(&file))
-                .filter(|p| p.is_file())
-                .collect();
+            if self.below.is_none() {
+                self.below = Some(directories_below(self.search).map_err(Unresolved::Refused)?);
+            }
+            hits = self.below.iter().flatten().map(|d| d.join(&file)).filter(|p| p.is_file()).collect();
         }
         match hits.len() {
-            0 => Err(LoadError::at(
+            0 => Err(Unresolved::Missing(LoadError::at(
                 format!(
                     "cannot find module `{module}`: no `{file}` beside `{}`{}",
                     from.display(),
-                    if self.search.is_empty() && self.search_fallback.is_empty() {
+                    if self.search.is_empty() {
                         " and no `-L` search directory was given".to_string()
                     } else {
                         format!(
-                            " or in {}",
+                            " or in {} or below",
                             self.search
                                 .iter()
-                                .chain(self.search_fallback)
                                 .map(|d| format!("`{}`", d.display()))
                                 .collect::<Vec<_>>()
                                 .join(", ")
@@ -240,18 +257,74 @@ impl Walk<'_> {
                     }
                 ),
                 from,
-            )),
+            ))),
             1 => Ok(hits.into_iter().next().expect("one hit")),
-            _ => Err(LoadError::at(
+            _ => Err(Unresolved::Refused(LoadError::at(
                 format!(
                     "module `{module}` is in two search directories ({}) — that is an \
                      error, not a precedence: remove one copy or drop one `-L`",
                     hits.iter().map(|p| format!("`{}`", p.display())).collect::<Vec<_>>().join(", ")
                 ),
                 from,
-            )),
+            ))),
         }
     }
+}
+
+/// Why an import did not resolve. Only a `Missing` name may be left to a
+/// caller that provides it; an ambiguous one, or a directory that couldn't be
+/// read, is refused whoever provides the name.
+enum Unresolved {
+    Missing(LoadError),
+    Refused(LoadError),
+}
+
+/// Every directory below the search directories, depth-first in name order,
+/// leaving out those that are search directories themselves (which already
+/// answered in the upper tier) and hidden ones: a dot-directory is a tool's
+/// (`.git`, a cache, a worktree checkout holding a second copy of the whole
+/// library), never a module family.
+fn directories_below(search: &[PathBuf]) -> Result<Vec<PathBuf>, LoadError> {
+    let canonical = |d: &Path| d.canonicalize().unwrap_or_else(|_| d.to_path_buf());
+    let mut seen: std::collections::HashSet<PathBuf> = search.iter().map(|d| canonical(d)).collect();
+    let mut below: Vec<PathBuf> = Vec::new();
+    for root in search {
+        let mut pending = child_directories(root)?;
+        pending.reverse();
+        while let Some(dir) = pending.pop() {
+            if seen.insert(canonical(&dir)) {
+                below.push(dir.clone());
+            }
+            pending.extend(child_directories(&dir)?.into_iter().rev());
+        }
+    }
+    Ok(below)
+}
+
+fn child_directories(dir: &Path) -> Result<Vec<PathBuf>, LoadError> {
+    // A search directory that doesn't exist has nothing below it: the upper
+    // tier already treats it as holding no modules.
+    if !dir.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut children = std::fs::read_dir(dir)
+        .map_err(|e| LoadError::new(format!("cannot read directory `{}`: {e}", dir.display())))?
+        .filter_map(|entry| match entry {
+            Ok(entry) => match entry.file_type() {
+                Ok(kind) if kind.is_dir() && !entry.file_name().to_string_lossy().starts_with('.') => {
+                    Some(Ok(entry.path()))
+                }
+                Ok(_) => None,
+                Err(e) => Some(Err(LoadError::new(format!(
+                    "cannot inspect entry in directory `{}`: {e}",
+                    dir.display()
+                )))),
+            },
+            Err(e) => Some(Err(LoadError::new(format!("cannot read directory `{}`: {e}", dir.display())))),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    children.sort();
+    Ok(children)
 }
 
 /// The module name of a file: its stem, which must be an identifier.

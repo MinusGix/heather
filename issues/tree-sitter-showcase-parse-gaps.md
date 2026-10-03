@@ -79,6 +79,6 @@ does not exist yet, which is their job.
   exclusions: every checkable manifest row now parses. All 13 Tree-sitter corpus
   cases, positive fixtures, five queries, and both Heather editor-corpus tests
   pass. The full repository check still reports parse errors in the already
-  modified `lib/std/arch/x86_64/fetched_code.hthr` and `store.hthr`; a scratch
+  modified `lib/std/arch/x86_64/x86_64_fetched_code.hthr` and `store.hthr`; a scratch
   parser generated from HEAD reproduces both at the same ranges, so those are
   independent of this issue and this fix.

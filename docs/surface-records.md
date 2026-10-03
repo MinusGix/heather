@@ -434,6 +434,34 @@ expected `Π` (`docs/constructor-function-values.md`), so the machinery is
 there. It is deferred only because `⟨⟩` needs lexer support and is awkward to
 type; it should land as a small follow-up, not a round.
 
+### 6.2 Update (added 2026-10-03)
+
+`s with { f = v, … }` is the literal that writes the given fields and keeps
+every other one as `s`'s projection (`issues/record-update-syntax.md`):
+
+```heather
+fn wc_step(s: WcState, b: BitVec(8)) → WcState {
+    … s with { bytes = Succ(s.bytes), inside = False } …
+}
+```
+
+- **Postfix, on any expression**, chaining left to right
+  (`p with { x = 0 } with { y = 0 }`). `with` is a word only before a `{`, so
+  it names nothing else and is no keyword elsewhere. Fields are written with
+  `=`, as a program assigns them; the literal's `:` declares them.
+- **Elaborated as the literal.** The elaborator infers the base's type, finds
+  the record, and checks or infers `R { f1: …, f2: … }` with each unwritten
+  field `base.f` (`Elaborator::record_update_expr`). A base that is not a
+  local is bound once by a `let`, an alias, so the term is the constructor
+  over projections in either case. That is the term every record reader
+  already takes; the native frontend reads it as a record result like any
+  other.
+- **Refused:** a field the record does not have, a field written twice, a
+  base that is not a record, an empty update (at parse), and a kept field
+  whose type mentions a replaced one, below binders too (`unit_l` when `unit`
+  or `op` is replaced). Its old value is about the old field, so the update
+  must give it as well, and then it is accepted.
+
 ## 7. Equality of records
 
 Two directions, and they are not the same problem.
@@ -472,7 +500,7 @@ discussion:
   dispatch is the other issue.
 - **Coercions** of any kind.
 - **Bundled records** (a `Type`-valued field) — §3.
-- **Record update** (`{ m with unit: 1 }`).
+- **Record update**: landed later, as `m with { unit = 1, … }` (§6.2).
 - **Recursive records** — that is an `inductive`, and §2's check says so.
 - **Anonymous `⟨…⟩` literals** — §6, wanted, small, deferred.
 - **Record equality construction** — §7.

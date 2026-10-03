@@ -132,6 +132,10 @@
         "named": true
       },
       {
+        "type": "record_update_expression",
+        "named": true
+      },
+      {
         "type": "refl_expression",
         "named": true
       },
@@ -5245,6 +5249,58 @@
     }
   },
   {
+    "type": "record_update_expression",
+    "named": true,
+    "fields": {
+      "value": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "record_update_field",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "record_update_field",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "value": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "refl_expression",
     "named": true,
     "fields": {}
@@ -6231,6 +6287,10 @@
   },
   {
     "type": "theorem",
+    "named": false
+  },
+  {
+    "type": "with",
     "named": false
   },
   {

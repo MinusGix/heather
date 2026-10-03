@@ -1,6 +1,6 @@
 //! The `decide` goal combinator (issues/reflection-through-decide-instances.md,
 //! docs/reflection-through-decide-instances-design.md §4): a closed decided
-//! goal is proved by `logic::decide_yes(refl)`, with resolution picking the
+//! goal is proved by `bool::decide_yes(refl)`, with resolution picking the
 //! `Decide` instance and the kernel running its decision. Every generated
 //! term here is checked by the kernel, so the four axes of
 //! docs/testing-generated-terms.md reduce to: a checking position (always),
@@ -67,6 +67,7 @@ fn decide_is_a_leaf_for_all_goals() {
 fn a_false_closed_goal_is_refused_at_the_decide_and_names_the_instance() {
     let msg = bad(r#"
         import logic;
+        import bool;
         import nat;
 
         theorem wrong(): nat::Nat::Le(5, 2) { decide }
@@ -75,9 +76,9 @@ fn a_false_closed_goal_is_refused_at_the_decide_and_names_the_instance() {
     assert!(msg.contains("`decide` resolved `Decide<"), "{msg}");
     assert!(msg.contains("nat::Nat::Le::Decide"), "{msg}");
     assert!(msg.contains("not `Inl`"), "{msg}");
-    // The span is the `decide` (line 5, column 47 of the source above), not
+    // The span is the `decide` (line 6, column 47 of the source above), not
     // the declaration head.
-    assert!(msg.starts_with("5:47:"), "{msg}");
+    assert!(msg.starts_with("6:47:"), "{msg}");
 }
 
 #[test]
@@ -86,6 +87,7 @@ fn a_passing_decide_is_not_blamed_for_another_refusal() {
     // and must not be named. Its record is consulted and found convertible.
     let msg = bad(r#"
         import logic;
+        import bool;
         import nat;
 
         theorem mixed(): nat::Nat::Le(2, 5) ∧ (2 = 3) { And(decide, refl) }
@@ -100,6 +102,7 @@ fn an_open_goal_is_reported_as_undecided_not_false() {
     // the kernel is where it stops; the note says so without claiming falsity.
     let msg = bad(r#"
         import logic;
+        import bool;
         import nat;
 
         theorem open_goal(n: Nat): n = n { decide }
@@ -112,6 +115,7 @@ fn an_open_goal_is_reported_as_undecided_not_false() {
 fn a_goal_with_no_instance_reports_the_search() {
     let msg = bad(r#"
         import logic;
+        import bool;
 
         theorem no_instance(P: Type, p: P): P { decide }
         "#);
@@ -119,17 +123,18 @@ fn a_goal_with_no_instance_reports_the_search() {
 }
 
 #[test]
-fn decide_needs_the_logic_module() {
+fn decide_needs_the_bool_module() {
     let mut e = Elaborator::with_prelude().expect("prelude");
     let src = "theorem t(): 2 = 2 { decide }";
     let msg = e.elab_source(src).expect_err("no Decide class in scope").render(src);
-    assert!(msg.contains("import logic;"), "{msg}");
+    assert!(msg.contains("import bool;"), "{msg}");
 }
 
 #[test]
 fn decide_gives_way_to_what_the_writer_bound() {
     ok(r#"
         import logic;
+        import bool;
         import nat;
 
         // A hypothesis named `decide` is the hypothesis.
@@ -140,6 +145,7 @@ fn decide_gives_way_to_what_the_writer_bound() {
     // A user global of that name is not the combinator either.
     ok(r#"
         import logic;
+        import bool;
 
         fn decide() -> Nat { 3 }
         theorem user_global(): decide() = 3 { refl }

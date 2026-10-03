@@ -37,7 +37,7 @@ canonical execution and the existing source-result certificate.
 
 ## Log
 
-- 2026-09-07: First slice implemented in `lib/std/arch/x86_64/fetch.hthr`:
+- 2026-09-07: First slice implemented in `lib/std/arch/x86_64/x86_64_fetch.hthr`:
   explicit byte-reader/execute-policy interface, exact-span fetch outcomes,
   nonwrapping address advancement, and `ExecuteFetched` connecting the same
   before-state memory to canonical `ExecuteAt`. Focused x86 checks pass,
