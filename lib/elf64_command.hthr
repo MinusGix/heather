@@ -9,6 +9,7 @@
 // register but RSP, which holds the operand's fd. The claim is
 // `command_runs`, against elf64_command_events' `command_events`.
 import command_program;
+import decimal_line;
 import elf64_arg_scan;
 import elf64_command_events;
 import elf64_format_width;
@@ -2863,8 +2864,9 @@ theorem keep_runs(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64), 
     page: Nat → BitVec(8), state: MachineState<IoMemory>, memory_is: state.memory = IoMemory(with_frame(file, frame), page),
     rip_is: state.rip = eof_rip(ca_keep_mask()), r8: read_gpr(R8, state.gprs) = mask, r9: read_gpr(R9, state.gprs) = word_of_nat(64, n),
     events: Bool → List<LinuxEvent>,
-    to_stat: KeptGoes(file, mask, n, read_gpr(Rsp, state.gprs), ca_stat(), λ _ => True, events(True)),
-    to_one: KeptGoes(file, mask, n, read_gpr(Rsp, state.gprs), ca_wstore(), λ g => read_gpr(Rsi, g) = BitVec::ofNat(1), events(False))):
+    to_stat: stats_made(mask, n) = True → KeptGoes(file, mask, n, read_gpr(Rsp, state.gprs), ca_stat(), λ _ => True, events(True)),
+    to_one: stats_made(mask, n) = False →
+        KeptGoes(file, mask, n, read_gpr(Rsp, state.gprs), ca_wstore(), λ g => read_gpr(Rsi, g) = BitVec::ofNat(1), events(False))):
     LinuxRuns(io_linux(), events(stats_made(mask, n)), state) {
     let io = io_linux();
     let fetch = io_fetch_access();
@@ -2908,7 +2910,7 @@ theorem keep_runs(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64), 
                 cmd_j_few_jae());
             let made: (stats_made(mask, n) = True) = cong_fn<Bool, Bool>(λ x => !(x && single_count(mask)), io_leb_false(n, 1, many));
             j(sym(made), λ x _ => LinuxRuns(io, events(x), state), linux_runs_after_linux_steps(io, events(True), state, s4, to_s4,
-                to_stat(frame2, vars2, b.holds, at16, at21, page, s4, c.memory_is, s4_rip, refl, trivial)))
+                to_stat(made)(frame2, vars2, b.holds, at16, at21, page, s4, c.memory_is, s4_rip, refl, trivial)))
         },
         True => λ below => {
             let lt = cmp_below(count, two, below);
@@ -2932,7 +2934,7 @@ theorem keep_runs(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64), 
                     let made: (stats_made(mask, n) = True) = trans(cong_fn<Bool, Bool>(λ x => !(x && single_count(mask)), leb1),
                         cong_fn<Bool, Bool>(λ s => !(True && s), multi));
                     j(sym(made), λ x _ => LinuxRuns(io, events(x), state), linux_runs_after_linux_steps(io, events(True), state, s6, to_s6,
-                        to_stat(frame2, vars2, b.holds, at16, at21, page, s6, e.memory_is, s6_rip, refl, trivial)))
+                        to_stat(made)(frame2, vars2, b.holds, at16, at21, page, s6, e.memory_is, s6_rip, refl, trivial)))
                 },
                 True => λ single => {
                     let s6_rip = jcc_passed(NE, cmd_d_single_jne(), s5, io_entry(), ca_single_jne(), e.rip_is,
@@ -2948,7 +2950,7 @@ theorem keep_runs(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64), 
                     j(sym(made), λ x _ => LinuxRuns(io, events(x), state), linux_runs_after_linux_steps(io, events(False), state, s8,
                         linux_steps_trans(io, state, s6, s8, to_s6, linux_steps_of_fetched(io, s6, s8, fetched_steps_trans(fetch, data, s6, s7, s8,
                             g.steps, h))),
-                        to_one(frame2, vars2, b.holds, at16, at21, page, s8, g.memory_is, s8_rip, refl, refl)))
+                        to_one(made)(frame2, vars2, b.holds, at16, at21, page, s8, g.memory_is, s8_rip, refl, refl)))
                 },
             })(refl)
         },
@@ -3252,4 +3254,196 @@ theorem inputs_runs<C>(file: IoImage, letters: List<BitVec(8)>, default: BitVec(
                 width, narrow, Cons(name, more).len(), some, few, history.total, rsp, Cons(name, more))(history.runs, no_counts(), ok, k, False,
                 command_args(argv), pointers2, argv2, left)),
     }
+}
+
+// ---------------------------------------------------------------------------
+// The claim's bounds: the width is at most twenty, and there are no more
+// operands than arguments.
+
+theorem digits_le(x: BitVec(64)): decimal(x.toNat()).len() <= 20 {
+    let n = x.toNat();
+    let digits: (decimal(n).len() = Succ(places_reached(19, n))) = decimal_len(n, BitVec::toNat_lt_pow(64, x));
+    let few = places_le(n, 19);
+    let bound: (decimal(n).len() <= 20) = omega;
+    bound
+}
+theorem widened_le(other: Bool, d: Nat, le: d <= 20): widened(other, d) <= 20 {
+    match other as λ o => widened(o, d) <= 20 {
+        False => le,
+        True => match Nat::leb(7, d) as λ c => (match c { True => d, False => 7 }) <= 20 {
+            True => le,
+            False => {
+                let b: (7 <= 20) = omega;
+                b
+            },
+        },
+    }
+}
+theorem stat_width_le(seen: List<StatSeen>): stat_width(seen) <= 20 {
+    widened_le(any_other(False, seen), decimal(regular_total(BitVec::zero(), seen).toNat()).len(),
+        digits_le(regular_total(BitVec::zero(), seen)))
+}
+theorem operands_le(args: List<List<BitVec(8)>>): (ended: Bool) → operands_from(ended, args).len() <= args.len() {
+    match args as λ a => (ended: Bool) → operands_from(ended, a).len() <= a.len() {
+        Nil => λ _ => Nat::le_refl(0),
+        Cons(arg, rest) => λ ended => {
+            let kept = λ (e: Bool) => {
+                let r = operands_le(rest, e);
+                let b: (Succ(operands_from(e, rest).len()) <= Succ(rest.len())) = omega;
+                b
+            };
+            let dropped = λ (e: Bool) => {
+                let r = operands_le(rest, e);
+                let b: (operands_from(e, rest).len() <= Succ(rest.len())) = omega;
+                b
+            };
+            match ended as λ e => operands_from(e, Cons(arg, rest)).len() <= Succ(rest.len()) {
+                True => kept(True),
+                False => match arg as λ g => operands_from(False, Cons(g, rest)).len() <= Succ(rest.len()) {
+                    Nil => kept(False),
+                    Cons(first, tail) => match first.eq_bit(dash()) as λ c => (match c {
+                            False => Cons(Cons(first, tail), operands_from(False, rest)),
+                            True => match tail {
+                                Nil => Cons(Cons(first, tail), operands_from(False, rest)),
+                                Cons(second, more) => operands_from(!letters_follow(second, more), rest),
+                            },
+                        }).len() <= Succ(rest.len()) {
+                        False => kept(False),
+                        True => match tail as λ t => (match t {
+                                Nil => Cons(Cons(first, t), operands_from(False, rest)),
+                                Cons(second, more) => operands_from(!letters_follow(second, more), rest),
+                            }).len() <= Succ(rest.len()) {
+                            Nil => kept(False),
+                            Cons(second, more) => dropped(!letters_follow(second, more)),
+                        },
+                    },
+                },
+            }
+        },
+    }
+}
+theorem with_frame_self(file: IoImage): with_frame(file, file.frame) = file { refl }
+theorem args_le(argv: List<List<BitVec(8)>>): command_args(argv).len() <= argv.len() {
+    match argv as λ a => command_args(a).len() <= a.len() {
+        Nil => Nat::le_refl(0),
+        Cons(_, rest) => {
+            let b: (rest.len() <= Succ(rest.len())) = omega;
+            b
+        },
+    }
+}
+theorem operands_few(argv: List<List<BitVec(8)>>, operands: List<List<BitVec(8)>>, same: operands_from(False, command_args(argv)) = operands,
+    argc: argv.len() < Nat::pow(2, 31)): operands.len() < Nat::pow(2, 64) {
+    let bound = operands_le(command_args(argv), False);
+    let args = args_le(argv);
+    let len_same: (operands_from(False, command_args(argv)).len() = operands.len()) =
+        cong_fn<List<List<BitVec(8)>>, Nat>(λ o => o.len(), same);
+    let few: (operands.len() < Nat::pow(2, 64)) = omega;
+    few
+}
+theorem one_narrow(): 1 <= 20 { omega }
+
+// ---------------------------------------------------------------------------
+// The claim.
+
+// What the history must be, and what the run does, once the command line is
+// parsed: `CommandHistoryOk` and `command_events` past their match.
+fn parsed_ok<C>(shape: FilterShape<C>, column: Nat → C → BitVec(64), history: CommandHistory, parsed: Scanned) → Type {
+    match parsed {
+        Refused => True,
+        Scanned(mask, operands) => match stats_made(mask, operands.len()) {
+            True => StatsFit(stat_targets(operands), history.stats) ∧
+                InputsOk(shape, column, mask, stat_width(history.stats.map(stat_seen)), operands, history),
+            False => InputsOk(shape, column, mask, 1, operands, history),
+        },
+    }
+}
+fn parsed_events<C>(shape: FilterShape<C>, column: Nat → C → BitVec(64), history: CommandHistory, parsed: Scanned) → List<LinuxEvent> {
+    match parsed {
+        Refused => [ExitEvent(BitVec::ofNat(1))],
+        Scanned(mask, operands) => match stats_made(mask, operands.len()) {
+            True => stat_events(stat_targets(operands), history.stats) ++
+                inputs_events(shape, column, mask, stat_width(history.stats.map(stat_seen)), operands, history),
+            False => inputs_events(shape, column, mask, 1, operands, history),
+        },
+    }
+}
+// Past the scan (602), the command line parsed: the selection and the count
+// kept, the stat pass or width 1, the slots set, then the inputs.
+theorem parsed_runs<C>(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64), spill: Nat → StateReg, shape: FilterShape<C>,
+    facts: FilterFacts<C>(shape), jumps: FilterJumps, pj: PrintJumps, placed: CommandPlaced(file, letters, default, spill, shape.code, jumps, pj),
+    targets: CoreTargets(ca_core(), ca_head(), structured_bytes(shape.code).len(), jumps, pj), column: Nat → C → BitVec(64),
+    spilled: (i: Nat) → i < 8 → (g: Gprs) → (s: C) → shape.rep(g, s) → read_gpr(state_gpr(spill(i)), g) = column(i)(s),
+    argv: List<List<BitVec(8)>>, pointers: List<BitVec(64)>, history: CommandHistory, argc: argv.len() < Nat::pow(2, 31),
+    mask: BitVec(64), operands: List<List<BitVec(8)>>, same: operands_from(False, command_args(argv)) = operands,
+    ok: parsed_ok(shape, column, history, Scanned(mask, operands)), page: Nat → BitVec(8), state: MachineState<IoMemory>,
+    memory_is: state.memory = IoMemory(with_frame(file, file.frame), page), rip_is: state.rip = eof_rip(ca_keep_mask()),
+    r8: read_gpr(R8, state.gprs) = mask, r9: read_gpr(R9, state.gprs) = word_of_nat(64, operands.len()),
+    stays: ArgvStaysAt(file, read_gpr(Rsp, state.gprs), argv, pointers)):
+    LinuxRuns(io_linux(), parsed_events(shape, column, history, Scanned(mask, operands)), state) {
+    let n = operands.len();
+    let rsp = read_gpr(Rsp, state.gprs);
+    let few = operands_few(argv, operands, same, argc);
+    let width = stat_width(history.stats.map(stat_seen));
+    let made_ok = λ (b: Bool) => match b as λ _ => Type {
+        True => StatsFit(stat_targets(operands), history.stats) ∧ InputsOk(shape, column, mask, width, operands, history),
+        False => InputsOk(shape, column, mask, 1, operands, history),
+    };
+    let events = λ (b: Bool) => match b {
+        True => stat_events(stat_targets(operands), history.stats) ++ inputs_events(shape, column, mask, width, operands, history),
+        False => inputs_events(shape, column, mask, 1, operands, history),
+    };
+    keep_runs(file, letters, default, spill, shape.code, jumps, pj, placed, file.frame, λ i => frame_word(file.frame, 8 * i),
+        frame_holds_self(file.frame), mask, n, few, page, state, memory_is, rip_is, r8, r9, events,
+        λ made => {
+            let held: made_ok(True) = j(made, λ c _ => made_ok(c), ok);
+            let after = inputs_events(shape, column, mask, width, operands, history);
+            j(same, λ o _ => KeptGoes(file, mask, n, rsp, ca_stat(), λ _ => True, stat_events(stat_targets(o), history.stats) ++ after),
+                stat_pass(file, letters, default, spill, shape.code, jumps, pj, placed, mask, n, rsp, argv, pointers, stays, history.stats,
+                    j(sym(same), λ o _ => StatsFit(stat_targets(o), history.stats), held.left), after,
+                    init_runs(file, letters, default, spill, shape.code, jumps, pj, placed, mask, n, rsp, width, after,
+                        inputs_runs(file, letters, default, spill, shape, facts, jumps, pj, placed, targets, column, spilled, mask, width,
+                            stat_width_le(history.stats.map(stat_seen)), rsp, argv, pointers, stays, history, operands)(same, few, held.right))))
+        },
+        λ made => {
+            let held: made_ok(False) = j(made, λ c _ => made_ok(c), ok);
+            let after = inputs_events(shape, column, mask, 1, operands, history);
+            one_width(file, mask, n, rsp, after,
+                init_runs(file, letters, default, spill, shape.code, jumps, pj, placed, mask, n, rsp, 1, after,
+                    inputs_runs(file, letters, default, spill, shape, facts, jumps, pj, placed, targets, column, spilled, mask, 1, one_narrow(),
+                        rsp, argv, pointers, stays, history, operands)(same, few, held)))
+        })
+}
+// The claim: for a file holding the command's code at the entry, whatever
+// its frame holds, any argv laid out at RSP with fewer than 2^31 arguments
+// (Linux's MAX_ARG_STRINGS), any page, registers and flags, and any history
+// Linux can give, the process makes `command_events`.
+theorem command_runs<C>(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64), spill: Nat → StateReg, shape: FilterShape<C>,
+    facts: FilterFacts<C>(shape), jumps: FilterJumps, pj: PrintJumps, placed: CommandPlaced(file, letters, default, spill, shape.code, jumps, pj),
+    targets: CoreTargets(ca_core(), ca_head(), structured_bytes(shape.code).len(), jumps, pj), column: Nat → C → BitVec(64),
+    spilled: (i: Nat) → i < 8 → (g: Gprs) → (s: C) → shape.rep(g, s) → read_gpr(state_gpr(spill(i)), g) = column(i)(s),
+    argv: List<List<BitVec(8)>>, pointers: List<BitVec(64)>, history: CommandHistory,
+    ok: CommandHistoryOk(shape, column, letters, default, argv, history), page: Nat → BitVec(8), gprs: Gprs, flags: Flags,
+    stays: ArgvStaysAt(file, read_gpr(Rsp, gprs), argv, pointers), argc: argv.len() < Nat::pow(2, 31)):
+    LinuxRuns(io_linux(), command_events(shape, column, letters, default, argv, history), io_initial(file, page, gprs, flags)) {
+    let io = io_linux();
+    let state = io_initial(file, page, gprs, flags);
+    let pieces = cmd_pieces(file, letters, default, spill, shape.code, jumps, pj, placed(file.frame));
+    let ops = operands_from(False, command_args(argv));
+    let checked: parsed_ok(shape, column, history, parse_args(letters, default, argv)) = ok;
+    let result: LinuxRuns(io, parsed_events(shape, column, history, parse_args(letters, default, argv)), state) =
+        (match parse_args(letters, default, argv) as λ r => ScanResult(file, page, eof_rip(ca_scan()), gprs, r, state) → OperandsAre(r, ops) →
+                parsed_ok(shape, column, history, r) → LinuxRuns(io, parsed_events(shape, column, history, r), state) {
+            Refused => λ runs _ _ => runs,
+            Scanned(mask, operands) => λ scanned same held => {
+                let s1 = scanned.witness;
+                let out = scanned.proof.right;
+                linux_runs_after_steps(io, parsed_events(shape, column, history, Scanned(mask, operands)), state, s1, scanned.proof.left,
+                    parsed_runs(file, letters, default, spill, shape, facts, jumps, pj, placed, targets, column, spilled, argv, pointers, history, argc,
+                        mask, operands, sym(same), held, page, s1, out.memory_is, trans(out.rip_is, rip_compose(io_entry(), ca_scan(), scan_len())),
+                        out.r8, out.r9, j(sym(out.kept.left), λ r _ => ArgvStaysAt(file, r, argv, pointers), stays)))
+            },
+        })(scan_runs(file, letters, default, eof_rip(ca_scan()), pieces.scan, page, argv, state, refl, refl,
+            stays_argv_at(file, read_gpr(Rsp, gprs), argv, pointers, stays, page)), parse_operands(letters, default, argv), checked);
+    result
 }
