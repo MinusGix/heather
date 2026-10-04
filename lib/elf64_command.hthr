@@ -601,7 +601,6 @@ fn command_code(letters: List<BitVec(8)>, default: BitVec(64), spill: Nat → St
     layout_code(command_parts(letters, default, spill), filter_core_code(code, jumps, pj))
 }
 
-
 // ---------------------------------------------------------------------------
 // The pieces, wherever the frame and the page are.
 
