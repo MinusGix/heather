@@ -36,3 +36,7 @@ Not a soundness problem (the kernel refuses), a diagnostics one: the
 elaborator should point at `p` and say it is a conjunction, not an equation.
 
 The counting that produced the bad projection is [[conjunction-facts-read-by-counting]].
+
+## Log
+
+- 2026-10-04: A second shape of the same gap, in `lib/elf64_row_fields.hthr`'s `row_selected`: inside a `match first as λ f => … → RowAt(…, f, …) → …` whose arm bound the refined record as `head1`, a record built from `page := head.page` and `holds := head1.holds` elaborated, and the kernel refused it (`PageNext` "where a type that displays the same is expected"). Here the kernel's message did carry a span. The elaborator treated `head1.page` and `head.page` as the same; they are different variables.

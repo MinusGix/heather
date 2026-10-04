@@ -51,6 +51,10 @@ mod stat_width_process;
 mod operand_cursor_refusals;
 #[path = "../stat_width_refusals.rs"]
 mod stat_width_refusals;
+#[path = "../row_fields_process.rs"]
+mod row_fields_process;
+#[path = "../row_fields_refusals.rs"]
+mod row_fields_refusals;
 #[path = "../filter_step_generation.rs"]
 mod filter_step_generation;
 #[path = "../read_print_process.rs"]

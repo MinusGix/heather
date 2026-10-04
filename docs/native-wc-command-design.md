@@ -702,6 +702,34 @@ from §6.1:
   `operand_cursor_refusals.rs` (two) and `stat_width_refusals.rs` (seven), a
   file each so each shard fits the suite's CPU rail.
 
+**Status (C2's row writer built, 2026-10-04): `lib/elf64_row_fields.hthr`,
+against `command_program`'s `row_counts`.** This finishes C2. Where it
+differs from §6.1 and §6.2:
+
+- **Only the counts.** The writer stores a row's fields in the page; the
+  name and the newline are the driver's (C3), written after the fields
+  straight from argv as §6.1 says. So one piece writes both a file's row
+  and the total row.
+- **Counts by slot, not a producer table.** The counts are eight words, one
+  per column slot, at an address the caller passes in R12; column `i`'s
+  count is slot `i`'s. The driver stores the state's counts into the slots
+  (wc's `m` and `c` both get the byte count), so the writer needs no table
+  of frame offsets and no generated code. `CountsAt` says the slots hold
+  the counts at every page, since the formatter writes the page.
+- **One formatter, in a loop.** R15 is slot `i`'s bit and doubles each
+  round; R9 says whether a field has been written, for the space between
+  fields. The loop ends when R15 reaches 256. RDI is the cursor throughout,
+  as the formatter leaves it.
+- **Claim:** `row_runs`: placed anywhere, with R12, R13 (the selection),
+  R14 (the width) and RDI set, the writer stores `row_counts` at the cursor,
+  leaves the rest of the page alone and moves RDI past it; RSP, RBP, R8 and
+  R10 are kept. Room for eight fields of the width plus 21 bytes is a
+  premise.
+- Its kept registers are a `record` (`RowKept`) rather than a conjunction,
+  per `issues/conjunction-facts-read-by-counting.md`.
+  Tests: `crates/elab/tests/row_fields_process.rs` (a client placing it past
+  any header; §2's rows) and `row_fields_refusals.rs` (seven).
+
 **Refusal controls** (mutations the library must reject), in the
 `slow_acceptance_` tests as now: the row loop printing an unselected
 column; the formatter's pad loop off by one (`width ≥ k`); the stat pass

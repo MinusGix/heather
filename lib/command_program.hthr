@@ -171,3 +171,29 @@ fn width_from(total: BitVec(64), other: Bool, seen: List<StatSeen>) → Nat {
 // adds nothing, wherever it is. (When no stat is made at all, for one input
 // and one count, the width is 1; the command decides that.)
 fn stat_width(seen: List<StatSeen>) → Nat { width_from(BitVec::zero(), False, seen) }
+
+// ---------------------------------------------------------------------------
+// A row's counts (coreutils' `write_counts`): each selected column's count,
+// in column order, right-aligned in the width, a space between them. The
+// counts are by slot: `counts(i)` is column `i`'s, as the command keeps them
+// in its frame. The name and the newline are the command's to write after.
+
+fn field_gap() → BitVec(8) { BitVec::ofNat(32) }
+fn field_lead(first: Bool) → List<BitVec(8)> { match first { True => Nil, False => [field_gap()] } }
+fn column_selected(mask: BitVec(64), i: Nat) → Bool { !mask.band(column_bit(i)).eq_bit(BitVec::zero()) }
+
+// The fields of slots `i` .. `i + j - 1`, `first` saying no field has been
+// written before them.
+fn row_fields(width: Nat, mask: BitVec(64), counts: Nat → BitVec(64), first: Bool, i, j: Nat) → List<BitVec(8)> {
+    match j {
+        Zero => Nil,
+        Succ(k) => match column_selected(mask, i) {
+            False => row_fields(width, mask, counts, first, Succ(i), k),
+            True => field_lead(first) ++ (pad_left(width, field_gap(), decimal(counts(i).toNat())) ++
+                row_fields(width, mask, counts, False, Succ(i), k)),
+        },
+    }
+}
+fn row_counts(width: Nat, mask: BitVec(64), counts: Nat → BitVec(64)) → List<BitVec(8)> {
+    row_fields(width, mask, counts, True, 0, column_slots())
+}
