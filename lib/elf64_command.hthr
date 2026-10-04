@@ -2838,3 +2838,119 @@ theorem operand_loop<C>(file: IoImage, letters: List<BitVec(8)>, default: BitVec
         },
     }
 }
+
+// ---------------------------------------------------------------------------
+// The prologue: the scan (0), the selection and the operand count into their
+// slots (602), the stat pass when one is made (700) or width 1 (685), the
+// width, status and totals into theirs (1723), the cursor's start (1863),
+// then the operand loop, or stdin when there is no operand (1906).
+
+// Past the slots of the selection and the count, at `to` with `extra` of
+// the registers.
+fn KeptGoes(file: IoImage, mask: BitVec(64), n: Nat, rsp: BitVec(64), to: Nat, extra: Gprs → Type, events: List<LinuxEvent>) → Type {
+    (frame: Nat → BitVec(8)) → (vars: Nat → BitVec(64)) → FrameHolds(frame, vars) → vars(16) = mask → vars(21) = word_of_nat(64, n) →
+        (page: Nat → BitVec(8)) → (state: MachineState<IoMemory>) → state.memory = IoMemory(with_frame(file, frame), page) →
+        state.rip = eof_rip(to) → read_gpr(Rsp, state.gprs) = rsp → extra(state.gprs) → LinuxRuns(io_linux(), events, state)
+}
+fn keep_few_block() → List<Instruction> { [MovRI(R11, BitVec::ofNat(2)), CmpRR(R9, R11)] }
+fn keep_single_block() → List<Instruction> {
+    [MovRI(R11, BitVec::ofNat(1)), MovRR(Rax, R8), SubRR(Rax, R11), AndRR(Rax, R8), MovRI(R11, word_zero()), CmpRR(Rax, R11)]
+}
+fn keep_one_block() → List<Instruction> { [MovRI(Rsi, BitVec::ofNat(1))] }
+theorem keep_runs(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64), spill: Nat → StateReg, code: StructuredCode,
+    jumps: FilterJumps, pj: PrintJumps, placed: CommandPlaced(file, letters, default, spill, code, jumps, pj),
+    frame: Nat → BitVec(8), vars: Nat → BitVec(64), holds: FrameHolds(frame, vars), mask: BitVec(64), n: Nat, few: n < Nat::pow(2, 64),
+    page: Nat → BitVec(8), state: MachineState<IoMemory>, memory_is: state.memory = IoMemory(with_frame(file, frame), page),
+    rip_is: state.rip = eof_rip(ca_keep_mask()), r8: read_gpr(R8, state.gprs) = mask, r9: read_gpr(R9, state.gprs) = word_of_nat(64, n),
+    events: Bool → List<LinuxEvent>,
+    to_stat: KeptGoes(file, mask, n, read_gpr(Rsp, state.gprs), ca_stat(), λ _ => True, events(True)),
+    to_one: KeptGoes(file, mask, n, read_gpr(Rsp, state.gprs), ca_wstore(), λ g => read_gpr(Rsi, g) = BitVec::ofNat(1), events(False))):
+    LinuxRuns(io_linux(), events(stats_made(mask, n)), state) {
+    let io = io_linux();
+    let fetch = io_fetch_access();
+    let data = io_data_access();
+    let img = with_frame(file, frame);
+    let pieces = cmd_pieces(img, letters, default, spill, code, jumps, pj, placed(frame));
+    let a = run_slot_store(file, frame, vars, holds, page, ca_keep_mask(), 16, { omega }, R8, pieces.keep(0), pieces.keep(1), state,
+        memory_is, rip_is);
+    let s1 = slot_store_after(R8, 16, state);
+    let w8 = read_gpr(R8, state.gprs);
+    let frame1 = stored_frame(file, frame, 16, w8);
+    let vars1 = set_var(vars, 16, w8);
+    let pieces1 = cmd_pieces(with_frame(file, frame1), letters, default, spill, code, jumps, pj, placed(frame1));
+    let b = run_slot_store(file, frame1, vars1, a.holds, page, ca_keep_count(), 21, { omega }, R9, pieces1.keep(2), pieces1.keep(3), s1,
+        a.memory_is, a.rip_is);
+    let s2 = slot_store_after(R9, 21, s1);
+    let w9 = read_gpr(R9, state.gprs);
+    let frame2 = stored_frame(file, frame1, 21, w9);
+    let vars2 = set_var(vars1, 21, w9);
+    let img2 = with_frame(file, frame2);
+    let pieces2 = cmd_pieces(img2, letters, default, spill, code, jumps, pj, placed(frame2));
+    let at16: (vars2(16) = mask) = r8;
+    let at21: (vars2(21) = word_of_nat(64, n)) = r9;
+    let to_s2 = linux_steps_trans(io, state, s1, s2, a.steps, b.steps);
+    let c = run_block(img2, page, keep_few_block(), io_entry(), ca_few(), pieces2.keep(4), s2, b.memory_is, b.rip_is);
+    let s3 = execute_block_normal(keep_few_block(), s2);
+    let jae = JumpIfNear(AE, cmd_d_few_jae());
+    let d = run_near(img2, page, jae, io_entry(), ca_few_jae(), pieces2.keep(5), s3, c.memory_is, c.rip_is);
+    let s4 = execute_near_control(jae, s3);
+    let to_s4 = linux_steps_trans(io, state, s2, s4, to_s2, linux_steps_of_fetched(io, s2, s4, fetched_steps_trans(fetch, data, s2, s3, s4,
+        c.steps, d)));
+    let count = w9;
+    let two = BitVec::ofNat(2, n := 64);
+    let value: (count.toNat() = n) = trans(cong_fn<BitVec(64), Nat>(λ v => v.toNat(), r9), toNat_word_of_nat(64, n, few));
+    let two_value: (two.toNat() = 2) = BitVec::toNat_ofNat(64, 2, { omega });
+    (match count.borrow_sub_bit(two) as λ c => (count.borrow_sub_bit(two) = c) → LinuxRuns(io, events(stats_made(mask, n)), state) {
+        False => λ fits => {
+            let ge = cmp_not_below(count, two, fits);
+            let many: (1 < n) = omega;
+            let s4_rip = jcc_taken(AE, cmd_d_few_jae(), s3, io_entry(), ca_few_jae(), ca_stat(), c.rip_is, cong_fn<Bool, Bool>(λ x => !x, fits),
+                cmd_j_few_jae());
+            let made: (stats_made(mask, n) = True) = cong_fn<Bool, Bool>(λ x => !(x && single_count(mask)), io_leb_false(n, 1, many));
+            j(sym(made), λ x _ => LinuxRuns(io, events(x), state), linux_runs_after_linux_steps(io, events(True), state, s4, to_s4,
+                to_stat(frame2, vars2, b.holds, at16, at21, page, s4, c.memory_is, s4_rip, refl, trivial)))
+        },
+        True => λ below => {
+            let lt = cmp_below(count, two, below);
+            let one_n: (n <= 1) = omega;
+            let leb1: (Nat::leb(n, 1) = True) = bool::eq_true_of_is_true(Nat::leb(n, 1), Nat::leb_complete(n, 1, one_n));
+            let s4_rip = jcc_passed(AE, cmd_d_few_jae(), s3, io_entry(), ca_few_jae(), c.rip_is, cong_fn<Bool, Bool>(λ x => !x, below));
+            let e = run_block(img2, page, keep_single_block(), io_entry(), ca_single(), pieces2.keep(6), s4, c.memory_is, s4_rip);
+            let s5 = execute_block_normal(keep_single_block(), s4);
+            let jne = JumpIfNear(NE, cmd_d_single_jne());
+            let f = run_near(img2, page, jne, io_entry(), ca_single_jne(), pieces2.keep(7), s5, e.memory_is, e.rip_is);
+            let s6 = execute_near_control(jne, s5);
+            let rax = w8.sub(BitVec::ofNat(1)).band(w8);
+            let zf: (s5.flags.zf = single_count(mask)) = trans(zero_bits_sub(64, rax, word_zero()),
+                cong_fn<BitVec(64), Bool>(λ v => v.sub(BitVec::ofNat(1)).band(v).eq_bit(word_zero()), r8));
+            let to_s6 = linux_steps_trans(io, state, s4, s6, to_s4, linux_steps_of_fetched(io, s4, s6, fetched_steps_trans(fetch, data, s4, s5, s6,
+                e.steps, f)));
+            (match single_count(mask) as λ c => (single_count(mask) = c) → LinuxRuns(io, events(stats_made(mask, n)), state) {
+                False => λ multi => {
+                    let s6_rip = jcc_taken(NE, cmd_d_single_jne(), s5, io_entry(), ca_single_jne(), ca_stat(), e.rip_is,
+                        cong_fn<Bool, Bool>(λ x => !x, trans(zf, multi)), cmd_j_single_jne());
+                    let made: (stats_made(mask, n) = True) = trans(cong_fn<Bool, Bool>(λ x => !(x && single_count(mask)), leb1),
+                        cong_fn<Bool, Bool>(λ s => !(True && s), multi));
+                    j(sym(made), λ x _ => LinuxRuns(io, events(x), state), linux_runs_after_linux_steps(io, events(True), state, s6, to_s6,
+                        to_stat(frame2, vars2, b.holds, at16, at21, page, s6, e.memory_is, s6_rip, refl, trivial)))
+                },
+                True => λ single => {
+                    let s6_rip = jcc_passed(NE, cmd_d_single_jne(), s5, io_entry(), ca_single_jne(), e.rip_is,
+                        cong_fn<Bool, Bool>(λ x => !x, trans(zf, single)));
+                    let g = run_block(img2, page, keep_one_block(), io_entry(), ca_narrow(), pieces2.keep(8), s6, e.memory_is, s6_rip);
+                    let s7 = execute_block_normal(keep_one_block(), s6);
+                    let jmp = JumpNear(cmd_d_narrow_jmp());
+                    let h = run_near(img2, page, jmp, io_entry(), ca_narrow_jmp(), pieces2.keep(9), s7, g.memory_is, g.rip_is);
+                    let s8 = execute_near_control(jmp, s7);
+                    let s8_rip = jmp_forward(cmd_d_narrow_jmp(), s7, io_entry(), ca_narrow_jmp(), ca_wstore(), g.rip_is, cmd_j_narrow_jmp());
+                    let made: (stats_made(mask, n) = False) = trans(cong_fn<Bool, Bool>(λ x => !(x && single_count(mask)), leb1),
+                        cong_fn<Bool, Bool>(λ s => !(True && s), single));
+                    j(sym(made), λ x _ => LinuxRuns(io, events(x), state), linux_runs_after_linux_steps(io, events(False), state, s8,
+                        linux_steps_trans(io, state, s6, s8, to_s6, linux_steps_of_fetched(io, s6, s8, fetched_steps_trans(fetch, data, s6, s7, s8,
+                            g.steps, h))),
+                        to_one(frame2, vars2, b.holds, at16, at21, page, s8, g.memory_is, s8_rip, refl, refl)))
+                },
+            })(refl)
+        },
+    })(refl)
+}
