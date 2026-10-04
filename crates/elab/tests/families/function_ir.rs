@@ -39,6 +39,8 @@ mod field_line_high_format;
 mod read_fields_process;
 #[path = "../read_filter_process.rs"]
 mod read_filter_process;
+#[path = "../format_width_process.rs"]
+mod format_width_process;
 #[path = "../filter_step_generation.rs"]
 mod filter_step_generation;
 #[path = "../read_print_process.rs"]

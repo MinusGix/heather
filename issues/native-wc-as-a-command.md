@@ -3,7 +3,7 @@ title: wc as a command: file operands, flags in one binary, argv and open in the
 status: open
 labels: [native,x86,semantics,design]
 created: 2026-10-02
-updated: 2026-10-03
+updated: 2026-10-04
 ---
 
 The certified `wc` reads stdin only. A normal `wc`:
@@ -37,3 +37,4 @@ histories.
     - **Formatter.** `%*d` for any 64-bit count is one hand-proved library loop (table of powers of ten, repeated subtraction). It is not generated. `Fields` goes when `wc` migrates (C4).
     - **Cost estimate** (§9, from a cold `--timings` build of today's `wc`): the generated `%7d` certificates are 47% of a cold build and disappear. The new library is about 630 declarations and +14 to +20 points, priced by kind. The driver is the uncertain line. A cold build of the full `wc` comes to about 70–80% of today's; a warm build about a tenth dearer.
     - Decisions taken by default (§11): GNU's output; no stderr diagnostics; exit at once on a failed write; the formatter as library code; `Fields` retired. Residue: [[native-wc-command-residue]].
+- 2026-10-04: **Formatter built** (`lib/elf64_format_width.hthr`, claim `format_runs`; design §7's status note). `%*d` for any 64-bit count and any width, proved once against `pad_left(width, ' ', decimal(n))`. Built as unrolled position-independent place blocks with immediates rather than a table loop, so it needs no `WordLoad` and stays off C1's model work. Tests: `crates/elab/tests/format_width_process.rs` (a client placing it past any header; six code mutations each refused by the kernel). `Fields` stays until C4.

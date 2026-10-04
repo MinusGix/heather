@@ -1,0 +1,1130 @@
+// `%*d` for any 64-bit count, proved once (docs/native-wc-command-design.md
+// §7): the bytes of `pad_left(width, ' ', decimal(n))` stored at a cursor in
+// the page, for every `n < 2^64` and every width. The code is library code,
+// placed wherever a program puts it; no formatter is generated per format.
+import decimal_line;
+import elf64_io;
+import linux_x86_64_io;
+import x86_64;
+import x86_64_block;
+import x86_64_fetch;
+import x86_64_fetched_code;
+import x86_64_data_read;
+import x86_64_access_memory;
+import x86_64_layout;
+import x86_64_store;
+import bitvec;
+import bitvec_nat;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+import omega;
+
+// ---------------------------------------------------------------------------
+// What the code prints, place by place. The code walks the twenty places of
+// a 64-bit count from 10^19 down: at each place below the count's leading
+// one it prints nothing, and from the leading place on it prints the digit.
+// The units place is always printed, so zero prints "0".
+
+fn ten_pow(i: Nat) → Nat { Nat::pow(10, i) }
+
+// One when the place `p` is at most `n`: `n` has a digit there.
+fn reaches(p, n: Nat) → Nat { match p.leb(n) { True => 1, False => 0 } }
+
+// How many of the places 10^1 .. 10^j `n` reaches.
+fn places_reached(j: Nat) → Nat → Nat {
+    match j { Zero => λ n => 0, Succ(i) => λ n => reaches(ten_pow(Succ(i)), n) + places_reached(i)(n) }
+}
+
+// The digits printed for places 10^j .. 10^0 of `m`, what is left of the
+// count above them already taken away; `n` is the whole count, and it decides
+// which places lead.
+fn place_digits(j: Nat) → Nat → Nat → List<BitVec(8)> {
+    match j {
+        Zero => λ m n => [digit(m)],
+        Succ(i) => λ m n => match ten_pow(Succ(i)).leb(n) {
+            True => Cons(digit(m.div(ten_pow(Succ(i)))), place_digits(i)(m.mod(ten_pow(Succ(i))), n)),
+            False => place_digits(i)(m.mod(ten_pow(Succ(i))), n),
+        },
+    }
+}
+
+// The bytes printed: spaces up to the width, then the digits.
+fn padded_decimal(width, n: Nat) → List<BitVec(8)> { pad_left(width, BitVec::ofNat(32), decimal(n)) }
+
+// ---------------------------------------------------------------------------
+// The places printed are `decimal`.
+
+theorem ten_pow_pos(i: Nat): 0 < ten_pow(i) { ten_pow_positive(i) }
+theorem ten_pow_grows(i: Nat): ten_pow(i) <= ten_pow(Succ(i)) {
+    let p = ten_pow_pos(i);
+    let grown: (ten_pow(i) <= ten_pow(i) * 10) = omega;
+    grown
+}
+theorem ten_pow_above(i: Nat): Succ(i) <= ten_pow(Succ(i)) {
+    match i as λ k => Succ(k) <= ten_pow(Succ(k)) {
+        Zero => trivial,
+        Succ(k) => { let below = ten_pow_above(k); let grown: (Succ(Succ(k)) <= ten_pow(Succ(k)) * 10) = omega; grown },
+    }
+}
+
+// The last `k` places of a count depend only on the count below 10^k.
+theorem places_mod(k: Nat): (n: Nat) → places(k)(n) = places(k)(n.mod(ten_pow(k))) {
+    match k as λ w => (n: Nat) → places(w)(n) = places(w)(n.mod(ten_pow(w))) {
+        Zero => λ n => refl,
+        Succ(j) => λ n => {
+            let p = ten_pow(j);
+            let m = n.mod(p * 10);
+            let wide: (p * 10 = 10 * p) = Nat::mul_comm(p, 10);
+            let units: (m.mod(10) = n.mod(10)) =
+                trans(cong_fn<Nat, Nat>(λ d => n.mod(d).mod(10), wide), Nat::mod_mul_mod(n, 10, p, trivial, ten_pow_pos(j)));
+            let tens: (n.div(10).mod(p) = m.div(10)) =
+                trans(Nat::div_mod_eq_mod_div(n, 10, p, trivial, ten_pow_pos(j)), cong_fn<Nat, Nat>(λ d => n.mod(d).div(10), sym(wide)));
+            let front: (places(j)(n.div(10)) = places(j)(m.div(10))) =
+                trans(places_mod(j, n.div(10)), cong_fn<Nat, List<BitVec(8)>>(λ x => places(j)(x), tens));
+            trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ xs => xs ++ [digit(n.mod(10))], front),
+                cong_fn<Nat, List<BitVec(8)>>(λ u => places(j)(m.div(10)) ++ [digit(u)], sym(units)))
+        },
+    }
+}
+
+// The leading place of `k + 1` places, taken from the front.
+theorem places_front(k: Nat): (n: Nat) → places(Succ(k))(n) = Cons(digit(tens(k)(n).mod(10)), places(k)(n)) {
+    match k as λ w => (n: Nat) → places(Succ(w))(n) = Cons(digit(tens(w)(n).mod(10)), places(w)(n)) {
+        Zero => λ n => refl,
+        Succ(j) => λ n => trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ xs => xs ++ [digit(n.mod(10))], places_front(j, n.div(10))),
+            refl),
+    }
+}
+
+// A count with `j + 1` places splits at its leading place.
+theorem places_split(i, m: Nat, small: m < ten_pow(Succ(Succ(i)))):
+    places(Succ(Succ(i)))(m) = Cons(digit(m.div(ten_pow(Succ(i)))), places(Succ(i))(m.mod(ten_pow(Succ(i))))) {
+    let p = ten_pow(Succ(i));
+    let lead: (tens(Succ(i))(m) = m.div(p)) = tens_is_div(Succ(i), m);
+    let top: (m.div(p) < 10) = Nat::div_lt_of_lt_mul(m, p, 10, small);
+    let digit_is: (tens(Succ(i))(m).mod(10) = m.div(p)) = trans(cong_fn<Nat, Nat>(λ t => t.mod(10), lead), Nat::mod_of_lt(m.div(p), 10, top));
+    trans(places_front(Succ(i), m),
+        trans(cong_fn<Nat, List<BitVec(8)>>(λ d => Cons(digit(d), places(Succ(i))(m)), digit_is),
+            cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ xs => Cons(digit(m.div(p)), xs), places_mod(Succ(i), m))))
+}
+
+// Past the leading place every place is printed, zeros included.
+theorem place_digits_past(top: Nat): (m, n: Nat) → m < ten_pow(Succ(top)) → ten_pow(top) <= n → place_digits(top)(m, n) = places(Succ(top))(m) {
+    match top as λ w => (m, n: Nat) → m < ten_pow(Succ(w)) → ten_pow(w) <= n → place_digits(w)(m, n) = places(Succ(w))(m) {
+        Zero => λ m n small _ => cong_fn<Nat, List<BitVec(8)>>(λ d => [digit(d)], sym(Nat::mod_of_lt(m, 10, { let s: (m < 1 * 10) = small; omega }))),
+        Succ(i) => λ m n small led => {
+            let p = ten_pow(Succ(i));
+            let leads: (p.leb(n) = True) = leb_yes(p, n, led);
+            let rest: (place_digits(i)(m.mod(p), n) = places(Succ(i))(m.mod(p))) =
+                place_digits_past(i, m.mod(p), n, Nat::mod_lt(m, p, ten_pow_pos(Succ(i))), Nat::le_trans(ten_pow(i), p, n, ten_pow_grows(i), led));
+            trans(j(sym(leads), λ b _ => (match b { True => Cons(digit(m.div(p)), place_digits(i)(m.mod(p), n)), False => place_digits(i)(m.mod(p), n) }) =
+                    Cons(digit(m.div(p)), place_digits(i)(m.mod(p), n)), refl),
+                trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ xs => Cons(digit(m.div(p)), xs), rest), sym(places_split(i, m, small))))
+        },
+    }
+}
+
+// A count at least a place has at least one there.
+theorem div_reaches(m, p: Nat, led: p <= m, positive: 0 < p): 1 <= m.div(p) {
+    match Nat::le_dec(1, m.div(p)) {
+        Inl(yes) => yes,
+        Inr(no) => {
+            let zero: (m.div(p) = 0) = { omega };
+            let none: (m.div(p) * p = 0) = trans(cong_fn<Nat, Nat>(λ d => d * p, zero), Nat::mul_left_zero(p));
+            let parts = Nat::div_mul_add_mod(m, p);
+            let under = Nat::mod_lt(m, p, positive);
+            false_elim(Nat::lt_irrefl(m, { omega }))
+        },
+    }
+}
+
+// From the top, the places printed are the count's decimal digits.
+theorem place_digits_decimal(top: Nat): (m: Nat) → m < ten_pow(Succ(top)) → place_digits(top)(m, m) = decimal(m) {
+    match top as λ w => (m: Nat) → m < ten_pow(Succ(w)) → place_digits(w)(m, m) = decimal(m) {
+        Zero => λ m small => sym(decimal_one(m, m, { let s: (m < 1 * 10) = small; omega })),
+        Succ(i) => λ m small => {
+            let p = ten_pow(Succ(i));
+            match Nat::le_dec(p, m) {
+                Inl(led) => {
+                    let leads: (p.leb(m) = True) = leb_yes(p, m, led);
+                    let rest = place_digits_past(i, m.mod(p), m, Nat::mod_lt(m, p, ten_pow_pos(Succ(i))),
+                        Nat::le_trans(ten_pow(i), p, m, ten_pow_grows(i), led));
+                    let top: (m.div(p) < 10) = Nat::div_lt_of_lt_mul(m, p, 10, small);
+                    let digits: (decimal(m) = places(Succ(Succ(i)))(m)) =
+                        decimal_places(Succ(i), m, m, Nat::le_trans(Succ(i), p, m, ten_pow_above(i), led),
+                            j(sym(tens_is_div(Succ(i), m)), λ t _ => t <= 9, { omega }),
+                            j(sym(tens_is_div(Succ(i), m)), λ t _ => 1 <= t,
+                                Nat::le_trans(1, 1, m.div(p), trivial, div_reaches(m, p, led, ten_pow_pos(Succ(i))))));
+                    trans(j(sym(leads), λ b _ => (match b { True => Cons(digit(m.div(p)), place_digits(i)(m.mod(p), m)), False => place_digits(i)(m.mod(p), m) }) =
+                            Cons(digit(m.div(p)), place_digits(i)(m.mod(p), m)), refl),
+                        trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ xs => Cons(digit(m.div(p)), xs), rest),
+                            trans(sym(places_split(i, m, small)), sym(digits))))
+                },
+                Inr(short) => {
+                    let below: (m < p) = Nat::lt_of_not_le(m, p, short);
+                    let skips: (p.leb(m) = False) = leb_no(p, m, below);
+                    trans(j(sym(skips), λ b _ => (match b { True => Cons(digit(m.div(p)), place_digits(i)(m.mod(p), m)), False => place_digits(i)(m.mod(p), m) }) =
+                            place_digits(i)(m.mod(p), m), refl),
+                        trans(cong_fn<Nat, List<BitVec(8)>>(λ x => place_digits(i)(x, m), Nat::mod_of_lt(m, p, below)),
+                            place_digits_decimal(i, m, below)))
+                },
+            }
+        },
+    }
+}
+
+theorem succ_one_add(x: Nat): Succ(x) = 1 + x { omega }
+
+// As many places are printed as the count reaches, and the units.
+theorem place_digits_len(top: Nat): (m, n: Nat) → place_digits(top)(m, n).len() = Succ(places_reached(top)(n)) {
+    match top as λ w => (m, n: Nat) → place_digits(w)(m, n).len() = Succ(places_reached(w)(n)) {
+        Zero => λ m n => refl,
+        Succ(i) => λ m n => {
+            let p = ten_pow(Succ(i));
+            let rest = place_digits_len(i, m.mod(p), n);
+            match p.leb(n) as λ b => (match b { True => Cons(digit(m.div(p)), place_digits(i)(m.mod(p), n)), False => place_digits(i)(m.mod(p), n) }).len() =
+                    Succ((match b { True => 1, False => 0 }) + places_reached(i)(n)) {
+                True => cong_fn<Nat, Nat>(λ t => Succ(t), trans(rest, succ_one_add(places_reached(i)(n)))),
+                False => trans(rest, cong_fn<Nat, Nat>(λ t => Succ(t), sym(Nat::add_left_zero(places_reached(i)(n))))),
+            }
+        },
+    }
+}
+
+// Every 64-bit count is below 10^20, so twenty places print it.
+theorem word_below_places(n: Nat, small: n < Nat::pow(2, 64)): n < ten_pow(20) {
+    let wide: (Nat::pow(2, 64) <= ten_pow(20)) = Nat::leb_sound(Nat::pow(2, 64), ten_pow(20), trivial);
+    omega
+}
+theorem decimal_of_places(n: Nat, small: n < Nat::pow(2, 64)): place_digits(19)(n, n) = decimal(n) {
+    place_digits_decimal(19, n, word_below_places(n, small))
+}
+theorem decimal_len(n: Nat, small: n < Nat::pow(2, 64)): decimal(n).len() = Succ(places_reached(19)(n)) {
+    trans(cong_fn<List<BitVec(8)>, Nat>(λ xs => xs.len(), sym(decimal_of_places(n, small))), place_digits_len(19, n, n))
+}
+
+// ---------------------------------------------------------------------------
+// The code. On entry RAX holds the count, RDX the width and RDI the cursor,
+// in the page. Every block is position-independent: its jumps are relative
+// and land inside it, so a block is the same bytes wherever it is placed.
+//
+//   setup:  RBX := RAX (the whole count, which decides the leading place);
+//           RSI := 1 (the units place is always printed)
+//   count:  for each place p = 10^19 .. 10^1: RSI += 1 unless RAX < p
+//   pad:    while RSI < RDX: store ' ' at RDI; RDI += 1; RSI += 1
+//   emit:   for each place p = 10^19 .. 10^1, unless RBX < p:
+//             RCX := '0'; while RAX >= p: RAX -= p; RCX += 1
+//             store CL at RDI; RDI += 1
+//           then the units: store '0' + RAX at RDI; RDI += 1
+//
+// RAX, RBX, RCX, RDX, RSI, RDI, R11 and the flags are clobbered; every other
+// register is kept.
+
+fn place_word(i: Nat) → BitVec(64) { BitVec::ofNat(ten_pow(i)) }
+fn one_byte() → BitVec(8) { BitVec::ofNat(1) }
+
+fn fmt_setup_block() → List<Instruction> { [MovRR(Rbx, Rax), MovRI(Rsi, BitVec::ofNat(1))] }
+
+// One place of the count: CMP RAX, p; JB over the increment.
+fn count_test_block(i: Nat) → List<Instruction> { [MovRI(R11, place_word(i)), CmpRR(Rax, R11)] }
+fn count_bump_block() → List<Instruction> { [AddRI8(Rsi, one_byte())] }
+fn count_parts(i: Nat) → List<List<BitVec(8)>> {
+    [canonical_block_bytes(count_test_block(i)), near_control_bytes(JumpIfNear(B, BitVec::ofNat(4)))]
+}
+fn count_lens() → List<Nat> { [13, 6] }
+fn count_block(i: Nat) → List<BitVec(8)> { layout_code(count_parts(i), canonical_block_bytes(count_bump_block())) }
+// Places 10^j down to 10^1.
+fn count_blocks(j: Nat) → List<BitVec(8)> {
+    match j { Zero => Nil, Succ(i) => count_block(Succ(i)) ++ count_blocks(i) }
+}
+
+// The padding loop: CMP RSI, RDX; JAE out; store ' '; advance; JMP back.
+fn pad_test_block() → List<Instruction> { [CmpRR(Rsi, Rdx)] }
+fn pad_space_block() → List<Instruction> { [MovRI(R11, BitVec::ofNat(32))] }
+fn pad_store() → ByteStore { ByteStore(base := Rdi, source := R11) }
+fn pad_advance_block() → List<Instruction> { [AddRI8(Rdi, one_byte()), AddRI8(Rsi, one_byte())] }
+fn pad_parts() → List<List<BitVec(8)>> {
+    [canonical_block_bytes(pad_test_block()), near_control_bytes(JumpIfNear(AE, BitVec::ofNat(26))),
+     canonical_block_bytes(pad_space_block()), byte_store_bytes(pad_store()), canonical_block_bytes(pad_advance_block())]
+}
+fn pad_lens() → List<Nat> { [3, 6, 10, 3, 8] }
+fn pad_code() → List<BitVec(8)> { layout_code(pad_parts(), near_control_bytes(JumpNear(BitVec::ofNat(4294967261)))) }
+
+// One place of the digits: skip it before the leading place, else count how
+// many times the place fits and store that digit.
+fn emit_test_block(i: Nat) → List<Instruction> { [MovRI(R11, place_word(i)), CmpRR(Rbx, R11)] }
+fn emit_zero_block() → List<Instruction> { [MovRI(Rcx, BitVec::ofNat(48))] }
+fn emit_fit_block() → List<Instruction> { [CmpRR(Rax, R11)] }
+fn emit_take_block() → List<Instruction> { [SubRR(Rax, R11), AddRI8(Rcx, one_byte())] }
+fn emit_store() → ByteStore { ByteStore(base := Rdi, source := Rcx) }
+fn emit_advance_block() → List<Instruction> { [AddRI8(Rdi, one_byte())] }
+fn emit_parts(i: Nat) → List<List<BitVec(8)>> {
+    [canonical_block_bytes(emit_test_block(i)), near_control_bytes(JumpIfNear(B, BitVec::ofNat(38))),
+     canonical_block_bytes(emit_zero_block()), canonical_block_bytes(emit_fit_block()), near_control_bytes(JumpIfNear(B, BitVec::ofNat(12))),
+     canonical_block_bytes(emit_take_block()), near_control_bytes(JumpNear(BitVec::ofNat(4294967275))), byte_store_bytes(emit_store())]
+}
+fn emit_lens() → List<Nat> { [13, 6, 10, 3, 6, 7, 5, 3] }
+fn emit_block(i: Nat) → List<BitVec(8)> { layout_code(emit_parts(i), canonical_block_bytes(emit_advance_block())) }
+// The units: '0' + RAX.
+fn units_block() → List<Instruction> { [MovRI(Rcx, BitVec::ofNat(48)), AddRR(Rcx, Rax)] }
+fn units_parts() → List<List<BitVec(8)>> { [canonical_block_bytes(units_block()), byte_store_bytes(emit_store())] }
+fn units_lens() → List<Nat> { [13, 3] }
+fn units_code() → List<BitVec(8)> { layout_code(units_parts(), canonical_block_bytes(emit_advance_block())) }
+// Places 10^j down to the units.
+fn emit_code(j: Nat) → List<BitVec(8)> {
+    match j { Zero => units_code(), Succ(i) => emit_block(Succ(i)) ++ emit_code(i) }
+}
+
+fn format_code() → List<BitVec(8)> {
+    canonical_block_bytes(fmt_setup_block()) ++ (count_blocks(19) ++ (pad_code() ++ emit_code(19)))
+}
+fn format_len() → Nat { format_code().len() }
+
+// ---------------------------------------------------------------------------
+// Running the code's pieces.
+
+// The registers the formatter keeps.
+fn FmtKept(after, before: Gprs) → Type {
+    (read_gpr(Rsp, after) = read_gpr(Rsp, before)) ∧ ((read_gpr(Rbp, after) = read_gpr(Rbp, before)) ∧
+    ((read_gpr(R8, after) = read_gpr(R8, before)) ∧ ((read_gpr(R9, after) = read_gpr(R9, before)) ∧
+    ((read_gpr(R10, after) = read_gpr(R10, before)) ∧ ((read_gpr(R12, after) = read_gpr(R12, before)) ∧
+    ((read_gpr(R13, after) = read_gpr(R13, before)) ∧ ((read_gpr(R14, after) = read_gpr(R14, before)) ∧
+    (read_gpr(R15, after) = read_gpr(R15, before)))))))))
+}
+theorem fmt_kept_refl(gprs: Gprs): FmtKept(gprs, gprs) { ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, refl⟩⟩⟩⟩⟩⟩⟩⟩ }
+theorem fmt_kept_trans(after, middle, before: Gprs, late: FmtKept(after, middle), early: FmtKept(middle, before)): FmtKept(after, before) {
+    ⟨trans(late.left, early.left), ⟨trans(late.right.left, early.right.left), ⟨trans(late.right.right.left, early.right.right.left),
+    ⟨trans(late.right.right.right.left, early.right.right.right.left), ⟨trans(late.right.right.right.right.left, early.right.right.right.right.left),
+    ⟨trans(late.right.right.right.right.right.left, early.right.right.right.right.right.left),
+    ⟨trans(late.right.right.right.right.right.right.left, early.right.right.right.right.right.right.left),
+    ⟨trans(late.right.right.right.right.right.right.right.left, early.right.right.right.right.right.right.right.left),
+     trans(late.right.right.right.right.right.right.right.right, early.right.right.right.right.right.right.right.right)⟩⟩⟩⟩⟩⟩⟩⟩
+}
+
+// Code at `at` whatever the page holds.
+fn Placed(file: List<BitVec(8)>, code: List<BitVec(8)>, at: BitVec(64)) → Type {
+    (page: Nat → BitVec(8)) → CodeResident(io_fetch_access(), IoMemory(file, page), code, at)
+}
+theorem placed_split(file: List<BitVec(8)>, front, back: List<BitVec(8)>, at: BitVec(64), placed: Placed(file, front ++ back, at)):
+    Placed(file, front, at) ∧ Placed(file, back, next_rip(at, front.len())) {
+    ⟨λ page => resident_split(io_fetch_access(), IoMemory(file, page), front, back, at, placed(page)).left,
+     λ page => resident_split(io_fetch_access(), IoMemory(file, page), front, back, at, placed(page)).right⟩
+}
+// A piece of a laid-out block, placed where the layout puts it.
+theorem placed_piece(file: List<BitVec(8)>, pieces: List<List<BitVec(8)>>, last: List<BitVec(8)>, lens: List<Nat>,
+    measured: LayoutMeasured(pieces, lens), at: BitVec(64), placed: Placed(file, layout_code(pieces, last), at), i: Nat):
+    Placed(file, layout_piece(pieces, last, i), next_rip(at, layout_at(0, lens, i))) {
+    λ page => layout_resident(io_fetch_access(), IoMemory(file, page), at, last, pieces, lens, measured, 0, placed(page), i)
+}
+
+// A straight block run from its start: memory unchanged, RIP past it.
+record Ran(file: List<BitVec(8)>, page: Nat → BitVec(8), before, after: MachineState<IoMemory>, to: BitVec(64)) {
+    steps: FetchedSteps(io_fetch_access(), io_data_access(), before, after),
+    memory_is: after.memory = IoMemory(file, page),
+    rip_is: after.rip = to,
+}
+theorem run_block(file: List<BitVec(8)>, page: Nat → BitVec(8), instructions: List<Instruction>, at: BitVec(64), k: Nat,
+    placed: Placed(file, canonical_block_bytes(instructions), next_rip(at, k)), state: MachineState<IoMemory>,
+    memory_is: state.memory = IoMemory(file, page), rip_is: state.rip = next_rip(at, k)):
+    Ran(file, page, state, execute_block_normal(instructions, state), next_rip(at, k + canonical_block_bytes(instructions).len())) {
+    let fetch = io_fetch_access();
+    let ran = block_fetched(fetch, io_data_access(), instructions, state, trivial,
+        resident_state(fetch, canonical_block_bytes(instructions), IoMemory(file, page), next_rip(at, k), state, memory_is, rip_is, placed(page)));
+    Ran(steps := ran.left, memory_is := trans(pure_block_memory(instructions, state), memory_is),
+        rip_is := trans(ran.right, rip_advance(at, state.rip, k, canonical_block_bytes(instructions).len(), rip_is)))
+}
+theorem run_near(file: List<BitVec(8)>, page: Nat → BitVec(8), control: NearControl, at: BitVec(64), k: Nat,
+    placed: Placed(file, near_control_bytes(control), next_rip(at, k)), state: MachineState<IoMemory>,
+    memory_is: state.memory = IoMemory(file, page), rip_is: state.rip = next_rip(at, k)):
+    FetchedSteps(io_fetch_access(), io_data_access(), state, execute_near_control(control, state)) {
+    let fetch = io_fetch_access();
+    fetched_steps_one(fetch, io_data_access(), state, execute_near_control(control, state),
+        near_fetched_step(fetch, io_data_access(), control, state,
+            resident_state(fetch, near_control_bytes(control), IoMemory(file, page), next_rip(at, k), state, memory_is, rip_is, placed(page))))
+}
+
+// CMP's carry is the unsigned order.
+theorem cmp_below(a, b: BitVec(64), carry: a.borrow_sub_bit(b) = True): a.toNat() < b.toNat() { BitVec::borrow_sub_of_bit_true(64, a, b, carry) }
+theorem cmp_not_below(a, b: BitVec(64), carry: a.borrow_sub_bit(b) = False): b.toNat() <= a.toNat() {
+    match Nat::le_dec(b.toNat(), a.toNat()) {
+        Inl(yes) => yes,
+        Inr(no) => absurd(trans(sym(carry), BitVec::borrow_sub_bit_of_borrow(64, a, b, Nat::lt_of_not_le(a.toNat(), b.toNat(), no)))),
+    }
+}
+
+// The places that fit a word.
+theorem ten_pow_mono(i: Nat): (k: Nat) → i <= k → ten_pow(i) <= ten_pow(k) {
+    match i as λ w => (k: Nat) → w <= k → ten_pow(w) <= ten_pow(k) {
+        Zero => λ k _ => ten_pow_pos(k),
+        Succ(a) => λ k => match k as λ v => Succ(a) <= v → ten_pow(Succ(a)) <= ten_pow(v) {
+            Zero => λ never => false_elim(never),
+            Succ(b) => λ le => { let inner = ten_pow_mono(a, b, le); let grown: (ten_pow(a) * 10 <= ten_pow(b) * 10) = omega; grown },
+        },
+    }
+}
+theorem place_fits(i: Nat, small: i <= 19): ten_pow(i) < Nat::pow(2, 64) {
+    let top: (ten_pow(19) < Nat::pow(2, 64)) = Nat::leb_sound(Succ(ten_pow(19)), Nat::pow(2, 64), trivial);
+    let le = ten_pow_mono(i, 19, small);
+    omega
+}
+theorem place_word_value(i: Nat, small: i <= 19): place_word(i).toNat() = ten_pow(i) { BitVec::toNat_ofNat(64, ten_pow(i), place_fits(i, small)) }
+
+// ADD r, 1 on a value with room.
+theorem add_one_value(x: BitVec(64), v: Nat, value: x.toNat() = v, room: Succ(v) < Nat::pow(2, 64)):
+    x.add(one_byte().sign_extend(56)).toNat() = Succ(v) {
+    let one: (one_byte().sign_extend(56).toNat() = 1) = refl;
+    let sum: (x.toNat() + one_byte().sign_extend(56).toNat() = Succ(v)) = omega;
+    trans(bitvec_nat::toNat_add(64, x, one_byte().sign_extend(56), { omega }), sum)
+}
+
+// ---------------------------------------------------------------------------
+// The count: RSI ends at the number of places the count has.
+
+// At a count block: the page as it was, RAX and RBX the count, RDX the
+// width, RDI the cursor `o` bytes into the page, RSI the places so far.
+record CountAt(file: List<BitVec(8)>, page: Nat → BitVec(8), at: BitVec(64), n, w, o, s: Nat, origin: Gprs, state: MachineState<IoMemory>) {
+    memory_is: state.memory = IoMemory(file, page),
+    rip_is: state.rip = at,
+    rax: read_gpr(Rax, state.gprs).toNat() = n,
+    rbx: read_gpr(Rbx, state.gprs).toNat() = n,
+    rdx: read_gpr(Rdx, state.gprs).toNat() = w,
+    rdi: read_gpr(Rdi, state.gprs).toNat() = io_page_base() + o,
+    rsi: read_gpr(Rsi, state.gprs).toNat() = s,
+    kept: FmtKept(state.gprs, origin),
+}
+
+theorem count_measured(i: Nat): LayoutMeasured(count_parts(i), count_lens()) { ⟨refl, ⟨refl, trivial⟩⟩ }
+theorem count_block_len(i: Nat): count_block(i).len() = 23 { refl }
+
+theorem reaches_no(p, n: Nat, below: n < p): reaches(p, n) = 0 {
+    j(sym(leb_no(p, n, below)), λ b _ => (match b { True => 1, False => 0 }) = 0, refl)
+}
+theorem reaches_yes(p, n: Nat, at_least: p <= n): reaches(p, n) = 1 {
+    j(sym(leb_yes(p, n, at_least)), λ b _ => (match b { True => 1, False => 0 }) = 1, refl)
+}
+theorem count_add_zero(s, r: Nat, none: r = 0): s = s + r { omega }
+theorem count_add_one(s, r: Nat, one: r = 1): Succ(s) = s + r { omega }
+
+// One place: RSI grows by one exactly when the count reaches it.
+theorem count_step(file: List<BitVec(8)>, page: Nat → BitVec(8), i: Nat, small: i <= 19, at: BitVec(64), n, w, o, s: Nat,
+    room: Succ(s) < Nat::pow(2, 64), origin: Gprs, placed: Placed(file, count_block(i), at), state: MachineState<IoMemory>,
+    head: CountAt(file, page, at, n, w, o, s, origin, state)):
+    Exists<MachineState<IoMemory>>(λ after => FetchedSteps(io_fetch_access(), io_data_access(), state, after) ∧
+        CountAt(file, page, next_rip(at, 23), n, w, o, s + reaches(ten_pow(i), n), origin, after)) {
+    let fetch = io_fetch_access();
+    let data = io_data_access();
+    let piece = placed_piece(file, count_parts(i), canonical_block_bytes(count_bump_block()), count_lens(), count_measured(i), at, placed);
+    let tested = run_block(file, page, count_test_block(i), at, 0, piece(0), state, head.memory_is, head.rip_is);
+    let s1 = execute_block_normal(count_test_block(i), state);
+    let jb = JumpIfNear(B, BitVec::ofNat(4));
+    let jumped = run_near(file, page, jb, at, 13, piece(1), s1, tested.memory_is, tested.rip_is);
+    let s2 = execute_near_control(jb, s1);
+    let rax = read_gpr(Rax, state.gprs);
+    let carry: (s1.flags.cf = rax.borrow_sub_bit(place_word(i))) = refl;
+    (match rax.borrow_sub_bit(place_word(i)) as λ c => (rax.borrow_sub_bit(place_word(i)) = c) →
+            Exists<MachineState<IoMemory>>(λ after => FetchedSteps(fetch, data, state, after) ∧
+                CountAt(file, page, next_rip(at, 23), n, w, o, s + reaches(ten_pow(i), n), origin, after)) {
+        True => λ below => {
+            let less: (n < ten_pow(i)) = j(head.rax, λ v _ => v < ten_pow(i),
+                j(place_word_value(i, small), λ v _ => rax.toNat() < v, cmp_below(rax, place_word(i), below)));
+            let taken: (condition_holds(B, s1.flags) = True) = trans(carry, below);
+            let s2_rip: (s2.rip = next_rip(at, 23)) = trans(near_if_taken_rip(B, BitVec::ofNat(4), s1, taken),
+                trans(cong_fn<BitVec(64), BitVec(64)>(λ a => near_branch_target(a, 6, BitVec::ofNat(4)), tested.rip_is),
+                    jumps_forward(at, 13, 6, BitVec::ofNat(4), 23, refl)));
+            let same = count_add_zero(s, reaches(ten_pow(i), n), reaches_no(ten_pow(i), n, less));
+            Exists(s2, ⟨fetched_steps_trans(fetch, data, state, s1, s2, tested.steps, jumped),
+                j(same, λ t _ => CountAt(file, page, next_rip(at, 23), n, w, o, t, origin, s2),
+                    CountAt(memory_is := tested.memory_is, rip_is := s2_rip, rax := head.rax, rbx := head.rbx, rdx := head.rdx, rdi := head.rdi,
+                        rsi := head.rsi, kept := head.kept))⟩)
+        },
+        False => λ fits => {
+            let reached: (ten_pow(i) <= n) = j(head.rax, λ v _ => ten_pow(i) <= v,
+                j(place_word_value(i, small), λ v _ => v <= rax.toNat(), cmp_not_below(rax, place_word(i), fits)));
+            let passed: (condition_holds(B, s1.flags) = False) = trans(carry, fits);
+            let s2_rip: (s2.rip = next_rip(at, 19)) = trans(near_if_not_taken_rip(B, BitVec::ofNat(4), s1, passed),
+                rip_advance(at, s1.rip, 13, 6, tested.rip_is));
+            let bumped = run_block(file, page, count_bump_block(), at, 19, piece(2), s2, tested.memory_is, s2_rip);
+            let s3 = execute_block_normal(count_bump_block(), s2);
+            let grown: (read_gpr(Rsi, s3.gprs).toNat() = Succ(s)) = add_one_value(read_gpr(Rsi, state.gprs), s, head.rsi, room);
+            let same = count_add_one(s, reaches(ten_pow(i), n), reaches_yes(ten_pow(i), n, reached));
+            Exists(s3, ⟨fetched_steps_trans(fetch, data, state, s1, s3, tested.steps, fetched_steps_trans(fetch, data, s1, s2, s3, jumped, bumped.steps)),
+                j(same, λ t _ => CountAt(file, page, next_rip(at, 23), n, w, o, t, origin, s3),
+                    CountAt(memory_is := bumped.memory_is, rip_is := bumped.rip_is, rax := head.rax, rbx := head.rbx, rdx := head.rdx, rdi := head.rdi,
+                        rsi := grown, kept := head.kept))⟩)
+        },
+    })(refl)
+}
+
+theorem count_room(s, j: Nat, bound: s + Succ(j) <= 20): Succ(s) < Nat::pow(2, 64) {
+    let wide: (21 <= Nat::pow(2, 64)) = Nat::leb_sound(21, Nat::pow(2, 64), trivial);
+    omega
+}
+theorem reaches_le(p, n: Nat): reaches(p, n) <= 1 { match p.leb(n) as λ b => (match b { True => 1, False => 0 }) <= 1 { True => trivial, False => trivial } }
+theorem count_bound_next(s, r, j: Nat, bound: s + Succ(j) <= 20, small: r <= 1): (s + r) + j <= 20 { omega }
+theorem count_sum(s, r, t: Nat): (s + r) + t = s + (r + t) { Nat::add_assoc(s, r, t) }
+
+// Places 10^j .. 10^1, by recursion on `j`.
+theorem count_run(file: List<BitVec(8)>, page: Nat → BitVec(8), n, w, o: Nat, origin: Gprs, j: Nat):
+    (at: BitVec(64)) → (s: Nat) → (state: MachineState<IoMemory>) → j <= 19 → s + j <= 20 → Placed(file, count_blocks(j), at) →
+    CountAt(file, page, at, n, w, o, s, origin, state) →
+    Exists<MachineState<IoMemory>>(λ after => FetchedSteps(io_fetch_access(), io_data_access(), state, after) ∧
+        CountAt(file, page, next_rip(at, count_blocks(j).len()), n, w, o, s + places_reached(j)(n), origin, after)) {
+    let fetch = io_fetch_access();
+    let data = io_data_access();
+    match j as λ k => (at: BitVec(64)) → (s: Nat) → (state: MachineState<IoMemory>) → k <= 19 → s + k <= 20 → Placed(file, count_blocks(k), at) →
+            CountAt(file, page, at, n, w, o, s, origin, state) →
+            Exists<MachineState<IoMemory>>(λ after => FetchedSteps(fetch, data, state, after) ∧
+                CountAt(file, page, next_rip(at, count_blocks(k).len()), n, w, o, s + places_reached(k)(n), origin, after)) {
+        Zero => λ at s state _ _ _ head => Exists(state, ⟨fetched_steps_refl(fetch, data, state), head⟩),
+        Succ(i) => λ at s state small bound placed head => {
+            let parts = placed_split(file, count_block(Succ(i)), count_blocks(i), at, placed);
+            have first = count_step(file, page, Succ(i), small, at, n, w, o, s, count_room(s, i, bound), origin, parts.left, state, head);
+            let r = reaches(ten_pow(Succ(i)), n);
+            let moved: (next_rip(at, count_block(Succ(i)).len()) = next_rip(at, 23)) = rip_count(at, count_block_len(Succ(i)));
+            have rest = count_run(file, page, n, w, o, origin, i, next_rip(at, 23), s + r, first.witness, { omega },
+                count_bound_next(s, r, i, bound, reaches_le(ten_pow(Succ(i)), n)),
+                j(moved, λ a _ => Placed(file, count_blocks(i), a), parts.right), first.proof.right);
+            let ends: (next_rip(next_rip(at, 23), count_blocks(i).len()) = next_rip(at, count_blocks(Succ(i)).len())) =
+                trans(rip_compose(at, 23, count_blocks(i).len()),
+                    rip_count(at, trans(cong_fn<Nat, Nat>(λ c => c + count_blocks(i).len(), sym(count_block_len(Succ(i)))),
+                        sym(List::len_append(count_block(Succ(i)), count_blocks(i))))));
+            Exists(rest.witness, ⟨fetched_steps_trans(fetch, data, state, first.witness, rest.witness, first.proof.left, rest.proof.left),
+                j(ends, λ a _ => CountAt(file, page, a, n, w, o, s + places_reached(Succ(i))(n), origin, rest.witness),
+                    j(count_sum(s, r, places_reached(i)(n)), λ t _ => CountAt(file, page, next_rip(next_rip(at, 23), count_blocks(i).len()), n, w, o, t, origin, rest.witness),
+                        rest.proof.right))⟩)
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// What the formatter has stored so far: `bytes` from `o` in the page, the
+// rest of the page as `page0` had it, the cursor past them.
+
+record FmtOut(file: List<BitVec(8)>, page0: Nat → BitVec(8), o: Nat, bytes: List<BitVec(8)>, at: BitVec(64), origin: Gprs,
+    state: MachineState<IoMemory>) {
+    page: Nat → BitVec(8),
+    memory_is: state.memory = IoMemory(file, page),
+    rip_is: state.rip = at,
+    held: Stored(page, o, bytes),
+    below: (q: Nat) → q < o → page(q) = page0(q),
+    above: (q: Nat) → o + bytes.len() <= q → page(q) = page0(q),
+    rdi: read_gpr(Rdi, state.gprs).toNat() = io_page_base() + (o + bytes.len()),
+    kept: FmtKept(state.gprs, origin),
+}
+
+// The page after one more byte at the cursor.
+record PageNext(page0, page: Nat → BitVec(8), o: Nat, bytes: List<BitVec(8)>) {
+    held: Stored(page, o, bytes),
+    below: (q: Nat) → q < o → page(q) = page0(q),
+    above: (q: Nat) → o + bytes.len() <= q → page(q) = page0(q),
+}
+theorem page_next(file: List<BitVec(8)>, page0, page: Nat → BitVec(8), o: Nat, bytes: List<BitVec(8)>, x: BitVec(8),
+    held: Stored(page, o, bytes), below: (q: Nat) → q < o → page(q) = page0(q), above: (q: Nat) → o + bytes.len() <= q → page(q) = page0(q)):
+    PageNext(page0, io_store_offset(IoMemory(file, page), o + bytes.len(), [x]).page, o, bytes ++ [x]) {
+    let memory = IoMemory(file, page);
+    let c = o + bytes.len();
+    let next = io_store_offset(memory, c, [x]).page;
+    let grown: ((bytes ++ [x]).len() = Succ(bytes.len())) = List::len_append(bytes, [x]);
+    let old: Stored(next, o, bytes) = stored_kept(memory, c, [x], bytes, o, Nat::le_refl(c), held);
+    let new: Stored(next, o + bytes.len(), [x]) = stored_store(memory, c, [x]);
+    PageNext(held := stored_join(next, o, bytes, [x], old, new),
+        below := λ q short => trans(store_below(memory, c, [x], q, { omega }), below(q, short)),
+        above := λ q past => {
+            let beyond: (Succ(c) <= q) = j(grown, λ l _ => o + l <= q, past);
+            trans(store_byte_other(memory, c, x, q, λ same => false_elim(Nat::lt_irrefl(q, { omega }))), above(q, { omega }))
+        })
+}
+
+// A byte store at the cursor, `k` bytes into a placed piece.
+record StoreRan(file: List<BitVec(8)>, page: Nat → BitVec(8), c: Nat, x: BitVec(8), before, after: MachineState<IoMemory>, to: BitVec(64)) {
+    step: LinuxSteps(io_linux(), before, after),
+    memory_is: after.memory = io_store_offset(IoMemory(file, page), c, [x]),
+    rip_is: after.rip = to,
+    gprs_is: after.gprs = before.gprs,
+}
+theorem run_store(file: List<BitVec(8)>, page: Nat → BitVec(8), store: ByteStore, plain: store_base_plain(store.base) = True,
+    at: BitVec(64), k: Nat, placed: Placed(file, byte_store_bytes(store), next_rip(at, k)), c: Nat, inside: c < 4096, x: BitVec(8),
+    state: MachineState<IoMemory>, memory_is: state.memory = IoMemory(file, page), rip_is: state.rip = next_rip(at, k),
+    cursor: read_gpr(store.base, state.gprs).toNat() = io_page_base() + c, low: imm_byte0(read_gpr(store.source, state.gprs)) = x):
+    StoreRan(file, page, c, x, state, byte_store_after(linux_writes(io_linux()), store, state), next_rip(at, k + 3)) {
+    let fetch = io_fetch_access();
+    let writes = linux_writes(io_linux());
+    let memory = IoMemory(file, page);
+    let room: ((io_page_base() <= io_page_base() + c) ∧ ((io_page_base() + c) + 1 <= io_page_base() + 4096)) = ⟨omega, omega⟩;
+    let base = read_gpr(store.base, state.gprs);
+    let writable: IoWritable(state.memory, base, 1) =
+        ⟨j(sym(cursor), λ v _ => io_page_base() <= v, room.left), j(sym(cursor), λ v _ => v + 1 <= io_page_base() + 4096, room.right)⟩;
+    StoreRan(
+        step := linux_steps_store(io_linux(), state, byte_store_after(writes, store, state),
+            byte_store_step(fetch, writes, store, state, plain,
+                FetchedFrom(resident_readable(fetch, state.memory, byte_store_bytes(store), state.rip,
+                    resident_state(fetch, byte_store_bytes(store), memory, next_rip(at, k), state, memory_is, rip_is, placed(page)))),
+                writable)),
+        memory_is := trans(cong_fn<IoMemory, IoMemory>(λ m => io_store(m, base, [imm_byte0(read_gpr(store.source, state.gprs))]), memory_is),
+            trans(cong_fn<BitVec(8), IoMemory>(λ y => io_store(memory, base, [y]), low), store_at_offset(memory, base, c, [x], cursor))),
+        rip_is := rip_advance(at, state.rip, k, 3, rip_is),
+        gprs_is := refl)
+}
+
+// ---------------------------------------------------------------------------
+// The padding: a space for each place the width has beyond the count's.
+
+fn space() → BitVec(8) { BitVec::ofNat(32) }
+
+theorem replicate_snoc<A>(x: A, t: Nat): List::replicate(x, t) ++ [x] = List::replicate(x, Succ(t)) {
+    match t as λ k => List::replicate(x, k) ++ [x] = List::replicate(x, Succ(k)) {
+        Zero => refl,
+        Succ(k) => cong_fn<List<A>, List<A>>(λ xs => Cons(x, xs), replicate_snoc(x, k)),
+    }
+}
+
+theorem pad_measured(): LayoutMeasured(pad_parts(), pad_lens()) { ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, trivial⟩⟩⟩⟩⟩ }
+
+fn PadDone(file: List<BitVec(8)>, page0: Nat → BitVec(8), o, n, t: Nat, at: BitVec(64), origin: Gprs, state: MachineState<IoMemory>) → Type {
+    Exists<MachineState<IoMemory>>(λ after => LinuxSteps(io_linux(), state, after) ∧
+        (FmtOut(file, page0, o, List::replicate(space(), t), next_rip(at, 35), origin, after) ∧
+        ((read_gpr(Rax, after.gprs).toNat() = n) ∧ (read_gpr(Rbx, after.gprs).toNat() = n))))
+}
+
+// The spaces still to store, `f`, from `c` places so far up to the width:
+// none once `c` reaches it, else the difference.
+fn PadLeft(c, w, f: Nat) → Type { match f { Zero => w <= c, Succ(_) => c + f = w } }
+theorem pad_left_more(w, k, t, f: Nat, left: (k + t) + Succ(f) = w): (k + t < w) ∧ PadLeft(k + Succ(t), w, f) {
+    ⟨omega, match f as λ g => ((k + t) + Succ(g) = w) → PadLeft(k + Succ(t), w, g) {
+        Zero => λ h => { let e: ((k + t) + 1 = w) = h; let r: (w <= k + Succ(t)) = omega; r },
+        Succ(g) => λ h => { let e: ((k + t) + Succ(Succ(g)) = w) = h; let r: ((k + Succ(t)) + Succ(g) = w) = omega; r },
+    }(left)⟩
+}
+theorem sub_none(w: Nat): (k: Nat) → w <= k → w -k = 0 {
+    match w as λ a => (k: Nat) → a <= k → a -k = 0 {
+        Zero => λ k _ => refl,
+        Succ(a) => λ k => match k as λ b => Succ(a) <= b → Succ(a) -b = 0 {
+            Zero => λ never => false_elim(never),
+            Succ(b) => λ le => sub_none(a, b, le),
+        },
+    }
+}
+// The padding's length is what is left of the width.
+theorem pad_left_start(k, w: Nat): PadLeft(k + 0, w, w -k) {
+    match Nat::le_dec(w, k) {
+        Inl(short) => j(sym(sub_none(w, k, short)), λ f _ => PadLeft(k + 0, w, f), short),
+        Inr(wide) => {
+            let below: (k < w) = Nat::lt_of_not_le(k, w, wide);
+            let back: ((w -k) + k = w) = Nat::sub_add_cancel(k, w, { omega });
+            (match w -k as λ f => ((w -k) = f) → PadLeft(k + 0, w, f) {
+                Zero => λ none => false_elim(Nat::lt_irrefl(w, { omega })),
+                Succ(g) => λ some => { let r: (k + Succ(g) = w) = omega; r },
+            })(refl)
+        },
+    }
+}
+theorem pad_room_more(o, t, f: Nat, room: o + (t + Succ(f)) <= 4096): (o + t < 4096) ∧ (o + (Succ(t) + f) <= 4096) { ⟨omega, omega⟩ }
+theorem pad_count_more(t, f: Nat): Succ(t) + f = t + Succ(f) { Nat::add_succ_left(t, f) }
+theorem pad_cursor_more(o, t: Nat): Succ(io_page_base() + (o + t)) = io_page_base() + (o + Succ(t)) { refl }
+theorem pad_low_word(o, t: Nat, inside: o + t < 4096): Succ(io_page_base() + (o + t)) < Nat::pow(2, 64) {
+    let page: (io_page_base() + 4097 <= Nat::pow(2, 64)) = Nat::leb_sound(io_page_base() + 4097, Nat::pow(2, 64), trivial);
+    omega
+}
+theorem pad_k_word(k, t, w: Nat, below: k + t < w, fits: w < Nat::pow(2, 64)): Succ(k + t) < Nat::pow(2, 64) { omega }
+
+// The loop, by recursion on the spaces still to store.
+theorem pad_run(file: List<BitVec(8)>, page0: Nat → BitVec(8), at: BitVec(64), placed: Placed(file, pad_code(), at), o, n, k, w: Nat,
+    origin: Gprs, f: Nat): (t: Nat) → (state: MachineState<IoMemory>) → PadLeft(k + t, w, f) → o + (t + f) <= 4096 →
+    FmtOut(file, page0, o, List::replicate(space(), t), at, origin, state) →
+    read_gpr(Rsi, state.gprs).toNat() = k + t → read_gpr(Rdx, state.gprs).toNat() = w →
+    read_gpr(Rax, state.gprs).toNat() = n → read_gpr(Rbx, state.gprs).toNat() = n →
+    PadDone(file, page0, o, n, t + f, at, origin, state) {
+    let fetch = io_fetch_access();
+    let data = io_data_access();
+    let piece = placed_piece(file, pad_parts(), near_control_bytes(JumpNear(BitVec::ofNat(4294967261))), pad_lens(), pad_measured(), at, placed);
+    let jae = JumpIfNear(AE, BitVec::ofNat(26));
+    match f as λ g => (t: Nat) → (state: MachineState<IoMemory>) → PadLeft(k + t, w, g) → o + (t + g) <= 4096 →
+            FmtOut(file, page0, o, List::replicate(space(), t), at, origin, state) →
+            read_gpr(Rsi, state.gprs).toNat() = k + t → read_gpr(Rdx, state.gprs).toNat() = w →
+            read_gpr(Rax, state.gprs).toNat() = n → read_gpr(Rbx, state.gprs).toNat() = n →
+            PadDone(file, page0, o, n, t + g, at, origin, state) {
+        Zero => λ t state left room head rsi rdx rax rbx => {
+            let tested = run_block(file, head.page, pad_test_block(), at, 0, piece(0), state, head.memory_is, head.rip_is);
+            let s1 = execute_block_normal(pad_test_block(), state);
+            let jumped = run_near(file, head.page, jae, at, 3, piece(1), s1, tested.memory_is, tested.rip_is);
+            let s2 = execute_near_control(jae, s1);
+            let full: (w <= k + t) = left;
+            let rsi_word = read_gpr(Rsi, state.gprs);
+            let rdx_word = read_gpr(Rdx, state.gprs);
+            let carry: (rsi_word.borrow_sub_bit(rdx_word) = False) =
+                (match rsi_word.borrow_sub_bit(rdx_word) as λ c => (rsi_word.borrow_sub_bit(rdx_word) = c) → c = False {
+                    False => λ _ => refl,
+                    True => λ below => {
+                        let less = cmp_below(rsi_word, rdx_word, below);
+                        false_elim(Nat::lt_irrefl(w, { omega }))
+                    },
+                })(refl);
+            let taken: (condition_holds(AE, s1.flags) = True) = cong_fn<Bool, Bool>(λ c => !c, carry);
+            let s2_rip: (s2.rip = next_rip(at, 35)) = trans(near_if_taken_rip(AE, BitVec::ofNat(26), s1, taken),
+                trans(cong_fn<BitVec(64), BitVec(64)>(λ a => near_branch_target(a, 6, BitVec::ofNat(26)), tested.rip_is),
+                    jumps_forward(at, 3, 6, BitVec::ofNat(26), 35, refl)));
+            Exists(s2, ⟨linux_steps_of_fetched(io_linux(), state, s2, fetched_steps_trans(fetch, data, state, s1, s2, tested.steps, jumped)),
+                ⟨FmtOut(page := head.page, memory_is := tested.memory_is, rip_is := s2_rip, held := head.held, below := head.below,
+                    above := head.above, rdi := head.rdi, kept := head.kept), ⟨rax, rbx⟩⟩⟩)
+        },
+        Succ(g) => λ t state left room head rsi rdx rax rbx => {
+            let more = pad_left_more(w, k, t, g, left);
+            let space_room = pad_room_more(o, t, g, room);
+            let count: (List::replicate(space(), t).len() = t) = List::len_replicate(space(), t);
+            let tested = run_block(file, head.page, pad_test_block(), at, 0, piece(0), state, head.memory_is, head.rip_is);
+            let s1 = execute_block_normal(pad_test_block(), state);
+            let jumped = run_near(file, head.page, jae, at, 3, piece(1), s1, tested.memory_is, tested.rip_is);
+            let s2 = execute_near_control(jae, s1);
+            let rsi_word = read_gpr(Rsi, state.gprs);
+            let rdx_word = read_gpr(Rdx, state.gprs);
+            let carry: (rsi_word.borrow_sub_bit(rdx_word) = True) =
+                BitVec::borrow_sub_bit_of_borrow(64, rsi_word, rdx_word, j(sym(rsi), λ v _ => v < rdx_word.toNat(), j(sym(rdx), λ v _ => k + t < v, more.left)));
+            let passed: (condition_holds(AE, s1.flags) = False) = cong_fn<Bool, Bool>(λ c => !c, carry);
+            let s2_rip: (s2.rip = next_rip(at, 9)) = trans(near_if_not_taken_rip(AE, BitVec::ofNat(26), s1, passed), rip_advance(at, s1.rip, 3, 6, tested.rip_is));
+            let spaced = run_block(file, head.page, pad_space_block(), at, 9, piece(2), s2, tested.memory_is, s2_rip);
+            let s3 = execute_block_normal(pad_space_block(), s2);
+            let c = o + t;
+            let cursor: (read_gpr(Rdi, s3.gprs).toNat() = io_page_base() + c) =
+                trans(head.rdi, cong_fn<Nat, Nat>(λ l => io_page_base() + (o + l), count));
+            let stored = run_store(file, head.page, pad_store(), refl, at, 19, piece(3), c, space_room.left, space(), s3, spaced.memory_is,
+                spaced.rip_is, cursor, refl);
+            let s4 = byte_store_after(linux_writes(io_linux()), pad_store(), s3);
+            let next = io_store_offset(IoMemory(file, head.page), c, [space()]).page;
+            let advanced = run_block(file, next, pad_advance_block(), at, 22, piece(4), s4, stored.memory_is, stored.rip_is);
+            let s5 = execute_block_normal(pad_advance_block(), s4);
+            let back = JumpNear(BitVec::ofNat(4294967261));
+            let returned = run_near(file, next, back, at, 30, piece(5), s5, advanced.memory_is, advanced.rip_is);
+            let s6 = execute_near_control(back, s5);
+            let s6_rip: (s6.rip = at) = trans(cong_fn<BitVec(64), BitVec(64)>(λ a => near_branch_target(a, 5, BitVec::ofNat(4294967261)), advanced.rip_is),
+                jumps_back(at, 30, 5, BitVec::ofNat(4294967261), 0, refl));
+            let paged = page_next(file, page0, head.page, o, List::replicate(space(), t), space(), head.held, head.below, head.above);
+            let at_c: (o + List::replicate(space(), t).len() = c) = cong_fn<Nat, Nat>(λ l => o + l, count);
+            let paged_next: PageNext(page0, next, o, List::replicate(space(), Succ(t))) =
+                j(replicate_snoc(space(), t), λ bs _ => PageNext(page0, next, o, bs),
+                    j(at_c, λ d _ => PageNext(page0, io_store_offset(IoMemory(file, head.page), d, [space()]).page, o, List::replicate(space(), t) ++ [space()]), paged));
+            let rdi6: (read_gpr(Rdi, s6.gprs).toNat() = io_page_base() + (o + List::replicate(space(), Succ(t)).len())) =
+                trans(add_one_value(read_gpr(Rdi, state.gprs), io_page_base() + c, cursor, pad_low_word(o, t, space_room.left)),
+                    cong_fn<Nat, Nat>(λ l => io_page_base() + (o + l), sym(List::len_replicate(space(), Succ(t)))));
+            let rsi6: (read_gpr(Rsi, s6.gprs).toNat() = k + Succ(t)) =
+                add_one_value(rsi_word, k + t, rsi, pad_k_word(k, t, w, more.left, j(rdx, λ v _ => v < Nat::pow(2, 64), BitVec::toNat_lt_pow(64, rdx_word))));
+            let head6: FmtOut(file, page0, o, List::replicate(space(), Succ(t)), at, origin, s6) =
+                FmtOut(page := next, memory_is := advanced.memory_is, rip_is := s6_rip, held := paged_next.held, below := paged_next.below,
+                    above := paged_next.above, rdi := rdi6, kept := head.kept);
+            have rest = pad_run(file, page0, at, placed, o, n, k, w, origin, g, Succ(t), s6, more.right, space_room.right, head6, rsi6, rdx, rax, rbx);
+            let steps: LinuxSteps(io_linux(), state, s6) =
+                linux_steps_trans(io_linux(), state, s3, s6,
+                    linux_steps_of_fetched(io_linux(), state, s3, fetched_steps_trans(fetch, data, state, s1, s3, tested.steps,
+                        fetched_steps_trans(fetch, data, s1, s2, s3, jumped, spaced.steps))),
+                    linux_steps_trans(io_linux(), s3, s4, s6, stored.step,
+                        linux_steps_of_fetched(io_linux(), s4, s6, fetched_steps_trans(fetch, data, s4, s5, s6, advanced.steps, returned))));
+            j(pad_count_more(t, g), λ total _ => PadDone(file, page0, o, n, total, at, origin, state),
+                Exists(rest.witness, ⟨linux_steps_trans(io_linux(), state, s6, rest.witness, steps, rest.proof.left), rest.proof.right⟩))
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The digits.
+
+// A word's low byte, for a value that fits one.
+theorem low_byte(x: BitVec(64), v: Nat, value: x.toNat() = v, small: v < 256): imm_byte0(x) = BitVec::ofNat(v) {
+    let low = x.take_low(8, 56);
+    let halves = bitvec_nat::toNat_take_drop(8, 56, x);
+    let byte: (Nat::pow(2, 8) = 256) = refl;
+    let high = x.drop_low(8, 56).toNat();
+    let spelled: (x.toNat() = low.toNat() + 256 * high) = j(byte, λ b _ => x.toNat() = low.toNat() + b * high, halves);
+    let fits: (low.toNat() < 256) = j(byte, λ b _ => low.toNat() < b, BitVec::toNat_lt_pow(8, low));
+    let same: (low.toNat() = v) = omega;
+    trans(sym(BitVec::ofNat_toNat(8, low)), cong_fn<Nat, BitVec(8)>(λ k => BitVec::ofNat(k), same))
+}
+
+// Taking a place away once: one fewer to take, the same remainder.
+theorem take_place(x, p, q: Nat, positive: 0 < p, count: x.div(p) = Succ(q)): (p <= x) ∧ (((x -p).div(p) = q) ∧ ((x -p).mod(p) = x.mod(p))) {
+    let parts = Nat::div_mul_add_mod(x, p);
+    let whole: (Succ(q) * p + x.mod(p) = x) = j(count, λ d _ => d * p + x.mod(p) = x, parts);
+    let unfold: (Succ(q) * p = p + q * p) = Nat::mul_succ_left(q, p);
+    let under = Nat::mod_lt(x, p, positive);
+    let fits: (p <= x) = omega;
+    let back: ((x -p) + p = x) = Nat::sub_add_cancel(p, x, fits);
+    let rest: (q * p + x.mod(p) = x -p) = omega;
+    let unique = Nat::div_mod_unique(x -p, p, q, x.mod(p), rest, under);
+    ⟨fits, unique⟩
+}
+theorem none_left(x, p: Nat, positive: 0 < p, count: x.div(p) = 0): x < p {
+    let parts = Nat::div_mul_add_mod(x, p);
+    let none: (x.div(p) * p = 0) = trans(cong_fn<Nat, Nat>(λ d => d * p, count), Nat::mul_left_zero(p));
+    let under = Nat::mod_lt(x, p, positive);
+    omega
+}
+
+theorem emit_measured(i: Nat): LayoutMeasured(emit_parts(i), emit_lens()) {
+    ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, trivial⟩⟩⟩⟩⟩⟩⟩⟩
+}
+
+// The digit loop at its head, `c` taken so far, `q` still to take.
+record InnerDone(file: List<BitVec(8)>, page: Nat → BitVec(8), at: BitVec(64), r, d: Nat, before, after: MachineState<IoMemory>) {
+    memory_is: after.memory = IoMemory(file, page),
+    rip_is: after.rip = next_rip(at, 50),
+    rax: read_gpr(Rax, after.gprs).toNat() = r,
+    rcx: read_gpr(Rcx, after.gprs).toNat() = 48 + d,
+    rbx: read_gpr(Rbx, after.gprs) = read_gpr(Rbx, before.gprs),
+    rdi: read_gpr(Rdi, after.gprs) = read_gpr(Rdi, before.gprs),
+    kept: FmtKept(after.gprs, before.gprs),
+}
+theorem inner_more(c, q: Nat, room: c + Succ(q) <= 9): (Succ(48 + c) < Nat::pow(2, 64)) ∧ (Succ(c) + q <= 9) {
+    let wide: (100 <= Nat::pow(2, 64)) = Nat::leb_sound(100, Nat::pow(2, 64), trivial);
+    ⟨omega, omega⟩
+}
+theorem inner_digit(c, q: Nat): 48 + (Succ(c) + q) = 48 + (c + Succ(q)) { omega }
+
+theorem inner_run(file: List<BitVec(8)>, page: Nat → BitVec(8), i: Nat, small: i <= 19, at: BitVec(64), placed: Placed(file, emit_block(i), at), q: Nat):
+    (x, c: Nat) → (state: MachineState<IoMemory>) → x.div(ten_pow(i)) = q → c + q <= 9 →
+    state.memory = IoMemory(file, page) → state.rip = next_rip(at, 29) → read_gpr(Rax, state.gprs).toNat() = x →
+    read_gpr(R11, state.gprs) = place_word(i) → read_gpr(Rcx, state.gprs).toNat() = 48 + c →
+    Exists<MachineState<IoMemory>>(λ after => FetchedSteps(io_fetch_access(), io_data_access(), state, after) ∧
+        InnerDone(file, page, at, x.mod(ten_pow(i)), c + q, state, after)) {
+    let fetch = io_fetch_access();
+    let data = io_data_access();
+    let p = ten_pow(i);
+    let positive = ten_pow_pos(i);
+    let piece = placed_piece(file, emit_parts(i), canonical_block_bytes(emit_advance_block()), emit_lens(), emit_measured(i), at, placed);
+    let jb = JumpIfNear(B, BitVec::ofNat(12));
+    match q as λ g => (x, c: Nat) → (state: MachineState<IoMemory>) → x.div(p) = g → c + g <= 9 →
+            state.memory = IoMemory(file, page) → state.rip = next_rip(at, 29) → read_gpr(Rax, state.gprs).toNat() = x →
+            read_gpr(R11, state.gprs) = place_word(i) → read_gpr(Rcx, state.gprs).toNat() = 48 + c →
+            Exists<MachineState<IoMemory>>(λ after => FetchedSteps(fetch, data, state, after) ∧ InnerDone(file, page, at, x.mod(p), c + g, state, after)) {
+        Zero => λ x c state count room memory_is rip_is rax r11 rcx => {
+            let tested = run_block(file, page, emit_fit_block(), at, 29, piece(3), state, memory_is, rip_is);
+            let s1 = execute_block_normal(emit_fit_block(), state);
+            let jumped = run_near(file, page, jb, at, 32, piece(4), s1, tested.memory_is, tested.rip_is);
+            let s2 = execute_near_control(jb, s1);
+            let less: (x < p) = none_left(x, p, positive, count);
+            let rax_word = read_gpr(Rax, state.gprs);
+            let r11_word = read_gpr(R11, state.gprs);
+            let r11_value: (r11_word.toNat() = p) = trans(cong_fn<BitVec(64), Nat>(λ v => v.toNat(), r11), place_word_value(i, small));
+            let carry: (rax_word.borrow_sub_bit(r11_word) = True) =
+                BitVec::borrow_sub_bit_of_borrow(64, rax_word, r11_word, { omega });
+            let s2_rip: (s2.rip = next_rip(at, 50)) = trans(near_if_taken_rip(B, BitVec::ofNat(12), s1, carry),
+                trans(cong_fn<BitVec(64), BitVec(64)>(λ a => near_branch_target(a, 6, BitVec::ofNat(12)), tested.rip_is),
+                    jumps_forward(at, 32, 6, BitVec::ofNat(12), 50, refl)));
+            Exists(s2, ⟨fetched_steps_trans(fetch, data, state, s1, s2, tested.steps, jumped),
+                InnerDone(memory_is := tested.memory_is, rip_is := s2_rip, rax := trans(rax, sym(Nat::mod_of_lt(x, p, less))), rcx := rcx,
+                    rbx := refl, rdi := refl, kept := fmt_kept_refl(state.gprs))⟩)
+        },
+        Succ(g) => λ x c state count room memory_is rip_is rax r11 rcx => {
+            let taken = take_place(x, p, g, positive, count);
+            let more = inner_more(c, g, room);
+            let tested = run_block(file, page, emit_fit_block(), at, 29, piece(3), state, memory_is, rip_is);
+            let s1 = execute_block_normal(emit_fit_block(), state);
+            let jumped = run_near(file, page, jb, at, 32, piece(4), s1, tested.memory_is, tested.rip_is);
+            let s2 = execute_near_control(jb, s1);
+            let rax_word = read_gpr(Rax, state.gprs);
+            let r11_word = read_gpr(R11, state.gprs);
+            let r11_value: (r11_word.toNat() = p) = trans(cong_fn<BitVec(64), Nat>(λ v => v.toNat(), r11), place_word_value(i, small));
+            let carry: (rax_word.borrow_sub_bit(r11_word) = False) =
+                (match rax_word.borrow_sub_bit(r11_word) as λ b => (rax_word.borrow_sub_bit(r11_word) = b) → b = False {
+                    False => λ _ => refl,
+                    True => λ below => { let lt = cmp_below(rax_word, r11_word, below); let le = taken.left; false_elim(Nat::lt_irrefl(x, { omega })) },
+                })(refl);
+            let s2_rip: (s2.rip = next_rip(at, 38)) = trans(near_if_not_taken_rip(B, BitVec::ofNat(12), s1, carry), rip_advance(at, s1.rip, 32, 6, tested.rip_is));
+            let took = run_block(file, page, emit_take_block(), at, 38, piece(5), s2, tested.memory_is, s2_rip);
+            let s3 = execute_block_normal(emit_take_block(), s2);
+            let back = JumpNear(BitVec::ofNat(4294967275));
+            let returned = run_near(file, page, back, at, 45, piece(6), s3, took.memory_is, took.rip_is);
+            let s4 = execute_near_control(back, s3);
+            let s4_rip: (s4.rip = next_rip(at, 29)) = trans(cong_fn<BitVec(64), BitVec(64)>(λ a => near_branch_target(a, 5, BitVec::ofNat(4294967275)), took.rip_is),
+                jumps_back(at, 45, 5, BitVec::ofNat(4294967275), 29, refl));
+            let fits: (r11_word.toNat() <= rax_word.toNat()) = { let le = taken.left; omega };
+            let rax4: (read_gpr(Rax, s4.gprs).toNat() = x -p) =
+                trans(bitvec_nat::toNat_sub(64, rax_word, r11_word, fits),
+                    trans(cong_fn<Nat, Nat>(λ a => a -r11_word.toNat(), rax), cong_fn<Nat, Nat>(λ b => x -b, r11_value)));
+            let rcx4: (read_gpr(Rcx, s4.gprs).toNat() = 48 + Succ(c)) = add_one_value(read_gpr(Rcx, state.gprs), 48 + c, rcx, more.left);
+            have rest = inner_run(file, page, i, small, at, placed, g, x -p, Succ(c), s4, taken.right.left, more.right, took.memory_is, s4_rip,
+                rax4, r11, rcx4);
+            let done = rest.proof.right;
+            Exists(rest.witness, ⟨fetched_steps_trans(fetch, data, state, s4, rest.witness,
+                    fetched_steps_trans(fetch, data, state, s1, s4, tested.steps,
+                        fetched_steps_trans(fetch, data, s1, s2, s4, jumped, fetched_steps_trans(fetch, data, s2, s3, s4, took.steps, returned))),
+                    rest.proof.left),
+                InnerDone(memory_is := done.memory_is, rip_is := done.rip_is, rax := trans(done.rax, taken.right.right),
+                    rcx := trans(done.rcx, inner_digit(c, g)), rbx := done.rbx, rdi := done.rdi, kept := done.kept)⟩)
+        },
+    }
+}
+
+// The digit a place prints, if it is at or past the leading place.
+fn lead_digit(p, m, n: Nat) → List<BitVec(8)> { match p.leb(n) { True => [digit(m.div(p))], False => Nil } }
+theorem place_digits_lead(i, m, n: Nat):
+    place_digits(Succ(i))(m, n) = lead_digit(ten_pow(Succ(i)), m, n) ++ place_digits(i)(m.mod(ten_pow(Succ(i))), n) {
+    let p = ten_pow(Succ(i));
+    match p.leb(n) as λ b => (match b { True => Cons(digit(m.div(p)), place_digits(i)(m.mod(p), n)), False => place_digits(i)(m.mod(p), n) }) =
+            (match b as λ _ => List<BitVec(8)> { True => [digit(m.div(p))], False => Nil }) ++ place_digits(i)(m.mod(p), n) {
+        True => refl, False => refl,
+    }
+}
+
+theorem digit_fits(q: Nat, small: q < 10): 48 + (0 + q) < 256 { omega }
+theorem digit_spelled(q: Nat): BitVec::ofNat(48 + (0 + q), n := 8) = digit(q) {
+    cong_fn<Nat, BitVec(8)>(λ k => BitVec::ofNat(48 + k), Nat::add_left_zero(q))
+}
+theorem mod_le_self(m, p: Nat): m.mod(p) <= m {
+    let parts = Nat::div_mul_add_mod(m, p);
+    omega
+}
+
+// One place 10^i, i ≥ 1: the digit stored when the count reaches the place,
+// and what is left of the count below it.
+theorem emit_step(file: List<BitVec(8)>, page0: Nat → BitVec(8), i: Nat, small: Succ(i) <= 19, at: BitVec(64), o, m, n: Nat,
+    front: List<BitVec(8)>, origin: Gprs, placed: Placed(file, emit_block(Succ(i)), at), below_place: m < ten_pow(Succ(Succ(i))), within: m <= n,
+    room: o + front.len() < 4096, state: MachineState<IoMemory>, head: FmtOut(file, page0, o, front, at, origin, state),
+    rax: read_gpr(Rax, state.gprs).toNat() = m, rbx: read_gpr(Rbx, state.gprs).toNat() = n):
+    Exists<MachineState<IoMemory>>(λ after => LinuxSteps(io_linux(), state, after) ∧
+        (FmtOut(file, page0, o, front ++ lead_digit(ten_pow(Succ(i)), m, n), next_rip(at, 57), origin, after) ∧
+        ((read_gpr(Rax, after.gprs).toNat() = m.mod(ten_pow(Succ(i)))) ∧ (read_gpr(Rbx, after.gprs).toNat() = n)))) {
+    let fetch = io_fetch_access();
+    let data = io_data_access();
+    let io = io_linux();
+    let p = ten_pow(Succ(i));
+    let positive = ten_pow_pos(Succ(i));
+    let piece = placed_piece(file, emit_parts(Succ(i)), canonical_block_bytes(emit_advance_block()), emit_lens(), emit_measured(Succ(i)), at, placed);
+    let tested = run_block(file, head.page, emit_test_block(Succ(i)), at, 0, piece(0), state, head.memory_is, head.rip_is);
+    let s1 = execute_block_normal(emit_test_block(Succ(i)), state);
+    let jb = JumpIfNear(B, BitVec::ofNat(38));
+    let jumped = run_near(file, head.page, jb, at, 13, piece(1), s1, tested.memory_is, tested.rip_is);
+    let s2 = execute_near_control(jb, s1);
+    let rbx_word = read_gpr(Rbx, state.gprs);
+    let carry: (s1.flags.cf = rbx_word.borrow_sub_bit(place_word(Succ(i)))) = refl;
+    (match rbx_word.borrow_sub_bit(place_word(Succ(i))) as λ c => (rbx_word.borrow_sub_bit(place_word(Succ(i))) = c) →
+            Exists<MachineState<IoMemory>>(λ after => LinuxSteps(io, state, after) ∧
+                (FmtOut(file, page0, o, front ++ lead_digit(p, m, n), next_rip(at, 57), origin, after) ∧
+                ((read_gpr(Rax, after.gprs).toNat() = m.mod(p)) ∧ (read_gpr(Rbx, after.gprs).toNat() = n)))) {
+        True => λ below => {
+            let less: (n < p) = j(rbx, λ v _ => v < p,
+                j(place_word_value(Succ(i), small), λ v _ => rbx_word.toNat() < v, cmp_below(rbx_word, place_word(Succ(i)), below)));
+            let taken: (condition_holds(B, s1.flags) = True) = trans(carry, below);
+            let s2_rip: (s2.rip = next_rip(at, 57)) = trans(near_if_taken_rip(B, BitVec::ofNat(38), s1, taken),
+                trans(cong_fn<BitVec(64), BitVec(64)>(λ a => near_branch_target(a, 6, BitVec::ofNat(38)), tested.rip_is),
+                    jumps_forward(at, 13, 6, BitVec::ofNat(38), 57, refl)));
+            let none: (lead_digit(p, m, n) = Nil) = j(sym(leb_no(p, n, less)), λ b _ => (match b as λ _ => List<BitVec(8)> { True => [digit(m.div(p))], False => Nil }) = Nil, refl);
+            let bytes: (front = front ++ lead_digit(p, m, n)) = trans(sym(List::append_nil(front)), cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ l => front ++ l, sym(none)));
+            let kept_low: (m.mod(p) = m) = Nat::mod_of_lt(m, p, { omega });
+            Exists(s2, ⟨linux_steps_of_fetched(io, state, s2, fetched_steps_trans(fetch, data, state, s1, s2, tested.steps, jumped)),
+                ⟨j(bytes, λ l _ => FmtOut(file, page0, o, l, next_rip(at, 57), origin, s2),
+                    FmtOut(page := head.page, memory_is := tested.memory_is, rip_is := s2_rip, held := head.held, below := head.below,
+                        above := head.above, rdi := head.rdi, kept := head.kept)),
+                 ⟨trans(rax, sym(kept_low)), rbx⟩⟩⟩)
+        },
+        False => λ fits => {
+            let reached: (p <= n) = j(rbx, λ v _ => p <= v,
+                j(place_word_value(Succ(i), small), λ v _ => v <= rbx_word.toNat(), cmp_not_below(rbx_word, place_word(Succ(i)), fits)));
+            let passed: (condition_holds(B, s1.flags) = False) = trans(carry, fits);
+            let s2_rip: (s2.rip = next_rip(at, 19)) = trans(near_if_not_taken_rip(B, BitVec::ofNat(38), s1, passed), rip_advance(at, s1.rip, 13, 6, tested.rip_is));
+            let zeroed = run_block(file, head.page, emit_zero_block(), at, 19, piece(2), s2, tested.memory_is, s2_rip);
+            let s3 = execute_block_normal(emit_zero_block(), s2);
+            let q = m.div(p);
+            let top: (q < 10) = Nat::div_lt_of_lt_mul(m, p, 10, below_place);
+            let rcx3: (read_gpr(Rcx, s3.gprs).toNat() = 48 + 0) = refl;
+            have inner = inner_run(file, head.page, Succ(i), small, at, placed, q, m, 0, s3, refl, { omega }, zeroed.memory_is, zeroed.rip_is,
+                rax, refl, rcx3);
+            let s4 = inner.witness;
+            let done = inner.proof.right;
+            let c = o + front.len();
+            let cursor: (read_gpr(Rdi, s4.gprs).toNat() = io_page_base() + c) = trans(cong_fn<BitVec(64), Nat>(λ v => v.toNat(), done.rdi), head.rdi);
+            let low: (imm_byte0(read_gpr(Rcx, s4.gprs)) = digit(q)) =
+                trans(low_byte(read_gpr(Rcx, s4.gprs), 48 + (0 + q), done.rcx, digit_fits(q, top)), digit_spelled(q));
+            let stored = run_store(file, head.page, emit_store(), refl, at, 50, piece(7), c, room, digit(q), s4, done.memory_is, done.rip_is, cursor, low);
+            let s5 = byte_store_after(linux_writes(io), emit_store(), s4);
+            let next = io_store_offset(IoMemory(file, head.page), c, [digit(q)]).page;
+            let advanced = run_block(file, next, emit_advance_block(), at, 53, piece(8), s5, stored.memory_is, stored.rip_is);
+            let s6 = execute_block_normal(emit_advance_block(), s5);
+            let paged = page_next(file, page0, head.page, o, front, digit(q), head.held, head.below, head.above);
+            let one: (lead_digit(p, m, n) = [digit(q)]) = j(sym(leb_yes(p, n, reached)), λ b _ => (match b as λ _ => List<BitVec(8)> { True => [digit(m.div(p))], False => Nil }) = [digit(q)], refl);
+            let grown: ((front ++ [digit(q)]).len() = Succ(front.len())) = List::len_append(front, [digit(q)]);
+            let page_low: (io_page_base() + 4097 <= Nat::pow(2, 64)) = Nat::leb_sound(io_page_base() + 4097, Nat::pow(2, 64), trivial);
+            let rdi6: (read_gpr(Rdi, s6.gprs).toNat() = io_page_base() + (o + (front ++ [digit(q)]).len())) =
+                trans(add_one_value(read_gpr(Rdi, s4.gprs), io_page_base() + c, cursor, { omega }),
+                    cong_fn<Nat, Nat>(λ l => io_page_base() + (o + l), sym(grown)));
+            let out: FmtOut(file, page0, o, front ++ [digit(q)], next_rip(at, 57), origin, s6) =
+                FmtOut(page := next, memory_is := advanced.memory_is, rip_is := advanced.rip_is, held := paged.held, below := paged.below,
+                    above := paged.above, rdi := rdi6, kept := fmt_kept_trans(s6.gprs, s3.gprs, origin, done.kept, head.kept));
+            let steps: LinuxSteps(io, state, s6) =
+                linux_steps_trans(io, state, s4, s6,
+                    linux_steps_of_fetched(io, state, s4, fetched_steps_trans(fetch, data, state, s1, s4, tested.steps,
+                        fetched_steps_trans(fetch, data, s1, s2, s4, jumped, fetched_steps_trans(fetch, data, s2, s3, s4, zeroed.steps, inner.proof.left)))),
+                    linux_steps_trans(io, s4, s5, s6, stored.step, linux_steps_of_fetched(io, s5, s6, advanced.steps)));
+            Exists(s6, ⟨steps,
+                ⟨j(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ l => front ++ l, sym(one)), λ l _ => FmtOut(file, page0, o, l, next_rip(at, 57), origin, s6), out),
+                 ⟨done.rax, trans(cong_fn<BitVec(64), Nat>(λ v => v.toNat(), done.rbx), rbx)⟩⟩⟩)
+        },
+    })(refl)
+}
+
+theorem units_measured(): LayoutMeasured(units_parts(), units_lens()) { ⟨refl, ⟨refl, trivial⟩⟩ }
+theorem units_len(): units_code().len() = 20 { refl }
+theorem emit_block_len(i: Nat): emit_block(i).len() = 57 { refl }
+
+// The units place: '0' + what is left, always stored.
+theorem units_step(file: List<BitVec(8)>, page0: Nat → BitVec(8), at: BitVec(64), o, m: Nat, front: List<BitVec(8)>, origin: Gprs,
+    placed: Placed(file, units_code(), at), small: m < ten_pow(1), room: o + front.len() < 4096,
+    state: MachineState<IoMemory>, head: FmtOut(file, page0, o, front, at, origin, state), rax: read_gpr(Rax, state.gprs).toNat() = m):
+    Exists<MachineState<IoMemory>>(λ after => LinuxSteps(io_linux(), state, after) ∧
+        FmtOut(file, page0, o, front ++ [digit(m)], next_rip(at, 20), origin, after)) {
+    let fetch = io_fetch_access();
+    let data = io_data_access();
+    let io = io_linux();
+    let piece = placed_piece(file, units_parts(), canonical_block_bytes(emit_advance_block()), units_lens(), units_measured(), at, placed);
+    let digit_small: (m < 10) = { let s: (m < 1 * 10) = small; omega };
+    let made = run_block(file, head.page, units_block(), at, 0, piece(0), state, head.memory_is, head.rip_is);
+    let s1 = execute_block_normal(units_block(), state);
+    let zero_value: (BitVec::ofNat(48, n := 64).toNat() = 48) = refl;
+    let rcx1: (read_gpr(Rcx, s1.gprs).toNat() = 48 + (0 + m)) =
+        trans(bitvec_nat::add_words(64, BitVec::ofNat(48), read_gpr(Rax, state.gprs), 48, m, zero_value, rax, { omega }),
+            cong_fn<Nat, Nat>(λ k => 48 + k, sym(Nat::add_left_zero(m))));
+    let low: (imm_byte0(read_gpr(Rcx, s1.gprs)) = digit(m)) =
+        trans(low_byte(read_gpr(Rcx, s1.gprs), 48 + (0 + m), rcx1, digit_fits(m, digit_small)), digit_spelled(m));
+    let c = o + front.len();
+    let cursor: (read_gpr(Rdi, s1.gprs).toNat() = io_page_base() + c) = head.rdi;
+    let stored = run_store(file, head.page, emit_store(), refl, at, 13, piece(1), c, room, digit(m), s1, made.memory_is, made.rip_is, cursor, low);
+    let s2 = byte_store_after(linux_writes(io), emit_store(), s1);
+    let next = io_store_offset(IoMemory(file, head.page), c, [digit(m)]).page;
+    let advanced = run_block(file, next, emit_advance_block(), at, 16, piece(2), s2, stored.memory_is, stored.rip_is);
+    let s3 = execute_block_normal(emit_advance_block(), s2);
+    let paged = page_next(file, page0, head.page, o, front, digit(m), head.held, head.below, head.above);
+    let grown: ((front ++ [digit(m)]).len() = Succ(front.len())) = List::len_append(front, [digit(m)]);
+    let page_low: (io_page_base() + 4097 <= Nat::pow(2, 64)) = Nat::leb_sound(io_page_base() + 4097, Nat::pow(2, 64), trivial);
+    let rdi3: (read_gpr(Rdi, s3.gprs).toNat() = io_page_base() + (o + (front ++ [digit(m)]).len())) =
+        trans(add_one_value(read_gpr(Rdi, s1.gprs), io_page_base() + c, cursor, { omega }),
+            cong_fn<Nat, Nat>(λ l => io_page_base() + (o + l), sym(grown)));
+    Exists(s3, ⟨linux_steps_trans(io, state, s1, s3, linux_steps_of_fetched(io, state, s1, made.steps),
+            linux_steps_trans(io, s1, s2, s3, stored.step, linux_steps_of_fetched(io, s2, s3, advanced.steps))),
+        FmtOut(page := next, memory_is := advanced.memory_is, rip_is := advanced.rip_is, held := paged.held, below := paged.below,
+            above := paged.above, rdi := rdi3, kept := head.kept)⟩)
+}
+
+theorem emit_room(o, f, rest: Nat, room: o + (f + Succ(rest)) <= 4096): o + f < 4096 { omega }
+theorem emit_lead_room(o, f, l, rest: Nat, room: o + (f + (l + rest)) <= 4096): o + ((f + l) + rest) <= 4096 { omega }
+
+// Places 10^j down to the units, by recursion on `j`.
+theorem emit_run(file: List<BitVec(8)>, page0: Nat → BitVec(8), o, n: Nat, origin: Gprs, j: Nat):
+    (at: BitVec(64)) → (front: List<BitVec(8)>) → (m: Nat) → (state: MachineState<IoMemory>) → j <= 19 → m < ten_pow(Succ(j)) → m <= n →
+    o + (front.len() + place_digits(j)(m, n).len()) <= 4096 → Placed(file, emit_code(j), at) →
+    FmtOut(file, page0, o, front, at, origin, state) → read_gpr(Rax, state.gprs).toNat() = m → read_gpr(Rbx, state.gprs).toNat() = n →
+    Exists<MachineState<IoMemory>>(λ after => LinuxSteps(io_linux(), state, after) ∧
+        FmtOut(file, page0, o, front ++ place_digits(j)(m, n), next_rip(at, emit_code(j).len()), origin, after)) {
+    let io = io_linux();
+    match j as λ k => (at: BitVec(64)) → (front: List<BitVec(8)>) → (m: Nat) → (state: MachineState<IoMemory>) → k <= 19 → m < ten_pow(Succ(k)) → m <= n →
+            o + (front.len() + place_digits(k)(m, n).len()) <= 4096 → Placed(file, emit_code(k), at) →
+            FmtOut(file, page0, o, front, at, origin, state) → read_gpr(Rax, state.gprs).toNat() = m → read_gpr(Rbx, state.gprs).toNat() = n →
+            Exists<MachineState<IoMemory>>(λ after => LinuxSteps(io, state, after) ∧
+                FmtOut(file, page0, o, front ++ place_digits(k)(m, n), next_rip(at, emit_code(k).len()), origin, after)) {
+        Zero => λ at front m state _ small _ room placed head rax rbx => {
+            have done = units_step(file, page0, at, o, m, front, origin, placed, small, emit_room(o, front.len(), 0, room), state, head, rax);
+            Exists(done.witness, ⟨done.proof.left, j(sym(units_len()), λ l _ => FmtOut(file, page0, o, front ++ [digit(m)], next_rip(at, l), origin, done.witness),
+                done.proof.right)⟩)
+        },
+        Succ(i) => λ at front m state small below within room placed head rax rbx => {
+            let p = ten_pow(Succ(i));
+            let parts = placed_split(file, emit_block(Succ(i)), emit_code(i), at, placed);
+            let lead = lead_digit(p, m, n);
+            let rest_digits = place_digits(i)(m.mod(p), n);
+            let whole: (place_digits(Succ(i))(m, n) = lead ++ rest_digits) = place_digits_lead(i, m, n);
+            let whole_len: (place_digits(Succ(i))(m, n).len() = lead.len() + rest_digits.len()) =
+                trans(cong_fn<List<BitVec(8)>, Nat>(λ l => l.len(), whole), List::len_append(lead, rest_digits));
+            let rest_len: (rest_digits.len() = Succ(places_reached(i)(n))) = place_digits_len(i, m.mod(p), n);
+            let step_room: (o + front.len() < 4096) = emit_room(o, front.len(), lead.len() + places_reached(i)(n), { omega });
+            have first = emit_step(file, page0, i, small, at, o, m, n, front, origin, parts.left, below, within, step_room, state, head, rax, rbx);
+            let moved: (next_rip(at, emit_block(Succ(i)).len()) = next_rip(at, 57)) = rip_count(at, emit_block_len(Succ(i)));
+            let front_len: ((front ++ lead).len() = front.len() + lead.len()) = List::len_append(front, lead);
+            have rest = emit_run(file, page0, o, n, origin, i, next_rip(at, 57), front ++ lead, m.mod(p), first.witness, { omega },
+                Nat::mod_lt(m, p, ten_pow_pos(Succ(i))), Nat::le_trans(m.mod(p), m, n, mod_le_self(m, p), within),
+                j(sym(front_len), λ l _ => o + (l + rest_digits.len()) <= 4096,
+                    emit_lead_room(o, front.len(), lead.len(), rest_digits.len(), j(whole_len, λ l _ => o + (front.len() + l) <= 4096, room))),
+                j(moved, λ a _ => Placed(file, emit_code(i), a), parts.right), first.proof.right.left, first.proof.right.right.left,
+                first.proof.right.right.right);
+            let bytes: ((front ++ lead) ++ rest_digits = front ++ place_digits(Succ(i))(m, n)) =
+                trans(List::append_assoc(front, lead, rest_digits), cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ l => front ++ l, sym(whole)));
+            let ends: (next_rip(next_rip(at, 57), emit_code(i).len()) = next_rip(at, emit_code(Succ(i)).len())) =
+                trans(rip_compose(at, 57, emit_code(i).len()),
+                    rip_count(at, trans(cong_fn<Nat, Nat>(λ c => c + emit_code(i).len(), sym(emit_block_len(Succ(i)))),
+                        sym(List::len_append(emit_block(Succ(i)), emit_code(i))))));
+            Exists(rest.witness, ⟨linux_steps_trans(io, state, first.witness, rest.witness, first.proof.left, rest.proof.left),
+                j(ends, λ a _ => FmtOut(file, page0, o, front ++ place_digits(Succ(i))(m, n), a, origin, rest.witness),
+                    j(bytes, λ l _ => FmtOut(file, page0, o, l, next_rip(next_rip(at, 57), emit_code(i).len()), origin, rest.witness), rest.proof.right))⟩)
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The formatter, whole: from its first byte with the count in RAX, the width
+// in RDX and the cursor `o` bytes into the page in RDI, it stores
+// `pad_left(width, ' ', decimal(n))` at the cursor, moves the cursor past
+// it, leaves the rest of the page and the kept registers alone, and ends
+// just past its code. Every step is a fetched step or a byte store.
+
+theorem stored_nothing(page: Nat → BitVec(8), o: Nat): Stored(page, o, Nil) {
+    λ i byte present => false_elim(j(present, λ found _ => match found as λ _ => Type { None => True, Some(_) => False }, trivial))
+}
+theorem padded_len(w, n: Nat): padded_decimal(w, n).len() = (w -decimal(n).len()) + decimal(n).len() {
+    trans(List::len_append(List::replicate(space(), w -decimal(n).len()), decimal(n)),
+        cong_fn<Nat, Nat>(λ l => l + decimal(n).len(), List::len_replicate(space(), w -decimal(n).len())))
+}
+theorem format_room(o, f, k, d: Nat, room: o + (f + k) <= 4096, same: d = k): (o + (0 + f) <= 4096) ∧ (o + ((0 + f) + d) <= 4096) { ⟨omega, omega⟩ }
+theorem format_ends(at: BitVec(64)):
+    next_rip(next_rip(next_rip(next_rip(at, 13), count_blocks(19).len()), 35), emit_code(19).len()) = next_rip(at, format_len()) {
+    trans(cong_fn<BitVec(64), BitVec(64)>(λ a => next_rip(next_rip(a, 35), emit_code(19).len()), rip_compose(at, 13, count_blocks(19).len())),
+        trans(cong_fn<BitVec(64), BitVec(64)>(λ a => next_rip(a, emit_code(19).len()), rip_compose(at, 13 + count_blocks(19).len(), 35)),
+            trans(rip_compose(at, (13 + count_blocks(19).len()) + 35, emit_code(19).len()), rip_count(at, refl))))
+}
+
+theorem format_runs(file: List<BitVec(8)>, at: BitVec(64), placed: Placed(file, format_code(), at), page0: Nat → BitVec(8), w, o: Nat,
+    state: MachineState<IoMemory>, memory_is: state.memory = IoMemory(file, page0), rip_is: state.rip = at,
+    rdx: read_gpr(Rdx, state.gprs).toNat() = w, rdi: read_gpr(Rdi, state.gprs).toNat() = io_page_base() + o,
+    room: o + padded_decimal(w, read_gpr(Rax, state.gprs).toNat()).len() <= 4096):
+    Exists<MachineState<IoMemory>>(λ after => LinuxSteps(io_linux(), state, after) ∧
+        FmtOut(file, page0, o, padded_decimal(w, read_gpr(Rax, state.gprs).toNat()), next_rip(at, format_len()), state.gprs, after)) {
+    let io = io_linux();
+    let n = read_gpr(Rax, state.gprs).toNat();
+    let word: (n < Nat::pow(2, 64)) = BitVec::toNat_lt_pow(64, read_gpr(Rax, state.gprs));
+    let first = placed_split(file, canonical_block_bytes(fmt_setup_block()), count_blocks(19) ++ (pad_code() ++ emit_code(19)), at, placed);
+    let second = placed_split(file, count_blocks(19), pad_code() ++ emit_code(19), next_rip(at, 13), first.right);
+    let third = placed_split(file, pad_code(), emit_code(19), next_rip(next_rip(at, 13), count_blocks(19).len()), second.right);
+    let set = run_block(file, page0, fmt_setup_block(), at, 0, first.left, state, memory_is, rip_is);
+    let s1 = execute_block_normal(fmt_setup_block(), state);
+    let counting: CountAt(file, page0, next_rip(at, 13), n, w, o, 1, state.gprs, s1) =
+        CountAt(memory_is := set.memory_is, rip_is := set.rip_is, rax := refl, rbx := refl, rdx := rdx, rdi := rdi, rsi := refl,
+            kept := fmt_kept_refl(state.gprs));
+    have counted = count_run(file, page0, n, w, o, state.gprs, 19, next_rip(at, 13), 1, s1, trivial, trivial, second.left, counting);
+    let pad_at = next_rip(next_rip(at, 13), count_blocks(19).len());
+    let s2 = counted.witness;
+    let c2 = counted.proof.right;
+    let k = 1 + places_reached(19)(n);
+    let digits: (decimal(n).len() = k) = trans(decimal_len(n, word), succ_one_add(places_reached(19)(n)));
+    let f = w -k;
+    let rooms = format_room(o, f, k, place_digits(19)(n, n).len(),
+        j(cong_fn<Nat, Nat>(λ d => (w -d) + d, digits), λ l _ => o + l <= 4096, j(padded_len(w, n), λ l _ => o + l <= 4096, room)),
+        trans(place_digits_len(19, n, n), succ_one_add(places_reached(19)(n))));
+    let start_out: FmtOut(file, page0, o, List::replicate(space(), 0), pad_at, state.gprs, s2) =
+        FmtOut(page := page0, memory_is := c2.memory_is, rip_is := c2.rip_is, held := stored_nothing(page0, o), below := λ q _ => refl,
+            above := λ q _ => refl, rdi := c2.rdi, kept := c2.kept);
+    have padded = pad_run(file, page0, pad_at, third.left, o, n, k, w, state.gprs, f, 0, s2, pad_left_start(k, w), rooms.left, start_out,
+        c2.rsi, c2.rdx, c2.rax, c2.rbx);
+    let s3 = padded.witness;
+    let spaces = List::replicate(space(), 0 + f);
+    let spaces_len: (spaces.len() = 0 + f) = List::len_replicate(space(), 0 + f);
+    have emitted = emit_run(file, page0, o, n, state.gprs, 19, next_rip(pad_at, 35), spaces, n, s3, trivial, word_below_places(n, word), Nat::le_refl(n),
+        j(sym(spaces_len), λ l _ => o + (l + place_digits(19)(n, n).len()) <= 4096, rooms.right),
+        third.right, padded.proof.right.left, padded.proof.right.right.left, padded.proof.right.right.right);
+    let bytes: (spaces ++ place_digits(19)(n, n) = padded_decimal(w, n)) =
+        trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ l => spaces ++ l, decimal_of_places(n, word)),
+            cong_fn<Nat, List<BitVec(8)>>(λ c => List::replicate(space(), c) ++ decimal(n),
+                trans(Nat::add_left_zero(f), cong_fn<Nat, Nat>(λ d => w -d, sym(digits)))));
+    Exists(emitted.witness, ⟨linux_steps_trans(io, state, s2, emitted.witness,
+            linux_steps_of_fetched(io, state, s2, fetched_steps_trans(io_fetch_access(), io_data_access(), state, s1, s2, set.steps, counted.proof.left)),
+            linux_steps_trans(io, s2, s3, emitted.witness, padded.proof.left, emitted.proof.left)),
+        j(format_ends(at), λ a _ => FmtOut(file, page0, o, padded_decimal(w, n), a, state.gprs, emitted.witness),
+            j(bytes, λ l _ => FmtOut(file, page0, o, l, next_rip(next_rip(pad_at, 35), emit_code(19).len()), state.gprs, emitted.witness),
+                emitted.proof.right))⟩)
+}

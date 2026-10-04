@@ -417,6 +417,33 @@ gives POSIX `%d` as the width-1 case. Stdin filters keep `Line`. `Fields`
 loses its only client when `wc.hthr` becomes the command, so C4 deletes it
 (§11, decision 6).
 
+**Status (built, 2026-10-04): `lib/elf64_format_width.hthr`.** It differs
+from the sketch above in two ways, both to keep the proof small and off the
+model work of C1:
+
+- **Unrolled places, no table and no `WordLoad`.** Each of the nineteen
+  places above the units is a block of its own with its power of ten as an
+  immediate (`MovRI(R11, place_word(i))`): a run of `count_block`s counts the
+  places the number reaches, the padding loop stores spaces while that count
+  is below the width, and a run of `emit_block`s writes one digit per place,
+  each skipping its place while the whole count is below it (so a leading
+  place prints nothing and an inner zero prints `0`). The code is fixed bytes,
+  position-independent, and needs no new decoder form.
+- **Branches on the carry**: `CmpRR` then `JumpIfNear(B | AE, …)`, the
+  borrow of `CmpRR` read directly as unsigned less-than, instead of
+  `SetBelow; TestRR; JZ`.
+
+Interface: RAX holds the count, RDX the width, RDI the cursor into the I/O
+page; RAX, RBX, RCX, RDX, RSI, RDI, R11 and the flags are clobbered, the
+other nine registers kept. The claim is `format_runs`: placed anywhere in
+the file, with room in the page, the code runs to its end and the page holds
+`padded_decimal(width, n) = pad_left(width, ' ', decimal(n))` at the cursor,
+for every 64-bit `n` and every width. Its spec half proves that the unrolled
+place digits equal `decimal` (`decimal_of_places`). Proof cost is linear in
+the number of places, and is paid once, in the library; a program adds only
+its placement (`crates/elab/tests/format_width_process.rs`). Nothing uses it
+yet: the generated `Fields` finish stays until C4 migrates `wc`.
+
 ## 8. Producer and generator
 
 - **Generator: no change.** The step piece is generated over the context's
