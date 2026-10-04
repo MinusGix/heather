@@ -2073,3 +2073,343 @@ theorem unnamed_spill<C>(file: IoImage, letters: List<BitVec(8)>, default: BitVe
                 counts_ok, ready.page, ready.after, ready.memory_is, ready.rip_is, ready.stored, ready.rdi))
     }
 }
+
+// ---------------------------------------------------------------------------
+// The operand loop (1979): the cursor's slots loaded, the cursor run to the
+// next operand, its slots stored back; no operand left goes to the total
+// row, and an operand is read as stdin (`-`) or opened.
+
+// A slot past the status, other than the count's, leaves what Vars says.
+theorem slot_vars(vars: Nat → BitVec(64), mask: BitVec(64), width, n: Nat, failed: Bool, totals: Nat → BitVec(64),
+    held: Vars(vars, mask, width, n, failed, totals), q: Nat, w: BitVec(64), low: 18 < q, other: Not(q = 21)):
+    Vars(set_var(vars, q, w), mask, width, n, failed, totals) {
+    Vars(mask_is := trans(set_var_other(vars, q, w, 16, ne_below(16, q, { omega })), held.mask_is),
+        width_is := trans(set_var_other(vars, q, w, 17, ne_below(17, q, { omega })), held.width_is),
+        status_is := trans(set_var_other(vars, q, w, 18, ne_below(18, q, low)), held.status_is),
+        count_is := trans(set_var_other(vars, q, w, 21, λ same => other(sym(same))), held.count_is),
+        totals_is := λ i below => trans(set_var_other(vars, q, w, 8 + i, ne_below(8 + i, q, { omega })), held.totals_is(i, below)))
+}
+
+// The cursor's slots into RBX and R12, then the cursor.
+theorem loop_cursor(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64), spill: Nat → StateReg, code: StructuredCode,
+    jumps: FilterJumps, pj: PrintJumps, placed: CommandPlaced(file, letters, default, spill, code, jumps, pj),
+    frame: Nat → BitVec(8), vars: Nat → BitVec(64), holds: FrameHolds(frame, vars), rsp: BitVec(64), k: Nat, ended: Bool,
+    args: List<List<BitVec(8)>>, pointers: List<BitVec(64)>, argv: ArgvStays(file, rsp, args, pointers, k),
+    at19: vars(19) = argv_slot(rsp, k), at20: vars(20) = ended_word(ended),
+    page: Nat → BitVec(8), state: MachineState<IoMemory>, memory_is: state.memory = IoMemory(with_frame(file, frame), page),
+    rip_is: state.rip = eof_rip(ca_loop())):
+    CursorReach(with_frame(file, frame), page, eof_rip(ca_cursor()), rsp, state.gprs, operands_from(ended, args), state) {
+    let img = with_frame(file, frame);
+    let pieces = cmd_pieces(img, letters, default, spill, code, jumps, pj, placed(frame));
+    let first = run_slot_load(file, frame, vars, holds, page, ca_loop(), 19, { omega }, Rbx, pieces.begin(10), pieces.begin(11), state,
+        memory_is, rip_is);
+    let s1 = slot_load_after(Rbx, vars(19), 19, state);
+    let second = run_slot_load(file, frame, vars, holds, page, ca_loop_ended(), 20, { omega }, R12, pieces.begin(12), pieces.begin(13), s1,
+        first.memory_is, first.rip_is);
+    let s2 = slot_load_after(R12, vars(20), 20, s1);
+    let head: CursorAt(img, page, eof_rip(ca_cursor()), rsp, k, ended, state.gprs, s2) = CursorAt(memory_is := second.memory_is,
+        rip_is := second.rip_is, regs := ⟨at19, ⟨at20, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, refl⟩⟩⟩⟩⟩⟩⟩⟩⟩⟩⟩);
+    cursor_reach_after(img, page, eof_rip(ca_cursor()), rsp, state.gprs, operands_from(ended, args), state, s2,
+        fetched_steps_trans(io_fetch_access(), io_data_access(), state, s1, s2, first.steps, second.steps),
+        cursor_runs(img, eof_rip(ca_cursor()), pieces.cursor, page, rsp, k, ended, args, pointers, state.gprs, s2, argv, head))
+}
+
+// Past the cursor (2164): RBX and R12 back in their slots.
+record CursorStored(file: IoImage, page: Nat → BitVec(8), mask: BitVec(64), width, n: Nat, failed: Bool, totals: Nat → BitVec(64),
+    before: MachineState<IoMemory>) {
+    after: MachineState<IoMemory>,
+    frame: Nat → BitVec(8),
+    vars: Nat → BitVec(64),
+    steps: LinuxSteps(io_linux(), before, after),
+    memory_is: after.memory = IoMemory(with_frame(file, frame), page),
+    rip_is: after.rip = eof_rip(ca_last()),
+    holds: FrameHolds(frame, vars),
+    values: Vars(vars, mask, width, n, failed, totals),
+    at19: vars(19) = read_gpr(Rbx, before.gprs),
+    at20: vars(20) = read_gpr(R12, before.gprs),
+    rsi: read_gpr(Rsi, after.gprs) = read_gpr(Rsi, before.gprs),
+}
+theorem cursor_store(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64), spill: Nat → StateReg, code: StructuredCode,
+    jumps: FilterJumps, pj: PrintJumps, placed: CommandPlaced(file, letters, default, spill, code, jumps, pj),
+    frame: Nat → BitVec(8), vars: Nat → BitVec(64), holds: FrameHolds(frame, vars), mask: BitVec(64), width, n: Nat, failed: Bool,
+    totals: Nat → BitVec(64), values: Vars(vars, mask, width, n, failed, totals),
+    page: Nat → BitVec(8), state: MachineState<IoMemory>, memory_is: state.memory = IoMemory(with_frame(file, frame), page),
+    rip_is: state.rip = eof_rip(ca_cstore())): CursorStored(file, page, mask, width, n, failed, totals, state) {
+    let img = with_frame(file, frame);
+    let pieces = cmd_pieces(img, letters, default, spill, code, jumps, pj, placed(frame));
+    let w19 = read_gpr(Rbx, state.gprs);
+    let w20 = read_gpr(R12, state.gprs);
+    let first = run_slot_store(file, frame, vars, holds, page, ca_cstore(), 19, { omega }, Rbx, pieces.operand(0), pieces.operand(1), state,
+        memory_is, rip_is);
+    let s1 = slot_store_after(Rbx, 19, state);
+    let frame1 = stored_frame(file, frame, 19, w19);
+    let vars1 = set_var(vars, 19, w19);
+    let pieces1 = cmd_pieces(with_frame(file, frame1), letters, default, spill, code, jumps, pj, placed(frame1));
+    let second = run_slot_store(file, frame1, vars1, first.holds, page, ca_estore(), 20, { omega }, R12, pieces1.operand(2), pieces1.operand(3),
+        s1, first.memory_is, first.rip_is);
+    let s2 = slot_store_after(R12, 20, s1);
+    let vars2 = set_var(vars1, 20, w20);
+    CursorStored(after := s2, frame := stored_frame(file, frame1, 20, w20), vars := vars2,
+        steps := linux_steps_trans(io_linux(), state, s1, s2, first.steps, second.steps),
+        memory_is := second.memory_is, rip_is := second.rip_is, holds := second.holds,
+        values := slot_vars(vars1, mask, width, n, failed, totals, slot_vars(vars, mask, width, n, failed, totals, values, 19, w19, trivial,
+            ne_below(19, 21, trivial)), 20, w20, trivial, ne_below(20, 21, trivial)),
+        at19 := trans(set_var_other(vars1, 20, w20, 19, ne_below(19, 20, trivial)), set_var_same(vars, 19, w19)),
+        at20 := set_var_same(vars1, 20, w20), rsi := refl)
+}
+
+// No operand left: RSI zero, JE to the total row.
+fn last_test_block() → List<Instruction> { [MovRI(R11, word_zero()), CmpRR(Rsi, R11)] }
+theorem loop_last(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64), spill: Nat → StateReg, code: StructuredCode,
+    jumps: FilterJumps, pj: PrintJumps, placed: CommandPlaced(file, letters, default, spill, code, jumps, pj),
+    frame: Nat → BitVec(8), vars: Nat → BitVec(64), holds: FrameHolds(frame, vars), mask: BitVec(64), width, n: Nat, failed: Bool,
+    totals: Nat → BitVec(64), values: Vars(vars, mask, width, n, failed, totals), narrow: width <= 20, few: n < Nat::pow(2, 64),
+    total: RowWrite, ok: TotalOk(mask, width, n, total, totals),
+    page: Nat → BitVec(8), state: MachineState<IoMemory>, memory_is: state.memory = IoMemory(with_frame(file, frame), page),
+    rip_is: state.rip = eof_rip(ca_cstore()), rsi: read_gpr(Rsi, state.gprs) = word_zero()):
+    LinuxRuns(io_linux(), total_events(mask, width, n, total, failed, totals), state) {
+    let io = io_linux();
+    let fetch = io_fetch_access();
+    let data = io_data_access();
+    have stored = cursor_store(file, letters, default, spill, code, jumps, pj, placed, frame, vars, holds, mask, width, n, failed, totals, values,
+        page, state, memory_is, rip_is);
+    let s0 = stored.after;
+    let img = with_frame(file, stored.frame);
+    let pieces = cmd_pieces(img, letters, default, spill, code, jumps, pj, placed(stored.frame));
+    let tested = run_block(img, page, last_test_block(), io_entry(), ca_last(), pieces.operand(4), s0, stored.memory_is, stored.rip_is);
+    let s1 = execute_block_normal(last_test_block(), s0);
+    let je = JumpIfNear(E, cmd_d_last_je());
+    let jumped = run_near(img, page, je, io_entry(), ca_last_je(), pieces.operand(5), s1, tested.memory_is, tested.rip_is);
+    let s2 = execute_near_control(je, s1);
+    let set: (s1.flags.zf = True) = trans(cong_fn<BitVec(64), Bool>(λ v => is_zero_bits(64, v.sub(word_zero())), trans(stored.rsi, rsi)),
+        zero_bits_sub_self(64, word_zero()));
+    let s2_rip = jcc_taken(E, cmd_d_last_je(), s1, io_entry(), ca_last_je(), ca_total(), tested.rip_is, set, cmd_j_last_je());
+    linux_runs_after_linux_steps(io, total_events(mask, width, n, total, failed, totals), state, s0, stored.steps,
+        linux_runs_after_steps(io, total_events(mask, width, n, total, failed, totals), s0, s2,
+            fetched_steps_trans(fetch, data, s0, s1, s2, tested.steps, jumped),
+            total_runs(file, letters, default, spill, code, jumps, pj, placed, stored.frame, stored.vars, stored.holds, mask, width, n, failed,
+                totals, stored.values, narrow, few, total, ok, page, s2, tested.memory_is, s2_rip)))
+}
+
+// An operand (RSI not zero): past the JE, its name's pointer into slot 22.
+record OperandAt(file: IoImage, page: Nat → BitVec(8), mask: BitVec(64), width, n: Nat, failed: Bool, totals: Nat → BitVec(64),
+    c19, c20, pointer: BitVec(64), before: MachineState<IoMemory>) {
+    after: MachineState<IoMemory>,
+    frame: Nat → BitVec(8),
+    vars: Nat → BitVec(64),
+    steps: LinuxSteps(io_linux(), before, after),
+    memory_is: after.memory = IoMemory(with_frame(file, frame), page),
+    rip_is: after.rip = eof_rip(ca_dash_load()),
+    holds: FrameHolds(frame, vars),
+    values: Vars(vars, mask, width, n, failed, totals),
+    at19: vars(19) = c19,
+    at20: vars(20) = c20,
+    at22: vars(22) = pointer,
+    rsi: read_gpr(Rsi, after.gprs) = pointer,
+}
+theorem operand_head(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64), spill: Nat → StateReg, code: StructuredCode,
+    jumps: FilterJumps, pj: PrintJumps, placed: CommandPlaced(file, letters, default, spill, code, jumps, pj),
+    frame: Nat → BitVec(8), vars: Nat → BitVec(64), holds: FrameHolds(frame, vars), mask: BitVec(64), width, n: Nat, failed: Bool,
+    totals: Nat → BitVec(64), values: Vars(vars, mask, width, n, failed, totals), pointer: BitVec(64), nonzero: 0 < pointer.toNat(),
+    page: Nat → BitVec(8), state: MachineState<IoMemory>, memory_is: state.memory = IoMemory(with_frame(file, frame), page),
+    rip_is: state.rip = eof_rip(ca_cstore()), rsi: read_gpr(Rsi, state.gprs) = pointer):
+    OperandAt(file, page, mask, width, n, failed, totals, read_gpr(Rbx, state.gprs), read_gpr(R12, state.gprs), pointer, state) {
+    let io = io_linux();
+    let fetch = io_fetch_access();
+    let data = io_data_access();
+    have stored = cursor_store(file, letters, default, spill, code, jumps, pj, placed, frame, vars, holds, mask, width, n, failed, totals, values,
+        page, state, memory_is, rip_is);
+    let s0 = stored.after;
+    let img = with_frame(file, stored.frame);
+    let pieces = cmd_pieces(img, letters, default, spill, code, jumps, pj, placed(stored.frame));
+    let tested = run_block(img, page, last_test_block(), io_entry(), ca_last(), pieces.operand(4), s0, stored.memory_is, stored.rip_is);
+    let s1 = execute_block_normal(last_test_block(), s0);
+    let je = JumpIfNear(E, cmd_d_last_je());
+    let passed = run_near(img, page, je, io_entry(), ca_last_je(), pieces.operand(5), s1, tested.memory_is, tested.rip_is);
+    let s2 = execute_near_control(je, s1);
+    let rsi0: (read_gpr(Rsi, s0.gprs) = pointer) = trans(stored.rsi, rsi);
+    let clear: (s1.flags.zf = False) = trans(cong_fn<BitVec(64), Bool>(λ v => is_zero_bits(64, v.sub(word_zero())), rsi0),
+        trans(zero_bits_sub(64, pointer, word_zero()), nonzero_word(pointer, nonzero)));
+    let s2_rip = jcc_passed(E, cmd_d_last_je(), s1, io_entry(), ca_last_je(), tested.rip_is, clear);
+    let named = run_slot_store(file, stored.frame, stored.vars, stored.holds, page, ca_name(), 22, { omega }, Rsi, pieces.operand(6),
+        pieces.operand(7), s2, tested.memory_is, s2_rip);
+    let s3 = slot_store_after(Rsi, 22, s2);
+    let w22 = read_gpr(Rsi, s0.gprs);
+    OperandAt(after := s3, frame := stored_frame(file, stored.frame, 22, w22), vars := set_var(stored.vars, 22, w22),
+        steps := linux_steps_trans(io, state, s0, s3, stored.steps, linux_steps_trans(io, s0, s2, s3,
+            linux_steps_of_fetched(io, s0, s2, fetched_steps_trans(fetch, data, s0, s1, s2, tested.steps, passed)), named.steps)),
+        memory_is := named.memory_is, rip_is := named.rip_is, holds := named.holds,
+        values := slot_vars(stored.vars, mask, width, n, failed, totals, stored.values, 22, w22, trivial, ne_above(22, 21, trivial)),
+        at19 := trans(set_var_other(stored.vars, 22, w22, 19, ne_below(19, 22, trivial)), stored.at19),
+        at20 := trans(set_var_other(stored.vars, 22, w22, 20, ne_below(20, 22, trivial)), stored.at20),
+        at22 := trans(set_var_same(stored.vars, 22, w22), rsi0), rsi := rsi0)
+}
+
+// The name's first byte against `-` (2222), and after a `-` its second
+// against NUL (2245): `-` alone is stdin, anything else is opened.
+fn dash_load() → ByteLoad { ByteLoad(destination := Rax, base := Rsi) }
+fn dash_test_block() → List<Instruction> { [MovRI(R11, byte_word(dash())), CmpRR(Rax, R11)] }
+fn ahead_block() → List<Instruction> { [MovRR(Rdi, Rsi), AddRI8(Rdi, one_byte())] }
+fn ahead_load() → ByteLoad { ByteLoad(destination := Rax, base := Rdi) }
+record ByteTested(file: IoImage, page: Nat → BitVec(8), at: Nat, zf: Bool, before: MachineState<IoMemory>) {
+    after: MachineState<IoMemory>,
+    steps: FetchedSteps(io_fetch_access(), io_data_access(), before, after),
+    memory_is: after.memory = IoMemory(file, page),
+    rip_is: after.rip = eof_rip(at),
+    flag: after.flags.zf = zf,
+    rsi: read_gpr(Rsi, after.gprs) = read_gpr(Rsi, before.gprs),
+}
+theorem dash_tested(file: IoImage, page: Nat → BitVec(8), pieces: SegPieces(file, operand_parts(), operand_last(), operand_lens(), ca_cstore()),
+    byte: BitVec(8), state: MachineState<IoMemory>, memory_is: state.memory = IoMemory(file, page), rip_is: state.rip = eof_rip(ca_dash_load()),
+    present: io_data_access().read(IoMemory(file, page), read_gpr(Rsi, state.gprs)) = Some(byte),
+    low: read_gpr(Rsi, state.gprs).toNat() < Nat::pow(2, 47)): ByteTested(file, page, ca_dash_jne(), byte.eq_bit(dash()), state) {
+    let loaded = run_byte_load(file, page, dash_load(), io_entry(), ca_dash_load(), pieces(8), state, memory_is, rip_is, byte, present, low);
+    let s1 = byte_load_after(dash_load(), byte, state);
+    let tested = run_block(file, page, dash_test_block(), io_entry(), ca_dash_test(), pieces(9), s1, loaded.memory_is, loaded.rip_is);
+    ByteTested(after := execute_block_normal(dash_test_block(), s1),
+        steps := fetched_steps_trans(io_fetch_access(), io_data_access(), state, s1, execute_block_normal(dash_test_block(), s1), loaded.steps,
+            tested.steps),
+        memory_is := tested.memory_is, rip_is := tested.rip_is, flag := cmp_bytes(byte, dash()), rsi := refl)
+}
+theorem ahead_tested(file: IoImage, page: Nat → BitVec(8), pieces: SegPieces(file, operand_parts(), operand_last(), operand_lens(), ca_cstore()),
+    byte: BitVec(8), state: MachineState<IoMemory>, memory_is: state.memory = IoMemory(file, page), rip_is: state.rip = eof_rip(ca_ahead()),
+    present: io_data_access().read(IoMemory(file, page), read_gpr(Rsi, state.gprs).add(one_byte().sign_extend(56))) = Some(byte),
+    low: read_gpr(Rsi, state.gprs).add(one_byte().sign_extend(56)).toNat() < Nat::pow(2, 47)):
+    ByteTested(file, page, ca_ahead_jne(), byte.eq_bit(nul()), state) {
+    let fetch = io_fetch_access();
+    let data = io_data_access();
+    let set = run_block(file, page, ahead_block(), io_entry(), ca_ahead(), pieces(11), state, memory_is, rip_is);
+    let s1 = execute_block_normal(ahead_block(), state);
+    let loaded = run_byte_load(file, page, ahead_load(), io_entry(), ca_ahead_load(), pieces(12), s1, set.memory_is, set.rip_is, byte, present, low);
+    let s2 = byte_load_after(ahead_load(), byte, s1);
+    let tested = run_block(file, page, zero_test_block(), io_entry(), ca_ahead_test(), pieces(13), s2, loaded.memory_is, loaded.rip_is);
+    ByteTested(after := execute_block_normal(zero_test_block(), s2),
+        steps := fetched_steps_trans(fetch, data, state, s1, execute_block_normal(zero_test_block(), s2), set.steps,
+            fetched_steps_trans(fetch, data, s1, s2, execute_block_normal(zero_test_block(), s2), loaded.steps, tested.steps)),
+        memory_is := tested.memory_is, rip_is := tested.rip_is, flag := cmp_bytes(byte, nul()), rsi := refl)
+}
+fn StdinAt(file: IoImage, frame, page: Nat → BitVec(8), events: List<LinuxEvent>) → Type {
+    (state: MachineState<IoMemory>) → state.memory = IoMemory(with_frame(file, frame), page) → state.rip = eof_rip(ca_dash()) →
+        LinuxRuns(io_linux(), events, state)
+}
+fn OpenAt(file: IoImage, frame, page: Nat → BitVec(8), pointer: BitVec(64), events: List<LinuxEvent>) → Type {
+    (state: MachineState<IoMemory>) → state.memory = IoMemory(with_frame(file, frame), page) → state.rip = eof_rip(ca_open()) →
+        read_gpr(Rsi, state.gprs) = pointer → LinuxRuns(io_linux(), events, state)
+}
+theorem below_from(a, v, l: Nat, at: a = v, low: v + l + 1 <= Nat::pow(2, 47)): a < Nat::pow(2, 47) { omega }
+theorem ahead_low(v, l: Nat, low: v + Succ(l) + 1 <= Nat::pow(2, 47)): Succ(v) < Nat::pow(2, 47) { omega }
+theorem lt_from(a, b, m: Nat, at: a = b, below: b < m): a < m { omega }
+theorem stdin_not_dash(b: BitVec(8), rest: List<BitVec(8)>, no: b.eq_bit(dash()) = False): names_stdin(Cons(b, rest)) = False {
+    match rest as λ r => names_stdin(Cons(b, r)) = False { Nil => no, Cons(_, _) => refl }
+}
+// A JNE taken to the open (2313).
+theorem jne_open(file: IoImage, frame, page: Nat → BitVec(8), d: BitVec(32), at: Nat,
+    piece: Placed(with_frame(file, frame), near_control_bytes(JumpIfNear(NE, d)), eof_rip(at)), lands: JumpsForward(at, 6, d, ca_open()),
+    zf: Bool, clear: zf = False, pointer: BitVec(64), before: MachineState<IoMemory>, tested: ByteTested(with_frame(file, frame), page, at, zf, before),
+    rsi: read_gpr(Rsi, before.gprs) = pointer, events: List<LinuxEvent>, go: OpenAt(file, frame, page, pointer, events)):
+    LinuxRuns(io_linux(), events, before) {
+    let img = with_frame(file, frame);
+    let jumped = run_near(img, page, JumpIfNear(NE, d), io_entry(), at, piece, tested.after, tested.memory_is, tested.rip_is);
+    let s = execute_near_control(JumpIfNear(NE, d), tested.after);
+    let s_rip = jcc_taken(NE, d, tested.after, io_entry(), at, ca_open(), tested.rip_is, cong_fn<Bool, Bool>(λ x => !x, trans(tested.flag, clear)),
+        lands);
+    linux_runs_after_steps(io_linux(), events, before, s,
+        fetched_steps_trans(io_fetch_access(), io_data_access(), before, tested.after, s, tested.steps, jumped),
+        go(s, tested.memory_is, s_rip, trans(tested.rsi, rsi)))
+}
+// After a `-` (2245): the next byte NUL is stdin, any other is opened.
+theorem dash_second(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64), spill: Nat → StateReg, code: StructuredCode,
+    jumps: FilterJumps, pj: PrintJumps, placed: CommandPlaced(file, letters, default, spill, code, jumps, pj),
+    frame, page: Nat → BitVec(8), pointer: BitVec(64), b: BitVec(8), yes: b.eq_bit(dash()) = True, events: Bool → List<LinuxEvent>,
+    state: MachineState<IoMemory>, memory_is: state.memory = IoMemory(with_frame(file, frame), page), rip_is: state.rip = eof_rip(ca_ahead()),
+    rsi: read_gpr(Rsi, state.gprs) = pointer, low: Succ(pointer.toNat()) < Nat::pow(2, 47), rest: List<BitVec(8)>):
+    CStringFrom(rest, λ i => io_data_access().read(IoMemory(with_frame(file, frame), page), word_of_nat(64, pointer.toNat() + Succ(i)))) →
+    (names_stdin(Cons(b, rest)) = True → StdinAt(file, frame, page, events(True))) →
+    (names_stdin(Cons(b, rest)) = False → OpenAt(file, frame, page, pointer, events(False))) →
+    LinuxRuns(io_linux(), events(names_stdin(Cons(b, rest))), state) {
+    let io = io_linux();
+    let fetch = io_fetch_access();
+    let data = io_data_access();
+    let img = with_frame(file, frame);
+    let memory = IoMemory(img, page);
+    let pieces = cmd_pieces(img, letters, default, spill, code, jumps, pj, placed(frame));
+    let src = λ (i: Nat) => data.read(memory, word_of_nat(64, pointer.toNat() + i));
+    let reads: ReadsFrom(img, page, src, pointer.toNat()) = λ i => refl;
+    let ahead = read_gpr(Rsi, state.gprs).add(one_byte().sign_extend(56));
+    let ahead_value: (ahead.toNat() = Succ(pointer.toNat())) =
+        pointer_next(read_gpr(Rsi, state.gprs), pointer.toNat(), cong_fn<BitVec(64), Nat>(λ w => w.toNat(), rsi), low);
+    let second: (data.read(memory, ahead) = src(1)) = read_here(img, page, λ i => src(Succ(i)), ahead,
+        j(sym(ahead_value), λ v _ => src(1) = data.read(memory, word_of_nat(64, v + 0)), (reads_next(img, page, src, pointer.toNat(), reads))(0)));
+    let low1: (ahead.toNat() < Nat::pow(2, 47)) = lt_from(ahead.toNat(), Succ(pointer.toNat()), Nat::pow(2, 47), ahead_value, low);
+    match rest as λ r => CStringFrom(r, λ i => src(Succ(i))) → (names_stdin(Cons(b, r)) = True → StdinAt(file, frame, page, events(True))) →
+            (names_stdin(Cons(b, r)) = False → OpenAt(file, frame, page, pointer, events(False))) →
+            LinuxRuns(io, events(names_stdin(Cons(b, r))), state) {
+        Nil => λ tail stdin _ => {
+            have u = ahead_tested(img, page, pieces.operand, nul(), state, memory_is, rip_is, trans(second, tail), low1);
+            let jne = JumpIfNear(NE, cmd_d_ahead_jne());
+            let passed = run_near(img, page, jne, io_entry(), ca_ahead_jne(), pieces.operand(14), u.after, u.memory_is, u.rip_is);
+            let s = execute_near_control(jne, u.after);
+            let s_rip = jcc_passed(NE, cmd_d_ahead_jne(), u.after, io_entry(), ca_ahead_jne(), u.rip_is, cong_fn<Bool, Bool>(λ x => !x, u.flag));
+            j(sym(yes), λ x _ => LinuxRuns(io, events(x), state),
+                linux_runs_after_steps(io, events(True), state, s, fetched_steps_trans(fetch, data, state, u.after, s, u.steps, passed),
+                    stdin(yes)(s, u.memory_is, s_rip)))
+        },
+        Cons(c, more) => λ tail _ opens => {
+            have u = ahead_tested(img, page, pieces.operand, c, state, memory_is, rip_is, trans(second, tail.left), low1);
+            jne_open(file, frame, page, cmd_d_ahead_jne(), ca_ahead_jne(), pieces.operand(14), cmd_j_ahead_jne(), c.eq_bit(nul()),
+                not_nul(c, tail.right.left), pointer, state, u, rsi, events(False), opens(refl))
+        },
+    }
+}
+// The first byte (2222).
+theorem dash_test(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64), spill: Nat → StateReg, code: StructuredCode,
+    jumps: FilterJumps, pj: PrintJumps, placed: CommandPlaced(file, letters, default, spill, code, jumps, pj),
+    frame, page: Nat → BitVec(8), pointer: BitVec(64), name: List<BitVec(8)>, string: ArgStays(file, pointer, name),
+    low: pointer.toNat() + name.len() + 1 <= Nat::pow(2, 47), events: Bool → List<LinuxEvent>,
+    on_stdin: names_stdin(name) = True → StdinAt(file, frame, page, events(True)),
+    on_open: names_stdin(name) = False → OpenAt(file, frame, page, pointer, events(False)),
+    state: MachineState<IoMemory>, memory_is: state.memory = IoMemory(with_frame(file, frame), page),
+    rip_is: state.rip = eof_rip(ca_dash_load()), rsi: read_gpr(Rsi, state.gprs) = pointer):
+    LinuxRuns(io_linux(), events(names_stdin(name)), state) {
+    let io = io_linux();
+    let fetch = io_fetch_access();
+    let data = io_data_access();
+    let img = with_frame(file, frame);
+    let memory = IoMemory(img, page);
+    let pieces = cmd_pieces(img, letters, default, spill, code, jumps, pj, placed(frame));
+    let src = λ (i: Nat) => data.read(memory, word_of_nat(64, pointer.toNat() + i));
+    let reads: ReadsFrom(img, page, src, pointer.toNat()) = λ i => refl;
+    let first: (data.read(memory, read_gpr(Rsi, state.gprs)) = src(0)) =
+        trans(cong_fn<BitVec(64), Option<BitVec(8)>>(λ a => data.read(memory, a), rsi), read_here(img, page, src, pointer, reads(0)));
+    let rsi_value: (read_gpr(Rsi, state.gprs).toNat() = pointer.toNat()) = cong_fn<BitVec(64), Nat>(λ w => w.toNat(), rsi);
+    (match name as λ nm => CStringFrom(nm, src) → pointer.toNat() + nm.len() + 1 <= Nat::pow(2, 47) →
+            (names_stdin(nm) = True → StdinAt(file, frame, page, events(True))) →
+            (names_stdin(nm) = False → OpenAt(file, frame, page, pointer, events(False))) → LinuxRuns(io, events(names_stdin(nm)), state) {
+        Nil => λ held lw _ opens => {
+            have t = dash_tested(img, page, pieces.operand, nul(), state, memory_is, rip_is, trans(first, held),
+                below_from(read_gpr(Rsi, state.gprs).toNat(), pointer.toNat(), 0, rsi_value, lw));
+            jne_open(file, frame, page, cmd_d_dash_jne(), ca_dash_jne(), pieces.operand(10), cmd_j_dash_jne(), nul().eq_bit(dash()), refl, pointer,
+                state, t, rsi, events(False), opens(refl))
+        },
+        Cons(b, rest) => λ held lw stdin opens => {
+            have t = dash_tested(img, page, pieces.operand, b, state, memory_is, rip_is, trans(first, held.left),
+                below_from(read_gpr(Rsi, state.gprs).toNat(), pointer.toNat(), Succ(rest.len()), rsi_value, lw));
+            (match b.eq_bit(dash()) as λ c => b.eq_bit(dash()) = c → LinuxRuns(io, events(names_stdin(Cons(b, rest))), state) {
+                False => λ no => j(sym(stdin_not_dash(b, rest, no)), λ x _ => LinuxRuns(io, events(x), state),
+                    jne_open(file, frame, page, cmd_d_dash_jne(), ca_dash_jne(), pieces.operand(10), cmd_j_dash_jne(), b.eq_bit(dash()), no,
+                        pointer, state, t, rsi, events(False), opens(stdin_not_dash(b, rest, no)))),
+                True => λ yes => {
+                    let jne = JumpIfNear(NE, cmd_d_dash_jne());
+                    let passed = run_near(img, page, jne, io_entry(), ca_dash_jne(), pieces.operand(10), t.after, t.memory_is, t.rip_is);
+                    let s = execute_near_control(jne, t.after);
+                    let s_rip = jcc_passed(NE, cmd_d_dash_jne(), t.after, io_entry(), ca_dash_jne(), t.rip_is,
+                        cong_fn<Bool, Bool>(λ x => !x, trans(t.flag, yes)));
+                    linux_runs_after_steps(io, events(names_stdin(Cons(b, rest))), state, s,
+                        fetched_steps_trans(fetch, data, state, t.after, s, t.steps, passed),
+                        dash_second(file, letters, default, spill, code, jumps, pj, placed, frame, page, pointer, b, yes, events, s, t.memory_is,
+                            s_rip, trans(t.rsi, rsi), ahead_low(pointer.toNat(), rest.len(), lw), rest)(held.right.right, stdin, opens))
+                },
+            })(refl)
+        },
+    })(string(frame, page), low, on_stdin, on_open)
+}
