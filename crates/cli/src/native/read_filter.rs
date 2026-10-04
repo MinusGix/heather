@@ -226,10 +226,10 @@ fn finish_write_loop() -> Layout {
 }
 
 /// elf64_read_filter's `filter_parts`: init, the read head (its JZ at end of
-/// file to `end`), the chunk's setup, the loop over its bytes (MOVZX RAX,
+/// file to `end`), the chunk loop (`filter_core_code`: the chunk's setup, the loop over its bytes (MOVZX RAX,
 /// byte [RSI]; the step; MOV byte [RDI], DL; the cursors on; JNZ), the close
 /// and its JZ back to the read when nothing was emitted, the write loop back
-/// to the read, the failure tail; the finish goes at `finish`.
+/// to the read), the failure tail; the finish goes at `finish`.
 fn process_layout(step: &str, bytes: &[u8], end: &'static str) -> Layout {
     use Gpr::*;
     let encode = super::encode;

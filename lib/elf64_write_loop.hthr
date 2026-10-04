@@ -96,18 +96,21 @@ record WriteLoopTargets(at, done: Nat, pj: PrintJumps) {
 // The registers the loop leaves alone (docs/native-stream-filter-design.md
 // §4.1): its write block writes RSI, RDX, RDI and RAX, its advance R9 and
 // R10, its retry RBX, and Linux returns in RAX, RCX and R11. A program's state
-// in R8 and R13–R15 lives through its writes.
+// in R8 and R13–R15 lives through its writes, and so does RSP, where a
+// command keeps its operand's fd (docs/native-wc-command-design.md §6.2).
 fn WriteKept(after, before: Gprs) → Type {
     (read_gpr(R8, after) = read_gpr(R8, before)) ∧ ((read_gpr(R12, after) = read_gpr(R12, before)) ∧
     ((read_gpr(R13, after) = read_gpr(R13, before)) ∧ ((read_gpr(R14, after) = read_gpr(R14, before)) ∧
-    ((read_gpr(R15, after) = read_gpr(R15, before)) ∧ (read_gpr(Rbp, after) = read_gpr(Rbp, before))))))
+    ((read_gpr(R15, after) = read_gpr(R15, before)) ∧ ((read_gpr(Rbp, after) = read_gpr(Rbp, before)) ∧
+    (read_gpr(Rsp, after) = read_gpr(Rsp, before)))))))
 }
-theorem write_kept_refl(gprs: Gprs): WriteKept(gprs, gprs) { ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, refl⟩⟩⟩⟩⟩ }
+theorem write_kept_refl(gprs: Gprs): WriteKept(gprs, gprs) { ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, refl⟩⟩⟩⟩⟩⟩ }
 theorem write_kept_trans(after, middle, before: Gprs, late: WriteKept(after, middle), early: WriteKept(middle, before)): WriteKept(after, before) {
     ⟨trans(late.left, early.left), ⟨trans(late.right.left, early.right.left), ⟨trans(late.right.right.left, early.right.right.left),
         ⟨trans(late.right.right.right.left, early.right.right.right.left),
             ⟨trans(late.right.right.right.right.left, early.right.right.right.right.left),
-                trans(late.right.right.right.right.right, early.right.right.right.right.right)⟩⟩⟩⟩⟩
+                ⟨trans(late.right.right.right.right.right.left, early.right.right.right.right.right.left),
+                    trans(late.right.right.right.right.right.right, early.right.right.right.right.right.right)⟩⟩⟩⟩⟩⟩
 }
 
 // The loop's head: `bytes` is what is left, readable at R9 and counted in R10,
@@ -378,7 +381,7 @@ theorem wl_from_then(memory: IoMemory, at: Nat, pj: PrintJumps,
                             let going = wl_going(returned, pj);
                             linux_runs_after_steps(io_linux(), after, returned, going, finished.steps,
                                 then(going, finished.rip_is, finished.memory_is,
-                                    write_kept_trans(going.gprs, state.gprs, origin, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, refl⟩⟩⟩⟩⟩, kept)))
+                                    write_kept_trans(going.gprs, state.gprs, origin, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, refl⟩⟩⟩⟩⟩⟩, kept)))
                         })
                 },
                 WriteFailedWith(errno) => λ bad _ => {
@@ -456,7 +459,7 @@ theorem wl_from_then(memory: IoMemory, at: Nat, pj: PrintJumps,
                                 back.rip_is, back.memory_is, sends_rest, moved_left,
                                 rest_room(read_gpr(R9, moved.gprs).toNat(), from.toNat(), count, bytes.drop(count).len(), bytes.len(), Nat::pow(2, 64),
                                     moved_by, rest_len, room),
-                                write_kept_trans(moved.gprs, state.gprs, origin, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, refl⟩⟩⟩⟩⟩, kept)))
+                                write_kept_trans(moved.gprs, state.gprs, origin, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, refl⟩⟩⟩⟩⟩⟩, kept)))
                     })
             },
             WriteInterrupted => λ bytes ok state some fits at_write memory_is sends counted room kept => {
@@ -486,7 +489,7 @@ theorem wl_from_then(memory: IoMemory, at: Nat, pj: PrintJumps,
                                 j(sym(same_at), λ v _ => LinuxWritesFrom(io_linux(), memory, v, bytes), sends),
                                 trans(cong_fn<BitVec(64), Nat>(λ v => v.toNat(), same_left), counted),
                                 j(sym(same_at), λ v _ => v.toNat() + bytes.len() < Nat::pow(2, 64), room),
-                                write_kept_trans(again.gprs, state.gprs, origin, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, refl⟩⟩⟩⟩⟩, kept)))
+                                write_kept_trans(again.gprs, state.gprs, origin, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, refl⟩⟩⟩⟩⟩⟩, kept)))
                     })
             },
         }),
