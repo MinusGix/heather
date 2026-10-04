@@ -883,7 +883,7 @@ fn filter_failed_ok<C>(shape: FilterShape<C>) → List<BitVec(8)> → List<BitVe
 // A run's events: each chunk read and its output written; at end of file,
 // the finish's `tail`.
 fn filter_events<C>(shape: FilterShape<C>, steps: List<EofStep<List<WriteStep>>>, ending: EofEnd<WriteFailure>, tail: List<LinuxEvent>) → List<LinuxEvent> {
-    eof_run(filter_body(shape), filter_failed(shape), steps, ending, tail, Nil)
+    eof_run(BitVec::ofNat(0), filter_body(shape), filter_failed(shape), read_exits(), steps, ending, tail, Nil)
 }
 fn FilterSteps<C>(shape: FilterShape<C>, steps: List<EofStep<List<WriteStep>>>) → Type { EofSteps(filter_ok(shape), steps, Nil) }
 fn FilterEndingOk<C>(shape: FilterShape<C>, steps: List<EofStep<List<WriteStep>>>, ending: EofEnd<WriteFailure>) → Type {
@@ -929,8 +929,8 @@ theorem filter_process<C>(shape: FilterShape<C>, facts: FilterFacts<C>(shape), j
     file: List<BitVec(8)>, pieces: (page: Nat → BitVec(8)) → FilterPieces(IoMemory(file, page), shape.code, jumps, pj, finish),
     input: List<BitVec(8)>, room: FilterRoom(shape.counts, input), tail_events: List<LinuxEvent>,
     tail: EofTail(file, done, shape.rep, filter_state(shape.step, input, shape.init), tail_events)):
-    EofProcess<List<WriteStep>, WriteFailure>(file, fl_at_read(structured_bytes(shape.code).len()), done, filter_inv(shape), input,
-        filter_ok(shape), filter_body(shape), filter_failed_ok(shape), filter_failed(shape), tail_events) {
+    EofProcess<List<WriteStep>, WriteFailure>(file, fl_at_read(structured_bytes(shape.code).len()), fl_at_failed(structured_bytes(shape.code).len()),
+        done, filter_inv(shape), input, filter_ok(shape), filter_body(shape), filter_failed_ok(shape), filter_failed(shape), read_exits(), tail_events) {
     EofProcess(
         framed := λ seen before after kept held => facts.framed(before, after, filter_state(shape.step, seen, shape.init),
             ⟨kept.right.right.right.right.right.right.left, ⟨kept.right.right.right.right.right.right.right.left,
@@ -947,6 +947,7 @@ theorem filter_process<C>(shape: FilterShape<C>, facts: FilterFacts<C>(shape), j
                 going, memory_is, rip_is, length_word, held, failure.writes,
                 writes_for_of(chunk_out(shape, seen, bytes), failure.writes, failed.left, failed.right.left),
                 WriteFailedWith(failure.errno), failed.right.right, Nil, failed.left),
+        fails := tail_exits(file, fl_at_failed(structured_bytes(shape.code).len()), jumps.rd, λ page => pieces(page).fail, filter_inv(shape), input),
         at_end := λ page state at_done in_page placed => tail(page, state, at_done, in_page, placed))
 }
 
@@ -962,19 +963,19 @@ theorem chunk_sends(out: List<BitVec(8)>, writes: List<WriteStep>, after: List<L
 }
 theorem filter_sends_from<C>(shape: FilterShape<C>, tail: List<LinuxEvent>, steps: List<EofStep<List<WriteStep>>>):
     (seen: List<BitVec(8)>) → EofSteps(filter_ok(shape), steps, seen) →
-    sent_to(BitVec::ofNat(1), eof_run(filter_body(shape), filter_failed(shape), steps, AtEnd, tail, seen)) =
+    sent_to(BitVec::ofNat(1), eof_run(BitVec::ofNat(0), filter_body(shape), filter_failed(shape), read_exits(), steps, AtEnd, tail, seen)) =
         filter_emitted(shape.step, eof_input(steps), filter_state(shape.step, seen, shape.init)) ++ sent_to(BitVec::ofNat(1), tail) {
     match steps as λ ss => (seen: List<BitVec(8)>) → EofSteps(filter_ok(shape), ss, seen) →
-            sent_to(BitVec::ofNat(1), eof_run(filter_body(shape), filter_failed(shape), ss, AtEnd, tail, seen)) =
+            sent_to(BitVec::ofNat(1), eof_run(BitVec::ofNat(0), filter_body(shape), filter_failed(shape), read_exits(), ss, AtEnd, tail, seen)) =
                 filter_emitted(shape.step, eof_input(ss), filter_state(shape.step, seen, shape.init)) ++ sent_to(BitVec::ofNat(1), tail) {
         Nil => λ seen _ => refl,
         Cons(step, rest) => match step as λ st => (seen: List<BitVec(8)>) → EofSteps(filter_ok(shape), Cons(st, rest), seen) →
-                sent_to(BitVec::ofNat(1), eof_run(filter_body(shape), filter_failed(shape), Cons(st, rest), AtEnd, tail, seen)) =
+                sent_to(BitVec::ofNat(1), eof_run(BitVec::ofNat(0), filter_body(shape), filter_failed(shape), read_exits(), Cons(st, rest), AtEnd, tail, seen)) =
                     filter_emitted(shape.step, eof_input(Cons(st, rest)), filter_state(shape.step, seen, shape.init)) ++ sent_to(BitVec::ofNat(1), tail) {
             Chunk(bytes, writes) => λ seen ok => {
                 let s = filter_state(shape.step, seen, shape.init);
                 let out = filter_emitted(shape.step, bytes, s);
-                let later = eof_run(filter_body(shape), filter_failed(shape), rest, AtEnd, tail, seen ++ bytes);
+                let later = eof_run(BitVec::ofNat(0), filter_body(shape), filter_failed(shape), read_exits(), rest, AtEnd, tail, seen ++ bytes);
                 let rest_out = filter_emitted(shape.step, eof_input(rest), filter_state(shape.step, seen ++ bytes, shape.init));
                 let moved: (filter_state(shape.step, seen ++ bytes, shape.init) = filter_state(shape.step, bytes, s)) =
                     filter_state_append(shape.step, seen, bytes, shape.init);
@@ -1014,10 +1015,10 @@ theorem read_filter_runs<C>(file: List<BitVec(8)>, shape: FilterShape<C>, facts:
     let started = block_fetched(fetch, data, state_init_block(), begin, trivial, pieces(page).init_at);
     let ready = execute_block_normal(state_init_block(), begin);
     let layout: EofLayout(file, fl_at_read(p), fl_at_failed(p), done, jumps.ed, jumps.sd, jumps.rd) =
-        EofLayout(λ pg => pieces(pg).head, λ pg => pieces(pg).fail, targets.finish, targets.fail, targets.retry);
+        EofLayout(λ pg => pieces(pg).head, λ pg => fail_tail_retries(IoMemory(file, pg), fl_at_failed(p), jumps.rd, pieces(pg).fail), targets.finish, targets.fail, targets.retry);
     linux_runs_after_steps(io_linux(), filter_events(shape, steps, ending, tail_events), begin, ready, started.left,
         eof_from(file, fl_at_read(p), fl_at_failed(p), done, jumps.ed, jumps.sd, jumps.rd, layout, filter_inv(shape), input,
-            filter_ok(shape), filter_body(shape), filter_failed_ok(shape), filter_failed(shape), tail_events,
+            filter_ok(shape), filter_body(shape), filter_failed_ok(shape), filter_failed(shape), read_exits(), tail_events,
             filter_process(shape, facts, jumps, pj, finish, done, targets, file, pieces, input, room, tail_events, tail),
             ending, ending_ok, steps)(Nil, ok, page, refl, ready, started.right, refl, facts.initialised(begin)))
 }
