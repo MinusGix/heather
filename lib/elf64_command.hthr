@@ -2954,3 +2954,159 @@ theorem keep_runs(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64), 
         },
     })(refl)
 }
+// A fact of each of 0 to 7 is one of every slot below 8.
+theorem below_eight(p: Nat → Type, p0: p(0), p1: p(1), p2: p(2), p3: p(3), p4: p(4), p5: p(5), p6: p(6), p7: p(7)):
+    (i: Nat) → i < 8 → p(i) {
+    λ a0 below => (match a0 as λ b => b < 8 → p(b) {
+        Zero => λ _ => p0,
+        Succ(a1) => match a1 as λ b => Succ(b) < 8 → p(Succ(b)) {
+            Zero => λ _ => p1,
+            Succ(a2) => match a2 as λ b => Succ(Succ(b)) < 8 → p(Succ(Succ(b))) {
+                Zero => λ _ => p2,
+                Succ(a3) => match a3 as λ b => Succ(Succ(Succ(b))) < 8 → p(Succ(Succ(Succ(b)))) {
+                    Zero => λ _ => p3,
+                    Succ(a4) => match a4 as λ b => Succ(Succ(Succ(Succ(b)))) < 8 → p(Succ(Succ(Succ(Succ(b))))) {
+                        Zero => λ _ => p4,
+                        Succ(a5) => match a5 as λ b => Succ(Succ(Succ(Succ(Succ(b))))) < 8 → p(Succ(Succ(Succ(Succ(Succ(b)))))) {
+                            Zero => λ _ => p5,
+                            Succ(a6) => match a6 as λ b => Succ(Succ(Succ(Succ(Succ(Succ(b)))))) < 8 → p(Succ(Succ(Succ(Succ(Succ(Succ(b))))))) {
+                                Zero => λ _ => p6,
+                                Succ(a7) => match a7 as λ b => Succ(Succ(Succ(Succ(Succ(Succ(Succ(b))))))) < 8 → p(Succ(Succ(Succ(Succ(Succ(Succ(Succ(b)))))))) {
+                                    Zero => λ _ => p7,
+                                    Succ(_) => λ never => false_elim(never),
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    })(below)
+}
+
+// At the width's store (1723) with RSI the width.
+fn WidthGoes(file: IoImage, mask: BitVec(64), n: Nat, rsp: BitVec(64), width: Nat, events: List<LinuxEvent>) → Type {
+    (frame: Nat → BitVec(8)) → (vars: Nat → BitVec(64)) → FrameHolds(frame, vars) → vars(16) = mask → vars(21) = word_of_nat(64, n) →
+        (page: Nat → BitVec(8)) → (state: MachineState<IoMemory>) → state.memory = IoMemory(with_frame(file, frame), page) →
+        state.rip = eof_rip(ca_wstore()) → read_gpr(Rsp, state.gprs) = rsp → read_gpr(Rsi, state.gprs).toNat() = width →
+        LinuxRuns(io_linux(), events, state)
+}
+// The stat pass (700), over the operands `parse_args` gives.
+theorem stat_pass(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64), spill: Nat → StateReg, code: StructuredCode,
+    jumps: FilterJumps, pj: PrintJumps, placed: CommandPlaced(file, letters, default, spill, code, jumps, pj),
+    mask: BitVec(64), n: Nat, rsp: BitVec(64), argv: List<List<BitVec(8)>>, pointers: List<BitVec(64)>,
+    stays: ArgvStaysAt(file, rsp, argv, pointers), results: List<StatResult>,
+    fit: StatsFit(stat_targets(operands_from(False, command_args(argv))), results), after: List<LinuxEvent>,
+    then: WidthGoes(file, mask, n, rsp, stat_width(results.map(stat_seen)), after)):
+    KeptGoes(file, mask, n, rsp, ca_stat(), λ _ => True,
+        stat_events(stat_targets(operands_from(False, command_args(argv))), results) ++ after) {
+    λ frame vars holds at16 at21 page state memory_is rip_is rsp_is _ => {
+        let img = with_frame(file, frame);
+        let pieces = cmd_pieces(img, letters, default, spill, code, jumps, pj, placed(frame));
+        stat_runs(img, eof_rip(ca_stat()), pieces.stat, page, argv, pointers, results, fit, after, state, memory_is, rip_is,
+            j(sym(rsp_is), λ r _ => ArgvStaysAt(img, r, argv, pointers), stays),
+            λ pg st out => then(frame, vars, holds, at16, at21, pg, st, out.memory_is, trans(out.rip_is, rip_compose(io_entry(), ca_stat(), stat_len())),
+                trans(out.kept.left, rsp_is), out.rsi))
+    }
+}
+// No stat (685): width 1.
+theorem one_width(file: IoImage, mask: BitVec(64), n: Nat, rsp: BitVec(64), after: List<LinuxEvent>, then: WidthGoes(file, mask, n, rsp, 1, after)):
+    KeptGoes(file, mask, n, rsp, ca_wstore(), λ g => read_gpr(Rsi, g) = BitVec::ofNat(1), after) {
+    λ frame vars holds at16 at21 page state memory_is rip_is rsp_is rsi =>
+        then(frame, vars, holds, at16, at21, page, state, memory_is, rip_is, rsp_is,
+            trans(cong_fn<BitVec(64), Nat>(λ w => w.toNat(), rsi), BitVec::toNat_ofNat(64, 1, { omega })))
+}
+
+// A slot zeroed from RAX.
+record SlotZeroed(file: IoImage, page: Nat → BitVec(8), vars: Nat → BitVec(64), q: Nat, before: MachineState<IoMemory>, to: Nat) {
+    after: MachineState<IoMemory>,
+    frame: Nat → BitVec(8),
+    steps: LinuxSteps(io_linux(), before, after),
+    memory_is: after.memory = IoMemory(with_frame(file, frame), page),
+    rip_is: after.rip = eof_rip(to),
+    holds: FrameHolds(frame, set_var(vars, q, word_zero())),
+    rax: read_gpr(Rax, after.gprs) = word_zero(),
+    rsp: read_gpr(Rsp, after.gprs) = read_gpr(Rsp, before.gprs),
+}
+theorem zero_slot(file: IoImage, frame: Nat → BitVec(8), vars: Nat → BitVec(64), holds: FrameHolds(frame, vars),
+    page: Nat → BitVec(8), k, q: Nat, inside: q < frame_slots(),
+    block: Placed(with_frame(file, frame), canonical_block_bytes(slot_block(q)), eof_rip(k)),
+    store: Placed(with_frame(file, frame), word_store_bytes(WordStore(base := R11, source := Rax)), eof_rip(k + 10)),
+    state: MachineState<IoMemory>, memory_is: state.memory = IoMemory(with_frame(file, frame), page), rip_is: state.rip = eof_rip(k),
+    rax: read_gpr(Rax, state.gprs) = word_zero()): SlotZeroed(file, page, vars, q, state, k + 13) {
+    let s = run_slot_store(file, frame, vars, holds, page, k, q, inside, Rax, block, store, state, memory_is, rip_is);
+    let f = stored_frame(file, frame, q, read_gpr(Rax, state.gprs));
+    SlotZeroed(after := slot_store_after(Rax, q, state), frame := f, steps := s.steps, memory_is := s.memory_is, rip_is := s.rip_is,
+        holds := j(rax, λ x _ => FrameHolds(f, set_var(vars, q, x)), s.holds), rax := rax, rsp := refl)
+}
+
+// At the cursor's start (1863): the frame holds what Vars says, nothing
+// failed and the totals are zero.
+fn InitGoes(file: IoImage, mask: BitVec(64), width, n: Nat, rsp: BitVec(64), events: List<LinuxEvent>) → Type {
+    (frame: Nat → BitVec(8)) → (vars: Nat → BitVec(64)) → FrameHolds(frame, vars) → Vars(vars, mask, width, n, False, no_counts()) →
+        (page: Nat → BitVec(8)) → (state: MachineState<IoMemory>) → state.memory = IoMemory(with_frame(file, frame), page) →
+        state.rip = eof_rip(ca_start()) → read_gpr(Rsp, state.gprs) = rsp → LinuxRuns(io_linux(), events, state)
+}
+fn rax_zero_block() → List<Instruction> { [MovRI(Rax, word_zero())] }
+theorem init_runs(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64), spill: Nat → StateReg, code: StructuredCode,
+    jumps: FilterJumps, pj: PrintJumps, placed: CommandPlaced(file, letters, default, spill, code, jumps, pj),
+    mask: BitVec(64), n: Nat, rsp: BitVec(64), width: Nat, after: List<LinuxEvent>, then: InitGoes(file, mask, width, n, rsp, after)):
+    WidthGoes(file, mask, n, rsp, width, after) {
+    λ frame vars holds at16 at21 page state memory_is rip_is rsp_is rsi => {
+        let io = io_linux();
+        let img = with_frame(file, frame);
+        let pieces = cmd_pieces(img, letters, default, spill, code, jumps, pj, placed(frame));
+        let a = run_slot_store(file, frame, vars, holds, page, ca_wstore(), 17, { omega }, Rsi, pieces.init(0), pieces.init(1), state,
+            memory_is, rip_is);
+        let s1 = slot_store_after(Rsi, 17, state);
+        let w17 = read_gpr(Rsi, state.gprs);
+        let frame1 = stored_frame(file, frame, 17, w17);
+        let vars1 = set_var(vars, 17, w17);
+        let pieces1 = cmd_pieces(with_frame(file, frame1), letters, default, spill, code, jumps, pj, placed(frame1));
+        let z = run_block(with_frame(file, frame1), page, rax_zero_block(), io_entry(), ca_zero(), pieces1.init(2), s1, a.memory_is, a.rip_is);
+        let s2 = execute_block_normal(rax_zero_block(), s1);
+        let p = λ (f: Nat → BitVec(8)) => cmd_pieces(with_frame(file, f), letters, default, spill, code, jumps, pj, placed(f));
+        have z0 = zero_slot(file, frame1, vars1, a.holds, page, ca_zero0(), 18, { omega }, (p(frame1)).init(3), (p(frame1)).init(4), s2,
+            z.memory_is, z.rip_is, refl);
+        let v0 = set_var(vars1, 18, word_zero());
+        have z1 = zero_slot(file, z0.frame, v0, z0.holds, page, ca_zero1(), 8, { omega }, (p(z0.frame)).init(5), (p(z0.frame)).init(6), z0.after,
+            z0.memory_is, z0.rip_is, z0.rax);
+        let v1 = set_var(v0, 8, word_zero());
+        have z2 = zero_slot(file, z1.frame, v1, z1.holds, page, ca_zero2(), 9, { omega }, (p(z1.frame)).init(7), (p(z1.frame)).init(8), z1.after,
+            z1.memory_is, z1.rip_is, z1.rax);
+        let v2 = set_var(v1, 9, word_zero());
+        have z3 = zero_slot(file, z2.frame, v2, z2.holds, page, ca_zero3(), 10, { omega }, (p(z2.frame)).init(9), (p(z2.frame)).init(10),
+            z2.after, z2.memory_is, z2.rip_is, z2.rax);
+        let v3 = set_var(v2, 10, word_zero());
+        have z4 = zero_slot(file, z3.frame, v3, z3.holds, page, ca_zero4(), 11, { omega }, (p(z3.frame)).init(11), (p(z3.frame)).init(12),
+            z3.after, z3.memory_is, z3.rip_is, z3.rax);
+        let v4 = set_var(v3, 11, word_zero());
+        have z5 = zero_slot(file, z4.frame, v4, z4.holds, page, ca_zero5(), 12, { omega }, (p(z4.frame)).init(13), (p(z4.frame)).init(14),
+            z4.after, z4.memory_is, z4.rip_is, z4.rax);
+        let v5 = set_var(v4, 12, word_zero());
+        have z6 = zero_slot(file, z5.frame, v5, z5.holds, page, ca_zero6(), 13, { omega }, (p(z5.frame)).init(15), (p(z5.frame)).init(16),
+            z5.after, z5.memory_is, z5.rip_is, z5.rax);
+        let v6 = set_var(v5, 13, word_zero());
+        have z7 = zero_slot(file, z6.frame, v6, z6.holds, page, ca_zero7(), 14, { omega }, (p(z6.frame)).init(17), (p(z6.frame)).init(18),
+            z6.after, z6.memory_is, z6.rip_is, z6.rax);
+        let v7 = set_var(v6, 14, word_zero());
+        have z8 = zero_slot(file, z7.frame, v7, z7.holds, page, ca_zero8(), 15, { omega }, (p(z7.frame)).init(19), (p(z7.frame)).init(20),
+            z7.after, z7.memory_is, z7.rip_is, z7.rax);
+        let v8 = set_var(v7, 15, word_zero());
+        let zeroed = λ (m: Nat) => v8(8 + m) = no_counts()(m);
+        let values: Vars(v8, mask, width, n, False, no_counts()) = Vars(mask_is := at16,
+            width_is := sym(trans(cong_fn<Nat, BitVec(64)>(λ m => word_of_nat(64, m), sym(rsi)), word_of_nat_toNat(64, w17))),
+            status_is := refl, count_is := at21,
+            totals_is := below_eight(zeroed, refl, refl, refl, refl, refl, refl, refl, refl));
+        let steps = linux_steps_trans(io, state, s1, z8.after, a.steps, linux_steps_trans(io, s1, s2, z8.after,
+            linux_steps_of_fetched(io, s1, s2, z.steps), linux_steps_trans(io, s2, z0.after, z8.after, z0.steps,
+            linux_steps_trans(io, z0.after, z1.after, z8.after, z1.steps, linux_steps_trans(io, z1.after, z2.after, z8.after, z2.steps,
+            linux_steps_trans(io, z2.after, z3.after, z8.after, z3.steps, linux_steps_trans(io, z3.after, z4.after, z8.after, z4.steps,
+            linux_steps_trans(io, z4.after, z5.after, z8.after, z5.steps, linux_steps_trans(io, z5.after, z6.after, z8.after, z6.steps,
+            linux_steps_trans(io, z6.after, z7.after, z8.after, z7.steps, z8.steps))))))))));
+        let rsp8: (read_gpr(Rsp, z8.after.gprs) = rsp) = trans(z8.rsp, trans(z7.rsp, trans(z6.rsp, trans(z5.rsp, trans(z4.rsp, trans(z3.rsp,
+            trans(z2.rsp, trans(z1.rsp, trans(z0.rsp, rsp_is)))))))));
+        linux_runs_after_linux_steps(io, after, state, z8.after, steps,
+            then(z8.frame, v8, z8.holds, values, page, z8.after, z8.memory_is, z8.rip_is, rsp8))
+    }
+}
