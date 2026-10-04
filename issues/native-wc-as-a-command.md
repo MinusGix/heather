@@ -3,7 +3,7 @@ title: wc as a command: file operands, flags in one binary, argv and open in the
 status: open
 labels: [native,x86,semantics,design]
 created: 2026-10-02
-updated: 2026-10-03
+updated: 2026-10-04
 ---
 
 The certified `wc` reads stdin only. A normal `wc`:
@@ -37,3 +37,8 @@ histories.
     - **Formatter.** `%*d` for any 64-bit count is one hand-proved library loop (table of powers of ten, repeated subtraction). It is not generated. `Fields` goes when `wc` migrates (C4).
     - **Cost estimate** (§9, from a cold `--timings` build of today's `wc`): the generated `%7d` certificates are 47% of a cold build and disappear. The new library is about 630 declarations and +14 to +20 points, priced by kind. The driver is the uncertain line. A cold build of the full `wc` comes to about 70–80% of today's; a warm build about a tenth dearer.
     - Decisions taken by default (§11): GNU's output; no stderr diagnostics; exit at once on a failed write; the formatter as library code; `Fields` retired. Residue: [[native-wc-command-residue]].
+- 2026-10-04: **Probes V4 and V5 run (design §10.1); both hold.**
+    - **V4.** `eof_run` takes the fd and a failed-read continuation; the driver takes the continuation as `EofProcess.fails` and needs only the EINTR half of a failure tail (`RetryTail`). The filter keeps its trace. A cold `wc` build gives the same binary with identical counters in the formatter, step piece and program proofs; the whole build is +0.11% steps, all in `elf64_read_pieces`. The head still reads fd 0 until `WordLoad` lands.
+    - **V5.** One `emit` digit (`probes/wc_command/digit_emit.hthr`, no table read) is about 2.2× `elf64_write_loop`'s module time. That puts each library loop at the top of §9.3's band, so the loops may come to 10–12 points instead of 6–10. The cold-build estimate still lands under today's.
+    - The per-operand driver itself is still unmeasured: V4 shows its hook into the read driver is cheap, not what composing the row, close and totals costs. Measure it at C3.
+

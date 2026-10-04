@@ -577,9 +577,39 @@ If one refutes the design, stop and amend it before working around it.
 - **V4. `eof_run` with fd and failure continuation.** Make the change and
   recheck `elf64_read_filter` and its tests. The counters on
   `read_filter_process` should not move beyond the new parameter.
+  **Holds (2026-10-04).** `eof_run(fd, body, ended, failed, …)`: every read
+  event carries `fd`, and a failed read goes on as `failed(seen, errno)`.
+  The driver `eof_from` takes the continuation as a fifth process
+  obligation, `EofProcess.fails` (`EofReadFails`: from the failure tail with
+  the errno in RAX), and its layout needs only the EINTR half of a tail
+  (`RetryTail`), so a command can put its own code after the JZ. The filter
+  supplies `read_exits()` and `tail_exits` and keeps its trace. The head
+  still reads fd 0: a head that loads the fd from the frame waits on
+  `WordLoad` (C1). On a cold `build-x86` of `wc` the binary is the same, and
+  every counter of the formatter, the step piece and the program's own
+  proofs is identical. All the change is library, paid once per image
+  store: `eof_from` +23% steps (the failed read is now its own branch),
+  `elf64_read_pieces` +7.7%, `elf64_read_filter` +0.02%, the whole build
+  +0.11% steps and +4 items.
 - **V5. One digit of the formatter.** One `emit` iteration with its table
   read and store, checked at an open place value. Compare its cost per
   declaration with `elf64_write_loop`'s, which is §9.3's analogue.
+  **Holds, at the top of its band (2026-10-04).**
+  `probes/wc_command/digit_emit.hthr`: from n < 10 · place in RDX and the
+  place in RBX, `CMP; JB` out, `SUB; ADD` and `JMP` back, then `'0' + d`
+  stored at the cursor, which steps past it, at an open place and an open
+  cursor in the page. The table read is left out (it is one `WordLoad`,
+  V2's). It checks as 57 items, about 2.2× the module time of
+  `elf64_write_loop` (75 items), so about 3× per item, at one kernel
+  worker; the loop's induction (`digit_loop`) is two thirds of it. So one
+  of §9.3's seven loops costs about 1.5 points of today's cold build, the
+  top of the 6–10 point band, before its table read and the place loop
+  around it. If every loop costs that much, the loops come to about 10–12
+  points instead of 6–10, and the cold build stays under today's even with
+  the driver at twice its estimate. Two proof costs to plan for: `omega`
+  inside the long proof bodies needs its arithmetic as small top-level
+  theorems, and `bv_omega` does not read `sign_extend`, so an `AddRI8`
+  immediate's value is a `refl` lemma.
 - **V6. The stat bytes.** `stat_regular` and `stat_size` as functions of a
   144-byte list. Check that `WordLoad` at offset 24, `AND 0xF000` and a
   compare against `0x8000` decide `stat_regular`, at an open `st`.

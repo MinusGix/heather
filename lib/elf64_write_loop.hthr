@@ -474,7 +474,7 @@ theorem wl_from_then(memory: IoMemory, at: Nat, pj: PrintJumps,
                             rip_advance(entry, asked.rip, wl_at_write_call(at), 2, w.right.right.left);
                         have failing = wl_failed(memory, at, pj, done, pieces, targets, eintr(), eintr_errno, returned,
                             w.right.left, returned_rip, refl);
-                        have back = fail_retry(memory, wl_at_wfail(at), pj.rd, pieces.fail, wl_at_write(at), targets.retry,
+                        have back = fail_retry(memory, wl_at_wfail(at), pj.rd, fail_tail_retries(memory, wl_at_wfail(at), pj.rd, pieces.fail), wl_at_write(at), targets.retry,
                             wl_failing(returned, pj), failing.memory_is, failing.rip_is, refl);
                         let again = fail_back(wl_failing(returned, pj), pj.rd);
                         let same_at: (read_gpr(R9, again.gprs) = read_gpr(R9, state.gprs)) = refl;
