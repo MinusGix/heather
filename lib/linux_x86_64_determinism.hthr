@@ -44,6 +44,15 @@ fn WriteResumes<M>(at: MachineState<M>, result: WriteResult, next: MachineState<
     }
 }
 
+fn StatResumes<M>(io: LinuxIo<M>, at: MachineState<M>, target: StatTarget, result: StatResult,
+    next: MachineState<M> → Type) → Type {
+    match result {
+        Stated(st) => Resumes(λ rcx r11 => next(linux_stat_return(io, at, target, st, BitVec::ofNat(0), rcx, r11))),
+        StatFailed(errno) => Exists<List<BitVec(8)>>(λ junk => (junk.len() <= stat_length()) ∧
+            Resumes(λ rcx r11 => next(linux_stat_return(io, at, target, junk, errno_word(errno), rcx, r11)))),
+    }
+}
+
 fn LinuxRun<M>(io: LinuxIo<M>, events: List<LinuxEvent>) → MachineState<M> → Type {
     match events {
         Nil => λ state => False,
@@ -60,6 +69,13 @@ fn LinuxRun<M>(io: LinuxIo<M>, events: List<LinuxEvent>) → MachineState<M> →
                     WriteResumes(at, result, LinuxRun(io, rest))))),
                 ExitEvent(status) =>
                     (read_gpr(Rax, at.gprs) = BitVec::ofNat(60)) ∧ ((read_gpr(Rdi, at.gprs) = status) ∧ (rest = Nil)),
+                OpenEvent(path, result) =>
+                    OpenRequest(io, at, path) ∧ Resumes(λ rcx r11 => LinuxRun(io, rest, linux_write_return(at, open_rax(result), rcx, r11))),
+                CloseEvent(fd, result) =>
+                    (read_gpr(Rax, at.gprs) = BitVec::ofNat(3)) ∧ ((read_gpr(Rdi, at.gprs) = fd) ∧
+                    Resumes(λ rcx r11 => LinuxRun(io, rest, linux_write_return(at, close_rax(result), rcx, r11)))),
+                StatEvent(target, result) =>
+                    StatRequest(io, at, target) ∧ StatResumes(io, at, target, result, LinuxRun(io, rest)),
             })),
     }
 }
@@ -71,6 +87,9 @@ fn SameResponse(claim, run: LinuxEvent) → Type {
         ReadEvent(_, result) => match run { ReadEvent(_, other) => result = other, _ => False },
         WriteEvent(_, _, result) => match run { WriteEvent(_, _, other) => result = other, _ => False },
         ExitEvent(_) => match run { ExitEvent(_) => True, _ => False },
+        OpenEvent(_, result) => match run { OpenEvent(_, other) => result = other, _ => False },
+        CloseEvent(_, result) => match run { CloseEvent(_, other) => result = other, _ => False },
+        StatEvent(_, result) => match run { StatEvent(_, other) => result = other, _ => False },
     }
 }
 fn SameResponses(claim: List<LinuxEvent>) → List<LinuxEvent> → Type {
@@ -84,7 +103,10 @@ fn SameResponses(claim: List<LinuxEvent>) → List<LinuxEvent> → Type {
 }
 
 theorem same_response_refl(event: LinuxEvent): SameResponse(event, event) {
-    match event { ReadEvent(_, _) => refl, WriteEvent(_, _, _) => refl, ExitEvent(_) => trivial }
+    match event {
+        ReadEvent(_, _) => refl, WriteEvent(_, _, _) => refl, ExitEvent(_) => trivial,
+        OpenEvent(_, _) => refl, CloseEvent(_, _) => refl, StatEvent(_, _) => refl,
+    }
 }
 theorem same_responses_refl(events: List<LinuxEvent>): SameResponses(events, events) {
     match events {
@@ -199,6 +221,17 @@ fn ClaimWriteRest<M>(io: LinuxIo<M>, rest: List<LinuxEvent>, at: MachineState<M>
             ((rcx, r11: BitVec(64)) → LinuxRuns(io, rest, linux_write_return(at, errno_word(errno), rcx, r11))),
     }
 }
+fn ClaimStatRest<M>(io: LinuxIo<M>, rest: List<LinuxEvent>, at: MachineState<M>, target: StatTarget,
+    result: StatResult) → Type {
+    match result as λ _ => Type {
+        Stated(st) => (st.len() = stat_length()) ∧
+            ((rcx, r11: BitVec(64)) →
+                LinuxRuns(io, rest, linux_stat_return(io, at, target, st, BitVec::ofNat(0), rcx, r11))),
+        StatFailed(errno) => Errno(errno) ∧
+            ((junk: List<BitVec(8)>) → junk.len() <= stat_length() → (rcx, r11: BitVec(64)) →
+                LinuxRuns(io, rest, linux_stat_return(io, at, target, junk, errno_word(errno), rcx, r11))),
+    }
+}
 fn ClaimAt<M>(io: LinuxIo<M>, event: LinuxEvent, rest: List<LinuxEvent>, at: MachineState<M>) → Type {
     match event as λ _ => Type {
         ReadEvent(fd, result) =>
@@ -211,6 +244,13 @@ fn ClaimAt<M>(io: LinuxIo<M>, event: LinuxEvent, rest: List<LinuxEvent>, at: Mac
         ExitEvent(status) =>
             (read_gpr(Rax, at.gprs) = BitVec::ofNat(60)) ∧
             ((read_gpr(Rdi, at.gprs) = status) ∧ (rest = Nil)),
+        OpenEvent(path, result) =>
+            OpenRequest(io, at, path) ∧ (OpenReturns(result) ∧
+            ((rcx, r11: BitVec(64)) → LinuxRuns(io, rest, linux_write_return(at, open_rax(result), rcx, r11)))),
+        CloseEvent(fd, result) =>
+            (read_gpr(Rax, at.gprs) = BitVec::ofNat(3)) ∧ ((read_gpr(Rdi, at.gprs) = fd) ∧ (CloseReturns(result) ∧
+            ((rcx, r11: BitVec(64)) → LinuxRuns(io, rest, linux_write_return(at, close_rax(result), rcx, r11))))),
+        StatEvent(target, result) => StatRequest(io, at, target) ∧ ClaimStatRest(io, rest, at, target, result),
     }
 }
 fn RunAt<M>(io: LinuxIo<M>, event: LinuxEvent, rest: List<LinuxEvent>, at: MachineState<M>) → Type {
@@ -225,6 +265,13 @@ fn RunAt<M>(io: LinuxIo<M>, event: LinuxEvent, rest: List<LinuxEvent>, at: Machi
             WriteResumes(at, result, LinuxRun(io, rest))))),
         ExitEvent(status) =>
             (read_gpr(Rax, at.gprs) = BitVec::ofNat(60)) ∧ ((read_gpr(Rdi, at.gprs) = status) ∧ (rest = Nil)),
+        OpenEvent(path, result) =>
+            OpenRequest(io, at, path) ∧ Resumes(λ rcx r11 => LinuxRun(io, rest, linux_write_return(at, open_rax(result), rcx, r11))),
+        CloseEvent(fd, result) =>
+            (read_gpr(Rax, at.gprs) = BitVec::ofNat(3)) ∧ ((read_gpr(Rdi, at.gprs) = fd) ∧
+            Resumes(λ rcx r11 => LinuxRun(io, rest, linux_write_return(at, close_rax(result), rcx, r11)))),
+        StatEvent(target, result) =>
+            StatRequest(io, at, target) ∧ StatResumes(io, at, target, result, LinuxRun(io, rest)),
     }
 }
 
@@ -306,6 +353,9 @@ theorem read_determines<M>(io: LinuxIo<M>, fd: BitVec(64), result: ReadResult, r
         },
         WriteEvent(_, _, _) => λ _ never => false_elim(never),
         ExitEvent(_) => λ _ never => false_elim(never),
+        OpenEvent(_, _) => λ _ never => false_elim(never),
+        CloseEvent(_, _) => λ _ never => false_elim(never),
+        StatEvent(_, _) => λ _ never => false_elim(never),
     }
 }
 
@@ -342,6 +392,9 @@ theorem write_determines<M>(io: LinuxIo<M>, fd: BitVec(64), bytes: List<BitVec(8
         },
         ReadEvent(_, _) => λ _ never => false_elim(never),
         ExitEvent(_) => λ _ never => false_elim(never),
+        OpenEvent(_, _) => λ _ never => false_elim(never),
+        CloseEvent(_, _) => λ _ never => false_elim(never),
+        StatEvent(_, _) => λ _ never => false_elim(never),
     }
 }
 
@@ -358,6 +411,159 @@ theorem exit_determines<M>(io: LinuxIo<M>, status: BitVec(64), rest, more: List<
                 trans(claimed.right.right, sym(ran.right.right))),
         ReadEvent(_, _) => λ _ never => false_elim(never),
         WriteEvent(_, _, _) => λ _ never => false_elim(never),
+        OpenEvent(_, _) => λ _ never => false_elim(never),
+        CloseEvent(_, _) => λ _ never => false_elim(never),
+        StatEvent(_, _) => λ _ never => false_elim(never),
+    }
+}
+
+// A C string is where its NUL is: two read from one source are one.
+theorem c_strings_alike(left: List<BitVec(8)>): (right: List<BitVec(8)>) → (source: Nat → Option<BitVec(8)>) →
+    CStringFrom(left, source) → CStringFrom(right, source) → left = right {
+    match left {
+        Nil => λ right source here there => (match right as λ r => CStringFrom(r, source) → (Nil<BitVec(8)> = r) {
+            Nil => λ _ => refl,
+            Cons(y, ys) => λ there =>
+                false_elim(there.right.left(Option::some_inj(y, BitVec::ofNat(0), trans(sym(there.left), here)))),
+        })(there),
+        Cons(x, xs) => λ right source here there => (match right as λ r => CStringFrom(r, source) → (Cons(x, xs) = r) {
+            Nil => λ there =>
+                false_elim(here.right.left(Option::some_inj(x, BitVec::ofNat(0), trans(sym(here.left), there)))),
+            Cons(y, ys) => λ there =>
+                List::cons_eq(xs, ys, x, y, Option::some_inj(x, y, trans(sym(here.left), there.left)),
+                    c_strings_alike(xs, ys, λ i => source(Succ(i)), here.right.right, there.right.right)),
+        })(there),
+    }
+}
+
+// The path a related state names is this one's.
+theorem paths_related<M>(io: LinuxIo<M>, left, right: MachineState<M>, same: SameDefinedState<M>(left, right),
+    path, other: List<BitVec(8)>, here: CStringAt(io.data, left.memory, read_gpr(Rsi, left.gprs), path),
+    there: CStringAt(io.data, right.memory, read_gpr(Rsi, right.gprs), other)): path = other {
+    let moved: CStringAt(io.data, left.memory, read_gpr(Rsi, left.gprs), other) =
+        j(sym(register_related(Rsi, left, right, same)), λ address _ => CStringAt(io.data, left.memory, address, other),
+            j(sym(same.memory), λ memory _ => CStringAt(io.data, memory, read_gpr(Rsi, right.gprs), other), there));
+    c_strings_alike(path, other, λ i => io.data.read(left.memory, bitvec_nat::word_of_nat(64, read_gpr(Rsi, left.gprs).toNat() + i)),
+        here, moved)
+}
+
+theorem stat_numbers_differ<M>(left, right: MachineState<M>, same: SameDefinedState<M>(left, right),
+    here: read_gpr(Rax, left.gprs) = BitVec::ofNat(262), there: read_gpr(Rax, right.gprs) = BitVec::ofNat(5)): False {
+    let equal: (BitVec::ofNat(262, n := 64) = BitVec::ofNat(5, n := 64)) =
+        trans(sym(here), trans(register_related(Rax, left, right, same), there));
+    absurd(cong_fn(λ (word: BitVec(64)) => byte_bit1(word.take_low(8, 56)), equal))
+}
+
+theorem open_determines<M>(io: LinuxIo<M>, path: List<BitVec(8)>, result: OpenResult, rest, more: List<LinuxEvent>,
+    left, right: MachineState<M>, same: SameDefinedState<M>(left, right), tails: TailsAgree(io, rest, more),
+    claimed: ClaimAt(io, OpenEvent(path, result), rest, left)): (other: LinuxEvent) → RunAt(io, other, more, right) →
+    SameResponse(OpenEvent(path, result), other) → Cons(OpenEvent(path, result), rest) = Cons(other, more) {
+    λ other => match other as λ o => RunAt(io, o, more, right) → SameResponse(OpenEvent(path, result), o) →
+            Cons(OpenEvent(path, result), rest) = Cons(o, more) {
+        OpenEvent(path2, result2) => λ ran response => {
+            let paths: (path = path2) = paths_related(io, left, right, same, path, path2,
+                claimed.left.right.right.right, ran.left.right.right.right);
+            let resumes: Resumes(λ rcx r11 => LinuxRun(io, more, linux_write_return(right, open_rax(result), rcx, r11))) =
+                j(sym(response), λ r _ => Resumes(λ rcx r11 => LinuxRun(io, more, linux_write_return(right, open_rax(r), rcx, r11))),
+                    ran.right);
+            let tail: (rest = more) = write_resume(io, rest, more, left, right, same, open_rax(result), tails,
+                claimed.right.right, resumes);
+            List::cons_eq(rest, more, OpenEvent(path, result), OpenEvent(path2, result2),
+                trans(cong_fn(λ (p: List<BitVec(8)>) => OpenEvent(p, result), paths),
+                    cong_fn(λ (r: OpenResult) => OpenEvent(path2, r), response)), tail)
+        },
+        ReadEvent(_, _) => λ _ never => false_elim(never),
+        WriteEvent(_, _, _) => λ _ never => false_elim(never),
+        ExitEvent(_) => λ _ never => false_elim(never),
+        CloseEvent(_, _) => λ _ never => false_elim(never),
+        StatEvent(_, _) => λ _ never => false_elim(never),
+    }
+}
+
+theorem close_determines<M>(io: LinuxIo<M>, fd: BitVec(64), result: CloseResult, rest, more: List<LinuxEvent>,
+    left, right: MachineState<M>, same: SameDefinedState<M>(left, right), tails: TailsAgree(io, rest, more),
+    claimed: ClaimAt(io, CloseEvent(fd, result), rest, left)): (other: LinuxEvent) → RunAt(io, other, more, right) →
+    SameResponse(CloseEvent(fd, result), other) → Cons(CloseEvent(fd, result), rest) = Cons(other, more) {
+    λ other => match other as λ o => RunAt(io, o, more, right) → SameResponse(CloseEvent(fd, result), o) →
+            Cons(CloseEvent(fd, result), rest) = Cons(o, more) {
+        CloseEvent(fd2, result2) => λ ran response => {
+            let fds: (fd = fd2) = trans(sym(claimed.right.left), trans(register_related(Rdi, left, right, same), ran.right.left));
+            let resumes: Resumes(λ rcx r11 => LinuxRun(io, more, linux_write_return(right, close_rax(result), rcx, r11))) =
+                j(sym(response), λ r _ => Resumes(λ rcx r11 => LinuxRun(io, more, linux_write_return(right, close_rax(r), rcx, r11))),
+                    ran.right.right);
+            let tail: (rest = more) = write_resume(io, rest, more, left, right, same, close_rax(result), tails,
+                claimed.right.right.right, resumes);
+            List::cons_eq(rest, more, CloseEvent(fd, result), CloseEvent(fd2, result2),
+                trans(cong_fn(λ (f: BitVec(64)) => CloseEvent(f, result), fds),
+                    cong_fn(λ (r: CloseResult) => CloseEvent(fd2, r), response)), tail)
+        },
+        ReadEvent(_, _) => λ _ never => false_elim(never),
+        WriteEvent(_, _, _) => λ _ never => false_elim(never),
+        ExitEvent(_) => λ _ never => false_elim(never),
+        OpenEvent(_, _) => λ _ never => false_elim(never),
+        StatEvent(_, _) => λ _ never => false_elim(never),
+    }
+}
+
+// A stat of a path and of a descriptor are told apart by their numbers.
+theorem stat_targets_related<M>(io: LinuxIo<M>, left, right: MachineState<M>, same: SameDefinedState<M>(left, right),
+    target: StatTarget): (other: StatTarget) → StatAsked(io, left, target) → StatAsked(io, right, other) → target = other {
+    match target {
+        StatPath(path) => λ other => match other as λ o => StatAsked(io, left, StatPath(path)) → StatAsked(io, right, o) →
+                StatPath(path) = o {
+            StatPath(path2) => λ here there => cong_fn(λ (p: List<BitVec(8)>) => StatPath(p),
+                paths_related(io, left, right, same, path, path2, here.right.right.right, there.right.right.right)),
+            StatFd(_) => λ here there => false_elim(stat_numbers_differ(left, right, same, here.left, there.left)),
+        },
+        StatFd(fd) => λ other => match other as λ o => StatAsked(io, left, StatFd(fd)) → StatAsked(io, right, o) →
+                StatFd(fd) = o {
+            StatPath(_) => λ here there => false_elim(stat_numbers_differ(right, left, same_defined_sym(left, right, same), there.left, here.left)),
+            StatFd(fd2) => λ here there => cong_fn(λ (f: BitVec(64)) => StatFd(f),
+                trans(sym(here.right), trans(register_related(Rdi, left, right, same), there.right))),
+        },
+    }
+}
+
+theorem stat_resume<M>(io: LinuxIo<M>, rest, more: List<LinuxEvent>, left, right: MachineState<M>,
+    same: SameDefinedState<M>(left, right), target: StatTarget, bytes: List<BitVec(8)>, rax: BitVec(64),
+    tails: TailsAgree(io, rest, more),
+    claimed: (rcx, r11: BitVec(64)) → LinuxRuns(io, rest, linux_stat_return(io, left, target, bytes, rax, rcx, r11)),
+    ran: Resumes(λ rcx r11 => LinuxRun(io, more, linux_stat_return(io, right, target, bytes, rax, rcx, r11)))): rest = more {
+    let rcx = ran.witness;
+    let r11 = ran.proof.witness;
+    tails(linux_stat_return(io, left, target, bytes, rax, rcx, r11), linux_stat_return(io, right, target, bytes, rax, rcx, r11),
+        respects_by_erasing(λ state => linux_stat_return(io, state, target, bytes, rax, rcx, r11), λ state => refl, left, right, same),
+        claimed(rcx, r11), ran.proof.proof)
+}
+
+theorem stat_determines<M>(io: LinuxIo<M>, target: StatTarget, result: StatResult, rest, more: List<LinuxEvent>,
+    left, right: MachineState<M>, same: SameDefinedState<M>(left, right), tails: TailsAgree(io, rest, more),
+    claimed: ClaimAt(io, StatEvent(target, result), rest, left)): (other: LinuxEvent) → RunAt(io, other, more, right) →
+    SameResponse(StatEvent(target, result), other) → Cons(StatEvent(target, result), rest) = Cons(other, more) {
+    λ other => match other as λ o => RunAt(io, o, more, right) → SameResponse(StatEvent(target, result), o) →
+            Cons(StatEvent(target, result), rest) = Cons(o, more) {
+        StatEvent(target2, result2) => λ ran response => {
+            let targets: (target = target2) = stat_targets_related(io, left, right, same, target, target2,
+                claimed.left.left, ran.left.left);
+            let resumes: StatResumes(io, right, target, result, LinuxRun(io, more)) =
+                j(sym(targets), λ t _ => StatResumes(io, right, t, result, LinuxRun(io, more)),
+                    j(sym(response), λ r _ => StatResumes(io, right, target2, r, LinuxRun(io, more)), ran.right));
+            let tail: (rest = more) = (match result as λ r => ClaimStatRest(io, rest, left, target, r) →
+                    StatResumes(io, right, target, r, LinuxRun(io, more)) → rest = more {
+                Stated(st) => λ c r => stat_resume(io, rest, more, left, right, same, target, st, BitVec::ofNat(0), tails,
+                    c.right, r),
+                StatFailed(errno) => λ c r => stat_resume(io, rest, more, left, right, same, target, r.witness,
+                    errno_word(errno), tails, λ rcx r11 => c.right(r.witness, r.proof.left, rcx, r11), r.proof.right),
+            })(claimed.right, resumes);
+            List::cons_eq(rest, more, StatEvent(target, result), StatEvent(target2, result2),
+                trans(cong_fn(λ (t: StatTarget) => StatEvent(t, result), targets),
+                    cong_fn(λ (r: StatResult) => StatEvent(target2, r), response)), tail)
+        },
+        ReadEvent(_, _) => λ _ never => false_elim(never),
+        WriteEvent(_, _, _) => λ _ never => false_elim(never),
+        ExitEvent(_) => λ _ never => false_elim(never),
+        OpenEvent(_, _) => λ _ never => false_elim(never),
+        CloseEvent(_, _) => λ _ never => false_elim(never),
     }
 }
 
@@ -370,6 +576,9 @@ theorem event_determines<M>(io: LinuxIo<M>, event, other: LinuxEvent, rest, more
         WriteEvent(fd, bytes, result) => λ c r =>
             write_determines(io, fd, bytes, result, rest, more, left, right, same, tails, c, other, ran, r),
         ExitEvent(status) => λ c r => exit_determines(io, status, rest, more, left, right, same, c, other, ran, r),
+        OpenEvent(path, result) => λ c r => open_determines(io, path, result, rest, more, left, right, same, tails, c, other, ran, r),
+        CloseEvent(fd, result) => λ c r => close_determines(io, fd, result, rest, more, left, right, same, tails, c, other, ran, r),
+        StatEvent(target, result) => λ c r => stat_determines(io, target, result, rest, more, left, right, same, tails, c, other, ran, r),
     })(claimed, response)
 }
 
@@ -422,6 +631,17 @@ theorem claim_is_run_at<M>(io: LinuxIo<M>, event: LinuxEvent, rest: List<LinuxEv
                     next(linux_write_return(at, errno_word(errno), zero, zero), k.right(zero, zero)))),
             })(c.right.right.right.right)⟩⟩⟩⟩,
         ExitEvent(status) => λ c => c,
+        OpenEvent(path, result) => λ c => ⟨c.left, Exists(zero, Exists(zero,
+            next(linux_write_return(at, open_rax(result), zero, zero), c.right.right(zero, zero))))⟩,
+        CloseEvent(fd, result) => λ c => ⟨c.left, ⟨c.right.left, Exists(zero, Exists(zero,
+            next(linux_write_return(at, close_rax(result), zero, zero), c.right.right.right(zero, zero))))⟩⟩,
+        StatEvent(target, result) => λ c => ⟨c.left,
+            (match result as λ r => ClaimStatRest(io, rest, at, target, r) → StatResumes(io, at, target, r, LinuxRun(io, rest)) {
+                Stated(st) => λ k => Exists(zero, Exists(zero,
+                    next(linux_stat_return(io, at, target, st, BitVec::ofNat(0), zero, zero), k.right(zero, zero)))),
+                StatFailed(errno) => λ k => Exists(Nil<BitVec(8)>, ⟨trivial, Exists(zero, Exists(zero,
+                    next(linux_stat_return(io, at, target, Nil, errno_word(errno), zero, zero), k.right(Nil, trivial, zero, zero))))⟩),
+            })(c.right)⟩,
     })(claimed)
 }
 

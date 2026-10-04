@@ -20,17 +20,18 @@ fn base() -> heather_elab::Elaborator {
 // width and cursor that leave room in the page: the client supplies only the
 // placement, and the library's claim does the rest.
 const CLIENT: &str = "import elf64_format_width; import elf64_io; import linux_x86_64_io; import decimal_line;
-import x86_64; import x86_64_fetched_code; import bitvec; import bitvec_nat; import list; import logic; import nat;
-theorem format_after_header(header: List<BitVec(8)>, fits: header.len() + format_code().len() <= 65536, page: Nat → BitVec(8), w, o: Nat,
-    state: MachineState<IoMemory>, memory_is: state.memory = IoMemory(header ++ format_code(), page),
+import x86_64; import x86_64_fetched_code; import bitvec; import bitvec_nat; import list; import logic; import nat; import option;
+theorem format_after_header(header: List<BitVec(8)>, fits: header.len() + format_code().len() <= 65536,
+    frame: Nat → BitVec(8), rest: BitVec(64) → Option<BitVec(8)>, page: Nat → BitVec(8), w, o: Nat,
+    state: MachineState<IoMemory>, memory_is: state.memory = IoMemory(IoImage(header ++ format_code(), frame, rest), page),
     rip_is: state.rip = bitvec_nat::word_of_nat(64, 0x400000 + header.len()),
     rdx: read_gpr(Rdx, state.gprs).toNat() = w, rdi: read_gpr(Rdi, state.gprs).toNat() = io_page_base() + o,
     room: o + padded_decimal(w, read_gpr(Rax, state.gprs).toNat()).len() <= 4096):
     Exists<MachineState<IoMemory>>(λ after => LinuxSteps(io_linux(), state, after) ∧
-        FmtOut(header ++ format_code(), page, o, padded_decimal(w, read_gpr(Rax, state.gprs).toNat()),
+        FmtOut(IoImage(header ++ format_code(), frame, rest), page, o, padded_decimal(w, read_gpr(Rax, state.gprs).toNat()),
             next_rip(bitvec_nat::word_of_nat(64, 0x400000 + header.len()), format_len()), state.gprs, after)) {
-    format_runs(header ++ format_code(), bitvec_nat::word_of_nat(64, 0x400000 + header.len()),
-        λ any => io_code_resident(header, format_code(), any, fits), page, w, o, state, memory_is, rip_is, rdx, rdi, room)
+    format_runs(IoImage(header ++ format_code(), frame, rest), bitvec_nat::word_of_nat(64, 0x400000 + header.len()),
+        λ any => io_code_resident(header, format_code(), frame, rest, any, fits), page, w, o, state, memory_is, rip_is, rdx, rdi, room)
 }
 // Zero prints one digit, at width one as POSIX `%d` does.
 theorem prints_zero(): padded_decimal(1, 0) = [BitVec::ofNat(48)] { refl }

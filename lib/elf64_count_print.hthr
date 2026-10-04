@@ -164,7 +164,7 @@ theorem count_writes(stored: IoMemory, at: Nat, word, start, length: StructuredC
             s3, formatted.memory, formatted.rip, pieces.store_at);
     let writable: IoWritable(s3.memory, read_gpr(R8, s3.gprs), 8) =
         j(sym(formatted.base), λ address _ => IoWritable(s3.memory, address, 8),
-            ⟨Nat::le_refl(io_page_base()), Nat::leb_sound(io_page_base() + 8, io_page_base() + 4096, trivial)⟩);
+            Inl(⟨Nat::le_refl(io_page_base()), Nat::leb_sound(io_page_base() + 8, io_page_base() + 4096, trivial)⟩));
     let stored_step = store_step(fetch, writes, print_store(), s3, refl,
         FetchedFrom(resident_readable(fetch, s3.memory, word_store_bytes(print_store()), s3.rip, store_at)), writable);
     let s4 = word_store_after(writes, print_store(), s3);
@@ -193,7 +193,7 @@ theorem count_writes(stored: IoMemory, at: Nat, word, start, length: StructuredC
 
 // The tail, from the loop's end with the count in R13: format, store, write
 // the line, exit 0 (or exit 1 at a failed write).
-theorem count_tail_runs(file: List<BitVec(8)>, at: Nat, rep: Gprs → Nat → Type, counted: CountWord(rep), codes: PrintCodes, format: PrintFormat(codes),
+theorem count_tail_runs(file: IoImage, at: Nat, rep: Gprs → Nat → Type, counted: CountWord(rep), codes: PrintCodes, format: PrintFormat(codes),
     pj: PrintJumps,
     resident: (page: Nat → BitVec(8)) → CodeResident(io_fetch_access(), IoMemory(file, page), count_tail(codes.word, codes.start, codes.length, pj),
         eof_rip(at)),

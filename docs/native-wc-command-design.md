@@ -223,6 +223,8 @@ so they are not modelled.
 `io_initial` quantifies over `frame` and `rest` as it does over `page`. A
 process that never reads outside its pages, which is every program today,
 gets one more universally quantified argument and nothing else (V1).
+As built, both fields sit in the file's image rather than beside the page
+(§10's C1 status).
 
 **A new x86 form: `WordLoad`**, `MOV r64, [base]` (`REX.W 8B /r`, mod=00).
 It is the read twin of `WordStore`: it reads eight bytes through
@@ -340,6 +342,7 @@ failure blocks. Two things change:
 - **The read head** takes its fd from the frame: `MOV RDI, frame.fd`'s
   address, then `WordLoad RDI ← [RDI]`, where today it is `MovRI(Rdi, 0)`.
   RDI is free at the read. Stdin-only filters keep today's head.
+  As built, the fd stays in RSP and the head copies it (§10's C1 status).
 - **The driver** (`eof_run`) gains the fd as a parameter (today it is the
   literal 0) and a continuation for a failed read (today it is
   `[ExitEvent(1)]`). The filter instantiates them with 0 and the exit, so its
@@ -578,6 +581,55 @@ C1's model change and C2's formatter don't depend on each other. The
 formatter needs only `WordLoad` and a buffer, so the two can run in
 parallel once `WordLoad` lands.
 
+**Status (C1 built, 2026-10-04).** The model is in, and every existing
+process checks with its trace unchanged. Where it differs from §4 and §6.1:
+
+- **`frame` and `rest` live in the image, not beside the page.** `IoMemory`
+  is `{ file: IoImage, page }` and `IoImage` is `{ bytes, frame, rest }`
+  (`lib/elf64_io.hthr`). The read driver's obligations quantify over the
+  page, because a read overwrites it; with the frame inside `file`, every
+  existing lemma that keeps `file` keeps the frame across reads for nothing.
+  `io_read` reads the file's bytes, then the frame at `0x411000`, then
+  `rest`; `io_store` writes the frame by rewriting the image. `IoWritable` is
+  the page or the frame, a disjunction, so existing proofs wrap their page
+  case in `Inl`. Code is fetched only from `bytes`, as before. Every io
+  program's RW segment is now 8 KiB of memsz; the code bytes are unchanged.
+- **`WordLoad` takes any base.** It is encoded like `ByteLoad` (a SIB byte
+  for RSP and R12, a zero displacement for RBP and R13), not restricted like
+  the stores, so code can read `[RSP]` directly. A step needs all eight
+  bytes below the canonical boundary (`base + 8 ≤ 2^47`) and reads them
+  little-endian through the profile's byte access (`read_word`). The decoder
+  tells `8B` from the stores in the same mod-00 branch, and
+  `word_load_form_complete` keeps determinism's one-fetch-one-form argument
+  whole. `word_load_ran` (`elf64_read_pieces`) runs one at an offset from a
+  `WordAt` fact.
+- **`ArgvAt`** (`lib/linux_x86_64_io.hthr`) names the k-th stack word by
+  value, `argv_slot(rsp, k) = rsp + 8k`, so a program that adds to RSP meets
+  it through `toNat`. Each argument is a `CStringAt`: its bytes, then a NUL,
+  with no NUL before it, all below the canonical boundary.
+- **Events as §4.3.** Open and stat name their path by `CStringAt` at RSI.
+  Open and close return through the write's return state (`open_rax`,
+  `close_rax`), and a stat stores through `linux_stat_return`. In the
+  determinism proof, two paths read from one memory are one path, because a
+  C string ends at its first NUL (`c_strings_alike`). A stat of a path and a
+  stat of an fd are told apart by their syscall numbers.
+- **The fd is held in RSP, not loaded from the frame.** The read head's
+  first instruction sets RDI from an `FdSource`: `MovRI(Rdi, 0)` for stdin,
+  `MovRR(Rdi, r)` for a register. The driver takes the source and the fd,
+  plus one obligation, `EofProcess.reads`: the invariant pins the fd's
+  register. RSP is the only register the read loop keeps, so a command keeps
+  its fd there, and the head needs no `WordLoad`. Stdin filters instantiate
+  `FdStdin` and 0, so their traces are unchanged. Their head now sets RDI
+  first, which reorders its bytes but keeps the length.
+- **Hand test:** `crates/elab/tests/open_read_close_process.rs`. The test
+  program opens argv[1], reads it to end of file through `eof_from` with the
+  fd in RSP, closes it and exits 0. A failed open exits 1. The claim covers
+  every file holding the code, every argv layout, page, register file and
+  history. Four mutations are refused: opening argv[0], keeping the fd in a
+  register the loop clobbers, closing RAX, and exiting 0 after a failed
+  open. `linux_determinism.rs` gains refusals for a decoder that misses `8B`
+  and for stat answers compared by kind or with unbounded junk.
+
 **Refusal controls** (mutations the library must reject), in the
 `slow_acceptance_` tests as now: the row loop printing an unselected
 column; the formatter's pad loop off by one (`width ≥ k`); the stat pass
@@ -595,9 +647,13 @@ If one refutes the design, stop and amend it before working around it.
   lemmas (`io_read_stored`, the file-window lemmas). If the filter's process
   proofs need real edits, the fallback is a separate `ArgMemory` that embeds
   `IoMemory`, with the filter's pieces lifted through a frame law.
+  **Holds, with the fields in the image (2026-10-04, §10's C1 status).**
+  Existing proofs needed the extra arguments, `Inl` around their page
+  writability, and one bound passed to `store_at_offset`.
 - **V2. `WordLoad`.** Encode, decode and execute `MOV RAX, [RBX]`. Its
   `ExecuteBlock` and data-read facts follow the `ByteLoad` pattern, and
   reading eight bytes little-endian gives the word.
+  **Holds (2026-10-04, C1).**
 - **V3. A NUL scan over `ArgvAt`.** Prove a `ByteLoad` loop that finds a
   string's length at an open address in `rest`. This is the first data read
   whose address is not bounded by the page. It sizes C2's argument scan.

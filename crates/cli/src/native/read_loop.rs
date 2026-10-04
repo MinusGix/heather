@@ -83,11 +83,11 @@ pub(super) fn nested(parts: &[String]) -> String {
     }
 }
 
-/// elf64_read_pieces's read head at `read`: read(0, page, 4096), TEST, JZ to
+/// elf64_read_pieces's read head at `read`: read(0, page, 4096) (the fd set first), TEST, JZ to
 /// `end` at end of file, JS to `failed` at a failed read.
 pub(super) fn read_head(end: &'static str, failed: &'static str) -> Layout {
     use Gpr::*;
-    Layout::default().label("read").fixed("entry", super::encode(&[mov(Rax, 0), mov(Rdi, 0), mov(Rsi, 0x410000), mov(Rdx, 4096)])).syscall()
+    Layout::default().label("read").fixed("entry", super::encode(&[mov(Rdi, 0), mov(Rax, 0), mov(Rsi, 0x410000), mov(Rdx, 4096)])).syscall()
         .fixed("test", TEST.to_vec()).jump("jz", JZ, end).jump("js", JS, failed)
 }
 
@@ -151,7 +151,11 @@ theorem {prefix}_file_correct(): {prefix}_file() = io_elf_bytes({code_term}, {pr
 theorem {prefix}_written(): {prefix}_file() = {prefix}_header() ++ ({spelled}) {{
     cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ code => {prefix}_header() ++ code, {prefix}_code_written())
 }}
-theorem {prefix}_resident(): (page: Nat → BitVec(8)) → CodeResident(io_fetch_access(), IoMemory({prefix}_file(), page), {code_term},
+// The memory the file is loaded into, whatever its frame and the rest of
+// the address space hold.
+fn {prefix}_io_image(frame: Nat → BitVec(8), rest: BitVec(64) → Option<BitVec(8)>) → IoImage {{ IoImage({prefix}_file(), frame, rest) }}
+theorem {prefix}_resident(): (frame: Nat → BitVec(8)) → (rest: BitVec(64) → Option<BitVec(8)>) → (page: Nat → BitVec(8)) →
+    CodeResident(io_fetch_access(), IoMemory({prefix}_io_image(frame, rest), page), {code_term},
     @bitvec::BitVec::ofNat(64, 0x4000e8)) {{
     eof_file_resident({prefix}_header(), {code_term}, {prefix}_header_length(), {prefix}_code_fits())
 }}
@@ -167,16 +171,16 @@ pub(super) fn claims(module: &mut Module, prefix: &str, comment: &str, premises:
     module.raw(format!("\
 {comment}
 theorem {prefix}_runs({premises}):
-    LinuxRuns(io_linux(), {events}, io_initial({prefix}_file(), page, gprs, flags)) {{
+    LinuxRuns(io_linux(), {events}, io_initial({prefix}_io_image(frame, rest), page, gprs, flags)) {{
     {proof}
 }}
 
 // And that run is the run (linux_x86_64_determinism).
 theorem {prefix}_runs_every({premises},
-    run: List<LinuxEvent>, ran: LinuxRun(io_linux(), run, io_initial({prefix}_file(), page, gprs, flags)),
+    run: List<LinuxEvent>, ran: LinuxRun(io_linux(), run, io_initial({prefix}_io_image(frame, rest), page, gprs, flags)),
     answers: SameResponses({events}, run)):
     run = {events} {{
-    linux_runs_every(io_linux(), {events}, run, io_initial({prefix}_file(), page, gprs, flags), {proof}, ran, answers)
+    linux_runs_every(io_linux(), {events}, run, io_initial({prefix}_io_image(frame, rest), page, gprs, flags), {proof}, ran, answers)
 }}
 "));
 }

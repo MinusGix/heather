@@ -356,7 +356,7 @@ fn {prefix}_tail_facts() → PrintJumpFacts({prefix}_tail_jumps()) {{ PrintJumpF
     let p = format!("structured_bytes({s}_code()).len()");
     let shape = format!("{prefix}_shape()");
     let final_state = format!("filter_state({prefix}_step(), eof_input(steps), {prefix}_init())");
-    let pieces = format!("λ (pg: Nat → BitVec(8)) => filter_pieces(IoMemory({prefix}_file(), pg), {s}_code(), {jumps}, {pj}, {finish_code}, {prefix}_resident()(pg))");
+    let pieces = format!("λ (pg: Nat → BitVec(8)) => filter_pieces(IoMemory({prefix}_io_image(frame, rest), pg), {s}_code(), {jumps}, {pj}, {finish_code}, {prefix}_resident()(frame, rest, pg))");
     module.raw(format!("\
 // The program as the process takes it (elf64_read_filter's `FilterShape` and
 // `FilterFacts`): the context's data, the generated piece and placement.
@@ -381,9 +381,9 @@ fn {prefix}_jump_facts() → FilterJumpFacts({p}, {done_p}, {jumps}, {pj}) {{
         .replace("{S}", &shape).replace("{C}", &format!("{prefix}_counts()"));
     let spec = &program.spec;
     let (premises, tail_events, tail, finished, sends_premises) = match program.finish {
-        Finish::Quiet => (format!("{common}, page: Nat → BitVec(8), gprs: Gprs, flags: Flags"),
+        Finish::Quiet => (format!("{common}, frame: Nat → BitVec(8), rest: BitVec(64) → Option<BitVec(8)>, page: Nat → BitVec(8), gprs: Gprs, flags: Flags"),
             "[ExitEvent(@bitvec::BitVec::ofNat(64, 0))]".to_string(),
-            format!("filter_quiet_tail({shape}, {jumps}, {pj}, {prefix}_file(), {pieces}, {final_state})"),
+            format!("filter_quiet_tail({shape}, {jumps}, {pj}, {prefix}_io_image(frame, rest), {pieces}, {final_state})"),
             "refl".to_string(), String::new()),
         _ => {
             let printed = format!("finish_bytes({prefix}_finish(), {prefix}_counts(), {final_state})");
@@ -394,7 +394,7 @@ theorem {prefix}_line_word(): LineWord({s}_rep, {count}) {{ λ gprs s placed => 
 fn {prefix}_print_codes() → PrintCodes {{ PrintCodes({a}_code(), {b}_code(), {c}_code()) }}
 fn {prefix}_print_format() → PrintFormat({prefix}_print_codes()) {{ PrintFormat({a}_computes<IoMemory>(), {b}_computes<IoMemory>(), {c}_computes<IoMemory>()) }}
 ", count = state.count(0), w = word(0), a = generated[1].1, b = generated[2].1, c = generated[3].1));
-                    format!("filter_line_tail({shape}, {count}, {prefix}_line_word(), {prefix}_file(), fl_at_finish({p}), {prefix}_print_codes(), \
+                    format!("filter_line_tail({shape}, {count}, {prefix}_line_word(), {prefix}_io_image(frame, rest), fl_at_finish({p}), {prefix}_print_codes(), \
                         {prefix}_print_format(), {prefix}_tail_jumps(), {prefix}_tail_facts(), λ pg => ({pieces})(pg).finish_at, {final_state}, small, \
                         written, written_ok, writes, writes_ok)", count = state.count(0))
                 }
@@ -410,7 +410,7 @@ fn {prefix}_fields_codes() → FieldsCodes {{ FieldsCodes({lo}_code(), {hi}_code
 fn {prefix}_fields_format() → FieldsFormat({prefix}_fields_codes()) {{ FieldsFormat({lo}_computes<IoMemory>(), {hi}_computes<IoMemory>()) }}
 ", f0 = state.field("s", 0), f1 = state.field("s", 1), f2 = state.field("s", 2), words = tuple(&[word(0), word(1), word(2)]),
                         c0 = state.count(0), c1 = state.count(1), c2 = state.count(2), lo = generated[1].1, hi = generated[2].1));
-                    format!("fields_tail_runs({prefix}_file(), fl_at_finish({p}), {s}_rep, {prefix}_three(), {prefix}_fields_codes(), \
+                    format!("fields_tail_runs({prefix}_io_image(frame, rest), fl_at_finish({p}), {s}_rep, {prefix}_three(), {prefix}_fields_codes(), \
                         {prefix}_fields_format(), {prefix}_tail_jumps(), λ pg => ({pieces})(pg).finish_at, \
                         write_targets(fields_at_write(fl_at_finish({p}), {lo}_code(), {hi}_code()), {prefix}_tail_jumps(), {prefix}_tail_facts()), \
                         {final_state}, small, written, written_ok, writes, writes_ok)", lo = generated[1].1, hi = generated[2].1)
@@ -418,15 +418,15 @@ fn {prefix}_fields_format() → FieldsFormat({prefix}_fields_codes()) {{ FieldsF
             };
             (format!("{common}, small: FinishFits({prefix}_finish(), {prefix}_counts(), {final_state}),
     writes: List<WriteStep>, writes_ok: WriteSteps(writes)({printed}), written: WriteEnding, written_ok: WriteEndingOk(written),
-    page: Nat → BitVec(8), gprs: Gprs, flags: Flags"),
+    frame: Nat → BitVec(8), rest: BitVec(64) → Option<BitVec(8)>, page: Nat → BitVec(8), gprs: Gprs, flags: Flags"),
                 format!("write_events({printed}, writes, written)"), tail,
                 format!("stdout_is_bytes(writes, {printed}, writes_ok)"),
                 format!(", writes: List<WriteStep>, writes_ok: WriteSteps(writes)({printed})"))
         }
     };
     let events = format!("filter_events({shape}, steps, ending, {tail_events})");
-    let proof = format!("read_filter_runs({prefix}_file(), {shape}, {prefix}_facts(), {jumps}, {pj}, {finish_code}, {done_p}, {prefix}_jump_facts(),
-        {prefix}_resident(), steps, ok, ending, ending_ok, room, {tail_events}, {tail}, page, gprs, flags)", done_p = done(&p));
+    let proof = format!("read_filter_runs({prefix}_io_image(frame, rest), {shape}, {prefix}_facts(), {jumps}, {pj}, {finish_code}, {done_p}, {prefix}_jump_facts(),
+        {prefix}_resident()(frame, rest), steps, ok, ending, ending_ok, room, {tail_events}, {tail}, page, gprs, flags)", done_p = done(&p));
     claims(module, prefix, &format!("\
 // The process claim for the written file: for every way the reads may split
 // stdin into non-empty chunks, with EINTRs between them, and every way each

@@ -305,28 +305,28 @@ theorem fmt_kept_trans(after, middle, before: Gprs, late: FmtKept(after, middle)
 }
 
 // Code at `at` whatever the page holds.
-fn Placed(file: List<BitVec(8)>, code: List<BitVec(8)>, at: BitVec(64)) → Type {
+fn Placed(file: IoImage, code: List<BitVec(8)>, at: BitVec(64)) → Type {
     (page: Nat → BitVec(8)) → CodeResident(io_fetch_access(), IoMemory(file, page), code, at)
 }
-theorem placed_split(file: List<BitVec(8)>, front, back: List<BitVec(8)>, at: BitVec(64), placed: Placed(file, front ++ back, at)):
+theorem placed_split(file: IoImage, front, back: List<BitVec(8)>, at: BitVec(64), placed: Placed(file, front ++ back, at)):
     Placed(file, front, at) ∧ Placed(file, back, next_rip(at, front.len())) {
     ⟨λ page => resident_split(io_fetch_access(), IoMemory(file, page), front, back, at, placed(page)).left,
      λ page => resident_split(io_fetch_access(), IoMemory(file, page), front, back, at, placed(page)).right⟩
 }
 // A piece of a laid-out block, placed where the layout puts it.
-theorem placed_piece(file: List<BitVec(8)>, pieces: List<List<BitVec(8)>>, last: List<BitVec(8)>, lens: List<Nat>,
+theorem placed_piece(file: IoImage, pieces: List<List<BitVec(8)>>, last: List<BitVec(8)>, lens: List<Nat>,
     measured: LayoutMeasured(pieces, lens), at: BitVec(64), placed: Placed(file, layout_code(pieces, last), at), i: Nat):
     Placed(file, layout_piece(pieces, last, i), next_rip(at, layout_at(0, lens, i))) {
     λ page => layout_resident(io_fetch_access(), IoMemory(file, page), at, last, pieces, lens, measured, 0, placed(page), i)
 }
 
 // A straight block run from its start: memory unchanged, RIP past it.
-record Ran(file: List<BitVec(8)>, page: Nat → BitVec(8), before, after: MachineState<IoMemory>, to: BitVec(64)) {
+record Ran(file: IoImage, page: Nat → BitVec(8), before, after: MachineState<IoMemory>, to: BitVec(64)) {
     steps: FetchedSteps(io_fetch_access(), io_data_access(), before, after),
     memory_is: after.memory = IoMemory(file, page),
     rip_is: after.rip = to,
 }
-theorem run_block(file: List<BitVec(8)>, page: Nat → BitVec(8), instructions: List<Instruction>, at: BitVec(64), k: Nat,
+theorem run_block(file: IoImage, page: Nat → BitVec(8), instructions: List<Instruction>, at: BitVec(64), k: Nat,
     placed: Placed(file, canonical_block_bytes(instructions), next_rip(at, k)), state: MachineState<IoMemory>,
     memory_is: state.memory = IoMemory(file, page), rip_is: state.rip = next_rip(at, k)):
     Ran(file, page, state, execute_block_normal(instructions, state), next_rip(at, k + canonical_block_bytes(instructions).len())) {
@@ -336,7 +336,7 @@ theorem run_block(file: List<BitVec(8)>, page: Nat → BitVec(8), instructions: 
     Ran(steps := ran.left, memory_is := trans(pure_block_memory(instructions, state), memory_is),
         rip_is := trans(ran.right, rip_advance(at, state.rip, k, canonical_block_bytes(instructions).len(), rip_is)))
 }
-theorem run_near(file: List<BitVec(8)>, page: Nat → BitVec(8), control: NearControl, at: BitVec(64), k: Nat,
+theorem run_near(file: IoImage, page: Nat → BitVec(8), control: NearControl, at: BitVec(64), k: Nat,
     placed: Placed(file, near_control_bytes(control), next_rip(at, k)), state: MachineState<IoMemory>,
     memory_is: state.memory = IoMemory(file, page), rip_is: state.rip = next_rip(at, k)):
     FetchedSteps(io_fetch_access(), io_data_access(), state, execute_near_control(control, state)) {
@@ -385,7 +385,7 @@ theorem add_one_value(x: BitVec(64), v: Nat, value: x.toNat() = v, room: Succ(v)
 
 // At a count block: the page as it was, RAX and RBX the count, RDX the
 // width, RDI the cursor `o` bytes into the page, RSI the places so far.
-record CountAt(file: List<BitVec(8)>, page: Nat → BitVec(8), at: BitVec(64), n, w, o, s: Nat, origin: Gprs, state: MachineState<IoMemory>) {
+record CountAt(file: IoImage, page: Nat → BitVec(8), at: BitVec(64), n, w, o, s: Nat, origin: Gprs, state: MachineState<IoMemory>) {
     memory_is: state.memory = IoMemory(file, page),
     rip_is: state.rip = at,
     rax: read_gpr(Rax, state.gprs).toNat() = n,
@@ -409,7 +409,7 @@ theorem count_add_zero(s, r: Nat, none: r = 0): s = s + r { omega }
 theorem count_add_one(s, r: Nat, one: r = 1): Succ(s) = s + r { omega }
 
 // One place: RSI grows by one exactly when the count reaches it.
-theorem count_step(file: List<BitVec(8)>, page: Nat → BitVec(8), i: Nat, small: i <= 19, at: BitVec(64), n, w, o, s: Nat,
+theorem count_step(file: IoImage, page: Nat → BitVec(8), i: Nat, small: i <= 19, at: BitVec(64), n, w, o, s: Nat,
     room: Succ(s) < Nat::pow(2, 64), origin: Gprs, placed: Placed(file, count_block(i), at), state: MachineState<IoMemory>,
     head: CountAt(file, page, at, n, w, o, s, origin, state)):
     Exists<MachineState<IoMemory>>(λ after => FetchedSteps(io_fetch_access(), io_data_access(), state, after) ∧
@@ -467,7 +467,7 @@ theorem count_bound_next(s, r, j: Nat, bound: s + Succ(j) <= 20, small: r <= 1):
 theorem count_sum(s, r, t: Nat): (s + r) + t = s + (r + t) { Nat::add_assoc(s, r, t) }
 
 // Places 10^j .. 10^1, by recursion on `j`.
-theorem count_run(file: List<BitVec(8)>, page: Nat → BitVec(8), n, w, o: Nat, origin: Gprs, j: Nat):
+theorem count_run(file: IoImage, page: Nat → BitVec(8), n, w, o: Nat, origin: Gprs, j: Nat):
     (at: BitVec(64)) → (s: Nat) → (state: MachineState<IoMemory>) → j <= 19 → s + j <= 20 → Placed(file, count_blocks(j), at) →
     CountAt(file, page, at, n, w, o, s, origin, state) →
     Exists<MachineState<IoMemory>>(λ after => FetchedSteps(io_fetch_access(), io_data_access(), state, after) ∧
@@ -503,7 +503,7 @@ theorem count_run(file: List<BitVec(8)>, page: Nat → BitVec(8), n, w, o: Nat, 
 // What the formatter has stored so far: `bytes` from `o` in the page, the
 // rest of the page as `page0` had it, the cursor past them.
 
-record FmtOut(file: List<BitVec(8)>, page0: Nat → BitVec(8), o: Nat, bytes: List<BitVec(8)>, at: BitVec(64), origin: Gprs,
+record FmtOut(file: IoImage, page0: Nat → BitVec(8), o: Nat, bytes: List<BitVec(8)>, at: BitVec(64), origin: Gprs,
     state: MachineState<IoMemory>) {
     page: Nat → BitVec(8),
     memory_is: state.memory = IoMemory(file, page),
@@ -521,7 +521,7 @@ record PageNext(page0, page: Nat → BitVec(8), o: Nat, bytes: List<BitVec(8)>) 
     below: (q: Nat) → q < o → page(q) = page0(q),
     above: (q: Nat) → o + bytes.len() <= q → page(q) = page0(q),
 }
-theorem page_next(file: List<BitVec(8)>, page0, page: Nat → BitVec(8), o: Nat, bytes: List<BitVec(8)>, x: BitVec(8),
+theorem page_next(file: IoImage, page0, page: Nat → BitVec(8), o: Nat, bytes: List<BitVec(8)>, x: BitVec(8),
     held: Stored(page, o, bytes), below: (q: Nat) → q < o → page(q) = page0(q), above: (q: Nat) → o + bytes.len() <= q → page(q) = page0(q)):
     PageNext(page0, io_store_offset(IoMemory(file, page), o + bytes.len(), [x]).page, o, bytes ++ [x]) {
     let memory = IoMemory(file, page);
@@ -539,13 +539,13 @@ theorem page_next(file: List<BitVec(8)>, page0, page: Nat → BitVec(8), o: Nat,
 }
 
 // A byte store at the cursor, `k` bytes into a placed piece.
-record StoreRan(file: List<BitVec(8)>, page: Nat → BitVec(8), c: Nat, x: BitVec(8), before, after: MachineState<IoMemory>, to: BitVec(64)) {
+record StoreRan(file: IoImage, page: Nat → BitVec(8), c: Nat, x: BitVec(8), before, after: MachineState<IoMemory>, to: BitVec(64)) {
     step: LinuxSteps(io_linux(), before, after),
     memory_is: after.memory = io_store_offset(IoMemory(file, page), c, [x]),
     rip_is: after.rip = to,
     gprs_is: after.gprs = before.gprs,
 }
-theorem run_store(file: List<BitVec(8)>, page: Nat → BitVec(8), store: ByteStore, plain: store_base_plain(store.base) = True,
+theorem run_store(file: IoImage, page: Nat → BitVec(8), store: ByteStore, plain: store_base_plain(store.base) = True,
     at: BitVec(64), k: Nat, placed: Placed(file, byte_store_bytes(store), next_rip(at, k)), c: Nat, inside: c < 4096, x: BitVec(8),
     state: MachineState<IoMemory>, memory_is: state.memory = IoMemory(file, page), rip_is: state.rip = next_rip(at, k),
     cursor: read_gpr(store.base, state.gprs).toNat() = io_page_base() + c, low: imm_byte0(read_gpr(store.source, state.gprs)) = x):
@@ -556,7 +556,7 @@ theorem run_store(file: List<BitVec(8)>, page: Nat → BitVec(8), store: ByteSto
     let room: ((io_page_base() <= io_page_base() + c) ∧ ((io_page_base() + c) + 1 <= io_page_base() + 4096)) = ⟨omega, omega⟩;
     let base = read_gpr(store.base, state.gprs);
     let writable: IoWritable(state.memory, base, 1) =
-        ⟨j(sym(cursor), λ v _ => io_page_base() <= v, room.left), j(sym(cursor), λ v _ => v + 1 <= io_page_base() + 4096, room.right)⟩;
+        Inl(⟨j(sym(cursor), λ v _ => io_page_base() <= v, room.left), j(sym(cursor), λ v _ => v + 1 <= io_page_base() + 4096, room.right)⟩);
     StoreRan(
         step := linux_steps_store(io_linux(), state, byte_store_after(writes, store, state),
             byte_store_step(fetch, writes, store, state, plain,
@@ -564,7 +564,7 @@ theorem run_store(file: List<BitVec(8)>, page: Nat → BitVec(8), store: ByteSto
                     resident_state(fetch, byte_store_bytes(store), memory, next_rip(at, k), state, memory_is, rip_is, placed(page)))),
                 writable)),
         memory_is := trans(cong_fn<IoMemory, IoMemory>(λ m => io_store(m, base, [imm_byte0(read_gpr(store.source, state.gprs))]), memory_is),
-            trans(cong_fn<BitVec(8), IoMemory>(λ y => io_store(memory, base, [y]), low), store_at_offset(memory, base, c, [x], cursor))),
+            trans(cong_fn<BitVec(8), IoMemory>(λ y => io_store(memory, base, [y]), low), store_at_offset(memory, base, c, [x], { omega }, cursor))),
         rip_is := rip_advance(at, state.rip, k, 3, rip_is),
         gprs_is := refl)
 }
@@ -583,7 +583,7 @@ theorem replicate_snoc<A>(x: A, t: Nat): List::replicate(x, t) ++ [x] = List::re
 
 theorem pad_measured(): LayoutMeasured(pad_parts(), pad_lens()) { ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, trivial⟩⟩⟩⟩⟩ }
 
-fn PadDone(file: List<BitVec(8)>, page0: Nat → BitVec(8), o, n, t: Nat, at: BitVec(64), origin: Gprs, state: MachineState<IoMemory>) → Type {
+fn PadDone(file: IoImage, page0: Nat → BitVec(8), o, n, t: Nat, at: BitVec(64), origin: Gprs, state: MachineState<IoMemory>) → Type {
     Exists<MachineState<IoMemory>>(λ after => LinuxSteps(io_linux(), state, after) ∧
         (FmtOut(file, page0, o, List::replicate(space(), t), next_rip(at, 35), origin, after) ∧
         ((read_gpr(Rax, after.gprs).toNat() = n) ∧ (read_gpr(Rbx, after.gprs).toNat() = n))))
@@ -631,7 +631,7 @@ theorem pad_low_word(o, t: Nat, inside: o + t < 4096): Succ(io_page_base() + (o 
 theorem pad_k_word(k, t, w: Nat, below: k + t < w, fits: w < Nat::pow(2, 64)): Succ(k + t) < Nat::pow(2, 64) { omega }
 
 // The loop, by recursion on the spaces still to store.
-theorem pad_run(file: List<BitVec(8)>, page0: Nat → BitVec(8), at: BitVec(64), placed: Placed(file, pad_code(), at), o, n, k, w: Nat,
+theorem pad_run(file: IoImage, page0: Nat → BitVec(8), at: BitVec(64), placed: Placed(file, pad_code(), at), o, n, k, w: Nat,
     origin: Gprs, f: Nat): (t: Nat) → (state: MachineState<IoMemory>) → PadLeft(k + t, w, f) → o + (t + f) <= 4096 →
     FmtOut(file, page0, o, List::replicate(space(), t), at, origin, state) →
     read_gpr(Rsi, state.gprs).toNat() = k + t → read_gpr(Rdx, state.gprs).toNat() = w →
@@ -765,7 +765,7 @@ theorem emit_measured(i: Nat): LayoutMeasured(emit_parts(i), emit_lens()) {
 }
 
 // The digit loop at its head, `c` taken so far, `q` still to take.
-record InnerDone(file: List<BitVec(8)>, page: Nat → BitVec(8), at: BitVec(64), r, d: Nat, before, after: MachineState<IoMemory>) {
+record InnerDone(file: IoImage, page: Nat → BitVec(8), at: BitVec(64), r, d: Nat, before, after: MachineState<IoMemory>) {
     memory_is: after.memory = IoMemory(file, page),
     rip_is: after.rip = next_rip(at, 50),
     rax: read_gpr(Rax, after.gprs).toNat() = r,
@@ -780,7 +780,7 @@ theorem inner_more(c, q: Nat, room: c + Succ(q) <= 9): (Succ(48 + c) < Nat::pow(
 }
 theorem inner_digit(c, q: Nat): 48 + (Succ(c) + q) = 48 + (c + Succ(q)) { omega }
 
-theorem inner_run(file: List<BitVec(8)>, page: Nat → BitVec(8), i: Nat, small: i <= 19, at: BitVec(64), placed: Placed(file, emit_block(i), at), q: Nat):
+theorem inner_run(file: IoImage, page: Nat → BitVec(8), i: Nat, small: i <= 19, at: BitVec(64), placed: Placed(file, emit_block(i), at), q: Nat):
     (x, c: Nat) → (state: MachineState<IoMemory>) → x.div(ten_pow(i)) = q → c + q <= 9 →
     state.memory = IoMemory(file, page) → state.rip = next_rip(at, 29) → read_gpr(Rax, state.gprs).toNat() = x →
     read_gpr(R11, state.gprs) = place_word(i) → read_gpr(Rcx, state.gprs).toNat() = 48 + c →
@@ -877,7 +877,7 @@ theorem mod_le_self(m, p: Nat): m.mod(p) <= m {
 
 // One place 10^i, i ≥ 1: the digit stored when the count reaches the place,
 // and what is left of the count below it.
-theorem emit_step(file: List<BitVec(8)>, page0: Nat → BitVec(8), i: Nat, small: Succ(i) <= 19, at: BitVec(64), o, m, n: Nat,
+theorem emit_step(file: IoImage, page0: Nat → BitVec(8), i: Nat, small: Succ(i) <= 19, at: BitVec(64), o, m, n: Nat,
     front: List<BitVec(8)>, origin: Gprs, placed: Placed(file, emit_block(Succ(i)), at), below_place: m < ten_pow(Succ(Succ(i))), within: m <= n,
     room: o + front.len() < 4096, state: MachineState<IoMemory>, head: FmtOut(file, page0, o, front, at, origin, state),
     rax: read_gpr(Rax, state.gprs).toNat() = m, rbx: read_gpr(Rbx, state.gprs).toNat() = n):
@@ -967,7 +967,7 @@ theorem units_len(): units_code().len() = 20 { refl }
 theorem emit_block_len(i: Nat): emit_block(i).len() = 57 { refl }
 
 // The units place: '0' + what is left, always stored.
-theorem units_step(file: List<BitVec(8)>, page0: Nat → BitVec(8), at: BitVec(64), o, m: Nat, front: List<BitVec(8)>, origin: Gprs,
+theorem units_step(file: IoImage, page0: Nat → BitVec(8), at: BitVec(64), o, m: Nat, front: List<BitVec(8)>, origin: Gprs,
     placed: Placed(file, units_code(), at), small: m < ten_pow(1), room: o + front.len() < 4096,
     state: MachineState<IoMemory>, head: FmtOut(file, page0, o, front, at, origin, state), rax: read_gpr(Rax, state.gprs).toNat() = m):
     Exists<MachineState<IoMemory>>(λ after => LinuxSteps(io_linux(), state, after) ∧
@@ -1008,7 +1008,7 @@ theorem emit_room(o, f, rest: Nat, room: o + (f + Succ(rest)) <= 4096): o + f < 
 theorem emit_lead_room(o, f, l, rest: Nat, room: o + (f + (l + rest)) <= 4096): o + ((f + l) + rest) <= 4096 { omega }
 
 // Places 10^j down to the units, by recursion on `j`.
-theorem emit_run(file: List<BitVec(8)>, page0: Nat → BitVec(8), o, n: Nat, origin: Gprs, j: Nat):
+theorem emit_run(file: IoImage, page0: Nat → BitVec(8), o, n: Nat, origin: Gprs, j: Nat):
     (at: BitVec(64)) → (front: List<BitVec(8)>) → (m: Nat) → (state: MachineState<IoMemory>) → j <= 19 → m < ten_pow(Succ(j)) → m <= n →
     o + (front.len() + place_digits(j)(m, n).len()) <= 4096 → Placed(file, emit_code(j), at) →
     FmtOut(file, page0, o, front, at, origin, state) → read_gpr(Rax, state.gprs).toNat() = m → read_gpr(Rbx, state.gprs).toNat() = n →
@@ -1079,7 +1079,7 @@ theorem format_ends(at: BitVec(64)):
             trans(rip_compose(at, (13 + count_blocks(19).len()) + 35, emit_code(19).len()), rip_count(at, refl))))
 }
 
-theorem format_runs(file: List<BitVec(8)>, at: BitVec(64), placed: Placed(file, format_code(), at), page0: Nat → BitVec(8), w, o: Nat,
+theorem format_runs(file: IoImage, at: BitVec(64), placed: Placed(file, format_code(), at), page0: Nat → BitVec(8), w, o: Nat,
     state: MachineState<IoMemory>, memory_is: state.memory = IoMemory(file, page0), rip_is: state.rip = at,
     rdx: read_gpr(Rdx, state.gprs).toNat() = w, rdi: read_gpr(Rdi, state.gprs).toNat() = io_page_base() + o,
     room: o + padded_decimal(w, read_gpr(Rax, state.gprs).toNat()).len() <= 4096):

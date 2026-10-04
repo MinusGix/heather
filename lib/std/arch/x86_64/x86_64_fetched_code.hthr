@@ -28,6 +28,7 @@ import omega;
 inductive EmittedInstruction {
     EmitOrdinary(instruction: Instruction),
     EmitLoad(load: ByteLoad),
+    EmitWordLoad(load: WordLoad),
     EmitShort(control: ShortControl),
     EmitNear(control: NearControl),
 }
@@ -35,6 +36,7 @@ fn emitted_bytes(emitted: EmittedInstruction) → List<BitVec(8)> {
     match emitted {
         EmitOrdinary(instruction) => canonical_bytes(instruction),
         EmitLoad(load) => byte_load_bytes(load),
+        EmitWordLoad(load) => word_load_bytes(load),
         EmitShort(control) => short_control_bytes(control),
         EmitNear(control) => near_control_bytes(control),
     }
@@ -45,6 +47,7 @@ fn EmittedExecutes<M>(data: ByteReadAccess<M>, emitted: EmittedInstruction,
         EmitOrdinary(instruction) => ExecuteAt(encoded_at(before.rip, instruction),
             decoded_canonical(instruction), before, Returned(after)),
         EmitLoad(load) => Exists<BitVec(8)>(λ byte => ByteLoadStep<M>(data, load, byte, before, after)),
+        EmitWordLoad(load) => Exists<BitVec(64)>(λ word => WordLoadStep<M>(data, load, word, before, after)),
         EmitShort(control) => after = execute_short_control(control, before),
         EmitNear(control) => after = execute_near_control(control, before),
     }
@@ -64,6 +67,9 @@ theorem emitted_exec_same_defined<M>(data: ByteReadAccess<M>, emitted: EmittedIn
                 p.right.right, q.right.right),
         EmitLoad(load) => λ a b p q => same_defined_of_equal(a, b,
             byte_load_same(data, load, before, a, b, p.witness, q.witness,
+                p.proof, q.proof)),
+        EmitWordLoad(load) => λ a b p q => same_defined_of_equal(a, b,
+            word_load_same(data, load, before, a, b, p.witness, q.witness,
                 p.proof, q.proof)),
         EmitShort(control) => λ a b p q => same_defined_of_equal(a, b, trans(p, sym(q))),
         EmitNear(control) => λ a b p q => same_defined_of_equal(a, b, trans(p, sym(q))),
@@ -85,6 +91,9 @@ theorem emitted_exec_respects_defined<M>(data: ByteReadAccess<M>, emitted: Emitt
                 p.right.right, q.right.right),
         EmitLoad(load) => λ a b same x y p q =>
             byte_load_respects_defined(data, load, a, b, x, y,
+                p.witness, q.witness, same, p.proof, q.proof),
+        EmitWordLoad(load) => λ a b same x y p q =>
+            word_load_respects_defined(data, load, a, b, x, y,
                 p.witness, q.witness, same, p.proof, q.proof),
         EmitShort(control) => λ a b same x y p q =>
             same_defined_trans(x, execute_short_control(control, a), y,

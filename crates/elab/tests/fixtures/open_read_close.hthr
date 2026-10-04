@@ -1,0 +1,242 @@
+// A hand-written process over the command model (docs/native-wc-command-design.md
+// §10, slice C1): open argv[1], read it to end of file through the read
+// driver with the fd held in RSP, close it and exit 0; a failed open exits 1.
+import elf64_read_pieces;
+import elf64_io;
+import linux_x86_64_io;
+import linux_x86_64_entry;
+import x86_64;
+import x86_64_block;
+import x86_64_fetch;
+import x86_64_data_read;
+import x86_64_fetched_code;
+import x86_64_layout;
+import bitvec;
+import bitvec_nat;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+import omega;
+
+fn orc_entry_block() → List<Instruction> { [MovRR(Rbx, Rsp), AddRI8(Rbx, BitVec::ofNat(16))] }
+fn orc_load() → WordLoad { WordLoad(destination := Rsi, base := Rbx) }
+fn orc_open_block() → List<Instruction> {
+    [MovRI(Rdi, at_fdcwd()), MovRI(Rdx, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(257))]
+}
+fn orc_test_block() → List<Instruction> { [TestRR(Rax, Rax)] }
+fn orc_keep_block() → List<Instruction> { [MovRR(Rsp, Rax)] }
+fn orc_close_block() → List<Instruction> { [MovRR(Rdi, Rsp), MovRI(Rax, BitVec::ofNat(3))] }
+fn orc_exit_block(status: Nat) → List<Instruction> { [MovRI(Rdi, BitVec::ofNat(status)), MovRI(Rax, BitVec::ofNat(60))] }
+fn orc_fd() → FdSource { FdIn(Rsp) }
+
+// The jumps: JS to the failed open, JZ to the close at end of file, JS to the
+// failure tail, JMP back to the read after a chunk, JZ back after EINTR.
+fn orc_od() → BitVec(32) { BitVec::ofNat(136) }
+fn orc_ed() → BitVec(32) { BitVec::ofNat(52) }
+fn orc_sd() → BitVec(32) { BitVec::ofNat(5) }
+fn orc_bd() → BitVec(32) { BitVec::ofNat(4294967241) }
+fn orc_rd() → BitVec(32) { BitVec::ofNat(4294967222) }
+
+fn orc_parts() → List<List<BitVec(8)>> {
+    [canonical_block_bytes(orc_entry_block()), word_load_bytes(orc_load()), canonical_block_bytes(orc_open_block()), syscall_bytes(),
+     canonical_block_bytes(orc_test_block()), near_control_bytes(JumpSignNear(orc_od())), canonical_block_bytes(orc_keep_block()),
+     read_head_code(orc_fd(), orc_ed(), orc_sd()), near_control_bytes(JumpNear(orc_bd())), fail_tail_code(orc_rd()),
+     canonical_block_bytes(orc_close_block()), syscall_bytes(), canonical_block_bytes(orc_exit_block(0)), syscall_bytes(),
+     canonical_block_bytes(orc_exit_block(1))]
+}
+fn orc_lens() → List<Nat> { [7, 3, 30, 2, 3, 6, 3, 50, 5, 41, 13, 2, 20, 2, 20] }
+fn orc_code() → List<BitVec(8)> { layout_code(orc_parts(), syscall_bytes()) }
+theorem orc_measured(): LayoutMeasured(orc_parts(), orc_lens()) {
+    ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨read_head_code_len(orc_fd(), orc_ed(), orc_sd()), ⟨refl,
+        ⟨fail_tail_code_len(orc_rd()), ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, trivial⟩⟩⟩⟩⟩⟩⟩⟩⟩⟩⟩⟩⟩⟩⟩
+}
+theorem orc_code_len(): orc_code().len() = 209 {
+    layout_len(orc_parts(), syscall_bytes(), orc_lens(), orc_measured(), 2, refl)
+}
+
+// What the run does: the open, then on success the reads of the file, the
+// close and exit(0); on failure exit(1).
+fn orc_after(opened: OpenResult, steps: List<EofStep<True>>, ending: EofEnd<False>, closed: CloseResult) → List<LinuxEvent> {
+    match opened {
+        Opened(fd) => eof_run<True, False>(bitvec_nat::word_of_nat(64, fd), λ _ _ _ rest => rest, λ _ _ _ => Nil, read_exits(),
+            steps, ending, [CloseEvent(bitvec_nat::word_of_nat(64, fd), closed), ExitEvent(BitVec::ofNat(0))], Nil),
+        OpenFailed(_) => [ExitEvent(BitVec::ofNat(1))],
+    }
+}
+fn orc_events(path: List<BitVec(8)>, opened: OpenResult, steps: List<EofStep<True>>, ending: EofEnd<False>,
+    closed: CloseResult) → List<LinuxEvent> {
+    Cons(OpenEvent(path, opened), orc_after(opened, steps, ending, closed))
+}
+
+// argv[1] is the third word from RSP.
+theorem orc_slot(rsp: BitVec(64), low: rsp.toNat() + 8 <= Nat::pow(2, 47)):
+    rsp.add(BitVec::ofNat(16, n := 8).sign_extend(56)) = argv_slot(rsp, 2) {
+    let sixteen: (BitVec::ofNat(16, n := 8).sign_extend(56).toNat() = 16) = refl;
+    let sum = bitvec_nat::toNat_add(64, rsp, BitVec::ofNat(16, n := 8).sign_extend(56), { omega });
+    trans(sym(bitvec_nat::word_of_nat_toNat(64, rsp.add(BitVec::ofNat(16, n := 8).sign_extend(56)))),
+        cong_fn<Nat, BitVec(64)>(λ v => bitvec_nat::word_of_nat(64, v), trans(sum, cong_fn<Nat, Nat>(λ v => rsp.toNat() + v, sixteen))))
+}
+
+theorem orc_small(fd: Nat, small: fd < Nat::pow(2, 31)): bitvec_nat::word_of_nat(64, fd).toNat() < Nat::pow(2, 63) {
+    let value = bitvec_nat::toNat_word_of_nat(64, fd, { omega });
+    omega
+}
+
+fn OrcPieces(file: IoImage) → Type {
+    (page: Nat → BitVec(8)) → (i: Nat) →
+        CodeResident(io_fetch_access(), IoMemory(file, page), layout_piece(orc_parts(), syscall_bytes(), i), eof_rip(layout_at(0, orc_lens(), i)))
+}
+
+// The syscall at `at`, fetched where it is resident.
+theorem orc_call(file: IoImage, page: Nat → BitVec(8), at: Nat,
+    resident: CodeResident(io_fetch_access(), IoMemory(file, page), syscall_bytes(), eof_rip(at)),
+    state: MachineState<IoMemory>, memory_is: state.memory = IoMemory(file, page), rip_is: state.rip = eof_rip(at)):
+    LinuxSyscallAt(io_linux(), state) {
+    FetchedFrom(resident_readable(io_fetch_access(), state.memory, syscall_bytes(), state.rip,
+        resident_state(io_fetch_access(), syscall_bytes(), IoMemory(file, page), eof_rip(at), state, memory_is, rip_is, resident)))
+}
+
+// exit(status) from the block at `at`, whose SYSCALL follows it at `call`.
+theorem orc_exit(file: IoImage, page: Nat → BitVec(8), status, at, call: Nat, call_is: at + 20 = call,
+    block_at: CodeResident(io_fetch_access(), IoMemory(file, page), canonical_block_bytes(orc_exit_block(status)), eof_rip(at)),
+    call_at: CodeResident(io_fetch_access(), IoMemory(file, page), syscall_bytes(), eof_rip(call)),
+    state: MachineState<IoMemory>, memory_is: state.memory = IoMemory(file, page), rip_is: state.rip = eof_rip(at)):
+    LinuxRuns(io_linux(), [ExitEvent(BitVec::ofNat(status))], state) {
+    have ran = block_ran(orc_exit_block(status), IoMemory(file, page), at, block_at, state, memory_is, rip_is);
+    let last = execute_block_normal(orc_exit_block(status), state);
+    linux_runs_exit(io_linux(), state, last, BitVec::ofNat(status), ran.steps,
+        orc_call(file, page, call, call_at, last, ran.memory_is, trans(ran.rip_is, cong_fn<Nat, BitVec(64)>(λ n => eof_rip(n), call_is))),
+        refl, refl)
+}
+
+// From the end of file: close the fd in RSP, then exit(0).
+theorem orc_closes(file: IoImage, pieces: OrcPieces(file), fd: BitVec(64), closed: CloseResult, returns: CloseReturns(closed),
+    page: Nat → BitVec(8), state: MachineState<IoMemory>, rip_is: state.rip = eof_rip(150),
+    memory_is: state.memory = IoMemory(file, page), held: read_gpr(Rsp, state.gprs) = fd):
+    LinuxRuns(io_linux(), [CloseEvent(fd, closed), ExitEvent(BitVec::ofNat(0))], state) {
+    have ran = block_ran(orc_close_block(), IoMemory(file, page), 150, pieces(page, 10), state, memory_is, rip_is);
+    let at = execute_block_normal(orc_close_block(), state);
+    linux_runs_close(io_linux(), state, at, fd, closed, [ExitEvent(BitVec::ofNat(0))],
+        linux_steps_of_fetched(io_linux(), state, at, ran.steps),
+        orc_call(file, page, 163, pieces(page, 11), at, ran.memory_is, ran.rip_is), refl, held, returns,
+        λ rcx r11 => orc_exit(file, page, 0, 165, 185, refl, pieces(page, 12), pieces(page, 13),
+            linux_write_return(at, close_rax(closed), rcx, r11), ran.memory_is,
+            rip_advance(io_entry(), at.rip, 163, 2, ran.rip_is)))
+}
+
+fn orc_inv(fd: BitVec(64)) → List<BitVec(8)> → Gprs → Type { λ _ gprs => read_gpr(Rsp, gprs) = fd }
+
+// The read driver's process: nothing per chunk but the JMP back, the fd in
+// RSP throughout, and the close at end of file.
+theorem orc_process(file: IoImage, pieces: OrcPieces(file), fd: BitVec(64), input: List<BitVec(8)>,
+    closed: CloseResult, returns: CloseReturns(closed)):
+    EofProcess<True, False>(orc_fd(), fd, file, 54, 109, 150, orc_inv(fd), input, λ _ _ _ => True, λ _ _ _ rest => rest,
+        λ _ _ _ => True, λ _ _ _ => Nil, read_exits(), [CloseEvent(fd, closed), ExitEvent(BitVec::ofNat(0))]) {
+    EofProcess(
+        framed := λ seen before after kept held => trans(kept.right.left, held),
+        reads := λ seen gprs held => held,
+        chunk := λ page seen bytes rest x some fits okx prefix state rip_is memory_is length held after next => {
+            let stored = io_store_offset(IoMemory(file, page), 0, bytes);
+            let back = execute_near_control(JumpNear(orc_bd()), state);
+            let jumped = near_ran(JumpNear(orc_bd()), stored, 104, pieces(stored.page, 8), state, memory_is, rip_is);
+            let back_rip: (back.rip = eof_rip(54)) =
+                trans(cong_fn<BitVec(64), BitVec(64)>(λ address => near_branch_target(address, 5, orc_bd()), rip_is),
+                    jumps_back(io_entry(), 104, 5, orc_bd(), 54, refl));
+            linux_runs_after_steps(io_linux(), after, state, back, jumped,
+                next(stored.page, back, back_rip, memory_is, held))
+        },
+        ends := λ page seen bytes y => false_elim(y),
+        fails := tail_exits(file, 109, orc_rd(), λ pg => fail_tail(IoMemory(file, pg), 109, orc_rd(), pieces(pg, 9)), orc_inv(fd), input),
+        at_end := λ page state rip_is memory_is held => orc_closes(file, pieces, fd, closed, returns, page, state, rip_is, memory_is, held))
+}
+
+theorem orc_layout(file: IoImage, pieces: OrcPieces(file)): EofLayout(orc_fd(), file, 54, 109, 150, orc_ed(), orc_sd(), orc_rd()) {
+    EofLayout(λ pg => read_head(orc_fd(), IoMemory(file, pg), 54, orc_ed(), orc_sd(), pieces(pg, 7)),
+        λ pg => fail_tail_retries(IoMemory(file, pg), 109, orc_rd(), fail_tail(IoMemory(file, pg), 109, orc_rd(), pieces(pg, 9))),
+        jumps_forward(io_entry(), rh_at_jz(orc_fd(), 54), 6, orc_ed(), 150, refl),
+        jumps_forward(io_entry(), rh_at_js(orc_fd(), 54), 6, orc_sd(), 109, refl),
+        jumps_back(io_entry(), ft_at_jz(109), 6, orc_rd(), 54, refl))
+}
+
+// The claim: for every file holding the code at the entry, every command line
+// whose argv[1] is `path`, every page, register file and flags, and every
+// answer Linux gives, the run is `orc_events`.
+theorem orc_runs(file: IoImage, resident: (page: Nat → BitVec(8)) → CodeResident(io_fetch_access(), IoMemory(file, page), orc_code(), io_entry()),
+    page: Nat → BitVec(8), gprs: Gprs, flags: Flags, first, path: List<BitVec(8)>, more: List<List<BitVec(8)>>,
+    argv: ArgvAt(io_data_access(), IoMemory(file, page), read_gpr(Rsp, gprs), Cons(first, Cons(path, more))),
+    opened: OpenResult, open_returns: OpenReturns(opened), steps: List<EofStep<True>>, steps_ok: EofSteps<True>(λ _ _ _ => True, steps, Nil),
+    ending: EofEnd<False>, ending_ok: EofEndOk<False>(λ _ _ _ => True, eof_input(steps), ending),
+    closed: CloseResult, close_returns: CloseReturns(closed)):
+    LinuxRuns(io_linux(), orc_events(path, opened, steps, ending, closed), io_initial(file, page, gprs, flags)) {
+    let fetch = io_fetch_access();
+    let data = io_data_access();
+    let memory = IoMemory(file, page);
+    let pieces: OrcPieces(file) = λ pg => layout_resident(fetch, IoMemory(file, pg), io_entry(), syscall_bytes(), orc_parts(), orc_lens(),
+        orc_measured(), 0, resident(pg));
+    let begin = io_initial(file, page, gprs, flags);
+    let rsp = read_gpr(Rsp, gprs);
+    // RBX ← RSP + 16, then RSI ← argv[1].
+    have entered = block_ran(orc_entry_block(), memory, 0, pieces(page, 0), begin, refl, refl);
+    let s1 = execute_block_normal(orc_entry_block(), begin);
+    let second = argv.right.proof.right.right.right;
+    let pointer = second.witness;
+    let slot: (read_gpr(Rbx, s1.gprs) = argv_slot(rsp, 2)) = orc_slot(rsp, argv.left.left);
+    have loaded = word_load_ran(orc_load(), memory, 7, pieces(page, 1), s1, entered.memory_is, entered.rip_is,
+        argv_slot(rsp, 2), pointer, slot, second.proof.left);
+    let s2 = word_load_after(orc_load(), pointer, s1);
+    // openat(AT_FDCWD, argv[1], O_RDONLY).
+    have asked = block_ran(orc_open_block(), memory, 10, pieces(page, 2), s2, entered.memory_is, loaded.rip_is);
+    let s3 = execute_block_normal(orc_open_block(), s2);
+    let named: CStringAt(io_data_access(), s3.memory, read_gpr(Rsi, s3.gprs), path) =
+        j(sym(asked.memory_is), λ m _ => CStringAt(io_data_access(), m, pointer, path), second.proof.right.right.left);
+    let to_open: FetchedSteps(fetch, data, begin, s3) = fetched_steps_trans(fetch, data, begin, s1, s3, entered.steps,
+        fetched_steps_trans(fetch, data, s1, s2, s3, loaded.steps, asked.steps));
+    linux_runs_open(io_linux(), begin, s3, path, opened, orc_after(opened, steps, ending, closed),
+        linux_steps_of_fetched(io_linux(), begin, s3, to_open),
+        orc_call(file, page, 40, pieces(page, 3), s3, asked.memory_is, asked.rip_is),
+        ⟨refl, ⟨refl, ⟨refl, named⟩⟩⟩, open_returns,
+        λ rcx r11 => (match opened as λ o => OpenReturns(o) →
+                LinuxRuns(io_linux(), orc_after(o, steps, ending, closed), linux_write_return(s3, open_rax(o), rcx, r11)) {
+            Opened(fd) => λ small => {
+                let returned = linux_write_return(s3, bitvec_nat::word_of_nat(64, fd), rcx, r11);
+                let word = bitvec_nat::word_of_nat(64, fd);
+                let back_rip: (returned.rip = eof_rip(42)) = rip_advance(io_entry(), s3.rip, 40, 2, asked.rip_is);
+                have tested = block_ran(orc_test_block(), memory, 42, pieces(page, 4), returned, asked.memory_is, back_rip);
+                let s5 = execute_block_normal(orc_test_block(), returned);
+                let clear: (s5.flags.sf = False) = test_self_nonnegative(word, orc_small(fd, small));
+                let s6 = execute_near_control(JumpSignNear(orc_od()), s5);
+                let passed = near_ran(JumpSignNear(orc_od()), memory, 45, pieces(page, 5), s5, tested.memory_is, tested.rip_is);
+                let s6_rip: (s6.rip = eof_rip(51)) =
+                    trans(near_sign_not_taken_rip(orc_od(), s5, clear), rip_advance(io_entry(), s5.rip, 45, 6, tested.rip_is));
+                have kept = block_ran(orc_keep_block(), memory, 51, pieces(page, 6), s6, tested.memory_is, s6_rip);
+                let s7 = execute_block_normal(orc_keep_block(), s6);
+                let held: orc_inv(word)(Nil, s7.gprs) = refl;
+                linux_runs_after_steps(io_linux(), orc_after(Opened(fd), steps, ending, closed), returned, s7,
+                    fetched_steps_trans(fetch, data, returned, s5, s7, tested.steps,
+                        fetched_steps_trans(fetch, data, s5, s6, s7, passed, kept.steps)),
+                    eof_from(orc_fd(), word, file, 54, 109, 150, orc_ed(), orc_sd(), orc_rd(), orc_layout(file, pieces), orc_inv(word),
+                        eof_input(steps), λ _ _ _ => True, λ _ _ _ rest => rest, λ _ _ _ => True, λ _ _ _ => Nil, read_exits(),
+                        [CloseEvent(word, closed), ExitEvent(BitVec::ofNat(0))],
+                        orc_process(file, pieces, word, eof_input(steps), closed, close_returns),
+                        ending, ending_ok, steps)(Nil, steps_ok, page, refl, s7, kept.rip_is, kept.memory_is, held))
+            },
+            OpenFailed(errno) => λ error => {
+                let returned = linux_write_return(s3, errno_word(errno), rcx, r11);
+                let back_rip: (returned.rip = eof_rip(42)) = rip_advance(io_entry(), s3.rip, 40, 2, asked.rip_is);
+                have tested = block_ran(orc_test_block(), memory, 42, pieces(page, 4), returned, asked.memory_is, back_rip);
+                let s5 = execute_block_normal(orc_test_block(), returned);
+                let negative: (s5.flags.sf = True) = test_self_negative(errno_word(errno), errno_negative(errno, error));
+                let s6 = execute_near_control(JumpSignNear(orc_od()), s5);
+                let jumped = near_ran(JumpSignNear(orc_od()), memory, 45, pieces(page, 5), s5, tested.memory_is, tested.rip_is);
+                let s6_rip: (s6.rip = eof_rip(187)) =
+                    trans(near_sign_taken_rip(orc_od(), s5, negative),
+                        trans(cong_fn<BitVec(64), BitVec(64)>(λ address => near_branch_target(address, 6, orc_od()), tested.rip_is),
+                            jumps_forward(io_entry(), 45, 6, orc_od(), 187, refl)));
+                linux_runs_after_steps(io_linux(), [ExitEvent(BitVec::ofNat(1))], returned, s6,
+                    fetched_steps_trans(fetch, data, returned, s5, s6, tested.steps, jumped),
+                    orc_exit(file, page, 1, 187, 207, refl, pieces(page, 14), pieces(page, 15), s6, tested.memory_is, s6_rip))
+            },
+        })(open_returns))
+}

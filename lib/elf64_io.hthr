@@ -20,9 +20,18 @@ import nat;
 import option;
 import omega;
 
-record IoMemory { file: List<BitVec(8)>, page: Nat → BitVec(8) }
+// What no read and no store to the page changes
+// (docs/native-wc-command-design.md §4.2): the file as loaded, the frame page
+// at 0x411000 that a command keeps its variables in between operands, and the
+// rest of the address space, which the process only reads: the initial stack,
+// where argv is (`None` wherever Linux mapped nothing). A read loop's proofs
+// fix the image and quantify over the page, so a loop leaves the frame as it
+// found it without saying so.
+record IoImage { bytes: List<BitVec(8)>, frame: Nat → BitVec(8), rest: BitVec(64) → Option<BitVec(8)> }
+record IoMemory { file: IoImage, page: Nat → BitVec(8) }
 
 fn io_page_base() → Nat { 0x410000 }
+fn io_frame_base() → Nat { 0x411000 }
 // Where the program starts: its first byte, past the 232-byte header.
 fn io_entry() → BitVec(64) { BitVec::ofNat(0x4000e8) }
 
@@ -33,6 +42,16 @@ fn io_offset_of(address: Nat) → Option<Nat> {
         True => match Succ(address).leb(io_page_base() + 4096) {
             False => None,
             True => Some(address -io_page_base()),
+        },
+    }
+}
+// A frame offset, for an address inside the frame.
+fn io_frame_offset(address: Nat) → Option<Nat> {
+    match io_frame_base().leb(address) {
+        False => None,
+        True => match Succ(address).leb(io_frame_base() + 4096) {
+            False => None,
+            True => Some(address -io_frame_base()),
         },
     }
 }
@@ -47,10 +66,17 @@ fn io_file_offset(address: Nat) → Option<Nat> {
 fn io_file_read(file: List<BitVec(8)>, address: BitVec(64)) → Option<BitVec(8)> {
     match io_file_offset(address.toNat()) { None => None, Some(offset) => file.nth(offset) }
 }
+// Outside the page: the file's window, then the frame, then the rest.
+fn io_image_read(image: IoImage, address: BitVec(64)) → Option<BitVec(8)> {
+    match io_file_offset(address.toNat()) {
+        None => match io_frame_offset(address.toNat()) { Some(offset) => Some(image.frame(offset)), None => image.rest(address) },
+        Some(offset) => image.bytes.nth(offset),
+    }
+}
 fn io_read(memory: IoMemory, address: BitVec(64)) → Option<BitVec(8)> {
     match io_offset_of(address.toNat()) {
         Some(offset) => Some(memory.page(offset)),
-        None => io_file_read(memory.file, address),
+        None => io_image_read(memory.file, address),
     }
 }
 fn io_store_offset(memory: IoMemory, start: Nat, bytes: List<BitVec(8)>) → IoMemory {
@@ -59,16 +85,34 @@ fn io_store_offset(memory: IoMemory, start: Nat, bytes: List<BitVec(8)>) → IoM
         True => match bytes.nth(offset -start) { None => memory.page(offset), Some(byte) => byte },
     })
 }
-fn io_store(memory: IoMemory, address: BitVec(64), bytes: List<BitVec(8)>) → IoMemory {
-    io_store_offset(memory, address.toNat() -io_page_base(), bytes)
+fn io_frame_store_offset(image: IoImage, start: Nat, bytes: List<BitVec(8)>) → IoImage {
+    IoImage(image.bytes, λ offset => match start.leb(offset) {
+        False => image.frame(offset),
+        True => match bytes.nth(offset -start) { None => image.frame(offset), Some(byte) => byte },
+    }, image.rest)
 }
-fn IoWritable(memory: IoMemory, address: BitVec(64), length: Nat) → Type {
+// A store lands in the frame when it starts there, else in the page; a
+// writable span (`IoWritable`) never crosses from one into the other.
+fn io_store(memory: IoMemory, address: BitVec(64), bytes: List<BitVec(8)>) → IoMemory {
+    match io_frame_offset(address.toNat()) {
+        Some(start) => IoMemory(io_frame_store_offset(memory.file, start, bytes), memory.page),
+        None => io_store_offset(memory, address.toNat() -io_page_base(), bytes),
+    }
+}
+fn IoPageWritable(address: BitVec(64), length: Nat) → Type {
     (io_page_base() <= address.toNat()) ∧ (address.toNat() + length <= io_page_base() + 4096)
 }
+fn IoFrameWritable(address: BitVec(64), length: Nat) → Type {
+    (io_frame_base() <= address.toNat()) ∧ (address.toNat() + length <= io_frame_base() + 4096)
+}
+fn IoWritable(memory: IoMemory, address: BitVec(64), length: Nat) → Type {
+    IoPageWritable(address, length) ∨ IoFrameWritable(address, length)
+}
 
-// Code comes only from the file: the page is not executable.
+// Code comes only from the file: the page, the frame and the rest are not
+// executable.
 fn io_fetch_access() → FetchAccess<IoMemory> {
-    FetchAccess(io_read, λ memory address => match io_file_read(memory.file, address) { None => False, Some(_) => True })
+    FetchAccess(io_read, λ memory address => match io_file_read(memory.file.bytes, address) { None => False, Some(_) => True })
 }
 fn io_data_access() → ByteReadAccess<IoMemory> { ByteReadAccess(io_read) }
 fn io_linux() → LinuxIo<IoMemory> {
@@ -77,7 +121,7 @@ fn io_linux() → LinuxIo<IoMemory> {
 
 // The process at its entry: the file as loaded, anything at all in the page,
 // registers and flags arbitrary.
-fn io_initial(file: List<BitVec(8)>, page: Nat → BitVec(8), gprs: Gprs, flags: Flags) → MachineState<IoMemory> {
+fn io_initial(file: IoImage, page: Nat → BitVec(8), gprs: Gprs, flags: Flags) → MachineState<IoMemory> {
     MachineState(gprs, flags, io_entry(), IoMemory(file, page))
 }
 
@@ -113,7 +157,7 @@ theorem io_read_stored(memory: IoMemory, bytes: List<BitVec(8)>, i: Nat, byte: B
     let stored = io_store_offset(memory, 0, bytes);
     j(sym(offset), λ found _ => (match found {
             Some(k) => Some(stored.page(k)),
-            None => io_file_read(stored.file, bitvec_nat::word_of_nat(64, io_page_base() + i)),
+            None => io_image_read(stored.file, bitvec_nat::word_of_nat(64, io_page_base() + i)),
         }) = Some(byte),
         cong_fn<BitVec(8), Option<BitVec(8)>>(λ b => Some(b),
             j(sym(trans(cong_fn<Nat, Option<BitVec(8)>>(λ k => bytes.nth(k), Nat::sub_zero(i)), present)),
@@ -171,28 +215,41 @@ fn Stored(page: Nat → BitVec(8), offset: Nat, bytes: List<BitVec(8)>) → Type
 }
 
 // The page read at an address in it.
-theorem io_read_page(file: List<BitVec(8)>, page: Nat → BitVec(8), address: BitVec(64), i: Nat, inside: i < 4096,
+theorem io_read_page(file: IoImage, page: Nat → BitVec(8), address: BitVec(64), i: Nat, inside: i < 4096,
     at: address.toNat() = io_page_base() + i): io_read(IoMemory(file, page), address) = Some(page(i)) {
     j(sym(trans(cong_fn<Nat, Option<Nat>>(λ a => io_offset_of(a), at), io_offset_in_page(i, inside))),
         λ found _ => (match found {
             Some(k) => Some(page(k)),
-            None => io_file_read(file, address),
+            None => io_image_read(file, address),
         }) = Some(page(i)), refl)
 }
 
 // A store at the page's `i`-th byte is a store at offset `i`.
-theorem store_at_offset(memory: IoMemory, address: BitVec(64), i: Nat, bytes: List<BitVec(8)>,
+// An address below the frame is not in it.
+theorem io_frame_offset_below(a: Nat, below: a < io_frame_base()): io_frame_offset(a) = None {
+    j(sym(io_leb_false(io_frame_base(), a, below)), λ b _ => (match b as λ _ => Option<Nat> {
+            False => None,
+            True => match Succ(a).leb(io_frame_base() + 4096) { False => None, True => Some(a -io_frame_base()) },
+        }) = None, refl)
+}
+theorem store_at_offset(memory: IoMemory, address: BitVec(64), i: Nat, bytes: List<BitVec(8)>, inside: i < 4096,
     at: address.toNat() = io_page_base() + i): io_store(memory, address, bytes) = io_store_offset(memory, i, bytes) {
-    cong_fn<Nat, IoMemory>(λ offset => io_store_offset(memory, offset, bytes),
-        trans(cong_fn<Nat, Nat>(λ a => a -io_page_base(), at),
-            trans(cong_fn<Nat, Nat>(λ a => a -io_page_base(), Nat::add_comm(io_page_base(), i)), Nat::add_sub_cancel(i, io_page_base()))))
+    let none: (io_frame_offset(address.toNat()) = None) =
+        trans(cong_fn<Nat, Option<Nat>>(λ a => io_frame_offset(a), at), io_frame_offset_below(io_page_base() + i, { omega }));
+    trans(j(none, λ found _ => io_store(memory, address, bytes) = (match found {
+                Some(start) => IoMemory(io_frame_store_offset(memory.file, start, bytes), memory.page),
+                None => io_store_offset(memory, address.toNat() -io_page_base(), bytes),
+            }), refl),
+        cong_fn<Nat, IoMemory>(λ offset => io_store_offset(memory, offset, bytes),
+            trans(cong_fn<Nat, Nat>(λ a => a -io_page_base(), at),
+                trans(cong_fn<Nat, Nat>(λ a => a -io_page_base(), Nat::add_comm(io_page_base(), i)), Nat::add_sub_cancel(i, io_page_base())))))
 }
 theorem page_address(offset: Nat, room: offset + 8 <= 4096): BitVec::ofNat(0x410000 + offset, n := 64).toNat() = 0x410000 + offset {
     BitVec::toNat_ofNat(64, 0x410000 + offset, { omega })
 }
 theorem page_writable(memory: IoMemory, offset: Nat, room: offset + 8 <= 4096): IoWritable(memory, BitVec::ofNat(0x410000 + offset), 8) {
     let value = page_address(offset, room);
-    ⟨j(sym(value), λ a _ => io_page_base() <= a, { omega }), j(sym(value), λ a _ => a + 8 <= io_page_base() + 4096, { omega })⟩
+    Inl(⟨j(sym(value), λ a _ => io_page_base() <= a, { omega }), j(sym(value), λ a _ => a + 8 <= io_page_base() + 4096, { omega })⟩)
 }
 
 // A store holds what it stored ...
@@ -299,7 +356,7 @@ theorem stored_sends(memory: IoMemory, offset: Nat, bytes: List<BitVec(8)>, held
         let read: (io_read(memory, bitvec_nat::word_of_nat(64, buffer.toNat() + i)) = Some(memory.page(i + offset))) =
             j(sym(found), λ o _ => (match o {
                     Some(k) => Some(memory.page(k)),
-                    None => io_file_read(memory.file, bitvec_nat::word_of_nat(64, buffer.toNat() + i)),
+                    None => io_image_read(memory.file, bitvec_nat::word_of_nat(64, buffer.toNat() + i)),
                 }) = Some(memory.page(i + offset)), refl);
         trans(read, cong_fn<BitVec(8), Option<BitVec(8)>>(λ b => Some(b), held(i, byte, present)))
     }
@@ -331,9 +388,21 @@ theorem io_file_read_at(file: List<BitVec(8)>, k: Nat, byte: BitVec(8), inside: 
     j(sym(file_offset), λ found _ => (match found as λ _ => Option<BitVec(8)> { None => None, Some(offset) => file.nth(offset) }) = Some(byte), present)
 }
 
+// The image's file bytes, read through the image at their address.
+theorem io_image_read_at(file: IoImage, k: Nat, byte: BitVec(8), inside: k < 65536, present: file.bytes.nth(k) = Some(byte)):
+    io_image_read(file, bitvec_nat::word_of_nat(64, 0x400000 + k)) = Some(byte) {
+    let w = bitvec_nat::word_of_nat(64, 0x400000 + k);
+    let value = bitvec_nat::toNat_word_of_nat(64, 0x400000 + k, io_code_bound(k, inside));
+    let file_offset = trans(cong_fn<Nat, Option<Nat>>(λ a => io_file_offset(a), value), io_file_offset_at(k, inside));
+    j(sym(file_offset), λ found _ => (match found {
+            None => match io_frame_offset(w.toNat()) { Some(offset) => Some(file.frame(offset)), None => file.rest(w) },
+            Some(offset) => file.bytes.nth(offset),
+        }) = Some(byte), present)
+}
+
 // A byte of the file reads back, whatever the page holds.
-theorem io_read_file(file: List<BitVec(8)>, page: Nat → BitVec(8), k: Nat, byte: BitVec(8), inside: k < 65536,
-    present: file.nth(k) = Some(byte)):
+theorem io_read_file(file: IoImage, page: Nat → BitVec(8), k: Nat, byte: BitVec(8), inside: k < 65536,
+    present: file.bytes.nth(k) = Some(byte)):
     io_read(IoMemory(file, page), bitvec_nat::word_of_nat(64, 0x400000 + k)) = Some(byte) {
     let below: (Succ(0x400000 + k) <= 0x400000 + 65536) = omega;
     let value = bitvec_nat::toNat_word_of_nat(64, 0x400000 + k, io_code_bound(k, inside));
@@ -346,9 +415,9 @@ theorem io_read_file(file: List<BitVec(8)>, page: Nat → BitVec(8), k: Nat, byt
             }) = None, refl));
     j(sym(page_offset), λ found _ => (match found {
             Some(offset) => Some(page(offset)),
-            None => io_file_read(file, bitvec_nat::word_of_nat(64, 0x400000 + k)),
+            None => io_image_read(file, bitvec_nat::word_of_nat(64, 0x400000 + k)),
         }) = Some(byte),
-        io_file_read_at(file, k, byte, inside, present))
+        io_image_read_at(file, k, byte, inside, present))
 }
 
 theorem io_no_carry(k: Nat, inside: k < 65536):
@@ -373,26 +442,29 @@ theorem io_no_carry(k: Nat, inside: k < 65536):
 
 // Code placed at file offset `k` onward is resident at `0x400000 + k`, whatever
 // the page holds: one induction over the code, with no byte evaluated.
-theorem io_suffix_resident(file: List<BitVec(8)>, page: Nat → BitVec(8), code: List<BitVec(8)>): (k: Nat) →
+theorem io_suffix_resident(file: IoImage, page: Nat → BitVec(8), code: List<BitVec(8)>): (k: Nat) →
     k + code.len() <= 65536 →
-    ((i: Nat) → (byte: BitVec(8)) → code.nth(i) = Some(byte) → file.nth(k + i) = Some(byte)) →
+    ((i: Nat) → (byte: BitVec(8)) → code.nth(i) = Some(byte) → file.bytes.nth(k + i) = Some(byte)) →
     CodeResident(io_fetch_access(), IoMemory(file, page), code, bitvec_nat::word_of_nat(64, 0x400000 + k)) {
     match code {
         Nil => λ k fits placed => trivial,
         Cons(byte, rest) => λ k fits placed => {
             let inside: (k < 65536) = Nat::le_trans(Succ(k), k + Succ(rest.len()), 65536, Nat::le_succ_succ(k, k + rest.len(), Nat::le_add_l(k, rest.len())), fits);
             let read = io_read_file(file, page, k, byte, inside, placed(0, byte, refl));
-            let fetched = io_file_read_at(file, k, byte, inside, placed(0, byte, refl));
+            let fetched = io_file_read_at(file.bytes, k, byte, inside, placed(0, byte, refl));
             let later = io_suffix_resident(file, page, rest, Succ(k), j(sym(Nat::add_succ_left(k, rest.len())), λ n _ => n <= 65536, fits),
-                λ i found present => j(sym(Nat::add_succ_left(k, i)), λ at _ => file.nth(at) = Some(found), placed(Succ(i), found, present)));
+                λ i found present => j(sym(Nat::add_succ_left(k, i)), λ at _ => file.bytes.nth(at) = Some(found), placed(Succ(i), found, present)));
             ⟨j(sym(fetched), λ found _ => (match found as λ _ => bool::Bool { None => False, Some(_) => True }) = True, refl),
              ⟨read, ⟨io_no_carry(k, inside), later⟩⟩⟩
         },
     }
 }
 
-theorem io_code_resident(header, code: List<BitVec(8)>, page: Nat → BitVec(8), fits: header.len() + code.len() <= 65536):
-    CodeResident(io_fetch_access(), IoMemory(header ++ code, page), code, bitvec_nat::word_of_nat(64, 0x400000 + header.len())) {
-    io_suffix_resident(header ++ code, page, code, header.len(), fits, λ i byte present => trans(cong_fn<Nat, Option<BitVec(8)>>(λ at => (header ++ code).nth(at), Nat::add_comm(header.len(), i)),
-        trans(header.nth_append_r(code, i), present)))
+// Whatever the frame, the rest and the page hold.
+theorem io_code_resident(header, code: List<BitVec(8)>, frame: Nat → BitVec(8), rest: BitVec(64) → Option<BitVec(8)>,
+    page: Nat → BitVec(8), fits: header.len() + code.len() <= 65536):
+    CodeResident(io_fetch_access(), IoMemory(IoImage(header ++ code, frame, rest), page), code, bitvec_nat::word_of_nat(64, 0x400000 + header.len())) {
+    io_suffix_resident(IoImage(header ++ code, frame, rest), page, code, header.len(), fits, λ i byte present =>
+        trans(cong_fn<Nat, Option<BitVec(8)>>(λ at => (header ++ code).nth(at), Nat::add_comm(header.len(), i)),
+            trans(header.nth_append_r(code, i), present)))
 }

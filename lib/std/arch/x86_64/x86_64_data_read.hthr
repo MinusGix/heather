@@ -105,6 +105,104 @@ theorem byte_load_preserves<M>(load: ByteLoad, byte: BitVec(8), before: MachineS
         False => read_gpr(register, before.gprs), True => byte.zero_extend(56),
     }, distinct)
 }
+// Normal-path MOV r64, qword [base] (Intel SDM Vol. 2B, MOV: REX.W + 8B /r),
+// over the same canonical ModRM/SIB/displacement subset as the byte load. Its
+// eight bytes are read low first, each through the profile's byte access; a
+// word that any byte of is absent has no normal step.
+record WordLoad { destination: Gpr, base: Gpr }
+
+fn word_load_bytes(load: WordLoad) → List<BitVec(8)> {
+    List::append<BitVec(8)>([rex_w_rr(load.base, load.destination), BitVec::ofNat(0x8b),
+        byte_from_fields(gpr_bit0(load.base), gpr_bit1(load.base), gpr_bit2(load.base),
+            gpr_bit0(load.destination), gpr_bit1(load.destination), gpr_bit2(load.destination),
+            byte_load_displaced(load.base), False)],
+        List::append<BitVec(8)>(
+            match byte_load_sib(load.base) { True => [BitVec::ofNat(0x24)], False => [] },
+            match byte_load_displaced(load.base) { True => [BitVec::ofNat(0)], False => [] }))
+}
+fn word_of_reads(o0, o1, o2, o3, o4, o5, o6, o7: Option<BitVec(8)>) → Option<BitVec(64)> {
+    match o0 { None => None, Some(b0) => match o1 { None => None, Some(b1) => match o2 { None => None, Some(b2) =>
+    match o3 { None => None, Some(b3) => match o4 { None => None, Some(b4) => match o5 { None => None, Some(b5) =>
+    match o6 { None => None, Some(b6) => match o7 { None => None, Some(b7) =>
+        Some(immediate_from_bytes(b0, b1, b2, b3, b4, b5, b6, b7)) } } } } } } } }
+}
+fn read_word<M>(access: ByteReadAccess<M>, memory: M, address: BitVec(64)) → Option<BitVec(64)> {
+    word_of_reads(access.read(memory, address), access.read(memory, next_rip(address, 1)),
+        access.read(memory, next_rip(address, 2)), access.read(memory, next_rip(address, 3)),
+        access.read(memory, next_rip(address, 4)), access.read(memory, next_rip(address, 5)),
+        access.read(memory, next_rip(address, 6)), access.read(memory, next_rip(address, 7)))
+}
+fn word_load_after<M>(load: WordLoad, word: BitVec(64), before: MachineState<M>) → MachineState<M> {
+    MachineState(gprs := write_gpr(load.destination, word, before.gprs),
+        flags := before.flags, rip := next_rip(before.rip, word_load_bytes(load).len()), memory := before.memory)
+}
+// All eight bytes lie below the canonical boundary, so none wraps.
+record WordLoadStep<M>(access: ByteReadAccess<M>, load: WordLoad, word: BitVec(64),
+    before, after: MachineState<M>) {
+    canonical: read_gpr(load.base, before.gprs).toNat() + 8 <= Nat::pow(2, 47),
+    present: read_word(access, before.memory, read_gpr(load.base, before.gprs)) = Some(word),
+    execution: after = word_load_after(load, word, before),
+}
+
+theorem word_load_same<M>(access: ByteReadAccess<M>, load: WordLoad,
+    before, first, second: MachineState<M>, left, right: BitVec(64),
+    left_step: WordLoadStep<M>(access, load, left, before, first),
+    right_step: WordLoadStep<M>(access, load, right, before, second)):
+    first = second {
+    let word = Option::some_inj(left, right,
+        trans(sym(left_step.present), right_step.present));
+    trans(left_step.execution,
+        trans(cong_fn(λ value => word_load_after(load, value, before), word),
+            sym(right_step.execution)))
+}
+
+theorem word_load_after_respects_defined<M>(load: WordLoad, word: BitVec(64),
+    left, right: MachineState<M>, same: SameDefinedState<M>(left, right)):
+    SameDefinedState<M>(word_load_after(load, word, left), word_load_after(load, word, right)) {
+    SameDefinedState(
+        cong_fn(λ (gprs: Gprs) => write_gpr(load.destination, word, gprs), same.gprs),
+        cong_fn(λ (rip: BitVec(64)) => next_rip(rip, word_load_bytes(load).len()), same.rip),
+        same.memory, same.cf, same.pf, same.zf, same.sf, same.of)
+}
+
+theorem word_load_respects_defined<M>(access: ByteReadAccess<M>, load: WordLoad,
+    before_left, before_right, after_left, after_right: MachineState<M>,
+    left_word, right_word: BitVec(64), before_same: SameDefinedState<M>(before_left, before_right),
+    left: WordLoadStep<M>(access, load, left_word, before_left, after_left),
+    right: WordLoadStep<M>(access, load, right_word, before_right, after_right)):
+    SameDefinedState<M>(after_left, after_right) {
+    let address = cong_fn(λ (gprs: Gprs) => read_gpr(load.base, gprs), before_same.gprs);
+    let read_same = trans(
+        cong_fn(λ (memory: M) => read_word(access, memory, read_gpr(load.base, before_left.gprs)), before_same.memory),
+        cong_fn(λ (at: BitVec(64)) => read_word(access, before_right.memory, at), address));
+    let word = Option::some_inj(left_word, right_word,
+        trans(sym(left.present), trans(read_same, right.present)));
+    let same_result = same_defined_trans(word_load_after(load, left_word, before_left),
+        word_load_after(load, left_word, before_right), word_load_after(load, right_word, before_right),
+        word_load_after_respects_defined(load, left_word, before_left, before_right, before_same),
+        same_defined_of_equal(word_load_after(load, left_word, before_right),
+            word_load_after(load, right_word, before_right),
+            cong_fn(λ value => word_load_after(load, value, before_right), word)));
+    same_defined_trans(after_left, word_load_after(load, left_word, before_left), after_right,
+        same_defined_of_equal(after_left, word_load_after(load, left_word, before_left), left.execution),
+        same_defined_trans(word_load_after(load, left_word, before_left),
+            word_load_after(load, right_word, before_right), after_right,
+            same_result,
+            same_defined_of_equal(word_load_after(load, right_word, before_right), after_right,
+                sym(right.execution))))
+}
+
+theorem word_load_result<M>(load: WordLoad, word: BitVec(64), before: MachineState<M>):
+    read_gpr(load.destination, word_load_after(load, word, before).gprs) = word {
+    read_gpr_after_write(load.destination, word, before.gprs)
+}
+theorem word_load_preserves<M>(load: WordLoad, word: BitVec(64), before: MachineState<M>, register: Gpr,
+    distinct: nat_same(gpr_index(load.destination), gpr_index(register)) = False):
+    read_gpr(register, word_load_after(load, word, before).gprs) = read_gpr(register, before.gprs) {
+    cong_fn<Bool, BitVec(64)>(λ same => match same {
+        False => read_gpr(register, before.gprs), True => word,
+    }, distinct)
+}
 fn ReadThenProtected(load: ByteLoad, protected: Gpr → Type, register: Gpr) → Type {
     (nat_same(gpr_index(load.destination), gpr_index(register)) = False) ∧ protected(register)
 }

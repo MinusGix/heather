@@ -17,9 +17,10 @@ fn claimed_runs_are_every_run() {
 // Each change is refused where it is wrong, not by a missing name: a decoder
 // that reads ADD as SUB, takes a store for a register form, drops an ADD's
 // immediate, looks for SYSCALL at another opcode, or reads a byte store's
-// opcode as the word store's is not complete on the forms; a run in which a
-// failed read may leave more junk than it asked for, or whose answers are
-// compared by kind alone, is not the claimed run.
+// opcode as the word store's, or misses the word load's opcode, is not
+// complete on the forms; a run in which a failed read or stat may leave more
+// junk than it asked for, or whose answers are compared by kind alone, is not
+// the claimed run.
 #[test]
 fn determinism_refusals() {
     let library = checker().semantic_image();
@@ -29,6 +30,7 @@ fn determinism_refusals() {
         ("immediate_dropped", "Cons(b0, _) => emitted_form(AddRI8(rm, b0)),", "Cons(_, _) => emitted_form(AddRI8(rm, BitVec::ofNat(0))),"),
         ("syscall_elsewhere", "match opcode.eq_dec(BitVec::ofNat(0x05)) {", "match opcode.eq_dec(BitVec::ofNat(0x06)) {"),
         ("byte_store_read_as_word", "match opcode.eq_dec(BitVec::ofNat(0x88)) {", "match opcode.eq_dec(BitVec::ofNat(0x89)) {"),
+        ("word_load_read_as_store", "match opcode.eq_dec(BitVec::ofNat(0x8b)) {", "match opcode.eq_dec(BitVec::ofNat(0x8a)) {"),
     ] {
         let bad = FORMS.replacen(from, to, 1);
         assert_ne!(bad, FORMS, "{name}");
@@ -41,6 +43,8 @@ fn determinism_refusals() {
     for (name, from, to) in [
         ("junk_unbounded", "(junk.len() <= read_gpr(Rdx, at.gprs).toNat()) ∧\n", "True ∧\n"),
         ("answers_by_kind", "ReadEvent(_, other) => result = other,", "ReadEvent(_, other) => True,"),
+        ("stat_answers_by_kind", "StatEvent(_, other) => result = other,", "StatEvent(_, other) => True,"),
+        ("stat_junk_unbounded", "(junk.len() <= stat_length()) ∧\n", "True ∧\n"),
     ] {
         let bad = DETERMINISM.replacen(from, to, 1);
         assert_ne!(bad, DETERMINISM, "{name}");

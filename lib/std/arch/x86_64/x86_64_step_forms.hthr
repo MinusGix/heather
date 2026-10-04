@@ -112,7 +112,9 @@ fn decode_register_form(opcode: BitVec(8), rm, reg: Gpr, rest: List<BitVec(8)>) 
 }
 
 // After REX and an opcode that is not 0F or B8+r: mod 11 is a register form,
-// mod 00 a store into [base], of a byte (88 /r) or a word (89 /r).
+// mod 00 a store into [base], of a byte (88 /r) or a word (89 /r), or the
+// word load from [base] (8B /r), whose SIB or displacement byte, if any, the
+// decoder never reads.
 fn decode_modrm_form(rex, opcode: BitVec(8), rest: List<BitVec(8)>) → Option<StepForm> {
     match rest {
         Nil => None,
@@ -120,7 +122,10 @@ fn decode_modrm_form(rex, opcode: BitVec(8), rest: List<BitVec(8)>) → Option<S
             True => decode_register_form(opcode, rm_of(rex, modrm), reg_of(rex, modrm), tail),
             False => match opcode.eq_dec(BitVec::ofNat(0x88)) {
                 Inl(_) => Some(FormStore(StoreByte(ByteStore(base := rm_of(rex, modrm), source := reg_of(rex, modrm))))),
-                Inr(_) => Some(FormStore(StoreWord(WordStore(base := rm_of(rex, modrm), source := reg_of(rex, modrm))))),
+                Inr(_) => match opcode.eq_dec(BitVec::ofNat(0x8b)) {
+                    Inl(_) => Some(FormEmitted(EmitWordLoad(WordLoad(destination := reg_of(rex, modrm), base := rm_of(rex, modrm))))),
+                    Inr(_) => Some(FormStore(StoreWord(WordStore(base := rm_of(rex, modrm), source := reg_of(rex, modrm))))),
+                },
             },
         },
     }
@@ -380,6 +385,18 @@ theorem load_form_complete(load: ByteLoad, rest: List<BitVec(8)>):
             rm_of_fields(load.base, load.destination, byte_load_displaced(load.base), False)))
 }
 
+theorem word_load_form_complete(load: WordLoad, rest: List<BitVec(8)>):
+    decode_step_form(word_load_bytes(load) ++ rest) = Some(FormEmitted(EmitWordLoad(load))) {
+    let modrm = byte_from_fields(gpr_bit0(load.base), gpr_bit1(load.base), gpr_bit2(load.base),
+        gpr_bit0(load.destination), gpr_bit1(load.destination), gpr_bit2(load.destination),
+        byte_load_displaced(load.base), False);
+    let rex = rex_w_rr(load.base, load.destination);
+    trans(cong_fn(λ (d: Gpr) => Some(FormEmitted(EmitWordLoad(WordLoad(destination := d, base := rm_of(rex, modrm))))),
+            reg_of_fields(load.base, load.destination, byte_load_displaced(load.base), False)),
+        cong_fn(λ (b: Gpr) => Some(FormEmitted(EmitWordLoad(WordLoad(destination := load.destination, base := b)))),
+            rm_of_fields(load.base, load.destination, byte_load_displaced(load.base), False)))
+}
+
 theorem word_store_form_complete(store: WordStore, rest: List<BitVec(8)>):
     decode_step_form(word_store_bytes(store) ++ rest) = Some(FormStore(StoreWord(store))) {
     let modrm = byte_from_fields(gpr_bit0(store.base), gpr_bit1(store.base), gpr_bit2(store.base),
@@ -464,6 +481,7 @@ theorem step_form_complete(form: StepForm, rest: List<BitVec(8)>):
         FormEmitted(emitted) => match emitted as λ e => decode_step_form(emitted_bytes(e) ++ rest) = Some(FormEmitted(e)) {
             EmitOrdinary(instruction) => ordinary_form_complete(instruction, rest),
             EmitLoad(load) => load_form_complete(load, rest),
+            EmitWordLoad(load) => word_load_form_complete(load, rest),
             EmitShort(control) => short_form_complete(control, rest),
             EmitNear(control) => near_form_complete(control, rest),
         },
