@@ -295,12 +295,12 @@ theorem stdout_then(steps: List<WriteStep>, after: List<LinuxEvent>): (bytes: Li
 
 // Reads send nothing, whatever was read before the history starts.
 theorem reads_send_nothing_from(steps: List<EofStep<True>>, tail: List<LinuxEvent>): (seen: List<BitVec(8)>) →
-    sent_to(BitVec::ofNat(1), eof_run<True, False>(λ _ _ _ rest => rest, λ _ _ _ => Nil, steps, AtEnd, tail, seen)) = sent_to(BitVec::ofNat(1), tail) {
+    sent_to(BitVec::ofNat(1), eof_run<True, False>(BitVec::ofNat(0), λ _ _ _ rest => rest, λ _ _ _ => Nil, read_exits(), steps, AtEnd, tail, seen)) = sent_to(BitVec::ofNat(1), tail) {
     match steps as λ ss => (seen: List<BitVec(8)>) →
-            sent_to(BitVec::ofNat(1), eof_run<True, False>(λ _ _ _ rest => rest, λ _ _ _ => Nil, ss, AtEnd, tail, seen)) = sent_to(BitVec::ofNat(1), tail) {
+            sent_to(BitVec::ofNat(1), eof_run<True, False>(BitVec::ofNat(0), λ _ _ _ rest => rest, λ _ _ _ => Nil, read_exits(), ss, AtEnd, tail, seen)) = sent_to(BitVec::ofNat(1), tail) {
         Nil => λ seen => refl,
         Cons(step, rest) => match step as λ st => (seen: List<BitVec(8)>) →
-                sent_to(BitVec::ofNat(1), eof_run<True, False>(λ _ _ _ rest => rest, λ _ _ _ => Nil, Cons(st, rest), AtEnd, tail, seen)) =
+                sent_to(BitVec::ofNat(1), eof_run<True, False>(BitVec::ofNat(0), λ _ _ _ rest => rest, λ _ _ _ => Nil, read_exits(), Cons(st, rest), AtEnd, tail, seen)) =
                     sent_to(BitVec::ofNat(1), tail) {
             Chunk(bytes, _) => λ seen => reads_send_nothing_from(rest, tail, seen ++ bytes),
             Interrupted => λ seen => reads_send_nothing_from(rest, tail, seen),
