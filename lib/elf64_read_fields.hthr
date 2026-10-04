@@ -212,12 +212,12 @@ fn field_stored(memory: IoMemory, n, offset, separator: Nat) → IoMemory {
 // A store to the page at `offset` (elf64_io's `store_at_offset`).
 theorem page_store(memory: IoMemory, offset: Nat, bytes: List<BitVec(8)>, room: offset + 8 <= 4096):
     io_store(memory, BitVec::ofNat(0x410000 + offset), bytes) = io_store_offset(memory, offset, bytes) {
-    store_at_offset(memory, BitVec::ofNat(0x410000 + offset), offset, bytes, page_address(offset, room))
+    store_at_offset(memory, BitVec::ofNat(0x410000 + offset), offset, bytes, { omega }, page_address(offset, room))
 }
 
 // One field: its count's two words formatted and stored, the counts still in
 // their registers.
-theorem field_prints(file: List<BitVec(8)>, count: Gpr, offset, separator: Nat, codes: FieldsCodes, format: FieldsFormat(codes), at: Nat,
+theorem field_prints(file: IoImage, count: Gpr, offset, separator: Nat, codes: FieldsCodes, format: FieldsFormat(codes), at: Nat,
     pieces: (page: Nat → BitVec(8)) → FieldPieces(IoMemory(file, page), count, offset, separator, codes.low, codes.high, at),
     n: Nat, room: offset + 12 <= 4096, page: Nat → BitVec(8), state: MachineState<IoMemory>,
     memory_is: state.memory = IoMemory(file, page), rip_is: state.rip = eof_rip(at),
@@ -383,7 +383,7 @@ theorem line_stored(memory: IoMemory, a, b, c: Nat, sa: a < 10000000, sb: b < 10
 
 // From the tail at `at` with the counts in R13, R14 and R15: format and
 // store each, write the line, exit 0 (or exit 1 at a failed write).
-theorem fields_tail_runs<C>(file: List<BitVec(8)>, at: Nat, rep: Gprs → C → Type, three: ThreeCounts<C>(rep),
+theorem fields_tail_runs<C>(file: IoImage, at: Nat, rep: Gprs → C → Type, three: ThreeCounts<C>(rep),
     codes: FieldsCodes, format: FieldsFormat(codes), pj: PrintJumps,
     resident: (page: Nat → BitVec(8)) → CodeResident(io_fetch_access(), IoMemory(file, page), fields_tail(codes.low, codes.high, pj),
         eof_rip(at)),

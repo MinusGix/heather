@@ -22,11 +22,12 @@ struct Fragment { name: String, ops: Vec<Op> }
 struct Layout { bytes: Vec<u8>, symbols: BTreeMap<String, u64>, placed: BTreeMap<u64, (Op, Vec<u8>, String)> }
 // The call profile's file: the fixed RX profile's header, with its entry
 // after the third program header and a zero-filled RW PT_LOAD at 0x401000.
-pub(super) fn image(code: &[u8]) -> Result<Vec<u8>, String> { paged_image(code, 0x401000) }
+pub(super) fn image(code: &[u8]) -> Result<Vec<u8>, String> { paged_image(code, 0x401000, 0x1000) }
 // The read profile's file (elf64_calls' `io_elf_header`): the same, with the
-// RW page just past the file's 64-KiB window, so the code may fill it.
-pub(super) fn io_image(code: &[u8]) -> Result<Vec<u8>, String> { paged_image(code, 0x410000) }
-fn paged_image(code: &[u8], page: u64) -> Result<Vec<u8>, String> {
+// RW pages just past the file's 64-KiB window, so the code may fill it: the
+// page at 0x410000 and the frame at 0x411000 (elf64_io), one 8-KiB segment.
+pub(super) fn io_image(code: &[u8]) -> Result<Vec<u8>, String> { paged_image(code, 0x410000, 0x2000) }
+fn paged_image(code: &[u8], page: u64, memsz: u64) -> Result<Vec<u8>, String> {
     if ENTRY + code.len() as u64 > page { return Err("code overlaps the owned page".into()); }
     let mut file = super::elf::image(code)?;
     let size = HEADER + code.len();
@@ -36,7 +37,7 @@ fn paged_image(code: &[u8], page: u64) -> Result<Vec<u8>, String> {
     file[96..104].copy_from_slice(&(size as u64).to_le_bytes());
     file[104..112].copy_from_slice(&(size as u64).to_le_bytes());
     file.extend(1u32.to_le_bytes()); file.extend(6u32.to_le_bytes());
-    for n in [0x1000u64, page, page, 0, 0x1000, 0x1000] { file.extend(n.to_le_bytes()); }
+    for n in [0x1000u64, page, page, 0, memsz, 0x1000] { file.extend(n.to_le_bytes()); }
     file.extend(code);
     Ok(file)
 }

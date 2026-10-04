@@ -73,13 +73,13 @@ record FilterJumps { ed: BitVec(32), sd: BitVec(32), ld: BitVec(32), cd: BitVec(
 // write loop (whose end jumps back to the read), the failure tail, then the
 // finish. A layout (x86_64_layout) whose step is measured by its length `p`.
 fn filter_parts(code: StructuredCode, jumps: FilterJumps, pj: PrintJumps) → List<List<BitVec(8)>> {
-    [canonical_block_bytes(state_init_block()), read_head_code(jumps.ed, jumps.sd), canonical_block_bytes(filter_setup_block()),
+    [canonical_block_bytes(state_init_block()), read_head_code(FdStdin, jumps.ed, jumps.sd), canonical_block_bytes(filter_setup_block()),
      byte_load_bytes(filter_load()), structured_bytes(code), byte_store_bytes(filter_store()), canonical_block_bytes(filter_advance_block()),
      near_control_bytes(JumpIfNear(NE, jumps.ld)), canonical_block_bytes(filter_close_block()), near_control_bytes(JumpZeroNear(jumps.cd)),
      write_loop_code(pj), fail_tail_code(jumps.rd)]
 }
 fn filter_lens(p: Nat) → List<Nat> {
-    [state_init_len(), read_head_len(), filter_setup_len(), filter_load_len(), p, 3, filter_advance_len(), 6, filter_close_len(), 6,
+    [state_init_len(), read_head_len(FdStdin), filter_setup_len(), filter_load_len(), p, 3, filter_advance_len(), 6, filter_close_len(), 6,
      write_loop_len(), fail_tail_len()]
 }
 fn filter_code(code: StructuredCode, jumps: FilterJumps, pj: PrintJumps, finish: List<BitVec(8)>) → List<BitVec(8)> {
@@ -87,7 +87,7 @@ fn filter_code(code: StructuredCode, jumps: FilterJumps, pj: PrintJumps, finish:
 }
 theorem filter_measured(code: StructuredCode, jumps: FilterJumps, pj: PrintJumps, p: Nat, p_is: structured_bytes(code).len() = p):
     LayoutMeasured(filter_parts(code, jumps, pj), filter_lens(p)) {
-    ⟨refl, ⟨read_head_code_len(jumps.ed, jumps.sd), ⟨refl, ⟨refl, ⟨p_is, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨write_loop_code_len(pj),
+    ⟨refl, ⟨read_head_code_len(FdStdin, jumps.ed, jumps.sd), ⟨refl, ⟨refl, ⟨p_is, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨write_loop_code_len(pj),
         ⟨fail_tail_code_len(jumps.rd), trivial⟩⟩⟩⟩⟩⟩⟩⟩⟩⟩⟩⟩
 }
 // The code's length from the step's and the finish's, over open parts.
@@ -116,7 +116,7 @@ fn fl_at_retry(p: Nat) → Nat { ft_at_jz(fl_at_failed(p)) }
 // The program's pieces, resident at their offsets.
 record FilterPieces(memory: IoMemory, code: StructuredCode, jumps: FilterJumps, pj: PrintJumps, finish: List<BitVec(8)>) {
     init_at: CodeResident(io_fetch_access(), memory, canonical_block_bytes(state_init_block()), eof_rip(fl_at(structured_bytes(code).len(), 0))),
-    head: ReadHead(memory, fl_at_read(structured_bytes(code).len()), jumps.ed, jumps.sd),
+    head: ReadHead(FdStdin, memory, fl_at_read(structured_bytes(code).len()), jumps.ed, jumps.sd),
     setup_at: CodeResident(io_fetch_access(), memory, canonical_block_bytes(filter_setup_block()), eof_rip(fl_at_setup(structured_bytes(code).len()))),
     load_at: CodeResident(io_fetch_access(), memory, byte_load_bytes(filter_load()), eof_rip(fl_at_load(structured_bytes(code).len()))),
     step_at: CodeResident(io_fetch_access(), memory, structured_bytes(code), eof_rip(fl_at_step(structured_bytes(code).len()))),
@@ -136,7 +136,7 @@ theorem filter_pieces(memory: IoMemory, code: StructuredCode, jumps: FilterJumps
     let p = structured_bytes(code).len();
     let piece = layout_resident(io_fetch_access(), memory, io_entry(), finish, filter_parts(code, jumps, pj), filter_lens(p),
         filter_measured(code, jumps, pj, p, refl), 0, resident);
-    FilterPieces(piece(0), read_head(memory, fl_at_read(p), jumps.ed, jumps.sd, piece(1)), piece(2), piece(3), piece(4), piece(5), piece(6),
+    FilterPieces(piece(0), read_head(FdStdin, memory, fl_at_read(p), jumps.ed, jumps.sd, piece(1)), piece(2), piece(3), piece(4), piece(5), piece(6),
         piece(7), piece(8), piece(9), write_loop_resident(memory, fl_at_write(p), pj, piece(10)), fail_tail(memory, fl_at_failed(p), jumps.rd, piece(11)),
         piece(12))
 }
@@ -148,16 +148,16 @@ theorem filter_pieces(memory: IoMemory, code: StructuredCode, jumps: FilterJumps
 // finish's first byte.
 
 record FilterTargets(p, done: Nat, jumps: FilterJumps, pj: PrintJumps) {
-    finish: near_branch_target(eof_rip(rh_at_jz(fl_at_read(p))), 6, jumps.ed) = eof_rip(done),
-    fail: near_branch_target(eof_rip(rh_at_js(fl_at_read(p))), 6, jumps.sd) = eof_rip(fl_at_failed(p)),
+    finish: near_branch_target(eof_rip(rh_at_jz(FdStdin, fl_at_read(p))), 6, jumps.ed) = eof_rip(done),
+    fail: near_branch_target(eof_rip(rh_at_js(FdStdin, fl_at_read(p))), 6, jumps.sd) = eof_rip(fl_at_failed(p)),
     again: near_branch_target(eof_rip(fl_at_jnz(p)), 6, jumps.ld) = eof_rip(fl_at_load(p)),
     quiet: near_branch_target(eof_rip(fl_at_cjz(p)), 6, jumps.cd) = eof_rip(fl_at_read(p)),
     retry: near_branch_target(eof_rip(fl_at_retry(p)), 6, jumps.rd) = eof_rip(fl_at_read(p)),
     write: WriteLoopTargets(fl_at_write(p), fl_at_read(p), pj),
 }
 record FilterJumpFacts(p, done: Nat, jumps: FilterJumps, pj: PrintJumps) {
-    finish: JumpsForward(rh_at_jz(fl_at_read(p)), 6, jumps.ed, done),
-    fail: JumpsForward(rh_at_js(fl_at_read(p)), 6, jumps.sd, fl_at_failed(p)),
+    finish: JumpsForward(rh_at_jz(FdStdin, fl_at_read(p)), 6, jumps.ed, done),
+    fail: JumpsForward(rh_at_js(FdStdin, fl_at_read(p)), 6, jumps.sd, fl_at_failed(p)),
     again: JumpsBack(fl_at_jnz(p), 6, jumps.ld, fl_at_load(p)),
     quiet: JumpsBack(fl_at_cjz(p), 6, jumps.cd, fl_at_read(p)),
     retry: JumpsBack(fl_at_retry(p), 6, jumps.rd, fl_at_read(p)),
@@ -168,8 +168,8 @@ theorem filter_targets(p, done: Nat, jumps: FilterJumps, pj: PrintJumps, facts: 
     FilterTargets(p, done, jumps, pj) {
     let entry = io_entry();
     FilterTargets(
-        finish := jumps_forward(entry, rh_at_jz(fl_at_read(p)), 6, jumps.ed, done, facts.finish),
-        fail := jumps_forward(entry, rh_at_js(fl_at_read(p)), 6, jumps.sd, fl_at_failed(p), facts.fail),
+        finish := jumps_forward(entry, rh_at_jz(FdStdin, fl_at_read(p)), 6, jumps.ed, done, facts.finish),
+        fail := jumps_forward(entry, rh_at_js(FdStdin, fl_at_read(p)), 6, jumps.sd, fl_at_failed(p), facts.fail),
         again := jumps_back(entry, fl_at_jnz(p), 6, jumps.ld, fl_at_load(p), facts.again),
         quiet := jumps_back(entry, fl_at_cjz(p), 6, jumps.cd, fl_at_read(p), facts.quiet),
         retry := jumps_back(entry, fl_at_retry(p), 6, jumps.rd, fl_at_read(p), facts.retry),
@@ -273,7 +273,7 @@ theorem room_fits<C>(shape: FilterShape<C>, facts: FilterFacts<C>(shape), input,
 // was read, the state registers hold the state `front` left, RSI is at the
 // next byte, RCX counts what is left, RDI is past the output, R12 is 1.
 
-record FilterAt<C>(shape: FilterShape<C>, file: List<BitVec(8)>, s0: C, front, back: List<BitVec(8)>, at: Nat, state: MachineState<IoMemory>) {
+record FilterAt<C>(shape: FilterShape<C>, file: IoImage, s0: C, front, back: List<BitVec(8)>, at: Nat, state: MachineState<IoMemory>) {
     page: Nat → BitVec(8),
     memory_is: state.memory = IoMemory(file, page),
     rip_is: state.rip = eof_rip(at),
@@ -343,7 +343,7 @@ record FilterStepped<C>(shape: FilterShape<C>, s: C, byte: BitVec(8), state, ste
 }
 
 theorem filter_stepped<C>(shape: FilterShape<C>, facts: FilterFacts<C>(shape), jumps: FilterJumps, pj: PrintJumps, finish: List<BitVec(8)>,
-    file: List<BitVec(8)>, s0: C, front, rest: List<BitVec(8)>, b: BitVec(8), inside: front.len() < 4096,
+    file: IoImage, s0: C, front, rest: List<BitVec(8)>, b: BitVec(8), inside: front.len() < 4096,
     fits: CountsFit(shape.counts, shape.step(filter_state(shape.step, front, s0), b).next),
     pieces: (page: Nat → BitVec(8)) → FilterPieces(IoMemory(file, page), shape.code, jumps, pj, finish),
     state: MachineState<IoMemory>, head: FilterAt<C>(shape, file, s0, front, Cons(b, rest), fl_at_load(structured_bytes(shape.code).len()), state)):
@@ -386,13 +386,13 @@ theorem filter_stepped<C>(shape: FilterShape<C>, facts: FilterFacts<C>(shape), j
 }
 
 // The byte at the write cursor, `o` bytes into the page, stored.
-record FilterStored(file: List<BitVec(8)>, page: Nat → BitVec(8), o: Nat, x: BitVec(8), p: Nat, stepped, stored: MachineState<IoMemory>) {
+record FilterStored(file: IoImage, page: Nat → BitVec(8), o: Nat, x: BitVec(8), p: Nat, stepped, stored: MachineState<IoMemory>) {
     step: StoreStep(io_fetch_access(), linux_writes(io_linux()), stepped, stored),
     memory_is: stored.memory = io_store_offset(IoMemory(file, page), o, [x]),
     rip_is: stored.rip = eof_rip(fl_at_advance(p)),
     gprs_is: stored.gprs = stepped.gprs,
 }
-theorem filter_stored(code: StructuredCode, jumps: FilterJumps, pj: PrintJumps, finish: List<BitVec(8)>, file: List<BitVec(8)>,
+theorem filter_stored(code: StructuredCode, jumps: FilterJumps, pj: PrintJumps, finish: List<BitVec(8)>, file: IoImage,
     page: Nat → BitVec(8), o: Nat, inside: o < 4096, x: BitVec(8),
     pieces: (page: Nat → BitVec(8)) → FilterPieces(IoMemory(file, page), code, jumps, pj, finish),
     stepped: MachineState<IoMemory>, memory_is: stepped.memory = IoMemory(file, page),
@@ -405,7 +405,7 @@ theorem filter_stored(code: StructuredCode, jumps: FilterJumps, pj: PrintJumps, 
     let room = filter_writable(o, inside);
     let rdi = read_gpr(Rdi, stepped.gprs);
     let writable: IoWritable(stepped.memory, rdi, 1) =
-        ⟨j(sym(at), λ v _ => io_page_base() <= v, room.left), j(sym(at), λ v _ => v + 1 <= io_page_base() + 4096, room.right)⟩;
+        Inl(⟨j(sym(at), λ v _ => io_page_base() <= v, room.left), j(sym(at), λ v _ => v + 1 <= io_page_base() + 4096, room.right)⟩);
     let stored = byte_store_after(writes, filter_store(), stepped);
     Exists(stored, FilterStored(
         step := byte_store_step(fetch, writes, filter_store(), stepped, refl,
@@ -414,7 +414,7 @@ theorem filter_stored(code: StructuredCode, jumps: FilterJumps, pj: PrintJumps, 
                     memory_is, rip_is, pieces(page).store_at))),
             writable),
         memory_is := trans(cong_fn<IoMemory, IoMemory>(λ m => io_store(m, rdi, [imm_byte0(read_gpr(Rdx, stepped.gprs))]), memory_is),
-            trans(cong_fn<BitVec(8), IoMemory>(λ y => io_store(memory, rdi, [y]), low), store_at_offset(memory, rdi, o, [x], at))),
+            trans(cong_fn<BitVec(8), IoMemory>(λ y => io_store(memory, rdi, [y]), low), store_at_offset(memory, rdi, o, [x], inside, at))),
         rip_is := rip_advance(io_entry(), stepped.rip, fl_at_store(structured_bytes(code).len()), 3, rip_is),
         gprs_is := refl))
 }
@@ -470,7 +470,7 @@ theorem filter_rdi_next(o, n: Nat, inside: o < 4096, small: n <= 1, rdi, flag: B
 // One byte: load it, step, store what it emits at the write cursor, advance.
 // ZF says whether the chunk is done.
 theorem filter_byte<C>(shape: FilterShape<C>, facts: FilterFacts<C>(shape), jumps: FilterJumps, pj: PrintJumps, finish: List<BitVec(8)>,
-    file: List<BitVec(8)>, s0: C, front, rest: List<BitVec(8)>, b: BitVec(8), inside: front.len() < 4096,
+    file: IoImage, s0: C, front, rest: List<BitVec(8)>, b: BitVec(8), inside: front.len() < 4096,
     fits: CountsFit(shape.counts, shape.step(filter_state(shape.step, front, s0), b).next),
     pieces: (page: Nat → BitVec(8)) → FilterPieces(IoMemory(file, page), shape.code, jumps, pj, finish),
     state: MachineState<IoMemory>, head: FilterAt<C>(shape, file, s0, front, Cons(b, rest), fl_at_load(structured_bytes(shape.code).len()), state)):
@@ -548,7 +548,7 @@ theorem filter_byte<C>(shape: FilterShape<C>, facts: FilterFacts<C>(shape), jump
 }
 
 // The JNZ, taken while bytes are left.
-theorem filter_again<C>(shape: FilterShape<C>, jumps: FilterJumps, pj: PrintJumps, finish: List<BitVec(8)>, file: List<BitVec(8)>, s0: C,
+theorem filter_again<C>(shape: FilterShape<C>, jumps: FilterJumps, pj: PrintJumps, finish: List<BitVec(8)>, file: IoImage, s0: C,
     front, back: List<BitVec(8)>,
     loop_target: near_branch_target(eof_rip(fl_at_jnz(structured_bytes(shape.code).len())), 6, jumps.ld) = eof_rip(fl_at_load(structured_bytes(shape.code).len())),
     pieces: (page: Nat → BitVec(8)) → FilterPieces(IoMemory(file, page), shape.code, jumps, pj, finish),
@@ -569,7 +569,7 @@ theorem filter_again<C>(shape: FilterShape<C>, jumps: FilterJumps, pj: PrintJump
 }
 
 // The JNZ, falling through to the close once the chunk is done.
-theorem filter_done<C>(shape: FilterShape<C>, jumps: FilterJumps, pj: PrintJumps, finish: List<BitVec(8)>, file: List<BitVec(8)>, s0: C,
+theorem filter_done<C>(shape: FilterShape<C>, jumps: FilterJumps, pj: PrintJumps, finish: List<BitVec(8)>, file: IoImage, s0: C,
     front, back: List<BitVec(8)>,
     pieces: (page: Nat → BitVec(8)) → FilterPieces(IoMemory(file, page), shape.code, jumps, pj, finish),
     state: MachineState<IoMemory>, body: FilterAt<C>(shape, file, s0, front, back, fl_at_jnz(structured_bytes(shape.code).len()), state),
@@ -601,7 +601,7 @@ theorem filter_front_inside(front, rest: List<BitVec(8)>, b: BitVec(8), bytes: L
 
 // The chunk, by recursion on what is left of it: every byte stepped and its
 // output stored, and the close reached.
-fn FilterLoopFrom<C>(shape: FilterShape<C>, file: List<BitVec(8)>, s0: C, bytes, back: List<BitVec(8)>) → Type {
+fn FilterLoopFrom<C>(shape: FilterShape<C>, file: IoImage, s0: C, bytes, back: List<BitVec(8)>) → Type {
     (front: List<BitVec(8)>) → (state: MachineState<IoMemory>) → front ++ back = bytes → 0 < back.len() →
     FilterAt<C>(shape, file, s0, front, back, fl_at_load(structured_bytes(shape.code).len()), state) →
     Exists<MachineState<IoMemory>>(λ done => LinuxSteps(io_linux(), state, done) ∧
@@ -609,7 +609,7 @@ fn FilterLoopFrom<C>(shape: FilterShape<C>, file: List<BitVec(8)>, s0: C, bytes,
 }
 theorem filter_loop<C>(shape: FilterShape<C>, facts: FilterFacts<C>(shape), jumps: FilterJumps, pj: PrintJumps, finish: List<BitVec(8)>,
     loop_target: near_branch_target(eof_rip(fl_at_jnz(structured_bytes(shape.code).len())), 6, jumps.ld) = eof_rip(fl_at_load(structured_bytes(shape.code).len())),
-    file: List<BitVec(8)>, s0: C, bytes: List<BitVec(8)>, fits: bytes.len() <= 4096, counts_fit: ChunkFits(shape, s0, bytes),
+    file: IoImage, s0: C, bytes: List<BitVec(8)>, fits: bytes.len() <= 4096, counts_fit: ChunkFits(shape, s0, bytes),
     pieces: (page: Nat → BitVec(8)) → FilterPieces(IoMemory(file, page), shape.code, jumps, pj, finish), back: List<BitVec(8)>):
     FilterLoopFrom(shape, file, s0, bytes, back) {
     let p = structured_bytes(shape.code).len();
@@ -658,7 +658,7 @@ theorem filter_page_read(memory: IoMemory, bytes: List<BitVec(8)>): Stored(io_st
 
 // After the setup: nothing done, the whole chunk to go.
 theorem filter_entered<C>(shape: FilterShape<C>, facts: FilterFacts<C>(shape), jumps: FilterJumps, pj: PrintJumps, finish: List<BitVec(8)>,
-    file: List<BitVec(8)>, pieces: (page: Nat → BitVec(8)) → FilterPieces(IoMemory(file, page), shape.code, jumps, pj, finish),
+    file: IoImage, pieces: (page: Nat → BitVec(8)) → FilterPieces(IoMemory(file, page), shape.code, jumps, pj, finish),
     page: Nat → BitVec(8), s0: C, bytes: List<BitVec(8)>, fits: bytes.len() <= 4096,
     going: MachineState<IoMemory>, memory_is: going.memory = io_store_offset(IoMemory(file, page), 0, bytes),
     rip_is: going.rip = eof_rip(fl_at_setup(structured_bytes(shape.code).len())),
@@ -691,7 +691,7 @@ theorem filter_entered<C>(shape: FilterShape<C>, facts: FilterFacts<C>(shape), j
 
 // The close, at the JZ: R9 at the page, R10 the output's length, ZF whether
 // it is empty, the page holding the output, the state the chunk left.
-record FilterClosed<C>(shape: FilterShape<C>, file: List<BitVec(8)>, out: List<BitVec(8)>, s: C, going, closed: MachineState<IoMemory>) {
+record FilterClosed<C>(shape: FilterShape<C>, file: IoImage, out: List<BitVec(8)>, s: C, going, closed: MachineState<IoMemory>) {
     steps: LinuxSteps(io_linux(), going, closed),
     page: Nat → BitVec(8),
     memory_is: closed.memory = IoMemory(file, page),
@@ -713,7 +713,7 @@ theorem filter_out_len(rdi, r9: BitVec(64), o: Nat, at_out: rdi.toNat() = io_pag
 
 theorem filter_closed<C>(shape: FilterShape<C>, facts: FilterFacts<C>(shape), jumps: FilterJumps, pj: PrintJumps, finish: List<BitVec(8)>,
     loop_target: near_branch_target(eof_rip(fl_at_jnz(structured_bytes(shape.code).len())), 6, jumps.ld) = eof_rip(fl_at_load(structured_bytes(shape.code).len())),
-    file: List<BitVec(8)>, pieces: (page: Nat → BitVec(8)) → FilterPieces(IoMemory(file, page), shape.code, jumps, pj, finish),
+    file: IoImage, pieces: (page: Nat → BitVec(8)) → FilterPieces(IoMemory(file, page), shape.code, jumps, pj, finish),
     page: Nat → BitVec(8), s0: C, bytes: List<BitVec(8)>, some: 0 < bytes.len(), fits: bytes.len() <= 4096, counts_fit: ChunkFits(shape, s0, bytes),
     going: MachineState<IoMemory>, memory_is: going.memory = io_store_offset(IoMemory(file, page), 0, bytes),
     rip_is: going.rip = eof_rip(fl_at_setup(structured_bytes(shape.code).len())),
@@ -771,11 +771,11 @@ theorem writes_for_of(out: List<BitVec(8)>, writes: List<WriteStep>, some: 0 < o
 // What runs after the chunk: from the read with the state it left. Only a
 // chunk whose writes all finish goes on; one whose write fails emitted
 // something to write.
-fn ChunkThen<C>(shape: FilterShape<C>, file: List<BitVec(8)>, s: C, after: List<LinuxEvent>) → Type {
+fn ChunkThen<C>(shape: FilterShape<C>, file: IoImage, s: C, after: List<LinuxEvent>) → Type {
     (page: Nat → BitVec(8)) → (state: MachineState<IoMemory>) → state.rip = eof_rip(fl_at_read(structured_bytes(shape.code).len())) →
     state.memory = IoMemory(file, page) → shape.rep(state.gprs, s) → LinuxRuns(io_linux(), after, state)
 }
-fn ChunkThenIf<C>(shape: FilterShape<C>, file: List<BitVec(8)>, s: C, out: List<BitVec(8)>, ending: WriteEnding, after: List<LinuxEvent>) → Type {
+fn ChunkThenIf<C>(shape: FilterShape<C>, file: IoImage, s: C, out: List<BitVec(8)>, ending: WriteEnding, after: List<LinuxEvent>) → Type {
     match ending { Finished => ChunkThen(shape, file, s, after), WriteFailedWith(_) => 0 < out.len() }
 }
 
@@ -783,7 +783,7 @@ fn ChunkThenIf<C>(shape: FilterShape<C>, file: List<BitVec(8)>, s: C, out: List<
 // else into the write loop, whose end is the read.
 theorem filter_after_close<C>(shape: FilterShape<C>, facts: FilterFacts<C>(shape), jumps: FilterJumps, pj: PrintJumps, finish: List<BitVec(8)>,
     done: Nat, targets: FilterTargets(structured_bytes(shape.code).len(), done, jumps, pj),
-    file: List<BitVec(8)>, pieces: (page: Nat → BitVec(8)) → FilterPieces(IoMemory(file, page), shape.code, jumps, pj, finish),
+    file: IoImage, pieces: (page: Nat → BitVec(8)) → FilterPieces(IoMemory(file, page), shape.code, jumps, pj, finish),
     out: List<BitVec(8)>, short: out.len() <= 4096, s: C, going, closed: MachineState<IoMemory>, at: FilterClosed<C>(shape, file, out, s, going, closed),
     writes: List<WriteStep>, written: WritesFor(out, writes), ending: WriteEnding, ending_ok: WriteEndingOk(ending), after: List<LinuxEvent>,
     then: ChunkThenIf(shape, file, s, out, ending, after)):
@@ -841,7 +841,7 @@ theorem filter_after_close<C>(shape: FilterShape<C>, facts: FilterFacts<C>(shape
 // output written.
 theorem filter_chunk<C>(shape: FilterShape<C>, facts: FilterFacts<C>(shape), jumps: FilterJumps, pj: PrintJumps, finish: List<BitVec(8)>,
     done: Nat, targets: FilterTargets(structured_bytes(shape.code).len(), done, jumps, pj),
-    file: List<BitVec(8)>, pieces: (page: Nat → BitVec(8)) → FilterPieces(IoMemory(file, page), shape.code, jumps, pj, finish),
+    file: IoImage, pieces: (page: Nat → BitVec(8)) → FilterPieces(IoMemory(file, page), shape.code, jumps, pj, finish),
     page: Nat → BitVec(8), s0: C, bytes: List<BitVec(8)>, some: 0 < bytes.len(), fits: bytes.len() <= 4096, counts_fit: ChunkFits(shape, s0, bytes),
     going: MachineState<IoMemory>, memory_is: going.memory = io_store_offset(IoMemory(file, page), 0, bytes),
     rip_is: going.rip = eof_rip(fl_at_setup(structured_bytes(shape.code).len())),
@@ -926,12 +926,13 @@ theorem chunk_fits<C>(shape: FilterShape<C>, facts: FilterFacts<C>(shape), input
 // output written, a chunk whose write fails, and at end of file the finish.
 theorem filter_process<C>(shape: FilterShape<C>, facts: FilterFacts<C>(shape), jumps: FilterJumps, pj: PrintJumps, finish: List<BitVec(8)>,
     done: Nat, targets: FilterTargets(structured_bytes(shape.code).len(), done, jumps, pj),
-    file: List<BitVec(8)>, pieces: (page: Nat → BitVec(8)) → FilterPieces(IoMemory(file, page), shape.code, jumps, pj, finish),
+    file: IoImage, pieces: (page: Nat → BitVec(8)) → FilterPieces(IoMemory(file, page), shape.code, jumps, pj, finish),
     input: List<BitVec(8)>, room: FilterRoom(shape.counts, input), tail_events: List<LinuxEvent>,
     tail: EofTail(file, done, shape.rep, filter_state(shape.step, input, shape.init), tail_events)):
-    EofProcess<List<WriteStep>, WriteFailure>(file, fl_at_read(structured_bytes(shape.code).len()), fl_at_failed(structured_bytes(shape.code).len()),
+    EofProcess<List<WriteStep>, WriteFailure>(FdStdin, BitVec::ofNat(0), file, fl_at_read(structured_bytes(shape.code).len()), fl_at_failed(structured_bytes(shape.code).len()),
         done, filter_inv(shape), input, filter_ok(shape), filter_body(shape), filter_failed_ok(shape), filter_failed(shape), read_exits(), tail_events) {
     EofProcess(
+        reads := λ _ _ _ => refl,
         framed := λ seen before after kept held => facts.framed(before, after, filter_state(shape.step, seen, shape.init),
             ⟨kept.right.right.right.right.right.right.left, ⟨kept.right.right.right.right.right.right.right.left,
                 ⟨kept.right.right.right.right.right.right.right.right, kept.right.right.left⟩⟩⟩, held),
@@ -997,7 +998,7 @@ theorem filter_sends<C>(shape: FilterShape<C>, tail: List<LinuxEvent>, steps: Li
 }
 
 // The run: init, then the driver over the process, from the entry.
-theorem read_filter_runs<C>(file: List<BitVec(8)>, shape: FilterShape<C>, facts: FilterFacts<C>(shape), jumps: FilterJumps, pj: PrintJumps,
+theorem read_filter_runs<C>(file: IoImage, shape: FilterShape<C>, facts: FilterFacts<C>(shape), jumps: FilterJumps, pj: PrintJumps,
     finish: List<BitVec(8)>, done: Nat, jump_facts: FilterJumpFacts(structured_bytes(shape.code).len(), done, jumps, pj),
     resident: (page: Nat → BitVec(8)) → CodeResident(io_fetch_access(), IoMemory(file, page), filter_code(shape.code, jumps, pj, finish), io_entry()),
     steps: List<EofStep<List<WriteStep>>>, ok: FilterSteps(shape, steps), ending: EofEnd<WriteFailure>, ending_ok: FilterEndingOk(shape, steps, ending),
@@ -1014,10 +1015,10 @@ theorem read_filter_runs<C>(file: List<BitVec(8)>, shape: FilterShape<C>, facts:
     let begin = io_initial(file, page, gprs, flags);
     let started = block_fetched(fetch, data, state_init_block(), begin, trivial, pieces(page).init_at);
     let ready = execute_block_normal(state_init_block(), begin);
-    let layout: EofLayout(file, fl_at_read(p), fl_at_failed(p), done, jumps.ed, jumps.sd, jumps.rd) =
+    let layout: EofLayout(FdStdin, file, fl_at_read(p), fl_at_failed(p), done, jumps.ed, jumps.sd, jumps.rd) =
         EofLayout(λ pg => pieces(pg).head, λ pg => fail_tail_retries(IoMemory(file, pg), fl_at_failed(p), jumps.rd, pieces(pg).fail), targets.finish, targets.fail, targets.retry);
     linux_runs_after_steps(io_linux(), filter_events(shape, steps, ending, tail_events), begin, ready, started.left,
-        eof_from(file, fl_at_read(p), fl_at_failed(p), done, jumps.ed, jumps.sd, jumps.rd, layout, filter_inv(shape), input,
+        eof_from(FdStdin, BitVec::ofNat(0), file, fl_at_read(p), fl_at_failed(p), done, jumps.ed, jumps.sd, jumps.rd, layout, filter_inv(shape), input,
             filter_ok(shape), filter_body(shape), filter_failed_ok(shape), filter_failed(shape), read_exits(), tail_events,
             filter_process(shape, facts, jumps, pj, finish, done, targets, file, pieces, input, room, tail_events, tail),
             ending, ending_ok, steps)(Nil, ok, page, refl, ready, started.right, refl, facts.initialised(begin)))
@@ -1027,7 +1028,7 @@ theorem read_filter_runs<C>(file: List<BitVec(8)>, shape: FilterShape<C>, facts:
 // The finishes: the library's tails, at the end of the program.
 
 // Nothing more: the write loop's own exit(0).
-theorem filter_quiet_tail<C>(shape: FilterShape<C>, jumps: FilterJumps, pj: PrintJumps, file: List<BitVec(8)>,
+theorem filter_quiet_tail<C>(shape: FilterShape<C>, jumps: FilterJumps, pj: PrintJumps, file: IoImage,
     pieces: (page: Nat → BitVec(8)) → FilterPieces(IoMemory(file, page), shape.code, jumps, pj, Nil), total: C):
     EofTail(file, wl_at_exit(fl_at_write(structured_bytes(shape.code).len())), shape.rep, total, [ExitEvent(BitVec::ofNat(0))]) {
     λ page state at_done in_page _ => wl_exit(IoMemory(file, page), fl_at_write(structured_bytes(shape.code).len()), pj, pieces(page).write,

@@ -27,11 +27,12 @@ record CallElfImage(code: List<BitVec(8)>) {
 fn call_elf_bytes(code: List<BitVec(8)>, image: CallElfImage(code)) → List<BitVec(8)> {
     List::append(call_elf_header(image.low, image.high), code)
 }
-// The read profile's image (elf64_io): the same header with its RW page just
-// past the file's 64-KiB window, so the code may fill the window.
+// The read profile's image (elf64_io): the same header with its RW pages just
+// past the file's 64-KiB window, so the code may fill the window: the page
+// at 0x410000 and the frame at 0x411000, one zero-filled 8-KiB segment.
 fn io_elf_header(low, high: BitVec(8)) → List<BitVec(8)> {
     let base = static_elf64_header(low, high);
-    List::append(base.take(24), List::append(word_bytes(BitVec::ofNat(0x4000e8)), List::append(base.drop(32).take(24), List::append([elf_byte(3), elf_byte(0)], List::append(base.drop(58), List::append([elf_byte(1), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(6), elf_byte(0), elf_byte(0), elf_byte(0)], List::append(word_bytes(BitVec::ofNat(0x1000)), List::append(word_bytes(BitVec::ofNat(0x410000)), List::append(word_bytes(BitVec::ofNat(0x410000)), List::append(word_bytes(BitVec::ofNat(0)), List::append(word_bytes(BitVec::ofNat(0x1000)), word_bytes(BitVec::ofNat(0x1000)))))))))))))
+    List::append(base.take(24), List::append(word_bytes(BitVec::ofNat(0x4000e8)), List::append(base.drop(32).take(24), List::append([elf_byte(3), elf_byte(0)], List::append(base.drop(58), List::append([elf_byte(1), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(6), elf_byte(0), elf_byte(0), elf_byte(0)], List::append(word_bytes(BitVec::ofNat(0x1000)), List::append(word_bytes(BitVec::ofNat(0x410000)), List::append(word_bytes(BitVec::ofNat(0x410000)), List::append(word_bytes(BitVec::ofNat(0)), List::append(word_bytes(BitVec::ofNat(0x2000)), word_bytes(BitVec::ofNat(0x1000)))))))))))))
 }
 record IoElfImage(code: List<BitVec(8)>) {
     nonempty: 0 < code.len(),

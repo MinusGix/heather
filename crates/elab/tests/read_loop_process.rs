@@ -33,8 +33,8 @@ fn slow_acceptance_read_loop_refusals() {
     for (name, from, to) in [
         ("buffer_outside_page", "MovRI(Rsi, BitVec::ofNat(io_page_base())),\n", "MovRI(Rsi, BitVec::ofNat(0x411000)),\n"),
         ("capacity_past_page", "fn read_capacity() → Nat { 4096 }", "fn read_capacity() → Nat { 4097 }"),
-        ("read_number", "[MovRI(Rax, BitVec::ofNat(0)), MovRI(Rdi", "[MovRI(Rax, BitVec::ofNat(1)), MovRI(Rdi"),
-        ("descriptor", "MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rsi", "MovRI(Rdi, BitVec::ofNat(1)), MovRI(Rsi"),
+        ("read_number", "[fd_instruction(source), MovRI(Rax, BitVec::ofNat(0)),", "[fd_instruction(source), MovRI(Rax, BitVec::ofNat(1)),"),
+        ("descriptor", "FdStdin => MovRI(Rdi, BitVec::ofNat(0)),", "FdStdin => MovRI(Rdi, BitVec::ofNat(1)),"),
         ("exit_number", "[MovRI(Rdi, BitVec::ofNat(1)), MovRI(Rax, BitVec::ofNat(60))]", "[MovRI(Rdi, BitVec::ofNat(1)), MovRI(Rax, BitVec::ofNat(61))]"),
         ("end_tested_elsewhere", "[TestRR(Rax, Rax)]", "[TestRR(Rdx, Rdx)]"),
         ("eintr_tested_as_other", "fn eof_retry_block() → List<Instruction> { [MovRI(Rbx, BitVec::ofNat(4))",

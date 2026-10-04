@@ -41,6 +41,8 @@ mod read_fields_process;
 mod read_filter_process;
 #[path = "../format_width_process.rs"]
 mod format_width_process;
+#[path = "../open_read_close_process.rs"]
+mod open_read_close_process;
 #[path = "../filter_step_generation.rs"]
 mod filter_step_generation;
 #[path = "../read_print_process.rs"]

@@ -44,7 +44,7 @@ theorem count_tail_code_len(word, start, length: StructuredCode, pj: PrintJumps,
 fn LineWord<C>(rep: Gprs → C → Type, count: C → Nat) → Type {
     (gprs: Gprs) → (s: C) → rep(gprs, s) → read_gpr(R13, gprs) = bitvec_nat::word_of_nat(64, count(s))
 }
-theorem filter_line_tail<C>(shape: FilterShape<C>, count: C → Nat, word: LineWord(shape.rep, count), file: List<BitVec(8)>, at: Nat,
+theorem filter_line_tail<C>(shape: FilterShape<C>, count: C → Nat, word: LineWord(shape.rep, count), file: IoImage, at: Nat,
     codes: PrintCodes, format: PrintFormat(codes), pj: PrintJumps, print_facts: PrintJumpFacts(pj),
     resident: (page: Nat → BitVec(8)) → CodeResident(io_fetch_access(), IoMemory(file, page), count_tail(codes.word, codes.start, codes.length, pj), eof_rip(at)),
     total: C, small: count(total) < 10000, ending: WriteEnding, ending_ok: WriteEndingOk(ending), steps: List<WriteStep>,
