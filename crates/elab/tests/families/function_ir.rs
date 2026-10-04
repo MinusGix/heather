@@ -45,6 +45,12 @@ mod format_width_process;
 mod open_read_close_process;
 #[path = "../arg_scan_process.rs"]
 mod arg_scan_process;
+#[path = "../stat_width_process.rs"]
+mod stat_width_process;
+#[path = "../operand_cursor_refusals.rs"]
+mod operand_cursor_refusals;
+#[path = "../stat_width_refusals.rs"]
+mod stat_width_refusals;
 #[path = "../filter_step_generation.rs"]
 mod filter_step_generation;
 #[path = "../read_print_process.rs"]

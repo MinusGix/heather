@@ -67,11 +67,13 @@ The syscalls GNU makes for `wc f1 nosuch f2`, in order:
 coreutils' `wc.c`):
 
 - One operand and one selected count: no `stat`, width 1.
-- Otherwise, every operand is stat'ed. If the *first* stat failed, the width
-  is 1.
-- Otherwise the width is the number of decimal digits of the regular files'
-  sizes added together (as a `uintmax_t`, so modulo 2^64). It is at least
-  7 if any operand that stat'ed is not a regular file.
+- Otherwise, every operand is stat'ed, and the width is the number of
+  decimal digits of the regular files' sizes added together (as a
+  `uintmax_t`, so modulo 2^64). It is at least 7 if any operand that
+  stat'ed is not a regular file. A failed stat adds nothing, wherever it
+  is: `wc nosuch big` pads to big's size. (This said the width was 1 when
+  the first stat failed; `compute_number_width` tests whether a stat was
+  *made*, not whether it succeeded, and coreutils 9.4 on the box agrees.)
 - Counts wider than the width print in full: the width is a minimum.
 
 **Deviations, chosen.** The claim states what *this* program does, so each
@@ -664,6 +666,41 @@ the stat pass and the row writer follow. Where the scan differs from §3.2 and
   layout by its own lengths, and one closed equation pins them.
   Test: `crates/elab/tests/arg_scan_process.rs` (a client placing the scan
   past any header; `parse_args` over §2's command lines; seven refusals).
+
+**Status (C2's stat pass and width built, 2026-10-04):
+`lib/elf64_operand_cursor.hthr` and `lib/elf64_stat_width.hthr`, against
+`command_program`'s `operands_from` and `stat_width`.** Where they differ
+from §6.1:
+
+- **An operand cursor, shared.** The stat pass and the per-file driver both
+  walk argv again, so stepping to the next operand is one library piece
+  (`cursor_runs`): RBX the argv slot, R12 whether `--` has been seen, RSI
+  the operand's pointer or zero at the end. It passes over options and `--`
+  without reading their letters; `parse_operands` proves its operands are
+  the ones `parse_args` gives, so the scan's verdict is not re-checked.
+- **argv is named once, for every page.** Stats (and later reads) overwrite
+  the page, so the cursor's premise names argv's pointers outside the
+  per-page quantifier (`ArgvStays`): the same pointer holds whatever the
+  page is.
+- **The width is RSI, not the frame.** The pass keeps the total in R13, the
+  other-kind flag in R14 and whether a stat was made in R15, stats into the
+  page's first 144 bytes (nothing has been read yet), and ends by running
+  the formatter's own digit-count blocks over R13, then the floor of 7. The
+  command stores it.
+- **The spec is three folds.** `stat_targets` (one target per operand, `-`
+  as fstat(0), stdin once when there is none), `stat_seen` (a failed stat,
+  a regular file's size, another kind) and `stat_width` over them; the
+  claim `stat_runs` gives the events and leaves RSI as `stat_width` of
+  Linux's answers. The one-operand, one-count case (no stat at all, width
+  1) is the command's choice, not the pass's.
+- **One elaborator gap cost a bisection.** A proof of a conjunction passed
+  where an equation was expected got past the elaborator and was refused
+  only by the kernel, at the whole declaration
+  (`issues/elab-accepts-conjunction-for-equation.md`).
+  Tests: `crates/elab/tests/stat_width_process.rs` (a client placing the
+  pass past any header; targets, stat decoding and widths over §2's cases),
+  `operand_cursor_refusals.rs` (two) and `stat_width_refusals.rs` (seven), a
+  file each so each shard fits the suite's CPU rail.
 
 **Refusal controls** (mutations the library must reject), in the
 `slow_acceptance_` tests as now: the row loop printing an unselected
