@@ -2634,3 +2634,207 @@ theorem open_path<C>(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64
             name, run, rest, frame, vars, holds, failed, values, at19, at20, at22, opened, returns, goes, page,
             linux_write_return(s1, open_rax(opened), rcx, r11), asked.memory_is, rip_advance(io_entry(), s1.rip, ca_open_call(), 2, asked.rip_is), refl))
 }
+
+// An operand's events, facts and totals by whether it names stdin, as
+// `file_events`, `FileOk` and `totals_after` take them apart.
+fn operand_events<C>(stdin: Bool, shape: FilterShape<C>, column: Nat → C → BitVec(64), mask: BitVec(64), width: Nat,
+    name: List<BitVec(8)>, run: OperandRun, failed: Bool, totals: Nat → BitVec(64), rest: Bool → (Nat → BitVec(64)) → List<LinuxEvent>)
+    → List<LinuxEvent> {
+    match stdin {
+        True => file_reads(shape, column, mask, width, name, run, BitVec::zero(), False, failed, totals, rest),
+        False => open_events(run.opened, shape, column, mask, width, name, run, failed, totals, rest),
+    }
+}
+fn open_ok<C>(opened: OpenResult, shape: FilterShape<C>, column: Nat → C → BitVec(64), mask: BitVec(64), width: Nat, name: List<BitVec(8)>,
+    run: OperandRun) → Type {
+    match opened as λ _ => Type { Opened(_) => NamedOk<C>(shape, column, mask, width, name, run), OpenFailed(_) => True }
+}
+fn operand_ok<C>(stdin: Bool, shape: FilterShape<C>, column: Nat → C → BitVec(64), mask: BitVec(64), width: Nat, name: List<BitVec(8)>,
+    run: OperandRun) → Type {
+    match stdin {
+        True => NamedOk<C>(shape, column, mask, width, name, run),
+        False => OpenOk(name, run.opened) ∧ open_ok<C>(run.opened, shape, column, mask, width, name, run),
+    }
+}
+fn open_totals<C>(opened: OpenResult, shape: FilterShape<C>, column: Nat → C → BitVec(64), run: OperandRun, totals: Nat → BitVec(64))
+    → Nat → BitVec(64) {
+    match opened { Opened(_) => add_counts(totals, input_counts(shape, column, eof_input(run.steps))), OpenFailed(_) => totals }
+}
+fn operand_totals<C>(stdin: Bool, shape: FilterShape<C>, column: Nat → C → BitVec(64), run: OperandRun, totals: Nat → BitVec(64))
+    → Nat → BitVec(64) {
+    match stdin {
+        True => add_counts(totals, input_counts(shape, column, eof_input(run.steps))),
+        False => open_totals(run.opened, shape, column, run, totals),
+    }
+}
+theorem operand_events_is<C>(shape: FilterShape<C>, column: Nat → C → BitVec(64), mask: BitVec(64), width: Nat, name: List<BitVec(8)>,
+    run: OperandRun, failed: Bool, totals: Nat → BitVec(64), rest: Bool → (Nat → BitVec(64)) → List<LinuxEvent>):
+    file_events(shape, column, mask, width, name, run, failed, totals, rest) =
+        operand_events(names_stdin(name), shape, column, mask, width, name, run, failed, totals, rest) { refl }
+theorem operand_ok_is<C>(shape: FilterShape<C>, column: Nat → C → BitVec(64), mask: BitVec(64), width: Nat, name: List<BitVec(8)>,
+    run: OperandRun, ok: FileOk(shape, column, mask, width, name, run)): operand_ok(names_stdin(name), shape, column, mask, width, name, run) {
+    ok
+}
+theorem operand_totals_is<C>(shape: FilterShape<C>, column: Nat → C → BitVec(64), name: List<BitVec(8)>, run: OperandRun,
+    totals: Nat → BitVec(64)): totals_after(shape, column, name, run, totals) = operand_totals(names_stdin(name), shape, column, run, totals) {
+    refl
+}
+
+// `-` alone is one byte.
+theorem stdin_len(name: List<BitVec(8)>, stdin: names_stdin(name) = True): name.len() = 1 {
+    match name as λ nm => names_stdin(nm) = True → nm.len() = 1 {
+        Nil => λ no => absurd(no),
+        Cons(b, rest) => match rest as λ r => names_stdin(Cons(b, r)) = True → Cons(b, r).len() = 1 {
+            Nil => λ _ => refl,
+            Cons(_, _) => λ no => absurd(no),
+        },
+    }(stdin)
+}
+theorem len_fits(l: Nat, below: l < 4096): l <= 4096 { omega }
+theorem len_one(l: Nat, one: l = 1): (0 < l) ∧ (l <= 4096) { ⟨omega, omega⟩ }
+
+// What an open goes on to, from the facts its history gives and the loop
+// after it.
+theorem open_goes<C>(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64), spill: Nat → StateReg, shape: FilterShape<C>,
+    facts: FilterFacts<C>(shape), jumps: FilterJumps, pj: PrintJumps, placed: CommandPlaced(file, letters, default, spill, shape.code, jumps, pj),
+    targets: CoreTargets(ca_core(), ca_head(), structured_bytes(shape.code).len(), jumps, pj), column: Nat → C → BitVec(64),
+    spilled: (i: Nat) → i < 8 → (g: Gprs) → (s: C) → shape.rep(g, s) → read_gpr(state_gpr(spill(i)), g) = column(i)(s),
+    mask: BitVec(64), width: Nat, narrow: width <= 20, n: Nat, nonzero: 0 < n, few: n < Nat::pow(2, 64), c19, c20: BitVec(64),
+    rest: Bool → (Nat → BitVec(64)) → List<LinuxEvent>, totals: Nat → BitVec(64),
+    pointer: BitVec(64), name: List<BitVec(8)>, string: ArgStays(file, pointer, name),
+    low: pointer.toNat() + name.len() + 1 <= Nat::pow(2, 47), run: OperandRun, later_ok: (Nat → BitVec(64)) → Type,
+    onward: (t: Nat → BitVec(64)) → later_ok(t) → LoopGoes(file, mask, width, n, c19, c20, t, rest), opened: OpenResult):
+    OpenOk(name, opened) → open_ok<C>(opened, shape, column, mask, width, name, run) → later_ok(open_totals(opened, shape, column, run, totals)) →
+    OpenGoes<C>(opened, file, shape, column, mask, width, n, totals, c19, c20, pointer, name, run, rest) {
+    match opened as λ o => OpenOk(name, o) → open_ok<C>(o, shape, column, mask, width, name, run) →
+            later_ok(open_totals(o, shape, column, run, totals)) → OpenGoes<C>(o, file, shape, column, mask, width, n, totals, c19, c20, pointer,
+                name, run, rest) {
+        Opened(fd) => λ oo ok fitted => file_reads_runs(file, letters, default, spill, shape, facts, jumps, pj, placed, targets, column, spilled,
+            mask, width, narrow, n, nonzero, few, c19, c20, rest, totals, pointer, name, string, low, oo.right.left,
+            len_fits(name.len(), oo.right.right), run, ok, word_of_nat(64, fd), True,
+            onward(add_counts(totals, input_counts(shape, column, eof_input(run.steps))), fitted)),
+        OpenFailed(_) => λ _ _ fitted => onward(totals, fitted),
+    }
+}
+
+// One operand, from the loop's head: the cursor to it, its slots, the dash
+// test, then its reads and row, or its failed open, and on to the loop.
+theorem operand_step<C>(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64), spill: Nat → StateReg, shape: FilterShape<C>,
+    facts: FilterFacts<C>(shape), jumps: FilterJumps, pj: PrintJumps, placed: CommandPlaced(file, letters, default, spill, shape.code, jumps, pj),
+    targets: CoreTargets(ca_core(), ca_head(), structured_bytes(shape.code).len(), jumps, pj), column: Nat → C → BitVec(64),
+    spilled: (i: Nat) → i < 8 → (g: Gprs) → (s: C) → shape.rep(g, s) → read_gpr(state_gpr(spill(i)), g) = column(i)(s),
+    mask: BitVec(64), width: Nat, narrow: width <= 20, n: Nat, nonzero: 0 < n, few: n < Nat::pow(2, 64), rsp: BitVec(64),
+    name: List<BitVec(8)>, more: List<List<BitVec(8)>>, run: OperandRun, rest: Bool → (Nat → BitVec(64)) → List<LinuxEvent>,
+    later_ok: (Nat → BitVec(64)) → Type,
+    onward: (k: Nat) → (ended: Bool) → (args: List<List<BitVec(8)>>) → (pointers: List<BitVec(64)>) → ArgvStays(file, rsp, args, pointers, k) →
+        operands_from(ended, args) = more → (t: Nat → BitVec(64)) → later_ok(t) →
+        LoopGoes(file, mask, width, n, argv_slot(rsp, k), ended_word(ended), t, rest),
+    totals: Nat → BitVec(64), k: Nat, ended: Bool, args: List<List<BitVec(8)>>, pointers: List<BitVec(64)>,
+    argv: ArgvStays(file, rsp, args, pointers, k), left: operands_from(ended, args) = Cons(name, more),
+    ok: FileOk(shape, column, mask, width, name, run), fitted: later_ok(totals_after(shape, column, name, run, totals))):
+    LoopGoes(file, mask, width, n, argv_slot(rsp, k), ended_word(ended), totals,
+        λ f t => file_events(shape, column, mask, width, name, run, f, t, rest)) {
+    λ failed frame vars holds values at19 at20 page state memory_is rip_is => {
+        let io = io_linux();
+        let img = with_frame(file, frame);
+        have reach = j(left, λ o _ => CursorReach(img, page, eof_rip(ca_cursor()), rsp, state.gprs, o, state),
+            loop_cursor(file, letters, default, spill, shape.code, jumps, pj, placed, frame, vars, holds, rsp, k, ended, args, pointers, argv,
+                at19, at20, page, state, memory_is, rip_is));
+        let s0 = reach.witness;
+        let found = reach.proof.right;
+        let pointer = found.witness;
+        let at = found.proof;
+        let cur = at.right.right.right.right;
+        have head = operand_head(file, letters, default, spill, shape.code, jumps, pj, placed, frame, vars, holds, mask, width, n, failed, totals,
+            values, pointer, at.right.left, page, s0, cur.memory_is, trans(cur.rip_is, rip_compose(io_entry(), ca_cursor(), cursor_len())), at.left);
+        let c19 = argv_slot(rsp, cur.k);
+        let c20 = ended_word(cur.ended);
+        let head19: (head.vars(19) = c19) = trans(head.at19, cur.regs.left);
+        let head20: (head.vars(20) = c20) = trans(head.at20, cur.regs.right.left);
+        let string = at.right.right.right.left;
+        let low = at.right.right.left;
+        let goes_on = λ (t: Nat → BitVec(64)) (fit: later_ok(t)) => onward(cur.k, cur.ended, cur.args, cur.pointers, cur.argv, cur.left, t, fit);
+        let events = λ (b: Bool) => operand_events(b, shape, column, mask, width, name, run, failed, totals, rest);
+        let ran = dash_test(file, letters, default, spill, shape.code, jumps, pj, placed, head.frame, page, pointer, name, string, low, events,
+            λ stdin st st_memory st_rip => {
+                let named = j(stdin, λ b _ => operand_ok(b, shape, column, mask, width, name, run), operand_ok_is(shape, column, mask, width, name, run, ok));
+                let fit = j(stdin, λ b _ => later_ok(operand_totals(b, shape, column, run, totals)), fitted);
+                let sized = len_one(name.len(), stdin_len(name, stdin));
+                stdin_path(file, letters, default, spill, shape.code, jumps, pj, placed, mask, width, n, totals, c19, c20, pointer,
+                    λ f => file_reads(shape, column, mask, width, name, run, BitVec::zero(), False, f, totals, rest),
+                    file_reads_runs(file, letters, default, spill, shape, facts, jumps, pj, placed, targets, column, spilled, mask, width, narrow,
+                        n, nonzero, few, c19, c20, rest, totals, pointer, name, string, low, sized.left, sized.right, run, named, BitVec::zero(), False,
+                        goes_on(add_counts(totals, input_counts(shape, column, eof_input(run.steps))), fit)),
+                    head.frame, head.vars, head.holds, failed, head.values, head19, head20, head.at22, page, st, st_memory, st_rip)
+            },
+            λ opens st st_memory st_rip st_rsi => {
+                let checked = j(opens, λ b _ => operand_ok(b, shape, column, mask, width, name, run), operand_ok_is(shape, column, mask, width, name, run, ok));
+                let fit = j(opens, λ b _ => later_ok(operand_totals(b, shape, column, run, totals)), fitted);
+                open_path(file, letters, default, spill, shape.code, jumps, pj, placed, shape, column, mask, width, n, totals, c19, c20, pointer,
+                    name, string, run, rest, run.opened, checked.left.left,
+                    open_goes(file, letters, default, spill, shape, facts, jumps, pj, placed, targets, column, spilled, mask, width, narrow, n,
+                        nonzero, few, c19, c20, rest, totals, pointer, name, string, low, run, later_ok, goes_on, run.opened)(checked.left,
+                        checked.right, fit),
+                    head.frame, head.vars, head.holds, failed, head.values, head19, head20, head.at22, page, st, st_memory, st_rip, st_rsi)
+            },
+            head.after, head.memory_is, head.rip_is, head.rsi);
+        linux_runs_after_linux_steps(io, file_events(shape, column, mask, width, name, run, failed, totals, rest), state, head.after,
+            linux_steps_trans(io, state, s0, head.after, linux_steps_of_fetched(io, state, s0, reach.proof.left), head.steps), ran)
+    }
+}
+
+// The loop over the operands still to come, by recursion on them: from the
+// loop's head with the cursor's slots at argv slot `k`, the operands' events
+// and then the total row.
+fn LoopNext<C>(file: IoImage, shape: FilterShape<C>, column: Nat → C → BitVec(64), mask: BitVec(64), width, n: Nat, total: RowWrite,
+    rsp: BitVec(64), ops: List<List<BitVec(8)>>) → Type {
+    (runs: List<OperandRun>) → (totals: Nat → BitVec(64)) → FilesOk(shape, column, mask, width, n, total, ops, runs, totals) →
+        (k: Nat) → (ended: Bool) → (args: List<List<BitVec(8)>>) → (pointers: List<BitVec(64)>) → ArgvStays(file, rsp, args, pointers, k) →
+        operands_from(ended, args) = ops →
+        LoopGoes(file, mask, width, n, argv_slot(rsp, k), ended_word(ended), totals,
+            λ f t => files_events(shape, column, mask, width, n, total, ops, runs, f, t))
+}
+theorem total_ok_of<C>(shape: FilterShape<C>, column: Nat → C → BitVec(64), mask: BitVec(64), width, n: Nat, total: RowWrite,
+    totals: Nat → BitVec(64), runs: List<OperandRun>, ok: FilesOk(shape, column, mask, width, n, total, Nil, runs, totals)):
+    TotalOk(mask, width, n, total, totals) {
+    (match runs as λ r => FilesOk(shape, column, mask, width, n, total, Nil, r, totals) → TotalOk(mask, width, n, total, totals) {
+        Nil => λ held => held,
+        Cons(_, _) => λ never => false_elim(never),
+    })(ok)
+}
+theorem operand_loop<C>(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64), spill: Nat → StateReg, shape: FilterShape<C>,
+    facts: FilterFacts<C>(shape), jumps: FilterJumps, pj: PrintJumps, placed: CommandPlaced(file, letters, default, spill, shape.code, jumps, pj),
+    targets: CoreTargets(ca_core(), ca_head(), structured_bytes(shape.code).len(), jumps, pj), column: Nat → C → BitVec(64),
+    spilled: (i: Nat) → i < 8 → (g: Gprs) → (s: C) → shape.rep(g, s) → read_gpr(state_gpr(spill(i)), g) = column(i)(s),
+    mask: BitVec(64), width: Nat, narrow: width <= 20, n: Nat, nonzero: 0 < n, few: n < Nat::pow(2, 64), total: RowWrite, rsp: BitVec(64),
+    ops: List<List<BitVec(8)>>): LoopNext<C>(file, shape, column, mask, width, n, total, rsp, ops) {
+    match ops as λ o => LoopNext<C>(file, shape, column, mask, width, n, total, rsp, o) {
+        Nil => λ runs totals ok k ended args pointers argv left failed frame vars holds values at19 at20 page state memory_is rip_is => {
+            let img = with_frame(file, frame);
+            have reach = j(left, λ o _ => CursorReach(img, page, eof_rip(ca_cursor()), rsp, state.gprs, o, state),
+                loop_cursor(file, letters, default, spill, shape.code, jumps, pj, placed, frame, vars, holds, rsp, k, ended, args, pointers, argv,
+                    at19, at20, page, state, memory_is, rip_is));
+            let out = reach.proof.right;
+            linux_runs_after_steps(io_linux(), total_events(mask, width, n, total, failed, totals), state, reach.witness, reach.proof.left,
+                loop_last(file, letters, default, spill, shape.code, jumps, pj, placed, frame, vars, holds, mask, width, n, failed, totals, values,
+                    narrow, few, total, total_ok_of(shape, column, mask, width, n, total, totals, runs, ok), page, reach.witness,
+                    out.right.memory_is, trans(out.right.rip_is, rip_compose(io_entry(), ca_cursor(), cursor_len())), out.left))
+        },
+        Cons(name, more) => λ runs => match runs as λ r => (totals: Nat → BitVec(64)) →
+                FilesOk(shape, column, mask, width, n, total, Cons(name, more), r, totals) →
+                (k: Nat) → (ended: Bool) → (args: List<List<BitVec(8)>>) → (pointers: List<BitVec(64)>) → ArgvStays(file, rsp, args, pointers, k) →
+                operands_from(ended, args) = Cons(name, more) →
+                LoopGoes(file, mask, width, n, argv_slot(rsp, k), ended_word(ended), totals,
+                    λ f t => files_events(shape, column, mask, width, n, total, Cons(name, more), r, f, t)) {
+            Nil => λ _ never => false_elim(never),
+            Cons(run, later) => λ totals ok k ended args pointers argv left =>
+                operand_step(file, letters, default, spill, shape, facts, jumps, pj, placed, targets, column, spilled, mask, width, narrow, n,
+                    nonzero, few, rsp, name, more, run, λ f t => files_events(shape, column, mask, width, n, total, more, later, f, t),
+                    λ t => FilesOk(shape, column, mask, width, n, total, more, later, t),
+                    λ k2 ended2 args2 pointers2 argv2 left2 t fit => operand_loop(file, letters, default, spill, shape, facts, jumps, pj, placed,
+                        targets, column, spilled, mask, width, narrow, n, nonzero, few, total, rsp, more)(later, t, fit, k2, ended2, args2, pointers2,
+                        argv2, left2),
+                    totals, k, ended, args, pointers, argv, left, ok.left, ok.right),
+        },
+    }
+}
