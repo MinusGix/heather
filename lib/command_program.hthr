@@ -1,0 +1,113 @@
+// What a command does with its command line (docs/native-wc-command-design.md
+// §3.2), as total functions over plain lists: nothing here is about machines.
+// The command's pieces (elf64_arg_scan and the ones after it) are proved
+// against these functions.
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+
+// ---------------------------------------------------------------------------
+// Option letters. A command has up to eight columns, each selected by its
+// letter; column `i` is bit `i` of the selection, and the selection is a
+// 64-bit word the process ORs bits into, as the machine does. A slot past the
+// columns holds NUL, which no letter of an argument is.
+
+fn column_slots() → Nat { 8 }
+fn dash() → BitVec(8) { BitVec::ofNat(45) }
+fn nul() → BitVec(8) { BitVec::ofNat(0) }
+
+fn letter_slot(letters: List<BitVec(8)>, i: Nat) → BitVec(8) {
+    match letters {
+        Nil => nul(),
+        Cons(letter, rest) => match i { Zero => letter, Succ(k) => letter_slot(rest, k) },
+    }
+}
+fn column_bit(i: Nat) → BitVec(64) { BitVec::ofNat(Nat::pow(2, i)) }
+
+// The bits of slots `i` .. `i + j - 1` whose letter is `x`, ORed into `bits`
+// from the lowest slot up.
+fn slot_bits(letters: List<BitVec(8)>, x: BitVec(8), bits: BitVec(64), i, j: Nat) → BitVec(64) {
+    match j {
+        Zero => bits,
+        Succ(k) => slot_bits(letters, x, match x.eq_bit(letter_slot(letters, i)) { True => bits.bor(column_bit(i)), False => bits },
+            Succ(i), k),
+    }
+}
+// The columns the letter `x` selects: none when no column has it.
+fn letter_bits(letters: List<BitVec(8)>, x: BitVec(8)) → BitVec(64) { slot_bits(letters, x, BitVec::zero(), 0, column_slots()) }
+
+// The letters of an option, after its dash, ORed into `mask`; none when one
+// of them selects no column.
+fn option_mask(letters: List<BitVec(8)>, mask: BitVec(64), xs: List<BitVec(8)>) → Option<BitVec(64)> {
+    match xs {
+        Nil => Some(mask),
+        Cons(x, rest) => match letter_bits(letters, x).eq_bit(BitVec::zero()) {
+            True => None,
+            False => option_mask(letters, mask.bor(letter_bits(letters, x)), rest),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The command line, argument by argument (GNU's getopt with permutation):
+//
+// - after `--`, every argument is an operand;
+// - an argument that starts with `-` and is longer than one byte is an
+//   option, each of whose letters must select a column (`--` alone ends the
+//   options; any other argument starting `--` has `-` among its letters);
+// - any other argument, `-` included, is an operand.
+//
+// The operands keep their order.
+
+inductive Scanned { Refused, Scanned(mask: BitVec(64), operands: List<List<BitVec(8)>>) }
+
+// After a first dash: the rest are letters unless the argument is `--`.
+fn letters_follow(second: BitVec(8), more: List<BitVec(8)>) → Bool {
+    match second.eq_bit(dash()) { True => more.non_empty(), False => True }
+}
+
+fn scan_args(letters: List<BitVec(8)>, ended: Bool, mask: BitVec(64), operands: List<List<BitVec(8)>>,
+    args: List<List<BitVec(8)>>) → Scanned {
+    match args {
+        Nil => Scanned(mask, operands),
+        Cons(arg, rest) => match ended {
+            True => scan_args(letters, True, mask, operands ++ [arg], rest),
+            False => match arg {
+                Nil => scan_args(letters, False, mask, operands ++ [arg], rest),
+                Cons(first, tail) => match first.eq_bit(dash()) {
+                    False => scan_args(letters, False, mask, operands ++ [arg], rest),
+                    True => match tail {
+                        Nil => scan_args(letters, False, mask, operands ++ [arg], rest),
+                        Cons(second, more) => match letters_follow(second, more) {
+                            False => scan_args(letters, True, mask, operands, rest),
+                            True => match option_mask(letters, mask, tail) {
+                                None => Refused,
+                                Some(selected) => scan_args(letters, False, selected, operands, rest),
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    }
+}
+
+// argv without argv[0]; none when Linux gave no argv at all.
+fn command_args(argv: List<List<BitVec(8)>>) → List<List<BitVec(8)>> {
+    match argv { Nil => Nil, Cons(_, rest) => rest }
+}
+
+// The selection: what the options chose, or `default` when they chose nothing.
+fn chosen_mask(default, mask: BitVec(64)) → BitVec(64) { match mask.eq_bit(BitVec::zero()) { True => default, False => mask } }
+
+// The command line as the command reads it: refused, or the columns selected
+// (`default` when no option selects one) and the operands.
+fn parse_args(letters: List<BitVec(8)>, default: BitVec(64), argv: List<List<BitVec(8)>>) → Scanned {
+    match scan_args(letters, False, BitVec::zero(), Nil, command_args(argv)) {
+        Refused => Refused,
+        Scanned(mask, operands) => Scanned(chosen_mask(default, mask), operands),
+    }
+}

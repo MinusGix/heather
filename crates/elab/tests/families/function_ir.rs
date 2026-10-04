@@ -43,6 +43,8 @@ mod read_filter_process;
 mod format_width_process;
 #[path = "../open_read_close_process.rs"]
 mod open_read_close_process;
+#[path = "../arg_scan_process.rs"]
+mod arg_scan_process;
 #[path = "../filter_step_generation.rs"]
 mod filter_step_generation;
 #[path = "../read_print_process.rs"]
