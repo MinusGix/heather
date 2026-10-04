@@ -1,0 +1,759 @@
+// The operands again, one at a time (docs/native-wc-command-design.md §6.1):
+// once the scan has read the command line, the stat pass and the per-operand
+// driver walk argv again, and this cursor steps from one operand to the next,
+// passing over the options and `--` without reading their letters. The code
+// is library code with no program-specific bytes. The claim is `cursor_runs`,
+// against `command_program`'s `operands_from`; `parse_operands` says those
+// are the operands `parse_args` gives.
+import command_program;
+import elf64_arg_scan;
+import elf64_format_width;
+import elf64_io;
+import linux_x86_64_io;
+import x86_64;
+import x86_64_block;
+import x86_64_fetch;
+import x86_64_fetched_code;
+import x86_64_data_read;
+import x86_64_access_memory;
+import x86_64_layout;
+import bitvec;
+import bitvec_nat;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+import omega;
+
+// ---------------------------------------------------------------------------
+// The operands `parse_args` gives are `operands_from` argv[1] on.
+
+fn OperandsAre(result: Scanned, operands: List<List<BitVec(8)>>) → Type {
+    match result { Refused => True, Scanned(_, found) => found = operands }
+}
+
+theorem op_not_dash(rest: List<List<BitVec(8)>>, first: BitVec(8), tail: List<BitVec(8)>, no: first.eq_bit(dash()) = False):
+    operands_from(False, Cons(Cons(first, tail), rest)) = Cons(Cons(first, tail), operands_from(False, rest)) {
+    j(sym(no), λ c _ => (match c as λ _ => List<List<BitVec(8)>> {
+        False => Cons(Cons(first, tail), operands_from(False, rest)),
+        True => match tail {
+            Nil => Cons(Cons(first, tail), operands_from(False, rest)),
+            Cons(second, more) => operands_from(!letters_follow(second, more), rest),
+        },
+    }) = Cons(Cons(first, tail), operands_from(False, rest)), refl)
+}
+theorem op_lone_dash(rest: List<List<BitVec(8)>>, first: BitVec(8), yes: first.eq_bit(dash()) = True):
+    operands_from(False, Cons([first], rest)) = Cons([first], operands_from(False, rest)) {
+    j(sym(yes), λ c _ => (match c as λ _ => List<List<BitVec(8)>> {
+        False => Cons([first], operands_from(False, rest)),
+        True => Cons([first], operands_from(False, rest)),
+    }) = Cons([first], operands_from(False, rest)), refl)
+}
+theorem op_dash(rest: List<List<BitVec(8)>>, first, second: BitVec(8), more: List<BitVec(8)>, yes: first.eq_bit(dash()) = True):
+    operands_from(False, Cons(Cons(first, Cons(second, more)), rest)) = operands_from(!letters_follow(second, more), rest) {
+    j(sym(yes), λ c _ => (match c as λ _ => List<List<BitVec(8)>> {
+        False => Cons(Cons(first, Cons(second, more)), operands_from(False, rest)),
+        True => operands_from(!letters_follow(second, more), rest),
+    }) = operands_from(!letters_follow(second, more), rest), refl)
+}
+
+// An operand kept on the right of the list is one more in front of the rest.
+theorem operands_moved(result: Scanned, ops: List<List<BitVec(8)>>, arg: List<BitVec(8)>, later: List<List<BitVec(8)>>,
+    are: OperandsAre(result, (ops ++ [arg]) ++ later)): OperandsAre(result, ops ++ Cons(arg, later)) {
+    j(List::append_assoc(ops, [arg], later), λ o _ => OperandsAre(result, o), are)
+}
+
+theorem scan_operands(letters: List<BitVec(8)>, args: List<List<BitVec(8)>>):
+    (ended: Bool) → (mask: BitVec(64)) → (ops: List<List<BitVec(8)>>) →
+    OperandsAre(scan_args(letters, ended, mask, ops, args), ops ++ operands_from(ended, args)) {
+    match args as λ a => (ended: Bool) → (mask: BitVec(64)) → (ops: List<List<BitVec(8)>>) →
+            OperandsAre(scan_args(letters, ended, mask, ops, a), ops ++ operands_from(ended, a)) {
+        Nil => λ ended mask ops => sym(List::append_nil(ops)),
+        Cons(arg, rest) => λ ended mask ops =>
+            match ended as λ e => OperandsAre(scan_args(letters, e, mask, ops, Cons(arg, rest)), ops ++ operands_from(e, Cons(arg, rest))) {
+                True => operands_moved(scan_args(letters, True, mask, ops ++ [arg], rest), ops, arg, operands_from(True, rest),
+                    scan_operands(letters, rest, True, mask, ops ++ [arg])),
+                False => match arg as λ x => OperandsAre(scan_args(letters, False, mask, ops, Cons(x, rest)), ops ++ operands_from(False, Cons(x, rest))) {
+                    Nil => operands_moved(scan_args(letters, False, mask, ops ++ [Nil], rest), ops, Nil, operands_from(False, rest),
+                        scan_operands(letters, rest, False, mask, ops ++ [Nil])),
+                    Cons(first, tail) => (match first.eq_bit(dash()) as λ c => (first.eq_bit(dash()) = c) →
+                            OperandsAre(scan_args(letters, False, mask, ops, Cons(Cons(first, tail), rest)),
+                                ops ++ operands_from(False, Cons(Cons(first, tail), rest))) {
+                        False => λ no => {
+                            let kept = operands_moved(scan_args(letters, False, mask, ops ++ [Cons(first, tail)], rest), ops, Cons(first, tail),
+                                operands_from(False, rest), scan_operands(letters, rest, False, mask, ops ++ [Cons(first, tail)]));
+                            j(sym(scan_not_dash(letters, mask, ops, rest, first, tail, no)),
+                                λ r _ => OperandsAre(r, ops ++ operands_from(False, Cons(Cons(first, tail), rest))),
+                                j(sym(op_not_dash(rest, first, tail, no)),
+                                    λ o _ => OperandsAre(scan_args(letters, False, mask, ops ++ [Cons(first, tail)], rest), ops ++ o), kept))
+                        },
+                        True => λ yes => match tail as λ t => OperandsAre(scan_args(letters, False, mask, ops, Cons(Cons(first, t), rest)),
+                                ops ++ operands_from(False, Cons(Cons(first, t), rest))) {
+                            Nil => {
+                                let kept = operands_moved(scan_args(letters, False, mask, ops ++ [[first]], rest), ops, [first],
+                                    operands_from(False, rest), scan_operands(letters, rest, False, mask, ops ++ [[first]]));
+                                j(sym(scan_lone_dash(letters, mask, ops, rest, first, yes)),
+                                    λ r _ => OperandsAre(r, ops ++ operands_from(False, Cons([first], rest))),
+                                    j(sym(op_lone_dash(rest, first, yes)),
+                                        λ o _ => OperandsAre(scan_args(letters, False, mask, ops ++ [[first]], rest), ops ++ o), kept))
+                            },
+                            Cons(second, more) => {
+                                let follows = (match letters_follow(second, more) as λ f => (letters_follow(second, more) = f) →
+                                        OperandsAre(dash_scan(letters, mask, ops, second, more, rest), ops ++ operands_from(!f, rest)) {
+                                    False => λ ends => j(sym(dash_scan_ends(letters, mask, ops, rest, second, more, ends)),
+                                        λ r _ => OperandsAre(r, ops ++ operands_from(True, rest)), scan_operands(letters, rest, True, mask, ops)),
+                                    True => λ follow => j(sym(dash_scan_letters(letters, mask, ops, rest, second, more, follow)),
+                                        λ r _ => OperandsAre(r, ops ++ operands_from(False, rest)),
+                                        match option_mask(letters, mask, Cons(second, more)) as λ o =>
+                                                OperandsAre(option_scan(letters, ops, rest, o), ops ++ operands_from(False, rest)) {
+                                            None => trivial,
+                                            Some(selected) => scan_operands(letters, rest, False, selected, ops),
+                                        }),
+                                })(refl);
+                                j(sym(scan_dash(letters, mask, ops, rest, first, second, more, yes)),
+                                    λ r _ => OperandsAre(r, ops ++ operands_from(False, Cons(Cons(first, Cons(second, more)), rest))),
+                                    j(sym(op_dash(rest, first, second, more, yes)),
+                                        λ o _ => OperandsAre(dash_scan(letters, mask, ops, second, more, rest), ops ++ o), follows))
+                            },
+                        },
+                    })(refl),
+                },
+            },
+    }
+}
+
+// The operands of a command line that parses.
+theorem parse_operands(letters: List<BitVec(8)>, default: BitVec(64), argv: List<List<BitVec(8)>>):
+    OperandsAre(parse_args(letters, default, argv), operands_from(False, command_args(argv))) {
+    let found = operands_from(False, command_args(argv));
+    match scan_args(letters, False, BitVec::zero(), Nil, command_args(argv)) as λ r => OperandsAre(r, found) →
+            OperandsAre(match r { Refused => Refused, Scanned(mask, operands) => Scanned(chosen_mask(default, mask), operands) }, found) {
+        Refused => λ t => t,
+        Scanned(_, _) => λ same => same,
+    }(scan_operands(letters, command_args(argv), False, BitVec::zero(), Nil))
+}
+
+// ---------------------------------------------------------------------------
+// The code. RBX is the next argv slot and R12 is one once `--` has ended the
+// options; the caller keeps both between calls.
+//
+//   start:  RBX := RSP + 8; R12 := 0; past argv[0] unless it is null
+//   next:   RSI := [RBX]; null: end, RSI zero.  RBX += 8
+//           options ended: end, an operand
+//           AL := [RSI]; not a dash: end, an operand
+//           AL := [RSI + 1]; NUL (`-` alone): end, an operand
+//           not a dash: next (an option's letters)
+//           AL := [RSI + 2]; not NUL: next (an option starting `--`)
+//           R12 := 1 (`--` alone); next
+//   end:    RSI is the operand, or zero when none is left
+//
+// RAX, RBX, RSI, RDI, R11, R12 and the flags are clobbered; RSP, RBP, RCX,
+// RDX, R8–R10 and R13–R15 are kept.
+
+fn cursor_setup_block() → List<Instruction> { [MovRR(Rbx, Rsp), AddRI8(Rbx, eight_byte()), MovRI(R12, word_zero())] }
+fn cj_first() → BitVec(32) { BitVec::ofNat(4) }
+fn start_parts() → List<List<BitVec(8)>> {
+    [canonical_block_bytes(cursor_setup_block()), word_load_bytes(scan_slot_load()), canonical_block_bytes(scan_null_block()),
+     near_control_bytes(JumpIfNear(E, cj_first()))]
+}
+fn start_lens() → List<Nat> { [17, 3, 13, 6] }
+fn start_code() → List<BitVec(8)> { layout_code(start_parts(), canonical_block_bytes(scan_skip_block())) }
+fn start_len() → Nat { 43 }
+
+fn cursor_ended_block() → List<Instruction> { [AddRI8(Rbx, eight_byte()), MovRI(R11, word_zero()), CmpRR(R12, R11)] }
+fn cursor_step_block() → List<Instruction> { [AddRI8(Rdi, one_byte())] }
+fn cursor_end_block() → List<Instruction> { [MovRI(R12, BitVec::ofNat(1))] }
+
+// The jumps, from their own ends: to `end` (159), or back to `next` (0).
+fn cj_none() → BitVec(32) { BitVec::ofNat(137) }
+fn cj_ended() → BitVec(32) { BitVec::ofNat(114) }
+fn cj_not_dash() → BitVec(32) { BitVec::ofNat(91) }
+fn cj_lone() → BitVec(32) { BitVec::ofNat(61) }
+fn cj_letters() → BitVec(32) { BitVec::ofNat(4294967179) }
+fn cj_more() → BitVec(32) { BitVec::ofNat(4294967152) }
+fn cj_back() → BitVec(32) { BitVec::ofNat(4294967137) }
+
+fn cursor_parts() → List<List<BitVec(8)>> {
+    [word_load_bytes(scan_slot_load()), canonical_block_bytes(scan_null_block()), near_control_bytes(JumpIfNear(E, cj_none())),
+     canonical_block_bytes(cursor_ended_block()), near_control_bytes(JumpIfNear(NE, cj_ended())),
+     // the first byte (45)
+     byte_load_bytes(scan_byte_load()), canonical_block_bytes(scan_is_block(dash())), near_control_bytes(JumpIfNear(NE, cj_not_dash())),
+     // the second (68)
+     canonical_block_bytes(scan_ahead_block()), byte_load_bytes(scan_ahead_load()), canonical_block_bytes(scan_is_block(nul())),
+     near_control_bytes(JumpIfNear(E, cj_lone())), canonical_block_bytes(scan_is_block(dash())), near_control_bytes(JumpIfNear(NE, cj_letters())),
+     // the third (117)
+     canonical_block_bytes(cursor_step_block()), byte_load_bytes(scan_ahead_load()), canonical_block_bytes(scan_is_block(nul())),
+     near_control_bytes(JumpIfNear(NE, cj_more())), canonical_block_bytes(cursor_end_block())]
+}
+fn cursor_lens() → List<Nat> { [3, 13, 6, 17, 6, 4, 13, 6, 7, 4, 13, 6, 13, 6, 4, 4, 13, 6, 10] }
+fn cursor_code() → List<BitVec(8)> { layout_code(cursor_parts(), near_control_bytes(JumpNear(cj_back()))) }
+fn cursor_len() → Nat { 159 }
+
+theorem start_measured(): LayoutMeasured(start_parts(), start_lens()) { ⟨refl, ⟨refl, ⟨refl, ⟨refl, trivial⟩⟩⟩⟩ }
+theorem start_code_len(): start_code().len() = start_len() {
+    layout_len(start_parts(), canonical_block_bytes(scan_skip_block()), start_lens(), start_measured(), 4, refl)
+}
+theorem cursor_measured(): LayoutMeasured(cursor_parts(), cursor_lens()) {
+    let closed: (piece_lens(cursor_parts()) = cursor_lens()) = refl;
+    j(closed, λ ls _ => LayoutMeasured(cursor_parts(), ls), measured_self(cursor_parts()))
+}
+theorem cursor_code_len(): cursor_code().len() = cursor_len() {
+    layout_len(cursor_parts(), near_control_bytes(JumpNear(cj_back())), cursor_lens(), cursor_measured(), 5, refl)
+}
+
+fn StartPieces(file: IoImage, at: BitVec(64)) → Type {
+    (i: Nat) → Placed(file, layout_piece(start_parts(), canonical_block_bytes(scan_skip_block()), i), next_rip(at, layout_at(0, start_lens(), i)))
+}
+theorem start_pieces(file: IoImage, at: BitVec(64), placed: Placed(file, start_code(), at)): StartPieces(file, at) {
+    placed_piece(file, start_parts(), canonical_block_bytes(scan_skip_block()), start_lens(), start_measured(), at, placed)
+}
+fn CursorPieces(file: IoImage, at: BitVec(64)) → Type {
+    (i: Nat) → Placed(file, layout_piece(cursor_parts(), near_control_bytes(JumpNear(cj_back())), i), next_rip(at, layout_at(0, cursor_lens(), i)))
+}
+theorem cursor_pieces(file: IoImage, at: BitVec(64), placed: Placed(file, cursor_code(), at)): CursorPieces(file, at) {
+    placed_piece(file, cursor_parts(), near_control_bytes(JumpNear(cj_back())), cursor_lens(), cursor_measured(), at, placed)
+}
+
+// ---------------------------------------------------------------------------
+// argv at pointers that stay put. `ArgvFrom` names each argument's pointer
+// inside an `Exists`, at one memory; a command that stats, opens or prints an
+// argument after a read has overwritten its page needs the same pointer at
+// every page. Linux puts argv on the stack, outside the page, so the layout
+// holds whatever the page holds.
+
+fn ArgvPointers(memory: IoMemory, rsp: BitVec(64), args: List<List<BitVec(8)>>) → List<BitVec(64)> → Nat → Type {
+    match args {
+        Nil => λ _ k => WordAt(io_data_access(), memory, argv_slot(rsp, k), word_zero()),
+        Cons(arg, rest) => λ pointers k => match pointers {
+            Nil => False,
+            Cons(pointer, more) => WordAt(io_data_access(), memory, argv_slot(rsp, k), pointer) ∧ ((0 < pointer.toNat()) ∧
+                ((pointer.toNat() + arg.len() + 1 <= Nat::pow(2, 47)) ∧
+                (CStringAt(io_data_access(), memory, pointer, arg) ∧ ArgvPointers(memory, rsp, rest, more, Succ(k))))),
+        },
+    }
+}
+fn ArgvStays(file: IoImage, rsp: BitVec(64), args: List<List<BitVec(8)>>, pointers: List<BitVec(64)>, k: Nat) → Type {
+    (page: Nat → BitVec(8)) → ArgvPointers(IoMemory(file, page), rsp, args, pointers, k)
+}
+// The command line at RSP, argc and argv, whatever the page holds.
+fn ArgvStaysAt(file: IoImage, rsp: BitVec(64), argv: List<List<BitVec(8)>>, pointers: List<BitVec(64)>) → Type {
+    (page: Nat → BitVec(8)) → WordAt(io_data_access(), IoMemory(file, page), rsp, word_of_nat(64, argv.len())) ∧
+        ArgvPointers(IoMemory(file, page), rsp, argv, pointers, 1)
+}
+
+theorem pointers_argv(memory: IoMemory, rsp: BitVec(64), args: List<List<BitVec(8)>>):
+    (pointers: List<BitVec(64)>) → (k: Nat) → ArgvPointers(memory, rsp, args, pointers, k) → ArgvFrom(io_data_access(), memory, rsp, args, k) {
+    match args as λ a => (pointers: List<BitVec(64)>) → (k: Nat) → ArgvPointers(memory, rsp, a, pointers, k) →
+            ArgvFrom(io_data_access(), memory, rsp, a, k) {
+        Nil => λ _ _ held => held,
+        Cons(arg, rest) => λ pointers => match pointers as λ q => (k: Nat) → ArgvPointers(memory, rsp, Cons(arg, rest), q, k) →
+                ArgvFrom(io_data_access(), memory, rsp, Cons(arg, rest), k) {
+            Nil => λ _ never => false_elim(never),
+            Cons(pointer, more) => λ k held => Exists(pointer, ⟨held.left, ⟨held.right.left, ⟨held.right.right.left, ⟨held.right.right.right.left,
+                pointers_argv(memory, rsp, rest, more, Succ(k), held.right.right.right.right)⟩⟩⟩⟩),
+        },
+    }
+}
+// The layout the scan reads, at any one page.
+theorem stays_argv_at(file: IoImage, rsp: BitVec(64), argv: List<List<BitVec(8)>>, pointers: List<BitVec(64)>,
+    stays: ArgvStaysAt(file, rsp, argv, pointers), page: Nat → BitVec(8)): ArgvAt(io_data_access(), IoMemory(file, page), rsp, argv) {
+    ⟨(stays(page)).left, pointers_argv(IoMemory(file, page), rsp, argv, pointers, 1, (stays(page)).right)⟩
+}
+
+// ---------------------------------------------------------------------------
+// What the cursor keeps, and where it is.
+
+fn CursorKept(after, before: Gprs) → Type {
+    (read_gpr(Rsp, after) = read_gpr(Rsp, before)) ∧ ((read_gpr(Rbp, after) = read_gpr(Rbp, before)) ∧
+    ((read_gpr(Rcx, after) = read_gpr(Rcx, before)) ∧ ((read_gpr(Rdx, after) = read_gpr(Rdx, before)) ∧
+    ((read_gpr(R8, after) = read_gpr(R8, before)) ∧ ((read_gpr(R9, after) = read_gpr(R9, before)) ∧
+    ((read_gpr(R10, after) = read_gpr(R10, before)) ∧ ((read_gpr(R13, after) = read_gpr(R13, before)) ∧
+    ((read_gpr(R14, after) = read_gpr(R14, before)) ∧ (read_gpr(R15, after) = read_gpr(R15, before))))))))))
+}
+theorem cursor_kept_refl(gprs: Gprs): CursorKept(gprs, gprs) { ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, refl⟩⟩⟩⟩⟩⟩⟩⟩⟩ }
+
+// RBX at argv slot `k`, R12 whether `--` has ended the options.
+fn CursorRegs(rsp: BitVec(64), k: Nat, ended: Bool, origin, gprs: Gprs) → Type {
+    (read_gpr(Rbx, gprs) = argv_slot(rsp, k)) ∧ ((read_gpr(R12, gprs) = ended_word(ended)) ∧ CursorKept(gprs, origin))
+}
+record CursorAt(file: IoImage, page: Nat → BitVec(8), at, rsp: BitVec(64), k: Nat, ended: Bool, origin: Gprs, state: MachineState<IoMemory>) {
+    memory_is: state.memory = IoMemory(file, page),
+    rip_is: state.rip = at,
+    regs: CursorRegs(rsp, k, ended, origin, state.gprs),
+}
+
+// Past the code, with `ops` the operands still to come: RBX and R12 where
+// the next call goes on from.
+record CursorRest(file: IoImage, page: Nat → BitVec(8), at, rsp: BitVec(64), origin: Gprs, ops: List<List<BitVec(8)>>,
+    state: MachineState<IoMemory>) {
+    k: Nat,
+    ended: Bool,
+    args: List<List<BitVec(8)>>,
+    pointers: List<BitVec(64)>,
+    memory_is: state.memory = IoMemory(file, page),
+    rip_is: state.rip = next_rip(at, cursor_len()),
+    regs: CursorRegs(rsp, k, ended, origin, state.gprs),
+    argv: ArgvStays(file, rsp, args, pointers, k),
+    left: operands_from(ended, args) = ops,
+}
+// The cursor ends with RSI zero when no operand is left, and otherwise at the
+// next operand, a C string at RSI whatever the page holds.
+fn CursorOut(file: IoImage, page: Nat → BitVec(8), at, rsp: BitVec(64), origin: Gprs, ops: List<List<BitVec(8)>>,
+    state: MachineState<IoMemory>) → Type {
+    match ops {
+        Nil => (read_gpr(Rsi, state.gprs) = word_zero()) ∧ CursorRest(file, page, at, rsp, origin, Nil, state),
+        Cons(arg, more) => Exists<BitVec(64)>(λ pointer => (read_gpr(Rsi, state.gprs) = pointer) ∧ ((0 < pointer.toNat()) ∧
+            ((pointer.toNat() + arg.len() + 1 <= Nat::pow(2, 47)) ∧
+            (((page2: Nat → BitVec(8)) → CStringAt(io_data_access(), IoMemory(file, page2), pointer, arg)) ∧
+            CursorRest(file, page, at, rsp, origin, more, state))))),
+    }
+}
+fn CursorReach(file: IoImage, page: Nat → BitVec(8), at, rsp: BitVec(64), origin: Gprs, ops: List<List<BitVec(8)>>,
+    state: MachineState<IoMemory>) → Type {
+    Exists<MachineState<IoMemory>>(λ after => FetchedSteps(io_fetch_access(), io_data_access(), state, after) ∧
+        CursorOut(file, page, at, rsp, origin, ops, after))
+}
+theorem cursor_reach_after(file: IoImage, page: Nat → BitVec(8), at, rsp: BitVec(64), origin: Gprs, ops: List<List<BitVec(8)>>,
+    before, middle: MachineState<IoMemory>, steps: FetchedSteps(io_fetch_access(), io_data_access(), before, middle),
+    reach: CursorReach(file, page, at, rsp, origin, ops, middle)): CursorReach(file, page, at, rsp, origin, ops, before) {
+    Exists(reach.witness, ⟨fetched_steps_trans(io_fetch_access(), io_data_access(), before, middle, reach.witness, steps, reach.proof.left),
+        reach.proof.right⟩)
+}
+// The cursor from argv slot `k` on, whatever `--` has done so far.
+fn CursorCont(file: IoImage, page: Nat → BitVec(8), at, rsp: BitVec(64), origin: Gprs, k: Nat, args: List<List<BitVec(8)>>) → Type {
+    (ended: Bool) → (state: MachineState<IoMemory>) → CursorAt(file, page, at, rsp, k, ended, origin, state) →
+        CursorReach(file, page, at, rsp, origin, operands_from(ended, args), state)
+}
+
+// At `end` with an operand found.
+theorem cursor_found(file: IoImage, page: Nat → BitVec(8), at, rsp: BitVec(64), origin: Gprs, k: Nat, ended: Bool,
+    arg: List<BitVec(8)>, rest: List<List<BitVec(8)>>, pointer: BitVec(64), pointers: List<BitVec(64)>, state: MachineState<IoMemory>,
+    memory_is: state.memory = IoMemory(file, page), rip_is: state.rip = next_rip(at, cursor_len()), rsi: read_gpr(Rsi, state.gprs) = pointer,
+    positive: 0 < pointer.toNat(), bound: pointer.toNat() + arg.len() + 1 <= Nat::pow(2, 47),
+    string: (page2: Nat → BitVec(8)) → CStringAt(io_data_access(), IoMemory(file, page2), pointer, arg),
+    later: ArgvStays(file, rsp, rest, pointers, k), regs: CursorRegs(rsp, k, ended, origin, state.gprs)):
+    CursorOut(file, page, at, rsp, origin, Cons(arg, operands_from(ended, rest)), state) {
+    Exists(pointer, ⟨rsi, ⟨positive, ⟨bound, ⟨string,
+        CursorRest(k := k, ended := ended, args := rest, pointers := pointers, memory_is := memory_is, rip_is := rip_is, regs := regs,
+            argv := later, left := refl)⟩⟩⟩⟩)
+}
+
+// ---------------------------------------------------------------------------
+// One argument.
+
+// The null word: none left.
+theorem cursor_none(file: IoImage, page: Nat → BitVec(8), at: BitVec(64), piece: CursorPieces(file, at), rsp: BitVec(64), k: Nat,
+    ended: Bool, origin: Gprs, state: MachineState<IoMemory>, pointers: List<BitVec(64)>, argv: ArgvStays(file, rsp, Nil, pointers, k),
+    head: CursorAt(file, page, at, rsp, k, ended, origin, state)): CursorReach(file, page, at, rsp, origin, operands_from(ended, Nil), state) {
+    let fetch = io_fetch_access();
+    let data = io_data_access();
+    let loaded = run_word_load(file, page, scan_slot_load(), at, 0, piece(0), state, head.memory_is, head.rip_is, word_zero(),
+        j(sym(head.regs.left), λ a _ => WordAt(data, IoMemory(file, page), a, word_zero()), argv(page)));
+    let s1 = word_load_after(scan_slot_load(), word_zero(), state);
+    let tested = run_block(file, page, scan_null_block(), at, 3, piece(1), s1, loaded.memory_is, loaded.rip_is);
+    let s2 = execute_block_normal(scan_null_block(), s1);
+    let jumped = run_near(file, page, JumpIfNear(E, cj_none()), at, 16, piece(2), s2, tested.memory_is, tested.rip_is);
+    let s3 = execute_near_control(JumpIfNear(E, cj_none()), s2);
+    let s3_rip = jcc_taken(E, cj_none(), s2, at, 16, 159, tested.rip_is, zero_bits_sub_self(64, word_zero()), refl);
+    Exists(s3, ⟨fetched_steps_trans(fetch, data, state, s1, s3, loaded.steps, fetched_steps_trans(fetch, data, s1, s2, s3, tested.steps, jumped)),
+        ⟨refl, CursorRest(k := k, ended := ended, args := Nil, pointers := pointers, memory_is := tested.memory_is, rip_is := s3_rip,
+            regs := head.regs, argv := argv, left := refl)⟩⟩)
+}
+
+// An argument's pointer loaded, RBX past its slot, and the options-ended
+// test made, at the JNE (39).
+record CursorHead(file: IoImage, page: Nat → BitVec(8), at, rsp: BitVec(64), k: Nat, ended: Bool, origin: Gprs,
+    arg: List<BitVec(8)>, rest: List<List<BitVec(8)>>, state: MachineState<IoMemory>) {
+    pointer: BitVec(64),
+    pointers: List<BitVec(64)>,
+    memory_is: state.memory = IoMemory(file, page),
+    rip_is: state.rip = next_rip(at, 39),
+    zf: state.flags.zf = ended_zf(ended),
+    rsi: read_gpr(Rsi, state.gprs) = pointer,
+    positive: 0 < pointer.toNat(),
+    bound: pointer.toNat() + arg.len() + 1 <= Nat::pow(2, 47),
+    string: (page2: Nat → BitVec(8)) → CStringAt(io_data_access(), IoMemory(file, page2), pointer, arg),
+    later: ArgvStays(file, rsp, rest, pointers, k),
+    regs: CursorRegs(rsp, k, ended, origin, state.gprs),
+}
+theorem cursor_head(file: IoImage, page: Nat → BitVec(8), at: BitVec(64), piece: CursorPieces(file, at), rsp: BitVec(64), k: Nat,
+    ended: Bool, origin: Gprs, arg: List<BitVec(8)>, rest: List<List<BitVec(8)>>, state: MachineState<IoMemory>, pointers: List<BitVec(64)>,
+    argv: ArgvStays(file, rsp, Cons(arg, rest), pointers, k), head: CursorAt(file, page, at, rsp, k, ended, origin, state)):
+    Exists<MachineState<IoMemory>>(λ after => FetchedSteps(io_fetch_access(), io_data_access(), state, after) ∧
+        CursorHead(file, page, at, rsp, Succ(k), ended, origin, arg, rest, after)) {
+    let fetch = io_fetch_access();
+    let data = io_data_access();
+    match pointers as λ q => ArgvStays(file, rsp, Cons(arg, rest), q, k) →
+            Exists<MachineState<IoMemory>>(λ after => FetchedSteps(fetch, data, state, after) ∧
+                CursorHead(file, page, at, rsp, Succ(k), ended, origin, arg, rest, after)) {
+        Nil => λ never => false_elim(never(page)),
+        Cons(p, more) => λ stays => {
+            let facts = stays(page);
+            let loaded = run_word_load(file, page, scan_slot_load(), at, 0, piece(0), state, head.memory_is, head.rip_is, p,
+                j(sym(head.regs.left), λ a _ => WordAt(data, IoMemory(file, page), a, p), facts.left));
+            let s1 = word_load_after(scan_slot_load(), p, state);
+            let tested = run_block(file, page, scan_null_block(), at, 3, piece(1), s1, loaded.memory_is, loaded.rip_is);
+            let s2 = execute_block_normal(scan_null_block(), s1);
+            let passed = run_near(file, page, JumpIfNear(E, cj_none()), at, 16, piece(2), s2, tested.memory_is, tested.rip_is);
+            let s3 = execute_near_control(JumpIfNear(E, cj_none()), s2);
+            let s3_rip = jcc_passed(E, cj_none(), s2, at, 16, tested.rip_is, trans(zero_bits_sub(64, p, word_zero()), nonzero_word(p, facts.right.left)));
+            let bumped = run_block(file, page, cursor_ended_block(), at, 22, piece(3), s3, tested.memory_is, s3_rip);
+            let s4 = execute_block_normal(cursor_ended_block(), s3);
+            let regs = head.regs;
+            let rbx: (read_gpr(Rbx, s4.gprs) = argv_slot(rsp, Succ(k))) = slot_next(rsp, k, read_gpr(Rbx, state.gprs), regs.left);
+            Exists(s4, ⟨fetched_steps_trans(fetch, data, state, s1, s4, loaded.steps,
+                    fetched_steps_trans(fetch, data, s1, s2, s4, tested.steps, fetched_steps_trans(fetch, data, s2, s3, s4, passed, bumped.steps))),
+                CursorHead(pointer := p, pointers := more, memory_is := bumped.memory_is, rip_is := bumped.rip_is,
+                    zf := trans(cong_fn<BitVec(64), Bool>(λ a => is_zero_bits(64, a.sub(word_zero())), regs.right.left), ended_flag(ended)),
+                    rsi := refl, positive := facts.right.left, bound := facts.right.right.left,
+                    string := λ page2 => (stays(page2)).right.right.right.left, later := λ page2 => (stays(page2)).right.right.right.right,
+                    regs := ⟨rbx, regs.right⟩)⟩)
+        },
+    }(argv)
+}
+
+// Inside an argument whose options are not ended, `o` bytes into the code:
+// RSI still at the argument.
+record CursorIn(file: IoImage, page: Nat → BitVec(8), at, rsp: BitVec(64), k: Nat, origin: Gprs, pointer: BitVec(64), o: Nat,
+    state: MachineState<IoMemory>) {
+    memory_is: state.memory = IoMemory(file, page),
+    rip_is: state.rip = next_rip(at, o),
+    rsi: read_gpr(Rsi, state.gprs) = pointer,
+    regs: CursorRegs(rsp, k, False, origin, state.gprs),
+}
+
+// After `--`'s second dash (117), RDI at it: `--` alone ends the options,
+// and anything longer is an option.
+theorem cursor_dashes(file: IoImage, page: Nat → BitVec(8), at: BitVec(64), piece: CursorPieces(file, at), rsp: BitVec(64), k: Nat,
+    origin: Gprs, rest: List<List<BitVec(8)>>, cont: CursorCont(file, page, at, rsp, origin, k, rest), pointer: BitVec(64),
+    source2: Nat → Option<BitVec(8)>, more: List<BitVec(8)>, state: MachineState<IoMemory>,
+    head: CursorIn(file, page, at, rsp, k, origin, pointer, 117, state), v: Nat, rdi: read_gpr(Rdi, state.gprs).toNat() = v,
+    reads: ReadsFrom(file, page, source2, Succ(v)), string2: CStringFrom(more, source2), low: Succ(v) < Nat::pow(2, 47)):
+    CursorReach(file, page, at, rsp, origin, match more { Nil => operands_from(True, rest), Cons(_, _) => operands_from(False, rest) }, state) {
+    let fetch = io_fetch_access();
+    let data = io_data_access();
+    let memory = IoMemory(file, page);
+    let stepped = run_block(file, page, cursor_step_block(), at, 117, piece(14), state, head.memory_is, head.rip_is);
+    let s1 = execute_block_normal(cursor_step_block(), state);
+    let rdi1: (read_gpr(Rdi, s1.gprs).toNat() = Succ(v)) = pointer_next(read_gpr(Rdi, state.gprs), v, rdi, low);
+    let reads1: ReadsFrom(file, page, source2, read_gpr(Rdi, s1.gprs).toNat()) = j(sym(rdi1), λ w _ => ReadsFrom(file, page, source2, w), reads);
+    let low1 = low_of(read_gpr(Rdi, s1.gprs), Succ(v), rdi1, low);
+    match more as λ m => CStringFrom(m, source2) →
+            CursorReach(file, page, at, rsp, origin, match m { Nil => operands_from(True, rest), Cons(_, _) => operands_from(False, rest) }, state) {
+        Nil => λ string => {
+            let present: (data.read(memory, read_gpr(Rdi, s1.gprs)) = Some(nul())) =
+                trans(read_here(file, page, source2, read_gpr(Rdi, s1.gprs), reads1(0)), string);
+            let loaded = run_byte_load(file, page, scan_ahead_load(), at, 121, piece(15), s1, stepped.memory_is, stepped.rip_is, nul(), present, low1);
+            let s2 = byte_load_after(scan_ahead_load(), nul(), s1);
+            let tested = run_block(file, page, scan_is_block(nul()), at, 125, piece(16), s2, loaded.memory_is, loaded.rip_is);
+            let s3 = execute_block_normal(scan_is_block(nul()), s2);
+            let passed = run_near(file, page, JumpIfNear(NE, cj_more()), at, 138, piece(17), s3, tested.memory_is, tested.rip_is);
+            let s4 = execute_near_control(JumpIfNear(NE, cj_more()), s3);
+            let s4_rip = jcc_passed(NE, cj_more(), s3, at, 138, tested.rip_is, ne_fails(s3.flags, cmp_bytes(nul(), nul())));
+            let ended = run_block(file, page, cursor_end_block(), at, 144, piece(18), s4, tested.memory_is, s4_rip);
+            let s5 = execute_block_normal(cursor_end_block(), s4);
+            let back = run_near(file, page, JumpNear(cj_back()), at, 154, piece(19), s5, ended.memory_is, ended.rip_is);
+            let s6 = execute_near_control(JumpNear(cj_back()), s5);
+            let s6_rip = jmp_back(cj_back(), s5, at, 154, 0, ended.rip_is, refl);
+            let regs = head.regs;
+            cursor_reach_after(file, page, at, rsp, origin, operands_from(True, rest), state, s6,
+                fetched_steps_trans(fetch, data, state, s1, s6, stepped.steps,
+                    fetched_steps_trans(fetch, data, s1, s2, s6, loaded.steps,
+                        fetched_steps_trans(fetch, data, s2, s3, s6, tested.steps,
+                            fetched_steps_trans(fetch, data, s3, s4, s6, passed, fetched_steps_trans(fetch, data, s4, s5, s6, ended.steps, back))))),
+                cont(True, s6, CursorAt(memory_is := ended.memory_is, rip_is := s6_rip, regs := ⟨regs.left, ⟨refl, regs.right.right⟩⟩)))
+        },
+        Cons(byte2, _) => λ string => {
+            let present: (data.read(memory, read_gpr(Rdi, s1.gprs)) = Some(byte2)) =
+                trans(read_here(file, page, source2, read_gpr(Rdi, s1.gprs), reads1(0)), string.left);
+            let loaded = run_byte_load(file, page, scan_ahead_load(), at, 121, piece(15), s1, stepped.memory_is, stepped.rip_is, byte2, present, low1);
+            let s2 = byte_load_after(scan_ahead_load(), byte2, s1);
+            let tested = run_block(file, page, scan_is_block(nul()), at, 125, piece(16), s2, loaded.memory_is, loaded.rip_is);
+            let s3 = execute_block_normal(scan_is_block(nul()), s2);
+            let jumped = run_near(file, page, JumpIfNear(NE, cj_more()), at, 138, piece(17), s3, tested.memory_is, tested.rip_is);
+            let s4 = execute_near_control(JumpIfNear(NE, cj_more()), s3);
+            let s4_rip = jcc_taken_back(NE, cj_more(), s3, at, 138, 0, tested.rip_is,
+                ne_holds(s3.flags, trans(cmp_bytes(byte2, nul()), not_nul(byte2, string.right.left))), refl);
+            cursor_reach_after(file, page, at, rsp, origin, operands_from(False, rest), state, s4,
+                fetched_steps_trans(fetch, data, state, s1, s4, stepped.steps,
+                    fetched_steps_trans(fetch, data, s1, s2, s4, loaded.steps, fetched_steps_trans(fetch, data, s2, s3, s4, tested.steps, jumped))),
+                cont(False, s4, CursorAt(memory_is := tested.memory_is, rip_is := s4_rip, regs := head.regs)))
+        },
+    }(string2)
+}
+
+// What `operands_from` makes of an argument that starts with two dashes.
+theorem dashes_operands(rest: List<List<BitVec(8)>>, first, second: BitVec(8), more: List<BitVec(8)>,
+    yes: first.eq_bit(dash()) = True, yes1: second.eq_bit(dash()) = True):
+    operands_from(False, Cons(Cons(first, Cons(second, more)), rest)) =
+        match more { Nil => operands_from(True, rest), Cons(_, _) => operands_from(False, rest) } {
+    trans(op_dash(rest, first, second, more, yes),
+        match more as λ m => operands_from(!letters_follow(second, m), rest) =
+                match m { Nil => operands_from(True, rest), Cons(_, _) => operands_from(False, rest) } {
+            Nil => cong_fn<Bool, List<List<BitVec(8)>>>(λ f => operands_from(!f, rest), follow_dashes(second, yes1)),
+            Cons(third, after) => cong_fn<Bool, List<List<BitVec(8)>>>(λ f => operands_from(!f, rest), follow_dash_more(second, third, after, yes1)),
+        })
+}
+
+// After a first dash (68): `-` alone is an operand, a second byte that is
+// not a dash makes an option, and a second dash goes on to `cursor_dashes`.
+theorem cursor_dash(file: IoImage, page: Nat → BitVec(8), at: BitVec(64), piece: CursorPieces(file, at), rsp: BitVec(64), k: Nat,
+    origin: Gprs, rest: List<List<BitVec(8)>>, cont: CursorCont(file, page, at, rsp, origin, k, rest),
+    pointers: List<BitVec(64)>, later: ArgvStays(file, rsp, rest, pointers, k), pointer: BitVec(64), positive: 0 < pointer.toNat(),
+    byte0: BitVec(8), yes: byte0.eq_bit(dash()) = True, tail: List<BitVec(8)>, state: MachineState<IoMemory>,
+    head: CursorIn(file, page, at, rsp, k, origin, pointer, 68, state),
+    string: (page2: Nat → BitVec(8)) → CStringAt(io_data_access(), IoMemory(file, page2), pointer, Cons(byte0, tail)),
+    bound: pointer.toNat() + Succ(tail.len()) + 1 <= Nat::pow(2, 47)):
+    CursorReach(file, page, at, rsp, origin, operands_from(False, Cons(Cons(byte0, tail), rest)), state) {
+    let fetch = io_fetch_access();
+    let data = io_data_access();
+    let memory = IoMemory(file, page);
+    let v = pointer.toNat();
+    let lows = bound_first(v, tail.len(), bound);
+    let ahead = run_block(file, page, scan_ahead_block(), at, 68, piece(8), state, head.memory_is, head.rip_is);
+    let s1 = execute_block_normal(scan_ahead_block(), state);
+    let rdi1: (read_gpr(Rdi, s1.gprs).toNat() = Succ(v)) =
+        pointer_next(read_gpr(Rsi, state.gprs), v, cong_fn<BitVec(64), Nat>(λ w => w.toNat(), head.rsi), lows.right);
+    let source0 = λ (i: Nat) => data.read(memory, word_of_nat(64, v + i));
+    let source1 = λ (i: Nat) => source0(Succ(i));
+    let reads1: ReadsFrom(file, page, source1, Succ(v)) = reads_next(file, page, source0, v, λ i => refl);
+    let reads1_here: ReadsFrom(file, page, source1, read_gpr(Rdi, s1.gprs).toNat()) = j(sym(rdi1), λ w _ => ReadsFrom(file, page, source1, w), reads1);
+    let low1 = low_of(read_gpr(Rdi, s1.gprs), Succ(v), rdi1, lows.right);
+    match tail as λ t => ((page2: Nat → BitVec(8)) → CStringAt(data, IoMemory(file, page2), pointer, Cons(byte0, t))) →
+            (v + Succ(t.len()) + 1 <= Nat::pow(2, 47)) →
+            CursorReach(file, page, at, rsp, origin, operands_from(False, Cons(Cons(byte0, t), rest)), state) {
+        Nil => λ whole bound0 => {
+            let string1: CStringFrom(Nil, source1) = (whole(page)).right.right;
+            let present: (data.read(memory, read_gpr(Rdi, s1.gprs)) = Some(nul())) =
+                trans(read_here(file, page, source1, read_gpr(Rdi, s1.gprs), reads1_here(0)), string1);
+            let loaded = run_byte_load(file, page, scan_ahead_load(), at, 75, piece(9), s1, ahead.memory_is, ahead.rip_is, nul(), present, low1);
+            let s2 = byte_load_after(scan_ahead_load(), nul(), s1);
+            let tested = run_block(file, page, scan_is_block(nul()), at, 79, piece(10), s2, loaded.memory_is, loaded.rip_is);
+            let s3 = execute_block_normal(scan_is_block(nul()), s2);
+            let jumped = run_near(file, page, JumpIfNear(E, cj_lone()), at, 92, piece(11), s3, tested.memory_is, tested.rip_is);
+            let s4 = execute_near_control(JumpIfNear(E, cj_lone()), s3);
+            let s4_rip = jcc_taken(E, cj_lone(), s3, at, 92, 159, tested.rip_is, cmp_bytes(nul(), nul()), refl);
+            j(sym(op_lone_dash(rest, byte0, yes)), λ o _ => CursorReach(file, page, at, rsp, origin, o, state),
+                Exists(s4, ⟨fetched_steps_trans(fetch, data, state, s1, s4, ahead.steps, fetched_steps_trans(fetch, data, s1, s2, s4, loaded.steps,
+                        fetched_steps_trans(fetch, data, s2, s3, s4, tested.steps, jumped))),
+                    cursor_found(file, page, at, rsp, origin, k, False, [byte0], rest, pointer, pointers, s4, tested.memory_is, s4_rip, head.rsi,
+                        positive, bound0, whole, later, head.regs)⟩))
+        },
+        Cons(byte1, more) => λ whole bound1 => {
+            let string1: CStringFrom(Cons(byte1, more), source1) = (whole(page)).right.right;
+            let lows1 = bound_second(v, more.len(), bound1);
+            let present: (data.read(memory, read_gpr(Rdi, s1.gprs)) = Some(byte1)) =
+                trans(read_here(file, page, source1, read_gpr(Rdi, s1.gprs), reads1_here(0)), string1.left);
+            let loaded = run_byte_load(file, page, scan_ahead_load(), at, 75, piece(9), s1, ahead.memory_is, ahead.rip_is, byte1, present, low1);
+            let s2 = byte_load_after(scan_ahead_load(), byte1, s1);
+            let tested = run_block(file, page, scan_is_block(nul()), at, 79, piece(10), s2, loaded.memory_is, loaded.rip_is);
+            let s3 = execute_block_normal(scan_is_block(nul()), s2);
+            let passed = run_near(file, page, JumpIfNear(E, cj_lone()), at, 92, piece(11), s3, tested.memory_is, tested.rip_is);
+            let s4 = execute_near_control(JumpIfNear(E, cj_lone()), s3);
+            let s4_rip = jcc_passed(E, cj_lone(), s3, at, 92, tested.rip_is, trans(cmp_bytes(byte1, nul()), not_nul(byte1, string1.right.left)));
+            let tested2 = run_block(file, page, scan_is_block(dash()), at, 98, piece(12), s4, tested.memory_is, s4_rip);
+            let s5 = execute_block_normal(scan_is_block(dash()), s4);
+            let jne = JumpIfNear(NE, cj_letters());
+            let jumped = run_near(file, page, jne, at, 111, piece(13), s5, tested2.memory_is, tested2.rip_is);
+            let s6 = execute_near_control(jne, s5);
+            let to_s6: FetchedSteps(fetch, data, state, s6) = fetched_steps_trans(fetch, data, state, s1, s6, ahead.steps,
+                fetched_steps_trans(fetch, data, s1, s2, s6, loaded.steps, fetched_steps_trans(fetch, data, s2, s3, s6, tested.steps,
+                    fetched_steps_trans(fetch, data, s3, s4, s6, passed, fetched_steps_trans(fetch, data, s4, s5, s6, tested2.steps, jumped)))));
+            (match byte1.eq_bit(dash()) as λ c => (byte1.eq_bit(dash()) = c) →
+                    CursorReach(file, page, at, rsp, origin, operands_from(False, Cons(Cons(byte0, Cons(byte1, more)), rest)), state) {
+                False => λ no1 => {
+                    let s6_rip = jcc_taken_back(NE, cj_letters(), s5, at, 111, 0, tested2.rip_is,
+                        ne_holds(s5.flags, trans(cmp_bytes(byte1, dash()), no1)), refl);
+                    j(sym(trans(op_dash(rest, byte0, byte1, more, yes),
+                            cong_fn<Bool, List<List<BitVec(8)>>>(λ f => operands_from(!f, rest), follow_not_dash(byte1, more, no1)))),
+                        λ o _ => CursorReach(file, page, at, rsp, origin, o, state),
+                        cursor_reach_after(file, page, at, rsp, origin, operands_from(False, rest), state, s6, to_s6,
+                            cont(False, s6, CursorAt(memory_is := tested2.memory_is, rip_is := s6_rip, regs := head.regs))))
+                },
+                True => λ yes1 => {
+                    let s6_rip = jcc_passed(NE, cj_letters(), s5, at, 111, tested2.rip_is, ne_fails(s5.flags, trans(cmp_bytes(byte1, dash()), yes1)));
+                    j(sym(dashes_operands(rest, byte0, byte1, more, yes, yes1)), λ o _ => CursorReach(file, page, at, rsp, origin, o, state),
+                        cursor_reach_after(file, page, at, rsp, origin,
+                            match more { Nil => operands_from(True, rest), Cons(_, _) => operands_from(False, rest) }, state, s6, to_s6,
+                            cursor_dashes(file, page, at, piece, rsp, k, origin, rest, cont, pointer, λ i => source1(Succ(i)), more, s6,
+                                CursorIn(memory_is := tested2.memory_is, rip_is := s6_rip, rsi := head.rsi, regs := head.regs),
+                                Succ(v), rdi1, reads_next(file, page, source1, Succ(v), reads1), string1.right.right, lows1.left)))
+                },
+            })(refl)
+        },
+    }(string, bound)
+}
+
+// An argument with the options not ended, from the JNE (39).
+theorem cursor_option(file: IoImage, page: Nat → BitVec(8), at: BitVec(64), piece: CursorPieces(file, at), rsp: BitVec(64), k: Nat,
+    origin: Gprs, rest: List<List<BitVec(8)>>, cont: CursorCont(file, page, at, rsp, origin, k, rest), arg: List<BitVec(8)>,
+    state: MachineState<IoMemory>, head: CursorHead(file, page, at, rsp, k, False, origin, arg, rest, state)):
+    CursorReach(file, page, at, rsp, origin, operands_from(False, Cons(arg, rest)), state) {
+    let fetch = io_fetch_access();
+    let data = io_data_access();
+    let memory = IoMemory(file, page);
+    let p = head.pointer;
+    let passed = run_near(file, page, JumpIfNear(NE, cj_ended()), at, 39, piece(4), state, head.memory_is, head.rip_is);
+    let s1 = execute_near_control(JumpIfNear(NE, cj_ended()), state);
+    let s1_rip = jcc_passed(NE, cj_ended(), state, at, 39, head.rip_is, ne_fails(state.flags, head.zf));
+    let source0 = λ (i: Nat) => data.read(memory, word_of_nat(64, p.toNat() + i));
+    let reads: ReadsFrom(file, page, source0, read_gpr(Rsi, s1.gprs).toNat()) =
+        j(sym(head.rsi), λ w _ => ReadsFrom(file, page, source0, w.toNat()), λ i => refl);
+    let rsi_value: (read_gpr(Rsi, s1.gprs).toNat() = p.toNat()) = cong_fn<BitVec(64), Nat>(λ w => w.toNat(), head.rsi);
+    let b0: (p.toNat() + arg.len() + 1 <= Nat::pow(2, 47)) = head.bound;
+    let low0 = low_of(read_gpr(Rsi, s1.gprs), p.toNat(), rsi_value, { omega });
+    match arg as λ a => ((page2: Nat → BitVec(8)) → CStringAt(data, IoMemory(file, page2), p, a)) → (p.toNat() + a.len() + 1 <= Nat::pow(2, 47)) →
+            CursorReach(file, page, at, rsp, origin, operands_from(False, Cons(a, rest)), state) {
+        Nil => λ string bound => {
+            let present: (data.read(memory, read_gpr(Rsi, s1.gprs)) = Some(nul())) =
+                trans(read_here(file, page, source0, read_gpr(Rsi, s1.gprs), reads(0)), string(page));
+            let loaded = run_byte_load(file, page, scan_byte_load(), at, 45, piece(5), s1, head.memory_is, s1_rip, nul(), present, low0);
+            let s2 = byte_load_after(scan_byte_load(), nul(), s1);
+            let tested = run_block(file, page, scan_is_block(dash()), at, 49, piece(6), s2, loaded.memory_is, loaded.rip_is);
+            let s3 = execute_block_normal(scan_is_block(dash()), s2);
+            let jumped = run_near(file, page, JumpIfNear(NE, cj_not_dash()), at, 62, piece(7), s3, tested.memory_is, tested.rip_is);
+            let s4 = execute_near_control(JumpIfNear(NE, cj_not_dash()), s3);
+            let s4_rip = jcc_taken(NE, cj_not_dash(), s3, at, 62, 159, tested.rip_is, ne_holds(s3.flags, cmp_bytes(nul(), dash())), refl);
+            Exists(s4, ⟨fetched_steps_trans(fetch, data, state, s1, s4, passed,
+                    fetched_steps_trans(fetch, data, s1, s2, s4, loaded.steps, fetched_steps_trans(fetch, data, s2, s3, s4, tested.steps, jumped))),
+                cursor_found(file, page, at, rsp, origin, k, False, Nil, rest, p, head.pointers, s4, tested.memory_is, s4_rip, head.rsi,
+                    head.positive, bound, string, head.later, head.regs)⟩)
+        },
+        Cons(byte0, tail) => λ string bound => {
+            let present: (data.read(memory, read_gpr(Rsi, s1.gprs)) = Some(byte0)) =
+                trans(read_here(file, page, source0, read_gpr(Rsi, s1.gprs), reads(0)), (string(page)).left);
+            let loaded = run_byte_load(file, page, scan_byte_load(), at, 45, piece(5), s1, head.memory_is, s1_rip, byte0, present, low0);
+            let s2 = byte_load_after(scan_byte_load(), byte0, s1);
+            let tested = run_block(file, page, scan_is_block(dash()), at, 49, piece(6), s2, loaded.memory_is, loaded.rip_is);
+            let s3 = execute_block_normal(scan_is_block(dash()), s2);
+            let jne = JumpIfNear(NE, cj_not_dash());
+            let jumped = run_near(file, page, jne, at, 62, piece(7), s3, tested.memory_is, tested.rip_is);
+            let s4 = execute_near_control(jne, s3);
+            let to_s4: FetchedSteps(fetch, data, state, s4) = fetched_steps_trans(fetch, data, state, s1, s4, passed,
+                fetched_steps_trans(fetch, data, s1, s2, s4, loaded.steps, fetched_steps_trans(fetch, data, s2, s3, s4, tested.steps, jumped)));
+            (match byte0.eq_bit(dash()) as λ c => (byte0.eq_bit(dash()) = c) →
+                    CursorReach(file, page, at, rsp, origin, operands_from(False, Cons(Cons(byte0, tail), rest)), state) {
+                False => λ no => {
+                    let s4_rip = jcc_taken(NE, cj_not_dash(), s3, at, 62, 159, tested.rip_is, ne_holds(s3.flags, trans(cmp_bytes(byte0, dash()), no)), refl);
+                    j(sym(op_not_dash(rest, byte0, tail, no)), λ o _ => CursorReach(file, page, at, rsp, origin, o, state),
+                        Exists(s4, ⟨to_s4, cursor_found(file, page, at, rsp, origin, k, False, Cons(byte0, tail), rest, p, head.pointers, s4,
+                            tested.memory_is, s4_rip, head.rsi, head.positive, bound, string, head.later, head.regs)⟩))
+                },
+                True => λ yes => {
+                    let s4_rip = jcc_passed(NE, cj_not_dash(), s3, at, 62, tested.rip_is, ne_fails(s3.flags, trans(cmp_bytes(byte0, dash()), yes)));
+                    cursor_reach_after(file, page, at, rsp, origin, operands_from(False, Cons(Cons(byte0, tail), rest)), state, s4, to_s4,
+                        cursor_dash(file, page, at, piece, rsp, k, origin, rest, cont, head.pointers, head.later, p, head.positive, byte0, yes, tail, s4,
+                            CursorIn(memory_is := tested.memory_is, rip_is := s4_rip, rsi := head.rsi, regs := head.regs), string, bound))
+                },
+            })(refl)
+        },
+    }(head.string, head.bound)
+}
+
+// The arguments from slot `k`, by recursion on them.
+theorem cursor_loop(file: IoImage, page: Nat → BitVec(8), at: BitVec(64), piece: CursorPieces(file, at), rsp: BitVec(64), origin: Gprs,
+    args: List<List<BitVec(8)>>):
+    (k: Nat) → (pointers: List<BitVec(64)>) → ArgvStays(file, rsp, args, pointers, k) → CursorCont(file, page, at, rsp, origin, k, args) {
+    match args as λ a => (k: Nat) → (pointers: List<BitVec(64)>) → ArgvStays(file, rsp, a, pointers, k) →
+            CursorCont(file, page, at, rsp, origin, k, a) {
+        Nil => λ k pointers argv ended state head => cursor_none(file, page, at, piece, rsp, k, ended, origin, state, pointers, argv, head),
+        Cons(arg, rest) => λ k pointers argv ended state head => {
+            have h = cursor_head(file, page, at, piece, rsp, k, ended, origin, arg, rest, state, pointers, argv, head);
+            let s1 = h.witness;
+            let cont = cursor_loop(file, page, at, piece, rsp, origin, rest, Succ(k), h.proof.right.pointers, h.proof.right.later);
+            cursor_reach_after(file, page, at, rsp, origin, operands_from(ended, Cons(arg, rest)), state, s1, h.proof.left,
+                (match ended as λ e => CursorHead(file, page, at, rsp, Succ(k), e, origin, arg, rest, s1) →
+                        CursorReach(file, page, at, rsp, origin, operands_from(e, Cons(arg, rest)), s1) {
+                    True => λ hd => {
+                        let jumped = run_near(file, page, JumpIfNear(NE, cj_ended()), at, 39, piece(4), s1, hd.memory_is, hd.rip_is);
+                        let s2 = execute_near_control(JumpIfNear(NE, cj_ended()), s1);
+                        let s2_rip = jcc_taken(NE, cj_ended(), s1, at, 39, 159, hd.rip_is, ne_holds(s1.flags, hd.zf), refl);
+                        Exists(s2, ⟨jumped, cursor_found(file, page, at, rsp, origin, Succ(k), True, arg, rest, hd.pointer, hd.pointers, s2,
+                            hd.memory_is, s2_rip, hd.rsi, hd.positive, hd.bound, hd.string, hd.later, hd.regs)⟩)
+                    },
+                    False => λ hd => cursor_option(file, page, at, piece, rsp, Succ(k), origin, rest, cont, arg, s1, hd),
+                })(h.proof.right))
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The claims.
+
+// From the start: RBX past argv[0], whatever argv holds, and no `--` yet.
+record StartOut(file: IoImage, page: Nat → BitVec(8), at, rsp: BitVec(64), origin: Gprs, args: List<List<BitVec(8)>>,
+    state: MachineState<IoMemory>) {
+    k: Nat,
+    pointers: List<BitVec(64)>,
+    memory_is: state.memory = IoMemory(file, page),
+    rip_is: state.rip = next_rip(at, start_len()),
+    regs: CursorRegs(rsp, k, False, origin, state.gprs),
+    argv: ArgvStays(file, rsp, args, pointers, k),
+}
+theorem cursor_start(file: IoImage, at: BitVec(64), placed: Placed(file, start_code(), at), page: Nat → BitVec(8),
+    argv: List<List<BitVec(8)>>, pointers: List<BitVec(64)>, state: MachineState<IoMemory>, memory_is: state.memory = IoMemory(file, page),
+    rip_is: state.rip = at, stays: ArgvStaysAt(file, read_gpr(Rsp, state.gprs), argv, pointers)):
+    Exists<MachineState<IoMemory>>(λ after => FetchedSteps(io_fetch_access(), io_data_access(), state, after) ∧
+        StartOut(file, page, at, read_gpr(Rsp, state.gprs), state.gprs, command_args(argv), after)) {
+    let fetch = io_fetch_access();
+    let data = io_data_access();
+    let piece = start_pieces(file, at, placed);
+    let rsp = read_gpr(Rsp, state.gprs);
+    let origin = state.gprs;
+    let set = run_block(file, page, cursor_setup_block(), at, 0, piece(0), state, memory_is, rip_is);
+    let s1 = execute_block_normal(cursor_setup_block(), state);
+    let rbx1: (read_gpr(Rbx, s1.gprs) = argv_slot(rsp, 1)) = slot_next(rsp, 0, rsp, slot_zero(rsp));
+    let loaded_from = λ (p: BitVec(64)) (held: WordAt(data, IoMemory(file, page), argv_slot(rsp, 1), p)) =>
+        run_word_load(file, page, scan_slot_load(), at, 17, piece(1), s1, set.memory_is, set.rip_is, p,
+            j(sym(rbx1), λ w _ => WordAt(data, IoMemory(file, page), w, p), held));
+    match argv as λ a => ArgvStaysAt(file, rsp, a, pointers) →
+            Exists<MachineState<IoMemory>>(λ after => FetchedSteps(fetch, data, state, after) ∧ StartOut(file, page, at, rsp, origin, command_args(a), after)) {
+        Nil => λ layout => {
+            let loaded = loaded_from(word_zero(), (layout(page)).right);
+            let s2 = word_load_after(scan_slot_load(), word_zero(), s1);
+            let tested = run_block(file, page, scan_null_block(), at, 20, piece(2), s2, loaded.memory_is, loaded.rip_is);
+            let s3 = execute_block_normal(scan_null_block(), s2);
+            let jumped = run_near(file, page, JumpIfNear(E, cj_first()), at, 33, piece(3), s3, tested.memory_is, tested.rip_is);
+            let s4 = execute_near_control(JumpIfNear(E, cj_first()), s3);
+            let s4_rip = jcc_taken(E, cj_first(), s3, at, 33, 43, tested.rip_is, zero_bits_sub_self(64, word_zero()), refl);
+            Exists(s4, ⟨fetched_steps_trans(fetch, data, state, s1, s4, set.steps, fetched_steps_trans(fetch, data, s1, s2, s4, loaded.steps,
+                    fetched_steps_trans(fetch, data, s2, s3, s4, tested.steps, jumped))),
+                StartOut(k := 1, pointers := pointers, memory_is := tested.memory_is, rip_is := s4_rip,
+                    regs := ⟨rbx1, ⟨refl, cursor_kept_refl(origin)⟩⟩, argv := λ page2 => (layout(page2)).right)⟩)
+        },
+        Cons(first, rest) => match pointers as λ q => ArgvStaysAt(file, rsp, Cons(first, rest), q) →
+                Exists<MachineState<IoMemory>>(λ after => FetchedSteps(fetch, data, state, after) ∧ StartOut(file, page, at, rsp, origin, rest, after)) {
+            Nil => λ never => false_elim((never(page)).right),
+            Cons(p, more) => λ layout => {
+                let facts = (layout(page)).right;
+                let loaded = loaded_from(p, facts.left);
+                let s2 = word_load_after(scan_slot_load(), p, s1);
+                let tested = run_block(file, page, scan_null_block(), at, 20, piece(2), s2, loaded.memory_is, loaded.rip_is);
+                let s3 = execute_block_normal(scan_null_block(), s2);
+                let passed = run_near(file, page, JumpIfNear(E, cj_first()), at, 33, piece(3), s3, tested.memory_is, tested.rip_is);
+                let s4 = execute_near_control(JumpIfNear(E, cj_first()), s3);
+                let s4_rip = jcc_passed(E, cj_first(), s3, at, 33, tested.rip_is,
+                    trans(zero_bits_sub(64, p, word_zero()), nonzero_word(p, facts.right.left)));
+                let skipped = run_block(file, page, scan_skip_block(), at, 39, piece(4), s4, tested.memory_is, s4_rip);
+                let s5 = execute_block_normal(scan_skip_block(), s4);
+                Exists(s5, ⟨fetched_steps_trans(fetch, data, state, s1, s5, set.steps, fetched_steps_trans(fetch, data, s1, s2, s5, loaded.steps,
+                        fetched_steps_trans(fetch, data, s2, s3, s5, tested.steps, fetched_steps_trans(fetch, data, s3, s4, s5, passed, skipped.steps)))),
+                    StartOut(k := 2, pointers := more, memory_is := skipped.memory_is, rip_is := skipped.rip_is,
+                        regs := ⟨slot_next(rsp, 1, read_gpr(Rbx, s1.gprs), rbx1), ⟨refl, cursor_kept_refl(origin)⟩⟩,
+                        argv := λ page2 => (layout(page2)).right.right.right.right.right)⟩)
+            },
+        },
+    }(stays)
+}
+
+// The claim: placed anywhere in the file, entered at argv slot `k` with R12
+// saying whether `--` has ended the options, the cursor runs to its end with
+// RSI at the next operand `operands_from` gives, or zero, and RBX and R12
+// ready for the next call; it keeps RSP, RBP, RCX, RDX, R8–R10 and R13–R15.
+theorem cursor_runs(file: IoImage, at: BitVec(64), placed: Placed(file, cursor_code(), at), page: Nat → BitVec(8), rsp: BitVec(64),
+    k: Nat, ended: Bool, args: List<List<BitVec(8)>>, pointers: List<BitVec(64)>, origin: Gprs, state: MachineState<IoMemory>,
+    argv: ArgvStays(file, rsp, args, pointers, k), head: CursorAt(file, page, at, rsp, k, ended, origin, state)):
+    CursorReach(file, page, at, rsp, origin, operands_from(ended, args), state) {
+    cursor_loop(file, page, at, cursor_pieces(file, at, placed), rsp, origin, args, k, pointers, argv, ended, state, head)
+}

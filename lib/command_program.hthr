@@ -4,6 +4,7 @@
 // against these functions.
 import bitvec;
 import bool;
+import decimal_line;
 import list;
 import logic;
 import nat;
@@ -95,6 +96,28 @@ fn scan_args(letters: List<BitVec(8)>, ended: Bool, mask: BitVec(64), operands: 
     }
 }
 
+// The operands from `args` on, in order, `ended` saying whether `--` has
+// ended the options: the arguments `scan_args` keeps as operands, whatever
+// the options' letters select.
+fn operands_from(ended: Bool, args: List<List<BitVec(8)>>) → List<List<BitVec(8)>> {
+    match args {
+        Nil => Nil,
+        Cons(arg, rest) => match ended {
+            True => Cons(arg, operands_from(True, rest)),
+            False => match arg {
+                Nil => Cons(arg, operands_from(False, rest)),
+                Cons(first, tail) => match first.eq_bit(dash()) {
+                    False => Cons(arg, operands_from(False, rest)),
+                    True => match tail {
+                        Nil => Cons(arg, operands_from(False, rest)),
+                        Cons(second, more) => operands_from(!letters_follow(second, more), rest),
+                    },
+                },
+            },
+        },
+    }
+}
+
 // argv without argv[0]; none when Linux gave no argv at all.
 fn command_args(argv: List<List<BitVec(8)>>) → List<List<BitVec(8)>> {
     match argv { Nil => Nil, Cons(_, rest) => rest }
@@ -110,4 +133,67 @@ fn parse_args(letters: List<BitVec(8)>, default: BitVec(64), argv: List<List<Bit
         Refused => Refused,
         Scanned(mask, operands) => Scanned(chosen_mask(default, mask), operands),
     }
+}
+
+// ---------------------------------------------------------------------------
+// The width of the counts (coreutils' `compute_number_width`). Before
+// counting, GNU's wc stats every input, and a stat says one of three things:
+// nothing (it failed), a regular file's size, or a file of another kind.
+
+inductive StatSeen { Unstated, Regular(size: BitVec(64)), Other }
+
+// The regular files' sizes added to `total`, as the 64-bit sum GNU keeps
+// (`uintmax_t`).
+fn regular_total(total: BitVec(64), seen: List<StatSeen>) → BitVec(64) {
+    match seen {
+        Nil => total,
+        Cons(one, rest) => regular_total(match one { Unstated => total, Regular(size) => total.add(size), Other => total }, rest),
+    }
+}
+// Whether any stat found a file of another kind, `other` saying so of those
+// before.
+fn any_other(other: Bool, seen: List<StatSeen>) → Bool {
+    match seen {
+        Nil => other,
+        Cons(one, rest) => any_other(match one { Unstated => other, Regular(_) => other, Other => True }, rest),
+    }
+}
+// At least 7 when a file of another kind was stat'ed: a pipe's or a
+// terminal's size says nothing about its counts.
+fn widened(other: Bool, digits: Nat) → Nat {
+    match other { False => digits, True => match Nat::leb(7, digits) { True => digits, False => 7 } }
+}
+fn width_from(total: BitVec(64), other: Bool, seen: List<StatSeen>) → Nat {
+    widened(any_other(other, seen), decimal(regular_total(total, seen).toNat()).len())
+}
+// The width every count is padded to: the digits of the regular files' total
+// size, at least 7 when a file of another kind was stat'ed. A failed stat
+// adds nothing, wherever it is. (When no stat is made at all, for one input
+// and one count, the width is 1; the command decides that.)
+fn stat_width(seen: List<StatSeen>) → Nat { width_from(BitVec::zero(), False, seen) }
+
+// ---------------------------------------------------------------------------
+// A row's counts (coreutils' `write_counts`): each selected column's count,
+// in column order, right-aligned in the width, a space between them. The
+// counts are by slot: `counts(i)` is column `i`'s, as the command keeps them
+// in its frame. The name and the newline are the command's to write after.
+
+fn field_gap() → BitVec(8) { BitVec::ofNat(32) }
+fn field_lead(first: Bool) → List<BitVec(8)> { match first { True => Nil, False => [field_gap()] } }
+fn column_selected(mask: BitVec(64), i: Nat) → Bool { !mask.band(column_bit(i)).eq_bit(BitVec::zero()) }
+
+// The fields of slots `i` .. `i + j - 1`, `first` saying no field has been
+// written before them.
+fn row_fields(width: Nat, mask: BitVec(64), counts: Nat → BitVec(64), first: Bool, i, j: Nat) → List<BitVec(8)> {
+    match j {
+        Zero => Nil,
+        Succ(k) => match column_selected(mask, i) {
+            False => row_fields(width, mask, counts, first, Succ(i), k),
+            True => field_lead(first) ++ (pad_left(width, field_gap(), decimal(counts(i).toNat())) ++
+                row_fields(width, mask, counts, False, Succ(i), k)),
+        },
+    }
+}
+fn row_counts(width: Nat, mask: BitVec(64), counts: Nat → BitVec(64)) → List<BitVec(8)> {
+    row_fields(width, mask, counts, True, 0, column_slots())
 }
