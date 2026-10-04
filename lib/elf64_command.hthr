@@ -479,7 +479,7 @@ fn finish_parts() → List<List<BitVec(8)>> {
      canonical_block_bytes([MovRI(Rax, BitVec::ofNat(60))]),
      syscall_bytes(),
      canonical_block_bytes(eof_retry_block()),
-     near_control_bytes(JumpIfNear(E, cmd_d_retry_jz())),
+     near_control_bytes(JumpZeroNear(cmd_d_retry_jz())),
      canonical_block_bytes([MovRI(Rax, BitVec::ofNat(1)), MovRI(R11, slot_at(18))]),
      word_store_bytes(WordStore(base := R11, source := Rax)),
      near_control_bytes(JumpNear(cmd_d_rfail_jmp()))]
@@ -1844,4 +1844,229 @@ theorem spill_row(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64), 
         memory_is := row_out.memory_is, rip_is := trans(row_out.rip_is, rip_compose(io_entry(), ca_row(), row_len())),
         holds := out.holds, held := held2, high := high, stored := row_out.holds.held, rdi := row_out.rdi,
         rsp_is := trans(row_out.kept.rsp, out.kept.right.right.right.right.right.right))
+}
+
+// ---------------------------------------------------------------------------
+// A file's reads (7268): the state zeroed, then the filter's chunk loop
+// reading the fd in RSP, until the empty read goes to the spill (2413), and a
+// failed read goes there too with the status set first. The chunk loop is
+// the filter's, over the program's representation with RSP pinned to the fd.
+
+fn fd_rep<C>(rep: Gprs → C → Type, fd: BitVec(64)) → Gprs → C → Type { λ g s => rep(g, s) ∧ (read_gpr(Rsp, g) = fd) }
+fn fd_shape<C>(shape: FilterShape<C>, fd: BitVec(64)) → FilterShape<C> {
+    FilterShape(step := shape.step, init := shape.init, counts := shape.counts, rep := fd_rep(shape.rep, fd), code := shape.code)
+}
+// The step keeps RSP, so it keeps the fd.
+theorem fd_step_piece<C>(shape: FilterShape<C>, piece: StepPiece<IoMemory, C>(shape.code, shape.rep, shape.counts, shape.step), fd: BitVec(64)):
+    StepPiece<IoMemory, C>(shape.code, fd_rep(shape.rep, fd), shape.counts, shape.step) {
+    λ before s b held rax fit => {
+        let r = piece(before, s, b, held.left, rax, fit);
+        StepRan(after := r.after, execution := r.execution, layout := r.layout, decoding := r.decoding,
+            next_held := ⟨r.next_held, trans(r.registers_preserved(Rsp, trivial), held.right)⟩,
+            flag_is := r.flag_is, byte_is := r.byte_is, memory_preserved := r.memory_preserved, rip_correct := r.rip_correct,
+            registers_preserved := r.registers_preserved)
+    }
+}
+theorem fd_loop_facts<C>(shape: FilterShape<C>, facts: FilterFacts<C>(shape), fd: BitVec(64)): LoopFacts<C>(fd_shape(shape, fd)) {
+    LoopFacts(piece := fd_step_piece(shape, facts.piece, fd),
+        framed := λ before after carry kept rsp held => ⟨facts.framed(before, after, carry, kept, held.left), trans(rsp, held.right)⟩,
+        advances := facts.advances, zero := facts.zero)
+}
+
+// What runs at the spill after all of `input` was read, for any status and
+// any frame holding the selection, the width, the count and the totals, and
+// agreeing with `vars0` from the cursor's slot on.
+fn SpillGoes<C>(file: IoImage, shape: FilterShape<C>, fd: BitVec(64), mask: BitVec(64), width, n: Nat, totals, vars0: Nat → BitVec(64),
+    input: List<BitVec(8)>, after: Bool → List<LinuxEvent>) → Type {
+    (failed: Bool) → (frame: Nat → BitVec(8)) → (vars: Nat → BitVec(64)) → FrameHolds(frame, vars) →
+        Vars(vars, mask, width, n, failed, totals) → ((m: Nat) → 19 <= m → vars(m) = vars0(m)) → (page: Nat → BitVec(8)) →
+        (state: MachineState<IoMemory>) → state.memory = IoMemory(with_frame(file, frame), page) → state.rip = eof_rip(ca_spill()) →
+        shape.rep(state.gprs, filter_state(shape.step, input, shape.init)) → read_gpr(Rsp, state.gprs) = fd →
+        LinuxRuns(io_linux(), after(failed), state)
+}
+
+// A failed read other than EINTR (7221): past the retry test, the status set
+// to 1, then the spill.
+theorem read_failed<C>(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64), spill: Nat → StateReg, code: StructuredCode,
+    jumps: FilterJumps, pj: PrintJumps, placed: CommandPlaced(file, letters, default, spill, code, jumps, pj),
+    shape: FilterShape<C>, framed: StateFramed(shape.rep), fd: BitVec(64), mask: BitVec(64), width, n: Nat, totals, vars0: Nat → BitVec(64),
+    input: List<BitVec(8)>, after: Bool → List<LinuxEvent>, goes: SpillGoes(file, shape, fd, mask, width, n, totals, vars0, input, after),
+    frame: Nat → BitVec(8), vars: Nat → BitVec(64), holds: FrameHolds(frame, vars), failed: Bool, values: Vars(vars, mask, width, n, failed, totals),
+    agree: (m: Nat) → 19 <= m → vars(m) = vars0(m), page: Nat → BitVec(8), errno: Nat, error: Errno(errno), other: Not(errno = eintr()),
+    state: MachineState<IoMemory>, memory_is: state.memory = IoMemory(with_frame(file, frame), page),
+    rip_is: state.rip = eof_rip(ca_read_failed()), rax: read_gpr(Rax, state.gprs) = errno_word(errno),
+    rep: shape.rep(state.gprs, filter_state(shape.step, input, shape.init)), rsp: read_gpr(Rsp, state.gprs) = fd):
+    LinuxRuns(io_linux(), after(True), state) {
+    let fetch = io_fetch_access();
+    let data = io_data_access();
+    let img = with_frame(file, frame);
+    let memory = IoMemory(img, page);
+    let pieces = cmd_pieces(img, letters, default, spill, code, jumps, pj, placed(frame));
+    let rd = cmd_d_retry_jz();
+    have fixed = block_ran(eof_retry_block(), memory, ca_read_failed(), pieces.finish(4)(page), state, memory_is, rip_is);
+    let clear: (fail_fixed(state).flags.zf = False) =
+        trans(cong_fn<BitVec(64), Bool>(λ v => is_zero_bits(64, v.add(BitVec::ofNat(4))), rax), other_errno_plus_four(errno, error, other));
+    let jz = near_ran(JumpZeroNear(rd), memory, ca_retry_jz(), pieces.finish(5)(page), fail_fixed(state), fixed.memory_is, fixed.rip_is);
+    let going = fail_back(state, rd);
+    let going_rip: (going.rip = eof_rip(ca_rfail())) =
+        trans(near_not_taken_rip(rd, fail_fixed(state), clear), rip_advance(io_entry(), fail_fixed(state).rip, ca_retry_jz(), 6, fixed.rip_is));
+    let set = run_block(img, page, failed_block(), io_entry(), ca_rfail(), pieces.finish(6), going, fixed.memory_is, going_rip);
+    let s1 = execute_block_normal(failed_block(), going);
+    let one = status_word(True);
+    let stored = run_frame_store(img, page, WordStore(base := R11, source := Rax), refl, io_entry(), ca_rfail_store(), pieces.finish(7), 8 * 18,
+        { omega }, s1, set.memory_is, set.rip_is, refl);
+    let s2 = word_store_after(linux_writes(io_linux()), WordStore(base := R11, source := Rax), s1);
+    let frame2 = stored_frame(file, frame, 18, one);
+    let vars2 = set_var(vars, 18, one);
+    let jmp = JumpNear(cmd_d_rfail_jmp());
+    let jumped = run_near(with_frame(file, frame2), page, jmp, io_entry(), ca_rfail_jmp(), (cmd_pieces(with_frame(file, frame2), letters, default,
+        spill, code, jumps, pj, placed(frame2))).finish(8), s2, stored.memory_is, stored.rip_is);
+    let s3 = execute_near_control(jmp, s2);
+    let s3_rip = jmp_back(cmd_d_rfail_jmp(), s2, io_entry(), ca_rfail_jmp(), ca_spill(), stored.rip_is, cmd_j_rfail_jmp());
+    linux_runs_after_linux_steps(io_linux(), after(True), state, s2,
+        linux_steps_trans(io_linux(), state, s1, s2, linux_steps_of_fetched(io_linux(), state, s1,
+            fetched_steps_trans(fetch, data, state, fail_fixed(state), s1, fixed.steps,
+                fetched_steps_trans(fetch, data, fail_fixed(state), going, s1, jz, set.steps))),
+            stored.step),
+        linux_runs_after_steps(io_linux(), after(True), s2, s3, jumped,
+            goes(True, frame2, vars2, frame_holds_store(img, vars, 18, one, holds), status_vars(vars, mask, width, n, failed, totals, values, True),
+                λ m above => trans(set_var_other(vars, 18, one, m, ne_above(m, 18, { omega })), agree(m, above)),
+                page, s3, stored.memory_is, s3_rip,
+                framed(state.gprs, s3.gprs, filter_state(shape.step, input, shape.init), ⟨refl, ⟨refl, ⟨refl, refl⟩⟩⟩, rep), rsp)))
+}
+
+// The process the reads run, as filter_process's but reading the fd in RSP,
+// with the spill after the empty read and after a failed one.
+theorem cmd_process<C>(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64), spill: Nat → StateReg, shape: FilterShape<C>,
+    facts: FilterFacts<C>(shape), jumps: FilterJumps, pj: PrintJumps, placed: CommandPlaced(file, letters, default, spill, shape.code, jumps, pj),
+    targets: CoreTargets(ca_core(), ca_head(), structured_bytes(shape.code).len(), jumps, pj),
+    fd: BitVec(64), mask: BitVec(64), width, n: Nat, totals, vars0: Nat → BitVec(64), rows: List<BitVec(8)> → Bool → List<LinuxEvent>,
+    input: List<BitVec(8)>, room: FilterRoom(shape.counts, input),
+    goes: SpillGoes(file, shape, fd, mask, width, n, totals, vars0, input, λ f => rows(input, f)),
+    frame: Nat → BitVec(8), vars: Nat → BitVec(64), holds: FrameHolds(frame, vars), failed: Bool, values: Vars(vars, mask, width, n, failed, totals),
+    agree: (m: Nat) → 19 <= m → vars(m) = vars0(m)):
+    EofProcess<List<WriteStep>, WriteFailure>(FdIn(Rsp), fd, with_frame(file, frame), ca_head(), ca_read_failed(), ca_spill(),
+        filter_inv(fd_shape(shape, fd)), input, filter_ok(shape), filter_body(shape), filter_failed_ok(shape), filter_failed(shape),
+        λ seen _ => rows(seen, True), rows(input, failed)) {
+    let img = with_frame(file, frame);
+    let fs = fd_shape(shape, fd);
+    let loop = fd_loop_facts(shape, facts, fd);
+    let pieces = cmd_pieces(img, letters, default, spill, shape.code, jumps, pj, placed(frame));
+    let core = λ (pg: Nat → BitVec(8)) => pieces.core(pg);
+    EofProcess(
+        reads := λ _ _ held => held.right,
+        framed := λ seen before after kept held => ⟨facts.framed(before, after, filter_state(shape.step, seen, shape.init),
+            ⟨kept.right.right.right.right.right.right.left, ⟨kept.right.right.right.right.right.right.right.left,
+                ⟨kept.right.right.right.right.right.right.right.right, kept.right.right.left⟩⟩⟩, held.left), trans(kept.right.left, held.right)⟩,
+        chunk := λ pg seen bytes rest writes some fits written prefix going rip_is memory_is length_word held after next =>
+            filter_chunk(fs, loop, jumps, pj, ca_core(), ca_head(), targets, img, core, pg, filter_state(shape.step, seen, shape.init), bytes,
+                some, fits, chunk_fits(fs, loop, input, seen, bytes, room,
+                    λ front back chunk => chunk_within(seen, front, back, bytes, rest, input, chunk, prefix)),
+                going, memory_is, rip_is, length_word, held, writes, written, Finished, trivial, after,
+                λ next_page st at_read in_page placed2 => next(next_page, st, at_read, in_page,
+                    j(sym(filter_state_append(shape.step, seen, bytes, shape.init)), λ t _ => fd_rep(shape.rep, fd)(st.gprs, t), placed2))),
+        ends := λ pg seen bytes failure some fits failed2 all going rip_is memory_is length_word held =>
+            filter_chunk(fs, loop, jumps, pj, ca_core(), ca_head(), targets, img, core, pg, filter_state(shape.step, seen, shape.init), bytes,
+                some, fits, chunk_fits(fs, loop, input, seen, bytes, room,
+                    λ front back chunk => ended_within(seen, front, back, bytes, input, chunk, fits, all)),
+                going, memory_is, rip_is, length_word, held, failure.writes,
+                writes_for_of(chunk_out(shape, seen, bytes), failure.writes, failed2.left, failed2.right.left),
+                WriteFailedWith(failure.errno), failed2.right.right, Nil, failed2.left),
+        fails := λ pg junk seen errno error other all st rip_is memory_is rax held =>
+            j(sym(all), λ t _ => fd_rep(shape.rep, fd)(st.gprs, filter_state(shape.step, t, shape.init)) → LinuxRuns(io_linux(), rows(t, True), st),
+                λ h => read_failed(file, letters, default, spill, shape.code, jumps, pj, placed, shape, facts.framed, fd, mask, width, n, totals,
+                    vars0, input, λ f => rows(input, f), goes, frame, vars, holds, failed, values, agree,
+                    io_store_offset(IoMemory(img, pg), 0, junk).page, errno, error, other, st, memory_is, rip_is, rax, h.left, h.right))(held),
+        at_end := λ pg st at_done in_page held => goes(failed, frame, vars, holds, values, agree, pg, st, in_page, at_done, held.left, held.right))
+}
+
+// The reads, from the state's zeroing (7268) with the fd in RSP.
+theorem read_pass<C>(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64), spill: Nat → StateReg, shape: FilterShape<C>,
+    facts: FilterFacts<C>(shape), jumps: FilterJumps, pj: PrintJumps, placed: CommandPlaced(file, letters, default, spill, shape.code, jumps, pj),
+    targets: CoreTargets(ca_core(), ca_head(), structured_bytes(shape.code).len(), jumps, pj),
+    fd: BitVec(64), mask: BitVec(64), width, n: Nat, totals, vars0: Nat → BitVec(64), rows: List<BitVec(8)> → Bool → List<LinuxEvent>,
+    steps: List<EofStep<List<WriteStep>>>, ok: FilterSteps(shape, steps), ending: EofEnd<WriteFailure>,
+    ending_ok: FilterEndingOk(shape, steps, ending), room: FilterRoom(shape.counts, eof_input(steps)),
+    goes: SpillGoes(file, shape, fd, mask, width, n, totals, vars0, eof_input(steps), λ f => rows(eof_input(steps), f)),
+    frame: Nat → BitVec(8), vars: Nat → BitVec(64), holds: FrameHolds(frame, vars), failed: Bool, values: Vars(vars, mask, width, n, failed, totals),
+    agree: (m: Nat) → 19 <= m → vars(m) = vars0(m), page: Nat → BitVec(8), state: MachineState<IoMemory>,
+    memory_is: state.memory = IoMemory(with_frame(file, frame), page), rip_is: state.rip = eof_rip(ca_state_init()),
+    rsp: read_gpr(Rsp, state.gprs) = fd):
+    LinuxRuns(io_linux(), eof_run(fd, filter_body(shape), filter_failed(shape), λ seen _ => rows(seen, True), steps, ending,
+        rows(eof_input(steps), failed), Nil), state) {
+    let img = with_frame(file, frame);
+    let input = eof_input(steps);
+    let pieces = cmd_pieces(img, letters, default, spill, shape.code, jumps, pj, placed(frame));
+    let process = cmd_process(file, letters, default, spill, shape, facts, jumps, pj, placed, targets, fd, mask, width, n, totals, vars0, rows,
+        input, room, goes, frame, vars, holds, failed, values, agree);
+    let layout: EofLayout(FdIn(Rsp), img, ca_head(), ca_read_failed(), ca_spill(), cmd_ed(), cmd_sd(), cmd_d_retry_jz()) =
+        EofLayout(head := pieces.head, fail := λ pg => RetryTail(pieces.finish(4)(pg), pieces.finish(5)(pg)),
+            to_end := jumps_back(io_entry(), 7346, 6, cmd_ed(), ca_spill(), cmd_j_head_ed()),
+            to_fail := jumps_back(io_entry(), 7352, 6, cmd_sd(), ca_read_failed(), cmd_j_head_sd()),
+            to_read := jumps_forward(io_entry(), ca_retry_jz(), 6, cmd_d_retry_jz(), ca_head(), cmd_j_retry_jz()));
+    let started = run_block(img, page, state_init_block(), io_entry(), ca_state_init(), pieces.finish(9), state, memory_is, rip_is);
+    let ready = execute_block_normal(state_init_block(), state);
+    let init_held: filter_inv(fd_shape(shape, fd))(Nil, ready.gprs) = ⟨facts.initialised(state), rsp⟩;
+    linux_runs_after_steps(io_linux(), eof_run(fd, filter_body(shape), filter_failed(shape), λ seen _ => rows(seen, True), steps, ending,
+        rows(input, failed), Nil), state, ready, started.steps,
+        eof_from(FdIn(Rsp), fd, img, ca_head(), ca_read_failed(), ca_spill(), cmd_ed(), cmd_sd(), cmd_d_retry_jz(), layout,
+            filter_inv(fd_shape(shape, fd)), input, filter_ok(shape), filter_body(shape), filter_failed_ok(shape), filter_failed(shape),
+            λ seen _ => rows(seen, True), rows(input, failed), process, ending, ending_ok, steps)(Nil, ok, page, refl, ready, started.rip_is,
+            started.memory_is, init_held))
+}
+
+// After the reads, a named file's row: the spill and the counts' row, then
+// its writes and close (`named_runs`), back to the operand loop.
+theorem row_short(l, width: Nat, le: l <= 8 * (width + 21), narrow: width <= 20): l < 4096 { omega }
+theorem named_spill<C>(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64), spill: Nat → StateReg, shape: FilterShape<C>,
+    jumps: FilterJumps, pj: PrintJumps, placed: CommandPlaced(file, letters, default, spill, shape.code, jumps, pj),
+    column: Nat → C → BitVec(64),
+    spilled: (i: Nat) → i < 8 → (g: Gprs) → (s: C) → shape.rep(g, s) → read_gpr(state_gpr(spill(i)), g) = column(i)(s),
+    mask: BitVec(64), width: Nat, narrow: width <= 20, n: Nat, nonzero: 0 < n, few: n < Nat::pow(2, 64), c19, c20: BitVec(64),
+    rest: Bool → (Nat → BitVec(64)) → List<LinuxEvent>, goes: LoopGoes(file, mask, width, n, c19, c20, rest),
+    totals, vars0: Nat → BitVec(64), at19: vars0(19) = c19, at20: vars0(20) = c20,
+    pointer: BitVec(64), at22: vars0(22) = pointer, name: List<BitVec(8)>, string: ArgStays(file, pointer, name),
+    low: pointer.toNat() + name.len() + 1 <= Nat::pow(2, 47), some: 0 < name.len(), fits: name.len() <= 4096,
+    run: OperandRun, input: List<BitVec(8)>,
+    counts_ok: RowWriteOk(row_counts(width, mask, input_counts(shape, column, input)) ++ [field_gap()], run.counts),
+    named_ok: RowWriteOk(name, run.name), nl_ok: RowWriteOk([newline()], run.newline),
+    closes: Bool, closes_is: vars0(23) = status_word(closes), fd: BitVec(64), returns: CloseReturns(run.closed)):
+    SpillGoes(file, shape, fd, mask, width, n, totals, vars0, input,
+        λ f => named_row(shape, column, mask, width, name, run, fd, closes, input, f, totals, rest)) {
+    λ failed frame vars holds values agree page state memory_is rip_is rep rsp => {
+        let counts = input_counts(shape, column, input);
+        have ready = spill_row(file, letters, default, spill, shape.code, jumps, pj, placed, frame, vars, holds, mask, width, n, failed, totals,
+            values, narrow, counts, page, state, memory_is, rip_is,
+            λ m below => spilled(m, below, state.gprs, filter_state(shape.step, input, shape.init), rep));
+        let row = row_counts(width, mask, counts);
+        linux_runs_after_linux_steps(io_linux(), named_row(shape, column, mask, width, name, run, fd, closes, input, failed, totals, rest), state,
+            ready.after, ready.steps,
+            named_runs(file, letters, default, spill, shape.code, jumps, pj, placed, mask, width, n, c19, c20, rest, goes, ready.frame, ready.vars,
+                ready.holds, failed, add_counts(totals, counts), ready.held, trans(ready.high(19, trivial), trans(agree(19, trivial), at19)),
+                trans(ready.high(20, trivial), trans(agree(20, trivial), at20)), nonzero, few, row,
+                row_short(row.len(), width, row_counts_le(width, mask, counts), narrow), run.counts, counts_ok, pointer,
+                trans(ready.high(22, trivial), trans(agree(22, trivial), at22)), name, string, low, some, fits, run.name, named_ok, run.newline,
+                nl_ok, closes, trans(ready.high(23, trivial), trans(agree(23, trivial), closes_is)), fd, run.closed, returns,
+                ready.page, ready.after, ready.memory_is, ready.rip_is, ready.stored, ready.rdi, trans(ready.rsp_is, rsp)))
+    }
+}
+// With no operand, stdin's row and the exit (`unnamed_runs`).
+theorem unnamed_spill<C>(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64), spill: Nat → StateReg, shape: FilterShape<C>,
+    jumps: FilterJumps, pj: PrintJumps, placed: CommandPlaced(file, letters, default, spill, shape.code, jumps, pj),
+    column: Nat → C → BitVec(64),
+    spilled: (i: Nat) → i < 8 → (g: Gprs) → (s: C) → shape.rep(g, s) → read_gpr(state_gpr(spill(i)), g) = column(i)(s),
+    mask: BitVec(64), width: Nat, narrow: width <= 20, totals, vars0: Nat → BitVec(64), run: OperandRun, input: List<BitVec(8)>,
+    counts_ok: RowWriteOk(row_counts(width, mask, input_counts(shape, column, input)) ++ [newline()], run.counts), fd: BitVec(64)):
+    SpillGoes(file, shape, fd, mask, width, 0, totals, vars0, input, λ f => stdin_row(shape, column, mask, width, run, input, f)) {
+    λ failed frame vars holds values agree page state memory_is rip_is rep rsp => {
+        let counts = input_counts(shape, column, input);
+        have ready = spill_row(file, letters, default, spill, shape.code, jumps, pj, placed, frame, vars, holds, mask, width, 0, failed, totals,
+            values, narrow, counts, page, state, memory_is, rip_is,
+            λ m below => spilled(m, below, state.gprs, filter_state(shape.step, input, shape.init), rep));
+        let row = row_counts(width, mask, counts);
+        linux_runs_after_linux_steps(io_linux(), stdin_row(shape, column, mask, width, run, input, failed), state, ready.after, ready.steps,
+            unnamed_runs(file, letters, default, spill, shape.code, jumps, pj, placed, mask, width, ready.frame, ready.vars, ready.holds, failed,
+                add_counts(totals, counts), ready.held, row, row_short(row.len(), width, row_counts_le(width, mask, counts), narrow), run.counts,
+                counts_ok, ready.page, ready.after, ready.memory_is, ready.rip_is, ready.stored, ready.rdi))
+    }
 }
