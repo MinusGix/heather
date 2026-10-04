@@ -180,7 +180,7 @@ theorem orc_runs(file: IoImage, resident: (page: Nat → BitVec(8)) → CodeResi
     // RBX ← RSP + 16, then RSI ← argv[1].
     have entered = block_ran(orc_entry_block(), memory, 0, pieces(page, 0), begin, refl, refl);
     let s1 = execute_block_normal(orc_entry_block(), begin);
-    let second = argv.right.proof.right.right.right;
+    let second = argv.right.proof.right.right.right.right;
     let pointer = second.witness;
     let slot: (read_gpr(Rbx, s1.gprs) = argv_slot(rsp, 2)) = orc_slot(rsp, argv.left.left);
     have loaded = word_load_ran(orc_load(), memory, 7, pieces(page, 1), s1, entered.memory_is, entered.rip_is,
@@ -190,7 +190,7 @@ theorem orc_runs(file: IoImage, resident: (page: Nat → BitVec(8)) → CodeResi
     have asked = block_ran(orc_open_block(), memory, 10, pieces(page, 2), s2, entered.memory_is, loaded.rip_is);
     let s3 = execute_block_normal(orc_open_block(), s2);
     let named: CStringAt(io_data_access(), s3.memory, read_gpr(Rsi, s3.gprs), path) =
-        j(sym(asked.memory_is), λ m _ => CStringAt(io_data_access(), m, pointer, path), second.proof.right.right.left);
+        j(sym(asked.memory_is), λ m _ => CStringAt(io_data_access(), m, pointer, path), second.proof.right.right.right.left);
     let to_open: FetchedSteps(fetch, data, begin, s3) = fetched_steps_trans(fetch, data, begin, s1, s3, entered.steps,
         fetched_steps_trans(fetch, data, s1, s2, s3, loaded.steps, asked.steps));
     linux_runs_open(io_linux(), begin, s3, path, opened, orc_after(opened, steps, ending, closed),

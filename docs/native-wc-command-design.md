@@ -630,6 +630,41 @@ process checks with its trace unchanged. Where it differs from §4 and §6.1:
   open. `linux_determinism.rs` gains refusals for a decoder that misses `8B`
   and for stat answers compared by kind or with unbounded junk.
 
+**Status (C2's argument scan built, 2026-10-04): `lib/elf64_arg_scan.hthr`,
+against `lib/command_program.hthr`'s `parse_args`.** C2 lands piece by piece;
+the stat pass and the row writer follow. Where the scan differs from §3.2 and
+§6.1:
+
+- **The selection is a word, not a `List<Bool>`.** Column `i` is bit `i`,
+  and an option ORs its letters' bits in, so the spec (`option_mask`,
+  `letter_bits`) uses the machine's own `bor` and the code needs no bit
+  arithmetic proved. `chosen_mask` applies the default when nothing is set.
+- **Eight letter slots, fixed.** The letter table is eight position-
+  independent slot blocks (`CMP AL, letter; JNE; RDX |= bit`), with NUL in
+  the slots past the columns; no argument letter is NUL, so they never match.
+  A fixed table keeps every jump around it a closed number, whatever the
+  program's letters. A command has at most eight columns.
+- **Registers only.** The scan keeps its state in registers and stores
+  nothing: R8 ends as the selection and R9 as the operand count (as the word
+  of the count; nothing bounds argc). The command stores them to the frame.
+  It re-walks argv for the operands later, so it keeps no operand pointers.
+- **argv ends at the null pointer.** The scan walks slots until the null
+  word rather than counting argc, so `ArgvFrom` now says each argument's
+  pointer is not null, as the psABI lays it out (a premise of the claim).
+- **Claim:** `scan_runs` — placed anywhere in the file and entered with RSP
+  at any argv layout, the scan exits 1 exactly when `parse_args` refuses, and
+  otherwise runs to its end with R8 and R9 as `parse_args` gives; RSP, RBP,
+  RCX and R12–R15 are kept.
+- **Cost lesson.** The first proof of one argument's cases was one
+  declaration whose machine states nested a dozen steps deep, and it
+  dominated the module's cold time. Split into three lemmas that each start
+  from an abstract state and a record of facts (`ArgAt`), the same proof
+  is a few percent of it. Measuring a layout of forty pieces by a nested
+  `⟨refl, …⟩` also grew faster than linearly; `measured_self` measures any
+  layout by its own lengths, and one closed equation pins them.
+  Test: `crates/elab/tests/arg_scan_process.rs` (a client placing the scan
+  past any header; `parse_args` over §2's command lines; seven refusals).
+
 **Refusal controls** (mutations the library must reject), in the
 `slow_acceptance_` tests as now: the row loop printing an unselected
 column; the formatter's pad loop off by one (`width ≥ k`); the stat pass

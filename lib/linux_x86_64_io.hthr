@@ -219,7 +219,8 @@ fn CStringAt<M>(data: ByteReadAccess<M>, memory: M, address: BitVec(64), path: L
 
 // The process's command line (docs/native-wc-command-design.md §4.1): at the
 // initial RSP, argc, then a pointer to each argument (argv[0] included), then
-// a null word, as the x86-64 psABI lays them out; each argument a C string.
+// a null word, as the x86-64 psABI lays them out; each argument a C string
+// at a pointer that is not null, so the null word is the first null one.
 // The k-th word is at RSP + 8k, by value. Every word and string lies below
 // the canonical boundary, so a word load or a byte load reaches it. Envp and
 // auxv are past the null word and not named.
@@ -231,8 +232,8 @@ fn ArgvFrom<M>(data: ByteReadAccess<M>, memory: M, rsp: BitVec(64), args: List<L
     match args {
         Nil => λ k => WordAt(data, memory, argv_slot(rsp, k), BitVec::zero()),
         Cons(arg, rest) => λ k => Exists<BitVec(64)>(λ pointer => WordAt(data, memory, argv_slot(rsp, k), pointer) ∧
-            ((pointer.toNat() + arg.len() + 1 <= Nat::pow(2, 47)) ∧
-            (CStringAt(data, memory, pointer, arg) ∧ ArgvFrom(data, memory, rsp, rest, Succ(k))))),
+            ((0 < pointer.toNat()) ∧ ((pointer.toNat() + arg.len() + 1 <= Nat::pow(2, 47)) ∧
+            (CStringAt(data, memory, pointer, arg) ∧ ArgvFrom(data, memory, rsp, rest, Succ(k)))))),
     }
 }
 fn ArgvAt<M>(data: ByteReadAccess<M>, memory: M, rsp: BitVec(64), args: List<List<BitVec(8)>>) → Type {

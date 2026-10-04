@@ -1,0 +1,1225 @@
+// The command line, scanned once at entry (docs/native-wc-command-design.md
+// §6.1, `scan`): from argv on the initial stack, the columns the options
+// select and how many operands there are, or exit(1) for an option letter no
+// column has. The code is library code, placed wherever a program puts it;
+// its only program-specific bytes are the column letters and the default
+// selection, as immediates. The claim is `scan_runs`, against
+// `command_program`'s `parse_args`.
+import command_program;
+import elf64_format_width;
+import elf64_io;
+import linux_x86_64_io;
+import x86_64;
+import x86_64_block;
+import x86_64_fetch;
+import x86_64_fetched_code;
+import x86_64_data_read;
+import x86_64_access_memory;
+import x86_64_layout;
+import bitvec;
+import bitvec_nat;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+import omega;
+
+// ---------------------------------------------------------------------------
+// The code. On entry RSP holds argv; nothing else is read. The scan keeps
+// its state in registers, and stores nothing:
+//
+//   RBX the next argv slot, RSI the argument (then the letter) being read,
+//   RAX its byte, R8 the selection, R9 the operands so far, R10 one once
+//   `--` has ended the options, RDX the bits of one letter, R11 the operand
+//   of each compare, RDI the byte after a second dash.
+//
+//   setup:   RBX := RSP + 8; R8, R9, R10 := 0; skip argv[0] unless it is null
+//   next:    RSI := [RBX]; null: done.  RBX += 8
+//            options ended, or the argument does not start "-x": operand
+//            "--" alone: R10 := 1, next.  Otherwise its letters from the second byte:
+//   letters: AL := [RSI]; NUL: next.  RDX := the letter's column bits (eight
+//            slot blocks); none: refuse.  R8 |= RDX; RSI += 1; letters
+//   operand: R9 += 1; next
+//   refuse:  exit(1)
+//   done:    R8 := default if nothing is selected
+//
+// RAX, RBX, RDX, RSI, RDI, R8–R11 and the flags are clobbered; RSP, RBP,
+// RCX and R12–R15 are kept.
+
+fn word_zero() → BitVec(64) { BitVec::zero() }
+fn byte_word(x: BitVec(8)) → BitVec(64) { x.zero_extend(56) }
+fn eight_byte() → BitVec(8) { BitVec::ofNat(8) }
+
+fn scan_setup_block() → List<Instruction> {
+    [MovRR(Rbx, Rsp), AddRI8(Rbx, eight_byte()), MovRI(R8, word_zero()), MovRI(R9, word_zero()), MovRI(R10, word_zero())]
+}
+fn scan_slot_load() → WordLoad { WordLoad(destination := Rsi, base := Rbx) }
+fn scan_null_block() → List<Instruction> { [MovRI(R11, word_zero()), CmpRR(Rsi, R11)] }
+fn scan_skip_block() → List<Instruction> { [AddRI8(Rbx, eight_byte())] }
+fn scan_ended_block() → List<Instruction> { [AddRI8(Rbx, eight_byte()), MovRI(R11, word_zero()), CmpRR(R10, R11)] }
+fn scan_byte_load() → ByteLoad { ByteLoad(destination := Rax, base := Rsi) }
+fn scan_ahead_load() → ByteLoad { ByteLoad(destination := Rax, base := Rdi) }
+fn scan_is_block(x: BitVec(8)) → List<Instruction> { [MovRI(R11, byte_word(x)), CmpRR(Rax, R11)] }
+fn scan_step_block() → List<Instruction> { [AddRI8(Rsi, one_byte())] }
+fn scan_ahead_block() → List<Instruction> { [MovRR(Rdi, Rsi), AddRI8(Rdi, one_byte())] }
+fn scan_end_block() → List<Instruction> { [MovRI(R10, BitVec::ofNat(1))] }
+fn scan_clear_block() → List<Instruction> { [MovRI(Rdx, word_zero())] }
+fn scan_none_block() → List<Instruction> { [MovRI(R11, word_zero()), CmpRR(Rdx, R11)] }
+fn scan_select_block() → List<Instruction> { [OrRR(R8, Rdx), AddRI8(Rsi, one_byte())] }
+fn scan_operand_block() → List<Instruction> { [AddRI8(R9, one_byte())] }
+fn scan_exit_block() → List<Instruction> { [MovRI(Rdi, BitVec::ofNat(1)), MovRI(Rax, BitVec::ofNat(60))] }
+fn scan_any_block() → List<Instruction> { [MovRI(R11, word_zero()), CmpRR(R8, R11)] }
+fn scan_default_block(default: BitVec(64)) → List<Instruction> { [MovRI(R8, default)] }
+
+// One slot of the letter table: CMP RAX, letter; JNE over; RDX |= its bit.
+fn slot_test_block(letters: List<BitVec(8)>, i: Nat) → List<Instruction> { scan_is_block(letter_slot(letters, i)) }
+fn slot_take_block(i: Nat) → List<Instruction> { [MovRI(R11, column_bit(i)), OrRR(Rdx, R11)] }
+fn slot_parts(letters: List<BitVec(8)>, i: Nat) → List<List<BitVec(8)>> {
+    [canonical_block_bytes(slot_test_block(letters, i)), near_control_bytes(JumpIfNear(NE, BitVec::ofNat(13)))]
+}
+fn slot_lens() → List<Nat> { [13, 6] }
+fn slot_block(letters: List<BitVec(8)>, i: Nat) → List<BitVec(8)> { layout_code(slot_parts(letters, i), canonical_block_bytes(slot_take_block(i))) }
+// Slots `i` .. `i + j - 1`.
+fn slot_blocks(letters: List<BitVec(8)>, i, j: Nat) → List<BitVec(8)> {
+    match j { Zero => Nil, Succ(k) => slot_block(letters, i) ++ slot_blocks(letters, Succ(i), k) }
+}
+fn letter_table(letters: List<BitVec(8)>) → List<BitVec(8)> { slot_blocks(letters, 0, column_slots()) }
+
+// The jumps, from where each lands: forward to done (573), operand (542),
+// letters (222), refuse (551) and the end (602); back to next (63) and
+// letters (222).
+fn sj_done_a() → BitVec(32) { BitVec::ofNat(514) }
+fn sj_done_b() → BitVec(32) { BitVec::ofNat(488) }
+fn sj_operand_a() → BitVec(32) { BitVec::ofNat(434) }
+fn sj_operand_b() → BitVec(32) { BitVec::ofNat(411) }
+fn sj_operand_c() → BitVec(32) { BitVec::ofNat(384) }
+fn sj_letters_a() → BitVec(32) { BitVec::ofNat(45) }
+fn sj_letters_b() → BitVec(32) { BitVec::ofNat(15) }
+fn sj_next_a() → BitVec(32) { BitVec::ofNat(4294967137) }
+fn sj_next_b() → BitVec(32) { BitVec::ofNat(4294967114) }
+fn sj_refuse() → BitVec(32) { BitVec::ofNat(21) }
+fn sj_letters_back() → BitVec(32) { BitVec::ofNat(4294966976) }
+fn sj_next_c() → BitVec(32) { BitVec::ofNat(4294966808) }
+fn sj_end() → BitVec(32) { BitVec::ofNat(10) }
+
+fn scan_parts(letters: List<BitVec(8)>) → List<List<BitVec(8)>> {
+    [canonical_block_bytes(scan_setup_block()), word_load_bytes(scan_slot_load()), canonical_block_bytes(scan_null_block()),
+     near_control_bytes(JumpIfNear(E, sj_done_a())), canonical_block_bytes(scan_skip_block()),
+     // next (63)
+     word_load_bytes(scan_slot_load()), canonical_block_bytes(scan_null_block()), near_control_bytes(JumpIfNear(E, sj_done_b())),
+     canonical_block_bytes(scan_ended_block()), near_control_bytes(JumpIfNear(NE, sj_operand_a())),
+     byte_load_bytes(scan_byte_load()), canonical_block_bytes(scan_is_block(dash())), near_control_bytes(JumpIfNear(NE, sj_operand_b())),
+     canonical_block_bytes(scan_step_block()), byte_load_bytes(scan_byte_load()), canonical_block_bytes(scan_is_block(nul())),
+     near_control_bytes(JumpIfNear(E, sj_operand_c())), canonical_block_bytes(scan_is_block(dash())), near_control_bytes(JumpIfNear(NE, sj_letters_a())),
+     canonical_block_bytes(scan_ahead_block()), byte_load_bytes(scan_ahead_load()), canonical_block_bytes(scan_is_block(nul())),
+     near_control_bytes(JumpIfNear(NE, sj_letters_b())), canonical_block_bytes(scan_end_block()), near_control_bytes(JumpNear(sj_next_a())),
+     // letters (222)
+     byte_load_bytes(scan_byte_load()), canonical_block_bytes(scan_is_block(nul())), near_control_bytes(JumpIfNear(E, sj_next_b())),
+     canonical_block_bytes(scan_clear_block()), letter_table(letters), canonical_block_bytes(scan_none_block()),
+     near_control_bytes(JumpIfNear(E, sj_refuse())), canonical_block_bytes(scan_select_block()), near_control_bytes(JumpNear(sj_letters_back())),
+     // operand (542)
+     canonical_block_bytes(scan_operand_block()), near_control_bytes(JumpNear(sj_next_c())),
+     // refuse (551)
+     canonical_block_bytes(scan_exit_block()), syscall_bytes(),
+     // done (573)
+     canonical_block_bytes(scan_any_block()), near_control_bytes(JumpIfNear(NE, sj_end()))]
+}
+fn scan_lens() → List<Nat> {
+    [37, 3, 13, 6, 4, 3, 13, 6, 17, 6, 4, 13, 6, 4, 4, 13, 6, 13, 6, 7, 4, 13, 6, 10, 5, 4, 13, 6, 10, 256, 13, 6, 7, 5, 4, 5, 20, 2, 13, 6]
+}
+fn scan_code(letters: List<BitVec(8)>, default: BitVec(64)) → List<BitVec(8)> {
+    layout_code(scan_parts(letters), canonical_block_bytes(scan_default_block(default)))
+}
+fn scan_len() → Nat { 602 }
+
+theorem slot_measured(letters: List<BitVec(8)>, i: Nat): LayoutMeasured(slot_parts(letters, i), slot_lens()) { ⟨refl, ⟨refl, trivial⟩⟩ }
+theorem slot_block_len(letters: List<BitVec(8)>, i: Nat): slot_block(letters, i).len() = 32 { refl }
+theorem slot_blocks_len(letters: List<BitVec(8)>, j: Nat): (i: Nat) → slot_blocks(letters, i, j).len() = 32 * j {
+    match j as λ k => (i: Nat) → slot_blocks(letters, i, k).len() = 32 * k {
+        Zero => λ i => refl,
+        Succ(k) => λ i => {
+            let rest = slot_blocks_len(letters, k, Succ(i));
+            let total: (32 + 32 * k = 32 * Succ(k)) = omega;
+            trans(List::len_append(slot_block(letters, i), slot_blocks(letters, Succ(i), k)),
+                trans(cong_fn<Nat, Nat>(λ l => 32 + l, rest), total))
+        },
+    }
+}
+// Every piece is as long as its own length, so a layout is measured by its
+// pieces' lengths; the scan's are closed numbers, checked in one evaluation.
+fn piece_lens(pieces: List<List<BitVec(8)>>) → List<Nat> {
+    match pieces { Nil => Nil, Cons(piece, rest) => Cons(piece.len(), piece_lens(rest)) }
+}
+theorem measured_self(pieces: List<List<BitVec(8)>>): LayoutMeasured(pieces, piece_lens(pieces)) {
+    match pieces as λ ps => LayoutMeasured(ps, piece_lens(ps)) {
+        Nil => trivial,
+        Cons(_, rest) => ⟨refl, measured_self(rest)⟩,
+    }
+}
+theorem scan_measured(letters: List<BitVec(8)>): LayoutMeasured(scan_parts(letters), scan_lens()) {
+    let closed: (piece_lens(scan_parts(letters)) = scan_lens()) = refl;
+    j(closed, λ ls _ => LayoutMeasured(scan_parts(letters), ls), measured_self(scan_parts(letters)))
+}
+theorem scan_code_len(letters: List<BitVec(8)>, default: BitVec(64)): scan_code(letters, default).len() = scan_len() {
+    layout_len(scan_parts(letters), canonical_block_bytes(scan_default_block(default)), scan_lens(), scan_measured(letters), 10, refl)
+}
+
+// ---------------------------------------------------------------------------
+// Bytes, words and addresses.
+
+// CMP of a loaded byte against a byte immediate: ZF is their equality.
+theorem cmp_bytes(x, l: BitVec(8)): is_zero_bits(64, byte_word(x).sub(byte_word(l))) = x.eq_bit(l) {
+    trans(zero_bits_sub(64, byte_word(x), byte_word(l)), BitVec::eq_bit_zero_extend(8, 56, x, l))
+}
+// A byte of a C string before its NUL is not NUL.
+theorem not_nul(x: BitVec(8), held: Not(x = BitVec::ofNat(0))): x.eq_bit(nul()) = False {
+    (match x.eq_bit(nul()) as λ c => (x.eq_bit(nul()) = c) → c = False {
+        False => λ _ => refl,
+        True => λ same => false_elim(held(BitVec::eq_of_eq_bit(8, x, nul(), same))),
+    })(refl)
+}
+// A pointer that is not null is not zero.
+theorem nonzero_word(p: BitVec(64), positive: 0 < p.toNat()): p.eq_bit(word_zero()) = False {
+    (match p.eq_bit(word_zero()) as λ c => (p.eq_bit(word_zero()) = c) → c = False {
+        False => λ _ => refl,
+        True => λ same => {
+            let none: (word_zero().toNat() = 0) = refl;
+            let zero: (p.toNat() = 0) = j(sym(BitVec::eq_of_eq_bit(64, p, word_zero(), same)), λ w _ => w.toNat() = 0, none);
+            false_elim(Nat::lt_irrefl(0, { omega }))
+        },
+    })(refl)
+}
+
+// Adding to the word of a Nat is adding to the Nat.
+theorem word_add(v, d: Nat, w: BitVec(64), value: w.toNat() = d): word_of_nat(64, v).add(w) = word_of_nat(64, v + d) {
+    trans(sym(BitVec::iter_add_eq_add(64, word_of_nat(64, v), w)),
+        trans(BitVec::cong_iterate_increment_count(64, word_of_nat(64, v), value), BitVec::iterate_increment_compose(64, BitVec::zero(), v, d)))
+}
+theorem eight_value(): eight_byte().sign_extend(56).toNat() = 8 { refl }
+theorem one_value(): one_byte().sign_extend(56).toNat() = 1 { refl }
+theorem slot_sum(r, k: Nat): r + 8 * k + 8 = r + 8 * Succ(k) { omega }
+// ADD RBX, 8 steps to the next argv slot.
+theorem slot_next(rsp: BitVec(64), k: Nat, w: BitVec(64), at: w = argv_slot(rsp, k)): w.add(eight_byte().sign_extend(56)) = argv_slot(rsp, Succ(k)) {
+    trans(cong_fn<BitVec(64), BitVec(64)>(λ x => x.add(eight_byte().sign_extend(56)), at),
+        trans(word_add(rsp.toNat() + 8 * k, 8, eight_byte().sign_extend(56), eight_value()),
+            cong_fn<Nat, BitVec(64)>(λ v => word_of_nat(64, v), slot_sum(rsp.toNat(), k))))
+}
+theorem slot_zero(rsp: BitVec(64)): rsp = argv_slot(rsp, 0) { sym(word_of_nat_toNat(64, rsp)) }
+// ADD R9, 1 counts one more operand.
+theorem count_next(c: Nat, w: BitVec(64), at: w = word_of_nat(64, c)): w.add(one_byte().sign_extend(56)) = word_of_nat(64, Succ(c)) {
+    trans(cong_fn<BitVec(64), BitVec(64)>(λ x => x.add(one_byte().sign_extend(56)), at), word_add(c, 1, one_byte().sign_extend(56), one_value()))
+}
+// ADD RSI, 1 below the canonical boundary.
+theorem pointer_next(x: BitVec(64), v: Nat, value: x.toNat() = v, low: Succ(v) < Nat::pow(2, 47)): x.add(one_byte().sign_extend(56)).toNat() = Succ(v) {
+    let wide: (Nat::pow(2, 47) < Nat::pow(2, 64)) = Nat::leb_sound(Succ(Nat::pow(2, 47)), Nat::pow(2, 64), trivial);
+    add_one_value(x, v, value, { omega })
+}
+
+// The byte at a register, read through a C string's source.
+theorem read_here(file: IoImage, page: Nat → BitVec(8), source: Nat → Option<BitVec(8)>, r: BitVec(64),
+    reads: source(0) = io_data_access().read(IoMemory(file, page), word_of_nat(64, r.toNat() + 0))):
+    io_data_access().read(IoMemory(file, page), r) = source(0) {
+    sym(trans(reads, cong_fn<BitVec(64), Option<BitVec(8)>>(λ a => io_data_access().read(IoMemory(file, page), a), word_of_nat_toNat(64, r))))
+}
+// The reads from one byte further on.
+fn ReadsFrom(file: IoImage, page: Nat → BitVec(8), source: Nat → Option<BitVec(8)>, v: Nat) → Type {
+    (i: Nat) → source(i) = io_data_access().read(IoMemory(file, page), word_of_nat(64, v + i))
+}
+theorem reads_next(file: IoImage, page: Nat → BitVec(8), source: Nat → Option<BitVec(8)>, v: Nat, reads: ReadsFrom(file, page, source, v)):
+    ReadsFrom(file, page, λ i => source(Succ(i)), Succ(v)) {
+    λ i => trans(reads(Succ(i)), cong_fn<Nat, Option<BitVec(8)>>(λ a => io_data_access().read(IoMemory(file, page), word_of_nat(64, a)),
+        sym(Nat::add_succ_left(v, i))))
+}
+
+// ---------------------------------------------------------------------------
+// Running the code's pieces: loads, the exit, and where a jump lands.
+
+theorem run_byte_load(file: IoImage, page: Nat → BitVec(8), load: ByteLoad, at: BitVec(64), k: Nat,
+    placed: Placed(file, byte_load_bytes(load), next_rip(at, k)), state: MachineState<IoMemory>,
+    memory_is: state.memory = IoMemory(file, page), rip_is: state.rip = next_rip(at, k), byte: BitVec(8),
+    present: io_data_access().read(IoMemory(file, page), read_gpr(load.base, state.gprs)) = Some(byte),
+    low: read_gpr(load.base, state.gprs).toNat() < Nat::pow(2, 47)):
+    Ran(file, page, state, byte_load_after(load, byte, state), next_rip(at, k + byte_load_bytes(load).len())) {
+    let fetch = io_fetch_access();
+    let base = read_gpr(load.base, state.gprs);
+    let here: (io_data_access().read(state.memory, base) = Some(byte)) =
+        j(sym(memory_is), λ m _ => io_data_access().read(m, base) = Some(byte), present);
+    Ran(steps := fetched_steps_one(fetch, io_data_access(), state, byte_load_after(load, byte, state), Exists(EmitLoad(load),
+            ⟨FetchedFrom(resident_readable(fetch, state.memory, byte_load_bytes(load), state.rip,
+                resident_state(fetch, byte_load_bytes(load), IoMemory(file, page), next_rip(at, k), state, memory_is, rip_is, placed(page)))),
+             Exists(byte, ByteLoadStep(canonical := BitVec::drop_low_zero_of_lt(47, 17, base, low), present := here, execution := refl))⟩)),
+        memory_is := memory_is,
+        rip_is := rip_advance(at, state.rip, k, byte_load_bytes(load).len(), rip_is))
+}
+
+theorem run_word_load(file: IoImage, page: Nat → BitVec(8), load: WordLoad, at: BitVec(64), k: Nat,
+    placed: Placed(file, word_load_bytes(load), next_rip(at, k)), state: MachineState<IoMemory>,
+    memory_is: state.memory = IoMemory(file, page), rip_is: state.rip = next_rip(at, k), word: BitVec(64),
+    held: WordAt(io_data_access(), IoMemory(file, page), read_gpr(load.base, state.gprs), word)):
+    Ran(file, page, state, word_load_after(load, word, state), next_rip(at, k + word_load_bytes(load).len())) {
+    let fetch = io_fetch_access();
+    let here: WordAt(io_data_access(), state.memory, read_gpr(load.base, state.gprs), word) =
+        j(sym(memory_is), λ m _ => WordAt(io_data_access(), m, read_gpr(load.base, state.gprs), word), held);
+    Ran(steps := fetched_steps_one(fetch, io_data_access(), state, word_load_after(load, word, state), Exists(EmitWordLoad(load),
+            ⟨FetchedFrom(resident_readable(fetch, state.memory, word_load_bytes(load), state.rip,
+                resident_state(fetch, word_load_bytes(load), IoMemory(file, page), next_rip(at, k), state, memory_is, rip_is, placed(page)))),
+             Exists(word, WordLoadStep(canonical := here.left, present := here.right, execution := refl))⟩)),
+        memory_is := memory_is,
+        rip_is := rip_advance(at, state.rip, k, word_load_bytes(load).len(), rip_is))
+}
+
+theorem syscall_placed(file: IoImage, page: Nat → BitVec(8), at: BitVec(64), k: Nat, placed: Placed(file, syscall_bytes(), next_rip(at, k)),
+    state: MachineState<IoMemory>, memory_is: state.memory = IoMemory(file, page), rip_is: state.rip = next_rip(at, k)):
+    LinuxSyscallAt(io_linux(), state) {
+    FetchedFrom(resident_readable(io_fetch_access(), state.memory, syscall_bytes(), state.rip,
+        resident_state(io_fetch_access(), syscall_bytes(), IoMemory(file, page), next_rip(at, k), state, memory_is, rip_is, placed(page))))
+}
+
+// Where a Jcc at `from` leaves RIP.
+theorem jcc_taken(cc: ConditionCode, d: BitVec(32), state: MachineState<IoMemory>, at: BitVec(64), from, to: Nat,
+    rip_is: state.rip = next_rip(at, from), holds: condition_holds(cc, state.flags) = True, lands: JumpsForward(from, 6, d, to)):
+    execute_near_control(JumpIfNear(cc, d), state).rip = next_rip(at, to) {
+    trans(near_if_taken_rip(cc, d, state, holds),
+        trans(cong_fn<BitVec(64), BitVec(64)>(λ a => near_branch_target(a, 6, d), rip_is), jumps_forward(at, from, 6, d, to, lands)))
+}
+theorem jcc_taken_back(cc: ConditionCode, d: BitVec(32), state: MachineState<IoMemory>, at: BitVec(64), from, to: Nat,
+    rip_is: state.rip = next_rip(at, from), holds: condition_holds(cc, state.flags) = True, lands: JumpsBack(from, 6, d, to)):
+    execute_near_control(JumpIfNear(cc, d), state).rip = next_rip(at, to) {
+    trans(near_if_taken_rip(cc, d, state, holds),
+        trans(cong_fn<BitVec(64), BitVec(64)>(λ a => near_branch_target(a, 6, d), rip_is), jumps_back(at, from, 6, d, to, lands)))
+}
+theorem jcc_passed(cc: ConditionCode, d: BitVec(32), state: MachineState<IoMemory>, at: BitVec(64), from: Nat,
+    rip_is: state.rip = next_rip(at, from), fails: condition_holds(cc, state.flags) = False):
+    execute_near_control(JumpIfNear(cc, d), state).rip = next_rip(at, from + 6) {
+    trans(near_if_not_taken_rip(cc, d, state, fails), rip_advance(at, state.rip, from, 6, rip_is))
+}
+theorem jmp_back(d: BitVec(32), state: MachineState<IoMemory>, at: BitVec(64), from, to: Nat,
+    rip_is: state.rip = next_rip(at, from), lands: JumpsBack(from, 5, d, to)):
+    execute_near_control(JumpNear(d), state).rip = next_rip(at, to) {
+    trans(cong_fn<BitVec(64), BitVec(64)>(λ a => near_branch_target(a, 5, d), rip_is), jumps_back(at, from, 5, d, to, lands))
+}
+// What JE and JNE test.
+theorem e_holds(f: Flags, zf: f.zf = True): condition_holds(E, f) = True { zf }
+theorem e_fails(f: Flags, zf: f.zf = False): condition_holds(E, f) = False { zf }
+theorem ne_holds(f: Flags, zf: f.zf = False): condition_holds(NE, f) = True { cong_fn<Bool, Bool>(λ c => !c, zf) }
+theorem ne_fails(f: Flags, zf: f.zf = True): condition_holds(NE, f) = False { cong_fn<Bool, Bool>(λ c => !c, zf) }
+
+// ---------------------------------------------------------------------------
+// What the scan keeps, and what it carries between arguments.
+
+fn ScanKept(after, before: Gprs) → Type {
+    (read_gpr(Rsp, after) = read_gpr(Rsp, before)) ∧ ((read_gpr(Rbp, after) = read_gpr(Rbp, before)) ∧
+    ((read_gpr(Rcx, after) = read_gpr(Rcx, before)) ∧ ((read_gpr(R12, after) = read_gpr(R12, before)) ∧
+    ((read_gpr(R13, after) = read_gpr(R13, before)) ∧ ((read_gpr(R14, after) = read_gpr(R14, before)) ∧
+    (read_gpr(R15, after) = read_gpr(R15, before)))))))
+}
+theorem scan_kept_refl(gprs: Gprs): ScanKept(gprs, gprs) { ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, refl⟩⟩⟩⟩⟩⟩ }
+
+fn ended_word(ended: Bool) → BitVec(64) { match ended { True => BitVec::ofNat(1), False => word_zero() } }
+
+// Between arguments: RBX at argv slot `k`, the selection, the operands so
+// far, whether `--` has ended the options.
+fn ScanRegs(rsp: BitVec(64), k: Nat, ended: Bool, mask: BitVec(64), count: Nat, origin, gprs: Gprs) → Type {
+    (read_gpr(Rbx, gprs) = argv_slot(rsp, k)) ∧ ((read_gpr(R8, gprs) = mask) ∧ ((read_gpr(R9, gprs) = word_of_nat(64, count)) ∧
+    ((read_gpr(R10, gprs) = ended_word(ended)) ∧ ScanKept(gprs, origin))))
+}
+
+// ---------------------------------------------------------------------------
+// The letter table: RDX gathers the bits of the slots whose letter is in AL.
+
+// Inside the table: RAX the letter, RDX the bits so far, and RBX, RSI, R8,
+// R9, R10 and the kept registers as `regs` had them.
+fn SlotKept(after, before: Gprs) → Type {
+    (read_gpr(Rbx, after) = read_gpr(Rbx, before)) ∧ ((read_gpr(Rsi, after) = read_gpr(Rsi, before)) ∧
+    ((read_gpr(R8, after) = read_gpr(R8, before)) ∧ ((read_gpr(R9, after) = read_gpr(R9, before)) ∧
+    ((read_gpr(R10, after) = read_gpr(R10, before)) ∧ ScanKept(after, before)))))
+}
+record SlotAt(file: IoImage, page: Nat → BitVec(8), base: BitVec(64), x: BitVec(8), bits: BitVec(64), regs: Gprs,
+    state: MachineState<IoMemory>) {
+    memory_is: state.memory = IoMemory(file, page),
+    rip_is: state.rip = base,
+    rax: read_gpr(Rax, state.gprs) = byte_word(x),
+    rdx: read_gpr(Rdx, state.gprs) = bits,
+    same: SlotKept(state.gprs, regs),
+}
+
+fn slot_or(letters: List<BitVec(8)>, x: BitVec(8), bits: BitVec(64), i: Nat) → BitVec(64) {
+    match x.eq_bit(letter_slot(letters, i)) { True => bits.bor(column_bit(i)), False => bits }
+}
+
+// One slot: RDX gains the slot's bit exactly when its letter is AL.
+theorem slot_step(file: IoImage, page: Nat → BitVec(8), letters: List<BitVec(8)>, x: BitVec(8), i: Nat, base: BitVec(64), bits: BitVec(64),
+    regs: Gprs, placed: Placed(file, slot_block(letters, i), base), state: MachineState<IoMemory>, head: SlotAt(file, page, base, x, bits, regs, state)):
+    Exists<MachineState<IoMemory>>(λ after => FetchedSteps(io_fetch_access(), io_data_access(), state, after) ∧
+        SlotAt(file, page, next_rip(base, 32), x, slot_or(letters, x, bits, i), regs, after)) {
+    let fetch = io_fetch_access();
+    let data = io_data_access();
+    let l = letter_slot(letters, i);
+    let piece = placed_piece(file, slot_parts(letters, i), canonical_block_bytes(slot_take_block(i)), slot_lens(), slot_measured(letters, i), base, placed);
+    let tested = run_block(file, page, slot_test_block(letters, i), base, 0, piece(0), state, head.memory_is, head.rip_is);
+    let s1 = execute_block_normal(slot_test_block(letters, i), state);
+    let jne = JumpIfNear(NE, BitVec::ofNat(13));
+    let jumped = run_near(file, page, jne, base, 13, piece(1), s1, tested.memory_is, tested.rip_is);
+    let s2 = execute_near_control(jne, s1);
+    let zf: (s1.flags.zf = x.eq_bit(l)) =
+        trans(cong_fn<BitVec(64), Bool>(λ a => is_zero_bits(64, a.sub(byte_word(l))), head.rax), cmp_bytes(x, l));
+    (match x.eq_bit(l) as λ c => (s1.flags.zf = c) →
+            Exists<MachineState<IoMemory>>(λ after => FetchedSteps(fetch, data, state, after) ∧
+                SlotAt(file, page, next_rip(base, 32), x, match c { True => bits.bor(column_bit(i)), False => bits }, regs, after)) {
+        True => λ same => {
+            let s2_rip = jcc_passed(NE, BitVec::ofNat(13), s1, base, 13, tested.rip_is, ne_fails(s1.flags, same));
+            let taken = run_block(file, page, slot_take_block(i), base, 19, piece(2), s2, tested.memory_is, s2_rip);
+            let s3 = execute_block_normal(slot_take_block(i), s2);
+            let rdx: (read_gpr(Rdx, s3.gprs) = bits.bor(column_bit(i))) =
+                cong_fn<BitVec(64), BitVec(64)>(λ d => d.bor(column_bit(i)), head.rdx);
+            Exists(s3, ⟨fetched_steps_trans(fetch, data, state, s1, s3, tested.steps, fetched_steps_trans(fetch, data, s1, s2, s3, jumped, taken.steps)),
+                SlotAt(memory_is := taken.memory_is, rip_is := taken.rip_is, rax := head.rax, rdx := rdx, same := head.same)⟩)
+        },
+        False => λ differ => {
+            let s2_rip = jcc_taken(NE, BitVec::ofNat(13), s1, base, 13, 32, tested.rip_is, ne_holds(s1.flags, differ), refl);
+            Exists(s2, ⟨fetched_steps_trans(fetch, data, state, s1, s2, tested.steps, jumped),
+                SlotAt(memory_is := tested.memory_is, rip_is := s2_rip, rax := head.rax, rdx := head.rdx, same := head.same)⟩)
+        },
+    })(zf)
+}
+
+// Slots `i` .. `i + j - 1`, by recursion on `j`.
+theorem slots_run(file: IoImage, page: Nat → BitVec(8), letters: List<BitVec(8)>, x: BitVec(8), regs: Gprs, j: Nat):
+    (i: Nat) → (base: BitVec(64)) → (bits: BitVec(64)) → (state: MachineState<IoMemory>) → Placed(file, slot_blocks(letters, i, j), base) →
+    SlotAt(file, page, base, x, bits, regs, state) →
+    Exists<MachineState<IoMemory>>(λ after => FetchedSteps(io_fetch_access(), io_data_access(), state, after) ∧
+        SlotAt(file, page, next_rip(base, 32 * j), x, slot_bits(letters, x, bits, i, j), regs, after)) {
+    let fetch = io_fetch_access();
+    let data = io_data_access();
+    match j as λ k => (i: Nat) → (base: BitVec(64)) → (bits: BitVec(64)) → (state: MachineState<IoMemory>) → Placed(file, slot_blocks(letters, i, k), base) →
+            SlotAt(file, page, base, x, bits, regs, state) →
+            Exists<MachineState<IoMemory>>(λ after => FetchedSteps(fetch, data, state, after) ∧
+                SlotAt(file, page, next_rip(base, 32 * k), x, slot_bits(letters, x, bits, i, k), regs, after)) {
+        Zero => λ i base bits state _ head => Exists(state, ⟨fetched_steps_refl(fetch, data, state), head⟩),
+        Succ(k) => λ i base bits state placed head => {
+            let parts = placed_split(file, slot_block(letters, i), slot_blocks(letters, Succ(i), k), base, placed);
+            have first = slot_step(file, page, letters, x, i, base, bits, regs, parts.left, state, head);
+            let moved: (next_rip(base, slot_block(letters, i).len()) = next_rip(base, 32)) = rip_count(base, slot_block_len(letters, i));
+            have rest = slots_run(file, page, letters, x, regs, k, Succ(i), next_rip(base, 32), slot_or(letters, x, bits, i), first.witness,
+                j(moved, λ a _ => Placed(file, slot_blocks(letters, Succ(i), k), a), parts.right), first.proof.right);
+            let total: (32 + 32 * k = 32 * Succ(k)) = omega;
+            let ends: (next_rip(next_rip(base, 32), 32 * k) = next_rip(base, 32 * Succ(k))) = trans(rip_compose(base, 32, 32 * k), rip_count(base, total));
+            Exists(rest.witness, ⟨fetched_steps_trans(fetch, data, state, first.witness, rest.witness, first.proof.left, rest.proof.left),
+                j(ends, λ a _ => SlotAt(file, page, a, x, slot_bits(letters, x, slot_or(letters, x, bits, i), Succ(i), k), regs, rest.witness),
+                    rest.proof.right)⟩)
+        },
+    }
+}
+
+theorem scan_kept_trans(after, middle, before: Gprs, late: ScanKept(after, middle), early: ScanKept(middle, before)): ScanKept(after, before) {
+    ⟨trans(late.left, early.left), ⟨trans(late.right.left, early.right.left), ⟨trans(late.right.right.left, early.right.right.left),
+    ⟨trans(late.right.right.right.left, early.right.right.right.left), ⟨trans(late.right.right.right.right.left, early.right.right.right.right.left),
+    ⟨trans(late.right.right.right.right.right.left, early.right.right.right.right.right.left),
+     trans(late.right.right.right.right.right.right, early.right.right.right.right.right.right)⟩⟩⟩⟩⟩⟩
+}
+theorem slot_kept_refl(gprs: Gprs): SlotKept(gprs, gprs) { ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, scan_kept_refl(gprs)⟩⟩⟩⟩⟩ }
+
+// ---------------------------------------------------------------------------
+// The letters of one option.
+
+record ScanAt(file: IoImage, page: Nat → BitVec(8), at, rsp: BitVec(64), k: Nat, ended: Bool, mask: BitVec(64), count: Nat, origin: Gprs,
+    state: MachineState<IoMemory>) {
+    memory_is: state.memory = IoMemory(file, page),
+    rip_is: state.rip = next_rip(at, 63),
+    regs: ScanRegs(rsp, k, ended, mask, count, origin, state.gprs),
+}
+// At `letters`: RSI at the next letter, whose bytes on are `source`.
+record LettersAt(file: IoImage, page: Nat → BitVec(8), at, rsp: BitVec(64), k: Nat, mask: BitVec(64), count: Nat, origin: Gprs,
+    source: Nat → Option<BitVec(8)>, state: MachineState<IoMemory>) {
+    memory_is: state.memory = IoMemory(file, page),
+    rip_is: state.rip = next_rip(at, 222),
+    reads: ReadsFrom(file, page, source, read_gpr(Rsi, state.gprs).toNat()),
+    regs: ScanRegs(rsp, k, False, mask, count, origin, state.gprs),
+}
+
+fn exit_one() → List<LinuxEvent> { [ExitEvent(BitVec::ofNat(1))] }
+
+// The option's letters end at the next argument, or a letter no column has
+// exits.
+fn LettersEnd(file: IoImage, page: Nat → BitVec(8), at, rsp: BitVec(64), k, count: Nat, origin: Gprs, result: Option<BitVec(64)>,
+    state: MachineState<IoMemory>) → Type {
+    match result {
+        None => LinuxRuns(io_linux(), exit_one(), state),
+        Some(mask) => Exists<MachineState<IoMemory>>(λ after => FetchedSteps(io_fetch_access(), io_data_access(), state, after) ∧
+            ScanAt(file, page, at, rsp, k, False, mask, count, origin, after)),
+    }
+}
+theorem letters_end_after(file: IoImage, page: Nat → BitVec(8), at, rsp: BitVec(64), k, count: Nat, origin: Gprs, result: Option<BitVec(64)>,
+    before, middle: MachineState<IoMemory>, steps: FetchedSteps(io_fetch_access(), io_data_access(), before, middle),
+    ends: LettersEnd(file, page, at, rsp, k, count, origin, result, middle)): LettersEnd(file, page, at, rsp, k, count, origin, result, before) {
+    match result as λ r => LettersEnd(file, page, at, rsp, k, count, origin, r, middle) → LettersEnd(file, page, at, rsp, k, count, origin, r, before) {
+        None => λ runs => linux_runs_after_steps(io_linux(), exit_one(), before, middle, steps, runs),
+        Some(_) => λ found => Exists(found.witness, ⟨fetched_steps_trans(io_fetch_access(), io_data_access(), before, middle, found.witness, steps,
+            found.proof.left), found.proof.right⟩),
+    }(ends)
+}
+
+fn ScanPieces(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64), at: BitVec(64)) → Type {
+    (i: Nat) → Placed(file, layout_piece(scan_parts(letters), canonical_block_bytes(scan_default_block(default)), i),
+        next_rip(at, layout_at(0, scan_lens(), i)))
+}
+theorem scan_pieces(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64), at: BitVec(64), placed: Placed(file, scan_code(letters, default), at)):
+    ScanPieces(file, letters, default, at) {
+    placed_piece(file, scan_parts(letters), canonical_block_bytes(scan_default_block(default)), scan_lens(), scan_measured(letters), at, placed)
+}
+
+// A letter no column has: exit(1).
+theorem scan_refuses(file: IoImage, page: Nat → BitVec(8), letters: List<BitVec(8)>, default: BitVec(64), at: BitVec(64),
+    piece: ScanPieces(file, letters, default, at), state: MachineState<IoMemory>, memory_is: state.memory = IoMemory(file, page),
+    rip_is: state.rip = next_rip(at, 551)): LinuxRuns(io_linux(), exit_one(), state) {
+    let ran = run_block(file, page, scan_exit_block(), at, 551, piece(36), state, memory_is, rip_is);
+    let last = execute_block_normal(scan_exit_block(), state);
+    linux_runs_exit(io_linux(), state, last, BitVec::ofNat(1), ran.steps, syscall_placed(file, page, at, 571, piece(37), last, ran.memory_is, ran.rip_is),
+        refl, refl)
+}
+
+theorem letters_low(v, n: Nat, low: v + Succ(n) < Nat::pow(2, 47)):
+    (Succ(v) < Nat::pow(2, 47)) ∧ ((Succ(v) + n < Nat::pow(2, 47)) ∧ (v < Nat::pow(2, 47))) { ⟨omega, ⟨omega, omega⟩⟩ }
+
+// The letters, by recursion on what is left of the option.
+theorem letters_run(file: IoImage, page: Nat → BitVec(8), letters: List<BitVec(8)>, default: BitVec(64), at: BitVec(64),
+    piece: ScanPieces(file, letters, default, at), rsp: BitVec(64), k, count: Nat, origin: Gprs, xs: List<BitVec(8)>):
+    (mask: BitVec(64)) → (source: Nat → Option<BitVec(8)>) → (state: MachineState<IoMemory>) → CStringFrom(xs, source) →
+    read_gpr(Rsi, state.gprs).toNat() + xs.len() < Nat::pow(2, 47) → LettersAt(file, page, at, rsp, k, mask, count, origin, source, state) →
+    LettersEnd(file, page, at, rsp, k, count, origin, option_mask(letters, mask, xs), state) {
+    let fetch = io_fetch_access();
+    let data = io_data_access();
+    match xs as λ ys => (mask: BitVec(64)) → (source: Nat → Option<BitVec(8)>) → (state: MachineState<IoMemory>) → CStringFrom(ys, source) →
+            read_gpr(Rsi, state.gprs).toNat() + ys.len() < Nat::pow(2, 47) → LettersAt(file, page, at, rsp, k, mask, count, origin, source, state) →
+            LettersEnd(file, page, at, rsp, k, count, origin, option_mask(letters, mask, ys), state) {
+        Nil => λ mask source state string low head => {
+            let rsi = read_gpr(Rsi, state.gprs);
+            let present: (io_data_access().read(IoMemory(file, page), rsi) = Some(nul())) = trans(read_here(file, page, source, rsi, head.reads(0)), string);
+            let loaded = run_byte_load(file, page, scan_byte_load(), at, 222, piece(25), state, head.memory_is, head.rip_is, nul(), present, low);
+            let s1 = byte_load_after(scan_byte_load(), nul(), state);
+            let tested = run_block(file, page, scan_is_block(nul()), at, 226, piece(26), s1, loaded.memory_is, loaded.rip_is);
+            let s2 = execute_block_normal(scan_is_block(nul()), s1);
+            let jumped = run_near(file, page, JumpIfNear(E, sj_next_b()), at, 239, piece(27), s2, tested.memory_is, tested.rip_is);
+            let s3 = execute_near_control(JumpIfNear(E, sj_next_b()), s2);
+            let s3_rip = jcc_taken_back(E, sj_next_b(), s2, at, 239, 63, tested.rip_is, cmp_bytes(nul(), nul()), refl);
+            Exists(s3, ⟨fetched_steps_trans(fetch, data, state, s1, s3, loaded.steps, fetched_steps_trans(fetch, data, s1, s2, s3, tested.steps, jumped)),
+                ScanAt(memory_is := tested.memory_is, rip_is := s3_rip, regs := head.regs)⟩)
+        },
+        Cons(x, rest) => λ mask source state string low head => {
+            let rsi = read_gpr(Rsi, state.gprs);
+            let lows = letters_low(rsi.toNat(), rest.len(), low);
+            let present: (io_data_access().read(IoMemory(file, page), rsi) = Some(x)) = trans(read_here(file, page, source, rsi, head.reads(0)), string.left);
+            let loaded = run_byte_load(file, page, scan_byte_load(), at, 222, piece(25), state, head.memory_is, head.rip_is, x, present,
+                lows.right.right);
+            let s1 = byte_load_after(scan_byte_load(), x, state);
+            let tested = run_block(file, page, scan_is_block(nul()), at, 226, piece(26), s1, loaded.memory_is, loaded.rip_is);
+            let s2 = execute_block_normal(scan_is_block(nul()), s1);
+            let passed = run_near(file, page, JumpIfNear(E, sj_next_b()), at, 239, piece(27), s2, tested.memory_is, tested.rip_is);
+            let s3 = execute_near_control(JumpIfNear(E, sj_next_b()), s2);
+            let s3_rip = jcc_passed(E, sj_next_b(), s2, at, 239, tested.rip_is, trans(cmp_bytes(x, nul()), not_nul(x, string.right.left)));
+            let cleared = run_block(file, page, scan_clear_block(), at, 245, piece(28), s3, tested.memory_is, s3_rip);
+            let s4 = execute_block_normal(scan_clear_block(), s3);
+            let into: SlotAt(file, page, next_rip(at, 255), x, word_zero(), s4.gprs, s4) =
+                SlotAt(memory_is := cleared.memory_is, rip_is := cleared.rip_is, rax := refl, rdx := refl, same := slot_kept_refl(s4.gprs));
+            have looked = slots_run(file, page, letters, x, s4.gprs, column_slots(), 0, next_rip(at, 255), word_zero(), s4, piece(29), into);
+            let s5 = looked.witness;
+            let slot = looked.proof.right;
+            let b = letter_bits(letters, x);
+            let s5_rip: (s5.rip = next_rip(at, 511)) = trans(slot.rip_is, rip_compose(at, 255, 32 * column_slots()));
+            let none_tested = run_block(file, page, scan_none_block(), at, 511, piece(30), s5, slot.memory_is, s5_rip);
+            let s6 = execute_block_normal(scan_none_block(), s5);
+            let jumped = run_near(file, page, JumpIfNear(E, sj_refuse()), at, 524, piece(31), s6, none_tested.memory_is, none_tested.rip_is);
+            let s7 = execute_near_control(JumpIfNear(E, sj_refuse()), s6);
+            let to_s7: FetchedSteps(fetch, data, state, s7) = fetched_steps_trans(fetch, data, state, s1, s7, loaded.steps,
+                fetched_steps_trans(fetch, data, s1, s3, s7, fetched_steps_trans(fetch, data, s1, s2, s3, tested.steps, passed),
+                    fetched_steps_trans(fetch, data, s3, s4, s7, cleared.steps,
+                        fetched_steps_trans(fetch, data, s4, s5, s7, looked.proof.left,
+                            fetched_steps_trans(fetch, data, s5, s6, s7, none_tested.steps, jumped)))));
+            let zf: (s6.flags.zf = b.eq_bit(word_zero())) =
+                trans(cong_fn<BitVec(64), Bool>(λ d => is_zero_bits(64, d.sub(word_zero())), slot.rdx), zero_bits_sub(64, b, word_zero()));
+            (match b.eq_bit(word_zero()) as λ c => (s6.flags.zf = c) →
+                    LettersEnd(file, page, at, rsp, k, count, origin, match c { True => None, False => option_mask(letters, mask.bor(b), rest) }, state) {
+                True => λ none => {
+                    let s7_rip = jcc_taken(E, sj_refuse(), s6, at, 524, 551, none_tested.rip_is, none, refl);
+                    linux_runs_after_steps(io_linux(), exit_one(), state, s7, to_s7,
+                        scan_refuses(file, page, letters, default, at, piece, s7, none_tested.memory_is, s7_rip))
+                },
+                False => λ some => {
+                    let s7_rip = jcc_passed(E, sj_refuse(), s6, at, 524, none_tested.rip_is, some);
+                    let selected = run_block(file, page, scan_select_block(), at, 530, piece(32), s7, none_tested.memory_is, s7_rip);
+                    let s8 = execute_block_normal(scan_select_block(), s7);
+                    let back = run_near(file, page, JumpNear(sj_letters_back()), at, 537, piece(33), s8, selected.memory_is, selected.rip_is);
+                    let s9 = execute_near_control(JumpNear(sj_letters_back()), s8);
+                    let s9_rip = jmp_back(sj_letters_back(), s8, at, 537, 222, selected.rip_is, refl);
+                    let same = slot.same;
+                    let rsi9: (read_gpr(Rsi, s9.gprs).toNat() = Succ(rsi.toNat())) =
+                        pointer_next(read_gpr(Rsi, s5.gprs), rsi.toNat(), cong_fn<BitVec(64), Nat>(λ w => w.toNat(), same.right.left), lows.left);
+                    let r8: (read_gpr(R8, s9.gprs) = mask.bor(b)) =
+                        trans(cong_fn<BitVec(64), BitVec(64)>(λ m => m.bor(read_gpr(Rdx, s5.gprs)), trans(same.right.right.left, head.regs.right.left)),
+                            cong_fn<BitVec(64), BitVec(64)>(λ d => mask.bor(d), slot.rdx));
+                    let regs: ScanRegs(rsp, k, False, mask.bor(b), count, origin, s9.gprs) =
+                        ⟨trans(same.left, head.regs.left), ⟨r8, ⟨trans(same.right.right.right.left, head.regs.right.right.left),
+                            ⟨trans(same.right.right.right.right.left, head.regs.right.right.right.left),
+                             scan_kept_trans(s9.gprs, state.gprs, origin, same.right.right.right.right.right, head.regs.right.right.right.right)⟩⟩⟩⟩;
+                    let reads: ReadsFrom(file, page, λ i => source(Succ(i)), read_gpr(Rsi, s9.gprs).toNat()) =
+                        j(sym(rsi9), λ v _ => ReadsFrom(file, page, λ i => source(Succ(i)), v), reads_next(file, page, source, rsi.toNat(), head.reads));
+                    have more = letters_run(file, page, letters, default, at, piece, rsp, k, count, origin, rest, mask.bor(b), λ i => source(Succ(i)), s9,
+                        string.right.right, j(sym(rsi9), λ v _ => v + rest.len() < Nat::pow(2, 47), lows.right.left),
+                        LettersAt(memory_is := selected.memory_is, rip_is := s9_rip, reads := reads, regs := regs));
+                    letters_end_after(file, page, at, rsp, k, count, origin, option_mask(letters, mask.bor(b), rest), state, s9,
+                        fetched_steps_trans(fetch, data, state, s7, s9, to_s7, fetched_steps_trans(fetch, data, s7, s8, s9, selected.steps, back)), more)
+                },
+            })(zf)
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The arguments.
+
+// At `done`: the selection and the operands, before the default.
+record DoneAt(file: IoImage, page: Nat → BitVec(8), at: BitVec(64), mask: BitVec(64), count: Nat, origin: Gprs, state: MachineState<IoMemory>) {
+    memory_is: state.memory = IoMemory(file, page),
+    rip_is: state.rip = next_rip(at, 573),
+    r8: read_gpr(R8, state.gprs) = mask,
+    r9: read_gpr(R9, state.gprs) = word_of_nat(64, count),
+    kept: ScanKept(state.gprs, origin),
+}
+
+// What is left of the command line scans to a refusal, or to `done`.
+fn ScanEnds(file: IoImage, page: Nat → BitVec(8), at: BitVec(64), origin: Gprs, result: Scanned, state: MachineState<IoMemory>) → Type {
+    match result {
+        Refused => LinuxRuns(io_linux(), exit_one(), state),
+        Scanned(mask, operands) => Exists<MachineState<IoMemory>>(λ after => FetchedSteps(io_fetch_access(), io_data_access(), state, after) ∧
+            DoneAt(file, page, at, mask, operands.len(), origin, after)),
+    }
+}
+theorem scan_ends_after(file: IoImage, page: Nat → BitVec(8), at: BitVec(64), origin: Gprs, result: Scanned, before, middle: MachineState<IoMemory>,
+    steps: FetchedSteps(io_fetch_access(), io_data_access(), before, middle), ends: ScanEnds(file, page, at, origin, result, middle)):
+    ScanEnds(file, page, at, origin, result, before) {
+    match result as λ r => ScanEnds(file, page, at, origin, r, middle) → ScanEnds(file, page, at, origin, r, before) {
+        Refused => λ runs => linux_runs_after_steps(io_linux(), exit_one(), before, middle, steps, runs),
+        Scanned(_, _) => λ found => Exists(found.witness, ⟨fetched_steps_trans(io_fetch_access(), io_data_access(), before, middle, found.witness, steps,
+            found.proof.left), found.proof.right⟩),
+    }(ends)
+}
+
+// The scan from argv slot `k` on, whatever the selection and operands so far.
+fn ScanCont(file: IoImage, page: Nat → BitVec(8), at: BitVec(64), letters: List<BitVec(8)>, rsp: BitVec(64), k: Nat, origin: Gprs,
+    rest: List<List<BitVec(8)>>) → Type {
+    (ended: Bool) → (mask: BitVec(64)) → (operands: List<List<BitVec(8)>>) → (state: MachineState<IoMemory>) →
+        ScanAt(file, page, at, rsp, k, ended, mask, operands.len(), origin, state) →
+        ScanEnds(file, page, at, origin, scan_args(letters, ended, mask, operands, rest), state)
+}
+
+// The null word: done.
+theorem scan_end(file: IoImage, page: Nat → BitVec(8), letters: List<BitVec(8)>, default: BitVec(64), at: BitVec(64),
+    piece: ScanPieces(file, letters, default, at), rsp: BitVec(64), k: Nat, ended: Bool, mask: BitVec(64), count: Nat, origin: Gprs,
+    state: MachineState<IoMemory>, null: WordAt(io_data_access(), IoMemory(file, page), argv_slot(rsp, k), word_zero()),
+    head: ScanAt(file, page, at, rsp, k, ended, mask, count, origin, state)):
+    Exists<MachineState<IoMemory>>(λ after => FetchedSteps(io_fetch_access(), io_data_access(), state, after) ∧
+        DoneAt(file, page, at, mask, count, origin, after)) {
+    let fetch = io_fetch_access();
+    let data = io_data_access();
+    let loaded = run_word_load(file, page, scan_slot_load(), at, 63, piece(5), state, head.memory_is, head.rip_is, word_zero(),
+        j(sym(head.regs.left), λ a _ => WordAt(data, IoMemory(file, page), a, word_zero()), null));
+    let s1 = word_load_after(scan_slot_load(), word_zero(), state);
+    let tested = run_block(file, page, scan_null_block(), at, 66, piece(6), s1, loaded.memory_is, loaded.rip_is);
+    let s2 = execute_block_normal(scan_null_block(), s1);
+    let jumped = run_near(file, page, JumpIfNear(E, sj_done_b()), at, 79, piece(7), s2, tested.memory_is, tested.rip_is);
+    let s3 = execute_near_control(JumpIfNear(E, sj_done_b()), s2);
+    let s3_rip = jcc_taken(E, sj_done_b(), s2, at, 79, 573, tested.rip_is, zero_bits_sub_self(64, word_zero()), refl);
+    Exists(s3, ⟨fetched_steps_trans(fetch, data, state, s1, s3, loaded.steps, fetched_steps_trans(fetch, data, s1, s2, s3, tested.steps, jumped)),
+        DoneAt(memory_is := tested.memory_is, rip_is := s3_rip, r8 := head.regs.right.left, r9 := head.regs.right.right.left,
+            kept := head.regs.right.right.right.right)⟩)
+}
+
+// An argument's pointer loaded, RBX past its slot, and the options-ended
+// test made, at the JNE (102).
+fn ended_zf(ended: Bool) → Bool { match ended { True => False, False => True } }
+theorem ended_flag(ended: Bool): is_zero_bits(64, ended_word(ended).sub(word_zero())) = ended_zf(ended) {
+    match ended as λ e => is_zero_bits(64, ended_word(e).sub(word_zero())) = ended_zf(e) { True => refl, False => refl }
+}
+record HeadAt(file: IoImage, page: Nat → BitVec(8), at, rsp: BitVec(64), k: Nat, ended: Bool, mask: BitVec(64), count: Nat, origin: Gprs,
+    arg: List<BitVec(8)>, rest: List<List<BitVec(8)>>, state: MachineState<IoMemory>) {
+    pointer: BitVec(64),
+    memory_is: state.memory = IoMemory(file, page),
+    rip_is: state.rip = next_rip(at, 102),
+    zf: state.flags.zf = ended_zf(ended),
+    rsi: read_gpr(Rsi, state.gprs) = pointer,
+    positive: 0 < pointer.toNat(),
+    bound: pointer.toNat() + arg.len() + 1 <= Nat::pow(2, 47),
+    string: CStringAt(io_data_access(), IoMemory(file, page), pointer, arg),
+    later: ArgvFrom(io_data_access(), IoMemory(file, page), rsp, rest, k),
+    regs: ScanRegs(rsp, k, ended, mask, count, origin, state.gprs),
+}
+theorem scan_head(file: IoImage, page: Nat → BitVec(8), letters: List<BitVec(8)>, default: BitVec(64), at: BitVec(64),
+    piece: ScanPieces(file, letters, default, at), rsp: BitVec(64), k: Nat, ended: Bool, mask: BitVec(64), count: Nat, origin: Gprs,
+    arg: List<BitVec(8)>, rest: List<List<BitVec(8)>>, state: MachineState<IoMemory>,
+    argv: ArgvFrom(io_data_access(), IoMemory(file, page), rsp, Cons(arg, rest), k), head: ScanAt(file, page, at, rsp, k, ended, mask, count, origin, state)):
+    Exists<MachineState<IoMemory>>(λ after => FetchedSteps(io_fetch_access(), io_data_access(), state, after) ∧
+        HeadAt(file, page, at, rsp, Succ(k), ended, mask, count, origin, arg, rest, after)) {
+    let fetch = io_fetch_access();
+    let data = io_data_access();
+    let p = argv.witness;
+    let facts = argv.proof;
+    let loaded = run_word_load(file, page, scan_slot_load(), at, 63, piece(5), state, head.memory_is, head.rip_is, p,
+        j(sym(head.regs.left), λ a _ => WordAt(data, IoMemory(file, page), a, p), facts.left));
+    let s1 = word_load_after(scan_slot_load(), p, state);
+    let tested = run_block(file, page, scan_null_block(), at, 66, piece(6), s1, loaded.memory_is, loaded.rip_is);
+    let s2 = execute_block_normal(scan_null_block(), s1);
+    let passed = run_near(file, page, JumpIfNear(E, sj_done_b()), at, 79, piece(7), s2, tested.memory_is, tested.rip_is);
+    let s3 = execute_near_control(JumpIfNear(E, sj_done_b()), s2);
+    let s3_rip = jcc_passed(E, sj_done_b(), s2, at, 79, tested.rip_is, trans(zero_bits_sub(64, p, word_zero()), nonzero_word(p, facts.right.left)));
+    let bumped = run_block(file, page, scan_ended_block(), at, 85, piece(8), s3, tested.memory_is, s3_rip);
+    let s4 = execute_block_normal(scan_ended_block(), s3);
+    let regs = head.regs;
+    let rbx: (read_gpr(Rbx, s4.gprs) = argv_slot(rsp, Succ(k))) = slot_next(rsp, k, read_gpr(Rbx, state.gprs), regs.left);
+    Exists(s4, ⟨fetched_steps_trans(fetch, data, state, s1, s4, loaded.steps,
+            fetched_steps_trans(fetch, data, s1, s2, s4, tested.steps, fetched_steps_trans(fetch, data, s2, s3, s4, passed, bumped.steps))),
+        HeadAt(pointer := p, memory_is := bumped.memory_is, rip_is := bumped.rip_is,
+            zf := trans(cong_fn<BitVec(64), Bool>(λ a => is_zero_bits(64, a.sub(word_zero())), regs.right.right.right.left), ended_flag(ended)),
+            rsi := refl, positive := facts.right.left, bound := facts.right.right.left, string := facts.right.right.right.left,
+            later := facts.right.right.right.right, regs := ⟨rbx, regs.right⟩)⟩)
+}
+
+// An operand: R9 counts it, and the scan goes on from the next slot.
+theorem operand_then(file: IoImage, page: Nat → BitVec(8), letters: List<BitVec(8)>, default: BitVec(64), at: BitVec(64),
+    piece: ScanPieces(file, letters, default, at), rsp: BitVec(64), k: Nat, origin: Gprs, rest: List<List<BitVec(8)>>,
+    cont: ScanCont(file, page, at, letters, rsp, k, origin, rest), ended: Bool, mask: BitVec(64), operands: List<List<BitVec(8)>>,
+    arg: List<BitVec(8)>, state: MachineState<IoMemory>, memory_is: state.memory = IoMemory(file, page), rip_is: state.rip = next_rip(at, 542),
+    regs: ScanRegs(rsp, k, ended, mask, operands.len(), origin, state.gprs)):
+    ScanEnds(file, page, at, origin, scan_args(letters, ended, mask, operands ++ [arg], rest), state) {
+    let fetch = io_fetch_access();
+    let data = io_data_access();
+    let counted = run_block(file, page, scan_operand_block(), at, 542, piece(34), state, memory_is, rip_is);
+    let s1 = execute_block_normal(scan_operand_block(), state);
+    let back = run_near(file, page, JumpNear(sj_next_c()), at, 546, piece(35), s1, counted.memory_is, counted.rip_is);
+    let s2 = execute_near_control(JumpNear(sj_next_c()), s1);
+    let s2_rip = jmp_back(sj_next_c(), s1, at, 546, 63, counted.rip_is, refl);
+    let r9: (read_gpr(R9, s2.gprs) = word_of_nat(64, (operands ++ [arg]).len())) =
+        trans(count_next(operands.len(), read_gpr(R9, state.gprs), regs.right.right.left),
+            cong_fn<Nat, BitVec(64)>(λ c => word_of_nat(64, c), sym(List::len_append(operands, [arg]))));
+    scan_ends_after(file, page, at, origin, scan_args(letters, ended, mask, operands ++ [arg], rest), state, s2,
+        fetched_steps_trans(fetch, data, state, s1, s2, counted.steps, back),
+        cont(ended, mask, operands ++ [arg], s2,
+            ScanAt(memory_is := counted.memory_is, rip_is := s2_rip, regs := ⟨regs.left, ⟨regs.right.left, ⟨r9, regs.right.right.right⟩⟩⟩)))
+}
+
+// ---------------------------------------------------------------------------
+// `scan_args` one argument at a time.
+
+fn option_scan(letters: List<BitVec(8)>, operands: List<List<BitVec(8)>>, rest: List<List<BitVec(8)>>, result: Option<BitVec(64)>) → Scanned {
+    match result { None => Refused, Some(selected) => scan_args(letters, False, selected, operands, rest) }
+}
+fn dash_scan(letters: List<BitVec(8)>, mask: BitVec(64), operands: List<List<BitVec(8)>>, second: BitVec(8), more: List<BitVec(8)>,
+    rest: List<List<BitVec(8)>>) → Scanned {
+    match letters_follow(second, more) {
+        False => scan_args(letters, True, mask, operands, rest),
+        True => option_scan(letters, operands, rest, option_mask(letters, mask, Cons(second, more))),
+    }
+}
+
+theorem scan_not_dash(letters: List<BitVec(8)>, mask: BitVec(64), operands, rest: List<List<BitVec(8)>>, first: BitVec(8), tail: List<BitVec(8)>,
+    no: first.eq_bit(dash()) = False):
+    scan_args(letters, False, mask, operands, Cons(Cons(first, tail), rest)) = scan_args(letters, False, mask, operands ++ [Cons(first, tail)], rest) {
+    j(sym(no), λ c _ => (match c {
+        False => scan_args(letters, False, mask, operands ++ [Cons(first, tail)], rest),
+        True => match tail {
+            Nil => scan_args(letters, False, mask, operands ++ [Cons(first, tail)], rest),
+            Cons(second, more) => match letters_follow(second, more) {
+                False => scan_args(letters, True, mask, operands, rest),
+                True => match option_mask(letters, mask, tail) { None => Refused, Some(selected) => scan_args(letters, False, selected, operands, rest) },
+            },
+        },
+    }) = scan_args(letters, False, mask, operands ++ [Cons(first, tail)], rest), refl)
+}
+theorem scan_lone_dash(letters: List<BitVec(8)>, mask: BitVec(64), operands, rest: List<List<BitVec(8)>>, first: BitVec(8),
+    yes: first.eq_bit(dash()) = True):
+    scan_args(letters, False, mask, operands, Cons([first], rest)) = scan_args(letters, False, mask, operands ++ [[first]], rest) {
+    j(sym(yes), λ c _ => (match c {
+        False => scan_args(letters, False, mask, operands ++ [[first]], rest),
+        True => scan_args(letters, False, mask, operands ++ [[first]], rest),
+    }) = scan_args(letters, False, mask, operands ++ [[first]], rest), refl)
+}
+theorem scan_dash(letters: List<BitVec(8)>, mask: BitVec(64), operands, rest: List<List<BitVec(8)>>, first, second: BitVec(8), more: List<BitVec(8)>,
+    yes: first.eq_bit(dash()) = True):
+    scan_args(letters, False, mask, operands, Cons(Cons(first, Cons(second, more)), rest)) = dash_scan(letters, mask, operands, second, more, rest) {
+    j(sym(yes), λ c _ => (match c {
+        False => scan_args(letters, False, mask, operands ++ [Cons(first, Cons(second, more))], rest),
+        True => dash_scan(letters, mask, operands, second, more, rest),
+    }) = dash_scan(letters, mask, operands, second, more, rest), refl)
+}
+theorem dash_scan_ends(letters: List<BitVec(8)>, mask: BitVec(64), operands, rest: List<List<BitVec(8)>>, second: BitVec(8), more: List<BitVec(8)>,
+    ends: letters_follow(second, more) = False):
+    dash_scan(letters, mask, operands, second, more, rest) = scan_args(letters, True, mask, operands, rest) {
+    j(sym(ends), λ c _ => (match c {
+        False => scan_args(letters, True, mask, operands, rest),
+        True => option_scan(letters, operands, rest, option_mask(letters, mask, Cons(second, more))),
+    }) = scan_args(letters, True, mask, operands, rest), refl)
+}
+theorem dash_scan_letters(letters: List<BitVec(8)>, mask: BitVec(64), operands, rest: List<List<BitVec(8)>>, second: BitVec(8), more: List<BitVec(8)>,
+    follow: letters_follow(second, more) = True):
+    dash_scan(letters, mask, operands, second, more, rest) = option_scan(letters, operands, rest, option_mask(letters, mask, Cons(second, more))) {
+    j(sym(follow), λ c _ => (match c {
+        False => scan_args(letters, True, mask, operands, rest),
+        True => option_scan(letters, operands, rest, option_mask(letters, mask, Cons(second, more))),
+    }) = option_scan(letters, operands, rest, option_mask(letters, mask, Cons(second, more))), refl)
+}
+theorem follow_not_dash(second: BitVec(8), more: List<BitVec(8)>, no: second.eq_bit(dash()) = False): letters_follow(second, more) = True {
+    j(sym(no), λ c _ => (match c { True => more.non_empty(), False => True }) = True, refl)
+}
+theorem follow_dashes(second: BitVec(8), yes: second.eq_bit(dash()) = True): letters_follow(second, Nil) = False {
+    j(sym(yes), λ c _ => (match c { True => List::non_empty<BitVec(8)>(Nil), False => True }) = False, refl)
+}
+theorem follow_dash_more(second, third: BitVec(8), rest: List<BitVec(8)>, yes: second.eq_bit(dash()) = True):
+    letters_follow(second, Cons(third, rest)) = True {
+    j(sym(yes), λ c _ => (match c { True => Cons(third, rest).non_empty(), False => True }) = True, refl)
+}
+
+// An option's letters end in the scan of what follows, or in the refusal.
+theorem letters_then(file: IoImage, page: Nat → BitVec(8), letters: List<BitVec(8)>, at, rsp: BitVec(64), k: Nat, origin: Gprs,
+    rest: List<List<BitVec(8)>>, cont: ScanCont(file, page, at, letters, rsp, k, origin, rest), operands: List<List<BitVec(8)>>,
+    result: Option<BitVec(64)>, state: MachineState<IoMemory>, ends: LettersEnd(file, page, at, rsp, k, operands.len(), origin, result, state)):
+    ScanEnds(file, page, at, origin, option_scan(letters, operands, rest, result), state) {
+    match result as λ r => LettersEnd(file, page, at, rsp, k, operands.len(), origin, r, state) →
+            ScanEnds(file, page, at, origin, option_scan(letters, operands, rest, r), state) {
+        None => λ runs => runs,
+        Some(selected) => λ found => scan_ends_after(file, page, at, origin, scan_args(letters, False, selected, operands, rest), state, found.witness,
+            found.proof.left, cont(False, selected, operands, found.witness, found.proof.right)),
+    }(ends)
+}
+
+// An argument with the options not ended, from the JNE (102).
+theorem option_first(file: IoImage, page: Nat → BitVec(8), letters: List<BitVec(8)>, default: BitVec(64), at: BitVec(64),
+    piece: ScanPieces(file, letters, default, at), rsp: BitVec(64), k: Nat, mask: BitVec(64), count: Nat, origin: Gprs,
+    arg: List<BitVec(8)>, rest: List<List<BitVec(8)>>, state: MachineState<IoMemory>,
+    head: HeadAt(file, page, at, rsp, k, False, mask, count, origin, arg, rest, state)):
+    Ran(file, page, state, execute_near_control(JumpIfNear(NE, sj_operand_a()), state), next_rip(at, 108)) {
+    Ran(steps := run_near(file, page, JumpIfNear(NE, sj_operand_a()), at, 102, piece(9), state, head.memory_is, head.rip_is),
+        memory_is := head.memory_is,
+        rip_is := jcc_passed(NE, sj_operand_a(), state, at, 102, head.rip_is, ne_fails(state.flags, head.zf)))
+}
+theorem bound_first(v, n: Nat, bound: v + Succ(n) + 1 <= Nat::pow(2, 47)): (v < Nat::pow(2, 47)) ∧ (Succ(v) < Nat::pow(2, 47)) { ⟨omega, omega⟩ }
+theorem bound_second(v, n: Nat, bound: v + Succ(Succ(n)) + 1 <= Nat::pow(2, 47)):
+    (Succ(Succ(v)) < Nat::pow(2, 47)) ∧ (Succ(v) + Succ(n) < Nat::pow(2, 47)) { ⟨omega, omega⟩ }
+theorem low_of(a: BitVec(64), v: Nat, value: a.toNat() = v, low: v < Nat::pow(2, 47)): a.toNat() < Nat::pow(2, 47) {
+    j(sym(value), λ x _ => x < Nat::pow(2, 47), low)
+}
+
+// Inside an argument whose options are not ended: RSI at the byte `source`
+// starts with, `o` bytes into the code.
+record ArgAt(file: IoImage, page: Nat → BitVec(8), at, rsp: BitVec(64), k: Nat, mask: BitVec(64), count: Nat, origin: Gprs,
+    source: Nat → Option<BitVec(8)>, o: Nat, state: MachineState<IoMemory>) {
+    memory_is: state.memory = IoMemory(file, page),
+    rip_is: state.rip = next_rip(at, o),
+    reads: ReadsFrom(file, page, source, read_gpr(Rsi, state.gprs).toNat()),
+    regs: ScanRegs(rsp, k, False, mask, count, origin, state.gprs),
+}
+
+// After `--`'s second dash (177): `--` alone ends the options; anything
+// longer is letters from the second byte.
+theorem after_dashes(file: IoImage, page: Nat → BitVec(8), letters: List<BitVec(8)>, default: BitVec(64), at: BitVec(64),
+    piece: ScanPieces(file, letters, default, at), rsp: BitVec(64), k: Nat, origin: Gprs, rest: List<List<BitVec(8)>>,
+    cont: ScanCont(file, page, at, letters, rsp, k, origin, rest), mask: BitVec(64), operands: List<List<BitVec(8)>>, byte0, byte1: BitVec(8),
+    yes: byte0.eq_bit(dash()) = True, yes1: byte1.eq_bit(dash()) = True, source1: Nat → Option<BitVec(8)>, more: List<BitVec(8)>,
+    state: MachineState<IoMemory>, head: ArgAt(file, page, at, rsp, k, mask, operands.len(), origin, source1, 177, state),
+    string1: CStringFrom(Cons(byte1, more), source1), low: read_gpr(Rsi, state.gprs).toNat() + Cons(byte1, more).len() < Nat::pow(2, 47)):
+    ScanEnds(file, page, at, origin, scan_args(letters, False, mask, operands, Cons(Cons(byte0, Cons(byte1, more)), rest)), state) {
+    let fetch = io_fetch_access();
+    let data = io_data_access();
+    let memory = IoMemory(file, page);
+    let v = read_gpr(Rsi, state.gprs).toNat();
+    let lows = letters_low(v, more.len(), low);
+    let ahead = run_block(file, page, scan_ahead_block(), at, 177, piece(19), state, head.memory_is, head.rip_is);
+    let s1 = execute_block_normal(scan_ahead_block(), state);
+    let rdi1: (read_gpr(Rdi, s1.gprs).toNat() = Succ(v)) = pointer_next(read_gpr(Rsi, state.gprs), v, refl, lows.left);
+    let source2 = λ (i: Nat) => source1(Succ(i));
+    let reads2: ReadsFrom(file, page, source2, read_gpr(Rdi, s1.gprs).toNat()) =
+        j(sym(rdi1), λ w _ => ReadsFrom(file, page, source2, w), reads_next(file, page, source1, v, head.reads));
+    match more as λ m => CStringFrom(Cons(byte1, m), source1) → (v + Cons(byte1, m).len() < Nat::pow(2, 47)) →
+            ScanEnds(file, page, at, origin, scan_args(letters, False, mask, operands, Cons(Cons(byte0, Cons(byte1, m)), rest)), state) {
+        Nil => λ whole _ => {
+            let string2: CStringFrom(Nil, source2) = whole.right.right;
+            let present2: (data.read(memory, read_gpr(Rdi, s1.gprs)) = Some(nul())) =
+                trans(read_here(file, page, source2, read_gpr(Rdi, s1.gprs), reads2(0)), string2);
+            let loaded = run_byte_load(file, page, scan_ahead_load(), at, 184, piece(20), s1, ahead.memory_is, ahead.rip_is, nul(),
+                present2, low_of(read_gpr(Rdi, s1.gprs), Succ(v), rdi1, lows.left));
+            let s2 = byte_load_after(scan_ahead_load(), nul(), s1);
+            let tested = run_block(file, page, scan_is_block(nul()), at, 188, piece(21), s2, loaded.memory_is, loaded.rip_is);
+            let s3 = execute_block_normal(scan_is_block(nul()), s2);
+            let passed = run_near(file, page, JumpIfNear(NE, sj_letters_b()), at, 201, piece(22), s3, tested.memory_is, tested.rip_is);
+            let s4 = execute_near_control(JumpIfNear(NE, sj_letters_b()), s3);
+            let s4_rip = jcc_passed(NE, sj_letters_b(), s3, at, 201, tested.rip_is, ne_fails(s3.flags, cmp_bytes(nul(), nul())));
+            let ended = run_block(file, page, scan_end_block(), at, 207, piece(23), s4, tested.memory_is, s4_rip);
+            let s5 = execute_block_normal(scan_end_block(), s4);
+            let back = run_near(file, page, JumpNear(sj_next_a()), at, 217, piece(24), s5, ended.memory_is, ended.rip_is);
+            let s6 = execute_near_control(JumpNear(sj_next_a()), s5);
+            let s6_rip = jmp_back(sj_next_a(), s5, at, 217, 63, ended.rip_is, refl);
+            let regs = head.regs;
+            let regs6: ScanRegs(rsp, k, True, mask, operands.len(), origin, s6.gprs) =
+                ⟨regs.left, ⟨regs.right.left, ⟨regs.right.right.left, ⟨refl, regs.right.right.right.right⟩⟩⟩⟩;
+            j(sym(trans(scan_dash(letters, mask, operands, rest, byte0, byte1, Nil, yes),
+                    dash_scan_ends(letters, mask, operands, rest, byte1, Nil, follow_dashes(byte1, yes1)))),
+                λ r _ => ScanEnds(file, page, at, origin, r, state),
+                scan_ends_after(file, page, at, origin, scan_args(letters, True, mask, operands, rest), state, s6,
+                    fetched_steps_trans(fetch, data, state, s1, s6, ahead.steps,
+                        fetched_steps_trans(fetch, data, s1, s2, s6, loaded.steps,
+                            fetched_steps_trans(fetch, data, s2, s3, s6, tested.steps,
+                                fetched_steps_trans(fetch, data, s3, s4, s6, passed,
+                                    fetched_steps_trans(fetch, data, s4, s5, s6, ended.steps, back))))),
+                    cont(True, mask, operands, s6, ScanAt(memory_is := ended.memory_is, rip_is := s6_rip, regs := regs6))))
+        },
+        Cons(byte2, rest2) => λ whole low2 => {
+            let string2: CStringFrom(Cons(byte2, rest2), source2) = whole.right.right;
+            let present2: (data.read(memory, read_gpr(Rdi, s1.gprs)) = Some(byte2)) =
+                trans(read_here(file, page, source2, read_gpr(Rdi, s1.gprs), reads2(0)), string2.left);
+            let loaded = run_byte_load(file, page, scan_ahead_load(), at, 184, piece(20), s1, ahead.memory_is, ahead.rip_is, byte2,
+                present2, low_of(read_gpr(Rdi, s1.gprs), Succ(v), rdi1, lows.left));
+            let s2 = byte_load_after(scan_ahead_load(), byte2, s1);
+            let tested = run_block(file, page, scan_is_block(nul()), at, 188, piece(21), s2, loaded.memory_is, loaded.rip_is);
+            let s3 = execute_block_normal(scan_is_block(nul()), s2);
+            let jumped = run_near(file, page, JumpIfNear(NE, sj_letters_b()), at, 201, piece(22), s3, tested.memory_is, tested.rip_is);
+            let s4 = execute_near_control(JumpIfNear(NE, sj_letters_b()), s3);
+            let s4_rip = jcc_taken(NE, sj_letters_b(), s3, at, 201, 222, tested.rip_is,
+                ne_holds(s3.flags, trans(cmp_bytes(byte2, nul()), not_nul(byte2, string2.right.left))), refl);
+            have looked = letters_run(file, page, letters, default, at, piece, rsp, k, operands.len(), origin,
+                Cons(byte1, Cons(byte2, rest2)), mask, source1, s4, whole, low2,
+                LettersAt(memory_is := tested.memory_is, rip_is := s4_rip, reads := head.reads, regs := head.regs));
+            j(sym(trans(scan_dash(letters, mask, operands, rest, byte0, byte1, Cons(byte2, rest2), yes),
+                    dash_scan_letters(letters, mask, operands, rest, byte1, Cons(byte2, rest2), follow_dash_more(byte1, byte2, rest2, yes1)))),
+                λ r _ => ScanEnds(file, page, at, origin, r, state),
+                scan_ends_after(file, page, at, origin, option_scan(letters, operands, rest, option_mask(letters, mask, Cons(byte1, Cons(byte2, rest2)))),
+                    state, s4,
+                    fetched_steps_trans(fetch, data, state, s1, s4, ahead.steps,
+                        fetched_steps_trans(fetch, data, s1, s2, s4, loaded.steps, fetched_steps_trans(fetch, data, s2, s3, s4, tested.steps, jumped))),
+                    letters_then(file, page, letters, at, rsp, k, origin, rest, cont, operands,
+                        option_mask(letters, mask, Cons(byte1, Cons(byte2, rest2))), s4, looked)))
+        },
+    }(string1, low)
+}
+
+// After a first dash (131): `-` alone is an operand; a second byte that is
+// not a dash starts the letters; a second dash goes on to `after_dashes`.
+theorem after_dash(file: IoImage, page: Nat → BitVec(8), letters: List<BitVec(8)>, default: BitVec(64), at: BitVec(64),
+    piece: ScanPieces(file, letters, default, at), rsp: BitVec(64), k: Nat, origin: Gprs, rest: List<List<BitVec(8)>>,
+    cont: ScanCont(file, page, at, letters, rsp, k, origin, rest), mask: BitVec(64), operands: List<List<BitVec(8)>>, byte0: BitVec(8),
+    yes: byte0.eq_bit(dash()) = True, source0: Nat → Option<BitVec(8)>, tail: List<BitVec(8)>,
+    state: MachineState<IoMemory>, head: ArgAt(file, page, at, rsp, k, mask, operands.len(), origin, source0, 131, state),
+    string: CStringFrom(tail, λ i => source0(Succ(i))), bound: read_gpr(Rsi, state.gprs).toNat() + Succ(tail.len()) + 1 <= Nat::pow(2, 47)):
+    ScanEnds(file, page, at, origin, scan_args(letters, False, mask, operands, Cons(Cons(byte0, tail), rest)), state) {
+    let fetch = io_fetch_access();
+    let data = io_data_access();
+    let memory = IoMemory(file, page);
+    let v = read_gpr(Rsi, state.gprs).toNat();
+    let lows = bound_first(v, tail.len(), bound);
+    let stepped = run_block(file, page, scan_step_block(), at, 131, piece(13), state, head.memory_is, head.rip_is);
+    let s1 = execute_block_normal(scan_step_block(), state);
+    let rsi1: (read_gpr(Rsi, s1.gprs).toNat() = Succ(v)) = pointer_next(read_gpr(Rsi, state.gprs), v, refl, lows.right);
+    let source1 = λ (i: Nat) => source0(Succ(i));
+    let reads1: ReadsFrom(file, page, source1, read_gpr(Rsi, s1.gprs).toNat()) =
+        j(sym(rsi1), λ w _ => ReadsFrom(file, page, source1, w), reads_next(file, page, source0, v, head.reads));
+    match tail as λ t => CStringFrom(t, source1) → (v + Succ(t.len()) + 1 <= Nat::pow(2, 47)) →
+            ScanEnds(file, page, at, origin, scan_args(letters, False, mask, operands, Cons(Cons(byte0, t), rest)), state) {
+        Nil => λ string1 _ => {
+            let present1: (data.read(memory, read_gpr(Rsi, s1.gprs)) = Some(nul())) =
+                trans(read_here(file, page, source1, read_gpr(Rsi, s1.gprs), reads1(0)), string1);
+            let loaded = run_byte_load(file, page, scan_byte_load(), at, 135, piece(14), s1, stepped.memory_is, stepped.rip_is, nul(), present1,
+                low_of(read_gpr(Rsi, s1.gprs), Succ(v), rsi1, lows.right));
+            let s2 = byte_load_after(scan_byte_load(), nul(), s1);
+            let tested = run_block(file, page, scan_is_block(nul()), at, 139, piece(15), s2, loaded.memory_is, loaded.rip_is);
+            let s3 = execute_block_normal(scan_is_block(nul()), s2);
+            let jumped = run_near(file, page, JumpIfNear(E, sj_operand_c()), at, 152, piece(16), s3, tested.memory_is, tested.rip_is);
+            let s4 = execute_near_control(JumpIfNear(E, sj_operand_c()), s3);
+            let s4_rip = jcc_taken(E, sj_operand_c(), s3, at, 152, 542, tested.rip_is, cmp_bytes(nul(), nul()), refl);
+            j(sym(scan_lone_dash(letters, mask, operands, rest, byte0, yes)), λ r _ => ScanEnds(file, page, at, origin, r, state),
+                scan_ends_after(file, page, at, origin, scan_args(letters, False, mask, operands ++ [[byte0]], rest), state, s4,
+                    fetched_steps_trans(fetch, data, state, s1, s4, stepped.steps, fetched_steps_trans(fetch, data, s1, s2, s4, loaded.steps,
+                        fetched_steps_trans(fetch, data, s2, s3, s4, tested.steps, jumped))),
+                    operand_then(file, page, letters, default, at, piece, rsp, k, origin, rest, cont, False, mask, operands, [byte0], s4,
+                        tested.memory_is, s4_rip, head.regs)))
+        },
+        Cons(byte1, more) => λ string1 bound1 => {
+            let lows1 = bound_second(v, more.len(), bound1);
+            let present1: (data.read(memory, read_gpr(Rsi, s1.gprs)) = Some(byte1)) =
+                trans(read_here(file, page, source1, read_gpr(Rsi, s1.gprs), reads1(0)), string1.left);
+            let loaded = run_byte_load(file, page, scan_byte_load(), at, 135, piece(14), s1, stepped.memory_is, stepped.rip_is, byte1, present1,
+                low_of(read_gpr(Rsi, s1.gprs), Succ(v), rsi1, lows.right));
+            let s2 = byte_load_after(scan_byte_load(), byte1, s1);
+            let tested = run_block(file, page, scan_is_block(nul()), at, 139, piece(15), s2, loaded.memory_is, loaded.rip_is);
+            let s3 = execute_block_normal(scan_is_block(nul()), s2);
+            let passed = run_near(file, page, JumpIfNear(E, sj_operand_c()), at, 152, piece(16), s3, tested.memory_is, tested.rip_is);
+            let s4 = execute_near_control(JumpIfNear(E, sj_operand_c()), s3);
+            let s4_rip = jcc_passed(E, sj_operand_c(), s3, at, 152, tested.rip_is, trans(cmp_bytes(byte1, nul()), not_nul(byte1, string1.right.left)));
+            let tested2 = run_block(file, page, scan_is_block(dash()), at, 158, piece(17), s4, tested.memory_is, s4_rip);
+            let s5 = execute_block_normal(scan_is_block(dash()), s4);
+            let jne = JumpIfNear(NE, sj_letters_a());
+            let jumped = run_near(file, page, jne, at, 171, piece(18), s5, tested2.memory_is, tested2.rip_is);
+            let s6 = execute_near_control(jne, s5);
+            let to_s6: FetchedSteps(fetch, data, state, s6) = fetched_steps_trans(fetch, data, state, s1, s6, stepped.steps,
+                fetched_steps_trans(fetch, data, s1, s2, s6, loaded.steps, fetched_steps_trans(fetch, data, s2, s3, s6, tested.steps,
+                    fetched_steps_trans(fetch, data, s3, s4, s6, passed, fetched_steps_trans(fetch, data, s4, s5, s6, tested2.steps, jumped)))));
+            let low1: (read_gpr(Rsi, s1.gprs).toNat() + Cons(byte1, more).len() < Nat::pow(2, 47)) =
+                j(sym(rsi1), λ w _ => w + Succ(more.len()) < Nat::pow(2, 47), lows1.right);
+            (match byte1.eq_bit(dash()) as λ c => (byte1.eq_bit(dash()) = c) →
+                    ScanEnds(file, page, at, origin, scan_args(letters, False, mask, operands, Cons(Cons(byte0, Cons(byte1, more)), rest)), state) {
+                False => λ no1 => {
+                    let s6_rip = jcc_taken(NE, sj_letters_a(), s5, at, 171, 222, tested2.rip_is, ne_holds(s5.flags, trans(cmp_bytes(byte1, dash()), no1)), refl);
+                    have looked = letters_run(file, page, letters, default, at, piece, rsp, k, operands.len(), origin, Cons(byte1, more), mask,
+                        source1, s6, string1, low1, LettersAt(memory_is := tested2.memory_is, rip_is := s6_rip, reads := reads1, regs := head.regs));
+                    j(sym(trans(scan_dash(letters, mask, operands, rest, byte0, byte1, more, yes),
+                            dash_scan_letters(letters, mask, operands, rest, byte1, more, follow_not_dash(byte1, more, no1)))),
+                        λ r _ => ScanEnds(file, page, at, origin, r, state),
+                        scan_ends_after(file, page, at, origin, option_scan(letters, operands, rest, option_mask(letters, mask, Cons(byte1, more))),
+                            state, s6, to_s6,
+                            letters_then(file, page, letters, at, rsp, k, origin, rest, cont, operands, option_mask(letters, mask, Cons(byte1, more)),
+                                s6, looked)))
+                },
+                True => λ yes1 => {
+                    let s6_rip = jcc_passed(NE, sj_letters_a(), s5, at, 171, tested2.rip_is, ne_fails(s5.flags, trans(cmp_bytes(byte1, dash()), yes1)));
+                    scan_ends_after(file, page, at, origin, scan_args(letters, False, mask, operands, Cons(Cons(byte0, Cons(byte1, more)), rest)),
+                        state, s6, to_s6,
+                        after_dashes(file, page, letters, default, at, piece, rsp, k, origin, rest, cont, mask, operands, byte0, byte1, yes, yes1,
+                            source1, more, s6, ArgAt(memory_is := tested2.memory_is, rip_is := s6_rip, reads := reads1, regs := head.regs),
+                            string1, low1))
+                },
+            })(refl)
+        },
+    }(string, bound)
+}
+
+theorem scan_option(file: IoImage, page: Nat → BitVec(8), letters: List<BitVec(8)>, default: BitVec(64), at: BitVec(64),
+    piece: ScanPieces(file, letters, default, at), rsp: BitVec(64), k: Nat, origin: Gprs, rest: List<List<BitVec(8)>>,
+    cont: ScanCont(file, page, at, letters, rsp, k, origin, rest), mask: BitVec(64), operands: List<List<BitVec(8)>>, arg: List<BitVec(8)>):
+    (state: MachineState<IoMemory>) → HeadAt(file, page, at, rsp, k, False, mask, operands.len(), origin, arg, rest, state) →
+    ScanEnds(file, page, at, origin, scan_args(letters, False, mask, operands, Cons(arg, rest)), state) {
+    let fetch = io_fetch_access();
+    let data = io_data_access();
+    let memory = IoMemory(file, page);
+    match arg as λ a => (state: MachineState<IoMemory>) → HeadAt(file, page, at, rsp, k, False, mask, operands.len(), origin, a, rest, state) →
+            ScanEnds(file, page, at, origin, scan_args(letters, False, mask, operands, Cons(a, rest)), state) {
+        Nil => λ state head => {
+            let p = head.pointer;
+            let first = option_first(file, page, letters, default, at, piece, rsp, k, mask, operands.len(), origin, Nil, rest, state, head);
+            let s1 = execute_near_control(JumpIfNear(NE, sj_operand_a()), state);
+            let source0 = λ (i: Nat) => data.read(memory, word_of_nat(64, p.toNat() + i));
+            let reads: ReadsFrom(file, page, source0, read_gpr(Rsi, s1.gprs).toNat()) =
+                j(sym(head.rsi), λ w _ => ReadsFrom(file, page, source0, w.toNat()), λ i => refl);
+            let present: (data.read(memory, read_gpr(Rsi, s1.gprs)) = Some(nul())) =
+                trans(read_here(file, page, source0, read_gpr(Rsi, s1.gprs), reads(0)), head.string);
+            let b0: (p.toNat() + 0 + 1 <= Nat::pow(2, 47)) = head.bound;
+            let loaded = run_byte_load(file, page, scan_byte_load(), at, 108, piece(10), s1, first.memory_is, first.rip_is, nul(), present,
+                low_of(read_gpr(Rsi, s1.gprs), p.toNat(), cong_fn<BitVec(64), Nat>(λ w => w.toNat(), head.rsi), { omega }));
+            let s2 = byte_load_after(scan_byte_load(), nul(), s1);
+            let tested = run_block(file, page, scan_is_block(dash()), at, 112, piece(11), s2, loaded.memory_is, loaded.rip_is);
+            let s3 = execute_block_normal(scan_is_block(dash()), s2);
+            let differ: (s3.flags.zf = False) = cmp_bytes(nul(), dash());
+            let jumped = run_near(file, page, JumpIfNear(NE, sj_operand_b()), at, 125, piece(12), s3, tested.memory_is, tested.rip_is);
+            let s4 = execute_near_control(JumpIfNear(NE, sj_operand_b()), s3);
+            let s4_rip = jcc_taken(NE, sj_operand_b(), s3, at, 125, 542, tested.rip_is, ne_holds(s3.flags, differ), refl);
+            scan_ends_after(file, page, at, origin, scan_args(letters, False, mask, operands ++ [Nil], rest), state, s4,
+                fetched_steps_trans(fetch, data, state, s1, s4, first.steps,
+                    fetched_steps_trans(fetch, data, s1, s2, s4, loaded.steps, fetched_steps_trans(fetch, data, s2, s3, s4, tested.steps, jumped))),
+                operand_then(file, page, letters, default, at, piece, rsp, k, origin, rest, cont, False, mask, operands, Nil, s4,
+                    tested.memory_is, s4_rip, head.regs))
+        },
+        Cons(byte0, tail) => λ state head => {
+            let p = head.pointer;
+            let first = option_first(file, page, letters, default, at, piece, rsp, k, mask, operands.len(), origin, Cons(byte0, tail), rest, state, head);
+            let s1 = execute_near_control(JumpIfNear(NE, sj_operand_a()), state);
+            let source0 = λ (i: Nat) => data.read(memory, word_of_nat(64, p.toNat() + i));
+            let reads: ReadsFrom(file, page, source0, read_gpr(Rsi, s1.gprs).toNat()) =
+                j(sym(head.rsi), λ w _ => ReadsFrom(file, page, source0, w.toNat()), λ i => refl);
+            let string = head.string;
+            let present: (data.read(memory, read_gpr(Rsi, s1.gprs)) = Some(byte0)) =
+                trans(read_here(file, page, source0, read_gpr(Rsi, s1.gprs), reads(0)), string.left);
+            let rsi_value: (read_gpr(Rsi, s1.gprs).toNat() = p.toNat()) = cong_fn<BitVec(64), Nat>(λ w => w.toNat(), head.rsi);
+            let lows = bound_first(p.toNat(), tail.len(), head.bound);
+            let loaded = run_byte_load(file, page, scan_byte_load(), at, 108, piece(10), s1, first.memory_is, first.rip_is, byte0, present,
+                low_of(read_gpr(Rsi, s1.gprs), p.toNat(), rsi_value, lows.left));
+            let s2 = byte_load_after(scan_byte_load(), byte0, s1);
+            let tested = run_block(file, page, scan_is_block(dash()), at, 112, piece(11), s2, loaded.memory_is, loaded.rip_is);
+            let s3 = execute_block_normal(scan_is_block(dash()), s2);
+            let jne = JumpIfNear(NE, sj_operand_b());
+            let jumped = run_near(file, page, jne, at, 125, piece(12), s3, tested.memory_is, tested.rip_is);
+            let s4 = execute_near_control(jne, s3);
+            let to_s4: FetchedSteps(fetch, data, state, s4) = fetched_steps_trans(fetch, data, state, s1, s4, first.steps,
+                fetched_steps_trans(fetch, data, s1, s2, s4, loaded.steps, fetched_steps_trans(fetch, data, s2, s3, s4, tested.steps, jumped)));
+            (match byte0.eq_bit(dash()) as λ c => (byte0.eq_bit(dash()) = c) →
+                    ScanEnds(file, page, at, origin, scan_args(letters, False, mask, operands, Cons(Cons(byte0, tail), rest)), state) {
+                False => λ no => {
+                    let s4_rip = jcc_taken(NE, sj_operand_b(), s3, at, 125, 542, tested.rip_is, ne_holds(s3.flags, trans(cmp_bytes(byte0, dash()), no)), refl);
+                    j(sym(scan_not_dash(letters, mask, operands, rest, byte0, tail, no)), λ r _ => ScanEnds(file, page, at, origin, r, state),
+                        scan_ends_after(file, page, at, origin, scan_args(letters, False, mask, operands ++ [Cons(byte0, tail)], rest), state, s4, to_s4,
+                            operand_then(file, page, letters, default, at, piece, rsp, k, origin, rest, cont, False, mask, operands, Cons(byte0, tail), s4,
+                                tested.memory_is, s4_rip, head.regs)))
+                },
+                True => λ yes => {
+                    let s4_rip = jcc_passed(NE, sj_operand_b(), s3, at, 125, tested.rip_is, ne_fails(s3.flags, trans(cmp_bytes(byte0, dash()), yes)));
+                    scan_ends_after(file, page, at, origin, scan_args(letters, False, mask, operands, Cons(Cons(byte0, tail), rest)), state, s4, to_s4,
+                        after_dash(file, page, letters, default, at, piece, rsp, k, origin, rest, cont, mask, operands, byte0, yes, source0, tail, s4,
+                            ArgAt(memory_is := tested.memory_is, rip_is := s4_rip, reads := reads, regs := head.regs), string.right.right,
+                            j(sym(rsi_value), λ w _ => w + Succ(tail.len()) + 1 <= Nat::pow(2, 47), head.bound)))
+                },
+            })(refl)
+        },
+    }
+}
+
+// The arguments from slot `k`, by recursion on them.
+theorem scan_loop(file: IoImage, page: Nat → BitVec(8), letters: List<BitVec(8)>, default: BitVec(64), at: BitVec(64),
+    piece: ScanPieces(file, letters, default, at), rsp: BitVec(64), origin: Gprs, args: List<List<BitVec(8)>>):
+    (k: Nat) → ArgvFrom(io_data_access(), IoMemory(file, page), rsp, args, k) → ScanCont(file, page, at, letters, rsp, k, origin, args) {
+    match args as λ a => (k: Nat) → ArgvFrom(io_data_access(), IoMemory(file, page), rsp, a, k) → ScanCont(file, page, at, letters, rsp, k, origin, a) {
+        Nil => λ k argv ended mask operands state head =>
+            scan_end(file, page, letters, default, at, piece, rsp, k, ended, mask, operands.len(), origin, state, argv, head),
+        Cons(arg, rest) => λ k argv ended mask operands state head => {
+            have h = scan_head(file, page, letters, default, at, piece, rsp, k, ended, mask, operands.len(), origin, arg, rest, state, argv, head);
+            let s1 = h.witness;
+            let cont = scan_loop(file, page, letters, default, at, piece, rsp, origin, rest, Succ(k), h.proof.right.later);
+            scan_ends_after(file, page, at, origin, scan_args(letters, ended, mask, operands, Cons(arg, rest)), state, s1, h.proof.left,
+                (match ended as λ e => HeadAt(file, page, at, rsp, Succ(k), e, mask, operands.len(), origin, arg, rest, s1) →
+                        ScanEnds(file, page, at, origin, scan_args(letters, e, mask, operands, Cons(arg, rest)), s1) {
+                    True => λ hd => {
+                        let jumped = run_near(file, page, JumpIfNear(NE, sj_operand_a()), at, 102, piece(9), s1, hd.memory_is, hd.rip_is);
+                        let s2 = execute_near_control(JumpIfNear(NE, sj_operand_a()), s1);
+                        let s2_rip = jcc_taken(NE, sj_operand_a(), s1, at, 102, 542, hd.rip_is, ne_holds(s1.flags, hd.zf), refl);
+                        scan_ends_after(file, page, at, origin, scan_args(letters, True, mask, operands ++ [arg], rest), s1, s2, jumped,
+                            operand_then(file, page, letters, default, at, piece, rsp, Succ(k), origin, rest, cont, True, mask, operands, arg, s2,
+                                hd.memory_is, s2_rip, hd.regs))
+                    },
+                    False => λ hd => scan_option(file, page, letters, default, at, piece, rsp, Succ(k), origin, rest, cont, mask, operands, arg, s1, hd),
+                })(h.proof.right))
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The end, and the claim.
+
+// Past the code: the selection, the operands counted, RSP and the other kept
+// registers as they were.
+record ScanOut(file: IoImage, page: Nat → BitVec(8), at: BitVec(64), mask: BitVec(64), count: Nat, origin: Gprs, state: MachineState<IoMemory>) {
+    memory_is: state.memory = IoMemory(file, page),
+    rip_is: state.rip = next_rip(at, scan_len()),
+    r8: read_gpr(R8, state.gprs) = mask,
+    r9: read_gpr(R9, state.gprs) = word_of_nat(64, count),
+    kept: ScanKept(state.gprs, origin),
+}
+
+// Nothing selected: the default.
+theorem scan_done(file: IoImage, page: Nat → BitVec(8), letters: List<BitVec(8)>, default: BitVec(64), at: BitVec(64),
+    piece: ScanPieces(file, letters, default, at), mask: BitVec(64), count: Nat, origin: Gprs, state: MachineState<IoMemory>,
+    head: DoneAt(file, page, at, mask, count, origin, state)):
+    Exists<MachineState<IoMemory>>(λ after => FetchedSteps(io_fetch_access(), io_data_access(), state, after) ∧
+        ScanOut(file, page, at, chosen_mask(default, mask), count, origin, after)) {
+    let fetch = io_fetch_access();
+    let data = io_data_access();
+    let tested = run_block(file, page, scan_any_block(), at, 573, piece(38), state, head.memory_is, head.rip_is);
+    let s1 = execute_block_normal(scan_any_block(), state);
+    let jne = JumpIfNear(NE, sj_end());
+    let jumped = run_near(file, page, jne, at, 586, piece(39), s1, tested.memory_is, tested.rip_is);
+    let s2 = execute_near_control(jne, s1);
+    let zf: (s1.flags.zf = mask.eq_bit(word_zero())) =
+        trans(cong_fn<BitVec(64), Bool>(λ a => is_zero_bits(64, a.sub(word_zero())), head.r8), zero_bits_sub(64, mask, word_zero()));
+    (match mask.eq_bit(word_zero()) as λ c => (s1.flags.zf = c) →
+            Exists<MachineState<IoMemory>>(λ after => FetchedSteps(fetch, data, state, after) ∧
+                ScanOut(file, page, at, match c { True => default, False => mask }, count, origin, after)) {
+        True => λ none => {
+            let s2_rip = jcc_passed(NE, sj_end(), s1, at, 586, tested.rip_is, ne_fails(s1.flags, none));
+            let chose = run_block(file, page, scan_default_block(default), at, 592, piece(40), s2, tested.memory_is, s2_rip);
+            let s3 = execute_block_normal(scan_default_block(default), s2);
+            Exists(s3, ⟨fetched_steps_trans(fetch, data, state, s1, s3, tested.steps, fetched_steps_trans(fetch, data, s1, s2, s3, jumped, chose.steps)),
+                ScanOut(memory_is := chose.memory_is, rip_is := chose.rip_is, r8 := refl, r9 := head.r9, kept := head.kept)⟩)
+        },
+        False => λ some => {
+            let s2_rip = jcc_taken(NE, sj_end(), s1, at, 586, 602, tested.rip_is, ne_holds(s1.flags, some), refl);
+            Exists(s2, ⟨fetched_steps_trans(fetch, data, state, s1, s2, tested.steps, jumped),
+                ScanOut(memory_is := tested.memory_is, rip_is := s2_rip, r8 := head.r8, r9 := head.r9, kept := head.kept)⟩)
+        },
+    })(zf)
+}
+
+// What the scan ends in: exit(1), or past the code with the selection and the
+// operand count.
+fn ScanResult(file: IoImage, page: Nat → BitVec(8), at: BitVec(64), origin: Gprs, parsed: Scanned, state: MachineState<IoMemory>) → Type {
+    match parsed {
+        Refused => LinuxRuns(io_linux(), exit_one(), state),
+        Scanned(mask, operands) => Exists<MachineState<IoMemory>>(λ after => FetchedSteps(io_fetch_access(), io_data_access(), state, after) ∧
+            ScanOut(file, page, at, mask, operands.len(), origin, after)),
+    }
+}
+theorem scan_result(file: IoImage, page: Nat → BitVec(8), letters: List<BitVec(8)>, default: BitVec(64), at: BitVec(64),
+    piece: ScanPieces(file, letters, default, at), origin: Gprs, result: Scanned, state: MachineState<IoMemory>,
+    ends: ScanEnds(file, page, at, origin, result, state)):
+    ScanResult(file, page, at, origin, match result { Refused => Refused, Scanned(mask, operands) => Scanned(chosen_mask(default, mask), operands) }, state) {
+    match result as λ r => ScanEnds(file, page, at, origin, r, state) →
+            ScanResult(file, page, at, origin, match r { Refused => Refused, Scanned(mask, operands) => Scanned(chosen_mask(default, mask), operands) }, state) {
+        Refused => λ runs => runs,
+        Scanned(mask, operands) => λ found => {
+            have done = scan_done(file, page, letters, default, at, piece, mask, operands.len(), origin, found.witness, found.proof.right);
+            Exists(done.witness, ⟨fetched_steps_trans(io_fetch_access(), io_data_access(), state, found.witness, done.witness, found.proof.left,
+                done.proof.left), done.proof.right⟩)
+        },
+    }(ends)
+}
+
+// The claim: placed anywhere in the file, entered with RSP at any argv
+// layout, the scan exits 1 when the command line is refused, and otherwise
+// runs to its end with R8 the selection and R9 the operand count that
+// `parse_args` gives, whatever the page holds and whatever the other
+// registers are.
+theorem scan_runs(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64), at: BitVec(64), placed: Placed(file, scan_code(letters, default), at),
+    page: Nat → BitVec(8), argv: List<List<BitVec(8)>>, state: MachineState<IoMemory>, memory_is: state.memory = IoMemory(file, page),
+    rip_is: state.rip = at, argv_at: ArgvAt(io_data_access(), IoMemory(file, page), read_gpr(Rsp, state.gprs), argv)):
+    ScanResult(file, page, at, state.gprs, parse_args(letters, default, argv), state) {
+    let fetch = io_fetch_access();
+    let data = io_data_access();
+    let piece = scan_pieces(file, letters, default, at, placed);
+    let rsp = read_gpr(Rsp, state.gprs);
+    let origin = state.gprs;
+    let set = run_block(file, page, scan_setup_block(), at, 0, piece(0), state, memory_is, rip_is);
+    let s1 = execute_block_normal(scan_setup_block(), state);
+    let rbx1: (read_gpr(Rbx, s1.gprs) = argv_slot(rsp, 1)) = slot_next(rsp, 0, rsp, slot_zero(rsp));
+    match argv as λ a => ArgvAt(data, IoMemory(file, page), rsp, a) → ScanResult(file, page, at, origin, parse_args(letters, default, a), state) {
+        Nil => λ layout => {
+            let loaded = run_word_load(file, page, scan_slot_load(), at, 37, piece(1), s1, set.memory_is, set.rip_is, word_zero(),
+                j(sym(rbx1), λ w _ => WordAt(data, IoMemory(file, page), w, word_zero()), layout.right));
+            let s2 = word_load_after(scan_slot_load(), word_zero(), s1);
+            let tested = run_block(file, page, scan_null_block(), at, 40, piece(2), s2, loaded.memory_is, loaded.rip_is);
+            let s3 = execute_block_normal(scan_null_block(), s2);
+            let jumped = run_near(file, page, JumpIfNear(E, sj_done_a()), at, 53, piece(3), s3, tested.memory_is, tested.rip_is);
+            let s4 = execute_near_control(JumpIfNear(E, sj_done_a()), s3);
+            let s4_rip = jcc_taken(E, sj_done_a(), s3, at, 53, 573, tested.rip_is, zero_bits_sub_self(64, word_zero()), refl);
+            scan_result(file, page, letters, default, at, piece, origin, Scanned(word_zero(), Nil), state,
+                Exists(s4, ⟨fetched_steps_trans(fetch, data, state, s1, s4, set.steps, fetched_steps_trans(fetch, data, s1, s2, s4, loaded.steps,
+                        fetched_steps_trans(fetch, data, s2, s3, s4, tested.steps, jumped))),
+                    DoneAt(memory_is := tested.memory_is, rip_is := s4_rip, r8 := refl, r9 := refl, kept := scan_kept_refl(origin))⟩))
+        },
+        Cons(_, rest) => λ layout => {
+            let slot = layout.right;
+            let p = slot.witness;
+            let facts = slot.proof;
+            let loaded = run_word_load(file, page, scan_slot_load(), at, 37, piece(1), s1, set.memory_is, set.rip_is, p,
+                j(sym(rbx1), λ w _ => WordAt(data, IoMemory(file, page), w, p), facts.left));
+            let s2 = word_load_after(scan_slot_load(), p, s1);
+            let tested = run_block(file, page, scan_null_block(), at, 40, piece(2), s2, loaded.memory_is, loaded.rip_is);
+            let s3 = execute_block_normal(scan_null_block(), s2);
+            let passed = run_near(file, page, JumpIfNear(E, sj_done_a()), at, 53, piece(3), s3, tested.memory_is, tested.rip_is);
+            let s4 = execute_near_control(JumpIfNear(E, sj_done_a()), s3);
+            let s4_rip = jcc_passed(E, sj_done_a(), s3, at, 53, tested.rip_is, trans(zero_bits_sub(64, p, word_zero()), nonzero_word(p, facts.right.left)));
+            let skipped = run_block(file, page, scan_skip_block(), at, 59, piece(4), s4, tested.memory_is, s4_rip);
+            let s5 = execute_block_normal(scan_skip_block(), s4);
+            let regs: ScanRegs(rsp, 2, False, word_zero(), 0, origin, s5.gprs) =
+                ⟨slot_next(rsp, 1, read_gpr(Rbx, s1.gprs), rbx1), ⟨refl, ⟨refl, ⟨refl, scan_kept_refl(origin)⟩⟩⟩⟩;
+            have scanned = scan_loop(file, page, letters, default, at, piece, rsp, origin, rest, 2, facts.right.right.right.right, False, word_zero(), Nil, s5,
+                ScanAt(memory_is := skipped.memory_is, rip_is := skipped.rip_is, regs := regs));
+            scan_result(file, page, letters, default, at, piece, origin, scan_args(letters, False, BitVec::zero(), Nil, rest), state,
+                scan_ends_after(file, page, at, origin, scan_args(letters, False, BitVec::zero(), Nil, rest), state, s5,
+                    fetched_steps_trans(fetch, data, state, s1, s5, set.steps, fetched_steps_trans(fetch, data, s1, s2, s5, loaded.steps,
+                        fetched_steps_trans(fetch, data, s2, s3, s5, tested.steps, fetched_steps_trans(fetch, data, s3, s4, s5, passed, skipped.steps)))),
+                    scanned))
+        },
+    }(argv_at)
+}
