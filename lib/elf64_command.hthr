@@ -3110,3 +3110,146 @@ theorem init_runs(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64), 
             then(z8.frame, v8, z8.holds, values, page, z8.after, z8.memory_is, z8.rip_is, rsp8))
     }
 }
+
+// With no operand (1964): fd 0, at the reads (7268).
+fn StdinGoes(file: IoImage, mask: BitVec(64), width, n: Nat, events: List<LinuxEvent>) → Type {
+    (frame: Nat → BitVec(8)) → (vars: Nat → BitVec(64)) → FrameHolds(frame, vars) → Vars(vars, mask, width, n, False, no_counts()) →
+        (page: Nat → BitVec(8)) → (state: MachineState<IoMemory>) → state.memory = IoMemory(with_frame(file, frame), page) →
+        state.rip = eof_rip(ca_state_init()) → read_gpr(Rsp, state.gprs) = BitVec::zero() → LinuxRuns(io_linux(), events, state)
+}
+// With one (1979): the loop, the cursor past argv[0] and no `--` yet.
+fn BeginGoes(file: IoImage, mask: BitVec(64), width, n: Nat, rsp: BitVec(64), argv: List<List<BitVec(8)>>,
+    after: Bool → (Nat → BitVec(64)) → List<LinuxEvent>) → Type {
+    (k: Nat) → (pointers: List<BitVec(64)>) → ArgvStays(file, rsp, command_args(argv), pointers, k) →
+        LoopGoes(file, mask, width, n, argv_slot(rsp, k), ended_word(False), no_counts(), after)
+}
+// The cursor's start (1863), RBX and R12 into their slots (1906), then the
+// count tested: none goes to stdin, any to the loop.
+theorem begin_runs(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64), spill: Nat → StateReg, code: StructuredCode,
+    jumps: FilterJumps, pj: PrintJumps, placed: CommandPlaced(file, letters, default, spill, code, jumps, pj),
+    mask: BitVec(64), width, n: Nat, few: n < Nat::pow(2, 64), rsp: BitVec(64), argv: List<List<BitVec(8)>>, pointers: List<BitVec(64)>,
+    stays: ArgvStaysAt(file, rsp, argv, pointers), after: Bool → (Nat → BitVec(64)) → List<LinuxEvent>,
+    to_stdin: n = 0 → StdinGoes(file, mask, width, n, after(False, no_counts())),
+    to_loop: 0 < n → BeginGoes(file, mask, width, n, rsp, argv, after)):
+    InitGoes(file, mask, width, n, rsp, after(False, no_counts())) {
+    λ frame vars holds values page state memory_is rip_is rsp_is => {
+        let io = io_linux();
+        let fetch = io_fetch_access();
+        let data = io_data_access();
+        let events = after(False, no_counts());
+        let img = with_frame(file, frame);
+        let pieces = cmd_pieces(img, letters, default, spill, code, jumps, pj, placed(frame));
+        have started = cursor_start(img, eof_rip(ca_start()), pieces.start, page, argv, pointers, state, memory_is, rip_is,
+            j(sym(rsp_is), λ r _ => ArgvStaysAt(img, r, argv, pointers), stays));
+        let s0 = started.witness;
+        let out = started.proof.right;
+        let k = out.k;
+        let s0_rip = trans(out.rip_is, rip_compose(io_entry(), ca_start(), start_len()));
+        let rbx: (read_gpr(Rbx, s0.gprs) = argv_slot(rsp, k)) =
+            trans(out.regs.left, cong_fn<BitVec(64), BitVec(64)>(λ r => argv_slot(r, k), rsp_is));
+        let w19 = read_gpr(Rbx, s0.gprs);
+        let w20 = read_gpr(R12, s0.gprs);
+        let a = run_slot_store(file, frame, vars, holds, page, ca_ckeep(), 19, { omega }, Rbx, pieces.begin(0), pieces.begin(1), s0,
+            out.memory_is, s0_rip);
+        let s1 = slot_store_after(Rbx, 19, s0);
+        let frame1 = stored_frame(file, frame, 19, w19);
+        let vars1 = set_var(vars, 19, w19);
+        let pieces1 = cmd_pieces(with_frame(file, frame1), letters, default, spill, code, jumps, pj, placed(frame1));
+        let b = run_slot_store(file, frame1, vars1, a.holds, page, ca_ekeep(), 20, { omega }, R12, pieces1.begin(2), pieces1.begin(3), s1,
+            a.memory_is, a.rip_is);
+        let s2 = slot_store_after(R12, 20, s1);
+        let frame2 = stored_frame(file, frame1, 20, w20);
+        let vars2 = set_var(vars1, 20, w20);
+        let img2 = with_frame(file, frame2);
+        let pieces2 = cmd_pieces(img2, letters, default, spill, code, jumps, pj, placed(frame2));
+        let values2: Vars(vars2, mask, width, n, False, no_counts()) = slot_vars(vars1, mask, width, n, False, no_counts(),
+            slot_vars(vars, mask, width, n, False, no_counts(), values, 19, w19, trivial, ne_below(19, 21, trivial)), 20, w20, trivial,
+            ne_below(20, 21, trivial));
+        let at19: (vars2(19) = argv_slot(rsp, k)) = trans(set_var_other(vars1, 20, w20, 19, ne_below(19, 20, trivial)),
+            trans(set_var_same(vars, 19, w19), rbx));
+        let at20: (vars2(20) = ended_word(False)) = trans(set_var_same(vars1, 20, w20), out.regs.right.left);
+        let c = run_slot_load(file, frame2, vars2, b.holds, page, ca_none(), 21, { omega }, Rax, pieces2.begin(4), pieces2.begin(5), s2,
+            b.memory_is, b.rip_is);
+        let s3 = slot_load_after(Rax, vars2(21), 21, s2);
+        let t = run_block(img2, page, zero_test_block(), io_entry(), ca_none_test(), pieces2.begin(6), s3, c.memory_is, c.rip_is);
+        let s4 = execute_block_normal(zero_test_block(), s3);
+        let jne = JumpIfNear(NE, cmd_d_none_jne());
+        let d = run_near(img2, page, jne, io_entry(), ca_none_jne(), pieces2.begin(7), s4, t.memory_is, t.rip_is);
+        let s5 = execute_near_control(jne, s4);
+        let to_s5 = linux_steps_trans(io, s0, s1, s5, a.steps, linux_steps_trans(io, s1, s2, s5, b.steps,
+            linux_steps_of_fetched(io, s2, s5, fetched_steps_trans(fetch, data, s2, s3, s5, c.steps,
+                fetched_steps_trans(fetch, data, s3, s4, s5, t.steps, d)))));
+        let count: (vars2(21) = word_of_nat(64, n)) = values.count_is;
+        let zf_is: (s4.flags.zf = is_zero_bits(64, word_of_nat(64, n).sub(word_zero()))) =
+            cong_fn<BitVec(64), Bool>(λ v => is_zero_bits(64, v.sub(word_zero())), count);
+        linux_runs_after_steps(io, events, state, s0, started.proof.left,
+            (match n as λ m => (n = m) → LinuxRuns(io, events, s0) {
+                Zero => λ zero => {
+                    let zf: (s4.flags.zf = True) = trans(zf_is, trans(cong_fn<Nat, Bool>(λ m => is_zero_bits(64, word_of_nat(64, m).sub(word_zero())),
+                        zero), zero_bits_sub_self(64, word_zero())));
+                    let s5_rip = jcc_passed(NE, cmd_d_none_jne(), s4, io_entry(), ca_none_jne(), t.rip_is, cong_fn<Bool, Bool>(λ x => !x, zf));
+                    let e = run_block(img2, page, fd_zero_block(), io_entry(), ca_stdin(), pieces2.begin(8), s5, t.memory_is, s5_rip);
+                    let s6 = execute_block_normal(fd_zero_block(), s5);
+                    let jmp = JumpNear(cmd_d_stdin_jmp());
+                    let g = run_near(img2, page, jmp, io_entry(), ca_stdin_jmp(), pieces2.begin(9), s6, e.memory_is, e.rip_is);
+                    let s7 = execute_near_control(jmp, s6);
+                    let s7_rip = jmp_forward(cmd_d_stdin_jmp(), s6, io_entry(), ca_stdin_jmp(), ca_state_init(), e.rip_is, cmd_j_stdin_jmp());
+                    linux_runs_after_linux_steps(io, events, s0, s7, linux_steps_trans(io, s0, s5, s7, to_s5,
+                            linux_steps_of_fetched(io, s5, s7, fetched_steps_trans(fetch, data, s5, s6, s7, e.steps, g))),
+                        to_stdin(zero)(frame2, vars2, b.holds, values2, page, s7, e.memory_is, s7_rip, refl))
+                },
+                Succ(m) => λ succ => {
+                    let value = toNat_word_of_nat(64, n, few);
+                    let positive: (0 < word_of_nat(64, n).toNat()) = omega;
+                    let some: (0 < n) = omega;
+                    let zf: (s4.flags.zf = False) = trans(zf_is, trans(zero_bits_sub(64, word_of_nat(64, n), word_zero()),
+                        nonzero_word(word_of_nat(64, n), positive)));
+                    let s5_rip = jcc_taken(NE, cmd_d_none_jne(), s4, io_entry(), ca_none_jne(), ca_loop(), t.rip_is,
+                        cong_fn<Bool, Bool>(λ x => !x, zf), cmd_j_none_jne());
+                    linux_runs_after_linux_steps(io, events, s0, s5, to_s5,
+                        to_loop(some)(k, out.pointers, j(rsp_is, λ r _ => ArgvStays(file, r, command_args(argv), out.pointers, k), out.argv))(
+                            False, frame2, vars2, b.holds, values2, at19, at20, page, s5, t.memory_is, s5_rip))
+                },
+            })(refl))
+    }
+}
+
+// The inputs: stdin read once when there is no operand, the operand loop
+// otherwise.
+theorem inputs_runs<C>(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64), spill: Nat → StateReg, shape: FilterShape<C>,
+    facts: FilterFacts<C>(shape), jumps: FilterJumps, pj: PrintJumps, placed: CommandPlaced(file, letters, default, spill, shape.code, jumps, pj),
+    targets: CoreTargets(ca_core(), ca_head(), structured_bytes(shape.code).len(), jumps, pj), column: Nat → C → BitVec(64),
+    spilled: (i: Nat) → i < 8 → (g: Gprs) → (s: C) → shape.rep(g, s) → read_gpr(state_gpr(spill(i)), g) = column(i)(s),
+    mask: BitVec(64), width: Nat, narrow: width <= 20, rsp: BitVec(64), argv: List<List<BitVec(8)>>, pointers: List<BitVec(64)>,
+    stays: ArgvStaysAt(file, rsp, argv, pointers), history: CommandHistory, ops: List<List<BitVec(8)>>):
+    operands_from(False, command_args(argv)) = ops → ops.len() < Nat::pow(2, 64) → InputsOk(shape, column, mask, width, ops, history) →
+    InitGoes(file, mask, width, ops.len(), rsp, inputs_events(shape, column, mask, width, ops, history)) {
+    match ops as λ o => operands_from(False, command_args(argv)) = o → o.len() < Nat::pow(2, 64) → InputsOk(shape, column, mask, width, o, history) →
+            InitGoes(file, mask, width, o.len(), rsp, inputs_events(shape, column, mask, width, o, history)) {
+        Nil => λ _ _ => match history.runs as λ r => (match r as λ _ => Type {
+                    Nil => False,
+                    Cons(run, later) => ReadsOk<C>(shape, run) ∧
+                        (RowWriteOk(row_counts(width, mask, input_counts(shape, column, eof_input(run.steps))) ++ [newline()], run.counts) ∧
+                            (later = Nil)),
+                }) → InitGoes(file, mask, width, 0, rsp, match r { Nil => Nil, Cons(run, _) => stdin_events(shape, column, mask, width, run) }) {
+            Nil => λ never => false_elim(never),
+            Cons(run, later) => λ held => begin_runs(file, letters, default, spill, shape.code, jumps, pj, placed, mask, width, 0, { omega }, rsp,
+                argv, pointers, stays, λ _ _ => stdin_events(shape, column, mask, width, run),
+                λ _ frame vars holds values page state memory_is rip_is rsp_is =>
+                    read_pass(file, letters, default, spill, shape, facts, jumps, pj, placed, targets, BitVec::zero(), mask, width, 0, no_counts(), vars,
+                        λ seen f => stdin_row(shape, column, mask, width, run, seen, f), run.steps, held.left.steps, run.ending, held.left.ending,
+                        held.left.room,
+                        unnamed_spill(file, letters, default, spill, shape, jumps, pj, placed, column, spilled, mask, width, narrow, no_counts(), vars,
+                            run, eof_input(run.steps), held.right.left, BitVec::zero()),
+                        frame, vars, holds, False, values, λ m _ => refl, page, state, memory_is, rip_is, rsp_is),
+                λ none => false_elim(ne_below(0, 0, none)(refl))),
+        },
+        Cons(name, more) => λ left few ok => begin_runs(file, letters, default, spill, shape.code, jumps, pj, placed, mask, width,
+            Cons(name, more).len(), few, rsp, argv, pointers, stays,
+            λ f t => files_events(shape, column, mask, width, Cons(name, more).len(), history.total, Cons(name, more), history.runs, f, t),
+            λ zero => false_elim(ne_below(0, Cons(name, more).len(), { omega })(sym(zero))),
+            λ some k pointers2 argv2 => operand_loop(file, letters, default, spill, shape, facts, jumps, pj, placed, targets, column, spilled, mask,
+                width, narrow, Cons(name, more).len(), some, few, history.total, rsp, Cons(name, more))(history.runs, no_counts(), ok, k, False,
+                command_args(argv), pointers2, argv2, left)),
+    }
+}
