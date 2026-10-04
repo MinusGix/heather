@@ -96,10 +96,13 @@ name = "family_x86"
 path = "tests/families/x86.rs"
 
 # Standalone on purpose: the bench smoke times itself and runs exclusively,
-# and scripts/test runs the two warm-ups by name, before the parallel phase.
+# and scripts/test runs the warm-ups by name, before the parallel phase.
 [[test]]
 name = "frontend_bench_smoke"
 path = "tests/frontend_bench_smoke.rs"
+[[test]]
+name = "semantic_command_warmup"
+path = "tests/semantic_command_warmup.rs"
 [[test]]
 name = "semantic_omega_warmup"
 path = "tests/semantic_omega_warmup.rs"

@@ -730,6 +730,66 @@ differs from §6.1 and §6.2:
   Tests: `crates/elab/tests/row_fields_process.rs` (a client placing it past
   any header; §2's rows) and `row_fields_refusals.rs` (seven).
 
+**Status (C3 built, 2026-10-04): `lib/elf64_command.hthr`, with the
+corollaries in `lib/elf64_command_output.hthr`.** Where it differs from §5,
+§6.1 and §6.2:
+
+- **Closed offsets, the step last.** The command is laid out at fixed
+  offsets from the entry (`ca_*`), with every jump between its pieces a
+  closed fact (`cmd_j_*`): the scan, the selection and count stores, the
+  stat pass, the slot init, the operand loop, the read head, a file's row
+  and tails, the failed-read finish, the total row, and the exit. The
+  program's step piece and the chunk loop come last (`ca_core`), so only the
+  step's own jumps depend on its length. The library pieces are placed whole.
+- **Everything kept between operands is in the frame.** The read loop
+  leaves no register but RSP, which holds the operand's fd (C1), so the
+  driver keeps the rest in 24 frame slots (`elf64_frame`):
+  - slots 0 to 7 hold a file's counts and 8 to 15 the totals;
+  - 16 holds the selection, 17 the width and 18 the status;
+  - 19 and 20 hold the cursor's argv slot and its `--` flag;
+  - 21 holds the operand count, 22 the operand's name, and 23 whether it
+    was opened, and so must be closed.
+  A spill block per column stores the state's register and adds it into its
+  total, so the row writer reads counts by slot, as C2 planned.
+- **The name is measured at row time.** Its pointer is stored at the operand
+  (slot 22), and its length is scanned to the NUL only when the row is
+  written. Nothing about the name is kept in a register across the reads.
+- **The operand loop is recursion on the operands.** `LoopGoes` is what runs
+  at the loop's head for every frame holding the selection, width, count,
+  cursor and the totals so far. The totals are fixed there, because what
+  the operands after them need of the history depends on them (`FilesOk`).
+- **Two premises beyond §5.** `argc < 2^31` keeps the operand count below
+  2^64, so the word R9 holds is the count (Linux caps argc at
+  `MAX_ARG_STRINGS`, 2^31 − 1). An opened name is 1 to 4095 bytes (`OpenOk`), since
+  Linux's PATH_MAX counts the NUL and an empty path is ENOENT. Both hold of
+  every real process.
+- **The claim** is `command_runs`, against `command_events`. Any file whose
+  bytes hold the command (`CommandPlaced`), entered at the ELF entry with
+  RSP at any argv, runs every history Linux can give (`CommandHistoryOk`).
+  `command_sends` and `command_exits` turn the events into what is written
+  to stdout (`command_stdout`) and the exit (`command_status`), given that
+  each write ran to its end (`CommandWritten`). The spec is a fold over the
+  history's outcomes (opened or not, how the reads ended), not over the
+  syscalls.
+- **Cost lesson.** A declaration that both builds a freshly stored machine
+  state and branches on a `match` over it grew far faster than either half.
+  The prologue's store and test, the selection store and its few-operands
+  test, and the total row's name writes each dominated the module's cold
+  check. Split so that the stores end at an abstract state described by a
+  record (`BeginStored`, `KeepStored`, `PutReach`) and the branch starts
+  from it, each became a small share of the module.
+- **The test's step piece is abstract, not hand-written.** The claim is
+  stated over `FilterFacts`, so the test composes the whole process over any
+  step piece the filter's facts hold of, with no code of its own. The
+  generated piece (C4) is one instance.
+  Tests: `crates/elab/tests/command_process.rs` (the composed process
+  theorem; §2's rows, the total row and the exit statuses over a lines and
+  bytes counter) and `command_refusals.rs` (four). Both replay the library
+  as a semantic prefix (`support/command_prefix.rs`). Cold, that prefix is
+  more than one process's CPU rail, so `scripts/test` populates it first in
+  two bounded processes (`semantic_command_warmup`: the filter half to the
+  stat pass, then the rest).
+
 **Refusal controls** (mutations the library must reject), in the
 `slow_acceptance_` tests as now: the row loop printing an unselected
 column; the formatter's pad loop off by one (`width ≥ k`); the stat pass
