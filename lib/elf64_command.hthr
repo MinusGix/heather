@@ -1,0 +1,1241 @@
+// A command (docs/native-wc-command-design.md §6): a filter run over each
+// operand in turn, a row of counts after each, a total row after two or more,
+// and the exit status of what failed. The code is laid out at closed offsets
+// from the entry, the program's step last, so only the step's own jumps
+// depend on its length; the library pieces (the argument scan, the stat pass,
+// the operand cursor, the row writer, the read head and the filter's chunk
+// loop) are placed whole. Between operands everything the command keeps is
+// in the frame's slots (elf64_frame), since the read loop leaves it no
+// register but RSP, which holds the operand's fd. The claim is
+// `command_runs`, against elf64_command_events' `command_events`.
+import command_program;
+import elf64_arg_scan;
+import elf64_command_events;
+import elf64_format_width;
+import elf64_frame;
+import elf64_io;
+import elf64_operand_cursor;
+import elf64_print_pieces;
+import elf64_read_filter;
+import elf64_read_pieces;
+import elf64_row_fields;
+import elf64_stat_width;
+import elf64_write_loop;
+import filter_step_piece;
+import linux_x86_64_io;
+import stream_filter;
+import x86_64;
+import x86_64_block;
+import x86_64_fetch;
+import x86_64_fetched_code;
+import x86_64_data_read;
+import x86_64_access_memory;
+import x86_64_layout;
+import x86_64_store;
+import x86_64_structured_block;
+import bitvec;
+import bitvec_nat;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+import omega;
+
+// ---------------------------------------------------------------------------
+// The frame's slots: a file's counts (0–7), the totals (8–15), the selection
+// (16), the width (17), the status (18), the operand cursor's argv slot (19)
+// and whether `--` has been seen (20), the operand count (21), the current
+// operand's name (22), and whether it was opened, so is closed (23).
+
+fn slot_at(i: Nat) → BitVec(64) { frame_at(8 * i) }
+
+// The registers a column's count can be spilled from: the state's.
+inductive StateReg { SR13, SR14, SR15, SR8 }
+fn state_gpr(r: StateReg) → Gpr { match r { SR13 => R13, SR14 => R14, SR15 => R15, SR8 => R8 } }
+
+// Slot `i`'s count stored, then added into its total: R11 and RAX only.
+fn spill_parts(r: Gpr, i: Nat) → List<List<BitVec(8)>> {
+    [canonical_block_bytes([MovRI(R11, slot_at(i))]), word_store_bytes(WordStore(base := R11, source := r)),
+     canonical_block_bytes([MovRI(R11, slot_at(8 + i))]), word_load_bytes(WordLoad(destination := Rax, base := R11)),
+     canonical_block_bytes([AddRR(Rax, r)])]
+}
+fn spill_lens() → List<Nat> { [10, 3, 10, 3, 3] }
+fn spill_last() → List<BitVec(8)> { word_store_bytes(WordStore(base := R11, source := Rax)) }
+fn spill_block(r: Gpr, i: Nat) → List<BitVec(8)> { layout_code(spill_parts(r, i), spill_last()) }
+fn spill_blocks(spill: Nat → StateReg, i, j: Nat) → List<BitVec(8)> {
+    match j { Zero => Nil, Succ(k) => spill_block(state_gpr(spill(i)), i) ++ spill_blocks(spill, Succ(i), k) }
+}
+fn spill_code(spill: Nat → StateReg) → List<BitVec(8)> { spill_blocks(spill, 0, column_slots()) }
+
+theorem spill_measured(r: Gpr, i: Nat): LayoutMeasured(spill_parts(r, i), spill_lens()) { ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, trivial⟩⟩⟩⟩⟩ }
+theorem spill_block_len(r: Gpr, i: Nat): spill_block(r, i).len() = 32 { layout_len(spill_parts(r, i), spill_last(), spill_lens(), spill_measured(r, i), 3, refl) }
+theorem spill_blocks_len(spill: Nat → StateReg, j: Nat): (i: Nat) → spill_blocks(spill, i, j).len() = 32 * j {
+    match j as λ k => (i: Nat) → spill_blocks(spill, i, k).len() = 32 * k {
+        Zero => λ i => refl,
+        Succ(k) => λ i => {
+            let rest = spill_blocks_len(spill, k, Succ(i));
+            let total: (32 + 32 * k = 32 * Succ(k)) = omega;
+            trans(List::len_append(spill_block(state_gpr(spill(i)), i), spill_blocks(spill, Succ(i), k)),
+                trans(cong_fn<Nat, Nat>(λ l => l + spill_blocks(spill, Succ(i), k).len(), spill_block_len(state_gpr(spill(i)), i)),
+                    trans(cong_fn<Nat, Nat>(λ l => 32 + l, rest), total)))
+        },
+    }
+}
+theorem spill_code_len(spill: Nat → StateReg): spill_code(spill).len() = 256 { spill_blocks_len(spill, 8, 0) }
+
+// ---------------------------------------------------------------------------
+// The layout: segments of small pieces between the library's, every offset
+// a closed number (`ca_`), every jump between them a closed fact (`cmd_j_`).
+// Generated; the read head's JZ goes to the row code at `ca_spill`, its JS
+// to the failed read at `ca_read_failed`, and the program's step and the
+// chunk loop's other code come last, at `ca_core`.
+
+fn ca_scan() → Nat { 0 }
+fn ca_keep_mask() → Nat { 602 }
+fn ca_keep_mask_store() → Nat { 612 }
+fn ca_keep_count() → Nat { 615 }
+fn ca_keep_count_store() → Nat { 625 }
+fn ca_few() → Nat { 628 }
+fn ca_few_jae() → Nat { 641 }
+fn ca_single() → Nat { 647 }
+fn ca_single_jne() → Nat { 679 }
+fn ca_narrow() → Nat { 685 }
+fn ca_narrow_jmp() → Nat { 695 }
+fn ca_stat() → Nat { 700 }
+fn ca_wstore() → Nat { 1723 }
+fn ca_wstore_store() → Nat { 1733 }
+fn ca_zero() → Nat { 1736 }
+fn ca_zero0() → Nat { 1746 }
+fn ca_zero0_store() → Nat { 1756 }
+fn ca_zero1() → Nat { 1759 }
+fn ca_zero1_store() → Nat { 1769 }
+fn ca_zero2() → Nat { 1772 }
+fn ca_zero2_store() → Nat { 1782 }
+fn ca_zero3() → Nat { 1785 }
+fn ca_zero3_store() → Nat { 1795 }
+fn ca_zero4() → Nat { 1798 }
+fn ca_zero4_store() → Nat { 1808 }
+fn ca_zero5() → Nat { 1811 }
+fn ca_zero5_store() → Nat { 1821 }
+fn ca_zero6() → Nat { 1824 }
+fn ca_zero6_store() → Nat { 1834 }
+fn ca_zero7() → Nat { 1837 }
+fn ca_zero7_store() → Nat { 1847 }
+fn ca_zero8() → Nat { 1850 }
+fn ca_zero8_store() → Nat { 1860 }
+fn ca_start() → Nat { 1863 }
+fn ca_ckeep() → Nat { 1906 }
+fn ca_ckeep_store() → Nat { 1916 }
+fn ca_ekeep() → Nat { 1919 }
+fn ca_ekeep_store() → Nat { 1929 }
+fn ca_none() → Nat { 1932 }
+fn ca_none_load() → Nat { 1942 }
+fn ca_none_test() → Nat { 1945 }
+fn ca_none_jne() → Nat { 1958 }
+fn ca_stdin() → Nat { 1964 }
+fn ca_stdin_jmp() → Nat { 1974 }
+fn ca_loop() → Nat { 1979 }
+fn ca_loop_load() → Nat { 1989 }
+fn ca_loop_ended() → Nat { 1992 }
+fn ca_loop_ended_load() → Nat { 2002 }
+fn ca_cursor() → Nat { 2005 }
+fn ca_cstore() → Nat { 2164 }
+fn ca_cstore_store() → Nat { 2174 }
+fn ca_estore() → Nat { 2177 }
+fn ca_estore_store() → Nat { 2187 }
+fn ca_last() → Nat { 2190 }
+fn ca_last_je() → Nat { 2203 }
+fn ca_name() → Nat { 2209 }
+fn ca_name_store() → Nat { 2219 }
+fn ca_dash_load() → Nat { 2222 }
+fn ca_dash_test() → Nat { 2226 }
+fn ca_dash_jne() → Nat { 2239 }
+fn ca_ahead() → Nat { 2245 }
+fn ca_ahead_load() → Nat { 2252 }
+fn ca_ahead_test() → Nat { 2256 }
+fn ca_ahead_jne() → Nat { 2269 }
+fn ca_dash() → Nat { 2275 }
+fn ca_dash_store() → Nat { 2295 }
+fn ca_dash_fd() → Nat { 2298 }
+fn ca_dash_jmp() → Nat { 2308 }
+fn ca_open() → Nat { 2313 }
+fn ca_open_call() → Nat { 2343 }
+fn ca_open_test() → Nat { 2345 }
+fn ca_open_js() → Nat { 2348 }
+fn ca_opened() → Nat { 2354 }
+fn ca_opened_store() → Nat { 2377 }
+fn ca_opened_jmp() → Nat { 2380 }
+fn ca_failed() → Nat { 2385 }
+fn ca_failed_store() → Nat { 2405 }
+fn ca_failed_jmp() → Nat { 2408 }
+fn ca_spill() → Nat { 2413 }
+fn ca_setup() → Nat { 2669 }
+fn ca_setup_mask() → Nat { 2689 }
+fn ca_setup_w() → Nat { 2692 }
+fn ca_setup_width() → Nat { 2702 }
+fn ca_setup_page() → Nat { 2705 }
+fn ca_row() → Nat { 2715 }
+fn ca_named() → Nat { 4427 }
+fn ca_named_load() → Nat { 4437 }
+fn ca_named_test() → Nat { 4440 }
+fn ca_named_je() → Nat { 4453 }
+fn ca_gap() → Nat { 4459 }
+fn ca_gap_store() → Nat { 4469 }
+fn ca_gap_len() → Nat { 4472 }
+fn ca_gap_write() → Nat { 4492 }
+fn ca_nm() → Nat { 4609 }
+fn ca_nm_load() → Nat { 4619 }
+fn ca_nm_copy() → Nat { 4622 }
+fn ca_len_load() → Nat { 4625 }
+fn ca_len_test() → Nat { 4629 }
+fn ca_len_je() → Nat { 4642 }
+fn ca_len_step() → Nat { 4648 }
+fn ca_len_jmp() → Nat { 4652 }
+fn ca_found() → Nat { 4657 }
+fn ca_name_write() → Nat { 4666 }
+fn ca_nl() → Nat { 4783 }
+fn ca_nl_store() → Nat { 4803 }
+fn ca_nl_len() → Nat { 4806 }
+fn ca_nl_write() → Nat { 4826 }
+fn ca_closes() → Nat { 4943 }
+fn ca_closes_load() → Nat { 4953 }
+fn ca_closes_test() → Nat { 4956 }
+fn ca_closes_je() → Nat { 4969 }
+fn ca_close() → Nat { 4975 }
+fn ca_close_call() → Nat { 4988 }
+fn ca_close_test() → Nat { 4990 }
+fn ca_close_js() → Nat { 4993 }
+fn ca_close_jmp() → Nat { 4999 }
+fn ca_unnamed() → Nat { 5004 }
+fn ca_unnamed_store() → Nat { 5014 }
+fn ca_unnamed_len() → Nat { 5017 }
+fn ca_unnamed_write() → Nat { 5037 }
+fn ca_total() → Nat { 5154 }
+fn ca_total_load() → Nat { 5164 }
+fn ca_total_test() → Nat { 5167 }
+fn ca_total_jb() → Nat { 5180 }
+fn ca_tsetup() → Nat { 5186 }
+fn ca_tsetup_mask() → Nat { 5206 }
+fn ca_tsetup_w() → Nat { 5209 }
+fn ca_tsetup_width() → Nat { 5219 }
+fn ca_tsetup_page() → Nat { 5222 }
+fn ca_total_row() → Nat { 5232 }
+fn ca_tn0() → Nat { 6944 }
+fn ca_tn0_store() → Nat { 6954 }
+fn ca_tn0_step() → Nat { 6957 }
+fn ca_tn1() → Nat { 6961 }
+fn ca_tn1_store() → Nat { 6971 }
+fn ca_tn1_step() → Nat { 6974 }
+fn ca_tn2() → Nat { 6978 }
+fn ca_tn2_store() → Nat { 6988 }
+fn ca_tn2_step() → Nat { 6991 }
+fn ca_tn3() → Nat { 6995 }
+fn ca_tn3_store() → Nat { 7005 }
+fn ca_tn3_step() → Nat { 7008 }
+fn ca_tn4() → Nat { 7012 }
+fn ca_tn4_store() → Nat { 7022 }
+fn ca_tn4_step() → Nat { 7025 }
+fn ca_tn5() → Nat { 7029 }
+fn ca_tn5_store() → Nat { 7039 }
+fn ca_tn5_step() → Nat { 7042 }
+fn ca_tn6() → Nat { 7046 }
+fn ca_tn6_store() → Nat { 7056 }
+fn ca_tn6_step() → Nat { 7059 }
+fn ca_tlen() → Nat { 7063 }
+fn ca_total_write() → Nat { 7079 }
+fn ca_exit() → Nat { 7196 }
+fn ca_exit_load() → Nat { 7206 }
+fn ca_exit_num() → Nat { 7209 }
+fn ca_exit_call() → Nat { 7219 }
+fn ca_read_failed() → Nat { 7221 }
+fn ca_retry_jz() → Nat { 7234 }
+fn ca_rfail() → Nat { 7240 }
+fn ca_rfail_store() → Nat { 7260 }
+fn ca_rfail_jmp() → Nat { 7263 }
+fn ca_state_init() → Nat { 7268 }
+fn ca_head() → Nat { 7308 }
+fn ca_core() → Nat { 7358 }
+fn cmd_d_few_jae() → BitVec(32) { BitVec::ofNat(53) }
+fn cmd_d_single_jne() → BitVec(32) { BitVec::ofNat(15) }
+fn cmd_d_narrow_jmp() → BitVec(32) { BitVec::ofNat(1023) }
+fn cmd_d_none_jne() → BitVec(32) { BitVec::ofNat(15) }
+fn cmd_d_stdin_jmp() → BitVec(32) { BitVec::ofNat(5289) }
+fn cmd_d_last_je() → BitVec(32) { BitVec::ofNat(2945) }
+fn cmd_d_dash_jne() → BitVec(32) { BitVec::ofNat(68) }
+fn cmd_d_ahead_jne() → BitVec(32) { BitVec::ofNat(38) }
+fn cmd_d_dash_jmp() → BitVec(32) { BitVec::ofNat(4955) }
+fn cmd_d_open_js() → BitVec(32) { BitVec::ofNat(31) }
+fn cmd_d_opened_jmp() → BitVec(32) { BitVec::ofNat(4883) }
+fn cmd_d_failed_jmp() → BitVec(32) { BitVec::ofNat(4294966862) }
+fn cmd_d_named_je() → BitVec(32) { BitVec::ofNat(545) }
+fn cmd_d_len_je() → BitVec(32) { BitVec::ofNat(9) }
+fn cmd_d_len_jmp() → BitVec(32) { BitVec::ofNat(4294967264) }
+fn cmd_d_closes_je() → BitVec(32) { BitVec::ofNat(4294964300) }
+fn cmd_d_close_js() → BitVec(32) { BitVec::ofNat(4294964682) }
+fn cmd_d_close_jmp() → BitVec(32) { BitVec::ofNat(4294964271) }
+fn cmd_d_total_jb() → BitVec(32) { BitVec::ofNat(2010) }
+fn cmd_d_retry_jz() → BitVec(32) { BitVec::ofNat(68) }
+fn cmd_d_rfail_jmp() → BitVec(32) { BitVec::ofNat(4294962441) }
+fn pj_counts() → PrintJumps { PrintJumps(sd := BitVec::ofNat(17), zd := BitVec::ofNat(68), bd := BitVec::ofNat(4294967242), rd := BitVec::ofNat(4294967223)) }
+fn pj_name() → PrintJumps { PrintJumps(sd := BitVec::ofNat(17), zd := BitVec::ofNat(68), bd := BitVec::ofNat(4294967242), rd := BitVec::ofNat(4294967223)) }
+fn pj_newline() → PrintJumps { PrintJumps(sd := BitVec::ofNat(17), zd := BitVec::ofNat(68), bd := BitVec::ofNat(4294967242), rd := BitVec::ofNat(4294967223)) }
+fn pj_stdin() → PrintJumps { PrintJumps(sd := BitVec::ofNat(17), zd := BitVec::ofNat(2110), bd := BitVec::ofNat(4294967242), rd := BitVec::ofNat(4294967223)) }
+fn pj_total() → PrintJumps { PrintJumps(sd := BitVec::ofNat(17), zd := BitVec::ofNat(68), bd := BitVec::ofNat(4294967242), rd := BitVec::ofNat(4294967223)) }
+fn keep_parts() → List<List<BitVec(8)>> {
+    [canonical_block_bytes([MovRI(R11, slot_at(16))]),
+     word_store_bytes(WordStore(base := R11, source := R8)),
+     canonical_block_bytes([MovRI(R11, slot_at(21))]),
+     word_store_bytes(WordStore(base := R11, source := R9)),
+     canonical_block_bytes([MovRI(R11, BitVec::ofNat(2)), CmpRR(R9, R11)]),
+     near_control_bytes(JumpIfNear(AE, cmd_d_few_jae())),
+     canonical_block_bytes([MovRI(R11, BitVec::ofNat(1)), MovRR(Rax, R8), SubRR(Rax, R11), AndRR(Rax, R8), MovRI(R11, word_zero()), CmpRR(Rax, R11)]),
+     near_control_bytes(JumpIfNear(NE, cmd_d_single_jne())),
+     canonical_block_bytes([MovRI(Rsi, BitVec::ofNat(1))])]
+}
+fn keep_lens() → List<Nat> { [10, 3, 10, 3, 13, 6, 32, 6, 10] }
+fn keep_last() → List<BitVec(8)> { near_control_bytes(JumpNear(cmd_d_narrow_jmp())) }
+fn keep_code() → List<BitVec(8)> { layout_code(keep_parts(), keep_last()) }
+fn keep_len() → Nat { 98 }
+fn init_parts() → List<List<BitVec(8)>> {
+    [canonical_block_bytes([MovRI(R11, slot_at(17))]),
+     word_store_bytes(WordStore(base := R11, source := Rsi)),
+     canonical_block_bytes([MovRI(Rax, word_zero())]),
+     canonical_block_bytes([MovRI(R11, slot_at(18))]),
+     word_store_bytes(WordStore(base := R11, source := Rax)),
+     canonical_block_bytes([MovRI(R11, slot_at(8))]),
+     word_store_bytes(WordStore(base := R11, source := Rax)),
+     canonical_block_bytes([MovRI(R11, slot_at(9))]),
+     word_store_bytes(WordStore(base := R11, source := Rax)),
+     canonical_block_bytes([MovRI(R11, slot_at(10))]),
+     word_store_bytes(WordStore(base := R11, source := Rax)),
+     canonical_block_bytes([MovRI(R11, slot_at(11))]),
+     word_store_bytes(WordStore(base := R11, source := Rax)),
+     canonical_block_bytes([MovRI(R11, slot_at(12))]),
+     word_store_bytes(WordStore(base := R11, source := Rax)),
+     canonical_block_bytes([MovRI(R11, slot_at(13))]),
+     word_store_bytes(WordStore(base := R11, source := Rax)),
+     canonical_block_bytes([MovRI(R11, slot_at(14))]),
+     word_store_bytes(WordStore(base := R11, source := Rax)),
+     canonical_block_bytes([MovRI(R11, slot_at(15))])]
+}
+fn init_lens() → List<Nat> { [10, 3, 10, 10, 3, 10, 3, 10, 3, 10, 3, 10, 3, 10, 3, 10, 3, 10, 3, 10] }
+fn init_last() → List<BitVec(8)> { word_store_bytes(WordStore(base := R11, source := Rax)) }
+fn init_code() → List<BitVec(8)> { layout_code(init_parts(), init_last()) }
+fn init_len() → Nat { 140 }
+fn begin_parts() → List<List<BitVec(8)>> {
+    [canonical_block_bytes([MovRI(R11, slot_at(19))]),
+     word_store_bytes(WordStore(base := R11, source := Rbx)),
+     canonical_block_bytes([MovRI(R11, slot_at(20))]),
+     word_store_bytes(WordStore(base := R11, source := R12)),
+     canonical_block_bytes([MovRI(R11, slot_at(21))]),
+     word_load_bytes(WordLoad(destination := Rax, base := R11)),
+     canonical_block_bytes([MovRI(R11, word_zero()), CmpRR(Rax, R11)]),
+     near_control_bytes(JumpIfNear(NE, cmd_d_none_jne())),
+     canonical_block_bytes([MovRI(Rsp, word_zero())]),
+     near_control_bytes(JumpNear(cmd_d_stdin_jmp())),
+     canonical_block_bytes([MovRI(R11, slot_at(19))]),
+     word_load_bytes(WordLoad(destination := Rbx, base := R11)),
+     canonical_block_bytes([MovRI(R11, slot_at(20))])]
+}
+fn begin_lens() → List<Nat> { [10, 3, 10, 3, 10, 3, 13, 6, 10, 5, 10, 3, 10] }
+fn begin_last() → List<BitVec(8)> { word_load_bytes(WordLoad(destination := R12, base := R11)) }
+fn begin_code() → List<BitVec(8)> { layout_code(begin_parts(), begin_last()) }
+fn begin_len() → Nat { 99 }
+fn operand_parts() → List<List<BitVec(8)>> {
+    [canonical_block_bytes([MovRI(R11, slot_at(19))]),
+     word_store_bytes(WordStore(base := R11, source := Rbx)),
+     canonical_block_bytes([MovRI(R11, slot_at(20))]),
+     word_store_bytes(WordStore(base := R11, source := R12)),
+     canonical_block_bytes([MovRI(R11, word_zero()), CmpRR(Rsi, R11)]),
+     near_control_bytes(JumpIfNear(E, cmd_d_last_je())),
+     canonical_block_bytes([MovRI(R11, slot_at(22))]),
+     word_store_bytes(WordStore(base := R11, source := Rsi)),
+     byte_load_bytes(ByteLoad(destination := Rax, base := Rsi)),
+     canonical_block_bytes([MovRI(R11, byte_word(dash())), CmpRR(Rax, R11)]),
+     near_control_bytes(JumpIfNear(NE, cmd_d_dash_jne())),
+     canonical_block_bytes([MovRR(Rdi, Rsi), AddRI8(Rdi, one_byte())]),
+     byte_load_bytes(ByteLoad(destination := Rax, base := Rdi)),
+     canonical_block_bytes([MovRI(R11, word_zero()), CmpRR(Rax, R11)]),
+     near_control_bytes(JumpIfNear(NE, cmd_d_ahead_jne())),
+     canonical_block_bytes([MovRI(Rax, word_zero()), MovRI(R11, slot_at(23))]),
+     word_store_bytes(WordStore(base := R11, source := Rax)),
+     canonical_block_bytes([MovRI(Rsp, word_zero())]),
+     near_control_bytes(JumpNear(cmd_d_dash_jmp())),
+     canonical_block_bytes([MovRI(Rdi, at_fdcwd()), MovRI(Rdx, word_zero()), MovRI(Rax, BitVec::ofNat(257))]),
+     syscall_bytes(),
+     canonical_block_bytes([TestRR(Rax, Rax)]),
+     near_control_bytes(JumpIfNear(S, cmd_d_open_js())),
+     canonical_block_bytes([MovRR(Rsp, Rax), MovRI(Rax, BitVec::ofNat(1)), MovRI(R11, slot_at(23))]),
+     word_store_bytes(WordStore(base := R11, source := Rax)),
+     near_control_bytes(JumpNear(cmd_d_opened_jmp())),
+     canonical_block_bytes([MovRI(Rax, BitVec::ofNat(1)), MovRI(R11, slot_at(18))]),
+     word_store_bytes(WordStore(base := R11, source := Rax))]
+}
+fn operand_lens() → List<Nat> { [10, 3, 10, 3, 13, 6, 10, 3, 4, 13, 6, 7, 4, 13, 6, 20, 3, 10, 5, 30, 2, 3, 6, 23, 3, 5, 20, 3] }
+fn operand_last() → List<BitVec(8)> { near_control_bytes(JumpNear(cmd_d_failed_jmp())) }
+fn operand_code() → List<BitVec(8)> { layout_code(operand_parts(), operand_last()) }
+fn operand_len() → Nat { 249 }
+fn setup_parts() → List<List<BitVec(8)>> {
+    [canonical_block_bytes([MovRI(R12, slot_at(0)), MovRI(R11, slot_at(16))]),
+     word_load_bytes(WordLoad(destination := R13, base := R11)),
+     canonical_block_bytes([MovRI(R11, slot_at(17))]),
+     word_load_bytes(WordLoad(destination := R14, base := R11))]
+}
+fn setup_lens() → List<Nat> { [20, 3, 10, 3] }
+fn setup_last() → List<BitVec(8)> { canonical_block_bytes([MovRI(Rdi, page_word())]) }
+fn setup_code() → List<BitVec(8)> { layout_code(setup_parts(), setup_last()) }
+fn setup_len() → Nat { 46 }
+fn tails_parts() → List<List<BitVec(8)>> {
+    [canonical_block_bytes([MovRI(R11, slot_at(21))]),
+     word_load_bytes(WordLoad(destination := Rax, base := R11)),
+     canonical_block_bytes([MovRI(R11, word_zero()), CmpRR(Rax, R11)]),
+     near_control_bytes(JumpIfNear(E, cmd_d_named_je())),
+     canonical_block_bytes([MovRI(R11, BitVec::ofNat(32))]),
+     byte_store_bytes(ByteStore(base := Rdi, source := R11)),
+     canonical_block_bytes([AddRI8(Rdi, one_byte()), MovRI(R9, page_word()), MovRR(R10, Rdi), SubRR(R10, R9)]),
+     write_loop_code(pj_counts()),
+     canonical_block_bytes([MovRI(R11, slot_at(22))]),
+     word_load_bytes(WordLoad(destination := Rsi, base := R11)),
+     canonical_block_bytes([MovRR(Rdx, Rsi)]),
+     byte_load_bytes(ByteLoad(destination := Rax, base := Rdx)),
+     canonical_block_bytes([MovRI(R11, word_zero()), CmpRR(Rax, R11)]),
+     near_control_bytes(JumpIfNear(E, cmd_d_len_je())),
+     canonical_block_bytes([AddRI8(Rdx, one_byte())]),
+     near_control_bytes(JumpNear(cmd_d_len_jmp())),
+     canonical_block_bytes([MovRR(R9, Rsi), MovRR(R10, Rdx), SubRR(R10, Rsi)]),
+     write_loop_code(pj_name()),
+     canonical_block_bytes([MovRI(Rdi, page_word()), MovRI(R11, BitVec::ofNat(10))]),
+     byte_store_bytes(ByteStore(base := Rdi, source := R11)),
+     canonical_block_bytes([MovRI(R9, page_word()), MovRI(R10, BitVec::ofNat(1))]),
+     write_loop_code(pj_newline()),
+     canonical_block_bytes([MovRI(R11, slot_at(23))]),
+     word_load_bytes(WordLoad(destination := Rax, base := R11)),
+     canonical_block_bytes([MovRI(R11, word_zero()), CmpRR(Rax, R11)]),
+     near_control_bytes(JumpIfNear(E, cmd_d_closes_je())),
+     canonical_block_bytes([MovRR(Rdi, Rsp), MovRI(Rax, BitVec::ofNat(3))]),
+     syscall_bytes(),
+     canonical_block_bytes([TestRR(Rax, Rax)]),
+     near_control_bytes(JumpIfNear(S, cmd_d_close_js())),
+     near_control_bytes(JumpNear(cmd_d_close_jmp())),
+     canonical_block_bytes([MovRI(R11, BitVec::ofNat(10))]),
+     byte_store_bytes(ByteStore(base := Rdi, source := R11)),
+     canonical_block_bytes([AddRI8(Rdi, one_byte()), MovRI(R9, page_word()), MovRR(R10, Rdi), SubRR(R10, R9)])]
+}
+fn tails_lens() → List<Nat> { [10, 3, 13, 6, 10, 3, 20, 117, 10, 3, 3, 4, 13, 6, 4, 5, 9, 117, 20, 3, 20, 117, 10, 3, 13, 6, 13, 2, 3, 6, 5, 10, 3, 20] }
+fn tails_last() → List<BitVec(8)> { write_loop_code(pj_stdin()) }
+fn tails_code() → List<BitVec(8)> { layout_code(tails_parts(), tails_last()) }
+fn tails_len() → Nat { 727 }
+fn total_parts() → List<List<BitVec(8)>> {
+    [canonical_block_bytes([MovRI(R11, slot_at(21))]),
+     word_load_bytes(WordLoad(destination := Rax, base := R11)),
+     canonical_block_bytes([MovRI(R11, BitVec::ofNat(2)), CmpRR(Rax, R11)])]
+}
+fn total_lens() → List<Nat> { [10, 3, 13] }
+fn total_last() → List<BitVec(8)> { near_control_bytes(JumpIfNear(B, cmd_d_total_jb())) }
+fn total_code() → List<BitVec(8)> { layout_code(total_parts(), total_last()) }
+fn total_len() → Nat { 32 }
+fn tsetup_parts() → List<List<BitVec(8)>> {
+    [canonical_block_bytes([MovRI(R12, slot_at(8)), MovRI(R11, slot_at(16))]),
+     word_load_bytes(WordLoad(destination := R13, base := R11)),
+     canonical_block_bytes([MovRI(R11, slot_at(17))]),
+     word_load_bytes(WordLoad(destination := R14, base := R11))]
+}
+fn tsetup_lens() → List<Nat> { [20, 3, 10, 3] }
+fn tsetup_last() → List<BitVec(8)> { canonical_block_bytes([MovRI(Rdi, page_word())]) }
+fn tsetup_code() → List<BitVec(8)> { layout_code(tsetup_parts(), tsetup_last()) }
+fn tsetup_len() → Nat { 46 }
+fn tname_parts() → List<List<BitVec(8)>> {
+    [canonical_block_bytes([MovRI(R11, BitVec::ofNat(32))]),
+     byte_store_bytes(ByteStore(base := Rdi, source := R11)),
+     canonical_block_bytes([AddRI8(Rdi, one_byte())]),
+     canonical_block_bytes([MovRI(R11, BitVec::ofNat(116))]),
+     byte_store_bytes(ByteStore(base := Rdi, source := R11)),
+     canonical_block_bytes([AddRI8(Rdi, one_byte())]),
+     canonical_block_bytes([MovRI(R11, BitVec::ofNat(111))]),
+     byte_store_bytes(ByteStore(base := Rdi, source := R11)),
+     canonical_block_bytes([AddRI8(Rdi, one_byte())]),
+     canonical_block_bytes([MovRI(R11, BitVec::ofNat(116))]),
+     byte_store_bytes(ByteStore(base := Rdi, source := R11)),
+     canonical_block_bytes([AddRI8(Rdi, one_byte())]),
+     canonical_block_bytes([MovRI(R11, BitVec::ofNat(97))]),
+     byte_store_bytes(ByteStore(base := Rdi, source := R11)),
+     canonical_block_bytes([AddRI8(Rdi, one_byte())]),
+     canonical_block_bytes([MovRI(R11, BitVec::ofNat(108))]),
+     byte_store_bytes(ByteStore(base := Rdi, source := R11)),
+     canonical_block_bytes([AddRI8(Rdi, one_byte())]),
+     canonical_block_bytes([MovRI(R11, BitVec::ofNat(10))]),
+     byte_store_bytes(ByteStore(base := Rdi, source := R11)),
+     canonical_block_bytes([AddRI8(Rdi, one_byte())]),
+     canonical_block_bytes([MovRI(R9, page_word()), MovRR(R10, Rdi), SubRR(R10, R9)])]
+}
+fn tname_lens() → List<Nat> { [10, 3, 4, 10, 3, 4, 10, 3, 4, 10, 3, 4, 10, 3, 4, 10, 3, 4, 10, 3, 4, 16] }
+fn tname_last() → List<BitVec(8)> { write_loop_code(pj_total()) }
+fn tname_code() → List<BitVec(8)> { layout_code(tname_parts(), tname_last()) }
+fn tname_len() → Nat { 252 }
+fn finish_parts() → List<List<BitVec(8)>> {
+    [canonical_block_bytes([MovRI(R11, slot_at(18))]),
+     word_load_bytes(WordLoad(destination := Rdi, base := R11)),
+     canonical_block_bytes([MovRI(Rax, BitVec::ofNat(60))]),
+     syscall_bytes(),
+     canonical_block_bytes(eof_retry_block()),
+     near_control_bytes(JumpIfNear(E, cmd_d_retry_jz())),
+     canonical_block_bytes([MovRI(Rax, BitVec::ofNat(1)), MovRI(R11, slot_at(18))]),
+     word_store_bytes(WordStore(base := R11, source := Rax)),
+     near_control_bytes(JumpNear(cmd_d_rfail_jmp()))]
+}
+fn finish_lens() → List<Nat> { [10, 3, 10, 2, 13, 6, 20, 3, 5] }
+fn finish_last() → List<BitVec(8)> { canonical_block_bytes(state_init_block()) }
+fn finish_code() → List<BitVec(8)> { layout_code(finish_parts(), finish_last()) }
+fn finish_len() → Nat { 112 }
+fn cmd_ed() → BitVec(32) { BitVec::ofNat(4294962357) }
+fn cmd_sd() → BitVec(32) { BitVec::ofNat(4294967159) }
+theorem keep_measured(): LayoutMeasured(keep_parts(), keep_lens()) {
+    let closed: (piece_lens(keep_parts()) = keep_lens()) = refl;
+    j(closed, λ ls _ => LayoutMeasured(keep_parts(), ls), measured_self(keep_parts()))
+}
+theorem keep_code_len(): keep_code().len() = keep_len() { layout_len(keep_parts(), keep_last(), keep_lens(), keep_measured(), 5, refl) }
+theorem init_measured(): LayoutMeasured(init_parts(), init_lens()) {
+    let closed: (piece_lens(init_parts()) = init_lens()) = refl;
+    j(closed, λ ls _ => LayoutMeasured(init_parts(), ls), measured_self(init_parts()))
+}
+theorem init_code_len(): init_code().len() = init_len() { layout_len(init_parts(), init_last(), init_lens(), init_measured(), 3, refl) }
+theorem begin_measured(): LayoutMeasured(begin_parts(), begin_lens()) {
+    let closed: (piece_lens(begin_parts()) = begin_lens()) = refl;
+    j(closed, λ ls _ => LayoutMeasured(begin_parts(), ls), measured_self(begin_parts()))
+}
+theorem begin_code_len(): begin_code().len() = begin_len() { layout_len(begin_parts(), begin_last(), begin_lens(), begin_measured(), 3, refl) }
+theorem operand_measured(): LayoutMeasured(operand_parts(), operand_lens()) {
+    let closed: (piece_lens(operand_parts()) = operand_lens()) = refl;
+    j(closed, λ ls _ => LayoutMeasured(operand_parts(), ls), measured_self(operand_parts()))
+}
+theorem operand_code_len(): operand_code().len() = operand_len() { layout_len(operand_parts(), operand_last(), operand_lens(), operand_measured(), 5, refl) }
+theorem setup_measured(): LayoutMeasured(setup_parts(), setup_lens()) {
+    let closed: (piece_lens(setup_parts()) = setup_lens()) = refl;
+    j(closed, λ ls _ => LayoutMeasured(setup_parts(), ls), measured_self(setup_parts()))
+}
+theorem setup_code_len(): setup_code().len() = setup_len() { layout_len(setup_parts(), setup_last(), setup_lens(), setup_measured(), 10, refl) }
+theorem tails_measured(): LayoutMeasured(tails_parts(), tails_lens()) {
+    let closed: (piece_lens(tails_parts()) = tails_lens()) = refl;
+    j(closed, λ ls _ => LayoutMeasured(tails_parts(), ls), measured_self(tails_parts()))
+}
+theorem tails_code_len(): tails_code().len() = tails_len() { layout_len(tails_parts(), tails_last(), tails_lens(), tails_measured(), 117, refl) }
+theorem total_measured(): LayoutMeasured(total_parts(), total_lens()) {
+    let closed: (piece_lens(total_parts()) = total_lens()) = refl;
+    j(closed, λ ls _ => LayoutMeasured(total_parts(), ls), measured_self(total_parts()))
+}
+theorem total_code_len(): total_code().len() = total_len() { layout_len(total_parts(), total_last(), total_lens(), total_measured(), 6, refl) }
+theorem tsetup_measured(): LayoutMeasured(tsetup_parts(), tsetup_lens()) {
+    let closed: (piece_lens(tsetup_parts()) = tsetup_lens()) = refl;
+    j(closed, λ ls _ => LayoutMeasured(tsetup_parts(), ls), measured_self(tsetup_parts()))
+}
+theorem tsetup_code_len(): tsetup_code().len() = tsetup_len() { layout_len(tsetup_parts(), tsetup_last(), tsetup_lens(), tsetup_measured(), 10, refl) }
+theorem tname_measured(): LayoutMeasured(tname_parts(), tname_lens()) {
+    let closed: (piece_lens(tname_parts()) = tname_lens()) = refl;
+    j(closed, λ ls _ => LayoutMeasured(tname_parts(), ls), measured_self(tname_parts()))
+}
+theorem tname_code_len(): tname_code().len() = tname_len() { layout_len(tname_parts(), tname_last(), tname_lens(), tname_measured(), 117, refl) }
+theorem finish_measured(): LayoutMeasured(finish_parts(), finish_lens()) {
+    let closed: (piece_lens(finish_parts()) = finish_lens()) = refl;
+    j(closed, λ ls _ => LayoutMeasured(finish_parts(), ls), measured_self(finish_parts()))
+}
+theorem finish_code_len(): finish_code().len() = finish_len() { layout_len(finish_parts(), finish_last(), finish_lens(), finish_measured(), 40, refl) }
+// jump facts
+theorem cmd_j_few_jae(): JumpsForward(641, 6, cmd_d_few_jae(), 700) { refl }
+theorem cmd_j_single_jne(): JumpsForward(679, 6, cmd_d_single_jne(), 700) { refl }
+theorem cmd_j_narrow_jmp(): JumpsForward(695, 5, cmd_d_narrow_jmp(), 1723) { refl }
+theorem cmd_j_none_jne(): JumpsForward(1958, 6, cmd_d_none_jne(), 1979) { refl }
+theorem cmd_j_stdin_jmp(): JumpsForward(1974, 5, cmd_d_stdin_jmp(), 7268) { refl }
+theorem cmd_j_last_je(): JumpsForward(2203, 6, cmd_d_last_je(), 5154) { refl }
+theorem cmd_j_dash_jne(): JumpsForward(2239, 6, cmd_d_dash_jne(), 2313) { refl }
+theorem cmd_j_ahead_jne(): JumpsForward(2269, 6, cmd_d_ahead_jne(), 2313) { refl }
+theorem cmd_j_dash_jmp(): JumpsForward(2308, 5, cmd_d_dash_jmp(), 7268) { refl }
+theorem cmd_j_open_js(): JumpsForward(2348, 6, cmd_d_open_js(), 2385) { refl }
+theorem cmd_j_opened_jmp(): JumpsForward(2380, 5, cmd_d_opened_jmp(), 7268) { refl }
+theorem cmd_j_failed_jmp(): JumpsBack(2408, 5, cmd_d_failed_jmp(), 1979) { refl }
+theorem cmd_j_named_je(): JumpsForward(4453, 6, cmd_d_named_je(), 5004) { refl }
+theorem cmd_j_len_je(): JumpsForward(4642, 6, cmd_d_len_je(), 4657) { refl }
+theorem cmd_j_len_jmp(): JumpsBack(4652, 5, cmd_d_len_jmp(), 4625) { refl }
+theorem cmd_j_closes_je(): JumpsBack(4969, 6, cmd_d_closes_je(), 1979) { refl }
+theorem cmd_j_close_js(): JumpsBack(4993, 6, cmd_d_close_js(), 2385) { refl }
+theorem cmd_j_close_jmp(): JumpsBack(4999, 5, cmd_d_close_jmp(), 1979) { refl }
+theorem cmd_j_total_jb(): JumpsForward(5180, 6, cmd_d_total_jb(), 7196) { refl }
+theorem cmd_j_retry_jz(): JumpsForward(7234, 6, cmd_d_retry_jz(), 7308) { refl }
+theorem cmd_j_rfail_jmp(): JumpsBack(7263, 5, cmd_d_rfail_jmp(), 2413) { refl }
+theorem cmd_j_head_ed(): JumpsBack(7346, 6, cmd_ed(), 2413) { refl }
+theorem cmd_j_head_sd(): JumpsBack(7352, 6, cmd_sd(), 7221) { refl }
+theorem pj_counts_done(): JumpsForward(wl_at_wjz(4492), 6, pj_counts().zd, 4609) { refl }
+theorem pj_name_done(): JumpsForward(wl_at_wjz(4666), 6, pj_name().zd, 4783) { refl }
+theorem pj_newline_done(): JumpsForward(wl_at_wjz(4826), 6, pj_newline().zd, 4943) { refl }
+theorem pj_stdin_done(): JumpsForward(wl_at_wjz(5037), 6, pj_stdin().zd, 7196) { refl }
+theorem pj_total_done(): JumpsForward(wl_at_wjz(7079), 6, pj_total().zd, 7196) { refl }
+// outer
+fn command_parts(letters: List<BitVec(8)>, default: BitVec(64), spill: Nat → StateReg) → List<List<BitVec(8)>> {
+    [scan_code(letters, default),
+     keep_code(),
+     stat_code(),
+     init_code(),
+     start_code(),
+     begin_code(),
+     cursor_code(),
+     operand_code(),
+     spill_code(spill),
+     setup_code(),
+     row_code(),
+     tails_code(),
+     total_code(),
+     tsetup_code(),
+     row_code(),
+     tname_code(),
+     finish_code(),
+     read_head_code(FdIn(Rsp), cmd_ed(), cmd_sd())]
+}
+fn command_lens() → List<Nat> { [602, 98, 1023, 140, 43, 99, 159, 249, 256, 46, 1712, 727, 32, 46, 1712, 252, 112, 50] }
+theorem command_measured(letters: List<BitVec(8)>, default: BitVec(64), spill: Nat → StateReg):
+    LayoutMeasured(command_parts(letters, default, spill), command_lens()) {
+    ⟨scan_code_len(letters, default), ⟨keep_code_len(), ⟨stat_code_len(), ⟨init_code_len(), ⟨start_code_len(), ⟨begin_code_len(), ⟨cursor_code_len(), ⟨operand_code_len(), ⟨spill_code_len(spill), ⟨setup_code_len(), ⟨row_code_len(), ⟨tails_code_len(), ⟨total_code_len(), ⟨tsetup_code_len(), ⟨row_code_len(), ⟨tname_code_len(), ⟨finish_code_len(), ⟨read_head_code_len(FdIn(Rsp), cmd_ed(), cmd_sd()), trivial⟩⟩⟩⟩⟩⟩⟩⟩⟩⟩⟩⟩⟩⟩⟩⟩⟩⟩
+}
+fn command_code(letters: List<BitVec(8)>, default: BitVec(64), spill: Nat → StateReg, code: StructuredCode, jumps: FilterJumps, pj: PrintJumps)
+    → List<BitVec(8)> {
+    layout_code(command_parts(letters, default, spill), filter_core_code(code, jumps, pj))
+}
+
+
+// ---------------------------------------------------------------------------
+// The pieces, wherever the frame and the page are.
+
+fn SegPieces(file: IoImage, parts: List<List<BitVec(8)>>, last: List<BitVec(8)>, lens: List<Nat>, start: Nat) → Type {
+    (i: Nat) → Placed(file, layout_piece(parts, last, i), eof_rip(layout_at(start, lens, i)))
+}
+theorem seg_pieces(file: IoImage, parts: List<List<BitVec(8)>>, last: List<BitVec(8)>, lens: List<Nat>, measured: LayoutMeasured(parts, lens),
+    start: Nat, placed: Placed(file, layout_code(parts, last), eof_rip(start))): SegPieces(file, parts, last, lens, start) {
+    λ i page => layout_resident(io_fetch_access(), IoMemory(file, page), io_entry(), last, parts, lens, measured, start, placed(page), i)
+}
+
+// The code at the entry, whatever the frame holds.
+fn CommandPlaced(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64), spill: Nat → StateReg, code: StructuredCode,
+    jumps: FilterJumps, pj: PrintJumps) → Type {
+    (frame: Nat → BitVec(8)) → Placed(with_frame(file, frame), command_code(letters, default, spill, code, jumps, pj), io_entry())
+}
+record CmdPieces(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64), spill: Nat → StateReg, code: StructuredCode,
+    jumps: FilterJumps, pj: PrintJumps) {
+    scan: Placed(file, scan_code(letters, default), eof_rip(ca_scan())),
+    keep: SegPieces(file, keep_parts(), keep_last(), keep_lens(), ca_keep_mask()),
+    stat: Placed(file, stat_code(), eof_rip(ca_stat())),
+    init: SegPieces(file, init_parts(), init_last(), init_lens(), ca_wstore()),
+    start: Placed(file, start_code(), eof_rip(ca_start())),
+    begin: SegPieces(file, begin_parts(), begin_last(), begin_lens(), ca_ckeep()),
+    cursor: Placed(file, cursor_code(), eof_rip(ca_cursor())),
+    operand: SegPieces(file, operand_parts(), operand_last(), operand_lens(), ca_cstore()),
+    spilled: Placed(file, spill_code(spill), eof_rip(ca_spill())),
+    setup: SegPieces(file, setup_parts(), setup_last(), setup_lens(), ca_setup()),
+    row: Placed(file, row_code(), eof_rip(ca_row())),
+    tails: SegPieces(file, tails_parts(), tails_last(), tails_lens(), ca_named()),
+    total: SegPieces(file, total_parts(), total_last(), total_lens(), ca_total()),
+    tsetup: SegPieces(file, tsetup_parts(), tsetup_last(), tsetup_lens(), ca_tsetup()),
+    total_row: Placed(file, row_code(), eof_rip(ca_total_row())),
+    tname: SegPieces(file, tname_parts(), tname_last(), tname_lens(), ca_tn0()),
+    finish: SegPieces(file, finish_parts(), finish_last(), finish_lens(), ca_exit()),
+    head: (page: Nat → BitVec(8)) → ReadHead(FdIn(Rsp), IoMemory(file, page), ca_head(), cmd_ed(), cmd_sd()),
+    core: (page: Nat → BitVec(8)) → FilterCore(IoMemory(file, page), ca_core(), code, jumps, pj),
+}
+theorem cmd_pieces(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64), spill: Nat → StateReg, code: StructuredCode,
+    jumps: FilterJumps, pj: PrintJumps, placed: Placed(file, command_code(letters, default, spill, code, jumps, pj), io_entry())):
+    CmdPieces(file, letters, default, spill, code, jumps, pj) {
+    let outer = λ (i: Nat) => placed_piece(file, command_parts(letters, default, spill), filter_core_code(code, jumps, pj), command_lens(),
+        command_measured(letters, default, spill), io_entry(), placed, i);
+    CmdPieces(
+        scan := outer(0),
+        keep := seg_pieces(file, keep_parts(), keep_last(), keep_lens(), keep_measured(), ca_keep_mask(), outer(1)),
+        stat := outer(2),
+        init := seg_pieces(file, init_parts(), init_last(), init_lens(), init_measured(), ca_wstore(), outer(3)),
+        start := outer(4),
+        begin := seg_pieces(file, begin_parts(), begin_last(), begin_lens(), begin_measured(), ca_ckeep(), outer(5)),
+        cursor := outer(6),
+        operand := seg_pieces(file, operand_parts(), operand_last(), operand_lens(), operand_measured(), ca_cstore(), outer(7)),
+        spilled := outer(8),
+        setup := seg_pieces(file, setup_parts(), setup_last(), setup_lens(), setup_measured(), ca_setup(), outer(9)),
+        row := outer(10),
+        tails := seg_pieces(file, tails_parts(), tails_last(), tails_lens(), tails_measured(), ca_named(), outer(11)),
+        total := seg_pieces(file, total_parts(), total_last(), total_lens(), total_measured(), ca_total(), outer(12)),
+        tsetup := seg_pieces(file, tsetup_parts(), tsetup_last(), tsetup_lens(), tsetup_measured(), ca_tsetup(), outer(13)),
+        total_row := outer(14),
+        tname := seg_pieces(file, tname_parts(), tname_last(), tname_lens(), tname_measured(), ca_tn0(), outer(15)),
+        finish := seg_pieces(file, finish_parts(), finish_last(), finish_lens(), finish_measured(), ca_exit(), outer(16)),
+        head := λ page => read_head(FdIn(Rsp), IoMemory(file, page), ca_head(), cmd_ed(), cmd_sd(), outer(17)(page)),
+        core := λ page => filter_core(IoMemory(file, page), ca_core(), code, jumps, pj, outer(18)(page)))
+}
+
+// ---------------------------------------------------------------------------
+// The frame's slots, loaded and stored from placed code.
+
+fn stored_frame(file: IoImage, frame: Nat → BitVec(8), q: Nat, w: BitVec(64)) → Nat → BitVec(8) {
+    frame_stored(with_frame(file, frame), 8 * q, w).frame
+}
+fn slot_block(q: Nat) → List<Instruction> { [MovRI(R11, slot_at(q))] }
+fn slot_store_after(source: Gpr, q: Nat, state: MachineState<IoMemory>) → MachineState<IoMemory> {
+    word_store_after(linux_writes(io_linux()), WordStore(base := R11, source := source), execute_block_normal(slot_block(q), state))
+}
+fn slot_load_after(destination: Gpr, w: BitVec(64), q: Nat, state: MachineState<IoMemory>) → MachineState<IoMemory> {
+    word_load_after(WordLoad(destination := destination, base := R11), w, execute_block_normal(slot_block(q), state))
+}
+
+// R11 := the slot's address, then the source's word stored there: the slot
+// set, every other kept.
+record SlotStored(file: IoImage, frame: Nat → BitVec(8), vars: Nat → BitVec(64), q: Nat, w: BitVec(64), page: Nat → BitVec(8),
+    before, after: MachineState<IoMemory>, to: Nat) {
+    steps: LinuxSteps(io_linux(), before, after),
+    memory_is: after.memory = IoMemory(with_frame(file, stored_frame(file, frame, q, w)), page),
+    rip_is: after.rip = eof_rip(to),
+    holds: FrameHolds(stored_frame(file, frame, q, w), set_var(vars, q, w)),
+}
+theorem run_slot_store(file: IoImage, frame: Nat → BitVec(8), vars: Nat → BitVec(64), holds: FrameHolds(frame, vars),
+    page: Nat → BitVec(8), k, q: Nat, inside: q < frame_slots(), source: Gpr,
+    block: Placed(with_frame(file, frame), canonical_block_bytes(slot_block(q)), eof_rip(k)),
+    store: Placed(with_frame(file, frame), word_store_bytes(WordStore(base := R11, source := source)), eof_rip(k + 10)),
+    state: MachineState<IoMemory>, memory_is: state.memory = IoMemory(with_frame(file, frame), page), rip_is: state.rip = eof_rip(k)):
+    SlotStored(file, frame, vars, q, read_gpr(source, execute_block_normal(slot_block(q), state).gprs), page, state,
+        slot_store_after(source, q, state), k + 13) {
+    let img = with_frame(file, frame);
+    let set = run_block(img, page, slot_block(q), io_entry(), k, block, state, memory_is, rip_is);
+    let s1 = execute_block_normal(slot_block(q), state);
+    let stored = run_frame_store(img, page, WordStore(base := R11, source := source), refl, io_entry(), k + 10, store, 8 * q, { omega },
+        s1, set.memory_is, set.rip_is, refl);
+    SlotStored(
+        steps := linux_steps_trans(io_linux(), state, s1, slot_store_after(source, q, state), linux_steps_of_fetched(io_linux(), state, s1, set.steps),
+            stored.step),
+        memory_is := stored.memory_is,
+        rip_is := stored.rip_is,
+        holds := frame_holds_store(img, vars, q, read_gpr(source, s1.gprs), holds))
+}
+// R11 := the slot's address, then its word loaded.
+theorem run_slot_load(file: IoImage, frame: Nat → BitVec(8), vars: Nat → BitVec(64), holds: FrameHolds(frame, vars),
+    page: Nat → BitVec(8), k, q: Nat, inside: q < frame_slots(), destination: Gpr,
+    block: Placed(with_frame(file, frame), canonical_block_bytes(slot_block(q)), eof_rip(k)),
+    load: Placed(with_frame(file, frame), word_load_bytes(WordLoad(destination := destination, base := R11)), eof_rip(k + 10)),
+    state: MachineState<IoMemory>, memory_is: state.memory = IoMemory(with_frame(file, frame), page), rip_is: state.rip = eof_rip(k)):
+    Ran(with_frame(file, frame), page, state, slot_load_after(destination, vars(q), q, state), eof_rip(k + 13)) {
+    let img = with_frame(file, frame);
+    let set = run_block(img, page, slot_block(q), io_entry(), k, block, state, memory_is, rip_is);
+    let s1 = execute_block_normal(slot_block(q), state);
+    let loaded = run_word_load(img, page, WordLoad(destination := destination, base := R11), io_entry(), k + 10, load, s1, set.memory_is, set.rip_is,
+        vars(q), frame_var_at(img, page, vars, holds, q, inside));
+    Ran(steps := fetched_steps_trans(io_fetch_access(), io_data_access(), state, s1, slot_load_after(destination, vars(q), q, state), set.steps,
+            loaded.steps),
+        memory_is := loaded.memory_is, rip_is := loaded.rip_is)
+}
+
+// ---------------------------------------------------------------------------
+// What the slots hold between phases: the selection, the width, the status,
+// the operand count and the totals.
+
+record Vars(vars: Nat → BitVec(64), mask: BitVec(64), width, n: Nat, failed: Bool, totals: Nat → BitVec(64)) {
+    mask_is: vars(16) = mask,
+    width_is: vars(17) = word_of_nat(64, width),
+    status_is: vars(18) = status_word(failed),
+    count_is: vars(21) = word_of_nat(64, n),
+    totals_is: (i: Nat) → i < 8 → vars(8 + i) = totals(i),
+}
+theorem set_var_same(vars: Nat → BitVec(64), q: Nat, w: BitVec(64)): set_var(vars, q, w)(q) = w {
+    match Nat::eq_dec(q, q) as λ d => (match d { Inl(_) => w, Inr(_) => vars(q) }) = w {
+        Inl(_) => refl,
+        Inr(no) => false_elim(no(refl)),
+    }
+}
+theorem set_var_other(vars: Nat → BitVec(64), q: Nat, w: BitVec(64), i: Nat, other: Not(i = q)): set_var(vars, q, w)(i) = vars(i) {
+    match Nat::eq_dec(i, q) as λ d => (match d { Inl(_) => w, Inr(_) => vars(i) }) = vars(i) {
+        Inl(same) => false_elim(other(same)),
+        Inr(_) => refl,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The exit: the status's slot into RDI, exit(RDI).
+
+theorem exit_runs(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64), spill: Nat → StateReg, code: StructuredCode,
+    jumps: FilterJumps, pj: PrintJumps, placed: CommandPlaced(file, letters, default, spill, code, jumps, pj),
+    frame: Nat → BitVec(8), vars: Nat → BitVec(64), holds: FrameHolds(frame, vars), status: BitVec(64), status_is: vars(18) = status,
+    page: Nat → BitVec(8), state: MachineState<IoMemory>, memory_is: state.memory = IoMemory(with_frame(file, frame), page),
+    rip_is: state.rip = eof_rip(ca_exit())): LinuxRuns(io_linux(), [ExitEvent(status)], state) {
+    let img = with_frame(file, frame);
+    let pieces = cmd_pieces(img, letters, default, spill, code, jumps, pj, placed(frame));
+    let loaded = run_slot_load(file, frame, vars, holds, page, ca_exit(), 18, { omega }, Rdi, pieces.finish(0), pieces.finish(1), state,
+        memory_is, rip_is);
+    let s1 = slot_load_after(Rdi, vars(18), 18, state);
+    let numbered = run_block(img, page, [MovRI(Rax, BitVec::ofNat(60))], io_entry(), ca_exit_num(), pieces.finish(2), s1, loaded.memory_is,
+        loaded.rip_is);
+    let s2 = execute_block_normal([MovRI(Rax, BitVec::ofNat(60))], s1);
+    linux_runs_exit(io_linux(), state, s2, status,
+        fetched_steps_trans(io_fetch_access(), io_data_access(), state, s1, s2, loaded.steps, numbered.steps),
+        syscall_placed(img, page, io_entry(), ca_exit_call(), pieces.finish(3), s2, numbered.memory_is, numbered.rip_is),
+        refl, status_is)
+}
+
+// ---------------------------------------------------------------------------
+// Rows: the counts from the frame's slots, a row no longer than its eight
+// fields, and bytes put one at a time after it.
+
+theorem slots_counts(file: IoImage, frame: Nat → BitVec(8), vars: Nat → BitVec(64), holds: FrameHolds(frame, vars), b: Nat,
+    inside: b + 8 <= frame_slots(), counts: Nat → BitVec(64), same: (i: Nat) → i < 8 → vars(b + i) = counts(i)):
+    CountsAt(with_frame(file, frame), slot_at(b), counts) {
+    λ page i below => {
+        let start = frame_value(8 * b, { omega });
+        let place: (slot_at(b).toNat() + 8 * i = io_frame_base() + 8 * (b + i)) = omega;
+        let address: (argv_slot(slot_at(b), i) = frame_at(8 * (b + i))) =
+            cong_fn<Nat, BitVec(64)>(λ a => word_of_nat(64, a), place);
+        let word = frame_var_at(with_frame(file, frame), page, vars, holds, b + i, { omega });
+        j(sym(address), λ a _ => WordAt(io_data_access(), IoMemory(with_frame(file, frame), page), a, counts(i)),
+            j(same(i, below), λ v _ => WordAt(io_data_access(), IoMemory(with_frame(file, frame), page), frame_at(8 * (b + i)), v), word))
+    }
+}
+
+fn row_room(width, k: Nat) → Nat { match k { Zero => 0, Succ(m) => (width + 21) + row_room(width, m) } }
+theorem row_fields_le(width: Nat, mask: BitVec(64), counts: Nat → BitVec(64), k: Nat):
+    (first: Bool) → (i: Nat) → row_fields(width, mask, counts, first, i, k).len() <= row_room(width, k) {
+    match k as λ m => (first: Bool) → (i: Nat) → row_fields(width, mask, counts, first, i, m).len() <= row_room(width, m) {
+        Zero => λ first i => { omega },
+        Succ(m) => λ first i => {
+            let field = slot_field(width, mask, counts, first, i);
+            let later = row_fields(width, mask, counts, first_after(mask, first, i), Succ(i), m);
+            let short = slot_field_le(width, mask, counts, first, i);
+            let rest = row_fields_le(width, mask, counts, m, first_after(mask, first, i), Succ(i));
+            let both = List::len_append(field, later);
+            let sum: ((field ++ later).len() <= (width + 21) + row_room(width, m)) = omega;
+            j(sym(row_unfold(width, mask, counts, first, i, m)), λ l _ => l.len() <= (width + 21) + row_room(width, m), sum)
+        },
+    }
+}
+theorem row_counts_le(width: Nat, mask: BitVec(64), counts: Nat → BitVec(64)): row_counts(width, mask, counts).len() <= 8 * (width + 21) {
+    let fields = row_fields_le(width, mask, counts, 8, True, 0);
+    let rooms: (row_room(width, 8) = (width + 21) + ((width + 21) + ((width + 21) + ((width + 21) + ((width + 21) + ((width + 21) +
+        ((width + 21) + ((width + 21) + 0)))))))) = refl;
+    omega
+}
+
+// At `k`, `bytes` stored from `o`, RDI past them.
+record Put(file: IoImage, page0: Nat → BitVec(8), o: Nat, bytes: List<BitVec(8)>, k: Nat, state: MachineState<IoMemory>) {
+    page: Nat → BitVec(8),
+    memory_is: state.memory = IoMemory(file, page),
+    rip_is: state.rip = eof_rip(k),
+    holds: PageNext(page0, page, o, bytes),
+    rdi: read_gpr(Rdi, state.gprs).toNat() = io_page_base() + (o + bytes.len()),
+}
+fn put_after(w: BitVec(64), state: MachineState<IoMemory>) → MachineState<IoMemory> {
+    execute_block_normal([AddRI8(Rdi, one_byte())], byte_store_after(linux_writes(io_linux()), ByteStore(base := Rdi, source := R11),
+        execute_block_normal([MovRI(R11, w)], state)))
+}
+theorem put_grown(base, o, b, f, p, t, q: Nat, l1: b = f + p, l2: t = f + q, l3: q = p + 1): Succ(base + (o + b)) = base + (o + t) { omega }
+// R11 := the byte, stored at RDI, RDI on by one.
+theorem put_byte(file: IoImage, page0: Nat → BitVec(8), o: Nat, front, prefix: List<BitVec(8)>, k: Nat, w: BitVec(64), x: BitVec(8),
+    low: imm_byte0(w) = x,
+    set: Placed(file, canonical_block_bytes([MovRI(R11, w)]), eof_rip(k)),
+    store: Placed(file, byte_store_bytes(ByteStore(base := Rdi, source := R11)), eof_rip(k + 10)),
+    step: Placed(file, canonical_block_bytes([AddRI8(Rdi, one_byte())]), eof_rip(k + 13)),
+    state: MachineState<IoMemory>, head: Put(file, page0, o, front ++ prefix, k, state), room: o + (front ++ prefix).len() < 4096):
+    Exists<MachineState<IoMemory>>(λ after => LinuxSteps(io_linux(), state, after) ∧ Put(file, page0, o, front ++ (prefix ++ [x]), k + 17, after)) {
+    let io = io_linux();
+    let bytes = front ++ prefix;
+    let c = o + bytes.len();
+    let s1 = execute_block_normal([MovRI(R11, w)], state);
+    let ran1 = run_block(file, head.page, [MovRI(R11, w)], io_entry(), k, set, state, head.memory_is, head.rip_is);
+    let stored = run_store(file, head.page, ByteStore(base := Rdi, source := R11), refl, io_entry(), k + 10, store, c, room, x, s1,
+        ran1.memory_is, ran1.rip_is, head.rdi, low);
+    let s2 = byte_store_after(linux_writes(io), ByteStore(base := Rdi, source := R11), s1);
+    let next = io_store_offset(IoMemory(file, head.page), c, [x]).page;
+    let ran3 = run_block(file, next, [AddRI8(Rdi, one_byte())], io_entry(), k + 13, step, s2, stored.memory_is, stored.rip_is);
+    let paged = page_next(file, page0, head.page, o, bytes, x, head.holds.held, head.holds.below, head.holds.above);
+    let moved = List::append_assoc(front, prefix, [x]);
+    let page_low: (io_page_base() + 4097 <= Nat::pow(2, 64)) = Nat::leb_sound(io_page_base() + 4097, Nat::pow(2, 64), trivial);
+    let one = add_one_value(read_gpr(Rdi, s2.gprs), io_page_base() + c, head.rdi, { omega });
+    let l1: (bytes.len() = front.len() + prefix.len()) = List::len_append(front, prefix);
+    let l2: ((front ++ (prefix ++ [x])).len() = front.len() + (prefix ++ [x]).len()) = List::len_append(front, prefix ++ [x]);
+    let l3: ((prefix ++ [x]).len() = prefix.len() + 1) = List::len_append(prefix, [x]);
+    let grown = put_grown(io_page_base(), o, bytes.len(), front.len(), prefix.len(), (front ++ (prefix ++ [x])).len(), (prefix ++ [x]).len(),
+        l1, l2, l3);
+    let rdi: (read_gpr(Rdi, put_after(w, state).gprs).toNat() = io_page_base() + (o + (front ++ (prefix ++ [x])).len())) = trans(one, grown);
+    Exists(put_after(w, state), ⟨linux_steps_trans(io, state, s2, put_after(w, state),
+        linux_steps_trans(io, state, s1, s2, linux_steps_of_fetched(io, state, s1, ran1.steps), stored.step),
+        linux_steps_of_fetched(io, s2, put_after(w, state), ran3.steps)),
+     Put(page := next, memory_is := ran3.memory_is, rip_is := ran3.rip_is,
+        holds := j(moved, λ bs _ => PageNext(page0, next, o, bs), PageNext(held := paged.held, below := paged.below, above := paged.above)),
+        rdi := rdi)⟩)
+}
+
+// ---------------------------------------------------------------------------
+// A write of `bytes` from the loop at `at`, all sent going on at `done`.
+
+theorem mem_write(file: IoImage, page: Nat → BitVec(8), at, done: Nat, pj: PrintJumps, placed: Placed(file, write_loop_code(pj), eof_rip(at)),
+    facts: WriteJumpFacts(pj), lands: JumpsForward(wl_at_wjz(at), 6, pj.zd, done),
+    bytes: List<BitVec(8)>, write: RowWrite, ok: RowWriteOk(bytes, write), some: 0 < bytes.len(), fits: bytes.len() <= 4096,
+    after: List<LinuxEvent>, origin: Gprs, then: WriteThen(IoMemory(file, page), done, after, origin),
+    state: MachineState<IoMemory>, memory_is: state.memory = IoMemory(file, page), rip_is: state.rip = eof_rip(at),
+    sends: LinuxWritesFrom(io_linux(), IoMemory(file, page), read_gpr(R9, state.gprs), bytes),
+    room: read_gpr(R9, state.gprs).toNat() + bytes.len() < Nat::pow(2, 64),
+    r10: read_gpr(R10, state.gprs).toNat() = bytes.len(), kept: WriteKept(state.gprs, origin)):
+    LinuxRuns(io_linux(), write_events_then(bytes, write.steps, write.ending, after), state) {
+    let memory = IoMemory(file, page);
+    let pieces = write_loop_resident(memory, at, pj, placed(page));
+    let targets = write_targets_to(at, done, pj, facts, jumps_forward(io_entry(), wl_at_wjz(at), 6, pj.zd, done, lands));
+    wl_from_then(memory, at, pj, done, pieces, targets, after, write.ending, ok.right, origin,
+        finished_then(write.ending, memory, done, after, origin, then), write.steps)(bytes, ok.left, state, some, fits, rip_is, memory_is,
+        sends, r10, room, kept)
+}
+// The same from the page's start.
+theorem page_write(file: IoImage, page: Nat → BitVec(8), at, done: Nat, pj: PrintJumps, placed: Placed(file, write_loop_code(pj), eof_rip(at)),
+    facts: WriteJumpFacts(pj), lands: JumpsForward(wl_at_wjz(at), 6, pj.zd, done),
+    bytes: List<BitVec(8)>, write: RowWrite, ok: RowWriteOk(bytes, write), some: 0 < bytes.len(), fits: bytes.len() <= 4096,
+    after: List<LinuxEvent>, origin: Gprs, then: WriteThen(IoMemory(file, page), done, after, origin),
+    state: MachineState<IoMemory>, memory_is: state.memory = IoMemory(file, page), rip_is: state.rip = eof_rip(at),
+    held: Stored(page, 0, bytes), r9: read_gpr(R9, state.gprs) = page_word(),
+    r10: read_gpr(R10, state.gprs).toNat() = bytes.len(), kept: WriteKept(state.gprs, origin)):
+    LinuxRuns(io_linux(), write_events_then(bytes, write.steps, write.ending, after), state) {
+    let base: (read_gpr(R9, state.gprs).toNat() = io_page_base() + 0) = trans(cong_fn<BitVec(64), Nat>(λ v => v.toNat(), r9), page_word_value());
+    let page_low: (io_page_base() + 4097 <= Nat::pow(2, 64)) = Nat::leb_sound(io_page_base() + 4097, Nat::pow(2, 64), trivial);
+    mem_write(file, page, at, done, pj, placed, facts, lands, bytes, write, ok, some, fits, after, origin, then, state, memory_is, rip_is,
+        stored_sends(IoMemory(file, page), 0, bytes, held, read_gpr(R9, state.gprs), base, { omega }), { omega }, r10, kept)
+}
+// R9 := the page, R10 := RDI - R9: the length of what is stored from the
+// page's start.
+fn length_block() → List<Instruction> { [MovRI(R9, page_word()), MovRR(R10, Rdi), SubRR(R10, R9)] }
+theorem length_r10(state: MachineState<IoMemory>, o: Nat, rdi: read_gpr(Rdi, state.gprs).toNat() = io_page_base() + o):
+    read_gpr(R10, execute_block_normal(length_block(), state).gprs).toNat() = o {
+    let base: (page_word().toNat() = io_page_base()) = { let v = page_word_value(); omega };
+    filter_out_len(read_gpr(Rdi, state.gprs), page_word(), o, rdi, base)
+}
+
+// ---------------------------------------------------------------------------
+// After the last operand (5154): with two or more, the totals' row and
+// " total", then the exit.
+
+theorem total_events_few(mask: BitVec(64), width, n: Nat, total: RowWrite, failed: Bool, totals: Nat → BitVec(64),
+    few: Nat::leb(2, n) = False): total_events(mask, width, n, total, failed, totals) = [ExitEvent(status_word(failed))] {
+    j(sym(few), λ b _ => (match b {
+            True => write_events_then(row_counts(width, mask, totals) ++ total_name(), total.steps, total.ending, [ExitEvent(status_word(failed))]),
+            False => [ExitEvent(status_word(failed))],
+        }) = [ExitEvent(status_word(failed))], refl)
+}
+theorem total_events_many(mask: BitVec(64), width, n: Nat, total: RowWrite, failed: Bool, totals: Nat → BitVec(64),
+    many: Nat::leb(2, n) = True): total_events(mask, width, n, total, failed, totals) =
+        write_events_then(row_counts(width, mask, totals) ++ total_name(), total.steps, total.ending, [ExitEvent(status_word(failed))]) {
+    j(sym(many), λ b _ => (match b {
+            True => write_events_then(row_counts(width, mask, totals) ++ total_name(), total.steps, total.ending, [ExitEvent(status_word(failed))]),
+            False => [ExitEvent(status_word(failed))],
+        }) = write_events_then(row_counts(width, mask, totals) ++ total_name(), total.steps, total.ending, [ExitEvent(status_word(failed))]),
+        refl)
+}
+fn TotalOk(mask: BitVec(64), width, n: Nat, total: RowWrite, totals: Nat → BitVec(64)) → Type {
+    match Nat::leb(2, n) as λ _ => Type { True => RowWriteOk(row_counts(width, mask, totals) ++ total_name(), total), False => True }
+}
+theorem total_ok_many(mask: BitVec(64), width, n: Nat, total: RowWrite, totals: Nat → BitVec(64), many: Nat::leb(2, n) = True,
+    ok: TotalOk(mask, width, n, total, totals)): RowWriteOk(row_counts(width, mask, totals) ++ total_name(), total) {
+    j(many, λ b _ => match b as λ _ => Type { True => RowWriteOk(row_counts(width, mask, totals) ++ total_name(), total), False => True }, ok)
+}
+
+// The row, then " total\n" (6944 on): seven bytes put, the length, the write,
+// then the exit.
+theorem drop_zero(a, base, t: Nat, h: a = base + (0 + t)): a = base + t { omega }
+theorem tail_room(r, t, k: Nat, len: t = r + k, short: r <= 4000, small: Nat::leb(k, 7).IsTrue()): 0 + t < 4096 {
+    let few: (k <= 7) = Nat::leb_sound(k, 7, small);
+    omega
+}
+theorem total_tail(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64), spill: Nat → StateReg, code: StructuredCode,
+    jumps: FilterJumps, pj: PrintJumps, placed: CommandPlaced(file, letters, default, spill, code, jumps, pj),
+    frame: Nat → BitVec(8), vars: Nat → BitVec(64), holds: FrameHolds(frame, vars), status: BitVec(64), status_is: vars(18) = status,
+    row: List<BitVec(8)>, short: row.len() <= 4000, total: RowWrite, ok: RowWriteOk(row ++ total_name(), total),
+    page0: Nat → BitVec(8), state: MachineState<IoMemory>, head: Put(with_frame(file, frame), page0, 0, row ++ Nil, ca_tn0(), state)):
+    LinuxRuns(io_linux(), write_events_then(row ++ total_name(), total.steps, total.ending, [ExitEvent(status)]), state) {
+    let io = io_linux();
+    let img = with_frame(file, frame);
+    let pieces = cmd_pieces(img, letters, default, spill, code, jumps, pj, placed(frame));
+    let l0: ((row ++ Nil).len() = row.len() + 0) = List::len_append(row, Nil);
+    have b1 = put_byte(img, page0, 0, row, Nil, 6944, BitVec::ofNat(32), field_gap(), refl, pieces.tname(0), pieces.tname(1), pieces.tname(2),
+        state, head, tail_room(row.len(), (row ++ Nil).len(), 0, l0, short, trivial));
+    let p1: List<BitVec(8)> = [field_gap()];
+    let l1: ((row ++ p1).len() = row.len() + 1) = List::len_append(row, p1);
+    have b2 = put_byte(img, page0, 0, row, p1, 6961, BitVec::ofNat(116), BitVec::ofNat(116), refl, pieces.tname(3),
+        pieces.tname(4), pieces.tname(5), b1.witness, b1.proof.right, tail_room(row.len(), (row ++ p1).len(), 1, l1, short, trivial));
+    let p2: List<BitVec(8)> = [field_gap(), BitVec::ofNat(116)];
+    let l2: ((row ++ p2).len() = row.len() + 2) = List::len_append(row, p2);
+    have b3 = put_byte(img, page0, 0, row, p2, 6978, BitVec::ofNat(111), BitVec::ofNat(111), refl, pieces.tname(6),
+        pieces.tname(7), pieces.tname(8), b2.witness, b2.proof.right, tail_room(row.len(), (row ++ p2).len(), 2, l2, short, trivial));
+    let p3: List<BitVec(8)> = [field_gap(), BitVec::ofNat(116), BitVec::ofNat(111)];
+    let l3: ((row ++ p3).len() = row.len() + 3) = List::len_append(row, p3);
+    have b4 = put_byte(img, page0, 0, row, p3, 6995, BitVec::ofNat(116), BitVec::ofNat(116), refl, pieces.tname(9),
+        pieces.tname(10), pieces.tname(11), b3.witness, b3.proof.right, tail_room(row.len(), (row ++ p3).len(), 3, l3, short, trivial));
+    let p4: List<BitVec(8)> = [field_gap(), BitVec::ofNat(116), BitVec::ofNat(111), BitVec::ofNat(116)];
+    let l4: ((row ++ p4).len() = row.len() + 4) = List::len_append(row, p4);
+    have b5 = put_byte(img, page0, 0, row, p4, 7012, BitVec::ofNat(97), BitVec::ofNat(97), refl, pieces.tname(12),
+        pieces.tname(13), pieces.tname(14), b4.witness, b4.proof.right, tail_room(row.len(), (row ++ p4).len(), 4, l4, short, trivial));
+    let p5: List<BitVec(8)> = [field_gap(), BitVec::ofNat(116), BitVec::ofNat(111), BitVec::ofNat(116), BitVec::ofNat(97)];
+    let l5: ((row ++ p5).len() = row.len() + 5) = List::len_append(row, p5);
+    have b6 = put_byte(img, page0, 0, row, p5, 7029, BitVec::ofNat(108), BitVec::ofNat(108), refl, pieces.tname(15),
+        pieces.tname(16), pieces.tname(17), b5.witness, b5.proof.right, tail_room(row.len(), (row ++ p5).len(), 5, l5, short, trivial));
+    let p6: List<BitVec(8)> = [field_gap(), BitVec::ofNat(116), BitVec::ofNat(111), BitVec::ofNat(116), BitVec::ofNat(97), BitVec::ofNat(108)];
+    let l6: ((row ++ p6).len() = row.len() + 6) = List::len_append(row, p6);
+    have b7 = put_byte(img, page0, 0, row, p6, 7046, BitVec::ofNat(10), newline(), refl, pieces.tname(18),
+        pieces.tname(19), pieces.tname(20), b6.witness, b6.proof.right, tail_room(row.len(), (row ++ p6).len(), 6, l6, short, trivial));
+    let s7 = b7.witness;
+    let last = b7.proof.right;
+    let lengthened = run_block(img, last.page, length_block(), io_entry(), 7063, pieces.tname(21), s7, last.memory_is, last.rip_is);
+    let s8 = execute_block_normal(length_block(), s7);
+    let bytes = row ++ total_name();
+    let lb: (bytes.len() = row.len() + 7) = List::len_append(row, total_name());
+    let to_s7: LinuxSteps(io, state, s7) = linux_steps_trans(io, state, b1.witness, s7, b1.proof.left,
+        linux_steps_trans(io, b1.witness, b2.witness, s7, b2.proof.left, linux_steps_trans(io, b2.witness, b3.witness, s7, b3.proof.left,
+            linux_steps_trans(io, b3.witness, b4.witness, s7, b4.proof.left, linux_steps_trans(io, b4.witness, b5.witness, s7, b5.proof.left,
+                linux_steps_trans(io, b5.witness, b6.witness, s7, b6.proof.left, b7.proof.left))))));
+    let exiting: WriteThen(IoMemory(img, last.page), ca_exit(), [ExitEvent(status)], s8.gprs) =
+        λ st at_exit in_memory _ => exit_runs(file, letters, default, spill, code, jumps, pj, placed, frame, vars, holds,
+            status, status_is, last.page, st, in_memory, at_exit);
+    let writes = page_write(img, last.page, ca_total_write(), ca_exit(), pj_total(), pieces.tname(22), WriteJumpFacts(refl, refl, refl),
+        pj_total_done(), bytes, total, ok, { omega }, { omega }, [ExitEvent(status)], s8.gprs, exiting, s8, lengthened.memory_is,
+        lengthened.rip_is, last.holds.held, refl, length_r10(s7, bytes.len(), drop_zero(read_gpr(Rdi, s7.gprs).toNat(), io_page_base(), bytes.len(), last.rdi)), write_kept_refl(s8.gprs));
+    linux_runs_after_linux_steps(io, write_events_then(bytes, total.steps, total.ending, [ExitEvent(status)]), state, s7, to_s7,
+        linux_runs_after_steps(io, write_events_then(bytes, total.steps, total.ending, [ExitEvent(status)]), s7, s8, lengthened.steps, writes))
+}
+
+fn total_setup1() → List<Instruction> { [MovRI(R12, slot_at(8)), MovRI(R11, slot_at(16))] }
+fn page_block() → List<Instruction> { [MovRI(Rdi, page_word())] }
+fn total_compare() → List<Instruction> { [MovRI(R11, BitVec::ofNat(2)), CmpRR(Rax, R11)] }
+// Two or more (5186 on): R12 at the totals' slots, R13 the selection, R14
+// the width, RDI the page; the row; then the tail.
+theorem total_rows(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64), spill: Nat → StateReg, code: StructuredCode,
+    jumps: FilterJumps, pj: PrintJumps, placed: CommandPlaced(file, letters, default, spill, code, jumps, pj),
+    frame: Nat → BitVec(8), vars: Nat → BitVec(64), holds: FrameHolds(frame, vars), mask: BitVec(64), width, n: Nat, failed: Bool,
+    totals: Nat → BitVec(64), held: Vars(vars, mask, width, n, failed, totals), narrow: width <= 20,
+    total: RowWrite, ok: RowWriteOk(row_counts(width, mask, totals) ++ total_name(), total),
+    page: Nat → BitVec(8), state: MachineState<IoMemory>, memory_is: state.memory = IoMemory(with_frame(file, frame), page),
+    rip_is: state.rip = eof_rip(ca_tsetup())):
+    LinuxRuns(io_linux(), write_events_then(row_counts(width, mask, totals) ++ total_name(), total.steps, total.ending,
+        [ExitEvent(status_word(failed))]), state) {
+    let io = io_linux();
+    let fetch = io_fetch_access();
+    let data = io_data_access();
+    let img = with_frame(file, frame);
+    let pieces = cmd_pieces(img, letters, default, spill, code, jumps, pj, placed(frame));
+    let set1 = run_block(img, page, total_setup1(), io_entry(), ca_tsetup(), pieces.tsetup(0), state, memory_is, rip_is);
+    let s4 = execute_block_normal(total_setup1(), state);
+    let mask_load = run_word_load(img, page, WordLoad(destination := R13, base := R11), io_entry(), 5206, pieces.tsetup(1), s4,
+        set1.memory_is, set1.rip_is, vars(16), frame_var_at(img, page, vars, holds, 16, { omega }));
+    let s5 = word_load_after(WordLoad(destination := R13, base := R11), vars(16), s4);
+    let set2 = run_block(img, page, slot_block(17), io_entry(), 5209, pieces.tsetup(2), s5, mask_load.memory_is, mask_load.rip_is);
+    let s6 = execute_block_normal(slot_block(17), s5);
+    let width_load = run_word_load(img, page, WordLoad(destination := R14, base := R11), io_entry(), 5219, pieces.tsetup(3), s6,
+        set2.memory_is, set2.rip_is, vars(17), frame_var_at(img, page, vars, holds, 17, { omega }));
+    let s7 = word_load_after(WordLoad(destination := R14, base := R11), vars(17), s6);
+    let set3 = run_block(img, page, page_block(), io_entry(), 5222, pieces.tsetup(4), s7, width_load.memory_is, width_load.rip_is);
+    let s8 = execute_block_normal(page_block(), s7);
+    let to_s8: FetchedSteps(fetch, data, state, s8) = fetched_steps_trans(fetch, data, state, s4, s8, set1.steps,
+        fetched_steps_trans(fetch, data, s4, s5, s8, mask_load.steps, fetched_steps_trans(fetch, data, s5, s6, s8, set2.steps,
+            fetched_steps_trans(fetch, data, s6, s7, s8, width_load.steps, set3.steps))));
+    let counts = slots_counts(file, frame, vars, holds, 8, { omega }, totals, held.totals_is);
+    let w_small: (width < Nat::pow(2, 64)) = { let top: (21 <= Nat::pow(2, 64)) = Nat::leb_sound(21, Nat::pow(2, 64), trivial); omega };
+    let row = row_counts(width, mask, totals);
+    have ran = row_runs(img, eof_rip(ca_total_row()), pieces.total_row, page, width, mask, slot_at(8), totals, counts, 0, s8,
+        set3.memory_is, set3.rip_is, page_word_value(), refl, held.mask_is,
+        trans(cong_fn<BitVec(64), Nat>(λ v => v.toNat(), held.width_is), toNat_word_of_nat(64, width, w_small)), { omega });
+    let s9 = ran.witness;
+    let out = ran.proof.right;
+    let short_row = row_counts_le(width, mask, totals);
+    let p0: Put(img, page, 0, row ++ Nil, ca_tn0(), s9) = j(sym(List::append_nil(row)), λ bs _ => Put(img, page, 0, bs, ca_tn0(), s9),
+        Put(page := out.page, memory_is := out.memory_is, rip_is := trans(out.rip_is, rip_compose(io_entry(), ca_total_row(), row_len())),
+            holds := out.holds, rdi := out.rdi));
+    linux_runs_after_linux_steps(io, write_events_then(row ++ total_name(), total.steps, total.ending, [ExitEvent(status_word(failed))]),
+        state, s9, linux_steps_trans(io, state, s8, s9, linux_steps_of_fetched(io, state, s8, to_s8), ran.proof.left),
+        total_tail(file, letters, default, spill, code, jumps, pj, placed, frame, vars, holds, status_word(failed), held.status_is,
+            row, { omega }, total, ok, page, s9, p0))
+}
+// After the last operand (5154): with two or more, the totals' row, then
+// the exit.
+theorem total_runs(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64), spill: Nat → StateReg, code: StructuredCode,
+    jumps: FilterJumps, pj: PrintJumps, placed: CommandPlaced(file, letters, default, spill, code, jumps, pj),
+    frame: Nat → BitVec(8), vars: Nat → BitVec(64), holds: FrameHolds(frame, vars), mask: BitVec(64), width, n: Nat, failed: Bool,
+    totals: Nat → BitVec(64), held: Vars(vars, mask, width, n, failed, totals), narrow: width <= 20, few: n < Nat::pow(2, 64),
+    total: RowWrite, ok: TotalOk(mask, width, n, total, totals),
+    page: Nat → BitVec(8), state: MachineState<IoMemory>, memory_is: state.memory = IoMemory(with_frame(file, frame), page),
+    rip_is: state.rip = eof_rip(ca_total())): LinuxRuns(io_linux(), total_events(mask, width, n, total, failed, totals), state) {
+    let io = io_linux();
+    let fetch = io_fetch_access();
+    let data = io_data_access();
+    let img = with_frame(file, frame);
+    let pieces = cmd_pieces(img, letters, default, spill, code, jumps, pj, placed(frame));
+    let loaded = run_slot_load(file, frame, vars, holds, page, ca_total(), 21, { omega }, Rax, pieces.total(0), pieces.total(1), state,
+        memory_is, rip_is);
+    let s1 = slot_load_after(Rax, vars(21), 21, state);
+    let compared = run_block(img, page, total_compare(), io_entry(), ca_total_test(), pieces.total(2), s1, loaded.memory_is, loaded.rip_is);
+    let s2 = execute_block_normal(total_compare(), s1);
+    let jb = JumpIfNear(B, cmd_d_total_jb());
+    let jumped = run_near(img, page, jb, io_entry(), ca_total_jb(), pieces.total(3), s2, compared.memory_is, compared.rip_is);
+    let s3 = execute_near_control(jb, s2);
+    let to_s3: FetchedSteps(fetch, data, state, s3) = fetched_steps_trans(fetch, data, state, s1, s3, loaded.steps,
+        fetched_steps_trans(fetch, data, s1, s2, s3, compared.steps, jumped));
+    let count = vars(21);
+    let two = BitVec::ofNat(2, n := 64);
+    let value: (count.toNat() = n) = trans(cong_fn<BitVec(64), Nat>(λ v => v.toNat(), held.count_is), toNat_word_of_nat(64, n, few));
+    let two_value: (two.toNat() = 2) = BitVec::toNat_ofNat(64, 2, { omega });
+    (match count.borrow_sub_bit(two) as λ c => (count.borrow_sub_bit(two) = c) →
+            LinuxRuns(io, total_events(mask, width, n, total, failed, totals), state) {
+        True => λ below => {
+            let lt = cmp_below(count, two, below);
+            let short: (n < 2) = omega;
+            let s3_rip = jcc_taken(B, cmd_d_total_jb(), s2, io_entry(), ca_total_jb(), ca_exit(), compared.rip_is, below, cmd_j_total_jb());
+            let exits = exit_runs(file, letters, default, spill, code, jumps, pj, placed, frame, vars, holds, status_word(failed), held.status_is,
+                page, s3, compared.memory_is, s3_rip);
+            j(sym(total_events_few(mask, width, n, total, failed, totals, io_leb_false(2, n, short))), λ es _ => LinuxRuns(io, es, state),
+                linux_runs_after_steps(io, [ExitEvent(status_word(failed))], state, s3, to_s3, exits))
+        },
+        False => λ fits => {
+            let ge = cmp_not_below(count, two, fits);
+            let many_n: (2 <= n) = omega;
+            let many: (Nat::leb(2, n) = True) = bool::eq_true_of_is_true(Nat::leb(2, n), Nat::leb_complete(2, n, many_n));
+            let s3_rip = jcc_passed(B, cmd_d_total_jb(), s2, io_entry(), ca_total_jb(), compared.rip_is, fits);
+            j(sym(total_events_many(mask, width, n, total, failed, totals, many)), λ es _ => LinuxRuns(io, es, state),
+                linux_runs_after_steps(io, write_events_then(row_counts(width, mask, totals) ++ total_name(), total.steps, total.ending,
+                    [ExitEvent(status_word(failed))]), state, s3, to_s3,
+                    total_rows(file, letters, default, spill, code, jumps, pj, placed, frame, vars, holds, mask, width, n, failed, totals, held,
+                        narrow, total, total_ok_many(mask, width, n, total, totals, many, ok), page, s3, compared.memory_is, s3_rip)))
+        },
+    })(refl)
+}
+
+// ---------------------------------------------------------------------------
+// The name's length (4625 to 4657): RDX walks from the name to its NUL.
+
+theorem low_at(a, v, l: Nat, at: a = v, low: v + l < Nat::pow(2, 47)): a < Nat::pow(2, 47) { omega }
+theorem plus_zero(a, v: Nat, at: a = v): a = v + 0 { omega }
+theorem name_step_low(v, l: Nat, low: v + Succ(l) < Nat::pow(2, 47)): (Succ(v) < Nat::pow(2, 47)) ∧ (Succ(v) + l < Nat::pow(2, 47)) {
+    ⟨omega, omega⟩
+}
+record NameEnd(file: IoImage, page: Nat → BitVec(8), v: Nat, before, after: MachineState<IoMemory>) {
+    steps: FetchedSteps(io_fetch_access(), io_data_access(), before, after),
+    memory_is: after.memory = IoMemory(file, page),
+    rip_is: after.rip = eof_rip(4657),
+    rdx: read_gpr(Rdx, after.gprs).toNat() = v,
+    rsi: read_gpr(Rsi, after.gprs) = read_gpr(Rsi, before.gprs),
+    kept: WriteKept(after.gprs, before.gprs),
+}
+fn name_test_block() → List<Instruction> { [MovRI(R11, word_zero()), CmpRR(Rax, R11)] }
+fn name_load() → ByteLoad { ByteLoad(destination := Rax, base := Rdx) }
+theorem name_scan(file: IoImage, page: Nat → BitVec(8), pieces: SegPieces(file, tails_parts(), tails_last(), tails_lens(), ca_named()),
+    rest: List<BitVec(8)>): (v: Nat) → (source: Nat → Option<BitVec(8)>) → (state: MachineState<IoMemory>) →
+    state.memory = IoMemory(file, page) → state.rip = eof_rip(4625) → read_gpr(Rdx, state.gprs).toNat() = v →
+    ReadsFrom(file, page, source, v) → CStringFrom(rest, source) → v + rest.len() < Nat::pow(2, 47) →
+    Exists<MachineState<IoMemory>>(λ after => NameEnd(file, page, v + rest.len(), state, after)) {
+    let fetch = io_fetch_access();
+    let data = io_data_access();
+    let memory = IoMemory(file, page);
+    match rest as λ r => (v: Nat) → (source: Nat → Option<BitVec(8)>) → (state: MachineState<IoMemory>) →
+            state.memory = IoMemory(file, page) → state.rip = eof_rip(4625) → read_gpr(Rdx, state.gprs).toNat() = v →
+            ReadsFrom(file, page, source, v) → CStringFrom(r, source) → v + r.len() < Nat::pow(2, 47) →
+            Exists<MachineState<IoMemory>>(λ after => NameEnd(file, page, v + r.len(), state, after)) {
+        Nil => λ v source state memory_is rip_is rdx reads string low => {
+            let at: (read_gpr(Rdx, state.gprs).toNat() = v) = rdx;
+            let reads0: ReadsFrom(file, page, source, read_gpr(Rdx, state.gprs).toNat()) = j(sym(rdx), λ w _ => ReadsFrom(file, page, source, w), reads);
+            let present: (data.read(memory, read_gpr(Rdx, state.gprs)) = Some(nul())) =
+                trans(read_here(file, page, source, read_gpr(Rdx, state.gprs), reads0(0)), string);
+            let low0: (read_gpr(Rdx, state.gprs).toNat() < Nat::pow(2, 47)) = low_at(read_gpr(Rdx, state.gprs).toNat(), v, 0, rdx, low);
+            let loaded = run_byte_load(file, page, name_load(), io_entry(), 4625, pieces(11), state, memory_is, rip_is, nul(), present, low0);
+            let s1 = byte_load_after(name_load(), nul(), state);
+            let tested = run_block(file, page, name_test_block(), io_entry(), 4629, pieces(12), s1, loaded.memory_is, loaded.rip_is);
+            let s2 = execute_block_normal(name_test_block(), s1);
+            let jumped = run_near(file, page, JumpIfNear(E, cmd_d_len_je()), io_entry(), 4642, pieces(13), s2, tested.memory_is, tested.rip_is);
+            let s3 = execute_near_control(JumpIfNear(E, cmd_d_len_je()), s2);
+            let s3_rip = jcc_taken(E, cmd_d_len_je(), s2, io_entry(), 4642, 4657, tested.rip_is, cmp_bytes(nul(), nul()), cmd_j_len_je());
+            Exists(s3, NameEnd(steps := fetched_steps_trans(fetch, data, state, s1, s3, loaded.steps,
+                    fetched_steps_trans(fetch, data, s1, s2, s3, tested.steps, jumped)),
+                memory_is := tested.memory_is, rip_is := s3_rip, rdx := plus_zero(read_gpr(Rdx, s3.gprs).toNat(), v, rdx), rsi := refl,
+                kept := write_kept_refl(state.gprs)))
+        },
+        Cons(x, more) => λ v source state memory_is rip_is rdx reads string low => {
+            let reads0: ReadsFrom(file, page, source, read_gpr(Rdx, state.gprs).toNat()) = j(sym(rdx), λ w _ => ReadsFrom(file, page, source, w), reads);
+            let present: (data.read(memory, read_gpr(Rdx, state.gprs)) = Some(x)) =
+                trans(read_here(file, page, source, read_gpr(Rdx, state.gprs), reads0(0)), string.left);
+            let low0: (read_gpr(Rdx, state.gprs).toNat() < Nat::pow(2, 47)) = low_at(read_gpr(Rdx, state.gprs).toNat(), v, Succ(more.len()), rdx, low);
+            let loaded = run_byte_load(file, page, name_load(), io_entry(), 4625, pieces(11), state, memory_is, rip_is, x, present, low0);
+            let s1 = byte_load_after(name_load(), x, state);
+            let tested = run_block(file, page, name_test_block(), io_entry(), 4629, pieces(12), s1, loaded.memory_is, loaded.rip_is);
+            let s2 = execute_block_normal(name_test_block(), s1);
+            let passed = run_near(file, page, JumpIfNear(E, cmd_d_len_je()), io_entry(), 4642, pieces(13), s2, tested.memory_is, tested.rip_is);
+            let s3 = execute_near_control(JumpIfNear(E, cmd_d_len_je()), s2);
+            let s3_rip = jcc_passed(E, cmd_d_len_je(), s2, io_entry(), 4642, tested.rip_is, trans(cmp_bytes(x, nul()), not_nul(x, string.right.left)));
+            let stepped = run_block(file, page, [AddRI8(Rdx, one_byte())], io_entry(), 4648, pieces(14), s3, tested.memory_is, s3_rip);
+            let s4 = execute_block_normal([AddRI8(Rdx, one_byte())], s3);
+            let back = run_near(file, page, JumpNear(cmd_d_len_jmp()), io_entry(), 4652, pieces(15), s4, stepped.memory_is, stepped.rip_is);
+            let s5 = execute_near_control(JumpNear(cmd_d_len_jmp()), s4);
+            let s5_rip = jmp_back(cmd_d_len_jmp(), s4, io_entry(), 4652, 4625, stepped.rip_is, cmd_j_len_jmp());
+            let steps_low = name_step_low(v, more.len(), low);
+            let rdx5: (read_gpr(Rdx, s5.gprs).toNat() = Succ(v)) = pointer_next(read_gpr(Rdx, state.gprs), v, rdx, steps_low.left);
+            have later = name_scan(file, page, pieces, more, Succ(v), λ i => source(Succ(i)), s5, stepped.memory_is, s5_rip, rdx5,
+                reads_next(file, page, source, v, reads), string.right.right, steps_low.right);
+            let end = later.proof;
+            let sum: (Succ(v) + more.len() = v + Succ(more.len())) = Nat::add_succ_left(v, more.len());
+            Exists(later.witness, NameEnd(
+                steps := fetched_steps_trans(fetch, data, state, s5, later.witness,
+                    fetched_steps_trans(fetch, data, state, s1, s5, loaded.steps, fetched_steps_trans(fetch, data, s1, s2, s5, tested.steps,
+                        fetched_steps_trans(fetch, data, s2, s3, s5, passed, fetched_steps_trans(fetch, data, s3, s4, s5, stepped.steps, back)))),
+                    end.steps),
+                memory_is := end.memory_is, rip_is := end.rip_is, rdx := trans(end.rdx, sum), rsi := trans(end.rsi, refl),
+                kept := write_kept_trans(later.witness.gprs, s5.gprs, state.gprs, end.kept, write_kept_refl(state.gprs))))
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Back to the operand loop (1979): what runs there, for every frame holding
+// the selection, the width, the count, the cursor's two slots as `c19` and
+// `c20`, and any status and totals.
+
+fn LoopGoes(file: IoImage, mask: BitVec(64), width, n: Nat, c19, c20: BitVec(64), after: Bool → (Nat → BitVec(64)) → List<LinuxEvent>) → Type {
+    (failed: Bool) → (totals: Nat → BitVec(64)) → (frame: Nat → BitVec(8)) → (vars: Nat → BitVec(64)) → FrameHolds(frame, vars) →
+        Vars(vars, mask, width, n, failed, totals) → vars(19) = c19 → vars(20) = c20 → (page: Nat → BitVec(8)) →
+        (state: MachineState<IoMemory>) → state.memory = IoMemory(with_frame(file, frame), page) → state.rip = eof_rip(1979) →
+        LinuxRuns(io_linux(), after(failed, totals), state)
+}
+
+theorem ne_below(a, b: Nat, below: a < b): Not(a = b) { λ same => { omega } }
+theorem ne_above(a, b: Nat, above: b < a): Not(a = b) { λ same => { omega } }
+// A slot other than the status's, after the status is set.
+theorem status_vars(vars: Nat → BitVec(64), mask: BitVec(64), width, n: Nat, failed: Bool, totals: Nat → BitVec(64),
+    held: Vars(vars, mask, width, n, failed, totals), now: Bool):
+    Vars(set_var(vars, 18, status_word(now)), mask, width, n, now, totals) {
+    Vars(mask_is := trans(set_var_other(vars, 18, status_word(now), 16, ne_below(16, 18, trivial)), held.mask_is),
+        width_is := trans(set_var_other(vars, 18, status_word(now), 17, ne_below(17, 18, trivial)), held.width_is),
+        status_is := set_var_same(vars, 18, status_word(now)),
+        count_is := trans(set_var_other(vars, 18, status_word(now), 21, ne_above(21, 18, trivial)), held.count_is),
+        totals_is := λ i below => trans(set_var_other(vars, 18, status_word(now), 8 + i, ne_below(8 + i, 18, { omega })), held.totals_is(i, below)))
+}
+
+// The failed path (2385): the status set to 1, back to the loop.
+fn failed_block() → List<Instruction> { [MovRI(Rax, BitVec::ofNat(1)), MovRI(R11, slot_at(18))] }
+theorem failed_runs(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64), spill: Nat → StateReg, code: StructuredCode,
+    jumps: FilterJumps, pj: PrintJumps, placed: CommandPlaced(file, letters, default, spill, code, jumps, pj),
+    mask: BitVec(64), width, n: Nat, c19, c20: BitVec(64), after: Bool → (Nat → BitVec(64)) → List<LinuxEvent>,
+    goes: LoopGoes(file, mask, width, n, c19, c20, after),
+    frame: Nat → BitVec(8), vars: Nat → BitVec(64), holds: FrameHolds(frame, vars), failed: Bool, totals: Nat → BitVec(64),
+    held: Vars(vars, mask, width, n, failed, totals), at19: vars(19) = c19, at20: vars(20) = c20,
+    page: Nat → BitVec(8), state: MachineState<IoMemory>, memory_is: state.memory = IoMemory(with_frame(file, frame), page),
+    rip_is: state.rip = eof_rip(2385)): LinuxRuns(io_linux(), after(True, totals), state) {
+    let fetch = io_fetch_access();
+    let data = io_data_access();
+    let img = with_frame(file, frame);
+    let pieces = cmd_pieces(img, letters, default, spill, code, jumps, pj, placed(frame));
+    let set = run_block(img, page, failed_block(), io_entry(), 2385, pieces.operand(26), state, memory_is, rip_is);
+    let s1 = execute_block_normal(failed_block(), state);
+    let one = status_word(True);
+    let stored = run_frame_store(img, page, WordStore(base := R11, source := Rax), refl, io_entry(), 2405, pieces.operand(27), 8 * 18, { omega },
+        s1, set.memory_is, set.rip_is, refl);
+    let s2 = word_store_after(linux_writes(io_linux()), WordStore(base := R11, source := Rax), s1);
+    let frame2 = stored_frame(file, frame, 18, one);
+    let vars2 = set_var(vars, 18, one);
+    let jmp = JumpNear(cmd_d_failed_jmp());
+    let jumped = run_near(with_frame(file, frame2), page, jmp, io_entry(), 2408, (cmd_pieces(with_frame(file, frame2), letters, default, spill, code,
+        jumps, pj, placed(frame2))).operand(28), s2, stored.memory_is, stored.rip_is);
+    let s3 = execute_near_control(jmp, s2);
+    let s3_rip = jmp_back(cmd_d_failed_jmp(), s2, io_entry(), 2408, 1979, stored.rip_is, cmd_j_failed_jmp());
+    linux_runs_after_linux_steps(io_linux(), after(True, totals), state, s2,
+        linux_steps_trans(io_linux(), state, s1, s2, linux_steps_of_fetched(io_linux(), state, s1, set.steps), stored.step),
+        linux_runs_after_steps(io_linux(), after(True, totals), s2, s3, jumped,
+            goes(True, totals, frame2, vars2, frame_holds_store(img, vars, 18, one, holds), status_vars(vars, mask, width, n, failed, totals, held, True),
+                trans(set_var_other(vars, 18, one, 19, ne_above(19, 18, trivial)), at19), trans(set_var_other(vars, 18, one, 20, ne_above(20, 18, trivial)), at20),
+                page, s3, stored.memory_is, s3_rip)))
+}
