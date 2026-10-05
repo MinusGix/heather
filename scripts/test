@@ -165,12 +165,21 @@ compile_seconds=$((SECONDS - compile_started))
 # declaration gate — and stale images rebuild from source.
 semantic_warmup() {
   local target=$1
+  shift
   (
     ulimit -v 6291456
     ulimit -t 300
     RUST_MIN_STACK=8388608 RUST_TEST_THREADS=1 \
-      cargo test "${CARGO_FLAGS[@]}" -p heather-elab --test "$target" -- --format terse
+      cargo test "${CARGO_FLAGS[@]}" -p heather-elab --test "$target" -- --format terse "$@"
   )
+}
+
+# The per-file command's prefix (crates/elab/tests/support/command_prefix.rs)
+# is more than one rail cold: its filter half, then the rest, each in a
+# process of its own, at width one since the rail counts every gate worker.
+command_warmup() {
+  HEATHER_KERNEL_WORKERS="${HEATHER_KERNEL_WORKERS:-1}" semantic_warmup semantic_command_warmup --exact filter_half_is_ready
+  HEATHER_KERNEL_WORKERS="${HEATHER_KERNEL_WORKERS:-1}" semantic_warmup semantic_command_warmup --exact command_prefix_is_ready
 }
 
 native_warmup() {
@@ -189,6 +198,7 @@ native_warmup() {
 if (( $# == 0 )); then
   semantic_warmup semantic_x86_warmup
   semantic_warmup semantic_omega_warmup
+  command_warmup
   # The fast lane skips every native certificate gate, so it has no prefix
   # to warm; the warmup alone is ~150 CPU-s.
   if [[ "$TEST_LANE" != fast ]]; then
@@ -224,6 +234,12 @@ else
      [[ "$requested" == *"--test decreases_unfolding"* ]] ||
      [[ "$requested" =~ --test[=\ ]family_omega\  ]]; then
     semantic_warmup semantic_omega_warmup
+  fi
+  # `command_process` and `command_refusals` (family_function_ir) replay the
+  # per-file command's prefix.
+  if $whole_elab || [[ "$requested" =~ --test[=\ ]family_function_ir\  ]] ||
+     [[ "$requested" == *"--test semantic_command_warmup"* ]]; then
+    command_warmup
   fi
 fi
 

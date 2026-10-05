@@ -46,8 +46,8 @@ fn slow_acceptance_read_filter_refusals() {
         ("flag_forgotten", "[AddRR(Rdi, Rbx), AddRR(Rsi, R12), SubRR(Rcx, R12)]", "[AddRR(Rdi, R12), AddRR(Rsi, R12), SubRR(Rcx, R12)]"),
         ("base_left_in", "[MovRR(R10, Rdi), MovRI(R9, BitVec::ofNat(io_page_base())), SubRR(R10, R9)]",
             "[MovRR(R10, Rdi), MovRI(R9, BitVec::ofNat(io_page_base())), SubRR(R10, Rcx)]"),
-        ("quiet_into_write", "quiet: near_branch_target(eof_rip(fl_at_cjz(p)), 6, jumps.cd) = eof_rip(fl_at_read(p)),",
-            "quiet: near_branch_target(eof_rip(fl_at_cjz(p)), 6, jumps.cd) = eof_rip(fl_at_write(p)),"),
+        ("quiet_into_write", "quiet: near_branch_target(eof_rip(fc_at_cjz(c, p)), 6, jumps.cd) = eof_rip(ar),",
+            "quiet: near_branch_target(eof_rip(fc_at_cjz(c, p)), 6, jumps.cd) = eof_rip(fc_at_write(c, p)),"),
         ("store_measured_long", "filter_load_len(), p, 3, filter_advance_len()", "filter_load_len(), p, 4, filter_advance_len()"),
     ] {
         let bad = PROCESS.replacen(from, to, 1);

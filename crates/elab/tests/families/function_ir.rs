@@ -12,6 +12,8 @@ mod common;
 mod composed_fixture;
 #[path = "../support/read_loop.rs"]
 mod read_loop_fixture;
+#[path = "../support/command_prefix.rs"]
+mod command_prefix;
 
 #[path = "../function_ir.rs"]
 mod function_ir;
@@ -55,6 +57,10 @@ mod stat_width_refusals;
 mod row_fields_process;
 #[path = "../row_fields_refusals.rs"]
 mod row_fields_refusals;
+#[path = "../command_process.rs"]
+mod command_process;
+#[path = "../command_refusals.rs"]
+mod command_refusals;
 #[path = "../filter_step_generation.rs"]
 mod filter_step_generation;
 #[path = "../read_print_process.rs"]

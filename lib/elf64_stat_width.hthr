@@ -685,7 +685,7 @@ theorem stat_operand(file: IoImage, page: Nat → BitVec(8), at: BitVec(64), pie
     then: StatNext(file, at, rsp, origin, k, ended, args, pointers, total_after(total, stat_seen(result)), other_after(other, stat_seen(result)), events),
     state: MachineState<IoMemory>, memory_is: state.memory = IoMemory(file, page), rip_is: state.rip = next_rip(at, 232),
     rsi: read_gpr(Rsi, state.gprs) = pointer, positive: 0 < pointer.toNat(), bound: pointer.toNat() + operand.len() + 1 <= Nat::pow(2, 47),
-    string: (page2: Nat → BitVec(8)) → CStringAt(io_data_access(), IoMemory(file, page2), pointer, operand),
+    string: ArgStays(file, pointer, operand),
     rbx: read_gpr(Rbx, state.gprs) = argv_slot(rsp, k), r12: read_gpr(R12, state.gprs) = ended_word(ended),
     carried: StatCarried(total, other, origin, state.gprs), argv: ArgvStays(file, rsp, args, pointers, k)):
     LinuxRuns(io_linux(), Cons(StatEvent(stat_target(operand), result), events), state) {
@@ -711,8 +711,8 @@ theorem stat_operand(file: IoImage, page: Nat → BitVec(8), at: BitVec(64), pie
             (r12_s: read_gpr(R12, s.gprs) = ended_word(ended)) (carried_s: StatCarried(total, other, origin, s.gprs)) =>
         linux_runs_after_steps(io, Cons(StatEvent(StatPath(operand), result), events), state, s, from,
             stat_path(file, page, at, piece, rsp, origin, k, ended, args, pointers, total, other, operand, result, answer, events, then, s, m, r,
-                j(sym(rsi_s), λ w _ => CStringAt(data, memory, w, operand), string(page)), rbx_s, r12_s, carried_s, argv));
-    match operand as λ o => ((page2: Nat → BitVec(8)) → CStringAt(data, IoMemory(file, page2), pointer, o)) →
+                j(sym(rsi_s), λ w _ => CStringAt(data, memory, w, operand), string(file.frame, page)), rbx_s, r12_s, carried_s, argv));
+    match operand as λ o => ArgStays(file, pointer, o) →
             (pointer.toNat() + o.len() + 1 <= Nat::pow(2, 47)) →
             ((s: MachineState<IoMemory>) → FetchedSteps(fetch, data, state, s) → s.memory = memory → s.rip = next_rip(at, 360) →
                 (read_gpr(Rsi, s.gprs) = pointer) → (read_gpr(Rbx, s.gprs) = argv_slot(rsp, k)) → (read_gpr(R12, s.gprs) = ended_word(ended)) →
@@ -721,7 +721,7 @@ theorem stat_operand(file: IoImage, page: Nat → BitVec(8), at: BitVec(64), pie
             LinuxRuns(io, Cons(StatEvent(stat_target(o), result), events), state) {
         Nil => λ whole _ path => {
             let present: (data.read(memory, read_gpr(Rsi, s2.gprs)) = Some(nul())) =
-                trans(read_here(file, page, source0, read_gpr(Rsi, s2.gprs), reads(0)), whole(page));
+                trans(read_here(file, page, source0, read_gpr(Rsi, s2.gprs), reads(0)), whole(file.frame, page));
             let loaded = run_byte_load(file, page, scan_byte_load(), at, 307, piece(10), s2, tested.memory_is, s2_rip, nul(), present, low0);
             let s3 = byte_load_after(scan_byte_load(), nul(), s2);
             let dashed = run_block(file, page, scan_is_block(dash()), at, 311, piece(11), s3, loaded.memory_is, loaded.rip_is);
@@ -733,7 +733,7 @@ theorem stat_operand(file: IoImage, page: Nat → BitVec(8), at: BitVec(64), pie
                 fetched_steps_trans(fetch, data, s3, s4, s5, dashed.steps, jumped2))), dashed.memory_is, s5_rip, rsi, rbx, r12, carried)
         },
         Cons(byte0, tail) => λ whole bound0 path => {
-            let string0 = whole(page);
+            let string0 = whole(file.frame, page);
             let present: (data.read(memory, read_gpr(Rsi, s2.gprs)) = Some(byte0)) =
                 trans(read_here(file, page, source0, read_gpr(Rsi, s2.gprs), reads(0)), string0.left);
             let loaded = run_byte_load(file, page, scan_byte_load(), at, 307, piece(10), s2, tested.memory_is, s2_rip, byte0, present, low0);

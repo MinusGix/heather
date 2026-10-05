@@ -1,0 +1,746 @@
+// What a command prints and how it exits, read off the history rather than
+// the events (docs/native-wc-command-design.md §5): `command_stdout` is the
+// rows, `command_status` whether anything failed. The two corollaries say
+// `command_events` agrees with them on a run whose writes all go through, so
+// no reader of a command's claim unfolds its trace.
+import command_program;
+import elf64_command_events;
+import elf64_print_pieces;
+import elf64_read_filter;
+import elf64_read_pieces;
+import elf64_stat_width;
+import elf64_write_loop;
+import linux_x86_64_io;
+import stream_filter;
+import bitvec;
+import bitvec_nat;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+
+// ---------------------------------------------------------------------------
+// The runs these corollaries are about: each read ends at end of file or at a
+// failed read, never in a failed write, and each row's writes finish.
+
+fn ReadsEnded<Y>(ending: EofEnd<Y>) → Type {
+    match ending as λ _ => Type { AtEnd => True, FailedWith(_) => True, EndedIn(_, _) => False }
+}
+record RunWritten(run: OperandRun) {
+    reads: ReadsEnded(run.ending),
+    counts: run.counts.ending = Finished,
+    name: run.name.ending = Finished,
+    newline: run.newline.ending = Finished,
+}
+fn RunsWritten(runs: List<OperandRun>) → Type {
+    match runs as λ _ => Type { Nil => True, Cons(run, later) => RunWritten(run) ∧ RunsWritten(later) }
+}
+fn InputsWritten(operands: List<List<BitVec(8)>>, history: CommandHistory) → Type {
+    match operands as λ _ => Type {
+        Nil => match history.runs as λ _ => Type {
+            Nil => True,
+            Cons(run, _) => ReadsEnded(run.ending) ∧ (run.counts.ending = Finished),
+        },
+        Cons(_, _) => RunsWritten(history.runs) ∧ (history.total.ending = Finished),
+    }
+}
+fn CommandWritten(letters: List<BitVec(8)>, default: BitVec(64), argv: List<List<BitVec(8)>>, history: CommandHistory) → Type {
+    match parse_args(letters, default, argv) as λ _ => Type {
+        Refused => True,
+        Scanned(_, operands) => InputsWritten(operands, history),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// What stdout receives: per operand read, what the filter emits over its
+// bytes, then its row (the counts, a space, its name, the newline); after two
+// or more operands, the total row. No operand: stdin's row, unnamed.
+
+fn named_out<C>(shape: FilterShape<C>, column: Nat → C → BitVec(64), mask: BitVec(64), width: Nat, name: List<BitVec(8)>,
+    run: OperandRun, later: List<BitVec(8)>) → List<BitVec(8)> {
+    filter_emitted(shape.step, eof_input(run.steps), shape.init) ++
+        ((row_counts(width, mask, input_counts(shape, column, eof_input(run.steps))) ++ [field_gap()]) ++ (name ++ Cons(newline(), later)))
+}
+fn opened_out<C>(shape: FilterShape<C>, column: Nat → C → BitVec(64), mask: BitVec(64), width: Nat, name: List<BitVec(8)>,
+    run: OperandRun, later: List<BitVec(8)>) → List<BitVec(8)> {
+    match run.opened { Opened(_) => named_out(shape, column, mask, width, name, run, later), OpenFailed(_) => later }
+}
+fn operand_out<C>(shape: FilterShape<C>, column: Nat → C → BitVec(64), mask: BitVec(64), width: Nat, name: List<BitVec(8)>,
+    run: OperandRun, later: List<BitVec(8)>) → List<BitVec(8)> {
+    match names_stdin(name) {
+        True => named_out(shape, column, mask, width, name, run, later),
+        False => opened_out(shape, column, mask, width, name, run, later),
+    }
+}
+fn files_out<C>(shape: FilterShape<C>, column: Nat → C → BitVec(64), mask: BitVec(64), width, n: Nat,
+    operands: List<List<BitVec(8)>>, runs: List<OperandRun>, totals: Nat → BitVec(64)) → List<BitVec(8)> {
+    match operands {
+        Nil => match Nat::leb(2, n) { True => row_counts(width, mask, totals) ++ total_name(), False => Nil },
+        Cons(name, more) => match runs {
+            Nil => Nil,
+            Cons(run, later) => operand_out(shape, column, mask, width, name, run,
+                files_out(shape, column, mask, width, n, more, later, totals_after(shape, column, name, run, totals))),
+        },
+    }
+}
+fn inputs_out<C>(shape: FilterShape<C>, column: Nat → C → BitVec(64), mask: BitVec(64), width: Nat,
+    operands: List<List<BitVec(8)>>, history: CommandHistory) → List<BitVec(8)> {
+    match operands {
+        Nil => match history.runs {
+            Nil => Nil,
+            Cons(run, _) => filter_emitted(shape.step, eof_input(run.steps), shape.init) ++
+                (row_counts(width, mask, input_counts(shape, column, eof_input(run.steps))) ++ [newline()]),
+        },
+        Cons(_, _) => files_out(shape, column, mask, width, operands.len(), operands, history.runs, no_counts()),
+    }
+}
+fn command_stdout<C>(shape: FilterShape<C>, column: Nat → C → BitVec(64), letters: List<BitVec(8)>, default: BitVec(64),
+    argv: List<List<BitVec(8)>>, history: CommandHistory) → List<BitVec(8)> {
+    match parse_args(letters, default, argv) {
+        Refused => Nil,
+        Scanned(mask, operands) => inputs_out(shape, column, mask, command_width(mask, operands.len(), history.stats), operands, history),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The status: 1 when the command line is refused, or when any open, read or
+// close failed; else 0.
+
+fn reads_failed<Y>(ending: EofEnd<Y>, failed: Bool) → Bool { match ending { AtEnd => failed, FailedWith(_) => True, EndedIn(_, _) => True } }
+fn opened_failed(run: OperandRun, failed: Bool) → Bool {
+    match run.opened { Opened(_) => reads_failed(run.ending, failed) || close_failed(run.closed), OpenFailed(_) => True }
+}
+fn operand_failed(name: List<BitVec(8)>, run: OperandRun, failed: Bool) → Bool {
+    match names_stdin(name) { True => reads_failed(run.ending, failed), False => opened_failed(run, failed) }
+}
+fn files_failed(operands: List<List<BitVec(8)>>, runs: List<OperandRun>, failed: Bool) → Bool {
+    match operands {
+        Nil => failed,
+        Cons(name, more) => match runs { Nil => failed, Cons(run, later) => files_failed(more, later, operand_failed(name, run, failed)) },
+    }
+}
+fn inputs_failed(operands: List<List<BitVec(8)>>, history: CommandHistory) → Bool {
+    match operands {
+        Nil => match history.runs { Nil => False, Cons(run, _) => reads_failed(run.ending, False) },
+        Cons(_, _) => files_failed(operands, history.runs, False),
+    }
+}
+fn command_status(letters: List<BitVec(8)>, default: BitVec(64), argv: List<List<BitVec(8)>>, history: CommandHistory) → BitVec(64) {
+    match parse_args(letters, default, argv) {
+        Refused => BitVec::ofNat(1),
+        Scanned(_, operands) => status_word(inputs_failed(operands, history)),
+    }
+}
+
+// The events end in `last`.
+fn EndsIn(events: List<LinuxEvent>, last: LinuxEvent) → Type {
+    match events as λ _ => Type {
+        Nil => False,
+        Cons(event, rest) => match rest as λ _ => Type { Nil => event = last, Cons(_, _) => EndsIn(rest, last) },
+    }
+}
+theorem ends_cons(event: LinuxEvent, rest: List<LinuxEvent>, last: LinuxEvent, ends: EndsIn(rest, last)): EndsIn(Cons(event, rest), last) {
+    (match rest as λ r => EndsIn(r, last) → EndsIn(Cons(event, r), last) {
+        Nil => λ never => false_elim(never),
+        Cons(_, _) => λ held => held,
+    })(ends)
+}
+
+// ---------------------------------------------------------------------------
+// Reads and writes, piece by piece.
+
+// After the reads: the tail at end of file, the failure's continuation from
+// all that was read at a failed read.
+fn eof_after<Y>(ending: EofEnd<Y>, failed: List<BitVec(8)> → Nat → List<LinuxEvent>, tail: List<LinuxEvent>, seen: List<BitVec(8)>)
+    → List<LinuxEvent> {
+    match ending { AtEnd => tail, FailedWith(errno) => failed(seen, errno), EndedIn(_, _) => Nil }
+}
+theorem eof_sends<C>(shape: FilterShape<C>, fd: BitVec(64), failed: List<BitVec(8)> → Nat → List<LinuxEvent>, ending: EofEnd<WriteFailure>,
+    tail: List<LinuxEvent>, ended: ReadsEnded(ending), steps: List<EofStep<List<WriteStep>>>): (seen: List<BitVec(8)>) →
+    EofSteps(filter_ok(shape), steps, seen) →
+    sent_to(BitVec::ofNat(1), eof_run(fd, filter_body(shape), filter_failed(shape), failed, steps, ending, tail, seen)) =
+        filter_emitted(shape.step, eof_input(steps), filter_state(shape.step, seen, shape.init)) ++
+            sent_to(BitVec::ofNat(1), eof_after(ending, failed, tail, seen ++ eof_input(steps))) {
+    match steps as λ ss => (seen: List<BitVec(8)>) → EofSteps(filter_ok(shape), ss, seen) →
+            sent_to(BitVec::ofNat(1), eof_run(fd, filter_body(shape), filter_failed(shape), failed, ss, ending, tail, seen)) =
+                filter_emitted(shape.step, eof_input(ss), filter_state(shape.step, seen, shape.init)) ++
+                    sent_to(BitVec::ofNat(1), eof_after(ending, failed, tail, seen ++ eof_input(ss))) {
+        Nil => λ seen _ => (match ending as λ en => ReadsEnded(en) →
+                sent_to(BitVec::ofNat(1), eof_run(fd, filter_body(shape), filter_failed(shape), failed, Nil, en, tail, seen)) =
+                    sent_to(BitVec::ofNat(1), eof_after(en, failed, tail, seen ++ Nil)) {
+            AtEnd => λ _ => refl,
+            FailedWith(errno) => λ _ => cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ s => sent_to(BitVec::ofNat(1), failed(s, errno)),
+                sym(List::append_nil(seen))),
+            EndedIn(_, _) => λ never => false_elim(never),
+        })(ended),
+        Cons(step, rest) => match step as λ st => (seen: List<BitVec(8)>) → EofSteps(filter_ok(shape), Cons(st, rest), seen) →
+                sent_to(BitVec::ofNat(1), eof_run(fd, filter_body(shape), filter_failed(shape), failed, Cons(st, rest), ending, tail, seen)) =
+                    filter_emitted(shape.step, eof_input(Cons(st, rest)), filter_state(shape.step, seen, shape.init)) ++
+                        sent_to(BitVec::ofNat(1), eof_after(ending, failed, tail, seen ++ eof_input(Cons(st, rest)))) {
+            Chunk(bytes, writes) => λ seen ok => {
+                let s = filter_state(shape.step, seen, shape.init);
+                let out = filter_emitted(shape.step, bytes, s);
+                let later = eof_run(fd, filter_body(shape), filter_failed(shape), failed, rest, ending, tail, seen ++ bytes);
+                let rest_out = filter_emitted(shape.step, eof_input(rest), filter_state(shape.step, seen ++ bytes, shape.init));
+                let after = sent_to(BitVec::ofNat(1), eof_after(ending, failed, tail, (seen ++ bytes) ++ eof_input(rest)));
+                let moved: (filter_state(shape.step, seen ++ bytes, shape.init) = filter_state(shape.step, bytes, s)) =
+                    filter_state_append(shape.step, seen, bytes, shape.init);
+                let regrouped: (after = sent_to(BitVec::ofNat(1), eof_after(ending, failed, tail, seen ++ (bytes ++ eof_input(rest))))) =
+                    cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ x => sent_to(BitVec::ofNat(1), eof_after(ending, failed, tail, x)),
+                        List::append_assoc(seen, bytes, eof_input(rest)));
+                trans(chunk_sends(out, writes, later, ok.right.right.left),
+                    trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ t => out ++ t, eof_sends(shape, fd, failed, ending, tail, ended, rest, seen ++ bytes,
+                            ok.right.right.right)),
+                        trans(sym(List::append_assoc(out, rest_out, after)),
+                            trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ e => e ++ after,
+                                trans(cong_fn<C, List<BitVec(8)>>(λ t => out ++ filter_emitted(shape.step, eof_input(rest), t), moved),
+                                    sym(filter_emitted_append(shape.step, bytes, eof_input(rest), s)))),
+                                cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ a => filter_emitted(shape.step, bytes ++ eof_input(rest), s) ++ a,
+                                    regrouped)))))
+            },
+            Interrupted => λ seen ok => eof_sends(shape, fd, failed, ending, tail, ended, rest, seen, ok),
+        },
+    }
+}
+
+// A row's write that finishes sends its bytes.
+theorem row_write_sends(bytes: List<BitVec(8)>, write: RowWrite, after: List<LinuxEvent>, ok: WriteSteps(write.steps, bytes),
+    finished: write.ending = Finished):
+    sent_to(BitVec::ofNat(1), write_events_then(bytes, write.steps, write.ending, after)) = bytes ++ sent_to(BitVec::ofNat(1), after) {
+    j(sym(finished), λ e _ => sent_to(BitVec::ofNat(1), write_events_then(bytes, write.steps, e, after)) = bytes ++ sent_to(BitVec::ofNat(1), after),
+        stdout_then(write.steps, after, bytes, ok))
+}
+// A file's row: the counts and a space, the name, the newline, then what the
+// operands after it send, whatever the status.
+theorem named_row_sends<C>(shape: FilterShape<C>, column: Nat → C → BitVec(64), mask: BitVec(64), width: Nat, name: List<BitVec(8)>,
+    run: OperandRun, fd: BitVec(64), closes: Bool, input: List<BitVec(8)>, failed: Bool, totals: Nat → BitVec(64),
+    rest: Bool → (Nat → BitVec(64)) → List<LinuxEvent>, later: List<BitVec(8)>,
+    counts_ok: WriteSteps(run.counts.steps, row_counts(width, mask, input_counts(shape, column, input)) ++ [field_gap()]),
+    name_ok: WriteSteps(run.name.steps, name), newline_ok: WriteSteps(run.newline.steps, [newline()]), written: RunWritten(run),
+    rest_sends: (f: Bool) → sent_to(BitVec::ofNat(1), rest(f, add_counts(totals, input_counts(shape, column, input)))) = later):
+    sent_to(BitVec::ofNat(1), named_row(shape, column, mask, width, name, run, fd, closes, input, failed, totals, rest)) =
+        (row_counts(width, mask, input_counts(shape, column, input)) ++ [field_gap()]) ++ (name ++ Cons(newline(), later)) {
+    let counts = row_counts(width, mask, input_counts(shape, column, input)) ++ [field_gap()];
+    let t = add_counts(totals, input_counts(shape, column, input));
+    let closed = closing(fd, closes, run.closed, failed, t, rest);
+    let closed_sends: (sent_to(BitVec::ofNat(1), closed) = later) =
+        (match closes as λ c => sent_to(BitVec::ofNat(1), closing(fd, c, run.closed, failed, t, rest)) = later {
+            False => rest_sends(failed),
+            True => rest_sends(failed || close_failed(run.closed)),
+        });
+    let third = write_events_then([newline()], run.newline.steps, run.newline.ending, closed);
+    let second = write_events_then(name, run.name.steps, run.name.ending, third);
+    trans(row_write_sends(counts, run.counts, second, counts_ok, written.counts),
+        cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ x => counts ++ x, trans(row_write_sends(name, run.name, third, name_ok, written.name),
+            cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ x => name ++ x, trans(row_write_sends([newline()], run.newline, closed, newline_ok,
+                written.newline), cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ x => Cons(newline(), x), closed_sends))))))
+}
+// A file's reads and row: what the filter emits over all it read, then the
+// row, at end of file or after a failed read alike.
+theorem file_reads_sends<C>(shape: FilterShape<C>, column: Nat → C → BitVec(64), mask: BitVec(64), width: Nat, name: List<BitVec(8)>,
+    run: OperandRun, fd: BitVec(64), closes: Bool, failed: Bool, totals: Nat → BitVec(64), rest: Bool → (Nat → BitVec(64)) → List<LinuxEvent>,
+    later: List<BitVec(8)>, ok: NamedOk<C>(shape, column, mask, width, name, run), written: RunWritten(run),
+    rest_sends: (f: Bool) → sent_to(BitVec::ofNat(1), rest(f, add_counts(totals, input_counts(shape, column, eof_input(run.steps))))) = later):
+    sent_to(BitVec::ofNat(1), file_reads(shape, column, mask, width, name, run, fd, closes, failed, totals, rest)) =
+        named_out(shape, column, mask, width, name, run, later) {
+    let input = eof_input(run.steps);
+    let bytes = (row_counts(width, mask, input_counts(shape, column, input)) ++ [field_gap()]) ++ (name ++ Cons(newline(), later));
+    let ended = λ (seen: List<BitVec(8)>) (_: Nat) => named_row(shape, column, mask, width, name, run, fd, closes, seen, True, totals, rest);
+    let tail = named_row(shape, column, mask, width, name, run, fd, closes, input, failed, totals, rest);
+    let row = λ (f: Bool) => named_row_sends(shape, column, mask, width, name, run, fd, closes, input, f, totals, rest, later, ok.counts.left,
+        ok.named.left, ok.newline.left, written, rest_sends);
+    let after: (sent_to(BitVec::ofNat(1), eof_after(run.ending, ended, tail, input)) = bytes) =
+        (match run.ending as λ en => ReadsEnded(en) → sent_to(BitVec::ofNat(1), eof_after(en, ended, tail, input)) = bytes {
+            AtEnd => λ _ => row(failed),
+            FailedWith(_) => λ _ => row(True),
+            EndedIn(_, _) => λ never => false_elim(never),
+        })(written.reads);
+    trans(eof_sends(shape, fd, ended, run.ending, tail, written.reads, run.steps, Nil, ok.reads.steps),
+        cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ x => filter_emitted(shape.step, input, shape.init) ++ x, after))
+}
+
+// One operand, `-` or opened, as one function of whether it names stdin.
+fn split_events<C>(stdin: Bool, shape: FilterShape<C>, column: Nat → C → BitVec(64), mask: BitVec(64), width: Nat, name: List<BitVec(8)>,
+    run: OperandRun, failed: Bool, totals: Nat → BitVec(64), rest: Bool → (Nat → BitVec(64)) → List<LinuxEvent>) → List<LinuxEvent> {
+    match stdin {
+        True => file_reads(shape, column, mask, width, name, run, BitVec::zero(), False, failed, totals, rest),
+        False => Cons(OpenEvent(name, run.opened), match run.opened {
+            Opened(fd) => file_reads(shape, column, mask, width, name, run, word_of_nat(64, fd), True, failed, totals, rest),
+            OpenFailed(_) => rest(True, totals),
+        }),
+    }
+}
+fn split_ok<C>(stdin: Bool, shape: FilterShape<C>, column: Nat → C → BitVec(64), mask: BitVec(64), width: Nat, name: List<BitVec(8)>,
+    run: OperandRun) → Type {
+    match stdin as λ _ => Type {
+        True => NamedOk<C>(shape, column, mask, width, name, run),
+        False => OpenOk(name, run.opened) ∧ match run.opened as λ _ => Type {
+            Opened(_) => NamedOk<C>(shape, column, mask, width, name, run),
+            OpenFailed(_) => True,
+        },
+    }
+}
+fn split_totals<C>(stdin: Bool, shape: FilterShape<C>, column: Nat → C → BitVec(64), run: OperandRun, totals: Nat → BitVec(64))
+    → Nat → BitVec(64) {
+    match stdin {
+        True => add_counts(totals, input_counts(shape, column, eof_input(run.steps))),
+        False => match run.opened {
+            Opened(_) => add_counts(totals, input_counts(shape, column, eof_input(run.steps))),
+            OpenFailed(_) => totals,
+        },
+    }
+}
+fn split_out<C>(stdin: Bool, shape: FilterShape<C>, column: Nat → C → BitVec(64), mask: BitVec(64), width: Nat, name: List<BitVec(8)>,
+    run: OperandRun, later: List<BitVec(8)>) → List<BitVec(8)> {
+    match stdin {
+        True => named_out(shape, column, mask, width, name, run, later),
+        False => opened_out(shape, column, mask, width, name, run, later),
+    }
+}
+theorem split_sends<C>(shape: FilterShape<C>, column: Nat → C → BitVec(64), mask: BitVec(64), width: Nat, name: List<BitVec(8)>,
+    run: OperandRun, failed: Bool, totals: Nat → BitVec(64), rest: Bool → (Nat → BitVec(64)) → List<LinuxEvent>, later: List<BitVec(8)>,
+    written: RunWritten(run), stdin: Bool): split_ok(stdin, shape, column, mask, width, name, run) →
+    ((f: Bool) → sent_to(BitVec::ofNat(1), rest(f, split_totals(stdin, shape, column, run, totals))) = later) →
+    sent_to(BitVec::ofNat(1), split_events(stdin, shape, column, mask, width, name, run, failed, totals, rest)) =
+        split_out(stdin, shape, column, mask, width, name, run, later) {
+    match stdin as λ c => split_ok(c, shape, column, mask, width, name, run) →
+            ((f: Bool) → sent_to(BitVec::ofNat(1), rest(f, split_totals(c, shape, column, run, totals))) = later) →
+            sent_to(BitVec::ofNat(1), split_events(c, shape, column, mask, width, name, run, failed, totals, rest)) =
+                split_out(c, shape, column, mask, width, name, run, later) {
+        True => λ ok sends => file_reads_sends(shape, column, mask, width, name, run, BitVec::zero(), False, failed, totals, rest, later, ok,
+            written, sends),
+        False => λ ok sends => (match run.opened as λ o => (match o as λ _ => Type {
+                    Opened(_) => NamedOk<C>(shape, column, mask, width, name, run),
+                    OpenFailed(_) => True,
+                }) → ((f: Bool) → sent_to(BitVec::ofNat(1), rest(f, match o {
+                    Opened(_) => add_counts(totals, input_counts(shape, column, eof_input(run.steps))),
+                    OpenFailed(_) => totals,
+                })) = later) →
+                sent_to(BitVec::ofNat(1), Cons(OpenEvent(name, o), match o {
+                    Opened(fd) => file_reads(shape, column, mask, width, name, run, word_of_nat(64, fd), True, failed, totals, rest),
+                    OpenFailed(_) => rest(True, totals),
+                })) = (match o { Opened(_) => named_out(shape, column, mask, width, name, run, later), OpenFailed(_) => later }) {
+            Opened(fd) => λ named sends2 => file_reads_sends(shape, column, mask, width, name, run, word_of_nat(64, fd), True, failed, totals,
+                rest, later, named, written, sends2),
+            OpenFailed(_) => λ _ sends2 => sends2(True),
+        })(ok.right, sends),
+    }
+}
+
+// The operands in order, then the total row: the same bytes whatever failed.
+fn FilesSend<C>(shape: FilterShape<C>, column: Nat → C → BitVec(64), mask: BitVec(64), width, n: Nat, total: RowWrite,
+    operands: List<List<BitVec(8)>>) → Type {
+    (runs: List<OperandRun>) → (totals: Nat → BitVec(64)) → FilesOk(shape, column, mask, width, n, total, operands, runs, totals) →
+        RunsWritten(runs) → (failed: Bool) →
+        sent_to(BitVec::ofNat(1), files_events(shape, column, mask, width, n, total, operands, runs, failed, totals)) =
+            files_out(shape, column, mask, width, n, operands, runs, totals)
+}
+theorem files_sends<C>(shape: FilterShape<C>, column: Nat → C → BitVec(64), mask: BitVec(64), width, n: Nat, total: RowWrite,
+    finished: total.ending = Finished, operands: List<List<BitVec(8)>>): FilesSend<C>(shape, column, mask, width, n, total, operands) {
+    match operands as λ o => FilesSend<C>(shape, column, mask, width, n, total, o) {
+        Nil => λ runs => match runs as λ r => (totals: Nat → BitVec(64)) → FilesOk(shape, column, mask, width, n, total, Nil, r, totals) →
+                RunsWritten(r) → (failed: Bool) →
+                sent_to(BitVec::ofNat(1), files_events(shape, column, mask, width, n, total, Nil, r, failed, totals)) =
+                    files_out(shape, column, mask, width, n, Nil, r, totals) {
+            Nil => λ totals ok _ failed => (match Nat::leb(2, n) as λ c => (match c as λ _ => Type {
+                        True => RowWriteOk(row_counts(width, mask, totals) ++ total_name(), total),
+                        False => True,
+                    }) → sent_to(BitVec::ofNat(1), match c {
+                        True => write_events_then(row_counts(width, mask, totals) ++ total_name(), total.steps, total.ending,
+                            [ExitEvent(status_word(failed))]),
+                        False => [ExitEvent(status_word(failed))],
+                    }) = (match c { True => row_counts(width, mask, totals) ++ total_name(), False => Nil }) {
+                True => λ held => trans(row_write_sends(row_counts(width, mask, totals) ++ total_name(), total, [ExitEvent(status_word(failed))],
+                    held.left, finished), List::append_nil(row_counts(width, mask, totals) ++ total_name())),
+                False => λ _ => refl,
+            })(ok),
+            Cons(_, _) => λ _ never => false_elim(never),
+        },
+        Cons(name, more) => λ runs => match runs as λ r => (totals: Nat → BitVec(64)) →
+                FilesOk(shape, column, mask, width, n, total, Cons(name, more), r, totals) → RunsWritten(r) → (failed: Bool) →
+                sent_to(BitVec::ofNat(1), files_events(shape, column, mask, width, n, total, Cons(name, more), r, failed, totals)) =
+                    files_out(shape, column, mask, width, n, Cons(name, more), r, totals) {
+            Nil => λ _ never => false_elim(never),
+            Cons(run, later) => λ totals ok written failed => split_sends(shape, column, mask, width, name, run, failed, totals,
+                λ f t => files_events(shape, column, mask, width, n, total, more, later, f, t),
+                files_out(shape, column, mask, width, n, more, later, totals_after(shape, column, name, run, totals)), written.left,
+                names_stdin(name), ok.left,
+                λ f => files_sends(shape, column, mask, width, n, total, finished, more)(later, totals_after(shape, column, name, run, totals),
+                    ok.right, written.right, f)),
+        },
+    }
+}
+// The stat pass sends nothing.
+theorem stat_sends(targets: List<StatTarget>): (results: List<StatResult>) → (after: List<LinuxEvent>) →
+    sent_to(BitVec::ofNat(1), stat_events(targets, results) ++ after) = sent_to(BitVec::ofNat(1), after) {
+    match targets as λ t => (results: List<StatResult>) → (after: List<LinuxEvent>) →
+            sent_to(BitVec::ofNat(1), stat_events(t, results) ++ after) = sent_to(BitVec::ofNat(1), after) {
+        Nil => λ _ _ => refl,
+        Cons(target, rest) => λ results => match results as λ r => (after: List<LinuxEvent>) →
+                sent_to(BitVec::ofNat(1), stat_events(Cons(target, rest), r) ++ after) = sent_to(BitVec::ofNat(1), after) {
+            Nil => λ _ => refl,
+            Cons(_, more) => λ after => stat_sends(rest, more, after),
+        },
+    }
+}
+// No operand: stdin's reads and its unnamed row; else the files.
+theorem inputs_sends<C>(shape: FilterShape<C>, column: Nat → C → BitVec(64), mask: BitVec(64), width: Nat, history: CommandHistory,
+    operands: List<List<BitVec(8)>>): InputsOk(shape, column, mask, width, operands, history) → InputsWritten(operands, history) →
+    sent_to(BitVec::ofNat(1), inputs_events(shape, column, mask, width, operands, history)) = inputs_out(shape, column, mask, width, operands, history) {
+    match operands as λ o => InputsOk(shape, column, mask, width, o, history) → InputsWritten(o, history) →
+            sent_to(BitVec::ofNat(1), inputs_events(shape, column, mask, width, o, history)) = inputs_out(shape, column, mask, width, o, history) {
+        Nil => match history.runs as λ r => (match r as λ _ => Type {
+                    Nil => False,
+                    Cons(run, later) => ReadsOk<C>(shape, run) ∧
+                        (RowWriteOk(row_counts(width, mask, input_counts(shape, column, eof_input(run.steps))) ++ [newline()], run.counts) ∧
+                            (later = Nil)),
+                }) → (match r as λ _ => Type {
+                    Nil => True,
+                    Cons(run, _) => ReadsEnded(run.ending) ∧ (run.counts.ending = Finished),
+                }) → sent_to(BitVec::ofNat(1), match r { Nil => Nil, Cons(run, _) => stdin_events(shape, column, mask, width, run) }) =
+                    (match r {
+                        Nil => Nil,
+                        Cons(run, _) => filter_emitted(shape.step, eof_input(run.steps), shape.init) ++
+                            (row_counts(width, mask, input_counts(shape, column, eof_input(run.steps))) ++ [newline()]),
+                    }) {
+            Nil => λ never _ => false_elim(never),
+            Cons(run, later) => λ ok written => {
+                let input = eof_input(run.steps);
+                let bytes = row_counts(width, mask, input_counts(shape, column, input)) ++ [newline()];
+                let ended = λ (seen: List<BitVec(8)>) (_: Nat) => stdin_row(shape, column, mask, width, run, seen, True);
+                let tail = stdin_row(shape, column, mask, width, run, input, False);
+                let row = λ (f: Bool) => trans(row_write_sends(bytes, run.counts, [ExitEvent(status_word(f))], ok.right.left.left, written.right),
+                    List::append_nil(bytes));
+                let after: (sent_to(BitVec::ofNat(1), eof_after(run.ending, ended, tail, input)) = bytes) =
+                    (match run.ending as λ en => ReadsEnded(en) → sent_to(BitVec::ofNat(1), eof_after(en, ended, tail, input)) = bytes {
+                        AtEnd => λ _ => row(False),
+                        FailedWith(_) => λ _ => row(True),
+                        EndedIn(_, _) => λ never => false_elim(never),
+                    })(written.left);
+                trans(eof_sends(shape, BitVec::zero(), ended, run.ending, tail, written.left, run.steps, Nil, ok.left.steps),
+                    cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ x => filter_emitted(shape.step, input, shape.init) ++ x, after))
+            },
+        },
+        Cons(name, more) => λ ok written => files_sends(shape, column, mask, width, Cons(name, more).len(), history.total, written.right,
+            Cons(name, more))(history.runs, no_counts(), ok, written.left, False),
+    }
+}
+// The stdout corollary: on a run whose reads end at end of file or at a
+// failed read and whose writes all finish, stdout receives `command_stdout`.
+theorem command_sends<C>(shape: FilterShape<C>, column: Nat → C → BitVec(64), letters: List<BitVec(8)>, default: BitVec(64),
+    argv: List<List<BitVec(8)>>, history: CommandHistory, ok: CommandHistoryOk(shape, column, letters, default, argv, history),
+    written: CommandWritten(letters, default, argv, history)):
+    sent_to(BitVec::ofNat(1), command_events(shape, column, letters, default, argv, history)) =
+        command_stdout(shape, column, letters, default, argv, history) {
+    (match parse_args(letters, default, argv) as λ r => (match r as λ _ => Type {
+                Refused => True,
+                Scanned(mask, operands) => match stats_made(mask, operands.len()) as λ _ => Type {
+                    True => StatsFit(stat_targets(operands), history.stats) ∧
+                        InputsOk(shape, column, mask, stat_width(history.stats.map(stat_seen)), operands, history),
+                    False => InputsOk(shape, column, mask, 1, operands, history),
+                },
+            }) → (match r as λ _ => Type { Refused => True, Scanned(_, operands) => InputsWritten(operands, history) }) →
+            sent_to(BitVec::ofNat(1), match r {
+                Refused => [ExitEvent(BitVec::ofNat(1))],
+                Scanned(mask, operands) => match stats_made(mask, operands.len()) {
+                    True => stat_events(stat_targets(operands), history.stats) ++
+                        inputs_events(shape, column, mask, stat_width(history.stats.map(stat_seen)), operands, history),
+                    False => inputs_events(shape, column, mask, 1, operands, history),
+                },
+            }) = (match r {
+                Refused => Nil,
+                Scanned(mask, operands) => inputs_out(shape, column, mask, command_width(mask, operands.len(), history.stats), operands, history),
+            }) {
+        Refused => λ _ _ => refl,
+        Scanned(mask, operands) => λ held written2 => (match stats_made(mask, operands.len()) as λ c => (match c as λ _ => Type {
+                    True => StatsFit(stat_targets(operands), history.stats) ∧
+                        InputsOk(shape, column, mask, stat_width(history.stats.map(stat_seen)), operands, history),
+                    False => InputsOk(shape, column, mask, 1, operands, history),
+                }) → sent_to(BitVec::ofNat(1), match c {
+                    True => stat_events(stat_targets(operands), history.stats) ++
+                        inputs_events(shape, column, mask, stat_width(history.stats.map(stat_seen)), operands, history),
+                    False => inputs_events(shape, column, mask, 1, operands, history),
+                }) = inputs_out(shape, column, mask, match c { True => stat_width(history.stats.map(stat_seen)), False => 1 }, operands, history) {
+            True => λ fits => trans(stat_sends(stat_targets(operands), history.stats,
+                    inputs_events(shape, column, mask, stat_width(history.stats.map(stat_seen)), operands, history)),
+                inputs_sends(shape, column, mask, stat_width(history.stats.map(stat_seen)), history, operands, fits.right, written2)),
+            False => λ fits => inputs_sends(shape, column, mask, 1, history, operands, fits, written2),
+        })(held),
+    })(ok, written)
+}
+
+// ---------------------------------------------------------------------------
+// The status corollary: such a run ends in `exit(command_status)`.
+
+theorem write_ends(steps: List<WriteStep>, after: List<LinuxEvent>, last: LinuxEvent, ends: EndsIn(after, last)):
+    (bytes: List<BitVec(8)>) → EndsIn(write_events_then(bytes, steps, Finished, after), last) {
+    match steps as λ ss => (bytes: List<BitVec(8)>) → EndsIn(write_events_then(bytes, ss, Finished, after), last) {
+        Nil => λ bytes => ends_cons(WriteEvent(BitVec::ofNat(1), bytes, Wrote(bytes.len())), after, last, ends),
+        Cons(step, rest) => match step as λ st => (bytes: List<BitVec(8)>) → EndsIn(write_events_then(bytes, Cons(st, rest), Finished, after), last) {
+            Partial(count) => λ bytes => ends_cons(WriteEvent(BitVec::ofNat(1), bytes, Wrote(count)),
+                write_events_then(bytes.drop(count), rest, Finished, after), last, write_ends(rest, after, last, ends, bytes.drop(count))),
+            WriteInterrupted => λ bytes => ends_cons(WriteEvent(BitVec::ofNat(1), bytes, WriteFailed(eintr())),
+                write_events_then(bytes, rest, Finished, after), last, write_ends(rest, after, last, ends, bytes)),
+        },
+    }
+}
+theorem row_write_ends(bytes: List<BitVec(8)>, write: RowWrite, after: List<LinuxEvent>, last: LinuxEvent, finished: write.ending = Finished,
+    ends: EndsIn(after, last)): EndsIn(write_events_then(bytes, write.steps, write.ending, after), last) {
+    j(sym(finished), λ e _ => EndsIn(write_events_then(bytes, write.steps, e, after), last), write_ends(write.steps, after, last, ends, bytes))
+}
+theorem chunk_ends(out: List<BitVec(8)>, writes: List<WriteStep>, after: List<LinuxEvent>, last: LinuxEvent, ends: EndsIn(after, last)):
+    EndsIn(chunk_events(out, writes, Finished, after), last) {
+    match out as λ o => EndsIn(chunk_events(o, writes, Finished, after), last) {
+        Nil => ends,
+        Cons(c, more) => write_ends(writes, after, last, ends, Cons(c, more)),
+    }
+}
+// What follows the reads ends in `last`: the tail at end of file, the
+// failure's continuation from whatever was read.
+fn EndsAfter<Y>(ending: EofEnd<Y>, failed: List<BitVec(8)> → Nat → List<LinuxEvent>, tail: List<LinuxEvent>, last: LinuxEvent) → Type {
+    match ending as λ _ => Type {
+        AtEnd => EndsIn(tail, last),
+        FailedWith(errno) => (seen: List<BitVec(8)>) → EndsIn(failed(seen, errno), last),
+        EndedIn(_, _) => False,
+    }
+}
+theorem eof_ends<C>(shape: FilterShape<C>, fd: BitVec(64), failed: List<BitVec(8)> → Nat → List<LinuxEvent>, ending: EofEnd<WriteFailure>,
+    tail: List<LinuxEvent>, last: LinuxEvent, after: EndsAfter(ending, failed, tail, last), steps: List<EofStep<List<WriteStep>>>):
+    (seen: List<BitVec(8)>) → EndsIn(eof_run(fd, filter_body(shape), filter_failed(shape), failed, steps, ending, tail, seen), last) {
+    match steps as λ ss => (seen: List<BitVec(8)>) → EndsIn(eof_run(fd, filter_body(shape), filter_failed(shape), failed, ss, ending, tail, seen), last) {
+        Nil => λ seen => (match ending as λ en => EndsAfter(en, failed, tail, last) →
+                EndsIn(eof_run(fd, filter_body(shape), filter_failed(shape), failed, Nil, en, tail, seen), last) {
+            AtEnd => λ ends => ends_cons(ReadEvent(fd, ReadBytes(Nil)), tail, last, ends),
+            FailedWith(errno) => λ ends => ends_cons(ReadEvent(fd, ReadFailed(errno)), failed(seen, errno), last, ends(seen)),
+            EndedIn(_, _) => λ never => false_elim(never),
+        })(after),
+        Cons(step, rest) => match step as λ st => (seen: List<BitVec(8)>) →
+                EndsIn(eof_run(fd, filter_body(shape), filter_failed(shape), failed, Cons(st, rest), ending, tail, seen), last) {
+            Chunk(bytes, writes) => λ seen => {
+                let later = eof_run(fd, filter_body(shape), filter_failed(shape), failed, rest, ending, tail, seen ++ bytes);
+                ends_cons(ReadEvent(fd, ReadBytes(bytes)), chunk_events(chunk_out(shape, seen, bytes), writes, Finished, later), last,
+                    chunk_ends(chunk_out(shape, seen, bytes), writes, later, last, eof_ends(shape, fd, failed, ending, tail, last, after, rest, seen ++ bytes)))
+            },
+            Interrupted => λ seen => ends_cons(ReadEvent(fd, ReadFailed(eintr())),
+                eof_run(fd, filter_body(shape), filter_failed(shape), failed, rest, ending, tail, seen), last,
+                eof_ends(shape, fd, failed, ending, tail, last, after, rest, seen)),
+        },
+    }
+}
+
+// The status after a row, with the close's failure when there is a close.
+fn closed_failed(closes: Bool, closed: CloseResult, failed: Bool) → Bool { match closes { False => failed, True => failed || close_failed(closed) } }
+fn RestEnds(rest: Bool → (Nat → BitVec(64)) → List<LinuxEvent>, final: Bool → Bool) → Type {
+    (f: Bool) → (t: Nat → BitVec(64)) → EndsIn(rest(f, t), ExitEvent(status_word(final(f))))
+}
+theorem named_row_ends<C>(shape: FilterShape<C>, column: Nat → C → BitVec(64), mask: BitVec(64), width: Nat, name: List<BitVec(8)>,
+    run: OperandRun, fd: BitVec(64), closes: Bool, input: List<BitVec(8)>, failed: Bool, totals: Nat → BitVec(64),
+    rest: Bool → (Nat → BitVec(64)) → List<LinuxEvent>, final: Bool → Bool, written: RunWritten(run), rest_ends: RestEnds(rest, final)):
+    EndsIn(named_row(shape, column, mask, width, name, run, fd, closes, input, failed, totals, rest),
+        ExitEvent(status_word(final(closed_failed(closes, run.closed, failed))))) {
+    let t = add_counts(totals, input_counts(shape, column, input));
+    let closed = closing(fd, closes, run.closed, failed, t, rest);
+    let last = ExitEvent(status_word(final(closed_failed(closes, run.closed, failed))));
+    let closed_ends: EndsIn(closed, last) = (match closes as λ c => EndsIn(closing(fd, c, run.closed, failed, t, rest),
+            ExitEvent(status_word(final(closed_failed(c, run.closed, failed))))) {
+        False => rest_ends(failed, t),
+        True => ends_cons(CloseEvent(fd, run.closed), rest(failed || close_failed(run.closed), t), ExitEvent(status_word(final(failed ||
+            close_failed(run.closed)))), rest_ends(failed || close_failed(run.closed), t)),
+    });
+    let third = write_events_then([newline()], run.newline.steps, run.newline.ending, closed);
+    let second = write_events_then(name, run.name.steps, run.name.ending, third);
+    row_write_ends(row_counts(width, mask, input_counts(shape, column, input)) ++ [field_gap()], run.counts, second, last, written.counts,
+        row_write_ends(name, run.name, third, last, written.name, row_write_ends([newline()], run.newline, closed, last, written.newline,
+            closed_ends)))
+}
+theorem file_reads_ends<C>(shape: FilterShape<C>, column: Nat → C → BitVec(64), mask: BitVec(64), width: Nat, name: List<BitVec(8)>,
+    run: OperandRun, fd: BitVec(64), closes: Bool, failed: Bool, totals: Nat → BitVec(64), rest: Bool → (Nat → BitVec(64)) → List<LinuxEvent>,
+    final: Bool → Bool, written: RunWritten(run), rest_ends: RestEnds(rest, final)):
+    EndsIn(file_reads(shape, column, mask, width, name, run, fd, closes, failed, totals, rest),
+        ExitEvent(status_word(final(closed_failed(closes, run.closed, reads_failed(run.ending, failed)))))) {
+    let input = eof_input(run.steps);
+    let ended = λ (seen: List<BitVec(8)>) (_: Nat) => named_row(shape, column, mask, width, name, run, fd, closes, seen, True, totals, rest);
+    let tail = named_row(shape, column, mask, width, name, run, fd, closes, input, failed, totals, rest);
+    let after = (match run.ending as λ en => ReadsEnded(en) →
+            EndsAfter(en, ended, tail, ExitEvent(status_word(final(closed_failed(closes, run.closed, reads_failed(en, failed)))))) {
+        AtEnd => λ _ => named_row_ends(shape, column, mask, width, name, run, fd, closes, input, failed, totals, rest, final, written, rest_ends),
+        FailedWith(_) => λ _ seen => named_row_ends(shape, column, mask, width, name, run, fd, closes, seen, True, totals, rest, final, written,
+            rest_ends),
+        EndedIn(_, _) => λ never => false_elim(never),
+    })(written.reads);
+    eof_ends(shape, fd, ended, run.ending, tail, ExitEvent(status_word(final(closed_failed(closes, run.closed, reads_failed(run.ending, failed))))),
+        after, run.steps, Nil)
+}
+fn split_failed(stdin: Bool, run: OperandRun, failed: Bool) → Bool {
+    match stdin { True => reads_failed(run.ending, failed), False => opened_failed(run, failed) }
+}
+theorem split_ends<C>(shape: FilterShape<C>, column: Nat → C → BitVec(64), mask: BitVec(64), width: Nat, name: List<BitVec(8)>,
+    run: OperandRun, failed: Bool, totals: Nat → BitVec(64), rest: Bool → (Nat → BitVec(64)) → List<LinuxEvent>, final: Bool → Bool,
+    written: RunWritten(run), rest_ends: RestEnds(rest, final), stdin: Bool):
+    EndsIn(split_events(stdin, shape, column, mask, width, name, run, failed, totals, rest), ExitEvent(status_word(final(split_failed(stdin, run, failed))))) {
+    match stdin as λ c => EndsIn(split_events(c, shape, column, mask, width, name, run, failed, totals, rest),
+            ExitEvent(status_word(final(split_failed(c, run, failed))))) {
+        True => file_reads_ends(shape, column, mask, width, name, run, BitVec::zero(), False, failed, totals, rest, final, written, rest_ends),
+        False => match run.opened as λ o => EndsIn(Cons(OpenEvent(name, o), match o {
+                    Opened(fd) => file_reads(shape, column, mask, width, name, run, word_of_nat(64, fd), True, failed, totals, rest),
+                    OpenFailed(_) => rest(True, totals),
+                }), ExitEvent(status_word(final(match o {
+                    Opened(_) => reads_failed(run.ending, failed) || close_failed(run.closed),
+                    OpenFailed(_) => True,
+                })))) {
+            Opened(fd) => ends_cons(OpenEvent(name, Opened(fd)),
+                file_reads(shape, column, mask, width, name, run, word_of_nat(64, fd), True, failed, totals, rest),
+                ExitEvent(status_word(final(reads_failed(run.ending, failed) || close_failed(run.closed)))),
+                file_reads_ends(shape, column, mask, width, name, run, word_of_nat(64, fd), True, failed, totals, rest, final, written, rest_ends)),
+            OpenFailed(errno) => ends_cons(OpenEvent(name, OpenFailed(errno)), rest(True, totals), ExitEvent(status_word(final(True))),
+                rest_ends(True, totals)),
+        },
+    }
+}
+
+// One run per operand.
+fn RunsFit(operands: List<List<BitVec(8)>>) → List<OperandRun> → Type {
+    match operands {
+        Nil => λ runs => match runs as λ _ => Type { Nil => True, Cons(_, _) => False },
+        Cons(_, more) => λ runs => match runs as λ _ => Type { Nil => False, Cons(_, later) => RunsFit(more, later) },
+    }
+}
+theorem files_fit<C>(shape: FilterShape<C>, column: Nat → C → BitVec(64), mask: BitVec(64), width, n: Nat, total: RowWrite,
+    operands: List<List<BitVec(8)>>): (runs: List<OperandRun>) → (totals: Nat → BitVec(64)) →
+    FilesOk(shape, column, mask, width, n, total, operands, runs, totals) → RunsFit(operands, runs) {
+    match operands as λ o => (runs: List<OperandRun>) → (totals: Nat → BitVec(64)) →
+            FilesOk(shape, column, mask, width, n, total, o, runs, totals) → RunsFit(o, runs) {
+        Nil => λ runs => match runs as λ r => (totals: Nat → BitVec(64)) → FilesOk(shape, column, mask, width, n, total, Nil, r, totals) →
+                RunsFit(Nil, r) {
+            Nil => λ _ _ => trivial,
+            Cons(_, _) => λ _ never => false_elim(never),
+        },
+        Cons(name, more) => λ runs => match runs as λ r => (totals: Nat → BitVec(64)) →
+                FilesOk(shape, column, mask, width, n, total, Cons(name, more), r, totals) → RunsFit(Cons(name, more), r) {
+            Nil => λ _ never => false_elim(never),
+            Cons(run, later) => λ totals ok => files_fit(shape, column, mask, width, n, total, more, later,
+                totals_after(shape, column, name, run, totals), ok.right),
+        },
+    }
+}
+fn FilesEnd<C>(shape: FilterShape<C>, column: Nat → C → BitVec(64), mask: BitVec(64), width, n: Nat, total: RowWrite,
+    operands: List<List<BitVec(8)>>) → Type {
+    (runs: List<OperandRun>) → RunsFit(operands, runs) → RunsWritten(runs) → RestEnds(λ f t =>
+        files_events(shape, column, mask, width, n, total, operands, runs, f, t), λ f => files_failed(operands, runs, f))
+}
+theorem files_ends<C>(shape: FilterShape<C>, column: Nat → C → BitVec(64), mask: BitVec(64), width, n: Nat, total: RowWrite,
+    finished: total.ending = Finished, operands: List<List<BitVec(8)>>): FilesEnd<C>(shape, column, mask, width, n, total, operands) {
+    match operands as λ o => FilesEnd<C>(shape, column, mask, width, n, total, o) {
+        Nil => λ runs => match runs as λ r => RunsFit(Nil, r) → RunsWritten(r) → RestEnds(λ f t =>
+                files_events(shape, column, mask, width, n, total, Nil, r, f, t), λ f => files_failed(Nil, r, f)) {
+            Nil => λ _ _ f t => (match Nat::leb(2, n) as λ c => EndsIn(match c {
+                    True => write_events_then(row_counts(width, mask, t) ++ total_name(), total.steps, total.ending, [ExitEvent(status_word(f))]),
+                    False => [ExitEvent(status_word(f))],
+                }, ExitEvent(status_word(f))) {
+                True => row_write_ends(row_counts(width, mask, t) ++ total_name(), total, [ExitEvent(status_word(f))], ExitEvent(status_word(f)),
+                    finished, refl),
+                False => refl,
+            }),
+            Cons(_, _) => λ never => false_elim(never),
+        },
+        Cons(name, more) => λ runs => match runs as λ r => RunsFit(Cons(name, more), r) → RunsWritten(r) → RestEnds(λ f t =>
+                files_events(shape, column, mask, width, n, total, Cons(name, more), r, f, t), λ f => files_failed(Cons(name, more), r, f)) {
+            Nil => λ never => false_elim(never),
+            Cons(run, later) => λ fit written f t => split_ends(shape, column, mask, width, name, run, f, t,
+                λ f2 t2 => files_events(shape, column, mask, width, n, total, more, later, f2, t2), λ f2 => files_failed(more, later, f2),
+                written.left, files_ends(shape, column, mask, width, n, total, finished, more, later, fit, written.right), names_stdin(name)),
+        },
+    }
+}
+theorem inputs_ends<C>(shape: FilterShape<C>, column: Nat → C → BitVec(64), mask: BitVec(64), width: Nat, history: CommandHistory,
+    operands: List<List<BitVec(8)>>): InputsOk(shape, column, mask, width, operands, history) → InputsWritten(operands, history) →
+    EndsIn(inputs_events(shape, column, mask, width, operands, history), ExitEvent(status_word(inputs_failed(operands, history)))) {
+    match operands as λ o => InputsOk(shape, column, mask, width, o, history) → InputsWritten(o, history) →
+            EndsIn(inputs_events(shape, column, mask, width, o, history), ExitEvent(status_word(inputs_failed(o, history)))) {
+        Nil => match history.runs as λ r => (match r as λ _ => Type {
+                    Nil => False,
+                    Cons(run, later) => ReadsOk<C>(shape, run) ∧
+                        (RowWriteOk(row_counts(width, mask, input_counts(shape, column, eof_input(run.steps))) ++ [newline()], run.counts) ∧
+                            (later = Nil)),
+                }) → (match r as λ _ => Type {
+                    Nil => True,
+                    Cons(run, _) => ReadsEnded(run.ending) ∧ (run.counts.ending = Finished),
+                }) → EndsIn(match r { Nil => Nil, Cons(run, _) => stdin_events(shape, column, mask, width, run) },
+                    ExitEvent(status_word(match r { Nil => False, Cons(run, _) => reads_failed(run.ending, False) }))) {
+            Nil => λ never _ => false_elim(never),
+            Cons(run, later) => λ ok written => {
+                let input = eof_input(run.steps);
+                let bytes = row_counts(width, mask, input_counts(shape, column, input)) ++ [newline()];
+                let ended = λ (seen: List<BitVec(8)>) (_: Nat) => stdin_row(shape, column, mask, width, run, seen, True);
+                let tail = stdin_row(shape, column, mask, width, run, input, False);
+                let after = (match run.ending as λ en => ReadsEnded(en) →
+                        EndsAfter(en, ended, tail, ExitEvent(status_word(reads_failed(en, False)))) {
+                    AtEnd => λ _ => row_write_ends(bytes, run.counts, [ExitEvent(status_word(False))], ExitEvent(status_word(False)),
+                        written.right, refl),
+                    FailedWith(_) => λ _ seen => row_write_ends(row_counts(width, mask, input_counts(shape, column, seen)) ++ [newline()], run.counts,
+                        [ExitEvent(status_word(True))], ExitEvent(status_word(True)), written.right, refl),
+                    EndedIn(_, _) => λ never => false_elim(never),
+                })(written.left);
+                eof_ends(shape, BitVec::zero(), ended, run.ending, tail, ExitEvent(status_word(reads_failed(run.ending, False))), after, run.steps, Nil)
+            },
+        },
+        Cons(name, more) => λ ok written => files_ends(shape, column, mask, width, Cons(name, more).len(), history.total, written.right,
+            Cons(name, more))(history.runs, files_fit(shape, column, mask, width, Cons(name, more).len(), history.total, Cons(name, more),
+                history.runs, no_counts(), ok), written.left, False, no_counts()),
+    }
+}
+// The stat pass's events come before the rest's last.
+theorem stat_ends(after: List<LinuxEvent>, last: LinuxEvent, ends: EndsIn(after, last), targets: List<StatTarget>):
+    (results: List<StatResult>) → EndsIn(stat_events(targets, results) ++ after, last) {
+    match targets as λ t => (results: List<StatResult>) → EndsIn(stat_events(t, results) ++ after, last) {
+        Nil => λ _ => ends,
+        Cons(target, rest) => λ results => match results as λ r => EndsIn(stat_events(Cons(target, rest), r) ++ after, last) {
+            Nil => ends,
+            Cons(result, more) => ends_cons(StatEvent(target, result), stat_events(rest, more) ++ after, last,
+                stat_ends(after, last, ends, rest, more)),
+        },
+    }
+}
+// The status corollary: on a run whose reads end at end of file or at a
+// failed read and whose writes all finish, the last event is
+// `exit(command_status)`. (A failed write ends the run in exit(1) right
+// after it, by `write_events_then`.)
+theorem command_exits<C>(shape: FilterShape<C>, column: Nat → C → BitVec(64), letters: List<BitVec(8)>, default: BitVec(64),
+    argv: List<List<BitVec(8)>>, history: CommandHistory, ok: CommandHistoryOk(shape, column, letters, default, argv, history),
+    written: CommandWritten(letters, default, argv, history)):
+    EndsIn(command_events(shape, column, letters, default, argv, history), ExitEvent(command_status(letters, default, argv, history))) {
+    (match parse_args(letters, default, argv) as λ r => (match r as λ _ => Type {
+                Refused => True,
+                Scanned(mask, operands) => match stats_made(mask, operands.len()) as λ _ => Type {
+                    True => StatsFit(stat_targets(operands), history.stats) ∧
+                        InputsOk(shape, column, mask, stat_width(history.stats.map(stat_seen)), operands, history),
+                    False => InputsOk(shape, column, mask, 1, operands, history),
+                },
+            }) → (match r as λ _ => Type { Refused => True, Scanned(_, operands) => InputsWritten(operands, history) }) →
+            EndsIn(match r {
+                Refused => [ExitEvent(BitVec::ofNat(1))],
+                Scanned(mask, operands) => match stats_made(mask, operands.len()) {
+                    True => stat_events(stat_targets(operands), history.stats) ++
+                        inputs_events(shape, column, mask, stat_width(history.stats.map(stat_seen)), operands, history),
+                    False => inputs_events(shape, column, mask, 1, operands, history),
+                },
+            }, ExitEvent(match r { Refused => BitVec::ofNat(1), Scanned(_, operands) => status_word(inputs_failed(operands, history)) })) {
+        Refused => λ _ _ => refl,
+        Scanned(mask, operands) => λ held written2 => (match stats_made(mask, operands.len()) as λ c => (match c as λ _ => Type {
+                    True => StatsFit(stat_targets(operands), history.stats) ∧
+                        InputsOk(shape, column, mask, stat_width(history.stats.map(stat_seen)), operands, history),
+                    False => InputsOk(shape, column, mask, 1, operands, history),
+                }) → EndsIn(match c {
+                    True => stat_events(stat_targets(operands), history.stats) ++
+                        inputs_events(shape, column, mask, stat_width(history.stats.map(stat_seen)), operands, history),
+                    False => inputs_events(shape, column, mask, 1, operands, history),
+                }, ExitEvent(status_word(inputs_failed(operands, history)))) {
+            True => λ fits => stat_ends(inputs_events(shape, column, mask, stat_width(history.stats.map(stat_seen)), operands, history),
+                ExitEvent(status_word(inputs_failed(operands, history))),
+                inputs_ends(shape, column, mask, stat_width(history.stats.map(stat_seen)), history, operands, fits.right, written2),
+                stat_targets(operands), history.stats),
+            False => λ fits => inputs_ends(shape, column, mask, 1, history, operands, fits, written2),
+        })(held),
+    })(ok, written)
+}

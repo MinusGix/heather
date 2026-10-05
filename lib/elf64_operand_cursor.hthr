@@ -233,13 +233,21 @@ fn ArgvPointers(memory: IoMemory, rsp: BitVec(64), args: List<List<BitVec(8)>>) 
         },
     }
 }
+// The frame is the command's own page of variables, so argv holds whatever it
+// holds too: `with_frame` is the image with another frame.
+fn with_frame(file: IoImage, frame: Nat → BitVec(8)) → IoImage { IoImage(file.bytes, frame, file.rest) }
 fn ArgvStays(file: IoImage, rsp: BitVec(64), args: List<List<BitVec(8)>>, pointers: List<BitVec(64)>, k: Nat) → Type {
-    (page: Nat → BitVec(8)) → ArgvPointers(IoMemory(file, page), rsp, args, pointers, k)
+    (frame: Nat → BitVec(8)) → (page: Nat → BitVec(8)) → ArgvPointers(IoMemory(with_frame(file, frame), page), rsp, args, pointers, k)
 }
-// The command line at RSP, argc and argv, whatever the page holds.
+// The command line at RSP, argc and argv, whatever the frame and the page hold.
 fn ArgvStaysAt(file: IoImage, rsp: BitVec(64), argv: List<List<BitVec(8)>>, pointers: List<BitVec(64)>) → Type {
-    (page: Nat → BitVec(8)) → WordAt(io_data_access(), IoMemory(file, page), rsp, word_of_nat(64, argv.len())) ∧
-        ArgvPointers(IoMemory(file, page), rsp, argv, pointers, 1)
+    (frame: Nat → BitVec(8)) → (page: Nat → BitVec(8)) →
+        WordAt(io_data_access(), IoMemory(with_frame(file, frame), page), rsp, word_of_nat(64, argv.len())) ∧
+        ArgvPointers(IoMemory(with_frame(file, frame), page), rsp, argv, pointers, 1)
+}
+// One argument's string, whatever the frame and the page hold.
+fn ArgStays(file: IoImage, pointer: BitVec(64), arg: List<BitVec(8)>) → Type {
+    (frame: Nat → BitVec(8)) → (page: Nat → BitVec(8)) → CStringAt(io_data_access(), IoMemory(with_frame(file, frame), page), pointer, arg)
 }
 
 theorem pointers_argv(memory: IoMemory, rsp: BitVec(64), args: List<List<BitVec(8)>>):
@@ -258,7 +266,7 @@ theorem pointers_argv(memory: IoMemory, rsp: BitVec(64), args: List<List<BitVec(
 // The layout the scan reads, at any one page.
 theorem stays_argv_at(file: IoImage, rsp: BitVec(64), argv: List<List<BitVec(8)>>, pointers: List<BitVec(64)>,
     stays: ArgvStaysAt(file, rsp, argv, pointers), page: Nat → BitVec(8)): ArgvAt(io_data_access(), IoMemory(file, page), rsp, argv) {
-    ⟨(stays(page)).left, pointers_argv(IoMemory(file, page), rsp, argv, pointers, 1, (stays(page)).right)⟩
+    ⟨(stays(file.frame, page)).left, pointers_argv(IoMemory(file, page), rsp, argv, pointers, 1, (stays(file.frame, page)).right)⟩
 }
 
 // ---------------------------------------------------------------------------
@@ -305,7 +313,7 @@ fn CursorOut(file: IoImage, page: Nat → BitVec(8), at, rsp: BitVec(64), origin
         Nil => (read_gpr(Rsi, state.gprs) = word_zero()) ∧ CursorRest(file, page, at, rsp, origin, Nil, state),
         Cons(arg, more) => Exists<BitVec(64)>(λ pointer => (read_gpr(Rsi, state.gprs) = pointer) ∧ ((0 < pointer.toNat()) ∧
             ((pointer.toNat() + arg.len() + 1 <= Nat::pow(2, 47)) ∧
-            (((page2: Nat → BitVec(8)) → CStringAt(io_data_access(), IoMemory(file, page2), pointer, arg)) ∧
+            ((ArgStays(file, pointer, arg)) ∧
             CursorRest(file, page, at, rsp, origin, more, state))))),
     }
 }
@@ -331,7 +339,7 @@ theorem cursor_found(file: IoImage, page: Nat → BitVec(8), at, rsp: BitVec(64)
     arg: List<BitVec(8)>, rest: List<List<BitVec(8)>>, pointer: BitVec(64), pointers: List<BitVec(64)>, state: MachineState<IoMemory>,
     memory_is: state.memory = IoMemory(file, page), rip_is: state.rip = next_rip(at, cursor_len()), rsi: read_gpr(Rsi, state.gprs) = pointer,
     positive: 0 < pointer.toNat(), bound: pointer.toNat() + arg.len() + 1 <= Nat::pow(2, 47),
-    string: (page2: Nat → BitVec(8)) → CStringAt(io_data_access(), IoMemory(file, page2), pointer, arg),
+    string: ArgStays(file, pointer, arg),
     later: ArgvStays(file, rsp, rest, pointers, k), regs: CursorRegs(rsp, k, ended, origin, state.gprs)):
     CursorOut(file, page, at, rsp, origin, Cons(arg, operands_from(ended, rest)), state) {
     Exists(pointer, ⟨rsi, ⟨positive, ⟨bound, ⟨string,
@@ -349,7 +357,7 @@ theorem cursor_none(file: IoImage, page: Nat → BitVec(8), at: BitVec(64), piec
     let fetch = io_fetch_access();
     let data = io_data_access();
     let loaded = run_word_load(file, page, scan_slot_load(), at, 0, piece(0), state, head.memory_is, head.rip_is, word_zero(),
-        j(sym(head.regs.left), λ a _ => WordAt(data, IoMemory(file, page), a, word_zero()), argv(page)));
+        j(sym(head.regs.left), λ a _ => WordAt(data, IoMemory(file, page), a, word_zero()), argv(file.frame, page)));
     let s1 = word_load_after(scan_slot_load(), word_zero(), state);
     let tested = run_block(file, page, scan_null_block(), at, 3, piece(1), s1, loaded.memory_is, loaded.rip_is);
     let s2 = execute_block_normal(scan_null_block(), s1);
@@ -373,7 +381,7 @@ record CursorHead(file: IoImage, page: Nat → BitVec(8), at, rsp: BitVec(64), k
     rsi: read_gpr(Rsi, state.gprs) = pointer,
     positive: 0 < pointer.toNat(),
     bound: pointer.toNat() + arg.len() + 1 <= Nat::pow(2, 47),
-    string: (page2: Nat → BitVec(8)) → CStringAt(io_data_access(), IoMemory(file, page2), pointer, arg),
+    string: ArgStays(file, pointer, arg),
     later: ArgvStays(file, rsp, rest, pointers, k),
     regs: CursorRegs(rsp, k, ended, origin, state.gprs),
 }
@@ -387,9 +395,9 @@ theorem cursor_head(file: IoImage, page: Nat → BitVec(8), at: BitVec(64), piec
     match pointers as λ q => ArgvStays(file, rsp, Cons(arg, rest), q, k) →
             Exists<MachineState<IoMemory>>(λ after => FetchedSteps(fetch, data, state, after) ∧
                 CursorHead(file, page, at, rsp, Succ(k), ended, origin, arg, rest, after)) {
-        Nil => λ never => false_elim(never(page)),
+        Nil => λ never => false_elim(never(file.frame, page)),
         Cons(p, more) => λ stays => {
-            let facts = stays(page);
+            let facts = stays(file.frame, page);
             let loaded = run_word_load(file, page, scan_slot_load(), at, 0, piece(0), state, head.memory_is, head.rip_is, p,
                 j(sym(head.regs.left), λ a _ => WordAt(data, IoMemory(file, page), a, p), facts.left));
             let s1 = word_load_after(scan_slot_load(), p, state);
@@ -407,7 +415,7 @@ theorem cursor_head(file: IoImage, page: Nat → BitVec(8), at: BitVec(64), piec
                 CursorHead(pointer := p, pointers := more, memory_is := bumped.memory_is, rip_is := bumped.rip_is,
                     zf := trans(cong_fn<BitVec(64), Bool>(λ a => is_zero_bits(64, a.sub(word_zero())), regs.right.left), ended_flag(ended)),
                     rsi := refl, positive := facts.right.left, bound := facts.right.right.left,
-                    string := λ page2 => (stays(page2)).right.right.right.left, later := λ page2 => (stays(page2)).right.right.right.right,
+                    string := λ frame2 page2 => (stays(frame2, page2)).right.right.right.left, later := λ frame2 page2 => (stays(frame2, page2)).right.right.right.right,
                     regs := ⟨rbx, regs.right⟩)⟩)
         },
     }(argv)
@@ -503,7 +511,7 @@ theorem cursor_dash(file: IoImage, page: Nat → BitVec(8), at: BitVec(64), piec
     pointers: List<BitVec(64)>, later: ArgvStays(file, rsp, rest, pointers, k), pointer: BitVec(64), positive: 0 < pointer.toNat(),
     byte0: BitVec(8), yes: byte0.eq_bit(dash()) = True, tail: List<BitVec(8)>, state: MachineState<IoMemory>,
     head: CursorIn(file, page, at, rsp, k, origin, pointer, 68, state),
-    string: (page2: Nat → BitVec(8)) → CStringAt(io_data_access(), IoMemory(file, page2), pointer, Cons(byte0, tail)),
+    string: ArgStays(file, pointer, Cons(byte0, tail)),
     bound: pointer.toNat() + Succ(tail.len()) + 1 <= Nat::pow(2, 47)):
     CursorReach(file, page, at, rsp, origin, operands_from(False, Cons(Cons(byte0, tail), rest)), state) {
     let fetch = io_fetch_access();
@@ -520,11 +528,11 @@ theorem cursor_dash(file: IoImage, page: Nat → BitVec(8), at: BitVec(64), piec
     let reads1: ReadsFrom(file, page, source1, Succ(v)) = reads_next(file, page, source0, v, λ i => refl);
     let reads1_here: ReadsFrom(file, page, source1, read_gpr(Rdi, s1.gprs).toNat()) = j(sym(rdi1), λ w _ => ReadsFrom(file, page, source1, w), reads1);
     let low1 = low_of(read_gpr(Rdi, s1.gprs), Succ(v), rdi1, lows.right);
-    match tail as λ t => ((page2: Nat → BitVec(8)) → CStringAt(data, IoMemory(file, page2), pointer, Cons(byte0, t))) →
+    match tail as λ t => ArgStays(file, pointer, Cons(byte0, t)) →
             (v + Succ(t.len()) + 1 <= Nat::pow(2, 47)) →
             CursorReach(file, page, at, rsp, origin, operands_from(False, Cons(Cons(byte0, t), rest)), state) {
         Nil => λ whole bound0 => {
-            let string1: CStringFrom(Nil, source1) = (whole(page)).right.right;
+            let string1: CStringFrom(Nil, source1) = (whole(file.frame, page)).right.right;
             let present: (data.read(memory, read_gpr(Rdi, s1.gprs)) = Some(nul())) =
                 trans(read_here(file, page, source1, read_gpr(Rdi, s1.gprs), reads1_here(0)), string1);
             let loaded = run_byte_load(file, page, scan_ahead_load(), at, 75, piece(9), s1, ahead.memory_is, ahead.rip_is, nul(), present, low1);
@@ -541,7 +549,7 @@ theorem cursor_dash(file: IoImage, page: Nat → BitVec(8), at: BitVec(64), piec
                         positive, bound0, whole, later, head.regs)⟩))
         },
         Cons(byte1, more) => λ whole bound1 => {
-            let string1: CStringFrom(Cons(byte1, more), source1) = (whole(page)).right.right;
+            let string1: CStringFrom(Cons(byte1, more), source1) = (whole(file.frame, page)).right.right;
             let lows1 = bound_second(v, more.len(), bound1);
             let present: (data.read(memory, read_gpr(Rdi, s1.gprs)) = Some(byte1)) =
                 trans(read_here(file, page, source1, read_gpr(Rdi, s1.gprs), reads1_here(0)), string1.left);
@@ -603,11 +611,11 @@ theorem cursor_option(file: IoImage, page: Nat → BitVec(8), at: BitVec(64), pi
     let rsi_value: (read_gpr(Rsi, s1.gprs).toNat() = p.toNat()) = cong_fn<BitVec(64), Nat>(λ w => w.toNat(), head.rsi);
     let b0: (p.toNat() + arg.len() + 1 <= Nat::pow(2, 47)) = head.bound;
     let low0 = low_of(read_gpr(Rsi, s1.gprs), p.toNat(), rsi_value, { omega });
-    match arg as λ a => ((page2: Nat → BitVec(8)) → CStringAt(data, IoMemory(file, page2), p, a)) → (p.toNat() + a.len() + 1 <= Nat::pow(2, 47)) →
+    match arg as λ a => ArgStays(file, p, a) → (p.toNat() + a.len() + 1 <= Nat::pow(2, 47)) →
             CursorReach(file, page, at, rsp, origin, operands_from(False, Cons(a, rest)), state) {
         Nil => λ string bound => {
             let present: (data.read(memory, read_gpr(Rsi, s1.gprs)) = Some(nul())) =
-                trans(read_here(file, page, source0, read_gpr(Rsi, s1.gprs), reads(0)), string(page));
+                trans(read_here(file, page, source0, read_gpr(Rsi, s1.gprs), reads(0)), string(file.frame, page));
             let loaded = run_byte_load(file, page, scan_byte_load(), at, 45, piece(5), s1, head.memory_is, s1_rip, nul(), present, low0);
             let s2 = byte_load_after(scan_byte_load(), nul(), s1);
             let tested = run_block(file, page, scan_is_block(dash()), at, 49, piece(6), s2, loaded.memory_is, loaded.rip_is);
@@ -622,7 +630,7 @@ theorem cursor_option(file: IoImage, page: Nat → BitVec(8), at: BitVec(64), pi
         },
         Cons(byte0, tail) => λ string bound => {
             let present: (data.read(memory, read_gpr(Rsi, s1.gprs)) = Some(byte0)) =
-                trans(read_here(file, page, source0, read_gpr(Rsi, s1.gprs), reads(0)), (string(page)).left);
+                trans(read_here(file, page, source0, read_gpr(Rsi, s1.gprs), reads(0)), (string(file.frame, page)).left);
             let loaded = run_byte_load(file, page, scan_byte_load(), at, 45, piece(5), s1, head.memory_is, s1_rip, byte0, present, low0);
             let s2 = byte_load_after(scan_byte_load(), byte0, s1);
             let tested = run_block(file, page, scan_is_block(dash()), at, 49, piece(6), s2, loaded.memory_is, loaded.rip_is);
@@ -710,7 +718,7 @@ theorem cursor_start(file: IoImage, at: BitVec(64), placed: Placed(file, start_c
     match argv as λ a => ArgvStaysAt(file, rsp, a, pointers) →
             Exists<MachineState<IoMemory>>(λ after => FetchedSteps(fetch, data, state, after) ∧ StartOut(file, page, at, rsp, origin, command_args(a), after)) {
         Nil => λ layout => {
-            let loaded = loaded_from(word_zero(), (layout(page)).right);
+            let loaded = loaded_from(word_zero(), (layout(file.frame, page)).right);
             let s2 = word_load_after(scan_slot_load(), word_zero(), s1);
             let tested = run_block(file, page, scan_null_block(), at, 20, piece(2), s2, loaded.memory_is, loaded.rip_is);
             let s3 = execute_block_normal(scan_null_block(), s2);
@@ -720,13 +728,13 @@ theorem cursor_start(file: IoImage, at: BitVec(64), placed: Placed(file, start_c
             Exists(s4, ⟨fetched_steps_trans(fetch, data, state, s1, s4, set.steps, fetched_steps_trans(fetch, data, s1, s2, s4, loaded.steps,
                     fetched_steps_trans(fetch, data, s2, s3, s4, tested.steps, jumped))),
                 StartOut(k := 1, pointers := pointers, memory_is := tested.memory_is, rip_is := s4_rip,
-                    regs := ⟨rbx1, ⟨refl, cursor_kept_refl(origin)⟩⟩, argv := λ page2 => (layout(page2)).right)⟩)
+                    regs := ⟨rbx1, ⟨refl, cursor_kept_refl(origin)⟩⟩, argv := λ frame2 page2 => (layout(frame2, page2)).right)⟩)
         },
         Cons(first, rest) => match pointers as λ q => ArgvStaysAt(file, rsp, Cons(first, rest), q) →
                 Exists<MachineState<IoMemory>>(λ after => FetchedSteps(fetch, data, state, after) ∧ StartOut(file, page, at, rsp, origin, rest, after)) {
-            Nil => λ never => false_elim((never(page)).right),
+            Nil => λ never => false_elim((never(file.frame, page)).right),
             Cons(p, more) => λ layout => {
-                let facts = (layout(page)).right;
+                let facts = (layout(file.frame, page)).right;
                 let loaded = loaded_from(p, facts.left);
                 let s2 = word_load_after(scan_slot_load(), p, s1);
                 let tested = run_block(file, page, scan_null_block(), at, 20, piece(2), s2, loaded.memory_is, loaded.rip_is);
@@ -741,7 +749,7 @@ theorem cursor_start(file: IoImage, at: BitVec(64), placed: Placed(file, start_c
                         fetched_steps_trans(fetch, data, s2, s3, s5, tested.steps, fetched_steps_trans(fetch, data, s3, s4, s5, passed, skipped.steps)))),
                     StartOut(k := 2, pointers := more, memory_is := skipped.memory_is, rip_is := skipped.rip_is,
                         regs := ⟨slot_next(rsp, 1, read_gpr(Rbx, s1.gprs), rbx1), ⟨refl, cursor_kept_refl(origin)⟩⟩,
-                        argv := λ page2 => (layout(page2)).right.right.right.right.right)⟩)
+                        argv := λ frame2 page2 => (layout(frame2, page2)).right.right.right.right.right)⟩)
             },
         },
     }(stays)
