@@ -1,19 +1,19 @@
-// `wc`, as a certified static executable (docs/native-wc-design.md,
-// docs/native-stream-filter-design.md): lines, words and bytes of stdin,
-// printed as GNU prints them on a pipe. The program is a stream filter whose
-// step below counts and emits nothing, its state kept in registers across
-// the reads, and whose finish prints the first three fields as a
-// `%7d %7d %7d` line. What the counts mean is stated the way a reader would
-// check them: the newlines, the non-empty pieces of the input split at
-// whitespace, and the length. Each count's proof is what one byte does to it
-// (`lines_step` …, by case analysis), carried over the input by the
-// library's fold lemmas; `wc_program` at the end is the program.
+// `wc`, as a certified static executable (docs/native-wc-command-design.md):
+// GNU `wc` under `LC_ALL=C`, over its file operands or stdin, with `-l`, `-w`,
+// `-m` and `-c` selecting the columns it prints. The program is the step
+// below, which counts and emits nothing, folded over each input with its
+// state in registers across the reads; the command around it (the options,
+// the opens, the width, the rows and the total) is the library's. What the
+// counts mean is stated the way a reader would check them: the newlines, the
+// non-empty pieces of the input split at whitespace, and the length. Each
+// count's proof is what one byte does to it (`lines_step` …, by case
+// analysis), carried over the input by the library's fold lemmas;
+// `wc_command` at the end is the program.
 //
-//     heather build-x86 examples/x86-native/wc.hthr wc_program -o wc
+//     heather build-x86 examples/x86-native/wc.hthr wc_command -o wc
 import function_ir_loop;
 import filter_program;
 import stream_filter;
-import field_line;
 import algebra;
 import bitvec;
 import bool;
@@ -45,9 +45,6 @@ fn wc_words(bytes: List<BitVec(8)>) → Nat { bytes.split_by(space).filter(List:
 // The number of bytes.
 fn wc_bytes(bytes: List<BitVec(8)>) → Nat { bytes.len() }
 
-// What `wc` prints: the three counts as GNU prints them on a pipe.
-fn wc_out(bytes: List<BitVec(8)>) → List<BitVec(8)> { three_fields_line(wc_lines(bytes), wc_words(bytes), wc_bytes(bytes)) }
-
 // The step: the next state from a state and a byte. Every byte is counted;
 // whitespace ends a word, and a newline is a line; any other byte starts a
 // word unless the state is already in one.
@@ -72,15 +69,23 @@ theorem words_step(s: WcState, b: BitVec(8)): wc_step(s, b).words = s.words + st
 theorem inside_step(s: WcState, b: BitVec(8)): wc_step(s, b).inside = !space(b) { split_all; all_goals { refl } }
 theorem bytes_step(s: WcState, b: BitVec(8)): wc_step(s, b).bytes = Succ(s.bytes) { split_all; all_goals { omega } }
 
-// The program: the step, the zero state, its counts in order, the line it
-// prints, and what stdout is, with each printed count folded from zero; that
-// each count grows by at most one per byte is the program's default.
-// `heather build-x86` builds it by this name.
-fn wc_program() → Filter<WcState>(counting(wc_step), WcState(0, 0, 0, False), [λ s => s.lines, λ s => s.words, λ s => s.bytes],
-    Fields, wc_out) {
+// The columns GNU prints, in its order, with the letter that selects each and
+// what it means. In the C locale a character is a byte, so `-m` and `-c` both
+// print the byte count.
+fn wc_columns() → List<Column<WcState>> {
+    [Column('l', λ s => s.lines, wc_lines), Column('w', λ s => s.words, wc_words), Column('m', λ s => s.bytes, wc_bytes),
+     Column('c', λ s => s.bytes, wc_bytes)]
+}
+
+// The program: the step, the zero state, its counts in order, its columns,
+// and the ones printed with no option (lines, words and bytes), with each
+// column's count folded from zero; that each count grows by at most one per
+// byte is the program's default. `heather build-x86` builds it by this name.
+fn wc_command() → Command<WcState>(counting(wc_step), WcState(0, 0, 0, False), [λ s => s.lines, λ s => s.words, λ s => s.bytes],
+    wc_columns(), [True, True, False, True]) {
     let zero = WcState(0, 0, 0, False);
-    Filter(fields_computes(wc_step, zero, λ s => s.lines, λ s => s.words, λ s => s.bytes, Nil, wc_lines, wc_words, wc_bytes,
-        fold_counts_filtered(wc_step, λ s => s.lines, newline, lines_step, zero, refl),
-        fold_counts_runs(wc_step, λ s => s.words, λ s => s.inside, space, words_step, inside_step, zero, refl, refl),
-        fold_counts_len(wc_step, λ s => s.bytes, bytes_step, zero, refl)))
+    let lines = fold_counts_filtered(wc_step, λ s => s.lines, newline, lines_step, zero, refl);
+    let words = fold_counts_runs(wc_step, λ s => s.words, λ s => s.inside, space, words_step, inside_step, zero, refl, refl);
+    let bytes = fold_counts_len(wc_step, λ s => s.bytes, bytes_step, zero, refl);
+    Command(counting_columns(wc_step, zero, wc_columns(), λ input => ⟨lines(input), ⟨words(input), ⟨bytes(input), ⟨bytes(input), trivial⟩⟩⟩⟩))
 }

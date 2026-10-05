@@ -249,13 +249,14 @@ signal (EINTR) is retried; any other failure exits with status 1.
 
 ```sh
 cargo build --release -p heather-cli
-for p in wc_l:wc_l_program wc:wc_program tr:tr_program tr_s:tr_s_program tr_d:tr_d_program; do
+for p in wc_l:wc_l_program wc:wc_command tr:tr_program tr_s:tr_s_program tr_d:tr_d_program; do
   (ulimit -v 8388608 -t 900 -c 0; target/release/heather build-x86 \
     examples/x86-native/${p%%:*}.hthr ${p##*:} -o target/x86-native/${p%%:*} \
     --cache-dir target/native-images)
 done
 printf 'one\ntwo\nthree\n' | ./target/x86-native/wc_l      # 3
 printf 'one two\nthree\n' | ./target/x86-native/wc          #       2       3      14
+./target/x86-native/wc -lw examples/x86-native/wc.hthr README.md   # a row each, then the total
 printf 'Hello, world!\n' | ./target/x86-native/tr            # HELLO, WORLD!
 printf 'a\n\n\nb\n' | ./target/x86-native/tr_s              # a, b on two lines
 printf 'a\r\nb\r\n' | ./target/x86-native/tr_d              # a, b, no carriage returns
@@ -265,10 +266,10 @@ A program is a `Filter` bundle (`lib/filter_program.hthr`). Its type names the
 step, the initial state, the state's Nat fields (`counts`), the finish, and
 `spec`, which is all of stdout as an ordinary Heather function of stdin. Its
 value is the fact `spec(bytes) = filter_output(step, init, counts, finish,
-bytes)`. The finish names positions in `counts` (`Line` prints the first,
-`Fields` the first three), so the counts are written once. A counting program
-proves that fact from one fact per printed count (`line_computes`,
-`fields_computes`), and each of those from what one byte does to the count,
+bytes)`. The finish names positions in `counts` (`Line` prints the first),
+so the counts are written once. A counting program proves that fact from one
+fact per printed count (`line_computes`), and each of those from what one
+byte does to the count,
 by the library's fold lemmas (`fold_counts_filtered`, `fold_counts_len`,
 `fold_counts_runs`). A program that prints nothing after end of file
 (`tr -s`, `tr -d`) proves it from what one byte emits (`quiet_computes`).
@@ -283,15 +284,14 @@ refused at its own source, before anything is generated.
 
 - `wc_l.hthr` is `wc -l`: `counting(line_step)` over a `Nat`, finishing with
   `Line`, which prints the count as a decimal line.
-- `wc.hthr` is `wc`: `counting(wc_step)` over `WcState { lines, words, bytes,
-  inside }`, finishing with `Fields`, which prints the first three fields as
-  GNU `wc` prints them on a pipe (`%7d %7d %7d`). The state stays in
-  registers across the reads, so a word split between two reads is counted
-  once. What the counts mean is stated as a reader checks it: `wc_lines`
-  counts the newlines, `wc_words` the non-empty pieces of
-  `bytes.split_by(space)` (the C locale's POSIX whitespace), and
-  `wc_bytes` the length. Each count's proof is what one byte does to it, by
-  `split_all`.
+- `wc.hthr` is `wc`, a command (below): `counting(wc_step)` over
+  `WcState { lines, words, bytes, inside }`, with the columns `-l`, `-w`,
+  `-m` and `-c`. The state stays in registers across the reads, so a word
+  split between two reads is counted once. What the counts mean is stated as
+  a reader checks it: `wc_lines` counts the newlines, `wc_words` the
+  non-empty pieces of `bytes.split_by(space)` (the C locale's POSIX
+  whitespace), and `wc_bytes` the length. Each count's proof is what one
+  byte does to it, by `split_all`.
 - `tr.hthr` is `tr a-z A-Z`: `mapping(upcase)`, which keeps nothing between
   bytes and emits each byte's image.
 - `tr_s.hthr` is `tr -s '\n'`: its state is whether the last byte was a
@@ -313,8 +313,28 @@ It ends at the empty read (exit 0), or at a failed read or write (exit 1).
 is that run. `{name}_native_sends` shows that on a run that ends well, stdout
 receives exactly `spec(stdin)`. A program with counts is covered for inputs
 shorter than 2^64 − 4096 bytes, so no count wraps; one without counts (`tr`)
-has no bound on its input. The finishes' lines cover counts below 10000 (a
-decimal line) and 10^7 (three fields).
+has no bound on its input. The `Line` finish covers counts below 10000; a
+command's rows print any 64-bit count.
+
+A command is a `Command` bundle (`lib/filter_program.hthr`,
+docs/native-wc-command-design.md): a counting step as above, and the columns
+it prints, each an option letter, the state's count and what that count
+means over an input (`Column`), with the ones that print when no option
+selects any. Its value is the fact that each column's count of the folded
+state is what the column means. The process is the library's
+(`lib/elf64_command.hthr`): it parses its command line as GNU `wc` does
+(`-l -w -m -c`, bundles of them, `--`, `-` for stdin, options after
+operands), stats the operands for the column width, then for each operand
+opens it, folds the step over its reads, prints its row and closes it, and
+after two or more operands prints the total. A failed stat, open, read or
+close sets the exit status to 1 and the command carries on; nothing is
+written to stderr, and long options are refused
+(docs/native-wc-command-design.md §2 lists what differs from GNU). The
+certificate's `{name}_native_runs` covers every command line on the initial
+stack and every history of what Linux answered; `{name}_native_stdout` and
+`{name}_native_status` give stdout (`command_stdout`, the rows of the
+selected columns' counts) and the exit status on a run whose writes finish,
+and `{name}_native_column{j}_means` ties column `j`'s count to what it means.
 
 The step is compiled by the native compiler from the program's source
 (`crates/elab/src/function_ir_source/filter_step.rs`) into one straight-line
@@ -325,6 +345,7 @@ advances by the flag and never passes the byte just read. The trace
 (`lib/linux_x86_64_io.hthr`) records each syscall with Linux's response. Read,
 write and exit are the only syscalls with rules
 (`issues/linux-syscall-trace-model.md`). The printed line is computed by code
-the native compiler generates from `lib/decimal_line.hthr`'s and
-`lib/field_line.hthr`'s source functions. The machine has no divide or
-multiply, so they use restoring chains of subtract-if-fits steps.
+the native compiler generates from `lib/decimal_line.hthr`'s source functions.
+The machine has no divide or multiply, so they use restoring chains of
+subtract-if-fits steps. A command's row is formatted by library code instead
+(`lib/elf64_format_width.hthr`), one subtraction loop per decimal place.

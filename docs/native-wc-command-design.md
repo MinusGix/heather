@@ -797,6 +797,51 @@ summing a non-regular size; an open failure that leaves status 0; the total
 row printed for one operand; the read head reading fd 0 after an open; the
 name write using the NUL-inclusive length.
 
+**Status (C4 built, 2026-10-05): `crates/cli/src/native/read_command.rs`;
+`examples/x86-native/wc.hthr`'s `wc_command` is the command.** `build-x86`
+builds it, and `crates/cli/tests/native_wc.rs` runs §2's table and a sweep
+of piped inputs against the expected output and the host's `wc`. The
+`Fields` finish, `elf64_read_fields`, its producer path and
+`read_fields_process` are gone. Where it differs from §8:
+
+- **The producer reads the program back, it does not restate it.** The
+  bundle's written type gives the step, the state, the nullary function
+  listing the columns and the default. The columns' letters, and which Nat
+  field of the state each count is, come from evaluating the checked
+  context: the counts are taken at a state whose Nat field `k` holds
+  `k + 1`. It refuses no columns, more than eight, a default of the wrong
+  length, a letter that is NUL, `-` or not a byte, and a count that is not
+  one of the state's Nat fields.
+- **The library's bytes come from the kernel's evaluator**
+  (`native/evaluate.rs`): `layout_code(command_parts(…), Nil)` and
+  `command_lens()` are evaluated and split by the lengths, so no encoder of
+  the library is restated in Rust. The certificate states the same bytes as
+  literals, and the kernel re-checks them, so a misread list is refused there.
+- **The frame's addresses are `BitVec::ofNat`.** `frame_at` was
+  `word_of_nat(64, base + o)`, an iterated increment that neither the
+  evaluator nor conversion can afford for an address near `0x411000`. It is
+  now `BitVec::ofNat`, and `frame_counted` bridges the two forms where a
+  proof still counts (`frame_step`, `slots_counts`).
+- **The code is proved a piece at a time.** One declaration's fuel evaluates
+  a few hundred encoded bytes, and the command's library code is several
+  thousand. Each library part is stated as written by `refl` where the
+  library's list selects it. A part above the bound (the scan, the stat pass,
+  the row, the tails) is stated piece by piece of its own layout. The row's
+  formatter is stated by its appends (setup, the places' counting blocks,
+  the padding loop, the digits). `layout_code_same` (elf64_command) joins
+  the pieces under `layout_code`. A literal-list congruence over the whole
+  list of parts hung conversion instead (the large literal against the
+  `Cons` chain); the per-piece form does not build that literal.
+- **What a column means is a corollary, not a premise.** `{p}_column{j}_means`
+  says the count slot `j` holds is `word_of_nat(64, column_means(columns, j)(input))`,
+  from the bundle's `computes`. `{p}_stdout` is still stated over the
+  state's counts (`command_stdout`); restating it over the columns' meanings
+  is residue (§11).
+- **Two refusal controls at source** in the CLI test: a column that claims
+  another column's meaning, and a column that counts another column's
+  field. Each is refused at its own source line before anything is
+  published.
+
 ### 10.1 Verification items, cheap and first
 
 If one refutes the design, stop and amend it before working around it.

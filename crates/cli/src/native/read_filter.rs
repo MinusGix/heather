@@ -15,7 +15,7 @@ use heather_elab::heather_emit::Module;
 use heather_elab::Elaborator;
 
 use super::layout::{Layout, JNZ, JS, JZ, JMP};
-use super::read_loop::{claims, component, copy, fail_tail, image_facts, mov, nested, print_jumps, read_head, tuple, write_loop, FormatPart, TEST};
+use super::read_loop::{claims, component, copy, fail_tail, image_facts, mov, nested, print_jumps, read_head, write_loop, FormatPart, TEST};
 
 // Bundled after the read profile's, the write loop's and the formatters':
 // what a filter computes, its step's contract, its bundle, its process and
@@ -27,15 +27,23 @@ pub(super) const SUPPORT: &[(&str, &str)] = &[
     ("elf64_read_filter", include_str!("../../../../lib/elf64_read_filter.hthr")),
     ("elf64_filter_finish", include_str!("../../../../lib/elf64_filter_finish.hthr")),
 ];
+// What a command stands on of the filter's library: the step contract, the
+// bundle and the chunk loop, not the finishes.
+pub(super) const COMMAND_SUPPORT: &[(&str, &str)] = &[
+    ("stream_filter", include_str!("../../../../lib/stream_filter.hthr")),
+    ("filter_step_piece", include_str!("../../../../lib/filter_step_piece.hthr")),
+    ("filter_program", include_str!("../../../../lib/filter_program.hthr")),
+    ("elf64_read_filter", include_str!("../../../../lib/elf64_read_filter.hthr")),
+];
 pub(super) const IMPORTS: &[&str] = &["elf64_filter_finish", "elf64_read_filter", "filter_program", "filter_step_piece", "stream_filter",
-    "elf64_count_print", "elf64_read_fields", "field_line", "decimal_line", "elf64_write_loop", "elf64_print_pieces", "elf64_read_pieces", "elf64_io",
+    "elf64_count_print", "decimal_line", "elf64_write_loop", "elf64_print_pieces", "elf64_read_pieces", "elf64_io",
     "elf64_calls", "elf64", "linux_x86_64_entry", "linux_x86_64_io", "linux_x86_64_determinism", "x86_64_structured_block", "x86_64_layout",
     "function_ir_loop", "function_ir_loop_trace", "x86_64_fetched_code", "x86_64_fetch", "bitvec_nat", "x86_64", "x86_64_block", "bitvec", "bool", "list",
     "logic", "nat", "option"];
 
 /// What a program prints after end of file (filter_program's `Finish`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Finish { Quiet, Line, Fields }
+pub(super) enum Finish { Quiet, Line }
 
 /// A program's state: a record's fields, or a scalar as one field that is
 /// the state itself.
@@ -45,11 +53,11 @@ pub(super) struct State {
     pub fields: Vec<(String, StructuredSourceType)>,
 }
 impl State {
-    fn field(&self, value: &str, i: usize) -> String {
+    pub(super) fn field(&self, value: &str, i: usize) -> String {
         if self.constructor.is_some() { format!("{value}.{}", self.fields[i].0) } else { value.to_string() }
     }
     /// `λ (s: T) => s.f` for field `i`.
-    fn count(&self, i: usize) -> String { format!("λ (s: {}) => {}", self.type_name, self.field("s", i)) }
+    pub(super) fn count(&self, i: usize) -> String { format!("λ (s: {}) => {}", self.type_name, self.field("s", i)) }
 }
 
 /// A program as its bundle states it, read off the bundle's written type
@@ -72,7 +80,7 @@ pub(super) fn finish_written(args: &[heather_syntax::ast::Expr]) -> Option<Finis
         ExprKind::App { head, .. } => match &head.kind { ExprKind::Var(written) => written, _ => return None },
         _ => return None,
     };
-    match head.rsplit("::").next().unwrap_or(head) { "Quiet" => Some(Finish::Quiet), "Line" => Some(Finish::Line), "Fields" => Some(Finish::Fields), _ => None }
+    match head.rsplit("::").next().unwrap_or(head) { "Quiet" => Some(Finish::Quiet), "Line" => Some(Finish::Line), _ => None }
 }
 
 /// The bundle's data from its written arguments, each name resolved where
@@ -107,14 +115,12 @@ pub(super) fn read_program(elab: &Elaborator, root: &str, symbol: &str, args: &[
     let finish = match applied(&args[3]).map(|(head, _)| head) {
         Some(head) if head == "Quiet" => Finish::Quiet,
         Some(head) if head == "Line" => Finish::Line,
-        Some(head) if head == "Fields" => Finish::Fields,
-        _ => return Err(format!("`{symbol}`'s finish is written as `Quiet`, `Line` or `Fields`")),
+        _ => return Err(format!("`{symbol}`'s finish is written as `Quiet` or `Line`")),
     };
     let state = state_of(elab, &step)?;
     let nats = state.fields.iter().take_while(|(_, ty)| *ty == StructuredSourceType::NatWord).count();
     match finish {
         Finish::Line if nats < 1 => return Err(format!("`{symbol}` prints a line of its state's first field, which must be a Nat")),
-        Finish::Fields if nats < 3 => return Err(format!("`{symbol}` prints its state's first three fields, which must be Nats")),
         _ => {}
     }
     if state.fields.len() > 4 { return Err(format!("`{symbol}`'s state keeps at most four fields, in R13, R14, R15 and R8")); }
@@ -123,7 +129,7 @@ pub(super) fn read_program(elab: &Elaborator, root: &str, symbol: &str, args: &[
 
 // The state a step folds: its first parameter's type (a mapping's is
 // Stateless).
-fn state_of(elab: &Elaborator, step: &FilterStep) -> Result<State, String> {
+pub(super) fn state_of(elab: &Elaborator, step: &FilterStep) -> Result<State, String> {
     let source = match step {
         FilterStep::Mapping(_) => return Ok(State { type_name: "stream_filter::Stateless".into(),
             constructor: Some("stream_filter::Stateless".into()), fields: Vec::new() }),
@@ -174,7 +180,6 @@ pub(super) fn context(prefix: &str, root: &str, program: &Program) -> String {
     let finish = match program.finish {
         Finish::Quiet => "Quiet".to_string(),
         Finish::Line => "Line".to_string(),
-        Finish::Fields => "Fields".to_string(),
     };
     // Each count of the zero state is at most 0: one `0 <= 0` per count, then
     // the list's end.
@@ -235,6 +240,19 @@ fn process_layout(step: &str, bytes: &[u8], end: &'static str) -> Layout {
     let encode = super::encode;
     Layout::default().fixed("init", encode(&[mov(R13, 0), mov(R14, 0), mov(R15, 0), mov(R8, 0)]))
         .then(read_head(end, "failed"))
+        .then(core_layout(step, bytes))
+        .then(fail_tail("failed", "rjz", "read"))
+        .label("finish")
+}
+
+/// elf64_read_filter's `filter_core_code`, after a read head at `read`: the
+/// chunk's setup, the loop over its bytes, the close and its JZ back to the
+/// read, and the write loop back to the read. A command places it after its
+/// own head (`read_command`).
+pub(super) fn core_layout(step: &str, bytes: &[u8]) -> Layout {
+    use Gpr::*;
+    let encode = super::encode;
+    Layout::default()
         .fixed("setup", encode(&[mov(Rsi, 0x410000), copy(Rcx, Rax), mov(Rdi, 0x410000), mov(R12, 1)]))
         .label("load").fixed("load", vec![0x48, 0x0f, 0xb6, 0x06])
         .generated("step", format!("{step}_lit()"), bytes.to_vec())
@@ -245,8 +263,6 @@ fn process_layout(step: &str, bytes: &[u8], end: &'static str) -> Layout {
         .fixed("close", encode(&[copy(R10, Rdi), mov(R9, 0x410000), Instruction::SubRR { destination: R10, source: R9 }]))
         .jump("cjz", JZ, "read")
         .then(write_loop("read"))
-        .then(fail_tail("failed", "rjz", "read"))
-        .label("finish")
 }
 
 /// The process's jumps, `{prefix}_jumps()`.
@@ -291,24 +307,6 @@ pub(super) fn certify(module: &mut Module, prefix: &str, program: &Program, step
              format!("count_tail_code_len({w}_code(), {st}_code(), {ln}_code(), {prefix}_tail_jumps(), {wl}, {sl}, {ll}, \
                 {w}_byte_length(), {st}_byte_length(), {ln}_byte_length())"))
         }
-        (Finish::Fields, Some([low, high])) => {
-            let (lo, hi) = (&low.prefix, &high.prefix);
-            let mov8 = |destination, immediate| Instruction::MovRI { destination, immediate };
-            for (k, (count, offset, separator)) in [(R13, 0u64, 32u64), (R14, 8, 32), (R15, 16, 10)].into_iter().enumerate() {
-                layout = layout.fixed(format!("field{k}_count"), encode(&[copy(R11, count)]))
-                    .generated("low", format!("{lo}_lit()"), low.bytes.clone())
-                    .fixed(format!("field{k}_low"), encode(&[mov8(R9, 0x410000 + offset), mov8(R10, 16777216 * separator)]))
-                    .fixed("field_store", vec![0x49, 0x89, 0x01])
-                    .generated("high", format!("{hi}_lit()"), high.bytes.clone())
-                    .fixed(format!("field{k}_high"), encode(&[mov8(R9, 0x410000 + offset + 4)]))
-                    .fixed("field_store", vec![0x49, 0x89, 0x01]);
-            }
-            layout = layout.fixed("line", encode(&[mov(R9, 0x410000), mov(R10, 24)])).then(finish_write_loop());
-            let (ll, hl) = (low.bytes.len(), high.bytes.len());
-            (format!("fields_tail({lo}_code(), {hi}_code(), {prefix}_tail_jumps())"),
-             format!("fields_tail_len({ll}, {hl})"),
-             format!("fields_tail_code_len({lo}_code(), {hi}_code(), {prefix}_tail_jumps(), {ll}, {hl}, {lo}_byte_length(), {hi}_byte_length())"))
-        }
         _ => return Err("the finish's formatter has the wrong number of parts".into()),
     };
     let code = layout.code();
@@ -332,7 +330,6 @@ fn {prefix}_tail_facts() → PrintJumpFacts({prefix}_tail_jumps()) {{ PrintJumpF
     // parts, each generated part by its own length lemma.
     let generated: Vec<(&str, String)> = std::iter::once(("step", s.clone())).chain(match (program.finish, format) {
         (Finish::Line, Some([word, start, length])) => vec![("word", word.prefix.clone()), ("start", start.prefix.clone()), ("length", length.prefix.clone())],
-        (Finish::Fields, Some([low, high])) => vec![("low", low.prefix.clone()), ("high", high.prefix.clone())],
         _ => Vec::new(),
     }).collect();
     let spelled = |upto: usize, with: &str| {
@@ -385,37 +382,16 @@ fn {prefix}_jump_facts() → FilterJumpFacts({p}, {done_p}, {jumps}, {pj}) {{
             "[ExitEvent(@bitvec::BitVec::ofNat(64, 0))]".to_string(),
             format!("filter_quiet_tail({shape}, {jumps}, {pj}, {prefix}_io_image(frame, rest), {pieces}, {final_state})"),
             "refl".to_string(), String::new()),
-        _ => {
+        Finish::Line => {
             let printed = format!("finish_bytes({prefix}_finish(), {prefix}_counts(), {final_state})");
-            let tail = match program.finish {
-                Finish::Line => {
-                    module.raw(format!("\
+            module.raw(format!("\
 theorem {prefix}_line_word(): LineWord({s}_rep, {count}) {{ λ gprs s placed => {w} }}
 fn {prefix}_print_codes() → PrintCodes {{ PrintCodes({a}_code(), {b}_code(), {c}_code()) }}
 fn {prefix}_print_format() → PrintFormat({prefix}_print_codes()) {{ PrintFormat({a}_computes<IoMemory>(), {b}_computes<IoMemory>(), {c}_computes<IoMemory>()) }}
 ", count = state.count(0), w = word(0), a = generated[1].1, b = generated[2].1, c = generated[3].1));
-                    format!("filter_line_tail({shape}, {count}, {prefix}_line_word(), {prefix}_io_image(frame, rest), fl_at_finish({p}), {prefix}_print_codes(), \
-                        {prefix}_print_format(), {prefix}_tail_jumps(), {prefix}_tail_facts(), λ pg => ({pieces})(pg).finish_at, {final_state}, small, \
-                        written, written_ok, writes, writes_ok)", count = state.count(0))
-                }
-                _ => {
-                    module.raw(format!("\
-theorem {prefix}_counts_placed(gprs: Gprs, s: {ty}, placed: {s}_rep(gprs, s)):
-    (read_gpr(R13, gprs) = bitvec_nat::word_of_nat(64, {f0})) ∧ ((read_gpr(R14, gprs) = bitvec_nat::word_of_nat(64, {f1})) ∧
-    (read_gpr(R15, gprs) = bitvec_nat::word_of_nat(64, {f2}))) {{
-    {words}
-}}
-fn {prefix}_three() → ThreeCounts<{ty}>({s}_rep) {{ ThreeCounts({c0}, {c1}, {c2}, {prefix}_counts_placed) }}
-fn {prefix}_fields_codes() → FieldsCodes {{ FieldsCodes({lo}_code(), {hi}_code()) }}
-fn {prefix}_fields_format() → FieldsFormat({prefix}_fields_codes()) {{ FieldsFormat({lo}_computes<IoMemory>(), {hi}_computes<IoMemory>()) }}
-", f0 = state.field("s", 0), f1 = state.field("s", 1), f2 = state.field("s", 2), words = tuple(&[word(0), word(1), word(2)]),
-                        c0 = state.count(0), c1 = state.count(1), c2 = state.count(2), lo = generated[1].1, hi = generated[2].1));
-                    format!("fields_tail_runs({prefix}_io_image(frame, rest), fl_at_finish({p}), {s}_rep, {prefix}_three(), {prefix}_fields_codes(), \
-                        {prefix}_fields_format(), {prefix}_tail_jumps(), λ pg => ({pieces})(pg).finish_at, \
-                        write_targets(fields_at_write(fl_at_finish({p}), {lo}_code(), {hi}_code()), {prefix}_tail_jumps(), {prefix}_tail_facts()), \
-                        {final_state}, small, written, written_ok, writes, writes_ok)", lo = generated[1].1, hi = generated[2].1)
-                }
-            };
+            let tail = format!("filter_line_tail({shape}, {count}, {prefix}_line_word(), {prefix}_io_image(frame, rest), fl_at_finish({p}), \
+                {prefix}_print_codes(), {prefix}_print_format(), {prefix}_tail_jumps(), {prefix}_tail_facts(), λ pg => ({pieces})(pg).finish_at, \
+                {final_state}, small, written, written_ok, writes, writes_ok)", count = state.count(0));
             (format!("{common}, small: FinishFits({prefix}_finish(), {prefix}_counts(), {final_state}),
     writes: List<WriteStep>, writes_ok: WriteSteps(writes)({printed}), written: WriteEnding, written_ok: WriteEndingOk(written),
     frame: Nat → BitVec(8), rest: BitVec(64) → Option<BitVec(8)>, page: Nat → BitVec(8), gprs: Gprs, flags: Flags"),

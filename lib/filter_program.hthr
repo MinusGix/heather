@@ -9,7 +9,6 @@
 import stream_filter;
 import function_ir_loop;
 import decimal_line;
-import field_line;
 import bitvec;
 import bool;
 import list;
@@ -18,23 +17,16 @@ import nat;
 import option;
 import omega;
 
-// What a program prints after end of file: nothing, its first count as a
-// decimal line, or its first three as `%7d` fields. Each is one of the
+// What a program prints after end of file: nothing, or its first count as a
+// decimal line. Each is one of the
 // library's proved tails, which read the counts from the state's first
 // registers. The counts are the program's own (`Filter`'s `counts`), named
 // once there.
-inductive Finish { Quiet, Line, Fields }
+inductive Finish { Quiet, Line }
 fn finish_bytes<C>(finish: Finish, counts: List<C → Nat>, state: C) → List<BitVec(8)> {
     match finish {
         Quiet => Nil,
         Line => match counts { Nil => Nil, Cons(count, _) => decimal_line(count(state)) },
-        Fields => match counts {
-            Nil => Nil,
-            Cons(first, more) => match more {
-                Nil => Nil,
-                Cons(second, rest) => match rest { Nil => Nil, Cons(third, _) => three_fields_line(first(state), second(state), third(state)) },
-            },
-        },
     }
 }
 // What the tails print correctly: counts below their columns.
@@ -42,16 +34,6 @@ fn FinishFits<C>(finish: Finish, counts: List<C → Nat>, state: C) → Type {
     match finish {
         Quiet => True,
         Line => match counts { Nil => True, Cons(count, _) => count(state) < 10000 },
-        Fields => match counts {
-            Nil => True,
-            Cons(first, more) => match more {
-                Nil => True,
-                Cons(second, rest) => match rest {
-                    Nil => True,
-                    Cons(third, _) => (first(state) < 10000000) ∧ ((second(state) < 10000000) ∧ (third(state) < 10000000)),
-                },
-            },
-        },
     }
 }
 
@@ -65,11 +47,46 @@ fn filter_output<C>(step: C → BitVec(8) → Filtered<C>, init: C, counts: List
 // byte, so it fits a word for any input a process can read: case analysis
 // and `omega` show it for the usual step, and a program that needs more gives
 // `advances := …` itself. A counting program proves `computes` from one fact
-// per printed count (`line_computes`, `fields_computes` below).
+// per printed count (`line_computes` below).
 record Filter<C>(step: C → BitVec(8) → Filtered<C>, init: C, counts: List<C → Nat>, finish: Finish,
     spec: List<BitVec(8)> → List<BitVec(8)>) {
     advances: (state: C) → (byte: BitVec(8)) → counts_advance(counts, step(state, byte).next, state) := { split_all; all_goals { omega } },
     computes: (bytes: List<BitVec(8)>) → spec(bytes) = filter_output(step, init, counts, finish, bytes),
+}
+
+// ---------------------------------------------------------------------------
+// A command (docs/native-wc-command-design.md §3.2): the step folded over each
+// operand in turn, printing a row of the columns the command line selects.
+// A column is the option letter that selects it, the state's count it
+// prints, and what that count means over an input; `default` says which
+// columns print when no option selects one. The command's process
+// (elf64_command) prints at most eight columns, from the state's first four
+// fields.
+record Column<C> { letter: BitVec(8), count: C → Nat, means: List<BitVec(8)> → Nat }
+
+// Each column's count of the state an input folds to is what it means.
+fn ColumnsMean<C>(columns: List<Column<C>>, input: List<BitVec(8)>, state: C) → Type {
+    match columns { Nil => True, Cons(column, rest) => (column.means(input) = column.count(state)) ∧ ColumnsMean(rest, input, state) }
+}
+// What column `i` means; nothing past the columns.
+fn column_means<C>(columns: List<Column<C>>, i: Nat) → List<BitVec(8)> → Nat {
+    match columns { Nil => λ _ => 0, Cons(column, rest) => match i { Zero => column.means, Succ(k) => column_means(rest, k) } }
+}
+
+// A command: the step from `init`, whose Nat fields are `counts` in order, and
+// the columns it prints. Each count grows by at most one per byte, as a
+// filter's; `computes` is the program's own proof that its columns count
+// what they mean.
+record Command<C>(step: C → BitVec(8) → Filtered<C>, init: C, counts: List<C → Nat>, columns: List<Column<C>>, default: List<Bool>) {
+    advances: (state: C) → (byte: BitVec(8)) → counts_advance(counts, step(state, byte).next, state) := { split_all; all_goals { omega } },
+    computes: (input: List<BitVec(8)>) → ColumnsMean(columns, input, filter_state(step, input, init)),
+}
+
+// A counting step's columns, from what they mean of its fold.
+theorem counting_columns<C>(g: C → BitVec(8) → C, init: C, columns: List<Column<C>>,
+    folded: (input: List<BitVec(8)>) → ColumnsMean(columns, input, fold_bytes(g, input, init))):
+    (input: List<BitVec(8)>) → ColumnsMean(columns, input, filter_state(counting(g), input, init)) {
+    λ input => j(sym(counting_state(g, input, init)), λ s _ => ColumnsMean(columns, input, s), folded(input))
 }
 
 // A step that only counts prints the finish of its fold and nothing else.
@@ -205,7 +222,7 @@ theorem counts_runs<C>(g: C → BitVec(8) → C, count: C → Nat, inside: C →
 
 // What an author calls: from a state whose count is zero (and, for runs,
 // outside a run), the fold's count is what the count means, in the shape
-// `line_computes` and `fields_computes` take.
+// `line_computes` and a command's columns take.
 theorem fold_counts_filtered<C>(g: C → BitVec(8) → C, count: C → Nat, p: BitVec(8) → Bool,
     grows: (s: C) → (b: BitVec(8)) → count(g(s, b)) = count(s) + Nat::of_bit(p(b)), init: C, zero: count(init) = 0):
     (bytes: List<BitVec(8)>) → bytes.filter(p).len() = count(fold_bytes(g, bytes, init)) {
@@ -245,25 +262,4 @@ theorem line_computes<C>(g: C → BitVec(8) → C, init: C, count: C → Nat, re
     (bytes: List<BitVec(8)>) → decimal_line(means(bytes)) = filter_output(counting(g), init, Cons(count, rest), Line, bytes) {
     λ bytes => trans(cong_fn<Nat, List<BitVec(8)>>(λ n => decimal_line(n), counted(bytes)),
         sym(counting_output(g, init, Cons(count, rest), Line, bytes)))
-}
-
-// A program that prints its first three counts as fields prints the fields of
-// what they mean.
-theorem fields_computes<C>(g: C → BitVec(8) → C, init: C, first, second, third: C → Nat, rest: List<C → Nat>,
-    first_means, second_means, third_means: List<BitVec(8)> → Nat,
-    first_counted: (bytes: List<BitVec(8)>) → first_means(bytes) = first(fold_bytes(g, bytes, init)),
-    second_counted: (bytes: List<BitVec(8)>) → second_means(bytes) = second(fold_bytes(g, bytes, init)),
-    third_counted: (bytes: List<BitVec(8)>) → third_means(bytes) = third(fold_bytes(g, bytes, init))):
-    (bytes: List<BitVec(8)>) → three_fields_line(first_means(bytes), second_means(bytes), third_means(bytes)) =
-        filter_output(counting(g), init, Cons(first, Cons(second, Cons(third, rest))), Fields, bytes) {
-    λ bytes => {
-        let folded = fold_bytes(g, bytes, init);
-        let one = j(first_counted(bytes), λ n _ => three_fields_line(first_means(bytes), second_means(bytes), third_means(bytes)) =
-            three_fields_line(n, second_means(bytes), third_means(bytes)), refl);
-        let two = j(second_counted(bytes), λ n _ => three_fields_line(first(folded), second_means(bytes), third_means(bytes)) =
-            three_fields_line(first(folded), n, third_means(bytes)), refl);
-        let three = j(third_counted(bytes), λ n _ => three_fields_line(first(folded), second(folded), third_means(bytes)) =
-            three_fields_line(first(folded), second(folded), n), refl);
-        trans(one, trans(two, trans(three, sym(counting_output(g, init, Cons(first, Cons(second, Cons(third, rest))), Fields, bytes)))))
-    }
 }

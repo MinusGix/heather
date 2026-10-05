@@ -125,6 +125,12 @@ fn command_args(argv: List<List<BitVec(8)>>) → List<List<BitVec(8)>> {
 
 // The selection: what the options chose, or `default` when they chose nothing.
 fn chosen_mask(default, mask: BitVec(64)) → BitVec(64) { match mask.eq_bit(BitVec::zero()) { True => default, False => mask } }
+// A command's default columns as a selection: bit `i` for each flag `i`
+// that is set, from bit `i` on.
+fn selection_from(flags: List<Bool>, bits: BitVec(64), i: Nat) → BitVec(64) {
+    match flags { Nil => bits, Cons(on, rest) => selection_from(rest, match on { True => bits.bor(column_bit(i)), False => bits }, Succ(i)) }
+}
+fn selection_of(flags: List<Bool>) → BitVec(64) { selection_from(flags, BitVec::zero(), 0) }
 
 // The command line as the command reads it: refused, or the columns selected
 // (`default` when no option selects one) and the operands.

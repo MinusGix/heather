@@ -1,10 +1,10 @@
 ---
 title: --fields prints exactly three counts from R13–R15
-status: open
+status: closed
 labels: [native, cli, design]
 code: crates/cli/src/native/read_fields.rs @ 357c0afa
 created: 2026-09-29
-updated: 2026-10-03
+updated: 2026-10-05
 ---
 
 `build-x86 --read-loop --fields` accepts a record of three or four fields
@@ -22,3 +22,4 @@ the record would cover the `wc` flag combinations.
 ## Log
 
 - 2026-10-03: Superseded by [[native-wc-as-a-command]]'s design (docs/native-wc-command-design.md §6.2, §11): its row loop prints any subset of columns, and C4 deletes the `Fields` finish. Close this when C4 lands.
+- 2026-10-05: C4 landed: `wc.hthr` is a command whose row loop prints any subset of columns at any width, and the `Fields` finish, `elf64_read_fields` and `read_fields.rs` are deleted (docs/native-wc-command-design.md §10's C4 status).

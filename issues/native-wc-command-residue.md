@@ -3,7 +3,7 @@ title: wc as a command: GNU behaviours deferred from the first round
 status: open
 labels: [native,x86,design]
 created: 2026-10-03
-updated: 2026-10-03
+updated: 2026-10-05
 ---
 
 The full `wc` command (`docs/native-wc-command-design.md`) matches GNU `wc`
@@ -25,6 +25,12 @@ claim. These are the ones deferred:
 - **A failed write** exits 1 at once. GNU's buffered stdout finds the
   failure later and also exits 1. The difference is only which syscalls run
   after the failure.
+- **stdout stated over what the columns mean.** `{p}_stdout` says stdout is
+  `command_stdout` of the state's counts, and `{p}_column{j}_means` says
+  slot `j`'s count is `column_means(columns, j)(input)`. A corollary joining
+  them, stdout as rows of the columns' meanings over each operand's bytes,
+  is stated nowhere yet. Each half is checked; the join is bookkeeping over
+  `command_stdout`'s fold.
 
 ## What it assumes from elsewhere
 - **[[native-wc-as-a-command]]** owns the command and its claim. Assumed

@@ -53,14 +53,6 @@ pub(super) fn component(value: &str, i: usize, count: usize) -> String {
     if i + 1 < count { path.push_str(".left"); }
     path
 }
-/// A right-nested pair of the items, `trivial` for none.
-pub(super) fn tuple(items: &[String]) -> String {
-    match items {
-        [only] => only.clone(),
-        [first, rest @ ..] => format!("⟨{first}, {}⟩", tuple(rest)),
-        [] => "trivial".into(),
-    }
-}
 
 // TEST RAX, RAX: the lowering's encoder has no TEST of its own; the
 // certificate checks these bytes against the model's encoding.
