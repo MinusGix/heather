@@ -3,7 +3,7 @@ title: The x86 call certificate costs a per-declaration constant, half of it the
 status: open
 labels: [x86,performance,elaboration,compiler]
 created: 2026-09-23
-updated: 2026-10-03
+updated: 2026-10-05
 ---
 
 The generated x86 call certificate costs a **per-declaration constant**, not a
@@ -73,3 +73,18 @@ this workload), [[frontend-large-proof-composition-cost]].
   - What is left with the per-declaration shape is the formatter: 15.7k generated declarations at a few ms each, 43% frontend self time (`decl_type`/`decl_body`) and 31% gate, no family above ~12% of it (`*_preserves`, `*_carry`, `*_instructions_#`, `*_correct`, `*_decodes`). Its certificates are checked before any program module and keyed per profile, so an image store pays them once for every `Fields` program; a cold store (or a compiler change in the suite) pays them on the first. That is where lever 1 ("fewer, larger generated declarations") now applies — to `function_ir_x86_lower/structured_cert.rs`'s per-node families, not to fetch facts.
 - 2026-10-03: What the full `wc` command adds: docs/native-wc-command-design.md §9. It removes the `%7d` certificates, 47% of a cold build, and adds about 630 library declarations. The cold build comes to about 70–80% of today's.
 - 2026-10-03: **The formatter's certificates were not a flat constant after all.** Attributed per declaration on a cold `wc` build, half the formatter's time was its top thousand declarations, in a few families: `_preserves` re-evaluating the machine state once per register, a quadratic inline `at_width` in every `_carry`, and declarations nothing read (the leaves' execution chains and artifacts, inner nodes' `_artifact`/`_rip`). Cut in [[structured-certificate-cost]]: standalone `field_low` 45 s → 25 s, `field_high` 59 s → 36 s. What is left is one conversion per node per family; this issue's per-declaration framing now applies only to the call and fixed-input profiles.
+- 2026-10-05: **The full `wc` command, attributed (C4 of [[native-wc-as-a-command]]; cloud box, so counts and shares, not seconds).** One cold `build-x86 examples/x86-native/wc.hthr wc_command` into a fresh store at width eight, then one warm build over that store, each with `--timings`, read with `scripts/timings`:
+
+    | share of cold item time | decls |  |
+    |---|---|---|
+    | bundled library | 4.65k | 60%: `elf64_command` 20%, `elf64_stat_width` 10%, `elf64_read_filter` 6%, the rest under 3% each |
+    | the command's certificate | 798 | 27% |
+    | the program (`wc` module) | 26 | 8% |
+    | the step piece | 2.0k | 4% |
+
+    - The `Fields` formatter's certificates are gone, as §9 of the design predicted, so the per-declaration shape this issue names is now a small line here. The step piece is 2.0k cheap declarations at 4%.
+    - Two thirds of the certificate is four declarations: the joins of the long library parts (`{p}_part{k}` by `layout_code_same` over the part's own pieces, for the scan, stat, row and tails parts). They are about 80% frontend. The tails join (34 pieces) is the largest item of the whole build, well above the scan's join (40 pieces), so the cost does not follow piece count. The per-piece `refl` leaves and literals are the rest. Claims, targets and the column bridges are negligible.
+    - The library line is the command's own new modules, as §9.3 expected. `elf64_stat_width::stat_operand` is the largest library item, and `elf64_command`'s spills next.
+    - **Warm:** nothing is gated. The library, step piece and certificate replay from their images. Module scopes are under a quarter of the run row; the rest sits outside any module scope. That is presumably the producer's own evaluations of the library's bytes and columns (inferred, not bracketed).
+    - Leads, not taken: the joins' frontend cost (the tails join first), and bracketing the producer's evaluations on a warm build.
+    - Seconds, and the comparison with the old filter `wc`, belong on a local box.

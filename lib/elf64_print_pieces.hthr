@@ -5,7 +5,8 @@
 // stored line sends, and the trace of a write loop (`write_events`) with what
 // it means for stdout (`prints_the_line`). The write loop runs from
 // elf64_write_loop, at any offset; elf64_count_print is the tail that prints
-// a count and elf64_read_fields the one that prints three. The profile fixes
+// a count (elf64_read_fields printed three until the command replaced it,
+// 2026-10-05). The profile fixes
 // the registers: the count in R11 (copied from the state's R13), the page's
 // base in R8, the line's word in RAX, its start in R9 and its length in R10.
 // (elf64_read_print until 2026-09-29, when its process moved to

@@ -68,7 +68,7 @@ fn streams(executable: &Path) -> (Vec<u8>, Output) {
 #[test]
 fn tr_maps_stdin_to_stdout() {
     let directory = scratch("tr");
-    for (function, extra, reason) in [("upcase", &[][..], "is not a Filter program"), ("tr_program", &["--arg", "1"][..], "two --arg values")] {
+    for (function, extra, reason) in [("upcase", &[][..], "is not a Filter or Command program"), ("tr_program", &["--arg", "1"][..], "two --arg values")] {
         let output = build(&directory, function, extra);
         assert!(!output.status.success(), "{function} {extra:?} was certified");
         let stderr = String::from_utf8_lossy(&output.stderr);

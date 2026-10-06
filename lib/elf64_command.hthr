@@ -600,6 +600,26 @@ fn command_code(letters: List<BitVec(8)>, default: BitVec(64), spill: Nat → St
     → List<BitVec(8)> {
     layout_code(command_parts(letters, default, spill), filter_core_code(code, jumps, pj))
 }
+// Two lists of pieces, equal piece by piece, lay out the same code: how a
+// producer states the command's bytes a piece at a time, so no one
+// declaration evaluates the whole file.
+fn PiecesSame(pieces: List<List<BitVec(8)>>) → List<List<BitVec(8)>> → Type {
+    match pieces {
+        Nil => λ spelled => match spelled { Nil => True, Cons(_, _) => False },
+        Cons(p, ps) => λ spelled => match spelled { Nil => False, Cons(q, qs) => (p = q) ∧ PiecesSame(ps)(qs) },
+    }
+}
+theorem layout_code_same(last: List<BitVec(8)>, pieces: List<List<BitVec(8)>>):
+    (spelled: List<List<BitVec(8)>>) → PiecesSame(pieces)(spelled) → layout_code(pieces, last) = layout_code(spelled, last) {
+    match pieces {
+        Nil => λ spelled => match spelled { Nil => λ _ => refl, Cons(_, _) => λ no => false_elim(no) },
+        Cons(p, ps) => λ spelled => match spelled {
+            Nil => λ no => false_elim(no),
+            Cons(q, qs) => λ same => trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ x => x ++ layout_code(ps, last), same.left),
+                cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ t => q ++ t, layout_code_same(last, ps, qs, same.right))),
+        },
+    }
+}
 
 // ---------------------------------------------------------------------------
 // The pieces, wherever the frame and the page are.
@@ -782,7 +802,7 @@ theorem slots_counts(file: IoImage, frame: Nat → BitVec(8), vars: Nat → BitV
         let start = frame_value(8 * b, { omega });
         let place: (slot_at(b).toNat() + 8 * i = io_frame_base() + 8 * (b + i)) = omega;
         let address: (argv_slot(slot_at(b), i) = frame_at(8 * (b + i))) =
-            cong_fn<Nat, BitVec(64)>(λ a => word_of_nat(64, a), place);
+            trans(cong_fn<Nat, BitVec(64)>(λ a => word_of_nat(64, a), place), frame_counted(8 * (b + i), { omega }));
         let word = frame_var_at(with_frame(file, frame), page, vars, holds, b + i, { omega });
         j(sym(address), λ a _ => WordAt(io_data_access(), IoMemory(with_frame(file, frame), page), a, counts(i)),
             j(same(i, below), λ v _ => WordAt(io_data_access(), IoMemory(with_frame(file, frame), page), frame_at(8 * (b + i)), v), word))

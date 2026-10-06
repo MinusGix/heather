@@ -100,7 +100,10 @@ if [[ "${1:-}" == --fast ]]; then
         --skip elf_header_mutations_are_rejected_by_heather
         --skip call_stack_semantics_and_refusals
         --skip wc_l_prints_every_line
-        --skip wc_counts_lines_words_and_bytes
+        --skip wc_is_gnu_wc_on_its_command_lines
+        --skip command_filter_half_is_ready
+        --skip command_stat_pass_is_ready
+        --skip command_bundle_is_ready
         --skip tr_squeezes_newline_runs
         --skip tr_deletes_carriage_returns)
 elif [[ "${1:-}" == --long ]]; then
@@ -182,17 +185,30 @@ command_warmup() {
   HEATHER_KERNEL_WORKERS="${HEATHER_KERNEL_WORKERS:-1}" semantic_warmup semantic_command_warmup --exact command_prefix_is_ready
 }
 
-native_warmup() {
-  # Native certificates use a separate SemanticSession cache. Populate its
-  # exact-build prefix before a child spends its budget on the generated
-  # certificate; replay still kernel-checks every cached declaration.
+# One test of the heather binary's native module, alone in a bounded process.
+native_bin_warmup() {
   (
     ulimit -v 6291456
     ulimit -t 300
     RUST_MIN_STACK=8388608 RUST_TEST_THREADS=1 \
-      cargo test "${CARGO_FLAGS[@]}" -p heather-cli --bin heather \
-        native::tests::native_encoder_is_checked_and_corruption_is_rejected -- --exact --format terse
+      cargo test "${CARGO_FLAGS[@]}" -p heather-cli --bin heather "native::tests::$1" -- --exact --format terse
   )
+}
+
+native_warmup() {
+  # Native certificates use a separate SemanticSession cache. Populate its
+  # exact-build prefix before a child spends its budget on the generated
+  # certificate; replay still kernel-checks every cached declaration.
+  native_bin_warmup native_encoder_is_checked_and_corruption_is_rejected
+}
+
+# The command's bundled library (`build-x86` of a `Command`, native_wc) is
+# more than one rail cold: the filter's library, then through the stat pass,
+# then the rest, at width one, into the store native_wc builds with.
+native_command_warmup() {
+  HEATHER_KERNEL_WORKERS="${HEATHER_KERNEL_WORKERS:-1}" native_bin_warmup command_filter_half_is_ready
+  HEATHER_KERNEL_WORKERS="${HEATHER_KERNEL_WORKERS:-1}" native_bin_warmup command_stat_pass_is_ready
+  HEATHER_KERNEL_WORKERS="${HEATHER_KERNEL_WORKERS:-1}" native_bin_warmup command_bundle_is_ready
 }
 
 if (( $# == 0 )); then
@@ -203,10 +219,14 @@ if (( $# == 0 )); then
   # to warm; the warmup alone is ~150 CPU-s.
   if [[ "$TEST_LANE" != fast ]]; then
     native_warmup
+    native_command_warmup
   fi
 else
   if [[ "$requested" == *"--test native"* ]]; then
     native_warmup
+  fi
+  if [[ "$requested" == *"--test native_wc"* ]]; then
+    native_command_warmup
   fi
   whole_elab=false
   if { [[ "$requested" == *" -p heather-elab "* ]] ||

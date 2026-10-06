@@ -24,7 +24,10 @@ import nat;
 import option;
 import omega;
 
-fn frame_at(o: Nat) → BitVec(64) { word_of_nat(64, io_frame_base() + o) }
+// The address of offset `o`: a literal word, so a program's code that
+// names a slot evaluates to its bytes (a count up from zero, as `next_rip`
+// counts, does not; `frame_counted` says they agree inside the frame).
+fn frame_at(o: Nat) → BitVec(64) { BitVec::ofNat(io_frame_base() + o) }
 // The word at offset `o`, low byte first.
 fn frame_word(frame: Nat → BitVec(8), o: Nat) → BitVec(64) {
     immediate_from_bytes(frame(o), frame(o + 1), frame(o + 2), frame(o + 3), frame(o + 4), frame(o + 5), frame(o + 6), frame(o + 7))
@@ -46,7 +49,11 @@ theorem frame_bound(i: Nat, inside: i < 4096): io_frame_base() + i < Nat::pow(2,
     omega
 }
 theorem frame_value(i: Nat, inside: i < 4096): frame_at(i).toNat() = io_frame_base() + i {
-    bitvec_nat::toNat_word_of_nat(64, io_frame_base() + i, frame_bound(i, inside))
+    BitVec::toNat_ofNat(64, io_frame_base() + i, frame_bound(i, inside))
+}
+theorem frame_counted(i: Nat, inside: i < 4096): word_of_nat(64, io_frame_base() + i) = frame_at(i) {
+    trans(BitVec::cong_iterate_increment_count(64, BitVec::zero(), sym(BitVec::toNat_ofNat(64, io_frame_base() + i, frame_bound(i, inside)))),
+        BitVec::iterate_increment_toNat(64, frame_at(i)))
 }
 theorem io_offset_frame(i: Nat): io_offset_of(io_frame_base() + i) = None {
     let low = eq_true_of_is_true(io_page_base().leb(io_frame_base() + i),
@@ -100,13 +107,14 @@ theorem frame_read(file: IoImage, page: Nat → BitVec(8), i: Nat, inside: i < 4
             j(sym(in_frame), λ found _ => (match found { Some(offset) => Some(file.frame(offset)), None => file.rest(a) }) = Some(file.frame(i)),
                 refl)))
 }
-theorem frame_step(o, k: Nat): next_rip(frame_at(o), k) = frame_at(o + k) {
-    trans(BitVec::iterate_increment_compose(64, BitVec::zero(), io_frame_base() + o, k),
-        cong_fn<Nat, BitVec(64)>(λ v => word_of_nat(64, v), Nat::add_assoc(io_frame_base(), o, k)))
+theorem frame_step(o, k: Nat, inside: o + k < 4096): next_rip(frame_at(o), k) = frame_at(o + k) {
+    trans(cong_fn<BitVec(64), BitVec(64)>(λ a => next_rip(a, k), sym(frame_counted(o, { omega }))),
+        trans(BitVec::iterate_increment_compose(64, BitVec::zero(), io_frame_base() + o, k),
+            trans(cong_fn<Nat, BitVec(64)>(λ v => word_of_nat(64, v), Nat::add_assoc(io_frame_base(), o, k)), frame_counted(o + k, inside))))
 }
 theorem frame_byte(file: IoImage, page: Nat → BitVec(8), o, k: Nat, inside: o + k < 4096):
     io_read(IoMemory(file, page), next_rip(frame_at(o), k)) = Some(file.frame(o + k)) {
-    trans(cong_fn<BitVec(64), Option<BitVec(8)>>(λ a => io_read(IoMemory(file, page), a), frame_step(o, k)), frame_read(file, page, o + k, inside))
+    trans(cong_fn<BitVec(64), Option<BitVec(8)>>(λ a => io_read(IoMemory(file, page), a), frame_step(o, k, inside)), frame_read(file, page, o + k, inside))
 }
 
 // The word at offset `o`, whatever the page.

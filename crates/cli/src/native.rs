@@ -18,8 +18,9 @@ mod calls;
 mod layout;
 mod order;
 mod read_loop;
-mod read_fields;
 mod read_filter;
+mod evaluate;
+mod read_command;
 
 mod support;
 use support::SUPPORT;
@@ -57,7 +58,7 @@ fn symbol_ok(name: &str) -> bool {
 /// program that reads stdin, a stream filter's bundle (filter_program's
 /// `Filter`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Profile { Call, Filter }
+enum Profile { Call, Filter, Command }
 
 /// The profile a name's written declaration asks for, from its return type,
 /// and a bundle's written arguments: they choose the proof library to load,
@@ -87,7 +88,8 @@ fn profile_of(source: &Path, symbol: &str) -> Result<(Profile, Vec<heather_synta
     };
     Ok(match written {
         Some(("Filter", args)) => (Profile::Filter, args.to_vec()),
-        _ => return Err(format!("`{symbol}` is not a Filter program; \
+        Some(("Command", args)) => (Profile::Command, args.to_vec()),
+        _ => return Err(format!("`{symbol}` is not a Filter or Command program; \
             a function of two u64 arguments takes `--arg` twice")),
     })
 }
@@ -152,6 +154,7 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
         return Err("build-x86 needs exactly two --arg values for the source function".into());
     }
     let filter = profile == Profile::Filter;
+    let command = profile == Profile::Command;
     let source = Path::new(positional[0]);
     let symbol = positional[1];
     if !symbol_ok(symbol) {
@@ -179,11 +182,7 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
             return Err(format!("output already exists: {}", path.display()));
         }
     }
-    // A program that reads stdin stands on the read profile's pieces, the
-    // write loop, the formatters' tails and the filter's library.
-    let bundle: Vec<(&str, &str)> = SUPPORT.iter()
-        .chain(if filter { [read_loop::SUPPORT, read_loop::WRITE_SUPPORT, read_loop::PRINT_SUPPORT, read_fields::SUPPORT, read_filter::SUPPORT].concat() }
-            else { Vec::new() }.iter()).copied().collect();
+    let bundle = bundle_of(profile);
     // A program may import the bundled proof library by its bundled names,
     // which need not be files on the search path.
     let bundled: Vec<&str> = bundle.iter().map(|(name, _)| *name).collect();
@@ -277,10 +276,8 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     // cache key covers every module checked before it, so a second program
     // replays them instead of re-proving them.
     let finish = if filter { read_filter::finish_written(&written) } else { None };
-    let (line, three) = (finish == Some(read_filter::Finish::Line), finish == Some(read_filter::Finish::Fields));
-    let format = if line || three {
-        let parts = if three { read_fields::generate_format(&elab, read_fields::FORMAT_PREFIX)? }
-            else { read_loop::generate_format(&elab, read_loop::FORMAT_PREFIX)? };
+    let format = if finish == Some(read_filter::Finish::Line) {
+        let parts = read_loop::generate_format(&elab, read_loop::FORMAT_PREFIX)?;
         for part in &parts {
             check_module(&mut elab, &mut session, &loader::Module {
                 name: part.module.clone(), path: PathBuf::from(format!("{}.hthr", part.module)), src: part.text.clone(),
@@ -332,6 +329,26 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
         for part in format.iter().flatten() { proof.raw(format!("import {};", part.module)); }
         probes = None;
         (Some(read_filter::certify(&mut proof, &prefix, &program, &step, format.as_deref())?), None)
+    } else if command {
+        // As for a filter: the command, read off its bundle's written type,
+        // restated where the generator and the claim read it, its columns
+        // read back from that module, then its step piece.
+        let program = read_command::read_program(&elab, &root_name, symbol, &written)?;
+        let context = format!("{prefix}_context");
+        check_module(&mut elab, &mut session, &loader::Module {
+            name: context.clone(), path: PathBuf::from(format!("{context}.hthr")), src: read_command::context(&prefix, &root_name, &program),
+        }).map_err(|e| format!("{e}\nnote: `{symbol}`'s data, as the read profile needs them: its state starts at zeros and its counts are its \
+            state's Nat fields in order"))?;
+        let columns = read_command::read_columns(&elab, &prefix, &context, &program)?;
+        let step = read_filter::generate_step(&elab, &context, &prefix)?;
+        for (name, text) in [(format!("{prefix}_piece_pieces"), &step.pieces), (format!("{prefix}_piece_step"), &step.text)] {
+            check_module(&mut elab, &mut session, &loader::Module { name: name.clone(), path: PathBuf::from(format!("{name}.hthr")), src: text.clone() })?;
+        }
+        proof = Module::default();
+        for name in read_command::IMPORTS { proof.raw(format!("import {name};")); }
+        proof.raw(format!("import {root_name}; import {context}; import {prefix}_piece_pieces; import {prefix}_piece_step;"));
+        probes = None;
+        (Some(read_command::certify(&elab, &mut proof, &prefix, &context, &program, &columns, &step)?), None)
     } else if let Some(callee) = callee {
         if !symbol_ok(&callee) { return Err("callee must be a source identifier".into()); }
         let generate = |module: &mut Module, inputs: [u64; 2]| calls::generate(&elab, module, &prefix,
@@ -437,7 +454,9 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
             std::fs::set_permissions(&output, std::fs::Permissions::from_mode(0o755))
                 .map_err(|e| format!("{}: {e}", output.display()))?;
         }
-        if filter {
+        if command {
+            println!("{}: {}-byte ELF64 executable; checked command process trace: per operand, `{symbol}`'s columns of what it read", output.display(), image.len());
+        } else if filter {
             println!("{}: {}-byte ELF64 executable; checked read-until-EOF process trace whose stdout is `{}` of stdin", output.display(), image.len(), specs[0]);
         } else {
             println!("{}: {}-byte ELF64 executable; checked loaded-memory trace and Linux exit request", output.display(), image.len());
@@ -486,6 +505,18 @@ pub(super) fn drop_chain(m: &mut Module, name: &str, len: usize) {
 // suffix, plus one head read. Both steps are constant work.
 pub(super) fn byte_at(name: &str, index: usize) -> String {
     format!("trans(list::List::nth_drop({name}(), {index}), cong_fn<List<BitVec(8)>, Option<BitVec(8)>>(λ suffix => suffix.nth(0), {name}_drop_{index}()))")
+}
+
+/// The bundled proof library a profile's program stands on, in the order it
+/// is checked: a program that reads stdin stands on the read profile's
+/// pieces, the write loop, the formatters' tails and the filter's library; a
+/// command on those it shares with a filter and the command's own.
+fn bundle_of(profile: Profile) -> Vec<(&'static str, &'static str)> {
+    SUPPORT.iter().chain(match profile {
+        Profile::Filter => [read_loop::SUPPORT, read_loop::WRITE_SUPPORT, read_loop::PRINT_SUPPORT, read_filter::SUPPORT].concat(),
+        Profile::Command => [read_loop::SUPPORT, read_loop::WRITE_SUPPORT, read_filter::COMMAND_SUPPORT, read_command::SUPPORT].concat(),
+        Profile::Call => Vec::new(),
+    }.iter()).copied().collect()
 }
 
 fn check_module(elab: &mut Elaborator, session: &mut SemanticSession, module: &loader::Module) -> Result<(), String> {
@@ -565,6 +596,39 @@ pub(crate) fn native_test_base() -> Elaborator {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The command's bundled library, checked as `build-x86` checks it, into
+    // the store the CLI tests build with (`native_support::build_x86`).
+    // Cold, it is more than one CPU rail, so `scripts/test`'s native warmup
+    // runs these in a process each, in order, before `native_wc` builds over
+    // them (as `semantic_command_warmup` does for elab's copy of the same
+    // library): the filter's library, then through the stat pass, then the
+    // driver, which is the largest module.
+    fn command_bundle_ready(through: Option<&str>) {
+        let dir = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../target/native-test-images"));
+        let mut elab = Elaborator::with_prelude().unwrap();
+        elab.set_kernel_workers(heather_elab::kernel_workers_from_env().unwrap_or(heather_elab::DEFAULT_KERNEL_WORKERS));
+        let (store, rejected) = heather_cache::Cache::open(dir.clone());
+        if let Some(msg) = rejected.as_ref().and_then(|r| r.message()) { eprintln!("{msg}"); }
+        let store = Rc::new(store);
+        elab.set_gate(Rc::clone(&store) as Rc<dyn heather_elab::gate::KernelGate>);
+        let mut session = SemanticSession::new(Some(dir));
+        for (name, src) in bundle_of(Profile::Command) {
+            check_module(&mut elab, &mut session, &loader::Module { name: name.into(), path: PathBuf::from(format!("{name}.hthr")), src: src.into() })
+                .unwrap();
+            if Some(name) == through { break; }
+        }
+        if let Err(err) = store.save() { eprintln!("could not write the verdict store: {err}"); }
+    }
+
+    #[test]
+    fn command_filter_half_is_ready() { command_bundle_ready(Some("elf64_read_filter")); }
+
+    #[test]
+    fn command_stat_pass_is_ready() { command_bundle_ready(Some("elf64_stat_width")); }
+
+    #[test]
+    fn command_bundle_is_ready() { command_bundle_ready(None); }
 
     #[test]
     fn native_encoder_is_checked_and_corruption_is_rejected() {

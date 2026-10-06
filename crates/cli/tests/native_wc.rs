@@ -1,9 +1,10 @@
-//! `wc`, built as a certified executable that reads stdin to its end with its
-//! state kept in registers across the reads, and prints lines, words and bytes
-//! as GNU `wc` prints them on a pipe (docs/native-wc-design.md,
-//! docs/native-stream-filter-design.md). The output is
-//! compared with the counts of the whole input and, where the host has one,
-//! with `LC_ALL=C POSIXLY_CORRECT=1 wc` reading the same pipe.
+//! `wc` as a command (docs/native-wc-command-design.md), built as a certified
+//! executable: it parses its command line, stats its operands for the width,
+//! reads each one with its state kept in registers across the reads, and
+//! prints a row of the columns its options select, then a total. The table
+//! of §2 is run against the expected output and, where the host has one,
+//! against `LC_ALL=C wc` with the same arguments in the same directory; the
+//! counts are compared with the whole input's on a sweep of piped inputs.
 #![cfg(all(target_arch = "x86_64", target_os = "linux"))]
 use std::io::Write;
 use std::path::Path;
@@ -12,14 +13,16 @@ use std::process::{Command, Output, Stdio};
 mod native_support;
 use native_support::*;
 
-// `wc_program`, the program's bundle, is all a build names.
-fn build(directory: &Path, source: &Path) -> Output { build_x86(directory, source, "wc_program", &[], "wc") }
+// `wc_command`, the command's bundle, is all a build names.
+fn build(directory: &Path, source: &Path) -> Output { build_x86(directory, source, "wc_command", &[], "wc") }
 
-// Whitespace in the C locale, as POSIX has it: GNU also splits at 0xA0 unless
-// POSIXLY_CORRECT is set.
+// Whitespace in the C locale, as POSIX has it: GNU also splits at 0xA0
+// unless POSIXLY_CORRECT is set (and coreutils 9.4 disagrees with itself on
+// other high bytes), so the host is only asked about ASCII inputs.
 fn space(byte: u8) -> bool { matches!(byte, b'\t' | b'\n' | 0x0b | 0x0c | b'\r' | b' ') }
 
-// What `wc` prints on a pipe: seven columns a count, one space between.
+// What `wc` prints for one input on a pipe: no name, and seven columns a
+// count, since a pipe is not a regular file.
 fn expected(input: &[u8]) -> String {
     let lines = input.iter().filter(|&&b| b == b'\n').count();
     let words = input.split(|&b| space(b)).filter(|piece| !piece.is_empty()).count();
@@ -48,33 +51,73 @@ fn inputs() -> Vec<Vec<u8>> {
     inputs
 }
 
-// The host's `wc` on a pipe, when there is one.
-fn host_wc(input: &[u8]) -> Option<String> {
-    let mut child = Command::new("wc").env("LC_ALL", "C").env("POSIXLY_CORRECT", "1")
-        .stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().ok()?;
-    let mut stdin = child.stdin.take().unwrap();
-    let input = input.to_vec();
-    let writer = std::thread::spawn(move || { let _ = stdin.write_all(&input); });
+/// Where a run's stdin comes from.
+#[derive(Clone, Copy)]
+enum Input<'a> { Null, File(&'a str), Pipe(&'a [u8]) }
+
+// `program args…` in `directory`, stdin from `input`: its status and stdout.
+fn run(program: &Path, directory: &Path, args: &[&str], input: Input) -> Option<(Option<i32>, String)> {
+    let mut command = Command::new(program);
+    command.args(args).current_dir(directory).env("LC_ALL", "C").stdout(Stdio::piped()).stderr(Stdio::null());
+    command.stdin(match input {
+        Input::Null => Stdio::null(),
+        Input::File(name) => Stdio::from(std::fs::File::open(directory.join(name)).ok()?),
+        Input::Pipe(_) => Stdio::piped(),
+    });
+    let mut child = command.spawn().ok()?;
+    let writer = match input {
+        Input::Pipe(bytes) => {
+            let (mut stdin, bytes) = (child.stdin.take().unwrap(), bytes.to_vec());
+            Some(std::thread::spawn(move || { let _ = stdin.write_all(&bytes); }))
+        }
+        _ => None,
+    };
     let output = child.wait_with_output().ok()?;
-    writer.join().unwrap();
-    output.status.success().then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+    if let Some(writer) = writer { writer.join().unwrap(); }
+    Some((output.status.code(), String::from_utf8_lossy(&output.stdout).into_owned()))
 }
 
-// Bursts, one of them in the middle of a word: the in-word flag has to
-// survive the read between.
-const BURSTS: &[&[u8]] = &[b"one tw", b"o\nthr", b"", b"ee  ", b"four\n\n"];
+// The host's `wc`, when there is one and it is GNU's.
+fn host_wc() -> Option<std::path::PathBuf> {
+    let version = Command::new("wc").arg("--version").output().ok()?;
+    String::from_utf8_lossy(&version.stdout).contains("GNU coreutils").then(|| "wc".into())
+}
 
-// A program whose specification prints its counts in another order than its
-// proof states them, or whose finish prints its fields in another order than
-// its proof does, is refused at its own source, and nothing is published.
-// Then the program itself, run.
+// §2's table: f1 is two lines, three words, six bytes; f2 one line, two
+// words, twelve bytes; `-l` is a file holding f1's bytes; `d` a directory.
+// Each case's command line, stdin, status and stdout; GNU accepts long
+// options (§2's deviations), so that case is not asked of the host.
+const TABLE: &[(&[&str], Input, i32, &str)] = &[
+    (&["f1"], Input::Null, 0, "2 3 6 f1\n"),
+    (&["f1", "f2"], Input::Null, 0, " 2  3  6 f1\n 1  2 12 f2\n 3  5 18 total\n"),
+    (&["-l", "f1"], Input::Null, 0, "2 f1\n"),
+    (&["-lc", "f1"], Input::Null, 0, "2 6 f1\n"),
+    (&["-c", "-m", "f1"], Input::Null, 0, "6 6 f1\n"),
+    (&["-w", "f1", "f2"], Input::Null, 0, " 3 f1\n 2 f2\n 5 total\n"),
+    (&["f1", "nosuch", "f2"], Input::Null, 1, " 2  3  6 f1\n 1  2 12 f2\n 3  5 18 total\n"),
+    (&["nosuch", "f2"], Input::Null, 1, " 1  2 12 f2\n 1  2 12 total\n"),
+    (&["d"], Input::Null, 1, "      0       0       0 d\n"),
+    (&[], Input::Pipe(b"x"), 0, "      0       1       1\n"),
+    (&[], Input::File("f1"), 0, "2 3 6\n"),
+    (&[], Input::File("d"), 1, "      0       0       0\n"),
+    (&["-", "f1"], Input::File("f2"), 0, " 1  2 12 -\n 2  3  6 f1\n 3  5 18 total\n"),
+    (&["-", "f1"], Input::Pipe(b"one\n"), 0, "      1       1       4 -\n      2       3       6 f1\n      3       4      10 total\n"),
+    (&["--", "-l"], Input::Null, 0, "2 3 6 -l\n"),
+    (&["-x"], Input::Null, 1, ""),
+    (&["--lines", "f1"], Input::Null, 1, ""),
+    (&["f1", "-l"], Input::Null, 0, "2 f1\n"),
+    (&["-l", "--", "f1"], Input::Null, 0, "2 f1\n"),
+];
+
+// A command whose column counts what another column means, or whose count
+// is not what its proof folds, is refused at its own source, and nothing is
+// published. Then the command itself, run.
 #[test]
-fn wc_counts_lines_words_and_bytes() {
+fn wc_is_gnu_wc_on_its_command_lines() {
     let directory = scratch("wc");
     for edits in [
-        &[("three_fields_line(wc_lines(bytes), wc_words(bytes), wc_bytes(bytes)) }",
-            "three_fields_line(wc_words(bytes), wc_lines(bytes), wc_bytes(bytes)) }")][..],
-        &[("[λ s => s.lines, λ s => s.words, λ s => s.bytes],", "[λ s => s.words, λ s => s.lines, λ s => s.bytes],")][..],
+        &[("Column('l', λ s => s.lines, wc_lines)", "Column('l', λ s => s.lines, wc_words)")][..],
+        &[("Column('w', λ s => s.words, wc_words)", "Column('w', λ s => s.lines, wc_words)")][..],
     ] {
         let source = mistaken(&directory, "wc", edits);
         assert_refused_at(&build(&directory, &source), &source, &[directory.join("wc"), directory.join("wc.certificate.hthr")]);
@@ -85,30 +128,45 @@ fn wc_counts_lines_words_and_bytes() {
     let executable = directory.join("wc");
     let certificate = std::fs::read_to_string(directory.join("wc.certificate.hthr")).unwrap();
     assert!(!directory.join("wc.certificate.unchecked.hthr").exists(), "the refused build's unchecked copy is replaced, then removed");
-    for claim in ["_runs(", "_runs_every(", "_sends(", "fields_tail_runs(", "read_filter_runs(", "_code_written(", "_file_correct("] {
+    for claim in ["_runs(", "_runs_every(", "_stdout(", "_status(", "command_runs(", "_column0_means(", "_code_written(", "_file_correct("] {
         assert!(certificate.contains(claim), "missing {claim}");
     }
+
+    // §2's table, in a directory of its own.
+    let cases = directory.join("cases");
+    std::fs::create_dir_all(cases.join("d")).unwrap();
+    for (name, bytes) in [("f1", &b"a b\nc\n"[..]), ("f2", b"hello world\n"), ("-l", b"a b\nc\n")] {
+        std::fs::write(cases.join(name), bytes).unwrap();
+    }
+    let host = host_wc();
     let mut compared = 0;
-    for (index, input) in inputs().iter().enumerate() {
-        let path = directory.join(format!("input-{index}"));
-        std::fs::write(&path, input).unwrap();
-        let run = Command::new(&executable).stdin(std::fs::File::open(&path).unwrap()).output().unwrap();
-        assert_eq!(run.status.code(), Some(0), "input {index}");
-        assert_eq!(String::from_utf8_lossy(&run.stdout), expected(input), "input {index} ({} bytes)", input.len());
-        let run = piped(&executable, input);
-        assert_eq!(String::from_utf8_lossy(&run.stdout), expected(input), "input {index} on a pipe");
-        if let Some(host) = host_wc(input) {
-            assert_eq!(String::from_utf8_lossy(&run.stdout), host, "input {index} against the host's wc");
+    for &(args, input, status, stdout) in TABLE {
+        let ran = run(&executable, &cases, args, input).unwrap();
+        assert_eq!(ran, (Some(status), stdout.to_string()), "wc {}", args.join(" "));
+        if let Some(host) = host.as_ref().filter(|_| !args.iter().any(|a| a.starts_with("--") && a.len() > 2)) {
+            assert_eq!(run(host, &cases, args, input).unwrap(), ran, "wc {} against the host's wc", args.join(" "));
             compared += 1;
         }
     }
-    eprintln!("compared with the host's wc on {compared} inputs");
-    let run = bursts(&executable, BURSTS);
-    assert_eq!((run.status.code(), String::from_utf8_lossy(&run.stdout).into_owned()), (Some(0), expected(b"one two\nthree  four\n\n")));
-    let run = Command::new(&executable).stdin(std::fs::File::open("/").unwrap()).output().unwrap();
-    assert_eq!((run.status.code(), run.stdout.as_slice()), (Some(1), b"".as_slice()));
+
+    // The counts, on a pipe, against the whole input's.
+    for (index, input) in inputs().iter().enumerate() {
+        let ran = run(&executable, &cases, &[], Input::Pipe(input)).unwrap();
+        assert_eq!(ran, (Some(0), expected(input)), "input {index} ({} bytes)", input.len());
+        if let Some(host) = host.as_ref().filter(|_| input.is_ascii()) {
+            assert_eq!(run(host, &cases, &[], Input::Pipe(input)).unwrap(), ran, "input {index} against the host's wc");
+            compared += 1;
+        }
+    }
+    eprintln!("compared with the host's wc on {compared} command lines and inputs");
+    let ran = bursts(&executable, BURSTS);
+    assert_eq!((ran.status.code(), String::from_utf8_lossy(&ran.stdout).into_owned()), (Some(0), expected(b"one two\nthree  four\n\n")));
     assert_eq!(unwritable_stdout(&executable, Stdio::null(), b"one two\n").status.code(), Some(0));
     let full = std::fs::OpenOptions::new().write(true).open("/dev/full").unwrap();
     assert_eq!(unwritable_stdout(&executable, Stdio::from(full), b"one two\n").status.code(), Some(1));
     std::fs::remove_dir_all(directory).unwrap();
 }
+
+// Bursts, one of them in the middle of a word: the in-word flag has to
+// survive the read between.
+const BURSTS: &[&[u8]] = &[b"one tw", b"o\nthr", b"", b"ee  ", b"four\n\n"];

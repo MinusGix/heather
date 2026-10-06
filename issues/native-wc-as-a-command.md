@@ -3,7 +3,7 @@ title: wc as a command: file operands, flags in one binary, argv and open in the
 status: open
 labels: [native,x86,semantics,design]
 created: 2026-10-02
-updated: 2026-10-04
+updated: 2026-10-05
 ---
 
 The certified `wc` reads stdin only. A normal `wc`:
@@ -52,3 +52,9 @@ histories.
     - **Cost.** Three declarations, each building freshly stored machine states and branching on a `match` over them in one body, dominated the module's first cold check: the prologue's store and test, the selection store and its few-operands test, and the total row's name writes. Split so the stores end at an abstract state described by a record and the branch starts from it, they became a small share. The module's cold check fell to under a quarter of its first form. It is now the largest module the command stands on, ahead of the stat pass.
     - **Test.** `crates/elab/tests/command_process.rs` composes the claim and both corollaries over any step piece `FilterFacts` holds of (no hand-written piece: the claim is stated over the facts), and checks §2's rows, the total row and the exit statuses by `refl`. `command_refusals.rs` has four refusals. Cold, the library prefix is more than one CPU rail, so `scripts/test` populates it in two bounded processes first (`semantic_command_warmup`).
     - Filed [[list-literal-left-of-append]]. Next, C4: the producer, `wc.hthr` as the command, and deleting the `Fields` finish.
+- 2026-10-05: **C4 built: `wc` is the command** (`crates/cli/src/native/read_command.rs`; `examples/x86-native/wc.hthr`'s `wc_command`; design §10's C4 status). `build-x86` builds it, and `native_wc` runs §2's table and a sweep of piped inputs against the expected output and the host's `wc`. The `Fields` finish, `elf64_read_fields`, `read_fields.rs` and `read_fields_process` are deleted; [[fields-profile-shape]] is closed.
+    - **Producer.** It reads the columns back from the checked context by evaluation, and the library's code bytes by evaluating `command_parts`, so no library encoder is restated in Rust.
+    - **Two library changes.** `frame_at` is now `BitVec::ofNat`, bridged by `frame_counted`, because the iterated-increment form of a frame address cannot be evaluated. `layout_code_same` states a long part a piece at a time, since one declaration's fuel evaluates only a few hundred bytes.
+    - **The claim.** `{p}_column{j}_means` ties each slot to its column's meaning. Joining that to `{p}_stdout` is residue ([[native-wc-command-residue]]).
+    - **The test.** Cold, the command's library is more than one CPU rail, so `scripts/test` warms `target/native-test-images` in three bounded processes first (`command_filter_half_is_ready`, `command_stat_pass_is_ready`, `command_bundle_is_ready`).
+    - **Cost.** Logged on [[x86-certificate-per-declaration-constant]]. The certificate is about a quarter of a cold build, and two thirds of it is the joins of four long parts.
