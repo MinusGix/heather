@@ -3,7 +3,7 @@ title: wc as a command: file operands, flags in one binary, argv and open in the
 status: open
 labels: [native,x86,semantics,design]
 created: 2026-10-02
-updated: 2026-10-05
+updated: 2026-10-07
 ---
 
 The certified `wc` reads stdin only. A normal `wc`:
@@ -58,3 +58,4 @@ histories.
     - **The claim.** `{p}_column{j}_means` ties each slot to its column's meaning. Joining that to `{p}_stdout` is residue ([[native-wc-command-residue]]).
     - **The test.** Cold, the command's library is more than one CPU rail, so `scripts/test` warms `target/native-test-images` in three bounded processes first (`command_filter_half_is_ready`, `command_stat_pass_is_ready`, `command_bundle_is_ready`).
     - **Cost.** Logged on [[x86-certificate-per-declaration-constant]]. The certificate is about a quarter of a cold build, and two thirds of it is the joins of four long parts.
+- 2026-10-07: Reviewed after C4; the follow-ups and their order are on [[native-wc-review-follow-ups]].

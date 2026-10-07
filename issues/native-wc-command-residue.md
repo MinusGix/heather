@@ -3,7 +3,7 @@ title: wc as a command: GNU behaviours deferred from the first round
 status: open
 labels: [native,x86,design]
 created: 2026-10-03
-updated: 2026-10-05
+updated: 2026-10-07
 ---
 
 The full `wc` command (`docs/native-wc-command-design.md`) matches GNU `wc`
@@ -36,3 +36,7 @@ claim. These are the ones deferred:
 - **[[native-wc-as-a-command]]** owns the command and its claim. Assumed
   here: only that stdout and the exit status are stated as functions of the
   command line and the history.
+
+## Log
+
+- 2026-10-07: The stdout-over-column-meanings corollary is the acceptance test of [[command-trace-by-append]].
