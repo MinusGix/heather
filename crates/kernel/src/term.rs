@@ -80,7 +80,7 @@ pub enum Type {
     /// `sEmpty^l` — the strict (definitionally irrelevant) empty type at
     /// level `l`; no inhabitants, eliminated **anywhere** by
     /// [`Term::ElimSEmpty`]. Level-indexed for [`Type::Unit`]'s load-bearing
-    /// reason. Unlike [`Type::Empty`] (whose neutrals compare structurally),
+    /// reason. As at [`Type::Empty`] (Empty η),
     /// any two terms at this type are convertible — vacuously sound, and it
     /// keeps absurdity proofs invisible when they ride in data
     /// (docs/sprop-design.md §2.2; the Empty-reuse alternative is §2.2's

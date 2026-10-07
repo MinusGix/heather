@@ -453,6 +453,25 @@ fn fin_indices_are_the_sum_injections() {
 }
 
 #[test]
+fn fin_zero_is_proof_irrelevant() {
+    // `Fin(0) ⇝ Empty`, and Empty η is dispatched on the type's whnf, so
+    // two distinct indices at `Fin(0)` are convertible, and so are two
+    // eliminations of them.
+    let g = ext(&ext(&nil_ctx(), fin(nat(0)), c(0)), fin(nat(0)), c(0));
+    conv_tm(&g, &v(0), &v(1), &fin(nat(0)), c(0));
+    let absurd = |x: u32| Term::ElimEmpty { level: c(0),
+            scrut_level: Level::Zero, motive: rty(Type::Nat), scrut: rt(v(x)) };
+    ck(&g, &absurd(0), &Type::Nat, c(0));
+    conv_tm(&g, &absurd(0), &absurd(1), &Type::Nat, c(0));
+    // Negative control: at a *stuck* `Fin(n)` (n a variable) the type is
+    // not Empty, and distinct indices stay distinct. Substituting 0 for n
+    // later only adds convertible pairs, so this is stable.
+    let h = ext(&ext(&ext(&nil_ctx(), Type::Nat, c(0)), fin(v(0)), c(0)), fin(v(1)), c(0));
+    conv_term(&GlobalCtx::default(), &h, Layer::Prog, &v(0), &v(1), &fin(v(2)), &c(0), FUEL)
+        .expect_err("indices at a stuck Fin(n) must stay distinguishable");
+}
+
+#[test]
 fn substitution_reaches_the_length() {
     // The length is a term in Γ with no binder of its own, so substitution
     // must reach it — the `nth`/`arity` plumbing depends on this.

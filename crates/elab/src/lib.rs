@@ -1018,7 +1018,16 @@ impl matching::MotiveSynthesisElab for Elaborator {
         scrutinee_type: &Type,
         scrutinee_level: &Level,
     ) -> bool {
-        self.goal_oracle()
+        // A candidate is any stuck subterm of the goal, of whatever type, and
+        // conversion at the scrutinee's type presumes both sides have it. Where
+        // that type is irrelevant (Unit, Empty, sEmpty, …) the presumption is
+        // the whole answer — a `Nat` candidate "converts" to a scrutinee at
+        // `Empty`, and abstracting it breaks the motive
+        // (docs/metatheory-ch07-extensions.md §28). So a hit stands only once
+        // the candidate's own type converts too; misses, the common case, pay
+        // nothing extra.
+        let oracle = self.goal_oracle();
+        oracle
             .convert_term(
                 &cx.gamma,
                 Layer::Prog,
@@ -1028,6 +1037,12 @@ impl matching::MotiveSynthesisElab for Elaborator {
                 scrutinee_level,
             )
             .is_ok()
+            && typing::infer_term(oracle.world(), 0, Layer::Prog, &cx.gamma, candidate, self.fuel)
+                .is_ok_and(|(ty, _)| {
+                    oracle
+                        .convert_type(&cx.gamma, Layer::Prog, &ty, scrutinee_type, scrutinee_level)
+                        .is_ok()
+                })
     }
 }
 

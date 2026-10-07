@@ -194,6 +194,10 @@ candidate** if the round runs heavy, exactly like `Fin` was (§1.2 of the wf
 doc): make `Empty` irrelevant instead and drop `sEmpty`; nothing else in
 this document depends on the choice.
 
+> **2026-10-07:** `Empty` is now irrelevant (Empty η,
+> `docs/metatheory-ch07-extensions.md` §28), so the first half of this
+> alternative has landed. `sEmpty` stays; dropping it is a separate call.
+
 Squash `∥·∥` has since landed with the dependent squash-headed
 eliminator recorded in `issues/sprop-squash.md`; its normalizing-total LR
 case is `docs/metatheory-ch07-extensions.md` §27. SProp inductives in

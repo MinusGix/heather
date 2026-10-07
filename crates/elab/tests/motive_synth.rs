@@ -345,3 +345,27 @@ fn a_sibling_field_swap_is_refused() {
         }");
     assert!(e.contains("NotConvertible"), "{e}");
 }
+
+// An absurd match's scrutinee sits at an Empty type, where conversion (Empty
+// η) accepts any two terms. The goal `Le(Succ(k), Succ(Zero))` has stuck
+// `Nat` subterms, and none of them is the scrutinee: a candidate stands only
+// once its own type converts to the scrutinee's, so none is abstracted.
+#[test]
+fn an_absurd_match_abstracts_no_candidate_of_another_type() {
+    ok("inductive False {}
+        fn Le(n: Nat, m: Nat) -> Type {
+            match n {
+                Zero => True,
+                Succ(k) => match m { Zero => False, Succ(l) => Le(k, l) },
+            }
+        }
+        theorem le_succ_r(n: Nat, m: Nat): Le(n, m) -> Le(n, Succ(m)) {
+            match n {
+                Zero => λ h => trivial,
+                Succ(k) => match m {
+                    Zero => λ bad => match bad {},
+                    Succ(m2) => λ good => le_succ_r(k, m2, good),
+                },
+            }
+        }");
+}

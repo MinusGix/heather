@@ -1840,16 +1840,21 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
             // must sit here in `tm_nf`, ahead of any structural fallback.
             TyView::SEq { .. } => Ok(()),
             // sEmpty irrelevance (extension; docs/sprop-design.md §2.2):
-            // unlike Empty (structural neutrals, below), any two absurdity
-            // proofs are convertible — vacuously sound, the type is
-            // uninhabited in consistent contexts.
+            // any two absurdity proofs are convertible — vacuously sound,
+            // the type is uninhabited in consistent contexts.
             TyView::SEmpty { .. } => Ok(()),
             // Propositional truncation is definitionally proof-irrelevant,
             // while evaluation above still forces both sides to WHNF.
             TyView::Squash { .. } => Ok(()),
-            // Empty (extension): no canonical inhabitants, so only neutrals can
-            // appear; compare them structurally.
-            TyView::Empty { .. } => self.tm_nee(env, a, b).map(drop),
+            // Empty η (extension; docs/metatheory-ch07-extensions.md §28):
+            // proof irrelevance, as at sEmpty — any two terms of an Empty type
+            // are convertible. Only neutrals can appear (no canonical
+            // inhabitants), and they exist only under a false hypothesis.
+            // Dispatched on the type's whnf, so `Fin(0)` and `El «Empty»`
+            // reach it too. Not the initial-object η (`t ≡ elim_Empty(x)`
+            // under `x : Empty`), which would make conversion decide
+            // whether the context is inconsistent.
+            TyView::Empty { .. } => Ok(()),
             // Sum (extension): a positive type — the two constructors match
             // like `Zero`/`Succ` at `Nat`. The annotations on inl/inr are
             // forced by well-typedness at this sum type, so only the injected
@@ -2008,18 +2013,21 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                 self.tm_nee_c(env, n1, n2)?; // inferred Nat: redundant, ignored
                 Ok((D::inst_ty(self, env, env, m1, std::slice::from_ref(n1))?, (*v1).clone()))
             }
-            // elim_Empty neutral congruence (extension); mirrors ElimNat
-            // minus the base/step branches.
+            // elim_Empty neutral congruence (extension) — the scrutinees are
+            // *skipped*, as elim_sEmpty's below: they sit at Empty, whose
+            // irrelevance arm accepts any two terms, so congruence makes
+            // the two eliminations equal whatever the scrutinees. Comparing
+            // them would reject a pair the rule accepts. The motive
+            // instances agree for the same reason.
             (
                 TmView::ElimEmpty { level: v1, scrut_level: s1, motive: m1, scrut: n1 },
-                TmView::ElimEmpty { level: v2, scrut_level: s2, motive: m2, scrut: n2 },
+                TmView::ElimEmpty { level: v2, scrut_level: s2, motive: m2, scrut: _ },
             ) => {
                 self.lev_eq(v1, v2)?;
                 self.lev_eq(s1, s2)?;
                 let em = D::empty(env, s1);
                 let e_x = D::push_entry(env, &em, s1);
                 self.ty(&e_x, m1, m2, v1)?;
-                self.tm_nee_c(env, n1, n2)?; // inferred Empty: redundant, ignored
                 Ok((D::inst_ty(self, env, env, m1, std::slice::from_ref(n1))?, (*v1).clone()))
             }
             // elim_sEmpty neutral congruence (extension) — ElimEmpty's arm

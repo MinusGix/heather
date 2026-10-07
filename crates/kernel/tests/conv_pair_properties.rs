@@ -528,9 +528,9 @@ fn sigma_eta_and_neutral_distinctness() {
         );
         // Not blind: distinct neutral inhabitants of the same Σ differ —
         // asserted at Σ(S, Nat) rather than the generated Σ, because a
-        // generated component may be *proof-irrelevant* (`Unit`, or a
-        // `Vec` at length 0, which reduces to it), and then η makes any two
-        // inhabitants convertible, correctly.
+        // generated component may be *proof-irrelevant* (`Unit`, `Empty`,
+        // or a `Vec`/`Fin` at length 0, which reduces to one), and then η
+        // makes any two inhabitants convertible, correctly.
         let sig_rel = Type::Sigma {
             fst_level: fl.clone(),
             snd_level: Level::Zero,
