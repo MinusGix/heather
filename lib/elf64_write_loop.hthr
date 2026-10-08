@@ -59,6 +59,12 @@ fn wl_at_wfail(at: Nat) → Nat { wl_at(at, 7) }
 fn wl_at_wretry(at: Nat) → Nat { ft_at_jz(wl_at_wfail(at)) }
 fn wl_at_exit(at: Nat) → Nat { wl_at(at, 8) }
 fn wl_at_exit_call(at: Nat) → Nat { wl_at(at, 9) }
+// The loop's own jumps, its all-sent JZ's displacement given: where that
+// one lands is the program's.
+fn wl_jumps(zd: BitVec(32)) → PrintJumps {
+    PrintJumps(sd := near_rel(wl_at_wjs(0) + 6, wl_at_wfail(0)), zd := zd, bd := near_rel(wl_at_wjmp(0) + 5, wl_at_write(0)),
+        rd := near_rel(wl_at_wretry(0) + 6, wl_at_write(0)))
+}
 
 // The pieces, resident at their offsets.
 record WriteLoopResident(memory: IoMemory, at: Nat, pj: PrintJumps) {
