@@ -117,7 +117,7 @@ theorem layout_shift(lens: List<Nat>): (at, base, i: Nat) → layout_at(at + bas
 
 // The displacement a near jump ending at `end` takes to land on `to`: their
 // distance modulo 2^32.
-fn near_rel(end, to: Nat) → BitVec(32) { BitVec::ofNat((Nat::pow(2, 32) + to) - end) }
+fn near_rel(end, to: Nat) → BitVec(32) { BitVec::ofNat((Nat::pow(2, 32) + to) -end) }
 
 // A near jump `size` bytes long at `from` lands on `to`, ahead of it or
 // behind it: its displacement's unsigned reading completes the distance, or
