@@ -64,9 +64,10 @@ on a customer that needs liveness or concurrency.
     symmetric with no hypothesis; transitive and a `bind` congruence by
     induction on the index; absorbs Taus. So setoid rewriting along it needs
     no coinduction.
-  - Two design constraints, both checked: index 0 must relate everything (or
-    `spin` is not self-related), and `EqTau` must consume the index (an
-    inductive Tau-Tau rule fails at `spin`).
+  - Design constraint, checked: `EqTau` must consume the index (an
+    inductive Tau-Tau rule fails at `spin`, `spin_not_euttT`). Index 0 must
+    also relate everything, else every derivation is finite and `spin`
+    again fails; that one is argued, not checked.
   - Boundary: Milner's image-infinite LTS (`Br(λn. aⁿ)` against it plus
     `a^ω`) satisfies every approximant and fails the gfp, so choice trees
     (doc §6.2) reopen Q1. Nothing the finitary route needs is lost for

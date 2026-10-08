@@ -236,9 +236,9 @@ options:
    Taus precede its next `Ret`/`Vis`, so every index's derivation passes
    through the same node. The one other hypothesis is that the Vis clause's
    command equality is proof-irrelevant: state it with `sEq`, or with `Id`
-   over a `Cmd` that is a set. Index 0 must relate everything, and `EqTau`
-   must consume an index: with an index-free Tau-Tau rule, `spin` is not
-   related to itself. Milner's gap needs image-infinite nondeterminism, and
+   over a `Cmd` that is a set. `EqTau` must consume an index: with an
+   index-free Tau-Tau rule, `spin` is not related to itself (checked), and
+   for the same reason index 0 must relate everything (argued). Milner's gap needs image-infinite nondeterminism, and
    the probe checks that it does open there, so choice trees (§6.2) reopen
    the question.
 
