@@ -285,6 +285,12 @@ impl Elaborator {
             // a rejected candidate is search state rather than part of the
             // winning term. Only the accepted branch may publish its edges.
             let dependency_mark = self.attempt.direct_dependencies.borrow().clone();
+            // Likewise its checking mismatches: a candidate built at the goal
+            // records one wherever it is not of the goal type, and that is
+            // the search answering "no", not a site the gate could later
+            // blame — `Bool::Monoid` at `and` while `or` was asked
+            // (issues/width-specific-method-on-other-width.md).
+            let notes_mark = self.attempt.check_notes.borrow().len();
             // The index is part of the candidate line, not a separate one: at a
             // carrier with two structures the trace has to say *which* was
             // tried, and that is the whole observability the registry key buys
@@ -336,6 +342,7 @@ impl Elaborator {
                 Err(e) => tr.push(line(depth + 1, "rejected", e.message())),
             }
             *self.attempt.direct_dependencies.borrow_mut() = dependency_mark;
+            self.attempt.check_notes.borrow_mut().truncate(notes_mark);
         }
         None
     }

@@ -51,3 +51,10 @@ that differs only in an argument shows that argument.
   parameters still prints its type arguments as `<…>` beside the recovered
   values, because `display_targs` declines for it. Tests:
   `crates/elab/tests/type_members.rs` §7.
+- 2026-10-08: The display change exposed a stale note. Instance search builds
+  each candidate in checking position, so a rejected candidate (`Bool::Monoid`
+  at `and` while `or` was asked) left a mismatch note behind. It used to
+  display alike and lose to the `refl` note; spelled, it won and blamed the
+  search. `resolve_goal_from` now drops a rejected candidate's notes along
+  with its dependency edges. Caught by `lib_algebra` and
+  `operation_indexed_classes`.
