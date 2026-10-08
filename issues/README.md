@@ -75,6 +75,7 @@ scripts/issue log <slug> "note"                            # short entries only
 scripts/issue threads                                      # per-thread status counts
 scripts/issue check                                        # lint links/blocked-by/index
 scripts/issue index                                        # regenerate INDEX.md
+scripts/issue setup-git                                    # once per clone: INDEX.md merge driver
 scripts/issue serve [--port 8765] [--open]                 # read-only web viewer
 ```
 
@@ -88,6 +89,20 @@ and selection state lives in the URL hash, so a view can be bookmarked.
 
 Mutating commands (`new`, `close`, `reopen`) update `updated:` and regenerate
 `INDEX.md` automatically.
+
+**`INDEX.md` merges itself.** `.gitattributes` gives it the `issue-index` merge
+driver (`scripts/issue merge-index`), which merges the index per issue rather
+than per line: each line is a function of one issue's frontmatter, so taking
+whichever side changed each issue's line, and re-rendering the headers and
+counts, is exactly what `index` would print over the merged issue files. It
+runs under merge, rebase, cherry-pick and stash alike. It leaves the index
+conflicted only when both sides changed the *same* issue's line differently,
+which means that issue's file has conflicted as well: resolve it, then
+`scripts/issue index`. Git only knows the driver once it is registered in the
+clone's own config, so run `scripts/issue setup-git` once per clone (Claude
+Code sessions do it through the repo's `SessionStart` hook); an unregistered
+clone falls back to the ordinary text merge. `check` still reports a stale
+index, as the backstop.
 
 **Prose goes in on stdin, not in argv.** A log entry is markdown with `code
 spans`, and a shell expands backticks inside a double-quoted argument: on

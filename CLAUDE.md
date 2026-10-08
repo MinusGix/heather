@@ -106,6 +106,10 @@
   neutral scrutinee, an **open** element type, a *checking* position and not
   only computation, and a negative control); defects have hidden behind each.
 - Issue tracker: `scripts/issue` over `issues/*.md` (see `issues/README.md`).
+  `issues/INDEX.md` merges itself through a git merge driver that
+  `scripts/issue setup-git` registers (the `SessionStart` hook runs it); never
+  hand-merge it — if it does conflict, resolve the issue file and run
+  `scripts/issue index`.
 - Type-theory source of truth: `docs/delam/04–06`; `docs/delam/README.md`
   explains which chapters are implementation-relevant (01–03 are a
   simplified warm-up system, not the target).
