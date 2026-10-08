@@ -229,11 +229,18 @@ options:
 2. step-indexed: `eutt t u := Π n. euttₙ t u`, where each `euttₙ` is
    inductive (the Tau-peeling rules stay inductive, and `EqTau`/`EqVis`
    consume an index). It is small, it lives at the trees' level, and it
-   needs no kernel change. **Conjecture, unproved:** for *deterministic*
-   trees, which ITrees are, the ω-approximants meet at the gfp. Milner's
-   classic gap between approximants and bisimilarity needs image-infinite
-   nondeterminism. This needs a proof before anything rests on it, and
-   choice trees (§6.2) would reopen it.
+   needs no kernel change. **Proved in Coq (2026-10-08)**, heather-coq
+   `probes/ItreeDepthBisim.v`: for *deterministic* trees, which ITrees
+   are, the ω-approximants meet at the gfp, for any response types,
+   infinite ones included. Determinism enters because a tree fixes how many
+   Taus precede its next `Ret`/`Vis`, so every index's derivation passes
+   through the same node. The one other hypothesis is that the Vis clause's
+   command equality is proof-irrelevant: state it with `sEq`, or with `Id`
+   over a `Cmd` that is a set. Index 0 must relate everything, and `EqTau`
+   must consume an index: with an index-free Tau-Tau rule, `spin` is not
+   related to itself. Milner's gap needs image-infinite nondeterminism, and
+   the probe checks that it does open there, so choice trees (§6.2) reopen
+   the question.
 
 ### 3.8 Quotienting by eutt costs countable choice
 
