@@ -3,7 +3,7 @@ title: One program logic for native code, designed to meet interaction trees
 status: open
 labels: [native,x86,ir,semantics,design]
 created: 2026-10-01
-updated: 2026-10-01
+updated: 2026-10-07
 ---
 
 The native stack says "this code runs" five ways: `ExecuteBlock`,
@@ -43,3 +43,4 @@ interaction tree t" comes out later as a lemma, not a re-founding. Questions:
 ## Log
 
 - 2026-10-01: The stream filter landed (docs/native-stream-filter-design.md): its claim is read_filter_runs over filter_events, and filter_prints says stdout is spec(stdin) — the observable this logic must reproduce.
+- 2026-10-07: An incremental step toward this logic for straight code: [[native-straight-code-triples]].
