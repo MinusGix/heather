@@ -853,12 +853,16 @@ fn unit_eta_proof_irrelevance() {
 }
 
 #[test]
-fn empty_neutrals_and_encodings() {
+fn empty_eta_and_encodings() {
     let psi = psi(vec![]);
-    // At Empty only neutrals appear: equal vars convert, distinct ones do not.
+    // At Empty only neutrals appear, and Empty η (proof irrelevance) makes
+    // any two convertible, distinct variables included — as at Unit.
     let gamma = extend(&extend(&nil_ctx(0), Type::Empty { level: Level::Zero }, c(0)), Type::Empty { level: Level::Zero }, c(0));
     ok_tm(&psi, &gamma, &v(0), &v(0), &Type::Empty { level: Level::Zero }, &c(0));
-    no_tm(&psi, &gamma, &v(0), &v(1), &Type::Empty { level: Level::Zero }, &c(0));
+    ok_tm(&psi, &gamma, &v(0), &v(1), &Type::Empty { level: Level::Zero }, &c(0));
+    // Irrelevance is about terms, never types: Empty ≉ Unit stays below,
+    // and two Empty-typed variables do not make anything else convertible.
+    no_tm(&psi, &gamma, &Term::Zero, &num(1), &Type::Nat, &c(0));
     // Encodings congruence at Ty 0; «Unit» ≉ «Empty».
     ok_tm(&psi, &nil_ctx(0), &Term::TmUnit { level: Level::Zero }, &Term::TmUnit { level: Level::Zero }, &Type::Ty(c(0)), &c(1));
     no_tm(&psi, &nil_ctx(0), &Term::TmUnit { level: Level::Zero }, &Term::TmEmpty { level: Level::Zero }, &Type::Ty(c(0)), &c(1));
@@ -891,6 +895,20 @@ fn elim_empty_neutral_congruence() {
     ok_tm(&psi, &gamma, &elim(el_nat), &elim(Type::Nat), &Type::Nat, &c(0));
     // A differing motive is caught.
     no_tm(&psi, &gamma, &elim(Type::Nat), &elim(Type::Unit { level: Level::Zero }), &Type::Nat, &c(0));
+}
+
+#[test]
+fn elim_empty_congruence_skips_the_scrutinees() {
+    // Empty η makes any two scrutinees equal, so congruence makes the two
+    // eliminations equal: the tm_ne arm skips the scrutinees, as
+    // elim_sEmpty's does. Comparing them structurally would reject this.
+    let psi = psi(vec![]);
+    let gamma = extend(&extend(&nil_ctx(0), Type::Empty { level: Level::Zero }, c(0)), Type::Empty { level: Level::Zero }, c(0));
+    let elim = |m: Type, x: u32| Term::ElimEmpty { level: c(0),
+            scrut_level: Level::Zero, motive: rty(m), scrut: rt(v(x)) };
+    ok_tm(&psi, &gamma, &elim(Type::Nat, 0), &elim(Type::Nat, 1), &Type::Nat, &c(0));
+    // The motive is still compared.
+    no_tm(&psi, &gamma, &elim(Type::Nat, 0), &elim(Type::Unit { level: Level::Zero }, 1), &Type::Nat, &c(0));
 }
 
 // -------------------------------------------------------------------------

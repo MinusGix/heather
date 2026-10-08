@@ -101,7 +101,12 @@ all, so it is strictly *simpler* than `Nat` — no IH inside `NfEqSum`.
 `Empty^l`): type rule with no component premises,
 term relation = "both whnf are generically equivalent neutrals" (no
 constructor case, matching `conv.rs`'s `Type::Empty => tm_nee`).
-`elim_Empty`'s arm is the neutral case alone. Worth recording as a *gain*:
+`elim_Empty`'s arm is the neutral case alone.
+
+> **Superseded (2026-10-07) by §28, Empty η.** The term relation is now
+> `sEmpty`'s, "both whnf are neutrals, each related to itself", and the
+> `elim_Empty` arm skips the scrutinees. The consistency gain below is
+> unchanged, because the relation still asks for neutrals. Worth recording as a *gain*:
 with `Empty` in the LR, ch. 08's consistency statement is direct — in the
 empty local context there are no neutrals, so the term relation at `Empty`
 is empty, so `Empty` has no closed inhabitant. Previously that had to be
@@ -344,7 +349,7 @@ and where `conv.rs` discharges each:
 | `sup` congruence | Congruence | `Type::W` arm |
 | `J` neutral congruence | Congruence for Neutrals | `tm_ne` (lines 1004–1063) |
 | `fst` / `snd` neutral congruences | Congruence for Neutrals | `tm_ne` (lines 1082+) |
-| `elim_Empty` neutral congruence | Congruence for Neutrals | `tm_ne` (lines 817–831) |
+| `elim_Empty` neutral congruence (scrutinees skipped since §28) | Congruence for Neutrals | `tm_ne` (lines 817–831) |
 | `case` neutral congruence | Congruence for Neutrals | `tm_ne` (lines 832–906) |
 | `elim_W` neutral congruence | Congruence for Neutrals | `tm_ne` (lines 907–1003) |
 
@@ -412,7 +417,7 @@ and is what makes the stronger reading tempting.
 | former | LR case shape | new definitional risk | layering restriction | verdict |
 |---|---|---|---|---|
 | `Sum` | positive, `Nat`-shaped, two payload cases | none | direct | goes through |
-| `Empty` | positive, neutral-only | none | direct | goes through; gives consistency directly |
+| `Empty` | positive, neutral-only; irrelevant since §28 | none | direct | goes through; gives consistency directly |
 | `Unit` | irrelevant (no whnf condition) | escape depends on a *law*, not structure | direct | goes through; owes a declarative η rule |
 | `Σ` | negative (projections), `Π`-shaped premises | none | contravariant — iff-IH like `Π` | goes through; owes a declarative η rule |
 | `Id` | positive, `refl`/neutral, no K | none | direct | goes through; `□` intensionality confirmed sound |
@@ -2059,3 +2064,77 @@ The code-layer case is ordinary structural recursion. `TmSquash`,
 `squash`, and `elim_Squash` have distinct branches, so quotation can inspect
 the witness and eliminator syntax even though live conversion forgets the
 witness. No readback rule crosses the code firewall.
+
+## 28. Empty η: proof irrelevance at `Empty`
+
+Added 2026-10-07; closes `issues/empty-eta-conversion.md`. The rule:
+
+```text
+   Ψ; Γ ⊢_i t : Empty^l @ l      Ψ; Γ ⊢_i t' : Empty^l @ l
+  ─────────────────────────────────────────────────────────  (Empty-η)
+   Ψ; Γ ⊢_i t ≈ t' : Empty^l @ l
+```
+
+at the computing layers, as `Unit`'s and `sEmpty`'s. This is proof
+irrelevance. It is **not** the initial-object η (`t ≈ elim_Empty(x. T; x)`
+for every `t : T` under `x : Empty`). That rule relates terms whose type is
+not `Empty`, so conversion would have to decide whether the context is
+inconsistent, which is proof search.
+
+**Checked, not argued.** The Coq formalization (`heather-coq`, PR #7,
+`M12_DESIGN.md` last section) carries Empty η through the logical relation,
+the fundamental theorem, the algorithm's soundness and completeness, and
+decidability, with no admits. Its proofs are `sEmpty`'s (§18, §21.4) line for
+line:
+
+- **Term relation.** `sEmpty`'s, not `Unit`'s: both sides reduce to
+  neutrals, each related to itself, and the two are not compared. The
+  neutrals stay because `elim_Empty` is neutral only on a neutral scrutinee.
+  For the same reason the consistency gain of §2 is unchanged.
+- **Escape** comes from the new generic law: any two well-typed terms at
+  `Empty^l` are equivalent.
+- **`elim_Empty`'s neutral law weakens its scrutinee premise** to `ν ~ ν`
+  and `ν' ~ ν'`, as §21.4 does for `elim_sEmpty`. This is forced.
+  Congruence and irrelevance equate `elim_Empty(M; ν)` and
+  `elim_Empty(M'; ν')` for any two neutral scrutinees. A neutral law that
+  compared them could not be met by the relation's reflection of neutrals,
+  and an algorithm that compared them would be incomplete.
+
+**Two changes in `conv.rs`**, not one:
+
+1. In `tm_nf`, `TyView::Empty => Ok(())`, in place of `tm_nee`. The arm is
+   dispatched on the type's whnf, so `Fin(0) ⇝ Empty^0` and
+   `El «Empty» ⇝ Empty` reach it (`vec_fin.rs::fin_zero_is_proof_irrelevant`).
+2. In `tm_ne`, the `elim_Empty` congruence skips the scrutinees, as the
+   `elim_sEmpty` arm does (`conv.rs::elim_empty_congruence_skips_the_scrutinees`).
+
+**A stuck type stays structural.** At `Fin(n)` with `n` neutral, or `El` of
+a neutral code, the type is not `Empty`, and neutrals compare by spine. This
+is sound and stable under substitution, because instantiating `n := 0` can
+only add convertible pairs. The negative control in
+`fin_zero_is_proof_irrelevant` pins it.
+
+**A consumer that compared ill-typed pairs.** Conversion presumes both sides
+are at the type it is given. Motive synthesis (`matching.rs::abstract_stuck`)
+did not keep that promise: it compares every stuck subterm of the goal with
+the scrutinee at the *scrutinee's* type, whatever the subterm's own type. At
+a structural type an ill-typed candidate simply fails, but at `Empty` it now
+converts. A `match bad {}` with `bad : Le(Succ k, Zero) ⇝ False` then
+abstracted the goal's `Nat` subterms as if they were `bad`, and the kernel
+rejected the motive (three elab tests caught it). The elaborator's
+`motive_candidate_converts` now confirms a hit by inferring the candidate's
+type and converting it to the scrutinee's. Misses cost nothing extra. The
+same latent bug sat at `Unit`, `sEmpty`, `SEq` and `Squash`, whose arms also
+accept any two terms (`motive_synth.rs::an_absurd_match_abstracts_no_candidate_of_another_type`).
+
+**What it does not give.** Functions out of `Empty` are not all equal:
+`f ≈ g : Empty → T` still needs `f x ≈ g x : T` under `x : Empty`, which
+Empty η does not supply unless both bodies are `elim_Empty`s (then the
+scrutinees are skipped). That is the initial-object η again. So the
+funext obligation that motivated the issue is discharged only where the
+compared functions are both absurdity eliminations.
+
+**`sEmpty` is now redundant in conversion.** It differs from `Empty` only in
+its layer-c admission and its role under `transp` (`docs/sprop-design.md`
+§2.2), so dropping it is a separate decision.
+

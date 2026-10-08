@@ -507,17 +507,18 @@ fn sempty() -> Type {
 }
 
 #[test]
-fn sempty_proofs_are_irrelevant_where_empty_neutrals_are_not() {
-    // Two hypotheses at sEmpty are convertible; the same two at Empty are
-    // not (structural neutrals) — the §2.2 contrast that priced the
-    // Empty-reuse alternative, pinned so the two formers cannot drift
-    // together silently.
+fn sempty_and_empty_proofs_are_both_irrelevant() {
+    // Two hypotheses at sEmpty are convertible, and since Empty η the same
+    // two at Empty are too. §2.2 priced the Empty-reuse alternative on
+    // this contrast, which Empty η has since removed
+    // (docs/metatheory-ch07-extensions.md §28); sEmpty stays a separate
+    // former for its layer-c admission and its `transp` role.
     let g = ext(&nil_ctx(), sempty(), c(0));
     let g = ext(&g, sempty(), c(0));
     conv_tm(&g, &v(1), &v(0), &sempty(), c(0));
     let h = ext(&nil_ctx(), Type::Empty { level: c(0) }, c(0));
     let h = ext(&h, Type::Empty { level: c(0) }, c(0));
-    not_conv_tm(&h, &v(1), &v(0), &Type::Empty { level: c(0) }, c(0));
+    conv_tm(&h, &v(1), &v(0), &Type::Empty { level: c(0) }, c(0));
 }
 
 #[test]

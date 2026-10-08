@@ -261,7 +261,7 @@ paper and the kernel both get this wrong.
 | `Id`, `refl`, `J` | propositional equality. Certifying compilation needs to *state* that a source program and its lowering agree; without an identity type there is no proposition to prove. Paulin-Mohring `J` (based path induction) rather than Martin-Löf `J`, because the based form is what the elaborator generates. |
 | `Σ`, `pair`, `fst`, `snd` | dependent pairs, with **projections and definitional η** rather than a `split` eliminator. Records, existentials, and every "value together with a proof about it" in the generated code are Σ. |
 | `Unit`, `⟨⟩` | the terminal type, with **definitional η (proof irrelevance)** and hence *no* eliminator. It is the base case of every iterated-Σ encoding and the codomain of every trivial obligation. |
-| `Empty`, `elim_Empty` | the initial type. Absurdity elimination is how a lowering discharges an unreachable branch. |
+| `Empty`, `elim_Empty` | the initial type, with **definitional proof irrelevance** (§7.5). Absurdity elimination is how a lowering discharges an unreachable branch. |
 | `+`, `inl`, `inr`, `case` | binary coproducts, non-dependent in the summands, with a *dependent* eliminator. Tags. |
 | `W`, `sup`, `elim_W` | well-founded trees. The general branching inductive, which the tier-1 inductive lowerings compile into. |
 
@@ -913,13 +913,21 @@ adding one would only give the code recursor an extra branch to dispatch on.
 
 The two levels are **independent**: `l` is the motive's, `l'` the scrutinee's. A
 formalization must not identify them, and must not force `l' = 0`. `Empty` has no
-β rule (there is no canonical form to fire on) and no η rule.
+β rule (there is no canonical form to fire on). Its η rule is proof irrelevance,
+added 2026-10-07 (`docs/metatheory-ch07-extensions.md` §28), as `Unit`'s:
+
+```
+   Ψ; Γ ⊢_i t : Empty^l @ l      Ψ; Γ ⊢_i t' : Empty^l @ l
+  ─────────────────────────────────────────────────────────  (Empty-η)
+   Ψ; Γ ⊢_i t ≈ t' : Empty^l @ l
+```
 
 ### 7.6 Congruences
 
 Per §3's schema for all six rules above. `Unit-η` subsumes the `⟨⟩` congruence
 entirely. The `elim_Empty` congruence compares both levels up to `≈`, the motives
-at the extended context built from the left instance, and the scrutinees.
+at the extended context built from the left instance, and the scrutinees, which
+`Empty-η` always equates, so an algorithm skips them.
 
 ### 7.7 Code-recursor branches
 

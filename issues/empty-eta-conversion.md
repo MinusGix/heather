@@ -1,9 +1,9 @@
 ---
 title: Empty-eta in conv.rs
-status: open
+status: closed
 labels: [kernel,conversion,metatheory]
 created: 2026-07-26
-updated: 2026-07-26
+updated: 2026-10-07
 ---
 
 
@@ -62,3 +62,19 @@ mirror image.
 ## Log
 
 - 2026-07-26: The named customer does not want it. This issue records tier-2 Acc under W as 'the concrete customer' for Empty-eta, from route A's negative test where a refl in the leaf arm is rejected. Acc is now built (docs/acc-via-w.md, crates/kernel/tests/acc.rs) and needs it nowhere: Psi is empty, and the leaf arms -- the positions under a numeral, where R reduces to Empty -- are discharged by elim_Empty because they are children functions being BUILT, not two children functions being COMPARED. Comparison is what route A's leaf arm was doing and what needs funext/Empty-eta; the fording's Acc never states an equation between trees. So the issue keeps its case (proof irrelevance at Empty is still the mirror of Unit's, still owes a ch. 07 clause, and is still right) but loses its customer: nothing open now wants it. The customer it would have is the direction Acc does not need -- proving Acc(a) a proposition, i.e. that wfrec is independent of the accessibility proof supplied. Re-file that as the motivating case if this is picked up.
+- 2026-10-07: Done, and closed. The heather-coq formalization added Empty η
+  as proof irrelevance and carried it through the logical relation, the
+  fundamental theorem, the algorithm and decidability with no admits
+  (heather-coq PR #7). The ch. 07 clause asked for in step 1 is
+  `docs/metatheory-ch07-extensions.md` §28. Step 2 needed two changes, not
+  one: the `tm_nf` arm (`TyView::Empty => Ok(())`), and the `elim_Empty`
+  congruence in `tm_ne` skipping its scrutinees as `elim_sEmpty`'s does,
+  since otherwise conversion rejects pairs the rule equates. The arm is
+  dispatched on the type's whnf, so `Fin(0)` reaches it. Step 3's
+  negatives hold: no two types become convertible, and the "η is not
+  blind" test at `Σ(S, Nat)` is unaffected.
+  The full suite then caught an elaborator consumer: motive synthesis
+  compared the goal's stuck subterms with the scrutinee at the scrutinee's
+  type, whatever their own type, so at `Empty` a `Nat` subterm "converted"
+  and was abstracted. `motive_candidate_converts` now confirms a hit by
+  checking the candidate's type too (§28).
