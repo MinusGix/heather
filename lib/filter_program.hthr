@@ -130,17 +130,18 @@ theorem quiet_computes<C>(step: C → BitVec(8) → Filtered<C>, init: C, counts
 // (docs/native-programs-read-like-programs-design.md §3, S1). A program proves
 // the per-byte fact, usually by `split_all`; these carry it over the input.
 
-// A count the step raises by one at each byte `p` holds of counts those bytes.
-theorem counts_filtered<C>(g: C → BitVec(8) → C, count: C → Nat, p: BitVec(8) → Bool,
-    grows: (s: C) → (b: BitVec(8)) → count(g(s, b)) = count(s) + Nat::of_bit(p(b)), bytes: List<BitVec(8)>):
-    (s: C) → count(fold_bytes(g, bytes, s)) = count(s) + bytes.filter(p).len() {
+// A count field the step raises by one at each byte `p` holds of counts those
+// bytes.
+theorem counts_filtered<C>(g: C → BitVec(8) → C, field: C → Nat, p: BitVec(8) → Bool,
+    grows: (s: C) → (b: BitVec(8)) → field(g(s, b)) = field(s) + Nat::of_bit(p(b)), bytes: List<BitVec(8)>):
+    (s: C) → field(fold_bytes(g, bytes, s)) = field(s) + bytes.count(p) {
     match bytes {
         Nil => λ s => refl,
         Cons(b, rest) => λ s => {
-            let ih = counts_filtered(g, count, p, grows, rest, g(s, b));
+            let ih = counts_filtered(g, field, p, grows, rest, g(s, b));
             let grew = grows(s, b);
-            let kept = List::len_filter_cons(b, rest, p);
-            let sum: (count(fold_bytes(g, rest, g(s, b))) = count(s) + Cons(b, rest).filter(p).len()) = omega;
+            let kept = List::count_cons(b, rest, p);
+            let sum: (field(fold_bytes(g, rest, g(s, b))) = field(s) + Cons(b, rest).count(p)) = omega;
             sum
         },
     }
@@ -167,7 +168,7 @@ theorem counts_len<C>(g: C → BitVec(8) → C, count: C → Nat,
 // state was not already in a run.
 fn starts_run(cut, inside: Bool) → Nat { match cut { True => 0, False => match inside { True => 0, False => 1 } } }
 
-fn runs_of<A>(pieces: List<List<A>>) → Nat { pieces.filter(List::non_empty).len() }
+fn runs_of<A>(pieces: List<List<A>>) → Nat { pieces.count(List::non_empty) }
 
 // Whether the first piece is a run: the one a state already inside a run is
 // in, and counted when it began.
@@ -223,11 +224,11 @@ theorem counts_runs<C>(g: C → BitVec(8) → C, count: C → Nat, inside: C →
 // What an author calls: from a state whose count is zero (and, for runs,
 // outside a run), the fold's count is what the count means, in the shape
 // `line_computes` and a command's columns take.
-theorem fold_counts_filtered<C>(g: C → BitVec(8) → C, count: C → Nat, p: BitVec(8) → Bool,
-    grows: (s: C) → (b: BitVec(8)) → count(g(s, b)) = count(s) + Nat::of_bit(p(b)), init: C, zero: count(init) = 0):
-    (bytes: List<BitVec(8)>) → bytes.filter(p).len() = count(fold_bytes(g, bytes, init)) {
+theorem fold_counts_filtered<C>(g: C → BitVec(8) → C, field: C → Nat, p: BitVec(8) → Bool,
+    grows: (s: C) → (b: BitVec(8)) → field(g(s, b)) = field(s) + Nat::of_bit(p(b)), init: C, zero: field(init) = 0):
+    (bytes: List<BitVec(8)>) → bytes.count(p) = field(fold_bytes(g, bytes, init)) {
     λ bytes => {
-        let counted = counts_filtered(g, count, p, grows, bytes, init);
+        let counted = counts_filtered(g, field, p, grows, bytes, init);
         omega
     }
 }
