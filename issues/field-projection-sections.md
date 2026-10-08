@@ -1,9 +1,9 @@
 ---
 title: Projection sections: ·.field for λ s => s.field
-status: open
+status: closed
 labels: [frontend,surface-syntax,ergonomics]
 created: 2026-10-07
-updated: 2026-10-07
+updated: 2026-10-08
 ---
 
 Programs pass record projections as functions, written as lambdas
@@ -38,3 +38,22 @@ read, which today's producer recovers by evaluation.
 
 - **[[argument-slot-sections]]** owns `·` and its checking-position rules.
   Assumed here: only that a projection is a candidate slot context.
+
+## Log
+
+- 2026-10-08: Implemented as `·.field` (and chains, `·.inner.field`):
+  `docs/argument-slot-sections-design.md` §5. `resolve_dot` passes a slot
+  receiver's escape on to the enclosing function-typed position, which lowers
+  the section to the ordinary lambda, so the field is looked up at the
+  expected binder type; a masked sibling projects to the probe's disposable
+  neutral; and a projection section whose inference escapes at a function
+  domain with unsolved implicits re-plans the call with itself deferred, so
+  it waits there like an unannotated lambda. Acceptance in
+  `crates/elab/tests/argument_slots.rs`.
+
+  Decided: no shorter `.field` spelling (it would be a new parser form; one
+  marker for all sections). Residue: a bare `·` or a slot under a call at
+  such a parameter still escapes past it, as before:
+  [[slot-sections-under-calls-at-meta-domains]].
+  `wc.hthr` still writes `λ s => s.lines`; adopting the section there is
+  [[command-bundle-ergonomics]]'s call, since its producer reads those fields.

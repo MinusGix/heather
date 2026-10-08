@@ -231,6 +231,18 @@ pub(super) fn has_free_slots(e: &Expr) -> bool {
     found
 }
 
+/// `·.f`, `·.f.g`, …: a projection section, a slot reached only through
+/// bare field projections (issues/field-projection-sections.md). No checking
+/// position inside it can own the slot.
+pub(super) fn is_projection_section(e: &Expr) -> bool {
+    match &e.kind {
+        ExprKind::Dot {
+            recv, args: None, ..
+        } => matches!(recv.kind, ExprKind::ArgSlot(_)) || is_projection_section(recv),
+        _ => false,
+    }
+}
+
 pub(super) fn slot_profile(e: &Expr, excluded: &[Span]) -> R<Option<SlotProfile>> {
     let mut style: Option<(SlotStyle, Span)> = None;
     let mut unindexed = 0usize;
