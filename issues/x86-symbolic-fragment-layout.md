@@ -3,7 +3,7 @@ title: Lay out certified code fragments and resolve symbolic references
 status: open
 labels: [compiler,x86,proofs]
 created: 2026-09-07
-updated: 2026-09-07
+updated: 2026-10-07
 ---
 
 ## Scope
@@ -39,3 +39,4 @@ internal composition model.
 - 2026-09-07: The first call-executable producer lays out entry/leaf/wrapper fragments directly, checks symbolic rel32 bounds, and rejects duplicate/unresolved symbols and stack overlap. General alignment/export/data-fragment interfaces remain in scope; current profile fixes byte alignment and three fragments.
 - 2026-09-07: The three-fragment customer now builds and runs a 334-byte final ELF. Its caller-to-leaf rel32 is negative, with a checked modular target proof; layout tests cover signed bounds, duplicate/unresolved symbols, and code/stack overlap. No external linker or relocatable object is used. General fragment alignment, exported interfaces, and data placement remain open.
 - 2026-09-07: Reusable placed-function summaries now have a separate owner, [[x86-reusable-callee-certificates]]. This issue retains placement, symbol resolution, and relocation obligations.
+- 2026-10-07: A first customer inside one fragment: [[native-label-assembler]] (labels instead of `elf64_command`'s hand-closed offsets).
