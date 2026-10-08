@@ -2139,6 +2139,23 @@ impl Elaborator {
         Some(args)
     }
 
+    /// The value arguments of an instance of `D`, for a diagnostic that has
+    /// to say which instance it means (`BitVec(8)`, not `BitVec`). The type
+    /// is scoped `under` binders past `cx`, as the speller walks it; the
+    /// hole-match is the same checked one [`Self::instance_args`] uses, so a
+    /// type that is not an instance declines rather than mis-reads.
+    pub(crate) fn display_vargs(&self, cx: &Cx, ind: &Inductive, ty: &Type, under: u32) -> Option<Vec<Rc<Term>>> {
+        let args = match ty {
+            Type::El { tm, .. } => match self.gen_app_of(tm) {
+                Some((GenDef::TyCodeFn(tag), args)) if tag == ind.tag => args,
+                _ => self.instance_match(cx, ind, ty, under, 0)?.1,
+            },
+            _ => self.instance_match(cx, ind, ty, under, 0)?.1,
+        };
+        let np = ind.params.len();
+        (args.len() == np + ind.valparams.len()).then(|| args[np..].to_vec())
+    }
+
     /// `D#shape := ⌜S⌝` and `D#arity := λ(x : El (D#shape^δ)). n`, for a
     /// **recursive** declaration whose lowering is `Wf(x : S). n`
     /// (`docs/wf-shape-code-design.md` §2.1). Runs off `register_ty_code`'s own

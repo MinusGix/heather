@@ -1,9 +1,9 @@
 ---
 title: A BitVec(8) method is offered on BitVec(16) and refused by the kernel
-status: open
+status: closed
 labels: [frontend,elaboration,diagnostics]
 created: 2026-10-07
-updated: 2026-10-07
+updated: 2026-10-08
 ---
 
 A method declared for one width of `BitVec` is offered on receivers of any
@@ -33,3 +33,21 @@ that differs only in an argument shows that argument.
 - **[[byte-type-and-predicates]]** owns whether byte classes become methods
   on `BitVec(8)`. Assumed here: only that width-specific methods are a
   likely shape.
+
+## Log
+
+- 2026-10-08: Fixed on the diagnostic side, which is what was wanted.
+  Selection is unchanged: a namespace holds one `BitVec::is_nl`, so there is
+  no other member to choose. Two parts. The type display recovers an
+  instance's value arguments through the checked instance matcher
+  (`display_vargs`, beside `instance_args`), so a mismatch that differs only
+  in them is stated: "this has type `BitVec(16)`, but `BitVec(8)` is expected
+  here". And a mismatch at a receiver its type selected a member for names
+  the member: "`BitVec::is_nl` takes a receiver of type `BitVec(8)`, but this
+  receiver has type `BitVec(16)`", recorded by span on the success path like
+  `unmarked_receivers` and probed only on rejection. The source-spelling
+  flavour is untouched, so generated annotations do not move. Residue, not
+  filed for want of a customer: a declaration with both type and value
+  parameters still prints its type arguments as `<…>` beside the recovered
+  values, because `display_targs` declines for it. Tests:
+  `crates/elab/tests/type_members.rs` §7.

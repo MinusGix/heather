@@ -36,9 +36,8 @@ Questions to settle:
   parse error ("expected `fn`, `theorem`, `axiom`, or `inductive`"), and
   `fn BitVec::is_nl(self b: BitVec(8)) → Bool` works as a method on a
   `BitVec(8)` receiver. It is also offered on a `BitVec(16)` receiver, where
-  the mismatch reaches the kernel and reads "this has type `BitVec` where a
-  type that displays the same is expected"
-  ([[width-specific-method-on-other-width]]).
+  the gate refuses it with a note naming the method and both widths
+  ([[width-specific-method-on-other-width]], closed 2026-10-08).
 - **Lowering.** The structured frontend must still see the comparisons a
   class method unfolds to, as it does for today's `decide_bit` predicates
   (helpers that are comparisons are split at the comparison,

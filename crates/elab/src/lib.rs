@@ -5344,6 +5344,12 @@ impl Elaborator {
         if let Some(msg) = self.unmarked_receiver_note(cx, *span, got) {
             return Some((MismatchNote::Spelled(msg), *span));
         }
+        // Likewise a receiver at another instance of the member's type: the
+        // member is what the reader wrote the call to, so it is named
+        // (issues/width-specific-method-on-other-width.md).
+        if let Some(msg) = self.member_receiver_note(cx, *span, got, expected) {
+            return Some((MismatchNote::Spelled(msg), *span));
+        }
         let got_s = self.display_type_clean(cx, got);
         let want_s = self.display_type_clean(cx, expected);
         let note = match (got_s, want_s) {

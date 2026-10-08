@@ -395,6 +395,30 @@ impl Speller<'_> {
                 };
                 return self.source_instance(&ind, &args, d).unwrap_or_else(|| self.raw_ty(ty));
             }
+            // A value parameter is often the whole difference between two
+            // instances — `BitVec(8)` against `BitVec(16)` — so a diagnostic
+            // that drops it reads as a contradiction
+            // (issues/width-specific-method-on-other-width.md). The checked
+            // instance matcher recovers it; a type that does not match keeps
+            // the bare name below, as before. Not for the source flavour,
+            // whose spellings are re-elaborated into generated annotations:
+            // what it emits stays what it was.
+            if !ind.valparams.is_empty()
+                && !self.qualified
+                && let Some(values) = self.el.display_vargs(self.cx, &ind, ty, self.binders())
+            {
+                let values = values
+                    .iter()
+                    .map(|t| self.tm(t, d + 1))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let head = if ind.params.is_empty() {
+                    ind.name.clone()
+                } else {
+                    self.elided(format!("{}<…>", ind.name))
+                };
+                return format!("{head}({values})");
+            }
             return if ind.params.is_empty() {
                 ind.name.clone()
             } else if let Some(args) =
