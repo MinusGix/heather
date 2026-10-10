@@ -2401,43 +2401,52 @@ theorem open_back<C>(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64
                 OpenFailed(_) => rest(True, totals),
             }, state) {
         Opened(fd) => λ below reads page state memory_is rip_is rax => {
-            let tested = run_block(img, page, test_block(), io_entry(), ca(l_open_test()), pieces(l_open_test()), state, memory_is, rip_is);
-            let s1 = execute_block_normal(test_block(), state);
-            let js = JumpIfNear(S, cmd_d(l_open_js()));
-            let passed = run_near(img, page, js, io_entry(), ca(l_open_js()), pieces(l_open_js()), s1, tested.memory_is, tested.rip_is);
-            let s2 = execute_near_control(js, s1);
             let bounds = fd_bounds(fd, below);
             let word = word_of_nat(64, fd);
             let small: (word.toNat() < Nat::pow(2, 63)) = { let v = toNat_word_of_nat(64, fd, bounds.right); let w = bounds.left; omega };
-            let sf: (s1.flags.sf = read_gpr(Rax, state.gprs).band(read_gpr(Rax, state.gprs)).sign_bit()) = refl;
-            let clear: (s1.flags.sf = False) = trans(sf, trans(cong_fn<BitVec(64), Bool>(λ v => v.band(v).sign_bit(), rax),
-                test_self_nonnegative(word, small)));
-            let s2_rip = jcc_passed(S, cmd_d(l_open_js()), s1, io_entry(), ca(l_open_js()), tested.rip_is, clear);
-            let set = run_block(img, page, opened_block(), io_entry(), ca(l_opened()), pieces(l_opened()), s2, tested.memory_is, s2_rip);
-            let s3 = execute_block_normal(opened_block(), s2);
-            let stored = run_frame_store(img, page, WordStore(base := R11, source := Rax), refl, io_entry(), ca(l_opened_store()), pieces(l_opened_store()),
-                8 * 23, { omega }, s3, set.memory_is, set.rip_is, refl);
-            let s4 = word_store_after(linux_writes(io), WordStore(base := R11, source := Rax), s3);
             let one = status_word(True);
-            let frame2 = stored_frame(file, frame, 23, one);
             let vars2 = set_var(vars, 23, one);
-            let img2 = with_frame(file, frame2);
-            let jmp = JumpNear(cmd_d(l_opened_jmp()));
-            let jumped = run_near(img2, page, jmp, io_entry(), ca(l_opened_jmp()), (cmd_at(img2, letters, default, spill, code, jumps, pj,
-                placed(frame2)))(l_opened_jmp()), s4, stored.memory_is, stored.rip_is);
-            let s5 = execute_near_control(jmp, s4);
-            let s5_rip = jmp_forward(cmd_d(l_opened_jmp()), s4, io_entry(), ca(l_opened_jmp()), ca(l_state_init()), stored.rip_is, cmd_j_opened_jmp());
-            let events = file_reads(shape, column, mask, width, name, run, word, True, failed, totals, rest);
-            linux_runs_after_linux_steps(io, events, state, s4,
-                linux_steps_trans(io, state, s3, s4, linux_steps_of_fetched(io, state, s3, fetched_steps_trans(fetch, data, state, s1, s3,
-                    tested.steps, fetched_steps_trans(fetch, data, s1, s2, s3, passed, set.steps))), stored.step),
-                linux_runs_after_steps(io, events, s4, s5, jumped,
-                    reads(failed, frame2, vars2, frame_holds_store(img, vars, 23, one, holds),
-                        slot_vars(vars, mask, width, n, failed, totals, values, 23, one, trivial, ne_above(23, 21, trivial)),
-                        trans(set_var_other(vars, 23, one, 19, ne_below(19, 23, trivial)), at19),
-                        trans(set_var_other(vars, 23, one, 20, ne_below(20, 23, trivial)), at20),
-                        trans(set_var_other(vars, 23, one, 22, ne_below(22, 23, trivial)), at22),
-                        set_var_same(vars, 23, one), page, s5, stored.memory_is, s5_rip, rax)))
+            let here = λ (l: Prog) (f: Nat → BitVec(8)) => cmd_at(with_frame(file, f), letters, default, spill, code, jumps, pj, placed(f))(l);
+            let p0 = λ (st: MachineState<IoMemory>) => Framed(file, page, vars)(st) ∧ (read_gpr(Rax, st.gprs) = word);
+            let p1 = λ (st: MachineState<IoMemory>) => p0(st) ∧ (condition_holds(S, st.flags) = False);
+            let p2 = λ (st: MachineState<IoMemory>) => Framed(file, page, vars)(st) ∧ ((read_gpr(Rsp, st.gprs) = word) ∧
+                ((read_gpr(Rax, st.gprs) = one) ∧ (read_gpr(R11, st.gprs) = slot_at(23))));
+            let p3 = λ (st: MachineState<IoMemory>) => Framed(file, page, vars2)(st) ∧ (read_gpr(Rsp, st.gprs) = word);
+            let runs = runs_seq(p0, eof_rip(ca(l_open_test())), p1, eof_rip(ca(l_open_js())), p3, eof_rip(ca(l_state_init())),
+                runs_block(test_block(), io_entry(), ca(l_open_test()), p0, p1,
+                    λ st held => framed_resident(file, page, vars, canonical_block_bytes(test_block()), eof_rip(ca(l_open_test())), here(l_open_test()),
+                        st, held.left),
+                    λ st held same => ⟨⟨framed_moved(file, page, vars, execute_block_normal(test_block(), st), st, same, held.left), held.right⟩,
+                        trans(cong_fn<BitVec(64), Bool>(λ v => v.band(v).sign_bit(), held.right), test_self_nonnegative(word, small))⟩),
+                runs_seq(p1, eof_rip(ca(l_open_js())), p0, eof_rip(ca(l_opened())), p3, eof_rip(ca(l_state_init())),
+                    runs_jcc_passed(S, cmd_d(l_open_js()), io_entry(), ca(l_open_js()), p1, p0,
+                        λ st held => framed_resident(file, page, vars, near_control_bytes(JumpIfNear(S, cmd_d(l_open_js()))), eof_rip(ca(l_open_js())),
+                            here(l_open_js()), st, held.left.left),
+                        λ st held => held.right, λ st held => held.left),
+                    runs_seq(p0, eof_rip(ca(l_opened())), p2, eof_rip(ca(l_opened_store())), p3, eof_rip(ca(l_state_init())),
+                        runs_block(opened_block(), io_entry(), ca(l_opened()), p0, p2,
+                            λ st held => framed_resident(file, page, vars, canonical_block_bytes(opened_block()), eof_rip(ca(l_opened())), here(l_opened()),
+                                st, held.left),
+                            λ st held same => ⟨framed_moved(file, page, vars, execute_block_normal(opened_block(), st), st, same, held.left),
+                                ⟨held.right, ⟨refl, refl⟩⟩⟩),
+                        runs_seq(p2, eof_rip(ca(l_opened_store())), p3, eof_rip(ca(l_opened_jmp())), p3, eof_rip(ca(l_state_init())),
+                            runs_frame_store(file, page, vars, ca(l_opened_store()), 23, { omega }, Rax, here(l_opened_store()), p2, p3,
+                                λ _ held => held.left, λ _ held => held.right.right.right,
+                                λ st held framed => ⟨j(held.right.right.left, λ x _ => Framed(file, page, set_var(vars, 23, x))(
+                                    word_store_after(linux_writes(io), WordStore(base := R11, source := Rax), st)), framed), held.right.left⟩),
+                            runs_jmp(cmd_d(l_opened_jmp()), io_entry(), ca(l_opened_jmp()), ca(l_state_init()), cmd_j_opened_jmp(), p3, p3,
+                                λ st held => framed_resident(file, page, vars2, near_control_bytes(JumpNear(cmd_d(l_opened_jmp()))),
+                                    eof_rip(ca(l_opened_jmp())), here(l_opened_jmp()), st, held.left),
+                                λ st held => held)))));
+            runs_into(p0, eof_rip(ca(l_open_test())), p3, eof_rip(ca(l_state_init())),
+                file_reads(shape, column, mask, width, name, run, word, True, failed, totals, rest), runs, state, rip_is,
+                ⟨Exists(frame, ⟨memory_is, holds⟩), rax⟩,
+                λ s5 s5_rip held => reads(failed, held.left.witness, vars2, held.left.proof.right,
+                    slot_vars(vars, mask, width, n, failed, totals, values, 23, one, trivial, ne_above(23, 21, trivial)),
+                    trans(set_var_other(vars, 23, one, 19, ne_below(19, 23, trivial)), at19),
+                    trans(set_var_other(vars, 23, one, 20, ne_below(20, 23, trivial)), at20),
+                    trans(set_var_other(vars, 23, one, 22, ne_below(22, 23, trivial)), at22),
+                    set_var_same(vars, 23, one), page, s5, held.left.proof.left, s5_rip, held.right))
         },
         OpenFailed(errno) => λ error goes page state memory_is rip_is rax => {
             let tested = run_block(img, page, test_block(), io_entry(), ca(l_open_test()), pieces(l_open_test()), state, memory_is, rip_is);
