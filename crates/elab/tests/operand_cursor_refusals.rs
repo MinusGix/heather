@@ -9,7 +9,7 @@ fn slow_acceptance_operand_cursor_refusals() {
     let library = base().semantic_image();
     for (name, from, to) in [
         ("dashes_leave_open", "{ [MovRI(R12, BitVec::ofNat(1))] }", "{ [MovRI(R12, BitVec::ofNat(0))] }"),
-        ("lone_dash_skipped", "near_control_bytes(JumpIfNear(E, cj_lone()))", "near_control_bytes(JumpIfNear(NE, cj_lone()))"),
+        ("lone_dash_skipped", "then(lc_second_nul(), Jcc(E, tc_end()))", "then(lc_second_nul(), Jcc(NE, tc_end()))"),
     ] {
         let bad = CURSOR.replacen(from, to, 1);
         assert_ne!(bad, CURSOR, "{name}");

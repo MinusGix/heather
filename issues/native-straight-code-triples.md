@@ -3,7 +3,7 @@ title: Triples and frame sets for straight native code, proved once
 status: open
 labels: [native,x86,proofs,design]
 created: 2026-10-07
-updated: 2026-10-07
+updated: 2026-10-10
 ---
 
 Library processes prove straight code by threading machine states by hand
@@ -44,3 +44,7 @@ rewritten over these, with its cold check no dearer.
 - **[[native-one-program-logic]]** owns the eventual single program logic.
   Assumed here: only that a straight-code triple over Linux steps is a
   special case it can absorb, not a competing design.
+
+## Log
+
+- 2026-10-10: Inherits from [[native-label-assembler]] (closed): the command's spill block (`spill_lens`, `elf64_command.hthr:65`) and the list layouts left in `elf64_read_pieces`, `elf64_read_filter` and `elf64_count_print` (`layout_code`/`layout_at`). They are straight code whose proofs this issue rewrites; move them onto `x86_64_asm` labels with those proofs.

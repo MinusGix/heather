@@ -17,6 +17,7 @@ import x86_64_fetched_code;
 import x86_64_data_read;
 import x86_64_access_memory;
 import x86_64_layout;
+import x86_64_asm;
 import bitvec;
 import bitvec_nat;
 import bool;
@@ -152,67 +153,87 @@ theorem parse_operands(letters: List<BitVec(8)>, default: BitVec(64), argv: List
 // RDX, R8–R10 and R13–R15 are kept.
 
 fn cursor_setup_block() → List<Instruction> { [MovRR(Rbx, Rsp), AddRI8(Rbx, eight_byte()), MovRI(R12, word_zero())] }
-fn cj_first() → BitVec(32) { BitVec::ofNat(4) }
-fn start_parts() → List<List<BitVec(8)>> {
-    [canonical_block_bytes(cursor_setup_block()), word_load_bytes(scan_slot_load()), canonical_block_bytes(scan_null_block()),
-     near_control_bytes(JumpIfNear(E, cj_first()))]
-}
-fn start_lens() → List<Nat> { [17, 3, 13, 6] }
-fn start_code() → List<BitVec(8)> { layout_code(start_parts(), canonical_block_bytes(scan_skip_block())) }
+// The start as a program (x86_64_asm): its one jump goes past the skip.
+fn tst_past() → Nat { 1 }
+fn lst_setup() → Prog { then(Start, Block(cursor_setup_block())) }
+fn lst_first() → Prog { then(lst_setup(), scan_slot()) }
+fn lst_null() → Prog { then(lst_first(), Block(scan_null_block())) }
+fn lst_je() → Prog { then(lst_null(), Jcc(E, tst_past())) }
+fn lst_skip() → Prog { then(lst_je(), Block(scan_skip_block())) }
+fn lst_past() → Prog { At(lst_skip(), tst_past(), Block(Nil)) }
+fn start_labels() → Nat → Nat { asm_labels(lst_past()) }
+fn start_code() → List<BitVec(8)> { assemble(no_fills(), lst_past(), Nil) }
+// The program's size, closed: a client's offsets add it without evaluating
+// the program.
 fn start_len() → Nat { 43 }
+theorem start_len_closed(): prog_len(lst_past()) = start_len() { refl }
+theorem start_code_len(): start_code().len() = start_len() { trans(asm_len_is(no_fills(), start_labels(), lst_past(), trivial, Nil, 0, refl), start_len_closed()) }
+theorem start_j_je(): JumpsForward(asm_at(lst_je()), 6, asm_jump(start_labels(), lst_je()), asm_at(lst_past())) {
+    asm_jump_lands(start_labels(), lst_je(), 6, asm_at(lst_past()), refl)
+}
 
 fn cursor_ended_block() → List<Instruction> { [AddRI8(Rbx, eight_byte()), MovRI(R11, word_zero()), CmpRR(R12, R11)] }
 fn cursor_step_block() → List<Instruction> { [AddRI8(Rdi, one_byte())] }
 fn cursor_end_block() → List<Instruction> { [MovRI(R12, BitVec::ofNat(1))] }
 
-// The jumps, from their own ends: to `end` (159), or back to `next` (0).
-fn cj_none() → BitVec(32) { BitVec::ofNat(137) }
-fn cj_ended() → BitVec(32) { BitVec::ofNat(114) }
-fn cj_not_dash() → BitVec(32) { BitVec::ofNat(91) }
-fn cj_lone() → BitVec(32) { BitVec::ofNat(61) }
-fn cj_letters() → BitVec(32) { BitVec::ofNat(4294967179) }
-fn cj_more() → BitVec(32) { BitVec::ofNat(4294967152) }
-fn cj_back() → BitVec(32) { BitVec::ofNat(4294967137) }
-
-fn cursor_parts() → List<List<BitVec(8)>> {
-    [word_load_bytes(scan_slot_load()), canonical_block_bytes(scan_null_block()), near_control_bytes(JumpIfNear(E, cj_none())),
-     canonical_block_bytes(cursor_ended_block()), near_control_bytes(JumpIfNear(NE, cj_ended())),
-     // the first byte (45)
-     byte_load_bytes(scan_byte_load()), canonical_block_bytes(scan_is_block(dash())), near_control_bytes(JumpIfNear(NE, cj_not_dash())),
-     // the second (68)
-     canonical_block_bytes(scan_ahead_block()), byte_load_bytes(scan_ahead_load()), canonical_block_bytes(scan_is_block(nul())),
-     near_control_bytes(JumpIfNear(E, cj_lone())), canonical_block_bytes(scan_is_block(dash())), near_control_bytes(JumpIfNear(NE, cj_letters())),
-     // the third (117)
-     canonical_block_bytes(cursor_step_block()), byte_load_bytes(scan_ahead_load()), canonical_block_bytes(scan_is_block(nul())),
-     near_control_bytes(JumpIfNear(NE, cj_more())), canonical_block_bytes(cursor_end_block())]
-}
-fn cursor_lens() → List<Nat> { [3, 13, 6, 17, 6, 4, 13, 6, 7, 4, 13, 6, 13, 6, 4, 4, 13, 6, 10] }
-fn cursor_code() → List<BitVec(8)> { layout_code(cursor_parts(), near_control_bytes(JumpNear(cj_back()))) }
+// The cursor as a program: its jumps go to `end`, or back to `next`.
+fn tc_next() → Nat { 1 }
+fn tc_end() → Nat { 2 }
+fn lc_next() → Prog { At(Start, tc_next(), scan_slot()) }
+fn lc_null() → Prog { then(lc_next(), Block(scan_null_block())) }
+fn lc_none_je() → Prog { then(lc_null(), Jcc(E, tc_end())) }
+fn lc_ended() → Prog { then(lc_none_je(), Block(cursor_ended_block())) }
+fn lc_ended_jne() → Prog { then(lc_ended(), Jcc(NE, tc_end())) }
+// the first byte
+fn lc_first_load() → Prog { then(lc_ended_jne(), scan_byte()) }
+fn lc_first_dash() → Prog { then(lc_first_load(), Block(scan_is_block(dash()))) }
+fn lc_dash_jne() → Prog { then(lc_first_dash(), Jcc(NE, tc_end())) }
+// the second
+fn lc_ahead() → Prog { then(lc_dash_jne(), Block(scan_ahead_block())) }
+fn lc_ahead_load() → Prog { then(lc_ahead(), Code(byte_load_bytes(scan_ahead_load()))) }
+fn lc_second_nul() → Prog { then(lc_ahead_load(), Block(scan_is_block(nul()))) }
+fn lc_lone_je() → Prog { then(lc_second_nul(), Jcc(E, tc_end())) }
+fn lc_second_dash() → Prog { then(lc_lone_je(), Block(scan_is_block(dash()))) }
+fn lc_letters_jne() → Prog { then(lc_second_dash(), Jcc(NE, tc_next())) }
+// the third
+fn lc_step() → Prog { then(lc_letters_jne(), Block(cursor_step_block())) }
+fn lc_third_load() → Prog { then(lc_step(), Code(byte_load_bytes(scan_ahead_load()))) }
+fn lc_third_nul() → Prog { then(lc_third_load(), Block(scan_is_block(nul()))) }
+fn lc_more_jne() → Prog { then(lc_third_nul(), Jcc(NE, tc_next())) }
+fn lc_end_opts() → Prog { then(lc_more_jne(), Block(cursor_end_block())) }
+fn lc_back() → Prog { then(lc_end_opts(), Jmp(tc_next())) }
+fn lc_end() → Prog { At(lc_back(), tc_end(), Block(Nil)) }
+fn cursor_prog() → Prog { lc_end() }
+fn cursor_labels() → Nat → Nat { asm_labels(cursor_prog()) }
+fn cursor_code() → List<BitVec(8)> { assemble(no_fills(), cursor_prog(), Nil) }
+// The program's size, closed: a client's offsets add it without evaluating
+// the program.
 fn cursor_len() → Nat { 159 }
+theorem cursor_len_closed(): prog_len(cursor_prog()) = cursor_len() { refl }
+// Label `l`'s offset in the cursor, and the displacement of the jump there.
+fn cu(l: Prog) → Nat { asm_at(l) }
+fn cud(l: Prog) → BitVec(32) { asm_jump(cursor_labels(), l) }
+theorem cursor_code_len(): cursor_code().len() = cursor_len() { trans(asm_len_is(no_fills(), cursor_labels(), cursor_prog(), trivial, Nil, 0, refl), cursor_len_closed()) }
 
-theorem start_measured(): LayoutMeasured(start_parts(), start_lens()) { ⟨refl, ⟨refl, ⟨refl, ⟨refl, trivial⟩⟩⟩⟩ }
-theorem start_code_len(): start_code().len() = start_len() {
-    layout_len(start_parts(), canonical_block_bytes(scan_skip_block()), start_lens(), start_measured(), 4, refl)
-}
-theorem cursor_measured(): LayoutMeasured(cursor_parts(), cursor_lens()) {
-    let closed: (piece_lens(cursor_parts()) = cursor_lens()) = refl;
-    j(closed, λ ls _ => LayoutMeasured(cursor_parts(), ls), measured_self(cursor_parts()))
-}
-theorem cursor_code_len(): cursor_code().len() = cursor_len() {
-    layout_len(cursor_parts(), near_control_bytes(JumpNear(cj_back())), cursor_lens(), cursor_measured(), 5, refl)
-}
+theorem cj_none_je(): JumpsForward(cu(lc_none_je()), 6, cud(lc_none_je()), cu(lc_end())) { asm_jump_lands(cursor_labels(), lc_none_je(), 6, cu(lc_end()), refl) }
+theorem cj_ended_jne(): JumpsForward(cu(lc_ended_jne()), 6, cud(lc_ended_jne()), cu(lc_end())) { asm_jump_lands(cursor_labels(), lc_ended_jne(), 6, cu(lc_end()), refl) }
+theorem cj_dash_jne(): JumpsForward(cu(lc_dash_jne()), 6, cud(lc_dash_jne()), cu(lc_end())) { asm_jump_lands(cursor_labels(), lc_dash_jne(), 6, cu(lc_end()), refl) }
+theorem cj_lone_je(): JumpsForward(cu(lc_lone_je()), 6, cud(lc_lone_je()), cu(lc_end())) { asm_jump_lands(cursor_labels(), lc_lone_je(), 6, cu(lc_end()), refl) }
+theorem cj_letters_jne(): JumpsBack(cu(lc_letters_jne()), 6, cud(lc_letters_jne()), cu(lc_next())) { asm_jump_lands_back(cursor_labels(), lc_letters_jne(), 6, cu(lc_next()), refl) }
+theorem cj_more_jne(): JumpsBack(cu(lc_more_jne()), 6, cud(lc_more_jne()), cu(lc_next())) { asm_jump_lands_back(cursor_labels(), lc_more_jne(), 6, cu(lc_next()), refl) }
+theorem cj_back(): JumpsBack(cu(lc_back()), 5, cud(lc_back()), cu(lc_next())) { asm_jump_lands_back(cursor_labels(), lc_back(), 5, cu(lc_next()), refl) }
 
 fn StartPieces(file: IoImage, at: BitVec(64)) → Type {
-    (i: Nat) → Placed(file, layout_piece(start_parts(), canonical_block_bytes(scan_skip_block()), i), next_rip(at, layout_at(0, start_lens(), i)))
+    (l: Prog) → Placed(file, item_bytes(no_fills(), start_labels(), asm_find(lst_past(), l)), next_rip(at, asm_at(asm_find(lst_past(), l))))
 }
 theorem start_pieces(file: IoImage, at: BitVec(64), placed: Placed(file, start_code(), at)): StartPieces(file, at) {
-    placed_piece(file, start_parts(), canonical_block_bytes(scan_skip_block()), start_lens(), start_measured(), at, placed)
+    λ l page => asm_resident(io_fetch_access(), IoMemory(file, page), at, no_fills(), start_labels(), lst_past(), trivial, Nil, placed(page), l)
 }
 fn CursorPieces(file: IoImage, at: BitVec(64)) → Type {
-    (i: Nat) → Placed(file, layout_piece(cursor_parts(), near_control_bytes(JumpNear(cj_back())), i), next_rip(at, layout_at(0, cursor_lens(), i)))
+    (l: Prog) → Placed(file, item_bytes(no_fills(), cursor_labels(), asm_find(cursor_prog(), l)), next_rip(at, cu(asm_find(cursor_prog(), l))))
 }
 theorem cursor_pieces(file: IoImage, at: BitVec(64), placed: Placed(file, cursor_code(), at)): CursorPieces(file, at) {
-    placed_piece(file, cursor_parts(), near_control_bytes(JumpNear(cj_back())), cursor_lens(), cursor_measured(), at, placed)
+    λ l page => asm_resident(io_fetch_access(), IoMemory(file, page), at, no_fills(), cursor_labels(), cursor_prog(), trivial, Nil, placed(page), l)
 }
 
 // ---------------------------------------------------------------------------
@@ -356,27 +377,27 @@ theorem cursor_none(file: IoImage, page: Nat → BitVec(8), at: BitVec(64), piec
     head: CursorAt(file, page, at, rsp, k, ended, origin, state)): CursorReach(file, page, at, rsp, origin, operands_from(ended, Nil), state) {
     let fetch = io_fetch_access();
     let data = io_data_access();
-    let loaded = run_word_load(file, page, scan_slot_load(), at, 0, piece(0), state, head.memory_is, head.rip_is, word_zero(),
+    let loaded = run_word_load(file, page, scan_slot_load(), at, cu(lc_next()), piece(lc_next()), state, head.memory_is, head.rip_is, word_zero(),
         j(sym(head.regs.left), λ a _ => WordAt(data, IoMemory(file, page), a, word_zero()), argv(file.frame, page)));
     let s1 = word_load_after(scan_slot_load(), word_zero(), state);
-    let tested = run_block(file, page, scan_null_block(), at, 3, piece(1), s1, loaded.memory_is, loaded.rip_is);
+    let tested = run_block(file, page, scan_null_block(), at, cu(lc_null()), piece(lc_null()), s1, loaded.memory_is, loaded.rip_is);
     let s2 = execute_block_normal(scan_null_block(), s1);
-    let jumped = run_near(file, page, JumpIfNear(E, cj_none()), at, 16, piece(2), s2, tested.memory_is, tested.rip_is);
-    let s3 = execute_near_control(JumpIfNear(E, cj_none()), s2);
-    let s3_rip = jcc_taken(E, cj_none(), s2, at, 16, 159, tested.rip_is, zero_bits_sub_self(64, word_zero()), refl);
+    let jumped = run_near(file, page, JumpIfNear(E, cud(lc_none_je())), at, cu(lc_none_je()), piece(lc_none_je()), s2, tested.memory_is, tested.rip_is);
+    let s3 = execute_near_control(JumpIfNear(E, cud(lc_none_je())), s2);
+    let s3_rip = jcc_taken(E, cud(lc_none_je()), s2, at, cu(lc_none_je()), cu(lc_end()), tested.rip_is, zero_bits_sub_self(64, word_zero()), cj_none_je());
     Exists(s3, ⟨fetched_steps_trans(fetch, data, state, s1, s3, loaded.steps, fetched_steps_trans(fetch, data, s1, s2, s3, tested.steps, jumped)),
         ⟨refl, CursorRest(k := k, ended := ended, args := Nil, pointers := pointers, memory_is := tested.memory_is, rip_is := s3_rip,
             regs := head.regs, argv := argv, left := refl)⟩⟩)
 }
 
 // An argument's pointer loaded, RBX past its slot, and the options-ended
-// test made, at the JNE (39).
+// test made, at the JNE (`lc_ended_jne`).
 record CursorHead(file: IoImage, page: Nat → BitVec(8), at, rsp: BitVec(64), k: Nat, ended: Bool, origin: Gprs,
     arg: List<BitVec(8)>, rest: List<List<BitVec(8)>>, state: MachineState<IoMemory>) {
     pointer: BitVec(64),
     pointers: List<BitVec(64)>,
     memory_is: state.memory = IoMemory(file, page),
-    rip_is: state.rip = next_rip(at, 39),
+    rip_is: state.rip = next_rip(at, cu(lc_ended_jne())),
     zf: state.flags.zf = ended_zf(ended),
     rsi: read_gpr(Rsi, state.gprs) = pointer,
     positive: 0 < pointer.toNat(),
@@ -398,15 +419,15 @@ theorem cursor_head(file: IoImage, page: Nat → BitVec(8), at: BitVec(64), piec
         Nil => λ never => false_elim(never(file.frame, page)),
         Cons(p, more) => λ stays => {
             let facts = stays(file.frame, page);
-            let loaded = run_word_load(file, page, scan_slot_load(), at, 0, piece(0), state, head.memory_is, head.rip_is, p,
+            let loaded = run_word_load(file, page, scan_slot_load(), at, cu(lc_next()), piece(lc_next()), state, head.memory_is, head.rip_is, p,
                 j(sym(head.regs.left), λ a _ => WordAt(data, IoMemory(file, page), a, p), facts.left));
             let s1 = word_load_after(scan_slot_load(), p, state);
-            let tested = run_block(file, page, scan_null_block(), at, 3, piece(1), s1, loaded.memory_is, loaded.rip_is);
+            let tested = run_block(file, page, scan_null_block(), at, cu(lc_null()), piece(lc_null()), s1, loaded.memory_is, loaded.rip_is);
             let s2 = execute_block_normal(scan_null_block(), s1);
-            let passed = run_near(file, page, JumpIfNear(E, cj_none()), at, 16, piece(2), s2, tested.memory_is, tested.rip_is);
-            let s3 = execute_near_control(JumpIfNear(E, cj_none()), s2);
-            let s3_rip = jcc_passed(E, cj_none(), s2, at, 16, tested.rip_is, trans(zero_bits_sub(64, p, word_zero()), nonzero_word(p, facts.right.left)));
-            let bumped = run_block(file, page, cursor_ended_block(), at, 22, piece(3), s3, tested.memory_is, s3_rip);
+            let passed = run_near(file, page, JumpIfNear(E, cud(lc_none_je())), at, cu(lc_none_je()), piece(lc_none_je()), s2, tested.memory_is, tested.rip_is);
+            let s3 = execute_near_control(JumpIfNear(E, cud(lc_none_je())), s2);
+            let s3_rip = jcc_passed(E, cud(lc_none_je()), s2, at, cu(lc_none_je()), tested.rip_is, trans(zero_bits_sub(64, p, word_zero()), nonzero_word(p, facts.right.left)));
+            let bumped = run_block(file, page, cursor_ended_block(), at, cu(lc_ended()), piece(lc_ended()), s3, tested.memory_is, s3_rip);
             let s4 = execute_block_normal(cursor_ended_block(), s3);
             let regs = head.regs;
             let rbx: (read_gpr(Rbx, s4.gprs) = argv_slot(rsp, Succ(k))) = slot_next(rsp, k, read_gpr(Rbx, state.gprs), regs.left);
@@ -431,18 +452,18 @@ record CursorIn(file: IoImage, page: Nat → BitVec(8), at, rsp: BitVec(64), k: 
     regs: CursorRegs(rsp, k, False, origin, state.gprs),
 }
 
-// After `--`'s second dash (117), RDI at it: `--` alone ends the options,
+// After `--`'s second dash (`lc_step`), RDI at it: `--` alone ends the options,
 // and anything longer is an option.
 theorem cursor_dashes(file: IoImage, page: Nat → BitVec(8), at: BitVec(64), piece: CursorPieces(file, at), rsp: BitVec(64), k: Nat,
     origin: Gprs, rest: List<List<BitVec(8)>>, cont: CursorCont(file, page, at, rsp, origin, k, rest), pointer: BitVec(64),
     source2: Nat → Option<BitVec(8)>, more: List<BitVec(8)>, state: MachineState<IoMemory>,
-    head: CursorIn(file, page, at, rsp, k, origin, pointer, 117, state), v: Nat, rdi: read_gpr(Rdi, state.gprs).toNat() = v,
+    head: CursorIn(file, page, at, rsp, k, origin, pointer, cu(lc_step()), state), v: Nat, rdi: read_gpr(Rdi, state.gprs).toNat() = v,
     reads: ReadsFrom(file, page, source2, Succ(v)), string2: CStringFrom(more, source2), low: Succ(v) < Nat::pow(2, 47)):
     CursorReach(file, page, at, rsp, origin, match more { Nil => operands_from(True, rest), Cons(_, _) => operands_from(False, rest) }, state) {
     let fetch = io_fetch_access();
     let data = io_data_access();
     let memory = IoMemory(file, page);
-    let stepped = run_block(file, page, cursor_step_block(), at, 117, piece(14), state, head.memory_is, head.rip_is);
+    let stepped = run_block(file, page, cursor_step_block(), at, cu(lc_step()), piece(lc_step()), state, head.memory_is, head.rip_is);
     let s1 = execute_block_normal(cursor_step_block(), state);
     let rdi1: (read_gpr(Rdi, s1.gprs).toNat() = Succ(v)) = pointer_next(read_gpr(Rdi, state.gprs), v, rdi, low);
     let reads1: ReadsFrom(file, page, source2, read_gpr(Rdi, s1.gprs).toNat()) = j(sym(rdi1), λ w _ => ReadsFrom(file, page, source2, w), reads);
@@ -452,18 +473,18 @@ theorem cursor_dashes(file: IoImage, page: Nat → BitVec(8), at: BitVec(64), pi
         Nil => λ string => {
             let present: (data.read(memory, read_gpr(Rdi, s1.gprs)) = Some(nul())) =
                 trans(read_here(file, page, source2, read_gpr(Rdi, s1.gprs), reads1(0)), string);
-            let loaded = run_byte_load(file, page, scan_ahead_load(), at, 121, piece(15), s1, stepped.memory_is, stepped.rip_is, nul(), present, low1);
+            let loaded = run_byte_load(file, page, scan_ahead_load(), at, cu(lc_third_load()), piece(lc_third_load()), s1, stepped.memory_is, stepped.rip_is, nul(), present, low1);
             let s2 = byte_load_after(scan_ahead_load(), nul(), s1);
-            let tested = run_block(file, page, scan_is_block(nul()), at, 125, piece(16), s2, loaded.memory_is, loaded.rip_is);
+            let tested = run_block(file, page, scan_is_block(nul()), at, cu(lc_third_nul()), piece(lc_third_nul()), s2, loaded.memory_is, loaded.rip_is);
             let s3 = execute_block_normal(scan_is_block(nul()), s2);
-            let passed = run_near(file, page, JumpIfNear(NE, cj_more()), at, 138, piece(17), s3, tested.memory_is, tested.rip_is);
-            let s4 = execute_near_control(JumpIfNear(NE, cj_more()), s3);
-            let s4_rip = jcc_passed(NE, cj_more(), s3, at, 138, tested.rip_is, ne_fails(s3.flags, cmp_bytes(nul(), nul())));
-            let ended = run_block(file, page, cursor_end_block(), at, 144, piece(18), s4, tested.memory_is, s4_rip);
+            let passed = run_near(file, page, JumpIfNear(NE, cud(lc_more_jne())), at, cu(lc_more_jne()), piece(lc_more_jne()), s3, tested.memory_is, tested.rip_is);
+            let s4 = execute_near_control(JumpIfNear(NE, cud(lc_more_jne())), s3);
+            let s4_rip = jcc_passed(NE, cud(lc_more_jne()), s3, at, cu(lc_more_jne()), tested.rip_is, ne_fails(s3.flags, cmp_bytes(nul(), nul())));
+            let ended = run_block(file, page, cursor_end_block(), at, cu(lc_end_opts()), piece(lc_end_opts()), s4, tested.memory_is, s4_rip);
             let s5 = execute_block_normal(cursor_end_block(), s4);
-            let back = run_near(file, page, JumpNear(cj_back()), at, 154, piece(19), s5, ended.memory_is, ended.rip_is);
-            let s6 = execute_near_control(JumpNear(cj_back()), s5);
-            let s6_rip = jmp_back(cj_back(), s5, at, 154, 0, ended.rip_is, refl);
+            let back = run_near(file, page, JumpNear(cud(lc_back())), at, cu(lc_back()), piece(lc_back()), s5, ended.memory_is, ended.rip_is);
+            let s6 = execute_near_control(JumpNear(cud(lc_back())), s5);
+            let s6_rip = jmp_back(cud(lc_back()), s5, at, cu(lc_back()), cu(lc_next()), ended.rip_is, cj_back());
             let regs = head.regs;
             cursor_reach_after(file, page, at, rsp, origin, operands_from(True, rest), state, s6,
                 fetched_steps_trans(fetch, data, state, s1, s6, stepped.steps,
@@ -475,14 +496,14 @@ theorem cursor_dashes(file: IoImage, page: Nat → BitVec(8), at: BitVec(64), pi
         Cons(byte2, _) => λ string => {
             let present: (data.read(memory, read_gpr(Rdi, s1.gprs)) = Some(byte2)) =
                 trans(read_here(file, page, source2, read_gpr(Rdi, s1.gprs), reads1(0)), string.left);
-            let loaded = run_byte_load(file, page, scan_ahead_load(), at, 121, piece(15), s1, stepped.memory_is, stepped.rip_is, byte2, present, low1);
+            let loaded = run_byte_load(file, page, scan_ahead_load(), at, cu(lc_third_load()), piece(lc_third_load()), s1, stepped.memory_is, stepped.rip_is, byte2, present, low1);
             let s2 = byte_load_after(scan_ahead_load(), byte2, s1);
-            let tested = run_block(file, page, scan_is_block(nul()), at, 125, piece(16), s2, loaded.memory_is, loaded.rip_is);
+            let tested = run_block(file, page, scan_is_block(nul()), at, cu(lc_third_nul()), piece(lc_third_nul()), s2, loaded.memory_is, loaded.rip_is);
             let s3 = execute_block_normal(scan_is_block(nul()), s2);
-            let jumped = run_near(file, page, JumpIfNear(NE, cj_more()), at, 138, piece(17), s3, tested.memory_is, tested.rip_is);
-            let s4 = execute_near_control(JumpIfNear(NE, cj_more()), s3);
-            let s4_rip = jcc_taken_back(NE, cj_more(), s3, at, 138, 0, tested.rip_is,
-                ne_holds(s3.flags, trans(cmp_bytes(byte2, nul()), not_nul(byte2, string.right.left))), refl);
+            let jumped = run_near(file, page, JumpIfNear(NE, cud(lc_more_jne())), at, cu(lc_more_jne()), piece(lc_more_jne()), s3, tested.memory_is, tested.rip_is);
+            let s4 = execute_near_control(JumpIfNear(NE, cud(lc_more_jne())), s3);
+            let s4_rip = jcc_taken_back(NE, cud(lc_more_jne()), s3, at, cu(lc_more_jne()), cu(lc_next()), tested.rip_is,
+                ne_holds(s3.flags, trans(cmp_bytes(byte2, nul()), not_nul(byte2, string.right.left))), cj_more_jne());
             cursor_reach_after(file, page, at, rsp, origin, operands_from(False, rest), state, s4,
                 fetched_steps_trans(fetch, data, state, s1, s4, stepped.steps,
                     fetched_steps_trans(fetch, data, s1, s2, s4, loaded.steps, fetched_steps_trans(fetch, data, s2, s3, s4, tested.steps, jumped))),
@@ -504,13 +525,13 @@ theorem dashes_operands(rest: List<List<BitVec(8)>>, first, second: BitVec(8), m
         })
 }
 
-// After a first dash (68): `-` alone is an operand, a second byte that is
+// After a first dash (`lc_ahead`): `-` alone is an operand, a second byte that is
 // not a dash makes an option, and a second dash goes on to `cursor_dashes`.
 theorem cursor_dash(file: IoImage, page: Nat → BitVec(8), at: BitVec(64), piece: CursorPieces(file, at), rsp: BitVec(64), k: Nat,
     origin: Gprs, rest: List<List<BitVec(8)>>, cont: CursorCont(file, page, at, rsp, origin, k, rest),
     pointers: List<BitVec(64)>, later: ArgvStays(file, rsp, rest, pointers, k), pointer: BitVec(64), positive: 0 < pointer.toNat(),
     byte0: BitVec(8), yes: byte0.eq_bit(dash()) = True, tail: List<BitVec(8)>, state: MachineState<IoMemory>,
-    head: CursorIn(file, page, at, rsp, k, origin, pointer, 68, state),
+    head: CursorIn(file, page, at, rsp, k, origin, pointer, cu(lc_ahead()), state),
     string: ArgStays(file, pointer, Cons(byte0, tail)),
     bound: pointer.toNat() + Succ(tail.len()) + 1 <= Nat::pow(2, 47)):
     CursorReach(file, page, at, rsp, origin, operands_from(False, Cons(Cons(byte0, tail), rest)), state) {
@@ -519,7 +540,7 @@ theorem cursor_dash(file: IoImage, page: Nat → BitVec(8), at: BitVec(64), piec
     let memory = IoMemory(file, page);
     let v = pointer.toNat();
     let lows = bound_first(v, tail.len(), bound);
-    let ahead = run_block(file, page, scan_ahead_block(), at, 68, piece(8), state, head.memory_is, head.rip_is);
+    let ahead = run_block(file, page, scan_ahead_block(), at, cu(lc_ahead()), piece(lc_ahead()), state, head.memory_is, head.rip_is);
     let s1 = execute_block_normal(scan_ahead_block(), state);
     let rdi1: (read_gpr(Rdi, s1.gprs).toNat() = Succ(v)) =
         pointer_next(read_gpr(Rsi, state.gprs), v, cong_fn<BitVec(64), Nat>(λ w => w.toNat(), head.rsi), lows.right);
@@ -535,13 +556,13 @@ theorem cursor_dash(file: IoImage, page: Nat → BitVec(8), at: BitVec(64), piec
             let string1: CStringFrom(Nil, source1) = (whole(file.frame, page)).right.right;
             let present: (data.read(memory, read_gpr(Rdi, s1.gprs)) = Some(nul())) =
                 trans(read_here(file, page, source1, read_gpr(Rdi, s1.gprs), reads1_here(0)), string1);
-            let loaded = run_byte_load(file, page, scan_ahead_load(), at, 75, piece(9), s1, ahead.memory_is, ahead.rip_is, nul(), present, low1);
+            let loaded = run_byte_load(file, page, scan_ahead_load(), at, cu(lc_ahead_load()), piece(lc_ahead_load()), s1, ahead.memory_is, ahead.rip_is, nul(), present, low1);
             let s2 = byte_load_after(scan_ahead_load(), nul(), s1);
-            let tested = run_block(file, page, scan_is_block(nul()), at, 79, piece(10), s2, loaded.memory_is, loaded.rip_is);
+            let tested = run_block(file, page, scan_is_block(nul()), at, cu(lc_second_nul()), piece(lc_second_nul()), s2, loaded.memory_is, loaded.rip_is);
             let s3 = execute_block_normal(scan_is_block(nul()), s2);
-            let jumped = run_near(file, page, JumpIfNear(E, cj_lone()), at, 92, piece(11), s3, tested.memory_is, tested.rip_is);
-            let s4 = execute_near_control(JumpIfNear(E, cj_lone()), s3);
-            let s4_rip = jcc_taken(E, cj_lone(), s3, at, 92, 159, tested.rip_is, cmp_bytes(nul(), nul()), refl);
+            let jumped = run_near(file, page, JumpIfNear(E, cud(lc_lone_je())), at, cu(lc_lone_je()), piece(lc_lone_je()), s3, tested.memory_is, tested.rip_is);
+            let s4 = execute_near_control(JumpIfNear(E, cud(lc_lone_je())), s3);
+            let s4_rip = jcc_taken(E, cud(lc_lone_je()), s3, at, cu(lc_lone_je()), cu(lc_end()), tested.rip_is, cmp_bytes(nul(), nul()), cj_lone_je());
             j(sym(op_lone_dash(rest, byte0, yes)), λ o _ => CursorReach(file, page, at, rsp, origin, o, state),
                 Exists(s4, ⟨fetched_steps_trans(fetch, data, state, s1, s4, ahead.steps, fetched_steps_trans(fetch, data, s1, s2, s4, loaded.steps,
                         fetched_steps_trans(fetch, data, s2, s3, s4, tested.steps, jumped))),
@@ -553,17 +574,17 @@ theorem cursor_dash(file: IoImage, page: Nat → BitVec(8), at: BitVec(64), piec
             let lows1 = bound_second(v, more.len(), bound1);
             let present: (data.read(memory, read_gpr(Rdi, s1.gprs)) = Some(byte1)) =
                 trans(read_here(file, page, source1, read_gpr(Rdi, s1.gprs), reads1_here(0)), string1.left);
-            let loaded = run_byte_load(file, page, scan_ahead_load(), at, 75, piece(9), s1, ahead.memory_is, ahead.rip_is, byte1, present, low1);
+            let loaded = run_byte_load(file, page, scan_ahead_load(), at, cu(lc_ahead_load()), piece(lc_ahead_load()), s1, ahead.memory_is, ahead.rip_is, byte1, present, low1);
             let s2 = byte_load_after(scan_ahead_load(), byte1, s1);
-            let tested = run_block(file, page, scan_is_block(nul()), at, 79, piece(10), s2, loaded.memory_is, loaded.rip_is);
+            let tested = run_block(file, page, scan_is_block(nul()), at, cu(lc_second_nul()), piece(lc_second_nul()), s2, loaded.memory_is, loaded.rip_is);
             let s3 = execute_block_normal(scan_is_block(nul()), s2);
-            let passed = run_near(file, page, JumpIfNear(E, cj_lone()), at, 92, piece(11), s3, tested.memory_is, tested.rip_is);
-            let s4 = execute_near_control(JumpIfNear(E, cj_lone()), s3);
-            let s4_rip = jcc_passed(E, cj_lone(), s3, at, 92, tested.rip_is, trans(cmp_bytes(byte1, nul()), not_nul(byte1, string1.right.left)));
-            let tested2 = run_block(file, page, scan_is_block(dash()), at, 98, piece(12), s4, tested.memory_is, s4_rip);
+            let passed = run_near(file, page, JumpIfNear(E, cud(lc_lone_je())), at, cu(lc_lone_je()), piece(lc_lone_je()), s3, tested.memory_is, tested.rip_is);
+            let s4 = execute_near_control(JumpIfNear(E, cud(lc_lone_je())), s3);
+            let s4_rip = jcc_passed(E, cud(lc_lone_je()), s3, at, cu(lc_lone_je()), tested.rip_is, trans(cmp_bytes(byte1, nul()), not_nul(byte1, string1.right.left)));
+            let tested2 = run_block(file, page, scan_is_block(dash()), at, cu(lc_second_dash()), piece(lc_second_dash()), s4, tested.memory_is, s4_rip);
             let s5 = execute_block_normal(scan_is_block(dash()), s4);
-            let jne = JumpIfNear(NE, cj_letters());
-            let jumped = run_near(file, page, jne, at, 111, piece(13), s5, tested2.memory_is, tested2.rip_is);
+            let jne = JumpIfNear(NE, cud(lc_letters_jne()));
+            let jumped = run_near(file, page, jne, at, cu(lc_letters_jne()), piece(lc_letters_jne()), s5, tested2.memory_is, tested2.rip_is);
             let s6 = execute_near_control(jne, s5);
             let to_s6: FetchedSteps(fetch, data, state, s6) = fetched_steps_trans(fetch, data, state, s1, s6, ahead.steps,
                 fetched_steps_trans(fetch, data, s1, s2, s6, loaded.steps, fetched_steps_trans(fetch, data, s2, s3, s6, tested.steps,
@@ -571,8 +592,8 @@ theorem cursor_dash(file: IoImage, page: Nat → BitVec(8), at: BitVec(64), piec
             (match byte1.eq_bit(dash()) as λ c => (byte1.eq_bit(dash()) = c) →
                     CursorReach(file, page, at, rsp, origin, operands_from(False, Cons(Cons(byte0, Cons(byte1, more)), rest)), state) {
                 False => λ no1 => {
-                    let s6_rip = jcc_taken_back(NE, cj_letters(), s5, at, 111, 0, tested2.rip_is,
-                        ne_holds(s5.flags, trans(cmp_bytes(byte1, dash()), no1)), refl);
+                    let s6_rip = jcc_taken_back(NE, cud(lc_letters_jne()), s5, at, cu(lc_letters_jne()), cu(lc_next()), tested2.rip_is,
+                        ne_holds(s5.flags, trans(cmp_bytes(byte1, dash()), no1)), cj_letters_jne());
                     j(sym(trans(op_dash(rest, byte0, byte1, more, yes),
                             cong_fn<Bool, List<List<BitVec(8)>>>(λ f => operands_from(!f, rest), follow_not_dash(byte1, more, no1)))),
                         λ o _ => CursorReach(file, page, at, rsp, origin, o, state),
@@ -580,7 +601,7 @@ theorem cursor_dash(file: IoImage, page: Nat → BitVec(8), at: BitVec(64), piec
                             cont(False, s6, CursorAt(memory_is := tested2.memory_is, rip_is := s6_rip, regs := head.regs))))
                 },
                 True => λ yes1 => {
-                    let s6_rip = jcc_passed(NE, cj_letters(), s5, at, 111, tested2.rip_is, ne_fails(s5.flags, trans(cmp_bytes(byte1, dash()), yes1)));
+                    let s6_rip = jcc_passed(NE, cud(lc_letters_jne()), s5, at, cu(lc_letters_jne()), tested2.rip_is, ne_fails(s5.flags, trans(cmp_bytes(byte1, dash()), yes1)));
                     j(sym(dashes_operands(rest, byte0, byte1, more, yes, yes1)), λ o _ => CursorReach(file, page, at, rsp, origin, o, state),
                         cursor_reach_after(file, page, at, rsp, origin,
                             match more { Nil => operands_from(True, rest), Cons(_, _) => operands_from(False, rest) }, state, s6, to_s6,
@@ -593,7 +614,7 @@ theorem cursor_dash(file: IoImage, page: Nat → BitVec(8), at: BitVec(64), piec
     }(string, bound)
 }
 
-// An argument with the options not ended, from the JNE (39).
+// An argument with the options not ended, from the JNE (`lc_ended_jne`).
 theorem cursor_option(file: IoImage, page: Nat → BitVec(8), at: BitVec(64), piece: CursorPieces(file, at), rsp: BitVec(64), k: Nat,
     origin: Gprs, rest: List<List<BitVec(8)>>, cont: CursorCont(file, page, at, rsp, origin, k, rest), arg: List<BitVec(8)>,
     state: MachineState<IoMemory>, head: CursorHead(file, page, at, rsp, k, False, origin, arg, rest, state)):
@@ -602,9 +623,9 @@ theorem cursor_option(file: IoImage, page: Nat → BitVec(8), at: BitVec(64), pi
     let data = io_data_access();
     let memory = IoMemory(file, page);
     let p = head.pointer;
-    let passed = run_near(file, page, JumpIfNear(NE, cj_ended()), at, 39, piece(4), state, head.memory_is, head.rip_is);
-    let s1 = execute_near_control(JumpIfNear(NE, cj_ended()), state);
-    let s1_rip = jcc_passed(NE, cj_ended(), state, at, 39, head.rip_is, ne_fails(state.flags, head.zf));
+    let passed = run_near(file, page, JumpIfNear(NE, cud(lc_ended_jne())), at, cu(lc_ended_jne()), piece(lc_ended_jne()), state, head.memory_is, head.rip_is);
+    let s1 = execute_near_control(JumpIfNear(NE, cud(lc_ended_jne())), state);
+    let s1_rip = jcc_passed(NE, cud(lc_ended_jne()), state, at, cu(lc_ended_jne()), head.rip_is, ne_fails(state.flags, head.zf));
     let source0 = λ (i: Nat) => data.read(memory, word_of_nat(64, p.toNat() + i));
     let reads: ReadsFrom(file, page, source0, read_gpr(Rsi, s1.gprs).toNat()) =
         j(sym(head.rsi), λ w _ => ReadsFrom(file, page, source0, w.toNat()), λ i => refl);
@@ -616,13 +637,13 @@ theorem cursor_option(file: IoImage, page: Nat → BitVec(8), at: BitVec(64), pi
         Nil => λ string bound => {
             let present: (data.read(memory, read_gpr(Rsi, s1.gprs)) = Some(nul())) =
                 trans(read_here(file, page, source0, read_gpr(Rsi, s1.gprs), reads(0)), string(file.frame, page));
-            let loaded = run_byte_load(file, page, scan_byte_load(), at, 45, piece(5), s1, head.memory_is, s1_rip, nul(), present, low0);
+            let loaded = run_byte_load(file, page, scan_byte_load(), at, cu(lc_first_load()), piece(lc_first_load()), s1, head.memory_is, s1_rip, nul(), present, low0);
             let s2 = byte_load_after(scan_byte_load(), nul(), s1);
-            let tested = run_block(file, page, scan_is_block(dash()), at, 49, piece(6), s2, loaded.memory_is, loaded.rip_is);
+            let tested = run_block(file, page, scan_is_block(dash()), at, cu(lc_first_dash()), piece(lc_first_dash()), s2, loaded.memory_is, loaded.rip_is);
             let s3 = execute_block_normal(scan_is_block(dash()), s2);
-            let jumped = run_near(file, page, JumpIfNear(NE, cj_not_dash()), at, 62, piece(7), s3, tested.memory_is, tested.rip_is);
-            let s4 = execute_near_control(JumpIfNear(NE, cj_not_dash()), s3);
-            let s4_rip = jcc_taken(NE, cj_not_dash(), s3, at, 62, 159, tested.rip_is, ne_holds(s3.flags, cmp_bytes(nul(), dash())), refl);
+            let jumped = run_near(file, page, JumpIfNear(NE, cud(lc_dash_jne())), at, cu(lc_dash_jne()), piece(lc_dash_jne()), s3, tested.memory_is, tested.rip_is);
+            let s4 = execute_near_control(JumpIfNear(NE, cud(lc_dash_jne())), s3);
+            let s4_rip = jcc_taken(NE, cud(lc_dash_jne()), s3, at, cu(lc_dash_jne()), cu(lc_end()), tested.rip_is, ne_holds(s3.flags, cmp_bytes(nul(), dash())), cj_dash_jne());
             Exists(s4, ⟨fetched_steps_trans(fetch, data, state, s1, s4, passed,
                     fetched_steps_trans(fetch, data, s1, s2, s4, loaded.steps, fetched_steps_trans(fetch, data, s2, s3, s4, tested.steps, jumped))),
                 cursor_found(file, page, at, rsp, origin, k, False, Nil, rest, p, head.pointers, s4, tested.memory_is, s4_rip, head.rsi,
@@ -631,25 +652,25 @@ theorem cursor_option(file: IoImage, page: Nat → BitVec(8), at: BitVec(64), pi
         Cons(byte0, tail) => λ string bound => {
             let present: (data.read(memory, read_gpr(Rsi, s1.gprs)) = Some(byte0)) =
                 trans(read_here(file, page, source0, read_gpr(Rsi, s1.gprs), reads(0)), (string(file.frame, page)).left);
-            let loaded = run_byte_load(file, page, scan_byte_load(), at, 45, piece(5), s1, head.memory_is, s1_rip, byte0, present, low0);
+            let loaded = run_byte_load(file, page, scan_byte_load(), at, cu(lc_first_load()), piece(lc_first_load()), s1, head.memory_is, s1_rip, byte0, present, low0);
             let s2 = byte_load_after(scan_byte_load(), byte0, s1);
-            let tested = run_block(file, page, scan_is_block(dash()), at, 49, piece(6), s2, loaded.memory_is, loaded.rip_is);
+            let tested = run_block(file, page, scan_is_block(dash()), at, cu(lc_first_dash()), piece(lc_first_dash()), s2, loaded.memory_is, loaded.rip_is);
             let s3 = execute_block_normal(scan_is_block(dash()), s2);
-            let jne = JumpIfNear(NE, cj_not_dash());
-            let jumped = run_near(file, page, jne, at, 62, piece(7), s3, tested.memory_is, tested.rip_is);
+            let jne = JumpIfNear(NE, cud(lc_dash_jne()));
+            let jumped = run_near(file, page, jne, at, cu(lc_dash_jne()), piece(lc_dash_jne()), s3, tested.memory_is, tested.rip_is);
             let s4 = execute_near_control(jne, s3);
             let to_s4: FetchedSteps(fetch, data, state, s4) = fetched_steps_trans(fetch, data, state, s1, s4, passed,
                 fetched_steps_trans(fetch, data, s1, s2, s4, loaded.steps, fetched_steps_trans(fetch, data, s2, s3, s4, tested.steps, jumped)));
             (match byte0.eq_bit(dash()) as λ c => (byte0.eq_bit(dash()) = c) →
                     CursorReach(file, page, at, rsp, origin, operands_from(False, Cons(Cons(byte0, tail), rest)), state) {
                 False => λ no => {
-                    let s4_rip = jcc_taken(NE, cj_not_dash(), s3, at, 62, 159, tested.rip_is, ne_holds(s3.flags, trans(cmp_bytes(byte0, dash()), no)), refl);
+                    let s4_rip = jcc_taken(NE, cud(lc_dash_jne()), s3, at, cu(lc_dash_jne()), cu(lc_end()), tested.rip_is, ne_holds(s3.flags, trans(cmp_bytes(byte0, dash()), no)), cj_dash_jne());
                     j(sym(op_not_dash(rest, byte0, tail, no)), λ o _ => CursorReach(file, page, at, rsp, origin, o, state),
                         Exists(s4, ⟨to_s4, cursor_found(file, page, at, rsp, origin, k, False, Cons(byte0, tail), rest, p, head.pointers, s4,
                             tested.memory_is, s4_rip, head.rsi, head.positive, bound, string, head.later, head.regs)⟩))
                 },
                 True => λ yes => {
-                    let s4_rip = jcc_passed(NE, cj_not_dash(), s3, at, 62, tested.rip_is, ne_fails(s3.flags, trans(cmp_bytes(byte0, dash()), yes)));
+                    let s4_rip = jcc_passed(NE, cud(lc_dash_jne()), s3, at, cu(lc_dash_jne()), tested.rip_is, ne_fails(s3.flags, trans(cmp_bytes(byte0, dash()), yes)));
                     cursor_reach_after(file, page, at, rsp, origin, operands_from(False, Cons(Cons(byte0, tail), rest)), state, s4, to_s4,
                         cursor_dash(file, page, at, piece, rsp, k, origin, rest, cont, head.pointers, head.later, p, head.positive, byte0, yes, tail, s4,
                             CursorIn(memory_is := tested.memory_is, rip_is := s4_rip, rsi := head.rsi, regs := head.regs), string, bound))
@@ -674,9 +695,9 @@ theorem cursor_loop(file: IoImage, page: Nat → BitVec(8), at: BitVec(64), piec
                 (match ended as λ e => CursorHead(file, page, at, rsp, Succ(k), e, origin, arg, rest, s1) →
                         CursorReach(file, page, at, rsp, origin, operands_from(e, Cons(arg, rest)), s1) {
                     True => λ hd => {
-                        let jumped = run_near(file, page, JumpIfNear(NE, cj_ended()), at, 39, piece(4), s1, hd.memory_is, hd.rip_is);
-                        let s2 = execute_near_control(JumpIfNear(NE, cj_ended()), s1);
-                        let s2_rip = jcc_taken(NE, cj_ended(), s1, at, 39, 159, hd.rip_is, ne_holds(s1.flags, hd.zf), refl);
+                        let jumped = run_near(file, page, JumpIfNear(NE, cud(lc_ended_jne())), at, cu(lc_ended_jne()), piece(lc_ended_jne()), s1, hd.memory_is, hd.rip_is);
+                        let s2 = execute_near_control(JumpIfNear(NE, cud(lc_ended_jne())), s1);
+                        let s2_rip = jcc_taken(NE, cud(lc_ended_jne()), s1, at, cu(lc_ended_jne()), cu(lc_end()), hd.rip_is, ne_holds(s1.flags, hd.zf), cj_ended_jne());
                         Exists(s2, ⟨jumped, cursor_found(file, page, at, rsp, origin, Succ(k), True, arg, rest, hd.pointer, hd.pointers, s2,
                             hd.memory_is, s2_rip, hd.rsi, hd.positive, hd.bound, hd.string, hd.later, hd.regs)⟩)
                     },
@@ -709,22 +730,23 @@ theorem cursor_start(file: IoImage, at: BitVec(64), placed: Placed(file, start_c
     let piece = start_pieces(file, at, placed);
     let rsp = read_gpr(Rsp, state.gprs);
     let origin = state.gprs;
-    let set = run_block(file, page, cursor_setup_block(), at, 0, piece(0), state, memory_is, rip_is);
+    let je = asm_jump(start_labels(), lst_je());
+    let set = run_block(file, page, cursor_setup_block(), at, asm_at(lst_setup()), piece(lst_setup()), state, memory_is, rip_is);
     let s1 = execute_block_normal(cursor_setup_block(), state);
     let rbx1: (read_gpr(Rbx, s1.gprs) = argv_slot(rsp, 1)) = slot_next(rsp, 0, rsp, slot_zero(rsp));
     let loaded_from = λ (p: BitVec(64)) (held: WordAt(data, IoMemory(file, page), argv_slot(rsp, 1), p)) =>
-        run_word_load(file, page, scan_slot_load(), at, 17, piece(1), s1, set.memory_is, set.rip_is, p,
+        run_word_load(file, page, scan_slot_load(), at, asm_at(lst_first()), piece(lst_first()), s1, set.memory_is, set.rip_is, p,
             j(sym(rbx1), λ w _ => WordAt(data, IoMemory(file, page), w, p), held));
     match argv as λ a => ArgvStaysAt(file, rsp, a, pointers) →
             Exists<MachineState<IoMemory>>(λ after => FetchedSteps(fetch, data, state, after) ∧ StartOut(file, page, at, rsp, origin, command_args(a), after)) {
         Nil => λ layout => {
             let loaded = loaded_from(word_zero(), (layout(file.frame, page)).right);
             let s2 = word_load_after(scan_slot_load(), word_zero(), s1);
-            let tested = run_block(file, page, scan_null_block(), at, 20, piece(2), s2, loaded.memory_is, loaded.rip_is);
+            let tested = run_block(file, page, scan_null_block(), at, asm_at(lst_null()), piece(lst_null()), s2, loaded.memory_is, loaded.rip_is);
             let s3 = execute_block_normal(scan_null_block(), s2);
-            let jumped = run_near(file, page, JumpIfNear(E, cj_first()), at, 33, piece(3), s3, tested.memory_is, tested.rip_is);
-            let s4 = execute_near_control(JumpIfNear(E, cj_first()), s3);
-            let s4_rip = jcc_taken(E, cj_first(), s3, at, 33, 43, tested.rip_is, zero_bits_sub_self(64, word_zero()), refl);
+            let jumped = run_near(file, page, JumpIfNear(E, je), at, asm_at(lst_je()), piece(lst_je()), s3, tested.memory_is, tested.rip_is);
+            let s4 = execute_near_control(JumpIfNear(E, je), s3);
+            let s4_rip = jcc_taken(E, je, s3, at, asm_at(lst_je()), asm_at(lst_past()), tested.rip_is, zero_bits_sub_self(64, word_zero()), start_j_je());
             Exists(s4, ⟨fetched_steps_trans(fetch, data, state, s1, s4, set.steps, fetched_steps_trans(fetch, data, s1, s2, s4, loaded.steps,
                     fetched_steps_trans(fetch, data, s2, s3, s4, tested.steps, jumped))),
                 StartOut(k := 1, pointers := pointers, memory_is := tested.memory_is, rip_is := s4_rip,
@@ -737,13 +759,13 @@ theorem cursor_start(file: IoImage, at: BitVec(64), placed: Placed(file, start_c
                 let facts = (layout(file.frame, page)).right;
                 let loaded = loaded_from(p, facts.left);
                 let s2 = word_load_after(scan_slot_load(), p, s1);
-                let tested = run_block(file, page, scan_null_block(), at, 20, piece(2), s2, loaded.memory_is, loaded.rip_is);
+                let tested = run_block(file, page, scan_null_block(), at, asm_at(lst_null()), piece(lst_null()), s2, loaded.memory_is, loaded.rip_is);
                 let s3 = execute_block_normal(scan_null_block(), s2);
-                let passed = run_near(file, page, JumpIfNear(E, cj_first()), at, 33, piece(3), s3, tested.memory_is, tested.rip_is);
-                let s4 = execute_near_control(JumpIfNear(E, cj_first()), s3);
-                let s4_rip = jcc_passed(E, cj_first(), s3, at, 33, tested.rip_is,
+                let passed = run_near(file, page, JumpIfNear(E, je), at, asm_at(lst_je()), piece(lst_je()), s3, tested.memory_is, tested.rip_is);
+                let s4 = execute_near_control(JumpIfNear(E, je), s3);
+                let s4_rip = jcc_passed(E, je, s3, at, asm_at(lst_je()), tested.rip_is,
                     trans(zero_bits_sub(64, p, word_zero()), nonzero_word(p, facts.right.left)));
-                let skipped = run_block(file, page, scan_skip_block(), at, 39, piece(4), s4, tested.memory_is, s4_rip);
+                let skipped = run_block(file, page, scan_skip_block(), at, asm_at(lst_skip()), piece(lst_skip()), s4, tested.memory_is, s4_rip);
                 let s5 = execute_block_normal(scan_skip_block(), s4);
                 Exists(s5, ⟨fetched_steps_trans(fetch, data, state, s1, s5, set.steps, fetched_steps_trans(fetch, data, s1, s2, s5, loaded.steps,
                         fetched_steps_trans(fetch, data, s2, s3, s5, tested.steps, fetched_steps_trans(fetch, data, s3, s4, s5, passed, skipped.steps)))),

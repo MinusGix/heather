@@ -16,8 +16,8 @@ fn slow_acceptance_stat_width_refusals() {
         ("fstat_fd_1", "MovRI(Rdi, word_zero()), MovRI(Rsi, page_word())", "MovRI(Rdi, BitVec::ofNat(1)), MovRI(Rsi, page_word())"),
         ("no_dirfd", "MovRI(Rdi, at_fdcwd())", "MovRI(Rdi, word_zero())"),
         ("size_from_mode", "[MovRI(Rdi, size_word())]", "[MovRI(Rdi, mode_word())]"),
-        ("failed_counted", "near_control_bytes(JumpIfNear(NE, wj_failed()))", "near_control_bytes(JumpIfNear(E, wj_failed()))"),
-        ("kinds_swapped", "near_control_bytes(JumpIfNear(NE, wj_other()))", "near_control_bytes(JumpIfNear(E, wj_other()))"),
+        ("failed_counted", "then(lw_acct(), Jcc(NE, tw_next()))", "then(lw_acct(), Jcc(E, tw_next()))"),
+        ("kinds_swapped", "then(lw_kind(), Jcc(NE, tw_other()))", "then(lw_kind(), Jcc(E, tw_other()))"),
         ("made_forgotten", "[MovRI(R15, BitVec::ofNat(1)), MovRI(R11, word_zero())", "[MovRI(R15, BitVec::ofNat(0)), MovRI(R11, word_zero())"),
         ("widens_to_8", "{ [MovRI(Rsi, BitVec::ofNat(7))] }", "{ [MovRI(Rsi, BitVec::ofNat(8))] }"),
     ] {

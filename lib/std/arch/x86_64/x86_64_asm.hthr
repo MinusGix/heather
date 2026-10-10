@@ -114,6 +114,8 @@ fn asm_code(fills: Nat → List<BitVec(8)>, labels: Nat → Nat, p: Prog) → Li
 // The code: the program, its holes filled, then `last`, the open-ended piece
 // nothing is placed after.
 fn assemble(fills: Nat → List<BitVec(8)>, p: Prog, last: List<BitVec(8)>) → List<BitVec(8)> { asm_code(fills, asm_labels(p), p) ++ last }
+// A program with no holes is assembled with nothing.
+fn no_fills() → Nat → List<BitVec(8)> { λ _ => Nil }
 
 // The jump at label `l`: its displacement.
 fn asm_jump_of(labels: Nat → Nat, here: Nat, item: Asm) → BitVec(32) {
