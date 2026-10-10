@@ -304,17 +304,15 @@ Taken by Minus, 2026-10-10:
 4. **Result facts are named under the function** (`ten_pow::pos`) rather
    than minted, which needs function-owned members (§6 B).
 
-Still open:
+Then, the same day:
 
-1. **How smart `infer` is.** Either locals plus computation, with the
-   evidence rules living only in the positivity tactic, or locals,
-   computation and rules in `infer` itself. The first keeps `infer` a cheap
-   scope lookup; the second makes `Pos<Nat>` parameters work with no
-   default written.
-2. **Rule registration spelling.** `ten_pow::pos` registers itself through
-   the sugar; a hand-written rule such as `Nat::mul_pos` needs a declaration
-   form or an attribute.
-3. **Whether `infer` looks through `∧` projections of locals.**
+5. **Rules live in `infer`**, not only in the tactic, so a `Pos<Nat>`
+   parameter works with no default written.
+
+Settled by the round-1 implementation (§9): a hand-written rule is spelled
+`evidence theorem`.
+
+Still open: **whether `infer` looks through `∧` projections of locals.**
 
 ## 8. Rounds this implies, in order
 
@@ -331,6 +329,14 @@ Still open:
 7. A refinement *type* for function domains and containers, when the
    regular-reals probe needs one.
 
+Each round has an issue: [infer-proposition-evidence](../issues/infer-proposition-evidence.md)
+(round 1), [named-arguments](../issues/named-arguments.md) (parameter
+defaults), [function-owned-members](../issues/function-owned-members.md),
+[pos-binder-sugar](../issues/pos-binder-sugar.md),
+[retire-shifted-pos](../issues/retire-shifted-pos.md),
+[positivity-tactic](../issues/positivity-tactic.md) and
+[positive-refinement-type](../issues/positive-refinement-type.md).
+
 Owners elsewhere:
 [setoid-auto-lifting](../issues/setoid-auto-lifting.md) and
 [subtype-transfer-and-evidence](../issues/subtype-transfer-and-evidence.md)
@@ -341,3 +347,56 @@ the stored-goal machinery that parameter defaults would share.
 [implicit-logical-assumptions](../issues/implicit-logical-assumptions.md)
 owns `assuming`/`using`, whose `infer` precedence (explicit, local,
 derivation, scope providers) round 1 extends and must not reorder.
+
+## 9. As landed: round 1 (2026-10-10)
+
+`:= infer` at a goal that is not a class now tries, after the derived table,
+the locals and the upcast pass:
+
+1. **Computation.** `trivial` is proposed when the kernel accepts it at the
+   goal within a small fuel (`COMPUTE_FUEL` in `crates/elab/src/resolve.rs`).
+   `0 < 5`, `0 < Succ(k)` and `0 < k + 1` close this way; `0 < 0` does not.
+2. **Evidence rules.** A rule is a theorem marked `evidence`:
+
+   ```heather
+   evidence theorem Nat::mul_pos({a, b: Nat}, pa: 0 < a := infer, pb: 0 < b := infer): 0 < a * b {
+       (1).mul_le_mono(a, 1, b, pa, pb)
+   }
+   ```
+
+   Every parameter must be one search can fill: `{…}` values are solved by
+   unifying the conclusion with the goal, and premises are `:= infer`. A rule
+   is therefore tried exactly as an instance is, by elaborating its bare name
+   against the goal (`build_candidate`), so its premises recurse through the
+   same search with the caller's locals first. It is also an ordinary
+   theorem: `Nat::mul_pos()` searches every premise, `Nat::mul_pos(pb := q)`
+   names one.
+
+Rules are keyed by the qualified name of the conclusion's relation
+(`nat::Nat::Lt`), read off the checked statement, and listed in canonical
+order. Each records the head of every relation argument (a global, `Zero`,
+`Succ`, or a variable), which prefilters candidates; the kernel-checked
+trial decides. Several rules about one relation coexist.
+
+**Termination** is Paterson's condition, as for instances
+(`docs/traits-layer2-design.md` §6), checked on the elaborated statement:
+each premise has fewer symbols than the conclusion and mentions no binder
+more often. A premise that would grow the goal is refused at the
+declaration.
+
+**Persistence.** A rule is a module event (`DeltaEvent::Evidence`), so it
+reaches importers and survives semantic-image replay. The image format's
+magic was bumped, since `Decl` gained `is_evidence`.
+
+**Trace.** New keys: `computed`, `rules`, `no-rule`. A failed proposition
+goal is now displayed as the call instantiated it, `Lt(0, mul(a, b))`, not as
+the callee's written `<(0, n)`. It is spelled rather than decoded, because
+decoding reduces `0 < 0` to `False`. Operator notation in it is
+[diagnostic-operator-resugaring](../issues/diagnostic-operator-resugaring.md)'s.
+
+**Library.** `nat.hthr` registers `Nat::mul_pos`, `Nat::add_pos_l` and
+`Nat::add_pos_r`. No existing signature changed: a `0 < d` parameter only
+benefits once it is written `:= infer`, which is a positional-arity change
+for its callers and belongs with the `Pos<A>` sugar.
+
+Tests: `crates/elab/tests/lib_std_evidence.rs`.

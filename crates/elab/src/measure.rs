@@ -435,6 +435,7 @@ fn companion(decl: &Decl, name: String, params: Vec<Param>, result: Ty, body: Bl
     Decl {
         kind: decl.kind,
         is_meta: false,
+        is_evidence: false,
         elaborates: None,
         name,
         tyvars: decl.tyvars.clone(),
@@ -1013,6 +1014,7 @@ pub(crate) fn lower_group(
     let grp_decl = Decl {
         kind: DeclKind::Fn,
         is_meta: false,
+        is_evidence: false,
         elaborates: None,
         name: grp.clone(),
         tyvars: first.tyvars.clone(),
@@ -1130,6 +1132,7 @@ pub(crate) fn lower_group(
     let rec_decl = Decl {
         kind: DeclKind::Fn,
         is_meta: false,
+        is_evidence: false,
         elaborates: None,
         name: grp_rec.clone(),
         tyvars: first.tyvars.clone(),
@@ -1653,6 +1656,7 @@ impl Rewrite<'_> {
         let decl = Decl {
             kind: DeclKind::Theorem,
             is_meta: false,
+            is_evidence: false,
             elaborates: None,
             name: name.clone(),
             tyvars: self.decl.tyvars.clone(),
@@ -3193,6 +3197,7 @@ pub(crate) fn companions(
     let ext_decl = Decl {
         kind: DeclKind::Theorem,
         is_meta: false,
+        is_evidence: false,
         elaborates: None,
         name: ext_name(&decl.name),
         tyvars: decl.tyvars.clone(),
@@ -3366,6 +3371,7 @@ pub(crate) fn companions(
     let irrel_decl = Decl {
         kind: DeclKind::Theorem,
         is_meta: false,
+        is_evidence: false,
         elaborates: None,
         name: irrel_name(&decl.name),
         tyvars: decl.tyvars.clone(),
@@ -3401,6 +3407,7 @@ pub(crate) fn companions(
     let unfold_decl = Decl {
         kind: DeclKind::Theorem,
         is_meta: false,
+        is_evidence: false,
         elaborates: None,
         name: unfold_name(&decl.name),
         tyvars: decl.tyvars.clone(),

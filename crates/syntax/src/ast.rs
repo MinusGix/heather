@@ -364,6 +364,12 @@ pub struct Decl {
     /// quotation, and it is registered elaborator-side rather than in Ψ.
     /// Only `fn` may carry it; `meta theorem` is rejected in the parser.
     pub is_meta: bool,
+    /// `evidence theorem` — an **evidence rule**: a theorem `:= infer` may
+    /// apply to a proposition goal, backchaining through its own `:= infer`
+    /// premises (docs/positivity-evidence-design.md §6 A). Only a theorem may
+    /// carry it, and the elaborator refuses one with a parameter search could
+    /// not fill.
+    pub is_evidence: bool,
     /// `meta fn map_code(g: Ctx) for vec.map -> …` — the elaboration **slot**
     /// this template fills (docs/meta-def-registration-design.md §2.1). A
     /// `meta fn` without one is registered but never dispatched: the clause,

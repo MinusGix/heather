@@ -237,7 +237,9 @@ struct TraceLine { depth: usize, key: &'static str, value: String }
 
 with a closed key vocabulary — `goal`, `scope`, `local`, `class`,
 `candidate`, `rejected`, `subgoal`, `no-class`, `no-instance`, `blocked`,
-`depth` — rendered one per line, indented by `depth`. Nested subgoal failures
+`depth` — rendered one per line, indented by `depth`. (Amended 2026-10-10:
+a proposition goal adds `computed`, `rules` and `no-rule`,
+`docs/positivity-evidence-design.md` §9.) Nested subgoal failures
 are the same list at `depth + 1`, so a whole search is one flat, machine-
 readable structure and not a nested prose paragraph
 (`issues/ai-facing-tooling.md` §7; the same doctrine as the e-graph explain

@@ -20,7 +20,7 @@ use crate::metaprograms::MetaDef;
 use crate::names::{GlobalRegistration, NameKind, Scope};
 use crate::resolve::DerivedInst;
 use crate::slots::Slot;
-use crate::traits::{ClassInfo, DesignationInfo, InstanceInfo, InstKey};
+use crate::traits::{ClassInfo, DesignationInfo, EvidenceRule, InstanceInfo, InstKey};
 use crate::{pool, stats, ElabError, Elaborator, R};
 
 /// Ordered dependency-interface identities supplied by the module loader.
@@ -278,6 +278,7 @@ pub(crate) enum DeltaEvent {
         info: DesignationInfo,
     },
     Derived(DerivedInst),
+    Evidence(EvidenceRule),
     Repr {
         key: DatareprKey,
         name: String,
@@ -502,6 +503,11 @@ impl Elaborator {
             info: info.clone(),
         });
         self.traits.commit_designation(key, info);
+    }
+
+    pub(crate) fn semantic_commit_evidence(&mut self, rule: EvidenceRule) {
+        self.record_module_event(|| DeltaEvent::Evidence(rule.clone()));
+        self.traits.commit_evidence(rule);
     }
 
     pub(crate) fn semantic_commit_derived(&mut self, info: DerivedInst) {
@@ -1102,6 +1108,7 @@ impl Elaborator {
             DeltaEvent::Instance { key, info } => self.semantic_commit_instance(key, info),
             DeltaEvent::Designation { key, info } => self.semantic_commit_designation(key, info),
             DeltaEvent::Derived(info) => self.semantic_commit_derived(info),
+            DeltaEvent::Evidence(rule) => self.semantic_commit_evidence(rule),
             DeltaEvent::Repr { key, name, info, monomorph, obligations } => {
                 self.semantic_commit_repr(key, name, info, monomorph, obligations);
             }
@@ -1149,6 +1156,7 @@ impl Elaborator {
             }
             DeltaEvent::Derived(info)
                 if self.traits.derived().iter().any(|old| old.abs == info.abs) => Some("derived-instance"),
+            DeltaEvent::Evidence(rule) if self.traits.has_evidence(&rule.global) => Some("evidence-rule"),
             DeltaEvent::Repr { key, name, monomorph, .. }
                 if self.representations.for_spec(key).is_some()
                     || self.representations.has_name(name)

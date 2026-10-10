@@ -83,7 +83,7 @@ module.exports = grammar({
     ),
 
     theorem_declaration: $ => seq(
-      'theorem', field('name', $._qualified_name),
+      optional('evidence'), 'theorem', field('name', $._qualified_name),
       optional($.type_parameters), optional($.requires_clause),
       field('parameters', $.parameter_list),
       ':', field('return_type', $._declaration_type),

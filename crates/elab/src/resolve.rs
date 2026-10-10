@@ -44,6 +44,13 @@ const MAX_DEPTH: usize = 32;
 /// never correctness.
 const DERIVED_LOOKUP_FUEL: u64 = 1 << 12;
 
+/// The reduction allowance for the **computation** source at a proposition
+/// goal (docs/positivity-evidence-design.md §6 A): `trivial` is proposed only
+/// when the goal reduces to `True` within this much work. A goal whose
+/// operands are large closed computations is not worth proving this way, and
+/// an inconclusive check is a miss that falls through to the rules.
+const COMPUTE_FUEL: u64 = 1 << 12;
+
 /// One record of a resolution search — the trace is a flat list of these, not
 /// a prose paragraph (design §7, `issues/ai-facing-tooling.md` §7). `key` is
 /// drawn from a closed vocabulary so a consumer can read the trace as data;
@@ -110,6 +117,102 @@ pub(crate) struct DerivedInst {
 }
 
 impl Elaborator {
+    /// The surface shape an `evidence theorem` must have before it is
+    /// elaborated (docs/positivity-evidence-design.md §6 A). A rule is applied
+    /// by search, so search has to be able to fill every parameter: a `{…}`
+    /// value is solved by unifying the conclusion with the goal, and a
+    /// premise is `:= infer`, resolved by the same search.
+    pub(crate) fn evidence_shape(&self, decl: &heather_syntax::Decl) -> crate::R<()> {
+        if decl.kind != heather_syntax::DeclKind::Theorem || decl.decreases.is_some() {
+            return Err(ElabError::Elab {
+                msg: "`evidence` marks a `theorem`: a rule is a proof `:= infer` applies, \
+                      and only a theorem is one"
+                    .into(),
+                span: decl.span,
+            });
+        }
+        if let Some(p) = decl.params.iter().find(|p| !p.implicit && p.solver.is_none()) {
+            return Err(ElabError::Elab {
+                msg: format!(
+                    "`{}` is an explicit parameter, but an evidence rule is applied by \
+                     search, which has no argument to give it: write it `{{{}: …}}` if \
+                     the conclusion determines it, or `{}: … := infer` if it is a premise \
+                     (docs/positivity-evidence-design.md §6 A)",
+                    p.name, p.name, p.name
+                ),
+                span: p.span,
+            });
+        }
+        Ok(())
+    }
+
+    /// Register a checked `evidence theorem`: key it by its conclusion's
+    /// relation and check that backchaining through it terminates.
+    ///
+    /// Termination is Paterson's condition, the one instances obey
+    /// (docs/traits-layer2-design.md §6), read on the checked statement: each
+    /// `:= infer` premise is strictly smaller than the conclusion and mentions
+    /// no binder more often. Every step of a search through rules then
+    /// shrinks the goal, so no rule can loop, alone or with others.
+    pub(crate) fn register_evidence(&mut self, decl: &heather_syntax::Decl) -> crate::R<()> {
+        let refuse = |msg: String| Err(ElabError::Elab { msg, span: decl.span });
+        let Some(key) = self.key_of(&decl.name) else {
+            return refuse(format!("`{}` is not a declared global", decl.name));
+        };
+        let Some(info) = self.names.global(&key) else {
+            return refuse(format!("`{}` is not a declared global", decl.name));
+        };
+        let abs = info.abs as usize;
+        let params = Rc::clone(&info.params);
+        let Some(GlobalBinding::Tm { ty, .. }) = self.psi.bindings.get(abs) else {
+            return refuse(format!("`{}` is not a term declaration", decl.name));
+        };
+        let ty = Rc::clone(ty);
+        // Peel the telescope, keeping each premise's domain and the number of
+        // binders above it.
+        let mut premises = Vec::new();
+        let mut binders = 0u32;
+        let mut cur: &Type = &ty;
+        while let Type::Pi { dom, cod, .. } = cur {
+            if params.get(binders as usize).is_some_and(|p| p.solver.is_some()) {
+                premises.push((binders, Rc::clone(dom)));
+            }
+            binders += 1;
+            cur = cod;
+        }
+        let conclusion = cur;
+        let name_of = |v: GlobalVar| {
+            abs.checked_sub(v.0 as usize + 1)
+                .and_then(|g| self.names.global_name_at(g as u32).map(str::to_string))
+        };
+        let Some((relation, heads)) = proposition_key(conclusion, &name_of) else {
+            return refuse(format!(
+                "the conclusion of `{}` is not a relation applied to arguments \
+                 (`0 < a * b`), so no goal could select it as an evidence rule",
+                decl.name
+            ));
+        };
+        let concl = Measure::of(conclusion, binders);
+        for (at, dom) in &premises {
+            let premise = Measure::of(dom, *at);
+            if !premise.smaller_than(&concl) {
+                let name = params.get(*at as usize).map_or("?", |p| p.name.as_str());
+                return refuse(format!(
+                    "the premise `{name}` of evidence rule `{}` is not smaller than its \
+                     conclusion, so a search through it might not terminate: each premise \
+                     must have fewer symbols than the conclusion and mention no variable \
+                     more often (docs/traits-layer2-design.md §6)",
+                    decl.name
+                ));
+            }
+        }
+        if self.traits.has_evidence(&key) {
+            return refuse(format!("`{}` is already an evidence rule", decl.name));
+        }
+        self.semantic_commit_evidence(crate::traits::EvidenceRule { global: key, relation, heads });
+        Ok(())
+    }
+
     /// Resolve one goal, or explain in `tr` why not.
     ///
     /// `display` is what the diagnostic calls the goal (the parameter's
@@ -235,7 +338,7 @@ impl Elaborator {
         //    says so rather than reporting an empty registry.
         let Some(ind) = self.tag_of(goal) else {
             tr.push(line(depth, "no-class", "the goal type is not a class"));
-            return None;
+            return self.resolve_proposition(cx, goal, lvl, span, depth, tr);
         };
         // The goal has already exposed its nominal tag, so its owning
         // declaration is known. Re-resolving the bare class name here lets a
@@ -333,6 +436,97 @@ impl Elaborator {
                 Err(ElabError::Resolution { trace, .. }) => {
                     // A subgoal's own search, spliced in at one more level of
                     // nesting: the whole thing stays one flat list.
+                    tr.extend(trace.iter().map(|l| TraceLine {
+                        depth: l.depth + 1,
+                        key: l.key,
+                        value: l.value.clone(),
+                    }));
+                }
+                Err(e) => tr.push(line(depth + 1, "rejected", e.message())),
+            }
+            *self.attempt.direct_dependencies.borrow_mut() = dependency_mark;
+            self.attempt.check_notes.borrow_mut().truncate(notes_mark);
+        }
+        None
+    }
+
+    /// Steps 3 and 4 at a goal that is not a class: **computation**, then the
+    /// **evidence rules** about the goal's relation
+    /// (docs/positivity-evidence-design.md §6 A). Locals and derivations have
+    /// already had their turn, so an exact proof in scope still wins.
+    fn resolve_proposition(
+        &self,
+        cx: &Cx,
+        goal: &Type,
+        lvl: &Level,
+        span: Span,
+        depth: usize,
+        tr: &mut Vec<TraceLine>,
+    ) -> Option<Term> {
+        // 3. Computation. `0 < Succ(k)` and `0 < 5` reduce to `True`, whose η
+        //    makes `trivial` its proof; the kernel at bounded fuel decides.
+        let trivial = Term::Triv { level: lvl.clone() };
+        let psi = self.goal_psi();
+        let computes = stats::time_kernel(|| {
+            typing::check_term(
+                &psi, 0, Layer::Code, &cx.gamma, &trivial, goal, lvl,
+                self.fuel.min(COMPUTE_FUEL),
+            )
+            .is_ok()
+        });
+        if computes {
+            tr.push(line(depth, "computed", "the goal reduces to `True`"));
+            return Some(trivial);
+        }
+        // 4. The evidence rules, keyed by the goal's relation.
+        let name_of = |v: GlobalVar| {
+            self.global_abs_of(v)
+                .and_then(|abs| self.names.global_name_at(abs as u32).map(str::to_string))
+        };
+        let Some((relation, heads)) = proposition_key(goal, &name_of) else {
+            tr.push(line(depth, "no-rule", "the goal is not a relation applied to arguments"));
+            return None;
+        };
+        let rules: Vec<_> = self
+            .traits
+            .evidence_rules(&relation)
+            .iter()
+            .filter(|rule| {
+                rule.heads.len() == heads.len()
+                    && rule.heads.iter().zip(&heads).all(|(r, g)| heads_may_agree(r.as_deref(), g.as_deref()))
+            })
+            .map(|rule| rule.global.clone())
+            .collect();
+        if rules.is_empty() {
+            tr.push(line(
+                depth,
+                "no-rule",
+                format!("no evidence rule about `{}` fits", short_name(&relation)),
+            ));
+            return None;
+        }
+        tr.push(line(
+            depth,
+            "rules",
+            format!("{} ({} rule(s))", short_name(&relation), rules.len()),
+        ));
+        for g in rules {
+            // A rejected rule is search state, exactly as a rejected instance
+            // is: neither its edges nor its checking notes survive it.
+            let dependency_mark = self.attempt.direct_dependencies.borrow().clone();
+            let notes_mark = self.attempt.check_notes.borrow().len();
+            tr.push(line(depth, "candidate", g.clone()));
+            self.resolve_depth.set(depth + 1);
+            let built = self.build_candidate(cx, &g, goal, lvl, span);
+            self.resolve_depth.set(depth);
+            match built {
+                Ok(t) if self.checks_at(cx, &t, goal, lvl) => return Some(t),
+                Ok(_) => tr.push(line(
+                    depth + 1,
+                    "rejected",
+                    "built, but not of the goal type".to_string(),
+                )),
+                Err(ElabError::Resolution { trace, .. }) => {
                     tr.extend(trace.iter().map(|l| TraceLine {
                         depth: l.depth + 1,
                         key: l.key,
@@ -736,5 +930,95 @@ impl Elaborator {
         };
         self.semantic_commit_derived(derived);
         self.refresh_delta_psi();
+    }
+}
+
+/// A qualified key without its module, for a trace line: `Nat::Lt`.
+fn short_name(key: &str) -> &str {
+    key.split_once("::").map_or(key, |(_, rest)| rest)
+}
+
+/// The head of an evidence rule's or a goal's argument: the global it is an
+/// application of, or the Nat constructor it is, `None` where it is a
+/// variable or anything else. Only a prefilter reads it.
+fn argument_head(t: &Term, name_of: &dyn Fn(GlobalVar) -> Option<String>) -> Option<String> {
+    let (head, _) = crate::spelling::app_spine(t);
+    match head {
+        Term::GlobalTm { var, .. } => name_of(*var),
+        Term::Zero => Some("#zero".into()),
+        Term::Succ(_) => Some("#succ".into()),
+        Term::NatLit(n) => Some(if n.is_zero() { "#zero" } else { "#succ" }.into()),
+        _ => None,
+    }
+}
+
+/// A proposition as an evidence-rule key: the qualified name of its relation
+/// (the head global of `El(R a₁ … aₙ)`) and the head of each argument.
+pub(crate) fn proposition_key(
+    ty: &Type,
+    name_of: &dyn Fn(GlobalVar) -> Option<String>,
+) -> Option<(String, Vec<Option<String>>)> {
+    let Type::El { tm, .. } = ty else {
+        return None;
+    };
+    let (head, args) = crate::spelling::app_spine(tm);
+    let Term::GlobalTm { var, .. } = head else {
+        return None;
+    };
+    let relation = name_of(*var)?;
+    let heads = args.iter().map(|a| argument_head(a, name_of)).collect();
+    Some((relation, heads))
+}
+
+/// Symbol count and per-binder variable occurrences of a premise or
+/// conclusion, for an evidence rule's termination check. Binders are numbered
+/// from the outside of the rule's telescope, so a premise and the conclusion,
+/// which sit under different numbers of them, compare.
+struct Measure {
+    size: usize,
+    occurrences: std::collections::BTreeMap<u32, usize>,
+}
+
+impl Measure {
+    fn of(ty: &Type, under: u32) -> Measure {
+        let mut m = Measure { size: 0, occurrences: Default::default() };
+        match ty {
+            Type::El { tm, .. } => m.term(tm, under),
+            _ => m.size = usize::MAX / 2,
+        }
+        m
+    }
+
+    fn term(&mut self, t: &Term, under: u32) {
+        self.size += 1;
+        match t {
+            Term::Var(v) => {
+                if let Some(b) = under.checked_sub(v.0 + 1) {
+                    *self.occurrences.entry(b).or_default() += 1;
+                }
+            }
+            Term::Succ(x) => self.term(x, under),
+            _ => {
+                let (head, args) = crate::spelling::app_spine(t);
+                if !args.is_empty() {
+                    // The head already counted as this node.
+                    if let Term::Var(_) = head {
+                        self.term(head, under);
+                        self.size -= 1;
+                    }
+                    for a in args {
+                        self.term(a, under);
+                    }
+                }
+            }
+        }
+    }
+
+    fn smaller_than(&self, other: &Measure) -> bool {
+        self.size < other.size
+            && self
+                .occurrences
+                .iter()
+                .all(|(b, n)| other.occurrences.get(b).is_some_and(|m| n <= m))
     }
 }

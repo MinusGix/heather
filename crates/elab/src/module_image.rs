@@ -31,10 +31,10 @@ use crate::module_delta::{DeltaEvent, ModuleDelta, ModuleDependencyIdentity};
 use crate::names::{GlobalRegistration, ImportSpec, NameKind, Scope};
 use crate::resolve::DerivedInst;
 use crate::slots::Slot;
-use crate::traits::{ClassInfo, DesignationInfo, InstanceInfo};
+use crate::traits::{ClassInfo, DesignationInfo, EvidenceRule, InstanceInfo};
 
-const MAGIC: &[u8; 8] = b"HTHMOD\0\x0a";
-const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x09";
+const MAGIC: &[u8; 8] = b"HTHMOD\0\x0b";
+const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x0a";
 
 /// Hard limits applied before any decoded collection or string allocation.
 /// The loader may choose a smaller policy; these defaults are deliberately
@@ -1269,6 +1269,7 @@ fn get_param(r: &mut Reader<'_>) -> Result<Param, ModuleImageDecodeError> {
 fn put_decl(w: &mut Writer, decl: &Decl) {
     w.byte(match decl.kind { DeclKind::Fn => 0, DeclKind::Theorem => 1, DeclKind::Axiom => 2 });
     w.bool(decl.is_meta);
+    w.bool(decl.is_evidence);
     w.option(decl.elaborates.as_ref(), |w, slot| {
         w.string(&slot.family); w.string(&slot.name); put_span(w, slot.span);
     });
@@ -1292,7 +1293,7 @@ fn get_decl(r: &mut Reader<'_>) -> Result<Decl, ModuleImageDecodeError> {
         tag => return Err(ModuleImageDecodeError::InvalidTag { sort: "declaration kind", tag }),
     };
     Ok(Decl {
-        kind, is_meta: r.bool()?, elaborates: r.option(|r| Ok(SlotPath {
+        kind, is_meta: r.bool()?, is_evidence: r.bool()?, elaborates: r.option(|r| Ok(SlotPath {
             family: r.string()?, name: r.string()?, span: get_span(r)?,
         }))?, name: r.string()?, tyvars: r.vec(|r| Ok(TyParam {
             name: r.string()?, level: r.u64()?, span: get_span(r)?,
@@ -1695,6 +1696,10 @@ fn put_event(w: &mut Writer, event: &DeltaEvent) {
             w.byte(9); put_fixity(w, key.0); w.string(&key.1); w.string(&key.2); put_designation(w, info);
         }
         DeltaEvent::Derived(info) => { w.byte(10); put_derived(w, info); }
+        DeltaEvent::Evidence(rule) => {
+            w.byte(18); w.string(&rule.global); w.string(&rule.relation);
+            w.vec(&rule.heads, |w, head| w.option(head.as_ref(), |w, head| w.string(head)));
+        }
         DeltaEvent::Repr { key, name, info, monomorph, obligations } => {
             w.byte(11); w.option(key.0.as_ref(), |w, tag| w.u32(*tag)); w.string(&key.1);
             w.string(name); put_datarepr(w, info);
@@ -1746,6 +1751,9 @@ fn get_event(r: &mut Reader<'_>) -> Result<DeltaEvent, ModuleImageDecodeError> {
             key: (get_fixity(r)?, r.string()?, r.string()?), info: get_designation(r)?,
         },
         10 => DeltaEvent::Derived(get_derived(r)?),
+        18 => DeltaEvent::Evidence(EvidenceRule {
+            global: r.string()?, relation: r.string()?, heads: r.vec(|r| r.option(Reader::string))?,
+        }),
         11 => DeltaEvent::Repr {
             key: (r.option(Reader::u32)?, r.string()?), name: r.string()?, info: get_datarepr(r)?,
             monomorph: r.option(|r| Ok((r.u32()?, r.string()?)))?, obligations: r.vec(get_obligation)?,

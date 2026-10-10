@@ -1268,6 +1268,23 @@ theorem Nat::fact_pos(n: Nat): 0 < n.fact() {
     }
 }
 
+// Evidence rules (docs/positivity-evidence-design.md §6 A). A `:= infer`
+// positivity premise with no proof in scope backchains through these, each
+// premise searched the same way, so `0 < x * (y + 1)` is found from `0 < x`.
+// A literal or `Succ` operand needs no rule: its goal computes to `True`.
+
+evidence theorem Nat::mul_pos({a, b: Nat}, pa: 0 < a := infer, pb: 0 < b := infer): 0 < a * b {
+    (1).mul_le_mono(a, 1, b, pa, pb)
+}
+
+evidence theorem Nat::add_pos_l({a, b: Nat}, pa: 0 < a := infer): 0 < a + b {
+    (1).le_trans(a, a + b, pa, a.le_add_l(b))
+}
+
+evidence theorem Nat::add_pos_r({a, b: Nat}, pb: 0 < b := infer): 0 < a + b {
+    (1).le_trans(b, a + b, pb, a.le_add_r(b))
+}
+
 theorem Nat::fact_le_succ(self n: Nat): n.fact() <= Succ(n).fact() {
     j(n.fact().mul_left_one(), λ y q => y <= Succ(n) * n.fact(),
       n.fact().mul_le_mono_r(1, Succ(n), trivial))

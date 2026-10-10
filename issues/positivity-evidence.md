@@ -25,8 +25,8 @@ defaults such as `h: 0 < n := omega` should parse; a positivity tactic
 eventually; result facts named under the function (`ten_pow::pos`), which
 needs function-owned members.
 
-Open: whether evidence rules live in `infer` or only in the tactic, the
-rule registration spelling, and `∧` projections in `infer`. The rounds are
+Rules live in `infer` (Minus) and are spelled `evidence theorem` (round 1).
+Open: `∧` projections in `infer`. The rounds are
 listed in the note's §8; this issue closes when they are filed.
 
 ## What it assumes from elsewhere
@@ -46,3 +46,4 @@ listed in the note's §8; this issue closes when they are filed.
   `Pos` should exist at all.
 - 2026-10-10: Minus chose sugar over search, spelled `n: Pos<Nat>`, no `Fact`, `h := omega` parameter defaults, and function-owned result facts (`ten_pow::pos`). Note §7–§8 updated; title changed to match.
 - 2026-10-10: Rounds filed: [[infer-proposition-evidence]], [[named-arguments]] (parameter defaults), [[function-owned-members]], [[pos-binder-sugar]], [[retire-shifted-pos]], [[positivity-tactic]], [[positive-refinement-type]].
+- 2026-10-10: Round 1 implemented ([[infer-proposition-evidence]]): Minus chose rules in `infer`; hand-written rules are spelled `evidence theorem`.
