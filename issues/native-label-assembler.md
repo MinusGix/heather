@@ -1,9 +1,9 @@
 ---
 title: Lay out native library code with labels, not hand-closed offsets
-status: open
+status: closed
 labels: [native,x86,proofs,design]
 created: 2026-10-07
-updated: 2026-10-08
+updated: 2026-10-10
 ---
 
 `lib/elf64_command.hthr` lays out its code by hand. Pieces are byte lists
@@ -111,3 +111,44 @@ should emit per-item facts itself rather than evaluate the whole.
   certificate through the new producer. Its chunked items keep the producer's
   declarations small; the issue stays open for the formatter, the stat pass and
   the argument scan.
+- 2026-10-10: **Landed: the formatter, the argument scan, the operand cursor, the stat pass and the row writer are label programs.** Closes the issue.
+
+  - Each module's code is an `x86_64_asm` chain (`lk_*`/`lp_*`/`le_*`/`lu_*`
+    in the formatter, `lt_*`/`ls_*` in the scan, `lst_*`/`lc_*` in the
+    cursor, `lw_*` in the stat pass, `lr_*` in the row). The per-segment
+    `*_lens`, `*_measured`, literal offsets and displacement constants are
+    gone; every jump fact is an `asm_jump_lands`/`_back` by evaluation, and the
+    `*Pieces` records are `AsmPlaced` (format_width): a program's every label
+    resident at its offset, from one `asm_resident`.
+  - Repeated blocks (the formatter's count and digit blocks, the scan's letter
+    slots) are parametric programs whose length is `prog_len` of one instance;
+    their runs are proved per instance, so a block's index never enters an
+    offset.
+  - **One closed number per module: its size.** `scan_len`, `start_len`,
+    `cursor_len`, `stat_len` and `row_len` are literals, each checked by
+    `refl` against `prog_len` of its program (`*_len_closed`). With them
+    computed, every command jump past the stat pass or the row evaluated those
+    whole programs and five of the command's landing facts ran out of fuel. A
+    change to a module's code fails at exactly that one theorem.
+  - The scan's letter table and default block are `Hole`s, filled by
+    `scan_fills`; a closed program is assembled with `no_fills()`
+    (x86_64_asm).
+  - The bytes are unchanged: `build-x86 examples/x86-native/wc.hthr
+    wc_command` writes the same binary as before the round (same sha256).
+  - The refusal tests' jump mutations are restated over labels (a condition
+    inverted on a `Jcc` item, or a jump retargeted to a neighbouring label);
+    a jump that lands "a byte late" can no longer be written in the source.
+  - `x86_64_asm` now comes before the formatter in the embedded library and the
+    command prefix (`FILTER_HALF` is one more).
+
+  Cost: a cold `build-x86` of wc spends under a tenth more kernel steps than
+  before the round, with misses and queries flat. The growth is in the scan's,
+  cursor's and stat pass's own proofs (a landing or end-of-program fact
+  evaluates the chain up to it) and in the certificate's statements of items
+  made by `assemble`; no item changed rank.
+
+  Residue, owned by [[native-straight-code-triples]]: the command's spill block
+  (`spill_lens`, `elf64_command.hthr:65`) and the list layouts left in
+  `elf64_read_pieces`, `elf64_read_filter` and `elf64_count_print`
+  (`layout_code`/`layout_at`). They are straight code whose proofs that issue
+  rewrites; they move onto labels with them.
