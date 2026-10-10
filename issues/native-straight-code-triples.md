@@ -1,6 +1,6 @@
 ---
 title: Triples and frame sets for straight native code, proved once
-status: open
+status: closed
 labels: [native,x86,proofs,design]
 created: 2026-10-07
 updated: 2026-10-10
@@ -48,3 +48,29 @@ rewritten over these, with its cold check no dearer.
 ## Log
 
 - 2026-10-10: Inherits from [[native-label-assembler]] (closed): the command's spill block (`spill_lens`, `elf64_command.hthr:65`) and the list layouts left in `elf64_read_pieces`, `elf64_read_filter` and `elf64_count_print` (`layout_code`/`layout_at`). They are straight code whose proofs this issue rewrites; move them onto `x86_64_asm` labels with those proofs.
+- 2026-10-10: **Landed: `Runs` triples (`lib/elf64_runs.hthr`), the command's frame rules, and most of the command's phases over them.** Closes the issue; the residue is [[native-runs-remaining]].
+
+  - `Runs(pre, from, post, to)` with sequencing, consequence, a no-step rule,
+    blocks, forward and backward `Jcc`/`JMP`, a two-sided branch, and two ways
+    to consume a run (`runs_into` before a `LinuxRuns`, `runs_elim` before any
+    goal). `Placed`, `Ran`, `run_block` and `run_near` moved there from the
+    formatter. `Keeps`/`SlotsKeep` have refl, trans and list weakening.
+  - The command's state between phases is `Framed(file, page, vars)`: some frame
+    holds `vars`. `runs_slot_store`/`_load`, `runs_frame_store`/`_load` and
+    `runs_slot_test` are its rules; residency comes once from `framed_resident`.
+  - A block's postcondition is proved on `execute_block_normal`'s own result by
+    conversion (registers it does not write read back as `refl`), which is the
+    per-block form of [[native-symbolic-execution-step]].
+  - Moved: the operand loop's head and cursor store (the acceptance phase), stdin,
+    the open's return, the spill and row setup, the keep and begin phases, the
+    close, the failed path and the total row. The spill block is an `x86_64_asm`
+    program, so the command has no layout list left. The record per phase
+    (`CursorStored`, `SpillOut`, `KeepStored`, `BeginStored`) is gone.
+  - The lesson, in `docs/native-runs-design.md` ("Consuming a run"): bind a run's
+    end state in a λ, never project it out of a `let`-bound run; projecting made
+    the spill's row ten times dearer than the hand-threaded proof.
+
+  Cost: the command module's cold check takes about a third of the kernel steps
+  it took before (the whole check of it with its imports, about seven tenths).
+  Every moved phase is several times cheaper, the spill and the close an order
+  of magnitude.

@@ -1,7 +1,7 @@
 # Straight native code as triples: `Runs`
 
 Issue: `issues/native-straight-code-triples.md`. Library: `lib/elf64_runs.hthr`;
-first client: the operand loop of `lib/elf64_command.hthr`.
+client: the phases of `lib/elf64_command.hthr` listed under "Moved" below.
 
 ## The judgment
 
@@ -30,10 +30,11 @@ nothing in a postcondition is an existential over the earlier state.
 | `runs_here` | nothing: no step |
 | `runs_steps` | a step proved any other way |
 | `runs_block` | residency under `pre`, and `post` of `execute_block_normal(instructions, s)` given `pre(s)` and the block's unchanged memory |
-| `runs_jcc_passed` / `runs_jcc_taken` | residency, the flag's value under `pre`, and `post` of the jump's state |
+| `runs_jcc_passed` / `runs_jcc_taken` / `runs_jcc_taken_back` | residency, the flag's value under `pre`, and `post` of the jump's state |
 | `runs_branch` | both sides as `Runs` to one end, and `stays` (the precondition over the jump) |
-| `runs_jmp` | a forward JMP and its landing fact |
+| `runs_jmp` / `runs_jmp_back` | a JMP and its landing fact |
 | `runs_into` | a `Runs` followed by a `LinuxRuns` continuation, which gives a `LinuxRuns` |
+| `runs_elim` | a `Runs` followed by any goal, given the end state bound |
 
 A block's postcondition obligation is stated on the block's own result. The
 kernel computes `read_gpr(r, execute_block_normal(…, s).gprs)` down to `s`'s
@@ -65,10 +66,33 @@ command's frame-aware rules. A store's postcondition obligation receives
 comes from `framed_resident`: the command's code is placed in every frame's
 image (`CommandPlaced`), so it is resident in a framed state.
 
+`runs_slot_test` is the load of a slot into RAX and its compare with zero,
+the command's usual test before a `Jcc`. A system call is not a rule: a run
+ends at the `syscall`, and `runs_into` hands its end to the library's
+`linux_runs_*` lemma for that call (`closes_runs`).
+
 A phase is then a `runs_seq` chain whose middle predicates are written out
-(`p0`…`p3` in `stdin_path`, `open_back`). The theorem that consumes the phase
-calls `runs_into`, or reads the end state out of the `Runs` with `.witness`
-and `.proof`.
+(`p0`…`p3` in `stdin_path`, `open_back`). A predicate that needs a register
+read at the phase's start names it as a ghost value (`c19`, `mask`) or as
+the start's registers (`g` in `SpillPre`, which keeps the state registers by
+`WriteKept`).
+
+## Consuming a run
+
+The theorem that consumes a phase calls `runs_into` (when a `LinuxRuns`
+follows) or `runs_elim` (for any other goal). Both hand the end state to a
+λ as a bound variable. Never project it out of a `let`-bound run
+(`ran.witness`, `ran.proof`): the end state is then a projection of the
+run's proof term, and every later conversion that meets it unfolds the
+whole proof to reach the state. Projecting this way once made `spill_row`
+ten times dearer than the hand-threaded proof it replaced; binding the end
+state made it ten times cheaper instead. Inside a continuation, `h.witness`
+of a bound `h: Framed(…)(s)` is cheap for the same reason.
+
+A frame is bound the same way. A phase whose continuation needs the frame
+it started with (a closure over `frame` and `holds`, as in `named_runs`)
+cannot take it from `Framed`, whose witness is a fresh frame; such a phase
+stays hand-threaded until its continuation takes `Framed` itself.
 
 ## Why it is cheaper
 
@@ -76,18 +100,33 @@ The hand-threaded proofs named each intermediate frame concretely
 (`stored_frame(file, stored_frame(file, frame, 19, w19), 20, w20)`). The
 kernel then met those terms against the placement facts for every later
 piece. Under `Framed` the frame is a bound witness. A piece's residency is
-checked once inside `framed_resident`, against an abstract frame. The phases
-moved so far (the loop head, the stdin path and both branches of the open's
-return) take several times fewer kernel steps each. `cursor_store` and
-`stdin_path` take about an order of magnitude fewer. The rules themselves are
-paid once. `runs_frame_store` is the dearest because of its `omega` bound.
+checked once inside `framed_resident`, against an abstract frame. Each moved
+phase takes several times fewer kernel steps, the spill and the close an
+order of magnitude fewer, and the command module as a whole about a third of
+what it took hand-threaded. The rules themselves are paid once.
+`runs_frame_store` is the dearest because of its `omega` bound.
+
+## Moved
+
+The loop's head and cursor store (`operand_head`, `cursor_store_runs`,
+`last_tested_runs`, `loop_last`), stdin (`stdin_path`), the open's return
+(`open_back`), the read pass's spill and row setup (`spill_one_runs`,
+`spill_runs`, `spill_row`), the prologue's keep and begin phases
+(`keep_runs`, `keep_single`, `begin_store_runs`, `begin_test`), the close
+(`closes_runs`), the failed path (`failed_runs`) and the total row
+(`total_runs`, `total_rows`). The spill block is an `x86_64_asm` program
+(`lsp_*`), so the command has no `layout_code` left.
 
 ## Not yet moved
 
 - The dash and ahead tests (`ByteTested`, `jne_open`, `dash_second`,
-  `dash_test`) and `open_path` (a syscall: it needs a `runs_*` rule over
-  `linux_runs_open`, or stays CPS).
-- The read pass's spill and row (`spill_one`, `spill_run`, `spill_row`). These
-  are the costliest items in the module, and the spill block still lists its
-  own lengths (`spill_lens`).
-- The other process libraries (formatter, scan, cursor, stat pass, row).
+  `dash_test`) and `open_path`.
+- The row's tail (`named_runs`, `unnamed_runs`), the name's scan and write
+  (`name_scan`, `name_send`), `init_runs`, `inputs_runs`, `read_failed`,
+  `loop_cursor`: their continuations close over the starting frame (see
+  "Consuming a run").
+- The other process libraries (formatter, scan, cursor, stat pass, row), and
+  their own frame records (`FmtKept`, `WriteKept`, `CursorKept`) over
+  `Keeps`.
+- The list layouts in `elf64_read_pieces`, `elf64_read_filter` and
+  `elf64_count_print`.
