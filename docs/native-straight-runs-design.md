@@ -20,12 +20,13 @@ The step is not a `meta fn` and not elaborator sugar. It is an ordinary
 function from the program's items to a type, and one theorem:
 
 ```heather
-fn Straight(file, page, origin, events, labels, l: Prog, n: Nat)
+fn Straight(file, page, origin, goal: MachineState<IoMemory> → Type, labels, l: Prog, n: Nat)
     → (Nat → BitVec(64)) → MachineState<IoMemory> → Type
-theorem straight_runs(…, l, n, fits, rest, code, vars, state,
+theorem straight_runs(file, page, origin, goal, back: StepsBack(goal), fills, labels, l, n,
+    fits, rest, code, vars, state,
     rip: state.rip = next_rip(origin, straight_from(l, n)),
     framed: Framed(file, page, vars)(state),
-    held: Straight(…, l, n)(vars, state)): LinuxRuns(io_linux(), events, state)
+    held: Straight(…, l, n)(vars, state)): goal(state)
 ```
 
 `Straight(…, l, n)` reads the `n` items ending at label `l` and is, by
@@ -35,93 +36,165 @@ comes to:
 | Item | What it asks of `vars`, `s`, then the rest `then` |
 | --- | --- |
 | `Block(is)` | `then(vars, execute_block_normal(is, s))` |
-| `Load(ld)` | the slot `q` the base holds, then `then(vars, word_load_after(ld, vars(q), s))` |
-| `Store(st)` | the slot `q` the base holds, then `then(set_var(vars, q, src), word_store_after(…, st, s))` |
-| `Jcc(cc, t)` | `(condition_holds(cc, s.flags) = True → leaf at t) ∧ (… = False → then(…))` |
-| `Jmp(t)` | the leaf at `t` |
+| `Load(ld)` | `SlotThen(base, λ q => then(vars, word_load_after(ld, vars(q), s)))` |
+| `Store(st)` | for a plain base, `SlotThen(base, λ q => then(set_var(vars, q, src), word_store_after(…, st, s)))`; else `False` |
+| `Jcc(cc, t)` | `(condition_holds(cc, s.flags) = True → leaf at the jump's target) ∧ (… = False → then(…))` |
+| `Jmp(t)` | the leaf at the jump's target |
 | anything else | `False` |
 
+`SlotThen(base, then)` is `Exists q. q < frame_slots() ∧ base = frame_at(8q)
+∧ then(q)`: the caller names the slot, and the address equation is `refl`
+because the block before set the base (`MovRI(R11, slot_at(q))`). A closed
+`q < 32` is `trivial`.
+
+### The goal
+
+`goal` is any predicate on the end state, with `back: StepsBack(goal)`:
+`goal(after)` and Linux steps from `before` to `after` give `goal(before)`.
+`runs_back(events)` gives it for `LinuxRuns(io_linux(), events, ·)`, which
+is how the command's phases end; a phase's own record (`operand_at_back` for
+`OperandAt`) is another. A `Runs` chain is not needed around a stretch.
+
+### The leaf
+
 A leaf (`StraightLeaf`) is where the stretch ends, after its last item or at
-a jump's target: `s.rip = next_rip(origin, at) → Framed(file, page, vars)(s) →
-LinuxRuns(io_linux(), events, s)`. The caller proves it with the next phase's
-lemma, given the RIP and the frame.
+a jump's target:
 
-The caller writes one term per stretch: a pair per JCC and a leaf proof per
-end. No intermediate state is named, no item placed, no landing cited, no
-frame fact threaded: the kernel computes the states as the items' own
-results (`execute_block_normal` over `execute_block_normal`…), and
-conversion reads a register through them to the value written or kept, as
-`runs_block`'s postconditions already relied on.
+```heather
+λ vars state => (after) → after.rip = at → Framed(file, page, vars)(after) → after = state → goal(after)
+```
 
-Why this and not generated terms: a generator in the meta layer has no
-`match` or recursion over code (`docs/meta-def-registration-design.md` §2),
-and elaborator sugar would be a second, Rust-side reading of the items'
+The end state is bound (`after`), so the leaf's proof names it rather than
+the stretch's own spelling of it (an `execute_block_normal` over an
+`execute_near_control` over …); `after = state` is there for a fact the
+spelling gives by conversion (`operand_head` reads RSI through it). Binding
+it is the rule `docs/native-runs-design.md` ("Consuming a run") states for
+`Runs`. (`_` in argument position is a section, not a hole, so a leaf cannot
+be written as `goal(_)` and inferred.)
+
+A jump's leaf is at `near_branch_target(next_rip(origin, here), size, d)`,
+the jump's own target, with `here` the offset of the label before the jump
+(`prog_len(before)`) and `d` its displacement to the target's name
+(`near_rel(here + size, labels(t))`). The caller turns it into the target
+label's RIP with the landing fact the command already has, through
+`cmd_lands` (`cmd_lands_back` for a jump back), which states the landing in
+that spelling: `trans(at, cmd_lands(l_last(), 6, t_total(), ca(l_total()),
+cmd_j_last_je()))`.
+
+### The caller's term
+
+`loop_last` is one call: the slots of its two stores, then the JCC's pair.
+
+```heather
+cmd_straight(…, placed, page, λ s => LinuxRuns(io_linux(), events, s), runs_back(events),
+    l_last_je(), refl, 6, vars, state, rip_is, Exists(frame, ⟨memory_is, holds⟩),
+    Exists(19, ⟨trivial, ⟨refl, Exists(20, ⟨trivial, ⟨refl,
+        ⟨λ _ after at framed _ => total_runs(…, after, framed.proof.left,
+             trans(at, cmd_lands(l_last(), 6, t_total(), ca(l_total()), cmd_j_last_je()))),
+         λ no => absurd(trans(sym(no), zero))⟩⟩⟩)⟩⟩))
+```
+
+No intermediate state is named, no item placed, no landing cited inside the
+stretch, no frame fact threaded: the kernel computes the states as the
+items' own results, and conversion reads a register through them to the
+value written or kept, as `runs_block`'s postconditions already relied on.
+A side a precondition rules out is `absurd` of the flag fact (`loop_last`:
+RSI is zero, so the not-taken side is absurd). A side both preconditions
+allow is the caller's case analysis: the branch the issue leaves as a goal.
+
+`cmd_straight` is `straight_runs` for the command's program: it takes
+`at: asm_find(cmd_prog(), l) = l` (by `refl`) and supplies `fits` and
+`code` once, from `CommandPlaced`, for any label.
+
+Why not generated terms: a generator in the meta layer has no `match` or
+recursion over code (`docs/meta-def-registration-design.md` §2), and
+elaborator sugar would be a second, Rust-side reading of the items'
 semantics. Here the items' semantics are read once, in `straight_item`, and
 `straight_item_goes` proves that reading against the machine. Nothing is
 trusted, and the obligation is a type the elaborator already knows how to
 check a term against.
 
-### What decides an item, by evaluation
+## Keep the computed type structural
 
-Each choice the computation makes is a closed `match` that conversion
-evaluates when the caller's term is checked:
+The elaborator unfolds `Straight(…)` when it checks the caller's term
+against it, and its weak-head evaluation is far dearer than the kernel's on
+anything that computes with words or walks the program. Two first drafts
+showed it:
 
-- **A load's or store's slot**: `slot_find(read_gpr(base, s.gprs), 32)`
-  compares the base's value with each slot's address by `eq_bit`. The base
-  was set by the block before (`MovRI(R11, slot_at(q))`), so the value is a
-  closed word; `slot_find_some` turns the hit into the address equation
-  `run_frame_store` and `frame_var_at` take.
-- **A store's base form**: `store_base_plain(st.base)`, which
-  `run_frame_store` requires.
-- **A jump's landing**: `asm_same(here + size + d, to)`, then the same
-  around 2^64 for a jump back, as `asm_lands` and `asm_lands_back_to` do.
-  The leaf's RIP names the target's offset as the program computes it
-  (`labels(t)`); `cmd_target` restates it at the target's label, by the same
-  evaluation.
+- Finding a load's or store's slot inside the type (`slot_find`, a search
+  over the slot addresses by `eq_bit`) ran out of the elaborator's fuel.
+  The caller now names the slot and checks the address by `refl`, which the
+  kernel evaluates.
+- Finding the label inside the type (`asm_find(cmd_prog(), l)`, from the
+  program's end back to `l`) dominated the whole check. The caller now
+  passes the label itself and `asm_find(cmd_prog(), l) = l` by `refl`.
 
-A miss is `False`: a store through a base that holds no slot, a jump that
-does not land, an item the runner does not read. No caller can prove it, so
-a stretch that asks for one fails where it is used.
+For the same reason a jump's leaf names the jump's own target and not the
+target label's offset (which would compare `here + size + d` against the
+label, as `asm_lands` does): the landing is the caller's `cmd_j_*` fact.
+Even that fact's spelling matters. The `cmd_j_*` facts name the jump by its
+own label (`ca(l)`, `cmd_d(l)`); met against the leaf's spelling inside a
+`trans`, they cost the elaborator about as much as the rest of the stretch.
+`cmd_lands` takes the fact once at the stretch's spelling, where meeting it
+is cheap. Spelling the leaf by the jump's label instead (`asm_at(l)`,
+`asm_jump(labels, l)`, with `l` rebuilt as `At(before, name, item)`) was
+dearer in both the elaborator and the kernel.
 
-### What a JCC leaves
-
-Both sides, as two implications. A side the precondition rules out is
-`absurd` of the flag fact against the precondition (`loop_last`: RSI is
-zero, so `E` holds and the not-taken side is `absurd`). A side both
-preconditions allow is the caller's case analysis, the branch the issue says
-to leave as a goal. When the flag is closed (a compare of two constants) the
-equation reduces and the side is `λ never => absurd(never)`.
+So the type is computed from the items' structure only: which constructor,
+which register, which label. Anything numeric is a `refl` or a fact the
+caller cites, checked by the kernel.
 
 ## Items: `Load` and `Store`
 
 `Asm` had stores and loads as `Code(bytes)`, which a computation cannot
 read. `x86_64_asm` now has `Load(WordLoad)` and `Store(WordStore)`, with
 `Code`'s bytes (`word_load_bytes`, `word_store_bytes`) and lengths; the
-command's `wstore`/`wload` and the spill table use them. The assembled bytes
-do not change.
+command's `wstore`/`wload` and the spill program (`lsp_*`) use them. The
+assembled bytes do not change.
 
 ## Where a stretch's code is
 
 `straight_runs` takes the code up to its last label followed by anything,
 `asm_code(fills, labels, l) ++ rest`, placed in every frame's image. The
 whole program's code is that for any of its labels (`asm_code_back`:
-`asm_code(p) = asm_code(asm_back(p, k)) ++ asm_code_after(p, k)`), so
-`cmd_straight` supplies it once from `CommandPlaced` for any label. The
-runner splits off each item's bytes as it walks back along the chain, as
-`asm_resident_from` does.
+`asm_code(p) = asm_code(asm_back(p, k)) ++ asm_code_after(p, k)`, with
+`fills_fit_back` for the fills), so `cmd_straight` supplies it once from
+`CommandPlaced`. The runner splits off each item's bytes as it walks back
+along the chain, as `asm_resident_from` does.
 
 ## Cost
 
-Not measured as a round goal (CLAUDE.md). The shape: each use evaluates its
-stretch's items once (`asm_find` from the program's end to `l`, then the `n`
-items), each store's `slot_find` (up to 32 word comparisons), and each
-jump's landing.
+Not measured as a round goal (CLAUDE.md); one cold comparison against the
+hand-threaded `Runs` chains was taken to check the issue's acceptance. The
+kernel checks each item's residency once inside `straight_item_goes`,
+against an abstract frame, plus the caller's `refl`s. Over the five moved
+phases the kernel's steps went down (the chains' helper lemmas are gone; the
+runner and `asm_code_back` are paid once). `operand_head` alone went up: it
+absorbed its stretch's helpers, and its leaf reads RSI through the
+stretch's spelled state.
+
+What went up is elaboration. Checking a caller's term against `Straight`
+makes the elaborator unfold it at each anonymous constructor and λ, and its
+weak-head reducer copies the growing continuation at every step; that is
+now most of each moved phase's time, more than the gate. It grows with the
+stretch's length and the number of nested proof constructors. The library
+side has no cheaper spelling left that was found (an arm per function did
+not move it); the elaborator side is a reducer that shares
+(`issues/elab-whnf-copies-straight-continuations.md`).
+
+## Moved
+
+The loop's last-operand test (`loop_last`, replacing `cursor_store_runs`
+and `last_tested_runs`), the operand's head (`operand_head`), stdin
+(`stdin_path`, replacing `stdin_block`), the open's return (`open_back`, both
+arms, replacing `opened_block`) and the failed path (`failed_runs`).
 
 ## Not yet
 
 - Byte loads and stores (`Code(byte_load_bytes(…))`) and the page: the
   argument scan's and the row's. A `LoadByte` item would ask for the byte
   and its read under every frame.
-- A `Runs` form. The runner's leaves are `LinuxRuns` continuations, which is
-  how the command's phases end; a stretch inside a `Runs` chain still uses
-  the rules.
+- A system call ends a stretch: `closes_runs` still runs its JCCs with the
+  `Runs` rules before `linux_runs_close`.
+- The other `Runs` phases (`total_runs`, the prologue, the spill) and the
+  phases whose continuations close over the starting frame.
