@@ -57,22 +57,21 @@ fn slot_at(i: Nat) → BitVec(64) { frame_at(8 * i) }
 inductive StateReg { SR13, SR14, SR15, SR8 }
 fn state_gpr(r: StateReg) → Gpr { match r { SR13 => R13, SR14 => R14, SR15 => R15, SR8 => R8 } }
 
-// Slot `i`'s count stored, then added into its total: R11 and RAX only.
-fn spill_parts(r: Gpr, i: Nat) → List<List<BitVec(8)>> {
-    [canonical_block_bytes([MovRI(R11, slot_at(i))]), word_store_bytes(WordStore(base := R11, source := r)),
-     canonical_block_bytes([MovRI(R11, slot_at(8 + i))]), word_load_bytes(WordLoad(destination := Rax, base := R11)),
-     canonical_block_bytes([AddRR(Rax, r)])]
-}
-fn spill_lens() → List<Nat> { [10, 3, 10, 3, 3] }
-fn spill_last() → List<BitVec(8)> { word_store_bytes(WordStore(base := R11, source := Rax)) }
-fn spill_block(r: Gpr, i: Nat) → List<BitVec(8)> { layout_code(spill_parts(r, i), spill_last()) }
+// Slot `i`'s count stored, then added into its total: R11 and RAX only. A
+// program of its own (x86_64_asm), the same bytes wherever it is placed.
+fn lsp_slot(r: Gpr, i: Nat) → Prog { then(Start, Block([MovRI(R11, slot_at(i))])) }
+fn lsp_store(r: Gpr, i: Nat) → Prog { then(lsp_slot(r, i), Code(word_store_bytes(WordStore(base := R11, source := r)))) }
+fn lsp_total(r: Gpr, i: Nat) → Prog { then(lsp_store(r, i), Block([MovRI(R11, slot_at(8 + i))])) }
+fn lsp_load(r: Gpr, i: Nat) → Prog { then(lsp_total(r, i), Code(word_load_bytes(WordLoad(destination := Rax, base := R11)))) }
+fn lsp_add(r: Gpr, i: Nat) → Prog { then(lsp_load(r, i), Block([AddRR(Rax, r)])) }
+fn lsp_back(r: Gpr, i: Nat) → Prog { then(lsp_add(r, i), Code(word_store_bytes(WordStore(base := R11, source := Rax)))) }
+fn spill_block(r: Gpr, i: Nat) → List<BitVec(8)> { assemble(no_fills(), lsp_back(r, i), Nil) }
 fn spill_blocks(spill: Nat → StateReg, i, j: Nat) → List<BitVec(8)> {
     match j { Zero => Nil, Succ(k) => spill_block(state_gpr(spill(i)), i) ++ spill_blocks(spill, Succ(i), k) }
 }
 fn spill_code(spill: Nat → StateReg) → List<BitVec(8)> { spill_blocks(spill, 0, column_slots()) }
 
-theorem spill_measured(r: Gpr, i: Nat): LayoutMeasured(spill_parts(r, i), spill_lens()) { ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, trivial⟩⟩⟩⟩⟩ }
-theorem spill_block_len(r: Gpr, i: Nat): spill_block(r, i).len() = 32 { layout_len(spill_parts(r, i), spill_last(), spill_lens(), spill_measured(r, i), 3, refl) }
+theorem spill_block_len(r: Gpr, i: Nat): spill_block(r, i).len() = 32 { refl }
 theorem spill_blocks_len(spill: Nat → StateReg, j: Nat): (i: Nat) → spill_blocks(spill, i, j).len() = 32 * j {
     match j as λ k => (i: Nat) → spill_blocks(spill, i, k).len() = 32 * k {
         Zero => λ i => refl,
@@ -1553,79 +1552,76 @@ theorem placed_shift(file: IoImage, code: List<BitVec(8)>, k, off: Nat, placed: 
     j(rip_compose(io_entry(), k, off), λ a _ => Placed(file, code, a), placed)
 }
 
-record SpillOut(file: IoImage, page: Nat → BitVec(8), vars: Nat → BitVec(64), before: MachineState<IoMemory>, to: Nat) {
-    after: MachineState<IoMemory>,
-    frame: Nat → BitVec(8),
-    steps: LinuxSteps(io_linux(), before, after),
-    memory_is: after.memory = IoMemory(with_frame(file, frame), page),
-    rip_is: after.rip = eof_rip(to),
-    holds: FrameHolds(frame, vars),
-    kept: WriteKept(after.gprs, before.gprs),
+// The spill's states: the frame holds `vars`, and the state registers are as
+// they were where the spill began (`g`), so a count register still holds its
+// count.
+fn SpillPre(file: IoImage, page: Nat → BitVec(8), vars: Nat → BitVec(64), g: Gprs) → MachineState<IoMemory> → Type {
+    λ state => Framed(file, page, vars)(state) ∧ WriteKept(state.gprs, g)
+}
+theorem framed_set(file: IoImage, page: Nat → BitVec(8), vars: Nat → BitVec(64), q: Nat, a, b: BitVec(64), same: a = b,
+    state: MachineState<IoMemory>, framed: Framed(file, page, set_var(vars, q, a))(state)): Framed(file, page, set_var(vars, q, b))(state) {
+    j(same, λ w _ => Framed(file, page, set_var(vars, q, w))(state), framed)
 }
 fn SpillBlockPlaced(file: IoImage, r: Gpr, i, k: Nat) → Type {
     (frame: Nat → BitVec(8)) → Placed(with_frame(file, frame), spill_block(r, i), eof_rip(k))
 }
-theorem spill_piece(file: IoImage, r: Gpr, i, k: Nat, block: SpillBlockPlaced(file, r, i, k), frame: Nat → BitVec(8), idx: Nat):
-    Placed(with_frame(file, frame), layout_piece(spill_parts(r, i), spill_last(), idx), eof_rip(k + layout_at(0, spill_lens(), idx))) {
-    placed_shift(with_frame(file, frame), layout_piece(spill_parts(r, i), spill_last(), idx), k, layout_at(0, spill_lens(), idx),
-        placed_piece(with_frame(file, frame), spill_parts(r, i), spill_last(), spill_lens(), spill_measured(r, i), eof_rip(k), block(frame), idx))
+theorem spill_piece(file: IoImage, r: Gpr, i, k: Nat, block: SpillBlockPlaced(file, r, i, k), frame: Nat → BitVec(8), l: Prog):
+    Placed(with_frame(file, frame), item_bytes(no_fills(), asm_labels(lsp_back(r, i)), asm_find(lsp_back(r, i), l)),
+        eof_rip(k + asm_at(asm_find(lsp_back(r, i), l)))) {
+    placed_shift(with_frame(file, frame), item_bytes(no_fills(), asm_labels(lsp_back(r, i)), asm_find(lsp_back(r, i), l)), k,
+        asm_at(asm_find(lsp_back(r, i), l)), asm_placed(with_frame(file, frame), no_fills(), lsp_back(r, i), trivial, eof_rip(k), block(frame), l))
 }
-// One slot (`k` to `k + 32`).
-theorem spill_one(file: IoImage, spill: Nat → StateReg, i: Nat, inside: i < 8, k: Nat,
-    block: SpillBlockPlaced(file, state_gpr(spill(i)), i, k), counts: Nat → BitVec(64),
-    frame: Nat → BitVec(8), vars: Nat → BitVec(64), holds: FrameHolds(frame, vars), page: Nat → BitVec(8), state: MachineState<IoMemory>,
-    memory_is: state.memory = IoMemory(with_frame(file, frame), page), rip_is: state.rip = eof_rip(k),
-    col: read_gpr(state_gpr(spill(i)), state.gprs) = counts(i)): SpillOut(file, page, spill_step(vars, counts, i), state, k + 32) {
-    let io = io_linux();
+// One slot (`k` to `k + 32`): the count stored in its slot, the total loaded,
+// the count added, the total stored back.
+theorem spill_one_runs(file: IoImage, page: Nat → BitVec(8), spill: Nat → StateReg, i: Nat, inside: i < 8, k: Nat,
+    block: SpillBlockPlaced(file, state_gpr(spill(i)), i, k), counts, vars: Nat → BitVec(64), g: Gprs,
+    col: read_gpr(state_gpr(spill(i)), g) = counts(i)):
+    Runs(SpillPre(file, page, vars, g), eof_rip(k), SpillPre(file, page, spill_step(vars, counts, i), g), eof_rip(k + 32)) {
     let r = state_gpr(spill(i));
-    let s0 = execute_block_normal(slot_block(i), state);
-    let w = read_gpr(r, s0.gprs);
-    let a = run_slot_store(file, frame, vars, holds, page, k, i, { omega }, r, spill_piece(file, r, i, k, block, frame, 0),
-        spill_piece(file, r, i, k, block, frame, 1), state, memory_is, rip_is);
-    let s1 = slot_store_after(r, i, state);
-    let frame1 = stored_frame(file, frame, i, w);
-    let vars1 = set_var(vars, i, w);
-    let b = run_slot_load(file, frame1, vars1, a.holds, page, (k + 10) + 3, 8 + i, { omega }, Rax, spill_piece(file, r, i, k, block, frame1, 2),
-        spill_piece(file, r, i, k, block, frame1, 3), s1, a.memory_is, a.rip_is);
-    let s2 = slot_load_after(Rax, vars1(8 + i), 8 + i, s1);
-    let img1 = with_frame(file, frame1);
-    let c = run_block(img1, page, [AddRR(Rax, r)], io_entry(), k + 26, spill_piece(file, r, i, k, block, frame1, 4), s2, b.memory_is, b.rip_is);
-    let s3 = execute_block_normal([AddRR(Rax, r)], s2);
-    let w2 = read_gpr(Rax, s3.gprs);
-    let d = run_frame_store(img1, page, WordStore(base := R11, source := Rax), refl, io_entry(), k + 29, spill_piece(file, r, i, k, block, frame1, 5),
-        8 * (8 + i), { omega }, s3, c.memory_is, c.rip_is, refl);
-    let s4 = word_store_after(linux_writes(io), WordStore(base := R11, source := Rax), s3);
-    let frame2 = stored_frame(file, frame1, 8 + i, w2);
-    let holds2 = frame_holds_store(img1, vars1, 8 + i, w2, a.holds);
-    let weq: (w = counts(i)) = trans(state_kept(spill(i), s0.gprs, state.gprs, write_kept_refl(state.gprs)), col);
-    let r2eq: (read_gpr(r, s2.gprs) = counts(i)) = trans(state_kept(spill(i), s2.gprs, state.gprs, write_kept_refl(state.gprs)), col);
-    let holds3 = j(r2eq, λ x _ => FrameHolds(frame2, set_var(vars1, 8 + i, vars1(8 + i).add(x))), holds2);
-    let holds4 = j(weq, λ y _ => FrameHolds(frame2, set_var(set_var(vars, i, y), 8 + i, set_var(vars, i, y)(8 + i).add(counts(i)))), holds3);
-    SpillOut(after := s4, frame := frame2,
-        steps := linux_steps_trans(io, state, s1, s4, a.steps, linux_steps_trans(io, s1, s3, s4,
-            linux_steps_of_fetched(io, s1, s3, fetched_steps_trans(io_fetch_access(), io_data_access(), s1, s2, s3, b.steps, c.steps)), d.step)),
-        memory_is := d.memory_is, rip_is := d.rip_is, holds := holds4, kept := write_kept_refl(state.gprs))
+    let vars1 = set_var(vars, i, counts(i));
+    let total = vars1(8 + i);
+    let p0 = SpillPre(file, page, vars, g);
+    let p1 = SpillPre(file, page, vars1, g);
+    let p2 = λ (s: MachineState<IoMemory>) => p1(s) ∧ ((read_gpr(Rax, s.gprs) = total) ∧ (read_gpr(R11, s.gprs) = slot_at(8 + i)));
+    let p3 = λ (s: MachineState<IoMemory>) => p1(s) ∧ ((read_gpr(Rax, s.gprs) = total.add(counts(i))) ∧ (read_gpr(R11, s.gprs) = slot_at(8 + i)));
+    let p4 = SpillPre(file, page, spill_step(vars, counts, i), g);
+    let count = λ (s: MachineState<IoMemory>) (kept: WriteKept(s.gprs, g)) => trans(state_kept(spill(i), s.gprs, g, kept), col);
+    let piece = λ (l: Prog) (f: Nat → BitVec(8)) => spill_piece(file, r, i, k, block, f, l);
+    runs_seq(p0, eof_rip(k), p1, eof_rip((k + 10) + 3), p4, eof_rip(k + 32),
+        runs_slot_store(file, page, vars, k, i, { omega }, r, piece(lsp_slot(r, i)), piece(lsp_store(r, i)), p0, p1, λ _ held => held.left,
+            λ s held framed => ⟨framed_set(file, page, vars, i, read_gpr(r, execute_block_normal(slot_block(i), s).gprs), counts(i),
+                count(execute_block_normal(slot_block(i), s), held.right), slot_store_after(r, i, s), framed), held.right⟩),
+        runs_seq(p1, eof_rip((k + 10) + 3), p2, eof_rip(k + 26), p4, eof_rip(k + 32),
+            runs_slot_load(file, page, vars1, (k + 10) + 3, 8 + i, { omega }, Rax, piece(lsp_total(r, i)), piece(lsp_load(r, i)), p1, p2, λ _ held => held.left,
+                λ s held framed => ⟨⟨framed, held.right⟩, ⟨refl, refl⟩⟩),
+            runs_seq(p2, eof_rip(k + 26), p3, eof_rip(k + 29), p4, eof_rip(k + 32),
+                runs_block([AddRR(Rax, r)], io_entry(), k + 26, p2, p3,
+                    λ s held => framed_resident(file, page, vars1, canonical_block_bytes([AddRR(Rax, r)]), eof_rip(k + 26), piece(lsp_add(r, i)), s, held.left.left),
+                    λ s held same => {
+                        let sum = execute_block_normal([AddRR(Rax, r)], s);
+                        let added: (read_gpr(Rax, sum.gprs) = total.add(counts(i))) =
+                            j(held.right.left, λ x _ => read_gpr(Rax, sum.gprs) = x.add(counts(i)),
+                                j(count(s, held.left.right), λ y _ => read_gpr(Rax, sum.gprs) = read_gpr(Rax, s.gprs).add(y), refl));
+                        ⟨⟨framed_moved(file, page, vars1, sum, s, same, held.left.left), held.left.right⟩, ⟨added, held.right.right⟩⟩
+                    }),
+                runs_frame_store(file, page, vars1, k + 29, 8 + i, { omega }, Rax, piece(lsp_back(r, i)), p3, p4, λ _ held => held.left.left,
+                    λ _ held => held.right.right,
+                    λ s held framed => ⟨framed_set(file, page, vars1, 8 + i, read_gpr(Rax, s.gprs), total.add(counts(i)), held.right.left,
+                        word_store_after(linux_writes(io_linux()), WordStore(base := R11, source := Rax), s), framed), held.left.right⟩))))
 }
 fn SpillPlaced(file: IoImage, spill: Nat → StateReg, i, j, k: Nat) → Type {
     (frame: Nat → BitVec(8)) → Placed(with_frame(file, frame), spill_blocks(spill, i, j), eof_rip(k))
 }
 theorem spill_rest_at(k, m: Nat): (k + 32) + 32 * m = k + 32 * Succ(m) { omega }
-// Slots `i` to `i + j`.
-theorem spill_run(file: IoImage, spill: Nat → StateReg, counts: Nat → BitVec(64), j: Nat): (i, k: Nat) → SpillPlaced(file, spill, i, j, k) →
-    i + j <= 8 → (frame: Nat → BitVec(8)) → (vars: Nat → BitVec(64)) → FrameHolds(frame, vars) → (page: Nat → BitVec(8)) →
-    (state: MachineState<IoMemory>) → state.memory = IoMemory(with_frame(file, frame), page) → state.rip = eof_rip(k) →
-    ((m: Nat) → m < 8 → read_gpr(state_gpr(spill(m)), state.gprs) = counts(m)) →
-    SpillOut(file, page, spill_vars(counts, j)(vars, i), state, k + 32 * j) {
-    match j as λ q => (i, k: Nat) → SpillPlaced(file, spill, i, q, k) →
-            i + q <= 8 → (frame: Nat → BitVec(8)) → (vars: Nat → BitVec(64)) → FrameHolds(frame, vars) → (page: Nat → BitVec(8)) →
-            (state: MachineState<IoMemory>) → state.memory = IoMemory(with_frame(file, frame), page) → state.rip = eof_rip(k) →
-            ((m: Nat) → m < 8 → read_gpr(state_gpr(spill(m)), state.gprs) = counts(m)) →
-            SpillOut(file, page, spill_vars(counts, q)(vars, i), state, k + 32 * q) {
-        Zero => λ i k _ _ frame vars holds page state memory_is rip_is _ =>
-            SpillOut(after := state, frame := frame, steps := Exists(0, refl), memory_is := memory_is, rip_is := rip_is, holds := holds,
-                kept := write_kept_refl(state.gprs)),
-        Succ(m) => λ i k placed fits frame vars holds page state memory_is rip_is cols => {
-            let io = io_linux();
+// Slots `i` to `i + n`.
+theorem spill_runs(file: IoImage, page: Nat → BitVec(8), spill: Nat → StateReg, counts: Nat → BitVec(64), g: Gprs,
+    cols: (m: Nat) → m < 8 → read_gpr(state_gpr(spill(m)), g) = counts(m), n: Nat): (i, k: Nat) → SpillPlaced(file, spill, i, n, k) →
+    i + n <= 8 → (vars: Nat → BitVec(64)) →
+    Runs(SpillPre(file, page, vars, g), eof_rip(k), SpillPre(file, page, spill_vars(counts, n)(vars, i), g), eof_rip(k + 32 * n)) {
+    match n as λ q => (i, k: Nat) → SpillPlaced(file, spill, i, q, k) → i + q <= 8 → (vars: Nat → BitVec(64)) →
+            Runs(SpillPre(file, page, vars, g), eof_rip(k), SpillPre(file, page, spill_vars(counts, q)(vars, i), g), eof_rip(k + 32 * q)) {
+        Zero => λ i k _ _ vars => runs_here(SpillPre(file, page, vars, g), eof_rip(k)),
+        Succ(m) => λ i k placed fits vars => {
             let r = state_gpr(spill(i));
             let halves = λ (f: Nat → BitVec(8)) => placed_split(with_frame(file, f), spill_block(r, i), spill_blocks(spill, Succ(i), m), eof_rip(k),
                 placed(f));
@@ -1633,15 +1629,13 @@ theorem spill_run(file: IoImage, spill: Nat → StateReg, counts: Nat → BitVec
             let rest: SpillPlaced(file, spill, Succ(i), m, k + 32) = λ f => placed_shift(with_frame(file, f), spill_blocks(spill, Succ(i), m), k, 32,
                 j(spill_block_len(r, i), λ l _ => Placed(with_frame(file, f), spill_blocks(spill, Succ(i), m), next_rip(eof_rip(k), l)),
                     (halves(f)).right));
-            let one = spill_one(file, spill, i, { omega }, k, block, counts, frame, vars, holds, page, state, memory_is, rip_is, cols(i, { omega }));
-            let later = spill_run(file, spill, counts, m, Succ(i), k + 32, rest, { omega }, one.frame, spill_step(vars, counts, i), one.holds, page,
-                one.after, one.memory_is, one.rip_is,
-                λ q below => trans(state_kept(spill(q), one.after.gprs, state.gprs, one.kept), cols(q, below)));
-            SpillOut(after := later.after, frame := later.frame, steps := linux_steps_trans(io, state, one.after, later.after, one.steps, later.steps),
-                memory_is := later.memory_is,
-                rip_is := trans(later.rip_is, cong_fn<Nat, BitVec(64)>(λ t => eof_rip(t), spill_rest_at(k, m))),
-                holds := later.holds,
-                kept := write_kept_trans(later.after.gprs, one.after.gprs, state.gprs, later.kept, one.kept))
+            let stepped = spill_step(vars, counts, i);
+            let later = spill_runs(file, page, spill, counts, g, cols, m, Succ(i), k + 32, rest, { omega }, stepped);
+            j(cong_fn<Nat, BitVec(64)>(λ t => eof_rip(t), spill_rest_at(k, m)),
+                λ c _ => Runs(SpillPre(file, page, vars, g), eof_rip(k), SpillPre(file, page, spill_vars(counts, m)(stepped, Succ(i)), g), c),
+                runs_seq(SpillPre(file, page, vars, g), eof_rip(k), SpillPre(file, page, stepped, g), eof_rip(k + 32),
+                    SpillPre(file, page, spill_vars(counts, m)(stepped, Succ(i)), g), eof_rip((k + 32) + 32 * m),
+                    spill_one_runs(file, page, spill, i, { omega }, k, block, counts, vars, g, cols(i, { omega })), later))
         },
     }
 }
@@ -1675,9 +1669,7 @@ theorem spill_row(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64), 
     let io = io_linux();
     let fetch = io_fetch_access();
     let data = io_data_access();
-    let out = spill_run(file, spill, counts, 8, 0, ca(l_spill()),
-        λ f => (cmd_at(with_frame(file, f), letters, default, spill, code, jumps, pj, placed(f)))(l_spill()), trivial, frame, vars, holds, page,
-        state, memory_is, rip_is, cols);
+    let g = state.gprs;
     let sv = spill_vars(counts, 8)(vars, 0);
     let high: ((m: Nat) → 16 <= m → sv(m) = vars(m)) = λ m above => spill_high(counts, 8, vars, 0, m, trivial, above);
     let held2: Vars(sv, mask, width, n, failed, add_counts(totals, counts)) = Vars(
@@ -1685,9 +1677,10 @@ theorem spill_row(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64), 
         status_is := trans(high(18, trivial), held.status_is), count_is := trans(high(21, trivial), held.count_is),
         totals_is := λ i below => trans((spill_set(counts, 8, vars, 0, i, { omega }, below, trivial)).right,
             cong_fn<BitVec(64), BitVec(64)>(λ v => v.add(counts(i)), held.totals_is(i, below))));
-    let s0 = out.after;
-    let rsp0 = read_gpr(Rsp, s0.gprs);
+    let rsp0 = read_gpr(Rsp, g);
     let here = λ (l: Prog) (f: Nat → BitVec(8)) => cmd_at(with_frame(file, f), letters, default, spill, code, jumps, pj, placed(f))(l);
+    let p = SpillPre(file, page, vars, g);
+    let spilled = spill_runs(file, page, spill, counts, g, cols, 8, 0, ca(l_spill()), here(l_spill()), trivial, vars);
     let q0 = λ (st: MachineState<IoMemory>) => Framed(file, page, sv)(st) ∧ (read_gpr(Rsp, st.gprs) = rsp0);
     let q1 = λ (st: MachineState<IoMemory>) => q0(st) ∧ ((read_gpr(R12, st.gprs) = slot_at(0)) ∧ (read_gpr(R11, st.gprs) = slot_at(16)));
     let q2 = λ (st: MachineState<IoMemory>) => q0(st) ∧ ((read_gpr(R12, st.gprs) = slot_at(0)) ∧ (read_gpr(R13, st.gprs) = sv(16)));
@@ -1717,8 +1710,12 @@ theorem spill_row(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64), 
                         λ st held same => ⟨⟨⟨⟨framed_moved(file, page, sv, execute_block_normal(page_block(), st), st, same, held.left.left.left),
                             held.left.left.right⟩, held.left.right⟩, held.right⟩, refl⟩)))));
     let w_small: (width < Nat::pow(2, 64)) = { let top: (21 <= Nat::pow(2, 64)) = Nat::leb_sound(21, Nat::pow(2, 64), trivial); omega };
-    runs_elim(q0, eof_rip(ca(l_setup())), q5, eof_rip(ca(l_row())), RowReady(file, mask, width, n, failed, totals, counts, vars, read_gpr(Rsp, state.gprs), state),
-        setup, s0, out.rip_is, ⟨Exists(out.frame, ⟨out.memory_is, out.holds⟩), refl⟩, λ s5 steps5 rip5 at5 => {
+    let whole = runs_seq(p, eof_rip(ca(l_spill())), q0, eof_rip(ca(l_setup())), q5, eof_rip(ca(l_row())),
+        runs_post(p, eof_rip(ca(l_spill())), SpillPre(file, page, sv, g), q0, eof_rip(ca(l_setup())), spilled,
+            λ _ held => ⟨held.left, held.right.right.right.right.right.right.right⟩),
+        setup);
+    runs_elim(p, eof_rip(ca(l_spill())), q5, eof_rip(ca(l_row())), RowReady(file, mask, width, n, failed, totals, counts, vars, rsp0, state),
+        whole, state, rip_is, ⟨Exists(frame, ⟨memory_is, holds⟩), write_kept_refl(g)⟩, λ s5 steps5 rip5 at5 => {
             let f5 = at5.left.left.left.left.witness;
             let framed5 = at5.left.left.left.left.proof;
             let img = with_frame(file, f5);
@@ -1731,10 +1728,10 @@ theorem spill_row(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64), 
                 { omega });
             let row_out = ran.proof.right;
             RowReady(after := ran.witness, frame := f5, vars := sv, page := row_out.page,
-                steps := linux_steps_trans(io, state, s0, ran.witness, out.steps, linux_steps_trans(io, s0, s5, ran.witness, steps5, ran.proof.left)),
+                steps := linux_steps_trans(io, state, s5, ran.witness, steps5, ran.proof.left),
                 memory_is := row_out.memory_is, rip_is := trans(row_out.rip_is, rip_compose(io_entry(), ca(l_row()), row_len())),
                 holds := framed5.right, held := held2, high := high, stored := row_out.holds.held, rdi := row_out.rdi,
-                rsp_is := trans(row_out.kept.rsp, trans(at5.left.left.left.right, out.kept.right.right.right.right.right.right)))
+                rsp_is := trans(row_out.kept.rsp, at5.left.left.left.right))
         })
 }
 
