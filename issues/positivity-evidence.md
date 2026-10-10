@@ -45,3 +45,4 @@ listed in the note's §8; this issue closes when they are filed.
 - 2026-10-10: Filed with the design note, from Minus's question whether
   `Pos` should exist at all.
 - 2026-10-10: Minus chose sugar over search, spelled `n: Pos<Nat>`, no `Fact`, `h := omega` parameter defaults, and function-owned result facts (`ten_pow::pos`). Note §7–§8 updated; title changed to match.
+- 2026-10-10: Rounds filed: [[infer-proposition-evidence]], [[named-arguments]] (parameter defaults), [[function-owned-members]], [[pos-binder-sugar]], [[retire-shifted-pos]], [[positivity-tactic]], [[positive-refinement-type]].
