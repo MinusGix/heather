@@ -15,6 +15,7 @@ import elf64_command_events;
 import elf64_format_width;
 import elf64_runs;
 import elf64_frame;
+import elf64_straight;
 import elf64_io;
 import elf64_operand_cursor;
 import elf64_print_pieces;
@@ -60,11 +61,11 @@ fn state_gpr(r: StateReg) → Gpr { match r { SR13 => R13, SR14 => R14, SR15 => 
 // Slot `i`'s count stored, then added into its total: R11 and RAX only. A
 // program of its own (x86_64_asm), the same bytes wherever it is placed.
 fn lsp_slot(r: Gpr, i: Nat) → Prog { then(Start, Block([MovRI(R11, slot_at(i))])) }
-fn lsp_store(r: Gpr, i: Nat) → Prog { then(lsp_slot(r, i), Code(word_store_bytes(WordStore(base := R11, source := r)))) }
+fn lsp_store(r: Gpr, i: Nat) → Prog { then(lsp_slot(r, i), Store(WordStore(base := R11, source := r))) }
 fn lsp_total(r: Gpr, i: Nat) → Prog { then(lsp_store(r, i), Block([MovRI(R11, slot_at(8 + i))])) }
-fn lsp_load(r: Gpr, i: Nat) → Prog { then(lsp_total(r, i), Code(word_load_bytes(WordLoad(destination := Rax, base := R11)))) }
+fn lsp_load(r: Gpr, i: Nat) → Prog { then(lsp_total(r, i), Load(WordLoad(destination := Rax, base := R11))) }
 fn lsp_add(r: Gpr, i: Nat) → Prog { then(lsp_load(r, i), Block([AddRR(Rax, r)])) }
-fn lsp_back(r: Gpr, i: Nat) → Prog { then(lsp_add(r, i), Code(word_store_bytes(WordStore(base := R11, source := Rax)))) }
+fn lsp_back(r: Gpr, i: Nat) → Prog { then(lsp_add(r, i), Store(WordStore(base := R11, source := Rax))) }
 fn spill_block(r: Gpr, i: Nat) → List<BitVec(8)> { assemble(no_fills(), lsp_back(r, i), Nil) }
 fn spill_blocks(spill: Nat → StateReg, i, j: Nat) → List<BitVec(8)> {
     match j { Zero => Nil, Succ(k) => spill_block(state_gpr(spill(i)), i) ++ spill_blocks(spill, Succ(i), k) }
@@ -116,8 +117,8 @@ fn t_state_init() → Nat { 16 }
 fn t_head() → Nat { 17 }
 fn syscall() → Asm { Code(syscall_bytes()) }
 // A word stored to or loaded from the slot R11 holds.
-fn wstore(source: Gpr) → Asm { Code(word_store_bytes(WordStore(base := R11, source := source))) }
-fn wload(destination: Gpr) → Asm { Code(word_load_bytes(WordLoad(destination := destination, base := R11))) }
+fn wstore(source: Gpr) → Asm { Store(WordStore(base := R11, source := source)) }
+fn wload(destination: Gpr) → Asm { Load(WordLoad(destination := destination, base := R11)) }
 // The write loop (elf64_write_loop), its all-sent JZ to `done`.
 fn write_done(labels: Nat → Nat, here: Nat, done: Nat) → BitVec(32) { near_rel(wl_at_wjz(here) + 6, labels(done)) }
 fn write_to(done: Nat) → Asm {
@@ -415,6 +416,28 @@ theorem cmd_core_at(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64)
         cmd_fits(letters, default, spill), filter_core_code(code, jumps, pj), placed(page))
 }
 
+// A stretch of the command run by computation (elf64_straight): the `n`
+// items ending at label `l`, from a framed state where the first starts.
+// `at` (`refl`) says `l` is the program's: the kernel finds it, so the
+// elaborator never walks the program for it.
+theorem cmd_straight(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64), spill: Nat → StateReg, code: StructuredCode,
+    jumps: FilterJumps, pj: PrintJumps, placed: CommandPlaced(file, letters, default, spill, code, jumps, pj), page: Nat → BitVec(8),
+    goal: MachineState<IoMemory> → Type, back: StepsBack(goal), l: Prog, at: asm_find(cmd_prog(), l) = l, n: Nat, vars: Nat → BitVec(64),
+    state: MachineState<IoMemory>, rip: state.rip = eof_rip(straight_from(l, n)), framed: Framed(file, page, vars)(state),
+    held: Straight(file, page, io_entry(), goal, cmd_labels(), l, n)(vars, state)): goal(state) {
+    let k = prog_depth(cmd_prog()) -prog_depth(l);
+    let fills = cmd_fills(letters, default, spill);
+    let front = asm_code(fills, cmd_labels(), asm_back(cmd_prog(), k));
+    let after = asm_code_after(fills, cmd_labels(), cmd_prog(), k);
+    let core = filter_core_code(code, jumps, pj);
+    straight_runs(file, page, io_entry(), goal, back, fills, cmd_labels(), l, n,
+        j(at, λ x _ => FillsFit(x, fills), fills_fit_back(fills, k, cmd_prog(), cmd_fits(letters, default, spill))), after ++ core,
+        λ frame => j(at, λ x _ => Placed(with_frame(file, frame), asm_code(fills, cmd_labels(), x) ++ (after ++ core), io_entry()),
+            j(trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ c => c ++ core, asm_code_back(fills, cmd_labels(), k, cmd_prog())),
+                List::append_assoc(front, after, core)), λ c _ => Placed(with_frame(file, frame), c, io_entry()), placed(frame))),
+        vars, state, rip, framed, held)
+}
+
 // ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
 // The frame's slots, loaded and stored from placed code.
@@ -475,26 +498,7 @@ theorem run_slot_load(file: IoImage, frame: Nat → BitVec(8), vars: Nat → Bit
         memory_is := loaded.memory_is, rip_is := loaded.rip_is)
 }
 
-// The same over `Runs`: the frame is whichever one holds `vars` (`Framed`),
-// so a slot store sets `vars` at the slot and a phase's postcondition names
-// the frame's words, not the frame.
-fn Framed(file: IoImage, page: Nat → BitVec(8), vars: Nat → BitVec(64)) → MachineState<IoMemory> → Type {
-    λ state => Exists<Nat → BitVec(8)>(λ frame => (state.memory = IoMemory(with_frame(file, frame), page)) ∧ FrameHolds(frame, vars))
-}
-// Code placed in every frame's image is resident in a framed state.
-theorem framed_resident(file: IoImage, page: Nat → BitVec(8), vars: Nat → BitVec(64), bytes: List<BitVec(8)>, at: BitVec(64),
-    placed: (frame: Nat → BitVec(8)) → Placed(with_frame(file, frame), bytes, at), state: MachineState<IoMemory>,
-    framed: Framed(file, page, vars)(state)): CodeResident(io_fetch_access(), state.memory, bytes, at) {
-    j(sym(framed.proof.left), λ m _ => CodeResident(io_fetch_access(), m, bytes, at), placed(framed.witness)(page))
-}
-theorem framed_moved(file: IoImage, page: Nat → BitVec(8), vars: Nat → BitVec(64), after, before: MachineState<IoMemory>,
-    same: after.memory = before.memory, framed: Framed(file, page, vars)(before)): Framed(file, page, vars)(after) {
-    Exists(framed.witness, ⟨trans(same, framed.proof.left), framed.proof.right⟩)
-}
-theorem framed_set(file: IoImage, page: Nat → BitVec(8), vars: Nat → BitVec(64), q: Nat, a, b: BitVec(64), same: a = b,
-    state: MachineState<IoMemory>, framed: Framed(file, page, set_var(vars, q, a))(state)): Framed(file, page, set_var(vars, q, b))(state) {
-    j(same, λ w _ => Framed(file, page, set_var(vars, q, w))(state), framed)
-}
+// The same over `Runs`, over a `Framed` state (elf64_straight).
 theorem runs_slot_store(file: IoImage, page: Nat → BitVec(8), vars: Nat → BitVec(64), k, q: Nat, inside: q < frame_slots(), source: Gpr,
     block: (frame: Nat → BitVec(8)) → Placed(with_frame(file, frame), canonical_block_bytes(slot_block(q)), eof_rip(k)),
     store: (frame: Nat → BitVec(8)) → Placed(with_frame(file, frame), word_store_bytes(WordStore(base := R11, source := source)), eof_rip(k + 10)),
@@ -1102,6 +1106,20 @@ theorem status_vars(vars: Nat → BitVec(64), mask: BitVec(64), width, n: Nat, f
 
 // The failed path (`l_failed`): the status set to 1, back to the loop.
 fn failed_block() → List<Instruction> { [MovRI(Rax, BitVec::ofNat(1)), MovRI(R11, slot_at(18))] }
+// A jump's landing as a straight stretch spells its leaf (`straight_item`):
+// at the offset of the label before it, by its target's name. The landing
+// facts (`cmd_j_*`) spell it by the jump's own label; the elaborator meets
+// the two here, once per fact, and not where a stretch's leaf meets it.
+theorem cmd_lands(before: Prog, size, target, to: Nat,
+    lands: JumpsForward(prog_len(before), size, near_rel(prog_len(before) + size, cmd_labels()(target)), to)):
+    near_branch_target(next_rip(io_entry(), prog_len(before)), size, near_rel(prog_len(before) + size, cmd_labels()(target))) = next_rip(io_entry(), to) {
+    jumps_forward(io_entry(), prog_len(before), size, near_rel(prog_len(before) + size, cmd_labels()(target)), to, lands)
+}
+theorem cmd_lands_back(before: Prog, size, target, to: Nat,
+    lands: JumpsBack(prog_len(before), size, near_rel(prog_len(before) + size, cmd_labels()(target)), to)):
+    near_branch_target(next_rip(io_entry(), prog_len(before)), size, near_rel(prog_len(before) + size, cmd_labels()(target))) = next_rip(io_entry(), to) {
+    jumps_back(io_entry(), prog_len(before), size, near_rel(prog_len(before) + size, cmd_labels()(target)), to, lands)
+}
 theorem failed_runs(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64), spill: Nat → StateReg, code: StructuredCode,
     jumps: FilterJumps, pj: PrintJumps, placed: CommandPlaced(file, letters, default, spill, code, jumps, pj),
     mask: BitVec(64), width, n: Nat, c19, c20: BitVec(64), after: Bool → (Nat → BitVec(64)) → List<LinuxEvent>,
@@ -1110,29 +1128,15 @@ theorem failed_runs(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64)
     held: Vars(vars, mask, width, n, failed, totals), at19: vars(19) = c19, at20: vars(20) = c20,
     page: Nat → BitVec(8), state: MachineState<IoMemory>, memory_is: state.memory = IoMemory(with_frame(file, frame), page),
     rip_is: state.rip = eof_rip(ca(l_failed()))): LinuxRuns(io_linux(), after(True, totals), state) {
-    let here = λ (l: Prog) (f: Nat → BitVec(8)) => cmd_at(with_frame(file, f), letters, default, spill, code, jumps, pj, placed(f))(l);
     let one = status_word(True);
-    let vars2 = set_var(vars, 18, one);
-    let p0 = Framed(file, page, vars);
-    let p1 = λ (st: MachineState<IoMemory>) => Framed(file, page, vars)(st) ∧ ((read_gpr(Rax, st.gprs) = one) ∧ (read_gpr(R11, st.gprs) = slot_at(18)));
-    let p2 = Framed(file, page, vars2);
-    let runs = runs_seq(p0, eof_rip(ca(l_failed())), p1, eof_rip(ca(l_failed_store())), p2, eof_rip(ca(l_loop())),
-        runs_block(failed_block(), io_entry(), ca(l_failed()), p0, p1,
-            λ st h => framed_resident(file, page, vars, canonical_block_bytes(failed_block()), eof_rip(ca(l_failed())), here(l_failed()), st, h),
-            λ st h same => ⟨framed_moved(file, page, vars, execute_block_normal(failed_block(), st), st, same, h), ⟨refl, refl⟩⟩),
-        runs_seq(p1, eof_rip(ca(l_failed_store())), p2, eof_rip(ca(l_failed_jmp())), p2, eof_rip(ca(l_loop())),
-            runs_frame_store(file, page, vars, ca(l_failed_store()), 18, { omega }, Rax, here(l_failed_store()), p1, p2, λ _ h => h.left,
-                λ _ h => h.right.right,
-                λ st h framed => framed_set(file, page, vars, 18, read_gpr(Rax, st.gprs), one, h.right.left,
-                    word_store_after(linux_writes(io_linux()), WordStore(base := R11, source := Rax), st), framed)),
-            runs_jmp_back(cmd_d(l_failed_jmp()), io_entry(), ca(l_failed_jmp()), ca(l_loop()), cmd_j_failed_jmp(), p2, p2,
-                λ st h => framed_resident(file, page, vars2, near_control_bytes(JumpNear(cmd_d(l_failed_jmp()))), eof_rip(ca(l_failed_jmp())),
-                    here(l_failed_jmp()), st, h),
-                λ st h => h)));
-    runs_into(p0, eof_rip(ca(l_failed())), p2, eof_rip(ca(l_loop())), after(True, totals), runs, state, rip_is, Exists(frame, ⟨memory_is, holds⟩),
-        λ s at h => goes(True, h.witness, vars2, h.proof.right, status_vars(vars, mask, width, n, failed, totals, held, True),
+    // The status set, the JMP back to the loop.
+    cmd_straight(file, letters, default, spill, code, jumps, pj, placed, page, λ s => LinuxRuns(io_linux(), after(True, totals), s),
+        runs_back(after(True, totals)), l_failed_jmp(), refl, 3, vars, state, rip_is, Exists(frame, ⟨memory_is, holds⟩),
+        Exists(18, ⟨trivial, ⟨refl, λ s at framed _ => goes(True, framed.witness, set_var(vars, 18, one), framed.proof.right,
+            status_vars(vars, mask, width, n, failed, totals, held, True),
             trans(set_var_other(vars, 18, one, 19, ne_above(19, 18, trivial)), at19), trans(set_var_other(vars, 18, one, 20, ne_above(20, 18, trivial)), at20),
-            page, s, h.proof.left, at))
+            page, s, framed.proof.left,
+            trans(at, cmd_lands_back(l_failed_store(), 5, t_loop(), ca(l_loop()), cmd_j_failed_jmp())))⟩⟩))
 }
 
 // ---------------------------------------------------------------------------
@@ -2060,50 +2064,6 @@ theorem loop_cursor(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64)
 }
 
 // Past the cursor (`l_cstore`): RBX and R12 back in their slots 19 and 20.
-fn CursorPre(file: IoImage, page: Nat → BitVec(8), vars: Nat → BitVec(64), c19, c20, w: BitVec(64)) → MachineState<IoMemory> → Type {
-    λ state => Framed(file, page, vars)(state) ∧ ((read_gpr(Rbx, state.gprs) = c19) ∧ ((read_gpr(R12, state.gprs) = c20) ∧ (read_gpr(Rsi, state.gprs) = w)))
-}
-fn CursorPost(file: IoImage, page: Nat → BitVec(8), vars: Nat → BitVec(64), c19, c20, w: BitVec(64)) → MachineState<IoMemory> → Type {
-    λ state => Framed(file, page, set_var(set_var(vars, 19, c19), 20, c20))(state) ∧ (read_gpr(Rsi, state.gprs) = w)
-}
-theorem cursor_store_runs(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64), spill: Nat → StateReg, code: StructuredCode,
-    jumps: FilterJumps, pj: PrintJumps, placed: CommandPlaced(file, letters, default, spill, code, jumps, pj),
-    page: Nat → BitVec(8), vars: Nat → BitVec(64), c19, c20, w: BitVec(64)):
-    Runs(CursorPre(file, page, vars, c19, c20, w), eof_rip(ca(l_cstore())), CursorPost(file, page, vars, c19, c20, w), eof_rip(ca(l_last()))) {
-    let here = λ (l: Prog) (f: Nat → BitVec(8)) => cmd_at(with_frame(file, f), letters, default, spill, code, jumps, pj, placed(f))(l);
-    let mid = λ (state: MachineState<IoMemory>) => Framed(file, page, set_var(vars, 19, c19))(state) ∧
-        ((read_gpr(R12, state.gprs) = c20) ∧ (read_gpr(Rsi, state.gprs) = w));
-    runs_seq(CursorPre(file, page, vars, c19, c20, w), eof_rip(ca(l_cstore())), mid, eof_rip(ca(l_estore())),
-        CursorPost(file, page, vars, c19, c20, w), eof_rip(ca(l_last())),
-        runs_slot_store(file, page, vars, ca(l_cstore()), 19, { omega }, Rbx, here(l_cstore()), here(l_cstore_store()),
-            CursorPre(file, page, vars, c19, c20, w), mid, λ _ held => held.left,
-            λ st held framed => ⟨j(held.right.left, λ x _ => Framed(file, page, set_var(vars, 19, x))(slot_store_after(Rbx, 19, st)), framed),
-                ⟨held.right.right.left, held.right.right.right⟩⟩),
-        runs_slot_store(file, page, set_var(vars, 19, c19), ca(l_estore()), 20, { omega }, R12, here(l_estore()), here(l_estore_store()),
-            mid, CursorPost(file, page, vars, c19, c20, w), λ _ held => held.left,
-            λ st held framed => ⟨j(held.right.left, λ x _ => Framed(file, page, set_var(set_var(vars, 19, c19), 20, x))(slot_store_after(R12, 20, st)),
-                framed), held.right.right⟩))
-}
-fn last_test_block() → List<Instruction> { [MovRI(R11, word_zero()), CmpRR(Rsi, R11)] }
-// RSI against zero (`l_last`), up to the JE: the flag is whether it is zero.
-fn LastTested(file: IoImage, page: Nat → BitVec(8), vars: Nat → BitVec(64), c19, c20, w: BitVec(64)) → MachineState<IoMemory> → Type {
-    λ state => CursorPost(file, page, vars, c19, c20, w)(state) ∧ (condition_holds(E, state.flags) = is_zero_bits(64, w.sub(word_zero())))
-}
-theorem last_tested_runs(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64), spill: Nat → StateReg, code: StructuredCode,
-    jumps: FilterJumps, pj: PrintJumps, placed: CommandPlaced(file, letters, default, spill, code, jumps, pj),
-    page: Nat → BitVec(8), vars: Nat → BitVec(64), c19, c20, w: BitVec(64)):
-    Runs(CursorPre(file, page, vars, c19, c20, w), eof_rip(ca(l_cstore())), LastTested(file, page, vars, c19, c20, w), eof_rip(ca(l_last_je()))) {
-    let cv = set_var(set_var(vars, 19, c19), 20, c20);
-    runs_seq(CursorPre(file, page, vars, c19, c20, w), eof_rip(ca(l_cstore())), CursorPost(file, page, vars, c19, c20, w), eof_rip(ca(l_last())),
-        LastTested(file, page, vars, c19, c20, w), eof_rip(ca(l_last_je())),
-        cursor_store_runs(file, letters, default, spill, code, jumps, pj, placed, page, vars, c19, c20, w),
-        runs_block(last_test_block(), io_entry(), ca(l_last()), CursorPost(file, page, vars, c19, c20, w), LastTested(file, page, vars, c19, c20, w),
-            λ st held => framed_resident(file, page, cv, canonical_block_bytes(last_test_block()), eof_rip(ca(l_last())),
-                λ f => cmd_at(with_frame(file, f), letters, default, spill, code, jumps, pj, placed(f))(l_last()), st, held.left),
-            λ st held same => ⟨⟨framed_moved(file, page, cv, execute_block_normal(last_test_block(), st), st, same, held.left), held.right⟩,
-                cong_fn<BitVec(64), Bool>(λ v => is_zero_bits(64, v.sub(word_zero())), held.right)⟩))
-}
-
 // No operand left: RSI zero, JE to the total row.
 theorem loop_last(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64), spill: Nat → StateReg, code: StructuredCode,
     jumps: FilterJumps, pj: PrintJumps, placed: CommandPlaced(file, letters, default, spill, code, jumps, pj),
@@ -2113,26 +2073,23 @@ theorem loop_last(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64), 
     page: Nat → BitVec(8), state: MachineState<IoMemory>, memory_is: state.memory = IoMemory(with_frame(file, frame), page),
     rip_is: state.rip = eof_rip(ca(l_cstore())), rsi: read_gpr(Rsi, state.gprs) = word_zero()):
     LinuxRuns(io_linux(), total_events(mask, width, n, total, failed, totals), state) {
+    let events = total_events(mask, width, n, total, failed, totals);
     let c19 = read_gpr(Rbx, state.gprs);
     let c20 = read_gpr(R12, state.gprs);
     let cv = set_var(set_var(vars, 19, c19), 20, c20);
-    let post = λ (st: MachineState<IoMemory>) => CursorPost(file, page, vars, c19, c20, word_zero())(st);
-    let runs = runs_seq(CursorPre(file, page, vars, c19, c20, word_zero()), eof_rip(ca(l_cstore())), LastTested(file, page, vars, c19, c20, word_zero()),
-        eof_rip(ca(l_last_je())), post, eof_rip(ca(l_total())),
-        last_tested_runs(file, letters, default, spill, code, jumps, pj, placed, page, vars, c19, c20, word_zero()),
-        runs_jcc_taken(E, cmd_d(l_last_je()), io_entry(), ca(l_last_je()), ca(l_total()), cmd_j_last_je(), LastTested(file, page, vars, c19, c20, word_zero()),
-            post,
-            λ st held => framed_resident(file, page, cv, near_control_bytes(JumpIfNear(E, cmd_d(l_last_je()))), eof_rip(ca(l_last_je())),
-                λ f => cmd_at(with_frame(file, f), letters, default, spill, code, jumps, pj, placed(f))(l_last_je()), st, held.left.left),
-            λ st held => trans(held.right, zero_bits_sub_self(64, word_zero())),
-            λ st held => held.left));
-    runs_into(CursorPre(file, page, vars, c19, c20, word_zero()), eof_rip(ca(l_cstore())), post, eof_rip(ca(l_total())),
-        total_events(mask, width, n, total, failed, totals), runs, state, rip_is, ⟨Exists(frame, ⟨memory_is, holds⟩), ⟨refl, ⟨refl, rsi⟩⟩⟩,
-        λ s2 s2_rip held => total_runs(file, letters, default, spill, code, jumps, pj, placed, held.left.witness, cv, held.left.proof.right, mask, width,
-            n, failed, totals,
-            slot_vars(set_var(vars, 19, c19), mask, width, n, failed, totals, slot_vars(vars, mask, width, n, failed, totals, values, 19, c19, trivial,
-                ne_below(19, 21, trivial)), 20, c20, trivial, ne_below(20, 21, trivial)),
-            narrow, few, total, ok, page, s2, held.left.proof.left, s2_rip))
+    let zero: (is_zero_bits(64, read_gpr(Rsi, state.gprs).sub(word_zero())) = True) =
+        trans(cong_fn<BitVec(64), Bool>(λ v => is_zero_bits(64, v.sub(word_zero())), rsi), zero_bits_sub_self(64, word_zero()));
+    // The cursor into slots 19 and 20, RSI against zero, the JE taken.
+    cmd_straight(file, letters, default, spill, code, jumps, pj, placed, page, λ s => LinuxRuns(io_linux(), events, s), runs_back(events),
+        l_last_je(), refl, 6, vars, state, rip_is, Exists(frame, ⟨memory_is, holds⟩),
+        Exists(19, ⟨trivial, ⟨refl, Exists(20, ⟨trivial, ⟨refl,
+            ⟨λ _ after at framed _ => total_runs(file, letters, default, spill, code, jumps, pj, placed, framed.witness, cv, framed.proof.right, mask,
+                width, n, failed, totals,
+                slot_vars(set_var(vars, 19, c19), mask, width, n, failed, totals, slot_vars(vars, mask, width, n, failed, totals, values, 19, c19, trivial,
+                    ne_below(19, 21, trivial)), 20, c20, trivial, ne_below(20, 21, trivial)),
+                narrow, few, total, ok, page, after, framed.proof.left,
+                trans(at, cmd_lands(l_last(), 6, t_total(), ca(l_total()), cmd_j_last_je()))),
+             λ no => absurd(trans(sym(no), zero))⟩⟩⟩)⟩⟩))
 }
 
 // An operand (RSI not zero): past the JE, its name's pointer into slot 22.
@@ -2151,6 +2108,12 @@ record OperandAt(file: IoImage, page: Nat → BitVec(8), mask: BitVec(64), width
     at22: vars(22) = pointer,
     rsi: read_gpr(Rsi, after.gprs) = pointer,
 }
+theorem operand_at_back(file: IoImage, page: Nat → BitVec(8), mask: BitVec(64), width, n: Nat, failed: Bool, totals: Nat → BitVec(64),
+    c19, c20, pointer: BitVec(64)): StepsBack(λ s => OperandAt(file, page, mask, width, n, failed, totals, c19, c20, pointer, s)) {
+    λ before after steps at => OperandAt(after := at.after, frame := at.frame, vars := at.vars,
+        steps := linux_steps_trans(io_linux(), before, after, at.after, steps, at.steps), memory_is := at.memory_is, rip_is := at.rip_is,
+        holds := at.holds, values := at.values, at19 := at.at19, at20 := at.at20, at22 := at.at22, rsi := at.rsi)
+}
 theorem operand_head(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64), spill: Nat → StateReg, code: StructuredCode,
     jumps: FilterJumps, pj: PrintJumps, placed: CommandPlaced(file, letters, default, spill, code, jumps, pj),
     frame: Nat → BitVec(8), vars: Nat → BitVec(64), holds: FrameHolds(frame, vars), mask: BitVec(64), width, n: Nat, failed: Bool,
@@ -2160,33 +2123,27 @@ theorem operand_head(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64
     OperandAt(file, page, mask, width, n, failed, totals, read_gpr(Rbx, state.gprs), read_gpr(R12, state.gprs), pointer, state) {
     let c19 = read_gpr(Rbx, state.gprs);
     let c20 = read_gpr(R12, state.gprs);
+    let w = read_gpr(Rsi, state.gprs);
     let cv = set_var(set_var(vars, 19, c19), 20, c20);
-    let named = λ (st: MachineState<IoMemory>) => Framed(file, page, set_var(cv, 22, pointer))(st) ∧ (read_gpr(Rsi, st.gprs) = pointer);
-    let here = λ (l: Prog) (f: Nat → BitVec(8)) => cmd_at(with_frame(file, f), letters, default, spill, code, jumps, pj, placed(f))(l);
-    let runs = runs_seq(CursorPre(file, page, vars, c19, c20, pointer), eof_rip(ca(l_cstore())), LastTested(file, page, vars, c19, c20, pointer),
-        eof_rip(ca(l_last_je())), named, eof_rip(ca(l_dash_load())),
-        last_tested_runs(file, letters, default, spill, code, jumps, pj, placed, page, vars, c19, c20, pointer),
-        runs_seq(LastTested(file, page, vars, c19, c20, pointer), eof_rip(ca(l_last_je())), CursorPost(file, page, vars, c19, c20, pointer),
-            eof_rip(ca(l_name())), named, eof_rip(ca(l_dash_load())),
-            runs_jcc_passed(E, cmd_d(l_last_je()), io_entry(), ca(l_last_je()), LastTested(file, page, vars, c19, c20, pointer),
-                CursorPost(file, page, vars, c19, c20, pointer),
-                λ st held => framed_resident(file, page, cv, near_control_bytes(JumpIfNear(E, cmd_d(l_last_je()))), eof_rip(ca(l_last_je())),
-                    here(l_last_je()), st, held.left.left),
-                λ st held => trans(held.right, trans(zero_bits_sub(64, pointer, word_zero()), nonzero_word(pointer, nonzero))),
-                λ st held => held.left),
-            runs_slot_store(file, page, cv, ca(l_name()), 22, { omega }, Rsi, here(l_name()), here(l_name_store()),
-                CursorPost(file, page, vars, c19, c20, pointer), named, λ _ held => held.left,
-                λ st held framed => ⟨j(held.right, λ x _ => Framed(file, page, set_var(cv, 22, x))(slot_store_after(Rsi, 22, st)), framed),
-                    held.right⟩)));
-    runs_elim(CursorPre(file, page, vars, c19, c20, pointer), eof_rip(ca(l_cstore())), named, eof_rip(ca(l_dash_load())),
-        OperandAt(file, page, mask, width, n, failed, totals, c19, c20, pointer, state), runs, state, rip_is,
-        ⟨Exists(frame, ⟨memory_is, holds⟩), ⟨refl, ⟨refl, rsi⟩⟩⟩, λ after steps at_rip post =>
-        OperandAt(after := after, frame := post.left.witness, vars := set_var(cv, 22, pointer), steps := steps,
-            memory_is := post.left.proof.left, rip_is := at_rip, holds := post.left.proof.right,
-            values := slot_vars(cv, mask, width, n, failed, totals,
-                slot_vars(set_var(vars, 19, c19), mask, width, n, failed, totals, slot_vars(vars, mask, width, n, failed, totals, values, 19, c19, trivial,
-                    ne_below(19, 21, trivial)), 20, c20, trivial, ne_below(20, 21, trivial)), 22, pointer, trivial, ne_above(22, 21, trivial)),
-            at19 := refl, at20 := refl, at22 := refl, rsi := post.right))
+    let nonzero_flag: (is_zero_bits(64, w.sub(word_zero())) = False) =
+        trans(cong_fn<BitVec(64), Bool>(λ v => is_zero_bits(64, v.sub(word_zero())), rsi),
+            trans(zero_bits_sub(64, pointer, word_zero()), nonzero_word(pointer, nonzero)));
+    // The cursor into slots 19 and 20, RSI against zero, the JE passed, the
+    // name's pointer into slot 22.
+    cmd_straight(file, letters, default, spill, code, jumps, pj, placed, page,
+        λ s => OperandAt(file, page, mask, width, n, failed, totals, c19, c20, pointer, s), operand_at_back(file, page, mask, width, n, failed, totals,
+            c19, c20, pointer),
+        l_name_store(), refl, 8, vars, state, rip_is, Exists(frame, ⟨memory_is, holds⟩),
+        Exists(19, ⟨trivial, ⟨refl, Exists(20, ⟨trivial, ⟨refl,
+            ⟨λ yes => absurd(trans(sym(yes), nonzero_flag)),
+             λ _ => Exists(22, ⟨trivial, ⟨refl, λ after at framed same =>
+                OperandAt(after := after, frame := framed.witness, vars := set_var(cv, 22, w), steps := Exists(0, refl),
+                    memory_is := framed.proof.left, rip_is := at, holds := framed.proof.right,
+                    values := slot_vars(cv, mask, width, n, failed, totals,
+                        slot_vars(set_var(vars, 19, c19), mask, width, n, failed, totals, slot_vars(vars, mask, width, n, failed, totals, values, 19, c19,
+                            trivial, ne_below(19, 21, trivial)), 20, c20, trivial, ne_below(20, 21, trivial)), 22, w, trivial, ne_above(22, 21, trivial)),
+                    at19 := refl, at20 := refl, at22 := rsi,
+                    rsi := trans(cong_fn<MachineState<IoMemory>, BitVec(64)>(λ x => read_gpr(Rsi, x.gprs), same), rsi))⟩⟩)⟩⟩⟩)⟩⟩))
 }
 
 // The name's first byte against `-` (`l_dash_load`), and after a `-` its second
@@ -2400,7 +2357,6 @@ theorem jmp_forward(d: BitVec(32), state: MachineState<IoMemory>, at: BitVec(64)
 }
 
 // `-` (`l_dash`): not closed after, fd 0, to the reads.
-fn stdin_block() → List<Instruction> { [MovRI(Rax, word_zero()), MovRI(R11, slot_at(23))] }
 fn fd_zero_block() → List<Instruction> { [MovRI(Rsp, word_zero())] }
 theorem stdin_path(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64), spill: Nat → StateReg, code: StructuredCode,
     jumps: FilterJumps, pj: PrintJumps, placed: CommandPlaced(file, letters, default, spill, code, jumps, pj),
@@ -2412,36 +2368,17 @@ theorem stdin_path(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64),
     rip_is: state.rip = eof_rip(ca(l_dash()))): LinuxRuns(io_linux(), events(failed), state) {
     let zero = word_zero();
     let vars2 = set_var(vars, 23, zero);
-    let here = λ (l: Prog) (f: Nat → BitVec(8)) => cmd_at(with_frame(file, f), letters, default, spill, code, jumps, pj, placed(f))(l);
-    let p0 = Framed(file, page, vars);
-    let p1 = λ (st: MachineState<IoMemory>) => Framed(file, page, vars)(st) ∧ ((read_gpr(Rax, st.gprs) = zero) ∧ (read_gpr(R11, st.gprs) = slot_at(23)));
-    let p2 = Framed(file, page, vars2);
-    let p3 = λ (st: MachineState<IoMemory>) => Framed(file, page, vars2)(st) ∧ (read_gpr(Rsp, st.gprs) = BitVec::zero());
-    let runs = runs_seq(p0, eof_rip(ca(l_dash())), p1, eof_rip(ca(l_dash_store())), p3, eof_rip(ca(l_state_init())),
-        runs_block(stdin_block(), io_entry(), ca(l_dash()), p0, p1,
-            λ st held => framed_resident(file, page, vars, canonical_block_bytes(stdin_block()), eof_rip(ca(l_dash())), here(l_dash()), st, held),
-            λ st held same => ⟨framed_moved(file, page, vars, execute_block_normal(stdin_block(), st), st, same, held), ⟨refl, refl⟩⟩),
-        runs_seq(p1, eof_rip(ca(l_dash_store())), p2, eof_rip(ca(l_dash_fd())), p3, eof_rip(ca(l_state_init())),
-            runs_frame_store(file, page, vars, ca(l_dash_store()), 23, { omega }, Rax, here(l_dash_store()), p1, p2, λ _ held => held.left,
-                λ _ held => held.right.right,
-                λ st held framed => j(held.right.left, λ x _ => Framed(file, page, set_var(vars, 23, x))(
-                    word_store_after(linux_writes(io_linux()), WordStore(base := R11, source := Rax), st)), framed)),
-            runs_seq(p2, eof_rip(ca(l_dash_fd())), p3, eof_rip(ca(l_dash_jmp())), p3, eof_rip(ca(l_state_init())),
-                runs_block(fd_zero_block(), io_entry(), ca(l_dash_fd()), p2, p3,
-                    λ st held => framed_resident(file, page, vars2, canonical_block_bytes(fd_zero_block()), eof_rip(ca(l_dash_fd())), here(l_dash_fd()),
-                        st, held),
-                    λ st held same => ⟨framed_moved(file, page, vars2, execute_block_normal(fd_zero_block(), st), st, same, held), refl⟩),
-                runs_jmp(cmd_d(l_dash_jmp()), io_entry(), ca(l_dash_jmp()), ca(l_state_init()), cmd_j_dash_jmp(), p3, p3,
-                    λ st held => framed_resident(file, page, vars2, near_control_bytes(JumpNear(cmd_d(l_dash_jmp()))), eof_rip(ca(l_dash_jmp())),
-                        here(l_dash_jmp()), st, held.left),
-                    λ st held => held))));
-    runs_into(p0, eof_rip(ca(l_dash())), p3, eof_rip(ca(l_state_init())), events(failed), runs, state, rip_is, Exists(frame, ⟨memory_is, holds⟩),
-        λ s4 s4_rip held => reads(failed, held.left.witness, vars2, held.left.proof.right,
+    // Slot 23 cleared (not closed after), RSP zero, the JMP to the reads.
+    cmd_straight(file, letters, default, spill, code, jumps, pj, placed, page, λ s => LinuxRuns(io_linux(), events(failed), s),
+        runs_back(events(failed)), l_dash_jmp(), refl, 4, vars, state, rip_is, Exists(frame, ⟨memory_is, holds⟩),
+        Exists(23, ⟨trivial, ⟨refl, λ after at framed same => reads(failed, framed.witness, vars2, framed.proof.right,
             slot_vars(vars, mask, width, n, failed, totals, values, 23, zero, trivial, ne_above(23, 21, trivial)),
             trans(set_var_other(vars, 23, zero, 19, ne_below(19, 23, trivial)), at19),
             trans(set_var_other(vars, 23, zero, 20, ne_below(20, 23, trivial)), at20),
             trans(set_var_other(vars, 23, zero, 22, ne_below(22, 23, trivial)), at22),
-            set_var_same(vars, 23, zero), page, s4, held.left.proof.left, s4_rip, held.right))
+            set_var_same(vars, 23, zero), page, after, framed.proof.left,
+            trans(at, cmd_lands(l_dash_fd(), 5, t_state_init(), ca(l_state_init()), cmd_j_dash_jmp())),
+            cong_fn<MachineState<IoMemory>, BitVec(64)>(λ x => read_gpr(Rsp, x.gprs), same))⟩⟩))
 }
 
 // Any other operand (`l_open`): openat(AT_FDCWD, name, O_RDONLY); a failed open
@@ -2465,7 +2402,6 @@ fn OpenGoes<C>(opened: OpenResult, file: IoImage, shape: FilterShape<C>, column:
     }
 }
 fn open_block() → List<Instruction> { [MovRI(Rdi, at_fdcwd()), MovRI(Rdx, word_zero()), MovRI(Rax, BitVec::ofNat(257))] }
-fn opened_block() → List<Instruction> { [MovRR(Rsp, Rax), MovRI(Rax, BitVec::ofNat(1)), MovRI(R11, slot_at(23))] }
 theorem fd_bounds(fd: Nat, below: fd < Nat::pow(2, 31)): (fd < Nat::pow(2, 63)) ∧ (fd < Nat::pow(2, 64)) {
     let a: (Nat::pow(2, 31) <= Nat::pow(2, 63)) = Nat::leb_sound(Nat::pow(2, 31), Nat::pow(2, 63), trivial);
     let b: (Nat::pow(2, 63) <= Nat::pow(2, 64)) = Nat::leb_sound(Nat::pow(2, 63), Nat::pow(2, 64), trivial);
@@ -2504,67 +2440,34 @@ theorem open_back<C>(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64
             let small: (word.toNat() < Nat::pow(2, 63)) = { let v = toNat_word_of_nat(64, fd, bounds.right); let w = bounds.left; omega };
             let one = status_word(True);
             let vars2 = set_var(vars, 23, one);
-            let here = λ (l: Prog) (f: Nat → BitVec(8)) => cmd_at(with_frame(file, f), letters, default, spill, code, jumps, pj, placed(f))(l);
-            let p0 = λ (st: MachineState<IoMemory>) => Framed(file, page, vars)(st) ∧ (read_gpr(Rax, st.gprs) = word);
-            let p1 = λ (st: MachineState<IoMemory>) => p0(st) ∧ (condition_holds(S, st.flags) = False);
-            let p2 = λ (st: MachineState<IoMemory>) => Framed(file, page, vars)(st) ∧ ((read_gpr(Rsp, st.gprs) = word) ∧
-                ((read_gpr(Rax, st.gprs) = one) ∧ (read_gpr(R11, st.gprs) = slot_at(23))));
-            let p3 = λ (st: MachineState<IoMemory>) => Framed(file, page, vars2)(st) ∧ (read_gpr(Rsp, st.gprs) = word);
-            let runs = runs_seq(p0, eof_rip(ca(l_open_test())), p1, eof_rip(ca(l_open_js())), p3, eof_rip(ca(l_state_init())),
-                runs_block(test_block(), io_entry(), ca(l_open_test()), p0, p1,
-                    λ st held => framed_resident(file, page, vars, canonical_block_bytes(test_block()), eof_rip(ca(l_open_test())), here(l_open_test()),
-                        st, held.left),
-                    λ st held same => ⟨⟨framed_moved(file, page, vars, execute_block_normal(test_block(), st), st, same, held.left), held.right⟩,
-                        trans(cong_fn<BitVec(64), Bool>(λ v => v.band(v).sign_bit(), held.right), test_self_nonnegative(word, small))⟩),
-                runs_seq(p1, eof_rip(ca(l_open_js())), p0, eof_rip(ca(l_opened())), p3, eof_rip(ca(l_state_init())),
-                    runs_jcc_passed(S, cmd_d(l_open_js()), io_entry(), ca(l_open_js()), p1, p0,
-                        λ st held => framed_resident(file, page, vars, near_control_bytes(JumpIfNear(S, cmd_d(l_open_js()))), eof_rip(ca(l_open_js())),
-                            here(l_open_js()), st, held.left.left),
-                        λ st held => held.right, λ st held => held.left),
-                    runs_seq(p0, eof_rip(ca(l_opened())), p2, eof_rip(ca(l_opened_store())), p3, eof_rip(ca(l_state_init())),
-                        runs_block(opened_block(), io_entry(), ca(l_opened()), p0, p2,
-                            λ st held => framed_resident(file, page, vars, canonical_block_bytes(opened_block()), eof_rip(ca(l_opened())), here(l_opened()),
-                                st, held.left),
-                            λ st held same => ⟨framed_moved(file, page, vars, execute_block_normal(opened_block(), st), st, same, held.left),
-                                ⟨held.right, ⟨refl, refl⟩⟩⟩),
-                        runs_seq(p2, eof_rip(ca(l_opened_store())), p3, eof_rip(ca(l_opened_jmp())), p3, eof_rip(ca(l_state_init())),
-                            runs_frame_store(file, page, vars, ca(l_opened_store()), 23, { omega }, Rax, here(l_opened_store()), p2, p3,
-                                λ _ held => held.left, λ _ held => held.right.right.right,
-                                λ st held framed => ⟨j(held.right.right.left, λ x _ => Framed(file, page, set_var(vars, 23, x))(
-                                    word_store_after(linux_writes(io), WordStore(base := R11, source := Rax), st)), framed), held.right.left⟩),
-                            runs_jmp(cmd_d(l_opened_jmp()), io_entry(), ca(l_opened_jmp()), ca(l_state_init()), cmd_j_opened_jmp(), p3, p3,
-                                λ st held => framed_resident(file, page, vars2, near_control_bytes(JumpNear(cmd_d(l_opened_jmp()))),
-                                    eof_rip(ca(l_opened_jmp())), here(l_opened_jmp()), st, held.left),
-                                λ st held => held)))));
-            runs_into(p0, eof_rip(ca(l_open_test())), p3, eof_rip(ca(l_state_init())),
-                file_reads(shape, column, mask, width, name, run, word, True, failed, totals, rest), runs, state, rip_is,
-                ⟨Exists(frame, ⟨memory_is, holds⟩), rax⟩,
-                λ s5 s5_rip held => reads(failed, held.left.witness, vars2, held.left.proof.right,
+            let events = file_reads(shape, column, mask, width, name, run, word, True, failed, totals, rest);
+            let clear: (read_gpr(Rax, state.gprs).band(read_gpr(Rax, state.gprs)).sign_bit() = False) =
+                trans(cong_fn<BitVec(64), Bool>(λ v => v.band(v).sign_bit(), rax), test_self_nonnegative(word, small));
+            // RAX tested, the JS passed, the fd into RSP and slot 23 set
+            // (closed after), the JMP to the reads.
+            cmd_straight(file, letters, default, spill, code, jumps, pj, placed, page, λ s => LinuxRuns(io, events, s), runs_back(events),
+                l_opened_jmp(), refl, 5, vars, state, rip_is, Exists(frame, ⟨memory_is, holds⟩),
+                ⟨λ yes => absurd(trans(sym(yes), clear)),
+                 λ _ => Exists(23, ⟨trivial, ⟨refl, λ after at framed same => reads(failed, framed.witness, vars2, framed.proof.right,
                     slot_vars(vars, mask, width, n, failed, totals, values, 23, one, trivial, ne_above(23, 21, trivial)),
                     trans(set_var_other(vars, 23, one, 19, ne_below(19, 23, trivial)), at19),
                     trans(set_var_other(vars, 23, one, 20, ne_below(20, 23, trivial)), at20),
                     trans(set_var_other(vars, 23, one, 22, ne_below(22, 23, trivial)), at22),
-                    set_var_same(vars, 23, one), page, s5, held.left.proof.left, s5_rip, held.right))
+                    set_var_same(vars, 23, one), page, after, framed.proof.left,
+                    trans(at, cmd_lands(l_opened_store(), 5, t_state_init(), ca(l_state_init()), cmd_j_opened_jmp())),
+                    trans(cong_fn<MachineState<IoMemory>, BitVec(64)>(λ x => read_gpr(Rsp, x.gprs), same), rax))⟩⟩)⟩)
         },
         OpenFailed(errno) => λ error goes page state memory_is rip_is rax => {
-            let here = λ (l: Prog) (f: Nat → BitVec(8)) => cmd_at(with_frame(file, f), letters, default, spill, code, jumps, pj, placed(f))(l);
             let word = errno_word(errno);
-            let p0 = λ (st: MachineState<IoMemory>) => Framed(file, page, vars)(st) ∧ (read_gpr(Rax, st.gprs) = word);
-            let p1 = λ (st: MachineState<IoMemory>) => Framed(file, page, vars)(st) ∧ (condition_holds(S, st.flags) = True);
-            let runs = runs_seq(p0, eof_rip(ca(l_open_test())), p1, eof_rip(ca(l_open_js())), Framed(file, page, vars), eof_rip(ca(l_failed())),
-                runs_block(test_block(), io_entry(), ca(l_open_test()), p0, p1,
-                    λ st held => framed_resident(file, page, vars, canonical_block_bytes(test_block()), eof_rip(ca(l_open_test())), here(l_open_test()),
-                        st, held.left),
-                    λ st held same => ⟨framed_moved(file, page, vars, execute_block_normal(test_block(), st), st, same, held.left),
-                        trans(cong_fn<BitVec(64), Bool>(λ v => v.band(v).sign_bit(), held.right), test_self_negative(word, errno_negative(errno, error)))⟩),
-                runs_jcc_taken(S, cmd_d(l_open_js()), io_entry(), ca(l_open_js()), ca(l_failed()), cmd_j_open_js(), p1, Framed(file, page, vars),
-                    λ st held => framed_resident(file, page, vars, near_control_bytes(JumpIfNear(S, cmd_d(l_open_js()))), eof_rip(ca(l_open_js())),
-                        here(l_open_js()), st, held.left),
-                    λ st held => held.right, λ st held => held.left));
-            runs_into(p0, eof_rip(ca(l_open_test())), Framed(file, page, vars), eof_rip(ca(l_failed())), rest(True, totals), runs, state, rip_is,
-                ⟨Exists(frame, ⟨memory_is, holds⟩), rax⟩,
-                λ s2 s2_rip held => failed_runs(file, letters, default, spill, code, jumps, pj, placed, mask, width, n, c19, c20, rest, totals, goes,
-                    held.witness, vars, held.proof.right, failed, values, at19, at20, page, s2, held.proof.left, s2_rip))
+            let set: (read_gpr(Rax, state.gprs).band(read_gpr(Rax, state.gprs)).sign_bit() = True) =
+                trans(cong_fn<BitVec(64), Bool>(λ v => v.band(v).sign_bit(), rax), test_self_negative(word, errno_negative(errno, error)));
+            // RAX tested, the JS taken to the failed path.
+            cmd_straight(file, letters, default, spill, code, jumps, pj, placed, page, λ s => LinuxRuns(io, rest(True, totals), s),
+                runs_back(rest(True, totals)), l_open_js(), refl, 2, vars, state, rip_is, Exists(frame, ⟨memory_is, holds⟩),
+                ⟨λ _ after at framed _ => failed_runs(file, letters, default, spill, code, jumps, pj, placed, mask, width, n, c19, c20, rest, totals, goes,
+                    framed.witness, vars, framed.proof.right, failed, values, at19, at20, page, after, framed.proof.left,
+                    trans(at, cmd_lands(l_open_test(), 6, t_failed(), ca(l_failed()), cmd_j_open_js()))),
+                 λ no => absurd(trans(sym(no), set))⟩)
         },
     }
 }

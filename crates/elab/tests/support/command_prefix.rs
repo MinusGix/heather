@@ -57,6 +57,7 @@ pub const COMMAND_PREFIX: &[(&str, &str)] = &[
     ("elf64_command_events", include_str!("../../../../lib/elf64_command_events.hthr")),
     ("elf64_command_output", include_str!("../../../../lib/elf64_command_output.hthr")),
     ("elf64_frame", include_str!("../../../../lib/elf64_frame.hthr")),
+    ("elf64_straight", include_str!("../../../../lib/elf64_straight.hthr")),
     ("elf64_row_fields", include_str!("../../../../lib/elf64_row_fields.hthr")),
     ("elf64_command", include_str!("../../../../lib/elf64_command.hthr")),
 ];

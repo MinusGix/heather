@@ -117,6 +117,11 @@ The loop's head and cursor store (`operand_head`, `cursor_store_runs`,
 (`total_runs`, `total_rows`). The spill block is an `x86_64_asm` program
 (`lsp_*`), so the command has no `layout_code` left.
 
+Since moved again, onto one computed stretch each
+(`docs/native-straight-runs-design.md`): the loop's last-operand test
+(`loop_last`, absorbing `cursor_store_runs` and `last_tested_runs`),
+`operand_head`, `stdin_path`, `open_back` and `failed_runs`.
+
 ## Not yet moved
 
 - The dash and ahead tests (`ByteTested`, `jne_open`, `dash_second`,

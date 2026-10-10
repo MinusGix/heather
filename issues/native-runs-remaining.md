@@ -34,3 +34,7 @@ before; `build-x86` of wc writes the same bytes.
 - **[[native-symbolic-execution-step]]** owns generating these chains.
   Assumed here: nothing; this work is by hand and is what that step would
   emit.
+
+## Log
+
+- 2026-10-10: **Five phases moved onto `cmd_straight` instead** ([[native-symbolic-execution-step]], `docs/native-straight-runs-design.md`): `loop_last` (absorbing `cursor_store_runs`, `last_tested_runs`, `last_test_block`), `operand_head`, `stdin_path`, `open_back` and `failed_runs`. Their `Runs` chains are now one call each, which states no middle predicate. `closes_runs` stays on the rules: a system call ends a stretch, and its JCCs sit on both sides of the call. The phases this issue lists as not yet moved are unchanged.

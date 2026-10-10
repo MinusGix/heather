@@ -27,6 +27,8 @@ import x86_64_block;
 import x86_64_fetch;
 import x86_64_fetched_code;
 import x86_64_layout;
+import x86_64_data_read;
+import x86_64_store;
 import bitvec;
 import bool;
 import list;
@@ -36,8 +38,13 @@ import nat;
 inductive Asm {
     // An instruction block: its length is its instructions' summed.
     Block(instructions: List<Instruction>),
-    // Bytes short enough to read their length off: a store, a syscall.
+    // Bytes short enough to read their length off: a syscall, a byte
+    // store.
     Code(bytes: List<BitVec(8)>),
+    // A word loaded and a word stored: bytes as `Code`, with what they do,
+    // so a run over them can be computed (lib/elf64_frame.hthr, `go_runs`).
+    Load(load: WordLoad),
+    Store(store: WordStore),
     // A near JCC or JMP to the label named `target`.
     Jcc(cc: ConditionCode, target: Nat),
     Jmp(target: Nat),
@@ -75,6 +82,8 @@ fn asm_len(item: Asm) → Nat {
     match item {
         Block(instructions) => block_length(instructions),
         Code(bytes) => bytes.len(),
+        Load(load) => word_load_bytes(load).len(),
+        Store(_) => 3,
         Jcc(_, _) => 6,
         Jmp(_) => 5,
         Piece(_, len, _) => len,
@@ -97,6 +106,8 @@ fn asm_bytes(fills: Nat → List<BitVec(8)>, labels: Nat → Nat, here: Nat, ite
     match item {
         Block(instructions) => canonical_block_bytes(instructions),
         Code(bytes) => bytes,
+        Load(load) => word_load_bytes(load),
+        Store(store) => word_store_bytes(store),
         Jcc(cc, target) => near_control_bytes(JumpIfNear(cc, near_rel(here + 6, labels(target)))),
         Jmp(target) => near_control_bytes(JumpNear(near_rel(here + 5, labels(target)))),
         Piece(bytes, _, _) => bytes,
@@ -197,6 +208,8 @@ theorem fills_fit_before(fills: Nat → List<BitVec(8)>, before: Prog, name: Nat
     (match item as λ it => FillsFit(At(before, name, it), fills) → FillsFit(before, fills) {
         Block(_) => λ f => f,
         Code(_) => λ f => f,
+        Load(_) => λ f => f,
+        Store(_) => λ f => f,
         Jcc(_, _) => λ f => f,
         Jmp(_) => λ f => f,
         Piece(_, _, _) => λ f => f,
@@ -209,6 +222,8 @@ theorem asm_bytes_len(fills: Nat → List<BitVec(8)>, labels: Nat → Nat, here:
     (match item as λ it => FillsFit(At(before, name, it), fills) → asm_bytes(fills, labels, here, it).len() = asm_len(it) {
         Block(instructions) => λ _ => block_length_is(instructions),
         Code(_) => λ _ => refl,
+        Load(_) => λ _ => refl,
+        Store(_) => λ _ => refl,
         Jcc(_, _) => λ _ => refl,
         Jmp(_) => λ _ => refl,
         Piece(_, _, measured) => λ _ => measured,
@@ -270,6 +285,38 @@ theorem asm_last_resident<M>(fetch: FetchAccess<M>, memory: M, origin: BitVec(64
     let after = resident_split_at(fetch, memory, asm_code(fills, labels, p), last, origin, 0, resident).right;
     j(trans(Nat::add_left_zero(asm_code(fills, labels, p).len()), asm_code_len(fills, labels, p, fits)),
         λ n _ => CodeResident(fetch, memory, last, next_rip(origin, n)), after)
+}
+
+// The code up to a label and the code after it: a label's code starts the
+// program's, so what is resident for the program is for the label's chain.
+fn asm_code_after(fills: Nat → List<BitVec(8)>, labels: Nat → Nat, p: Prog, k: Nat) → List<BitVec(8)> {
+    match k {
+        Zero => Nil,
+        Succ(j) => match p { Start => Nil, At(before, _, item) => asm_code_after(fills, labels, before, j) ++ asm_bytes(fills, labels, prog_len(before), item) },
+    }
+}
+theorem asm_code_back(fills: Nat → List<BitVec(8)>, labels: Nat → Nat, k: Nat): (p: Prog) →
+    asm_code(fills, labels, p) = asm_code(fills, labels, asm_back(p, k)) ++ asm_code_after(fills, labels, p, k) {
+    match k {
+        Zero => λ p => sym(List::append_nil(asm_code(fills, labels, p))),
+        Succ(j) => λ p => match p as λ x => asm_code(fills, labels, x) = asm_code(fills, labels, asm_back(x, Succ(j))) ++ asm_code_after(fills, labels, x, Succ(j)) {
+            Start => refl,
+            At(before, _, item) => {
+                let bytes = asm_bytes(fills, labels, prog_len(before), item);
+                trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ c => c ++ bytes, asm_code_back(fills, labels, j, before)),
+                    List::append_assoc(asm_code(fills, labels, asm_back(before, j)), asm_code_after(fills, labels, before, j), bytes))
+            },
+        },
+    }
+}
+theorem fills_fit_back(fills: Nat → List<BitVec(8)>, k: Nat): (p: Prog) → FillsFit(p, fills) → FillsFit(asm_back(p, k), fills) {
+    match k {
+        Zero => λ p fits => fits,
+        Succ(j) => λ p => match p as λ x => FillsFit(x, fills) → FillsFit(asm_back(x, Succ(j)), fills) {
+            Start => λ fits => fits,
+            At(before, name, item) => λ fits => fills_fit_back(fills, j, before, fills_fit_before(fills, before, name, item, fits)),
+        },
+    }
 }
 
 // The code's length: the program's, and the last piece's.
