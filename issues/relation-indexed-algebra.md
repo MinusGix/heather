@@ -3,7 +3,7 @@ title: Make algebraic theories generic over their equality relation
 status: open
 labels: [stdlib,mathematics,algebra,setoids,design]
 created: 2026-09-04
-updated: 2026-09-05
+updated: 2026-10-10
 ---
 
 Decision: reusable algebraic theory should be relation-indexed. The current
@@ -116,3 +116,4 @@ style. **[[algebraic-theory-composition]]** owns its underlying dictionary rules
 - 2026-09-04: **[[manual-mergeable-round]]** completed with a checked showcase and full-suite validation; the full identity-hierarchy migration remains open here.
 - 2026-09-04: Recorded the user-preferred individual-law instance authoring style and explicit composite assembly; generic migration remains a follow-up probe.
 - 2026-09-05: [[positive-subtype-manual-round]] adds the relation-indexed Semigroup composition and makes Mergeable extend it; the positive-natural customer reuses its laws through value-based comparison.
+- 2026-10-10: `Rat` (lib/std/rat.hthr) registers `Semigroup` and `Commutative` from `algebra_rel` for both `+` and `*` modulo `Rat::Same`. It is the first concrete arithmetic carrier of the relation-indexed hierarchy. A relation-indexed monoid, group or ring would let it state units and inverses as instances too.
