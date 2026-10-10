@@ -1354,10 +1354,14 @@ impl application::ImplicitApplicationElab for Elaborator {
             // §3). Spelled, not decoded: decoding reduces `0 < 0` to `False`,
             // which hides the goal the caller asked for. Operator notation in
             // it is issues/diagnostic-operator-resugaring.md's. Spelled only
-            // here, on failure: a resolved goal never needs it.
+            // here, on failure: a resolved goal never needs it. Which kind
+            // the goal was is the search's own verdict, its outermost
+            // `no-class` record (a class goal arrives in spellings the
+            // display path cannot classify).
             None => Err(ElabError::Resolution {
-                goal: if self.tag_of(&goal).is_none()
-                    && let Some(spelled) = self.spell_type_clean(cx, &goal)
+                goal: if trace.first().is_some_and(|top| {
+                    trace.iter().any(|l| l.key == "no-class" && l.depth == top.depth)
+                }) && let Some(spelled) = self.spell_type_clean(cx, &goal)
                 {
                     spelled
                 } else {
