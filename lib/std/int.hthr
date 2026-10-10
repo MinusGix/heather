@@ -603,6 +603,28 @@ theorem Int::mul_assoc(self a, b, c: Int): (a * b) * c = a * (b * c) {
     }
 }
 
+// The two rearrangements cross-multiplication keeps needing (`std/rat`);
+// `Nat::mul_shuffle` is the second one's natural-number twin.
+theorem Int::mul_right_comm(self a, b, c: Int): (a * b) * c = (a * c) * b {
+    calc {
+        (a * b) * c
+            = a * (b * c) := a.mul_assoc(b, c),
+            = a * (c * b) := cong(b.mul_comm(c)),
+            = (a * c) * b := sym(a.mul_assoc(c, b)),
+    }
+}
+
+theorem Int::mul_shuffle(self a, b, c, d: Int): (a * b) * (c * d) = (a * c) * (b * d) {
+    calc {
+        (a * b) * (c * d)
+            = a * (b * (c * d)) := a.mul_assoc(b, c * d),
+            = a * ((b * c) * d) := cong(sym(b.mul_assoc(c, d))),
+            = a * ((c * b) * d) := cong(b.mul_comm(c)),
+            = a * (c * (b * d)) := cong(c.mul_assoc(b, d)),
+            = (a * c) * (b * d) := sym(a.mul_assoc(c, b * d)),
+    }
+}
+
 // ---------------------------------------------------------------------------
 
 theorem Int::ofNat_add(m, n: Nat): OfNat(m + n) = OfNat(m) + OfNat(n) {

@@ -1,0 +1,523 @@
+// Rationals as unreduced fractions: the first serious setoid customer
+// (issues/positive-naturals-and-rationals.md, issues/setoid-core-api.md;
+// docs/setoid-rationals-round.md).
+//
+// A rational is an integer numerator over a `Pos` denominator. Nothing is
+// ever reduced: no gcd, no normal form, no non-structural recursion. The
+// mathematical equality is `Rat::Same`, cross-multiplication, written `≈`;
+// representation identity `=` stays available and is strictly finer (1/2 and
+// 2/4 are `≈` but not `=`). Every operation is defined on representatives and
+// then proved to respect `≈`, and every law is stated modulo `≈`, so clients
+// rewrite with `calc { … ≈ … }` and `rel_cong` exactly as over finite sets.
+
+import logic;
+import nat;
+import int;
+import omega;
+import pos;
+import relation_props;
+import algebra_rel;
+
+record Rat { num: Int, den: Pos }
+
+fn Rat::Same(x, y: Rat) → Type { x.num * y.den.int() = y.num * x.den.int() }
+
+designation ≈ at Rat := Rat::Same
+
+theorem Rat::same_refl(x: Rat): x ≈ x { refl }
+
+theorem Rat::same_sym(x, y: Rat, h: x ≈ y): y ≈ x { sym(h) }
+
+// a/p ≈ b/q and b/q ≈ c/r give a/p ≈ c/r: multiply the goal by q, move the
+// factors round with the two hypotheses, and cancel q (positive by
+// construction).
+theorem Rat::same_trans(x, y, z: Rat, hxy: x ≈ y, hyz: y ≈ z): x ≈ z {
+    (x.num * z.den.int()).mul_cancel_pos_r(z.num * x.den.int(), y.den, calc {
+        (x.num * z.den.int()) * y.den.int()
+            = (x.num * y.den.int()) * z.den.int() := x.num.mul_right_comm(z.den.int(), y.den.int()),
+            = (y.num * x.den.int()) * z.den.int() := cong(hxy),
+            = (y.num * z.den.int()) * x.den.int() := y.num.mul_right_comm(x.den.int(), z.den.int()),
+            = (z.num * y.den.int()) * x.den.int() := cong(hyz),
+            = (z.num * x.den.int()) * y.den.int() := z.num.mul_right_comm(y.den.int(), x.den.int()),
+    })
+}
+
+instance Equivalence<Rat>(Rat::Same) {
+    rel_refl := Rat::same_refl,
+    rel_sym := Rat::same_sym,
+    rel_trans := Rat::same_trans,
+}
+
+// Two representations with the same numerator and the same denominator value
+// are the same number; this is the bridge every identity-shaped law crosses.
+theorem Rat::same_of_parts(x, y: Rat, num: x.num = y.num, den: x.den.int() = y.den.int()):
+    x ≈ y
+{
+    calc {
+        x.num * y.den.int()
+            = y.num * y.den.int() := cong(num),
+            = y.num * x.den.int() := cong(sym(den)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Arithmetic. Each operation is defined on representatives and then shown to
+// respect `≈`; nothing reduces a fraction.
+
+fn Rat::ofInt(n: Int) → Rat { Rat(n, Pos::one()) }
+fn Rat::zero() → Rat { Rat::ofInt(OfNat(0)) }
+fn Rat::one() → Rat { Rat::ofInt(OfNat(1)) }
+
+fn Rat::add(self x, y: Rat) → Rat {
+    Rat(x.num * y.den.int() + y.num * x.den.int(), x.den.mul(y.den))
+}
+
+fn Rat::mul(self x, y: Rat) → Rat { Rat(x.num * y.num, x.den.mul(y.den)) }
+
+fn Rat::neg(self x: Rat) → Rat { Rat(-x.num, x.den) }
+
+designation + at Rat := Rat::add
+designation * at Rat := Rat::mul
+designation prefix - at Rat := Rat::neg
+
+theorem Rat::neg_respects(x, x2: Rat, hx: x ≈ x2): Rat::neg(x) ≈ Rat::neg(x2) {
+    calc {
+        (-x.num) * x2.den.int()
+            = -(x.num * x2.den.int()) := x.num.mul_neg_l(x2.den.int()),
+            = -(x2.num * x.den.int()) := cong(hx),
+            = (-x2.num) * x.den.int() := sym(x2.num.mul_neg_l(x.den.int())),
+    }
+}
+
+theorem Rat::mul_respects(x, x2: Rat, hx: x ≈ x2, y, y2: Rat, hy: y ≈ y2):
+    x * y ≈ x2 * y2
+{
+    calc {
+        (x.num * y.num) * x2.den.mul(y2.den).int()
+            = (x.num * y.num) * (x2.den.int() * y2.den.int()) := cong(x2.den.mul_int(y2.den)),
+            = (x.num * x2.den.int()) * (y.num * y2.den.int()) := x.num.mul_shuffle(y.num, x2.den.int(), y2.den.int()),
+            = (x2.num * x.den.int()) * (y.num * y2.den.int()) := cong(hx),
+            = (x2.num * x.den.int()) * (y2.num * y.den.int()) := cong(hy),
+            = (x2.num * y2.num) * (x.den.int() * y.den.int()) := x2.num.mul_shuffle(x.den.int(), y2.num, y.den.int()),
+            = (x2.num * y2.num) * x.den.mul(y.den).int() := cong(sym(x.den.mul_int(y.den))),
+    }
+}
+
+// One summand of `add_respects`: a·q moved across the other side's
+// denominators. With P, Q the denominators of x, y and primes for x2, y2:
+// (a·Q)·(P'·Q') = (a'·Q')·(P·Q) whenever a·P' = a'·P.
+theorem Rat::cross_term(a, p, q, a2, p2, q2: Int, h: a * p2 = a2 * p):
+    (a * q) * (p2 * q2) = (a2 * q2) * (p * q)
+{
+    calc {
+        (a * q) * (p2 * q2)
+            = (a * p2) * (q * q2) := a.mul_shuffle(q, p2, q2),
+            = (a2 * p) * (q * q2) := cong(h),
+            = (a2 * p) * (q2 * q) := cong(q.mul_comm(q2)),
+            = (a2 * q2) * (p * q) := a2.mul_shuffle(p, q2, q),
+    }
+}
+
+theorem Rat::add_respects(x, x2: Rat, hx: x ≈ x2, y, y2: Rat, hy: y ≈ y2):
+    x + y ≈ x2 + y2
+{
+    let p = x.den.int();
+    let q = y.den.int();
+    let p2 = x2.den.int();
+    let q2 = y2.den.int();
+    calc {
+        (x.num * q + y.num * p) * x2.den.mul(y2.den).int()
+            = (x.num * q + y.num * p) * (p2 * q2) := cong(x2.den.mul_int(y2.den)),
+            = (x.num * q) * (p2 * q2) + (y.num * p) * (p2 * q2)
+                := (x.num * q).add_mul_distr(y.num * p, p2 * q2),
+            = (x2.num * q2) * (p * q) + (y.num * p) * (p2 * q2)
+                := cong(Rat::cross_term(x.num, p, q, x2.num, p2, q2, hx)),
+            = (x2.num * q2) * (p * q) + (y.num * p) * (q2 * p2) := cong(p2.mul_comm(q2)),
+            = (x2.num * q2) * (p * q) + (y2.num * p2) * (q * p)
+                := cong(Rat::cross_term(y.num, q, p, y2.num, q2, p2, hy)),
+            = (x2.num * q2) * (p * q) + (y2.num * p2) * (p * q) := cong(q.mul_comm(p)),
+            = (x2.num * q2 + y2.num * p2) * (p * q)
+                := sym((x2.num * q2).add_mul_distr(y2.num * p2, p * q)),
+            = (x2.num * q2 + y2.num * p2) * x.den.mul(y.den).int() := cong(sym(x.den.mul_int(y.den))),
+    }
+}
+
+instance Respects2<Rat, Rat, Rat>(Rat::Same, Rat::Same, Rat::Same, Rat::add) {
+    respects2 := Rat::add_respects,
+}
+
+instance Respects2<Rat, Rat, Rat>(Rat::Same, Rat::Same, Rat::Same, Rat::mul) {
+    respects2 := Rat::mul_respects,
+}
+
+// ---------------------------------------------------------------------------
+// The field-facing laws, modulo `≈`. Identity-shaped laws cross
+// `same_of_parts`; distributivity is the one that needs cross-multiplication.
+
+theorem Rat::add_comm(x, y: Rat): x + y ≈ y + x {
+    Rat::same_of_parts(x + y, y + x,
+        (x.num * y.den.int()).add_comm(y.num * x.den.int()),
+        x.den.mul_comm_int(y.den))
+}
+
+theorem Rat::mul_comm(x, y: Rat): x * y ≈ y * x {
+    Rat::same_of_parts(x * y, y * x, x.num.mul_comm(y.num), x.den.mul_comm_int(y.den))
+}
+
+theorem Rat::mul_assoc(x, y, z: Rat): (x * y) * z ≈ x * (y * z) {
+    Rat::same_of_parts((x * y) * z, x * (y * z),
+        x.num.mul_assoc(y.num, z.num), x.den.mul_assoc_int(y.den, z.den))
+}
+
+// Expand both numerators, match the three monomials, and let Omega do the
+// linear bookkeeping over them as atoms.
+theorem Rat::add_assoc(x, y, z: Rat): (x + y) + z ≈ x + (y + z) {
+    let a = x.num;
+    let c = y.num;
+    let e = z.num;
+    let p = x.den.int();
+    let q = y.den.int();
+    let r = z.den.int();
+    let pq = x.den.mul_int(y.den);
+    let qr = y.den.mul_int(z.den);
+    let left = (a * q).add_mul_distr(c * p, r);
+    let right = (c * r).add_mul_distr(e * q, p);
+    let m1 = a.mul_assoc(q, r);
+    let m2 = c.mul_right_comm(p, r);
+    let m3 = calc {
+        e * (p * q)
+            = e * (q * p) := cong(p.mul_comm(q)),
+            = (e * q) * p := sym(e.mul_assoc(q, p)),
+    };
+    let e1: (e * x.den.mul(y.den).int() = e * (p * q)) = cong(pq);
+    let a1: (a * y.den.mul(z.den).int() = a * (q * r)) = cong(qr);
+    let num: ((a * q + c * p) * r + e * x.den.mul(y.den).int()
+        = a * y.den.mul(z.den).int() + (c * r + e * q) * p) = omega;
+    Rat::same_of_parts((x + y) + z, x + (y + z), num, x.den.mul_assoc_int(y.den, z.den))
+}
+
+theorem Rat::add_zero(x: Rat): x + Rat::zero() ≈ x {
+    let num: (x.num * OfNat(1) + OfNat(0) * x.den.int() = x.num) = omega;
+    Rat::same_of_parts(x + Rat::zero(), x, num, x.den.mul_one_int())
+}
+
+theorem Rat::mul_one(x: Rat): x * Rat::one() ≈ x {
+    let num: (x.num * OfNat(1) = x.num) = omega;
+    Rat::same_of_parts(x * Rat::one(), x, num, x.den.mul_one_int())
+}
+
+theorem Rat::add_neg(x: Rat): x + Rat::neg(x) ≈ Rat::zero() {
+    let flip = x.num.mul_neg_l(x.den.int());
+    let gone = Int::zero_mul(x.den.mul(x.den).int());
+    let goal: ((x.num * x.den.int() + (-x.num) * x.den.int()) * OfNat(1)
+        = OfNat(0) * x.den.mul(x.den).int()) = omega;
+    goal
+}
+
+// The seven-factor monomial distributivity needs on each side.
+theorem Rat::distr_monomial(a, c, r, p, q: Int):
+    (a * (c * r)) * ((p * q) * (p * r)) = ((a * c) * (p * r)) * (p * (q * r))
+{
+    calc {
+        (a * (c * r)) * ((p * q) * (p * r))
+            = ((a * c) * r) * ((p * q) * (p * r)) := cong(sym(a.mul_assoc(c, r))),
+            = ((a * c) * r) * ((p * r) * (p * q)) := cong((p * q).mul_comm(p * r)),
+            = ((a * c) * (p * r)) * (r * (p * q)) := (a * c).mul_shuffle(r, p * r, p * q),
+            = ((a * c) * (p * r)) * ((p * q) * r) := cong(r.mul_comm(p * q)),
+            = ((a * c) * (p * r)) * (p * (q * r)) := cong(p.mul_assoc(q, r)),
+    }
+}
+
+theorem Rat::mul_add_distr(x, y, z: Rat): x * (y + z) ≈ x * y + x * z {
+    let a = x.num;
+    let c = y.num;
+    let e = z.num;
+    let p = x.den.int();
+    let q = y.den.int();
+    let r = z.den.int();
+    let first = Rat::distr_monomial(a, c, r, p, q);
+    // The second monomial is the first with (c, r) and (e, q) exchanged.
+    let second = calc {
+        (a * (e * q)) * ((p * q) * (p * r))
+            = (a * (e * q)) * ((p * r) * (p * q)) := cong((p * q).mul_comm(p * r)),
+            = ((a * e) * (p * q)) * (p * (r * q)) := Rat::distr_monomial(a, e, q, p, r),
+            = ((a * e) * (p * q)) * (p * (q * r)) := cong(r.mul_comm(q)),
+    };
+    let lnum = a.mul_add_distr(c * r, e * q);
+    let lsum = (a * (c * r)).add_mul_distr(a * (e * q), (p * q) * (p * r));
+    let rsum = ((a * c) * (p * r)).add_mul_distr((a * e) * (p * q), p * (q * r));
+    let lden = calc {
+        x.den.mul(y.den.mul(z.den)).int()
+            = p * y.den.mul(z.den).int() := x.den.mul_int(y.den.mul(z.den)),
+            = p * (q * r) := cong(y.den.mul_int(z.den)),
+    };
+    let rden = calc {
+        x.den.mul(y.den).mul(x.den.mul(z.den)).int()
+            = x.den.mul(y.den).int() * x.den.mul(z.den).int() := x.den.mul(y.den).mul_int(x.den.mul(z.den)),
+            = (p * q) * x.den.mul(z.den).int() := cong(x.den.mul_int(y.den)),
+            = (p * q) * (p * r) := cong(x.den.mul_int(z.den)),
+    };
+    let pq = x.den.mul_int(y.den);
+    let pr = x.den.mul_int(z.den);
+    calc {
+        (a * (c * r + e * q)) * x.den.mul(y.den).mul(x.den.mul(z.den)).int()
+            = (a * (c * r + e * q)) * ((p * q) * (p * r)) := cong(rden),
+            = (a * (c * r) + a * (e * q)) * ((p * q) * (p * r)) := cong(lnum),
+            = (a * (c * r)) * ((p * q) * (p * r)) + (a * (e * q)) * ((p * q) * (p * r)) := lsum,
+            = ((a * c) * (p * r)) * (p * (q * r)) + ((a * e) * (p * q)) * (p * (q * r))
+                := omega,
+            = ((a * c) * (p * r) + (a * e) * (p * q)) * (p * (q * r)) := sym(rsum),
+            = ((a * c) * x.den.mul(z.den).int() + (a * e) * (p * q)) * (p * (q * r))
+                := cong(sym(pr)),
+            = ((a * c) * x.den.mul(z.den).int() + (a * e) * x.den.mul(y.den).int()) * (p * (q * r))
+                := cong(sym(pq)),
+            = ((a * c) * x.den.mul(z.den).int() + (a * e) * x.den.mul(y.den).int())
+                * x.den.mul(y.den.mul(z.den)).int() := cong(sym(lden)),
+    }
+}
+
+instance Semigroup<Rat>(Rat::Same, Rat::add) {
+    assoc := Rat::add_assoc,
+}
+
+instance Commutative<Rat>(Rat::Same, Rat::add) {
+    comm := Rat::add_comm,
+}
+
+instance Semigroup<Rat>(Rat::Same, Rat::mul) {
+    assoc := Rat::mul_assoc,
+}
+
+instance Commutative<Rat>(Rat::Same, Rat::mul) {
+    comm := Rat::mul_comm,
+}
+
+// ---------------------------------------------------------------------------
+// Order
+
+fn Rat::Le(x, y: Rat) → Type { x.num * y.den.int() <= y.num * x.den.int() }
+
+designation <= at Rat := Rat::Le
+
+theorem Rat::le_of_same(x, y: Rat, h: x ≈ y): x <= y {
+    j(h, λ right q => x.num * y.den.int() <= right, (x.num * y.den.int()).le_refl())
+}
+
+theorem Rat::le_refl(x: Rat): x <= x { Rat::le_of_same(x, x, Rat::same_refl(x)) }
+
+theorem Rat::le_trans(x, y, z: Rat, hxy: x <= y, hyz: y <= z): x <= z {
+    let p = x.den.int();
+    let q = y.den.int();
+    let r = z.den.int();
+    let first = (x.num * q).mul_le_mono_r(y.num * p, r, hxy, trivial);
+    let second = (y.num * r).mul_le_mono_r(z.num * q, p, hyz, trivial);
+    let m1 = x.num.mul_right_comm(r, q);
+    let m2 = y.num.mul_right_comm(p, r);
+    let m3 = z.num.mul_right_comm(q, p);
+    (x.num * r).mul_le_cancel_pos_r(z.num * p, y.den, omega)
+}
+
+theorem Rat::le_antisymm(x, y: Rat, hxy: x <= y, hyx: y <= x): x ≈ y {
+    (x.num * y.den.int()).le_antisym(y.num * x.den.int(), hxy, hyx)
+}
+
+theorem Rat::le_total(x, y: Rat): x <= y ∨ y <= x {
+    (x.num * y.den.int()).le_total(y.num * x.den.int())
+}
+
+theorem Rat::le_respects(x, x2: Rat, hx: x ≈ x2, y, y2: Rat, hy: y ≈ y2, h: x <= y): x2 <= y2 {
+    Rat::le_trans(x2, y, y2,
+        Rat::le_trans(x2, x, y, Rat::le_of_same(x2, x, Rat::same_sym(x, x2, hx)), h),
+        Rat::le_of_same(y, y2, hy))
+}
+
+// Adding on the right preserves order. Both sides expand to two monomials;
+// the z-terms agree outright and the x/y terms compare by `h` scaled by r·r.
+theorem Rat::add_le_mono_r(x, y, z: Rat, h: x <= y): x + z <= y + z {
+    let a = x.num;
+    let c = y.num;
+    let e = z.num;
+    let p = x.den.int();
+    let q = y.den.int();
+    let r = z.den.int();
+    let pr = x.den.mul_int(z.den);
+    let qr = y.den.mul_int(z.den);
+    let scaled = (a * q).mul_le_mono_r(c * p, r * r, h, trivial);
+    let left = (a * r).add_mul_distr(e * p, q * r);
+    let right = (c * r).add_mul_distr(e * q, p * r);
+    let ml = a.mul_shuffle(r, q, r);
+    let mr = c.mul_shuffle(r, p, r);
+    let ez = e.mul_shuffle(p, q, r);
+    let gl: ((a * r + e * p) * y.den.mul(z.den).int() = (a * r + e * p) * (q * r)) = cong(qr);
+    let gr: ((c * r + e * q) * x.den.mul(z.den).int() = (c * r + e * q) * (p * r)) = cong(pr);
+    let goal: ((a * r + e * p) * y.den.mul(z.den).int() <= (c * r + e * q) * x.den.mul(z.den).int())
+        = omega;
+    goal
+}
+
+theorem Rat::mul_nonneg(x, y: Rat, hx: Rat::zero() <= x, hy: Rat::zero() <= y): Rat::zero() <= x * y {
+    let hx2: (OfNat(0) * x.den.int() <= x.num * OfNat(1)) = hx;
+    let hy2: (OfNat(0) * y.den.int() <= y.num * OfNat(1)) = hy;
+    let zx = Int::zero_mul(x.den.int());
+    let zy = Int::zero_mul(y.den.int());
+    let ha: (OfNat(0) <= x.num) = omega;
+    let hb: (OfNat(0) <= y.num) = omega;
+    let prod = OfNat(0).mul_le_mono_r(x.num, y.num, ha, hb);
+    let zero = Int::zero_mul(y.num);
+    let goal: (OfNat(0) * x.den.mul(y.den).int() <= (x.num * y.num) * OfNat(1)) = omega;
+    goal
+}
+
+// ---------------------------------------------------------------------------
+// The integers inside the rationals.
+
+theorem Rat::ofInt_add(m, n: Int): Rat::ofInt(m + n) ≈ Rat::ofInt(m) + Rat::ofInt(n) {
+    let goal: ((m + n) * OfNat(1) = (m * OfNat(1) + n * OfNat(1)) * OfNat(1)) = omega;
+    goal
+}
+
+theorem Rat::ofInt_mul(m, n: Int): Rat::ofInt(m * n) ≈ Rat::ofInt(m) * Rat::ofInt(n) { refl }
+
+theorem Rat::ofInt_inj(m, n: Int, h: Rat::ofInt(m) ≈ Rat::ofInt(n)): m = n {
+    let spelled: (m * OfNat(1) = n * OfNat(1)) = h;
+    omega
+}
+
+theorem Rat::ofInt_le(m, n: Int, h: m <= n): Rat::ofInt(m) <= Rat::ofInt(n) {
+    let goal: (m * OfNat(1) <= n * OfNat(1)) = omega;
+    goal
+}
+
+// ---------------------------------------------------------------------------
+// Inverse. Total, with 0⁻¹ = 0; the field law asks for a nonzero argument.
+// The numerator's sign moves to the new numerator, its magnitude becomes the
+// new (positive) denominator.
+
+fn Rat::inv_parts(a: Int, d: Pos) → Rat {
+    match a {
+        OfNat(n) => match n {
+            Zero => Rat::zero(),
+            Succ(k) => Rat(d.int(), Pos(k)),
+        },
+        NegSucc(k) => Rat(-d.int(), Pos(k)),
+    }
+}
+
+fn Rat::inv(self x: Rat) → Rat { Rat::inv_parts(x.num, x.den) }
+
+theorem Rat::mul_inv_parts(a: Int, d: Pos):
+    ¬(Rat(a, d) ≈ Rat::zero()) → Rat(a, d) * Rat::inv_parts(a, d) ≈ Rat::one()
+{
+    match a {
+        OfNat(n) => match n {
+            Zero => λ nonzero => false_elim(nonzero(sym(Int::zero_mul(d.int())))),
+            Succ(k) => λ nonzero => {
+                let den = d.mul_int(Pos(k));
+                let swap = OfNat(Succ(k)).mul_comm(d.int());
+                let goal: ((OfNat(Succ(k)) * d.int()) * OfNat(1) = OfNat(1) * d.mul(Pos(k)).int()) = omega;
+                goal
+            },
+        },
+        NegSucc(k) => λ nonzero => {
+            let den = d.mul_int(Pos(k));
+            let flip = NegSucc(k).mul_neg_r(d.int());
+            let sign = OfNat(Succ(k)).mul_neg_l(d.int());
+            let swap = OfNat(Succ(k)).mul_comm(d.int());
+            let goal: ((NegSucc(k) * -d.int()) * OfNat(1) = OfNat(1) * d.mul(Pos(k)).int()) = omega;
+            goal
+        },
+    }
+}
+
+theorem Rat::mul_inv(x: Rat, nonzero: ¬(x ≈ Rat::zero())): x * x.inv() ≈ Rat::one() {
+    Rat::mul_inv_parts(x.num, x.den, nonzero)
+}
+
+// Signs of a numerator scaled by a denominator; the mixed-sign cases of
+// `inv_respects` are contradictions between these.
+theorem Rat::succ_times_pos(k: Nat, p: Pos): OfNat(1) <= OfNat(Succ(k)) * p.int() { trivial }
+
+theorem Rat::negsucc_times_pos(k: Nat, p: Pos): NegSucc(k) * p.int() <= NegSucc(0) { trivial }
+
+// Inverse respects `≈`. Equal fractions have numerators of one sign, so the
+// mixed cases contradict the hypothesis; the zero cases are both zero; the
+// same-sign cases are the hypothesis read backwards.
+theorem Rat::inv_parts_respects(a: Int, p: Pos, c: Int, q: Pos):
+    Rat(a, p) ≈ Rat(c, q) → Rat::inv_parts(a, p) ≈ Rat::inv_parts(c, q)
+{
+    match a {
+        OfNat(n) => match n {
+            Zero => match c {
+                OfNat(m) => match m {
+                    Zero => λ h => refl,
+                    Succ(j) => λ h => {
+                        let cross: (OfNat(0) * q.int() = OfNat(Succ(j)) * p.int()) = h;
+                        let zero = Int::zero_mul(q.int());
+                        let sign = Rat::succ_times_pos(j, p);
+                        false_elim(omega)
+                    },
+                },
+                NegSucc(j) => λ h => {
+                    let cross: (OfNat(0) * q.int() = NegSucc(j) * p.int()) = h;
+                    let zero = Int::zero_mul(q.int());
+                    let sign = Rat::negsucc_times_pos(j, p);
+                    false_elim(omega)
+                },
+            },
+            Succ(k) => match c {
+                OfNat(m) => match m {
+                    Zero => λ h => {
+                        let cross: (OfNat(Succ(k)) * q.int() = OfNat(0) * p.int()) = h;
+                        let zero = Int::zero_mul(p.int());
+                        let sign = Rat::succ_times_pos(k, q);
+                        false_elim(omega)
+                    },
+                    Succ(j) => λ h => {
+                        let cross: (OfNat(Succ(k)) * q.int() = OfNat(Succ(j)) * p.int()) = h;
+                        let left = p.int().mul_comm(OfNat(Succ(j)));
+                        let right = q.int().mul_comm(OfNat(Succ(k)));
+                        let goal: (p.int() * OfNat(Succ(j)) = q.int() * OfNat(Succ(k))) = omega;
+                        goal
+                    },
+                },
+                NegSucc(j) => λ h => {
+                    let cross: (OfNat(Succ(k)) * q.int() = NegSucc(j) * p.int()) = h;
+                    let left = Rat::succ_times_pos(k, q);
+                    let right = Rat::negsucc_times_pos(j, p);
+                    false_elim(omega)
+                },
+            },
+        },
+        NegSucc(k) => match c {
+            OfNat(m) => match m {
+                Zero => λ h => {
+                    let cross: (NegSucc(k) * q.int() = OfNat(0) * p.int()) = h;
+                    let zero = Int::zero_mul(p.int());
+                    let sign = Rat::negsucc_times_pos(k, q);
+                    false_elim(omega)
+                },
+                Succ(j) => λ h => {
+                    let cross: (NegSucc(k) * q.int() = OfNat(Succ(j)) * p.int()) = h;
+                    let left = Rat::negsucc_times_pos(k, q);
+                    let right = Rat::succ_times_pos(j, p);
+                    false_elim(omega)
+                },
+            },
+            NegSucc(j) => λ h => {
+                let cross: (NegSucc(k) * q.int() = NegSucc(j) * p.int()) = h;
+                let lsign = OfNat(Succ(k)).mul_neg_l(q.int());
+                let rsign = OfNat(Succ(j)).mul_neg_l(p.int());
+                let lneg = p.int().mul_neg_l(OfNat(Succ(j)));
+                let rneg = q.int().mul_neg_l(OfNat(Succ(k)));
+                let left = p.int().mul_comm(OfNat(Succ(j)));
+                let right = q.int().mul_comm(OfNat(Succ(k)));
+                let goal: ((-p.int()) * OfNat(Succ(j)) = (-q.int()) * OfNat(Succ(k))) = omega;
+                goal
+            },
+        },
+    }
+}
+
+theorem Rat::inv_respects(x, x2: Rat, hx: x ≈ x2): x.inv() ≈ x2.inv() {
+    Rat::inv_parts_respects(x.num, x.den, x2.num, x2.den, hx)
+}

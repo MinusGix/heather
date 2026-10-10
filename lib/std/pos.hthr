@@ -1,0 +1,102 @@
+// Positive naturals, positive by construction (issues/positive-naturals-and-rationals.md).
+//
+// `Pos(pred)` stands for `pred + 1`. No proof field rides along, so two
+// positives are equal exactly when their numbers are, and nothing downstream
+// owes a positivity side condition: a denominator built from `Pos` cannot be
+// zero. `val` and `int` read the number back as a `Nat` or an `Int`; both
+// are `Succ` of the stored predecessor, which is what lets cancellation below
+// take a `Pos` instead of a hypothesis.
+
+import logic;
+import nat;
+import int;
+import omega;
+
+record Pos { pred: Nat }
+
+fn Pos::val(self p: Pos) → Nat { Succ(p.pred) }
+fn Pos::int(self p: Pos) → Int { OfNat(Succ(p.pred)) }
+
+fn Pos::one() → Pos { Pos(0) }
+
+// (p + 1)(q + 1) = (pq + p + q) + 1.
+fn Pos::mul(self p, q: Pos) → Pos { Pos(p.pred * q.pred + p.pred + q.pred) }
+
+// Omega reads neither `val` nor `Pos::mul`, so the goal is restated in the
+// predecessors before it is asked.
+theorem Pos::mul_val(self p, q: Pos): p.mul(q).val() = p.val() * q.val() {
+    let unfold: (Succ(p.pred) * Succ(q.pred) = Succ(p.pred) * q.pred + Succ(p.pred)) = refl;
+    let left = p.pred.mul_succ_left(q.pred);
+    let spelled: (Succ(p.pred * q.pred + p.pred + q.pred) = Succ(p.pred) * Succ(q.pred)) = omega;
+    spelled
+}
+
+theorem Pos::mul_int(self p, q: Pos): p.mul(q).int() = p.int() * q.int() {
+    Int::cong_ofnat(p.mul_val(q))
+}
+
+theorem Pos::mul_comm_int(self p, q: Pos): p.mul(q).int() = q.mul(p).int() {
+    calc {
+        p.mul(q).int()
+            = p.int() * q.int() := p.mul_int(q),
+            = q.int() * p.int() := p.int().mul_comm(q.int()),
+            = q.mul(p).int() := sym(q.mul_int(p)),
+    }
+}
+
+theorem Pos::mul_assoc_int(self p, q, r: Pos): p.mul(q).mul(r).int() = p.mul(q.mul(r)).int() {
+    calc {
+        p.mul(q).mul(r).int()
+            = p.mul(q).int() * r.int() := p.mul(q).mul_int(r),
+            = (p.int() * q.int()) * r.int() := cong(p.mul_int(q)),
+            = p.int() * (q.int() * r.int()) := p.int().mul_assoc(q.int(), r.int()),
+            = p.int() * q.mul(r).int() := cong(sym(q.mul_int(r))),
+            = p.mul(q.mul(r)).int() := sym(p.mul_int(q.mul(r))),
+    }
+}
+
+theorem Pos::mul_one_int(self p: Pos): p.mul(Pos::one()).int() = p.int() {
+    let spelled: (p.pred * 0 + p.pred + 0 = p.pred) = omega;
+    Int::cong_ofnat(Nat::cong_succ(spelled))
+}
+
+// ---------------------------------------------------------------------------
+// Cancelling a positive factor (issues/cancellative-algebra-api.md). The
+// factor is a `Pos`, so the integral-domain side condition is discharged by
+// the type. Both go through order: x < y would make x·p + p ≤ y·p = x·p.
+
+theorem Pos::int_positive(self p: Pos): OfNat(1) <= p.int() { trivial }
+
+theorem Int::mul_cancel_pos_r(self x, y: Int, p: Pos, h: x * p.int() = y * p.int()): x = y {
+    let positive = p.int_positive();
+    match x.lt_trichotomy(y) {
+        Inl(lt) => {
+            let grown = x.isucc().mul_le_mono_r(y, p.int(), lt, trivial);
+            let flip = x.isucc().mul_comm(p.int());
+            let step = p.int().mul_isucc(x);
+            let back = x.mul_comm(p.int());
+            false_elim(omega)
+        },
+        Inr(rest) => match rest {
+            Inl(eq) => eq,
+            Inr(gt) => {
+                let grown = y.isucc().mul_le_mono_r(x, p.int(), gt, trivial);
+                let flip = y.isucc().mul_comm(p.int());
+                let step = p.int().mul_isucc(y);
+                let back = y.mul_comm(p.int());
+                false_elim(omega)
+            },
+        },
+    }
+}
+
+theorem Int::mul_le_cancel_pos_r(self a, b: Int, p: Pos, h: a * p.int() <= b * p.int()): a <= b {
+    let positive = p.int_positive();
+    Int::le_of_not_lt(b, a, λ lt => {
+        let grown = b.isucc().mul_le_mono_r(a, p.int(), lt, trivial);
+        let flip = b.isucc().mul_comm(p.int());
+        let step = p.int().mul_isucc(b);
+        let back = b.mul_comm(p.int());
+        omega
+    })
+}

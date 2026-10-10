@@ -28,6 +28,8 @@ mod lib_std_list;
 mod lib_std_location;
 #[path = "../lib_std_order.rs"]
 mod lib_std_order;
+#[path = "../lib_std_rat.rs"]
+mod lib_std_rat;
 #[path = "../lib_std_relation.rs"]
 mod lib_std_relation;
 #[path = "../lib_std_string.rs"]
