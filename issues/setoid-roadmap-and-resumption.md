@@ -3,7 +3,7 @@ title: Pause setoid expansion until a concrete client drives the next slice
 status: open
 labels: [setoids,planning,backlog]
 created: 2026-09-05
-updated: 2026-09-05
+updated: 2026-10-10
 ---
 
 ## Decision
@@ -60,3 +60,7 @@ The boxed-code/metaprogram implementation remains under [[setoid-auto-lifting]],
 Resume when a real subsystem needs to compare representations or transport an operation/theorem, and its current proof or implementation cost is visible. Possible sources include a compiler transformation, a mathematical representation already needed elsewhere, or an actual collection consumer. Do not build one just to justify this backlog.
 
 At resumption, record the concrete operation/client, chosen relations, observations that must remain valid, current manual proof, and an acceptance measure such as removed proof plumbing or bounded checking cost. Select the smallest coherent subset of this map that helps that client. A successful finite-set showcase does not establish a need for every listed extension.
+
+## Log
+
+- 2026-10-10: Resumed at user direction with rationals as the client (docs/setoid-rationals-round.md). Recorded per "At resumption": the client is unreduced `Rat` (lib/std/rat.hthr) over `Pos` (lib/std/pos.hthr); the relation is cross-multiplication `≈`; the observations that must stay valid are + * - inv ≤ and the `ofInt` embedding, with the denominator proved not to be one; the acceptance measure is a client (docs/showcase/rat_client.hthr) that rewrites with `calc` over `≈` and `rel_cong` and never opens a fraction. The existing setoid tooling needed no change. The cost went to ring rearrangement ([[ring-normalization]]) and omega restatements ([[omega-unfolds-defined-propositions]]). The next native-side client is [[same-defined-state-setoid]], after [[native-straight-code-triples]].

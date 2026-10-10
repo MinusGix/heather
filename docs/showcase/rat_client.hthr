@@ -1,0 +1,77 @@
+// Rationals as a setoid client (docs/setoid-rationals-round.md).
+//
+// The proofs below never look inside a fraction. They use the laws
+// `std/rat` states modulo `≈` and the same relational tools the finite-set
+// client used: `calc` chains over `≈`, whose steps are glued by the
+// `Equivalence<Rat>(Rat::Same)` instance, and `rel_cong`, which lifts a step
+// through the surrounding `+`, `*` or `-` using the registered `Respects2`
+// instances.
+
+import logic;
+import nat;
+import int;
+import list;
+import omega;
+import pos;
+import rat;
+import relation_props;
+import algebra_rel;
+
+// Cancel a pair inside a sum: `rel_cong` carries `y + -y ≈ 0` under `x + _`.
+theorem cancel_inside(x, y: Rat): x + (y + -y) ≈ x {
+    calc {
+        x + (y + -y) ≈ x + Rat::zero() := rel_cong(Rat::add_neg(y)),
+        ≈ x := Rat::add_zero(x),
+    }
+}
+
+// Right distributivity from left distributivity and commutativity, with the
+// last two steps commuting a product inside a sum.
+theorem distr_right(x, y, z: Rat): (x + y) * z ≈ x * z + y * z {
+    calc {
+        (x + y) * z ≈ z * (x + y) := Rat::mul_comm(x + y, z),
+        ≈ z * x + z * y := Rat::mul_add_distr(z, x, y),
+        ≈ x * z + z * y := rel_cong(Rat::mul_comm(z, x)),
+        ≈ x * z + y * z := rel_cong(Rat::mul_comm(z, y)),
+    }
+}
+
+// Division by a nonzero rational undoes multiplication by it.
+theorem mul_inv_cancel(x, y: Rat, nonzero: ¬(x ≈ Rat::zero())): (y * x) * x.inv() ≈ y {
+    calc {
+        (y * x) * x.inv() ≈ y * (x * x.inv()) := Rat::mul_assoc(y, x, x.inv()),
+        ≈ y * Rat::one() := rel_cong(Rat::mul_inv(x, nonzero)),
+        ≈ y := Rat::mul_one(y),
+    }
+}
+
+// Order facts move along `≈` on either side.
+theorem le_across(x, x2, y: Rat, same: x ≈ x2, h: x <= y): x2 <= y + Rat::zero() {
+    Rat::le_respects(x, x2, same, y, y + Rat::zero(),
+        Rat::same_sym(y + Rat::zero(), y, Rat::add_zero(y)), h)
+}
+
+// ---------------------------------------------------------------------------
+// The representation boundary.
+
+fn half() → Rat { Rat(OfNat(1), Pos(1)) }
+fn two_quarters() → Rat { Rat(OfNat(2), Pos(3)) }
+
+// Cross-multiplication decides this by computation: 1·4 = 2·2.
+theorem half_same(): half() ≈ two_quarters() { refl }
+
+// ... while the representations differ.
+theorem half_not_identical(): half() ≠ two_quarters() {
+    λ h => {
+        let nums = list::cong_fn(λ (r: Rat) => r.num, h);
+        let spelled: (OfNat(1) = OfNat(2)) = nums;
+        omega
+    }
+}
+
+// So the denominator is an observation of the representation, not of the
+// number: no theorem can make it respect `≈`.
+theorem den_not_invariant(): ¬((x, y: Rat) → x ≈ y → x.den.val() = y.den.val()) {
+    λ invariant => Nat::succ_ne_zero(0,
+        Nat::succ_inj(1, 0, invariant(Rat(OfNat(2), Pos(1)), Rat(OfNat(1), Pos(0)), refl)))
+}

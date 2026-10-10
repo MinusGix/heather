@@ -3,7 +3,7 @@ title: Add cancellative algebra with explicit side conditions
 status: open
 labels: [stdlib,mathematics,algebra,arithmetic]
 created: 2026-09-02
-updated: 2026-09-02
+updated: 2026-10-10
 ---
 
 Develop left/right additive cancellation and multiplication cancellation under
@@ -24,3 +24,4 @@ controls; avoid proving a hierarchy with no consumer.
 
 - 2026-09-02: Filed because the current integer API has multiplication
   monotonicity but no multiplication-cancellation kit.
+- 2026-10-10: Customer slice from the rationals round. `Int::mul_cancel_pos_r` and `Int::mul_le_cancel_pos_r` (lib/std/pos.hthr) cancel a right factor given as a `Pos`, so the side condition is carried by the type. A `Nat` multiplicative cancellation still does not exist, and neither do left-factor or `≠ 0` forms.

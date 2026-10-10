@@ -3,7 +3,7 @@ title: Add a small relation-indexed setoid core
 status: open
 labels: [stdlib,mathematics,setoids,relations]
 created: 2026-09-02
-updated: 2026-09-04
+updated: 2026-10-10
 ---
 
 Introduce the minimum explicit API for reasoning modulo an equivalence
@@ -38,3 +38,4 @@ mathematical constructions rather than determine their semantics.
   replacement for ordinary identity throughout the library.
 - 2026-09-04: Expanded from the agreed relational-transfer design; implementation remains open.
 - 2026-09-04: **[[manual-mergeable-round]]** implements the shared respectful-function foundation and a membership-based list customer. This does not complete the rational, morphism, or function-valued acceptance owned here.
+- 2026-10-10: The rationals half of the acceptance landed with [[positive-naturals-and-rationals]] (docs/setoid-rationals-round.md). Rational arithmetic respects `≈`, and `den_not_invariant` (docs/showcase/rat_client.hthr) proves that the denominator cannot be an invariant observation. Still open here: morphisms as respectful functions compared pointwise, and a function-valued or proof-bearing representation.
