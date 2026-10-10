@@ -491,6 +491,10 @@ theorem framed_moved(file: IoImage, page: Nat → BitVec(8), vars: Nat → BitVe
     same: after.memory = before.memory, framed: Framed(file, page, vars)(before)): Framed(file, page, vars)(after) {
     Exists(framed.witness, ⟨trans(same, framed.proof.left), framed.proof.right⟩)
 }
+theorem framed_set(file: IoImage, page: Nat → BitVec(8), vars: Nat → BitVec(64), q: Nat, a, b: BitVec(64), same: a = b,
+    state: MachineState<IoMemory>, framed: Framed(file, page, set_var(vars, q, a))(state)): Framed(file, page, set_var(vars, q, b))(state) {
+    j(same, λ w _ => Framed(file, page, set_var(vars, q, w))(state), framed)
+}
 theorem runs_slot_store(file: IoImage, page: Nat → BitVec(8), vars: Nat → BitVec(64), k, q: Nat, inside: q < frame_slots(), source: Gpr,
     block: (frame: Nat → BitVec(8)) → Placed(with_frame(file, frame), canonical_block_bytes(slot_block(q)), eof_rip(k)),
     store: (frame: Nat → BitVec(8)) → Placed(with_frame(file, frame), word_store_bytes(WordStore(base := R11, source := source)), eof_rip(k + 10)),
@@ -1106,29 +1110,29 @@ theorem failed_runs(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64)
     held: Vars(vars, mask, width, n, failed, totals), at19: vars(19) = c19, at20: vars(20) = c20,
     page: Nat → BitVec(8), state: MachineState<IoMemory>, memory_is: state.memory = IoMemory(with_frame(file, frame), page),
     rip_is: state.rip = eof_rip(ca(l_failed()))): LinuxRuns(io_linux(), after(True, totals), state) {
-    let fetch = io_fetch_access();
-    let data = io_data_access();
-    let img = with_frame(file, frame);
-    let pieces = cmd_at(img, letters, default, spill, code, jumps, pj, placed(frame));
-    let set = run_block(img, page, failed_block(), io_entry(), ca(l_failed()), pieces(l_failed()), state, memory_is, rip_is);
-    let s1 = execute_block_normal(failed_block(), state);
+    let here = λ (l: Prog) (f: Nat → BitVec(8)) => cmd_at(with_frame(file, f), letters, default, spill, code, jumps, pj, placed(f))(l);
     let one = status_word(True);
-    let stored = run_frame_store(img, page, WordStore(base := R11, source := Rax), refl, io_entry(), ca(l_failed_store()), pieces(l_failed_store()), 8 * 18, { omega },
-        s1, set.memory_is, set.rip_is, refl);
-    let s2 = word_store_after(linux_writes(io_linux()), WordStore(base := R11, source := Rax), s1);
-    let frame2 = stored_frame(file, frame, 18, one);
     let vars2 = set_var(vars, 18, one);
-    let jmp = JumpNear(cmd_d(l_failed_jmp()));
-    let jumped = run_near(with_frame(file, frame2), page, jmp, io_entry(), ca(l_failed_jmp()), (cmd_at(with_frame(file, frame2), letters, default, spill, code,
-        jumps, pj, placed(frame2)))(l_failed_jmp()), s2, stored.memory_is, stored.rip_is);
-    let s3 = execute_near_control(jmp, s2);
-    let s3_rip = jmp_back(cmd_d(l_failed_jmp()), s2, io_entry(), ca(l_failed_jmp()), ca(l_loop()), stored.rip_is, cmd_j_failed_jmp());
-    linux_runs_after_linux_steps(io_linux(), after(True, totals), state, s2,
-        linux_steps_trans(io_linux(), state, s1, s2, linux_steps_of_fetched(io_linux(), state, s1, set.steps), stored.step),
-        linux_runs_after_steps(io_linux(), after(True, totals), s2, s3, jumped,
-            goes(True, frame2, vars2, frame_holds_store(img, vars, 18, one, holds), status_vars(vars, mask, width, n, failed, totals, held, True),
-                trans(set_var_other(vars, 18, one, 19, ne_above(19, 18, trivial)), at19), trans(set_var_other(vars, 18, one, 20, ne_above(20, 18, trivial)), at20),
-                page, s3, stored.memory_is, s3_rip)))
+    let p0 = Framed(file, page, vars);
+    let p1 = λ (st: MachineState<IoMemory>) => Framed(file, page, vars)(st) ∧ ((read_gpr(Rax, st.gprs) = one) ∧ (read_gpr(R11, st.gprs) = slot_at(18)));
+    let p2 = Framed(file, page, vars2);
+    let runs = runs_seq(p0, eof_rip(ca(l_failed())), p1, eof_rip(ca(l_failed_store())), p2, eof_rip(ca(l_loop())),
+        runs_block(failed_block(), io_entry(), ca(l_failed()), p0, p1,
+            λ st h => framed_resident(file, page, vars, canonical_block_bytes(failed_block()), eof_rip(ca(l_failed())), here(l_failed()), st, h),
+            λ st h same => ⟨framed_moved(file, page, vars, execute_block_normal(failed_block(), st), st, same, h), ⟨refl, refl⟩⟩),
+        runs_seq(p1, eof_rip(ca(l_failed_store())), p2, eof_rip(ca(l_failed_jmp())), p2, eof_rip(ca(l_loop())),
+            runs_frame_store(file, page, vars, ca(l_failed_store()), 18, { omega }, Rax, here(l_failed_store()), p1, p2, λ _ h => h.left,
+                λ _ h => h.right.right,
+                λ st h framed => framed_set(file, page, vars, 18, read_gpr(Rax, st.gprs), one, h.right.left,
+                    word_store_after(linux_writes(io_linux()), WordStore(base := R11, source := Rax), st), framed)),
+            runs_jmp_back(cmd_d(l_failed_jmp()), io_entry(), ca(l_failed_jmp()), ca(l_loop()), cmd_j_failed_jmp(), p2, p2,
+                λ st h => framed_resident(file, page, vars2, near_control_bytes(JumpNear(cmd_d(l_failed_jmp()))), eof_rip(ca(l_failed_jmp())),
+                    here(l_failed_jmp()), st, h),
+                λ st h => h)));
+    runs_into(p0, eof_rip(ca(l_failed())), p2, eof_rip(ca(l_loop())), after(True, totals), runs, state, rip_is, Exists(frame, ⟨memory_is, holds⟩),
+        λ s at h => goes(True, h.witness, vars2, h.proof.right, status_vars(vars, mask, width, n, failed, totals, held, True),
+            trans(set_var_other(vars, 18, one, 19, ne_above(19, 18, trivial)), at19), trans(set_var_other(vars, 18, one, 20, ne_above(20, 18, trivial)), at20),
+            page, s, h.proof.left, at))
 }
 
 // ---------------------------------------------------------------------------
@@ -1616,10 +1620,6 @@ theorem placed_shift(file: IoImage, code: List<BitVec(8)>, k, off: Nat, placed: 
 // count.
 fn SpillPre(file: IoImage, page: Nat → BitVec(8), vars: Nat → BitVec(64), g: Gprs) → MachineState<IoMemory> → Type {
     λ state => Framed(file, page, vars)(state) ∧ WriteKept(state.gprs, g)
-}
-theorem framed_set(file: IoImage, page: Nat → BitVec(8), vars: Nat → BitVec(64), q: Nat, a, b: BitVec(64), same: a = b,
-    state: MachineState<IoMemory>, framed: Framed(file, page, set_var(vars, q, a))(state)): Framed(file, page, set_var(vars, q, b))(state) {
-    j(same, λ w _ => Framed(file, page, set_var(vars, q, w))(state), framed)
 }
 fn SpillBlockPlaced(file: IoImage, r: Gpr, i, k: Nat) → Type {
     (frame: Nat → BitVec(8)) → Placed(with_frame(file, frame), spill_block(r, i), eof_rip(k))
