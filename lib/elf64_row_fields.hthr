@@ -20,6 +20,7 @@ import x86_64_fetched_code;
 import x86_64_data_read;
 import x86_64_access_memory;
 import x86_64_layout;
+import x86_64_asm;
 import x86_64_store;
 import bitvec;
 import bitvec_nat;
@@ -81,37 +82,46 @@ fn row_field_block() → List<Instruction> { [MovRI(R9, word_zero()), MovRR(Rdx,
 fn row_count_load() → WordLoad { WordLoad(destination := Rax, base := R12) }
 fn row_next_block() → List<Instruction> { [AddRI8(R12, eight_byte()), AddRR(R15, R15), MovRI(R11, BitVec::ofNat(256)), CmpRR(R15, R11)] }
 
-fn rj_skip() → BitVec(32) { BitVec::ofNat(1641) }
-fn rj_field() → BitVec(32) { BitVec::ofNat(17) }
-fn rj_back() → BitVec(32) { BitVec::ofNat(4294965604) }
-
-fn row_parts() → List<List<BitVec(8)>> {
-    [canonical_block_bytes(row_setup_block()),
-     // head (20)
-     canonical_block_bytes(row_test_block()), near_control_bytes(JumpIfNear(E, rj_skip())),
-     canonical_block_bytes(row_lead_block()), near_control_bytes(JumpIfNear(NE, rj_field())),
-     canonical_block_bytes(row_gap_block()), byte_store_bytes(row_gap_store()), canonical_block_bytes(row_step_block()),
-     // field (81)
-     canonical_block_bytes(row_field_block()), word_load_bytes(row_count_load()), format_code(),
-     // skip (1686)
-     canonical_block_bytes(row_next_block())]
-}
-fn row_lens() → List<Nat> { [20, 19, 6, 13, 6, 10, 3, 4, 13, 4, 1588, 20] }
-fn row_code() → List<BitVec(8)> { layout_code(row_parts(), near_control_bytes(JumpIfNear(NE, rj_back()))) }
+// The row as a program (x86_64_asm). The jumps' targets, named.
+fn tr_head() → Nat { 1 }
+fn tr_field() → Nat { 2 }
+fn tr_skip() → Nat { 3 }
+fn lr_setup() → Prog { then(Start, Block(row_setup_block())) }
+// head: a slot not selected is skipped; a field after the first is led by ' '
+fn lr_head() → Prog { At(lr_setup(), tr_head(), Block(row_test_block())) }
+fn lr_skip_je() → Prog { then(lr_head(), Jcc(E, tr_skip())) }
+fn lr_lead() → Prog { then(lr_skip_je(), Block(row_lead_block())) }
+fn lr_field_jne() → Prog { then(lr_lead(), Jcc(NE, tr_field())) }
+fn lr_gap() → Prog { then(lr_field_jne(), Block(row_gap_block())) }
+fn lr_gap_store() → Prog { then(lr_gap(), Code(byte_store_bytes(row_gap_store()))) }
+fn lr_step() → Prog { then(lr_gap_store(), Block(row_step_block())) }
+// field: the count, by the formatter
+fn lr_field() → Prog { At(lr_step(), tr_field(), Block(row_field_block())) }
+fn lr_load() → Prog { then(lr_field(), Code(word_load_bytes(row_count_load()))) }
+fn lr_format() → Prog { then(lr_load(), Piece(format_code(), format_len(), format_code_len())) }
+// skip: the next slot, until the last
+fn lr_skip() → Prog { At(lr_format(), tr_skip(), Block(row_next_block())) }
+fn lr_back() → Prog { then(lr_skip(), Jcc(NE, tr_head())) }
+fn lr_end() → Prog { then(lr_back(), Block(Nil)) }
+fn row_prog() → Prog { lr_end() }
+fn row_labels() → Nat → Nat { asm_labels(row_prog()) }
+fn row_code() → List<BitVec(8)> { assemble(no_fills(), row_prog(), Nil) }
+// The program's size, closed: a client's offsets add it without evaluating
+// the program.
 fn row_len() → Nat { 1712 }
+theorem row_len_closed(): prog_len(row_prog()) = row_len() { refl }
+// Label `l`'s offset in the row, and the displacement of the jump there.
+fn ra(l: Prog) → Nat { asm_at(l) }
+fn rd(l: Prog) → BitVec(32) { asm_jump(row_labels(), l) }
+theorem row_code_len(): row_code().len() = row_len() { trans(asm_len_is(no_fills(), row_labels(), row_prog(), trivial, Nil, 0, refl), row_len_closed()) }
 
-theorem row_measured(): LayoutMeasured(row_parts(), row_lens()) {
-    let closed: (piece_lens(row_parts()) = row_lens()) = refl;
-    j(closed, λ ls _ => LayoutMeasured(row_parts(), ls), measured_self(row_parts()))
-}
-theorem row_code_len(): row_code().len() = row_len() {
-    layout_len(row_parts(), near_control_bytes(JumpIfNear(NE, rj_back())), row_lens(), row_measured(), 6, refl)
-}
-fn RowPieces(file: IoImage, at: BitVec(64)) → Type {
-    (i: Nat) → Placed(file, layout_piece(row_parts(), near_control_bytes(JumpIfNear(NE, rj_back())), i), next_rip(at, layout_at(0, row_lens(), i)))
-}
+theorem rj_skip_je(): JumpsForward(ra(lr_skip_je()), 6, rd(lr_skip_je()), ra(lr_skip())) { asm_jump_lands(row_labels(), lr_skip_je(), 6, ra(lr_skip()), refl) }
+theorem rj_field_jne(): JumpsForward(ra(lr_field_jne()), 6, rd(lr_field_jne()), ra(lr_field())) { asm_jump_lands(row_labels(), lr_field_jne(), 6, ra(lr_field()), refl) }
+theorem rj_back(): JumpsBack(ra(lr_back()), 6, rd(lr_back()), ra(lr_head())) { asm_jump_lands_back(row_labels(), lr_back(), 6, ra(lr_head()), refl) }
+
+fn RowPieces(file: IoImage, at: BitVec(64)) → Type { AsmPlaced(file, no_fills(), row_prog(), at) }
 theorem row_pieces(file: IoImage, at: BitVec(64), placed: Placed(file, row_code(), at)): RowPieces(file, at) {
-    placed_piece(file, row_parts(), near_control_bytes(JumpIfNear(NE, rj_back())), row_lens(), row_measured(), at, placed)
+    asm_placed(file, no_fills(), row_prog(), trivial, at, placed)
 }
 
 // ---------------------------------------------------------------------------
@@ -252,11 +262,11 @@ fn RowRan(file: IoImage, page0: Nat → BitVec(8), at: BitVec(64), rip, width: N
 // Skip: R12 to the next slot, R15 doubled, compared with 256.
 theorem row_next(file: IoImage, page0: Nat → BitVec(8), at: BitVec(64), piece: RowPieces(file, at), width: Nat, mask, slots: BitVec(64),
     o: Nat, bytes: List<BitVec(8)>, i: Nat, first: Bool, origin: Gprs, state: MachineState<IoMemory>,
-    head: RowAt(file, page0, at, 1686, width, mask, slots, o, bytes, i, column_bit(i), first, origin, state)):
+    head: RowAt(file, page0, at, ra(lr_skip()), width, mask, slots, o, bytes, i, column_bit(i), first, origin, state)):
     Exists<MachineState<IoMemory>>(λ after => LinuxSteps(io_linux(), state, after) ∧
-        (RowAt(file, page0, at, 1706, width, mask, slots, o, bytes, Succ(i), doubled(i), first, origin, after) ∧
+        (RowAt(file, page0, at, ra(lr_back()), width, mask, slots, o, bytes, Succ(i), doubled(i), first, origin, after) ∧
         (after.flags.zf = is_zero_bits(64, doubled(i).sub(BitVec::ofNat(256)))))) {
-    let set = run_block(file, head.page, row_next_block(), at, 1686, piece(11), state, head.memory_is, head.rip_is);
+    let set = run_block(file, head.page, row_next_block(), at, ra(lr_skip()), piece(lr_skip()), state, head.memory_is, head.rip_is);
     let s1 = execute_block_normal(row_next_block(), state);
     let r15: (read_gpr(R15, s1.gprs) = doubled(i)) = cong_fn<BitVec(64), BitVec(64)>(λ b => b.add(b), head.r15);
     Exists(s1, ⟨linux_steps_of_fetched(io_linux(), state, s1, set.steps),
@@ -271,21 +281,21 @@ theorem row_next(file: IoImage, page0: Nat → BitVec(8), at: BitVec(64), piece:
 theorem row_field(file: IoImage, page0: Nat → BitVec(8), at: BitVec(64), piece: RowPieces(file, at), width: Nat, mask, slots: BitVec(64),
     counts: Nat → BitVec(64), held: CountsAt(file, slots, counts), o: Nat, bytes: List<BitVec(8)>, i: Nat, below: i < column_slots(),
     first: Bool, origin: Gprs, state: MachineState<IoMemory>, room: (o + bytes.len()) + (width + 20) <= 4096,
-    head: RowAt(file, page0, at, 81, width, mask, slots, o, bytes, i, column_bit(i), first, origin, state)):
-    RowRan(file, page0, at, 1686, width, mask, slots, o, bytes ++ padded_decimal(width, counts(i).toNat()), i, column_bit(i), False, origin, state) {
+    head: RowAt(file, page0, at, ra(lr_field()), width, mask, slots, o, bytes, i, column_bit(i), first, origin, state)):
+    RowRan(file, page0, at, ra(lr_skip()), width, mask, slots, o, bytes ++ padded_decimal(width, counts(i).toNat()), i, column_bit(i), False, origin, state) {
     let io = io_linux();
     let page = head.page;
-    let set = run_block(file, page, row_field_block(), at, 81, piece(8), state, head.memory_is, head.rip_is);
+    let set = run_block(file, page, row_field_block(), at, ra(lr_field()), piece(lr_field()), state, head.memory_is, head.rip_is);
     let s1 = execute_block_normal(row_field_block(), state);
     let word: WordAt(io_data_access(), IoMemory(file, page), read_gpr(R12, s1.gprs), counts(i)) =
         j(sym(head.r12), λ a _ => WordAt(io_data_access(), IoMemory(file, page), a, counts(i)), held(page, i, below));
-    let loaded = run_word_load(file, page, row_count_load(), at, 94, piece(9), s1, set.memory_is, set.rip_is, counts(i), word);
+    let loaded = run_word_load(file, page, row_count_load(), at, ra(lr_load()), piece(lr_load()), s1, set.memory_is, set.rip_is, counts(i), word);
     let s2 = word_load_after(row_count_load(), counts(i), s1);
     let c = o + bytes.len();
     let pad = padded_decimal(width, counts(i).toNat());
     let short = padded_le(width, counts(i));
     let fits: (c + pad.len() <= 4096) = omega;
-    have formatted = format_runs(file, next_rip(at, 98), piece(10), page, width, c, s2, loaded.memory_is, loaded.rip_is, head.r14, head.rdi,
+    have formatted = format_runs(file, next_rip(at, ra(lr_format())), piece(lr_format()), page, width, c, s2, loaded.memory_is, loaded.rip_is, head.r14, head.rdi,
         fits);
     let s3 = formatted.witness;
     let out = formatted.proof.right;
@@ -294,7 +304,7 @@ theorem row_field(file: IoImage, page0: Nat → BitVec(8), at: BitVec(64), piece
     let sum: (c + pad.len() = o + (bytes ++ pad).len()) = omega;
     let rdi: (read_gpr(Rdi, s3.gprs).toNat() = io_page_base() + (o + (bytes ++ pad).len())) =
         trans(out.rdi, cong_fn<Nat, Nat>(λ l => io_page_base() + l, sum));
-    let rip: (s3.rip = next_rip(at, 1686)) = trans(out.rip_is, rip_compose(at, 98, format_len()));
+    let rip: (s3.rip = next_rip(at, ra(lr_skip()))) = trans(out.rip_is, rip_compose(at, ra(lr_format()), format_len()));
     let fk = out.kept;
     Exists(s3, ⟨linux_steps_trans(io, state, s2, s3,
             linux_steps_of_fetched(io, state, s2, fetched_steps_trans(io_fetch_access(), io_data_access(), state, s1, s2, set.steps, loaded.steps)),
@@ -310,17 +320,17 @@ theorem row_field(file: IoImage, page0: Nat → BitVec(8), at: BitVec(64), piece
 // The space before a field that is not the first, from `head` (64) to `field`.
 theorem row_gap(file: IoImage, page0: Nat → BitVec(8), at: BitVec(64), piece: RowPieces(file, at), width: Nat, mask, slots: BitVec(64),
     o: Nat, bytes: List<BitVec(8)>, i: Nat, origin: Gprs, state: MachineState<IoMemory>, room: (o + bytes.len()) < 4096,
-    head: RowAt(file, page0, at, 64, width, mask, slots, o, bytes, i, column_bit(i), False, origin, state)):
-    RowRan(file, page0, at, 81, width, mask, slots, o, bytes ++ [field_gap()], i, column_bit(i), False, origin, state) {
+    head: RowAt(file, page0, at, ra(lr_gap()), width, mask, slots, o, bytes, i, column_bit(i), False, origin, state)):
+    RowRan(file, page0, at, ra(lr_field()), width, mask, slots, o, bytes ++ [field_gap()], i, column_bit(i), False, origin, state) {
     let io = io_linux();
     let page = head.page;
     let c = o + bytes.len();
-    let set = run_block(file, page, row_gap_block(), at, 64, piece(5), state, head.memory_is, head.rip_is);
+    let set = run_block(file, page, row_gap_block(), at, ra(lr_gap()), piece(lr_gap()), state, head.memory_is, head.rip_is);
     let s1 = execute_block_normal(row_gap_block(), state);
-    let stored = run_store(file, page, row_gap_store(), refl, at, 74, piece(6), c, room, field_gap(), s1, set.memory_is, set.rip_is, head.rdi, refl);
+    let stored = run_store(file, page, row_gap_store(), refl, at, ra(lr_gap_store()), piece(lr_gap_store()), c, room, field_gap(), s1, set.memory_is, set.rip_is, head.rdi, refl);
     let s2 = byte_store_after(linux_writes(io), row_gap_store(), s1);
     let next = io_store_offset(IoMemory(file, page), c, [field_gap()]).page;
-    let stepped = run_block(file, next, row_step_block(), at, 77, piece(7), s2, stored.memory_is, stored.rip_is);
+    let stepped = run_block(file, next, row_step_block(), at, ra(lr_step()), piece(lr_step()), s2, stored.memory_is, stored.rip_is);
     let s3 = execute_block_normal(row_step_block(), s2);
     let paged = page_next(file, page0, page, o, bytes, field_gap(), head.holds.held, head.holds.below, head.holds.above);
     let grown: ((bytes ++ [field_gap()]).len() = Succ(bytes.len())) = List::len_append(bytes, [field_gap()]);
@@ -343,16 +353,16 @@ theorem gap_room(o, b, w: Nat, room: (o + b) + (w + 21) <= 4096): (o + Succ(b)) 
 theorem row_selected(file: IoImage, page0: Nat → BitVec(8), at: BitVec(64), piece: RowPieces(file, at), width: Nat, mask, slots: BitVec(64),
     counts: Nat → BitVec(64), held: CountsAt(file, slots, counts), o: Nat, bytes: List<BitVec(8)>, i: Nat, below: i < column_slots(),
     first: Bool, origin: Gprs, state: MachineState<IoMemory>, room: (o + bytes.len()) + (width + 21) <= 4096,
-    head: RowAt(file, page0, at, 45, width, mask, slots, o, bytes, i, column_bit(i), first, origin, state)):
-    RowRan(file, page0, at, 1686, width, mask, slots, o, bytes ++ (field_lead(first) ++ padded_decimal(width, counts(i).toNat())), i,
+    head: RowAt(file, page0, at, ra(lr_lead()), width, mask, slots, o, bytes, i, column_bit(i), first, origin, state)):
+    RowRan(file, page0, at, ra(lr_skip()), width, mask, slots, o, bytes ++ (field_lead(first) ++ padded_decimal(width, counts(i).toNat())), i,
         column_bit(i), False, origin, state) {
     let io = io_linux();
     let page = head.page;
     let pad = padded_decimal(width, counts(i).toNat());
-    let tested = run_block(file, page, row_lead_block(), at, 45, piece(3), state, head.memory_is, head.rip_is);
+    let tested = run_block(file, page, row_lead_block(), at, ra(lr_lead()), piece(lr_lead()), state, head.memory_is, head.rip_is);
     let s1 = execute_block_normal(row_lead_block(), state);
-    let jne = JumpIfNear(NE, rj_field());
-    let jumped = run_near(file, page, jne, at, 58, piece(4), s1, tested.memory_is, tested.rip_is);
+    let jne = JumpIfNear(NE, rd(lr_field_jne()));
+    let jumped = run_near(file, page, jne, at, ra(lr_field_jne()), piece(lr_field_jne()), s1, tested.memory_is, tested.rip_is);
     let s2 = execute_near_control(jne, s1);
     let to_s2: LinuxSteps(io, state, s2) =
         linux_steps_of_fetched(io, state, s2, fetched_steps_trans(io_fetch_access(), io_data_access(), state, s1, s2, tested.steps, jumped));
@@ -360,10 +370,10 @@ theorem row_selected(file: IoImage, page0: Nat → BitVec(8), at: BitVec(64), pi
         trans(cong_fn<BitVec(64), Bool>(λ a => is_zero_bits(64, a.sub(word_zero())), head.r9), ended_flag(first));
     let same: RowKept(state.gprs, origin) = RowKept(rsp := head.kept.rsp, rbp := head.kept.rbp, r8 := head.kept.r8, r10 := head.kept.r10);
     (match first as λ f => (s1.flags.zf = ended_zf(f)) → (read_gpr(R9, state.gprs) = ended_word(f)) →
-            RowRan(file, page0, at, 1686, width, mask, slots, o, bytes ++ (field_lead(f) ++ pad), i, column_bit(i), False, origin, state) {
+            RowRan(file, page0, at, ra(lr_skip()), width, mask, slots, o, bytes ++ (field_lead(f) ++ pad), i, column_bit(i), False, origin, state) {
         True => λ none r9 => {
-            let s2_rip = jcc_taken(NE, rj_field(), s1, at, 58, 81, tested.rip_is, ne_holds(s1.flags, none), refl);
-            let at_field: RowAt(file, page0, at, 81, width, mask, slots, o, bytes, i, column_bit(i), True, origin, s2) =
+            let s2_rip = jcc_taken(NE, rd(lr_field_jne()), s1, at, ra(lr_field_jne()), ra(lr_field()), tested.rip_is, ne_holds(s1.flags, none), rj_field_jne());
+            let at_field: RowAt(file, page0, at, ra(lr_field()), width, mask, slots, o, bytes, i, column_bit(i), True, origin, s2) =
                 RowAt(page := page, memory_is := tested.memory_is, rip_is := s2_rip, holds := head.holds, rdi := head.rdi, r9 := r9,
                     r12 := head.r12, r13 := head.r13, r14 := head.r14, r15 := head.r15, kept := same);
             have fielded = row_field(file, page0, at, piece, width, mask, slots, counts, held, o, bytes, i, below, True, origin, s2, { omega },
@@ -371,8 +381,8 @@ theorem row_selected(file: IoImage, page0: Nat → BitVec(8), at: BitVec(64), pi
             Exists(fielded.witness, ⟨linux_steps_trans(io, state, s2, fielded.witness, to_s2, fielded.proof.left), fielded.proof.right⟩)
         },
         False => λ some r9 => {
-            let s2_rip = jcc_passed(NE, rj_field(), s1, at, 58, tested.rip_is, ne_fails(s1.flags, some));
-            let at_gap: RowAt(file, page0, at, 64, width, mask, slots, o, bytes, i, column_bit(i), False, origin, s2) =
+            let s2_rip = jcc_passed(NE, rd(lr_field_jne()), s1, at, ra(lr_field_jne()), tested.rip_is, ne_fails(s1.flags, some));
+            let at_gap: RowAt(file, page0, at, ra(lr_gap()), width, mask, slots, o, bytes, i, column_bit(i), False, origin, s2) =
                 RowAt(page := page, memory_is := tested.memory_is, rip_is := s2_rip, holds := head.holds, rdi := head.rdi, r9 := r9,
                     r12 := head.r12, r13 := head.r13, r14 := head.r14, r15 := head.r15, kept := same);
             have gapped = row_gap(file, page0, at, piece, width, mask, slots, o, bytes, i, origin, s2, { omega }, at_gap);
@@ -385,27 +395,27 @@ theorem row_selected(file: IoImage, page0: Nat → BitVec(8), at: BitVec(64), pi
             let assoc: (lead ++ pad = bytes ++ (field_lead(False) ++ pad)) = List::append_assoc(bytes, field_lead(False), pad);
             Exists(fielded.witness, ⟨linux_steps_trans(io, state, s2, fielded.witness, to_s2,
                     linux_steps_trans(io, s2, gapped.witness, fielded.witness, gapped.proof.left, fielded.proof.left)),
-                j(assoc, λ l _ => RowAt(file, page0, at, 1686, width, mask, slots, o, l, i, column_bit(i), False, origin, fielded.witness),
+                j(assoc, λ l _ => RowAt(file, page0, at, ra(lr_skip()), width, mask, slots, o, l, i, column_bit(i), False, origin, fielded.witness),
                     fielded.proof.right)⟩)
         },
     })(zf, head.r9)
 }
 
-// One slot, from `head` to the back jump (1706): its field when selected.
+// One slot, from `head` to the back jump (`lr_back`): its field when selected.
 theorem row_slot(file: IoImage, page0: Nat → BitVec(8), at: BitVec(64), piece: RowPieces(file, at), width: Nat, mask, slots: BitVec(64),
     counts: Nat → BitVec(64), held: CountsAt(file, slots, counts), o: Nat, bytes: List<BitVec(8)>, i: Nat, below: i < column_slots(),
     first: Bool, origin: Gprs, state: MachineState<IoMemory>, room: (o + bytes.len()) + (width + 21) <= 4096,
-    head: RowAt(file, page0, at, 20, width, mask, slots, o, bytes, i, column_bit(i), first, origin, state)):
+    head: RowAt(file, page0, at, ra(lr_head()), width, mask, slots, o, bytes, i, column_bit(i), first, origin, state)):
     Exists<MachineState<IoMemory>>(λ after => LinuxSteps(io_linux(), state, after) ∧
-        (RowAt(file, page0, at, 1706, width, mask, slots, o, bytes ++ slot_field(width, mask, counts, first, i), Succ(i), doubled(i),
+        (RowAt(file, page0, at, ra(lr_back()), width, mask, slots, o, bytes ++ slot_field(width, mask, counts, first, i), Succ(i), doubled(i),
             first_after(mask, first, i), origin, after) ∧
         (after.flags.zf = is_zero_bits(64, doubled(i).sub(BitVec::ofNat(256)))))) {
     let io = io_linux();
     let page = head.page;
-    let tested = run_block(file, page, row_test_block(), at, 20, piece(1), state, head.memory_is, head.rip_is);
+    let tested = run_block(file, page, row_test_block(), at, ra(lr_head()), piece(lr_head()), state, head.memory_is, head.rip_is);
     let s1 = execute_block_normal(row_test_block(), state);
-    let je = JumpIfNear(E, rj_skip());
-    let jumped = run_near(file, page, je, at, 39, piece(2), s1, tested.memory_is, tested.rip_is);
+    let je = JumpIfNear(E, rd(lr_skip_je()));
+    let jumped = run_near(file, page, je, at, ra(lr_skip_je()), piece(lr_skip_je()), s1, tested.memory_is, tested.rip_is);
     let s2 = execute_near_control(je, s1);
     let to_s2: LinuxSteps(io, state, s2) =
         linux_steps_of_fetched(io, state, s2, fetched_steps_trans(io_fetch_access(), io_data_access(), state, s1, s2, tested.steps, jumped));
@@ -418,24 +428,24 @@ theorem row_slot(file: IoImage, page0: Nat → BitVec(8), at: BitVec(64), piece:
     let pad = padded_decimal(width, counts(i).toNat());
     (match mask.band(column_bit(i)).eq_bit(word_zero()) as λ c => (s1.flags.zf = c) →
             Exists<MachineState<IoMemory>>(λ after => LinuxSteps(io, state, after) ∧
-                (RowAt(file, page0, at, 1706, width, mask, slots, o,
+                (RowAt(file, page0, at, ra(lr_back()), width, mask, slots, o,
                     bytes ++ (match !c as λ _ => List<BitVec(8)> { True => field_lead(first) ++ pad, False => Nil }), Succ(i), doubled(i),
                     match !c { True => False, False => first }, origin, after) ∧
                 (after.flags.zf = is_zero_bits(64, doubled(i).sub(BitVec::ofNat(256)))))) {
         True => λ none => {
-            let s2_rip = jcc_taken(E, rj_skip(), s1, at, 39, 1686, tested.rip_is, e_holds(s1.flags, none), refl);
-            let at_skip: RowAt(file, page0, at, 1686, width, mask, slots, o, bytes, i, column_bit(i), first, origin, s2) =
+            let s2_rip = jcc_taken(E, rd(lr_skip_je()), s1, at, ra(lr_skip_je()), ra(lr_skip()), tested.rip_is, e_holds(s1.flags, none), rj_skip_je());
+            let at_skip: RowAt(file, page0, at, ra(lr_skip()), width, mask, slots, o, bytes, i, column_bit(i), first, origin, s2) =
                 RowAt(page := page, memory_is := tested.memory_is, rip_is := s2_rip, holds := head.holds, rdi := head.rdi, r9 := head.r9,
                     r12 := head.r12, r13 := head.r13, r14 := head.r14, r15 := head.r15, kept := same);
             have next = row_next(file, page0, at, piece, width, mask, slots, o, bytes, i, first, origin, s2, at_skip);
             let nothing: (bytes ++ Nil = bytes) = List::append_nil(bytes);
             Exists(next.witness, ⟨linux_steps_trans(io, state, s2, next.witness, to_s2, next.proof.left),
-                ⟨j(sym(nothing), λ l _ => RowAt(file, page0, at, 1706, width, mask, slots, o, l, Succ(i), doubled(i), first, origin, next.witness),
+                ⟨j(sym(nothing), λ l _ => RowAt(file, page0, at, ra(lr_back()), width, mask, slots, o, l, Succ(i), doubled(i), first, origin, next.witness),
                     next.proof.right.left), next.proof.right.right⟩⟩)
         },
         False => λ some => {
-            let s2_rip = jcc_passed(E, rj_skip(), s1, at, 39, tested.rip_is, e_fails(s1.flags, some));
-            let at_lead: RowAt(file, page0, at, 45, width, mask, slots, o, bytes, i, column_bit(i), first, origin, s2) =
+            let s2_rip = jcc_passed(E, rd(lr_skip_je()), s1, at, ra(lr_skip_je()), tested.rip_is, e_fails(s1.flags, some));
+            let at_lead: RowAt(file, page0, at, ra(lr_lead()), width, mask, slots, o, bytes, i, column_bit(i), first, origin, s2) =
                 RowAt(page := page, memory_is := tested.memory_is, rip_is := s2_rip, holds := head.holds, rdi := head.rdi, r9 := head.r9,
                     r12 := head.r12, r13 := head.r13, r14 := head.r14, r15 := head.r15, kept := same);
             have fielded = row_selected(file, page0, at, piece, width, mask, slots, counts, held, o, bytes, i, below, first, origin, s2, room,
@@ -456,13 +466,13 @@ theorem row_loop(file: IoImage, page0: Nat → BitVec(8), at: BitVec(64), piece:
     counts: Nat → BitVec(64), held: CountsAt(file, slots, counts), o: Nat, origin: Gprs, k: Nat):
     (i: Nat) → (first: Bool) → (bytes: List<BitVec(8)>) → (state: MachineState<IoMemory>) → i + Succ(k) = column_slots() →
     (o + bytes.len()) + fields_room(width, k) <= 4096 →
-    RowAt(file, page0, at, 20, width, mask, slots, o, bytes, i, column_bit(i), first, origin, state) →
+    RowAt(file, page0, at, ra(lr_head()), width, mask, slots, o, bytes, i, column_bit(i), first, origin, state) →
     Exists<MachineState<IoMemory>>(λ after => LinuxSteps(io_linux(), state, after) ∧
         RowOut(file, page0, at, o, bytes ++ row_fields(width, mask, counts, first, i, Succ(k)), origin, after)) {
     let io = io_linux();
     match k as λ m => (i: Nat) → (first: Bool) → (bytes: List<BitVec(8)>) → (state: MachineState<IoMemory>) → i + Succ(m) = column_slots() →
             (o + bytes.len()) + fields_room(width, m) <= 4096 →
-            RowAt(file, page0, at, 20, width, mask, slots, o, bytes, i, column_bit(i), first, origin, state) →
+            RowAt(file, page0, at, ra(lr_head()), width, mask, slots, o, bytes, i, column_bit(i), first, origin, state) →
             Exists<MachineState<IoMemory>>(λ after => LinuxSteps(io, state, after) ∧
                 RowOut(file, page0, at, o, bytes ++ row_fields(width, mask, counts, first, i, Succ(m)), origin, after)) {
         Zero => λ i first bytes state count room head => {
@@ -471,12 +481,12 @@ theorem row_loop(file: IoImage, page0: Nat → BitVec(8), at: BitVec(64), piece:
             have slot = row_slot(file, page0, at, piece, width, mask, slots, counts, held, o, bytes, i, { omega }, first, origin, state, room, head);
             let s1 = slot.witness;
             let at1 = slot.proof.right.left;
-            let jne = JumpIfNear(NE, rj_back());
-            let jumped = run_near(file, at1.page, jne, at, 1706, piece(12), s1, at1.memory_is, at1.rip_is);
+            let jne = JumpIfNear(NE, rd(lr_back()));
+            let jumped = run_near(file, at1.page, jne, at, ra(lr_back()), piece(lr_back()), s1, at1.memory_is, at1.rip_is);
             let s2 = execute_near_control(jne, s1);
             let last: (s1.flags.zf = True) = trans(slot.proof.right.right,
                 j(sym(seven), λ m _ => is_zero_bits(64, doubled(m).sub(BitVec::ofNat(256))) = True, bits_last()));
-            let s2_rip = jcc_passed(NE, rj_back(), s1, at, 1706, at1.rip_is, ne_fails(s1.flags, last));
+            let s2_rip = jcc_passed(NE, rd(lr_back()), s1, at, ra(lr_back()), at1.rip_is, ne_fails(s1.flags, last));
             let fields: (row_fields(width, mask, counts, first, i, 1) = field) =
                 trans(row_unfold(width, mask, counts, first, i, 0), List::append_nil(field));
             let out: RowOut(file, page0, at, o, bytes ++ field, origin, s2) =
@@ -495,15 +505,15 @@ theorem row_loop(file: IoImage, page0: Nat → BitVec(8), at: BitVec(64), piece:
                 head);
             let s1 = slot.witness;
             let at1 = slot.proof.right.left;
-            let jne = JumpIfNear(NE, rj_back());
-            let jumped = run_near(file, at1.page, jne, at, 1706, piece(12), s1, at1.memory_is, at1.rip_is);
+            let jne = JumpIfNear(NE, rd(lr_back()));
+            let jumped = run_near(file, at1.page, jne, at, ra(lr_back()), piece(lr_back()), s1, at1.memory_is, at1.rip_is);
             let s2 = execute_near_control(jne, s1);
             let bits = bits_more(i, more);
             let going: (s1.flags.zf = False) = trans(slot.proof.right.right, bits.right);
-            let s2_rip = jcc_taken_back(NE, rj_back(), s1, at, 1706, 20, at1.rip_is, ne_holds(s1.flags, going), refl);
+            let s2_rip = jcc_taken_back(NE, rd(lr_back()), s1, at, ra(lr_back()), ra(lr_head()), at1.rip_is, ne_holds(s1.flags, going), rj_back());
             let front = bytes ++ field;
             let grown: (front.len() = bytes.len() + field.len()) = List::len_append(bytes, field);
-            let at2: RowAt(file, page0, at, 20, width, mask, slots, o, front, Succ(i), column_bit(Succ(i)), first_after(mask, first, i), origin, s2) =
+            let at2: RowAt(file, page0, at, ra(lr_head()), width, mask, slots, o, front, Succ(i), column_bit(Succ(i)), first_after(mask, first, i), origin, s2) =
                 RowAt(page := at1.page, memory_is := at1.memory_is, rip_is := s2_rip, holds := at1.holds, rdi := at1.rdi, r9 := at1.r9,
                     r12 := at1.r12, r13 := at1.r13, r14 := at1.r14, r15 := trans(at1.r15, bits.left),
                     kept := RowKept(rsp := at1.kept.rsp, rbp := at1.kept.rbp, r8 := at1.kept.r8, r10 := at1.kept.r10));
@@ -534,9 +544,9 @@ theorem row_runs(file: IoImage, at: BitVec(64), placed: Placed(file, row_code(),
         RowOut(file, page0, at, o, row_counts(width, mask, counts), state.gprs, after)) {
     let io = io_linux();
     let piece = row_pieces(file, at, placed);
-    let set = run_block(file, page0, row_setup_block(), at, 0, piece(0), state, memory_is, rip_is);
+    let set = run_block(file, page0, row_setup_block(), at, ra(lr_setup()), piece(lr_setup()), state, memory_is, rip_is);
     let s1 = execute_block_normal(row_setup_block(), state);
-    let head: RowAt(file, page0, at, 20, width, mask, slots, o, Nil, 0, column_bit(0), True, state.gprs, s1) =
+    let head: RowAt(file, page0, at, ra(lr_head()), width, mask, slots, o, Nil, 0, column_bit(0), True, state.gprs, s1) =
         RowAt(page := page0, memory_is := set.memory_is, rip_is := set.rip_is, holds := page_same(page0, o), rdi := rdi, r9 := refl,
             r12 := trans(r12, slot_zero(slots)), r13 := r13, r14 := r14, r15 := refl,
             kept := RowKept(rsp := refl, rbp := refl, r8 := refl, r10 := refl));

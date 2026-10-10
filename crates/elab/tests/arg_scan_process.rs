@@ -7,13 +7,14 @@ use crate::read_loop_fixture::checker;
 
 const BV_OMEGA: &str = include_str!("../../../lib/std/bitvec/bitvec_omega.hthr");
 const DECIMAL: &str = include_str!("../../../lib/decimal_line.hthr");
+const ASM: &str = include_str!("../../../lib/std/arch/x86_64/x86_64_asm.hthr");
 const FORMAT: &str = include_str!("../../../lib/elf64_format_width.hthr");
 const PROGRAM: &str = include_str!("../../../lib/command_program.hthr");
 const SCAN: &str = include_str!("../../../lib/elf64_arg_scan.hthr");
 
 fn base() -> heather_elab::Elaborator {
     let mut elab = checker();
-    for (name, source) in [("bitvec_omega", BV_OMEGA), ("decimal_line", DECIMAL), ("elf64_format_width", FORMAT), ("command_program", PROGRAM)] {
+    for (name, source) in [("bitvec_omega", BV_OMEGA), ("decimal_line", DECIMAL), ("x86_64_asm", ASM), ("elf64_format_width", FORMAT), ("command_program", PROGRAM)] {
         elab.elab_module_source(name, source).unwrap_or_else(|e| panic!("{name}: {}", e.render(source)));
     }
     elab
@@ -71,19 +72,19 @@ fn arg_scan_library_checks() {
 // column, a `--` that leaves the options open, an options-ended test that
 // reads the flag the wrong way round, a refusal that exits 0, a default
 // chosen by the operand count rather than the selection, a scan that skips
-// argv[1] as well as argv[0], or a letter loop whose back jump lands a byte
-// late.
+// argv[1] as well as argv[0], or a letter loop whose back jump falls through
+// to the operand code.
 #[test]
 fn slow_acceptance_arg_scan_refusals() {
     let library = base().semantic_image();
     for (name, from, to) in [
         ("bit_shifted", "[MovRI(R11, column_bit(i)), OrRR(Rdx, R11)]", "[MovRI(R11, column_bit(Succ(i))), OrRR(Rdx, R11)]"),
         ("dashes_leave_open", "{ [MovRI(R10, BitVec::ofNat(1))] }", "{ [MovRI(R10, BitVec::ofNat(0))] }"),
-        ("ended_inverted", "near_control_bytes(JumpIfNear(NE, sj_operand_a()))", "near_control_bytes(JumpIfNear(E, sj_operand_a()))"),
+        ("ended_inverted", "then(ls_ended(), Jcc(NE, ts_operand()))", "then(ls_ended(), Jcc(E, ts_operand()))"),
         ("refusal_exits_0", "[MovRI(Rdi, BitVec::ofNat(1)), MovRI(Rax, BitVec::ofNat(60))]", "[MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))]"),
         ("default_by_count", "[MovRI(R11, word_zero()), CmpRR(R8, R11)]", "[MovRI(R11, word_zero()), CmpRR(R9, R11)]"),
         ("skips_two", "[MovRR(Rbx, Rsp), AddRI8(Rbx, eight_byte()),", "[MovRR(Rbx, Rsp), AddRI8(Rbx, BitVec::ofNat(16)),"),
-        ("letters_late", "BitVec::ofNat(4294966976)", "BitVec::ofNat(4294966977)"),
+        ("letters_fall_out", "then(ls_select(), Jmp(ts_letters()))", "then(ls_select(), Jmp(ts_operand()))"),
     ] {
         let bad = SCAN.replacen(from, to, 1);
         assert_ne!(bad, SCAN, "{name}");

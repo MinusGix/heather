@@ -6,11 +6,12 @@ use crate::read_loop_fixture::checker;
 
 const BV_OMEGA: &str = include_str!("../../../lib/std/bitvec/bitvec_omega.hthr");
 const DECIMAL: &str = include_str!("../../../lib/decimal_line.hthr");
+const ASM: &str = include_str!("../../../lib/std/arch/x86_64/x86_64_asm.hthr");
 const FORMAT: &str = include_str!("../../../lib/elf64_format_width.hthr");
 
 fn base() -> heather_elab::Elaborator {
     let mut elab = checker();
-    for (name, source) in [("bitvec_omega", BV_OMEGA), ("decimal_line", DECIMAL)] {
+    for (name, source) in [("bitvec_omega", BV_OMEGA), ("decimal_line", DECIMAL), ("x86_64_asm", ASM)] {
         elab.elab_module_source(name, source).unwrap_or_else(|e| panic!("{name}: {}", e.render(source)));
     }
     elab
@@ -51,18 +52,18 @@ fn format_width_library_checks() {
 // at no places, a place skipped by what is left of the count rather than the
 // whole count (a zero inside a count dropped), a digit counted from '/'
 // rather than '0', a units digit taken from the whole count, or a digit loop
-// whose exit lands one byte past the store.
+// whose exit lands past the store.
 #[test]
 fn slow_acceptance_format_width_refusals() {
     let library = base().semantic_image();
     for (name, from, to) in [
-        ("pad_one_more", "JumpIfNear(AE, BitVec::ofNat(26))", "JumpIfNear(A, BitVec::ofNat(26))"),
+        ("pad_one_more", "Jcc(AE, tp_out())", "Jcc(A, tp_out())"),
         ("count_from_zero", "[MovRR(Rbx, Rax), MovRI(Rsi, BitVec::ofNat(1))]", "[MovRR(Rbx, Rax), MovRI(Rsi, BitVec::ofNat(0))]"),
         ("skip_by_rest", "[MovRI(R11, place_word(i)), CmpRR(Rbx, R11)]", "[MovRI(R11, place_word(i)), CmpRR(Rax, R11)]"),
         ("digit_from_slash", "fn emit_zero_block() → List<Instruction> { [MovRI(Rcx, BitVec::ofNat(48))] }",
             "fn emit_zero_block() → List<Instruction> { [MovRI(Rcx, BitVec::ofNat(47))] }"),
         ("units_from_whole", "[MovRI(Rcx, BitVec::ofNat(48)), AddRR(Rcx, Rax)]", "[MovRI(Rcx, BitVec::ofNat(48)), AddRR(Rcx, Rbx)]"),
-        ("exit_past_store", "JumpIfNear(B, BitVec::ofNat(12))", "JumpIfNear(B, BitVec::ofNat(13))"),
+        ("exit_past_store", "Jcc(B, te_store())", "Jcc(B, te_skip())"),
     ] {
         let bad = FORMAT.replacen(from, to, 1);
         assert_ne!(bad, FORMAT, "{name}");

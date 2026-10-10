@@ -29,6 +29,7 @@ use super::read_loop::{claims, component, image_facts, literal, nested, print_ju
 // operand cursor, the stat pass, the events and what they print, the frame,
 // the row, and the process.
 pub(super) const SUPPORT: &[(&str, &str)] = &[
+    ("x86_64_asm", include_str!("../../../../lib/std/arch/x86_64/x86_64_asm.hthr")),
     ("command_program", include_str!("../../../../lib/command_program.hthr")),
     ("elf64_format_width", include_str!("../../../../lib/elf64_format_width.hthr")),
     ("elf64_arg_scan", include_str!("../../../../lib/elf64_arg_scan.hthr")),
@@ -38,7 +39,6 @@ pub(super) const SUPPORT: &[(&str, &str)] = &[
     ("elf64_command_output", include_str!("../../../../lib/elf64_command_output.hthr")),
     ("elf64_frame", include_str!("../../../../lib/elf64_frame.hthr")),
     ("elf64_row_fields", include_str!("../../../../lib/elf64_row_fields.hthr")),
-    ("x86_64_asm", include_str!("../../../../lib/std/arch/x86_64/x86_64_asm.hthr")),
     ("elf64_command", include_str!("../../../../lib/elf64_command.hthr")),
 ];
 pub(super) const IMPORTS: &[&str] = &["elf64_command", "x86_64_asm", "elf64_command_output", "elf64_command_events", "elf64_row_fields", "elf64_frame",

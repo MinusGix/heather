@@ -9,6 +9,7 @@ use crate::read_loop_fixture::checker;
 
 const BV_OMEGA: &str = include_str!("../../../lib/std/bitvec/bitvec_omega.hthr");
 const DECIMAL: &str = include_str!("../../../lib/decimal_line.hthr");
+const ASM: &str = include_str!("../../../lib/std/arch/x86_64/x86_64_asm.hthr");
 const FORMAT: &str = include_str!("../../../lib/elf64_format_width.hthr");
 const PROGRAM: &str = include_str!("../../../lib/command_program.hthr");
 const SCAN: &str = include_str!("../../../lib/elf64_arg_scan.hthr");
@@ -17,7 +18,7 @@ pub(crate) const STAT: &str = include_str!("../../../lib/elf64_stat_width.hthr")
 
 pub(crate) fn base() -> heather_elab::Elaborator {
     let mut elab = checker();
-    for (name, source) in [("bitvec_omega", BV_OMEGA), ("decimal_line", DECIMAL), ("elf64_format_width", FORMAT), ("command_program", PROGRAM),
+    for (name, source) in [("bitvec_omega", BV_OMEGA), ("decimal_line", DECIMAL), ("x86_64_asm", ASM), ("elf64_format_width", FORMAT), ("command_program", PROGRAM),
         ("elf64_arg_scan", SCAN)] {
         elab.elab_module_source(name, source).unwrap_or_else(|e| panic!("{name}: {}", e.render(source)));
     }
