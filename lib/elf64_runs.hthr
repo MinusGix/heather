@@ -218,6 +218,25 @@ theorem runs_jcc_taken(cc: ConditionCode, d: BitVec(32), at: BitVec(64), from, t
     }
 }
 
+// A forward JMP.
+theorem runs_jmp(d: BitVec(32), at: BitVec(64), from, to: Nat, lands: JumpsForward(from, 5, d, to), p, q: MachineState<IoMemory> → Type,
+    resident: (state: MachineState<IoMemory>) → p(state) →
+        CodeResident(io_fetch_access(), state.memory, near_control_bytes(JumpNear(d)), next_rip(at, from)),
+    post: (state: MachineState<IoMemory>) → p(state) → q(execute_near_control(JumpNear(d), state))):
+    Runs(p, next_rip(at, from), q, next_rip(at, to)) {
+    λ state rip_is holds => {
+        let fetch = io_fetch_access();
+        let jmp = JumpNear(d);
+        Exists(execute_near_control(jmp, state),
+            ⟨linux_steps_of_fetched(io_linux(), state, execute_near_control(jmp, state),
+                fetched_steps_one(fetch, io_data_access(), state, execute_near_control(jmp, state),
+                    near_fetched_step(fetch, io_data_access(), jmp, state,
+                        j(sym(rip_is), λ here _ => CodeResident(fetch, state.memory, near_control_bytes(jmp), here), resident(state, holds))))),
+             ⟨trans(cong_fn<BitVec(64), BitVec(64)>(λ a => near_branch_target(a, 5, d), rip_is), jumps_forward(at, from, 5, d, to, lands)),
+              post(state, holds)⟩⟩)
+    }
+}
+
 // A run ending where a process goes on: its steps are part of the process.
 theorem runs_into(p: MachineState<IoMemory> → Type, a: BitVec(64), q: MachineState<IoMemory> → Type, b: BitVec(64),
     events: List<LinuxEvent>, runs: Runs(p, a, q, b), state: MachineState<IoMemory>, rip_is: state.rip = a, holds: p(state),

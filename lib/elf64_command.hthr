@@ -519,6 +519,25 @@ theorem runs_slot_load(file: IoImage, page: Nat → BitVec(8), vars: Nat → Bit
     }
 }
 
+// A word stored from `source` at R11, which holds slot `q`'s address.
+theorem runs_frame_store(file: IoImage, page: Nat → BitVec(8), vars: Nat → BitVec(64), k, q: Nat, inside: q < frame_slots(), source: Gpr,
+    store: (frame: Nat → BitVec(8)) → Placed(with_frame(file, frame), word_store_bytes(WordStore(base := R11, source := source)), eof_rip(k)),
+    p, r: MachineState<IoMemory> → Type, framed: (state: MachineState<IoMemory>) → p(state) → Framed(file, page, vars)(state),
+    base: (state: MachineState<IoMemory>) → p(state) → read_gpr(R11, state.gprs) = slot_at(q),
+    post: (state: MachineState<IoMemory>) → p(state) →
+        Framed(file, page, set_var(vars, q, read_gpr(source, state.gprs)))(word_store_after(linux_writes(io_linux()), WordStore(base := R11, source := source), state)) →
+        r(word_store_after(linux_writes(io_linux()), WordStore(base := R11, source := source), state))): Runs(p, eof_rip(k), r, eof_rip(k + 3)) {
+    λ state rip_is holds => {
+        let at = framed(state, holds);
+        let img = with_frame(file, at.witness);
+        let stored = run_frame_store(img, page, WordStore(base := R11, source := source), refl, io_entry(), k, store(at.witness), 8 * q, { omega },
+            state, at.proof.left, rip_is, base(state, holds));
+        Exists(word_store_after(linux_writes(io_linux()), WordStore(base := R11, source := source), state), ⟨stored.step, ⟨stored.rip_is,
+            post(state, holds, Exists(stored_frame(file, at.witness, q, read_gpr(source, state.gprs)),
+                ⟨stored.memory_is, frame_holds_store(img, vars, q, read_gpr(source, state.gprs), at.proof.right)⟩))⟩⟩)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // What the slots hold between phases: the selection, the width, the status,
 // the operand count and the totals.
@@ -2293,36 +2312,38 @@ theorem stdin_path(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64),
     values: Vars(vars, mask, width, n, failed, totals), at19: vars(19) = c19, at20: vars(20) = c20, at22: vars(22) = pointer,
     page: Nat → BitVec(8), state: MachineState<IoMemory>, memory_is: state.memory = IoMemory(with_frame(file, frame), page),
     rip_is: state.rip = eof_rip(ca(l_dash()))): LinuxRuns(io_linux(), events(failed), state) {
-    let io = io_linux();
-    let fetch = io_fetch_access();
-    let data = io_data_access();
-    let img = with_frame(file, frame);
-    let pieces = cmd_at(img, letters, default, spill, code, jumps, pj, placed(frame));
-    let set = run_block(img, page, stdin_block(), io_entry(), ca(l_dash()), pieces(l_dash()), state, memory_is, rip_is);
-    let s1 = execute_block_normal(stdin_block(), state);
-    let stored = run_frame_store(img, page, WordStore(base := R11, source := Rax), refl, io_entry(), ca(l_dash_store()), pieces(l_dash_store()), 8 * 23,
-        { omega }, s1, set.memory_is, set.rip_is, refl);
-    let s2 = word_store_after(linux_writes(io), WordStore(base := R11, source := Rax), s1);
     let zero = word_zero();
-    let frame2 = stored_frame(file, frame, 23, zero);
     let vars2 = set_var(vars, 23, zero);
-    let img2 = with_frame(file, frame2);
-    let pieces2 = cmd_at(img2, letters, default, spill, code, jumps, pj, placed(frame2));
-    let zeroed = run_block(img2, page, fd_zero_block(), io_entry(), ca(l_dash_fd()), pieces2(l_dash_fd()), s2, stored.memory_is, stored.rip_is);
-    let s3 = execute_block_normal(fd_zero_block(), s2);
-    let jmp = JumpNear(cmd_d(l_dash_jmp()));
-    let jumped = run_near(img2, page, jmp, io_entry(), ca(l_dash_jmp()), pieces2(l_dash_jmp()), s3, zeroed.memory_is, zeroed.rip_is);
-    let s4 = execute_near_control(jmp, s3);
-    let s4_rip = jmp_forward(cmd_d(l_dash_jmp()), s3, io_entry(), ca(l_dash_jmp()), ca(l_state_init()), zeroed.rip_is, cmd_j_dash_jmp());
-    linux_runs_after_linux_steps(io, events(failed), state, s2,
-        linux_steps_trans(io, state, s1, s2, linux_steps_of_fetched(io, state, s1, set.steps), stored.step),
-        linux_runs_after_steps(io, events(failed), s2, s4, fetched_steps_trans(fetch, data, s2, s3, s4, zeroed.steps, jumped),
-            reads(failed, frame2, vars2, frame_holds_store(img, vars, 23, zero, holds),
-                slot_vars(vars, mask, width, n, failed, totals, values, 23, zero, trivial, ne_above(23, 21, trivial)),
-                trans(set_var_other(vars, 23, zero, 19, ne_below(19, 23, trivial)), at19),
-                trans(set_var_other(vars, 23, zero, 20, ne_below(20, 23, trivial)), at20),
-                trans(set_var_other(vars, 23, zero, 22, ne_below(22, 23, trivial)), at22),
-                set_var_same(vars, 23, zero), page, s4, zeroed.memory_is, s4_rip, refl)))
+    let here = λ (l: Prog) (f: Nat → BitVec(8)) => cmd_at(with_frame(file, f), letters, default, spill, code, jumps, pj, placed(f))(l);
+    let p0 = Framed(file, page, vars);
+    let p1 = λ (st: MachineState<IoMemory>) => Framed(file, page, vars)(st) ∧ ((read_gpr(Rax, st.gprs) = zero) ∧ (read_gpr(R11, st.gprs) = slot_at(23)));
+    let p2 = Framed(file, page, vars2);
+    let p3 = λ (st: MachineState<IoMemory>) => Framed(file, page, vars2)(st) ∧ (read_gpr(Rsp, st.gprs) = BitVec::zero());
+    let runs = runs_seq(p0, eof_rip(ca(l_dash())), p1, eof_rip(ca(l_dash_store())), p3, eof_rip(ca(l_state_init())),
+        runs_block(stdin_block(), io_entry(), ca(l_dash()), p0, p1,
+            λ st held => framed_resident(file, page, vars, canonical_block_bytes(stdin_block()), eof_rip(ca(l_dash())), here(l_dash()), st, held),
+            λ st held same => ⟨framed_moved(file, page, vars, execute_block_normal(stdin_block(), st), st, same, held), ⟨refl, refl⟩⟩),
+        runs_seq(p1, eof_rip(ca(l_dash_store())), p2, eof_rip(ca(l_dash_fd())), p3, eof_rip(ca(l_state_init())),
+            runs_frame_store(file, page, vars, ca(l_dash_store()), 23, { omega }, Rax, here(l_dash_store()), p1, p2, λ _ held => held.left,
+                λ _ held => held.right.right,
+                λ st held framed => j(held.right.left, λ x _ => Framed(file, page, set_var(vars, 23, x))(
+                    word_store_after(linux_writes(io_linux()), WordStore(base := R11, source := Rax), st)), framed)),
+            runs_seq(p2, eof_rip(ca(l_dash_fd())), p3, eof_rip(ca(l_dash_jmp())), p3, eof_rip(ca(l_state_init())),
+                runs_block(fd_zero_block(), io_entry(), ca(l_dash_fd()), p2, p3,
+                    λ st held => framed_resident(file, page, vars2, canonical_block_bytes(fd_zero_block()), eof_rip(ca(l_dash_fd())), here(l_dash_fd()),
+                        st, held),
+                    λ st held same => ⟨framed_moved(file, page, vars2, execute_block_normal(fd_zero_block(), st), st, same, held), refl⟩),
+                runs_jmp(cmd_d(l_dash_jmp()), io_entry(), ca(l_dash_jmp()), ca(l_state_init()), cmd_j_dash_jmp(), p3, p3,
+                    λ st held => framed_resident(file, page, vars2, near_control_bytes(JumpNear(cmd_d(l_dash_jmp()))), eof_rip(ca(l_dash_jmp())),
+                        here(l_dash_jmp()), st, held.left),
+                    λ st held => held))));
+    runs_into(p0, eof_rip(ca(l_dash())), p3, eof_rip(ca(l_state_init())), events(failed), runs, state, rip_is, Exists(frame, ⟨memory_is, holds⟩),
+        λ s4 s4_rip held => reads(failed, held.left.witness, vars2, held.left.proof.right,
+            slot_vars(vars, mask, width, n, failed, totals, values, 23, zero, trivial, ne_above(23, 21, trivial)),
+            trans(set_var_other(vars, 23, zero, 19, ne_below(19, 23, trivial)), at19),
+            trans(set_var_other(vars, 23, zero, 20, ne_below(20, 23, trivial)), at20),
+            trans(set_var_other(vars, 23, zero, 22, ne_below(22, 23, trivial)), at22),
+            set_var_same(vars, 23, zero), page, s4, held.left.proof.left, s4_rip, held.right))
 }
 
 // Any other operand (`l_open`): openat(AT_FDCWD, name, O_RDONLY); a failed open
