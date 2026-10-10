@@ -12,6 +12,7 @@ use heather_kernel::subst::{GlobalEntry, GlobalSubst};
 use heather_kernel::term::{GlobalVar, LocalSubst, Term, Type};
 use heather_syntax::{Expr, ExprKind, LamBinder, Span, Ty, TyKind};
 
+use crate::surface::is_projection_section;
 use crate::unification::{DeferredArg, ResolveOb, Sol, zonked};
 use crate::{Cx, ElabError, R, err};
 
@@ -885,6 +886,21 @@ fn apply_implicit_planned(
                                 argument.kind,
                                 ExprKind::App { .. } | ExprKind::Dot { .. } | ExprKind::Var(_)
                             ) =>
+                        {
+                            restart.set(args.iter().position(|a| std::ptr::eq(a, argument)));
+                            return Err(e);
+                        }
+                        // A projection section (`·.count`) at a function
+                        // domain still waiting on this call's implicits:
+                        // the position is function-typed whatever solves
+                        // it, so it owns the slot, and the section waits
+                        // like an unannotated lambda — `apply_to(·.count, c)`
+                        // (issues/field-projection-sections.md). Projection
+                        // sections only: a bare `·` here has always escaped
+                        // to the enclosing section.
+                        Err(e @ ElabError::ArgSlotEscape { .. })
+                            if matches!(&*dom, Type::Pi { .. })
+                                && is_projection_section(argument) =>
                         {
                             restart.set(args.iter().position(|a| std::ptr::eq(a, argument)));
                             return Err(e);

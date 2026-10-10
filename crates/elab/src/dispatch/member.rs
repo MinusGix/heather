@@ -27,6 +27,23 @@ enum ReceiverCarrier {
 impl Elaborator {
     // -- field access (docs/surface-records.md §4) ---------------------------
 
+    /// Whether `recv` is a chain of bare projections rooted at an argument
+    /// slot that the current ownership probe masks (a sibling, not its
+    /// target).
+    fn masked_slot_projection(&self, recv: &Expr) -> bool {
+        match &recv.kind {
+            ExprKind::ArgSlot(_) => self
+                .attempt
+                .slot_probe_target
+                .get()
+                .is_some_and(|target| target != recv.span),
+            ExprKind::Dot {
+                recv, args: None, ..
+            } => self.masked_slot_projection(recv),
+            _ => false,
+        }
+    }
+
     /// Resolve `p.f` / `p.f(a, …)` against the receiver's type (§4.2).
     ///
     /// The order matters and is the whole design. The **cheap negative test**
@@ -55,6 +72,19 @@ impl Elaborator {
         // receiver, so nothing below could have read it — every reading it
         // takes was an error before this round, and every reading it declines
         // reaches its old handler untouched.
+        // A **projection section** (`·.lines`, issues/field-projection-
+        // sections.md) whose slot is a sibling masked by an ownership probe
+        // (`elab_check_skel_slots`) stands for a disposable neutral, like the
+        // masked slot itself (`expr.rs`): its receiver has no type to project
+        // from yet, and the probe only asks which boundary owns the *other*
+        // slot.
+        if args.is_none() && self.masked_slot_projection(recv) {
+            return Ok(DotResolution::Inferred(
+                heather_kernel::term::Term::Var(heather_kernel::term::LocalVar(0)),
+                Type::Nat,
+                heather_kernel::level::Level::Zero,
+            ));
+        }
         if let Some(d) = self.type_projection(cx, recv, name, args, span)? {
             return Ok(d);
         }
@@ -101,6 +131,12 @@ impl Elaborator {
                 // a carrier with no instance is the spelling that produces one
                 // (docs/traits-type-projection-design.md §5).
                 Err(e @ ElabError::Resolution { .. }) => return Err(e),
+                // A slot receiver (`·.lines`) is a projection section: the
+                // escape reaches the enclosing function-typed checking
+                // position, which lowers it to `λ s => s.lines` and checks
+                // the field against the binder's type
+                // (issues/field-projection-sections.md).
+                Err(e @ ElabError::ArgSlotEscape { .. }) => return Err(e),
                 Err(_) => format!(
                     "no field `{name}` here (and the receiver's type \
                                    could not be inferred)"
