@@ -872,41 +872,57 @@ theorem total_rows(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64),
     LinuxRuns(io_linux(), write_events_then(row_counts(width, mask, totals) ++ total_name(), total.steps, total.ending,
         [ExitEvent(status_word(failed))]), state) {
     let io = io_linux();
-    let fetch = io_fetch_access();
-    let data = io_data_access();
-    let img = with_frame(file, frame);
-    let pieces = cmd_at(img, letters, default, spill, code, jumps, pj, placed(frame));
-    let set1 = run_block(img, page, total_setup1(), io_entry(), ca(l_tsetup()), pieces(l_tsetup()), state, memory_is, rip_is);
-    let s4 = execute_block_normal(total_setup1(), state);
-    let mask_load = run_word_load(img, page, WordLoad(destination := R13, base := R11), io_entry(), ca(l_tsetup_mask()), pieces(l_tsetup_mask()), s4,
-        set1.memory_is, set1.rip_is, vars(16), frame_var_at(img, page, vars, holds, 16, { omega }));
-    let s5 = word_load_after(WordLoad(destination := R13, base := R11), vars(16), s4);
-    let set2 = run_block(img, page, slot_block(17), io_entry(), ca(l_tsetup_w()), pieces(l_tsetup_w()), s5, mask_load.memory_is, mask_load.rip_is);
-    let s6 = execute_block_normal(slot_block(17), s5);
-    let width_load = run_word_load(img, page, WordLoad(destination := R14, base := R11), io_entry(), ca(l_tsetup_width()), pieces(l_tsetup_width()), s6,
-        set2.memory_is, set2.rip_is, vars(17), frame_var_at(img, page, vars, holds, 17, { omega }));
-    let s7 = word_load_after(WordLoad(destination := R14, base := R11), vars(17), s6);
-    let set3 = run_block(img, page, page_block(), io_entry(), ca(l_tsetup_page()), pieces(l_tsetup_page()), s7, width_load.memory_is, width_load.rip_is);
-    let s8 = execute_block_normal(page_block(), s7);
-    let to_s8: FetchedSteps(fetch, data, state, s8) = fetched_steps_trans(fetch, data, state, s4, s8, set1.steps,
-        fetched_steps_trans(fetch, data, s4, s5, s8, mask_load.steps, fetched_steps_trans(fetch, data, s5, s6, s8, set2.steps,
-            fetched_steps_trans(fetch, data, s6, s7, s8, width_load.steps, set3.steps))));
-    let counts = slots_counts(file, frame, vars, holds, 8, { omega }, totals, held.totals_is);
-    let w_small: (width < Nat::pow(2, 64)) = { let top: (21 <= Nat::pow(2, 64)) = Nat::leb_sound(21, Nat::pow(2, 64), trivial); omega };
     let row = row_counts(width, mask, totals);
-    have ran = row_runs(img, eof_rip(ca(l_total_row())), pieces(l_total_row()), page, width, mask, slot_at(8), totals, counts, 0, s8,
-        set3.memory_is, set3.rip_is, page_word_value(), refl, held.mask_is,
-        trans(cong_fn<BitVec(64), Nat>(λ v => v.toNat(), held.width_is), toNat_word_of_nat(64, width, w_small)), { omega });
-    let s9 = ran.witness;
-    let out = ran.proof.right;
-    let short_row = row_counts_le(width, mask, totals);
-    let p0: Put(img, page, 0, row ++ Nil, ca(l_tn0()), s9) = j(sym(List::append_nil(row)), λ bs _ => Put(img, page, 0, bs, ca(l_tn0()), s9),
-        Put(page := out.page, memory_is := out.memory_is, rip_is := trans(out.rip_is, rip_compose(io_entry(), ca(l_total_row()), row_len())),
-            holds := out.holds, rdi := out.rdi));
-    linux_runs_after_linux_steps(io, write_events_then(row ++ total_name(), total.steps, total.ending, [ExitEvent(status_word(failed))]),
-        state, s9, linux_steps_trans(io, state, s8, s9, linux_steps_of_fetched(io, state, s8, to_s8), ran.proof.left),
-        total_tail(file, letters, default, spill, code, jumps, pj, placed, frame, vars, holds, status_word(failed), held.status_is,
-            row, { omega }, total, ok, page, s9, p0))
+    let events = write_events_then(row ++ total_name(), total.steps, total.ending, [ExitEvent(status_word(failed))]);
+    let here = λ (l: Prog) (f: Nat → BitVec(8)) => cmd_at(with_frame(file, f), letters, default, spill, code, jumps, pj, placed(f))(l);
+    let q0 = Framed(file, page, vars);
+    let q1 = λ (st: MachineState<IoMemory>) => q0(st) ∧ ((read_gpr(R12, st.gprs) = slot_at(8)) ∧ (read_gpr(R11, st.gprs) = slot_at(16)));
+    let q2 = λ (st: MachineState<IoMemory>) => q0(st) ∧ ((read_gpr(R12, st.gprs) = slot_at(8)) ∧ (read_gpr(R13, st.gprs) = vars(16)));
+    let q3 = λ (st: MachineState<IoMemory>) => q2(st) ∧ (read_gpr(R11, st.gprs) = slot_at(17));
+    let q4 = λ (st: MachineState<IoMemory>) => q2(st) ∧ (read_gpr(R14, st.gprs) = vars(17));
+    let q5 = λ (st: MachineState<IoMemory>) => q4(st) ∧ (read_gpr(Rdi, st.gprs) = page_word());
+    let setup = runs_seq(q0, eof_rip(ca(l_tsetup())), q1, eof_rip(ca(l_tsetup_mask())), q5, eof_rip(ca(l_total_row())),
+        runs_block(total_setup1(), io_entry(), ca(l_tsetup()), q0, q1,
+            λ st h => framed_resident(file, page, vars, canonical_block_bytes(total_setup1()), eof_rip(ca(l_tsetup())), here(l_tsetup()), st, h),
+            λ st h same => ⟨framed_moved(file, page, vars, execute_block_normal(total_setup1(), st), st, same, h), ⟨refl, refl⟩⟩),
+        runs_seq(q1, eof_rip(ca(l_tsetup_mask())), q2, eof_rip(ca(l_tsetup_w())), q5, eof_rip(ca(l_total_row())),
+            runs_frame_load(file, page, vars, ca(l_tsetup_mask()), 16, { omega }, R13, here(l_tsetup_mask()), q1, q2, λ _ h => h.left,
+                λ _ h => h.right.right, λ st h framed => ⟨framed, ⟨h.right.left, refl⟩⟩),
+            runs_seq(q2, eof_rip(ca(l_tsetup_w())), q3, eof_rip(ca(l_tsetup_width())), q5, eof_rip(ca(l_total_row())),
+                runs_block(slot_block(17), io_entry(), ca(l_tsetup_w()), q2, q3,
+                    λ st h => framed_resident(file, page, vars, canonical_block_bytes(slot_block(17)), eof_rip(ca(l_tsetup_w())), here(l_tsetup_w()), st,
+                        h.left),
+                    λ st h same => ⟨⟨framed_moved(file, page, vars, execute_block_normal(slot_block(17), st), st, same, h.left), h.right⟩, refl⟩),
+                runs_seq(q3, eof_rip(ca(l_tsetup_width())), q4, eof_rip(ca(l_tsetup_page())), q5, eof_rip(ca(l_total_row())),
+                    runs_frame_load(file, page, vars, ca(l_tsetup_width()), 17, { omega }, R14, here(l_tsetup_width()), q3, q4,
+                        λ _ h => h.left.left, λ _ h => h.right, λ st h framed => ⟨⟨framed, h.left.right⟩, refl⟩),
+                    runs_block(page_block(), io_entry(), ca(l_tsetup_page()), q4, q5,
+                        λ st h => framed_resident(file, page, vars, canonical_block_bytes(page_block()), eof_rip(ca(l_tsetup_page())),
+                            here(l_tsetup_page()), st, h.left.left),
+                        λ st h same => ⟨⟨⟨framed_moved(file, page, vars, execute_block_normal(page_block(), st), st, same, h.left.left), h.left.right⟩,
+                            h.right⟩, refl⟩)))));
+    let w_small: (width < Nat::pow(2, 64)) = { let top: (21 <= Nat::pow(2, 64)) = Nat::leb_sound(21, Nat::pow(2, 64), trivial); omega };
+    runs_elim(q0, eof_rip(ca(l_tsetup())), q5, eof_rip(ca(l_total_row())), LinuxRuns(io, events, state), setup, state, rip_is,
+        Exists(frame, ⟨memory_is, holds⟩), λ s8 steps8 rip8 at8 => {
+            let f8 = at8.left.left.left.witness;
+            let framed8 = at8.left.left.left.proof;
+            let img = with_frame(file, f8);
+            let counts = slots_counts(file, f8, vars, framed8.right, 8, { omega }, totals, held.totals_is);
+            have ran = row_runs(img, eof_rip(ca(l_total_row())), here(l_total_row(), f8), page, width, mask, slot_at(8), totals, counts, 0, s8,
+                framed8.left, rip8, trans(cong_fn<BitVec(64), Nat>(λ v => v.toNat(), at8.right), page_word_value()), at8.left.left.right.left,
+                trans(at8.left.left.right.right, held.mask_is),
+                trans(cong_fn<BitVec(64), Nat>(λ v => v.toNat(), trans(at8.left.right, held.width_is)), toNat_word_of_nat(64, width, w_small)),
+                { omega });
+            let s9 = ran.witness;
+            let out = ran.proof.right;
+            let short_row = row_counts_le(width, mask, totals);
+            let p0: Put(img, page, 0, row ++ Nil, ca(l_tn0()), s9) = j(sym(List::append_nil(row)), λ bs _ => Put(img, page, 0, bs, ca(l_tn0()), s9),
+                Put(page := out.page, memory_is := out.memory_is, rip_is := trans(out.rip_is, rip_compose(io_entry(), ca(l_total_row()), row_len())),
+                    holds := out.holds, rdi := out.rdi));
+            linux_runs_after_linux_steps(io, events, state, s9, linux_steps_trans(io, state, s8, s9, steps8, ran.proof.left),
+                total_tail(file, letters, default, spill, code, jumps, pj, placed, f8, vars, framed8.right, status_word(failed), held.status_is,
+                    row, { omega }, total, ok, page, s9, p0))
+        })
 }
 // After the last operand (`l_total`): with two or more, the totals' row, then
 // the exit.
@@ -918,22 +934,24 @@ theorem total_runs(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64),
     page: Nat → BitVec(8), state: MachineState<IoMemory>, memory_is: state.memory = IoMemory(with_frame(file, frame), page),
     rip_is: state.rip = eof_rip(ca(l_total()))): LinuxRuns(io_linux(), total_events(mask, width, n, total, failed, totals), state) {
     let io = io_linux();
-    let fetch = io_fetch_access();
-    let data = io_data_access();
-    let img = with_frame(file, frame);
-    let pieces = cmd_at(img, letters, default, spill, code, jumps, pj, placed(frame));
-    let loaded = run_slot_load(file, frame, vars, holds, page, ca(l_total()), 21, { omega }, Rax, pieces(l_total()), pieces(l_total_load()), state,
-        memory_is, rip_is);
-    let s1 = slot_load_after(Rax, vars(21), 21, state);
-    let compared = run_block(img, page, total_compare(), io_entry(), ca(l_total_test()), pieces(l_total_test()), s1, loaded.memory_is, loaded.rip_is);
-    let s2 = execute_block_normal(total_compare(), s1);
-    let jb = JumpIfNear(B, cmd_d(l_total_jb()));
-    let jumped = run_near(img, page, jb, io_entry(), ca(l_total_jb()), pieces(l_total_jb()), s2, compared.memory_is, compared.rip_is);
-    let s3 = execute_near_control(jb, s2);
-    let to_s3: FetchedSteps(fetch, data, state, s3) = fetched_steps_trans(fetch, data, state, s1, s3, loaded.steps,
-        fetched_steps_trans(fetch, data, s1, s2, s3, compared.steps, jumped));
+    let here = λ (l: Prog) (f: Nat → BitVec(8)) => cmd_at(with_frame(file, f), letters, default, spill, code, jumps, pj, placed(f))(l);
     let count = vars(21);
     let two = BitVec::ofNat(2, n := 64);
+    let p0 = Framed(file, page, vars);
+    let p1 = λ (st: MachineState<IoMemory>) => Framed(file, page, vars)(st) ∧ (read_gpr(Rax, st.gprs) = count);
+    let p2 = λ (st: MachineState<IoMemory>) => Framed(file, page, vars)(st) ∧ (condition_holds(B, st.flags) = count.borrow_sub_bit(two));
+    let compared = runs_seq(p0, eof_rip(ca(l_total())), p1, eof_rip(ca(l_total_test())), p2, eof_rip(ca(l_total_jb())),
+        runs_slot_load(file, page, vars, ca(l_total()), 21, { omega }, Rax, here(l_total()), here(l_total_load()), p0, p1, λ _ h => h,
+            λ st h framed => ⟨framed, refl⟩),
+        runs_block(total_compare(), io_entry(), ca(l_total_test()), p1, p2,
+            λ st h => framed_resident(file, page, vars, canonical_block_bytes(total_compare()), eof_rip(ca(l_total_test())), here(l_total_test()), st,
+                h.left),
+            λ st h same => ⟨framed_moved(file, page, vars, execute_block_normal(total_compare(), st), st, same, h.left),
+                cong_fn<BitVec(64), Bool>(λ v => v.borrow_sub_bit(two), h.right)⟩));
+    let jb = JumpIfNear(B, cmd_d(l_total_jb()));
+    let resident = λ (st: MachineState<IoMemory>) (h: p2(st)) =>
+        framed_resident(file, page, vars, near_control_bytes(jb), eof_rip(ca(l_total_jb())), here(l_total_jb()), st, h.left);
+    let pre: p0(state) = Exists(frame, ⟨memory_is, holds⟩);
     let value: (count.toNat() = n) = trans(cong_fn<BitVec(64), Nat>(λ v => v.toNat(), held.count_is), toNat_word_of_nat(64, n, few));
     let two_value: (two.toNat() = 2) = BitVec::toNat_ofNat(64, 2, { omega });
     (match count.borrow_sub_bit(two) as λ c => (count.borrow_sub_bit(two) = c) →
@@ -941,22 +959,28 @@ theorem total_runs(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64),
         True => λ below => {
             let lt = cmp_below(count, two, below);
             let short: (n < 2) = omega;
-            let s3_rip = jcc_taken(B, cmd_d(l_total_jb()), s2, io_entry(), ca(l_total_jb()), ca(l_exit()), compared.rip_is, below, cmd_j_total_jb());
-            let exits = exit_runs(file, letters, default, spill, code, jumps, pj, placed, frame, vars, holds, status_word(failed), held.status_is,
-                page, s3, compared.memory_is, s3_rip);
             j(sym(total_events_few(mask, width, n, total, failed, totals, io_leb_false(2, n, short))), λ es _ => LinuxRuns(io, es, state),
-                linux_runs_after_steps(io, [ExitEvent(status_word(failed))], state, s3, to_s3, exits))
+                runs_into(p0, eof_rip(ca(l_total())), p0, eof_rip(ca(l_exit())), [ExitEvent(status_word(failed))],
+                    runs_seq(p0, eof_rip(ca(l_total())), p2, eof_rip(ca(l_total_jb())), p0, eof_rip(ca(l_exit())), compared,
+                        runs_jcc_taken(B, cmd_d(l_total_jb()), io_entry(), ca(l_total_jb()), ca(l_exit()), cmd_j_total_jb(), p2, p0, resident,
+                            λ st h => trans(h.right, below), λ st h => h.left)),
+                    state, rip_is, pre,
+                    λ s at h => exit_runs(file, letters, default, spill, code, jumps, pj, placed, h.witness, vars, h.proof.right, status_word(failed),
+                        held.status_is, page, s, h.proof.left, at)))
         },
         False => λ fits => {
             let ge = cmp_not_below(count, two, fits);
             let many_n: (2 <= n) = omega;
             let many: (Nat::leb(2, n) = True) = bool::eq_true_of_is_true(Nat::leb(2, n), Nat::leb_complete(2, n, many_n));
-            let s3_rip = jcc_passed(B, cmd_d(l_total_jb()), s2, io_entry(), ca(l_total_jb()), compared.rip_is, fits);
+            let events = write_events_then(row_counts(width, mask, totals) ++ total_name(), total.steps, total.ending, [ExitEvent(status_word(failed))]);
             j(sym(total_events_many(mask, width, n, total, failed, totals, many)), λ es _ => LinuxRuns(io, es, state),
-                linux_runs_after_steps(io, write_events_then(row_counts(width, mask, totals) ++ total_name(), total.steps, total.ending,
-                    [ExitEvent(status_word(failed))]), state, s3, to_s3,
-                    total_rows(file, letters, default, spill, code, jumps, pj, placed, frame, vars, holds, mask, width, n, failed, totals, held,
-                        narrow, total, total_ok_many(mask, width, n, total, totals, many, ok), page, s3, compared.memory_is, s3_rip)))
+                runs_into(p0, eof_rip(ca(l_total())), p0, eof_rip(ca(l_tsetup())), events,
+                    runs_seq(p0, eof_rip(ca(l_total())), p2, eof_rip(ca(l_total_jb())), p0, eof_rip(ca(l_tsetup())), compared,
+                        runs_jcc_passed(B, cmd_d(l_total_jb()), io_entry(), ca(l_total_jb()), p2, p0, resident, λ st h => trans(h.right, fits),
+                            λ st h => h.left)),
+                    state, rip_is, pre,
+                    λ s at h => total_rows(file, letters, default, spill, code, jumps, pj, placed, h.witness, vars, h.proof.right, mask, width, n, failed,
+                        totals, held, narrow, total, total_ok_many(mask, width, n, total, totals, many, ok), page, s, h.proof.left, at)))
         },
     })(refl)
 }
