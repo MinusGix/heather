@@ -1114,6 +1114,30 @@ theorem failed_runs(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64)
 theorem or_true_r(a: Bool): a || True = True { match a { False => refl, True => refl } }
 fn closes_block() → List<Instruction> { [MovRR(Rdi, Rsp), MovRI(Rax, BitVec::ofNat(3))] }
 fn zero_test_block() → List<Instruction> { [MovRI(R11, word_zero()), CmpRR(Rax, R11)] }
+// Slot `q` into RAX (`k`), then against zero: ZF is whether it is zero.
+fn slot_tested_after(q: Nat, vars: Nat → BitVec(64), state: MachineState<IoMemory>) → MachineState<IoMemory> {
+    execute_block_normal(zero_test_block(), slot_load_after(Rax, vars(q), q, state))
+}
+theorem runs_slot_test(file: IoImage, page: Nat → BitVec(8), vars: Nat → BitVec(64), k, q: Nat, inside: q < frame_slots(),
+    block: (frame: Nat → BitVec(8)) → Placed(with_frame(file, frame), canonical_block_bytes(slot_block(q)), eof_rip(k)),
+    load: (frame: Nat → BitVec(8)) → Placed(with_frame(file, frame), word_load_bytes(WordLoad(destination := Rax, base := R11)), eof_rip(k + 10)),
+    test: (frame: Nat → BitVec(8)) → Placed(with_frame(file, frame), canonical_block_bytes(zero_test_block()), eof_rip((k + 10) + 3)),
+    p, r: MachineState<IoMemory> → Type, framed: (state: MachineState<IoMemory>) → p(state) → Framed(file, page, vars)(state),
+    post: (state: MachineState<IoMemory>) → p(state) → Framed(file, page, vars)(slot_tested_after(q, vars, state)) →
+        r(slot_tested_after(q, vars, state))): Runs(p, eof_rip(k), r, eof_rip(((k + 10) + 3) + 13)) {
+    λ state rip_is holds => {
+        let at = framed(state, holds);
+        let img = with_frame(file, at.witness);
+        let loaded = run_slot_load(file, at.witness, vars, at.proof.right, page, k, q, inside, Rax, block(at.witness), load(at.witness), state,
+            at.proof.left, rip_is);
+        let s1 = slot_load_after(Rax, vars(q), q, state);
+        let tested = run_block(img, page, zero_test_block(), io_entry(), (k + 10) + 3, test(at.witness), s1, loaded.memory_is, loaded.rip_is);
+        let s2 = slot_tested_after(q, vars, state);
+        Exists(s2, ⟨linux_steps_of_fetched(io_linux(), state, s2, fetched_steps_trans(io_fetch_access(), io_data_access(), state, s1, s2,
+                loaded.steps, tested.steps)),
+            ⟨tested.rip_is, post(state, holds, Exists(at.witness, ⟨tested.memory_is, at.proof.right⟩))⟩⟩)
+    }
+}
 // After the close returned (`l_close_test`): TEST, JS to the failed path, else back.
 fn test_block() → List<Instruction> { [TestRR(Rax, Rax)] }
 theorem close_back(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64), spill: Nat → StateReg, code: StructuredCode,
@@ -1174,41 +1198,52 @@ theorem closes_runs(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64)
     rip_is: state.rip = eof_rip(ca(l_closes())), rsp: read_gpr(Rsp, state.gprs) = fd):
     LinuxRuns(io_linux(), closing(fd, closes, closed, failed, totals, after), state) {
     let io = io_linux();
-    let fetch = io_fetch_access();
-    let data = io_data_access();
-    let img = with_frame(file, frame);
-    let pieces = cmd_at(img, letters, default, spill, code, jumps, pj, placed(frame));
-    let loaded = run_slot_load(file, frame, vars, holds, page, ca(l_closes()), 23, { omega }, Rax, pieces(l_closes()), pieces(l_closes_load()), state,
-        memory_is, rip_is);
-    let s1 = slot_load_after(Rax, vars(23), 23, state);
-    let tested = run_block(img, page, zero_test_block(), io_entry(), ca(l_closes_test()), pieces(l_closes_test()), s1, loaded.memory_is, loaded.rip_is);
-    let s2 = execute_block_normal(zero_test_block(), s1);
+    let here = λ (l: Prog) (f: Nat → BitVec(8)) => cmd_at(with_frame(file, f), letters, default, spill, code, jumps, pj, placed(f))(l);
+    let p0 = λ (st: MachineState<IoMemory>) => Framed(file, page, vars)(st) ∧ (read_gpr(Rsp, st.gprs) = fd);
+    let tested_at = λ (st: MachineState<IoMemory>) => Framed(file, page, vars)(st) ∧
+        ((st.flags.zf = is_zero_bits(64, vars(23).sub(word_zero()))) ∧ (read_gpr(Rsp, st.gprs) = fd));
+    let test = runs_slot_test(file, page, vars, ca(l_closes()), 23, { omega }, here(l_closes()), here(l_closes_load()), here(l_closes_test()),
+        p0, tested_at, λ _ h => h.left, λ st h framed => ⟨framed, ⟨refl, h.right⟩⟩);
     let je = JumpIfNear(E, cmd_d(l_closes_je()));
-    let jumped = run_near(img, page, je, io_entry(), ca(l_closes_je()), pieces(l_closes_je()), s2, tested.memory_is, tested.rip_is);
-    let s3 = execute_near_control(je, s2);
-    let to_s3: FetchedSteps(fetch, data, state, s3) = fetched_steps_trans(fetch, data, state, s1, s3, loaded.steps,
-        fetched_steps_trans(fetch, data, s1, s2, s3, tested.steps, jumped));
-    let zf: (s2.flags.zf = is_zero_bits(64, vars(23).sub(word_zero()))) = refl;
+    let resident = λ (st: MachineState<IoMemory>) (h: tested_at(st)) =>
+        framed_resident(file, page, vars, near_control_bytes(je), eof_rip(ca(l_closes_je())), here(l_closes_je()), st, h.left);
+    let pre: p0(state) = ⟨Exists(frame, ⟨memory_is, holds⟩), rsp⟩;
     (match closes as λ c => vars(23) = status_word(c) → LinuxRuns(io, closing(fd, c, closed, failed, totals, after), state) {
         False => λ none => {
-            let set: (s2.flags.zf = True) = trans(zf, trans(cong_fn<BitVec(64), Bool>(λ v => is_zero_bits(64, v.sub(word_zero())), none),
-                zero_bits_sub_self(64, word_zero())));
-            let s3_rip = jcc_taken_back(E, cmd_d(l_closes_je()), s2, io_entry(), ca(l_closes_je()), ca(l_loop()), tested.rip_is, set, cmd_j_closes_je());
-            linux_runs_after_steps(io, after(failed, totals), state, s3, to_s3,
-                goes(failed, frame, vars, holds, held, at19, at20, page, s3, tested.memory_is, s3_rip))
+            let p1 = Framed(file, page, vars);
+            runs_into(p0, eof_rip(ca(l_closes())), p1, eof_rip(ca(l_loop())), after(failed, totals),
+                runs_seq(p0, eof_rip(ca(l_closes())), tested_at, eof_rip(ca(l_closes_je())), p1, eof_rip(ca(l_loop())), test,
+                    runs_jcc_taken_back(E, cmd_d(l_closes_je()), io_entry(), ca(l_closes_je()), ca(l_loop()), cmd_j_closes_je(), tested_at, p1,
+                        resident,
+                        λ st h => trans(h.right.left, trans(cong_fn<BitVec(64), Bool>(λ v => is_zero_bits(64, v.sub(word_zero())), none),
+                            zero_bits_sub_self(64, word_zero()))),
+                        λ st h => h.left)),
+                state, rip_is, pre,
+                λ s at h => goes(failed, h.witness, vars, h.proof.right, held, at19, at20, page, s, h.proof.left, at))
         },
         True => λ some => {
-            let clear: (s2.flags.zf = False) = trans(zf, cong_fn<BitVec(64), Bool>(λ v => is_zero_bits(64, v.sub(word_zero())), some));
-            let s3_rip = jcc_passed(E, cmd_d(l_closes_je()), s2, io_entry(), ca(l_closes_je()), tested.rip_is, clear);
-            let asked = run_block(img, page, closes_block(), io_entry(), ca(l_close()), pieces(l_close()), s3, tested.memory_is, s3_rip);
-            let s4 = execute_block_normal(closes_block(), s3);
+            let asked = λ (st: MachineState<IoMemory>) => Framed(file, page, vars)(st) ∧
+                ((read_gpr(Rax, st.gprs) = BitVec::ofNat(3)) ∧ (read_gpr(Rdi, st.gprs) = fd));
             let rest = after(failed || close_failed(closed), totals);
-            linux_runs_close(io, state, s4, fd, closed, rest,
-                linux_steps_of_fetched(io, state, s4, fetched_steps_trans(fetch, data, state, s3, s4, to_s3, asked.steps)),
-                syscall_placed(img, page, io_entry(), ca(l_close_call()), pieces(l_close_call()), s4, asked.memory_is, asked.rip_is), refl, rsp, returns,
-                λ rcx r11 => close_back(file, letters, default, spill, code, jumps, pj, placed, mask, width, n, c19, c20, after, totals, goes, frame, vars,
-                    holds, failed, held, at19, at20, closed, returns, page, linux_write_return(s4, close_rax(closed), rcx, r11),
-                    asked.memory_is, rip_advance(io_entry(), s4.rip, ca(l_close_call()), 2, asked.rip_is), refl))
+            runs_into(p0, eof_rip(ca(l_closes())), asked, eof_rip(ca(l_close_call())), Cons(CloseEvent(fd, closed), rest),
+                runs_seq(p0, eof_rip(ca(l_closes())), tested_at, eof_rip(ca(l_closes_je())), asked, eof_rip(ca(l_close_call())), test,
+                    runs_seq(tested_at, eof_rip(ca(l_closes_je())), p0, eof_rip(ca(l_close())), asked, eof_rip(ca(l_close_call())),
+                        runs_jcc_passed(E, cmd_d(l_closes_je()), io_entry(), ca(l_closes_je()), tested_at, p0, resident,
+                            λ st h => trans(h.right.left, cong_fn<BitVec(64), Bool>(λ v => is_zero_bits(64, v.sub(word_zero())), some)),
+                            λ st h => ⟨h.left, h.right.right⟩),
+                        runs_block(closes_block(), io_entry(), ca(l_close()), p0, asked,
+                            λ st h => framed_resident(file, page, vars, canonical_block_bytes(closes_block()), eof_rip(ca(l_close())), here(l_close()),
+                                st, h.left),
+                            λ st h same => ⟨framed_moved(file, page, vars, execute_block_normal(closes_block(), st), st, same, h.left), ⟨refl, h.right⟩⟩))),
+                state, rip_is, pre,
+                λ s4 at h => linux_runs_close(io, s4, s4, fd, closed, rest, Exists(0, refl),
+                    syscall_placed(with_frame(file, h.left.witness), page, io_entry(), ca(l_close_call()), here(l_close_call(), h.left.witness), s4,
+                        h.left.proof.left, at),
+                    h.right.left, h.right.right, returns,
+                    λ rcx r11 => close_back(file, letters, default, spill, code, jumps, pj, placed, mask, width, n, c19, c20, after, totals, goes,
+                        h.left.witness, vars, h.left.proof.right, failed, held, at19, at20, closed, returns, page,
+                        linux_write_return(s4, close_rax(closed), rcx, r11), h.left.proof.left, rip_advance(io_entry(), s4.rip, ca(l_close_call()), 2, at),
+                        refl)))
         },
     })(closes_is)
 }
