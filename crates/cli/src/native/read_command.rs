@@ -39,10 +39,11 @@ pub(super) const SUPPORT: &[(&str, &str)] = &[
     ("elf64_command_events", include_str!("../../../../lib/elf64_command_events.hthr")),
     ("elf64_command_output", include_str!("../../../../lib/elf64_command_output.hthr")),
     ("elf64_frame", include_str!("../../../../lib/elf64_frame.hthr")),
+    ("elf64_straight", include_str!("../../../../lib/elf64_straight.hthr")),
     ("elf64_row_fields", include_str!("../../../../lib/elf64_row_fields.hthr")),
     ("elf64_command", include_str!("../../../../lib/elf64_command.hthr")),
 ];
-pub(super) const IMPORTS: &[&str] = &["elf64_command", "x86_64_asm", "elf64_command_output", "elf64_command_events", "elf64_row_fields", "elf64_frame",
+pub(super) const IMPORTS: &[&str] = &["elf64_command", "x86_64_asm", "elf64_command_output", "elf64_command_events", "elf64_row_fields", "elf64_frame", "elf64_straight",
     "elf64_stat_width", "elf64_operand_cursor", "elf64_arg_scan", "elf64_format_width", "elf64_runs", "command_program", "elf64_read_filter", "filter_program",
     "filter_step_piece", "stream_filter", "decimal_line", "elf64_write_loop", "elf64_print_pieces", "elf64_read_pieces", "elf64_io", "elf64_calls",
     "elf64", "linux_x86_64_entry", "linux_x86_64_io", "linux_x86_64_determinism", "x86_64_structured_block", "x86_64_layout", "function_ir_loop",
@@ -262,7 +263,7 @@ fn {prefix}_column(i: Nat) → {ty} → BitVec(64) {{ {column} }}
 
     // The library's code, read back, and where its items end: the read head
     // before the chunk loop is the last.
-    let imports = format!("import {}; import {context}; import elf64_command; import x86_64_asm; import bitvec_nat; import x86_64; import x86_64_block; import x86_64_structured_block; import elf64_frame; import elf64_stat_width; import elf64_row_fields; import elf64_format_width; import elf64_runs; import elf64_arg_scan; import linux_x86_64_io; import elf64_read_pieces; import x86_64_layout; import filter_program; \
+    let imports = format!("import {}; import {context}; import elf64_command; import x86_64_asm; import bitvec_nat; import x86_64; import x86_64_block; import x86_64_structured_block; import elf64_frame; import elf64_straight; import elf64_stat_width; import elf64_row_fields; import elf64_format_width; import elf64_runs; import elf64_arg_scan; import linux_x86_64_io; import elf64_read_pieces; import x86_64_layout; import filter_program; \
         import command_program; import bitvec; import list; import nat;", command.root);
     let (letters, default) = (format!("{prefix}_letters()"), format!("{prefix}_default()"));
     let fills = format!("cmd_fills({letters}, {default}, {prefix}_spill)");
