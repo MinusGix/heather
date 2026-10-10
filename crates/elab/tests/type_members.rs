@@ -391,7 +391,10 @@ fn failed_receiver_inference_is_reused_but_checking_can_still_pin_it() {
 
     ok(&format!("{REC} fn c(n: Nat) -> R(n) {{ R::mk(){chain} }}"));
     let error = bad(&format!("{REC} fn c(n: Nat, r: R(n)) -> R(Succ(n)) {{ r{chain} }}"));
-    assert!(error.contains("kernel"), "an incompatible result must still fail: {error}");
+    assert!(
+        error.contains("this has type `R(n)`, but `R(Succ(n))` is expected here"),
+        "an incompatible result must still fail: {error}"
+    );
 }
 
 // A constructor with no written type arguments names its inductive: the gate
@@ -585,4 +588,52 @@ fn the_missing_self_suggestion_is_narrow() {
          fn u(b: Box) -> Nat {{ shift(b, 3) }}"
     ));
     assert!(!e.contains("`self`"), "{e}");
+}
+
+// -- 7: a member declared at one instance of its type ---------------------
+//
+// issues/width-specific-method-on-other-width.md. The receiver's type selects
+// `Word::low` by its name alone, so a member declared for `Word(8)` is reached
+// from every `Word(n)`; the kernel refuses the wrong one, and the note names
+// the member and both instances instead of two types that displayed as `Word`.
+
+const WORD: &str = r#"
+record Word(n: Nat) { cells: [Nat; n] }
+fn Word::low(self w: Word(8)) -> Word(8) { w }
+"#;
+
+#[test]
+fn a_member_at_one_value_argument_takes_a_receiver_at_that_argument() {
+    ok(&format!("{WORD} fn u(x: Word(8)) -> Word(8) {{ x.low() }}"));
+}
+
+#[test]
+fn a_receiver_at_another_value_argument_is_named_with_both_instances() {
+    let e = bad(&format!("{WORD} fn u(x: Word(16)) -> Word(8) {{ x.low() }}"));
+    assert!(
+        e.contains("`Word::low` takes a receiver of type `Word(8)`, but this receiver has type `Word(16)`"),
+        "{e}"
+    );
+}
+
+// An open argument: the width is a variable, and the note spells it.
+#[test]
+fn a_receiver_at_an_open_value_argument_is_named_too() {
+    let e = bad(&format!("{WORD} fn u(m: Nat, x: Word(m)) -> Word(8) {{ x.low() }}"));
+    assert!(e.contains("this receiver has type `Word(m)`"), "{e}");
+}
+
+// Not a receiver: the same mismatch at a plain argument, and at a member's
+// result, gets the ordinary note — which now shows the arguments it differs in.
+#[test]
+fn a_value_argument_mismatch_elsewhere_is_spelled_with_its_arguments() {
+    let e = bad(&format!(
+        "{WORD} fn low(w: Word(8)) -> Word(8) {{ w }}
+         fn u(x: Word(16)) -> Word(8) {{ low(x) }}"
+    ));
+    assert!(e.contains("this has type `Word(16)`, but `Word(8)` is expected here"), "{e}");
+    assert!(!e.contains("takes a receiver"), "{e}");
+    let e = bad(&format!("{WORD} fn u(x: Word(8)) -> Word(16) {{ x.low() }}"));
+    assert!(e.contains("this has type `Word(8)`, but `Word(16)` is expected here"), "{e}");
+    assert!(!e.contains("takes a receiver"), "{e}");
 }

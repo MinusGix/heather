@@ -209,6 +209,16 @@ impl Elaborator {
                         .borrow_mut()
                         .push((recv.span, name.to_string()));
                 }
+                // Any member the receiver's type selected: the type picked
+                // the namespace, not the instance, so a receiver at another
+                // instance of it — `BitVec(16)` at a `BitVec(8)` member — is
+                // also found only by the gate (`member_receiver_note`).
+                if member_selected {
+                    self.attempt
+                        .member_receivers
+                        .borrow_mut()
+                        .push((recv.span, name.to_string()));
+                }
                 application::subject_index_in(&params)
             }
         };
@@ -550,6 +560,38 @@ impl Elaborator {
             .map(|(_, m)| m.clone())?;
         let carrier = self.receiver_carrier(cx, got, span)?;
         self.missing_self_message(&member, &carrier, span)
+    }
+
+    /// The gate's note for a receiver its type selected a member for, at an
+    /// instance the member does not take
+    /// (issues/width-specific-method-on-other-width.md). Selection reads only
+    /// the receiver's carrier — `BitVec`, whatever its width — so a member
+    /// declared at one instance is reached from every other, and the
+    /// mismatch is the kernel's to find; this names the member and both
+    /// instances. Only when the two spell completely and differently: a pair
+    /// that displays alike is left to the generic note, which says so.
+    pub(crate) fn member_receiver_note(
+        &self,
+        cx: &Cx,
+        span: Span,
+        got: &Type,
+        expected: &Type,
+    ) -> Option<String> {
+        let member = self
+            .attempt
+            .member_receivers
+            .borrow()
+            .iter()
+            .find(|(at, _)| *at == span)
+            .map(|(_, m)| m.clone())?;
+        let got_s = self.display_type_clean(cx, got)?;
+        let want_s = self.display_type_clean(cx, expected)?;
+        (got_s != want_s).then(|| {
+            format!(
+                "`{member}` takes a receiver of type `{want_s}`, but this receiver has type \
+                 `{got_s}`"
+            )
+        })
     }
 
     /// A type-owned member reached through a receiver, whose declaration

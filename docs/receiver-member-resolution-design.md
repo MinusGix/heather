@@ -191,6 +191,14 @@ amending the section named:
   each dot call that selects a member marking no `self`. That is one push on
   the success path, cleared per declaration with `check_notes`. The gate's
   note (`unmarked_receiver_note`) reads the record.
+- **§3.2, at another instance.** Selection reads the receiver's carrier and
+  not its arguments, so a member declared at `BitVec(8)` is reached from a
+  `BitVec(16)` receiver; there is one `BitVec::name` per namespace, so there
+  is nothing else to select, and the mismatch is the gate's like the one
+  above. `resolve_dot` records every member-selected receiver in
+  `DeclAttempt::member_receivers` (one more push per such call), and
+  `member_receiver_note` names the member and both instances when the gate
+  rejects (`issues/width-specific-method-on-other-width.md`).
 - **§4.** Two acceptance items reach only the honest error, because their
   qualified spelling fails identically on master. They are tested as such:
   - `zero().iterate_increment(3).band(y)`: a nested uninferable call in

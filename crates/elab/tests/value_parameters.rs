@@ -251,7 +251,9 @@ fn a_witness_for_one_parameter_does_not_inhabit_another() {
     let m = bad(&format!(
         "{HALTS}\nfn coerce(c: Halts(4)) -> Halts(5) {{ c }}"
     ));
-    assert!(m.contains("NotConvertible"), "{m}");
+    // Stated, now that the display shows the parameter the two differ in
+    // (issues/width-specific-method-on-other-width.md).
+    assert!(m.contains("this has type `Halts(4)`, but `Halts(5)` is expected here"), "{m}");
     // …and the same statement at the *right* parameter is provable, so the two
     // rejections above are about the parameter and not about the spelling.
     ok(&format!("{HALTS}\nfn right() -> Halts(4) {{ Halts(2, refl) }}"));

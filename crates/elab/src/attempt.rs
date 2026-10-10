@@ -41,6 +41,12 @@ pub(super) struct DeclAttempt {
     /// no elaboration error — the kernel is the judge — so the dot call's own
     /// failure path never sees it.
     pub(super) unmarked_receivers: RefCell<Vec<(Span, String)>>,
+    /// Every receiver a dot call placed into a member its type selected,
+    /// marked `self` or not, by the receiver's span and the member's name.
+    /// Read only by the probe of a [`CheckNote`] at that span, to name the
+    /// member whose receiver type the value missed — `BitVec::is_nl` at a
+    /// `BitVec(16)` (issues/width-specific-method-on-other-width.md).
+    pub(super) member_receivers: RefCell<Vec<(Span, String)>>,
     /// Written `refl`s whose two sides are not syntactically equal, in the
     /// order they were met — [`Self::check_notes`]' counterpart, deferred for
     /// its reason and probed the same way. Unlike a checking mismatch this
@@ -89,6 +95,7 @@ impl DeclAttempt {
         self.op_fallback_uses.get_mut().clear();
         self.check_notes.get_mut().clear();
         self.unmarked_receivers.get_mut().clear();
+        self.member_receivers.get_mut().clear();
         self.refl_notes.get_mut().clear();
         self.decide_uses.get_mut().clear();
         self.direct_dependencies.get_mut().clear();
@@ -110,6 +117,7 @@ impl DeclAttempt {
         self.op_fallback_notes.get_mut().clear();
         self.check_notes.get_mut().clear();
         self.unmarked_receivers.get_mut().clear();
+        self.member_receivers.get_mut().clear();
         self.refl_notes.get_mut().clear();
         self.decide_uses.get_mut().clear();
     }
