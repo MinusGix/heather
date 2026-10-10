@@ -13,6 +13,7 @@ import x86_64_data_read;
 import x86_64_access_memory;
 import x86_64_layout;
 import x86_64_asm;
+import elf64_runs;
 import x86_64_store;
 import bitvec;
 import bitvec_nat;
@@ -349,57 +350,6 @@ theorem fmt_kept_trans(after, middle, before: Gprs, late: FmtKept(after, middle)
     ⟨trans(late.right.right.right.right.right.right.left, early.right.right.right.right.right.right.left),
     ⟨trans(late.right.right.right.right.right.right.right.left, early.right.right.right.right.right.right.right.left),
      trans(late.right.right.right.right.right.right.right.right, early.right.right.right.right.right.right.right.right)⟩⟩⟩⟩⟩⟩⟩⟩
-}
-
-// Code at `at` whatever the page holds.
-fn Placed(file: IoImage, code: List<BitVec(8)>, at: BitVec(64)) → Type {
-    (page: Nat → BitVec(8)) → CodeResident(io_fetch_access(), IoMemory(file, page), code, at)
-}
-theorem placed_split(file: IoImage, front, back: List<BitVec(8)>, at: BitVec(64), placed: Placed(file, front ++ back, at)):
-    Placed(file, front, at) ∧ Placed(file, back, next_rip(at, front.len())) {
-    ⟨λ page => resident_split(io_fetch_access(), IoMemory(file, page), front, back, at, placed(page)).left,
-     λ page => resident_split(io_fetch_access(), IoMemory(file, page), front, back, at, placed(page)).right⟩
-}
-// A piece of a laid-out block, placed where the layout puts it.
-theorem placed_piece(file: IoImage, pieces: List<List<BitVec(8)>>, last: List<BitVec(8)>, lens: List<Nat>,
-    measured: LayoutMeasured(pieces, lens), at: BitVec(64), placed: Placed(file, layout_code(pieces, last), at), i: Nat):
-    Placed(file, layout_piece(pieces, last, i), next_rip(at, layout_at(0, lens, i))) {
-    λ page => layout_resident(io_fetch_access(), IoMemory(file, page), at, last, pieces, lens, measured, 0, placed(page), i)
-}
-
-// A program's items, each placed at its label, wherever the program is.
-fn AsmPlaced(file: IoImage, fills: Nat → List<BitVec(8)>, p: Prog, at: BitVec(64)) → Type {
-    (l: Prog) → Placed(file, item_bytes(fills, asm_labels(p), asm_find(p, l)), next_rip(at, asm_at(asm_find(p, l))))
-}
-theorem asm_placed(file: IoImage, fills: Nat → List<BitVec(8)>, p: Prog, fits: FillsFit(p, fills), at: BitVec(64),
-    placed: Placed(file, assemble(fills, p, Nil), at)): AsmPlaced(file, fills, p, at) {
-    λ l page => asm_resident(io_fetch_access(), IoMemory(file, page), at, fills, asm_labels(p), p, fits, Nil, placed(page), l)
-}
-
-// A straight block run from its start: memory unchanged, RIP past it.
-record Ran(file: IoImage, page: Nat → BitVec(8), before, after: MachineState<IoMemory>, to: BitVec(64)) {
-    steps: FetchedSteps(io_fetch_access(), io_data_access(), before, after),
-    memory_is: after.memory = IoMemory(file, page),
-    rip_is: after.rip = to,
-}
-theorem run_block(file: IoImage, page: Nat → BitVec(8), instructions: List<Instruction>, at: BitVec(64), k: Nat,
-    placed: Placed(file, canonical_block_bytes(instructions), next_rip(at, k)), state: MachineState<IoMemory>,
-    memory_is: state.memory = IoMemory(file, page), rip_is: state.rip = next_rip(at, k)):
-    Ran(file, page, state, execute_block_normal(instructions, state), next_rip(at, k + canonical_block_bytes(instructions).len())) {
-    let fetch = io_fetch_access();
-    let ran = block_fetched(fetch, io_data_access(), instructions, state, trivial,
-        resident_state(fetch, canonical_block_bytes(instructions), IoMemory(file, page), next_rip(at, k), state, memory_is, rip_is, placed(page)));
-    Ran(steps := ran.left, memory_is := trans(pure_block_memory(instructions, state), memory_is),
-        rip_is := trans(ran.right, rip_advance(at, state.rip, k, canonical_block_bytes(instructions).len(), rip_is)))
-}
-theorem run_near(file: IoImage, page: Nat → BitVec(8), control: NearControl, at: BitVec(64), k: Nat,
-    placed: Placed(file, near_control_bytes(control), next_rip(at, k)), state: MachineState<IoMemory>,
-    memory_is: state.memory = IoMemory(file, page), rip_is: state.rip = next_rip(at, k)):
-    FetchedSteps(io_fetch_access(), io_data_access(), state, execute_near_control(control, state)) {
-    let fetch = io_fetch_access();
-    fetched_steps_one(fetch, io_data_access(), state, execute_near_control(control, state),
-        near_fetched_step(fetch, io_data_access(), control, state,
-            resident_state(fetch, near_control_bytes(control), IoMemory(file, page), next_rip(at, k), state, memory_is, rip_is, placed(page))))
 }
 
 // CMP's carry is the unsigned order.
