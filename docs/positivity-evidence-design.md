@@ -1,7 +1,8 @@
 # Positive values: a type, a hypothesis, or a binder
 
-Status: design proposal, 2026-10-10. Nothing here is implemented; the
-probes in §3 were run against master at f2deb85. Tracking issue:
+Status: design proposal, 2026-10-10; route and spelling chosen the same day
+(§7). Nothing here is implemented; the probes in §3 were run against master
+at f2deb85. Tracking issue:
 [positivity-evidence](../issues/positivity-evidence.md).
 
 The question: should `lib/std/pos.hthr`'s `Pos` exist at all? The three
@@ -195,11 +196,19 @@ looking through `∧` projections of locals, so `facts.right.left` needs no
 `let`. That one is optional: it is cheap, but it widens what "in scope"
 means.
 
-Not proposed: **omega as an implicit default.** A default solver runs at
-every call site, invisibly, and omega is the most expensive thing per goal
-in the library (`issues/omega-per-goal-elaboration-cost.md`). Where the cheap
-sources miss, the caller writes the proof by name (`h := omega`). That keeps
-the cost where it is visible.
+Not proposed: **omega inside `infer`.** `infer` runs at every call site of
+every solver parameter, invisibly, and omega is the most expensive thing per
+goal in the library (`issues/omega-per-goal-elaboration-cost.md`). Omega
+belongs where an author chose it:
+
+- **At a call site**, by name: `mod_lt(x, p, positive := omega)`.
+- **At a declaration**, as a parameter default: `h: 0 < n := omega`. This
+  does not parse today. It is `docs/named-arguments-design.md` §9.4's stored
+  goal, the same machinery record fields have, and it is wanted (§7). The
+  author who writes it has chosen omega's cost for every caller.
+- **Later, a `positivity` tactic** that composes the evidence rules and hands
+  linear leftovers to omega, usable as `h: 0 < n := positivity`. Whether the
+  rules live in `infer` (as above) or only in that tactic is open (§7).
 
 ### B. `Pos<A>` as binder sugar, not a type
 
@@ -214,11 +223,21 @@ theorem Nat::mod_lt(self n, divisor: Nat, divisor_pos: 0 < divisor := infer): �
   callees through (A). A caller passes a plain `A` and the proof is found,
   which is option 3's behaviour with no coercion, because nothing is ever
   wrapped. The named argument `divisor_pos := …` overrides it.
-- **Results.** `fn ten_pow(i: Nat) → Pos<Nat>` returns a `Nat` and mints a
-  companion theorem `0 < ten_pow(i)`, which is registered as an evidence
-  rule. The body's positivity is an obligation discharged by (A), or left as
-  a resumable goal, as field defaults already do. This is what turns (c)
-  into (a): `ten_pow_pos(Succ(i))` disappears from call sites.
+- **Results.** `fn ten_pow(i: Nat) → Pos<Nat>` returns a `Nat` and gives the
+  function a theorem `ten_pow::pos(i): 0 < ten_pow(i)`, registered as an
+  evidence rule. The name is deterministic and owned by the function, not a
+  hygienic minted name in the shared namespace. The body's positivity is an
+  obligation discharged by (A), or left as a resumable goal, as field
+  defaults already do. This is what turns (c) into (a):
+  `ten_pow_pos(Succ(i))` disappears from call sites.
+
+  Function-owned names do not exist yet. Today a member declaration attaches
+  only to a type, and `theorem ten_pow::pos` is refused with "`ten_pow` is
+  not a type or a type former in scope" (probed). Letting a `fn` own members
+  is useful beyond positivity, since many theorems are about one function
+  rather than about its result type. `ten_pow::pos` is the safe spelling.
+  `ten_pow.pos` would collide with receiver dispatch, which resolves `f.m` by
+  the type of `f`, here a function type.
 - **Record fields.** `den: Pos<Nat>` expands to `den: Nat, den_pos: 0 < den`,
   plus a rule `0 < r.den` from `r.den_pos`. `Rat` becomes
   `{ num: Int, den: Pos<Nat> }`, reading exactly as it does today, but the
@@ -273,32 +292,50 @@ neither, and B gets most of that surface from the resolver it already has.
 CoRN's `Qpos` is the function-domain case B deliberately leaves to a later
 type.
 
-## 7. Decisions for Minus
+## 7. Decisions
 
-1. **Route:** B on top of A (recommended), A alone with hypotheses written
-   out, or a refinement record (option 1) now.
-2. **Spelling of the sugar:** `n: Pos<Nat>`, `n: Nat where 0 < n`, or both.
-   The `where` form generalizes to other refinements (`n: Nat where n < 64`),
-   and `Pos<A>` could be the named abbreviation of it.
-3. **Rule registration spelling:** reuse `instance(…) P := lemma`, or give it
-   a declaration form of its own.
-4. **Whether `infer` looks through `∧` projections of locals.**
+Taken by Minus, 2026-10-10:
+
+1. **Route: B on top of A.** Sugar over search; no `Fact`-style class.
+2. **Spelling: `n: Pos<Nat>`.** A property that is not worth a name is an
+   ordinary proof parameter, so there is no general `where` form.
+3. **`h := omega` should parse** as a parameter default (§6 A), and a
+   dedicated positivity tactic is wanted eventually.
+4. **Result facts are named under the function** (`ten_pow::pos`) rather
+   than minted, which needs function-owned members (§6 B).
+
+Still open:
+
+1. **How smart `infer` is.** Either locals plus computation, with the
+   evidence rules living only in the positivity tactic, or locals,
+   computation and rules in `infer` itself. The first keeps `infer` a cheap
+   scope lookup; the second makes `Pos<Nat>` parameters work with no
+   default written.
+2. **Rule registration spelling.** `ten_pow::pos` registers itself through
+   the sugar; a hand-written rule such as `Nat::mul_pos` needs a declaration
+   form or an attribute.
+3. **Whether `infer` looks through `∧` projections of locals.**
 
 ## 8. Rounds this implies, in order
 
-1. `infer` at proposition goals: computation, then evidence rules with
-   head-of-term keys. Fix the two diagnostic nits from §3 in the same round.
-2. Binder sugar for parameters, then results with companion rules, then
+1. `infer` at proposition goals: computation to `True`, and evidence rules
+   with head-of-term keys if open question 1 puts them there. Fix the two
+   diagnostic nits from §3 in the same round.
+2. Parameter defaults with a stored goal (`h: 0 < n := omega`), sharing the
+   record-field machinery (`issues/field-defaults-under-locals.md`).
+3. Function-owned members (`theorem ten_pow::pos`).
+4. `Pos<A>` binder sugar for parameters, then results (with `f::pos`), then
    record fields.
-3. Migrate `Rat` and the cancellation lemmas, and delete the shifted `Pos`.
-4. A refinement *type* for function domains and containers, when the
+5. Migrate `Rat` and the cancellation lemmas, and delete the shifted `Pos`.
+6. A `positivity` tactic.
+7. A refinement *type* for function domains and containers, when the
    regular-reals probe needs one.
 
 Owners elsewhere:
 [setoid-auto-lifting](../issues/setoid-auto-lifting.md) and
 [subtype-transfer-and-evidence](../issues/subtype-transfer-and-evidence.md)
 own lifting operations and comparing evidence policies for real subtypes,
-which round 4 would feed.
+which round 7 would feed.
 [field-defaults-under-locals](../issues/field-defaults-under-locals.md) owns
 the stored-goal machinery that parameter defaults would share.
 [implicit-logical-assumptions](../issues/implicit-logical-assumptions.md)

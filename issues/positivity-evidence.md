@@ -1,5 +1,5 @@
 ---
-title: Decide how positivity is spelled: keep Pos, hypotheses, or binder sugar over infer
+title: Replace the shifted Pos with Pos<A> binder sugar over a smarter infer
 status: open
 labels: [stdlib,elaboration,traits,design,ergonomics]
 created: 2026-10-10
@@ -18,15 +18,16 @@ type, migrate `Rat`, and delete the shifted representation. A real
 refinement type for function domains and containers waits for
 [[regular-cauchy-reals]].
 
-## Decisions wanted (design note §7)
+## Decided (2026-10-10, design note §7)
 
-1. Route: sugar over the search (recommended), the search alone, or a
-   refinement record now.
-2. Spelling: `n: Pos<Nat>`, `n: Nat where 0 < n`, or both.
-3. How an evidence rule is registered.
-4. Whether `infer` looks through `∧` projections of locals.
+Sugar over search, spelled `n: Pos<Nat>`; no `Fact`-style class; parameter
+defaults such as `h: 0 < n := omega` should parse; a positivity tactic
+eventually; result facts named under the function (`ten_pow::pos`), which
+needs function-owned members.
 
-No refactor of `Pos` users until the route is picked.
+Open: whether evidence rules live in `infer` or only in the tactic, the
+rule registration spelling, and `∧` projections in `infer`. The rounds are
+listed in the note's §8; this issue closes when they are filed.
 
 ## What it assumes from elsewhere
 
@@ -43,3 +44,4 @@ No refactor of `Pos` users until the route is picked.
 
 - 2026-10-10: Filed with the design note, from Minus's question whether
   `Pos` should exist at all.
+- 2026-10-10: Minus chose sugar over search, spelled `n: Pos<Nat>`, no `Fact`, `h := omega` parameter defaults, and function-owned result facts (`ten_pow::pos`). Note §7–§8 updated; title changed to match.
