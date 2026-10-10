@@ -426,6 +426,39 @@ theorem List::len_filter_cons<A>(h: A, t: List<A>, p: A → Bool):
 }
 
 // ---------------------------------------------------------------------------
+// Counting (issues/list-count-and-lines.md): the elements `p` holds of.
+
+fn List::count<A>(self xs: List<A>, p: A → Bool) → Nat {
+    match xs { Nil => 0, Cons(h, t) => t.count(p) + Nat::of_bit(p(h)) }
+}
+
+theorem List::count_nil<A>(p: A → Bool): List::count(Nil<A>, p) = 0 { refl }
+
+// One more than the tail's when `p` holds of the head, or as many.
+theorem List::count_cons<A>(h: A, t: List<A>, p: A → Bool): Cons(h, t).count(p) = t.count(p) + Nat::of_bit(p(h)) { refl }
+
+theorem List::count_append<A>(self xs, ys: List<A>, p: A → Bool):
+    (xs ++ ys).count(p) = xs.count(p) + ys.count(p)
+{
+    match xs {
+        Nil => sym(ys.count(p).add_left_zero()),
+        Cons(h, t) => match p(h) as λ c => (t ++ ys).count(p) + Nat::of_bit(c) = (t.count(p) + Nat::of_bit(c)) + ys.count(p) {
+            True => trans(Nat::cong_succ(t.count_append(ys, p)), sym(t.count(p).add_succ_left(ys.count(p)))),
+            False => t.count_append(ys, p),
+        },
+    }
+}
+
+// A count is the length of the filter: specs and proofs written over
+// `filter(p).len()` meet ones written over `count(p)` here.
+theorem List::count_eq_len_filter<A>(self xs: List<A>, p: A → Bool): xs.count(p) = xs.filter(p).len() {
+    match xs {
+        Nil => refl,
+        Cons(h, t) => trans(cong_fn<Nat, Nat>(λ n => n + Nat::of_bit(p(h)), t.count_eq_len_filter(p)), sym(List::len_filter_cons(h, t, p))),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Splitting at separators (issues/list-split-by.md)
 
 // `x` put at the front of the first piece.

@@ -275,7 +275,7 @@ by the library's fold lemmas (`fold_counts_filtered`, `fold_counts_len`,
 (`tr -s`, `tr -d`) proves it from what one byte emits (`quiet_computes`).
 Byte tests are decided propositions: a step branches with `if b = '\n'` or
 `if 'a' <= b ∧ b <= 'z'`, and a predicate a specification passes to
-`filter` or `split_by` is the decision's bit, `decide_bit<b = '\n'>()`.
+`count` or `split_by` is the decision's bit, `decide_bit<b = '\n'>()`.
 That each count grows by at most one per byte is the bundle's `advances`
 field, shown by default (case analysis, then `omega`). A step the default
 cannot show gets an error naming the case left, and `advances := …` by hand.

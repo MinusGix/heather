@@ -25,7 +25,7 @@ import omega;
 fn newline(b: BitVec(8)) → Bool { decide_bit<b = '\n'>() }
 
 // What the count means: the input's newlines.
-fn wc_l(bytes: List<BitVec(8)>) → Nat { bytes.filter(newline).len() }
+fn wc_l(bytes: List<BitVec(8)>) → Nat { bytes.count(newline) }
 
 // What `wc -l` prints: the count as a decimal line.
 fn wc_l_out(bytes: List<BitVec(8)>) → List<BitVec(8)> { decimal_line(wc_l(bytes)) }
