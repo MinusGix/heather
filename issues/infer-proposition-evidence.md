@@ -1,6 +1,6 @@
 ---
 title: Discharge proposition goals in infer by computation and evidence rules
-status: open
+status: closed
 labels: [elaboration,traits,proofs,ergonomics]
 created: 2026-10-10
 updated: 2026-10-10
