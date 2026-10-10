@@ -5231,6 +5231,16 @@ impl Elaborator {
                 // the expected-type solver performs its own reduction retry.
                 let (t, got, _) =
                     self.elab_infer_at(cx, e, if suppress { None } else { Some(expected) })?;
+                // A *type* where a value is expected — the proposition `n = 0`
+                // where a `Bool` is — is refused here rather than noted: the
+                // kernel's verdict on it is `LevelMismatch`, which the notes
+                // below are never read for
+                // (issues/prop-in-bool-position-reaches-kernel.md).
+                if matches!(got, Type::Ty(_)) {
+                    if let Some(refusal) = self.type_where_value_expected(cx, e, &got, &head, lvl) {
+                        return Err(refusal);
+                    }
+                }
                 // The inferred type is *not* thrown away any more
                 // (`issues/check-fallback-discards-expected-type.md`): it is
                 // compared with what was expected, and a disagreement is
@@ -5248,6 +5258,111 @@ impl Elaborator {
                 Ok(t)
             }
         }
+    }
+
+    /// The refusal of an expression whose type is a universe — a type, most
+    /// often a proposition — checked where a value of a non-universe type is
+    /// expected (`issues/prop-in-bool-position-reaches-kernel.md`).
+    ///
+    /// The kernel refuses these as a bare `LevelMismatch` (the inferred type
+    /// lives a level above the expected one), and [`Self::kernel_error`] reads
+    /// the deferred checking notes only for `NotConvertible`, so the author
+    /// of `fn z(n: Nat) → Bool { n = 0 }` was told neither type. The refusal
+    /// is made here, at the expression, and only on a *decided* answer: the
+    /// expected type was reduced by the caller, but a universe can still hide
+    /// behind a δ-step that reduction does not take, so the semantic
+    /// conversion has the last word and anything short of `NotConvertible`
+    /// falls back to the ordinary note. It runs only when the inferred type
+    /// is a universe and differs from the expected one, which no well-typed
+    /// checking site produces.
+    ///
+    /// A proposition met where `bool::Bool` is expected also says how to get
+    /// its decision, when there is one: a trial `decide_bit<P>()` resolves
+    /// `Decide<P>` exactly as the written call would, and its state is rolled
+    /// back like any declined speculation. Whether that position should
+    /// *become* `decide_bit<P>()` is `issues/bool-from-decidable-prop.md`'s
+    /// question; until it is answered, this is an error.
+    fn type_where_value_expected(
+        &self,
+        cx: &Cx,
+        e: &Expr,
+        got: &Type,
+        expected: &Type,
+        lvl: &Level,
+    ) -> Option<ElabError> {
+        if self
+            .goal_oracle()
+            .convert_type(&cx.gamma, Layer::Prog, got, expected, lvl)
+            != Err(ConvError::NotConvertible)
+        {
+            return None;
+        }
+        let want = self.display_type_clean(cx, expected);
+        let bool_ty = Ty {
+            kind: TyKind::Named {
+                name: "bool::Bool".to_string(),
+                args: Vec::new(),
+            },
+            span: e.span,
+        };
+        let is_bool = self.elab_ty(cx, &bool_ty).is_ok_and(|(b, _)| {
+            self.goal_oracle()
+                .convert_type(&cx.gamma, Layer::Prog, expected, &b, &Level::Zero)
+                .is_ok()
+        });
+        let msg = if is_bool {
+            if self.decide_bit_resolves(cx, e) {
+                "this is a proposition, but a `Bool` is expected here; \
+                 `decide_bit<…>()` around it reads its decision as a `Bool`"
+                    .to_string()
+            } else {
+                "this is a proposition, but a `Bool` is expected here, and it has no \
+                 `Decide` instance to read its decision as one"
+                    .to_string()
+            }
+        } else {
+            let got = self.display_type_clean(cx, got).unwrap_or_else(|| "a universe".into());
+            match want {
+                Some(w) => format!(
+                    "this is a type (it has type `{got}`), but a value of `{w}` is expected here"
+                ),
+                None => format!(
+                    "this is a type (it has type `{got}`), but a value is expected here"
+                ),
+            }
+        };
+        Some(ElabError::Elab { msg, span: e.span })
+    }
+
+    /// Does `bool::decide_bit<P>()` elaborate, for the proposition `P` written
+    /// as `e`? A trial for [`Self::type_where_value_expected`]'s hint: its
+    /// warnings and goals are rolled back whatever the answer.
+    fn decide_bit_resolves(&self, cx: &Cx, e: &Expr) -> bool {
+        let prop = expression_as_type(e).unwrap_or_else(|| Ty {
+            kind: TyKind::OfExpr(Box::new(e.clone())),
+            span: e.span,
+        });
+        let call = Expr {
+            kind: ExprKind::App {
+                head: Box::new(Expr {
+                    kind: ExprKind::TyApp {
+                        head: Box::new(Expr {
+                            kind: ExprKind::Var("bool::decide_bit".to_string()),
+                            span: e.span,
+                        }),
+                        args: vec![prop],
+                    },
+                    span: e.span,
+                }),
+                args: Vec::new(),
+                named: Vec::new(),
+                explicit: false,
+                goal_oriented: false,
+            },
+            span: e.span,
+        };
+        let _rollback = matching::MatchRollback::new(self);
+        self.elab_infer(cx, &call).is_ok()
     }
 
     /// Notice what the kernel is going to reject, and where

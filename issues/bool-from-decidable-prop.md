@@ -3,7 +3,7 @@ title: Write a decidable proposition where a Bool is expected
 status: open
 labels: [frontend,elaboration,surface-syntax,design]
 created: 2026-10-07
-updated: 2026-10-07
+updated: 2026-10-08
 ---
 
 A Bool-valued predicate on a decidable proposition is written through
@@ -43,3 +43,7 @@ Questions:
 - **[[native-frontend-decided-matches]]** owns how `decide_bit` is read by
   the elaborator and the structured frontend. Assumed here: only that a
   resolved `decide_bit<P>()` is what both read.
+
+## Log
+
+- 2026-10-08: Its interim error landed: a proposition in a Bool position is now an elaborator refusal at the expression that names `decide_bit<…>()` when `Decide` resolves ([[prop-in-bool-position-reaches-kernel]]). The coercion question here is unchanged.

@@ -138,8 +138,10 @@ fn vector_literals_at_computed_carriers_keep_intrinsic_refusals() {
     assert!(m.contains("1 element(s) but 2 are expected"), "{m}");
     let m = elab_err("fn V<A>(n: Nat) -> Type { [A; n] } fn bad<A>(n: Nat, x: A) -> V<A>(n) { [x] }");
     assert!(m.contains("literal length"), "{m}");
+    // A type as an element used to reach the kernel as a bare `LevelMismatch`;
+    // it is refused at the element (issues/prop-in-bool-position-reaches-kernel.md).
     let m = elab_err("fn V<A>(n: Nat) -> Type { [A; n] } fn bad() -> V<Nat>(1) { [Type] }");
-    assert!(m.contains("LevelMismatch"), "{m}");
+    assert!(m.contains("this is a type (it has type `Type<1>`), but a value of `Nat` is expected here"), "{m}");
     let m = elab_err("fn Carrier() -> Type { Nat } fn bad() -> Carrier() { [1] }");
     assert!(m.contains("no instance for `CollectionLiteral<Nat>(1)`"), "{m}");
 }

@@ -245,3 +245,75 @@ fn ordinary_if_infers_a_constant_branch_type() {
         "#,
     );
 }
+
+// A proposition where a `Bool` is expected is refused by the elaborator, at
+// the proposition, saying what it is and how to read its decision
+// (issues/prop-in-bool-position-reaches-kernel.md). It used to reach the
+// kernel and come back as a bare `LevelMismatch` at the declaration.
+fn refused_at(e: &mut Elaborator, src: &str, at: &str) -> String {
+    let err = e.elab_module_source("probe", src).expect_err("source must be refused");
+    let msg = err.render(src);
+    assert!(!msg.contains("the kernel rejected"), "{msg}");
+    let heather_elab::ElabError::Elab { span, .. } = err else {
+        panic!("expected an elaborator error: {msg}")
+    };
+    assert_eq!(&src[span.start as usize..span.end as usize], at, "{msg}");
+    msg
+}
+
+#[test]
+fn a_decidable_proposition_where_a_bool_is_expected_points_at_decide_bit() {
+    let src = r#"
+        import logic;
+        import bool;
+        import nat;
+        fn z(n: Nat) -> Bool { n = 0 }
+    "#;
+    let msg = refused_at(&mut with_std(), src, "n = 0");
+    assert!(msg.contains("this is a proposition, but a `Bool` is expected here"), "{msg}");
+    assert!(msg.contains("`decide_bit<…>()`"), "{msg}");
+}
+
+#[test]
+fn an_undecidable_proposition_where_a_bool_is_expected_says_there_is_no_decide() {
+    let src = r#"
+        import logic;
+        import bool;
+        fn m(f: Nat -> Nat, g: Nat -> Nat) -> Bool { f = g }
+    "#;
+    let msg = refused_at(&mut with_std(), src, "f = g");
+    assert!(msg.contains("it has no `Decide` instance"), "{msg}");
+    assert!(!msg.contains("decide_bit"), "{msg}");
+}
+
+#[test]
+fn a_proposition_where_other_data_is_expected_names_both() {
+    let src = r#"
+        import logic;
+        import bool;
+        inductive Two { L, R }
+        fn t(n: Nat) -> Two { n = 0 }
+    "#;
+    let msg = refused_at(&mut with_std(), src, "n = 0");
+    assert!(msg.contains("but a value of `Two` is expected here"), "{msg}");
+}
+
+/// **Negative controls.** The refusal is on a decided conversion, not on the
+/// reduced head: a universe reached only through a `fn` still takes a
+/// proposition, and the spelling the hint names is accepted.
+#[test]
+fn a_proposition_where_a_universe_is_expected_is_still_accepted() {
+    ok(
+        &mut with_std(),
+        r#"
+        import logic;
+        import bool;
+        import nat;
+        fn Props() -> Type<1> { Type }
+        fn p(n: Nat) -> Type { n = 0 }
+        fn q(n: Nat) -> Props() { n = 0 }
+        fn z(n: Nat) -> Bool { decide_bit<n = 0>() }
+        theorem z0(): z(0) = True { refl }
+        "#,
+    );
+}
