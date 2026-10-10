@@ -1,0 +1,325 @@
+// Code as data with labels (issues/native-label-assembler.md): a program is
+// its items (instruction blocks, pieces measured by their lemmas, near jumps
+// to labels, pieces that take labels' offsets, and holes the program is
+// assembled with), and `assemble` lays it out with every offset and
+// displacement computed. Every item's length is known without the offsets
+// (a near jump is a fixed 5 or 6 bytes; a piece that takes offsets is as
+// long whatever they are), so an offset is the lengths before it summed and
+// the bytes are written over them.
+//
+// A program is written from its start as a chain of labels: a label is the
+// program up to and with its item (`At(before, name, item)`), and is where
+// the item starts. What a proof about the code cites is a label: the item
+// there is resident at its offset (`asm_resident`), and a jump's
+// displacement is the one `asm_jump` names. Nothing restates an offset, a
+// length or a displacement; a closed fact about them is proved by
+// evaluation where it is used.
+//
+// Why a chain and not a list: the kernel evaluates an offset afresh in every
+// conversion that needs it. A label's offset is the one before it plus its
+// predecessor's length *by definition*, so the step a proof takes from one
+// item to the next converts at the cost of one item's length, wherever in
+// the program it is; a list would sum every length before it each time. A
+// jump names its target by a number (`name`), since a forward target is a
+// label defined after it.
+import x86_64;
+import x86_64_block;
+import x86_64_fetch;
+import x86_64_fetched_code;
+import x86_64_layout;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+
+inductive Asm {
+    // An instruction block: its length is its instructions' summed.
+    Block(instructions: List<Instruction>),
+    // Bytes short enough to read their length off: a store, a syscall.
+    Code(bytes: List<BitVec(8)>),
+    // A near JCC or JMP to the label named `target`.
+    Jcc(cc: ConditionCode, target: Nat),
+    Jmp(target: Nat),
+    // A piece measured by its lemma: a library's layout, too long to read
+    // its length off its bytes.
+    Piece(bytes: List<BitVec(8)>, len: Nat, measured: bytes.len() = len),
+    // A piece whose bytes take the labels' offsets (by name) and its own: a
+    // library layout with a jump out of it. Its length does not depend on
+    // them.
+    Refer(bytes: (Nat → Nat) → Nat → List<BitVec(8)>, len: Nat, measured: (labels: Nat → Nat) → (here: Nat) → bytes(labels, here).len() = len),
+    // The program's `index`th open piece, `len` long: what it is assembled
+    // with (`fills`), a table or a parameter's code.
+    Hole(index: Nat, len: Nat),
+}
+
+// A program read from its end: the program before its last item, the
+// item's name (0 for none; a jump's target has one), and the item. A label
+// is a program, the one up to and with its item.
+inductive Prog { Start, At(before: Prog, name: Nat, item: Asm) }
+fn then(before: Prog, item: Asm) → Prog { At(before, 0, item) }
+
+fn block_length(instructions: List<Instruction>) → Nat {
+    match instructions { Nil => 0, Cons(instruction, rest) => canonical_length(instruction) + block_length(rest) }
+}
+theorem block_length_is(instructions: List<Instruction>): canonical_block_bytes(instructions).len() = block_length(instructions) {
+    match instructions {
+        Nil => refl,
+        Cons(instruction, rest) => trans(List::len_append(canonical_bytes(instruction), canonical_block_bytes(rest)),
+            trans(cong_fn<Nat, Nat>(λ n => n + canonical_block_bytes(rest).len(), canonical_bytes_length(instruction)),
+                cong_fn<Nat, Nat>(λ n => canonical_length(instruction) + n, block_length_is(rest)))),
+    }
+}
+
+fn asm_len(item: Asm) → Nat {
+    match item {
+        Block(instructions) => block_length(instructions),
+        Code(bytes) => bytes.len(),
+        Jcc(_, _) => 6,
+        Jmp(_) => 5,
+        Piece(_, len, _) => len,
+        Refer(_, len, _) => len,
+        Hole(_, len) => len,
+    }
+}
+// The program's length, and label `l`'s offset: where its item starts.
+fn prog_len(p: Prog) → Nat { match p { Start => 0, At(before, _, item) => prog_len(before) + asm_len(item) } }
+fn asm_at(l: Prog) → Nat { match l { Start => 0, At(before, _, _) => prog_len(before) } }
+
+// The offset of the label named `name` (nonzero), the last one so named.
+fn asm_target(p: Prog, name: Nat) → Nat {
+    match p { Start => 0, At(before, m, _) => match m.leb(name) && name.leb(m) { True => prog_len(before), False => asm_target(before, name) } }
+}
+fn asm_labels(p: Prog) → Nat → Nat { λ name => asm_target(p, name) }
+// An item's bytes at `here`, the holes filled from `fills` and the labels at
+// `labels`.
+fn asm_bytes(fills: Nat → List<BitVec(8)>, labels: Nat → Nat, here: Nat, item: Asm) → List<BitVec(8)> {
+    match item {
+        Block(instructions) => canonical_block_bytes(instructions),
+        Code(bytes) => bytes,
+        Jcc(cc, target) => near_control_bytes(JumpIfNear(cc, near_rel(here + 6, labels(target)))),
+        Jmp(target) => near_control_bytes(JumpNear(near_rel(here + 5, labels(target)))),
+        Piece(bytes, _, _) => bytes,
+        Refer(bytes, _, _) => bytes(labels, here),
+        Hole(index, _) => fills(index),
+    }
+}
+// The bytes of label `l`'s item, and of the program.
+fn item_bytes(fills: Nat → List<BitVec(8)>, labels: Nat → Nat, l: Prog) → List<BitVec(8)> {
+    match l { Start => Nil, At(before, _, item) => asm_bytes(fills, labels, prog_len(before), item) }
+}
+fn asm_code(fills: Nat → List<BitVec(8)>, labels: Nat → Nat, p: Prog) → List<BitVec(8)> {
+    match p { Start => Nil, At(before, _, item) => asm_code(fills, labels, before) ++ asm_bytes(fills, labels, prog_len(before), item) }
+}
+// The code: the program, its holes filled, then `last`, the open-ended piece
+// nothing is placed after.
+fn assemble(fills: Nat → List<BitVec(8)>, p: Prog, last: List<BitVec(8)>) → List<BitVec(8)> { asm_code(fills, asm_labels(p), p) ++ last }
+
+// The jump at label `l`: its displacement.
+fn asm_jump_of(labels: Nat → Nat, here: Nat, item: Asm) → BitVec(32) {
+    match item {
+        Jcc(_, target) => near_rel(here + 6, labels(target)),
+        Jmp(target) => near_rel(here + 5, labels(target)),
+        _ => BitVec::ofNat(0),
+    }
+}
+fn asm_jump(labels: Nat → Nat, l: Prog) → BitVec(32) { match l { Start => BitVec::ofNat(0), At(before, _, item) => asm_jump_of(labels, prog_len(before), item) } }
+
+// Where a jump lands, by evaluation: both sides of the landing equation
+// are closed numbers, compared by `leb` each way and proved `= True` by
+// `refl`, so the kernel evaluates them and the elaborator does not. Meeting
+// them by conversion instead unfolds the two offsets' sums against each
+// other and runs out of fuel once the jump spans much of a program.
+fn asm_same(a, b: Nat) → Bool { a.leb(b) && b.leb(a) }
+theorem asm_same_eq(a, b: Nat, same: asm_same(a, b) = True): a = b {
+    let both = a.leb(b).is_true_and(b.leb(a), j(sym(same), λ x _ => x.IsTrue(), trivial));
+    a.le_antisym(b, a.leb_sound(b, both.left), b.leb_sound(a, both.right))
+}
+theorem asm_lands_forward(from, size: Nat, displacement: BitVec(32), to: Nat,
+    same: asm_same(from + size + displacement.sign_extend(32).toNat(), to) = True): JumpsForward(from, size, displacement, to) {
+    asm_same_eq(from + size + displacement.sign_extend(32).toNat(), to, same)
+}
+theorem asm_lands_back(from, size: Nat, displacement: BitVec(32), to: Nat,
+    same: asm_same(from + size + displacement.sign_extend(32).toNat(), to + Nat::pow(2, 64)) = True): JumpsBack(from, size, displacement, to) {
+    asm_same_eq(from + size + displacement.sign_extend(32).toNat(), to + Nat::pow(2, 64), same)
+}
+// A jump item's own landing, its offset evaluated once (`here` is shared
+// by the jump's start and its displacement).
+fn asm_item_lands(labels: Nat → Nat, here, size: Nat, item: Asm, to: Nat) → Bool {
+    asm_same(here + size + asm_jump_of(labels, here, item).sign_extend(32).toNat(), to)
+}
+fn asm_lands(labels: Nat → Nat, l: Prog, size, to: Nat) → Bool {
+    match l { Start => False, At(before, _, item) => asm_item_lands(labels, prog_len(before), size, item, to) }
+}
+theorem asm_jump_lands(labels: Nat → Nat, l: Prog, size, to: Nat, same: asm_lands(labels, l, size, to) = True):
+    JumpsForward(asm_at(l), size, asm_jump(labels, l), to) {
+    (match l as λ m => asm_lands(labels, m, size, to) = True → JumpsForward(asm_at(m), size, asm_jump(labels, m), to) {
+        Start => λ no => absurd_of(no, λ (e: bool::False = bool::True) => j(e, λ x _ => x.IsTrue() → logic::False, λ u => u)(trivial)),
+        At(before, _, item) => λ yes => asm_same_eq(prog_len(before) + size + asm_jump_of(labels, prog_len(before), item).sign_extend(32).toNat(), to, yes),
+    })(same)
+}
+fn asm_item_lands_back(labels: Nat → Nat, here, size: Nat, item: Asm, to: Nat) → Bool {
+    asm_same(here + size + asm_jump_of(labels, here, item).sign_extend(32).toNat(), to + Nat::pow(2, 64))
+}
+fn asm_lands_back_to(labels: Nat → Nat, l: Prog, size, to: Nat) → Bool {
+    match l { Start => False, At(before, _, item) => asm_item_lands_back(labels, prog_len(before), size, item, to) }
+}
+theorem asm_jump_lands_back(labels: Nat → Nat, l: Prog, size, to: Nat, same: asm_lands_back_to(labels, l, size, to) = True):
+    JumpsBack(asm_at(l), size, asm_jump(labels, l), to) {
+    (match l as λ m => asm_lands_back_to(labels, m, size, to) = True → JumpsBack(asm_at(m), size, asm_jump(labels, m), to) {
+        Start => λ no => absurd_of(no, λ (e: bool::False = bool::True) => j(e, λ x _ => x.IsTrue() → logic::False, λ u => u)(trivial)),
+        At(before, _, item) => λ yes =>
+            asm_same_eq(prog_len(before) + size + asm_jump_of(labels, prog_len(before), item).sign_extend(32).toNat(), to + Nat::pow(2, 64), yes),
+    })(same)
+}
+
+// Label `l` found in `p`: the one as many items from its end as `l` is
+// shorter. It is `l` itself when `l` is one of `p`'s labels, which is what a
+// proof that cites `l` converts by.
+fn asm_back(p: Prog, k: Nat) → Prog { match k { Zero => p, Succ(j) => match p { Start => Start, At(before, _, _) => asm_back(before, j) } } }
+fn prog_depth(p: Prog) → Nat { match p { Start => 0, At(before, _, _) => Succ(prog_depth(before)) } }
+fn asm_find(p, l: Prog) → Prog { asm_back(p, prog_depth(p) -prog_depth(l)) }
+
+// ---------------------------------------------------------------------------
+// Every item is as long as `asm_len` says, once each hole is filled with
+// bytes as long as it says.
+
+fn FillsFit(p: Prog, fills: Nat → List<BitVec(8)>) → Type {
+    match p {
+        Start => True,
+        At(before, _, item) => match item { Hole(index, len) => (fills(index).len() = len) ∧ FillsFit(before, fills), _ => FillsFit(before, fills) },
+    }
+}
+theorem fills_fit_before(fills: Nat → List<BitVec(8)>, before: Prog, name: Nat, item: Asm, fits: FillsFit(At(before, name, item), fills)):
+    FillsFit(before, fills) {
+    (match item as λ it => FillsFit(At(before, name, it), fills) → FillsFit(before, fills) {
+        Block(_) => λ f => f,
+        Code(_) => λ f => f,
+        Jcc(_, _) => λ f => f,
+        Jmp(_) => λ f => f,
+        Piece(_, _, _) => λ f => f,
+        Refer(_, _, _) => λ f => f,
+        Hole(_, _) => λ f => f.right,
+    })(fits)
+}
+theorem asm_bytes_len(fills: Nat → List<BitVec(8)>, labels: Nat → Nat, here: Nat, before: Prog, name: Nat, item: Asm,
+    fits: FillsFit(At(before, name, item), fills)): asm_bytes(fills, labels, here, item).len() = asm_len(item) {
+    (match item as λ it => FillsFit(At(before, name, it), fills) → asm_bytes(fills, labels, here, it).len() = asm_len(it) {
+        Block(instructions) => λ _ => block_length_is(instructions),
+        Code(_) => λ _ => refl,
+        Jcc(_, _) => λ _ => refl,
+        Jmp(_) => λ _ => refl,
+        Piece(_, _, measured) => λ _ => measured,
+        Refer(_, _, measured) => λ _ => measured(labels, here),
+        Hole(_, _) => λ f => f.left,
+    })(fits)
+}
+theorem asm_len_step(code, bytes: List<BitVec(8)>, before, len: Nat, code_is: code.len() = before, bytes_is: bytes.len() = len):
+    (code ++ bytes).len() = before + len {
+    trans(List::len_append(code, bytes), trans(cong_fn<Nat, Nat>(λ n => n + bytes.len(), code_is), cong_fn<Nat, Nat>(λ n => before + n, bytes_is)))
+}
+theorem asm_code_len(fills: Nat → List<BitVec(8)>, labels: Nat → Nat, p: Prog): FillsFit(p, fills) → asm_code(fills, labels, p).len() = prog_len(p) {
+    match p {
+        Start => λ _ => refl,
+        At(before, name, item) => λ fits => asm_len_step(asm_code(fills, labels, before), asm_bytes(fills, labels, prog_len(before), item),
+            prog_len(before), asm_len(item), asm_code_len(fills, labels, before, fills_fit_before(fills, before, name, item, fits)),
+            asm_bytes_len(fills, labels, prog_len(before), before, name, item, fits)),
+    }
+}
+
+// The code resident at `at` is each label's item resident at its offset
+// from there.
+theorem asm_resident_from<M>(fetch: FetchAccess<M>, memory: M, origin: BitVec(64), fills: Nat → List<BitVec(8)>, labels: Nat → Nat, at: Nat,
+    p: Prog): FillsFit(p, fills) → (last: List<BitVec(8)>) → CodeResident(fetch, memory, asm_code(fills, labels, p) ++ last, next_rip(origin, at)) →
+    (k: Nat) → CodeResident(fetch, memory, item_bytes(fills, labels, asm_back(p, k)), next_rip(origin, at + asm_at(asm_back(p, k)))) {
+    match p {
+        Start => λ fits last resident k => match k as λ i => CodeResident(fetch, memory, item_bytes(fills, labels, asm_back(Start, i)),
+                next_rip(origin, at + asm_at(asm_back(Start, i)))) {
+            Zero => trivial,
+            Succ(_) => trivial,
+        },
+        At(before, name, item) => λ fits last resident => {
+            let code = asm_code(fills, labels, before);
+            let bytes = asm_bytes(fills, labels, prog_len(before), item);
+            let moved = j(List::append_assoc(code, bytes, last), λ c _ => CodeResident(fetch, memory, c, next_rip(origin, at)), resident);
+            let parts = resident_split_at(fetch, memory, code, bytes ++ last, origin, at, moved);
+            let fits_before = fills_fit_before(fills, before, name, item, fits);
+            let here = j(asm_code_len(fills, labels, before, fits_before), λ n _ => CodeResident(fetch, memory, bytes ++ last, next_rip(origin, at + n)),
+                parts.right);
+            λ k => match k as λ i => CodeResident(fetch, memory, item_bytes(fills, labels, asm_back(At(before, name, item), i)),
+                    next_rip(origin, at + asm_at(asm_back(At(before, name, item), i)))) {
+                Zero => resident_split_at(fetch, memory, bytes, last, origin, at + prog_len(before), here).left,
+                Succ(i) => asm_resident_from(fetch, memory, origin, fills, labels, at, before, fits_before, bytes ++ last, moved, i),
+            }
+        },
+    }
+}
+theorem asm_resident<M>(fetch: FetchAccess<M>, memory: M, origin: BitVec(64), fills: Nat → List<BitVec(8)>, labels: Nat → Nat, p: Prog,
+    fits: FillsFit(p, fills), last: List<BitVec(8)>, resident: CodeResident(fetch, memory, asm_code(fills, labels, p) ++ last, next_rip(origin, 0))):
+    (l: Prog) → CodeResident(fetch, memory, item_bytes(fills, labels, asm_find(p, l)), next_rip(origin, asm_at(asm_find(p, l)))) {
+    λ l => j(Nat::add_left_zero(asm_at(asm_find(p, l))),
+        λ n _ => CodeResident(fetch, memory, item_bytes(fills, labels, asm_find(p, l)), next_rip(origin, n)),
+        asm_resident_from(fetch, memory, origin, fills, labels, 0, p, fits, last, resident, prog_depth(p) -prog_depth(l)))
+}
+// And `last` after the program.
+theorem asm_last_resident<M>(fetch: FetchAccess<M>, memory: M, origin: BitVec(64), fills: Nat → List<BitVec(8)>, labels: Nat → Nat, p: Prog,
+    fits: FillsFit(p, fills), last: List<BitVec(8)>, resident: CodeResident(fetch, memory, asm_code(fills, labels, p) ++ last, next_rip(origin, 0))):
+    CodeResident(fetch, memory, last, next_rip(origin, prog_len(p))) {
+    let after = resident_split_at(fetch, memory, asm_code(fills, labels, p), last, origin, 0, resident).right;
+    j(trans(Nat::add_left_zero(asm_code(fills, labels, p).len()), asm_code_len(fills, labels, p, fits)),
+        λ n _ => CodeResident(fetch, memory, last, next_rip(origin, n)), after)
+}
+
+// The code's length: the program's, and the last piece's.
+theorem asm_len_is(fills: Nat → List<BitVec(8)>, labels: Nat → Nat, p: Prog, fits: FillsFit(p, fills), last: List<BitVec(8)>, last_len: Nat,
+    last_is: last.len() = last_len): (asm_code(fills, labels, p) ++ last).len() = prog_len(p) + last_len {
+    asm_len_step(asm_code(fills, labels, p), last, prog_len(p), last_len, asm_code_len(fills, labels, p, fits), last_is)
+}
+
+// ---------------------------------------------------------------------------
+// Stating code as written a piece at a time, so no one declaration
+// evaluates more of it than a piece: how a producer states its program.
+
+// The items' lengths, from the start.
+fn asm_lens_onto(p: Prog, after: List<Nat>) → List<Nat> { match p { Start => after, At(before, _, item) => asm_lens_onto(before, Cons(asm_len(item), after)) } }
+fn asm_lens(p: Prog) → List<Nat> { asm_lens_onto(p, Nil) }
+
+// The items' bytes as written, the last first, and the code they make.
+fn ItemsSame(fills: Nat → List<BitVec(8)>, labels: Nat → Nat, p: Prog) → List<List<BitVec(8)>> → Type {
+    match p {
+        Start => λ spelled => match spelled { Nil => True, Cons(_, _) => False },
+        At(before, name, item) => λ spelled => match spelled {
+            Nil => False,
+            Cons(bytes, rest) => (item_bytes(fills, labels, At(before, name, item)) = bytes) ∧ ItemsSame(fills, labels, before)(rest),
+        },
+    }
+}
+fn back_code(spelled: List<List<BitVec(8)>>) → List<BitVec(8)> { match spelled { Nil => Nil, Cons(bytes, rest) => back_code(rest) ++ bytes } }
+theorem asm_code_same(fills: Nat → List<BitVec(8)>, labels: Nat → Nat, p: Prog):
+    (spelled: List<List<BitVec(8)>>) → ItemsSame(fills, labels, p)(spelled) → asm_code(fills, labels, p) = back_code(spelled) {
+    match p {
+        Start => λ spelled => match spelled { Nil => λ _ => refl, Cons(_, _) => λ no => false_elim(no) },
+        At(before, name, item) => λ spelled => match spelled {
+            Nil => λ no => false_elim(no),
+            Cons(bytes, rest) => λ same => trans(
+                cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ c => c ++ asm_bytes(fills, labels, prog_len(before), item),
+                    asm_code_same(fills, labels, before, rest, same.right)),
+                cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ b => back_code(rest) ++ b, same.left)),
+        },
+    }
+}
+
+// A piece too long for one declaration, `n` bytes at a time: each chunk as
+// written, and nothing past the last. It needs nothing of how the piece is
+// made.
+fn ChunksAre(n: Nat, chunks: List<List<BitVec(8)>>) → List<BitVec(8)> → Type {
+    match chunks { Nil => λ bytes => bytes = Nil, Cons(c, cs) => λ bytes => (bytes.take(n) = c) ∧ ChunksAre(n, cs)(bytes.drop(n)) }
+}
+theorem chunks_same(n: Nat, chunks: List<List<BitVec(8)>>): (bytes: List<BitVec(8)>) → ChunksAre(n, chunks)(bytes) → bytes = layout_code(chunks, Nil) {
+    match chunks {
+        Nil => λ bytes each => each,
+        Cons(c, cs) => λ bytes each => trans(sym(List::take_append_drop(bytes, n)),
+            trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ x => x ++ bytes.drop(n), each.left),
+                cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ t => c ++ t, chunks_same(n, cs, bytes.drop(n), each.right)))),
+    }
+}

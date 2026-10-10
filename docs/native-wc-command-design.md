@@ -741,6 +741,15 @@ corollaries in `lib/elf64_command_output.hthr`.** Where it differs from §5,
   and tails, the failed-read finish, the total row, and the exit. The
   program's step piece and the chunk loop come last (`ca_core`), so only the
   step's own jumps depend on its length. The library pieces are placed whole.
+  (2026-10-08, `issues/native-label-assembler.md`: the offsets are no
+  longer literals. The command is a program over `x86_64_asm`, its items at
+  labels `l_*`, and `ca(l)`, `cmd_d(l)` and the jump facts are computed from
+  the items' lengths; the chunk loop is the program's last piece, at
+  `l_core`. A jump fact is proved by evaluating both sides
+  (`asm_jump_lands`), since meeting two offsets by conversion runs out of
+  fuel once a jump spans much of the program, and the proof helpers state
+  an offset several items on an item at a time, `(k + 10) + 3`, as a label
+  is.)
 - **Everything kept between operands is in the frame.** The read loop
   leaves no register but RSP, which holds the operand's fd (C1), so the
   driver keeps the rest in 24 frame slots (`elf64_frame`):
@@ -813,10 +822,11 @@ of piped inputs against the expected output and the host's `wc`. The
   length, a letter that is NUL, `-` or not a byte, and a count that is not
   one of the state's Nat fields.
 - **The library's bytes come from the kernel's evaluator**
-  (`native/evaluate.rs`): `layout_code(command_parts(…), Nil)` and
-  `command_lens()` are evaluated and split by the lengths, so no encoder of
-  the library is restated in Rust. The certificate states the same bytes as
-  literals, and the kernel re-checks them, so a misread list is refused there.
+  (`native/evaluate.rs`): the program's bytes (`asm_code(cmd_fills(…),
+  cmd_labels(), cmd_prog())`) and its items' lengths (`asm_lens(cmd_prog())`)
+  are evaluated and split by the lengths, so no encoder of the library is restated in Rust.
+  The certificate states the same bytes as literals, and the kernel
+  re-checks them, so a misread list is refused there.
 - **The frame's addresses are `BitVec::ofNat`.** `frame_at` was
   `word_of_nat(64, base + o)`, an iterated increment that neither the
   evaluator nor conversion can afford for an address near `0x411000`. It is
@@ -824,12 +834,13 @@ of piped inputs against the expected output and the host's `wc`. The
   proof still counts (`frame_step`, `slots_counts`).
 - **The code is proved a piece at a time.** One declaration's fuel evaluates
   a few hundred encoded bytes, and the command's library code is several
-  thousand. Each library part is stated as written by `refl` where the
-  library's list selects it. A part above the bound (the scan, the stat pass,
-  the row, the tails) is stated piece by piece of its own layout. The row's
-  formatter is stated by its appends (setup, the places' counting blocks,
-  the padding loop, the digits). `layout_code_same` (elf64_command) joins
-  the pieces under `layout_code`. A literal-list congruence over the whole
+  thousand. Each item is stated as written by `refl` where `asm_back`
+  finds it in the program. An item above the bound (the scan, the stat pass, the
+  rows) is stated a fixed-size chunk at a time (`ChunksAre`, `take` and
+  `drop`), which needs nothing of how the item is made; until 2026-10-08 the
+  producer named the long parts' own layouts and the formatter's appends
+  instead. `asm_code_same` (x86_64_asm) joins the items into the
+  program's code. A literal-list congruence over the whole
   list of parts hung conversion instead (the large literal against the
   `Cons` chain); the per-piece form does not build that literal.
 - **What a column means is a corollary, not a premise.** `{p}_column{j}_means`

@@ -27,7 +27,7 @@ import list; import logic; import nat; import option;
 // `command_stdout` and exits with `command_status`.
 theorem command_prints<C>(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64), spill: Nat → StateReg, shape: FilterShape<C>,
     facts: FilterFacts<C>(shape), jumps: FilterJumps, pj: PrintJumps, placed: CommandPlaced(file, letters, default, spill, shape.code, jumps, pj),
-    targets: CoreTargets(ca_core(), ca_head(), structured_bytes(shape.code).len(), jumps, pj), column: Nat → C → BitVec(64),
+    targets: CoreTargets(ca(l_core()), ca(l_head()), structured_bytes(shape.code).len(), jumps, pj), column: Nat → C → BitVec(64),
     spilled: (i: Nat) → i < 8 → (g: Gprs) → (s: C) → shape.rep(g, s) → read_gpr(state_gpr(spill(i)), g) = column(i)(s),
     argv: List<List<BitVec(8)>>, pointers: List<BitVec(64)>, history: CommandHistory,
     ok: CommandHistoryOk(shape, column, letters, default, argv, history), written: CommandWritten(letters, default, argv, history),
