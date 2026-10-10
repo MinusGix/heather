@@ -2449,18 +2449,24 @@ theorem open_back<C>(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64
                     set_var_same(vars, 23, one), page, s5, held.left.proof.left, s5_rip, held.right))
         },
         OpenFailed(errno) => λ error goes page state memory_is rip_is rax => {
-            let tested = run_block(img, page, test_block(), io_entry(), ca(l_open_test()), pieces(l_open_test()), state, memory_is, rip_is);
-            let s1 = execute_block_normal(test_block(), state);
-            let js = JumpIfNear(S, cmd_d(l_open_js()));
-            let jumped = run_near(img, page, js, io_entry(), ca(l_open_js()), pieces(l_open_js()), s1, tested.memory_is, tested.rip_is);
-            let s2 = execute_near_control(js, s1);
-            let sf: (s1.flags.sf = read_gpr(Rax, state.gprs).band(read_gpr(Rax, state.gprs)).sign_bit()) = refl;
-            let set: (s1.flags.sf = True) = trans(sf, trans(cong_fn<BitVec(64), Bool>(λ v => v.band(v).sign_bit(), rax),
-                test_self_negative(errno_word(errno), errno_negative(errno, error))));
-            let s2_rip = jcc_taken(S, cmd_d(l_open_js()), s1, io_entry(), ca(l_open_js()), ca(l_failed()), tested.rip_is, set, cmd_j_open_js());
-            linux_runs_after_steps(io, rest(True, totals), state, s2, fetched_steps_trans(fetch, data, state, s1, s2, tested.steps, jumped),
-                failed_runs(file, letters, default, spill, code, jumps, pj, placed, mask, width, n, c19, c20, rest, totals, goes, frame, vars, holds,
-                    failed, values, at19, at20, page, s2, tested.memory_is, s2_rip))
+            let here = λ (l: Prog) (f: Nat → BitVec(8)) => cmd_at(with_frame(file, f), letters, default, spill, code, jumps, pj, placed(f))(l);
+            let word = errno_word(errno);
+            let p0 = λ (st: MachineState<IoMemory>) => Framed(file, page, vars)(st) ∧ (read_gpr(Rax, st.gprs) = word);
+            let p1 = λ (st: MachineState<IoMemory>) => Framed(file, page, vars)(st) ∧ (condition_holds(S, st.flags) = True);
+            let runs = runs_seq(p0, eof_rip(ca(l_open_test())), p1, eof_rip(ca(l_open_js())), Framed(file, page, vars), eof_rip(ca(l_failed())),
+                runs_block(test_block(), io_entry(), ca(l_open_test()), p0, p1,
+                    λ st held => framed_resident(file, page, vars, canonical_block_bytes(test_block()), eof_rip(ca(l_open_test())), here(l_open_test()),
+                        st, held.left),
+                    λ st held same => ⟨framed_moved(file, page, vars, execute_block_normal(test_block(), st), st, same, held.left),
+                        trans(cong_fn<BitVec(64), Bool>(λ v => v.band(v).sign_bit(), held.right), test_self_negative(word, errno_negative(errno, error)))⟩),
+                runs_jcc_taken(S, cmd_d(l_open_js()), io_entry(), ca(l_open_js()), ca(l_failed()), cmd_j_open_js(), p1, Framed(file, page, vars),
+                    λ st held => framed_resident(file, page, vars, near_control_bytes(JumpIfNear(S, cmd_d(l_open_js()))), eof_rip(ca(l_open_js())),
+                        here(l_open_js()), st, held.left),
+                    λ st held => held.right, λ st held => held.left));
+            runs_into(p0, eof_rip(ca(l_open_test())), Framed(file, page, vars), eof_rip(ca(l_failed())), rest(True, totals), runs, state, rip_is,
+                ⟨Exists(frame, ⟨memory_is, holds⟩), rax⟩,
+                λ s2 s2_rip held => failed_runs(file, letters, default, spill, code, jumps, pj, placed, mask, width, n, c19, c20, rest, totals, goes,
+                    held.witness, vars, held.proof.right, failed, values, at19, at20, page, s2, held.proof.left, s2_rip))
         },
     }
 }
