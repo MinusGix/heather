@@ -245,6 +245,16 @@ theorem runs_into(p: MachineState<IoMemory> → Type, a: BitVec(64), q: MachineS
     linux_runs_after_linux_steps(io_linux(), events, state, ran.witness, ran.proof.left, then(ran.witness, ran.proof.right.left, ran.proof.right.right))
 }
 
+// A run's end handed to what follows as a bound state: what follows never
+// projects the end out of the run's proof, which conversion would otherwise
+// have to evaluate.
+theorem runs_elim(p: MachineState<IoMemory> → Type, a: BitVec(64), q: MachineState<IoMemory> → Type, b: BitVec(64), goal: Type,
+    runs: Runs(p, a, q, b), state: MachineState<IoMemory>, rip_is: state.rip = a, holds: p(state),
+    then: (after: MachineState<IoMemory>) → LinuxSteps(io_linux(), state, after) → after.rip = b → q(after) → goal): goal {
+    let ran = runs(state, rip_is, holds);
+    then(ran.witness, ran.proof.left, ran.proof.right.left, ran.proof.right.right)
+}
+
 // ---------------------------------------------------------------------------
 // Frame conditions.
 
