@@ -8,6 +8,7 @@
 import elf64_stat_width;
 import elf64_arg_scan;
 import elf64_format_width;
+import elf64_runs;
 import elf64_io;
 import linux_x86_64_io;
 import x86_64;

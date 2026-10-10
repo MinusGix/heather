@@ -1,0 +1,280 @@
+// Straight label code over a frame, computed (issues/native-symbolic-execution-step.md,
+// docs/native-straight-runs-design.md): one theorem runs a stretch of a label
+// program's items, and what the stretch needs of its starting state is a
+// type the kernel computes from the items.
+//
+// `Straight(…, goal, labels, l, n)(vars, state)` reads the `n` items ending
+// at label `l` off the program and states, in their order, what running them
+// from `state` comes to: each block's, load's and store's state is the
+// item's own result over the one before it, a stored word sets its slot in
+// `vars`, a JCC is two obligations, one per value of its condition, and a
+// taken JCC or a JMP ends the stretch at its target. Where the stretch ends,
+// the leaf asks for `goal` there (`StraightLeaf`), given its RIP and its
+// frame. `straight_runs` proves `goal` of the start from that type; the
+// caller proves the type, which the elaborator unfolds to the leaves, the
+// JCC conditions and each load's or store's slot: no state is named, no item
+// placed and no frame fact threaded by hand.
+//
+// Only the items' structure is computed when the type is read: a slot is
+// named by the caller and its address checked by `refl` (a block before set
+// the base), a jump's target is the jump's own (`near_branch_target`), which
+// the caller's landing fact (`cmd_j_*`) names. Reading words or offsets while
+// elaborating would evaluate them in the elaborator, which costs far more
+// than the kernel's evaluation of the same `refl`. An item the stretch cannot
+// run (a syscall, a byte load, a piece, a hole) leaves `False`, which no
+// caller proves. Nothing is trusted: `straight_runs` is an ordinary theorem.
+import elf64_frame;
+import elf64_operand_cursor;
+import elf64_arg_scan;
+import elf64_runs;
+import elf64_io;
+import linux_x86_64_io;
+import x86_64;
+import x86_64_block;
+import x86_64_fetch;
+import x86_64_fetched_code;
+import x86_64_data_read;
+import x86_64_access_memory;
+import x86_64_layout;
+import x86_64_asm;
+import x86_64_store;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+import omega;
+
+// The frame is whichever one holds `vars` (`Framed`), so a slot store sets
+// `vars` at the slot and a phase's postcondition names the frame's words,
+// not the frame.
+fn Framed(file: IoImage, page: Nat → BitVec(8), vars: Nat → BitVec(64)) → MachineState<IoMemory> → Type {
+    λ state => Exists<Nat → BitVec(8)>(λ frame => (state.memory = IoMemory(with_frame(file, frame), page)) ∧ FrameHolds(frame, vars))
+}
+// Code placed in every frame's image is resident in a framed state.
+theorem framed_resident(file: IoImage, page: Nat → BitVec(8), vars: Nat → BitVec(64), bytes: List<BitVec(8)>, at: BitVec(64),
+    placed: (frame: Nat → BitVec(8)) → Placed(with_frame(file, frame), bytes, at), state: MachineState<IoMemory>,
+    framed: Framed(file, page, vars)(state)): CodeResident(io_fetch_access(), state.memory, bytes, at) {
+    j(sym(framed.proof.left), λ m _ => CodeResident(io_fetch_access(), m, bytes, at), placed(framed.witness)(page))
+}
+theorem framed_moved(file: IoImage, page: Nat → BitVec(8), vars: Nat → BitVec(64), after, before: MachineState<IoMemory>,
+    same: after.memory = before.memory, framed: Framed(file, page, vars)(before)): Framed(file, page, vars)(after) {
+    Exists(framed.witness, ⟨trans(same, framed.proof.left), framed.proof.right⟩)
+}
+theorem framed_set(file: IoImage, page: Nat → BitVec(8), vars: Nat → BitVec(64), q: Nat, a, b: BitVec(64), same: a = b,
+    state: MachineState<IoMemory>, framed: Framed(file, page, set_var(vars, q, a))(state)): Framed(file, page, set_var(vars, q, b))(state) {
+    j(same, λ w _ => Framed(file, page, set_var(vars, q, w))(state), framed)
+}
+
+theorem slot_room(q: Nat, inside: q < frame_slots()): 8 * q + 8 <= 4096 { omega }
+
+// ---------------------------------------------------------------------------
+// The computation.
+
+// What a stretch proves: `goal` of its start, from `goal` of where it ends,
+// given that steps lead there (`back`). The process's `LinuxRuns` is one
+// (`runs_back`); a record of where a phase ends is another.
+fn StepsBack(goal: MachineState<IoMemory> → Type) → Type {
+    (before, after: MachineState<IoMemory>) → LinuxSteps(io_linux(), before, after) → goal(after) → goal(before)
+}
+theorem runs_back(events: List<LinuxEvent>): StepsBack(λ s => LinuxRuns(io_linux(), events, s)) {
+    λ before after steps runs => linux_runs_after_linux_steps(io_linux(), events, before, after, steps, runs)
+}
+theorem back_fetched(goal: MachineState<IoMemory> → Type, back: StepsBack(goal), before, after: MachineState<IoMemory>,
+    steps: FetchedSteps(io_fetch_access(), io_data_access(), before, after), reached: goal(after)): goal(before) {
+    back(before, after, linux_steps_of_fetched(io_linux(), before, after, steps), reached)
+}
+
+// Where a stretch ends, at `at` with the frame holding `vars`: the rest of
+// the process. The end state is handed over bound (`after`), so the leaf's
+// proof can name it; `same` says which it is, for a fact the stretch's own
+// spelling of it gives by conversion.
+fn StraightLeaf(file: IoImage, page: Nat → BitVec(8), goal: MachineState<IoMemory> → Type, at: BitVec(64))
+    → (Nat → BitVec(64)) → MachineState<IoMemory> → Type {
+    λ vars state => (after: MachineState<IoMemory>) → after.rip = at → Framed(file, page, vars)(after) → after = state →
+        goal(after)
+}
+// A load's or store's slot: the caller names it, and the base register's
+// value is its address (`refl` where a block before set it).
+fn SlotThen(base: BitVec(64), then: Nat → Type) → Type {
+    Exists<Nat>(λ q => (q < frame_slots()) ∧ ((base = frame_at(8 * q)) ∧ then(q)))
+}
+// The item at `here`, then what follows it (`then`).
+fn straight_item(file: IoImage, page: Nat → BitVec(8), origin: BitVec(64), goal: MachineState<IoMemory> → Type, labels: Nat → Nat, here: Nat, item: Asm,
+    then: (Nat → BitVec(64)) → MachineState<IoMemory> → Type) → (Nat → BitVec(64)) → MachineState<IoMemory> → Type {
+    match item {
+        Block(instructions) => λ vars state => then(vars, execute_block_normal(instructions, state)),
+        Jcc(cc, target) => λ vars state =>
+            ((condition_holds(cc, state.flags) = True) → StraightLeaf(file, page, goal, near_branch_target(next_rip(origin, here), 6,
+                near_rel(here + 6, labels(target))))(vars, execute_near_control(JumpIfNear(cc, near_rel(here + 6, labels(target))), state))) ∧
+            ((condition_holds(cc, state.flags) = False) → then(vars, execute_near_control(JumpIfNear(cc, near_rel(here + 6, labels(target))), state))),
+        Jmp(target) => λ vars state => StraightLeaf(file, page, goal, near_branch_target(next_rip(origin, here), 5, near_rel(here + 5, labels(target))))(vars,
+            execute_near_control(JumpNear(near_rel(here + 5, labels(target))), state)),
+        Load(load) => λ vars state => SlotThen(read_gpr(load.base, state.gprs), λ q => then(vars, word_load_after(load, vars(q), state))),
+        Store(store) => λ vars state => match store_base_plain(store.base) {
+            True => SlotThen(read_gpr(store.base, state.gprs), λ q =>
+                then(set_var(vars, q, read_gpr(store.source, state.gprs)), word_store_after(linux_writes(io_linux()), store, state))),
+            False => False,
+        },
+        _ => λ _ _ => False,
+    }
+}
+// The `n` items ending at label `l`, then `then`; and where they start.
+fn straight_run(file: IoImage, page: Nat → BitVec(8), origin: BitVec(64), goal: MachineState<IoMemory> → Type, labels: Nat → Nat, l: Prog, n: Nat,
+    then: (Nat → BitVec(64)) → MachineState<IoMemory> → Type) → (Nat → BitVec(64)) → MachineState<IoMemory> → Type {
+    match n {
+        Zero => then,
+        Succ(m) => match l {
+            Start => then,
+            At(before, _, item) => straight_run(file, page, origin, goal, labels, before, m,
+                straight_item(file, page, origin, goal, labels, prog_len(before), item, then)),
+        },
+    }
+}
+fn straight_from(l: Prog, n: Nat) → Nat {
+    match n { Zero => prog_len(l), Succ(m) => match l { Start => 0, At(before, _, _) => straight_from(before, m) } }
+}
+// What the stretch needs: its items, each leaf the rest of the process.
+fn Straight(file: IoImage, page: Nat → BitVec(8), origin: BitVec(64), goal: MachineState<IoMemory> → Type, labels: Nat → Nat, l: Prog, n: Nat)
+    → (Nat → BitVec(64)) → MachineState<IoMemory> → Type {
+    straight_run(file, page, origin, goal, labels, l, n, StraightLeaf(file, page, goal, next_rip(origin, prog_len(l))))
+}
+
+// ---------------------------------------------------------------------------
+// The proof.
+
+// From a framed state at `at` that meets `then`, the process runs.
+fn StraightGoes(file: IoImage, page: Nat → BitVec(8), origin: BitVec(64), goal: MachineState<IoMemory> → Type, at: Nat,
+    then: (Nat → BitVec(64)) → MachineState<IoMemory> → Type) → Type {
+    (vars: Nat → BitVec(64)) → (state: MachineState<IoMemory>) → state.rip = next_rip(origin, at) → Framed(file, page, vars)(state) →
+        then(vars, state) → goal(state)
+}
+// One item, resident at `here`, then what follows.
+theorem straight_item_goes(file: IoImage, page: Nat → BitVec(8), origin: BitVec(64), goal: MachineState<IoMemory> → Type, back: StepsBack(goal), fills: Nat → List<BitVec(8)>,
+    labels: Nat → Nat, here: Nat, item: Asm, then: (Nat → BitVec(64)) → MachineState<IoMemory> → Type):
+    ((frame: Nat → BitVec(8)) → Placed(with_frame(file, frame), asm_bytes(fills, labels, here, item), next_rip(origin, here))) →
+    StraightGoes(file, page, origin, goal, here + asm_len(item), then) →
+    StraightGoes(file, page, origin, goal, here, straight_item(file, page, origin, goal, labels, here, item, then)) {
+    let io = io_linux();
+    let fetch = io_fetch_access();
+    let data = io_data_access();
+    match item as λ it => ((frame: Nat → BitVec(8)) → Placed(with_frame(file, frame), asm_bytes(fills, labels, here, it), next_rip(origin, here))) →
+            StraightGoes(file, page, origin, goal, here + asm_len(it), then) →
+            StraightGoes(file, page, origin, goal, here, straight_item(file, page, origin, goal, labels, here, it, then)) {
+        Block(instructions) => λ code goes vars state rip framed held => {
+            let bytes = canonical_block_bytes(instructions);
+            let after = execute_block_normal(instructions, state);
+            let resident = framed_resident(file, page, vars, bytes, next_rip(origin, here), code, state, framed);
+            let ran = block_fetched(fetch, data, instructions, state, trivial, j(sym(rip), λ a _ => CodeResident(fetch, state.memory, bytes, a), resident));
+            let after_rip: (after.rip = next_rip(origin, here + block_length(instructions))) =
+                trans(ran.right, trans(rip_advance(origin, state.rip, here, bytes.len(), rip),
+                    rip_count(origin, cong_fn<Nat, Nat>(λ k => here + k, block_length_is(instructions)))));
+            back_fetched(goal, back, state, after, ran.left,
+                goes(vars, after, after_rip, framed_moved(file, page, vars, after, state, pure_block_memory(instructions, state), framed), held))
+        },
+        Code(_) => λ _ _ vars state rip framed never => false_elim(never),
+        Load(load) => λ code goes vars state rip framed slot => {
+            let q = slot.witness;
+            let img = with_frame(file, framed.witness);
+            let loaded = run_word_load(img, page, load, origin, here, code(framed.witness), state, framed.proof.left, rip, vars(q),
+                j(sym(slot.proof.right.left), λ a _ => WordAt(data, IoMemory(img, page), a, vars(q)),
+                    frame_var_at(img, page, vars, framed.proof.right, q, slot.proof.left)));
+            let after = word_load_after(load, vars(q), state);
+            back_fetched(goal, back, state, after, loaded.steps,
+                goes(vars, after, loaded.rip_is, Exists(framed.witness, ⟨loaded.memory_is, framed.proof.right⟩), slot.proof.right.right))
+        },
+        Store(store) => λ code goes vars state rip framed => (match store_base_plain(store.base) as λ b => store_base_plain(store.base) = b →
+                (match b as λ _ => Type {
+                    True => SlotThen(read_gpr(store.base, state.gprs), λ q =>
+                        then(set_var(vars, q, read_gpr(store.source, state.gprs)), word_store_after(linux_writes(io), store, state))),
+                    False => False,
+                }) → goal(state) {
+            True => λ plain slot => {
+                let q = slot.witness;
+                let img = with_frame(file, framed.witness);
+                let w = read_gpr(store.source, state.gprs);
+                let stored = run_frame_store(img, page, store, plain, origin, here, code(framed.witness), 8 * q, slot_room(q, slot.proof.left), state,
+                    framed.proof.left, rip, slot.proof.right.left);
+                let after = word_store_after(linux_writes(io), store, state);
+                back(state, after, stored.step,
+                    goes(set_var(vars, q, w), after, stored.rip_is,
+                        Exists(frame_stored(img, 8 * q, w).frame, ⟨stored.memory_is, frame_holds_store(img, vars, q, w, framed.proof.right)⟩),
+                        slot.proof.right.right))
+            },
+            False => λ _ never => false_elim(never),
+        })(refl),
+        Jcc(cc, target) => λ code goes vars state rip framed held => {
+            let d = near_rel(here + 6, labels(target));
+            let jcc = JumpIfNear(cc, d);
+            let after = execute_near_control(jcc, state);
+            let resident = framed_resident(file, page, vars, near_control_bytes(jcc), next_rip(origin, here), code, state, framed);
+            let step = fetched_steps_one(fetch, data, state, after, near_fetched_step(fetch, data, jcc, state,
+                j(sym(rip), λ a _ => CodeResident(fetch, state.memory, near_control_bytes(jcc), a), resident)));
+            let moved = framed_moved(file, page, vars, after, state, refl, framed);
+            back_fetched(goal, back, state, after, step,
+                (match condition_holds(cc, state.flags) as λ c => condition_holds(cc, state.flags) = c → goal(after) {
+                    True => λ yes => held.left(yes)(after, trans(near_if_taken_rip(cc, d, state, yes),
+                        cong_fn<BitVec(64), BitVec(64)>(λ a => near_branch_target(a, 6, d), rip)), moved, refl),
+                    False => λ no => goes(vars, after, trans(near_if_not_taken_rip(cc, d, state, no), rip_advance(origin, state.rip, here, 6, rip)),
+                        moved, held.right(no)),
+                })(refl))
+        },
+        Jmp(target) => λ code goes vars state rip framed held => {
+            let d = near_rel(here + 5, labels(target));
+            let jmp = JumpNear(d);
+            let after = execute_near_control(jmp, state);
+            let resident = framed_resident(file, page, vars, near_control_bytes(jmp), next_rip(origin, here), code, state, framed);
+            let step = fetched_steps_one(fetch, data, state, after, near_fetched_step(fetch, data, jmp, state,
+                j(sym(rip), λ a _ => CodeResident(fetch, state.memory, near_control_bytes(jmp), a), resident)));
+            back_fetched(goal, back, state, after, step,
+                held(after, cong_fn<BitVec(64), BitVec(64)>(λ a => near_branch_target(a, 5, d), rip), framed_moved(file, page, vars, after, state, refl, framed),
+                    refl))
+        },
+        Piece(_, _, _) => λ _ _ vars state rip framed never => false_elim(never),
+        Refer(_, _, _) => λ _ _ vars state rip framed never => false_elim(never),
+        Hole(_, _) => λ _ _ vars state rip framed never => false_elim(never),
+    }
+}
+// The chain's items, each resident where the chain's code is.
+theorem straight_run_goes(file: IoImage, page: Nat → BitVec(8), origin: BitVec(64), goal: MachineState<IoMemory> → Type, back: StepsBack(goal), fills: Nat → List<BitVec(8)>,
+    labels: Nat → Nat, n: Nat): (l: Prog) → FillsFit(l, fills) → (rest: List<BitVec(8)>) →
+    ((frame: Nat → BitVec(8)) → Placed(with_frame(file, frame), asm_code(fills, labels, l) ++ rest, origin)) →
+    (then: (Nat → BitVec(64)) → MachineState<IoMemory> → Type) → StraightGoes(file, page, origin, goal, prog_len(l), then) →
+    StraightGoes(file, page, origin, goal, straight_from(l, n), straight_run(file, page, origin, goal, labels, l, n, then)) {
+    match n {
+        Zero => λ l fits rest code then goes => goes,
+        Succ(m) => λ l => match l as λ x => FillsFit(x, fills) → (rest: List<BitVec(8)>) →
+                ((frame: Nat → BitVec(8)) → Placed(with_frame(file, frame), asm_code(fills, labels, x) ++ rest, origin)) →
+                (then: (Nat → BitVec(64)) → MachineState<IoMemory> → Type) → StraightGoes(file, page, origin, goal, prog_len(x), then) →
+                StraightGoes(file, page, origin, goal, straight_from(x, Succ(m)), straight_run(file, page, origin, goal, labels, x, Succ(m), then)) {
+            Start => λ fits rest code then goes => goes,
+            At(before, name, item) => λ fits rest code then goes => {
+                let fetch = io_fetch_access();
+                let fits_before = fills_fit_before(fills, before, name, item, fits);
+                let front = asm_code(fills, labels, before);
+                let bytes = asm_bytes(fills, labels, prog_len(before), item);
+                let moved = λ (frame: Nat → BitVec(8)) => j(List::append_assoc(front, bytes, rest),
+                    λ c _ => Placed(with_frame(file, frame), c, origin), code(frame));
+                let item_code = λ (frame: Nat → BitVec(8)) (page: Nat → BitVec(8)) => {
+                    let memory = IoMemory(with_frame(file, frame), page);
+                    let tail = resident_split(fetch, memory, front, bytes ++ rest, origin, moved(frame)(page)).right;
+                    resident_split(fetch, memory, bytes, rest, next_rip(origin, prog_len(before)),
+                        j(asm_code_len(fills, labels, before, fits_before), λ k _ => CodeResident(fetch, memory, bytes ++ rest, next_rip(origin, k)), tail)).left
+                };
+                straight_run_goes(file, page, origin, goal, back, fills, labels, m, before, fits_before, bytes ++ rest, moved,
+                    straight_item(file, page, origin, goal, labels, prog_len(before), item, then),
+                    straight_item_goes(file, page, origin, goal, back, fills, labels, prog_len(before), item, then, item_code, goes))
+            },
+        },
+    }
+}
+theorem straight_runs(file: IoImage, page: Nat → BitVec(8), origin: BitVec(64), goal: MachineState<IoMemory> → Type, back: StepsBack(goal), fills: Nat → List<BitVec(8)>,
+    labels: Nat → Nat, l: Prog, n: Nat, fits: FillsFit(l, fills), rest: List<BitVec(8)>,
+    code: (frame: Nat → BitVec(8)) → Placed(with_frame(file, frame), asm_code(fills, labels, l) ++ rest, origin),
+    vars: Nat → BitVec(64), state: MachineState<IoMemory>, rip: state.rip = next_rip(origin, straight_from(l, n)),
+    framed: Framed(file, page, vars)(state), held: Straight(file, page, origin, goal, labels, l, n)(vars, state)):
+    goal(state) {
+    straight_run_goes(file, page, origin, goal, back, fills, labels, n, l, fits, rest, code, StraightLeaf(file, page, goal, next_rip(origin, prog_len(l))),
+        λ vs s at f leaf => leaf(s, at, f, refl), vars, state, rip, framed, held)
+}

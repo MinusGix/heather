@@ -49,6 +49,7 @@ pub const COMMAND_PREFIX: &[(&str, &str)] = &[
     ("elf64_write_loop", include_str!("../../../../lib/elf64_write_loop.hthr")),
     ("elf64_read_filter", include_str!("../../../../lib/elf64_read_filter.hthr")),
     ("x86_64_asm", include_str!("../../../../lib/std/arch/x86_64/x86_64_asm.hthr")),
+    ("elf64_runs", include_str!("../../../../lib/elf64_runs.hthr")),
     ("elf64_format_width", include_str!("../../../../lib/elf64_format_width.hthr")),
     ("elf64_arg_scan", include_str!("../../../../lib/elf64_arg_scan.hthr")),
     ("elf64_operand_cursor", include_str!("../../../../lib/elf64_operand_cursor.hthr")),
@@ -56,10 +57,11 @@ pub const COMMAND_PREFIX: &[(&str, &str)] = &[
     ("elf64_command_events", include_str!("../../../../lib/elf64_command_events.hthr")),
     ("elf64_command_output", include_str!("../../../../lib/elf64_command_output.hthr")),
     ("elf64_frame", include_str!("../../../../lib/elf64_frame.hthr")),
+    ("elf64_straight", include_str!("../../../../lib/elf64_straight.hthr")),
     ("elf64_row_fields", include_str!("../../../../lib/elf64_row_fields.hthr")),
     ("elf64_command", include_str!("../../../../lib/elf64_command.hthr")),
 ];
 
 /// The filter half: through `elf64_stat_width` (the warm-up reads it).
 #[allow(dead_code)]
-pub const FILTER_HALF: usize = 48;
+pub const FILTER_HALF: usize = 49;
