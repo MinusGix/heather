@@ -47,4 +47,5 @@ listed in the note's §8; this issue closes when they are filed.
 - 2026-10-10: Minus chose sugar over search, spelled `n: Pos<Nat>`, no `Fact`, `h := omega` parameter defaults, and function-owned result facts (`ten_pow::pos`). Note §7–§8 updated; title changed to match.
 - 2026-10-10: Rounds filed: [[infer-proposition-evidence]], [[named-arguments]] (parameter defaults), [[function-owned-members]], [[pos-binder-sugar]], [[retire-shifted-pos]], [[positivity-tactic]], [[positive-refinement-type]].
 - 2026-10-10: Round 1 implemented ([[infer-proposition-evidence]]): Minus chose rules in `infer`; hand-written rules are spelled `evidence theorem`.
-- 2026-10-11: 2026-10-11: Round 6, the `positivity` tactic, landed ([[positivity-tactic]], note §10).
+- 2026-10-11: Round 3 landed: [[function-owned-members]] (`theorem f::name`).
+- 2026-10-11: Round 6, the `positivity` tactic, landed ([[positivity-tactic]], note §10).

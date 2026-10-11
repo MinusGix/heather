@@ -231,13 +231,15 @@ theorem Nat::mod_lt(self n, divisor: Nat, divisor_pos: 0 < divisor := infer): â€
   defaults already do. This is what turns (c) into (a):
   `ten_pow_pos(Succ(i))` disappears from call sites.
 
-  Function-owned names do not exist yet. Today a member declaration attaches
-  only to a type, and `theorem ten_pow::pos` is refused with "`ten_pow` is
-  not a type or a type former in scope" (probed). Letting a `fn` own members
-  is useful beyond positivity, since many theorems are about one function
-  rather than about its result type. `ten_pow::pos` is the safe spelling.
-  `ten_pow.pos` would collide with receiver dispatch, which resolves `f.m` by
-  the type of `f`, here a function type.
+  Function-owned names exist as of 2026-10-11
+  ([function-owned-members](../issues/function-owned-members.md)): a `fn`
+  owns members as a type does, and `theorem ten_pow::pos` declares one,
+  reached by qualification. Letting a `fn` own members is useful beyond
+  positivity, since many theorems are about one function rather than about
+  its result type. `ten_pow::pos` is the safe spelling. `ten_pow.pos` would
+  collide with receiver dispatch, which resolves `f.m` by the type of `f`,
+  here a function type; written anyway, it is refused with the qualified
+  spelling named.
 - **Record fields.** `den: Pos<Nat>` expands to `den: Nat, den_pos: 0 < den`,
   plus a rule `0 < r.den` from `r.den_pos`. `Rat` becomes
   `{ num: Int, den: Pos<Nat> }`, reading exactly as it does today, but the
