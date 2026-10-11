@@ -99,6 +99,22 @@ impl Elaborator {
         self.names_a_type(name) || self.names_a_type_former(name)
     }
 
+    /// Does this name refer to a **function** — a global that keeps its body,
+    /// which is what a `fn` is in Ψ and a `theorem` or `axiom` is not? The
+    /// other owner of a member namespace (issues/function-owned-members.md):
+    /// `theorem ten_pow::pos(i): 0 < ten_pow(i)` names a fact about `ten_pow`
+    /// under it. A type former is a function too, so this widens
+    /// [`Self::names_a_carrier`] for member declarations without moving the
+    /// instance and designation owner rule, which stays the carrier one.
+    pub(crate) fn names_a_function(&self, name: &str) -> bool {
+        self.lookup_global(name).is_some_and(|info| {
+            matches!(
+                &self.psi.bindings[info.abs as usize],
+                GlobalBinding::Tm { body: Some(_), .. }
+            )
+        })
+    }
+
     /// The name of the declaration a lowered type belongs to — the type's own
     /// namespace, for a receiver-directed member lookup. `Nat` is a kernel
     /// type with no declaration and answers for itself; anything with no

@@ -637,3 +637,158 @@ fn a_value_argument_mismatch_elsewhere_is_spelled_with_its_arguments() {
     assert!(e.contains("this has type `Word(8)`, but `Word(16)` is expected here"), "{e}");
     assert!(!e.contains("takes a receiver"), "{e}");
 }
+
+// -- Function-owned members ------------------------------------------------
+//
+// A `fn` owns a namespace too (issues/function-owned-members.md): a fact about
+// one function is named under it, `theorem f::name(…)`, and reached by
+// qualification. The receiver never reaches it — `f.name` dispatches on the
+// type of `f`, a function type with no namespace.
+
+const DOUBLE: &str = r#"
+fn double(n: Nat) -> Nat { match n { Zero => 0, Succ(k) => Succ(Succ(double(k))) } }
+theorem double::zero(): double(0) = 0 { refl }
+"#;
+
+#[test]
+fn a_function_member_is_declared_and_reached_by_qualification() {
+    ok(&format!("{DOUBLE} theorem u(): double(0) = 0 {{ double::zero() }}"));
+}
+
+// A function member may itself be a function, called like any other.
+#[test]
+fn a_function_owns_a_function_member() {
+    ok("fn double(n: Nat) -> Nat { match n { Zero => 0, Succ(k) => Succ(Succ(double(k))) } }
+        fn double::twice(n: Nat) -> Nat { double(double(n)) }
+        theorem u(): double::twice(1) = 4 { refl }");
+}
+
+// The member's statement is checked, not just its name: a use at the wrong
+// goal is the ordinary mismatch, and the qualified name is what is reported.
+#[test]
+fn a_function_member_is_named_in_full_in_diagnostics() {
+    let e = bad(&format!("{DOUBLE} theorem u(): double(0) = 0 {{ double::zero(1) }}"));
+    assert!(e.contains("`double::zero` is applied to too many arguments"), "{e}");
+    let e = bad(&format!("{DOUBLE} theorem double::zero(): double(0) = 0 {{ refl }}"));
+    assert!(e.contains("duplicate name `double::zero`"), "{e}");
+}
+
+// The base name stays out of the ambient namespace, exactly as a type's
+// member's does.
+#[test]
+fn a_function_members_base_name_is_not_in_scope() {
+    let e = bad(&format!("{DOUBLE} theorem u(): double(0) = 0 {{ zero() }}"));
+    assert!(e.contains("unbound name `zero`"), "{e}");
+}
+
+// `double.zero()` cannot reach it, and with no ambient `zero` the refusal says
+// which spelling does.
+#[test]
+fn a_dot_call_on_a_function_names_the_qualified_member() {
+    let e = bad(&format!("{DOUBLE} theorem u(): double(0) = 0 {{ double.zero() }}"));
+    assert!(e.contains("the member of the function `double` is `double::zero(…)`"), "{e}");
+}
+
+// A function member and a type's member with the same base name are two
+// declarations: each qualification reaches its own, and the receiver reaches
+// the type's.
+#[test]
+fn a_function_member_and_a_same_named_type_member_stay_distinct() {
+    ok("record Pt { x: Nat }
+        fn Pt::zero(self p: Pt) -> Nat { 7 }
+        fn double(n: Nat) -> Nat { match n { Zero => 0, Succ(k) => Succ(Succ(double(k))) } }
+        theorem double::zero(): double(0) = 0 { refl }
+        theorem by_fn(): double(0) = 0 { double::zero() }
+        theorem by_ty(p: Pt): Pt::zero(p) = 7 { refl }
+        theorem by_recv(p: Pt): p.zero() = 7 { refl }");
+}
+
+#[test]
+fn a_function_member_is_reached_from_an_importer() {
+    let src = "fn double(n: Nat) -> Nat { match n { Zero => 0, Succ(k) => Succ(Succ(double(k))) } }
+               theorem double::zero(): double(0) = 0 { refl }";
+    for user in [
+        "import d;\ntheorem u(): double(0) = 0 { double::zero() }",
+        "import d;\ntheorem u(): d::double(0) = 0 { d::double::zero() }",
+    ] {
+        if let Err(e) = run(&[("d", src), ("user", user)]) {
+            panic!("{user}: {e}");
+        }
+    }
+    // A facade reexports it like a type's member, by its qualified name.
+    run(&[
+        ("d", src),
+        ("f", "export d::{double, double::zero};"),
+        ("user", "import f;\ntheorem u(): double(0) = 0 { double::zero() }"),
+    ])
+    .unwrap_or_else(|e| panic!("{e}"));
+}
+
+// Two modules attaching the same member to the same function are ambiguous at
+// the use, as for a type's member — and qualification by module resolves it.
+#[test]
+fn two_modules_attaching_one_function_member_are_ambiguous() {
+    let mods = |user: &'static str| {
+        run(&[
+            ("d", "fn double(n: Nat) -> Nat { match n { Zero => 0, Succ(k) => Succ(Succ(double(k))) } }"),
+            ("a", "import d;\ntheorem double::zero(): double(0) = 0 { refl }"),
+            ("b", "import d;\ntheorem double::zero(): double(0) = 0 { refl }"),
+            ("user", user),
+        ])
+    };
+    let e = match mods("import d;\nimport a;\nimport b;\ntheorem u(): double(0) = 0 { double::zero() }") {
+        Ok(_) => panic!("expected an ambiguity"),
+        Err(e) => e,
+    };
+    assert!(e.contains("ambiguous"), "{e}");
+    mods("import d;\nimport a;\nimport b;\ntheorem u(): double(0) = 0 { a::double::zero() }")
+        .unwrap_or_else(|e| panic!("{e}"));
+}
+
+// The owner rule's refusals: a theorem owns nothing, and neither does a name
+// that is not declared (yet).
+#[test]
+fn a_theorem_or_an_unknown_owner_is_refused() {
+    let e = bad("theorem t(): 0 = 0 { refl } theorem t::again(): 0 = 0 { refl }");
+    assert!(e.contains("`t` is a theorem, so `t::again` attaches to nothing"), "{e}");
+    let e = bad("theorem later::zero(): 0 = 0 { refl } fn later(n: Nat) -> Nat { n }");
+    assert!(e.contains("not a type, a type former or a function in scope"), "{e}");
+}
+
+// `f::name` reads as the module `f`'s `name` first, so a function named like a
+// visible module cannot own members — the declaration is refused rather than
+// left unreachable.
+#[test]
+fn a_function_named_like_a_visible_module_owns_no_members() {
+    let e = match run(&[
+        ("m", "fn other(n: Nat) -> Nat { n }"),
+        ("user", "import m;\nfn m(n: Nat) -> Nat { n }\ntheorem m::id(): m(0) = 0 { refl }"),
+    ]) {
+        Ok(_) => panic!("expected a refusal"),
+        Err(e) => e,
+    };
+    assert!(e.contains("would read as `id` in the module `m`"), "{e}");
+}
+
+// And across modules, where the declaring module could not see the clash: a
+// client that sees both the module `f` declaring `name` and a member `f::name`
+// gets an ambiguity, never a silent pick — so the module growing a `name`
+// cannot reinterpret a member reference.
+#[test]
+fn a_module_path_and_a_function_member_spelled_alike_are_ambiguous() {
+    let mods = |user: &'static str| {
+        run(&[
+            ("sq", "fn zero() -> Nat { 0 }"),
+            ("d", "fn sq(n: Nat) -> Nat { match n { Zero => 0, Succ(k) => sq(k) } }\ntheorem sq::zero(): sq(0) = 0 { refl }"),
+            ("user", user),
+        ])
+    };
+    let e = match mods("import sq;\nimport d;\ntheorem u(): d::sq(0) = 0 { sq::zero() }") {
+        Ok(_) => panic!("expected an ambiguity"),
+        Err(e) => e,
+    };
+    assert!(e.contains("`sq::zero` is ambiguous"), "{e}");
+    assert!(e.contains("`d::sq::zero`"), "{e}");
+    mods("import sq;\nimport d;\ntheorem u(): d::sq(0) = 0 { d::sq::zero() }")
+        .unwrap_or_else(|e| panic!("{e}"));
+}
