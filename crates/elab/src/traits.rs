@@ -173,6 +173,24 @@ pub(crate) struct Traits {
     instances: HashMap<InstKey, InstanceInfo>,
     designations: HashMap<DesigKey, DesignationInfo>,
     derived: Vec<DerivedInst>,
+    /// Evidence rules by the qualified key of their conclusion's relation
+    /// (`nat::Nat::Lt`), each list in canonical (global-name) order
+    /// (docs/positivity-evidence-design.md §6 A).
+    evidence: HashMap<String, Vec<EvidenceRule>>,
+}
+
+/// One `evidence theorem`: what `:= infer` may apply at a proposition goal.
+///
+/// Keyed by the conclusion's relation, read off the checked statement's head
+/// global, so two rules about one relation coexist where the class registry's
+/// (class, carrier head) key would collide them. `heads` is the head global
+/// of each of the relation's arguments, `None` where the rule binds it to a
+/// variable: a prefilter only, the kernel-checked trial decides.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct EvidenceRule {
+    pub(crate) global: String,
+    pub(crate) relation: String,
+    pub(crate) heads: Vec<Option<String>>,
 }
 
 impl Traits {
@@ -298,6 +316,22 @@ impl Traits {
 
     pub(crate) fn designation(&self, key: &DesigKey) -> Option<&DesignationInfo> {
         self.designations.get(key)
+    }
+
+    pub(crate) fn commit_evidence(&mut self, rule: EvidenceRule) {
+        let rules = self.evidence.entry(rule.relation.clone()).or_default();
+        debug_assert!(!rules.iter().any(|r| r.global == rule.global));
+        let at = rules.partition_point(|r| r.global < rule.global);
+        rules.insert(at, rule);
+    }
+
+    pub(crate) fn has_evidence(&self, global: &str) -> bool {
+        self.evidence.values().flatten().any(|r| r.global == global)
+    }
+
+    /// The rules about `relation`, in canonical order.
+    pub(crate) fn evidence_rules(&self, relation: &str) -> &[EvidenceRule] {
+        self.evidence.get(relation).map_or(&[], Vec::as_slice)
     }
 
     pub(crate) fn commit_designation(&mut self, key: DesigKey, info: DesignationInfo) {
@@ -2387,6 +2421,7 @@ impl Elaborator {
                 let decl = Decl {
                     kind: m.kind,
                     is_meta: m.is_meta,
+                    is_evidence: m.is_evidence,
                     elaborates: m.elaborates.clone(),
                     name: full,
                     tyvars: d
@@ -3071,6 +3106,7 @@ impl Elaborator {
         let decl = Decl {
             kind,
             is_meta: false,
+            is_evidence: false,
             elaborates: None,
             name: name.to_string(),
             tyvars: d.tyvars.clone(),

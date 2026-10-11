@@ -20,6 +20,8 @@ mod lib_std_bitvec;
 mod lib_std_bounded_list;
 #[path = "../lib_std_certified_lookup.rs"]
 mod lib_std_certified_lookup;
+#[path = "../lib_std_evidence.rs"]
+mod lib_std_evidence;
 #[path = "../lib_std_int.rs"]
 mod lib_std_int;
 #[path = "../lib_std_list.rs"]

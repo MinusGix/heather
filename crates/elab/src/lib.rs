@@ -1318,6 +1318,12 @@ impl application::ImplicitApplicationElab for Elaborator {
             });
         };
         let written = params.get(obligation.param).and_then(|p| p.solver.as_deref());
+        // A class goal is displayed as written (`Monoid<A>`, layer 2 §7). A
+        // proposition is displayed as this call instantiated it: `0 < 5`, not
+        // the callee's `0 < n` (docs/positivity-evidence-design.md §3). Spelled,
+        // not decoded: decoding reduces `0 < 0` to `False`, which hides the
+        // goal the caller asked for. Operator notation in it is
+        // issues/diagnostic-operator-resugaring.md's.
         let display = written
             .map(traits::render_ty)
             .unwrap_or_else(|| "a solver parameter".to_string());
@@ -1342,8 +1348,25 @@ impl application::ImplicitApplicationElab for Elaborator {
                 sols[obligation.slot] = Sol::Solved(Rc::new(term));
                 Ok(application::ObligationProgress::Solved)
             }
+            // A class goal is displayed as written (`Monoid<A>`, layer 2 §7).
+            // A proposition is displayed as this call instantiated it: `0 <
+            // 5`, not the callee's `0 < n` (docs/positivity-evidence-design.md
+            // §3). Spelled, not decoded: decoding reduces `0 < 0` to `False`,
+            // which hides the goal the caller asked for. Operator notation in
+            // it is issues/diagnostic-operator-resugaring.md's. Spelled only
+            // here, on failure: a resolved goal never needs it. Which kind
+            // the goal was is the search's own verdict, its outermost
+            // `no-class` record (a class goal arrives in spellings the
+            // display path cannot classify).
             None => Err(ElabError::Resolution {
-                goal: display,
+                goal: if trace.first().is_some_and(|top| {
+                    trace.iter().any(|l| l.key == "no-class" && l.depth == top.depth)
+                }) && let Some(spelled) = self.spell_type_clean(cx, &goal)
+                {
+                    spelled
+                } else {
+                    display
+                },
                 span,
                 trace,
             }),
@@ -3089,6 +3112,14 @@ impl Elaborator {
         // (docs/in-language-map-design.md §3–4).
         if decl.is_meta {
             return self.elab_meta_decl(decl);
+        }
+        // An `evidence theorem` is an ordinary theorem, registered for
+        // `:= infer` once it has passed its gate
+        // (docs/positivity-evidence-design.md §6 A).
+        if decl.is_evidence {
+            self.evidence_shape(decl)?;
+            self.elab_decl_one(decl, None)?;
+            return self.register_evidence(decl);
         }
         // `decreases e` is not one declaration but a family of them
         // (docs/decreases-unfolding-design.md §2): the arm, the eliminator,

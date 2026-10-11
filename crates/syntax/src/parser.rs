@@ -1696,6 +1696,22 @@ impl Parser {
         // §3). Only `fn`: a theorem is an opaque Ψ-global, and meta
         // definitions never reach Ψ, so `meta theorem` has no meaning.
         let is_meta = self.eat_kw("meta");
+        // `evidence theorem` — contextual, like every keyword here: only the
+        // word directly before `theorem` is the modifier, so a field or
+        // binder named `evidence` elsewhere is untouched.
+        let is_evidence = !is_meta
+            && self.at_kw("evidence")
+            && matches!(self.nth(1), TokKind::Ident(s) if s == "theorem");
+        if is_evidence {
+            self.bump();
+        } else if self.at_kw("evidence")
+            && matches!(self.nth(1), TokKind::Ident(s) if s == "fn" || s == "axiom" || s == "meta")
+        {
+            return self.err(
+                "`evidence` marks a `theorem`: a rule is a proof `:= infer` applies \
+                 (docs/positivity-evidence-design.md §6 A)",
+            );
+        }
         let kind = if self.eat_kw("fn") {
             DeclKind::Fn
         } else if !is_meta && self.eat_kw("theorem") {
@@ -1975,7 +1991,7 @@ impl Parser {
         } else { body };
         crate::try_lower::validate_decrease_labels(&body, decreases.is_some())?;
         let span = start.join(body.span);
-        Ok(Decl { kind, is_meta, elaborates, name, tyvars, params, result, decreases, body, span })
+        Ok(Decl { kind, is_meta, is_evidence, elaborates, name, tyvars, params, result, decreases, body, span })
     }
 
     // -- blocks and statements ----------------------------------------------
