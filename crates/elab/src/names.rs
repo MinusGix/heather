@@ -478,6 +478,16 @@ fn resolve_kinds(
     let visible_module =
         qual == scope.module || scope.imports_module(qual) || qual == PRELUDE_MODULE;
     if visible_module && names.declares(qual, base) {
+        // ... unless a visible module also declares the whole string as a
+        // member — `f::pos` of a function `f` named like the module `f`
+        // (issues/function-owned-members.md). A function shares a module's
+        // lower-case spelling, so the module path winning here would let the
+        // module growing a `pos` silently reinterpret a member reference. Two
+        // readings are an ambiguity, as everywhere else; the member's own
+        // module comes first so the advice's `m::f::pos` reaches it.
+        if let NameRes::Found(m) = resolve_bare_kinds(names, scope, name, kinds) {
+            return NameRes::Ambiguous(vec![m, qual.to_string()]);
+        }
         return NameRes::Found(names.origin(qual, base).unwrap().to_string());
     }
     // `Option::None` — a constructor qualified by its *type*. The type name is
@@ -585,7 +595,7 @@ pub(crate) fn miss_msg(res: &NameRes, name: &str, fallback: String) -> Option<St
         NameRes::Ambiguous(origins) => Some(ambiguity_msg(name, origins)),
         NameRes::NoSuchQualifier(q) => Some(format!(
             "`{name}` is qualified by `{q}`, which is neither an imported module nor a \
-             type in scope here"
+             type or function in scope here with a member by that name"
         )),
         NameRes::Restricted(msg) => Some(msg.clone()),
         NameRes::NotFound => Some(fallback),

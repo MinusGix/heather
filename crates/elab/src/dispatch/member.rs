@@ -339,6 +339,27 @@ impl Elaborator {
         let Some((carrier, owner)) =
             inferred.or_else(|| self.receiver_owner_by_head(cx, recv, span))
         else {
+            // `f.pos(…)` written for a function's member `f::pos`
+            // (issues/function-owned-members.md): the receiver's type is a
+            // function type, which owns no namespace, so the call falls back
+            // to an ambient `pos`. Where there is none the fallback can only
+            // fail, and saying which spelling reaches the member is strictly
+            // better than "unbound" — a reading that resolved is never touched.
+            if let ExprKind::Var(f) = &recv.kind
+                && !cx.names.iter().any(|n| n == f)
+                && self.names_a_function(f)
+                && matches!(self.resolve_name(name), NameRes::NotFound)
+                && matches!(self.resolve_name(&format!("{f}::{name}")), NameRes::Found(_))
+            {
+                return err(
+                    format!(
+                        "`{f}.{name}` dispatches on the type of `{f}`, a function type, \
+                         which owns no members — the member of the function `{f}` is \
+                         `{f}::{name}(…)`"
+                    ),
+                    span,
+                );
+            }
             // Inference failure is not an error here, exactly as for a field:
             // the fallback is what handles a receiver whose type only the
             // call fixes.

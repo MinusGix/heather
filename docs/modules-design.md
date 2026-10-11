@@ -215,6 +215,16 @@ Qualification is `::` (Rust-flavored surface; `.` is projection/method).
 Parser: `ident :: ident` as an atom, composing with existing call/type
 syntax — `nat::le_add(p, q)`, `option::Option<Nat>`.
 
+A member of a namespace is the third qualified reading: `List::nth` (a
+type's, 2026-08-05) and `ten_pow::pos` (a function's, 2026-10-11,
+`issues/function-owned-members.md`) declare the whole string, which the
+§4 regime then resolves like any name. It is tried after the module path
+and the constructor, and it races neither: a function shares a module's
+lower-case spelling, so where a visible module `f` declares `pos` and a
+visible member `f::pos` exists too, `f::pos` is **ambiguous** and
+`m::f::pos` names the member. A function named like a module its own file
+sees is refused as an owner at the declaration.
+
 Constructors and record fields ride the same rule: a constructor name is
 ambiguous only if two visible inductives declare it, and then either
 qualification (`Option::None` — constructor names qualify by *type* name,

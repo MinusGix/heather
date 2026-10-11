@@ -3666,17 +3666,59 @@ impl Elaborator {
             // owner rule is one rule — an instance's canonical name has never
             // been a special kind of declaration, and making it one to avoid
             // this line would be the first time it was.
+            //
+            // A **function** owns one as well (issues/function-owned-members.md):
+            // `theorem ten_pow::pos(i): 0 < ten_pow(i)` is a fact about
+            // `ten_pow` named under it, not about its result type. The receiver
+            // never reaches it — `f.pos` dispatches on the type of `f`, a
+            // function type with no namespace — so qualification is its one
+            // route, and the declared string is the same `f::pos` a type's
+            // member would be.
             if !self.names_a_carrier(owner) {
-                return err(
-                    format!(
-                        "`{owner}` is not a type or a type former in scope, so `{}` \
-                         attaches to nothing — a member declaration is \
-                         `fn <Type>::{base}(…)` and the type must be declared (or be a \
-                         kernel type) before it",
-                        decl.name
-                    ),
-                    decl.span,
-                );
+                if self.names_a_function(owner) {
+                    // `f::pos` is read as module `f`'s `pos` first
+                    // (`names::resolve_kinds`), and functions share modules'
+                    // lower-case spelling, so a function named like a visible
+                    // module could declare a member its own module could never
+                    // reach.
+                    let scope = self.names.scope();
+                    if owner == scope.module
+                        || scope.imports_module(owner)
+                        || owner == names::PRELUDE_MODULE
+                    {
+                        return err(
+                            format!(
+                                "`{}` would read as `{base}` in the module `{owner}`, not \
+                                 as a member of the function `{owner}` — rename the \
+                                 function or the module",
+                                decl.name
+                            ),
+                            decl.span,
+                        );
+                    }
+                } else if self.lookup_global(owner).is_some() {
+                    return err(
+                        format!(
+                            "`{owner}` is a theorem, so `{}` attaches to nothing — \
+                             members belong to types and functions; name a lemma \
+                             about it on its own",
+                            decl.name
+                        ),
+                        decl.span,
+                    );
+                } else {
+                    return err(
+                        format!(
+                            "`{owner}` is not a type, a type former or a function in \
+                             scope, so `{}` attaches to nothing — a member declaration \
+                             is `fn <Type>::{base}(…)` or `theorem <function>::{base}(…)`, \
+                             and the owner must be declared (or be a kernel type) \
+                             before it",
+                            decl.name
+                        ),
+                        decl.span,
+                    );
+                }
             }
             if base.is_empty() {
                 return err("a member needs a name after `::`", decl.span);
