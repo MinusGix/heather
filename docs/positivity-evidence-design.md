@@ -1,8 +1,8 @@
 # Positive values: a type, a hypothesis, or a binder
 
 Status: design proposal, 2026-10-10; route and spelling chosen the same day
-(§7). Nothing here is implemented; the probes in §3 were run against master
-at f2deb85. Tracking issue:
+(§7). Round 1 landed (§9), and the `positivity` tactic (§10); the probes in
+§3 were run against master at f2deb85, before either. Tracking issue:
 [positivity-evidence](../issues/positivity-evidence.md).
 
 The question: should `lib/std/pos.hthr`'s `Pos` exist at all? The three
@@ -400,3 +400,60 @@ benefits once it is written `:= infer`, which is a positional-arity change
 for its callers and belongs with the `Pos<A>` sugar.
 
 Tests: `crates/elab/tests/lib_std_evidence.rs`.
+
+## 10. As landed: the `positivity` tactic (round 6, 2026-10-11)
+
+`positivity` is a tactic term, written where a proof of a proposition is
+expected (`{ positivity }`, `needs(a * b, positivity)`, a `let` with its
+statement written). It runs the search `:= infer` runs at that goal
+(`Elaborator::positivity`, `crates/elab/src/resolve.rs`), with one more
+source at every proposition subgoal:
+
+1. Locals up to conversion, then computation to `True`, then the evidence
+   rules, exactly as §9. Each is one kernel trial.
+2. **Omega**, only where all of those failed at that subgoal. Rule
+   premises recurse through the same search, so omega runs at the
+   *leaves* the rules leave over, not at the goal: `0 < a * b` with
+   `2 <= a` and `5 <= b` in scope is `Nat::mul_pos` with an omega proof of
+   each factor. Omega alone treats `a * b` as an opaque atom and is stuck
+   on that goal.
+
+Why it is cheap:
+
+- **The cheap sources always run first.** A goal a local, a computation or
+  a rule closes runs no omega at all (`a_local_computation_or_rule_needs_no_omega`
+  asserts the count).
+- **Omega's calls are bounded.** A run remembers the subgoals omega was
+  stuck on and does not try them again, so a failing run costs at most one
+  omega call per distinct subgoal. A successful leaf is not memoized: its
+  proof may name an atom-list slot a rejected rule took back with it.
+- **A rejected attempt leaves nothing.** A rule or an omega call that does
+  not end in the proof gives back its dependency edges, checking notes,
+  named atom lists, warnings and Omega reports (`SearchMark`).
+- **Rules skip goals headed by a local.** A goal argument whose head is a
+  local can only meet a rule binder, since a local has no definition to
+  unfold, so a rule about `a * b` is not tried at `0 < b`. This prefilter
+  is shared with plain `:= infer`, where it only removes trials that fail.
+- **Omega's own certificate runs with plain `infer`.** The flag that turns
+  the omega source on is taken down for the duration of the call.
+
+Without `import omega;` the tactic still runs steps 1, and the trace says
+omega was not tried. A failure prints the whole search, with one line per
+omega call (omega's verdict, not its report; `omega` written at the goal
+gives the report).
+
+Not in this round:
+
+- **`h: 0 < n := positivity` as a parameter default** needs parameter
+  defaults, which are [named-arguments](../issues/named-arguments.md)'s
+  (§8 round 2). The tactic is what such a default would run.
+- **Goals other than a relation.** `positivity` accepts any proposition and
+  is only as good as the rules about it: there are rules about `Nat::Lt`
+  and nothing else yet, so `e ≠ 0` and goals over `Int` are omega's alone
+  for now (`Nat`'s `0 <= e` computes to `True`). New rules extend the tactic and
+  `infer` together, with no change here.
+- **`∧` projections of locals** (§7, still open) would reach the tactic
+  through the shared search if `infer` takes them.
+
+Tests: `crates/elab/tests/positivity_tactic.rs` (in the `omega` family,
+which already builds the omega prefix).

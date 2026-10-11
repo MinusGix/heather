@@ -47,3 +47,5 @@ mod stable_termination_labels;
 mod typed_termination_contexts;
 #[path = "../bv_omega.rs"]
 mod bv_omega;
+#[path = "../positivity_tactic.rs"]
+mod positivity_tactic;

@@ -609,8 +609,10 @@ const BV_OMEGA_ATOM_SLOTS: u32 = 4;
 
 /// Slots a declaration's tactics may fill besides its goals: a `bv_omega`
 /// lifts its proof into one (`docs/bv-omega-design.md` §6) and every `omega`
-/// names its atom list by one. Reserved up front, since a slot discovered
-/// mid-body restarts the declaration; an over-count costs an unused slot.
+/// names its atom list by one (a `positivity` counts as one `omega`; a run
+/// that needs more restarts once). Reserved up front, since a slot
+/// discovered mid-body restarts the declaration; an over-count costs an
+/// unused slot.
 pub(crate) fn count_tactic_slots(decl: &Decl) -> u32 {
     if decl.kind == heather_syntax::DeclKind::Axiom {
         return 0;
@@ -618,7 +620,7 @@ pub(crate) fn count_tactic_slots(decl: &Decl) -> u32 {
     let mut n = 0u32;
     let mut count = |e: &Expr| {
         walk_expr(e, &mut |x| match &x.kind {
-            ExprKind::Var(v) if v == "omega" => n += OMEGA_ATOM_SLOTS,
+            ExprKind::Var(v) if v == "omega" || v == "positivity" => n += OMEGA_ATOM_SLOTS,
             ExprKind::Var(v) if v == "bv_omega" => n += 1 + BV_OMEGA_ATOM_SLOTS,
             _ => {}
         })
