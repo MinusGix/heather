@@ -5,7 +5,7 @@
 // `filter_step_piece::StepPiece`, kernel-checked.
 use std::sync::OnceLock;
 
-use crate::read_loop_fixture::checker;
+use crate::read_loop_fixture::checker_with;
 use heather_elab::function_ir_source::{generate_elaborated_filter_step_x86, reflect_filter_step, FilterStep, FilterStepEmission};
 use heather_elab::{Elaborator, SemanticImage};
 
@@ -149,12 +149,9 @@ fn if_upcase_filter() → Stateless → BitVec(8) → Filtered<Stateless> { mapp
 fn library() -> Elaborator {
     static IMAGE: OnceLock<SemanticImage> = OnceLock::new();
     IMAGE.get_or_init(|| {
-        let mut elab = checker();
-        for (name, source) in [("elf64_read_pieces", READ_PIECES), ("stream_filter", STREAM_FILTER), ("filter_step_piece", STEP_PIECE), ("filters", FILTERS),
-            ("char", CHAR), ("byte", BYTE), ("decided", DECIDED)] {
-            elab.elab_module_source(name, source).unwrap_or_else(|e| panic!("{name}: {}", e.render(source)));
-        }
-        elab.semantic_image()
+        checker_with(&[("elf64_read_pieces", READ_PIECES), ("stream_filter", STREAM_FILTER), ("filter_step_piece", STEP_PIECE), ("filters", FILTERS),
+            ("char", CHAR), ("byte", BYTE), ("decided", DECIDED)])
+            .semantic_image()
     }).elaborator()
 }
 

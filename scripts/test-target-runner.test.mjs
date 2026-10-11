@@ -57,6 +57,8 @@ test("automatic job bound reserves host memory and two CPUs per child", () => {
   assert.equal(jobBounds("auto", tenFree, 16).jobs, 2);
   assert.equal(jobBounds("auto", thirtyFree, 16).jobs, 7);
   assert.equal(jobBounds("auto", thirtyFree, 8).jobs, 3);
+  assert.equal(jobBounds("auto", thirtyFree, 4).jobs, 2);
+  assert.equal(jobBounds("auto", thirtyFree, 2).jobs, 1);
   assert.equal(jobBounds("8", "", 16).jobs, 1);
   assert.equal(jobBounds("auto", thirtyFree, 16, String(16 * 1024 ** 3), String(2 * 1024 ** 3)).jobs, 4);
 });

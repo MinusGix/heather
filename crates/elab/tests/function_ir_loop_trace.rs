@@ -2,19 +2,11 @@ use crate::common;
 use heather_elab::function_ir_source::{generate_elaborated_loop_x86, generate_elaborated_typed_x86, NativeLoopPlacement};
 use heather_elab::function_ir_x86_lower::{Gpr, Placements};
 
+// The x86 prefix and the loop modules: the first eight of the read-loop
+// fixture's list, replayed from the shared semantic test images.
 fn checker() -> heather_elab::Elaborator {
-    let mut elab = common::base_image(common::MODULES.len());
-    for (name, source) in [
-        ("x86_64_structured_block", include_str!("../../../lib/std/arch/x86_64/x86_64_structured_block.hthr")),
-        ("x86_64_data_read", include_str!("../../../lib/std/arch/x86_64/x86_64_data_read.hthr")),
-        ("x86_64_access_code", include_str!("../../../lib/std/arch/x86_64/x86_64_access_code.hthr")),
-        ("x86_64_access_memory", include_str!("../../../lib/std/arch/x86_64/x86_64_access_memory.hthr")),
-        ("bitvec_nat", include_str!("../../../lib/std/bitvec/bitvec_nat.hthr")),
-        ("function_ir_loop", include_str!("../../../lib/function_ir_loop.hthr")),
-        ("function_ir_loop_x86", include_str!("../../../lib/function_ir_loop_x86.hthr")),
-        ("function_ir_loop_trace", include_str!("../../../lib/function_ir_loop_trace.hthr")),
-    ] { elab.elab_module_source(name, source).unwrap_or_else(|e| panic!("{}", e.render(source))); }
-    elab
+    let modules: Vec<(&str, &str)> = common::MODULES.iter().chain(&crate::read_loop_fixture::READ_LOOP[..8]).copied().collect();
+    crate::support::semantic_test_base(&modules)
 }
 
 // The loop's own steps go through the ordinary typed generator: no loop

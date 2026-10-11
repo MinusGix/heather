@@ -5,7 +5,7 @@
 //! their code is refused where it is wrong, not by a missing name, in
 //! `operand_cursor_refusals.rs` and `stat_width_refusals.rs`: a file each, so
 //! each shard fits the suite's CPU rail.
-use crate::read_loop_fixture::checker;
+use crate::read_loop_fixture::checker_with;
 
 const BV_OMEGA: &str = include_str!("../../../lib/std/bitvec/bitvec_omega.hthr");
 const DECIMAL: &str = include_str!("../../../lib/decimal_line.hthr");
@@ -17,14 +17,9 @@ const SCAN: &str = include_str!("../../../lib/elf64_arg_scan.hthr");
 pub(crate) const CURSOR: &str = include_str!("../../../lib/elf64_operand_cursor.hthr");
 pub(crate) const STAT: &str = include_str!("../../../lib/elf64_stat_width.hthr");
 
-pub(crate) fn base() -> heather_elab::Elaborator {
-    let mut elab = checker();
-    for (name, source) in [("bitvec_omega", BV_OMEGA), ("decimal_line", DECIMAL), ("x86_64_asm", ASM), ("elf64_runs", RUNS), ("elf64_format_width", FORMAT), ("command_program", PROGRAM),
-        ("elf64_arg_scan", SCAN)] {
-        elab.elab_module_source(name, source).unwrap_or_else(|e| panic!("{name}: {}", e.render(source)));
-    }
-    elab
-}
+pub(crate) const BASE: &[(&str, &str)] = &[("bitvec_omega", BV_OMEGA), ("decimal_line", DECIMAL), ("x86_64_asm", ASM), ("elf64_runs", RUNS), ("elf64_format_width", FORMAT), ("command_program", PROGRAM), ("elf64_arg_scan", SCAN)];
+
+pub(crate) fn base() -> heather_elab::Elaborator { checker_with(BASE) }
 
 // The pass placed past any header in the file, entered with RSP at any argv
 // whose pointers hold at every page: the client supplies only the placement.
@@ -83,8 +78,6 @@ theorem stat_length_is(): stat_code().len() = 1023 { stat_code_len() }
 
 #[test]
 fn stat_width_library_checks() {
-    let mut elab = base();
-    for (name, source) in [("elf64_operand_cursor", CURSOR), ("elf64_stat_width", STAT), ("stat_client", CLIENT)] {
-        elab.elab_module_source(name, source).unwrap_or_else(|e| panic!("{name}: {}", e.render(source)));
-    }
+    let mut elab = checker_with(&[BASE, &[("elf64_operand_cursor", CURSOR), ("elf64_stat_width", STAT)]].concat());
+    elab.elab_module_source("stat_client", CLIENT).unwrap_or_else(|e| panic!("{}", e.render(CLIENT)));
 }

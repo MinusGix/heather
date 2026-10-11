@@ -202,8 +202,11 @@ export function jobBounds(requested, meminfo, cores, cgroupMax = "", cgroupCurre
     : 1;
   // libtest itself gets two threads, so don't create more runnable test
   // threads than the CPUs the process is actually allowed to use. One
-  // two-thread slot remains free for the editor and other foreground work.
-  const cpuJobs = Math.max(1, Math.floor(cores / 2) - 1);
+  // two-thread slot remains free for the editor and other foreground work
+  // on a box of eight or more CPUs; below that the slot would be half the
+  // box or more (a 4-CPU cloud container ran the whole suite one target at
+  // a time, issues/suite-iteration-chokepoints-2026-10.md).
+  const cpuJobs = Math.max(1, Math.floor(cores / 2) - (cores >= 8 ? 1 : 0));
   const requestedJobs = requested === "auto" ? cpuJobs : Number(requested);
   if (!Number.isInteger(requestedJobs) || requestedJobs < 1) {
     throw new Error("--jobs must be `auto` or a positive integer");
@@ -475,7 +478,11 @@ async function main() {
   // Cargo remains responsible for doctest discovery. Its rustdoc children
   // inherit the same rails, and Cargo runs this phase serially.
   console.log("\n== doc tests (serial) ==");
-  const doc = await collect(limitedCommand("cargo", ["test", "--workspace", "--doc", "--", ...libtestArgs]));
+  // `heather-elab-unit` is elab's sources again, for its unit tests only
+  // (`doctest = false`, which `--doc` does not honour): documenting it would
+  // compile a second full O3 rlib of the elaborator after every elab edit,
+  // for no doc test (issues/suite-iteration-chokepoints-2026-10.md).
+  const doc = await collect(limitedCommand("cargo", ["test", "--workspace", "--exclude", "heather-elab-unit", "--doc", "--", ...libtestArgs]));
   process.stdout.write(doc.output);
   const docResult = parseResults(doc.output);
   merge(total, docResult);

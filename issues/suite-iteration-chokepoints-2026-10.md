@@ -1,0 +1,101 @@
+---
+title: The fast lane grew 6x with the wc command's library tests; where the suite's time goes (2026-10)
+status: open
+labels: [testing,performance,tooling]
+created: 2026-10-11
+updated: 2026-10-11
+---
+
+A fresh look at what the suite spends, after the wc command rounds
+(C1–C4, the label assembler, the Runs triples) landed on top of the
+2026-09-24 state that [[fast-lane-heaviest-declarations]] and
+[[rust-edit-loop-build-bound]] left. Measured on a 4-CPU cloud container
+(slower than the desktop; read the shapes and ratios, not the seconds).
+
+## What was found
+
+The fast lane's test phase, warm, was **890 s wall for 881 s summed /
+1048 CPU-s** (the 2026-09-24 desktop snapshot: 151 s summed / 185 CPU-s).
+Three causes, ranked by what they cost the loop:
+
+1. **The wc library tests re-elaborated the command's library from source in
+   every test** — [[suite-tests-reelaborate-library-modules]]'s pattern,
+   back in the new files. `stat_width_process`, `row_fields_process`,
+   `arg_scan_process`, `format_width_process`, `read_filter_process`,
+   `field_line_*`, `open_read_close_process`, `read_loop_process`,
+   `linux_determinism` and the read-loop fixture's `checker()` itself each
+   built the x86 prefix by image and then elaborated 17–27 library modules
+   (`linux_x86_64_io`, `x86_64_asm`, `elf64_runs`, `elf64_format_width`,
+   `elf64_stat_width`, …) with `elab_module_source`. Per-test declaration rows
+   (`HEATHER_TIMINGS_DIR`): `stat_width_library_checks` was 124.6 s, of which
+   the test's own client was 0.34 s and `elf64_stat_width` alone 59 s
+   (92 % gate). Summed over the fast lane's tests, ~545 s of the 881 s was
+   library modules re-elaborated from source; the full lane's
+   `slow_acceptance_*` refusal tests paid the same base again before their
+   mutants.
+2. **The runner ran one target at a time on a 4-CPU box.** The automatic CPU
+   bound was `floor(cores / 2) − 1`: two CPUs per child minus a slot kept
+   free for the editor, which on 4 CPUs is half the box.
+3. **The doc pass compiled a second O3 elaborator after every elab edit.**
+   `cargo test --workspace --doc` builds `heather-elab-unit`'s rlib although
+   its `[lib]` says `doctest = false` (`--doc` does not honour it), and the
+   workspace has no doc tests at all. After a one-line elab body edit: 41 s of
+   the doc pass, serial, at the end of every suite (the `--no-run` build
+   before it is 71 s on this box).
+
+## What changed
+
+- `support/read_loop.rs`: `checker_with(extra)` replays the x86 prefix, the
+  read-loop list and `extra` through `support::semantic_test_base`, and
+  `checker()` is `checker_with(&[])`. Every converted test keeps its exact
+  module list and order; the module a `*_library_checks` test is about goes
+  in the replayed list (checked from source by whichever test first asks for
+  that list, and by the full lane's exact policy whenever the compiler
+  changes), and the test's client, generated pieces and mutants go through
+  the real kernel as before. A `slow_acceptance_*` test's unmutated base is
+  replayed; its mutants are not.
+- `scripts/run-test-targets.mjs`: the editor slot is kept only on boxes of
+  eight or more CPUs (4 CPUs → 2 jobs; 16 → 7, unchanged); the doc pass
+  excludes `heather-elab-unit`.
+
+Fast lane, warm, same box: **890 s → 210 s wall** (summed 881 → 400 s,
+CPU 1048 → 529 s), 3051 passed. The converted targets, warm, alone:
+`stat_width_process` 122 → 1.3 s, `row_fields_process` 61 → 1.2 s; the
+others now cost what their own pieces and mutants cost.
+
+Full lane after the change, same box: **3229 passed in 13.5 min** (compile
+69 s + warm-ups + tests 549 s; summed 1061 s, CPU 1323 s). The
+`slow_acceptance_*` refusal tests now pay only their mutants:
+`stat_width_refusals` 68.8 CPU-s (it was at the 300 s rail,
+[[stat-width-refusals-test-cpu-rail]]). Its heaviest targets:
+`native_wc` 166 CPU-s (the only one past half the rail),
+`command_refusals` 100 s, `stat_width_refusals` 69 s, then the field pieces
+and the other refusal tests at 25–45 s.
+
+## What is left, ranked (fast lane, warm, after the change)
+
+The lane is now throughput-bound (summed 400 s over two jobs ≈ its 204 s of
+tests), so further cuts are per-test work. Every one of these is generated
+certificate content, i.e. the native line's own cost, not harness overhead:
+
+| test | s | what it is |
+|---|---|---|
+| `field_line_high_format::field_high_certifies` | 49 | generated `field_high` piece, ~44 s in its own module, plus a refused mutant |
+| `field_line_format::field_low_certifies` | 37 | the same for `field_low` (~33 s own) |
+| `function_ir_loop_trace::record_state_loop_certificate_checks` | 27 | `wc_pieces` 12 s, `wc` 7.5 s |
+| `function_ir_narrow_certificates::narrow_fused_branches_check_and_refuse_another_test` | 26 | four branch mutants at ~6 s each |
+| `filter_step_generation` (16 tests) | 50 wall / 93 CPU | `squeeze_pieces` ~12 s in each of two tests, `wc_pieces` 10 s |
+
+The field pieces are the cheapest lead: one generated function's
+certificate costing ~40 s of kernel time is the kind of shape
+[[structured-certificate-cost]] and [[fast-lane-heaviest-declarations]]
+found and fixed before (a spelling that misses the shortcut, or a layout
+restated per node). Probe with `--only` per [[check-single-item-measurement]].
+
+Outside the test phase:
+
+- **Rust-edit build**: 71 s on this box after an elab body edit; the floor
+  [[elab-rebuild-floor]] closed with no lever left.
+- **Cold warm-ups**: the command prefix is 157 + 67 s on a cold store
+  (`semantic_command_warmup`), the largest cold cost in the fast lane; it is
+  paid once per lib change, then replayed in ~2 s.

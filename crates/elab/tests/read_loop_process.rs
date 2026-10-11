@@ -1,4 +1,4 @@
-use crate::read_loop_fixture::checker;
+use crate::read_loop_fixture::{checker, checker_with};
 use heather_elab::function_ir_source::{generate_elaborated_loop_x86, NativeLoopPlacement};
 use heather_elab::function_ir_x86_lower::Gpr;
 
@@ -6,8 +6,7 @@ const PROCESS: &str = include_str!("../../../lib/elf64_read_pieces.hthr");
 
 #[test]
 fn read_loop_library_checks() {
-    let mut elab = checker();
-    elab.elab_module_source("elf64_read_pieces", PROCESS).unwrap_or_else(|e| panic!("{}", e.render(PROCESS)));
+    checker_with(&[("elf64_read_pieces", PROCESS)]);
 }
 
 // Each change to the read profile's pieces is refused where it is used, not
