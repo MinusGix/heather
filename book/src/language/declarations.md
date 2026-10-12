@@ -52,7 +52,16 @@ second(1, b := 2)
 pos(k)               // omega proves 0 < k from the caller's facts
 ```
 
-A default may not mention another parameter yet.
+A default may mention the parameters before it, and reads the call's
+arguments for them. It may not mention its own parameter, a later one, or a
+type parameter.
+
+```text
+fn window(start: Nat, len: Nat := 8, end: Nat := start + len) -> Nat { end }
+
+window(2)            // window(2, len := 8, end := 2 + 8)
+window(2, len := 1)  // end := 2 + 1
+```
 
 A parameter defaulted with `:= infer` is filled by instance resolution. A
 class constraint can also be written with `requires` or inline on a type

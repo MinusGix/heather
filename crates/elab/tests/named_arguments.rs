@@ -551,16 +551,173 @@ fn a_positional_argument_cannot_fill_a_default() {
 
 /// The declaration-side refusals: a default on an implicit or on `self`
 /// (two filling disciplines on one slot, or a slot the receiver always
-/// fills), and a default that mentions a parameter, which needs the call's
-/// arguments by name (issues/parameter-defaults-mention-parameters.md).
+/// fills), and a default that mentions its own parameter, a later one, or a
+/// type parameter. The telescope is ordered, so only the parameters before a
+/// default have arguments when it runs (§9.4); a type parameter has no alias
+/// to bind it (issues/parameter-defaults-mention-type-parameters.md).
 #[test]
 fn declaration_side_refusals() {
     let error = bad("fn f({b: Nat := 0}) -> Nat { b }");
     assert!(error.contains("already filled by unification"), "{error}");
     let error = bad("inductive Holder { Hold(n: Nat) }\nfn Holder::get(self h: Holder := Hold(0)) -> Nat { 0 }");
     assert!(error.contains("`self` cannot have a default"), "{error}");
-    let error = bad("fn f(n: Nat, k: Nat := n) -> Nat { k }");
-    assert!(error.contains("mentions the parameter `n`"), "{error}");
+    let error = bad("fn f(k: Nat := n, n: Nat) -> Nat { k }");
+    assert!(error.contains("mentions the later parameter `n`"), "{error}");
+    let error = bad("fn f(k: Nat := Succ(k)) -> Nat { k }");
+    assert!(error.contains("mentions its own parameter"), "{error}");
+    let error = bad("inductive List<A> { Nil, Cons(h: A, t: List<A>) }\nfn f<A>(x: A, xs: List<A> := Nil<A>) -> A { x }");
+    assert!(error.contains("mentions the type parameter `A`"), "{error}");
+    // A binder of the default's own that shadows a later parameter's name is
+    // not a mention of it.
+    ok("fn apply(f: Nat -> Nat, x: Nat) -> Nat { f(x) }
+fn g(m: Nat, k: Nat := apply(λ (n: Nat) => n, m), n: Nat) -> Nat { k }
+theorem shadowed(): g(1, 2) = 1 { refl }");
     // `:= infer` is still the solver, not a default naming `infer`.
     ok("fn f(n: Nat, h: True := infer) -> Nat { n }\nfn g() -> Nat { f(1) }");
+}
+
+// -- defaults that mention earlier parameters (§9.6) -------------------------
+//
+// issues/parameter-defaults-mention-parameters.md. At the call, each earlier
+// parameter a default mentions is bound to the call's argument for it, so
+// `k: Nat := n` reads the argument the call gave `n`. The axes: a literal and
+// a neutral argument, an open element type, a checking position, an
+// implicit learned from another argument and one learned only from the
+// expected type, a chain of defaults, and negative controls.
+
+const ECHO: &str = "
+fn echo(n: Nat, k: Nat := n) -> Nat { k }
+";
+
+/// `echo(3)` is `echo(3, k := 3)`, by `refl` against the full spelling and
+/// the value; a neutral argument and a checking position too. A named
+/// argument still overrides.
+#[test]
+fn a_default_reads_an_earlier_argument() {
+    ok(&format!("{ECHO}
+theorem literal(): echo(3) = 3 {{ refl }}
+theorem is_full(): echo(3) = echo(3, k := 3) {{ refl }}
+theorem neutral(m: Nat): echo(Succ(m)) = Succ(m) {{ refl }}
+theorem overridden(): echo(3, k := 5) = 5 {{ refl }}
+fn checked(m: Nat) -> Nat {{ echo(m) }}
+theorem checked_is(m: Nat): checked(m) = m {{ refl }}
+"));
+}
+
+/// The default's `n` is the parameter, never the caller's own `n`: here the
+/// caller's `n` is a different argument, and `echo(m)` is still `m`.
+#[test]
+fn a_callers_local_of_the_same_name_is_not_the_parameter() {
+    ok(&format!("{ECHO}
+fn other(n: Nat, m: Nat) -> Nat {{ echo(m) }}
+theorem is_m(): other(1, 2) = 2 {{ refl }}
+"));
+    // The negative control: if the default were the caller's `n`, this
+    // would be 1.
+    let error = bad(&format!("{ECHO}
+fn other(n: Nat, m: Nat) -> Nat {{ echo(m) }}
+theorem is_n(): other(1, 2) = 1 {{ refl }}
+"));
+    assert!(error.contains("is_n"), "{error}");
+}
+
+/// At an open type the default is the argument at that type.
+#[test]
+fn a_default_at_an_open_type() {
+    ok("
+inductive Bool { False, True }
+fn dup<A>(x: A, y: A := x) -> A { y }
+theorem closed(): dup(True) = True { refl }
+theorem open<A>(a: A): dup(a) = a { refl }
+theorem overridden(): dup(True, y := False) = False { refl }
+");
+}
+
+/// A default may mention an earlier defaulted parameter, which is filled
+/// first; overriding the earlier one changes what the later one reads.
+#[test]
+fn a_chain_of_defaults() {
+    ok("
+fn chain(a: Nat, b: Nat := Succ(a), c: Nat := Succ(b)) -> Nat { c }
+theorem both(): chain(0) = 2 { refl }
+theorem first_given(): chain(0, b := 5) = 6 { refl }
+theorem last_given(): chain(0, c := 9) = 9 { refl }
+");
+}
+
+/// The mentioned parameter is an implicit, learned from another argument;
+/// and one learned only from the expected type, so the default waits for it.
+/// There the later `h := refl` default proves `k = n`, so `k` is `n`'s
+/// argument or the call does not elaborate.
+#[test]
+fn a_default_mentions_an_implicit() {
+    ok("
+record Sized(n: Nat) { x: Nat, p: x = n }
+fn size_of({n: Nat}, s: Sized(n), k: Nat := n) -> Nat { k }
+theorem closed(s: Sized(4)): size_of(s) = 4 { refl }
+theorem open(m: Nat, s: Sized(m)): size_of(s) = m { refl }
+fn pinned({n: Nat}, k: Nat := n, h: k = n := refl) -> n = n { refl }
+theorem learned_late(): 3 = 3 { pinned() }
+");
+}
+
+/// A default whose *type* also depends on the earlier argument: the domain
+/// and the default are instantiated by the same argument.
+#[test]
+fn a_dependent_default() {
+    ok("
+fn self_eq(n: Nat, h: n = n := refl, m: Nat := n) -> Nat { m }
+theorem t(k: Nat): self_eq(k) = k { refl }
+");
+}
+
+/// A method call: the receiver is an earlier argument like any other.
+#[test]
+fn a_default_reads_the_receiver() {
+    ok("
+inductive Holder { Hold(n: Nat) }
+fn Holder::count(self h: Holder) -> Nat { match h { Hold(n) => n } }
+fn Holder::get(self h: Holder, extra: Nat := h.count()) -> Nat { extra }
+theorem by_default(): Hold(4).get() = 4 { refl }
+theorem by_name(): Hold(4).get(extra := 2) = 2 { refl }
+");
+}
+
+/// A default that does not give the parameter's type at this call is still
+/// refused at the call, naming the parameter: here `zero`'s goal is
+/// `IsZero(m)`, and `m` is the earlier default's copy of `n`.
+#[test]
+fn a_mentioning_default_that_fails_is_refused_at_the_call() {
+    let error = bad("
+inductive Yes { Holds }
+inductive No { Fails }
+fn IsZero(n: Nat) -> Type { match n { Zero => Yes, Succ(_) => No } }
+fn zeroed(n: Nat, m: Nat := n, zero: IsZero(m) := Holds) -> Nat { n }
+fn fine() -> Nat { zeroed(0) }
+fn wrong() -> Nat { zeroed(5) }
+");
+    assert!(error.contains("`zeroed`'s `zero` was left to its default") && error.contains("zero := "), "{error}");
+    assert!(error.starts_with("7:"), "the refusal points at the call in `wrong`: {error}");
+    // An argument of the wrong type for what the default does with it is
+    // refused too, though at the default rather than the call: the mismatch
+    // is the gate's verdict, which is
+    // issues/default-kernel-failure-reported-at-declaration.md's case.
+    let error = bad("
+inductive Bool { False, True }
+fn pick<A>(x: A, k: Nat := x) -> Nat { k }
+fn fine() -> Nat { pick(3) }
+fn wrong() -> Nat { pick(True) }
+");
+    assert!(error.contains("this has type `Bool`, but `Nat` is expected here"), "{error}");
+}
+
+/// Across modules: the default's parameter names bind in the user module's
+/// call, and its other names still resolve where it was declared.
+#[test]
+fn a_mentioning_default_across_modules() {
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    let declaring = "fn bump(n: Nat) -> Nat { Succ(n) }\nfn next(n: Nat, k: Nat := bump(n)) -> Nat { k }";
+    e.elab_module_source("declaring", declaring).unwrap_or_else(|err| panic!("{}", err.render(declaring)));
+    let user = "import declaring::{next};\nfn bump(n: Nat) -> Nat { n }\ntheorem one(n: Nat): next(n) = Succ(n) { refl }";
+    e.elab_module_source("user", user).unwrap_or_else(|err| panic!("{}", err.render(user)));
 }

@@ -1,6 +1,6 @@
 ---
 title: Let a parameter default mention an earlier parameter (k: Nat := n)
-status: open
+status: closed
 labels: [frontend,elaboration,defaults]
 created: 2026-10-12
 updated: 2026-10-12
@@ -38,3 +38,19 @@ is ordered (§9.4).
 - **[[named-arguments]]** owns how a default is filled at a call. Assumed
   here: an omitted default reaches the spine walkers as a named argument
   whose payload is the `PARAM_DEFAULT` marker.
+
+## Log
+
+- 2026-10-12: Landed. Each earlier value parameter a default mentions is bound, at the
+  call, to the call's argument for it, as an alias in the default's hygienic
+  context (`defaults::elab_param_default`); the caller's own locals stay out of
+  reach. The spine walkers keep the call's arguments so far beside the walk
+  (`application::EarlierArg`) only when the call leaves a default to fill, and
+  a default waits, like a deferred argument, until the earlier arguments it
+  mentions are solved: an implicit learned later, from the expected type, or
+  an earlier default not yet filled. A default that mentions its own or a later
+  parameter is refused at the declaration (the telescope is ordered), and one
+  that mentions a type parameter is refused there too, now owned by
+  [[parameter-defaults-mention-type-parameters]]. Tests:
+  crates/elab/tests/named_arguments.rs, "defaults that mention earlier
+  parameters", and positivity_tactic.rs's tactic default after a mentioning one.

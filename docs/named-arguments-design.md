@@ -657,13 +657,32 @@ The `__` prefix is the same reserved spelling `omega`'s own renaming uses.
 Record fields use the same check, so a field default now runs under local
 bindings too.
 
+**A default may mention the parameters before it** (`k: Nat := n`,
+2026-10-12). In the hygienic context the caller's locals are out of reach,
+so a parameter's name is bound to something else: the call's argument for
+it, pushed as an alias (the `let` mechanism, a kernel term inlined at each
+use) by `defaults::elab_param_default`. The default's term is therefore the
+one it would be with the arguments written in, and `fn f(n: Nat, k: Nat :=
+n)` makes `f(3)` the term `f(3, k := 3)`. A caller's own `n` is still
+`__caller_n`, so it cannot be what the default reads.
+
+The arguments come from the spine walkers, which keep the call's arguments
+so far, with their instantiated domains, only when the call leaves a default
+to fill (`application::EarlierArg`). In `apply_implicit` they are scratch-world
+terms, so a default waits, as a deferred argument does, until the earlier
+arguments it mentions are solved as well as its domain: an implicit learned
+from a later argument or the expected type, or an earlier default not yet
+filled. Which parameters a default mentions is read off its syntax at the
+call (`defaults::mentioned_parameters`), so the module image is unchanged.
+
+The declaration refuses a default that mentions its own parameter or a later
+one (the telescope is ordered, §9.4), and one that mentions a type parameter,
+which no alias can bind
+(issues/parameter-defaults-mention-type-parameters.md).
+
 **What a default cannot do yet**, each with an owner:
 
-- **Mention a parameter** (`k: Nat := n`). In the hygienic context a
-  parameter is not a name: the default sees the domain `0 < 5`, not `0 < n`.
-  Refused at the declaration
-  (issues/parameter-defaults-mention-parameters.md, which sketches binding
-  the earlier arguments as aliases).
+- **Mention a type parameter** (`xs: List<A> := Nil<A>`); see above.
 - **Fail at the call when only the kernel sees it.** A `refl` default whose
   endpoints differ at some call is reported at the declaration
   (issues/default-kernel-failure-reported-at-declaration.md). An elaboration
