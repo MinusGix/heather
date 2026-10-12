@@ -1,4 +1,4 @@
-use crate::read_loop_fixture::checker;
+use crate::read_loop_fixture::{checker, checker_with};
 
 // The run is the run (docs/fetched-step-determinism-design.md): every step
 // form reads back from the front of its bytes, so a step is a function of
@@ -9,9 +9,7 @@ const DETERMINISM: &str = include_str!("../../../lib/linux_x86_64_determinism.ht
 
 #[test]
 fn claimed_runs_are_every_run() {
-    let mut elab = checker();
-    elab.elab_module_source("x86_64_step_forms", FORMS).unwrap_or_else(|e| panic!("{}", e.render(FORMS)));
-    elab.elab_module_source("linux_x86_64_determinism", DETERMINISM).unwrap_or_else(|e| panic!("{}", e.render(DETERMINISM)));
+    checker_with(&[("x86_64_step_forms", FORMS), ("linux_x86_64_determinism", DETERMINISM)]);
 }
 
 // Each change is refused where it is wrong, not by a missing name: a decoder
@@ -37,9 +35,7 @@ fn determinism_refusals() {
         let error = library.elaborator().elab_module_source("x86_64_step_forms", &bad).expect_err(name).render(&bad);
         assert!(!error.contains("unbound") && !error.contains("ambiguous"), "{name}: {error}");
     }
-    let mut elab = library.elaborator();
-    elab.elab_module_source("x86_64_step_forms", FORMS).unwrap_or_else(|e| panic!("{}", e.render(FORMS)));
-    let forms = elab.semantic_image();
+    let forms = checker_with(&[("x86_64_step_forms", FORMS)]).semantic_image();
     for (name, from, to) in [
         ("junk_unbounded", "(junk.len() <= read_gpr(Rdx, at.gprs).toNat()) ∧\n", "True ∧\n"),
         ("answers_by_kind", "ReadEvent(_, other) => result = other,", "ReadEvent(_, other) => True,"),

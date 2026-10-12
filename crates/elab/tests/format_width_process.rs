@@ -2,7 +2,7 @@
 //! library formatter checks over what it stands on, runs wherever a program
 //! places it, and each change to its code is refused where it is wrong, not
 //! by a missing name.
-use crate::read_loop_fixture::checker;
+use crate::read_loop_fixture::checker_with;
 
 const BV_OMEGA: &str = include_str!("../../../lib/std/bitvec/bitvec_omega.hthr");
 const DECIMAL: &str = include_str!("../../../lib/decimal_line.hthr");
@@ -10,13 +10,9 @@ const ASM: &str = include_str!("../../../lib/std/arch/x86_64/x86_64_asm.hthr");
 const RUNS: &str = include_str!("../../../lib/elf64_runs.hthr");
 const FORMAT: &str = include_str!("../../../lib/elf64_format_width.hthr");
 
-fn base() -> heather_elab::Elaborator {
-    let mut elab = checker();
-    for (name, source) in [("bitvec_omega", BV_OMEGA), ("decimal_line", DECIMAL), ("x86_64_asm", ASM), ("elf64_runs", RUNS)] {
-        elab.elab_module_source(name, source).unwrap_or_else(|e| panic!("{name}: {}", e.render(source)));
-    }
-    elab
-}
+const BASE: &[(&str, &str)] = &[("bitvec_omega", BV_OMEGA), ("decimal_line", DECIMAL), ("x86_64_asm", ASM), ("elf64_runs", RUNS)];
+
+fn base() -> heather_elab::Elaborator { checker_with(BASE) }
 
 // The formatter placed past any header in the file, entered with any count,
 // width and cursor that leave room in the page: the client supplies only the
@@ -43,8 +39,7 @@ theorem format_length(): format_len() = 1588 { refl }
 
 #[test]
 fn format_width_library_checks() {
-    let mut elab = base();
-    elab.elab_module_source("elf64_format_width", FORMAT).unwrap_or_else(|e| panic!("{}", e.render(FORMAT)));
+    let mut elab = checker_with(&[BASE, &[("elf64_format_width", FORMAT)]].concat());
     elab.elab_module_source("format_client", CLIENT).unwrap_or_else(|e| panic!("{}", e.render(CLIENT)));
 }
 

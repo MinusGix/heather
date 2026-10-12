@@ -3,16 +3,12 @@
 //! the read driver with the fd held in RSP, closes it and exits 0, or exits 1
 //! when the open fails; its claim checks over the library, and each change to
 //! it is refused where it is wrong, not by a missing name.
-use crate::read_loop_fixture::checker;
+use crate::read_loop_fixture::checker_with;
 
 const READ_PIECES: &str = include_str!("../../../lib/elf64_read_pieces.hthr");
 const PROCESS: &str = include_str!("fixtures/open_read_close.hthr");
 
-fn base() -> heather_elab::Elaborator {
-    let mut elab = checker();
-    elab.elab_module_source("elf64_read_pieces", READ_PIECES).unwrap_or_else(|e| panic!("{}", e.render(READ_PIECES)));
-    elab
-}
+fn base() -> heather_elab::Elaborator { checker_with(&[("elf64_read_pieces", READ_PIECES)]) }
 
 #[test]
 fn open_read_close_checks() {

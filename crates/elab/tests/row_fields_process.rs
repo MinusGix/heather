@@ -4,7 +4,7 @@
 //! layout on §2's cases. Each change to its code is refused where it is
 //! wrong, not by a missing name, in `row_fields_refusals.rs` (a file of its
 //! own, so each shard fits the suite's CPU rail).
-use crate::read_loop_fixture::checker;
+use crate::read_loop_fixture::checker_with;
 
 const BV_OMEGA: &str = include_str!("../../../lib/std/bitvec/bitvec_omega.hthr");
 const DECIMAL: &str = include_str!("../../../lib/decimal_line.hthr");
@@ -15,14 +15,9 @@ const PROGRAM: &str = include_str!("../../../lib/command_program.hthr");
 const SCAN: &str = include_str!("../../../lib/elf64_arg_scan.hthr");
 pub(crate) const ROW: &str = include_str!("../../../lib/elf64_row_fields.hthr");
 
-pub(crate) fn base() -> heather_elab::Elaborator {
-    let mut elab = checker();
-    for (name, source) in [("bitvec_omega", BV_OMEGA), ("decimal_line", DECIMAL), ("x86_64_asm", ASM), ("elf64_runs", RUNS), ("elf64_format_width", FORMAT), ("command_program", PROGRAM),
-        ("elf64_arg_scan", SCAN)] {
-        elab.elab_module_source(name, source).unwrap_or_else(|e| panic!("{name}: {}", e.render(source)));
-    }
-    elab
-}
+const BASE: &[(&str, &str)] = &[("bitvec_omega", BV_OMEGA), ("decimal_line", DECIMAL), ("x86_64_asm", ASM), ("elf64_runs", RUNS), ("elf64_format_width", FORMAT), ("command_program", PROGRAM), ("elf64_arg_scan", SCAN)];
+
+pub(crate) fn base() -> heather_elab::Elaborator { checker_with(BASE) }
 
 // The writer placed past any header in the file, its counts anywhere the
 // client keeps them: the client supplies only the placement. Then
@@ -64,8 +59,6 @@ theorem row_length_is(): row_code().len() = 1712 { row_code_len() }
 
 #[test]
 fn row_fields_library_checks() {
-    let mut elab = base();
-    for (name, source) in [("elf64_row_fields", ROW), ("row_client", CLIENT)] {
-        elab.elab_module_source(name, source).unwrap_or_else(|e| panic!("{name}: {}", e.render(source)));
-    }
+    let mut elab = checker_with(&[BASE, &[("elf64_row_fields", ROW)]].concat());
+    elab.elab_module_source("row_client", CLIENT).unwrap_or_else(|e| panic!("{}", e.render(CLIENT)));
 }

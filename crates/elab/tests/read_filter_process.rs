@@ -1,7 +1,7 @@
 //! The stream filter's process (docs/native-stream-filter-design.md §4): the
 //! library checks over what it stands on, and each change to its shape is
 //! refused where it is wrong, not by a missing name.
-use crate::read_loop_fixture::checker;
+use crate::read_loop_fixture::checker_with;
 
 const READ_PIECES: &str = include_str!("../../../lib/elf64_read_pieces.hthr");
 const DECIMAL: &str = include_str!("../../../lib/decimal_line.hthr");
@@ -14,14 +14,10 @@ const PROCESS: &str = include_str!("../../../lib/elf64_read_filter.hthr");
 
 // Everything the filter process stands on: the read driver, the write loop,
 // what a filter computes, and the step's contract.
-fn base() -> heather_elab::Elaborator {
-    let mut elab = checker();
-    for (name, source) in [("elf64_read_pieces", READ_PIECES), ("bitvec_omega", BV_OMEGA), ("decimal_line", DECIMAL),
-        ("elf64_print_pieces", PRINT), ("elf64_write_loop", WRITE), ("stream_filter", STREAM)] {
-        elab.elab_module_source(name, source).unwrap_or_else(|e| panic!("{name}: {}", e.render(source)));
-    }
-    elab
-}
+const BASE: &[(&str, &str)] = &[("elf64_read_pieces", READ_PIECES), ("bitvec_omega", BV_OMEGA), ("decimal_line", DECIMAL),
+    ("elf64_print_pieces", PRINT), ("elf64_write_loop", WRITE), ("stream_filter", STREAM)];
+
+fn base() -> heather_elab::Elaborator { checker_with(BASE) }
 fn with_step_piece(mut elab: heather_elab::Elaborator, source: &str) -> heather_elab::Elaborator {
     elab.elab_module_source("filter_step_piece", source).unwrap_or_else(|e| panic!("{}", e.render(source)));
     elab
@@ -29,8 +25,7 @@ fn with_step_piece(mut elab: heather_elab::Elaborator, source: &str) -> heather_
 
 #[test]
 fn read_filter_library_checks() {
-    let mut elab = with_step_piece(base(), STEP_PIECE);
-    elab.elab_module_source("elf64_read_filter", PROCESS).unwrap_or_else(|e| panic!("{}", e.render(PROCESS)));
+    checker_with(&[BASE, &[("filter_step_piece", STEP_PIECE), ("elf64_read_filter", PROCESS)]].concat());
 }
 
 // The claim can't be restated over a store at the read cursor instead of the
@@ -40,7 +35,7 @@ fn read_filter_library_checks() {
 // may write the write cursor.
 #[test]
 fn slow_acceptance_read_filter_refusals() {
-    let library = with_step_piece(base(), STEP_PIECE).semantic_image();
+    let library = checker_with(&[BASE, &[("filter_step_piece", STEP_PIECE)]].concat()).semantic_image();
     for (name, from, to) in [
         ("store_at_read", "ByteStore(base := Rdi, source := Rdx)", "ByteStore(base := Rsi, source := Rdx)"),
         ("flag_forgotten", "[AddRR(Rdi, Rbx), AddRR(Rsi, R12), SubRR(Rcx, R12)]", "[AddRR(Rdi, R12), AddRR(Rsi, R12), SubRR(Rcx, R12)]"),

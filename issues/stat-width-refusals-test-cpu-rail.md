@@ -1,9 +1,9 @@
 ---
 title: The stat width refusal test runs at the CPU rail
-status: open
+status: closed
 labels: [x86,testing,performance]
 created: 2026-10-10
-updated: 2026-10-10
+updated: 2026-10-11
 ---
 
 `slow_acceptance_stat_width_refusals` (`crates/elab/tests/stat_width_refusals.rs`,
@@ -32,3 +32,7 @@ pass module before its refusal, so the cost is about seven times one
 2. Make the refusal cheaper: stop at the first failing declaration (it may
    already), or check only the theorem each mutation breaks, by an `--only`
    style probe.
+
+## Log
+
+- 2026-10-11: Measured after [[suite-iteration-chokepoints-2026-10]] (the refusal test's unmutated base is now replayed from the semantic images, not re-elaborated from source): 68.8 CPU-s in a full suite on a 4-CPU cloud box, 23% of the rail. Closing: the margin is back without splitting the mutations.

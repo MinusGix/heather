@@ -1,4 +1,4 @@
-use crate::read_loop_fixture::checker;
+use crate::read_loop_fixture::checker_with;
 use heather_elab::function_ir_source::generate_elaborated_piece_x86;
 use heather_elab::function_ir_x86_lower::{Gpr, Placements};
 
@@ -6,12 +6,9 @@ const BV_OMEGA: &str = include_str!("../../../lib/std/bitvec/bitvec_omega.hthr")
 const DECIMAL: &str = include_str!("../../../lib/decimal_line.hthr");
 pub(crate) const FIELD: &str = include_str!("../../../lib/field_line.hthr");
 
-pub(crate) fn base() -> heather_elab::Elaborator {
-    let mut elab = checker();
-    elab.elab_module_source("bitvec_omega", BV_OMEGA).unwrap_or_else(|e| panic!("{}", e.render(BV_OMEGA)));
-    elab.elab_module_source("decimal_line", DECIMAL).unwrap_or_else(|e| panic!("{}", e.render(DECIMAL)));
-    elab
-}
+const BASE: &[(&str, &str)] = &[("bitvec_omega", BV_OMEGA), ("decimal_line", DECIMAL)];
+
+pub(crate) fn base() -> heather_elab::Elaborator { checker_with(BASE) }
 
 // One of the field formatter's words at the registers the three-field tail
 // gives it (docs/native-wc-design.md §5): the count in R11, the high word's
@@ -27,8 +24,7 @@ pub(crate) fn word_certifies(function: &str) {
         "field_low" => (Placements::from([(0, R11)]), vec![Rax, Rcx, Rdx, Rbx, R8, R9, R10, R12, Rsi, Rdi, Rbp], "FieldLow"),
         _ => (Placements::from([(0, R11), (1, R10)]), vec![Rax, Rcx, Rdx, Rbx, R8, R9, R12, Rsi, Rdi, Rbp], "FieldHigh"),
     };
-    let mut elab = base();
-    elab.elab_module_source("field_line", FIELD).unwrap_or_else(|e| panic!("{}", e.render(FIELD)));
+    let mut elab = checker_with(&[BASE, &[("field_line", FIELD)]].concat());
     elab.elab_module_source("field_context", "import field_line; import decimal_line; import bitvec; import bool;").unwrap();
     let emission = generate_elaborated_piece_x86(&elab, function, &format!("field_line::{function}"), &inputs, &temporaries, Rax)
         .unwrap_or_else(|e| panic!("{function}: {e:?}"));

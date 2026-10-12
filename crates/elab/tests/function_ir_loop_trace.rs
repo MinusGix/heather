@@ -2,19 +2,11 @@ use crate::common;
 use heather_elab::function_ir_source::{generate_elaborated_loop_x86, generate_elaborated_typed_x86, NativeLoopPlacement};
 use heather_elab::function_ir_x86_lower::{Gpr, Placements};
 
+// The x86 prefix and the loop modules: the first eight of the read-loop
+// fixture's list, replayed from the shared semantic test images.
 fn checker() -> heather_elab::Elaborator {
-    let mut elab = common::base_image(common::MODULES.len());
-    for (name, source) in [
-        ("x86_64_structured_block", include_str!("../../../lib/std/arch/x86_64/x86_64_structured_block.hthr")),
-        ("x86_64_data_read", include_str!("../../../lib/std/arch/x86_64/x86_64_data_read.hthr")),
-        ("x86_64_access_code", include_str!("../../../lib/std/arch/x86_64/x86_64_access_code.hthr")),
-        ("x86_64_access_memory", include_str!("../../../lib/std/arch/x86_64/x86_64_access_memory.hthr")),
-        ("bitvec_nat", include_str!("../../../lib/std/bitvec/bitvec_nat.hthr")),
-        ("function_ir_loop", include_str!("../../../lib/function_ir_loop.hthr")),
-        ("function_ir_loop_x86", include_str!("../../../lib/function_ir_loop_x86.hthr")),
-        ("function_ir_loop_trace", include_str!("../../../lib/function_ir_loop_trace.hthr")),
-    ] { elab.elab_module_source(name, source).unwrap_or_else(|e| panic!("{}", e.render(source))); }
-    elab
+    let modules: Vec<(&str, &str)> = common::MODULES.iter().chain(&crate::read_loop_fixture::READ_LOOP[..8]).copied().collect();
+    crate::support::semantic_test_base(&modules)
 }
 
 // The loop's own steps go through the ordinary typed generator: no loop
@@ -336,21 +328,27 @@ pub(crate) fn wc_placement() -> NativeLoopPlacement {
 
 #[test]
 fn record_state_loop_certificate_checks() {
-    let mut elab = checker().semantic_image().elaborator();
-    for (name, source) in [("omega", include_str!("../../../lib/std/omega.hthr")),
-        ("bitvec_omega", include_str!("../../../lib/std/bitvec/bitvec_omega.hthr"))] {
-        elab.elab_module_source(name, source).unwrap_or_else(|e| panic!("{}", e.render(source)));
-    }
+    let mut elab = wc_checker();
     wc_record_loop(&mut elab);
 }
 
-// The step as module `wc`, its record loop generated and checked as
+// The step as module `wc` and its loop over one chunk as `wc_context`, as the
+// read profile's producer writes it beside a program (`count_wc`), with the
+// omega modules `wc`'s growth proof uses: the loop generator's inputs,
+// replayed like the rest of the base, so only what it generates is checked
+// from source here.
+fn wc_checker() -> heather_elab::Elaborator {
+    let modules: Vec<(&str, &str)> = common::MODULES.iter().chain(&crate::read_loop_fixture::READ_LOOP[..8]).copied()
+        .chain([("omega", include_str!("../../../lib/std/omega.hthr")),
+            ("bitvec_omega", include_str!("../../../lib/std/bitvec/bitvec_omega.hthr")),
+            ("wc", WC_SOURCE), ("wc_context", WC_CONTEXT)])
+        .collect();
+    crate::support::semantic_test_base(&modules)
+}
+
+// The record loop over `wc_checker`'s step, generated and checked as
 // `wc_pieces` and `wc_native`.
 pub(crate) fn wc_record_loop(elab: &mut heather_elab::Elaborator) {
-    elab.elab_module_source("wc", WC_SOURCE).unwrap_or_else(|e| panic!("{}", e.render(WC_SOURCE)));
-    // The step as the loop over one chunk, as the read profile's producer
-    // writes it beside a program (`count_wc`).
-    elab.elab_module_source("wc_context", WC_CONTEXT).unwrap_or_else(|e| panic!("{}", e.render(WC_CONTEXT)));
     let emission = generate_elaborated_loop_x86(elab, "wc", "wc_context::count_wc", &wc_placement(), Some("wc_context::wc_advances"))
         .unwrap_or_else(|e| panic!("{e:?}"));
     elab.elab_module_source("wc_pieces", &emission.pieces).unwrap_or_else(|e| panic!("{}", e.render(&emission.pieces)));

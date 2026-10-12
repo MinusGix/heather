@@ -3,9 +3,10 @@
 // `Filtered` result, or `counting(g)` / `mapping(f)`, lowered output by
 // output, the emit first and then the state in place, and published as
 // `filter_step_piece::StepPiece`, kernel-checked.
-use std::sync::OnceLock;
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex, OnceLock};
 
-use crate::read_loop_fixture::checker;
+use crate::read_loop_fixture::checker_with;
 use heather_elab::function_ir_source::{generate_elaborated_filter_step_x86, reflect_filter_step, FilterStep, FilterStepEmission};
 use heather_elab::{Elaborator, SemanticImage};
 
@@ -149,12 +150,9 @@ fn if_upcase_filter() → Stateless → BitVec(8) → Filtered<Stateless> { mapp
 fn library() -> Elaborator {
     static IMAGE: OnceLock<SemanticImage> = OnceLock::new();
     IMAGE.get_or_init(|| {
-        let mut elab = checker();
-        for (name, source) in [("elf64_read_pieces", READ_PIECES), ("stream_filter", STREAM_FILTER), ("filter_step_piece", STEP_PIECE), ("filters", FILTERS),
-            ("char", CHAR), ("byte", BYTE), ("decided", DECIDED)] {
-            elab.elab_module_source(name, source).unwrap_or_else(|e| panic!("{name}: {}", e.render(source)));
-        }
-        elab.semantic_image()
+        checker_with(&[("elf64_read_pieces", READ_PIECES), ("stream_filter", STREAM_FILTER), ("filter_step_piece", STEP_PIECE), ("filters", FILTERS),
+            ("char", CHAR), ("byte", BYTE), ("decided", DECIDED)])
+            .semantic_image()
     }).elaborator()
 }
 
@@ -163,11 +161,27 @@ fn generate(elab: &Elaborator, prefix: &str, step: &str, init: Option<&str>) -> 
     generate_elaborated_filter_step_x86(elab, prefix, &step, init).unwrap_or_else(|e| panic!("{e}"))
 }
 
+// A step's generated pieces, elaborated once per process: its certifying
+// test and its refusal both stand on them, and they are most of either test's
+// cost. Keyed by prefix; the pieces do not depend on the initial state, which
+// `certify` asserts.
+fn with_pieces(prefix: &str, step: &str) -> (Elaborator, String) {
+    static PIECES: Mutex<BTreeMap<String, Arc<OnceLock<(SemanticImage, String)>>>> = Mutex::new(BTreeMap::new());
+    let cell = Arc::clone(PIECES.lock().unwrap_or_else(|e| e.into_inner()).entry(prefix.to_string()).or_default());
+    let (image, pieces) = cell.get_or_init(|| {
+        let mut elab = library();
+        let emission = generate(&elab, prefix, step, None);
+        elab.elab_module_source(&format!("{prefix}_pieces"), &emission.pieces).unwrap_or_else(|e| panic!("{}", e.render(&emission.pieces)));
+        (elab.semantic_image(), emission.pieces)
+    });
+    (image.elaborator(), pieces.clone())
+}
+
 // Generated and elaborated: the pieces, then the step piece over them.
 fn certify(prefix: &str, step: &str, init: Option<&str>) -> (Elaborator, FilterStepEmission) {
-    let mut elab = library();
-    let emission = generate(&elab, prefix, step, init);
-    elab.elab_module_source(&format!("{prefix}_pieces"), &emission.pieces).unwrap_or_else(|e| panic!("{}", e.render(&emission.pieces)));
+    let emission = generate(&library(), prefix, step, init);
+    let (mut elab, pieces) = with_pieces(prefix, step);
+    assert_eq!(emission.pieces, pieces, "{prefix}: the pieces depend on the initial state");
     elab.elab_module_source(&format!("{prefix}_step"), &emission.text).unwrap_or_else(|e| panic!("{}", e.render(&emission.text)));
     (elab, emission)
 }
@@ -204,10 +218,8 @@ theorem drop_letter_kept<M>(before: MachineState<M>, rax: read_gpr(Rax, before.g
 // refused where the claim is checked, not by a missing name.
 #[test]
 fn drop_code_is_not_another_steps_piece() {
-    let elab = library();
-    let emission = generate(&elab, "drop", "filters::drop_step", None);
-    let mut elab = elab;
-    elab.elab_module_source("drop_pieces", &emission.pieces).unwrap_or_else(|e| panic!("{}", e.render(&emission.pieces)));
+    let emission = generate(&library(), "drop", "filters::drop_step", None);
+    let (mut elab, _) = with_pieces("drop", "filters::drop_step");
     let claim = "StepPiece<M, stream_filter::Stateless>(drop_code(), drop_rep, drop_counts(), filters::drop_step)";
     assert!(emission.text.contains(claim), "{}", emission.text);
     let bad = emission.text.replace(claim, "StepPiece<M, stream_filter::Stateless>(drop_code(), drop_rep, drop_counts(), filters::keep_step)");
@@ -232,10 +244,8 @@ theorem squeeze_repeat_silent<M>(before: MachineState<M>, held: squeeze_rep(befo
 
 #[test]
 fn squeeze_code_is_not_another_steps_piece() {
-    let elab = library();
-    let emission = generate(&elab, "squeeze", "filters::squeeze_step", None);
-    let mut elab = elab;
-    elab.elab_module_source("squeeze_pieces", &emission.pieces).unwrap_or_else(|e| panic!("{}", e.render(&emission.pieces)));
+    let emission = generate(&library(), "squeeze", "filters::squeeze_step", None);
+    let (mut elab, _) = with_pieces("squeeze", "filters::squeeze_step");
     let claim = "squeeze_counts(), filters::squeeze_step)";
     assert!(emission.text.contains(claim), "{}", emission.text);
     let bad = emission.text.replace(claim, "squeeze_counts(), filters::stale_step)");
@@ -282,10 +292,8 @@ theorem eq_drop_letter_kept<M>(before: MachineState<M>, rax: read_gpr(Rax, befor
     eq_drop_step_piece<M>()(before, Stateless(), BitVec::ofNat(0x61), trivial, rax, trivial).byte_is
 }";
     elab.semantic_image().elaborator().elab_module_source("eq_drop_client", client).unwrap_or_else(|e| panic!("{}", e.render(client)));
-    let elab = library();
-    let emission = generate(&elab, "eq_drop", "filters::eq_drop_step", None);
-    let mut elab = elab;
-    elab.elab_module_source("eq_drop_pieces", &emission.pieces).unwrap_or_else(|e| panic!("{}", e.render(&emission.pieces)));
+    let emission = generate(&library(), "eq_drop", "filters::eq_drop_step", None);
+    let (mut elab, _) = with_pieces("eq_drop", "filters::eq_drop_step");
     let claim = "eq_drop_counts(), filters::eq_drop_step)";
     assert!(emission.text.contains(claim), "{}", emission.text);
     let bad = emission.text.replace(claim, "eq_drop_counts(), filters::eq_keep_step)");
@@ -319,10 +327,8 @@ theorem if_drop_letter_kept<M>(before: MachineState<M>, rax: read_gpr(Rax, befor
 }";
     elab.semantic_image().elaborator().elab_module_source("if_drop_client", client).unwrap_or_else(|e| panic!("{}", e.render(client)));
     assert!(!emission.text.contains("split_all") && !emission.pieces.contains("split_all"), "one comparison needs no case analysis");
-    let elab = library();
-    let emission = generate(&elab, "if_drop", "decided::if_drop_step", None);
-    let mut elab = elab;
-    elab.elab_module_source("if_drop_pieces", &emission.pieces).unwrap_or_else(|e| panic!("{}", e.render(&emission.pieces)));
+    let emission = generate(&library(), "if_drop", "decided::if_drop_step", None);
+    let (mut elab, _) = with_pieces("if_drop", "decided::if_drop_step");
     let claim = "if_drop_counts(), decided::if_drop_step)";
     assert!(emission.text.contains(claim), "{}", emission.text);
     let bad = emission.text.replace(claim, "if_drop_counts(), decided::if_keep_step)");

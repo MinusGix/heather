@@ -3,7 +3,7 @@
 //! program places it against any argv layout, agrees with `parse_args` on
 //! GNU's cases, and each change to its code is refused where it is wrong, not
 //! by a missing name.
-use crate::read_loop_fixture::checker;
+use crate::read_loop_fixture::checker_with;
 
 const BV_OMEGA: &str = include_str!("../../../lib/std/bitvec/bitvec_omega.hthr");
 const DECIMAL: &str = include_str!("../../../lib/decimal_line.hthr");
@@ -13,13 +13,9 @@ const FORMAT: &str = include_str!("../../../lib/elf64_format_width.hthr");
 const PROGRAM: &str = include_str!("../../../lib/command_program.hthr");
 const SCAN: &str = include_str!("../../../lib/elf64_arg_scan.hthr");
 
-fn base() -> heather_elab::Elaborator {
-    let mut elab = checker();
-    for (name, source) in [("bitvec_omega", BV_OMEGA), ("decimal_line", DECIMAL), ("x86_64_asm", ASM), ("elf64_runs", RUNS), ("elf64_format_width", FORMAT), ("command_program", PROGRAM)] {
-        elab.elab_module_source(name, source).unwrap_or_else(|e| panic!("{name}: {}", e.render(source)));
-    }
-    elab
-}
+const BASE: &[(&str, &str)] = &[("bitvec_omega", BV_OMEGA), ("decimal_line", DECIMAL), ("x86_64_asm", ASM), ("elf64_runs", RUNS), ("elf64_format_width", FORMAT), ("command_program", PROGRAM)];
+
+fn base() -> heather_elab::Elaborator { checker_with(BASE) }
 
 // The scan placed past any header in the file, entered with RSP at any argv
 // layout: the client supplies only the placement. Then `parse_args` on
@@ -64,8 +60,7 @@ theorem scan_length(letters: List<BitVec(8)>, default: BitVec(64)): scan_code(le
 
 #[test]
 fn arg_scan_library_checks() {
-    let mut elab = base();
-    elab.elab_module_source("elf64_arg_scan", SCAN).unwrap_or_else(|e| panic!("{}", e.render(SCAN)));
+    let mut elab = checker_with(&[BASE, &[("elf64_arg_scan", SCAN)]].concat());
     elab.elab_module_source("scan_client", CLIENT).unwrap_or_else(|e| panic!("{}", e.render(CLIENT)));
 }
 
