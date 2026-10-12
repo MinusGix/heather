@@ -1,0 +1,644 @@
+// Commutative-ring normalization by reflection (issues/ring-normalization.md,
+// docs/ring-normalization-design.md).
+//
+// The `ring` tactic is an untrusted reifier: it reads both sides of an
+// equation at `Int` or `Nat` into a `RingExpr` over an atom list and applies
+// `RingExpr::sound` with `refl` for the normal forms. Everything below is
+// ordinary Heather checked once here; a certificate's own cost is evaluating
+// `norm` on two closed syntax trees with integer coefficients, plus the
+// conversion that reads `eval` back into the goal's spelling.
+//
+// The normal form is a list of monomials with nonzero coefficients, sorted
+// by their exponent vectors. Only completeness depends on the sorting: every
+// soundness lemma holds whatever order the comparisons pick, so a mistake in
+// `cmp` could make `ring` refuse a true identity, never accept a false one.
+
+import logic;
+import nat;
+import int;
+import list;
+
+// ---------------------------------------------------------------------------
+// Syntax and its meaning.
+
+inductive RingExpr {
+    RAtom(index: Nat),
+    RConst(value: Int),
+    RAdd(left: RingExpr, right: RingExpr),
+    RSub(left: RingExpr, right: RingExpr),
+    RMul(left: RingExpr, right: RingExpr),
+    RNeg(inner: RingExpr),
+}
+
+// An atom list read past its end yields zero; the reifier never does that,
+// and the soundness proof does not need to know.
+fn RingExpr::head(xs: List<Int>) → Int { match xs { Nil => OfNat(0), Cons(x, _) => x } }
+
+fn RingExpr::tail(xs: List<Int>) → List<Int> { match xs { Nil => Nil, Cons(_, rest) => rest } }
+
+fn RingExpr::atom(i: Nat) → List<Int> → Int {
+    match i {
+        Zero => λ xs => RingExpr::head(xs),
+        Succ(j) => λ xs => RingExpr::atom(j, RingExpr::tail(xs)),
+    }
+}
+
+fn RingExpr::eval(self e: RingExpr, xs: List<Int>) → Int {
+    match e {
+        RAtom(i) => RingExpr::atom(i, xs),
+        RConst(c) => c,
+        RAdd(a, b) => a.eval(xs) + b.eval(xs),
+        RSub(a, b) => a.eval(xs) - b.eval(xs),
+        RMul(a, b) => a.eval(xs) * b.eval(xs),
+        RNeg(a) => -a.eval(xs),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Normal forms: `PTerm(c, m, rest)` is `c · Π xs[i]^m[i] + rest`. A monomial
+// is a dense exponent vector with no trailing zero, so equal monomials have
+// equal vectors.
+
+inductive RingPoly { PZero, PTerm(coeff: Int, mono: List<Nat>, rest: RingPoly) }
+
+fn RingPoly::pow(x: Int, k: Nat) → Int { match k { Zero => OfNat(1), Succ(j) => x * RingPoly::pow(x, j) } }
+
+fn RingPoly::mono(m: List<Nat>) → List<Int> → Int {
+    match m {
+        Nil => λ xs => OfNat(1),
+        Cons(k, rest) => λ xs =>
+            RingPoly::pow(RingExpr::head(xs), k) * RingPoly::mono(rest, RingExpr::tail(xs)),
+    }
+}
+
+fn RingPoly::eval(self p: RingPoly, xs: List<Int>) → Int {
+    match p {
+        PZero => OfNat(0),
+        PTerm(c, m, rest) => c * RingPoly::mono(m, xs) + rest.eval(xs),
+    }
+}
+
+// Monomial order: lexicographic on exponent vectors, a shorter vector first.
+// With no trailing zeros that is the order of the vectors padded with zeros,
+// which multiplying by a fixed monomial preserves; `scale` relies on it.
+inductive RingOrder { RLess, RSame, RMore }
+
+fn RingPoly::cmp_nat(a: Nat) → Nat → RingOrder {
+    match a {
+        Zero => λ b => match b { Zero => RSame, Succ(_) => RLess },
+        Succ(x) => λ b => match b { Zero => RMore, Succ(y) => RingPoly::cmp_nat(x, y) },
+    }
+}
+
+fn RingPoly::then(o: RingOrder, next: RingOrder) → RingOrder {
+    match o { RLess => RLess, RSame => next, RMore => RMore }
+}
+
+fn RingPoly::cmp(m: List<Nat>) → List<Nat> → RingOrder {
+    match m {
+        Nil => λ n => match n { Nil => RSame, Cons(_, _) => RLess },
+        Cons(a, ms) => λ n => match n {
+            Nil => RMore,
+            Cons(b, ns) => RingPoly::then(RingPoly::cmp_nat(a, b), RingPoly::cmp(ms, ns)),
+        },
+    }
+}
+
+// What a comparison promises: only `RSame` promises anything. The other two
+// cases are a trivially true equation, so no case needs constructor
+// disjointness.
+fn RingPoly::SameNat(o: RingOrder, a, b: Nat) → Type {
+    match o { RLess => a = a, RSame => a = b, RMore => a = a }
+}
+
+fn RingPoly::Same(o: RingOrder, m, n: List<Nat>) → Type {
+    match o { RLess => m = m, RSame => m = n, RMore => m = m }
+}
+
+// The coefficient's zero test: a zero coefficient drops its monomial.
+fn RingPoly::term(c: Int, m: List<Nat>, rest: RingPoly) → RingPoly {
+    match c {
+        OfNat(n) => match n { Zero => rest, Succ(_) => PTerm(c, m, rest) },
+        NegSucc(_) => PTerm(c, m, rest),
+    }
+}
+
+// Merging two sorted polynomials. The second list is walked by `add_into`,
+// with the first one's tail already merged into `rec`, so both recursions
+// are structural.
+fn RingPoly::add_step(o: RingOrder, c: Int, m: List<Nat>, d: Int, n: List<Nat>,
+    less, more, same: RingPoly) → RingPoly
+{
+    match o {
+        RLess => PTerm(c, m, less),
+        RSame => RingPoly::term(c + d, m, same),
+        RMore => PTerm(d, n, more),
+    }
+}
+
+fn RingPoly::add_into(c: Int, m: List<Nat>, rest: RingPoly, rec: RingPoly → RingPoly,
+    q: RingPoly) → RingPoly
+{
+    match q {
+        PZero => PTerm(c, m, rest),
+        PTerm(d, n, qs) => RingPoly::add_step(RingPoly::cmp(m, n), c, m, d, n,
+            rec(PTerm(d, n, qs)), RingPoly::add_into(c, m, rest, rec, qs), rec(qs)),
+    }
+}
+
+fn RingPoly::add(self p: RingPoly) → RingPoly → RingPoly {
+    match p {
+        PZero => λ q => q,
+        PTerm(c, m, rest) => λ q => RingPoly::add_into(c, m, rest, RingPoly::add(rest), q),
+    }
+}
+
+fn RingPoly::neg(self p: RingPoly) → RingPoly {
+    match p { PZero => PZero, PTerm(c, m, rest) => PTerm(-c, m, rest.neg()) }
+}
+
+fn RingPoly::mul_mono(m: List<Nat>) → List<Nat> → List<Nat> {
+    match m {
+        Nil => λ n => n,
+        Cons(a, ms) => λ n => match n {
+            Nil => Cons(a, ms),
+            Cons(b, ns) => Cons(a + b, RingPoly::mul_mono(ms, ns)),
+        },
+    }
+}
+
+// `c·m` times a polynomial. Nonzero coefficients stay nonzero and the order
+// is preserved, so the result is a normal form again.
+fn RingPoly::scale(c: Int, m: List<Nat>, q: RingPoly) → RingPoly {
+    match q {
+        PZero => PZero,
+        PTerm(d, n, rest) => PTerm(c * d, RingPoly::mul_mono(m, n), RingPoly::scale(c, m, rest)),
+    }
+}
+
+fn RingPoly::mul(self p: RingPoly, q: RingPoly) → RingPoly {
+    match p {
+        PZero => PZero,
+        PTerm(c, m, rest) => RingPoly::scale(c, m, q).add(rest.mul(q)),
+    }
+}
+
+fn RingPoly::basis(i: Nat) → List<Nat> {
+    match i { Zero => [1], Succ(j) => Cons(0, RingPoly::basis(j)) }
+}
+
+fn RingExpr::norm(self e: RingExpr) → RingPoly {
+    match e {
+        RAtom(i) => PTerm(OfNat(1), RingPoly::basis(i), PZero),
+        RConst(c) => RingPoly::term(c, Nil, PZero),
+        RAdd(a, b) => a.norm().add(b.norm()),
+        RSub(a, b) => a.norm().add(b.norm().neg()),
+        RMul(a, b) => a.norm().mul(b.norm()),
+        RNeg(a) => a.norm().neg(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Soundness.
+
+theorem RingPoly::add_left_comm(a, b, c: Int): a + (b + c) = b + (a + c) {
+    calc {
+        a + (b + c)
+            = (a + b) + c := sym(a.add_assoc(b, c)),
+            = (b + a) + c := Int::cong(λ (w: Int) => w + c, a.add_comm(b)),
+            = b + (a + c) := b.add_assoc(a, c),
+    }
+}
+
+theorem RingPoly::add_swap_middle(a, b, c, d: Int): (a + b) + (c + d) = (a + c) + (b + d) {
+    calc {
+        (a + b) + (c + d)
+            = a + (b + (c + d)) := a.add_assoc(b, c + d),
+            = a + (c + (b + d)) := Int::cong(λ (w: Int) => a + w, RingPoly::add_left_comm(b, c, d)),
+            = (a + c) + (b + d) := sym(a.add_assoc(c, b + d)),
+    }
+}
+
+theorem RingPoly::mul_left_comm(a, b, c: Int): a * (b * c) = b * (a * c) {
+    calc {
+        a * (b * c)
+            = (a * b) * c := sym(a.mul_assoc(b, c)),
+            = (b * a) * c := Int::cong(λ (w: Int) => w * c, a.mul_comm(b)),
+            = b * (a * c) := b.mul_assoc(a, c),
+    }
+}
+
+theorem RingPoly::pow_add(x: Int, a: Nat, b: Nat): RingPoly::pow(x, a + b) = RingPoly::pow(x, a) * RingPoly::pow(x, b) {
+    match b {
+        Zero => sym(RingPoly::pow(x, a).mul_one()),
+        Succ(k) => calc {
+            x * RingPoly::pow(x, a + k)
+                = x * (RingPoly::pow(x, a) * RingPoly::pow(x, k))
+                    := Int::cong(λ (w: Int) => x * w, RingPoly::pow_add(x, a, k)),
+                = RingPoly::pow(x, a) * (x * RingPoly::pow(x, k))
+                    := RingPoly::mul_left_comm(x, RingPoly::pow(x, a), RingPoly::pow(x, k)),
+        },
+    }
+}
+
+theorem RingPoly::cmp_nat_succ(o: RingOrder, x, y: Nat):
+    RingPoly::SameNat(o, x, y) → RingPoly::SameNat(o, Succ(x), Succ(y))
+{
+    match o {
+        RLess => λ h => refl,
+        RSame => λ h => Nat::cong_succ(h),
+        RMore => λ h => refl,
+    }
+}
+
+theorem RingPoly::cmp_nat_same(a: Nat): (b: Nat) → RingPoly::SameNat(RingPoly::cmp_nat(a, b), a, b) {
+    match a {
+        Zero => λ b => match b { Zero => refl, Succ(_) => refl },
+        Succ(x) => λ b => match b {
+            Zero => refl,
+            Succ(y) => RingPoly::cmp_nat_succ(RingPoly::cmp_nat(x, y), x, y, RingPoly::cmp_nat_same(x, y)),
+        },
+    }
+}
+
+theorem RingPoly::then_same(o, next: RingOrder, a, b: Nat, ms, ns: List<Nat>):
+    RingPoly::SameNat(o, a, b) → RingPoly::Same(next, ms, ns)
+        → RingPoly::Same(RingPoly::then(o, next), Cons(a, ms), Cons(b, ns))
+{
+    match o {
+        RLess => λ h t => refl,
+        RSame => λ h => match next {
+            RLess => λ t => refl,
+            RSame => λ t => j(h, λ b2 q => Cons(a, ms) = Cons(b2, ns), List::cong_cons(a, t)),
+            RMore => λ t => refl,
+        },
+        RMore => λ h t => refl,
+    }
+}
+
+theorem RingPoly::cmp_same(m: List<Nat>): (n: List<Nat>) → RingPoly::Same(RingPoly::cmp(m, n), m, n) {
+    match m {
+        Nil => λ n => match n { Nil => refl, Cons(_, _) => refl },
+        Cons(a, ms) => λ n => match n {
+            Nil => refl,
+            Cons(b, ns) => RingPoly::then_same(RingPoly::cmp_nat(a, b), RingPoly::cmp(ms, ns), a, b, ms, ns,
+                RingPoly::cmp_nat_same(a, b), RingPoly::cmp_same(ms, ns)),
+        },
+    }
+}
+
+theorem RingPoly::term_eval(c: Int, m: List<Nat>, rest: RingPoly, xs: List<Int>):
+    RingPoly::term(c, m, rest).eval(xs) = c * RingPoly::mono(m, xs) + rest.eval(xs)
+{
+    match c {
+        OfNat(n) => match n {
+            Zero => sym(trans(
+                Int::cong(λ (w: Int) => w + rest.eval(xs), Int::zero_mul(RingPoly::mono(m, xs))),
+                rest.eval(xs).zero_add())),
+            Succ(_) => refl,
+        },
+        NegSucc(_) => refl,
+    }
+}
+
+// One merge step, with what the three recursive results evaluate to.
+theorem RingPoly::add_step_eval(o: RingOrder, c: Int, m: List<Nat>, d: Int, n: List<Nat>,
+    less, more, same: RingPoly, xs: List<Int>, r, s: Int,
+    hless: less.eval(xs) = r + (d * RingPoly::mono(n, xs) + s),
+    hmore: more.eval(xs) = (c * RingPoly::mono(m, xs) + r) + s,
+    hsame: same.eval(xs) = r + s):
+    RingPoly::Same(o, m, n) →
+        RingPoly::add_step(o, c, m, d, n, less, more, same).eval(xs)
+            = (c * RingPoly::mono(m, xs) + r) + (d * RingPoly::mono(n, xs) + s)
+{
+    match o {
+        RLess => λ h => calc {
+            c * RingPoly::mono(m, xs) + less.eval(xs)
+                = c * RingPoly::mono(m, xs) + (r + (d * RingPoly::mono(n, xs) + s))
+                    := Int::cong(λ (w: Int) => c * RingPoly::mono(m, xs) + w, hless),
+                = (c * RingPoly::mono(m, xs) + r) + (d * RingPoly::mono(n, xs) + s)
+                    := sym((c * RingPoly::mono(m, xs)).add_assoc(r, d * RingPoly::mono(n, xs) + s)),
+        },
+        RSame => λ h => j(h, λ n2 q => RingPoly::term(c + d, m, same).eval(xs)
+                = (c * RingPoly::mono(m, xs) + r) + (d * RingPoly::mono(n2, xs) + s),
+            calc {
+                RingPoly::term(c + d, m, same).eval(xs)
+                    = (c + d) * RingPoly::mono(m, xs) + same.eval(xs) := RingPoly::term_eval(c + d, m, same, xs),
+                    = (c + d) * RingPoly::mono(m, xs) + (r + s)
+                        := Int::cong(λ (w: Int) => (c + d) * RingPoly::mono(m, xs) + w, hsame),
+                    = (c * RingPoly::mono(m, xs) + d * RingPoly::mono(m, xs)) + (r + s)
+                        := Int::cong(λ (w: Int) => w + (r + s), c.add_mul_distr(d, RingPoly::mono(m, xs))),
+                    = (c * RingPoly::mono(m, xs) + r) + (d * RingPoly::mono(m, xs) + s)
+                        := RingPoly::add_swap_middle(c * RingPoly::mono(m, xs), d * RingPoly::mono(m, xs), r, s),
+            }),
+        RMore => λ h => calc {
+            d * RingPoly::mono(n, xs) + more.eval(xs)
+                = d * RingPoly::mono(n, xs) + ((c * RingPoly::mono(m, xs) + r) + s)
+                    := Int::cong(λ (w: Int) => d * RingPoly::mono(n, xs) + w, hmore),
+                = (c * RingPoly::mono(m, xs) + r) + (d * RingPoly::mono(n, xs) + s)
+                    := RingPoly::add_left_comm(d * RingPoly::mono(n, xs), c * RingPoly::mono(m, xs) + r, s),
+        },
+    }
+}
+
+theorem RingPoly::add_into_eval(c: Int, m: List<Nat>, rest: RingPoly, rec: RingPoly → RingPoly,
+    xs: List<Int>, ih: (r: RingPoly) → rec(r).eval(xs) = rest.eval(xs) + r.eval(xs),
+    q: RingPoly):
+    RingPoly::add_into(c, m, rest, rec, q).eval(xs)
+        = (c * RingPoly::mono(m, xs) + rest.eval(xs)) + q.eval(xs)
+{
+    match q {
+        PZero => sym((c * RingPoly::mono(m, xs) + rest.eval(xs)).add_zero()),
+        PTerm(d, n, qs) => RingPoly::add_step_eval(RingPoly::cmp(m, n), c, m, d, n,
+            rec(PTerm(d, n, qs)), RingPoly::add_into(c, m, rest, rec, qs), rec(qs),
+            xs, rest.eval(xs), qs.eval(xs),
+            ih(PTerm(d, n, qs)),
+            RingPoly::add_into_eval(c, m, rest, rec, xs, ih, qs),
+            ih(qs),
+            RingPoly::cmp_same(m, n)),
+    }
+}
+
+theorem RingPoly::add_eval(xs: List<Int>, p: RingPoly): (q: RingPoly) →
+    p.add(q).eval(xs) = p.eval(xs) + q.eval(xs)
+{
+    match p {
+        PZero => λ q => sym(q.eval(xs).zero_add()),
+        PTerm(c, m, rest) => λ q =>
+            RingPoly::add_into_eval(c, m, rest, RingPoly::add(rest), xs, RingPoly::add_eval(xs, rest), q),
+    }
+}
+
+theorem RingPoly::neg_eval(xs: List<Int>, p: RingPoly): p.neg().eval(xs) = -p.eval(xs) {
+    match p {
+        PZero => refl,
+        PTerm(c, m, rest) => calc {
+            (-c) * RingPoly::mono(m, xs) + rest.neg().eval(xs)
+                = -(c * RingPoly::mono(m, xs)) + rest.neg().eval(xs)
+                    := Int::cong(λ (w: Int) => w + rest.neg().eval(xs), c.mul_neg_l(RingPoly::mono(m, xs))),
+                = -(c * RingPoly::mono(m, xs)) + -rest.eval(xs)
+                    := Int::cong(λ (w: Int) => -(c * RingPoly::mono(m, xs)) + w, RingPoly::neg_eval(xs, rest)),
+                = -(c * RingPoly::mono(m, xs) + rest.eval(xs))
+                    := sym((c * RingPoly::mono(m, xs)).neg_add(rest.eval(xs))),
+        },
+    }
+}
+
+theorem RingPoly::mono_mul(m: List<Nat>): (n: List<Nat>) → (xs: List<Int>) →
+    RingPoly::mono(RingPoly::mul_mono(m, n), xs) = RingPoly::mono(m, xs) * RingPoly::mono(n, xs)
+{
+    match m {
+        Nil => λ n xs => sym(RingPoly::mono(n, xs).one_mul()),
+        Cons(a, ms) => λ n => match n {
+            Nil => λ xs => sym(RingPoly::mono(Cons(a, ms), xs).mul_one()),
+            Cons(b, ns) => λ xs => calc {
+                RingPoly::pow(RingExpr::head(xs), a + b) * RingPoly::mono(RingPoly::mul_mono(ms, ns), RingExpr::tail(xs))
+                    = (RingPoly::pow(RingExpr::head(xs), a) * RingPoly::pow(RingExpr::head(xs), b))
+                        * RingPoly::mono(RingPoly::mul_mono(ms, ns), RingExpr::tail(xs))
+                        := Int::cong(λ (w: Int) => w * RingPoly::mono(RingPoly::mul_mono(ms, ns), RingExpr::tail(xs)),
+                            RingPoly::pow_add(RingExpr::head(xs), a, b)),
+                    = (RingPoly::pow(RingExpr::head(xs), a) * RingPoly::pow(RingExpr::head(xs), b))
+                        * (RingPoly::mono(ms, RingExpr::tail(xs)) * RingPoly::mono(ns, RingExpr::tail(xs)))
+                        := Int::cong(λ (w: Int) => (RingPoly::pow(RingExpr::head(xs), a) * RingPoly::pow(RingExpr::head(xs), b)) * w,
+                            RingPoly::mono_mul(ms, ns, RingExpr::tail(xs))),
+                    = (RingPoly::pow(RingExpr::head(xs), a) * RingPoly::mono(ms, RingExpr::tail(xs)))
+                        * (RingPoly::pow(RingExpr::head(xs), b) * RingPoly::mono(ns, RingExpr::tail(xs)))
+                        := RingPoly::pow(RingExpr::head(xs), a).mul_shuffle(RingPoly::pow(RingExpr::head(xs), b),
+                            RingPoly::mono(ms, RingExpr::tail(xs)), RingPoly::mono(ns, RingExpr::tail(xs))),
+            },
+        },
+    }
+}
+
+theorem RingPoly::scale_eval(c: Int, m: List<Nat>, xs: List<Int>, q: RingPoly):
+    RingPoly::scale(c, m, q).eval(xs) = (c * RingPoly::mono(m, xs)) * q.eval(xs)
+{
+    match q {
+        PZero => sym((c * RingPoly::mono(m, xs)).mul_zero()),
+        PTerm(d, n, rest) => calc {
+            (c * d) * RingPoly::mono(RingPoly::mul_mono(m, n), xs) + RingPoly::scale(c, m, rest).eval(xs)
+                = (c * d) * (RingPoly::mono(m, xs) * RingPoly::mono(n, xs)) + RingPoly::scale(c, m, rest).eval(xs)
+                    := Int::cong(λ (w: Int) => (c * d) * w + RingPoly::scale(c, m, rest).eval(xs),
+                        RingPoly::mono_mul(m, n, xs)),
+                = (c * RingPoly::mono(m, xs)) * (d * RingPoly::mono(n, xs)) + RingPoly::scale(c, m, rest).eval(xs)
+                    := Int::cong(λ (w: Int) => w + RingPoly::scale(c, m, rest).eval(xs),
+                        c.mul_shuffle(d, RingPoly::mono(m, xs), RingPoly::mono(n, xs))),
+                = (c * RingPoly::mono(m, xs)) * (d * RingPoly::mono(n, xs)) + (c * RingPoly::mono(m, xs)) * rest.eval(xs)
+                    := Int::cong(λ (w: Int) => (c * RingPoly::mono(m, xs)) * (d * RingPoly::mono(n, xs)) + w,
+                        RingPoly::scale_eval(c, m, xs, rest)),
+                = (c * RingPoly::mono(m, xs)) * (d * RingPoly::mono(n, xs) + rest.eval(xs))
+                    := sym((c * RingPoly::mono(m, xs)).mul_add_distr(d * RingPoly::mono(n, xs), rest.eval(xs))),
+        },
+    }
+}
+
+theorem RingPoly::mul_eval(xs: List<Int>, p, q: RingPoly): p.mul(q).eval(xs) = p.eval(xs) * q.eval(xs) {
+    match p {
+        PZero => sym(Int::zero_mul(q.eval(xs))),
+        PTerm(c, m, rest) => calc {
+            RingPoly::scale(c, m, q).add(rest.mul(q)).eval(xs)
+                = RingPoly::scale(c, m, q).eval(xs) + rest.mul(q).eval(xs)
+                    := RingPoly::add_eval(xs, RingPoly::scale(c, m, q), rest.mul(q)),
+                = (c * RingPoly::mono(m, xs)) * q.eval(xs) + rest.mul(q).eval(xs)
+                    := Int::cong(λ (w: Int) => w + rest.mul(q).eval(xs), RingPoly::scale_eval(c, m, xs, q)),
+                = (c * RingPoly::mono(m, xs)) * q.eval(xs) + rest.eval(xs) * q.eval(xs)
+                    := Int::cong(λ (w: Int) => (c * RingPoly::mono(m, xs)) * q.eval(xs) + w,
+                        RingPoly::mul_eval(xs, rest, q)),
+                = (c * RingPoly::mono(m, xs) + rest.eval(xs)) * q.eval(xs)
+                    := sym((c * RingPoly::mono(m, xs)).add_mul_distr(rest.eval(xs), q.eval(xs))),
+        },
+    }
+}
+
+theorem RingPoly::mono_basis(i: Nat): (xs: List<Int>) → RingPoly::mono(RingPoly::basis(i), xs) = RingExpr::atom(i, xs) {
+    match i {
+        Zero => λ xs => trans((RingExpr::head(xs) * OfNat(1)).mul_one(), RingExpr::head(xs).mul_one()),
+        Succ(k) => λ xs => trans(RingPoly::mono(RingPoly::basis(k), RingExpr::tail(xs)).one_mul(),
+            RingPoly::mono_basis(k, RingExpr::tail(xs))),
+    }
+}
+
+theorem RingExpr::norm_eval(xs: List<Int>, e: RingExpr): e.norm().eval(xs) = e.eval(xs) {
+    match e {
+        RAtom(i) => trans((OfNat(1) * RingPoly::mono(RingPoly::basis(i), xs)).add_zero(),
+            trans(RingPoly::mono(RingPoly::basis(i), xs).one_mul(), RingPoly::mono_basis(i, xs))),
+        RConst(c) => trans(RingPoly::term_eval(c, Nil, PZero, xs), trans((c * OfNat(1)).add_zero(), c.mul_one())),
+        RAdd(a, b) => calc {
+            a.norm().add(b.norm()).eval(xs)
+                = a.norm().eval(xs) + b.norm().eval(xs) := RingPoly::add_eval(xs, a.norm(), b.norm()),
+                = a.eval(xs) + b.norm().eval(xs)
+                    := Int::cong(λ (w: Int) => w + b.norm().eval(xs), RingExpr::norm_eval(xs, a)),
+                = a.eval(xs) + b.eval(xs) := Int::cong(λ (w: Int) => a.eval(xs) + w, RingExpr::norm_eval(xs, b)),
+        },
+        RSub(a, b) => calc {
+            a.norm().add(b.norm().neg()).eval(xs)
+                = a.norm().eval(xs) + b.norm().neg().eval(xs) := RingPoly::add_eval(xs, a.norm(), b.norm().neg()),
+                = a.norm().eval(xs) + -b.norm().eval(xs)
+                    := Int::cong(λ (w: Int) => a.norm().eval(xs) + w, RingPoly::neg_eval(xs, b.norm())),
+                = a.eval(xs) + -b.norm().eval(xs)
+                    := Int::cong(λ (w: Int) => w + -b.norm().eval(xs), RingExpr::norm_eval(xs, a)),
+                = a.eval(xs) + -b.eval(xs)
+                    := Int::cong(λ (w: Int) => a.eval(xs) + -w, RingExpr::norm_eval(xs, b)),
+        },
+        RMul(a, b) => calc {
+            a.norm().mul(b.norm()).eval(xs)
+                = a.norm().eval(xs) * b.norm().eval(xs) := RingPoly::mul_eval(xs, a.norm(), b.norm()),
+                = a.eval(xs) * b.norm().eval(xs)
+                    := Int::cong(λ (w: Int) => w * b.norm().eval(xs), RingExpr::norm_eval(xs, a)),
+                = a.eval(xs) * b.eval(xs) := Int::cong(λ (w: Int) => a.eval(xs) * w, RingExpr::norm_eval(xs, b)),
+        },
+        RNeg(a) => trans(RingPoly::neg_eval(xs, a.norm()), Int::cong(Int::neg, RingExpr::norm_eval(xs, a))),
+    }
+}
+
+// The certificate `ring` writes for an identity: both sides have the same
+// normal form, which the kernel checks by evaluating `norm` at the reified
+// syntax.
+theorem RingExpr::sound(xs: List<Int>, a, b: RingExpr, h: a.norm() = b.norm()): a.eval(xs) = b.eval(xs) {
+    calc {
+        a.eval(xs)
+            = a.norm().eval(xs) := sym(RingExpr::norm_eval(xs, a)),
+            = b.norm().eval(xs) := j(h, λ q p => a.norm().eval(xs) = q.eval(xs), refl),
+            = b.eval(xs) := RingExpr::norm_eval(xs, b),
+    }
+}
+
+theorem RingExpr::eq_of_sub_zero(x, y: Int, h: x - y = OfNat(0)): x = y {
+    let flipped = Int::neg_unique(x, -y, h);
+    calc {
+        x
+            = -(-x) := sym(x.neg_neg()),
+            = -(-y) := Int::cong(Int::neg, sym(flipped)),
+            = y := y.neg_neg(),
+    }
+}
+
+// With hypotheses: `a - b` and `d` have the same normal form, and `d`, a sum
+// of multiples of hypotheses' differences, is zero (`hyp`, `hyp_add`). The
+// multipliers are the reifier's search result; the kernel only checks them.
+theorem RingExpr::sound_with(xs: List<Int>, a, b, d: RingExpr, hd: d.eval(xs) = OfNat(0),
+    h: RSub(a, b).norm() = d.norm()): a.eval(xs) = b.eval(xs)
+{
+    RingExpr::eq_of_sub_zero(a.eval(xs), b.eval(xs), trans(RingExpr::sound(xs, RSub(a, b), d, h), hd))
+}
+
+theorem RingExpr::hyp(xs: List<Int>, c, a, b: RingExpr, h: a.eval(xs) = b.eval(xs)):
+    RMul(c, RSub(a, b)).eval(xs) = OfNat(0)
+{
+    calc {
+        c.eval(xs) * (a.eval(xs) - b.eval(xs))
+            = c.eval(xs) * (b.eval(xs) - b.eval(xs)) := Int::cong(λ (w: Int) => c.eval(xs) * (w - b.eval(xs)), h),
+            = c.eval(xs) * OfNat(0) := Int::cong(λ (w: Int) => c.eval(xs) * w, b.eval(xs).sub_self()),
+            = OfNat(0) := c.eval(xs).mul_zero(),
+    }
+}
+
+theorem RingExpr::hyp_add(xs: List<Int>, u, v: RingExpr, hu: u.eval(xs) = OfNat(0), hv: v.eval(xs) = OfNat(0)):
+    RAdd(u, v).eval(xs) = OfNat(0)
+{
+    trans(Int::cong(λ (w: Int) => w + v.eval(xs), hu), trans(Int::cong(λ (w: Int) => OfNat(0) + w, hv), refl))
+}
+
+// ---------------------------------------------------------------------------
+// `Nat` as a commutative semiring, through its embedding in `Int`: a `Nat`
+// identity is the `Int` one at `OfNat` atoms, read back by `toNat`.
+
+inductive RingNat {
+    NAtom(index: Nat),
+    NConst(value: Nat),
+    NAdd(left: RingNat, right: RingNat),
+    NMul(left: RingNat, right: RingNat),
+}
+
+fn RingNat::head(ys: List<Nat>) → Nat { match ys { Nil => 0, Cons(y, _) => y } }
+
+fn RingNat::tail(ys: List<Nat>) → List<Nat> { match ys { Nil => Nil, Cons(_, rest) => rest } }
+
+fn RingNat::atom(i: Nat) → List<Nat> → Nat {
+    match i {
+        Zero => λ ys => RingNat::head(ys),
+        Succ(j) => λ ys => RingNat::atom(j, RingNat::tail(ys)),
+    }
+}
+
+fn RingNat::eval(self e: RingNat, ys: List<Nat>) → Nat {
+    match e {
+        NAtom(i) => RingNat::atom(i, ys),
+        NConst(n) => n,
+        NAdd(a, b) => a.eval(ys) + b.eval(ys),
+        NMul(a, b) => a.eval(ys) * b.eval(ys),
+    }
+}
+
+fn RingNat::lift(self e: RingNat) → RingExpr {
+    match e {
+        NAtom(i) => RAtom(i),
+        NConst(n) => RConst(OfNat(n)),
+        NAdd(a, b) => RAdd(a.lift(), b.lift()),
+        NMul(a, b) => RMul(a.lift(), b.lift()),
+    }
+}
+
+fn RingNat::lift_atoms(ys: List<Nat>) → List<Int> {
+    match ys { Nil => Nil, Cons(y, rest) => Cons(OfNat(y), RingNat::lift_atoms(rest)) }
+}
+
+theorem RingNat::atom_lift(i: Nat): (ys: List<Nat>) →
+    OfNat(RingNat::atom(i, ys)) = RingExpr::atom(i, RingNat::lift_atoms(ys))
+{
+    match i {
+        Zero => λ ys => match ys { Nil => refl, Cons(_, _) => refl },
+        Succ(k) => λ ys => match ys {
+            Nil => RingNat::atom_lift(k, Nil),
+            Cons(_, rest) => RingNat::atom_lift(k, rest),
+        },
+    }
+}
+
+theorem RingNat::eval_lift(ys: List<Nat>, e: RingNat): OfNat(e.eval(ys)) = e.lift().eval(RingNat::lift_atoms(ys)) {
+    match e {
+        NAtom(i) => RingNat::atom_lift(i, ys),
+        NConst(_) => refl,
+        NAdd(a, b) => calc {
+            OfNat(a.eval(ys) + b.eval(ys))
+                = OfNat(a.eval(ys)) + OfNat(b.eval(ys)) := Int::ofNat_add(a.eval(ys), b.eval(ys)),
+                = a.lift().eval(RingNat::lift_atoms(ys)) + OfNat(b.eval(ys))
+                    := Int::cong(λ (w: Int) => w + OfNat(b.eval(ys)), RingNat::eval_lift(ys, a)),
+                = a.lift().eval(RingNat::lift_atoms(ys)) + b.lift().eval(RingNat::lift_atoms(ys))
+                    := Int::cong(λ (w: Int) => a.lift().eval(RingNat::lift_atoms(ys)) + w, RingNat::eval_lift(ys, b)),
+        },
+        NMul(a, b) => calc {
+            OfNat(a.eval(ys) * b.eval(ys))
+                = OfNat(a.eval(ys)) * OfNat(b.eval(ys)) := Int::ofNat_mul(a.eval(ys), b.eval(ys)),
+                = a.lift().eval(RingNat::lift_atoms(ys)) * OfNat(b.eval(ys))
+                    := Int::cong(λ (w: Int) => w * OfNat(b.eval(ys)), RingNat::eval_lift(ys, a)),
+                = a.lift().eval(RingNat::lift_atoms(ys)) * b.lift().eval(RingNat::lift_atoms(ys))
+                    := Int::cong(λ (w: Int) => a.lift().eval(RingNat::lift_atoms(ys)) * w, RingNat::eval_lift(ys, b)),
+        },
+    }
+}
+
+theorem RingNat::lower(ys: List<Nat>, a, b: RingNat,
+    h: a.lift().eval(RingNat::lift_atoms(ys)) = b.lift().eval(RingNat::lift_atoms(ys))): a.eval(ys) = b.eval(ys)
+{
+    let both = trans(RingNat::eval_lift(ys, a), trans(h, sym(RingNat::eval_lift(ys, b))));
+    j(both, λ q p => a.eval(ys) = q.toNat(), refl)
+}
+
+theorem RingNat::sound(ys: List<Nat>, a, b: RingNat, h: a.lift().norm() = b.lift().norm()): a.eval(ys) = b.eval(ys) {
+    RingNat::lower(ys, a, b, RingExpr::sound(RingNat::lift_atoms(ys), a.lift(), b.lift(), h))
+}
+
+theorem RingNat::sound_with(ys: List<Nat>, a, b: RingNat, d: RingExpr,
+    hd: d.eval(RingNat::lift_atoms(ys)) = OfNat(0),
+    h: RSub(a.lift(), b.lift()).norm() = d.norm()): a.eval(ys) = b.eval(ys)
+{
+    RingNat::lower(ys, a, b, RingExpr::sound_with(RingNat::lift_atoms(ys), a.lift(), b.lift(), d, hd, h))
+}
+
+theorem RingNat::hyp(ys: List<Nat>, c: RingExpr, a, b: RingNat, h: a.eval(ys) = b.eval(ys)):
+    RMul(c, RSub(a.lift(), b.lift())).eval(RingNat::lift_atoms(ys)) = OfNat(0)
+{
+    RingExpr::hyp(RingNat::lift_atoms(ys), c, a.lift(), b.lift(),
+        trans(sym(RingNat::eval_lift(ys, a)), trans(Int::cong_ofnat(h), RingNat::eval_lift(ys, b))))
+}

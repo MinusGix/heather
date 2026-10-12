@@ -27,6 +27,7 @@ const MODULES: &[(&str, &str)] = &[
     ("algebra", include_str!("../../../lib/std/algebra.hthr")),
     ("int", include_str!("../../../lib/std/int.hthr")),
     ("omega", include_str!("../../../lib/std/omega.hthr")),
+    ("ring", include_str!("../../../lib/std/ring.hthr")),
     ("relation", include_str!("../../../lib/std/relation.hthr")),
     (
         "relation_props",

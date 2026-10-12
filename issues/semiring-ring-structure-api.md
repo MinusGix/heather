@@ -3,7 +3,7 @@ title: Add a minimally factored semiring and ring API
 status: open
 labels: [stdlib,mathematics,algebra,traits]
 created: 2026-09-02
-updated: 2026-09-02
+updated: 2026-10-12
 ---
 
 Add the first two-operation algebraic theories without importing a large
@@ -27,3 +27,4 @@ possible nonunital/nonassociative variant in advance.
 
 - 2026-09-02: Filed with distributivity treated as a natural independent
   structure, not an incidental field buried in `Semiring`.
+- 2026-10-12: A consumer is waiting: `ring` (docs/ring-normalization-design.md) normalizes at Int and Nat, and proves Rat laws only through cross-multiplication. Normalizing at a carrier modulo its relation (Rat and ≈, reals later) wants this interface, indexed by the relation, plus Respects2 for + and *; the normalizer and its soundness proof in lib/std/ring.hthr would be restated over it. Filed from [[ring-normalization]].

@@ -3,7 +3,7 @@ title: Finish the rationals' order: strict order, abs, monotone products, Archim
 status: open
 labels: [stdlib,mathematics,order,setoids]
 created: 2026-10-10
-updated: 2026-10-10
+updated: 2026-10-12
 ---
 
 Residue of [[positive-naturals-and-rationals]] (2026-10-10 round,
@@ -20,3 +20,7 @@ non-negative products. Still missing, and wanted by the real-number probes:
 - an instance of [[constructive-ordered-field-interface]] once it exists.
 
 Expected to lean on [[ring-normalization]] if that lands first.
+
+## Log
+
+- 2026-10-12: [[ring-normalization]] landed: equations are `ring` calls now; the order laws this issue owns want inequalities, filed as [[ring-inequalities]].

@@ -96,7 +96,9 @@ Each item below has an owner.
    Every law past the identity-shaped ones is a hand-written monomial match.
    Distributivity needed a seven-factor monomial lemma. Reals will multiply
    this: every Cauchy-modulus estimate is a polynomial identity or
-   inequality.
+   inequality. *Since 2026-10-12 the laws are one `ring` call each
+   ([ring-normalization-design](ring-normalization-design.md)); the
+   rearrangement described above is history.*
 2. **`omega` does not see through a defined proposition**
    ([omega-unfolds-defined-propositions](../issues/omega-unfolds-defined-propositions.md)).
    A hypothesis `h: x <= y` at `Rat` is `Rat::Le(x, y)`, and omega skips it.
