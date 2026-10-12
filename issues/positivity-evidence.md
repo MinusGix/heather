@@ -48,3 +48,4 @@ listed in the note's §8; this issue closes when they are filed.
 - 2026-10-10: Rounds filed: [[infer-proposition-evidence]], [[named-arguments]] (parameter defaults), [[function-owned-members]], [[pos-binder-sugar]], [[retire-shifted-pos]], [[positivity-tactic]], [[positive-refinement-type]].
 - 2026-10-10: Round 1 implemented ([[infer-proposition-evidence]]): Minus chose rules in `infer`; hand-written rules are spelled `evidence theorem`.
 - 2026-10-11: Round 3 landed: [[function-owned-members]] (`theorem f::name`).
+- 2026-10-11: Round 6, the `positivity` tactic, landed ([[positivity-tactic]], note §10).
