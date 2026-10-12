@@ -140,3 +140,21 @@ Outside the test phase:
 ## Log
 
 - 2026-10-12: Second pass over the heavy tests: named-type lowering memoized (named-type-lowering-per-mention), loop_trace fixtures replayed, narrow_fused split per case, filter-step pieces shared per process. field_high's remaining cost attributed by declaration kind.
+
+Measured A/B (the `function_ir` family binary before and after this pass,
+same replayed images, two test threads, width one, same box, 2026-10-12):
+
+| target | before | after |
+|---|---|---|
+| `field_high_certifies` alone, wall | 75.0 / 78.6 s | 75.4 / 73.1 s |
+| `record_state_loop_certificate_checks`, CPU | 40.0 s | 22.1 s |
+| `filter_step_generation`, CPU (wall) | 132 s (69 s) | 109 s (69 s) |
+| `function_ir_narrow_certificates`, wall | 47 s | 28 s |
+
+The memo does not move `field_high` end to end. Its warm fast-lane time was
+49 s in the first pass and is ~75 s on this box today at every commit back to
+the first pass's own (542609c: 78.5 / 81.2 s alone), so that is the box, not
+#27 or #28. `filter_step_generation`'s wall is held by its counting tests
+(`wc_counting_piece_certifies`, `decided_connective_counting_piece_certifies`,
+`record_update_counting_piece_certifies`, 15–18 s each), which elaborate
+different steps and share nothing.

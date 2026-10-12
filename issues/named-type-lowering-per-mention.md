@@ -21,7 +21,9 @@ most of its time lowering it. A probe of 800 such one-line declarations
 went from 6.0 to 1.6 ms each, `Instruction` from 2.7 to 0.37 ms.
 
 The generated certificates gain less than that suggests: `field_high`'s own
-module went from 65.7 to 60.1 s of item time (decl_type 5.5 → 3.0 s). Its
+module went from 65.7 to 60.1 s of item time (decl_type 5.5 → 3.0 s). End to end,
+`field_high_certifies` is unchanged within noise (A/B in
+[[suite-iteration-chokepoints-2026-10]]). Its
 cost is spread over the kinds of declaration the structured generator writes
 per node (`decodes`, `correct`, `graph`, `byte_length`, `preserves`, …, none
 past an eighth), and is dominated by the kernel gate and by elaborator `whnf`
