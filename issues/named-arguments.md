@@ -3,7 +3,7 @@ title: "Named arguments at call sites (landed); defaults at binders (staged)"
 status: open
 labels: [frontend,syntax,design]
 created: 2026-07-27
-updated: 2026-10-10
+updated: 2026-10-11
 ---
 
 **Status (2026-08-18): the call-site half is LANDED**
@@ -165,3 +165,4 @@ Default arguments, variadics, and any form of overloading.
   call-site `field := value` convention and does not change that status.
 - 2026-10-01: 2026-10-01: Record field defaults landed (docs/named-arguments-design.md §9.5; [[automatic-author-surface]]). §9.2's no-positional-slot rule holds, and the default is checked in the declaring scope against the instantiated field type, in an empty local context. Running a default under locals is [[field-defaults-under-locals]]. Parameter defaults remain §9's.
 - 2026-10-10: Parameter defaults (`h: 0 < n := omega`) are wanted by [[positivity-evidence]] for positivity; Minus asked that they parse (2026-10-10).
+- 2026-10-11: 2026-10-11: [[positivity-tactic]] landed the tactic a `h: 0 < n := positivity` default would run; the default itself is still this issue's parameter-defaults half.

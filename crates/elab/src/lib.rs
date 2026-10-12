@@ -628,6 +628,11 @@ pub struct Elaborator {
     /// recurses *through* `elab_check` — the nested obligation is discovered
     /// by `apply_implicit`, not passed down.
     resolve_depth: Cell<usize>,
+    /// The `positivity` tactic in progress, if any: while it is `Some`, a
+    /// proposition goal the evidence rules cannot close falls back to
+    /// `omega` ([`resolve::PositivityRun`]). `None` everywhere else, so plain
+    /// `:= infer` never runs omega.
+    positivity: RefCell<Option<resolve::PositivityRun>>,
     fuel: u64,
     /// Optional explicit collector for evaluator-region activity. Clones
     /// share it so speculative and generated checking contribute to the same
@@ -1615,6 +1620,7 @@ impl Elaborator {
             review_lints: false,
             misplaced_recursion: RefCell::new(None),
             resolve_depth: Cell::new(0),
+            positivity: RefCell::new(None),
             fuel: DEFAULT_FUEL,
             value_metrics: None,
             emission_findings: None,
@@ -4825,6 +4831,16 @@ impl Elaborator {
                 && !self.shadowed(cx, name)
                 && self.ctor_here_expected(cx, name, expected).is_none() => {
                 relational_context::proof::derive(self, cx, expected, lvl, e.span)
+            }
+            // `positivity` is `:= infer`'s proposition search run as a tactic,
+            // with `omega` as the fallback at every subgoal the evidence rules
+            // cannot close (docs/positivity-evidence-design.md §10).
+            ExprKind::Var(name)
+                if name == "positivity"
+                    && !self.shadowed(cx, name)
+                    && self.ctor_here_expected(cx, name, expected).is_none() =>
+            {
+                self.positivity(cx, expected, lvl, e.span)
             }
             // `omega` is the kernel-certified vertical slice of the linear
             // solver. It is only an untrusted elaborator shortcut:

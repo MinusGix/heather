@@ -116,6 +116,49 @@ pub(crate) struct DerivedInst {
     pub head: Option<String>,
 }
 
+/// One `positivity` run's memory (docs/positivity-evidence-design.md §10):
+/// the subgoals omega was already stuck on. Every subgoal of one run is
+/// elaborated in the caller's context, since rules bind nothing, so a goal is
+/// compared by syntax.
+#[derive(Clone, Default)]
+pub(crate) struct PositivityRun {
+    stuck: Vec<Type>,
+}
+
+/// Everything a rejected proposition candidate may have left behind, so it
+/// can be undone: its dependency edges, its checking notes, and (an `omega`
+/// inside `positivity`) its named atom lists, warnings and Omega reports.
+struct SearchMark {
+    dependencies: std::collections::BTreeSet<String>,
+    notes: usize,
+    goals: usize,
+    warnings: usize,
+    omega_reports: usize,
+    omega_failures: usize,
+}
+
+impl SearchMark {
+    fn of(e: &Elaborator) -> Self {
+        SearchMark {
+            dependencies: e.attempt.direct_dependencies.borrow().clone(),
+            notes: e.attempt.check_notes.borrow().len(),
+            goals: e.attempt.goal_arena.mark(),
+            warnings: e.warnings.borrow().len(),
+            omega_reports: e.omega_reports.borrow().len(),
+            omega_failures: e.omega_failure_reports.borrow().len(),
+        }
+    }
+
+    fn rollback(self, e: &Elaborator) {
+        *e.attempt.direct_dependencies.borrow_mut() = self.dependencies;
+        e.attempt.check_notes.borrow_mut().truncate(self.notes);
+        e.attempt.goal_arena.rollback(self.goals);
+        e.warnings.borrow_mut().truncate(self.warnings);
+        e.omega_reports.borrow_mut().truncate(self.omega_reports);
+        e.omega_failure_reports.borrow_mut().truncate(self.omega_failures);
+    }
+}
+
 impl Elaborator {
     /// The surface shape an `evidence theorem` must have before it is
     /// elaborated (docs/positivity-evidence-design.md §6 A). A rule is applied
@@ -450,11 +493,25 @@ impl Elaborator {
         None
     }
 
-    /// Steps 3 and 4 at a goal that is not a class: **computation**, then the
+    /// Steps 3 to 5 at a goal that is not a class: **computation**, the
     /// **evidence rules** about the goal's relation
-    /// (docs/positivity-evidence-design.md §6 A). Locals and derivations have
-    /// already had their turn, so an exact proof in scope still wins.
+    /// (docs/positivity-evidence-design.md §6 A), and, only inside a
+    /// `positivity` run, **omega** (§10). Locals and derivations have already
+    /// had their turn, so an exact proof in scope still wins.
     fn resolve_proposition(
+        &self,
+        cx: &Cx,
+        goal: &Type,
+        lvl: &Level,
+        span: Span,
+        depth: usize,
+        tr: &mut Vec<TraceLine>,
+    ) -> Option<Term> {
+        self.computed_or_ruled(cx, goal, lvl, span, depth, tr)
+            .or_else(|| self.positivity_omega(cx, goal, lvl, span, depth, tr))
+    }
+
+    fn computed_or_ruled(
         &self,
         cx: &Cx,
         goal: &Type,
@@ -483,10 +540,20 @@ impl Elaborator {
             self.global_abs_of(v)
                 .and_then(|abs| self.names.global_name_at(abs as u32).map(str::to_string))
         };
-        let Some((relation, heads)) = proposition_key(goal, &name_of) else {
+        let Some((relation, mut heads)) = proposition_key(goal, &name_of) else {
             tr.push(line(depth, "no-rule", "the goal is not a relation applied to arguments"));
             return None;
         };
+        // A goal argument headed by a local is neutral for good (a local has
+        // no definition to unfold), so it can only meet a rule binder: a
+        // rule whose argument has a head (`a * b`) is not worth a trial.
+        // Only the goal side is read this way; a rule's binders stay
+        // wildcards.
+        for (head, arg) in heads.iter_mut().zip(proposition_args(goal)) {
+            if head.is_none() && matches!(crate::spelling::app_spine(arg).0, Term::Var(_)) {
+                *head = Some("#local".into());
+            }
+        }
         let rules: Vec<_> = self
             .traits
             .evidence_rules(&relation)
@@ -512,9 +579,10 @@ impl Elaborator {
         ));
         for g in rules {
             // A rejected rule is search state, exactly as a rejected instance
-            // is: neither its edges nor its checking notes survive it.
-            let dependency_mark = self.attempt.direct_dependencies.borrow().clone();
-            let notes_mark = self.attempt.check_notes.borrow().len();
+            // is: neither its edges nor its checking notes survive it. Nor,
+            // inside `positivity`, does an `omega` a premise of it ran: its
+            // named atom list and its audit report go with it.
+            let mark = SearchMark::of(self);
             tr.push(line(depth, "candidate", g.clone()));
             self.resolve_depth.set(depth + 1);
             let built = self.build_candidate(cx, &g, goal, lvl, span);
@@ -535,10 +603,89 @@ impl Elaborator {
                 }
                 Err(e) => tr.push(line(depth + 1, "rejected", e.message())),
             }
-            *self.attempt.direct_dependencies.borrow_mut() = dependency_mark;
-            self.attempt.check_notes.borrow_mut().truncate(notes_mark);
+            mark.rollback(self);
         }
         None
+    }
+
+    /// The `positivity` tactic (docs/positivity-evidence-design.md §10): the
+    /// search `:= infer` runs at `goal`, with one more source at every
+    /// proposition subgoal, `omega`, tried after the evidence rules. Cheap
+    /// routes first: a local, computation and a rule are each one kernel
+    /// trial, and omega runs only where they all failed, so `0 < a * b` with
+    /// `3 <= a` and `0 < b` in scope costs one omega call, at `0 < a`.
+    pub(crate) fn positivity(&self, cx: &Cx, goal: &Type, lvl: &Level, span: Span) -> crate::R<Term> {
+        let spelled = self
+            .spell_type_clean(cx, goal)
+            .unwrap_or_else(|| "the goal".to_string());
+        let outer = self.positivity.replace(Some(PositivityRun::default()));
+        let mut tr = Vec::new();
+        let found = self.resolve_goal(cx, goal, lvl, &spelled, None, span, &mut tr);
+        *self.positivity.borrow_mut() = outer;
+        found.ok_or_else(|| ElabError::Elab {
+            msg: format!("`positivity` could not prove `{spelled}` — the search:{}", render_trace(&tr)),
+            span,
+        })
+    }
+
+    /// Step 5, inside a `positivity` run only: hand the goal to `omega`. A
+    /// goal omega was stuck on once in this run is not tried again, which
+    /// bounds a failing run at one omega call per distinct subgoal.
+    fn positivity_omega(
+        &self,
+        cx: &Cx,
+        goal: &Type,
+        lvl: &Level,
+        span: Span,
+        depth: usize,
+        tr: &mut Vec<TraceLine>,
+    ) -> Option<Term> {
+        let stuck_before = match &*self.positivity.borrow() {
+            None => return None,
+            Some(run) => run.stuck.iter().any(|g| g == goal),
+        };
+        if self.key_of("omega::nat_le_of_not_not_le").is_none() {
+            tr.push(line(depth, "omega", "not imported, so not tried (`import omega;`)"));
+            return None;
+        }
+        if self.shadowed(cx, "omega") {
+            tr.push(line(depth, "omega", "a local named `omega` shadows the tactic"));
+            return None;
+        }
+        if stuck_before {
+            tr.push(line(depth, "omega", "already stuck on this goal"));
+            return None;
+        }
+        // Omega's own certificate is elaborated with plain `infer`: a
+        // positivity run does not reach into it.
+        let run = self.positivity.take();
+        let mark = SearchMark::of(self);
+        let e = Expr {
+            kind: ExprKind::Var("omega".to_string()),
+            span,
+        };
+        let proved = self.elab_check(cx, &e, goal, lvl);
+        *self.positivity.borrow_mut() = run;
+        match proved {
+            Ok(t) => {
+                tr.push(line(depth, "omega", "proved"));
+                Some(t)
+            }
+            Err(err) => {
+                mark.rollback(self);
+                // Omega's own report (atoms, residual, locals) is pages
+                // long; the trace keeps its verdict, and `omega` written at
+                // the goal still gives the whole report.
+                let msg = err.message();
+                let verdict = msg.lines().next().unwrap_or_default();
+                let verdict = verdict.split(';').next().unwrap_or_default();
+                tr.push(line(depth, "omega", verdict.to_string()));
+                if let Some(run) = self.positivity.borrow_mut().as_mut() {
+                    run.stuck.push(goal.clone());
+                }
+                None
+            }
+        }
     }
 
     /// Build one candidate: the bare instance reference, elaborated in
@@ -949,6 +1096,14 @@ fn argument_head(t: &Term, name_of: &dyn Fn(GlobalVar) -> Option<String>) -> Opt
         Term::Succ(_) => Some("#succ".into()),
         Term::NatLit(n) => Some(if n.is_zero() { "#zero" } else { "#succ" }.into()),
         _ => None,
+    }
+}
+
+/// The arguments of a relation application, in [`proposition_key`]'s order.
+fn proposition_args(ty: &Type) -> Vec<&Rc<Term>> {
+    match ty {
+        Type::El { tm, .. } => crate::spelling::app_spine(tm).1,
+        _ => Vec::new(),
     }
 }
 
