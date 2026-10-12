@@ -48,7 +48,7 @@ fn RingExpr::eval(self e: RingExpr, xs: List<Int>) → Int {
         RAtom(i) => RingExpr::atom(i, xs),
         RConst(c) => c,
         RAdd(a, b) => a.eval(xs) + b.eval(xs),
-        RSub(a, b) => a.eval(xs) - b.eval(xs),
+        RSub(a, b) => a.eval(xs) -b.eval(xs),
         RMul(a, b) => a.eval(xs) * b.eval(xs),
         RNeg(a) => -a.eval(xs),
     }
@@ -503,7 +503,7 @@ theorem RingExpr::sound(xs: List<Int>, a, b: RingExpr, h: a.norm() = b.norm()): 
     }
 }
 
-theorem RingExpr::eq_of_sub_zero(x, y: Int, h: x - y = OfNat(0)): x = y {
+theorem RingExpr::eq_of_sub_zero(x, y: Int, h: x -y = OfNat(0)): x = y {
     let flipped = Int::neg_unique(x, -y, h);
     calc {
         x
@@ -526,8 +526,8 @@ theorem RingExpr::hyp(xs: List<Int>, c, a, b: RingExpr, h: a.eval(xs) = b.eval(x
     RMul(c, RSub(a, b)).eval(xs) = OfNat(0)
 {
     calc {
-        c.eval(xs) * (a.eval(xs) - b.eval(xs))
-            = c.eval(xs) * (b.eval(xs) - b.eval(xs)) := Int::cong(λ (w: Int) => c.eval(xs) * (w - b.eval(xs)), h),
+        c.eval(xs) * (a.eval(xs) -b.eval(xs))
+            = c.eval(xs) * (b.eval(xs) -b.eval(xs)) := Int::cong(λ (w: Int) => c.eval(xs) * (w -b.eval(xs)), h),
             = c.eval(xs) * OfNat(0) := Int::cong(λ (w: Int) => c.eval(xs) * w, b.eval(xs).sub_self()),
             = OfNat(0) := c.eval(xs).mul_zero(),
     }
