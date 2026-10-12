@@ -3,7 +3,7 @@ title: The fast lane grew 6x with the wc command's library tests; where the suit
 status: open
 labels: [testing,performance,tooling]
 created: 2026-10-11
-updated: 2026-10-11
+updated: 2026-10-12
 ---
 
 A fresh look at what the suite spends, after the wc command rounds
@@ -99,3 +99,44 @@ Outside the test phase:
 - **Cold warm-ups**: the command prefix is 157 + 67 s on a cold store
   (`semantic_command_warmup`), the largest cold cost in the fast lane; it is
   paid once per lib change, then replayed in ~2 s.
+
+## Second pass: the heavy tests (2026-10-12)
+
+- **`field_high` / `field_low`**: a declared type was lowered again at every
+  mention ([[named-type-lowering-per-mention]], now memoized). That cut the
+  declarations that only name `StructuredCode` about fourfold but
+  `field_high`'s own module only 65.7 → 60.1 s of item time: the rest is
+  spread over the per-node declaration kinds. Item seconds summed by kind
+  (`field_high`, debug build, width one):
+
+  | kind | n | total | gate | body | note |
+  |---|---|---|---|---|---|
+  | `decodes` | 247 | 7.5 | 0.6 | 1.5 | elab `whnf` 3.0, `instance_match` 1.9 |
+  | `correct` | 247 | 6.5 | 4.6 | 1.1 | |
+  | `graph` | 124 | 6.0 | 3.8 | 0.3 | |
+  | `byte_length` | 247 | 4.1 | 0.3 | 3.5 | |
+  | `preserves` | 247 | 3.9 | 1.7 | 1.4 | |
+  | `layout` | 247 | 3.5 | 0.5 | 0.9 | |
+  | `leaf_value_*_after_node_*` | 152 | 3.4 | 0.6 | 1.6 | |
+  | `leaf_instructions` | 124 | 3.3 | 1.0 | 0.2 | |
+  | `bytes_are` | 247 | 3.2 | 1.1 | 1.9 | |
+
+  One `decodes` (`--only`): 12.7 ms, of which `whnf` 7.5 ms over only ~300
+  evaluation steps and two `instance_match` calls 2 ms — work proportional to
+  the size of the lowered `StructuredCode`/`Instruction` types rather than to
+  the proof, [[elab-whnf-copies-straight-continuations]]'s shape. That is the next lead
+  for these two tests; nothing in them is harness overhead.
+- **`record_state_loop_certificate_checks`** elaborated `omega`,
+  `bitvec_omega` and its own fixtures `wc` (whose growth proof runs `omega`)
+  and `wc_context` from source; they are the loop generator's inputs and now
+  replay with the base (`wc_checker`), leaving `wc_pieces` and `wc_native`.
+- **`narrow_fused_branches_check_and_refuse_another_test`** checked four
+  certificates and fourteen mutants serially; now one test per case, so they
+  run on the process's test threads.
+- **`filter_step_generation`**: each step's certifying test and its refusal
+  elaborated the same generated pieces (`squeeze_pieces` twice, likewise
+  `drop`, `eq_drop`, `if_drop`); `with_pieces` builds each once per process.
+
+## Log
+
+- 2026-10-12: Second pass over the heavy tests: named-type lowering memoized (named-type-lowering-per-mention), loop_trace fixtures replayed, narrow_fused split per case, filter-step pieces shared per process. field_high's remaining cost attributed by declaration kind.

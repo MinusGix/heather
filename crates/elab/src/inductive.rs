@@ -1254,11 +1254,52 @@ impl Elaborator {
                 span,
             );
         }
+        // A declaration from a finished module, named bare, lowers to the same
+        // type at every use, up to weakening past the globals committed since
+        // (Ψ is de Bruijn): its field types are read in its own scope
+        // (`lower_ctor`'s `use_inductive_scope`) with no type or value
+        // arguments and the use site's binders and aliases hidden, so only
+        // what else a use site's context carries could reach them — class
+        // dictionaries, a quotation or meta environment, which keep the type
+        // out of the memo. So it is lowered once per elaborator,
+        // not at every mention: naming
+        // `StructuredCode` in a signature cost ~5 ms of re-lowering
+        // `Instruction` and everything under it, on every one of a generated
+        // certificate's thousands of declarations
+        // (issues/named-type-lowering-per-mention.md). The current module's
+        // own declarations are left out, since a later declaration there can
+        // still change what their field names resolve to; the `Rc` is held so
+        // its address cannot be reused by another declaration.
+        let memo = args.is_empty()
+            && cx.dicts.is_empty()
+            && cx.meta.is_none()
+            && !cx.quoted
+            && ind.scope.module != self.names.module();
+        let key = (Rc::as_ptr(ind) as usize, self.in_generated());
+        let psi = self.psi.bindings.len();
+        if memo {
+            let hit = self.named_type_memo.borrow().get(&key).map(|(_, at, hit)| (*at, hit.clone()));
+            if let Some((at, (ty, level))) = hit.filter(|(at, _)| *at <= psi) {
+                let out = (if at == psi { ty } else { ty.shift_global((psi - at) as u32) }, level);
+                if at != psi {
+                    self.named_type_memo.borrow_mut().insert(key, (Rc::clone(ind), psi, out.clone()));
+                }
+                return Ok(out);
+            }
+        }
+        let ind = Rc::clone(ind);
         let mut lowered = Vec::with_capacity(args.len());
         for a in args {
             lowered.push(self.elab_ty(cx, a)?);
         }
-        self.lower_instance(cx, ind, &lowered, &[], span)
+        let out = self.lower_instance(cx, &ind, &lowered, &[], span)?;
+        // Kept only when closed over the locals, so a hit is the same type at
+        // any depth. Hiding the use site's binders should make every bare
+        // lowering closed; this is the backstop, paid once per miss.
+        if memo && out.0.shift_local(1) == out.0 {
+            self.named_type_memo.borrow_mut().insert(key, (ind, psi, out.clone()));
+        }
+        Ok(out)
     }
 
     /// `D<ā>(v̄)` written in **type position**: a record applied to its value
@@ -1734,6 +1775,14 @@ impl Elaborator {
         // binder's scope, and for a class head that scope is the class body).
         // Empty for every declaration whose head writes no `as`.
         fcx.op_locals = ind.op_symbols.clone();
+        // The use site's binders and `let` aliases stay in Γ, where the
+        // arguments are scoped, but out of reach by name: a field spelling
+        // `y()` means the declaration's `y`, not a parameter `y` of whatever
+        // function names the type (issues/named-type-lowering-per-mention.md).
+        for name in &mut fcx.names {
+            *name = "#use-site".into();
+        }
+        fcx.aliases.clear();
         let depth = cx.names.len();
         fcx.tyvars = ind
             .params

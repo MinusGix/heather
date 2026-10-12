@@ -87,8 +87,29 @@ fn narrow_constants_passthrough_and_comparisons_check() {
 // against a literal and against a computed sum, for equality and for the
 // unsigned order. A branch testing another condition, or the operands the
 // other way round, is refused; a narrow signed comparison is not fused.
+// One test per case, so the four certificates and their mutants check in
+// parallel rather than as one long pole.
 #[test]
-fn narrow_fused_branches_check_and_refuse_another_test() {
+fn narrow_fused_newline_equality_checks_and_refuses_another_test() {
+    narrow_fused_case(0);
+}
+
+#[test]
+fn narrow_fused_sum_equality_checks_and_refuses_another_test() {
+    narrow_fused_case(1);
+}
+
+#[test]
+fn narrow_fused_below_newline_checks_and_refuses_another_test() {
+    narrow_fused_case(2);
+}
+
+#[test]
+fn narrow_fused_sum_below_checks_and_refuses_another_test() {
+    narrow_fused_case(3);
+}
+
+fn narrow_fused_case(case: usize) {
     use heather_elab::function_ir_x86_lower::{ComparisonOperation, PlannedTest, StructuredPlan};
     let elab = checker();
     let byte = |id| Port { id, width: 8 };
@@ -108,28 +129,40 @@ fn narrow_fused_branches_check_and_refuse_another_test() {
         ("byte_below_newline_branch", region(newline, Node::UnsignedLessThan { width: 8, output: 3, left: 0, right: 2 }), ComparisonOperation::UnsignedLessThan, "B", ["AE", "L", "E"]),
         ("byte_sum_below_branch", region(sum, Node::UnsignedLessThan { width: 8, output: 3, left: 2, right: 0 }), ComparisonOperation::UnsignedLessThan, "B", ["AE", "L", "BE"]),
     ];
-    for (name, region, expected, cc, others) in cases {
-        let emission = generate_structured(name, &region, &Placements::from([(0, Gpr::Rdi), (1, Gpr::Rsi)]), &[Gpr::Rax, Gpr::Rcx, Gpr::Rdx, Gpr::R8], Gpr::Rax)
-            .unwrap_or_else(|e| panic!("{name}: {e:?}"));
-        let StructuredPlan::FusedSequence { continuation, .. } = &emission.lowered.body else { panic!("{name}: expected a fused sequence, got {:?}", emission.lowered.body) };
-        let StructuredPlan::Conditional { test: PlannedTest::Compare { left, right, operation, width, .. }, .. } = continuation.body else { panic!("{name}: expected a compared branch") };
-        assert_eq!((operation, width), (expected, 8), "{name}");
-        let text = format!("{IMPORTS}\n{}", emission.text);
-        assert!(!text.contains("SetEqual(") && !text.contains("SetBelow("), "{name}: the bit is not materialised");
-        elab.semantic_image().elaborator().elab_module_source(&format!("{name}_certificate"), &text).unwrap_or_else(|e| panic!("{}", e.render(&text)));
-        let (l, r) = (left.heather_name(), right.heather_name());
-        let code = format!("CodeBranch(Compare({l}, {r}, {cc})");
-        assert!(text.contains(&code), "{name}: the code should branch on Compare({l}, {r}, {cc})");
-        let swapped = format!("CodeBranch(Compare({r}, {l}, {cc})");
-        for mutant in others.iter().map(|other| text.replacen(&code, &format!("CodeBranch(Compare({l}, {r}, {other})"), 1))
-            .chain((expected == ComparisonOperation::UnsignedLessThan).then(|| text.replacen(&code, &swapped, 1))) {
-            let error = elab.semantic_image().elaborator().elab_module_source(&format!("{name}_mutant"), &mutant)
-                .expect_err("a branch testing something else must be refused");
-            let message = error.render(&mutant);
-            assert!(!message.contains("unknown") && !message.contains("not in scope") && !message.contains("unbound"), "{name} failed on a name: {message}");
-        }
+    let (name, region, expected, cc, others) = cases.into_iter().nth(case).expect("a case");
+    let emission = generate_structured(name, &region, &Placements::from([(0, Gpr::Rdi), (1, Gpr::Rsi)]), &[Gpr::Rax, Gpr::Rcx, Gpr::Rdx, Gpr::R8], Gpr::Rax)
+        .unwrap_or_else(|e| panic!("{name}: {e:?}"));
+    let StructuredPlan::FusedSequence { continuation, .. } = &emission.lowered.body else { panic!("{name}: expected a fused sequence, got {:?}", emission.lowered.body) };
+    let StructuredPlan::Conditional { test: PlannedTest::Compare { left, right, operation, width, .. }, .. } = continuation.body else { panic!("{name}: expected a compared branch") };
+    assert_eq!((operation, width), (expected, 8), "{name}");
+    let text = format!("{IMPORTS}\n{}", emission.text);
+    assert!(!text.contains("SetEqual(") && !text.contains("SetBelow("), "{name}: the bit is not materialised");
+    elab.semantic_image().elaborator().elab_module_source(&format!("{name}_certificate"), &text).unwrap_or_else(|e| panic!("{}", e.render(&text)));
+    let (l, r) = (left.heather_name(), right.heather_name());
+    let code = format!("CodeBranch(Compare({l}, {r}, {cc})");
+    assert!(text.contains(&code), "{name}: the code should branch on Compare({l}, {r}, {cc})");
+    let swapped = format!("CodeBranch(Compare({r}, {l}, {cc})");
+    for mutant in others.iter().map(|other| text.replacen(&code, &format!("CodeBranch(Compare({l}, {r}, {other})"), 1))
+        .chain((expected == ComparisonOperation::UnsignedLessThan).then(|| text.replacen(&code, &swapped, 1))) {
+        let error = elab.semantic_image().elaborator().elab_module_source(&format!("{name}_mutant"), &mutant)
+            .expect_err("a branch testing something else must be refused");
+        let message = error.render(&mutant);
+        assert!(!message.contains("unknown") && !message.contains("not in scope") && !message.contains("unbound"), "{name} failed on a name: {message}");
     }
-    let signed = region(newline, Node::SignedLessThan { width: 8, output: 3, left: 0, right: 2 });
+}
+
+// A narrow signed comparison is not fused.
+#[test]
+fn narrow_signed_comparison_is_not_fused() {
+    use heather_elab::function_ir_x86_lower::StructuredPlan;
+    let byte = |id| Port { id, width: 8 };
+    let bit = Port { id: 3, width: 1 };
+    let arm = |node| Box::new(StructuredRegion::Dataflow(Region { inputs: vec![byte(0), byte(1)], nodes: vec![node], outputs: vec![byte(4)] }));
+    let signed = StructuredRegion::Sequence {
+        prefix: Region { inputs: vec![byte(0), byte(1)], nodes: vec![Node::Const { width: 8, output: 2, value: 10 }, Node::SignedLessThan { width: 8, output: 3, left: 0, right: 2 }], outputs: vec![bit] },
+        continuation: Box::new(StructuredRegion::Conditional { inputs: vec![bit, byte(0), byte(1)], condition: 3, arguments: vec![byte(0), byte(1)], outputs: vec![byte(4)],
+            when_true: arm(Node::Sub { width: 8, output: 4, left: 1, right: 0 }), when_false: arm(Node::BitXor { width: 8, output: 4, left: 0, right: 1 }) }),
+    };
     if let Ok(emission) = generate_structured("byte_signed_branch", &signed, &Placements::from([(0, Gpr::Rdi), (1, Gpr::Rsi)]), &[Gpr::Rax, Gpr::Rcx, Gpr::Rdx, Gpr::R8], Gpr::Rax) {
         assert!(!matches!(emission.lowered.body, StructuredPlan::FusedSequence { .. }), "a narrow signed comparison is not fused");
     }

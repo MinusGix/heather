@@ -74,6 +74,7 @@ impl SessionCheckpoint {
         // for a removed declaration must not become the answer for its future
         // replacement at the same index.
         elab.result_only_memo.borrow_mut().clear();
+        elab.named_type_memo.borrow_mut().clear();
     }
 }
 

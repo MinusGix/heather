@@ -505,6 +505,25 @@ fn a_parameter_at_a_dependent_type_is_not_captured_by_an_earlier_field() {
     );
 }
 
+// A field type is read in its declaration's scope, never the use site's
+// (issues/named-type-lowering-per-mention.md): `y()` in `W`'s field is the
+// global `y`, even where `W` is named under a parameter `y`. Before, the field
+// was lowered over the use site's names and `y()` became the parameter
+// applied to nothing, so `three` was refused; and since bare named types are
+// now lowered once, which reading won would have depended on which use came
+// first.
+#[test]
+fn a_field_type_does_not_see_the_use_sites_binders() {
+    let src = "fn y() -> Nat { 3 }
+         inductive W { Mk(x: Nat, p: x = y()) }
+         fn three(y: Nat -> Nat, n: Nat, p: n = 3) -> W { Mk(n, p) }";
+    elab(src);
+    // The negative control: the field really is `x = 3`.
+    let msg = elab_err(&format!("{src}
+         fn four(y: Nat -> Nat, n: Nat, p: n = 4) -> W {{ Mk(n, p) }}"));
+    assert!(msg.contains("n = 4"), "a proof of `n = 4` was accepted for `x = y()`: {msg}");
+}
+
 /// The tier-0 case tree's **inner** injection annotations — axis 6 of
 /// `docs/testing-generated-terms.md`, crossed with axis 2, found 2026-08-05.
 ///

@@ -831,6 +831,7 @@ impl Elaborator {
         }
         self.refresh_delta_psi();
         self.result_only_memo.borrow_mut().clear();
+        self.named_type_memo.borrow_mut().clear();
         let shift = |at: usize| (at as i64 + offset) as usize;
         self.warnings.borrow_mut().extend(previous.warnings[slice.warnings.clone()].iter().map(|w| {
             let mut w = w.clone();
@@ -911,6 +912,7 @@ impl Elaborator {
         candidate.refresh_delta_psi();
         self.committed = candidate.committed;
         self.result_only_memo.borrow_mut().clear();
+        self.named_type_memo.borrow_mut().clear();
         Ok(())
     }
 
