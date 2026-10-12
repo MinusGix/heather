@@ -3,7 +3,7 @@ title: A hole beside a splitting field default is an internal error
 status: open
 labels: [elaborator,tactics,bug]
 created: 2026-10-01
-updated: 2026-10-01
+updated: 2026-10-12
 ---
 
 A `?hole` in a record construction whose omitted field has a tactic default
@@ -29,3 +29,7 @@ Repro: the module above, with `newline`/`line_step` as in
 `stream_filter` and `function_ir_loop`.
 
 Related: [[field-defaults-under-locals]].
+
+## Log
+
+- 2026-10-12: 2026-10-12: Parameter defaults (docs/named-arguments-design.md §9.6) fill an omitted parameter the same way, so a `?hole` beside a call whose omitted default splits presumably meets the same pre-count; not reproduced.

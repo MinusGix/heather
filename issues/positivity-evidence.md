@@ -3,7 +3,7 @@ title: Replace the shifted Pos with Pos<A> binder sugar over a smarter infer
 status: open
 labels: [stdlib,elaboration,traits,design,ergonomics]
 created: 2026-10-10
-updated: 2026-10-11
+updated: 2026-10-12
 ---
 
 Decide whether `lib/std/pos.hthr`'s shifted `Pos { pred }` stays, and how
@@ -49,3 +49,4 @@ listed in the note's §8; this issue closes when they are filed.
 - 2026-10-10: Round 1 implemented ([[infer-proposition-evidence]]): Minus chose rules in `infer`; hand-written rules are spelled `evidence theorem`.
 - 2026-10-11: Round 3 landed: [[function-owned-members]] (`theorem f::name`).
 - 2026-10-11: Round 6, the `positivity` tactic, landed ([[positivity-tactic]], note §10).
+- 2026-10-12: 2026-10-12: Round 2 landed: parameter defaults `h: 0 < n := omega` and `:= positivity` run at the call over the caller's hypotheses ([[named-arguments]], docs/named-arguments-design.md §9.6).

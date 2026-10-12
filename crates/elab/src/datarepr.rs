@@ -1413,7 +1413,7 @@ fn law_statement_binder_names(spec: &SpecView) -> HashMap<String, Vec<String>> {
 /// matters in both directions — `λ a0 h0 => bin_canon_succ(a0, h0)` is a
 /// whole-Π value whose own λ binds the same names, and wrapping it again
 /// would break it.
-fn mentions_free(e: &Expr, names: &[String], bound: &mut Vec<String>) -> bool {
+pub(crate) fn mentions_free(e: &Expr, names: &[String], bound: &mut Vec<String>) -> bool {
     let hit = |n: &str, bound: &Vec<String>| {
         names.iter().any(|m| m == n) && !bound.iter().any(|m| m == n)
     };

@@ -113,12 +113,14 @@ argument (`advances := p`) or a full positional spelling overrides it.
 default, a stored goal and not a spliced expression:
 
 - The default's names resolve in the record's declaring scope.
-- The default sees the goal and none of the construction's locals.
+- The default sees the goal and none of the construction's locals by name.
 
-This round runs a default only where the construction has no local bindings,
-which is where a program bundle is built (a parameterless `fn`). Under
-locals, the error asks for the field by name. Closing the goal over the
-locals is `issues/field-defaults-under-locals.md`.
+This round ran a default only where the construction had no local bindings,
+which is where a program bundle is built (a parameterless `fn`). Since
+2026-10-12 a default also runs under locals: the goal stays open in them, and
+the check runs in the construction's context with each local renamed out of
+reach, so a tactic default sees them as hypotheses
+(docs/named-arguments-design.md §9.6).
 
 When a default fails, the error is at the construction and names the goal it
 did not prove, followed by the tactic's own report. For a step that grows by

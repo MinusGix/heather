@@ -827,6 +827,12 @@ impl Speller<'_> {
                     Shown::Explicit
                 } else if p.is_type {
                     Shown::Type(self.qualified && !determined.get(i).copied().unwrap_or(true))
+                } else if p.default.is_some() {
+                    // A defaulted parameter's value is whatever the call
+                    // gave, the default or an override, and nothing else
+                    // determines it, so it is spelled by name in both modes
+                    // (docs/named-arguments-design.md §9.6).
+                    Shown::Named(p.name.clone())
                 } else if !self.qualified || p.solver.is_some() || determined.get(i).copied().unwrap_or(true) {
                     Shown::Hidden
                 } else {

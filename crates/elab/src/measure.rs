@@ -380,6 +380,7 @@ fn param(name: &str, ty: Ty, span: Span) -> Param {
         implicit: false,
         is_self: false,
         solver: None,
+        default: None,
         origin: ParamOrigin::Written,
         symbol: None,
         span,
@@ -396,6 +397,7 @@ fn value_params(decl: &Decl) -> Vec<Param> {
             implicit: false,
             is_self: false,
             solver: None,
+            default: None,
             symbol: None,
             ..p.clone()
         })

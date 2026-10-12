@@ -1,9 +1,9 @@
 ---
-title: "Named arguments at call sites (landed); defaults at binders (staged)"
-status: open
+title: "Named arguments at call sites and defaults at binders (both landed)"
+status: closed
 labels: [frontend,syntax,design]
 created: 2026-07-27
-updated: 2026-10-11
+updated: 2026-10-12
 ---
 
 **Status (2026-08-18): the call-site half is LANDED**
@@ -166,3 +166,4 @@ Default arguments, variadics, and any form of overloading.
 - 2026-10-01: 2026-10-01: Record field defaults landed (docs/named-arguments-design.md §9.5; [[automatic-author-surface]]). §9.2's no-positional-slot rule holds, and the default is checked in the declaring scope against the instantiated field type, in an empty local context. Running a default under locals is [[field-defaults-under-locals]]. Parameter defaults remain §9's.
 - 2026-10-10: Parameter defaults (`h: 0 < n := omega`) are wanted by [[positivity-evidence]] for positivity; Minus asked that they parse (2026-10-10).
 - 2026-10-11: 2026-10-11: [[positivity-tactic]] landed the tactic a `h: 0 < n := positivity` default would run; the default itself is still this issue's parameter-defaults half.
+- 2026-10-12: 2026-10-12: **Parameter defaults landed** (docs/named-arguments-design.md §9.6). `p: T := e` parses for any `e` but `infer`; the parameter is implicit with no positional slot (§9.2), and a named argument overrides it. Two departures from §9.3–§9.4 as written. (1) No `DefaultOb`: `resolve_named` fills an omitted default with an internal marker and flips its mask bit, so the default is a named argument the caller did not write. It is checked at the parameter's instantiated domain, in declaration order, and deferred until that domain is known, by the existing path. (2) §9.4's open question, where a default's names resolve, is answered with neither mechanism 1 nor 2. Names resolve in the declaring scope (the scope is stored on `ParamMeta`), and the check runs in the caller's context with every local renamed out of reach (`Cx::hygienic`), so `h: 0 < n := omega` or `:= positivity` searches the caller's hypotheses while a caller's local `trivial` or `omega` cannot capture the default's name. The same change ran field defaults under locals and closed [[field-defaults-under-locals]]. Residue, each with an owner: a default that mentions an earlier parameter (`k: Nat := n`, refused at the declaration) is [[parameter-defaults-mention-parameters]]; a kernel-only failure (`refl`) reported at the declaration is [[default-kernel-failure-reported-at-declaration]]; a bare reference `f` still has the defaulted parameter in its Π (a default fills at a call), recorded in §9.6. Closing.

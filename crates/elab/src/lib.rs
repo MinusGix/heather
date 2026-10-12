@@ -92,6 +92,7 @@ pub mod function_ir_x86_lower;
 mod code;
 mod constructor;
 mod context;
+mod defaults;
 mod datarepr;
 mod diagnostics;
 mod dispatch;
@@ -4003,6 +4004,29 @@ impl Elaborator {
             .map_err(|e| self.kernel_error(&decl.name, decl.span, e))?;
         }
 
+        // A default runs at the call, where the declaration's parameters are
+        // the caller's arguments rather than names; a default that names one
+        // is refused here rather than at every call
+        // (issues/parameter-defaults-mention-parameters.md).
+        let param_names: Vec<String> =
+            decl.tyvars.iter().map(|t| t.name.clone()).chain(decl.params.iter().map(|p| p.name.clone())).collect();
+        for p in &decl.params {
+            let Some(default) = p.default.as_deref() else { continue };
+            if let Some(mentioned) = param_names.iter().find(|n| datarepr::mentions_free(default, std::slice::from_ref(n), &mut Vec::new())) {
+                return err(
+                    format!(
+                        "`{}`'s default mentions the parameter `{mentioned}`, and a default cannot \
+                         mention a parameter yet (issues/parameter-defaults-mention-parameters.md): \
+                         give `{}` by name at the calls that need it",
+                        p.name, p.name
+                    ),
+                    default.span,
+                );
+            }
+        }
+        // A default's names resolve where the declaration was written, at
+        // every call (docs/named-arguments-design.md §9.4).
+        let default_scope = Rc::new(self.names.scope().clone());
         let params = Rc::new(
             decl.tyvars
                 .iter()
@@ -4013,8 +4037,9 @@ impl Elaborator {
                     is_self: false,
                     skel: None,
                     solver: None,
+                    default: None,
                 })
-                .chain(decl.params.iter().map(|p| ParamMeta {
+                .chain(decl.params.iter().enumerate().map(|(i, p)| ParamMeta {
                     name: p.name.clone(),
                     implicit: p.implicit,
                     is_type: false,
@@ -4024,6 +4049,12 @@ impl Elaborator {
                     // bare-reference insertion at this argument (§5.3/§6.1).
                     skel: skel_of_ty(&p.ty),
                     solver: p.solver.map(|_| Rc::new(p.ty.clone())),
+                    default: p.default.as_ref().map(|e| Rc::new(application::ParamDefault {
+                        expr: (**e).clone(),
+                        scope: Rc::clone(&default_scope),
+                        owner: qkey(self.names.module(), &decl.name),
+                        index: decl.tyvars.len() + i,
+                    })),
                 }))
                 .collect::<Vec<_>>(),
         );
@@ -4582,6 +4613,9 @@ impl Elaborator {
                     && named.is_empty() =>
             {
                 self.elab_field_default(cx, args, expected, lvl, e.span)
+            }
+            ExprKind::App { args, .. } if defaults::is_param_default(e) => {
+                self.elab_param_default(cx, args, expected, lvl, e.span)
             }
             ExprKind::App { head, args, named, explicit: false, goal_oriented: false }
                 if matches!(&head.kind, ExprKind::Var(name) if name == goal_combinators::SPLIT_STUCK)
@@ -7759,6 +7793,9 @@ impl Elaborator {
     /// default is load-bearing for the suite (`xs[2]`'s `Fin` reading exists
     /// only in checking position, as before).
     fn is_checking_only(&self, cx: &Cx, e: &Expr) -> bool {
+        if defaults::is_param_default(e) {
+            return true;
+        }
         match &e.kind {
             ExprKind::Hole(_) | ExprKind::AutoRefl | ExprKind::CollectionLit(_) => true,
             // A bare operator symbol that needs a carrier
@@ -7814,6 +7851,9 @@ impl Elaborator {
     /// one member of [`Self::is_checking_only`] that can still be elaborated
     /// in inference mode? See [`DeferredArg::fallback_infer`].
     fn deferral_can_fall_back(&self, cx: &Cx, e: &Expr) -> bool {
+        if defaults::is_param_default(e) {
+            return false;
+        }
         match e.as_named() {
             Some(("absurd", _, _)) | Some(("FS", _, false)) => false,
             Some((n, args, false)) => self.call_defers_for_result_only(cx, n, args.len()),

@@ -101,10 +101,10 @@ Probes, with `theorem uses(n: Nat, h: 0 < n := infer): 0 < n { h }`:
 
 Neighbouring mechanisms:
 
-- **Parameter defaults** (`b: Nat := 0`, or `h: P := omega`) do not parse.
-  `docs/named-arguments-design.md` §9.4 stages them: "a stored goal" is the
-  intended mechanism for a default that searches the context. `:= omega` is
-  refused by name as an unknown solver.
+- **Parameter defaults** (`b: Nat := 0`, or `h: P := omega`) did not parse
+  when this was written. They landed 2026-10-12
+  (`docs/named-arguments-design.md` §9.6): a tactic default runs at the call
+  over the caller's hypotheses.
 - **Record-field defaults** landed (`h: 0 < v := trivial` or `:= omega`,
   `docs/automatic-author-surface-design.md` §2.3). They only run where the
   construction has no local bindings; under a local, `P(Succ(k))` is refused
@@ -202,10 +202,10 @@ goal in the library (`issues/omega-per-goal-elaboration-cost.md`). Omega
 belongs where an author chose it:
 
 - **At a call site**, by name: `mod_lt(x, p, positive := omega)`.
-- **At a declaration**, as a parameter default: `h: 0 < n := omega`. This
-  does not parse today. It is `docs/named-arguments-design.md` §9.4's stored
-  goal, the same machinery record fields have, and it is wanted (§7). The
-  author who writes it has chosen omega's cost for every caller.
+- **At a declaration**, as a parameter default: `h: 0 < n := omega`
+  (`docs/named-arguments-design.md` §9.6, landed 2026-10-12). It shares
+  record fields' machinery. The author who writes it has chosen omega's cost
+  for every caller.
 - **Later, a `positivity` tactic** that composes the evidence rules and hands
   linear leftovers to omega, usable as `h: 0 < n := positivity`. Whether the
   rules live in `infer` (as above) or only in that tactic is open (§7).
@@ -446,9 +446,9 @@ gives the report).
 
 Not in this round:
 
-- **`h: 0 < n := positivity` as a parameter default** needs parameter
+- **`h: 0 < n := positivity` as a parameter default** needed parameter
   defaults, which are [named-arguments](../issues/named-arguments.md)'s
-  (§8 round 2). The tactic is what such a default would run.
+  (§8 round 2). They landed 2026-10-12, and this default works.
 - **Goals other than a relation.** `positivity` accepts any proposition and
   is only as good as the rules about it: there are rules about `Nat::Lt`
   and nothing else yet, so `e ≠ 0` and goals over `Int` are omega's alone

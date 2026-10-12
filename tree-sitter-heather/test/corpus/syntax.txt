@@ -502,3 +502,74 @@ fn f(s: P) -> P { s with { x = 1, y = s.y } }
           (member_expression
             (identifier)
             (identifier)))))))
+
+==================
+Parameter and field defaults
+==================
+
+record Pinned { value: Nat, same: value = value := refl }
+fn second(a: Nat, b: Nat := seven(), h: 0 < a := omega) -> Nat { b }
+theorem uses(n: Nat, h: 0 < n := infer): 0 < n { h }
+
+---
+
+(source_file
+  (record_declaration
+    (identifier)
+    (field_list
+      (field
+        (identifier)
+        (identifier))
+      (field
+        (identifier)
+        (binary_expression
+          (identifier)
+          (identifier))
+        (refl_expression))))
+  (function_declaration
+    (qualified_identifier)
+    (parameter_list
+      (parameter
+        (parameter_run
+          (parameter_name
+            (identifier))
+          (identifier)))
+      (parameter
+        (parameter_run
+          (parameter_name
+            (identifier))
+          (identifier)
+          (call_expression
+            (identifier)
+            (argument_list))))
+      (parameter
+        (parameter_run
+          (parameter_name
+            (identifier))
+          (binary_expression
+            (number)
+            (identifier))
+          (identifier))))
+    (identifier)
+    (block
+      (identifier)))
+  (theorem_declaration
+    (qualified_identifier)
+    (parameter_list
+      (parameter
+        (parameter_run
+          (parameter_name
+            (identifier))
+          (identifier)))
+      (parameter
+        (parameter_run
+          (parameter_name
+            (identifier))
+          (binary_expression
+            (number)
+            (identifier)))))
+    (declaration_binary_type
+      (number)
+      (identifier))
+    (block
+      (identifier))))

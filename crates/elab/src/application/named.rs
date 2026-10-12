@@ -1,10 +1,34 @@
 //! Named and positional argument normalization before spine elaboration.
 
-use heather_syntax::{Expr, NamedArg, Span};
+use heather_syntax::{Expr, ExprKind, NamedArg, Span};
 
 use super::ParamMeta;
 use crate::inductive::Inductive;
 use crate::{ElabError, R, err};
+
+/// A defaulted parameter a call left out (docs/named-arguments-design.md §9):
+/// the marker's arguments are the declaring global's key and the parameter's
+/// index in its table, and checking it runs the default against the
+/// parameter's instantiated domain. Like the parser's markers, this head
+/// cannot collide with a source name.
+pub(crate) const PARAM_DEFAULT: &str = "\0param-default";
+
+/// The marker standing for `default`'s parameter in a call that left it out.
+fn default_marker(default: &super::ParamDefault, span: Span) -> Expr {
+    Expr {
+        kind: ExprKind::App {
+            head: Box::new(Expr { kind: ExprKind::Var(PARAM_DEFAULT.into()), span }),
+            args: vec![
+                Expr { kind: ExprKind::Str(default.owner.clone()), span },
+                Expr { kind: ExprKind::Num((default.index as u64).into()), span },
+            ],
+            named: vec![],
+            explicit: false,
+            goal_oriented: false,
+        },
+        span,
+    }
+}
 
 /// Named arguments at a **callable** head (docs/named-arguments-design.md
 /// §8.3): permute the written `x := e` arguments into declaration order
@@ -21,9 +45,15 @@ use crate::{ElabError, R, err};
 /// checking-only argument at a metaful domain, and drives `unify_arg_ty`
 /// otherwise.
 ///
-/// `None` — and *nothing cloned* — when no named argument was written,
-/// which is this round's invariant: a call with no named argument reaches
-/// the walkers with exactly the vector and mask it did before.
+/// A **defaulted** parameter the call left out is filled here too, by
+/// [`PARAM_DEFAULT`]'s marker with its mask bit flipped, so the default is
+/// a named argument the caller did not have to write: checked at the
+/// parameter's domain in declaration order, and deferred until that domain
+/// is known, by the same path (docs/named-arguments-design.md §9.6).
+///
+/// `None` — and *nothing cloned* — when no named argument was written and
+/// the call leaves no default to fill, which is this round's invariant: such
+/// a call reaches the walkers with exactly the vector and mask it did before.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn resolve_named(
     callee: &str,
@@ -35,10 +65,13 @@ pub(crate) fn resolve_named(
     named: &[NamedArg],
     span: Span,
 ) -> R<Option<(Vec<Expr>, Vec<bool>)>> {
-    if named.is_empty() {
+    let n = mask.len();
+    let defaulted = |mi: usize| {
+        mask[mi] && params.get(mi + param_offset).is_some_and(|p| p.default.is_some())
+    };
+    if named.is_empty() && !(0..n).any(defaulted) {
         return Ok(None);
     }
-    let n = mask.len();
     let mut slots: Vec<Option<Expr>> = vec![None; n];
     let mut written: Vec<Option<Span>> = vec![None; n];
     let mut newmask = mask.to_vec();
@@ -121,6 +154,31 @@ pub(crate) fn resolve_named(
         // filled by the written argument rather than inferred or searched.
         newmask[mi] = false;
     }
+    if over_applied && named.is_empty() {
+        // Only a default made this call reach here: its positional
+        // arguments outnumber the parameters that take one by position.
+        let first = (0..n).find(|&mi| defaulted(mi)).expect("a default to fill");
+        let name = &params[first + param_offset].name;
+        return err(
+            format!(
+                "`{callee}` takes {} argument(s) by position, found {}: `{name}` has a \
+                 default, so it has no positional slot — give it by name (`{name} := …`)",
+                mask.iter().filter(|&&m| !m).count(),
+                args.len(),
+            ),
+            span,
+        );
+    }
+    // Every defaulted parameter the call left out is filled from its
+    // default: the third state of the mask again, with the caller's
+    // argument supplied by the declaration.
+    for mi in 0..n {
+        if slots[mi].is_none() && newmask[mi] && defaulted(mi) {
+            let default = params[mi + param_offset].default.as_deref().expect("defaulted");
+            slots[mi] = Some(default_marker(default, span));
+            newmask[mi] = false;
+        }
+    }
     if over_applied {
         return err(
             format!(
@@ -143,12 +201,16 @@ pub(crate) fn resolve_named(
                     || format!("parameter {}", mi + 1),
                     |p| format!("`{}`", p.name),
                 );
+                let why = if named.is_empty() {
+                    "A call that leaves a parameter to its default has to fill every \
+                     parameter before it — partial application and parameter defaults do \
+                     not compose"
+                } else {
+                    "A call that names an argument has to fill every parameter before it — \
+                     partial application and named arguments do not compose"
+                };
                 return err(
-                    format!(
-                        "`{callee}` is applied to too few arguments: {what} has none. A call \
-                         that names an argument has to fill every parameter before it — \
-                         partial application and named arguments do not compose"
-                    ),
+                    format!("`{callee}` is applied to too few arguments: {what} has none. {why}"),
                     span,
                 );
             }
@@ -337,6 +399,7 @@ mod tests {
             is_self: false,
             skel: None,
             solver: None,
+            default: None,
         }
     }
 

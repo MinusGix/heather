@@ -374,6 +374,9 @@ impl<'a> Walk<'a> {
 
     fn param(&mut self, p: &Param) {
         self.ty(&p.ty);
+        if let Some(e) = &p.default {
+            self.expr(e);
+        }
     }
 
     fn class_ref(&mut self, c: &ClassRef, region: Span) {

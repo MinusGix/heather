@@ -405,18 +405,21 @@ fn wrong() -> Zeroed { Zeroed(5) }
     assert!(error.contains("`zero` was left to its default") && error.contains("zero := "), "{error}");
 }
 
-/// Under local bindings the default does not run yet
-/// (issues/field-defaults-under-locals.md); naming the field still works.
+/// Under local bindings the default runs too: its goal is open in the
+/// construction's locals, so it is checked under them
+/// (issues/field-defaults-under-locals.md). A neutral field value and a
+/// literal one build the same term as the full spelling.
 #[test]
-fn a_default_under_locals_asks_for_the_field() {
-    let error = bad("
-record Pinned { value: Nat, same: value = value := refl }
-fn local(k: Nat) -> Pinned { Pinned(k) }
-");
-    assert!(error.contains("under local bindings"), "{error}");
+fn a_field_default_runs_under_locals() {
     ok("
 record Pinned { value: Nat, same: value = value := refl }
-fn local(k: Nat) -> Pinned { Pinned(k, same := refl) }
+fn local(k: Nat) -> Pinned { Pinned(k) }
+fn named(k: Nat) -> Pinned { Pinned(value := k) }
+fn in_let(k: Nat) -> Pinned { let p: Pinned = Pinned(Succ(k)); p }
+theorem local_is_full(k: Nat): local(k) = Pinned(k, refl) { refl }
+theorem named_is_full(k: Nat): named(k) = Pinned(k, refl) { refl }
+theorem in_let_is_full(k: Nat): in_let(k) = Pinned(Succ(k), refl) { refl }
+fn given(k: Nat) -> Pinned { Pinned(k, same := refl) }
 ");
 }
 
@@ -442,4 +445,122 @@ record Three { a: Nat, b: Nat := 0, c: Nat }
 fn two() -> Three { Three(1, 2, 3, 4) }
 ");
     assert!(error.contains("by position"), "{error}");
+}
+
+// -- parameter defaults (§9.6) -----------------------------------------------
+
+const SECOND: &str = "
+fn seven() -> Nat { 7 }
+fn second(a: Nat, b: Nat := seven()) -> Nat { b }
+";
+
+/// A defaulted parameter has no positional slot (§9.2): `second(1)` is
+/// `second(1, b := seven())`, proved by `refl` against both the full
+/// spelling and the value, and the value is the *default's* (7) rather than
+/// the positional argument's, so a slot mix-up cannot pass. A named argument
+/// overrides it, and `@` passes it positionally.
+#[test]
+fn a_defaulted_parameter_has_no_positional_slot() {
+    ok(&format!("{SECOND}
+theorem short(): second(1) = 7 {{ refl }}
+theorem is_full(): second(1) = second(1, b := seven()) {{ refl }}
+theorem overridden(): second(1, b := 2) = 2 {{ refl }}
+theorem reordered(): second(b := 2, a := 1) = 2 {{ refl }}
+theorem at_call(): @second(1, 3) = 3 {{ refl }}
+theorem neutral(k: Nat): second(k) = 7 {{ refl }}
+"));
+}
+
+/// The default is checked at the parameter's domain *as the call
+/// instantiates it*: `same: x = x` becomes `True = True`, `a = a` at an open
+/// `A`, and `Succ(k) = Succ(k)` at a neutral argument. In checking position
+/// too, where the call's own type is the expected one.
+#[test]
+fn a_default_is_checked_at_the_instantiated_domain() {
+    ok("
+inductive Bool { False, True }
+fn first<A>(x: A, y: A, same: x = x := refl) -> A { x }
+theorem closed(): first(True, False) = True { refl }
+theorem open<A>(a: A, b: A): first(a, b) = a { refl }
+theorem neutral(k: Nat): first(Succ(k), k) = Succ(k) { refl }
+fn checked(k: Nat) -> Nat { first(k, Zero) }
+");
+}
+
+/// A method call fills the receiver and leaves the default to fill itself.
+#[test]
+fn a_method_call_leaves_the_default_to_fill_itself() {
+    ok("
+fn seven() -> Nat { 7 }
+inductive Holder { Hold(n: Nat) }
+fn Holder::get(self h: Holder, extra: Nat := seven()) -> Nat { extra }
+theorem by_default(): Hold(1).get() = 7 { refl }
+theorem by_name(): Hold(1).get(extra := 2) = 2 { refl }
+");
+}
+
+/// §9.4: a default's names resolve where the declaration was written. A
+/// caller's local `seven` would make the dynamically scoped reading of
+/// `seven()` an application of a `Nat` — and a caller's local `trivial`
+/// would be a `Nat` where a proof of `True` is due.
+#[test]
+fn a_callers_locals_cannot_capture_a_defaults_names() {
+    ok(&format!("{SECOND}
+fn shadowing(seven: Nat) -> Nat {{ second(seven) }}
+theorem still_seven(): shadowing(1) = 7 {{ refl }}
+fn trivially(n: Nat, h: True := trivial) -> Nat {{ n }}
+fn caller(trivial: Nat) -> Nat {{ trivially(trivial) }}
+"));
+}
+
+/// The same rule across modules: the user module's own `witness` does not
+/// change the declaring module's default.
+#[test]
+fn a_parameter_default_resolves_in_the_declaring_module() {
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    let declaring = "fn witness() -> Nat { 0 }\nfn extra(n: Nat, w: Nat := witness()) -> Nat { w }";
+    e.elab_module_source("declaring", declaring).unwrap_or_else(|err| panic!("{}", err.render(declaring)));
+    let user = "import declaring::{extra};\nfn witness() -> Nat { 1 }\ntheorem zero(): extra(5) = 0 { refl }";
+    e.elab_module_source("user", user).unwrap_or_else(|err| panic!("{}", err.render(user)));
+}
+
+/// A default that does not give the parameter's type at this call is
+/// refused at the call, naming the parameter and the way out; the positive
+/// call beside it is the control.
+#[test]
+fn a_parameter_default_that_fails_is_refused_at_the_call() {
+    let error = bad("
+inductive Yes { Holds }
+inductive No { Fails }
+fn IsZero(n: Nat) -> Type { match n { Zero => Yes, Succ(_) => No } }
+fn zeroed(n: Nat, zero: IsZero(n) := Holds) -> Nat { n }
+fn fine() -> Nat { zeroed(0) }
+fn wrong() -> Nat { zeroed(5) }
+");
+    assert!(error.contains("`zeroed`'s `zero` was left to its default") && error.contains("zero := "), "{error}");
+    assert!(error.starts_with("7:"), "the refusal points at the call in `wrong`: {error}");
+}
+
+/// Positional arguments past the parameters that take one are refused
+/// rather than read as the defaulted one.
+#[test]
+fn a_positional_argument_cannot_fill_a_default() {
+    let error = bad(&format!("{SECOND}\ntheorem two(): second(1, 2) = 2 {{ refl }}"));
+    assert!(error.contains("by position") && error.contains("b := "), "{error}");
+}
+
+/// The declaration-side refusals: a default on an implicit or on `self`
+/// (two filling disciplines on one slot, or a slot the receiver always
+/// fills), and a default that mentions a parameter, which needs the call's
+/// arguments by name (issues/parameter-defaults-mention-parameters.md).
+#[test]
+fn declaration_side_refusals() {
+    let error = bad("fn f({b: Nat := 0}) -> Nat { b }");
+    assert!(error.contains("already filled by unification"), "{error}");
+    let error = bad("inductive Holder { Hold(n: Nat) }\nfn Holder::get(self h: Holder := Hold(0)) -> Nat { 0 }");
+    assert!(error.contains("`self` cannot have a default"), "{error}");
+    let error = bad("fn f(n: Nat, k: Nat := n) -> Nat { k }");
+    assert!(error.contains("mentions the parameter `n`"), "{error}");
+    // `:= infer` is still the solver, not a default naming `infer`.
+    ok("fn f(n: Nat, h: True := infer) -> Nat { n }\nfn g() -> Nat { f(1) }");
 }

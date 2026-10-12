@@ -22,7 +22,7 @@ use heather_syntax::{
     RecordPatField, SlotPath, Solver, Span, Stmt, Ty, TyKind, TyParam,
 };
 
-use crate::application::{ParamMeta, Skel, SkelBinder};
+use crate::application::{ParamDefault, ParamMeta, Skel, SkelBinder};
 use crate::datarepr::{CtorView, DatareprInfo, FieldView, ImplEntry, Obligation, Provenance};
 use crate::gendefs::{GenDef, SpineCodes, TyCodeFn, WfSlots};
 use crate::inductive::{Ctor, FieldKind, IdxPat, IdxTy, Inductive};
@@ -33,8 +33,8 @@ use crate::resolve::DerivedInst;
 use crate::slots::Slot;
 use crate::traits::{ClassInfo, DesignationInfo, EvidenceRule, InstanceInfo};
 
-const MAGIC: &[u8; 8] = b"HTHMOD\0\x0b";
-const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x0a";
+const MAGIC: &[u8; 8] = b"HTHMOD\0\x0c";
+const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x0b";
 
 /// Hard limits applied before any decoded collection or string allocation.
 /// The loader may choose a smaller policy; these defaults are deliberately
@@ -1241,6 +1241,7 @@ fn get_block(r: &mut Reader<'_>) -> Result<Block, ModuleImageDecodeError> {
 fn put_param(w: &mut Writer, param: &Param) {
     w.string(&param.name); put_ty(w, &param.ty); w.bool(param.implicit); w.bool(param.is_self);
     w.option(param.solver.as_ref(), |w, solver| match solver { Solver::Infer => w.byte(0) });
+    w.option(param.default.as_deref(), put_expr);
     w.byte(match param.origin {
         ParamOrigin::Written => 0, ParamOrigin::InlineConstraint => 1, ParamOrigin::Assuming => 2,
     });
@@ -1256,12 +1257,13 @@ fn get_param(r: &mut Reader<'_>) -> Result<Param, ModuleImageDecodeError> {
         0 => Ok(Solver::Infer),
         tag => Err(ModuleImageDecodeError::InvalidTag { sort: "solver", tag }),
     })?;
+    let default = r.option(|r| Ok(Box::new(get_expr(r)?)))?;
     let origin = match r.byte()? {
         0 => ParamOrigin::Written, 1 => ParamOrigin::InlineConstraint, 2 => ParamOrigin::Assuming,
         tag => return Err(ModuleImageDecodeError::InvalidTag { sort: "parameter origin", tag }),
     };
     Ok(Param {
-        name, ty, implicit, is_self, solver, origin,
+        name, ty, implicit, is_self, solver, default, origin,
         symbol: r.option(Reader::string)?, span: get_span(r)?,
     })
 }
@@ -1349,6 +1351,10 @@ fn get_skel(r: &mut Reader<'_>) -> Result<Skel, ModuleImageDecodeError> {
 fn put_param_meta(w: &mut Writer, param: &ParamMeta) {
     w.string(&param.name); w.bool(param.implicit); w.bool(param.is_type); w.bool(param.is_self);
     w.option(param.skel.as_deref(), put_skel); w.option(param.solver.as_deref(), put_ty);
+    w.option(param.default.as_deref(), |w, default| {
+        put_expr(w, &default.expr); put_scope(w, &default.scope);
+        w.string(&default.owner); w.usize(default.index);
+    });
 }
 
 fn get_param_meta(r: &mut Reader<'_>) -> Result<ParamMeta, ModuleImageDecodeError> {
@@ -1356,6 +1362,10 @@ fn get_param_meta(r: &mut Reader<'_>) -> Result<ParamMeta, ModuleImageDecodeErro
         name: r.string()?, implicit: r.bool()?, is_type: r.bool()?, is_self: r.bool()?,
         skel: r.option(|r| Ok(Rc::new(get_skel(r)?)))?,
         solver: r.option(|r| Ok(Rc::new(get_ty(r)?)))?,
+        default: r.option(|r| Ok(Rc::new(ParamDefault {
+            expr: get_expr(r)?, scope: Rc::new(get_scope(r)?),
+            owner: r.string()?, index: r.usize()?,
+        })))?,
     })
 }
 

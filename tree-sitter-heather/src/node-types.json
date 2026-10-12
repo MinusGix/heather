@@ -2501,6 +2501,16 @@
     "type": "field",
     "named": true,
     "fields": {
+      "default": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          }
+        ]
+      },
       "name": {
         "multiple": false,
         "required": true,
@@ -4988,6 +4998,16 @@
     "type": "parameter_run",
     "named": true,
     "fields": {
+      "default": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          }
+        ]
+      },
       "type": {
         "multiple": false,
         "required": true,

@@ -181,7 +181,7 @@ module.exports = grammar({
     ),
     parameter_run: $ => seq(
       commaSep1($.parameter_name), ':', field('type', $._expression),
-      optional(seq(':=', 'infer')),
+      optional(seq(':=', choice('infer', field('default', $._expression)))),
     ),
     parameter_name: $ => seq(optional('self'), field('name', $.identifier), optional(seq('as', $.operator))),
     binder_group: $ => seq('(', commaSep1($.parameter_run), ')'),
@@ -210,7 +210,10 @@ module.exports = grammar({
     ),
     field_parameters: $ => seq('(', commaSep($.field), optional(','), ')'),
     field_list: $ => seq('{', commaSep($.field), optional(','), '}'),
-    field: $ => seq(field('name', $.identifier), ':', field('type', $._expression)),
+    field: $ => seq(
+      field('name', $.identifier), ':', field('type', $._expression),
+      optional(seq(':=', field('default', $._expression))),
+    ),
 
     instance_body: $ => seq('{', choice(
       repeat1(choice($.function_declaration, $.theorem_declaration)),

@@ -95,9 +95,9 @@ impl Elaborator {
     }
 
     /// A defaulted field, filled: its default checked at the field's type as
-    /// this construction instantiates it. The default sees that goal and
-    /// nothing else — no local of the construction is in its scope, and its
-    /// names resolve where the record was declared — so a caller's names
+    /// this construction instantiates it. The default sees that goal and the
+    /// construction's hypotheses by type, but none of its locals by name, and
+    /// its names resolve where the record was declared — so a caller's names
     /// cannot change what it means (docs/named-arguments-design.md §9.4).
     pub(crate) fn elab_field_default(&self, cx: &Cx, args: &[Expr], expected: &Type, lvl: &Level, span: Span) -> R<Term> {
         let number = |k: usize| match args.get(k).map(|arg| &arg.kind) {
@@ -115,18 +115,12 @@ impl Elaborator {
             return err("internal field default names a field with none", span);
         };
         let goal = self.spell_type_source(cx, expected).or_else(|| self.spell_type(cx, expected)).unwrap_or_else(|| "its type".into());
-        // The goal is moved into the empty context as it stands, which is
-        // right only when the construction has no locals: one with locals
-        // would need its type closed over them first.
-        if !cx.names.is_empty() {
-            return err(
-                format!("`{field}` was left to its default, but this construction is under local bindings, \
-                    where a default cannot run yet; give it by name (`{field} := …`)"),
-                span,
-            );
-        }
         let _scope = self.use_inductive_scope(&ind);
-        self.elab_check(&Cx::empty(), default, expected, lvl).map_err(|error| crate::ElabError::Elab {
+        // The goal is open in the construction's locals, so the default is
+        // checked under them — renamed out of reach, so that a tactic sees each
+        // hypothesis and no local can capture one of the default's names
+        // (`Cx::hygienic`; docs/named-arguments-design.md §9.6).
+        self.elab_check(&cx.hygienic(), default, expected, lvl).map_err(|error| crate::ElabError::Elab {
             msg: format!("`{field}` was left to its default, which did not prove `{goal}` here: {}; \
                 give it by name (`{field} := …`)", match error {
                     crate::ElabError::Elab { msg, .. } => msg,
