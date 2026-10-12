@@ -1867,6 +1867,7 @@ impl Elaborator {
                         implicit: true,
                         is_self: false,
                         solver: None,
+                        default: None,
                         origin: heather_syntax::ParamOrigin::Written,
                         // The generated index binder is not a declaring
                         // occurrence the user wrote, and a class's own `as`
@@ -1922,6 +1923,7 @@ impl Elaborator {
                     implicit: true,
                     is_self: false,
                     solver: None,
+                    default: None,
                     origin: heather_syntax::ParamOrigin::Written,
                     symbol: None,
                     span: p.span,

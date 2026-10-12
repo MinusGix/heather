@@ -33,7 +33,7 @@
 //!                                     -- what a symbol means at a carrier
 //!                                     (docs/operators-onto-classes-design.md)
 //! decl    := ("fn"|"theorem") name tyvars? ("requires" ibind ("," ibind)*)?
-//!            "(" param* ")" …          -- param := … (":=" "infer")?
+//!            "(" param* ")" …          -- param := … (":=" ("infer" | expr))?
 //!            "{" (decl* | ifield ("," ifield)* ","?) "}"
 //! ibind   := name ":" type
 //! ifield  := name ":=" expr
@@ -703,6 +703,7 @@ impl Parser {
                 implicit: true,
                 is_self: false,
                 solver: Some(Solver::Infer),
+                default: None,
                 origin: ParamOrigin::Assuming,
                 symbol: None,
                 span,
@@ -1229,6 +1230,7 @@ impl Parser {
                 implicit: true,
                 is_self: false,
                 solver: Some(Solver::Infer),
+                default: None,
                 origin: if named { ParamOrigin::Written } else { ParamOrigin::InlineConstraint },
                 symbol: None,
                 span,
@@ -1405,6 +1407,7 @@ impl Parser {
             implicit: true,
             is_self: false,
             solver: Some(Solver::Infer),
+            default: None,
             origin: ParamOrigin::InlineConstraint,
             symbol: None,
             span,
@@ -1565,6 +1568,7 @@ impl Parser {
                     implicit: false,
                     is_self: false,
                     solver: None,
+                    default: None,
                     origin: ParamOrigin::Written,
                     symbol,
                     span: nsp.join(ty.span),
@@ -1845,47 +1849,63 @@ impl Parser {
             let ty = self.ty()?;
             let mut span = names[0].1.join(ty.span);
             // `hx: P := infer` — a solver default
-            // (docs/traits-layer2-design.md §1). Unambiguous here: nothing
-            // else follows a parameter's type with `:=`.
+            // (docs/traits-layer2-design.md §1) — or, with any other
+            // expression after the `:=`, a parameter default
+            // (docs/named-arguments-design.md §9.1). Unambiguous here: nothing
+            // else follows a parameter's type with `:=`. `infer` stays the
+            // solver keyword, so it is not a default naming something else.
             let mut solver = None;
+            let mut default = None;
             if matches!(self.peek(), TokKind::ColonEq) {
                 let eq = self.bump().span;
-                let (sname, ssp) = self.ident("a solver name (`:= infer`)")?;
-                if sname != "infer" {
-                    return Err(ParseError {
-                        msg: format!(
-                            "`{sname}` is not a solver: `infer` is the only one \
-                             (docs/traits-design.md §8)"
-                        ),
-                        span: ssp,
-                    });
-                }
+                let solver_kw = matches!(self.peek(), TokKind::Ident(n) if n == "infer")
+                    && matches!(self.nth(1), TokKind::Comma | TokKind::RParen | TokKind::RBrace);
+                let filled = if solver_kw {
+                    let ssp = self.bump().span;
+                    solver = Some(Solver::Infer);
+                    ssp
+                } else {
+                    let e = self.expr()?;
+                    let esp = e.span;
+                    default = Some(Box::new(e));
+                    esp
+                };
                 if implicit {
                     return Err(ParseError {
-                        msg: "an implicit parameter is already filled by unification: \
-                              `:= infer` is the other filling discipline, and a \
-                              parameter has one"
-                            .into(),
-                        span: eq.join(ssp),
+                        msg: if solver.is_some() {
+                            "an implicit parameter is already filled by unification: \
+                             `:= infer` is the other filling discipline, and a \
+                             parameter has one"
+                                .into()
+                        } else {
+                            "an implicit parameter is already filled by unification: \
+                             a default is another filling discipline, and a parameter \
+                             has one. Drop the braces: a defaulted parameter has no \
+                             positional slot either (docs/named-arguments-design.md §9.2)"
+                                .into()
+                        },
+                        span: eq.join(filled),
                     });
                 }
                 if names.iter().any(|(_, _, s, _)| *s) {
                     return Err(ParseError {
-                        msg: "`self` cannot have a solver default: its argument is the \
-                              receiver, which is never omitted"
-                            .into(),
-                        span: eq.join(ssp),
+                        msg: format!(
+                            "`self` cannot have {}: its argument is the receiver, which \
+                             is never omitted",
+                            if solver.is_some() { "a solver default" } else { "a default" }
+                        ),
+                        span: eq.join(filled),
                     });
                 }
-                solver = Some(Solver::Infer);
-                span = span.join(ssp);
+                span = span.join(filled);
             }
             if implicit {
                 span = span.join(self.expect(&TokKind::RBrace, "`}` to close implicit parameter")?);
             }
             // A solver parameter has no positional slot: it is implicit, and
-            // `@f(…)` is how it is passed by hand (§1).
-            let implicit = implicit || solver.is_some();
+            // `@f(…)` is how it is passed by hand (§1). A defaulted one is
+            // the same (docs/named-arguments-design.md §9.2).
+            let implicit = implicit || solver.is_some() || default.is_some();
             for (name, nsp, is_self, symbol) in names {
                 params.push(Param {
                     name,
@@ -1893,6 +1913,7 @@ impl Parser {
                     implicit,
                     is_self,
                     solver,
+                    default: default.clone(),
                     origin: ParamOrigin::Written,
                     symbol,
                     span: nsp.join(span),

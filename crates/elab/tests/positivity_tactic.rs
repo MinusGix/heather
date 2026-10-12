@@ -192,3 +192,52 @@ fn a_local_named_positivity_is_an_ordinary_name() {
     ok("theorem shadow(n: Nat, positivity: 0 < n): 0 < n { positivity }\n");
 }
 
+
+// -- as a parameter or field default (docs/named-arguments-design.md §9.6) --
+
+const DEFAULTS: &str = "theorem by_omega(n: Nat, h: 0 < n := omega): 0 < n { h }
+theorem by_positivity(n: Nat, h: 0 < n := positivity): 0 < n { h }
+";
+
+#[test]
+fn a_tactic_default_searches_the_callers_hypotheses() {
+    // The goal is the call's (`0 < k`, `0 < x * y`), and the hypotheses are
+    // the caller's: a literal, a neutral operand with a linear fact, a
+    // product the rules split, and a checking position inside a `let`.
+    ok(&format!("{DEFAULTS}
+theorem lit(): 0 < 5 {{ by_omega(5) }}
+theorem linear(k: Nat, hk: 2 < k): 0 < k {{ by_omega(k) }}
+theorem product(x, y: Nat, px: 0 < x, py: 0 < y): 0 < x * y {{ by_positivity(x * y) }}
+theorem in_let(k: Nat): 0 < k + 1 {{ let p = by_positivity(k + 1); p }}
+theorem by_name(k: Nat, hk: 0 < k): 0 < k {{ by_omega(k, h := hk) }}
+"));
+    // The negative control: no hypothesis gives `0 < k`.
+    let e = bad(&format!("{DEFAULTS}theorem none(k: Nat): 0 < k {{ by_omega(k) }}\n"));
+    assert!(e.contains("`by_omega`'s `h` was left to its default") && e.contains("h := "), "{e}");
+}
+
+#[test]
+fn a_callers_local_cannot_shadow_a_defaults_tactic() {
+    // In the caller, `omega` and `positivity` are locals of type `Nat`; the
+    // defaults still mean the tactics, because their names resolve where
+    // they were written.
+    ok(&format!("{DEFAULTS}
+fn shadow(omega, positivity: Nat, k: Nat, hk: 0 < k) -> Nat {{
+    let a = by_omega(k);
+    let b = by_positivity(k);
+    k
+}}
+"));
+}
+
+#[test]
+fn a_field_default_tactic_runs_under_the_constructions_locals() {
+    ok("record Positive { value: Nat, pos: 0 < value := omega }
+fn make(k: Nat, hk: 0 < k) -> Positive { Positive(k) }
+fn bump(k: Nat) -> Positive { Positive(k + 1) }
+");
+    let e = bad("record Positive { value: Nat, pos: 0 < value := omega }
+fn make(k: Nat) -> Positive { Positive(k) }
+");
+    assert!(e.contains("`pos` was left to its default"), "{e}");
+}

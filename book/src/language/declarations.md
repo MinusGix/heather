@@ -36,6 +36,24 @@ fn use(xs: [Nat; 2]) -> [Nat; 2] { keep_length(xs) }
 fn explicit(xs: [Nat; 2]) -> [Nat; 2] { @keep_length(2, xs) }
 ```
 
+Any other expression after `:=` is a **default**. A defaulted parameter has
+no positional slot: a call that leaves it out gets the default, and a named
+argument overrides it. The default is checked at the call, against the
+parameter's type with the call's arguments filled in. Its names mean what they
+mean at the declaration, and a tactic default such as `omega` or `positivity`
+can use the caller's hypotheses.
+
+```text
+fn second(a: Nat, b: Nat := 0) -> Nat { b }
+theorem pos(n: Nat, h: 0 < n := omega): 0 < n { h }
+
+second(1)            // second(1, b := 0)
+second(1, b := 2)
+pos(k)               // omega proves 0 < k from the caller's facts
+```
+
+A default may not mention another parameter yet.
+
 A parameter defaulted with `:= infer` is filled by instance resolution. A
 class constraint can also be written with `requires` or inline on a type
 parameter:

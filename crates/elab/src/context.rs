@@ -174,6 +174,65 @@ impl Cx {
         }
     }
 
+    /// This context with every local **renamed out of reach**: the binders
+    /// and aliases keep their types, positions and order, but each is renamed
+    /// to a reserved `__caller_<name>` spelling (a hidden `#` binder stays
+    /// hidden), and the name-keyed scaffolding — dictionaries, operator
+    /// symbols, the self-reference — is dropped. The new names are still
+    /// *source*, which is what lets a tactic that reconstructs a certificate
+    /// as source (`omega`) cite a hypothesis; the `__` prefix is the same
+    /// reserved spelling `omega`'s own renaming uses
+    /// (`omega_cert::source_context`).
+    ///
+    /// Where a default runs (docs/named-arguments-design.md §9.4): its goal
+    /// is the caller's, open in the caller's locals, so it is checked here;
+    /// its *names* must resolve where it was declared, so none of the
+    /// caller's may capture one. A tactic still sees every hypothesis — by
+    /// type, which is how `omega` and `positivity` search — so a default
+    /// can run a search over the surrounding context without the caller's
+    /// spelling meaning anything to it.
+    pub(crate) fn hygienic(&self) -> Cx {
+        // The written name stays legible inside the reserved spelling, so a
+        // tactic's diagnostic still says which hypothesis it meant; two
+        // locals that shared a name still do, and shadow as they did.
+        let hide = |name: &str| {
+            if name.starts_with('#') { name.to_string() } else { format!("__caller_{name}") }
+        };
+        Cx {
+            dot_receiver: None,
+            names: self.names.iter().map(|n| hide(n)).collect(),
+            gamma: self.gamma.clone(),
+            skels: self.skels.clone(),
+            selfref: None,
+            guard: None,
+            generalized: None,
+            aliases: self
+                .aliases
+                .iter()
+                .map(|a| {
+                    Rc::new(Alias {
+                        name: hide(&a.name),
+                        depth: a.depth,
+                        term: Rc::clone(&a.term),
+                        ty: a.ty.clone(),
+                        level: a.level.clone(),
+                        skel: a.skel.clone(),
+                    })
+                })
+                .collect(),
+            tyvars: self
+                .tyvars
+                .iter()
+                .map(|t| TyVar { name: hide(&t.name), ..t.clone() })
+                .collect(),
+            dicts: vec![],
+            index_ambiguity: vec![],
+            op_locals: vec![],
+            meta: None,
+            quoted: self.quoted,
+        }
+    }
+
     pub(crate) fn with_dot_receiver(&self, recv: &Expr) -> Cow<'_, Cx> {
         if !matches!(recv.kind, ExprKind::Dot { .. }) || crate::has_free_slots(recv) {
             return Cow::Borrowed(self);

@@ -21,7 +21,7 @@ mod polymorphic;
 pub(crate) use callable::subject_index_in;
 mod named;
 pub(crate) use named::{
-    permute_by_name_refs, refuse_named, resolve_constructor_arguments, resolve_named,
+    PARAM_DEFAULT, permute_by_name_refs, refuse_named, resolve_constructor_arguments, resolve_named,
 };
 
 /// The state-free schedule for one implicit-inserting call.
@@ -460,6 +460,22 @@ pub(crate) struct ParamMeta {
     pub(crate) skel: Option<Rc<Skel>>,
     /// A `requires`/`:= infer` parameter filled by trait resolution.
     pub(crate) solver: Option<Rc<Ty>>,
+    /// A `p: T := e` parameter filled from its default when a call leaves
+    /// it out (docs/named-arguments-design.md §9).
+    pub(crate) default: Option<Rc<ParamDefault>>,
+}
+
+/// A parameter's default as the declaration wrote it: the expression and
+/// the name-resolution scope it was written in, which is where its names
+/// resolve at every call (docs/named-arguments-design.md §9.4).
+pub(crate) struct ParamDefault {
+    pub(crate) expr: Expr,
+    pub(crate) scope: Rc<crate::names::Scope>,
+    /// The declaring global's key and this parameter's index in its table:
+    /// what a call's omitted-default marker carries, so the default is found
+    /// again without resolving any name at the call.
+    pub(crate) owner: String,
+    pub(crate) index: usize,
 }
 
 /// Synthesize the parameter table a value callee offers from its skeleton.
@@ -475,6 +491,7 @@ pub(crate) fn skel_params(skel: &Skel) -> Rc<Vec<ParamMeta>> {
                 is_self: false,
                 skel: b.dom.clone(),
                 solver: None,
+                default: None,
             })
             .collect(),
     )
@@ -1427,6 +1444,7 @@ mod tests {
                 is_self: false,
                 skel: None,
                 solver: None,
+                default: None,
             },
             ParamMeta {
                 name: "value".into(),
@@ -1435,6 +1453,7 @@ mod tests {
                 is_self: false,
                 skel: None,
                 solver: None,
+                default: None,
             },
         ]);
         let argument = Expr {

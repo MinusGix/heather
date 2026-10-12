@@ -604,10 +604,74 @@ fields as it says it must be:
 - names resolve in the record's declaring scope, and none of the
   construction's locals are visible to it.
 
-One restriction remains: a default runs only where the construction has no
-local bindings, because moving the goal out of a non-empty context needs it
-closed over those locals first (issues/field-defaults-under-locals.md).
-Parameter defaults, `fn f(b: Nat := 0)`, remain this section's.
+One restriction remained: a default ran only where the construction had no
+local bindings (issues/field-defaults-under-locals.md). §9.6 lifted it.
+
+### 9.6 As landed for parameters (2026-10-12)
+
+```heather
+fn second(a: Nat, b: Nat := seven()) -> Nat { b }
+theorem divides(n: Nat, h: 0 < n := omega): 0 < n { h }
+
+second(1)                 // second(1, b := seven())
+second(1, b := 2)         // the override
+divides(k)                // omega, over the caller's hypotheses about k
+```
+
+§9.1 and §9.2 hold as written: after `:=`, `infer` is the solver and any
+other expression is a default, and a defaulted parameter is implicit with no
+positional slot. A default is refused on a `{}`-implicit and on `self`.
+
+**The mechanism is a named argument, not a `DefaultOb`.** §9.3 planned a
+fourth obligation beside `ResolveOb`. What landed is smaller:
+`resolve_named` fills each omitted defaulted parameter with an internal
+marker (`application::PARAM_DEFAULT`, carrying the declaring global's key and
+the parameter's index) and flips its mask bit. From there it is a named
+argument the caller did not write. The spine walkers check it at the
+parameter's domain with the earlier arguments substituted, in declaration
+order, and defer it, since the marker is checking-only, until that domain has
+no unsolved metas. The ordering §9.3 wanted (after resolutions, before
+deferred arguments that depend on it) falls out of the existing
+retry-to-fixpoint loop. A call that names nothing and leaves no default takes
+the path it took before, cloning nothing.
+
+**§9.4, answered.** Neither mechanism as described. A default is checked:
+
+- against the call's instantiated domain, which is open in the caller's
+  locals, so it is checked in the caller's context;
+- with that context made **hygienic** (`Cx::hygienic`): each local and alias
+  is renamed to a reserved `__caller_<name>` spelling, and the name-keyed
+  scaffolding (dictionaries, operator symbols, the self-reference) is
+  dropped;
+- with names resolving in the declaration's scope, which `ParamMeta` stores
+  beside the default.
+
+So `h: True := trivial` means the declaring module's `trivial` even when the
+caller has a local `trivial`, and `h: 0 < n := omega` or `:= positivity`
+searches the caller's hypotheses, which a tactic reads by type. This is the
+"default that runs a tactic search over the surrounding context" the user
+asked for (2026-08-16), with no dynamic scoping. The renamed locals stay
+*source* spellings, because `omega` reconstructs its certificate as source.
+The `__` prefix is the same reserved spelling `omega`'s own renaming uses.
+
+Record fields use the same check, so a field default now runs under local
+bindings too.
+
+**What a default cannot do yet**, each with an owner:
+
+- **Mention a parameter** (`k: Nat := n`). In the hygienic context a
+  parameter is not a name: the default sees the domain `0 < 5`, not `0 < n`.
+  Refused at the declaration
+  (issues/parameter-defaults-mention-parameters.md, which sketches binding
+  the earlier arguments as aliases).
+- **Fail at the call when only the kernel sees it.** A `refl` default whose
+  endpoints differ at some call is reported at the declaration
+  (issues/default-kernel-failure-reported-at-declaration.md). An elaboration
+  failure is reported at the call, naming the parameter and `name := …`.
+
+**A bare reference is the whole function.** `apply(second)` passes
+`Nat -> Nat -> Nat`: a default fills at a call, as a solver parameter does,
+and `λ a => second(a)` is the spelling that fills it.
 
 ## 10. Out of scope, with homes
 

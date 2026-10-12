@@ -356,10 +356,15 @@ fn infer_is_refused_on_an_implicit_parameter() {
     assert!(e.contains("filling discipline") || e.contains("infer"), "{e}");
 }
 
+/// `infer` is the only solver; any other expression after `:=` is a
+/// parameter default (docs/named-arguments-design.md §9.6), which runs at the
+/// call. Here the call runs `omega` with its certificate library absent, and
+/// the refusal names both the default and the missing import.
 #[test]
-fn an_unknown_solver_is_refused_by_name() {
-    let e = bad("theorem t(n: Nat, h: n = n := omega) : n = n { h }\n");
-    assert!(e.contains("omega") && e.contains("solver"), "{e}");
+fn a_non_solver_after_colon_eq_is_a_default() {
+    ok("theorem t(n: Nat, h: n = n := omega) : n = n { h }\n");
+    let e = bad("theorem t(n: Nat, h: n = n := omega) : n = n { h }\ntheorem u(k: Nat): k = k { t(k) }\n");
+    assert!(e.contains("left to its default") && e.contains("import omega"), "{e}");
 }
 
 /// Candidates keyed at the goal carrier's own head are tried before the

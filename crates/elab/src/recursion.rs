@@ -711,6 +711,7 @@ pub(crate) fn elab_self_call(
                 is_self: false,
                 skel: None,
                 solver: None,
+                default: None,
             })
             .collect();
         let varied: Vec<Expr> = varied.into_iter().cloned().collect();

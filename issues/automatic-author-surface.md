@@ -31,8 +31,8 @@ needle immediate.
 
 - [[split-all-through-recursive-definitions]]: unfolding a recursive
   specification leaves raw recursor terms.
-- [[field-defaults-under-locals]]: defaults run only where a construction
-  has no locals.
+- [[field-defaults-under-locals]]: defaults ran only where a construction
+  had no locals (closed 2026-10-12: they now run under locals).
 - [[byte-vocabulary-for-native-programs]]: `==`, `<` and literals at
   `BitVec(8)`.
 - [[fold-programs-carry-a-needle]]: the read profile still threads a needle

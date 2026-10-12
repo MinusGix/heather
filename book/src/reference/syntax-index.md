@@ -37,6 +37,7 @@ block. Most apparent keywords are contextual.
 type-params   ::= < A, B : Type<n>, A : Class, ... >
 params        ::= ( x, y : T, {implicit : U}, self receiver : R, ... )
 solver-param  ::= evidence : Proposition := infer
+default-param ::= name : T := expression
 requires      ::= requires name : Class<A>, Class<B>, ...
 
 call          ::= expression ( positional..., named := expression... )

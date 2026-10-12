@@ -522,6 +522,13 @@ pub struct Param {
     /// spellings desugar here, and a solver parameter is always `implicit`
     /// (it has no positional slot; `@f(…)` is how one is passed by hand).
     pub solver: Option<Solver>,
+    /// A **parameter default** (docs/named-arguments-design.md §9): written
+    /// `b: T := e` with any expression but `infer`. Like a solver parameter
+    /// it has no positional slot and is always `implicit`; a call that leaves
+    /// it out gets `e` checked at the parameter's instantiated type, with
+    /// names resolved where the declaration was written, and a named argument
+    /// (`b := …`) overrides it.
+    pub default: Option<Box<Expr>>,
     /// Where this parameter entered the written telescope. Assumption groups
     /// are parser sugar over ordinary solver parameters, but the distinction
     /// remains observable to the advisory unused-assumption lint.

@@ -174,6 +174,6 @@ impl Elaborator {
 
 fn measure_param(name: &str, ty: &Ty, span: Span) -> heather_syntax::Param {
     heather_syntax::Param { name: name.into(), ty: ty.clone(), implicit: false,
-        is_self: false, solver: None, origin: heather_syntax::ParamOrigin::Written,
+        is_self: false, solver: None, default: None, origin: heather_syntax::ParamOrigin::Written,
         symbol: None, span }
 }
