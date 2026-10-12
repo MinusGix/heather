@@ -197,21 +197,17 @@ theorem Rat::add_assoc(x, y, z: Rat): (x + y) + z ≈ x + (y + z) {
 }
 
 theorem Rat::add_zero(x: Rat): x + Rat::zero() ≈ x {
-    let num: (x.num * OfNat(1) + OfNat(0) * x.den.int() = x.num) = omega;
-    Rat::same_of_parts(x + Rat::zero(), x, num, x.den.mul_one_int())
+    Rat::same_of_parts(x + Rat::zero(), x, omega, x.den.mul_one_int())
 }
 
 theorem Rat::mul_one(x: Rat): x * Rat::one() ≈ x {
-    let num: (x.num * OfNat(1) = x.num) = omega;
-    Rat::same_of_parts(x * Rat::one(), x, num, x.den.mul_one_int())
+    Rat::same_of_parts(x * Rat::one(), x, omega, x.den.mul_one_int())
 }
 
 theorem Rat::add_neg(x: Rat): x + Rat::neg(x) ≈ Rat::zero() {
     let flip = x.num.mul_neg_l(x.den.int());
     let gone = Int::zero_mul(x.den.mul(x.den).int());
-    let goal: ((x.num * x.den.int() + (-x.num) * x.den.int()) * OfNat(1)
-        = OfNat(0) * x.den.mul(x.den).int()) = omega;
-    goal
+    omega
 }
 
 // The seven-factor monomial distributivity needs on each side.
@@ -350,43 +346,29 @@ theorem Rat::add_le_mono_r(x, y, z: Rat, h: x <= y): x + z <= y + z {
     let ez = e.mul_shuffle(p, q, r);
     let gl: ((a * r + e * p) * y.den.mul(z.den).int() = (a * r + e * p) * (q * r)) = cong(qr);
     let gr: ((c * r + e * q) * x.den.mul(z.den).int() = (c * r + e * q) * (p * r)) = cong(pr);
-    let goal: ((a * r + e * p) * y.den.mul(z.den).int() <= (c * r + e * q) * x.den.mul(z.den).int())
-        = omega;
-    goal
+    omega
 }
 
 theorem Rat::mul_nonneg(x, y: Rat, hx: Rat::zero() <= x, hy: Rat::zero() <= y): Rat::zero() <= x * y {
-    let hx2: (OfNat(0) * x.den.int() <= x.num * OfNat(1)) = hx;
-    let hy2: (OfNat(0) * y.den.int() <= y.num * OfNat(1)) = hy;
     let zx = Int::zero_mul(x.den.int());
     let zy = Int::zero_mul(y.den.int());
     let ha: (OfNat(0) <= x.num) = omega;
     let hb: (OfNat(0) <= y.num) = omega;
     let prod = OfNat(0).mul_le_mono_r(x.num, y.num, ha, hb);
     let zero = Int::zero_mul(y.num);
-    let goal: (OfNat(0) * x.den.mul(y.den).int() <= (x.num * y.num) * OfNat(1)) = omega;
-    goal
+    omega
 }
 
 // ---------------------------------------------------------------------------
 // The integers inside the rationals.
 
-theorem Rat::ofInt_add(m, n: Int): Rat::ofInt(m + n) ≈ Rat::ofInt(m) + Rat::ofInt(n) {
-    let goal: ((m + n) * OfNat(1) = (m * OfNat(1) + n * OfNat(1)) * OfNat(1)) = omega;
-    goal
-}
+theorem Rat::ofInt_add(m, n: Int): Rat::ofInt(m + n) ≈ Rat::ofInt(m) + Rat::ofInt(n) { omega }
 
 theorem Rat::ofInt_mul(m, n: Int): Rat::ofInt(m * n) ≈ Rat::ofInt(m) * Rat::ofInt(n) { refl }
 
-theorem Rat::ofInt_inj(m, n: Int, h: Rat::ofInt(m) ≈ Rat::ofInt(n)): m = n {
-    let spelled: (m * OfNat(1) = n * OfNat(1)) = h;
-    omega
-}
+theorem Rat::ofInt_inj(m, n: Int, h: Rat::ofInt(m) ≈ Rat::ofInt(n)): m = n { omega }
 
-theorem Rat::ofInt_le(m, n: Int, h: m <= n): Rat::ofInt(m) <= Rat::ofInt(n) {
-    let goal: (m * OfNat(1) <= n * OfNat(1)) = omega;
-    goal
-}
+theorem Rat::ofInt_le(m, n: Int, h: m <= n): Rat::ofInt(m) <= Rat::ofInt(n) { omega }
 
 // ---------------------------------------------------------------------------
 // Inverse. Total, with 0⁻¹ = 0; the field law asks for a nonzero argument.
@@ -414,8 +396,7 @@ theorem Rat::mul_inv_parts(a: Int, d: Pos):
             Succ(k) => λ nonzero => {
                 let den = d.mul_int(Pos(k));
                 let swap = OfNat(Succ(k)).mul_comm(d.int());
-                let goal: ((OfNat(Succ(k)) * d.int()) * OfNat(1) = OfNat(1) * d.mul(Pos(k)).int()) = omega;
-                goal
+                omega
             },
         },
         NegSucc(k) => λ nonzero => {
@@ -423,8 +404,7 @@ theorem Rat::mul_inv_parts(a: Int, d: Pos):
             let flip = NegSucc(k).mul_neg_r(d.int());
             let sign = OfNat(Succ(k)).mul_neg_l(d.int());
             let swap = OfNat(Succ(k)).mul_comm(d.int());
-            let goal: ((NegSucc(k) * -d.int()) * OfNat(1) = OfNat(1) * d.mul(Pos(k)).int()) = omega;
-            goal
+            omega
         },
     }
 }
@@ -451,14 +431,12 @@ theorem Rat::inv_parts_respects(a: Int, p: Pos, c: Int, q: Pos):
                 OfNat(m) => match m {
                     Zero => λ h => refl,
                     Succ(j) => λ h => {
-                        let cross: (OfNat(0) * q.int() = OfNat(Succ(j)) * p.int()) = h;
                         let zero = Int::zero_mul(q.int());
                         let sign = Rat::succ_times_pos(j, p);
                         false_elim(omega)
                     },
                 },
                 NegSucc(j) => λ h => {
-                    let cross: (OfNat(0) * q.int() = NegSucc(j) * p.int()) = h;
                     let zero = Int::zero_mul(q.int());
                     let sign = Rat::negsucc_times_pos(j, p);
                     false_elim(omega)
@@ -467,21 +445,17 @@ theorem Rat::inv_parts_respects(a: Int, p: Pos, c: Int, q: Pos):
             Succ(k) => match c {
                 OfNat(m) => match m {
                     Zero => λ h => {
-                        let cross: (OfNat(Succ(k)) * q.int() = OfNat(0) * p.int()) = h;
                         let zero = Int::zero_mul(p.int());
                         let sign = Rat::succ_times_pos(k, q);
                         false_elim(omega)
                     },
                     Succ(j) => λ h => {
-                        let cross: (OfNat(Succ(k)) * q.int() = OfNat(Succ(j)) * p.int()) = h;
                         let left = p.int().mul_comm(OfNat(Succ(j)));
                         let right = q.int().mul_comm(OfNat(Succ(k)));
-                        let goal: (p.int() * OfNat(Succ(j)) = q.int() * OfNat(Succ(k))) = omega;
-                        goal
+                        omega
                     },
                 },
                 NegSucc(j) => λ h => {
-                    let cross: (OfNat(Succ(k)) * q.int() = NegSucc(j) * p.int()) = h;
                     let left = Rat::succ_times_pos(k, q);
                     let right = Rat::negsucc_times_pos(j, p);
                     false_elim(omega)
@@ -491,28 +465,24 @@ theorem Rat::inv_parts_respects(a: Int, p: Pos, c: Int, q: Pos):
         NegSucc(k) => match c {
             OfNat(m) => match m {
                 Zero => λ h => {
-                    let cross: (NegSucc(k) * q.int() = OfNat(0) * p.int()) = h;
                     let zero = Int::zero_mul(p.int());
                     let sign = Rat::negsucc_times_pos(k, q);
                     false_elim(omega)
                 },
                 Succ(j) => λ h => {
-                    let cross: (NegSucc(k) * q.int() = OfNat(Succ(j)) * p.int()) = h;
                     let left = Rat::negsucc_times_pos(k, q);
                     let right = Rat::succ_times_pos(j, p);
                     false_elim(omega)
                 },
             },
             NegSucc(j) => λ h => {
-                let cross: (NegSucc(k) * q.int() = NegSucc(j) * p.int()) = h;
                 let lsign = OfNat(Succ(k)).mul_neg_l(q.int());
                 let rsign = OfNat(Succ(j)).mul_neg_l(p.int());
                 let lneg = p.int().mul_neg_l(OfNat(Succ(j)));
                 let rneg = q.int().mul_neg_l(OfNat(Succ(k)));
                 let left = p.int().mul_comm(OfNat(Succ(j)));
                 let right = q.int().mul_comm(OfNat(Succ(k)));
-                let goal: ((-p.int()) * OfNat(Succ(j)) = (-q.int()) * OfNat(Succ(k))) = omega;
-                goal
+                omega
             },
         },
     }

@@ -446,3 +446,46 @@ Not covered: an atom equal to another only by unfolding a *different* head
 the specifications' names in typed `let`s. Its six Nat-only helper lemmas
 are gone. The module costs a few times its old cold check, which is the
 folds' certificates.
+
+## 11. Defined propositions and calls that compute to constructors (2026-10-12)
+
+`issues/omega-unfolds-defined-propositions.md`. The rationals client
+(`lib/std/rat.hthr`) restated most goals and hypotheses with a typed `let`
+before calling omega, because each was spelled through a definition. Five
+pieces, all in `crates/elab/src/omega_cert.rs`:
+
+- **A fact whose head is a defined proposition** (`h: Rat::zero() <= x`, a
+  `Rat::Le`) is reflected as the relation it unfolds to
+  (`unfolded_proposition`): the goal side's existing rule, unfolding the head
+  one reduct at a time and stopping at the first relation it reads, then
+  simplifying the arguments as a goal's are. A negation's domain gets the same
+  question. The evidence is still the local's name, and the checker converts
+  its type to the unfolded statement where the certificate uses it. Gated on an applied
+  global that is not an inductive type, so data locals pay nothing.
+- **A goal that unfolds to an equation** (`x ≈ y`, an `=` underneath) is
+  decoded before it is simplified and read; the loop already took `<=`.
+- **A global call whose bounded weak head is `Succ(…)`** (`Pos::val(p)` is
+  `Succ(p.pred)`; `computed_successor`) and **an Int call whose weak head is
+  `OfNat(e)`** (`Pos::int(p)`; `computed_of_nat`) are reflected as that
+  arithmetic, by §2's rule: an arithmetic head and leaves that spell, or the
+  term interns as before. This is a second route beside §2's, ungated by a
+  constructor argument; a call stuck on a match (`bump(b, n)`) still interns.
+- **A field of a call that unfolds to a constructor** (`p.mul(q).pred`,
+  `(x + y).num`; `field_as_put`) is the expression put there: the receiver is
+  unfolded only as far as the pair and the field projected without δ, since
+  the weak head of the whole read unfolds the sum on into its recursor. Nat
+  keeps it on §2's arithmetic rule; Int keeps it when it spells.
+- **A factor that computes to a numeral** (`x.num * Rat::one().num`) scales,
+  on both carriers, as an atom that computes to one is a constant.
+
+Separately, a fact whose equation side is a β-redex (`Int::cong(λ (t: Int) =>
+e * t, p)`) is simplified and retried when the first attempt cannot spell it,
+instead of being skipped. Only that shape is retried.
+
+§5's hazard is narrowed, not absent: an atom such as `Pos::val(p)` is now
+re-spelled as `p.pred + 1`. Every occurrence takes the same route, goal and
+facts alike, so no atom splits; what moves is that a fact stated over the
+unfolded spelling now meets the call. The negative controls are in
+`crates/elab/tests/omega_defined_propositions.rs`: a proposition stuck on a
+match is still skipped, a false claim through a defined fact is refused, and a
+stuck call stays an atom.

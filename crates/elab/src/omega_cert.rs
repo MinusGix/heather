@@ -578,6 +578,54 @@ fn negated_domain(elab: &Elaborator, cx: &Cx, ty: &Type) -> Option<Type> {
         .then(|| (**dom).clone())
 }
 
+/// Whether `ty` is a relation this frontend reflects as stated: `<=`, `<`
+/// or `=` at `Int` or `Nat`, an equality possibly still a code.
+fn reads_as_relation(elab: &Elaborator, cx: &Cx, ty: &Type) -> bool {
+    let decoded = crate::inductive::decoded(ty);
+    relation_args(elab, ty).is_some()
+        || strict_relation_args(elab, ty).is_some()
+        || nat_relation_args(elab, ty).is_some()
+        || nat_strict_relation_args(elab, ty).is_some()
+        || equality_args(elab, cx, &decoded).is_some()
+        || nat_equality_args(elab, cx, &decoded).is_some()
+}
+
+/// Reducts a defined proposition may take to reach a relation: the same
+/// bound the goal side unfolds under.
+const PROPOSITION_UNFOLD_STEPS: u64 = 64;
+
+/// The relation a defined proposition unfolds to
+/// (issues/omega-unfolds-defined-propositions.md): `Rat::Le(x, y)` is
+/// `x.num * y.den.int() <= y.num * x.den.int()`. Its head is unfolded step by
+/// step and the first reduct `reads` accepts is kept, not the weak head
+/// normal form, which would unfold `Le` itself into its recursor; then the
+/// arguments, which arrive as passed (`Rat::zero().num`), are simplified as a
+/// goal's are. Only an applied global that is not a type former is asked: a
+/// local `x: Rat` or `l: List<Int>` is data, and asking it would cost every
+/// call a reduction per binder.
+fn unfolded_proposition(
+    elab: &Elaborator,
+    cx: &Cx,
+    ty: &Type,
+    reads: impl Fn(&Type) -> bool,
+) -> Option<Type> {
+    let Type::El { level, tm } = ty else {
+        return None;
+    };
+    if !head_is_global(tm) || elab.display_tag_of(ty).is_some() {
+        return None;
+    }
+    let oracle = elab.goal_oracle();
+    for reduct in oracle.term_reducts(&cx.gamma, tm, PROPOSITION_UNFOLD_STEPS) {
+        let unfolded = Type::El { level: level.clone(), tm: Rc::new(reduct) };
+        if reads(&unfolded) {
+            let decoded = crate::inductive::decoded(&unfolded);
+            return Some(crate::goal_combinators::simplify_goal(elab, cx, &decoded));
+        }
+    }
+    None
+}
+
 fn dot_args<'a>(elab: &Elaborator, tm: &'a Term) -> Option<(&'a Rc<Term>, &'a Rc<Term>)> {
     let args = named_args(elab, tm, "omega::dot")?;
     let [coeffs, atoms] = args.as_slice() else {
@@ -917,6 +965,18 @@ fn affine_syntax(
                     inner: Box::new(affine_syntax(elab, cx, left, atoms)?),
                 });
             }
+            // A factor that computes to a numeral is that numeral, as an
+            // atom is (`x.num * Pos::one().int()` is `x.num * 1`); the
+            // checker's conversion computes it again.
+            for (factor, inner, factor_on_left) in [(left, right, true), (right, left, false)] {
+                if let Some(factor) = int_value(elab, cx, factor).filter(|value| *value != Z::MIN) {
+                    return Ok(AffineSyntax::Scale {
+                        factor,
+                        factor_on_left,
+                        inner: Box::new(affine_syntax(elab, cx, inner, atoms)?),
+                    });
+                }
+            }
         }
     }
     if let Some(args) = named_args(elab, tm, "int::Int::mod")
@@ -1018,6 +1078,17 @@ fn affine_syntax(
             source: int_ctor(value),
         });
     }
+    if let Some(reduct) = computed_of_nat(elab, cx, tm) {
+        return affine_syntax(elab, cx, &reduct, atoms);
+    }
+    // A field of a call that unfolds to a constructor (`(x + y).num`), read
+    // as the expression put there when that spells.
+    if crate::spelling::proj_of(tm).is_some()
+        && let Some(field) = field_as_put(elab, cx, tm)
+        && int_term_source(elab, cx, &field).is_ok()
+    {
+        return affine_syntax(elab, cx, &field, atoms);
+    }
     if let Some(index) = convertible_atom(elab, cx, tm, atoms, Carrier::Int) {
         return Ok(AffineSyntax::Atom { index, source });
     }
@@ -1033,11 +1104,12 @@ fn affine_syntax(
     Ok(AffineSyntax::Atom { index, source })
 }
 
-/// The integer a global-headed Int term computes to: its bounded weak head
+/// The integer a global-headed Int term, or a field of one, computes to: its bounded weak head
 /// is a constructor whose Nat payload computes to a numeral
 /// ([`SemanticOracle::nat_value`](crate::oracle::SemanticOracle::nat_value)).
 fn int_value(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>) -> Option<Z> {
-    if !head_is_global(tm) {
+    // A field of a call (`Rat::one().num`) computes as the call does.
+    if !head_is_global(projection_path(tm).1) {
         return None;
     }
     let oracle = elab.goal_oracle();
@@ -1145,6 +1217,41 @@ fn projection_reduct(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>, depth: u32) -> O
         return Some(reduct);
     }
     named_arithmetic_shape(elab, cx, &reduct, &[], depth)
+        .or_else(|| named_arithmetic_shape(elab, cx, &field_as_put(elab, cx, tm)?, &[], depth))
+}
+
+/// A field of a call that unfolds to a constructor, read as what was put
+/// there (issues/omega-unfolds-defined-propositions.md): `p.mul(q).pred` is
+/// `p.pred * q.pred + p.pred + q.pred`. The weak head of the whole read would
+/// unfold that sum on into its recursor, so the receiver is unfolded only as
+/// far as the constructor and the field projected without δ, as
+/// `simplify_goal` does for a goal's fields.
+fn field_as_put(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>) -> Option<Rc<Term>> {
+    fn with_receiver(tm: &Rc<Term>, receiver: &Rc<Term>) -> Rc<Term> {
+        let mut out = (**tm).clone();
+        match &mut out {
+            Term::Fst { pair, .. } | Term::FstAt { pair } | Term::Snd { pair, .. } | Term::SndAt { pair } => {
+                *pair = with_receiver(pair, receiver);
+            }
+            _ => return Rc::clone(receiver),
+        }
+        Rc::new(out)
+    }
+    let (_, receiver) = projection_path(tm);
+    if !head_is_global(receiver) {
+        return None;
+    }
+    let oracle = elab.goal_oracle();
+    let unfolded = oracle.whnf_term_bounded(&cx.gamma, receiver).ok()?;
+    if !matches!(unfolded, Term::Pair { .. } | Term::PairAt { .. }) {
+        return None;
+    }
+    let read = with_receiver(tm, &Rc::new(unfolded));
+    let field = Rc::new(oracle.bounded(64).whnf_term_opaque(&cx.gamma, &read).ok()?);
+    if crate::spelling::proj_of(&field).is_some() {
+        return None;
+    }
+    Some(field)
 }
 
 /// The most kernel steps a closed power may cost to be read as its value.
@@ -1266,6 +1373,32 @@ fn nat_affine_syntax_within(
                     inner: Box::new(nat_affine_syntax_within(elab, cx, left, atoms, depth)?),
                 });
             }
+            // A factor that computes to a numeral (`Pos::one().pred`) is that
+            // numeral, as on the Int side; it keeps its own spelling, which
+            // the checker's conversion computes.
+            if let (Some(left_nat), Some(right_nat)) = (left_source, right_source) {
+                for (factor, factor_nat, inner, inner_nat, factor_on_left) in
+                    [(left, &left_nat, right, &right_nat, true), (right, &right_nat, left, &left_nat, false)]
+                {
+                    if matches!(&***factor, Term::Var(_)) {
+                        continue;
+                    }
+                    let Some(value) = elab
+                        .goal_oracle()
+                        .nat_value(&cx.gamma, factor, ATOM_COMPUTATION_STEPS)
+                        .and_then(|value| Z::try_from(value).ok())
+                    else {
+                        continue;
+                    };
+                    return Ok(AffineSyntax::NatScale {
+                        factor: value,
+                        factor_on_left,
+                        factor_nat: factor_nat.clone(),
+                        inner_nat: inner_nat.clone(),
+                        inner: Box::new(nat_affine_syntax_within(elab, cx, inner, atoms, depth)?),
+                    });
+                }
+            }
         }
     }
     if let Some(args) = named_args(elab, tm, "nat::Nat::mod")
@@ -1380,6 +1513,15 @@ fn nat_affine_syntax_within(
         && let Some(named) = reduce_and_name(elab, cx, tm, depth)
     {
         return nat_affine_syntax_within(elab, cx, &named, atoms, depth - 1);
+    }
+    // A call that computes to a successor of something the source names
+    // (issues/omega-unfolds-defined-propositions.md): `Pos::val(p)` is
+    // `Succ(p.pred)`, so it is at least one, and `p.mul(q).val()` reads on
+    // through the field to its arithmetic.
+    if depth > 0
+        && let Some(successor) = computed_successor(elab, cx, tm, depth)
+    {
+        return nat_affine_syntax_within(elab, cx, &successor, atoms, depth - 1);
     }
     if let Some(index) = convertible_atom(elab, cx, tm, atoms, Carrier::Nat) {
         return Ok(AffineSyntax::Atom { index, source });
@@ -1498,6 +1640,33 @@ fn reduce_and_name(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>, depth: u32) -> Opt
     let candidates = recursive_field_candidates(elab, cx, tm);
     let named = named_arithmetic_reduct(elab, cx, tm, &candidates, depth)?;
     (*named != **tm).then_some(named)
+}
+
+/// The bounded weak head of a global call when it is `Succ` of a leaf that
+/// spells, or reaches one by [`named_arithmetic_shape`]'s own reduction.
+/// Anything else, a call stuck on a match among them, stays an atom.
+fn computed_successor(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>, depth: u32) -> Option<Rc<Term>> {
+    if !head_is_global(tm) {
+        return None;
+    }
+    let reduct = Rc::new(elab.goal_oracle().whnf_term_bounded(&cx.gamma, tm).ok()?);
+    if !matches!(&*reduct, Term::Succ(_)) {
+        return None;
+    }
+    named_arithmetic_shape(elab, cx, &reduct, &[], depth)
+}
+
+/// The Int constructor value `OfNat(e)` a global call computes to, when `e`
+/// spells: `Pos::int(p)` is `OfNat(Succ(p.pred))`. The Nat side then reads
+/// `e`, so the call meets the same atoms a Nat fact about them states.
+fn computed_of_nat(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>) -> Option<Rc<Term>> {
+    if !head_is_global(tm) {
+        return None;
+    }
+    let reduct = Rc::new(elab.goal_oracle().whnf_term_bounded(&cx.gamma, tm).ok()?);
+    let payload = of_nat_payload(elab, &reduct)?;
+    nat_term_source(elab, cx, payload).ok()?;
+    Some(reduct)
 }
 
 /// The applied spine of `tm`: its head and its arguments, outermost last.
@@ -2082,7 +2251,50 @@ fn collect_ordinary(
 }
 
 /// Reflect one fact. The caller rolls back its atoms if source spelling fails.
+/// A fact whose head is a defined proposition is reflected as the relation
+/// it unfolds to; its evidence is still the fact's name, which the checker
+/// converts to the unfolded statement at every use.
 fn reflect_ordinary_relation(
+    elab: &Elaborator,
+    cx: &Cx,
+    name: &str,
+    ty: &Type,
+    atoms: &mut AtomTable<ReflectedAtom>,
+) -> Result<Option<ReflectedConstraint<AffineSyntax, String>>, String> {
+    let saved_atoms = atoms.iter().len();
+    match reflect_stated_relation(elab, cx, name, ty, atoms) {
+        Ok(Some(relation)) => return Ok(Some(relation)),
+        Ok(None) => {}
+        // A side the speller cannot name may be a redex it can once
+        // simplified: `Int::cong(λ (t: Int) => e * t, p)` states
+        // `(λ t => e * t)(a) = (λ t => e * t)(b)`.
+        // Only that shape is retried: an unspellable fact is skipped on
+        // every call, and simplifying one costs a reduction per node.
+        Err(error) if error.contains("could not spell") => {
+            let beta_redex = |tm: &Rc<Term>| {
+                crate::spelling::app_of(tm).is_some_and(|(fun, _)| matches!(&**fun, Term::Lam { .. }))
+            };
+            let decoded = crate::inductive::decoded(ty);
+            let Type::Id { lhs, rhs, .. } = &*decoded else {
+                return Err(error);
+            };
+            if !beta_redex(lhs) && !beta_redex(rhs) {
+                return Err(error);
+            }
+            let simplified = crate::goal_combinators::simplify_goal(elab, cx, &decoded);
+            atoms.truncate(saved_atoms);
+            return reflect_stated_relation(elab, cx, name, &simplified, atoms);
+        }
+        Err(error) => return Err(error),
+    }
+    let reads = |ty: &Type| reads_as_relation(elab, cx, ty) || negated_domain(elab, cx, ty).is_some();
+    match unfolded_proposition(elab, cx, ty, reads) {
+        Some(unfolded) => reflect_stated_relation(elab, cx, name, &unfolded, atoms),
+        None => Ok(None),
+    }
+}
+
+fn reflect_stated_relation(
     elab: &Elaborator,
     cx: &Cx,
     name: &str,
@@ -2168,6 +2380,13 @@ fn reflect_ordinary_relation(
                 format!("int::Int::cong_ofnat({})", name),
             )
         } else if let Some(domain) = negated_domain(elab, cx, &ty) {
+            // `¬(x <= y)` at a defined `<=` reads the relation underneath.
+            let domain = if reads_as_relation(elab, cx, &domain) {
+                domain
+            } else {
+                unfolded_proposition(elab, cx, &domain, |ty| reads_as_relation(elab, cx, ty))
+                    .unwrap_or(domain)
+            };
             if let Some((left, right)) = relation_args(elab, &domain) {
                 let left_source = int_term_source(elab, cx, left)?;
                 let right_source = int_term_source(elab, cx, right)?;
@@ -3428,16 +3647,13 @@ pub(crate) fn reconstruct(
                 }
                 let unfolded = Type::El { level: level.clone(), tm: Rc::new(reduct) };
                 let reads = elab.display_tag_of(&unfolded).is_some_and(|tag| tag.name == "And")
-                    || relation_args(elab, &unfolded).is_some()
-                    || strict_relation_args(elab, &unfolded).is_some()
-                    || nat_relation_args(elab, &unfolded).is_some()
-                    || nat_strict_relation_args(elab, &unfolded).is_some()
-                    || equality_args(elab, cx, &unfolded).is_some()
-                    || nat_equality_args(elab, cx, &unfolded).is_some()
+                    || reads_as_relation(elab, cx, &unfolded)
                     || elab.display_type(cx, &unfolded) == "False";
                 if reads {
                     // The definition's arguments arrive as passed: a count
-                    // `λ s => s.lines` applied, a projection of a pair.
+                    // `λ s => s.lines` applied, a projection of a pair. An
+                    // equation is decoded first, so its sides are simplified.
+                    let unfolded = crate::inductive::decoded(&unfolded);
                     let unfolded = crate::goal_combinators::simplify_goal(elab, cx, &unfolded);
                     return reconstruct(elab, cx, &unfolded, allow_disequality_split, allow_connective_split, allow_cutsat);
                 }

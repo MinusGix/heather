@@ -64,7 +64,6 @@ theorem half_same(): half() ≈ two_quarters() { refl }
 theorem half_not_identical(): half() ≠ two_quarters() {
     λ h => {
         let nums = list::cong_fn(λ (r: Rat) => r.num, h);
-        let spelled: (OfNat(1) = OfNat(2)) = nums;
         omega
     }
 }

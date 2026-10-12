@@ -29,6 +29,8 @@ mod omega_reconstruction;
 mod omega_wide_constants;
 #[path = "../omega_relevance.rs"]
 mod omega_relevance;
+#[path = "../omega_defined_propositions.rs"]
+mod omega_defined_propositions;
 #[path = "../module_delta_omega_bench.rs"]
 mod module_delta_omega_bench;
 #[path = "../mutual_recursion.rs"]
