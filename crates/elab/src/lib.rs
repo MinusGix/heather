@@ -1155,6 +1155,20 @@ impl application::ExplicitArgElab for Elaborator {
     ) -> R<Term> {
         self.elab_check_skel(cx, arg, expected, level, hint, skel)
     }
+
+    fn check_param_default(
+        &self,
+        cx: &Cx,
+        arg: &Expr,
+        expected: &Type,
+        level: &Level,
+        earlier: &[unification::EarlierArg],
+    ) -> R<Term> {
+        let ExprKind::App { args, .. } = &arg.kind else {
+            return err("internal parameter default has the wrong form", arg.span);
+        };
+        self.elab_param_default(cx, args, expected, level, arg.span, earlier)
+    }
 }
 
 impl recursion::SelfCallElab for Elaborator {
@@ -4016,21 +4030,34 @@ impl Elaborator {
             .map_err(|e| self.kernel_error(&decl.name, decl.span, e))?;
         }
 
-        // A default runs at the call, where the declaration's parameters are
-        // the caller's arguments rather than names; a default that names one
-        // is refused here rather than at every call
-        // (issues/parameter-defaults-mention-parameters.md).
-        let param_names: Vec<String> =
-            decl.tyvars.iter().map(|t| t.name.clone()).chain(decl.params.iter().map(|p| p.name.clone())).collect();
-        for p in &decl.params {
+        // A default runs at the call, where an earlier parameter's name is
+        // bound to the call's argument for it (`defaults::elab_param_default`).
+        // So a default may mention the value parameters before it, and is
+        // refused here, rather than at every call, when it mentions its own
+        // parameter or a later one (the telescope is ordered, §9.4) or a type
+        // parameter, which no alias can bind
+        // (issues/parameter-defaults-mention-type-parameters.md).
+        for (i, p) in decl.params.iter().enumerate() {
             let Some(default) = p.default.as_deref() else { continue };
-            if let Some(mentioned) = param_names.iter().find(|n| datarepr::mentions_free(default, std::slice::from_ref(n), &mut Vec::new())) {
+            let mentions = |n: &String| datarepr::mentions_free(default, std::slice::from_ref(n), &mut Vec::new());
+            if let Some(t) = decl.tyvars.iter().map(|t| &t.name).find(|n| measure::mentions_context(default, n)) {
                 return err(
                     format!(
-                        "`{}`'s default mentions the parameter `{mentioned}`, and a default cannot \
-                         mention a parameter yet (issues/parameter-defaults-mention-parameters.md): \
-                         give `{}` by name at the calls that need it",
-                        p.name, p.name
+                        "`{}`'s default mentions the type parameter `{t}`, and a default cannot \
+                         mention a type parameter yet (issues/parameter-defaults-mention-type-parameters.md): \
+                         its expected type already says what `{t}` is at each call",
+                        p.name
+                    ),
+                    default.span,
+                );
+            }
+            if let Some(later) = decl.params[i..].iter().map(|q| &q.name).find(|n| mentions(n)) {
+                let whose = if *later == p.name { "its own parameter".to_string() } else { format!("the later parameter `{later}`") };
+                return err(
+                    format!(
+                        "`{}`'s default mentions {whose}: a default reads only the parameters \
+                         before it, whose arguments the call has already given",
+                        p.name
                     ),
                     default.span,
                 );
@@ -4627,7 +4654,9 @@ impl Elaborator {
                 self.elab_field_default(cx, args, expected, lvl, e.span)
             }
             ExprKind::App { args, .. } if defaults::is_param_default(e) => {
-                self.elab_param_default(cx, args, expected, lvl, e.span)
+                // Reached only off a spine walker's path, which hands the
+                // call's earlier arguments to `check_param_default` instead.
+                self.elab_param_default(cx, args, expected, lvl, e.span, &[])
             }
             ExprKind::App { head, args, named, explicit: false, goal_oriented: false }
                 if matches!(&head.kind, ExprKind::Var(name) if name == goal_combinators::SPLIT_STUCK)

@@ -241,3 +241,12 @@ fn make(k: Nat) -> Positive { Positive(k) }
 ");
     assert!(e.contains("`pos` was left to its default"), "{e}");
 }
+
+/// A tactic default whose goal mentions an earlier *defaulted* parameter
+/// that itself mentions the first: the goal is the call's (`0 < k + 1`).
+#[test]
+fn a_tactic_default_after_a_mentioning_default() {
+    ok("theorem next_pos(n: Nat, m: Nat := n + 1, h: 0 < m := omega): 0 < m { h }
+theorem use(k: Nat): 0 < k + 1 { next_pos(k) }
+");
+}

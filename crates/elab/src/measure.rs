@@ -2188,8 +2188,9 @@ fn mentions(e: &Expr, v: &str) -> bool {
 }
 
 // Include annotations and explicit type arguments when collecting a lifted
-// telescope. The ordinary expression walker deliberately skips these.
-fn mentions_context(e: &Expr, name: &str) -> bool {
+// telescope. The ordinary expression walker deliberately skips these. Also
+// how a parameter default is found to mention a type parameter.
+pub(crate) fn mentions_context(e: &Expr, name: &str) -> bool {
     let mut found = false;
     crate::surface::walk_expr(e, &mut |e| {
         found |= match &e.kind {
