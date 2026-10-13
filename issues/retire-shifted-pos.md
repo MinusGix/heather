@@ -3,7 +3,7 @@ title: Migrate Rat to Pos<Nat> sugar and delete the shifted Pos
 status: open
 labels: [stdlib,mathematics]
 created: 2026-10-10
-updated: 2026-10-10
+updated: 2026-10-13
 ---
 
 Once [[pos-binder-sugar]] has record fields, migrate `Rat` to
@@ -23,3 +23,4 @@ lemma is not in `lib/` yet.
 ## Log
 
 - 2026-10-10: Filed from [[positivity-evidence]].
+- 2026-10-13: 2026-10-13: Unblocked: [[pos-binder-sugar]] landed record fields (`den: Pos<Nat>`, rule `Rat::den_positive`; note §11). A record with parameters cannot take one yet ([[pos-sugar-unsupported-positions]]); `Rat` has none.

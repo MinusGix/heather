@@ -1,8 +1,9 @@
 # Positive values: a type, a hypothesis, or a binder
 
 Status: design proposal, 2026-10-10; route and spelling chosen the same day
-(§7). Round 1 landed (§9), and the `positivity` tactic (§10); the probes in
-§3 were run against master at f2deb85, before either. Tracking issue:
+(§7). Round 1 landed (§9), the `positivity` tactic (§10), and the `Pos<A>`
+binder sugar (§11); the probes in §3 were run against master at f2deb85,
+before any of them. Tracking issue:
 [positivity-evidence](../issues/positivity-evidence.md).
 
 The question: should `lib/std/pos.hthr`'s `Pos` exist at all? The three
@@ -459,3 +460,80 @@ Not in this round:
 
 Tests: `crates/elab/tests/positivity_tactic.rs` (in the `omega` family,
 which already builds the omega prefix).
+
+## 11. As landed: `Pos<A>` binder sugar (round 4, 2026-10-13)
+
+All three positions of §6 B, as a **parser** desugaring
+(`crates/syntax/src/parser.rs`, `pos_carrier` and its callers), so every
+later pass sees ordinary parameters, fields and declarations. `Pos` with one
+type argument is claimed by name there, as `Squash<A>` is; the shifted
+`record Pos` takes none and is untouched until
+[retire-shifted-pos](../issues/retire-shifted-pos.md).
+
+**Parameters.** `x: Pos<A>` is `x: A` followed by
+`x_pos: 0 < x := infer`. A run `a, b: Pos<Nat>` puts each fact after its
+value. `0 < x` is written with the ordinary numeral and `<`, so any carrier
+whose numeral and `<` resolve works (`Int` needs `Numeral<Int>`, from
+`algebra` and `int`). The positional arity is the values' alone; `x_pos :=
+…` names the fact, and `@f(…)` passes it in its slot. A default on a `Pos`
+parameter is refused: the value is the caller's.
+
+**Results.** `fn f(…) → Pos<A> { body }` returns an `A`, and the item after
+it is
+
+```heather
+evidence theorem f::pos({…f's values…}, x_pos: 0 < x := infer, …): 0 < f(…)
+```
+
+Every parameter of `f` that is not a solver parameter becomes a `{}`
+implicit, which the conclusion fixes by unification; solver parameters,
+`f`'s own `Pos` facts among them, stay premises. So it is a rule under §9,
+and Paterson's condition holds by construction for the `Pos` premises
+(`0 < x` is smaller than `0 < f(…x…)`). An `assuming` group reaches both
+items.
+
+The proof is the obligation the result states, in one of two ways:
+
+- **Restated.** The body's `let`s and result are copied into the theorem,
+  and `positivity` proves `0 < (result)` there; conversion unfolds `f` once to
+  meet the statement. This is a second elaboration of the body, paid once
+  per declaration. A failure names the escape below
+  (`heather_syntax::POS_RESULT` marks the search).
+- **By hand.** `on ?pos := e;` in `f`'s body is moved to the theorem and `e`
+  proves `0 < f(…)` itself. This is the route for a recursive `f`, whose
+  restated body is a case split the search cannot read and whose recursion
+  does not convert; `e` may recurse on `f::pos`. A `decreases` function must
+  take it.
+
+A member function (`fn T::f(…) → Pos<A>`) is refused: its fact would be
+`T::f::pos`, and a member owns no members yet.
+
+**Record fields.** `den: Pos<A>` is `den: A` followed by
+`den_pos: 0 < den`, whose default runs the same search `:= infer` does
+(`heather_syntax::POS_SEARCH`: locals, computation, rules, no omega) over
+the constructing scope, through the parameter-default machinery
+(docs/named-arguments-design.md §9.6). `Frac(1, k)` therefore finds `0 < k`
+from the caller's hypotheses, `den_pos := h` names it, and writing every
+field positionally passes it. The record also declares
+
+```heather
+evidence theorem Frac::den_positive({r: Frac}): 0 < r.den { r.den_pos }
+```
+
+because a projection of a local is not itself in scope (§7's open `∧`
+question, in record form). The name is `R::field_positive`, since a field
+owns no members. Only a record without type or value parameters takes a
+`Pos` field this round; a rule over a value-parameterised record did not
+unify its parameters, and type parameters are monomorphized.
+
+Elsewhere (a function type's domain, a lambda binder, an inductive
+constructor's field) `Pos<A>` is refused as "binder sugar, not a type",
+pointing at [positive-refinement-type](../issues/positive-refinement-type.md).
+
+**Library.** No declaration in `lib/` changed. Adopting the sugar on the
+existing `0 < d` parameters (`Nat::mod_lt` and the division lemmas, about
+fifty binders) changes their callers' positional arity, and is
+[pos-sugar-library-adoption](../issues/pos-sugar-library-adoption.md)'s.
+
+Tests: `crates/elab/tests/pos_binder_sugar.rs` (in the `library` family),
+and the desugared shapes in `crates/syntax/src/parser.rs`'s unit tests.

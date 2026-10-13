@@ -1,9 +1,9 @@
 ---
 title: Pos<A> binder sugar: a value plus an inferred positivity hypothesis
-status: open
+status: closed
 labels: [frontend,syntax,elaboration,stdlib,ergonomics]
 created: 2026-10-10
-updated: 2026-10-10
+updated: 2026-10-13
 ---
 
 `x: Pos<A>` in a binder elaborates as `x: A, x_pos: 0 < x := infer`, for any
@@ -32,3 +32,4 @@ general `where` form (Minus, 2026-10-10).
 ## Log
 
 - 2026-10-10: Filed from [[positivity-evidence]].
+- 2026-10-13: 2026-10-13: LANDED, all three positions, as a parser desugaring (docs/positivity-evidence-design.md §11). Parameters: `x: Pos<A>` is `x: A, x_pos: 0 < x := infer`. Results: `fn f(…) → Pos<A>` returns an `A` and declares `evidence theorem f::pos` (values implicit, solver parameters premises), proved by `positivity` over the restated body or by hand with `on ?pos := …;` (the route for recursion). Fields: `den: Pos<A>` is `den: A, den_pos: 0 < den` searched at construction, plus the rule `R::den_positive`. Tests: crates/elab/tests/pos_binder_sugar.rs. Residue filed: [[pos-sugar-library-adoption]] (no lib signature changed this round) and [[pos-sugar-unsupported-positions]] (member results, parameterised records, constructor fields).

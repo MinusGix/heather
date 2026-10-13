@@ -4942,6 +4942,27 @@ impl Elaborator {
             {
                 self.positivity(cx, expected, lvl, e.span)
             }
+            // The obligation a `fn f(…) → Pos<A>` result states, restated at
+            // its body by the parser (`result_fact`): the same search, with a
+            // failure that names the way to prove it by hand.
+            // A `Pos<A>` record field's fact, left out of a construction.
+            ExprKind::Var(name) if name == heather_syntax::POS_SEARCH => {
+                self.infer_proposition(cx, expected, lvl, e.span)
+            }
+            ExprKind::Var(name) if name == heather_syntax::POS_RESULT => {
+                self.positivity(cx, expected, lvl, e.span).map_err(|e| match e {
+                    ElabError::Elab { msg, span } => ElabError::Elab {
+                        msg: format!(
+                            "{msg}\n  hint: a function whose result is `Pos<A>` must return a \
+                             positive value, and its fact `f::pos` is proved by searching its \
+                             body. A body the search cannot read (a recursion, a case split) \
+                             proves it by hand: `on ?pos := …;` in the body, at `0 < f(…)`"
+                        ),
+                        span,
+                    },
+                    e => e,
+                })
+            }
             // `omega` is the kernel-certified vertical slice of the linear
             // solver. It is only an untrusted elaborator shortcut:
             // reconstruction returns an ordinary Heather

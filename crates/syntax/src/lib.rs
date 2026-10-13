@@ -17,7 +17,7 @@ pub mod roles;
 mod try_lower;
 
 pub use ast::*;
-pub use parser::{class_ty, parse_file, ParseError};
+pub use parser::{class_ty, parse_file, pos_carrier, ParseError, POS_RESULT, POS_SEARCH};
 pub use fmt::format_source;
 pub use roles::{argument_lists, token_roles, ArgumentLists, Delims, TokenRole};
 

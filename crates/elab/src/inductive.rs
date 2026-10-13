@@ -1203,6 +1203,24 @@ impl Elaborator {
         // Claimed only when no declaration answers, so a file that declares
         // its own `True` keeps it; `Bool`'s `True` *constructor* is untouched
         // because a constructor is not a type name and never reached here.
+        // `Pos<A>` where no binder sugar claimed it (the parser expands it on
+        // a parameter, a function result and a record field). Unless a
+        // declaration by that name takes one argument, say what it is.
+        if name == "Pos"
+            && args.len() == 1
+            && self.lookup_inductive(name).is_none_or(|i| i.params.len() != 1)
+        {
+            return err(
+                "`Pos<A>` is binder sugar, not a type: it is written as a parameter's type \
+                 (`x: Pos<Nat>`), a function's result (`fn f(…) → Pos<Nat>`) or a record \
+                 field (`den: Pos<Nat>`), and stands for the carrier beside a searched `0 < x` \
+                 (docs/positivity-evidence-design.md §6 B). Here, write the carrier and the \
+                 hypothesis; a positive type for function domains and containers is \
+                 issues/positive-refinement-type.md"
+                    .to_string(),
+                span,
+            );
+        }
         let Some(ind) = self.lookup_inductive(name) else {
             if name == "True" && args.is_empty() {
                 return Ok((Type::Unit { level: Level::Zero }, Level::Zero));

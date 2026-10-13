@@ -153,6 +153,7 @@ pub fn parse_file(src: &str) -> Result<File, ParseError> {
             motive_body: false,
             spec_failed: std::collections::HashSet::new(),
             next_hygienic: 0,
+            record_facts: Vec::new(),
             propagation_count: 0,
             propagation_depth: 0,
         };
@@ -182,6 +183,9 @@ pub fn parse_file(src: &str) -> Result<File, ParseError> {
 struct Parser {
     toks: Vec<Tok>,
     pos: usize,
+    /// The evidence rules a record's `Pos<A>` fields declare, emitted as the
+    /// items after the record ([`Parser::record`]).
+    record_facts: Vec<Decl>,
     /// Avoid a lowering walk for declarations and lambdas without postfix `?`.
     propagation_count: usize,
     /// Ordinary function/lambda bodies admit propagation; signatures do not.
@@ -338,6 +342,55 @@ fn op_call(sym: &str, fixity: OpFixity, args: Vec<Expr>, span: Span) -> Expr {
             explicit: false,
             goal_oriented: false,
         },
+        span,
+    }
+}
+
+/// The carrier of `Pos<A>` written as a binder's type: the sugar
+/// (docs/positivity-evidence-design.md §6 B) is recognised by name, as
+/// `Squash<A>` is, so `Pos` with one type argument is reserved there. The
+/// shifted `record Pos` (lib/std/pos.hthr) takes none and is untouched.
+pub fn pos_carrier(ty: &Ty) -> Option<&Ty> {
+    match &ty.kind {
+        TyKind::Named { name, args } if name == "Pos" && args.len() == 1 => Some(&args[0]),
+        _ => None,
+    }
+}
+
+/// The searched fact a `Pos<A>` binder named `name` stands beside: `0 < name`.
+pub fn positivity_ty(name: &str, span: Span) -> Ty {
+    let zero = Expr { kind: ExprKind::Num(Numeral::ZERO), span };
+    let var = Expr { kind: ExprKind::Var(name.to_string()), span };
+    let lt = op_call("<", OpFixity::Infix, vec![zero, var], span);
+    Ty { kind: TyKind::OfExpr(Box::new(lt)), span }
+}
+
+/// The search a `fn f(…) → Pos<A>` body's positivity is proved by:
+/// `positivity`, with a failure that says how to prove it by hand
+/// (`on ?pos := …;`). Reserved like omega's own `__` branch markers.
+pub const POS_RESULT: &str = "__pos_result";
+
+/// What fills a `Pos<A>` record field's fact when a construction leaves it
+/// out: the search a `:= infer` parameter runs (locals, computation, evidence
+/// rules; no omega), over the constructing scope.
+pub const POS_SEARCH: &str = "__pos_search";
+
+/// The name of that fact: `x_pos` beside `x`.
+pub fn positivity_name(name: &str) -> String {
+    format!("{name}_pos")
+}
+
+/// `x_pos: 0 < x := infer`, the parameter a `Pos<A>` binder adds after `x`.
+fn positivity_param(name: &str, span: Span) -> Param {
+    Param {
+        name: positivity_name(name),
+        ty: positivity_ty(name, span),
+        implicit: true,
+        is_self: false,
+        solver: Some(Solver::Infer),
+        default: None,
+        origin: ParamOrigin::Written,
+        symbol: None,
         span,
     }
 }
@@ -675,8 +728,142 @@ impl Parser {
         if self.at_kw("assuming") {
             self.assuming_items()
         } else {
-            Ok(vec![self.item()?])
+            match self.item()? {
+                Item::Decl(mut d) => {
+                    let fact = self.result_fact(&mut d)?;
+                    Ok(std::iter::once(Item::Decl(d)).chain(fact.map(Item::Decl)).collect())
+                }
+                item => {
+                    let facts = std::mem::take(&mut self.record_facts);
+                    Ok(std::iter::once(item).chain(facts.into_iter().map(Item::Decl)).collect())
+                }
+            }
         }
+    }
+
+    /// `fn f(…) → Pos<A>` — the result half of the `Pos<A>` binder sugar
+    /// (docs/positivity-evidence-design.md §6 B). The function returns an
+    /// `A`, and the declaration after it is the fact, owned by the function:
+    ///
+    /// ```text
+    /// evidence theorem f::pos({…f's parameters…}): 0 < f(…) { … }
+    /// ```
+    ///
+    /// Every parameter of `f` that is not a solver parameter becomes a `{}`
+    /// implicit, which the rule's conclusion fixes by unification; solver
+    /// parameters (a `Pos<A>` parameter's `x_pos` among them) stay premises
+    /// `:= infer`. So the fact is an evidence rule, and `0 < f(…)` is found
+    /// by `:= infer` at every caller. An `assuming` group reaches both
+    /// declarations, as it does every item in it.
+    ///
+    /// The proof is the obligation the result type states. Written
+    /// `on ?pos := e;` in `f`'s body, `e` proves the statement itself, which
+    /// is the route for a recursive `f` (its proof is an induction). Otherwise
+    /// the body is restated at `0 < (result)` and `positivity` searches it:
+    /// the statement unfolds `f` once, by conversion, to meet it.
+    fn result_fact(&mut self, d: &mut Decl) -> R<Option<Decl>> {
+        let Some(carrier) = pos_carrier(&d.result).cloned() else { return Ok(None) };
+        let span = d.result.span;
+        let refuse = |msg: String| Err(ParseError { msg, span });
+        if d.kind != DeclKind::Fn || d.is_meta {
+            return refuse(format!(
+                "`Pos<A>` as a result is a function's: `fn f(…) → Pos<A>` returns an `A` \
+                 and declares `f::pos` (docs/positivity-evidence-design.md §6 B). A \
+                 {} states `0 < …` instead",
+                if d.is_meta { "`meta fn`" } else { "theorem" }
+            ));
+        }
+        if d.name.contains("::") {
+            return refuse(format!(
+                "`{}` is a member, so its positivity fact would be `{}::pos`, and a member \
+                 owns no members yet. Return the carrier and state an `evidence theorem` \
+                 about it",
+                d.name, d.name
+            ));
+        }
+        let mut written = None;
+        d.body.ons.retain(|o| match &o.target {
+            OnTarget::Name(n) if n == "pos" && written.is_none() => {
+                written = Some(o.expr.clone());
+                false
+            }
+            _ => true,
+        });
+        if written.is_none() && d.decreases.is_some() {
+            return refuse(format!(
+                "`{}` recurses on a measure, so restating its body proves nothing about \
+                 the recursive calls: prove its positivity in the body, \
+                 `on ?pos := …;`, at `0 < {}(…)`",
+                d.name, d.name
+            ));
+        }
+        d.result = carrier;
+        let var = |name: &str| Expr { kind: ExprKind::Var(name.to_string()), span };
+        let mut args = Vec::new();
+        let mut named = Vec::new();
+        let mut params = Vec::new();
+        for p in &d.params {
+            let mut q = p.clone();
+            if p.solver.is_none() {
+                if p.implicit {
+                    named.push(NamedArg {
+                        name: p.name.clone(),
+                        name_span: span,
+                        expr: var(&p.name),
+                        span,
+                    });
+                } else {
+                    args.push(var(&p.name));
+                }
+                q.implicit = true;
+                q.default = None;
+                q.is_self = false;
+            }
+            q.span = span;
+            params.push(q);
+        }
+        let call = Expr {
+            kind: ExprKind::App {
+                head: Box::new(var(&d.name)),
+                args,
+                named,
+                explicit: false,
+                goal_oriented: false,
+            },
+            span,
+        };
+        let positive = |e: Expr| {
+            let zero = Expr { kind: ExprKind::Num(Numeral::ZERO), span };
+            Ty { kind: TyKind::OfExpr(Box::new(op_call("<", OpFixity::Infix, vec![zero, e], span))), span }
+        };
+        let body = match written {
+            Some(e) => Block { stmts: Vec::new(), result: Box::new(e), ons: Vec::new(), span },
+            None => {
+                let h = self.hygienic("pos");
+                let mut stmts = d.body.stmts.clone();
+                stmts.push(Stmt::Let {
+                    name: h.clone(),
+                    ty: Some(positive((*d.body.result).clone())),
+                    expr: var(POS_RESULT),
+                    span,
+                    opaque: false,
+                });
+                Block { stmts, result: Box::new(var(&h)), ons: d.body.ons.clone(), span }
+            }
+        };
+        Ok(Some(Decl {
+            kind: DeclKind::Theorem,
+            is_meta: false,
+            is_evidence: true,
+            elaborates: None,
+            name: format!("{}::pos", d.name),
+            tyvars: d.tyvars.clone(),
+            params,
+            result: positive(call),
+            decreases: None,
+            body,
+            span,
+        }))
     }
 
     fn assuming_items(&mut self) -> R<Vec<Item>> {
@@ -1476,6 +1663,7 @@ impl Parser {
         let valparams = self.valparam_list(false)?;
         self.expect(&TokKind::LBrace, "`{` (field list)")?;
         let mut fields = Vec::new();
+        let mut facts = Vec::new();
         while !matches!(self.peek(), TokKind::RBrace) {
             let f = self.field()?;
             if f.name.is_none() {
@@ -1486,7 +1674,40 @@ impl Parser {
                     span: f.span,
                 });
             }
-            fields.push(f);
+            // `den: Pos<A>` — the field half of the binder sugar
+            // (docs/positivity-evidence-design.md §6 B): `den: A`, then
+            // `den_pos: 0 < den`, filled at a construction that leaves it out
+            // by the search `:= infer` runs, over the constructing scope.
+            if let Some(carrier) = pos_carrier(&f.ty).cloned() {
+                let fname = f.name.clone().unwrap_or_default();
+                let refuse = |msg: &str| Err(ParseError { msg: msg.to_string(), span: f.span });
+                if f.default.is_some() {
+                    return refuse(
+                        "a `Pos<A>` field takes no default: its positivity is searched at \
+                         each construction, and the value is the constructor's to pass",
+                    );
+                }
+                if !params.is_empty() || !valparams.is_empty() {
+                    return refuse(
+                        "a `Pos<A>` field is supported on a record without parameters only: \
+                         its rule `0 < r.field` is not yet stated over a parameterised \
+                         record (issues/pos-binder-sugar.md). Write the carrier and a \
+                         `0 < field` field",
+                    );
+                }
+                let fact_name = positivity_name(&fname);
+                let ty_span = f.ty.span;
+                fields.push(FieldDecl { name: f.name, ty: carrier, default: None, span: f.span });
+                fields.push(FieldDecl {
+                    name: Some(fact_name.clone()),
+                    ty: positivity_ty(&fname, ty_span),
+                    default: Some(Box::new(Expr { kind: ExprKind::Var(POS_SEARCH.into()), span: ty_span })),
+                    span: ty_span,
+                });
+                facts.push((fname, fact_name, ty_span));
+            } else {
+                fields.push(f);
+            }
             if !matches!(self.peek(), TokKind::Comma) {
                 break;
             }
@@ -1494,6 +1715,49 @@ impl Parser {
         }
         let end = self.expect(&TokKind::RBrace, "`}` (field list)")?;
         let span = start.join(end);
+        // One rule per positive field, `0 < r.den` from `r.den_pos`: a
+        // projection of a local is not itself in scope, so without it the
+        // search could not read the field's fact.
+        for (field, fact, fspan) in facts {
+            let var = |n: &str| Expr { kind: ExprKind::Var(n.to_string()), span: fspan };
+            let recv = self.hygienic("record");
+            let rparams = vec![Param {
+                name: recv.clone(),
+                ty: Ty { kind: TyKind::Named { name: name.clone(), args: Vec::new() }, span: fspan },
+                implicit: true,
+                is_self: false,
+                solver: None,
+                default: None,
+                origin: ParamOrigin::Written,
+                symbol: None,
+                span: fspan,
+            }];
+            let project = |n: &str| Expr {
+                kind: ExprKind::Dot {
+                    recv: Box::new(var(&recv)),
+                    name: n.to_string(),
+                    tyargs: Vec::new(),
+                    args: None,
+                    named: Vec::new(),
+                },
+                span: fspan,
+            };
+            let zero = Expr { kind: ExprKind::Num(Numeral::ZERO), span: fspan };
+            let stmt = op_call("<", OpFixity::Infix, vec![zero, project(&field)], fspan);
+            self.record_facts.push(Decl {
+                kind: DeclKind::Theorem,
+                is_meta: false,
+                is_evidence: true,
+                elaborates: None,
+                name: format!("{name}::{field}_positive"),
+                tyvars: Vec::new(),
+                params: rparams,
+                result: Ty { kind: TyKind::OfExpr(Box::new(stmt)), span: fspan },
+                decreases: None,
+                body: Block { stmts: Vec::new(), result: Box::new(project(&fact)), ons: Vec::new(), span: fspan },
+                span: fspan,
+            });
+        }
         let ctor = CtorDecl { name: name.clone(), fields, result: None, span };
         Ok(InductiveDecl {
             name,
@@ -1906,10 +2170,25 @@ impl Parser {
             // `@f(…)` is how it is passed by hand (§1). A defaulted one is
             // the same (docs/named-arguments-design.md §9.2).
             let implicit = implicit || solver.is_some() || default.is_some();
+            // `x: Pos<A>` — binder sugar, not a type
+            // (docs/positivity-evidence-design.md §6 B): the parameter is an
+            // `A`, followed by `x_pos: 0 < x := infer`. Nothing is wrapped, so
+            // a caller passes a plain `A` and the search finds its positivity;
+            // `x_pos := …` names it by hand.
+            let positive = pos_carrier(&ty).cloned();
+            if positive.is_some() && (solver.is_some() || default.is_some()) {
+                return Err(ParseError {
+                    msg: "a `Pos<A>` parameter takes no default: its positivity is \
+                          searched at each call, and the value is the caller's to pass"
+                        .into(),
+                    span,
+                });
+            }
             for (name, nsp, is_self, symbol) in names {
+                let fact = positive.as_ref().map(|_| positivity_param(&name, ty.span));
                 params.push(Param {
                     name,
-                    ty: ty.clone(),
+                    ty: positive.clone().unwrap_or_else(|| ty.clone()),
                     implicit,
                     is_self,
                     solver,
@@ -1918,6 +2197,7 @@ impl Parser {
                     symbol,
                     span: nsp.join(span),
                 });
+                params.extend(fact);
             }
             if !matches!(self.peek(), TokKind::Comma) {
                 break;
@@ -6854,5 +7134,58 @@ mod tests {
     fn assuming_refuses_item_kinds_not_yet_generalized() {
         let e = parse_file("assuming Nat { inductive D { C } }").unwrap_err();
         assert!(e.msg.contains("inside `assuming` is not implemented yet"), "{}", e.msg);
+    }
+
+    // -- `Pos<A>` binder sugar (issues/pos-binder-sugar.md) -----------------
+
+    #[test]
+    fn a_pos_parameter_is_its_carrier_then_a_searched_fact() {
+        let d = decl_of("fn f(a, b: Pos<Nat>, c: Nat) -> Nat { a }");
+        let shape: Vec<_> = d
+            .params
+            .iter()
+            .map(|p| (p.name.as_str(), p.implicit, p.solver == Some(Solver::Infer)))
+            .collect();
+        assert_eq!(
+            shape,
+            vec![
+                ("a", false, false),
+                ("a_pos", true, true),
+                ("b", false, false),
+                ("b_pos", true, true),
+                ("c", false, false),
+            ]
+        );
+        assert!(matches!(d.params[0].ty.kind, TyKind::Nat), "{:?}", d.params[0].ty);
+    }
+
+    #[test]
+    fn a_pos_result_declares_the_functions_fact_after_it() {
+        let items = parse_file("fn sq(n: Pos<Nat>, k: Nat) -> Pos<Nat> { n * n }").unwrap().items;
+        assert_eq!(items.len(), 2);
+        let mut items = items.into_iter();
+        let f = items.next().unwrap().into_decl();
+        assert!(matches!(f.result.kind, TyKind::Nat), "{:?}", f.result);
+        let fact = items.next().unwrap().into_decl();
+        assert_eq!(fact.name, "sq::pos");
+        assert!(fact.is_evidence && fact.kind == DeclKind::Theorem);
+        // Values become implicits the conclusion fixes; `n_pos` stays a premise.
+        let shape: Vec<_> = fact.params.iter().map(|p| (p.name.as_str(), p.implicit, p.solver.is_some())).collect();
+        assert_eq!(shape, vec![("n", true, false), ("n_pos", true, true), ("k", true, false)]);
+    }
+
+    #[test]
+    fn a_pos_field_is_its_carrier_then_a_fact_and_a_rule() {
+        let items = parse_file("record Frac { num: Nat, den: Pos<Nat> }").unwrap().items;
+        let Item::Inductive(r) = &items[0] else { panic!("{:?}", items[0]) };
+        let fields: Vec<_> = r.ctors[0]
+            .fields
+            .iter()
+            .map(|f| (f.name.clone().unwrap(), f.default.is_some()))
+            .collect();
+        assert_eq!(fields, vec![("num".into(), false), ("den".into(), false), ("den_pos".into(), true)]);
+        let Item::Decl(rule) = &items[1] else { panic!("{:?}", items[1]) };
+        assert_eq!(rule.name, "Frac::den_positive");
+        assert!(rule.is_evidence);
     }
 }
