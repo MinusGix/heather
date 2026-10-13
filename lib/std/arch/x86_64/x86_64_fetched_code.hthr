@@ -21,6 +21,7 @@ import logic;
 import nat;
 import option;
 import omega;
+import relation_props;
 
 // The forms the compiler emits. Each executes by its existing relation; a
 // fetched step adds only the fetch of its exact canonical bytes. Calls join
@@ -65,14 +66,14 @@ theorem emitted_exec_same_defined<M>(data: ByteReadAccess<M>, emitted: EmittedIn
             execute_pair_same_defined(instruction, canonical_length(instruction),
                 squash(canonical_length_valid(instruction)), before, a, b,
                 p.right.right, q.right.right),
-        EmitLoad(load) => λ a b p q => same_defined_of_equal(a, b,
+        EmitLoad(load) => λ a b p q => SameDefinedState::of_equal(
             byte_load_same(data, load, before, a, b, p.witness, q.witness,
                 p.proof, q.proof)),
-        EmitWordLoad(load) => λ a b p q => same_defined_of_equal(a, b,
+        EmitWordLoad(load) => λ a b p q => SameDefinedState::of_equal(
             word_load_same(data, load, before, a, b, p.witness, q.witness,
                 p.proof, q.proof)),
-        EmitShort(control) => λ a b p q => same_defined_of_equal(a, b, trans(p, sym(q))),
-        EmitNear(control) => λ a b p q => same_defined_of_equal(a, b, trans(p, sym(q))),
+        EmitShort(control) => λ a b p q => SameDefinedState::of_equal(trans(p, sym(q))),
+        EmitNear(control) => λ a b p q => SameDefinedState::of_equal(trans(p, sym(q))),
     })(first, second, left, right)
 }
 
@@ -95,20 +96,16 @@ theorem emitted_exec_respects_defined<M>(data: ByteReadAccess<M>, emitted: Emitt
         EmitWordLoad(load) => λ a b same x y p q =>
             word_load_respects_defined(data, load, a, b, x, y,
                 p.witness, q.witness, same, p.proof, q.proof),
-        EmitShort(control) => λ a b same x y p q =>
-            same_defined_trans(x, execute_short_control(control, a), y,
-                same_defined_of_equal(x, execute_short_control(control, a), p),
-                same_defined_trans(execute_short_control(control, a),
-                    execute_short_control(control, b), y,
-                    short_control_respects_defined(control, a, b, same),
-                    same_defined_of_equal(execute_short_control(control, b), y, sym(q)))),
-        EmitNear(control) => λ a b same x y p q =>
-            same_defined_trans(x, execute_near_control(control, a), y,
-                same_defined_of_equal(x, execute_near_control(control, a), p),
-                same_defined_trans(execute_near_control(control, a),
-                    execute_near_control(control, b), y,
-                    near_control_respects_defined(control, a, b, same),
-                    same_defined_of_equal(execute_near_control(control, b), y, sym(q)))),
+        EmitShort(control) => λ a b same x y p q => calc {
+            x ≈ execute_short_control(control, a) := SameDefinedState::of_equal(p),
+            ≈ execute_short_control(control, b) := rel_cong(same),
+            ≈ y := SameDefinedState::of_equal(sym(q)),
+        },
+        EmitNear(control) => λ a b same x y p q => calc {
+            x ≈ execute_near_control(control, a) := SameDefinedState::of_equal(p),
+            ≈ execute_near_control(control, b) := rel_cong(same),
+            ≈ y := SameDefinedState::of_equal(sym(q)),
+        },
     })(before_left, before_right, before_same, after_left, after_right, left, right)
 }
 fn FetchedStep<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, before, after: MachineState<M>) → Type {
@@ -193,12 +190,11 @@ theorem short_fetched_respects_defined<M>(fetch: FetchAccess<M>,
             j(same, λ actual _ =>
                 (after_right = execute_short_control(actual, before_right)) →
                 SameDefinedState<M>(after_left, after_right),
-                λ agreed => same_defined_trans(after_left, execute_short_control(left, before_left),
-                    after_right, same_defined_of_equal(after_left, execute_short_control(left, before_left), left_exec),
-                    same_defined_trans(execute_short_control(left, before_left),
-                        execute_short_control(left, before_right), after_right,
-                        short_control_respects_defined(left, before_left, before_right, before_same),
-                        same_defined_of_equal(execute_short_control(left, before_right), after_right, sym(agreed)))))(execution);
+                λ agreed => calc {
+                    after_left ≈ execute_short_control(left, before_left) := SameDefinedState::of_equal(left_exec),
+                    ≈ execute_short_control(left, before_right) := rel_cong(before_same),
+                    ≈ after_right := SameDefinedState::of_equal(sym(agreed)),
+                })(execution);
     runner(right, control, right_exec)
 }
 
@@ -224,12 +220,11 @@ theorem near_fetched_respects_defined<M>(fetch: FetchAccess<M>,
             j(same, λ actual _ =>
                 (after_right = execute_near_control(actual, before_right)) →
                 SameDefinedState<M>(after_left, after_right),
-                λ agreed => same_defined_trans(after_left, execute_near_control(left, before_left),
-                    after_right, same_defined_of_equal(after_left, execute_near_control(left, before_left), left_exec),
-                    same_defined_trans(execute_near_control(left, before_left),
-                        execute_near_control(left, before_right), after_right,
-                        near_control_respects_defined(left, before_left, before_right, before_same),
-                        same_defined_of_equal(execute_near_control(left, before_right), after_right, sym(agreed)))))(execution);
+                λ agreed => calc {
+                    after_left ≈ execute_near_control(left, before_left) := SameDefinedState::of_equal(left_exec),
+                    ≈ execute_near_control(left, before_right) := rel_cong(before_same),
+                    ≈ after_right := SameDefinedState::of_equal(sym(agreed)),
+                })(execution);
     runner(right, control, right_exec)
 }
 // `n` fetched steps, and a run of any length. Counting keeps concatenation a

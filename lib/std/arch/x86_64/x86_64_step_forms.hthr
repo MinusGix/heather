@@ -544,8 +544,8 @@ theorem fetched_from_related<M>(access: FetchAccess<M>, left, right: MachineStat
     same: SameDefinedState<M>(left, right), bytes: List<BitVec(8)>,
     read: FetchedFrom(access, right.memory, InstructionBytes(right.rip, bytes))):
     FetchedFrom(access, left.memory, InstructionBytes(left.rip, bytes)) {
-    j(sym(same.rip), λ rip _ => FetchedFrom(access, left.memory, InstructionBytes(rip, bytes)),
-        j(sym(same.memory), λ memory _ => FetchedFrom(access, memory, InstructionBytes(right.rip, bytes)), read))
+    j(sym(SameDefinedState::rip(same)), λ rip _ => FetchedFrom(access, left.memory, InstructionBytes(rip, bytes)),
+        j(sym(SameDefinedState::memory(same)), λ memory _ => FetchedFrom(access, memory, InstructionBytes(right.rip, bytes)), read))
 }
 
 fn emitted_of(form: StepForm, fallback: EmittedInstruction) → EmittedInstruction {

@@ -263,9 +263,9 @@ theorem fetched_bytes_same_length_related<M>(access: FetchAccess<M>,
         InstructionBytes(before_right.rip, right), right_read);
     let same_fetch = trans(
         cong_fn(λ (memory: M) => fetch_instruction_bytes(access, memory, left.len(), before_left.rip),
-            same.memory),
+            SameDefinedState::memory(same)),
         trans(cong_fn(λ (start: BitVec(64)) => fetch_instruction_bytes(access, before_right.memory,
-                left.len(), start), same.rip),
+                left.len(), start), SameDefinedState::rip(same)),
             cong_fn(λ (count: Nat) => fetch_instruction_bytes(access, before_right.memory,
                 count, before_right.rip), length)));
     Option::some_inj(left, right,

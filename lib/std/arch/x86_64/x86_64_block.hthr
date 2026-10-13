@@ -10,6 +10,7 @@ import logic;
 import nat;
 import option;
 import relation;
+import relation_props;
 
 // SYSCALL, 0F 05: not a block instruction (it leaves the machine for the
 // kernel), but every profile's code places it between blocks.
@@ -777,24 +778,14 @@ theorem erase_af_near_commute<M>(control: NearControl, before: MachineState<M>):
     }
 }
 
-theorem short_control_respects_defined<M>(control: ShortControl,
-    left, right: MachineState<M>, same: SameDefinedState<M>(left, right)):
-    SameDefinedState<M>(execute_short_control(control, left), execute_short_control(control, right)) {
-    erased_equal_same_defined(execute_short_control(control, left), execute_short_control(control, right),
-        trans(erase_af_short_commute(control, left),
-            trans(cong_fn(λ (state: MachineState<M>) => erase_af(execute_short_control(control, state)),
-                    same_defined_erased_equal(left, right, same)),
-                sym(erase_af_short_commute(control, right)))))
+evidence theorem short_control_respects_defined<M>({control: ShortControl}):
+    PreservesRelation(SameDefinedState<M>, SameDefinedState<M>, execute_short_control<M>(control)) {
+    same_defined_respects(execute_short_control<M>(control), λ state => erase_af_short_commute(control, state))
 }
 
-theorem near_control_respects_defined<M>(control: NearControl,
-    left, right: MachineState<M>, same: SameDefinedState<M>(left, right)):
-    SameDefinedState<M>(execute_near_control(control, left), execute_near_control(control, right)) {
-    erased_equal_same_defined(execute_near_control(control, left), execute_near_control(control, right),
-        trans(erase_af_near_commute(control, left),
-            trans(cong_fn(λ (state: MachineState<M>) => erase_af(execute_near_control(control, state)),
-                    same_defined_erased_equal(left, right, same)),
-                sym(erase_af_near_commute(control, right)))))
+evidence theorem near_control_respects_defined<M>({control: NearControl}):
+    PreservesRelation(SameDefinedState<M>, SameDefinedState<M>, execute_near_control<M>(control)) {
+    same_defined_respects(execute_near_control<M>(control), λ state => erase_af_near_commute(control, state))
 }
 
 theorem execute_near_control_preserves_gprs<M>(control: NearControl, before: MachineState<M>):

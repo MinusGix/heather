@@ -30,6 +30,7 @@ const X86_MODULES: &[(&str, &str)] = &[
     ("int", INT),
     ("bitvec", BITVEC),
     ("relation", RELATION),
+    ("relation_props", include_str!("../../../lib/std/relation_props.hthr")),
     ("location", LOCATION),
     ("certified_lookup", CERTIFIED_LOOKUP),
     ("x86_64", X86_64),
@@ -90,6 +91,7 @@ fn x86_64_suite() {
     register_and_execution_laws_check(&base);
     mov_ri_encoding_decoding_and_execution_check(&base);
     setcc_encoding_decoding_and_execution_check(&base);
+    same_defined_setoid_check(&base);
     if report_metrics {
         eprintln!(
             "x86_64 execution-law metrics: {:?}",
@@ -112,6 +114,81 @@ fn x86_64_suite() {
             "x86_64 negative-control metrics: {:?}",
             base.value_metrics().unwrap()
         );
+    }
+}
+
+// `SameDefinedState` is `=` pulled back along `erase_af`: a registered
+// equivalence, `≈` at `MachineState`, and congruence through the steps that
+// commute with erasing AF. The controls: a function that branches on AF has
+// no such proof and no certificate for `rel_cong`, and TEST's two permitted
+// results are related without being equal.
+fn same_defined_setoid_check(base: &Elaborator) {
+    let mut e = base.clone();
+    let src = r#"
+import x86_64;
+import relation_props;
+import bool;
+import logic;
+import list;
+
+// Two ordinary instructions in a row, from states that differ only in AF:
+// congruence walks both steps, each by its registered evidence.
+theorem two_steps_related<M>(first, second: Instruction, a, b: MachineState<M>, same: a ≈ b):
+    execute_normal(decoded_canonical(second), execute_normal(decoded_canonical(first), a)) ≈
+    execute_normal(decoded_canonical(second), execute_normal(decoded_canonical(first), b)) {
+    rel_cong(same)
+}
+
+// TEST's two permitted results, then one more step, then back.
+theorem test_then_step<M>(left, right: Gpr, next: Instruction, before: MachineState<M>, x: MachineState<M>,
+    back: x = execute_normal(decoded_canonical(next), execute_test(left, right, 3, before, False))):
+    execute_normal(decoded_canonical(next), execute_test(left, right, 3, before, True)) ≈ x {
+    calc {
+        execute_normal(decoded_canonical(next), execute_test(left, right, 3, before, True)) ≈
+            execute_normal(decoded_canonical(next), execute_test(left, right, 3, before, False)) :=
+            rel_cong(execute_test_same_defined(left, right, 3, before, True, False)),
+        ≈ x := SameDefinedState::of_equal(sym(back)),
+    }
+}
+
+// Generic setoid lemmas apply: the registered equivalence is found by resolution.
+theorem meet<A: Equivalence(R)>(R: A → A → Type, a, b, c: A, ab: R(a, b), cb: R(c, b)): R(a, c) {
+    A.rel_trans(a, b, c, ab, A.rel_sym(c, b, cb))
+}
+theorem through_the_instance<M>(a, b, c: MachineState<M>, ab: a ≈ b, cb: c ≈ b): a ≈ c {
+    meet(SameDefinedState<M>, a, b, c, ab, cb)
+}
+"#;
+    if let Err(err) = e.elab_module_source("same_defined_setoid", src) {
+        panic!("the SameDefinedState setoid did not check: {}", err.render(src));
+    }
+    let header = "import x86_64;\nimport relation_props;\nimport bool;\nimport logic;\nimport list;\n\n\
+        fn branch_on_af<M>(s: MachineState<M>) → MachineState<M> {\n\
+        MachineState(s.gprs, s.flags, match s.flags.af { True => s.rip, False => next_rip(s.rip, 1) }, s.memory)\n}\n";
+    for (name, body, expect) in [
+        (
+            "af_reader_commutes",
+            "theorem af_reader_respects<M>(): PreservesRelation(SameDefinedState<M>, SameDefinedState<M>, branch_on_af<M>) {\n\
+                 same_defined_respects(branch_on_af<M>, λ state => refl)\n}\n",
+            "NotConvertible",
+        ),
+        (
+            "af_reader_congruence",
+            "theorem af_reader_related<M>(a, b: MachineState<M>, same: a ≈ b): branch_on_af(a) ≈ branch_on_af(b) {\n\
+                 rel_cong(same)\n}\n",
+            "?compatibility",
+        ),
+        (
+            "test_results_equal",
+            "theorem test_results_equal<M>(left, right: Gpr, before: MachineState<M>):\n\
+                 execute_test(left, right, 3, before, True) = execute_test(left, right, 3, before, False) {\n    refl\n}\n",
+            "NotConvertible",
+        ),
+    ] {
+        let bad = format!("{header}\n{body}");
+        let mut e = base.clone();
+        let error = e.elab_module_source(name, &bad).expect_err(name).render(&bad);
+        assert!(error.contains(expect), "{name}: {error}");
     }
 }
 
