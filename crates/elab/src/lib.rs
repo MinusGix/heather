@@ -83,6 +83,7 @@ pub mod cutsat;
 pub mod omega;
 mod omega_cert;
 mod bv_omega;
+mod ring;
 pub use omega_cert::{CutSatReport, OmegaPhases, OmegaReport, OmegaResidualConstraint};
 pub mod certgen;
 pub mod function_ir_cert;
@@ -667,6 +668,9 @@ pub struct Elaborator {
     /// How many `omega` certificates are currently being checked above this
     /// point: the nesting depth recorded in [`OmegaPhases`].
     omega_depth: Cell<usize>,
+    /// How many `ring` certificates are being checked above this point
+    /// (`ring.rs`): their library names resolve as `omega`'s do.
+    ring_depth: Cell<usize>,
     /// The Ψ-extending binders of the `meta fn` currently elaborating (its
     /// `Ctx`/`TyCode` binders, plus letbox-bound code globals during quote
     /// assembly). The whnf/conv oracles append these to Ψ so meta-bound
@@ -1637,6 +1641,7 @@ impl Elaborator {
             container_at: Cell::new(0),
             omega_failure_reports: RefCell::new(Vec::new()),
             omega_depth: Cell::new(0),
+            ring_depth: Cell::new(0),
             meta_pushed: RefCell::new(Vec::new()),
             quote_depth: Cell::new(0),
             result_only_memo: RefCell::new(HashMap::new()),
@@ -2390,7 +2395,7 @@ impl Elaborator {
         // Omega's generated certificate may explicitly name its library
         // dependencies. This overlay applies to this qualified lookup only:
         // it neither opens bare names nor changes the caller's saved imports.
-        if self.omega_depth.get() > 0
+        if (self.omega_depth.get() > 0 || self.ring_depth.get() > 0)
             && let Some((module, base)) = split_qual(name)
             && matches!(module, "omega" | "nat" | "int" | "logic" | "list")
             && self.names.declares(module, base)
@@ -4872,6 +4877,31 @@ impl Elaborator {
                 && !self.shadowed(cx, name)
                 && self.ctor_here_expected(cx, name, expected).is_none() => {
                 relational_context::proof::derive(self, cx, expected, lvl, e.span)
+            }
+            // `ring` normalizes both sides of an equation at `Int` or `Nat`
+            // by reflection; `ring(h, …)` also combines equations
+            // (docs/ring-normalization-design.md).
+            ExprKind::Var(name)
+                if name == "ring"
+                    && !self.shadowed(cx, name)
+                    && self.ctor_here_expected(cx, name, expected).is_none() =>
+            {
+                self.elab_ring(cx, &[], expected, lvl, e.span)
+            }
+            ExprKind::App {
+                head,
+                args,
+                named,
+                explicit: false,
+                goal_oriented: false,
+            } if matches!(&head.kind, ExprKind::Var(name) if name == "ring")
+                && !self.shadowed(cx, "ring")
+                && self.ctor_here_expected(cx, "ring", expected).is_none() =>
+            {
+                if !named.is_empty() {
+                    return err("`ring` takes its equations positionally", e.span);
+                }
+                self.elab_ring(cx, args, expected, lvl, e.span)
             }
             // `positivity` is `:= infer`'s proposition search run as a tactic,
             // with `omega` as the fallback at every subgoal the evidence rules
