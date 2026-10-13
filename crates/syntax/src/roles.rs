@@ -176,7 +176,25 @@ impl<'a> Walk<'a> {
         }
     }
 
+    /// `Pos<A>` as a binder's type or a function's result is parser sugar
+    /// (`parser::pos_carrier`): the AST keeps only the carrier `A`, so the
+    /// list `Pos<…>` wrote around it is found from the tokens that hug it.
+    fn pos_wrapper(&mut self, t: &Ty) {
+        let Some(at) = self.toks.iter().position(|k| k.span.start == t.span.start) else { return };
+        if at < 2
+            || !matches!(self.toks[at - 1].kind, TokKind::Lt)
+            || !matches!(&self.toks[at - 2].kind, TokKind::Ident(i) if i == "Pos")
+        {
+            return;
+        }
+        let after = self.toks.iter().find(|k| k.span.start >= t.span.end);
+        if let Some(close) = after.filter(|k| matches!(k.kind, TokKind::Gt)) {
+            self.sites.push(("ty-pos-sugar", Delims { open: self.toks[at - 1].span.start, close: close.span.start }));
+        }
+    }
+
     fn ty(&mut self, t: &Ty) {
+        self.pos_wrapper(t);
         match &t.kind {
             TyKind::Named { args, .. } if !args.is_empty() => {
                 self.list_spanned("ty-named", t.span, args[0].span, args[args.len() - 1].span);

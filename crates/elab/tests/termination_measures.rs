@@ -100,7 +100,7 @@ fn gcd(a, b: Nat) -> Nat decreases b {
         Zero => a,
         Succ(k) => gcd(Succ(k), nat::Nat::mod(a, Succ(k))),
     }
-    on ?dec1 := nat::Nat::mod_lt(a, Succ(k), trivial);
+    on ?dec1 := nat::Nat::mod_lt(a, Succ(k));
 }
 "#;
 
