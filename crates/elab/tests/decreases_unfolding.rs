@@ -132,7 +132,7 @@ fn gcd_carries_its_by_hand_obligation_into_the_companions() {
                 Zero => a,
                 Succ(k) => gcd(Succ(k), nat::Nat::mod(a, Succ(k))),
             }
-            on ?dec1 := nat::Nat::mod_lt(a, Succ(k), trivial);
+            on ?dec1 := nat::Nat::mod_lt(a, Succ(k));
         }
 
         theorem gcd_step(a, k: Nat): gcd(a, Succ(k)) = gcd(Succ(k), nat::Nat::mod(a, Succ(k))) {

@@ -131,6 +131,18 @@ fn the_two_roles_of_angle_brackets() {
     );
 }
 
+/// `Pos<A>` is parser sugar whose AST keeps only the carrier, so its list is
+/// found from the tokens around the carrier: a parameter run, a nested
+/// carrier, and a function result, each beside a real comparison.
+#[test]
+fn pos_sugar_angle_brackets_are_delimiters() {
+    check(
+        "theorem t(a,b: Pos<Nat>,xs: Pos<List<Nat> >): 0<a { a_pos }",
+        "theorem t(a, b: Pos<Nat>, xs: Pos<List<Nat>>): 0 < a { a_pos }",
+    );
+    check("fn ten(i: Nat) -> Pos<Nat> { 10 }", "fn ten(i: Nat) -> Pos<Nat> { 10 }");
+}
+
 #[test]
 fn projections_and_qualified_names_stay_tight() {
     check("fn f(p: Pair) -> Nat { p . fst }", "fn f(p: Pair) -> Nat { p.fst }");
