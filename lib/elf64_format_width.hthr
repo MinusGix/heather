@@ -30,7 +30,10 @@ import omega;
 // one it prints nothing, and from the leading place on it prints the digit.
 // The units place is always printed, so zero prints "0".
 
-fn ten_pow(i: Nat) → Nat { Nat::pow(10, i) }
+fn ten_pow(i: Nat) → Pos<Nat> {
+    Nat::pow(10, i)
+    on ?pos := ten_pow_positive(i);
+}
 
 // One when the place `p` is at most `n`: `n` has a digit there.
 fn reaches(p, n: Nat) → Nat { match p.leb(n) { True => 1, False => 0 } }
@@ -59,9 +62,8 @@ fn padded_decimal(width, n: Nat) → List<BitVec(8)> { pad_left(width, BitVec::o
 // ---------------------------------------------------------------------------
 // The places printed are `decimal`.
 
-theorem ten_pow_pos(i: Nat): 0 < ten_pow(i) { ten_pow_positive(i) }
 theorem ten_pow_grows(i: Nat): ten_pow(i) <= ten_pow(Succ(i)) {
-    let p = ten_pow_pos(i);
+    let p = ten_pow::pos(i := i);
     let grown: (ten_pow(i) <= ten_pow(i) * 10) = omega;
     grown
 }
@@ -81,9 +83,9 @@ theorem places_mod(k: Nat): (n: Nat) → places(k)(n) = places(k)(n.mod(ten_pow(
             let m = n.mod(p * 10);
             let wide: (p * 10 = 10 * p) = Nat::mul_comm(p, 10);
             let units: (m.mod(10) = n.mod(10)) =
-                trans(cong_fn<Nat, Nat>(λ d => n.mod(d).mod(10), wide), Nat::mod_mul_mod(n, 10, p, trivial, ten_pow_pos(j)));
+                trans(cong_fn<Nat, Nat>(λ d => n.mod(d).mod(10), wide), Nat::mod_mul_mod(n, 10, p));
             let tens: (n.div(10).mod(p) = m.div(10)) =
-                trans(Nat::div_mod_eq_mod_div(n, 10, p, trivial, ten_pow_pos(j)), cong_fn<Nat, Nat>(λ d => n.mod(d).div(10), sym(wide)));
+                trans(Nat::div_mod_eq_mod_div(n, 10, p), cong_fn<Nat, Nat>(λ d => n.mod(d).div(10), sym(wide)));
             let front: (places(j)(n.div(10)) = places(j)(m.div(10))) =
                 trans(places_mod(j, n.div(10)), cong_fn<Nat, List<BitVec(8)>>(λ x => places(j)(x), tens));
             trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ xs => xs ++ [digit(n.mod(10))], front),
@@ -121,7 +123,7 @@ theorem place_digits_past(top: Nat): (m, n: Nat) → m < ten_pow(Succ(top)) → 
             let p = ten_pow(Succ(i));
             let leads: (p.leb(n) = True) = leb_yes(p, n, led);
             let rest: (place_digits(i)(m.mod(p), n) = places(Succ(i))(m.mod(p))) =
-                place_digits_past(i, m.mod(p), n, Nat::mod_lt(m, p, ten_pow_pos(Succ(i))), Nat::le_trans(ten_pow(i), p, n, ten_pow_grows(i), led));
+                place_digits_past(i, m.mod(p), n, Nat::mod_lt(m, p), Nat::le_trans(ten_pow(i), p, n, ten_pow_grows(i), led));
             trans(j(sym(leads), λ b _ => (match b { True => Cons(digit(m.div(p)), place_digits(i)(m.mod(p), n)), False => place_digits(i)(m.mod(p), n) }) =
                     Cons(digit(m.div(p)), place_digits(i)(m.mod(p), n)), refl),
                 trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ xs => Cons(digit(m.div(p)), xs), rest), sym(places_split(i, m, small))))
@@ -130,14 +132,14 @@ theorem place_digits_past(top: Nat): (m, n: Nat) → m < ten_pow(Succ(top)) → 
 }
 
 // A count at least a place has at least one there.
-theorem div_reaches(m, p: Nat, led: p <= m, positive: 0 < p): 1 <= m.div(p) {
+theorem div_reaches(m: Nat, p: Pos<Nat>, led: p <= m): 1 <= m.div(p) {
     match Nat::le_dec(1, m.div(p)) {
         Inl(yes) => yes,
         Inr(no) => {
             let zero: (m.div(p) = 0) = { omega };
             let none: (m.div(p) * p = 0) = trans(cong_fn<Nat, Nat>(λ d => d * p, zero), Nat::mul_left_zero(p));
             let parts = Nat::div_mul_add_mod(m, p);
-            let under = Nat::mod_lt(m, p, positive);
+            let under = Nat::mod_lt(m, p);
             false_elim(Nat::lt_irrefl(m, { omega }))
         },
     }
@@ -152,14 +154,14 @@ theorem place_digits_decimal(top: Nat): (m: Nat) → m < ten_pow(Succ(top)) → 
             match Nat::le_dec(p, m) {
                 Inl(led) => {
                     let leads: (p.leb(m) = True) = leb_yes(p, m, led);
-                    let rest = place_digits_past(i, m.mod(p), m, Nat::mod_lt(m, p, ten_pow_pos(Succ(i))),
+                    let rest = place_digits_past(i, m.mod(p), m, Nat::mod_lt(m, p),
                         Nat::le_trans(ten_pow(i), p, m, ten_pow_grows(i), led));
                     let top: (m.div(p) < 10) = Nat::div_lt_of_lt_mul(m, p, 10, small);
                     let digits: (decimal(m) = places(Succ(Succ(i)))(m)) =
                         decimal_places(Succ(i), m, m, Nat::le_trans(Succ(i), p, m, ten_pow_above(i), led),
                             j(sym(tens_is_div(Succ(i), m)), λ t _ => t <= 9, { omega }),
                             j(sym(tens_is_div(Succ(i), m)), λ t _ => 1 <= t,
-                                Nat::le_trans(1, 1, m.div(p), trivial, div_reaches(m, p, led, ten_pow_pos(Succ(i))))));
+                                Nat::le_trans(1, 1, m.div(p), trivial, div_reaches(m, p, led))));
                     trans(j(sym(leads), λ b _ => (match b { True => Cons(digit(m.div(p)), place_digits(i)(m.mod(p), m)), False => place_digits(i)(m.mod(p), m) }) =
                             Cons(digit(m.div(p)), place_digits(i)(m.mod(p), m)), refl),
                         trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ xs => Cons(digit(m.div(p)), xs), rest),
@@ -364,7 +366,7 @@ theorem cmp_not_below(a, b: BitVec(64), carry: a.borrow_sub_bit(b) = False): b.t
 // The places that fit a word.
 theorem ten_pow_mono(i: Nat): (k: Nat) → i <= k → ten_pow(i) <= ten_pow(k) {
     match i as λ w => (k: Nat) → w <= k → ten_pow(w) <= ten_pow(k) {
-        Zero => λ k _ => ten_pow_pos(k),
+        Zero => λ k _ => ten_pow::pos(i := k),
         Succ(a) => λ k => match k as λ v => Succ(a) <= v → ten_pow(Succ(a)) <= ten_pow(v) {
             Zero => λ never => false_elim(never),
             Succ(b) => λ le => { let inner = ten_pow_mono(a, b, le); let grown: (ten_pow(a) * 10 <= ten_pow(b) * 10) = omega; grown },
@@ -753,21 +755,21 @@ theorem low_byte(x: BitVec(64), v: Nat, value: x.toNat() = v, small: v < 256): i
 }
 
 // Taking a place away once: one fewer to take, the same remainder.
-theorem take_place(x, p, q: Nat, positive: 0 < p, count: x.div(p) = Succ(q)): (p <= x) ∧ (((x -p).div(p) = q) ∧ ((x -p).mod(p) = x.mod(p))) {
+theorem take_place(x: Nat, p: Pos<Nat>, q: Nat, count: x.div(p) = Succ(q)): (p <= x) ∧ (((x -p).div(p) = q) ∧ ((x -p).mod(p) = x.mod(p))) {
     let parts = Nat::div_mul_add_mod(x, p);
     let whole: (Succ(q) * p + x.mod(p) = x) = j(count, λ d _ => d * p + x.mod(p) = x, parts);
     let unfold: (Succ(q) * p = p + q * p) = Nat::mul_succ_left(q, p);
-    let under = Nat::mod_lt(x, p, positive);
+    let under = Nat::mod_lt(x, p);
     let fits: (p <= x) = omega;
     let back: ((x -p) + p = x) = Nat::sub_add_cancel(p, x, fits);
     let rest: (q * p + x.mod(p) = x -p) = omega;
     let unique = Nat::div_mod_unique(x -p, p, q, x.mod(p), rest, under);
     ⟨fits, unique⟩
 }
-theorem none_left(x, p: Nat, positive: 0 < p, count: x.div(p) = 0): x < p {
+theorem none_left(x: Nat, p: Pos<Nat>, count: x.div(p) = 0): x < p {
     let parts = Nat::div_mul_add_mod(x, p);
     let none: (x.div(p) * p = 0) = trans(cong_fn<Nat, Nat>(λ d => d * p, count), Nat::mul_left_zero(p));
-    let under = Nat::mod_lt(x, p, positive);
+    let under = Nat::mod_lt(x, p);
     omega
 }
 
@@ -796,7 +798,7 @@ theorem inner_run(file: IoImage, page: Nat → BitVec(8), i: Nat, small: i <= 19
     let fetch = io_fetch_access();
     let data = io_data_access();
     let p = ten_pow(i);
-    let positive = ten_pow_pos(i);
+    let positive = ten_pow::pos(i := i);
     let piece = asm_placed(file, no_fills(), le_skip(i), trivial, at, placed);
     let jb = JumpIfNear(B, asm_jump(emit_labels(i), le_carry(i)));
     match q as λ g => (x, c: Nat) → (state: MachineState<IoMemory>) → x.div(p) = g → c + g <= 9 →
@@ -808,7 +810,7 @@ theorem inner_run(file: IoImage, page: Nat → BitVec(8), i: Nat, small: i <= 19
             let s1 = execute_block_normal(emit_fit_block(), state);
             let jumped = run_near(file, page, jb, at, asm_at(le_carry(i)), piece(le_carry(i)), s1, tested.memory_is, tested.rip_is);
             let s2 = execute_near_control(jb, s1);
-            let less: (x < p) = none_left(x, p, positive, count);
+            let less: (x < p) = none_left(x, p, count);
             let rax_word = read_gpr(Rax, state.gprs);
             let r11_word = read_gpr(R11, state.gprs);
             let r11_value: (r11_word.toNat() = p) = trans(cong_fn<BitVec(64), Nat>(λ v => v.toNat(), r11), place_word_value(i, small));
@@ -822,7 +824,7 @@ theorem inner_run(file: IoImage, page: Nat → BitVec(8), i: Nat, small: i <= 19
                     rbx := refl, rdi := refl, kept := fmt_kept_refl(state.gprs))⟩)
         },
         Succ(g) => λ x c state count room memory_is rip_is rax r11 rcx => {
-            let taken = take_place(x, p, g, positive, count);
+            let taken = take_place(x, p, g, count);
             let more = inner_more(c, g, room);
             let tested = run_block(file, page, emit_fit_block(), at, emit_fit_at(), piece(le_fit(i)), state, memory_is, rip_is);
             let s1 = execute_block_normal(emit_fit_block(), state);
@@ -895,7 +897,7 @@ theorem emit_step(file: IoImage, page0: Nat → BitVec(8), i: Nat, small: Succ(i
     let data = io_data_access();
     let io = io_linux();
     let p = ten_pow(Succ(i));
-    let positive = ten_pow_pos(Succ(i));
+    let positive = ten_pow::pos(i := Succ(i));
     let piece = asm_placed(file, no_fills(), le_skip(Succ(i)), trivial, at, placed);
     let tested = run_block(file, head.page, emit_test_block(Succ(i)), at, asm_at(le_test(Succ(i))), piece(le_test(Succ(i))), state, head.memory_is, head.rip_is);
     let s1 = execute_block_normal(emit_test_block(Succ(i)), state);
@@ -1055,7 +1057,7 @@ theorem emit_run(file: IoImage, page0: Nat → BitVec(8), o, n: Nat, origin: Gpr
             let moved: (next_rip(at, emit_block(Succ(i)).len()) = next_rip(at, emit_len())) = rip_count(at, emit_block_len(Succ(i)));
             let front_len: ((front ++ lead).len() = front.len() + lead.len()) = List::len_append(front, lead);
             have rest = emit_run(file, page0, o, n, origin, i, next_rip(at, emit_len()), front ++ lead, m.mod(p), first.witness, { omega },
-                Nat::mod_lt(m, p, ten_pow_pos(Succ(i))), Nat::le_trans(m.mod(p), m, n, mod_le_self(m, p), within),
+                Nat::mod_lt(m, p), Nat::le_trans(m.mod(p), m, n, mod_le_self(m, p), within),
                 j(sym(front_len), λ l _ => o + (l + rest_digits.len()) <= 4096,
                     emit_lead_room(o, front.len(), lead.len(), rest_digits.len(), j(whole_len, λ l _ => o + (front.len() + l) <= 4096, room))),
                 j(moved, λ a _ => Placed(file, emit_code(i), a), parts.right), first.proof.right.left, first.proof.right.right.left,

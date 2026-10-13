@@ -549,7 +549,7 @@ theorem nat_div_upper(dividend, divisor_pred: Nat):
                 product.add_le_mono_l(
                 Succ(remainder),
                 Succ(divisor_pred),
-                dividend.mod_lt(Succ(divisor_pred), trivial)))))
+                dividend.mod_lt(Succ(divisor_pred))))))
 }
 
 theorem nat_mod_expand(dividend, divisor: Nat):
