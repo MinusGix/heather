@@ -77,7 +77,47 @@ pub enum StructuredPlan {
         false_displacement: u32,
         join_displacement: u32,
         near: bool,
+        /// One arm has no code (a passthrough, `passthrough`): the branch is
+        /// `CodeWhen`, `test ; Jcc join ; body`, with no JMP and no node for
+        /// the empty arm. `false_displacement` is then the skip over the body
+        /// and `join_displacement` is 0. Both arms stay in the plan.
+        one_armed: Option<OneArmed>,
     },
+}
+
+/// Which arm a one-armed conditional runs (`CodeWhen`). `True`: the false arm
+/// is empty and the body is the true arm under the plan's own test. `False`:
+/// the true arm is empty, and the body is the false arm under the negated
+/// comparison, which the condition-code family makes free
+/// (docs/structured-lowering-code-size-design.md §2.3). A materialised bit's
+/// TEST has no negated form, so only a comparison elides its true arm.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OneArmed { True, False }
+
+impl OneArmed {
+    /// The Jcc condition code over the body: the plan test's skip, or for a
+    /// body on the false side its negation (the low bit, as the manual
+    /// numbers the family).
+    pub fn skip_code(self, test: PlannedTest) -> u8 {
+        match self { OneArmed::True => test.skip_code(), OneArmed::False => test.skip_code() ^ 1 }
+    }
+}
+
+/// The input a dataflow arm returns unchanged, through `Move`s only: an arm
+/// that lowers to no code. `None` for anything that computes.
+pub(crate) fn passthrough(region: &StructuredRegion) -> Option<Port> {
+    let StructuredRegion::Dataflow(region) = region else { return None };
+    let [output] = region.outputs[..] else { return None };
+    let mut id = output.id;
+    loop {
+        if let Some(port) = region.inputs.iter().find(|port| port.id == id) {
+            return (port.width == output.width).then_some(*port);
+        }
+        match region.nodes.iter().find(|node| node.output().id == id)? {
+            Node::Move { source, .. } => id = *source,
+            _ => return None,
+        }
+    }
 }
 
 /// Compatibility entry point for a single result. Leaf instruction widths
@@ -323,6 +363,24 @@ fn branch(
     let (scratch, consumed) = child_pool(temporaries, consumable, &branch_inputs.values().copied().collect::<Vec<_>>(), &BTreeSet::new());
     let yes = select(when_true, &branch_inputs, &scratch, &consumed, requested, &format!("{path}.true"))?;
     let no = select(when_false, &branch_inputs, &scratch, &consumed, requested, &format!("{path}.false"))?;
+    // An arm that returns its input where it already is has no code; the
+    // other runs under a one-armed branch, `test ; Jcc join ; body`, while it
+    // fits rel8. Word results only: a bit result is normalised per arm.
+    let empty = |region: &StructuredRegion, arm: &LoweredStructured| matches!(&arm.body, StructuredPlan::Dataflow(dag) if dag.instructions.is_empty())
+        && passthrough(region).is_some_and(|port| port.width != 1);
+    let one_armed = if empty(when_false, &no) && yes.byte_length <= 127 { Some(OneArmed::True) }
+        else if empty(when_true, &yes) && matches!(test, PlannedTest::Compare { .. }) && no.byte_length <= 127 { Some(OneArmed::False) }
+        else { None };
+    if let Some(arm) = one_armed {
+        let body = if arm == OneArmed::True { &yes } else { &no };
+        let length = 3 + 2 + body.byte_length;
+        let clobbered = yes.clobbered.union(&no.clobbered).copied().collect();
+        let false_displacement = body.byte_length as u32;
+        return Ok((StructuredPlan::Conditional {
+            test, when_true: Box::new(yes), when_false: Box::new(no),
+            false_displacement, join_displacement: 0, near: false, one_armed,
+        }, clobbered, length));
+    }
     // TEST r,r or CMP l,r; Jcc false; true; JMP join; false. Short jumps
     // while both distances fit rel8, near (Jcc rel32, JMP rel32) otherwise.
     let near = yes.byte_length + 2 > 127 || no.byte_length > 127;
@@ -336,7 +394,7 @@ fn branch(
     let clobbered = yes.clobbered.union(&no.clobbered).copied().collect();
     Ok((StructuredPlan::Conditional {
         test, when_true: Box::new(yes), when_false: Box::new(no),
-        false_displacement: false_distance as u32, join_displacement: join_distance as u32, near,
+        false_displacement: false_distance as u32, join_displacement: join_distance as u32, near, one_armed: None,
     }, clobbered, length))
 }
 

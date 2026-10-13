@@ -1,6 +1,6 @@
 # A tighter structured x86 lowering — design
 
-Status: **decisions taken 2026-09-29 (§6, all as recommended); probes V2–V5 done 2026-09-29 (§7.1); slices landed 2026-09-30: F (§2.4), F′ (§2.5), P's in-place results (§3.1) and `Move` node (§3.2), and I (§4.1). `CodeWhen` (§2.3) deferred.** Owner:
+Status: **decisions taken 2026-09-29 (§6, all as recommended); probes V2–V5 done 2026-09-29 (§7.1); slices landed 2026-09-30: F (§2.4), F′ (§2.5), P's in-place results (§3.1) and `Move` node (§3.2), and I (§4.1). `CodeWhen` (§2.3) landed 2026-10-13 (§2.6).** Owner:
 `issues/structured-lowering-code-size.md`. Also lands
 `issues/function-ir-x86-fused-compare-branch.md`. Builds on
 `docs/native-wc-design.md` §4.5 (near conditionals) and §5.1 (the measurement
@@ -226,6 +226,55 @@ the constant once, and refuses a false arm claiming to take away `b`. It
 also runs natively in `native_branches` against C. A unit test pins where
 the rewrite does not apply: another constant, an arm that returns the
 constant, and a narrow comparison.
+
+### 2.6 `CodeWhen` as landed (2026-10-13)
+
+`CodeWhen(test, displacement, body)` is `test ; Jcc(branch_skip(test)) rel8 ;
+body`: the body sits where `CodeBranch`'s true arm does and runs when the test
+holds, so the constructor reuses the two-armed branch's entry state, skip and
+test lemmas. When it is the *true* arm that is empty, the lowering takes the
+false arm as the body under the negated comparison (`Compare(l, r, AE)` for an
+unsigned `<`, `GE`, `NE`). Its skip is then the comparison itself, which
+`unsigned_compare_holds`, `signed_compare_holds` and `equal_compare_holds`
+state, the twins of the `_skips` lemmas. A materialised bit's `TEST r, r` has
+no negated form, so an empty true arm under `NonZero` keeps both arms. There
+is no near form, so a body past rel8 keeps `CodeBranchNear`.
+
+The library gains the constructor's case in each fold (`structured_bytes`,
+`structured_after`, `StructuredLayout`, `StructuredDecodes`,
+`structured_fetched`, `pure_structured_memory`) and the node lemmas
+(`structured_when_property`/`_cases`/`_read`/`_length`/`_bytes`/`_layout`/
+`_decodes`). In the plan, `StructuredPlan::Conditional` carries `one_armed:
+Option<OneArmed>` and keeps both arms, so interpreters and tests read the same
+shape. An arm is empty when its plan has no instructions and its region
+returns an input through `Move`s alone (`passthrough`). That is checked on
+the region and not only the plan, because the certificate spells the skipped
+path's result as that input.
+
+**Certificate.** The empty arm is no node. On the skip the result is the
+input's own placement fact, read through `structured_when_read`, since neither
+the test nor the Jcc writes a register. So a `place` is five nodes rather than
+six (the composition, its sequence, the threshold's load, the branch and its
+body). `field_low` falls from 5,329 to 4,613 declarations and 3.44 to 3.03 MB
+of text, and `field_high` from 7,234 to 6,126 and 5.69 to 4.91 MB. Checked
+standalone as `issues/field-high-certificate-shape.md` measures them (release
+binary, width one, no `--timings`, interleaved, one cloud box, three runs
+each), `field_high` went from 16.3–16.5 s to 13.9–14.7 s and `field_low` from
+10.7–11.4 s to 9.9–10.1 s. The empty leaf was cheap, which is why the time
+falls less than the declaration count.
+
+**Bytes.** `field_low` 637 → 597 and `field_high` 868 → 808. Each of the 20
+and 30 steps is `cmp ; jb join ; body`, two bytes shorter.
+
+Tests (`one_armed_branches_certify_and_refuse_another_skip`): five hand-built
+steps. One has an empty false arm (skip `B`), and four have an empty true arm:
+unsigned, signed and equal at 64 bits, and unsigned at a byte, which goes
+through the zero-extension law. Each certifies, and its encoding is
+`70+cc rel8` over the body. Each is refused with the skip's condition code
+changed, and with the skipped path claiming to return the other input. A
+materialised bit with an empty true arm keeps both arms and certifies.
+`keep_twice` is one-armed in its outer step; it runs natively in
+`native_branches` as before.
 
 ## 3. P: results in place
 

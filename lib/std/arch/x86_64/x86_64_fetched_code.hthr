@@ -759,6 +759,70 @@ theorem branch_near_taken_close<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M
                 rip_count(before.rip, sym(branch_near_bytes_len(test, fd, jd, yes, no)))))))⟩
 }
 
+// A one-armed conditional's pieces: TEST, Jcc over the body, the body.
+fn when_bytes(test: BranchTest, d: BitVec(8), body: List<BitVec(8)>) → List<BitVec(8)> {
+    canonical_bytes(branch_test_instruction(test)) ++ (short_control_bytes(JumpIf(branch_skip(test), d)) ++ body)
+}
+theorem when_bytes_len(test: BranchTest, d: BitVec(8), body: List<BitVec(8)>):
+    when_bytes(test, d, body).len() = 3 + (2 + body.len()) {
+    let rest = short_control_bytes(JumpIf(branch_skip(test), d)) ++ body;
+    trans(List::len_append(canonical_bytes(branch_test_instruction(test)), rest),
+        trans(cong_fn<Nat, Nat>(λ k => k + rest.len(), branch_test_bytes_len(test)),
+            cong_fn<Nat, Nat>(λ n => 3 + n, List::len_append(short_control_bytes(JumpIf(branch_skip(test), d)), body))))
+}
+theorem when_count(b: Nat): (3 + 2) + b = 3 + (2 + b) { omega }
+
+// TEST and the Jcc run fetched, and the body is resident where it starts.
+theorem when_entry_fetched<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, test: BranchTest, d: BitVec(8),
+    body: List<BitVec(8)>, before: MachineState<M>,
+    resident: CodeResident(fetch, before.memory, when_bytes(test, d, body), before.rip)):
+    FetchedSteps(fetch, data, before, structured_branch_entry(test, d, before)) ∧
+    CodeResident(fetch, before.memory, body, branch_yes_at(test, before)) {
+    let test_bytes = canonical_bytes(branch_test_instruction(test));
+    let jz = short_control_bytes(JumpIf(branch_skip(test), d));
+    let r0 = resident_split(fetch, before.memory, test_bytes, jz ++ body, before.rip, resident);
+    let tested = branch_test_state(test, before);
+    let r1 = resident_split(fetch, before.memory, jz, body, tested.rip,
+        j(branch_test_bytes_len(test), λ k _ => CodeResident(fetch, before.memory, jz ++ body, next_rip(before.rip, k)), r0.right));
+    let entry = structured_branch_entry(test, d, before);
+    ⟨fetched_steps_cons(fetch, data, before, tested, entry,
+        j(sym(branch_test_canonical(test, before)), λ state _ => FetchedStep(fetch, data, before, state),
+            ordinary_fetched_step(fetch, data, branch_test_instruction(test), before, r0.left)),
+        fetched_steps_one(fetch, data, tested, entry, short_fetched_step(fetch, data, JumpIf(branch_skip(test), d), tested, r1.left))),
+     r1.right⟩
+}
+
+// The body ran from its start to `after`, which is the join.
+theorem when_ran_close<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, test: BranchTest, d: BitVec(8),
+    body: List<BitVec(8)>, before, after: MachineState<M>,
+    entry_steps: FetchedSteps(fetch, data, before, structured_branch_entry(test, d, before)),
+    body_steps: FetchedSteps(fetch, data, structured_branch_entry(test, d, before), after),
+    after_rip: after.rip = next_rip(branch_yes_at(test, before), body.len())):
+    FetchedSteps(fetch, data, before, after) ∧
+    after.rip = next_rip(before.rip, when_bytes(test, d, body).len()) {
+    let b = body.len();
+    ⟨fetched_steps_trans(fetch, data, before, structured_branch_entry(test, d, before), after, entry_steps, body_steps),
+     trans(after_rip,
+        trans(cong_fn<BitVec(64), BitVec(64)>(λ address => next_rip(address, b), rip_compose(before.rip, 3, 2)),
+        trans(rip_compose(before.rip, 3 + 2, b),
+            trans(rip_count(before.rip, when_count(b)), rip_count(before.rip, sym(when_bytes_len(test, d, body)))))))⟩
+}
+
+// The Jcc jumped over the body: the entry is the join.
+theorem when_skipped_close<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, test: BranchTest, d: BitVec(8),
+    body: List<BitVec(8)>, before: MachineState<M>,
+    over: (start: BitVec(64)) → short_branch_target(start, d) = next_rip(start, 2 + body.len()),
+    taken: branch_skips(test, before) = True,
+    entry_steps: FetchedSteps(fetch, data, before, structured_branch_entry(test, d, before))):
+    FetchedSteps(fetch, data, before, structured_branch_entry(test, d, before)) ∧
+    structured_branch_entry(test, d, before).rip = next_rip(before.rip, when_bytes(test, d, body).len()) {
+    let tested = branch_test_state(test, before);
+    ⟨entry_steps,
+     trans(jump_zero_taken_rip(condition_holds(branch_skip(test), tested.flags), tested.rip, d, taken),
+        trans(over(tested.rip), trans(rip_compose(before.rip, 3, 2 + body.len()),
+            rip_count(before.rip, sym(when_bytes_len(test, d, body))))))⟩
+}
+
 // ---- StructuredCode ----
 
 // A pure tree runs fetched from its start to `structured_after`, ending just
@@ -860,6 +924,23 @@ theorem structured_fetched<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, co
                         structured_after(no, entry), parts.left, arm.left,
                         trans(arm.right, cong_fn<BitVec(64), BitVec(64)>(λ address => next_rip(address, structured_bytes(no).len()), entry_rip)))
                 })
+        },
+        CodeWhen(test, d, body) => λ before layout resident => {
+            let parts = when_entry_fetched(fetch, data, test, d, structured_bytes(body), before, resident);
+            let entry = structured_branch_entry(test, d, before);
+            let tested = branch_test_state(test, before);
+            structured_when_cases(test, d, body, before,
+                λ state => FetchedSteps(fetch, data, before, state) ∧
+                    state.rip = next_rip(before.rip, structured_bytes(CodeWhen(test, d, body)).len()),
+                λ not_taken => {
+                    let entry_rip: (entry.rip = branch_yes_at(test, before)) =
+                        jump_zero_not_taken_rip(condition_holds(branch_skip(test), tested.flags), tested.rip, d, not_taken);
+                    let arm = structured_fetched(fetch, data, body, entry, layout.right,
+                        resident_state(fetch, structured_bytes(body), before.memory, branch_yes_at(test, before), entry, refl, entry_rip, parts.right));
+                    when_ran_close(fetch, data, test, d, structured_bytes(body), before, structured_after(body, entry), parts.left, arm.left,
+                        trans(arm.right, cong_fn<BitVec(64), BitVec(64)>(λ address => next_rip(address, structured_bytes(body).len()), entry_rip)))
+                },
+                λ taken => when_skipped_close(fetch, data, test, d, structured_bytes(body), before, layout.left, taken, parts.left))
         },
     }
 }

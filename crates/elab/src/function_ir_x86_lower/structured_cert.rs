@@ -301,43 +301,13 @@ fn emit(n: &str, r: &StructuredRegion, p: &LoweredStructured, incoming: &Values,
                 outputs: outputs.clone(), when_true: when_true.clone(), when_false: when_false.clone() };
             return emit_sequence(n, r, p, &first_region, &first_plan, &branch, next, incoming, m, sources);
         }
-        (StructuredRegion::Conditional { condition, when_true, when_false, .. }, StructuredPlan::Conditional { test: planned, when_true: yes, when_false: no, false_displacement, join_displacement, near }) => {
+        (StructuredRegion::Conditional { condition, when_true, when_false, .. }, StructuredPlan::Conditional { test: planned, when_true: yes, when_false: no, one_armed: Some(arm), .. }) => {
+            return emit_when(n, r, p, *condition, *planned, *arm, (when_true, yes), (when_false, no), incoming, m, sources);
+        }
+        (StructuredRegion::Conditional { condition, when_true, when_false, .. }, StructuredPlan::Conditional { test: planned, when_true: yes, when_false: no, false_displacement, join_displacement, near, one_armed: None }) => {
             let t = format!("{n}_true"); let f = format!("{n}_false");
             let tv = emit(&t, when_true, yes, incoming, m, sources)?; let fv = emit(&f, when_false, no, incoming, m, sources)?;
-            // What the branch tests, as `StructuredCode` spells it, the
-            // Boolean that picks the true arm, and why the machine's selector
-            // is that Boolean's zero test.
-            let (test, bit, placed, selector) = match *planned {
-                PlannedTest::NonZero(register) => {
-                    let register = register.heather_name();
-                    let bit = test_of(&incoming[condition]).unwrap_or_else(|| format!("@bitvec::BitVec::head_bit(0, {})", val(incoming, *condition, 1)));
-                    (format!("NonZero({register})"), bit,
-                        format!("test_bit_value_placed_zf(λ width _ => {}, {condition}, {register}, before, placed_{condition})", incoming[condition]),
-                        format!("structured_test({register}, before).flags.zf"))
-                }
-                PlannedTest::Compare { left, right, operation, left_port, right_port, width } => {
-                    let (l, rr) = (left.heather_name(), right.heather_name());
-                    let (a, b) = (val(incoming, left_port, width), val(incoming, right_port, width));
-                    let (op, cc, lemma, zero_extend_law) = match operation {
-                        ComparisonOperation::UnsignedLessThan => ("unsigned_lt_bit", "B", "unsigned_compare_skips", Some("unsigned_lt_zero_extend")),
-                        ComparisonOperation::SignedLessThan => ("signed_lt_bit", "L", "signed_compare_skips", None),
-                        ComparisonOperation::Equal => ("eq_bit", "E", "equal_compare_skips", Some("eq_bit_zero_extend")),
-                    };
-                    fun(m, format!("{n}_test"), false, logical(), "Bool".into(), format!("@bitvec::BitVec::{op}({width}, {a}, {b})"));
-                    let test = format!("Compare({l}, {rr}, {cc})");
-                    // CMP compares the placed words; below 64 bits those are
-                    // the operands zero-extended, whose comparison is the
-                    // narrow one by the zero-extension law.
-                    let (wide_a, wide_b) = (placed_expression(width, &a), placed_expression(width, &b));
-                    let skips = format!("{lemma}({l}, {rr}, {wide_a}, {wide_b}, before, placed_{left_port}, placed_{right_port})");
-                    let skips = if width == 64 { skips } else {
-                        let zero_extend_law = zero_extend_law.expect("fusable refuses a narrow signed comparison");
-                        trans(&skips, &format!("cong_fn<bool::Bool, bool::Bool>(λ bit => bool::Bool::not(bit), bitvec::BitVec::{zero_extend_law}({width}, {}, {a}, {b}))", 64 - width))
-                    };
-                    (test.clone(), format!("{n}_test(values)"), skips,
-                        format!("branch_skips({test}, before)"))
-                }
-            };
+            let (test, bit, placed, selector) = describe_test(n, *planned, *condition, incoming, m, false);
             let compare = matches!(planned, PlannedTest::Compare { .. });
             // The two encodings differ in their jumps only: rel8 JZ/JMP (2
             // bytes each), or JZ rel32 (6) and JMP rel32 (5).
@@ -413,14 +383,7 @@ fn emit(n: &str, r: &StructuredRegion, p: &LoweredStructured, incoming: &Values,
                         let mut jmp = vec![0xe9]; jmp.extend((jdn as u32).to_le_bytes());
                         (literal_bytes(&jz), literal_bytes(&jmp))
                     } else { (literal_bytes(&[0x70 | planned.skip_code(), fdn as u8]), literal_bytes(&[0xeb, jdn as u8])) };
-                    let test_literal = match *planned {
-                        PlannedTest::NonZero(register) => {
-                            let r = encoding::register_code(register);
-                            vec![0x48 | (r >> 3) | ((r >> 3) << 2), 0x85, 0xc0 | ((r & 7) << 3) | (r & 7)]
-                        }
-                        PlannedTest::Compare { .. } => encoding::encode_instructions(&[planned.instruction().expect("a comparison's instruction")]),
-                    };
-                    (format!("{} ++ ({jz_literal} ++ ({t}_lit() ++ ({jmp_literal} ++ {f}_lit())))", literal_bytes(&test_literal)),
+                    (format!("{} ++ ({jz_literal} ++ ({t}_lit() ++ ({jmp_literal} ++ {f}_lit())))", literal_bytes(&test_literal(*planned))),
                         format!("{facts}_bytes({children}, {t}_lit(), {f}_lit(), {t}_bytes_are(), {f}_bytes_are())"))
                 },
                 Frame::Any { children: vec![frame_t.clone(), frame_f.clone()],
@@ -429,6 +392,124 @@ fn emit(n: &str, r: &StructuredRegion, p: &LoweredStructured, incoming: &Values,
         _ => return Err(LoweringError::InvalidStructuredRegion("selected plan disagrees with region shape".into())),
     };
     finish(n, r, p, incoming, m, sources, code, results, proofs, memory, span, layout, decoding, byte_length, bytes, frame)
+}
+
+/// What a branch tests, as `StructuredCode` spells it; the Boolean that picks
+/// the true arm; why the machine's selector is that Boolean (its zero test,
+/// or itself when `negated`); and the selector. `negated` is a one-armed
+/// branch whose body is the false arm: its skip is the comparison holding.
+fn describe_test(n: &str, planned: PlannedTest, condition: u64, incoming: &Values, m: &mut Module, negated: bool) -> (String, String, String, String) {
+    match planned {
+        PlannedTest::NonZero(register) => {
+            assert!(!negated, "a materialised bit's TEST has no negated form");
+            let register = register.heather_name();
+            let bit = test_of(&incoming[&condition]).unwrap_or_else(|| format!("@bitvec::BitVec::head_bit(0, {})", val(incoming, condition, 1)));
+            (format!("NonZero({register})"), bit,
+                format!("test_bit_value_placed_zf(λ width _ => {}, {condition}, {register}, before, placed_{condition})", incoming[&condition]),
+                format!("structured_test({register}, before).flags.zf"))
+        }
+        PlannedTest::Compare { left, right, operation, left_port, right_port, width } => {
+            let (l, rr) = (left.heather_name(), right.heather_name());
+            let (a, b) = (val(incoming, left_port, width), val(incoming, right_port, width));
+            let (op, cc, lemma, zero_extend_law) = match (operation, negated) {
+                (ComparisonOperation::UnsignedLessThan, false) => ("unsigned_lt_bit", "B", "unsigned_compare_skips", Some("unsigned_lt_zero_extend")),
+                (ComparisonOperation::SignedLessThan, false) => ("signed_lt_bit", "L", "signed_compare_skips", None),
+                (ComparisonOperation::Equal, false) => ("eq_bit", "E", "equal_compare_skips", Some("eq_bit_zero_extend")),
+                (ComparisonOperation::UnsignedLessThan, true) => ("unsigned_lt_bit", "AE", "unsigned_compare_holds", Some("unsigned_lt_zero_extend")),
+                (ComparisonOperation::SignedLessThan, true) => ("signed_lt_bit", "GE", "signed_compare_holds", None),
+                (ComparisonOperation::Equal, true) => ("eq_bit", "NE", "equal_compare_holds", Some("eq_bit_zero_extend")),
+            };
+            fun(m, format!("{n}_test"), false, logical(), "Bool".into(), format!("@bitvec::BitVec::{op}({width}, {a}, {b})"));
+            let test = format!("Compare({l}, {rr}, {cc})");
+            // CMP compares the placed words; below 64 bits those are
+            // the operands zero-extended, whose comparison is the
+            // narrow one by the zero-extension law.
+            let (wide_a, wide_b) = (placed_expression(width, &a), placed_expression(width, &b));
+            let skips = format!("{lemma}({l}, {rr}, {wide_a}, {wide_b}, before, placed_{left_port}, placed_{right_port})");
+            let skips = if width == 64 { skips } else {
+                let zero_extend_law = zero_extend_law.expect("fusable refuses a narrow signed comparison");
+                let law = format!("bitvec::BitVec::{zero_extend_law}({width}, {}, {a}, {b})", 64 - width);
+                if negated { trans(&skips, &law) } else { trans(&skips, &format!("cong_fn<bool::Bool, bool::Bool>(λ bit => bool::Bool::not(bit), {law})")) }
+            };
+            (test.clone(), format!("{n}_test(values)"), skips, format!("branch_skips({test}, before)"))
+        }
+    }
+}
+
+/// The bytes of a branch's TEST r, r or CMP l, r.
+fn test_literal(planned: PlannedTest) -> Vec<u8> {
+    match planned {
+        PlannedTest::NonZero(register) => {
+            let r = encoding::register_code(register);
+            vec![0x48 | (r >> 3) | ((r >> 3) << 2), 0x85, 0xc0 | ((r & 7) << 3) | (r & 7)]
+        }
+        PlannedTest::Compare { .. } => encoding::encode_instructions(&[planned.instruction().expect("a comparison's instruction")]),
+    }
+}
+
+/// A conditional with one empty arm, laid out as `CodeWhen(test, d, body)`:
+/// `test ; Jcc join ; body`. Only the body is a node; the empty arm returns
+/// its input where it already is (`passthrough`), so on the skip the result
+/// is that input's placement, read through the branch's registers.
+#[allow(clippy::too_many_arguments)]
+fn emit_when(n: &str, r: &StructuredRegion, p: &LoweredStructured, condition: u64, planned: PlannedTest, arm: OneArmed,
+    (when_true, yes): (&StructuredRegion, &LoweredStructured), (when_false, no): (&StructuredRegion, &LoweredStructured),
+    incoming: &Values, m: &mut Module, sources: &Crossings,
+) -> Result<Values, LoweringError> {
+    let (b, body_region, body_plan, empty_region) = match arm {
+        OneArmed::True => (format!("{n}_true"), when_true, yes, when_false),
+        OneArmed::False => (format!("{n}_false"), when_false, no, when_true),
+    };
+    let kept_input = structured::passthrough(empty_region)
+        .ok_or_else(|| LoweringError::InvalidStructuredRegion("a one-armed plan over an arm that computes".into()))?;
+    let bv = emit(&b, body_region, body_plan, incoming, m, sources)?;
+    let (test, bit, placed, selector) = describe_test(n, planned, condition, incoming, m, arm == OneArmed::False);
+    let bl = body_plan.byte_length;
+    let length = p.byte_length;
+    let d = format!("@bitvec::BitVec::ofNat(8, {bl})");
+    let entry = format!("structured_branch_entry({test}, {d}, before)");
+    let when_args = format!("{test}, {d}, {b}_code(), before");
+    let child_args = args(body_region);
+    let mut results = Values::new();
+    let mut proofs = Vec::new();
+    for &(port, reg) in &p.outputs {
+        let output = reg.heather_name();
+        let child = normalize_bit_result(format!("{b}{}_correct(values, {entry}{child_args})", result_suffix(p, port.id)), &bv, port);
+        let ran = format!("read_gpr({output}, {b}_after({entry}).gprs)");
+        let stayed = format!("read_gpr({output}, before.gprs)");
+        let kept = format!("sym(placed_{})", kept_input.id);
+        let empty = Values::from([(port.id, incoming[&kept_input.id].clone())]);
+        // The read lemma's match is on the skip: the body's read when it
+        // ran, the entry's when it was jumped over.
+        let (tv, fv, rt, rf, child_t, child_f, choice) = match arm {
+            OneArmed::True => (&bv, &empty, ran.clone(), stayed.clone(), child, kept,
+                format!("select_zero_test({bit}, {selector}, {ran}, {stayed}, {placed})")),
+            OneArmed::False => (&empty, &bv, stayed.clone(), ran.clone(), kept, child,
+                format!("cong_fn<bool::Bool, BitVec(64)>(λ skips => match skips {{ False => {ran}, True => {stayed} }}, {placed})")),
+        };
+        let selected_result = placed_value(&Values::from([(port.id, branch_value("selected", port, tv, fv))]), port);
+        let agree = format!("match {bit} as λ selected => (match selected {{ False => {rf}, True => {rt} }}) = ({selected_result}) {{ False => {child_f}, True => {child_t} }}");
+        proofs.push(trans(&format!("structured_when_read({when_args}, {output})"), &trans(&choice, &agree)));
+        results.insert(port.id, branch_value(&bit, port, tv, fv));
+    }
+    let memory = format!("structured_when_property({when_args}, λ after => after.memory = before.memory, {b}_memory({entry}), refl)");
+    thm(m, format!("{n}_skip_target"), false, start(), format!("short_branch_target(start, {d}) = next_rip(start, {})", 2 + bl),
+        trans(&format!("sym(bitvec::BitVec::iter_add_eq_add(64, next_rip(start, 2), @bitvec::BitVec::sign_extend(7, 56, {d})))"), &compose("start", 2, bl)));
+    let test_rip = step("before.rip", 3);
+    let entry_rip = trans(&format!("jump_zero_not_taken_rip({selector}, {test_rip}, {d}, selected)"), &compose("before.rip", 3, 2));
+    let body_span = trans(&format!("{b}_span({entry})"), &trans(&congr_step(bl, &entry_rip), &compose("before.rip", 5, bl)));
+    let skip_span = trans(&format!("jump_zero_taken_rip({selector}, {test_rip}, {d}, selected)"),
+        &trans(&format!("{n}_skip_target({test_rip})"), &compose("before.rip", 3, 2 + bl)));
+    let span = format!("structured_when_cases({when_args}, λ after => after.rip = next_rip(before.rip, {length}), λ selected => {body_span}, λ selected => {skip_span})");
+    let jcc = literal_bytes(&[0x70 | arm.skip_code(planned), bl as u8]);
+    finish(n, r, p, incoming, m, sources, format!("CodeWhen({test}, {d}, {b}_code())"), results, proofs, memory, span,
+        format!("structured_when_layout({test}, {d}, {b}_code(), {bl}, {b}_byte_length(), λ start => {n}_skip_target(start), {b}_layout())"),
+        format!("structured_when_decodes({test}, {d}, {b}_code(), start, {b}_decodes(next_rip(start, 5)))"),
+        format!("structured_when_length({test}, {d}, {b}_code(), {bl}, {b}_byte_length())"),
+        (format!("{} ++ ({jcc} ++ {b}_lit())", literal_bytes(&test_literal(planned))),
+            format!("structured_when_bytes({test}, {d}, {b}_code(), {b}_lit(), {b}_bytes_are())")),
+        Frame::Any { children: vec![b.clone()],
+            proof: format!("structured_when_property({when_args}, λ after => read_gpr(register, after.gprs) = read_gpr(register, before.gprs), {b}_preserves(register, {entry}, {b}_kept(register, protected)), refl)") })
 }
 
 /// How `_preserves` is proved: one proof at a neutral `register` from the
