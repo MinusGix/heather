@@ -109,7 +109,10 @@ fn div_and_mod_euclidean_laws_compose_at_open_arguments() {
     n.div_mul_add_mod(d)
 }
 theorem bounded(n, d: Nat, h: 0 < d): n.mod(d) < d {
-    n.mod_lt(d, h)
+    n.mod_lt(d)
+}
+theorem named(n, d: Nat, h: 1 <= d): n.mod(d) < d {
+    n.mod_lt(d, divisor_pos := h)
 }
 theorem quotient_at_zero(n: Nat): n.div(0) = 0 { n.div_zero() }
 theorem remainder_at_zero(n: Nat): n.mod(0) = n { n.mod_zero() }",
@@ -118,7 +121,11 @@ theorem remainder_at_zero(n: Nat): n.mod(0) = n { n.mod_zero() }",
 
 #[test]
 fn the_positive_divisor_hypothesis_is_load_bearing() {
-    bad("theorem t(n, d: Nat): n.mod(d) < d { n.mod_lt(d, trivial) }");
+    // `divisor: Pos<Nat>`: with no `0 < d` in scope the search refuses, and
+    // naming a proof that is not one is refused too.
+    let e = bad("theorem t(n, d: Nat): n.mod(d) < d { n.mod_lt(d) }");
+    assert!(e.contains("no instance for `Lt(0, d)`"), "{e}");
+    bad("theorem t(n, d: Nat): n.mod(d) < d { n.mod_lt(d, divisor_pos := trivial) }");
 }
 
 // ---------------------------------------------------------------------------

@@ -137,7 +137,7 @@ theorem decimal_three(fuel, m: Nat, lo: 100 <= m, hi: m <= 999, room: 2 <= fuel)
     (match fuel as λ f => (2 <= f) → decimal_digits(f, m) = [digit(m.div(10).div(10)), digit(m.div(10).mod(10)), digit(m.mod(10))] {
         Zero => λ room => false_elim(room),
         Succ(rest) => λ room => {
-            let lo2: (10 <= m.div(10)) = m.le_div_of_mul_le(10, 10, trivial, lo);
+            let lo2: (10 <= m.div(10)) = m.le_div_of_mul_le(10, 10, lo);
             let hi2: (m.div(10) <= 99) = m.div_lt_of_lt_mul(10, 100, hi);
             let room2: (1 <= rest) = omega;
             trans(decimal_more(rest, m, omega), @cong(λ (xs: List<BitVec(8)>) => xs ++ [digit(m.mod(10))],
@@ -151,7 +151,7 @@ theorem decimal_four(fuel, m: Nat, lo: 1000 <= m, hi: m <= 9999, room: 3 <= fuel
     (match fuel as λ f => (3 <= f) → decimal_digits(f, m) = [digit(m.div(10).div(10).div(10)), digit(m.div(10).div(10).mod(10)), digit(m.div(10).mod(10)), digit(m.mod(10))] {
         Zero => λ room => false_elim(room),
         Succ(rest) => λ room => {
-            let lo2: (100 <= m.div(10)) = m.le_div_of_mul_le(10, 100, trivial, lo);
+            let lo2: (100 <= m.div(10)) = m.le_div_of_mul_le(10, 100, lo);
             let hi2: (m.div(10) <= 999) = m.div_lt_of_lt_mul(10, 1000, hi);
             let room2: (2 <= rest) = omega;
             trans(decimal_more(rest, m, omega), @cong(λ (xs: List<BitVec(8)>) => xs ++ [digit(m.mod(10))],
@@ -319,17 +319,14 @@ theorem weigh(h, w, a, b, x, d: Nat):
 // four restoring steps take `c * 8`, `c * 4`, `c * 2` and `c`, and their
 // outcomes are the bits of `r / c`. Every fact is a kit lemma; the group
 // lemmas below only supply the bounds, at literals.
-theorem group_facts(r, h, c, w: Nat, positive: 0 < c, small: r < (c * 8) * 2, room: h + w * 15 < 1099511627776,
+theorem group_facts(r, h: Nat, c: Pos<Nat>, w: Nat, small: r < (c * 8) * 2, room: h + w * 15 < 1099511627776,
     fits: 1099511627776 * r + h < 1152921504606846976, big1: 1099511627776 * (c * 8) < 1152921504606846976, big2: 1099511627776 * (c * 4) < 1152921504606846976,
     big3: 1099511627776 * (c * 2) < 1152921504606846976, big4: 1099511627776 * c < 1152921504606846976):
     GroupFacts(r, h, c * 8, w * 8, c * 4, w * 4, c * 2, w * 2, c, w) {
-    let p2: (0 < c * 2) = (1).le_trans(c, c * 2, positive, (c * 1).le_add_r(c));
-    let p4: (0 < c * 4) = (1).le_trans(c, c * 4, positive, (c * 3).le_add_r(c));
-    let p8: (0 < c * 8) = (1).le_trans(c, c * 8, positive, (c * 7).le_add_r(c));
-    let rem1: (r.mod(c * 8) < c * 8) = r.mod_lt(c * 8, p8);
-    let rem2: (r.mod(c * 8).mod(c * 4) < c * 4) = r.mod(c * 8).mod_lt(c * 4, p4);
-    let rem3: (r.mod(c * 8).mod(c * 4).mod(c * 2) < c * 2) = r.mod(c * 8).mod(c * 4).mod_lt(c * 2, p2);
-    let rem4: (r.mod(c * 8).mod(c * 4).mod(c * 2).mod(c) < c) = r.mod(c * 8).mod(c * 4).mod(c * 2).mod_lt(c, positive);
+    let rem1: (r.mod(c * 8) < c * 8) = r.mod_lt(c * 8);
+    let rem2: (r.mod(c * 8).mod(c * 4) < c * 4) = r.mod(c * 8).mod_lt(c * 4);
+    let rem3: (r.mod(c * 8).mod(c * 4).mod(c * 2) < c * 2) = r.mod(c * 8).mod(c * 4).mod_lt(c * 2);
+    let rem4: (r.mod(c * 8).mod(c * 4).mod(c * 2).mod(c) < c) = r.mod(c * 8).mod(c * 4).mod(c * 2).mod_lt(c);
     let one1: (r.div(c * 8) <= 1) = r.div_lt_of_lt_mul(c * 8, 2, small);
     let one2: (r.mod(c * 8).div(c * 4) <= 1) = r.mod(c * 8).div_lt_of_lt_mul(c * 4, 2,
         j(sym(c.mul_assoc(4, 2)), λ y _ => r.mod(c * 8) < y, rem1));
@@ -349,15 +346,15 @@ theorem group_facts(r, h, c, w: Nat, positive: 0 < c, small: r < (c * 8) * 2, ro
         j(w.add_left_zero(), λ y _ => (((h + (w * 8) * r.div(c * 8)) + (w * 4) * r.mod(c * 8).div(c * 4)) + (w * 2) * r.mod(c * 8).mod(c * 4).div(c * 2)) + y < 1099511627776,
             low_next((h + (w * 8) * r.div(c * 8)) + (w * 4) * r.mod(c * 8).div(c * 4), w * 2, r.mod(c * 8).mod(c * 4).div(c * 2), w * 1, inv2, one3));
     let rest1: (r.mod(c * 8).mod(c * 4) = r.mod(c * 4)) =
-        j(c.mul_assoc(4, 2), λ y _ => r.mod(y).mod(c * 4) = r.mod(c * 4), r.mod_mul_mod(c * 4, 2, p4, trivial));
+        j(c.mul_assoc(4, 2), λ y _ => r.mod(y).mod(c * 4) = r.mod(c * 4), r.mod_mul_mod(c * 4, 2));
     let rest2: (r.mod(c * 4).mod(c * 2) = r.mod(c * 2)) =
-        j(c.mul_assoc(2, 2), λ y _ => r.mod(y).mod(c * 2) = r.mod(c * 2), r.mod_mul_mod(c * 2, 2, p2, trivial));
+        j(c.mul_assoc(2, 2), λ y _ => r.mod(y).mod(c * 2) = r.mod(c * 2), r.mod_mul_mod(c * 2, 2));
     let rest: (r.mod(c * 8).mod(c * 4).mod(c * 2).mod(c) = r.mod(c)) =
-        trans(Nat::cong(λ (x: Nat) => x.mod(c * 2).mod(c), rest1), trans(Nat::cong(λ (x: Nat) => x.mod(c), rest2), r.mod_mul_mod(c, 2, positive, trivial)));
+        trans(Nat::cong(λ (x: Nat) => x.mod(c * 2).mod(c), rest1), trans(Nat::cong(λ (x: Nat) => x.mod(c), rest2), r.mod_mul_mod(c, 2)));
     let bits: (r.div(c) = r.div(c * 8) * 8 + (r.mod(c * 8).div(c * 4) * 4 + (r.mod(c * 8).mod(c * 4).div(c * 2) * 2 + r.mod(c * 8).mod(c * 4).mod(c * 2).div(c)))) =
-        trans(r.div_split(c, 8, positive, trivial), Nat::cong(λ (y: Nat) => r.div(c * 8) * 8 + y,
-            trans(r.mod(c * 8).div_split(c, 4, positive, trivial), Nat::cong(λ (y: Nat) => r.mod(c * 8).div(c * 4) * 4 + y,
-                r.mod(c * 8).mod(c * 4).div_split(c, 2, positive, trivial)))));
+        trans(r.div_split(c, 8), Nat::cong(λ (y: Nat) => r.div(c * 8) * 8 + y,
+            trans(r.mod(c * 8).div_split(c, 4), Nat::cong(λ (y: Nat) => r.mod(c * 8).div(c * 4) * 4 + y,
+                r.mod(c * 8).mod(c * 4).div_split(c, 2)))));
     let sum = trans(weigh(h, w, r.div(c * 8), r.mod(c * 8).div(c * 4), r.mod(c * 8).mod(c * 4).div(c * 2), r.mod(c * 8).mod(c * 4).mod(c * 2).div(c)),
         Nat::cong(λ (y: Nat) => h + w * y, sym(bits)));
     GroupFacts(low_here(h, w * 8, w * 7, inv0), step_parts(r, c * 8), rem1, one1, fits, big1,
@@ -380,25 +377,25 @@ theorem below_wider(r, a, b: Nat, small: r < a, wider: a.leb(b).IsTrue()): r < b
 // Each group at its place value, from the value's bound and the room left
 // in its byte.
 theorem thousands_arith(r, h: Nat, small: r < 10000, room: h + 15 < 1099511627776): GroupFacts(r, h, 8000, 8, 4000, 4, 2000, 2, 1000, 1) {
-    group_facts(r, h, 1000, 1, trivial, below_wider(r, 10000, 16000, small, trivial), room,
+    group_facts(r, h, 1000, 1, below_wider(r, 10000, 16000, small, trivial), room,
         step_fits(r, h, 10000, small, low_part(h, 15, room), step_big(10000, trivial)),
         step_big(8000, trivial), step_big(4000, trivial), step_big(2000, trivial), step_big(1000, trivial))
 }
 
 theorem hundreds_arith(r, h: Nat, small: r < 1000, room: h + 3840 < 1099511627776): GroupFacts(r, h, 800, 2048, 400, 1024, 200, 512, 100, 256) {
-    group_facts(r, h, 100, 256, trivial, below_wider(r, 1000, 1600, small, trivial), room,
+    group_facts(r, h, 100, 256, below_wider(r, 1000, 1600, small, trivial), room,
         step_fits(r, h, 1000, small, low_part(h, 3840, room), step_big(1000, trivial)),
         step_big(800, trivial), step_big(400, trivial), step_big(200, trivial), step_big(100, trivial))
 }
 
 theorem tens_arith(r, h: Nat, small: r < 100, room: h + 983040 < 1099511627776): GroupFacts(r, h, 80, 524288, 40, 262144, 20, 131072, 10, 65536) {
-    group_facts(r, h, 10, 65536, trivial, below_wider(r, 100, 160, small, trivial), room,
+    group_facts(r, h, 10, 65536, below_wider(r, 100, 160, small, trivial), room,
         step_fits(r, h, 100, small, low_part(h, 983040, room), step_big(100, trivial)),
         step_big(80, trivial), step_big(40, trivial), step_big(20, trivial), step_big(10, trivial))
 }
 
 theorem units_arith(r, h: Nat, small: r < 10, room: h + 251658240 < 1099511627776): GroupFacts(r, h, 8, 134217728, 4, 67108864, 2, 33554432, 1, 16777216) {
-    group_facts(r, h, 1, 16777216, trivial, below_wider(r, 10, 16, small, trivial), room,
+    group_facts(r, h, 1, 16777216, below_wider(r, 10, 16, small, trivial), room,
         step_fits(r, h, 10, small, low_part(h, 251658240, room), step_big(10, trivial)),
         step_big(8, trivial), step_big(4, trivial), step_big(2, trivial), step_big(1, trivial))
 }
@@ -424,41 +421,41 @@ theorem top_digit_small(n: Nat, small: n < 10000): n.div(10).div(10).div(10) < 1
 theorem line_prereqs(n: Nat, small: n < 10000):
     (43758137392 + 15 < 1099511627776) ∧ ((1099511627776 * n + 43758137392 < 1152921504606846976) ∧ ((n < 10000) ∧ ((43758137392 + 15 < 1099511627776) ∧ ((n.mod(1000) < 1000) ∧ (((43758137392 + 1 * n.div(1000)) + 3840 < 1099511627776) ∧ ((n.mod(1000).mod(100) < 100) ∧ ((((43758137392 + 1 * n.div(1000)) + 256 * n.mod(1000).div(100)) + 983040 < 1099511627776) ∧ ((n.mod(1000).mod(100).mod(10) < 10) ∧ (((((43758137392 + 1 * n.div(1000)) + 256 * n.mod(1000).div(100)) + 65536 * n.mod(1000).mod(100).div(10)) + 251658240 < 1099511627776) ∧ ((n.mod(1000).mod(100).mod(10).mod(1) = 0) ∧ (((n.div(10).div(10).div(10) < 208) ∧ ((n.div(10).div(10).mod(10) < 208) ∧ ((n.div(10).mod(10) < 208) ∧ (n.mod(10) < 208))))))))))))))) {
     let q1: (n.div(1000) < 10) = n.div_lt_of_lt_mul(1000, 10, small);
-    let q2: (n.mod(1000).div(100) < 10) = n.mod(1000).div_lt_of_lt_mul(100, 10, n.mod_lt(1000, trivial));
-    let q3: (n.mod(1000).mod(100).div(10) < 10) = n.mod(1000).mod(100).div_lt_of_lt_mul(10, 10, n.mod(1000).mod_lt(100, trivial));
+    let q2: (n.mod(1000).div(100) < 10) = n.mod(1000).div_lt_of_lt_mul(100, 10, n.mod_lt(1000));
+    let q3: (n.mod(1000).mod(100).div(10) < 10) = n.mod(1000).mod(100).div_lt_of_lt_mul(10, 10, n.mod(1000).mod_lt(100));
     let s1 = weighted_le(43758137392, 43758137392, 1, n.div(1000), 9, (43758137392).le_refl(), q1);
     let s2 = weighted_le(43758137392 + 1 * n.div(1000), 43758137392 + 1 * 9, 256, n.mod(1000).div(100), 9, s1, q2);
     let s3 = weighted_le((43758137392 + 1 * n.div(1000)) + 256 * n.mod(1000).div(100), (43758137392 + 1 * 9) + 256 * 9,
         65536, n.mod(1000).mod(100).div(10), 9, s2, q3);
     let base: (43758137392 + 15 < 1099511627776) = lit_lt(43758137392 + 15, 1099511627776, trivial);
     ⟨base, ⟨step_fits(n, 43758137392, 10000, small, lit_lt(43758137392, 1099511627776, trivial), step_big(10000, trivial)), ⟨small, ⟨base,
-        ⟨n.mod_lt(1000, trivial), ⟨room_of(43758137392 + 1 * n.div(1000), 43758137392 + 1 * 9, 3840, s1, trivial),
-        ⟨n.mod(1000).mod_lt(100, trivial), ⟨room_of((43758137392 + 1 * n.div(1000)) + 256 * n.mod(1000).div(100), (43758137392 + 1 * 9) + 256 * 9, 983040, s2, trivial),
-        ⟨n.mod(1000).mod(100).mod_lt(10, trivial),
+        ⟨n.mod_lt(1000), ⟨room_of(43758137392 + 1 * n.div(1000), 43758137392 + 1 * 9, 3840, s1, trivial),
+        ⟨n.mod(1000).mod_lt(100), ⟨room_of((43758137392 + 1 * n.div(1000)) + 256 * n.mod(1000).div(100), (43758137392 + 1 * 9) + 256 * 9, 983040, s2, trivial),
+        ⟨n.mod(1000).mod(100).mod_lt(10),
         ⟨room_of(((43758137392 + 1 * n.div(1000)) + 256 * n.mod(1000).div(100)) + 65536 * n.mod(1000).mod(100).div(10),
             ((43758137392 + 1 * 9) + 256 * 9) + 65536 * 9, 251658240, s3, trivial),
         ⟨n.mod(1000).mod(100).mod(10).mod_one(),
         ⟨below_wider(n.div(10).div(10).div(10), 10, 208, top_digit_small(n, small), trivial),
-        ⟨below_wider(n.div(10).div(10).mod(10), 10, 208, n.div(10).div(10).mod_lt(10, trivial), trivial),
-        ⟨below_wider(n.div(10).mod(10), 10, 208, n.div(10).mod_lt(10, trivial), trivial),
-        below_wider(n.mod(10), 10, 208, n.mod_lt(10, trivial), trivial)⟩⟩⟩⟩⟩⟩⟩⟩⟩⟩⟩⟩⟩⟩
+        ⟨below_wider(n.div(10).div(10).mod(10), 10, 208, n.div(10).div(10).mod_lt(10), trivial),
+        ⟨below_wider(n.div(10).mod(10), 10, 208, n.div(10).mod_lt(10), trivial),
+        below_wider(n.mod(10), 10, 208, n.mod_lt(10), trivial)⟩⟩⟩⟩⟩⟩⟩⟩⟩⟩⟩⟩⟩⟩
 }
 
 // The formatter's digits are the spec's. The formatter divides once by each
 // place value and keeps the remainder; the spec divides by ten again and
 // again. The kit's nesting laws say those agree.
 theorem thousands_digit(n: Nat): n.div(1000) = n.div(10).div(10).div(10) {
-    sym(trans(Nat::cong(λ (x: Nat) => x.div(10), n.div_div(10, 10, trivial, trivial)), n.div_div(100, 10, trivial, trivial)))
+    sym(trans(Nat::cong(λ (x: Nat) => x.div(10), n.div_div(10, 10)), n.div_div(100, 10)))
 }
 theorem hundreds_digit(n: Nat): n.mod(1000).div(100) = n.div(10).div(10).mod(10) {
-    sym(trans(Nat::cong(λ (x: Nat) => x.mod(10), n.div_div(10, 10, trivial, trivial)), n.div_mod_eq_mod_div(100, 10, trivial, trivial)))
+    sym(trans(Nat::cong(λ (x: Nat) => x.mod(10), n.div_div(10, 10)), n.div_mod_eq_mod_div(100, 10)))
 }
 theorem tens_digit(n: Nat): n.mod(1000).mod(100).div(10) = n.div(10).mod(10) {
-    trans(Nat::cong(λ (x: Nat) => x.div(10), n.mod_mul_mod(100, 10, trivial, trivial)), sym(n.div_mod_eq_mod_div(10, 10, trivial, trivial)))
+    trans(Nat::cong(λ (x: Nat) => x.div(10), n.mod_mul_mod(100, 10)), sym(n.div_mod_eq_mod_div(10, 10)))
 }
 theorem units_digit(n: Nat): n.mod(1000).mod(100).mod(10).div(1) = n.mod(10) {
     trans(n.mod(1000).mod(100).mod(10).div_one(),
-        trans(Nat::cong(λ (x: Nat) => x.mod(10), n.mod_mul_mod(100, 10, trivial, trivial)), n.mod_mul_mod(10, 10, trivial, trivial)))
+        trans(Nat::cong(λ (x: Nat) => x.mod(10), n.mod_mul_mod(100, 10)), n.mod_mul_mod(10, 10)))
 }
 
 theorem digits_agree(n: Nat):
@@ -557,8 +554,8 @@ theorem byte_of_digit(d: Nat, h: d < 10): 48 + d < 256 {
 
 theorem digit_bounds(n: Nat, small: n < 10000):
     (48 + n.div(10).div(10).div(10) < 256) ∧ ((48 + n.div(10).div(10).mod(10) < 256) ∧ ((48 + n.div(10).mod(10) < 256) ∧ (48 + n.mod(10) < 256))) {
-    ⟨byte_of_digit(n.div(10).div(10).div(10), top_digit_small(n, small)), ⟨byte_of_digit(n.div(10).div(10).mod(10), n.div(10).div(10).mod_lt(10, trivial)),
-        ⟨byte_of_digit(n.div(10).mod(10), n.div(10).mod_lt(10, trivial)), byte_of_digit(n.mod(10), n.mod_lt(10, trivial))⟩⟩⟩
+    ⟨byte_of_digit(n.div(10).div(10).div(10), top_digit_small(n, small)), ⟨byte_of_digit(n.div(10).div(10).mod(10), n.div(10).div(10).mod_lt(10)),
+        ⟨byte_of_digit(n.div(10).mod(10), n.div(10).mod_lt(10)), byte_of_digit(n.mod(10), n.mod_lt(10))⟩⟩⟩
 }
 
 // What the formatter stores, byte by byte.
@@ -813,7 +810,7 @@ theorem tens_is_div(k: Nat): (n: Nat) → tens(k)(n) = n.div(Nat::pow(10, k)) {
     match k as λ w => (n: Nat) → tens(w)(n) = n.div(Nat::pow(10, w)) {
         Zero => λ n => sym(Nat::div_one(n)),
         Succ(j) => λ n => trans(tens_is_div(j, n.div(10)),
-            trans(Nat::div_div(n, 10, Nat::pow(10, j), trivial, ten_pow_positive(j)),
+            trans(Nat::div_div(n, 10, Nat::pow(10, j), b_pos := ten_pow_positive(j)),
                 cong_fn<Nat, Nat>(λ d => n.div(d), Nat::mul_comm(10, Nat::pow(10, j))))),
     }
 }

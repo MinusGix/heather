@@ -530,10 +530,41 @@ Elsewhere (a function type's domain, a lambda binder, an inductive
 constructor's field) `Pos<A>` is refused as "binder sugar, not a type",
 pointing at [positive-refinement-type](../issues/positive-refinement-type.md).
 
-**Library.** No declaration in `lib/` changed. Adopting the sugar on the
-existing `0 < d` parameters (`Nat::mod_lt` and the division lemmas, about
-fifty binders) changes their callers' positional arity, and is
-[pos-sugar-library-adoption](../issues/pos-sugar-library-adoption.md)'s.
+**Library.** No declaration in `lib/` changed in this round; the adoption
+that followed is §12.
 
 Tests: `crates/elab/tests/pos_binder_sugar.rs` (in the `library` family),
 and the desugared shapes in `crates/syntax/src/parser.rs`'s unit tests.
+
+## 12. As landed: the library on `Pos<Nat>` (2026-10-13)
+
+[pos-sugar-library-adoption](../issues/pos-sugar-library-adoption.md). The
+divisor binders take the sugar: `Nat::mod_lt(self n: Nat, divisor:
+Pos<Nat>)`, `le_div_of_mul_le`, and the nesting laws `div_mul_parts`,
+`div_div`, `mod_mul_mod`, `div_mod_eq_mod_div` and `div_split` (each
+`a, b: Pos<Nat>`); `decimal_line`'s `group_facts`, `field_line`'s
+`field_group_facts` and `field_group_at`, and `elf64_format_width`'s
+`div_reaches`, `take_place` and `none_left`. `ten_pow` is `→ Pos<Nat>`, its
+fact proved by hand (`on ?pos := ten_pow_positive(i);`, the recursion lives
+in `decimal_line`), and `ten_pow_pos` is gone: `ten_pow::pos` is a rule, so
+call site (c) of §2, `Nat::mod_lt(m, p, ten_pow_pos(Succ(i)))`, is
+`Nat::mod_lt(m, p)` even with `p` a `let` of `ten_pow(Succ(i))`.
+
+What the call sites became: a literal divisor's `trivial` and a local's name
+are dropped (computation and locals); a product such as `c * 8` is found by
+`Nat::mul_pos` from the local `c_pos`, so the hand-built `p2`/`p4`/`p8`
+lets went; a fact the search cannot read is named, as `div_mod_unique`'s
+`divisor_pos := (1).le_trans(…)` (a bound on a remainder, not a `0 <`) and
+`tens_is_div`'s `b_pos := ten_pow_positive(j)` (a bare `Nat::pow`, which no
+rule covers). `field_line`'s `column_byte` never used its `0 < p` and lost
+it outright.
+
+The formatter learnt the sugar in the same change: the parser keeps only the
+carrier, so `crates/syntax/src/roles.rs` (`pos_wrapper`) finds `Pos<…>`'s
+delimiters from the tokens around it. Before, a formatted `Pos<Nat>` came
+out as `Pos < Nat>`, which does not parse.
+
+Not migrated: `elf64_command`'s `n: Nat, nonzero: 0 < n` binders wait for the
+native triples work in that file, and the `0 < bytes.len()` /
+`0 < pointer.toNat()` facts elsewhere in the native libraries bound no
+variable, so the sugar does not apply to them.
