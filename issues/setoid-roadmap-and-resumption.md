@@ -3,7 +3,7 @@ title: Pause setoid expansion until a concrete client drives the next slice
 status: open
 labels: [setoids,planning,backlog]
 created: 2026-09-05
-updated: 2026-10-10
+updated: 2026-10-13
 ---
 
 ## Decision
@@ -64,3 +64,4 @@ At resumption, record the concrete operation/client, chosen relations, observati
 ## Log
 
 - 2026-10-10: Resumed at user direction with rationals as the client (docs/setoid-rationals-round.md). Recorded per "At resumption": the client is unreduced `Rat` (lib/std/rat.hthr) over `Pos` (lib/std/pos.hthr); the relation is cross-multiplication `≈`; the observations that must stay valid are + * - inv ≤ and the `ofInt` embedding, with the denominator proved not to be one; the acceptance measure is a client (docs/showcase/rat_client.hthr) that rewrites with `calc` over `≈` and `rel_cong` and never opens a fraction. The existing setoid tooling needed no change. The cost went to ring rearrangement ([[ring-normalization]]) and omega restatements ([[omega-unfolds-defined-propositions]]). The next native-side client is [[same-defined-state-setoid]], after [[native-straight-code-triples]].
+- 2026-10-13: The native client, [[same-defined-state-setoid]], is done. `SameDefinedState` became `=` pulled back along `erase_af`, with an `Equivalence` instance, `≈` designated at `MachineState`, and `evidence theorem` certificates that `rel_cong` finds. The existing tooling needed no change. The cost it surfaced is [[setoid-surface-kernel-cost]].
