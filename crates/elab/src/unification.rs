@@ -58,6 +58,23 @@ pub(crate) struct DeferredArg<'a> {
     /// re-plan). If the domain never resolves, the fallback's error is about
     /// the implicit nothing pinned, not the argument.
     pub(crate) replanned: bool,
+    /// For an omitted default's marker, the call's arguments before it, in
+    /// the scratch world: a default that mentions an earlier parameter waits
+    /// for that argument as well as for its domain. Empty for every other
+    /// argument.
+    pub(crate) earlier: Vec<EarlierArg>,
+}
+
+/// One argument a call gave before a defaulted parameter, for a default that
+/// mentions its parameter (`k: Nat := n`; docs/named-arguments-design.md
+/// §9.6): the parameter's index in the callee's table, the argument, and its
+/// type, which is the parameter's domain as this call instantiated it.
+#[derive(Clone)]
+pub(crate) struct EarlierArg {
+    pub(crate) param: usize,
+    pub(crate) term: Rc<Term>,
+    pub(crate) ty: Type,
+    pub(crate) level: Level,
 }
 
 /// Per-slot state of one [`crate::application::apply_implicit`] scratch world

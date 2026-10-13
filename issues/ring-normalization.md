@@ -1,9 +1,9 @@
 ---
 title: Normalize commutative-ring identities over Nat and Int
-status: open
+status: closed
 labels: [proofs,arithmetic,solver,mathematics,design]
 created: 2026-10-10
-updated: 2026-10-10
+updated: 2026-10-12
 ---
 
 Commutative-ring identities over `Int` are proved by hand. In `lib/std/rat.hthr`
@@ -40,3 +40,30 @@ one), with the module's cold check no dearer.
 
 - **[[omega-linear-arithmetic]]** owns omega. Assumed here: only that its
   atom table can be reused for ring atoms.
+
+## Log
+
+- 2026-10-12: Landed (docs/ring-normalization-design.md). Reflective, not a Rust-side
+  `calc`: `lib/std/ring.hthr` holds `RingExpr`/`RingNat`, a sorted
+  exponent-vector normal form and its soundness proof, checked once; the `ring`
+  tactic (`crates/elab/src/ring.rs`) reifies and writes
+  `RingExpr::sound(atoms, ⟦lhs⟧, ⟦rhs⟧, refl)`. `Nat` goes through its `Int`
+  embedding. `ring(h, …)` combines equations with polynomial multipliers the
+  tactic finds by linear algebra over candidate monomial multipliers
+  (`sound_with`, the multipliers checked by the same `refl`). Defined
+  propositions unfold, fields of computed records are read, convertible atoms
+  are one atom.
+
+  Acceptance: `Rat::add_assoc`, `Rat::add_respects` and `Rat::mul_add_distr`
+  are one `ring` call each with their hypotheses (the `mul_int` facts, and
+  `hx`/`hy` for the respect law); so are `mul_respects` and `add_neg`, and
+  `same_trans` takes its scaled equation from `ring(hxy, hyz)`. `cross_term` and
+  `distr_monomial` are gone. Cold, by `scripts/perf ab --source-patch`: the
+  module's own declarations check faster, their kernel gate is dearer (residue:
+  [[ring-certificate-kernel-cost]]), the whole file's wall is inside the
+  spread. Omega was not touched: composition is a `ring` fact handed to `omega`;
+  the atom-table reuse this issue assumed was not needed.
+
+  Residue has owners: inequalities [[ring-inequalities]]; normalizing modulo a
+  setoid at `Rat` itself [[semiring-ring-structure-api]]; certificate cost
+  [[ring-certificate-kernel-cost]].

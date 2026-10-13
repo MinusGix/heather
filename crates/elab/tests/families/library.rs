@@ -34,6 +34,8 @@ mod lib_std_order;
 mod lib_std_rat;
 #[path = "../lib_std_relation.rs"]
 mod lib_std_relation;
+#[path = "../lib_std_ring.rs"]
+mod lib_std_ring;
 #[path = "../lib_std_string.rs"]
 mod lib_std_string;
 #[path = "../lib_std_tree.rs"]

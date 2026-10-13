@@ -83,6 +83,7 @@ pub mod cutsat;
 pub mod omega;
 mod omega_cert;
 mod bv_omega;
+mod ring;
 pub use omega_cert::{CutSatReport, OmegaPhases, OmegaReport, OmegaResidualConstraint};
 pub mod certgen;
 pub mod function_ir_cert;
@@ -667,6 +668,9 @@ pub struct Elaborator {
     /// How many `omega` certificates are currently being checked above this
     /// point: the nesting depth recorded in [`OmegaPhases`].
     omega_depth: Cell<usize>,
+    /// How many `ring` certificates are being checked above this point
+    /// (`ring.rs`): their library names resolve as `omega`'s do.
+    ring_depth: Cell<usize>,
     /// The Ψ-extending binders of the `meta fn` currently elaborating (its
     /// `Ctx`/`TyCode` binders, plus letbox-bound code globals during quote
     /// assembly). The whnf/conv oracles append these to Ψ so meta-bound
@@ -1150,6 +1154,20 @@ impl application::ExplicitArgElab for Elaborator {
         skel: Option<&Skel>,
     ) -> R<Term> {
         self.elab_check_skel(cx, arg, expected, level, hint, skel)
+    }
+
+    fn check_param_default(
+        &self,
+        cx: &Cx,
+        arg: &Expr,
+        expected: &Type,
+        level: &Level,
+        earlier: &[unification::EarlierArg],
+    ) -> R<Term> {
+        let ExprKind::App { args, .. } = &arg.kind else {
+            return err("internal parameter default has the wrong form", arg.span);
+        };
+        self.elab_param_default(cx, args, expected, level, arg.span, earlier)
     }
 }
 
@@ -1637,6 +1655,7 @@ impl Elaborator {
             container_at: Cell::new(0),
             omega_failure_reports: RefCell::new(Vec::new()),
             omega_depth: Cell::new(0),
+            ring_depth: Cell::new(0),
             meta_pushed: RefCell::new(Vec::new()),
             quote_depth: Cell::new(0),
             result_only_memo: RefCell::new(HashMap::new()),
@@ -2390,7 +2409,7 @@ impl Elaborator {
         // Omega's generated certificate may explicitly name its library
         // dependencies. This overlay applies to this qualified lookup only:
         // it neither opens bare names nor changes the caller's saved imports.
-        if self.omega_depth.get() > 0
+        if (self.omega_depth.get() > 0 || self.ring_depth.get() > 0)
             && let Some((module, base)) = split_qual(name)
             && matches!(module, "omega" | "nat" | "int" | "logic" | "list")
             && self.names.declares(module, base)
@@ -4011,21 +4030,34 @@ impl Elaborator {
             .map_err(|e| self.kernel_error(&decl.name, decl.span, e))?;
         }
 
-        // A default runs at the call, where the declaration's parameters are
-        // the caller's arguments rather than names; a default that names one
-        // is refused here rather than at every call
-        // (issues/parameter-defaults-mention-parameters.md).
-        let param_names: Vec<String> =
-            decl.tyvars.iter().map(|t| t.name.clone()).chain(decl.params.iter().map(|p| p.name.clone())).collect();
-        for p in &decl.params {
+        // A default runs at the call, where an earlier parameter's name is
+        // bound to the call's argument for it (`defaults::elab_param_default`).
+        // So a default may mention the value parameters before it, and is
+        // refused here, rather than at every call, when it mentions its own
+        // parameter or a later one (the telescope is ordered, §9.4) or a type
+        // parameter, which no alias can bind
+        // (issues/parameter-defaults-mention-type-parameters.md).
+        for (i, p) in decl.params.iter().enumerate() {
             let Some(default) = p.default.as_deref() else { continue };
-            if let Some(mentioned) = param_names.iter().find(|n| datarepr::mentions_free(default, std::slice::from_ref(n), &mut Vec::new())) {
+            let mentions = |n: &String| datarepr::mentions_free(default, std::slice::from_ref(n), &mut Vec::new());
+            if let Some(t) = decl.tyvars.iter().map(|t| &t.name).find(|n| measure::mentions_context(default, n)) {
                 return err(
                     format!(
-                        "`{}`'s default mentions the parameter `{mentioned}`, and a default cannot \
-                         mention a parameter yet (issues/parameter-defaults-mention-parameters.md): \
-                         give `{}` by name at the calls that need it",
-                        p.name, p.name
+                        "`{}`'s default mentions the type parameter `{t}`, and a default cannot \
+                         mention a type parameter yet (issues/parameter-defaults-mention-type-parameters.md): \
+                         its expected type already says what `{t}` is at each call",
+                        p.name
+                    ),
+                    default.span,
+                );
+            }
+            if let Some(later) = decl.params[i..].iter().map(|q| &q.name).find(|n| mentions(n)) {
+                let whose = if *later == p.name { "its own parameter".to_string() } else { format!("the later parameter `{later}`") };
+                return err(
+                    format!(
+                        "`{}`'s default mentions {whose}: a default reads only the parameters \
+                         before it, whose arguments the call has already given",
+                        p.name
                     ),
                     default.span,
                 );
@@ -4622,7 +4654,9 @@ impl Elaborator {
                 self.elab_field_default(cx, args, expected, lvl, e.span)
             }
             ExprKind::App { args, .. } if defaults::is_param_default(e) => {
-                self.elab_param_default(cx, args, expected, lvl, e.span)
+                // Reached only off a spine walker's path, which hands the
+                // call's earlier arguments to `check_param_default` instead.
+                self.elab_param_default(cx, args, expected, lvl, e.span, &[])
             }
             ExprKind::App { head, args, named, explicit: false, goal_oriented: false }
                 if matches!(&head.kind, ExprKind::Var(name) if name == goal_combinators::SPLIT_STUCK)
@@ -4872,6 +4906,31 @@ impl Elaborator {
                 && !self.shadowed(cx, name)
                 && self.ctor_here_expected(cx, name, expected).is_none() => {
                 relational_context::proof::derive(self, cx, expected, lvl, e.span)
+            }
+            // `ring` normalizes both sides of an equation at `Int` or `Nat`
+            // by reflection; `ring(h, …)` also combines equations
+            // (docs/ring-normalization-design.md).
+            ExprKind::Var(name)
+                if name == "ring"
+                    && !self.shadowed(cx, name)
+                    && self.ctor_here_expected(cx, name, expected).is_none() =>
+            {
+                self.elab_ring(cx, &[], expected, lvl, e.span)
+            }
+            ExprKind::App {
+                head,
+                args,
+                named,
+                explicit: false,
+                goal_oriented: false,
+            } if matches!(&head.kind, ExprKind::Var(name) if name == "ring")
+                && !self.shadowed(cx, "ring")
+                && self.ctor_here_expected(cx, "ring", expected).is_none() =>
+            {
+                if !named.is_empty() {
+                    return err("`ring` takes its equations positionally", e.span);
+                }
+                self.elab_ring(cx, args, expected, lvl, e.span)
             }
             // `positivity` is `:= infer`'s proposition search run as a tactic,
             // with `omega` as the fallback at every subgoal the evidence rules

@@ -13,7 +13,7 @@ use heather_kernel::term::{GlobalVar, LocalSubst, Term, Type};
 use heather_syntax::{Expr, ExprKind, LamBinder, Span, Ty, TyKind};
 
 use crate::surface::is_projection_section;
-use crate::unification::{DeferredArg, ResolveOb, Sol, zonked};
+use crate::unification::{DeferredArg, EarlierArg, ResolveOb, Sol, zonked, zonked_tm};
 use crate::{Cx, ElabError, R, err};
 
 mod callable;
@@ -249,18 +249,26 @@ pub(crate) fn retry_obligations(
                 blocked = true;
                 continue;
             };
-            let hint = params
-                .get(obligation.param)
-                .map(|p| (name, p.name.as_str()));
-            let skel = params.get(obligation.param).and_then(|p| p.skel.as_deref());
-            let term = elab.check_explicit_argument(
-                cx,
-                obligation.expr,
-                &dom,
-                &obligation.dom_level,
-                hint,
-                skel,
-            )?;
+            let term = if crate::defaults::is_param_default(obligation.expr) {
+                let Some(mentioned) = earlier_for_default(params, obligation.param, &obligation.earlier, n, sols) else {
+                    blocked = true;
+                    continue;
+                };
+                elab.check_param_default(cx, obligation.expr, &dom, &obligation.dom_level, &mentioned)?
+            } else {
+                let hint = params
+                    .get(obligation.param)
+                    .map(|p| (name, p.name.as_str()));
+                let skel = params.get(obligation.param).and_then(|p| p.skel.as_deref());
+                elab.check_explicit_argument(
+                    cx,
+                    obligation.expr,
+                    &dom,
+                    &obligation.dom_level,
+                    hint,
+                    skel,
+                )?
+            };
             sols[obligation.slot] = Sol::Solved(Rc::new(term));
             progressed = true;
         }
@@ -306,6 +314,34 @@ pub(crate) fn retry_obligations(
             return Ok(());
         }
     }
+}
+
+/// The earlier arguments `param`'s default mentions, out of the scratch
+/// world: `None` while one of them, or its type, still waits on this call's
+/// metas — an implicit not yet learned, or an earlier default not yet
+/// filled — so the default waits with it (docs/named-arguments-design.md
+/// §9.6). A default that mentions no parameter is ready at once and
+/// allocates nothing.
+fn earlier_for_default(
+    params: &[ParamMeta],
+    param: usize,
+    earlier: &[EarlierArg],
+    n: u32,
+    sols: &[Sol],
+) -> Option<Vec<EarlierArg>> {
+    let mentioned = crate::defaults::mentioned_parameters(params, param);
+    earlier
+        .iter()
+        .filter(|e| mentioned.contains(&e.param))
+        .map(|e| {
+            Some(EarlierArg {
+                param: e.param,
+                term: Rc::new(zonked_tm(&e.term, n, sols)?),
+                ty: zonked(&e.ty, n, sols)?,
+                level: e.level.clone(),
+            })
+        })
+        .collect()
 }
 
 /// The error for a re-planned argument whose domain never resolved. The
@@ -534,6 +570,22 @@ pub(crate) trait ExplicitArgElab {
         skel: Option<&Skel>,
     ) -> R<Term>;
 
+    /// An omitted default's marker ([`PARAM_DEFAULT`]), checked at the
+    /// parameter's instantiated domain with the call's `earlier` arguments,
+    /// which a default that mentions an earlier parameter reads by that
+    /// parameter's name (docs/named-arguments-design.md §9.6). The fakes have
+    /// no defaults and check it as any other argument.
+    fn check_param_default(
+        &self,
+        cx: &Cx,
+        arg: &Expr,
+        expected: &Type,
+        level: &Level,
+        _earlier: &[EarlierArg],
+    ) -> R<Term> {
+        self.check_explicit_argument(cx, arg, expected, level, None, None)
+    }
+
     /// Whether an application is written `app@(f; a)` here
     /// (`docs/app-by-head-type-design.md` §6.1): outside a quotation. The
     /// fakes answer `false` and keep the annotated form their tests read.
@@ -610,6 +662,10 @@ pub(crate) fn apply_explicit(
 ) -> R<(Term, Type, Level)> {
     let (mut term, mut ty, mut lvl) = (head, ty, lvl);
     let what = name.map_or_else(|| "this function".to_string(), |n| format!("`{n}`"));
+    // The arguments so far, kept only for a call that leaves a default to
+    // fill, which may mention them (§9.6).
+    let defaults = args.iter().any(crate::defaults::is_param_default);
+    let mut earlier: Vec<EarlierArg> = Vec::new();
     // Every node written `app@` (§6.1 of the app design): nothing needs a
     // node's own `dom`/`cod`, so while the telescope stays a syntactic Π the
     // arguments are held in `delta` and each domain is instantiated under
@@ -639,7 +695,14 @@ pub(crate) fn apply_explicit(
             let param = params.get(i + param_offset);
             let hint = name.zip(param).map(|(n, p)| (n, p.name.as_str()));
             let skel = param.and_then(|p| p.skel.as_deref());
-            let arg = Rc::new(elab.check_explicit_argument(cx, arg, &dom, &dom_level, hint, skel)?);
+            let arg = Rc::new(if crate::defaults::is_param_default(arg) {
+                elab.check_param_default(cx, arg, &dom, &dom_level, &earlier)?
+            } else {
+                elab.check_explicit_argument(cx, arg, &dom, &dom_level, hint, skel)?
+            });
+            if defaults {
+                earlier.push(EarlierArg { param: i + param_offset, term: Rc::clone(&arg), ty: (*dom).clone(), level: dom_level.clone() });
+            }
             delta = Some(delta.take().unwrap_or_else(|| LocalSubst::id(&cx.gamma)).extended(Rc::clone(&arg)));
             ty = (*cod).clone();
             lvl = cod_level;
@@ -664,8 +727,15 @@ pub(crate) fn apply_explicit(
         let param = params.get(i + param_offset);
         let hint = name.zip(param).map(|(n, p)| (n, p.name.as_str()));
         let skel = param.and_then(|p| p.skel.as_deref());
-        let arg = elab.check_explicit_argument(cx, arg, &dom, &dom_level, hint, skel)?;
+        let arg = if crate::defaults::is_param_default(arg) {
+            elab.check_param_default(cx, arg, &dom, &dom_level, &earlier)?
+        } else {
+            elab.check_explicit_argument(cx, arg, &dom, &dom_level, hint, skel)?
+        };
         let arg = Rc::new(arg);
+        if defaults {
+            earlier.push(EarlierArg { param: i + param_offset, term: Rc::clone(&arg), ty: (*dom).clone(), level: dom_level.clone() });
+        }
         ty = cod.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(&arg)));
         lvl = cod_level.clone();
         term = emit_app(elab, cx, term, dom_level, cod_level, dom, cod, arg, 0);
@@ -769,6 +839,10 @@ fn apply_implicit_planned(
     let mut resolves = Vec::new();
     let mut next_meta = 0u32;
     let mut arguments = args.iter();
+    // The spine so far, scratch world, kept only for a call that leaves a
+    // default to fill, which may mention an earlier argument (§9.6).
+    let defaults = args.iter().any(crate::defaults::is_param_default);
+    let mut earlier: Vec<EarlierArg> = Vec::new();
 
     for step in plan.steps(param_offset) {
         let parameter = step.parameter;
@@ -840,16 +914,30 @@ fn apply_implicit_planned(
                 };
                 elab.unify_application_argument_type(cx, &dom, &counted, n, &mut sols, span);
             }
-            match zonked(&dom, n, &sols) {
-                Some(real_dom) => {
+            // A default waits for the earlier arguments it mentions as well
+            // as for its domain.
+            let is_default = crate::defaults::is_param_default(argument);
+            let ready = zonked(&dom, n, &sols).and_then(|real_dom| {
+                let mentioned = if is_default {
+                    earlier_for_default(&params, parameter, &earlier, n, &sols)?
+                } else {
+                    Vec::new()
+                };
+                Some((real_dom, mentioned))
+            });
+            match ready {
+                Some((real_dom, mentioned)) => {
                     let hint = params
                         .get(parameter)
                         .map(|parameter| (name, parameter.name.as_str()));
                     let skel = params
                         .get(parameter)
                         .and_then(|parameter| parameter.skel.as_deref());
-                    let checked = elab
-                        .check_explicit_argument(cx, argument, &real_dom, &dom_level, hint, skel)?;
+                    let checked = if is_default {
+                        elab.check_param_default(cx, argument, &real_dom, &dom_level, &mentioned)?
+                    } else {
+                        elab.check_explicit_argument(cx, argument, &real_dom, &dom_level, hint, skel)?
+                    };
                     if class.checking_only {
                         sols[next_meta as usize] = Sol::Solved(Rc::new(checked.clone()));
                         meta_doms.push((*dom).clone());
@@ -873,6 +961,7 @@ fn apply_implicit_planned(
                         param: parameter,
                         fallback_infer: class.fallback_infer,
                         replanned: forced_at(argument),
+                        earlier: if is_default { earlier.clone() } else { Vec::new() },
                     });
                     meta_doms.push((*dom).clone());
                     meta_lvls.push(dom_level.clone());
@@ -936,6 +1025,9 @@ fn apply_implicit_planned(
                 }
             }
         };
+        if defaults {
+            earlier.push(EarlierArg { param: parameter, term: Rc::clone(&argument), ty: (*dom).clone(), level: dom_level.clone() });
+        }
         ty = cod.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(&argument)));
         level = cod_level.clone();
         term = emit_app(elab, cx, term, dom_level, cod_level, dom, cod, argument, n);
@@ -1399,6 +1491,7 @@ mod tests {
             param: 1,
             fallback_infer: false,
             replanned: false,
+            earlier: vec![],
         }];
         let mut sols = [Sol::Withheld, Sol::Withheld];
 
