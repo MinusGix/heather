@@ -1,6 +1,9 @@
 # The `IWf` former: finitary inductive families without a stored equation
 
-Status: **design sketch, 2026-09-30**, not reviewed, no kernel code. It is
+Status: **rule set (§1–§6) reviewed and frozen, 2026-10-13**; no kernel
+code. §7–§13 stay open where §12 says so: they are the generator's, not the
+kernel's. The review's edits are §1's layer paragraph, §1.1's and §10's
+neutral-length caveat, and §3's note on the ih's type. It is
 [[indexed-families]]'s route 4, promoted, and extended with an output-index
 function. Tracking issue: `issues/iwf-former.md`. Written before the code,
 per repo discipline, as the specification an implementation would be
@@ -32,6 +35,14 @@ is then nothing to make irrelevant and nothing to transport.
 Two. `DVec` is `Vec` with a per-position element type; `IWf` is `Wf` with
 an index.
 
+**Layers: as `Wf`'s.** `DVec`, `IWf`, `sup_i` and `elim_IWf` are gated out
+of layer c until the rec.rs round (§13 step 4) gives them their code-recursor
+branches, as `Wf`'s formers were (`wf-former-design.md` §8 step 5), and are
+code after it. The Coq formalization types them at its layers D and M and
+reaches C through codes and static code. For `Wf` that meant porting `nth`'s
+typing to C by hand, since `nth` types only through `Fin`'s and `Vec`'s
+computation rules (its M15b, `nth_wf_g`); `dnth` needs the same port.
+
 ### 1.1 `DVec`: dependent fixed-length tuples
 
 ```
@@ -46,8 +57,11 @@ DVec^l(S k; i. F)  ⇝  Σ^{l,l}(_ : F[inl ⟨⟩/i]). DVec^l(k; j. F[inr j/i])
 It takes a binder, not a family argument, because Heather has no
 type-valued functions. As with `Vec`, it reduces on a canonical length
 and is neutral at a neutral one, with no η of its own. η arrives through
-the reducts. `Vec^l(T; k)` is `DVec^l(k; _. T)` exactly, reduction for
-reduction. So `Vec` could become derived, or stay a former for its
+the reducts. `Vec^l(T; k)` and `DVec^l(k; _. T)` agree reduct for
+reduct at a canonical length. At a neutral length they are two distinct
+neutral types and do not convert, so the two must not both be spellings of
+one type: either `Vec` is the only spelling of a constant-family tuple, or
+it is gone (§10). So `Vec` could become derived, or stay a former for its
 `Conv::vec_ty` fast path (`wf-former-design.md` §5). That is an
 implementation choice, recorded in §10.
 
@@ -114,7 +128,16 @@ dnth^l(n; i. F; cs; i) :=
           ; n) (λi. i) cs i
 ```
 
-The result type `F[(λi. i) i/i]` is `F[i/i]` by β. Checked in Coq with
+The result type `F[(λi. i) i/i]` is `F[i/i]` by β, so the ih's type
+(§4) holds only up to that β, not syntactically. Likewise the step's
+recursive call is at family `F[(λj. e (inr j)) j/i]`, which is
+`F[e (inr j)/i]` up to β. `nth` needs no β there, and it was already the
+hardest lemma of `Wf`'s metatheory: the Coq formalization had to state it
+through reductions, because `nth`'s recursive call is its reduct only up to
+substitution lemmas (its M15a, `V_nth`). `dnth` adds a β step to each
+of those. This is a cost for the metatheory, not a reason to change the
+rule, and it is the first thing the formalization's IWf relation probe
+checks. Checked in Coq with
 `F` fixed over `Fin n` (§11): at a literal arity and a **neutral** tuple
 it reduces to the projections, `dnth(3; F; cs; inr (inl ⟨⟩)) ≡ fst (snd cs)`,
 by `reflexivity`. That property is what made `nth` usable for `Wf`'s ih.
@@ -352,7 +375,12 @@ as its own milestone, after `W`/`Wf`, which it does not have yet.
 
 ## 10. Relation to `Vec`/`Wf`
 
-`Vec = DVec(_; _. T)` and `Wf = IWf` at `I = Unit`. Three options, in
+`Vec = DVec(_; _. T)` and `Wf = IWf` at `I = Unit`, as **translations**,
+not as conversions. Unit-η absorbs the index, but `elim_Wf`'s ih goes through
+`nth` and `elim_IWf`'s through `dnth` (§3). The two agree at a canonical
+arity and are distinct stuck `elim_Nat`s at a neutral one. At a neutral
+length `Vec` and `DVec` are distinct neutral types (§1.1), and `Wf` and
+`IWf` are distinct formers, so they never convert. Three options, in
 increasing churn:
 
 1. Keep all four formers. `IWf` is only used for families.
@@ -360,7 +388,15 @@ increasing churn:
    fast path keyed on the constant family, and 4 code branches retire.
 3. Retire `Vec`/`Wf` outright. The simplest kernel, and the largest migration.
 
-Recommendation: 1 now, and revisit after the generator lands.
+Decided 2026-10-13: **1 now, 2 as the target.** Under option 1 the
+elaborator picks one spelling per declaration (unindexed data is `Wf`,
+indexed data is `IWf`), so the non-conversions above never meet. Option 2
+moves after the generator lands. It adds the index components to every
+unindexed type and term, so it may well be slower at first; that is
+accepted, to be won back by optimization work as `Wf`'s was, not a reason
+to stay at option 1. Option 2 makes `Vec`/`Wf` the *only* spellings of
+their instances, which is what §1.1 requires. Retiring `transp` needs none
+of this: `Wf` never used it, and its only producer is fording (§7).
 
 ---
 
@@ -394,6 +430,10 @@ Decided 2026-09-30:
 - `transp` is removed (§7);
 - `match` is tiers 1–2 now and tier 3 on demand (§8.3).
 
+Decided 2026-10-13: §1–§6 are frozen; `Vec`/`Wf` are option 1 now, option 2
+as the target (§10). The items below are the generator's and do not change
+a typing or reduction rule.
+
 1. **Inversion at a parameterized or container index type.** The motive's
    index case is `I`'s eliminator, so it is as available as that
    eliminator is. It is probably free, but the generator's form A device
@@ -406,15 +446,20 @@ Decided 2026-09-30:
    components of the context, proved there. DeLaM's globals and `□` are
    interpreted in stages, argued rather than checked. `UIP₀` at `Ty 0` is
    empty. The same model validates `transp` at strict motives and refutes
-   a relevant `transp`. Review of §4 of that document is still owed.
+   a relevant `transp`. Review of §4 of that document is still owed. It
+   does not gate the freeze (2026-10-13): removing `transp` only removes a
+   rule, and `elim_IWf` is Dybjer's eliminator, which Coq and Agda have
+   without K. The review backs the claim that Heather does not prove UIP,
+   not the soundness of this rule set, which the ch. 07 round (§9) checks.
 4. **Migration of existing 2b declarations.** The acceptance suites
    (`indexed_route_2b*.rs`) re-run against the new lowering. Their
    form-B negatives should flip to positives.
 
 ## 13. Sequencing
 
-1. This document reviewed and the rule set frozen (with
-   `docs/no-uip-model.md` reviewed alongside).
+1. ~~This document reviewed and the rule set frozen.~~ Done 2026-10-13
+   for §1–§6. `docs/no-uip-model.md` §4's review was decoupled from this
+   step (§12.3) and is still owed.
 2. `DVec` lands, with `dnth`'s materialization and the neutral-tuple
    projection test.
 3. `IWf`/`sup_i`/`elim_IWf`, with β on open data at a computed index as

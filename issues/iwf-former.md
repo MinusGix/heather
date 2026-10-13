@@ -3,11 +3,11 @@ title: IWf: finitary inductive families as a former, with no stored index equati
 status: open
 labels: [kernel,design,delam,metatheory]
 created: 2026-09-30
-updated: 2026-09-30
+updated: 2026-10-13
 ---
 
-Owns the `IWf` former round: `docs/iwf-former-design.md` (design sketch,
-2026-09-30, not yet reviewed). This is [[indexed-families]]'s route 4,
+Owns the `IWf` former round: `docs/iwf-former-design.md` (rule set
+frozen 2026-10-13, not implemented). This is [[indexed-families]]'s route 4,
 extended with an output-index function. It is Dybjer's finitary inductive
 families in `Wf`'s shape:
 - `IWf(I; x:S. n; x. o; x i. c)(m)`;
@@ -44,12 +44,15 @@ The full argument is in the doc. Items marked checked have a Coq probe:
 - There is no negative premise, conversion premise or strip in
   reduction, and no stored proof.
 
-## Open, before freezing (doc §12)
+## Status (doc §12, §13)
 
-The family's level (`l ⊔ li` or `l`); whether `transp` is removed or
-restricted to strict motives (a `docs/sprop-design.md` revision); a model
-argument for no-UIP; and matching without K at non-invertible indices,
-which is a new elaborator piece.
+The rule set (doc §1–§6) is frozen, 2026-10-13. Nothing is implemented. What
+is still open is the generator's and changes no typing or reduction rule:
+inversion at parameterized or container index types (§12.1), mutual
+families (§12.2) and migrating route 2b's declarations (§12.4). An
+independent review of `docs/no-uip-model.md` §4 is still owed; it backs the
+no-UIP claim and does not gate the freeze (§12.3). `Vec`/`Wf` stay
+separate formers now, with abbreviations as the target (§10).
 
 ## What it assumes from elsewhere
 
@@ -68,3 +71,4 @@ which is a new elaborator piece.
 - 2026-09-30: The components lemma of `docs/no-uip-model.md` §3 is mechanized in `../Lean/delam/probes/NoUipComponents.v`, closed under the global context. Mechanized: strict propositions are transported along context morphisms, strictly stable under substitution, and definitionally irrelevant; `srefl`, `elim_sEmpty` and `ElimSquash`; `transp` at a strict motive exists. In the groupoid of types and bijections: no relevant `transp` (`no_relevant_transp`), and UIP at `Ty 0` fails (`no_uip0`). §4, DeLaM's globals and `□`, remains argued only.
 - 2026-09-30: `docs/no-uip-model.md` §4 has been self-reviewed against the Coq formalization's declarative rules. It is right in outline, and three things were fixed. (1) `□`'s discreteness rests on Static Code, which is syntactic only up to level equivalence (`StaticCodeEq.v`), not on `conv.rs`. (2) The interpretation is now three explicit stages, with environments carrying syntax and semantics, plus the semantic global substitution lemma that validates `letbox`'s β. (3) The scope excludes postulated globals. Every layer fact used is a side condition of a cited rule. Still open: an independent review, and the substitution lemma written out case by case.
 - 2026-09-30: `docs/no-uip-model.md` §4.2a writes out the semantic global substitution lemma, `⟦t⦃σ⦄⟧ρ ≃ ⟦t⟧(ρ·σ)` for every global substitution `σ`, case by case. It covers globals (substituted and renamed), context globals, boxes, `letbox`, the recursors, `CΠ`/`TΠ` and bodied globals. Its syntactic half cites Coq-checked lemmas: `gsubst_gsubst`, `gsubst_subst`, `gsubst_gren_all`, the `ptm`/`pdef` clauses and `gsubstitution`. Its semantic half uses the standard local substitution lemma and a closing lemma for C/D, proved there. It validates `letbox` β, `CΠ`/`TΠ` β/η and the recursors' β. Still open: an independent review of §4.
+- 2026-10-13: Decided with the user: doc §1–§6 are frozen after a review that changed no rule. Three wording edits came out of it. (1) §1 now says where the formers live: as `Wf`'s, gated out of layer c until the rec.rs round. (2) §1.1 and §10: `Vec`/`DVec(_; _. T)` and `Wf`/`IWf` at `Unit` are translations, not conversions. At a neutral length they are distinct neutral types, and `elim_Wf`'s ih goes through `nth` where `elim_IWf`'s goes through `dnth`. (3) §3: the ih's type is `F[i]` only up to β, which adds a step to the formalization's hardest `Wf` lemma (`V_nth`); its IWf relation probe checks this first. §10 is decided: option 1 now, option 2 (abbreviations) as the target, after the generator, accepting that it may be slower at first. The no-UIP §4 review is decoupled from the freeze (§12.3, §13 step 1). The stale "Open, before freezing" paragraph is replaced by a status paragraph.
