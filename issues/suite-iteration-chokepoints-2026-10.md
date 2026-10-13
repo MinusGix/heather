@@ -3,7 +3,7 @@ title: The fast lane grew 6x with the wc command's library tests; where the suit
 status: open
 labels: [testing,performance,tooling]
 created: 2026-10-11
-updated: 2026-10-12
+updated: 2026-10-13
 ---
 
 A fresh look at what the suite spends, after the wc command rounds
@@ -158,3 +158,4 @@ the first pass's own (542609c: 78.5 / 81.2 s alone), so that is the box, not
 (`wc_counting_piece_certifies`, `decided_connective_counting_piece_certifies`,
 `record_update_counting_piece_certifies`, 15–18 s each), which elaborate
 different steps and share nothing.
+- 2026-10-13: field_high's generated certificate reshaped ([[field-high-certificate-shape]]): standalone check 39.9 → 15.8 s, field_low 28.6 → 11.1 s.

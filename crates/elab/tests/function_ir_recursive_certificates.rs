@@ -272,7 +272,7 @@ fn an_empty_passthrough_arm_certifies_and_another_copy_is_refused() {
     let emission = generate_elaborated_structured_x86(&elab, "keep_twice", "branches::keep_twice", [Gpr::Rdi, Gpr::Rsi], &scratch, Gpr::Rax)
         .unwrap_or_else(|e| panic!("keep_twice: {e:?}"));
     let text = format!("import x86_64_structured_block; import function_ir; import function_ir_x86_support; import x86_64; import x86_64_block; import bitvec; import bool; import list; import logic; import nat;\n{}", emission.text);
-    assert!(text.contains("CodeBlock([])") || text.contains("_leaf_instructions() → List<Instruction>\n{\n    []"), "an arm should be an empty block");
+    assert!(text.contains("CodeBlock([])") || text.contains("_leaf_instructions() → List<Instruction>\n{\n    Nil<Instruction>\n}"), "an arm should be an empty block");
     elab.semantic_image().elaborator().elab_module_source("keep_twice_certificate", &text).unwrap_or_else(|e| panic!("{}", e.render(&text)));
     let moves = text.match_indices("Move(width := 64, output := ").map(|(at, _)| at).collect::<Vec<_>>();
     assert!(!moves.is_empty(), "the passthrough should be a Move");

@@ -110,6 +110,11 @@ fn branch_value(condition: &str, port: Port, yes: &Values, no: &Values) -> Strin
     }
 }
 
+/// `proof : a = b` (at `BitVec(width)`) as the placed words' equation.
+fn placed_cong(width: u64, proof: &str) -> String {
+    if width == 64 { proof.into() } else { format!("cong_fn<BitVec({width}), BitVec(64)>(λ value => {}, {proof})", placed_expression(width, "value")) }
+}
+
 fn normalize_bit_result(proof: String, values: &Values, port: Port) -> String {
     if port.width != 1 { return proof; }
     trans(&proof, &format!("cong_fn<BitVec(1), BitVec(64)>(λ value => @bitvec::BitVec::zero_extend(1, 63, value), bitvec::BitVec::one_bit_eq_ofBool({}))", val(values, port.id, 1)))
@@ -147,19 +152,6 @@ fn trans(a: &str, b: &str) -> String { format!("trans({a}, {b})") }
 // along them: converting that length evaluates every instruction's
 // encoding in the subtree, at every level above it.
 fn length_of(child: &str) -> String { format!("structured_bytes({child}_code())") }
-/// `(A₁ ++ (A₂ ++ …)).len() = L₁ + (L₂ + …)` from each piece's fact
-/// `Aᵢ.len() = Lᵢ`.
-fn appended_length(pieces: &[(String, String, usize)]) -> String {
-    let (last, rest) = pieces.split_last().unwrap();
-    let mut spine = last.0.clone();
-    let mut proof = last.1.clone();
-    for (piece, fact, length) in rest.iter().rev() {
-        proof = trans(&format!("list::List::len_append({piece}, {spine})"),
-            &trans(&format!("cong_fn<Nat, Nat>(λ k => k + ({spine}).len(), {fact})"), &format!("cong_fn<Nat, Nat>(λ k => {length} + k, {proof})")));
-        spine = format!("{piece} ++ {spine}");
-    }
-    proof
-}
 /// Spelled with constructors so that it has a type of its own beside `++`.
 fn literal_bytes(bytes: &[u8]) -> String {
     bytes.iter().rev().fold("Nil<BitVec(8)>".to_string(), |rest, b| format!("Cons(@bitvec::BitVec::ofNat(8, {b}), {rest})"))
@@ -205,10 +197,37 @@ fn dataflow_values(n: &str, r: &Region, incoming: &Values, m: &mut Module) -> Va
     }
     let entries: Vec<_> = values.iter().map(|(id, value)| (*id, value.clone())).collect();
     fun(m, format!("{n}_valuation"), false, logical(), "Valuation()".into(), format!("λ width id => {}", valuation_body(&entries)));
-    let mut witness = "trivial".to_string();
-    for _ in &r.nodes { witness = format!("⟨refl, {witness}⟩"); }
-    thm(m, format!("{n}_graph"), false, logical(), format!("RegionHolds({n}_raw(), {n}_valuation(values))"), witness);
+    // The lookups the node's interface reads, at a neutral width: at a
+    // literal one, conversion unfolds the other side in lockstep with the
+    // lookup's `leb` steps (see the node equations below).
+    for port in r.inputs.iter().chain(&r.outputs).map(|port| port.id).collect::<BTreeSet<_>>() {
+        thm(m, format!("{n}_at_{port}"), false, vec![emitted_parameter("values", "Valuation()"), emitted_parameter("width", "Nat")],
+            format!("{n}_valuation(values)(width, {port}) = {}", values[&port]), "refl".into());
+    }
+    // Each node's equation by `refl` at a neutral width, used at its own
+    // (the leaf's context). At a literal width the lookup's `leb` steps are
+    // δ-steps, which conversion takes in lockstep with the other side: one
+    // more unfolding of a width-64 `add` per step.
+    // A comparison's is at its own width: its `_test_` Boolean is stated at
+    // the operand width.
+    for node in &r.nodes {
+        let (parameters, at) = if is_comparison(node) { (vec![], cert::render_node(*node)) }
+            else { (vec![emitted_parameter("w", "Nat")], cert::render_node_at(*node, "w").0) };
+        thm(m, format!("{n}_holds_{}", node.output().id), false, [vec![emitted_parameter("values", "Valuation()")], parameters].concat(),
+            format!("NodeHolds({n}_valuation(values), {at})"), "refl".into());
+    }
     values
+}
+
+fn is_comparison(node: &Node) -> bool {
+    matches!(node, Node::UnsignedLessThan { .. } | Node::SignedLessThan { .. } | Node::Equal { .. })
+}
+
+/// The node's equation as `dataflow_values` proves it, at the node's width.
+fn holds(n: &str, node: &Node) -> String {
+    let output = node.output().id;
+    if is_comparison(node) { format!("{n}_holds_{output}(values)") }
+    else { format!("{n}_holds_{output}(values, {})", cert::render_node_at(*node, "w").1) }
 }
 
 /// A comparison node's Boolean, when `value` is the word `dataflow_values`
@@ -221,22 +240,37 @@ fn test_of(value: &str) -> Option<String> {
 
 fn emit(n: &str, r: &StructuredRegion, p: &LoweredStructured, incoming: &Values, m: &mut Module, sources: &Crossings) -> Result<Values, LoweringError> {
     let length = p.byte_length;
-    let arguments = args(r);
     let (code, results, proofs, memory, span, layout, decoding, byte_length, bytes, frame): (String, Values, Vec<String>, String, String, String, String, String, (String, String), Frame) = match (&r, &p.body) {
         (StructuredRegion::Dataflow(region), StructuredPlan::Dataflow(dag)) => {
-            m.raw(cert::render_region_function(&format!("{n}_raw"), region));
             let values = dataflow_values(n, region, incoming, m);
             let leaf = format!("{n}_leaf");
-            let emission = generate_selected(&leaf, &format!("{n}_raw()"), region, dag.clone(), LeafUse::Structured)?;
+            // No region declaration: a structured leaf's context holds its
+            // node equations, not the region's graph.
+            let emission = generate_selected(&leaf, "", region, dag.clone(), LeafUse::Structured)?;
             m.raw(emission.text);
             thm(m, format!("{n}_leaf_span"), false, start(), format!("{leaf}_final_rip(start) = next_rip(start, {length})"), render_block_span_proof(&dag.instructions));
-            let proof = format!("{leaf}_refines_function_ir({n}_valuation(values), before{arguments}, {n}_graph(values))");
-            let frame_leaf = leaf.clone();
-            (format!("CodeBlock({leaf}_instructions())"), Values::from([(p.output.0.id, values[&p.output.0.id].clone())]), vec![proof],
+            // The leaf states its inputs and result as lookups in the node's
+            // valuation; each is met through `_at`, a lookup proved at a
+            // neutral width (`dataflow_values`), never converted at its own.
+            // Its context's node equations are the node's own `_holds_N`.
+            let placed = region.inputs.iter().enumerate().map(|(index, port)|
+                format!("input_{index}_placed := trans({}, placed_{})", placed_cong(port.width, &format!("{n}_at_{}(values, {})", port.id, port.width)), port.id));
+            let holds = region.nodes.iter().enumerate().map(|(index, node)|
+                format!("holds_{index} := {}", holds(n, node)));
+            let context = placed.chain(holds).collect::<Vec<_>>().join(", ");
+            let output = p.output.0;
+            let proof = format!("trans({leaf}_refines_compact({n}_valuation(values), before, {leaf}_Context({context})), {})",
+                placed_cong(output.width, &format!("{n}_at_{}(values, {})", output.id, output.width)));
+            // The node protects what its leaf does (both are `clobbered`'s
+            // arms), so one proof at a neutral register: at a named one,
+            // `read_gpr` evaluated the block's state once per register.
+            let protected = if p.clobbered == dag.clobbered { "protected".to_string() } else { format!("{leaf}_kept(register, protected)") };
+            let kept = if p.clobbered == dag.clobbered { vec![] } else { vec![leaf.clone()] };
+            (format!("CodeBlock({leaf}_instructions())"), Values::from([(output.id, values[&output.id].clone())]), vec![proof],
                 format!("{leaf}_preserves_memory(before)"),
                 format!("trans({leaf}_advances_rip(before), {n}_leaf_span(before.rip))"),
                 "trivial".into(), format!("{leaf}_block_decodes(start)"), "refl".into(), (literal_bytes(&encoding::encode_instructions(&dag.instructions)), "refl".into()),
-                Frame::Each(Box::new(move |reg| format!("{frame_leaf}_preserves_protected({}, before, trivial)", reg.heather_name()))))
+                Frame::Any { children: kept, proof: format!("{leaf}_preserves_protected(register, before, {protected})") })
         }
         (StructuredRegion::Sequence { prefix, continuation }, StructuredPlan::Sequence { prefix: dag, continuation: next }) => {
             let first_region = StructuredRegion::Dataflow(prefix.clone());
@@ -270,14 +304,14 @@ fn emit(n: &str, r: &StructuredRegion, p: &LoweredStructured, incoming: &Values,
         (StructuredRegion::Conditional { condition, when_true, when_false, .. }, StructuredPlan::Conditional { test: planned, when_true: yes, when_false: no, false_displacement, join_displacement, near }) => {
             let t = format!("{n}_true"); let f = format!("{n}_false");
             let tv = emit(&t, when_true, yes, incoming, m, sources)?; let fv = emit(&f, when_false, no, incoming, m, sources)?;
-            // What the branch tests, as `StructuredCode` spells it, its
-            // instruction, the Boolean that picks the true arm, and why the
-            // machine's selector is that Boolean's zero test.
-            let (test, test_instruction, bit, placed, selector) = match *planned {
+            // What the branch tests, as `StructuredCode` spells it, the
+            // Boolean that picks the true arm, and why the machine's selector
+            // is that Boolean's zero test.
+            let (test, bit, placed, selector) = match *planned {
                 PlannedTest::NonZero(register) => {
                     let register = register.heather_name();
                     let bit = test_of(&incoming[condition]).unwrap_or_else(|| format!("@bitvec::BitVec::head_bit(0, {})", val(incoming, *condition, 1)));
-                    (format!("NonZero({register})"), format!("TestRR({register}, {register})"), bit,
+                    (format!("NonZero({register})"), bit,
                         format!("test_bit_value_placed_zf(λ width _ => {}, {condition}, {register}, before, placed_{condition})", incoming[condition]),
                         format!("structured_test({register}, before).flags.zf"))
                 }
@@ -300,7 +334,7 @@ fn emit(n: &str, r: &StructuredRegion, p: &LoweredStructured, incoming: &Values,
                         let zero_extend_law = zero_extend_law.expect("fusable refuses a narrow signed comparison");
                         trans(&skips, &format!("cong_fn<bool::Bool, bool::Bool>(λ bit => bool::Bool::not(bit), bitvec::BitVec::{zero_extend_law}({width}, {}, {a}, {b}))", 64 - width))
                     };
-                    (test.clone(), format!("CmpRR({l}, {rr})"), format!("{n}_test(values)"), skips,
+                    (test.clone(), format!("{n}_test(values)"), skips,
                         format!("branch_skips({test}, before)"))
                 }
             };
@@ -314,17 +348,7 @@ fn emit(n: &str, r: &StructuredRegion, p: &LoweredStructured, incoming: &Values,
             let (entry_fn, read_fn, property_fn, cases_fn, constructor) = if *near {
                 ("structured_near_entry", "structured_near_branch_read", "structured_near_branch_property", "structured_near_branch_cases", "CodeBranchNear")
             } else { ("structured_branch_entry", "structured_branch_read", "structured_branch_property", "structured_branch_cases", "CodeBranch") };
-            let skip_jump = match (compare, *near) {
-                (false, true) => format!("JumpZeroNear({fd})"), (false, false) => format!("JumpZero({fd})"),
-                (true, true) => format!("JumpIfNear(branch_skip({test}), {fd})"), (true, false) => format!("JumpIf(branch_skip({test}), {fd})"),
-            };
-            let (jz_bytes, jmp_bytes, jz_decodes, jmp_decodes) = if *near {
-                (format!("near_control_bytes({skip_jump})"), format!("near_control_bytes(JumpNear({jd}))"),
-                    format!("decode_near_control_complete({skip_jump})"), format!("decode_near_control_complete(JumpNear({jd}))"))
-            } else {
-                (format!("short_control_bytes({skip_jump})"), format!("short_control_bytes(Jump({jd}))"),
-                    format!("decode_short_control_complete({skip_jump})"), format!("decode_short_control_complete(Jump({jd}))"))
-            };
+            let facts = if *near { "structured_near_branch" } else { "structured_branch" };
             let target = |start: &str, length: usize, displacement: &str| if *near { format!("near_branch_target({start}, {length}, {displacement})") }
                 else { format!("short_branch_target({start}, {displacement})") };
             let entry = format!("{entry_fn}({test}, {fd}, before)");
@@ -372,22 +396,15 @@ fn emit(n: &str, r: &StructuredRegion, p: &LoweredStructured, incoming: &Values,
             let span = format!("{cases_fn}({branch_args}, λ after => after.rip = next_rip(before.rip, {length}), λ selected => {true_span}, λ selected => {false_span})");
             let frame_branch_args = branch_args.clone(); let frame_entry = entry.clone(); let frame_t = t.clone(); let frame_f = f.clone();
             let frame_property = property_fn.to_string();
-            let fixed = [("test", format!("canonical_bytes({test_instruction})"), 3), ("jump_zero", jz_bytes.clone(), jz), ("jump", jmp_bytes.clone(), jmp)];
-            for (tag, bytes, size) in &fixed {
-                thm(m, format!("{n}_{tag}_length"), false, vec![], format!("{bytes}.len() = {size}"), "refl".into());
-            }
-            let byte_length = appended_length(&[
-                (fixed[0].1.clone(), format!("{n}_test_length()"), 3), (fixed[1].1.clone(), format!("{n}_jump_zero_length()"), jz),
-                (length_of(&t), format!("{t}_byte_length()"), yes.byte_length), (fixed[2].1.clone(), format!("{n}_jump_length()"), jmp),
-                (length_of(&f), format!("{f}_byte_length()"), no.byte_length)]);
-            let false_layout = transported(&t, &format!("{} = next_rip(start, {jz} + (y + {jmp}))", target("start", jz, &fd)), &format!("{n}_false_target(start)"));
-            let join_layout = transported(&f, &format!("{} = next_rip(start, {jmp} + y)", target("start", jmp, &jd)), &format!("{n}_join_target(start)"));
-            let false_decodes = format!("j(cong_fn<Nat, Nat>(λ k => {head} + k + {jmp}, sym({t}_byte_length())), λ y _ => StructuredDecodes({f}_code(), next_rip(start, y)), {f}_decodes(next_rip(start, {head} + {} + {jmp})))", yes.byte_length);
+            // The node's facts from its children's, through the lemma for
+            // its constructor (structured_branch_length, …).
+            let (yl, nl) = (yes.byte_length, no.byte_length);
+            let children = format!("{test}, {fd}, {jd}, {t}_code(), {f}_code()");
             (format!("{constructor}({test}, {fd}, {jd}, {t}_code(), {f}_code())"),
                 results, proofs, memory, span,
-                format!("⟨λ start => {false_layout}, ⟨λ start => {join_layout}, ⟨{t}_layout(), {f}_layout()⟩⟩⟩"),
-                format!("⟨canonical_encoding_decodes(start, {test_instruction}), ⟨{jz_decodes}, ⟨{t}_decodes(next_rip(start, {head})), ⟨{jmp_decodes}, {false_decodes}⟩⟩⟩⟩"),
-                byte_length,
+                format!("{facts}_layout({children}, {yl}, {nl}, {t}_byte_length(), {f}_byte_length(), λ start => {n}_false_target(start), λ start => {n}_join_target(start), {t}_layout(), {f}_layout())"),
+                format!("{facts}_decodes({children}, {yl}, start, {t}_byte_length(), {t}_decodes(next_rip(start, {head})), {f}_decodes(next_rip(start, {head} + {yl} + {jmp})))"),
+                format!("{facts}_length({children}, {yl}, {nl}, {t}_byte_length(), {f}_byte_length())"),
                 {
                     // The fixed pieces are literal too; conversion checks each
                     // against its few-byte encoding.
@@ -403,12 +420,8 @@ fn emit(n: &str, r: &StructuredRegion, p: &LoweredStructured, incoming: &Values,
                         }
                         PlannedTest::Compare { .. } => encoding::encode_instructions(&[planned.instruction().expect("a comparison's instruction")]),
                     };
-                    let literal = [literal_bytes(&test_literal), jz_literal, jmp_literal];
-                    let lit = |pieces: &[String; 3], yes: &str, no: &str| format!("{} ++ ({} ++ ({yes} ++ ({} ++ {no})))", pieces[0], pieces[1], pieces[2]);
-                    let code = [fixed[0].1.clone(), fixed[1].1.clone(), fixed[2].1.clone()];
-                    (lit(&literal, &format!("{t}_lit()"), &format!("{f}_lit()")),
-                        trans(&format!("cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ ys => {}, {t}_bytes_are())", lit(&code, "ys", &format!("{f}_bytes()"))),
-                            &format!("cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ zs => {}, {f}_bytes_are())", lit(&code, &format!("{t}_lit()"), "zs"))))
+                    (format!("{} ++ ({jz_literal} ++ ({t}_lit() ++ ({jmp_literal} ++ {f}_lit())))", literal_bytes(&test_literal)),
+                        format!("{facts}_bytes({children}, {t}_lit(), {f}_lit(), {t}_bytes_are(), {f}_bytes_are())"))
                 },
                 Frame::Any { children: vec![frame_t.clone(), frame_f.clone()],
                     proof: format!("{frame_property}({frame_branch_args}, λ after => read_gpr(register, after.gprs) = read_gpr(register, before.gprs), {frame_t}_preserves(register, {frame_entry}, {frame_t}_kept(register, protected)), {frame_f}_preserves(register, {frame_entry}, {frame_f}_kept(register, protected)))") })
@@ -418,14 +431,11 @@ fn emit(n: &str, r: &StructuredRegion, p: &LoweredStructured, incoming: &Values,
     finish(n, r, p, incoming, m, sources, code, results, proofs, memory, span, layout, decoding, byte_length, bytes, frame)
 }
 
-/// How `_preserves` is proved. `Each` gives the proof for one register the
-/// node does not clobber, at that register: a leaf's block reaches a
-/// register's value only by evaluating its instructions. `Any` is one proof
-/// at a neutral `register` from the children's `_preserves`, given
-/// `protected`, with `{child}_kept(register, protected)` for each child's own
-/// premise: composite states convert by unfolding, register or not.
+/// How `_preserves` is proved: one proof at a neutral `register` from the
+/// children's `_preserves` (a leaf's own `_preserves_protected`), given
+/// `protected`, with `{child}_kept(register, protected)` for each child whose
+/// own premise differs: the states convert by unfolding, register or not.
 enum Frame {
-    Each(Box<dyn Fn(Gpr) -> String>),
     Any { children: Vec<String>, proof: String },
 }
 
@@ -469,13 +479,6 @@ fn finish(n: &str, r: &StructuredRegion, p: &LoweredStructured, incoming: &Value
         transported(n, &format!("{n}_after(before).rip = next_rip(before.rip, y)"), &format!("{n}_span(before)"))); }
     fun(m, format!("{n}_Protected"), false, vec![emitted_parameter("register", "Gpr")], "Type".into(), format!("match register {{ {} }}", render_protected_arms(&p.clobbered)));
     let preserved = match frame {
-        Frame::Each(frame) => {
-            let mut arms = Vec::new();
-            for reg in [Gpr::Rax, Gpr::Rcx, Gpr::Rdx, Gpr::Rbx, Gpr::Rsp, Gpr::Rbp, Gpr::Rsi, Gpr::Rdi, Gpr::R8, Gpr::R9, Gpr::R10, Gpr::R11, Gpr::R12, Gpr::R13, Gpr::R14, Gpr::R15] {
-                arms.push(format!("{} => {}", reg.heather_name(), if p.clobbered.contains(&reg) { "protected ⊢ false_elim(protected)".into() } else { format!("_ ⊢ {}", frame(reg)) }));
-            }
-            format!("match register {{ {} }}", arms.join(", "))
-        }
         Frame::Any { children, proof } => {
             // Each child protects what this node does: the one per-register
             // case split, over `Protected` alone, which reduces to a
@@ -522,13 +525,24 @@ fn emit_sequence(n: &str, r: &StructuredRegion, p: &LoweredStructured,
     let memory = format!("trans({rest}_memory({intermediate}), {first}_memory(before))");
     let ff = first.clone(); let fr = rest.clone();
     finish(n, r, p, incoming, m, sources, format!("CodeSequence({first}_code(), {rest}_code())"), results, proofs, memory, span,
-        format!("⟨{first}_layout(), {rest}_layout()⟩"),
-        format!("⟨{first}_decodes(start), {}⟩", transported(&first, &format!("StructuredDecodes({rest}_code(), next_rip(start, y))"), &format!("{rest}_decodes(next_rip(start, {}))", first_plan.byte_length))),
-        appended_length(&[(length_of(&first), format!("{first}_byte_length()"), first_plan.byte_length), (length_of(&rest), format!("{rest}_byte_length()"), next.byte_length)]),
-        (format!("{first}_lit() ++ {rest}_lit()"), trans(&format!("cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ xs => xs ++ {rest}_bytes(), {first}_bytes_are())"),
-            &format!("cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ ys => {first}_lit() ++ ys, {rest}_bytes_are())"))),
+        sequence_layout(&first, &rest), sequence_decodes(&first, &rest, first_plan.byte_length),
+        sequence_length(&first, &rest, first_plan.byte_length, next.byte_length), sequence_bytes(&first, &rest),
         Frame::Any { children: vec![ff.clone(), fr.clone()],
             proof: format!("trans({fr}_preserves(register, {ff}_after(before), {fr}_kept(register, protected)), {ff}_preserves(register, before, {ff}_kept(register, protected)))") })
+}
+
+// A sequence's facts from its two children's (structured_sequence_length, …).
+fn sequence_layout(first: &str, rest: &str) -> String {
+    format!("structured_sequence_layout({first}_code(), {rest}_code(), {first}_layout(), {rest}_layout())")
+}
+fn sequence_decodes(first: &str, rest: &str, length: usize) -> String {
+    format!("structured_sequence_decodes({first}_code(), {rest}_code(), {length}, start, {first}_byte_length(), {first}_decodes(start), {rest}_decodes(next_rip(start, {length})))")
+}
+fn sequence_length(first: &str, rest: &str, a: usize, b: usize) -> String {
+    format!("structured_sequence_length({first}_code(), {rest}_code(), {a}, {b}, {first}_byte_length(), {rest}_byte_length())")
+}
+fn sequence_bytes(first: &str, rest: &str) -> (String, String) {
+    (format!("{first}_lit() ++ {rest}_lit()"), format!("structured_sequence_bytes({first}_code(), {rest}_code(), {first}_lit(), {rest}_lit(), {first}_bytes_are(), {rest}_bytes_are())"))
 }
 
 /// A valuation's body over its populated entries (sorted by id), zero
@@ -641,11 +655,8 @@ fn emit_crossing(n: &str, r: &StructuredRegion, p: &LoweredStructured,
     let memory = format!("trans({rest}_memory({intermediate}), {first}_memory(before))");
     let ff = first.clone(); let fr = rest.clone();
     let exported = finish(n, r, p, incoming, m, sources, format!("CodeSequence({first}_code(), {rest}_code())"), results, proofs, memory, span,
-        format!("⟨{first}_layout(), {rest}_layout()⟩"),
-        format!("⟨{first}_decodes(start), {}⟩", transported(&first, &format!("StructuredDecodes({rest}_code(), next_rip(start, y))"), &format!("{rest}_decodes(next_rip(start, {}))", first_plan.byte_length))),
-        appended_length(&[(length_of(&first), format!("{first}_byte_length()"), first_plan.byte_length), (length_of(&rest), format!("{rest}_byte_length()"), next.byte_length)]),
-        (format!("{first}_lit() ++ {rest}_lit()"), trans(&format!("cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ xs => xs ++ {rest}_bytes(), {first}_bytes_are())"),
-            &format!("cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ ys => {first}_lit() ++ ys, {rest}_bytes_are())"))),
+        sequence_layout(&first, &rest), sequence_decodes(&first, &rest, first_plan.byte_length),
+        sequence_length(&first, &rest, first_plan.byte_length, next.byte_length), sequence_bytes(&first, &rest),
         Frame::Any { children: vec![ff.clone(), fr.clone()],
             proof: format!("trans({fr}_preserves(register, {ff}_after(before), {fr}_kept(register, protected)), {ff}_preserves(register, before, {ff}_kept(register, protected)))") })?;
     // The result as the source computes it from the crossing value, stated

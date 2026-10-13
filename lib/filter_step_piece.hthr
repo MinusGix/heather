@@ -84,9 +84,10 @@ fn emitted_nothing() → BitVec(8) { BitVec::ofNat(0) }
 // own while the state is intact, then copied home.
 fn emit_copy(word: BitVec(64)) → BitVec(64) { word }
 
-// A sequence's facts from its two parts': where it leaves RIP, how long it
-// is, and its bytes. Over the parts' own lengths and literals, so a client
-// never has the kernel evaluate a closed encoding.
+// Where a sequence leaves RIP, from its two parts'. Its length and bytes are
+// x86_64_structured_block's structured_sequence_length/_bytes. Over the
+// parts' own lengths and literals, so a client never has the kernel evaluate
+// a closed encoding.
 theorem structured_sequence_rip<M>(first, rest: StructuredCode, before: MachineState<M>,
     one: structured_after(first, before).rip = next_rip(before.rip, structured_bytes(first).len()),
     two: structured_after(rest, structured_after(first, before)).rip = next_rip(structured_after(first, before).rip, structured_bytes(rest).len())):
@@ -94,16 +95,4 @@ theorem structured_sequence_rip<M>(first, rest: StructuredCode, before: MachineS
     trans(two, trans(BitVec::cong_iterate_increment(64, structured_bytes(rest).len(), one),
         trans(BitVec::iterate_increment_compose(64, before.rip, structured_bytes(first).len(), structured_bytes(rest).len()),
             BitVec::cong_iterate_increment_count(64, before.rip, sym(List::len_append(structured_bytes(first), structured_bytes(rest)))))))
-}
-theorem structured_sequence_length(first, rest: StructuredCode, a, b: Nat,
-    one: structured_bytes(first).len() = a, two: structured_bytes(rest).len() = b):
-    structured_bytes(CodeSequence(first, rest)).len() = a + b {
-    trans(List::len_append(structured_bytes(first), structured_bytes(rest)),
-        trans(cong_fn<Nat, Nat>(λ k => k + structured_bytes(rest).len(), one), cong_fn<Nat, Nat>(λ k => a + k, two)))
-}
-theorem structured_sequence_bytes(first, rest: StructuredCode, a, b: List<BitVec(8)>,
-    one: structured_bytes(first) = a, two: structured_bytes(rest) = b):
-    structured_bytes(CodeSequence(first, rest)) = a ++ b {
-    trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ xs => xs ++ structured_bytes(rest), one),
-        cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ ys => a ++ ys, two))
 }
