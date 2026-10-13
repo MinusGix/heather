@@ -36,3 +36,7 @@ with a resolved certificate, emit the term the explicit form is, and gate no
 alias that the final term does not keep. Acceptance: the four forms above in
 `crates/elab/tests` with item counters, `calc`/`rel_cong` within a small
 factor of the explicit `trans`.
+
+Related: [[relational-derivation-cost]] owns the search side of `rel_derive`
+(certificate probes, family searches); this is the emitted term's cost at an
+ordinary `rel_cong`/`calc` use with nothing to search.
