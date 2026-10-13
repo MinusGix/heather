@@ -363,3 +363,137 @@ theorem structured_near_branch_read<M>(test: BranchTest, fd, jd: BitVec(32),
         }
     { False => refl, True => refl }
 }
+
+// ---------------------------------------------------------------------------
+// One node's facts from its children's, stated at the node's constructor.
+// A generated certificate cites these instead of building the conjunction or
+// the length's chain of appends itself: checking a lemma's conclusion against
+// `StructuredDecodes({n}_code(), start)` unfolds `{n}_code()` one step and
+// meets at the constructor, where an anonymous constructor or a spelled-out
+// chain made the elaborator reduce the node's type to its conjunction and
+// re-elaborate every piece's encoding in each certificate
+// (issues/field-high-certificate-shape.md).
+
+theorem structured_sequence_length(prefix, continuation: StructuredCode, a, b: Nat,
+    pa: structured_bytes(prefix).len() = a, pb: structured_bytes(continuation).len() = b):
+    structured_bytes(CodeSequence(prefix, continuation)).len() = a + b
+{
+    trans(list::List::len_append(structured_bytes(prefix), structured_bytes(continuation)),
+        trans(cong_fn<Nat, Nat>(λ k => k + structured_bytes(continuation).len(), pa), cong_fn<Nat, Nat>(λ k => a + k, pb)))
+}
+
+theorem structured_branch_length(test: BranchTest, fd, jd: BitVec(8), yes, no: StructuredCode, a, b: Nat,
+    pa: structured_bytes(yes).len() = a, pb: structured_bytes(no).len() = b):
+    structured_bytes(CodeBranch(test, fd, jd, yes, no)).len() = 3 + (2 + (a + (2 + b)))
+{
+    let jump = short_control_bytes(Jump(jd));
+    let skip = short_control_bytes(JumpIf(branch_skip(test), fd));
+    trans(list::List::len_append(canonical_bytes(branch_test_instruction(test)), skip ++ structured_bytes(yes) ++ jump ++ structured_bytes(no)),
+        trans(cong_fn<Nat, Nat>(λ k => k + (skip ++ structured_bytes(yes) ++ jump ++ structured_bytes(no)).len(), branch_test_bytes_len(test)),
+            cong_fn<Nat, Nat>(λ k => 3 + k, trans(list::List::len_append(skip, structured_bytes(yes) ++ jump ++ structured_bytes(no)),
+                cong_fn<Nat, Nat>(λ k => 2 + k, trans(list::List::len_append(structured_bytes(yes), jump ++ structured_bytes(no)),
+                    trans(cong_fn<Nat, Nat>(λ k => k + (jump ++ structured_bytes(no)).len(), pa),
+                        cong_fn<Nat, Nat>(λ k => a + k, trans(list::List::len_append(jump, structured_bytes(no)), cong_fn<Nat, Nat>(λ k => 2 + k, pb))))))))))
+}
+
+theorem structured_near_branch_length(test: BranchTest, fd, jd: BitVec(32), yes, no: StructuredCode, a, b: Nat,
+    pa: structured_bytes(yes).len() = a, pb: structured_bytes(no).len() = b):
+    structured_bytes(CodeBranchNear(test, fd, jd, yes, no)).len() = 3 + (6 + (a + (5 + b)))
+{
+    let jump = near_control_bytes(JumpNear(jd));
+    let skip = near_control_bytes(JumpIfNear(branch_skip(test), fd));
+    trans(list::List::len_append(canonical_bytes(branch_test_instruction(test)), skip ++ structured_bytes(yes) ++ jump ++ structured_bytes(no)),
+        trans(cong_fn<Nat, Nat>(λ k => k + (skip ++ structured_bytes(yes) ++ jump ++ structured_bytes(no)).len(), branch_test_bytes_len(test)),
+            cong_fn<Nat, Nat>(λ k => 3 + k, trans(list::List::len_append(skip, structured_bytes(yes) ++ jump ++ structured_bytes(no)),
+                cong_fn<Nat, Nat>(λ k => 6 + k, trans(list::List::len_append(structured_bytes(yes), jump ++ structured_bytes(no)),
+                    trans(cong_fn<Nat, Nat>(λ k => k + (jump ++ structured_bytes(no)).len(), pa),
+                        cong_fn<Nat, Nat>(λ k => a + k, trans(list::List::len_append(jump, structured_bytes(no)), cong_fn<Nat, Nat>(λ k => 5 + k, pb))))))))))
+}
+
+theorem structured_sequence_bytes(prefix, continuation: StructuredCode, xs, ys: List<BitVec(8)>,
+    px: structured_bytes(prefix) = xs, py: structured_bytes(continuation) = ys):
+    structured_bytes(CodeSequence(prefix, continuation)) = xs ++ ys
+{
+    trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ zs => zs ++ structured_bytes(continuation), px), cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ zs => xs ++ zs, py))
+}
+
+theorem structured_branch_bytes(test: BranchTest, fd, jd: BitVec(8), yes, no: StructuredCode, xs, ys: List<BitVec(8)>,
+    px: structured_bytes(yes) = xs, py: structured_bytes(no) = ys):
+    structured_bytes(CodeBranch(test, fd, jd, yes, no)) = canonical_bytes(branch_test_instruction(test)) ++
+        (short_control_bytes(JumpIf(branch_skip(test), fd)) ++ (xs ++ (short_control_bytes(Jump(jd)) ++ ys)))
+{
+    let head = canonical_bytes(branch_test_instruction(test));
+    let skip = short_control_bytes(JumpIf(branch_skip(test), fd));
+    let jump = short_control_bytes(Jump(jd));
+    trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ zs => head ++ (skip ++ (zs ++ (jump ++ structured_bytes(no)))), px),
+        cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ zs => head ++ (skip ++ (xs ++ (jump ++ zs))), py))
+}
+
+theorem structured_near_branch_bytes(test: BranchTest, fd, jd: BitVec(32), yes, no: StructuredCode, xs, ys: List<BitVec(8)>,
+    px: structured_bytes(yes) = xs, py: structured_bytes(no) = ys):
+    structured_bytes(CodeBranchNear(test, fd, jd, yes, no)) = canonical_bytes(branch_test_instruction(test)) ++
+        (near_control_bytes(JumpIfNear(branch_skip(test), fd)) ++ (xs ++ (near_control_bytes(JumpNear(jd)) ++ ys)))
+{
+    let head = canonical_bytes(branch_test_instruction(test));
+    let skip = near_control_bytes(JumpIfNear(branch_skip(test), fd));
+    let jump = near_control_bytes(JumpNear(jd));
+    trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ zs => head ++ (skip ++ (zs ++ (jump ++ structured_bytes(no)))), px),
+        cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ zs => head ++ (skip ++ (xs ++ (jump ++ zs))), py))
+}
+
+theorem structured_sequence_layout(prefix, continuation: StructuredCode,
+    first: StructuredLayout(prefix), rest: StructuredLayout(continuation)):
+    StructuredLayout(CodeSequence(prefix, continuation))
+{
+    ⟨first, rest⟩
+}
+
+theorem structured_branch_layout(test: BranchTest, fd, jd: BitVec(8), yes, no: StructuredCode, a, b: Nat,
+    pa: structured_bytes(yes).len() = a, pb: structured_bytes(no).len() = b,
+    skip: (start: BitVec(64)) → short_branch_target(start, fd) = next_rip(start, 2 + (a + 2)),
+    join: (start: BitVec(64)) → short_branch_target(start, jd) = next_rip(start, 2 + b),
+    first: StructuredLayout(yes), second: StructuredLayout(no)):
+    StructuredLayout(CodeBranch(test, fd, jd, yes, no))
+{
+    ⟨λ start => j(sym(pa), λ y _ => short_branch_target(start, fd) = next_rip(start, 2 + (y + 2)), skip(start)),
+        ⟨λ start => j(sym(pb), λ y _ => short_branch_target(start, jd) = next_rip(start, 2 + y), join(start)), ⟨first, second⟩⟩⟩
+}
+
+theorem structured_near_branch_layout(test: BranchTest, fd, jd: BitVec(32), yes, no: StructuredCode, a, b: Nat,
+    pa: structured_bytes(yes).len() = a, pb: structured_bytes(no).len() = b,
+    skip: (start: BitVec(64)) → near_branch_target(start, 6, fd) = next_rip(start, 6 + (a + 5)),
+    join: (start: BitVec(64)) → near_branch_target(start, 5, jd) = next_rip(start, 5 + b),
+    first: StructuredLayout(yes), second: StructuredLayout(no)):
+    StructuredLayout(CodeBranchNear(test, fd, jd, yes, no))
+{
+    ⟨λ start => j(sym(pa), λ y _ => near_branch_target(start, 6, fd) = next_rip(start, 6 + (y + 5)), skip(start)),
+        ⟨λ start => j(sym(pb), λ y _ => near_branch_target(start, 5, jd) = next_rip(start, 5 + y), join(start)), ⟨first, second⟩⟩⟩
+}
+
+theorem structured_sequence_decodes(prefix, continuation: StructuredCode, a: Nat, start: BitVec(64),
+    pa: structured_bytes(prefix).len() = a,
+    first: StructuredDecodes(prefix, start), rest: StructuredDecodes(continuation, next_rip(start, a))):
+    StructuredDecodes(CodeSequence(prefix, continuation), start)
+{
+    ⟨first, j(sym(pa), λ y _ => StructuredDecodes(continuation, next_rip(start, y)), rest)⟩
+}
+
+theorem structured_branch_decodes(test: BranchTest, fd, jd: BitVec(8), yes, no: StructuredCode, a: Nat, start: BitVec(64),
+    pa: structured_bytes(yes).len() = a,
+    first: StructuredDecodes(yes, next_rip(start, 5)), second: StructuredDecodes(no, next_rip(start, 5 + a + 2))):
+    StructuredDecodes(CodeBranch(test, fd, jd, yes, no), start)
+{
+    ⟨canonical_encoding_decodes(start, branch_test_instruction(test)), ⟨decode_short_control_complete(JumpIf(branch_skip(test), fd)),
+        ⟨first, ⟨decode_short_control_complete(Jump(jd)),
+            j(cong_fn<Nat, Nat>(λ k => 5 + k + 2, sym(pa)), λ y _ => StructuredDecodes(no, next_rip(start, y)), second)⟩⟩⟩⟩
+}
+
+theorem structured_near_branch_decodes(test: BranchTest, fd, jd: BitVec(32), yes, no: StructuredCode, a: Nat, start: BitVec(64),
+    pa: structured_bytes(yes).len() = a,
+    first: StructuredDecodes(yes, next_rip(start, 9)), second: StructuredDecodes(no, next_rip(start, 9 + a + 5))):
+    StructuredDecodes(CodeBranchNear(test, fd, jd, yes, no), start)
+{
+    ⟨canonical_encoding_decodes(start, branch_test_instruction(test)), ⟨decode_near_control_complete(JumpIfNear(branch_skip(test), fd)),
+        ⟨first, ⟨decode_near_control_complete(JumpNear(jd)),
+            j(cong_fn<Nat, Nat>(λ k => 9 + k + 5, sym(pa)), λ y _ => StructuredDecodes(no, next_rip(start, y)), second)⟩⟩⟩⟩
+}

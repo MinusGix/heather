@@ -1047,7 +1047,7 @@ fn render_port(port: Port) -> String {
     format!("Port(id := {}, width := {})", port.id, port.width)
 }
 
-fn render_node(node: Node) -> String {
+pub(crate) fn render_node(node: Node) -> String {
     match node {
         Node::Const {
             width,
@@ -1124,6 +1124,15 @@ fn render_node(node: Node) -> String {
             right,
         } => render_binary("Equal", width, output, left, right),
     }
+}
+
+/// `node` with its width spelled `width`, a variable, and the width it has:
+/// for a node equation proved once at a neutral width and used at its own.
+pub(crate) fn render_node_at(node: Node, width: &str) -> (String, String) {
+    let rendered = render_node(node);
+    let (name, rest) = rendered.split_once("(width := ").expect("a node renders its width first");
+    let (own, rest) = rest.split_once(", ").expect("a node has fields after its width");
+    (format!("{name}(width := {width}, {rest}"), own.to_string())
 }
 
 fn render_binary(name: &str, width: u64, output: u64, left: u64, right: u64) -> String {

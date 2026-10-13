@@ -3272,7 +3272,9 @@ pub fn generate(
 /// which states execution as `structured_after` by `refl` and its bytes from
 /// its own literals, so the execution chain, the artifact, the register
 /// congruence and the leaf's own byte facts would be declarations nothing
-/// uses (issues/structured-certificate-cost.md).
+/// uses (issues/structured-certificate-cost.md). Its context holds each
+/// node's equation rather than the region's graph, which its node proves
+/// node by node (issues/field-high-certificate-shape.md).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum LeafUse { Standalone, Structured }
 
@@ -3302,9 +3304,10 @@ pub(super) fn generate_selected(
     } else {
         // No execution chain reads a suffix, so the list is one literal,
         // an instruction to a line as the spine spells it.
-        let list = if lowered.instructions.is_empty() { Expr::list([]) } else {
-            Expr::name(lowered.instructions.iter().rev().fold("Nil<Instruction>".to_string(), |rest, instruction| format!("Cons(\n        {},\n        {rest})", instruction.render())))
-        };
+        // `Nil<Instruction>` rather than `[]` when empty: a collection
+        // literal resolves its instance first, which made an empty arm's
+        // list cost more than a two-instruction one.
+        let list = Expr::name(lowered.instructions.iter().rev().fold("Nil<Instruction>".to_string(), |rest, instruction| format!("Cons(\n        {},\n        {rest})", instruction.render())));
         header.declaration(Declaration::function(&instructions_name, Expr::name("List<Instruction>"), Block::expression(list)));
     }
     if standalone { header.declaration(Declaration::function(
@@ -3386,14 +3389,29 @@ pub(super) fn generate_selected(
     ));
     }
 
-    text.push_str(&format!(
-        "record {prefix}_Context<M>(values: Valuation(), before: MachineState<M>) {{\n\
+    // A standalone block's context holds the region's graph, from which its
+    // proofs project each node's equation in stages. A structured leaf's
+    // holds each equation as a field of its own, which its node supplies
+    // (structured_cert's `_holds_N`): the stages, the node lists and the
+    // region they walk would be declarations only that projection reads.
+    let node_fact = |index: usize| if standalone { format!("{prefix}_graph_{index}(values, before, context).left") } else { format!("context.holds_{index}") };
+    if standalone {
+        text.push_str(&format!(
+            "record {prefix}_Context<M>(values: Valuation(), before: MachineState<M>) {{\n\
 {}\
-         \x20   graph: RegionHolds({region_expr}, values),\n\
-         }}\n\n",
-        render_context_fields(region, input_registers),
-    ));
-    emit_graph_stages(prefix, &lowered.node_plans, &mut text);
+             \x20   graph: RegionHolds({region_expr}, values),\n\
+             }}\n\n",
+            render_context_fields(region, input_registers),
+        ));
+        emit_graph_stages(prefix, &lowered.node_plans, &mut text);
+    } else {
+        let holds: String = region.nodes.iter().enumerate()
+            .map(|(index, node)| format!("    holds_{index}: NodeHolds(values, {}),\n", cert::render_node(*node))).collect();
+        text.push_str(&format!(
+            "record {prefix}_Context<M>(values: Valuation(), before: MachineState<M>) {{\n{}{holds}}}\n\n",
+            render_context_fields(region, input_registers),
+        ));
+    }
 
     let final_placement = emit_placement_proofs(
         prefix,
@@ -3401,6 +3419,7 @@ pub(super) fn generate_selected(
         &lowered,
         &compact_parameters,
         &arguments,
+        &node_fact,
         &mut text,
     );
     let result_expression = placed_expression(lowered.output_width, &format!("values({}, {})", lowered.output_width, lowered.output_id));
@@ -3409,16 +3428,18 @@ pub(super) fn generate_selected(
          \x20   read_gpr({}, {after_name}(before).gprs) = {result_expression}\n\
          {{\n\
          \x20   sym({final_placement})\n\
-         }}\n\n\
-         theorem {prefix}_refines_function_ir<M>({public_parameters}):\n\
+         }}\n\n",
+        lowered.output_register.heather_name(),
+    ));
+    if standalone { text.push_str(&format!(
+        "theorem {prefix}_refines_function_ir<M>({public_parameters}):\n\
          \x20   read_gpr({}, {after_name}(before).gprs) = {result_expression}\n\
          {{\n\
          \x20   {prefix}_refines_compact(values, before,\n\
          \x20       {prefix}_Context({context_arguments}))\n\
          }}\n\n",
         lowered.output_register.heather_name(),
-        lowered.output_register.heather_name(),
-    ));
+    )); }
 
     text.push_str(&format!(
         "theorem {prefix}_preserves_memory<M>(before: MachineState<M>):\n\
@@ -3722,6 +3743,7 @@ fn emit_placement_proofs(
     lowered: &LoweredDag,
     parameters: &str,
     arguments: &str,
+    node_fact: &dyn Fn(usize) -> String,
     text: &mut String,
 ) -> String {
     let widths = region.inputs.iter().copied().chain(region.nodes.iter().map(|node| node.output()))
@@ -3769,10 +3791,7 @@ fn emit_placement_proofs(
         let before_index = instruction_index;
         instruction_index += plan.instructions.len();
         let after_index = instruction_index;
-        let equation = format!(
-            "{prefix}_graph_{}(values, before, context).left",
-            plan.node_index,
-        );
+        let equation = node_fact(plan.node_index);
         let output_name = format!(
             "{prefix}_value_{}_after_node_{}",
             plan.node.output(),
@@ -3800,7 +3819,7 @@ fn emit_placement_proofs(
                 let equation = if plan.orientation == OperandOrientation::Original { equation } else {
                     format!("trans({equation}, bitvec::BitVec::add_comm(64, values(64, {}), values(64, {})))", node.left, node.right)
                 };
-                let constant = format!("{prefix}_graph_{}(values, before, context).left", immediate.node_index);
+                let constant = node_fact(immediate.node_index);
                 let add = BinaryOperation::Add.semantic_function();
                 text.push_str(&format!("theorem {output_name}<M>({parameters}): {} {{\n\
                     \x20   trans({equation},\n\
