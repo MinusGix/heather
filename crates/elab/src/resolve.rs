@@ -628,6 +628,24 @@ impl Elaborator {
         })
     }
 
+    /// The search a `:= infer` parameter runs at a proposition goal, as a
+    /// term: what fills a `Pos<A>` record field's fact
+    /// (`heather_syntax::POS_SEARCH`). Outside any `positivity` run, so omega
+    /// is not a source, exactly as at a parameter.
+    pub(crate) fn infer_proposition(&self, cx: &Cx, goal: &Type, lvl: &Level, span: Span) -> crate::R<Term> {
+        let spelled = self
+            .spell_type_clean(cx, goal)
+            .unwrap_or_else(|| "the goal".to_string());
+        let outer = self.positivity.replace(None);
+        let mut tr = Vec::new();
+        let found = self.resolve_goal(cx, goal, lvl, &spelled, None, span, &mut tr);
+        *self.positivity.borrow_mut() = outer;
+        found.ok_or_else(|| ElabError::Elab {
+            msg: format!("no evidence for `{spelled}` — the search:{}", render_trace(&tr)),
+            span,
+        })
+    }
+
     /// Step 5, inside a `positivity` run only: hand the goal to `omega`. A
     /// goal omega was stuck on once in this run is not tried again, which
     /// bounds a failing run at one omega call per distinct subgoal.

@@ -36,6 +36,8 @@ mod lib_std_rat;
 mod lib_std_relation;
 #[path = "../lib_std_ring.rs"]
 mod lib_std_ring;
+#[path = "../pos_binder_sugar.rs"]
+mod pos_binder_sugar;
 #[path = "../lib_std_string.rs"]
 mod lib_std_string;
 #[path = "../lib_std_tree.rs"]
