@@ -1,9 +1,9 @@
 ---
 title: omega skips a goal or fact whose head is a defined proposition
-status: open
+status: closed
 labels: [omega,proofs,elaboration,ergonomics]
 created: 2026-10-10
-updated: 2026-10-10
+updated: 2026-10-12
 ---
 
 `omega` reads a goal or hypothesis only when its head is already `=`, `<=`,
@@ -31,3 +31,15 @@ relation head. Same for a `Nat`/`Int` atom whose whnf is `Succ`/`OfNat` of a
 readable term. Acceptance: the typed restatements in `pos`/`rat` deleted with
 the modules still checking, plus a negative control that an opaque (non-
 unfolding) proposition is still skipped.
+
+## Log
+
+- 2026-10-12: LANDED. Omega now reads a fact or goal through a defined proposition, a call
+  computing to `Succ(…)`/`OfNat(…)`, a field of a call that unfolds to a
+  constructor, a factor computing to a numeral, and a `cong` of a function
+  literal; design in docs/omega-measure-reduction-design.md §11. Acceptance: the
+  typed restatements in `lib/std/pos.hthr` and `lib/std/rat.hthr` are gone
+  (`Pos::mul_val` keeps its two product facts, which are not restatements), and
+  `crates/elab/tests/omega_defined_propositions.rs` covers the rows plus three
+  controls: a proposition stuck on a match is still skipped, a false claim
+  through a defined fact is refused, and a stuck call stays an atom.

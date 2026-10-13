@@ -22,13 +22,12 @@ fn Pos::one() → Pos { Pos(0) }
 // (p + 1)(q + 1) = (pq + p + q) + 1.
 fn Pos::mul(self p, q: Pos) → Pos { Pos(p.pred * q.pred + p.pred + q.pred) }
 
-// Omega reads neither `val` nor `Pos::mul`, so the goal is restated in the
-// predecessors before it is asked.
+// Omega reads `val` and `Pos::mul` through to the predecessors; the two
+// products are the facts it cannot derive.
 theorem Pos::mul_val(self p, q: Pos): p.mul(q).val() = p.val() * q.val() {
     let unfold: (Succ(p.pred) * Succ(q.pred) = Succ(p.pred) * q.pred + Succ(p.pred)) = refl;
     let left = p.pred.mul_succ_left(q.pred);
-    let spelled: (Succ(p.pred * q.pred + p.pred + q.pred) = Succ(p.pred) * Succ(q.pred)) = omega;
-    spelled
+    omega
 }
 
 theorem Pos::mul_int(self p, q: Pos): p.mul(q).int() = p.int() * q.int() {
@@ -55,10 +54,7 @@ theorem Pos::mul_assoc_int(self p, q, r: Pos): p.mul(q).mul(r).int() = p.mul(q.m
     }
 }
 
-theorem Pos::mul_one_int(self p: Pos): p.mul(Pos::one()).int() = p.int() {
-    let spelled: (p.pred * 0 + p.pred + 0 = p.pred) = omega;
-    Int::cong_ofnat(Nat::cong_succ(spelled))
-}
+theorem Pos::mul_one_int(self p: Pos): p.mul(Pos::one()).int() = p.int() { omega }
 
 // ---------------------------------------------------------------------------
 // Cancelling a positive factor (issues/cancellative-algebra-api.md). The
