@@ -237,3 +237,88 @@ fn a_narrow_fused_branch_past_rel8_is_near() {
     assert!(text.contains("CodeBranchNear(Compare("), "expected a near compared branch");
     elab.semantic_image().elaborator().elab_module_source("near_byte_branch_certificate", &text).unwrap_or_else(|e| panic!("{}", e.render(&text)));
 }
+
+// A conditional with one arm that returns its input in place is one-armed,
+// `CodeWhen` (docs/structured-lowering-code-size-design.md §2.3): `cmp ; jcc
+// join ; body`, with no node for the empty arm. The body is the true arm
+// under the comparison's own skip, or the false arm under its negation (AE,
+// GE, NE; at a byte width through the zero-extension law). Each certifies;
+// a code skipping on another condition, or a result claiming the skipped
+// path returns another input, is refused. A materialised bit has no negated
+// TEST, so its empty true arm keeps the two-armed branch.
+#[test]
+fn one_armed_branches_certify_and_refuse_another_skip() {
+    use heather_elab::function_ir_x86_lower::{encode_structured, generate_structured_consuming, OneArmed, PlannedTest, StructuredPlan};
+    use std::collections::BTreeSet;
+    let elab = checker();
+    let port = |id, width| Port { id, width };
+    let bit = Port { id: 3, width: 1 };
+    let case = |width: u64, compare: Node, true_node: Node, false_node: Node| {
+        let arm = |node| Box::new(StructuredRegion::Dataflow(Region { inputs: vec![port(0, width), port(1, width)], nodes: vec![node], outputs: vec![port(4, width)] }));
+        StructuredRegion::Sequence {
+            prefix: Region { inputs: vec![port(0, width), port(1, width)], nodes: vec![Node::Const { width, output: 2, value: 10 }, compare], outputs: vec![bit] },
+            continuation: Box::new(StructuredRegion::Conditional { inputs: vec![bit, port(0, width), port(1, width)], condition: 3,
+                arguments: vec![port(0, width), port(1, width)], outputs: vec![port(4, width)], when_true: arm(true_node), when_false: arm(false_node) }),
+        }
+    };
+    let keep = |width| Node::Move { width, output: 4, source: 0 };
+    let below = |width| Node::UnsignedLessThan { width, output: 3, left: 0, right: 2 };
+    let cases = [
+        // a <u 10 ? a + b : a: the false arm is empty.
+        ("when_below", case(64, below(64), Node::Add { width: 64, output: 4, left: 0, right: 1 }, keep(64)), OneArmed::True, "B", ["AE", "BE"]),
+        // a <u 10 ? a : a + b, a <s 10 ? a : a ^ b, a = 10 ? a : a - b.
+        ("unless_below", case(64, below(64), keep(64), Node::Add { width: 64, output: 4, left: 0, right: 1 }), OneArmed::False, "AE", ["B", "A"]),
+        ("unless_less", case(64, Node::SignedLessThan { width: 64, output: 3, left: 0, right: 2 }, keep(64), Node::BitXor { width: 64, output: 4, left: 0, right: 1 }), OneArmed::False, "GE", ["L", "AE"]),
+        ("unless_equal", case(64, Node::Equal { width: 64, output: 3, left: 0, right: 2 }, keep(64), Node::Sub { width: 64, output: 4, left: 0, right: 1 }), OneArmed::False, "NE", ["E", "AE"]),
+        ("unless_byte_below", case(8, below(8), keep(8), Node::BitXor { width: 8, output: 4, left: 0, right: 1 }), OneArmed::False, "AE", ["B", "NE"]),
+    ];
+    // a in RAX, which the region may consume: the passthrough is in place.
+    let inputs = Placements::from([(0, Gpr::Rax), (1, Gpr::Rsi)]);
+    let generate = |name: &str, region: &StructuredRegion| generate_structured_consuming(name, region, &Default::default(), &Default::default(), &inputs,
+        &[Gpr::Rcx, Gpr::Rdx, Gpr::R8], &BTreeSet::from([Gpr::Rax]), &Placements::from([(4, Gpr::Rax)])).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+    for (name, region, side, cc, others) in cases {
+        let emission = generate(name, &region);
+        let StructuredPlan::FusedSequence { continuation, .. } = &emission.lowered.body else { panic!("{name}: expected a fused sequence, got {:?}", emission.lowered.body) };
+        let StructuredPlan::Conditional { test, one_armed, false_displacement, when_true, when_false, .. } = &continuation.body else { panic!("{name}: expected a branch") };
+        assert_eq!(*one_armed, Some(side), "{name}");
+        let body = if side == OneArmed::True { when_true } else { when_false };
+        assert_eq!((*false_displacement as usize, continuation.byte_length), (body.byte_length, 5 + body.byte_length), "{name}: no false arm, no JMP");
+        let bytes = encode_structured(&emission.lowered);
+        assert_eq!(bytes.len(), emission.lowered.byte_length, "{name}: the planned length is the encoding's");
+        let jcc = bytes.len() - body.byte_length - 2;
+        assert_eq!(&bytes[jcc..jcc + 2], &[0x70 | side.skip_code(*test), body.byte_length as u8], "{name}: Jcc rel8 over the body");
+        let PlannedTest::Compare { left, right, .. } = test else { panic!("{name}: expected a comparison") };
+        let text = format!("{IMPORTS}\n{}", emission.text);
+        let code = format!("CodeWhen(Compare({}, {}, {cc})", left.heather_name(), right.heather_name());
+        assert!(text.contains(&code), "{name}: expected {code}");
+        assert!(!text.contains("CodeBranch"), "{name}: the empty arm is no node");
+        elab.semantic_image().elaborator().elab_module_source(&format!("{name}_certificate"), &text).unwrap_or_else(|e| panic!("{}", e.render(&text)));
+        // The branch's result: the skipped path's arm is `a` itself.
+        let skipped = if side == OneArmed::True { "False => values(width, 0)" } else { "True => values(width, 0)" };
+        let value = text.find(&format!("fn {name}_continuation_value(")).unwrap_or_else(|| panic!("{name}: the branch's value"));
+        let at = value + text[value..].find(skipped).unwrap_or_else(|| panic!("{name}: the skipped path returns a"));
+        let other_input = format!("{}{}{}", &text[..at], skipped.replace("width, 0", "width, 1"), &text[at + skipped.len()..]);
+        let mutants = others.iter().map(|other| text.replacen(&code, &code.replace(&format!(", {cc})"), &format!(", {other})")), 1))
+            .chain([other_input]);
+        for mutant in mutants {
+            let error = elab.semantic_image().elaborator().elab_module_source(&format!("{name}_mutant"), &mutant)
+                .expect_err("another skip or another skipped value must be refused");
+            let message = error.render(&mutant);
+            assert!(!message.contains("unknown") && !message.contains("not in scope") && !message.contains("unbound"), "{name} failed on a name: {message}");
+        }
+    }
+    // a <u b compares two inputs, so the bit is materialised and TESTed; its
+    // empty true arm keeps both arms.
+    let word = |id| port(id, 64);
+    let tested = StructuredRegion::Sequence {
+        prefix: Region { inputs: vec![word(0), word(1)], nodes: vec![Node::UnsignedLessThan { width: 64, output: 3, left: 0, right: 1 }], outputs: vec![bit] },
+        continuation: Box::new(StructuredRegion::Conditional { inputs: vec![bit, word(0), word(1)], condition: 3, arguments: vec![word(0), word(1)], outputs: vec![word(4)],
+            when_true: Box::new(StructuredRegion::Dataflow(Region { inputs: vec![word(0), word(1)], nodes: vec![keep(64)], outputs: vec![word(4)] })),
+            when_false: Box::new(StructuredRegion::Dataflow(Region { inputs: vec![word(0), word(1)], nodes: vec![Node::Add { width: 64, output: 4, left: 0, right: 1 }], outputs: vec![word(4)] })) }),
+    };
+    let emission = generate("tested_keep", &tested);
+    let StructuredPlan::Sequence { continuation, .. } = &emission.lowered.body else { panic!("expected a sequence, got {:?}", emission.lowered.body) };
+    assert!(matches!(continuation.body, StructuredPlan::Conditional { test: PlannedTest::NonZero(_), one_armed: None, .. }), "{:?}", continuation.body);
+    let text = format!("{IMPORTS}\n{}", emission.text);
+    elab.semantic_image().elaborator().elab_module_source("tested_keep_certificate", &text).unwrap_or_else(|e| panic!("{}", e.render(&text)));
+}

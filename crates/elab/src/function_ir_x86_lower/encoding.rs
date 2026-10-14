@@ -74,7 +74,7 @@ pub fn encode_structured(plan: &super::LoweredStructured) -> Vec<u8> {
             bytes.extend(encode_structured(continuation));
             bytes
         }
-        StructuredPlan::Conditional { test, when_true, when_false, false_displacement, join_displacement, near } => {
+        StructuredPlan::Conditional { test, when_true, when_false, false_displacement, join_displacement, near, one_armed } => {
             let mut bytes = match (test, test.instruction()) {
                 (_, Some(instruction)) => encode_instructions(&[instruction]),
                 (super::PlannedTest::NonZero(register), None) => {
@@ -83,6 +83,12 @@ pub fn encode_structured(plan: &super::LoweredStructured) -> Vec<u8> {
                 }
                 (super::PlannedTest::Compare { .. }, None) => unreachable!("a comparison has its instruction"),
             };
+            // CodeWhen: Jcc rel8 over the one arm with code.
+            if let Some(arm) = one_armed {
+                bytes.extend([0x70 | arm.skip_code(*test), *false_displacement as u8]);
+                bytes.extend(encode_structured(if *arm == super::OneArmed::True { when_true } else { when_false }));
+                return bytes;
+            }
             if *near { bytes.extend([0x0f, 0x80 | test.skip_code()]); bytes.extend(false_displacement.to_le_bytes()); }
             else { bytes.extend([0x70 | test.skip_code(), *false_displacement as u8]); }
             bytes.extend(encode_structured(when_true));

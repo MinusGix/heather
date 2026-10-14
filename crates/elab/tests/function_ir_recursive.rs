@@ -5,7 +5,7 @@ use crate::support;
 use std::collections::BTreeMap;
 use heather_elab::function_ir_cert::{Node, Port, Region, StructuredRegion};
 use heather_elab::function_ir_source::{generate_structured_source_expansion, reflect_elaborated, reflect_elaborated_structured};
-use heather_elab::function_ir_x86_lower::{lower_structured, Gpr, Instruction, LoweredDag, LoweredStructured, Placements, StructuredPlan};
+use heather_elab::function_ir_x86_lower::{lower_structured, Gpr, Instruction, LoweredDag, LoweredStructured, OneArmed, Placements, StructuredPlan};
 
 const SCRATCH: &[Gpr] = &[Gpr::Rax, Gpr::Rcx, Gpr::Rdx, Gpr::R8];
 const SOURCE: &str = r#"
@@ -109,9 +109,22 @@ fn run(plan: &LoweredStructured, regs: &mut BTreeMap<Gpr, u64>) {
         StructuredPlan::Compose { prefix, continuation } => { run(prefix, regs); run(continuation, regs); }
         StructuredPlan::Sequence { prefix, continuation } => { run_dag(prefix, regs); run(continuation, regs); }
         StructuredPlan::FusedSequence { operands, continuation } => { run_dag(operands, regs); run(continuation, regs); }
-        StructuredPlan::Conditional { test, when_true, when_false, false_displacement, join_displacement, near } => {
-            assert_eq!(*false_displacement as usize, when_true.byte_length + if *near { 5 } else { 2 });
-            assert_eq!(*join_displacement as usize, when_false.byte_length);
+        StructuredPlan::Conditional { test, when_true, when_false, false_displacement, join_displacement, near, one_armed } => {
+            match one_armed {
+                // CodeWhen: the Jcc skips the one arm with code, and the
+                // other arm is empty.
+                Some(arm) => {
+                    let (body, empty) = if *arm == OneArmed::True { (when_true, when_false) } else { (when_false, when_true) };
+                    assert!(!*near);
+                    assert_eq!(*false_displacement as usize, body.byte_length);
+                    assert_eq!((*join_displacement, empty.byte_length), (0, 0));
+                    assert_eq!(plan.byte_length, 5 + body.byte_length);
+                }
+                None => {
+                    assert_eq!(*false_displacement as usize, when_true.byte_length + if *near { 5 } else { 2 });
+                    assert_eq!(*join_displacement as usize, when_false.byte_length);
+                }
+            }
             use heather_elab::function_ir_x86_lower::{ComparisonOperation, PlannedTest};
             let holds = match *test {
                 PlannedTest::NonZero(register) => regs[&register] != 0,
@@ -730,6 +743,13 @@ fn a_dead_state_passed_through_is_an_empty_arm() {
     };
     assert_eq!(true_arm(prefix), vec![Instruction::MovRR { destination: Gpr::Rax, source: Gpr::Rdi }], "the caller's a stays");
     assert_eq!(true_arm(continuation), vec![], "the inner result passes through in place");
+    // An empty arm makes the step one-armed: `cmp ; jb join ; false arm`.
+    let one_armed = |plan: &LoweredStructured| {
+        let StructuredPlan::FusedSequence { continuation, .. } = &plan.body else { unreachable!() };
+        let StructuredPlan::Conditional { one_armed, .. } = &continuation.body else { unreachable!() };
+        *one_armed
+    };
+    assert_eq!((one_armed(prefix), one_armed(continuation)), (None, Some(OneArmed::False)));
     assert!(!plan.clobbered.contains(&Gpr::Rdi) && !plan.clobbered.contains(&Gpr::Rsi));
     let threshold = 1u64 << 32;
     let step = |a: u64, b: u64| if a < threshold { a } else { a.wrapping_sub(threshold).wrapping_add(b) };

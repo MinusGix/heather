@@ -15,7 +15,7 @@ pub use data_read::ByteLoad;
 mod structured;
 mod structured_cert;
 pub use structured_cert::{at_width, generate_structured, generate_structured_consuming, generate_structured_results, generate_structured_sourced, StructuredX86Emission};
-pub use structured::{lower_structured, lower_structured_consuming, lower_structured_results, LoweredStructured, Placements, PlannedTest, StructuredPlan};
+pub use structured::{lower_structured, lower_structured_consuming, lower_structured_results, LoweredStructured, OneArmed, Placements, PlannedTest, StructuredPlan};
 pub(crate) use structured::share_compared_constant;
 
 use crate::function_ir_cert::{

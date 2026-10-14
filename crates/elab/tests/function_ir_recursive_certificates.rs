@@ -257,8 +257,9 @@ fn a_consumed_input_is_no_longer_protected() {
     }
 }
 
-// The outer step's passthrough arm is empty, and its certificate checks; a
-// region whose Move copies another value there is refused.
+// The outer step's passthrough arm is empty, so the step is one-armed, and
+// its certificate checks; a region whose Move copies another value in the
+// inner step's arm is refused.
 #[test]
 fn an_empty_passthrough_arm_certifies_and_another_copy_is_refused() {
     use heather_elab::function_ir_source::generate_elaborated_structured_x86;
@@ -272,7 +273,10 @@ fn an_empty_passthrough_arm_certifies_and_another_copy_is_refused() {
     let emission = generate_elaborated_structured_x86(&elab, "keep_twice", "branches::keep_twice", [Gpr::Rdi, Gpr::Rsi], &scratch, Gpr::Rax)
         .unwrap_or_else(|e| panic!("keep_twice: {e:?}"));
     let text = format!("import x86_64_structured_block; import function_ir; import function_ir_x86_support; import x86_64; import x86_64_block; import bitvec; import bool; import list; import logic; import nat;\n{}", emission.text);
-    assert!(text.contains("CodeBlock([])") || text.contains("_leaf_instructions() → List<Instruction>\n{\n    Nil<Instruction>\n}"), "an arm should be an empty block");
+    // The empty arm is no node: the outer step is one-armed, its false arm
+    // under the negated comparison (`CodeWhen`).
+    assert!(text.contains("CodeWhen(Compare(") && text.contains(", AE), @bitvec::BitVec::ofNat(8, "), "the outer step should be one-armed");
+    assert_eq!(text.matches("CodeWhen(").count(), 1, "the inner step's arm is a mov, so it keeps both arms");
     elab.semantic_image().elaborator().elab_module_source("keep_twice_certificate", &text).unwrap_or_else(|e| panic!("{}", e.render(&text)));
     let moves = text.match_indices("Move(width := 64, output := ").map(|(at, _)| at).collect::<Vec<_>>();
     assert!(!moves.is_empty(), "the passthrough should be a Move");

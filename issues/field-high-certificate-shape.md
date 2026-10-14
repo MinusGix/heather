@@ -112,3 +112,7 @@ with a 64-bit immediate (evaluating its encoding), branch `_correct` and
 `_span`. The remaining structural lever is the node count: a `place` is six
 nodes, two of them an empty true arm and its branch's sequence
 ([[structured-lowering-codewhen]] would remove the empty arm).
+
+## Log
+
+- 2026-10-13: 2026-10-13: the node-count lever is [[structured-lowering-codewhen]] (landed): a place is five nodes, field_high 15.8 → ~14 s standalone.

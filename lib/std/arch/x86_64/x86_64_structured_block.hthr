@@ -42,6 +42,11 @@ inductive StructuredCode {
     // true arm and JMP rel32 over the false one (docs/native-wc-design.md §4.5).
     CodeBranchNear(test: BranchTest, false_displacement: BitVec(32),
         join_displacement: BitVec(32), when_true: StructuredCode, when_false: StructuredCode),
+    // A conditional with one arm: Jcc rel8 over `body` on the test's failure,
+    // with no false arm and no JMP (docs/structured-lowering-code-size-design.md
+    // §2.3). The lowering uses it when the other arm has no code; a body on
+    // the false side runs under the negated comparison.
+    CodeWhen(test: BranchTest, displacement: BitVec(8), body: StructuredCode),
 }
 
 fn structured_bytes(code: StructuredCode) → List<BitVec(8)> {
@@ -56,6 +61,9 @@ fn structured_bytes(code: StructuredCode) → List<BitVec(8)> {
             canonical_bytes(branch_test_instruction(test)) ++
             near_control_bytes(JumpIfNear(branch_skip(test), false_displacement)) ++ structured_bytes(yes) ++
             near_control_bytes(JumpNear(join_displacement)) ++ structured_bytes(no),
+        CodeWhen(test, displacement, body) =>
+            canonical_bytes(branch_test_instruction(test)) ++
+            short_control_bytes(JumpIf(branch_skip(test), displacement)) ++ structured_bytes(body),
     }
 }
 
@@ -123,6 +131,31 @@ theorem equal_compare_skips<M>(left, right: Gpr, a, b: BitVec(64), state: Machin
             cong_fn(λ (bit: Bool) => !bit, zero_bits_sub(64, read_gpr(left, state.gprs), read_gpr(right, state.gprs)))))
 }
 
+// A one-armed branch whose body is the false arm skips it on the negated
+// code (`CodeWhen`), so its skip is the comparison itself.
+theorem unsigned_compare_holds<M>(left, right: Gpr, a, b: BitVec(64), state: MachineState<M>,
+    pa: a = read_gpr(left, state.gprs), pb: b = read_gpr(right, state.gprs)):
+    branch_skips(Compare(left, right, AE), state) = a.unsigned_lt_bit(b)
+{
+    j(sym(pa), λ x _ => branch_skips(Compare(left, right, AE), state) = x.unsigned_lt_bit(b),
+        j(sym(pb), λ y _ => branch_skips(Compare(left, right, AE), state) = read_gpr(left, state.gprs).unsigned_lt_bit(y), refl))
+}
+theorem signed_compare_holds<M>(left, right: Gpr, a, b: BitVec(64), state: MachineState<M>,
+    pa: a = read_gpr(left, state.gprs), pb: b = read_gpr(right, state.gprs)):
+    branch_skips(Compare(left, right, GE), state) = a.signed_lt_bit(b)
+{
+    j(sym(pa), λ x _ => branch_skips(Compare(left, right, GE), state) = x.signed_lt_bit(b),
+        j(sym(pb), λ y _ => branch_skips(Compare(left, right, GE), state) = read_gpr(left, state.gprs).signed_lt_bit(y), refl))
+}
+theorem equal_compare_holds<M>(left, right: Gpr, a, b: BitVec(64), state: MachineState<M>,
+    pa: a = read_gpr(left, state.gprs), pb: b = read_gpr(right, state.gprs)):
+    branch_skips(Compare(left, right, NE), state) = a.eq_bit(b)
+{
+    j(sym(pa), λ x _ => branch_skips(Compare(left, right, NE), state) = x.eq_bit(b),
+        j(sym(pb), λ y _ => branch_skips(Compare(left, right, NE), state) = read_gpr(left, state.gprs).eq_bit(y),
+            zero_bits_sub(64, read_gpr(left, state.gprs), read_gpr(right, state.gprs))))
+}
+
 fn structured_branch_entry<M>(test: BranchTest, displacement: BitVec(8),
     before: MachineState<M>) → MachineState<M>
 {
@@ -153,6 +186,13 @@ fn structured_after<M>(code: StructuredCode, before: MachineState<M>) → Machin
                 True => structured_after(no, entry),
             }
         },
+        CodeWhen(test, displacement, body) => {
+            let entry = structured_branch_entry(test, displacement, before);
+            match branch_skips(test, before) {
+                False => structured_after(body, entry),
+                True => entry,
+            }
+        },
     }
 }
 
@@ -179,6 +219,9 @@ fn StructuredLayout(code: StructuredCode) → Type {
             (((start: BitVec(64)) → near_branch_target(start, 5, join_displacement) =
                 next_rip(start, 5 + structured_bytes(no).len())) ∧
             (StructuredLayout(yes) ∧ StructuredLayout(no))),
+        CodeWhen(_, displacement, body) =>
+            ((start: BitVec(64)) → short_branch_target(start, displacement) =
+                next_rip(start, 2 + structured_bytes(body).len())) ∧ StructuredLayout(body),
     }
 }
 
@@ -201,6 +244,11 @@ fn StructuredDecodes(code: StructuredCode) → BitVec(64) → Type {
             (StructuredDecodes(yes, next_rip(start, 9)) ∧
             (NearControlDecodes(JumpNear(join_displacement)) ∧
             StructuredDecodes(no, next_rip(start, 9 + structured_bytes(yes).len() + 5))))),
+        CodeWhen(test, displacement, body) => λ start =>
+            DecodedAt(encoded_at(start, branch_test_instruction(test)),
+                decoded_canonical(branch_test_instruction(test))) ∧
+            (ShortControlDecodes(JumpIf(branch_skip(test), displacement)) ∧
+            StructuredDecodes(body, next_rip(start, 5))),
     }
 }
 
@@ -364,6 +412,56 @@ theorem structured_near_branch_read<M>(test: BranchTest, fd, jd: BitVec(32),
     { False => refl, True => refl }
 }
 
+// The one-armed conditional's twins: the body runs, or the jump over it
+// leaves the state after the test and Jcc as it is.
+theorem structured_when_property<M>(test: BranchTest, d: BitVec(8), body: StructuredCode, before: MachineState<M>,
+    property: MachineState<M> → Type,
+    ran: property(structured_after(body, structured_branch_entry(test, d, before))),
+    skipped: property(structured_branch_entry(test, d, before))):
+    property(structured_after(CodeWhen(test, d, body), before))
+{
+    match branch_skips(test, before) as λ selected =>
+        property(match selected {
+            False => structured_after(body, structured_branch_entry(test, d, before)),
+            True => structured_branch_entry(test, d, before),
+        }) { False => ran, True => skipped }
+}
+
+theorem structured_when_cases<M>(test: BranchTest, d: BitVec(8), body: StructuredCode, before: MachineState<M>,
+    property: MachineState<M> → Type,
+    ran: (branch_skips(test, before) = False) →
+        property(structured_after(body, structured_branch_entry(test, d, before))),
+    skipped: (branch_skips(test, before) = True) → property(structured_branch_entry(test, d, before))):
+    property(structured_after(CodeWhen(test, d, body), before))
+{
+    (match branch_skips(test, before) as λ selected =>
+        (branch_skips(test, before) = selected) →
+        property(match selected {
+            False => structured_after(body, structured_branch_entry(test, d, before)),
+            True => structured_branch_entry(test, d, before),
+        }) { False => ran, True => skipped })(refl)
+}
+
+// Neither the test nor the jump writes a register, so a skipped body leaves
+// every register as it was before the branch.
+theorem structured_when_read<M>(test: BranchTest, d: BitVec(8), body: StructuredCode, before: MachineState<M>, output: Gpr):
+    read_gpr(output, structured_after(CodeWhen(test, d, body), before).gprs) =
+        match branch_skips(test, before) {
+            False => read_gpr(output, structured_after(body, structured_branch_entry(test, d, before)).gprs),
+            True => read_gpr(output, before.gprs),
+        }
+{
+    match branch_skips(test, before) as λ selected =>
+        read_gpr(output, (match selected {
+            False => structured_after(body, structured_branch_entry(test, d, before)),
+            True => structured_branch_entry(test, d, before),
+        }).gprs) = match selected {
+            False => read_gpr(output, structured_after(body, structured_branch_entry(test, d, before)).gprs),
+            True => read_gpr(output, before.gprs),
+        }
+    { False => refl, True => refl }
+}
+
 // ---------------------------------------------------------------------------
 // One node's facts from its children's, stated at the node's constructor.
 // A generated certificate cites these instead of building the conjunction or
@@ -410,6 +508,17 @@ theorem structured_near_branch_length(test: BranchTest, fd, jd: BitVec(32), yes,
                         cong_fn<Nat, Nat>(λ k => a + k, trans(list::List::len_append(jump, structured_bytes(no)), cong_fn<Nat, Nat>(λ k => 5 + k, pb))))))))))
 }
 
+theorem structured_when_length(test: BranchTest, d: BitVec(8), body: StructuredCode, a: Nat,
+    pa: structured_bytes(body).len() = a):
+    structured_bytes(CodeWhen(test, d, body)).len() = 3 + (2 + a)
+{
+    let skip = short_control_bytes(JumpIf(branch_skip(test), d));
+    trans(list::List::len_append(canonical_bytes(branch_test_instruction(test)), skip ++ structured_bytes(body)),
+        trans(cong_fn<Nat, Nat>(λ k => k + (skip ++ structured_bytes(body)).len(), branch_test_bytes_len(test)),
+            cong_fn<Nat, Nat>(λ k => 3 + k, trans(list::List::len_append(skip, structured_bytes(body)),
+                cong_fn<Nat, Nat>(λ k => 2 + k, pa)))))
+}
+
 theorem structured_sequence_bytes(prefix, continuation: StructuredCode, xs, ys: List<BitVec(8)>,
     px: structured_bytes(prefix) = xs, py: structured_bytes(continuation) = ys):
     structured_bytes(CodeSequence(prefix, continuation)) = xs ++ ys
@@ -441,6 +550,16 @@ theorem structured_near_branch_bytes(test: BranchTest, fd, jd: BitVec(32), yes, 
         cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ zs => head ++ (skip ++ (xs ++ (jump ++ zs))), py))
 }
 
+theorem structured_when_bytes(test: BranchTest, d: BitVec(8), body: StructuredCode, xs: List<BitVec(8)>,
+    px: structured_bytes(body) = xs):
+    structured_bytes(CodeWhen(test, d, body)) = canonical_bytes(branch_test_instruction(test)) ++
+        (short_control_bytes(JumpIf(branch_skip(test), d)) ++ xs)
+{
+    let head = canonical_bytes(branch_test_instruction(test));
+    let skip = short_control_bytes(JumpIf(branch_skip(test), d));
+    cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ zs => head ++ (skip ++ zs), px)
+}
+
 theorem structured_sequence_layout(prefix, continuation: StructuredCode,
     first: StructuredLayout(prefix), rest: StructuredLayout(continuation)):
     StructuredLayout(CodeSequence(prefix, continuation))
@@ -470,6 +589,15 @@ theorem structured_near_branch_layout(test: BranchTest, fd, jd: BitVec(32), yes,
         ⟨λ start => j(sym(pb), λ y _ => near_branch_target(start, 5, jd) = next_rip(start, 5 + y), join(start)), ⟨first, second⟩⟩⟩
 }
 
+theorem structured_when_layout(test: BranchTest, d: BitVec(8), body: StructuredCode, a: Nat,
+    pa: structured_bytes(body).len() = a,
+    skip: (start: BitVec(64)) → short_branch_target(start, d) = next_rip(start, 2 + a),
+    inner: StructuredLayout(body)):
+    StructuredLayout(CodeWhen(test, d, body))
+{
+    ⟨λ start => j(sym(pa), λ y _ => short_branch_target(start, d) = next_rip(start, 2 + y), skip(start)), inner⟩
+}
+
 theorem structured_sequence_decodes(prefix, continuation: StructuredCode, a: Nat, start: BitVec(64),
     pa: structured_bytes(prefix).len() = a,
     first: StructuredDecodes(prefix, start), rest: StructuredDecodes(continuation, next_rip(start, a))):
@@ -496,4 +624,12 @@ theorem structured_near_branch_decodes(test: BranchTest, fd, jd: BitVec(32), yes
     ⟨canonical_encoding_decodes(start, branch_test_instruction(test)), ⟨decode_near_control_complete(JumpIfNear(branch_skip(test), fd)),
         ⟨first, ⟨decode_near_control_complete(JumpNear(jd)),
             j(cong_fn<Nat, Nat>(λ k => 9 + k + 5, sym(pa)), λ y _ => StructuredDecodes(no, next_rip(start, y)), second)⟩⟩⟩⟩
+}
+
+theorem structured_when_decodes(test: BranchTest, d: BitVec(8), body: StructuredCode, start: BitVec(64),
+    inner: StructuredDecodes(body, next_rip(start, 5))):
+    StructuredDecodes(CodeWhen(test, d, body), start)
+{
+    ⟨canonical_encoding_decodes(start, branch_test_instruction(test)),
+        ⟨decode_short_control_complete(JumpIf(branch_skip(test), d)), inner⟩⟩
 }

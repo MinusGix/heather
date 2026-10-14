@@ -29,6 +29,9 @@ theorem pure_structured_memory<M>(code: StructuredCode): (before: MachineState<M
         CodeBranchNear(test, fd, jd, yes, no) => λ before =>
             structured_near_branch_property(test, fd, jd, yes, no, before, λ after => after.memory = before.memory,
                 pure_structured_memory(yes, structured_near_entry(test, fd, before)), pure_structured_memory(no, structured_near_entry(test, fd, before))),
+        CodeWhen(test, d, body) => λ before =>
+            structured_when_property(test, d, body, before, λ after => after.memory = before.memory,
+                pure_structured_memory(body, structured_branch_entry(test, d, before)), refl),
     }
 }
 // Memory through any number of iterations, from the children's own laws.
