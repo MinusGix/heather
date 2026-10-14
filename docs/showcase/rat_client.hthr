@@ -51,6 +51,28 @@ theorem le_across(x, x2, y: Rat, same: x ≈ x2, h: x <= y): x2 <= y + Rat::zero
         Rat::same_sym(y + Rat::zero(), y, Rat::add_zero(y)), h)
 }
 
+// The estimate a regular Cauchy sequence chains: two points each within
+// 1/(2n+2) of a third are within 1/(n+1) of each other. Distance symmetry,
+// the triangle inequality and the two halves of 1/(n+1) do all the work.
+theorem two_halves_close(x, y, z: Rat, n: Nat,
+    hx: (x -y).abs() <= Rat::inv_succ(n + n + 1),
+    hz: (z -y).abs() <= Rat::inv_succ(n + n + 1)):
+    (x -z).abs() <= Rat::inv_succ(n)
+{
+    let half = Rat::inv_succ(n + n + 1);
+    let hz2 = Rat::le_respects((z -y).abs(), (y -z).abs(), Rat::abs_sub_comm(z, y), half, half, Rat::same_refl(half), hz);
+    Rat::le_trans((x -z).abs(), (x -y).abs() + (y -z).abs(), Rat::inv_succ(n),
+        Rat::dist_triangle(x, y, z),
+        Rat::le_respects((x -y).abs() + (y -z).abs(), (x -y).abs() + (y -z).abs(),
+            Rat::same_refl((x -y).abs() + (y -z).abs()),
+            half + half, Rat::inv_succ(n), Rat::inv_succ_half(n),
+            Rat::add_le_mono((x -y).abs(), half, (y -z).abs(), half, hx, hz2)))
+}
+
+// A gap x < y places any z above x or below y: cotransitivity, the form of
+// trichotomy a constructive real keeps.
+theorem apart_or_close(x, y, z: Rat, h: x < y): x < z ∨ z < y { Rat::lt_cotrans(x, y, z, h) }
+
 // ---------------------------------------------------------------------------
 // The representation boundary.
 

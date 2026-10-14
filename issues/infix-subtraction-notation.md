@@ -3,7 +3,7 @@ title: "Carrier-directed infix subtraction notation"
 status: open
 labels: [frontend,syntax,notation,stdlib,ergonomics]
 created: 2026-08-20
-updated: 2026-10-12
+updated: 2026-10-14
 ---
 
 `Nat` and `Int` both expose `sub`, but their laws still read
@@ -30,3 +30,4 @@ continuing to recognize prefix `-` and `->` unambiguously.
   negation deliberately reserved this separate fixity slot but did not add it.
 - 2026-09-16: Landing this makes `-` the second token whose role its kind does not determine (`a - b` vs prefix `-b`), which [[heather-formatter]] must disambiguate from the AST exactly as it does `<`. No constraint on this issue; its role table is being built general so this costs nothing when it lands.
 - 2026-10-12: The `designation - at Int` / `at Nat` half is in the library, but the formatter still writes every `-` as a tight prefix, so binary subtraction is checked in as `a -b` (`lib/std/int.hthr`, and `lib/std/ring.hthr` from the ring round, which `repository_sources_are_formatted` rejected spelt `a - b`). The 2026-09-16 entry's AST disambiguation is the fix; one reformat of `lib/` follows it.
+- 2026-10-14: `Rat` now designates binary `-` too ([[rational-order-completion]]), and its distance laws (`abs_sub_comm`, `dist_triangle`, the showcase's `two_halves_close`) are checked in as `(x -y).abs()`.
