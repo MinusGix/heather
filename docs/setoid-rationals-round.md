@@ -8,8 +8,10 @@ needed elsewhere": unreduced rationals, the first step toward the real-number
 probes ([regular-cauchy-reals](../issues/regular-cauchy-reals.md),
 [constructive-ordered-field-interface](../issues/constructive-ordered-field-interface.md)).
 
-- [`lib/std/pos.hthr`](../lib/std/pos.hthr): positive naturals, positive by
-  construction, and cancellation of an `Int` factor by a `Pos`.
+- `lib/std/pos.hthr`: positive naturals, positive by construction, and
+  cancellation of an `Int` factor by a `Pos`. Deleted 2026-10-14: `Rat`'s
+  denominator is now `Pos<Nat>` binder sugar and the cancellation lemmas live
+  in `rat.hthr` (docs/positivity-evidence-design.md §14).
 - [`lib/std/rat.hthr`](../lib/std/rat.hthr): `Rat`, its equality `≈`, the
   respectful operations, and the ring, order, field and embedding laws modulo
   `≈`.

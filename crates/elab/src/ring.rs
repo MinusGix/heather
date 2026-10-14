@@ -205,8 +205,9 @@ impl Reifier<'_> {
     }
 
     /// A field read off a value that computes to a constructor is read as the
-    /// field: `Rat::add(x, y).num` is the numerator `add` builds. Anything
-    /// else is an atom.
+    /// field: `Rat::add(x, y).num` is the numerator `add` builds, whether the
+    /// read is the inline walk or a named projection
+    /// ([`Elaborator::named_field_read`]). Anything else is an atom.
     fn projection_or_atom(&mut self, tm: &Rc<Term>, depth: u32) -> Result<Syn, String> {
         if depth > 0
             && let Some(field) = self.project(tm)
@@ -223,12 +224,7 @@ impl Reifier<'_> {
     }
 
     fn project(&self, tm: &Rc<Term>) -> Option<Rc<Term>> {
-        let mut path = Vec::new();
-        let mut cur = tm;
-        while let Some((first, pair)) = crate::spelling::proj_of(cur) {
-            path.push(first);
-            cur = pair;
-        }
+        let (path, cur) = self.elab.named_field_read(tm).unwrap_or_else(|| projection_path(tm));
         if path.is_empty() || !matches!(app_spine(cur).0, Term::GlobalTm { .. }) {
             return None;
         }
@@ -246,8 +242,8 @@ impl Reifier<'_> {
 
     /// The index of `tm` in the atom table: the same term, or one it is
     /// convertible to by a bounded check when both share a head and differ
-    /// somewhere computation could reach (`(x + y).den.int()` against
-    /// `x.den.mul(y.den).int()`).
+    /// somewhere computation could reach (`(-x).den.int()` against
+    /// `x.den.int()`).
     fn intern(&mut self, tm: &Rc<Term>) -> Result<usize, String> {
         if let Some(index) = self.atoms.iter().position(|atom| atom.term == *tm) {
             return Ok(index);

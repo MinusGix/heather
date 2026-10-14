@@ -966,7 +966,7 @@ fn affine_syntax(
                 });
             }
             // A factor that computes to a numeral is that numeral, as an
-            // atom is (`x.num * Pos::one().int()` is `x.num * 1`); the
+            // atom is (`x.num * Rat::one().den.int()` is `x.num * 1`); the
             // checker's conversion computes it again.
             for (factor, inner, factor_on_left) in [(left, right, true), (right, left, false)] {
                 if let Some(factor) = int_value(elab, cx, factor).filter(|value| *value != Z::MIN) {
@@ -1083,7 +1083,7 @@ fn affine_syntax(
     }
     // A field of a call that unfolds to a constructor (`(x + y).num`), read
     // as the expression put there when that spells.
-    if crate::spelling::proj_of(tm).is_some()
+    if is_field_read(elab, tm)
         && let Some(field) = field_as_put(elab, cx, tm)
         && int_term_source(elab, cx, &field).is_ok()
     {
@@ -1211,7 +1211,9 @@ pub(crate) fn nat_term_source(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>) -> Resu
 /// head, and one out of a call that unfolds (`step_fold(…).bytes`) reduces to
 /// an eliminator, and both intern as they always did (§5).
 fn projection_reduct(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>, depth: u32) -> Option<Rc<Term>> {
-    crate::spelling::proj_of(tm)?;
+    if !is_field_read(elab, tm) {
+        return None;
+    }
     let reduct = Rc::new(elab.goal_oracle().whnf_term_bounded(&cx.gamma, tm).ok()?);
     if matches!(&*reduct, Term::NatLit(_)) {
         return Some(reduct);
@@ -1221,8 +1223,8 @@ fn projection_reduct(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>, depth: u32) -> O
 }
 
 /// A field of a call that unfolds to a constructor, read as what was put
-/// there (issues/omega-unfolds-defined-propositions.md): `p.mul(q).pred` is
-/// `p.pred * q.pred + p.pred + q.pred`. The weak head of the whole read would
+/// there (issues/omega-unfolds-defined-propositions.md): `(x * y).den` is
+/// `x.den * y.den`. The weak head of the whole read would
 /// unfold that sum on into its recursor, so the receiver is unfolded only as
 /// far as the constructor and the field projected without δ, as
 /// `simplify_goal` does for a goal's fields.
@@ -1237,16 +1239,24 @@ fn field_as_put(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>) -> Option<Rc<Term>> {
         }
         Rc::new(out)
     }
-    let (_, receiver) = projection_path(tm);
+    let named = elab.named_field_read(tm);
+    let (_, receiver) = named.clone().unwrap_or_else(|| projection_path(tm));
     if !head_is_global(receiver) {
         return None;
     }
     let oracle = elab.goal_oracle();
-    let unfolded = oracle.whnf_term_bounded(&cx.gamma, receiver).ok()?;
-    if !matches!(unfolded, Term::Pair { .. } | Term::PairAt { .. }) {
+    let unfolded = Rc::new(oracle.whnf_term_bounded(&cx.gamma, receiver).ok()?);
+    if !matches!(&*unfolded, Term::Pair { .. } | Term::PairAt { .. }) {
         return None;
     }
-    let read = with_receiver(tm, &Rc::new(unfolded));
+    // A named projection is read as the inline walk it names, so that the
+    // walk, not the definition, meets the constructor.
+    let read = match named {
+        Some((path, _)) => path.into_iter().rev().fold(unfolded, |pair, first| {
+            Rc::new(if first { Term::FstAt { pair } } else { Term::SndAt { pair } })
+        }),
+        None => with_receiver(tm, &unfolded),
+    };
     let field = Rc::new(oracle.bounded(64).whnf_term_opaque(&cx.gamma, &read).ok()?);
     if crate::spelling::proj_of(&field).is_some() {
         return None;
@@ -1373,7 +1383,7 @@ fn nat_affine_syntax_within(
                     inner: Box::new(nat_affine_syntax_within(elab, cx, left, atoms, depth)?),
                 });
             }
-            // A factor that computes to a numeral (`Pos::one().pred`) is that
+            // A factor that computes to a numeral (`Rat::one().den`) is that
             // numeral, as on the Int side; it keeps its own spelling, which
             // the checker's conversion computes.
             if let (Some(left_nat), Some(right_nat)) = (left_source, right_source) {
@@ -1515,9 +1525,10 @@ fn nat_affine_syntax_within(
         return nat_affine_syntax_within(elab, cx, &named, atoms, depth - 1);
     }
     // A call that computes to a successor of something the source names
-    // (issues/omega-unfolds-defined-propositions.md): `Pos::val(p)` is
-    // `Succ(p.pred)`, so it is at least one, and `p.mul(q).val()` reads on
-    // through the field to its arithmetic.
+    // (issues/omega-unfolds-defined-propositions.md): a shifted positive's
+    // `p.val()` is `Succ(p.pred)`, so it is at least one, and `p.mul(q).val()`
+    // reads on through the field to its arithmetic
+    // (`crates/elab/tests/omega_defined_propositions.rs` declares one).
     if depth > 0
         && let Some(successor) = computed_successor(elab, cx, tm, depth)
     {
@@ -1601,6 +1612,12 @@ fn convertible_atom(
     })
 }
 
+/// Is `tm` a field read: an inline projection, or a named one
+/// ([`Elaborator::named_field_read`])?
+fn is_field_read(elab: &Elaborator, tm: &Rc<Term>) -> bool {
+    crate::spelling::proj_of(tm).is_some() || elab.named_field_read(tm).is_some()
+}
+
 /// The projections `tm` reads, outermost first (`true` for `fst`), and the
 /// term they read from.
 fn projection_path(tm: &Rc<Term>) -> (Vec<bool>, &Rc<Term>) {
@@ -1657,7 +1674,7 @@ fn computed_successor(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>, depth: u32) -> 
 }
 
 /// The Int constructor value `OfNat(e)` a global call computes to, when `e`
-/// spells: `Pos::int(p)` is `OfNat(Succ(p.pred))`. The Nat side then reads
+/// spells: `x.den.int()` is `OfNat(x.den)`. The Nat side then reads
 /// `e`, so the call meets the same atoms a Nat fact about them states.
 fn computed_of_nat(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>) -> Option<Rc<Term>> {
     if !head_is_global(tm) {

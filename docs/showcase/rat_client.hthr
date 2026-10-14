@@ -12,7 +12,6 @@ import nat;
 import int;
 import list;
 import omega;
-import pos;
 import rat;
 import relation_props;
 import algebra_rel;
@@ -76,8 +75,8 @@ theorem apart_or_close(x, y, z: Rat, h: x < y): x < z ∨ z < y { Rat::lt_cotran
 // ---------------------------------------------------------------------------
 // The representation boundary.
 
-fn half() → Rat { Rat(OfNat(1), Pos(1)) }
-fn two_quarters() → Rat { Rat(OfNat(2), Pos(3)) }
+fn half() → Rat { Rat(OfNat(1), 2) }
+fn two_quarters() → Rat { Rat(OfNat(2), 4) }
 
 // Cross-multiplication decides this by computation: 1·4 = 2·2.
 theorem half_same(): half() ≈ two_quarters() { refl }
@@ -92,7 +91,7 @@ theorem half_not_identical(): half() ≠ two_quarters() {
 
 // So the denominator is an observation of the representation, not of the
 // number: no theorem can make it respect `≈`.
-theorem den_not_invariant(): ¬((x, y: Rat) → x ≈ y → x.den.val() = y.den.val()) {
+theorem den_not_invariant(): ¬((x, y: Rat) → x ≈ y → x.den = y.den) {
     λ invariant => Nat::succ_ne_zero(0,
-        Nat::succ_inj(1, 0, invariant(Rat(OfNat(2), Pos(1)), Rat(OfNat(1), Pos(0)), refl)))
+        Nat::succ_inj(1, 0, invariant(Rat(OfNat(2), 2), Rat(OfNat(1), 1), refl)))
 }

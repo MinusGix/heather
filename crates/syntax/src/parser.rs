@@ -348,8 +348,7 @@ fn op_call(sym: &str, fixity: OpFixity, args: Vec<Expr>, span: Span) -> Expr {
 
 /// The carrier of `Pos<A>` written as a binder's type: the sugar
 /// (docs/positivity-evidence-design.md §6 B) is recognised by name, as
-/// `Squash<A>` is, so `Pos` with one type argument is reserved there. The
-/// shifted `record Pos` (lib/std/pos.hthr) takes none and is untouched.
+/// `Squash<A>` is, so `Pos` with one type argument is reserved there.
 pub fn pos_carrier(ty: &Ty) -> Option<&Ty> {
     match &ty.kind {
         TyKind::Named { name, args } if name == "Pos" && args.len() == 1 => Some(&args[0]),
