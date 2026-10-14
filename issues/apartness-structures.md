@@ -3,7 +3,7 @@ title: Develop apartness as a first-class constructive relation
 status: open
 labels: [stdlib,mathematics,logic,relations]
 created: 2026-09-02
-updated: 2026-09-02
+updated: 2026-10-14
 ---
 
 Define apartness and its useful variants independently of decidable inequality
@@ -24,3 +24,4 @@ interface, and a real presentation where apartness has positive witness data.
 
 - 2026-09-02: Filed because constructive apartness is mathematical structure,
   not a synonym for `Decide<x != y>`.
+- 2026-10-14: `Rat` is a ready customer ([[rational-order-completion]]): `<` carries positive witness data (an integer gap), and `Rat::lt_cotrans` and `Rat::same_of_not_lt` (tightness) are proved. `x # y` as `x < y ∨ y < x` would follow from them.
