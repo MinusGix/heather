@@ -3,7 +3,7 @@ title: Prove polynomial inequalities with the ring normalizer
 status: open
 labels: [proofs,arithmetic,mathematics,solver,design]
 created: 2026-10-12
-updated: 2026-10-12
+updated: 2026-10-14
 ---
 
 `ring` (docs/ring-normalization-design.md) closes equations only. The
@@ -29,3 +29,7 @@ Two shapes, to decide:
   `RingExpr::sound` and the reifier's atom table.
 - **[[omega-linear-arithmetic]]** owns omega. Assumed here: nothing yet; the
   second shape would consume it.
+
+## Log
+
+- 2026-10-14: [[rational-order-completion]] wrote `Rat::mul_le_mono_r`/`mul_lt_mono_r` as: scale the premise by `e·r` with `Int::mul_le_mono_r`, state each goal side equal to the scaled side with one `ring(den.mul_int(…))` each, and close with omega over product atoms (docs/rational-order-round.md). That is the first shape here done by hand; three lines per law, no monomial matching.

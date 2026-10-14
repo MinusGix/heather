@@ -130,7 +130,8 @@ cold.
 ## Not in this round
 
 - Strict order, `abs`, multiplication monotonicity and Archimedean facts:
-  [rational-order-completion](../issues/rational-order-completion.md).
+  [rational-order-completion](../issues/rational-order-completion.md). *Done 2026-10-14:
+  [rational-order-round](rational-order-round.md).*
 - Morphisms as respectful functions compared pointwise, and a function-valued
   representation: these remain [setoid-core-api](../issues/setoid-core-api.md)'s
   acceptance.
