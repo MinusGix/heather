@@ -14,6 +14,7 @@ const MODULES: &[(&str, &str)] = &[
     ("int", include_str!("../../../lib/std/int.hthr")),
     ("bitvec", include_str!("../../../lib/std/bitvec.hthr")),
     ("relation", include_str!("../../../lib/std/relation.hthr")),
+    ("relation_props", include_str!("../../../lib/std/relation_props.hthr")),
     ("location", include_str!("../../../lib/std/location.hthr")),
     (
         "certified_lookup",

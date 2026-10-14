@@ -18,6 +18,7 @@ pub const COMMAND_PREFIX: &[(&str, &str)] = &[
     ("bitvec_nat", include_str!("../../../../lib/std/bitvec/bitvec_nat.hthr")),
     ("bitvec_omega", include_str!("../../../../lib/std/bitvec/bitvec_omega.hthr")),
     ("relation", include_str!("../../../../lib/std/relation.hthr")),
+    ("relation_props", include_str!("../../../../lib/std/relation_props.hthr")),
     ("location", include_str!("../../../../lib/std/location.hthr")),
     ("certified_lookup", include_str!("../../../../lib/std/certified_lookup.hthr")),
     ("x86_64", include_str!("../../../../lib/std/arch/x86_64/x86_64.hthr")),

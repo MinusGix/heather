@@ -11,6 +11,7 @@ import list;
 import logic;
 import option;
 import nat;
+import relation_props;
 
 record ByteReadAccess<M> { read: M → BitVec(64) → Option<BitVec(8)> }
 record ByteLoad { destination: Gpr, base: Gpr }
@@ -58,13 +59,9 @@ theorem byte_load_same<M>(access: ByteReadAccess<M>, load: ByteLoad,
             sym(right_step.execution)))
 }
 
-theorem byte_load_after_respects_defined<M>(load: ByteLoad, byte: BitVec(8),
-    left, right: MachineState<M>, same: SameDefinedState<M>(left, right)):
-    SameDefinedState<M>(byte_load_after(load, byte, left), byte_load_after(load, byte, right)) {
-    SameDefinedState(
-        cong_fn(λ (gprs: Gprs) => write_gpr(load.destination, byte.zero_extend(56), gprs), same.gprs),
-        cong_fn(λ (rip: BitVec(64)) => next_rip(rip, byte_load_bytes(load).len()), same.rip),
-        same.memory, same.cf, same.pf, same.zf, same.sf, same.of)
+evidence theorem byte_load_after_respects_defined<M>({load: ByteLoad}, {byte: BitVec(8)}):
+    PreservesRelation(SameDefinedState<M>, SameDefinedState<M>, byte_load_after<M>(load, byte)) {
+    same_defined_respects(byte_load_after<M>(load, byte), λ state => refl)
 }
 
 theorem byte_load_respects_defined<M>(access: ByteReadAccess<M>, load: ByteLoad,
@@ -73,25 +70,19 @@ theorem byte_load_respects_defined<M>(access: ByteReadAccess<M>, load: ByteLoad,
     left: ByteLoadStep<M>(access, load, left_byte, before_left, after_left),
     right: ByteLoadStep<M>(access, load, right_byte, before_right, after_right)):
     SameDefinedState<M>(after_left, after_right) {
-    let address = cong_fn(λ (gprs: Gprs) => read_gpr(load.base, gprs), before_same.gprs);
+    let address = cong_fn(λ (gprs: Gprs) => read_gpr(load.base, gprs), SameDefinedState::gprs(before_same));
     let read_same = trans(
-        cong_fn(λ (memory: M) => access.read(memory, read_gpr(load.base, before_left.gprs)), before_same.memory),
+        cong_fn(λ (memory: M) => access.read(memory, read_gpr(load.base, before_left.gprs)), SameDefinedState::memory(before_same)),
         cong_fn(λ (at: BitVec(64)) => access.read(before_right.memory, at), address));
     let byte = Option::some_inj(left_byte, right_byte,
         trans(sym(left.present), trans(read_same, right.present)));
-    let same_result = same_defined_trans(byte_load_after(load, left_byte, before_left),
-        byte_load_after(load, left_byte, before_right), byte_load_after(load, right_byte, before_right),
-        byte_load_after_respects_defined(load, left_byte, before_left, before_right, before_same),
-        same_defined_of_equal(byte_load_after(load, left_byte, before_right),
-            byte_load_after(load, right_byte, before_right),
-            cong_fn(λ value => byte_load_after(load, value, before_right), byte)));
-    same_defined_trans(after_left, byte_load_after(load, left_byte, before_left), after_right,
-        same_defined_of_equal(after_left, byte_load_after(load, left_byte, before_left), left.execution),
-        same_defined_trans(byte_load_after(load, left_byte, before_left),
-            byte_load_after(load, right_byte, before_right), after_right,
-            same_result,
-            same_defined_of_equal(byte_load_after(load, right_byte, before_right), after_right,
-                sym(right.execution))))
+    calc {
+        after_left ≈ byte_load_after(load, left_byte, before_left) := SameDefinedState::of_equal(left.execution),
+        ≈ byte_load_after(load, left_byte, before_right) := rel_cong(before_same),
+        ≈ byte_load_after(load, right_byte, before_right) :=
+            SameDefinedState::of_equal(cong_fn(λ value => byte_load_after(load, value, before_right), byte)),
+        ≈ after_right := SameDefinedState::of_equal(sym(right.execution)),
+    }
 }
 
 theorem byte_load_result<M>(load: ByteLoad, byte: BitVec(8), before: MachineState<M>):
@@ -156,13 +147,9 @@ theorem word_load_same<M>(access: ByteReadAccess<M>, load: WordLoad,
             sym(right_step.execution)))
 }
 
-theorem word_load_after_respects_defined<M>(load: WordLoad, word: BitVec(64),
-    left, right: MachineState<M>, same: SameDefinedState<M>(left, right)):
-    SameDefinedState<M>(word_load_after(load, word, left), word_load_after(load, word, right)) {
-    SameDefinedState(
-        cong_fn(λ (gprs: Gprs) => write_gpr(load.destination, word, gprs), same.gprs),
-        cong_fn(λ (rip: BitVec(64)) => next_rip(rip, word_load_bytes(load).len()), same.rip),
-        same.memory, same.cf, same.pf, same.zf, same.sf, same.of)
+evidence theorem word_load_after_respects_defined<M>({load: WordLoad}, {word: BitVec(64)}):
+    PreservesRelation(SameDefinedState<M>, SameDefinedState<M>, word_load_after<M>(load, word)) {
+    same_defined_respects(word_load_after<M>(load, word), λ state => refl)
 }
 
 theorem word_load_respects_defined<M>(access: ByteReadAccess<M>, load: WordLoad,
@@ -171,25 +158,19 @@ theorem word_load_respects_defined<M>(access: ByteReadAccess<M>, load: WordLoad,
     left: WordLoadStep<M>(access, load, left_word, before_left, after_left),
     right: WordLoadStep<M>(access, load, right_word, before_right, after_right)):
     SameDefinedState<M>(after_left, after_right) {
-    let address = cong_fn(λ (gprs: Gprs) => read_gpr(load.base, gprs), before_same.gprs);
+    let address = cong_fn(λ (gprs: Gprs) => read_gpr(load.base, gprs), SameDefinedState::gprs(before_same));
     let read_same = trans(
-        cong_fn(λ (memory: M) => read_word(access, memory, read_gpr(load.base, before_left.gprs)), before_same.memory),
+        cong_fn(λ (memory: M) => read_word(access, memory, read_gpr(load.base, before_left.gprs)), SameDefinedState::memory(before_same)),
         cong_fn(λ (at: BitVec(64)) => read_word(access, before_right.memory, at), address));
     let word = Option::some_inj(left_word, right_word,
         trans(sym(left.present), trans(read_same, right.present)));
-    let same_result = same_defined_trans(word_load_after(load, left_word, before_left),
-        word_load_after(load, left_word, before_right), word_load_after(load, right_word, before_right),
-        word_load_after_respects_defined(load, left_word, before_left, before_right, before_same),
-        same_defined_of_equal(word_load_after(load, left_word, before_right),
-            word_load_after(load, right_word, before_right),
-            cong_fn(λ value => word_load_after(load, value, before_right), word)));
-    same_defined_trans(after_left, word_load_after(load, left_word, before_left), after_right,
-        same_defined_of_equal(after_left, word_load_after(load, left_word, before_left), left.execution),
-        same_defined_trans(word_load_after(load, left_word, before_left),
-            word_load_after(load, right_word, before_right), after_right,
-            same_result,
-            same_defined_of_equal(word_load_after(load, right_word, before_right), after_right,
-                sym(right.execution))))
+    calc {
+        after_left ≈ word_load_after(load, left_word, before_left) := SameDefinedState::of_equal(left.execution),
+        ≈ word_load_after(load, left_word, before_right) := rel_cong(before_same),
+        ≈ word_load_after(load, right_word, before_right) :=
+            SameDefinedState::of_equal(cong_fn(λ value => word_load_after(load, value, before_right), word)),
+        ≈ after_right := SameDefinedState::of_equal(sym(right.execution)),
+    }
 }
 
 theorem word_load_result<M>(load: WordLoad, word: BitVec(64), before: MachineState<M>):

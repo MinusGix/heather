@@ -14,6 +14,7 @@ import bool;
 import nat;
 import bitvec;
 import relation;
+import relation_props;
 import location;
 import list;
 import option;
@@ -2479,18 +2480,8 @@ fn execute_test<M>(left, right: Gpr, length: Nat, before: MachineState<M>,
 }
 
 // AF after TEST is undefined. The two permitted outcomes still agree on
-// every register, RIP, memory, and every flag a later instruction reads.
-record SameDefinedState<M>(left, right: MachineState<M>) {
-    gprs: left.gprs = right.gprs,
-    rip: left.rip = right.rip,
-    memory: left.memory = right.memory,
-    cf: left.flags.cf = right.flags.cf,
-    pf: left.flags.pf = right.flags.pf,
-    zf: left.flags.zf = right.flags.zf,
-    sf: left.flags.sf = right.flags.sf,
-    of: left.flags.of = right.flags.of,
-}
-
+// every register, RIP, memory, and every flag a later instruction reads:
+// they are equal once AF is erased.
 fn erase_af<M>(state: MachineState<M>) → MachineState<M> {
     MachineState(
         gprs := state.gprs,
@@ -2500,45 +2491,49 @@ fn erase_af<M>(state: MachineState<M>) → MachineState<M> {
         memory := state.memory)
 }
 
-theorem erased_flags_equal(left, right: Flags,
-    cf: left.cf = right.cf, pf: left.pf = right.pf,
-    zf: left.zf = right.zf, sf: left.sf = right.sf, of: left.of = right.of):
-    Flags(left.cf, left.pf, False, left.zf, left.sf, left.of) =
-    Flags(right.cf, right.pf, False, right.zf, right.sf, right.of) {
-    trans(cong_fn<Bool, Flags>(λ value => Flags(value, left.pf, False, left.zf, left.sf, left.of), cf),
-    trans(cong_fn<Bool, Flags>(λ value => Flags(right.cf, value, False, left.zf, left.sf, left.of), pf),
-    trans(cong_fn<Bool, Flags>(λ value => Flags(right.cf, right.pf, False, value, left.sf, left.of), zf),
-    trans(cong_fn<Bool, Flags>(λ value => Flags(right.cf, right.pf, False, right.zf, value, left.of), sf),
-          cong_fn<Bool, Flags>(λ value => Flags(right.cf, right.pf, False, right.zf, right.sf, value), of)))))
+// States the same where defined: the pullback of `=` along `erase_af`
+// (`SameDefinedState::pullback`), so its equivalence is `pullback_equivalence`'s
+// and a function respects it as soon as it commutes with erasing
+// (`same_defined_respects`). Proofs may still use `refl`, `sym` and `trans`
+// on it directly: it is an equality of erased states.
+fn SameDefinedState<M>(left, right: MachineState<M>) → Type {
+    erase_af(left) = erase_af(right)
 }
 
-theorem same_defined_erased_equal<M>(left, right: MachineState<M>,
-    same: SameDefinedState<M>(left, right)): erase_af(left) = erase_af(right) {
-    let flags = erased_flags_equal(left.flags, right.flags,
-        same.cf, same.pf, same.zf, same.sf, same.of);
-    trans(cong_fn<Gprs, MachineState<M>>(λ gprs => MachineState(gprs,
-            Flags(left.flags.cf, left.flags.pf, False, left.flags.zf, left.flags.sf, left.flags.of),
-            left.rip, left.memory), same.gprs),
-    trans(cong_fn<Flags, MachineState<M>>(λ actual => MachineState(right.gprs, actual, left.rip, left.memory), flags),
-    trans(cong_fn<BitVec(64), MachineState<M>>(λ rip => MachineState(right.gprs,
-            Flags(right.flags.cf, right.flags.pf, False, right.flags.zf, right.flags.sf, right.flags.of),
-            rip, left.memory), same.rip),
-          cong_fn<M, MachineState<M>>(λ memory => MachineState(right.gprs,
-            Flags(right.flags.cf, right.flags.pf, False, right.flags.zf, right.flags.sf, right.flags.of),
-            right.rip, memory), same.memory))))
+theorem SameDefinedState::pullback<M>(left, right: MachineState<M>):
+    SameDefinedState<M>(left, right) = Pullback(erase_af<M>, RelId<MachineState<M>>, left, right) {
+    refl
 }
 
-theorem erased_equal_same_defined<M>(left, right: MachineState<M>,
-    same: erase_af(left) = erase_af(right)): SameDefinedState<M>(left, right) {
-    SameDefinedState(
-        cong_fn(λ (state: MachineState<M>) => state.gprs, same),
-        cong_fn(λ (state: MachineState<M>) => state.rip, same),
-        cong_fn(λ (state: MachineState<M>) => state.memory, same),
-        cong_fn(λ (state: MachineState<M>) => state.flags.cf, same),
-        cong_fn(λ (state: MachineState<M>) => state.flags.pf, same),
-        cong_fn(λ (state: MachineState<M>) => state.flags.zf, same),
-        cong_fn(λ (state: MachineState<M>) => state.flags.sf, same),
-        cong_fn(λ (state: MachineState<M>) => state.flags.of, same))
+instance<M> Equivalence<MachineState<M>>(SameDefinedState<M>) {
+    rel_refl := pullback_equivalence(erase_af<M>, RelId<MachineState<M>>, relid_equivalence()).rel_refl,
+    rel_sym := pullback_equivalence(erase_af<M>, RelId<MachineState<M>>, relid_equivalence()).rel_sym,
+    rel_trans := pullback_equivalence(erase_af<M>, RelId<MachineState<M>>, relid_equivalence()).rel_trans,
+}
+
+designation ≈ at MachineState := SameDefinedState
+
+theorem SameDefinedState::of_equal<M>({left, right: MachineState<M>}, same: left = right): left ≈ right {
+    cong_fn(erase_af<M>, same)
+}
+
+// The defined components, read back.
+theorem SameDefinedState::gprs<M>({left, right: MachineState<M>}, same: left ≈ right): left.gprs = right.gprs {
+    cong_fn(λ (state: MachineState<M>) => state.gprs, same)
+}
+theorem SameDefinedState::rip<M>({left, right: MachineState<M>}, same: left ≈ right): left.rip = right.rip {
+    cong_fn(λ (state: MachineState<M>) => state.rip, same)
+}
+theorem SameDefinedState::memory<M>({left, right: MachineState<M>}, same: left ≈ right): left.memory = right.memory {
+    cong_fn(λ (state: MachineState<M>) => state.memory, same)
+}
+
+// Commuting with the quotient map is respecting the relation.
+theorem same_defined_respects<M>(f: MachineState<M> → MachineState<M>,
+    commute: (state: MachineState<M>) → erase_af(f(state)) = erase_af(f(erase_af(state)))):
+    PreservesRelation(SameDefinedState<M>, SameDefinedState<M>, f) {
+    λ left right same => trans(commute(left),
+        trans(cong_fn(λ (state: MachineState<M>) => erase_af(f(state)), same), sym(commute(right))))
 }
 
 theorem erase_af_normal_commute<M>(instruction: Instruction, before: MachineState<M>):
@@ -2553,42 +2548,10 @@ theorem erase_af_normal_commute<M>(instruction: Instruction, before: MachineStat
     }
 }
 
-theorem execute_normal_respects_defined<M>(instruction: Instruction,
-    left, right: MachineState<M>, same: SameDefinedState<M>(left, right)):
-    SameDefinedState<M>(execute_normal(decoded_canonical(instruction), left),
-        execute_normal(decoded_canonical(instruction), right)) {
-    let erased = same_defined_erased_equal(left, right, same);
-    let first = erase_af_normal_commute(instruction, left);
-    let middle = cong_fn(λ (state: MachineState<M>) =>
-        erase_af(execute_normal(decoded_canonical(instruction), state)), erased);
-    let last = erase_af_normal_commute(instruction, right);
-    erased_equal_same_defined(execute_normal(decoded_canonical(instruction), left),
-        execute_normal(decoded_canonical(instruction), right),
-        trans(first, trans(middle, sym(last))))
-}
-
-theorem same_defined_refl<M>(state: MachineState<M>): SameDefinedState<M>(state, state) {
-    SameDefinedState(refl, refl, refl, refl, refl, refl, refl, refl)
-}
-
-theorem same_defined_of_equal<M>(left, right: MachineState<M>, same: left = right):
-    SameDefinedState<M>(left, right) {
-    j(same, λ state _ => SameDefinedState<M>(left, state), same_defined_refl(left))
-}
-
-theorem same_defined_sym<M>(left, right: MachineState<M>, same: SameDefinedState<M>(left, right)):
-    SameDefinedState<M>(right, left) {
-    SameDefinedState(sym(same.gprs), sym(same.rip), sym(same.memory),
-        sym(same.cf), sym(same.pf), sym(same.zf), sym(same.sf), sym(same.of))
-}
-
-theorem same_defined_trans<M>(left, middle, right: MachineState<M>,
-    first: SameDefinedState<M>(left, middle), second: SameDefinedState<M>(middle, right)):
-    SameDefinedState<M>(left, right) {
-    SameDefinedState(trans(first.gprs, second.gprs), trans(first.rip, second.rip),
-        trans(first.memory, second.memory), trans(first.cf, second.cf),
-        trans(first.pf, second.pf), trans(first.zf, second.zf),
-        trans(first.sf, second.sf), trans(first.of, second.of))
+evidence theorem execute_normal_respects_defined<M>({instruction: Instruction}):
+    PreservesRelation(SameDefinedState<M>, SameDefinedState<M>, execute_normal<M>(decoded_canonical(instruction))) {
+    same_defined_respects(execute_normal<M>(decoded_canonical(instruction)),
+        λ state => erase_af_normal_commute(instruction, state))
 }
 
 theorem returned_machine_inj<M>(left, right: MachineState<M>,
@@ -2605,7 +2568,7 @@ theorem execute_test_same_defined<M>(left, right: Gpr, length: Nat,
     before: MachineState<M>, first, second: Bool):
     SameDefinedState<M>(execute_test(left, right, length, before, first),
         execute_test(left, right, length, before, second)) {
-    SameDefinedState(refl, refl, refl, refl, refl, refl, refl, refl)
+    refl
 }
 
 fn Execute<M>(decoded: DecodedInstruction, before: MachineState<M>,
@@ -2635,8 +2598,7 @@ theorem execute_fixed_same_defined<M>(form: Instruction, length: Nat,
     proof: Returned<MachineState<M>, Exception>(after) =
         Returned(execute_normal(DecodedInstruction(form, length, valid), before))):
     SameDefinedState<M>(after, execute_normal(DecodedInstruction(form, length, valid), before)) {
-    same_defined_of_equal(after, execute_normal(DecodedInstruction(form, length, valid), before),
-        returned_machine_inj(after, execute_normal(DecodedInstruction(form, length, valid), before), proof))
+    SameDefinedState::of_equal(returned_machine_inj(after, execute_normal(DecodedInstruction(form, length, valid), before), proof))
 }
 
 // An ordinary instruction has one result; TEST's only choice is AF.
@@ -2675,11 +2637,8 @@ theorem execute_pair_same_defined<M>(instruction: Instruction, length: Nat,
     left: Execute(DecodedInstruction(instruction, length, valid), before, Returned(first)),
     right: Execute(DecodedInstruction(instruction, length, valid), before, Returned(second))):
     SameDefinedState<M>(first, second) {
-    let canonical = execute_normal(DecodedInstruction(instruction, length, valid), before);
-    same_defined_trans(first, canonical, second,
-        execute_same_defined(instruction, length, valid, before, first, left),
-        same_defined_sym(second, canonical,
-            execute_same_defined(instruction, length, valid, before, second, right)))
+    trans(execute_same_defined(instruction, length, valid, before, first, left),
+        sym(execute_same_defined(instruction, length, valid, before, second, right)))
 }
 
 theorem execute_canonical_respects_defined<M>(instruction: Instruction,
@@ -2688,16 +2647,14 @@ theorem execute_canonical_respects_defined<M>(instruction: Instruction,
     left: Execute(decoded_canonical(instruction), before_left, Returned(after_left)),
     right: Execute(decoded_canonical(instruction), before_right, Returned(after_right))):
     SameDefinedState<M>(after_left, after_right) {
-    let normal_left = execute_normal(decoded_canonical(instruction), before_left);
-    let normal_right = execute_normal(decoded_canonical(instruction), before_right);
-    same_defined_trans(after_left, normal_left, after_right,
-        execute_same_defined(instruction, canonical_length(instruction),
-            squash(canonical_length_valid(instruction)), before_left, after_left, left),
-        same_defined_trans(normal_left, normal_right, after_right,
-            execute_normal_respects_defined(instruction, before_left, before_right, before_same),
-            same_defined_sym(after_right, normal_right,
-                execute_same_defined(instruction, canonical_length(instruction),
-                    squash(canonical_length_valid(instruction)), before_right, after_right, right))))
+    let valid = squash(canonical_length_valid(instruction));
+    calc {
+        after_left ≈ execute_normal(decoded_canonical(instruction), before_left) :=
+            execute_same_defined(instruction, canonical_length(instruction), valid, before_left, after_left, left),
+        ≈ execute_normal(decoded_canonical(instruction), before_right) := rel_cong(before_same),
+        ≈ after_right := sym(execute_same_defined(instruction, canonical_length(instruction), valid,
+            before_right, after_right, right)),
+    }
 }
 
 // This is the byte/typed execution composition for the current no-fetch-fault

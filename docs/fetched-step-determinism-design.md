@@ -14,18 +14,23 @@ boundary as it stood after the first slices (2026-09-27); §5–§7 close it.
 correctly permits either value. Thus equality of complete `MachineState`s is
 false even for two executions of the same decoded instruction. The relation
 `SameDefinedState` compares all registers, RIP, memory, and CF/PF/ZF/SF/OF;
-it omits AF. `execute_pair_same_defined` proves that two executions of the
-same decoded ordinary instruction agree on this observation. The proof uses
-the functional `execute_normal` as a common state and treats TEST separately.
+it omits AF. It is defined as equality after `erase_af`, which supplies a
+canonical representative of a state: the pullback of `=` along `erase_af`
+(`SameDefinedState::pullback`), registered as an `Equivalence` and written `≈`
+at `MachineState`. `execute_pair_same_defined` proves that two executions of
+the same decoded ordinary instruction agree on this observation. The proof
+uses the functional `execute_normal` as a common state and treats TEST
+separately.
 
-The observation is preserved by each emitted operation. `erase_af` supplies a
-canonical representative of a state; equality of these representatives is
-equivalent to `SameDefinedState`. Executing an ordinary instruction or branch
-commutes with erasing AF. The byte-load proof additionally uses equality of
-memory and the base register to show both executions read the same byte; the
-store proof uses equality of the base, source, and memory. These yield
-`execute_canonical_respects_defined`, `emitted_exec_respects_defined`, and
-`word_store_respects_defined`.
+The observation is preserved by each emitted operation. A function that
+commutes with erasing AF respects the relation (`same_defined_respects`);
+executing an ordinary instruction or branch, a load's result and a store's
+result each commute, and each is registered as an `evidence theorem` of
+`PreservesRelation`, so `rel_cong` finds it. The byte-load proof additionally
+uses equality of memory and the base register to show both executions read
+the same byte; the store proof uses equality of the base, source, and memory.
+These yield `execute_canonical_respects_defined`,
+`emitted_exec_respects_defined`, and `store_step_respects_same_witness`.
 
 ## 2. Byte and decoding boundary
 
@@ -126,7 +131,7 @@ fetched, no step runs, from that state or a related one.
   the same responses have equal event lists. At each syscall the request is
   read off related registers and memory (`writes_from_unique` for a write's
   bytes), and Linux's returns read only defined components
-  (`respects_by_erasing`, by `erase_af` commuting with each return).
+  (`same_defined_respects`, by `erase_af` commuting with each return).
 - `linux_runs_every` is the one-state corollary. It is not vacuous:
   `claim_is_run` turns a claim into a run (zeros for RCX and R11, an empty
   junk buffer) and `same_responses_refl` matches its answers.

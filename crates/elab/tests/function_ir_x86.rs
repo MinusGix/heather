@@ -49,6 +49,7 @@ pub(crate) const MODULES: &[(&str, &str)] = &[
     ("int", INT),
     ("bitvec", BITVEC),
     ("relation", RELATION),
+    ("relation_props", include_str!("../../../lib/std/relation_props.hthr")),
     ("location", LOCATION),
     ("certified_lookup", CERTIFIED_LOOKUP),
     ("x86_64", X86_64),

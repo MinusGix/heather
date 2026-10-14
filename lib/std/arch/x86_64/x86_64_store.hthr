@@ -13,6 +13,7 @@ import bool;
 import list;
 import logic;
 import nat;
+import relation_props;
 
 record WordStore { base: Gpr, source: Gpr }
 
@@ -88,22 +89,9 @@ fn byte_store_after<M>(writes: ByteWrites<M>, store: ByteStore, before: MachineS
     memory_store_after(writes, StoreByte(store), before)
 }
 
-theorem memory_store_respects_defined<M>(writes: ByteWrites<M>, store: MemoryStore,
-    left, right: MachineState<M>, same: SameDefinedState<M>(left, right)):
-    SameDefinedState<M>(memory_store_after(writes, store, left),
-        memory_store_after(writes, store, right)) {
-    let base = cong_fn(λ (gprs: Gprs) => read_gpr(memory_store_base(store), gprs), same.gprs);
-    let bytes = cong_fn(λ (gprs: Gprs) => memory_store_data(store, gprs), same.gprs);
-    let memory = trans(
-        cong_fn(λ (value: M) => writes.store(value,
-            read_gpr(memory_store_base(store), left.gprs), memory_store_data(store, left.gprs)), same.memory),
-        trans(cong_fn(λ (address: BitVec(64)) => writes.store(right.memory,
-                address, memory_store_data(store, left.gprs)), base),
-            cong_fn(λ (contents: List<BitVec(8)>) => writes.store(right.memory,
-                read_gpr(memory_store_base(store), right.gprs), contents), bytes)));
-    SameDefinedState(same.gprs,
-        cong_fn(λ (rip: BitVec(64)) => next_rip(rip, 3), same.rip),
-        memory, same.cf, same.pf, same.zf, same.sf, same.of)
+evidence theorem memory_store_respects_defined<M>({writes: ByteWrites<M>}, {store: MemoryStore}):
+    PreservesRelation(SameDefinedState<M>, SameDefinedState<M>, memory_store_after<M>(writes, store)) {
+    same_defined_respects(memory_store_after<M>(writes, store), λ state => refl)
 }
 
 // One fetched store: the exact bytes at RIP, a plain base, a writable span.
@@ -134,15 +122,12 @@ theorem store_step_respects_same_witness<M>(fetch: FetchAccess<M>, writes: ByteW
                  (writes.writable(before_right.memory, read_gpr(memory_store_base(actual), before_right.gprs), memory_store_width(actual)) ∧
                   after_right = memory_store_after(writes, actual, before_right)))) →
                 SameDefinedState<M>(after_left, after_right),
-                λ agreed =>
-                    same_defined_trans(after_left, memory_store_after(writes, left.witness, before_left), after_right,
-                        same_defined_of_equal(after_left, memory_store_after(writes, left.witness, before_left),
-                            left.proof.right.right.right),
-                        same_defined_trans(memory_store_after(writes, left.witness, before_left),
-                            memory_store_after(writes, left.witness, before_right), after_right,
-                            memory_store_respects_defined(writes, left.witness, before_left, before_right, before_same),
-                            same_defined_of_equal(memory_store_after(writes, left.witness, before_right), after_right,
-                                sym(agreed.right.right.right)))))(evidence);
+                λ agreed => calc {
+                    after_left ≈ memory_store_after(writes, left.witness, before_left) :=
+                        SameDefinedState::of_equal(left.proof.right.right.right),
+                    ≈ memory_store_after(writes, left.witness, before_right) := rel_cong(before_same),
+                    ≈ after_right := SameDefinedState::of_equal(sym(agreed.right.right.right)),
+                })(evidence);
     runner(right.witness, same_store, right.proof)
 }
 
