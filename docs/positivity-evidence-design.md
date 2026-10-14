@@ -580,12 +580,12 @@ binder stay [positive-refinement-type](../issues/positive-refinement-type.md)'s.
 **A member function's result.** `fn T::f(…) → Pos<A>` declares
 `T::f::pos`, exactly §11's item under the member's name. The parser still
 lets no written head have two qualifiers; the generated one has them, and the
-elaborator's owner rule reads such a name at its **last** `::`, so the owner
-is the function `T::f` (the function-owner rule of
-[function-owned-members](../issues/function-owned-members.md)) and nothing
-new is a type's member. Resolution needed nothing: `T::f::pos` reaches the
-whole-string reading of `names::resolve_kinds` as `T::f` does, and
-`m::T::f::pos` is the module path. A `self` parameter becomes an implicit of
+elaborator's owner rule splits it at its first `::` as it already did for an
+instance's member (`Le::Judge::verdict`): the declaration attaches to `T`,
+and the declared string is the whole name. (Reading the owner as the function
+`T::f` instead was tried and broke those instance members.) Resolution
+needed nothing: `T::f::pos` reaches the whole-string reading of
+`names::resolve_kinds`, and `m::T::f::pos` is the module path. A `self` parameter becomes an implicit of
 the fact like any other value, so `k.spread()` and `Nat::spread(k)` both meet
 it.
 

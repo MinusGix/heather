@@ -3689,14 +3689,11 @@ impl Elaborator {
         // (issues/type-owned-members-receiver-slice.md). What is declared is
         // the qualified string, so the base name stays out of the ambient
         // namespace and is reached through the receiver or by qualification.
-        // A name with two qualifiers is a member function's own member,
-        // `T::f::pos` (`fn T::f(…) → Pos<A>`'s fact; the parser lets no
-        // written head have two), so its owner is the function `T::f`.
-        let member = if decl.name.matches("::").count() > 1 {
-            decl.name.rsplit_once("::")
-        } else {
-            split_qual(&decl.name)
-        };
+        // A name with two qualifiers (an instance's member,
+        // `Le::Judge::verdict`, or a member function's `Pos` fact,
+        // `T::f::pos`) splits at its first `::` like any other: the type owns
+        // it, and the declared string is the whole name.
+        let member = split_qual(&decl.name);
         if let Some((owner, base)) = member {
             // A **type former** owns a namespace too, as of the 2026-08-17
             // carrier widening (docs/decide-class-design.md §2): `Le::Decide` is

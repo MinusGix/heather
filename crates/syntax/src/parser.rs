@@ -749,9 +749,9 @@ impl Parser {
     /// evidence theorem f::pos({…f's parameters…}): 0 < f(…) { … }
     /// ```
     ///
-    /// A member function's fact is its member in turn: `fn T::f(…) → Pos<A>`
-    /// declares `T::f::pos`, owned by the function `T::f` (the elaborator's
-    /// owner rule reads a two-qualifier name at its last `::`).
+    /// A member function's fact is named under it: `fn T::f(…) → Pos<A>`
+    /// declares `T::f::pos`, attached to `T` as an instance's
+    /// `Le::Judge::verdict` is (the elaborator splits at the first `::`).
     ///
     /// Every parameter of `f` that is not a solver parameter becomes a `{}`
     /// implicit, which the rule's conclusion fixes by unification; solver
