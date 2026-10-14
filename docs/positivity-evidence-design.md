@@ -505,8 +505,8 @@ The proof is the obligation the result states, in one of two ways:
   does not convert; `e` may recurse on `f::pos`. A `decreases` function must
   take it.
 
-A member function (`fn T::f(…) → Pos<A>`) is refused: its fact would be
-`T::f::pos`, and a member owns no members yet.
+A member function (`fn T::f(…) → Pos<A>`) was refused: its fact would be
+`T::f::pos`, and a member owned no members yet. Lifted in §13.
 
 **Record fields.** `den: Pos<A>` is `den: A` followed by
 `den_pos: 0 < den`, whose default runs the same search `:= infer` does
@@ -524,11 +524,13 @@ because a projection of a local is not itself in scope (§7's open `∧`
 question, in record form). The name is `R::field_positive`, since a field
 owns no members. Only a record without type or value parameters takes a
 `Pos` field this round; a rule over a value-parameterised record did not
-unify its parameters, and type parameters are monomorphized.
+unify its parameters, and type parameters are monomorphized. Lifted in §13:
+the failure was a parameter no field mentions.
 
-Elsewhere (a function type's domain, a lambda binder, an inductive
-constructor's field) `Pos<A>` is refused as "binder sugar, not a type",
-pointing at [positive-refinement-type](../issues/positive-refinement-type.md).
+Elsewhere (a function type's domain, a lambda binder, and until §13 an
+inductive constructor's field) `Pos<A>` is refused as "binder sugar, not a
+type", pointing at
+[positive-refinement-type](../issues/positive-refinement-type.md).
 
 **Library.** No declaration in `lib/` changed in this round; the adoption
 that followed is §12.
@@ -568,3 +570,60 @@ Not migrated: `elf64_command`'s `n: Nat, nonzero: 0 < n` binders wait for the
 native triples work in that file, and the `0 < bytes.len()` /
 `0 < pointer.toNat()` facts elsewhere in the native libraries bound no
 variable, so the sugar does not apply to them.
+
+## 13. As landed: the remaining positions (2026-10-14)
+
+[pos-sugar-unsupported-positions](../issues/pos-sugar-unsupported-positions.md).
+Three of §11's refusals are lifted; a function type's domain and a lambda
+binder stay [positive-refinement-type](../issues/positive-refinement-type.md)'s.
+
+**A member function's result.** `fn T::f(…) → Pos<A>` declares
+`T::f::pos`, exactly §11's item under the member's name. The parser still
+lets no written head have two qualifiers; the generated one has them, and the
+elaborator's owner rule reads such a name at its **last** `::`, so the owner
+is the function `T::f` (the function-owner rule of
+[function-owned-members](../issues/function-owned-members.md)) and nothing
+new is a type's member. Resolution needed nothing: `T::f::pos` reaches the
+whole-string reading of `names::resolve_kinds` as `T::f` does, and
+`m::T::f::pos` is the module path. A `self` parameter becomes an implicit of
+the fact like any other value, so `k.spread()` and `Nat::spread(k)` both meet
+it.
+
+**A field of a parameterised record.** The rule takes the record's
+parameters:
+
+```heather
+record Window<A>(k: Nat) { a: A, len: Pos<Nat>, fits: len <= k }
+// evidence theorem Window::len_positive<A>({k: Nat}, {r: Window<A>(k)}): 0 < r.len
+```
+
+Search solves `A` and `k` by unifying `r`'s type with the goal's receiver.
+§11's probe failed because its record mentioned its parameter in no field:
+a value parameter lowers by substitution
+([surface-value-parameters](surface-value-parameters.md) §6), so `R(3)` and
+`R(5)` are one type and nothing determines `k`. A type parameter is the same.
+The parser therefore refuses a `Pos` field on a record with a parameter no
+field's tokens mention (conservatively: any mention counts). It is a parse
+error, so the rule after it never reports a second, cascading one.
+
+**A constructor's field.** `Square(side: Pos<Nat>)` expands as a record field
+does, to `side: Nat, side_pos: 0 < side` with the searched default, and
+construction finds the fact the same way (`Square(k)`, `side_pos := h`, or
+every field by position). There is **no rule**: a constructor's fields are
+read by a pattern, which binds every field, so the fact is a local the search
+already reads, named or `_`. The elaborator still refuses an ordinary default
+on a constructor; the parser's search default is the one exception, and on an
+indexed family's constructor it is refused by name (that route has no default
+slot). An unnamed `Pos` field is refused: the fact is named after the field.
+
+A construction nothing checks (`let s = Square(3);`) used to fail on every
+defaulted field, records included ("takes 2 argument(s), found 1"), because
+only checking position filled defaults. A declaration without parameters has
+one instance, so inference now checks the construction against it
+(`Elaborator::infer_defaulted_ctor`). With parameters, nothing fixes the
+instance a default is filled at; that is refused naming the two ways out (an
+expected type, or every field written).
+
+Tests: `crates/elab/tests/pos_binder_sugar.rs` (member results, both kinds of
+parameterised record, constructor fields with literal, neutral, open-instance
+and recursive cases and their negative controls) and the parser's shape tests.

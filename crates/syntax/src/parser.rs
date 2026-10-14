@@ -749,6 +749,10 @@ impl Parser {
     /// evidence theorem f::pos({…f's parameters…}): 0 < f(…) { … }
     /// ```
     ///
+    /// A member function's fact is its member in turn: `fn T::f(…) → Pos<A>`
+    /// declares `T::f::pos`, owned by the function `T::f` (the elaborator's
+    /// owner rule reads a two-qualifier name at its last `::`).
+    ///
     /// Every parameter of `f` that is not a solver parameter becomes a `{}`
     /// implicit, which the rule's conclusion fixes by unification; solver
     /// parameters (a `Pos<A>` parameter's `x_pos` among them) stay premises
@@ -771,14 +775,6 @@ impl Parser {
                  and declares `f::pos` (docs/positivity-evidence-design.md §6 B). A \
                  {} states `0 < …` instead",
                 if d.is_meta { "`meta fn`" } else { "theorem" }
-            ));
-        }
-        if d.name.contains("::") {
-            return refuse(format!(
-                "`{}` is a member, so its positivity fact would be `{}::pos`, and a member \
-                 owns no members yet. Return the carrier and state an `evidence theorem` \
-                 about it",
-                d.name, d.name
             ));
         }
         let mut written = None;
@@ -1648,6 +1644,40 @@ impl Parser {
         Ok(ImportItem { reexport, module, module_span, listed, span: start.join(end) })
     }
 
+    /// A field written `x: Pos<A>`, expanded: `x: A`, then `x_pos: 0 < x`,
+    /// filled at a construction that leaves it out by the search `:= infer`
+    /// runs, over the constructing scope (docs/positivity-evidence-design.md
+    /// §6 B). Any other field comes back as it was. A record's and a
+    /// constructor's field expand alike; only the record also gets a rule.
+    fn pos_field(&self, f: FieldDecl) -> R<Vec<FieldDecl>> {
+        let Some(carrier) = pos_carrier(&f.ty).cloned() else { return Ok(vec![f]) };
+        let refuse = |msg: &str| Err(ParseError { msg: msg.to_string(), span: f.span });
+        // Only a constructor's field can be unnamed; a record refused it
+        // already.
+        let Some(fname) = f.name.clone() else {
+            return refuse(
+                "a `Pos<A>` field needs a name (`n: Pos<Nat>`): its fact is `n_pos`, \
+                 named after it",
+            );
+        };
+        if f.default.is_some() {
+            return refuse(
+                "a `Pos<A>` field takes no default: its positivity is searched at \
+                 each construction, and the value is the constructor's to pass",
+            );
+        }
+        let ty_span = f.ty.span;
+        Ok(vec![
+            FieldDecl { name: f.name, ty: carrier, default: None, span: f.span },
+            FieldDecl {
+                name: Some(positivity_name(&fname)),
+                ty: positivity_ty(&fname, ty_span),
+                default: Some(Box::new(Expr { kind: ExprKind::Var(POS_SEARCH.into()), span: ty_span })),
+                span: ty_span,
+            },
+        ])
+    }
+
     /// `record D<p, …>(v: T, …) { f: T, … }` — desugared here into the
     /// one-constructor `InductiveDecl` the tier-0 generator already handles
     /// (docs/surface-records.md §2.1), with the constructor named after the
@@ -1664,8 +1694,12 @@ impl Parser {
         self.expect(&TokKind::LBrace, "`{` (field list)")?;
         let mut fields = Vec::new();
         let mut facts = Vec::new();
+        // Where each field's tokens begin and end, for the parameter check below.
+        let mut field_toks = Vec::new();
         while !matches!(self.peek(), TokKind::RBrace) {
+            let from = self.pos;
             let f = self.field()?;
+            field_toks.push(from..self.pos);
             if f.name.is_none() {
                 return Err(ParseError {
                     msg: "a record field needs a name (`unit: Nat`): the name is what \
@@ -1675,36 +1709,13 @@ impl Parser {
                 });
             }
             // `den: Pos<A>` — the field half of the binder sugar
-            // (docs/positivity-evidence-design.md §6 B): `den: A`, then
-            // `den_pos: 0 < den`, filled at a construction that leaves it out
-            // by the search `:= infer` runs, over the constructing scope.
-            if let Some(carrier) = pos_carrier(&f.ty).cloned() {
+            // (docs/positivity-evidence-design.md §6 B), with a rule about
+            // the projection declared after the record.
+            if pos_carrier(&f.ty).is_some() {
                 let fname = f.name.clone().unwrap_or_default();
-                let refuse = |msg: &str| Err(ParseError { msg: msg.to_string(), span: f.span });
-                if f.default.is_some() {
-                    return refuse(
-                        "a `Pos<A>` field takes no default: its positivity is searched at \
-                         each construction, and the value is the constructor's to pass",
-                    );
-                }
-                if !params.is_empty() || !valparams.is_empty() {
-                    return refuse(
-                        "a `Pos<A>` field is supported on a record without parameters only: \
-                         its rule `0 < r.field` is not yet stated over a parameterised \
-                         record (issues/pos-binder-sugar.md). Write the carrier and a \
-                         `0 < field` field",
-                    );
-                }
-                let fact_name = positivity_name(&fname);
                 let ty_span = f.ty.span;
-                fields.push(FieldDecl { name: f.name, ty: carrier, default: None, span: f.span });
-                fields.push(FieldDecl {
-                    name: Some(fact_name.clone()),
-                    ty: positivity_ty(&fname, ty_span),
-                    default: Some(Box::new(Expr { kind: ExprKind::Var(POS_SEARCH.into()), span: ty_span })),
-                    span: ty_span,
-                });
-                facts.push((fname, fact_name, ty_span));
+                fields.extend(self.pos_field(f)?);
+                facts.push((fname.clone(), positivity_name(&fname), ty_span));
             } else {
                 fields.push(f);
             }
@@ -1715,15 +1726,79 @@ impl Parser {
         }
         let end = self.expect(&TokKind::RBrace, "`}` (field list)")?;
         let span = start.join(end);
+        // The rule below finds the record's parameters by unifying its type,
+        // and a parameter no field mentions leaves nothing to unify: `R(3)`
+        // and `R(5)` lower to one type (docs/surface-value-parameters.md §6).
+        // Read off the tokens, conservatively: any mention counts, the
+        // field's own name included.
+        if let Some((_, _, fspan)) = facts.first() {
+            let mentioned = |p: &str| {
+                field_toks.iter().flat_map(|r| &self.toks[r.clone()])
+                    .any(|t| matches!(&t.kind, TokKind::Ident(n) if n == p))
+            };
+            let all = params.iter().cloned().chain(valparams.iter().map(|v| v.name.clone()));
+            if let Some(p) = all.into_iter().find(|p| !mentioned(p)) {
+                return Err(ParseError {
+                    msg: format!(
+                        "a `Pos<A>` field needs every parameter of `{name}` to appear in a \
+                         field's type, and `{p}` appears in none: its rule `0 < r.field` \
+                         finds the parameters by unifying the record's type, and with `{p}` \
+                         unused every instantiation of `{name}` is one type"
+                    ),
+                    span: *fspan,
+                });
+            }
+        }
         // One rule per positive field, `0 < r.den` from `r.den_pos`: a
         // projection of a local is not itself in scope, so without it the
-        // search could not read the field's fact.
+        // search could not read the field's fact. On a parameterised record
+        // the rule is generic in its type parameters and takes its value
+        // parameters as `{}` implicits ahead of the record:
+        // `<A>({k: Nat}, {r: R<A>(k)}): 0 < r.den`. All of them are solved by
+        // unifying the record's type, checked above.
         for (field, fact, fspan) in facts {
             let var = |n: &str| Expr { kind: ExprKind::Var(n.to_string()), span: fspan };
             let recv = self.hygienic("record");
-            let rparams = vec![Param {
+            let tyargs: Vec<Ty> = params
+                .iter()
+                .map(|p| Ty { kind: TyKind::Named { name: p.clone(), args: Vec::new() }, span: fspan })
+                .collect();
+            let recv_ty = if valparams.is_empty() {
+                Ty { kind: TyKind::Named { name: name.clone(), args: tyargs }, span: fspan }
+            } else {
+                let head = if tyargs.is_empty() {
+                    var(&name)
+                } else {
+                    Expr { kind: ExprKind::TyApp { head: Box::new(var(&name)), args: tyargs }, span: fspan }
+                };
+                let applied = Expr {
+                    kind: ExprKind::App {
+                        head: Box::new(head),
+                        args: valparams.iter().map(|v| var(&v.name)).collect(),
+                        named: Vec::new(),
+                        explicit: false,
+                        goal_oriented: false,
+                    },
+                    span: fspan,
+                };
+                Ty { kind: TyKind::OfExpr(Box::new(applied)), span: fspan }
+            };
+            let mut rparams: Vec<Param> = valparams
+                .iter()
+                .map(|v| Param {
+                    implicit: true,
+                    is_self: false,
+                    solver: None,
+                    default: None,
+                    origin: ParamOrigin::Written,
+                    symbol: None,
+                    span: fspan,
+                    ..v.clone()
+                })
+                .collect();
+            rparams.push(Param {
                 name: recv.clone(),
-                ty: Ty { kind: TyKind::Named { name: name.clone(), args: Vec::new() }, span: fspan },
+                ty: recv_ty,
                 implicit: true,
                 is_self: false,
                 solver: None,
@@ -1731,7 +1806,7 @@ impl Parser {
                 origin: ParamOrigin::Written,
                 symbol: None,
                 span: fspan,
-            }];
+            });
             let project = |n: &str| Expr {
                 kind: ExprKind::Dot {
                     recv: Box::new(var(&recv)),
@@ -1750,7 +1825,7 @@ impl Parser {
                 is_evidence: true,
                 elaborates: None,
                 name: format!("{name}::{field}_positive"),
-                tyvars: Vec::new(),
+                tyvars: params.iter().map(|p| TyParam { name: p.clone(), level: 0, span: fspan }).collect(),
                 params: rparams,
                 result: Ty { kind: TyKind::OfExpr(Box::new(stmt)), span: fspan },
                 decreases: None,
@@ -1893,7 +1968,11 @@ impl Parser {
             if matches!(self.peek(), TokKind::LParen) {
                 self.bump();
                 while !matches!(self.peek(), TokKind::RParen) {
-                    fields.push(self.field()?);
+                    // `Some(n: Pos<Nat>)` — the record expansion, with no rule:
+                    // a constructor's fields are reached by a pattern, which
+                    // binds the fact as a local the search reads.
+                    let f = self.field()?;
+                    fields.extend(self.pos_field(f)?);
                     if !matches!(self.peek(), TokKind::Comma) {
                         break;
                     }
@@ -7187,5 +7266,44 @@ mod tests {
         let Item::Decl(rule) = &items[1] else { panic!("{:?}", items[1]) };
         assert_eq!(rule.name, "Frac::den_positive");
         assert!(rule.is_evidence);
+    }
+
+    #[test]
+    fn a_member_pos_result_declares_the_members_fact() {
+        let items = parse_file("fn Nat::twice(self n: Nat) -> Pos<Nat> { n + n + 1 }").unwrap().items;
+        let fact = items.into_iter().nth(1).unwrap().into_decl();
+        assert_eq!(fact.name, "Nat::twice::pos");
+        assert!(!fact.params[0].is_self && fact.params[0].implicit);
+    }
+
+    #[test]
+    fn a_parameterised_records_rule_takes_its_parameters() {
+        let items = parse_file("record Bounded<A>(k: Nat) { a: A, len: Pos<Nat>, ok: len <= k }")
+            .unwrap()
+            .items;
+        let Item::Decl(rule) = &items[1] else { panic!("{:?}", items[1]) };
+        assert_eq!(rule.name, "Bounded::len_positive");
+        let tyvars: Vec<_> = rule.tyvars.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(tyvars, vec!["A"]);
+        // `{k: Nat}`, then the record at `Bounded<A>(k)`, both implicit.
+        assert_eq!(rule.params.len(), 2);
+        assert!(rule.params.iter().all(|p| p.implicit && p.solver.is_none()));
+        assert_eq!(rule.params[0].name, "k");
+        assert!(matches!(rule.params[1].ty.kind, TyKind::OfExpr(_)), "{:?}", rule.params[1].ty);
+    }
+
+    #[test]
+    fn a_pos_constructor_field_expands_with_no_rule() {
+        let items = parse_file("inductive Q { Mk(a: Nat, n: Pos<Nat>), Other }").unwrap().items;
+        assert_eq!(items.len(), 1);
+        let Item::Inductive(q) = &items[0] else { panic!("{:?}", items[0]) };
+        let fields: Vec<_> = q.ctors[0]
+            .fields
+            .iter()
+            .map(|f| (f.name.clone().unwrap(), f.default.is_some()))
+            .collect();
+        assert_eq!(fields, vec![("a".into(), false), ("n".into(), false), ("n_pos".into(), true)]);
+        let e = parse_file("inductive Q { Mk(Pos<Nat>) }").unwrap_err();
+        assert!(e.msg.contains("a `Pos<A>` field needs a name"), "{}", e.msg);
     }
 }
