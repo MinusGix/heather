@@ -610,6 +610,46 @@ impl Elaborator {
         Ok(Some((i, args)))
     }
 
+    /// A construction that may leave a defaulted field out
+    /// (docs/named-arguments-design.md §9.5), where nothing is checking it.
+    /// A default is filled against the type the construction is built at, so
+    /// a declaration without parameters is checked at its one instance; one
+    /// with parameters has nothing here to fix them, and says so unless every
+    /// field is written (the ordinary inference then applies). `None` leaves
+    /// a constructor without defaults to the ordinary inference.
+    pub(super) fn infer_defaulted_ctor(
+        &self,
+        cx: &Cx,
+        ind: &Rc<Inductive>,
+        i: usize,
+        written: usize,
+        e: &Expr,
+    ) -> Option<R<(Term, Type, Level)>> {
+        let ctor = &ind.ctors[i];
+        if ctor.defaults.iter().all(Option::is_none) {
+            return None;
+        }
+        if ind.params.is_empty() && ind.valparams.is_empty() && ind.index.is_none() {
+            return Some((|| {
+                let (ty, lvl) = self.lower_instance(cx, ind, &[], &[], e.span)?;
+                let t = self.elab_check(cx, e, &ty, &lvl)?;
+                Ok((t, ty, lvl))
+            })());
+        }
+        if written == ctor.fields.len() {
+            return None;
+        }
+        Some(err(
+            format!(
+                "`{}` leaves a defaulted field to be filled, which needs the type it builds, \
+                 and nothing here fixes `{}`'s parameters: put the construction where the \
+                 expected type is `{}<…>`, or give every field",
+                ctor.name, ind.name, ind.name
+            ),
+            e.span,
+        ))
+    }
+
     /// A constructor used where nothing is checking it. Only possible when the
     /// declaration has no type parameters — otherwise there is nothing to
     /// determine the instantiation, and an annotation is required (§2:

@@ -190,8 +190,46 @@ fn a_result_the_search_cannot_prove_is_refused_with_the_way_out() {
 fn a_result_is_a_functions_alone() {
     let e = bad("theorem t(n: Nat): Pos<Nat> { n }\n");
     assert!(e.contains("`Pos<A>` as a result is a function's"), "{e}");
-    let e = bad("fn Nat::twice(n: Nat) -> Pos<Nat> { n + n + 1 }\n");
-    assert!(e.contains("a member owns no members yet"), "{e}");
+}
+
+#[test]
+fn a_member_result_declares_the_members_fact() {
+    // `fn Nat::spread` declares `Nat::spread::pos`, owned by the function: by
+    // name, through the receiver and the qualified call, under a rule, in a
+    // checking position, and over a `Pos` receiver whose fact is a premise.
+    ok("fn Nat::spread(self n: Nat) -> Pos<Nat> { n + n + 1 }
+fn Nat::sq(self n: Pos<Nat>) -> Pos<Nat> { n * n }
+theorem named(k: Nat): 0 < k.spread() { Nat::spread::pos(n := k) }
+theorem receiver(k: Nat): 0 < k.spread() { uses(k.spread()) }
+theorem nested(k: Nat): 0 < Nat::spread(k) * 2 { uses(Nat::spread(k) * 2) }
+theorem stated(k: Nat): 0 < k.spread() { let h: (0 < k.spread()) = uses(k.spread()); h }
+theorem premise(k: Nat, h: 0 < k): 0 < k.sq() { uses(k.sq()) }
+");
+    let e = bad("fn Nat::sq(self n: Pos<Nat>) -> Pos<Nat> { n * n }
+theorem open(k: Nat): 0 < k.sq() { uses(k.sq()) }
+");
+    assert!(e.contains("no instance for `Lt(0, k)`"), "{e}");
+    // The restated body is searched as a plain function's is.
+    let e = bad("fn Nat::ident(self n: Nat) -> Pos<Nat> { n }\n");
+    assert!(e.contains("`positivity` could not prove `Lt(0, n)`"), "{e}");
+}
+
+#[test]
+fn a_member_result_fact_reaches_an_importer() {
+    let mut e = base();
+    let a = format!("{HEAD}fn Nat::spread(self n: Nat) -> Pos<Nat> {{ n + n + 1 }}\n");
+    if let Err(err) = e.elab_module_source("a", &a) {
+        panic!("module a: {}", err.render(&a));
+    }
+    let b = "import nat; import a;
+theorem uses(n: Pos<Nat>): 0 < n { n_pos }
+theorem used(k: Nat): 0 < k.spread() * k.spread() { uses(k.spread() * k.spread()) }
+theorem named(k: Nat): 0 < k.spread() { Nat::spread::pos(n := k) }
+theorem qualified(k: Nat): 0 < k.spread() { a::Nat::spread::pos(n := k) }
+";
+    if let Err(err) = e.elab_module_source("b", b) {
+        panic!("module b: {}", err.render(b));
+    }
 }
 
 #[test]
@@ -246,9 +284,123 @@ fn a_field_without_evidence_is_refused_at_the_construction() {
 }
 
 #[test]
-fn a_field_on_a_parameterised_record_is_refused() {
-    let e = bad("record Box<A> { a: A, n: Pos<Nat> }\n");
-    assert!(e.contains("record without parameters only"), "{e}");
+fn a_field_on_a_type_parameterised_record_has_a_generic_rule() {
+    // `Box::n_positive<A>` is found at a closed instance and at an **open**
+    // one (`Box<A>` inside a generic function), in a checking position.
+    ok("record Box<A> { a: A, n: Pos<Nat> }
+fn mk<A>(x: A) -> Box<A> { Box(x, 4) }
+fn local<A>(x: A, k: Nat, h: 0 < k) -> Box<A> { Box(x, k) }
+theorem closed(b: Box<Nat>): 0 < b.n { uses(b.n) }
+theorem open<A>(b: Box<A>): 0 < b.n * 2 { uses(b.n * 2) }
+theorem stated<A>(b: Box<A>): 0 < b.n { let h: (0 < b.n) = Box::n_positive(); h }
+");
+    let e = bad("record Box<A> { a: A, n: Pos<Nat> }
+fn zero<A>(x: A) -> Box<A> { Box(x, 0) }
+");
+    assert!(e.contains("no evidence for `Lt(0, 0)`"), "{e}");
+}
+
+#[test]
+fn a_field_on_a_value_parameterised_record_has_a_rule_over_its_parameters() {
+    // `{k}, {r: Window(k)}`: `k` is found by unifying the record's type, at a
+    // literal, at a neutral `j + 1`, and under a rule.
+    ok("record Window(k: Nat) { len: Pos<Nat>, fits: len <= k }
+fn mk(j: Nat, h: 1 <= j + 1) -> Window(j + 1) { Window(1, h) }
+theorem lit(w: Window(3)): 0 < w.len { uses(w.len) }
+theorem neutral(j: Nat, w: Window(j + 1)): 0 < w.len * 2 { uses(w.len * 2) }
+theorem stated(j: Nat, w: Window(j)): 0 < w.len { let h: (0 < w.len) = Window::len_positive(); h }
+");
+    // Both kinds of parameter at once, the type one open.
+    ok("record Slot<A>(k: Nat) { a: A, len: Pos<Nat>, fits: len <= k }
+theorem closed(s: Slot<Nat>(3)): 0 < s.len { uses(s.len) }
+theorem open<A>(j: Nat, s: Slot<A>(j)): 0 < s.len * 2 { uses(s.len * 2) }
+");
+    let e = bad("record Window(k: Nat) { len: Pos<Nat>, fits: len <= k }
+fn zero(j: Nat, h: 0 <= j) -> Window(j) { Window(0, h) }
+");
+    assert!(e.contains("no evidence for `Lt(0, 0)`"), "{e}");
+}
+
+#[test]
+fn a_parameter_no_field_mentions_is_refused() {
+    // `Tag(3)` and `Tag(5)` would be one type, with nothing to read `k` off.
+    let e = bad("record Tag(k: Nat) { n: Pos<Nat> }\n");
+    assert!(e.contains("`k` appears in none"), "{e}");
+    let e = bad("record Tag<A> { n: Pos<Nat> }\n");
+    assert!(e.contains("`A` appears in none"), "{e}");
     let e = bad("record Frac { den: Pos<Nat> := 1 }\n");
     assert!(e.contains("a `Pos<A>` field takes no default"), "{e}");
+}
+
+// -- constructor fields -----------------------------------------------------
+
+const SHAPE: &str = "inductive Shape { Square(side: Pos<Nat>), Dot }\n";
+
+#[test]
+fn a_constructor_field_is_its_carrier_and_its_fact_is_searched() {
+    // A literal, a neutral `Succ`, a local, a rule, the fact named and passed
+    // positionally, and a construction nothing checks (`let s = …;`).
+    ok(&format!("{SHAPE}fn lit() -> Shape {{ Square(2) }}
+fn neutral(k: Nat) -> Shape {{ Square(Succ(k)) }}
+fn local(k: Nat, h: 0 < k) -> Shape {{ Square(k) }}
+fn product(a, b: Pos<Nat>) -> Shape {{ Square(a * b) }}
+fn named(k: Nat, h: 1 <= k) -> Shape {{ Square(k, side_pos := h) }}
+fn written(k: Nat, h: 0 < k) -> Shape {{ Square(k, h) }}
+fn unchecked() -> Nat {{ let s = Square(3); match s {{ Square(n, _) => n, Dot => 0 }} }}
+"));
+}
+
+#[test]
+fn a_constructor_field_without_evidence_is_refused() {
+    let e = bad(&format!("{SHAPE}fn zero() -> Shape {{ Square(0) }}\n"));
+    assert!(e.contains("no evidence for `Lt(0, 0)`"), "{e}");
+    let e = bad(&format!("{SHAPE}fn open(k: Nat) -> Shape {{ Square(k) }}\n"));
+    assert!(e.contains("no evidence for"), "{e}");
+}
+
+#[test]
+fn a_matched_constructor_binds_its_fact_for_the_search() {
+    // The pattern binds every field; the fact, even as `_`, is a local the
+    // search reads, so a callee's `Pos` parameter is satisfied. Without the
+    // match there is no fact, and the call is refused.
+    ok(&format!("{SHAPE}fn half(n: Pos<Nat>) -> Nat {{ n.div(2) }}
+fn area(s: Shape) -> Nat {{ match s {{ Square(n, _) => half(n * n), Dot => 0 }} }}
+"));
+    let e = bad(&format!("{SHAPE}fn half(n: Pos<Nat>) -> Nat {{ n.div(2) }}
+fn area(s: Shape, k: Nat) -> Nat {{ match s {{ Square(n, _) => half(k), Dot => 0 }} }}
+"));
+    assert!(e.contains("no instance for `Lt(0, k)`"), "{e}");
+}
+
+#[test]
+fn a_constructor_field_works_in_a_recursive_and_a_parameterised_inductive() {
+    // A recursive constructor (the `Wf` lowering), and a type parameter at a
+    // closed and an open instance, in a checking position.
+    ok("inductive Runs { End, Run(len: Pos<Nat>, rest: Runs) }
+fn two() -> Runs { Run(2, Run(1, End)) }
+fn total(r: Runs) -> Nat { match r { End => 0, Run(n, _, rest) => n + total(rest) } }
+inductive Tagged<A> { Item(a: A, weight: Pos<Nat>), Blank }
+fn closed() -> Tagged<Nat> { Item(7, 3) }
+fn open<A>(x: A, k: Nat, h: 0 < k) -> Tagged<A> { Item(x, k * 2) }
+fn every<A>(x: A, k: Nat, h: 0 < k) -> Nat { let t = Item(x, k, h); 0 }
+");
+    // With a type parameter and the fact left out, nothing fixes the
+    // instance a default is filled at.
+    let e = bad("inductive Tagged<A> { Item(a: A, weight: Pos<Nat>), Blank }
+fn unchecked<A>(x: A) -> Nat { let t = Item(x, 3); 0 }
+");
+    assert!(e.contains("nothing here fixes `Tagged`'s parameters"), "{e}");
+}
+
+#[test]
+fn a_constructor_field_is_refused_where_it_has_no_meaning() {
+    let e = bad("inductive Q { Mk(Pos<Nat>) }\n");
+    assert!(e.contains("a `Pos<A>` field needs a name"), "{e}");
+    let e = bad("inductive Q { Mk(n: Pos<Nat> := 1) }\n");
+    assert!(e.contains("a `Pos<A>` field takes no default"), "{e}");
+    let e = bad("inductive I : (n: Nat) -> Type { Z(m: Pos<Nat>) : I(0) }\n");
+    assert!(e.contains("indexed family `I`"), "{e}");
+    // An ordinary default stays a record's.
+    let e = bad("inductive Q { Mk(n: Nat := 1) }\n");
+    assert!(e.contains("only a record's fields take a default"), "{e}");
 }

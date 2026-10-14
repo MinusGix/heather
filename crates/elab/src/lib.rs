@@ -3689,6 +3689,10 @@ impl Elaborator {
         // (issues/type-owned-members-receiver-slice.md). What is declared is
         // the qualified string, so the base name stays out of the ambient
         // namespace and is reached through the receiver or by qualification.
+        // A name with two qualifiers (an instance's member,
+        // `Le::Judge::verdict`, or a member function's `Pos` fact,
+        // `T::f::pos`) splits at its first `::` like any other: the type owns
+        // it, and the declared string is the whole name.
         let member = split_qual(&decl.name);
         if let Some((owner, base)) = member {
             // A **type former** owns a namespace too, as of the 2026-08-17
@@ -6510,6 +6514,9 @@ impl Elaborator {
             ExprKind::App { .. } if e.as_named().is_none() && self.ctor_spine(cx, e).is_some() => {
                 let (ind, i, args, named) = self.ctor_spine(cx, e).expect("just checked");
                 self.lint_manual_list_construction(cx, e, &ind, i);
+                if let Some(r) = self.infer_defaulted_ctor(cx, &ind, i, args.len() + named.len(), e) {
+                    return r;
+                }
                 let permuted =
                     application::resolve_constructor_arguments(&ind, i, &args, &named, e.span)?;
                 let args = permuted.unwrap_or(args);
@@ -6739,6 +6746,9 @@ impl Elaborator {
                 }
                 if let Some((ind, i)) = self.ctor_here(cx, name) {
                     self.lint_manual_list_construction(cx, e, &ind, i);
+                    if let Some(r) = self.infer_defaulted_ctor(cx, &ind, i, args.len() + named.len(), e) {
+                        return r;
+                    }
                     let borrowed: Vec<&Expr> = args.iter().collect();
                     let named: Vec<_> = named.iter().collect();
                     let permuted =

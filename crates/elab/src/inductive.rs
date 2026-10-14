@@ -974,10 +974,24 @@ impl Elaborator {
                 }
             };
             // A default fills a record's field; a constructor of a family
-            // has no construction site that could leave one out by name.
+            // has no construction site that could leave one out by name. An
+            // unindexed constructor's `Pos<A>` field is the one default
+            // elsewhere: its fact is searched as a record field's is
+            // (docs/positivity-evidence-design.md §13).
             if let Some(field) = c.fields.iter().find(|f| f.default.is_some())
-                && (!d.is_record || index.is_some())
+                && (index.is_some() || !(d.is_record || is_pos_search(field)))
             {
+                if is_pos_search(field) {
+                    return err(
+                        format!(
+                            "a `Pos<A>` field is not supported on a constructor of the indexed \
+                             family `{}`: write the carrier and a `0 < …` field, passed by \
+                             position",
+                            d.name
+                        ),
+                        field.span,
+                    );
+                }
                 return err("only a record's fields take a default (`name: T := e`)", field.span);
             }
             ctors.push(Ctor {
@@ -1212,8 +1226,9 @@ impl Elaborator {
         {
             return err(
                 "`Pos<A>` is binder sugar, not a type: it is written as a parameter's type \
-                 (`x: Pos<Nat>`), a function's result (`fn f(…) → Pos<Nat>`) or a record \
-                 field (`den: Pos<Nat>`), and stands for the carrier beside a searched `0 < x` \
+                 (`x: Pos<Nat>`), a function's result (`fn f(…) → Pos<Nat>`) or a named \
+                 record or constructor field (`den: Pos<Nat>`), and stands for the carrier \
+                 beside a searched `0 < x` \
                  (docs/positivity-evidence-design.md §6 B). Here, write the carrier and the \
                  hypothesis; a positive type for function domains and containers is \
                  issues/positive-refinement-type.md"
@@ -4420,6 +4435,12 @@ pub(crate) fn expr_mentions(e: &Expr, name: &str) -> bool {
         // mention (and the modal forms are rejected in field types anyway).
         ExprKind::Quote(e) | ExprKind::Splice(e) => expr_mentions(e, name),
     }
+}
+
+/// Is this field the fact a `Pos<A>` field adds, defaulted to the parser's
+/// positivity search?
+fn is_pos_search(f: &heather_syntax::FieldDecl) -> bool {
+    matches!(f.default.as_deref(), Some(Expr { kind: ExprKind::Var(v), .. }) if v == heather_syntax::POS_SEARCH)
 }
 
 fn occurs(t: &Ty, name: &str) -> Option<Span> {
