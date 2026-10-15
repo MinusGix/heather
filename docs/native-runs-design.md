@@ -120,12 +120,11 @@ The loop's head and cursor store (`operand_head`, `cursor_store_runs`,
 Since moved again, onto one computed stretch each
 (`docs/native-straight-runs-design.md`): the loop's last-operand test
 (`loop_last`, absorbing `cursor_store_runs` and `last_tested_runs`),
-`operand_head`, `stdin_path`, `open_back` and `failed_runs`.
+`operand_head`, `stdin_path`, `open_back` and `failed_runs`; then, with a
+byte-load item, the dash and ahead tests (`dash_test`, `dash_ahead`) and
+`open_path`.
 
 ## Not yet moved
-
-- The dash and ahead tests (`ByteTested`, `jne_open`, `dash_second`,
-  `dash_test`) and `open_path`.
 - The row's tail (`named_runs`, `unnamed_runs`), the name's scan and write
   (`name_scan`, `name_send`), `init_runs`, `inputs_runs`, `read_failed`,
   `loop_cursor`: their continuations close over the starting frame (see

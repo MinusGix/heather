@@ -38,6 +38,7 @@ comes to:
 | `Block(is)` | `then(vars, execute_block_normal(is, s))` |
 | `Load(ld)` | `SlotThen(base, λ q => then(vars, word_load_after(ld, vars(q), s)))` |
 | `Store(st)` | for a plain base, `SlotThen(base, λ q => then(set_var(vars, q, src), word_store_after(…, st, s)))`; else `False` |
+| `LoadByte(ld)` | `ByteThen(file, page, base, λ b => then(vars, byte_load_after(ld, b, s)))` |
 | `Jcc(cc, t)` | `(condition_holds(cc, s.flags) = True → leaf at the jump's target) ∧ (… = False → then(…))` |
 | `Jmp(t)` | the leaf at the jump's target |
 | anything else | `False` |
@@ -46,6 +47,14 @@ comes to:
 ∧ then(q)`: the caller names the slot, and the address equation is `refl`
 because the block before set the base (`MovRI(R11, slot_at(q))`). A closed
 `q < 32` is `trivial`.
+
+`ByteThen(file, page, base, then)` is `Exists b a. base = a ∧ (every
+frame's image reads `b` at `a`) ∧ a < 2^47 ∧ then(b)`. A byte the command
+loads is an argument's, which is not in the frame, so the read is stated
+for every frame (`ArgStays` gives it). The caller names the address as it
+names a slot: the base register's value where nothing computed it (`rsi`),
+the block's own sum where one did (`refl`), so the reads are facts about a
+term the caller wrote and no read is met against the stretch's spelling.
 
 ### The goal
 
@@ -144,13 +153,35 @@ So the type is computed from the items' structure only: which constructor,
 which register, which label. Anything numeric is a `refl` or a fact the
 caller cites, checked by the kernel.
 
-## Items: `Load` and `Store`
+## Items: `Load`, `Store` and `LoadByte`
 
 `Asm` had stores and loads as `Code(bytes)`, which a computation cannot
-read. `x86_64_asm` now has `Load(WordLoad)` and `Store(WordStore)`, with
-`Code`'s bytes (`word_load_bytes`, `word_store_bytes`) and lengths; the
-command's `wstore`/`wload` and the spill program (`lsp_*`) use them. The
-assembled bytes do not change.
+read. `x86_64_asm` now has `Load(WordLoad)`, `Store(WordStore)` and
+`LoadByte(ByteLoad)`, with `Code`'s bytes (`word_load_bytes`,
+`word_store_bytes`, `byte_load_bytes`) and lengths; the command's
+`wstore`/`wload`, its three byte loads (`l_dash_load`, `l_ahead_load`,
+`l_len_load`) and the spill program (`lsp_*`) use them. The assembled bytes
+do not change. The process libraries' byte loads (the argument scan's, the
+stat pass's, the cursor's) are still `Code`.
+
+## Where a stretch forks on data, split it
+
+A stretch whose leaves depend on a value the caller takes apart (the dash
+test on the operand's name: no byte, a first byte not `-`, `-` alone, `-`
+and more) can be one call per case, each the whole stretch. The dash test
+written that way (four calls over its seven items) took more kernel steps
+than the hand-threaded proof it replaced and several times its elaboration:
+each call unfolds the whole stretch again, and each nests the next byte's
+obligation inside the first JCC's side.
+
+Written instead as one call per straight run (`dash_test`: the first byte,
+three items; `dash_ahead`: the second, four), with the byte computed from
+the name (`first_byte`) rather than cased on, it took well under half the
+kernel steps of the hand-threaded proof. A JCC's sides are then small terms:
+the flag converted to a fact about the byte (`byte_differs`, `byte_same`
+over `cmp_bytes`), and a lemma that cases on the name to say what it names
+(`stdin_of_first`, `stdin_of_second`, `stdin_of_nul`). The case analysis is
+in ordinary lemmas, outside any term checked against `Straight`.
 
 ## Where a stretch's code is
 
@@ -189,11 +220,18 @@ and `last_tested_runs`), the operand's head (`operand_head`), stdin
 (`stdin_path`, replacing `stdin_block`), the open's return (`open_back`, both
 arms, replacing `opened_block`) and the failed path (`failed_runs`).
 
+Then, with `LoadByte`: the dash test (`dash_test`, `dash_ahead`, replacing
+`ByteTested`, `dash_tested`, `ahead_tested`, `jne_open` and `dash_second`)
+and the open's request (`open_path`, a stretch of one block whose leaf makes
+the system call). Their continuations (`StdinAt`, `OpenAt`) take a framed
+state, so they no longer close over the starting frame.
+
 ## Not yet
 
-- Byte loads and stores (`Code(byte_load_bytes(…))`) and the page: the
-  argument scan's and the row's. A `LoadByte` item would ask for the byte
-  and its read under every frame.
+- Byte stores (`Code(byte_store_bytes(…))`) and the page: the row's. A
+  store to the page changes it, and `Framed` holds the page fixed; a
+  `StoreByte` item would carry the page in the stretch's state as `vars`
+  is carried.
 - A system call ends a stretch: `closes_runs` still runs its JCCs with the
   `Runs` rules before `linux_runs_close`.
 - The other `Runs` phases (`total_runs`, the prologue, the spill) and the

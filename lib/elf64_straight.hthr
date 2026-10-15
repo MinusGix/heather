@@ -18,11 +18,12 @@
 // Only the items' structure is computed when the type is read: a slot is
 // named by the caller and its address checked by `refl` (a block before set
 // the base), a jump's target is the jump's own (`near_branch_target`), which
-// the caller's landing fact (`cmd_j_*`) names. Reading words or offsets while
-// elaborating would evaluate them in the elaborator, which costs far more
-// than the kernel's evaluation of the same `refl`. An item the stretch cannot
-// run (a syscall, a byte load, a piece, a hole) leaves `False`, which no
-// caller proves. Nothing is trusted: `straight_runs` is an ordinary theorem.
+// the caller's landing fact (`cmd_j_*`) names. A byte load's byte and its
+// address are named by the caller too, the read at that address shown for
+// every frame (`ByteThen`). Reading words or offsets while elaborating would
+// evaluate them in the elaborator, which costs far more than the kernel's
+// evaluation of the same `refl`. An item the stretch cannot run (a syscall, a
+// piece, a hole) leaves `False`, which no caller proves. Nothing is trusted: `straight_runs` is an ordinary theorem.
 import elf64_frame;
 import elf64_operand_cursor;
 import elf64_arg_scan;
@@ -100,6 +101,15 @@ fn StraightLeaf(file: IoImage, page: Nat → BitVec(8), goal: MachineState<IoMem
 fn SlotThen(base: BitVec(64), then: Nat → Type) → Type {
     Exists<Nat>(λ q => (q < frame_slots()) ∧ ((base = frame_at(8 * q)) ∧ then(q)))
 }
+// A byte load's byte: the caller names it and its address `a` (the base
+// register's value, `refl` where a block before computed it), read there
+// whatever the frame holds (an argument's string is not in the frame), and
+// below the canonical boundary.
+fn ByteThen(file: IoImage, page: Nat → BitVec(8), base: BitVec(64), then: BitVec(8) → Type) → Type {
+    Exists<BitVec(8)>(λ byte => Exists<BitVec(64)>(λ a => (base = a) ∧
+        (((frame: Nat → BitVec(8)) → io_data_access().read(IoMemory(with_frame(file, frame), page), a) = Some(byte)) ∧
+        ((a.toNat() < Nat::pow(2, 47)) ∧ then(byte)))))
+}
 // The item at `here`, then what follows it (`then`).
 fn straight_item(file: IoImage, page: Nat → BitVec(8), origin: BitVec(64), goal: MachineState<IoMemory> → Type, labels: Nat → Nat, here: Nat, item: Asm,
     then: (Nat → BitVec(64)) → MachineState<IoMemory> → Type) → (Nat → BitVec(64)) → MachineState<IoMemory> → Type {
@@ -112,6 +122,7 @@ fn straight_item(file: IoImage, page: Nat → BitVec(8), origin: BitVec(64), goa
         Jmp(target) => λ vars state => StraightLeaf(file, page, goal, near_branch_target(next_rip(origin, here), 5, near_rel(here + 5, labels(target))))(vars,
             execute_near_control(JumpNear(near_rel(here + 5, labels(target))), state)),
         Load(load) => λ vars state => SlotThen(read_gpr(load.base, state.gprs), λ q => then(vars, word_load_after(load, vars(q), state))),
+        LoadByte(load) => λ vars state => ByteThen(file, page, read_gpr(load.base, state.gprs), λ byte => then(vars, byte_load_after(load, byte, state))),
         Store(store) => λ vars state => match store_base_plain(store.base) {
             True => SlotThen(read_gpr(store.base, state.gprs), λ q =>
                 then(set_var(vars, q, read_gpr(store.source, state.gprs)), word_store_after(linux_writes(io_linux()), store, state))),
@@ -183,6 +194,19 @@ theorem straight_item_goes(file: IoImage, page: Nat → BitVec(8), origin: BitVe
             let after = word_load_after(load, vars(q), state);
             back_fetched(goal, back, state, after, loaded.steps,
                 goes(vars, after, loaded.rip_is, Exists(framed.witness, ⟨loaded.memory_is, framed.proof.right⟩), slot.proof.right.right))
+        },
+        LoadByte(load) => λ code goes vars state rip framed held => {
+            let byte = held.witness;
+            let named = held.proof.proof;
+            let base = read_gpr(load.base, state.gprs);
+            let img = with_frame(file, framed.witness);
+            let present: (data.read(IoMemory(img, page), base) = Some(byte)) =
+                j(sym(named.left), λ a _ => data.read(IoMemory(img, page), a) = Some(byte), named.right.left(framed.witness));
+            let low: (base.toNat() < Nat::pow(2, 47)) = j(sym(named.left), λ a _ => a.toNat() < Nat::pow(2, 47), named.right.right.left);
+            let loaded = run_byte_load(img, page, load, origin, here, code(framed.witness), state, framed.proof.left, rip, byte, present, low);
+            let after = byte_load_after(load, byte, state);
+            back_fetched(goal, back, state, after, loaded.steps,
+                goes(vars, after, loaded.rip_is, Exists(framed.witness, ⟨loaded.memory_is, framed.proof.right⟩), named.right.right.right))
         },
         Store(store) => λ code goes vars state rip framed => (match store_base_plain(store.base) as λ b => store_base_plain(store.base) = b →
                 (match b as λ _ => Type {
