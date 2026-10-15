@@ -641,7 +641,8 @@ Constructions find their facts as §11 says: `ofInt` and `inv_succ` by
 computation (`1`, `Succ(n)`), `add` and `mul` through `Nat::mul_pos` over two
 `den_positive`s, `neg` and `abs` through `den_positive` alone. Cross-
 multiplication reads a denominator into `Int` as `x.den.int()`, where
-`Nat::int(n)` is `OfNat(n)`, a call rather than the bare constructor. That
+`Nat::int(n)` (in `int.hthr`) is `OfNat(n)`, a call rather than the bare
+constructor. That
 keeps one atom per denominator for `ring` and `omega` (which relate
 `(-x).den.int()` and `x.den.int()` by conversion), and lets a denominator that
 computes (`Rat::one().den.int()`) read as its numeral; neither reader does
@@ -657,16 +658,16 @@ used it say where it comes from: the cancellations take `y.den_pos`, and
 `mul_lt_mono_r`, `archimedean` and the inverse's sign lemmas bring a
 `den_pos` into scope for omega or build one with `Nat::mul_pos`.
 
-**The cancellation lemmas** move into `rat.hthr` beside the other `Int`
-facts only `Rat` uses, as the issue spelled them: `Int::mul_cancel_pos_r(self
-x, y: Int, p: Pos<Int>, h: x * p = y * p)` and its `≤` twin. `0 < p` at `Int`
-needs `Numeral<Int>`'s class, so `rat` lists `import algebra::{Numeral}`;
-`algebra_rel` is imported as `import algebra_rel::{Semigroup}`, since a plain
-`import algebra` makes `Semigroup` ambiguous between the two modules (a list
-is the standing disambiguation, docs/modules-design.md §3). No rule reaches
-`0 < x.den.int()` (an `evidence theorem` lifting `0 < n` to `0 < OfNat(n)` is
-refused by the rule-size check), so the two calls name the fact,
-`p_pos := y.den_pos`, which converts. A literal factor's fact computes.
+**The cancellation lemmas** move into `int.hthr`, after `Numeral<Int>`, as
+the issue spelled them: `Int::mul_cancel_pos_r(self x, y: Int, p: Pos<Int>, h:
+x * p = y * p)` and its `≤` twin, proved without omega through a new
+`Int::mul_lt_mono_r`. The `Int` absolute-value facts `Rat` uses
+(`abs_cases`, `le_abs`, `abs_mul`, …) move there too, rewritten as case splits
+where they had leaned on omega, so `rat.hthr` holds only rational facts. No
+rule reaches `0 < x.den.int()` (an `evidence theorem` lifting `0 < n` to
+`0 < OfNat(n)` is refused by the rule-size check), so the two calls in `Rat`
+name the fact, `p_pos := y.den_pos`, which converts. A literal factor's fact
+computes.
 
 **`ring` and `omega` read named field projections.** A record whose spine is
 dependent (a `Pos` field's fact mentions the field) registers named

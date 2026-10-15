@@ -14,66 +14,14 @@
 // rewrite with `calc { … ≈ … }` and `rel_cong` exactly as over finite sets.
 
 import logic;
-// `algebra` for `Numeral<Int>`, which `Pos<Int>`'s `0 < p` needs. It also
-// declares a `Semigroup`; the list on `algebra_rel` says that one is meant.
-import algebra::{Numeral};
 import nat;
 import int;
 import omega;
 import ring;
 import relation_props;
-import algebra_rel::{Semigroup};
+import algebra_rel;
 import order;
 import bool;
-
-// ---------------------------------------------------------------------------
-// The integer facts cross-multiplication needs. A denominator is a `Nat`, read
-// into `Int` by `int`. It is a call rather than a bare `OfNat(…)` so that
-// `ring` and `omega` meet it as one atom per denominator, which conversion
-// relates across spellings (`(-x).den.int()` is `x.den.int()`), and so that
-// one whose value computes (`Rat::one().den.int()`) is read as that numeral.
-// A product of denominators computes to the product of their readings.
-
-fn Nat::int(self n: Nat) → Int { OfNat(n) }
-
-theorem Nat::int_mul(self a, b: Nat): (a * b).int() = a.int() * b.int() { refl }
-
-// Cancelling a positive factor (issues/cancellative-algebra-api.md). Both go
-// through order: x < y would make x·p + p ≤ y·p = x·p.
-theorem Int::mul_cancel_pos_r(self x, y: Int, p: Pos<Int>, h: x * p = y * p): x = y {
-    match x.lt_trichotomy(y) {
-        Inl(lt) => {
-            let grown = x.isucc().mul_le_mono_r(y, p, lt, omega);
-            let flip = x.isucc().mul_comm(p);
-            let step = p.mul_isucc(x);
-            let back = x.mul_comm(p);
-            false_elim(omega)
-        },
-        Inr(rest) => match rest {
-            Inl(eq) => eq,
-            Inr(gt) => {
-                let grown = y.isucc().mul_le_mono_r(x, p, gt, omega);
-                let flip = y.isucc().mul_comm(p);
-                let step = p.mul_isucc(y);
-                let back = y.mul_comm(p);
-                false_elim(omega)
-            },
-        },
-    }
-}
-
-theorem Int::mul_le_cancel_pos_r(self a, b: Int, p: Pos<Int>, h: a * p <= b * p): a <= b {
-    Int::le_of_not_lt(b, a, λ lt => {
-        let grown = b.isucc().mul_le_mono_r(a, p, lt, omega);
-        let flip = b.isucc().mul_comm(p);
-        let step = p.mul_isucc(b);
-        let back = b.mul_comm(p);
-        omega
-    })
-}
-
-// ---------------------------------------------------------------------------
-// The rationals.
 
 record Rat { num: Int, den: Pos<Nat> }
 
@@ -87,7 +35,7 @@ theorem Rat::same_sym(x, y: Rat, h: x ≈ y): y ≈ x { sym(h) }
 
 // a/p ≈ b/q and b/q ≈ c/r give a/p ≈ c/r: multiply the goal by q, which
 // the two hypotheses rearrange into each other, and cancel q (positive by
-// construction).
+// `y.den_pos`).
 theorem Rat::same_trans(x, y, z: Rat, hxy: x ≈ y, hyz: y ≈ z): x ≈ z {
     let scaled: ((x.num * z.den.int()) * y.den.int() = (z.num * x.den.int()) * y.den.int()) = ring(hxy, hyz);
     (x.num * z.den.int()).mul_cancel_pos_r(z.num * x.den.int(), y.den.int(), scaled, p_pos := y.den_pos)
@@ -591,75 +539,6 @@ theorem Rat::sub_pos(x, y: Rat, h: y < x): Rat::zero() < x -y {
 }
 
 // ---------------------------------------------------------------------------
-// Integer facts the absolute value and the products below use. They live
-// here, beside their only client, rather than in `int`, which everything
-// downstream would then re-elaborate.
-
-theorem Int::abs_cases(self a: Int): (OfNat(0) <= a ∧ a.abs() = a) ∨ (a < OfNat(0) ∧ a.abs() = -a) {
-    match a {
-        OfNat(_) => Inl(And(trivial, refl)),
-        NegSucc(n) => Inr(And(Int::negsucc_lt_ofnat(n, 0), refl)),
-    }
-}
-
-theorem Int::abs_nonneg(self a: Int): OfNat(0) <= a.abs() { trivial }
-
-theorem Int::le_abs(self a: Int): a <= a.abs() {
-    match a.abs_cases() {
-        Inl(c) => { let s = c.left; let e = c.right; omega },
-        Inr(c) => { let s = c.left; let e = c.right; omega },
-    }
-}
-
-theorem Int::neg_le_abs(self a: Int): -a <= a.abs() {
-    match a.abs_cases() {
-        Inl(c) => { let s = c.left; let e = c.right; omega },
-        Inr(c) => { let s = c.left; let e = c.right; omega },
-    }
-}
-
-theorem Int::abs_of_nonneg(self a: Int, h: OfNat(0) <= a): a.abs() = a {
-    match a.abs_cases() {
-        Inl(c) => c.right,
-        Inr(c) => { let s = c.left; false_elim(omega) },
-    }
-}
-
-theorem Int::natAbs_negOfNat(n: Nat): Int::negOfNat(n).natAbs() = n {
-    match n { Zero => refl, Succ(_) => refl }
-}
-
-theorem Int::natAbs_neg(self a: Int): (-a).natAbs() = a.natAbs() {
-    match a { OfNat(n) => Int::natAbs_negOfNat(n), NegSucc(_) => refl }
-}
-
-theorem Int::natAbs_mul(self a, b: Int): (a * b).natAbs() = a.natAbs() * b.natAbs() {
-    match a {
-        OfNat(m) => match b {
-            OfNat(_) => refl,
-            NegSucc(n) => Int::natAbs_negOfNat(m * Succ(n)),
-        },
-        NegSucc(m) => match b {
-            OfNat(n) => Int::natAbs_negOfNat(Succ(m) * n),
-            NegSucc(_) => refl,
-        },
-    }
-}
-
-theorem Int::abs_mul(self a, b: Int): (a * b).abs() = a.abs() * b.abs() { Int::cong_ofnat(a.natAbs_mul(b)) }
-
-theorem Int::abs_neg(self a: Int): (-a).abs() = a.abs() { Int::cong_ofnat(a.natAbs_neg()) }
-
-// a < b scaled by a positive k: (a + 1)·k ≤ b·k and the extra k is positive.
-theorem Int::mul_lt_mono_r(self a, b, k: Int, h: a < b, hk: OfNat(0) < k): a * k < b * k {
-    let grown = a.isucc().mul_le_mono_r(b, k, h, omega);
-    let flip = a.isucc().mul_comm(k);
-    let step = k.mul_isucc(a);
-    let back = a.mul_comm(k);
-    omega
-}
-
-// ---------------------------------------------------------------------------
 // Absolute value: the numerator's, over the same denominator.
 
 fn Rat::abs(self x: Rat) → Rat { Rat(x.num.abs(), x.den) }
@@ -790,8 +669,8 @@ theorem Rat::mul_pos(x, y: Rat, hx: Rat::zero() < x, hy: Rat::zero() < y): Rat::
 
 // ---------------------------------------------------------------------------
 // Archimedean facts. `inv_succ(n)` is 1/(n+1), the step size the regular
-// Cauchy-sequence probes measure distances in; its denominator is positive
-// by construction, so no side condition rides along.
+// Cauchy-sequence probes measure distances in; its denominator is a `Succ`,
+// so its positivity computes and no side condition rides along.
 
 fn Rat::inv_succ(n: Nat) → Rat { Rat(OfNat(1), Succ(n)) }
 
