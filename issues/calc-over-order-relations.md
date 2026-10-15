@@ -1,6 +1,6 @@
 ---
 title: calc chains over Le/Lt and mixed relations
-status: open
+status: closed
 labels: [frontend,proofs,design]
 created: 2026-08-18
 updated: 2026-10-15
@@ -12,3 +12,4 @@ Residue of [[calc-equational-chains]] (decided out of scope there, 2026-08-18; s
 
 - 2026-10-14: Trigger hit: `two_halves_close` in docs/showcase/rat_client.hthr ([[rational-order-completion]]) is a three-step `≤` chain (`dist_triangle`, then `≈` into `half + half`, then `inv_succ_half`), written as nested `Rat::le_trans`/`Rat::le_respects`. The mixed lemmas now exist at `Rat` (`lt_of_lt_of_le`, `lt_of_le_of_lt`, `le_respects`, `lt_respects`), and `Rat` registers `Transitive` for both `Rat::Le` (via `Preorder`) and `Rat::Lt`.
 - 2026-10-15: Rat style review (PR #42): after making the order transports' endpoints implicit, what is left of `dist_triangle` and `abs_triangle` is exactly 'rewrite each side by ≈, then chain ≤', which an order calc would state as the textbook proof.
+- 2026-10-15: Built (docs/calc-order-chains.md). Steps may use =, ≈, <= or <; adjacent pairs fold through relation_props helpers: = transports, a repeated relation uses Transitive, two different relations use the new Trans<A>(R, S, T) class with the stronger relation as result, named by the parser. Rat registers its six mixed pairs; Nat and Int get Transitive for < and the two <=/< pairs in order.hthr. Rat::dist_triangle, abs_triangle's lower bound and the showcase's two_halves_close are calc chains now.

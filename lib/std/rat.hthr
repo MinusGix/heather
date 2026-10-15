@@ -412,6 +412,32 @@ instance Transitive<Rat>(Rat::Lt) {
     rel_trans := λ x y z hxy hyz => Rat::lt_trans(hxy, hyz),
 }
 
+// The mixed pairs a `calc` chain composes: `<` absorbs `<=` on either side,
+// and `≈` is absorbed by either order.
+instance Trans<Rat>(Rat::Le, Rat::Lt, Rat::Lt) {
+    rel_chain := λ x y z hxy hyz => Rat::lt_of_le_of_lt(hxy, hyz),
+}
+
+instance Trans<Rat>(Rat::Lt, Rat::Le, Rat::Lt) {
+    rel_chain := λ x y z hxy hyz => Rat::lt_of_lt_of_le(hxy, hyz),
+}
+
+instance Trans<Rat>(Rat::Same, Rat::Le, Rat::Le) {
+    rel_chain := λ x y z hxy hyz => Rat::le_trans(Rat::le_of_same(hxy), hyz),
+}
+
+instance Trans<Rat>(Rat::Le, Rat::Same, Rat::Le) {
+    rel_chain := λ x y z hxy hyz => Rat::le_trans(hxy, Rat::le_of_same(hyz)),
+}
+
+instance Trans<Rat>(Rat::Same, Rat::Lt, Rat::Lt) {
+    rel_chain := λ x y z hxy hyz => Rat::lt_of_le_of_lt(Rat::le_of_same(hxy), hyz),
+}
+
+instance Trans<Rat>(Rat::Lt, Rat::Same, Rat::Lt) {
+    rel_chain := λ x y z hxy hyz => Rat::lt_of_lt_of_le(hxy, Rat::le_of_same(hyz)),
+}
+
 // ---------------------------------------------------------------------------
 // Order and the additive structure.
 
@@ -553,7 +579,11 @@ theorem Rat::neg_abs_le(self x: Rat): -x.abs() <= x {
 theorem Rat::abs_triangle(self x, y: Rat): (x + y).abs() <= x.abs() + y.abs() {
     let upper = Rat::add_le_mono(x.le_abs(), y.le_abs());
     let lower = Rat::add_le_mono(x.neg_abs_le(), y.neg_abs_le());
-    Rat::abs_le(Rat::le_respects(Rat::same_sym(x.abs().neg_add(y.abs())), (x + y).same_refl(), lower), upper)
+    let below = calc {
+        -(x.abs() + y.abs()) ≈ -x.abs() + -y.abs() := x.abs().neg_add(y.abs()),
+        <= x + y := lower,
+    };
+    Rat::abs_le(below, upper)
 }
 
 // ---------------------------------------------------------------------------
@@ -681,8 +711,10 @@ theorem Rat::sub_add_sub(self x, y, z: Rat): (x -y) + (y -z) ≈ x -z {
 }
 
 theorem Rat::dist_triangle(self x, y, z: Rat): (x -z).abs() <= (x -y).abs() + (y -z).abs() {
-    Rat::le_respects(Rat::abs_respects(x.sub_add_sub(y, z)), ((x -y).abs() + (y -z).abs()).same_refl(),
-        (x -y).abs_triangle(y -z))
+    calc {
+        (x -z).abs() ≈ ((x -y) + (y -z)).abs() := Rat::abs_respects(Rat::same_sym(x.sub_add_sub(y, z))),
+        <= (x -y).abs() + (y -z).abs() := (x -y).abs_triangle(y -z),
+    }
 }
 
 instance(x, y: Rat) Decide<Rat::Le(x, y)> {

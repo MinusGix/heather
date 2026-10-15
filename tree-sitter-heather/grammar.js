@@ -469,16 +469,15 @@ module.exports = grammar({
 
     quote_expression: $ => seq('code', $.block),
     splice_expression: $ => prec(PREC.PREFIX, seq('$', choice($.identifier, seq('{', $._expression, '}')))),
-    // The compiler accepts homogeneous identity and setoid chains.
-    calc_expression: $ => seq('calc', '{', choice(
-      seq($.calc_first_step, repeat(seq(',', $.calc_next_step))),
-      seq(alias($._calc_relational_first_step, $.calc_first_step),
-        repeat(seq(',', alias($._calc_relational_next_step, $.calc_next_step)))),
-    ), optional(','), '}'),
-    calc_first_step: $ => seq($._expression, '=', $._expression, ':=', $._expression),
-    calc_next_step: $ => seq('=', $._expression, ':=', $._expression),
-    _calc_relational_first_step: $ => seq($._expression, '≈', $._expression, ':=', $._expression),
-    _calc_relational_next_step: $ => seq('≈', $._expression, ':=', $._expression),
+    // Each step names its relation; the compiler composes mixed `=`, `≈`,
+    // `<=` and `<` steps (docs/calc-order-chains.md).
+    calc_expression: $ => seq('calc', '{',
+      $.calc_first_step, repeat(seq(',', $.calc_next_step)),
+      optional(','), '}'),
+    // The relation is an inline choice, not a hidden rule: a rule would need
+    // a reduction right after the token, where the comparison rung shifts.
+    calc_first_step: $ => seq($._expression, choice('=', '≈', '<=', '<'), $._expression, ':=', $._expression),
+    calc_next_step: $ => seq(choice('=', '≈', '<=', '<'), $._expression, ':=', $._expression),
     apply_expression: $ => prec.right(seq(
       'apply', field('function', $._expression), ';',
       repeat(seq('give', field('argument', $._expression), ';')),

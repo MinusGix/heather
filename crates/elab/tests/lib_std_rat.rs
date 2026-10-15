@@ -14,7 +14,10 @@
 //!     bound needs a positive argument;
 //!  5. the denominator's positivity (`issues/retire-shifted-pos.md`): a zero
 //!     or unproved denominator is refused, a local fact or a product of
-//!     denominators is found.
+//!     denominators is found;
+//!  6. `calc` over `<=` and `<` (`issues/calc-over-order-relations.md`):
+//!     mixed chains prove the strongest relation they use, and nothing
+//!     stronger.
 
 use std::cell::OnceCell;
 use std::sync::Mutex;
@@ -286,6 +289,81 @@ fn equal_fractions_share_a_numerator_sign() {
                 Rat::num_pos_of_same(h, hx)
             }}"
         ),
+    );
+}
+
+/// `calc` over `<=` and `<` (`issues/calc-over-order-relations.md`): each
+/// adjacent pair composes by its own lemma, so a chain may mix `=`, `≈`,
+/// `<=` and `<`, and the chain proves the strongest relation it used.
+#[test]
+fn order_calc_chains_mix_relations() {
+    let mut e = base();
+    check(
+        &mut e,
+        "rat_order_calc",
+        &format!(
+            "{IMPORTS} import order;
+            theorem le3(x, y, z, w: Rat, a: x <= y, b: y <= z, c: z <= w): x <= w {{
+                calc {{ x <= y := a, <= z := b, <= w := c }}
+            }}
+            theorem lt3(x, y, z, w: Rat, a: x < y, b: y < z, c: z < w): x < w {{
+                calc {{ x < y := a, < z := b, < w := c }}
+            }}
+            theorem mixed(x, y, z, w: Rat, a: x ≈ y, b: y < z, c: z <= w): x < w {{
+                calc {{ x ≈ y := a, < z := b, <= w := c }}
+            }}
+            theorem same_last(x, y, z: Rat, a: x <= y, b: y ≈ z): x <= z {{
+                calc {{ x <= y := a, ≈ z := b }}
+            }}
+            theorem eqs(x, y, z, w: Rat, a: x = y, b: y < z, c: z = w): x < w {{
+                calc {{ x = y := a, < z := b, = w := c }}
+            }}
+            theorem refl_step(x, y: Rat, a: x + Rat::zero() <= y): x + Rat::zero() <= y {{
+                calc {{ x + Rat::zero() = x + Rat::zero() := refl, <= y := a }}
+            }}
+            theorem one(x, y: Rat, a: x < y): x < y {{ calc {{ x < y := a }} }}
+            theorem nat_mixed(x, y, z, w: Nat, a: x < y, b: y <= z, c: z < w): x < w {{
+                calc {{ x < y := a, <= z := b, < w := c }}
+            }}
+            theorem int_mixed(x, y, z: Int, a: x <= y, b: y < z): x < z {{
+                calc {{ x <= y := a, < z := b }}
+            }}"
+        ),
+    );
+    // Two `<=` steps do not make a `<`.
+    refused(
+        "rat_calc_le_le_is_not_lt",
+        &format!(
+            "{IMPORTS} theorem bad(x, y, z: Rat, a: x <= y, b: y <= z): x < z {{
+                calc {{ x <= y := a, <= z := b }}
+            }}"
+        ),
+    );
+    // A step's written relation is checked against its proof ...
+    refused(
+        "rat_calc_le_proof_at_lt_step",
+        &format!(
+            "{IMPORTS} theorem bad(x, y, z: Rat, a: x <= y, b: y <= z): x <= z {{
+                calc {{ x <= y := a, < z := b }}
+            }}"
+        ),
+    );
+    // ... and so is every written endpoint, a single step's included.
+    refused(
+        "rat_calc_wrong_endpoint",
+        &format!(
+            "{IMPORTS} theorem bad(x, y: Rat, a: x <= y): x <= y {{ calc {{ x <= x := a }} }}"
+        ),
+    );
+    // A pair the carrier does not register is a missing instance: two bare
+    // local relations have no `Trans` between them.
+    refused(
+        "calc_unregistered_pair",
+        "import relation_props;
+            theorem bad<A>(le as <=: A → A → Type, lt as <: A → A → Type,
+                x, y, z: A, a: x <= y, b: y < z): x < z {
+                calc { x <= y := a, < z := b }
+            }",
     );
 }
 

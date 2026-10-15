@@ -162,3 +162,25 @@ theorem relation_exact<A>(R: A → A → Type, a, b: A, proof: R(a, b)): R(a, b)
 theorem relation_step<A: Transitive(R)>(R: A → A → Type,
     a, b, c: A, first: R(a, b), rest: R(b, c)): R(a, c)
 { A.rel_trans(a, b, c, first, rest) }
+
+// Mixed chains (`calc { a <= b := p, < c := q }`). A step whose relation
+// differs from the rest of the chain's composes through `Trans`, resolved per
+// adjacent pair exactly as `+` resolves through the operator ladder; the
+// parser picks the result relation (the stronger of the two, `≈` < `<=` <
+// `<`), so `T` is never inferred. A homogeneous pair keeps `Transitive`, and
+// an `=` step needs no class: it transports along the identity.
+class Trans<A>(R: A → A → Type, S: A → A → Type, T: A → A → Type) {
+    rel_chain: (x, y, z: A) → R(x, y) → S(y, z) → T(x, z),
+}
+
+theorem relation_trans<A: Trans(R, S, T)>(R, S, T: A → A → Type,
+    a, b, c: A, first: R(a, b), rest: S(b, c)): T(a, c)
+{ A.rel_chain(a, b, c, first, rest) }
+
+theorem relation_eq_l<A>(R: A → A → Type,
+    a, b, c: A, first: a = b, rest: R(b, c)): R(a, c)
+{ j(sym(first), λ y q => R(y, c), rest) }
+
+theorem relation_eq_r<A>(R: A → A → Type,
+    a, b, c: A, first: R(a, b), rest: b = c): R(a, c)
+{ j(rest, λ y q => R(a, y), first) }

@@ -276,6 +276,28 @@ type R<T> = Result<T, ParseError>;
 const SITE_EXPR_TYARGS: u8 = 1 << 4;
 const SITE_TY_NAMED: u8 = 1 << 5;
 
+/// A calc step's relation, ordered by strength: composing two steps yields
+/// the stronger (`=` < `≈` < `<=` < `<`), which is what the mixed lemmas
+/// prove (`<` absorbs `<=`, either order absorbs `≈`, `=` transports).
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+enum CalcRel {
+    Eq,
+    Same,
+    Le,
+    Lt,
+}
+
+impl CalcRel {
+    fn symbol(self) -> &'static str {
+        match self {
+            CalcRel::Eq => "=",
+            CalcRel::Same => "≈",
+            CalcRel::Le => "<=",
+            CalcRel::Lt => "<",
+        }
+    }
+}
+
 /// `trans(p, q, a := …, b := …, c := …)` — one `calc` step
 /// (docs/named-arguments-design.md). Separate from [`named_call`] because the
 /// endpoints are named rather than positional; see `calc_expr` for why.
@@ -5157,30 +5179,55 @@ impl Parser {
         })
     }
 
+    /// One calc step's relation token.
+    fn calc_relation(&mut self) -> R<CalcRel> {
+        let rel = match self.peek() {
+            TokKind::Approx => CalcRel::Same,
+            TokKind::LtEq => CalcRel::Le,
+            TokKind::Lt => CalcRel::Lt,
+            TokKind::EqEq => {
+                self.expect_eq("calc step")?;
+                unreachable!("`==` is refused by expect_eq")
+            }
+            TokKind::Eq => CalcRel::Eq,
+            _ => {
+                return self.err("a calc step relation: `=`, `≈`, `<=` or `<`".to_string());
+            }
+        };
+        self.bump();
+        Ok(rel)
+    }
+
     /// `calc { e0 = e1 := p1 (, = e_i := p_i)* ,? }` — an equational chain
     /// (surface-v1 §1). Desugars to a right-nested `@trans` over the step
     /// proofs, carrying the step terms as the *explicit* endpoints so that
     /// `refl` steps still receive a checking type. Proves `e0 = e_last`;
-    /// a single identity step is just its proof. Homogeneous `≈` chains use
-    /// the locally selected relation and ordinary `relation_props` helpers;
-    /// their endpoints are checked even for a single step.
+    /// a single identity step is just its proof.
+    ///
+    /// A step may instead be written with `≈`, `<=` or `<`
+    /// (issues/calc-over-order-relations.md). Such a chain is relational: it
+    /// folds through the ordinary `relation_props` helpers with every
+    /// endpoint passed explicitly, so each is checked, even in a single
+    /// step. Adjacent steps compose by their pair: the same relation through
+    /// `Transitive` (`relation_step`), an `=` beside anything by transport
+    /// (`relation_eq_l`/`_r`, no class), and two different relations through
+    /// a `Trans` instance (`relation_trans`) whose result is the stronger of
+    /// the two in `≈` < `<=` < `<`. The parser names that result, so
+    /// resolution only looks the pair up; a pair the carrier does not
+    /// register is a missing instance, reported at the elaborator.
     fn calc_expr(&mut self) -> R<Expr> {
         let start = self.peek_span();
         self.bump(); // `calc`
         self.expect(&TokKind::LBrace, "`{`")?;
-        // The chain: terms[i] are the endpoints, proofs[i] : terms[i] = terms[i+1].
+        // The chain: terms[i] are the endpoints, proofs[i] : terms[i] rels[i] terms[i+1].
         // The first step carries both endpoints (`e0 = e1 := p1`); later steps
         // reuse the previous right endpoint (`= e_{i+1} := p_{i+1}`).
-        // Endpoints are read with `=` suppressed: here it is the step
-        // separator, not the identity type (docs/surface-universe.md §13).
+        // Endpoints are read with the comparison rung suppressed: here `=`,
+        // `≈`, `<=` and `<` are step separators, not the comparison types
+        // (docs/surface-universe.md §13).
         let mut terms = vec![self.with_eq(true, |p| p.expr())?];
         let mut proofs = Vec::new();
-        let relational = matches!(self.peek(), TokKind::Approx);
-        if relational {
-            self.bump();
-        } else {
-            self.expect_eq("calc step")?;
-        }
+        let mut rels = vec![self.calc_relation()?];
         loop {
             terms.push(self.with_eq(true, |p| p.expr())?);
             self.expect(&TokKind::ColonEq, "`:=` (calc step proof)")?;
@@ -5192,23 +5239,16 @@ impl Parser {
             if matches!(self.peek(), TokKind::RBrace) {
                 break; // trailing comma
             }
-            if relational {
-                self.expect(
-                    &TokKind::Approx,
-                    "`≈` (all steps in this calc must use the same relation)",
-                )?;
-            } else {
-                self.expect_eq("calc step")?;
-            }
+            rels.push(self.calc_relation()?);
         }
         let end = self.expect(&TokKind::RBrace, "`}`")?;
         let span = start.join(end);
-        // Fold right: acc proves terms[i+1] = e_last; prepend step i.
+        // Fold right: acc proves terms[i+1] acc_rel e_last; prepend step i.
         let m = proofs.len();
-        if relational {
-            let relation = Expr {
+        if rels.iter().any(|r| *r != CalcRel::Eq) {
+            let relation = |r: CalcRel| Expr {
                 kind: ExprKind::OpSymbol {
-                    symbol: "≈".to_string(),
+                    symbol: r.symbol().to_string(),
                     fixity: OpFixity::Infix,
                 },
                 span,
@@ -5226,27 +5266,47 @@ impl Parser {
                 },
                 span,
             };
-            let mut acc = call(
-                "relation_props::relation_exact",
-                vec![
-                    relation.clone(),
-                    terms[m - 1].clone(),
-                    terms[m].clone(),
-                    proofs[m - 1].clone(),
-                ],
-            );
-            for i in (0..m - 1).rev() {
-                acc = call(
-                    "relation_props::relation_step",
+            let last = &terms[m];
+            let mut acc_rel = rels[m - 1];
+            let mut acc = if acc_rel == CalcRel::Eq {
+                proofs[m - 1].clone()
+            } else {
+                call(
+                    "relation_props::relation_exact",
                     vec![
-                        relation.clone(),
-                        terms[i].clone(),
-                        terms[i + 1].clone(),
-                        terms[m].clone(),
-                        proofs[i].clone(),
-                        acc,
+                        relation(acc_rel),
+                        terms[m - 1].clone(),
+                        last.clone(),
+                        proofs[m - 1].clone(),
                     ],
-                );
+                )
+            };
+            for i in (0..m - 1).rev() {
+                let (a, b, c) = (terms[i].clone(), terms[i + 1].clone(), last.clone());
+                let step = rels[i];
+                let p = proofs[i].clone();
+                acc = match (step, acc_rel) {
+                    (CalcRel::Eq, CalcRel::Eq) => {
+                        trans_call(vec![p, acc], vec![("a", a), ("b", b), ("c", c)], span)
+                    }
+                    (CalcRel::Eq, r) => call(
+                        "relation_props::relation_eq_l",
+                        vec![relation(r), a, b, c, p, acc],
+                    ),
+                    (r, CalcRel::Eq) => call(
+                        "relation_props::relation_eq_r",
+                        vec![relation(r), a, b, c, p, acc],
+                    ),
+                    (r, s) if r == s => call(
+                        "relation_props::relation_step",
+                        vec![relation(r), a, b, c, p, acc],
+                    ),
+                    (r, s) => call(
+                        "relation_props::relation_trans",
+                        vec![relation(r), relation(s), relation(r.max(s)), a, b, c, p, acc],
+                    ),
+                };
+                acc_rel = acc_rel.max(step);
             }
             return Ok(acc);
         }
@@ -6332,6 +6392,72 @@ mod tests {
         assert!(!iexpl);
         assert_eq!(calc_endpoint(&args[1].kind, "a"), "b");
         assert_eq!(calc_endpoint(&args[1].kind, "c"), "d");
+    }
+
+    /// The relation symbol an order calc passes as argument `i`.
+    fn calc_relation_arg(args: &[Expr], i: usize) -> &str {
+        let ExprKind::OpSymbol { symbol, .. } = &args[i].kind else {
+            panic!("expected a relation symbol, got {:?}", args[i].kind)
+        };
+        symbol.as_str()
+    }
+
+    /// Two different relations meet at a `Trans` instance named by the pair
+    /// and the stronger result; the same relation keeps `Transitive`.
+    /// `calc { a <= b := p1, < c := p2, < d := p3 }` ⇒
+    /// `relation_trans(<=, <, <, a, b, d, p1, relation_step(<, b, c, d, p2,
+    /// relation_exact(<, c, d, p3)))`.
+    #[test]
+    fn calc_order_steps_compose_by_pair() {
+        let k = body("calc { a <= b := p1, < c := p2, < d := p3 }");
+        let (head, args, _) = as_call(&k);
+        assert_eq!(head, "relation_props::relation_trans");
+        assert_eq!(
+            [0, 1, 2].map(|i| calc_relation_arg(args, i)),
+            ["<=", "<", "<"],
+            "the pair and the stronger result",
+        );
+        let ends: Vec<_> = args[3..6]
+            .iter()
+            .map(|e| match &e.kind {
+                ExprKind::Var(v) => v.as_str(),
+                other => panic!("expected an endpoint, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(ends, ["a", "b", "d"]);
+        let (inner, iargs, _) = as_call(&args[7].kind);
+        assert_eq!(inner, "relation_props::relation_step");
+        assert_eq!(calc_relation_arg(iargs, 0), "<");
+        let (last, _, _) = as_call(&iargs[5].kind);
+        assert_eq!(last, "relation_props::relation_exact");
+    }
+
+    /// An `=` step beside a relation transports rather than asking for an
+    /// instance, on either side; a single order step still checks its
+    /// endpoints.
+    #[test]
+    fn calc_eq_steps_transport_in_an_order_chain() {
+        let k = body("calc { a = b := p1, <= c := p2, = d := p3 }");
+        let (head, args, _) = as_call(&k);
+        assert_eq!(head, "relation_props::relation_eq_l");
+        assert_eq!(calc_relation_arg(args, 0), "<=");
+        let (inner, iargs, _) = as_call(&args[5].kind);
+        assert_eq!(inner, "relation_props::relation_eq_r");
+        assert_eq!(calc_relation_arg(iargs, 0), "<=");
+        // The trailing `=` proof is passed bare, checked at `c = d`.
+        assert!(matches!(&iargs[5].kind, ExprKind::Var(v) if v == "p3"));
+        let single = body("calc { a < b := p }");
+        let (one, oargs, _) = as_call(&single);
+        assert_eq!(one, "relation_props::relation_exact");
+        assert_eq!(calc_relation_arg(oargs, 0), "<");
+    }
+
+    #[test]
+    fn calc_step_needs_a_relation() {
+        let msg = parse_file("fn f(n: Nat) -> Nat { calc { a <= b := p, + c := q } }")
+            .unwrap_err()
+            .msg;
+        assert!(msg.contains("calc step relation"), "{msg}");
     }
 
     /// The variable a `calc`-emitted `trans` pins at the named endpoint `which`.
