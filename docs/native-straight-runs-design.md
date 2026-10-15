@@ -226,6 +226,35 @@ and the open's request (`open_path`, a stretch of one block whose leaf makes
 the system call). Their continuations (`StdinAt`, `OpenAt`) take a framed
 state, so they no longer close over the starting frame.
 
+Then the phases whose continuations closed over the starting frame, once
+those continuations took a frame:
+
+- The name's scan (`name_scan`, replacing `NameEnd`, `name_test_block`,
+  `name_load` and `name_len_block`): recursive over the name, one five-item
+  stretch per byte ending at its back jump. The byte read is `NameReads`
+  (each byte up to the cursor is known and not NUL) and the end is
+  `NameFound`; the stretch's leaf at the back jump recurses one byte on.
+- The name's write (`name_send`, replacing `name_copy_block`): two
+  stretches, the copy (three items) and the found label (one item, then the
+  write's system call). Its continuation is a `FramedWrite`, a write stated
+  for every frame the caller's vars hold in, rather than over one image;
+  `named_runs` hands its close and newline writes on the same way.
+- The read's failure (`read_failed`): one five-item stretch to its jump.
+- The loop's cursor (`loop_cursor`): one four-item stretch, then the
+  cursor's own phase. It is written in continuation-passing style, ending
+  in a `CursorGoes` the caller supplies, so `operand_step` and the empty
+  list's arm of `operand_loop` are its continuations rather than terms that
+  rebuild its end state.
+
+Not moved, tried: `init_runs` as one stretch of its twenty-one items. It
+took more than twice the kernel steps of the hand-threaded chain, for the
+same reason as the first dash test: one long stretch nests every later
+item's obligation inside the earlier ones, and the elaborator unfolds the
+whole of it at every constructor. A stretch pays when it is a few items
+long; `init_runs` would need splitting at its labels first.
+`inputs_runs` is composition of other phases, with no code of its own to
+move.
+
 ## Not yet
 
 - Byte stores (`Code(byte_store_bytes(…))`) and the page: the row's. A
@@ -234,5 +263,6 @@ state, so they no longer close over the starting frame.
   is carried.
 - A system call ends a stretch: `closes_runs` still runs its JCCs with the
   `Runs` rules before `linux_runs_close`.
-- The other `Runs` phases (`total_runs`, the prologue, the spill) and the
-  phases whose continuations close over the starting frame.
+- The other `Runs` phases (`total_runs`, the prologue, the spill,
+  `init_runs`) and the row's tail (`named_runs`, `unnamed_runs`), which
+  needs the byte stores above.
