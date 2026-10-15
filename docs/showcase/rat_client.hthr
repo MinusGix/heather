@@ -12,7 +12,6 @@ import nat;
 import int;
 import list;
 import omega;
-import pos;
 import rat;
 import relation_props;
 import algebra_rel;
@@ -20,8 +19,8 @@ import algebra_rel;
 // Cancel a pair inside a sum: `rel_cong` carries `y + -y ≈ 0` under `x + _`.
 theorem cancel_inside(x, y: Rat): x + (y + -y) ≈ x {
     calc {
-        x + (y + -y) ≈ x + Rat::zero() := rel_cong(Rat::add_neg(y)),
-        ≈ x := Rat::add_zero(x),
+        x + (y + -y) ≈ x + Rat::zero() := rel_cong(y.add_neg()),
+        ≈ x := x.add_zero(),
     }
 }
 
@@ -29,26 +28,25 @@ theorem cancel_inside(x, y: Rat): x + (y + -y) ≈ x {
 // last two steps commuting a product inside a sum.
 theorem distr_right(x, y, z: Rat): (x + y) * z ≈ x * z + y * z {
     calc {
-        (x + y) * z ≈ z * (x + y) := Rat::mul_comm(x + y, z),
-        ≈ z * x + z * y := Rat::mul_add_distr(z, x, y),
-        ≈ x * z + z * y := rel_cong(Rat::mul_comm(z, x)),
-        ≈ x * z + y * z := rel_cong(Rat::mul_comm(z, y)),
+        (x + y) * z ≈ z * (x + y) := (x + y).mul_comm(z),
+        ≈ z * x + z * y := z.mul_add_distr(x, y),
+        ≈ x * z + z * y := rel_cong(z.mul_comm(x)),
+        ≈ x * z + y * z := rel_cong(z.mul_comm(y)),
     }
 }
 
 // Division by a nonzero rational undoes multiplication by it.
 theorem mul_inv_cancel(x, y: Rat, nonzero: ¬(x ≈ Rat::zero())): (y * x) * x.inv() ≈ y {
     calc {
-        (y * x) * x.inv() ≈ y * (x * x.inv()) := Rat::mul_assoc(y, x, x.inv()),
-        ≈ y * Rat::one() := rel_cong(Rat::mul_inv(x, nonzero)),
-        ≈ y := Rat::mul_one(y),
+        (y * x) * x.inv() ≈ y * (x * x.inv()) := y.mul_assoc(x, x.inv()),
+        ≈ y * Rat::one() := rel_cong(x.mul_inv(nonzero)),
+        ≈ y := y.mul_one(),
     }
 }
 
 // Order facts move along `≈` on either side.
 theorem le_across(x, x2, y: Rat, same: x ≈ x2, h: x <= y): x2 <= y + Rat::zero() {
-    Rat::le_respects(x, x2, same, y, y + Rat::zero(),
-        Rat::same_sym(y + Rat::zero(), y, Rat::add_zero(y)), h)
+    Rat::le_respects(same, Rat::same_sym(y.add_zero()), h)
 }
 
 // The estimate a regular Cauchy sequence chains: two points each within
@@ -60,24 +58,20 @@ theorem two_halves_close(x, y, z: Rat, n: Nat,
     (x -z).abs() <= Rat::inv_succ(n)
 {
     let half = Rat::inv_succ(n + n + 1);
-    let hz2 = Rat::le_respects((z -y).abs(), (y -z).abs(), Rat::abs_sub_comm(z, y), half, half, Rat::same_refl(half), hz);
-    Rat::le_trans((x -z).abs(), (x -y).abs() + (y -z).abs(), Rat::inv_succ(n),
-        Rat::dist_triangle(x, y, z),
-        Rat::le_respects((x -y).abs() + (y -z).abs(), (x -y).abs() + (y -z).abs(),
-            Rat::same_refl((x -y).abs() + (y -z).abs()),
-            half + half, Rat::inv_succ(n), Rat::inv_succ_half(n),
-            Rat::add_le_mono((x -y).abs(), half, (y -z).abs(), half, hx, hz2)))
+    let hz2 = Rat::le_respects(z.abs_sub_comm(y), half.same_refl(), hz);
+    let sum = Rat::add_le_mono(hx, hz2);
+    Rat::le_trans(x.dist_triangle(y, z), Rat::le_respects(((x -y).abs() + (y -z).abs()).same_refl(), Rat::inv_succ_half(n), sum))
 }
 
 // A gap x < y places any z above x or below y: cotransitivity, the form of
 // trichotomy a constructive real keeps.
-theorem apart_or_close(x, y, z: Rat, h: x < y): x < z ∨ z < y { Rat::lt_cotrans(x, y, z, h) }
+theorem apart_or_close(x, y, z: Rat, h: x < y): x < z ∨ z < y { x.lt_cotrans(y, z, h) }
 
 // ---------------------------------------------------------------------------
 // The representation boundary.
 
-fn half() → Rat { Rat(OfNat(1), Pos(1)) }
-fn two_quarters() → Rat { Rat(OfNat(2), Pos(3)) }
+fn half() → Rat { Rat(OfNat(1), 2) }
+fn two_quarters() → Rat { Rat(OfNat(2), 4) }
 
 // Cross-multiplication decides this by computation: 1·4 = 2·2.
 theorem half_same(): half() ≈ two_quarters() { refl }
@@ -92,7 +86,7 @@ theorem half_not_identical(): half() ≠ two_quarters() {
 
 // So the denominator is an observation of the representation, not of the
 // number: no theorem can make it respect `≈`.
-theorem den_not_invariant(): ¬((x, y: Rat) → x ≈ y → x.den.val() = y.den.val()) {
+theorem den_not_invariant(): ¬((x, y: Rat) → x ≈ y → x.den = y.den) {
     λ invariant => Nat::succ_ne_zero(0,
-        Nat::succ_inj(1, 0, invariant(Rat(OfNat(2), Pos(1)), Rat(OfNat(1), Pos(0)), refl)))
+        Nat::succ_inj(1, 0, invariant(Rat(OfNat(2), 2), Rat(OfNat(1), 1), refl)))
 }

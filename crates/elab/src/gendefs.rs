@@ -3697,6 +3697,34 @@ impl Elaborator {
         self.types.gdefs().key_for_abs(&abs).copied()
     }
 
+    /// A named field read `D#projⱼ(ā, v)` (`register_rec_projs`) as the
+    /// inline walk it stands for: the projections `fst(sndʲ⁺¹ v)`, outermost
+    /// first with `true` for `fst` (entry 0 of the spine is the tag, as
+    /// [`crate::inductive::project_field`] lays it out), and the receiver `v`.
+    /// The arithmetic readers (`ring`, `omega`) read a field off a call that
+    /// computes to a constructor through either spelling, so a record whose
+    /// spine is dependent (`den: Pos<Nat>` and its `den_pos`) reads as one
+    /// whose spine is not.
+    pub(crate) fn named_field_read<'t>(&self, tm: &'t Term) -> Option<(Vec<bool>, &'t Rc<Term>)> {
+        let (head, args) = crate::spelling::app_spine(tm);
+        let Term::GlobalTm { var, subst } = head else {
+            return None;
+        };
+        if !subst.terms.is_empty() {
+            return None;
+        }
+        let Some(GenDef::RecProj(tag, field)) = self.gen_def_of(*var) else {
+            return None;
+        };
+        let record = self.types.by_tag(tag)?;
+        if args.len() != record.params.len() + record.valparams.len() + 1 {
+            return None;
+        }
+        let mut path = vec![true];
+        path.extend(std::iter::repeat_n(false, field + 1));
+        Some((path, args.last()?))
+    }
+
     /// How far a `meta fn`'s Ψ-extending binders push the committed bindings
     /// out, mirroring `resolve`'s `meta_off` (`lib.rs`). Zero everywhere else.
     fn meta_offset(&self) -> u32 {

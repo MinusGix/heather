@@ -31,3 +31,7 @@ go away.
 ## What it assumes from elsewhere
 
 - **[[omega-unfolds-defined-propositions]]** owns the one-level read.
+
+## Log
+
+- 2026-10-14: The repro's shape is gone with the shifted Pos ([[retire-shifted-pos]]): Rat::inv_succ(n).den is Succ(n), one projection, and both 'Rat::inv_succ(n).den.int() = OfNat(n) + OfNat(1)' and 'Rat::inv_succ(n).den = Succ(n)' now check by omega. A projection of a projection of a call is still unread in general; a new repro needs a record field holding a record. inv_succ_half keeps its refl lets because ring, not omega, consumes them (ring reads Nat::int(Succ(..)) as an atom).

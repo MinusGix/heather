@@ -3,7 +3,7 @@ title: A member under declaration shadows the same-named member reached through 
 status: closed
 labels: [frontend,elaboration,traits,ergonomics]
 created: 2026-09-18
-updated: 2026-09-22
+updated: 2026-10-15
 ---
 
 Declaring a member whose body reaches the same-named member of another type
@@ -30,3 +30,7 @@ it lands.
   committed global. `type_members` pins both halves and retains the existing
   cross-module ambiguity controls. The two library delegations are no longer
   required and can disappear with their surrounding API refactors.
+
+## Log
+
+- 2026-10-15: Residue: [[self-name-shadows-dot-call]]. The carrier check misses a member whose first explicit parameter is a proof (implicit endpoints), so `Rat::mul_le_mono_r` still clashes with `Int::mul_le_mono_r` in its own body.

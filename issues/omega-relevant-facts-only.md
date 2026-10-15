@@ -3,7 +3,7 @@ title: omega reflects every fact in scope; reflect only those connected to the g
 status: closed
 labels: [omega,performance,proofs]
 created: 2026-09-25
-updated: 2026-09-25
+updated: 2026-10-15
 ---
 
 `omega` reflects every fact in scope, whether or not it bears on the goal.
@@ -87,3 +87,4 @@ atom-free fact, since `1 < 0` in scope refutes anything.
   failure. The respelling repro in [[omega-respells-atoms-without-implicits]]
   now checks, and a goal that uses the misspelled atom still fails (that
   issue's). Design note: docs/certifying-arithmetic-substrate-design.md §1.
+- 2026-10-15: Follow-up: [[omega-fact-arguments]] proposes `omega(h…)`, which would also let a proof name exactly the facts omega reflects.

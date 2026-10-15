@@ -633,6 +633,14 @@ theorem Int::ofNat_add(m, n: Nat): OfNat(m + n) = OfNat(m) + OfNat(n) {
 
 theorem Int::ofNat_mul(m, n: Nat): OfNat(m * n) = OfNat(m) * OfNat(n) { refl }
 
+// A `Nat` read as an `Int`, as a call rather than the bare constructor:
+// `ring` and `omega` meet `n.int()` as one atom per `n`, which conversion
+// relates across spellings (`(-x).den.int()` is `x.den.int()`), and read one
+// whose value computes as its numeral. Neither does either for `OfNat(e)`.
+fn Nat::int(self n: Nat) → Int { OfNat(n) }
+
+theorem Nat::int_mul(self a, b: Nat): (a * b).int() = a.int() * b.int() { refl }
+
 theorem Int::mul_neg_one(self a: Int): a * NegSucc(0) = -a {
     apply trans;
     give a.mul_neg_r(OfNat(1));
@@ -1090,6 +1098,20 @@ theorem Int::mul_le_mono_l(self a, b, k: Int, h: a <= b, hk: OfNat(0) <= k): k *
         a.mul_le_mono_r(b, k, h, hk)))
 }
 
+// a < b scaled by a positive k: (a + 1)·k ≤ b·k, and (a + 1)·k is a·k + k,
+// which the extra k puts above a·k.
+theorem Int::mul_lt_mono_r(self a, b, k: Int, h: a < b, hk: OfNat(0) < k): a * k < b * k {
+    let grown = a.isucc().mul_le_mono_r(b, k, h, OfNat(0).le_of_lt(k, hk));
+    let expand = calc {
+        a * k + k
+            = k * a + k := cong(a.mul_comm(k)),
+            = k * a.isucc() := sym(k.mul_isucc(a)),
+            = a.isucc() * k := k.mul_comm(a.isucc()),
+    };
+    let step = j((a * k).add_one(), λ left q => left <= a * k + k, OfNat(1).add_le_mono_l(k, a * k, hk));
+    (a * k).isucc().le_trans(a.isucc() * k, b * k, j(expand, λ right q => (a * k).isucc() <= right, step), grown)
+}
+
 theorem Int::le_neg(self a: Int): (b: Int) → a <= b → -b <= -a {
     match a {
         OfNat(m) => λ b =>
@@ -1196,6 +1218,61 @@ theorem Int::ofNat_toNat(self a: Int): OfNat(0) <= a → OfNat(a.toNat()) = a {
         NegSucc(_) => false_elim(·),
     }
 }
+
+// ---------------------------------------------------------------------------
+// Absolute value.
+
+theorem Int::abs_cases(self a: Int): (OfNat(0) <= a ∧ a.abs() = a) ∨ (a < OfNat(0) ∧ a.abs() = -a) {
+    match a {
+        OfNat(_) => Inl(And(trivial, refl)),
+        NegSucc(n) => Inr(And(Int::negsucc_lt_ofnat(n, 0), refl)),
+    }
+}
+
+theorem Int::abs_nonneg(self a: Int): OfNat(0) <= a.abs() { trivial }
+
+theorem Int::le_abs(self a: Int): a <= a.abs() {
+    match a { OfNat(n) => OfNat(n).le_refl(), NegSucc(_) => trivial }
+}
+
+theorem Int::neg_le_abs(self a: Int): -a <= a.abs() {
+    match a {
+        OfNat(n) => match n { Zero => trivial, Succ(_) => trivial },
+        NegSucc(n) => OfNat(Succ(n)).le_refl(),
+    }
+}
+
+theorem Int::abs_of_nonneg(self a: Int): OfNat(0) <= a → a.abs() = a {
+    match a {
+        OfNat(_) => λ h => refl,
+        NegSucc(_) => false_elim(·),
+    }
+}
+
+theorem Int::natAbs_negOfNat(n: Nat): Int::negOfNat(n).natAbs() = n {
+    match n { Zero => refl, Succ(_) => refl }
+}
+
+theorem Int::natAbs_neg(self a: Int): (-a).natAbs() = a.natAbs() {
+    match a { OfNat(n) => Int::natAbs_negOfNat(n), NegSucc(_) => refl }
+}
+
+theorem Int::natAbs_mul(self a, b: Int): (a * b).natAbs() = a.natAbs() * b.natAbs() {
+    match a {
+        OfNat(m) => match b {
+            OfNat(_) => refl,
+            NegSucc(n) => Int::natAbs_negOfNat(m * Succ(n)),
+        },
+        NegSucc(m) => match b {
+            OfNat(n) => Int::natAbs_negOfNat(Succ(m) * n),
+            NegSucc(_) => refl,
+        },
+    }
+}
+
+theorem Int::abs_mul(self a, b: Int): (a * b).abs() = a.abs() * b.abs() { Int::cong_ofnat(a.natAbs_mul(b)) }
+
+theorem Int::abs_neg(self a: Int): (-a).abs() = a.abs() { Int::cong_ofnat(a.natAbs_neg()) }
 
 // ---------------------------------------------------------------------------
 
@@ -1600,3 +1677,43 @@ instance Default<Int> { default := OfNat(0) }
 instance Numeral<Int> { ofNat := OfNat }
 
 instance Cmp<Int> { le := Int::Le, le_refl := Int::le_refl, le_dec := Int::le_dec }
+
+// ---------------------------------------------------------------------------
+// Cancelling a positive factor (issues/cancellative-algebra-api.md): either
+// order of x and y would scale to a strict inequality the hypothesis denies.
+
+theorem Int::mul_cancel_pos_r(self x, y: Int, p: Pos<Int>, h: x * p = y * p): x = y {
+    match x.lt_trichotomy(y) {
+        Inl(lt) => false_elim((x * p).lt_irrefl()(j(sym(h), λ right q => x * p < right, x.mul_lt_mono_r(y, p, lt, p_pos)))),
+        Inr(rest) => match rest {
+            Inl(eq) => eq,
+            Inr(gt) => false_elim((y * p).lt_irrefl()(j(h, λ right q => y * p < right, y.mul_lt_mono_r(x, p, gt, p_pos)))),
+        },
+    }
+}
+
+theorem Int::mul_le_cancel_pos_r(self a, b: Int, p: Pos<Int>, h: a * p <= b * p): a <= b {
+    Int::le_of_not_lt(b, a, λ lt => (a * p).not_lt_of_ge(b * p, h)(b.mul_lt_mono_r(a, p, lt, p_pos)))
+}
+
+// ---------------------------------------------------------------------------
+// Signs of a product with a positive factor: the product has the other
+// factor's sign, and the other factor has the product's.
+
+theorem Int::mul_pos(self a: Int, p: Pos<Int>, ha: OfNat(0) < a): OfNat(0) < a * p {
+    j(p.zero_mul(), λ left q => left < a * p, OfNat(0).mul_lt_mono_r(a, p, ha, p_pos))
+}
+
+theorem Int::mul_neg(self a: Int, p: Pos<Int>, ha: a < OfNat(0)): a * p < OfNat(0) {
+    j(p.zero_mul(), λ right q => a * p < right, a.mul_lt_mono_r(OfNat(0), p, ha, p_pos))
+}
+
+theorem Int::pos_of_mul_pos(self a: Int, p: Pos<Int>, h: OfNat(0) < a * p): OfNat(0) < a {
+    OfNat(0).lt_of_not_le(a, λ le => (a * p).not_lt_of_ge(OfNat(0),
+        j(p.zero_mul(), λ right q => a * p <= right, a.mul_le_mono_r(OfNat(0), p, le, OfNat(0).le_of_lt(p, p_pos))))(h))
+}
+
+theorem Int::neg_of_mul_neg(self a: Int, p: Pos<Int>, h: a * p < OfNat(0)): a < OfNat(0) {
+    a.lt_of_not_le(OfNat(0), λ le => OfNat(0).not_lt_of_ge(a * p,
+        j(p.zero_mul(), λ left q => left <= a * p, OfNat(0).mul_le_mono_r(a, p, le, OfNat(0).le_of_lt(p, p_pos))))(h))
+}

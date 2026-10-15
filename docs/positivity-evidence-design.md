@@ -1,8 +1,9 @@
 # Positive values: a type, a hypothesis, or a binder
 
 Status: design proposal, 2026-10-10; route and spelling chosen the same day
-(§7). Round 1 landed (§9), the `positivity` tactic (§10), and the `Pos<A>`
-binder sugar (§11); the probes in §3 were run against master at f2deb85,
+(§7). Round 1 landed (§9), the `positivity` tactic (§10), the `Pos<A>`
+binder sugar (§11), and the shifted `Pos` is gone (§14; §1 describes it as it
+was); the probes in §3 were run against master at f2deb85,
 before any of them. Tracking issue:
 [positivity-evidence](../issues/positivity-evidence.md).
 
@@ -627,3 +628,93 @@ expected type, or every field written).
 Tests: `crates/elab/tests/pos_binder_sugar.rs` (member results, both kinds of
 parameterised record, constructor fields with literal, neutral, open-instance
 and recursive cases and their negative controls) and the parser's shape tests.
+
+## 14. As landed: the shifted `Pos` retired (2026-10-14)
+
+[retire-shifted-pos](../issues/retire-shifted-pos.md). `lib/std/pos.hthr` is
+deleted; `Pos` with no type argument now names nothing.
+
+**`Rat`.** `record Rat { num: Int, den: Pos<Nat> }`: the denominator is a
+plain `Nat` with `den_pos: 0 < den` beside it and the rule
+`Rat::den_positive`. A literal no longer lies: `Rat(OfNat(1), 2)` is ½.
+Constructions find their facts as §11 says: `ofInt` and `inv_succ` by
+computation (`1`, `Succ(n)`), `add` and `mul` through `Nat::mul_pos` over two
+`den_positive`s, `neg` and `abs` through `den_positive` alone. Cross-
+multiplication reads a denominator into `Int` as `x.den.int()`, where
+`Nat::int(n)` (in `int.hthr`) is `OfNat(n)`, a call rather than the bare
+constructor. That
+keeps one atom per denominator for `ring` and `omega` (which relate
+`(-x).den.int()` and `x.den.int()` by conversion), and lets a denominator that
+computes (`Rat::one().den.int()`) read as its numeral; neither reader does
+either for a bare `OfNat(e)`.
+
+What went, as §6 C predicted: `Pos::mul` and its `mul_val`/`mul_int`/
+`mul_comm_int`/`mul_assoc_int`/`mul_one_int` bridges. Their places are taken
+by `Nat`'s own laws (`x.den.mul_comm(y.den)` where `same_of_parts` now takes
+`x.den = y.den`) and by two `refl` facts in the spelling `ring` meets,
+`Rat::den_add` and `Rat::den_mul` (`(x + y).den.int() = x.den.int() *
+y.den.int()`). Positivity is no longer definitional, so the four places that
+used it say where it comes from: the cancellations take `y.den_pos`, and
+`mul_lt_mono_r` and `archimedean` bring a `den_pos` into scope for omega, and
+the numerator-sign lemmas pass one as `p_pos`.
+
+**The cancellation lemmas** move into `int.hthr`, after `Numeral<Int>`, as
+the issue spelled them: `Int::mul_cancel_pos_r(self x, y: Int, p: Pos<Int>, h:
+x * p = y * p)` and its `≤` twin, proved without omega through a new
+`Int::mul_lt_mono_r`. The `Int` absolute-value facts `Rat` uses
+(`abs_cases`, `le_abs`, `abs_mul`, …) move there too, rewritten as case splits
+where they had leaned on omega, so `rat.hthr` holds only rational facts. No
+rule reaches `0 < x.den.int()` (an `evidence theorem` lifting `0 < n` to
+`0 < OfNat(n)` is refused by the rule-size check), so the two calls in `Rat`
+name the fact, `p_pos := y.den_pos`, which converts. A literal factor's fact
+computes.
+
+**`ring` and `omega` read named field projections.** A record whose spine is
+dependent (a `Pos` field's fact mentions the field) registers named
+projections (`register_rec_projs`), so `x.num` is `Rat#proj(x)`, not the
+inline `fst(snd(x))` walk both readers looked for. A field of a call that
+computes to a constructor therefore stayed an atom, and every `Rat` law built
+on one (`(x * y).num` is `x.num * y.num`) failed.
+`Elaborator::named_field_read` maps a named read back to the walk it stands
+for; `ring`'s `project` and `omega`'s `field_as_put`/`projection_reduct` take
+either spelling, and atoms keep the spelling the goal wrote. No new
+inference route: the readers do on one more term shape what they already did.
+
+**Representation equality.** `=` on `Rat` now compares the `den_pos` proofs as
+well. Nothing in `lib/` uses it beyond the showcase's `half ≠ two_quarters`,
+which projects the numerators; the uniqueness lemma for `Nat::Le` proofs is
+not needed and not written.
+
+**Review follow-ups (2026-10-15).** Three cleanups from the PR review rode
+along; the other findings are filed as issues.
+
+- *Calling convention.* A `Rat` lemma whose every `Rat` is named by a
+  hypothesis takes its endpoints implicitly (`Rat::le_respects(hx, hy, h)`,
+  `Rat::le_trans(h1, h2)`, the `*_respects` family, the monotonicity laws whose
+  factor is fixed by a sign hypothesis). Every other lemma takes its first
+  `Rat` as `self` (`x.add_comm(y)`), matching `Int` and `Nat`. Instance fields
+  wrap the implicit ones in a lambda (`rel_trans := λ x y z h1 h2 =>
+  Rat::le_trans(h1, h2)`). One cost: a lemma whose first explicit parameter is
+  a proof no longer rules out its own name as a reading of a same-named dot call
+  on `Int`, so two bodies spell `Int::mul_le_mono_r(…)`
+  ([self-name-shadows-dot-call](../issues/self-name-shadows-dot-call.md)).
+- *The inverse.* `inv_parts_respects` was nine cases, six of them sign
+  contradictions spelled out for omega. Equal fractions have numerators of one
+  sign (`Rat::num_pos_of_same`, `Rat::num_neg_of_same`, from the new `Int`
+  facts `mul_pos`, `mul_neg`, `pos_of_mul_pos` and `neg_of_mul_neg` over a
+  `Pos<Int>` factor), so each mismatch is one line. A positive pair is
+  `Rat::same_recip` (equal fractions with positive numerators have equal
+  reciprocals), and a negative pair is that under `neg_respects`.
+- *`ring` reads a field of a written-out record.* `same_recip` is `ring(h)`
+  over `Rat(a.int(), p).num`; `ring`'s `project` took only a call as the
+  receiver, so a constructor literal's field stayed an atom. It now takes a
+  pair as well.
+
+Tests: `crates/elab/tests/lib_std_rat.rs` (the law kit, now with the sign lemmas; new rows
+for a zero or open denominator, a local or product one, cancellation at a
+positive and a zero factor, and `ring`/`omega` over a dependent record's
+fields with a neutral and a literal receiver, an open element type, a checking
+position and a wrong-equation control; after the follow-ups, a constructor
+literal under `ring`, and the numerator-sign lemmas at a neutral pair with the
+inverse at a literal negative pair and a non-negative control) and
+`docs/showcase/rat_client.hthr`.

@@ -1,9 +1,9 @@
-//! `lib/std/pos.hthr` and `lib/std/rat.hthr` — positive naturals and
-//! unreduced rationals, the first arithmetic setoid customer
+//! `lib/std/rat.hthr` — unreduced rationals over a `Pos<Nat>` denominator,
+//! the first arithmetic setoid customer
 //! (`issues/positive-naturals-and-rationals.md`,
 //! `docs/setoid-rationals-round.md`).
 //!
-//!  1. the closure checks: both modules and the client showcase, which uses
+//!  1. the closure checks: the module and the client showcase, which uses
 //!     `calc` over `≈` and `rel_cong` through `+`, `*` and `-`;
 //!  2. the law kit is *there*, named one by one;
 //!  3. negative controls: `≈` is not identity, a wrong law is refused, the
@@ -11,7 +11,10 @@
 //!     reached at a zero factor;
 //!  4. the order completion (`issues/rational-order-completion.md`): `<` is
 //!     strict, `|x|` is not `x`, scaling needs a sign, and the Archimedean
-//!     bound needs a positive argument.
+//!     bound needs a positive argument;
+//!  5. the denominator's positivity (`issues/retire-shifted-pos.md`): a zero
+//!     or unproved denominator is refused, a local fact or a product of
+//!     denominators is found.
 
 use std::cell::OnceCell;
 use std::sync::Mutex;
@@ -41,7 +44,6 @@ const MODULES: &[(&str, &str)] = &[
         include_str!("../../../lib/std/algebra_rel.hthr"),
     ),
     ("order", include_str!("../../../lib/std/order.hthr")),
-    ("pos", include_str!("../../../lib/std/pos.hthr")),
     ("rat", include_str!("../../../lib/std/rat.hthr")),
 ];
 
@@ -75,7 +77,7 @@ fn refused(name: &str, src: &str) {
     );
 }
 
-const IMPORTS: &str = "import logic; import bool; import nat; import int; import omega; import pos; import rat;
+const IMPORTS: &str = "import logic; import bool; import nat; import int; import omega; import rat;
     import relation_props; import algebra_rel;\n";
 
 #[test]
@@ -91,6 +93,8 @@ fn rationals_and_their_client_check() {
 const LAWS: &[&str] = &[
     "Rat::same_refl", "Rat::same_sym", "Rat::same_trans",
     "Rat::add_respects", "Rat::mul_respects", "Rat::neg_respects", "Rat::inv_respects",
+    "Rat::num_pos_of_same", "Rat::num_neg_of_same", "Rat::same_recip",
+    "Int::mul_pos", "Int::mul_neg", "Int::pos_of_mul_pos", "Int::neg_of_mul_neg",
     "Rat::add_comm", "Rat::add_assoc", "Rat::add_zero", "Rat::add_neg",
     "Rat::mul_comm", "Rat::mul_assoc", "Rat::mul_one", "Rat::mul_add_distr", "Rat::mul_inv",
     "Rat::le_refl", "Rat::le_trans", "Rat::le_antisymm", "Rat::le_total",
@@ -144,18 +148,18 @@ fn the_law_kit_is_there() {
 fn same_is_not_identity() {
     refused(
         "rat_identity",
-        &format!("{IMPORTS} theorem bad(): Rat(OfNat(1), Pos(1)) = Rat(OfNat(2), Pos(3)) {{ refl }}"),
+        &format!("{IMPORTS} theorem bad(): Rat(OfNat(1), 2) = Rat(OfNat(2), 4) {{ refl }}"),
     );
     // The control: the same pair is `≈` by computation.
     let mut e = base();
     check(
         &mut e,
         "rat_same_control",
-        &format!("{IMPORTS} theorem ok(): Rat(OfNat(1), Pos(1)) ≈ Rat(OfNat(2), Pos(3)) {{ refl }}"),
+        &format!("{IMPORTS} theorem ok(): Rat(OfNat(1), 2) ≈ Rat(OfNat(2), 4) {{ refl }}"),
     );
     refused(
         "rat_not_same",
-        &format!("{IMPORTS} theorem bad(): Rat(OfNat(1), Pos(1)) ≈ Rat(OfNat(2), Pos(2)) {{ refl }}"),
+        &format!("{IMPORTS} theorem bad(): Rat(OfNat(1), 2) ≈ Rat(OfNat(2), 3) {{ refl }}"),
     );
 }
 
@@ -200,8 +204,38 @@ fn cancellation_is_only_by_a_positive() {
         "int_cancel_zero",
         &format!(
             "{IMPORTS} theorem bad(x, y: Int, h: x * OfNat(0) = y * OfNat(0)): x = y {{
-                x.mul_cancel_pos_r(y, Pos::one(), h)
+                x.mul_cancel_pos_r(y, OfNat(0), h)
             }}"
+        ),
+    );
+    // The control: a positive factor's side condition is found by computation.
+    let mut e = base();
+    check(
+        &mut e,
+        "int_cancel_two",
+        &format!(
+            "{IMPORTS} theorem ok(x, y: Int, h: x * OfNat(2) = y * OfNat(2)): x = y {{
+                x.mul_cancel_pos_r(y, OfNat(2), h)
+            }}"
+        ),
+    );
+}
+
+#[test]
+fn a_denominator_carries_its_positivity() {
+    // `den: Pos<Nat>` refuses a zero denominator and an open one, ...
+    refused("rat_zero_den", &format!("{IMPORTS} fn bad() → Rat {{ Rat(OfNat(1), 0) }}"));
+    refused("rat_open_den", &format!("{IMPORTS} fn bad(k: Nat) → Rat {{ Rat(OfNat(1), k) }}"));
+    // ... finds a local fact or a product of denominators, and reads its
+    // fact back through `Rat::den_positive`.
+    let mut e = base();
+    check(
+        &mut e,
+        "rat_den_control",
+        &format!(
+            "{IMPORTS} fn local(k: Nat, h: 0 < k) → Rat {{ Rat(OfNat(1), k) }}
+            fn product(x, y: Rat) → Rat {{ Rat(x.num, x.den * y.den) }}
+            theorem positive(x: Rat): 0 < x.den {{ Rat::den_positive() }}"
         ),
     );
 }
@@ -211,19 +245,47 @@ fn strict_order_is_strict() {
     // 1/2 and 2/4 are the same number, so neither is below the other ...
     refused(
         "rat_lt_same",
-        &format!("{IMPORTS} theorem bad(): Rat(OfNat(1), Pos(1)) < Rat(OfNat(2), Pos(3)) {{ omega }}"),
+        &format!("{IMPORTS} theorem bad(): Rat(OfNat(1), 2) < Rat(OfNat(2), 4) {{ omega }}"),
     );
     // ... while 1/2 < 3/4 holds by cross-multiplication.
     let mut e = base();
     check(
         &mut e,
         "rat_lt_control",
-        &format!("{IMPORTS} theorem ok(): Rat(OfNat(1), Pos(1)) < Rat(OfNat(3), Pos(3)) {{ omega }}"),
+        &format!("{IMPORTS} theorem ok(): Rat(OfNat(1), 2) < Rat(OfNat(3), 4) {{ omega }}"),
     );
     // `≤` does not give `<`.
     refused(
         "rat_lt_of_le",
         &format!("{IMPORTS} theorem bad(x, y: Rat, h: x <= y): x < y {{ omega }}"),
+    );
+}
+
+#[test]
+fn equal_fractions_share_a_numerator_sign() {
+    let mut e = base();
+    // The sign lemmas at a neutral pair, and the inverse they feed at a
+    // literal negative pair (-1/2 ≈ -2/4, so their inverses agree).
+    check(
+        &mut e,
+        "rat_num_sign",
+        &format!(
+            "{IMPORTS} theorem neg(x, y: Rat, h: x ≈ y, hx: x.num < OfNat(0)): y.num < OfNat(0) {{
+                Rat::num_neg_of_same(h, hx)
+            }}
+            theorem inv(): Rat(NegSucc(0), 2).inv() ≈ Rat(NegSucc(1), 4).inv() {{
+                Rat::inv_parts_respects(NegSucc(0), 2, NegSucc(1), 4, refl)
+            }}"
+        ),
+    );
+    // A non-negative numerator gives no sign: 0/1 ≈ 0/2.
+    refused(
+        "rat_num_sign_of_nonneg",
+        &format!(
+            "{IMPORTS} theorem bad(x, y: Rat, h: x ≈ y, hx: OfNat(0) <= x.num): OfNat(0) < y.num {{
+                Rat::num_pos_of_same(h, hx)
+            }}"
+        ),
     );
 }
 
@@ -238,14 +300,14 @@ fn order_laws_need_their_side_conditions() {
     check(
         &mut e,
         "rat_abs_control",
-        &format!("{IMPORTS} theorem ok(): Rat(NegSucc(0), Pos(1)).abs() ≈ Rat(OfNat(1), Pos(1)) {{ refl }}"),
+        &format!("{IMPORTS} theorem ok(): Rat(NegSucc(0), 2).abs() ≈ Rat(OfNat(1), 2) {{ refl }}"),
     );
     // Scaling preserves order only by a non-negative factor.
     refused(
         "rat_scale_without_sign",
         &format!(
             "{IMPORTS} theorem bad(x, y, z: Rat, h: x <= y): x * z <= y * z {{
-                Rat::mul_le_mono_r(x, y, z, h, Rat::le_refl(z))
+                Rat::mul_le_mono_r(h, z.le_refl())
             }}"
         ),
     );
@@ -256,6 +318,43 @@ fn order_laws_need_their_side_conditions() {
             "{IMPORTS} theorem bad(): ∃ n: Nat, Rat::inv_succ(n) < Rat::zero() {{
                 Rat::archimedean_inv(Rat::zero(), Rat::le_refl(Rat::zero()))
             }}"
+        ),
+    );
+}
+
+#[test]
+fn ring_and_omega_read_fields_of_a_record_with_a_proof_field() {
+    // A record whose spine is dependent (a `Pos<Nat>` field's `den_pos`
+    // mentions `den`) reads its fields through named projections, not the
+    // inline walk; `ring` and `omega` must still read a field of a call that
+    // computes to a constructor, or of a constructor written out. Varied: a
+    // neutral and a literal receiver, a
+    // type-parameterised record (an open element type), a checking position,
+    // and a wrong equation as the control.
+    let src = format!(
+        "{IMPORTS} import ring; record Frac {{ num: Int, den: Pos<Nat> }}
+        record Tagged<A> {{ tag: A, num: Int, den: Pos<Nat> }}
+        fn Frac::mul(self x, y: Frac) → Frac {{ Frac(x.num * y.num, x.den * y.den) }}
+        fn Frac::one() → Frac {{ Frac(OfNat(1), 1) }}
+        fn Tagged::scale<A>(self t: Tagged<A>, k: Int) → Tagged<A> {{ Tagged(t.tag, t.num * k, t.den) }}
+        theorem ring_num(x, y: Frac): x.mul(y).num = y.num * x.num {{ ring }}
+        theorem omega_den(x, y: Frac): x.mul(y).den = x.den * y.den {{ omega }}
+        theorem omega_literal(x: Int): Frac::one().num + x = x + OfNat(1) {{ omega }}
+        theorem ring_literal(a, b: Int, p: Pos<Nat>): Frac(a * b, p).num = b * a {{ ring }}
+        theorem open<A>(t: Tagged<A>, k: Int): t.scale(k).num = k * t.num {{ ring }}
+        theorem checked(x, y: Frac): OfNat(0) <= x.mul(y).num - x.num * y.num {{
+            let e: (x.mul(y).num = x.num * y.num) = ring;
+            omega
+        }}"
+    );
+    let mut e = base();
+    check(&mut e, "dependent_fields", &src);
+    refused(
+        "dependent_fields_wrong",
+        &format!(
+            "{IMPORTS} import ring; record Frac {{ num: Int, den: Pos<Nat> }}
+            fn Frac::mul(self x, y: Frac) → Frac {{ Frac(x.num * y.num, x.den * y.den) }}
+            theorem bad(x, y: Frac): x.mul(y).num = x.num + y.num {{ ring }}"
         ),
     );
 }
