@@ -655,8 +655,8 @@ by `Nat`'s own laws (`x.den.mul_comm(y.den)` where `same_of_parts` now takes
 `Rat::den_add` and `Rat::den_mul` (`(x + y).den.int() = x.den.int() *
 y.den.int()`). Positivity is no longer definitional, so the four places that
 used it say where it comes from: the cancellations take `y.den_pos`, and
-`mul_lt_mono_r`, `archimedean` and the inverse's sign lemmas bring a
-`den_pos` into scope for omega or build one with `Nat::mul_pos`.
+`mul_lt_mono_r` and `archimedean` bring a `den_pos` into scope for omega, and
+the numerator-sign lemmas pass one as `p_pos`.
 
 **The cancellation lemmas** move into `int.hthr`, after `Numeral<Int>`, as
 the issue spelled them: `Int::mul_cancel_pos_r(self x, y: Int, p: Pos<Int>, h:
@@ -685,8 +685,36 @@ well. Nothing in `lib/` uses it beyond the showcase's `half ≠ two_quarters`,
 which projects the numerators; the uniqueness lemma for `Nat::Le` proofs is
 not needed and not written.
 
-Tests: `crates/elab/tests/lib_std_rat.rs` (the law kit unchanged; new rows
+**Review follow-ups (2026-10-15).** Three cleanups from the PR review rode
+along; the other findings are filed as issues.
+
+- *Calling convention.* A `Rat` lemma whose every `Rat` is named by a
+  hypothesis takes its endpoints implicitly (`Rat::le_respects(hx, hy, h)`,
+  `Rat::le_trans(h1, h2)`, the `*_respects` family, the monotonicity laws whose
+  factor is fixed by a sign hypothesis). Every other lemma takes its first
+  `Rat` as `self` (`x.add_comm(y)`), matching `Int` and `Nat`. Instance fields
+  wrap the implicit ones in a lambda (`rel_trans := λ x y z h1 h2 =>
+  Rat::le_trans(h1, h2)`). One cost: a lemma whose first explicit parameter is
+  a proof no longer rules out its own name as a reading of a same-named dot call
+  on `Int`, so two bodies spell `Int::mul_le_mono_r(…)`
+  ([self-name-shadows-dot-call](../issues/self-name-shadows-dot-call.md)).
+- *The inverse.* `inv_parts_respects` was nine cases, six of them sign
+  contradictions spelled out for omega. Equal fractions have numerators of one
+  sign (`Rat::num_pos_of_same`, `Rat::num_neg_of_same`, from the new `Int`
+  facts `mul_pos`, `mul_neg`, `pos_of_mul_pos` and `neg_of_mul_neg` over a
+  `Pos<Int>` factor), so each mismatch is one line. A positive pair is
+  `Rat::same_recip` (equal fractions with positive numerators have equal
+  reciprocals), and a negative pair is that under `neg_respects`.
+- *`ring` reads a field of a written-out record.* `same_recip` is `ring(h)`
+  over `Rat(a.int(), p).num`; `ring`'s `project` took only a call as the
+  receiver, so a constructor literal's field stayed an atom. It now takes a
+  pair as well.
+
+Tests: `crates/elab/tests/lib_std_rat.rs` (the law kit, now with the sign lemmas; new rows
 for a zero or open denominator, a local or product one, cancellation at a
 positive and a zero factor, and `ring`/`omega` over a dependent record's
 fields with a neutral and a literal receiver, an open element type, a checking
-position and a wrong-equation control) and `docs/showcase/rat_client.hthr`.
+position and a wrong-equation control; after the follow-ups, a constructor
+literal under `ring`, and the numerator-sign lemmas at a neutral pair with the
+inverse at a literal negative pair and a non-negative control) and
+`docs/showcase/rat_client.hthr`.

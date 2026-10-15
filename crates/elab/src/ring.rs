@@ -225,7 +225,9 @@ impl Reifier<'_> {
 
     fn project(&self, tm: &Rc<Term>) -> Option<Rc<Term>> {
         let (path, cur) = self.elab.named_field_read(tm).unwrap_or_else(|| projection_path(tm));
-        if path.is_empty() || !matches!(app_spine(cur).0, Term::GlobalTm { .. }) {
+        // A call computes to its record; a literal record (`Rat(a, p, h).num`)
+        // already is one.
+        if path.is_empty() || !(matches!(app_spine(cur).0, Term::GlobalTm { .. }) || crate::spelling::is_pair(cur)) {
             return None;
         }
         let oracle = self.elab.goal_oracle().bounded(ATOM_STEPS);

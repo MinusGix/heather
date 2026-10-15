@@ -93,6 +93,8 @@ fn rationals_and_their_client_check() {
 const LAWS: &[&str] = &[
     "Rat::same_refl", "Rat::same_sym", "Rat::same_trans",
     "Rat::add_respects", "Rat::mul_respects", "Rat::neg_respects", "Rat::inv_respects",
+    "Rat::num_pos_of_same", "Rat::num_neg_of_same", "Rat::same_recip",
+    "Int::mul_pos", "Int::mul_neg", "Int::pos_of_mul_pos", "Int::neg_of_mul_neg",
     "Rat::add_comm", "Rat::add_assoc", "Rat::add_zero", "Rat::add_neg",
     "Rat::mul_comm", "Rat::mul_assoc", "Rat::mul_one", "Rat::mul_add_distr", "Rat::mul_inv",
     "Rat::le_refl", "Rat::le_trans", "Rat::le_antisymm", "Rat::le_total",
@@ -260,6 +262,34 @@ fn strict_order_is_strict() {
 }
 
 #[test]
+fn equal_fractions_share_a_numerator_sign() {
+    let mut e = base();
+    // The sign lemmas at a neutral pair, and the inverse they feed at a
+    // literal negative pair (-1/2 ≈ -2/4, so their inverses agree).
+    check(
+        &mut e,
+        "rat_num_sign",
+        &format!(
+            "{IMPORTS} theorem neg(x, y: Rat, h: x ≈ y, hx: x.num < OfNat(0)): y.num < OfNat(0) {{
+                Rat::num_neg_of_same(h, hx)
+            }}
+            theorem inv(): Rat(NegSucc(0), 2).inv() ≈ Rat(NegSucc(1), 4).inv() {{
+                Rat::inv_parts_respects(NegSucc(0), 2, NegSucc(1), 4, refl)
+            }}"
+        ),
+    );
+    // A non-negative numerator gives no sign: 0/1 ≈ 0/2.
+    refused(
+        "rat_num_sign_of_nonneg",
+        &format!(
+            "{IMPORTS} theorem bad(x, y: Rat, h: x ≈ y, hx: OfNat(0) <= x.num): OfNat(0) < y.num {{
+                Rat::num_pos_of_same(h, hx)
+            }}"
+        ),
+    );
+}
+
+#[test]
 fn order_laws_need_their_side_conditions() {
     // |x| is not x: -1/1 has absolute value 1/1.
     refused(
@@ -277,7 +307,7 @@ fn order_laws_need_their_side_conditions() {
         "rat_scale_without_sign",
         &format!(
             "{IMPORTS} theorem bad(x, y, z: Rat, h: x <= y): x * z <= y * z {{
-                Rat::mul_le_mono_r(x, y, z, h, Rat::le_refl(z))
+                Rat::mul_le_mono_r(h, z.le_refl())
             }}"
         ),
     );
@@ -297,7 +327,8 @@ fn ring_and_omega_read_fields_of_a_record_with_a_proof_field() {
     // A record whose spine is dependent (a `Pos<Nat>` field's `den_pos`
     // mentions `den`) reads its fields through named projections, not the
     // inline walk; `ring` and `omega` must still read a field of a call that
-    // computes to a constructor. Varied: a neutral and a literal receiver, a
+    // computes to a constructor, or of a constructor written out. Varied: a
+    // neutral and a literal receiver, a
     // type-parameterised record (an open element type), a checking position,
     // and a wrong equation as the control.
     let src = format!(
@@ -309,6 +340,7 @@ fn ring_and_omega_read_fields_of_a_record_with_a_proof_field() {
         theorem ring_num(x, y: Frac): x.mul(y).num = y.num * x.num {{ ring }}
         theorem omega_den(x, y: Frac): x.mul(y).den = x.den * y.den {{ omega }}
         theorem omega_literal(x: Int): Frac::one().num + x = x + OfNat(1) {{ omega }}
+        theorem ring_literal(a, b: Int, p: Pos<Nat>): Frac(a * b, p).num = b * a {{ ring }}
         theorem open<A>(t: Tagged<A>, k: Int): t.scale(k).num = k * t.num {{ ring }}
         theorem checked(x, y: Frac): OfNat(0) <= x.mul(y).num - x.num * y.num {{
             let e: (x.mul(y).num = x.num * y.num) = ring;
