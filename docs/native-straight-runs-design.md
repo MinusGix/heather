@@ -20,18 +20,19 @@ The step is not a `meta fn` and not elaborator sugar. It is an ordinary
 function from the program's items to a type, and one theorem:
 
 ```heather
-fn Straight(file, page, origin, goal: MachineState<IoMemory> → Type, labels, l: Prog, n: Nat)
-    → (Nat → BitVec(64)) → MachineState<IoMemory> → Type
+fn Straight(file, origin, goal: MachineState<IoMemory> → Type, labels, l: Prog, n: Nat)
+    → (Nat → BitVec(8)) → (Nat → BitVec(64)) → MachineState<IoMemory> → Type
 theorem straight_runs(file, page, origin, goal, back: StepsBack(goal), fills, labels, l, n,
     fits, rest, code, vars, state,
     rip: state.rip = next_rip(origin, straight_from(l, n)),
     framed: Framed(file, page, vars)(state),
-    held: Straight(…, l, n)(vars, state)): goal(state)
+    held: Straight(…, l, n)(page, vars, state)): goal(state)
 ```
 
 `Straight(…, l, n)` reads the `n` items ending at label `l` and is, by
 evaluation, what running them from `state` with the frame holding `vars`
-comes to:
+and the page `page` comes to (the table drops the page, which every item
+but `StoreByte` hands on as it is):
 
 | Item | What it asks of `vars`, `s`, then the rest `then` |
 | --- | --- |
@@ -39,6 +40,7 @@ comes to:
 | `Load(ld)` | `SlotThen(base, λ q => then(vars, word_load_after(ld, vars(q), s)))` |
 | `Store(st)` | for a plain base, `SlotThen(base, λ q => then(set_var(vars, q, src), word_store_after(…, st, s)))`; else `False` |
 | `LoadByte(ld)` | `ByteThen(file, page, base, λ b => then(vars, byte_load_after(ld, b, s)))` |
+| `StoreByte(st)` | for a plain base, `PageThen(base, λ c => then(page_stored(…, page, c, low byte of src), vars, byte_store_after(…, st, s)))`; else `False` |
 | `Jcc(cc, t)` | `(condition_holds(cc, s.flags) = True → leaf at the jump's target) ∧ (… = False → then(…))` |
 | `Jmp(t)` | the leaf at the jump's target |
 | anything else | `False` |
@@ -70,7 +72,7 @@ A leaf (`StraightLeaf`) is where the stretch ends, after its last item or at
 a jump's target:
 
 ```heather
-λ vars state => (after) → after.rip = at → Framed(file, page, vars)(after) → after = state → goal(after)
+λ page vars state => (after) → after.rip = at → Framed(file, page, vars)(after) → after = state → goal(after)
 ```
 
 The end state is bound (`after`), so the leaf's proof names it rather than
@@ -153,7 +155,7 @@ So the type is computed from the items' structure only: which constructor,
 which register, which label. Anything numeric is a `refl` or a fact the
 caller cites, checked by the kernel.
 
-## Items: `Load`, `Store` and `LoadByte`
+## Items: `Load`, `Store`, `LoadByte` and `StoreByte`
 
 `Asm` had stores and loads as `Code(bytes)`, which a computation cannot
 read. `x86_64_asm` now has `Load(WordLoad)`, `Store(WordStore)` and
@@ -163,6 +165,19 @@ read. `x86_64_asm` now has `Load(WordLoad)`, `Store(WordStore)` and
 `l_len_load`) and the spill program (`lsp_*`) use them. The assembled bytes
 do not change. The process libraries' byte loads (the argument scan's, the
 stat pass's, the cursor's) are still `Code`.
+
+`StoreByte(ByteStore)` is a byte store to the page, which the row's tail
+writes before each write. The page is not fixed for a stretch: `Straight`
+carries it as it carries `vars`, so every continuation and leaf takes the
+page first (`then(page, vars, state)`), and a byte store hands on
+`page_stored(file, page, c, x)`, `io_store_offset`'s page with `x` at `c`.
+`PageThen(base, then)` is `Exists c. c < 4096 ∧ base.toNat() =
+io_page_base() + c ∧ then(c)`: the caller names the offset, from the
+cursor's fact (`rdi`), as it names a slot. The leaf's `Framed` is over the
+carried page, so the write after the stretch reads its stored bytes from
+`io_store_offset`'s lemmas (`stored_store`, `stored_kept`, in `row_sent`).
+Carrying the page left the other phases' kernel steps as they were. The
+total row's seven stores (`l_tn*`) are still `Code`.
 
 ## Where a stretch forks on data, split it
 
@@ -182,6 +197,33 @@ the flag converted to a fact about the byte (`byte_differs`, `byte_same`
 over `cmp_bytes`), and a lemma that cases on the name to say what it names
 (`stdin_of_first`, `stdin_of_second`, `stdin_of_nul`). The case analysis is
 in ordinary lemmas, outside any term checked against `Straight`.
+
+## A stretch written once over any label
+
+Where the same items repeat at many labels, the stretch can be a lemma over
+the label rather than a call per label. `init_runs` zeroes nine slots, each
+a block setting R11 and a store from RAX; `zero_runs` is that pair ending at
+`zero_label(before, q)`, for any `before` and slot `q`, taking the label's
+`asm_find` fact (`refl` at the caller) and a continuation (`ZeroGoes`) that
+takes the frame with the slot zero. `Straight` unfolds over an abstract
+`before` as over a concrete one, since it reads only the items' structure;
+the slot's address is `refl` for any `q`. So the elaborator checks the
+stretch once, and `init_runs` is a stretch of three items (the width's
+store, RAX zeroed) and nine calls. Cold, its kernel steps fell to about a
+seventh of the hand-threaded chain's (the chain's own `zero_slot` included),
+and its elaboration rose by about the one check of `zero_runs`, not by a
+check per slot.
+
+The row's tail is written the same way, for a different reason: its two
+arms share their first stretch and the shape of their second. `tail_test`
+is the count's test (`l_named` to the JE), with a continuation per side of
+the JE (`TailGoes`), and `named_runs` and `unnamed_runs` each pass the side
+their count rules out as absurd. `byte_sends` is a byte stored after the
+row and R9 and R10 set, ending at `byte_label(before, name, w)`, then the
+row written (`row_sent`); the gap (`w` = 32) and stdin's newline (`w` =
+10) are two calls of it. A first draft with each arm's stretches written
+out in its own phase took over half again the kernel steps and about four
+times the elaboration of this one.
 
 ## Where a stretch's code is
 
@@ -246,23 +288,27 @@ those continuations took a frame:
   list's arm of `operand_loop` are its continuations rather than terms that
   rebuild its end state.
 
-Not moved, tried: `init_runs` as one stretch of its twenty-one items. It
-took more than twice the kernel steps of the hand-threaded chain, for the
-same reason as the first dash test: one long stretch nests every later
-item's obligation inside the earlier ones, and the elaborator unfolds the
-whole of it at every constructor. A stretch pays when it is a few items
-long; `init_runs` would need splitting at its labels first.
+Then, with `StoreByte` and the page carried:
+
+- The row's tail: `named_runs` and `unnamed_runs` are the count's test
+  (`tail_test`, four items, the JE's ruled-out side absurd) and a byte sent
+  after the row (`byte_sends`, three items, then the write), both written
+  once ("A stretch written once over any label"). The newline
+  (`newline_send`) is one three-item stretch. Cold, their kernel steps fell
+  to about a third (`row_send`'s included); their elaboration rose from
+  about half a second in all to about two.
+- `init_runs`, as a stretch per slot ("A stretch written once over any
+  label"). As one stretch of its twenty-one items it had taken more than
+  twice the chain's kernel steps: one long stretch nests every later item's
+  obligation inside the earlier ones, and the elaborator unfolds the whole
+  of it at every constructor.
+
 `inputs_runs` is composition of other phases, with no code of its own to
 move.
 
 ## Not yet
 
-- Byte stores (`Code(byte_store_bytes(…))`) and the page: the row's. A
-  store to the page changes it, and `Framed` holds the page fixed; a
-  `StoreByte` item would carry the page in the stretch's state as `vars`
-  is carried.
 - A system call ends a stretch: `closes_runs` still runs its JCCs with the
   `Runs` rules before `linux_runs_close`.
-- The other `Runs` phases (`total_runs`, the prologue, the spill,
-  `init_runs`) and the row's tail (`named_runs`, `unnamed_runs`), which
-  needs the byte stores above.
+- The other `Runs` phases (`total_runs` with its seven byte stores, the
+  prologue, the spill).
