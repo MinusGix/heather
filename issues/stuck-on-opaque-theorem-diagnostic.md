@@ -26,6 +26,12 @@ it: "`CReal::add_zero` is a theorem, so it never unfolds; …". The note
 should point at the current way to compute with a proof (a `fn`, or the
 unfolding form [[theorem-witness-unfolding]] lands).
 
-Acceptance: a test in `crates/elab/tests/check_reports_mismatch.rs` with a
-theorem-built `Exists` projected under `refl`. A control does the same with
+Since [[theorem-witness-unfolding]] landed, a theorem whose statement
+carries data is opened by such a projection, so the case left is a theorem
+whose statement the classifier judged data-free, or an `axiom`
+(`check_reports_mismatch.rs`'s projection fixture is an axiom for this
+reason). The note should say which.
+
+Acceptance: a test in `crates/elab/tests/check_reports_mismatch.rs` with an
+axiom-built `Exists` projected under `refl`. A control does the same with
 a `fn` and checks.
