@@ -58,9 +58,12 @@ theorem two_halves_close(x, y, z: Rat, n: Nat,
     (x -z).abs() <= Rat::inv_succ(n)
 {
     let half = Rat::inv_succ(n + n + 1);
-    let hz2 = Rat::le_respects(z.abs_sub_comm(y), half.same_refl(), hz);
-    let sum = Rat::add_le_mono(hx, hz2);
-    Rat::le_trans(x.dist_triangle(y, z), Rat::le_respects(((x -y).abs() + (y -z).abs()).same_refl(), Rat::inv_succ_half(n), sum))
+    let hz2 = calc { (y -z).abs() ≈ (z -y).abs() := y.abs_sub_comm(z), <= half := hz };
+    calc {
+        (x -z).abs() <= (x -y).abs() + (y -z).abs() := x.dist_triangle(y, z),
+        <= half + half := Rat::add_le_mono(hx, hz2),
+        ≈ Rat::inv_succ(n) := Rat::inv_succ_half(n),
+    }
 }
 
 // A gap x < y places any z above x or below y: cotransitivity, the form of

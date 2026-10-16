@@ -1541,11 +1541,24 @@ theorem one<A>(same as ≈: A → A → Type, a, b: A, h: a ≈ b): a ≈ b {
     assert!(e
         .elab_module_source("missing_calc_transitivity", missing)
         .is_err());
-    let mixed = "import relation_props;
-        theorem mixed<A: Transitive(≈)>(a, b, c: A, h: a ≈ b, k: b = c): a ≈ c {
+    // An `=` step beside `≈` transports and needs no class
+    // (issues/calc-over-order-relations.md) ...
+    check(
+        &mut e,
+        "mixed_calc_relation",
+        "import relation_props;
+        theorem mixed<A>(same as ≈: A → A → Type, a, b, c: A, h: a ≈ b, k: b = c): a ≈ c {
             calc { a ≈ b := h, = c := k }
+        }",
+    );
+    // ... but two different relations compose only through a `Trans`
+    // instance, which a bare local relation does not have.
+    let mixed = "import relation_props;
+        theorem mixed<A>(same as ≈: A → A → Type, le as <=: A → A → Type,
+            a, b, c: A, h: a ≈ b, k: b <= c): a <= c {
+            calc { a ≈ b := h, <= c := k }
         }";
-    assert!(e.elab_module_source("mixed_calc_relation", mixed).is_err());
+    assert!(e.elab_module_source("mixed_calc_without_trans", mixed).is_err());
 }
 
 #[test]

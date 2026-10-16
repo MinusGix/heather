@@ -185,6 +185,11 @@ Not this round, for three reasons, in strength order:
 Filed as `issues/calc-over-order-relations.md` with the design shape above,
 triggered on the first library proof that wants an inequality *chain*.
 
+**Built 2026-10-15** in that shape once the rationals hit the trigger: see
+[calc-order-chains](calc-order-chains.md). Reason 2 was answered by a `Trans`
+class plus explicit-endpoint helpers in `relation_props`, not by the kit
+spellings; reason 3 by the mixed lemmas the rational order round added.
+
 ## 5. What the desugaring keeps (and the property that makes §1 true)
 
 Unchanged, restated as commitments because §1 leans on them:

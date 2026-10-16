@@ -102,3 +102,34 @@ theorem chain(): X { calc { a ≈ b := p, ≈ c := q, ≈ d := r, } }
         (calc_next_step
           (identifier)
           (identifier))))))
+
+=================
+Order calc chains
+=================
+
+theorem mixed(): X { calc { a + b <= c := p, < d := q, ≈ e := r, = f := s } }
+
+---
+
+(source_file
+  (theorem_declaration
+    (qualified_identifier)
+    (parameter_list)
+    (identifier)
+    (block
+      (calc_expression
+        (calc_first_step
+          (binary_expression
+            (identifier)
+            (identifier))
+          (identifier)
+          (identifier))
+        (calc_next_step
+          (identifier)
+          (identifier))
+        (calc_next_step
+          (identifier)
+          (identifier))
+        (calc_next_step
+          (identifier)
+          (identifier))))))

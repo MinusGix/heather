@@ -42,6 +42,33 @@ instance LinearOrder<Int>(Int::Le) {
     rel_total := Int::le_total,
 }
 
+// The strict orders' transitivity and the two mixed pairs, so `calc` chains
+// `<=` and `<` steps at both carriers. `Nat`'s `n < m` is `Succ(n) <= m`,
+// which is why its pairs are `<=` transitivity once the left side is shifted.
+instance Transitive<Nat>(Nat::Lt) {
+    rel_trans := Nat::lt_trans,
+}
+
+instance Trans<Nat>(Nat::Lt, Nat::Le, Nat::Lt) {
+    rel_chain := λ x y z hxy hyz => Succ(x).le_trans(y, z, hxy, hyz),
+}
+
+instance Trans<Nat>(Nat::Le, Nat::Lt, Nat::Lt) {
+    rel_chain := λ x y z hxy hyz => Succ(x).le_trans(Succ(y), z, x.le_succ_succ(y, hxy), hyz),
+}
+
+instance Transitive<Int>(Int::Lt) {
+    rel_trans := Int::lt_trans,
+}
+
+instance Trans<Int>(Int::Lt, Int::Le, Int::Lt) {
+    rel_chain := Int::lt_of_lt_of_le,
+}
+
+instance Trans<Int>(Int::Le, Int::Lt, Int::Lt) {
+    rel_chain := Int::lt_of_le_of_lt,
+}
+
 // Componentwise products preserve preorders and partial orders. They do not
 // preserve linearity: `(a1,b2)` and `(a2,b1)` may be incomparable. Keeping the
 // constructor at the precise layer is the first forcing case for a hierarchy
