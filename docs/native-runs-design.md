@@ -120,16 +120,18 @@ The loop's head and cursor store (`operand_head`, `cursor_store_runs`,
 Since moved again, onto one computed stretch each
 (`docs/native-straight-runs-design.md`): the loop's last-operand test
 (`loop_last`, absorbing `cursor_store_runs` and `last_tested_runs`),
-`operand_head`, `stdin_path`, `open_back` and `failed_runs`.
+`operand_head`, `stdin_path`, `open_back` and `failed_runs`; then, with a
+byte-load item, the dash and ahead tests (`dash_test`, `dash_ahead`) and
+`open_path`; then, once their continuations took a frame (`FramedWrite`,
+`CursorGoes`), the name's scan and write (`name_scan`, `name_send`), the
+read's failure (`read_failed`) and the loop's cursor (`loop_cursor`).
 
 ## Not yet moved
-
-- The dash and ahead tests (`ByteTested`, `jne_open`, `dash_second`,
-  `dash_test`) and `open_path`.
-- The row's tail (`named_runs`, `unnamed_runs`), the name's scan and write
-  (`name_scan`, `name_send`), `init_runs`, `inputs_runs`, `read_failed`,
-  `loop_cursor`: their continuations close over the starting frame (see
-  "Consuming a run").
+- The row's tail (`named_runs`, `unnamed_runs`): its byte stores change
+  the page, which `Framed` holds fixed.
+- `init_runs`: one long stretch cost more than the chain; it needs
+  splitting first (`docs/native-straight-runs-design.md`, "Moved").
+  `inputs_runs` only composes other phases.
 - The other process libraries (formatter, scan, cursor, stat pass, row), and
   their own frame records (`FmtKept`, `WriteKept`, `CursorKept`) over
   `Keeps`.

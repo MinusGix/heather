@@ -45,6 +45,8 @@ inductive Asm {
     // so a run over them can be computed (lib/elf64_frame.hthr, `go_runs`).
     Load(load: WordLoad),
     Store(store: WordStore),
+    // A byte loaded (MOVZX), likewise (lib/elf64_straight.hthr).
+    LoadByte(load: ByteLoad),
     // A near JCC or JMP to the label named `target`.
     Jcc(cc: ConditionCode, target: Nat),
     Jmp(target: Nat),
@@ -84,6 +86,7 @@ fn asm_len(item: Asm) → Nat {
         Code(bytes) => bytes.len(),
         Load(load) => word_load_bytes(load).len(),
         Store(_) => 3,
+        LoadByte(load) => byte_load_bytes(load).len(),
         Jcc(_, _) => 6,
         Jmp(_) => 5,
         Piece(_, len, _) => len,
@@ -108,6 +111,7 @@ fn asm_bytes(fills: Nat → List<BitVec(8)>, labels: Nat → Nat, here: Nat, ite
         Code(bytes) => bytes,
         Load(load) => word_load_bytes(load),
         Store(store) => word_store_bytes(store),
+        LoadByte(load) => byte_load_bytes(load),
         Jcc(cc, target) => near_control_bytes(JumpIfNear(cc, near_rel(here + 6, labels(target)))),
         Jmp(target) => near_control_bytes(JumpNear(near_rel(here + 5, labels(target)))),
         Piece(bytes, _, _) => bytes,
@@ -210,6 +214,7 @@ theorem fills_fit_before(fills: Nat → List<BitVec(8)>, before: Prog, name: Nat
         Code(_) => λ f => f,
         Load(_) => λ f => f,
         Store(_) => λ f => f,
+        LoadByte(_) => λ f => f,
         Jcc(_, _) => λ f => f,
         Jmp(_) => λ f => f,
         Piece(_, _, _) => λ f => f,
@@ -224,6 +229,7 @@ theorem asm_bytes_len(fills: Nat → List<BitVec(8)>, labels: Nat → Nat, here:
         Code(_) => λ _ => refl,
         Load(_) => λ _ => refl,
         Store(_) => λ _ => refl,
+        LoadByte(_) => λ _ => refl,
         Jcc(_, _) => λ _ => refl,
         Jmp(_) => λ _ => refl,
         Piece(_, _, measured) => λ _ => measured,

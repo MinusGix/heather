@@ -3,7 +3,7 @@ title: Elaborator whnf respells structured formers by substitution: Straight's c
 status: open
 labels: [elaboration,performance,native]
 created: 2026-10-10
-updated: 2026-10-10
+updated: 2026-10-15
 ---
 
 `Straight(…)(vars, state)` (`lib/elf64_straight.hthr`,
@@ -59,3 +59,7 @@ time than their kernel gate, cold, with the same kernel step counts.
 - **[[elaborator-whnf-probes-on-computing-types]]** (closed) owns the
   probe/spell split in `SemanticOracle::whnf_type`. Assumed here: that split
   as it landed.
+
+## Log
+
+- 2026-10-15: **More workloads** ([[native-runs-remaining]]): `name_scan`, `read_failed`, `dash_ahead`, `loop_cursor`, `dash_test` and `name_send` in `lib/elf64_command.hthr` are each a few short stretches, and each now spends seconds in the elaborator's weak-head reducer where its hand-threaded proof spent milliseconds; together they are the command module's largest elaboration cost.
