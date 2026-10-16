@@ -527,14 +527,27 @@ customers checked one by one.
   (`issues/elaborator-whnf-probes-on-computing-types.md`). The oracle now
   asks the value machine first and lets it *decide*: a neutral means the
   reducer gets a small step budget for the spelling and past it the input is
-  the answer; a former means the reducer runs as before to spell it; out of
-  fuel is the answer too (2026-09-29: the reducer, sharing nothing, never
-  finishes on less fuel than the machine ran out of, and asked anyway it
-  copied a generated program's code for twenty CPU-minutes to agree —
-  `issues/closed-length-facts-evaluate-encodings.md`). The only
-  value→syntax step is a former with no sub-structure (`Nat`, `Ty l`,
-  `Unit`, `Empty`, `sEmpty`, and their codes), which is its own readback and
-  is never evaluated again — the invariant below holds as stated.
+  the answer; out of fuel is the answer too (2026-09-29: the reducer,
+  sharing nothing, never finishes on less fuel than the machine ran out of,
+  and asked anyway it copied a generated program's code for twenty
+  CPU-minutes to agree — `issues/closed-length-facts-evaluate-encodings.md`).
+  A former with no sub-structure (`Nat`, `Ty l`, `Unit`, `Empty`, `sEmpty`,
+  and their codes) is its own readback. A former *with* sub-structure was
+  spelled by the reducer until 2026-10-16, which copied every continuation
+  and branch bundle on the way to it
+  (`issues/elab-whnf-copies-straight-continuations.md`); the elaborator now
+  reads its **top layer** off the value (`crates/elab/src/readback.rs`).
+  That is a value→syntax step whose output the elaborator goes on to use,
+  so it is held to what makes the invariant below safe: it never forces or
+  normalises anything. Each child is a closure the machine has not
+  evaluated, read back as its own syntax under its environment, and the
+  handful of values the machine computes instead of capturing (a literal's
+  predecessor, an eliminator's induction hypothesis) are spelled as the
+  reducer's β spells them. The result is therefore the reducer's weak head
+  reduct node for node — debug builds check exactly that, sampled at the
+  kernel's slow-check rate — so it is no larger than the syntax the
+  elaborator already handled, and no growth enters through it. The kernel
+  itself still has no readback, and the invariant holds there as stated.
 
 **The invariant that keeps the exponential out of readback**, stated so a
 future round cannot quietly reintroduce it:
