@@ -22,7 +22,10 @@
 
 use std::sync::Arc as Rc;
 
+use heather_kernel::eval::whnf_value_ty;
+use heather_kernel::reduce::Defs;
 use heather_kernel::term::{GlobalCtx, LocalCtx, Term, Type};
+use heather_kernel::value::{Head, VNeTy, VTy, Val, ValueArena};
 
 use crate::oracle::SemanticOracle;
 
@@ -39,11 +42,16 @@ const DEPTH: u32 = 32;
 /// Whether a theorem with statement `stmt` (closed, scoped over `psi`) keeps
 /// its proof sealed.
 pub(crate) fn carries_data(psi: &GlobalCtx, stmt: &Type) -> bool {
-    data(&SemanticOracle::in_world(psi.clone(), FUEL), &LocalCtx::nil(), stmt, DEPTH)
+    data(psi, &SemanticOracle::in_world(psi.clone(), FUEL), &LocalCtx::nil(), stmt, DEPTH)
 }
 
-fn data(oracle: &SemanticOracle, gamma: &LocalCtx, ty: &Type, depth: u32) -> bool {
+fn data(psi: &GlobalCtx, oracle: &SemanticOracle, gamma: &LocalCtx, ty: &Type, depth: u32) -> bool {
     let Some(depth) = depth.checked_sub(1) else { return true };
+    if matches!(ty, Type::El { .. }) {
+        if let Some(answer) = decoded(psi, gamma, ty) {
+            return answer;
+        }
+    }
     let Ok(ty) = oracle.whnf_type(gamma, ty) else { return true };
     match &ty {
         // No component to compute with: a proof of one of these is all
@@ -52,16 +60,16 @@ fn data(oracle: &SemanticOracle, gamma: &LocalCtx, ty: &Type, depth: u32) -> boo
         Type::Unit { .. } | Type::Empty { .. } => false,
         // A function carries what its result carries: `∀ n. ∃ m. …` is the
         // shape of a modulus.
-        Type::Pi { dom, dom_level, cod, .. } => data(oracle, &gamma.extended(Rc::clone(dom), dom_level.clone()), cod, depth),
+        Type::Pi { dom, dom_level, cod, .. } => data(psi, oracle, &gamma.extended(Rc::clone(dom), dom_level.clone()), cod, depth),
         Type::UPi { body, .. } | Type::CtxPi { body, .. } | Type::TyPi { body, .. } => {
             // Under a binder Γ does not describe; answer for the body
             // without reducing it further.
             shape(body)
         }
         Type::Sigma { fst, fst_level, snd, .. } => {
-            data(oracle, gamma, fst, depth) || data(oracle, &gamma.extended(Rc::clone(fst), fst_level.clone()), snd, depth)
+            data(psi, oracle, gamma, fst, depth) || data(psi, oracle, &gamma.extended(Rc::clone(fst), fst_level.clone()), snd, depth)
         }
-        Type::Vec { elem, .. } => data(oracle, gamma, elem, depth),
+        Type::Vec { elem, .. } => data(psi, oracle, gamma, elem, depth),
         // A stuck decoding: data only when what is stuck is a type
         // parameter, which an instantiation may make anything. A recursion
         // into `Type` stuck on an open argument (`n <= m` at a variable `n`)
@@ -78,6 +86,41 @@ fn data(oracle: &SemanticOracle, gamma: &LocalCtx, ty: &Type, depth: u32) -> boo
         | Type::CodeTy { .. }
         | Type::CodeTm { .. } => true,
     }
+}
+
+/// [`data`] for a decoding, answered from its weak head value alone when the
+/// former has no components to look into — which is almost every statement
+/// spelled through a `fn … → Type` (`a <= b`, `x ≈ y` at a stuck argument).
+/// Only a decoding to `Π`/`Σ`/`Vec` (`None`) is spelled and recursed into:
+/// spelling is the reducer, which copies the definition bodies it unfolds.
+fn decoded(psi: &GlobalCtx, gamma: &LocalCtx, ty: &Type) -> Option<bool> {
+    let arena = ValueArena::new();
+    let Ok(v) = whnf_value_ty(&arena, &Rc::new(ty.clone()), gamma, Defs::transparent(psi), FUEL) else {
+        return Some(true);
+    };
+    Some(match &*v {
+        VTy::Id { .. } | VTy::SEq { .. } | VTy::SEmpty { .. } | VTy::Squash { .. } => false,
+        VTy::Unit { .. } | VTy::Empty { .. } => false,
+        VTy::Pi { .. } | VTy::Sigma { .. } | VTy::Vec { .. } => return None,
+        VTy::UPi { .. } | VTy::CtxPi { .. } | VTy::TyPi { .. } => return None,
+        VTy::Neutral(VNeTy::Global { .. }) => true,
+        // The value-domain reading of the syntax rule below: stuck on a
+        // local applied to arguments, and on nothing else.
+        VTy::Neutral(VNeTy::El { tm, .. }) => match &**tm {
+            Val::Neutral(n) => {
+                matches!(n.head, Head::Var(_) | Head::BaseVar(_)) && n.spine.iter_rev().all(|e| e.is_application())
+            }
+            _ => true,
+        },
+        VTy::Nat
+        | VTy::Ty(_)
+        | VTy::Sum { .. }
+        | VTy::W { .. }
+        | VTy::Wf { .. }
+        | VTy::Fin { .. }
+        | VTy::CodeTy { .. }
+        | VTy::CodeTm { .. } => true,
+    })
 }
 
 /// [`data`] without reduction, for a body under a binder the test does not
