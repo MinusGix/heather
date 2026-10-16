@@ -106,6 +106,7 @@ pub mod stats;
 pub use datarepr::{Obligation, Provenance};
 mod names;
 mod oracle;
+mod readback;
 mod patterns;
 mod pool;
 mod provenance;

@@ -1995,3 +1995,17 @@ pub fn holds_checked_spelling(t: &Rc<Term>) -> bool {
 pub fn holds_checked_spelling_ty(t: &Rc<Type>) -> bool {
     count_checked_spellings_ty(t) > 0
 }
+
+/// 1 + the largest free local de Bruijn index of `t` (0 when it is locally
+/// closed), from the bounds memo the local traversals already keep
+/// (`bounds.rs`). For a reader outside the kernel that pairs syntax with
+/// captured entries — the elaborator's readback of a closure — and must not
+/// pay for the entries the syntax cannot reach.
+pub fn local_bound(t: &Rc<Term>) -> u32 {
+    bounds::term_captures(t)
+}
+
+/// [`local_bound`] over a type.
+pub fn local_bound_ty(t: &Rc<Type>) -> u32 {
+    bounds::type_captures(t)
+}
