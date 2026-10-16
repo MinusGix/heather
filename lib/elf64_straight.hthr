@@ -27,6 +27,7 @@
 import elf64_frame;
 import elf64_operand_cursor;
 import elf64_arg_scan;
+import elf64_format_width;
 import elf64_runs;
 import elf64_io;
 import linux_x86_64_io;
@@ -91,9 +92,9 @@ theorem back_fetched(goal: MachineState<IoMemory> → Type, back: StepsBack(goal
 // the process. The end state is handed over bound (`after`), so the leaf's
 // proof can name it; `same` says which it is, for a fact the stretch's own
 // spelling of it gives by conversion.
-fn StraightLeaf(file: IoImage, page: Nat → BitVec(8), goal: MachineState<IoMemory> → Type, at: BitVec(64))
-    → (Nat → BitVec(64)) → MachineState<IoMemory> → Type {
-    λ vars state => (after: MachineState<IoMemory>) → after.rip = at → Framed(file, page, vars)(after) → after = state →
+fn StraightLeaf(file: IoImage, goal: MachineState<IoMemory> → Type, at: BitVec(64))
+    → (Nat → BitVec(8)) → (Nat → BitVec(64)) → MachineState<IoMemory> → Type {
+    λ page vars state => (after: MachineState<IoMemory>) → after.rip = at → Framed(file, page, vars)(after) → after = state →
         goal(after)
 }
 // A load's or store's slot: the caller names it, and the base register's
@@ -110,36 +111,51 @@ fn ByteThen(file: IoImage, page: Nat → BitVec(8), base: BitVec(64), then: BitV
         (((frame: Nat → BitVec(8)) → io_data_access().read(IoMemory(with_frame(file, frame), page), a) = Some(byte)) ∧
         ((a.toNat() < Nat::pow(2, 47)) ∧ then(byte)))))
 }
+// A byte store's place in the page: the caller names its offset `c`, the
+// base register's value is the page's address there.
+fn PageThen(base: BitVec(64), then: Nat → Type) → Type {
+    Exists<Nat>(λ c => (c < 4096) ∧ ((base.toNat() = io_page_base() + c) ∧ then(c)))
+}
+// The page with byte `x` stored at offset `c`: `io_store_offset`'s, which
+// reads no image (any frame's is the same page).
+fn page_stored(file: IoImage, page: Nat → BitVec(8), c: Nat, x: BitVec(8)) → Nat → BitVec(8) {
+    io_store_offset(IoMemory(file, page), c, [x]).page
+}
 // The item at `here`, then what follows it (`then`).
-fn straight_item(file: IoImage, page: Nat → BitVec(8), origin: BitVec(64), goal: MachineState<IoMemory> → Type, labels: Nat → Nat, here: Nat, item: Asm,
-    then: (Nat → BitVec(64)) → MachineState<IoMemory> → Type) → (Nat → BitVec(64)) → MachineState<IoMemory> → Type {
+fn straight_item(file: IoImage, origin: BitVec(64), goal: MachineState<IoMemory> → Type, labels: Nat → Nat, here: Nat, item: Asm,
+    then: (Nat → BitVec(8)) → (Nat → BitVec(64)) → MachineState<IoMemory> → Type) → (Nat → BitVec(8)) → (Nat → BitVec(64)) → MachineState<IoMemory> → Type {
     match item {
-        Block(instructions) => λ vars state => then(vars, execute_block_normal(instructions, state)),
-        Jcc(cc, target) => λ vars state =>
-            ((condition_holds(cc, state.flags) = True) → StraightLeaf(file, page, goal, near_branch_target(next_rip(origin, here), 6,
-                near_rel(here + 6, labels(target))))(vars, execute_near_control(JumpIfNear(cc, near_rel(here + 6, labels(target))), state))) ∧
-            ((condition_holds(cc, state.flags) = False) → then(vars, execute_near_control(JumpIfNear(cc, near_rel(here + 6, labels(target))), state))),
-        Jmp(target) => λ vars state => StraightLeaf(file, page, goal, near_branch_target(next_rip(origin, here), 5, near_rel(here + 5, labels(target))))(vars,
+        Block(instructions) => λ page vars state => then(page, vars, execute_block_normal(instructions, state)),
+        Jcc(cc, target) => λ page vars state =>
+            ((condition_holds(cc, state.flags) = True) → StraightLeaf(file, goal, near_branch_target(next_rip(origin, here), 6,
+                near_rel(here + 6, labels(target))))(page, vars, execute_near_control(JumpIfNear(cc, near_rel(here + 6, labels(target))), state))) ∧
+            ((condition_holds(cc, state.flags) = False) → then(page, vars, execute_near_control(JumpIfNear(cc, near_rel(here + 6, labels(target))), state))),
+        Jmp(target) => λ page vars state => StraightLeaf(file, goal, near_branch_target(next_rip(origin, here), 5, near_rel(here + 5, labels(target))))(page, vars,
             execute_near_control(JumpNear(near_rel(here + 5, labels(target))), state)),
-        Load(load) => λ vars state => SlotThen(read_gpr(load.base, state.gprs), λ q => then(vars, word_load_after(load, vars(q), state))),
-        LoadByte(load) => λ vars state => ByteThen(file, page, read_gpr(load.base, state.gprs), λ byte => then(vars, byte_load_after(load, byte, state))),
-        Store(store) => λ vars state => match store_base_plain(store.base) {
+        Load(load) => λ page vars state => SlotThen(read_gpr(load.base, state.gprs), λ q => then(page, vars, word_load_after(load, vars(q), state))),
+        LoadByte(load) => λ page vars state => ByteThen(file, page, read_gpr(load.base, state.gprs), λ byte => then(page, vars, byte_load_after(load, byte, state))),
+        Store(store) => λ page vars state => match store_base_plain(store.base) {
             True => SlotThen(read_gpr(store.base, state.gprs), λ q =>
-                then(set_var(vars, q, read_gpr(store.source, state.gprs)), word_store_after(linux_writes(io_linux()), store, state))),
+                then(page, set_var(vars, q, read_gpr(store.source, state.gprs)), word_store_after(linux_writes(io_linux()), store, state))),
             False => False,
         },
-        _ => λ _ _ => False,
+        StoreByte(store) => λ page vars state => match store_base_plain(store.base) {
+            True => PageThen(read_gpr(store.base, state.gprs), λ c =>
+                then(page_stored(file, page, c, imm_byte0(read_gpr(store.source, state.gprs))), vars, byte_store_after(linux_writes(io_linux()), store, state))),
+            False => False,
+        },
+        _ => λ _ _ _ => False,
     }
 }
 // The `n` items ending at label `l`, then `then`; and where they start.
-fn straight_run(file: IoImage, page: Nat → BitVec(8), origin: BitVec(64), goal: MachineState<IoMemory> → Type, labels: Nat → Nat, l: Prog, n: Nat,
-    then: (Nat → BitVec(64)) → MachineState<IoMemory> → Type) → (Nat → BitVec(64)) → MachineState<IoMemory> → Type {
+fn straight_run(file: IoImage, origin: BitVec(64), goal: MachineState<IoMemory> → Type, labels: Nat → Nat, l: Prog, n: Nat,
+    then: (Nat → BitVec(8)) → (Nat → BitVec(64)) → MachineState<IoMemory> → Type) → (Nat → BitVec(8)) → (Nat → BitVec(64)) → MachineState<IoMemory> → Type {
     match n {
         Zero => then,
         Succ(m) => match l {
             Start => then,
-            At(before, _, item) => straight_run(file, page, origin, goal, labels, before, m,
-                straight_item(file, page, origin, goal, labels, prog_len(before), item, then)),
+            At(before, _, item) => straight_run(file, origin, goal, labels, before, m,
+                straight_item(file, origin, goal, labels, prog_len(before), item, then)),
         },
     }
 }
@@ -147,33 +163,33 @@ fn straight_from(l: Prog, n: Nat) → Nat {
     match n { Zero => prog_len(l), Succ(m) => match l { Start => 0, At(before, _, _) => straight_from(before, m) } }
 }
 // What the stretch needs: its items, each leaf the rest of the process.
-fn Straight(file: IoImage, page: Nat → BitVec(8), origin: BitVec(64), goal: MachineState<IoMemory> → Type, labels: Nat → Nat, l: Prog, n: Nat)
-    → (Nat → BitVec(64)) → MachineState<IoMemory> → Type {
-    straight_run(file, page, origin, goal, labels, l, n, StraightLeaf(file, page, goal, next_rip(origin, prog_len(l))))
+fn Straight(file: IoImage, origin: BitVec(64), goal: MachineState<IoMemory> → Type, labels: Nat → Nat, l: Prog, n: Nat)
+    → (Nat → BitVec(8)) → (Nat → BitVec(64)) → MachineState<IoMemory> → Type {
+    straight_run(file, origin, goal, labels, l, n, StraightLeaf(file, goal, next_rip(origin, prog_len(l))))
 }
 
 // ---------------------------------------------------------------------------
 // The proof.
 
 // From a framed state at `at` that meets `then`, the process runs.
-fn StraightGoes(file: IoImage, page: Nat → BitVec(8), origin: BitVec(64), goal: MachineState<IoMemory> → Type, at: Nat,
-    then: (Nat → BitVec(64)) → MachineState<IoMemory> → Type) → Type {
-    (vars: Nat → BitVec(64)) → (state: MachineState<IoMemory>) → state.rip = next_rip(origin, at) → Framed(file, page, vars)(state) →
-        then(vars, state) → goal(state)
+fn StraightGoes(file: IoImage, origin: BitVec(64), goal: MachineState<IoMemory> → Type, at: Nat,
+    then: (Nat → BitVec(8)) → (Nat → BitVec(64)) → MachineState<IoMemory> → Type) → Type {
+    (page: Nat → BitVec(8)) → (vars: Nat → BitVec(64)) → (state: MachineState<IoMemory>) → state.rip = next_rip(origin, at) →
+        Framed(file, page, vars)(state) → then(page, vars, state) → goal(state)
 }
 // One item, resident at `here`, then what follows.
-theorem straight_item_goes(file: IoImage, page: Nat → BitVec(8), origin: BitVec(64), goal: MachineState<IoMemory> → Type, back: StepsBack(goal), fills: Nat → List<BitVec(8)>,
-    labels: Nat → Nat, here: Nat, item: Asm, then: (Nat → BitVec(64)) → MachineState<IoMemory> → Type):
+theorem straight_item_goes(file: IoImage, origin: BitVec(64), goal: MachineState<IoMemory> → Type, back: StepsBack(goal), fills: Nat → List<BitVec(8)>,
+    labels: Nat → Nat, here: Nat, item: Asm, then: (Nat → BitVec(8)) → (Nat → BitVec(64)) → MachineState<IoMemory> → Type):
     ((frame: Nat → BitVec(8)) → Placed(with_frame(file, frame), asm_bytes(fills, labels, here, item), next_rip(origin, here))) →
-    StraightGoes(file, page, origin, goal, here + asm_len(item), then) →
-    StraightGoes(file, page, origin, goal, here, straight_item(file, page, origin, goal, labels, here, item, then)) {
+    StraightGoes(file, origin, goal, here + asm_len(item), then) →
+    StraightGoes(file, origin, goal, here, straight_item(file, origin, goal, labels, here, item, then)) {
     let io = io_linux();
     let fetch = io_fetch_access();
     let data = io_data_access();
     match item as λ it => ((frame: Nat → BitVec(8)) → Placed(with_frame(file, frame), asm_bytes(fills, labels, here, it), next_rip(origin, here))) →
-            StraightGoes(file, page, origin, goal, here + asm_len(it), then) →
-            StraightGoes(file, page, origin, goal, here, straight_item(file, page, origin, goal, labels, here, it, then)) {
-        Block(instructions) => λ code goes vars state rip framed held => {
+            StraightGoes(file, origin, goal, here + asm_len(it), then) →
+            StraightGoes(file, origin, goal, here, straight_item(file, origin, goal, labels, here, it, then)) {
+        Block(instructions) => λ code goes page vars state rip framed held => {
             let bytes = canonical_block_bytes(instructions);
             let after = execute_block_normal(instructions, state);
             let resident = framed_resident(file, page, vars, bytes, next_rip(origin, here), code, state, framed);
@@ -182,10 +198,10 @@ theorem straight_item_goes(file: IoImage, page: Nat → BitVec(8), origin: BitVe
                 trans(ran.right, trans(rip_advance(origin, state.rip, here, bytes.len(), rip),
                     rip_count(origin, cong_fn<Nat, Nat>(λ k => here + k, block_length_is(instructions)))));
             back_fetched(goal, back, state, after, ran.left,
-                goes(vars, after, after_rip, framed_moved(file, page, vars, after, state, pure_block_memory(instructions, state), framed), held))
+                goes(page, vars, after, after_rip, framed_moved(file, page, vars, after, state, pure_block_memory(instructions, state), framed), held))
         },
-        Code(_) => λ _ _ vars state rip framed never => false_elim(never),
-        Load(load) => λ code goes vars state rip framed slot => {
+        Code(_) => λ _ _ page vars state rip framed never => false_elim(never),
+        Load(load) => λ code goes page vars state rip framed slot => {
             let q = slot.witness;
             let img = with_frame(file, framed.witness);
             let loaded = run_word_load(img, page, load, origin, here, code(framed.witness), state, framed.proof.left, rip, vars(q),
@@ -193,9 +209,9 @@ theorem straight_item_goes(file: IoImage, page: Nat → BitVec(8), origin: BitVe
                     frame_var_at(img, page, vars, framed.proof.right, q, slot.proof.left)));
             let after = word_load_after(load, vars(q), state);
             back_fetched(goal, back, state, after, loaded.steps,
-                goes(vars, after, loaded.rip_is, Exists(framed.witness, ⟨loaded.memory_is, framed.proof.right⟩), slot.proof.right.right))
+                goes(page, vars, after, loaded.rip_is, Exists(framed.witness, ⟨loaded.memory_is, framed.proof.right⟩), slot.proof.right.right))
         },
-        LoadByte(load) => λ code goes vars state rip framed held => {
+        LoadByte(load) => λ code goes page vars state rip framed held => {
             let byte = held.witness;
             let named = held.proof.proof;
             let base = read_gpr(load.base, state.gprs);
@@ -206,12 +222,12 @@ theorem straight_item_goes(file: IoImage, page: Nat → BitVec(8), origin: BitVe
             let loaded = run_byte_load(img, page, load, origin, here, code(framed.witness), state, framed.proof.left, rip, byte, present, low);
             let after = byte_load_after(load, byte, state);
             back_fetched(goal, back, state, after, loaded.steps,
-                goes(vars, after, loaded.rip_is, Exists(framed.witness, ⟨loaded.memory_is, framed.proof.right⟩), named.right.right.right))
+                goes(page, vars, after, loaded.rip_is, Exists(framed.witness, ⟨loaded.memory_is, framed.proof.right⟩), named.right.right.right))
         },
-        Store(store) => λ code goes vars state rip framed => (match store_base_plain(store.base) as λ b => store_base_plain(store.base) = b →
+        Store(store) => λ code goes page vars state rip framed => (match store_base_plain(store.base) as λ b => store_base_plain(store.base) = b →
                 (match b as λ _ => Type {
                     True => SlotThen(read_gpr(store.base, state.gprs), λ q =>
-                        then(set_var(vars, q, read_gpr(store.source, state.gprs)), word_store_after(linux_writes(io), store, state))),
+                        then(page, set_var(vars, q, read_gpr(store.source, state.gprs)), word_store_after(linux_writes(io), store, state))),
                     False => False,
                 }) → goal(state) {
             True => λ plain slot => {
@@ -222,13 +238,32 @@ theorem straight_item_goes(file: IoImage, page: Nat → BitVec(8), origin: BitVe
                     framed.proof.left, rip, slot.proof.right.left);
                 let after = word_store_after(linux_writes(io), store, state);
                 back(state, after, stored.step,
-                    goes(set_var(vars, q, w), after, stored.rip_is,
+                    goes(page, set_var(vars, q, w), after, stored.rip_is,
                         Exists(frame_stored(img, 8 * q, w).frame, ⟨stored.memory_is, frame_holds_store(img, vars, q, w, framed.proof.right)⟩),
                         slot.proof.right.right))
             },
             False => λ _ never => false_elim(never),
         })(refl),
-        Jcc(cc, target) => λ code goes vars state rip framed held => {
+        StoreByte(store) => λ code goes page vars state rip framed => (match store_base_plain(store.base) as λ b => store_base_plain(store.base) = b →
+                (match b as λ _ => Type {
+                    True => PageThen(read_gpr(store.base, state.gprs), λ c =>
+                        then(page_stored(file, page, c, imm_byte0(read_gpr(store.source, state.gprs))), vars, byte_store_after(linux_writes(io), store, state))),
+                    False => False,
+                }) → goal(state) {
+            True => λ plain at => {
+                let c = at.witness;
+                let img = with_frame(file, framed.witness);
+                let x = imm_byte0(read_gpr(store.source, state.gprs));
+                let stored = run_store(img, page, store, plain, origin, here, code(framed.witness), c, at.proof.left, x, state, framed.proof.left, rip,
+                    at.proof.right.left, refl);
+                let after = byte_store_after(linux_writes(io), store, state);
+                back(state, after, stored.step,
+                    goes(page_stored(file, page, c, x), vars, after, stored.rip_is, Exists(framed.witness, ⟨stored.memory_is, framed.proof.right⟩),
+                        at.proof.right.right))
+            },
+            False => λ _ never => false_elim(never),
+        })(refl),
+        Jcc(cc, target) => λ code goes page vars state rip framed held => {
             let d = near_rel(here + 6, labels(target));
             let jcc = JumpIfNear(cc, d);
             let after = execute_near_control(jcc, state);
@@ -240,11 +275,11 @@ theorem straight_item_goes(file: IoImage, page: Nat → BitVec(8), origin: BitVe
                 (match condition_holds(cc, state.flags) as λ c => condition_holds(cc, state.flags) = c → goal(after) {
                     True => λ yes => held.left(yes)(after, trans(near_if_taken_rip(cc, d, state, yes),
                         cong_fn<BitVec(64), BitVec(64)>(λ a => near_branch_target(a, 6, d), rip)), moved, refl),
-                    False => λ no => goes(vars, after, trans(near_if_not_taken_rip(cc, d, state, no), rip_advance(origin, state.rip, here, 6, rip)),
+                    False => λ no => goes(page, vars, after, trans(near_if_not_taken_rip(cc, d, state, no), rip_advance(origin, state.rip, here, 6, rip)),
                         moved, held.right(no)),
                 })(refl))
         },
-        Jmp(target) => λ code goes vars state rip framed held => {
+        Jmp(target) => λ code goes page vars state rip framed held => {
             let d = near_rel(here + 5, labels(target));
             let jmp = JumpNear(d);
             let after = execute_near_control(jmp, state);
@@ -255,23 +290,23 @@ theorem straight_item_goes(file: IoImage, page: Nat → BitVec(8), origin: BitVe
                 held(after, cong_fn<BitVec(64), BitVec(64)>(λ a => near_branch_target(a, 5, d), rip), framed_moved(file, page, vars, after, state, refl, framed),
                     refl))
         },
-        Piece(_, _, _) => λ _ _ vars state rip framed never => false_elim(never),
-        Refer(_, _, _) => λ _ _ vars state rip framed never => false_elim(never),
-        Hole(_, _) => λ _ _ vars state rip framed never => false_elim(never),
+        Piece(_, _, _) => λ _ _ page vars state rip framed never => false_elim(never),
+        Refer(_, _, _) => λ _ _ page vars state rip framed never => false_elim(never),
+        Hole(_, _) => λ _ _ page vars state rip framed never => false_elim(never),
     }
 }
 // The chain's items, each resident where the chain's code is.
-theorem straight_run_goes(file: IoImage, page: Nat → BitVec(8), origin: BitVec(64), goal: MachineState<IoMemory> → Type, back: StepsBack(goal), fills: Nat → List<BitVec(8)>,
+theorem straight_run_goes(file: IoImage, origin: BitVec(64), goal: MachineState<IoMemory> → Type, back: StepsBack(goal), fills: Nat → List<BitVec(8)>,
     labels: Nat → Nat, n: Nat): (l: Prog) → FillsFit(l, fills) → (rest: List<BitVec(8)>) →
     ((frame: Nat → BitVec(8)) → Placed(with_frame(file, frame), asm_code(fills, labels, l) ++ rest, origin)) →
-    (then: (Nat → BitVec(64)) → MachineState<IoMemory> → Type) → StraightGoes(file, page, origin, goal, prog_len(l), then) →
-    StraightGoes(file, page, origin, goal, straight_from(l, n), straight_run(file, page, origin, goal, labels, l, n, then)) {
+    (then: (Nat → BitVec(8)) → (Nat → BitVec(64)) → MachineState<IoMemory> → Type) → StraightGoes(file, origin, goal, prog_len(l), then) →
+    StraightGoes(file, origin, goal, straight_from(l, n), straight_run(file, origin, goal, labels, l, n, then)) {
     match n {
         Zero => λ l fits rest code then goes => goes,
         Succ(m) => λ l => match l as λ x => FillsFit(x, fills) → (rest: List<BitVec(8)>) →
                 ((frame: Nat → BitVec(8)) → Placed(with_frame(file, frame), asm_code(fills, labels, x) ++ rest, origin)) →
-                (then: (Nat → BitVec(64)) → MachineState<IoMemory> → Type) → StraightGoes(file, page, origin, goal, prog_len(x), then) →
-                StraightGoes(file, page, origin, goal, straight_from(x, Succ(m)), straight_run(file, page, origin, goal, labels, x, Succ(m), then)) {
+                (then: (Nat → BitVec(8)) → (Nat → BitVec(64)) → MachineState<IoMemory> → Type) → StraightGoes(file, origin, goal, prog_len(x), then) →
+                StraightGoes(file, origin, goal, straight_from(x, Succ(m)), straight_run(file, origin, goal, labels, x, Succ(m), then)) {
             Start => λ fits rest code then goes => goes,
             At(before, name, item) => λ fits rest code then goes => {
                 let fetch = io_fetch_access();
@@ -286,9 +321,9 @@ theorem straight_run_goes(file: IoImage, page: Nat → BitVec(8), origin: BitVec
                     resident_split(fetch, memory, bytes, rest, next_rip(origin, prog_len(before)),
                         j(asm_code_len(fills, labels, before, fits_before), λ k _ => CodeResident(fetch, memory, bytes ++ rest, next_rip(origin, k)), tail)).left
                 };
-                straight_run_goes(file, page, origin, goal, back, fills, labels, m, before, fits_before, bytes ++ rest, moved,
-                    straight_item(file, page, origin, goal, labels, prog_len(before), item, then),
-                    straight_item_goes(file, page, origin, goal, back, fills, labels, prog_len(before), item, then, item_code, goes))
+                straight_run_goes(file, origin, goal, back, fills, labels, m, before, fits_before, bytes ++ rest, moved,
+                    straight_item(file, origin, goal, labels, prog_len(before), item, then),
+                    straight_item_goes(file, origin, goal, back, fills, labels, prog_len(before), item, then, item_code, goes))
             },
         },
     }
@@ -297,8 +332,8 @@ theorem straight_runs(file: IoImage, page: Nat → BitVec(8), origin: BitVec(64)
     labels: Nat → Nat, l: Prog, n: Nat, fits: FillsFit(l, fills), rest: List<BitVec(8)>,
     code: (frame: Nat → BitVec(8)) → Placed(with_frame(file, frame), asm_code(fills, labels, l) ++ rest, origin),
     vars: Nat → BitVec(64), state: MachineState<IoMemory>, rip: state.rip = next_rip(origin, straight_from(l, n)),
-    framed: Framed(file, page, vars)(state), held: Straight(file, page, origin, goal, labels, l, n)(vars, state)):
+    framed: Framed(file, page, vars)(state), held: Straight(file, origin, goal, labels, l, n)(page, vars, state)):
     goal(state) {
-    straight_run_goes(file, page, origin, goal, back, fills, labels, n, l, fits, rest, code, StraightLeaf(file, page, goal, next_rip(origin, prog_len(l))),
-        λ vs s at f leaf => leaf(s, at, f, refl), vars, state, rip, framed, held)
+    straight_run_goes(file, origin, goal, back, fills, labels, n, l, fits, rest, code, StraightLeaf(file, goal, next_rip(origin, prog_len(l))),
+        λ pg vs s at f leaf => leaf(s, at, f, refl), page, vars, state, rip, framed, held)
 }
