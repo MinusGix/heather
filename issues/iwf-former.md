@@ -3,7 +3,7 @@ title: IWf: finitary inductive families as a former, with no stored index equati
 status: open
 labels: [kernel,design,delam,metatheory]
 created: 2026-09-30
-updated: 2026-10-13
+updated: 2026-10-16
 ---
 
 Owns the `IWf` former round: `docs/iwf-former-design.md` (rule set
@@ -46,12 +46,18 @@ The full argument is in the doc. Items marked checked have a Coq probe:
 
 ## Status (doc §12, §13)
 
-The rule set (doc §1–§6) is frozen, 2026-10-13. Nothing is implemented. What
+The rule set (doc §1–§6) is frozen, 2026-10-13. Nothing is implemented in
+the kernel. The Coq formalization has checked the frozen rules (typing at
+every layer but V, computation at D and M), with the code-recursor
+branches derived there before `rec.rs` has them (heather-coq
+`M17_DESIGN.md`; Log, 2026-10-16). What
 is still open is the generator's and changes no typing or reduction rule:
 inversion at parameterized or container index types (§12.1), mutual
 families (§12.2) and migrating route 2b's declarations (§12.4). An
-independent review of `docs/no-uip-model.md` §4 is still owed; it backs the
-no-UIP claim and does not gate the freeze (§12.3). `Vec`/`Wf` stay
+independent review of `docs/no-uip-model.md` §4 is written
+(`docs/no-uip-model-review.md`); its three local fixes and four missing
+steps are still to apply. It backs the no-UIP claim and does not gate the
+freeze (§12.3). `Vec`/`Wf` stay
 separate formers now, with abbreviations as the target (§10).
 
 ## What it assumes from elsewhere
@@ -72,3 +78,5 @@ separate formers now, with abbreviations as the target (§10).
 - 2026-09-30: `docs/no-uip-model.md` §4 has been self-reviewed against the Coq formalization's declarative rules. It is right in outline, and three things were fixed. (1) `□`'s discreteness rests on Static Code, which is syntactic only up to level equivalence (`StaticCodeEq.v`), not on `conv.rs`. (2) The interpretation is now three explicit stages, with environments carrying syntax and semantics, plus the semantic global substitution lemma that validates `letbox`'s β. (3) The scope excludes postulated globals. Every layer fact used is a side condition of a cited rule. Still open: an independent review, and the substitution lemma written out case by case.
 - 2026-09-30: `docs/no-uip-model.md` §4.2a writes out the semantic global substitution lemma, `⟦t⦃σ⦄⟧ρ ≃ ⟦t⟧(ρ·σ)` for every global substitution `σ`, case by case. It covers globals (substituted and renamed), context globals, boxes, `letbox`, the recursors, `CΠ`/`TΠ` and bodied globals. Its syntactic half cites Coq-checked lemmas: `gsubst_gsubst`, `gsubst_subst`, `gsubst_gren_all`, the `ptm`/`pdef` clauses and `gsubstitution`. Its semantic half uses the standard local substitution lemma and a closing lemma for C/D, proved there. It validates `letbox` β, `CΠ`/`TΠ` β/η and the recursors' β. Still open: an independent review of §4.
 - 2026-10-13: Decided with the user: doc §1–§6 are frozen after a review that changed no rule. Three wording edits came out of it. (1) §1 now says where the formers live: as `Wf`'s, gated out of layer c until the rec.rs round. (2) §1.1 and §10: `Vec`/`DVec(_; _. T)` and `Wf`/`IWf` at `Unit` are translations, not conversions. At a neutral length they are distinct neutral types, and `elim_Wf`'s ih goes through `nth` where `elim_IWf`'s goes through `dnth`. (3) §3: the ih's type is `F[i]` only up to β, which adds a step to the formalization's hardest `Wf` lemma (`V_nth`); its IWf relation probe checks this first. §10 is decided: option 1 now, option 2 (abbreviations) as the target, after the generator, accepting that it may be slower at first. The no-UIP §4 review is decoupled from the freeze (§12.3, §13 step 1). The stale "Open, before freezing" paragraph is replaced by a status paragraph.
+- 2026-10-16: The independent review of `docs/no-uip-model.md` §4 is written: `docs/no-uip-model-review.md`. The outline holds and nothing found touches `UIP₀`, but the interpretation as written misses three rules, each with a local fix: `eqtm_ubeta` when code mentions a bound level (box must evaluate levels), `eqtm_capp` and the other D-conversion congruences (`CΠ`/`TΠ` over conversion classes, with a new representative-independence lemma), and a boxed definition (normalize box values by `unf`). It also lists four missing steps: the recursor's D/V binders, the order of (M1) and the renaming lemma, the lemma's hypotheses, and level binders under `σ` (`guwkn_gosubst`).
+- 2026-10-16: The frozen rules are machine-checked in the Coq formalization (heather-coq `M17_DESIGN.md`, main @ 16ed0d5), with no admits or axioms and no change to Heather's rules. M17a: `DVec` at D and M, and `dnth`'s index lemma `V_dnth`, which answers the freeze's one open question: the ih's type being `F[i]` only up to β (doc §3) adds one validity step to `V_nth`'s composition and goes through. The neutral-tuple property is checked on doc §3's own instance (`dnth_reds_example`). M17b: `IWf`, `sup_i`, `elim_IWf` and β on open data at D and M, through the relation (`Wf`'s, with the index an index of the families), the fundamental theorem, decidable conversion, type checking and the consequences. M17c: the codes `TmDVec`/`TmIWf`, the lift to every layer but V, and the six code-recursor branches (`ty_dvec`, `tm_dvec`, `ty_iwf`, `tm_iwf`, `tm_sup_i`, `tm_elim_iwf`; there 55–60), their scopes derived from the layer-C typing rules and validated by `rec_code`. Those scopes are the first precise statement of doc §6, so §13 step 4 (the rec.rs round) checks Heather's branches against them, as M15b did for `Wf`'s, rather than the other way round. `dnth`'s de Bruijn transcription is likewise the statement for step 2's materialization.

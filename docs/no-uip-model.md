@@ -12,6 +12,9 @@ in the formalization's Paulin-Mohring form, is **mechanized**
 (`../Lean/delam/probes/NoUipJ.v`). It has not been independently
 reviewed.
 Owed by `docs/iwf-former-design.md` §12.3 before that rule set freezes.
+**Independent review of §4: `docs/no-uip-model-review.md` (2026-10-16).**
+It finds three rules the interpretation as written does not validate
+(R1–R3, each with a local fix) and four missing steps (R4–R7).
 The rule set in question is the revised one: `docs/sprop-design.md` with
 its 2026-09-30 revision (no `transp`, no strip), plus `IWf`/`DVec`.
 

@@ -15,6 +15,8 @@ use heather_kernel::reduce::{self, Defs, OutOfFuel};
 use heather_kernel::term::{GlobalBinding, GlobalCtx, LocalCtx, Term, Type};
 use heather_kernel::value::{VTy, Val, ValueArena};
 
+use crate::readback::Readback;
+
 /// Steps the small-step reducer may spend on the *spelling* of a head the
 /// value machine has already found stuck. See [`SemanticOracle::whnf_type`]:
 /// past this budget the input itself is the answer.
@@ -49,8 +51,8 @@ impl SemanticOracle {
     /// head-shape probes want it: "is this a Π", "is this a universe", "which
     /// former is this".
     ///
-    /// The answer is *decided* in the value domain and only *spelled* by the
-    /// small-step reducer. `reduce::whnf_type_delta` rewrites terms, so on a
+    /// The answer is *decided* in the value domain; the small-step reducer
+    /// only spells what the value cannot. `reduce::whnf_type_delta` rewrites terms, so on a
     /// type whose head is a computing `fn … → Type` over a computed argument
     /// (`El^0(Le(x, dot(row, atoms)))`: `Le` at `Int` unfolds to a `match`
     /// on the dot product) it evaluates the whole computation by substitution
@@ -60,10 +62,15 @@ impl SemanticOracle {
     /// pathological there (it is what conversion already runs on these
     /// types), so it is asked first, whenever the head could compute at all:
     ///
-    /// - a **former** at the head: the reducer will reach the same former,
-    ///   and it is run as before to produce the syntax the probe reads
-    ///   (there is no readback from the value domain, by design —
-    ///   docs/nbe-conversion-design.md);
+    /// - a **former** at the head: the reducer would reach the same former,
+    ///   but by substitution, copying every continuation and branch bundle at
+    ///   each step on the way (a straight stretch's encoded `match`,
+    ///   issues/elab-whnf-copies-straight-continuations.md). Its top layer is
+    ///   read off the value instead ([`Readback`]): each child is a closure
+    ///   the machine has not evaluated, read back as its syntax under its
+    ///   environment — exactly the reduct's child, since weak head reduction
+    ///   never enters one. A child the readback does not know falls back to
+    ///   the reducer, as before;
     /// - a **neutral** at the head: the probe's answer is "no former", and
     ///   every reduct is as good a witness of it as any other. The reducer is
     ///   given a small fixed step budget so a cheaply reached stuck spelling
@@ -79,7 +86,9 @@ impl SemanticOracle {
     ///
     /// Adequacy of the machine against ch. 06 reduction (the kernel's
     /// differential tests) is what makes the first bullet's "same former"
-    /// and the second's "no former" one claim.
+    /// and the second's "no former" one claim; the first bullet's "same
+    /// spelling" is checked against the reducer in debug builds
+    /// ([`crate::readback::verify`]).
     pub(crate) fn whnf_type(&self, gamma: &LocalCtx, ty: &Type) -> Result<Type, OutOfFuel> {
         // The elaborator's own head-shape probes are a phase of elaboration
         // and not of the gate (`docs/instrumentation-design.md` §5): nothing
@@ -109,7 +118,18 @@ impl SemanticOracle {
                 Ok(VTy::Empty { level }) => return Ok(Type::Empty { level: level.clone() }),
                 Ok(VTy::SEmpty { level }) => return Ok(Type::SEmpty { level: level.clone() }),
                 Err(OutOfFuel) => return Err(OutOfFuel),
-                Ok(_) => false,
+                // A former with sub-structure: read its top layer off the
+                // value (`readback.rs`), its children the syntax the machine
+                // has not evaluated — the reducer's spelling, without
+                // redoing the computation by substitution to reach it.
+                Ok(former) => match Readback::new(gamma).head(former) {
+                    Some(read) => {
+                        #[cfg(debug_assertions)]
+                        crate::readback::verify(ty, gamma, defs, self.fuel, &read);
+                        return Ok(read);
+                    }
+                    None => false,
+                },
             };
             if stuck {
                 let budget = self.fuel.min(STUCK_SPELLING_STEPS);
