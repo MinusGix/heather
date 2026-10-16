@@ -1,0 +1,513 @@
+// Regular Cauchy reals: the first computational presentation of the real
+// numbers (issues/regular-cauchy-reals.md; docs/regular-cauchy-reals-round.md).
+//
+// A real is a sequence of rationals with its rate of convergence written in:
+// the n-th term is meant to be within 1/(n+1) of the number, so any two terms
+// m and n lie within 1/(m+1) + 1/(n+1) of each other. That bound is the
+// `regular` field, Bishop's regular sequences indexed from zero. Nothing is
+// ever a limit: a real is its approximations, and asking for the n-th one
+// computes it.
+//
+// Equality is a setoid, `CReal::Same`, written `≈`: two reals are the same
+// when their terms become arbitrarily close, with the index from which they
+// are within 1/(k+1) given as data (`∃` is a record, so the modulus
+// computes). Two sequences that differ in finitely many places, or approach
+// the same number at different speeds, are `≈` and not `=`; the regularity
+// proofs are never compared.
+//
+// Every operation is defined on sequences and shown to respect `≈`, and every
+// law is stated modulo `≈`, as at `Rat`. Arithmetic reads its arguments
+// further out to keep within the rate: a sum's n-th term adds the summands'
+// (2n+1)-th terms, each within 1/(2n+2), and the halves add to 1/(n+1).
+//
+// Calling convention: as at `Rat`, a lemma whose every `CReal` is named by
+// one of its hypotheses takes them implicitly; any other takes the first as
+// `self`.
+
+import logic;
+import nat;
+import int;
+import omega;
+import relation_props;
+import algebra_rel;
+import order;
+import rat;
+
+record CReal {
+    seq: Nat → Rat,
+    regular: (m, n: Nat) → (seq(m) -seq(n)).abs() <= Rat::inv_succ(m) + Rat::inv_succ(n),
+}
+
+fn CReal::Same(x, y: CReal) → Type {
+    (k: Nat) → ∃ start: Nat, (n: Nat) → start <= n → (x.seq(n) -y.seq(n)).abs() <= Rat::inv_succ(k)
+}
+
+designation ≈ at CReal := CReal::Same
+
+// Two terms of one real, both from index 2k+1 on, are within 1/(k+1): each
+// is within 1/(2k+2) of the other's rate, and the halves add up.
+theorem CReal::regular_close(self x: CReal, k, m, n: Nat, hm: k + k + 1 <= m, hn: k + k + 1 <= n):
+    (x.seq(m) -x.seq(n)).abs() <= Rat::inv_succ(k)
+{
+    let half = Rat::inv_succ(k + k + 1);
+    calc {
+        (x.seq(m) -x.seq(n)).abs() <= Rat::inv_succ(m) + Rat::inv_succ(n) := x.regular(m, n),
+        <= half + half := Rat::add_le_mono(Rat::inv_succ_antitone(k + k + 1, m, hm), Rat::inv_succ_antitone(k + k + 1, n, hn)),
+        ≈ Rat::inv_succ(k) := Rat::inv_succ_half(k),
+    }
+}
+
+// The two ways most laws below are proved: termwise `≈` (closeness from
+// index zero), or closeness within 1/(k+1) from index 2k+1 on.
+fn CReal::same_of_terms(self x, y: CReal, terms: (n: Nat) → x.seq(n) ≈ y.seq(n)) → x ≈ y {
+    λ k => Exists(0, λ n start => calc {
+        (x.seq(n) -y.seq(n)).abs() ≈ (y.seq(n) -y.seq(n)).abs() := Rat::abs_respects(Rat::sub_respects(terms(n), y.seq(n).same_refl())),
+        ≈ Rat::zero() := y.seq(n).abs_sub_self(),
+        <= Rat::inv_succ(k) := Rat::le_of_lt(Rat::inv_succ_pos(k)),
+    })
+}
+
+fn CReal::same_of_close(self x, y: CReal,
+    close: (k, n: Nat) → k + k + 1 <= n → (x.seq(n) -y.seq(n)).abs() <= Rat::inv_succ(k)) → x ≈ y
+{
+    λ k => Exists(k + k + 1, close(k))
+}
+
+fn CReal::same_refl(self x: CReal) → x ≈ x { x.same_of_terms(x, λ n => x.seq(n).same_refl()) }
+
+fn CReal::same_sym({x, y: CReal}, h: x ≈ y) → y ≈ x {
+    λ k => match h(k) {
+        Exists(start, close) => Exists(start, λ n from => calc {
+            (y.seq(n) -x.seq(n)).abs() ≈ (x.seq(n) -y.seq(n)).abs() := y.seq(n).abs_sub_comm(x.seq(n)),
+            <= Rat::inv_succ(k) := close(n, from),
+        }),
+    }
+}
+
+// Within 1/(2k+2) of y from one index, y within 1/(2k+2) of z from another:
+// from the later of the two, x is within 1/(k+1) of z.
+fn CReal::same_trans({x, y, z: CReal}, hxy: x ≈ y, hyz: y ≈ z) → x ≈ z {
+    λ k => match hxy(k + k + 1) {
+        Exists(i, first) => match hyz(k + k + 1) {
+            Exists(j, second) => Exists(i.max(j), λ n from => {
+                let half = Rat::inv_succ(k + k + 1);
+                let a: ((x.seq(n) -y.seq(n)).abs() <= half) = first(n, i.le_trans(i.max(j), n, i.le_max_l(j), from));
+                let b: ((y.seq(n) -z.seq(n)).abs() <= half) = second(n, j.le_trans(i.max(j), n, i.le_max_r(j), from));
+                calc {
+                    (x.seq(n) -z.seq(n)).abs() <= (x.seq(n) -y.seq(n)).abs() + (y.seq(n) -z.seq(n)).abs() := x.seq(n).dist_triangle(y.seq(n), z.seq(n)),
+                    <= half + half := Rat::add_le_mono(a, b),
+                    ≈ Rat::inv_succ(k) := Rat::inv_succ_half(k),
+                }
+            }),
+        },
+    }
+}
+
+instance Equivalence<CReal>(CReal::Same) {
+    rel_refl := CReal::same_refl,
+    rel_sym := λ x y h => CReal::same_sym(h),
+    rel_trans := λ x y z hxy hyz => CReal::same_trans(hxy, hyz),
+}
+
+// ---------------------------------------------------------------------------
+// The rationals inside the reals: constant sequences.
+
+theorem CReal::const_regular(q: Rat, m, n: Nat): (q -q).abs() <= Rat::inv_succ(m) + Rat::inv_succ(n) {
+    calc {
+        (q -q).abs() ≈ Rat::zero() := q.abs_sub_self(),
+        <= Rat::inv_succ(m) + Rat::inv_succ(n) := omega,
+    }
+}
+
+fn CReal::ofRat(q: Rat) → CReal { CReal(λ n => q, λ m n => CReal::const_regular(q, m, n)) }
+
+fn CReal::zero() → CReal { CReal::ofRat(Rat::zero()) }
+fn CReal::one() → CReal { CReal::ofRat(Rat::one()) }
+
+fn CReal::ofRat_respects({p, q: Rat}, h: p ≈ q) → CReal::ofRat(p) ≈ CReal::ofRat(q) {
+    CReal::ofRat(p).same_of_terms(CReal::ofRat(q), λ n => h)
+}
+
+// The embedding reflects `≈` too: rationals that become arbitrarily close
+// are the same (`Rat::same_of_close`).
+theorem CReal::ofRat_inj({p, q: Rat}, h: CReal::ofRat(p) ≈ CReal::ofRat(q)): p ≈ q {
+    p.same_of_close(q, λ k => match h(k) {
+        Exists(start, close) => close(start, start.le_refl()),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Arithmetic. Negation reads the same index; a sum reads index 2n+1 of both
+// summands, so that the two rates of 1/(2n+2) add up to one of 1/(n+1).
+
+theorem CReal::neg_regular(self x: CReal, m, n: Nat):
+    ((-x.seq(m)) -(-x.seq(n))).abs() <= Rat::inv_succ(m) + Rat::inv_succ(n)
+{
+    calc {
+        ((-x.seq(m)) -(-x.seq(n))).abs() ≈ (x.seq(m) -x.seq(n)).abs() := x.seq(m).abs_neg_sub_neg(x.seq(n)),
+        <= Rat::inv_succ(m) + Rat::inv_succ(n) := x.regular(m, n),
+    }
+}
+
+fn CReal::neg(self x: CReal) → CReal { CReal(λ n => -x.seq(n), λ m n => x.neg_regular(m, n)) }
+
+theorem CReal::add_regular(self x, y: CReal, m, n: Nat):
+    ((x.seq(m + m + 1) + y.seq(m + m + 1)) -(x.seq(n + n + 1) + y.seq(n + n + 1))).abs()
+        <= Rat::inv_succ(m) + Rat::inv_succ(n)
+{
+    let hm = Rat::inv_succ(m + m + 1);
+    let hn = Rat::inv_succ(n + n + 1);
+    calc {
+        ((x.seq(m + m + 1) + y.seq(m + m + 1)) -(x.seq(n + n + 1) + y.seq(n + n + 1))).abs()
+            <= (hm + hn) + (hm + hn) := Rat::dist_add_le(x.regular(m + m + 1, n + n + 1), y.regular(m + m + 1, n + n + 1)),
+            ≈ (hm + hm) + (hn + hn) := hm.add_add_add_comm(hn, hm, hn),
+            ≈ Rat::inv_succ(m) + Rat::inv_succ(n) := Rat::add_respects(Rat::inv_succ_half(m), Rat::inv_succ_half(n)),
+    }
+}
+
+fn CReal::add(self x, y: CReal) → CReal {
+    CReal(λ n => x.seq(n + n + 1) + y.seq(n + n + 1), λ m n => x.add_regular(y, m, n))
+}
+
+designation + at CReal := CReal::add
+designation prefix - at CReal := CReal::neg
+
+fn CReal::sub(self x, y: CReal) → CReal { x + -y }
+
+designation - at CReal := CReal::sub
+
+fn CReal::neg_respects({x, x2: CReal}, hx: x ≈ x2) → -x ≈ -x2 {
+    λ k => match hx(k) {
+        Exists(start, close) => Exists(start, λ n from => calc {
+            ((-x.seq(n)) -(-x2.seq(n))).abs() ≈ (x.seq(n) -x2.seq(n)).abs() := x.seq(n).abs_neg_sub_neg(x2.seq(n)),
+            <= Rat::inv_succ(k) := close(n, from),
+        }),
+    }
+}
+
+// Each summand within 1/(2k+2) of its partner from index 2n+1 on; n is past
+// both starts, so 2n+1 is too.
+fn CReal::add_respects({x, x2, y, y2: CReal}, hx: x ≈ x2, hy: y ≈ y2) → x + y ≈ x2 + y2 {
+    λ k => match hx(k + k + 1) {
+        Exists(i, cx) => match hy(k + k + 1) {
+            Exists(j, cy) => Exists(i.max(j), λ n from => {
+                let far: (n <= n + n + 1) = omega;
+                let at_x: (i <= n + n + 1) = i.le_trans(n, n + n + 1, i.le_trans(i.max(j), n, i.le_max_l(j), from), far);
+                let at_y: (j <= n + n + 1) = j.le_trans(n, n + n + 1, j.le_trans(i.max(j), n, i.le_max_r(j), from), far);
+                let half = Rat::inv_succ(k + k + 1);
+                let a: ((x.seq(n + n + 1) -x2.seq(n + n + 1)).abs() <= half) = cx(n + n + 1, at_x);
+                let b: ((y.seq(n + n + 1) -y2.seq(n + n + 1)).abs() <= half) = cy(n + n + 1, at_y);
+                calc {
+                    ((x.seq(n + n + 1) + y.seq(n + n + 1)) -(x2.seq(n + n + 1) + y2.seq(n + n + 1))).abs()
+                        <= half + half := Rat::dist_add_le(a, b),
+                        ≈ Rat::inv_succ(k) := Rat::inv_succ_half(k),
+                }
+            }),
+        },
+    }
+}
+
+fn CReal::sub_respects({x, x2, y, y2: CReal}, hx: x ≈ x2, hy: y ≈ y2) → x -y ≈ x2 -y2 {
+    CReal::add_respects(hx, CReal::neg_respects(hy))
+}
+
+instance Respects2<CReal, CReal, CReal>(CReal::Same, CReal::Same, CReal::Same, CReal::add) {
+    respects2 := λ x x2 hx y y2 hy => CReal::add_respects(hx, hy),
+}
+
+// ---------------------------------------------------------------------------
+// The additive laws, modulo `≈`. Commutativity and inverses hold term by
+// term; the identity and associativity compare terms at different indices,
+// which regularity bounds.
+
+fn CReal::add_comm(self x, y: CReal) → x + y ≈ y + x {
+    (x + y).same_of_terms(y + x, λ n => x.seq(n + n + 1).add_comm(y.seq(n + n + 1)))
+}
+
+fn CReal::add_neg(self x: CReal) → x + -x ≈ CReal::zero() {
+    (x + -x).same_of_terms(CReal::zero(), λ n => x.seq(n + n + 1).add_neg())
+}
+
+fn CReal::add_zero(self x: CReal) → x + CReal::zero() ≈ x {
+    (x + CReal::zero()).same_of_close(x, λ k n from => {
+        let far: (k + k + 1 <= n + n + 1) = omega;
+        calc {
+            ((x.seq(n + n + 1) + Rat::zero()) -x.seq(n)).abs()
+                ≈ (x.seq(n + n + 1) -x.seq(n)).abs() := Rat::abs_respects(Rat::sub_respects(x.seq(n + n + 1).add_zero(), x.seq(n).same_refl())),
+                <= Rat::inv_succ(k) := x.regular_close(k, n + n + 1, n, far, from),
+        }
+    })
+}
+
+// ((x + y) + z) reads x and y at 4n+3 and z at 2n+1; (x + (y + z)) reads x
+// at 2n+1 and y and z at 4n+3. After reassociating, y's terms cancel and x's
+// and z's two terms are within 1/(2k+2) each once n is past 2k+1.
+fn CReal::add_assoc(self x, y, z: CReal) → (x + y) + z ≈ x + (y + z) {
+    ((x + y) + z).same_of_close(x + (y + z), λ k n from => {
+        let i = n + n + 1;
+        let j = i + i + 1;
+        let half = Rat::inv_succ(k + k + 1);
+        let at_i: (k + k + 1 + (k + k + 1) + 1 <= i) = omega;
+        let at_j: (k + k + 1 + (k + k + 1) + 1 <= j) = omega;
+        let dx: ((x.seq(j) -x.seq(i)).abs() <= half) = x.regular_close(k + k + 1, j, i, at_j, at_i);
+        let dz: ((z.seq(i) -z.seq(j)).abs() <= half) = z.regular_close(k + k + 1, i, j, at_i, at_j);
+        let dy: ((y.seq(j) -y.seq(j)).abs() <= Rat::zero()) = Rat::le_of_same(y.seq(j).abs_sub_self());
+        calc {
+            (((x.seq(j) + y.seq(j)) + z.seq(i)) -(x.seq(i) + (y.seq(j) + z.seq(j)))).abs()
+                ≈ ((x.seq(j) + (y.seq(j) + z.seq(i))) -(x.seq(i) + (y.seq(j) + z.seq(j)))).abs()
+                    := Rat::abs_respects(Rat::sub_respects(x.seq(j).add_assoc(y.seq(j), z.seq(i)), (x.seq(i) + (y.seq(j) + z.seq(j))).same_refl())),
+                <= half + (Rat::zero() + half) := Rat::dist_add_le(dx, Rat::dist_add_le(dy, dz)),
+                ≈ half + (half + Rat::zero()) := Rat::add_respects(half.same_refl(), Rat::zero().add_comm(half)),
+                ≈ half + half := Rat::add_respects(half.same_refl(), half.add_zero()),
+                ≈ Rat::inv_succ(k) := Rat::inv_succ_half(k),
+        }
+    })
+}
+
+instance Semigroup<CReal>(CReal::Same, CReal::add) {
+    assoc := CReal::add_assoc,
+}
+
+instance Commutative<CReal>(CReal::Same, CReal::add) {
+    comm := CReal::add_comm,
+}
+
+// The embedding is additive.
+fn CReal::ofRat_neg(q: Rat) → CReal::ofRat(-q) ≈ -CReal::ofRat(q) {
+    CReal::ofRat(-q).same_of_terms(-CReal::ofRat(q), λ n => (-q).same_refl())
+}
+
+fn CReal::ofRat_add(p, q: Rat) → CReal::ofRat(p + q) ≈ CReal::ofRat(p) + CReal::ofRat(q) {
+    CReal::ofRat(p + q).same_of_terms(CReal::ofRat(p) + CReal::ofRat(q), λ n => (p + q).same_refl())
+}
+
+// ---------------------------------------------------------------------------
+// Strict order and apartness. x < y when, from some index on, y's terms stay
+// above x's by a fixed 1/(k+1): a positive gap given as data (the gap's size
+// and where it starts), never a refutation of `≤`. No order on reals is ever
+// decided; the rationals' order is consulted only term by term.
+
+fn CReal::Lt(x, y: CReal) → Type {
+    ∃ k: Nat, ∃ start: Nat, (n: Nat) → start <= n → x.seq(n) + Rat::inv_succ(k) <= y.seq(n)
+}
+
+designation < at CReal := CReal::Lt
+
+// One index far enough out, where y's term clears x's by 1/(2k+2), is
+// enough: from there on later terms of each move by at most 1/(8k+8), so a
+// gap of 1/(4k+4) remains.
+fn CReal::lt_of_term(self x, y: CReal, k, n: Nat, far: 16 * k + 15 <= n,
+    h: x.seq(n) + Rat::inv_succ(k + k + 1) <= y.seq(n)) → x < y
+{
+    let k2 = k + k + 1;
+    let k4 = k2 + k2 + 1;
+    let k8 = k4 + k4 + 1;
+    let q = Rat::inv_succ(k4);
+    let e = Rat::inv_succ(k8);
+    let at_n: (k8 + k8 + 1 <= n) = omega;
+    let gap = calc {
+        x.seq(n) + (q + (e + e)) ≈ x.seq(n) + (q + q) := Rat::add_respects(x.seq(n).same_refl(), Rat::add_respects(q.same_refl(), Rat::inv_succ_half(k4))),
+        ≈ x.seq(n) + Rat::inv_succ(k2) := Rat::add_respects(x.seq(n).same_refl(), Rat::inv_succ_half(k2)),
+        <= y.seq(n) := h,
+    };
+    Exists(k4, Exists(n, λ m from => {
+        let at_m: (k8 + k8 + 1 <= m) = omega;
+        let dx: ((x.seq(m) -x.seq(n)).abs() <= e) = x.regular_close(k8, m, n, at_m, at_n);
+        let dy: ((y.seq(n) -y.seq(m)).abs() <= e) = y.regular_close(k8, n, m, at_n, at_m);
+        Rat::le_of_close_gap(Rat::le_add_of_dist(dx), Rat::le_add_of_dist(dy), gap)
+    }))
+}
+
+// Moving each side by 1/(4k+4) along `≈` costs half of a 1/(k+1) gap.
+fn CReal::lt_respects({x, x2, y, y2: CReal}, hx: x ≈ x2, hy: y ≈ y2, h: x < y) → x2 < y2 {
+    match h {
+        Exists(k, rest) => match rest {
+            Exists(s, gap) => {
+                let k2 = k + k + 1;
+                let k4 = k2 + k2 + 1;
+                let half = Rat::inv_succ(k2);
+                let e = Rat::inv_succ(k4);
+                match hx(k4) {
+                    Exists(i, cx) => match hy(k4) {
+                        Exists(j, cy) => Exists(k2, Exists(s.max(i.max(j)), λ n from => {
+                            let inner: (i.max(j) <= n) = i.max(j).le_trans(s.max(i.max(j)), n, s.le_max_r(i.max(j)), from);
+                            let at_s: (s <= n) = s.le_trans(s.max(i.max(j)), n, s.le_max_l(i.max(j)), from);
+                            let at_i: (i <= n) = i.le_trans(i.max(j), n, i.le_max_l(j), inner);
+                            let at_j: (j <= n) = j.le_trans(i.max(j), n, i.le_max_r(j), inner);
+                            let dx: ((x2.seq(n) -x.seq(n)).abs() <= e) = calc {
+                                (x2.seq(n) -x.seq(n)).abs() ≈ (x.seq(n) -x2.seq(n)).abs() := x2.seq(n).abs_sub_comm(x.seq(n)),
+                                <= e := cx(n, at_i),
+                            };
+                            let dy: ((y.seq(n) -y2.seq(n)).abs() <= e) = cy(n, at_j);
+                            let wide = calc {
+                                x.seq(n) + (half + (e + e)) ≈ x.seq(n) + (half + half) := Rat::add_respects(x.seq(n).same_refl(), Rat::add_respects(half.same_refl(), Rat::inv_succ_half(k2))),
+                                ≈ x.seq(n) + Rat::inv_succ(k) := Rat::add_respects(x.seq(n).same_refl(), Rat::inv_succ_half(k)),
+                                <= y.seq(n) := gap(n, at_s),
+                            };
+                            Rat::le_of_close_gap(Rat::le_add_of_dist(dx), Rat::le_add_of_dist(dy), wide)
+                        })),
+                    },
+                }
+            },
+        },
+    }
+}
+
+theorem CReal::lt_irrefl(self x: CReal): ¬(x < x) {
+    λ h => match h {
+        Exists(k, rest) => match rest {
+            Exists(s, gap) => {
+                let a = x.seq(s);
+                let step = Rat::inv_succ(k);
+                let swapped = calc {
+                    step + a ≈ a + step := step.add_comm(a),
+                    <= a := gap(s, s.le_refl()),
+                    ≈ a + Rat::zero() := Rat::same_sym(a.add_zero()),
+                    ≈ Rat::zero() + a := a.add_comm(Rat::zero()),
+                };
+                Rat::not_le_of_lt(Rat::inv_succ_pos(k), step.add_le_cancel_r(Rat::zero(), a, swapped))
+            },
+        },
+    }
+}
+
+// The gaps add, so the first one survives.
+fn CReal::lt_trans({x, y, z: CReal}, h1: x < y, h2: y < z) → x < z {
+    match h1 {
+        Exists(k, r1) => match r1 {
+            Exists(s, g1) => match h2 {
+                Exists(l, r2) => match r2 {
+                    Exists(t, g2) => Exists(k, Exists(s.max(t), λ n from => {
+                        let at_s: (s <= n) = s.le_trans(s.max(t), n, s.le_max_l(t), from);
+                        let at_t: (t <= n) = t.le_trans(s.max(t), n, s.le_max_r(t), from);
+                        calc {
+                            x.seq(n) + Rat::inv_succ(k) <= y.seq(n) := g1(n, at_s),
+                            <= y.seq(n) + Rat::inv_succ(l) := y.seq(n).le_add_nonneg(Rat::inv_succ(l), Rat::le_of_lt(Rat::inv_succ_pos(l))),
+                            <= z.seq(n) := g2(n, at_t),
+                        }
+                    })),
+                },
+            },
+        },
+    }
+}
+
+// Cotransitivity, the constructive replacement for trichotomy. Far enough
+// out, compare z's term with the midpoint of x's and y's: the rationals
+// decide that, and either side of the midpoint leaves half the gap.
+fn CReal::lt_cotrans(self x, y, z: CReal, h: x < y) → x < z ∨ z < y {
+    match h {
+        Exists(k, rest) => match rest {
+            Exists(s, gap) => {
+                let half = Rat::inv_succ(k + k + 1);
+                let n = s.max(16 * k + 15);
+                let at_s: (s <= n) = s.le_max_l(16 * k + 15);
+                let far: (16 * k + 15 <= n) = s.le_max_r(16 * k + 15);
+                match (x.seq(n) + half).le_dec(z.seq(n)) {
+                    Inl(above) => Inl(x.lt_of_term(z, k, n, far, above)),
+                    Inr(below) => {
+                        let clear = calc {
+                            z.seq(n) + half < (x.seq(n) + half) + half := z.seq(n).add_lt_mono_r(x.seq(n) + half, half, Rat::lt_of_not_le(below)),
+                            ≈ x.seq(n) + (half + half) := x.seq(n).add_assoc(half, half),
+                            ≈ x.seq(n) + Rat::inv_succ(k) := Rat::add_respects(x.seq(n).same_refl(), Rat::inv_succ_half(k)),
+                            <= y.seq(n) := gap(n, at_s),
+                        };
+                        Inr(z.lt_of_term(y, k, n, far, Rat::le_of_lt(clear)))
+                    },
+                }
+            },
+        },
+    }
+}
+
+instance Irreflexive<CReal>(CReal::Lt) {
+    rel_irrefl := CReal::lt_irrefl,
+}
+
+instance Transitive<CReal>(CReal::Lt) {
+    rel_trans := λ x y z hxy hyz => CReal::lt_trans(hxy, hyz),
+}
+
+// The mixed pairs a `calc` chain composes: `≈` is absorbed by `<` on either
+// side.
+instance Trans<CReal>(CReal::Same, CReal::Lt, CReal::Lt) {
+    rel_chain := λ x y z hxy hyz => CReal::lt_respects(CReal::same_sym(hxy), z.same_refl(), hyz),
+}
+
+instance Trans<CReal>(CReal::Lt, CReal::Same, CReal::Lt) {
+    rel_chain := λ x y z hxy hyz => CReal::lt_respects(x.same_refl(), hyz, hxy),
+}
+
+// Apartness: one of the two is below the other, by a gap given as data.
+fn CReal::Apart(x, y: CReal) → Type { x < y ∨ y < x }
+
+theorem CReal::apart_irrefl(self x: CReal): ¬(x.Apart(x)) {
+    λ h => match h {
+        Inl(lt) => x.lt_irrefl(lt),
+        Inr(lt) => x.lt_irrefl(lt),
+    }
+}
+
+fn CReal::apart_sym({x, y: CReal}, h: x.Apart(y)) → y.Apart(x) {
+    match h {
+        Inl(lt) => Inr(lt),
+        Inr(gt) => Inl(gt),
+    }
+}
+
+fn CReal::apart_cotrans(self x, y, z: CReal, h: x.Apart(y)) → x.Apart(z) ∨ z.Apart(y) {
+    match h {
+        Inl(lt) => match x.lt_cotrans(y, z, lt) {
+            Inl(xz) => Inl(Inl(xz)),
+            Inr(zy) => Inr(Inl(zy)),
+        },
+        Inr(gt) => match y.lt_cotrans(x, z, gt) {
+            Inl(yz) => Inr(Inr(yz)),
+            Inr(zx) => Inl(Inr(zx)),
+        },
+    }
+}
+
+// Tightness: reals that are not apart are the same. Far enough out, a term
+// of either more than 1/(2k+2) above the other's would start a gap; so the
+// terms are within 1/(2k+2), hence within 1/(k+1). No decision on reals,
+// and none on rationals either: `lt_of_not_le` is the integer order's.
+fn CReal::same_of_not_apart({x, y: CReal}, h: ¬(x.Apart(y))) → x ≈ y {
+    λ k => Exists(16 * k + 15, λ n far => {
+        let half = Rat::inv_succ(k + k + 1);
+        let not_above: ¬(y.seq(n) + half <= x.seq(n)) = λ le => h(Inr(y.lt_of_term(x, k, n, far, le)));
+        let not_below: ¬(x.seq(n) + half <= y.seq(n)) = λ le => h(Inl(x.lt_of_term(y, k, n, far, le)));
+        let close: ((x.seq(n) -y.seq(n)).abs() <= half) =
+            Rat::dist_le_of_le_add(Rat::le_of_lt(Rat::lt_of_not_le(not_above)), Rat::le_of_lt(Rat::lt_of_not_le(not_below)));
+        let finer: (k <= k + k + 1) = omega;
+        Rat::le_trans(close, Rat::inv_succ_antitone(k, k + k + 1, finer))
+    })
+}
+
+// The embedding preserves and reflects the strict order: a rational gap
+// q - p is above some 1/(k+1) (`Rat::archimedean_inv`), and a real gap read
+// at any index is a rational one.
+fn CReal::ofRat_lt({p, q: Rat}, h: p < q) → CReal::ofRat(p) < CReal::ofRat(q) {
+    match (q -p).archimedean_inv(Rat::sub_pos(h)) {
+        Exists(k, small) => {
+            let below: (Rat::inv_succ(k) < q -p) = small;
+            let clear = calc {
+                p + Rat::inv_succ(k) < p + (q -p) := Rat::inv_succ(k).add_lt_mono_l(q -p, p, below),
+                ≈ q := p.add_sub_self(q),
+            };
+            Exists(k, Exists(0, λ n from => Rat::le_of_lt(clear)))
+        },
+    }
+}
+
+theorem CReal::lt_of_ofRat_lt({p, q: Rat}, h: CReal::ofRat(p) < CReal::ofRat(q)): p < q {
+    match h {
+        Exists(k, rest) => match rest {
+            Exists(s, gap) => calc {
+                p ≈ p + Rat::zero() := Rat::same_sym(p.add_zero()),
+                < p + Rat::inv_succ(k) := Rat::zero().add_lt_mono_l(Rat::inv_succ(k), p, Rat::inv_succ_pos(k)),
+                <= q := gap(s, s.le_refl()),
+            },
+        },
+    }
+}

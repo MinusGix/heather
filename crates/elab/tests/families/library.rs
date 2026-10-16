@@ -18,6 +18,8 @@ mod lib_setoid_mergeable;
 mod lib_std_bitvec;
 #[path = "../lib_std_bounded_list.rs"]
 mod lib_std_bounded_list;
+#[path = "../lib_std_creal.rs"]
+mod lib_std_creal;
 #[path = "../lib_std_certified_lookup.rs"]
 mod lib_std_certified_lookup;
 #[path = "../lib_std_evidence.rs"]

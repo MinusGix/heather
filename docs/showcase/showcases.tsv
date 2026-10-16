@@ -58,3 +58,4 @@ finite_set_backend_transfer	lib/std	test	crates/elab/tests/lib_setoid_mergeable.
 derive_set_functions	lib/std	test	crates/elab/tests/lib_setoid_mergeable.rs.
 derive_set_function_clients	lib/std	test	crates/elab/tests/lib_setoid_mergeable.rs.
 rat_client	lib/std	test	crates/elab/tests/lib_std_rat.rs.
+creal_client	lib/std	test	crates/elab/tests/lib_std_creal.rs.
