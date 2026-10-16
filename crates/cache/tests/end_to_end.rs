@@ -544,7 +544,7 @@ fn an_abandoned_question_does_not_answer_for_a_different_declaration() {
     assert!(!cache.admits(&psi, &item(body_a)), "an empty store admits nothing");
     assert_eq!(cache.counts().hashed, 1);
     // The same declaration, accepted: answered from the open question.
-    cache.accepted(&psi, &item(body_a));
+    cache.accepted(&psi, &item(body_a), &[]);
     assert_eq!(cache.counts().hashed, 1, "accepted must not render again");
     let key_a = cache.keys();
     assert_eq!(key_a.len(), 1);
@@ -557,7 +557,7 @@ fn an_abandoned_question_does_not_answer_for_a_different_declaration() {
     cache.abandon(&psi);
     assert!(!cache.admits(&psi, &item(body_b)));
     assert_eq!(cache.counts().hashed, 2, "after abandon the new declaration is rendered afresh");
-    cache.accepted(&psi, &item(body_b));
+    cache.accepted(&psi, &item(body_b), &[]);
     let key_b = cache.keys();
     assert_eq!(key_b.len(), 1);
     assert_ne!(key_a, key_b, "the two bodies must not share a check key");
@@ -572,7 +572,7 @@ fn an_abandoned_question_does_not_answer_for_a_different_declaration() {
     assert!(!cache.admits(&psi, &item(body_a)));
     assert!(!cache.admits(&psi, &other(body_b)));
     assert_eq!(cache.counts().hashed, 2);
-    cache.accepted(&psi, &other(body_b));
+    cache.accepted(&psi, &other(body_b), &[]);
     assert_eq!(cache.keys(), key_b, "the check key is content-addressed; the name is metadata");
     // `helper`'s question is dead: asking again renders again.
     assert!(!cache.admits(&psi, &item(body_a)));

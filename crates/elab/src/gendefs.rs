@@ -3555,6 +3555,7 @@ impl Elaborator {
                 .is_some_and(|g| g.admits(&self.psi, &item));
             drop(item);
             if !admitted {
+                let recording = heather_kernel::unseal::Recording::start();
                 // `stats::time_kernel`, as at the `elab_decl_inner` gate
                 // (lib.rs) and the `Layer::Meta` one (quote.rs): the frontend
                 // suite's `kernel` phase covers *every* finished declaration,
@@ -3601,8 +3602,9 @@ impl Elaborator {
                         err,
                         note: None,
                     })?;
+                    let unsealed = recording.finish();
                     if let Some(g) = self.gate.as_ref() {
-                        g.accepted(&self.psi, &item);
+                        g.accepted(&self.psi, &item, &unsealed);
                     }
                 } else {
                     // The body is committed to Ψ below and the proof is
@@ -3610,6 +3612,7 @@ impl Elaborator {
                     // (`docs/parallel-kernel-gate-design.md` §5).
                     self.defer_kernel_term(
                         &name, span, &empty, &ty, &level, &body, false, Layer::Code, true,
+                        recording.finish(),
                     );
                 }
             }

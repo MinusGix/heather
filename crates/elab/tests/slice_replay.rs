@@ -380,7 +380,7 @@ impl heather_elab::gate::KernelGate for VouchesForNothing {
     fn admits(&self, _psi: &heather_kernel::term::GlobalCtx, _item: &heather_elab::gate::GateItem<'_>) -> bool {
         false
     }
-    fn accepted(&self, _psi: &heather_kernel::term::GlobalCtx, _item: &heather_elab::gate::GateItem<'_>) {}
+    fn accepted(&self, _psi: &heather_kernel::term::GlobalCtx, _item: &heather_elab::gate::GateItem<'_>, _unsealed: &[usize]) {}
 }
 
 /// A proof the elaborator lets through and the kernel refuses, edited into

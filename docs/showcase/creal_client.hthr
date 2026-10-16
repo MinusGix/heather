@@ -49,7 +49,7 @@ theorem embedded_sum_below(p, q, r: Rat, h: p + q < r): CReal::ofRat(p) + CReal:
 
 // Distinct rationals embed apart; apartness, not a decision, is what tells
 // reals apart.
-fn zero_below_one() → CReal::zero() < CReal::one() {
+theorem zero_below_one(): CReal::zero() < CReal::one() {
     let gap: (Rat::zero() < Rat::one()) = omega;
     CReal::ofRat_lt(gap)
 }

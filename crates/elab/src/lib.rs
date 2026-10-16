@@ -133,6 +133,7 @@ mod metaprograms;
 mod module_delta;
 mod module_image;
 mod quote;
+mod sealing;
 // The projected-tuple-tower round's two instruments
 // (`docs/projected-tuple-tower-design.md` §11, `probes/README.md`): the
 // value-graph counter that priced the naming, and the readback itself. Both
@@ -483,6 +484,9 @@ struct PendingDecl {
     /// (`docs/bv-omega-design.md` §7).
     aux: Vec<GlobalBinding>,
     binding: GlobalBinding,
+    /// A theorem's proof, kept sealed beside its opaque binding when its
+    /// statement carries data (`sealing.rs`).
+    sealed: Option<Rc<Term>>,
     registration: GlobalRegistration,
     is_axiom: bool,
     direct_dependencies: Vec<String>,
@@ -1830,10 +1834,23 @@ impl Elaborator {
                         layer: item.layer,
                         lands_in_psi: item.lands_in_psi,
                     },
+                    &outcome.unsealed,
                 );
             }
         }
+        self.charge_deferred_unseals(&outcomes);
         None
+    }
+
+    /// Charge the sealed proofs the pool's checks opened to the items that
+    /// queued them, once the module's slices are built
+    /// (`ModuleJournal::deferred_unseals`).
+    fn charge_deferred_unseals(&self, outcomes: &[pool::Outcome]) {
+        if let Some(journal) = self.module_journal.borrow_mut().as_mut() {
+            for outcome in outcomes.iter().filter(|o| !o.unsealed.is_empty()) {
+                journal.deferred_unseals.push((outcome.item.psi.bindings.len(), outcome.unsealed.clone()));
+            }
+        }
     }
 
     /// Queue one proof obligation, or run it here when the pool is inline.
@@ -1850,6 +1867,7 @@ impl Elaborator {
         opaque: bool,
         layer: Layer,
         lands_in_psi: bool,
+        unsealed: Vec<usize>,
     ) {
         stats::count(stats::Counter::DeclsGated);
         self.kernel_pool.submit(pool::Deferred {
@@ -1864,6 +1882,7 @@ impl Elaborator {
             layer,
             lands_in_psi,
             fuel: self.fuel,
+            unsealed,
             row: stats::current_item(),
         });
     }
@@ -2182,6 +2201,9 @@ impl Elaborator {
             let slice_source = slice_source(&file, src, idx, &plan);
             let slice_start = lint::item_span(item).start;
             let slice_mark = self.slice_begin();
+            // Every sealed proof the item opens, here or in its kernel
+            // checks, is charged to its slice (`issues/theorem-witness-unfolding.md`).
+            let unsealing = heather_kernel::unseal::Recording::start();
             // `--only` names items that elaborate from source however exact
             // the prefix is (`docs/check-only-design.md`); a group is named
             // through any member.
@@ -2190,7 +2212,7 @@ impl Elaborator {
             // included: nothing is re-run over it.
             if !forced && self.try_replay_slice(idx, &slice_source, slice_start) {
                 if let Some(mark) = slice_mark {
-                    self.slice_end(mark, slice_source, slice_start, true);
+                    self.slice_end(mark, slice_source, slice_start, true, unsealing.finish());
                 }
                 continue;
             }
@@ -2210,7 +2232,7 @@ impl Elaborator {
                 stats::timed(stats::Timer::Lint, || self.run_source_lints(item, &lint_source));
                 if let Some(mark) = slice_mark {
                     self.slice_elaborated();
-                    self.slice_end(mark, slice_source, slice_start, false);
+                    self.slice_end(mark, slice_source, slice_start, false, unsealing.finish());
                 }
             }
             #[cfg(feature = "value-metrics")]
@@ -2804,6 +2826,9 @@ impl Elaborator {
             let slice_source = slice_source(&file, src, idx, &plan);
             let slice_start = lint::item_span(item).start;
             let slice_mark = self.slice_begin();
+            // Every sealed proof the item opens, here or in its kernel
+            // checks, is charged to its slice (`issues/theorem-witness-unfolding.md`).
+            let unsealing = heather_kernel::unseal::Recording::start();
             // `--only` names items that elaborate from source however exact
             // the prefix is (`docs/check-only-design.md`); a group is named
             // through any member.
@@ -2812,7 +2837,7 @@ impl Elaborator {
             // included: nothing is re-run over it.
             if !forced && self.try_replay_slice(idx, &slice_source, slice_start) {
                 if let Some(mark) = slice_mark {
-                    self.slice_end(mark, slice_source, slice_start, true);
+                    self.slice_end(mark, slice_source, slice_start, true, unsealing.finish());
                 }
                 #[cfg(feature = "value-metrics")]
                 if let Some(metrics) = &self.value_metrics {
@@ -2836,7 +2861,7 @@ impl Elaborator {
                 stats::timed(stats::Timer::Lint, || self.run_source_lints(item, &lint_source));
                 if let Some(mark) = slice_mark {
                     self.slice_elaborated();
-                    self.slice_end(mark, slice_source, slice_start, false);
+                    self.slice_end(mark, slice_source, slice_start, false, unsealing.finish());
                 }
             }
             if let Err(e) = r {
@@ -3591,6 +3616,7 @@ impl Elaborator {
         let PendingDecl {
             aux,
             binding,
+            sealed,
             registration,
             is_axiom,
             direct_dependencies,
@@ -3601,7 +3627,10 @@ impl Elaborator {
             self.psi.push(lemma);
         }
         let abs = self.psi.bindings.len() as u32;
-        self.psi.push(binding);
+        match sealed {
+            Some(proof) => self.psi.push_sealed(binding, proof),
+            None => self.psi.push(binding),
+        }
         self.semantic_commit_global(abs, registration, is_axiom, direct_dependencies);
         self.refresh_delta_psi();
     }
@@ -4111,6 +4140,18 @@ impl Elaborator {
         // proofs are transported, never evaluated, and a transparent proof
         // would put the whole proof term back into every conversion that
         // mentions the theorem.
+        //
+        // Its proof is kept *sealed* beside the binding when the statement
+        // carries data (`sealing.rs`): still invisible to δ, to every
+        // comparison and to the binding's interface, but opened where an
+        // elimination is stuck on the theorem — a witness projected, a
+        // branch matched on (`issues/theorem-witness-unfolding.md`, D).
+        let sealed = match (decl.kind, &term) {
+            (DeclKind::Theorem, Some(proof)) if sealing::carries_data(&lifted_psi, &stmt) => {
+                Some(Rc::new(proof.clone()))
+            }
+            _ => None,
+        };
         let binding = GlobalBinding::Tm {
             ctx: LocalCtx::nil(),
             layer: Layer::Code,
@@ -4136,6 +4177,7 @@ impl Elaborator {
         Ok(PendingDecl {
             aux,
             binding,
+            sealed,
             is_axiom: decl.kind == DeclKind::Axiom,
             direct_dependencies,
             registration: GlobalRegistration {
@@ -4168,6 +4210,9 @@ impl Elaborator {
         if self.gate.as_ref().is_some_and(|g| g.admits(psi, &item)) {
             return Ok(());
         }
+        // Whatever sealed proofs the statement or the body open are part of
+        // what the verdict is about (`KernelGate::accepted`).
+        let recording = heather_kernel::unseal::Recording::start();
         // The statement is checked here, synchronously, whatever the pool is
         // doing: every dependent needs it, and it is the cheap half
         // (`docs/parallel-kernel-gate-design.md` §2).
@@ -4183,8 +4228,9 @@ impl Elaborator {
                 None => stats::time_kernel(|| self.kernel_check_term(psi, Layer::Code, ctx, body, ty, level)),
             };
             verdict.map_err(|e| self.kernel_error(name, span, e))?;
+            let unsealed = recording.finish();
             if let Some(g) = self.gate.as_ref() {
-                g.accepted(psi, &item);
+                g.accepted(psi, &item, &unsealed);
             }
         } else {
             // Queued against the Ψ the binding is about to extend;
@@ -4203,6 +4249,7 @@ impl Elaborator {
                 layer: Layer::Code,
                 lands_in_psi: true,
                 fuel: self.fuel,
+                unsealed: recording.finish(),
                 row: stats::current_item(),
             });
         }

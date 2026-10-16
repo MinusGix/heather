@@ -231,7 +231,7 @@ impl KernelGate for Recorder {
     fn admits(&self, _psi: &GlobalCtx, _item: &GateItem<'_>) -> bool {
         false
     }
-    fn accepted(&self, _psi: &GlobalCtx, item: &GateItem<'_>) {
+    fn accepted(&self, _psi: &GlobalCtx, item: &GateItem<'_>, _unsealed: &[usize]) {
         self.accepted.borrow_mut().push(item.name.to_string());
     }
 }

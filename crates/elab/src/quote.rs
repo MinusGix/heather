@@ -373,6 +373,7 @@ impl Elaborator {
                 .as_ref()
                 .is_some_and(|g| g.admits(&self.psi, &item))
             {
+                let recording = heather_kernel::unseal::Recording::start();
                 crate::stats::time_kernel(|| {
                     self.kernel_check_type(&self.psi, Layer::Meta, &empty, &stmt, &lvl)
                 })
@@ -391,8 +392,9 @@ impl Elaborator {
                     err: e,
                     note: None,
                 })?;
+                let unsealed = recording.finish();
                 if let Some(g) = self.gate.as_ref() {
-                    g.accepted(&self.psi, &item);
+                    g.accepted(&self.psi, &item, &unsealed);
                 }
             }
         }

@@ -33,7 +33,7 @@ use crate::resolve::DerivedInst;
 use crate::slots::Slot;
 use crate::traits::{ClassInfo, DesignationInfo, EvidenceRule, InstanceInfo};
 
-const MAGIC: &[u8; 8] = b"HTHMOD\0\x0c";
+const MAGIC: &[u8; 8] = b"HTHMOD\0\x0d";
 const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x0b";
 
 /// Hard limits applied before any decoded collection or string allocation.
@@ -1994,7 +1994,23 @@ fn encode_delta_into(w: &mut Writer, delta: &ModuleDelta, magic: &[u8; 8]) {
     if !w.interface {
         w.vec(&delta.items, put_slice);
         w.option(delta.scope_at_entry.as_ref(), put_scope);
+        // Sealed proofs (`issues/theorem-witness-unfolding.md`): the
+        // semantic image only, like the slices. A dependent observes a proof
+        // by opening it and records the copy it opened, so leaving proofs out
+        // of the interface is what keeps a proof edit from invalidating
+        // every dependent.
+        w.vec(&delta.sealed, put_sealed);
+        w.vec(&delta.opened_dependencies, put_sealed);
     }
+}
+
+fn put_sealed(w: &mut Writer, (at, proof): &(usize, Rc<Term>)) {
+    w.usize(*at);
+    put_term(w, proof);
+}
+
+fn get_sealed(r: &mut Reader<'_>) -> Result<(usize, Rc<Term>), ModuleImageDecodeError> {
+    Ok((r.usize()?, term_rc(r)?))
 }
 
 fn put_slice(w: &mut Writer, slice: &crate::module_delta::ItemSlice) {
@@ -2004,6 +2020,7 @@ fn put_slice(w: &mut Writer, slice: &crate::module_delta::ItemSlice) {
         w.usize(range.start);
         w.usize(range.end);
     }
+    w.vec(&slice.unsealed, |w, at| w.usize(*at));
 }
 
 fn get_slice(r: &mut Reader<'_>) -> Result<crate::module_delta::ItemSlice, ModuleImageDecodeError> {
@@ -2018,7 +2035,8 @@ fn get_slice(r: &mut Reader<'_>) -> Result<crate::module_delta::ItemSlice, Modul
         *range = a..b;
     }
     let [psi, events, warnings] = ranges;
-    Ok(crate::module_delta::ItemSlice { source, start, psi, events, warnings })
+    let unsealed = r.vec(|r| r.usize())?;
+    Ok(crate::module_delta::ItemSlice { source, start, psi, events, warnings, unsealed })
 }
 
 /// The stack one nesting level of decoding stands on, at most. `node` is the
@@ -2090,7 +2108,20 @@ fn decode_delta_here(
     let events = r.vec(get_event)?;
     let items = r.vec(get_slice)?;
     let scope_at_entry = r.option(get_scope)?;
+    let sealed = r.vec(get_sealed)?;
+    let opened_dependencies = r.vec(get_sealed)?;
     r.finish()?;
+    // A sealed proof sits beside a theorem of the extension, in order; an
+    // opened dependency proof inside the prefix it was opened from.
+    let theorem = |k: usize| matches!(extension.get(k), Some(GlobalBinding::Tm { body: None, .. }));
+    if sealed.windows(2).any(|w| w[0].0 >= w[1].0) || sealed.iter().any(|(k, _)| !theorem(*k)) {
+        return Err(ModuleImageDecodeError::InvalidStructure("a sealed proof is not beside a theorem"));
+    }
+    if opened_dependencies.windows(2).any(|w| w[0].0 >= w[1].0)
+        || opened_dependencies.iter().any(|(i, _)| *i >= actual)
+    {
+        return Err(ModuleImageDecodeError::InvalidStructure("an opened proof is outside the dependency prefix"));
+    }
     if scope.module != module {
         return Err(ModuleImageDecodeError::InvalidStructure("module and scope names disagree"));
     }
@@ -2109,7 +2140,7 @@ fn decode_delta_here(
     }
     let delta = ModuleDelta {
         module, dependencies: ModuleDependencyIdentity::new(hashes), dependency_psi,
-        extension, scope, events,
+        extension, sealed, opened_dependencies, scope, events,
         items,
         warnings: Vec::new(),
         scope_at_entry,
@@ -2354,6 +2385,8 @@ mod tests {
             items: Vec::new(),
             warnings: Vec::new(),
             scope_at_entry: None,
+            sealed: Vec::new(),
+            opened_dependencies: Vec::new(),
         };
         assert_eq!(
             ModuleDelta::from_image_bytes(
@@ -2383,6 +2416,8 @@ mod tests {
             items: Vec::new(),
             warnings: Vec::new(),
             scope_at_entry: None,
+            sealed: Vec::new(),
+            opened_dependencies: Vec::new(),
         };
         assert_eq!(
             ModuleDelta::from_image_bytes(

@@ -126,6 +126,9 @@ counters! {
     /// Definition bodies rescoped by `Defs::body` — one per `GlobalCache`
     /// body fill, i.e. per (definition, gate call) pair that unfolded it.
     delta_body_rescopes,
+    /// Sealed proofs unsealed at a stuck elimination (`crate::unseal`): one
+    /// per unsealing, so a theorem a check projects twice counts twice.
+    sealed_unfolds,
     /// Occurrences of `u^δ` / `U^δ` whose typing or conversion rule read the
     /// binding's declared context and type rescoped into the ambient Ψ. One
     /// per **occurrence**: the rescoping itself is memoized per (Ψ,

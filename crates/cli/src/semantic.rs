@@ -276,6 +276,12 @@ impl SemanticSession {
                         notices,
                     };
                 }
+                // A dependency theorem this module computed with has a new
+                // proof under the same statement: an ordinary miss, which the
+                // slice path below turns into re-checking just the
+                // declarations that opened it
+                // (`issues/theorem-witness-unfolding.md`).
+                Err(heather_elab::ModuleReplayError::OpenedProofChanged) => {}
                 Err(error) => notices.push(CacheNotice {
                     module: module.name.clone(),
                     kind: CacheNoticeKind::ReplayRejected,

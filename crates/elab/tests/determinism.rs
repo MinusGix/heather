@@ -97,7 +97,10 @@ fn same_source_elaborates_identically() {
 /// Moved 2026-09-26 by the nominal tag becoming `sEq⁰(Nat; k; k)`
 /// (`docs/inductive-tier0-lowering.md` §3.3): every lowered type and
 /// constructor value carries it.
-const NAT_SUITE_GOLDEN: u64 = 0x2ef98e0fad48b1e2;
+/// Moved 2026-10-16 by sealed theorem proofs
+/// (`issues/theorem-witness-unfolding.md`): Ψ's printed form gained the
+/// `sealed` list of theorems whose proofs it keeps.
+const NAT_SUITE_GOLDEN: u64 = 0x6c335ac4b2d2dfe8;
 
 #[test]
 fn nat_suite_golden_hash() {

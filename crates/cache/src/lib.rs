@@ -329,10 +329,22 @@ impl KernelGate for Cache {
         }
     }
 
-    fn accepted(&self, psi: &GlobalCtx, item: &GateItem<'_>) {
+    fn accepted(&self, psi: &GlobalCtx, item: &GateItem<'_>, unsealed: &[usize]) {
         let mut inner = self.inner.borrow_mut();
-        if let Some((iface, key)) = inner.identify(psi, item) {
-            inner.store.insert(key, iface, item.name);
+        // A check that opened a sealed proof leaned on that proof's body,
+        // which no interface hash covers: its verdict is not stored, so a
+        // later run re-checks it against whatever the proof is then
+        // (`issues/theorem-witness-unfolding.md`). A check that opened none
+        // took the same path whatever the sealed proofs are — which theorems
+        // carry one is fixed by their statements — so its key stays sound.
+        if unsealed.is_empty() {
+            if let Some((iface, key)) = inner.identify(psi, item) {
+                inner.store.insert(key, iface, item.name);
+            }
+        } else {
+            // `identify` still runs: the binding's interface hash is pending
+            // for `sync` whether or not a verdict is kept.
+            inner.identify(psi, item);
         }
         inner.close(psi, item);
     }
