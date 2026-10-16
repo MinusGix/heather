@@ -579,6 +579,36 @@ fn an_abandoned_question_does_not_answer_for_a_different_declaration() {
     assert_eq!(cache.counts().hashed, 3);
 }
 
+/// A check that opened a sealed theorem proof leaned on that proof's body,
+/// which no interface hash covers, so its verdict is not kept: a warm run
+/// re-checks it, and vouches for everything else
+/// (`issues/theorem-witness-unfolding.md`).
+#[test]
+fn a_verdict_that_opened_a_sealed_proof_is_not_kept() {
+    let src = "record Wit { n: Nat, ok: n = 2 }
+theorem wit(): Wit { Wit(n := 2, ok := refl) }
+theorem wit_two(): wit().n = 2 { refl }
+theorem two_two(): 2 = 2 { refl }
+";
+    let cache = Rc::new(Cache::over(Store::empty("unused".into())));
+    let mut runs = Vec::new();
+    for workers in [1usize, 4, 1] {
+        let mut e = Elaborator::with_prelude().expect("prelude");
+        e.set_kernel_workers(workers);
+        cache.begin_run();
+        e.set_gate(Rc::clone(&cache) as Rc<dyn heather_elab::gate::KernelGate>);
+        let errs = e.check_source(src);
+        assert!(errs.is_empty(), "the fixture must check: {}", errs[0].render(src));
+        runs.push(cache.counts());
+    }
+    let cold = runs[0].clone();
+    for (warm, earlier) in [(&runs[1], &runs[0]), (&runs[2], &runs[1])] {
+        let warm = warm.since(earlier);
+        assert_eq!(warm.checked, 1, "only `wit_two`, which opened `wit`, faces the kernel again");
+        assert_eq!(warm.hits, cold.checked - 1, "every other declaration is vouched for");
+    }
+}
+
 // -- 5. replay ---------------------------------------------------------------
 
 /// A module replayed from its semantic image asks the gate the same questions
