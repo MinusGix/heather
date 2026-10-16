@@ -42,11 +42,19 @@ compute with:
   type parameter could be instantiated at anything); a recursion into
   `Type` stuck on an open argument (`n <= m`) is a family of propositions.
 
-The test runs through the elaborator's own head probe (`SemanticOracle`,
-value domain first), and is a function of the statement and the definitions
-before it — so it is fixed by the interfaces, which §4 relies on. Erring
-towards "data" costs memory; erring the other way leaves a theorem opaque,
-which is what every theorem was before.
+The test walks the statement in the value domain, entering `Π` and `Σ`
+under fresh variables, with one fuel budget and a bound on the formers it
+visits; nothing is spelled and no definition body is copied. It is a
+function of the statement and the definitions before it, so it is fixed by
+the interfaces, which §4 relies on.
+
+**Unknown means opaque.** A statement the walk cannot settle keeps its
+proof out, which is what every theorem was before. The other default looked
+like a memory cost only, but a kept proof is *run* wherever an elimination
+is stuck on it, and the statements too big to classify are the ones whose
+proofs are expensive to run. `CodeResident` over a generated program's bytes
+(a conjunction per byte) decided it: classifying it by spelling ran the wc
+certificate build out of memory.
 
 ## 3. Where the kernel opens a proof
 
@@ -104,17 +112,21 @@ declarations that opened it, and only those.
 
 ## 5. What it costs
 
-Peak memory returns to the opaque baseline's neighbourhood, since only
-data-carrying proofs are kept. On today's corpus outside `creal`, no
-declaration opens a proof, so evaluation counters do not move; the
-classification adds one head probe per theorem. Measurements are in the
-issue's log (shapes only here).
+On today's corpus outside `creal`, no declaration opens a proof, so
+evaluation counters move only by the classification walk (a fraction of a
+percent). Memory is the kept proofs. The native libraries are where that
+shows: their run triples (`LinuxRuns`, `Runs`, the fetched-steps facts)
+carry their end state and trace, so they are kept, and the wc certificate
+build holds a few hundred of them at peak — a peak RSS increase on the
+order of a tenth there, against about a fifth for keeping every proof.
+Nothing computes with those witnesses today (clients consume a run through
+`runs_elim`/`runs_into`); [[sealed-proof-memory]] owns making the cost
+proportional to what is opened.
 
 ## 6. Not done here
 
-- **Lazy proofs.** Kept proofs live in memory for the run. Loading them from
-  the image on first unsealing would make the memory cost proportional to
-  what is opened; it was not needed at today's sizes.
+- **Lazy proofs** ([[sealed-proof-memory]]). Kept proofs live in memory for
+  the run.
 - **Deciders.** `le_dec`, `or_pick` and the other deciders are `fn`s by a
   rule written when a theorem never unfolded (docs/nat-order-design.md,
   docs/decide-class-design.md). A decision's statement carries data, so as
