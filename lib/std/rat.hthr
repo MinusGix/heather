@@ -660,7 +660,7 @@ theorem Rat::inv_succ_half(n: Nat): Rat::inv_succ(n + n + 1) + Rat::inv_succ(n +
 }
 
 // Every rational is below some integer: x = a/p < |a| + 1, because p ≥ 1.
-theorem Rat::archimedean(self x: Rat): ∃ n: Nat, x < Rat::ofInt(OfNat(n)) {
+fn Rat::archimedean(self x: Rat) → ∃ n: Nat, x < Rat::ofInt(OfNat(n)) {
     let a = x.num;
     let p = x.den.int();
     let above = a.le_abs();
@@ -671,7 +671,7 @@ theorem Rat::archimedean(self x: Rat): ∃ n: Nat, x < Rat::ofInt(OfNat(n)) {
 
 // Every positive rational is above some 1/(n+1): with ε = e/r and e ≥ 1,
 // 1/(r+1) < e/r because r < e·(r+1).
-theorem Rat::archimedean_inv(self eps: Rat, h: Rat::zero() < eps): ∃ n: Nat, Rat::inv_succ(n) < eps {
+fn Rat::archimedean_inv(self eps: Rat, h: Rat::zero() < eps) → ∃ n: Nat, Rat::inv_succ(n) < eps {
     let e = eps.num;
     let r = eps.den.int();
     let zr = Int::zero_mul(r);
@@ -715,6 +715,122 @@ theorem Rat::dist_triangle(self x, y, z: Rat): (x -z).abs() <= (x -y).abs() + (y
         (x -z).abs() ≈ ((x -y) + (y -z)).abs() := Rat::abs_respects(Rat::same_sym(x.sub_add_sub(y, z))),
         <= (x -y).abs() + (y -z).abs() := (x -y).abs_triangle(y -z),
     }
+}
+
+// The facts the regular Cauchy reals (`std/creal`) chain: a point's distance
+// to itself, negation and sums moved through a distance, and tightness read
+// off distances.
+
+theorem Rat::abs_sub_self(self x: Rat): (x -x).abs() ≈ Rat::zero() {
+    calc {
+        (x -x).abs() ≈ Rat::zero().abs() := Rat::abs_respects(x.add_neg()),
+        ≈ Rat::zero() := refl,
+    }
+}
+
+theorem Rat::neg_sub_neg(self x, y: Rat): (-x) -(-y) ≈ -(x -y) { Rat::same_sym(x.neg_add(-y)) }
+
+theorem Rat::abs_neg_sub_neg(self x, y: Rat): ((-x) -(-y)).abs() ≈ (x -y).abs() {
+    calc {
+        ((-x) -(-y)).abs() ≈ (-(x -y)).abs() := Rat::abs_respects(x.neg_sub_neg(y)),
+        ≈ (x -y).abs() := (x -y).abs_neg(),
+    }
+}
+
+theorem Rat::add_add_add_comm(self a, b, c, d: Rat): (a + b) + (c + d) ≈ (a + c) + (b + d) {
+    ring(a.den_add(b), c.den_add(d), (a + b).den_add(c + d), a.den_add(c), b.den_add(d), (a + c).den_add(b + d))
+}
+
+theorem Rat::add_sub_add(self a, b, c, d: Rat): (a + b) -(c + d) ≈ (a -c) + (b -d) {
+    calc {
+        (a + b) -(c + d) ≈ (a + b) + (-c + -d) := Rat::add_respects((a + b).same_refl(), c.neg_add(d)),
+        ≈ (a -c) + (b -d) := a.add_add_add_comm(b, -c, -d),
+    }
+}
+
+// Two sums are as close as their summands' distances added.
+theorem Rat::dist_add_le({a, b, c, d, u, v: Rat}, h1: (a -c).abs() <= u, h2: (b -d).abs() <= v):
+    ((a + b) -(c + d)).abs() <= u + v
+{
+    calc {
+        ((a + b) -(c + d)).abs() ≈ ((a -c) + (b -d)).abs() := Rat::abs_respects(a.add_sub_add(b, c, d)),
+        <= (a -c).abs() + (b -d).abs() := (a -c).abs_triangle(b -d),
+        <= u + v := Rat::add_le_mono(h1, h2),
+    }
+}
+
+theorem Rat::sub_add_cancel(self a, b: Rat): (a -b) + b ≈ a { ring(a.den_add(-b), (a -b).den_add(b)) }
+
+theorem Rat::add_sub_cancel_l(self a, b: Rat): (a + b) -a ≈ b { ring(a.den_add(b), (a + b).den_add(-a)) }
+
+theorem Rat::add_sub_self(self a, b: Rat): a + (b -a) ≈ b { ring(b.den_add(-a), a.den_add(b -a)) }
+
+theorem Rat::le_add_nonneg(self a, e: Rat, h: Rat::zero() <= e): a <= a + e {
+    calc {
+        a ≈ a + Rat::zero() := Rat::same_sym(a.add_zero()),
+        <= a + e := Rat::zero().add_le_mono_l(e, a, h),
+    }
+}
+
+// A distance bound as two one-sided bounds, and back.
+theorem Rat::le_add_of_dist({a, b, e: Rat}, h: (a -b).abs() <= e): a <= b + e {
+    calc {
+        a ≈ (a -b) + b := Rat::same_sym(a.sub_add_cancel(b)),
+        <= e + b := (a -b).add_le_mono_r(e, b, Rat::le_trans((a -b).le_abs(), h)),
+        ≈ b + e := e.add_comm(b),
+    }
+}
+
+theorem Rat::sub_le_of_le_add({a, b, c: Rat}, h: a <= b + c): a -b <= c {
+    calc {
+        a -b <= (b + c) -b := a.add_le_mono_r(b + c, -b, h),
+        ≈ c := b.add_sub_cancel_l(c),
+    }
+}
+
+theorem Rat::dist_le_of_le_add({a, b, c: Rat}, h1: a <= b + c, h2: b <= a + c): (a -b).abs() <= c {
+    let below = calc {
+        -c <= -(b -a) := Rat::neg_le(Rat::sub_le_of_le_add(h2)),
+        ≈ a -b := b.neg_sub(a),
+    };
+    Rat::abs_le(below, Rat::sub_le_of_le_add(h1))
+}
+
+// A gap of q + 2e between a and b survives moving a up and b down by e
+// each: the step a strict order on the reals takes whenever it compares
+// terms at two indices, or of two `≈` sequences.
+theorem Rat::le_of_close_gap({a, a2, b, b2, e, q: Rat}, ha: a2 <= a + e, hb: b <= b2 + e, gap: a + (q + (e + e)) <= b):
+    a2 + q <= b2
+{
+    let shifted = calc {
+        (a2 + q) + e <= ((a + e) + q) + e := (a2 + q).add_le_mono_r((a + e) + q, e, a2.add_le_mono_r(a + e, q, ha)),
+        ≈ a + (q + (e + e)) := ring(a.den_add(e), (a + e).den_add(q), ((a + e) + q).den_add(e), e.den_add(e), q.den_add(e + e), a.den_add(q + (e + e))),
+        <= b := gap,
+        <= b2 + e := hb,
+    };
+    (a2 + q).add_le_cancel_r(b2, e, shifted)
+}
+
+// Two rationals within every 1/(k+1) of each other are the same number: a
+// positive distance would sit above some 1/(k+1) (`archimedean_inv`).
+theorem Rat::same_of_close(self x, y: Rat, close: (k: Nat) → (x -y).abs() <= Rat::inv_succ(k)): x ≈ y {
+    let d = x -y;
+    let small: (d.abs() <= Rat::zero()) = Rat::le_of_not_lt(λ positive => {
+        match d.abs().archimedean_inv(positive) {
+            Exists(k, gap) => {
+                let below: (Rat::inv_succ(k) < d.abs()) = gap;
+                Rat::not_le_of_lt(below, close(k))
+            },
+        }
+    });
+    let above = d.num.le_abs();
+    let below = d.num.neg_le_abs();
+    let zero = Int::zero_mul(d.den.int());
+    let flip = y.num.mul_neg_l(x.den.int());
+    let gap: (d.num = x.num * y.den.int() + (-y.num) * x.den.int()) = refl;
+    let mag: (d.abs().num = d.num.abs()) = refl;
+    let den: (d.abs().den = d.den) = refl;
+    omega
 }
 
 instance(x, y: Rat) Decide<Rat::Le(x, y)> {

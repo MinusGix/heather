@@ -1,0 +1,80 @@
+// Regular Cauchy reals as a setoid client (docs/regular-cauchy-reals-round.md).
+//
+// As with the rationals, the proofs below never look inside a sequence. They
+// use the laws `std/creal` states modulo `≈`: `calc` chains glued by the
+// `Equivalence<CReal>(CReal::Same)` instance and by the mixed `Trans` pairs
+// of `≈` with `<`, and `rel_cong` through `+` by the registered `Respects2`.
+
+import logic;
+import nat;
+import int;
+import omega;
+import rat;
+import creal;
+import relation_props;
+import algebra_rel;
+
+// Cancel a pair inside a sum: `rel_cong` carries `y + -y ≈ 0` under `x + _`.
+theorem cancel_inside(x, y: CReal): x + (y + -y) ≈ x {
+    calc {
+        x + (y + -y) ≈ x + CReal::zero() := rel_cong(y.add_neg()),
+        ≈ x := x.add_zero(),
+    }
+}
+
+// Subtraction undoes addition.
+theorem add_sub_cancel(x, y: CReal): (x + y) -y ≈ x {
+    calc {
+        (x + y) -y ≈ x + (y + -y) := x.add_assoc(y, -y),
+        ≈ x := cancel_inside(x, y),
+    }
+}
+
+// A strict chain may pass through `≈` steps on either side.
+theorem lt_chain(x, y, z, w: CReal, a: x ≈ y, b: y < z, c: z ≈ w): x < w {
+    calc {
+        x ≈ y := a,
+        < z := b,
+        ≈ w := c,
+    }
+}
+
+// The rationals' order and sums carry over to their embeddings.
+theorem embedded_sum_below(p, q, r: Rat, h: p + q < r): CReal::ofRat(p) + CReal::ofRat(q) < CReal::ofRat(r) {
+    calc {
+        CReal::ofRat(p) + CReal::ofRat(q) ≈ CReal::ofRat(p + q) := CReal::same_sym(CReal::ofRat_add(p, q)),
+        < CReal::ofRat(r) := CReal::ofRat_lt(h),
+    }
+}
+
+// Distinct rationals embed apart; apartness, not a decision, is what tells
+// reals apart.
+fn zero_below_one() → CReal::zero() < CReal::one() {
+    let gap: (Rat::zero() < Rat::one()) = omega;
+    CReal::ofRat_lt(gap)
+}
+
+theorem zero_apart_one(): CReal::zero().Apart(CReal::one()) { Inl(zero_below_one()) }
+
+// Reals that are not apart are the same.
+theorem tight(x, y: CReal, h: ¬(x.Apart(y))): y ≈ x { CReal::same_sym(CReal::same_of_not_apart(h)) }
+
+// ---------------------------------------------------------------------------
+// The representation computes.
+
+fn half() → Rat { Rat(OfNat(1), 2) }
+fn third() → Rat { Rat(OfNat(1), 3) }
+
+// A sum's term is the summands' terms at 2n+1, added as fractions.
+theorem sum_term(): (CReal::ofRat(half()) + CReal::ofRat(third())).seq(5) ≈ Rat(OfNat(5), 6) { refl }
+
+// The modulus is data: `add_zero` says how far out `x + 0` is within
+// 1/(k+1) of `x`, and the answer evaluates.
+theorem add_zero_start(): (CReal::one().add_zero()(3)).witness = 7 { refl }
+
+// So is a gap: `0 < 1` is witnessed by 1/(k+1) below the rational gap, and
+// the k that `Rat::archimedean_inv` finds is the denominator of 1/1.
+theorem one_gap(): zero_below_one().witness = 1 { refl }
+
+// Two different sequences are the same real: 1/2 written as 2/4.
+theorem half_same(): CReal::ofRat(half()) ≈ CReal::ofRat(Rat(OfNat(2), 4)) { CReal::ofRat_respects(refl) }
