@@ -146,6 +146,14 @@ This also corrects [rational-order-round](rational-order-round.md).
 that their explicit witnesses "compute" was only true of the source. They
 are `fn`s now, and `one_gap` shows the witness flowing through `ofRat_lt`.
 
+Writing proofs as `fn`s is a workaround. It makes the author guess, at
+definition time, whether anyone will compute with a proof, and it gives up
+the edit firewall a theorem's opacity provides.
+[theorem-witness-unfolding](../issues/theorem-witness-unfolding.md) owns the
+alternative: theorems keep sealed bodies, and the declaration that computes
+with one unfolds it and records the dependency. Once that lands, these go
+back to being `theorem`s.
+
 ## Assumption inventory
 
 None in the core: no excluded middle, no choice, no function
@@ -192,12 +200,15 @@ For [constructive-ordered-field-interface](../issues/constructive-ordered-field-
 
 The dearest declarations are the `<` ones (`lt_of_term`, `lt_respects`,
 `lt_cotrans`) and `add_assoc`, each a nested chain of rational estimates.
-One finding: `omega` over facts about `Nat::max` (the later of two start
-indices) was several times dearer than chaining `le_max_l`/`le_max_r`
-through `le_trans`. `lt_respects` went from the module's dearest item by a
-wide margin to on par with its neighbours when its three `omega` calls
-became `le_trans` chains, so the start-index arithmetic in `creal` is
-written that way.
+One finding: the start-index arithmetic (`i <= n` from `i.max(j) <= n`)
+was written with `omega` at first, and in `lt_respects` those three calls
+were most of the declaration's time. The cost is not the `max` facts. A
+probe of the same goal costs about three times more with three unrelated
+`Rat` inequalities in scope, because `omega` still unfolds and inspects each
+of them (logged on
+[omega-fact-arguments](../issues/omega-fact-arguments.md)). Chaining
+`le_max_l`/`le_max_r` through `le_trans` costs far less than either, so
+`creal` writes its index arithmetic that way.
 
 ## Next
 
