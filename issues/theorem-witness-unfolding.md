@@ -105,3 +105,14 @@ declarations that unfolded it.
 - **[[declaration-slice-replay]]** owns the replay firewall. Assumed here:
   only that the check key of an item may include extra hashes the item
   reports.
+
+## Log
+
+- 2026-10-16: Measured the upper bound on step 1 with a probe compiler where every `theorem` keeps its body (one line in `crates/elab/src/lib.rs`'s binding: `DeclKind::Theorem` takes `Some(term)`). It was run with `scripts/perf ab --corpus full --only '' --samples 2` against HEAD, plus `rat_client` and `creal_client` (cloud box, loadavg ~2.6 on 4 CPUs).
+
+  - **Evaluation counters:** within ±0.1% on every corpus file (omega, nat, int, list, bitvec, algebra, calc_parser, ir_v1, function_ir, x86_64, the reused_callee certificate, rat_client, creal_client). The conversion counters (`conv_misses`, `conv_not_convertible`, memo and shortcut hits) are identical. With every theorem transparent, existing proofs almost never unfold one, so D's elaborator risk on today's library is negligible.
+  - **Memory:** max RSS rises 10–31% (x86_64 +21%, the certificate +22%, creal_client +31%), because Ψ now retains every proof term. This, not unfolding, is the cost to design around.
+  - **Seconds:** mostly inside the spread. `list` and `calc_parser` separated at about +20–28%, which is plausibly allocation from the retained bodies, on a loaded box with two samples. This is not a quotable result.
+  - With bodies kept, `creal` written with `theorem`s in place of its data-carrying `fn`s checks, and the showcase's `add_zero_start`/`one_gap` evaluate by `refl`.
+
+  Consequence for the plan: D is cheap at conversion. What remains is (a) retaining bodies without a 10–30% memory tax (lazily from the image or disk, or only for theorems whose statement carries data), and (b) recording which theorem bodies a declaration actually unfolded, at the kernel *and* in the elaborator's whnf, so the check key and slice replay depend on exactly those. On today's library that set is almost always empty, so the edit firewall would hold in practice. The probe patch is not committed.
