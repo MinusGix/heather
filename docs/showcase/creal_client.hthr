@@ -3,7 +3,8 @@
 // As with the rationals, the proofs below never look inside a sequence. They
 // use the laws `std/creal` states modulo `≈`: `calc` chains glued by the
 // `Equivalence<CReal>(CReal::Same)` instance and by the mixed `Trans` pairs
-// of `≈` with `<`, and `rel_cong` through `+` by the registered `Respects2`.
+// of `≈` with `<` and `≤`, and `rel_cong` through `+` and `*` by the
+// registered `Respects2` instances.
 
 import logic;
 import nat;
@@ -54,10 +55,46 @@ theorem zero_below_one(): CReal::zero() < CReal::one() {
     CReal::ofRat_lt(gap)
 }
 
+theorem one_not_le_zero(): ¬(CReal::one() <= CReal::zero()) { λ h => h(zero_below_one()) }
+
 theorem zero_apart_one(): CReal::zero().Apart(CReal::one()) { Inl(zero_below_one()) }
 
 // Reals that are not apart are the same.
 theorem tight(x, y: CReal, h: ¬(x.Apart(y))): y ≈ x { CReal::same_sym(CReal::same_of_not_apart(h)) }
+
+// ---------------------------------------------------------------------------
+// Products and the non-strict order.
+
+// `rel_cong` carries `≈` through `*` as through `+`.
+theorem drop_one_inside(x, y: CReal): x * (y * CReal::one()) ≈ x * y { rel_cong(y.mul_one()) }
+
+// Distributing from the right goes through commutativity.
+theorem mul_add_distr_r(x, y, z: CReal): (x + y) * z ≈ x * z + y * z {
+    calc {
+        (x + y) * z ≈ z * (x + y) := (x + y).mul_comm(z),
+        ≈ z * x + z * y := z.mul_add_distr(x, y),
+        ≈ x * z + y * z := CReal::add_respects(z.mul_comm(x), z.mul_comm(y)),
+    }
+}
+
+// The embedding carries rational products, and zero absorbs.
+theorem embedded_square(q: Rat): CReal::ofRat(q) * CReal::ofRat(q) ≈ CReal::ofRat(q * q) {
+    CReal::same_sym(CReal::ofRat_mul(q, q))
+}
+
+theorem times_zero(x, y: CReal): (x + y) * CReal::zero() ≈ CReal::zero() { (x + y).mul_zero() }
+
+// `≤` is the refutation of `>`, and a chain may mix it with `≈` and `<`.
+theorem le_chain(x, y, z, w: CReal, a: x ≈ y, b: y <= z, c: z < w): x < w {
+    calc {
+        x ≈ y := a,
+        <= z := b,
+        < w := c,
+    }
+}
+
+// Reals below each other are the same.
+theorem squeeze(x, y: CReal, a: x <= y, b: y <= x): x ≈ y { CReal::le_antisymm(a, b) }
 
 // ---------------------------------------------------------------------------
 // The representation computes.
@@ -78,3 +115,12 @@ theorem one_gap(): zero_below_one().witness = 1 { refl }
 
 // Two different sequences are the same real: 1/2 written as 2/4.
 theorem half_same(): CReal::ofRat(half()) ≈ CReal::ofRat(Rat(OfNat(2), 4)) { CReal::ofRat_respects(refl) }
+
+// A product reads its factors further out: both bounds are 2 here, so term
+// 0 reads index 5. The constants make that invisible in the value.
+theorem product_term(): (CReal::ofRat(half()) * CReal::ofRat(third())).seq(0) ≈ Rat(OfNat(1), 6) { refl }
+
+// The product laws' moduli compute too, through `mul_close`: for 1 · 1 the
+// bound is 3 on each side, so the factors must be within 1/14 of each other,
+// which regularity grants from index 55 on.
+theorem mul_comm_start(): (CReal::one().mul_comm(CReal::one())(0)).witness = 55 { refl }
