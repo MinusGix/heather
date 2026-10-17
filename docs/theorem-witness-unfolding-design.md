@@ -120,13 +120,17 @@ carry their end state and trace, so they are kept, and the wc certificate
 build holds a few hundred of them at peak — a peak RSS increase on the
 order of a tenth there, against about a fifth for keeping every proof.
 Nothing computes with those witnesses today (clients consume a run through
-`runs_elim`/`runs_into`); [[sealed-proof-memory]] owns making the cost
-proportional to what is opened.
+`runs_elim`/`runs_into`). Since [[sealed-proof-memory]], a proof read from a
+module image is kept as its encoding (`term::SealedProof`, a `ProofSource`)
+and decoded only when an unsealing needs its term, so a warm run pays the
+encodings plus what it opens; a cold run still holds the proofs it
+elaborated.
 
 ## 6. Not done here
 
-- **Lazy proofs** ([[sealed-proof-memory]]). Kept proofs live in memory for
-  the run.
+- **Lazy proofs on a cold run** ([[sealed-proof-cold-and-glue]]). A cold
+  run's own proofs stay in memory, and the value machine loads a lazy proof
+  when it glues it, before a comparison may decide on the spine.
 - **Deciders.** `le_dec`, `or_pick` and the other deciders are `fn`s by a
   rule written when a theorem never unfolded (docs/nat-order-design.md,
   docs/decide-class-design.md). A decision's statement carries data, so as

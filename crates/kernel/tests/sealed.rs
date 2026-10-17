@@ -17,7 +17,7 @@ use heather_kernel::level::Level;
 use heather_kernel::reduce::{whnf_term, whnf_term_delta, Defs};
 use heather_kernel::term::{
     CtxBase, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, LocalCtx, LocalSubst, LocalVar,
-    SubstTail, Term, Type,
+    ProofSource, SealedProof, SubstTail, Term, Type,
 };
 use heather_kernel::typing::{check_term, TypeError};
 use heather_kernel::unseal;
@@ -231,4 +231,81 @@ fn sealing_keeps_the_binding_and_its_prefix() {
     }]);
     q.seal(0, rt(num(2)));
     assert!(q.sealed.is_empty());
+}
+
+/// A proof source that counts how often it is loaded.
+struct Counted {
+    term: Term,
+    loads: Rc<std::sync::atomic::AtomicUsize>,
+}
+
+impl ProofSource for Counted {
+    fn load(&self) -> Term {
+        self.loads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.term.clone()
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+/// [`world`]`(true)` with both proofs kept lazily, and their load counts
+/// (`w`'s, then `f`'s).
+fn lazy_world() -> (GlobalCtx, [Rc<std::sync::atomic::AtomicUsize>; 2]) {
+    let eager = world(true);
+    let mut p = world(false);
+    let loads = [Rc::default(), Rc::default()];
+    for (at, loads) in loads.iter().enumerate() {
+        let term = (**eager.sealed_proof(at).unwrap()).clone();
+        p.seal_kept(at, Rc::new(SealedProof::lazy(Counted { term, loads: Rc::clone(loads) })));
+    }
+    (p, loads)
+}
+
+fn count(loads: &[Rc<std::sync::atomic::AtomicUsize>; 2]) -> [usize; 2] {
+    loads.each_ref().map(|n| n.load(std::sync::atomic::Ordering::SeqCst))
+}
+
+#[test]
+fn a_lazily_kept_proof_loads_only_where_it_is_opened() {
+    // `issues/sealed-proof-memory.md`: a proof kept as a source is loaded
+    // the first time an unsealing needs its term, once, and computes as the
+    // eager one does.
+    let (p, loads) = lazy_world();
+    let g = nats(0);
+    // Asking whether a head is sealed, and a bare application with no
+    // elimination waiting on it, load nothing.
+    assert!(Defs::transparent(&p).is_sealed(GlobalVar(0)));
+    let r = whnf_term_delta(&app(glob(0, 0), num(2)), &g, Defs::transparent(&p), FUEL);
+    assert_eq!(r.ok(), Some(app(glob(0, 0), num(2))));
+    assert_eq!(count(&loads), [0, 0]);
+    // Projecting `w` opens it, and only it.
+    let (r, opened) = unseal::record(|| conv(&p, &g, &fst(glob(1, 0)), &num(3), &Type::Nat));
+    assert_eq!(r, Ok(()));
+    assert_eq!(opened, vec![0]);
+    assert_eq!(count(&loads), [1, 0]);
+    // Opening it again, through the other machine too, does not load again.
+    assert_eq!(conv(&p, &g, &fst(glob(1, 0)), &num(4), &Type::Nat), Err(ConvError::NotConvertible));
+    let r = whnf_term_delta(&fst(glob(1, 0)), &g, Defs::transparent(&p), FUEL);
+    assert_eq!(r.ok(), Some(num(3)));
+    assert_eq!(count(&loads), [1, 0]);
+    // The syntax reducer loads `f` where it unseals it, under a checking
+    // position's neighbour: the open argument.
+    let r = whnf_term_delta(&fst(app(glob(0, 0), num(2))), &g, Defs::transparent(&p), FUEL);
+    assert_eq!(r.ok(), Some(num(3)));
+    assert_eq!(count(&loads), [1, 1]);
+    // A clone of Ψ shares the loaded proofs.
+    let q = p.clone();
+    assert_eq!(conv(&q, &nats(1), &fst(app(glob(0, 1), v(0))), &Term::Succ(rt(v(0))), &Type::Nat), Ok(()));
+    assert_eq!(count(&loads), [1, 1]);
+}
+
+#[test]
+fn a_lazily_kept_proof_is_kept_through_a_prefix() {
+    let (p, loads) = lazy_world();
+    let q = p.prefix(1);
+    assert!(q.sealed_kept(0).is_some() && q.sealed_kept(1).is_none());
+    assert_eq!(count(&loads), [0, 0]);
+    assert_eq!(p, world(true), "a lazy Ψ equals the eager one it loads to");
 }

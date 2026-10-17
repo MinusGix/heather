@@ -1545,13 +1545,94 @@ pub struct GlobalCtx {
 
 const SEALED_CHUNK: usize = 64;
 
+/// Where a lazily kept [`SealedProof`] comes from: something that can
+/// produce the proof term on demand, such as its encoding in a module image
+/// (`issues/sealed-proof-memory.md`). Producing it must be deterministic —
+/// the same term every call — and must not fail: whoever builds the source
+/// checks up front that it can.
+pub trait ProofSource: Send + Sync {
+    /// The proof term.
+    fn load(&self) -> Term;
+
+    /// The source as itself, for a caller that built it and compares or
+    /// re-encodes sources of its own kind without loading them.
+    fn as_any(&self) -> &dyn std::any::Any;
+}
+
+/// One kept proof: a term already in memory, or a [`ProofSource`] loaded the
+/// first time something needs the term and kept from then on. Ψ keeps a
+/// proof for every theorem whose statement carries data, and on a run that
+/// replays module images almost none of them is ever opened, so a proof held
+/// as a source costs its encoding until one is.
+pub struct SealedProof {
+    term: std::sync::OnceLock<Rc<Term>>,
+    source: Option<Box<dyn ProofSource>>,
+}
+
+impl SealedProof {
+    /// A proof already in memory.
+    pub fn new(term: Rc<Term>) -> SealedProof {
+        SealedProof { term: std::sync::OnceLock::from(term), source: None }
+    }
+
+    /// A proof loaded from `source` on first use.
+    pub fn lazy(source: impl ProofSource + 'static) -> SealedProof {
+        SealedProof { term: std::sync::OnceLock::new(), source: Some(Box::new(source)) }
+    }
+
+    /// A proof computed from `base`'s term on first use — `base` is loaded
+    /// only then.
+    pub fn derived(base: Rc<SealedProof>, f: impl Fn(&Term) -> Term + Send + Sync + 'static) -> SealedProof {
+        struct Derived<F> {
+            base: Rc<SealedProof>,
+            f: F,
+        }
+        impl<F: Fn(&Term) -> Term + Send + Sync + 'static> ProofSource for Derived<F> {
+            fn load(&self) -> Term {
+                (self.f)(self.base.term())
+            }
+            fn as_any(&self) -> &dyn std::any::Any {
+                self
+            }
+        }
+        SealedProof::lazy(Derived { base, f })
+    }
+
+    /// The proof term, loading it from its source if this is the first use.
+    pub fn term(&self) -> &Rc<Term> {
+        self.term.get_or_init(|| {
+            crate::stats::sealed_loads(1);
+            Rc::new(self.source.as_ref().expect("a sealed proof has a term or a source").load())
+        })
+    }
+
+    /// The proof term if it is in memory, without loading it.
+    pub fn loaded(&self) -> Option<&Rc<Term>> {
+        self.term.get()
+    }
+
+    /// Where the proof loads from, if it was kept lazily.
+    pub fn source(&self) -> Option<&dyn ProofSource> {
+        self.source.as_deref()
+    }
+}
+
+impl std::fmt::Debug for SealedProof {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.loaded() {
+            Some(t) => t.fmt(f),
+            None => f.write_str("<sealed proof, not loaded>"),
+        }
+    }
+}
+
 /// Persistent, index-ordered storage for [`GlobalCtx::sealed`]: `(absolute Ψ
 /// index, proof)` pairs, strictly increasing in the index, chunked the way
 /// [`GlobalBindings`] is so that cloning Ψ stays O(1).
 #[derive(Clone, Default)]
 pub struct SealedProofs {
-    chunks: Rc<Vec<Rc<Vec<(usize, Rc<Term>)>>>>,
-    tail: Rc<Vec<(usize, Rc<Term>)>>,
+    chunks: Rc<Vec<Rc<Vec<(usize, Rc<SealedProof>)>>>>,
+    tail: Rc<Vec<(usize, Rc<SealedProof>)>>,
 }
 
 impl SealedProofs {
@@ -1563,9 +1644,10 @@ impl SealedProofs {
         self.tail.is_empty() && self.chunks.is_empty()
     }
 
-    /// The sealed proof of the binding at absolute index `at`.
-    pub fn get(&self, at: usize) -> Option<&Rc<Term>> {
-        let find = |entries: &'_ [(usize, Rc<Term>)]| {
+    /// The sealed proof of the binding at absolute index `at`, as kept: a
+    /// lazy one stays unloaded.
+    pub fn get(&self, at: usize) -> Option<&Rc<SealedProof>> {
+        let find = |entries: &'_ [(usize, Rc<SealedProof>)]| {
             entries.binary_search_by_key(&at, |(i, _)| *i).ok()
         };
         if self.tail.first().is_some_and(|(first, _)| *first <= at) {
@@ -1576,13 +1658,13 @@ impl SealedProofs {
         find(chunk).map(|k| &chunk[k].1)
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (usize, &Rc<Term>)> {
+    pub fn iter(&self) -> impl Iterator<Item = (usize, &Rc<SealedProof>)> {
         self.chunks.iter().flat_map(|c| c.iter()).chain(self.tail.iter()).map(|(i, t)| (*i, t))
     }
 
     /// Record `proof` for the binding at `at`, which must be past every index
     /// already recorded.
-    fn push(&mut self, at: usize, proof: Rc<Term>) {
+    fn push(&mut self, at: usize, proof: Rc<SealedProof>) {
         let last = self.tail.last().or_else(|| self.chunks.last().and_then(|c| c.last()));
         assert!(last.is_none_or(|(i, _)| *i < at), "sealed proofs are recorded in Ψ order");
         if self.tail.len() == SEALED_CHUNK {
@@ -1606,9 +1688,11 @@ impl SealedProofs {
 }
 
 impl PartialEq for SealedProofs {
+    /// Loads whatever it compares that is not one allocation: equality of
+    /// Ψ is a test-side question, not one a check asks.
     fn eq(&self, other: &Self) -> bool {
         self.len() == other.len()
-            && self.iter().zip(other.iter()).all(|((i, a), (j, b))| i == j && (Rc::ptr_eq(a, b) || a == b))
+            && self.iter().zip(other.iter()).all(|((i, a), (j, b))| i == j && (Rc::ptr_eq(a, b) || a.term() == b.term()))
     }
 }
 
@@ -1785,13 +1869,26 @@ impl GlobalCtx {
     /// `at`. Ignored unless that binding is an opaque term binding; `at` must
     /// be past every index already sealed.
     pub fn seal(&mut self, at: usize, proof: Rc<Term>) {
+        self.seal_kept(at, Rc::new(SealedProof::new(proof)));
+    }
+
+    /// [`GlobalCtx::seal`] for a proof as kept, lazy or not.
+    pub fn seal_kept(&mut self, at: usize, proof: Rc<SealedProof>) {
         if matches!(self.bindings.get(at), Some(GlobalBinding::Tm { body: None, .. })) {
             self.sealed.push(at, proof);
         }
     }
 
-    /// The sealed proof of the binding at absolute index `at`, if one is kept.
+    /// The sealed proof of the binding at absolute index `at`, if one is
+    /// kept, loaded if it was kept lazily. Only unsealing needs the term;
+    /// [`GlobalCtx::sealed_kept`] asks without loading.
     pub fn sealed_proof(&self, at: usize) -> Option<&Rc<Term>> {
+        self.sealed.get(at).map(|p| p.term())
+    }
+
+    /// The sealed proof of the binding at absolute index `at` as kept,
+    /// without loading it.
+    pub fn sealed_kept(&self, at: usize) -> Option<&Rc<SealedProof>> {
         self.sealed.get(at)
     }
 
