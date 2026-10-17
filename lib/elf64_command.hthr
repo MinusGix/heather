@@ -743,6 +743,24 @@ theorem total_ok_many(mask: BitVec(64), width, n: Nat, total: RowWrite, totals: 
     j(many, λ b _ => match b as λ _ => Type { True => RowWriteOk(row_counts(width, mask, totals) ++ total_name(), total), False => True }, ok)
 }
 
+// A count `w` against two, as a JAE or a JB reads it. Apart, so that
+// `omega` sees only these facts: inside a phase's term it reads every
+// hypothesis in scope, and that dominated the phase's check.
+theorem two_or_more(w: BitVec(64), n: Nat, value: w.toNat() = n, fits: w.borrow_sub_bit(BitVec::ofNat(2, n := 64)) = False): 2 <= n {
+    let ge = cmp_not_below(w, BitVec::ofNat(2, n := 64), fits);
+    let two_value: (BitVec::ofNat(2, n := 64).toNat() = 2) = BitVec::toNat_ofNat(64, 2, { omega });
+    omega
+}
+theorem one_or_none(w: BitVec(64), n: Nat, value: w.toNat() = n, below: w.borrow_sub_bit(BitVec::ofNat(2, n := 64)) = True): n <= 1 {
+    let lt = cmp_below(w, BitVec::ofNat(2, n := 64), below);
+    let two_value: (BitVec::ofNat(2, n := 64).toNat() = 2) = BitVec::toNat_ofNat(64, 2, { omega });
+    omega
+}
+theorem under_two(w: BitVec(64), n: Nat, value: w.toNat() = n, below: w.borrow_sub_bit(BitVec::ofNat(2, n := 64)) = True): n < 2 {
+    let lt = cmp_below(w, BitVec::ofNat(2, n := 64), below);
+    let two_value: (BitVec::ofNat(2, n := 64).toNat() = 2) = BitVec::toNat_ofNat(64, 2, { omega });
+    omega
+}
 // The total row's " total\n" (`l_tn0` on): each byte one stretch
 // (elf64_straight) of three items written once over any label
 // (`put_label`): R11 set to the byte, stored at RDI, RDI on by one. What
@@ -874,22 +892,17 @@ theorem total_runs(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64),
     let count = vars(21);
     let two = BitVec::ofNat(2, n := 64);
     let value: (count.toNat() = n) = trans(cong_fn<BitVec(64), Nat>(λ v => v.toNat(), held.count_is), toNat_word_of_nat(64, n, few));
-    let two_value: (two.toNat() = 2) = BitVec::toNat_ofNat(64, 2, { omega });
     cmd_straight(file, letters, default, spill, code, jumps, pj, placed, page, λ s => LinuxRuns(io, events, s), runs_back(events),
         l_total_jb(), refl, 4, vars, state, rip_is, Exists(frame, ⟨memory_is, holds⟩),
         Exists(21, ⟨trivial, ⟨refl,
             ⟨λ taken after at fr _ => {
-                let below: (count.borrow_sub_bit(two) = True) = taken;
-                let lt = cmp_below(count, two, below);
-                let short: (n < 2) = omega;
+                let short = under_two(count, n, value, taken);
                 j(sym(total_events_few(mask, width, n, total, failed, totals, io_leb_false(2, n, short))), λ es _ => LinuxRuns(io, es, after),
                     exit_runs(file, letters, default, spill, code, jumps, pj, placed, fr.witness, vars, fr.proof.right, status_word(failed),
                         held.status_is, page, after, fr.proof.left, trans(at, cmd_lands(l_total_test(), 6, t_exit(), ca(l_exit()), cmd_j_total_jb()))))
             },
              λ passed after at fr _ => {
-                let fits: (count.borrow_sub_bit(two) = False) = passed;
-                let ge = cmp_not_below(count, two, fits);
-                let many_n: (2 <= n) = omega;
+                let many_n = two_or_more(count, n, value, passed);
                 let many: (Nat::leb(2, n) = True) = bool::eq_true_of_is_true(Nat::leb(2, n), Nat::leb_complete(2, n, many_n));
                 j(sym(total_events_many(mask, width, n, total, failed, totals, many)), λ es _ => LinuxRuns(io, es, after),
                     total_rows(file, letters, default, spill, code, jumps, pj, placed, vars, mask, width, n, failed, totals, held, narrow, total,
@@ -2610,27 +2623,16 @@ fn KeptGoes(file: IoImage, mask: BitVec(64), n: Nat, rsp: BitVec(64), to: Nat, e
         (page: Nat → BitVec(8)) → (state: MachineState<IoMemory>) → state.memory = IoMemory(with_frame(file, frame), page) →
         state.rip = eof_rip(to) → read_gpr(Rsp, state.gprs) = rsp → extra(state.gprs) → LinuxRuns(io_linux(), events, state)
 }
-fn keep_few_block() → List<Instruction> { [MovRI(R11, BitVec::ofNat(2)), CmpRR(R9, R11)] }
-fn keep_single_block() → List<Instruction> {
-    [MovRI(R11, BitVec::ofNat(1)), MovRR(Rax, R8), SubRR(Rax, R11), AndRR(Rax, R8), MovRI(R11, word_zero()), CmpRR(Rax, R11)]
+// A JCC's side, its condition a negated bit: the bit.
+theorem not_true_is(b: Bool, h: !b = True): b = False {
+    (match b as λ c => !c = True → c = False { True => λ no => absurd(no), False => λ _ => refl })(h)
 }
-fn keep_one_block() → List<Instruction> { [MovRI(Rsi, BitVec::ofNat(1))] }
-// The selection in R8, RSP as it was.
-fn KeepAt(file: IoImage, page: Nat → BitVec(8), vars: Nat → BitVec(64), mask, rsp: BitVec(64)) → MachineState<IoMemory> → Type {
-    λ state => Framed(file, page, vars)(state) ∧ ((read_gpr(R8, state.gprs) = mask) ∧ (read_gpr(Rsp, state.gprs) = rsp))
+theorem not_false_is(b: Bool, h: !b = False): b = True {
+    (match b as λ c => !c = False → c = True { True => λ _ => refl, False => λ no => absurd(no) })(h)
 }
-// Where the prologue goes on: RSP as it was, and `extra`.
-fn KeepGone(file: IoImage, page: Nat → BitVec(8), vars: Nat → BitVec(64), rsp: BitVec(64), extra: Gprs → Type) → MachineState<IoMemory> → Type {
-    λ state => Framed(file, page, vars)(state) ∧ ((read_gpr(Rsp, state.gprs) = rsp) ∧ extra(state.gprs))
-}
-theorem kept_goes(file: IoImage, mask: BitVec(64), n: Nat, rsp: BitVec(64), to: Nat, extra: Gprs → Type, events: List<LinuxEvent>,
-    goes: KeptGoes(file, mask, n, rsp, to, extra, events), page: Nat → BitVec(8), vars: Nat → BitVec(64), at16: vars(16) = mask,
-    at21: vars(21) = word_of_nat(64, n), state: MachineState<IoMemory>, rip_is: state.rip = eof_rip(to),
-    gone: KeepGone(file, page, vars, rsp, extra)(state)): LinuxRuns(io_linux(), events, state) {
-    goes(gone.left.witness, vars, gone.left.proof.right, at16, at21, page, state, gone.left.proof.left, rip_is, gone.right.left, gone.right.right)
-}
-// One operand or none (`l_single`): one count makes no stat (`l_narrow`, width 1);
-// more than one makes the stat pass (`l_stat`).
+// One operand or none (`l_single`, one stretch of four items to the JMP):
+// one count makes no stat (`l_narrow`, width 1); more than one makes the
+// stat pass (`l_stat`).
 theorem keep_single(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64), spill: Nat → StateReg, code: StructuredCode,
     jumps: FilterJumps, pj: PrintJumps, placed: CommandPlaced(file, letters, default, spill, code, jumps, pj),
     page: Nat → BitVec(8), vars: Nat → BitVec(64), mask: BitVec(64), n: Nat, rsp: BitVec(64),
@@ -2639,65 +2641,42 @@ theorem keep_single(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64)
     to_stat: stats_made(mask, n) = True → KeptGoes(file, mask, n, rsp, ca(l_stat()), λ _ => True, events(True)),
     to_one: stats_made(mask, n) = False →
         KeptGoes(file, mask, n, rsp, ca(l_wstore()), λ g => read_gpr(Rsi, g) = BitVec::ofNat(1), events(False)),
-    state: MachineState<IoMemory>, rip_is: state.rip = eof_rip(ca(l_single())), held: KeepAt(file, page, vars, mask, rsp)(state)):
+    state: MachineState<IoMemory>, rip_is: state.rip = eof_rip(ca(l_single())), framed: Framed(file, page, vars)(state),
+    r8: read_gpr(R8, state.gprs) = mask, rsp_is: read_gpr(Rsp, state.gprs) = rsp):
     LinuxRuns(io_linux(), events(stats_made(mask, n)), state) {
     let io = io_linux();
-    let here = λ (l: Prog) (f: Nat → BitVec(8)) => cmd_at(with_frame(file, f), letters, default, spill, code, jumps, pj, placed(f))(l);
-    let p0 = KeepAt(file, page, vars, mask, rsp);
-    let p1 = λ (st: MachineState<IoMemory>) => KeepAt(file, page, vars, mask, rsp)(st) ∧ (st.flags.zf = single_count(mask));
-    let tested = runs_block(keep_single_block(), io_entry(), ca(l_single()), p0, p1,
-        λ st h => framed_resident(file, page, vars, canonical_block_bytes(keep_single_block()), eof_rip(ca(l_single())), here(l_single()), st, h.left),
-        λ st h same => {
-            let w8 = read_gpr(R8, st.gprs);
-            ⟨⟨framed_moved(file, page, vars, execute_block_normal(keep_single_block(), st), st, same, h.left), h.right⟩,
-                trans(zero_bits_sub(64, w8.sub(BitVec::ofNat(1)).band(w8), word_zero()),
-                    cong_fn<BitVec(64), Bool>(λ v => v.sub(BitVec::ofNat(1)).band(v).eq_bit(word_zero()), h.right.left))⟩
-        });
-    let jne = JumpIfNear(NE, cmd_d(l_single_jne()));
-    let resident = λ (st: MachineState<IoMemory>) (h: p1(st)) =>
-        framed_resident(file, page, vars, near_control_bytes(jne), eof_rip(ca(l_single_jne())), here(l_single_jne()), st, h.left.left);
-    (match single_count(mask) as λ c => (single_count(mask) = c) → LinuxRuns(io, events(stats_made(mask, n)), state) {
-        False => λ multi => {
+    let goes = events(stats_made(mask, n));
+    let w8 = read_gpr(R8, state.gprs);
+    let zf: (execute_block_normal([MovRI(R11, BitVec::ofNat(1)), MovRR(Rax, R8), SubRR(Rax, R11), AndRR(Rax, R8), MovRI(R11, word_zero()),
+            CmpRR(Rax, R11)], state).flags.zf = single_count(mask)) =
+        trans(zero_bits_sub(64, w8.sub(BitVec::ofNat(1)).band(w8), word_zero()),
+            cong_fn<BitVec(64), Bool>(λ v => v.sub(BitVec::ofNat(1)).band(v).eq_bit(word_zero()), r8));
+    cmd_straight(file, letters, default, spill, code, jumps, pj, placed, page, λ s => LinuxRuns(io, goes, s), runs_back(goes),
+        l_narrow_jmp(), refl, 4, vars, state, rip_is, framed,
+        ⟨λ taken after at fr same => {
+            let regs = cong_fn<MachineState<IoMemory>, Gprs>(λ y => y.gprs, same);
+            let multi = not_true_is(single_count(mask), trans(cong_fn<Bool, Bool>(λ x => !x, sym(zf)), taken));
             let made: (stats_made(mask, n) = True) = trans(cong_fn<Bool, Bool>(λ x => !(x && single_count(mask)), leb1),
                 cong_fn<Bool, Bool>(λ s => !(True && s), multi));
-            let gone = KeepGone(file, page, vars, rsp, λ _ => True);
-            j(sym(made), λ x _ => LinuxRuns(io, events(x), state),
-                runs_into(p0, eof_rip(ca(l_single())), gone, eof_rip(ca(l_stat())), events(True),
-                    runs_seq(p0, eof_rip(ca(l_single())), p1, eof_rip(ca(l_single_jne())), gone, eof_rip(ca(l_stat())), tested,
-                        runs_jcc_taken(NE, cmd_d(l_single_jne()), io_entry(), ca(l_single_jne()), ca(l_stat()), cmd_j_single_jne(), p1, gone, resident,
-                            λ st h => cong_fn<Bool, Bool>(λ x => !x, trans(h.right, multi)), λ st h => ⟨h.left.left, ⟨h.left.right.right, trivial⟩⟩)),
-                    state, rip_is, held,
-                    λ s at gone_held => kept_goes(file, mask, n, rsp, ca(l_stat()), λ _ => True, events(True), to_stat(made), page, vars, at16, at21,
-                        s, at, gone_held)))
+            j(sym(made), λ x _ => LinuxRuns(io, events(x), after),
+                to_stat(made)(fr.witness, vars, fr.proof.right, at16, at21, page, after, fr.proof.left,
+                    trans(at, cmd_lands(l_single(), 6, t_stat(), ca(l_stat()), cmd_j_single_jne())),
+                    trans(cong_fn<Gprs, BitVec(64)>(λ g => read_gpr(Rsp, g), regs), rsp_is), trivial))
         },
-        True => λ single => {
+         λ passed after at fr same => {
+            let regs = cong_fn<MachineState<IoMemory>, Gprs>(λ y => y.gprs, same);
+            let single = not_false_is(single_count(mask), trans(cong_fn<Bool, Bool>(λ x => !x, sym(zf)), passed));
             let made: (stats_made(mask, n) = False) = trans(cong_fn<Bool, Bool>(λ x => !(x && single_count(mask)), leb1),
                 cong_fn<Bool, Bool>(λ s => !(True && s), single));
-            let one = λ (g: Gprs) => read_gpr(Rsi, g) = BitVec::ofNat(1);
-            let gone = KeepGone(file, page, vars, rsp, one);
-            let runs = runs_seq(p0, eof_rip(ca(l_single())), p1, eof_rip(ca(l_single_jne())), gone, eof_rip(ca(l_wstore())), tested,
-                runs_seq(p1, eof_rip(ca(l_single_jne())), p0, eof_rip(ca(l_narrow())), gone, eof_rip(ca(l_wstore())),
-                    runs_jcc_passed(NE, cmd_d(l_single_jne()), io_entry(), ca(l_single_jne()), p1, p0, resident,
-                        λ st h => cong_fn<Bool, Bool>(λ x => !x, trans(h.right, single)), λ st h => h.left),
-                    runs_seq(p0, eof_rip(ca(l_narrow())), gone, eof_rip(ca(l_narrow_jmp())), gone, eof_rip(ca(l_wstore())),
-                        runs_block(keep_one_block(), io_entry(), ca(l_narrow()), p0, gone,
-                            λ st h => framed_resident(file, page, vars, canonical_block_bytes(keep_one_block()), eof_rip(ca(l_narrow())), here(l_narrow()),
-                                st, h.left),
-                            λ st h same => ⟨framed_moved(file, page, vars, execute_block_normal(keep_one_block(), st), st, same, h.left),
-                                ⟨h.right.right, refl⟩⟩),
-                        runs_jmp(cmd_d(l_narrow_jmp()), io_entry(), ca(l_narrow_jmp()), ca(l_wstore()), cmd_j_narrow_jmp(), gone, gone,
-                            λ st h => framed_resident(file, page, vars, near_control_bytes(JumpNear(cmd_d(l_narrow_jmp()))), eof_rip(ca(l_narrow_jmp())),
-                                here(l_narrow_jmp()), st, h.left),
-                            λ st h => h))));
-            j(sym(made), λ x _ => LinuxRuns(io, events(x), state),
-                runs_into(p0, eof_rip(ca(l_single())), gone, eof_rip(ca(l_wstore())), events(False), runs, state, rip_is, held,
-                    λ s at gone_held => kept_goes(file, mask, n, rsp, ca(l_wstore()), one, events(False), to_one(made), page, vars, at16, at21,
-                        s, at, gone_held)))
-        },
-    })(refl)
+            j(sym(made), λ x _ => LinuxRuns(io, events(x), after),
+                to_one(made)(fr.witness, vars, fr.proof.right, at16, at21, page, after, fr.proof.left,
+                    trans(at, cmd_lands(l_narrow(), 5, t_wstore(), ca(l_wstore()), cmd_j_narrow_jmp())),
+                    trans(cong_fn<Gprs, BitVec(64)>(λ g => read_gpr(Rsp, g), regs), rsp_is), cong_fn<Gprs, BitVec(64)>(λ g => read_gpr(Rsi, g), regs)))
+        }⟩)
 }
 // The selection and the count into their slots (`l_keep_mask`), then the count
-// against two (`l_few`): two or more make the stat pass (`l_stat`).
+// against two (`l_few`), a stretch each (four items, then two to the JAE):
+// two or more make the stat pass (`l_stat`).
 theorem keep_runs(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64), spill: Nat → StateReg, code: StructuredCode,
     jumps: FilterJumps, pj: PrintJumps, placed: CommandPlaced(file, letters, default, spill, code, jumps, pj),
     frame: Nat → BitVec(8), vars: Nat → BitVec(64), holds: FrameHolds(frame, vars), mask: BitVec(64), n: Nat, few: n < Nat::pow(2, 64),
@@ -2709,70 +2688,49 @@ theorem keep_runs(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64), 
         KeptGoes(file, mask, n, read_gpr(Rsp, state.gprs), ca(l_wstore()), λ g => read_gpr(Rsi, g) = BitVec::ofNat(1), events(False))):
     LinuxRuns(io_linux(), events(stats_made(mask, n)), state) {
     let io = io_linux();
-    let here = λ (l: Prog) (f: Nat → BitVec(8)) => cmd_at(with_frame(file, f), letters, default, spill, code, jumps, pj, placed(f))(l);
+    let goes = events(stats_made(mask, n));
     let wn = word_of_nat(64, n);
     let two = BitVec::ofNat(2, n := 64);
     let rsp = read_gpr(Rsp, state.gprs);
     let v16 = set_var(vars, 16, mask);
     let kv = set_var(v16, 21, wn);
-    let p0 = λ (st: MachineState<IoMemory>) => Framed(file, page, vars)(st) ∧
-        ((read_gpr(R8, st.gprs) = mask) ∧ ((read_gpr(R9, st.gprs) = wn) ∧ (read_gpr(Rsp, st.gprs) = rsp)));
-    let p1 = λ (st: MachineState<IoMemory>) => Framed(file, page, v16)(st) ∧
-        ((read_gpr(R8, st.gprs) = mask) ∧ ((read_gpr(R9, st.gprs) = wn) ∧ (read_gpr(Rsp, st.gprs) = rsp)));
-    let p2 = λ (st: MachineState<IoMemory>) => Framed(file, page, kv)(st) ∧
-        ((read_gpr(R8, st.gprs) = mask) ∧ ((read_gpr(R9, st.gprs) = wn) ∧ (read_gpr(Rsp, st.gprs) = rsp)));
-    let p3 = λ (st: MachineState<IoMemory>) => KeepAt(file, page, kv, mask, rsp)(st) ∧ (condition_holds(AE, st.flags) = !(wn.borrow_sub_bit(two)));
-    let stored = runs_seq(p0, eof_rip(ca(l_keep_mask())), p1, eof_rip(ca(l_keep_count())), p3, eof_rip(ca(l_few_jae())),
-        runs_slot_store(file, page, vars, ca(l_keep_mask()), 16, { omega }, R8, here(l_keep_mask()), here(l_keep_mask_store()), p0, p1,
-            λ _ h => h.left,
-            λ st h framed => ⟨framed_set(file, page, vars, 16, read_gpr(R8, execute_block_normal(slot_block(16), st).gprs), mask, h.right.left,
-                slot_store_after(R8, 16, st), framed), h.right⟩),
-        runs_seq(p1, eof_rip(ca(l_keep_count())), p2, eof_rip(ca(l_few())), p3, eof_rip(ca(l_few_jae())),
-            runs_slot_store(file, page, v16, ca(l_keep_count()), 21, { omega }, R9, here(l_keep_count()), here(l_keep_count_store()), p1, p2,
-                λ _ h => h.left,
-                λ st h framed => ⟨framed_set(file, page, v16, 21, read_gpr(R9, execute_block_normal(slot_block(21), st).gprs), wn, h.right.right.left,
-                    slot_store_after(R9, 21, st), framed), h.right⟩),
-            runs_block(keep_few_block(), io_entry(), ca(l_few()), p2, p3,
-                λ st h => framed_resident(file, page, kv, canonical_block_bytes(keep_few_block()), eof_rip(ca(l_few())), here(l_few()), st, h.left),
-                λ st h same => ⟨⟨framed_moved(file, page, kv, execute_block_normal(keep_few_block(), st), st, same, h.left),
-                    ⟨h.right.left, h.right.right.right⟩⟩, cong_fn<BitVec(64), Bool>(λ v => !(v.borrow_sub_bit(two)), h.right.right.left)⟩)));
     let at16: (kv(16) = mask) = trans(set_var_other(v16, 21, wn, 16, ne_below(16, 21, trivial)), set_var_same(vars, 16, mask));
     let at21: (kv(21) = wn) = set_var_same(v16, 21, wn);
-    let jae = JumpIfNear(AE, cmd_d(l_few_jae()));
-    let resident = λ (st: MachineState<IoMemory>) (h: p3(st)) =>
-        framed_resident(file, page, kv, near_control_bytes(jae), eof_rip(ca(l_few_jae())), here(l_few_jae()), st, h.left.left);
-    let pre: p0(state) = ⟨Exists(frame, ⟨memory_is, holds⟩), ⟨r8, ⟨r9, refl⟩⟩⟩;
-    let value: (wn.toNat() = n) = toNat_word_of_nat(64, n, few);
-    let two_value: (two.toNat() = 2) = BitVec::toNat_ofNat(64, 2, { omega });
-    (match wn.borrow_sub_bit(two) as λ c => (wn.borrow_sub_bit(two) = c) → LinuxRuns(io, events(stats_made(mask, n)), state) {
-        False => λ fits => {
-            let ge = cmp_not_below(wn, two, fits);
-            let many: (1 < n) = omega;
-            let made: (stats_made(mask, n) = True) = cong_fn<Bool, Bool>(λ x => !(x && single_count(mask)), io_leb_false(n, 1, many));
-            let gone = KeepGone(file, page, kv, rsp, λ _ => True);
-            j(sym(made), λ x _ => LinuxRuns(io, events(x), state),
-                runs_into(p0, eof_rip(ca(l_keep_mask())), gone, eof_rip(ca(l_stat())), events(True),
-                    runs_seq(p0, eof_rip(ca(l_keep_mask())), p3, eof_rip(ca(l_few_jae())), gone, eof_rip(ca(l_stat())), stored,
-                        runs_jcc_taken(AE, cmd_d(l_few_jae()), io_entry(), ca(l_few_jae()), ca(l_stat()), cmd_j_few_jae(), p3, gone, resident,
-                            λ st h => trans(h.right, cong_fn<Bool, Bool>(λ x => !x, fits)), λ st h => ⟨h.left.left, ⟨h.left.right.right, trivial⟩⟩)),
-                    state, rip_is, pre,
-                    λ s at gone_held => kept_goes(file, mask, n, rsp, ca(l_stat()), λ _ => True, events(True), to_stat(made), page, kv, at16, at21,
-                        s, at, gone_held)))
-        },
-        True => λ below => {
-            let lt = cmp_below(wn, two, below);
-            let one_n: (n <= 1) = omega;
-            let leb1: (Nat::leb(n, 1) = True) = bool::eq_true_of_is_true(Nat::leb(n, 1), Nat::leb_complete(n, 1, one_n));
-            let p4 = KeepAt(file, page, kv, mask, rsp);
-            runs_into(p0, eof_rip(ca(l_keep_mask())), p4, eof_rip(ca(l_single())), events(stats_made(mask, n)),
-                runs_seq(p0, eof_rip(ca(l_keep_mask())), p3, eof_rip(ca(l_few_jae())), p4, eof_rip(ca(l_single())), stored,
-                    runs_jcc_passed(AE, cmd_d(l_few_jae()), io_entry(), ca(l_few_jae()), p3, p4, resident,
-                        λ st h => trans(h.right, cong_fn<Bool, Bool>(λ x => !x, below)), λ st h => h.left)),
-                state, rip_is, pre,
-                λ s at h => keep_single(file, letters, default, spill, code, jumps, pj, placed, page, kv, mask, n, rsp, at16, at21, leb1, events,
-                    to_stat, to_one, s, at, h))
-        },
-    })(refl)
+    // The stretch's frame names the registers it stored.
+    let kept = λ (after: MachineState<IoMemory>)
+            (fr: Framed(file, page, set_var(set_var(vars, 16, read_gpr(R8, state.gprs)), 21, read_gpr(R9, state.gprs)))(after)) =>
+        j(r9, λ w _ => Framed(file, page, set_var(v16, 21, w))(after),
+            j(r8, λ m _ => Framed(file, page, set_var(set_var(vars, 16, m), 21, read_gpr(R9, state.gprs)))(after), fr));
+    let goal = λ (s: MachineState<IoMemory>) => LinuxRuns(io, goes, s);
+    cmd_straight(file, letters, default, spill, code, jumps, pj, placed, page, goal, runs_back(goes),
+        l_keep_count_store(), refl, 4, vars, state, rip_is, Exists(frame, ⟨memory_is, holds⟩),
+        Exists(16, ⟨trivial, ⟨refl, Exists(21, ⟨trivial, ⟨refl, λ s4 at4 fr4 same4 => {
+            let regs4 = cong_fn<MachineState<IoMemory>, Gprs>(λ y => y.gprs, same4);
+            let r9_4: (read_gpr(R9, s4.gprs) = wn) = trans(cong_fn<Gprs, BitVec(64)>(λ g => read_gpr(R9, g), regs4), r9);
+            let r8_4: (read_gpr(R8, s4.gprs) = mask) = trans(cong_fn<Gprs, BitVec(64)>(λ g => read_gpr(R8, g), regs4), r8);
+            let rsp_4: (read_gpr(Rsp, s4.gprs) = rsp) = cong_fn<Gprs, BitVec(64)>(λ g => read_gpr(Rsp, g), regs4);
+            cmd_straight(file, letters, default, spill, code, jumps, pj, placed, page, goal, runs_back(goes), l_few_jae(), refl, 2, kv, s4, at4,
+                kept(s4, fr4),
+                ⟨λ taken after at fr same => {
+                    let regs = cong_fn<MachineState<IoMemory>, Gprs>(λ y => y.gprs, same);
+                    let fits = not_true_is(wn.borrow_sub_bit(two), trans(cong_fn<BitVec(64), Bool>(λ v => !(v.borrow_sub_bit(two)), sym(r9_4)), taken));
+                    let many: (1 < n) = two_or_more(wn, n, toNat_word_of_nat(64, n, few), fits);
+                    let made: (stats_made(mask, n) = True) = cong_fn<Bool, Bool>(λ x => !(x && single_count(mask)), io_leb_false(n, 1, many));
+                    j(sym(made), λ x _ => LinuxRuns(io, events(x), after),
+                        to_stat(made)(fr.witness, kv, fr.proof.right, at16, at21, page, after, fr.proof.left,
+                            trans(at, cmd_lands(l_few(), 6, t_stat(), ca(l_stat()), cmd_j_few_jae())),
+                            trans(cong_fn<Gprs, BitVec(64)>(λ g => read_gpr(Rsp, g), regs), rsp_4), trivial))
+                },
+                 λ passed after at fr same => {
+                    let regs = cong_fn<MachineState<IoMemory>, Gprs>(λ y => y.gprs, same);
+                    let below = not_false_is(wn.borrow_sub_bit(two), trans(cong_fn<BitVec(64), Bool>(λ v => !(v.borrow_sub_bit(two)), sym(r9_4)), passed));
+                    let one_n = one_or_none(wn, n, toNat_word_of_nat(64, n, few), below);
+                    let leb1: (Nat::leb(n, 1) = True) = bool::eq_true_of_is_true(Nat::leb(n, 1), Nat::leb_complete(n, 1, one_n));
+                    keep_single(file, letters, default, spill, code, jumps, pj, placed, page, kv, mask, n, rsp, at16, at21, leb1, events,
+                        to_stat, to_one, after, at, fr, trans(cong_fn<Gprs, BitVec(64)>(λ g => read_gpr(R8, g), regs), r8_4),
+                        trans(cong_fn<Gprs, BitVec(64)>(λ g => read_gpr(Rsp, g), regs), rsp_4))
+                }⟩)
+        }⟩⟩)⟩⟩))
 }
 // A fact of each of 0 to 7 is one of every slot below 8.
 theorem below_eight(p: Nat → Type, p0: p(0), p1: p(1), p2: p(2), p3: p(3), p4: p(4), p5: p(5), p6: p(6), p7: p(7)):
@@ -2920,46 +2878,35 @@ fn BeginGoes(file: IoImage, mask: BitVec(64), width, n: Nat, rsp: BitVec(64), ar
     (k: Nat) → (pointers: List<BitVec(64)>) → ArgvStays(file, rsp, command_args(argv), pointers, k) →
         LoopGoes(file, mask, width, n, argv_slot(rsp, k), ended_word(False), no_counts(), after)
 }
-// RBX and R12 into their slots (`l_ckeep`), then the count loaded and tested
-// (`l_none`), up to the JNE.
-fn BeginPre(file: IoImage, page: Nat → BitVec(8), vars: Nat → BitVec(64), c19, c20: BitVec(64)) → MachineState<IoMemory> → Type {
-    λ state => Framed(file, page, vars)(state) ∧ ((read_gpr(Rbx, state.gprs) = c19) ∧ (read_gpr(R12, state.gprs) = c20))
+// The count's test (`l_none` to the JNE): any operand, the JNE taken; none,
+// passed.
+theorem some_counted(vars: Nat → BitVec(64), n: Nat, count_is: vars(21) = word_of_nat(64, n),
+    taken: !is_zero_bits(64, vars(21).sub(word_zero())) = True): 0 < n {
+    (match n as λ m => n = m → 0 < n {
+        Zero => λ zero => {
+            let none: (is_zero_bits(64, vars(21).sub(word_zero())) = True) = trans(cong_fn<BitVec(64), Bool>(λ v => is_zero_bits(64, v.sub(word_zero())), count_is),
+                trans(cong_fn<Nat, Bool>(λ m => is_zero_bits(64, word_of_nat(64, m).sub(word_zero())), zero), zero_bits_sub_self(64, word_zero())));
+            absurd(trans(sym(cong_fn<Bool, Bool>(λ x => !x, none)), taken))
+        },
+        Succ(_) => λ succ => { omega },
+    })(refl)
 }
-fn NoneTested(file: IoImage, page: Nat → BitVec(8), vars: Nat → BitVec(64)) → MachineState<IoMemory> → Type {
-    λ state => Framed(file, page, vars)(state) ∧ (state.flags.zf = is_zero_bits(64, vars(21).sub(word_zero())))
+theorem none_counted(vars: Nat → BitVec(64), n: Nat, few: n < Nat::pow(2, 64), count_is: vars(21) = word_of_nat(64, n),
+    passed: !is_zero_bits(64, vars(21).sub(word_zero())) = False): n = 0 {
+    (match n as λ m => n = m → n = 0 {
+        Zero => λ zero => zero,
+        Succ(_) => λ succ => {
+            let value = toNat_word_of_nat(64, n, few);
+            let positive: (0 < word_of_nat(64, n).toNat()) = omega;
+            let some: (is_zero_bits(64, vars(21).sub(word_zero())) = False) = trans(cong_fn<BitVec(64), Bool>(λ v => is_zero_bits(64, v.sub(word_zero())), count_is),
+                trans(zero_bits_sub(64, word_of_nat(64, n), word_zero()), nonzero_word(word_of_nat(64, n), positive)));
+            absurd(trans(sym(passed), cong_fn<Bool, Bool>(λ x => !x, some)))
+        },
+    })(refl)
 }
-theorem begin_store_runs(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64), spill: Nat → StateReg, code: StructuredCode,
-    jumps: FilterJumps, pj: PrintJumps, placed: CommandPlaced(file, letters, default, spill, code, jumps, pj),
-    page: Nat → BitVec(8), vars: Nat → BitVec(64), c19, c20: BitVec(64)):
-    Runs(BeginPre(file, page, vars, c19, c20), eof_rip(ca(l_ckeep())), NoneTested(file, page, set_var(set_var(vars, 19, c19), 20, c20)),
-        eof_rip(ca(l_none_jne()))) {
-    let here = λ (l: Prog) (f: Nat → BitVec(8)) => cmd_at(with_frame(file, f), letters, default, spill, code, jumps, pj, placed(f))(l);
-    let v19 = set_var(vars, 19, c19);
-    let bv = set_var(v19, 20, c20);
-    let p0 = BeginPre(file, page, vars, c19, c20);
-    let p1 = λ (st: MachineState<IoMemory>) => Framed(file, page, v19)(st) ∧ (read_gpr(R12, st.gprs) = c20);
-    let p2 = Framed(file, page, bv);
-    let p3 = λ (st: MachineState<IoMemory>) => Framed(file, page, bv)(st) ∧ (read_gpr(Rax, st.gprs) = bv(21));
-    let p4 = NoneTested(file, page, bv);
-    runs_seq(p0, eof_rip(ca(l_ckeep())), p1, eof_rip(ca(l_ekeep())), p4, eof_rip(ca(l_none_jne())),
-        runs_slot_store(file, page, vars, ca(l_ckeep()), 19, { omega }, Rbx, here(l_ckeep()), here(l_ckeep_store()), p0, p1, λ _ held => held.left,
-            λ st held framed => ⟨framed_set(file, page, vars, 19, read_gpr(Rbx, execute_block_normal(slot_block(19), st).gprs), c19, held.right.left,
-                slot_store_after(Rbx, 19, st), framed), held.right.right⟩),
-        runs_seq(p1, eof_rip(ca(l_ekeep())), p2, eof_rip(ca(l_none())), p4, eof_rip(ca(l_none_jne())),
-            runs_slot_store(file, page, v19, ca(l_ekeep()), 20, { omega }, R12, here(l_ekeep()), here(l_ekeep_store()), p1, p2, λ _ held => held.left,
-                λ st held framed => framed_set(file, page, v19, 20, read_gpr(R12, execute_block_normal(slot_block(20), st).gprs), c20, held.right,
-                    slot_store_after(R12, 20, st), framed)),
-            runs_seq(p2, eof_rip(ca(l_none())), p3, eof_rip(ca(l_none_test())), p4, eof_rip(ca(l_none_jne())),
-                runs_slot_load(file, page, bv, ca(l_none()), 21, { omega }, Rax, here(l_none()), here(l_none_load()), p2, p3, λ _ held => held,
-                    λ st held framed => ⟨framed, refl⟩),
-                runs_block(zero_test_block(), io_entry(), ca(l_none_test()), p3, p4,
-                    λ st held => framed_resident(file, page, bv, canonical_block_bytes(zero_test_block()), eof_rip(ca(l_none_test())), here(l_none_test()),
-                        st, held.left),
-                    λ st held same => ⟨framed_moved(file, page, bv, execute_block_normal(zero_test_block(), st), st, same, held.left),
-                        cong_fn<BitVec(64), Bool>(λ v => is_zero_bits(64, v.sub(word_zero())), held.right)⟩))))
-}
-// The JNE (`l_none_jne`): no operand goes to stdin with fd 0 (`l_state_init`), any to
-// the loop (`l_loop`).
+// The count loaded and tested (`l_none`), one stretch of six items to the
+// JMP: no operand goes to stdin with fd 0 (`l_state_init`), any to the loop
+// (`l_loop`).
 theorem begin_test(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64), spill: Nat → StateReg, code: StructuredCode,
     jumps: FilterJumps, pj: PrintJumps, placed: CommandPlaced(file, letters, default, spill, code, jumps, pj),
     mask: BitVec(64), width, n: Nat, few: n < Nat::pow(2, 64), rsp: BitVec(64), k: Nat, after: Bool → (Nat → BitVec(64)) → List<LinuxEvent>,
@@ -2967,56 +2914,21 @@ theorem begin_test(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64),
     to_loop: 0 < n → LoopGoes(file, mask, width, n, argv_slot(rsp, k), ended_word(False), no_counts(), after),
     page: Nat → BitVec(8), vars: Nat → BitVec(64), values: Vars(vars, mask, width, n, False, no_counts()),
     at19: vars(19) = argv_slot(rsp, k), at20: vars(20) = ended_word(False),
-    state: MachineState<IoMemory>, rip_is: state.rip = eof_rip(ca(l_none_jne())), tested: NoneTested(file, page, vars)(state)):
+    state: MachineState<IoMemory>, rip_is: state.rip = eof_rip(ca(l_none())), framed: Framed(file, page, vars)(state)):
     LinuxRuns(io_linux(), after(False, no_counts()), state) {
     let io = io_linux();
     let events = after(False, no_counts());
-    let here = λ (l: Prog) (f: Nat → BitVec(8)) => cmd_at(with_frame(file, f), letters, default, spill, code, jumps, pj, placed(f))(l);
-    let jne = JumpIfNear(NE, cmd_d(l_none_jne()));
-    let resident = λ (zf: Bool) (st: MachineState<IoMemory>) (held: Framed(file, page, vars)(st) ∧ (st.flags.zf = zf)) =>
-        framed_resident(file, page, vars, near_control_bytes(jne), eof_rip(ca(l_none_jne())), here(l_none_jne()), st, held.left);
-    let zf_is: (state.flags.zf = is_zero_bits(64, word_of_nat(64, n).sub(word_zero()))) =
-        trans(tested.right, cong_fn<BitVec(64), Bool>(λ v => is_zero_bits(64, v.sub(word_zero())), values.count_is));
-    (match n as λ m => (n = m) → LinuxRuns(io, events, state) {
-        Zero => λ zero => {
-            let zf: (state.flags.zf = True) = trans(zf_is, trans(cong_fn<Nat, Bool>(λ m => is_zero_bits(64, word_of_nat(64, m).sub(word_zero())),
-                zero), zero_bits_sub_self(64, word_zero())));
-            let p0 = λ (st: MachineState<IoMemory>) => Framed(file, page, vars)(st) ∧ (st.flags.zf = True);
-            let p1 = Framed(file, page, vars);
-            let p2 = λ (st: MachineState<IoMemory>) => Framed(file, page, vars)(st) ∧ (read_gpr(Rsp, st.gprs) = BitVec::zero());
-            let runs = runs_seq(p0, eof_rip(ca(l_none_jne())), p1, eof_rip(ca(l_stdin())), p2, eof_rip(ca(l_state_init())),
-                runs_jcc_passed(NE, cmd_d(l_none_jne()), io_entry(), ca(l_none_jne()), p0, p1, resident(True),
-                    λ st held => cong_fn<Bool, Bool>(λ x => !x, held.right), λ st held => held.left),
-                runs_seq(p1, eof_rip(ca(l_stdin())), p2, eof_rip(ca(l_stdin_jmp())), p2, eof_rip(ca(l_state_init())),
-                    runs_block(fd_zero_block(), io_entry(), ca(l_stdin()), p1, p2,
-                        λ st held => framed_resident(file, page, vars, canonical_block_bytes(fd_zero_block()), eof_rip(ca(l_stdin())), here(l_stdin()),
-                            st, held),
-                        λ st held same => ⟨framed_moved(file, page, vars, execute_block_normal(fd_zero_block(), st), st, same, held), refl⟩),
-                    runs_jmp(cmd_d(l_stdin_jmp()), io_entry(), ca(l_stdin_jmp()), ca(l_state_init()), cmd_j_stdin_jmp(), p2, p2,
-                        λ st held => framed_resident(file, page, vars, near_control_bytes(JumpNear(cmd_d(l_stdin_jmp()))), eof_rip(ca(l_stdin_jmp())),
-                            here(l_stdin_jmp()), st, held.left),
-                        λ st held => held)));
-            runs_into(p0, eof_rip(ca(l_none_jne())), p2, eof_rip(ca(l_state_init())), events, runs, state, rip_is, ⟨tested.left, zf⟩,
-                λ s5 s5_rip held => to_stdin(zero)(held.left.witness, vars, held.left.proof.right, values, page, s5, held.left.proof.left, s5_rip,
-                    held.right))
-        },
-        Succ(m) => λ succ => {
-            let value = toNat_word_of_nat(64, n, few);
-            let positive: (0 < word_of_nat(64, n).toNat()) = omega;
-            let some: (0 < n) = omega;
-            let zf: (state.flags.zf = False) = trans(zf_is, trans(zero_bits_sub(64, word_of_nat(64, n), word_zero()),
-                nonzero_word(word_of_nat(64, n), positive)));
-            let p0 = λ (st: MachineState<IoMemory>) => Framed(file, page, vars)(st) ∧ (st.flags.zf = False);
-            runs_into(p0, eof_rip(ca(l_none_jne())), Framed(file, page, vars), eof_rip(ca(l_loop())), events,
-                runs_jcc_taken(NE, cmd_d(l_none_jne()), io_entry(), ca(l_none_jne()), ca(l_loop()), cmd_j_none_jne(), p0, Framed(file, page, vars),
-                    resident(False), λ st held => cong_fn<Bool, Bool>(λ x => !x, held.right), λ st held => held.left),
-                state, rip_is, ⟨tested.left, zf⟩,
-                λ s3 s3_rip held => to_loop(some)(False, held.witness, vars, held.proof.right, values, at19, at20, page, s3, held.proof.left, s3_rip))
-        },
-    })(refl)
+    cmd_straight(file, letters, default, spill, code, jumps, pj, placed, page, λ s => LinuxRuns(io, events, s), runs_back(events),
+        l_stdin_jmp(), refl, 6, vars, state, rip_is, framed,
+        Exists(21, ⟨trivial, ⟨refl,
+            ⟨λ taken s3 at fr _ => to_loop(some_counted(vars, n, values.count_is, taken))(False, fr.witness, vars, fr.proof.right, values, at19, at20, page,
+                s3, fr.proof.left, trans(at, cmd_lands(l_none_test(), 6, t_loop(), ca(l_loop()), cmd_j_none_jne()))),
+             λ passed s5 at fr same => to_stdin(none_counted(vars, n, few, values.count_is, passed))(fr.witness, vars, fr.proof.right, values, page, s5,
+                fr.proof.left, trans(at, cmd_lands(l_stdin(), 5, t_state_init(), ca(l_state_init()), cmd_j_stdin_jmp())),
+                cong_fn<Gprs, BitVec(64)>(λ g => read_gpr(Rsp, g), cong_fn<MachineState<IoMemory>, Gprs>(λ y => y.gprs, same)))⟩⟩⟩))
 }
-// The cursor's start (`l_start`), RBX and R12 into their slots, then the count
-// tested: none goes to stdin, any to the loop.
+// The cursor's start (`l_start`), RBX and R12 into their slots (one stretch
+// of four items), then the count tested: none goes to stdin, any to the loop.
 theorem begin_runs(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64), spill: Nat → StateReg, code: StructuredCode,
     jumps: FilterJumps, pj: PrintJumps, placed: CommandPlaced(file, letters, default, spill, code, jumps, pj),
     mask: BitVec(64), width, n: Nat, few: n < Nat::pow(2, 64), rsp: BitVec(64), argv: List<List<BitVec(8)>>, pointers: List<BitVec(64)>,
@@ -3045,14 +2957,17 @@ theorem begin_runs(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64),
         let argv_k: ArgvStays(file, rsp, command_args(argv), out.pointers, k) =
             j(rsp_is, λ r _ => ArgvStays(file, r, command_args(argv), out.pointers, k), out.argv);
         linux_runs_after_steps(io, events, state, s0, started.proof.left,
-            runs_elim(BeginPre(file, page, vars, c19, c20), eof_rip(ca(l_ckeep())), NoneTested(file, page, bv), eof_rip(ca(l_none_jne())),
-                LinuxRuns(io, events, s0), begin_store_runs(file, letters, default, spill, code, jumps, pj, placed, page, vars, c19, c20), s0,
-                trans(out.rip_is, rip_compose(io_entry(), ca(l_start()), start_len())), ⟨Exists(frame, ⟨out.memory_is, holds⟩), ⟨rbx, out.regs.right.left⟩⟩,
-                λ s1 steps1 rip1 tested => linux_runs_after_linux_steps(io, events, s0, s1, steps1,
+            cmd_straight(file, letters, default, spill, code, jumps, pj, placed, page, λ s => LinuxRuns(io, events, s), runs_back(events),
+                l_ekeep_store(), refl, 4, vars, s0, trans(out.rip_is, rip_compose(io_entry(), ca(l_start()), start_len())),
+                Exists(frame, ⟨out.memory_is, holds⟩),
+                Exists(19, ⟨trivial, ⟨refl, Exists(20, ⟨trivial, ⟨refl, λ s1 at fr _ => {
+                    let stored = j(out.regs.right.left, λ w _ => Framed(file, page, set_var(v19, 20, w))(s1),
+                        j(rbx, λ c _ => Framed(file, page, set_var(set_var(vars, 19, c), 20, read_gpr(R12, s0.gprs)))(s1), fr));
                     begin_test(file, letters, default, spill, code, jumps, pj, placed, mask, width, n, few, rsp, k, after, to_stdin,
                         λ some => to_loop(some)(k, out.pointers, argv_k), page, bv, values2,
                         trans(set_var_other(v19, 20, c20, 19, ne_below(19, 20, trivial)), set_var_same(vars, 19, c19)), set_var_same(v19, 20, c20),
-                        s1, rip1, tested))))
+                        s1, at, stored)
+                }⟩⟩)⟩⟩)))
     }
 }
 
