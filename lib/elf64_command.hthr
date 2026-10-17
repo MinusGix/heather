@@ -672,7 +672,6 @@ theorem row_counts_le(width: Nat, mask: BitVec(64), counts: Nat → BitVec(64)):
     omega
 }
 
-
 // ---------------------------------------------------------------------------
 // A write of `bytes` from the loop at `at`, all sent going on at `done`.
 
