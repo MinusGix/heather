@@ -521,6 +521,9 @@ fn put_type(w: &mut Writer, ty: &Type) {
             w.byte(16); put_level(w, level); put_type(w, shape); put_term(w, arity);
         }
         Type::GlobalTy { var, subst } => { w.byte(17); w.u32(var.0); put_subst(w, subst); }
+        Type::DVec { level, len, fam } => {
+            w.byte(22); put_level(w, level); put_term(w, len); put_type(w, fam);
+        }
         Type::CtxPi { level, body } => { w.byte(18); put_level(w, level); put_type(w, body); }
         Type::TyPi { ctx, arg_level, body_level, body } => {
             w.byte(19); put_ctx(w, ctx); put_level(w, arg_level); put_level(w, body_level); put_type(w, body);
@@ -569,6 +572,7 @@ fn get_type(r: &mut Reader<'_>) -> Result<Type, ModuleImageDecodeError> {
         19 => Type::TyPi { ctx: get_ctx(r)?, arg_level: get_level(r)?, body_level: get_level(r)?, body: type_rc(r)? },
         20 => Type::CodeTy { ctx: get_ctx(r)?, level: get_level(r)? },
         21 => Type::CodeTm { ctx: get_ctx(r)?, ty: type_rc(r)?, level: get_level(r)? },
+        22 => Type::DVec { level: get_level(r)?, len: term_rc(r)?, fam: type_rc(r)? },
         tag => return Err(ModuleImageDecodeError::InvalidTag { sort: "type", tag }),
     }))
 }

@@ -739,7 +739,9 @@ fn delta_head_in(t: &Term, defs: Defs<'_>, eliminated: bool) -> Option<GlobalVar
 fn delta_head_ty(t: &Type, defs: Defs<'_>) -> Option<GlobalVar> {
     match t {
         Type::El { tm, .. } => delta_head(tm, defs),
-        Type::Vec { len, .. } | Type::Fin { len } => delta_head(len, defs),
+        Type::Vec { len, .. } | Type::Fin { len } | Type::DVec { len, .. } => {
+            delta_head(len, defs)
+        }
         _ => None,
     }
 }
@@ -1147,6 +1149,19 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
             }
             (TyView::Fin { len: k1 }, TyView::Fin { len: k2 }) => {
                 self.tm_at_nat(env, k1, k2)
+            }
+            // DVec congruence (extension; docs/iwf-former-design.md §5): as
+            // `Vec`'s, reached only at a neutral length, with the family
+            // compared under one binder, `i : Fin k` at the left length.
+            (
+                TyView::DVec { level: l1, len: k1, fam: f1 },
+                TyView::DVec { level: l2, len: k2, fam: f2 },
+            ) => {
+                self.lev_eq(l1, l2)?;
+                self.tm_at_nat(env, k1, k2)?;
+                let fin = D::fin(self, env, k1)?;
+                let e_i = D::push_entry(env, &fin, &Level::Zero);
+                self.ty(&e_i, f1, f2, l1)
             }
             // Wf congruence (extension): the arity is a Nat term under the
             // shape binder, so it is compared as a term in (Γ, x : S).
@@ -1937,7 +1952,8 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
             TyView::El { .. }
             | TyView::GlobalTy { .. }
             | TyView::Vec { .. }
-            | TyView::Fin { .. } => self.tm_nee(env, a, b).map(drop),
+            | TyView::Fin { .. }
+            | TyView::DVec { .. } => self.tm_nee(env, a, b).map(drop),
         };
         result.map(|()| TmProgress::Done)
     }

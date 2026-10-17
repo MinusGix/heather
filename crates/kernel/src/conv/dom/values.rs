@@ -747,7 +747,7 @@ impl<'v> Dom<'v> for Values {
     fn delta_head_ty(_cv: &Conv<'v, Self>, _env: &Env<'v>, w: &Rc<VTy<'v>>) -> Option<GlobalVar> {
         match &**w {
             VTy::Neutral(VNeTy::El { tm, .. }) => glued(tm),
-            VTy::Vec { len, .. } | VTy::Fin { len } => glued(len),
+            VTy::Vec { len, .. } | VTy::Fin { len } | VTy::DVec { len, .. } => glued(len),
             _ => None,
         }
     }
@@ -848,6 +848,11 @@ impl<'v> Dom<'v> for Values {
                 len: TmC::value(env, Rc::clone(len)),
             },
             VTy::Fin { len } => TyView::Fin { len: TmC::value(env, Rc::clone(len)) },
+            VTy::DVec { level, len, fam } => TyView::DVec {
+                level,
+                len: TmC::value(env, Rc::clone(len)),
+                fam: TyC::under(env, *fam, 1),
+            },
             VTy::UPi { num_vars, level, body } => TyView::UPi {
                 num_vars: *num_vars,
                 level,
@@ -1304,6 +1309,16 @@ impl<'v> Dom<'v> for Values {
                 open_ty(env, elem, 0),
                 open_tm(env, len, 0),
             ),
+        ))
+    }
+
+    /// The length rides in the closure's environment, as in `Eval::fin_ty`'s
+    /// reducts: it is a value with no syntax of its own.
+    fn fin(_cv: &mut Conv<'v, Self>, env: &Env<'v>, len: &TmC<'v>) -> R<TyC<'v>> {
+        let rho = value::Env::empty().push(env.arena, open_tm(env, len, 0));
+        Ok(TyC::here(
+            env,
+            env.arena.ty(TyClo::new(rho, Rc::new(Type::Fin { len: Rc::new(Term::Var(LocalVar(0))) }))),
         ))
     }
 

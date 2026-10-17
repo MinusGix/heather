@@ -268,7 +268,7 @@ pub fn gen_wt_ctx(env: &WtEnv, r: &mut Rng, b: u32, layer: Layer) -> LocalCtx {
 pub fn gen_wt_type(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Type>, Level) {
     assert!(env.layer != Layer::Var);
     for _ in 0..8 {
-        match r.below(18) {
+        match r.below(19) {
             // Unit^l / Empty^l — level-indexed, so a generated level rather
             // than 0 (docs/unit-empty-level-indexing.md). Without these the
             // property suite never sees the round at all.
@@ -418,6 +418,15 @@ pub fn gen_wt_type(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Type>, Level) {
                 let e = env.push_entry(Rc::clone(&shape), l.clone());
                 let arity = gen_wt_nat(&e, r, b / 2);
                 return (rty(Type::Wf { level: l.clone(), shape, arity }), l);
+            }
+            // DVec (extension; docs/iwf-former-design.md §1.1): the family
+            // in (Γ, i : Fin len). Computing layers only — it has no code
+            // yet, and a code context is generated at layer c.
+            18 if b > 0 && env.layer.computes() => {
+                let len = gen_wt_nat(env, r, b / 2);
+                let e = env.push_entry(rty(Type::Fin { len: Rc::clone(&len) }), Level::Zero);
+                let (fam, l) = gen_wt_type(&e, r, b / 2);
+                return (rty(Type::DVec { level: l.clone(), len, fam }), l);
             }
             _ => continue,
         }

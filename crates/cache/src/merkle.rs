@@ -175,6 +175,7 @@ mod tag {
     pub const T_CODETY: u8 = 0x33;
     pub const T_CODETM: u8 = 0x34;
     pub const T_SQUASH: u8 = 0x35;
+    pub const T_DVEC: u8 = 0x36;
 
     // terms
     pub const E_VAR: u8 = 0x40;
@@ -530,6 +531,12 @@ impl<'a> Walk<'a> {
                 self.level(level);
                 self.ty(shape);
                 self.term(arity);
+            }
+            Type::DVec { level, len, fam } => {
+                self.tag(tag::T_DVEC);
+                self.level(level);
+                self.term(len);
+                self.ty(fam);
             }
             // Reference site 2 of 5.
             Type::GlobalTy { var, subst } => {

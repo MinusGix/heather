@@ -487,6 +487,12 @@ fn map_type<M: Mapper>(t: &Type, m: &mut M, at: Depths) -> Type {
             shape: sub_ty(shape, m, at),
             pos: sub_ty(pos, m, at + dep(0, 0, 1)),
         },
+        // DVec: the family is a type under `i : Fin len`.
+        Type::DVec { level, len, fam } => Type::DVec {
+            level: m.level(level, at),
+            len: sub_tm(len, m, at),
+            fam: sub_ty(fam, m, at + dep(0, 0, 1)),
+        },
         Type::GlobalTy { var, subst } => {
             let subst = map_subst(subst, m, at);
             m.global_ty(*var, subst, at)
@@ -1248,6 +1254,69 @@ impl Mapper for SubstLocal<'_> {
     }
 }
 
+/// `t[s/x]` read `by` binders further out: `t` is scoped in `Γ, x`, the
+/// payload `s` in `Γ, Δ` with `|Δ| = by`, and so is the result — `x` becomes
+/// `s` and every variable of `Γ` is weakened past `Δ`. It is
+/// `t.apply_local(&id(Γ).shift_local(by).extended(s))`, without needing `Γ`
+/// to build the identity: the derived schemas that instantiate a binder of
+/// their own former (`DVec`'s family at `inl ⟨⟩`/`inr j`, `dnth`'s at `e i`)
+/// are built from syntax alone, as `nth` is (`term.rs`).
+///
+/// Tails move as [`SubstLocal`]'s would: the source loses `x` and gains
+/// `Δ`, so a tail's length changes by `by - 1`; its base does not move.
+struct InstTop<'a> {
+    payload: &'a Term,
+    by: u32,
+    changes: u64,
+}
+
+impl Mapper for InstTop<'_> {
+    const LOCAL_OP: bool = true;
+    const NAME: &'static str = "inst_top";
+
+    fn changes(&mut self) -> &mut u64 {
+        &mut self.changes
+    }
+
+    fn local_var(&mut self, v: LocalVar, at: Depths) -> Term {
+        if v.0 < at.local {
+            return Term::Var(v);
+        }
+        if v.0 == at.local {
+            self.note();
+            return self
+                .payload
+                .shift_local(at.local)
+                .shift_global(at.global)
+                .shift_univ(at.univ);
+        }
+        // `by == 1` keeps Γ's variables where they were.
+        let w = v.0 - 1 + self.by;
+        if w != v.0 {
+            self.note();
+        }
+        Term::Var(LocalVar(w))
+    }
+
+    fn tail(&mut self, tail: SubstTail, _at: Depths) -> (SubstTail, Vec<Rc<Term>>) {
+        let t = match tail {
+            SubstTail::Empty { len, base } => SubstTail::Empty { len: len - 1 + self.by, base },
+            SubstTail::Wk { len, ctx_var } => SubstTail::Wk { len: len - 1 + self.by, ctx_var },
+        };
+        if t != tail {
+            self.note();
+        }
+        (t, Vec::new())
+    }
+
+    fn skip_ty(&mut self, t: &Rc<Type>, at: Depths) -> bool {
+        bounds::skip_type(t, at.local)
+    }
+    fn skip_tm(&mut self, t: &Rc<Term>, at: Depths) -> bool {
+        bounds::skip_term(t, at.local)
+    }
+}
+
 /// Abstraction over a **term**: every occurrence of `pat` becomes the fresh
 /// innermost variable `z` (`docs/goal-motive-synthesis-design.md` §3).
 ///
@@ -1507,12 +1576,30 @@ macro_rules! ops {
                 $map(self, &mut NormalizeLevels { changes: 0 }, Depths::default())
             }
 
+            /// `self[s/x]` weakened past `by` binders: `self` is scoped in
+            /// `Γ, x`, `s` and the result in `Γ, Δ` with `|Δ| = by`. See
+            /// [`InstTop`].
+            pub fn inst_top(&self, by: u32, payload: &Term) -> $ty {
+                $map(self, &mut InstTop { payload, by, changes: 0 }, Depths::default())
+            }
+
             /// Weaken the ambient local context by `by` entries.
             pub fn shift_local(&self, by: u32) -> $ty {
                 if by == 0 {
                     return self.clone(); // see §Shifting by zero
                 }
                 $map(self, &mut ShiftLocal { by, changes: 0 }, Depths::default())
+            }
+
+            /// Weaken the local context by `by` entries between existing
+            /// binders: the innermost `cutoff` locals stay fixed (the Coq
+            /// formalization's `⟨rlift ↑⟩`, iterated). See
+            /// [`Self::shift_univ_above`].
+            pub fn shift_local_above(&self, by: u32, cutoff: u32) -> $ty {
+                if by == 0 {
+                    return self.clone(); // see §Shifting by zero
+                }
+                $map(self, &mut ShiftLocal { by, changes: 0 }, Depths { local: cutoff, ..Depths::default() })
             }
 
             /// Weaken the global context by `by` bindings.

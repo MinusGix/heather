@@ -608,7 +608,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     }
 
     /// [`Eval::delta_step`] for types: advance exactly one definition in the
-    /// term at which an `El`, `Vec`, or `Fin` is δ-stuck, then perform the
+    /// term at which an `El`, `Vec`, `Fin` or `DVec` is δ-stuck, then perform the
     /// newly enabled non-δ type computation.
     /// Unfold a type value's definitions until its head is a former, or it
     /// is stuck on something δ cannot move.
@@ -637,11 +637,13 @@ impl<'a, 'v> Eval<'a, 'v> {
             El(Level, Rc<Val<'v>>),
             Vec(Level, &'v TyClo<'v>, Rc<Val<'v>>),
             Fin(Rc<Val<'v>>),
+            DVec(Level, &'v TyClo<'v>, Rc<Val<'v>>),
         }
         let next = match &*v {
             VTy::Neutral(VNeTy::El { level, tm }) => Next::El(level.clone(), Rc::clone(tm)),
             VTy::Vec { level, elem, len } => Next::Vec(level.clone(), *elem, Rc::clone(len)),
             VTy::Fin { len } => Next::Fin(Rc::clone(len)),
+            VTy::DVec { level, len, fam } => Next::DVec(level.clone(), *fam, Rc::clone(len)),
             _ => Next::Done,
         };
         match next {
@@ -668,6 +670,14 @@ impl<'a, 'v> Eval<'a, 'v> {
                     Ok(v)
                 } else {
                     self.fin_ty(&d)
+                }
+            }
+            Next::DVec(level, fam, len) => {
+                let d = self.delta_step(Rc::clone(&len))?;
+                if Rc::ptr_eq(&d, &len) {
+                    Ok(v)
+                } else {
+                    self.dvec_ty(&level, fam, &d)
                 }
             }
         }
@@ -794,6 +804,10 @@ impl<'a, 'v> Eval<'a, 'v> {
             Type::Fin { len } => {
                 let lv = self.eval_tm(len, env)?;
                 return self.fin_ty(&lv);
+            }
+            Type::DVec { level, len, fam } => {
+                let lv = self.eval_tm(len, env)?;
+                return self.dvec_ty(level, yclo(env, fam), &lv);
             }
         };
         Ok(Rc::new(v))
@@ -966,6 +980,60 @@ impl<'a, 'v> Eval<'a, 'v> {
             },
         };
         Ok(Rc::new(out))
+    }
+
+    /// `DVec^l(k; i. F)`: `0 ⇝ Unit^l`,
+    /// `S k ⇝ Σ^{l,l}(_ : F[inl ⟨⟩/i]). DVec^l(k; j. F[inr j/i])`, stuck
+    /// otherwise (docs/iwf-former-design.md §1.1).
+    ///
+    /// Both components are syntactic closures over the family's own
+    /// environment, so nothing is forced: the head is the family with `i`
+    /// bound to `inl ⟨⟩` — one environment cell — and the tail is `DVec`
+    /// syntax read with the predecessor `k` pushed (the predecessor is a
+    /// value with no syntax, and the tail's family must name it in its `inr`
+    /// annotation). Only the tail's family is rewritten, by
+    /// [`Type::inst_top`]: `F[inr j/i]` is not an environment extension.
+    ///
+    /// A family that is not syntactic (a constant closure) has no body to
+    /// rewrite. The evaluator builds every `DVec` from syntax, so that does
+    /// not arise; if it did the type would stay stuck, which costs
+    /// completeness and not soundness.
+    fn dvec_ty(
+        &mut self,
+        level: &Level,
+        fam: &'v TyClo<'v>,
+        len: &Rc<Val<'v>>,
+    ) -> Res<Rc<VTy<'v>>> {
+        let stuck = || Ok(Rc::new(VTy::DVec { level: level.clone(), len: Rc::clone(len), fam }));
+        let pred = match &**len {
+            Val::Zero => {
+                self.spend()?;
+                return Ok(Rc::new(VTy::Unit { level: level.clone() }));
+            }
+            Val::Succ(pred) => *pred,
+            Val::NatRun { program, tail } => Val::nat_run_pred(self.arena, program, tail),
+            _ => return stuck(),
+        };
+        let TyClo::Syn { env: fenv, body } = fam else { return stuck() };
+        let (fenv, body) = (*fenv, Rc::clone(body));
+        self.spend()?;
+        let k = Env::empty().push(self.arena, pred);
+        let first = self.arena.tm(TmClo::syn(
+            k,
+            Rc::new(crate::term::fin_first(Rc::new(Term::Var(LocalVar(0))))),
+        ));
+        let fst = self.arena.ty(TyClo::new(fenv.push(self.arena, first), Rc::clone(&body)));
+        // In (Γ_F, k, x), the family in (Γ_F, k, x, j).
+        let tail = Type::DVec {
+            level: level.clone(),
+            len: Rc::new(Term::Var(LocalVar(1))),
+            fam: Rc::new(body.inst_top(
+                3,
+                &crate::term::fin_next(Rc::new(Term::Var(LocalVar(2))), Rc::new(Term::Var(LocalVar(0)))),
+            )),
+        };
+        let snd = self.arena.ty(TyClo::new(fenv.push(self.arena, pred), Rc::new(tail)));
+        Ok(Rc::new(VTy::Sigma { fst_level: level.clone(), snd_level: level.clone(), fst, snd }))
     }
 
     /// `Fin(k)`: `0 ⇝ Empty^0`, `S k ⇝ Unit^0 +^{0,0} Fin(k)`, stuck

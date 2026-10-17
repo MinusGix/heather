@@ -186,6 +186,7 @@ impl fmt::Debug for Type {
             Type::Wf { level, shape, arity } => {
                 write!(f, "Wf[{level:?}]({shape:?}). {arity:?}")
             }
+            Type::DVec { level, len, fam } => write!(f, "DVec[{level:?}]({len:?}; {fam:?})"),
             Type::GlobalTy { var, subst } => write!(f, "U{}^{subst:?}", var.0),
             Type::CtxPi { level, body } => write!(f, "Π[g:Ctx@{level:?}]. {body:?}"),
             Type::TyPi { ctx, arg_level, body_level, body } => {

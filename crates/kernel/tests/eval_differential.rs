@@ -276,6 +276,15 @@ impl<'a, 'v> Agree<'a, 'v> {
             (VTy::Fin { len }, Type::Fin { len: k2 }) => {
                 self.tm(&Rc::clone(len), k2, gamma, d)
             }
+            // DVec: only at a stuck length, the family under `i : Fin len`.
+            (
+                VTy::DVec { level: a, len, fam },
+                Type::DVec { level: b, len: k2, fam: f2 },
+            ) => {
+                self.lev(a, b, "DVec level")?;
+                self.tm(&Rc::clone(len), k2, gamma, d)?;
+                self.under_ty(fam, f2, gamma, 1, d)
+            }
             // Universe/global binders: entered by instantiation, at a closed
             // payload so that neither side needs a scope extension.
             (

@@ -110,6 +110,11 @@ impl<'v, 'g> Readback<'v, 'g> {
                 len: Rc::new(self.val(len)?),
             },
             VTy::Fin { len } => Type::Fin { len: Rc::new(self.val(len)?) },
+            VTy::DVec { level, len, fam } => Type::DVec {
+                level: level.clone(),
+                len: Rc::new(self.val(len)?),
+                fam: self.ty(fam, 1)?,
+            },
             VTy::UPi { .. }
             | VTy::CtxPi { .. }
             | VTy::TyPi { .. }

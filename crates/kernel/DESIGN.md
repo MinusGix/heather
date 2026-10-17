@@ -171,6 +171,29 @@ term-motive one. `tm_elim_wf`'s step binding reuses `term::wf_step_telescope`
 verbatim, which is why the rec.rs, typing.rs and reduce.rs transcriptions of
 it cannot drift.
 
+`DVec^l(k; i. F)` (2026-10-17, `docs/iwf-former-design.md` §13 step 2) is
+`Vec` with a per-position element type, the children substrate of `IWf`:
+`DVec(0; i. F) ⇝ Unit^l`, `DVec(S k; i. F) ⇝ Σ(_ : F[inl ⟨⟩/i]).
+DVec(k; j. F[inr j/i])`, the injections annotated by `Fin(S k)`'s reduct so
+each instance is typed at the family's domain without a conversion. It
+takes a binder (`i : Fin k`) rather than a family argument, since there are
+no type-valued functions; that binder is the one new thing in the value
+domain, where the head is the family's closure with `i` bound to `inl ⟨⟩`
+(one environment cell) and the tail is `DVec` syntax over the family
+rewritten at `inr j` (`Type::inst_top`), with the predecessor pushed onto
+the environment because the `inr` annotation has to name it. It is neutral
+at a neutral length and compared there structurally, the family under
+`i : Fin k` at the left length. `Vec(T; k)` and `DVec(k; _. T)` agree reduct
+for reduct at a canonical length and are distinct neutral types at a neutral
+one: the two are siblings, not spellings of one type (design §10, option 1).
+Its projection `dnth` is not a former: `term::dnth` materializes design §3's
+`elim_Nat` schema over an embedding `Fin k̂ → Fin n`, transcribed binder by
+binder from the Coq formalization (heather-coq `Term.v`), whose `V_dnth`
+checked that the schema's β-annotated applications type (`tests/dvec.rs`
+checks them here, at an open length). `DVec` has **no code yet**: it is
+admitted at layers p and m only (`Tc::computing_layer`) until the rec.rs
+round gives it `TmDVec` and its branches, as `Vec` was before its phase 3.
+
 `sEq^l(I; a; b)` (2026-07-28) is **strict equality** — `Id` minus proof
 relevance plus strictness, the SProp round's customer former
 (`docs/sprop-design.md`; the sort itself dissolved into per-former

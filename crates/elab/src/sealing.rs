@@ -86,6 +86,11 @@ impl<'v> Walk<'_, '_, 'v> {
                 let elem = self.ev.force_ty(elem).ok()?;
                 self.data(elem, depth)?
             }
+            // A tuple carries what its family carries at a fresh position.
+            VTy::DVec { fam, .. } => {
+                let fam = self.under(fam, depth)?;
+                self.data(fam, depth + 1)?
+            }
             // Under a universe, context or type binder: rare in a theorem's
             // statement, and not entered.
             VTy::UPi { .. } | VTy::CtxPi { .. } | VTy::TyPi { .. } => return None,

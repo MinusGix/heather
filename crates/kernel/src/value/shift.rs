@@ -479,6 +479,11 @@ pub fn vty<'v>(v: &Rc<VTy<'v>>, o: Outer<'v>) -> Rc<VTy<'v>> {
             len: val(len, o),
         },
         VTy::Fin { len } => VTy::Fin { len: val(len, o) },
+        VTy::DVec { level: l, len, fam } => VTy::DVec {
+            level: level(l, o),
+            len: val(len, o),
+            fam: ty_clo(fam, o),
+        },
         VTy::UPi { num_vars, level: l, body } => VTy::UPi {
             num_vars: *num_vars,
             level: level(l, o),

@@ -91,6 +91,8 @@ pub(super) enum TyView<'a, 'v, D: Dom<'v>> {
     SEq { level: &'a Level, ty: D::TyC, lhs: D::TmC, rhs: D::TmC },
     Vec { level: &'a Level, elem: D::TyC, len: D::TmC },
     Fin { len: D::TmC },
+    /// `fam` is under one binder, `i : Fin len`.
+    DVec { level: &'a Level, len: D::TmC, fam: D::TyC },
     UPi { num_vars: u32, level: &'a Level, body: D::TyC },
     CtxPi { level: &'a Level, body: D::TyC },
     TyPi { ctx: &'a LocalCtx, arg_level: &'a Level, body_level: &'a Level, body: D::TyC },
@@ -617,6 +619,8 @@ pub(super) trait Dom<'v>: Sized {
         lhs: &Self::TmC,
         rhs: &Self::TmC,
     ) -> R<Self::TyC>;
+    /// `Fin(k)`, the binder type a `DVec`'s family is compared under.
+    fn fin(cv: &mut Conv<'v, Self>, env: &Env<'v>, len: &Self::TmC) -> R<Self::TyC>;
 
     // -- synthesized terms --------------------------------------------------
 
@@ -1032,6 +1036,9 @@ impl<'v> Dom<'v> for Syn {
                 TyView::Vec { level, elem: Rc::clone(elem), len: Rc::clone(len) }
             }
             Type::Fin { len } => TyView::Fin { len: Rc::clone(len) },
+            Type::DVec { level, len, fam } => {
+                TyView::DVec { level, len: Rc::clone(len), fam: Rc::clone(fam) }
+            }
             Type::UPi { num_vars, level, body } => {
                 TyView::UPi { num_vars: *num_vars, level, body: Rc::clone(body) }
             }
@@ -1633,6 +1640,11 @@ impl<'v> Dom<'v> for Syn {
             elem: Rc::clone(elem),
             len: Rc::clone(len),
         }))
+    }
+
+    #[inline]
+    fn fin(_cv: &mut Conv<'v, Self>, _env: &Env<'v>, len: &Rc<Term>) -> R<Rc<Type>> {
+        Ok(Rc::new(Type::Fin { len: Rc::clone(len) }))
     }
 
     #[inline]
