@@ -25,7 +25,7 @@ use crate::level::{Level, UnivVar};
 use crate::subst::{GlobalEntry, GlobalSubst};
 use crate::term::{
     wf_step_telescope, Branches, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar,
-    LocalCtx, LocalSubst, LocalVar, Motives, Term, Type,
+    LocalCtx, LocalSubst, LocalVar, Motives, SealedProof, Term, Type,
 };
 
 // ---------------------------------------------------------------------------
@@ -86,9 +86,10 @@ pub(crate) fn shift_univ_psi(psi: &GlobalCtx, by: u32) -> GlobalCtx {
             })
             .collect(),
     );
-    // A sealed proof shifts with its binding, as a body does.
+    // A sealed proof shifts with its binding, as a body does — when it is
+    // first needed, so a telescope does not load every lazily kept proof.
     for (i, t) in psi.sealed.iter() {
-        out.seal(i, Rc::new(t.shift_univ(by)));
+        out.seal_kept(i, Rc::new(SealedProof::derived(Rc::clone(t), move |t| t.shift_univ(by))));
     }
     out
 }

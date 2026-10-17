@@ -222,7 +222,10 @@ impl<'a> Defs<'a> {
     /// definition: δ never unfolds it, and only an elimination stuck on an
     /// application of it unseals it ([`Defs::sealed_body`]).
     pub fn is_sealed(&self, v: GlobalVar) -> bool {
-        self.sealed_at(v).is_some()
+        // Asked without loading a lazily kept proof: a stuck head is tested
+        // far more often than it is opened.
+        let Some(psi) = self.psi else { return false };
+        psi.bindings.len().checked_sub(1 + v.0 as usize).is_some_and(|i| psi.sealed_kept(i).is_some())
     }
 
     fn sealed_at(&self, v: GlobalVar) -> Option<(usize, &'a Rc<Term>)> {

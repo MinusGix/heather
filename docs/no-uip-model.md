@@ -1,7 +1,7 @@
 # UIP is not derivable without `transp`: a groupoid-model argument
 
 Status: **paper argument, 2026-09-30**. §3 and the two counterexamples of
-§3.4 and §5 are **mechanized** (`../Lean/delam/probes/NoUipComponents.v`,
+§3.4 and §5 are **mechanized** (`heather-coq/probes/NoUipComponents.v`,
 closed under the global context). §4 is argued, and was self-reviewed
 against the Coq formalization's rules the same day (§4.4). Once the
 formalization had `Id` (its M11), `UIP₀` was stated there and the model's
@@ -9,12 +9,16 @@ formalization had `Id` (its M11), `UIP₀` was stated there and the model's
 (its M12), `UIP₀` was restated at `⌜Bool⌝`, and Hedberg's theorem, the
 positive prediction of §5.2, was proved in its syntax. The model's `J`,
 in the formalization's Paulin-Mohring form, is **mechanized**
-(`../Lean/delam/probes/NoUipJ.v`). It has not been independently
+(`heather-coq/probes/NoUipJ.v`). It has not been independently
 reviewed.
 Owed by `docs/iwf-former-design.md` §12.3 before that rule set freezes.
 **Independent review of §4: `docs/no-uip-model-review.md` (2026-10-16).**
-It finds three rules the interpretation as written does not validate
-(R1–R3, each with a local fix) and four missing steps (R4–R7).
+It found three rules the interpretation as written did not validate
+(R1–R3, each with a local fix) and four missing steps (R4–R7). **All
+seven are applied (2026-10-17, §4.4a)**, and the two lemmas the review
+suggested mechanizing are checked in Coq: the `□` fibres' invariance under
+D-conversion (`heather-coq/theories/Typing/BoxFibre.v`) and `unf`'s
+idempotence (`unf_idem`, `heather-coq/theories/Syntax/Unfold.v`).
 The rule set in question is the revised one: `docs/sprop-design.md` with
 its 2026-09-30 revision (no `transp`, no strip), plus `IWf`/`DVec`.
 
@@ -43,7 +47,7 @@ Most of the extension is routine. Two pieces are not:
 ## 1. Why the removed `transp` mattered
 
 With a relevant `transp`, UIP is derivable
-(`../Lean/delam/probes/UipProbe.v`: `sEq` irrelevance, `transp` into any
+(`heather-coq/probes/UipProbe.v`: `sEq` irrelevance, `transp` into any
 motive, and β at `srefl`, even as a propositional equation). Any model of
 this document's kind therefore *cannot* validate that `transp`. §3.4 shows
 where it fails, as a sanity check on the construction. It also shows that
@@ -191,9 +195,12 @@ naturally in `Γ` and strictly `id` at `srefl`.
 
 DeLaM has no published semantic model. Hu and Pientka's own argument is a
 logical relation. This section is checked against the declarative rules
-of the Coq formalization (`../Lean/delam/theories/Typing/Declarative.v`,
-cited by rule name below); it is not mechanized. The review of
-2026-09-30 is recorded at the end of the section.
+of the Coq formalization (the `heather-coq` repository,
+`theories/Typing/Declarative.v`, cited by rule name below). Two of its
+lemmas are mechanized there (the `□` fibres' invariance and `unf`'s
+idempotence, §4.2); the rest is argued. The self-review of 2026-09-30 and
+the independent review of 2026-10-16 are recorded at the end of the
+section (§4.4, §4.4a).
 
 ### 4.1 The layer facts the construction uses
 
@@ -206,13 +213,33 @@ assumption:
   `wf_boxT`, `wf_boxt`, `wf_letboxT`/`wf_letboxt`, `wf_elimT`/`wf_elimt`,
   and the meta-functions `wft_cpi`/`wft_tpi` all conclude at `lM`. No
   C- or D-layer rule mentions them.
-- **Box contents are layer-C code** (`wf_boxT`: `Δ ⊢[lC] T`). `letbox`
-  binds a **layer-C** global (`gdTy Δ lC l`, `gdTm Δ lC T l`). `TΠ` binds
-  a **layer-D** type global (`gdTy Δ lD l`), and `CΠ` binds a context
-  global (`gdCtx`).
-- Hence **a layer-D global never occurs in code**: code is checked at
-  `lC`, and `lle lD lC` is false. A layer-C global can occur in code, and
-  that is how `letbox`'s body splices it.
+- **Box contents are layer-C code** (`wf_boxT`: `Δ ⊢[lC] T`). A box's
+  **context and type are checked at D** (`wf_boxT`, `wf_boxt`,
+  `wft_CTrm`: `Δ ⊢[lD]`, `Δ ⊢[lD] T`). That is the layer where a
+  C-judgment's types live (`typeof lC = lD`, `Context.v`).
+- **The global binders.** `letbox` binds a **layer-C** global
+  (`gdTy Δ lC l`, `gdTm Δ lC T l`). `TΠ` binds a **layer-D** type global
+  (`gdTy Δ lD l`), and `CΠ` binds a context global (`gdCtx`). The code
+  recursors' branches bind globals for the sub-codes (`brDecls`,
+  `Typing/RecSpec.v`), and two of them are of new kinds:
+  - branch 4 (`t_x`) binds `U_T : (g ⊢ @ℓ)` at **layer D** and
+    `u_x : (g ⊢ U_T @ℓ)` at **layer V**;
+  - branch 11 (`t_λ`) binds `U_T : (g, x : U_S ⊢ @ℓ')` at **layer D**.
+- **The level binders.** `UΠ` and `Λ` bind level variables (`wft_upi`,
+  `wf_ulam`), and so do the recursors' branches (`bindU`). Their bodies
+  live in the universe-weakened scope `gctx_uwk n G`, and code inside
+  them can mention the bound levels: `Λℓ. box(Ty ℓ)` is well typed.
+- Hence **a layer-D global never occurs in code itself**: code is
+  checked at `lC`, and `lle lD lC` is false. It **can occur in the
+  context and type of code**, which are checked at D. So the `□` fibres
+  depend on D-globals, and that is why §4.2 takes the meta-functions'
+  products over conversion classes. A layer-C global can occur in code,
+  and that is how `letbox`'s body splices it.
+- **A definition can occur in code.** `wf_gdef` needs only `lle lC i`,
+  and there is no δ at C (`eqtm_delta` requires `compt i`). So
+  `box(gdef u b d)` is closed code that no recursor branch matches: M9
+  leaves it stuck (`whne_elimt_gdef`, `stuck_rec_wf`,
+  `Validity/DefStuck.v`).
 - **Conversion at layer C is syntactic, up to level equivalence**
   (`static_code_eqty`, `static_code_eqtm`, `Typing/StaticCodeEq.v`). This
   is what makes `□` a discrete set. It is the declarative fact;
@@ -228,21 +255,45 @@ assumption:
   does, which is sound. As usual for interpreting derivations, the
   interpretation is defined on raw syntax (Streicher's partial
   interpretation), so it does not depend on the derivation chosen.
-- **Stage 2: open C/D, under an environment.** An environment `ρ` for a
-  global context `Ψ` assigns:
-  - a level to each universe variable;
-  - a closed syntactic context to each context global;
-  - to each layer-C global, a pair: a closed code `c` of its type, and
-    `c`'s stage-1 interpretation;
-  - to each layer-D type global, a closed D-type up to D-conversion,
-    with its stage-1 interpretation.
+  A definition `gdef u b d` is interpreted through its inline body, as
+  `b` reindexed along `d`.
+- **Stage 2: open C/D, under an environment.** An environment
+  `ρ = (v, ρ̂)` for a global context `Ψ` is a valuation `v` of the
+  universe variables together with a closing substitution `ρ̂` (§4.2a).
+  `ρ̂` assigns:
+  - to each context global, a closed D-context, a representative of its
+    class up to `[⊢[lD] Δ ≅ Δ']`;
+  - to each layer-C or layer-V global, a closed code of its type;
+  - to each layer-D type global, a closed D-type, a representative of its
+    class up to D-conversion.
 
-  A global's use at a local substitution `d` is its stage-1 value
-  reindexed along `⟦d⟧`. `Inst(Ψ)`, the set of environments, is a set.
+  Every entry is **level-closed** (each level variable replaced by the
+  numeral `v` gives it, written `⌜v⌝`) and **unfolded** (in the image of
+  M9's `unf`, `Syntax/Unfold.v`, so it mentions no definition). A
+  global's semantic component is the stage-1 interpretation of its entry,
+  and its use at a local substitution `d` is that reindexed along `⟦d⟧`.
+  `Inst(Ψ)`, the set of environments, is a set.
 - **Stage 3: layer M under an environment.**
-  - `□(Δ ⊢ T)` at `ρ` is the discrete groupoid of closed code of type
-    `T[ρ]`, modulo level equivalence. `box t` at `ρ` is the syntax
-    `t[ρ]`, which uses the syntax components of `ρ`.
+  - `□(Δ ⊢ T)` at `ρ` is the discrete groupoid of **well-typed**,
+    global-closed, level-closed, unfolded code `c` of type `T[ρ]` **in
+    the local context `Δ[ρ]`**: code is closed in globals, not in local
+    variables. The interpretation reads the typing judgment of the empty
+    global context. That is harmless, since it is a set, and it makes the
+    recursors' inversions available. On closed levels `≡ₗ` is equality,
+    so "modulo level equivalence" adds nothing.
+  - **The fibres depend on `Δ[ρ]`, `T[ρ]` and the level only up to
+    D-conversion and level equivalence.** This is mechanized
+    (`heather-coq`, `Typing/BoxFibre.v`): `box_fibre_ty_iff` along
+    `eqty_CTyp`'s premises, and `box_fibre_tm_iff` along `eqty_CTrm`'s.
+    The reason is that a C-judgment's types live at D, so `wf_conv` at C
+    converts at D, and context conversion (`ctxconv_tm`,
+    `Typing/CtxConv.v`) does the rest. So `eqty_CTyp`/`eqty_CTrm` hold,
+    and so do the representative-independence lemma's fibre cases
+    (§4.2a, (M3)).
+  - `box t` at `ρ` is the code `unf(t⦃ρ̂⦄)[⌜v⌝]ᵤ`: the syntax under `ρ`'s
+    syntax components, unfolded, with levels evaluated. So
+    `box(gdef u b d)` and `box(b[d])` denote the same point. The model
+    identifies more code than C-conversion does, which is sound.
   - A term of `□`-type in an M-context `Γ` is a section of a discrete
     family. It is therefore **constant on connected components** of
     `⟦Γ⟧ρ`.
@@ -251,20 +302,48 @@ assumption:
     `Γ` does not mention `u`, so the weakened context has the same
     interpretation. It is natural because `t(γ)` is constant along
     `Γ`'s morphisms.
-  - Code recursors recurse on the syntax `t(γ)` in the same way, with β
-    by definition.
-  - `CΠ` and `TΠ` are products over context globals and over D-types up
-    to conversion. `TΠ(U : (Δ ⊢ @l)). T @ l'` ranges over syntax, a
-    countable set, so no size question arises, even though `l'` is
-    independent of `l`. (No code former exists for `CΠ`/`TΠ`, so a
-    product over semantic families would also do.)
+  - **Code recursors recurse on typed code.** At `γ` the scrutinee is a
+    code `t(γ)` of the fibre. Each step reads a typed sub-code by
+    C-inversion, at the context and index that `redT`/`redt` give it, and
+    binds it in the environment for the branch. The reducts' typing
+    (`rec_red_typed`, `Validity/RecReduct.v`, which types the pieces by
+    inverting the code's C-typing) keeps the recursion inside the fibres.
+    It is total on typed, global-closed, unfolded C-code, since every head
+    is one of the 61 branches (checked against the `tm`/`ty`
+    constructors) and no `gdef` is left. β holds by definition. Two
+    branches read more than the code:
+    - **`t_x`** binds a layer-D type and a layer-V variable (§4.1). The
+      type is the variable's type in the fibre's context, the variable is
+      the code itself.
+    - **`t_λ`** binds the codomain `U_T`. `lam` stores no codomain, and
+      `redt` takes it from the index only when that is syntactically a
+      `Π` (`match T with tyPi _ _ _ B => … | _ => None`, `Recursor.v`).
+      The model cannot copy that: the index may be D-convertible to a `Π`
+      without being one (`El (tmPi …)`, or a D-global whose
+      representative is not a `Π`), and (M3) forbids reading its syntax.
+      So the model takes `U_T` to be the class of `B`, where `T ≅ Π A B`
+      at D. Such a `B` exists by inversion of the C-typed `lam` and
+      `wf_conv`, and it is unique up to D-conversion by `decl_pi_inj`
+      (`Validity/DeclConsequencesP.v`). The model therefore computes
+      where the syntax is stuck, which is sound.
+
+    The model also computes `elim(box(u^δ))`, which the syntax leaves
+    stuck. That is consistent with M9's `stuck_rec_not_numeral`, since the
+    model may identify more than the syntax.
+  - `CΠ` and `TΠ` are products over **classes**: `CΠ` over closed
+    D-contexts up to `[⊢[lD] Δ ≅ Δ']`, `TΠ` over closed D-types up to D
+    conversion. Environments store a representative, and (M3) makes the
+    choice irrelevant. `TΠ(U : (Δ ⊢ @l)). T @ l'` ranges over classes of
+    syntax, a countable set, so no size question arises, even though
+    `l'` is independent of `l`. (No code former exists for `CΠ`/`TΠ`, so
+    a product over semantic families would also do.)
   - Bodied globals are instantiated by their bodies.
 
 **The obligation that ties the stages together** is the semantic global
 substitution lemma:
 
 ```
-⟦t⟧(ρ, u ↦ (c, ⟦c⟧)) = ⟦t⦃c/u⦄⟧ρ
+⟦t⟧(ρ, u ↦ c) = ⟦t⦃c/u⦄⟧ρ
 ```
 
 together with its variants for context and type globals. It validates
@@ -273,58 +352,78 @@ meta-functions' β. It holds because the environment stores the syntax,
 so every syntax-reading construct (`box`, the recursors) sees `c` on
 both sides, while every semantic use of `u` sees `⟦c⟧`. The proof is by
 induction on `t`, and it is the standard substitution lemma with one
-syntactic case per construct that reads code.
+syntactic case per construct that reads code. Its companion for levels,
+the semantic universe substitution lemma, validates `ΠΠ`'s β and η
+(§4.2a, "What it validates").
 
 ### 4.2a The semantic global substitution lemma, written out
 
-Notation follows the Coq formalization (`../Lean/delam/theories/Syntax/`).
+Notation follows the Coq formalization (`heather-coq`,
+`theories/Syntax/`).
 - A global substitution `σ : Ψ ⇒ Ψ₀` maps each global `i` of `Ψ` to an
   object `σ i`, which is one of: `GId j` (another global), `GCtx Δ₀`,
   `GTy T` or `GTm t`. The objects are syntax over `Ψ₀`.
 - `t⦃σ⦄` applies `σ`, and `gosubst o τ` applies `τ` inside an object.
 - `gup σ` lifts `σ` under one global binder. `gsingle o` is `(o, id)`.
+  `guwkn k σ` universe-weakens `σ`'s objects past `k` level binders.
+- `t[φ]ᵤ` applies a level substitution `φ`, and `gousubst o φ` applies
+  it inside an object.
 - A global's use carries a local substitution `d`: `gvar i d`,
   `tyGvar i d`, and a context global inside a context.
 
-**Environments.** An environment `ρ ∈ Env(Ψ₀)` is a level assignment
-together with a **closing substitution** `ρ̂`. Its objects have no global
-variables other than definitions; levels are read through the assignment.
-Definitions are the one exception because a well-formed substitution
-must send a defined global to a defined one (`pdef`, `Term.v`, M9). So
-`ρ̂` maps each definition to itself. A definition's use `gdef j b d`
-carries its body `b` inline and is interpreted through it (case 9), so
-definitions never need an environment entry. The
-*semantic component* of a C/D global `i` is `s_ρ(i) := ⟦ρ̂ i⟧₁`, the
-stage-1 interpretation of its closed syntax. For a layer-D type global,
-`ρ̂ i` is a representative of its conversion class. Stage-1 soundness of
-D-conversion makes `s_ρ(i)` independent of which representative.
+**Environments.** An environment `ρ = (v, ρ̂) ∈ Env(Ψ₀)` is a valuation
+`v` of the level variables together with a **closing substitution** `ρ̂`.
+Write `⌜v⌝` for the level substitution sending each level variable to the
+numeral `v` gives it. `ρ̂`'s objects:
+- have no global variables;
+- are **level-closed** (fixed by every level substitution);
+- are **unfolded**: `unf_o (ρ̂ i) = ρ̂ i`, so they mention no definition;
+- are **layer-correct**: free of layer-M syntax, and of the binding's
+  sort (a code for a C- or V-global, a D-type for a D type global, a
+  D-context for a context global).
 
-**Composite environment.** For `σ : Ψ ⇒ Ψ₀` and `ρ ∈ Env(Ψ₀)`, define
-`ρ·σ ∈ Env(Ψ)` by `(ρ·σ)^ i := gosubst (σ i) ρ̂`, with the same level
-assignment. It is again closing. It is well-typed when `σ` and `ρ` are,
-by the global substitution theorem of the typing metatheory
-(`gsubstitution`, `Typing/GSubstitution.v`).
+Definitions need no entry. A definition's use `gdef j b d` carries its
+body `b` inline and is interpreted through it (case 9). The *semantic
+component* of a global `i` is `s_ρ(i) := ⟦ρ̂ i⟧₁`, the stage-1
+interpretation of its closed syntax. For a context global or a layer-D
+type global, `ρ̂ i` is a representative of its class, and (M3) below makes
+everything independent of which representative.
+
+**Composite environment.** For `σ : Ψ ⇒ Ψ₀` and `ρ = (v, ρ̂) ∈ Env(Ψ₀)`,
+define `ρ·σ := (v, (ρ·σ)^)` with
+
+```
+(ρ·σ)^ i := unf_o (gosubst (σ i) ρ̂) [⌜v⌝]ᵤ
+```
+
+It is again closing, level-closed and unfolded (`unf_gfree`, and `unf`
+commutes with level substitution, `unf_usubst`). It is layer-correct when
+`σ` is (below). It is well-typed when `σ` and `ρ` are, by the global
+substitution theorem of the typing metatheory (`gsubstitution`,
+`Typing/GSubstitution.v`), together with `unfolding` (`Typing/Unfold.v`)
+and level substitution.
 
 **The clauses that read the environment.** Every other clause of the
 partial interpretation is compositional: `⟦F(t₁,…)⟧ρ = F^sem(⟦t₁⟧ρ,…)`,
 with local binders extending the local context and never the
-environment. The rest are:
+environment. Level binders (`UΠ`, `Λ`, `bindU`) extend `v` only: `ρ̂` is
+level-closed, so it needs no weakening. The rest are:
 
-| construct | interpretation at `ρ` (object `γ` where relevant) |
+| construct | interpretation at `ρ = (v, ρ̂)` (object `γ` where relevant) |
 |---|---|
 | `gvar i d`, `tyGvar i d` | `s_ρ(i)` reindexed along `⟦d⟧ρ` |
 | a context global `g` inside a context | the stage-1 context `⟦ρ̂ g⟧₁`, spliced |
-| `boxT T`, `boxt t` | the code `T⦃ρ̂⦄` (resp. `t⦃ρ̂⦄`) modulo level equivalence |
+| `boxT T`, `boxt t` | the code `unf(T⦃ρ̂⦄)[⌜v⌝]ᵤ` (resp. `unf(t⦃ρ̂⦄)[⌜v⌝]ᵤ`) |
 | `letbox t' t` | `⟦t'⟧(ρ, c)` at `γ`, where `c := ⟦t⟧ρ(γ)` |
-| `elimT rb t`, `elimt rb t` | recursion on the code `⟦t⟧ρ(γ)`; each branch `⟦b⟧(ρ, sub-codes)` |
-| `clam t` / `capp t Δ` | `Δ₀ ↦ ⟦t⟧(ρ, Δ₀)` / `⟦t⟧ρ` at `Δ⦃ρ̂⦄` |
-| `tlam t` / `tapp t A` | `[A₀] ↦ ⟦t⟧(ρ, A₀)` / `⟦t⟧ρ` at the class of `A⦃ρ̂⦄` |
+| `elimT rb t`, `elimt rb t` | recursion on the typed code `⟦t⟧ρ(γ)` (§4.2 stage 3); each branch `⟦b⟧(ρ, sub-codes)` |
+| `clam t` / `capp t Δ` | `[Δ₀] ↦ ⟦t⟧(ρ, Δ₀)` / `⟦t⟧ρ` at the class of `unf(Δ⦃ρ̂⦄)[⌜v⌝]ᵤ` |
+| `tlam t` / `tapp t A` | `[A₀] ↦ ⟦t⟧(ρ, A₀)` / `⟦t⟧ρ` at the class of `unf(A⦃ρ̂⦄)[⌜v⌝]ᵤ` |
 
-**Syntactic facts**, checked in Coq (`Syntax/GSubst.v`, `Syntax/Commute.v`):
+**Syntactic facts**, checked in Coq (`Syntax/GSubst.v`, `Syntax/Commute.v`,
+`Syntax/Universe.v`, `Syntax/Unfold.v`):
 
 - **(S1) composition**, `gsubst_gsubst`: `t⦃σ⦄⦃τ⦄ = t⦃θ⦄` when
-  `θ i = gosubst (σ i) τ`. In particular `t⦃σ⦄⦃ρ̂⦄ = t⦃(ρ·σ)^⦄`, by the
-  definition of `ρ·σ`.
+  `θ i = gosubst (σ i) τ`.
 - **(S2) global after local substitution**, `gsubst_subst`:
   `t[d]⦃σ⦄ = t⦃σ⦄[d⦃σ⦄]`.
 - **(S3) substituting a global**, which is the definition itself:
@@ -334,126 +433,251 @@ environment. The rest are:
   - and `gvar j (d⦃σ⦄)` when `σ i = GId j`.
 - **(S4) lifting past a binder**, `gsubst_gren_all` with `gup`: renaming
   then substituting is substituting the composite. Hence
-  `(ρ, c)·(gup σ) = (ρ·σ, c)`, checked pointwise: at `0` it is `c`, and
-  at `i+1` it is `gosubst ((σ i)⟨↑⟩) (ρ̂, c) = gosubst (σ i) ρ̂`.
+  `(ρ, c)·(gup σ) = (ρ·σ, c)`, checked pointwise: at `0` it is `c`
+  (which is already level-closed and unfolded), and at `i+1` it is the
+  normal form of `gosubst ((σ i)⟨↑⟩) (ρ̂, c) = gosubst (σ i) ρ̂`.
+- **(S4u) lifting past a level binder**, `guwkn_gosubst`:
+  `guwkn k θ = gosubst (guwkn k σ ·) (guwkn k τ)` when
+  `θ = gosubst (σ ·) τ`. On the semantic side, `guwkn k ρ̂ = ρ̂`, since
+  `ρ̂` is level-closed.
 - **(S5) local substitution never enters a box**. `boxT T` and `boxt t`
   are closed in the local context, so `(boxT T)[d] = boxT T`. The global
   uses compose: `subst_gvar`, `(gvar i e)[d] = gvar i (e ∘ d)`.
+- **(S6) levels after globals**, `usubst_gsubst` (`Universe.v`):
+  `t⦃σ⦄[φ]ᵤ = t[φ]ᵤ⦃gousubst (σ ·) φ⦄`. With level substitutions
+  composing (`usubst_usubst`) and evaluating (`leval_lvsubst`,
+  `Level.v`).
+- **(S7) unfolding commutes**, `unf_gsubst`, `unf_usubst`, `unf_subst`:
+  `unf(t⦃σ⦄) = unf(t)⦃unf_o ∘ σ⦄`, `unf(t[φ]ᵤ) = unf(t)[φ]ᵤ`,
+  `unf(t[d]) = unf(t)[unf d]`. And **`unf` is idempotent**,
+  `unf_idem`/`unf_idem_ty`/`unf_idem_ctx`/`unf_o_idem` (mechanized for
+  this section, `Syntax/Unfold.v`), so an unfolded entry is its own
+  normal form.
 
-**Semantic facts**, standard for split models:
+**Semantic facts**, standard for split models. They are proved in this
+order, because each one's binder cases use the ones before it:
 
+- **(R) global renaming.** `⟦t⦃ξ⦄⟧ρ = ⟦t⟧(ρ∘ξ)` for a global renaming
+  `ξ`. All its objects are `GId`s, so only the lemma's cases 3, 4 and 9
+  occur, and (M1) is never used. Its binder cases are (S4) for renamings.
+  The instance `ξ := ↑` is `⟦t⦃↑⦄⟧(ρ, c) = ⟦t⟧ρ`.
+- **(U) universe renaming**, for `uwk d`: the same induction. Under
+  level-closed environments it is the observation that a level-closed
+  object is fixed by universe renaming.
 - **(M1) local substitution lemma**: `⟦t[d]⟧ρ ≃ ⟦t⟧ρ` reindexed along
-  `⟦d⟧ρ`. It is the usual induction (Hofmann, Streicher). The two new
-  clauses are immediate: the global-variable case by (S5) and
-  functoriality of reindexing, and the box case because a box's
-  interpretation is constant.
-- **(M2) closing lemma for C/D.** For a term `t` at layer C or D,
-  `⟦t⟧ρ ≃ ⟦t⦃ρ̂⦄⟧₁`. *Proof.* By induction on `t`. C/D syntax has no
-  global binders (`letbox`, `CΠ`, `TΠ` are M only, §4.1), so the only
-  non-compositional case is a global. There,
-  `⟦gvar i d⟧ρ = s_ρ(i)·⟦d⟧ρ = ⟦ρ̂ i⟧₁·⟦d⦃ρ̂⦄⟧₁`
+  `⟦d⟧ρ`. It is the usual induction (Hofmann, Streicher). Local
+  substitution goes under every global and level binder (`subst_tm`,
+  `Term.v`): `letboxT`/`letboxt` and `bindG` substitute `t'[gwk d]`,
+  `clam`/`tlam` substitute under `gwk d`, `ulam` and `bindU` under
+  `uwk d` (resp. `uwkn n d`), and `bindL` under `llift d`. Those cases
+  use (R) at `↑` (`⟦gwk d⟧(ρ, c) = ⟦d⟧ρ`) and (U). The two new clauses
+  are then immediate: the global-variable case by (S5) and functoriality
+  of reindexing, and the box case because a box's interpretation is
+  constant.
+- **(M2) closing lemma for M-free syntax.** For raw syntax `t` free of
+  layer-M constructs, `⟦t⟧ρ ≃ ⟦unf(t⦃ρ̂⦄)[⌜v⌝]ᵤ⟧₁`. *Proof.* By induction
+  on `t`. M-free syntax has no global binders (`letbox`, `CΠ`, `TΠ` and
+  the recursors are M only, §4.1), so the non-compositional cases are a
+  global and a definition. For a global,
+  `⟦gvar i d⟧ρ = s_ρ(i)·⟦d⟧ρ = ⟦ρ̂ i⟧₁·⟦unf(d⦃ρ̂⦄)[⌜v⌝]ᵤ⟧₁`
   by the induction hypothesis on `d`. By (M1) at stage 1 that is
-  `⟦(ρ̂ i)[d⦃ρ̂⦄]⟧₁`, which is `⟦(gvar i d)⦃ρ̂⦄⟧₁` by (S3). ∎
+  `⟦(ρ̂ i)[unf(d⦃ρ̂⦄)[⌜v⌝]ᵤ]⟧₁`, which is `⟦unf((gvar i d)⦃ρ̂⦄)[⌜v⌝]ᵤ⟧₁`
+  by (S3), (S7) and `usubst_subst` (level substitution commutes with local
+  substitution), since `ρ̂ i` is level-closed and unfolded. For
+  `gdef j b d`, both sides interpret the body: stage 1 reads `gdef`
+  through it, and `unf` replaces it by `b[d]`. In the compositional cases
+  the level annotations agree, since `⟦l⟧v = ⟦l[⌜v⌝]ᵤ⟧` (`leval_lvsubst`). ∎ It covers layer-V globals too: their
+  entries are codes, like a C-global's.
+- **(M3) representative independence.** If `ρ` and `ρ'` agree on levels
+  and on C- and V-globals, and their context and layer-D type entries are
+  pairwise D-convertible, then `⟦t⟧ρ ≃ ⟦t⟧ρ'` for every `t`, and the two
+  interpretations of a context or type are the same family. The same
+  holds when the two differ by unfolding an entry. *Proof*, by induction
+  on `t`. A representative is read in four places, and each is
+  invariant:
+  1. **Through `s_ρ`**, by stage-1 soundness of D-conversion, and of
+     context conversion for a context global. An unfolded entry has the
+     same stage-1 interpretation, since stage 1 reads `gdef` through its
+     body.
+  2. **Through a `□` fibre.** The fibre is invariant under D-conversion
+     of its context and type, and under level equivalence. This is
+     **mechanized**: `box_fibre_ty_iff`, `box_fibre_tm_iff`
+     (`Typing/BoxFibre.v`).
+  3. **Through box values.** They do not read the representatives at all.
+     `static_gsubst` (`Typing/GStatic.v`) is the syntactic form of this:
+     C-code under substitutions that agree on static bindings is
+     `≡ₗ`-equal, and neither `gdCtx` nor a layer-D binding is static.
+  4. **Through the recursors' contexts and indices**, by induction on the
+     code, with stage 3's reading of `t_λ`'s index up to D-conversion.
+  ∎ Once (M3) holds, the products over classes are well defined, and
+  `eqtm_capp`, `eqtm_tapp`, `eqty_CTyp`, `eqty_CTrm`,
+  `eqtm_elimT`/`eqtm_elimt`, `eqtm_tlam` and `eqty_tpi` hold: each
+  compares its annotations `Δ`, `T` at D only.
 
 **Lemma (semantic global substitution).** For every raw type, term,
-context or local substitution `t` over `Ψ`, every `σ : Ψ ⇒ Ψ₀` and every
-`ρ ∈ Env(Ψ₀)`:
+context or local substitution `t` over `Ψ`, every **layer-correct**
+`σ : Ψ ⇒ Ψ₀` and every `ρ ∈ Env(Ψ₀)`:
 
 ```
 ⟦t⦃σ⦄⟧ρ  ≃  ⟦t⟧(ρ·σ)          (Kleene equality)
 ```
+
+`σ` is layer-correct when each object for a V-, C- or D-global is free of
+layer-M syntax, and each is of the binding's sort. A well-typed `σ` is
+layer-correct by inversion, since a judgment at a layer below M uses no
+M rule. Without the hypothesis, case 2 fails: stage 1 is undefined on a
+`box` or `letbox` in `c`, while the left side, the stage-3
+interpretation of `c`, may be defined.
 
 *Proof.* By induction on `t`, for all `σ` and `ρ` at once.
 
 1. **Compositional formers**: `Π`, `Σ`, `λ`, application, `Id`/`J`, `Nat`
    and its recursor, `W`/`Wf`/`IWf`, `Vec`/`Fin`/`DVec`, the universes
    and their codes, `El`, `sEq`/`srefl`, `Squash`, `sEmpty`, `+`, `Unit`,
-   `ΠΠ`/`Λ`/`$`, and local variables. Global substitution commutes with
-   the former syntactically: local binders are a separate namespace from
-   globals, and `σ`'s objects enter only through a `d` (S3). The
-   interpretation is `F^sem` of the parts. Apply the induction hypothesis
-   componentwise. Levels are untouched by `σ`, and `ρ·σ` keeps `ρ`'s
-   level assignment.
+   and local variables. Global substitution commutes with the former
+   syntactically: local binders are a separate namespace from globals,
+   and `σ`'s objects enter only through a `d` (S3). The interpretation
+   is `F^sem` of the parts. Apply the induction hypothesis componentwise.
+   **`ΠΠ`/`Λ`/`$`** are the same, except that `σ` goes under the level
+   binder as `guwkn n σ`
+   (`gsubst_ty (tyUPi n l T) σ = tyUPi n l (T⦃guwkn n σ⦄)`, and likewise
+   for `ulam`). The body is interpreted at `(v·v', ρ̂)` on one side and
+   at `(v·v', (ρ·σ)^)` on the other. The induction hypothesis at
+   `guwkn n σ`, with (S4u) and `guwkn n ρ̂ = ρ̂`, equates them.
 2. **A global, `σ i = GTm c`.** Its interpretation is
    `⟦(gvar i d)⦃σ⦄⟧ρ = ⟦c[d⦃σ⦄]⟧ρ` (S3), which is
-   `⟦c⟧ρ·⟦d⦃σ⦄⟧ρ` (M1). By (M2) on `c`, which is well-typed at layer C,
-   `⟦c⟧ρ = ⟦c⦃ρ̂⦄⟧₁ = ⟦(ρ·σ)^ i⟧₁ = s_{ρ·σ}(i)`. By the induction
-   hypothesis on `d`, `⟦d⦃σ⦄⟧ρ = ⟦d⟧(ρ·σ)`. Together that is
-   `⟦gvar i d⟧(ρ·σ)`. `tyGvar` with `σ i = GTy T` is the same, and so is
-   a layer-D type global: its object is a D-type, and (M2) applies
-   because C ⊆ D.
+   `⟦c⟧ρ·⟦d⦃σ⦄⟧ρ` (M1). By (M2) on `c`, which is M-free because `σ` is
+   layer-correct, `⟦c⟧ρ = ⟦unf(c⦃ρ̂⦄)[⌜v⌝]ᵤ⟧₁ = ⟦(ρ·σ)^ i⟧₁ = s_{ρ·σ}(i)`.
+   By the induction hypothesis on `d`, `⟦d⦃σ⦄⟧ρ = ⟦d⟧(ρ·σ)`. Together
+   that is `⟦gvar i d⟧(ρ·σ)`. `tyGvar` with `σ i = GTy T` is the same,
+   and so is a layer-D type global: its object is an M-free D-type.
 3. **A global, `σ i = GId j`.** Then `(gvar i d)⦃σ⦄ = gvar j (d⦃σ⦄)`, and
-   `(ρ·σ)^ i = gosubst (GId j) ρ̂ = ρ̂ j`, so `s_{ρ·σ}(i) = s_ρ(j)`. Apply
+   `(ρ·σ)^ i = unf_o (gosubst (GId j) ρ̂)[⌜v⌝]ᵤ = ρ̂ j`, since `ρ̂ j` is
+   already level-closed and unfolded. So `s_{ρ·σ}(i) = s_ρ(j)`. Apply
    the induction hypothesis on `d`.
 4. **A context global inside a context**, `σ g = GCtx Δ₀` or `GId j`: as
    cases 2 and 3, with `pctx` in place of `ptm` and the stage-1 context
    interpretation in place of the term one.
-5. **`boxT T`, `boxt t`.** `⟦(boxT T)⦃σ⦄⟧ρ` is the code `T⦃σ⦄⦃ρ̂⦄`, which
-   is `T⦃(ρ·σ)^⦄` by (S1), and that is `⟦boxT T⟧(ρ·σ)`. The equality is
-   on the nose, so it also holds modulo level equivalence.
+5. **`boxT T`, `boxt t`.** Write `θ i := gosubst (σ i) ρ̂`, so that
+   `(ρ·σ)^ = (unf_o ∘ θ)[⌜v⌝]ᵤ`.
+   - The left side is the code `unf(T⦃σ⦄⦃ρ̂⦄)[⌜v⌝]ᵤ = unf(T⦃θ⦄)[⌜v⌝]ᵤ`
+     by (S1), which is `unf(T)⦃unf_o ∘ θ⦄[⌜v⌝]ᵤ` by (S7).
+   - The right side is `unf(T⦃(ρ·σ)^⦄)[⌜v⌝]ᵤ
+     = unf(T)⦃unf_o ∘ unf_o ∘ θ[⌜v⌝]ᵤ⦄[⌜v⌝]ᵤ` by (S7) and `unf_usubst`,
+     which is `unf(T)⦃(unf_o ∘ θ)[⌜v⌝]ᵤ⦄[⌜v⌝]ᵤ` by idempotence.
+   - By (S6) both are `unf(T)[⌜v⌝]ᵤ⦃…⦄`, at objects `(unf_o ∘ θ)[⌜v⌝]ᵤ`
+     and `(unf_o ∘ θ)[⌜v⌝]ᵤ[⌜v⌝]ᵤ`. These are equal: the first is
+     level-closed, so `[⌜v⌝]ᵤ` fixes it.
+
+   The equality is on the nose.
 6. **`letbox t' t`.** The substitution goes under the binder:
    `(letbox t' t)⦃σ⦄ = letbox (t'⦃gup σ⦄) (t⦃σ⦄)`. At `γ`:
    - The scrutinee gives the code `c := ⟦t⦃σ⦄⟧ρ(γ)`, which is
      `⟦t⟧(ρ·σ)(γ)` by the induction hypothesis on `t`.
    - The body gives `⟦t'⦃gup σ⦄⟧(ρ, c)`, which is `⟦t'⟧((ρ, c)·(gup σ))`
      by the induction hypothesis on `t'`, with `σ := gup σ` and
-     `ρ := (ρ, c)`.
+     `ρ := (ρ, c)`. `gup σ` is layer-correct, and `c` is a valid entry:
+     a box value is level-closed and unfolded.
    - That environment is `(ρ·σ, c)` by (S4), so the result is
      `⟦letbox t' t⟧(ρ·σ)` at `γ`.
    - The local context `Γ⟪S⟫` of the body denotes `⟦Γ⟧` under both
-     environments. That is the lemma for the weakening renaming (the
-     instance `σ := ↑`), and it holds on the same objects `γ`.
+     environments. That is (R) at `↑`, and it holds on the same
+     objects `γ`.
 7. **`elimT rb t`, `elimt rb t`.** Both sides recurse on the same code,
    `⟦t⦃σ⦄⟧ρ(γ) = ⟦t⟧(ρ·σ)(γ)`, by the induction hypothesis on `t`.
    - Each branch lives under the global binders that name the sub-codes
-     (`wrapG`). A branch `b` is interpreted at `(ρ, c̄)` on one side and
-     at `(ρ·σ, c̄)` on the other. The binders give `b⦃gupⁿ σ⦄`, so the
-     induction hypothesis with (S4), applied `n` times, equates the two.
-   - The motives are the same. The recursion is defined by the same
-     equations on the same code, so its values agree by induction on the
-     code.
+     (`wrapG`) and under its level binders (`bindU`). Branch `k` is
+     instantiated through `gbsub k σ = gupⁿ (guwkn m σ)`, with
+     `n = br_ng k` and `m = br_nu k` (`RecGSubst.v`). A branch `b` is
+     interpreted at `(ρ, c̄)` on one side and at `(ρ·σ, c̄)` on the other,
+     with `v` extended by the branch's levels. The induction hypothesis
+     with (S4u) once and (S4) `n` times equates the two.
+   - The motives are substituted too, under the same level binders, and
+     agree by the induction hypothesis with (S4u).
+   - The recursion is defined by the same equations on the same code,
+     so its values agree by induction on the code. The contexts and
+     indices it reads (`t_x`'s type, `t_λ`'s codomain class) are the
+     same on both sides, by the induction hypothesis and (M3).
 8. **`clam`/`capp`, `tlam`/`tapp`.**
    - The binders are as in case 6: `(ρ, Δ₀)·(gup σ) = (ρ·σ, Δ₀)`, and the
      same for a type class `[A₀]`.
-   - For `capp t Δ`, the argument is `Δ⦃σ⦄⦃ρ̂⦄ = Δ⦃(ρ·σ)^⦄` by (S1).
+   - For `capp t Δ`, the argument is the class of
+     `unf(Δ⦃σ⦄⦃ρ̂⦄)[⌜v⌝]ᵤ = unf(Δ⦃(ρ·σ)^⦄)[⌜v⌝]ᵤ`, as in case 5.
    - For `tapp t A`, the argument is the class of
-     `A⦃σ⦄⦃ρ̂⦄ = A⦃(ρ·σ)^⦄`, again by (S1).
+     `unf(A⦃σ⦄⦃ρ̂⦄)[⌜v⌝]ᵤ = unf(A⦃(ρ·σ)^⦄)[⌜v⌝]ᵤ`, as in case 5.
    - The function part is the induction hypothesis.
-9. **Bodied globals** (`gdef i b d`, M9). A well-formed `σ` sends `i` to
-   a defined `GId j`, so `(gdef i b d)⦃σ⦄ = gdef j (b⦃σ⦄) (d⦃σ⦄)` (`pdef`).
-   The interpretation ignores the name and uses the inline body: it is
-   `⟦b⟧` reindexed along `⟦d⟧`. Apply the induction hypothesis to `b` and
-   to `d`. ∎
+9. **Bodied globals** (`gdef i b d`, M9). `pdef` (`Term.v`) has two
+   cases:
+   - `σ i = GId j`: `(gdef i b d)⦃σ⦄ = gdef j (b⦃σ⦄) (d⦃σ⦄)`. The
+     interpretation ignores the name and uses the inline body: it is
+     `⟦b⟧` reindexed along `⟦d⟧`. Apply the induction hypothesis to `b`
+     and to `d`.
+   - any other object: `pdef` inlines the body,
+     `(gdef i b d)⦃σ⦄ = b⦃σ⦄[d⦃σ⦄]`. (M1) with the induction hypothesis
+     on `b` and `d` closes it.
+
+   Neither case needs a hypothesis on `σ`. ∎
 
 **What it validates.**
 - **`letbox`'s β** (`eqtm_letboxT_beta`, `eqtm_letboxt_beta`). The right
   side interprets as `⟦t'⦃gsingle c⦄⟧ρ = ⟦t'⟧(ρ·gsingle c)`, and
-  `ρ·gsingle c = (ρ, c⦃ρ̂⦄)`. The left side interprets as
-  `⟦t'⟧(ρ, ⟦box c⟧ρ)`, which is `⟦t'⟧(ρ, c⦃ρ̂⦄)`.
-- **`CΠ`/`TΠ` β and η** (`eqtm_cbeta`, `eqtm_tbeta`, `eqtm_ceta`, `eqtm_teta`) the same way.
+  `ρ·gsingle c = (ρ, unf(c⦃ρ̂⦄)[⌜v⌝]ᵤ)`. The left side interprets as
+  `⟦t'⟧(ρ, ⟦box c⟧ρ)`, which is the same environment, since
+  `⟦box c⟧ρ = unf(c⦃ρ̂⦄)[⌜v⌝]ᵤ`.
+- **`letbox`'s dependent motive.** `wf_letboxT` types the body at
+  `M⟪S⟫[box(u^id)]`. That `⟦t'⟧(ρ, t(γ))(γ)` lands in `⟦M[t]⟧ρ(γ)` uses
+  (R) on `M`, `⟦box(u^id)⟧(ρ, c) = c` (from `gvar 0 (lshift 0)`, (S3) at
+  the identity substitution, and `c` being a normal form), and (M1).
+  Naturality uses the morphism `(α, id_c)` of `Γ.□`.
+- **`CΠ`/`TΠ` β and η** (`eqtm_cbeta`, `eqtm_tbeta`, `eqtm_ceta`,
+  `eqtm_teta`) the same way, and their congruences by (M3).
 - **The recursors' β.** `redT` builds the reduct by global substitution
   of the sub-codes into the branch. The interpretation recurses with the
-  sub-codes in the environment, and the lemma equates the two.
+  sub-codes in the environment, and the lemma equates the two. `redt`'s
+  reduct passes the sub-code as it is, where the model passes its normal
+  form; they agree by (M3)'s unfolding clause.
+- **The recursors' congruences** (`eqtm_elimT`, `eqtm_elimt`), by (M3)
+  for the annotations, and because C-convertible scrutinees denote the
+  same code.
+- **`ΠΠ`'s β and η** (`eqtm_ubeta`, `eqtm_ueta`). These are not
+  consequences of the global lemma. They need its companion, the
+  **semantic universe substitution lemma**
+  `⟦t[φ]ᵤ⟧(v, ρ̂) = ⟦t⟧(⟦φ⟧v, ρ̂)`, by the same induction. Its box case:
+  `unf(T[φ]ᵤ⦃ρ̂⦄)[⌜v⌝]ᵤ = unf(T⦃ρ̂⦄)[φ]ᵤ[⌜v⌝]ᵤ` by (S6), since `ρ̂` is
+  level-closed, and that is `unf(T⦃ρ̂⦄)[⌜⟦φ⟧v⌝]ᵤ` by `usubst_usubst` and
+  `leval_lvsubst`. Its global case is (S6). Without level evaluation in
+  box values the rule fails: `(Λℓ. box(Ty ℓ)) $ [0] ≡ box(Ty 0)` would
+  compare the code `Ty ℓ` with `Ty 0`, and `ℓ ≢ₗ 0`.
 - **Global weakening** is the instance `σ := ↑` (a renaming, whose
-  objects are `GId`s). It is used for the weakened local contexts in
-  every global binder rule.
+  objects are `GId`s), i.e. (R). It is used for the weakened local
+  contexts in every global binder rule.
 
 **What it rests on.**
-- The Coq-checked syntax lemmas (S1)–(S5).
+- The Coq-checked syntax lemmas (S1)–(S7).
 - The global substitution theorem of the typing, also in Coq: it
   keeps `ρ·σ` well-typed.
-- (M1), the standard local substitution lemma of the split model. Its
-  only new cases are immediate.
-- Stage-1 soundness of D-conversion, used only to make `s_ρ` of a
-  layer-D type global independent of the representative.
+- The `□` fibres' invariance under D-conversion, **mechanized**
+  (`Typing/BoxFibre.v`), for (M3).
+- (R), (U), (M1), (M2) and (M3), in that order. (M1) is the standard
+  local substitution lemma of the split model, whose binder cases use (R)
+  and (U).
+- Stage-1 soundness of D-conversion and of context conversion, used for
+  (M3)'s first item.
 
 ### 4.3 Scope
 
 The claim of this document is about the **empty global context**, or a
-global context of definitions only. A module that postulates a global of
-an empty type makes `Inst(Ψ)` empty and the interpretation vacuous. A
-module that postulates UIP proves it. Neither says anything about the
-rule set.
+global context of definitions only. Definitions are covered because box
+values are unfolded (§4.2 stage 3), so a boxed definition and its
+unfolding denote the same code, and the recursion never meets a `gdef`.
+Dropping definitions from the scope would not be simpler: `unfolding`
+(`Typing/Unfold.v`) gives derivability of the unfolded judgment in
+`unf_G G`, not a derivation free of `gdef`, so the model would still have
+to interpret intermediate `box(gdef …)` terms.
+
+A module that postulates a global of an empty type makes `Inst(Ψ)` empty
+and the interpretation vacuous. A module that postulates UIP proves it.
+Neither says anything about the rule set.
 
 ### 4.4 Review record (2026-09-30)
 
@@ -480,10 +704,32 @@ lemma, unchecked at the review, is now written out case by case (§4.2a).
 Its syntactic half rests on lemmas checked in Coq. Its semantic half rests
 on the standard local substitution lemma (M1).
 
+### 4.4a Independent review record (2026-10-16), applied 2026-10-17
+
+The independent review (`docs/no-uip-model-review.md`) found that the
+interpretation as written did not validate three rules, each with a
+concrete instance, and that four steps were asserted where an argument
+was needed. All seven are applied above:
+
+| | finding | where it is fixed |
+|---|---|---|
+| R1 | `box` ignored the level assignment, so `eqtm_ubeta` failed at `Λℓ. box(Ty ℓ)` | environments `(v, ρ̂)` with level-closed entries; box values evaluate levels; the semantic universe substitution lemma (§4.2, §4.2a "What it validates") |
+| R2 | context and type globals were raw syntax, but `eqtm_capp` and its siblings relate D-convertible ones | `CΠ`/`TΠ` over classes; (M3) representative independence, its fibre case mechanized (`Typing/BoxFibre.v`) |
+| R3 | a boxed `gdef` had no recursion clause | box values and entries are unfolded by `unf`; `unf`'s idempotence mechanized (`unf_idem`, `Syntax/Unfold.v`); §4.3 |
+| R4 | the recursor's branches bind layer-D and layer-V globals, and `t_λ` reads the index | V-globals in environments; recursion on typed code; `t_λ`'s codomain up to D-conversion by `decl_pi_inj` (§4.1, §4.2 stage 3) |
+| R5 | (M1)'s binder cases need a renaming lemma first | the order (R), (U), (M1), (M2), (M3) (§4.2a) |
+| R6 | case 2 needs `σ`'s objects to be M-free | the layer-correctness hypothesis; (M2) for M-free raw syntax; case 9 covers `pdef`'s inlining |
+| R7 | `σ` is universe-weakened under level binders | (S4u), `guwkn_gosubst`, in cases 1 and 7 |
+
+The smaller points are applied too: the fibre is typed code in the local
+context `Δ[ρ]`; `letbox`'s dependent motive is argued; §4.1 lists the
+recursor's and the level binders; §4.5 counts `t_J`'s level binders; and
+the formalization is cited as the `heather-coq` repository.
+
 ### 4.5 The formal `Id` rules against the model (2026-09-30)
 
 The formalization gained `Id` in its milestone M11
-(`../Lean/delam/M11_DESIGN.md`). Each rule below is from `Declarative.v`;
+(`heather-coq/M11_DESIGN.md`). Each rule below is from `Declarative.v`;
 each is checked against §2's clause.
 
 - **Layers.** Formation, `refl`, `J`, the code `TmId` and their
@@ -516,7 +762,7 @@ each is checked against §2's clause.
   `Γ.A.Id` too, whose last component is an equation. So `J(α)` is
   `c(α)` transported by `M`'s functoriality.
 
-  **Mechanized** in `../Lean/delam/probes/NoUipJ.v`, closed under the
+  **Mechanized** in `heather-coq/probes/NoUipJ.v`, closed under the
   global context:
   - `IdF` is `Id(a↑; var 0)` as a split family over `Γ.A`;
   - `reflS` is `refl`;
@@ -558,8 +804,9 @@ each is checked against §2's clause.
     type global whose context mentions globals. The environment closes it
     like any other (§4.2a, S3).
   - Case 7 of §4.2a is unchanged: the branch sits under `wrapG`'s seven
-    global binders and six local ones, the same pattern as the other
-    branches.
+    global binders, six local ones and two level binders
+    (`br_ar 24 = (2, 7, 6)`), the same pattern as the other branches. Its
+    level binders are case 7's (S4u).
 
 Nothing found contradicts the construction.
 
@@ -577,7 +824,7 @@ At the empty context, `⟦Id^1(Ty 0; ⌜Bool⌝; ⌜Bool⌝)⟧` is the hom-set 
 
 The formalization states `UIP₀` as written above, with
 `⌜Bool⌝ := ⌜Unit⌝ + ⌜Unit⌝` (`UIP0`,
-`../Lean/delam/theories/Validity/Uip.v`, since its M12). Before it had
+`heather-coq/theories/Validity/Uip.v`, since its M12). Before it had
 `+` it took `⌜Nat⌝` for `⌜Bool⌝` (`UIP0_nat`). This changes nothing:
 `ℕ` has non-identity bijections, and one suffices.
 
@@ -609,7 +856,7 @@ UIP *does* hold in the model at every type whose interpretation is a
 discrete groupoid: `Nat`, first-order data, `□` code, and the strict
 propositions. That matches what the syntax proves: Hedberg's theorem at
 types with decidable equality. The formalization proves it
-(`../Lean/delam/theories/Validity/Hedberg.v`, closed under the global
+(`heather-coq/theories/Validity/Hedberg.v`, closed under the global
 context): as a schema over any carrier with a decider, as one closed
 term of `Π(a : Ty l). DecEq(El a) → UIP(El a)`, at `Bool`, whose
 decider uses `Unit`-η on the diagonal and a large elimination into
@@ -637,7 +884,7 @@ its identities are isomorphisms of groupoids, not equivalences.
 | `ΠΠ` at `ω` | products over level assignments |
 | strict propositions `sEq`/`sEmpty`/`Squash` | **new lemma, proved in §3.1, mechanized** (`NoUipComponents.v`: `conn_transport`, `sEq_subst`, `sec_irrelevant`, `ElimSquash`, `transp_strict`, `no_relevant_transp`, `no_uip0`) |
 | `Id` as formalized (M11: every layer but V, Paulin-Mohring `J`, code, four recursor branches) | **checked rule by rule, §4.5**; `UIP0` stated at `⌜Bool⌝` (M12) and well-formed in Coq, its interpretation refuted in the probe, the model's positive predictions checked in Coq (§5.1), Hedberg's theorem proved in the syntax (§5.2) |
-| DeLaM globals, `□`, code recursors, `CΠ`/`TΠ`, δ | **argued by stratification (§4)**; the layer facts it uses are side conditions of the Coq rules (§4.1); the semantic global substitution lemma is written out (§4.2a), its syntactic half on Coq-checked lemmas |
+| DeLaM globals, `□`, code recursors, `CΠ`/`TΠ`, δ | **argued by stratification (§4), independently reviewed (§4.4a)**; the layer facts it uses are side conditions of the Coq rules (§4.1); the semantic global substitution lemma is written out (§4.2a), its syntactic half on Coq-checked lemmas; the `□` fibres' invariance and `unf`'s idempotence **mechanized** (`BoxFibre.v`, `unf_idem`) |
 
 The mechanization states contexts as reflexive graphs (morphisms and
 identities only) and fibres as groupoid data. None of the groupoid laws is
@@ -647,9 +894,12 @@ uniqueness the model provides. Sections of a strict family are then an
 `SProp`, and their irrelevance is checked by conversion alone.
 
 What would strengthen it:
-- An independent review of §4, including the substitution lemma
-  (§4.2a). The lemma's semantic half is where any remaining slack is:
-  (M1) is taken as standard, and the partial interpretation's full
-  clause list is only summarized in §2 and §4.2a. The layer-D type globals, flagged here
-  before the review, turned out fine: they range over syntax, which is a
-  countable set, and never occur in code (§4.1).
+- A second pass over §4 as revised (§4.4a). Its weakest point is now
+  (M3), representative independence, whose fibre case is mechanized and
+  whose other three cases are argued. The lemma's semantic half is where
+  any remaining slack is: (M1) is taken as standard, and the partial
+  interpretation's full clause list is only summarized in §2 and §4.2a.
+  The layer-D type globals, flagged here before the self-review, needed
+  the independent review's R2: they never occur in code, but they occur
+  in the contexts and types of code (§4.1), so they range over classes,
+  a countable set.

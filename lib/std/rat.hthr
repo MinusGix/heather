@@ -638,6 +638,13 @@ theorem Rat::mul_pos({x, y: Rat}, hx: Rat::zero() < x, hy: Rat::zero() < y): Rat
     Rat::lt_respects(y.zero_mul(), (x * y).same_refl(), Rat::mul_lt_mono_r(hx, hy))
 }
 
+// Both factors grow: the bound a product of approximations is kept under.
+theorem Rat::mul_le_mul({a, b, c, d: Rat}, h1: a <= b, h2: c <= d, ha: Rat::zero() <= a, hc: Rat::zero() <= c):
+    a * c <= b * d
+{
+    Rat::le_trans(Rat::mul_le_mono_r(h1, hc), Rat::mul_le_mono_l(h2, Rat::le_trans(ha, h1)))
+}
+
 // ---------------------------------------------------------------------------
 // Archimedean facts. `inv_succ(n)` is 1/(n+1), the step size the regular
 // Cauchy-sequence probes measure distances in; its denominator is a `Succ`,
@@ -659,6 +666,28 @@ theorem Rat::inv_succ_half(n: Nat): Rat::inv_succ(n + n + 1) + Rat::inv_succ(n +
     ring(whole, part, half.int_mul(half))
 }
 
+// A bound of l+1 against the step 1/((l+1)(k+1)) leaves 1/(k+1): the
+// product reads its factors at index (l+1)(k+1) - 1 to keep the other
+// factor's size inside the rate.
+theorem Rat::scale_inv_succ(l, k: Nat): Rat::ofInt(OfNat(l + 1)) * Rat::inv_succ(l * (k + 1) + k) ≈ Rat::inv_succ(k) {
+    let big = Rat::ofInt(OfNat(l + 1));
+    let fine = Rat::inv_succ(l * (k + 1) + k);
+    let whole: (Rat::inv_succ(k).den.int() = OfNat(k) + OfNat(1)) = refl;
+    let part: (fine.den.int() = OfNat(l) * (OfNat(k) + OfNat(1)) + OfNat(k) + OfNat(1)) = refl;
+    let scale: (OfNat(l + 1) = OfNat(l) + OfNat(1)) = Int::ofNat_add(l, 1);
+    let unit: (big.den.int() = OfNat(1)) = refl;
+    let prod: ((big * fine).den.int() = fine.den.int()) = ring(big.den_mul(fine), unit);
+    let both: ((big * fine).den.int() = OfNat(l + 1) * Rat::inv_succ(k).den.int()) = ring(prod, part, whole, scale);
+    ring(both)
+}
+
+theorem Rat::scale_inv_succ_half(l, k: Nat):
+    Rat::ofInt(OfNat(l + 1)) * Rat::inv_succ(l * (k + k + 1 + 1) + (k + k + 1))
+        + Rat::ofInt(OfNat(l + 1)) * Rat::inv_succ(l * (k + k + 1 + 1) + (k + k + 1)) ≈ Rat::inv_succ(k)
+{
+    Rat::same_trans(Rat::add_respects(Rat::scale_inv_succ(l, k + k + 1), Rat::scale_inv_succ(l, k + k + 1)), Rat::inv_succ_half(k))
+}
+
 // Every rational is below some integer: x = a/p < |a| + 1, because p ≥ 1.
 theorem Rat::archimedean(self x: Rat): ∃ n: Nat, x < Rat::ofInt(OfNat(n)) {
     let a = x.num;
@@ -678,6 +707,19 @@ theorem Rat::archimedean_inv(self eps: Rat, h: Rat::zero() < eps): ∃ n: Nat, R
     let he: (OfNat(1) <= e) = omega;
     let scaled = OfNat(1).mul_le_mono_r(e, OfNat(Succ(eps.den)), he, trivial);
     Exists(eps.den, omega)
+}
+
+// A rational is at most its numerator in size, a/p with p ≥ 1; with the
+// next lemma, the canonical bound of a regular Cauchy real.
+theorem Rat::abs_le_natAbs(self x: Rat): x.abs() <= Rat::ofInt(OfNat(x.num.natAbs())) {
+    let pp = x.den_pos;
+    let scaled = OfNat(1).mul_le_mono_l(x.den.int(), OfNat(x.num.natAbs()), omega, trivial);
+    omega
+}
+
+theorem Rat::two_add_ofNat(n: Nat): (Rat::one() + Rat::one()) + Rat::ofInt(OfNat(n)) ≈ Rat::ofInt(OfNat(n + 2)) {
+    let lift = Int::ofNat_add(n, 2);
+    omega
 }
 
 // ---------------------------------------------------------------------------
@@ -756,6 +798,33 @@ theorem Rat::dist_add_le({a, b, c, d, u, v: Rat}, h1: (a -c).abs() <= u, h2: (b 
         ((a + b) -(c + d)).abs() ≈ ((a -c) + (b -d)).abs() := Rat::abs_respects(a.add_sub_add(b, c, d)),
         <= (a -c).abs() + (b -d).abs() := (a -c).abs_triangle(b -d),
         <= u + v := Rat::add_le_mono(h1, h2),
+    }
+}
+
+// Two products are as close as their factors, each distance weighted by the
+// size of the other side's factor: ab - cd = a(b - d) + d(a - c).
+theorem Rat::mul_sub_mul(self a, b, c, d: Rat): a * b -c * d ≈ a * (b -d) + d * (a -c) {
+    ring(a.den_mul(b), c.den_mul(d), (a * b).den_add(-(c * d)), b.den_add(-d), a.den_mul(b -d), a.den_add(-c),
+        d.den_mul(a -c), (a * (b -d)).den_add(d * (a -c)))
+}
+
+theorem Rat::dist_mul_le({a, b, c, d, m, e: Rat}, ha: a.abs() <= m, hd: d.abs() <= m,
+    hbd: (b -d).abs() <= e, hac: (a -c).abs() <= e): (a * b -c * d).abs() <= m * e + m * e
+{
+    calc {
+        (a * b -c * d).abs() ≈ (a * (b -d) + d * (a -c)).abs() := Rat::abs_respects(a.mul_sub_mul(b, c, d)),
+        <= (a * (b -d)).abs() + (d * (a -c)).abs() := (a * (b -d)).abs_triangle(d * (a -c)),
+        ≈ a.abs() * (b -d).abs() + d.abs() * (a -c).abs() := Rat::add_respects(a.abs_mul(b -d), d.abs_mul(a -c)),
+        <= m * e + m * e := Rat::add_le_mono(
+            Rat::mul_le_mul(ha, hbd, a.abs_nonneg(), (b -d).abs_nonneg()),
+            Rat::mul_le_mul(hd, hac, d.abs_nonneg(), (a -c).abs_nonneg())),
+    }
+}
+
+theorem Rat::mul_add_twice(self m, p, q: Rat): m * (p + q) + m * (p + q) ≈ (m * p + m * p) + (m * q + m * q) {
+    calc {
+        m * (p + q) + m * (p + q) ≈ (m * p + m * q) + (m * p + m * q) := Rat::add_respects(m.mul_add_distr(p, q), m.mul_add_distr(p, q)),
+        ≈ (m * p + m * p) + (m * q + m * q) := (m * p).add_add_add_comm(m * q, m * p, m * q),
     }
 }
 

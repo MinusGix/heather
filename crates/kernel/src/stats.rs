@@ -129,6 +129,10 @@ counters! {
     /// Sealed proofs unsealed at a stuck elimination (`crate::unseal`): one
     /// per unsealing, so a theorem a check projects twice counts twice.
     sealed_unfolds,
+    /// Lazily kept sealed proofs loaded from their source (a module image's
+    /// encoding: `term::SealedProof`): one per proof per run, on the thread
+    /// that first needed it.
+    sealed_loads,
     /// Occurrences of `u^δ` / `U^δ` whose typing or conversion rule read the
     /// binding's declared context and type rescoped into the ambient Ψ. One
     /// per **occurrence**: the rescoping itself is memoized per (Ψ,

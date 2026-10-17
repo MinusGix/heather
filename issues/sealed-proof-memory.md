@@ -1,9 +1,9 @@
 ---
 title: Make kept theorem proofs cost memory only when opened
-status: open
+status: closed
 labels: [kernel,cache,memory]
 created: 2026-10-16
-updated: 2026-10-16
+updated: 2026-10-17
 ---
 
 A theorem whose statement carries data keeps its proof sealed beside its
@@ -33,3 +33,9 @@ Options, cheapest first:
 
 Acceptance: the wc certificate build's peak RSS within noise of the opaque
 baseline, with `creal`'s witnesses still computing.
+
+## Log
+
+- 2026-10-17: Done: **lazy from the image.** Ψ keeps each sealed proof as a `term::SealedProof`: a term, or a `ProofSource` loaded on first use and kept from then on (`stats::sealed_loads` counts loads). A module image's reader decodes each kept proof once to validate it, drops the term, and keeps the proof's encoded bytes (`module_image::ImageProof`); `is_sealed` asks without loading, only an unsealing loads, re-encoding an image copies the bytes unloaded, and the replay's "did this proof change" comparisons compare encodings instead of decoding (`module_image::same_proof`). `shift_univ_psi` now shifts a proof when it is first needed instead of every proof at each universe telescope. The image format is unchanged.
+
+  Measured (cloud box, peak RSS of `build-x86 examples/x86-native/wc.hthr wc_command` warm over its own images, one release binary per side, warm runs repeated): master 4433/4429 MB, this change 3660/3660 MB, the commit before sealing (5cc5d6b) 3625 MB, so warm is within 1% of the opaque baseline (master was about +22% warm). No proof is loaded in that build. Cold runs are unchanged: master 4385, this change 4393, opaque 4014 MB, since a cold run holds the proofs it elaborated. Residue (cold runs, value-machine glue loading before a spine decision): [[sealed-proof-cold-and-glue]].

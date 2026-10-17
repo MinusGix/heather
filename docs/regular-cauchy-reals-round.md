@@ -211,13 +211,14 @@ of them (logged on
 
 - **Multiplication and inverse**
   ([creal-multiplication](../issues/creal-multiplication.md)).
-  Multiplication needs a canonical bound per argument (an integer above
-  every term, e.g. `|x_0| + 2`) and reads index 2K(n+1)-1. The inverse of a
-  real apart from zero reads its gap, which computes although it is a theorem.
+  Multiplication landed in the second round
+  ([creal-multiplication-round](creal-multiplication-round.md)), with the
+  canonical bound |x_0| + 2 and a cross-index product estimate; the inverse
+  has its own issue ([creal-inverse](../issues/creal-inverse.md)).
 - **`≤` and the Bishop bridge**
   ([creal-order-and-bishop-bridge](../issues/creal-order-and-bishop-bridge.md)).
-  This adds `≤` as `¬(y < x)`, its laws, and the converse bridge to
-  pointwise equality. The bridge needs the rational lemma "a ≤ b + 1/(k+1)
+  `≤` as `¬(y < x)` and its laws landed with multiplication; left is the
+  converse bridge to pointwise equality. The bridge needs the rational lemma "a ≤ b + 1/(k+1)
   for every k gives a ≤ b", which is `same_of_close`'s argument.
 - **Completeness:** the diagonal limit of a regular sequence of reals, owned
   by [regular-cauchy-reals](../issues/regular-cauchy-reals.md) and stated

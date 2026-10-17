@@ -3,7 +3,7 @@ title: Give regular Cauchy reals a non-strict order and the Bishop equality brid
 status: open
 labels: [stdlib,mathematics,reals,order]
 created: 2026-10-16
-updated: 2026-10-16
+updated: 2026-10-17
 ---
 
 Give `CReal` a non-strict order and connect its `≈` to Bishop's pointwise
@@ -25,3 +25,7 @@ equality.
   building gaps.
 - **[[constructive-ordered-field-interface]]** owns which of these become
   interface laws.
+
+## Log
+
+- 2026-10-17: `≤` landed with the multiplication round (docs/creal-multiplication-round.md): `CReal::Le` is `¬(y < x)` with reflexivity, transitivity, the mixed transitivities with `<`, antisymmetry modulo `≈` (tightness), `le_respects`, the embedding both ways, `Preorder` and the mixed `Trans` pairs. Remaining here: the Bishop bridge and `add_lt_mono`/`add_le_mono`/positivity of a sum.

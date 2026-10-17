@@ -14,7 +14,7 @@ use heather_kernel::layer::Layer;
 use heather_kernel::level::{Level, UnivVar};
 use heather_kernel::term::{Numeral, 
     Branches, CtxBase, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, LocalCtx, LocalSubst, LocalVar,
-    Motives, SubstTail, Term, Type,
+    Motives, ProofSource, SealedProof, SubstTail, Term, Type,
 };
 use heather_syntax::{
     Arm, Block, ClassRef, Decl, DeclKind, Expr, ExprKind, FieldDecl, LamBinder, MatchForm,
@@ -2008,13 +2008,83 @@ fn encode_delta_into(w: &mut Writer, delta: &ModuleDelta, magic: &[u8; 8]) {
     }
 }
 
-fn put_sealed(w: &mut Writer, (at, proof): &(usize, Rc<Term>)) {
+fn put_sealed(w: &mut Writer, (at, proof): &(usize, Rc<SealedProof>)) {
     w.usize(*at);
-    put_term(w, proof);
+    match ImageProof::of(proof) {
+        // Kept as its encoding: written back as it was read, unloaded.
+        Some(image) => {
+            w.bytes.extend_from_slice(&image.bytes);
+            w.nodes += image.nodes;
+        }
+        None => put_term(w, proof.term()),
+    }
 }
 
-fn get_sealed(r: &mut Reader<'_>) -> Result<(usize, Rc<Term>), ModuleImageDecodeError> {
-    Ok((r.usize()?, term_rc(r)?))
+/// A sealed proof as an image encodes it, kept unloaded
+/// (`issues/sealed-proof-memory.md`). The decode is checked, then let go: a
+/// warm run holds each kept proof as its encoding until something opens
+/// it, and an opened one is decoded again from these bytes.
+fn get_sealed(r: &mut Reader<'_>) -> Result<(usize, Rc<SealedProof>), ModuleImageDecodeError> {
+    let at = r.usize()?;
+    let (start, budget) = (r.at, r.nodes_left);
+    drop(get_term(r)?);
+    let image = ImageProof { bytes: r.bytes[start..r.at].into(), nodes: budget - r.nodes_left, limits: r.limits };
+    Ok((at, Rc::new(SealedProof::lazy(image))))
+}
+
+/// The [`ProofSource`] of a sealed proof read from an image: the bytes of
+/// its term exactly as [`put_term`] wrote them, which decoded once already
+/// when the image was read.
+pub(crate) struct ImageProof {
+    bytes: Box<[u8]>,
+    /// The reader's node charge for the term, so re-writing the bytes keeps
+    /// the writer's count the one a reader of the new image pays.
+    nodes: u64,
+    limits: ModuleImageLimits,
+}
+
+impl ImageProof {
+    pub(crate) fn of(proof: &SealedProof) -> Option<&ImageProof> {
+        proof.source()?.as_any().downcast_ref()
+    }
+}
+
+impl ProofSource for ImageProof {
+    fn load(&self) -> Term {
+        decode_on_own_stack(&self.limits, || {
+            let mut r = Reader::new(&self.bytes, self.limits)?;
+            let term = get_term(&mut r)?;
+            r.finish()?;
+            Ok(term)
+        })
+        .expect("a sealed proof decodes as it did when its image was read")
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+/// Two sealed proofs are the same proof: one allocation, the same encoding,
+/// or equal terms. A proof kept as its encoding is compared as one — the
+/// other side is encoded, never this side decoded — so asking whether an
+/// unopened dependency proof changed leaves it unloaded. The encoding is
+/// a faithful tree serialisation, so equal bytes are equal terms.
+pub(crate) fn same_proof(a: &Rc<SealedProof>, b: &Rc<SealedProof>) -> bool {
+    if Rc::ptr_eq(a, b) {
+        return true;
+    }
+    let encoded = |t: &Term| {
+        let mut w = Writer::default();
+        put_term(&mut w, t);
+        w.bytes
+    };
+    match (ImageProof::of(a), ImageProof::of(b)) {
+        (Some(x), Some(y)) => x.bytes == y.bytes,
+        (Some(x), None) => *x.bytes == *encoded(b.term()),
+        (None, Some(y)) => *encoded(a.term()) == *y.bytes,
+        (None, None) => a.term() == b.term(),
+    }
 }
 
 fn put_slice(w: &mut Writer, slice: &crate::module_delta::ItemSlice) {
