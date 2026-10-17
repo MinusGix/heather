@@ -14,8 +14,9 @@ Multiplication needs a canonical bound per argument: an integer K above
 every term (e.g. `|x_0| + 2`, since every term is within 1 + 1 of `x_0`).
 The product reads index 2K(n+1) - 1 of both factors, so the cross terms
 stay inside the rate. The inverse of x with `x.Apart(zero)` reads the gap
-(k, start) out of the apartness. That gap is data (`CReal::Lt` is built by
-`fn`s), so the inverse computes.
+(k, start) out of the apartness. That gap is data, and the theorems that
+build `CReal::Lt` keep their proofs sealed for a client to open
+([[theorem-witness-unfolding]]), so the inverse computes.
 
 Acceptance: `mul`, `mul_respects` with a `Respects2` instance, commutativity,
 associativity, `mul_one`, distributivity, `ofRat_mul`, and `mul_inv` for an

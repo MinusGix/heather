@@ -429,6 +429,9 @@ impl<'a, 'v> Eval<'a, 'v> {
                     _ => Work::Force(c),
                 },
                 Work::Force(c) => {
+                    if let Some(at) = self.arena.sealed_glue(c) {
+                        crate::unseal::note(at);
+                    }
                     if let Some(v) = self.arena.memo_tm(c) {
                         Work::Val(v)
                     } else {
@@ -1576,14 +1579,48 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// through to the same [`Head::BaseVar`] numbering either way.
     fn global_tm(&mut self, var: GlobalVar, subst: VSubst<'v>) -> Rc<Val<'v>> {
         let body = self.defs.body_unshifted(var).map(Rc::clone);
-        let unfold = body.map(|body| {
-            let mut denv = Env::at(var.0 + 1);
-            for v in &subst.terms {
-                denv = denv.push(self.arena, self.vclo(Rc::clone(v)));
-            }
-            self.arena.tm(TmClo::syn(denv, body))
-        });
+        let unfold = body.map(|body| self.glue(var, &subst, body));
         neutral(Head::Global { var, subst }, ElimSpine::empty(), unfold)
+    }
+
+    /// `body[δ]` for the global `var` as a closure: δ's payload values over
+    /// the body's own Ψ-prefix (the `global_tm` convention).
+    fn glue(&mut self, var: GlobalVar, subst: &VSubst<'v>, body: Rc<Term>) -> &'v TmClo<'v> {
+        let mut denv = Env::at(var.0 + 1);
+        for v in &subst.terms {
+            denv = denv.push(self.arena, self.vclo(Rc::clone(v)));
+        }
+        self.arena.tm(TmClo::syn(denv, body))
+    }
+
+    /// `u a⃗` with `u` a sealed theorem, met by an elimination that unseals
+    /// (`Elim::unseals`): the same neutral, now glued to the proof applied to
+    /// `a⃗`, so that the elimination about to be pushed extends a pending
+    /// unfolding exactly as it would a definition's
+    /// (`issues/theorem-witness-unfolding.md`, option D). Until this moment
+    /// the neutral carried no unfolding at all, so no comparison could open
+    /// the proof of a bare `u a⃗`; and the proof counts as opened only once
+    /// the glue is forced ([`ValueArena::mark_sealed`]). `None` when `n` is
+    /// not such a neutral.
+    fn unseal(&mut self, n: &VNeutral<'v>) -> Option<Rc<VNeutral<'v>>> {
+        if n.unfold.is_some() {
+            return None;
+        }
+        let Head::Global { var, subst } = &n.head else { return None };
+        if !self.defs.is_sealed(*var) {
+            return None;
+        }
+        let (at, body) = self.defs.sealed_proof_unshifted(*var)?;
+        let mut unfold = self.glue(*var, subst, Rc::clone(body));
+        // Recorded when forced, not here: an elimination is about to be
+        // pushed, but conversion may still decide on the spine.
+        self.arena.mark_sealed(unfold, at);
+        let mut spine: Vec<&'v Elim<'v>> = n.spine.iter_rev().collect();
+        spine.reverse();
+        for e in spine {
+            unfold = self.arena.tm(TmClo::elim(unfold, Rc::new(e.clone())));
+        }
+        Some(Rc::new(VNeutral { head: n.head.clone(), spine: n.spine, unfold: Some(unfold) }))
     }
 
     /// `T ⇝* W` on **syntax**, in a local context that is not the ambient
@@ -1609,6 +1646,8 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// One step of [`Eval::elim`]; see [`Eval::drive`].
     fn step_elim(&mut self, head: Rc<Val<'v>>, e: Elim<'v>) -> Res<Work<'v>> {
         if let Val::Neutral(n) = &*head {
+            let unsealed = if e.unseals() { self.unseal(n) } else { None };
+            let n = unsealed.as_ref().unwrap_or(n);
             // A Nat fold the run machinery accelerates — one whose step
             // classifies as an affine or synchronous algebra (`probe.rs`,
             // memoized per closure) — whose scrutinee

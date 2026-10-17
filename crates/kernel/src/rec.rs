@@ -64,7 +64,7 @@ pub(crate) fn shift_univ_psi(psi: &GlobalCtx, by: u32) -> GlobalCtx {
     if by == 0 {
         return psi.clone();
     }
-    GlobalCtx::new(
+    let mut out = GlobalCtx::new(
         psi.bindings
             .iter()
             .map(|b| match b {
@@ -85,7 +85,12 @@ pub(crate) fn shift_univ_psi(psi: &GlobalCtx, by: u32) -> GlobalCtx {
                 },
             })
             .collect(),
-    )
+    );
+    // A sealed proof shifts with its binding, as a body does.
+    for (i, t) in psi.sealed.iter() {
+        out.seal(i, Rc::new(t.shift_univ(by)));
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------

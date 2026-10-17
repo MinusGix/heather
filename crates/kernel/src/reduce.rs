@@ -217,6 +217,48 @@ impl<'a> Defs<'a> {
         Some(t)
     }
 
+    /// Whether `v` is an opaque binding whose proof Ψ keeps sealed
+    /// ([`crate::term::GlobalCtx::sealed`]). Such a binding is *not* a
+    /// definition: δ never unfolds it, and only an elimination stuck on an
+    /// application of it unseals it ([`Defs::sealed_body`]).
+    pub fn is_sealed(&self, v: GlobalVar) -> bool {
+        self.sealed_at(v).is_some()
+    }
+
+    fn sealed_at(&self, v: GlobalVar) -> Option<(usize, &'a Rc<Term>)> {
+        let psi = self.psi?;
+        let i = psi.bindings.len().checked_sub(1 + v.0 as usize)?;
+        Some((i, psi.sealed_proof(i)?))
+    }
+
+    /// The sealed proof of `v`, rescoped like [`Defs::body`], **for an
+    /// elimination stuck on it**: the one place a theorem computes
+    /// (`issues/theorem-witness-unfolding.md`, option D). Every call is an
+    /// unsealing and is recorded ([`crate::unseal`]), so only call it to
+    /// unseal. `None` when `v` keeps no sealed proof here.
+    pub(crate) fn sealed_body(&self, v: GlobalVar) -> Option<Rc<Term>> {
+        let (i, t) = self.sealed_at(v)?;
+        crate::unseal::note(i);
+        let rescope = || {
+            crate::stats::delta_body_rescopes(1);
+            t.shift_global(v.0 + 1)
+        };
+        // A sealed binding has no body, so the slot is free for its proof.
+        Some(match self.cache {
+            Some(c) => c.body_or_insert(v, rescope),
+            None => Rc::new(rescope()),
+        })
+    }
+
+    /// The sealed proof of `v` unshifted (the value machine's
+    /// [`Defs::body_unshifted`]), with the absolute index it is recorded
+    /// under, **without** recording it: the value machine glues the proof
+    /// lazily and records the unsealing only when the glue is forced
+    /// (`crate::eval`), so a comparison decided on the spine opens nothing.
+    pub(crate) fn sealed_proof_unshifted(&self, v: GlobalVar) -> Option<(usize, &'a Rc<Term>)> {
+        self.sealed_at(v)
+    }
+
     /// Whether `v` is a definition here — the head test the conversion
     /// heuristic keys on, without paying for the rescoped body.
     pub fn is_defined(&self, v: GlobalVar) -> bool {
@@ -504,6 +546,42 @@ pub fn step_term_delta(t: &Term, gamma: &LocalCtx, defs: Defs<'_>) -> Result<Opt
     frames.answer(next)
 }
 
+/// Step an elimination's scrutinee: unseal it when it is an application
+/// spine of a sealed theorem (`issues/theorem-witness-unfolding.md`, option
+/// D), and otherwise step it as any term. This is the *only* place the syntax
+/// reducer unseals: a bare `u a⃗` with no elimination waiting on it stays
+/// stuck, so a proof is opened exactly where something needs to compute
+/// with what it built.
+fn step_scrut(t: &Term, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) -> Option<Term> {
+    unseal_spine(t, defs).or_else(|| step_term_in(t, gamma, defs, frames))
+}
+
+/// `u a⃗` with the sealed theorem `u` replaced by its proof; `None` unless the
+/// spine's head is a sealed theorem of `defs`.
+fn unseal_spine(t: &Term, defs: Defs<'_>) -> Option<Term> {
+    Some(match t {
+        Term::GlobalTm { var, subst } => {
+            if !defs.is_sealed(*var) {
+                return None;
+            }
+            defs.sealed_body(*var)?.apply_local(subst)
+        }
+        Term::App { fun, dom_level, cod_level, dom, cod, arg } => Term::App {
+            fun: Rc::new(unseal_spine(fun, defs)?),
+            dom_level: dom_level.clone(),
+            cod_level: cod_level.clone(),
+            dom: Rc::clone(dom),
+            cod: Rc::clone(cod),
+            arg: Rc::clone(arg),
+        },
+        Term::AppAt { fun, arg } => Term::AppAt { fun: Rc::new(unseal_spine(fun, defs)?), arg: Rc::clone(arg) },
+        Term::UApp { fun, levels } => Term::UApp { fun: Rc::new(unseal_spine(fun, defs)?), levels: levels.clone() },
+        Term::CtxApp { fun, ctx } => Term::CtxApp { fun: Rc::new(unseal_spine(fun, defs)?), ctx: ctx.clone() },
+        Term::TyApp { fun, arg } => Term::TyApp { fun: Rc::new(unseal_spine(fun, defs)?), arg: Rc::clone(arg) },
+        _ => return None,
+    })
+}
+
 fn step_term_frame(t: &Term, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) -> Option<Term> {
     match t {
         // δ: `u^δ ⇝ t[δ]` for a definition `u := t`. Opaque at layer c,
@@ -540,7 +618,7 @@ fn step_term_frame(t: &Term, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) 
                     .extended(Rc::new(rec));
                 Some(step.apply_local(&delta))
             }
-            _ => step_term_in(scrut, gamma, defs, frames).map(|s| Term::ElimNat {
+            _ => step_scrut(scrut, gamma, defs, frames).map(|s| Term::ElimNat {
                 level: level.clone(),
                 motive: Rc::clone(motive),
                 base: Rc::clone(base),
@@ -552,7 +630,7 @@ fn step_term_frame(t: &Term, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) 
             match &**proof {
                 // J … refl ⇝ c   (extension; fires on head shape only)
                 Term::Refl { .. } => Some((**case).clone()),
-                _ => step_term_in(proof, gamma, defs, frames).map(|p| Term::J {
+                _ => step_scrut(proof, gamma, defs, frames).map(|p| Term::J {
                     ty_level: ty_level.clone(),
                     motive_level: motive_level.clone(),
                     ty: Rc::clone(ty),
@@ -591,7 +669,7 @@ fn step_term_frame(t: &Term, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) 
             // component form). This is why the checked spellings need no
             // rule of their own in the recursor's β.
             Term::Pair { fst, .. } | Term::PairAt { fst, .. } => Some((**fst).clone()),
-            _ => step_term_in(pair, gamma, defs, frames).map(|p| Term::Fst {
+            _ => step_scrut(pair, gamma, defs, frames).map(|p| Term::Fst {
                 fst_level: fst_level.clone(),
                 snd_level: snd_level.clone(),
                 fst_ty: Rc::clone(fst_ty),
@@ -618,13 +696,13 @@ fn step_term_frame(t: &Term, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) 
                 // projection on a neutral pair is neutral, and exposing the
                 // Σ is the *typing* rule's business (`Tc::view`), not
                 // reduction's.
-                _ => step_term_in(pair, gamma, defs, frames).map(|p| rebuild(Rc::new(p))),
+                _ => step_scrut(pair, gamma, defs, frames).map(|p| rebuild(Rc::new(p))),
             }
         }
         // elim_Empty has no β rule (Empty has no constructors); it only ever
         // steps its scrutinee, staying neutral when the scrutinee is.
         Term::ElimEmpty { level, scrut_level, motive, scrut } => {
-            step_term_in(scrut, gamma, defs, frames).map(|s| Term::ElimEmpty {
+            step_scrut(scrut, gamma, defs, frames).map(|s| Term::ElimEmpty {
                 level: level.clone(),
                 scrut_level: scrut_level.clone(),
                 motive: Rc::clone(motive),
@@ -646,7 +724,7 @@ fn step_term_frame(t: &Term, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) 
                     let delta = LocalSubst::id(gamma).extended(Rc::clone(tm));
                     Some(case.apply_local(&delta))
                 }
-                _ => step_term_in(scrut, gamma, defs, frames).map(|s| Term::ElimSquash {
+                _ => step_scrut(scrut, gamma, defs, frames).map(|s| Term::ElimSquash {
                     src_level: src_level.clone(),
                     dst_level: dst_level.clone(),
                     src_ty: Rc::clone(src_ty),
@@ -677,7 +755,7 @@ fn step_term_frame(t: &Term, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) 
             Term::Inr { val, .. } | Term::InrAt { val, .. } => {
                 Some(case_r.apply_local(&LocalSubst::id(gamma).extended(Rc::clone(val))))
             }
-            _ => step_term_in(scrut, gamma, defs, frames).map(|s| Term::Case {
+            _ => step_scrut(scrut, gamma, defs, frames).map(|s| Term::Case {
                 lhs_level: lhs_level.clone(),
                 rhs_level: rhs_level.clone(),
                 motive_level: motive_level.clone(),
@@ -692,7 +770,7 @@ fn step_term_frame(t: &Term, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) 
         // snd (pair a b) ⇝ b; else reduce the pair   (extension)
         Term::Snd { fst_level, snd_level, fst_ty, snd_ty, pair } => match &**pair {
             Term::Pair { snd, .. } | Term::PairAt { snd, .. } => Some((**snd).clone()),
-            _ => step_term_in(pair, gamma, defs, frames).map(|p| Term::Snd {
+            _ => step_scrut(pair, gamma, defs, frames).map(|p| Term::Snd {
                 fst_level: fst_level.clone(),
                 snd_level: snd_level.clone(),
                 fst_ty: Rc::clone(fst_ty),
@@ -771,7 +849,7 @@ fn step_term_frame(t: &Term, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) 
                     .extended(Rc::new(ih));
                 Some(step.apply_local(&delta))
             }
-            _ => step_term_in(scrut, gamma, defs, frames).map(|s| Term::ElimW {
+            _ => step_scrut(scrut, gamma, defs, frames).map(|s| Term::ElimW {
                 shape_level: shape_level.clone(),
                 pos_level: pos_level.clone(),
                 motive_level: motive_level.clone(),
@@ -841,7 +919,7 @@ fn step_term_frame(t: &Term, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) 
                     .extended(Rc::new(ih));
                 Some(step.apply_local(&delta))
             }
-            _ => step_term_in(scrut, gamma, defs, frames).map(|s| Term::ElimWf {
+            _ => step_scrut(scrut, gamma, defs, frames).map(|s| Term::ElimWf {
                 level: level.clone(),
                 motive_level: motive_level.clone(),
                 shape: Rc::clone(shape),

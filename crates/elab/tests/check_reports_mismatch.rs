@@ -287,14 +287,18 @@ record W { after: Nat, pres: after = 0 }
 
 /// A field projection in checking position synthesizes, and was the one
 /// synthesizing arm that returned without recording what it synthesized
-/// (`issues/elab-accepts-projection-through-opaque-theorem.md`). A theorem is
+/// (`issues/elab-accepts-projection-through-opaque-theorem.md`). An axiom is
 /// opaque, so `mk_w().after` is stuck and `mk_w().pres` does not prove `0 = 0`;
 /// the gate's refusal used to land on the declaration with nothing named.
+/// (This was a `theorem` until a theorem whose statement carries data kept
+/// its proof sealed and a projection opened it,
+/// `issues/theorem-witness-unfolding.md`: `mk_w().after` now computes to
+/// `0` through one, and the axiom is what is still stuck.)
 #[test]
 fn a_projection_at_the_wrong_type_reports_at_the_projection() {
     for body in ["mk_w().pres", "let w = mk_w(); w.pres"] {
         let src = format!(
-            "{WITNESS}theorem mk_w(): W {{ W(after := 0, pres := refl) }}\n\
+            "{WITNESS}axiom mk_w(): W;\n\
              theorem t(): 0 = 0 {{ {body} }}\n"
         );
         let r = reject(&src);
@@ -310,13 +314,16 @@ fn a_projection_at_the_wrong_type_reports_at_the_projection() {
 
 /// **Control for the projection note.** The same projection through a `fn`,
 /// which unfolds, converts and is accepted: the note is a record, and only
-/// the gate's refusal reads it.
+/// the gate's refusal reads it. Through a `theorem` it is accepted too: `W`
+/// carries data, so the projection opens the theorem's sealed proof.
 #[test]
 fn a_projection_that_converts_is_still_accepted() {
-    ok(&format!(
-        "{WITNESS}fn mk_w() -> W {{ W(after := 0, pres := refl) }}\n\
-         theorem t(): 0 = 0 {{ mk_w().pres }}\n"
-    ));
+    for head in ["fn mk_w() -> W", "theorem mk_w(): W"] {
+        ok(&format!(
+            "{WITNESS}{head} {{ W(after := 0, pres := refl) }}\n\
+             theorem t(): 0 = 0 {{ mk_w().pres }}\n"
+        ));
+    }
 }
 
 /// A mismatch the conversion decides but the display cannot state: the

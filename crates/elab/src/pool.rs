@@ -70,6 +70,10 @@ pub(crate) struct Deferred {
     pub(crate) layer: Layer,
     pub(crate) lands_in_psi: bool,
     pub(crate) fuel: u64,
+    /// The sealed proofs the statement's check opened, on the queuing
+    /// thread, before the body was queued (`heather_kernel::unseal`): the
+    /// verdict depends on them as much as on the body's own.
+    pub(crate) unsealed: Vec<usize>,
     /// The declaration scope open when this was queued — the row its timings
     /// fold back into (`docs/parallel-kernel-gate-design.md` §7). `None` when
     /// nothing is collecting.
@@ -100,6 +104,10 @@ pub(crate) struct Outcome {
     pub(crate) verdict: Result<(), Option<TypeError>>,
     pub(crate) ns: u64,
     pub(crate) kernel: kstats::Snapshot,
+    /// Absolute Ψ indices of the sealed proofs the check opened, the
+    /// statement's included: what `KernelGate::accepted` must be told, and
+    /// what the module's slices charge to the item that queued this.
+    pub(crate) unsealed: Vec<usize>,
 }
 
 fn run(index: usize, item: Rc<Deferred>) -> Outcome {
@@ -108,13 +116,22 @@ fn run(index: usize, item: Rc<Deferred>) -> Outcome {
     // A panic in a worker must not poison the queue or wedge the join. It is
     // reported as this item failing, which is what a panic on the elaborator's
     // own thread would have amounted to.
-    let verdict = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| item.check())) {
-        Ok(Ok(())) => Ok(()),
-        Ok(Err(e)) => Err(Some(e)),
+    let checked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        heather_kernel::unseal::record(|| item.check())
+    }));
+    let mut unsealed = item.unsealed.clone();
+    let verdict = match checked {
+        Ok((Ok(()), opened)) => {
+            unsealed.extend(opened);
+            Ok(())
+        }
+        Ok((Err(e), _)) => Err(Some(e)),
         Err(_) => Err(None),
     };
+    unsealed.sort_unstable();
+    unsealed.dedup();
     let ns = started.elapsed().as_nanos() as u64;
-    Outcome { index, item, verdict, ns, kernel: kstats::snapshot().since(&before) }
+    Outcome { index, item, verdict, ns, kernel: kstats::snapshot().since(&before), unsealed }
 }
 
 // ---------------------------------------------------------------------------
@@ -146,6 +163,7 @@ struct Recorded {
     verdict: Result<(), TypeError>,
     ns: u64,
     kernel: kstats::Snapshot,
+    unsealed: Vec<usize>,
 }
 
 /// What a discarded pass leaves the serial replay: its verdicts, in submission
@@ -225,6 +243,7 @@ impl Replay {
                 verdict,
                 ns: outcome.ns,
                 kernel: outcome.kernel,
+                unsealed: outcome.unsealed.clone(),
             }));
         }
         (!entries.is_empty()).then_some(Replay {
@@ -282,6 +301,9 @@ impl Replay {
         if let Some((module, item)) = crate::stats::current_item() {
             self.folds.push((module, item, entry.ns, entry.kernel));
         }
+        // The worker's unsealings belong to this check as if it had just run
+        // here, for whoever is recording on this thread.
+        heather_kernel::unseal::observe(&entry.unsealed);
         Some(entry.verdict)
     }
 

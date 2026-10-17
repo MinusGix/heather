@@ -89,7 +89,14 @@ pub trait KernelGate {
     /// `item` just passed the real kernel gate in `psi`. Called only after a
     /// `false` from [`Self::admits`] — never after a hit, so a gate cannot
     /// mistake its own vouching for evidence.
-    fn accepted(&self, psi: &GlobalCtx, item: &GateItem<'_>);
+    ///
+    /// `unsealed` lists, by absolute Ψ index, the sealed theorem proofs the
+    /// check opened (`heather_kernel::unseal`;
+    /// `issues/theorem-witness-unfolding.md`). A verdict with any is a
+    /// verdict about those proofs' bodies as well as about `item`, and a
+    /// theorem's interface leaves its proof out: whatever the oracle keys a
+    /// verdict on must account for them, or not keep the verdict.
+    fn accepted(&self, psi: &GlobalCtx, item: &GateItem<'_>, unsealed: &[usize]);
 
     /// An explicit axiom's statement passed `check_type` and is about to land
     /// as an opaque binding. A cache observes this separately so an axiom and
@@ -120,7 +127,7 @@ impl KernelGate for NoGate {
     fn admits(&self, _psi: &GlobalCtx, _item: &GateItem<'_>) -> bool {
         false
     }
-    fn accepted(&self, _psi: &GlobalCtx, _item: &GateItem<'_>) {}
+    fn accepted(&self, _psi: &GlobalCtx, _item: &GateItem<'_>, _unsealed: &[usize]) {}
 }
 
 /// A gate that never admits the named declarations and never learns that
@@ -145,9 +152,9 @@ impl KernelGate for Except {
         !self.names.contains(item.name) && self.inner.admits(psi, item)
     }
 
-    fn accepted(&self, psi: &GlobalCtx, item: &GateItem<'_>) {
+    fn accepted(&self, psi: &GlobalCtx, item: &GateItem<'_>, unsealed: &[usize]) {
         if !self.names.contains(item.name) {
-            self.inner.accepted(psi, item);
+            self.inner.accepted(psi, item, unsealed);
         }
     }
 

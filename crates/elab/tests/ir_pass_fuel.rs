@@ -1010,7 +1010,7 @@ impl KernelGate for CaptureGate {
         });
         true
     }
-    fn accepted(&self, _psi: &GlobalCtx, _item: &GateItem<'_>) {}
+    fn accepted(&self, _psi: &GlobalCtx, _item: &GateItem<'_>, _unsealed: &[usize]) {}
 }
 
 #[test]

@@ -21,6 +21,12 @@ Two things the implementation settled that §3–4 below did not say:
   compared as encoded bytes, plus the Ψ bindings compared structurally. That
   is what a dependent observes, so it is what decides whether the prefix
   after a re-elaborated item is still exact.
+- **Sealed proofs** (2026-10-16, docs/theorem-witness-unfolding-design.md
+  §4): a theorem whose statement carries data keeps its proof beside Ψ,
+  and a dependent that eliminates it observes the proof too. A slice records
+  the proofs its pass opened; a re-elaborated theorem whose proof differs
+  leaves the prefix exact but marks its index changed, and a later slice
+  that opened a changed index is elaborated instead of replayed.
 
 ## 1. The number this is about
 

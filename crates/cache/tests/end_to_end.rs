@@ -544,7 +544,7 @@ fn an_abandoned_question_does_not_answer_for_a_different_declaration() {
     assert!(!cache.admits(&psi, &item(body_a)), "an empty store admits nothing");
     assert_eq!(cache.counts().hashed, 1);
     // The same declaration, accepted: answered from the open question.
-    cache.accepted(&psi, &item(body_a));
+    cache.accepted(&psi, &item(body_a), &[]);
     assert_eq!(cache.counts().hashed, 1, "accepted must not render again");
     let key_a = cache.keys();
     assert_eq!(key_a.len(), 1);
@@ -557,7 +557,7 @@ fn an_abandoned_question_does_not_answer_for_a_different_declaration() {
     cache.abandon(&psi);
     assert!(!cache.admits(&psi, &item(body_b)));
     assert_eq!(cache.counts().hashed, 2, "after abandon the new declaration is rendered afresh");
-    cache.accepted(&psi, &item(body_b));
+    cache.accepted(&psi, &item(body_b), &[]);
     let key_b = cache.keys();
     assert_eq!(key_b.len(), 1);
     assert_ne!(key_a, key_b, "the two bodies must not share a check key");
@@ -572,11 +572,41 @@ fn an_abandoned_question_does_not_answer_for_a_different_declaration() {
     assert!(!cache.admits(&psi, &item(body_a)));
     assert!(!cache.admits(&psi, &other(body_b)));
     assert_eq!(cache.counts().hashed, 2);
-    cache.accepted(&psi, &other(body_b));
+    cache.accepted(&psi, &other(body_b), &[]);
     assert_eq!(cache.keys(), key_b, "the check key is content-addressed; the name is metadata");
     // `helper`'s question is dead: asking again renders again.
     assert!(!cache.admits(&psi, &item(body_a)));
     assert_eq!(cache.counts().hashed, 3);
+}
+
+/// A check that opened a sealed theorem proof leaned on that proof's body,
+/// which no interface hash covers, so its verdict is not kept: a warm run
+/// re-checks it, and vouches for everything else
+/// (`issues/theorem-witness-unfolding.md`).
+#[test]
+fn a_verdict_that_opened_a_sealed_proof_is_not_kept() {
+    let src = "record Wit { n: Nat, ok: n = 2 }
+theorem wit(): Wit { Wit(n := 2, ok := refl) }
+theorem wit_two(): wit().n = 2 { refl }
+theorem two_two(): 2 = 2 { refl }
+";
+    let cache = Rc::new(Cache::over(Store::empty("unused".into())));
+    let mut runs = Vec::new();
+    for workers in [1usize, 4, 1] {
+        let mut e = Elaborator::with_prelude().expect("prelude");
+        e.set_kernel_workers(workers);
+        cache.begin_run();
+        e.set_gate(Rc::clone(&cache) as Rc<dyn heather_elab::gate::KernelGate>);
+        let errs = e.check_source(src);
+        assert!(errs.is_empty(), "the fixture must check: {}", errs[0].render(src));
+        runs.push(cache.counts());
+    }
+    let cold = runs[0].clone();
+    for (warm, earlier) in [(&runs[1], &runs[0]), (&runs[2], &runs[1])] {
+        let warm = warm.since(earlier);
+        assert_eq!(warm.checked, 1, "only `wit_two`, which opened `wit`, faces the kernel again");
+        assert_eq!(warm.hits, cold.checked - 1, "every other declaration is vouched for");
+    }
 }
 
 // -- 5. replay ---------------------------------------------------------------

@@ -1534,6 +1534,92 @@ impl GlobalBinding {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct GlobalCtx {
     pub bindings: GlobalBindings,
+    /// Sealed proofs: the bodies of opaque bindings that may be unsealed at
+    /// a stuck elimination (`issues/theorem-witness-unfolding.md`, option D;
+    /// `crate::reduce::Defs::sealed_body`). Not part of any binding, so a
+    /// binding's interface, its equality and its hash are what they were
+    /// before the proof was kept; losing an entry only makes the theorem
+    /// opaque again, never wrong.
+    pub sealed: SealedProofs,
+}
+
+const SEALED_CHUNK: usize = 64;
+
+/// Persistent, index-ordered storage for [`GlobalCtx::sealed`]: `(absolute Ψ
+/// index, proof)` pairs, strictly increasing in the index, chunked the way
+/// [`GlobalBindings`] is so that cloning Ψ stays O(1).
+#[derive(Clone, Default)]
+pub struct SealedProofs {
+    chunks: Rc<Vec<Rc<Vec<(usize, Rc<Term>)>>>>,
+    tail: Rc<Vec<(usize, Rc<Term>)>>,
+}
+
+impl SealedProofs {
+    pub fn len(&self) -> usize {
+        self.chunks.iter().map(|c| c.len()).sum::<usize>() + self.tail.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.tail.is_empty() && self.chunks.is_empty()
+    }
+
+    /// The sealed proof of the binding at absolute index `at`.
+    pub fn get(&self, at: usize) -> Option<&Rc<Term>> {
+        let find = |entries: &'_ [(usize, Rc<Term>)]| {
+            entries.binary_search_by_key(&at, |(i, _)| *i).ok()
+        };
+        if self.tail.first().is_some_and(|(first, _)| *first <= at) {
+            return find(&self.tail).map(|k| &self.tail[k].1);
+        }
+        let c = self.chunks.partition_point(|c| c.first().is_some_and(|(first, _)| *first <= at));
+        let chunk = self.chunks.get(c.checked_sub(1)?)?;
+        find(chunk).map(|k| &chunk[k].1)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (usize, &Rc<Term>)> {
+        self.chunks.iter().flat_map(|c| c.iter()).chain(self.tail.iter()).map(|(i, t)| (*i, t))
+    }
+
+    /// Record `proof` for the binding at `at`, which must be past every index
+    /// already recorded.
+    fn push(&mut self, at: usize, proof: Rc<Term>) {
+        let last = self.tail.last().or_else(|| self.chunks.last().and_then(|c| c.last()));
+        assert!(last.is_none_or(|(i, _)| *i < at), "sealed proofs are recorded in Ψ order");
+        if self.tail.len() == SEALED_CHUNK {
+            let full = std::mem::take(&mut self.tail);
+            Rc::make_mut(&mut self.chunks).push(full);
+        }
+        Rc::make_mut(&mut self.tail).push((at, proof));
+    }
+
+    /// The entries below absolute index `n`.
+    fn prefix(&self, n: usize) -> SealedProofs {
+        if self.iter().all(|(i, _)| i < n) {
+            return self.clone();
+        }
+        let mut out = SealedProofs::default();
+        for (i, t) in self.iter().take_while(|(i, _)| *i < n) {
+            out.push(i, Rc::clone(t));
+        }
+        out
+    }
+}
+
+impl PartialEq for SealedProofs {
+    fn eq(&self, other: &Self) -> bool {
+        self.len() == other.len()
+            && self.iter().zip(other.iter()).all(|((i, a), (j, b))| i == j && (Rc::ptr_eq(a, b) || a == b))
+    }
+}
+
+impl Eq for SealedProofs {}
+
+impl std::fmt::Debug for SealedProofs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The indices only: a proof is a term, and Ψ's `Debug` already prints
+        // every binding.
+        f.debug_list().entries(self.iter().map(|(i, _)| i)).finish()
+    }
 }
 
 const GLOBAL_CHUNK: usize = 64;
@@ -1678,12 +1764,35 @@ impl GlobalBindings {
 impl GlobalCtx {
     /// Ψ from its bindings, outermost first.
     pub fn new(bindings: Vec<GlobalBinding>) -> GlobalCtx {
-        GlobalCtx { bindings: GlobalBindings::new(bindings) }
+        GlobalCtx { bindings: GlobalBindings::new(bindings), sealed: SealedProofs::default() }
     }
 
     /// Append one binding (copy-on-write if this Ψ is shared).
     pub fn push(&mut self, b: GlobalBinding) {
         self.bindings.push(b);
+    }
+
+    /// Append an opaque term binding together with its sealed proof: the
+    /// binding is exactly what [`GlobalCtx::push`] would add, and `proof` is
+    /// kept beside it for [`crate::reduce::Defs::sealed_body`].
+    pub fn push_sealed(&mut self, b: GlobalBinding, proof: Rc<Term>) {
+        let at = self.bindings.len();
+        self.push(b);
+        self.seal(at, proof);
+    }
+
+    /// Keep `proof` as the sealed proof of the binding at absolute index
+    /// `at`. Ignored unless that binding is an opaque term binding; `at` must
+    /// be past every index already sealed.
+    pub fn seal(&mut self, at: usize, proof: Rc<Term>) {
+        if matches!(self.bindings.get(at), Some(GlobalBinding::Tm { body: None, .. })) {
+            self.sealed.push(at, proof);
+        }
+    }
+
+    /// The sealed proof of the binding at absolute index `at`, if one is kept.
+    pub fn sealed_proof(&self, at: usize) -> Option<&Rc<Term>> {
+        self.sealed.get(at)
     }
 
     /// Append several bindings (copy-on-write if this Ψ is shared).
@@ -1705,7 +1814,7 @@ impl GlobalCtx {
 
     /// The first `n` bindings of Ψ, sharing its full chunks.
     pub fn prefix(&self, n: usize) -> GlobalCtx {
-        GlobalCtx { bindings: self.bindings.prefix(n) }
+        GlobalCtx { bindings: self.bindings.prefix(n), sealed: self.sealed.prefix(n) }
     }
 
     /// Share the bounded append tail for an immutable semantic image.

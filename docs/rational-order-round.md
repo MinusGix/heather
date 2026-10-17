@@ -94,9 +94,12 @@ hand. The strict version swaps in the new `Int::mul_lt_mono_r`.
 because the denominator is at least one). `Rat::archimedean_inv(ε, 0 < ε)`
 gives `n` with `1/(n+1) < ε` (the witness is `ε`'s denominator value: with
 `ε = e/r` and `e ≥ 1`, `r < e·(r+1)`). Both are explicit `Exists`
-witnesses. (They only compute since they became `fn`s in
-[regular-cauchy-reals-round](regular-cauchy-reals-round.md); as `theorem`s
-they were opaque.)
+witnesses. They are `theorem`s whose statements carry data, so a client
+that projects the witness computes it
+([theorem-witness-unfolding](../issues/theorem-witness-unfolding.md)).
+Before that landed a `theorem` was opaque and the claim held only of the
+source; [regular-cauchy-reals-round](regular-cauchy-reals-round.md) made
+them `fn`s for a while.
 
 `inv_succ(n)` has its denominator positive by construction (`Pos(n)`), so its
 laws (`inv_succ_pos`, `inv_succ_le_one`, `inv_succ_antitone`, and

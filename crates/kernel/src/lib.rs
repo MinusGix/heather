@@ -19,4 +19,5 @@ pub mod stats;
 pub mod subst;
 pub mod term;
 pub mod typing;
+pub mod unseal;
 pub mod value;

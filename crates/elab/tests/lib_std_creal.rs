@@ -268,7 +268,9 @@ fn strict_order_is_strict() {
 
 #[test]
 fn witnesses_compute() {
-    // The moduli and gaps are `fn`s, so their witnesses evaluate; a wrong
+    // The moduli and gaps are theorems whose statements carry data, so
+    // their sealed proofs open where a projection is stuck on them and the
+    // witnesses evaluate (`issues/theorem-witness-unfolding.md`); a wrong
     // value is refused by the same evaluation.
     let mut e = base();
     check(

@@ -129,30 +129,27 @@ The laws:
   produce an apartness. That step needs no decision at all; `lt_of_not_le`
   is the integers' order.
 
-## Computation: data-carrying proofs are `fn`s
+## Computation: witnesses of theorems evaluate
 
-A `theorem` is opaque (docs/nat-order-design.md §2), so a witness inside an
-`∃` that a theorem proves never evaluates. Every `CReal` declaration whose
-statement carries data is therefore a `fn`. That covers the `≈` builders and
-laws (their start indices), the `<` builders (gap and start), cotransitivity
-(which side), apartness symmetry and cotransitivity, and tightness. Pure
-bounds (`regular_close`, `add_regular`) and negations stay theorems. The
+A `CReal` declaration whose statement carries data is a `theorem` like any
+other proof: the `≈` builders and laws (their start indices), the `<`
+builders (gap and start), cotransitivity (which side), apartness symmetry
+and cotransitivity, and tightness. Their witnesses still compute. A theorem
+whose statement carries data keeps its proof sealed beside its opaque
+binding, and a projection or `match` stuck on it opens the proof
+([theorem-witness-unfolding](../issues/theorem-witness-unfolding.md)). The
 showcase evaluates a sum's term (`sum_term`), a modulus (`add_zero_start`)
 and a gap (`one_gap`) by `refl`, and `lib_std_creal.rs` refuses a wrong
 modulus by the same evaluation.
 
-This also corrects [rational-order-round](rational-order-round.md).
-`Rat::archimedean` and `Rat::archimedean_inv` were `theorem`s, so the claim
-that their explicit witnesses "compute" was only true of the source. They
-are `fn`s now, and `one_gap` shows the witness flowing through `ofRat_lt`.
-
-Writing proofs as `fn`s is a workaround. It makes the author guess, at
-definition time, whether anyone will compute with a proof, and it gives up
-the edit firewall a theorem's opacity provides.
-[theorem-witness-unfolding](../issues/theorem-witness-unfolding.md) owns the
-alternative: theorems keep sealed bodies, and the declaration that computes
-with one unfolds it and records the dependency. Once that lands, these go
-back to being `theorem`s.
+The round first wrote these proofs as `fn`s, because a `theorem` was then
+opaque. That made the author guess, at definition time, whether anyone
+would compute with a proof, and gave up the edit firewall for every one of
+them. Now only the declarations that open a proof re-check when it is
+edited. The same correction applies to
+[rational-order-round](rational-order-round.md): `Rat::archimedean` and
+`Rat::archimedean_inv` are theorems again, and `one_gap` shows the witness
+flowing through `ofRat_lt`.
 
 ## Assumption inventory
 
@@ -216,7 +213,7 @@ of them (logged on
   ([creal-multiplication](../issues/creal-multiplication.md)).
   Multiplication needs a canonical bound per argument (an integer above
   every term, e.g. `|x_0| + 2`) and reads index 2K(n+1)-1. The inverse of a
-  real apart from zero reads its gap, which is a `fn` now, so it computes.
+  real apart from zero reads its gap, which computes although it is a theorem.
 - **`≤` and the Bishop bridge**
   ([creal-order-and-bishop-bridge](../issues/creal-order-and-bishop-bridge.md)).
   This adds `≤` as `¬(y < x)`, its laws, and the converse bridge to

@@ -660,7 +660,7 @@ theorem Rat::inv_succ_half(n: Nat): Rat::inv_succ(n + n + 1) + Rat::inv_succ(n +
 }
 
 // Every rational is below some integer: x = a/p < |a| + 1, because p ≥ 1.
-fn Rat::archimedean(self x: Rat) → ∃ n: Nat, x < Rat::ofInt(OfNat(n)) {
+theorem Rat::archimedean(self x: Rat): ∃ n: Nat, x < Rat::ofInt(OfNat(n)) {
     let a = x.num;
     let p = x.den.int();
     let above = a.le_abs();
@@ -671,7 +671,7 @@ fn Rat::archimedean(self x: Rat) → ∃ n: Nat, x < Rat::ofInt(OfNat(n)) {
 
 // Every positive rational is above some 1/(n+1): with ε = e/r and e ≥ 1,
 // 1/(r+1) < e/r because r < e·(r+1).
-fn Rat::archimedean_inv(self eps: Rat, h: Rat::zero() < eps) → ∃ n: Nat, Rat::inv_succ(n) < eps {
+theorem Rat::archimedean_inv(self eps: Rat, h: Rat::zero() < eps): ∃ n: Nat, Rat::inv_succ(n) < eps {
     let e = eps.num;
     let r = eps.den.int();
     let zr = Int::zero_mul(r);

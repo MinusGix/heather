@@ -699,28 +699,37 @@ fn lookup(psi: &GlobalCtx, v: GlobalVar) -> Option<&GlobalBinding> {
 /// through, minus `transp`'s proof — that head belongs to [`Conv::strip`],
 /// which runs after the δ-lazy stage.
 fn delta_head(t: &Term, defs: Defs<'_>) -> Option<GlobalVar> {
+    delta_head_in(t, defs, false)
+}
+
+/// [`delta_head`], knowing whether an elimination that unseals is waiting on
+/// `t`: under one, a sealed theorem's application is δ-stuck too, since
+/// stepping the elimination unseals it (`reduce::step_scrut`).
+fn delta_head_in(t: &Term, defs: Defs<'_>, eliminated: bool) -> Option<GlobalVar> {
     match t {
-        Term::GlobalTm { var, .. } => defs.is_defined(*var).then_some(*var),
+        Term::GlobalTm { var, .. } => {
+            (defs.is_defined(*var) || (eliminated && defs.is_sealed(*var))).then_some(*var)
+        }
         Term::ElimNat { scrut, .. }
         | Term::ElimEmpty { scrut, .. }
-        | Term::ElimSEmpty { scrut, .. }
         | Term::Case { scrut, .. }
         | Term::ElimW { scrut, .. }
-        | Term::ElimWf { scrut, .. }
+        | Term::ElimWf { scrut, .. } => delta_head_in(scrut, defs, true),
+        Term::ElimSEmpty { scrut, .. }
         | Term::LetBoxTy { scrut, .. }
         | Term::LetBoxTm { scrut, .. }
         | Term::ElimCodeTy { scrut, .. }
-        | Term::ElimCodeTm { scrut, .. } => delta_head(scrut, defs),
-        Term::J { proof, .. } => delta_head(proof, defs),
+        | Term::ElimCodeTm { scrut, .. } => delta_head_in(scrut, defs, false),
+        Term::J { proof, .. } => delta_head_in(proof, defs, true),
         Term::Fst { pair, .. }
         | Term::Snd { pair, .. }
         | Term::FstAt { pair }
-        | Term::SndAt { pair } => delta_head(pair, defs),
+        | Term::SndAt { pair } => delta_head_in(pair, defs, true),
         Term::App { fun, .. }
         | Term::AppAt { fun, .. }
         | Term::UApp { fun, .. }
         | Term::CtxApp { fun, .. }
-        | Term::TyApp { fun, .. } => delta_head(fun, defs),
+        | Term::TyApp { fun, .. } => delta_head_in(fun, defs, eliminated),
         _ => None,
     }
 }
@@ -784,10 +793,10 @@ struct Conv<'v, D: Dom<'v>> {
 
 impl<'v, D: Dom<'v>> Conv<'v, D> {
     fn new(fuel: u64, psi: &GlobalCtx) -> Conv<'v, D> {
-        let has_defs = psi
-            .bindings
-            .iter()
-            .any(|b| matches!(b, GlobalBinding::Tm { body: Some(_), .. }));
+        // A sealed proof unfolds where an elimination is stuck on it, through
+        // the same δ stage (`reduce::Defs::sealed_body`).
+        let has_defs = !psi.sealed.is_empty()
+            || psi.bindings.iter().any(|b| matches!(b, GlobalBinding::Tm { body: Some(_), .. }));
         Conv { fuel, has_defs, memo: HashMap::new(), depth: 0, _dom: PhantomData }
     }
 

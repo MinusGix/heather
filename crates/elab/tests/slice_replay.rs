@@ -135,6 +135,67 @@ fn a_proof_body_edit_replays_the_declarations_after_it() {
     same_as_fresh(&previous, &edited, SliceReport { replayed: 4, elaborated: 1, forced: 0 }, "proof edit");
 }
 
+/// A theorem whose statement carries data keeps its proof sealed, and a
+/// declaration that projects its witness opens it
+/// (`issues/theorem-witness-unfolding.md`). `WIT_B` is another proof of the
+/// same statement with the same witness, so every opener still checks.
+const WIT_REC: &str = "record Wit { n: Nat, ok: n = 2 }";
+const WIT_A: &str = "theorem wit(): Wit { Wit(n := 2, ok := refl) }";
+const WIT_B: &str = "theorem wit(): Wit { Wit(n := add(1, 1), ok := refl) }";
+const OPENER: &str = "theorem wit_two(): wit().n = 2 { refl }";
+
+/// The firewall still holds for a sealed proof nobody opened: editing it
+/// re-elaborates only the theorem itself.
+#[test]
+fn an_unopened_sealed_proof_edit_replays_the_declarations_after_it() {
+    let (_, previous) = fresh(1, &module(&[ADD, WIT_REC, WIT_A, DOUBLE, TRIPLE]));
+    let edited = module(&[ADD, WIT_REC, WIT_B, DOUBLE, TRIPLE]);
+    same_as_fresh(&previous, &edited, SliceReport { replayed: 4, elaborated: 1, forced: 0 }, "unopened sealed proof");
+}
+
+/// Editing a sealed proof re-elaborates exactly the declarations that opened
+/// it: the opener computed with the old proof, the rest did not.
+#[test]
+fn an_opened_sealed_proof_edit_re_elaborates_its_openers() {
+    let (_, previous) = fresh(1, &module(&[ADD, WIT_REC, WIT_A, OPENER, DOUBLE, TRIPLE]));
+    let opener = previous.items().iter().find(|i| i.source == OPENER).expect("the opener's slice");
+    assert!(!opener.unsealed.is_empty(), "the opener records the proof it opened");
+    let others = previous.items().iter().filter(|i| i.source != OPENER);
+    assert!(others.clone().all(|i| i.unsealed.is_empty()), "nothing else opens a proof");
+    let edited = module(&[ADD, WIT_REC, WIT_B, OPENER, DOUBLE, TRIPLE]);
+    same_as_fresh(&previous, &edited, SliceReport { replayed: 4, elaborated: 2, forced: 0 }, "opened sealed proof");
+}
+
+/// A module that opened a dependency's sealed proof is not replayed whole
+/// over a dependency whose proof changed under the same statement: the
+/// interface is the same, the computation is not. Over the same proof it is.
+#[test]
+fn a_module_image_that_opened_a_changed_dependency_proof_is_a_miss() {
+    let dep = |wit: &str| module(&[ADD, WIT_REC, wit]);
+    let client = "import d;\ntheorem wit_two(): wit().n = 2 { refl }\nfn after() -> Nat { 3 }\n";
+    let with_dep = |wit: &str| {
+        let mut e = elaborator(1);
+        e.check_module_delta("d", &dep(wit), ModuleDependencyIdentity::default()).expect("the dependency checks");
+        e
+    };
+    let mut first = with_dep(WIT_A);
+    let delta = first.check_module_delta("c", client, ModuleDependencyIdentity::default()).expect("the client checks");
+    assert_eq!(delta.opened_dependency_indices().count(), 1, "the client opened `wit`");
+    let mut same = with_dep(WIT_A);
+    assert!(same.replay_module_delta(&delta, &ModuleDependencyIdentity::default()).is_ok());
+    let mut changed = with_dep(WIT_B);
+    assert!(matches!(
+        changed.replay_module_delta(&delta, &ModuleDependencyIdentity::default()),
+        Err(heather_elab::ModuleReplayError::OpenedProofChanged)
+    ));
+    // The slice path then re-elaborates the opener alone; the import and
+    // `after` replay.
+    let (_, report) = changed
+        .check_module_delta_from("c", client, ModuleDependencyIdentity::default(), &delta)
+        .expect("the client checks over the new proof");
+    assert_eq!(report, SliceReport { replayed: 2, elaborated: 1, forced: 0 });
+}
+
 /// Two proof edits: the prefix is restored after each, so only the two
 /// theorems are elaborated.
 #[test]
@@ -380,7 +441,7 @@ impl heather_elab::gate::KernelGate for VouchesForNothing {
     fn admits(&self, _psi: &heather_kernel::term::GlobalCtx, _item: &heather_elab::gate::GateItem<'_>) -> bool {
         false
     }
-    fn accepted(&self, _psi: &heather_kernel::term::GlobalCtx, _item: &heather_elab::gate::GateItem<'_>) {}
+    fn accepted(&self, _psi: &heather_kernel::term::GlobalCtx, _item: &heather_elab::gate::GateItem<'_>, _unsealed: &[usize]) {}
 }
 
 /// A proof the elaborator lets through and the kernel refuses, edited into

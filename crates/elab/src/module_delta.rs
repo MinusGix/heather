@@ -9,7 +9,7 @@ use std::fmt;
 use std::sync::Arc as Rc;
 
 use heather_kernel::level::Level;
-use heather_kernel::term::{GlobalBinding, GlobalCtx, Type};
+use heather_kernel::term::{GlobalBinding, GlobalCtx, Term, Type};
 use heather_kernel::typing::{self, TypeError};
 use heather_syntax::OpFixity;
 
@@ -48,6 +48,18 @@ pub struct ModuleDelta {
     pub(crate) dependencies: ModuleDependencyIdentity,
     pub(crate) dependency_psi: GlobalCtx,
     pub(crate) extension: Vec<GlobalBinding>,
+    /// The sealed proofs of the extension's theorems, by extension index,
+    /// ascending (`issues/theorem-witness-unfolding.md`): kept beside the
+    /// bindings exactly as Ψ keeps them, never in one. Part of the semantic
+    /// image and not of the interface, since a dependent observes a proof
+    /// only by opening it, and records that it did.
+    pub(crate) sealed: Vec<(usize, Rc<Term>)>,
+    /// The dependency prefix's sealed proofs this module's items opened, by
+    /// absolute Ψ index, as they were when they were opened. A replay over a
+    /// prefix whose proof at one of these indices differs is not a replay
+    /// of what was checked: the module is rebuilt (`replay_module_delta`),
+    /// or only the items that opened it are (`slice_enter`).
+    pub(crate) opened_dependencies: Vec<(usize, Rc<Term>)>,
     pub(crate) scope: Scope,
     pub(crate) events: Vec<DeltaEvent>,
     /// One slice per item of the source file, in order: the ranges of
@@ -78,6 +90,10 @@ pub struct ItemSlice {
     pub psi: std::ops::Range<usize>,
     pub events: std::ops::Range<usize>,
     pub warnings: std::ops::Range<usize>,
+    /// The sealed proofs elaborating and checking the item opened, by
+    /// absolute Ψ index, ascending (`heather_kernel::unseal`). The item's
+    /// slice replays only while every one of them is unchanged.
+    pub unsealed: Vec<usize>,
 }
 
 /// What a sliced pass did with the previous delta's items.
@@ -105,6 +121,12 @@ pub(crate) struct SlicePlan {
     /// the pass actually saw, so the caller can name the ones it did not.
     pub(crate) force: std::collections::BTreeSet<String>,
     pub(crate) met: std::collections::BTreeSet<String>,
+    /// Absolute Ψ indices whose sealed proof differs from the one the
+    /// previous delta's world had: a theorem whose proof was edited, in this
+    /// module or a dependency. The prefix can be exact with these present —
+    /// a theorem's binding leaves its proof out — and an old slice that
+    /// opened one of them is elaborated instead of replayed.
+    pub(crate) changed: std::collections::BTreeSet<usize>,
 }
 
 /// The journal's marks at an item's start, taken relative to the module's
@@ -119,6 +141,27 @@ pub(crate) struct SliceMark {
 impl ModuleDelta {
     pub fn module(&self) -> &str {
         &self.module
+    }
+
+    /// The sealed proof of the extension's binding at index `k`.
+    pub(crate) fn sealed_at(&self, k: usize) -> Option<&Rc<Term>> {
+        self.sealed.binary_search_by_key(&k, |(i, _)| *i).ok().map(|i| &self.sealed[i].1)
+    }
+
+    /// The sealed proofs of the extension range `range`, re-indexed from its
+    /// start, as [`Elaborator::recheck_extension`] takes them.
+    pub(crate) fn sealed_in(&self, range: std::ops::Range<usize>) -> Vec<(usize, Rc<Term>)> {
+        self.sealed
+            .iter()
+            .filter(|(i, _)| range.contains(i))
+            .map(|(i, t)| (i - range.start, Rc::clone(t)))
+            .collect()
+    }
+
+    /// The dependency proofs this module computed with
+    /// ([`ModuleDelta::opened_dependencies`]), by absolute Ψ index.
+    pub fn opened_dependency_indices(&self) -> impl Iterator<Item = usize> + '_ {
+        self.opened_dependencies.iter().map(|(i, _)| *i)
     }
 
     pub fn binding_count(&self) -> usize {
@@ -209,6 +252,21 @@ impl ModuleDelta {
     }
 }
 
+/// Append `bindings` to `psi` with the sealed proofs `sealed` (indexed from
+/// the first of them) kept beside their theorems.
+pub(crate) fn extend_sealed(psi: &mut GlobalCtx, bindings: &[GlobalBinding], sealed: &[(usize, Rc<Term>)]) {
+    let base = psi.bindings.len();
+    psi.extend(bindings.iter().cloned());
+    for (k, proof) in sealed {
+        psi.seal(base + k, Rc::clone(proof));
+    }
+}
+
+/// Two sealed proofs are the same proof: one allocation, or equal terms.
+pub(crate) fn same_proof(a: &Rc<Term>, b: &Rc<Term>) -> bool {
+    Rc::ptr_eq(a, b) || a == b
+}
+
 #[derive(Debug)]
 pub enum ModuleReplayError {
     DependencyIdentity,
@@ -216,6 +274,10 @@ pub enum ModuleReplayError {
     Kernel(TypeError),
     KernelWorkerPanicked,
     MetadataConflict(&'static str),
+    /// A dependency theorem's sealed proof that the module opened is not the
+    /// proof it opened (`ModuleDelta::opened_dependencies`): an ordinary
+    /// miss — the statement is the same, the computation is not.
+    OpenedProofChanged,
 }
 
 impl fmt::Display for ModuleReplayError {
@@ -231,6 +293,9 @@ impl fmt::Display for ModuleReplayError {
             }
             Self::MetadataConflict(registry) => {
                 write!(f, "stored module metadata conflicts with the accepted {registry} registry")
+            }
+            Self::OpenedProofChanged => {
+                write!(f, "a dependency theorem the module computed with has a different proof")
             }
         }
     }
@@ -311,11 +376,22 @@ pub(crate) struct ModuleJournal {
     pub(crate) base_warnings: usize,
     pub(crate) items: Vec<ItemSlice>,
     pub(crate) scope_at_entry: Option<Scope>,
+    /// Sealed proofs opened by kernel checks that ran on the pool, keyed by
+    /// the Ψ length each was queued at, charged to their items' slices when
+    /// the delta is built (a join may come after the item's slice closed).
+    pub(crate) deferred_unseals: Vec<(usize, Vec<usize>)>,
 }
 
 impl ModuleJournal {
     fn new(base_psi: usize, base_warnings: usize) -> Self {
-        Self { events: Vec::new(), base_psi, base_warnings, items: Vec::new(), scope_at_entry: None }
+        Self {
+            events: Vec::new(),
+            base_psi,
+            base_warnings,
+            items: Vec::new(),
+            scope_at_entry: None,
+            deferred_unseals: Vec::new(),
+        }
     }
 
     fn lengths(&self) -> (usize, usize) {
@@ -600,16 +676,37 @@ impl Elaborator {
         dependency_psi: GlobalCtx,
         journal: ModuleJournal,
     ) -> ModuleDelta {
-        let extension = self.psi.bindings.iter().skip(journal.base_psi).cloned().collect();
+        let base = journal.base_psi;
+        let extension = self.psi.bindings.iter().skip(base).cloned().collect();
         let warnings = self.warnings.borrow()[journal.base_warnings..].to_vec();
+        let sealed = self.psi.sealed.iter().filter(|(i, _)| *i >= base).map(|(i, t)| (i - base, Rc::clone(t))).collect();
+        let mut items = journal.items;
+        // A proof checked on the pool belongs to the item that queued it:
+        // the last slice that had begun at the Ψ length it was queued at.
+        for (at, opened) in journal.deferred_unseals {
+            let k = items.iter().rposition(|slice| base + slice.psi.start <= at);
+            if let Some(slice) = k.and_then(|k| items.get_mut(k)) {
+                slice.unsealed.extend(opened);
+                slice.unsealed.sort_unstable();
+                slice.unsealed.dedup();
+            }
+        }
+        let opened: std::collections::BTreeSet<usize> =
+            items.iter().flat_map(|slice| slice.unsealed.iter().copied()).filter(|i| *i < base).collect();
+        let opened_dependencies = opened
+            .into_iter()
+            .filter_map(|i| Some((i, Rc::clone(dependency_psi.sealed_proof(i)?))))
+            .collect();
         ModuleDelta {
             module: module.to_string(),
             dependencies,
             dependency_psi,
             extension,
+            sealed,
+            opened_dependencies,
             scope: self.names.scope().clone(),
             events: journal.events,
-            items: journal.items,
+            items,
             warnings,
             scope_at_entry: journal.scope_at_entry,
         }
@@ -656,6 +753,7 @@ impl Elaborator {
             report: SliceReport::default(),
             force,
             met: Default::default(),
+            changed: Default::default(),
         });
         let result = self.check_module_delta(module, src, dependencies);
         let plan = self.slice_plan.take().expect("the slice plan was installed");
@@ -694,9 +792,19 @@ impl Elaborator {
             && previous.scope_at_entry.as_ref() == Some(&scope)
             && previous.dependency_psi.bindings.len() == self.psi.bindings.len()
             && previous.dependency_psi.bindings.iter().eq(self.psi.bindings.iter());
+        // A dependency theorem whose proof changed under an unchanged
+        // statement leaves the prefix exact; only the items that opened it
+        // have to be elaborated again.
+        let changed = previous
+            .opened_dependencies
+            .iter()
+            .filter(|(i, old)| self.psi.sealed_proof(*i).is_none_or(|now| !same_proof(now, old)))
+            .map(|(i, _)| *i)
+            .collect();
         let plan = self.slice_plan.as_mut().expect("checked above");
         plan.exact = exact;
         plan.report = SliceReport::default();
+        plan.changed = changed;
     }
 
     pub(crate) fn slice_begin(&self) -> Option<SliceMark> {
@@ -714,14 +822,33 @@ impl Elaborator {
     /// landed, and keep the plan's `exact` flag honest: it means the prefix
     /// through the items completed so far equals the previous delta's, so
     /// the next item may replay its slice (§4).
-    pub(crate) fn slice_end(&mut self, mark: SliceMark, source: String, start: usize, replayed: bool) {
+    pub(crate) fn slice_end(
+        &mut self,
+        mark: SliceMark,
+        source: String,
+        start: usize,
+        replayed: bool,
+        unsealed: Vec<usize>,
+    ) {
         let Some(begun) = self.slice_begin() else { return };
+        let mut unsealed = unsealed;
+        if replayed {
+            // A replayed slice computed with what its first elaboration
+            // opened, whatever its recheck opened now.
+            let index = self.module_journal.borrow().as_ref().map_or(0, |j| j.items.len());
+            if let Some(old) = self.slice_plan.as_ref().and_then(|p| p.previous.items.get(index)) {
+                unsealed.extend(old.unsealed.iter().copied());
+                unsealed.sort_unstable();
+                unsealed.dedup();
+            }
+        }
         let slice = ItemSlice {
             source,
             start,
             psi: mark.psi..begun.psi,
             events: mark.events..begun.events,
             warnings: mark.warnings..begun.warnings,
+            unsealed,
         };
         let index = {
             let mut journal = self.module_journal.borrow_mut();
@@ -755,7 +882,28 @@ impl Elaborator {
         });
         if !same {
             self.slice_plan.as_mut().expect("checked above").exact = false;
+            return;
         }
+        // The same bindings and events: the prefix stays exact. A theorem
+        // whose proof was edited is the case this exists for, and the
+        // later items that opened that proof are the ones that must not
+        // replay.
+        let base = self.module_journal.borrow().as_ref().map_or(0, |j| j.base_psi);
+        let old = &previous.items[index];
+        let mut changed = Vec::new();
+        for k in 0..slice.psi.len() {
+            let before = previous.sealed_at(old.psi.start + k);
+            let now = self.psi.sealed_proof(base + slice.psi.start + k);
+            let same = match (before, now) {
+                (None, None) => true,
+                (Some(a), Some(b)) => same_proof(a, b),
+                _ => false,
+            };
+            if !same {
+                changed.push(base + slice.psi.start + k);
+            }
+        }
+        self.slice_plan.as_mut().expect("checked above").changed.extend(changed);
     }
 
     /// Try to reproduce item `index` from the previous delta's slice. `true`
@@ -773,6 +921,13 @@ impl Elaborator {
         let Some(old) = previous.items.get(index).filter(|old| old.source == source) else {
             return false;
         };
+        // An item that opened a proof which has changed since is elaborated
+        // again: what it computed with is not what it would compute with
+        // now. Its text is unchanged, so this does not break the prefix;
+        // `slice_end` decides that from what it contributes.
+        if old.unsealed.iter().any(|i| plan.changed.contains(i)) {
+            return false;
+        }
         // Not in a `session_transaction`: `replay_slice` fails only before its
         // first write, so a refused slice leaves nothing to roll back. A
         // checkpoint would be worse than redundant — holding the committed
@@ -812,9 +967,10 @@ impl Elaborator {
         start: usize,
     ) -> Result<(), ModuleReplayError> {
         let bindings = &previous.extension[slice.psi.clone()];
+        let sealed = previous.sealed_in(slice.psi.clone());
         // Inline, whatever the pool's width: the pool holds the bodies of the
         // items elaborated around this one, and their join is the module's.
-        self.recheck_extension(&previous.module, bindings, false)?;
+        self.recheck_extension(&previous.module, bindings, &sealed, false)?;
         // The item's text is unchanged but may sit elsewhere in the file:
         // every span the slice carries moves with it.
         let offset = start as i64 - slice.start as i64;
@@ -823,7 +979,7 @@ impl Elaborator {
         for event in &events {
             self.preflight_module_event(event)?;
         }
-        self.psi.extend(bindings.iter().cloned());
+        extend_sealed(&mut self.psi, bindings, &sealed);
         for event in events {
             // Applying an event records it again, so the new delta's journal
             // carries this slice as it would a fresh elaboration's.
@@ -891,14 +1047,24 @@ impl Elaborator {
         if self.psi.bindings.iter().ne(delta.dependency_psi.bindings.iter()) {
             return Err(ModuleReplayError::DependencyKernelPrefix);
         }
+        // The module computed with these dependency proofs; a dependency
+        // whose proof changed under the same statement has the same
+        // interface, so this is the one place that notices.
+        if delta
+            .opened_dependencies
+            .iter()
+            .any(|(i, old)| self.psi.sealed_proof(*i).is_none_or(|now| !same_proof(now, old)))
+        {
+            return Err(ModuleReplayError::OpenedProofChanged);
+        }
         if !self.names.valid_exports(&delta.scope) {
             return Err(ModuleReplayError::MetadataConflict("reexports"));
         }
-        self.recheck_extension(&delta.module, &delta.extension, true)?;
+        self.recheck_extension(&delta.module, &delta.extension, &delta.sealed, true)?;
 
         let mut candidate = self.semantic_image().elaborator();
         candidate.names.enter_scope(delta.scope.clone());
-        candidate.psi.extend(delta.extension.iter().cloned());
+        extend_sealed(&mut candidate.psi, &delta.extension, &delta.sealed);
         // Check every operation against the dependency world before applying
         // any of them. Some one-module commits intentionally share a logical
         // name across correlated registries; intra-delta duplicates were
@@ -949,6 +1115,7 @@ impl Elaborator {
         &mut self,
         module: &str,
         extension: &[GlobalBinding],
+        sealed: &[(usize, Rc<Term>)],
         on_pool: bool,
     ) -> Result<(), ModuleReplayError> {
         let gate = self.gate.clone();
@@ -956,7 +1123,10 @@ impl Elaborator {
         // a slice replay runs inside a module pass whose own deferred bodies
         // are on the pool, and a join here would consume their outcomes.
         let inline = self.kernel_pool.is_inline() || !on_pool;
-        if gate.is_none() && inline {
+        // The one-call form checks bindings alone, and a definition that
+        // computes with an earlier theorem's witness needs its sealed proof
+        // in the prefix: with any, take the per-binding loop below.
+        if gate.is_none() && inline && sealed.is_empty() {
             return typing::check_global_ctx_extension(&self.psi, extension, 0, self.fuel)
                 .map_err(ModuleReplayError::Kernel);
         }
@@ -992,15 +1162,17 @@ impl Elaborator {
                 }
                 if let Some(item) = &body {
                     if inline {
-                        let verdict = typing::check_term(
-                            &prefix, 0, item.layer, item.ctx, item.body, item.ty, item.level, self.fuel,
-                        );
+                        let (verdict, unsealed) = heather_kernel::unseal::record(|| {
+                            typing::check_term(
+                                &prefix, 0, item.layer, item.ctx, item.body, item.ty, item.level, self.fuel,
+                            )
+                        });
                         if let Err(e) = verdict {
                             statement = Err(ModuleReplayError::Kernel(e));
                             break;
                         }
                         if let Some(g) = &gate {
-                            g.accepted(&prefix, item);
+                            g.accepted(&prefix, item, &unsealed);
                         }
                     } else {
                         self.kernel_pool.submit(pool::Deferred {
@@ -1015,13 +1187,19 @@ impl Elaborator {
                             layer: item.layer,
                             lands_in_psi: true,
                             fuel: self.fuel,
+                            unsealed: Vec::new(),
                             row: None,
                         });
                     }
                 }
             }
             drop(body);
-            crate::stats::make_mut(&mut prefix).push(binding.clone());
+            let at = prefix.bindings.len();
+            let psi = crate::stats::make_mut(&mut prefix);
+            psi.push(binding.clone());
+            if let Ok(k) = sealed.binary_search_by_key(&index, |(k, _)| *k) {
+                psi.seal(at, Rc::clone(&sealed[k].1));
+            }
         }
         // Join even after a statement failure: the pool must be drained before
         // the caller moves on, and a body verdict is still a verdict. But only
@@ -1070,6 +1248,7 @@ impl Elaborator {
                                 layer: item.layer,
                                 lands_in_psi: item.lands_in_psi,
                             },
+                            &outcome.unsealed,
                         );
                     }
                 }

@@ -327,6 +327,13 @@ pub struct ValueArena<'v> {
     /// on every opaque `Nat` fold's step: the default hasher over five words
     /// was a 1.27× constant on `nat/step-once`.
     transducers: RefCell<PtrMap<(CloId, CloId), Option<Rc<Transducer>>>>,
+    /// The closures that glue a sealed theorem proof to its use
+    /// (`Eval::unseal`), with the proof's absolute Ψ index: forcing one is
+    /// the unsealing, recorded then (`crate::unseal`). Rare — one per stuck
+    /// elimination on a sealed theorem — so a list, and `sealed_any` keeps
+    /// the check off every other force.
+    sealed_glues: RefCell<Vec<(*const TmClo<'v>, usize)>>,
+    sealed_any: Cell<bool>,
     envs: Arena<EnvNode<'v>>,
     levels: Arena<Level>,
     elims: Arena<ElimNode<'v>>,
@@ -704,6 +711,8 @@ impl<'v> ValueArena<'v> {
             bit_types: RefCell::new(HashMap::new()),
             bit_tys: std::cell::OnceCell::new(),
             transducers: RefCell::new(PtrMap::default()),
+            sealed_glues: RefCell::new(Vec::new()),
+            sealed_any: Cell::new(false),
             envs: Arena::new(),
             levels: Arena::new(),
             elims: Arena::new(),
@@ -725,6 +734,8 @@ impl<'v> ValueArena<'v> {
                 bit_types: RefCell::new(HashMap::new()),
                 bit_tys: std::cell::OnceCell::new(),
                 transducers: RefCell::new(PtrMap::default()),
+                sealed_glues: RefCell::new(Vec::new()),
+                sealed_any: Cell::new(false),
                 envs: Arena::new(),
                 levels: Arena::new(),
                 elims: Arena::new(),
@@ -821,6 +832,21 @@ impl<'v> ValueArena<'v> {
         class: Option<Rc<Transducer>>,
     ) {
         self.transducers.borrow_mut().insert((step.ident(), motive.ident()), class);
+    }
+
+    /// `clo` glues the sealed proof at absolute Ψ index `at`.
+    pub(crate) fn mark_sealed(&self, clo: &'v TmClo<'v>, at: usize) {
+        self.sealed_glues.borrow_mut().push((clo as *const TmClo<'v>, at));
+        self.sealed_any.set(true);
+    }
+
+    /// The sealed proof `clo` glues, if it glues one.
+    pub(crate) fn sealed_glue(&self, clo: &'v TmClo<'v>) -> Option<usize> {
+        if !self.sealed_any.get() {
+            return None;
+        }
+        let key = clo as *const TmClo<'v>;
+        self.sealed_glues.borrow().iter().find(|(c, _)| *c == key).map(|(_, at)| *at)
     }
 
     pub fn memo_tm(&self, clo: &'v TmClo<'v>) -> Option<Rc<Val<'v>>> {
@@ -1877,6 +1903,24 @@ impl Elim<'_> {
     /// a neutral's spine without ever being *stuck* on its head.
     pub fn is_application(&self) -> bool {
         matches!(self, Elim::App { .. } | Elim::UApp { .. } | Elim::CtxApp { .. } | Elim::TyApp { .. })
+    }
+
+    /// An elimination that unseals a sealed theorem it is stuck on
+    /// (`issues/theorem-witness-unfolding.md`, option D): any that can
+    /// compute with what a proof built. Applications only extend the spine;
+    /// `transp` and `elim_sEmpty` eliminate strict propositions, whose
+    /// proofs never compute (`reduce::step_scrut` makes the same choice).
+    pub fn unseals(&self) -> bool {
+        !self.is_application()
+            && !matches!(
+                self,
+                Elim::Transp { .. }
+                    | Elim::ElimSEmpty { .. }
+                    | Elim::LetBoxTy { .. }
+                    | Elim::LetBoxTm { .. }
+                    | Elim::ElimCodeTy { .. }
+                    | Elim::ElimCodeTm { .. }
+            )
     }
 
     /// A stable name for the elimination form — the head discriminant a
