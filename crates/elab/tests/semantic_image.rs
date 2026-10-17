@@ -302,3 +302,45 @@ theorem refines(a: Bin, b: Bin):
         .expect("replayed repr metadata is observable");
     assert_eq!(replayed.psi(), source.psi());
 }
+
+/// A module image keeps its sealed theorem proofs as their encoding
+/// (`issues/sealed-proof-memory.md`): replaying the image loads none of
+/// them, writing the image again copies the bytes without loading them, and
+/// a downstream declaration that projects a witness loads exactly that
+/// proof and computes with it as a cold run would.
+#[test]
+fn a_replayed_image_loads_a_sealed_proof_only_where_it_is_opened() {
+    use heather_elab::{ModuleDelta, ModuleImageLimits};
+
+    let module = r#"
+record Wit { n: Nat, ok: n = 2 }
+theorem wit(): Wit { Wit(n := 2, ok := refl) }
+theorem other(): Wit { Wit(n := 2, ok := refl) }
+"#;
+    let identity = ModuleDependencyIdentity::default();
+    let mut source = Elaborator::with_prelude().unwrap();
+    let base = source.psi().bindings.len();
+    let delta = source.elab_module_delta("wit", module, identity.clone()).expect("extract the witnesses");
+    let bytes = delta.to_image_bytes();
+    let decoded = ModuleDelta::from_image_bytes(&bytes, Elaborator::with_prelude().unwrap().psi().clone(), ModuleImageLimits::default())
+        .expect("decode the image");
+    assert_eq!(decoded.to_image_bytes(), bytes, "an unloaded proof is written back as it was read");
+
+    let mut replayed = Elaborator::with_prelude().unwrap();
+    replayed.replay_module_delta(&decoded, &identity).unwrap();
+    let kept: Vec<usize> = replayed.psi().sealed.iter().map(|(i, _)| i).filter(|i| *i >= base).collect();
+    assert_eq!(kept.len(), 2, "both witnesses carry data, so both proofs are kept");
+    let loaded = |e: &Elaborator| kept.iter().map(|i| e.psi().sealed_kept(*i).unwrap().loaded().is_some()).collect::<Vec<_>>();
+    assert_eq!(loaded(&replayed), [false, false], "a replay opens nothing");
+
+    let downstream = "import wit;\ntheorem wit_two(): wit().n = 2 { refl }\n";
+    replayed.elab_module_source("user", downstream).expect("the replayed witness computes");
+    assert_eq!(loaded(&replayed), [true, false], "only `wit`, which `wit_two` projects, is loaded");
+    source.elab_module_source("user", downstream).expect("the cold witness computes");
+    assert_eq!(replayed.psi(), source.psi());
+
+    // Negative control: the loaded witness is 2, not 3.
+    let mut wrong = Elaborator::with_prelude().unwrap();
+    wrong.replay_module_delta(&decoded, &identity).unwrap();
+    assert!(wrong.elab_module_source("user", "import wit;\ntheorem wit_three(): wit().n = 3 { refl }\n").is_err());
+}

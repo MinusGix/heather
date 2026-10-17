@@ -9,7 +9,7 @@ use std::fmt;
 use std::sync::Arc as Rc;
 
 use heather_kernel::level::Level;
-use heather_kernel::term::{GlobalBinding, GlobalCtx, Term, Type};
+use heather_kernel::term::{GlobalBinding, GlobalCtx, SealedProof, Type};
 use heather_kernel::typing::{self, TypeError};
 use heather_syntax::OpFixity;
 
@@ -22,6 +22,7 @@ use crate::resolve::DerivedInst;
 use crate::slots::Slot;
 use crate::traits::{ClassInfo, DesignationInfo, EvidenceRule, InstanceInfo, InstKey};
 use crate::{pool, stats, ElabError, Elaborator, R};
+use crate::module_image::same_proof;
 
 /// Ordered dependency-interface identities supplied by the module loader.
 /// The digest algorithm lives outside the elaborator; these stable bytes are
@@ -53,13 +54,13 @@ pub struct ModuleDelta {
     /// bindings exactly as Ψ keeps them, never in one. Part of the semantic
     /// image and not of the interface, since a dependent observes a proof
     /// only by opening it, and records that it did.
-    pub(crate) sealed: Vec<(usize, Rc<Term>)>,
+    pub(crate) sealed: Vec<(usize, Rc<SealedProof>)>,
     /// The dependency prefix's sealed proofs this module's items opened, by
     /// absolute Ψ index, as they were when they were opened. A replay over a
     /// prefix whose proof at one of these indices differs is not a replay
     /// of what was checked: the module is rebuilt (`replay_module_delta`),
     /// or only the items that opened it are (`slice_enter`).
-    pub(crate) opened_dependencies: Vec<(usize, Rc<Term>)>,
+    pub(crate) opened_dependencies: Vec<(usize, Rc<SealedProof>)>,
     pub(crate) scope: Scope,
     pub(crate) events: Vec<DeltaEvent>,
     /// One slice per item of the source file, in order: the ranges of
@@ -144,13 +145,13 @@ impl ModuleDelta {
     }
 
     /// The sealed proof of the extension's binding at index `k`.
-    pub(crate) fn sealed_at(&self, k: usize) -> Option<&Rc<Term>> {
+    pub(crate) fn sealed_at(&self, k: usize) -> Option<&Rc<SealedProof>> {
         self.sealed.binary_search_by_key(&k, |(i, _)| *i).ok().map(|i| &self.sealed[i].1)
     }
 
     /// The sealed proofs of the extension range `range`, re-indexed from its
     /// start, as [`Elaborator::recheck_extension`] takes them.
-    pub(crate) fn sealed_in(&self, range: std::ops::Range<usize>) -> Vec<(usize, Rc<Term>)> {
+    pub(crate) fn sealed_in(&self, range: std::ops::Range<usize>) -> Vec<(usize, Rc<SealedProof>)> {
         self.sealed
             .iter()
             .filter(|(i, _)| range.contains(i))
@@ -254,17 +255,12 @@ impl ModuleDelta {
 
 /// Append `bindings` to `psi` with the sealed proofs `sealed` (indexed from
 /// the first of them) kept beside their theorems.
-pub(crate) fn extend_sealed(psi: &mut GlobalCtx, bindings: &[GlobalBinding], sealed: &[(usize, Rc<Term>)]) {
+pub(crate) fn extend_sealed(psi: &mut GlobalCtx, bindings: &[GlobalBinding], sealed: &[(usize, Rc<SealedProof>)]) {
     let base = psi.bindings.len();
     psi.extend(bindings.iter().cloned());
     for (k, proof) in sealed {
-        psi.seal(base + k, Rc::clone(proof));
+        psi.seal_kept(base + k, Rc::clone(proof));
     }
-}
-
-/// Two sealed proofs are the same proof: one allocation, or equal terms.
-pub(crate) fn same_proof(a: &Rc<Term>, b: &Rc<Term>) -> bool {
-    Rc::ptr_eq(a, b) || a == b
 }
 
 #[derive(Debug)]
@@ -695,7 +691,7 @@ impl Elaborator {
             items.iter().flat_map(|slice| slice.unsealed.iter().copied()).filter(|i| *i < base).collect();
         let opened_dependencies = opened
             .into_iter()
-            .filter_map(|i| Some((i, Rc::clone(dependency_psi.sealed_proof(i)?))))
+            .filter_map(|i| Some((i, Rc::clone(dependency_psi.sealed_kept(i)?))))
             .collect();
         ModuleDelta {
             module: module.to_string(),
@@ -798,7 +794,7 @@ impl Elaborator {
         let changed = previous
             .opened_dependencies
             .iter()
-            .filter(|(i, old)| self.psi.sealed_proof(*i).is_none_or(|now| !same_proof(now, old)))
+            .filter(|(i, old)| self.psi.sealed_kept(*i).is_none_or(|now| !same_proof(now, old)))
             .map(|(i, _)| *i)
             .collect();
         let plan = self.slice_plan.as_mut().expect("checked above");
@@ -893,7 +889,7 @@ impl Elaborator {
         let mut changed = Vec::new();
         for k in 0..slice.psi.len() {
             let before = previous.sealed_at(old.psi.start + k);
-            let now = self.psi.sealed_proof(base + slice.psi.start + k);
+            let now = self.psi.sealed_kept(base + slice.psi.start + k);
             let same = match (before, now) {
                 (None, None) => true,
                 (Some(a), Some(b)) => same_proof(a, b),
@@ -1053,7 +1049,7 @@ impl Elaborator {
         if delta
             .opened_dependencies
             .iter()
-            .any(|(i, old)| self.psi.sealed_proof(*i).is_none_or(|now| !same_proof(now, old)))
+            .any(|(i, old)| self.psi.sealed_kept(*i).is_none_or(|now| !same_proof(now, old)))
         {
             return Err(ModuleReplayError::OpenedProofChanged);
         }
@@ -1115,7 +1111,7 @@ impl Elaborator {
         &mut self,
         module: &str,
         extension: &[GlobalBinding],
-        sealed: &[(usize, Rc<Term>)],
+        sealed: &[(usize, Rc<SealedProof>)],
         on_pool: bool,
     ) -> Result<(), ModuleReplayError> {
         let gate = self.gate.clone();
@@ -1198,7 +1194,7 @@ impl Elaborator {
             let psi = crate::stats::make_mut(&mut prefix);
             psi.push(binding.clone());
             if let Ok(k) = sealed.binary_search_by_key(&index, |(k, _)| *k) {
-                psi.seal(at, Rc::clone(&sealed[k].1));
+                psi.seal_kept(at, Rc::clone(&sealed[k].1));
             }
         }
         // Join even after a statement failure: the pool must be drained before
