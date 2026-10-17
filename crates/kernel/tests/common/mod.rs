@@ -428,7 +428,7 @@ pub fn gen_type(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Type> {
     }
 
     for _ in 0..8 {
-        let arm = if b == 0 { r.below(3) } else { r.below(21) };
+        let arm = if b == 0 { r.below(3) } else { r.below(22) };
         match arm {
             0 => return Rc::new(Type::Nat),
             1 => return Rc::new(Type::Ty(gen_level(sc, r, 1))),
@@ -564,6 +564,17 @@ pub fn gen_type(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Type> {
                     level: gen_level(sc, r, 1),
                     shape: gen_type(sc, r, b / 2),
                     arity: gen_term(&inner, r, b / 2),
+                });
+            }
+            21 if b > 0 => {
+                // DVec: the length in the ambient scope, the family under
+                // `i : Fin len`.
+                let mut inner = sc.clone();
+                inner.local.len += 1;
+                return Rc::new(Type::DVec {
+                    level: gen_level(sc, r, 1),
+                    len: gen_term(sc, r, b / 2),
+                    fam: gen_type(&inner, r, b / 2),
                 });
             }
             _ => continue,
@@ -1090,6 +1101,7 @@ pub fn count_type(t: &Type) -> u64 {
         Type::Vec { elem, len, .. } => count_type(elem) + count_term(len),
         Type::Fin { len } => count_term(len),
         Type::Wf { shape, arity, .. } => count_type(shape) + count_term(arity),
+        Type::DVec { len, fam, .. } => count_term(len) + count_type(fam),
         Type::Squash { ty, .. } => count_type(ty),
         Type::UPi { body, .. } => count_type(body),
         Type::El { tm, .. } => count_term(tm),

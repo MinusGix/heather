@@ -337,6 +337,7 @@ impl Cache {
                 self.type_use(shape).join(self.term_use(arity).under(1))
             }
             Type::W { shape, pos, .. } => self.type_use(shape).join(self.type_use(pos).under(1)),
+            Type::DVec { len, fam, .. } => self.term_use(len).join(self.type_use(fam).under(1)),
             Type::GlobalTy { subst, .. } => self.subst_use(subst),
             Type::CtxPi { body, .. } => self.type_use(body),
             Type::TyPi { body, .. } => self.type_use(body),

@@ -1534,6 +1534,15 @@ impl Tc {
         if env.under_box { Err(TypeError::UnderBox) } else { Ok(()) }
     }
 
+    /// The gate on a former that has no code yet (`DVec`, until the rec.rs
+    /// round of docs/iwf-former-design.md §13 step 4): admitted at the
+    /// computing layers `p`/`m` only, as `Vec`/`Wf` were before their codes
+    /// (the Coq formalization's `compt i`). Layer c is where the code
+    /// recursors range, and they have no branch for it.
+    fn computing_layer(&self, env: &Env) -> R {
+        if env.layer.computes() { Ok(()) } else { Err(TypeError::LayerMismatch) }
+    }
+
     fn meta_layer(&self, env: &Env) -> R {
         if env.layer == Layer::Meta { Ok(()) } else { Err(TypeError::LayerMismatch) }
     }
@@ -1754,6 +1763,18 @@ impl Tc {
                 self.ty_check(env, shape, level)?;
                 let e_x = env.push_entry(Rc::clone(shape), level.clone());
                 self.tm_check_ty(&e_x, arity, &Type::Nat, &Level::Zero)?;
+                Ok(level.clone())
+            }
+            // DVec-formation (extension; docs/iwf-former-design.md §1.1):
+            // ⊢_i DVec^l(k; i. F) @ l ⟸ ⊢_i k : Nat @ 0,
+            // (Γ, i : Fin k @ 0) ⊢_i F @ l. Computing layers only until the
+            // rec.rs round gives it a code (design §1).
+            Type::DVec { level, len, fam } => {
+                self.computing_layer(env)?;
+                self.level_wf(env, level)?;
+                self.tm_check_ty(env, len, &Type::Nat, &Level::Zero)?;
+                let e_i = env.push_entry(Rc::new(Type::Fin { len: Rc::clone(len) }), Level::Zero);
+                self.ty_check(&e_i, fam, level)?;
                 Ok(level.clone())
             }
             Type::GlobalTy { var, subst } => {
@@ -3575,6 +3596,7 @@ fn type_head(ty: &Type) -> &'static str {
         Type::Vec { .. } => "Vec",
         Type::Fin { .. } => "Fin",
         Type::Wf { .. } => "Wf",
+        Type::DVec { .. } => "DVec",
         _ => "other",
     }
 }
@@ -3660,6 +3682,7 @@ fn type_anchor(ty: &Type) -> TypeAnchor {
             TypeAnchor::Type(RcIdentity::new(Rc::clone(shape)))
         }
         Type::Vec { elem, .. } => type_anchor(elem),
+        Type::DVec { fam, .. } => type_anchor(fam),
         Type::Fin { len } => TypeAnchor::Term(RcIdentity::new(Rc::clone(len))),
         Type::CtxPi { body, .. } | Type::TyPi { body, .. } => {
             TypeAnchor::Type(RcIdentity::new(Rc::clone(body)))

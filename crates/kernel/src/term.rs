@@ -178,6 +178,27 @@ pub enum Type {
         shape: Rc<Type>,
         arity: Rc<Term>,
     },
+    /// `DVec^l(k; i. F)` — dependent fixed-length tuples: [`Type::Vec`] with
+    /// a per-position element type. `fam` binds one local, `i : Fin k`.
+    /// `DVec(0; i. F) ⇝ Unit^l`,
+    /// `DVec(S k; i. F) ⇝ Σ^{l,l}(_ : F[inl ⟨⟩/i]). DVec(k; j. F[inr j/i])`
+    /// (the injections annotated by `Fin(S k)`'s reduct, `Unit^0 + Fin(k)`);
+    /// neutral at a neutral length, no η of its own. Lives at `l`. Children
+    /// substrate of `IWf` (docs/iwf-former-design.md §1.1); its projection is
+    /// the derived [`dnth`], not a former.
+    ///
+    /// **Not code yet**: refused inside a `box` payload until the rec.rs
+    /// round gives it `TmDVec` and its branches (design §1, §13 step 4), as
+    /// `Vec` was before its phase 3. A takes-a-binder former rather than a
+    /// family argument because Heather has no type-valued functions. `Vec^l(T;
+    /// k)` and `DVec^l(k; _. T)` agree reduct for reduct at a canonical
+    /// length and are distinct neutral types at a neutral one; they are not
+    /// converted into each other (design §10, option 1).
+    DVec {
+        level: Level,
+        len: Rc<Term>,
+        fam: Rc<Type>,
+    },
     /// `U^δ` — global type variable under a local substitution.
     GlobalTy { var: GlobalVar, subst: LocalSubst },
     /// `(g : Ctx) ⇒^l T` — meta-function type over context variables; binds
@@ -2100,6 +2121,281 @@ pub fn nth(level: &Level, elem: &Rc<Type>, len: &Rc<Term>, cs: Rc<Term>, idx: Rc
         cod_level: level.clone(),
         dom: Rc::new(Type::Fin { len: Rc::clone(len) }),
         cod: Rc::new(elem.shift_local(1)),
+        arg: idx,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Derived constructions for `DVec` (docs/iwf-former-design.md §1.1, §3)
+//
+// The successor reduct and `dnth` are transcribed binder by binder from the
+// Coq formalization (heather-coq `theories/Syntax/Term.v`: `dvecHd`,
+// `dvecTl`, `dnthMot`, `dnthBase`, `dnthStep`, `tmDNth`), which is the
+// first precise statement of them (heather-coq `M17_DESIGN.md`). Its
+// `F⟨rlift ↑⟩ⁿ[lsingle t]` is [`Type::inst_top`]`(n, t)` here, `t⟨↑⟩ⁿ` is
+// `shift_local(n)`, and `T⟨rlift ↑⟩ⁿ` is `shift_local_above(n, 1)`.
+// ---------------------------------------------------------------------------
+
+/// `inl^{0,0}(Unit^0; Fin(k); ⟨⟩^0) : Fin(S k)` — the first position, with
+/// `Fin(S k)`'s reduct's annotations, so it is typed at the family's domain
+/// without a conversion. `k` is the predecessor, in the ambient scope.
+pub fn fin_first(pred: Rc<Term>) -> Term {
+    Term::Inl {
+        lhs_level: Level::Zero,
+        rhs_level: Level::Zero,
+        lhs: Rc::new(Type::Unit { level: Level::Zero }),
+        rhs: Rc::new(Type::Fin { len: pred }),
+        val: Rc::new(Term::Triv { level: Level::Zero }),
+    }
+}
+
+/// `inr^{0,0}(Unit^0; Fin(k); j) : Fin(S k)` — position `j : Fin(k)` moved
+/// one up. `k` and `j` are in the ambient scope.
+pub fn fin_next(pred: Rc<Term>, j: Rc<Term>) -> Term {
+    Term::Inr {
+        lhs_level: Level::Zero,
+        rhs_level: Level::Zero,
+        lhs: Rc::new(Type::Unit { level: Level::Zero }),
+        rhs: Rc::new(Type::Fin { len: pred }),
+        val: j,
+    }
+}
+
+/// `DVec`'s successor reduct's two components, at the predecessor `k`
+/// (scoped in Γ) of the length, over the family `F` (in `Γ, i`):
+///
+/// ```text
+/// head  F[inl ⟨⟩/i]                          in Γ
+/// tail  DVec^l(k; j. F[inr j/i])             in (Γ, x)   (the Σ's binder)
+/// ```
+///
+/// so that `DVec^l(S k; i. F) ⇝ Σ^{l,l}(_ : head). tail`. The tail's family
+/// is in `(Γ, x, j)`: `F` weakened past `x` and `j` with `i` at `inr j`.
+pub fn dvec_succ_parts(level: &Level, pred: &Rc<Term>, fam: &Rc<Type>) -> (Type, Type) {
+    let head = fam.inst_top(0, &fin_first(Rc::clone(pred)));
+    let tail_fam = fam.inst_top(
+        2,
+        &fin_next(Rc::new(pred.shift_local(2)), Rc::new(Term::Var(LocalVar(0)))),
+    );
+    let tail = Type::DVec {
+        level: level.clone(),
+        len: Rc::new(pred.shift_local(1)),
+        fam: Rc::new(tail_fam),
+    };
+    (head, tail)
+}
+
+/// `DVec^l(S k; i. F)`'s reduct, `Σ^{l,l}(_ : F[inl ⟨⟩/i]). DVec^l(k; j. F[inr j/i])`.
+pub fn dvec_succ_reduct(level: &Level, pred: &Rc<Term>, fam: &Rc<Type>) -> Type {
+    let (head, tail) = dvec_succ_parts(level, pred, fam);
+    Type::Sigma {
+        fst_level: level.clone(),
+        snd_level: level.clone(),
+        fst: Rc::new(head),
+        snd: Rc::new(tail),
+    }
+}
+
+/// `dnth^l(n; i. F; cs; i) : F` — the `i`th component of a
+/// `DVec^l(n; i. F)` (docs/iwf-former-design.md §3). Not a former: a fixed
+/// `elim_Nat` schema on the length, whose motive quantifies over an
+/// **embedding** `e : Fin k̂ → Fin n` so that the family stays `F` over the
+/// full length (a motive cannot quantify over families):
+///
+/// ```text
+/// dnth(n; F; cs; i) := elim_Nat(k̂. Π(e : Fin k̂ → Fin n). Π(cs : DVec(k̂; j. F[e j/i])).
+///                                     Π(i' : Fin k̂). F[e i'/i]
+///                              ; λe cs i'. elim_Empty(x. F[e x/i]; i')
+///                              ; k̂ r. λe cs i'. case i' of
+///                                    { inl _ ⇒ fst cs
+///                                    | inr j ⇒ r (λy. e (inr y)) (snd cs) j }
+///                              ; n) (λi. i) cs i
+/// ```
+///
+/// Every application is annotated by β-normal types (the family at
+/// `e (inr y)`, not at `(λy. e (inr y)) y`), so the whole is typed at `F`
+/// exactly; the β steps sit in the conversions of the applications'
+/// function types — the step the Coq formalization's `V_dnth` checks.
+///
+/// At a literal length it reduces to the projections whatever the tuple is,
+/// a neutral one included: `dnth(3; F; cs; inr (inl ⟨⟩)) ⇝* fst (snd cs)`
+/// (design §3; heather-coq `dnth_reds_example`).
+///
+/// `len`, `cs` and `idx` live in Γ, `fam` in `(Γ, i : Fin len)`; the result
+/// is in Γ.
+pub fn dnth(level: &Level, len: &Rc<Term>, fam: &Rc<Type>, cs: Rc<Term>, idx: Rc<Term>) -> Term {
+    let l = level;
+    let z = || Level::Zero;
+    let var = |i: u32| Rc::new(Term::Var(LocalVar(i)));
+    let fin = |t: Rc<Term>| Rc::new(Type::Fin { len: t });
+    let n_up = |k: u32| Rc::new(len.shift_local(k));
+    let succ = |t: Rc<Term>| Rc::new(Term::Succ(t));
+    let pi = |dl: Level, cl: Level, dom: Rc<Type>, cod: Rc<Type>| {
+        Rc::new(Type::Pi { dom_level: dl, cod_level: cl, dom, cod })
+    };
+    let lam = |dl: Level, cl: Level, dom: Rc<Type>, body: Rc<Term>| {
+        Rc::new(Term::Lam { dom_level: dl, cod_level: cl, dom, body })
+    };
+    let app = |fun: Rc<Term>, dl: Level, cl: Level, dom: Rc<Type>, cod: Rc<Type>, arg: Rc<Term>| {
+        Rc::new(Term::App { fun, dom_level: dl, cod_level: cl, dom, cod, arg })
+    };
+    let dvec = |len: Rc<Term>, fam: Type| {
+        Rc::new(Type::DVec { level: l.clone(), len, fam: Rc::new(fam) })
+    };
+    // `e t : Fin n` for the embedding `e = var(e)` of domain `Fin(k)`, read
+    // `up` binders below Γ (the application's codomain one more).
+    let emb_at = |e: u32, k: Rc<Term>, up: u32, t: Rc<Term>| {
+        app(var(e), z(), z(), fin(k), fin(n_up(up + 1)), t)
+    };
+
+    // dnthEmb, in (Γ, k̂): Π^{0,0}(Fin k̂). Fin n.
+    let emb = pi(z(), z(), fin(var(0)), fin(n_up(2)));
+    // dnthFam, in (Γ, k̂, e, j): F[e j/i].
+    let fam_e = fam.inst_top(3, &emb_at(1, var(2), 3, var(0)));
+    // dnthRes, in (Γ, k̂, e, cs, i'): F[e i'/i].
+    let res = fam.inst_top(4, &emb_at(2, var(3), 4, var(0)));
+    // The motive's codomain under `e`, in (Γ, k̂, e).
+    let mot_cod = pi(l.clone(), l.clone(), dvec(var(1), fam_e), pi(z(), l.clone(), fin(var(2)), Rc::new(res)));
+    // dnthMot, in (Γ, k̂).
+    let motive = pi(z(), l.clone(), Rc::clone(&emb), Rc::clone(&mot_cod));
+
+    // dnthBase, in Γ.
+    let base = lam(
+        z(),
+        l.clone(),
+        pi(z(), z(), fin(Rc::new(Term::Zero)), fin(n_up(1))),
+        lam(
+            l.clone(),
+            l.clone(),
+            dvec(Rc::new(Term::Zero), fam.inst_top(2, &emb_at(1, Rc::new(Term::Zero), 2, var(0)))),
+            lam(
+                z(),
+                l.clone(),
+                fin(Rc::new(Term::Zero)),
+                Rc::new(Term::ElimEmpty {
+                    level: l.clone(),
+                    // `Fin(0) ⇝ Empty^0` — `Fin` is declared at level 0.
+                    scrut_level: Level::Zero,
+                    motive: Rc::new(fam.inst_top(4, &emb_at(3, Rc::new(Term::Zero), 4, var(0)))),
+                    scrut: var(0),
+                }),
+            ),
+        ),
+    );
+
+    // dnthStep, in (Γ, k̂, r); under the three λs (Γ, k̂, r, e, cs, i'), and
+    // under a case arm's binder one more.
+    //
+    // dnthFamS, in (Γ, k̂, r, e, cs, i', x, j): the tuple's family at
+    // `e j`, `e : Fin(S k̂) → Fin n` — the projections' annotations.
+    let fam_s = Rc::new(fam.inst_top(7, &emb_at(4, succ(var(6)), 7, var(0))));
+    let (hd, tl) = dvec_succ_parts(l, &var(5), &fam_s);
+    let (hd, tl) = (Rc::new(hd), Rc::new(tl));
+    let fst_cs = Rc::new(Term::Fst {
+        fst_level: l.clone(),
+        snd_level: l.clone(),
+        fst_ty: Rc::clone(&hd),
+        snd_ty: Rc::clone(&tl),
+        pair: var(2),
+    });
+    let snd_cs = Rc::new(Term::Snd {
+        fst_level: l.clone(),
+        snd_level: l.clone(),
+        fst_ty: hd,
+        snd_ty: tl,
+        pair: var(2),
+    });
+    // In (Γ, k̂, r, e, cs, i', y): `inr y'` for a fresh `y' : Fin k̂` one
+    // binder further in, and the family at `e (inr y')`.
+    let inr_y = |pred: Rc<Term>| Rc::new(fin_next(pred, var(0)));
+    let shifted_emb = lam(z(), z(), fin(var(5)), emb_at(4, succ(var(6)), 7, inr_y(var(6))));
+    let fam_inr = |by: u32| fam.inst_top(by, &emb_at(by - 3, succ(var(by - 1)), by, inr_y(var(by - 1))));
+    let rec_call = app(
+        app(
+            app(
+                var(4),
+                z(),
+                l.clone(),
+                Rc::new(emb.shift_local(5)),
+                Rc::new(mot_cod.shift_local_above(5, 1)),
+                shifted_emb,
+            ),
+            l.clone(),
+            l.clone(),
+            dvec(var(5), fam_inr(7)),
+            pi(z(), l.clone(), fin(var(6)), Rc::new(fam_inr(8))),
+            snd_cs,
+        ),
+        z(),
+        l.clone(),
+        fin(var(5)),
+        Rc::new(fam_inr(7)),
+        var(0),
+    );
+    let step = lam(
+        z(),
+        l.clone(),
+        pi(z(), z(), fin(succ(var(1))), fin(n_up(3))),
+        lam(
+            l.clone(),
+            l.clone(),
+            dvec(succ(var(2)), fam.inst_top(4, &emb_at(1, succ(var(3)), 4, var(0)))),
+            lam(
+                z(),
+                l.clone(),
+                fin(succ(var(3))),
+                Rc::new(Term::Case {
+                    lhs_level: Level::Zero,
+                    rhs_level: Level::Zero,
+                    motive_level: l.clone(),
+                    // `Fin(S k̂) ⇝ Unit^0 +^{0,0} Fin(k̂)`.
+                    lhs: Rc::new(Type::Unit { level: Level::Zero }),
+                    rhs: fin(var(4)),
+                    motive: Rc::new(fam.inst_top(6, &emb_at(3, succ(var(5)), 6, var(0)))),
+                    case_l: fst_cs,
+                    case_r: rec_call,
+                    scrut: var(0),
+                }),
+            ),
+        ),
+    );
+
+    // The recursion, applied to the identity embedding, the tuple and the
+    // index (tmDNth).
+    let recursion = Rc::new(Term::ElimNat {
+        level: l.clone(),
+        motive,
+        base,
+        step,
+        scrut: Rc::clone(len),
+    });
+    let at_id = app(
+        recursion,
+        z(),
+        l.clone(),
+        pi(z(), z(), fin(Rc::clone(len)), fin(n_up(1))),
+        pi(
+            l.clone(),
+            l.clone(),
+            dvec(n_up(1), fam.inst_top(2, &emb_at(1, n_up(2), 2, var(0)))),
+            pi(z(), l.clone(), fin(n_up(2)), Rc::new(fam.inst_top(3, &emb_at(2, n_up(3), 3, var(0))))),
+        ),
+        lam(z(), z(), fin(Rc::clone(len)), var(0)),
+    );
+    let at_cs = app(
+        at_id,
+        l.clone(),
+        l.clone(),
+        Rc::new(Type::DVec { level: l.clone(), len: Rc::clone(len), fam: Rc::clone(fam) }),
+        pi(z(), l.clone(), fin(n_up(1)), Rc::new(fam.shift_local_above(1, 1))),
+        cs,
+    );
+    Term::App {
+        fun: at_cs,
+        dom_level: Level::Zero,
+        cod_level: l.clone(),
+        dom: fin(Rc::clone(len)),
+        cod: Rc::clone(fam),
         arg: idx,
     }
 }

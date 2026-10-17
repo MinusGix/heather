@@ -14,8 +14,9 @@
 //!   decoded former) or its encoding is stuck, in which case the value is
 //!   [`VNeTy::El`]. Ch. 06's normal-form grammar `V := U^δ | El^l ν`, made
 //!   structural.
-//! - [`VTy::Vec`] / [`VTy::Fin`] exist only over a **non-canonical** length:
-//!   at a canonical one they step, so the evaluator never builds them.
+//! - [`VTy::Vec`] / [`VTy::Fin`] / [`VTy::DVec`] exist only over a
+//!   **non-canonical** length: at a canonical one they step, so the
+//!   evaluator never builds them.
 //! - `box` values ([`Val::BoxTy`], [`Val::BoxTm`]) carry raw syntax with
 //!   **no environment**, so there is no environment in which the payload
 //!   *could* be evaluated. Ch. 06's "reduction never enters a box", made
@@ -1259,6 +1260,12 @@ pub enum VTy<'v> {
     },
     /// See [`VTy::Vec`].
     Fin { len: Rc<Val<'v>> },
+    /// See [`VTy::Vec`]; `fam` has one pending binder, `i : Fin len`.
+    DVec {
+        level: Level,
+        len: Rc<Val<'v>>,
+        fam: &'v TyClo<'v>,
+    },
     /// Binds *universe* variables, not a local: entered by instantiating the
     /// body syntax and evaluating it in the **unchanged** environment
     /// (`inst_univ` renumbers the outer scope back down, so the captured
@@ -2068,6 +2075,7 @@ impl fmt::Debug for VTy<'_> {
             VTy::SEq { ty, lhs, rhs, .. } => write!(f, "sEq({ty:?}; {lhs:?}; {rhs:?})"),
             VTy::Vec { elem, len, .. } => write!(f, "Vec({elem:?}; {len:?})"),
             VTy::Fin { len } => write!(f, "Fin({len:?})"),
+            VTy::DVec { len, fam, .. } => write!(f, "DVec({len:?}; {fam:?})"),
             VTy::UPi { num_vars, body, .. } => write!(f, "ΠΠ[{num_vars}ℓ]. {body:?}"),
             VTy::CtxPi { body, .. } => write!(f, "(g:Ctx)⇒ {body:?}"),
             VTy::TyPi { body, .. } => write!(f, "(U:Typ)⇒ {body:?}"),

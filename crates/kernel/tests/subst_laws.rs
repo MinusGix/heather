@@ -196,6 +196,37 @@ fn shift_composition() {
     }
 }
 
+/// The two operations the derived `DVec` schemas are built from
+/// (`term::dvec_succ_parts`, `term::dnth`), against the substitution they
+/// abbreviate: `t.inst_top(k, s)` is `t[id_Γ↑ᵏ, s/x]`, for `t` in `Γ, x` and
+/// `s` in `Γ, Δ` with `|Δ| = k`; `shift_local_above(k, 0)` is
+/// `shift_local(k)`, and above one binder it is `inst_top(k + 1, x)`.
+#[test]
+fn instantiation_at_the_top_is_a_substitution() {
+    heather_kernel::checks::set_skip_verification(heather_kernel::checks::SkipVerification::Full);
+    for seed in 0..CASES {
+        let mut r = Rng::new(seed ^ 0xd6e8feb86659fd93);
+        let sc = gen_scope(&mut r);
+        let gamma = materialize(&sc, sc.local);
+        let mut sc_x = sc.clone();
+        sc_x.local.len += 1;
+        let t = gen_term(&sc_x, &mut r, BUDGET);
+        let ty = gen_type(&sc_x, &mut r, BUDGET);
+        for by in 0..4 {
+            let mut sc_d = sc.clone();
+            sc_d.local.len += by;
+            let s = gen_term(&sc_d, &mut r, BUDGET);
+            let delta = LocalSubst::id(&gamma).shift_local(by).extended(Rc::clone(&s));
+            law!(seed, t.inst_top(by, &s), t.apply_local(&delta));
+            law!(seed, ty.inst_top(by, &s), ty.apply_local(&delta));
+            let x = Term::Var(LocalVar(0));
+            law!(seed, t.shift_local_above(by, 0), t.shift_local(by));
+            law!(seed, t.shift_local_above(by, 1), t.inst_top(by + 1, &x));
+            law!(seed, ty.shift_local_above(by, 1), ty.inst_top(by + 1, &x));
+        }
+    }
+}
+
 /// Shifting by zero must not just *equal* the input, it must **share** it:
 /// that is the point of the fast path, and equality alone would pass just as
 /// well against the deep-copying traversal it replaced

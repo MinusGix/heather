@@ -508,6 +508,23 @@ fn step_type_frame(t: &Type, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) 
                 len: Rc::new(len),
             }),
         },
+        // DVec^l(0; i. F) ⇝ Unit^l,
+        // DVec^l(S k; i. F) ⇝ Σ^{l,l}(_ : F[inl ⟨⟩/i]). DVec^l(k; j. F[inr j/i])
+        // (docs/iwf-former-design.md §1.1). The nullary reduct carries `l`,
+        // as `Vec`'s does.
+        Type::DVec { level, len, fam } => match &**len {
+            t if crate::term::is_nat_zero(t) => Some(Type::Unit { level: level.clone() }),
+            Term::Succ(pred) => Some(crate::term::dvec_succ_reduct(level, pred, fam)),
+            Term::NatLit(n) => {
+                let pred = Rc::new(crate::term::nat_lit_pred(n));
+                Some(crate::term::dvec_succ_reduct(level, &pred, fam))
+            }
+            _ => step_term_in(len, gamma, defs, frames).map(|len| Type::DVec {
+                level: level.clone(),
+                len: Rc::new(len),
+                fam: Rc::clone(fam),
+            }),
+        },
         // Fin(0) ⇝ Empty^0, Fin(S k) ⇝ Unit^0 +^{0,0} Fin(k).   (§1.2)
         // `Fin` is declared at level 0, so both reducts land there and it
         // needs nothing from the level-indexing round.
@@ -1415,7 +1432,8 @@ pub(crate) fn beta_elim_ty(
                 gamma,
             ))
         }
-        // Layer-m types cannot be layer-c code: ill-typed, stuck.
+        // Layer-m types cannot be layer-c code, nor can a former with no code
+        // yet (`DVec`): ill-typed, stuck.
         _ => None,
     }
 }
@@ -2550,8 +2568,10 @@ pub fn is_neutral_type(t: &Type) -> bool {
         Type::GlobalTy { .. } => true,
         Type::El { tm, .. } => is_neutral_term(tm),
         // A stuck length blocks the reduction, so the type is neutral —
-        // conversion compares such `Vec`/`Fin` structurally (extension).
-        Type::Vec { len, .. } | Type::Fin { len } => is_neutral_term(len),
+        // conversion compares such `Vec`/`Fin`/`DVec` structurally (extension).
+        Type::Vec { len, .. } | Type::Fin { len } | Type::DVec { len, .. } => {
+            is_neutral_term(len)
+        }
         _ => false,
     }
 }
@@ -2581,7 +2601,10 @@ pub fn is_whnf_type(t: &Type) -> bool {
         Type::El { .. } | Type::GlobalTy { .. } => is_neutral_type(t),
         // Vec/Fin step on a *canonical* length, so they are normal exactly
         // when the length is stuck (extension; docs/wf-former-design.md §1).
-        Type::Vec { len, .. } | Type::Fin { len } => is_neutral_term(len),
+        // `DVec` likewise (docs/iwf-former-design.md §1.1).
+        Type::Vec { len, .. } | Type::Fin { len } | Type::DVec { len, .. } => {
+            is_neutral_term(len)
+        }
     }
 }
 

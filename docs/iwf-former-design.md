@@ -1,7 +1,7 @@
 # The `IWf` former: finitary inductive families without a stored equation
 
-Status: **rule set (§1–§6) reviewed and frozen, 2026-10-13**; no kernel
-code. §7–§13 stay open where §12 says so: they are the generator's, not the
+Status: **rule set (§1–§6) reviewed and frozen, 2026-10-13**; `DVec` and
+`dnth` in the kernel (§13 step 2, 2026-10-17), `IWf` not yet. §7–§13 stay open where §12 says so: they are the generator's, not the
 kernel's. The review's edits are §1's layer paragraph, §1.1's and §10's
 neutral-length caveat, and §3's note on the ih's type. It is
 [[indexed-families]]'s route 4, promoted, and extended with an output-index
@@ -9,7 +9,8 @@ function. Tracking issue: `issues/iwf-former.md`. Written before the code,
 per repo discipline, as the specification an implementation would be
 checked against. The evidence so far is a Coq probe, listed in §11. It
 checks the derived `dnth`, β on open data, three of the lowerings and
-index inversion. Nothing here has touched the kernel.
+index inversion. The Coq formalization has since checked §1–§6 (heather-coq
+`M17_DESIGN.md`), and the kernel follows its de Bruijn transcriptions.
 
 The design principle, stated once: **an index constraint belongs in the
 type of a constructor, not in its data.** Route 2b stores the equation
@@ -460,8 +461,11 @@ a typing or reduction rule.
 1. ~~This document reviewed and the rule set frozen.~~ Done 2026-10-13
    for §1–§6. `docs/no-uip-model.md` §4's review was decoupled from this
    step (§12.3) and is still owed.
-2. `DVec` lands, with `dnth`'s materialization and the neutral-tuple
-   projection test.
+2. ~~`DVec` lands, with `dnth`'s materialization and the neutral-tuple
+   projection test.~~ Done 2026-10-17 (`crates/kernel/tests/dvec.rs`).
+   `Type::DVec`, its two reductions in both reducers, its neutral
+   congruence, and `term::dnth` transcribed from heather-coq's `tmDNth`.
+   Gated to layers p and m (`Tc::computing_layer`) until step 4.
 3. `IWf`/`sup_i`/`elim_IWf`, with β on open data at a computed index as
    the headline test, and value equality with no irrelevance arm.
 4. The rec.rs round (§6).
