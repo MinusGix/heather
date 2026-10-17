@@ -111,6 +111,15 @@ const LAWS: &[&str] = &[
     "CReal::Le", "CReal::le_refl", "CReal::le_of_lt", "CReal::le_of_same", "CReal::le_trans",
     "CReal::lt_of_lt_of_le", "CReal::lt_of_le_of_lt", "CReal::le_antisymm", "CReal::le_respects",
     "CReal::ofRat_le", "CReal::le_of_ofRat_le",
+    // Bishop's pointwise forms.
+    "CReal::BishopSame", "CReal::same_of_bishop", "CReal::bishop_of_same",
+    "CReal::BishopLe", "CReal::le_of_bishop", "CReal::bishop_of_le",
+    // Order and addition.
+    "CReal::add_lt_mono_r", "CReal::add_lt_mono_l", "CReal::add_lt_mono", "CReal::add_neg_cancel_r",
+    "CReal::add_lt_cancel_r", "CReal::add_lt_cancel_l", "CReal::add_le_mono_r", "CReal::add_le_mono_l",
+    "CReal::add_le_mono", "CReal::add_lt_le_mono", "CReal::add_le_lt_mono", "CReal::add_lt_cancel",
+    "CReal::zero_add_zero", "CReal::add_pos", "CReal::add_pos_of_nonneg_of_pos", "CReal::add_nonneg",
+    "CReal::pos_of_add_pos",
     // The rational facts the reals chain.
     "Rat::abs_sub_self", "Rat::neg_sub_neg", "Rat::abs_neg_sub_neg", "Rat::add_add_add_comm",
     "Rat::add_sub_add", "Rat::dist_add_le", "Rat::sub_add_cancel", "Rat::add_sub_cancel_l",
@@ -118,6 +127,7 @@ const LAWS: &[&str] = &[
     "Rat::dist_le_of_le_add", "Rat::le_of_close_gap", "Rat::same_of_close",
     "Rat::mul_le_mul", "Rat::scale_inv_succ", "Rat::scale_inv_succ_half", "Rat::abs_le_natAbs",
     "Rat::two_add_ofNat", "Rat::mul_sub_mul", "Rat::dist_mul_le", "Rat::mul_add_twice",
+    "Rat::add_left_comm", "Rat::le_of_le_add_inv_succ",
 ];
 
 #[test]
@@ -393,5 +403,52 @@ fn product_witnesses_compute() {
     refused(
         "creal_wrong_product_modulus",
         &format!("{IMPORTS} theorem bad(): (CReal::one().mul_comm(CReal::one())(0)).witness = 54 {{ refl }}"),
+    );
+}
+
+#[test]
+fn order_and_addition() {
+    // Adding to both sides keeps the direction of a gap, never reverses it.
+    refused(
+        "creal_add_lt_reversed",
+        &format!(
+            "{IMPORTS} fn bad(x, y, z: CReal, h: x < y) → y + z < x + z {{ x.add_lt_mono_r(y, z, h) }}"
+        ),
+    );
+    // A positive sum names one positive summand, not both.
+    refused(
+        "creal_pos_of_add_both",
+        &format!(
+            "{IMPORTS} fn bad(x, y: CReal, h: CReal::zero() < x + y) → CReal::zero() < x ∧ CReal::zero() < y {{
+                CReal::pos_of_add_pos(h)
+            }}"
+        ),
+    );
+    // Bishop's bound is 2/(n+1), not 1/(n+1).
+    refused(
+        "creal_bishop_too_tight",
+        &format!(
+            "{IMPORTS} fn bad(x, y: CReal, h: x ≈ y, n: Nat) → (x.seq(n) -y.seq(n)).abs() <= Rat::inv_succ(n) {{
+                CReal::bishop_of_same(h, n)
+            }}"
+        ),
+    );
+    // The control: the shifted gap is data, the same 1/(k+1) from the same
+    // start, and it evaluates.
+    let mut e = base();
+    check(
+        &mut e,
+        "creal_shift_control",
+        &format!(
+            "{IMPORTS} theorem gap(): (Rat::zero() < Rat::one()) {{ omega }}
+            theorem shifted(z: CReal): CReal::zero().add_lt_mono_r(CReal::one(), z, CReal::ofRat_lt(gap())).witness = 1 {{ refl }}"
+        ),
+    );
+    refused(
+        "creal_shift_wrong_gap",
+        &format!(
+            "{IMPORTS} theorem gap(): (Rat::zero() < Rat::one()) {{ omega }}
+            theorem shifted(z: CReal): CReal::zero().add_lt_mono_r(CReal::one(), z, CReal::ofRat_lt(gap())).witness = 2 {{ refl }}"
+        ),
     );
 }
