@@ -1,7 +1,12 @@
 # Review of `docs/no-uip-model.md` §4 (2026-10-16)
 
 Status: **independent paper review**, the one `docs/no-uip-model.md` §6
-and `docs/iwf-former-design.md` §12.3 say is owed. It covers §4.1–§4.3
+and `docs/iwf-former-design.md` §12.3 say is owed. **Resolved
+2026-10-17**: every finding (R1–R7) and every smaller point is applied to
+`docs/no-uip-model.md` §4 (its §4.4a maps each one to where it is fixed),
+and the two pieces suggested for mechanizing at the end are checked in
+Coq (`heather-coq`: `Typing/BoxFibre.v` and `unf_idem` in
+`Syntax/Unfold.v`). The findings below are kept as written. It covers §4.1–§4.3
 (the staged interpretation of globals and `□`) and §4.2a (the semantic
 global substitution lemma). §4.5 is mechanized and was only read for
 consistency. Nothing here is mechanized. Every rule and lemma cited is
@@ -24,15 +29,15 @@ correct as far as I can check it on paper. Its weakest point is then a
 new semantic lemma, representative independence (R2), which the
 document needs and does not state.
 
-| | finding | severity | fix |
-|---|---|---|---|
-| R1 | level variables inside code: `box` ignores the level assignment, so `eqtm_ubeta` fails | breaks a rule | evaluate levels in box values; level-closed environments |
-| R2 | context globals are raw syntax, but `eqtm_capp` and four other congruences relate D-convertible contexts and types | breaks a rule | products over D-conversion classes, plus a representative-independence lemma |
-| R3 | definitions inside code: the recursion has no clause for a boxed `gdef`, which §4.3's scope admits | breaks totality | normalize box values with `unf` (M9's unfolding) |
-| R4 | the recursor's branches bind layer-D and layer-V globals whose values come from the index type, not the code | gap | read the index up to D-conversion (`decl_pi_inj`); add V globals to environments |
-| R5 | (M1) is not "two new clauses": its global and level binder cases need a renaming lemma first | gap, and an order | prove the global renaming instance first |
-| R6 | the lemma is stated for every `σ`, but case 2 needs `σ`'s objects to be layer-correct | gap | add the hypothesis |
-| R7 | `σ` is universe-weakened under `UΠ`/`Λ` and the recursor's level binders; §4.2a says levels are untouched | gap | cite `guwkn_gosubst` (S4u) |
+| | finding | severity | fix | status |
+|---|---|---|---|---|
+| R1 | level variables inside code: `box` ignores the level assignment, so `eqtm_ubeta` fails | breaks a rule | evaluate levels in box values; level-closed environments | resolved 2026-10-17 |
+| R2 | context globals are raw syntax, but `eqtm_capp` and four other congruences relate D-convertible contexts and types | breaks a rule | products over D-conversion classes, plus a representative-independence lemma | resolved 2026-10-17 |
+| R3 | definitions inside code: the recursion has no clause for a boxed `gdef`, which §4.3's scope admits | breaks totality | normalize box values with `unf` (M9's unfolding) | resolved 2026-10-17 |
+| R4 | the recursor's branches bind layer-D and layer-V globals whose values come from the index type, not the code | gap | read the index up to D-conversion (`decl_pi_inj`); add V globals to environments | resolved 2026-10-17 |
+| R5 | (M1) is not "two new clauses": its global and level binder cases need a renaming lemma first | gap, and an order | prove the global renaming instance first | resolved 2026-10-17 |
+| R6 | the lemma is stated for every `σ`, but case 2 needs `σ`'s objects to be layer-correct | gap | add the hypothesis | resolved 2026-10-17 |
+| R7 | `σ` is universe-weakened under `UΠ`/`Λ` and the recursor's level binders; §4.2a says levels are untouched | gap | cite `guwkn_gosubst` (S4u) | resolved 2026-10-17 |
 
 R1–R3 are the ones to fix before the claim is restated. R4–R7 are
 missing text, not wrong mathematics.
@@ -362,3 +367,13 @@ level-closed environments the semantic side is simpler, since `guwk ρ̂ = ρ̂`
 The pieces most worth mechanizing next, if anyone does, are the □
 fibre's invariance under D-conversion (R2 item 2), which is a typing
 lemma close to what Coq already has, and `unf`'s idempotence (R3).
+
+**Done (2026-10-17).** Both are mechanized in `heather-coq`, with no
+admits or axioms:
+- `box_fibre_ty_iff` and `box_fibre_tm_iff` (`Typing/BoxFibre.v`), along
+  `eqty_CTyp`'s and `eqty_CTrm`'s premises, as corollaries of
+  `ctxconv_ty`/`ctxconv_tm` with `wf_conv` and `wf_lconv`;
+- `unf_idem`, `unf_idem_ty`, `unf_idem_ctx`, `unf_l_idem` and
+  `unf_o_idem` (`Syntax/Unfold.v`), directly by one mutual induction: the
+  `gdef` case is `unf_subst` and the induction hypothesis on the body, so
+  the route through `unf_gfree` was not needed.
