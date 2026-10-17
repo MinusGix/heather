@@ -29,3 +29,4 @@ core).
 - 2026-10-16: Writing data-carrying proofs as fns is a stopgap; [[theorem-witness-unfolding]] owns the real fix, and creal's fns become theorems again once it lands. Every `∃` elimination in creal restates its type by hand because of [[exists-proof-projection-type-not-reduced]].
 - 2026-10-16: creal's data-carrying proofs are theorems again: [[theorem-witness-unfolding]] landed, so their witnesses compute without being `fn`s.
 - 2026-10-17: Second round: products and `≤` (docs/creal-multiplication-round.md); [[creal-multiplication]] closed, the inverse split to [[creal-inverse]].
+- 2026-10-17: Third round: the inverse of a real apart from zero (docs/creal-inverse-round.md); [[creal-inverse]] closed.

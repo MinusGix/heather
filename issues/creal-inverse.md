@@ -1,6 +1,6 @@
 ---
 title: Invert a regular Cauchy real apart from zero
-status: open
+status: closed
 labels: [stdlib,mathematics,reals]
 created: 2026-10-17
 updated: 2026-10-17
@@ -30,3 +30,7 @@ argument.
   `∃ k ∃ start` with the terms separated by 1/(k+1) from `start` on.
 - **[[positive-naturals-and-rationals]]** owns `Rat::inv`. Assumed here: it
   is total with 0⁻¹ = 0, and `Rat::mul_inv` needs a nonzero argument.
+
+## Log
+
+- 2026-10-17: Done (docs/creal-inverse-round.md): `CReal::inv` at `x.Apart(CReal::zero())` reads the gap off the proof (`away_of_apart`) and x at index max(start, (k+1)²(n+1) + n); the factor 2 the body suggested is not needed. `inv_respects` (any two proofs), `mul_inv`, `inv_mul`, `ofRat_inv`, with the laws proved for an arbitrary gap first (`inv_gap`). Rational estimates (`dist_inv_le`, `inv_abs_le`, `scale_inv_succ_le`, …) in rat.hthr. Tests refuse a gap at zero and the termwise reciprocal, and evaluate the gap and terms. Order facts about the inverse wait on [[creal-order-and-bishop-bridge]].

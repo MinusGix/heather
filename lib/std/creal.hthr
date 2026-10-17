@@ -20,7 +20,8 @@
 // further out to keep within the rate: a sum's n-th term adds the summands'
 // (2n+1)-th terms, each within 1/(2n+2), and the halves add to 1/(n+1).
 // A product reads further out still, by its factors' canonical bounds
-// (docs/creal-multiplication-round.md).
+// (docs/creal-multiplication-round.md), and an inverse by the size of its
+// argument's gap from zero (docs/creal-inverse-round.md).
 //
 // Calling convention: as at `Rat`, a lemma whose every `CReal` is named by
 // one of its hypotheses takes them implicitly; any other takes the first as
@@ -809,6 +810,161 @@ theorem CReal::lt_of_ofRat_lt({p, q: Rat}, h: CReal::ofRat(p) < CReal::ofRat(q))
             },
         },
     }
+}
+
+// ---------------------------------------------------------------------------
+// The inverse of a real apart from zero. Apartness gives a gap: from some
+// index `start` on, the terms are at least 1/(k+1) in size, on one side
+// (`Away`). There a reciprocal moves by at most (k+1)² times what it inverts
+// (`Rat::dist_inv_le`), so the inverse reads x at index (k+1)²(n+1) + n, or
+// at `start` if that is later: the (k+1)² comes out of the rate there
+// (`Rat::scale_inv_succ_le`). The gap is data, read off the apartness proof
+// (`away_of_apart`), so the inverse computes; every law is proved for an
+// arbitrary gap first (`inv_gap`), so two apartness proofs with different
+// gaps give `≈` inverses.
+
+fn CReal::Away(x: CReal, k, start: Nat) → Type {
+    (n: Nat) → start <= n → Rat::inv_succ(k) <= x.seq(n).abs()
+}
+
+theorem CReal::away_of_apart(self x: CReal, h: x.Apart(CReal::zero())): ∃ k: Nat, ∃ start: Nat, x.Away(k, start) {
+    match h {
+        Inl(below) => match below {
+            Exists(k, rest) => match rest {
+                Exists(s, gap) => Exists(k, Exists(s, λ n from => Rat::le_abs_of_add_le_zero(gap(n, from)))),
+            },
+        },
+        Inr(above) => match above {
+            Exists(k, rest) => match rest {
+                Exists(s, gap) => Exists(k, Exists(s, λ n from => Rat::le_abs_of_zero_add_le(gap(n, from)))),
+            },
+        },
+    }
+}
+
+// Where the inverse reads x: past the gap's start, and far enough out for
+// the reciprocal's (k+1)² to fit inside 1/(n+1).
+fn CReal::inv_at(k, start, n: Nat) → Nat { start.max((k + 1) * (k + 1) * (n + 1) + n) }
+
+theorem CReal::inv_at_start(k, start, n: Nat): start <= CReal::inv_at(k, start, n) {
+    start.le_max_l((k + 1) * (k + 1) * (n + 1) + n)
+}
+
+theorem CReal::inv_at_far(k, start, n: Nat): (k + 1) * (k + 1) * (n + 1) + n <= CReal::inv_at(k, start, n) {
+    start.le_max_r((k + 1) * (k + 1) * (n + 1) + n)
+}
+
+theorem CReal::inv_at_ge(k, start, n: Nat): n <= CReal::inv_at(k, start, n) {
+    n.le_trans((k + 1) * (k + 1) * (n + 1) + n, CReal::inv_at(k, start, n),
+        ((k + 1) * (k + 1) * (n + 1)).le_add_r(n), CReal::inv_at_far(k, start, n))
+}
+
+// Both terms are past the gap's start, so their reciprocals are within (k+1)²
+// times their distance, and each index pays for its own (k+1)².
+theorem CReal::inv_regular(self x: CReal, k, start: Nat, gap: x.Away(k, start), m, n: Nat):
+    (x.seq(CReal::inv_at(k, start, m)).inv() -x.seq(CReal::inv_at(k, start, n)).inv()).abs()
+        <= Rat::inv_succ(m) + Rat::inv_succ(n)
+{
+    let a = CReal::inv_at(k, start, m);
+    let b = CReal::inv_at(k, start, n);
+    let sq = (k + 1) * (k + 1);
+    let big = Rat::ofInt(OfNat(sq));
+    let fa = Rat::inv_succ(a);
+    let fb = Rat::inv_succ(b);
+    calc {
+        (x.seq(a).inv() -x.seq(b).inv()).abs() <= big * (x.seq(a) -x.seq(b)).abs()
+            := Rat::dist_inv_le(k, k, gap(a, CReal::inv_at_start(k, start, m)), gap(b, CReal::inv_at_start(k, start, n))),
+        <= big * (fa + fb) := Rat::mul_le_mono_l(x.regular(a, b), Rat::ofNat_nonneg(sq)),
+        ≈ big * fa + big * fb := big.mul_add_distr(fa, fb),
+        <= Rat::inv_succ(m) + Rat::inv_succ(n) := Rat::add_le_mono(
+            Rat::scale_inv_succ_le(sq, a, m, CReal::inv_at_far(k, start, m), fa.le_refl()),
+            Rat::scale_inv_succ_le(sq, b, n, CReal::inv_at_far(k, start, n), fb.le_refl())),
+    }
+}
+
+fn CReal::inv_gap(self x: CReal, k, start: Nat, gap: x.Away(k, start)) → CReal {
+    CReal(λ n => x.seq(CReal::inv_at(k, start, n)).inv(), λ m n => x.inv_regular(k, start, gap, m, n))
+}
+
+fn CReal::inv(self x: CReal, h: x.Apart(CReal::zero())) → CReal {
+    let g = x.away_of_apart(h);
+    x.inv_gap(g.witness, g.proof.witness, g.proof.proof)
+}
+
+// `≈` reals with gaps (k, s) and (l, t): far enough out, the terms each
+// inverse reads are within 1/((k+1)(l+1)(K+1)) of each other, wherever the
+// two gaps put them, and the reciprocals within 1/(K+1).
+theorem CReal::inv_gap_respects({x, x2: CReal}, hx: x ≈ x2, k, s: Nat, gap: x.Away(k, s), l, t: Nat, gap2: x2.Away(l, t)):
+    x.inv_gap(k, s, gap) ≈ x2.inv_gap(l, t, gap2)
+{
+    λ K => {
+        let p = (k + 1) * (l + 1);
+        let j = p * (K + 1) + K;
+        match CReal::same_close_far(hx, j) {
+            Exists(r, close) => Exists(r, λ n from => {
+                let a = CReal::inv_at(k, s, n);
+                let b = CReal::inv_at(l, t, n);
+                let near: ((x.seq(a) -x2.seq(b)).abs() <= Rat::inv_succ(j)) =
+                    close(a, b, r.le_trans(n, a, from, CReal::inv_at_ge(k, s, n)), r.le_trans(n, b, from, CReal::inv_at_ge(l, t, n)));
+                calc {
+                    (x.seq(a).inv() -x2.seq(b).inv()).abs() <= Rat::ofInt(OfNat(p)) * (x.seq(a) -x2.seq(b)).abs()
+                        := Rat::dist_inv_le(k, l, gap(a, CReal::inv_at_start(k, s, n)), gap2(b, CReal::inv_at_start(l, t, n))),
+                    <= Rat::inv_succ(K) := Rat::scale_inv_succ_le(p, j, K, j.le_refl(), near),
+                }
+            }),
+        }
+    }
+}
+
+// x * x⁻¹ reads x at a and the inverse at a, which reads x at b further out.
+// The term x_b · x_b⁻¹ is exactly 1, so the product's distance from 1 is
+// x_b⁻¹ (at most k+1) times x_a - x_b, which regularity makes small.
+theorem CReal::mul_inv_gap(self x: CReal, k, s: Nat, gap: x.Away(k, s)): x * x.inv_gap(k, s, gap) ≈ CReal::one() {
+    let y = x.inv_gap(k, s, gap);
+    λ K => {
+        let j = (k + 1) * (K + 1) + K;
+        Exists(j + j + 1, λ n from => {
+            let a = x.mul_at(y, n);
+            let b = CReal::inv_at(k, s, a);
+            let at_a: (j + j + 1 <= a) = (j + j + 1).le_trans(n, a, from, x.mul_at_ge(y, n));
+            let at_b: (j + j + 1 <= b) = (j + j + 1).le_trans(a, b, at_a, CReal::inv_at_ge(k, s, a));
+            let away: (Rat::inv_succ(k) <= x.seq(b).abs()) = gap(b, CReal::inv_at_start(k, s, a));
+            let u = x.seq(b).inv();
+            let d = x.seq(a) -x.seq(b);
+            let near: (d.abs() <= Rat::inv_succ(j)) = x.regular_close(j, a, b, at_a, at_b);
+            calc {
+                (x.seq(a) * u -Rat::one()).abs() ≈ (u * d).abs()
+                    := Rat::abs_respects(Rat::mul_sub_one_of_inverse(x.seq(b).mul_inv(Rat::nonzero_of_gap(k, away)))),
+                ≈ u.abs() * d.abs() := u.abs_mul(d),
+                <= Rat::ofInt(OfNat(k + 1)) * d.abs() := Rat::mul_le_mono_r(Rat::inv_abs_le(k, away), d.abs_nonneg()),
+                <= Rat::inv_succ(K) := Rat::scale_inv_succ_le(k + 1, j, K, j.le_refl(), near),
+            }
+        })
+    }
+}
+
+// The laws at an apartness proof: whichever gaps the two proofs carry.
+theorem CReal::inv_respects({x, x2: CReal}, hx: x ≈ x2, h: x.Apart(CReal::zero()), h2: x2.Apart(CReal::zero())):
+    x.inv(h) ≈ x2.inv(h2)
+{
+    let g = x.away_of_apart(h);
+    let g2 = x2.away_of_apart(h2);
+    CReal::inv_gap_respects(hx, g.witness, g.proof.witness, g.proof.proof, g2.witness, g2.proof.witness, g2.proof.proof)
+}
+
+theorem CReal::mul_inv(self x: CReal, h: x.Apart(CReal::zero())): x * x.inv(h) ≈ CReal::one() {
+    let g = x.away_of_apart(h);
+    x.mul_inv_gap(g.witness, g.proof.witness, g.proof.proof)
+}
+
+theorem CReal::inv_mul(self x: CReal, h: x.Apart(CReal::zero())): x.inv(h) * x ≈ CReal::one() {
+    CReal::same_trans(x.inv(h).mul_comm(x), x.mul_inv(h))
+}
+
+// The embedding commutes with the inverse, term by term: a constant
+// sequence reads the same wherever the gap sends it.
+theorem CReal::ofRat_inv(q: Rat, h: CReal::ofRat(q).Apart(CReal::zero())): CReal::ofRat(q).inv(h) ≈ CReal::ofRat(q.inv()) {
+    CReal::ofRat(q).inv(h).same_of_terms(CReal::ofRat(q.inv()), λ n => q.inv().same_refl())
 }
 
 // ---------------------------------------------------------------------------
