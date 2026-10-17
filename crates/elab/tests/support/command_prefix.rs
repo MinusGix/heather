@@ -63,6 +63,20 @@ pub const COMMAND_PREFIX: &[(&str, &str)] = &[
     ("elf64_command", include_str!("../../../../lib/elf64_command.hthr")),
 ];
 
-/// The filter half: through `elf64_stat_width` (the warm-up reads it).
+/// The first warm-up process's share: the list through this module. Named
+/// rather than counted, so a module inserted earlier in the list cannot
+/// silently move the split (an index did, by one module, in #39). It sits
+/// before the stat pass, which with the command itself dominates a cold run;
+/// that leaves the two processes about even, each well inside one rail.
 #[allow(dead_code)]
-pub const FILTER_HALF: usize = 49;
+pub const FILTER_HALF_THROUGH: &str = "elf64_operand_cursor";
+
+/// The list through `FILTER_HALF_THROUGH`.
+#[allow(dead_code)]
+pub fn filter_half() -> &'static [(&'static str, &'static str)] {
+    let end = COMMAND_PREFIX
+        .iter()
+        .position(|&(name, _)| name == FILTER_HALF_THROUGH)
+        .expect("FILTER_HALF_THROUGH names a module of COMMAND_PREFIX");
+    &COMMAND_PREFIX[..=end]
+}
