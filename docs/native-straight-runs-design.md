@@ -177,7 +177,8 @@ cursor's fact (`rdi`), as it names a slot. The leaf's `Framed` is over the
 carried page, so the write after the stretch reads its stored bytes from
 `io_store_offset`'s lemmas (`stored_store`, `stored_kept`, in `row_sent`).
 Carrying the page left the other phases' kernel steps as they were. The
-total row's seven stores (`l_tn*`) are still `Code`.
+total row's seven stores (`l_tn*`) are `StoreByte` items too, run by
+`put_runs` ("A stretch written once over any label").
 
 ## Where a stretch forks on data, split it
 
@@ -306,9 +307,49 @@ Then, with `StoreByte` and the page carried:
 `inputs_runs` is composition of other phases, with no code of its own to
 move.
 
+Then the last of the command's `Runs` chains:
+
+- After the last operand: `total_runs` is one stretch of four items to its
+  JB; `total_rows` one of five for the row's setup, the row, then
+  " total\n" as seven calls of `put_runs` (a byte stored at RDI and RDI on
+  by one, written once over any label as `put_label(before, w)`), and a
+  one-item stretch for R9 and R10 before the write.
+- The prologue: `keep_runs` is two stretches (the two slot stores, then the
+  count against two to the JAE), `keep_single` one of four items to its
+  JMP, `begin_runs` one of four (RBX and R12 into their slots) and
+  `begin_test` one of six (the count's test, stdin's fd and its JMP).
+- The spill's row setup: `spill_row` hands the spill's end state on
+  (`runs_elim`) to one five-item stretch, its goal the `RowReady` record
+  (`row_ready_back` is its `StepsBack`).
+
+Cold, over these phases the kernel's steps fell to between a third and a
+half of the chains' (the total row's to under a third). Elaboration rose
+for the prologue and the spill's setup and fell for the total row.
+
+Two things decided the shape:
+
+- **`omega` stays out of a phase's term.** It reads every hypothesis in
+  scope (`docs/creal-multiplication-round.md` met the same with `Rat`
+  facts), and inside a stretch's leaf that scope holds the stretch's spelled
+  state. In `keep_runs` two `omega`s for the count's bounds were three
+  quarters of its kernel steps; as small lemmas (`two_or_more`,
+  `one_or_none`, `under_two`), the phase fell to a fifth of the chain's.
+  The total row's and the spill's arithmetic is the same way (`put_room`,
+  `total_fits`, `row_fits`, `spilled_vars`).
+- **A JCC's side on a negated flag** (`AE`, `NE`) is `!b = True` or
+  `!b = False`; `not_true_is` and `not_false_is` give `b`, so one stretch
+  states both sides and no case analysis runs before it.
+
 ## Not yet
 
 - A system call ends a stretch: `closes_runs` still runs its JCCs with the
   `Runs` rules before `linux_runs_close`.
-- The other `Runs` phases (`total_runs` with its seven byte stores, the
-  prologue, the spill).
+- **The spill's slots stay on the `Runs` rules** (`spill_one_runs`,
+  `spill_runs`). A slot's source register is the state's (`state_gpr(spill(i))`),
+  not a constant, so in the computed type each read of it is stuck behind
+  the writes before it; a stretch has to restate the stretch's spelled
+  states to show those writes keep it (`state_kept`), and to carry
+  `WriteKept` through them. Tried as a stretch written once over any slot
+  and register (`spill_one`, with `spill_goes` in continuation-passing
+  style), the slot and its recursion took over twice the chain's kernel
+  steps, and more elaboration.
