@@ -349,7 +349,7 @@ function rel(n) {
 }
 
 async function load() {
-  const j = await (await fetch("/api/issues", { cache: "no-store" })).json();
+  const j = await (await fetch("api/issues", { cache: "no-store" })).json();
   const by = new Map(j.issues.map(m => [m.slug, m]));
   for (const m of j.issues) { m.backlinks = []; m.blocks = []; }
   for (const m of j.issues) {
@@ -1142,7 +1142,7 @@ function wire() {
 
 async function poll() {
   try {
-    const s = await (await fetch("/api/stamp", { cache: "no-store" })).text();
+    const s = await (await fetch("api/stamp", { cache: "no-store" })).text();
     $("#live").classList.remove("down");
     if (D && s !== D.stamp) {
       await load();
@@ -1159,7 +1159,7 @@ async function poll() {
   wire();
   wireGraph();
   try { await load(); }
-  catch (err) { $("#detail").innerHTML = `<div class="empty">Could not load /api/issues — is <code>scripts/issue serve</code> running?</div>`; return; }
+  catch (err) { $("#detail").innerHTML = `<div class="empty">Could not load api/issues — is <code>scripts/issue serve</code> running?</div>`; return; }
   render();
   setInterval(poll, 3000);
 })();
