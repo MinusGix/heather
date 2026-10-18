@@ -97,6 +97,33 @@ theorem le_chain(x, y, z, w: CReal, a: x ≈ y, b: y <= z, c: z < w): x < w {
 theorem squeeze(x, y: CReal, a: x <= y, b: y <= x): x ≈ y { CReal::le_antisymm(a, b) }
 
 // ---------------------------------------------------------------------------
+// Order and addition, and Bishop's pointwise forms.
+
+// Positive reals have a positive sum, and a gap between sums lies between
+// one pair of summands.
+theorem sum_pos(x, y: CReal, a: CReal::zero() < x, b: CReal::zero() < y): CReal::zero() < x + y { CReal::add_pos(a, b) }
+
+theorem gap_splits(x, y, z, w: CReal, h: x + y < z + w): x < z ∨ y < w { CReal::add_lt_cancel(h) }
+
+// Adding to both sides keeps `≤`, so translation is monotone in a chain.
+theorem shift_chain(x, y, z: CReal, a: x <= y, b: y < z): x + CReal::one() < z + CReal::one() {
+    calc {
+        x + CReal::one() <= y + CReal::one() := x.add_le_mono_r(y, CReal::one(), a),
+        < z + CReal::one() := y.add_lt_mono_r(z, CReal::one(), b),
+    }
+}
+
+// `≈` read Bishop's way: at every index, not only eventually.
+theorem close_at_three(x, y: CReal, h: x ≈ y): (x.seq(3) -y.seq(3)).abs() <= Rat::inv_succ(3) + Rat::inv_succ(3) {
+    CReal::bishop_of_same(h, 3)
+}
+
+// And `≤` read Bishop's way, back to the refutation.
+theorem le_from_terms(x, y: CReal, h: (n: Nat) → x.seq(n) <= y.seq(n) + (Rat::inv_succ(n) + Rat::inv_succ(n))): x <= y {
+    CReal::le_of_bishop(h)
+}
+
+// ---------------------------------------------------------------------------
 // The representation computes.
 
 fn half() → Rat { Rat(OfNat(1), 2) }
@@ -124,3 +151,7 @@ theorem product_term(): (CReal::ofRat(half()) * CReal::ofRat(third())).seq(0) �
 // bound is 3 on each side, so the factors must be within 1/14 of each other,
 // which regularity grants from index 55 on.
 theorem mul_comm_start(): (CReal::one().mul_comm(CReal::one())(0)).witness = 55 { refl }
+
+// Adding to both sides of a gap keeps it: the same 1/(k+1), from the same
+// start.
+theorem shifted_gap(z: CReal): CReal::zero().add_lt_mono_r(CReal::one(), z, zero_below_one()).witness = 1 { refl }
