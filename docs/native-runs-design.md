@@ -130,8 +130,8 @@ tail (`named_runs`, `unnamed_runs`, `newline_send`), and `init_runs` as a
 stretch per slot (`zero_runs`).
 
 ## Not yet moved
-- `inputs_runs` only composes other phases. `total_runs`, the prologue and
-  the spill are still `Runs` chains.
+- `inputs_runs` only composes other phases. The spill's slots stay on the
+  `Runs` rules (`docs/native-straight-runs-design.md`, "Not yet").
 - The other process libraries (formatter, scan, cursor, stat pass, row), and
   their own frame records (`FmtKept`, `WriteKept`, `CursorKept`) over
   `Keeps`.

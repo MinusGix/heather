@@ -335,7 +335,14 @@ Two things decided the shape:
   quarters of its kernel steps; as small lemmas (`two_or_more`,
   `one_or_none`, `under_two`), the phase fell to a fifth of the chain's.
   The total row's and the spill's arithmetic is the same way (`put_room`,
-  `total_fits`, `row_fits`, `spilled_vars`).
+  `total_fits`, `row_fits`, `spilled_vars`). The rule holds for the
+  hand-threaded process libraries too, whose phases name each state with a
+  `let`: a goal that shares an atom with a register fact
+  (`read_gpr(Rsi, s2.gprs).toNat() = …`) brings that state into the
+  certificate. One such `omega` was two thirds of `stat_operand`'s steps;
+  moving the libraries' phase `omega`s into lemmas (`bound_low`,
+  `page_succ_room`, `values_lt`, `field_fits`, `slot_more`, …) halved the
+  stat pass, the cursor, the filter and the row writer cold.
 - **A JCC's side on a negated flag** (`AE`, `NE`) is `!b = True` or
   `!b = False`; `not_true_is` and `not_false_is` give `b`, so one stretch
   states both sides and no case analysis runs before it.
