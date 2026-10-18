@@ -139,6 +139,8 @@ theorem Rat::add_assoc(self x, y, z: Rat): (x + y) + z ≈ x + (y + z) {
 
 theorem Rat::add_zero(self x: Rat): x + Rat::zero() ≈ x { (x + Rat::zero()).same_of_parts(x, omega, omega) }
 
+theorem Rat::zero_add(self x: Rat): Rat::zero() + x ≈ x { Rat::same_trans(Rat::zero().add_comm(x), x.add_zero()) }
+
 theorem Rat::mul_one(self x: Rat): x * Rat::one() ≈ x { (x * Rat::one()).same_of_parts(x, omega, omega) }
 
 theorem Rat::add_neg(self x: Rat): x + -x ≈ Rat::zero() { ring }
@@ -688,6 +690,19 @@ theorem Rat::scale_inv_succ_half(l, k: Nat):
     Rat::same_trans(Rat::add_respects(Rat::scale_inv_succ(l, k + k + 1), Rat::scale_inv_succ(l, k + k + 1)), Rat::inv_succ_half(k))
 }
 
+// Steps multiply: 1/(k+1) · 1/(l+1) = 1/((k+1)(l+1)), the gap a product of
+// two positive reals keeps.
+theorem Rat::inv_succ_mul(k, l: Nat): Rat::inv_succ(k) * Rat::inv_succ(l) ≈ Rat::inv_succ(k * (l + 1) + l) {
+    let a = Rat::inv_succ(k);
+    let b = Rat::inv_succ(l);
+    let c = Rat::inv_succ(k * (l + 1) + l);
+    let da: (a.den.int() = OfNat(k) + OfNat(1)) = refl;
+    let db: (b.den.int() = OfNat(l) + OfNat(1)) = refl;
+    let dc: (c.den.int() = OfNat(k) * (OfNat(l) + OfNat(1)) + OfNat(l) + OfNat(1)) = refl;
+    let prod: ((a * b).den.int() = (OfNat(k) + OfNat(1)) * (OfNat(l) + OfNat(1))) = ring(a.den_mul(b), da, db);
+    ring(prod, dc)
+}
+
 // Every rational is below some integer: x = a/p < |a| + 1, because p ≥ 1.
 theorem Rat::archimedean(self x: Rat): ∃ n: Nat, x < Rat::ofInt(OfNat(n)) {
     let a = x.num;
@@ -966,6 +981,43 @@ theorem Rat::le_add_nonneg(self a, e: Rat, h: Rat::zero() <= e): a <= a + e {
     calc {
         a ≈ a + Rat::zero() := Rat::same_sym(a.add_zero()),
         <= a + e := Rat::zero().add_le_mono_l(e, a, h),
+    }
+}
+
+// Two factors that each fall short of zero by at most e, and are at most m
+// in size, fall short as a product by at most m·e. If either factor is
+// nonnegative, the product loses at most e times that factor's size; if
+// both are negative, the product is positive. A product of approximations
+// of nonnegative reals is nearly nonnegative this way.
+theorem Rat::mul_nonneg_approx({p, q, e, m: Rat}, hp: Rat::zero() <= p + e, hq: Rat::zero() <= q + e,
+    he: Rat::zero() <= e, sp: p.abs() <= m, sq: q.abs() <= m): Rat::zero() <= p * q + m * e
+{
+    let hm: (Rat::zero() <= m) = Rat::le_trans(p.abs_nonneg(), sp);
+    match Rat::zero().le_total(p) {
+        Inl(p_up) => calc {
+            Rat::zero() <= p * (q + e) := Rat::mul_nonneg(p_up, hq),
+            ≈ p * q + p * e := p.mul_add_distr(q, e),
+            <= p * q + m * e := (p * e).add_le_mono_l(m * e, p * q, Rat::mul_le_mono_r(Rat::le_trans(p.le_abs(), sp), he)),
+        },
+        Inr(p_down) => match Rat::zero().le_total(q) {
+            Inl(q_up) => calc {
+                Rat::zero() <= q * (p + e) := Rat::mul_nonneg(q_up, hp),
+                ≈ q * p + q * e := q.mul_add_distr(p, e),
+                <= q * p + m * e := (q * e).add_le_mono_l(m * e, q * p, Rat::mul_le_mono_r(Rat::le_trans(q.le_abs(), sq), he)),
+                ≈ p * q + m * e := Rat::add_respects(q.mul_comm(p), (m * e).same_refl()),
+            },
+            Inr(q_down) => {
+                let flat: (-Rat::zero() ≈ Rat::zero()) = refl;
+                let np: (Rat::zero() <= -p) = Rat::le_respects(flat, (-p).same_refl(), Rat::neg_le(p_down));
+                let nq: (Rat::zero() <= -q) = Rat::le_respects(flat, (-q).same_refl(), Rat::neg_le(q_down));
+                let flip: ((-p) * (-q) ≈ p * q) = ring;
+                calc {
+                    Rat::zero() <= (-p) * (-q) := Rat::mul_nonneg(np, nq),
+                    ≈ p * q := flip,
+                    <= p * q + m * e := (p * q).le_add_nonneg(m * e, Rat::mul_nonneg(hm, he)),
+                }
+            },
+        },
     }
 }
 

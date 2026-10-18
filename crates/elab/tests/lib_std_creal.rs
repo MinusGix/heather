@@ -12,7 +12,8 @@
 //!     out, `<` is strict and `≤` is not `<`, the inverse needs a gap and
 //!     reads further out still, and the witnesses are data that compute
 //!     (`docs/creal-multiplication-round.md` for the product and `≤`,
-//!     `docs/creal-inverse-round.md` for the inverse).
+//!     `docs/creal-inverse-round.md` for the inverse), and a product's sign
+//!     needs both factors' (`docs/creal-mul-order-round.md`).
 
 use std::cell::OnceCell;
 use std::sync::Mutex;
@@ -125,6 +126,10 @@ const LAWS: &[&str] = &[
     "CReal::add_le_mono", "CReal::add_lt_le_mono", "CReal::add_le_lt_mono", "CReal::add_lt_cancel",
     "CReal::zero_add_zero", "CReal::add_pos", "CReal::add_pos_of_nonneg_of_pos", "CReal::add_nonneg",
     "CReal::pos_of_add_pos",
+    // Order and multiplication.
+    "CReal::mul_pos", "CReal::mul_nonneg", "CReal::zero_add", "CReal::sub_add_cancel",
+    "CReal::add_mul_distr", "CReal::sub_nonneg", "CReal::sub_pos", "CReal::mul_le_mono_r",
+    "CReal::mul_lt_mono_r", "CReal::mul_le_mono_l", "CReal::mul_lt_mono_l",
     // The rational facts the reals chain.
     "Rat::abs_sub_self", "Rat::neg_sub_neg", "Rat::abs_neg_sub_neg", "Rat::add_add_add_comm",
     "Rat::add_sub_add", "Rat::dist_add_le", "Rat::sub_add_cancel", "Rat::add_sub_cancel_l",
@@ -135,7 +140,8 @@ const LAWS: &[&str] = &[
     "Rat::ofNat_nonneg", "Rat::succ_mul_inv_succ", "Rat::scale_inv_succ_le", "Rat::le_abs_of_add_le_zero",
     "Rat::le_abs_of_zero_add_le", "Rat::nonzero_of_gap", "Rat::inv_abs_le", "Rat::sub_of_inverses",
     "Rat::mul_sub_one_of_inverse", "Rat::dist_inv_le",
-    "Rat::add_left_comm", "Rat::le_of_le_add_inv_succ",
+    "Rat::add_left_comm", "Rat::le_of_le_add_inv_succ", "Rat::zero_add", "Rat::inv_succ_mul",
+    "Rat::mul_nonneg_approx",
 ];
 
 #[test]
@@ -549,6 +555,56 @@ fn order_and_addition() {
         &format!(
             "{IMPORTS} theorem gap(): (Rat::zero() < Rat::one()) {{ omega }}
             theorem shifted(z: CReal): CReal::zero().add_lt_mono_r(CReal::one(), z, CReal::ofRat_lt(gap())).witness = 2 {{ refl }}"
+        ),
+    );
+}
+
+#[test]
+fn order_and_multiplication() {
+    // A positive product needs both factors positive: a nonnegative one
+    // carries no gap to multiply.
+    refused(
+        "creal_mul_pos_of_nonneg",
+        &format!(
+            "{IMPORTS} fn bad(x, y: CReal, hx: CReal::zero() <= x, hy: CReal::zero() < y) → CReal::zero() < x * y {{
+                CReal::mul_pos(hx, hy)
+            }}"
+        ),
+    );
+    // A nonnegative factor keeps the direction, never reverses it.
+    refused(
+        "creal_mul_le_reversed",
+        &format!(
+            "{IMPORTS} fn bad(x, y, z: CReal, h: x <= y, hz: CReal::zero() <= z) → y * z <= x * z {{
+                CReal::mul_le_mono_r(h, hz)
+            }}"
+        ),
+    );
+    // Nonnegative factors give a nonnegative product, not a positive one.
+    refused(
+        "creal_mul_nonneg_strict",
+        &format!(
+            "{IMPORTS} fn bad(x, y: CReal, hx: CReal::zero() <= x, hy: CReal::zero() <= y) → CReal::zero() < x * y {{
+                CReal::mul_nonneg(hx, hy)
+            }}"
+        ),
+    );
+    // The control: the product's gap is the product of the gaps, as data.
+    // 0 < 1 has the gap 1/2, so 1 · 1 clears zero by 1/4 (k = 3).
+    let mut e = base();
+    check(
+        &mut e,
+        "creal_mul_gap_control",
+        &format!(
+            "{IMPORTS} theorem gap(): (Rat::zero() < Rat::one()) {{ omega }}
+            theorem squared(): CReal::mul_pos(CReal::ofRat_lt(gap()), CReal::ofRat_lt(gap())).witness = 3 {{ refl }}"
+        ),
+    );
+    refused(
+        "creal_mul_wrong_gap",
+        &format!(
+            "{IMPORTS} theorem gap(): (Rat::zero() < Rat::one()) {{ omega }}
+            theorem squared(): CReal::mul_pos(CReal::ofRat_lt(gap()), CReal::ofRat_lt(gap())).witness = 1 {{ refl }}"
         ),
     );
 }
