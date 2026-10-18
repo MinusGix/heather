@@ -116,6 +116,12 @@ const LAWS: &[&str] = &[
     "CReal::Away", "CReal::away_of_apart", "CReal::inv_at", "CReal::inv_at_start", "CReal::inv_at_far",
     "CReal::inv_at_ge", "CReal::inv_regular", "CReal::inv_gap", "CReal::inv", "CReal::inv_gap_respects",
     "CReal::mul_inv_gap", "CReal::inv_respects", "CReal::mul_inv", "CReal::inv_mul", "CReal::ofRat_inv",
+    "CReal::ofRat_apart",
+    // Signs and integer powers.
+    "CReal::Positive", "CReal::Negative", "CReal::apart_of_positive", "CReal::apart_of_negative",
+    "CReal::npow", "CReal::npow_respects", "CReal::npow_add", "CReal::PowOk", "CReal::pow",
+    "CReal::pow_ofNat", "CReal::pow_negSucc", "CReal::pow_zero", "CReal::pow_one", "CReal::pow_two",
+    "CReal::pow_neg_one",
     // Bishop's pointwise forms.
     "CReal::BishopSame", "CReal::same_of_bishop", "CReal::bishop_of_same",
     "CReal::BishopLe", "CReal::le_of_bishop", "CReal::bishop_of_le",
@@ -133,8 +139,8 @@ const LAWS: &[&str] = &[
     "Rat::mul_le_mul", "Rat::scale_inv_succ", "Rat::scale_inv_succ_half", "Rat::abs_le_natAbs",
     "Rat::two_add_ofNat", "Rat::mul_sub_mul", "Rat::dist_mul_le", "Rat::mul_add_twice",
     "Rat::ofNat_nonneg", "Rat::succ_mul_inv_succ", "Rat::scale_inv_succ_le", "Rat::le_abs_of_add_le_zero",
-    "Rat::le_abs_of_zero_add_le", "Rat::nonzero_of_gap", "Rat::inv_abs_le", "Rat::sub_of_inverses",
-    "Rat::mul_sub_one_of_inverse", "Rat::dist_inv_le",
+    "Rat::le_abs_of_zero_add_le", "Rat::nonzero_of_gap", "Rat::recip_abs_le", "Rat::sub_of_inverses",
+    "Rat::mul_sub_one_of_inverse", "Rat::dist_recip_le",
     "Rat::add_left_comm", "Rat::le_of_le_add_inv_succ",
 ];
 
@@ -427,7 +433,7 @@ fn the_inverse_needs_a_gap() {
         &format!(
             "{IMPORTS} fn bad() → CReal {{
                 let above: (Rat::zero() + Rat::inv_succ(0) <= Rat::zero()) = omega;
-                CReal::zero().inv(Inr(Exists(0, Exists(0, λ n from => above))))
+                CReal::zero().inv(h := Inr(Exists(0, Exists(0, λ n from => above))))
             }}"
         ),
     );
@@ -441,7 +447,7 @@ fn the_inverse_needs_a_gap() {
         &format!(
             "{IMPORTS} fn ok() → CReal {{
                 let above: (Rat::zero() + Rat::inv_succ(0) <= Rat::one()) = omega;
-                CReal::one().inv(Inr(Exists(0, Exists(0, λ n from => above))))
+                CReal::one().inv(h := Inr(Exists(0, Exists(0, λ n from => above))))
             }}
             theorem zero_absurd(h: CReal::zero().Apart(CReal::zero())): False {{ CReal::zero().apart_irrefl(h) }}"
         ),
@@ -455,7 +461,7 @@ fn the_inverse_reads_further_out() {
     refused(
         "creal_inv_same_index",
         &format!(
-            "{IMPORTS} theorem bad(x: CReal, h: x.Apart(CReal::zero()), n: Nat): x.inv(h).seq(n) = x.seq(n).inv() {{ refl }}"
+            "{IMPORTS} theorem bad(x: CReal, h: x.Apart(CReal::zero()), n: Nat): x⁻¹.seq(n) = x.seq(n).recip() {{ refl }}"
         ),
     );
     let mut e = base();
@@ -464,14 +470,14 @@ fn the_inverse_reads_further_out() {
         "creal_inv_index_control",
         &format!(
             "{IMPORTS} theorem ok(x: CReal, k, s: Nat, gap: x.Away(k, s), n: Nat):
-                x.inv_gap(k, s, gap).seq(n) = x.seq(CReal::inv_at(k, s, n)).inv() {{ refl }}"
+                x.inv_gap(k, s, gap).seq(n) = x.seq(CReal::inv_at(k, s, n)).recip() {{ refl }}"
         ),
     );
     // A wrong field law is refused.
     refused(
         "creal_mul_inv_wrong",
         &format!(
-            "{IMPORTS} fn bad(x: CReal, h: x.Apart(CReal::zero())) → x * x.inv(h) ≈ CReal::zero() {{ x.mul_inv(h) }}"
+            "{IMPORTS} fn bad(x: CReal, h: x.Apart(CReal::zero())) → x * x⁻¹ ≈ CReal::zero() {{ x.mul_inv() }}"
         ),
     );
 }
@@ -488,17 +494,17 @@ fn the_inverse_computes() {
         &format!(
             "{IMPORTS} {ONE_APART}
             theorem gap_size(): (CReal::one().away_of_apart(one_apart())).witness = 1 {{ refl }}
-            theorem inv_one_term(): CReal::one().inv(one_apart()).seq(3) = Rat::one() {{ refl }}
+            theorem inv_one_term(): CReal::one().inv(h := one_apart()).seq(3) = Rat::one() {{ refl }}
             theorem neg_two_apart(): CReal::ofRat(Rat(-OfNat(2), 1)).Apart(CReal::zero()) {{
                 let gap: (Rat(-OfNat(2), 1) < Rat::zero()) = omega;
                 Inl(CReal::ofRat_lt(gap))
             }}
-            theorem inv_neg_two_term(): CReal::ofRat(Rat(-OfNat(2), 1)).inv(neg_two_apart()).seq(5) = Rat(-OfNat(1), 2) {{ refl }}"
+            theorem inv_neg_two_term(): CReal::ofRat(Rat(-OfNat(2), 1)).inv(h := neg_two_apart()).seq(5) = Rat(-OfNat(1), 2) {{ refl }}"
         ),
     );
     refused(
         "creal_inv_wrong_value",
-        &format!("{IMPORTS} {ONE_APART} theorem bad(): CReal::one().inv(one_apart()).seq(3) = Rat::zero() {{ refl }}"),
+        &format!("{IMPORTS} {ONE_APART} theorem bad(): CReal::one().inv(h := one_apart()).seq(3) = Rat::zero() {{ refl }}"),
     );
     refused(
         "creal_inv_wrong_gap",
@@ -550,5 +556,37 @@ fn order_and_addition() {
             "{IMPORTS} theorem gap(): (Rat::zero() < Rat::one()) {{ omega }}
             theorem shifted(z: CReal): CReal::zero().add_lt_mono_r(CReal::one(), z, CReal::ofRat_lt(gap())).witness = 2 {{ refl }}"
         ),
+    );
+}
+
+const POWER_IMPORTS: &str = "import logic; import bool; import nat; import int; import algebra; import omega;
+    import rat; import creal; import relation_props; import algebra_rel;\n";
+
+/// `x⁻¹` and `x ^ n` on the reals (docs/inverse-power-notation-design.md):
+/// the apartness is searched from a local apartness or sign, or from an
+/// embedded rational's sign; a negative power needs it and a natural one
+/// does not. Negative controls: no hypothesis, zero, a wrong law.
+#[test]
+fn inverse_and_power_notation() {
+    let mut e = base();
+    check(
+        &mut e,
+        "creal_power_notation",
+        &format!(
+            "{POWER_IMPORTS}
+            theorem from_apart(x: CReal, h: x.Apart(CReal::zero())): x * x⁻¹ ≈ CReal::one() {{ x.mul_inv() }}
+            theorem from_negative(x: CReal, h: x < CReal::zero()): x ^ (-1) ≈ x⁻¹ {{ x.pow_neg_one() }}
+            theorem square(x: CReal): x ^ 2 ≈ x * x {{ x.pow_two() }}
+            theorem embedded(): CReal::ofRat(Rat(OfNat(2), 1))⁻¹ ≈ CReal::ofRat(Rat(OfNat(2), 1)⁻¹) {{
+                CReal::ofRat_inv(Rat(OfNat(2), 1))
+            }}"
+        ),
+    );
+    refused("creal_inv_unknown_sign", &format!("{POWER_IMPORTS} fn bad(x: CReal) → CReal {{ x⁻¹ }}"));
+    refused("creal_power_negative_unknown", &format!("{POWER_IMPORTS} fn bad(x: CReal) → CReal {{ x ^ (-2) }}"));
+    refused("creal_inv_of_zero", &format!("{POWER_IMPORTS} fn bad() → CReal {{ CReal::ofRat(Rat::zero())⁻¹ }}"));
+    refused(
+        "creal_pow_neg_one_wrong",
+        &format!("{POWER_IMPORTS} theorem bad(x: CReal, h: x.Apart(CReal::zero())): x ^ (-1) ≈ x {{ x.pow_neg_one() }}"),
     );
 }

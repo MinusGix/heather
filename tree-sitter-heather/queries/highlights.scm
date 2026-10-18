@@ -11,7 +11,7 @@
 [
   "import" "export" "inductive" "record" "class" "instance" "designation"
   "datarepr" "impl" "fn" "theorem" "axiom" "meta" "evidence" "requires" "assuming" "extends" "decreases" "decreasing" "with"
-  "for" "at" "prefix" "mk" "let" "have" "split" "on" "match" "if"
+  "for" "at" "prefix" "postfix" "mk" "let" "have" "split" "on" "match" "if"
   "else" "as" "code" "calc" "self" "infer" "squash_ind"
 ] @keyword
 
@@ -22,7 +22,7 @@
 ] @keyword
 
 [
-  "+" "-" "++" "*" "<" "<=" "=" "≠" "&&" "||" "∙" "⊔" "≈"
+  "+" "-" "++" "*" "<" "<=" "=" "≠" "&&" "||" "∙" "⊔" "≈" "^" "⁻¹"
   "!" "¬" "∧" "∨" "↔" "<->" "→" "->" "=>" "⊢" "|-" ":=" "⟨" "⟩" "|" "⟦" "⟧"
 ] @operator
 

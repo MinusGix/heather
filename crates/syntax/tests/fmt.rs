@@ -237,6 +237,8 @@ fn a_declared_operator_symbol_is_not_a_prefix_operator() {
         "designation prefix ! at Bool := not\n",
         "designation<A> ++ at List<A> := append\n",
         "designation < at Int := lt\n",
+        "designation postfix ⁻¹ at Rat := inv\n",
+        "designation ^ at Rat := pow\n",
     ] {
         assert_eq!(format_source(src), src, "restyled a declared symbol");
     }
@@ -262,5 +264,15 @@ fn repository_sources_are_formatted() {
         unformatted.is_empty(),
         "these files are not formatted; run `scripts/fmt`:\n  {}",
         unformatted.join("\n  ")
+    );
+}
+
+/// `⁻¹` hugs its operand as a prefix operator does, and `^` is spaced as
+/// every infix operator is.
+#[test]
+fn inverse_hugs_and_power_is_spaced() {
+    assert_eq!(
+        format_source("fn f(x: Rat) -> Rat { x ⁻¹ ^2 * x⁻¹ }\n"),
+        "fn f(x: Rat) -> Rat { x⁻¹ ^ 2 * x⁻¹ }\n"
     );
 }

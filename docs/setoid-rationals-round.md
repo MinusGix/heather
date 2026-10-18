@@ -71,6 +71,8 @@ transitivity.
 `inv` is total, with `0⁻¹ = 0`. The field law `x * x.inv() ≈ 1` takes
 `¬(x ≈ 0)`, and the test checks that both the hypothesis-free statement and
 `0 · 0⁻¹ ≈ 1` are refused. `inv_respects` covers the zero case too.
+(Since then the total one is `Rat::recip`, and `Rat::inv`, written `x⁻¹`,
+takes apartness from zero: docs/inverse-power-notation-design.md.)
 
 ## Where the proof text went
 

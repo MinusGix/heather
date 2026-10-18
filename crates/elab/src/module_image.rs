@@ -921,13 +921,14 @@ fn get_span(r: &mut Reader<'_>) -> Result<Span, ModuleImageDecodeError> {
 }
 
 fn put_fixity(w: &mut Writer, fixity: OpFixity) {
-    w.byte(match fixity { OpFixity::Prefix => 0, OpFixity::Infix => 1 });
+    w.byte(match fixity { OpFixity::Prefix => 0, OpFixity::Infix => 1, OpFixity::Postfix => 2 });
 }
 
 fn get_fixity(r: &mut Reader<'_>) -> Result<OpFixity, ModuleImageDecodeError> {
     match r.byte()? {
         0 => Ok(OpFixity::Prefix),
         1 => Ok(OpFixity::Infix),
+        2 => Ok(OpFixity::Postfix),
         tag => Err(ModuleImageDecodeError::InvalidTag { sort: "operator fixity", tag }),
     }
 }

@@ -95,11 +95,18 @@ fn rationals_and_their_client_check() {
 
 const LAWS: &[&str] = &[
     "Rat::same_refl", "Rat::same_sym", "Rat::same_trans",
-    "Rat::add_respects", "Rat::mul_respects", "Rat::neg_respects", "Rat::inv_respects",
+    "Rat::add_respects", "Rat::mul_respects", "Rat::neg_respects", "Rat::recip_respects", "Rat::inv_respects",
     "Rat::num_pos_of_same", "Rat::num_neg_of_same", "Rat::same_recip",
     "Int::mul_pos", "Int::mul_neg", "Int::pos_of_mul_pos", "Int::neg_of_mul_neg",
     "Rat::add_comm", "Rat::add_assoc", "Rat::add_zero", "Rat::add_neg",
-    "Rat::mul_comm", "Rat::mul_assoc", "Rat::mul_one", "Rat::mul_add_distr", "Rat::mul_inv",
+    "Rat::mul_comm", "Rat::mul_assoc", "Rat::mul_one", "Rat::mul_add_distr", "Rat::mul_recip", "Rat::mul_inv",
+    // Apartness, the inverse and integer powers.
+    "Rat::apart_of_positive", "Rat::apart_of_negative", "Rat::apart_sym", "Rat::apart_irrefl",
+    "Rat::nonzero_of_apart", "Rat::apart_of_nonzero", "Rat::apart_mul", "Rat::apart_inv", "Rat::apart_npow",
+    "Rat::apart_pow", "Rat::inv_any_proof", "Rat::inv_mul", "Rat::inv_unique",
+    "Rat::npow_respects", "Rat::npow_add", "Rat::mul_npow", "Rat::one_npow",
+    "Rat::pow_ofNat", "Rat::pow_negSucc", "Rat::pow_zero", "Rat::pow_one", "Rat::pow_two",
+    "Rat::pow_neg_one", "Rat::pow_negSucc_inv",
     "Rat::le_refl", "Rat::le_trans", "Rat::le_antisymm", "Rat::le_total",
     "Rat::le_respects", "Rat::add_le_mono_r", "Rat::mul_nonneg",
     "Rat::ofInt_add", "Rat::ofInt_mul", "Rat::ofInt_inj", "Rat::ofInt_le",
@@ -186,18 +193,84 @@ fn a_wrong_law_or_step_is_refused() {
 
 #[test]
 fn inverse_needs_a_nonzero_argument() {
-    // 0⁻¹ is 0 by convention, so 0 · 0⁻¹ is 0, not 1.
+    // The raw reciprocal sends 0 to 0, so 0 · recip(0) is 0, not 1.
     refused(
-        "rat_zero_inverse",
-        &format!("{IMPORTS} theorem bad(): Rat::zero() * Rat::zero().inv() ≈ Rat::one() {{ refl }}"),
+        "rat_zero_recip",
+        &format!("{IMPORTS} theorem bad(): Rat::zero() * Rat::zero().recip() ≈ Rat::one() {{ refl }}"),
     );
     refused(
-        "rat_inverse_without_hypothesis",
+        "rat_recip_without_hypothesis",
         &format!(
-            "{IMPORTS} theorem bad(x: Rat): x * x.inv() ≈ Rat::one() {{
-                Rat::mul_inv(x, λ h => h)
+            "{IMPORTS} theorem bad(x: Rat): x * x.recip() ≈ Rat::one() {{
+                Rat::mul_recip(x, λ h => h)
             }}"
         ),
+    );
+    // The inverse has no value at 0 at all: no apartness proof exists, so
+    // the search for one fails, at a literal zero and at an unknown `x`.
+    refused("rat_zero_inverse", &format!("{IMPORTS} fn bad() → Rat {{ Rat::zero()⁻¹ }}"));
+    refused("rat_inverse_unknown_sign", &format!("{IMPORTS} fn bad(x: Rat) → Rat {{ x⁻¹ }}"));
+    // `¬(x ≈ 0)` is not apartness until it is converted.
+    refused(
+        "rat_inverse_from_nonzero_unconverted",
+        &format!("{IMPORTS} fn bad(x: Rat, h: ¬(x ≈ Rat::zero())) → Rat {{ x⁻¹ }}"),
+    );
+}
+
+const POWER_IMPORTS: &str = "import logic; import bool; import nat; import int; import algebra; import omega;
+    import rat; import relation_props; import algebra_rel;\n";
+
+/// `x⁻¹` and `x ^ n` (docs/inverse-power-notation-design.md): the hypothesis
+/// is searched at the call, from a local apartness, a local sign, a product
+/// or power of those, or a literal; the integer power's side condition
+/// computes from the exponent's sign. Varied over a neutral and a literal
+/// base, a neutral and a literal exponent, inference and checking
+/// positions, and negative controls.
+#[test]
+fn inverse_and_power_notation() {
+    let mut e = base();
+    check(
+        &mut e,
+        "rat_power_notation",
+        &format!(
+            "{POWER_IMPORTS}
+            theorem from_apart(x: Rat, h: x.Apart(Rat::zero())): x * x⁻¹ ≈ Rat::one() {{ x.mul_inv() }}
+            theorem from_positive(x: Rat, h: Rat::zero() < x): x⁻¹ * x ≈ Rat::one() {{ x.inv_mul() }}
+            theorem from_negative(x: Rat, h: x < Rat::zero()): x ^ (-1) ≈ x⁻¹ {{ x.pow_neg_one() }}
+            theorem of_product(x, y: Rat, hx: x.Apart(Rat::zero()), hy: Rat::zero() < y): (x * y) * (x * y)⁻¹ ≈ Rat::one() {{
+                (x * y).mul_inv()
+            }}
+            theorem of_inverse(x: Rat, h: x.Apart(Rat::zero())): x⁻¹ * x⁻¹⁻¹ ≈ Rat::one() {{ x⁻¹.mul_inv() }}
+            theorem of_power(x: Rat, h: x.Apart(Rat::zero()), k: Nat): (x ^ NegSucc(k)).Apart(Rat::zero()) {{ Rat::apart_pow() }}
+            fn half() → Rat {{ 2⁻¹ }}
+            theorem half_value(): half() ≈ Rat(OfNat(1), 2) {{ refl }}
+            theorem neg_third(): (-3)⁻¹ ≈ Rat(-OfNat(1), 3) {{ refl }}
+            theorem quarter(): 2 ^ (-2) * 4 ≈ Rat::one() {{ refl }}
+            theorem square(x: Rat): x ^ 2 ≈ x * x {{ x.pow_two() }}
+            theorem nat_exponent(x: Rat, n: Nat): x ^ OfNat(n) = x.npow(n) {{ refl }}
+            theorem neutral_negative(x: Rat, h: x.Apart(Rat::zero()), k: Nat): x ^ NegSucc(k) ≈ (x ^ OfNat(Succ(k)))⁻¹ {{
+                x.pow_negSucc_inv(k)
+            }}
+            theorem precedence(x: Rat): -x ^ 2 = -(x ^ 2) {{ refl }}
+            theorem any_proof(x: Rat, h, h2: x.Apart(Rat::zero())): x.inv(h := h) = x.inv(h := h2) {{ refl }}
+            theorem checked(x: Rat, h: Rat::zero() < x): Rat::one() ≈ x * x⁻¹ {{ Rat::same_sym(x.mul_inv()) }}"
+        ),
+    );
+    // A neutral exponent's sign is unknown, so its side condition is.
+    refused("rat_power_neutral_exponent", &format!("{POWER_IMPORTS} fn bad(x: Rat, n: Int) → Rat {{ x ^ n }}"));
+    refused("rat_power_negative_unknown", &format!("{POWER_IMPORTS} fn bad(x: Rat) → Rat {{ x ^ (-2) }}"));
+    refused("rat_power_zero_negative", &format!("{POWER_IMPORTS} fn bad() → Rat {{ 0 ^ (-1) }}"));
+    // Wrong values: 2⁻¹ is not 2, and x ^ -1 is not x.
+    refused("rat_half_wrong", &format!("{POWER_IMPORTS} theorem bad(): 2⁻¹ ≈ 2 {{ refl }}"));
+    refused(
+        "rat_pow_neg_one_wrong",
+        &format!("{POWER_IMPORTS} theorem bad(x: Rat, h: x.Apart(Rat::zero())): x ^ (-1) ≈ x {{ x.pow_neg_one() }}"),
+    );
+    // `^` binds tighter than negation, so `-x ^ 2` is not `(-x) ^ 2`
+    // syntactically, though the two are `≈`.
+    refused(
+        "rat_power_precedence",
+        &format!("{POWER_IMPORTS} theorem bad(x: Rat): -x ^ 2 = (-x) ^ 2 {{ refl }}"),
     );
 }
 
@@ -276,8 +349,8 @@ fn equal_fractions_share_a_numerator_sign() {
             "{IMPORTS} theorem neg(x, y: Rat, h: x ≈ y, hx: x.num < OfNat(0)): y.num < OfNat(0) {{
                 Rat::num_neg_of_same(h, hx)
             }}
-            theorem inv(): Rat(NegSucc(0), 2).inv() ≈ Rat(NegSucc(1), 4).inv() {{
-                Rat::inv_parts_respects(NegSucc(0), 2, NegSucc(1), 4, refl)
+            theorem recip(): Rat(NegSucc(0), 2).recip() ≈ Rat(NegSucc(1), 4).recip() {{
+                Rat::recip_parts_respects(NegSucc(0), 2, NegSucc(1), 4, refl)
             }}"
         ),
     );

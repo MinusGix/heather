@@ -135,6 +135,7 @@ fn is_infix(tok: &Tok, roles: &HashMap<usize, TokenRole>) -> bool {
         TokKind::Plus
         | TokKind::PlusPlus
         | TokKind::Star
+        | TokKind::Caret
         | TokKind::LtEq
         | TokKind::Arrow
         | TokKind::FatArrow
@@ -206,6 +207,10 @@ fn gap_between(a: &Tok, b: &Tok, roles: &HashMap<usize, TokenRole>) -> Gap {
     // occurrence — and a bare `?` must keep its gap, because `? p` and `?p` are
     // different programs.
     if matches!(a.kind, Neg | Minus | Bang | Dollar) && !declared(a) {
+        return Gap::Tight;
+    }
+    // The postfix `⁻¹` hugs its operand, on the same terms.
+    if matches!(b.kind, SupInverse) && !declared(b) {
         return Gap::Tight;
     }
 

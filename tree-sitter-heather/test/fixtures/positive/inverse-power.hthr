@@ -1,0 +1,10 @@
+// Inverse and power notation: postfix `⁻¹` binds tightest, `^` sits between
+// it and prefix negation and associates to the right.
+designation postfix ⁻¹ at Rat := Rat::inv
+designation ^ at Rat := Rat::pow
+
+theorem inverse_is_power(x: Rat, h: x.Apart(Rat::zero())): x ^ (-1) ≈ x⁻¹ { x.pow_neg_one() }
+
+theorem precedence(x: Rat): -x ^ 2 ≈ -(x ^ 2) { refl }
+
+fn tower(x: Rat) → Rat { x⁻¹⁻¹ ^ 2 ^ 3 * x⁻¹.f() }
