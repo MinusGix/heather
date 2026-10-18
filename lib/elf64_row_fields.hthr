@@ -277,6 +277,24 @@ theorem row_next(file: IoImage, page0: Nat → BitVec(8), at: BitVec(64), piece:
          cong_fn<BitVec(64), Bool>(λ b => is_zero_bits(64, b.sub(BitVec::ofNat(256))), r15)⟩⟩)
 }
 
+// The phases' side conditions, each in a context of its own: an `omega`
+// inside a phase reads every fact in scope, the phase's states too
+// (docs/native-straight-runs-design.md).
+theorem field_fits(a, p, w: Nat, short: p <= w + 20, room: a + (w + 20) <= 4096): a + p <= 4096 { omega }
+theorem field_sum(o, b, p, l: Nat, grown: l = b + p): (o + b) + p = o + l { omega }
+theorem room_less(a, w: Nat, room: a + (w + 21) <= 4096): a + (w + 20) <= 4096 { omega }
+theorem room_inside(a, w: Nat, room: a + (w + 21) <= 4096): a < 4096 { omega }
+theorem slot_room(a, w, r: Nat, room: a + ((w + 21) + r) <= 4096): a + (w + 21) <= 4096 { omega }
+theorem rest_room(o, b, f, l, w, r: Nat, grown: l = b + f, short: f <= w + 21, room: (o + b) + ((w + 21) + r) <= 4096): (o + l) + r <= 4096 { omega }
+theorem last_slot(i: Nat, count: i + 1 = column_slots()): (i = 7) ∧ (i < column_slots()) { ⟨omega, omega⟩ }
+theorem slot_more(i, m: Nat, count: i + Succ(Succ(m)) = column_slots()): (i < 7) ∧ ((i < column_slots()) ∧ (Succ(i) + Succ(m) = column_slots())) {
+    ⟨omega, ⟨omega, omega⟩⟩
+}
+theorem row_room(o, w: Nat, room: o + 8 * (w + 21) <= 4096): o + fields_room(w, 7) <= 4096 {
+    let rooms: (fields_room(w, 7) = (w + 21) + ((w + 21) + ((w + 21) + ((w + 21) + ((w + 21) + ((w + 21) + ((w + 21) + (w + 21)))))))) = refl;
+    omega
+}
+
 // A selected slot's field, from `field`: the count of the slot, padded to
 // the width, at the cursor.
 theorem row_field(file: IoImage, page0: Nat → BitVec(8), at: BitVec(64), piece: RowPieces(file, at), width: Nat, mask, slots: BitVec(64),
@@ -295,14 +313,14 @@ theorem row_field(file: IoImage, page0: Nat → BitVec(8), at: BitVec(64), piece
     let c = o + bytes.len();
     let pad = padded_decimal(width, counts(i).toNat());
     let short = padded_le(width, counts(i));
-    let fits: (c + pad.len() <= 4096) = omega;
+    let fits: (c + pad.len() <= 4096) = field_fits(c, pad.len(), width, short, room);
     have formatted = format_runs(file, next_rip(at, ra(lr_format())), piece(lr_format()), page, width, c, s2, loaded.memory_is, loaded.rip_is, head.r14, head.rdi,
         fits);
     let s3 = formatted.witness;
     let out = formatted.proof.right;
     let joined = page_join(page0, page, out.page, o, bytes, pad, head.holds, PageNext(held := out.held, below := out.below, above := out.above));
     let grown: ((bytes ++ pad).len() = bytes.len() + pad.len()) = List::len_append(bytes, pad);
-    let sum: (c + pad.len() = o + (bytes ++ pad).len()) = omega;
+    let sum: (c + pad.len() = o + (bytes ++ pad).len()) = field_sum(o, bytes.len(), pad.len(), (bytes ++ pad).len(), grown);
     let rdi: (read_gpr(Rdi, s3.gprs).toNat() = io_page_base() + (o + (bytes ++ pad).len())) =
         trans(out.rdi, cong_fn<Nat, Nat>(λ l => io_page_base() + l, sum));
     let rip: (s3.rip = next_rip(at, ra(lr_skip()))) = trans(out.rip_is, rip_compose(at, ra(lr_format()), format_len()));
@@ -335,9 +353,8 @@ theorem row_gap(file: IoImage, page0: Nat → BitVec(8), at: BitVec(64), piece: 
     let s3 = execute_block_normal(row_step_block(), s2);
     let paged = page_next(file, page0, page, o, bytes, field_gap(), head.holds.held, head.holds.below, head.holds.above);
     let grown: ((bytes ++ [field_gap()]).len() = Succ(bytes.len())) = List::len_append(bytes, [field_gap()]);
-    let page_low: (io_page_base() + 4097 <= Nat::pow(2, 64)) = Nat::leb_sound(io_page_base() + 4097, Nat::pow(2, 64), trivial);
     let rdi: (read_gpr(Rdi, s3.gprs).toNat() = io_page_base() + (o + (bytes ++ [field_gap()]).len())) =
-        trans(add_one_value(read_gpr(Rdi, s2.gprs), io_page_base() + c, head.rdi, { omega }),
+        trans(add_one_value(read_gpr(Rdi, s2.gprs), io_page_base() + c, head.rdi, page_succ_room(c, room)),
             cong_fn<Nat, Nat>(λ l => io_page_base() + (o + l), sym(grown)));
     Exists(s3, ⟨linux_steps_trans(io, state, s2, s3,
             linux_steps_trans(io, state, s1, s2, linux_steps_of_fetched(io, state, s1, set.steps), stored.step),
@@ -377,8 +394,8 @@ theorem row_selected(file: IoImage, page0: Nat → BitVec(8), at: BitVec(64), pi
             let at_field: RowAt(file, page0, at, ra(lr_field()), width, mask, slots, o, bytes, i, column_bit(i), True, origin, s2) =
                 RowAt(page := page, memory_is := tested.memory_is, rip_is := s2_rip, holds := head.holds, rdi := head.rdi, r9 := r9,
                     r12 := head.r12, r13 := head.r13, r14 := head.r14, r15 := head.r15, kept := same);
-            have fielded = row_field(file, page0, at, piece, width, mask, slots, counts, held, o, bytes, i, below, True, origin, s2, { omega },
-                at_field);
+            have fielded = row_field(file, page0, at, piece, width, mask, slots, counts, held, o, bytes, i, below, True, origin, s2,
+                room_less(o + bytes.len(), width, room), at_field);
             Exists(fielded.witness, ⟨linux_steps_trans(io, state, s2, fielded.witness, to_s2, fielded.proof.left), fielded.proof.right⟩)
         },
         False => λ some r9 => {
@@ -386,7 +403,7 @@ theorem row_selected(file: IoImage, page0: Nat → BitVec(8), at: BitVec(64), pi
             let at_gap: RowAt(file, page0, at, ra(lr_gap()), width, mask, slots, o, bytes, i, column_bit(i), False, origin, s2) =
                 RowAt(page := page, memory_is := tested.memory_is, rip_is := s2_rip, holds := head.holds, rdi := head.rdi, r9 := r9,
                     r12 := head.r12, r13 := head.r13, r14 := head.r14, r15 := head.r15, kept := same);
-            have gapped = row_gap(file, page0, at, piece, width, mask, slots, o, bytes, i, origin, s2, { omega }, at_gap);
+            have gapped = row_gap(file, page0, at, piece, width, mask, slots, o, bytes, i, origin, s2, room_inside(o + bytes.len(), width, room), at_gap);
             let lead = bytes ++ [field_gap()];
             let grown: (lead.len() = Succ(bytes.len())) = List::len_append(bytes, [field_gap()]);
             let fits: ((o + lead.len()) + (width + 20) <= 4096) =
@@ -477,9 +494,10 @@ theorem row_loop(file: IoImage, page0: Nat → BitVec(8), at: BitVec(64), piece:
             Exists<MachineState<IoMemory>>(λ after => LinuxSteps(io, state, after) ∧
                 RowOut(file, page0, at, o, bytes ++ row_fields(width, mask, counts, first, i, Succ(m)), origin, after)) {
         Zero => λ i first bytes state count room head => {
-            let seven: (i = 7) = omega;
+            let last = last_slot(i, count);
+            let seven: (i = 7) = last.left;
             let field = slot_field(width, mask, counts, first, i);
-            have slot = row_slot(file, page0, at, piece, width, mask, slots, counts, held, o, bytes, i, { omega }, first, origin, state, room, head);
+            have slot = row_slot(file, page0, at, piece, width, mask, slots, counts, held, o, bytes, i, last.right, first, origin, state, room, head);
             let s1 = slot.witness;
             let at1 = slot.proof.right.left;
             let jne = JumpIfNear(NE, rd(lr_back()));
@@ -498,12 +516,12 @@ theorem row_loop(file: IoImage, page0: Nat → BitVec(8), at: BitVec(64), piece:
                     λ l _ => RowOut(file, page0, at, o, l, origin, s2), out)⟩)
         },
         Succ(m) => λ i first bytes state count room head => {
-            let more: (i < 7) = omega;
+            let counted = slot_more(i, m, count);
+            let more: (i < 7) = counted.left;
             let field = slot_field(width, mask, counts, first, i);
             let short = slot_field_le(width, mask, counts, first, i);
-            let unfold: (fields_room(width, Succ(m)) = (width + 21) + fields_room(width, m)) = refl;
-            have slot = row_slot(file, page0, at, piece, width, mask, slots, counts, held, o, bytes, i, { omega }, first, origin, state, { omega },
-                head);
+            have slot = row_slot(file, page0, at, piece, width, mask, slots, counts, held, o, bytes, i, counted.right.left, first, origin, state,
+                slot_room(o + bytes.len(), width, fields_room(width, m), room), head);
             let s1 = slot.witness;
             let at1 = slot.proof.right.left;
             let jne = JumpIfNear(NE, rd(lr_back()));
@@ -519,7 +537,7 @@ theorem row_loop(file: IoImage, page0: Nat → BitVec(8), at: BitVec(64), piece:
                     r12 := at1.r12, r13 := at1.r13, r14 := at1.r14, r15 := trans(at1.r15, bits.left),
                     kept := RowKept(rsp := at1.kept.rsp, rbp := at1.kept.rbp, r8 := at1.kept.r8, r10 := at1.kept.r10));
             have rest = row_loop(file, page0, at, piece, width, mask, slots, counts, held, o, origin, m, Succ(i), first_after(mask, first, i), front,
-                s2, { omega }, { omega }, at2);
+                s2, counted.right.right, rest_room(o, bytes.len(), field.len(), front.len(), width, fields_room(width, m), grown, short, room), at2);
             let tail = row_fields(width, mask, counts, first_after(mask, first, i), Succ(i), Succ(m));
             let whole: (front ++ tail = bytes ++ row_fields(width, mask, counts, first, i, Succ(Succ(m)))) =
                 trans(List::append_assoc(bytes, field, tail),
@@ -551,9 +569,7 @@ theorem row_runs(file: IoImage, at: BitVec(64), placed: Placed(file, row_code(),
         RowAt(page := page0, memory_is := set.memory_is, rip_is := set.rip_is, holds := page_same(page0, o), rdi := rdi, r9 := refl,
             r12 := trans(r12, slot_zero(slots)), r13 := r13, r14 := r14, r15 := refl,
             kept := RowKept(rsp := refl, rbp := refl, r8 := refl, r10 := refl));
-    let rooms: (fields_room(width, 7) = (width + 21) + ((width + 21) + ((width + 21) + ((width + 21) + ((width + 21) + ((width + 21) +
-        ((width + 21) + (width + 21)))))))) = refl;
-    let fits: (o + fields_room(width, 7) <= 4096) = omega;
+    let fits: (o + fields_room(width, 7) <= 4096) = row_room(o, width, room);
     have ran = row_loop(file, page0, at, piece, width, mask, slots, counts, held, o, state.gprs, 7, 0, True, Nil, s1, refl, fits, head);
     Exists(ran.witness, ⟨linux_steps_trans(io, state, s1, ran.witness, linux_steps_of_fetched(io, state, s1, set.steps), ran.proof.left),
         ran.proof.right⟩)

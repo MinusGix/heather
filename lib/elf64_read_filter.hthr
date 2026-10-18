@@ -280,6 +280,12 @@ theorem loop_facts<C>(shape: FilterShape<C>, facts: FilterFacts<C>(shape)): Loop
 // Over Nats, so omega sees atoms rather than a count applied.
 theorem le_succ_of(a, b, n: Nat, grew: a <= Succ(b), below: b <= n): a <= Succ(n) { omega }
 theorem lt_of_le_below(a, n, m: Nat, below: a <= n, small: n < m): a < m { omega }
+// A chunk's output, stored from the page's start and sent from there.
+theorem page_sends(l: Nat, short: l <= 4096): 0 + l <= 4096 { omega }
+theorem page_sends_room(r, l: Nat, base: r = io_page_base(), short: l <= 4096): r + l < Nat::pow(2, 64) {
+    let page: (io_page_base() + 4097 <= Nat::pow(2, 64)) = Nat::leb_sound(io_page_base() + 4097, Nat::pow(2, 64), trivial);
+    omega
+}
 
 theorem counts_step<C>(counts: List<C → Nat>): (next, s: C) → (n: Nat) → counts_advance(counts, next, s) → CountsAtMost(counts, s, n) →
     CountsAtMost(counts, next, Succ(n)) {
@@ -552,7 +558,7 @@ theorem filter_byte<C>(shape: FilterShape<C>, facts: LoopFacts<C>(shape), jumps:
     let emitted = filter_emitted(shape.step, front, s0);
     let o = emitted.len();
     let short: (o <= front.len()) = filter_emitted_len(shape.step, front, s0);
-    let o_inside: (o < 4096) = omega;
+    let o_inside: (o < 4096) = lt_of_le_below(o, front.len(), 4096, short, inside);
     have st = filter_stepped(shape, facts, jumps, pj, c, file, s0, front, rest, b, inside, fits, pieces, state, head);
     let s2 = st.witness;
     let at_out: (read_gpr(Rdi, s2.gprs).toNat() = io_page_base() + o) = trans(cong_fn<BitVec(64), Nat>(λ v => v.toNat(), st.proof.rdi), head.out);
@@ -883,12 +889,9 @@ theorem filter_after_close<C>(shape: FilterShape<C>, facts: LoopFacts<C>(shape),
             let on: (next.rip = eof_rip(fc_at_write(c, p))) =
                 trans(near_not_taken_rip(jumps.cd, closed, passed), rip_advance(io_entry(), closed.rip, fc_at_cjz(c, p), 6, at.rip_is));
             let sends: LinuxWritesFrom(io_linux(), memory, read_gpr(R9, next.gprs), o) =
-                stored_sends(memory, 0, o, stored, read_gpr(R9, next.gprs), at.base, { omega });
-            let room: (read_gpr(R9, next.gprs).toNat() + o.len() < Nat::pow(2, 64)) = {
-                let base: (read_gpr(R9, next.gprs).toNat() = io_page_base()) = at.base;
-                let page: (io_page_base() + 4097 <= Nat::pow(2, 64)) = Nat::leb_sound(io_page_base() + 4097, Nat::pow(2, 64), trivial);
-                omega
-            };
+                stored_sends(memory, 0, o, stored, read_gpr(R9, next.gprs), at.base, page_sends(o.len(), short));
+            let room: (read_gpr(R9, next.gprs).toNat() + o.len() < Nat::pow(2, 64)) =
+                page_sends_room(read_gpr(R9, next.gprs).toNat(), o.len(), at.base, short);
             let finished: FinishedThen(ending, memory, ar, after, next.gprs) =
                 (match ending as λ en => ChunkThenIf(shape, ar, file, s, o, en, after) → FinishedThen(en, memory, ar, after, next.gprs) {
                     Finished => λ go => λ state at_read in_page kept => go(at.page, state, at_read, in_page,
@@ -920,7 +923,7 @@ theorem filter_chunk<C>(shape: FilterShape<C>, facts: LoopFacts<C>(shape), jumps
     let out = filter_emitted(shape.step, bytes, s0);
     have closed = filter_closed(shape, facts, jumps, pj, c, targets.again, file, pieces, page, s0, bytes, some, fits, counts_fit,
         going, memory_is, rip_is, length_word, held);
-    let short: (out.len() <= 4096) = { let less: (out.len() <= bytes.len()) = filter_emitted_len(shape.step, bytes, s0); omega };
+    let short: (out.len() <= 4096) = Nat::le_trans(out.len(), bytes.len(), 4096, filter_emitted_len(shape.step, bytes, s0), fits);
     linux_runs_after_linux_steps(io_linux(), chunk_events(out, writes, ending, after), going, closed.witness, closed.proof.steps,
         filter_after_close(shape, facts, jumps, pj, c, ar, targets, file, pieces, out, short, filter_state(shape.step, bytes, s0),
             going, closed.witness, closed.proof, writes, written, ending, ending_ok, after, then))
