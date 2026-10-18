@@ -238,6 +238,21 @@ pub(super) fn unify_ty(
         }
         return;
     }
+    // A subject whose code is a β-redex — the type of an `∃`'s proof read
+    // off a call, `El(app(λk. P; witness))` — is read as its contractum,
+    // which may itself be a former a pattern `Id`/`Π`/… meets
+    // (issues/exists-proof-projection-type-not-reduced.md).
+    let contracted;
+    let subj = match subj {
+        Type::El { level, tm } => match beta_head(tm) {
+            Some(r) => {
+                contracted = Type::El { level: level.clone(), tm: Rc::new(r) };
+                &contracted
+            }
+            None => subj,
+        },
+        _ => subj,
+    };
     // The subject may be `El` of a canonical code rather than the former
     // itself — a record field read off a type that arrived through a
     // `Val -> Type` *value* is exactly that (docs/record-type-values.md §4).
@@ -452,6 +467,15 @@ fn unify_tm(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]
             sols[var.0 as usize] = Sol::Solved(Rc::new(s));
         }
         return;
+    }
+    // A subject headed by a β-redex has nothing to align until it contracts:
+    // the application congruence would pair the pattern's spine against the
+    // λ and its argument, and teach the pattern's last argument the redex's
+    // (issues/exists-proof-projection-type-not-reduced.md). Contracting the
+    // head λs is syntactic and needs no context, so it runs before any other
+    // rule, on every pairing; a well-typed subject's head redexes run out.
+    if let Some(r) = beta_head(subj) {
+        return unify_tm(u, pat, &r, n, d, sols);
     }
     match (pat, subj) {
         (Term::Succ(a), Term::Succ(b)) => unify_tm(u, a, b, n, d, sols),
@@ -687,6 +711,32 @@ fn unify_tm(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]
         }
         _ => {}
     }
+}
+
+/// `t` with the β-redexes at the head of its spine contracted, `(λx. b) s ⋯`
+/// to `b[s/x] ⋯`, until the head is no λ; `None` when there was none. Only
+/// the head: an argument's redexes are reached when the congruence gets to
+/// them.
+fn beta_head(t: &Term) -> Option<Term> {
+    let (fun, arg) = spelling::app_of(t)?;
+    let r = match &**fun {
+        Term::Lam { body, .. } => body.inst_top(0, arg),
+        _ => {
+            let fun = Rc::new(beta_head(fun)?);
+            match t {
+                Term::App { dom_level, cod_level, dom, cod, arg, .. } => Term::App {
+                    fun,
+                    dom_level: dom_level.clone(),
+                    cod_level: cod_level.clone(),
+                    dom: Rc::clone(dom),
+                    cod: Rc::clone(cod),
+                    arg: Rc::clone(arg),
+                },
+                _ => Term::AppAt { fun, arg: Rc::clone(arg) },
+            }
+        }
+    };
+    Some(beta_head(&r).unwrap_or(r))
 }
 
 /// A form [`U::canonical_head`] can reduce a subject to.

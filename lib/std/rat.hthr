@@ -1014,10 +1014,7 @@ theorem Rat::same_of_close(self x, y: Rat, close: (k: Nat) → (x -y).abs() <= R
     let d = x -y;
     let small: (d.abs() <= Rat::zero()) = Rat::le_of_not_lt(λ positive => {
         match d.abs().archimedean_inv(positive) {
-            Exists(k, gap) => {
-                let below: (Rat::inv_succ(k) < d.abs()) = gap;
-                Rat::not_le_of_lt(below, close(k))
-            },
+            Exists(k, gap) => Rat::not_le_of_lt(gap, close(k)),
         }
     });
     let above = d.num.le_abs();
@@ -1035,10 +1032,7 @@ theorem Rat::same_of_close(self x, y: Rat, close: (k: Nat) → (x -y).abs() <= R
 theorem Rat::le_of_le_add_inv_succ({a, b: Rat}, close: (k: Nat) → a <= b + Rat::inv_succ(k)): a <= b {
     Rat::le_of_not_lt(λ above => {
         match (a -b).archimedean_inv(Rat::sub_pos(above)) {
-            Exists(k, gap) => {
-                let below: (Rat::inv_succ(k) < a -b) = gap;
-                Rat::not_le_of_lt(below, Rat::sub_le_of_le_add(close(k)))
-            },
+            Exists(k, gap) => Rat::not_le_of_lt(gap, Rat::sub_le_of_le_add(close(k))),
         }
     })
 }
