@@ -241,10 +241,11 @@ pub(super) fn unify_ty(
     // A subject whose code is a β-redex — the type of an `∃`'s proof read
     // off a call, `El(app(λk. P; witness))` — is read as its contractum,
     // which may itself be a former a pattern `Id`/`Π`/… meets
-    // (issues/exists-proof-projection-type-not-reduced.md).
+    // (issues/exists-proof-projection-type-not-reduced.md). Against an `El`
+    // pattern the codes meet in `unify_tm`, which contracts both sides.
     let contracted;
     let subj = match subj {
-        Type::El { level, tm } => match beta_head(tm) {
+        Type::El { level, tm } if !matches!(pat, Type::El { .. }) => match beta_head(tm) {
             Some(r) => {
                 contracted = Type::El { level: level.clone(), tm: Rc::new(r) };
                 &contracted
@@ -468,14 +469,20 @@ fn unify_tm(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]
         }
         return;
     }
-    // A subject headed by a β-redex has nothing to align until it contracts:
-    // the application congruence would pair the pattern's spine against the
-    // λ and its argument, and teach the pattern's last argument the redex's
-    // (issues/exists-proof-projection-type-not-reduced.md). Contracting the
-    // head λs is syntactic and needs no context, so it runs before any other
-    // rule, on every pairing; a well-typed subject's head redexes run out.
-    if let Some(r) = beta_head(subj) {
-        return unify_tm(u, pat, &r, n, d, sols);
+    // A side headed by a β-redex has nothing to align until it contracts:
+    // the application congruence would pair the other side's spine against
+    // the λ and its argument, and teach the pattern's last argument the
+    // redex's (issues/exists-proof-projection-type-not-reduced.md). Both
+    // sides contract, since a pattern carries redexes too — a record field
+    // `protected(register)` instantiated at `λ r => Kept(?scratch, r)` — and
+    // one contracted against one not would stop meeting. Contracting head
+    // λs is syntactic and needs no context, so it runs before any other
+    // rule, on every pairing; a well-typed term's head redexes run out.
+    let (p, s) = (beta_head(pat), beta_head(subj));
+    if p.is_some() || s.is_some() {
+        let pat = p.as_ref().unwrap_or(pat);
+        let subj = s.as_ref().unwrap_or(subj);
+        return unify_tm(u, pat, subj, n, d, sols);
     }
     match (pat, subj) {
         (Term::Succ(a), Term::Succ(b)) => unify_tm(u, a, b, n, d, sols),

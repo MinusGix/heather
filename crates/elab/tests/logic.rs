@@ -262,6 +262,21 @@ theorem wrong(n: Nat): ∃ k: Nat, k.add(1) = n {{
     assert!(!err.contains("could not infer"), "got: {err}");
 }
 
+/// The pattern side carries β-redexes too: a record field typed `p(k)` at a
+/// parameter instantiated with `λ k => Small(?bound, k)` (the native
+/// formatter's `protected(register)` at `λ r => Kept(scratch, r)`). Contracting
+/// only the subject would leave the two sides unable to meet, so `bound`
+/// must still be learned through the field.
+#[test]
+fn a_redex_in_the_pattern_still_teaches_implicits() {
+    ok("
+record Guard(p: Nat -> Type) { check: (k: Nat) -> p(k) -> Nat }
+fn Small(bound: Nat, k: Nat) -> Type { k = bound }
+theorem take({bound: Nat}, g: Guard(λ (k: Nat) => Small(bound, k))): Nat { 0 }
+theorem used(b: Nat, g: Guard(λ (k: Nat) => Small(b, k))): Nat { take(g) }
+");
+}
+
 /// What is still refused, and why it is not the same question: an argument
 /// whose type determines nothing. The matcher is first-order and reads the
 /// declared side as a skeleton, so a parameter that appears nowhere in it
