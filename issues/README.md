@@ -77,6 +77,7 @@ scripts/issue check                                        # lint links/blocked-
 scripts/issue index                                        # regenerate INDEX.md
 scripts/issue setup-git                                    # once per clone: INDEX.md merge driver
 scripts/issue serve [--port 8765] [--open]                 # read-only web viewer
+scripts/issue export <dir>                                 # the same viewer as static files
 ```
 
 `serve` (page: `scripts/issue-web.html`, stdlib server, localhost only) is for
@@ -86,6 +87,8 @@ edges with a focus-on-neighbourhood mode. The detail pane shows links in both
 directions. It re-reads `issues/` on every request and the page reloads itself
 when a file changes, so it can stay open while rounds edit the tracker. Filter
 and selection state lives in the URL hash, so a view can be bookmarked.
+`export` writes the same page with a snapshot of its data (`index.html`,
+`api/issues`, `api/stamp`, fetched by relative path) for a static host.
 
 Mutating commands (`new`, `close`, `reopen`) update `updated:` and regenerate
 `INDEX.md` automatically.

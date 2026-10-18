@@ -458,6 +458,19 @@ def cmd_serve(args):
         pass
 
 
+def cmd_export(args):
+    """Static snapshot of the web viewer: the page plus the two files it
+    fetches, under the same relative paths `serve` answers, so any static host
+    (or a file server) serves it unchanged. The stamp only changes between
+    exports, so an open page reloads itself once a new export is published."""
+    out = Path(args.dir)
+    (out / "api").mkdir(parents=True, exist_ok=True)
+    (out / "index.html").write_bytes(WEB.read_bytes())
+    (out / "api" / "issues").write_text(issues_json())
+    (out / "api" / "stamp").write_text(stamp())
+    print(f"exported {out}/index.html, {out}/api/issues, {out}/api/stamp")
+
+
 def main():
     p = argparse.ArgumentParser(prog="issue", description="repo-local issue tracker")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -518,6 +531,10 @@ def main():
     sp.add_argument("--host", default="127.0.0.1")
     sp.add_argument("--open", action="store_true", help="open a browser tab")
     sp.set_defaults(fn=cmd_serve)
+
+    sp = sub.add_parser("export", help="write the web viewer as static files (for a static host)")
+    sp.add_argument("dir", help="output directory, created if missing")
+    sp.set_defaults(fn=cmd_export)
 
     args = p.parse_args()
     args.fn(args)
