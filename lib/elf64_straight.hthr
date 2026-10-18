@@ -25,6 +25,7 @@
 // evaluation of the same `refl`. An item the stretch cannot run (a syscall, a
 // piece, a hole) leaves `False`, which no caller proves. Nothing is trusted: `straight_runs` is an ordinary theorem.
 import elf64_frame;
+import elf64_stretch;
 import elf64_operand_cursor;
 import elf64_arg_scan;
 import elf64_format_width;
@@ -74,19 +75,8 @@ theorem slot_room(q: Nat, inside: q < frame_slots()): 8 * q + 8 <= 4096 { omega 
 // ---------------------------------------------------------------------------
 // The computation.
 
-// What a stretch proves: `goal` of its start, from `goal` of where it ends,
-// given that steps lead there (`back`). The process's `LinuxRuns` is one
-// (`runs_back`); a record of where a phase ends is another.
-fn StepsBack(goal: MachineState<IoMemory> → Type) → Type {
-    (before, after: MachineState<IoMemory>) → LinuxSteps(io_linux(), before, after) → goal(after) → goal(before)
-}
-theorem runs_back(events: List<LinuxEvent>): StepsBack(λ s => LinuxRuns(io_linux(), events, s)) {
-    λ before after steps runs => linux_runs_after_linux_steps(io_linux(), events, before, after, steps, runs)
-}
-theorem back_fetched(goal: MachineState<IoMemory> → Type, back: StepsBack(goal), before, after: MachineState<IoMemory>,
-    steps: FetchedSteps(io_fetch_access(), io_data_access(), before, after), reached: goal(after)): goal(before) {
-    back(before, after, linux_steps_of_fetched(io_linux(), before, after, steps), reached)
-}
+// `StepsBack`, `PageThen`, `page_stored` and `straight_from` are elf64_stretch's,
+// shared with the libraries' frame-free stretches.
 
 // Where a stretch ends, at `at` with the frame holding `vars`: the rest of
 // the process. The end state is handed over bound (`after`), so the leaf's
@@ -110,16 +100,6 @@ fn ByteThen(file: IoImage, page: Nat → BitVec(8), base: BitVec(64), then: BitV
     Exists<BitVec(8)>(λ byte => Exists<BitVec(64)>(λ a => (base = a) ∧
         (((frame: Nat → BitVec(8)) → io_data_access().read(IoMemory(with_frame(file, frame), page), a) = Some(byte)) ∧
         ((a.toNat() < Nat::pow(2, 47)) ∧ then(byte)))))
-}
-// A byte store's place in the page: the caller names its offset `c`, the
-// base register's value is the page's address there.
-fn PageThen(base: BitVec(64), then: Nat → Type) → Type {
-    Exists<Nat>(λ c => (c < 4096) ∧ ((base.toNat() = io_page_base() + c) ∧ then(c)))
-}
-// The page with byte `x` stored at offset `c`: `io_store_offset`'s, which
-// reads no image (any frame's is the same page).
-fn page_stored(file: IoImage, page: Nat → BitVec(8), c: Nat, x: BitVec(8)) → Nat → BitVec(8) {
-    io_store_offset(IoMemory(file, page), c, [x]).page
 }
 // The item at `here`, then what follows it (`then`).
 fn straight_item(file: IoImage, origin: BitVec(64), goal: MachineState<IoMemory> → Type, labels: Nat → Nat, here: Nat, item: Asm,
@@ -158,9 +138,6 @@ fn straight_run(file: IoImage, origin: BitVec(64), goal: MachineState<IoMemory> 
                 straight_item(file, origin, goal, labels, prog_len(before), item, then)),
         },
     }
-}
-fn straight_from(l: Prog, n: Nat) → Nat {
-    match n { Zero => prog_len(l), Succ(m) => match l { Start => 0, At(before, _, _) => straight_from(before, m) } }
 }
 // What the stretch needs: its items, each leaf the rest of the process.
 fn Straight(file: IoImage, origin: BitVec(64), goal: MachineState<IoMemory> → Type, labels: Nat → Nat, l: Prog, n: Nat)

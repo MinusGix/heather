@@ -1,7 +1,7 @@
 //! Changes to the stat pass's code (elf64_stat_width), each refused where it
 //! is wrong (stat_width_process.rs checks the library itself).
 use crate::read_loop_fixture::checker_with;
-use crate::stat_width_process::{BASE, CURSOR, STAT};
+use crate::stat_width_process::{BASE, CURSOR, STAT, STRETCH};
 
 // The pass's claim can't be proved when it fstats descriptor 1 for `-`,
 // stats a path against no directory, reads the size from the mode's word,
@@ -10,7 +10,7 @@ use crate::stat_width_process::{BASE, CURSOR, STAT};
 // the operands too), or widens to 8.
 #[test]
 fn slow_acceptance_stat_width_refusals() {
-    let library = checker_with(&[BASE, &[("elf64_operand_cursor", CURSOR)]].concat()).semantic_image();
+    let library = checker_with(&[BASE, &[("elf64_operand_cursor", CURSOR), ("elf64_stretch", STRETCH)]].concat()).semantic_image();
     for (name, from, to) in [
         ("fstat_fd_1", "MovRI(Rdi, word_zero()), MovRI(Rsi, page_word())", "MovRI(Rdi, BitVec::ofNat(1)), MovRI(Rsi, page_word())"),
         ("no_dirfd", "MovRI(Rdi, at_fdcwd())", "MovRI(Rdi, word_zero())"),

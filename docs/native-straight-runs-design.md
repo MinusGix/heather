@@ -347,6 +347,39 @@ Two things decided the shape:
   `!b = False`; `not_true_is` and `not_false_is` give `b`, so one stretch
   states both sides and no case analysis runs before it.
 
+## The libraries' stretches
+
+The process libraries keep no frame: they run wherever a program places
+them, over the page alone. `lib/elf64_stretch.hthr` is `Straight` without
+`vars`: `Stretch(file, origin, goal, labels, l, n)(page, state)`, with
+`StretchLeaf` (the end state handed over bound, as `StraightLeaf`),
+`WordThen` and `ByteAt` for a load (the caller names the value and its
+address, the read shown over the page), and `PageThen` for a byte store.
+`stretch_runs` is `straight_runs`'s counterpart; a library states its own
+wrapper over its placement (`stat_straight`, as `cmd_straight`). The pieces
+both kinds share (`StepsBack`, `runs_back`, `PageThen`, `page_stored`,
+`straight_from`, `not_true_is`, `not_false_is`) live there, and
+`elf64_straight` imports them.
+
+A stretch reads a load only from a `Load` or `LoadByte` item; a
+`Code(word_load_bytes(…))` item has the same bytes but leaves `False`, so
+the stat pass's loads are now `Load`/`LoadByte` items (wc's bytes are
+unchanged).
+
+The stat pass's two heaviest phases moved first:
+
+- `acct_stated` is one ten-item stretch from `acct` to its JMP, the
+  other kind's two items a second (`acct_other`); the answer's kind is
+  decided in the leaves (`stated_regular`, `stated_other`), and the phase
+  is continuation-passing (`StatNext`), no longer an end state handed back.
+- `stat_operand` is the operand test to its JNE (two items), then
+  `stat_each`: one seven-item stretch from `each` to the lone dash's JE,
+  split by the operand's shape (empty, one byte, more) so each byte the
+  stretch reads is named, as the command's dash test is.
+
+Cold, the two phases' kernel steps fell to a fiftieth and a twentieth of
+the chains', and the stat pass's to a fifth.
+
 ## Not yet
 
 - A system call ends a stretch: `closes_runs` still runs its JCCs with the
