@@ -838,6 +838,130 @@ theorem Rat::add_sub_cancel_l(self a, b: Rat): (a + b) -a ≈ b { ring(a.den_add
 
 theorem Rat::add_sub_self(self a, b: Rat): a + (b -a) ≈ b { ring(b.den_add(-a), a.den_add(b -a)) }
 
+// ---------------------------------------------------------------------------
+// Reciprocals away from zero: the estimates the inverse of a regular Cauchy
+// real chains. A rational at least 1/(k+1) in size is nonzero, its
+// reciprocal is at most k+1 in size, and two such reciprocals are within
+// (k+1)(l+1) times the distance between what they invert.
+
+theorem Rat::ofNat_nonneg(n: Nat): Rat::zero() <= Rat::ofInt(OfNat(n)) { omega }
+
+theorem Rat::succ_mul_inv_succ(k: Nat): Rat::ofInt(OfNat(k + 1)) * Rat::inv_succ(k) ≈ Rat::one() { omega }
+
+// A factor m against a step at most 1/(m(n+1)+n+1) leaves at most 1/(n+1):
+// `scale_inv_succ` with one more unit of slack, so that m need not be a
+// successor.
+theorem Rat::scale_inv_succ_le({e: Rat}, m, j, n: Nat, far: m * (n + 1) + n <= j, he: e <= Rat::inv_succ(j)):
+    Rat::ofInt(OfNat(m)) * e <= Rat::inv_succ(n)
+{
+    let big = Rat::ofInt(OfNat(m));
+    let fine = Rat::inv_succ(m * (n + 1) + n);
+    let wider: (OfNat(m) <= OfNat(m + 1)) = omega;
+    calc {
+        big * e <= big * Rat::inv_succ(j) := Rat::mul_le_mono_l(he, Rat::ofNat_nonneg(m)),
+        <= big * fine := Rat::mul_le_mono_l(Rat::inv_succ_antitone(m * (n + 1) + n, j, far), Rat::ofNat_nonneg(m)),
+        <= Rat::ofInt(OfNat(m + 1)) * fine := Rat::mul_le_mono_r(Rat::ofInt_le(OfNat(m), OfNat(m + 1), wider),
+            Rat::le_of_lt(Rat::inv_succ_pos(m * (n + 1) + n))),
+        ≈ Rat::inv_succ(n) := Rat::scale_inv_succ(m, n),
+    }
+}
+
+// A gap below zero, or above it, is a lower bound on the size.
+theorem Rat::le_abs_of_add_le_zero({a, g: Rat}, h: a + g <= Rat::zero()): g <= a.abs() {
+    calc {
+        g ≈ (a + g) -a := Rat::same_sym(a.add_sub_cancel_l(g)),
+        <= Rat::zero() + -a := (a + g).add_le_mono_r(Rat::zero(), -a, h),
+        ≈ -a + Rat::zero() := Rat::zero().add_comm(-a),
+        ≈ -a := (-a).add_zero(),
+        <= a.abs() := a.neg_le_abs(),
+    }
+}
+
+theorem Rat::le_abs_of_zero_add_le({a, g: Rat}, h: Rat::zero() + g <= a): g <= a.abs() {
+    calc {
+        g ≈ g + Rat::zero() := Rat::same_sym(g.add_zero()),
+        ≈ Rat::zero() + g := g.add_comm(Rat::zero()),
+        <= a := h,
+        <= a.abs() := a.le_abs(),
+    }
+}
+
+theorem Rat::nonzero_of_gap({a: Rat}, k: Nat, h: Rat::inv_succ(k) <= a.abs()): ¬(a ≈ Rat::zero()) {
+    λ zero => Rat::not_le_of_lt(Rat::inv_succ_pos(k), calc {
+        Rat::inv_succ(k) <= a.abs() := h,
+        ≈ Rat::zero().abs() := Rat::abs_respects(zero),
+        ≈ Rat::zero() := refl,
+    })
+}
+
+// |a| ≥ 1/(k+1) bounds |a⁻¹| by k+1: a larger reciprocal would make
+// |a·a⁻¹| = 1 larger than (1/(k+1))·(k+1) = 1.
+theorem Rat::inv_abs_le({a: Rat}, k: Nat, h: Rat::inv_succ(k) <= a.abs()): a.inv().abs() <= Rat::ofInt(OfNat(k + 1)) {
+    let u = a.inv();
+    let big = Rat::ofInt(OfNat(k + 1));
+    let g = Rat::inv_succ(k);
+    Rat::le_of_not_lt(λ above => {
+        let unit = calc {
+            Rat::one() ≈ g * big := Rat::same_sym(Rat::same_trans(g.mul_comm(big), Rat::succ_mul_inv_succ(k))),
+            < g * u.abs() := Rat::mul_lt_mono_l(above, Rat::inv_succ_pos(k)),
+            <= a.abs() * u.abs() := Rat::mul_le_mono_r(h, u.abs_nonneg()),
+            ≈ (a * u).abs() := Rat::same_sym(a.abs_mul(u)),
+            ≈ Rat::one().abs() := Rat::abs_respects(a.mul_inv(Rat::nonzero_of_gap(k, h))),
+            ≈ Rat::one() := refl,
+        };
+        Rat::one().lt_irrefl(unit)
+    })
+}
+
+// Differences of inverses: with a·u ≈ 1 and b·v ≈ 1, u - v ≈ uv(b - a), and
+// a·u - 1 ≈ u(a - b) when b·u ≈ 1.
+theorem Rat::sub_of_inverses({a, b, u, v: Rat}, hu: a * u ≈ Rat::one(), hv: b * v ≈ Rat::one()):
+    u -v ≈ (u * v) * (b -a)
+{
+    let left = calc {
+        u ≈ u * Rat::one() := Rat::same_sym(u.mul_one()),
+        ≈ u * (b * v) := Rat::mul_respects(u.same_refl(), Rat::same_sym(hv)),
+    };
+    let right = calc {
+        v ≈ v * Rat::one() := Rat::same_sym(v.mul_one()),
+        ≈ v * (a * u) := Rat::mul_respects(v.same_refl(), Rat::same_sym(hu)),
+        ≈ (a * u) * v := v.mul_comm(a * u),
+    };
+    calc {
+        u -v ≈ u * (b * v) -(a * u) * v := Rat::sub_respects(left, right),
+        ≈ (u * v) * (b -a) := ring(b.den_mul(v), u.den_mul(b * v), a.den_mul(u), (a * u).den_mul(v),
+            (u * (b * v)).den_add(-((a * u) * v)), u.den_mul(v), b.den_add(-a), (u * v).den_mul(b -a)),
+    }
+}
+
+theorem Rat::mul_sub_one_of_inverse({a, b, u: Rat}, hu: b * u ≈ Rat::one()): a * u -Rat::one() ≈ u * (a -b) {
+    calc {
+        a * u -Rat::one() ≈ a * u -b * u := Rat::sub_respects((a * u).same_refl(), Rat::same_sym(hu)),
+        ≈ u * (a -b) := ring(a.den_mul(u), b.den_mul(u), (a * u).den_add(-(b * u)), a.den_add(-b), u.den_mul(a -b)),
+    }
+}
+
+// Reciprocals of two rationals at least 1/(k+1) and 1/(l+1) in size are
+// within (k+1)(l+1) times their distance.
+theorem Rat::dist_inv_le({a, b: Rat}, k, l: Nat, ha: Rat::inv_succ(k) <= a.abs(), hb: Rat::inv_succ(l) <= b.abs()):
+    (a.inv() -b.inv()).abs() <= Rat::ofInt(OfNat((k + 1) * (l + 1))) * (a -b).abs()
+{
+    let u = a.inv();
+    let v = b.inv();
+    let du = Rat::ofInt(OfNat(k + 1));
+    let dv = Rat::ofInt(OfNat(l + 1));
+    calc {
+        (u -v).abs() ≈ ((u * v) * (b -a)).abs()
+            := Rat::abs_respects(Rat::sub_of_inverses(a.mul_inv(Rat::nonzero_of_gap(k, ha)), b.mul_inv(Rat::nonzero_of_gap(l, hb)))),
+        ≈ (u * v).abs() * (b -a).abs() := (u * v).abs_mul(b -a),
+        ≈ (u.abs() * v.abs()) * (a -b).abs() := Rat::mul_respects(u.abs_mul(v), b.abs_sub_comm(a)),
+        <= (du * dv) * (a -b).abs() := Rat::mul_le_mono_r(
+            Rat::mul_le_mul(Rat::inv_abs_le(k, ha), Rat::inv_abs_le(l, hb), u.abs_nonneg(), v.abs_nonneg()), (a -b).abs_nonneg()),
+        ≈ Rat::ofInt(OfNat((k + 1) * (l + 1))) * (a -b).abs()
+            := Rat::mul_respects(Rat::same_sym(Rat::ofInt_mul(OfNat(k + 1), OfNat(l + 1))), (a -b).abs().same_refl()),
+    }
+}
+
 theorem Rat::le_add_nonneg(self a, e: Rat, h: Rat::zero() <= e): a <= a + e {
     calc {
         a ≈ a + Rat::zero() := Rat::same_sym(a.add_zero()),

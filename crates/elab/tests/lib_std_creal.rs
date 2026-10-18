@@ -9,9 +9,10 @@
 //!     registered dictionaries;
 //!  3. negative controls: a sequence must be regular, `≈` is not identity, a
 //!     wrong law is refused, a sum and a product read their arguments further
-//!     out, `<` is strict and `≤` is not `<`, and the witnesses are data that
-//!     compute (`docs/creal-multiplication-round.md` for the product and
-//!     `≤`).
+//!     out, `<` is strict and `≤` is not `<`, the inverse needs a gap and
+//!     reads further out still, and the witnesses are data that compute
+//!     (`docs/creal-multiplication-round.md` for the product and `≤`,
+//!     `docs/creal-inverse-round.md` for the inverse).
 
 use std::cell::OnceCell;
 use std::sync::Mutex;
@@ -111,6 +112,10 @@ const LAWS: &[&str] = &[
     "CReal::Le", "CReal::le_refl", "CReal::le_of_lt", "CReal::le_of_same", "CReal::le_trans",
     "CReal::lt_of_lt_of_le", "CReal::lt_of_le_of_lt", "CReal::le_antisymm", "CReal::le_respects",
     "CReal::ofRat_le", "CReal::le_of_ofRat_le",
+    // The inverse.
+    "CReal::Away", "CReal::away_of_apart", "CReal::inv_at", "CReal::inv_at_start", "CReal::inv_at_far",
+    "CReal::inv_at_ge", "CReal::inv_regular", "CReal::inv_gap", "CReal::inv", "CReal::inv_gap_respects",
+    "CReal::mul_inv_gap", "CReal::inv_respects", "CReal::mul_inv", "CReal::inv_mul", "CReal::ofRat_inv",
     // Bishop's pointwise forms.
     "CReal::BishopSame", "CReal::same_of_bishop", "CReal::bishop_of_same",
     "CReal::BishopLe", "CReal::le_of_bishop", "CReal::bishop_of_le",
@@ -127,6 +132,9 @@ const LAWS: &[&str] = &[
     "Rat::dist_le_of_le_add", "Rat::le_of_close_gap", "Rat::same_of_close",
     "Rat::mul_le_mul", "Rat::scale_inv_succ", "Rat::scale_inv_succ_half", "Rat::abs_le_natAbs",
     "Rat::two_add_ofNat", "Rat::mul_sub_mul", "Rat::dist_mul_le", "Rat::mul_add_twice",
+    "Rat::ofNat_nonneg", "Rat::succ_mul_inv_succ", "Rat::scale_inv_succ_le", "Rat::le_abs_of_add_le_zero",
+    "Rat::le_abs_of_zero_add_le", "Rat::nonzero_of_gap", "Rat::inv_abs_le", "Rat::sub_of_inverses",
+    "Rat::mul_sub_one_of_inverse", "Rat::dist_inv_le",
     "Rat::add_left_comm", "Rat::le_of_le_add_inv_succ",
 ];
 
@@ -403,6 +411,98 @@ fn product_witnesses_compute() {
     refused(
         "creal_wrong_product_modulus",
         &format!("{IMPORTS} theorem bad(): (CReal::one().mul_comm(CReal::one())(0)).witness = 54 {{ refl }}"),
+    );
+}
+
+const ONE_APART: &str = "theorem one_apart(): CReal::one().Apart(CReal::zero()) {
+        let gap: (Rat::zero() < Rat::one()) = omega;
+        Inr(CReal::ofRat_lt(gap))
+    }\n";
+
+#[test]
+fn the_inverse_needs_a_gap() {
+    // Zero has no inverse: no gap above it can be claimed ...
+    refused(
+        "creal_inv_zero",
+        &format!(
+            "{IMPORTS} fn bad() → CReal {{
+                let above: (Rat::zero() + Rat::inv_succ(0) <= Rat::zero()) = omega;
+                CReal::zero().inv(Inr(Exists(0, Exists(0, λ n from => above))))
+            }}"
+        ),
+    );
+    // ... nor can the inverse be asked for without one ...
+    refused("creal_inv_no_gap", &format!("{IMPORTS} fn bad() → CReal {{ CReal::zero().inv() }}"));
+    // ... and an apartness proof at zero is absurd.
+    let mut e = base();
+    check(
+        &mut e,
+        "creal_inv_gap_control",
+        &format!(
+            "{IMPORTS} fn ok() → CReal {{
+                let above: (Rat::zero() + Rat::inv_succ(0) <= Rat::one()) = omega;
+                CReal::one().inv(Inr(Exists(0, Exists(0, λ n from => above))))
+            }}
+            theorem zero_absurd(h: CReal::zero().Apart(CReal::zero())): False {{ CReal::zero().apart_irrefl(h) }}"
+        ),
+    );
+}
+
+#[test]
+fn the_inverse_reads_further_out() {
+    // Not the termwise reciprocal: the inverse reads past the gap's start
+    // and far enough out to pay for the reciprocal's (k+1)².
+    refused(
+        "creal_inv_same_index",
+        &format!(
+            "{IMPORTS} theorem bad(x: CReal, h: x.Apart(CReal::zero()), n: Nat): x.inv(h).seq(n) = x.seq(n).inv() {{ refl }}"
+        ),
+    );
+    let mut e = base();
+    check(
+        &mut e,
+        "creal_inv_index_control",
+        &format!(
+            "{IMPORTS} theorem ok(x: CReal, k, s: Nat, gap: x.Away(k, s), n: Nat):
+                x.inv_gap(k, s, gap).seq(n) = x.seq(CReal::inv_at(k, s, n)).inv() {{ refl }}"
+        ),
+    );
+    // A wrong field law is refused.
+    refused(
+        "creal_mul_inv_wrong",
+        &format!(
+            "{IMPORTS} fn bad(x: CReal, h: x.Apart(CReal::zero())) → x * x.inv(h) ≈ CReal::zero() {{ x.mul_inv(h) }}"
+        ),
+    );
+}
+
+#[test]
+fn the_inverse_computes() {
+    // The gap comes out of the apartness proof's sealed proofs and the
+    // inverse's terms evaluate: 1/1 has gap 1/2 (k = 1), 1⁻¹ reads 1, and
+    // the reciprocal of -2 reads -1/2.
+    let mut e = base();
+    check(
+        &mut e,
+        "creal_inv_computes",
+        &format!(
+            "{IMPORTS} {ONE_APART}
+            theorem gap_size(): (CReal::one().away_of_apart(one_apart())).witness = 1 {{ refl }}
+            theorem inv_one_term(): CReal::one().inv(one_apart()).seq(3) = Rat::one() {{ refl }}
+            theorem neg_two_apart(): CReal::ofRat(Rat(-OfNat(2), 1)).Apart(CReal::zero()) {{
+                let gap: (Rat(-OfNat(2), 1) < Rat::zero()) = omega;
+                Inl(CReal::ofRat_lt(gap))
+            }}
+            theorem inv_neg_two_term(): CReal::ofRat(Rat(-OfNat(2), 1)).inv(neg_two_apart()).seq(5) = Rat(-OfNat(1), 2) {{ refl }}"
+        ),
+    );
+    refused(
+        "creal_inv_wrong_value",
+        &format!("{IMPORTS} {ONE_APART} theorem bad(): CReal::one().inv(one_apart()).seq(3) = Rat::zero() {{ refl }}"),
+    );
+    refused(
+        "creal_inv_wrong_gap",
+        &format!("{IMPORTS} {ONE_APART} theorem bad(): (CReal::one().away_of_apart(one_apart())).witness = 0 {{ refl }}"),
     );
 }
 

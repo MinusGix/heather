@@ -97,6 +97,24 @@ theorem le_chain(x, y, z, w: CReal, a: x ≈ y, b: y <= z, c: z < w): x < w {
 theorem squeeze(x, y: CReal, a: x <= y, b: y <= x): x ≈ y { CReal::le_antisymm(a, b) }
 
 // ---------------------------------------------------------------------------
+// The inverse, at a proof of apartness from zero.
+
+// Dividing and multiplying back.
+theorem div_mul_cancel(x, y: CReal, h: y.Apart(CReal::zero())): (x * y.inv(h)) * y ≈ x {
+    calc {
+        (x * y.inv(h)) * y ≈ x * (y.inv(h) * y) := x.mul_assoc(y.inv(h), y),
+        ≈ x * CReal::one() := rel_cong(y.inv_mul(h)),
+        ≈ x := x.mul_one(),
+    }
+}
+
+// Which apartness proof is used does not matter, though their gaps may
+// differ and with them where the inverse reads.
+theorem inv_any_proof(x: CReal, h, h2: x.Apart(CReal::zero())): x.inv(h) ≈ x.inv(h2) {
+    CReal::inv_respects(x.same_refl(), h, h2)
+}
+
+// ---------------------------------------------------------------------------
 // Order and addition, and Bishop's pointwise forms.
 
 // Positive reals have a positive sum, and a gap between sums lies between
@@ -151,6 +169,20 @@ theorem product_term(): (CReal::ofRat(half()) * CReal::ofRat(third())).seq(0) �
 // bound is 3 on each side, so the factors must be within 1/14 of each other,
 // which regularity grants from index 55 on.
 theorem mul_comm_start(): (CReal::one().mul_comm(CReal::one())(0)).witness = 55 { refl }
+
+// The inverse computes: 0 < 2 carries the gap 1/2 (k = 1) from index 0 on,
+// so term n reads index (k+1)²(n+1) + n, and every term inverts the
+// constant 2.
+theorem two_apart(): CReal::ofRat(Rat(OfNat(2), 1)).Apart(CReal::zero()) {
+    let gap: (Rat::zero() < Rat(OfNat(2), 1)) = omega;
+    Inr(CReal::ofRat_lt(gap))
+}
+
+theorem two_gap(): (CReal::ofRat(Rat(OfNat(2), 1)).away_of_apart(two_apart())).witness = 1 { refl }
+
+theorem inv_two_index(): CReal::inv_at(1, 0, 4) = 24 { refl }
+
+theorem inv_two_term(): CReal::ofRat(Rat(OfNat(2), 1)).inv(two_apart()).seq(4) ≈ half() { refl }
 
 // Adding to both sides of a gap keeps it: the same 1/(k+1), from the same
 // start.
