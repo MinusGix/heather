@@ -783,6 +783,10 @@ theorem Rat::add_add_add_comm(self a, b, c, d: Rat): (a + b) + (c + d) ≈ (a + 
     ring(a.den_add(b), c.den_add(d), (a + b).den_add(c + d), a.den_add(c), b.den_add(d), (a + c).den_add(b + d))
 }
 
+theorem Rat::add_left_comm(self a, b, c: Rat): a + (b + c) ≈ b + (a + c) {
+    ring(b.den_add(c), a.den_add(b + c), a.den_add(c), b.den_add(a + c))
+}
+
 theorem Rat::add_sub_add(self a, b, c, d: Rat): (a + b) -(c + d) ≈ (a -c) + (b -d) {
     calc {
         (a + b) -(c + d) ≈ (a + b) + (-c + -d) := Rat::add_respects((a + b).same_refl(), c.neg_add(d)),
@@ -1024,6 +1028,19 @@ theorem Rat::same_of_close(self x, y: Rat, close: (k: Nat) → (x -y).abs() <= R
     let mag: (d.abs().num = d.num.abs()) = refl;
     let den: (d.abs().den = d.den) = refl;
     omega
+}
+
+// The one-sided form: a rational below b plus every 1/(k+1) is below b, since
+// an excess over b would sit above some 1/(k+1).
+theorem Rat::le_of_le_add_inv_succ({a, b: Rat}, close: (k: Nat) → a <= b + Rat::inv_succ(k)): a <= b {
+    Rat::le_of_not_lt(λ above => {
+        match (a -b).archimedean_inv(Rat::sub_pos(above)) {
+            Exists(k, gap) => {
+                let below: (Rat::inv_succ(k) < a -b) = gap;
+                Rat::not_le_of_lt(below, Rat::sub_le_of_le_add(close(k)))
+            },
+        }
+    })
 }
 
 instance(x, y: Rat) Decide<Rat::Le(x, y)> {

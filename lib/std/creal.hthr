@@ -113,6 +113,70 @@ instance Equivalence<CReal>(CReal::Same) {
 }
 
 // ---------------------------------------------------------------------------
+// Bishop's equality. Bishop calls two regular sequences equal when their
+// n-th terms are within 2/(n+1) at every n: a bound at each index, with no
+// modulus. It is the same relation as `≈`. Pointwise closeness is within
+// 1/(k+1) from index 2k+1 on. Conversely, compare the n-th terms through a
+// far index m: regularity moves each side by 1/(n+1) + 1/(m+1) and `≈`
+// crosses at m, so the excess over 2/(n+1) is below every 1/(j+1), hence
+// nothing (`Rat::le_of_le_add_inv_succ`).
+
+fn CReal::BishopSame(x, y: CReal) → Type {
+    (n: Nat) → (x.seq(n) -y.seq(n)).abs() <= Rat::inv_succ(n) + Rat::inv_succ(n)
+}
+
+theorem CReal::same_of_bishop({x, y: CReal}, h: x.BishopSame(y)): x ≈ y {
+    x.same_of_close(y, λ k n from => {
+        let fine = Rat::inv_succ(n);
+        let half = Rat::inv_succ(k + k + 1);
+        let le_half: (fine <= half) = Rat::inv_succ_antitone(k + k + 1, n, from);
+        calc {
+            (x.seq(n) -y.seq(n)).abs() <= fine + fine := h(n),
+            <= half + half := Rat::add_le_mono(le_half, le_half),
+            ≈ Rat::inv_succ(k) := Rat::inv_succ_half(k),
+        }
+    })
+}
+
+theorem CReal::bishop_of_same({x, y: CReal}, h: x ≈ y): x.BishopSame(y) {
+    λ n => {
+        let fine = Rat::inv_succ(n);
+        Rat::le_of_le_add_inv_succ(λ j => {
+            let j2 = j + j + 1;
+            let j4 = j2 + j2 + 1;
+            let q = Rat::inv_succ(j4);
+            let quarter = Rat::inv_succ(j2);
+            match h(j4) {
+                Exists(s, close) => {
+                    let m = s.max(j4);
+                    let at_s: (s <= m) = s.le_max_l(j4);
+                    let em: (Rat::inv_succ(m) <= q) = Rat::inv_succ_antitone(j4, m, s.le_max_r(j4));
+                    let dx: ((x.seq(n) -x.seq(m)).abs() <= fine + q) =
+                        Rat::le_trans(x.regular(n, m), Rat::inv_succ(m).add_le_mono_l(q, fine, em));
+                    let dy: ((y.seq(m) -y.seq(n)).abs() <= q + fine) =
+                        Rat::le_trans(y.regular(m, n), Rat::inv_succ(m).add_le_mono_r(q, fine, em));
+                    let near: ((x.seq(n) -y.seq(m)).abs() <= (fine + q) + q) = calc {
+                        (x.seq(n) -y.seq(m)).abs() <= (x.seq(n) -x.seq(m)).abs() + (x.seq(m) -y.seq(m)).abs() := x.seq(n).dist_triangle(x.seq(m), y.seq(m)),
+                        <= (fine + q) + q := Rat::add_le_mono(dx, close(m, at_s)),
+                    };
+                    let spare: (q <= q + q) = q.le_add_nonneg(q, Rat::le_of_lt(Rat::inv_succ_pos(j4)));
+                    calc {
+                        (x.seq(n) -y.seq(n)).abs() <= (x.seq(n) -y.seq(m)).abs() + (y.seq(m) -y.seq(n)).abs() := x.seq(n).dist_triangle(y.seq(m), y.seq(n)),
+                        <= ((fine + q) + q) + (q + fine) := Rat::add_le_mono(near, dy),
+                        ≈ (fine + (q + q)) + (q + fine) := Rat::add_respects(fine.add_assoc(q, q), (q + fine).same_refl()),
+                        ≈ (fine + (q + q)) + (fine + q) := Rat::add_respects((fine + (q + q)).same_refl(), q.add_comm(fine)),
+                        ≈ (fine + fine) + ((q + q) + q) := fine.add_add_add_comm(q + q, fine, q),
+                        <= (fine + fine) + ((q + q) + (q + q)) := ((q + q) + q).add_le_mono_l((q + q) + (q + q), fine + fine, q.add_le_mono_l(q + q, q + q, spare)),
+                        ≈ (fine + fine) + (quarter + quarter) := Rat::add_respects((fine + fine).same_refl(), Rat::add_respects(Rat::inv_succ_half(j2), Rat::inv_succ_half(j2))),
+                        ≈ (fine + fine) + Rat::inv_succ(j) := Rat::add_respects((fine + fine).same_refl(), Rat::inv_succ_half(j)),
+                    }
+                },
+            }
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
 // The rationals inside the reals: constant sequences.
 
 theorem CReal::const_regular(q: Rat, m, n: Nat): (q -q).abs() <= Rat::inv_succ(m) + Rat::inv_succ(n) {
@@ -1049,4 +1113,203 @@ instance Trans<CReal>(CReal::Same, CReal::Le, CReal::Le) {
 
 instance Trans<CReal>(CReal::Le, CReal::Same, CReal::Le) {
     rel_chain := λ x y z hxy hyz => CReal::le_trans(hxy, CReal::le_of_same(hyz)),
+}
+
+// ---------------------------------------------------------------------------
+// Order and addition. A sum reads both summands at index 2n+1, so adding z
+// to both sides of x < y adds the same rational to both terms there, and x's
+// gap below y is the sums' gap from the same start. Cancellation adds -z,
+// `≤` follows by refutation, and cotransitivity splits a gap between sums
+// into a gap between one pair of summands (Bishop's form of "a sum is
+// positive only if a summand is").
+
+theorem CReal::add_lt_mono_r(self x, y, z: CReal, h: x < y): x + z < y + z {
+    match h {
+        Exists(k, rest) => match rest {
+            Exists(s, gap) => Exists(k, Exists(s, λ n from => {
+                let i = n + n + 1;
+                let at_i: (s <= i) = s.le_trans(n, i, from, n.le_add_l(n + 1));
+                let a = x.seq(i);
+                let c = z.seq(i);
+                let step = Rat::inv_succ(k);
+                calc {
+                    (a + c) + step ≈ a + (c + step) := a.add_assoc(c, step),
+                    ≈ a + (step + c) := Rat::add_respects(a.same_refl(), c.add_comm(step)),
+                    ≈ (a + step) + c := Rat::same_sym(a.add_assoc(step, c)),
+                    <= y.seq(i) + c := (a + step).add_le_mono_r(y.seq(i), c, gap(i, at_i)),
+                }
+            })),
+        },
+    }
+}
+
+theorem CReal::add_lt_mono_l(self x, y, z: CReal, h: x < y): z + x < z + y {
+    calc {
+        z + x ≈ x + z := z.add_comm(x),
+        < y + z := x.add_lt_mono_r(y, z, h),
+        ≈ z + y := y.add_comm(z),
+    }
+}
+
+theorem CReal::add_lt_mono({x, x2, y, y2: CReal}, hx: x < x2, hy: y < y2): x + y < x2 + y2 {
+    CReal::lt_trans(x.add_lt_mono_r(x2, y, hx), y.add_lt_mono_l(y2, x2, hy))
+}
+
+theorem CReal::add_neg_cancel_r(self x, y: CReal): (x + y) + -y ≈ x {
+    calc {
+        (x + y) + -y ≈ x + (y + -y) := x.add_assoc(y, -y),
+        ≈ x + CReal::zero() := CReal::add_respects(x.same_refl(), y.add_neg()),
+        ≈ x := x.add_zero(),
+    }
+}
+
+theorem CReal::add_lt_cancel_r(self x, y, z: CReal, h: x + z < y + z): x < y {
+    calc {
+        x ≈ (x + z) + -z := CReal::same_sym(x.add_neg_cancel_r(z)),
+        < (y + z) + -z := (x + z).add_lt_mono_r(y + z, -z, h),
+        ≈ y := y.add_neg_cancel_r(z),
+    }
+}
+
+theorem CReal::add_lt_cancel_l(self x, y, z: CReal, h: z + x < z + y): x < y {
+    x.add_lt_cancel_r(y, z, calc {
+        x + z ≈ z + x := x.add_comm(z),
+        < z + y := h,
+        ≈ y + z := z.add_comm(y),
+    })
+}
+
+theorem CReal::add_le_mono_r(self x, y, z: CReal, h: x <= y): x + z <= y + z {
+    λ back => h(y.add_lt_cancel_r(x, z, back))
+}
+
+theorem CReal::add_le_mono_l(self x, y, z: CReal, h: x <= y): z + x <= z + y {
+    λ back => h(y.add_lt_cancel_l(x, z, back))
+}
+
+theorem CReal::add_le_mono({x, x2, y, y2: CReal}, hx: x <= x2, hy: y <= y2): x + y <= x2 + y2 {
+    CReal::le_trans(x.add_le_mono_r(x2, y, hx), y.add_le_mono_l(y2, x2, hy))
+}
+
+theorem CReal::add_lt_le_mono({x, x2, y, y2: CReal}, hx: x < x2, hy: y <= y2): x + y < x2 + y2 {
+    CReal::lt_of_lt_of_le(x.add_lt_mono_r(x2, y, hx), y.add_le_mono_l(y2, x2, hy))
+}
+
+theorem CReal::add_le_lt_mono({x, x2, y, y2: CReal}, hx: x <= x2, hy: y < y2): x + y < x2 + y2 {
+    CReal::lt_of_le_of_lt(x.add_le_mono_r(x2, y, hx), y.add_lt_mono_l(y2, x2, hy))
+}
+
+theorem CReal::add_lt_cancel({x, x2, y, y2: CReal}, h: x + y < x2 + y2): x < x2 ∨ y < y2 {
+    match (x + y).lt_cotrans(x2 + y2, x2 + y, h) {
+        Inl(left) => Inl(x.add_lt_cancel_r(x2, y, left)),
+        Inr(right) => Inr(y.add_lt_cancel_l(y2, x2, right)),
+    }
+}
+
+// Signs of a sum.
+theorem CReal::zero_add_zero(): CReal::zero() + CReal::zero() ≈ CReal::zero() { CReal::zero().add_zero() }
+
+theorem CReal::add_pos({x, y: CReal}, hx: CReal::zero() < x, hy: CReal::zero() < y): CReal::zero() < x + y {
+    calc {
+        CReal::zero() ≈ CReal::zero() + CReal::zero() := CReal::same_sym(CReal::zero_add_zero()),
+        < x + y := CReal::add_lt_mono(hx, hy),
+    }
+}
+
+theorem CReal::add_pos_of_nonneg_of_pos({x, y: CReal}, hx: CReal::zero() <= x, hy: CReal::zero() < y): CReal::zero() < x + y {
+    calc {
+        CReal::zero() ≈ CReal::zero() + CReal::zero() := CReal::same_sym(CReal::zero_add_zero()),
+        < x + y := CReal::add_le_lt_mono(hx, hy),
+    }
+}
+
+theorem CReal::add_nonneg({x, y: CReal}, hx: CReal::zero() <= x, hy: CReal::zero() <= y): CReal::zero() <= x + y {
+    calc {
+        CReal::zero() ≈ CReal::zero() + CReal::zero() := CReal::same_sym(CReal::zero_add_zero()),
+        <= x + y := CReal::add_le_mono(hx, hy),
+    }
+}
+
+theorem CReal::pos_of_add_pos({x, y: CReal}, h: CReal::zero() < x + y): CReal::zero() < x ∨ CReal::zero() < y {
+    CReal::add_lt_cancel(calc {
+        CReal::zero() + CReal::zero() ≈ CReal::zero() := CReal::zero_add_zero(),
+        < x + y := h,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Bishop's order. Bishop reads x ≤ y pointwise, as x_n ≤ y_n + 2/(n+1) at
+// every n, and it agrees with `≤` as the refutation of `>`. A gap of 1/(k+1)
+// with y below x would contradict the pointwise bound once 2/(n+1) is under
+// it. Conversely, x_n above y_n + 2/(n+1) by some 1/(j+1) leaves a gap
+// further out, after regularity moves both terms, and `lt_of_term` turns it
+// into y < x; so every such excess is refuted and vanishes.
+
+fn CReal::BishopLe(x, y: CReal) → Type {
+    (n: Nat) → x.seq(n) <= y.seq(n) + (Rat::inv_succ(n) + Rat::inv_succ(n))
+}
+
+theorem CReal::le_of_bishop({x, y: CReal}, h: x.BishopLe(y)): x <= y {
+    λ back => match back {
+        Exists(k, rest) => match rest {
+            Exists(s, gap) => {
+                let k2 = k + k + 1;
+                let k4 = k2 + k2 + 1;
+                let n = s.max(k4);
+                let a = y.seq(n);
+                let fine = Rat::inv_succ(n);
+                let step = Rat::inv_succ(k);
+                let le_q: (fine <= Rat::inv_succ(k4)) = Rat::inv_succ_antitone(k4, n, s.le_max_r(k4));
+                let strict: (Rat::inv_succ(k2) < step) = omega;
+                let small: (fine + fine < step) = calc {
+                    fine + fine <= Rat::inv_succ(k4) + Rat::inv_succ(k4) := Rat::add_le_mono(le_q, le_q),
+                    ≈ Rat::inv_succ(k2) := Rat::inv_succ_half(k2),
+                    < step := strict,
+                };
+                let swapped = calc {
+                    step + a ≈ a + step := step.add_comm(a),
+                    <= x.seq(n) := gap(n, s.le_max_l(k4)),
+                    <= a + (fine + fine) := h(n),
+                    ≈ (fine + fine) + a := a.add_comm(fine + fine),
+                };
+                Rat::not_le_of_lt(small, step.add_le_cancel_r(fine + fine, a, swapped))
+            },
+        },
+    }
+}
+
+theorem CReal::bishop_of_le({x, y: CReal}, h: x <= y): x.BishopLe(y) {
+    λ n => {
+        let fine = Rat::inv_succ(n);
+        let two = fine + fine;
+        Rat::le_of_le_add_inv_succ(λ j => Rat::le_of_not_lt(λ above => {
+            let j2 = j + j + 1;
+            let k = j2;
+            let q = Rat::inv_succ(k + k + 1);
+            let m = 16 * k + 15;
+            let at_m: (k + k + 1 <= m) = omega;
+            let em: (Rat::inv_succ(m) <= q) = Rat::inv_succ_antitone(k + k + 1, m, at_m);
+            let e = fine + q;
+            let ha: (y.seq(m) <= y.seq(n) + e) = Rat::le_add_of_dist(calc {
+                (y.seq(m) -y.seq(n)).abs() ≈ (y.seq(n) -y.seq(m)).abs() := y.seq(m).abs_sub_comm(y.seq(n)),
+                <= fine + Rat::inv_succ(m) := y.regular(n, m),
+                <= e := Rat::inv_succ(m).add_le_mono_l(q, fine, em),
+            });
+            let hb: (x.seq(n) <= x.seq(m) + e) =
+                Rat::le_add_of_dist(Rat::le_trans(x.regular(n, m), Rat::inv_succ(m).add_le_mono_l(q, fine, em)));
+            let spare: (q <= q + q) = q.le_add_nonneg(q, Rat::le_of_lt(Rat::inv_succ_pos(k + k + 1)));
+            let a = y.seq(n);
+            let wide = calc {
+                a + (q + (e + e)) ≈ a + (q + (two + (q + q))) := Rat::add_respects(a.same_refl(), Rat::add_respects(q.same_refl(), fine.add_add_add_comm(q, fine, q))),
+                ≈ a + (two + (q + (q + q))) := Rat::add_respects(a.same_refl(), q.add_left_comm(two, q + q)),
+                <= a + (two + ((q + q) + (q + q))) := (two + (q + (q + q))).add_le_mono_l(two + ((q + q) + (q + q)), a,
+                    (q + (q + q)).add_le_mono_l((q + q) + (q + q), two, q.add_le_mono_r(q + q, q + q, spare))),
+                ≈ a + (two + (Rat::inv_succ(j2) + Rat::inv_succ(j2))) := Rat::add_respects(a.same_refl(), Rat::add_respects(two.same_refl(), Rat::add_respects(Rat::inv_succ_half(k), Rat::inv_succ_half(k)))),
+                ≈ a + (two + Rat::inv_succ(j)) := Rat::add_respects(a.same_refl(), Rat::add_respects(two.same_refl(), Rat::inv_succ_half(j))),
+                ≈ (a + two) + Rat::inv_succ(j) := Rat::same_sym(a.add_assoc(two, Rat::inv_succ(j))),
+                <= x.seq(n) := Rat::le_of_lt(above),
+            };
+            h(y.lt_of_term(x, k, m, m.le_refl(), Rat::le_of_close_gap(ha, hb, wide)))
+        }))
+    }
 }
