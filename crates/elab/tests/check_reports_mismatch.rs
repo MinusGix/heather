@@ -307,6 +307,12 @@ fn a_projection_at_the_wrong_type_reports_at_the_projection() {
             rendered.contains("but `0 = 0` is expected here"),
             "{body}: {rendered}"
         );
+        // Why `mk_w().after` is not `0`: nothing will ever compute it
+        // (`issues/stuck-on-opaque-theorem-diagnostic.md`).
+        assert!(
+            rendered.contains("`mk_w` is an axiom, so it has no proof to unfold"),
+            "{body}: {rendered}"
+        );
         let ElabError::Elab { span, .. } = r else { panic!("expected an elaborator error: {r}") };
         assert!(src[span.start as usize..span.end as usize].ends_with(".pres"), "{rendered}");
     }
@@ -352,4 +358,70 @@ theorem t(r: Step, w: Nat, h: w = match r { Go(p) => dbl(p), Stop(p) => dbl(p) }
     );
     let ElabError::Kernel { span, .. } = r else { panic!("expected a kernel rejection: {r}") };
     assert_eq!(&src[span.start as usize..span.end as usize], "h");
+}
+
+/// `lib/std/logic.hthr`'s `Exists`, which `∃` spells.
+const EXISTS: &str = "record Exists<A>(P: A → Type) { witness: A, proof: P(witness) }\n";
+
+/// A `refl` refused because the reduction it needed is stuck on a global that
+/// never unfolds (`issues/stuck-on-opaque-theorem-diagnostic.md`). Read alone,
+/// "`ex().witness` and `3` are not" says the number is wrong; the note says
+/// instead that nothing will ever compute `ex().witness`, and why.
+#[test]
+fn a_refl_stuck_on_an_axiom_names_the_axiom() {
+    let src = format!(
+        "{EXISTS}axiom ex(k: Nat): ∃ n: Nat, n = 3;\n\
+         theorem t(): ex(0).witness = 3 {{ refl }}\n"
+    );
+    let r = reject(&src);
+    let rendered = r.render(&src);
+    assert!(
+        rendered.contains("but `ex(0).witness` and `3` are not"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("`ex` is an axiom, so it has no proof to unfold"),
+        "{rendered}"
+    );
+    let ElabError::Kernel { span, .. } = r else { panic!("expected a kernel rejection: {r}") };
+    assert_eq!(&src[span.start as usize..span.end as usize], "refl");
+}
+
+/// The theorem half of the same note: a theorem whose statement the sealing
+/// test does not judge to carry data keeps no proof (`sealing.rs`). A
+/// statement that decodes through a `match` on a parameter is such a
+/// statement — a family the test reads as propositions — even when every arm
+/// is an `∃`. A theorem whose statement does carry data is opened by the
+/// projection and needs no note (`a_projection_that_converts_is_still_accepted`).
+#[test]
+fn a_refl_stuck_on_an_unkept_theorem_names_the_theorem() {
+    let src = format!(
+        "{EXISTS}fn Pick(k: Nat) -> Type {{ match k {{ Zero => ∃ n: Nat, n = 3, Succ(j) => ∃ n: Nat, n = 3 }} }}\n\
+         theorem ex(k: Nat): Pick(k) {{ match k {{ Zero => Exists(3, refl), Succ(j) => Exists(3, refl) }} }}\n\
+         theorem t(): ex(0).witness = 3 {{ refl }}\n"
+    );
+    let rendered = reject(&src).render(&src);
+    assert!(
+        rendered.contains("`ex` is a theorem whose statement was not judged to carry data"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("declare it as a `fn`"), "{rendered}");
+}
+
+/// **Control for the opaque-head note.** The same projection through a `fn`
+/// unfolds and is accepted; through a `fn` with a false equation the `refl`
+/// note stays, but nothing is stuck on an opaque global, so nothing is named.
+#[test]
+fn a_refl_through_a_fn_is_accepted_and_names_no_opaque_global() {
+    ok(&format!(
+        "{EXISTS}fn ex() -> ∃ n: Nat, n = 3 {{ Exists(3, refl) }}\n\
+         theorem t(): ex().witness = 3 {{ refl }}\n"
+    ));
+    let src = format!(
+        "{EXISTS}fn ex() -> ∃ n: Nat, n = 3 {{ Exists(3, refl) }}\n\
+         theorem t(): ex().witness = 4 {{ refl }}\n"
+    );
+    let rendered = reject(&src).render(&src);
+    assert!(rendered.contains("`refl` needs both sides to be definitionally equal"), "{rendered}");
+    assert!(!rendered.contains("never unfolds") && !rendered.contains("axiom"), "{rendered}");
 }

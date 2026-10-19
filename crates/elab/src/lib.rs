@@ -5729,6 +5729,26 @@ impl Elaborator {
         }
         let got_s = self.display_type_clean(cx, got);
         let want_s = self.display_type_clean(cx, expected);
+        // Two equations whose endpoints differ because one is stuck on a
+        // global that never unfolds: [`Self::note_refl_mismatch`]'s
+        // addition, at the endpoints of each side's whnf.
+        let opaque = {
+            let oracle = oracle::SemanticOracle::in_world(
+                self.goal_psi(),
+                self.fuel.min(diagnostics::REFL_NOTE_FUEL),
+            );
+            let ends: Vec<Rc<Term>> = [got, expected]
+                .into_iter()
+                .filter_map(|ty| match oracle.whnf_type(&cx.gamma, ty).ok()? {
+                    Type::Id { lhs, rhs, .. } => Some([lhs, rhs]),
+                    _ => None,
+                })
+                .flatten()
+                .collect();
+            let ends: Vec<&Term> = ends.iter().map(|t| &**t).collect();
+            self.opaque_stuck_note(&oracle, cx, &ends)
+                .map_or_else(String::new, |why| format!("; {why}"))
+        };
         let note = match (got_s, want_s) {
             (Some(g), Some(w)) if g != w => MismatchNote::Spelled(format!(
                 "this has type `{g}`, but `{w}` is expected here"
@@ -5750,6 +5770,10 @@ impl Elaborator {
                  (neither has a surface spelling)"
                     .to_string(),
             ),
+        };
+        let note = match note {
+            MismatchNote::Spelled(msg) => MismatchNote::Spelled(msg + &opaque),
+            MismatchNote::Located(msg) => MismatchNote::Located(msg + &opaque),
         };
         Some((note, *span))
     }
@@ -5875,13 +5899,61 @@ impl Elaborator {
         if lhs_s == rhs_s {
             return None;
         }
+        let opaque = self
+            .opaque_stuck_note(&oracle, cx, &[lhs, rhs])
+            .map_or_else(String::new, |why| format!("; {why}"));
         Some((
             format!(
                 "`refl` needs both sides to be definitionally equal, \
-                 but `{lhs_s}` and `{rhs_s}` are not"
+                 but `{lhs_s}` and `{rhs_s}` are not{opaque}"
             ),
             *span,
         ))
+    }
+
+    /// Why a side of a refused conversion will never compute, when the
+    /// reason is a global that does not unfold
+    /// (`issues/stuck-on-opaque-theorem-diagnostic.md`). "`ex().witness` and
+    /// `3` are not" reads as "the number is wrong" to a writer used to `fn`s;
+    /// what is wrong is that nothing ever computes `ex().witness`.
+    ///
+    /// A side qualifies when its whnf is an elimination chain whose innermost
+    /// head is a named, body-less global with no sealed proof: an `axiom`, or
+    /// a `theorem` whose statement [`sealing::carries_data`] did not accept.
+    /// A theorem whose statement carries data is opened by the elimination,
+    /// so meeting one here means the budget ran out first, and nothing is
+    /// claimed. Only on a refusal the probe already decided, so it costs a
+    /// whnf of each side under the same small budget, on the error path.
+    fn opaque_stuck_note(
+        &self,
+        oracle: &oracle::SemanticOracle,
+        cx: &Cx,
+        sides: &[&Term],
+    ) -> Option<String> {
+        sides.iter().find_map(|side| {
+            let whnf = oracle.whnf_term(&cx.gamma, side).ok()?;
+            let abs = self.global_abs_of(eliminated_global(&whnf)?)?;
+            let Some(GlobalBinding::Tm { body: None, .. }) = self.psi.bindings.get(abs) else {
+                return None;
+            };
+            if self.psi.sealed.get(abs).is_some() {
+                return None;
+            }
+            let report = self.provenance.report(&self.global_qualified_name_at(abs)?)?;
+            let name = self.global_declared_name_at(abs)?;
+            Some(if report.is_axiom {
+                format!(
+                    "`{name}` is an axiom, so it has no proof to unfold \
+                     and what is stuck on it never computes"
+                )
+            } else {
+                format!(
+                    "`{name}` is a theorem whose statement was not judged to carry data, \
+                     so its proof is not kept and never unfolds; \
+                     to compute with what it builds, declare it as a `fn`"
+                )
+            })
+        })
     }
 
     /// The first recorded `refl` that has something to say, in the order the
@@ -8796,6 +8868,45 @@ impl Elaborator {
             body: None,
         };
         *self.delta_psi = self.psi.extended(std::iter::repeat_n(placeholder, self.attempt.goal_arena.base() as usize));
+    }
+}
+
+/// The global an elimination chain is stuck on: descend from `t`'s head
+/// through projections, matches, recursors and applications to the innermost
+/// head, and return it when it is a global **and** at least one elimination
+/// was crossed. A bare call of a global that does not unfold is a value; it
+/// is an elimination of one that was expected to compute
+/// ([`Elaborator::opaque_stuck_note`]). `transp` is not an elimination of its
+/// proof (a strict equation's proof is never inspected), so it is not crossed.
+fn eliminated_global(mut t: &Term) -> Option<GlobalVar> {
+    let mut eliminated = false;
+    loop {
+        t = match t {
+            Term::App { fun, .. }
+            | Term::AppAt { fun, .. }
+            | Term::UApp { fun, .. }
+            | Term::CtxApp { fun, .. }
+            | Term::TyApp { fun, .. } => {
+                t = fun;
+                continue;
+            }
+            Term::GlobalTm { var, .. } => return eliminated.then_some(*var),
+            Term::Fst { pair, .. } | Term::Snd { pair, .. } | Term::FstAt { pair } | Term::SndAt { pair } => pair,
+            Term::J { proof, .. } => proof,
+            Term::ElimNat { scrut, .. }
+            | Term::ElimEmpty { scrut, .. }
+            | Term::ElimSEmpty { scrut, .. }
+            | Term::ElimSquash { scrut, .. }
+            | Term::Case { scrut, .. }
+            | Term::ElimW { scrut, .. }
+            | Term::ElimWf { scrut, .. }
+            | Term::LetBoxTy { scrut, .. }
+            | Term::LetBoxTm { scrut, .. }
+            | Term::ElimCodeTy { scrut, .. }
+            | Term::ElimCodeTm { scrut, .. } => scrut,
+            _ => return None,
+        };
+        eliminated = true;
     }
 }
 
