@@ -5028,98 +5028,26 @@ impl Elaborator {
                     && !self.shadowed(cx, name)
                     && self.ctor_here_expected(cx, name, expected).is_none() =>
             {
-                if self.omega_depth.get() == 0 && self.key_of("omega::nat_le_of_not_not_le").is_none() {
-                    return err(
-                        "`omega` requires its certificate library; add `import omega;`",
-                        e.span,
-                    );
+                self.elab_omega(cx, name, expected, lvl, e.span)
+            }
+            // `omega(h, …)`: the listed proofs join the context for this call
+            // only, read as facts exactly as a `let` of each would be
+            // (`issues/omega-fact-arguments.md`).
+            ExprKind::App {
+                head,
+                args,
+                named,
+                explicit: false,
+                goal_oriented: false,
+            } if matches!(&head.kind, ExprKind::Var(name) if name == "omega")
+                && !self.shadowed(cx, "omega")
+                && self.ctor_here_expected(cx, "omega", expected).is_none() =>
+            {
+                if !named.is_empty() {
+                    return err("`omega` takes its facts positionally", e.span);
                 }
-                let outer_depth = self.omega_depth.get();
-                let source_cx = omega_cert::source_context(cx);
-                let cx = source_cx.as_ref();
-                let _certificate_scope = omega_cert::CertificateScope::enter(&self.omega_depth);
-                omega_cert::reset_phases();
-                let reconstruct_guard = stats::guard(stats::Timer::OmegaReconstruct);
-                let mut cert = omega_cert::reconstruct(
-                    self,
-                    cx,
-                    expected,
-                    name != "__omega_diseq_branch",
-                    name != "__omega_connective_branch",
-                    name != "__cutsat_linear_branch",
-                )
-                .map_err(|detail| ElabError::Elab {
-                    msg: format!("`omega` got stuck: {detail}"),
-                    span: e.span,
-                })?;
-                let reconstruct_ns = reconstruct_guard.finish();
-                let mut phases = omega_cert::phases();
-                phases.reconstruct_ns = reconstruct_ns;
-                phases.depth = outer_depth;
-                phases.source_len = cert.source.len();
-                // The certificate is parsed from generated text: its spans index
-                // that text, not the user's file, and a lint about how the
-                // generator spells a list is the generator's problem, not the
-                // reader's. Same rule as datarepr emissions (`emit_lint`).
-                let check_guard = stats::guard(stats::Timer::OmegaCheck);
-                // The certificate names its atom list rather than spelling it
-                // at every row: elaborated once here, and a transparent slot
-                // of the declaration's where there is one, so the kernel
-                // checks one list per certificate, not one per use.
-                let named;
-                let cx = match &cert.atoms {
-                    Some(literal) => {
-                        let (list_ty, parsed) = omega_cert::parse_atom_list(literal).map_err(|detail| ElabError::Elab {
-                            msg: format!("`omega` wrote an atom list that does not parse: {detail}\n  generated: {literal}"),
-                            span: e.span,
-                        })?;
-                        let checked = self.generated_scope(|me| {
-                            let (ty, level) = me.elab_ty(cx, &list_ty)?;
-                            let atoms = me.elab_check(cx, &parsed, &ty, &level)?;
-                            Ok((atoms, ty, level))
-                        });
-                        let (atoms, ty, level) = checked.map_err(|error: ElabError| ElabError::Elab {
-                            msg: format!("{error}\n  generated Omega atom list: {literal}"),
-                            span: e.span,
-                        })?;
-                        let term = self
-                            .attempt
-                            .goal_arena
-                            .allocate_transparent(cx, ty.clone(), level.clone(), atoms.clone());
-                        let term = match term {
-                            goals::Named::Slot(reference) => reference,
-                            goals::Named::Inline => atoms,
-                            goals::Named::Restart => {
-                                return err("internal: restarting declaration to reserve a slot for `omega`'s atoms", e.span);
-                            }
-                        };
-                        let mut inner = cx.clone();
-                        inner.aliases.push(Rc::new(Alias {
-                            name: omega_cert::ATOMS.to_string(),
-                            depth: cx.names.len(),
-                            term: Rc::new(term),
-                            ty,
-                            level,
-                            skel: None,
-                        }));
-                        named = inner;
-                        &named
-                    }
-                    None => cx,
-                };
-                let checked = self
-                    .generated_scope(|me| me.elab_check(cx, &cert.expr, expected, lvl));
-                phases.check_ns = check_guard.finish();
-                let term = checked.map_err(|error| ElabError::Elab {
-                    msg: match &cert.atoms {
-                        Some(atoms) => format!("{error}\n  generated Omega certificate: {}\n  where {} = {atoms}", cert.source, omega_cert::ATOMS),
-                        None => format!("{error}\n  generated Omega certificate: {}", cert.source),
-                    },
-                    span: e.span,
-                })?;
-                cert.report.phases = phases;
-                self.omega_reports.borrow_mut().push(cert.report);
-                Ok(term)
+                let cx = self.omega_fact_context(cx, args)?;
+                self.elab_omega(&cx, "omega", expected, lvl, e.span)
             }
             // `bv_omega` lifts word arithmetic to Nat (docs/bv-omega-design.md):
             // it writes a proof from the bridge lemmas and `omega`, and this
@@ -5520,6 +5448,137 @@ impl Elaborator {
                 Ok(t)
             }
         }
+    }
+
+    /// `cx` with each of `omega(h, …)`'s arguments bound as a fact. Each is
+    /// elaborated where it was written and named by an alias the user cannot
+    /// spell, so the certificate can cite it; a bare local is in scope
+    /// already and is only checked.
+    fn omega_fact_context(&self, cx: &Cx, facts: &[Expr]) -> R<Cx> {
+        let mut inner = cx.clone();
+        let mut next = 0;
+        for fact in facts {
+            let (term, ty, level) = self.elab_infer(cx, fact)?;
+            if let ExprKind::Var(name) = &fact.kind {
+                if cx.names.contains(name) || cx.aliases.iter().any(|alias| alias.name == *name) {
+                    continue;
+                }
+            }
+            let name = loop {
+                let name = format!("__omega_fact_{next}");
+                next += 1;
+                if !inner.names.contains(&name) && !inner.aliases.iter().any(|alias| alias.name == name) {
+                    break name;
+                }
+            };
+            inner.aliases.push(Rc::new(Alias {
+                name,
+                depth: cx.names.len(),
+                term: Rc::new(term),
+                ty,
+                level,
+                skel: None,
+            }));
+        }
+        Ok(inner)
+    }
+
+    /// `omega` at `expected`, reading its facts from `cx`: reconstruction
+    /// writes a certificate and this checks it like any other source.
+    /// `name` is `omega` or one of the certificate's own branch markers.
+    fn elab_omega(&self, cx: &Cx, name: &str, expected: &Type, lvl: &Level, span: Span) -> R<Term> {
+        if self.omega_depth.get() == 0 && self.key_of("omega::nat_le_of_not_not_le").is_none() {
+            return err(
+                "`omega` requires its certificate library; add `import omega;`",
+                span,
+            );
+        }
+        let outer_depth = self.omega_depth.get();
+        let source_cx = omega_cert::source_context(cx);
+        let cx = source_cx.as_ref();
+        let _certificate_scope = omega_cert::CertificateScope::enter(&self.omega_depth);
+        omega_cert::reset_phases();
+        let reconstruct_guard = stats::guard(stats::Timer::OmegaReconstruct);
+        let mut cert = omega_cert::reconstruct(
+            self,
+            cx,
+            expected,
+            name != "__omega_diseq_branch",
+            name != "__omega_connective_branch",
+            name != "__cutsat_linear_branch",
+        )
+        .map_err(|detail| ElabError::Elab {
+            msg: format!("`omega` got stuck: {detail}"),
+            span: span,
+        })?;
+        let reconstruct_ns = reconstruct_guard.finish();
+        let mut phases = omega_cert::phases();
+        phases.reconstruct_ns = reconstruct_ns;
+        phases.depth = outer_depth;
+        phases.source_len = cert.source.len();
+        // The certificate is parsed from generated text: its spans index
+        // that text, not the user's file, and a lint about how the
+        // generator spells a list is the generator's problem, not the
+        // reader's. Same rule as datarepr emissions (`emit_lint`).
+        let check_guard = stats::guard(stats::Timer::OmegaCheck);
+        // The certificate names its atom list rather than spelling it
+        // at every row: elaborated once here, and a transparent slot
+        // of the declaration's where there is one, so the kernel
+        // checks one list per certificate, not one per use.
+        let named;
+        let cx = match &cert.atoms {
+            Some(literal) => {
+                let (list_ty, parsed) = omega_cert::parse_atom_list(literal).map_err(|detail| ElabError::Elab {
+                    msg: format!("`omega` wrote an atom list that does not parse: {detail}\n  generated: {literal}"),
+                    span: span,
+                })?;
+                let checked = self.generated_scope(|me| {
+                    let (ty, level) = me.elab_ty(cx, &list_ty)?;
+                    let atoms = me.elab_check(cx, &parsed, &ty, &level)?;
+                    Ok((atoms, ty, level))
+                });
+                let (atoms, ty, level) = checked.map_err(|error: ElabError| ElabError::Elab {
+                    msg: format!("{error}\n  generated Omega atom list: {literal}"),
+                    span: span,
+                })?;
+                let term = self
+                    .attempt
+                    .goal_arena
+                    .allocate_transparent(cx, ty.clone(), level.clone(), atoms.clone());
+                let term = match term {
+                    goals::Named::Slot(reference) => reference,
+                    goals::Named::Inline => atoms,
+                    goals::Named::Restart => {
+                        return err("internal: restarting declaration to reserve a slot for `omega`'s atoms", span);
+                    }
+                };
+                let mut inner = cx.clone();
+                inner.aliases.push(Rc::new(Alias {
+                    name: omega_cert::ATOMS.to_string(),
+                    depth: cx.names.len(),
+                    term: Rc::new(term),
+                    ty,
+                    level,
+                    skel: None,
+                }));
+                named = inner;
+                &named
+            }
+            None => cx,
+        };
+        let checked = self
+            .generated_scope(|me| me.elab_check(cx, &cert.expr, expected, lvl));
+        phases.check_ns = check_guard.finish();
+        let term = checked.map_err(|error| ElabError::Elab {
+            msg: match &cert.atoms {
+                Some(atoms) => format!("{error}\n  generated Omega certificate: {}\n  where {} = {atoms}", cert.source, omega_cert::ATOMS),
+                None => format!("{error}\n  generated Omega certificate: {}", cert.source),
+            },
+            span: span,
+        })?;
+        cert.report.phases = phases;
+        self.omega_reports.borrow_mut().push(cert.report);
+        Ok(term)
     }
 
     /// The refusal of an expression whose type is a universe — a type, most

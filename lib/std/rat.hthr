@@ -188,10 +188,9 @@ theorem Rat::le_trans({x, y, z: Rat}, hxy: x <= y, hyz: y <= z): x <= z {
     let r = z.den.int();
     let first = (x.num * q).mul_le_mono_r(y.num * p, r, hxy, trivial);
     let second = (y.num * r).mul_le_mono_r(z.num * q, p, hyz, trivial);
-    let m1 = x.num.mul_right_comm(r, q);
-    let m2 = y.num.mul_right_comm(p, r);
-    let m3 = z.num.mul_right_comm(q, p);
-    (x.num * r).mul_le_cancel_pos_r(z.num * p, q, omega, p_pos := y.den_pos)
+    (x.num * r).mul_le_cancel_pos_r(z.num * p, q,
+        omega(first, second, x.num.mul_right_comm(r, q), y.num.mul_right_comm(p, r), z.num.mul_right_comm(q, p)),
+        p_pos := y.den_pos)
 }
 
 theorem Rat::le_antisymm({x, y: Rat}, hxy: x <= y, hyx: y <= x): x ≈ y {
@@ -215,27 +214,17 @@ theorem Rat::add_le_mono_r(self x, y, z: Rat, h: x <= y): x + z <= y + z {
     let p = x.den.int();
     let q = y.den.int();
     let r = z.den.int();
-    let pr = x.den_add(z);
-    let qr = y.den_add(z);
     let scaled = (a * q).mul_le_mono_r(c * p, r * r, h, trivial);
-    let left = (a * r).add_mul_distr(e * p, q * r);
-    let right = (c * r).add_mul_distr(e * q, p * r);
-    let ml = a.mul_shuffle(r, q, r);
-    let mr = c.mul_shuffle(r, p, r);
-    let ez = e.mul_shuffle(p, q, r);
-    let gl: ((a * r + e * p) * (y + z).den.int() = (a * r + e * p) * (q * r)) = cong(qr);
-    let gr: ((c * r + e * q) * (x + z).den.int() = (c * r + e * q) * (p * r)) = cong(pr);
-    omega
+    let gl: ((a * r + e * p) * (y + z).den.int() = (a * r + e * p) * (q * r)) = cong(y.den_add(z));
+    let gr: ((c * r + e * q) * (x + z).den.int() = (c * r + e * q) * (p * r)) = cong(x.den_add(z));
+    omega(scaled, gl, gr, (a * r).add_mul_distr(e * p, q * r), (c * r).add_mul_distr(e * q, p * r),
+        a.mul_shuffle(r, q, r), c.mul_shuffle(r, p, r), e.mul_shuffle(p, q, r))
 }
 
 theorem Rat::mul_nonneg({x, y: Rat}, hx: Rat::zero() <= x, hy: Rat::zero() <= y): Rat::zero() <= x * y {
-    let zx = Int::zero_mul(x.den.int());
-    let zy = Int::zero_mul(y.den.int());
-    let ha: (OfNat(0) <= x.num) = omega;
-    let hb: (OfNat(0) <= y.num) = omega;
-    let prod = OfNat(0).mul_le_mono_r(x.num, y.num, ha, hb);
-    let zero = Int::zero_mul(y.num);
-    omega
+    let ha: (OfNat(0) <= x.num) = omega(Int::zero_mul(x.den.int()));
+    let hb: (OfNat(0) <= y.num) = omega(Int::zero_mul(y.den.int()));
+    omega(OfNat(0).mul_le_mono_r(x.num, y.num, ha, hb), Int::zero_mul(y.num))
 }
 
 // ---------------------------------------------------------------------------
@@ -276,18 +265,11 @@ theorem Rat::mul_recip_parts(a: Int, d: Pos<Nat>):
     match a {
         OfNat(n) => match n {
             Zero => λ nonzero => false_elim(nonzero(sym(Int::zero_mul(d.int())))),
-            Succ(k) => λ nonzero => {
-                let den = d.int_mul(Succ(k));
-                let swap = OfNat(Succ(k)).mul_comm(d.int());
-                omega
-            },
+            Succ(k) => λ nonzero => omega(d.int_mul(Succ(k)), OfNat(Succ(k)).mul_comm(d.int())),
         },
         NegSucc(k) => λ nonzero => {
-            let den = d.int_mul(Succ(k));
-            let flip = NegSucc(k).mul_neg_r(d.int());
-            let sign = OfNat(Succ(k)).mul_neg_l(d.int());
-            let swap = OfNat(Succ(k)).mul_comm(d.int());
-            omega
+            omega(d.int_mul(Succ(k)), NegSucc(k).mul_neg_r(d.int()), OfNat(Succ(k)).mul_neg_l(d.int()),
+                OfNat(Succ(k)).mul_comm(d.int()))
         },
     }
 }
@@ -300,12 +282,12 @@ theorem Rat::mul_recip(self x: Rat, nonzero: ¬(x ≈ Rat::zero())): x * x.recip
 // positive denominator keeps each numerator's sign.
 theorem Rat::num_pos_of_same({x, y: Rat}, h: x ≈ y, hx: OfNat(0) < x.num): OfNat(0) < y.num {
     let scaled = x.num.mul_pos(y.den.int(), hx, p_pos := y.den_pos);
-    y.num.pos_of_mul_pos(x.den.int(), omega, p_pos := x.den_pos)
+    y.num.pos_of_mul_pos(x.den.int(), omega(scaled), p_pos := x.den_pos)
 }
 
 theorem Rat::num_neg_of_same({x, y: Rat}, h: x ≈ y, hx: x.num < OfNat(0)): y.num < OfNat(0) {
     let scaled = x.num.mul_neg(y.den.int(), hx, p_pos := y.den_pos);
-    y.num.neg_of_mul_neg(x.den.int(), omega, p_pos := x.den_pos)
+    y.num.neg_of_mul_neg(x.den.int(), omega(scaled), p_pos := x.den_pos)
 }
 
 // Equal fractions with positive numerators have equal reciprocals.
@@ -480,15 +462,11 @@ theorem Rat::add_neg_cancel_r(self x, y: Rat): (x + y) + -y ≈ x {
 }
 
 theorem Rat::neg_le({x, y: Rat}, h: x <= y): -y <= -x {
-    let left = y.num.mul_neg_l(x.den.int());
-    let right = x.num.mul_neg_l(y.den.int());
-    omega
+    omega(y.num.mul_neg_l(x.den.int()), x.num.mul_neg_l(y.den.int()))
 }
 
 theorem Rat::neg_lt({x, y: Rat}, h: x < y): -y < -x {
-    let left = y.num.mul_neg_l(x.den.int());
-    let right = x.num.mul_neg_l(y.den.int());
-    omega
+    omega(y.num.mul_neg_l(x.den.int()), x.num.mul_neg_l(y.den.int()))
 }
 
 theorem Rat::add_le_mono_l(self x, y, z: Rat, h: x <= y): z + x <= z + y {
@@ -543,9 +521,7 @@ theorem Rat::abs_respects({x, x2: Rat}, hx: x ≈ x2): x.abs() ≈ x2.abs() {
 }
 
 theorem Rat::abs_nonneg(self x: Rat): Rat::zero() <= x.abs() {
-    let positive = x.num.abs_nonneg();
-    let zero = Int::zero_mul(x.den.int());
-    omega
+    omega(x.num.abs_nonneg(), Int::zero_mul(x.den.int()))
 }
 
 theorem Rat::le_abs(self x: Rat): x <= x.abs() { x.num.mul_le_mono_r(x.num.abs(), x.den.int(), x.num.le_abs(), trivial) }
@@ -563,14 +539,8 @@ theorem Rat::abs_mul(self x, y: Rat): (x * y).abs() ≈ x.abs() * y.abs() {
 theorem Rat::abs_cases(self x: Rat): (Rat::zero() <= x ∧ x.abs() ≈ x) ∨ (x < Rat::zero() ∧ x.abs() ≈ -x) {
     let zero = Int::zero_mul(x.den.int());
     match x.num.abs_cases() {
-        Inl(c) => {
-            let s = c.left;
-            Inl(And(omega, x.abs().same_of_parts(x, c.right, refl)))
-        },
-        Inr(c) => {
-            let s = c.left;
-            Inr(And(omega, x.abs().same_of_parts(-x, c.right, refl)))
-        },
+        Inl(c) => Inl(And(omega(zero, c.left), x.abs().same_of_parts(x, c.right, refl))),
+        Inr(c) => Inr(And(omega(zero, c.left), x.abs().same_of_parts(-x, c.right, refl))),
     }
 }
 
@@ -611,12 +581,11 @@ theorem Rat::mul_le_mono_r({x, y, z: Rat}, h: x <= y, hz: Rat::zero() <= z): x *
     let q = y.den.int();
     let r = z.den.int();
     let zr = Int::zero_mul(r);
-    let he: (OfNat(0) <= e) = omega;
-    let her = Int::mul_le_mono_r(OfNat(0), e, r, he, trivial);
-    let scaled = Int::mul_le_mono_r(a * q, c * p, e * r, h, omega);
+    let he: (OfNat(0) <= e) = omega(zr);
+    let scaled = Int::mul_le_mono_r(a * q, c * p, e * r, h, omega(zr, Int::mul_le_mono_r(OfNat(0), e, r, he, trivial)));
     let left: ((a * e) * (y * z).den.int() = (a * q) * (e * r)) = ring(y.den_mul(z));
     let right: ((c * e) * (x * z).den.int() = (c * p) * (e * r)) = ring(x.den_mul(z));
-    omega
+    omega(scaled, left, right)
 }
 
 theorem Rat::mul_lt_mono_r({x, y, z: Rat}, h: x < y, hz: Rat::zero() < z): x * z < y * z {
@@ -627,13 +596,12 @@ theorem Rat::mul_lt_mono_r({x, y, z: Rat}, h: x < y, hz: Rat::zero() < z): x * z
     let q = y.den.int();
     let r = z.den.int();
     let zr = Int::zero_mul(r);
-    let he: (OfNat(0) < e) = omega;
-    let rp = z.den_pos;
-    let her = Int::mul_lt_mono_r(OfNat(0), e, r, he, omega);
-    let scaled = Int::mul_lt_mono_r(a * q, c * p, e * r, h, omega);
+    let he: (OfNat(0) < e) = omega(zr);
+    let her = Int::mul_lt_mono_r(OfNat(0), e, r, he, omega(z.den_pos));
+    let scaled = Int::mul_lt_mono_r(a * q, c * p, e * r, h, omega(zr, her));
     let left: ((a * e) * (y * z).den.int() = (a * q) * (e * r)) = ring(y.den_mul(z));
     let right: ((c * e) * (x * z).den.int() = (c * p) * (e * r)) = ring(x.den_mul(z));
-    omega
+    omega(scaled, left, right)
 }
 
 theorem Rat::mul_le_mono_l({x, y, z: Rat}, h: x <= y, hz: Rat::zero() <= z): z * x <= z * y {
@@ -715,10 +683,8 @@ theorem Rat::inv_succ_mul(k, l: Nat): Rat::inv_succ(k) * Rat::inv_succ(l) ≈ Ra
 theorem Rat::archimedean(self x: Rat): ∃ n: Nat, x < Rat::ofInt(OfNat(n)) {
     let a = x.num;
     let p = x.den.int();
-    let above = a.le_abs();
-    let pp = x.den_pos;
-    let scaled = OfNat(1).mul_le_mono_l(p, OfNat(Succ(a.natAbs())), omega, trivial);
-    Exists(Succ(a.natAbs()), omega)
+    let scaled = OfNat(1).mul_le_mono_l(p, OfNat(Succ(a.natAbs())), omega(x.den_pos), trivial);
+    Exists(Succ(a.natAbs()), omega(scaled, a.le_abs()))
 }
 
 // Every positive rational is above some 1/(n+1): with ε = e/r and e ≥ 1,
@@ -726,23 +692,19 @@ theorem Rat::archimedean(self x: Rat): ∃ n: Nat, x < Rat::ofInt(OfNat(n)) {
 theorem Rat::archimedean_inv(self eps: Rat, h: Rat::zero() < eps): ∃ n: Nat, Rat::inv_succ(n) < eps {
     let e = eps.num;
     let r = eps.den.int();
-    let zr = Int::zero_mul(r);
-    let he: (OfNat(1) <= e) = omega;
-    let scaled = OfNat(1).mul_le_mono_r(e, OfNat(Succ(eps.den)), he, trivial);
-    Exists(eps.den, omega)
+    let he: (OfNat(1) <= e) = omega(Int::zero_mul(r));
+    Exists(eps.den, omega(OfNat(1).mul_le_mono_r(e, OfNat(Succ(eps.den)), he, trivial)))
 }
 
 // A rational is at most its numerator in size, a/p with p ≥ 1; with the
 // next lemma, the canonical bound of a regular Cauchy real.
 theorem Rat::abs_le_natAbs(self x: Rat): x.abs() <= Rat::ofInt(OfNat(x.num.natAbs())) {
-    let pp = x.den_pos;
-    let scaled = OfNat(1).mul_le_mono_l(x.den.int(), OfNat(x.num.natAbs()), omega, trivial);
-    omega
+    let scaled = OfNat(1).mul_le_mono_l(x.den.int(), OfNat(x.num.natAbs()), omega(x.den_pos), trivial);
+    omega(scaled)
 }
 
 theorem Rat::two_add_ofNat(n: Nat): (Rat::one() + Rat::one()) + Rat::ofInt(OfNat(n)) ≈ Rat::ofInt(OfNat(n + 2)) {
-    let lift = Int::ofNat_add(n, 2);
-    omega
+    omega(Int::ofNat_add(n, 2))
 }
 
 // ---------------------------------------------------------------------------

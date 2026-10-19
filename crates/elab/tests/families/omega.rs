@@ -31,6 +31,8 @@ mod omega_wide_constants;
 mod omega_relevance;
 #[path = "../omega_defined_propositions.rs"]
 mod omega_defined_propositions;
+#[path = "../omega_fact_arguments.rs"]
+mod omega_fact_arguments;
 #[path = "../module_delta_omega_bench.rs"]
 mod module_delta_omega_bench;
 #[path = "../mutual_recursion.rs"]
