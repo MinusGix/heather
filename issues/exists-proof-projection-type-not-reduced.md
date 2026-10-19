@@ -1,9 +1,9 @@
 ---
 title: Inference does not beta-reduce an Exists proof's type P(witness)
-status: open
+status: closed
 labels: [elaboration,inference]
 created: 2026-10-16
-updated: 2026-10-16
+updated: 2026-10-18
 ---
 
 Projecting the proof out of an `∃` that a call returns gives a value whose
@@ -36,3 +36,22 @@ refused.
 
 - **[[exists-type-arg-not-inferred]]** (closed) fixed inference of
   `Exists`'s type argument at introduction. This is elimination.
+
+## Log
+
+- 2026-10-18: FIXED. The subject type was `El(app@(λk. Rat::Lt(inv_succ(k), d); witness))`,
+  and the application congruence in `unify_tm` (crates/elab/src/unification.rs) paired the
+  pattern's spine against the λ and its argument: `?x` learned nothing and `?y` learned the
+  *witness*, a wrong solution the kernel would have refused had `x` not been reported first.
+  Now `unify_tm` contracts the head β-redexes of **both** sides (`beta_head`, context-free
+  `inst_top`) before any other rule, and `unify_ty` contracts an `El` subject's code before
+  decoding when the pattern is a former, so a predicate that is an equation reads as an `Id`
+  against a pattern `a = b`. Both sides, because patterns carry redexes too: contracting
+  only the subject broke the native formatter's `piece_runs`, whose `scratch` was learned
+  from `protected(register)` at `λ r => Kept(scratch, r)` by the λ/λ congruence of two
+  redexes. Head-only and syntactic: no δ, no context, nothing a well-typed term reduces
+  forever. Tests: crates/elab/tests/logic.rs
+  `an_exists_proof_read_off_a_call_teaches_implicits` (`.proof` and `match` binder, a named
+  predicate and an equation, a wrong-statement negative control) and
+  `a_redex_in_the_pattern_still_teaches_implicits`. Library: `Rat::same_of_close` and `Rat::le_of_le_add_inv_succ` drop
+  their restating `let`s; `CReal::ofRat_lt` keeps its own (creal.hthr had other rounds open).

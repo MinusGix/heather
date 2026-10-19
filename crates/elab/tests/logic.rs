@@ -221,6 +221,62 @@ fn AtBool(P: Bool -> Type) -> Type { Exists(P) }
 ");
 }
 
+/// Eliminating an `∃` a **call** returns: its proof's type arrives as the
+/// predicate applied to the witness, `(λk. P)(witness)`, and the implicits
+/// of the lemma it is handed are learned through that β-redex
+/// (`issues/exists-proof-projection-type-not-reduced.md`). Both ways in —
+/// the `.proof` projection and the `match` binder — and both shapes of
+/// predicate: a named type function (`Below`, the `Rat::Lt` shape) and an
+/// equation, which only reads as an `Id` once the redex contracts. The
+/// negative control hands a proof of the wrong statement and is refused.
+#[test]
+fn an_exists_proof_read_off_a_call_teaches_implicits() {
+    let defs = "
+fn Below(a: Nat, b: Nat) -> Type { a.add(1) = b }
+theorem below_out({a, b: Nat}, h: Below(a, b)): a.add(1) = b { h }
+theorem near(n: Nat): ∃ k: Nat, Below(k, n.add(1)) { Exists(n, refl) }
+theorem twice(n: Nat): ∃ k: Nat, k.add(k) = n.add(n) { Exists(n, refl) }
+";
+    ok(&format!("{defs}
+theorem projected(n: Nat): ∃ k: Nat, k.add(1) = n.add(1) {{
+    let gap = near(n);
+    Exists(gap.witness, below_out(gap.proof))
+}}
+theorem matched(n: Nat): ∃ k: Nat, k.add(1) = n.add(1) {{
+    match near(n) {{ Exists(k, gap) => Exists(k, below_out(gap)) }}
+}}
+theorem equation(n: Nat): ∃ k: Nat, n.add(n) = k.add(k) {{
+    let pair = twice(n);
+    Exists(pair.witness, sym(pair.proof))
+}}
+theorem equation_matched(n: Nat): ∃ k: Nat, n.add(n) = k.add(k) {{
+    match twice(n) {{ Exists(k, same) => Exists(k, sym(same)) }}
+}}
+"));
+    let err = bad(&format!("{defs}
+theorem wrong(n: Nat): ∃ k: Nat, k.add(1) = n {{
+    let gap = near(n);
+    Exists(gap.witness, below_out(gap.proof))
+}}
+"));
+    assert!(!err.contains("could not infer"), "got: {err}");
+}
+
+/// The pattern side carries β-redexes too: a record field typed `p(k)` at a
+/// parameter instantiated with `λ k => Small(?bound, k)` (the native
+/// formatter's `protected(register)` at `λ r => Kept(scratch, r)`). Contracting
+/// only the subject would leave the two sides unable to meet, so `bound`
+/// must still be learned through the field.
+#[test]
+fn a_redex_in_the_pattern_still_teaches_implicits() {
+    ok("
+record Guard(p: Nat -> Type) { check: (k: Nat) -> p(k) -> Nat }
+fn Small(bound: Nat, k: Nat) -> Type { k = bound }
+theorem take({bound: Nat}, g: Guard(λ (k: Nat) => Small(bound, k))): Nat { 0 }
+theorem used(b: Nat, g: Guard(λ (k: Nat) => Small(b, k))): Nat { take(g) }
+");
+}
+
 /// What is still refused, and why it is not the same question: an argument
 /// whose type determines nothing. The matcher is first-order and reads the
 /// declared side as a skeleton, so a parameter that appears nowhere in it
