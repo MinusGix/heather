@@ -3,7 +3,7 @@ title: Connect ordered structures to addition and multiplication
 status: open
 labels: [stdlib,mathematics,order,algebra]
 created: 2026-09-02
-updated: 2026-09-02
+updated: 2026-10-19
 ---
 
 Factor the compatibility laws between order and algebra: translation
@@ -25,3 +25,4 @@ distinctions.
 
 - 2026-09-02: Filed as the bridge rather than folding order into the ring
   hierarchy itself.
+- 2026-10-19: First consumer: [[constructive-ordered-field-interface]] composes order with + (OrderedAddGroup: translation-invariant <, ≤ translation without locatedness) and * (OrderedField: mul_pos, strict monotonicity derived) over a setoid, in lib/std/ordered_field.hthr.

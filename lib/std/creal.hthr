@@ -35,6 +35,7 @@ import relation_props;
 import algebra;
 import algebra_rel::{Semigroup, Commutative};
 import order;
+import ordered_field;
 import rat;
 
 record CReal {
@@ -1545,4 +1546,69 @@ theorem CReal::mul_lt_mono_l({x, y, z: CReal}, h: x < y, hz: CReal::zero() < z):
         < y * z := CReal::mul_lt_mono_r(h, hz),
         ≈ z * y := y.mul_comm(z),
     }
+}
+
+// ---------------------------------------------------------------------------
+// The Archimedean property and the ordered-field interface
+// (std/ordered_field). A real is below the natural number one past its
+// canonical bound: every term is at most the bound, so a gap of one holds
+// from index zero.
+
+theorem CReal::archimedean(self x: CReal): ∃ n: Nat, x < CReal::ofRat(Rat::ofInt(OfNat(n))) {
+    let b = x.bound();
+    Exists(b + 1, Exists(0, Exists(0, λ n from => calc {
+        x.seq(n) + Rat::inv_succ(0) <= x.seq(n).abs() + Rat::inv_succ(0) := x.seq(n).add_le_mono_r(x.seq(n).abs(), Rat::inv_succ(0), x.seq(n).le_abs()),
+        <= Rat::ofInt(OfNat(b)) + Rat::inv_succ(0) := x.seq(n).abs().add_le_mono_r(Rat::ofInt(OfNat(b)), Rat::inv_succ(0), x.bound_le(n)),
+        ≈ Rat::ofInt(OfNat(b + 1)) := omega,
+    })))
+}
+
+theorem CReal::zero_lt_one(): CReal::zero() < CReal::one() { CReal::ofRat_lt(Rat::zero_lt_one()) }
+
+theorem CReal::ofNat_succ(n: Nat): CReal::ofRat(Rat::ofInt(OfNat(Succ(n)))) ≈ CReal::ofRat(Rat::ofInt(OfNat(n))) + CReal::one() {
+    CReal::same_trans(CReal::ofRat_respects(omega), CReal::ofRat_add(Rat::ofInt(OfNat(n)), Rat::one()))
+}
+
+// `≤` is `¬(y < x)` by definition here, so both of its laws are the identity.
+instance StrictOrder<CReal>(CReal::Same, CReal::Lt, CReal::Le) {
+    lt_irrefl := CReal::lt_irrefl,
+    lt_trans := λ x y z h1 h2 => CReal::lt_trans(h1, h2),
+    lt_respects := λ x x2 y y2 hx hy h => CReal::lt_respects(hx, hy, h),
+    lt_tight := λ x y h1 h2 => CReal::same_of_not_apart(λ a => match a { Inl(l) => h1(l), Inr(r) => h2(r) }),
+    le_of_not_lt := λ x y h => h,
+    not_lt_of_le := λ x y h => h,
+}
+
+instance Cotransitive<CReal>(CReal::Lt) {
+    rel_cotrans := CReal::lt_cotrans,
+}
+
+instance PseudoOrder<CReal>(CReal::Same, CReal::Lt, CReal::Le) {}
+
+instance OrderedAddGroup<CReal>(CReal::Same, CReal::Lt, CReal::Le, CReal::add) {
+    zero := CReal::zero(),
+    neg := CReal::neg,
+    add_zero := CReal::add_zero,
+    add_neg := CReal::add_neg,
+    neg_respects := λ x x2 h => CReal::neg_respects(h),
+    add_lt_mono_r := CReal::add_lt_mono_r,
+}
+
+instance LocatedAddGroup<CReal>(CReal::Same, CReal::Lt, CReal::Le, CReal::add) {}
+
+instance OrderedField<CReal>(CReal::Same, CReal::Lt, CReal::Le, CReal::add, CReal::mul) {
+    one := CReal::one(),
+    of_nat := λ n => CReal::ofRat(Rat::ofInt(OfNat(n))),
+    inv := λ x h => x.inv(h := h),
+    mul_respects := λ x x2 y y2 hx hy => CReal::mul_respects(hx, hy),
+    mul_assoc := CReal::mul_assoc,
+    mul_comm := CReal::mul_comm,
+    mul_one := CReal::mul_one,
+    mul_add_distr := CReal::mul_add_distr,
+    mul_inv := λ x h => x.mul_inv(h := h),
+    zero_lt_one := CReal::zero_lt_one(),
+    mul_pos := λ x y hx hy => CReal::mul_pos(hx, hy),
+    of_nat_zero := CReal::zero().same_refl(),
+    of_nat_succ := CReal::ofNat_succ,
+    archimedean := CReal::archimedean,
 }

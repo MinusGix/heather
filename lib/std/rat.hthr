@@ -28,6 +28,7 @@ import algebra;
 import algebra_rel::{Semigroup, Commutative};
 import order;
 import bool;
+import ordered_field;
 
 record Rat { num: Int, den: Pos<Nat> }
 
@@ -369,6 +370,8 @@ theorem Rat::not_le_of_lt({x, y: Rat}, h: x < y): ¬(y <= x) { λ le => omega }
 theorem Rat::lt_of_not_le({x, y: Rat}, h: ¬(y <= x)): x < y { omega }
 
 theorem Rat::le_of_not_lt({x, y: Rat}, h: ¬(y < x)): x <= y { omega }
+
+theorem Rat::not_lt_of_le({x, y: Rat}, h: x <= y): ¬(y < x) { λ lt => omega }
 
 theorem Rat::lt_trichotomy(self x, y: Rat): x < y ∨ x ≈ y ∨ y < x {
     (x.num * y.den.int()).lt_trichotomy(y.num * x.den.int())
@@ -1367,4 +1370,54 @@ theorem Rat::pow_negSucc_inv(self x: Rat, k: Nat, h: x.Apart(Rat::zero()) := inf
         ≈ Rat::one() := Rat::one_npow(n),
     };
     Rat::inv_unique(unit)
+}
+
+// ---------------------------------------------------------------------------
+// The ordered-field interface (std/ordered_field). Every layer is filled
+// from the laws above; `≤` is the cross-multiplied one, which means
+// `¬(y < x)`, and the inverse is `x⁻¹` at the same apartness proof.
+
+theorem Rat::zero_lt_one(): Rat::zero() < Rat::one() { omega }
+
+instance StrictOrder<Rat>(Rat::Same, Rat::Lt, Rat::Le) {
+    lt_irrefl := Rat::lt_irrefl,
+    lt_trans := λ x y z h1 h2 => Rat::lt_trans(h1, h2),
+    lt_respects := λ x x2 y y2 hx hy h => Rat::lt_respects(hx, hy, h),
+    lt_tight := λ x y h1 h2 => Rat::same_of_not_lt(h1, h2),
+    le_of_not_lt := λ x y h => Rat::le_of_not_lt(h),
+    not_lt_of_le := λ x y h => Rat::not_lt_of_le(h),
+}
+
+instance Cotransitive<Rat>(Rat::Lt) {
+    rel_cotrans := Rat::lt_cotrans,
+}
+
+instance PseudoOrder<Rat>(Rat::Same, Rat::Lt, Rat::Le) {}
+
+instance OrderedAddGroup<Rat>(Rat::Same, Rat::Lt, Rat::Le, Rat::add) {
+    zero := Rat::zero(),
+    neg := Rat::neg,
+    add_zero := Rat::add_zero,
+    add_neg := Rat::add_neg,
+    neg_respects := λ x x2 h => Rat::neg_respects(h),
+    add_lt_mono_r := Rat::add_lt_mono_r,
+}
+
+instance LocatedAddGroup<Rat>(Rat::Same, Rat::Lt, Rat::Le, Rat::add) {}
+
+instance OrderedField<Rat>(Rat::Same, Rat::Lt, Rat::Le, Rat::add, Rat::mul) {
+    one := Rat::one(),
+    of_nat := λ n => Rat::ofInt(OfNat(n)),
+    inv := λ x h => x.inv(h := h),
+    mul_respects := λ x x2 y y2 hx hy => Rat::mul_respects(hx, hy),
+    mul_assoc := Rat::mul_assoc,
+    mul_comm := Rat::mul_comm,
+    mul_one := Rat::mul_one,
+    mul_add_distr := Rat::mul_add_distr,
+    mul_inv := λ x h => x.mul_inv(h := h),
+    zero_lt_one := Rat::zero_lt_one(),
+    mul_pos := λ x y hx hy => Rat::mul_pos(hx, hy),
+    of_nat_zero := Rat::zero().same_refl(),
+    of_nat_succ := λ n => omega,
+    archimedean := Rat::archimedean,
 }

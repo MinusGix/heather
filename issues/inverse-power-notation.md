@@ -3,7 +3,7 @@ title: Inverse and power notation without junk values
 status: open
 labels: [stdlib,mathematics,reals,syntax]
 created: 2026-10-18
-updated: 2026-10-18
+updated: 2026-10-19
 ---
 
 Write `x⁻¹` and `x ^ n` the way Lean does, with `x ^ (-1)` agreeing with
@@ -29,3 +29,7 @@ docs/inverse-power-notation-design.md.
 - No `apart_mul` at `CReal` until [[creal-mul-order]].
 - Integer-exponent laws: `pow_add` over `Int`, `(x * y) ^ n`, `(x ^ m) ^ n`.
 - State `inv`/`pow` once in [[constructive-ordered-field-interface]].
+
+## Log
+
+- 2026-10-19: `inv` is now stated once ([[constructive-ordered-field-interface]]: `OrderedField.inv` at apartness, `inv_unique`/`inv_respects` generic). A generic `pow` is not; it stays here.

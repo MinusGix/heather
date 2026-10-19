@@ -43,6 +43,10 @@ const MODULES: &[(&str, &str)] = &[
         include_str!("../../../lib/std/algebra_rel.hthr"),
     ),
     ("order", include_str!("../../../lib/std/order.hthr")),
+    (
+        "ordered_field",
+        include_str!("../../../lib/std/ordered_field.hthr"),
+    ),
     ("rat", include_str!("../../../lib/std/rat.hthr")),
     ("creal", include_str!("../../../lib/std/creal.hthr")),
 ];
