@@ -467,7 +467,7 @@ theorem stat_end_runs(file: IoImage, page: Nat → BitVec(8), at: BitVec(64), pl
         trans(cong_fn<BitVec(64), Bool>(λ a => is_zero_bits(64, a.sub(word_zero())), out.left), zero_bits_sub_self(64, word_zero()));
     let some: (is_zero_bits(64, read_gpr(R15, s1.gprs).sub(word_zero())) = False) =
         trans(cong_fn<BitVec(64), Bool>(λ a => is_zero_bits(64, a.sub(word_zero())), r15), ended_flag(True));
-    linux_runs_after_steps(io_linux(), after, state, s1, reach.proof.left,
+    linux_runs_after_linux_steps(io_linux(), after, state, s1, reach.proof.left,
         stat_straight(file, at, placed, page, λ s => LinuxRuns(io_linux(), after, s), runs_back(after), lw_made_jne(), refl, 4, s1, s1_rip, rest.memory_is,
             ⟨λ taken => absurd(trans(sym(taken), cong_fn<Bool, Bool>(λ x => !x, none))),
              λ _ => ⟨λ _ e rip m same => stat_done(file, page, at, placed, origin, total, other, after, then, e, m,
@@ -937,7 +937,7 @@ theorem stat_loop(file: IoImage, at: BitVec(64), placed: Placed(file, stat_code(
                         let carried = carried_cursor(total, other, origin, s1.gprs, state.gprs, rest.regs.right.right, head.carried);
                         let r15: (read_gpr(R15, s1.gprs) = ended_word(False)) =
                             trans(rest.regs.right.right.right.right.right.right.right.right.right.right.right, head.r15);
-                        linux_runs_after_steps(io, Cons(StatEvent(StatFd(word_zero()), result), after), state, s1, reach.proof.left,
+                        linux_runs_after_linux_steps(io, Cons(StatEvent(StatFd(word_zero()), result), after), state, s1, reach.proof.left,
                             stat_stdin(file, page, at, placed, rsp, origin, rest.k, rest.ended, rest.args, rest.pointers, total, other, result, fit.left,
                                 after,
                                 λ page2 state2 head2 => stat_end_runs(file, page2, at, placed, rsp, origin, after, rest.k, rest.ended, rest.args,
@@ -964,7 +964,7 @@ theorem stat_loop(file: IoImage, at: BitVec(64), placed: Placed(file, stat_code(
                 let rest = facts.right.right.right.right;
                 let s1_rip: (s1.rip = next_rip(at, wa(lw_operand()))) = trans(rest.rip_is, rip_compose(at, wa(lw_next()), cursor_len()));
                 let carried = carried_cursor(total, other, origin, s1.gprs, state.gprs, rest.regs.right.right, head.carried);
-                linux_runs_after_steps(io, Cons(StatEvent(stat_target(operand), result), stat_events(targets_from(True, more), rs) ++ after), state, s1,
+                linux_runs_after_linux_steps(io, Cons(StatEvent(stat_target(operand), result), stat_events(targets_from(True, more), rs) ++ after), state, s1,
                     reach.proof.left,
                     stat_operand(file, page, at, placed, rsp, origin, rest.k, rest.ended, rest.args, rest.pointers, total, other, operand,
                         found.witness, result, fit.left, stat_events(targets_from(True, more), rs) ++ after,
@@ -1005,8 +1005,8 @@ theorem stat_runs(file: IoImage, at: BitVec(64), placed: Placed(file, stat_code(
         StatAt(memory_is := set.memory_is, rip_is := set.rip_is, rbx := so.regs.left, r12 := so.regs.right.left, r15 := refl,
             carried := ⟨refl, ⟨refl, ⟨kept.left, ⟨kept.right.left, ⟨kept.right.right.right.right.left, kept.right.right.right.right.right.left⟩⟩⟩⟩⟩,
             argv := so.argv);
-    linux_runs_after_steps(io_linux(), stat_events(stat_targets(operands_from(False, command_args(argv))), results) ++ after, state, s2,
-        fetched_steps_trans(io_fetch_access(), io_data_access(), state, s1, s2, started.proof.left, set.steps),
+    linux_runs_after_linux_steps(io_linux(), stat_events(stat_targets(operands_from(False, command_args(argv))), results) ++ after, state, s2,
+        linux_steps_trans(io_linux(), state, s1, s2, started.proof.left, linux_steps_of_fetched(io_linux(), s1, s2, set.steps)),
         stat_loop(file, at, placed, rsp, origin, after, operands_from(False, command_args(argv)), False, BitVec::zero(), False, results, fit, then,
             page, s2, so.k, False, command_args(argv), so.pointers, refl, head))
 }

@@ -404,6 +404,27 @@ through a `StepsBack` of its own (`scan_back`, `letters_back`,
 scan's kernel steps fell to two fifths, and the command closure's by about
 a twelfth.
 
+The stat pass's end and the operand cursor (`lib/elf64_operand_cursor.hthr`,
+over `cursor_straight`) came next:
+
+- `stat_end_runs` is the cursor, then one stretch of four items to the
+  JNE to `done`; `stat_done` is the total's digits (`count_run`, over a
+  piece), then five items to the widen. Both are continuation-passing, so
+  `stat_end` is gone.
+- The cursor's argument is `cursor_arg`, eight items from its slot to the
+  first dash's JNE (absorbing `cursor_head`), split by whether `--` has
+  ended the options and by the argument's first byte; a dash goes on in
+  `cursor_dash`, twelve items to the JMP that ends the options (absorbing
+  `cursor_dashes` and `cursor_option`), split by the next two bytes. The
+  null slot is `cursor_none` (three items) and the start `cursor_start`
+  (six, over its own program).
+
+`CursorReach` and the start's `StartReach` are stated over `LinuxSteps`,
+with `cursor_back` and `start_back` as their `StepsBack`. Cold, the
+stat pass's end fell to a little over a quarter of its kernel steps, the
+cursor's to about two fifths, and the command closure's by about a
+twelfth.
+
 ## Not yet
 
 - A system call ends a stretch: `closes_runs` still runs its JCCs with the
