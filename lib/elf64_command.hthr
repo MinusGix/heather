@@ -2562,7 +2562,7 @@ theorem operand_step<C>(file: IoImage, letters: List<BitVec(8)>, default: BitVec
             },
             head.after, Exists(head.frame, ⟨head.memory_is, head.holds⟩), head.rip_is, head.rsi);
         linux_runs_after_linux_steps(io, file_events(shape, column, mask, width, name, run, failed, totals, rest), s1, head.after,
-            linux_steps_trans(io, s1, s0, head.after, linux_steps_of_fetched(io, s1, s0, reach.proof.left), head.steps), ran)
+            linux_steps_trans(io, s1, s0, head.after, reach.proof.left, head.steps), ran)
     })
 }
 
@@ -2598,7 +2598,7 @@ theorem operand_loop<C>(file: IoImage, letters: List<BitVec(8)>, default: BitVec
                 λ frame1 holds1 s1 reached => {
                     have reach = j(left, λ o _ => CursorReach(with_frame(file, frame1), page, eof_rip(ca(l_cursor())), rsp, state.gprs, o, s1), reached);
                     let out = reach.proof.right;
-                    linux_runs_after_steps(io_linux(), total_events(mask, width, n, total, failed, totals), s1, reach.witness, reach.proof.left,
+                    linux_runs_after_linux_steps(io_linux(), total_events(mask, width, n, total, failed, totals), s1, reach.witness, reach.proof.left,
                         loop_last(file, letters, default, spill, shape.code, jumps, pj, placed, frame1, vars, holds1, mask, width, n, failed, totals,
                             values, narrow, few, total, total_ok_of(shape, column, mask, width, n, total, totals, runs, ok), page, reach.witness,
                             out.right.memory_is, trans(out.right.rip_is, rip_compose(io_entry(), ca(l_cursor()), cursor_len())), out.left))
@@ -2962,7 +2962,7 @@ theorem begin_runs(file: IoImage, letters: List<BitVec(8)>, default: BitVec(64),
             trivial, ne_below(19, 21, trivial)), 20, c20, trivial, ne_below(20, 21, trivial));
         let argv_k: ArgvStays(file, rsp, command_args(argv), out.pointers, k) =
             j(rsp_is, λ r _ => ArgvStays(file, r, command_args(argv), out.pointers, k), out.argv);
-        linux_runs_after_steps(io, events, state, s0, started.proof.left,
+        linux_runs_after_linux_steps(io, events, state, s0, started.proof.left,
             cmd_straight(file, letters, default, spill, code, jumps, pj, placed, page, λ s => LinuxRuns(io, events, s), runs_back(events),
                 l_ekeep_store(), refl, 4, vars, s0, trans(out.rip_is, rip_compose(io_entry(), ca(l_start()), start_len())),
                 Exists(frame, ⟨out.memory_is, holds⟩),
@@ -3199,7 +3199,7 @@ theorem command_runs<C>(file: IoImage, letters: List<BitVec(8)>, default: BitVec
             Scanned(mask, operands) => λ scanned same held => {
                 let s1 = scanned.witness;
                 let out = scanned.proof.right;
-                linux_runs_after_steps(io, parsed_events(shape, column, history, Scanned(mask, operands)), state, s1, scanned.proof.left,
+                linux_runs_after_linux_steps(io, parsed_events(shape, column, history, Scanned(mask, operands)), state, s1, scanned.proof.left,
                     parsed_runs(file, letters, default, spill, shape, facts, jumps, pj, placed, targets, column, spilled, argv, pointers, history, argc,
                         mask, operands, sym(same), held, page, s1, out.memory_is, trans(out.rip_is, rip_compose(io_entry(), ca(l_scan()), scan_len())),
                         out.r8, out.r9, j(sym(out.kept.left), λ r _ => ArgvStaysAt(file, r, argv, pointers), stays)))

@@ -382,11 +382,13 @@ theorem ended_cmp(other: Bool, gprs: Gprs, r14: read_gpr(R14, gprs) = ended_word
     trans(cong_fn<BitVec(64), Bool>(λ a => is_zero_bits(64, a.sub(word_zero())), r14), ended_flag(other))
 }
 
+// From `done`: the total's digits (`count_run`, over a piece a stretch does
+// not read), then one stretch of five items to the widen; the narrow JE and
+// the wide JAE end at `end`.
 theorem stat_done(file: IoImage, page: Nat → BitVec(8), at: BitVec(64), placed: Placed(file, stat_code(), at), origin: Gprs, total: BitVec(64),
-    other: Bool, state: MachineState<IoMemory>, memory_is: state.memory = IoMemory(file, page), rip_is: state.rip = next_rip(at, wa(lw_done())),
-    carried: StatCarried(total, other, origin, state.gprs)):
-    Exists<MachineState<IoMemory>>(λ after => FetchedSteps(io_fetch_access(), io_data_access(), state, after) ∧
-        StatOut(file, page, at, origin, widened(other, decimal(total.toNat()).len()), after)) {
+    other: Bool, after: List<LinuxEvent>, then: StatThen(file, at, origin, widened(other, decimal(total.toNat()).len()), after),
+    state: MachineState<IoMemory>, memory_is: state.memory = IoMemory(file, page), rip_is: state.rip = next_rip(at, wa(lw_done())),
+    carried: StatCarried(total, other, origin, state.gprs)): LinuxRuns(io_linux(), after, state) {
     let piece = stat_pieces(file, at, placed);
     let fetch = io_fetch_access();
     let data = io_data_access();
@@ -409,66 +411,49 @@ theorem stat_done(file: IoImage, page: Nat → BitVec(8), at: BitVec(64), placed
     let kept2: StatKept(s2.gprs, origin) = ⟨trans(fk.left, kept.left), ⟨trans(fk.right.left, kept.right.left),
         ⟨trans(fk.right.right.left, kept.right.right.left), trans(fk.right.right.right.left, kept.right.right.right)⟩⟩⟩;
     let r14: (read_gpr(R14, s2.gprs) = ended_word(other)) = trans(fk.right.right.right.right.right.right.right.left, carried.right.left);
-    let tested = run_block(file, page, stat_any_block(), at, wa(lw_any()), piece(lw_any()), s2, c.memory_is, s2_rip);
-    let s3 = execute_block_normal(stat_any_block(), s2);
-    let je = JumpIfNear(E, wd(lw_narrow_je()));
-    let jumped = run_near(file, page, je, at, wa(lw_narrow_je()), piece(lw_narrow_je()), s3, tested.memory_is, tested.rip_is);
-    let s4 = execute_near_control(je, s3);
-    let to_s4: FetchedSteps(fetch, data, state, s4) = fetched_steps_trans(fetch, data, state, s1, s4, set.steps,
-        fetched_steps_trans(fetch, data, s1, s2, s4, counted.proof.left, fetched_steps_trans(fetch, data, s2, s3, s4, tested.steps, jumped)));
     let d = decimal(n).len();
-    (match other as λ o => (read_gpr(R14, s2.gprs) = ended_word(o)) →
-            Exists<MachineState<IoMemory>>(λ after => FetchedSteps(fetch, data, state, after) ∧ StatOut(file, page, at, origin, widened(o, d), after)) {
-        False => λ none => {
-            let s4_rip = jcc_taken(E, wd(lw_narrow_je()), s3, at, wa(lw_narrow_je()), wa(lw_end()), tested.rip_is, ended_cmp(False, s2.gprs, none), wj_narrow_je());
-            Exists(s4, ⟨to_s4, StatOut(memory_is := tested.memory_is, rip_is := s4_rip, rsi := digits, kept := kept2)⟩)
-        },
-        True => λ some => {
-            let s4_rip = jcc_passed(E, wd(lw_narrow_je()), s3, at, wa(lw_narrow_je()), tested.rip_is, ended_cmp(True, s2.gprs, some));
-            let compared = run_block(file, page, stat_seven_block(), at, wa(lw_seven()), piece(lw_seven()), s4, tested.memory_is, s4_rip);
-            let s5 = execute_block_normal(stat_seven_block(), s4);
-            let jae = JumpIfNear(AE, wd(lw_wide_jae()));
-            let jumped2 = run_near(file, page, jae, at, wa(lw_wide_jae()), piece(lw_wide_jae()), s5, compared.memory_is, compared.rip_is);
-            let s6 = execute_near_control(jae, s5);
-            let to_s6: FetchedSteps(fetch, data, state, s6) = fetched_steps_trans(fetch, data, state, s4, s6, to_s4,
-                fetched_steps_trans(fetch, data, s4, s5, s6, compared.steps, jumped2));
-            let rsi = read_gpr(Rsi, s2.gprs);
-            let seven = BitVec::ofNat(7, n := 64);
-            (match rsi.borrow_sub_bit(seven) as λ c => (rsi.borrow_sub_bit(seven) = c) →
-                    Exists<MachineState<IoMemory>>(λ after => FetchedSteps(fetch, data, state, after) ∧
-                        StatOut(file, page, at, origin, widened(True, d), after)) {
-                False => λ wide => {
-                    let at_least: (7 <= d) = j(digits, λ v _ => 7 <= v, cmp_not_below(rsi, seven, wide));
-                    let s6_rip = jcc_taken(AE, wd(lw_wide_jae()), s5, at, wa(lw_wide_jae()), wa(lw_end()), compared.rip_is, cong_fn<Bool, Bool>(λ b => !b, wide), wj_wide_jae());
-                    let leb: (Nat::leb(7, d) = True) = eq_true_of_is_true(Nat::leb(7, d), Nat::leb_complete(7, d, at_least));
-                    Exists(s6, ⟨to_s6, j(sym(leb), λ b _ => StatOut(file, page, at, origin, match b { True => d, False => 7 }, s6),
-                        StatOut(memory_is := compared.memory_is, rip_is := s6_rip, rsi := digits, kept := kept2))⟩)
-                },
-                True => λ narrow => {
-                    let below: (d < 7) = j(digits, λ v _ => v < 7, cmp_below(rsi, seven, narrow));
-                    let s6_rip = jcc_passed(AE, wd(lw_wide_jae()), s5, at, wa(lw_wide_jae()), compared.rip_is, cong_fn<Bool, Bool>(λ b => !b, narrow));
-                    let widen = run_block(file, page, stat_widen_block(), at, wa(lw_widen()), piece(lw_widen()), s6, compared.memory_is, s6_rip);
-                    let s7 = execute_block_normal(stat_widen_block(), s6);
-                    let leb: (Nat::leb(7, d) = False) = io_leb_false(7, d, below);
-                    Exists(s7, ⟨fetched_steps_trans(fetch, data, state, s6, s7, to_s6, widen.steps),
-                        j(sym(leb), λ b _ => StatOut(file, page, at, origin, match b { True => d, False => 7 }, s7),
-                            StatOut(memory_is := widen.memory_is, rip_is := widen.rip_is, rsi := refl, kept := kept2))⟩)
-                },
-            })(refl)
-        },
-    })(r14)
+    let rsi = read_gpr(Rsi, s2.gprs);
+    let seven = BitVec::ofNat(7, n := 64);
+    linux_runs_after_steps(io_linux(), after, state, s2, fetched_steps_trans(fetch, data, state, s1, s2, set.steps, counted.proof.left),
+        (match other as λ o => (read_gpr(R14, s2.gprs) = ended_word(o)) → StatThen(file, at, origin, widened(o, d), after) →
+                LinuxRuns(io_linux(), after, s2) {
+            False => λ none then => stat_straight(file, at, placed, page, λ s => LinuxRuns(io_linux(), after, s), runs_back(after), lw_widen(), refl, 5,
+                s2, s2_rip, c.memory_is,
+                ⟨λ _ e rip m same => then(page, e, StatOut(memory_is := m,
+                        rip_is := trans(rip, stat_lands(at, lw_any(), 6, tw_end(), wa(lw_end()), wj_narrow_je())),
+                        rsi := j(sym(same), λ s _ => read_gpr(Rsi, s.gprs).toNat() = d, digits),
+                        kept := j(sym(same), λ s _ => StatKept(s.gprs, origin), kept2))),
+                 λ passed => absurd(trans(sym(passed), ended_cmp(False, s2.gprs, none)))⟩),
+            True => λ some then => stat_straight(file, at, placed, page, λ s => LinuxRuns(io_linux(), after, s), runs_back(after), lw_widen(), refl, 5,
+                s2, s2_rip, c.memory_is,
+                ⟨λ taken => absurd(trans(sym(taken), ended_cmp(True, s2.gprs, some))),
+                 λ _ => ⟨λ taken e rip m same => {
+                        let wide = not_true_is(rsi.borrow_sub_bit(seven), taken);
+                        let at_least: (7 <= d) = j(digits, λ v _ => 7 <= v, cmp_not_below(rsi, seven, wide));
+                        let leb: (Nat::leb(7, d) = True) = eq_true_of_is_true(Nat::leb(7, d), Nat::leb_complete(7, d, at_least));
+                        then(page, e, j(sym(leb), λ b _ => StatOut(file, page, at, origin, match b { True => d, False => 7 }, e),
+                            StatOut(memory_is := m, rip_is := trans(rip, stat_lands(at, lw_seven(), 6, tw_end(), wa(lw_end()), wj_wide_jae())),
+                                rsi := j(sym(same), λ s _ => read_gpr(Rsi, s.gprs).toNat() = d, digits),
+                                kept := j(sym(same), λ s _ => StatKept(s.gprs, origin), kept2))))
+                     },
+                     λ passed e rip m same => {
+                        let narrow = not_false_is(rsi.borrow_sub_bit(seven), passed);
+                        let below: (d < 7) = j(digits, λ v _ => v < 7, cmp_below(rsi, seven, narrow));
+                        let leb: (Nat::leb(7, d) = False) = io_leb_false(7, d, below);
+                        then(page, e, j(sym(leb), λ b _ => StatOut(file, page, at, origin, match b { True => d, False => 7 }, e),
+                            StatOut(memory_is := m, rip_is := rip, rsi := j(sym(same), λ s _ => read_gpr(Rsi, s.gprs).toNat() = 7, refl),
+                                kept := j(sym(same), λ s _ => StatKept(s.gprs, origin), kept2))))
+                     }⟩⟩),
+        })(r14, then))
 }
 
-// No operand left, and a stat made: the width.
-theorem stat_end(file: IoImage, page: Nat → BitVec(8), at: BitVec(64), placed: Placed(file, stat_code(), at), rsp: BitVec(64), origin: Gprs,
-    k: Nat, ended: Bool, args: List<List<BitVec(8)>>, pointers: List<BitVec(64)>, total: BitVec(64), other: Bool,
-    state: MachineState<IoMemory>, left: operands_from(ended, args) = Nil,
-    head: StatAt(file, page, at, rsp, origin, k, ended, args, pointers, total, other, True, state)):
-    Exists<MachineState<IoMemory>>(λ after => FetchedSteps(io_fetch_access(), io_data_access(), state, after) ∧
-        StatOut(file, page, at, origin, width_from(total, other, Nil), after)) {
+// No operand left, and a stat made: the cursor (a piece), then one stretch
+// of four items to the JNE to `done`.
+theorem stat_end_runs(file: IoImage, page: Nat → BitVec(8), at: BitVec(64), placed: Placed(file, stat_code(), at), rsp: BitVec(64), origin: Gprs,
+    after: List<LinuxEvent>, k: Nat, ended: Bool, args: List<List<BitVec(8)>>, pointers: List<BitVec(64)>, total: BitVec(64), other: Bool,
+    then: StatThen(file, at, origin, width_from(total, other, Nil), after), state: MachineState<IoMemory>, left: operands_from(ended, args) = Nil,
+    head: StatAt(file, page, at, rsp, origin, k, ended, args, pointers, total, other, True, state)): LinuxRuns(io_linux(), after, state) {
     let piece = stat_pieces(file, at, placed);
-    let fetch = io_fetch_access();
-    let data = io_data_access();
     let reach = j(left, λ o _ => CursorReach(file, page, next_rip(at, wa(lw_next())), rsp, state.gprs, o, state),
         cursor_runs(file, next_rip(at, wa(lw_next())), piece(lw_next()), page, rsp, k, ended, args, pointers, state.gprs, state, head.argv,
             CursorAt(memory_is := head.memory_is, rip_is := head.rip_is, regs := ⟨head.rbx, ⟨head.r12, cursor_kept_refl(state.gprs)⟩⟩)));
@@ -478,31 +463,17 @@ theorem stat_end(file: IoImage, page: Nat → BitVec(8), at: BitVec(64), placed:
     let s1_rip: (s1.rip = next_rip(at, wa(lw_operand()))) = trans(rest.rip_is, rip_compose(at, wa(lw_next()), cursor_len()));
     let carried = carried_cursor(total, other, origin, s1.gprs, state.gprs, rest.regs.right.right, head.carried);
     let r15: (read_gpr(R15, s1.gprs) = ended_word(True)) = trans(rest.regs.right.right.right.right.right.right.right.right.right.right.right, head.r15);
-    let tested = run_block(file, page, scan_null_block(), at, wa(lw_operand()), piece(lw_operand()), s1, rest.memory_is, s1_rip);
-    let s2 = execute_block_normal(scan_null_block(), s1);
-    let passed = run_near(file, page, JumpIfNear(NE, wd(lw_each_jne())), at, wa(lw_each_jne()), piece(lw_each_jne()), s2, tested.memory_is, tested.rip_is);
-    let s3 = execute_near_control(JumpIfNear(NE, wd(lw_each_jne())), s2);
-    let none: (s2.flags.zf = True) = trans(cong_fn<BitVec(64), Bool>(λ a => is_zero_bits(64, a.sub(word_zero())), out.left),
-        zero_bits_sub_self(64, word_zero()));
-    let s3_rip = jcc_passed(NE, wd(lw_each_jne()), s2, at, wa(lw_each_jne()), tested.rip_is, ne_fails(s2.flags, none));
-    let made = run_block(file, page, stat_made_block(), at, wa(lw_made()), piece(lw_made()), s3, tested.memory_is, s3_rip);
-    let s4 = execute_block_normal(stat_made_block(), s3);
-    let jumped = run_near(file, page, JumpIfNear(NE, wd(lw_made_jne())), at, wa(lw_made_jne()), piece(lw_made_jne()), s4, made.memory_is, made.rip_is);
-    let s5 = execute_near_control(JumpIfNear(NE, wd(lw_made_jne())), s4);
-    let some: (s4.flags.zf = False) = trans(cong_fn<BitVec(64), Bool>(λ a => is_zero_bits(64, a.sub(word_zero())), r15), ended_flag(True));
-    let s5_rip = jcc_taken(NE, wd(lw_made_jne()), s4, at, wa(lw_made_jne()), wa(lw_done()), made.rip_is, ne_holds(s4.flags, some), wj_made_jne());
-    have done = stat_done(file, page, at, placed, origin, total, other, s5, made.memory_is, s5_rip, carried);
-    Exists(done.witness, ⟨fetched_steps_trans(fetch, data, state, s1, done.witness, reach.proof.left,
-        fetched_steps_trans(fetch, data, s1, s2, done.witness, tested.steps, fetched_steps_trans(fetch, data, s2, s3, done.witness, passed,
-            fetched_steps_trans(fetch, data, s3, s4, done.witness, made.steps,
-                fetched_steps_trans(fetch, data, s4, s5, done.witness, jumped, done.proof.left))))), done.proof.right⟩)
-}
-theorem stat_end_runs(file: IoImage, page: Nat → BitVec(8), at: BitVec(64), placed: Placed(file, stat_code(), at), rsp: BitVec(64), origin: Gprs,
-    after: List<LinuxEvent>, k: Nat, ended: Bool, args: List<List<BitVec(8)>>, pointers: List<BitVec(64)>, total: BitVec(64), other: Bool,
-    then: StatThen(file, at, origin, width_from(total, other, Nil), after), state: MachineState<IoMemory>, left: operands_from(ended, args) = Nil,
-    head: StatAt(file, page, at, rsp, origin, k, ended, args, pointers, total, other, True, state)): LinuxRuns(io_linux(), after, state) {
-    have done = stat_end(file, page, at, placed, rsp, origin, k, ended, args, pointers, total, other, state, left, head);
-    linux_runs_after_steps(io_linux(), after, state, done.witness, done.proof.left, then(page, done.witness, done.proof.right))
+    let none: (is_zero_bits(64, read_gpr(Rsi, s1.gprs).sub(word_zero())) = True) =
+        trans(cong_fn<BitVec(64), Bool>(λ a => is_zero_bits(64, a.sub(word_zero())), out.left), zero_bits_sub_self(64, word_zero()));
+    let some: (is_zero_bits(64, read_gpr(R15, s1.gprs).sub(word_zero())) = False) =
+        trans(cong_fn<BitVec(64), Bool>(λ a => is_zero_bits(64, a.sub(word_zero())), r15), ended_flag(True));
+    linux_runs_after_linux_steps(io_linux(), after, state, s1, reach.proof.left,
+        stat_straight(file, at, placed, page, λ s => LinuxRuns(io_linux(), after, s), runs_back(after), lw_made_jne(), refl, 4, s1, s1_rip, rest.memory_is,
+            ⟨λ taken => absurd(trans(sym(taken), cong_fn<Bool, Bool>(λ x => !x, none))),
+             λ _ => ⟨λ _ e rip m same => stat_done(file, page, at, placed, origin, total, other, after, then, e, m,
+                    trans(rip, stat_lands(at, lw_made(), 6, tw_done(), wa(lw_done()), wj_made_jne())),
+                    j(sym(same), λ s _ => StatCarried(total, other, origin, s.gprs), carried)),
+                 λ passed => absurd(trans(sym(passed), cong_fn<Bool, Bool>(λ x => !x, some)))⟩⟩))
 }
 
 // ---------------------------------------------------------------------------
@@ -966,7 +937,7 @@ theorem stat_loop(file: IoImage, at: BitVec(64), placed: Placed(file, stat_code(
                         let carried = carried_cursor(total, other, origin, s1.gprs, state.gprs, rest.regs.right.right, head.carried);
                         let r15: (read_gpr(R15, s1.gprs) = ended_word(False)) =
                             trans(rest.regs.right.right.right.right.right.right.right.right.right.right.right, head.r15);
-                        linux_runs_after_steps(io, Cons(StatEvent(StatFd(word_zero()), result), after), state, s1, reach.proof.left,
+                        linux_runs_after_linux_steps(io, Cons(StatEvent(StatFd(word_zero()), result), after), state, s1, reach.proof.left,
                             stat_stdin(file, page, at, placed, rsp, origin, rest.k, rest.ended, rest.args, rest.pointers, total, other, result, fit.left,
                                 after,
                                 λ page2 state2 head2 => stat_end_runs(file, page2, at, placed, rsp, origin, after, rest.k, rest.ended, rest.args,
@@ -993,7 +964,7 @@ theorem stat_loop(file: IoImage, at: BitVec(64), placed: Placed(file, stat_code(
                 let rest = facts.right.right.right.right;
                 let s1_rip: (s1.rip = next_rip(at, wa(lw_operand()))) = trans(rest.rip_is, rip_compose(at, wa(lw_next()), cursor_len()));
                 let carried = carried_cursor(total, other, origin, s1.gprs, state.gprs, rest.regs.right.right, head.carried);
-                linux_runs_after_steps(io, Cons(StatEvent(stat_target(operand), result), stat_events(targets_from(True, more), rs) ++ after), state, s1,
+                linux_runs_after_linux_steps(io, Cons(StatEvent(stat_target(operand), result), stat_events(targets_from(True, more), rs) ++ after), state, s1,
                     reach.proof.left,
                     stat_operand(file, page, at, placed, rsp, origin, rest.k, rest.ended, rest.args, rest.pointers, total, other, operand,
                         found.witness, result, fit.left, stat_events(targets_from(True, more), rs) ++ after,
@@ -1034,8 +1005,8 @@ theorem stat_runs(file: IoImage, at: BitVec(64), placed: Placed(file, stat_code(
         StatAt(memory_is := set.memory_is, rip_is := set.rip_is, rbx := so.regs.left, r12 := so.regs.right.left, r15 := refl,
             carried := ⟨refl, ⟨refl, ⟨kept.left, ⟨kept.right.left, ⟨kept.right.right.right.right.left, kept.right.right.right.right.right.left⟩⟩⟩⟩⟩,
             argv := so.argv);
-    linux_runs_after_steps(io_linux(), stat_events(stat_targets(operands_from(False, command_args(argv))), results) ++ after, state, s2,
-        fetched_steps_trans(io_fetch_access(), io_data_access(), state, s1, s2, started.proof.left, set.steps),
+    linux_runs_after_linux_steps(io_linux(), stat_events(stat_targets(operands_from(False, command_args(argv))), results) ++ after, state, s2,
+        linux_steps_trans(io_linux(), state, s1, s2, started.proof.left, linux_steps_of_fetched(io_linux(), s1, s2, set.steps)),
         stat_loop(file, at, placed, rsp, origin, after, operands_from(False, command_args(argv)), False, BitVec::zero(), False, results, fit, then,
             page, s2, so.k, False, command_args(argv), so.pointers, refl, head))
 }

@@ -3,7 +3,7 @@ title: Move the command's remaining phases and the process libraries onto Runs
 status: open
 labels: [native,x86,proofs]
 created: 2026-10-10
-updated: 2026-10-18
+updated: 2026-10-19
 ---
 
 The command's remaining hand-threaded phases and the other process libraries,
@@ -15,9 +15,11 @@ moved onto `Runs` (`docs/native-runs-design.md`, `lib/elf64_runs.hthr`).
   of a stretch (`docs/native-straight-runs-design.md`, "Not yet"), and
   `closes_runs` on them around its system call. `inputs_runs` only
   composes other phases.
-- **The process libraries**: formatter, scan, cursor, stat pass and row
-  writer, and their frame records (`FmtKept`, `WriteKept`, `CursorKept`,
-  `StatCarried`) restated over `Keeps`/`SlotsKeep`.
+- **The process libraries**: onto the frame-free stretch
+  (`lib/elf64_stretch.hthr`). The argument scan is done (its letter table
+  and refusal stay by hand); the stat pass and the operand cursor are
+  done, and so is the row writer. Left: the read filter, which needs its
+  list layout on `x86_64_asm` labels first (below).
 - **The list layouts** left in `elf64_read_pieces`, `elf64_read_filter` and
   `elf64_count_print` (`layout_code`/`layout_at`), onto `x86_64_asm` labels
   with their proofs.
@@ -42,3 +44,6 @@ before; `build-x86` of wc writes the same bytes.
 - 2026-10-17: **The total row, the prologue and the spill's row setup moved onto `cmd_straight`.** `total_runs` (four items to the JB) and `total_rows` (the setup's five items, the row, " total\n" as seven calls of `put_runs`, a `StoreByte` stretch of three items written once over any label, and R9/R10 before the write); `keep_runs` (two stretches), `keep_single`, `begin_runs` and `begin_test`; `spill_row`'s setup after the spill's chain. Cold, the elf64_command module's kernel steps fell by about a fifth; the total row's phase to under a third, the prologue's and `begin`'s to about a third, the spill's row setup to about half. Two `omega`s for the count's bounds had been three quarters of `keep_runs`'s steps (an `omega` reads every hypothesis in scope); the phases' arithmetic is in small lemmas now. The spill's slots as a stretch (`state_gpr(spill(i))` is not a constant, so its reads are stuck in the computed type) took over twice the chain's steps and were left on the rules. wc's bytes are unchanged.
 - 2026-10-18: **The libraries' phase `omega`s moved into lemmas**, before any library moves onto stretches. An `omega` inside a hand-threaded phase pulls the phase's `let`-named states into its certificate through any register fact sharing an atom with the goal; one in `stat_operand` was two thirds of its kernel steps. Cold, over `elf64_command`'s whole closure the kernel's steps fell by about three tenths: the stat pass, the cursor, the filter and the row writer to about half, the formatter by about a quarter; no item rose but the new lemmas. The stat pass is still the dearest library (`stat_operand`, `acct_stated`), and the next step: a stretch that runs outside the command's frame. wc's bytes are unchanged.
 - 2026-10-18: **A frame-free stretch for the libraries** (`lib/elf64_stretch.hthr`, `docs/native-straight-runs-design.md`, "The libraries' stretches"): `Straight` without a frame, the shared pieces moved there from `elf64_straight`/`elf64_command`. The stat pass's `acct_stated` and `stat_operand` moved onto it (its loads are now `Load`/`LoadByte` items, the same bytes). Cold, `acct_stated`'s kernel steps fell to a fiftieth, `stat_operand`'s (with `stat_each`) to a twentieth, the stat pass's to a fifth and the command closure's by a quarter; `stat_end`, not moved, rose a few percent. Left in the stat pass: `stat_end`, `stat_done` (hand back an end state; moving them means a continuation through `StatOut`). wc's bytes are unchanged.
+- 2026-10-19: **The argument scan moved onto the frame-free stretch** (`docs/native-straight-runs-design.md`, "The libraries' stretches"): the setup, each argument's head to the dash test (`scan_arg`, absorbing `scan_head`, `option_first` and `scan_option`), the dash's tail (`after_dash`, absorbing `after_dashes`), the letters around the table, the operand, the null slot and the default's test; the phases' ends restated over `LinuxSteps`. Cold, the scan's kernel steps fell to two fifths (`after_dash` with `after_dashes` and `scan_runs` to under a quarter, `letters_run` to about a quarter, the argument's head to about half) and the command closure's by about a twelfth; no item rose by more than a few dozen steps. The one-step loads and `run_store` moved into `elf64_runs`. wc's bytes are unchanged.
+- 2026-10-19: **The stat pass's end and the operand cursor moved onto the frame-free stretch** (`docs/native-straight-runs-design.md`, "The libraries' stretches"): `stat_end_runs` (the cursor, then four items) and `stat_done` (the total's digits, then five items), both continuation-passing, so `stat_end` is gone; the cursor's argument (`cursor_arg`, eight items, absorbing `cursor_head`), its dash (`cursor_dash`, twelve items, absorbing `cursor_dashes` and `cursor_option`), the null slot and the start, with `CursorReach` and the start's end over `LinuxSteps`. Cold, the stat pass's end fell to a little over a quarter of its kernel steps, the cursor's to about two fifths (the start to under a third) and the command closure's by about a twelfth; no item rose but the new wrappers. wc's bytes are unchanged.
+- 2026-10-19: **The row writer moved onto the frame-free stretch** (`docs/native-straight-runs-design.md`, "The libraries' stretches"): a stretch per path through a slot (not selected, the first field, any other field with its space), the formatter by hand between, and `skip` to the back jump; continuation-passing through `SkipThen` and `RowReach`. `row_loop` itself fell to a sixtieth of its kernel steps, the row writer's to about three fifths, and the command closure's by about a fortieth. wc's bytes are unchanged.
