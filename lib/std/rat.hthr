@@ -24,7 +24,8 @@ import int;
 import omega;
 import ring;
 import relation_props;
-import algebra_rel;
+import algebra;
+import algebra_rel::{Semigroup, Commutative};
 import order;
 import bool;
 
@@ -71,6 +72,9 @@ theorem Rat::same_of_parts(self x, y: Rat, num: x.num = y.num, den: x.den = y.de
 fn Rat::ofInt(n: Int) → Rat { Rat(n, 1) }
 fn Rat::zero() → Rat { Rat::ofInt(OfNat(0)) }
 fn Rat::one() → Rat { Rat::ofInt(OfNat(1)) }
+
+// A numeral at `Rat` is the integer over 1: `2 * x`, `2⁻¹`.
+instance Numeral<Rat> { ofNat := λ (n: Nat) => Rat::ofInt(OfNat(n)) }
 
 fn Rat::add(self x, y: Rat) → Rat {
     Rat(x.num * y.den.int() + y.num * x.den.int(), x.den * y.den)
@@ -244,11 +248,15 @@ theorem Rat::ofInt_inj(m, n: Int, h: Rat::ofInt(m) ≈ Rat::ofInt(n)): m = n { o
 theorem Rat::ofInt_le(m, n: Int, h: m <= n): Rat::ofInt(m) <= Rat::ofInt(n) { omega }
 
 // ---------------------------------------------------------------------------
-// Inverse. Total, with 0⁻¹ = 0; the field law asks for a nonzero argument.
-// The numerator's sign moves to the new numerator, its magnitude becomes the
-// new (positive) denominator.
+// The reciprocal of a fraction, as raw arithmetic: total, with 0 sent to 0,
+// so its law asks for a nonzero argument. This is not the inverse `x⁻¹`,
+// which takes apartness from zero and so has no value at 0 (below, and
+// docs/inverse-power-notation-design.md); it is what that inverse computes,
+// and what a real's inverse reads term by term at indices whose gap from
+// zero it tracks itself. The numerator's sign moves to the new numerator,
+// its magnitude becomes the new (positive) denominator.
 
-fn Rat::inv_parts(a: Int, d: Pos<Nat>) → Rat {
+fn Rat::recip_parts(a: Int, d: Pos<Nat>) → Rat {
     match a {
         OfNat(n) => match n {
             Zero => Rat::zero(),
@@ -258,10 +266,10 @@ fn Rat::inv_parts(a: Int, d: Pos<Nat>) → Rat {
     }
 }
 
-fn Rat::inv(self x: Rat) → Rat { Rat::inv_parts(x.num, x.den) }
+fn Rat::recip(self x: Rat) → Rat { Rat::recip_parts(x.num, x.den) }
 
-theorem Rat::mul_inv_parts(a: Int, d: Pos<Nat>):
-    ¬(Rat(a, d) ≈ Rat::zero()) → Rat(a, d) * Rat::inv_parts(a, d) ≈ Rat::one()
+theorem Rat::mul_recip_parts(a: Int, d: Pos<Nat>):
+    ¬(Rat(a, d) ≈ Rat::zero()) → Rat(a, d) * Rat::recip_parts(a, d) ≈ Rat::one()
 {
     match a {
         OfNat(n) => match n {
@@ -282,8 +290,8 @@ theorem Rat::mul_inv_parts(a: Int, d: Pos<Nat>):
     }
 }
 
-theorem Rat::mul_inv(self x: Rat, nonzero: ¬(x ≈ Rat::zero())): x * x.inv() ≈ Rat::one() {
-    Rat::mul_inv_parts(x.num, x.den, nonzero)
+theorem Rat::mul_recip(self x: Rat, nonzero: ¬(x ≈ Rat::zero())): x * x.recip() ≈ Rat::one() {
+    Rat::mul_recip_parts(x.num, x.den, nonzero)
 }
 
 // Equal fractions have numerators of one sign: cross-multiplying by a
@@ -306,8 +314,8 @@ theorem Rat::same_recip(a, p, c, q: Pos<Nat>, h: Rat(a.int(), p) ≈ Rat(c.int()
 // Inverse respects `≈`. A sign mismatch contradicts the numerators' common
 // sign; zero inverts to zero; a positive pair is `same_recip`, and a negative
 // pair is the positive one under negation.
-theorem Rat::inv_parts_respects(a: Int, p: Pos<Nat>, c: Int, q: Pos<Nat>):
-    Rat(a, p) ≈ Rat(c, q) → Rat::inv_parts(a, p) ≈ Rat::inv_parts(c, q)
+theorem Rat::recip_parts_respects(a: Int, p: Pos<Nat>, c: Int, q: Pos<Nat>):
+    Rat(a, p) ≈ Rat(c, q) → Rat::recip_parts(a, p) ≈ Rat::recip_parts(c, q)
 {
     match a {
         OfNat(n) => match n {
@@ -333,8 +341,8 @@ theorem Rat::inv_parts_respects(a: Int, p: Pos<Nat>, c: Int, q: Pos<Nat>):
     }
 }
 
-theorem Rat::inv_respects({x, x2: Rat}, hx: x ≈ x2): x.inv() ≈ x2.inv() {
-    Rat::inv_parts_respects(x.num, x.den, x2.num, x2.den, hx)
+theorem Rat::recip_respects({x, x2: Rat}, hx: x ≈ x2): x.recip() ≈ x2.recip() {
+    Rat::recip_parts_respects(x.num, x.den, x2.num, x2.den, hx)
 }
 
 // ---------------------------------------------------------------------------
@@ -894,10 +902,10 @@ theorem Rat::nonzero_of_gap({a: Rat}, k: Nat, h: Rat::inv_succ(k) <= a.abs()): �
     })
 }
 
-// |a| ≥ 1/(k+1) bounds |a⁻¹| by k+1: a larger reciprocal would make
-// |a·a⁻¹| = 1 larger than (1/(k+1))·(k+1) = 1.
-theorem Rat::inv_abs_le({a: Rat}, k: Nat, h: Rat::inv_succ(k) <= a.abs()): a.inv().abs() <= Rat::ofInt(OfNat(k + 1)) {
-    let u = a.inv();
+// |a| ≥ 1/(k+1) bounds |1/a| by k+1: a larger reciprocal would make
+// |a·(1/a)| = 1 larger than (1/(k+1))·(k+1) = 1.
+theorem Rat::recip_abs_le({a: Rat}, k: Nat, h: Rat::inv_succ(k) <= a.abs()): a.recip().abs() <= Rat::ofInt(OfNat(k + 1)) {
+    let u = a.recip();
     let big = Rat::ofInt(OfNat(k + 1));
     let g = Rat::inv_succ(k);
     Rat::le_of_not_lt(λ above => {
@@ -906,7 +914,7 @@ theorem Rat::inv_abs_le({a: Rat}, k: Nat, h: Rat::inv_succ(k) <= a.abs()): a.inv
             < g * u.abs() := Rat::mul_lt_mono_l(above, Rat::inv_succ_pos(k)),
             <= a.abs() * u.abs() := Rat::mul_le_mono_r(h, u.abs_nonneg()),
             ≈ (a * u).abs() := Rat::same_sym(a.abs_mul(u)),
-            ≈ Rat::one().abs() := Rat::abs_respects(a.mul_inv(Rat::nonzero_of_gap(k, h))),
+            ≈ Rat::one().abs() := Rat::abs_respects(a.mul_recip(Rat::nonzero_of_gap(k, h))),
             ≈ Rat::one() := refl,
         };
         Rat::one().lt_irrefl(unit)
@@ -943,20 +951,20 @@ theorem Rat::mul_sub_one_of_inverse({a, b, u: Rat}, hu: b * u ≈ Rat::one()): a
 
 // Reciprocals of two rationals at least 1/(k+1) and 1/(l+1) in size are
 // within (k+1)(l+1) times their distance.
-theorem Rat::dist_inv_le({a, b: Rat}, k, l: Nat, ha: Rat::inv_succ(k) <= a.abs(), hb: Rat::inv_succ(l) <= b.abs()):
-    (a.inv() -b.inv()).abs() <= Rat::ofInt(OfNat((k + 1) * (l + 1))) * (a -b).abs()
+theorem Rat::dist_recip_le({a, b: Rat}, k, l: Nat, ha: Rat::inv_succ(k) <= a.abs(), hb: Rat::inv_succ(l) <= b.abs()):
+    (a.recip() -b.recip()).abs() <= Rat::ofInt(OfNat((k + 1) * (l + 1))) * (a -b).abs()
 {
-    let u = a.inv();
-    let v = b.inv();
+    let u = a.recip();
+    let v = b.recip();
     let du = Rat::ofInt(OfNat(k + 1));
     let dv = Rat::ofInt(OfNat(l + 1));
     calc {
         (u -v).abs() ≈ ((u * v) * (b -a)).abs()
-            := Rat::abs_respects(Rat::sub_of_inverses(a.mul_inv(Rat::nonzero_of_gap(k, ha)), b.mul_inv(Rat::nonzero_of_gap(l, hb)))),
+            := Rat::abs_respects(Rat::sub_of_inverses(a.mul_recip(Rat::nonzero_of_gap(k, ha)), b.mul_recip(Rat::nonzero_of_gap(l, hb)))),
         ≈ (u * v).abs() * (b -a).abs() := (u * v).abs_mul(b -a),
         ≈ (u.abs() * v.abs()) * (a -b).abs() := Rat::mul_respects(u.abs_mul(v), b.abs_sub_comm(a)),
         <= (du * dv) * (a -b).abs() := Rat::mul_le_mono_r(
-            Rat::mul_le_mul(Rat::inv_abs_le(k, ha), Rat::inv_abs_le(l, hb), u.abs_nonneg(), v.abs_nonneg()), (a -b).abs_nonneg()),
+            Rat::mul_le_mul(Rat::recip_abs_le(k, ha), Rat::recip_abs_le(l, hb), u.abs_nonneg(), v.abs_nonneg()), (a -b).abs_nonneg()),
         ≈ Rat::ofInt(OfNat((k + 1) * (l + 1))) * (a -b).abs()
             := Rat::mul_respects(Rat::same_sym(Rat::ofInt_mul(OfNat(k + 1), OfNat(l + 1))), (a -b).abs().same_refl()),
     }
@@ -1047,4 +1055,270 @@ instance(x, y: Rat) Decide<Rat::Le(x, y)> {
     dec := x.le_dec(y),
     bit := or_bit(x.le_dec(y)),
     reflects := or_bit_reflects(x.le_dec(y)),
+}
+
+// ---------------------------------------------------------------------------
+// Apartness, the inverse, and integer powers
+// (docs/inverse-power-notation-design.md). The inverse takes apartness from
+// zero, as the reals' does, rather than giving 0 a junk value: `x⁻¹` is
+// `x.inv(h)` with `h` searched at the call (`:= infer`), so it costs
+// nothing where a hypothesis is in scope, a rule builds one, or `x` is a
+// positive or negative literal. At `Rat` apartness and `¬(x ≈ 0)` are
+// interchangeable (`apart_of_nonzero`, `nonzero_of_apart`), and the value
+// never reads the proof.
+
+fn Rat::Apart(x, y: Rat) → Type { x < y ∨ y < x }
+
+// The sign premises of the rules below, as one-place predicates: `0 < x`
+// has as many symbols as `x.Apart(0)`, so a rule from one to the other
+// could not show the search terminates; `x.Positive()` has fewer. A local
+// `h: 0 < x` is one by conversion.
+fn Rat::Positive(self x: Rat) → Type { Rat::zero() < x }
+fn Rat::Negative(self x: Rat) → Type { x < Rat::zero() }
+
+evidence theorem Rat::apart_of_positive({x: Rat}, h: x.Positive() := infer): x.Apart(Rat::zero()) { Inr(h) }
+evidence theorem Rat::apart_of_negative({x: Rat}, h: x.Negative() := infer): x.Apart(Rat::zero()) { Inl(h) }
+
+theorem Rat::apart_sym({x, y: Rat}, h: x.Apart(y)): y.Apart(x) {
+    match h {
+        Inl(lt) => Inr(lt),
+        Inr(gt) => Inl(gt),
+    }
+}
+
+theorem Rat::apart_irrefl(self x: Rat): ¬(x.Apart(x)) {
+    λ h => match h {
+        Inl(lt) => x.lt_irrefl(lt),
+        Inr(lt) => x.lt_irrefl(lt),
+    }
+}
+
+theorem Rat::nonzero_of_apart({x: Rat}, h: x.Apart(Rat::zero())): ¬(x ≈ Rat::zero()) {
+    λ zero => match h {
+        Inl(lt) => Rat::zero().lt_irrefl(Rat::lt_respects(zero, Rat::zero().same_refl(), lt)),
+        Inr(gt) => Rat::zero().lt_irrefl(Rat::lt_respects(Rat::zero().same_refl(), zero, gt)),
+    }
+}
+
+theorem Rat::apart_of_nonzero({x: Rat}, h: ¬(x ≈ Rat::zero())): x.Apart(Rat::zero()) {
+    match x.lt_trichotomy(Rat::zero()) {
+        Inl(lt) => Inl(lt),
+        Inr(rest) => match rest {
+            Inl(same) => false_elim(h(same)),
+            Inr(gt) => Inr(gt),
+        },
+    }
+}
+
+// A sign is the numerator's sign.
+theorem Rat::num_pos({x: Rat}, h: Rat::zero() < x): OfNat(0) < x.num { omega }
+theorem Rat::num_neg({x: Rat}, h: x < Rat::zero()): x.num < OfNat(0) { omega }
+
+// A product of numbers apart from zero is apart from zero: the sign of the
+// product's numerator is the product of the signs.
+evidence theorem Rat::apart_mul({x, y: Rat}, hx: x.Apart(Rat::zero()) := infer, hy: y.Apart(Rat::zero()) := infer):
+    (x * y).Apart(Rat::zero())
+{
+    let a = x.num;
+    let b = y.num;
+    let num: ((x * y).num = a * b) = refl;
+    match hx {
+        Inl(xn) => {
+            let ha = Rat::num_neg(xn);
+            match hy {
+                Inl(yn) => {
+                    let hb = Rat::num_neg(yn);
+                    let pos = (-a).mul_pos(-b, omega, p_pos := omega);
+                    let l = a.mul_neg_l(-b);
+                    let r = a.mul_neg_r(b);
+                    Inr(omega)
+                },
+                Inr(yp) => {
+                    let neg = a.mul_neg(b, ha, p_pos := Rat::num_pos(yp));
+                    Inl(omega)
+                },
+            }
+        },
+        Inr(xp) => {
+            let ha = Rat::num_pos(xp);
+            match hy {
+                Inl(yn) => {
+                    let neg = b.mul_neg(a, Rat::num_neg(yn), p_pos := ha);
+                    let swap = a.mul_comm(b);
+                    Inl(omega)
+                },
+                Inr(yp) => {
+                    let pos = a.mul_pos(b, ha, p_pos := Rat::num_pos(yp));
+                    Inr(omega)
+                },
+            }
+        },
+    }
+}
+
+// The inverse, at apartness from zero; `x⁻¹` is this with `h` searched.
+fn Rat::inv(self x: Rat, h: x.Apart(Rat::zero()) := infer) → Rat { x.recip() }
+
+designation postfix ⁻¹ at Rat := Rat::inv
+
+// The value never reads the proof.
+theorem Rat::inv_any_proof(self x: Rat, h, h2: x.Apart(Rat::zero())): x.inv(h := h) = x.inv(h := h2) { refl }
+
+theorem Rat::mul_inv(self x: Rat, h: x.Apart(Rat::zero()) := infer): x * x⁻¹ ≈ Rat::one() {
+    x.mul_recip(Rat::nonzero_of_apart(h))
+}
+
+theorem Rat::inv_mul(self x: Rat, h: x.Apart(Rat::zero()) := infer): x⁻¹ * x ≈ Rat::one() {
+    Rat::same_trans(x⁻¹.mul_comm(x), x.mul_inv())
+}
+
+theorem Rat::inv_respects({x, x2: Rat}, hx: x ≈ x2, h: x.Apart(Rat::zero()) := infer, h2: x2.Apart(Rat::zero()) := infer):
+    x⁻¹ ≈ x2⁻¹
+{
+    Rat::recip_respects(hx)
+}
+
+// An inverse is unique: anything y multiplies to 1 is y⁻¹.
+theorem Rat::inv_unique({y, u: Rat}, hu: y * u ≈ Rat::one(), h: y.Apart(Rat::zero()) := infer): u ≈ y⁻¹ {
+    calc {
+        u ≈ u * Rat::one() := Rat::same_sym(u.mul_one()),
+        ≈ u * (y * y⁻¹) := Rat::mul_respects(u.same_refl(), Rat::same_sym(y.mul_inv())),
+        ≈ (u * y) * y⁻¹ := Rat::same_sym(u.mul_assoc(y, y⁻¹)),
+        ≈ (y * u) * y⁻¹ := Rat::mul_respects(u.mul_comm(y), y⁻¹.same_refl()),
+        ≈ Rat::one() * y⁻¹ := Rat::mul_respects(hu, y⁻¹.same_refl()),
+        ≈ y⁻¹ * Rat::one() := Rat::one().mul_comm(y⁻¹),
+        ≈ y⁻¹ := y⁻¹.mul_one(),
+    }
+}
+
+// Powers at a natural exponent, recursing as `Nat::pow` does, with the
+// recursive result on the left.
+fn Rat::npow(self x: Rat, n: Nat) → Rat {
+    match n {
+        Zero => Rat::one(),
+        Succ(k) => x.npow(k) * x,
+    }
+}
+
+theorem Rat::npow_respects({x, x2: Rat}, hx: x ≈ x2, n: Nat): x.npow(n) ≈ x2.npow(n) {
+    match n {
+        Zero => Rat::one().same_refl(),
+        Succ(k) => Rat::mul_respects(Rat::npow_respects(hx, k), hx),
+    }
+}
+
+theorem Rat::npow_add(self x: Rat, m, n: Nat): x.npow(m + n) ≈ x.npow(m) * x.npow(n) {
+    match n {
+        Zero => Rat::same_sym(x.npow(m).mul_one()),
+        Succ(k) => calc {
+            x.npow(m + Succ(k)) ≈ x.npow(m + k) * x := refl,
+            ≈ (x.npow(m) * x.npow(k)) * x := Rat::mul_respects(x.npow_add(m, k), x.same_refl()),
+            ≈ x.npow(m) * (x.npow(k) * x) := x.npow(m).mul_assoc(x.npow(k), x),
+        },
+    }
+}
+
+theorem Rat::mul_npow(self x, y: Rat, n: Nat): (x * y).npow(n) ≈ x.npow(n) * y.npow(n) {
+    match n {
+        Zero => Rat::same_sym(Rat::one().mul_one()),
+        Succ(k) => {
+            let p = x.npow(k);
+            let q = y.npow(k);
+            calc {
+                (x * y).npow(Succ(k)) ≈ (x * y).npow(k) * (x * y) := refl,
+                ≈ (p * q) * (x * y) := Rat::mul_respects(x.mul_npow(y, k), (x * y).same_refl()),
+                ≈ (p * x) * (q * y) := ring(p.den_mul(q), x.den_mul(y), (p * q).den_mul(x * y), p.den_mul(x), q.den_mul(y), (p * x).den_mul(q * y)),
+            }
+        },
+    }
+}
+
+theorem Rat::one_npow(n: Nat): Rat::one().npow(n) ≈ Rat::one() {
+    match n {
+        Zero => Rat::one().same_refl(),
+        Succ(k) => Rat::same_trans(Rat::mul_respects(Rat::one_npow(k), Rat::one().same_refl()), Rat::one().mul_one()),
+    }
+}
+
+theorem Rat::npow_apart(self x: Rat, n: Nat, h: x.Apart(Rat::zero())): x.npow(n).Apart(Rat::zero()) {
+    match n {
+        Zero => Rat::apart_of_positive(),
+        Succ(k) => Rat::apart_mul(hx := x.npow_apart(k, h), hy := h),
+    }
+}
+
+evidence theorem Rat::apart_npow({x: Rat}, {n: Nat}, h: x.Apart(Rat::zero()) := infer): x.npow(n).Apart(Rat::zero()) {
+    x.npow_apart(n, h)
+}
+
+// An inverse is apart from zero: were it ≈ 0, x · x⁻¹ would be ≈ 0, not 1.
+evidence theorem Rat::apart_inv({x: Rat}, {h: x.Apart(Rat::zero())}): x.inv(h := h).Apart(Rat::zero()) {
+    Rat::apart_of_nonzero(λ zero => {
+        let bad: (Rat::one() ≈ Rat::zero()) = calc {
+            Rat::one() ≈ x * x⁻¹ := Rat::same_sym(x.mul_inv()),
+            ≈ x * Rat::zero() := Rat::mul_respects(x.same_refl(), zero),
+            ≈ Rat::zero() * x := x.mul_comm(Rat::zero()),
+            ≈ Rat::zero() := x.zero_mul(),
+        };
+        omega
+    })
+}
+
+// Powers at an integer exponent. The side condition depends on the
+// exponent's sign: nothing at n ≥ 0, apartness from zero at n < 0, so
+// `x ^ 2` asks for nothing and `x ^ (-1)` asks exactly what `x⁻¹` does. The
+// condition computes, and the search reads what it computes to.
+fn Rat::PowOk(x: Rat, n: Int) → Type {
+    match n {
+        OfNat(_) => True,
+        NegSucc(_) => x.Apart(Rat::zero()),
+    }
+}
+
+fn Rat::pow_parts(x: Rat, n: Int) → (x.PowOk(n) → Rat) {
+    match n {
+        OfNat(m) => λ _ => x.npow(m),
+        NegSucc(k) => λ h => x.inv(h := h).npow(Succ(k)),
+    }
+}
+
+fn Rat::pow(self x: Rat, n: Int, h: x.PowOk(n) := infer) → Rat { Rat::pow_parts(x, n, h) }
+
+designation ^ at Rat := Rat::pow
+
+theorem Rat::apart_pow_parts(x: Rat, n: Int, h: x.Apart(Rat::zero())): (hn: x.PowOk(n)) → Rat::pow_parts(x, n, hn).Apart(Rat::zero()) {
+    match n {
+        OfNat(m) => λ _ => x.npow_apart(m, h),
+        NegSucc(k) => λ hn => x.inv(h := hn).npow_apart(Succ(k), Rat::apart_inv()),
+    }
+}
+
+evidence theorem Rat::apart_pow({x: Rat}, {n: Int}, {hn: x.PowOk(n)}, h: x.Apart(Rat::zero()) := infer):
+    x.pow(n, h := hn).Apart(Rat::zero())
+{
+    Rat::apart_pow_parts(x, n, h, hn)
+}
+
+theorem Rat::pow_ofNat(self x: Rat, n: Nat): x ^ OfNat(n) = x.npow(n) { refl }
+
+theorem Rat::pow_negSucc(self x: Rat, k: Nat, h: x.Apart(Rat::zero()) := infer): x ^ NegSucc(k) = x⁻¹.npow(Succ(k)) { refl }
+
+theorem Rat::pow_zero(self x: Rat): x ^ 0 ≈ Rat::one() { refl }
+
+theorem Rat::pow_one(self x: Rat): x ^ 1 ≈ x { Rat::same_trans(Rat::one().mul_comm(x), x.mul_one()) }
+
+theorem Rat::pow_two(self x: Rat): x ^ 2 ≈ x * x { Rat::mul_respects(x.pow_one(), x.same_refl()) }
+
+// The inverse is the power at -1.
+theorem Rat::pow_neg_one(self x: Rat, h: x.Apart(Rat::zero()) := infer): x ^ (-1) ≈ x⁻¹ { x⁻¹.pow_one() }
+
+// A negative power is the inverse of the positive one.
+theorem Rat::pow_negSucc_inv(self x: Rat, k: Nat, h: x.Apart(Rat::zero()) := infer): x ^ NegSucc(k) ≈ (x ^ OfNat(Succ(k)))⁻¹ {
+    let n = Succ(k);
+    let unit = calc {
+        x.npow(n) * x⁻¹.npow(n) ≈ (x * x⁻¹).npow(n) := Rat::same_sym(x.mul_npow(x⁻¹, n)),
+        ≈ Rat::one().npow(n) := Rat::npow_respects(x.mul_inv(), n),
+        ≈ Rat::one() := Rat::one_npow(n),
+    };
+    Rat::inv_unique(unit)
 }

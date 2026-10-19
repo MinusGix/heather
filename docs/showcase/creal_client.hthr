@@ -10,6 +10,7 @@ import logic;
 import nat;
 import int;
 import omega;
+import algebra;
 import rat;
 import creal;
 import relation_props;
@@ -99,20 +100,25 @@ theorem squeeze(x, y: CReal, a: x <= y, b: y <= x): x ≈ y { CReal::le_antisymm
 // ---------------------------------------------------------------------------
 // The inverse, at a proof of apartness from zero.
 
-// Dividing and multiplying back.
-theorem div_mul_cancel(x, y: CReal, h: y.Apart(CReal::zero())): (x * y.inv(h)) * y ≈ x {
+// Dividing and multiplying back. `y⁻¹` finds the apartness in scope.
+theorem div_mul_cancel(x, y: CReal, h: y.Apart(CReal::zero())): (x * y⁻¹) * y ≈ x {
     calc {
-        (x * y.inv(h)) * y ≈ x * (y.inv(h) * y) := x.mul_assoc(y.inv(h), y),
-        ≈ x * CReal::one() := rel_cong(y.inv_mul(h)),
+        (x * y⁻¹) * y ≈ x * (y⁻¹ * y) := x.mul_assoc(y⁻¹, y),
+        ≈ x * CReal::one() := rel_cong(y.inv_mul()),
         ≈ x := x.mul_one(),
     }
 }
 
 // Which apartness proof is used does not matter, though their gaps may
 // differ and with them where the inverse reads.
-theorem inv_any_proof(x: CReal, h, h2: x.Apart(CReal::zero())): x.inv(h) ≈ x.inv(h2) {
-    CReal::inv_respects(x.same_refl(), h, h2)
+theorem inv_any_proof(x: CReal, h, h2: x.Apart(CReal::zero())): x.inv(h := h) ≈ x.inv(h := h2) {
+    CReal::inv_respects(x.same_refl(), h := h, h2 := h2)
 }
+
+// A sign is enough, and the inverse is the power at -1.
+theorem inv_of_positive(x: CReal, h: CReal::zero() < x): x * x⁻¹ ≈ CReal::one() { x.mul_inv() }
+
+theorem inv_is_pow(x: CReal, h: x.Apart(CReal::zero())): x ^ (-1) ≈ x⁻¹ { x.pow_neg_one() }
 
 // ---------------------------------------------------------------------------
 // Order and addition, and Bishop's pointwise forms.
@@ -182,7 +188,14 @@ theorem two_gap(): (CReal::ofRat(Rat(OfNat(2), 1)).away_of_apart(two_apart())).w
 
 theorem inv_two_index(): CReal::inv_at(1, 0, 4) = 24 { refl }
 
-theorem inv_two_term(): CReal::ofRat(Rat(OfNat(2), 1)).inv(two_apart()).seq(4) ≈ half() { refl }
+theorem inv_two_term(): CReal::ofRat(Rat(OfNat(2), 1)).inv(h := two_apart()).seq(4) ≈ half() { refl }
+
+// Written as notation, the apartness comes from the rational's sign
+// (`ofRat_apart`, `Rat::apart_of_positive`), and the embedding carries the
+// rational inverse across.
+theorem inv_two_searched(): CReal::ofRat(Rat(OfNat(2), 1))⁻¹ ≈ CReal::ofRat(Rat(OfNat(2), 1)⁻¹) {
+    CReal::ofRat_inv(Rat(OfNat(2), 1))
+}
 
 // Adding to both sides of a gap keeps it: the same 1/(k+1), from the same
 // start.

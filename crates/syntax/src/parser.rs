@@ -720,7 +720,7 @@ impl Parser {
                 msg: format!(
                     "`{name} as …` installs an operator SYMBOL as this binder's body \
                      spelling, and `as` can only install one that already lexes: the \
-                     curated table is `+`, `++`, `*`, `&&`, `||`, `∙`, `⊔`, `≈`, `<=`, `<` \
+                     curated table is `+`, `++`, `*`, `^`, `&&`, `||`, `∙`, `⊔`, `≈`, `<=`, `<` \
                      (issues/notation-extensibility.md owns the lexicon)"
                 ),
                 span: asp.join(self.peek_span()),
@@ -1167,7 +1167,13 @@ impl Parser {
     fn designation_decl(&mut self) -> R<DesignationDecl> {
         let start = self.peek_span();
         self.bump(); // `designation`
-        let fixity = if self.eat_kw("prefix") { OpFixity::Prefix } else { OpFixity::Infix };
+        let fixity = if self.eat_kw("prefix") {
+            OpFixity::Prefix
+        } else if self.eat_kw("postfix") {
+            OpFixity::Postfix
+        } else {
+            OpFixity::Infix
+        };
         // `<` opens the optional type-parameter list everywhere else, but in
         // `designation < at Int := Lt` it is the operator itself. `at` cannot
         // begin a type parameter, so this two-token lookahead is exact and
@@ -1183,12 +1189,15 @@ impl Parser {
             OpFixity::Prefix if matches!(self.peek(), TokKind::Minus) => Some("-"),
             OpFixity::Prefix if matches!(self.peek(), TokKind::Bang) => Some("!"),
             OpFixity::Prefix => None,
+            OpFixity::Postfix if matches!(self.peek(), TokKind::SupInverse) => Some("⁻¹"),
+            OpFixity::Postfix => None,
             OpFixity::Infix => Self::op_symbol(self.peek()),
         };
         let Some(sym) = sym else {
             return self.err(
                 "a designation names an operator (`designation + at Nat := add`, \
-                 `designation prefix - at Int := neg`). A designation for an ordinary name \
+                 `designation prefix - at Int := neg`, `designation postfix ⁻¹ at Rat := \
+                 Rat::inv`). A designation for an ordinary name \
                  is not a form — that is a default instance wearing a smaller hat \
                  (docs/operation-indexed-classes-design.md §9.2)",
             );
@@ -3822,6 +3831,7 @@ impl Parser {
             TokKind::Minus => Some("-"),
             TokKind::PlusPlus => Some("++"),
             TokKind::Star => Some("*"),
+            TokKind::Caret => Some("^"),
             TokKind::AmpAmp => Some("&&"),
             TokKind::PipePipe => Some("||"),
             TokKind::Bullet => Some("∙"),
@@ -3876,16 +3886,36 @@ impl Parser {
     /// follows the same carrier-directed path. They bind more tightly than
     /// every infix rung, include postfix applications in their operands, and
     /// recurse so `--a` and `!!b` are nested applications.
+    ///
+    /// The one exception is `^`, which binds tighter than a prefix operator
+    /// (`-x ^ 2` is `-(x ^ 2)`, as in mathematics and Lean): a prefix
+    /// operator's operand is a [`Self::power`], not a bare postfix.
     fn prefix(&mut self) -> R<Expr> {
         let symbol = match self.peek() {
             TokKind::Minus => "-",
             TokKind::Bang => "!",
-            _ => return self.postfix(),
+            _ => return self.power(),
         };
         let start = self.bump().span;
         let inner = self.prefix()?;
         let span = start.join(inner.span);
         Ok(op_call(symbol, OpFixity::Prefix, vec![inner], span))
+    }
+
+    /// `base ^ exponent` (docs/inverse-power-notation-design.md §2): above
+    /// every infix rung and above the prefix operators, below postfix forms
+    /// (`x⁻¹ ^ 2` is `(x⁻¹) ^ 2`, `x.f ^ 2` is `(x.f) ^ 2`). Right-associative,
+    /// and the exponent is a whole [`Self::prefix`], so `a ^ b ^ c` is
+    /// `a ^ (b ^ c)` and `x ^ -1` needs no parentheses.
+    fn power(&mut self) -> R<Expr> {
+        let base = self.postfix()?;
+        if !matches!(self.peek(), TokKind::Caret) {
+            return Ok(base);
+        }
+        self.bump();
+        let exponent = self.prefix()?;
+        let span = base.span.join(exponent.span);
+        Ok(op_call("^", OpFixity::Infix, vec![base, exponent], span))
     }
 
     /// An atom followed by zero or more field accesses `.f`, method calls
@@ -3942,6 +3972,13 @@ impl Parser {
                     named.push(NamedArg { name: format!("#decreasing:{label}"), name_span: end,
                         expr: Expr { kind: ExprKind::Num(Numeral::ZERO), span: end }, span: start.join(end) });
                     e.span = e.span.join(end);
+                }
+                // `x⁻¹` — the postfix inverse, binding as tightly as `.f`
+                // (docs/inverse-power-notation-design.md §2).
+                TokKind::SupInverse => {
+                    let end = self.bump().span;
+                    let span = e.span.join(end);
+                    e = op_call("⁻¹", OpFixity::Postfix, vec![e], span);
                 }
                 TokKind::Hole(None) if self.tight(self.pos) => {
                     if self.propagation_depth == 0 {
@@ -5646,6 +5683,63 @@ mod tests {
             assert!(err.msg.contains(message), "{body}: {}", err.msg);
             assert_eq!(&src[err.span.start..err.span.end], token, "{body}");
         }
+    }
+
+    /// Operator structure as an s-expression: `(^ x 2)`, with the fixity of a
+    /// unary symbol marked (`(- …)` prefix, `(⁻¹ …)` postfix both print as
+    /// `(sym …)`, so the fixity is asserted separately where it matters).
+    fn shape(k: &ExprKind) -> String {
+        match k {
+            ExprKind::App { head, args, .. } if matches!(head.kind, ExprKind::OpSymbol { .. }) => {
+                let ExprKind::OpSymbol { symbol, .. } = &head.kind else { unreachable!() };
+                let inner: Vec<String> = args.iter().map(|a| shape(&a.kind)).collect();
+                format!("({symbol} {})", inner.join(" "))
+            }
+            ExprKind::Var(n) => n.clone(),
+            ExprKind::Num(n) => format!("{}", n.as_u64().unwrap()),
+            ExprKind::Dot { recv, name, .. } => format!("{}.{name}", shape(&recv.kind)),
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    /// `^` sits above `*` and above prefix `-`, is right-associative, and
+    /// takes a whole prefix expression as its exponent; `⁻¹` binds as tightly
+    /// as `.f` (docs/inverse-power-notation-design.md §2).
+    #[test]
+    fn power_and_inverse_precedence() {
+        for (src, want) in [
+            ("x ^ 2", "(^ x 2)"),
+            ("-x ^ 2", "(- (^ x 2))"),
+            ("a * b ^ 2", "(* a (^ b 2))"),
+            ("a ^ b * c", "(* (^ a b) c)"),
+            ("a ^ b ^ c", "(^ a (^ b c))"),
+            ("x ^ -1", "(^ x (- 1))"),
+            ("x⁻¹", "(⁻¹ x)"),
+            ("x⁻¹⁻¹", "(⁻¹ (⁻¹ x))"),
+            ("-x⁻¹", "(- (⁻¹ x))"),
+            ("x⁻¹ ^ 2", "(^ (⁻¹ x) 2)"),
+            ("x ^ 2⁻¹", "(^ x (⁻¹ 2))"),
+            ("x⁻¹.f", "(⁻¹ x).f"),
+            ("a + b⁻¹ * c", "(+ a (* (⁻¹ b) c))"),
+        ] {
+            assert_eq!(shape(&body(src)), want, "{src}");
+        }
+        let ExprKind::App { head, .. } = body("x⁻¹") else { panic!("expected a call") };
+        assert!(matches!(head.kind, ExprKind::OpSymbol { fixity: OpFixity::Postfix, .. }));
+        let ExprKind::App { head, .. } = body("x ^ 2") else { panic!("expected a call") };
+        assert!(matches!(head.kind, ExprKind::OpSymbol { fixity: OpFixity::Infix, .. }));
+    }
+
+    #[test]
+    fn postfix_and_power_designations_parse() {
+        let file = parse_file("designation postfix ⁻¹ at Rat := inv\ndesignation ^ at Rat := pow\n").unwrap();
+        let [Item::Designation(inv), Item::Designation(pow)] = file.items.as_slice() else {
+            panic!("expected two designations")
+        };
+        assert_eq!((inv.fixity, inv.symbol.as_str()), (OpFixity::Postfix, "⁻¹"));
+        assert_eq!((pow.fixity, pow.symbol.as_str()), (OpFixity::Infix, "^"));
+        let err = parse_file("designation postfix - at Int := neg\n").unwrap_err();
+        assert!(err.msg.contains("designation postfix ⁻¹"), "{}", err.msg);
     }
 
     #[test]
