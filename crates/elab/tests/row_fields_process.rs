@@ -10,12 +10,13 @@ const BV_OMEGA: &str = include_str!("../../../lib/std/bitvec/bitvec_omega.hthr")
 const DECIMAL: &str = include_str!("../../../lib/decimal_line.hthr");
 const ASM: &str = include_str!("../../../lib/std/arch/x86_64/x86_64_asm.hthr");
 const RUNS: &str = include_str!("../../../lib/elf64_runs.hthr");
+const STRETCH: &str = include_str!("../../../lib/elf64_stretch.hthr");
 const FORMAT: &str = include_str!("../../../lib/elf64_format_width.hthr");
 const PROGRAM: &str = include_str!("../../../lib/command_program.hthr");
 const SCAN: &str = include_str!("../../../lib/elf64_arg_scan.hthr");
 pub(crate) const ROW: &str = include_str!("../../../lib/elf64_row_fields.hthr");
 
-const BASE: &[(&str, &str)] = &[("bitvec_omega", BV_OMEGA), ("decimal_line", DECIMAL), ("x86_64_asm", ASM), ("elf64_runs", RUNS), ("elf64_format_width", FORMAT), ("command_program", PROGRAM), ("elf64_arg_scan", SCAN)];
+const BASE: &[(&str, &str)] = &[("bitvec_omega", BV_OMEGA), ("decimal_line", DECIMAL), ("x86_64_asm", ASM), ("elf64_runs", RUNS), ("elf64_stretch", STRETCH), ("elf64_format_width", FORMAT), ("command_program", PROGRAM), ("elf64_arg_scan", SCAN)];
 
 pub(crate) fn base() -> heather_elab::Elaborator { checker_with(BASE) }
 

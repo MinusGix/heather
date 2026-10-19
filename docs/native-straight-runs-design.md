@@ -380,6 +380,63 @@ The stat pass's two heaviest phases moved first:
 Cold, the two phases' kernel steps fell to a fiftieth and a twentieth of
 the chains', and the stat pass's to a fifth.
 
+The argument scan (`lib/elf64_arg_scan.hthr`) followed, over its own
+wrapper `scan_straight`; only its letter table (`slots_run`, each slot a
+small program of its own) and the refusal's system call stay by hand:
+
+- `scan_runs` is the setup to argv[0]'s skip (five items), `scan_end` the
+  null slot (three), `scan_done` the any-selected test (two; the default is
+  a `Hole`, which a stretch does not read, so it runs past the stretch's
+  end).
+- `scan_arg` is one argument from its slot to the dash test's JNE (eight
+  items), split by whether `--` has ended the options and by the
+  argument's shape; an operand ends in `operand_then` (two items), a dash
+  in `after_dash`, twelve items to the JMP that ends the options, split by
+  the argument's next two bytes.
+- `letters_run` is two stretches per letter around the table: to the
+  table (a NUL goes back to `next`), and from it to the select's JMP (no
+  column refuses).
+
+The phases' ends are stated over `LinuxSteps`, so each leaf hands back
+through a `StepsBack` of its own (`scan_back`, `letters_back`,
+`result_back`). The one-step loads and `run_store` moved into
+`elf64_runs`, so `elf64_stretch` imports no process library. Cold, the
+scan's kernel steps fell to two fifths, and the command closure's by about
+a twelfth.
+
+The stat pass's end and the operand cursor (`lib/elf64_operand_cursor.hthr`,
+over `cursor_straight`) came next:
+
+- `stat_end_runs` is the cursor, then one stretch of four items to the
+  JNE to `done`; `stat_done` is the total's digits (`count_run`, over a
+  piece), then five items to the widen. Both are continuation-passing, so
+  `stat_end` is gone.
+- The cursor's argument is `cursor_arg`, eight items from its slot to the
+  first dash's JNE (absorbing `cursor_head`), split by whether `--` has
+  ended the options and by the argument's first byte; a dash goes on in
+  `cursor_dash`, twelve items to the JMP that ends the options (absorbing
+  `cursor_dashes` and `cursor_option`), split by the next two bytes. The
+  null slot is `cursor_none` (three items) and the start `cursor_start`
+  (six, over its own program).
+
+`CursorReach` and the start's `StartReach` are stated over `LinuxSteps`,
+with `cursor_back` and `start_back` as their `StepsBack`. Cold, the
+stat pass's end fell to a little over a quarter of its kernel steps, the
+cursor's to about two fifths, and the command closure's by about a
+twelfth.
+
+The row writer (`lib/elf64_row_fields.hthr`, over `row_straight`) is a
+stretch per path through a slot: a slot not selected is two items to the
+JE, the first field four to the JNE and then the field's two
+(`row_field`), any other field nine, its space stored on the way, to the
+count's load; the formatter (`row_format`) runs by hand between, and
+`skip` is two items to the back JNE, past the last slot (`row_last`) or
+back to `head` (`row_more`). A slot hands on through `SkipThen`, the
+loop through `RowReach`'s `row_back`; the registers are one conjunction,
+`RowRegs`, so a leaf carries them across the blocks that keep them. The
+space's store and the count's load are `StoreByte`/`Load` items (the same
+bytes). Cold, the row writer's kernel steps fell to about three fifths.
+
 ## Not yet
 
 - A system call ends a stretch: `closes_runs` still runs its JCCs with the

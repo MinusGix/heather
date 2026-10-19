@@ -31,11 +31,11 @@ use super::read_loop::{claims, component, image_facts, literal, nested, print_ju
 pub(super) const SUPPORT: &[(&str, &str)] = &[
     ("x86_64_asm", include_str!("../../../../lib/std/arch/x86_64/x86_64_asm.hthr")),
     ("elf64_runs", include_str!("../../../../lib/elf64_runs.hthr")),
+    ("elf64_stretch", include_str!("../../../../lib/elf64_stretch.hthr")),
     ("command_program", include_str!("../../../../lib/command_program.hthr")),
     ("elf64_format_width", include_str!("../../../../lib/elf64_format_width.hthr")),
     ("elf64_arg_scan", include_str!("../../../../lib/elf64_arg_scan.hthr")),
     ("elf64_operand_cursor", include_str!("../../../../lib/elf64_operand_cursor.hthr")),
-    ("elf64_stretch", include_str!("../../../../lib/elf64_stretch.hthr")),
     ("elf64_stat_width", include_str!("../../../../lib/elf64_stat_width.hthr")),
     ("elf64_command_events", include_str!("../../../../lib/elf64_command_events.hthr")),
     ("elf64_command_output", include_str!("../../../../lib/elf64_command_output.hthr")),

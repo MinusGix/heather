@@ -15,8 +15,6 @@
 // What the elaborator computes and what it leaves to `refl` is as for
 // `Straight`; an item a stretch cannot run (a syscall, a piece, a word
 // store, a hole) leaves `False`.
-import elf64_arg_scan;
-import elf64_format_width;
 import elf64_runs;
 import elf64_io;
 import linux_x86_64_io;
