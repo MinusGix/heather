@@ -367,7 +367,7 @@ theorem stat_done(file: IoImage, page: Nat → BitVec(8), at: BitVec(64), piece:
     let head: CountAt(file, page, next_rip(at, wa(lw_count())), n, read_gpr(Rdx, s1.gprs).toNat(), 0, 1, s1.gprs, s1) =
         CountAt(memory_is := set.memory_is, rip_is := set.rip_is, rax := r13, rbx := r13, rdx := refl, rdi := page_word_value(), rsi := refl,
             kept := fmt_kept_refl(s1.gprs));
-    have counted = count_run(file, page, n, read_gpr(Rdx, s1.gprs).toNat(), 0, s1.gprs, 19, next_rip(at, wa(lw_count())), 1, s1, { omega }, { omega },
+    have counted = count_run(file, page, n, read_gpr(Rdx, s1.gprs).toNat(), 0, s1.gprs, 19, next_rip(at, wa(lw_count())), 1, s1, trivial, trivial,
         piece(lw_count()), head);
     let s2 = counted.witness;
     let c = counted.proof.right;
@@ -531,7 +531,7 @@ theorem acct_stated(file: IoImage, page: Nat → BitVec(8), at: BitVec(64), piec
     let s3 = execute_block_normal(stat_mode_block(), s2);
     let mode = st_word(st, 24);
     let loaded = run_word_load(file, page2, stat_word_load(), at, wa(lw_mode_load()), piece(lw_mode_load()), s3, moded.memory_is, moded.rip_is, mode,
-        j(sym(mode_address()), λ a _ => WordAt(data, IoMemory(file, page2), a, mode), stat_word_at(file, page, st, 24, len, { omega })));
+        j(sym(mode_address()), λ a _ => WordAt(data, IoMemory(file, page2), a, mode), stat_word_at(file, page, st, 24, len, trivial)));
     let s4 = word_load_after(stat_word_load(), mode, s3);
     let kinded = run_block(file, page2, stat_kind_block(), at, wa(lw_kind()), piece(lw_kind()), s4, loaded.memory_is, loaded.rip_is);
     let s5 = execute_block_normal(stat_kind_block(), s4);
@@ -554,7 +554,7 @@ theorem acct_stated(file: IoImage, page: Nat → BitVec(8), at: BitVec(64), piec
             let s7 = execute_block_normal(stat_size_block(), s6);
             let size = st_word(st, 48);
             let loaded2 = run_word_load(file, page2, stat_word_load(), at, wa(lw_size_load()), piece(lw_size_load()), s7, sized.memory_is, sized.rip_is, size,
-                j(sym(size_address()), λ a _ => WordAt(data, IoMemory(file, page2), a, size), stat_word_at(file, page, st, 48, len, { omega })));
+                j(sym(size_address()), λ a _ => WordAt(data, IoMemory(file, page2), a, size), stat_word_at(file, page, st, 48, len, trivial)));
             let s8 = word_load_after(stat_word_load(), size, s7);
             let added = run_block(file, page2, stat_add_block(), at, wa(lw_add()), piece(lw_add()), s8, loaded2.memory_is, loaded2.rip_is);
             let s9 = execute_block_normal(stat_add_block(), s8);
@@ -735,7 +735,7 @@ theorem stat_operand(file: IoImage, page: Nat → BitVec(8), at: BitVec(64), pie
     let rsi_value: (read_gpr(Rsi, s2.gprs).toNat() = pointer.toNat()) = cong_fn<BitVec(64), Nat>(λ w => w.toNat(), rsi);
     let reads: ReadsFrom(file, page, source0, read_gpr(Rsi, s2.gprs).toNat()) =
         j(sym(rsi_value), λ w _ => ReadsFrom(file, page, source0, w), λ i => refl);
-    let low0 = low_of(read_gpr(Rsi, s2.gprs), pointer.toNat(), rsi_value, { omega });
+    let low0 = low_of(read_gpr(Rsi, s2.gprs), pointer.toNat(), rsi_value, bound_low(pointer.toNat(), operand.len(), bound));
     let at_path = λ (s: MachineState<IoMemory>) (from: FetchedSteps(fetch, data, state, s)) (m: s.memory = memory) (r: s.rip = next_rip(at, wa(lw_path())))
             (rsi_s: read_gpr(Rsi, s.gprs) = pointer) (rbx_s: read_gpr(Rbx, s.gprs) = argv_slot(rsp, k))
             (r12_s: read_gpr(R12, s.gprs) = ended_word(ended)) (carried_s: StatCarried(total, other, origin, s.gprs)) =>

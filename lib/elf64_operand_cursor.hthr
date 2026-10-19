@@ -632,7 +632,7 @@ theorem cursor_option(file: IoImage, page: Nat → BitVec(8), at: BitVec(64), pi
         j(sym(head.rsi), λ w _ => ReadsFrom(file, page, source0, w.toNat()), λ i => refl);
     let rsi_value: (read_gpr(Rsi, s1.gprs).toNat() = p.toNat()) = cong_fn<BitVec(64), Nat>(λ w => w.toNat(), head.rsi);
     let b0: (p.toNat() + arg.len() + 1 <= Nat::pow(2, 47)) = head.bound;
-    let low0 = low_of(read_gpr(Rsi, s1.gprs), p.toNat(), rsi_value, { omega });
+    let low0 = low_of(read_gpr(Rsi, s1.gprs), p.toNat(), rsi_value, bound_low(p.toNat(), arg.len(), b0));
     match arg as λ a => ArgStays(file, p, a) → (p.toNat() + a.len() + 1 <= Nat::pow(2, 47)) →
             CursorReach(file, page, at, rsp, origin, operands_from(False, Cons(a, rest)), state) {
         Nil => λ string bound => {
