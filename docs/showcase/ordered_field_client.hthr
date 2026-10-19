@@ -1,0 +1,107 @@
+// One theory, two carriers: the constructive ordered-field interface
+// (lib/std/ordered_field.hthr, docs/constructive-ordered-field-design.md)
+// used at the rationals and at the regular Cauchy reals.
+//
+// Each generic theorem below is proved once, at the weakest layer it needs,
+// and then called at `Rat` and at `CReal`. The calls name no dictionary and
+// no operation: the carrier is read off the first point, and its registered
+// instances fill `≈`, `<`, `≤`, `+` and `*`.
+
+import logic;
+import nat;
+import int;
+import omega;
+import algebra;
+import relation_props;
+import algebra_rel;
+import ordered_field;
+import rat;
+import creal;
+
+// ---------------------------------------------------------------------------
+// A client's own generic theorem: if x is within e of a and within d of b,
+// then a and b are within e + d. The triangle inequality, in the bounded
+// form, at any ordered additive group; locatedness is never asked for.
+theorem close_through<A: OrderedAddGroup(≈, <, <=, +)>(a, b, x, e, d: A, ha: Close(x, a, e), hb: Close(x, b, d)):
+    Close(a, b, e + d)
+{
+    OrderedAddGroup::close_triangle(a, x, b, e, d, OrderedAddGroup::close_sym(x, a, e, ha), hb)
+}
+
+theorem rat_close_through(a, b, x, e, d: Rat, ha: Close(x, a, e), hb: Close(x, b, d)): Close(a, b, e + d) {
+    close_through(a, b, x, e, d, ha, hb)
+}
+
+theorem creal_close_through(a, b, x, e, d: CReal, ha: Close(x, a, e), hb: Close(x, b, d)): Close(a, b, e + d) {
+    close_through(a, b, x, e, d, ha, hb)
+}
+
+// The bounds unfold to each carrier's own order and negation: `AbsLt(x, e)`
+// at `Rat` is `-e < x ∧ x < e`, with `Rat::neg` and `Rat::Lt`. A hypothesis
+// may be written either way; a result written unfolded is reached through a
+// `let` naming the bound, because an unfolded expected type does not pin the
+// generic theorem's indices (issues/constrained-predicate-expected-type.md).
+theorem rat_abs_lt_add(x, y, e, d: Rat, hx: -e < x ∧ x < e, hy: -d < y ∧ y < d): -(e + d) < x + y ∧ x + y < e + d {
+    let sum: AbsLt(x + y, e + d) = OrderedAddGroup::abs_lt_add(x, y, e, d, hx, hy);
+    sum
+}
+
+theorem creal_abs_lt_add(x, y, e, d: CReal, hx: -e < x ∧ x < e, hy: -d < y ∧ y < d): -(e + d) < x + y ∧ x + y < e + d {
+    let sum: AbsLt(x + y, e + d) = OrderedAddGroup::abs_lt_add(x, y, e, d, hx, hy);
+    sum
+}
+
+// ---------------------------------------------------------------------------
+// Tightness: what is within every positive distance is the same.
+
+theorem rat_same_of_close(x, y: Rat, all: (e: Rat) → Rat::zero() < e → Close(x, y, e)): x ≈ y {
+    OrderedAddGroup::same_of_close(x, y, all)
+}
+
+theorem creal_same_of_close(x, y: CReal, all: (e: CReal) → CReal::zero() < e → Close(x, y, e)): x ≈ y {
+    OrderedAddGroup::same_of_close(x, y, all)
+}
+
+// `≤` antisymmetry modulo `≈` at both, through each carrier's own `≤`.
+theorem rat_le_antisymm(x, y: Rat, hxy: x <= y, hyx: y <= x): x ≈ y { StrictOrder::le_antisymm(x, y, hxy, hyx) }
+
+theorem creal_le_antisymm(x, y: CReal, hxy: x <= y, hyx: y <= x): x ≈ y { StrictOrder::le_antisymm(x, y, hxy, hyx) }
+
+// ---------------------------------------------------------------------------
+// Intervals. Closed ones need locatedness for their transitivity; both
+// carriers are located, so both get every lemma.
+
+theorem rat_nested(a, x, b, a2, b2: Rat, ha: a2 <= a, hb: b <= b2, h: a <= x ∧ x <= b): a2 <= x ∧ x <= b2 {
+    PseudoOrder::within_widen(a, x, b, a2, b2, ha, hb, h)
+}
+
+theorem creal_nested(a, x, b, a2, b2: CReal, ha: a2 <= a, hb: b <= b2, h: a <= x ∧ x <= b): a2 <= x ∧ x <= b2 {
+    PseudoOrder::within_widen(a, x, b, a2, b2, ha, hb, h)
+}
+
+// A gap places every real, without deciding anything about it.
+theorem creal_locate(a, b, x: CReal, h: a < b): a < x ∨ x < b { PseudoOrder::locate(a, b, x, h) }
+
+// A bound with a point under it is positive: a located-group theorem.
+theorem creal_bound_pos(x, e: CReal, h: -e < x ∧ x < e): CReal::zero() < e { LocatedAddGroup::abs_lt_pos(x, e, h) }
+
+// ---------------------------------------------------------------------------
+// The field. The inverse is unique whichever apartness proof built it, which
+// the reals did not have on their own.
+
+theorem creal_inv_unique(x, u: CReal, h: x.Apart(CReal::zero()), hu: x * u ≈ CReal::one()): u ≈ x.inv(h := h) {
+    OrderedField::inv_unique(x, h, u, hu)
+}
+
+theorem creal_inv_any_proof(x: CReal, h, h2: x.Apart(CReal::zero())): x.inv(h := h) ≈ x.inv(h := h2) {
+    OrderedField::inv_respects(x, x, h, h2, x.same_refl())
+}
+
+theorem rat_mul_lt(x, y, z: Rat, h: x < y, hz: Rat::zero() < z): z * x < z * y { OrderedField::mul_lt_mono_l(x, y, z, h, hz) }
+
+// Every real is below some natural number, and the naturals climb.
+theorem creal_below_nat(x: CReal): ∃ n: Nat, x < CReal::ofRat(Rat::ofInt(OfNat(n))) { CReal::archimedean(x) }
+
+theorem creal_nat_climbs(n: Nat): CReal::ofRat(Rat::ofInt(OfNat(n))) < CReal::ofRat(Rat::ofInt(OfNat(Succ(n)))) {
+    OrderedField::of_nat_lt_succ(CReal::zero(), n)
+}
