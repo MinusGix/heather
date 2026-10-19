@@ -49,11 +49,15 @@ a `fn` and checks.
   sealed proof is never named (the elimination opens it; meeting one stuck
   means the note's budget ran out). Both the `refl` note and the checking
   note carry it; the checking note reads the endpoints of the two types when
-  they are equations, which is the projection fixture's shape
-  (`mk_w().pres` at `0 = 0` now names `mk_w`). Error path only: a whnf per
-  side at the `refl` note's budget, after the probe has decided
-  `NotConvertible`. `Elaborator::opaque_stuck_note`, `eliminated_global` in
-  `crates/elab/src/lib.rs`. Tests in `check_reports_mismatch.rs`: an axiom
+  both spell and are written as equations, which is the projection fixture's
+  shape (`mk_w().pres` at `0 = 0` now names `mk_w`). Error path only: an
+  evaluation per side at the `refl` note's budget, after the probe has
+  decided `NotConvertible`. The stuck head is read off the value
+  (`SemanticOracle::eliminated_global`), never spelled: a first version
+  spelled each side's whnf back as a term, and a refused certificate pin in
+  `certgen_emissions` outgrew the 6 GiB test rail doing it.
+  `Elaborator::opaque_stuck_note` in `crates/elab/src/lib.rs`. Tests in
+  `check_reports_mismatch.rs`: an axiom
   projected under `refl`, a theorem whose statement decodes through a
   `match` on its parameter (data-free to the sealing test), and the `fn`
   control, accepted and, with a false equation, naming nothing.

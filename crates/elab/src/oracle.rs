@@ -12,8 +12,8 @@ use heather_kernel::eval;
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
 use heather_kernel::reduce::{self, Defs, OutOfFuel};
-use heather_kernel::term::{GlobalBinding, GlobalCtx, LocalCtx, Term, Type};
-use heather_kernel::value::{VTy, Val, ValueArena};
+use heather_kernel::term::{GlobalBinding, GlobalCtx, GlobalVar, LocalCtx, Term, Type};
+use heather_kernel::value::{Head, VTy, Val, ValueArena};
 
 use crate::readback::Readback;
 
@@ -170,6 +170,26 @@ impl SemanticOracle {
             }
         }
         reduce::whnf_term_delta(term, gamma, defs, self.fuel)
+    }
+
+    /// The global `term`'s weak head is stuck eliminating: its whnf is a
+    /// neutral headed by a global, with at least one elimination in its
+    /// spine that is not an application (a projection, a `match`, a
+    /// recursor). A bare call of a global that does not unfold is a value,
+    /// not a stuck reduction, so it does not count
+    /// (`issues/stuck-on-opaque-theorem-diagnostic.md`).
+    ///
+    /// Read off the value and never spelled: [`Self::whnf_term`] spells a
+    /// stuck reduct back as a term, and the sides of a certificate's refused
+    /// pin spelled that way outgrew the test process's memory rail, where
+    /// their value graph shares.
+    pub(crate) fn eliminated_global(&self, gamma: &LocalCtx, term: &Term) -> Option<GlobalVar> {
+        let arena = ValueArena::new();
+        let defs = Defs::transparent(&self.world);
+        let v = eval::whnf_value(&arena, &Rc::new(term.clone()), gamma, defs, self.fuel).ok()?;
+        let Val::Neutral(n) = &*v else { return None };
+        let Head::Global { var, .. } = &n.head else { return None };
+        n.spine.iter_rev().any(|e| !e.is_application()).then_some(*var)
     }
 
     /// [`Self::whnf_term`] under the stuck-spelling budget, for a *speculative*
