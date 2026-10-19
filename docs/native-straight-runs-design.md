@@ -425,6 +425,18 @@ stat pass's end fell to a little over a quarter of its kernel steps, the
 cursor's to about two fifths, and the command closure's by about a
 twelfth.
 
+The row writer (`lib/elf64_row_fields.hthr`, over `row_straight`) is a
+stretch per path through a slot: a slot not selected is two items to the
+JE, the first field four to the JNE and then the field's two
+(`row_field`), any other field nine, its space stored on the way, to the
+count's load; the formatter (`row_format`) runs by hand between, and
+`skip` is two items to the back JNE, past the last slot (`row_last`) or
+back to `head` (`row_more`). A slot hands on through `SkipThen`, the
+loop through `RowReach`'s `row_back`; the registers are one conjunction,
+`RowRegs`, so a leaf carries them across the blocks that keep them. The
+space's store and the count's load are `StoreByte`/`Load` items (the same
+bytes). Cold, the row writer's kernel steps fell to about three fifths.
+
 ## Not yet
 
 - A system call ends a stretch: `closes_runs` still runs its JCCs with the
