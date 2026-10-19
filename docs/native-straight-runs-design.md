@@ -380,6 +380,30 @@ The stat pass's two heaviest phases moved first:
 Cold, the two phases' kernel steps fell to a fiftieth and a twentieth of
 the chains', and the stat pass's to a fifth.
 
+The argument scan (`lib/elf64_arg_scan.hthr`) followed, over its own
+wrapper `scan_straight`; only its letter table (`slots_run`, each slot a
+small program of its own) and the refusal's system call stay by hand:
+
+- `scan_runs` is the setup to argv[0]'s skip (five items), `scan_end` the
+  null slot (three), `scan_done` the any-selected test (two; the default is
+  a `Hole`, which a stretch does not read, so it runs past the stretch's
+  end).
+- `scan_arg` is one argument from its slot to the dash test's JNE (eight
+  items), split by whether `--` has ended the options and by the
+  argument's shape; an operand ends in `operand_then` (two items), a dash
+  in `after_dash`, twelve items to the JMP that ends the options, split by
+  the argument's next two bytes.
+- `letters_run` is two stretches per letter around the table: to the
+  table (a NUL goes back to `next`), and from it to the select's JMP (no
+  column refuses).
+
+The phases' ends are stated over `LinuxSteps`, so each leaf hands back
+through a `StepsBack` of its own (`scan_back`, `letters_back`,
+`result_back`). The one-step loads and `run_store` moved into
+`elf64_runs`, so `elf64_stretch` imports no process library. Cold, the
+scan's kernel steps fell to two fifths, and the command closure's by about
+a twelfth.
+
 ## Not yet
 
 - A system call ends a stretch: `closes_runs` still runs its JCCs with the

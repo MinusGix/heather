@@ -573,37 +573,6 @@ theorem page_next(file: IoImage, page0, page: Nat → BitVec(8), o: Nat, bytes: 
         })
 }
 
-// A byte store at the cursor, `k` bytes into a placed piece.
-record StoreRan(file: IoImage, page: Nat → BitVec(8), c: Nat, x: BitVec(8), before, after: MachineState<IoMemory>, to: BitVec(64)) {
-    step: LinuxSteps(io_linux(), before, after),
-    memory_is: after.memory = io_store_offset(IoMemory(file, page), c, [x]),
-    rip_is: after.rip = to,
-    gprs_is: after.gprs = before.gprs,
-}
-theorem run_store(file: IoImage, page: Nat → BitVec(8), store: ByteStore, plain: store_base_plain(store.base) = True,
-    at: BitVec(64), k: Nat, placed: Placed(file, byte_store_bytes(store), next_rip(at, k)), c: Nat, inside: c < 4096, x: BitVec(8),
-    state: MachineState<IoMemory>, memory_is: state.memory = IoMemory(file, page), rip_is: state.rip = next_rip(at, k),
-    cursor: read_gpr(store.base, state.gprs).toNat() = io_page_base() + c, low: imm_byte0(read_gpr(store.source, state.gprs)) = x):
-    StoreRan(file, page, c, x, state, byte_store_after(linux_writes(io_linux()), store, state), next_rip(at, k + 3)) {
-    let fetch = io_fetch_access();
-    let writes = linux_writes(io_linux());
-    let memory = IoMemory(file, page);
-    let room: ((io_page_base() <= io_page_base() + c) ∧ ((io_page_base() + c) + 1 <= io_page_base() + 4096)) = ⟨omega, omega⟩;
-    let base = read_gpr(store.base, state.gprs);
-    let writable: IoWritable(state.memory, base, 1) =
-        Inl(⟨j(sym(cursor), λ v _ => io_page_base() <= v, room.left), j(sym(cursor), λ v _ => v + 1 <= io_page_base() + 4096, room.right)⟩);
-    StoreRan(
-        step := linux_steps_store(io_linux(), state, byte_store_after(writes, store, state),
-            byte_store_step(fetch, writes, store, state, plain,
-                FetchedFrom(resident_readable(fetch, state.memory, byte_store_bytes(store), state.rip,
-                    resident_state(fetch, byte_store_bytes(store), memory, next_rip(at, k), state, memory_is, rip_is, placed(page)))),
-                writable)),
-        memory_is := trans(cong_fn<IoMemory, IoMemory>(λ m => io_store(m, base, [imm_byte0(read_gpr(store.source, state.gprs))]), memory_is),
-            trans(cong_fn<BitVec(8), IoMemory>(λ y => io_store(memory, base, [y]), low), store_at_offset(memory, base, c, [x], { omega }, cursor))),
-        rip_is := rip_advance(at, state.rip, k, 3, rip_is),
-        gprs_is := refl)
-}
-
 // ---------------------------------------------------------------------------
 // The padding: a space for each place the width has beyond the count's.
 
