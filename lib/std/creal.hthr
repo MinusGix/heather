@@ -32,7 +32,8 @@ import nat;
 import int;
 import omega;
 import relation_props;
-import algebra_rel;
+import algebra;
+import algebra_rel::{Semigroup, Commutative};
 import order;
 import rat;
 
@@ -880,7 +881,7 @@ theorem CReal::lt_of_ofRat_lt({p, q: Rat}, h: CReal::ofRat(p) < CReal::ofRat(q))
 // The inverse of a real apart from zero. Apartness gives a gap: from some
 // index `start` on, the terms are at least 1/(k+1) in size, on one side
 // (`Away`). There a reciprocal moves by at most (k+1)² times what it inverts
-// (`Rat::dist_inv_le`), so the inverse reads x at index (k+1)²(n+1) + n, or
+// (`Rat::dist_recip_le`), so the inverse reads x at index (k+1)²(n+1) + n, or
 // at `start` if that is later: the (k+1)² comes out of the rate there
 // (`Rat::scale_inv_succ_le`). The gap is data, read off the apartness proof
 // (`away_of_apart`), so the inverse computes; every law is proved for an
@@ -926,7 +927,7 @@ theorem CReal::inv_at_ge(k, start, n: Nat): n <= CReal::inv_at(k, start, n) {
 // Both terms are past the gap's start, so their reciprocals are within (k+1)²
 // times their distance, and each index pays for its own (k+1)².
 theorem CReal::inv_regular(self x: CReal, k, start: Nat, gap: x.Away(k, start), m, n: Nat):
-    (x.seq(CReal::inv_at(k, start, m)).inv() -x.seq(CReal::inv_at(k, start, n)).inv()).abs()
+    (x.seq(CReal::inv_at(k, start, m)).recip() -x.seq(CReal::inv_at(k, start, n)).recip()).abs()
         <= Rat::inv_succ(m) + Rat::inv_succ(n)
 {
     let a = CReal::inv_at(k, start, m);
@@ -936,8 +937,8 @@ theorem CReal::inv_regular(self x: CReal, k, start: Nat, gap: x.Away(k, start), 
     let fa = Rat::inv_succ(a);
     let fb = Rat::inv_succ(b);
     calc {
-        (x.seq(a).inv() -x.seq(b).inv()).abs() <= big * (x.seq(a) -x.seq(b)).abs()
-            := Rat::dist_inv_le(k, k, gap(a, CReal::inv_at_start(k, start, m)), gap(b, CReal::inv_at_start(k, start, n))),
+        (x.seq(a).recip() -x.seq(b).recip()).abs() <= big * (x.seq(a) -x.seq(b)).abs()
+            := Rat::dist_recip_le(k, k, gap(a, CReal::inv_at_start(k, start, m)), gap(b, CReal::inv_at_start(k, start, n))),
         <= big * (fa + fb) := Rat::mul_le_mono_l(x.regular(a, b), Rat::ofNat_nonneg(sq)),
         ≈ big * fa + big * fb := big.mul_add_distr(fa, fb),
         <= Rat::inv_succ(m) + Rat::inv_succ(n) := Rat::add_le_mono(
@@ -947,13 +948,19 @@ theorem CReal::inv_regular(self x: CReal, k, start: Nat, gap: x.Away(k, start), 
 }
 
 fn CReal::inv_gap(self x: CReal, k, start: Nat, gap: x.Away(k, start)) → CReal {
-    CReal(λ n => x.seq(CReal::inv_at(k, start, n)).inv(), λ m n => x.inv_regular(k, start, gap, m, n))
+    CReal(λ n => x.seq(CReal::inv_at(k, start, n)).recip(), λ m n => x.inv_regular(k, start, gap, m, n))
 }
 
-fn CReal::inv(self x: CReal, h: x.Apart(CReal::zero())) → CReal {
+// `x⁻¹` is this with `h` searched at the call
+// (docs/inverse-power-notation-design.md): a local apartness, a local
+// `0 < x` or `x < 0` (`apart_of_positive`), or a rational apart from zero
+// (`ofRat_apart`).
+fn CReal::inv(self x: CReal, h: x.Apart(CReal::zero()) := infer) → CReal {
     let g = x.away_of_apart(h);
     x.inv_gap(g.witness, g.proof.witness, g.proof.proof)
 }
+
+designation postfix ⁻¹ at CReal := CReal::inv
 
 // `≈` reals with gaps (k, s) and (l, t): far enough out, the terms each
 // inverse reads are within 1/((k+1)(l+1)(K+1)) of each other, wherever the
@@ -971,8 +978,8 @@ theorem CReal::inv_gap_respects({x, x2: CReal}, hx: x ≈ x2, k, s: Nat, gap: x.
                 let near: ((x.seq(a) -x2.seq(b)).abs() <= Rat::inv_succ(j)) =
                     close(a, b, r.le_trans(n, a, from, CReal::inv_at_ge(k, s, n)), r.le_trans(n, b, from, CReal::inv_at_ge(l, t, n)));
                 calc {
-                    (x.seq(a).inv() -x2.seq(b).inv()).abs() <= Rat::ofInt(OfNat(p)) * (x.seq(a) -x2.seq(b)).abs()
-                        := Rat::dist_inv_le(k, l, gap(a, CReal::inv_at_start(k, s, n)), gap2(b, CReal::inv_at_start(l, t, n))),
+                    (x.seq(a).recip() -x2.seq(b).recip()).abs() <= Rat::ofInt(OfNat(p)) * (x.seq(a) -x2.seq(b)).abs()
+                        := Rat::dist_recip_le(k, l, gap(a, CReal::inv_at_start(k, s, n)), gap2(b, CReal::inv_at_start(l, t, n))),
                     <= Rat::inv_succ(K) := Rat::scale_inv_succ_le(p, j, K, j.le_refl(), near),
                 }
             }),
@@ -993,14 +1000,14 @@ theorem CReal::mul_inv_gap(self x: CReal, k, s: Nat, gap: x.Away(k, s)): x * x.i
             let at_a: (j + j + 1 <= a) = (j + j + 1).le_trans(n, a, from, x.mul_at_ge(y, n));
             let at_b: (j + j + 1 <= b) = (j + j + 1).le_trans(a, b, at_a, CReal::inv_at_ge(k, s, a));
             let away: (Rat::inv_succ(k) <= x.seq(b).abs()) = gap(b, CReal::inv_at_start(k, s, a));
-            let u = x.seq(b).inv();
+            let u = x.seq(b).recip();
             let d = x.seq(a) -x.seq(b);
             let near: (d.abs() <= Rat::inv_succ(j)) = x.regular_close(j, a, b, at_a, at_b);
             calc {
                 (x.seq(a) * u -Rat::one()).abs() ≈ (u * d).abs()
-                    := Rat::abs_respects(Rat::mul_sub_one_of_inverse(x.seq(b).mul_inv(Rat::nonzero_of_gap(k, away)))),
+                    := Rat::abs_respects(Rat::mul_sub_one_of_inverse(x.seq(b).mul_recip(Rat::nonzero_of_gap(k, away)))),
                 ≈ u.abs() * d.abs() := u.abs_mul(d),
-                <= Rat::ofInt(OfNat(k + 1)) * d.abs() := Rat::mul_le_mono_r(Rat::inv_abs_le(k, away), d.abs_nonneg()),
+                <= Rat::ofInt(OfNat(k + 1)) * d.abs() := Rat::mul_le_mono_r(Rat::recip_abs_le(k, away), d.abs_nonneg()),
                 <= Rat::inv_succ(K) := Rat::scale_inv_succ_le(k + 1, j, K, j.le_refl(), near),
             }
         })
@@ -1008,27 +1015,35 @@ theorem CReal::mul_inv_gap(self x: CReal, k, s: Nat, gap: x.Away(k, s)): x * x.i
 }
 
 // The laws at an apartness proof: whichever gaps the two proofs carry.
-theorem CReal::inv_respects({x, x2: CReal}, hx: x ≈ x2, h: x.Apart(CReal::zero()), h2: x2.Apart(CReal::zero())):
-    x.inv(h) ≈ x2.inv(h2)
+theorem CReal::inv_respects({x, x2: CReal}, hx: x ≈ x2, h: x.Apart(CReal::zero()) := infer, h2: x2.Apart(CReal::zero()) := infer):
+    x⁻¹ ≈ x2⁻¹
 {
     let g = x.away_of_apart(h);
     let g2 = x2.away_of_apart(h2);
     CReal::inv_gap_respects(hx, g.witness, g.proof.witness, g.proof.proof, g2.witness, g2.proof.witness, g2.proof.proof)
 }
 
-theorem CReal::mul_inv(self x: CReal, h: x.Apart(CReal::zero())): x * x.inv(h) ≈ CReal::one() {
+theorem CReal::mul_inv(self x: CReal, h: x.Apart(CReal::zero()) := infer): x * x⁻¹ ≈ CReal::one() {
     let g = x.away_of_apart(h);
     x.mul_inv_gap(g.witness, g.proof.witness, g.proof.proof)
 }
 
-theorem CReal::inv_mul(self x: CReal, h: x.Apart(CReal::zero())): x.inv(h) * x ≈ CReal::one() {
-    CReal::same_trans(x.inv(h).mul_comm(x), x.mul_inv(h))
+theorem CReal::inv_mul(self x: CReal, h: x.Apart(CReal::zero()) := infer): x⁻¹ * x ≈ CReal::one() {
+    CReal::same_trans(x⁻¹.mul_comm(x), x.mul_inv())
+}
+
+// A rational apart from zero is a real apart from zero.
+evidence theorem CReal::ofRat_apart({q: Rat}, h: q.Apart(Rat::zero()) := infer): CReal::ofRat(q).Apart(CReal::zero()) {
+    match h {
+        Inl(lt) => Inl(CReal::ofRat_lt(lt)),
+        Inr(gt) => Inr(CReal::ofRat_lt(gt)),
+    }
 }
 
 // The embedding commutes with the inverse, term by term: a constant
 // sequence reads the same wherever the gap sends it.
-theorem CReal::ofRat_inv(q: Rat, h: CReal::ofRat(q).Apart(CReal::zero())): CReal::ofRat(q).inv(h) ≈ CReal::ofRat(q.inv()) {
-    CReal::ofRat(q).inv(h).same_of_terms(CReal::ofRat(q.inv()), λ n => q.inv().same_refl())
+theorem CReal::ofRat_inv(q: Rat, h: q.Apart(Rat::zero()) := infer): CReal::ofRat(q)⁻¹ ≈ CReal::ofRat(q⁻¹) {
+    CReal::ofRat(q)⁻¹.same_of_terms(CReal::ofRat(q⁻¹), λ n => q⁻¹.same_refl())
 }
 
 // ---------------------------------------------------------------------------
@@ -1313,6 +1328,76 @@ theorem CReal::bishop_of_le({x, y: CReal}, h: x <= y): x.BishopLe(y) {
         }))
     }
 }
+
+// ---------------------------------------------------------------------------
+// Signs, and integer powers (docs/inverse-power-notation-design.md), as at
+// `Rat`. The sign predicates are the one-place premises of the apartness
+// rules, so that the search through them shrinks its goal; a local
+// `h: CReal::zero() < x` is one by conversion.
+
+fn CReal::Positive(self x: CReal) → Type { CReal::zero() < x }
+fn CReal::Negative(self x: CReal) → Type { x < CReal::zero() }
+
+evidence theorem CReal::apart_of_positive({x: CReal}, h: x.Positive() := infer): x.Apart(CReal::zero()) { Inr(h) }
+evidence theorem CReal::apart_of_negative({x: CReal}, h: x.Negative() := infer): x.Apart(CReal::zero()) { Inl(h) }
+
+fn CReal::npow(self x: CReal, n: Nat) → CReal {
+    match n {
+        Zero => CReal::one(),
+        Succ(k) => x.npow(k) * x,
+    }
+}
+
+theorem CReal::npow_respects({x, x2: CReal}, hx: x ≈ x2, n: Nat): x.npow(n) ≈ x2.npow(n) {
+    match n {
+        Zero => CReal::one().same_refl(),
+        Succ(k) => CReal::mul_respects(CReal::npow_respects(hx, k), hx),
+    }
+}
+
+theorem CReal::npow_add(self x: CReal, m, n: Nat): x.npow(m + n) ≈ x.npow(m) * x.npow(n) {
+    match n {
+        Zero => CReal::same_sym(x.npow(m).mul_one()),
+        Succ(k) => calc {
+            x.npow(m + Succ(k)) ≈ x.npow(m + k) * x := (x.npow(m + k) * x).same_refl(),
+            ≈ (x.npow(m) * x.npow(k)) * x := CReal::mul_respects(x.npow_add(m, k), x.same_refl()),
+            ≈ x.npow(m) * (x.npow(k) * x) := x.npow(m).mul_assoc(x.npow(k), x),
+        },
+    }
+}
+
+// The side condition of an integer power: nothing at n ≥ 0, apartness from
+// zero at n < 0. It computes, and the search reads what it computes to.
+fn CReal::PowOk(x: CReal, n: Int) → Type {
+    match n {
+        OfNat(_) => True,
+        NegSucc(_) => x.Apart(CReal::zero()),
+    }
+}
+
+fn CReal::pow_parts(x: CReal, n: Int) → (x.PowOk(n) → CReal) {
+    match n {
+        OfNat(m) => λ _ => x.npow(m),
+        NegSucc(k) => λ h => x.inv(h := h).npow(Succ(k)),
+    }
+}
+
+fn CReal::pow(self x: CReal, n: Int, h: x.PowOk(n) := infer) → CReal { CReal::pow_parts(x, n, h) }
+
+designation ^ at CReal := CReal::pow
+
+theorem CReal::pow_ofNat(self x: CReal, n: Nat): x ^ OfNat(n) = x.npow(n) { refl }
+
+theorem CReal::pow_negSucc(self x: CReal, k: Nat, h: x.Apart(CReal::zero()) := infer): x ^ NegSucc(k) = x⁻¹.npow(Succ(k)) { refl }
+
+theorem CReal::pow_zero(self x: CReal): x ^ 0 ≈ CReal::one() { CReal::one().same_refl() }
+
+theorem CReal::pow_one(self x: CReal): x ^ 1 ≈ x { CReal::same_trans(CReal::one().mul_comm(x), x.mul_one()) }
+
+theorem CReal::pow_two(self x: CReal): x ^ 2 ≈ x * x { CReal::mul_respects(x.pow_one(), x.same_refl()) }
+
+// The inverse is the power at -1.
+theorem CReal::pow_neg_one(self x: CReal, h: x.Apart(CReal::zero()) := infer): x ^ (-1) ≈ x⁻¹ { x⁻¹.pow_one() }
 
 // ---------------------------------------------------------------------------
 // Order and multiplication (docs/creal-mul-order-round.md). A product reads

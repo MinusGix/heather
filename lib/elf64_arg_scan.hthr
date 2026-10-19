@@ -854,6 +854,7 @@ theorem option_first(file: IoImage, page: Nat → BitVec(8), letters: List<BitVe
 theorem bound_first(v, n: Nat, bound: v + Succ(n) + 1 <= Nat::pow(2, 47)): (v < Nat::pow(2, 47)) ∧ (Succ(v) < Nat::pow(2, 47)) { ⟨omega, omega⟩ }
 theorem bound_second(v, n: Nat, bound: v + Succ(Succ(n)) + 1 <= Nat::pow(2, 47)):
     (Succ(Succ(v)) < Nat::pow(2, 47)) ∧ (Succ(v) + Succ(n) < Nat::pow(2, 47)) { ⟨omega, omega⟩ }
+theorem bound_low(v, n: Nat, bound: v + n + 1 <= Nat::pow(2, 47)): v < Nat::pow(2, 47) { omega }
 theorem low_of(a: BitVec(64), v: Nat, value: a.toNat() = v, low: v < Nat::pow(2, 47)): a.toNat() < Nat::pow(2, 47) {
     j(sym(value), λ x _ => x < Nat::pow(2, 47), low)
 }
@@ -1060,7 +1061,7 @@ theorem scan_option(file: IoImage, page: Nat → BitVec(8), letters: List<BitVec
                 trans(read_here(file, page, source0, read_gpr(Rsi, s1.gprs), reads(0)), head.string);
             let b0: (p.toNat() + 0 + 1 <= Nat::pow(2, 47)) = head.bound;
             let loaded = run_byte_load(file, page, scan_byte_load(), at, sa(ls_dash_load()), piece(ls_dash_load()), s1, first.memory_is, first.rip_is, nul(), present,
-                low_of(read_gpr(Rsi, s1.gprs), p.toNat(), cong_fn<BitVec(64), Nat>(λ w => w.toNat(), head.rsi), { omega }));
+                low_of(read_gpr(Rsi, s1.gprs), p.toNat(), cong_fn<BitVec(64), Nat>(λ w => w.toNat(), head.rsi), bound_low(p.toNat(), 0, b0)));
             let s2 = byte_load_after(scan_byte_load(), nul(), s1);
             let tested = run_block(file, page, scan_is_block(dash()), at, sa(ls_dash()), piece(ls_dash()), s2, loaded.memory_is, loaded.rip_is);
             let s3 = execute_block_normal(scan_is_block(dash()), s2);

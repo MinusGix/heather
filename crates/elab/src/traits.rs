@@ -554,6 +554,17 @@ pub(crate) fn render_expr(e: &Expr) -> String {
         {
             format!("{}{}", render_expr(head), render_expr(&args[0]))
         }
+        ExprKind::App { head, args, .. }
+            if matches!(
+                head.kind,
+                ExprKind::OpSymbol {
+                    fixity: OpFixity::Postfix,
+                    ..
+                }
+            ) && args.len() == 1 =>
+        {
+            format!("{}{}", render_expr(&args[0]), render_expr(head))
+        }
         // A named argument renders as it was **written**, `x := e`, for the
         // same reason an operator application renders as `a + b`
         // (issues/diagnostics-name-the-written-form.md).
@@ -2126,10 +2137,10 @@ impl Elaborator {
         let op = self.key_of(op.as_str()).unwrap_or_else(|| op.clone());
         let written = format!(
             "designation {}{} at {} := {}",
-            if d.fixity == OpFixity::Prefix {
-                "prefix "
-            } else {
-                ""
+            match d.fixity {
+                OpFixity::Prefix => "prefix ",
+                OpFixity::Postfix => "postfix ",
+                OpFixity::Infix => "",
             },
             d.symbol,
             render_ty(&d.carrier),

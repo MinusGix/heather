@@ -3,7 +3,7 @@
     "Code", "Ctx", "TyCode", "Type", "apply", "as", "at", "axiom", "calc", "class", "code",
     "all_goals", "datarepr", "designation", "else", "evidence", "export", "extends", "fn", "for", "fun", "if",
     "give", "have", "impl", "import", "inductive", "infer", "instance", "j", "let", "match",
-    "meta", "mk", "on", "prefix", "record", "refl", "requires", "assuming", "self", "split", "split_all",
+    "meta", "mk", "on", "postfix", "prefix", "record", "refl", "requires", "assuming", "self", "split", "split_all",
     "theorem", "Squash", "squash_ind", "decreases", "decreasing", "with"
   ],
   "punctuation": [
@@ -12,7 +12,7 @@
   ],
   "fixed_operators": [
     "+", "-", "!", "++", "*", "<", "<=", "&&", "||", "∙", "⊔", "≈", "¬", "∧", "∨", "↔",
-    "<->", "∀", "∃", "≠"
+    "<->", "∀", "∃", "≠", "^", "⁻¹"
   ],
   "rejected_fixed_tokens": ["=="]
 }

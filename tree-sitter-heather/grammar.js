@@ -13,7 +13,9 @@ const PREC = {
   ADD: 8,
   MUL: 9,
   PREFIX: 10,
-  POSTFIX: 11,
+  // `-x ^ 2` is `-(x ^ 2)` and `x⁻¹ ^ 2` is `(x⁻¹) ^ 2`, as in the compiler.
+  POWER: 11,
+  POSTFIX: 12,
 };
 
 module.exports = grammar({
@@ -127,7 +129,7 @@ module.exports = grammar({
     ),
 
     designation_declaration: $ => seq(
-      'designation', optional('prefix'), optional($.type_parameters),
+      'designation', optional(choice('prefix', 'postfix')), optional($.type_parameters),
       field('operator', $.operator), 'at', field('carrier', $._expression),
       ':=', field('value', $._expression), optional(';'),
     ),
@@ -270,9 +272,11 @@ module.exports = grammar({
       $.head_call_expression, $.head_member_expression, $.head_type_application,
       $.head_index_expression,
       $.head_propagation_expression,
+      $.head_inverse_expression,
       $.head_prefix_expression, $.head_binary_expression,
     ),
     head_propagation_expression: $ => prec.left(PREC.POSTFIX, seq($._head_expression, token.immediate('?'))),
+    head_inverse_expression: $ => prec.left(PREC.POSTFIX, seq($._head_expression, '⁻¹')),
     head_call_expression: $ => prec.left(PREC.POSTFIX, seq($._head_expression, $.argument_list)),
     head_member_expression: $ => prec.left(PREC.POSTFIX, seq($._head_expression, choice('.', '::'), $.identifier, optional($.argument_list))),
     head_type_application: $ => prec.left(PREC.POSTFIX, seq(choice($.identifier, $.qualified_identifier), $.type_arguments)),
@@ -289,6 +293,7 @@ module.exports = grammar({
       ...headBinary($, ['&&'], PREC.BOOL_AND, 'left'),
       ...headBinary($, ['+', '-', '++', '⊔'], PREC.ADD, 'left'),
       ...headBinary($, ['*', '∙'], PREC.MUL, 'left'),
+      ...headBinary($, ['^'], PREC.POWER, 'right'),
     ),
 
     // A declaration body starts with `{`, which is also record-literal
@@ -322,10 +327,12 @@ module.exports = grammar({
       $.declaration_call_type,
       $.declaration_member_type,
       $.declaration_index_type,
+      $.declaration_inverse_type,
     ),
     declaration_type_application: $ => prec.dynamic(4, prec.left(PREC.POSTFIX, seq(
       field('value', $._type_atom), $.type_arguments,
     ))),
+    declaration_inverse_type: $ => prec.left(PREC.POSTFIX, seq(field('value', $._type_atom), '⁻¹')),
     declaration_call_type: $ => prec.left(PREC.POSTFIX, seq(
       field('function', $._type_atom), repeat1($.argument_list),
     )),
@@ -347,6 +354,7 @@ module.exports = grammar({
       ...typeBinary($, ['&&'], PREC.BOOL_AND, 'left'),
       ...typeBinary($, ['+', '-', '++', '⊔'], PREC.ADD, 'left'),
       ...typeBinary($, ['*', '∙'], PREC.MUL, 'left'),
+      ...typeBinary($, ['^'], PREC.POWER, 'right'),
     ),
     declaration_quantified_type: $ => prec.right(seq(
       choice('∀', '∃'), $.identifier, ':', $._declaration_type, ',', $._declaration_type,
@@ -393,6 +401,7 @@ module.exports = grammar({
       $.member_expression,
       $.index_expression,
       $.propagation_expression,
+      $.inverse_expression,
       $.type_application_expression,
       $.prefix_expression,
       $.binary_expression,
@@ -490,6 +499,7 @@ module.exports = grammar({
     explicit_call_expression: $ => prec(PREC.POSTFIX, seq('@', $._qualified_name, optional($.type_arguments), $.argument_list)),
     propagation_expression: $ => prec.left(PREC.POSTFIX, seq(field('value', $._expression), token.immediate('?'))),
     decreasing_expression: $ => prec.left(PREC.POSTFIX, seq(field('call', $._expression), 'decreasing', field('label', $.identifier))),
+    inverse_expression: $ => prec.left(PREC.POSTFIX, seq(field('value', $._expression), '⁻¹')),
     call_expression: $ => prec.left(PREC.POSTFIX, seq(
       field('function', $._expression), repeat1(field('arguments', $.argument_list)),
     )),
@@ -539,9 +549,10 @@ module.exports = grammar({
       ...binary($, ['&&'], PREC.BOOL_AND, 'left'),
       ...binary($, ['+', '-', '++', '⊔'], PREC.ADD, 'left'),
       ...binary($, ['*', '∙'], PREC.MUL, 'left'),
+      ...binary($, ['^'], PREC.POWER, 'right'),
     ),
 
-    operator: _ => choice('+', '-', '!', '++', '*', '&&', '||', '∙', '⊔', '≈', '<=', '<'),
+    operator: _ => choice('+', '-', '!', '++', '*', '&&', '||', '∙', '⊔', '≈', '<=', '<', '^', '⁻¹'),
     // These words introduce a special form only with their fixed follower in
     // Heather's parser (`j(`, `code {`, `calc {`, `apply f;`). Elsewhere they are ordinary
     // names, so preserve that recovery-friendly contextual reading.

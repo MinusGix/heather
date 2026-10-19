@@ -51,6 +51,13 @@ const DERIVED_LOOKUP_FUEL: u64 = 1 << 12;
 /// an inconclusive check is a miss that falls through to the rules.
 const COMPUTE_FUEL: u64 = 1 << 12;
 
+/// How many reduction steps a goal headed by a definition **no rule is
+/// about** may take to reach one that some rule is about
+/// (docs/inverse-power-notation-design.md §4): `PowOk(x, -1)` unfolds to
+/// `x.Apart(0)` in a handful. A goal still stuck past this is answered as
+/// before, by the trace's `no-rule`.
+const UNFOLD_STEPS: u64 = 64;
+
 /// One record of a resolution search — the trace is a flat list of these, not
 /// a prose paragraph (design §7, `issues/ai-facing-tooling.md` §7). `key` is
 /// drawn from a closed vocabulary so a consumer can read the trace as data;
@@ -554,6 +561,22 @@ impl Elaborator {
                 *head = Some("#local".into());
             }
         }
+        // A relation no rule is about at all may be a *computed* proposition
+        // (`PowOk(x, n)`, a sign-dependent side condition): search what it
+        // computes to, the first reduct whose head some rule is about.
+        if self.traits.evidence_rules(&relation).is_empty()
+            && let Some(unfolded) = self.unfolded_to_ruled(cx, goal, &relation)
+        {
+            tr.push(line(
+                depth,
+                "unfolded",
+                format!(
+                    "`{}` has no rules; searching what it computes to",
+                    short_name(&relation)
+                ),
+            ));
+            return self.computed_or_ruled(cx, &unfolded, lvl, span, depth + 1, tr);
+        }
         let rules: Vec<_> = self
             .traits
             .evidence_rules(&relation)
@@ -604,6 +627,36 @@ impl Elaborator {
                 Err(e) => tr.push(line(depth + 1, "rejected", e.message())),
             }
             mark.rollback(self);
+        }
+        None
+    }
+
+    /// The first reduct of `goal` headed by a relation other than `relation`
+    /// that some evidence rule is about, within [`UNFOLD_STEPS`]. Stepping
+    /// one reduct at a time rather than taking the weak head normal form is
+    /// the point: the normal form of `PowOk(x, -1)` is `x.Apart(0)`'s own
+    /// disjunction, which no rule is keyed by.
+    fn unfolded_to_ruled(&self, cx: &Cx, goal: &Type, relation: &str) -> Option<Type> {
+        let Type::El { level, tm } = goal else {
+            return None;
+        };
+        let name_of = |v: GlobalVar| {
+            self.global_abs_of(v)
+                .and_then(|abs| self.names.global_name_at(abs as u32).map(str::to_string))
+        };
+        let oracle = self.goal_oracle();
+        for reduct in oracle.term_reducts(&cx.gamma, tm, UNFOLD_STEPS) {
+            let unfolded = Type::El { level: level.clone(), tm: Rc::new(reduct) };
+            // The first relation the goal reaches decides: a rule about it,
+            // or nothing. Stepping on through a rule-less relation would
+            // unfold its arithmetic (`Rat::Lt` into `Int::Lt` into `Nat`'s
+            // recursor) at every failing proposition goal, which on closed
+            // operands is the whole cost of the search.
+            if let Some((next, _)) = proposition_key(&unfolded, &name_of)
+                && next != relation
+            {
+                return (!self.traits.evidence_rules(&next).is_empty()).then_some(unfolded);
+            }
         }
         None
     }
@@ -1104,8 +1157,8 @@ fn short_name(key: &str) -> &str {
 }
 
 /// The head of an evidence rule's or a goal's argument: the global it is an
-/// application of, or the Nat constructor it is, `None` where it is a
-/// variable or anything else. Only a prefilter reads it.
+/// application of, or the Nat, pair or sum constructor it is, `None` where it
+/// is a variable or anything else. Only a prefilter reads it.
 fn argument_head(t: &Term, name_of: &dyn Fn(GlobalVar) -> Option<String>) -> Option<String> {
     let (head, _) = crate::spelling::app_spine(t);
     match head {
@@ -1113,6 +1166,13 @@ fn argument_head(t: &Term, name_of: &dyn Fn(GlobalVar) -> Option<String>) -> Opt
         Term::Zero => Some("#zero".into()),
         Term::Succ(_) => Some("#succ".into()),
         Term::NatLit(n) => Some(if n.is_zero() { "#zero" } else { "#succ" }.into()),
+        // A record or sum value written out: no rule about an application
+        // of a global fits it without unfolding that global, which the
+        // prefilter does not do (a literal `Rat(2, 1)` would otherwise try
+        // every rule about products, powers and inverses).
+        Term::Pair { .. } | Term::PairAt { .. } => Some("#pair".into()),
+        Term::Inl { .. } | Term::InlAt { .. } => Some("#inl".into()),
+        Term::Inr { .. } | Term::InrAt { .. } => Some("#inr".into()),
         _ => None,
     }
 }

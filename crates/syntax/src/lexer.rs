@@ -95,6 +95,15 @@ pub enum TokKind {
     /// window would land mid-codepoint and see nothing.
     Bullet,    // ∙
     Approx,    // ≈ — relation notation, no fallback
+    /// `^` — power, an infix operator on a rung of its own above `*`, and
+    /// right-associative (docs/inverse-power-notation-design.md §2). ASCII,
+    /// as Lean spells it: there is no Unicode power sign worth the typing.
+    Caret,     // ^
+    /// `⁻¹` (U+207B U+00B9) — the inverse, the grammar's one **postfix**
+    /// operator. One token for the pair: `⁻` alone spells nothing, and
+    /// lexing `¹` as a digit would invite `x⁻²`, which is `^` written
+    /// differently. Five bytes, so it has a window of its own.
+    SupInverse, // ⁻¹
     Join,      // ⊔ — additive-precedence operation notation, no fallback
     /// The propositional connectives (issues/std-logic-module.md). Unicode is
     /// the spelling, not an alternative to an ASCII digraph set: `λ` and `∙`
@@ -467,6 +476,11 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
         // window can see it. `get` again rather than an index — a window that
         // runs off the end, or lands inside a codepoint, simply means "not a
         // token of this width".
+        if src.get(i..i + 5) == Some("⁻¹") {
+            toks.push(Tok { kind: TokKind::SupInverse, span: Span { start, end: start + 5 } });
+            i += 5;
+            continue;
+        }
         let three = src.get(i..i + 3).unwrap_or("");
         // `<->` is three ASCII bytes and so is matched here, before the
         // two-byte window could take a `<` off it. `<=` is unaffected: no
@@ -591,6 +605,7 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
                 b'-' => (TokKind::Minus, 1),
                 b'!' => (TokKind::Bang, 1),
                 b'*' => (TokKind::Star, 1),
+                b'^' => (TokKind::Caret, 1),
                 b'<' => (TokKind::Lt, 1),
                 b'>' => (TokKind::Gt, 1),
                 b'=' => (TokKind::Eq, 1),

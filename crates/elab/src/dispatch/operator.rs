@@ -224,10 +224,10 @@ impl Elaborator {
         // it is the difference between "covers this carrier" — which names no
         // carrier at all — and a sentence the reader can check against the
         // table (docs/bare-symbol-checking-carrier-design.md §6).
-        let designation_form = if fixity == OpFixity::Prefix {
-            format!("designation prefix {sym} at …")
-        } else {
-            format!("designation {sym} at …")
+        let designation_form = match fixity {
+            OpFixity::Prefix => format!("designation prefix {sym} at …"),
+            OpFixity::Postfix => format!("designation postfix {sym} at …"),
+            OpFixity::Infix => format!("designation {sym} at …"),
         };
         let tried = match &uncovered_carrier {
             Some((head, from)) => {

@@ -71,7 +71,8 @@ pub struct DesignationDecl {
     /// declarations omit the keyword and are infix; prefix declarations write
     /// it explicitly (`designation prefix - at Int := neg`).
     pub fixity: OpFixity,
-    /// The operator, as written: `+`, `++`, `*`, `&&`, `||`, `<=`, `<`, `-`, `!`.
+    /// The operator, as written: `+`, `++`, `*`, `^`, `&&`, `||`, `<=`, `<`,
+    /// `-`, `!`, `⁻¹`.
     pub symbol: String,
     pub carrier: Ty,
     /// The designated operation. A **bare global name** (§3.2): it is emitted
@@ -86,6 +87,9 @@ pub struct DesignationDecl {
 pub enum OpFixity {
     Prefix,
     Infix,
+    /// `x⁻¹`, the only postfix symbol (docs/inverse-power-notation-design.md
+    /// §2), declared `designation postfix ⁻¹ at Rat := Rat::inv`.
+    Postfix,
 }
 
 impl OpFixity {
@@ -93,6 +97,7 @@ impl OpFixity {
         match self {
             Self::Prefix => "prefix",
             Self::Infix => "infix",
+            Self::Postfix => "postfix",
         }
     }
 }

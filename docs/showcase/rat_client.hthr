@@ -12,6 +12,7 @@ import nat;
 import int;
 import list;
 import omega;
+import algebra;
 import rat;
 import relation_props;
 import algebra_rel;
@@ -35,14 +36,32 @@ theorem distr_right(x, y, z: Rat): (x + y) * z ≈ x * z + y * z {
     }
 }
 
-// Division by a nonzero rational undoes multiplication by it.
-theorem mul_inv_cancel(x, y: Rat, nonzero: ¬(x ≈ Rat::zero())): (y * x) * x.inv() ≈ y {
+// Division by a rational apart from zero undoes multiplication by it. `x⁻¹`
+// takes that apartness, and finds it in scope: there is no `0⁻¹` to reason
+// around (docs/inverse-power-notation-design.md).
+theorem mul_inv_cancel(x, y: Rat, h: x.Apart(Rat::zero())): (y * x) * x⁻¹ ≈ y {
     calc {
-        (y * x) * x.inv() ≈ y * (x * x.inv()) := y.mul_assoc(x, x.inv()),
-        ≈ y * Rat::one() := rel_cong(x.mul_inv(nonzero)),
+        (y * x) * x⁻¹ ≈ y * (x * x⁻¹) := y.mul_assoc(x, x⁻¹),
+        ≈ y * Rat::one() := rel_cong(x.mul_inv()),
         ≈ y := y.mul_one(),
     }
 }
+
+// A sign is enough, and a literal needs nothing. (`¬(x ≈ 0)` is apartness
+// after `Rat::apart_of_nonzero`, which the search does not apply itself.)
+theorem inv_of_positive(x: Rat, h: Rat::zero() < x): x⁻¹ * x ≈ Rat::one() { x.inv_mul() }
+
+theorem half_inverse(): 2⁻¹ ≈ Rat(OfNat(1), 2) { refl }
+
+// Integer powers: `-1` is the inverse, a negative power inverts the positive
+// one, and `^` binds tighter than negation.
+theorem inv_is_pow(x: Rat, h: x.Apart(Rat::zero())): x ^ (-1) ≈ x⁻¹ { x.pow_neg_one() }
+
+theorem quarter(): 2 ^ (-2) * 4 ≈ Rat::one() { refl }
+
+theorem negative_power(x: Rat, h: x < Rat::zero()): x ^ -3 ≈ (x ^ 3)⁻¹ { x.pow_negSucc_inv(2) }
+
+theorem neg_square(x: Rat): -x ^ 2 ≈ -(x * x) { Rat::neg_respects(x.pow_two()) }
 
 // Order facts move along `≈` on either side.
 theorem le_across(x, x2, y: Rat, same: x ≈ x2, h: x <= y): x2 <= y + Rat::zero() {
