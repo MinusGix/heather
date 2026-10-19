@@ -35,6 +35,7 @@ pub(super) const SUPPORT: &[(&str, &str)] = &[
     ("elf64_format_width", include_str!("../../../../lib/elf64_format_width.hthr")),
     ("elf64_arg_scan", include_str!("../../../../lib/elf64_arg_scan.hthr")),
     ("elf64_operand_cursor", include_str!("../../../../lib/elf64_operand_cursor.hthr")),
+    ("elf64_stretch", include_str!("../../../../lib/elf64_stretch.hthr")),
     ("elf64_stat_width", include_str!("../../../../lib/elf64_stat_width.hthr")),
     ("elf64_command_events", include_str!("../../../../lib/elf64_command_events.hthr")),
     ("elf64_command_output", include_str!("../../../../lib/elf64_command_output.hthr")),
@@ -44,7 +45,7 @@ pub(super) const SUPPORT: &[(&str, &str)] = &[
     ("elf64_command", include_str!("../../../../lib/elf64_command.hthr")),
 ];
 pub(super) const IMPORTS: &[&str] = &["elf64_command", "x86_64_asm", "elf64_command_output", "elf64_command_events", "elf64_row_fields", "elf64_frame", "elf64_straight",
-    "elf64_stat_width", "elf64_operand_cursor", "elf64_arg_scan", "elf64_format_width", "elf64_runs", "command_program", "elf64_read_filter", "filter_program",
+    "elf64_stat_width", "elf64_stretch", "elf64_operand_cursor", "elf64_arg_scan", "elf64_format_width", "elf64_runs", "command_program", "elf64_read_filter", "filter_program",
     "filter_step_piece", "stream_filter", "decimal_line", "elf64_write_loop", "elf64_print_pieces", "elf64_read_pieces", "elf64_io", "elf64_calls",
     "elf64", "linux_x86_64_entry", "linux_x86_64_io", "linux_x86_64_determinism", "x86_64_structured_block", "x86_64_layout", "function_ir_loop",
     "function_ir_loop_trace", "x86_64_fetched_code", "x86_64_fetch", "bitvec_nat", "x86_64", "x86_64_block", "bitvec", "bool", "list", "logic",

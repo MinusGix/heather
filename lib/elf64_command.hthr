@@ -16,6 +16,7 @@ import elf64_format_width;
 import elf64_runs;
 import elf64_frame;
 import elf64_straight;
+import elf64_stretch;
 import elf64_io;
 import elf64_operand_cursor;
 import elf64_print_pieces;
@@ -2635,12 +2636,6 @@ fn KeptGoes(file: IoImage, mask: BitVec(64), n: Nat, rsp: BitVec(64), to: Nat, e
         state.rip = eof_rip(to) → read_gpr(Rsp, state.gprs) = rsp → extra(state.gprs) → LinuxRuns(io_linux(), events, state)
 }
 // A JCC's side, its condition a negated bit: the bit.
-theorem not_true_is(b: Bool, h: !b = True): b = False {
-    (match b as λ c => !c = True → c = False { True => λ no => absurd(no), False => λ _ => refl })(h)
-}
-theorem not_false_is(b: Bool, h: !b = False): b = True {
-    (match b as λ c => !c = False → c = True { True => λ _ => refl, False => λ no => absurd(no) })(h)
-}
 // One operand or none (`l_single`, one stretch of four items to the JMP):
 // one count makes no stat (`l_narrow`, width 1); more than one makes the
 // stat pass (`l_stat`).

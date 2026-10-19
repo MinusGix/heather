@@ -54,6 +54,7 @@ pub const COMMAND_PREFIX: &[(&str, &str)] = &[
     ("elf64_format_width", include_str!("../../../../lib/elf64_format_width.hthr")),
     ("elf64_arg_scan", include_str!("../../../../lib/elf64_arg_scan.hthr")),
     ("elf64_operand_cursor", include_str!("../../../../lib/elf64_operand_cursor.hthr")),
+    ("elf64_stretch", include_str!("../../../../lib/elf64_stretch.hthr")),
     ("elf64_stat_width", include_str!("../../../../lib/elf64_stat_width.hthr")),
     ("elf64_command_events", include_str!("../../../../lib/elf64_command_events.hthr")),
     ("elf64_command_output", include_str!("../../../../lib/elf64_command_output.hthr")),
