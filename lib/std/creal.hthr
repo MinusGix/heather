@@ -1398,3 +1398,151 @@ theorem CReal::pow_two(self x: CReal): x ^ 2 ≈ x * x { CReal::mul_respects(x.p
 
 // The inverse is the power at -1.
 theorem CReal::pow_neg_one(self x: CReal, h: x.Apart(CReal::zero()) := infer): x ^ (-1) ≈ x⁻¹ { x⁻¹.pow_one() }
+
+// ---------------------------------------------------------------------------
+// Order and multiplication (docs/creal-mul-order-round.md). A product reads
+// both factors at one index, at or past its own, so a positive product needs
+// no estimate: past both gaps' starts each factor is at least its gap, and
+// the product of the terms clears zero by the product of the gaps. A
+// nonnegative product goes through Bishop's form: each factor falls short of
+// zero by at most 2/(a+1) at the index a it is read at, and the shortfall of
+// the product, scaled by the bound l+1, is the 1/(n+1) the product's index
+// was chosen to absorb, too small for any gap below zero. The monotone forms
+// are those two signs applied to the difference: y*z - x*z ≈ (y -x)*z.
+
+theorem CReal::mul_pos({x, y: CReal}, hx: CReal::zero() < x, hy: CReal::zero() < y): CReal::zero() < x * y {
+    match hx {
+        Exists(k, rx) => match rx {
+            Exists(s, gx) => match hy {
+                Exists(l, ry) => match ry {
+                    Exists(t, gy) => Exists(k * (l + 1) + l, Exists(s.max(t), λ n from => {
+                        let a = x.mul_at(y, n);
+                        let at_a: (s.max(t) <= a) = s.max(t).le_trans(n, a, from, x.mul_at_ge(y, n));
+                        let at_s: (s <= a) = s.le_trans(s.max(t), a, s.le_max_l(t), at_a);
+                        let at_t: (t <= a) = t.le_trans(s.max(t), a, s.le_max_r(t), at_a);
+                        let fk = Rat::inv_succ(k);
+                        let fl = Rat::inv_succ(l);
+                        let lx: (fk <= x.seq(a)) = Rat::le_trans(Rat::le_of_same(Rat::same_sym(Rat::zero_add(fk))), gx(a, at_s));
+                        let ly: (fl <= y.seq(a)) = Rat::le_trans(Rat::le_of_same(Rat::same_sym(Rat::zero_add(fl))), gy(a, at_t));
+                        let step = Rat::inv_succ(k * (l + 1) + l);
+                        calc {
+                            Rat::zero() + step ≈ step := Rat::zero_add(step),
+                            ≈ fk * fl := Rat::same_sym(Rat::inv_succ_mul(k, l)),
+                            <= x.seq(a) * y.seq(a) := Rat::mul_le_mul(lx, ly, Rat::le_of_lt(Rat::inv_succ_pos(k)), Rat::le_of_lt(Rat::inv_succ_pos(l))),
+                        }
+                    })),
+                },
+            },
+        },
+    }
+}
+
+theorem CReal::mul_nonneg({x, y: CReal}, hx: CReal::zero() <= x, hy: CReal::zero() <= y): CReal::zero() <= x * y {
+    let bx = CReal::bishop_of_le(hx);
+    let by = CReal::bishop_of_le(hy);
+    λ back => match back {
+        Exists(j, rest) => match rest {
+            Exists(s, gap) => {
+                let n = s.max(j + 1);
+                let past: (j + 1 <= n) = s.le_max_r(j + 1);
+                let l = x.bound().max(y.bound());
+                let a = x.mul_at(y, n);
+                let big = Rat::ofInt(OfNat(l + 1));
+                let f = Rat::inv_succ(a);
+                let p = x.seq(a) * y.seq(a);
+                let size_x: (x.seq(a).abs() <= big) = x.bound_below(a, l + 1, x.bound().le_succ_r(l, x.bound().le_max_l(y.bound())));
+                let size_y: (y.seq(a).abs() <= big) = y.bound_below(a, l + 1, y.bound().le_succ_r(l, x.bound().le_max_r(y.bound())));
+                let f_up: (Rat::zero() <= f) = Rat::le_of_lt(Rat::inv_succ_pos(a));
+                let pos_f = calc {
+                    Rat::zero() ≈ Rat::zero() + Rat::zero() := Rat::same_sym(Rat::zero().add_zero()),
+                    <= f + f := Rat::add_le_mono(f_up, f_up),
+                };
+                let near = calc {
+                    Rat::zero() <= p + big * (f + f) := Rat::mul_nonneg_approx(bx(a), by(a), pos_f, size_x, size_y),
+                    ≈ p + (big * f + big * f) := Rat::add_respects(p.same_refl(), big.mul_add_distr(f, f)),
+                    ≈ p + Rat::inv_succ(n) := Rat::add_respects(p.same_refl(), Rat::scale_inv_succ_half(l, n)),
+                };
+                let g = Rat::inv_succ(j);
+                let below = calc {
+                    g + p ≈ p + g := g.add_comm(p),
+                    <= Rat::zero() := gap(n, s.le_max_l(j + 1)),
+                    <= p + Rat::inv_succ(n) := near,
+                    ≈ Rat::inv_succ(n) + p := p.add_comm(Rat::inv_succ(n)),
+                };
+                let strict: (Rat::inv_succ(n) < g) = omega;
+                Rat::not_le_of_lt(strict, g.add_le_cancel_r(Rat::inv_succ(n), p, below))
+            },
+        },
+    }
+}
+
+theorem CReal::zero_add(self x: CReal): CReal::zero() + x ≈ x {
+    CReal::same_trans(CReal::zero().add_comm(x), x.add_zero())
+}
+
+theorem CReal::sub_add_cancel(self x, y: CReal): (x -y) + y ≈ x {
+    calc {
+        (x + -y) + y ≈ x + (-y + y) := x.add_assoc(-y, y),
+        ≈ x + (y + -y) := CReal::add_respects(x.same_refl(), (-y).add_comm(y)),
+        ≈ x + CReal::zero() := CReal::add_respects(x.same_refl(), y.add_neg()),
+        ≈ x := x.add_zero(),
+    }
+}
+
+theorem CReal::add_mul_distr(self x, y, z: CReal): (x + y) * z ≈ x * z + y * z {
+    calc {
+        (x + y) * z ≈ z * (x + y) := (x + y).mul_comm(z),
+        ≈ z * x + z * y := z.mul_add_distr(x, y),
+        ≈ x * z + y * z := CReal::add_respects(z.mul_comm(x), z.mul_comm(y)),
+    }
+}
+
+theorem CReal::sub_nonneg({x, y: CReal}, h: x <= y): CReal::zero() <= y -x {
+    calc {
+        CReal::zero() ≈ x + -x := CReal::same_sym(x.add_neg()),
+        <= y + -x := x.add_le_mono_r(y, -x, h),
+    }
+}
+
+theorem CReal::sub_pos({x, y: CReal}, h: x < y): CReal::zero() < y -x {
+    calc {
+        CReal::zero() ≈ x + -x := CReal::same_sym(x.add_neg()),
+        < y + -x := x.add_lt_mono_r(y, -x, h),
+    }
+}
+
+theorem CReal::mul_le_mono_r({x, y, z: CReal}, h: x <= y, hz: CReal::zero() <= z): x * z <= y * z {
+    let d = y -x;
+    calc {
+        x * z ≈ CReal::zero() + x * z := CReal::same_sym((x * z).zero_add()),
+        <= d * z + x * z := CReal::zero().add_le_mono_r(d * z, x * z, CReal::mul_nonneg(CReal::sub_nonneg(h), hz)),
+        ≈ (d + x) * z := CReal::same_sym(d.add_mul_distr(x, z)),
+        ≈ y * z := CReal::mul_respects(y.sub_add_cancel(x), z.same_refl()),
+    }
+}
+
+theorem CReal::mul_lt_mono_r({x, y, z: CReal}, h: x < y, hz: CReal::zero() < z): x * z < y * z {
+    let d = y -x;
+    calc {
+        x * z ≈ CReal::zero() + x * z := CReal::same_sym((x * z).zero_add()),
+        < d * z + x * z := CReal::zero().add_lt_mono_r(d * z, x * z, CReal::mul_pos(CReal::sub_pos(h), hz)),
+        ≈ (d + x) * z := CReal::same_sym(d.add_mul_distr(x, z)),
+        ≈ y * z := CReal::mul_respects(y.sub_add_cancel(x), z.same_refl()),
+    }
+}
+
+theorem CReal::mul_le_mono_l({x, y, z: CReal}, h: x <= y, hz: CReal::zero() <= z): z * x <= z * y {
+    calc {
+        z * x ≈ x * z := z.mul_comm(x),
+        <= y * z := CReal::mul_le_mono_r(h, hz),
+        ≈ z * y := y.mul_comm(z),
+    }
+}
+
+theorem CReal::mul_lt_mono_l({x, y, z: CReal}, h: x < y, hz: CReal::zero() < z): z * x < z * y {
+    calc {
+        z * x ≈ x * z := z.mul_comm(x),
+        < y * z := CReal::mul_lt_mono_r(h, hz),
+        ≈ z * y := y.mul_comm(z),
+    }
+}

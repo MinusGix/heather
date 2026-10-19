@@ -1,9 +1,9 @@
 ---
 title: Relate products of regular Cauchy reals to the order
-status: open
+status: closed
 labels: [stdlib,mathematics,reals,order]
 created: 2026-10-17
-updated: 2026-10-17
+updated: 2026-10-18
 ---
 
 Relate the product of regular Cauchy reals (`lib/std/creal.hthr`) to the
@@ -22,3 +22,7 @@ so their product is at least 1/((k+1)(l+1)), then use `lt_of_term`.
 - **[[creal-order-and-bishop-bridge]]** gave `≤` with addition
   (`add_lt_mono`, `add_le_mono`, `add_lt_cancel`), which the
   non-strict forms can reuse through x * z - y * z ≈ (x - y) * z.
+
+## Log
+
+- 2026-10-18: Done in docs/creal-mul-order-round.md: `mul_pos` is termwise (a product reads both factors at one index past both starts, gap = product of gaps via `Rat::inv_succ_mul`; no `lt_of_term`), `mul_nonneg` refutes a gap below zero through Bishop's form and `Rat::mul_nonneg_approx`, and `mul_le_mono_r/l`, `mul_lt_mono_r/l` are those signs on the difference. Sign of the inverse has no issue yet; file it when a client needs it.
