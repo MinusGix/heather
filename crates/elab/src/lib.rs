@@ -5731,7 +5731,8 @@ impl Elaborator {
         let want_s = self.display_type_clean(cx, expected);
         let note = match (got_s, want_s) {
             (Some(g), Some(w)) if g != w => MismatchNote::Spelled(format!(
-                "this has type `{g}`, but `{w}` is expected here"
+                "this has type `{g}`, but `{w}` is expected here{}",
+                self.opaque_equation_note(cx, got, expected),
             )),
             (Some(g), Some(_)) => MismatchNote::Located(format!(
                 "this has type `{g}` where a type that displays the same is expected; \
@@ -5875,13 +5876,84 @@ impl Elaborator {
         if lhs_s == rhs_s {
             return None;
         }
+        let opaque = self
+            .opaque_stuck_note(&oracle, cx, &[lhs, rhs])
+            .map_or_else(String::new, |why| format!("; {why}"));
         Some((
             format!(
                 "`refl` needs both sides to be definitionally equal, \
-                 but `{lhs_s}` and `{rhs_s}` are not"
+                 but `{lhs_s}` and `{rhs_s}` are not{opaque}"
             ),
             *span,
         ))
+    }
+
+    /// [`Self::opaque_stuck_note`] for a checking note between two
+    /// equations, read at their endpoints, as a suffix for the message. Only
+    /// for two types that both spell — the probe has shown they are small
+    /// enough to read — and only for an equation as written: a type is not
+    /// reduced to find one, since a certificate's pinned equations are where
+    /// reducing again costs what the gate's own check does.
+    fn opaque_equation_note(&self, cx: &Cx, got: &Type, expected: &Type) -> String {
+        let oracle = oracle::SemanticOracle::in_world(
+            self.goal_psi(),
+            self.fuel.min(diagnostics::REFL_NOTE_FUEL),
+        );
+        let ends: Vec<&Term> = [got, expected]
+            .into_iter()
+            .filter_map(|ty| match ty {
+                Type::Id { lhs, rhs, .. } => Some([&**lhs, &**rhs]),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        self.opaque_stuck_note(&oracle, cx, &ends)
+            .map_or_else(String::new, |why| format!("; {why}"))
+    }
+
+    /// Why a side of a refused conversion will never compute, when the
+    /// reason is a global that does not unfold
+    /// (`issues/stuck-on-opaque-theorem-diagnostic.md`). "`ex().witness` and
+    /// `3` are not" reads as "the number is wrong" to a writer used to `fn`s;
+    /// what is wrong is that nothing ever computes `ex().witness`.
+    ///
+    /// A side qualifies when its whnf is stuck eliminating
+    /// ([`oracle::SemanticOracle::eliminated_global`]) a named, body-less
+    /// global with no sealed proof: an `axiom`, or a `theorem` whose
+    /// statement [`sealing::carries_data`] did not accept. A theorem whose
+    /// statement carries data is opened by the elimination, so meeting one
+    /// here means the budget ran out first, and nothing is claimed. Only on a
+    /// refusal the probe already decided, so it costs an evaluation of each
+    /// side under the same small budget, on the error path.
+    fn opaque_stuck_note(
+        &self,
+        oracle: &oracle::SemanticOracle,
+        cx: &Cx,
+        sides: &[&Term],
+    ) -> Option<String> {
+        sides.iter().find_map(|side| {
+            let abs = self.global_abs_of(oracle.eliminated_global(&cx.gamma, side)?)?;
+            let Some(GlobalBinding::Tm { body: None, .. }) = self.psi.bindings.get(abs) else {
+                return None;
+            };
+            if self.psi.sealed.get(abs).is_some() {
+                return None;
+            }
+            let report = self.provenance.report(&self.global_qualified_name_at(abs)?)?;
+            let name = self.global_declared_name_at(abs)?;
+            Some(if report.is_axiom {
+                format!(
+                    "`{name}` is an axiom, so it has no proof to unfold \
+                     and what is stuck on it never computes"
+                )
+            } else {
+                format!(
+                    "`{name}` is a theorem whose statement was not judged to carry data, \
+                     so its proof is not kept and never unfolds; \
+                     to compute with what it builds, declare it as a `fn`"
+                )
+            })
+        })
     }
 
     /// The first recorded `refl` that has something to say, in the order the
