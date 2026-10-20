@@ -58,5 +58,7 @@ right distributivity `add_mul_distr`).
 
 Nothing in the issue's scope. Products with the inverse, such as
 0 < x ⇒ 0 < x⁻¹ and dividing an inequality by a positive real, need the
-inverse's sign. They have no issue yet and can be filed when a client wants
-them.
+inverse's sign. That landed later, generically over the ordered-field
+interface ([ordered-field-inverse-sign](../issues/ordered-field-inverse-sign.md);
+`OrderedField::inv_pos` and its neighbours, at `CReal` through
+`CReal::pos_of_mul_pos`).
