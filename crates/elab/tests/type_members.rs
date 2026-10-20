@@ -523,6 +523,77 @@ fn a_local_function_with_an_open_subject_stays_ambiguous() {
     assert!(e.contains("both `R::get`"), "{e}");
 }
 
+// A subject that is a proof about other values, the shape of a member whose
+// endpoints are implicit (issues/self-name-shadows-dot-call.md). Its type is a
+// relation stuck on those endpoints, so it has no carrier of its own, but
+// every type it can reduce to is `True`, `Never` or the relation again: never
+// a `Nat`. So inside `Q::pick`, `n.pick(…)` is `Nat::pick` and the
+// declaration's own name is no rival (before: "both `Nat::pick`").
+const LE: &str = r#"
+inductive Never {}
+inductive Q { Mk(a: Nat) }
+fn Nat::Le(self n: Nat, m: Nat) -> Type {
+    match n { Zero => True, Succ(k) => match m { Zero => Never, Succ(l) => k.Le(l) } }
+}
+fn Q::Le(x: Q, y: Q) -> Type { match x { Mk(a) => match y { Mk(b) => a.Le(b) } } }
+fn Nat::pick(self n: Nat, m: Nat) -> Nat { n }
+"#;
+
+#[test]
+fn a_proof_subject_does_not_make_its_own_name_a_rival() {
+    ok(&format!(
+        "{LE}
+         fn Q::pick({{x: Q}}, {{y: Q}}, h: Q::Le(x, y), n: Nat) -> Nat {{ n.pick(Zero) }}
+         theorem t({{x: Q}}, {{y: Q}}, h: Q::Le(x, y), n: Nat): Q::pick(h, n) = n {{ refl }}"
+    ));
+}
+
+// The same read for a committed ambient global, at an equation subject.
+#[test]
+fn an_ambient_global_with_an_equation_subject_does_not_block_the_member() {
+    ok(&format!(
+        "{REC}
+         fn get({{a: Nat}}, {{b: Nat}}, h: a = b) -> Nat {{ a }}
+         theorem t(n: Nat, r: R(n)): r.get() = R::get(r) {{ refl }}"
+    ));
+}
+
+// A case split on a neutral is read branch by branch: a family whose
+// branches are `Never` and `True` takes no `Nat`…
+#[test]
+fn a_family_split_into_other_carriers_does_not_block_the_member() {
+    ok(&format!(
+        "{LE}
+         inductive Side {{ Left, Right }}
+         fn Side::Slot(self s: Side) -> Type {{ match s {{ Left => Never, Right => True }} }}
+         fn Side::pick({{s: Side}}, v: s.Slot(), n: Nat) -> Nat {{ n.pick(Zero) }}"
+    ));
+}
+
+// …and negative control: one branch of which is `Nat` can take the receiver,
+// so the declaration's own name is a real second reading.
+#[test]
+fn a_family_that_can_reduce_to_the_receivers_carrier_stays_ambiguous() {
+    let e = bad(&format!(
+        "{LE}
+         inductive Side {{ Left, Right }}
+         fn Side::Slot(self s: Side) -> Type {{ match s {{ Left => Nat, Right => True }} }}
+         fn Side::pick({{s: Side}}, v: s.Slot(), n: Nat) -> Nat {{ n.pick(Zero) }}"
+    ));
+    assert!(e.contains("both `Nat::pick`"), "{e}");
+}
+
+// Negative control: a family nothing can read through — a parameter of
+// function type standing for a relation — keeps the ambiguity.
+#[test]
+fn a_subject_typed_by_an_opaque_family_stays_ambiguous() {
+    let e = bad(&format!(
+        "{LE}
+         fn Q::pick({{F: Nat -> Type}}, {{k: Nat}}, v: F(k), n: Nat) -> Nat {{ n.pick(Zero) }}"
+    ));
+    assert!(e.contains("both `Nat::pick`"), "{e}");
+}
+
 // -- 6: diagnostics -------------------------------------------------------
 
 // "declared below" is about the name that missed: a member `V::get` further
