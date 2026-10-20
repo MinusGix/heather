@@ -33,7 +33,7 @@ theorem count_tail_code_len(word, start, length: StructuredCode, pj: PrintJumps,
     word_is: structured_bytes(word).len() = word_len, start_is: structured_bytes(start).len() = start_len,
     length_is: structured_bytes(length).len() = length_len):
     count_tail(word, start, length, pj).len() = layout_end(0, count_tail_lens(word_len, start_len, length_len)) + write_loop_len() {
-    layout_len(count_tail_parts(word, start, length), write_loop_code(pj), count_tail_lens(word_len, start_len, length_len),
+    layout_len(count_tail_parts(structured_bytes(word), structured_bytes(start), structured_bytes(length)), write_loop_code(pj), count_tail_lens(word_len, start_len, length_len),
         count_tail_measured(word, start, length, word_len, start_len, length_len, word_is, start_is, length_is), write_loop_len(),
         write_loop_code_len(pj))
 }

@@ -11,6 +11,22 @@ use heather_kernel::term::GlobalBinding;
 use heather_kernel::value::program::ContextProgram;
 use heather_kernel::value::{Env, TmClo, Val, ValueArena};
 
+/// A closed `List<Nat>`, the value of `value` in a module that imports
+/// `imports`: elaborated in a fork of the checked state, which the caller's
+/// elaborator never sees.
+pub(super) fn evaluate(elab: &Elaborator, imports: &str, decls: &str, value: &str) -> Result<Vec<u64>, String> {
+    let mut fork = elab.clone();
+    let text = format!("{imports}\n{decls}\nfn native_probe() → List<Nat> {{ {value} }}\n");
+    fork.elab_module_source("native_probe", &text).map_err(|e| format!("evaluating `{value}`: {}", e.render(&text)))?;
+    last_nat_list(&fork).map_err(|e| format!("evaluating `{value}`: {e}"))
+}
+
+/// A closed `List<BitVec(8)>`, likewise: the bytes of a library definition.
+pub(super) fn evaluate_bytes(elab: &Elaborator, imports: &str, decls: &str, value: &str) -> Result<Vec<u8>, String> {
+    evaluate(elab, imports, decls, &format!("({value}).map(λ (b: BitVec(8)) => b.toNat())"))?.into_iter()
+        .map(|b| u8::try_from(b).map_err(|_| format!("`{value}` holds {b}, not a byte"))).collect()
+}
+
 // Enough for a file-sized layout; a list that needs more is a producer bug.
 const FUEL: u64 = 1 << 34;
 

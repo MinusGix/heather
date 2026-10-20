@@ -525,6 +525,18 @@ record PrintJumpFacts(pj: PrintJumps) {
     write: WriteJumpFacts(pj),
     exit: JumpsForward(wl_at_wjz(0), 6, pj.zd, wl_at_exit(0)),
 }
+// The loop's own jumps (`wl_jumps`) land, wherever its all-sent JZ goes;
+// and a last write's, whose JZ goes to the adjacent exit(0): closed facts,
+// evaluated once here (x86_64_layout's `asm_lands_forward`).
+theorem wl_jumps_land(zd: BitVec(32)): WriteJumpFacts(wl_jumps(zd)) {
+    WriteJumpFacts(asm_lands_forward(wl_at_wjs(0), 6, wl_jumps(zd).sd, wl_at_wfail(0), refl),
+        asm_lands_back(wl_at_wjmp(0), 5, wl_jumps(zd).bd, wl_at_write(0), refl),
+        asm_lands_back(wl_at_wretry(0), 6, wl_jumps(zd).rd, wl_at_write(0), refl))
+}
+fn last_jumps() → PrintJumps { wl_jumps(near_rel(wl_at_wjz(0) + 6, wl_at_exit(0))) }
+theorem last_jumps_land(): PrintJumpFacts(last_jumps()) {
+    PrintJumpFacts(wl_jumps_land(near_rel(wl_at_wjz(0) + 6, wl_at_exit(0))), asm_lands_forward(wl_at_wjz(0), 6, last_jumps().zd, wl_at_exit(0), refl))
+}
 
 // A loop at `at` is `at` past one at 0.
 theorem wl_shift(at, i: Nat): wl_at(at, i) = at + wl_at(0, i) { layout_shift(write_loop_lens(), at, 0, i) }

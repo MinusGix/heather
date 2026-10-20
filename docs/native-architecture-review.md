@@ -718,6 +718,21 @@ library's layout by evaluation.
 keeps a table of its own. Nothing is generated from either: the certificate
 is what checks that the two agree, and the control below shows it does.
 
+**Since 2026-10-20 the producer keeps no table**
+(`issues/native-runs-remaining.md`). Each jump is a Heather function of
+where the library's layout places its end and its target (`core_jumps`,
+`filter_jumps`, elf64_command's `cmd_jumps`, the write loop's `last_jumps`),
+and where it lands is a library theorem whose closed premises the producer
+proves by `refl` (`core_jumps_land`, `filter_jumps_land`, `wl_jumps_land`).
+The producer reads the code back by evaluating the library's layout over the
+generated pieces' bytes (`filter_bytes`, `filter_core_bytes`,
+`native/evaluate.rs`), and the certificate spells it in literal chunks
+(`read_loop::spell`), each checked against that layout. `layout.rs` is gone,
+and the producer mutation control with it: there is no second table to
+disagree. `filter_jumps_land_and_mutations_are_refused` shows the landing
+proofs are not vacuous (a JZ claimed to land elsewhere, a loop laid out for
+another step length, are refused).
+
 **Controls.**
 
 - **Producer mutation control**, new

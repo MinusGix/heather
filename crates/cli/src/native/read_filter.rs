@@ -6,16 +6,18 @@
 //! (`lib/elf64_read_filter.hthr`, `lib/elf64_filter_finish.hthr`); this
 //! producer reads the program off its bundle's type, restates it where the
 //! generator and the claim read it (`context`), generates the step piece,
-//! lays out the code and instantiates the library theorem at the written
-//! file. Nothing in it is about any one program.
+//! reads the code back from the library's layout (`filter_code`, its jumps
+//! by `filter_jumps`) and instantiates the library theorem at the written
+//! file. Nothing in it is about any one program, or about where any piece
+//! of the code is.
 use heather_elab::function_ir_source::{generate_elaborated_filter_step_x86, reflect_elaborated_structured, reflect_filter_step, FilterStep,
     FilterStepEmission, StructuredSourceType};
-use heather_elab::function_ir_x86_lower::{Gpr, Instruction};
+use heather_elab::function_ir_x86_lower::Gpr;
 use heather_elab::heather_emit::Module;
 use heather_elab::Elaborator;
 
-use super::layout::{Layout, JNZ, JS, JZ, JMP};
-use super::read_loop::{claims, component, copy, fail_tail, image_facts, mov, nested, print_jumps, read_head, write_loop, FormatPart, TEST};
+use super::evaluate::evaluate_bytes;
+use super::read_loop::{claims, component, image_facts, literal, spell, FormatPart};
 
 // Bundled after the read profile's, the write loop's and the formatters':
 // what a filter computes, its step's contract, its bundle, its process and
@@ -217,140 +219,81 @@ pub(super) fn generate_step(elab: &Elaborator, scope: &str, prefix: &str) -> Res
     })?
 }
 
-/// elf64_write_loop's loop once more, for a finish's own last write: the same
-/// pieces under other names, so one layout holds both.
-fn finish_write_loop() -> Layout {
-    use Gpr::*;
-    let encode = super::encode;
-    Layout::default().label("twrite").fixed("write", encode(&[copy(Rsi, R9), copy(Rdx, R10), mov(Rdi, 1), mov(Rax, 1)])).syscall()
-        .fixed("test", TEST.to_vec()).jump("twjs", JS, "twfailed")
-        .fixed("advance", encode(&[Instruction::AddRR { destination: R9, source: Rax }, Instruction::SubRR { destination: R10, source: Rax }]))
-        .jump("twjz", JZ, "twexit").jump("twjmp", JMP, "twrite")
-        .then(fail_tail("twfailed", "twrjz", "twrite"))
-        .label("twexit").fixed("exit", encode(&[mov(Rdi, 0), mov(Rax, 60)])).syscall()
-}
-
-/// elf64_read_filter's `filter_parts`: init, the read head (its JZ at end of
-/// file to `end`), the chunk loop (`filter_core_code`: the chunk's setup, the loop over its bytes (MOVZX RAX,
-/// byte [RSI]; the step; MOV byte [RDI], DL; the cursors on; JNZ), the close
-/// and its JZ back to the read when nothing was emitted, the write loop back
-/// to the read), the failure tail; the finish goes at `finish`.
-fn process_layout(step: &str, bytes: &[u8], end: &'static str) -> Layout {
-    use Gpr::*;
-    let encode = super::encode;
-    Layout::default().fixed("init", encode(&[mov(R13, 0), mov(R14, 0), mov(R15, 0), mov(R8, 0)]))
-        .then(read_head(end, "failed"))
-        .then(core_layout(step, bytes))
-        .then(fail_tail("failed", "rjz", "read"))
-        .label("finish")
-}
-
-/// elf64_read_filter's `filter_core_code`, after a read head at `read`: the
-/// chunk's setup, the loop over its bytes, the close and its JZ back to the
-/// read, and the write loop back to the read. A command places it after its
-/// own head (`read_command`).
-pub(super) fn core_layout(step: &str, bytes: &[u8]) -> Layout {
-    use Gpr::*;
-    let encode = super::encode;
-    Layout::default()
-        .fixed("setup", encode(&[mov(Rsi, 0x410000), copy(Rcx, Rax), mov(Rdi, 0x410000), mov(R12, 1)]))
-        .label("load").fixed("load", vec![0x48, 0x0f, 0xb6, 0x06])
-        .generated("step", format!("{step}_lit()"), bytes.to_vec())
-        .fixed("store", vec![0x40, 0x88, 0x17])
-        .fixed("cursors", encode(&[Instruction::AddRR { destination: Rdi, source: Rbx }, Instruction::AddRR { destination: Rsi, source: R12 },
-            Instruction::SubRR { destination: Rcx, source: R12 }]))
-        .jump("jnz", JNZ, "load")
-        .fixed("close", encode(&[copy(R10, Rdi), mov(R9, 0x410000), Instruction::SubRR { destination: R10, source: R9 }]))
-        .jump("cjz", JZ, "read")
-        .then(write_loop("read"))
-}
-
-/// The process's jumps, `{prefix}_jumps()`.
-fn filter_jumps(module: &mut Module, prefix: &str, layout: &Layout) {
-    let d = |jump| format!("@bitvec::BitVec::ofNat(32, {})", layout.displacement(jump));
-    module.raw(format!("fn {prefix}_jumps() → FilterJumps {{ FilterJumps({}, {}, {}, {}, {}) }}", d("jz"), d("js"), d("jnz"), d("cjz"), d("rjz")));
-}
-
-/// Lay out the program and write its certificate after the step piece's
-/// (whose modules the caller has checked). Returns the file to publish.
-pub(super) fn certify(module: &mut Module, prefix: &str, program: &Program, step: &FilterStepEmission, format: Option<&[FormatPart]>)
-    -> Result<Vec<u8>, String>
+/// Read the program's code back from the library and write its certificate
+/// after the step piece's (whose modules the caller has checked). Returns
+/// the file to publish.
+pub(super) fn certify(elab: &Elaborator, module: &mut Module, prefix: &str, program: &Program, step: &FilterStepEmission,
+    format: Option<&[FormatPart]>) -> Result<Vec<u8>, String>
 {
     use Gpr::*;
-    let encode = super::encode;
     let s = format!("{prefix}_piece");
     let state = &program.state;
     let ty = &state.type_name;
-    // init, the read head (its JZ at end of file to the finish), the chunk's
-    // setup, the loop over its bytes (MOVZX RAX, byte [RSI]; the step; MOV
-    // byte [RDI], DL; the cursors on; JNZ), the close and its JZ back to the
-    // read when nothing was emitted, the write loop back to the read, the
-    // failure tail, then the finish. A program that prints nothing more
-    // finishes at the write loop's own exit(0).
-    let end = if program.finish == Finish::Quiet { "wexit" } else { "finish" };
-    let mut layout = process_layout(&s, &step.bytes, end);
-    // The finish's code, how the certificate spells it, its length's lemma,
-    // and its generated parts' terms.
-    let (finish_code, finish_len, finish_measure) = match (program.finish, format) {
-        (Finish::Quiet, _) => ("Nil".to_string(), "0".to_string(), "refl".to_string()),
-        (Finish::Line, Some([word, start, length])) => {
-            let (w, st, ln) = (&word.prefix, &start.prefix, &length.prefix);
-            layout = layout.fixed("base", encode(&[copy(R11, R13), mov(R8, 0x410000)]))
-                .generated("word", format!("{w}_lit()"), word.bytes.clone())
-                .generated("start", format!("{st}_lit()"), start.bytes.clone())
-                .generated("length", format!("{ln}_lit()"), length.bytes.clone())
-                .fixed("line_store", vec![0x49, 0x89, 0x00])
-                .then(finish_write_loop());
-            let (wl, sl, ll) = (word.bytes.len(), start.bytes.len(), length.bytes.len());
-            (format!("count_tail({w}_code(), {st}_code(), {ln}_code(), {prefix}_tail_jumps())"),
-             format!("layout_end(0, count_tail_lens({wl}, {sl}, {ll})) + write_loop_len()"),
-             format!("count_tail_code_len({w}_code(), {st}_code(), {ln}_code(), {prefix}_tail_jumps(), {wl}, {sl}, {ll}, \
-                {w}_byte_length(), {st}_byte_length(), {ln}_byte_length())"))
-        }
+    let p = step.bytes.len();
+    // The library's layout (elf64_read_filter's `filter_code`): init, the
+    // read head (its JZ at end of file to the finish), the chunk loop, the
+    // failure tail, then the finish, with the jumps that layout places for a
+    // step this long (`filter_jumps`). A program that prints nothing more
+    // finishes at the write loop's own exit(0); one that prints a line, at
+    // the count tail (elf64_count_print), whose write loop is a last write
+    // (`last_jumps`).
+    let done = |n: &str| if program.finish == Finish::Quiet { format!("wl_at_exit(fl_at_write({n}))") } else { format!("fl_at_finish({n})") };
+    let formatter: Vec<&FormatPart> = match (program.finish, format) {
+        (Finish::Quiet, _) => Vec::new(),
+        (Finish::Line, Some(parts @ [_, _, _])) => parts.iter().collect(),
         _ => return Err("the finish's formatter has the wrong number of parts".into()),
     };
-    let code = layout.code();
-    let file = super::calls::io_image(&code)?;
-
-    layout.declare(module, prefix);
-    let d = |jump| format!("@bitvec::BitVec::ofNat(32, {})", layout.displacement(jump));
-    filter_jumps(module, prefix, &layout);
-    print_jumps(module, prefix, &layout);
-    if program.finish != Finish::Quiet {
-        module.raw(format!("\
-fn {prefix}_tail_jumps() → PrintJumps {{ PrintJumps({}, {}, {}, {}) }}
-fn {prefix}_tail_facts() → PrintJumpFacts({prefix}_tail_jumps()) {{ PrintJumpFacts(WriteJumpFacts(refl, refl, refl), refl) }}
-", d("twjs"), d("twjz"), d("twjmp"), d("twrjz")));
-    }
-
     let (jumps, pj) = (format!("{prefix}_jumps()"), format!("{prefix}_print_jumps()"));
-    let code_term = format!("filter_code({s}_code(), {jumps}, {pj}, {finish_code})");
-    // The code as written: fixed pieces by evaluation, generated ones (the
-    // step, the formatter's words) by their lemmas; its length over open
-    // parts, each generated part by its own length lemma.
-    let generated: Vec<(&str, String)> = std::iter::once(("step", s.clone())).chain(match (program.finish, format) {
-        (Finish::Line, Some([word, start, length])) => vec![("word", word.prefix.clone()), ("start", start.prefix.clone()), ("length", length.prefix.clone())],
-        _ => Vec::new(),
-    }).collect();
-    let spelled = |upto: usize, with: &str| {
-        let terms: Vec<(&str, String)> = generated.iter().enumerate().map(|(i, (key, p))| {
-            (*key, if i < upto { format!("{p}_lit()") } else if i == upto { with.to_string() } else { format!("{p}_bytes()") })
-        }).collect();
-        let terms: Vec<(&str, &str)> = terms.iter().map(|(k, t)| (*k, t.as_str())).collect();
-        nested(&layout.spelled_with(prefix, &terms))
+    // The code over its generated parts' bytes: the step's, then the
+    // formatter's three words'.
+    let laid = |parts: &[String]| match parts {
+        [step] => format!("filter_bytes({step}, {jumps}, {pj}, Nil)"),
+        [step, word, start, length] => format!("filter_bytes({step}, {jumps}, {pj}, count_tail_bytes({word}, {start}, {length}, last_jumps()))"),
+        _ => unreachable!("a step and its finish's formatter"),
     };
-    let mut chain = "refl".to_string();
-    // The innermost rewrite is the first part's; each spells the parts
-    // before it by their literals and the ones after by their bytes.
-    for (i, (_, p)) in generated.iter().enumerate() {
-        chain = format!("j({p}_bytes_are(), λ y _ => {code_term} = {}, {chain})", spelled(i, "y"));
-    }
-    let length = format!("filter_code_len({s}_code(), {jumps}, {pj}, {finish_code}, {}, {finish_len}, {s}_byte_length(), {finish_measure})", step.bytes.len());
-    image_facts(module, prefix, &code_term, &spelled(generated.len(), ""), &chain, &file, code.len(), &length);
+    let generated: Vec<(&str, &[u8])> = std::iter::once((s.as_str(), &step.bytes[..]))
+        .chain(formatter.iter().map(|part| (part.prefix.as_str(), &part.bytes[..]))).collect();
+    let decls = format!("\
+// The program's jumps, where the library's layout places them for this step.
+fn {prefix}_jumps() → FilterJumps {{ filter_jumps({p}, {}) }}
+fn {prefix}_print_jumps() → PrintJumps {{ filter_print_jumps({p}) }}
+", done(&p.to_string()));
+    let imports = "import elf64_read_filter; import elf64_count_print; import elf64_write_loop; import elf64_print_pieces; import elf64_read_pieces; \
+        import x86_64_layout; import bitvec; import list; import nat;";
+    let code = evaluate_bytes(elab, imports, &decls, &laid(&generated.iter().map(|(_, bytes)| literal(bytes)).collect::<Vec<_>>()))?;
+    let file = super::calls::io_image(&code)?;
+    module.raw(decls);
 
-    // Where the finish starts, for a step `n` bytes long.
-    let done = |n: &str| if program.finish == Finish::Quiet { format!("wl_at_exit(fl_at_write({n}))") } else { format!("fl_at_finish({n})") };
-    let p = format!("structured_bytes({s}_code()).len()");
+    let (finish_code, finish_len, finish_measure) = match &formatter[..] {
+        [] => ("Nil".to_string(), "0".to_string(), "refl".to_string()),
+        [word, start, length] => {
+            let (w, st, ln) = (&word.prefix, &start.prefix, &length.prefix);
+            let (wl, sl, ll) = (word.bytes.len(), start.bytes.len(), length.bytes.len());
+            (format!("count_tail({w}_code(), {st}_code(), {ln}_code(), last_jumps())"),
+             format!("layout_end(0, count_tail_lens({wl}, {sl}, {ll})) + write_loop_len()"),
+             format!("count_tail_code_len({w}_code(), {st}_code(), {ln}_code(), last_jumps(), {wl}, {sl}, {ll}, \
+                {w}_byte_length(), {st}_byte_length(), {ln}_byte_length())"))
+        }
+        _ => unreachable!("matched above"),
+    };
+    let code_term = format!("filter_code({s}_code(), {jumps}, {pj}, {finish_code})");
+    // The code as written, chunk by chunk, from the layout over the generated
+    // parts' literals; that layout from the code by each part's lemma, the
+    // first part's innermost, each spelling the parts before it by their
+    // literals and the ones after by their bytes.
+    let spelled = spell(module, &format!("{prefix}_laid"), &laid(&generated.iter().map(|(p, _)| format!("{p}_lit()")).collect::<Vec<_>>()), &code);
+    let with = |upto: usize, y: &str| laid(&generated.iter().enumerate().map(|(i, (p, _))|
+        if i < upto { format!("{p}_lit()") } else if i == upto { y.to_string() } else { format!("{p}_bytes()") }).collect::<Vec<_>>());
+    let mut chain = "refl".to_string();
+    for (i, (p, _)) in generated.iter().enumerate() {
+        chain = format!("j({p}_bytes_are(), λ y _ => {code_term} = {}, {chain})", with(i, "y"));
+    }
+    let chain = format!("trans({chain}, {prefix}_laid())");
+    let length = format!("filter_code_len({s}_code(), {jumps}, {pj}, {finish_code}, {p}, {finish_len}, {s}_byte_length(), {finish_measure})");
+    image_facts(module, prefix, &code_term, &spelled, &chain, &file, code.len(), &length);
+
+    // The step's length, as the library states it.
+    let pp = format!("structured_bytes({s}_code()).len()");
     let shape = format!("{prefix}_shape()");
     let final_state = format!("filter_state({prefix}_step(), eof_input(steps), {prefix}_init())");
     let pieces = format!("λ (pg: Nat → BitVec(8)) => filter_pieces(IoMemory({prefix}_io_image(frame, rest), pg), {s}_code(), {jumps}, {pj}, {finish_code}, {prefix}_resident()(frame, rest, pg))");
@@ -361,13 +304,13 @@ fn {shape} → FilterShape<{ty}> {{ FilterShape({prefix}_step(), {prefix}_init()
 fn {prefix}_facts() → FilterFacts<{ty}>({shape}) {{
     FilterFacts({s}_step_piece<IoMemory>(), {s}_framed(), {s}_initialised(), {prefix}_advances(), {prefix}_zero())
 }}
-// Where the jumps land, from the written displacements: closed facts once
-// the step's length is its lemma's.
-fn {prefix}_jump_facts() → FilterJumpFacts({p}, {done_p}, {jumps}, {pj}) {{
+// Where the jumps land: closed facts once the step's length is its lemma's,
+// proved by evaluation (elf64_read_filter's `filter_jumps_land`).
+fn {prefix}_jump_facts() → FilterJumpFacts({pp}, {done_p}, {jumps}, {pj}) {{
     j(sym({s}_byte_length()), λ n _ => FilterJumpFacts(n, {done_n}, {jumps}, {pj}),
-        FilterJumpFacts(refl, refl, refl, refl, refl, WriteJumpFacts(refl, refl, refl), refl))
+        filter_jumps_land({p}, {done_lit}, refl, refl, refl, refl, refl, refl))
 }}
-", done_p = done(&p), done_n = done("n")));
+", done_p = done(&pp), done_n = done("n"), done_lit = done(&p.to_string())));
 
     // The state's counts as the finishes read them: each Nat field its word.
     let k = state.fields.len();
@@ -388,9 +331,9 @@ fn {prefix}_jump_facts() → FilterJumpFacts({p}, {done_p}, {jumps}, {pj}) {{
 theorem {prefix}_line_word(): LineWord({s}_rep, {count}) {{ λ gprs s placed => {w} }}
 fn {prefix}_print_codes() → PrintCodes {{ PrintCodes({a}_code(), {b}_code(), {c}_code()) }}
 fn {prefix}_print_format() → PrintFormat({prefix}_print_codes()) {{ PrintFormat({a}_computes<IoMemory>(), {b}_computes<IoMemory>(), {c}_computes<IoMemory>()) }}
-", count = state.count(0), w = word(0), a = generated[1].1, b = generated[2].1, c = generated[3].1));
-            let tail = format!("filter_line_tail({shape}, {count}, {prefix}_line_word(), {prefix}_io_image(frame, rest), fl_at_finish({p}), \
-                {prefix}_print_codes(), {prefix}_print_format(), {prefix}_tail_jumps(), {prefix}_tail_facts(), λ pg => ({pieces})(pg).finish_at, \
+", count = state.count(0), w = word(0), a = generated[1].0, b = generated[2].0, c = generated[3].0));
+            let tail = format!("filter_line_tail({shape}, {count}, {prefix}_line_word(), {prefix}_io_image(frame, rest), fl_at_finish({pp}), \
+                {prefix}_print_codes(), {prefix}_print_format(), last_jumps(), last_jumps_land(), λ pg => ({pieces})(pg).finish_at, \
                 {final_state}, small, written, written_ok, writes, writes_ok)", count = state.count(0));
             (format!("{common}, small: FinishFits({prefix}_finish(), {prefix}_counts(), {final_state}),
     writes: List<WriteStep>, writes_ok: WriteSteps(writes)({printed}), written: WriteEnding, written_ok: WriteEndingOk(written),
@@ -402,7 +345,7 @@ fn {prefix}_print_format() → PrintFormat({prefix}_print_codes()) {{ PrintForma
     };
     let events = format!("filter_events({shape}, steps, ending, {tail_events})");
     let proof = format!("read_filter_runs({prefix}_io_image(frame, rest), {shape}, {prefix}_facts(), {jumps}, {pj}, {finish_code}, {done_p}, {prefix}_jump_facts(),
-        {prefix}_resident()(frame, rest), steps, ok, ending, ending_ok, room, {tail_events}, {tail}, page, gprs, flags)", done_p = done(&p));
+        {prefix}_resident()(frame, rest), steps, ok, ending, ending_ok, room, {tail_events}, {tail}, page, gprs, flags)", done_p = done(&pp));
     claims(module, prefix, &format!("\
 // The process claim for the written file: for every way the reads may split
 // stdin into non-empty chunks, with EINTRs between them, and every way each
@@ -426,15 +369,15 @@ theorem {prefix}_sends(steps: List<EofStep<List<WriteStep>>>, ok: FilterSteps({s
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::super::read_loop::{literal, SUPPORT as READ_SUPPORT, WRITE_SUPPORT};
+    use super::super::read_loop::{SUPPORT as READ_SUPPORT, WRITE_SUPPORT};
 
-    // The producer's layout against the library's (docs/native-architecture-review.md
-    // R4): the filter's jump facts, proved by evaluation at the displacements
-    // the table computes, hold for the table as written, and are refused for
-    // one whose empty-chunk JZ lands on the write loop or whose setup is a
-    // byte longer than the library's.
+    // The library's layout places its own jumps (docs/native-architecture-review.md
+    // R4): at a step's length, each lands where the library says, proved by
+    // evaluation; and the evaluation is not vacuous: an empty-chunk JZ
+    // claimed to land on the write loop, or a byte loop laid out for a step
+    // a byte longer, is refused.
     #[test]
-    fn filter_layout_agrees_with_the_library_and_mutations_are_refused() {
+    fn filter_jumps_land_and_mutations_are_refused() {
         let mut elab = super::super::native_test_base();
         let mut session = heather_cli::semantic::SemanticSession::new(Some(std::path::PathBuf::from(
             concat!(env!("CARGO_MANIFEST_DIR"), "/../../target/native-test-images"),
@@ -446,21 +389,20 @@ mod tests {
             }).unwrap();
         }
         let library = elab.semantic_image();
-        let step = vec![0u8; 40];
-        for (name, layout, holds) in [
-            ("as written", process_layout("t", &step, "wexit"), true),
-            ("empty chunk into the write loop", process_layout("t", &step, "wexit").retarget("cjz", "write"), false),
-            ("setup a byte longer", process_layout("t", &step, "wexit").pad("setup"), false),
+        let done = |p: usize| format!("wl_at_exit(fl_at_write({p}))");
+        for (name, declaration, holds) in [
+            ("as laid out", format!("fn t_jump_facts() → FilterJumpFacts(40, {d}, filter_jumps(40, {d}), filter_print_jumps(40)) {{
+    filter_jumps_land(40, {d}, refl, refl, refl, refl, refl, refl)
+}}", d = done(40)), true),
+            ("empty chunk into the write loop", format!("theorem t_jump_facts(): JumpsBack(fl_at_cjz(40), 6, filter_jumps(40, {d}).cd, fl_at_write(40)) {{
+    asm_lands_back(fl_at_cjz(40), 6, filter_jumps(40, {d}).cd, fl_at_write(40), refl)
+}}", d = done(40)), false),
+            ("laid out for a step a byte longer", format!("theorem t_jump_facts(): JumpsBack(fl_at_jnz(40), 6, filter_jumps(41, {d}).ld, fl_at_load(40)) {{
+    asm_lands_back(fl_at_jnz(40), 6, filter_jumps(41, {d}).ld, fl_at_load(40), refl)
+}}", d = done(41)), false),
         ] {
-            let mut module = Module::default();
-            module.raw("import elf64_read_filter; import elf64_write_loop; import elf64_print_pieces; import elf64_read_pieces; import bitvec; import list; import logic; import nat;");
-            module.raw(format!("fn t_bytes() → List<BitVec(8)> {{ {} }}", literal(&step)));
-            filter_jumps(&mut module, "t", &layout);
-            print_jumps(&mut module, "t", &layout);
-            module.raw("fn t_jump_facts() → FilterJumpFacts(40, wl_at_exit(fl_at_write(40)), t_jumps(), t_print_jumps()) {
-    FilterJumpFacts(refl, refl, refl, refl, refl, WriteJumpFacts(refl, refl, refl), refl)
-}");
-            let text = module.render();
+            let text = format!("import elf64_read_filter; import elf64_write_loop; import elf64_print_pieces; import elf64_read_pieces; import x86_64_layout; \
+                import bitvec; import list; import logic; import nat;\n{declaration}\n");
             let result = library.elaborator().elab_module_source("layout_control", &text);
             if holds {
                 result.unwrap_or_else(|e| panic!("{name}: {}", e.render(&text)));
