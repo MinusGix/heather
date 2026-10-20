@@ -626,6 +626,13 @@ theorem Rat::mul_le_mul({a, b, c, d: Rat}, h1: a <= b, h2: c <= d, ha: Rat::zero
     Rat::le_trans(Rat::mul_le_mono_r(h1, hc), Rat::mul_le_mono_l(h2, Rat::le_trans(ha, h1)))
 }
 
+// A positive factor reflects the product's sign: were y ≤ 0, the product
+// would be at most 0 · x. The rationals decide `≤`, so refuting it is
+// enough.
+theorem Rat::pos_of_mul_pos({x, y: Rat}, hx: Rat::zero() < x, h: Rat::zero() < x * y): Rat::zero() < y {
+    Rat::lt_of_not_le(λ le => Rat::not_le_of_lt(h, Rat::le_respects(y.mul_comm(x), x.zero_mul(), Rat::mul_le_mono_r(le, Rat::le_of_lt(hx)))))
+}
+
 // ---------------------------------------------------------------------------
 // Archimedean facts. `inv_succ(n)` is 1/(n+1), the step size the regular
 // Cauchy-sequence probes measure distances in; its denominator is a `Succ`,
@@ -680,6 +687,24 @@ theorem Rat::inv_succ_mul(k, l: Nat): Rat::inv_succ(k) * Rat::inv_succ(l) ≈ Ra
     let dc: (c.den.int() = OfNat(k) * (OfNat(l) + OfNat(1)) + OfNat(l) + OfNat(1)) = refl;
     let prod: ((a * b).den.int() = (OfNat(k) + OfNat(1)) * (OfNat(l) + OfNat(1))) = ring(a.den_mul(b), da, db);
     ring(prod, dc)
+}
+
+// The quantitative form, for the reals' terms: a product at least 1/(j+1)
+// whose first factor lies in (0, l+1] leaves the second factor at least
+// 1/((l+1)(j+1)), since below that the product would fall under
+// (l+1) · 1/((l+1)(j+1)) = 1/(j+1).
+theorem Rat::le_of_mul_le_bounded({p, q: Rat}, j, l: Nat, hp: Rat::zero() < p, hb: p <= Rat::ofInt(OfNat(l + 1)),
+    h: Rat::inv_succ(j) <= p * q): Rat::inv_succ(l * (j + 1) + j) <= q
+{
+    let c = Rat::inv_succ(l * (j + 1) + j);
+    Rat::le_of_not_lt(λ lt => {
+        let below = calc {
+            p * q < p * c := Rat::mul_lt_mono_l(lt, hp),
+            <= Rat::ofInt(OfNat(l + 1)) * c := Rat::mul_le_mono_r(hb, Rat::le_of_lt(Rat::inv_succ_pos(l * (j + 1) + j))),
+            ≈ Rat::inv_succ(j) := Rat::scale_inv_succ(l, j),
+        };
+        Rat::not_le_of_lt(below, h)
+    })
 }
 
 // Every rational is below some integer: x = a/p < |a| + 1, because p ≥ 1.
@@ -1379,6 +1404,7 @@ instance OrderedField<Rat>(Rat::Same, Rat::Lt, Rat::Le, Rat::add, Rat::mul) {
     mul_inv := λ x h => x.mul_inv(h := h),
     zero_lt_one := Rat::zero_lt_one(),
     mul_pos := λ x y hx hy => Rat::mul_pos(hx, hy),
+    pos_of_mul_pos := λ x y hx h => Rat::pos_of_mul_pos(hx, h),
     of_nat_zero := Rat::zero().same_refl(),
     of_nat_succ := λ n => omega,
     archimedean := Rat::archimedean,

@@ -19,10 +19,9 @@ use heather_elab::function_ir_source::{FilterStep, FilterStepEmission, Structure
 use heather_elab::heather_emit::Module;
 use heather_elab::Elaborator;
 
-use super::evaluate::last_nat_list;
-use super::layout::Layout;
-use super::read_filter::{core_layout, state_of, State};
-use super::read_loop::{claims, component, image_facts, literal, nested, print_jumps};
+use super::evaluate::{evaluate, evaluate_bytes};
+use super::read_filter::{state_of, State};
+use super::read_loop::{claims, component, image_facts, literal, spell};
 
 // Bundled after the filter's library (its step contract, bundle and chunk
 // loop): what a command does with its command line, the formatter, the
@@ -51,9 +50,6 @@ pub(super) const IMPORTS: &[&str] = &["elf64_command", "x86_64_asm", "elf64_comm
     "function_ir_loop_trace", "x86_64_fetched_code", "x86_64_fetch", "bitvec_nat", "x86_64", "x86_64_block", "bitvec", "bool", "list", "logic",
     "nat", "option"];
 
-/// An item longer than this is stated a chunk this long at a time: one
-/// declaration's fuel evaluates a few hundred bytes.
-const CHUNK: usize = 400;
 /// The process's slots: at most eight columns (command_program's `column_slots`).
 const SLOTS: usize = 8;
 /// The state registers, in field order (elf64_command's `StateReg`).
@@ -177,16 +173,6 @@ fn {prefix}_default() → BitVec(64) {{ selection_of({prefix}_default_columns())
 ")
 }
 
-/// A closed `List<Nat>`, the value of `value` in a module that imports
-/// `imports` (`evaluate`): elaborated in a fork of the checked state, which
-/// the caller's elaborator never sees.
-fn evaluate(elab: &Elaborator, imports: &str, decls: &str, value: &str) -> Result<Vec<u64>, String> {
-    let mut fork = elab.clone();
-    let text = format!("{imports}\n{decls}\nfn command_probe() → List<Nat> {{ {value} }}\n");
-    fork.elab_module_source("command_probe", &text).map_err(|e| format!("evaluating `{value}`: {}", e.render(&text)))?;
-    last_nat_list(&fork).map_err(|e| format!("evaluating `{value}`: {e}"))
-}
-
 /// Per column: its option letter, and the state field its count reads.
 pub(super) struct Columns { pub letters: Vec<u8>, pub fields: Vec<usize> }
 
@@ -264,87 +250,63 @@ fn {prefix}_column(i: Nat) → {ty} → BitVec(64) {{ {column} }}
 
     // The library's code, read back, and where its items end: the read head
     // before the chunk loop is the last.
-    let imports = format!("import {}; import {context}; import elf64_command; import x86_64_asm; import bitvec_nat; import x86_64; import x86_64_block; import x86_64_structured_block; import elf64_frame; import elf64_straight; import elf64_stat_width; import elf64_row_fields; import elf64_format_width; import elf64_runs; import elf64_arg_scan; import linux_x86_64_io; import elf64_read_pieces; import x86_64_layout; import filter_program; \
+    let imports = format!("import {}; import {context}; import elf64_command; import x86_64_asm; import bitvec_nat; import x86_64; import x86_64_block; import x86_64_structured_block; import elf64_frame; import elf64_straight; import elf64_stat_width; import elf64_row_fields; import elf64_format_width; import elf64_runs; import elf64_arg_scan; import linux_x86_64_io; import elf64_read_pieces; import elf64_read_filter; import elf64_write_loop; import x86_64_layout; import filter_program; \
         import command_program; import bitvec; import list; import nat;", command.root);
     let (letters, default) = (format!("{prefix}_letters()"), format!("{prefix}_default()"));
     let fills = format!("cmd_fills({letters}, {default}, {prefix}_spill)");
     let lens = evaluate(elab, &imports, "", "asm_lens(cmd_prog())")?;
-    let library = evaluate(elab, &imports, &decls, &format!("asm_code({fills}, cmd_labels(), cmd_prog()).map(λ (b: BitVec(8)) => b.toNat())"))?;
+    let library = evaluate_bytes(elab, &imports, &decls, &format!("asm_code({fills}, cmd_labels(), cmd_prog())"))?;
     if lens.iter().sum::<u64>() != library.len() as u64 || lens.is_empty() {
         return Err(format!("the command's library code is {} bytes, but its items measure {}", library.len(), lens.iter().sum::<u64>()));
     }
-    let library: Vec<u8> = library.into_iter().map(|b| u8::try_from(b).map_err(|_| format!("the library's code holds {b}, not a byte")))
-        .collect::<Result<_, _>>()?;
     let mut items: Vec<&[u8]> = Vec::new();
     let mut at = 0;
     for &len in &lens {
         items.push(&library[at..at + len as usize]);
         at += len as usize;
     }
-    let head = *items.last().expect("the items are not empty");
-    // The read head, then the chunk loop after it: its jumps back to the read
-    // land on the head.
-    let layout = Layout::default().label("read").fixed("head", head.to_vec()).then(core_layout(&s, &step.bytes));
-    let code = [&library[..library.len() - head.len()], &layout.code()[..]].concat();
+    // The chunk loop after the read head, the library's last item: its
+    // layout at the step's length, with the jumps that layout places
+    // (elf64_command's `cmd_jumps`).
+    let p = step.bytes.len();
+    let core = evaluate_bytes(elab, &imports, &decls, &format!("filter_core_bytes({}, cmd_jumps({p}), cmd_print_jumps({p}))", literal(&step.bytes)))?;
+    let code = [&library[..], &core[..]].concat();
     let file = super::calls::io_image(&code)?;
 
     module.raw(decls.clone());
-    layout.declare(module, prefix);
-    print_jumps(module, prefix, &layout);
-    let d = |jump| format!("@bitvec::BitVec::ofNat(32, {})", layout.displacement(jump));
-    let none = "@bitvec::BitVec::ofNat(32, 0)";
     module.raw(format!("\
-// The chunk loop's two jumps; the command's own read head and failure tail
-// are the library's, so the filter's other three are not used.
-fn {prefix}_jumps() → FilterJumps {{ FilterJumps({none}, {none}, {}, {}, {none}) }}
-", d("jnz"), d("cjz")));
+// The chunk loop's jumps, where the library's layout places them for this
+// step; the command's own read head and failure tail are the library's.
+fn {prefix}_jumps() → FilterJumps {{ cmd_jumps({p}) }}
+fn {prefix}_print_jumps() → PrintJumps {{ cmd_print_jumps({p}) }}
+"));
 
     let (jumps, pj) = (format!("{prefix}_jumps()"), format!("{prefix}_print_jumps()"));
     let code_term = format!("command_code({letters}, {default}, {prefix}_spill, {s}_code(), {jumps}, {pj})");
     // The code as written, an item at a time so that no one declaration
     // evaluates more than an item's bytes (a long one's, a chunk's): each
     // item's bytes at its label, found from the program's end, the chunk loop
-    // with the step by its lemma, and the code from them by `asm_code_same`.
+    // with the step's literal for its code by its lemma, and the code from
+    // them by `asm_code_same`.
     let bytes_ty = "List<BitVec(8)>";
     let chain_of = |items: &[String]| items.iter().rev().fold("Nil".to_string(), |rest, item| format!("Cons({item}, {rest})"));
     let pairs = |proofs: &[String]| proofs.iter().rev().fold("trivial".to_string(), |rest, proof| format!("⟨{proof}, {rest}⟩"));
-    let mut spelled_items = Vec::new();
-    for (k, bytes) in items.iter().enumerate() {
+    let spelled_items: Vec<String> = items.iter().enumerate().map(|(k, bytes)| {
         let item = format!("item_bytes({fills}, cmd_labels(), asm_back(cmd_prog(), {}))", items.len() - 1 - k);
-        let name = format!("{prefix}_item{k}");
-        if bytes.len() <= CHUNK {
-            module.raw(format!("fn {name}_written() → {bytes_ty} {{ {} }}\ntheorem {name}(): {item} = {name}_written() {{ refl }}", literal(bytes)));
-            spelled_items.push(format!("{name}_written()"));
-            continue;
-        }
-        // Chunk `j` is what is left after `j` chunks, taken a chunk long.
-        let after = |j: usize| format!("{item}{}", format!(".drop({CHUNK})").repeat(j));
-        let mut lits = Vec::new();
-        let mut proofs = Vec::new();
-        for (j, chunk) in bytes.chunks(CHUNK).enumerate() {
-            module.raw(format!("fn {name}_{j}_written() → {bytes_ty} {{ {} }}\ntheorem {name}_{j}(): {}.take({CHUNK}) = {name}_{j}_written() {{ refl }}",
-                literal(chunk), after(j)));
-            lits.push(format!("{name}_{j}_written()"));
-            proofs.push(format!("{name}_{j}()"));
-        }
-        let ended = format!("{}.drop({CHUNK})", after(lits.len() - 1));
-        let each = proofs.iter().rev().fold(format!("{name}_end()"), |rest, proof| format!("⟨{proof}, {rest}⟩"));
-        module.raw(format!("\
-theorem {name}_end(): {ended} = Nil {{ refl }}
-theorem {name}(): {item} = layout_code({c}, Nil) {{ chunks_same({CHUNK}, {c}, {item}, {each}) }}", c = chain_of(&lits)));
-        spelled_items.push(format!("layout_code({}, Nil)", chain_of(&lits)));
-    }
+        spell(module, &format!("{prefix}_item{k}"), &item, bytes)
+    }).collect();
     let core_term = format!("filter_core_code({s}_code(), {jumps}, {pj})");
-    let core = |with: &str| nested(&layout.spelled_with(prefix, &[("step", with)])[1..]);
-    module.raw(format!("theorem {prefix}_core_written(): {core_term} = {} {{ j({s}_bytes_are(), λ y _ => {core_term} = {}, refl) }}",
-        core(&format!("{s}_lit()")), core("y")));
+    let core_spelled = spell(module, &format!("{prefix}_chunk_loop"), &format!("filter_core_bytes({s}_lit(), {jumps}, {pj})"), &core);
+    module.raw(format!("\
+theorem {prefix}_core_written(): {core_term} = {core_spelled} {{
+    trans(j({s}_bytes_are(), λ y _ => {core_term} = filter_core_bytes(y, {jumps}, {pj}), refl), {prefix}_chunk_loop())
+}}"));
     // The items from the end, as `asm_code_same` takes them.
     let all = chain_of(&spelled_items.iter().rev().cloned().collect::<Vec<_>>());
     let same = pairs(&(0..items.len()).rev().map(|k| format!("{prefix}_item{k}()")).collect::<Vec<_>>());
     let chain = format!("trans(cong_fn<{bytes_ty}, {bytes_ty}>(λ c => c ++ {core_term}, asm_code_same({fills}, cmd_labels(), cmd_prog(), {all}, {same})),
         cong_fn<{bytes_ty}, {bytes_ty}>(λ c => back_code({all}) ++ c, {prefix}_core_written()))");
-    let spelled = format!("back_code({all}) ++ ({})", core(&format!("{s}_lit()")));
-    let p = step.bytes.len();
+    let spelled = format!("back_code({all}) ++ ({core_spelled})");
     let length = format!("asm_len_is({fills}, cmd_labels(), cmd_prog(), cmd_fits({letters}, {default}, {prefix}_spill), {core_term}, \
         filter_core_len({p}), filter_core_code_len({s}_code(), {jumps}, {pj}, {p}, {s}_byte_length()))");
     image_facts(module, prefix, &code_term, &spelled, &chain, &file, code.len(), &length);
@@ -362,19 +324,11 @@ fn {shape} → FilterShape<{ty}> {{ FilterShape({prefix}_step(), {prefix}_init()
 fn {prefix}_facts() → FilterFacts<{ty}>({shape}) {{
     FilterFacts({s}_step_piece<IoMemory>(), {s}_framed(), {s}_initialised(), {prefix}_advances(), {prefix}_zero())
 }}
-// Where the chunk loop's jumps land, from the written displacements: closed
-// facts once the step's length is its lemma's, proved by evaluation
-// (`asm_lands_back`): the core's offset is the whole program's length.
+// Where the chunk loop's jumps land: closed facts once the step's length is
+// its lemma's, proved by evaluation (elf64_read_filter's `core_jumps_land`).
 fn {prefix}_targets() → CoreTargets(ca(l_core()), ca(l_head()), structured_bytes({s}_code()).len(), {jumps}, {pj}) {{
     j(sym({s}_byte_length()), λ n _ => CoreTargets(ca(l_core()), ca(l_head()), n, {jumps}, {pj}),
-        CoreTargets(
-            again := jumps_back(io_entry(), fc_at_jnz(ca(l_core()), {p}), 6, {jumps}.ld, fc_at_load(ca(l_core()), {p}),
-                asm_lands_back(fc_at_jnz(ca(l_core()), {p}), 6, {jumps}.ld, fc_at_load(ca(l_core()), {p}), refl)),
-            quiet := jumps_back(io_entry(), fc_at_cjz(ca(l_core()), {p}), 6, {jumps}.cd, ca(l_head()),
-                asm_lands_back(fc_at_cjz(ca(l_core()), {p}), 6, {jumps}.cd, ca(l_head()), refl)),
-            write := write_targets_to(fc_at_write(ca(l_core()), {p}), ca(l_head()), {pj}, WriteJumpFacts(refl, refl, refl),
-                jumps_back(io_entry(), wl_at_wjz(fc_at_write(ca(l_core()), {p})), 6, {pj}.zd, ca(l_head()),
-                    asm_lands_back(wl_at_wjz(fc_at_write(ca(l_core()), {p})), 6, {pj}.zd, ca(l_head()), refl)))))
+        core_jumps_land(ca(l_core()), ca(l_head()), {p}, refl, refl, refl))
 }}
 theorem {prefix}_spilled(i: Nat, below: i < 8, g: Gprs, s: {ty}, placed: {s}_rep(g, s)):
     read_gpr(state_gpr({prefix}_spill(i)), g) = {prefix}_column(i)(s) {{

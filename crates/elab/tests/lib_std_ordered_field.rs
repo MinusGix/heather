@@ -10,7 +10,8 @@
 //!     carriers' own operations by `refl`;
 //!  3. negative controls: each layer's theorems are refused one layer down
 //!     (`≤` transitivity and a bound's positivity need locatedness), a wrong
-//!     law is refused, the inverse wants apartness of its own argument, `≤`
+//!     law is refused, the inverse wants apartness of its own argument and
+//!     has its argument's sign (`issues/ordered-field-inverse-sign.md`), `≤`
 //!     is not `<`, and nothing in the interface decides.
 
 use std::cell::OnceCell;
@@ -121,6 +122,7 @@ const THEOREMS: &[&str] = &[
     "OrderedAddGroup::sub_add_sub", "OrderedAddGroup::neg_sub", "OrderedAddGroup::add_lt_mono_l",
     "OrderedAddGroup::add_lt_mono", "OrderedAddGroup::add_lt_cancel_r", "OrderedAddGroup::add_lt_cancel_l",
     "OrderedAddGroup::add_le_mono_r", "OrderedAddGroup::add_le_mono_l", "OrderedAddGroup::neg_lt",
+    "OrderedAddGroup::neg_pos", "OrderedAddGroup::neg_of_neg_pos",
     "OrderedAddGroup::sub_pos", "OrderedAddGroup::lt_of_sub_pos", "OrderedAddGroup::between_add",
     "OrderedAddGroup::abs_lt_respects", "OrderedAddGroup::abs_lt_mono", "OrderedAddGroup::abs_lt_neg",
     "OrderedAddGroup::abs_lt_add", "OrderedAddGroup::same_zero_of_abs_lt", "OrderedAddGroup::close_sym",
@@ -133,10 +135,14 @@ const THEOREMS: &[&str] = &[
     "OrderedField::one_apart_zero", "OrderedField::one_mul", "OrderedField::mul_zero",
     "OrderedField::mul_neg", "OrderedField::mul_lt_mono_l", "OrderedField::mul_lt_mono_r",
     "OrderedField::inv_unique", "OrderedField::inv_respects", "OrderedField::inv_mul",
-    "OrderedField::of_nat_lt_succ",
+    "OrderedField::of_nat_lt_succ", "OrderedField::of_nat_pos", "OrderedField::neg_mul",
+    "OrderedField::neg_mul_neg",
+    // The inverse's sign, from the reflection law.
+    "OrderedField::inv_pos", "OrderedField::inv_neg", "OrderedField::inv_inv",
+    "OrderedField::inv_lt_inv", "OrderedField::archimedean_inv",
     // What the carriers added for their instances.
     "Rat::not_lt_of_le", "Rat::zero_lt_one", "CReal::archimedean", "CReal::zero_lt_one",
-    "CReal::ofNat_succ",
+    "CReal::ofNat_succ", "Rat::pos_of_mul_pos", "Rat::le_of_mul_le_bounded", "CReal::pos_of_mul_pos",
 ];
 
 #[test]
@@ -183,6 +189,54 @@ fn the_layers_are_there_at_both_carriers() {
         }\n",
     );
     check(&mut e, "ordered_field_kit", &src);
+}
+
+// A predicate meets its own unfolding wherever it is written: a hypothesis
+// of `Close` where `AbsLt` is expected, a bound passed as `Between`, and a
+// result checked against the carrier's spelled-out order. The carrier, from
+// the first point or a type argument, fills the indices through its
+// designations; the unfolding is conversion's
+// (issues/constrained-predicate-expected-type.md).
+#[test]
+fn an_unfolded_predicate_meets_its_name() {
+    let mut e = base();
+    check(
+        &mut e,
+        "unfolded_predicates",
+        &format!(
+            "{IMPORTS} theorem close_neg<A: OrderedAddGroup(≈, <, <=, +)>(x, y, e: A, h: Close(x, y, e)):
+                AbsLt(A.neg(x + A.neg(y)), e)
+            {{
+                OrderedAddGroup::abs_lt_neg(x + A.neg(y), e, h)
+            }}
+            theorem bound_lt<A: OrderedAddGroup(≈, <, <=, +)>(x, e: A, h: AbsLt(x, e)): A.neg(e) < e {{
+                StrictOrder::between_lt(A.neg(e), x, e, h)
+            }}
+            theorem rat_sum(x, y, e, d: Rat, hx: -e < x ∧ x < e, hy: -d < y ∧ y < d):
+                -(e + d) < x + y ∧ x + y < e + d
+            {{
+                OrderedAddGroup::abs_lt_add(x, y, e, d, hx, hy)
+            }}
+            theorem creal_within(x, e: CReal, h: -e < x ∧ x < e): -e <= x ∧ x <= e {{
+                LocatedAddGroup::abs_le_of_abs_lt(x, e, h)
+            }}
+            // A carrier given as a type argument pins the indices too.
+            theorem rat_le_typed(x, y: Rat, h: x < y): x <= y {{ StrictOrder::le_of_lt<Rat>(x, y, h) }}
+            theorem creal_le_typed(x, y: CReal, h: x < y): x <= y {{ StrictOrder::le_of_lt<CReal>(x, y, h) }}"
+        ),
+    );
+    // The unfolding is checked, not assumed: the bound's two halves the
+    // wrong way round are refused.
+    refused(
+        "unfolded_predicate_swapped",
+        &format!(
+            "{IMPORTS} theorem bad(x, y, e, d: Rat, hx: -e < x ∧ x < e, hy: -d < y ∧ y < d):
+                x + y < e + d ∧ -(e + d) < x + y
+            {{
+                OrderedAddGroup::abs_lt_add(x, y, e, d, hx, hy)
+            }}"
+        ),
+    );
 }
 
 #[test]
@@ -293,12 +347,25 @@ fn the_inverse_wants_its_own_argument_apart() {
         "inverse_without_proof",
         &format!("{IMPORTS} fn bad<A: OrderedField(≈, <, <=, +, *)>() → A {{ A.inv(A.zero) }}"),
     );
+    // The inverse's sign is its argument's: a negative argument does not
+    // give a positive inverse.
+    refused(
+        "inverse_sign_of_negative",
+        &format!(
+            "{IMPORTS} theorem bad<A: OrderedField(≈, <, <=, +, *)>(x: A, hx: x < A.zero): A.zero < A.inv(x, Inl(hx)) {{
+                OrderedField::inv_pos(x, Inl(hx), hx)
+            }}"
+        ),
+    );
     let mut e = base();
     check(
         &mut e,
         "inverse_control",
         &format!(
             "{IMPORTS} fn ok<A: OrderedField(≈, <, <=, +, *)>(x: A) → A {{ A.inv(A.one, Inr(A.zero_lt_one)) }}
+            theorem neg_inv<A: OrderedField(≈, <, <=, +, *)>(x: A, hx: x < A.zero): A.inv(x, Inl(hx)) < A.zero {{
+                OrderedField::inv_neg(x, Inl(hx), hx)
+            }}
             theorem zero_not_apart<A: OrderedField(≈, <, <=, +, *)>(x: A): ¬(ApartBy(<, A.zero, A.zero)) {{
                 StrictOrder::apart_irrefl(A.zero)
             }}"

@@ -1344,7 +1344,8 @@ impl application::ImplicitApplicationElab for Elaborator {
                 .and_then(|p| p.solver.as_deref());
             let changed = self.fill_index_from_scope(cx, written, params, slot_param, sols)
                 || self.fill_index_from_designation(
-                    cx, written, params, slot_param, sols, meta_doms, n, span,
+                    cx, written, params, slot_param, sols, meta_doms, n,
+                    obligation.applied.as_ref(), span,
                 );
             return Ok(if changed {
                 application::ObligationProgress::Unblocked

@@ -15,7 +15,6 @@ use heather_cli::{loader, semantic::SemanticSession};
 
 mod elf;
 mod calls;
-mod layout;
 mod order;
 mod read_loop;
 mod read_filter;
@@ -328,7 +327,7 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
         proof.raw(format!("import {root_name}; import {context}; import {prefix}_piece_pieces; import {prefix}_piece_step;"));
         for part in format.iter().flatten() { proof.raw(format!("import {};", part.module)); }
         probes = None;
-        (Some(read_filter::certify(&mut proof, &prefix, &program, &step, format.as_deref())?), None)
+        (Some(read_filter::certify(&elab, &mut proof, &prefix, &program, &step, format.as_deref())?), None)
     } else if command {
         // As for a filter: the command, read off its bundle's written type,
         // restated where the generator and the claim read it, its columns

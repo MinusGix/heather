@@ -189,6 +189,7 @@ impl Elaborator {
     /// nothing here to consult.
     ///
     /// `true` when it filled at least one slot.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn fill_index_from_designation(
         &self,
         cx: &Cx,
@@ -198,6 +199,7 @@ impl Elaborator {
         sols: &mut [Sol],
         meta_doms: &[Type],
         n: u32,
+        applied: Option<&Term>,
         span: Span,
     ) -> bool {
         let Some(r) = goal.and_then(|t| self.class_ref_of_ty(t)) else {
@@ -214,7 +216,7 @@ impl Elaborator {
         }) {
             return false;
         }
-        let Some(head) = self.goal_carrier_head(cx, r.args.first(), params, slot_param, sols, span)
+        let Some(head) = self.goal_carrier_head(cx, r.args.first(), params, slot_param, sols, n, applied, span)
         else {
             return false;
         };
@@ -267,7 +269,10 @@ impl Elaborator {
     ///
     /// A solved type-parameter slot holds the carrier's **code**, so `El` of it
     /// is the type and the kernel's own `El ⌜T⌝ ⇝ T` does the decoding — no
-    /// second decoder, and nothing to drift.
+    /// second decoder, and nothing to drift. A carrier given as an explicit
+    /// type argument (`le_of_lt<Rat>(…)`) has no slot: its code is read off
+    /// `applied`, the call's spine up to the goal, in the scratch world.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn goal_carrier_head(
         &self,
         cx: &Cx,
@@ -275,6 +280,8 @@ impl Elaborator {
         params: &[ParamMeta],
         slot_param: &[usize],
         sols: &[Sol],
+        n: u32,
+        applied: Option<&Term>,
         span: Span,
     ) -> Option<Carrier> {
         let TyKind::Named { name, args } = &carrier?.kind else {
@@ -293,11 +300,22 @@ impl Elaborator {
             });
         }
         let pi = params.iter().position(|p| p.name == *name)?;
-        let slot = slot_param.iter().position(|&s| s == pi)?;
-        let code = sols[slot].solved()?;
+        let code = match slot_param.iter().position(|&s| s == pi) {
+            Some(slot) => Rc::clone(sols[slot].solved()?),
+            None => {
+                let mut spine = Vec::new();
+                let mut head = applied?;
+                while let Some((fun, arg)) = crate::spelling::app_of(head) {
+                    spine.push(&**arg);
+                    head = fun;
+                }
+                spine.reverse();
+                Rc::new(crate::unification::zonked_tm(spine.get(pi)?, n, sols)?)
+            }
+        };
         let ty = Type::El {
             level: Level::Zero,
-            tm: Rc::clone(code),
+            tm: code,
         };
         self.carrier_of_ty(cx, &ty, span)
     }

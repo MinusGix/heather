@@ -26,8 +26,10 @@
 //   splitting a gap between its summands, and the `≤` forms of the bounds.
 // - `OrderedField(≈, <, ≤, +, *)`: a located group with a commutative
 //   multiplication, an inverse on elements apart from zero, products of
-//   positives positive, and the Archimedean property over an embedding of
-//   `Nat`.
+//   positives positive, a positive factor reflecting a product's sign, and
+//   the Archimedean property over an embedding of `Nat`. The inverse's sign,
+//   the order reversal of inversion and the Archimedean property's inverse
+//   form (`archimedean_inv`) are derived here.
 //
 // Points are explicit arguments: a generic theorem's indices are filled from
 // its carrier, and the carrier is read off the first point. Theorems are
@@ -432,6 +434,16 @@ theorem OrderedAddGroup::neg_lt<A: OrderedAddGroup(≈, <, <=, +)>(x, y: A, h: x
         OrderedAddGroup::add_neg_add(x, A.neg(y)), right, shifted)
 }
 
+// Negation swaps the sides of zero.
+theorem OrderedAddGroup::neg_pos<A: OrderedAddGroup(≈, <, <=, +)>(x: A, h: x < A.zero): A.zero < A.neg(x) {
+    StrictOrder::lt_respects_l(A.neg(A.zero), A.zero, A.neg(x), OrderedAddGroup::neg_zero(x), OrderedAddGroup::neg_lt(x, A.zero, h))
+}
+
+theorem OrderedAddGroup::neg_of_neg_pos<A: OrderedAddGroup(≈, <, <=, +)>(x: A, h: A.zero < A.neg(x)): x < A.zero {
+    A.lt_respects(A.neg(A.neg(x)), x, A.neg(A.zero), A.zero, OrderedAddGroup::neg_neg(x), OrderedAddGroup::neg_zero(x),
+        OrderedAddGroup::neg_lt(A.zero, A.neg(x), h))
+}
+
 theorem OrderedAddGroup::sub_pos<A: OrderedAddGroup(≈, <, <=, +)>(x, y: A, h: x < y): A.zero < y + A.neg(x) {
     StrictOrder::lt_respects_l(x + A.neg(x), A.zero, y + A.neg(x), A.add_neg(x), A.add_lt_mono_r(x, y, A.neg(x), h))
 }
@@ -490,30 +502,26 @@ theorem OrderedAddGroup::same_zero_of_abs_lt<A: OrderedAddGroup(≈, <, <=, +)>(
 }
 
 theorem OrderedAddGroup::close_sym<A: OrderedAddGroup(≈, <, <=, +)>(x, y, e: A, h: Close(x, y, e)): Close(y, x, e) {
-    let bound: AbsLt(x + A.neg(y), e) = h;
     OrderedAddGroup::abs_lt_respects(A.neg(x + A.neg(y)), y + A.neg(x), e, e, OrderedAddGroup::neg_sub(x, y), A.rel_refl(e),
-        OrderedAddGroup::abs_lt_neg(x + A.neg(y), e, bound))
+        OrderedAddGroup::abs_lt_neg(x + A.neg(y), e, h))
 }
 
 theorem OrderedAddGroup::close_triangle<A: OrderedAddGroup(≈, <, <=, +)>(x, y, z, e, d: A, hxy: Close(x, y, e),
     hyz: Close(y, z, d)): Close(x, z, e + d)
 {
-    let first: AbsLt(x + A.neg(y), e) = hxy;
-    let second: AbsLt(y + A.neg(z), d) = hyz;
     OrderedAddGroup::abs_lt_respects((x + A.neg(y)) + (y + A.neg(z)), x + A.neg(z), e + d, e + d,
         OrderedAddGroup::sub_add_sub(x, y, z), A.rel_refl(e + d),
-        OrderedAddGroup::abs_lt_add(x + A.neg(y), y + A.neg(z), e, d, first, second))
+        OrderedAddGroup::abs_lt_add(x + A.neg(y), y + A.neg(z), e, d, hxy, hyz))
 }
 
 // Points within every positive distance of each other are the same.
 theorem OrderedAddGroup::same_of_close<A: OrderedAddGroup(≈, <, <=, +)>(x, y: A,
     all: (e: A) → A.zero < e → Close(x, y, e)): x ≈ y
 {
-    let bounds: ((e: A) → A.zero < e → AbsLt(x + A.neg(y), e)) = all;
     calc {
         x ≈ (x + A.neg(y)) + y := A.rel_sym((x + A.neg(y)) + y, x, OrderedAddGroup::sub_add_cancel(x, y)),
         ≈ A.zero + y := OrderedAddGroup::add_respects(x + A.neg(y), A.zero, y, y,
-            OrderedAddGroup::same_zero_of_abs_lt(x + A.neg(y), bounds), A.rel_refl(y)),
+            OrderedAddGroup::same_zero_of_abs_lt(x + A.neg(y), all), A.rel_refl(y)),
         ≈ y := OrderedAddGroup::zero_add(y),
     }
 }
@@ -547,8 +555,7 @@ theorem LocatedAddGroup::pos_of_add_pos<A: LocatedAddGroup(≈, <, <=, +)>(x, y:
 // A bound with a point under it is positive. This one needs locatedness:
 // -e < e places zero, and zero below -e makes e positive by negation.
 theorem LocatedAddGroup::abs_lt_pos<A: LocatedAddGroup(≈, <, <=, +)>(x, e: A, h: AbsLt(x, e)): A.zero < e {
-    let between: Between(<, A.neg(e), x, e) = h;
-    match A.rel_cotrans(A.neg(e), e, A.zero, StrictOrder::between_lt(A.neg(e), x, e, between)) {
+    match A.rel_cotrans(A.neg(e), e, A.zero, StrictOrder::between_lt(A.neg(e), x, e, h)) {
         Inl(below) => A.lt_respects(A.neg(A.zero), A.zero, A.neg(A.neg(e)), e,
             OrderedAddGroup::neg_zero(x), OrderedAddGroup::neg_neg(e), OrderedAddGroup::neg_lt(A.neg(e), A.zero, below)),
         Inr(above) => above,
@@ -568,9 +575,7 @@ theorem LocatedAddGroup::neg_le<A: LocatedAddGroup(≈, <, <=, +)>(x, y: A, h: x
 }
 
 theorem LocatedAddGroup::abs_le_of_abs_lt<A: LocatedAddGroup(≈, <, <=, +)>(x, e: A, h: AbsLt(x, e)): AbsLe(x, e) {
-    let between: Between(<, A.neg(e), x, e) = h;
-    let within: Within(<=, A.neg(e), x, e) = StrictOrder::within_of_between(A.neg(e), x, e, between);
-    within
+    StrictOrder::within_of_between(A.neg(e), x, e, h)
 }
 
 theorem LocatedAddGroup::abs_le_add<A: LocatedAddGroup(≈, <, <=, +)>(x, y, e, d: A, hx: AbsLe(x, e), hy: AbsLe(y, d)):
@@ -586,16 +591,21 @@ theorem LocatedAddGroup::abs_le_add<A: LocatedAddGroup(≈, <, <=, +)>(x, y, e, 
 theorem LocatedAddGroup::abs_lt_of_abs_le<A: LocatedAddGroup(≈, <, <=, +)>(x, e, d: A, h: AbsLe(x, e), ed: e < d):
     AbsLt(x, d)
 {
-    let within: Within(<=, A.neg(e), x, e) = h;
-    PseudoOrder::between_of_within(A.neg(e), x, e, A.neg(d), d, OrderedAddGroup::neg_lt(e, d, ed), ed, within)
+    PseudoOrder::between_of_within(A.neg(e), x, e, A.neg(d), d, OrderedAddGroup::neg_lt(e, d, ed), ed, h)
 }
 
 // ---------------------------------------------------------------------------
 // The field.
 
 // A located group with a commutative ring structure, `0 < 1`, products of
-// positives positive, an inverse on exactly the elements apart from zero, and
-// the Archimedean property: every element is below some natural number.
+// positives positive, a positive factor reflecting the product's sign, an
+// inverse on exactly the elements apart from zero, and the Archimedean
+// property: every element is below some natural number.
+//
+// The reflection (`0 < x` and `0 < x * y` give `0 < y`) is strong
+// extensionality of `*` at zero, a constructive axiom of its own: the ring
+// laws and `mul_pos` only refute `y ≤ 0`, which is not a gap. It is what the
+// inverse's sign and the Archimedean property's inverse form need.
 // `of_nat` is a field, with its two defining laws, so a carrier keeps its own
 // embedding (`Rat::ofInt`, `CReal::ofRat`) and the law speaks of it.
 class OrderedField<A>(same as ≈: A → A → Type, lt as <: A → A → Type, le as <=: A → A → Type,
@@ -613,6 +623,7 @@ class OrderedField<A>(same as ≈: A → A → Type, lt as <: A → A → Type, 
     mul_inv: (x: A) → (h: ApartBy(lt, x, zero)) → x * inv(x, h) ≈ one,
     zero_lt_one: zero < one,
     mul_pos: (x, y: A) → zero < x → zero < y → zero < x * y,
+    pos_of_mul_pos: (x, y: A) → zero < x → zero < x * y → zero < y,
     of_nat_zero: of_nat(Zero) ≈ zero,
     of_nat_succ: (n: Nat) → of_nat(Succ(n)) ≈ of_nat(n) + one,
     archimedean: (x: A) → ∃ n: Nat, x < of_nat(n),
@@ -698,4 +709,99 @@ theorem OrderedField::of_nat_lt_succ<A: OrderedField(≈, <, <=, +, *)>(x: A, n:
     A.lt_respects(A.of_nat(n) + A.zero, A.of_nat(n), A.of_nat(n) + A.one, A.of_nat(Succ(n)),
         A.add_zero(A.of_nat(n)), A.rel_sym(A.of_nat(Succ(n)), A.of_nat(n) + A.one, A.of_nat_succ(n)),
         OrderedAddGroup::add_lt_mono_l(A.zero, A.one, A.of_nat(n), A.zero_lt_one))
+}
+
+theorem OrderedField::of_nat_pos<A: OrderedField(≈, <, <=, +, *)>(x: A, n: Nat): A.zero < A.of_nat(Succ(n)) {
+    match n {
+        Zero => StrictOrder::lt_respects_l(A.of_nat(Zero), A.zero, A.of_nat(Succ(Zero)), A.of_nat_zero, OrderedField::of_nat_lt_succ(x, Zero)),
+        Succ(m) => A.lt_trans(A.zero, A.of_nat(Succ(m)), A.of_nat(Succ(Succ(m))), OrderedField::of_nat_pos(x, m),
+            OrderedField::of_nat_lt_succ(x, Succ(m))),
+    }
+}
+
+theorem OrderedField::neg_mul<A: OrderedField(≈, <, <=, +, *)>(x, y: A): A.neg(x) * y ≈ A.neg(x * y) {
+    A.rel_trans(A.neg(x) * y, y * A.neg(x), A.neg(x * y), A.mul_comm(A.neg(x), y),
+        A.rel_trans(y * A.neg(x), A.neg(y * x), A.neg(x * y), OrderedField::mul_neg(y, x), A.neg_respects(y * x, x * y, A.mul_comm(y, x))))
+}
+
+theorem OrderedField::neg_mul_neg<A: OrderedField(≈, <, <=, +, *)>(x, y: A): A.neg(x) * A.neg(y) ≈ x * y {
+    calc {
+        A.neg(x) * A.neg(y) ≈ A.neg(A.neg(x) * y) := OrderedField::mul_neg(A.neg(x), y),
+        ≈ A.neg(A.neg(x * y)) := A.neg_respects(A.neg(x) * y, A.neg(x * y), OrderedField::neg_mul(x, y)),
+        ≈ x * y := OrderedAddGroup::neg_neg(x * y),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The inverse's sign, from the reflection law: x · x⁻¹ ≈ 1 is positive, so
+// x⁻¹ has the sign of x.
+
+theorem OrderedField::inv_pos<A: OrderedField(≈, <, <=, +, *)>(x: A, h: ApartBy(<, x, A.zero), hx: A.zero < x):
+    A.zero < A.inv(x, h)
+{
+    A.pos_of_mul_pos(x, A.inv(x, h), hx, StrictOrder::lt_respects_r(A.zero, A.one, x * A.inv(x, h),
+        A.rel_sym(x * A.inv(x, h), A.one, A.mul_inv(x, h)), A.zero_lt_one))
+}
+
+// A negative x: -x is positive and (-x) · (-x⁻¹) ≈ 1, so -x⁻¹ is positive.
+theorem OrderedField::inv_neg<A: OrderedField(≈, <, <=, +, *)>(x: A, h: ApartBy(<, x, A.zero), hx: x < A.zero):
+    A.inv(x, h) < A.zero
+{
+    let u = A.inv(x, h);
+    let unit: (A.neg(x) * A.neg(u) ≈ A.one) = A.rel_trans(A.neg(x) * A.neg(u), x * u, A.one,
+        OrderedField::neg_mul_neg(x, u), A.mul_inv(x, h));
+    let product: (A.zero < A.neg(x) * A.neg(u)) = StrictOrder::lt_respects_r(A.zero, A.one, A.neg(x) * A.neg(u),
+        A.rel_sym(A.neg(x) * A.neg(u), A.one, unit), A.zero_lt_one);
+    OrderedAddGroup::neg_of_neg_pos(u, A.pos_of_mul_pos(A.neg(x), A.neg(u), OrderedAddGroup::neg_pos(x, hx), product))
+}
+
+// The inverse undoes itself, at any proofs of the two apartnesses.
+theorem OrderedField::inv_inv<A: OrderedField(≈, <, <=, +, *)>(x: A, h: ApartBy(<, x, A.zero), h2: ApartBy(<, A.inv(x, h), A.zero)):
+    A.inv(A.inv(x, h), h2) ≈ x
+{
+    A.rel_sym(x, A.inv(A.inv(x, h), h2), OrderedField::inv_unique(A.inv(x, h), h2, x, OrderedField::inv_mul(x, h)))
+}
+
+// Inversion reverses the order of positives: multiply x < y by the positive
+// x⁻¹ · y⁻¹, and each side cancels to the other's inverse.
+theorem OrderedField::inv_lt_inv<A: OrderedField(≈, <, <=, +, *)>(x, y: A, hx: ApartBy(<, x, A.zero), hy: ApartBy(<, y, A.zero),
+    px: A.zero < x, h: x < y): A.inv(y, hy) < A.inv(x, hx)
+{
+    let u = A.inv(x, hx);
+    let v = A.inv(y, hy);
+    let w = u * v;
+    let pw: (A.zero < w) = A.mul_pos(u, v, OrderedField::inv_pos(x, hx, px),
+        OrderedField::inv_pos(y, hy, A.lt_trans(A.zero, x, y, px, h)));
+    let left = calc {
+        x * w ≈ (x * u) * v := A.rel_sym((x * u) * v, x * w, A.mul_assoc(x, u, v)),
+        ≈ A.one * v := A.mul_respects(x * u, A.one, v, v, A.mul_inv(x, hx), A.rel_refl(v)),
+        ≈ v := OrderedField::one_mul(v),
+    };
+    let right = calc {
+        y * w ≈ y * (v * u) := A.mul_respects(y, y, w, v * u, A.rel_refl(y), A.mul_comm(u, v)),
+        ≈ (y * v) * u := A.rel_sym((y * v) * u, y * (v * u), A.mul_assoc(y, v, u)),
+        ≈ A.one * u := A.mul_respects(y * v, A.one, u, u, A.mul_inv(y, hy), A.rel_refl(u)),
+        ≈ u := OrderedField::one_mul(u),
+    };
+    A.lt_respects(x * w, v, y * w, u, left, right, OrderedField::mul_lt_mono_r(x, y, w, h, pw))
+}
+
+// The Archimedean property's inverse form: a positive x is above some
+// 1/(n+1). Its inverse is below some natural n, so below n + 1, and
+// inverting reverses that.
+theorem OrderedField::archimedean_inv<A: OrderedField(≈, <, <=, +, *)>(x: A, hx: A.zero < x):
+    ∃ n: Nat, A.inv(A.of_nat(Succ(n)), Inr(OrderedField::of_nat_pos(x, n))) < x
+{
+    let h: ApartBy(<, x, A.zero) = Inr(hx);
+    let u = A.inv(x, h);
+    let pu: (A.zero < u) = OrderedField::inv_pos(x, h, hx);
+    match A.archimedean(u) {
+        Exists(n, below) => {
+            let big = A.of_nat(Succ(n));
+            let pbig: (A.zero < big) = OrderedField::of_nat_pos(x, n);
+            let flipped: (A.inv(big, Inr(pbig)) < A.inv(u, Inr(pu))) = OrderedField::inv_lt_inv(u, big, Inr(pu), Inr(pbig), pu,
+                A.lt_trans(u, A.of_nat(n), big, below, OrderedField::of_nat_lt_succ(x, n)));
+            Exists(n, StrictOrder::lt_respects_r(A.inv(big, Inr(pbig)), A.inv(u, Inr(pu)), x, OrderedField::inv_inv(x, h, Inr(pu)), flipped))
+        },
+    }
 }

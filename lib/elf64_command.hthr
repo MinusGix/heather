@@ -355,6 +355,10 @@ fn cmd_ed() → BitVec(32) { head_ed(cmd_labels(), ca(l_head()), t_spill()) }
 fn cmd_sd() → BitVec(32) { head_sd(cmd_labels(), ca(l_head()), t_read_failed()) }
 // The write loop at `at`, done at the label named `done`.
 fn pj_to(at: Prog, done: Nat) → PrintJumps { wl_jumps(write_done(cmd_labels(), ca(at), done)) }
+// The chunk loop's jumps, for a step `p` bytes long (elf64_read_filter's
+// `core_jumps`): the loop at `l_core`, after the read head.
+fn cmd_jumps(p: Nat) → FilterJumps { core_jumps(ca(l_core()), ca(l_head()), p) }
+fn cmd_print_jumps(p: Nat) → PrintJumps { core_print_jumps(ca(l_core()), ca(l_head()), p) }
 fn pj_counts() → PrintJumps { pj_to(l_gap_write(), t_nm()) }
 fn pj_name() → PrintJumps { pj_to(l_name_write(), t_nl()) }
 fn pj_newline() → PrintJumps { pj_to(l_nl_write(), t_closes()) }

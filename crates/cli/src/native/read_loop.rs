@@ -1,15 +1,14 @@
 //! The read profile's shared pieces (docs/native-read-until-eof-design.md,
 //! docs/native-stream-filter-design.md §6): the support library every program
-//! that reads stdin stands on, the read head, the failure tail and the write
-//! loop as layouts, the written file's facts, the claims' shape, and the
-//! decimal line's formatter. The one process that uses them is the stream
-//! filter (`read_filter`).
+//! that reads stdin stands on, the written file's facts, the code spelled as
+//! the certificate states it, the claims' shape, and the decimal line's
+//! formatter. The processes that use them are the stream filter
+//! (`read_filter`) and the command (`read_command`); their layouts are the
+//! library's, evaluated (`evaluate`), never restated here.
 use heather_elab::function_ir_source::generate_elaborated_piece_x86;
-use heather_elab::function_ir_x86_lower::{encode_structured, Gpr, Instruction, Placements};
+use heather_elab::function_ir_x86_lower::{encode_structured, Gpr, Placements};
 use heather_elab::heather_emit::Module;
 use heather_elab::Elaborator;
-
-use super::layout::{Layout, JMP, JS, JZ};
 
 // Bundled after the base support for a program that reads stdin: the loop
 // contract and its native certificates, fetched execution, the Linux trace
@@ -54,63 +53,42 @@ pub(super) fn component(value: &str, i: usize, count: usize) -> String {
     path
 }
 
-// TEST RAX, RAX: the lowering's encoder has no TEST of its own; the
-// certificate checks these bytes against the model's encoding.
-pub(super) const TEST: [u8; 3] = [0x48, 0x85, 0xc0];
-pub(super) const SYSCALL: [u8; 2] = [0x0f, 0x05];
-
-pub(super) fn mov(destination: Gpr, immediate: u64) -> Instruction { Instruction::MovRI { destination, immediate } }
-pub(super) fn copy(destination: Gpr, source: Gpr) -> Instruction { Instruction::MovRR { destination, source } }
-
 pub(super) fn literal(bytes: &[u8]) -> String {
     format!("[{}]", bytes.iter().map(|b| format!("@bitvec::BitVec::ofNat(8, {b})")).collect::<Vec<_>>().join(", "))
 }
 
-/// `a ++ (b ++ (… ++ z))`.
-pub(super) fn nested(parts: &[String]) -> String {
-    match parts {
-        [only] => only.clone(),
-        [first, rest @ ..] => format!("{first} ++ ({})", nested(rest)),
-        [] => "[]".into(),
+/// A piece longer than this is stated a chunk this long at a time: one
+/// declaration's fuel evaluates a few hundred bytes.
+pub(super) const CHUNK: usize = 400;
+
+/// `term`, whose value is `bytes`, spelled as the certificate states it: a
+/// literal, or chunks of one (x86_64_layout's `chunks_same`) so that no one
+/// declaration evaluates more than a chunk's worth past the last. Declares
+/// `{name}(): {term} = <spelled>` and returns the spelling.
+pub(super) fn spell(module: &mut Module, name: &str, term: &str, bytes: &[u8]) -> String {
+    let bytes_ty = "List<BitVec(8)>";
+    if bytes.len() <= CHUNK {
+        module.raw(format!("fn {name}_written() → {bytes_ty} {{ {} }}\ntheorem {name}(): {term} = {name}_written() {{ refl }}", literal(bytes)));
+        return format!("{name}_written()");
     }
+    // Chunk `j` is what is left after `j` chunks, taken a chunk long.
+    let after = |j: usize| format!("{term}{}", format!(".drop({CHUNK})").repeat(j));
+    let mut lits = Vec::new();
+    let mut proofs = Vec::new();
+    for (j, chunk) in bytes.chunks(CHUNK).enumerate() {
+        module.raw(format!("fn {name}_{j}_written() → {bytes_ty} {{ {} }}\ntheorem {name}_{j}(): {}.take({CHUNK}) = {name}_{j}_written() {{ refl }}",
+            literal(chunk), after(j)));
+        lits.push(format!("{name}_{j}_written()"));
+        proofs.push(format!("{name}_{j}()"));
+    }
+    let chain = lits.iter().rev().fold("Nil".to_string(), |rest, lit| format!("Cons({lit}, {rest})"));
+    let each = proofs.iter().rev().fold(format!("{name}_end()"), |rest, proof| format!("⟨{proof}, {rest}⟩"));
+    module.raw(format!("\
+theorem {name}_end(): {}.drop({CHUNK}) = Nil {{ refl }}
+theorem {name}(): {term} = layout_code({chain}, Nil) {{ chunks_same({CHUNK}, {chain}, {term}, {each}) }}", after(lits.len() - 1)));
+    format!("layout_code({chain}, Nil)")
 }
 
-/// elf64_read_pieces's read head at `read`: read(0, page, 4096) (the fd set first), TEST, JZ to
-/// `end` at end of file, JS to `failed` at a failed read.
-pub(super) fn read_head(end: &'static str, failed: &'static str) -> Layout {
-    use Gpr::*;
-    Layout::default().label("read").fixed("entry", super::encode(&[mov(Rdi, 0), mov(Rax, 0), mov(Rsi, 0x410000), mov(Rdx, 4096)])).syscall()
-        .fixed("test", TEST.to_vec()).jump("jz", JZ, end).jump("js", JS, failed)
-}
-
-/// elf64_read_pieces's failure tail at `at` (docs/native-syscall-failures-design.md
-/// §4): RAX + 4 is zero exactly at -EINTR, whose JZ (`jump`) goes back to
-/// `retry`; otherwise exit(1).
-pub(super) fn fail_tail(at: &'static str, jump: &'static str, retry: &'static str) -> Layout {
-    use Gpr::*;
-    Layout::default().label(at).fixed("retry", super::encode(&[mov(Rbx, 4), Instruction::AddRR { destination: Rax, source: Rbx }]))
-        .jump(jump, JZ, retry).fixed("fail", super::encode(&[mov(Rdi, 1), mov(Rax, 60)])).syscall()
-}
-
-/// elf64_write_loop's `write_loop_parts`: write(1, R9, R10) until nothing is
-/// left, EINTR retried, any other failure exit 1; the all-sent JZ goes to
-/// `done`, the loop's own exit(0) at `wexit` for a program's last write.
-pub(super) fn write_loop(done: &'static str) -> Layout {
-    use Gpr::*;
-    let encode = super::encode;
-    Layout::default().label("write").fixed("write", encode(&[copy(Rsi, R9), copy(Rdx, R10), mov(Rdi, 1), mov(Rax, 1)])).syscall()
-        .fixed("test", TEST.to_vec()).jump("wjs", JS, "wfailed")
-        .fixed("advance", encode(&[Instruction::AddRR { destination: R9, source: Rax }, Instruction::SubRR { destination: R10, source: Rax }]))
-        .jump("wjz", JZ, done).jump("wjmp", JMP, "write")
-        .then(fail_tail("wfailed", "wrjz", "write"))
-        .label("wexit").fixed("exit", encode(&[mov(Rdi, 0), mov(Rax, 60)])).syscall()
-}
-
-/// The write loop's jumps, `{prefix}_print_jumps()`.
-pub(super) fn print_jumps(module: &mut Module, prefix: &str, layout: &Layout) {
-    let d = |jump| format!("@bitvec::BitVec::ofNat(32, {})", layout.displacement(jump));
-    module.raw(format!("fn {prefix}_print_jumps() → PrintJumps {{ PrintJumps({}, {}, {}, {}) }}", d("wjs"), d("wjz"), d("wjmp"), d("wrjz")));
-}
 /// The written file's facts, for any layout of the read profile: the header
 /// the producer wrote, the code as written (`chain` proves `code_term =
 /// spelled`), its length (`length` proves `code_term.len() = total` over open

@@ -147,24 +147,6 @@ fn asm_jump_of(labels: Nat → Nat, here: Nat, item: Asm) → BitVec(32) {
 }
 fn asm_jump(labels: Nat → Nat, l: Prog) → BitVec(32) { match l { Start => BitVec::ofNat(0), At(before, _, item) => asm_jump_of(labels, prog_len(before), item) } }
 
-// Where a jump lands, by evaluation: both sides of the landing equation
-// are closed numbers, compared by `leb` each way and proved `= True` by
-// `refl`, so the kernel evaluates them and the elaborator does not. Meeting
-// them by conversion instead unfolds the two offsets' sums against each
-// other and runs out of fuel once the jump spans much of a program.
-fn asm_same(a, b: Nat) → Bool { a.leb(b) && b.leb(a) }
-theorem asm_same_eq(a, b: Nat, same: asm_same(a, b) = True): a = b {
-    let both = a.leb(b).is_true_and(b.leb(a), j(sym(same), λ x _ => x.IsTrue(), trivial));
-    a.le_antisym(b, a.leb_sound(b, both.left), b.leb_sound(a, both.right))
-}
-theorem asm_lands_forward(from, size: Nat, displacement: BitVec(32), to: Nat,
-    same: asm_same(from + size + displacement.sign_extend(32).toNat(), to) = True): JumpsForward(from, size, displacement, to) {
-    asm_same_eq(from + size + displacement.sign_extend(32).toNat(), to, same)
-}
-theorem asm_lands_back(from, size: Nat, displacement: BitVec(32), to: Nat,
-    same: asm_same(from + size + displacement.sign_extend(32).toNat(), to + Nat::pow(2, 64)) = True): JumpsBack(from, size, displacement, to) {
-    asm_same_eq(from + size + displacement.sign_extend(32).toNat(), to + Nat::pow(2, 64), same)
-}
 // A jump item's own landing, its offset evaluated once (`here` is shared
 // by the jump's start and its displacement).
 fn asm_item_lands(labels: Nat → Nat, here, size: Nat, item: Asm, to: Nat) → Bool {
@@ -368,20 +350,5 @@ theorem asm_code_same(fills: Nat → List<BitVec(8)>, labels: Nat → Nat, p: Pr
                     asm_code_same(fills, labels, before, rest, same.right)),
                 cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ b => back_code(rest) ++ b, same.left)),
         },
-    }
-}
-
-// A piece too long for one declaration, `n` bytes at a time: each chunk as
-// written, and nothing past the last. It needs nothing of how the piece is
-// made.
-fn ChunksAre(n: Nat, chunks: List<List<BitVec(8)>>) → List<BitVec(8)> → Type {
-    match chunks { Nil => λ bytes => bytes = Nil, Cons(c, cs) => λ bytes => (bytes.take(n) = c) ∧ ChunksAre(n, cs)(bytes.drop(n)) }
-}
-theorem chunks_same(n: Nat, chunks: List<List<BitVec(8)>>): (bytes: List<BitVec(8)>) → ChunksAre(n, chunks)(bytes) → bytes = layout_code(chunks, Nil) {
-    match chunks {
-        Nil => λ bytes each => each,
-        Cons(c, cs) => λ bytes each => trans(sym(List::take_append_drop(bytes, n)),
-            trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ x => x ++ bytes.drop(n), each.left),
-                cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ t => c ++ t, chunks_same(n, cs, bytes.drop(n), each.right)))),
     }
 }
