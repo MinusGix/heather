@@ -474,8 +474,10 @@ paper too).
   in the length, and a failed spine attempt still falls through to η.
   **The eliminators are typed too** (2026-10-20,
   `issues/conversion-typed-eliminator-congruence.md`): two neutral `case`s,
-  `elim_W`s, `elim_Wf`s and `J`s compare their scrutinees first, then the
-  motive's level, the motive and the branches, and never what the
+  `elim_W`s, `elim_Wf`s and `J`s compare the motive's level, the motive,
+  the branches and then their scrutinees (last, as before: comparing the
+  scrutinees first ran a function_ir certificate out of fuel), and
+  never what the
   scrutinee's type forces — `case`'s and `elim_W`'s `A`/`B`, `elim_Wf`'s
   shape and arity, `J`'s `A`/`a`/`u`, their levels included. The motive and
   branches are compared in the *left* elimination's stored telescope, which
