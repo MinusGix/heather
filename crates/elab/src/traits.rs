@@ -725,6 +725,31 @@ pub(crate) fn op_index_symbol(name: &str) -> Option<&str> {
 
 type Ren = HashMap<String, String>;
 
+/// Where a class holds an ancestor, for a diagnostic: untagged, or at the
+/// path of tags that reaches it.
+fn where_reached(path: &[String]) -> String {
+    if path.is_empty() {
+        "untagged".to_string()
+    } else {
+        format!("at `{}`", path.join("."))
+    }
+}
+
+/// The [`Ren`] key under which a parent's body symbol maps to the child's
+/// index argument. A NUL prefix keeps it apart from every identifier.
+fn symbol_key(symbol: &str) -> String {
+    format!("\0{symbol}")
+}
+
+/// A class's own body symbols read as its own index names — what the
+/// phantom-index check counts occurrences through.
+fn own_symbols(info: &ClassInfo) -> Ren {
+    info.valparams
+        .iter()
+        .filter_map(|p| p.symbol.as_ref().map(|s| (symbol_key(s), p.name.clone())))
+        .collect()
+}
+
 fn ren(m: &Ren, n: &str) -> String {
     m.get(n).cloned().unwrap_or_else(|| n.to_string())
 }
@@ -771,11 +796,17 @@ fn rename_expr(m: &Ren, e: &Expr) -> Expr {
     use ExprKind::*;
     let kind = match &e.kind {
         Var(n) => Var(ren(m, n)),
-        // A symbol is never renamed: it names nothing in the telescope a
-        // parent instantiation renames.
-        OpSymbol { symbol, fixity } => OpSymbol {
-            symbol: symbol.clone(),
-            fixity: *fixity,
+        // A symbol a parent's head bound (`op as ∙`) is that parent's index,
+        // so instantiating the parent spells it as the child's argument: the
+        // child installs its own symbols, not the parent's
+        // (`symbol_key`). Any other symbol names nothing in the telescope
+        // and is kept.
+        OpSymbol { symbol, fixity } => match m.get(&symbol_key(symbol)) {
+            Some(n) => Var(n.clone()),
+            None => OpSymbol {
+                symbol: symbol.clone(),
+                fixity: *fixity,
+            },
         },
         Univ { level } => Univ { level: *level },
         Num(n) => Num(n.clone()),
@@ -1222,30 +1253,81 @@ impl Elaborator {
         let mut fields: Vec<FieldDecl> = Vec::new();
         let mut owner: Vec<Option<String>> = Vec::new();
         let mut ancestors: Vec<ClassRef> = Vec::new();
-        let add_ancestor = |ancestors: &mut Vec<ClassRef>, candidate: ClassRef| -> R<()> {
+        // `direct` runs parallel to `ancestors`: whether the entry is one of
+        // this class's own written parents rather than something one of them
+        // brought along.
+        let mut direct: Vec<bool> = Vec::new();
+        let add_ancestor = |ancestors: &mut Vec<ClassRef>,
+                            direct: &mut Vec<bool>,
+                            candidate: ClassRef,
+                            is_direct: bool|
+         -> R<()> {
+            // One fiber reached by two paths. The same path is the ordinary
+            // diamond and collapses. Through different paths — a setoid
+            // inherited untagged and again inside a tagged monoid, or inside
+            // two tags — the class keeps one canonical copy: the untagged one
+            // if there is one, else the first reached. Every instance owes the
+            // other copies agreement with it (`shared_ancestor_agreements`),
+            // so two dictionaries for one fiber never register side by side.
+            // Writing one parent twice is still refused: that is an authoring
+            // slip, not a composition.
+            if let Some(i) = ancestors
+                .iter()
+                .position(|x| same_parent_fiber(x, &candidate))
+            {
+                let previous = &ancestors[i];
+                if previous.path == candidate.path {
+                    return Ok(());
+                }
+                if is_direct && direct[i] {
+                    return err(
+                        format!(
+                            "`{}` inherits the same `{}` fiber through two different parent \
+                             paths (`{}` and `{}`), so its canonical parent would be \
+                             ambiguous",
+                            d.name,
+                            candidate.name,
+                            previous.path.join("."),
+                            candidate.path.join(".")
+                        ),
+                        candidate.span,
+                    );
+                }
+                // Only a fiber with no data may be held twice. Copies of a
+                // proof-only dictionary differ in proofs, which no statement
+                // mentions; copies of a unit or an inverse are different
+                // terms in generic code, so a theorem stated through one copy
+                // would not apply through the other.
+                if let Some(info) = self.lookup_class(&candidate.name)
+                    && !self.proof_only(&info)
+                {
+                    return err(
+                        format!(
+                            "`{}` would hold the `{}` fiber `{}` twice, {} and {}: that \
+                             class carries data, and two copies of it are not convertible \
+                             in generic code. Inherit it once, and take any further law it \
+                             needs as a law class of its own",
+                            d.name,
+                            candidate.name,
+                            class_ref_written(&candidate),
+                            where_reached(&previous.path),
+                            where_reached(&candidate.path)
+                        ),
+                        candidate.span,
+                    );
+                }
+                if candidate.path.is_empty() {
+                    ancestors[i] = candidate;
+                    direct[i] = is_direct;
+                }
+                return Ok(());
+            }
             let Some(previous) = ancestors.iter().find(|x| x.name == candidate.name) else {
                 ancestors.push(candidate);
+                direct.push(is_direct);
                 return Ok(());
             };
-            if same_parent_fiber(previous, &candidate) && previous.path == candidate.path {
-                return Ok(());
-            }
-            if same_parent_fiber(previous, &candidate) {
-                return err(
-                    format!(
-                        "`{}` inherits the same `{}` fiber through two different parent \
-                         paths (`{}` and `{}`), so its canonical parent would be \
-                         ambiguous",
-                        d.name,
-                        candidate.name,
-                        previous.path.join("."),
-                        candidate.path.join(".")
-                    ),
-                    candidate.span,
-                );
-            }
-            if !previous.path.is_empty()
-                && !candidate.path.is_empty()
+            if (!previous.path.is_empty() || !candidate.path.is_empty())
                 && previous.path != candidate.path
             {
                 // A registry key can distinguish two written indices, but if
@@ -1266,11 +1348,11 @@ impl Elaborator {
                         let Some(param) = info.valparams.get(i) else {
                             continue;
                         };
+                        let spelled = own_symbols(&info);
                         if !same
-                            && info
-                                .fields
-                                .iter()
-                                .all(|field| ty_var_count(&field.ty, &param.name) == 0)
+                            && info.fields.iter().all(|field| {
+                                ty_var_count(&rename_ty(&spelled, &field.ty), &param.name) == 0
+                            })
                         {
                             return err(
                                 format!(
@@ -1285,6 +1367,7 @@ impl Elaborator {
                     }
                 }
                 ancestors.push(candidate);
+                direct.push(is_direct);
                 return Ok(());
             }
             err(
@@ -1313,10 +1396,11 @@ impl Elaborator {
                     path,
                     span: parent.span,
                 };
-                add_ancestor(&mut ancestors, a)?;
+                add_ancestor(&mut ancestors, &mut direct, a, false)?;
             }
             add_ancestor(
                 &mut ancestors,
+                &mut direct,
                 ClassRef {
                     name: parent.name.clone(),
                     args: parent.args.clone(),
@@ -1324,6 +1408,7 @@ impl Elaborator {
                     path: parent.path.clone(),
                     span: parent.span,
                 },
+                true,
             )?;
             if let Some(tag) = parent.path.first() {
                 if fields.iter().any(|f| f.name.as_deref() == Some(tag)) {
@@ -1660,6 +1745,9 @@ impl Elaborator {
                 );
             }
             rename.insert(p.name.clone(), n.clone());
+            if let Some(sym) = &p.symbol {
+                rename.insert(symbol_key(sym), n.clone());
+            }
         }
         Ok((info, rename))
     }
@@ -1679,6 +1767,34 @@ impl Elaborator {
             };
         }
         self.name_miss(name, format!("`{name}` is not a class in scope"), span)
+    }
+
+    /// Does every field of the class state a proposition rather than hold
+    /// data? A field whose type ends in a named type (the carrier, `Nat`, a
+    /// list), a universe, or an applied type former or class (a dictionary)
+    /// is data; one ending in an equation, a squash, or an applied relation
+    /// or predicate is a proof. Conservative: a proposition spelled as a
+    /// named type counts as data, which only refuses a sharing.
+    fn proof_only(&self, info: &ClassInfo) -> bool {
+        fn result(t: &Ty) -> &Ty {
+            match &t.kind {
+                TyKind::Fn { cod, .. } => result(cod),
+                _ => t,
+            }
+        }
+        info.fields.iter().all(|f| match &result(&f.ty).kind {
+            TyKind::Eq(..) | TyKind::Squash(_) => true,
+            TyKind::OfExpr(e) => match &e.kind {
+                ExprKind::App { head, .. } => match crate::inductive::named_head(head) {
+                    Some((name, _)) => {
+                        self.lookup_class(name).is_none() && self.lookup_inductive(name).is_none()
+                    }
+                    None => true,
+                },
+                _ => true,
+            },
+            _ => false,
+        })
     }
 
     pub(crate) fn lookup_class(&self, name: &str) -> Option<Rc<ClassInfo>> {
@@ -2768,6 +2884,36 @@ impl Elaborator {
                 })?;
         }
 
+        // 4b. Shared ancestors. A tagged parent may re-reach a proof-only
+        // ancestor the class already holds (a setoid `Equivalence(≈)` inside
+        // a tagged `MonoidRel(≈, *)` beside the flat one). One copy is
+        // canonical (`elab_class`), so every other copy owes agreement with
+        // it, field by field: two dictionaries for one fiber never register
+        // side by side.
+        let tag_ty = |r: &ClassRef| -> Ty {
+            let r = anc_ref(r);
+            heather_syntax::class_ty(r.name, r.args, r.index, span)
+        };
+        for (fname, (over, parent)) in self.shared_ancestor_agreements(&class, &lit_fields, &tag_ty, span) {
+            let stmt = Ty {
+                kind: TyKind::Eq(Box::new(over), Box::new(parent)),
+                span,
+            };
+            let name = format!("{prefix}::{}#shared", fname.replace('.', "#"));
+            let proof = span_expr(ExprKind::Refl, span);
+            self.synth_decl(DeclKind::Theorem, &name, d, stmt, proof, span)
+                .map_err(|e| ElabError::Elab {
+                    msg: format!(
+                        "`instance {written}`'s `{fname}` disagrees with the canonical \
+                         copy of the same field: a tagged parent that re-reaches an \
+                         ancestor the class already holds owes agreement with it, by \
+                         conversion. The kernel said: {}",
+                        e
+                    ),
+                    span,
+                })?;
+        }
+
         // 5. Canonical parents not yet registered — synthesized as this
         // instance's projections, sharing its very field expressions, so a
         // diamond collapses by construction (design §4.4).
@@ -2930,6 +3076,136 @@ impl Elaborator {
             self.semantic_commit_instance(key, info);
         }
         Ok(())
+    }
+
+    /// The agreements a class's shared ancestors owe at one instance. For
+    /// every ancestor reached inside a tagged parent at a fiber the class
+    /// keeps canonically at another path (untagged, or under an earlier tag),
+    /// each of that ancestor's fields, as (`tag.….field`, (the copy under the
+    /// tag, the canonical copy)). A copy under a tag is read through a `let`
+    /// at the tag's class type at this instance (`tag_ty`), as the
+    /// canonical-parent synthesis reads it.
+    fn shared_ancestor_agreements(
+        &self,
+        class: &ClassInfo,
+        lit_fields: &[RecordLitField],
+        tag_ty: &dyn Fn(&ClassRef) -> Ty,
+        span: Span,
+    ) -> Vec<(String, (Expr, Expr))> {
+        let dot = |recv: Expr, name: &str| {
+            span_expr(
+                ExprKind::Dot {
+                    recv: Box::new(recv),
+                    name: name.to_string(),
+                    tyargs: Vec::new(),
+                    args: None,
+                    named: Vec::new(),
+                },
+                span,
+            )
+        };
+        // Field `n` of the ancestor at `path`, out of this instance's fields.
+        let read = |path: &[String], n: &str| -> Option<Expr> {
+            let Some((root, inner)) = path.split_first() else {
+                return lit_fields.iter().find(|x| x.name == n).map(|x| x.expr.clone());
+            };
+            let value = lit_fields.iter().find(|x| x.name == *root)?;
+            let field = class.fields.iter().find(|x| x.name.as_deref() == Some(root.as_str()))?;
+            let tref = self.class_ref_of_ty(&field.ty)?;
+            let mut source = var("__tagged_parent", span);
+            for component in inner {
+                source = dot(source, component);
+            }
+            Some(span_expr(
+                ExprKind::Block(Box::new(Block {
+                    stmts: vec![Stmt::Let {
+                        name: "__tagged_parent".into(),
+                        ty: Some(tag_ty(&tref)),
+                        expr: value.expr.clone(),
+                        span,
+                        opaque: false,
+                    }],
+                    result: Box::new(dot(source, n)),
+                    ons: Vec::new(),
+                    span,
+                })),
+                span,
+            ))
+        };
+        let mut out: Vec<(String, (Expr, Expr))> = Vec::new();
+        for f in &class.fields {
+            let Some(tag) = f.name.clone() else { continue };
+            if !class.ancestors.iter().any(|a| a.path.len() == 1 && a.path[0] == tag) {
+                continue;
+            }
+            let Some(tref) = self.class_ref_of_ty(&f.ty) else { continue };
+            let Some(tinfo) = self.lookup_class(&tref.name) else { continue };
+            // The tag's class and its ancestors, spelled in this class's names.
+            let mut rename = Ren::new();
+            for (p, a) in tinfo.params.iter().zip(&tref.args) {
+                if let TyKind::Named { name, args } = &a.kind
+                    && args.is_empty()
+                {
+                    rename.insert(p.clone(), name.clone());
+                }
+            }
+            for (p, a) in tinfo.valparams.iter().zip(&tref.index) {
+                if let ExprKind::Var(n) = &a.kind {
+                    rename.insert(p.name.clone(), n.clone());
+                }
+            }
+            let own = ClassRef {
+                name: tinfo.name.clone(),
+                args: tinfo
+                    .params
+                    .iter()
+                    .map(|p| Ty {
+                        kind: TyKind::Named {
+                            name: p.clone(),
+                            args: vec![],
+                        },
+                        span,
+                    })
+                    .collect(),
+                index: tinfo.valparams.iter().map(|p| var(&p.name, span)).collect(),
+                path: Vec::new(),
+                span,
+            };
+            for c in std::iter::once(&own).chain(tinfo.ancestors.iter()) {
+                let mut path = vec![tag.clone()];
+                path.extend(c.path.iter().cloned());
+                let renamed = ClassRef {
+                    name: c.name.clone(),
+                    args: c.args.iter().map(|t| rename_ty(&rename, t)).collect(),
+                    index: c.index.iter().map(|e| rename_expr(&rename, e)).collect(),
+                    path,
+                    span,
+                };
+                let Some(canon) = class.ancestors.iter().find(|o| same_parent_fiber(o, &renamed)) else {
+                    continue;
+                };
+                if canon.path == renamed.path {
+                    continue;
+                }
+                let Some(cinfo) = self.lookup_class(&c.name) else { continue };
+                for n in cinfo.fields.iter().filter_map(|g| g.name.clone()) {
+                    let label = renamed.path.iter().map(String::as_str)
+                        .chain(std::iter::once(n.as_str()))
+                        .collect::<Vec<_>>()
+                        .join(".");
+                    // `Equivalence` and its own `Reflexive` parent name one
+                    // field; it owes one agreement.
+                    if out.iter().any(|(l, _)| *l == label) {
+                        continue;
+                    }
+                    let (Some(over), Some(canonical)) = (read(&renamed.path, &n), read(&canon.path, &n)) else {
+                        continue;
+                    };
+                    out.push((label, (over, canonical)));
+                }
+            }
+        }
+        out
     }
 
     /// Every binder of an instance has to be **recoverable**: a binder the goal

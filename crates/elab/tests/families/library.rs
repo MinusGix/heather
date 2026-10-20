@@ -40,6 +40,8 @@ mod lib_std_rat;
 mod lib_std_relation;
 #[path = "../lib_std_ring.rs"]
 mod lib_std_ring;
+#[path = "../lib_std_semiring.rs"]
+mod lib_std_semiring;
 #[path = "../pos_binder_sugar.rs"]
 mod pos_binder_sugar;
 #[path = "../lib_std_string.rs"]
