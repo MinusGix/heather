@@ -33,10 +33,11 @@ import int;
 import omega;
 import relation_props;
 import algebra;
-import algebra_rel::{Semigroup, Commutative};
+import algebra_rel;
 import order;
 import ordered_field;
 import rat;
+export algebra::{Numeral};
 
 record CReal {
     seq: Nat → Rat,
@@ -67,7 +68,7 @@ theorem CReal::regular_close(self x: CReal, k, m, n: Nat, hm: k + k + 1 <= m, hn
 theorem CReal::same_of_terms(self x, y: CReal, terms: (n: Nat) → x.seq(n) ≈ y.seq(n)): x ≈ y {
     λ k => Exists(0, λ n start => calc {
         (x.seq(n) -y.seq(n)).abs() ≈ (y.seq(n) -y.seq(n)).abs() := Rat::abs_respects(Rat::sub_respects(terms(n), y.seq(n).same_refl())),
-        ≈ Rat::zero() := y.seq(n).abs_sub_self(),
+        ≈ 0 := y.seq(n).abs_sub_self(),
         <= Rat::inv_succ(k) := Rat::le_of_lt(Rat::inv_succ_pos(k)),
     })
 }
@@ -183,15 +184,17 @@ theorem CReal::bishop_of_same({x, y: CReal}, h: x ≈ y): x.BishopSame(y) {
 
 theorem CReal::const_regular(q: Rat, m, n: Nat): (q -q).abs() <= Rat::inv_succ(m) + Rat::inv_succ(n) {
     calc {
-        (q -q).abs() ≈ Rat::zero() := q.abs_sub_self(),
+        (q -q).abs() ≈ 0 := q.abs_sub_self(),
         <= Rat::inv_succ(m) + Rat::inv_succ(n) := omega,
     }
 }
 
 fn CReal::ofRat(q: Rat) → CReal { CReal(λ n => q, λ m n => CReal::const_regular(q, m, n)) }
 
-fn CReal::zero() → CReal { CReal::ofRat(Rat::zero()) }
-fn CReal::one() → CReal { CReal::ofRat(Rat::one()) }
+// A numeral at `CReal` is the rational numeral embedded: `0`, `1`, `2 * x`.
+// As at `Rat` it is the only spelling of a constant, since evidence search
+// compares spellings (std/rat's note on `Numeral<Rat>`).
+instance Numeral<CReal> { ofNat := λ (n: Nat) => CReal::ofRat(Rat::ofInt(OfNat(n))) }
 
 theorem CReal::ofRat_respects({p, q: Rat}, h: p ≈ q): CReal::ofRat(p) ≈ CReal::ofRat(q) {
     CReal::ofRat(p).same_of_terms(CReal::ofRat(q), λ n => h)
@@ -293,15 +296,15 @@ theorem CReal::add_comm(self x, y: CReal): x + y ≈ y + x {
     (x + y).same_of_terms(y + x, λ n => x.seq(n + n + 1).add_comm(y.seq(n + n + 1)))
 }
 
-theorem CReal::add_neg(self x: CReal): x + -x ≈ CReal::zero() {
-    (x + -x).same_of_terms(CReal::zero(), λ n => x.seq(n + n + 1).add_neg())
+theorem CReal::add_neg(self x: CReal): x + -x ≈ 0 {
+    (x + -x).same_of_terms(0, λ n => x.seq(n + n + 1).add_neg())
 }
 
-theorem CReal::add_zero(self x: CReal): x + CReal::zero() ≈ x {
-    (x + CReal::zero()).same_of_close(x, λ k n from => {
+theorem CReal::add_zero(self x: CReal): x + 0 ≈ x {
+    (x + 0).same_of_close(x, λ k n from => {
         let far: (k + k + 1 <= n + n + 1) = omega;
         calc {
-            ((x.seq(n + n + 1) + Rat::zero()) -x.seq(n)).abs()
+            ((x.seq(n + n + 1) + 0) -x.seq(n)).abs()
                 ≈ (x.seq(n + n + 1) -x.seq(n)).abs() := Rat::abs_respects(Rat::sub_respects(x.seq(n + n + 1).add_zero(), x.seq(n).same_refl())),
                 <= Rat::inv_succ(k) := x.regular_close(k, n + n + 1, n, far, from),
         }
@@ -320,20 +323,20 @@ theorem CReal::add_assoc(self x, y, z: CReal): (x + y) + z ≈ x + (y + z) {
         let at_j: (k + k + 1 + (k + k + 1) + 1 <= j) = omega;
         let dx: ((x.seq(j) -x.seq(i)).abs() <= half) = x.regular_close(k + k + 1, j, i, at_j, at_i);
         let dz: ((z.seq(i) -z.seq(j)).abs() <= half) = z.regular_close(k + k + 1, i, j, at_i, at_j);
-        let dy: ((y.seq(j) -y.seq(j)).abs() <= Rat::zero()) = Rat::le_of_same(y.seq(j).abs_sub_self());
+        let dy: ((y.seq(j) -y.seq(j)).abs() <= 0) = Rat::le_of_same(y.seq(j).abs_sub_self());
         calc {
             (((x.seq(j) + y.seq(j)) + z.seq(i)) -(x.seq(i) + (y.seq(j) + z.seq(j)))).abs()
                 ≈ ((x.seq(j) + (y.seq(j) + z.seq(i))) -(x.seq(i) + (y.seq(j) + z.seq(j)))).abs()
                     := Rat::abs_respects(Rat::sub_respects(x.seq(j).add_assoc(y.seq(j), z.seq(i)), (x.seq(i) + (y.seq(j) + z.seq(j))).same_refl())),
-                <= half + (Rat::zero() + half) := Rat::dist_add_le(dx, Rat::dist_add_le(dy, dz)),
-                ≈ half + (half + Rat::zero()) := Rat::add_respects(half.same_refl(), Rat::zero().add_comm(half)),
+                <= half + (0 + half) := Rat::dist_add_le(dx, Rat::dist_add_le(dy, dz)),
+                ≈ half + (half + 0) := Rat::add_respects(half.same_refl(), Rat::add_comm(0, half)),
                 ≈ half + half := Rat::add_respects(half.same_refl(), half.add_zero()),
                 ≈ Rat::inv_succ(k) := Rat::inv_succ_half(k),
         }
     })
 }
 
-instance Semigroup<CReal>(CReal::Same, CReal::add) {
+instance SemigroupRel<CReal>(CReal::Same, CReal::add) {
     assoc := CReal::add_assoc,
 }
 
@@ -369,7 +372,7 @@ fn CReal::bound(self x: CReal) → Nat { x.seq(0).num.natAbs() + 2 }
 theorem CReal::bound_le(self x: CReal, n: Nat): x.seq(n).abs() <= Rat::ofInt(OfNat(x.bound())) {
     let a = x.seq(0);
     let top = Rat::ofInt(OfNat(a.num.natAbs()));
-    let two = Rat::one() + Rat::one();
+    let two: Rat = 1 + 1;
     calc {
         x.seq(n).abs() ≈ ((x.seq(n) -a) + a).abs() := Rat::abs_respects(Rat::same_sym(x.seq(n).sub_add_cancel(a))),
         <= (x.seq(n) -a).abs() + a.abs() := (x.seq(n) -a).abs_triangle(a),
@@ -614,26 +617,26 @@ theorem CReal::mul_add_distr(self x, y, z: CReal): x * (y + z) ≈ x * y + x * z
 }
 
 // x * 1 reads x further out, within 1/(k+1) of x_n once n is past 2k+1.
-theorem CReal::mul_one(self x: CReal): x * CReal::one() ≈ x {
-    (x * CReal::one()).same_of_close(x, λ k n from => {
-        let a = x.mul_at(CReal::one(), n);
-        let far: (k + k + 1 <= a) = (k + k + 1).le_trans(n, a, from, x.mul_at_ge(CReal::one(), n));
+theorem CReal::mul_one(self x: CReal): x * 1 ≈ x {
+    (x * 1).same_of_close(x, λ k n from => {
+        let a = x.mul_at(1, n);
+        let far: (k + k + 1 <= a) = (k + k + 1).le_trans(n, a, from, x.mul_at_ge(1, n));
         calc {
-            (x.seq(a) * Rat::one() -x.seq(n)).abs() ≈ (x.seq(a) -x.seq(n)).abs()
+            (x.seq(a) * 1 -x.seq(n)).abs() ≈ (x.seq(a) -x.seq(n)).abs()
                 := Rat::abs_respects(Rat::sub_respects(x.seq(a).mul_one(), x.seq(n).same_refl())),
             <= Rat::inv_succ(k) := x.regular_close(k, a, n, far, from),
         }
     })
 }
 
-theorem CReal::mul_zero(self x: CReal): x * CReal::zero() ≈ CReal::zero() {
-    (x * CReal::zero()).same_of_terms(CReal::zero(), λ n => {
-        let t = x.seq(x.mul_at(CReal::zero(), n));
-        Rat::same_trans(t.mul_comm(Rat::zero()), t.zero_mul())
+theorem CReal::mul_zero(self x: CReal): x * 0 ≈ 0 {
+    (x * 0).same_of_terms(0, λ n => {
+        let t = x.seq(x.mul_at(0, n));
+        Rat::same_trans(t.mul_comm(0), t.zero_mul())
     })
 }
 
-instance Semigroup<CReal>(CReal::Same, CReal::mul) {
+instance SemigroupRel<CReal>(CReal::Same, CReal::mul) {
     assoc := CReal::mul_assoc,
 }
 
@@ -728,10 +731,10 @@ theorem CReal::lt_irrefl(self x: CReal): ¬(x < x) {
                 let swapped = calc {
                     step + a ≈ a + step := step.add_comm(a),
                     <= a := gap(s, s.le_refl()),
-                    ≈ a + Rat::zero() := Rat::same_sym(a.add_zero()),
-                    ≈ Rat::zero() + a := a.add_comm(Rat::zero()),
+                    ≈ a + 0 := Rat::same_sym(a.add_zero()),
+                    ≈ 0 + a := a.add_comm(0),
                 };
-                Rat::not_le_of_lt(Rat::inv_succ_pos(k), step.add_le_cancel_r(Rat::zero(), a, swapped))
+                Rat::not_le_of_lt(Rat::inv_succ_pos(k), step.add_le_cancel_r(0, a, swapped))
             },
         },
     }
@@ -870,8 +873,8 @@ theorem CReal::lt_of_ofRat_lt({p, q: Rat}, h: CReal::ofRat(p) < CReal::ofRat(q))
     match h {
         Exists(k, rest) => match rest {
             Exists(s, gap) => calc {
-                p ≈ p + Rat::zero() := Rat::same_sym(p.add_zero()),
-                < p + Rat::inv_succ(k) := Rat::zero().add_lt_mono_l(Rat::inv_succ(k), p, Rat::inv_succ_pos(k)),
+                p ≈ p + 0 := Rat::same_sym(p.add_zero()),
+                < p + Rat::inv_succ(k) := Rat::add_lt_mono_l(0, Rat::inv_succ(k), p, Rat::inv_succ_pos(k)),
                 <= q := gap(s, s.le_refl()),
             },
         },
@@ -893,7 +896,7 @@ fn CReal::Away(x: CReal, k, start: Nat) → Type {
     (n: Nat) → start <= n → Rat::inv_succ(k) <= x.seq(n).abs()
 }
 
-theorem CReal::away_of_apart(self x: CReal, h: x.Apart(CReal::zero())): ∃ k: Nat, ∃ start: Nat, x.Away(k, start) {
+theorem CReal::away_of_apart(self x: CReal, h: x.Apart(0)): ∃ k: Nat, ∃ start: Nat, x.Away(k, start) {
     match h {
         Inl(below) => match below {
             Exists(k, rest) => match rest {
@@ -956,7 +959,7 @@ fn CReal::inv_gap(self x: CReal, k, start: Nat, gap: x.Away(k, start)) → CReal
 // (docs/inverse-power-notation-design.md): a local apartness, a local
 // `0 < x` or `x < 0` (`apart_of_positive`), or a rational apart from zero
 // (`ofRat_apart`).
-fn CReal::inv(self x: CReal, h: x.Apart(CReal::zero()) := infer) → CReal {
+fn CReal::inv(self x: CReal, h: x.Apart(0) := infer) → CReal {
     let g = x.away_of_apart(h);
     x.inv_gap(g.witness, g.proof.witness, g.proof.proof)
 }
@@ -991,7 +994,7 @@ theorem CReal::inv_gap_respects({x, x2: CReal}, hx: x ≈ x2, k, s: Nat, gap: x.
 // x * x⁻¹ reads x at a and the inverse at a, which reads x at b further out.
 // The term x_b · x_b⁻¹ is exactly 1, so the product's distance from 1 is
 // x_b⁻¹ (at most k+1) times x_a - x_b, which regularity makes small.
-theorem CReal::mul_inv_gap(self x: CReal, k, s: Nat, gap: x.Away(k, s)): x * x.inv_gap(k, s, gap) ≈ CReal::one() {
+theorem CReal::mul_inv_gap(self x: CReal, k, s: Nat, gap: x.Away(k, s)): x * x.inv_gap(k, s, gap) ≈ 1 {
     let y = x.inv_gap(k, s, gap);
     λ K => {
         let j = (k + 1) * (K + 1) + K;
@@ -1005,7 +1008,7 @@ theorem CReal::mul_inv_gap(self x: CReal, k, s: Nat, gap: x.Away(k, s)): x * x.i
             let d = x.seq(a) -x.seq(b);
             let near: (d.abs() <= Rat::inv_succ(j)) = x.regular_close(j, a, b, at_a, at_b);
             calc {
-                (x.seq(a) * u -Rat::one()).abs() ≈ (u * d).abs()
+                (x.seq(a) * u -1).abs() ≈ (u * d).abs()
                     := Rat::abs_respects(Rat::mul_sub_one_of_inverse(x.seq(b).mul_recip(Rat::nonzero_of_gap(k, away)))),
                 ≈ u.abs() * d.abs() := u.abs_mul(d),
                 <= Rat::ofInt(OfNat(k + 1)) * d.abs() := Rat::mul_le_mono_r(Rat::recip_abs_le(k, away), d.abs_nonneg()),
@@ -1016,7 +1019,7 @@ theorem CReal::mul_inv_gap(self x: CReal, k, s: Nat, gap: x.Away(k, s)): x * x.i
 }
 
 // The laws at an apartness proof: whichever gaps the two proofs carry.
-theorem CReal::inv_respects({x, x2: CReal}, hx: x ≈ x2, h: x.Apart(CReal::zero()) := infer, h2: x2.Apart(CReal::zero()) := infer):
+theorem CReal::inv_respects({x, x2: CReal}, hx: x ≈ x2, h: x.Apart(0) := infer, h2: x2.Apart(0) := infer):
     x⁻¹ ≈ x2⁻¹
 {
     let g = x.away_of_apart(h);
@@ -1024,17 +1027,17 @@ theorem CReal::inv_respects({x, x2: CReal}, hx: x ≈ x2, h: x.Apart(CReal::zero
     CReal::inv_gap_respects(hx, g.witness, g.proof.witness, g.proof.proof, g2.witness, g2.proof.witness, g2.proof.proof)
 }
 
-theorem CReal::mul_inv(self x: CReal, h: x.Apart(CReal::zero()) := infer): x * x⁻¹ ≈ CReal::one() {
+theorem CReal::mul_inv(self x: CReal, h: x.Apart(0) := infer): x * x⁻¹ ≈ 1 {
     let g = x.away_of_apart(h);
     x.mul_inv_gap(g.witness, g.proof.witness, g.proof.proof)
 }
 
-theorem CReal::inv_mul(self x: CReal, h: x.Apart(CReal::zero()) := infer): x⁻¹ * x ≈ CReal::one() {
+theorem CReal::inv_mul(self x: CReal, h: x.Apart(0) := infer): x⁻¹ * x ≈ 1 {
     CReal::same_trans(x⁻¹.mul_comm(x), x.mul_inv())
 }
 
 // A rational apart from zero is a real apart from zero.
-evidence theorem CReal::ofRat_apart({q: Rat}, h: q.Apart(Rat::zero()) := infer): CReal::ofRat(q).Apart(CReal::zero()) {
+evidence theorem CReal::ofRat_apart({q: Rat}, h: q.Apart(0) := infer): CReal::ofRat(q).Apart(0) {
     match h {
         Inl(lt) => Inl(CReal::ofRat_lt(lt)),
         Inr(gt) => Inr(CReal::ofRat_lt(gt)),
@@ -1043,7 +1046,7 @@ evidence theorem CReal::ofRat_apart({q: Rat}, h: q.Apart(Rat::zero()) := infer):
 
 // The embedding commutes with the inverse, term by term: a constant
 // sequence reads the same wherever the gap sends it.
-theorem CReal::ofRat_inv(q: Rat, h: q.Apart(Rat::zero()) := infer): CReal::ofRat(q)⁻¹ ≈ CReal::ofRat(q⁻¹) {
+theorem CReal::ofRat_inv(q: Rat, h: q.Apart(0) := infer): CReal::ofRat(q)⁻¹ ≈ CReal::ofRat(q⁻¹) {
     CReal::ofRat(q)⁻¹.same_of_terms(CReal::ofRat(q⁻¹), λ n => q⁻¹.same_refl())
 }
 
@@ -1174,7 +1177,7 @@ theorem CReal::add_lt_mono({x, x2, y, y2: CReal}, hx: x < x2, hy: y < y2): x + y
 theorem CReal::add_neg_cancel_r(self x, y: CReal): (x + y) + -y ≈ x {
     calc {
         (x + y) + -y ≈ x + (y + -y) := x.add_assoc(y, -y),
-        ≈ x + CReal::zero() := CReal::add_respects(x.same_refl(), y.add_neg()),
+        ≈ x + 0 := CReal::add_respects(x.same_refl(), y.add_neg()),
         ≈ x := x.add_zero(),
     }
 }
@@ -1223,34 +1226,22 @@ theorem CReal::add_lt_cancel({x, x2, y, y2: CReal}, h: x + y < x2 + y2): x < x2 
 }
 
 // Signs of a sum.
-theorem CReal::zero_add_zero(): CReal::zero() + CReal::zero() ≈ CReal::zero() { CReal::zero().add_zero() }
+theorem CReal::zero_add_zero(): CReal::Same(0 + 0, 0) { CReal::add_zero(0) }
 
-theorem CReal::add_pos({x, y: CReal}, hx: CReal::zero() < x, hy: CReal::zero() < y): CReal::zero() < x + y {
-    calc {
-        CReal::zero() ≈ CReal::zero() + CReal::zero() := CReal::same_sym(CReal::zero_add_zero()),
-        < x + y := CReal::add_lt_mono(hx, hy),
-    }
+theorem CReal::add_pos({x, y: CReal}, hx: 0 < x, hy: 0 < y): 0 < x + y {
+    CReal::lt_respects(CReal::zero_add_zero(), (x + y).same_refl(), CReal::add_lt_mono(hx, hy))
 }
 
-theorem CReal::add_pos_of_nonneg_of_pos({x, y: CReal}, hx: CReal::zero() <= x, hy: CReal::zero() < y): CReal::zero() < x + y {
-    calc {
-        CReal::zero() ≈ CReal::zero() + CReal::zero() := CReal::same_sym(CReal::zero_add_zero()),
-        < x + y := CReal::add_le_lt_mono(hx, hy),
-    }
+theorem CReal::add_pos_of_nonneg_of_pos({x, y: CReal}, hx: 0 <= x, hy: 0 < y): 0 < x + y {
+    CReal::lt_respects(CReal::zero_add_zero(), (x + y).same_refl(), CReal::add_le_lt_mono(hx, hy))
 }
 
-theorem CReal::add_nonneg({x, y: CReal}, hx: CReal::zero() <= x, hy: CReal::zero() <= y): CReal::zero() <= x + y {
-    calc {
-        CReal::zero() ≈ CReal::zero() + CReal::zero() := CReal::same_sym(CReal::zero_add_zero()),
-        <= x + y := CReal::add_le_mono(hx, hy),
-    }
+theorem CReal::add_nonneg({x, y: CReal}, hx: 0 <= x, hy: 0 <= y): 0 <= x + y {
+    CReal::le_respects(CReal::zero_add_zero(), (x + y).same_refl(), CReal::add_le_mono(hx, hy))
 }
 
-theorem CReal::pos_of_add_pos({x, y: CReal}, h: CReal::zero() < x + y): CReal::zero() < x ∨ CReal::zero() < y {
-    CReal::add_lt_cancel(calc {
-        CReal::zero() + CReal::zero() ≈ CReal::zero() := CReal::zero_add_zero(),
-        < x + y := h,
-    })
+theorem CReal::pos_of_add_pos({x, y: CReal}, h: 0 < x + y): 0 < x ∨ 0 < y {
+    CReal::add_lt_cancel(CReal::lt_respects(CReal::same_sym(CReal::zero_add_zero()), (x + y).same_refl(), h))
 }
 
 // ---------------------------------------------------------------------------
@@ -1336,22 +1327,22 @@ theorem CReal::bishop_of_le({x, y: CReal}, h: x <= y): x.BishopLe(y) {
 // rules, so that the search through them shrinks its goal; a local
 // `h: CReal::zero() < x` is one by conversion.
 
-fn CReal::Positive(self x: CReal) → Type { CReal::zero() < x }
-fn CReal::Negative(self x: CReal) → Type { x < CReal::zero() }
+fn CReal::Positive(self x: CReal) → Type { 0 < x }
+fn CReal::Negative(self x: CReal) → Type { x < 0 }
 
-evidence theorem CReal::apart_of_positive({x: CReal}, h: x.Positive() := infer): x.Apart(CReal::zero()) { Inr(h) }
-evidence theorem CReal::apart_of_negative({x: CReal}, h: x.Negative() := infer): x.Apart(CReal::zero()) { Inl(h) }
+evidence theorem CReal::apart_of_positive({x: CReal}, h: x.Positive() := infer): x.Apart(0) { Inr(h) }
+evidence theorem CReal::apart_of_negative({x: CReal}, h: x.Negative() := infer): x.Apart(0) { Inl(h) }
 
 fn CReal::npow(self x: CReal, n: Nat) → CReal {
     match n {
-        Zero => CReal::one(),
+        Zero => 1,
         Succ(k) => x.npow(k) * x,
     }
 }
 
 theorem CReal::npow_respects({x, x2: CReal}, hx: x ≈ x2, n: Nat): x.npow(n) ≈ x2.npow(n) {
     match n {
-        Zero => CReal::one().same_refl(),
+        Zero => CReal::same_refl(1),
         Succ(k) => CReal::mul_respects(CReal::npow_respects(hx, k), hx),
     }
 }
@@ -1372,7 +1363,7 @@ theorem CReal::npow_add(self x: CReal, m, n: Nat): x.npow(m + n) ≈ x.npow(m) *
 fn CReal::PowOk(x: CReal, n: Int) → Type {
     match n {
         OfNat(_) => True,
-        NegSucc(_) => x.Apart(CReal::zero()),
+        NegSucc(_) => x.Apart(0),
     }
 }
 
@@ -1389,16 +1380,16 @@ designation ^ at CReal := CReal::pow
 
 theorem CReal::pow_ofNat(self x: CReal, n: Nat): x ^ OfNat(n) = x.npow(n) { refl }
 
-theorem CReal::pow_negSucc(self x: CReal, k: Nat, h: x.Apart(CReal::zero()) := infer): x ^ NegSucc(k) = x⁻¹.npow(Succ(k)) { refl }
+theorem CReal::pow_negSucc(self x: CReal, k: Nat, h: x.Apart(0) := infer): x ^ NegSucc(k) = x⁻¹.npow(Succ(k)) { refl }
 
-theorem CReal::pow_zero(self x: CReal): x ^ 0 ≈ CReal::one() { CReal::one().same_refl() }
+theorem CReal::pow_zero(self x: CReal): x ^ 0 ≈ 1 { CReal::same_refl(1) }
 
-theorem CReal::pow_one(self x: CReal): x ^ 1 ≈ x { CReal::same_trans(CReal::one().mul_comm(x), x.mul_one()) }
+theorem CReal::pow_one(self x: CReal): x ^ 1 ≈ x { CReal::same_trans(CReal::mul_comm(1, x), x.mul_one()) }
 
 theorem CReal::pow_two(self x: CReal): x ^ 2 ≈ x * x { CReal::mul_respects(x.pow_one(), x.same_refl()) }
 
 // The inverse is the power at -1.
-theorem CReal::pow_neg_one(self x: CReal, h: x.Apart(CReal::zero()) := infer): x ^ (-1) ≈ x⁻¹ { x⁻¹.pow_one() }
+theorem CReal::pow_neg_one(self x: CReal, h: x.Apart(0) := infer): x ^ (-1) ≈ x⁻¹ { x⁻¹.pow_one() }
 
 // ---------------------------------------------------------------------------
 // Order and multiplication (docs/creal-mul-order-round.md). A product reads
@@ -1411,7 +1402,7 @@ theorem CReal::pow_neg_one(self x: CReal, h: x.Apart(CReal::zero()) := infer): x
 // was chosen to absorb, too small for any gap below zero. The monotone forms
 // are those two signs applied to the difference: y*z - x*z ≈ (y -x)*z.
 
-theorem CReal::mul_pos({x, y: CReal}, hx: CReal::zero() < x, hy: CReal::zero() < y): CReal::zero() < x * y {
+theorem CReal::mul_pos({x, y: CReal}, hx: 0 < x, hy: 0 < y): 0 < x * y {
     match hx {
         Exists(k, rx) => match rx {
             Exists(s, gx) => match hy {
@@ -1427,7 +1418,7 @@ theorem CReal::mul_pos({x, y: CReal}, hx: CReal::zero() < x, hy: CReal::zero() <
                         let ly: (fl <= y.seq(a)) = Rat::le_trans(Rat::le_of_same(Rat::same_sym(Rat::zero_add(fl))), gy(a, at_t));
                         let step = Rat::inv_succ(k * (l + 1) + l);
                         calc {
-                            Rat::zero() + step ≈ step := Rat::zero_add(step),
+                            0 + step ≈ step := Rat::zero_add(step),
                             ≈ fk * fl := Rat::same_sym(Rat::inv_succ_mul(k, l)),
                             <= x.seq(a) * y.seq(a) := Rat::mul_le_mul(lx, ly, Rat::le_of_lt(Rat::inv_succ_pos(k)), Rat::le_of_lt(Rat::inv_succ_pos(l))),
                         }
@@ -1443,7 +1434,7 @@ theorem CReal::mul_pos({x, y: CReal}, hx: CReal::zero() < x, hy: CReal::zero() <
 // 1/(j+1) and x_a lies in (0, l+1], l the bound of x, so y_a is at least
 // 1/((l+1)(j+1)) (`Rat::le_of_mul_le_bounded`). That is one term, and a
 // is chosen far enough out for one term to be enough (`lt_of_term`).
-theorem CReal::pos_of_mul_pos({x, y: CReal}, hx: CReal::zero() < x, h: CReal::zero() < x * y): CReal::zero() < y {
+theorem CReal::pos_of_mul_pos({x, y: CReal}, hx: 0 < x, h: 0 < x * y): 0 < y {
     match hx {
         Exists(k, rx) => match rx {
             Exists(s, gx) => match h {
@@ -1462,13 +1453,13 @@ theorem CReal::pos_of_mul_pos({x, y: CReal}, hx: CReal::zero() < x, h: CReal::ze
                         let fk = Rat::inv_succ(k);
                         let fj = Rat::inv_succ(j);
                         let lx: (fk <= x.seq(a)) = Rat::le_trans(Rat::le_of_same(Rat::same_sym(Rat::zero_add(fk))), gx(a, at_s));
-                        let px: (Rat::zero() < x.seq(a)) = Rat::lt_of_lt_of_le(Rat::inv_succ_pos(k), lx);
+                        let px: (0 < x.seq(a)) = Rat::lt_of_lt_of_le(Rat::inv_succ_pos(k), lx);
                         let bx: (x.seq(a) <= Rat::ofInt(OfNat(l + 1))) =
                             Rat::le_trans(x.seq(a).le_abs(), x.bound_below(a, l + 1, l.le_succ_r(l, l.le_refl())));
                         let lp: (fj <= x.seq(a) * y.seq(a)) = Rat::le_trans(Rat::le_of_same(Rat::same_sym(Rat::zero_add(fj))), gp(n, at_t));
                         let ly: (Rat::inv_succ(m) <= y.seq(a)) = Rat::le_of_mul_le_bounded(j, l, px, bx, lp);
                         let step = Rat::inv_succ(m + m + 1);
-                        CReal::zero().lt_of_term(y, m, a, far, Rat::le_trans(Rat::le_of_same(Rat::zero_add(step)),
+                        CReal::lt_of_term(0, y, m, a, far, Rat::le_trans(Rat::le_of_same(Rat::zero_add(step)),
                             Rat::le_trans(Rat::inv_succ_antitone(m, m + m + 1, m.le_add_l(m + 1)), ly)))
                     },
                 },
@@ -1477,7 +1468,7 @@ theorem CReal::pos_of_mul_pos({x, y: CReal}, hx: CReal::zero() < x, h: CReal::ze
     }
 }
 
-theorem CReal::mul_nonneg({x, y: CReal}, hx: CReal::zero() <= x, hy: CReal::zero() <= y): CReal::zero() <= x * y {
+theorem CReal::mul_nonneg({x, y: CReal}, hx: 0 <= x, hy: 0 <= y): 0 <= x * y {
     let bx = CReal::bishop_of_le(hx);
     let by = CReal::bishop_of_le(hy);
     λ back => match back {
@@ -1492,20 +1483,17 @@ theorem CReal::mul_nonneg({x, y: CReal}, hx: CReal::zero() <= x, hy: CReal::zero
                 let p = x.seq(a) * y.seq(a);
                 let size_x: (x.seq(a).abs() <= big) = x.bound_below(a, l + 1, x.bound().le_succ_r(l, x.bound().le_max_l(y.bound())));
                 let size_y: (y.seq(a).abs() <= big) = y.bound_below(a, l + 1, y.bound().le_succ_r(l, x.bound().le_max_r(y.bound())));
-                let f_up: (Rat::zero() <= f) = Rat::le_of_lt(Rat::inv_succ_pos(a));
-                let pos_f = calc {
-                    Rat::zero() ≈ Rat::zero() + Rat::zero() := Rat::same_sym(Rat::zero().add_zero()),
-                    <= f + f := Rat::add_le_mono(f_up, f_up),
-                };
+                let f_up: (0 <= f) = Rat::le_of_lt(Rat::inv_succ_pos(a));
+                let pos_f: (0 <= f + f) = Rat::le_respects(Rat::add_zero(0), (f + f).same_refl(), Rat::add_le_mono(f_up, f_up));
                 let near = calc {
-                    Rat::zero() <= p + big * (f + f) := Rat::mul_nonneg_approx(bx(a), by(a), pos_f, size_x, size_y),
+                    0 <= p + big * (f + f) := Rat::mul_nonneg_approx(bx(a), by(a), pos_f, size_x, size_y),
                     ≈ p + (big * f + big * f) := Rat::add_respects(p.same_refl(), big.mul_add_distr(f, f)),
                     ≈ p + Rat::inv_succ(n) := Rat::add_respects(p.same_refl(), Rat::scale_inv_succ_half(l, n)),
                 };
                 let g = Rat::inv_succ(j);
                 let below = calc {
                     g + p ≈ p + g := g.add_comm(p),
-                    <= Rat::zero() := gap(n, s.le_max_l(j + 1)),
+                    <= 0 := gap(n, s.le_max_l(j + 1)),
                     <= p + Rat::inv_succ(n) := near,
                     ≈ Rat::inv_succ(n) + p := p.add_comm(Rat::inv_succ(n)),
                 };
@@ -1516,15 +1504,15 @@ theorem CReal::mul_nonneg({x, y: CReal}, hx: CReal::zero() <= x, hy: CReal::zero
     }
 }
 
-theorem CReal::zero_add(self x: CReal): CReal::zero() + x ≈ x {
-    CReal::same_trans(CReal::zero().add_comm(x), x.add_zero())
+theorem CReal::zero_add(self x: CReal): 0 + x ≈ x {
+    CReal::same_trans(CReal::add_comm(0, x), x.add_zero())
 }
 
 theorem CReal::sub_add_cancel(self x, y: CReal): (x -y) + y ≈ x {
     calc {
         (x + -y) + y ≈ x + (-y + y) := x.add_assoc(-y, y),
         ≈ x + (y + -y) := CReal::add_respects(x.same_refl(), (-y).add_comm(y)),
-        ≈ x + CReal::zero() := CReal::add_respects(x.same_refl(), y.add_neg()),
+        ≈ x + 0 := CReal::add_respects(x.same_refl(), y.add_neg()),
         ≈ x := x.add_zero(),
     }
 }
@@ -1537,41 +1525,41 @@ theorem CReal::add_mul_distr(self x, y, z: CReal): (x + y) * z ≈ x * z + y * z
     }
 }
 
-theorem CReal::sub_nonneg({x, y: CReal}, h: x <= y): CReal::zero() <= y -x {
+theorem CReal::sub_nonneg({x, y: CReal}, h: x <= y): 0 <= y -x {
     calc {
-        CReal::zero() ≈ x + -x := CReal::same_sym(x.add_neg()),
+        0 ≈ x + -x := CReal::same_sym(x.add_neg()),
         <= y + -x := x.add_le_mono_r(y, -x, h),
     }
 }
 
-theorem CReal::sub_pos({x, y: CReal}, h: x < y): CReal::zero() < y -x {
+theorem CReal::sub_pos({x, y: CReal}, h: x < y): 0 < y -x {
     calc {
-        CReal::zero() ≈ x + -x := CReal::same_sym(x.add_neg()),
+        0 ≈ x + -x := CReal::same_sym(x.add_neg()),
         < y + -x := x.add_lt_mono_r(y, -x, h),
     }
 }
 
-theorem CReal::mul_le_mono_r({x, y, z: CReal}, h: x <= y, hz: CReal::zero() <= z): x * z <= y * z {
+theorem CReal::mul_le_mono_r({x, y, z: CReal}, h: x <= y, hz: 0 <= z): x * z <= y * z {
     let d = y -x;
     calc {
-        x * z ≈ CReal::zero() + x * z := CReal::same_sym((x * z).zero_add()),
-        <= d * z + x * z := CReal::zero().add_le_mono_r(d * z, x * z, CReal::mul_nonneg(CReal::sub_nonneg(h), hz)),
+        x * z ≈ 0 + x * z := CReal::same_sym((x * z).zero_add()),
+        <= d * z + x * z := CReal::add_le_mono_r(0, d * z, x * z, CReal::mul_nonneg(CReal::sub_nonneg(h), hz)),
         ≈ (d + x) * z := CReal::same_sym(d.add_mul_distr(x, z)),
         ≈ y * z := CReal::mul_respects(y.sub_add_cancel(x), z.same_refl()),
     }
 }
 
-theorem CReal::mul_lt_mono_r({x, y, z: CReal}, h: x < y, hz: CReal::zero() < z): x * z < y * z {
+theorem CReal::mul_lt_mono_r({x, y, z: CReal}, h: x < y, hz: 0 < z): x * z < y * z {
     let d = y -x;
     calc {
-        x * z ≈ CReal::zero() + x * z := CReal::same_sym((x * z).zero_add()),
-        < d * z + x * z := CReal::zero().add_lt_mono_r(d * z, x * z, CReal::mul_pos(CReal::sub_pos(h), hz)),
+        x * z ≈ 0 + x * z := CReal::same_sym((x * z).zero_add()),
+        < d * z + x * z := CReal::add_lt_mono_r(0, d * z, x * z, CReal::mul_pos(CReal::sub_pos(h), hz)),
         ≈ (d + x) * z := CReal::same_sym(d.add_mul_distr(x, z)),
         ≈ y * z := CReal::mul_respects(y.sub_add_cancel(x), z.same_refl()),
     }
 }
 
-theorem CReal::mul_le_mono_l({x, y, z: CReal}, h: x <= y, hz: CReal::zero() <= z): z * x <= z * y {
+theorem CReal::mul_le_mono_l({x, y, z: CReal}, h: x <= y, hz: 0 <= z): z * x <= z * y {
     calc {
         z * x ≈ x * z := z.mul_comm(x),
         <= y * z := CReal::mul_le_mono_r(h, hz),
@@ -1579,7 +1567,7 @@ theorem CReal::mul_le_mono_l({x, y, z: CReal}, h: x <= y, hz: CReal::zero() <= z
     }
 }
 
-theorem CReal::mul_lt_mono_l({x, y, z: CReal}, h: x < y, hz: CReal::zero() < z): z * x < z * y {
+theorem CReal::mul_lt_mono_l({x, y, z: CReal}, h: x < y, hz: 0 < z): z * x < z * y {
     calc {
         z * x ≈ x * z := z.mul_comm(x),
         < y * z := CReal::mul_lt_mono_r(h, hz),
@@ -1602,10 +1590,10 @@ theorem CReal::archimedean(self x: CReal): ∃ n: Nat, x < CReal::ofRat(Rat::ofI
     })))
 }
 
-theorem CReal::zero_lt_one(): CReal::zero() < CReal::one() { CReal::ofRat_lt(Rat::zero_lt_one()) }
+theorem CReal::zero_lt_one(): CReal::Lt(0, 1) { CReal::ofRat_lt(Rat::zero_lt_one()) }
 
-theorem CReal::ofNat_succ(n: Nat): CReal::ofRat(Rat::ofInt(OfNat(Succ(n)))) ≈ CReal::ofRat(Rat::ofInt(OfNat(n))) + CReal::one() {
-    CReal::same_trans(CReal::ofRat_respects(omega), CReal::ofRat_add(Rat::ofInt(OfNat(n)), Rat::one()))
+theorem CReal::ofNat_succ(n: Nat): CReal::ofRat(Rat::ofInt(OfNat(Succ(n)))) ≈ CReal::ofRat(Rat::ofInt(OfNat(n))) + 1 {
+    CReal::same_trans(CReal::ofRat_respects(omega), CReal::ofRat_add(Rat::ofInt(OfNat(n)), 1))
 }
 
 // `≤` is `¬(y < x)` by definition here, so both of its laws are the identity.
@@ -1625,7 +1613,7 @@ instance Cotransitive<CReal>(CReal::Lt) {
 instance PseudoOrder<CReal>(CReal::Same, CReal::Lt, CReal::Le) {}
 
 instance OrderedAddGroup<CReal>(CReal::Same, CReal::Lt, CReal::Le, CReal::add) {
-    zero := CReal::zero(),
+    zero := 0,
     neg := CReal::neg,
     add_zero := CReal::add_zero,
     add_neg := CReal::add_neg,
@@ -1636,7 +1624,7 @@ instance OrderedAddGroup<CReal>(CReal::Same, CReal::Lt, CReal::Le, CReal::add) {
 instance LocatedAddGroup<CReal>(CReal::Same, CReal::Lt, CReal::Le, CReal::add) {}
 
 instance OrderedField<CReal>(CReal::Same, CReal::Lt, CReal::Le, CReal::add, CReal::mul) {
-    one := CReal::one(),
+    one := 1,
     of_nat := λ n => CReal::ofRat(Rat::ofInt(OfNat(n))),
     inv := λ x h => x.inv(h := h),
     mul_respects := λ x x2 y y2 hx hy => CReal::mul_respects(hx, hy),
@@ -1648,7 +1636,7 @@ instance OrderedField<CReal>(CReal::Same, CReal::Lt, CReal::Le, CReal::add, CRea
     zero_lt_one := CReal::zero_lt_one(),
     mul_pos := λ x y hx hy => CReal::mul_pos(hx, hy),
     pos_of_mul_pos := λ x y hx h => CReal::pos_of_mul_pos(hx, h),
-    of_nat_zero := CReal::zero().same_refl(),
+    of_nat_zero := CReal::same_refl(0),
     of_nat_succ := CReal::ofNat_succ,
     archimedean := CReal::archimedean,
 }
