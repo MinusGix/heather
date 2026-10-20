@@ -105,3 +105,28 @@ theorem creal_below_nat(x: CReal): ∃ n: Nat, x < CReal::ofRat(Rat::ofInt(OfNat
 theorem creal_nat_climbs(n: Nat): CReal::ofRat(Rat::ofInt(OfNat(n))) < CReal::ofRat(Rat::ofInt(OfNat(Succ(n)))) {
     OrderedField::of_nat_lt_succ(CReal::zero(), n)
 }
+
+// ---------------------------------------------------------------------------
+// The inverse's sign. A positive factor reflects a product's sign at both
+// carriers (`pos_of_mul_pos`, a law), so the inverse has its argument's sign
+// and reverses the order of positives, once for both.
+
+theorem rat_inv_pos(x: Rat, hx: Rat::zero() < x): Rat::zero() < x⁻¹ { OrderedField::inv_pos(x, Inr(hx), hx) }
+
+theorem creal_inv_pos(x: CReal, hx: CReal::zero() < x): CReal::zero() < x⁻¹ { OrderedField::inv_pos(x, Inr(hx), hx) }
+
+theorem creal_inv_neg(x: CReal, hx: x < CReal::zero()): x⁻¹ < CReal::zero() { OrderedField::inv_neg(x, Inl(hx), hx) }
+
+// `y⁻¹` is searched, so the client names y's positivity; the generic
+// theorem derives it from x < y.
+theorem creal_inv_lt_inv(x, y: CReal, hx: CReal::zero() < x, hy: CReal::zero() < y, h: x < y): y⁻¹ < x⁻¹ {
+    OrderedField::inv_lt_inv(x, y, Inr(hx), Inr(hy), hx, h)
+}
+
+// Every positive real is above some 1/(n+1), the form the Cauchy reals'
+// own estimates are written in.
+theorem creal_archimedean_inv(x: CReal, hx: CReal::zero() < x):
+    ∃ n: Nat, CReal::ofRat(Rat::ofInt(OfNat(Succ(n))))⁻¹ < x
+{
+    OrderedField::archimedean_inv(x, hx)
+}
