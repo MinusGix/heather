@@ -1,15 +1,18 @@
 # Roadmap: areas and their importance
 
 Started 2026-10-20 from Minus's list of the project's core areas. This file
-owns three things: **the list of areas**, **their importance order**, and
-**the milestones** that effort is allocated toward. Everything else is owned
-by an issue or a design doc, and this file links to it rather than restating
-it (`issues/README.md`, rule 1).
+owns four things: **the list of areas**, **their priority**, **the milestones**
+(and submilestones) that effort is allocated toward, and **the design
+principles** that cut across areas. Everything else is owned by an issue or a
+design doc, and this file links to it rather than restating it
+(`issues/README.md`, rule 1).
 
-**The importance order below is a proposal, not a decision.** It was drafted
-by a Claude round from the state of the tracker, with the reasoning written
-next to it, so that Minus can move areas up or down by editing one table.
-Once Minus has edited it, delete this paragraph.
+**Priority is not a sequence.** The numbers say where effort goes when it has
+to be split, not what must finish before what starts. The unit of work is a
+milestone, or a submilestone of one: pick a milestone, fill it out, land it.
+Because the areas are mostly disjoint in code, several of them can be worked
+at once by separate agents (see [Parallel lanes](#parallel-lanes)). Minus
+reviewed the first draft on 2026-10-20; changes since are in the log.
 
 ## How the tracker uses this file
 
@@ -17,14 +20,16 @@ Once Minus has edited it, delete this paragraph.
   and may name the **milestones** it serves (`milestone: [tac-in-heather]`).
   An area is the one place the issue's work lands; labels stay as free-form
   topics (`reals`, `omega`, `x86`) and can cross areas.
-- `scripts/issue areas` prints the areas in rank order with their open and
-  closed counts and each milestone's open issues. `scripts/issue list --area
+- `scripts/issue areas` prints the areas in priority order with their open and
+  closed counts and each milestone's open issues, submilestones nested under
+  their parent. `scripts/issue list --area
   A` / `--milestone M` filter; `scripts/issue tag <slug>… --area A
   [--milestone M,N]` retags without touching `updated:`. The web viewer's
   **Areas** tab shows the same order, with each area's direction and
   milestones.
 - `scripts/issue check` reads the two tables below. An unknown area or
-  milestone in an issue is an error; open issues with no area are one
+  milestone in an issue is an error, and so is a submilestone whose parent
+  is missing or belongs to another area; open issues with no area are one
   warning with a count.
 - The tables are read by the script, between the HTML comment markers. Keep
   one row per line and the column order as it is.
@@ -39,24 +44,23 @@ Once Minus has edited it, delete this paragraph.
   notes and a survey, not implementation.
 - **horizon**: tracked so its needs shape decisions now. No rounds yet.
 - **enabling**: the language, kernel and tooling everything else stands on.
-  Not ranked against the directions. Its work is *pulled* by a direction's
+  Not prioritised against the directions. Its work is *pulled* by a direction's
   milestone or blocker, and an enabling issue with no puller waits.
 
 ## Areas
 
 <!-- areas -->
-| rank | area | tier | name | direction |
+| priority | area | tier | name | direction |
 |---|---|---|---|---|
 | 1 | `heather-in-heather` | focus | Heather in Heather | Write real programs, compile them natively with proofs, and move the compiler's logic out of Rust into Heather, toward dogfooded optimisation passes. |
 | 2 | `tactics` | focus | Tactics | Anything systematic is closed by some tactic: cheap specialised tactics, a few high-value general ones, and tactics written in Heather. |
 | 3 | `interaction-trees` | focus | Interaction trees | Reason about effectful programs intuitively: interaction trees over container events, meeting the native program logic. |
-| 4 | `mathematics` | steady | Mathematics | Fundamental classes and APIs first, then reals, floating point, and the fields Minus cares about (asymptotics, measure, locales, combinatorics). |
-| 5 | `constructive` | steady | Constructive mathematics | Make constructive mathematics natural: ask for the specific property a proof needs, which choice could supply but specific types supply without it. |
-| 6 | `heather-in-lean-coq` | next | Heather in Lean/Coq | Translate Heather proofs and their dependencies into Lean or Coq so they can be checked outside Heather. |
-| 7 | `machine-learning` | next | Machine learning | Bring Minus's Lean ML formalization (Wick) into Heather, improved, as a target for both the mathematical and the programming tooling. |
-| 8 | `gpu` | horizon | GPU | A Triton-like kernel language, proved correct and efficient against a GPU model, reusing the floating point, numerics and ML proofs. |
-| 9 | `rust-in-heather` | horizon | Rust in Heather | Translate Rust code into Heather to prove properties about it. |
-| 10 | `lean-in-heather` | horizon | Lean in Heather | An autotranslator from Lean to Heather over a formal model of Lean, so Lean proofs can be cited (not a first-class Lean or mathlib port). |
+| 4 | `mathematics` | steady | Mathematics | Fundamental classes and APIs first, then reals, floating point, and the fields Minus cares about (asymptotics, measure, locales, combinatorics), all designed constructive-first. |
+| 5 | `heather-in-lean-coq` | next | Heather in Lean/Coq | Translate Heather proofs and their dependencies into Lean or Coq so they can be checked outside Heather, and so Heather can show it is trustworthy. |
+| 6 | `machine-learning` | next | Machine learning | Bring Minus's Lean ML formalization (Wick) into Heather, improved, as a target for both the mathematical and the programming tooling. |
+| 7 | `gpu` | horizon | GPU | A Triton-like kernel language, proved correct and efficient against a GPU model, reusing the floating point, numerics and ML proofs. |
+| 8 | `rust-in-heather` | horizon | Rust in Heather | Translate Rust code into Heather to prove properties about it. |
+| 9 | `lean-in-heather` | horizon | Lean in Heather | An autotranslator from Lean to Heather over a formal model of Lean, so Lean proofs can be cited (not a first-class Lean or mathlib port). |
 | — | `language` | enabling | Language and elaborator | The surface language and its elaborator: syntax, inference, classes, inductives, modules, diagnostics, lints, editors. |
 | — | `kernel` | enabling | Kernel and type theory | The kernel, its type theory (DeLaM and extensions), the metatheory, and checking cost. |
 | — | `infrastructure` | enabling | Infrastructure | The test suite, caches and module images, performance measurement, and the CLI around them. |
@@ -65,63 +69,78 @@ Once Minus has edited it, delete this paragraph.
 ## Milestones
 
 A milestone is a usable result, stated so that someone can tell when it has
-happened. Issues serve one through `milestone:`; the list of issues is
-`scripts/issue list --milestone <id>`, not a copy here.
+happened. A **submilestone** names its parent in the last column: it is a
+piece of the parent small enough for one round or one agent, and the parent
+is done when its own "done when" holds (normally, once its submilestones
+have landed). Add submilestones when a milestone is picked up and its pieces
+become clear; not every milestone needs them up front. Issues serve one
+through `milestone:`; the list of issues is `scripts/issue list --milestone
+<id>`, not a copy here.
 
 <!-- milestones -->
-| milestone | area | status | done when |
-|---|---|---|---|
-| `hih-program-logic` | heather-in-heather | open | Native code is stated and proved through one program logic (one effectful code tree, rules proved once) instead of the five "this code runs" shapes, and the assembly layer is redesigned on it. |
-| `hih-memory` | heather-in-heather | open | A native program allocates on the heap, under a byte-addressed memory model whose certificates bound and track the allocation. |
-| `hih-passes` | heather-in-heather | open | A compiler pass (certificate emission or an optimisation) is a Heather metaprogram with its proof, and Rust only moves its output around. |
-| `hih-self` | heather-in-heather | open | A first component of Heather itself (candidate: the lexer, on the parser library) is written in Heather and compiled natively. |
-| `tac-in-heather` | tactics | open | A tactic is written in Heather through a host elaboration interface, and one tactic that lives in Rust today has a Heather counterpart. |
-| `tac-general` | tactics | open | A general-purpose rewriting and congruence-closure tactic (grind-like) closes the routine goals that today need hand `trans`/`cong` towers, and hands back its search state when it fails. |
-| `tac-arith` | tactics | open | Linear integer arithmetic is complete and certified (CutSat), and polynomial inequalities go through the ring normaliser. |
-| `it-library` | interaction-trees | open | The container-event interaction-tree library exists: bind, iter, trace refinement, and the bridge to `converges`/`fuel_monotone`. |
-| `it-native` | interaction-trees | open | A native program's theorem says its run refines an interaction tree. |
-| `math-classes` | mathematics | open | The algebra and order class hierarchy (semiring to ordered field, lattices) is settled, with a documented API that clients use without restating laws. |
-| `math-reals` | mathematics | open | Reals have their completeness interfaces and basic analysis (sequences, limits, continuity) on top of the regular Cauchy reals. |
-| `math-float` | mathematics | open | IEEE-style binary floating point, rounding and error bounds are proved against the reals, ported from Minus's Lean formalization. |
-| `math-metatheory` | mathematics | open | A result from heather-coq (for example a small logical-relation proof) is restated and proved in Heather. |
-| `cons-specific-choice` | constructive | open | A library convention, with inference behind it, for asking for the specific property instead of choice, with per-type instances that discharge it without an axiom. |
-| `export-fragment` | heather-in-lean-coq | open | A closed, layer-free fragment of the library (Nat and List lemmas) is translated to Coq or Lean and rechecked there. |
-| `ml-survey` | machine-learning | open | Wick is surveyed: what transfers, what must be redone better, and the mathematics and tooling it needs from Heather. |
-| `gpu-model` | gpu | open | A design note fixes the GPU execution model and the kernel-language level (tile IR, Triton-like) to prove against, with what it needs from the other areas. |
-| `rust-design` | rust-in-heather | open | A design note fixes the Rust subset, the semantics source (MIR or surface), and what the translation needs from `hih-memory` and `it-library`. |
-| `lean-fragment` | lean-in-heather | open | A design note says which fragment of Lean translates into Heather and how impredicative `Prop` is handled. |
+| milestone | area | status | done when | parent |
+|---|---|---|---|---|
+| `hih-program-logic` | heather-in-heather | open | Native code is stated and proved through one program logic (one effectful code tree, rules proved once) instead of the five "this code runs" shapes, and the assembly layer is redesigned on it. |  |
+| `hih-memory` | heather-in-heather | open | A native program allocates on the heap, under a byte-addressed memory model whose certificates bound and track the allocation. |  |
+| `hih-memory-model` | heather-in-heather | open | Byte-addressed memory with explicit access outcomes is a library model that the native machine model and the program logic both use. | hih-memory |
+| `hih-alloc-metering` | heather-in-heather | open | Certificates state an allocation bound, over a platform model that meters allocation. | hih-memory |
+| `hih-first-alloc` | heather-in-heather | open | One native program allocates, frees or bounds its heap, and its theorem says so. | hih-memory |
+| `hih-passes` | heather-in-heather | open | A compiler pass (certificate emission or an optimisation) is a Heather metaprogram with its proof, and Rust only moves its output around. |  |
+| `hih-self` | heather-in-heather | open | A first component of Heather itself (candidate: the lexer, on the parser library) is written in Heather and compiled natively. |  |
+| `tac-in-heather` | tactics | open | A tactic is written in Heather through a host elaboration interface, and one tactic that lives in Rust today has a Heather counterpart. |  |
+| `tac-host-interface` | tactics | open | Heather code can read a goal, build a checked term, and report failure with its search state, through one scoped host interface. | tac-in-heather |
+| `tac-first-port` | tactics | open | One tactic that lives in Rust today (candidate: `split_all` or `monoid` normalisation) has a Heather implementation that closes the same goals. | tac-in-heather |
+| `tac-general` | tactics | open | A general-purpose rewriting and congruence-closure tactic (grind-like) closes the routine goals that today need hand `trans`/`cong` towers, and hands back its search state when it fails. |  |
+| `tac-arith` | tactics | open | Linear integer arithmetic is complete and certified (CutSat), and polynomial inequalities go through the ring normaliser. |  |
+| `it-library` | interaction-trees | open | The container-event interaction-tree library exists: bind, iter, trace refinement, and the bridge to `converges`/`fuel_monotone`. |  |
+| `it-function-fields` | interaction-trees | open | A surface inductive can have a recursive function-typed field (`Vis(c, k: Resp(c) -> Tree)`), lowered through W, with match and recursion over it. | it-library |
+| `it-core` | interaction-trees | open | Events as containers, the fuel-cut tree, `bind`/`iter`/`mrec`, and the structural laws, with the definitional ones checked as such. | it-library |
+| `it-refinement` | interaction-trees | open | Trace refinement and depth-indexed equivalence, with the bridge to `converges`/`fuel_monotone` and one handler into world threading. | it-library |
+| `it-native` | interaction-trees | open | A native program's theorem says its run refines an interaction tree. |  |
+| `math-classes` | mathematics | open | The algebra and order class hierarchy (semiring to ordered field, lattices) is settled, with a documented API that clients use without restating laws. |  |
+| `math-reals` | mathematics | open | Reals have their completeness interfaces and basic analysis (sequences, limits, continuity) on top of the regular Cauchy reals. |  |
+| `math-float` | mathematics | open | IEEE-style binary floating point, rounding and error bounds are proved against the reals, ported from Minus's Lean formalization. |  |
+| `math-metatheory` | mathematics | open | A result from heather-coq (for example a small logical-relation proof) is restated and proved in Heather. |  |
+| `math-specific-choice` | mathematics | open | A library convention, with inference behind it, for asking for the specific property instead of choice, with per-type instances that discharge it without an axiom. |  |
+| `export-fragment` | heather-in-lean-coq | open | A closed, layer-free fragment of the library (Nat and List lemmas) is translated to Coq or Lean and rechecked there. |  |
+| `ml-survey` | machine-learning | open | Wick is surveyed: what transfers, what must be redone better, and the mathematics and tooling it needs from Heather. |  |
+| `gpu-model` | gpu | open | A design note fixes the GPU execution model and the kernel-language level (tile IR, Triton-like) to prove against, with what it needs from the other areas. |  |
+| `rust-design` | rust-in-heather | open | A design note fixes the Rust subset, the semantics source (MIR or surface), and what the translation needs from `hih-memory` and `it-library`. |  |
+| `lean-fragment` | lean-in-heather | open | A design note says which fragment of Lean translates into Heather and how impredicative `Prop` is handled. |  |
 <!-- /milestones -->
 
-## Why this order (the proposal)
+## Why these priorities
 
-Three things decided the ranks: what Minus said leads, what unblocks the most
+Three things decided them: what Minus said leads, what unblocks the most
 other areas, and what is ready to be worked on now.
 
 1. **Heather in Heather leads** because it is the project's stated goal (fast,
    broad, certified native code) and because it compounds: once passes are
    Heather metaprograms, every later optimisation is dogfooded. It also
    decides what "a program" means for interaction trees, Rust and GPU.
-2. **Tactics are second** because they multiply every other area,
-   mathematics included, and because with generated code a specialised
-   tactic is cheap. The step that matters most is *writing tactics in
+2. **Tactics are second** because they interweave with everything: they
+   make writing complex code, not only proofs, faster and nicer, and with
+   generated code a specialised tactic is cheap (see
+   [Design principles](#design-principles)). The step that matters most is *writing tactics in
    Heather* (`tac-in-heather`). It shares its meta-layer interface with
    `hih-passes`, so the two focus areas pull the same enabling work.
-3. **Interaction trees are focus despite being early** because the native
-   program logic (`hih-program-logic`) is meant to be stated so that ITree
-   refinement comes out as a lemma, not a re-founding. Designing them late
-   would mean redoing that logic. The library itself waits on surface
-   inductives with function-typed fields (see its section).
+3. **Interaction trees are focus** because the native program logic
+   (`hih-program-logic`) is meant to be stated so that ITree refinement comes
+   out as a lemma, not a re-founding. Designing them late would mean redoing
+   that logic. Surface inductives with function-typed fields are part of this
+   area's own work (`it-function-fields`), not a wait on someone else.
 4. **Mathematics is steady**, not focus: it runs all the time and is the
    main customer of tactics, but most of its fields are worth more after the
    class hierarchy settles. Floating point is ranked early inside it,
    because GPU and ML both need it and Minus already has a Lean version.
-5. **Constructive mathematics is a principle more than a workload.** It is
-   carried out inside mathematics and the language (assumption profiles,
-   evidence search). It keeps its own area so its milestone has an owner.
-6. **Heather in Lean/Coq comes before the other translations** because
-   exporting is the easy direction. Heather is predicative and has no K, so
-   a layer-free proof asks less of its target than Lean or Coq provide. It
-   buys an external trust story early.
+5. **Constructive mathematics is not an area** but a design principle across
+   mathematics (see [Design principles](#design-principles)). Its one concrete
+   milestone, `math-specific-choice`, lives in mathematics.
+6. **Heather in Lean/Coq comes before the other translations** because what
+   Heather wants to show is that it is trustworthy, more than it needs to
+   import other systems' logic. Exporting is also the easy direction: Heather
+   is predicative and has no K, so a layer-free proof asks less of its target
+   than Lean or Coq provide.
 7. **ML is next, GPU after it.** ML needs mathematics (linear algebra,
    analysis, probability) and floating point, and a survey can start now.
    GPU needs those *and* a mature native story.
@@ -185,7 +204,8 @@ and above all a way to track allocations.
   [function-ir-x86-proof-scaling](../issues/function-ir-x86-proof-scaling.md)).
 
 **Milestones.** `hih-program-logic` first, since every later program is
-written on it, then `hih-memory`. `hih-passes` can proceed in parallel
+written on it, then `hih-memory` (submilestones `hih-memory-model`,
+`hih-alloc-metering`, `hih-first-alloc`). `hih-passes` can proceed in parallel
 because it is meta-layer work. `hih-self` comes after both
 ([self-hosting-first-component](../issues/self-hosting-first-component.md)).
 
@@ -213,7 +233,8 @@ towers ([grind-port](../issues/grind-port.md),
 [monoid-normalisation](../issues/monoid-normalisation.md),
 [equation-rewrite-in-goal](../issues/equation-rewrite-in-goal.md)).
 
-**Milestones.** `tac-in-heather`, then `tac-general` (written in Heather if
+**Milestones.** `tac-in-heather` (submilestones `tac-host-interface`,
+`tac-first-port`), then `tac-general` (written in Heather if
 the first has landed), with `tac-arith` continuing as arithmetic clients
 need it.
 
@@ -232,14 +253,18 @@ coincides with the greatest fixed point over container events
 The effects story (uniqueness threading first, interaction trees for trace
 semantics) is open in [effects-direction](../issues/effects-direction.md).
 
-**Blockers.** The surface cannot write a tree yet: a continuation field
+**First work.** The surface cannot write a tree yet: a continuation field
 `k: Resp(c) -> Tree` is a recursive function-typed field, which needs the
-tier-2 (W-lowered) inductive generator
-([inductive-compiler](../issues/inductive-compiler.md)). The native program
-logic has to be designed to meet it
+tier-2 (W-lowered) generator. That is this area's to build, with ITrees as
+its driving client
+([recursive-function-fields](../issues/recursive-function-fields.md); the
+tier scheme itself is owned by
+[inductive-compiler](../issues/inductive-compiler.md)). The native program
+logic has to be designed to meet the trees
 ([native-one-program-logic](../issues/native-one-program-logic.md)).
 
-**Milestones.** `it-library`, then `it-native` together with
+**Milestones.** `it-library` through its submilestones `it-function-fields`,
+`it-core` and `it-refinement`, then `it-native` together with
 `hih-program-logic`.
 
 ### Mathematics (`mathematics`)
@@ -278,14 +303,8 @@ syntax with binders, substitution lemmas, logical relations. The IWf former
 landing in the kernel (`docs/iwf-former-design.md`) is what makes its
 inductive families writable.
 
-### Constructive mathematics (`constructive`)
-
-**Goal.** See how far constructive mathematics can be made natural. Choice
-and similar statements are assumed less often. Instead a statement takes the
-*specific* property it needs. Choice could always supply that property, but
-some specific types supply it without choice.
-
-**Where it stands.** The kernel is predicative and has no axioms by default
+**Constructive design** (a principle across this area, see
+[Design principles](#design-principles)). The kernel is predicative and has no axioms by default
 (axioms are explicit, with provenance: `docs/axiom-provenance-design.md`).
 The reals are constructive, with apartness and a Bishop bridge. The pieces
 the principle needs already exist in some form: assumption scopes and
@@ -294,9 +313,8 @@ searched evidence (`docs/positivity-evidence-design.md`), and `Decide`
 instances. What is missing is the convention that ties them together
 ([default-inhabited-nonempty](../issues/default-inhabited-nonempty.md),
 [apartness-structures](../issues/apartness-structures.md),
-[real-number-foundation](../issues/real-number-foundation.md)).
-
-**Milestone.** `cons-specific-choice`.
+[real-number-foundation](../issues/real-number-foundation.md)), which is the
+milestone `math-specific-choice`.
 
 ### Heather in Lean/Coq (`heather-in-lean-coq`)
 
@@ -305,6 +323,9 @@ they can be verified outside Heather. The foundations differ, but much of
 the difference is in how things are done, or can be handled by replacing
 equality with another symbol. Proving which fragment can be trusted across
 the two is further off and needs more mathematical maturity in Heather.
+
+Export is wanted more than import: it is how Heather shows it can be
+trusted.
 
 **Where it stands.** Nothing is translated. heather-coq formalizes Heather's
 *metatheory* (logical relation, decidable conversion, the extension rules),
@@ -379,11 +400,59 @@ issues ([frontend-roadmap](../issues/frontend-roadmap.md),
 needs one of their issues, the issue names that milestone. That is how an
 enabling issue shows it has a puller.
 
+## Design principles
+
+These are not areas. They shape decisions in every area, and a design doc
+or review should say how it meets them.
+
+- **Constructive-first mathematics.** Much of the mathematics has to be
+  designed with constructivity in mind from the start, not patched later. A
+  statement takes the *specific* property it needs rather than assuming
+  choice or excluded middle. Choice could always supply that property, but
+  specific types supply it without choice (a decidable equality, a located
+  real, a finite enumeration). Apartness and located structures come first
+  where the classical theory would use plain inequality. Axioms stay
+  explicit (`docs/axiom-provenance-design.md`).
+- **Tactics everywhere.** Anything systematic should end up closed by a
+  tactic, in programs as much as in proofs. When a round writes the same
+  shape of proof or code by hand a third time, it files a `tactics` issue
+  naming the milestone it was working on, so the tactic's customer is
+  recorded with it.
+- **Logic in Heather, not Rust.** New compiler or elaborator logic goes into
+  Heather when Heather can hold it. Rust stays the untrusted plumbing.
+
+## Parallel lanes
+
+Disjoint areas can be worked at once by separate agents. What decides
+whether two rounds can run together is the code they touch, so each lane is
+listed with its main footprint. Two rounds in different lanes rarely
+conflict; two rounds in one lane should be sequenced or split by
+submilestone.
+
+| lane | main footprint |
+|---|---|
+| Native code (`heather-in-heather`) | `crates/cli/src/native*`, `crates/elab/src/function_ir*`, `heather_emit.rs`, `lib/elf64*`, `lib/linux_x86_64*`, `lib/function_ir*`, `lib/std/arch/` |
+| Tactics | `crates/elab/src/{omega,omega_cert,cutsat,ring,bv_omega,goal_combinators,relational_context}*`, `lib/std/omega.hthr`; later the meta layer |
+| Interaction trees | a new `lib/std` module; `crates/elab/src/inductive.rs` and the W lowering for `it-function-fields`, shared with `language` |
+| Mathematics | `lib/std/*.hthr` other than the above, `docs/showcase/` |
+| Export, ML, GPU, Rust, Lean | new crates or scripts and design notes; nearly disjoint from everything |
+| Kernel | `crates/kernel/` |
+| Language, infrastructure | `crates/elab` core (`lib.rs`, `expr.rs`, `unification.rs`, `traits.rs`), `crates/cli`, `scripts/` |
+
+Shared hotspots that every lane can touch, and where parallel rounds do
+collide: the elaborator core files above, `crates/elab/src/prelude.hthr`,
+the native support lists (`read_command.rs` SUPPORT/IMPORTS and the test
+lists), `CLAUDE.md`, and this file's log. Issue files are one per issue and
+merge cleanly. The suite's CPU rails are per process, so parallel agents on
+separate machines do not slow each other's tests.
+
 ## Changing this file
 
-- Reordering areas or changing a tier is a decision Minus makes. Record it
+- Changing an area's priority or tier is a decision Minus makes. Record it
   as a one-line entry in the log below, with the reason.
-- A new area needs a row, a section, and at least one milestone.
+- A new area needs a row, a section, at least one milestone, and a lane.
+- A submilestone is added when its parent is picked up; give it a "done
+  when" a single round can meet.
 - When a milestone lands, set its status to `done`, link the PR in the log,
   and leave the row so the history stays readable.
 
@@ -392,3 +461,11 @@ enabling issue shows it has a puller.
 - 2026-10-20: Areas, tiers and milestones proposed from Minus's list. The open
   issues were tagged by area, and milestones were set only where an issue
   clearly serves one. Closed issues are left untagged.
+- 2026-10-20: Minus's review. Priority guides allocation and is not a
+  sequence; milestones gain submilestones; parallel lanes added, since
+  disjoint areas can run on separate agents at once. Constructive mathematics
+  stops being an area and becomes a design principle across mathematics
+  (`cons-specific-choice` becomes `math-specific-choice`). Tactics are noted
+  as cross-cutting, for code as well as proofs. Function-typed fields are
+  interaction-tree work (`it-function-fields`). Export is wanted for showing
+  trustworthiness, more than import.

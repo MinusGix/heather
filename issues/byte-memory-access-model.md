@@ -3,7 +3,7 @@ title: Develop byte-addressed memory and explicit access outcomes
 status: open
 labels: [stdlib,semantics,runtime,design]
 area: heather-in-heather
-milestone: [hih-memory]
+milestone: [hih-memory-model]
 created: 2026-08-25
 updated: 2026-08-25
 ---

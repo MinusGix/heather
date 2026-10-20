@@ -690,7 +690,7 @@ function renderList(list) {
 
 function renderAreas() {
   const bar = `<div class="avbar">show <span class="seg" id="avseg"><button data-al="0" class="${S.al ? "" : "on"}" ${D.areas.length ? "" : "disabled"}>roadmap areas</button><button data-al="1" class="${S.al ? "on" : ""}">labels</button></span>
-    ${S.al || !D.areas.length ? "" : `<span>in importance order, from docs/roadmap.md</span>`}</div>`;
+    ${S.al || !D.areas.length ? "" : `<span>by priority, from docs/roadmap.md</span>`}</div>`;
   if (!S.al && D.areas.length) { $("#areas").innerHTML = bar + roadmapCards(); return; }
   $("#areas").innerHTML = bar + labelCards();
 }
@@ -705,9 +705,11 @@ function roadmapCards() {
     const tot = ms.length || 1;
     const liveMs = ms.filter(m => m.status !== "closed").sort(SORTS.updated);
     const waiting = liveMs.filter(held).length;
-    const mst = D.milestones.filter(x => x.area === a.area).map(x => {
+    const mine = D.milestones.filter(x => x.area === a.area);
+    const tops = mine.filter(x => !x.parent || !mine.some(y => y.milestone === x.parent));
+    const mst = tops.flatMap(x => [x, ...mine.filter(c => c.parent === x.milestone)]).map(x => {
       const serving = D.issues.filter(m => m.milestones.includes(x.milestone) && m.status !== "closed").length;
-      return `<div title="${esc(x.done)}"><b class="${x.status === "done" ? "done" : ""}" data-ms="${esc(x.milestone)}">${esc(x.milestone)}</b><span>${serving} open</span></div>`;
+      return `<div title="${esc(x.done)}"${x.parent ? ` style="padding-left:14px"` : ""}><b class="${x.status === "done" ? "done" : ""}" data-ms="${esc(x.milestone)}">${esc(x.milestone)}</b><span>${serving} open</span></div>`;
     }).join("");
     return `<div class="card"><div class="card-h" data-ar1="${esc(a.area)}" title="show these in the list"><span class="sw" style="--h:${ahueOf(a.area)}"></span>
       ${a.rank && a.rank !== "—" ? `<span class="rank">${esc(a.rank)}</span>` : ""}<span class="name">${esc(a.name || a.area)}</span>${a.tier ? `<span class="tier">${esc(a.tier)}</span>` : ""}

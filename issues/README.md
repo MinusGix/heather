@@ -27,8 +27,8 @@ Body: problem statement, then iterative notes appended under `## Log` with dates
 Link related issues as [[other-slug]].
 ```
 
-- **Areas and milestones** are owned by `docs/roadmap.md`, which also ranks
-  the areas by importance; `scripts/issue check` refuses a name it does not
+- **Areas and milestones** are owned by `docs/roadmap.md`, which also gives
+  each area its priority; `scripts/issue check` refuses a name it does not
   list. An area is where the issue's work lands (labels stay free-form
   topics); a milestone is a result the issue helps reach, possibly in another
   area (`inductive-compiler` is `language` work serving `it-library`). Give a
@@ -94,7 +94,7 @@ scripts/issue export <dir>                                 # the same viewer as 
 
 `serve` (page: `scripts/issue-web.html`, stdlib server, localhost only) is for
 the human view of the whole tracker: facet filters over status, area and labels, an
-**Areas** overview (the roadmap's areas in importance order with their
+**Areas** overview (the roadmap's areas by priority with their
 direction and milestones, or one card per label), and a **Graph** of `[[links]]` and `blocked-by`
 edges with a focus-on-neighbourhood mode. The detail pane shows links in both
 directions. It re-reads `issues/` on every request and the page reloads itself

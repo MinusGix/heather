@@ -93,7 +93,8 @@ def load_roadmap():
     """(areas, milestones) in roadmap order, as lists of dicts."""
     areas = [dict(rank=r[0], area=r[1], tier=r[2], name=r[3], direction=r[4])
              for r in roadmap_table("areas") if len(r) >= 5]
-    milestones = [dict(milestone=r[0], area=r[1], status=r[2], done=r[3])
+    milestones = [dict(milestone=r[0], area=r[1], status=r[2], done=r[3],
+                       parent=r[4] if len(r) > 4 else "")
                   for r in roadmap_table("milestones") if len(r) >= 4]
     return areas, milestones
 
@@ -340,20 +341,23 @@ def cmd_tag(args):
 
 
 def cmd_areas(_args):
-    """The roadmap's areas in importance order, with issue counts, and each
-    milestone with the open issues that name it."""
+    """The roadmap's areas in priority order, with issue counts, and each
+    milestone with the open issues that name it, submilestones nested under
+    their parent."""
     areas, milestones = load_roadmap()
     issues = load_all()
     live = lambda m: m["status"] != "closed"
     wname = max([len(a["area"]) for a in areas] + [9])
-    print(f"{'rank':>4}  {'area':<{wname}}  {'tier':<9} open  closed")
+    print(f"{'pri':>4}  {'area':<{wname}}  {'tier':<9} open  closed")
     for a in areas:
         ms = [m for m in issues if m["area"] == a["area"]]
         print(f"{a['rank']:>4}  {a['area']:<{wname}}  {a['tier']:<9} {sum(map(live, ms)):>4}  {len(ms) - sum(map(live, ms)):>6}")
-        for mi in (x for x in milestones if x["area"] == a["area"]):
-            serving = sorted(m["slug"] for m in issues if mi["milestone"] in m["milestone"] and live(m))
-            print(f"{'':>4}    - {mi['milestone']} ({mi['status']}): {len(serving)} open"
-                  + (f": {', '.join(serving)}" if serving else ""))
+        mine = [x for x in milestones if x["area"] == a["area"]]
+        for mi in [x for x in mine if not x["parent"]] + [x for x in mine if x["parent"] and x["parent"] not in {y["milestone"] for y in mine}]:
+            for depth, x in [(0, mi)] + [(1, c) for c in mine if c["parent"] == mi["milestone"]]:
+                serving = sorted(m["slug"] for m in issues if x["milestone"] in m["milestone"] and live(m))
+                print(f"{'':>4}    {'  ' * depth}- {x['milestone']} ({x['status']}): {len(serving)} open"
+                      + (f": {', '.join(serving)}" if serving else ""))
     untagged = [m for m in issues if not m["area"] and live(m)]
     if untagged:
         print(f"\n{len(untagged)} open issue(s) with no area: scripts/issue list --area none --status open")
@@ -395,9 +399,13 @@ def cmd_check(_args):
         for x in m["milestone"]:
             if x not in milestone_names:
                 problems.append(f"{m['slug']}: unknown milestone '{x}' (docs/roadmap.md)")
+    by_ms = {mi["milestone"]: mi for mi in milestones}
     for mi in milestones:
         if mi["area"] not in area_names:
             problems.append(f"roadmap: milestone '{mi['milestone']}' names unknown area '{mi['area']}'")
+        parent = by_ms.get(mi["parent"]) if mi["parent"] else None
+        if mi["parent"] and (parent is None or parent["area"] != mi["area"] or parent["parent"]):
+            problems.append(f"roadmap: submilestone '{mi['milestone']}' needs a top-level parent in its own area, not '{mi['parent']}'")
 
     # Warnings, not errors: judgement calls the README's ownership rules ask
     # for, which were both live in the tracker on 2026-07-27.
@@ -575,7 +583,7 @@ def main():
     sp.add_argument("--milestone", help="comma-separated; empty string clears")
     sp.set_defaults(fn=cmd_tag)
 
-    sp = sub.add_parser("areas", help="roadmap areas in importance order, with counts and milestones")
+    sp = sub.add_parser("areas", help="roadmap areas in priority order, with counts and milestones")
     sp.set_defaults(fn=cmd_areas)
 
     sp = sub.add_parser("threads", help="per-thread status counts")

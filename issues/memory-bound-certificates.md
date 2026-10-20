@@ -3,7 +3,7 @@ title: Memory-bound certificates: an allocation-metered platform model
 status: open
 labels: [design,runtime,compiler,metatheory]
 area: heather-in-heather
-milestone: [hih-memory]
+milestone: [hih-alloc-metering]
 created: 2026-08-14
 updated: 2026-08-14
 ---
