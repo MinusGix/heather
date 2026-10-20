@@ -6,3 +6,8 @@
 # Locally downloaded research material and third-party source checkouts.
 # Provenance and reconstruction links belong in docs/, not the artifacts here.
 /.references/
+
+# `scripts/issue index -o issues/INDEX.md` output, if anyone writes one there:
+# the index is generated on demand and deliberately not tracked
+# (issues/README.md).
+/issues/INDEX.md
