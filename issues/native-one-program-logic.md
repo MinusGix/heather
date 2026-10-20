@@ -1,11 +1,11 @@
 ---
 title: One program logic for native code, designed to meet interaction trees
-status: open
+status: closed
 labels: [native,x86,ir,semantics,design]
 area: heather-in-heather
 milestone: [hih-program-logic, it-native]
 created: 2026-10-01
-updated: 2026-10-07
+updated: 2026-10-20
 ---
 
 The native stack says "this code runs" five ways: `ExecuteBlock`,
@@ -46,3 +46,4 @@ interaction tree t" comes out later as a lemma, not a re-founding. Questions:
 
 - 2026-10-01: The stream filter landed (docs/native-stream-filter-design.md): its claim is read_filter_runs over filter_events, and filter_prints says stdout is spec(stdin) — the observable this logic must reproduce.
 - 2026-10-07: An incremental step toward this logic for straight code: [[native-straight-code-triples]].
+- 2026-10-20: 2026-10-20: Designed in docs/native-program-logic-design.md (answers the three questions in §1): specs as coalgebras over a Linux call/answer container, the judgment Sim bridged to LinuxRuns, one computed Wp over Asm items with Syscall and Proved items, and loop_at measured by the history. The work is five rounds with owners: [[native-linux-spec]], [[native-one-wp]], [[native-loop-rule]], [[native-filter-on-program-logic]], [[native-retire-execution-shapes]]; the tactic is [[wp-obligation-tactic]] and question 3 moved to [[ir-v1-retirement]]. Closed: the design is this issue's scope.

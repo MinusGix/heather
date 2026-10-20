@@ -81,6 +81,11 @@ through `milestone:`; the list of issues is `scripts/issue list --milestone
 | milestone | area | status | done when | parent |
 |---|---|---|---|---|
 | `hih-program-logic` | heather-in-heather | open | Native code is stated and proved through one program logic (one effectful code tree, rules proved once) instead of the five "this code runs" shapes, and the assembly layer is redesigned on it. |  |
+| `hih-pl-spec` | heather-in-heather | open | Linux's calls and answers are a container, a program's spec is a coalgebra over it, and `Sim` (every allowed history is produced) is bridged both ways to `LinuxRuns`, with one filter spec and its stdout fact stated over it. | hih-program-logic |
+| `hih-pl-wp` | heather-in-heather | open | One computed weakest precondition over every `Asm` item, syscalls and proved pieces included, is sound once, and `Stretch` and `Straight` are its instances. | hih-program-logic |
+| `hih-pl-loops` | heather-in-heather | open | One loop rule, measured by the remaining history and a variant, closes the filter's byte loop and its read-until-EOF loop. | hih-program-logic |
+| `hih-pl-first-program` | heather-in-heather | open | The stream filter's claim is `Sim` at its spec end to end, with its process library's hand inductions deleted. | hih-program-logic |
+| `hih-pl-retire` | heather-in-heather | open | Every native program is on the logic and the five execution shapes are gone as client judgments. | hih-program-logic |
 | `hih-memory` | heather-in-heather | open | A native program allocates on the heap, under a byte-addressed memory model whose certificates bound and track the allocation. |  |
 | `hih-memory-model` | heather-in-heather | open | Byte-addressed memory with explicit access outcomes is a library model that the native machine model and the program logic both use. | hih-memory |
 | `hih-alloc-metering` | heather-in-heather | open | Certificates state an allocation bound, over a platform model that meters allocation. | hih-memory |
@@ -188,7 +193,7 @@ and above all a way to track allocations.
   [native-stack-refactor](../issues/native-stack-refactor.md),
   [x86-64-machine-model](../issues/x86-64-machine-model.md)). This is the
   "kinda eugh" Minus named, and it should be redesigned before more programs
-  are written on it.
+  are written on it. The design is `docs/native-program-logic-design.md`.
 - *Memory and allocation.* There is no heap model and no allocation
   accounting ([memory-bound-certificates](../issues/memory-bound-certificates.md),
   [byte-memory-access-model](../issues/byte-memory-access-model.md),
@@ -204,7 +209,8 @@ and above all a way to track allocations.
   [function-ir-x86-proof-scaling](../issues/function-ir-x86-proof-scaling.md)).
 
 **Milestones.** `hih-program-logic` first, since every later program is
-written on it, then `hih-memory` (submilestones `hih-memory-model`,
+written on it (submilestones `hih-pl-spec`, `hih-pl-wp`, `hih-pl-loops`,
+`hih-pl-first-program`, `hih-pl-retire`), then `hih-memory` (submilestones `hih-memory-model`,
 `hih-alloc-metering`, `hih-first-alloc`). `hih-passes` can proceed in parallel
 because it is meta-layer work. `hih-self` comes after both
 ([self-hosting-first-component](../issues/self-hosting-first-component.md)).
