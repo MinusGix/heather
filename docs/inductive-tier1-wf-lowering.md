@@ -324,9 +324,12 @@ the field values it returns.
 ## 8. Not covered here
 
 - **Indexed families** still ford by `Id`, tracked separately.
-- **Infinitary branching** (`Acc`) stays on `W` + funext: its positions are
-  a *type*, not a `Nat`, and that tier never computed anyway
-  (`wf-former-design.md` §7).
+- **Infinitary branching** stays on `W`: its positions are a *type*, not a
+  `Nat`. Since 2026-10-20 it is lowered, not merely classified, for a
+  recursive function field (`k: A -> D`) with at most one recursive field per
+  constructor: `docs/inductive-tier2-w-lowering.md`. It needs no funext
+  axiom; a leaf predicate carried beside the tree stands in for the
+  `Empty`-domain η the kernel lacks (that document's §2).
 - **Mutual** declarations: no scheme yet at any tier.
 - **Polymorphic containers.** The level constraint is gone (route (a) of
   `unit-empty-level-indexing.md`) and the kernel side is exercised by
@@ -376,9 +379,12 @@ container. A *nested* occurrence (`List Rose`) is still rejected with the
 message below, and correctly: this closes the gap by adding the container to
 the surface, not by identifying a user declaration with `Vec`.
 - **Indexed families** still ford by `Id`, tracked separately.
-- **Infinitary branching** (`Acc`) stays on `W` + funext: its positions are
-  a *type*, not a `Nat`, and that tier never computed anyway
-  (`wf-former-design.md` §7).
+- **Infinitary branching** stays on `W`: its positions are a *type*, not a
+  `Nat`. Since 2026-10-20 it is lowered, not merely classified, for a
+  recursive function field (`k: A -> D`) with at most one recursive field per
+  constructor: `docs/inductive-tier2-w-lowering.md`. It needs no funext
+  axiom; a leaf predicate carried beside the tree stands in for the
+  `Empty`-domain η the kernel lacks (that document's §2).
 - **Mutual** declarations: no scheme yet at any tier.
 
 ## 9. What retires, and what does not

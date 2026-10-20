@@ -792,8 +792,23 @@ impl Elaborator {
         // A family with no index: a child's type is the constructor's result
         // type itself (`Cons(Nil, xs)` is at `xs`'s type).
         if ind.index.is_none() && ind.skel.is_none() {
-            let k = ind.ctors[i].kind.iter().position(|f| *f == inductive::FieldKind::Plain)?;
+            let k = ind.ctors[i].kind.iter().position(|f| {
+                matches!(f, inductive::FieldKind::Plain | inductive::FieldKind::FnChild)
+            })?;
             let (_, ty, lvl) = self.elab_infer(cx, args[k].borrow()).ok()?;
+            // A recursive function field (`k: A -> D`, tier 2) is at
+            // `Π(y : A). D`, and the instance is its codomain — provided
+            // that does not mention `y`.
+            let (ty, lvl) = if ind.ctors[i].kind[k] == inductive::FieldKind::FnChild {
+                match self.whnf(cx, &ty, span).ok()? {
+                    Type::Pi { cod, cod_level, .. } => {
+                        (crate::vec::strengthen(&cod, &cx.gamma)?, cod_level)
+                    }
+                    _ => return None,
+                }
+            } else {
+                (ty, lvl)
+            };
             if self.tag_of(&ty)?.tag != ind.tag {
                 return None;
             }
