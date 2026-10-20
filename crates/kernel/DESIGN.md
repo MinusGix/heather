@@ -194,6 +194,32 @@ checks them here, at an open length). `DVec` has **no code yet**: it is
 admitted at layers p and m only (`Tc::computing_layer`) until the rec.rs
 round gives it `TmDVec` and its branches, as `Vec` was before its phase 3.
 
+`IWf^{l,li}(I; x:S. n; x. o; x i. c)(m)` (2026-10-20,
+`docs/iwf-former-design.md` §13 step 3) is `Wf` with an index: `sup_i(a;
+cs)` is at its output index `o[a/x]`, its children a `DVec^{l ⊔ li}(n[a];
+k. IWf(…)(c[a, k]))`, and nothing else is stored, so there is no equation,
+no `transp` and no irrelevance arm. The family level is `l ⊔ li`.
+`elim_IWf`'s motive binds the index and the scrutinee, its step `a, cs, ih`
+with `ih : Π(i : Fin n[a]). M[c[a,i], dnth(…; cs; i)]`, and β fires at a
+`sup_i` whatever the index (heather-coq `red_elimIWf_supi`): the headline,
+β on open data at a computed index, is `tests/iwf.rs`. Every schema is
+built once in `term.rs` around `IWfSig` (`iwf_children_ty`,
+`iwf_step_telescope`, `iwf_ih`), which typing, both reducers and conversion
+share; the one new substitution operation is `inst_top_above`
+(`t[s/x]` under the position binder that the child index keeps). The
+evaluator's β takes the closures' syntax apart, as `DVec`'s tail does,
+and builds the ih as a `Val::Lam` whose body is the eliminator at
+`dnth(…; cs; i)`. Two values compare by their label (at the shape) and
+their children (at the children's `DVec`, so Σ- and Unit-η come through
+its reduct); the annotations are the type's. The neutral `elim_IWf` arm is
+typed from the start: the scrutinees as neutrals first, whose inferred
+`IWf` forces the signature and the index, then the motive's level, the
+motive in `(Γ, j : I, z : IWf(…)(j))` and the step in the left telescope.
+It does not compare the ih types either: equal signatures and motives
+force them (heather-coq `ELIM_CONGRUENCE.md`, `Validity/IWfIhEq.v`,
+MinusGix/heather-coq#24). Like `DVec`, `IWf` has **no code yet** and is
+admitted at layers p and m only until the rec.rs round.
+
 `sEq^l(I; a; b)` (2026-07-28) is **strict equality** — `Id` minus proof
 relevance plus strictness, the SProp round's customer former
 (`docs/sprop-design.md`; the sort itself dissolved into per-former
