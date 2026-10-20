@@ -221,7 +221,7 @@ struct Fam {
 
 impl Fam {
     /// The signature `IWf^{0,0}(I; x : L + R. n; x. o; x i. c)`, in Γ.
-    fn sig(&self) -> IWfSig {
+    fn sig(&self) -> Rc<IWfSig> {
         let (l1, r1) = (self.left.shift_local(1), self.right.shift_local(1));
         // n, in (Γ, x): case x { inl _ ⇒ 0 | inr _ ⇒ k }.
         let arity = case(c(0), l1.clone(), r1.clone(), Type::Nat, nat(0), nat(self.arity_r), v(0));
@@ -252,7 +252,7 @@ impl Fam {
         let at_r = lam(fin(nat(self.arity_r)), c(0), self.child_r.shift_local_above(2, 2));
         let convoy = case(c(0), l2, r2, motive, absurd, at_r, v(1));
         let child = app(convoy, fin(arity.shift_local(1)), self.idx.shift_local(3), c(0), v(0));
-        IWfSig {
+        Rc::new(IWfSig {
             level: c(0),
             idx_level: c(0),
             idx: rty(self.idx.clone()),
@@ -260,24 +260,18 @@ impl Fam {
             arity: rt(arity),
             out: rt(out),
             child: rt(child),
-        }
+        })
     }
 }
 
-fn at(sig: &IWfSig, m: Term) -> Type {
+fn at(sig: &Rc<IWfSig>, m: Term) -> Type {
     sig.at(rt(m))
 }
 
-fn elim(sig: &IWfSig, ml: Level, motive: Type, step: Term, index: Term, scrut: Term) -> Term {
+fn elim(sig: &Rc<IWfSig>, ml: Level, motive: Type, step: Term, index: Term, scrut: Term) -> Term {
     Term::ElimIWf {
-        level: sig.level.clone(),
-        idx_level: sig.idx_level.clone(),
+        sig: Rc::clone(sig),
         motive_level: ml,
-        idx: Rc::clone(&sig.idx),
-        shape: Rc::clone(&sig.shape),
-        arity: Rc::clone(&sig.arity),
-        out: Rc::clone(&sig.out),
-        child: Rc::clone(&sig.child),
         motive: rty(motive),
         step: rt(step),
         index: rt(index),
@@ -489,10 +483,10 @@ fn the_families_are_well_formed() {
     assert!(ck_ty_at(Layer::Prog, &g, &at(&sig, triv()), &c(0)).is_err());
     // A child index outside `I` (here a `Fin` position, not a `Nat`) is
     // rejected: the signature's own premises are checked.
-    let bad = IWfSig { child: rt(v(0)), ..sig.clone() };
+    let bad = Rc::new(IWfSig { child: rt(v(0)), ..(*sig).clone() });
     assert!(ck_ty_at(Layer::Prog, &g, &at(&bad, v(0)), &c(0)).is_err());
     // So is an output index outside `I`.
-    let bad = IWfSig { out: rt(v(0)), ..sig };
+    let bad = Rc::new(IWfSig { out: rt(v(0)), ..(*sig).clone() });
     assert!(ck_ty_at(Layer::Prog, &g, &at(&bad, v(0)), &c(0)).is_err());
 }
 
@@ -500,7 +494,7 @@ fn the_families_are_well_formed() {
 fn the_level_is_the_join_of_the_shape_and_index_levels() {
     // Design §1.2: l ⊔ li. An index type at level 1 (`Ty 0`) and shapes at 0.
     let g = nil_ctx();
-    let sig = IWfSig {
+    let sig = Rc::new(IWfSig {
         level: c(0),
         idx_level: c(1),
         idx: rty(Type::Ty(c(0))),
@@ -508,7 +502,7 @@ fn the_level_is_the_join_of_the_shape_and_index_levels() {
         arity: rt(nat(0)),
         out: rt(Term::TmNat),
         child: rt(Term::TmNat),
-    };
+    });
     let ty = at(&sig, Term::TmNat);
     ck_ty(&g, &ty, c(1));
     assert_eq!(ck_ty_at(Layer::Prog, &g, &ty, &c(0)), Err(TypeError::LevelMismatch));
@@ -843,12 +837,16 @@ fn type_conversion_is_structural_with_the_index() {
     let swapped = fam.sig().shift_local(2);
     not_conv_ty(&g, &at(&sig, v(0)), &at(&swapped, v(0)), c(0));
     // Different levels: distinguished.
-    let up = IWfSig { level: c(1), shape: rty(Type::Sum {
-        lhs_level: c(1),
-        rhs_level: c(1),
-        lhs: rty(Type::Unit { level: c(1) }),
-        rhs: rty(Type::Unit { level: c(1) }),
-    }), ..sig.clone() };
+    let up = Rc::new(IWfSig {
+        level: c(1),
+        shape: rty(Type::Sum {
+            lhs_level: c(1),
+            rhs_level: c(1),
+            lhs: rty(Type::Unit { level: c(1) }),
+            rhs: rty(Type::Unit { level: c(1) }),
+        }),
+        ..(*sig).clone()
+    });
     not_conv_ty(&g, &at(&sig, v(0)), &at(&up, v(0)), c(0));
 }
 
@@ -856,11 +854,11 @@ fn type_conversion_is_structural_with_the_index() {
 // Design §8.2: what route 2b rejects (F1–F3), as hand-built IWf terms
 // -------------------------------------------------------------------------
 
-fn leaf(sig: &IWfSig, left: &Type, right: &Type) -> Term {
+fn leaf(sig: &Rc<IWfSig>, left: &Type, right: &Type) -> Term {
     sig.supi(rt(inl(left.clone(), right.clone(), triv())), rt(triv()))
 }
 
-fn node(sig: &IWfSig, left: &Type, right: &Type, payload: Term, tys: &[Type], kids: &[Term]) -> Term {
+fn node(sig: &Rc<IWfSig>, left: &Type, right: &Type, payload: Term, tys: &[Type], kids: &[Term]) -> Term {
     sig.supi(rt(inr(left.clone(), right.clone(), payload)), rt(tuple(tys, kids)))
 }
 

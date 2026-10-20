@@ -40,7 +40,7 @@ use std::sync::Arc as Rc;
 use crate::level::Level;
 use crate::subst::{GlobalEntry, GlobalSubst};
 use crate::term::{
-    iwf_ih, nth, wf_step_telescope, IWfSig, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, LocalCtx,
+    iwf_ih, nth, wf_step_telescope, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, LocalCtx,
     LocalSubst, LocalVar, Term, Type,
 };
 
@@ -953,31 +953,9 @@ fn step_term_frame(t: &Term, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) 
         // `sup_i` of any annotations and at any index `m`, open data included
         // (docs/iwf-former-design.md §4; heather-coq `red_elimIWf_supi`). The
         // ih is `term::iwf_ih`, shared with the value machine.
-        Term::ElimIWf {
-            level,
-            idx_level,
-            motive_level,
-            idx,
-            shape,
-            arity,
-            out,
-            child,
-            motive,
-            step,
-            index,
-            scrut,
-        } => match &**scrut {
+        Term::ElimIWf { sig, motive_level, motive, step, index, scrut } => match &**scrut {
             Term::Supi { label, children, .. } => {
-                let sig = IWfSig {
-                    level: level.clone(),
-                    idx_level: idx_level.clone(),
-                    idx: Rc::clone(idx),
-                    shape: Rc::clone(shape),
-                    arity: Rc::clone(arity),
-                    out: Rc::clone(out),
-                    child: Rc::clone(child),
-                };
-                let ih = iwf_ih(&sig, motive_level, motive, step, label, children);
+                let ih = iwf_ih(sig, motive_level, motive, step, label, children);
                 let delta = LocalSubst::id(gamma)
                     .extended(Rc::clone(label))
                     .extended(Rc::clone(children))
@@ -985,14 +963,8 @@ fn step_term_frame(t: &Term, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) 
                 Some(step.apply_local(&delta))
             }
             _ => step_scrut(scrut, gamma, defs, frames).map(|s| Term::ElimIWf {
-                level: level.clone(),
-                idx_level: idx_level.clone(),
+                sig: Rc::clone(sig),
                 motive_level: motive_level.clone(),
-                idx: Rc::clone(idx),
-                shape: Rc::clone(shape),
-                arity: Rc::clone(arity),
-                out: Rc::clone(out),
-                child: Rc::clone(child),
                 motive: Rc::clone(motive),
                 step: Rc::clone(step),
                 index: Rc::clone(index),

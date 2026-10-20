@@ -59,7 +59,7 @@ use crate::term::{
     Motives, Term, Type,
 };
 use crate::value::{
-    Elim, ElimSpine, Env, Head, Lookup, PiAnn, SigAnn, SumAnn, TmClo, TyClo, VNeTy, VNeutral,
+    Elim, ElimSpine, Env, Head, Lookup, PiAnn, VIWfSig, SigAnn, SumAnn, TmClo, TyClo, VNeTy, VNeutral,
     VSubst, VTail, VTy, Val, ValueArena,
 };
 use crate::value::algebra::{AffineTree, FoldClass};
@@ -740,14 +740,16 @@ impl<'a, 'v> Eval<'a, 'v> {
                 shape: yclo(env, shape),
                 arity: tclo(env, arity),
             },
-            Type::IWf { level, idx_level, idx, shape, arity, out, child, index } => VTy::IWf {
-                level: level.clone(),
-                idx_level: idx_level.clone(),
-                idx: yclo(env, idx),
-                shape: yclo(env, shape),
-                arity: tclo(env, arity),
-                out: tclo(env, out),
-                child: tclo(env, child),
+            Type::IWf { sig, index } => VTy::IWf {
+                sig: Rc::new(VIWfSig {
+                    level: sig.level.clone(),
+                    idx_level: sig.idx_level.clone(),
+                    idx: yclo(env, &sig.idx),
+                    shape: yclo(env, &sig.shape),
+                    arity: tclo(env, &sig.arity),
+                    out: tclo(env, &sig.out),
+                    child: tclo(env, &sig.child),
+                }),
                 index: tclo(env, index),
             },
             Type::Sum { lhs_level, rhs_level, lhs, rhs } => VTy::Sum {
@@ -1328,19 +1330,19 @@ impl<'a, 'v> Eval<'a, 'v> {
                 label: tclo(env, label),
                 children: tclo(env, children),
             },
-            Term::Supi { level, idx_level, idx, shape, arity, out, child, label, children } => {
-                Val::Supi {
-                    level: level.clone(),
-                    idx_level: idx_level.clone(),
-                    idx: yclo(env, idx),
-                    shape: yclo(env, shape),
-                    arity: tclo(env, arity),
-                    out: tclo(env, out),
-                    child: tclo(env, child),
-                    label: tclo(env, label),
-                    children: tclo(env, children),
-                }
-            }
+            Term::Supi { sig, label, children } => Val::Supi {
+                sig: Rc::new(VIWfSig {
+                    level: sig.level.clone(),
+                    idx_level: sig.idx_level.clone(),
+                    idx: yclo(env, &sig.idx),
+                    shape: yclo(env, &sig.shape),
+                    arity: tclo(env, &sig.arity),
+                    out: tclo(env, &sig.out),
+                    child: tclo(env, &sig.child),
+                }),
+                label: tclo(env, label),
+                children: tclo(env, children),
+            },
 
             // -- functions --
             Term::Lam { dom_level, cod_level, dom, body } => Val::Lam {
@@ -1553,30 +1555,19 @@ impl<'a, 'v> Eval<'a, 'v> {
                 };
                 return Ok(Work::Elim(s, e));
             }
-            Term::ElimIWf {
-                level,
-                idx_level,
-                motive_level,
-                idx,
-                shape,
-                arity,
-                out,
-                child,
-                motive,
-                step,
-                index,
-                scrut,
-            } => {
+            Term::ElimIWf { sig, motive_level, motive, step, index, scrut } => {
                 let s = self.eval_tm(scrut, env)?;
                 let e = Elim::ElimIWf {
-                    level: level.clone(),
-                    idx_level: idx_level.clone(),
+                    sig: Rc::new(VIWfSig {
+                        level: sig.level.clone(),
+                        idx_level: sig.idx_level.clone(),
+                        idx: yclo(env, &sig.idx),
+                        shape: yclo(env, &sig.shape),
+                        arity: tclo(env, &sig.arity),
+                        out: tclo(env, &sig.out),
+                        child: tclo(env, &sig.child),
+                    }),
                     motive_level: motive_level.clone(),
-                    idx: yclo(env, idx),
-                    shape: yclo(env, shape),
-                    arity: tclo(env, arity),
-                    out: tclo(env, out),
-                    child: tclo(env, child),
                     motive: yclo(env, motive),
                     step: tclo(env, step),
                     index: tclo(env, index),
@@ -2273,23 +2264,10 @@ impl<'a, 'v> Eval<'a, 'v> {
         children: &'v TmClo<'v>,
         e: &Elim<'v>,
     ) -> Res<Option<Work<'v>>> {
-        let Elim::ElimIWf {
-            level,
-            idx_level,
-            motive_level,
-            idx,
-            shape,
-            arity,
-            out,
-            child,
-            motive,
-            step,
-            env,
-            ..
-        } = e
-        else {
+        let Elim::ElimIWf { sig, motive_level, motive, step, env, .. } = e else {
             return Ok(None);
         };
+        let VIWfSig { level, idx_level, idx, shape, arity, out, child } = &**sig;
         let (
             Some((_, idx_b)),
             Some((_, shape_b)),
@@ -2310,7 +2288,7 @@ impl<'a, 'v> Eval<'a, 'v> {
         else {
             return Ok(None);
         };
-        let sig = IWfSig {
+        let sig = Rc::new(IWfSig {
             level: level.clone(),
             idx_level: idx_level.clone(),
             idx: Rc::clone(idx_b),
@@ -2318,7 +2296,7 @@ impl<'a, 'v> Eval<'a, 'v> {
             arity: Rc::clone(arity_b),
             out: Rc::clone(out_b),
             child: Rc::clone(child_b),
-        }
+        })
         .shift_local(2);
         let ih = iwf_ih(
             &sig,

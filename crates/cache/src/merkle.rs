@@ -82,7 +82,7 @@
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
 use heather_kernel::term::{
-    Branches, CtxBase, CtxEntry, GlobalBinding, LocalCtx, LocalSubst, Motives, SubstTail, Term,
+    Branches, CtxBase, CtxEntry, GlobalBinding, IWfSig, LocalCtx, LocalSubst, Motives, SubstTail, Term,
     Type,
 };
 
@@ -442,6 +442,21 @@ impl<'a> Walk<'a> {
         }
     }
 
+    /// An `IWf` signature's two levels, then its components: `elim_IWf`
+    /// hashes its motive level between the two, as the flat variant did.
+    fn iwf_sig_levels(&mut self, sig: &IWfSig) {
+        self.level(&sig.level);
+        self.level(&sig.idx_level);
+    }
+
+    fn iwf_sig_parts(&mut self, sig: &IWfSig) {
+        self.ty(&sig.idx);
+        self.ty(&sig.shape);
+        self.term(&sig.arity);
+        self.term(&sig.out);
+        self.term(&sig.child);
+    }
+
     fn ty(&mut self, t: &Type) {
         match t {
             Type::Nat => self.tag(tag::T_NAT),
@@ -541,15 +556,10 @@ impl<'a> Walk<'a> {
                 self.term(len);
                 self.ty(fam);
             }
-            Type::IWf { level, idx_level, idx, shape, arity, out, child, index } => {
+            Type::IWf { sig, index } => {
                 self.tag(tag::T_IWF);
-                self.level(level);
-                self.level(idx_level);
-                self.ty(idx);
-                self.ty(shape);
-                self.term(arity);
-                self.term(out);
-                self.term(child);
+                self.iwf_sig_levels(sig);
+                self.iwf_sig_parts(sig);
                 self.term(index);
             }
             // Reference site 2 of 5.
@@ -908,41 +918,18 @@ impl<'a> Walk<'a> {
                 self.term(step);
                 self.term(scrut);
             }
-            Term::Supi { level, idx_level, idx, shape, arity, out, child, label, children } => {
+            Term::Supi { sig, label, children } => {
                 self.tag(tag::E_SUPI);
-                self.level(level);
-                self.level(idx_level);
-                self.ty(idx);
-                self.ty(shape);
-                self.term(arity);
-                self.term(out);
-                self.term(child);
+                self.iwf_sig_levels(sig);
+                self.iwf_sig_parts(sig);
                 self.term(label);
                 self.term(children);
             }
-            Term::ElimIWf {
-                level,
-                idx_level,
-                motive_level,
-                idx,
-                shape,
-                arity,
-                out,
-                child,
-                motive,
-                step,
-                index,
-                scrut,
-            } => {
+            Term::ElimIWf { sig, motive_level, motive, step, index, scrut } => {
                 self.tag(tag::E_ELIMIWF);
-                self.level(level);
-                self.level(idx_level);
+                self.iwf_sig_levels(sig);
                 self.level(motive_level);
-                self.ty(idx);
-                self.ty(shape);
-                self.term(arity);
-                self.term(out);
-                self.term(child);
+                self.iwf_sig_parts(sig);
                 self.ty(motive);
                 self.term(step);
                 self.term(index);

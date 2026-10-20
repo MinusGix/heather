@@ -211,18 +211,14 @@ pub enum Type {
     /// any index; positive, no η, and nothing stored but the shape and the
     /// children, so there is no irrelevance arm (design §5).
     ///
+    /// The signature (everything but the index) is one shared [`IWfSig`]:
+    /// flat, its two levels and five components would make every `Type`
+    /// a third larger, and the checker's recursion holds `Type`s in each
+    /// frame (`docs/native-depth-budget-design.md`).
+    ///
     /// **Not code yet**: as [`Type::DVec`], admitted at layers p and m only
     /// until the rec.rs round (design §13 step 4).
-    IWf {
-        level: Level,
-        idx_level: Level,
-        idx: Rc<Type>,
-        shape: Rc<Type>,
-        arity: Rc<Term>,
-        out: Rc<Term>,
-        child: Rc<Term>,
-        index: Rc<Term>,
-    },
+    IWf { sig: Rc<IWfSig>, index: Rc<Term> },
     /// `U^δ` — global type variable under a local substitution.
     GlobalTy { var: GlobalVar, subst: LocalSubst },
     /// `(g : Ctx) ⇒^l T` — meta-function type over context variables; binds
@@ -721,17 +717,7 @@ pub enum Term {
     /// constructor *is* at its output index, so it stores no equation
     /// (design §2). The signature is [`Type::IWf`]'s, with its binders; fully
     /// annotated, so it synthesizes. Same layer gate as [`Type::IWf`].
-    Supi {
-        level: Level,
-        idx_level: Level,
-        idx: Rc<Type>,
-        shape: Rc<Type>,
-        arity: Rc<Term>,
-        out: Rc<Term>,
-        child: Rc<Term>,
-        label: Rc<Term>,
-        children: Rc<Term>,
-    },
+    Supi { sig: Rc<IWfSig>, label: Rc<Term>, children: Rc<Term> },
     /// `elim_IWf^{l,li,l'}(I; x:S. n; x. o; x i. c; j z. M; a cs ih. s; m; t)
     /// : M[m/j, t/z]` — dependent elimination over `t : IWf(…)(m)`. The
     /// signature is [`Type::IWf`]'s; `motive` binds two locals
@@ -745,14 +731,8 @@ pub enum Term {
     /// dnth(…; cs; i))]` ([`iwf_ih`]). Neutral on a neutral scrutinee, no η,
     /// no strip. Same layer gate as [`Type::IWf`].
     ElimIWf {
-        level: Level,
-        idx_level: Level,
+        sig: Rc<IWfSig>,
         motive_level: Level,
-        idx: Rc<Type>,
-        shape: Rc<Type>,
-        arity: Rc<Term>,
-        out: Rc<Term>,
-        child: Rc<Term>,
         motive: Rc<Type>,
         step: Rc<Term>,
         index: Rc<Term>,
@@ -2481,9 +2461,10 @@ pub fn dnth(level: &Level, len: &Rc<Term>, fam: &Rc<Type>, cs: Rc<Term>, idx: Rc
 /// The signature of an `IWf` — every component but the index: `idx` and
 /// `shape` in Γ, `arity` and `out` under `x : S`, `child` under
 /// `x : S, i : Fin n` (see [`Type::IWf`]). [`Type::IWf`], [`Term::Supi`] and
-/// [`Term::ElimIWf`] carry it as flat fields; this is the borrowed bundle the
-/// schemas below are written over.
-#[derive(Clone, Debug)]
+/// [`Term::ElimIWf`] share it behind one pointer, and the schemas below are
+/// written over it. Its `Debug` is [`Type::IWf`]'s budgeted one, through
+/// `fmt.rs`.
+#[derive(Clone, PartialEq, Eq)]
 pub struct IWfSig {
     pub level: Level,
     pub idx_level: Level,
@@ -2501,45 +2482,24 @@ impl IWfSig {
     }
 
     /// `IWf(…)(m)`.
-    pub fn at(&self, index: Rc<Term>) -> Type {
-        Type::IWf {
-            level: self.level.clone(),
-            idx_level: self.idx_level.clone(),
-            idx: Rc::clone(&self.idx),
-            shape: Rc::clone(&self.shape),
-            arity: Rc::clone(&self.arity),
-            out: Rc::clone(&self.out),
-            child: Rc::clone(&self.child),
-            index,
-        }
+    pub fn at(self: &Rc<Self>, index: Rc<Term>) -> Type {
+        Type::IWf { sig: Rc::clone(self), index }
     }
 
     /// `sup_i(…; a; cs)`, at this signature.
-    pub fn supi(&self, label: Rc<Term>, children: Rc<Term>) -> Term {
-        Term::Supi {
-            level: self.level.clone(),
-            idx_level: self.idx_level.clone(),
-            idx: Rc::clone(&self.idx),
-            shape: Rc::clone(&self.shape),
-            arity: Rc::clone(&self.arity),
-            out: Rc::clone(&self.out),
-            child: Rc::clone(&self.child),
-            label,
-            children,
-        }
+    pub fn supi(self: &Rc<Self>, label: Rc<Term>, children: Rc<Term>) -> Term {
+        Term::Supi { sig: Rc::clone(self), label, children }
     }
 
     /// The signature weakened past `by` binders. The components under the
     /// shape's (and the position's) binder keep those binders fixed, which is
     /// what shifting the whole former does, so it is done that way.
-    pub fn shift_local(&self, by: u32) -> IWfSig {
+    pub fn shift_local(self: &Rc<Self>, by: u32) -> Rc<IWfSig> {
         if by == 0 {
-            return self.clone();
+            return Rc::clone(self);
         }
         match self.at(Rc::new(Term::Zero)).shift_local(by) {
-            Type::IWf { level, idx_level, idx, shape, arity, out, child, .. } => {
-                IWfSig { level, idx_level, idx, shape, arity, out, child }
-            }
+            Type::IWf { sig, .. } => sig,
             _ => unreachable!("shifting an IWf yields an IWf"),
         }
     }
@@ -2554,14 +2514,14 @@ pub fn inst_motive2(motive: &Type, by: u32, tj: &Term, tz: &Term) -> Type {
 
 /// `iwfFam a`: the children's family, `IWf(…)(c[a/x, k/i])`, in `(Γ, k)`
 /// for `a` in Γ. The `k`th child of `sup_i(a; cs)` lives at it.
-pub fn iwf_fam(sig: &IWfSig, a: &Term) -> Type {
+pub fn iwf_fam(sig: &Rc<IWfSig>, a: &Term) -> Type {
     sig.shift_local(1).at(Rc::new(sig.child.inst_top_above(0, 1, a)))
 }
 
 /// `DVec^{l⊔li}(n[a/x]; k. IWf(…)(c[a/x, k/i]))`, in Γ for `a` in Γ: the
 /// type of `sup_i(a; cs)`'s children (design §2), and `cs`'s entry in the
 /// step telescope at `a := x`.
-pub fn iwf_children_ty(sig: &IWfSig, a: &Term) -> Type {
+pub fn iwf_children_ty(sig: &Rc<IWfSig>, a: &Term) -> Type {
     Type::DVec {
         level: sig.family_level(),
         len: Rc::new(sig.arity.inst_top(0, a)),
@@ -2570,7 +2530,7 @@ pub fn iwf_children_ty(sig: &IWfSig, a: &Term) -> Type {
 }
 
 /// `iwfmotty`: the motive's scrutinee type `IWf(…)(j)`, in `(Γ, j : I)`.
-pub fn iwf_motive_scrut_ty(sig: &IWfSig) -> Type {
+pub fn iwf_motive_scrut_ty(sig: &Rc<IWfSig>) -> Type {
     sig.shift_local(1).at(Rc::new(Term::Var(LocalVar(0))))
 }
 
@@ -2586,7 +2546,7 @@ pub fn iwf_motive_scrut_ty(sig: &IWfSig) -> Type {
 /// where, in `(Γ, a)`, the components under the shape binder are read with
 /// `a` for `x` as they stand (as `wf_step_telescope`'s arity is).
 /// heather-coq's `iwfcsty`, `iwfihty` and `iwfstepty`, binder for binder.
-pub fn iwf_step_telescope(sig: &IWfSig, motive_level: &Level, motive: &Type) -> (Type, Type, Type) {
+pub fn iwf_step_telescope(sig: &Rc<IWfSig>, motive_level: &Level, motive: &Type) -> (Type, Type, Type) {
     let var = |i: u32| Rc::new(Term::Var(LocalVar(i)));
     let cs_ty = iwf_children_ty(&sig.shift_local(1), &Term::Var(LocalVar(0)));
     // In (Γ, a, cs, i): the child index c[a, i] and the `i`th child, whose
@@ -2620,7 +2580,7 @@ pub fn iwf_step_telescope(sig: &IWfSig, motive_level: &Level, motive: &Type) -> 
 /// in Γ, for `a` and `cs` in Γ (design §4). The recursive call is at the
 /// child's own index, so β fires at any index, open data included.
 pub fn iwf_ih(
-    sig: &IWfSig,
+    sig: &Rc<IWfSig>,
     motive_level: &Level,
     motive: &Rc<Type>,
     step: &Rc<Term>,
@@ -2635,16 +2595,9 @@ pub fn iwf_ih(
         Rc::new(cs.shift_local(1)),
         Rc::new(Term::Var(LocalVar(0))),
     );
-    let up = sig.shift_local(1);
     let rec = Term::ElimIWf {
-        level: up.level,
-        idx_level: up.idx_level,
+        sig: sig.shift_local(1),
         motive_level: motive_level.clone(),
-        idx: up.idx,
-        shape: up.shape,
-        arity: up.arity,
-        out: up.out,
-        child: up.child,
         motive: Rc::new(motive.shift_local_above(1, 2)),
         step: Rc::new(step.shift_local_above(1, 3)),
         index: Rc::new(sig.child.inst_top_above(0, 1, a)),
@@ -2773,6 +2726,23 @@ pub fn wf_step_telescope_at(
         &LocalSubst::id(gamma).shift_local(3).extended(Rc::new(sup_ac.shift_local(1))),
     );
     (cs_ty, ih_ty, step_ty)
+}
+
+#[cfg(test)]
+mod size_tests {
+    use super::{Term, Type};
+
+    /// The checker's recursion holds `Type`s and `Term`s in every frame
+    /// (`docs/native-depth-budget-design.md`), so a variant that outgrows the
+    /// rest grows every frame of it: a flat `IWf` signature made a 1000-deep
+    /// constructor value overflow the 8 MiB stack. A former with many
+    /// components keeps them behind one pointer (`IWfSig`).
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn syntax_nodes_stay_their_size() {
+        assert_eq!(std::mem::size_of::<Type>(), 72);
+        assert_eq!(std::mem::size_of::<Term>(), 128);
+    }
 }
 
 #[cfg(test)]

@@ -35,7 +35,7 @@ use heather_kernel::layer::Layer;
 use heather_kernel::level::{Level, UnivVar};
 use heather_kernel::reduce::whnf_type;
 use heather_kernel::term::{
-    nth, Branches, CtxBase, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, LocalCtx,
+    nth, Branches, CtxBase, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, IWfSig, LocalCtx,
     LocalSubst, LocalVar, Motives, SubstTail, Term, Type,
 };
 use heather_kernel::typing::check_term;
@@ -445,7 +445,8 @@ pub fn gen_wt_type(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Type>, Level) {
                 ) else {
                     continue;
                 };
-                let ty = Type::IWf { level: l.clone(), idx_level: li.clone(), idx, shape, arity, out, child, index };
+                let sig = IWfSig { level: l.clone(), idx_level: li.clone(), idx, shape, arity, out, child };
+                let ty = Type::IWf { sig: Rc::new(sig), index };
                 return (rty(ty), Level::max(l, li));
             }
             _ => continue,

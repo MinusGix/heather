@@ -109,7 +109,7 @@ use std::sync::Arc as Rc;
 use crate::bounds;
 use crate::level::Level;
 use crate::term::{
-    Branches, CtxBase, CtxEntries, CtxEntry, GlobalVar, LocalCtx, LocalSubst, LocalVar, Motives,
+    Branches, CtxBase, CtxEntries, CtxEntry, GlobalVar, IWfSig, LocalCtx, LocalSubst, LocalVar, Motives,
     SubstTail, Term, Type,
 };
 
@@ -326,6 +326,27 @@ fn sub_ty<M: Mapper>(t: &Rc<Type>, m: &mut M, at: Depths) -> Rc<Type> {
     }
 }
 
+/// An `IWf` signature (`docs/iwf-former-design.md` §1.2): `arity` and
+/// `out` under `x : S`, `child` under `x, i`. Shared when nothing in it
+/// changed, as [`sub_ty`]/[`sub_tm`] share a node.
+fn sub_iwf_sig<M: Mapper>(sig: &Rc<IWfSig>, m: &mut M, at: Depths) -> Rc<IWfSig> {
+    let before = *m.changes();
+    let mapped = IWfSig {
+        level: m.level(&sig.level, at),
+        idx_level: m.level(&sig.idx_level, at),
+        idx: sub_ty(&sig.idx, m, at),
+        shape: sub_ty(&sig.shape, m, at),
+        arity: sub_tm(&sig.arity, m, at + dep(0, 0, 1)),
+        out: sub_tm(&sig.out, m, at + dep(0, 0, 1)),
+        child: sub_tm(&sig.child, m, at + dep(0, 0, 2)),
+    };
+    if *m.changes() == before {
+        Rc::clone(sig)
+    } else {
+        Rc::new(mapped)
+    }
+}
+
 fn sub_tm<M: Mapper>(t: &Rc<Term>, m: &mut M, at: Depths) -> Rc<Term> {
     if M::COUNT_NODES {
         crate::stats::shift_global_nodes(1);
@@ -494,16 +515,7 @@ fn map_type<M: Mapper>(t: &Type, m: &mut M, at: Depths) -> Type {
             fam: sub_ty(fam, m, at + dep(0, 0, 1)),
         },
         // IWf: `arity` and `out` under `x : S`, `child` under `x, i`.
-        Type::IWf { level, idx_level, idx, shape, arity, out, child, index } => Type::IWf {
-            level: m.level(level, at),
-            idx_level: m.level(idx_level, at),
-            idx: sub_ty(idx, m, at),
-            shape: sub_ty(shape, m, at),
-            arity: sub_tm(arity, m, at + dep(0, 0, 1)),
-            out: sub_tm(out, m, at + dep(0, 0, 1)),
-            child: sub_tm(child, m, at + dep(0, 0, 2)),
-            index: sub_tm(index, m, at),
-        },
+        Type::IWf { sig, index } => Type::IWf { sig: sub_iwf_sig(sig, m, at), index: sub_tm(index, m, at) },
         Type::GlobalTy { var, subst } => {
             let subst = map_subst(subst, m, at);
             m.global_ty(*var, subst, at)
@@ -786,41 +798,14 @@ fn map_term<M: Mapper>(t: &Term, m: &mut M, at: Depths) -> Term {
         },
         // sup_i / elim_IWf: the signature as `IWf`'s; the motive binds
         // `j, z`, the step `a, cs, ih`.
-        Term::Supi { level, idx_level, idx, shape, arity, out, child, label, children } => {
-            Term::Supi {
-                level: m.level(level, at),
-                idx_level: m.level(idx_level, at),
-                idx: sub_ty(idx, m, at),
-                shape: sub_ty(shape, m, at),
-                arity: sub_tm(arity, m, at + dep(0, 0, 1)),
-                out: sub_tm(out, m, at + dep(0, 0, 1)),
-                child: sub_tm(child, m, at + dep(0, 0, 2)),
-                label: sub_tm(label, m, at),
-                children: sub_tm(children, m, at),
-            }
-        }
-        Term::ElimIWf {
-            level,
-            idx_level,
-            motive_level,
-            idx,
-            shape,
-            arity,
-            out,
-            child,
-            motive,
-            step,
-            index,
-            scrut,
-        } => Term::ElimIWf {
-            level: m.level(level, at),
-            idx_level: m.level(idx_level, at),
+        Term::Supi { sig, label, children } => Term::Supi {
+            sig: sub_iwf_sig(sig, m, at),
+            label: sub_tm(label, m, at),
+            children: sub_tm(children, m, at),
+        },
+        Term::ElimIWf { sig, motive_level, motive, step, index, scrut } => Term::ElimIWf {
+            sig: sub_iwf_sig(sig, m, at),
             motive_level: m.level(motive_level, at),
-            idx: sub_ty(idx, m, at),
-            shape: sub_ty(shape, m, at),
-            arity: sub_tm(arity, m, at + dep(0, 0, 1)),
-            out: sub_tm(out, m, at + dep(0, 0, 1)),
-            child: sub_tm(child, m, at + dep(0, 0, 2)),
             motive: sub_ty(motive, m, at + dep(0, 0, 2)),
             step: sub_tm(step, m, at + dep(0, 0, 3)),
             index: sub_tm(index, m, at),

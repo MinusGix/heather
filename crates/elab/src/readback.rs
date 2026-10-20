@@ -35,7 +35,7 @@ use heather_kernel::level::Level;
 #[cfg(debug_assertions)]
 use heather_kernel::reduce::Defs;
 use heather_kernel::subst::{local_bound, local_bound_ty};
-use heather_kernel::term::{nth, LocalCtx, LocalSubst, LocalVar, Numeral, SubstTail, Term, Type};
+use heather_kernel::term::{nth, IWfSig, LocalCtx, LocalSubst, LocalVar, Numeral, SubstTail, Term, Type};
 use heather_kernel::value::program::ContextProgram;
 use heather_kernel::value::{Elim, Env, Head, TmClo, TyClo, VTail, VTy, Val};
 
@@ -115,14 +115,16 @@ impl<'v, 'g> Readback<'v, 'g> {
                 len: Rc::new(self.val(len)?),
                 fam: self.ty(fam, 1)?,
             },
-            VTy::IWf { level, idx_level, idx, shape, arity, out, child, index } => Type::IWf {
-                level: level.clone(),
-                idx_level: idx_level.clone(),
-                idx: self.ty(idx, 0)?,
-                shape: self.ty(shape, 0)?,
-                arity: self.tm(arity, 1)?,
-                out: self.tm(out, 1)?,
-                child: self.tm(child, 2)?,
+            VTy::IWf { sig, index } => Type::IWf {
+                sig: Rc::new(IWfSig {
+                    level: sig.level.clone(),
+                    idx_level: sig.idx_level.clone(),
+                    idx: self.ty(&sig.idx, 0)?,
+                    shape: self.ty(&sig.shape, 0)?,
+                    arity: self.tm(&sig.arity, 1)?,
+                    out: self.tm(&sig.out, 1)?,
+                    child: self.tm(&sig.child, 2)?,
+                }),
                 index: self.tm(index, 0)?,
             },
             VTy::UPi { .. }

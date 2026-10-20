@@ -825,14 +825,14 @@ impl<'v> Dom<'v> for Values {
                 shape: TyC::here(env, *shape),
                 arity: TmC::under(env, *arity, 1),
             },
-            VTy::IWf { level, idx_level, idx, shape, arity, out, child, index } => TyView::IWf {
-                level,
-                idx_level,
-                idx: TyC::here(env, *idx),
-                shape: TyC::here(env, *shape),
-                arity: TmC::under(env, *arity, 1),
-                out: TmC::under(env, *out, 1),
-                child: TmC::under(env, *child, 2),
+            VTy::IWf { sig, index } => TyView::IWf {
+                level: &sig.level,
+                idx_level: &sig.idx_level,
+                idx: TyC::here(env, sig.idx),
+                shape: TyC::here(env, sig.shape),
+                arity: TmC::under(env, sig.arity, 1),
+                out: TmC::under(env, sig.out, 1),
+                child: TmC::under(env, sig.child, 2),
                 index: TmC::here(env, *index),
             },
             VTy::Sum { lhs_level, rhs_level, lhs, rhs } => TyView::Sum {
@@ -1871,17 +1871,17 @@ impl<'v> Dom<'v> for Values {
         label: &TmC<'v>,
     ) -> R<TyC<'v>> {
         let wv = Self::whnf_ty(cv, env, &TyC::value(env, Rc::clone(w)))?;
-        let VTy::IWf { level, idx_level, idx, shape, arity, out, child, .. } = &*wv else {
+        let VTy::IWf { sig, .. } = &*wv else {
             return Err(NC);
         };
         let parts = IWfSigC::<Values> {
-            level,
-            idx_level,
-            idx: &TyC::here(env, *idx),
-            shape: &TyC::here(env, *shape),
-            arity: &TmC::under(env, *arity, 1),
-            out: &TmC::under(env, *out, 1),
-            child: &TmC::under(env, *child, 2),
+            level: &sig.level,
+            idx_level: &sig.idx_level,
+            idx: &TyC::here(env, sig.idx),
+            shape: &TyC::here(env, sig.shape),
+            arity: &TmC::under(env, sig.arity, 1),
+            out: &TmC::under(env, sig.out, 1),
+            child: &TmC::under(env, sig.child, 2),
         };
         let Some((senv, sig)) = iwf_sig_syn(&parts) else { return Err(NC) };
         let cs = iwf_children_ty(&sig.shift_local(1), &Term::Var(LocalVar(0)));
@@ -1939,7 +1939,7 @@ impl<'v> Dom<'v> for Values {
 /// the syntax, each body with its closure's pending global offset spent (see
 /// [`Values::wf_step_telescope`]). `None` when a component is not syntactic
 /// or the five were not built in one scope.
-fn iwf_sig_syn<'v>(sig: &IWfSigC<'_, 'v, Values>) -> Option<(value::Env<'v>, IWfSig)> {
+fn iwf_sig_syn<'v>(sig: &IWfSigC<'_, 'v, Values>) -> Option<(value::Env<'v>, Rc<IWfSig>)> {
     let (ienv, ibody) = sig.idx.clo.as_syn()?;
     let (senv, sbody) = sig.shape.clo.as_syn()?;
     let (aenv, abody) = sig.arity.clo.as_syn()?;
@@ -1958,7 +1958,7 @@ fn iwf_sig_syn<'v>(sig: &IWfSigC<'_, 'v, Values>) -> Option<(value::Env<'v>, IWf
         out: amb_tm(oenv, obody),
         child: amb_tm(cenv, cbody),
     };
-    Some((senv.clone(), syn))
+    Some((senv.clone(), Rc::new(syn)))
 }
 
 fn amb_ty<'v>(env: &value::Env<'v>, t: &Rc<Type>) -> Rc<Type> {
@@ -2144,28 +2144,15 @@ fn view_neutral<'a, 'v>(env: &Env<'v>, n: &'a Rc<VNeutral<'v>>) -> TmView<'a, 'v
                 scrut: head,
             }
         }
-        Elim::ElimIWf {
-            level,
-            idx_level,
+        Elim::ElimIWf { sig, motive_level, motive, step, index, .. } => TmView::ElimIWf {
+            level: &sig.level,
+            idx_level: &sig.idx_level,
             motive_level,
-            idx,
-            shape,
-            arity,
-            out,
-            child,
-            motive,
-            step,
-            index,
-            ..
-        } => TmView::ElimIWf {
-            level,
-            idx_level,
-            motive_level,
-            idx: TyC::here(env, *idx),
-            shape: TyC::here(env, *shape),
-            arity: TmC::under(env, *arity, 1),
-            out: TmC::under(env, *out, 1),
-            child: TmC::under(env, *child, 2),
+            idx: TyC::here(env, sig.idx),
+            shape: TyC::here(env, sig.shape),
+            arity: TmC::under(env, sig.arity, 1),
+            out: TmC::under(env, sig.out, 1),
+            child: TmC::under(env, sig.child, 2),
             // `(Γ, j, z)`.
             motive: TyC::under(env, *motive, 2),
             // `(Γ, a, cs, ih)`.

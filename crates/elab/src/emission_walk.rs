@@ -455,41 +455,21 @@ impl Walk<'_> {
             // (docs/iwf-former-design.md §13 step 6); walked so the answer
             // exists when something does. The signature's two types are
             // slots, its three terms are walked under their binders.
-            Term::Supi {
-                idx,
-                shape,
-                arity,
-                out,
-                child,
-                label,
-                children,
-                ..
-            } => {
-                self.slot("Supi.idx", idx, d);
-                self.slot("Supi.shape", shape, d);
-                self.term(arity, d + 1);
-                self.term(out, d + 1);
-                self.term(child, d + 2);
+            Term::Supi { sig, label, children } => {
+                self.slot("Supi.idx", &sig.idx, d);
+                self.slot("Supi.shape", &sig.shape, d);
+                self.term(&sig.arity, d + 1);
+                self.term(&sig.out, d + 1);
+                self.term(&sig.child, d + 2);
                 self.term(label, d);
                 self.term(children, d);
             }
-            Term::ElimIWf {
-                idx,
-                shape,
-                arity,
-                out,
-                child,
-                motive,
-                step,
-                index,
-                scrut,
-                ..
-            } => {
-                self.slot("ElimIWf.idx", idx, d);
-                self.slot("ElimIWf.shape", shape, d);
-                self.term(arity, d + 1);
-                self.term(out, d + 1);
-                self.term(child, d + 2);
+            Term::ElimIWf { sig, motive, step, index, scrut, .. } => {
+                self.slot("ElimIWf.idx", &sig.idx, d);
+                self.slot("ElimIWf.shape", &sig.shape, d);
+                self.term(&sig.arity, d + 1);
+                self.term(&sig.out, d + 1);
+                self.term(&sig.child, d + 2);
                 self.slot("ElimIWf.motive", motive, d + 2);
                 self.term(step, d + 3);
                 self.term(index, d);

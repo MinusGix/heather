@@ -1798,19 +1798,10 @@ impl Tc {
             // ⊢_i IWf^{l,li}(I; x:S. n; x. o; x i. c)(m) @ l ⊔ li ⟸ the
             // signature (`iwf_sig_wf`), ⊢_i m : I @ li. Computing layers only
             // until the rec.rs round gives it a code (design §1).
-            Type::IWf { level, idx_level, idx, shape, arity, out, child, index } => {
+            Type::IWf { sig, index } => {
                 self.computing_layer(env)?;
-                let sig = IWfSig {
-                    level: level.clone(),
-                    idx_level: idx_level.clone(),
-                    idx: Rc::clone(idx),
-                    shape: Rc::clone(shape),
-                    arity: Rc::clone(arity),
-                    out: Rc::clone(out),
-                    child: Rc::clone(child),
-                };
-                self.iwf_sig_wf(env, &sig)?;
-                self.tm_check_rc(env, index, idx, idx_level)?;
+                self.iwf_sig_wf(env, sig)?;
+                self.tm_check_rc(env, index, &sig.idx, &sig.idx_level)?;
                 Ok(sig.family_level())
             }
             Type::GlobalTy { var, subst } => {
@@ -3205,22 +3196,13 @@ impl Tc {
             // cs : DVec^{l⊔li}(n[a/x]; k. IWf(sig)(c[a/x, k/i])) — the
             // constructor is at its output index (docs/iwf-former-design.md
             // §2). A value at a convertible index checks by conversion.
-            Term::Supi { level, idx_level, idx, shape, arity, out, child, label, children } => {
+            Term::Supi { sig, label, children } => {
                 self.computing_layer(env)?;
-                let sig = IWfSig {
-                    level: level.clone(),
-                    idx_level: idx_level.clone(),
-                    idx: Rc::clone(idx),
-                    shape: Rc::clone(shape),
-                    arity: Rc::clone(arity),
-                    out: Rc::clone(out),
-                    child: Rc::clone(child),
-                };
-                self.iwf_sig_wf(env, &sig)?;
-                self.tm_check_rc(env, label, shape, level)?;
+                self.iwf_sig_wf(env, sig)?;
+                self.tm_check_rc(env, label, &sig.shape, &sig.level)?;
                 let fl = sig.family_level();
-                self.tm_check_ty(env, children, &iwf_children_ty(&sig, label), &fl)?;
-                Ok((sig.at(Rc::new(out.inst_top(0, label))), fl))
+                self.tm_check_ty(env, children, &iwf_children_ty(sig, label), &fl)?;
+                Ok((sig.at(Rc::new(sig.out.inst_top(0, label))), fl))
             }
             // elim_IWf^{l,li,l'}(sig; j z. M; a cs ih. s; m; t) : M[m/j, t/z]
             // @ l' (design §4). The motive ranges over every index; the step
@@ -3228,43 +3210,21 @@ impl Tc {
             // heather-coq's `iwfcsty`/`iwfihty`/`iwfstepty`. The telescope's
             // types are not checked: they are well-formed given the
             // signature and the motive (heather-coq `IWf_ihty_wf`).
-            Term::ElimIWf {
-                level,
-                idx_level,
-                motive_level,
-                idx,
-                shape,
-                arity,
-                out,
-                child,
-                motive,
-                step,
-                index,
-                scrut,
-            } => {
+            Term::ElimIWf { sig, motive_level, motive, step, index, scrut } => {
                 self.computing_layer(env)?;
-                let sig = IWfSig {
-                    level: level.clone(),
-                    idx_level: idx_level.clone(),
-                    idx: Rc::clone(idx),
-                    shape: Rc::clone(shape),
-                    arity: Rc::clone(arity),
-                    out: Rc::clone(out),
-                    child: Rc::clone(child),
-                };
-                self.iwf_sig_wf(env, &sig)?;
+                self.iwf_sig_wf(env, sig)?;
                 self.level_wf(env, motive_level)?;
                 let fl = sig.family_level();
                 // M scoped in (Γ, j : I, z : IWf(…)(j)).
-                let e_j = env.push_entry(Rc::clone(idx), idx_level.clone());
-                let e_jz = e_j.push_entry(Rc::new(iwf_motive_scrut_ty(&sig)), fl.clone());
+                let e_j = env.push_entry(Rc::clone(&sig.idx), sig.idx_level.clone());
+                let e_jz = e_j.push_entry(Rc::new(iwf_motive_scrut_ty(sig)), fl.clone());
                 self.ty_check(&e_jz, motive, motive_level)?;
-                let (cs_ty, ih_ty, step_ty) = iwf_step_telescope(&sig, motive_level, motive);
-                let e_a = env.push_entry(Rc::clone(shape), level.clone());
+                let (cs_ty, ih_ty, step_ty) = iwf_step_telescope(sig, motive_level, motive);
+                let e_a = env.push_entry(Rc::clone(&sig.shape), sig.level.clone());
                 let e_cs = e_a.push_entry(Rc::new(cs_ty), fl.clone());
                 let e_step = e_cs.push_entry(Rc::new(ih_ty), motive_level.clone());
                 self.tm_check_ty(&e_step, step, &step_ty, motive_level)?;
-                self.tm_check_rc(env, index, idx, idx_level)?;
+                self.tm_check_rc(env, index, &sig.idx, &sig.idx_level)?;
                 self.tm_check_ty(env, scrut, &sig.at(Rc::clone(index)), &fl)?;
                 Ok((inst_motive2(motive, 0, index, scrut), motive_level.clone()))
             }
@@ -3790,7 +3750,7 @@ fn type_anchor(ty: &Type) -> TypeAnchor {
         }
         Type::Vec { elem, .. } => type_anchor(elem),
         Type::DVec { fam, .. } => type_anchor(fam),
-        Type::IWf { shape, .. } => TypeAnchor::Type(RcIdentity::new(Rc::clone(shape))),
+        Type::IWf { sig, .. } => TypeAnchor::Type(RcIdentity::new(Rc::clone(&sig.shape))),
         Type::Fin { len } => TypeAnchor::Term(RcIdentity::new(Rc::clone(len))),
         Type::CtxPi { body, .. } | Type::TyPi { body, .. } => {
             TypeAnchor::Type(RcIdentity::new(Rc::clone(body)))

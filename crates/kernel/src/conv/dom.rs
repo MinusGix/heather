@@ -1099,14 +1099,14 @@ impl<'v> Dom<'v> for Syn {
             Type::DVec { level, len, fam } => {
                 TyView::DVec { level, len: Rc::clone(len), fam: Rc::clone(fam) }
             }
-            Type::IWf { level, idx_level, idx, shape, arity, out, child, index } => TyView::IWf {
-                level,
-                idx_level,
-                idx: Rc::clone(idx),
-                shape: Rc::clone(shape),
-                arity: Rc::clone(arity),
-                out: Rc::clone(out),
-                child: Rc::clone(child),
+            Type::IWf { sig, index } => TyView::IWf {
+                level: &sig.level,
+                idx_level: &sig.idx_level,
+                idx: Rc::clone(&sig.idx),
+                shape: Rc::clone(&sig.shape),
+                arity: Rc::clone(&sig.arity),
+                out: Rc::clone(&sig.out),
+                child: Rc::clone(&sig.child),
                 index: Rc::clone(index),
             },
             Type::UPi { num_vars, level, body } => {
@@ -1276,28 +1276,15 @@ impl<'v> Dom<'v> for Syn {
                     scrut: Rc::clone(scrut),
                 }
             }
-            Term::ElimIWf {
-                level,
-                idx_level,
+            Term::ElimIWf { sig, motive_level, motive, step, index, scrut } => TmView::ElimIWf {
+                level: &sig.level,
+                idx_level: &sig.idx_level,
                 motive_level,
-                idx,
-                shape,
-                arity,
-                out,
-                child,
-                motive,
-                step,
-                index,
-                scrut,
-            } => TmView::ElimIWf {
-                level,
-                idx_level,
-                motive_level,
-                idx: Rc::clone(idx),
-                shape: Rc::clone(shape),
-                arity: Rc::clone(arity),
-                out: Rc::clone(out),
-                child: Rc::clone(child),
+                idx: Rc::clone(&sig.idx),
+                shape: Rc::clone(&sig.shape),
+                arity: Rc::clone(&sig.arity),
+                out: Rc::clone(&sig.out),
+                child: Rc::clone(&sig.child),
                 motive: Rc::clone(motive),
                 step: Rc::clone(step),
                 index: Rc::clone(index),
@@ -2048,7 +2035,7 @@ impl<'v> Dom<'v> for Syn {
         motive_level: &Level,
         motive: &Rc<Type>,
     ) -> R<(Rc<Type>, Rc<Type>, Rc<Type>, Rc<Type>)> {
-        let sig = IWfSig {
+        let sig = Rc::new(IWfSig {
             level: sig.level.clone(),
             idx_level: sig.idx_level.clone(),
             idx: Rc::clone(sig.idx),
@@ -2056,7 +2043,7 @@ impl<'v> Dom<'v> for Syn {
             arity: Rc::clone(sig.arity),
             out: Rc::clone(sig.out),
             child: Rc::clone(sig.child),
-        };
+        });
         let mot = iwf_motive_scrut_ty(&sig);
         let (cs, ih, step) = iwf_step_telescope(&sig, motive_level, motive);
         Ok((Rc::new(mot), Rc::new(cs), Rc::new(ih), Rc::new(step)))
@@ -2068,19 +2055,10 @@ impl<'v> Dom<'v> for Syn {
         w: &Type,
         label: &Rc<Term>,
     ) -> R<Rc<Type>> {
-        let Type::IWf { level, idx_level, idx, shape, arity, out, child, .. } = w else {
+        let Type::IWf { sig, .. } = w else {
             return Err(NC);
         };
-        let sig = IWfSig {
-            level: level.clone(),
-            idx_level: idx_level.clone(),
-            idx: Rc::clone(idx),
-            shape: Rc::clone(shape),
-            arity: Rc::clone(arity),
-            out: Rc::clone(out),
-            child: Rc::clone(child),
-        };
-        Ok(Rc::new(iwf_children_ty(&sig, label)))
+        Ok(Rc::new(iwf_children_ty(sig, label)))
     }
 
     #[inline]

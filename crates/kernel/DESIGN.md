@@ -205,7 +205,13 @@ with `ih : Π(i : Fin n[a]). M[c[a,i], dnth(…; cs; i)]`, and β fires at a
 β on open data at a computed index, is `tests/iwf.rs`. Every schema is
 built once in `term.rs` around `IWfSig` (`iwf_children_ty`,
 `iwf_step_telescope`, `iwf_ih`), which typing, both reducers and conversion
-share; the one new substitution operation is `inst_top_above`
+share. The signature is also how the six variants (`Type::IWf`,
+`Term::Supi`, `Term::ElimIWf` and their values) carry it, behind one
+pointer: flat, its two levels and five components made `Type` and `VTy` a
+third larger and `Term` and `Elim` larger too, and since the checker's
+recursion holds them in every frame, a 1000-deep constructor value
+overflowed the 8 MiB stack (`size_tests`, and the value-size test, now pin
+the four). The one new substitution operation is `inst_top_above`
 (`t[s/x]` under the position binder that the child index keeps). The
 evaluator's β takes the closures' syntax apart, as `DVec`'s tail does,
 and builds the ih as a `Val::Lam` whose body is the eliminator at

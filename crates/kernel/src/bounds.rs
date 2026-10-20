@@ -58,7 +58,7 @@
 use std::cell::RefCell;
 use std::sync::Arc as Rc;
 
-use crate::term::{Branches, LocalSubst, Motives, Term, Type};
+use crate::term::{Branches, IWfSig, LocalSubst, Motives, Term, Type};
 
 /// What a subtree exposes to local-namespace operations, relative to its
 /// own root. See the module docs for the two components.
@@ -294,6 +294,16 @@ pub(crate) fn skip_type(t: &Rc<Type>, d: u32) -> bool {
 }
 
 impl Cache {
+    /// An `IWf` signature: `arity` and `out` under `x : S`, `child` under
+    /// `x, i`.
+    fn iwf_sig_use(&mut self, sig: &IWfSig) -> LocalUse {
+        self.type_use(&sig.idx)
+            .join(self.type_use(&sig.shape))
+            .join(self.term_use(&sig.arity).under(1))
+            .join(self.term_use(&sig.out).under(1))
+            .join(self.term_use(&sig.child).under(2))
+    }
+
     /// Every `δ` has a tail, and the local operations rewrite tails
     /// unconditionally; the payload terms live in the current scope.
     fn subst_use(&mut self, s: &LocalSubst) -> LocalUse {
@@ -338,13 +348,7 @@ impl Cache {
             }
             Type::W { shape, pos, .. } => self.type_use(shape).join(self.type_use(pos).under(1)),
             Type::DVec { len, fam, .. } => self.term_use(len).join(self.type_use(fam).under(1)),
-            Type::IWf { idx, shape, arity, out, child, index, .. } => self
-                .type_use(idx)
-                .join(self.type_use(shape))
-                .join(self.term_use(arity).under(1))
-                .join(self.term_use(out).under(1))
-                .join(self.term_use(child).under(2))
-                .join(self.term_use(index)),
+            Type::IWf { sig, index } => self.iwf_sig_use(sig).join(self.term_use(index)),
             Type::GlobalTy { subst, .. } => self.subst_use(subst),
             Type::CtxPi { body, .. } => self.type_use(body),
             Type::TyPi { body, .. } => self.type_use(body),
@@ -539,40 +543,12 @@ impl Cache {
                 .join(self.type_use(motive).under(1))
                 .join(self.term_use(step).under(3))
                 .join(self.term_use(scrut)),
-            Term::Supi {
-                idx,
-                shape,
-                arity,
-                out,
-                child,
-                label,
-                children,
-                ..
-            } => self
-                .type_use(idx)
-                .join(self.type_use(shape))
-                .join(self.term_use(arity).under(1))
-                .join(self.term_use(out).under(1))
-                .join(self.term_use(child).under(2))
+            Term::Supi { sig, label, children } => self
+                .iwf_sig_use(sig)
                 .join(self.term_use(label))
                 .join(self.term_use(children)),
-            Term::ElimIWf {
-                idx,
-                shape,
-                arity,
-                out,
-                child,
-                motive,
-                step,
-                index,
-                scrut,
-                ..
-            } => self
-                .type_use(idx)
-                .join(self.type_use(shape))
-                .join(self.term_use(arity).under(1))
-                .join(self.term_use(out).under(1))
-                .join(self.term_use(child).under(2))
+            Term::ElimIWf { sig, motive, step, index, scrut, .. } => self
+                .iwf_sig_use(sig)
                 .join(self.type_use(motive).under(2))
                 .join(self.term_use(step).under(3))
                 .join(self.term_use(index))
