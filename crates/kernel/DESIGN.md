@@ -472,6 +472,20 @@ paper too).
   chain). At Σ types, two neutrals try their spines before η-expanding
   (`Conv::tm_nf`'s Σ arm): η on two neutral 64-bit vectors was quadratic
   in the length, and a failed spine attempt still falls through to η.
+  **The eliminators are typed too** (2026-10-20,
+  `issues/conversion-typed-eliminator-congruence.md`): two neutral `case`s,
+  `elim_W`s, `elim_Wf`s and `J`s compare their scrutinees first, then the
+  motive's level, the motive and the branches, and never what the
+  scrutinee's type forces — `case`'s and `elim_W`'s `A`/`B`, `elim_Wf`'s
+  shape and arity, `J`'s `A`/`a`/`u`, their levels included. The motive and
+  branches are compared in the *left* elimination's stored telescope, which
+  converts with the scrutinee's inferred one, so no type is read off the
+  scrutinee. heather-coq checked exactly this rule (`ELIM_CONGRUENCE.md`:
+  soundness, completeness and decidability of the algorithm with these
+  premises, no axioms). On a Wf-lowered inductive the skipped shape is the
+  sum-of-Σs, the size of the declaration, at every meeting of two matches.
+  `elim_Nat` had nothing forced to drop; `transp` has no scrutinee (its
+  proof is irrelevant), so it still compares every annotation.
 - **Typing a spine is one walk** (2026-09-26,
   `issues/application-spine-substitution-cost.md`): `app@(…app@(f; a₁)…; aₖ)`
   holds the arguments while `f`'s type stays a syntactic Π telescope, checks
