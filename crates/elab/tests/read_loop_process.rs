@@ -18,7 +18,12 @@ fn read_loop_library_checks() {
 // state on a retry (docs/native-syscall-failures-design.md).
 #[test]
 fn slow_acceptance_read_loop_refusals() {
-    let library = checker().semantic_image();
+    // The labelled program and its stretches stand below the pieces.
+    let library = checker_with(&[
+        ("x86_64_asm", include_str!("../../../lib/std/arch/x86_64/x86_64_asm.hthr")),
+        ("elf64_runs", include_str!("../../../lib/elf64_runs.hthr")),
+        ("elf64_stretch", include_str!("../../../lib/elf64_stretch.hthr")),
+    ]).semantic_image();
     // What the filter stands on above the pieces, then the filter itself.
     let above: [(&str, &str); 6] = [
         ("bitvec_omega", include_str!("../../../lib/std/bitvec/bitvec_omega.hthr")),

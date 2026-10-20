@@ -20,18 +20,26 @@ use super::evaluate::evaluate_bytes;
 use super::read_loop::{claims, component, image_facts, literal, spell, FormatPart};
 
 // Bundled after the read profile's, the write loop's and the formatters':
-// what a filter computes, its step's contract, its bundle, its process and
-// its finishes.
+// the labelled program and its stretches (the chunk loop's byte loop is
+// one), what a filter computes, its step's contract, its bundle, its
+// process and its finishes.
 pub(super) const SUPPORT: &[(&str, &str)] = &[
+    ("x86_64_asm", include_str!("../../../../lib/std/arch/x86_64/x86_64_asm.hthr")),
+    ("elf64_runs", include_str!("../../../../lib/elf64_runs.hthr")),
+    ("elf64_stretch", include_str!("../../../../lib/elf64_stretch.hthr")),
     ("stream_filter", include_str!("../../../../lib/stream_filter.hthr")),
     ("filter_step_piece", include_str!("../../../../lib/filter_step_piece.hthr")),
     ("filter_program", include_str!("../../../../lib/filter_program.hthr")),
     ("elf64_read_filter", include_str!("../../../../lib/elf64_read_filter.hthr")),
     ("elf64_filter_finish", include_str!("../../../../lib/elf64_filter_finish.hthr")),
 ];
-// What a command stands on of the filter's library: the step contract, the
-// bundle and the chunk loop, not the finishes.
+// What a command stands on of the filter's library: the labelled program
+// and its stretches, the step contract, the bundle and the chunk loop, not
+// the finishes.
 pub(super) const COMMAND_SUPPORT: &[(&str, &str)] = &[
+    ("x86_64_asm", include_str!("../../../../lib/std/arch/x86_64/x86_64_asm.hthr")),
+    ("elf64_runs", include_str!("../../../../lib/elf64_runs.hthr")),
+    ("elf64_stretch", include_str!("../../../../lib/elf64_stretch.hthr")),
     ("stream_filter", include_str!("../../../../lib/stream_filter.hthr")),
     ("filter_step_piece", include_str!("../../../../lib/filter_step_piece.hthr")),
     ("filter_program", include_str!("../../../../lib/filter_program.hthr")),
@@ -382,7 +390,7 @@ mod tests {
         let mut session = heather_cli::semantic::SemanticSession::new(Some(std::path::PathBuf::from(
             concat!(env!("CARGO_MANIFEST_DIR"), "/../../target/native-test-images"),
         )));
-        let filter: Vec<(&str, &str)> = SUPPORT.iter().copied().filter(|(name, _)| matches!(*name, "stream_filter" | "filter_step_piece" | "elf64_read_filter")).collect();
+        let filter: Vec<(&str, &str)> = SUPPORT.iter().copied().filter(|(name, _)| matches!(*name, "x86_64_asm" | "elf64_runs" | "elf64_stretch" | "stream_filter" | "filter_step_piece" | "elf64_read_filter")).collect();
         for &(name, src) in READ_SUPPORT.iter().chain(WRITE_SUPPORT).chain(filter.iter()) {
             super::super::check_module(&mut elab, &mut session, &heather_cli::loader::Module {
                 name: name.into(), path: name.into(), src: src.into(),
@@ -397,11 +405,11 @@ mod tests {
             ("empty chunk into the write loop", format!("theorem t_jump_facts(): JumpsBack(fl_at_cjz(40), 6, filter_jumps(40, {d}).cd, fl_at_write(40)) {{
     asm_lands_back(fl_at_cjz(40), 6, filter_jumps(40, {d}).cd, fl_at_write(40), refl)
 }}", d = done(40)), false),
-            ("laid out for a step a byte longer", format!("theorem t_jump_facts(): JumpsBack(fl_at_jnz(40), 6, filter_jumps(41, {d}).ld, fl_at_load(40)) {{
-    asm_lands_back(fl_at_jnz(40), 6, filter_jumps(41, {d}).ld, fl_at_load(40), refl)
-}}", d = done(41)), false),
+            ("laid out for a step a byte longer", "theorem t_jump_facts(): JumpsBack(prog_len(lf_advance(40)), 6, near_rel(prog_len(lf_advance(41)) + 6, loop_labels(41, tf_load())), asm_at(lf_load())) {
+    asm_lands_back(prog_len(lf_advance(40)), 6, near_rel(prog_len(lf_advance(41)) + 6, loop_labels(41, tf_load())), asm_at(lf_load()), refl)
+}".to_string(), false),
         ] {
-            let text = format!("import elf64_read_filter; import elf64_write_loop; import elf64_print_pieces; import elf64_read_pieces; import x86_64_layout; \
+            let text = format!("import elf64_read_filter; import elf64_write_loop; import elf64_print_pieces; import elf64_read_pieces; import x86_64_layout; import x86_64_asm; \
                 import bitvec; import list; import logic; import nat;\n{declaration}\n");
             let result = library.elaborator().elab_module_source("layout_control", &text);
             if holds {

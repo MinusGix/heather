@@ -219,7 +219,9 @@ RSI, RDX, RDI, RAX and RBX; Linux clobbers RCX and R11; R9 and R10 advance.
   minutes until each sub-step was `have`-bound into a record of its own.
   Keep that discipline from the first draft: `FilterLoaded`,
   `FilterStepped`, `FilterStored` and `FilterAdvanced` are records, and
-  `filter_byte` chains them.
+  `filter_byte` chains them. (Since 2026-10-20 the loop is a program on
+  frame-free stretches, the step by hand between them:
+  `docs/native-straight-runs-design.md`, "The libraries' stretches".)
 - **Nat fields fit.** The step piece's contract needs each Nat field of the
   next state below 2^64. With init at zero and `advances`, each count after
   `k` bytes is at most `k`. The library proves `counts_bounded` once, by

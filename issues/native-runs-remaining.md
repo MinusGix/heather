@@ -18,11 +18,12 @@ moved onto `Runs` (`docs/native-runs-design.md`, `lib/elf64_runs.hthr`).
 - **The process libraries**: onto the frame-free stretch
   (`lib/elf64_stretch.hthr`). The argument scan is done (its letter table
   and refusal stay by hand); the stat pass and the operand cursor are
-  done, and so is the row writer. Left: the read filter, which needs its
-  list layout on `x86_64_asm` labels first (below).
-- **The list layouts** left in `elf64_read_pieces`, `elf64_read_filter` and
-  `elf64_count_print` (`layout_code`/`layout_at`), onto `x86_64_asm` labels
-  with their proofs.
+  done, and so are the row writer and the read filter's chunk loop (a
+  program of its own, the step its hole).
+- **The list layouts** left in `elf64_read_pieces`, `elf64_read_filter`
+  (the program around the chunk loop, and the loop's close JZ and write
+  loop after it) and `elf64_count_print` (`layout_code`/`layout_at`), onto
+  `x86_64_asm` labels with their proofs.
 
 Acceptance: each moved phase checks in no more kernel steps cold than
 before; `build-x86` of wc writes the same bytes.
@@ -48,3 +49,4 @@ before; `build-x86` of wc writes the same bytes.
 - 2026-10-19: **The stat pass's end and the operand cursor moved onto the frame-free stretch** (`docs/native-straight-runs-design.md`, "The libraries' stretches"): `stat_end_runs` (the cursor, then four items) and `stat_done` (the total's digits, then five items), both continuation-passing, so `stat_end` is gone; the cursor's argument (`cursor_arg`, eight items, absorbing `cursor_head`), its dash (`cursor_dash`, twelve items, absorbing `cursor_dashes` and `cursor_option`), the null slot and the start, with `CursorReach` and the start's end over `LinuxSteps`. Cold, the stat pass's end fell to a little over a quarter of its kernel steps, the cursor's to about two fifths (the start to under a third) and the command closure's by about a twelfth; no item rose but the new wrappers. wc's bytes are unchanged.
 - 2026-10-19: **The row writer moved onto the frame-free stretch** (`docs/native-straight-runs-design.md`, "The libraries' stretches"): a stretch per path through a slot (not selected, the first field, any other field with its space), the formatter by hand between, and `skip` to the back jump; continuation-passing through `SkipThen` and `RowReach`. `row_loop` itself fell to a sixtieth of its kernel steps, the row writer's to about three fifths, and the command closure's by about a fortieth. wc's bytes are unchanged.
 - 2026-10-20: **The producer's layout table is gone; the filter's and the command's jumps and code come from the library** (`docs/native-architecture-review.md`, after "Decision 2"). Each jump is a Heather function of where the library's layout places it (`core_jumps`, `filter_jumps`, `cmd_jumps`, `last_jumps`), landing by library theorems proved by evaluation (`core_jumps_land`, `filter_jumps_land`, `wl_jumps_land`); the producer evaluates the layout over the generated pieces' bytes and spells the code in literal chunks. `crates/cli/src/native/layout.rs` and Rust's read head, failure tail and write loop are deleted; `asm_same`, the landing lemmas and `chunks_same` moved to `x86_64_layout`. Cold, the command closure's kernel steps rose by about a thousandth, all of it the new landing lemmas. The read filter's byte loop on stretches, and the list layouts on labels, are still left. wc's bytes are unchanged.
+- 2026-10-20: **The read filter's chunk loop moved onto the frame-free stretch** (`docs/native-straight-runs-design.md`, "The libraries' stretches"): the loop is an `x86_64_asm` program (setup, load, the step as its `Hole`, store, advance, JNZ, close) placed first in the core's layout, so `FilterJumps` loses the JNZ's displacement, which lands by `loop_again`, proved by evaluation at the step's length. A byte is a one-item stretch to the step, the step by hand, and a three-item stretch to the JNZ whose sides hand on through `ByteAgain`/`ByteDone`; the setup and the close are one item each, the chunk's end stated over `LinuxSteps` (`ClosedReach`). `filter_entered`, `filter_again`, `filter_done` and `filter_stored` are gone. STEPS_PLACEHOLDER wc's bytes are unchanged.

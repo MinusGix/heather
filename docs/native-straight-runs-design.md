@@ -437,6 +437,30 @@ loop through `RowReach`'s `row_back`; the registers are one conjunction,
 space's store and the count's load are `StoreByte`/`Load` items (the same
 bytes). Cold, the row writer's kernel steps fell to about three fifths.
 
+The read filter's chunk loop (`lib/elf64_read_filter.hthr`, over
+`loop_straight`) is a program of its own: the setup, then load, the step,
+store, advance and the JNZ back to the load, then the close. The step is
+the program's `Hole`, filled with the generated piece's bytes
+(`loop_fills`), so its length is the program's parameter and the layout's
+offsets after it are open in it, as before. The close's JZ and the write
+loop stay in the layout after the program; the JNZ is the program's own,
+and lands by `loop_again`, proved by evaluation at the step's length.
+
+- A byte is one item to the step (`filter_byte`, its load's byte named
+  by `ByteAt`), the step by hand from its certificate (`filter_stepped`,
+  resident by `asm_placed` at its hole), then three items to the JNZ
+  (`filter_advanced`), the store's offset named by `PageThen`. The JNZ's
+  sides are the two ways on, `ByteAgain` back to the load and `ByteDone`
+  on to the close, each given what the count's flag says (`left_of_flag`,
+  `none_of_flag`); `filter_advanced_at` states the byte's end once for
+  both.
+- `filter_loop` recurses on what is left of the chunk and hands the
+  close to `LoopDone`; `filter_closed` is the setup (one item), the loop
+  and the close (one item, `filter_close`), stated over `LinuxSteps`
+  (`ClosedReach`, `closed_back`).
+
+STEPS_PLACEHOLDER
+
 ## Not yet
 
 - A system call ends a stretch: `closes_runs` still runs its JCCs with the
