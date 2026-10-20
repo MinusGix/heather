@@ -11,11 +11,16 @@ const BV_OMEGA: &str = include_str!("../../../lib/std/bitvec/bitvec_omega.hthr")
 const STREAM: &str = include_str!("../../../lib/stream_filter.hthr");
 const STEP_PIECE: &str = include_str!("../../../lib/filter_step_piece.hthr");
 const PROCESS: &str = include_str!("../../../lib/elf64_read_filter.hthr");
+const ASM: &str = include_str!("../../../lib/std/arch/x86_64/x86_64_asm.hthr");
+const RUNS: &str = include_str!("../../../lib/elf64_runs.hthr");
+const STRETCH: &str = include_str!("../../../lib/elf64_stretch.hthr");
 
 // Everything the filter process stands on: the read driver, the write loop,
-// what a filter computes, and the step's contract.
+// the labelled program and its stretches, what a filter computes, and the
+// step's contract.
 const BASE: &[(&str, &str)] = &[("elf64_read_pieces", READ_PIECES), ("bitvec_omega", BV_OMEGA), ("decimal_line", DECIMAL),
-    ("elf64_print_pieces", PRINT), ("elf64_write_loop", WRITE), ("stream_filter", STREAM)];
+    ("elf64_print_pieces", PRINT), ("elf64_write_loop", WRITE), ("x86_64_asm", ASM), ("elf64_runs", RUNS), ("elf64_stretch", STRETCH),
+    ("stream_filter", STREAM)];
 
 fn base() -> heather_elab::Elaborator { checker_with(BASE) }
 fn with_step_piece(mut elab: heather_elab::Elaborator, source: &str) -> heather_elab::Elaborator {
@@ -31,7 +36,7 @@ fn read_filter_library_checks() {
 // The claim can't be restated over a store at the read cursor instead of the
 // write cursor, an advance that forgets the flag, a close that leaves the
 // page's base in the length, an empty chunk that jumps into the write loop,
-// a layout that measures the step's store a byte long, or a step piece that
+// a byte loop that jumps back once the chunk is done, or a step piece that
 // may write the write cursor.
 #[test]
 fn slow_acceptance_read_filter_refusals() {
@@ -43,7 +48,7 @@ fn slow_acceptance_read_filter_refusals() {
             "[MovRR(R10, Rdi), MovRI(R9, BitVec::ofNat(io_page_base())), SubRR(R10, Rcx)]"),
         ("quiet_into_write", "quiet: near_branch_target(eof_rip(fc_at_cjz(c, p)), 6, jumps.cd) = eof_rip(ar),",
             "quiet: near_branch_target(eof_rip(fc_at_cjz(c, p)), 6, jumps.cd) = eof_rip(fc_at_write(c, p)),"),
-        ("store_measured_long", "filter_load_len(), p, 3, filter_advance_len()", "filter_load_len(), p, 4, filter_advance_len()"),
+        ("loop_on_zero", "fn lf_jnz(p: Nat) → Prog { then(lf_advance(p), Jcc(NE, tf_load())) }", "fn lf_jnz(p: Nat) → Prog { then(lf_advance(p), Jcc(E, tf_load())) }"),
     ] {
         let bad = PROCESS.replacen(from, to, 1);
         assert_ne!(bad, PROCESS, "{name}");

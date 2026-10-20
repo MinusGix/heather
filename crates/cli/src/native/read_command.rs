@@ -28,9 +28,6 @@ use super::read_loop::{claims, component, image_facts, literal, spell};
 // operand cursor, the stat pass, the events and what they print, the frame,
 // the row, and the process.
 pub(super) const SUPPORT: &[(&str, &str)] = &[
-    ("x86_64_asm", include_str!("../../../../lib/std/arch/x86_64/x86_64_asm.hthr")),
-    ("elf64_runs", include_str!("../../../../lib/elf64_runs.hthr")),
-    ("elf64_stretch", include_str!("../../../../lib/elf64_stretch.hthr")),
     ("command_program", include_str!("../../../../lib/command_program.hthr")),
     ("elf64_format_width", include_str!("../../../../lib/elf64_format_width.hthr")),
     ("elf64_arg_scan", include_str!("../../../../lib/elf64_arg_scan.hthr")),

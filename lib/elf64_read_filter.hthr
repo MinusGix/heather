@@ -25,6 +25,9 @@ import x86_64_access_code;
 import x86_64_access_memory;
 import x86_64_fetched_code;
 import x86_64_layout;
+import x86_64_asm;
+import elf64_runs;
+import elf64_stretch;
 import x86_64_structured_block;
 import x86_64_store;
 import bitvec;
@@ -58,30 +61,56 @@ fn filter_close_block() → List<Instruction> {
     [MovRR(R10, Rdi), MovRI(R9, BitVec::ofNat(io_page_base())), SubRR(R10, R9)]
 }
 
-fn filter_setup_len() → Nat { canonical_block_bytes(filter_setup_block()).len() }
-fn filter_load_len() → Nat { byte_load_bytes(filter_load()).len() }
-fn filter_advance_len() → Nat { canonical_block_bytes(filter_advance_block()).len() }
-fn filter_close_len() → Nat { canonical_block_bytes(filter_close_block()).len() }
+// The jumps: JZ to the finish at end of file, JS to the failure path, JZ
+// back to the read when a chunk emitted nothing, JZ back to the read after
+// EINTR. The JNZ back to the next byte is the loop program's own.
+record FilterJumps { ed: BitVec(32), sd: BitVec(32), cd: BitVec(32), rd: BitVec(32) }
 
-// The jumps: JZ to the finish at end of file, JS to the failure path, JNZ
-// back to the next byte, JZ back to the read when a chunk emitted nothing,
-// JZ back to the read after EINTR.
-record FilterJumps { ed: BitVec(32), sd: BitVec(32), ld: BitVec(32), cd: BitVec(32), rd: BitVec(32) }
-
-// The chunk loop, placeable: the setup, the loop over the chunk (load, step,
-// store, advance, JNZ), the close and its JZ, then the write loop, whose end
-// jumps back to the read. Every jump in it is relative, so it runs wherever
-// it is placed and whatever read head is before it: a filter's, which reads
-// stdin, or a command's, which reads its operand's fd from RSP
-// (docs/native-wc-command-design.md §6.1). A layout (x86_64_layout) whose
-// step is measured by its length `p`; over the step's bytes, as the producer
-// evaluates and spells it (`filter_core_bytes`).
-fn filter_core_parts(step: List<BitVec(8)>, jumps: FilterJumps) → List<List<BitVec(8)>> {
-    [canonical_block_bytes(filter_setup_block()), byte_load_bytes(filter_load()), step, byte_store_bytes(filter_store()),
-     canonical_block_bytes(filter_advance_block()), near_control_bytes(JumpIfNear(NE, jumps.ld)), canonical_block_bytes(filter_close_block()),
-     near_control_bytes(JumpZeroNear(jumps.cd))]
+// The loop over the chunk as a program (x86_64_asm), the step its hole, `p`
+// bytes long: the setup, then load, step, store, advance and JNZ back to
+// the load while bytes are left, then the close.
+fn tf_load() → Nat { 1 }
+fn lf_setup() → Prog { then(Start, Block(filter_setup_block())) }
+fn lf_load() → Prog { At(lf_setup(), tf_load(), LoadByte(filter_load())) }
+fn lf_step(p: Nat) → Prog { then(lf_load(), Hole(0, p)) }
+fn lf_store(p: Nat) → Prog { then(lf_step(p), StoreByte(filter_store())) }
+fn lf_advance(p: Nat) → Prog { then(lf_store(p), Block(filter_advance_block())) }
+fn lf_jnz(p: Nat) → Prog { then(lf_advance(p), Jcc(NE, tf_load())) }
+fn lf_close(p: Nat) → Prog { then(lf_jnz(p), Block(filter_close_block())) }
+fn loop_prog(p: Nat) → Prog { lf_close(p) }
+fn loop_labels(p: Nat) → Nat → Nat { asm_labels(loop_prog(p)) }
+fn loop_fills(step: List<BitVec(8)>) → Nat → List<BitVec(8)> { λ _ => step }
+fn loop_bytes(step: List<BitVec(8)>) → List<BitVec(8)> { assemble(loop_fills(step), loop_prog(step.len()), Nil) }
+fn loop_len(p: Nat) → Nat { prog_len(loop_prog(p)) }
+theorem loop_fits(step: List<BitVec(8)>): FillsFit(loop_prog(step.len()), loop_fills(step)) { ⟨refl, trivial⟩ }
+theorem loop_bytes_len(step: List<BitVec(8)>): loop_bytes(step).len() = loop_len(step.len()) {
+    asm_len_is(loop_fills(step), loop_labels(step.len()), loop_prog(step.len()), loop_fits(step), Nil, 0, refl)
 }
-fn filter_core_lens(p: Nat) → List<Nat> { [filter_setup_len(), filter_load_len(), p, 3, filter_advance_len(), 6, filter_close_len(), 6] }
+
+// The JNZ lands on the load: closed once the step's length is known, so the
+// producer proves it by evaluation (`loop_again`).
+fn LoopAgain(p: Nat) → Type {
+    JumpsBack(prog_len(lf_advance(p)), 6, near_rel(prog_len(lf_advance(p)) + 6, loop_labels(p, tf_load())), asm_at(lf_load()))
+}
+fn loop_lands(p: Nat) → Bool {
+    asm_same(prog_len(lf_advance(p)) + 6 + near_rel(prog_len(lf_advance(p)) + 6, loop_labels(p, tf_load())).sign_extend(32).toNat(),
+        asm_at(lf_load()) + Nat::pow(2, 64))
+}
+theorem loop_again(p: Nat, same: loop_lands(p) = True): LoopAgain(p) {
+    asm_lands_back(prog_len(lf_advance(p)), 6, near_rel(prog_len(lf_advance(p)) + 6, loop_labels(p, tf_load())), asm_at(lf_load()), same)
+}
+
+// The chunk loop, placeable: the loop program, the close's JZ, then the
+// write loop, whose end jumps back to the read. Every jump in it is
+// relative, so it runs wherever it is placed and whatever read head is
+// before it: a filter's, which reads stdin, or a command's, which reads its
+// operand's fd from RSP (docs/native-wc-command-design.md §6.1). A layout
+// (x86_64_layout) whose step is measured by its length `p`; over the step's
+// bytes, as the producer evaluates and spells it (`filter_core_bytes`).
+fn filter_core_parts(step: List<BitVec(8)>, jumps: FilterJumps) → List<List<BitVec(8)>> {
+    [loop_bytes(step), near_control_bytes(JumpZeroNear(jumps.cd))]
+}
+fn filter_core_lens(p: Nat) → List<Nat> { [loop_len(p), 6] }
 fn filter_core_bytes(step: List<BitVec(8)>, jumps: FilterJumps, pj: PrintJumps) → List<BitVec(8)> {
     layout_code(filter_core_parts(step, jumps), write_loop_code(pj))
 }
@@ -91,7 +120,7 @@ fn filter_core_code(code: StructuredCode, jumps: FilterJumps, pj: PrintJumps) �
 fn filter_core_len(p: Nat) → Nat { layout_end(0, filter_core_lens(p)) + write_loop_len() }
 theorem filter_core_measured(code: StructuredCode, jumps: FilterJumps, p: Nat, p_is: structured_bytes(code).len() = p):
     LayoutMeasured(filter_core_parts(structured_bytes(code), jumps), filter_core_lens(p)) {
-    ⟨refl, ⟨refl, ⟨p_is, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, trivial⟩⟩⟩⟩⟩⟩⟩⟩
+    ⟨j(p_is, λ n _ => loop_bytes(structured_bytes(code)).len() = loop_len(n), loop_bytes_len(structured_bytes(code))), ⟨refl, trivial⟩⟩
 }
 theorem filter_core_code_len(code: StructuredCode, jumps: FilterJumps, pj: PrintJumps, p: Nat, p_is: structured_bytes(code).len() = p):
     filter_core_code(code, jumps, pj).len() = filter_core_len(p) {
@@ -99,27 +128,17 @@ theorem filter_core_code_len(code: StructuredCode, jumps: FilterJumps, pj: Print
         write_loop_len(), write_loop_code_len(pj))
 }
 
-// Where each of the loop's pieces starts, for a loop placed at `c` (its
-// setup) with a step `p` bytes long.
+// Where the close's JZ and the write loop start, for a loop placed at `c`
+// with a step `p` bytes long; and where the loop's load and close are.
 fn fc_at(c, p, i: Nat) → Nat { layout_at(c, filter_core_lens(p), i) }
-fn fc_at_load(c, p: Nat) → Nat { fc_at(c, p, 1) }
-fn fc_at_step(c, p: Nat) → Nat { fc_at(c, p, 2) }
-fn fc_at_store(c, p: Nat) → Nat { fc_at(c, p, 3) }
-fn fc_at_advance(c, p: Nat) → Nat { fc_at(c, p, 4) }
-fn fc_at_jnz(c, p: Nat) → Nat { fc_at(c, p, 5) }
-fn fc_at_close(c, p: Nat) → Nat { fc_at(c, p, 6) }
-fn fc_at_cjz(c, p: Nat) → Nat { fc_at(c, p, 7) }
-fn fc_at_write(c, p: Nat) → Nat { fc_at(c, p, 8) }
+fn fc_at_cjz(c, p: Nat) → Nat { fc_at(c, p, 1) }
+fn fc_at_write(c, p: Nat) → Nat { fc_at(c, p, 2) }
+fn load_rip(c: Nat) → BitVec(64) { next_rip(eof_rip(c), asm_at(lf_load())) }
+fn close_rip(c, p: Nat) → BitVec(64) { next_rip(eof_rip(c), asm_at(lf_close(p))) }
 
 // The loop's pieces, resident where they start.
 record FilterCore(memory: IoMemory, c: Nat, code: StructuredCode, jumps: FilterJumps, pj: PrintJumps) {
-    setup_at: CodeResident(io_fetch_access(), memory, canonical_block_bytes(filter_setup_block()), eof_rip(c)),
-    load_at: CodeResident(io_fetch_access(), memory, byte_load_bytes(filter_load()), eof_rip(fc_at_load(c, structured_bytes(code).len()))),
-    step_at: CodeResident(io_fetch_access(), memory, structured_bytes(code), eof_rip(fc_at_step(c, structured_bytes(code).len()))),
-    store_at: CodeResident(io_fetch_access(), memory, byte_store_bytes(filter_store()), eof_rip(fc_at_store(c, structured_bytes(code).len()))),
-    advance_at: CodeResident(io_fetch_access(), memory, canonical_block_bytes(filter_advance_block()), eof_rip(fc_at_advance(c, structured_bytes(code).len()))),
-    jnz_at: CodeResident(io_fetch_access(), memory, near_control_bytes(JumpIfNear(NE, jumps.ld)), eof_rip(fc_at_jnz(c, structured_bytes(code).len()))),
-    close_at: CodeResident(io_fetch_access(), memory, canonical_block_bytes(filter_close_block()), eof_rip(fc_at_close(c, structured_bytes(code).len()))),
+    loop_at: CodeResident(io_fetch_access(), memory, loop_bytes(structured_bytes(code)), eof_rip(c)),
     cjz_at: CodeResident(io_fetch_access(), memory, near_control_bytes(JumpZeroNear(jumps.cd)), eof_rip(fc_at_cjz(c, structured_bytes(code).len()))),
     write: WriteLoopResident(memory, fc_at_write(c, structured_bytes(code).len()), pj),
 }
@@ -128,14 +147,33 @@ theorem filter_core(memory: IoMemory, c: Nat, code: StructuredCode, jumps: Filte
     let p = structured_bytes(code).len();
     let piece = layout_resident(io_fetch_access(), memory, io_entry(), write_loop_code(pj), filter_core_parts(structured_bytes(code), jumps), filter_core_lens(p),
         filter_core_measured(code, jumps, p, refl), c, resident);
-    FilterCore(piece(0), piece(1), piece(2), piece(3), piece(4), piece(5), piece(6), piece(7),
-        write_loop_resident(memory, fc_at_write(c, p), pj, piece(8)))
+    FilterCore(piece(0), piece(1), write_loop_resident(memory, fc_at_write(c, p), pj, piece(2)))
 }
 
-// The loop's jumps: the JNZ back to the next byte, and the JZ and the write
-// loop's end back to the read head at `ar`.
+// The loop's stretches (elf64_stretch): the `n` items ending at label `l`,
+// for a loop placed at `c`.
+theorem loop_straight(file: IoImage, c: Nat, step: List<BitVec(8)>, placed: Placed(file, loop_bytes(step), eof_rip(c)), page: Nat → BitVec(8),
+    goal: MachineState<IoMemory> → Type, back: StepsBack(goal), l: Prog, found: asm_find(loop_prog(step.len()), l) = l, n: Nat,
+    state: MachineState<IoMemory>, rip: state.rip = next_rip(eof_rip(c), straight_from(l, n)), memory_is: state.memory = IoMemory(file, page),
+    held: Stretch(file, eof_rip(c), goal, loop_labels(step.len()), l, n, page, state)): goal(state) {
+    let prog = loop_prog(step.len());
+    let k = prog_depth(prog) -prog_depth(l);
+    let fills = loop_fills(step);
+    let labels = loop_labels(step.len());
+    let front = asm_code(fills, labels, asm_back(prog, k));
+    let after = asm_code_after(fills, labels, prog, k);
+    stretch_runs(file, page, eof_rip(c), goal, back, fills, labels, l, n,
+        j(found, λ x _ => FillsFit(x, fills), fills_fit_back(fills, k, prog, loop_fits(step))), after ++ Nil,
+        j(found, λ x _ => Placed(file, asm_code(fills, labels, x) ++ (after ++ Nil), eof_rip(c)),
+            j(trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ code => code ++ Nil, asm_code_back(fills, labels, k, prog)),
+                List::append_assoc(front, after, Nil)), λ code _ => Placed(file, code, eof_rip(c)), placed)),
+        state, rip, memory_is, held)
+}
+
+// The loop's jumps: the close's JZ and the write loop's end back to the
+// read head at `ar`, and the JNZ back to the load.
 record CoreTargets(c, ar, p: Nat, jumps: FilterJumps, pj: PrintJumps) {
-    again: near_branch_target(eof_rip(fc_at_jnz(c, p)), 6, jumps.ld) = eof_rip(fc_at_load(c, p)),
+    again: LoopAgain(p),
     quiet: near_branch_target(eof_rip(fc_at_cjz(c, p)), 6, jumps.cd) = eof_rip(ar),
     write: WriteLoopTargets(fc_at_write(c, p), ar, pj),
 }
@@ -145,15 +183,13 @@ record CoreTargets(c, ar, p: Nat, jumps: FilterJumps, pj: PrintJumps) {
 // head and failure tail are its library's, so the filter's other three are
 // not the loop's.
 fn core_jumps(c, ar, p: Nat) → FilterJumps {
-    FilterJumps(BitVec::ofNat(0), BitVec::ofNat(0), near_rel(fc_at_jnz(c, p) + 6, fc_at_load(c, p)), near_rel(fc_at_cjz(c, p) + 6, ar),
-        BitVec::ofNat(0))
+    FilterJumps(BitVec::ofNat(0), BitVec::ofNat(0), near_rel(fc_at_cjz(c, p) + 6, ar), BitVec::ofNat(0))
 }
 fn core_print_jumps(c, ar, p: Nat) → PrintJumps { wl_jumps(near_rel(wl_at_wjz(fc_at_write(c, p)) + 6, ar)) }
 // Where they land, by evaluation (x86_64_layout's `asm_lands_back`): closed
 // once the loop is placed and the step's length known, so the producer proves
 // each `refl`.
-theorem core_jumps_land(c, ar, p: Nat,
-    again: asm_same(fc_at_jnz(c, p) + 6 + core_jumps(c, ar, p).ld.sign_extend(32).toNat(), fc_at_load(c, p) + Nat::pow(2, 64)) = True,
+theorem core_jumps_land(c, ar, p: Nat, again: loop_lands(p) = True,
     quiet: asm_same(fc_at_cjz(c, p) + 6 + core_jumps(c, ar, p).cd.sign_extend(32).toNat(), ar + Nat::pow(2, 64)) = True,
     write: asm_same(wl_at_wjz(fc_at_write(c, p)) + 6 + core_print_jumps(c, ar, p).zd.sign_extend(32).toNat(), ar + Nat::pow(2, 64)) = True):
     CoreTargets(c, ar, p, core_jumps(c, ar, p), core_print_jumps(c, ar, p)) {
@@ -161,7 +197,7 @@ theorem core_jumps_land(c, ar, p: Nat,
     let jumps = core_jumps(c, ar, p);
     let pj = core_print_jumps(c, ar, p);
     CoreTargets(
-        again := jumps_back(entry, fc_at_jnz(c, p), 6, jumps.ld, fc_at_load(c, p), asm_lands_back(fc_at_jnz(c, p), 6, jumps.ld, fc_at_load(c, p), again)),
+        again := loop_again(p, again),
         quiet := jumps_back(entry, fc_at_cjz(c, p), 6, jumps.cd, ar, asm_lands_back(fc_at_cjz(c, p), 6, jumps.cd, ar, quiet)),
         write := write_targets_to(fc_at_write(c, p), ar, pj, wl_jumps_land(near_rel(wl_at_wjz(fc_at_write(c, p)) + 6, ar)),
             jumps_back(entry, wl_at_wjz(fc_at_write(c, p)), 6, pj.zd, ar, asm_lands_back(wl_at_wjz(fc_at_write(c, p)), 6, pj.zd, ar, write))))
@@ -195,8 +231,6 @@ theorem filter_code_len(code: StructuredCode, jumps: FilterJumps, pj: PrintJumps
 fn fl_at(p, i: Nat) → Nat { layout_at(0, filter_lens(p), i) }
 fn fl_at_read(p: Nat) → Nat { fl_at(p, 1) }
 fn fl_at_setup(p: Nat) → Nat { fl_at(p, 2) }
-fn fl_at_load(p: Nat) → Nat { fc_at_load(fl_at_setup(p), p) }
-fn fl_at_jnz(p: Nat) → Nat { fc_at_jnz(fl_at_setup(p), p) }
 fn fl_at_cjz(p: Nat) → Nat { fc_at_cjz(fl_at_setup(p), p) }
 fn fl_at_write(p: Nat) → Nat { fc_at_write(fl_at_setup(p), p) }
 fn fl_at_failed(p: Nat) → Nat { fl_at(p, 3) }
@@ -237,7 +271,7 @@ record FilterTargets(p, done: Nat, jumps: FilterJumps, pj: PrintJumps) {
 record FilterJumpFacts(p, done: Nat, jumps: FilterJumps, pj: PrintJumps) {
     finish: JumpsForward(rh_at_jz(FdStdin, fl_at_read(p)), 6, jumps.ed, done),
     fail: JumpsForward(rh_at_js(FdStdin, fl_at_read(p)), 6, jumps.sd, fl_at_failed(p)),
-    again: JumpsBack(fl_at_jnz(p), 6, jumps.ld, fl_at_load(p)),
+    again: LoopAgain(p),
     quiet: JumpsBack(fl_at_cjz(p), 6, jumps.cd, fl_at_read(p)),
     retry: JumpsBack(fl_at_retry(p), 6, jumps.rd, fl_at_read(p)),
     write: WriteJumpFacts(pj),
@@ -251,7 +285,7 @@ theorem filter_targets(p, done: Nat, jumps: FilterJumps, pj: PrintJumps, facts: 
         fail := jumps_forward(entry, rh_at_js(FdStdin, fl_at_read(p)), 6, jumps.sd, fl_at_failed(p), facts.fail),
         retry := jumps_back(entry, fl_at_retry(p), 6, jumps.rd, fl_at_read(p), facts.retry),
         core := CoreTargets(
-            again := jumps_back(entry, fl_at_jnz(p), 6, jumps.ld, fl_at_load(p), facts.again),
+            again := facts.again,
             quiet := jumps_back(entry, fl_at_cjz(p), 6, jumps.cd, fl_at_read(p), facts.quiet),
             write := write_targets_to(fl_at_write(p), fl_at_read(p), pj, facts.write,
                 jumps_back(entry, wl_at_wjz(fl_at_write(p)), 6, pj.zd, fl_at_read(p), facts.write_read))))
@@ -262,13 +296,13 @@ theorem filter_targets(p, done: Nat, jumps: FilterJumps, pj: PrintJumps, facts: 
 // for the loop's (`core_jumps_land`).
 fn filter_jumps(p, done: Nat) → FilterJumps {
     FilterJumps(near_rel(rh_at_jz(FdStdin, fl_at_read(p)) + 6, done), near_rel(rh_at_js(FdStdin, fl_at_read(p)) + 6, fl_at_failed(p)),
-        near_rel(fl_at_jnz(p) + 6, fl_at_load(p)), near_rel(fl_at_cjz(p) + 6, fl_at_read(p)), near_rel(fl_at_retry(p) + 6, fl_at_read(p)))
+        near_rel(fl_at_cjz(p) + 6, fl_at_read(p)), near_rel(fl_at_retry(p) + 6, fl_at_read(p)))
 }
 fn filter_print_jumps(p: Nat) → PrintJumps { wl_jumps(near_rel(wl_at_wjz(fl_at_write(p)) + 6, fl_at_read(p))) }
 theorem filter_jumps_land(p, done: Nat,
     finish: asm_same(rh_at_jz(FdStdin, fl_at_read(p)) + 6 + filter_jumps(p, done).ed.sign_extend(32).toNat(), done) = True,
     fail: asm_same(rh_at_js(FdStdin, fl_at_read(p)) + 6 + filter_jumps(p, done).sd.sign_extend(32).toNat(), fl_at_failed(p)) = True,
-    again: asm_same(fl_at_jnz(p) + 6 + filter_jumps(p, done).ld.sign_extend(32).toNat(), fl_at_load(p) + Nat::pow(2, 64)) = True,
+    again: loop_lands(p) = True,
     quiet: asm_same(fl_at_cjz(p) + 6 + filter_jumps(p, done).cd.sign_extend(32).toNat(), fl_at_read(p) + Nat::pow(2, 64)) = True,
     retry: asm_same(fl_at_retry(p) + 6 + filter_jumps(p, done).rd.sign_extend(32).toNat(), fl_at_read(p) + Nat::pow(2, 64)) = True,
     write_read: asm_same(wl_at_wjz(fl_at_write(p)) + 6 + filter_print_jumps(p).zd.sign_extend(32).toNat(), fl_at_read(p) + Nat::pow(2, 64)) = True):
@@ -277,7 +311,7 @@ theorem filter_jumps_land(p, done: Nat,
     FilterJumpFacts(
         finish := asm_lands_forward(rh_at_jz(FdStdin, fl_at_read(p)), 6, jumps.ed, done, finish),
         fail := asm_lands_forward(rh_at_js(FdStdin, fl_at_read(p)), 6, jumps.sd, fl_at_failed(p), fail),
-        again := asm_lands_back(fl_at_jnz(p), 6, jumps.ld, fl_at_load(p), again),
+        again := loop_again(p, again),
         quiet := asm_lands_back(fl_at_cjz(p), 6, jumps.cd, fl_at_read(p), quiet),
         retry := asm_lands_back(fl_at_retry(p), 6, jumps.rd, fl_at_read(p), retry),
         write := wl_jumps_land(near_rel(wl_at_wjz(fl_at_write(p)) + 6, fl_at_read(p))),
@@ -401,15 +435,15 @@ theorem room_fits<C>(shape: FilterShape<C>, facts: LoopFacts<C>(shape), input, s
 }
 
 // ---------------------------------------------------------------------------
-// One chunk's loop. At `at` with `front` of the chunk done and `back` to go:
-// the page holds what `front` emitted from its start and `back` where it
+// One chunk's loop. At `rip` with `front` of the chunk done and `back` to
+// go: the page holds what `front` emitted from its start and `back` where it
 // was read, the state registers hold the state `front` left, RSI is at the
 // next byte, RCX counts what is left, RDI is past the output, R12 is 1.
 
-record FilterAt<C>(shape: FilterShape<C>, file: IoImage, s0: C, front, back: List<BitVec(8)>, at: Nat, state: MachineState<IoMemory>) {
+record FilterAt<C>(shape: FilterShape<C>, file: IoImage, s0: C, front, back: List<BitVec(8)>, rip: BitVec(64), state: MachineState<IoMemory>) {
     page: Nat → BitVec(8),
     memory_is: state.memory = IoMemory(file, page),
-    rip_is: state.rip = eof_rip(at),
+    rip_is: state.rip = rip,
     emitted: Stored(page, 0, filter_emitted(shape.step, front, s0)),
     left: Stored(page, front.len(), back),
     held: shape.rep(state.gprs, filter_state(shape.step, front, s0)),
@@ -419,21 +453,20 @@ record FilterAt<C>(shape: FilterShape<C>, file: IoImage, s0: C, front, back: Lis
     one: read_gpr(R12, state.gprs) = BitVec::ofNat(1),
 }
 
-// A step piece's run from offset `at`, where its bytes are resident
-// (elf64_print_pieces's `piece_runs`, for the step's certificate).
+// A step piece's run from offset `at` past `origin`, where its bytes are
+// resident (elf64_print_pieces's `piece_runs`, for the step's certificate).
 theorem step_runs<C>(code: StructuredCode, before: MachineState<IoMemory>, rep: Gprs → C → Type, out: Filtered<C>,
-    ran: StepRan<IoMemory, C>(code, before, rep, out), stored: IoMemory, at: Nat,
-    resident: CodeResident(io_fetch_access(), stored, structured_bytes(code), eof_rip(at)),
-    memory_is: before.memory = stored, rip_is: before.rip = eof_rip(at)):
-    PieceRan(stored, at + structured_bytes(code).len(), before, ran.after) {
+    ran: StepRan<IoMemory, C>(code, before, rep, out), stored: IoMemory, origin: BitVec(64), at: Nat,
+    resident: CodeResident(io_fetch_access(), stored, structured_bytes(code), next_rip(origin, at)),
+    memory_is: before.memory = stored, rip_is: before.rip = next_rip(origin, at)):
+    FetchedSteps(io_fetch_access(), io_data_access(), before, ran.after) ∧
+        ((ran.after.memory = stored) ∧ (ran.after.rip = next_rip(origin, at + structured_bytes(code).len()))) {
     let fetch = io_fetch_access();
     let data = io_data_access();
     let went = structured_fetched(fetch, data, code, before, ran.layout,
-        resident_state(fetch, structured_bytes(code), stored, eof_rip(at), before, memory_is, rip_is, resident));
-    PieceRan(
-        steps := j(sym(ran.execution), λ after _ => FetchedSteps(fetch, data, before, after), went.left),
-        memory_is := trans(ran.memory_preserved, memory_is),
-        rip_is := trans(ran.rip_correct, rip_advance(io_entry(), before.rip, at, structured_bytes(code).len(), rip_is)))
+        resident_state(fetch, structured_bytes(code), stored, next_rip(origin, at), before, memory_is, rip_is, resident));
+    ⟨j(sym(ran.execution), λ after _ => FetchedSteps(fetch, data, before, after), went.left),
+     ⟨trans(ran.memory_preserved, memory_is), trans(ran.rip_correct, rip_advance(origin, before.rip, at, structured_bytes(code).len(), rip_is))⟩⟩
 }
 
 // The flag's value is how many bytes the step emitted.
@@ -455,101 +488,6 @@ theorem filter_low(i: Nat, inside: i < 4096): io_page_base() + i < Nat::pow(2, 4
 theorem filter_word(i: Nat, inside: i < 4096): Succ(io_page_base() + i) < Nat::pow(2, 64) {
     let page: (io_page_base() + 4097 <= Nat::pow(2, 64)) = Nat::leb_sound(io_page_base() + 4097, Nat::pow(2, 64), trivial);
     omega
-}
-theorem filter_writable(i: Nat, inside: i < 4096):
-    (io_page_base() <= io_page_base() + i) ∧ ((io_page_base() + i) + 1 <= io_page_base() + 4096) { ⟨omega, omega⟩ }
-
-// Byte `front.len()` loaded and stepped: the next state in the state
-// registers, the flag in RBX, the byte in RDX, memory untouched, the loop's
-// registers kept, at the store.
-record FilterStepped<C>(shape: FilterShape<C>, c: Nat, s: C, byte: BitVec(8), state, stepped: MachineState<IoMemory>) {
-    steps: FetchedSteps(io_fetch_access(), io_data_access(), state, stepped),
-    memory_is: stepped.memory = state.memory,
-    rip_is: stepped.rip = eof_rip(fc_at_store(c, structured_bytes(shape.code).len())),
-    next_held: shape.rep(stepped.gprs, shape.step(s, byte).next),
-    flag_is: read_gpr(Rbx, stepped.gprs) = emit_flag(shape.step(s, byte).emit),
-    byte_is: read_gpr(Rdx, stepped.gprs) = emit_word(shape.step(s, byte).emit),
-    rsi: read_gpr(Rsi, stepped.gprs) = read_gpr(Rsi, state.gprs),
-    rcx: read_gpr(Rcx, stepped.gprs) = read_gpr(Rcx, state.gprs),
-    rdi: read_gpr(Rdi, stepped.gprs) = read_gpr(Rdi, state.gprs),
-    r12: read_gpr(R12, stepped.gprs) = read_gpr(R12, state.gprs),
-}
-
-theorem filter_stepped<C>(shape: FilterShape<C>, facts: LoopFacts<C>(shape), jumps: FilterJumps, pj: PrintJumps, c: Nat,
-    file: IoImage, s0: C, front, rest: List<BitVec(8)>, b: BitVec(8), inside: front.len() < 4096,
-    fits: CountsFit(shape.counts, shape.step(filter_state(shape.step, front, s0), b).next),
-    pieces: (page: Nat → BitVec(8)) → FilterCore(IoMemory(file, page), c, shape.code, jumps, pj),
-    state: MachineState<IoMemory>, head: FilterAt<C>(shape, file, s0, front, Cons(b, rest), fc_at_load(c, structured_bytes(shape.code).len()), state)):
-    Exists<MachineState<IoMemory>>(λ stepped => FilterStepped<C>(shape, c, filter_state(shape.step, front, s0), b, state, stepped)) {
-    let fetch = io_fetch_access();
-    let data = io_data_access();
-    let entry = io_entry();
-    let p = structured_bytes(shape.code).len();
-    let here = pieces(head.page);
-    let s = filter_state(shape.step, front, s0);
-    let rsi = read_gpr(Rsi, state.gprs);
-    let loaded: (head.page(front.len()) = b) = j(Nat::add_left_zero(front.len()), λ k _ => head.page(k) = b, head.left(0, b, refl));
-    let present: (io_data_access().read(state.memory, rsi) = Some(b)) =
-        j(sym(head.memory_is), λ m _ => io_read(m, rsi) = Some(b),
-            trans(io_read_page(file, head.page, rsi, front.len(), inside, head.cursor), cong_fn<BitVec(8), Option<BitVec(8)>>(λ x => Some(x), loaded)));
-    let canonical: (rsi.drop_low(47, 17) = BitVec::zero()) =
-        BitVec::drop_low_zero_of_lt(47, 17, rsi, j(sym(head.cursor), λ v _ => v < Nat::pow(2, 47), filter_low(front.len(), inside)));
-    let s1 = byte_load_after(filter_load(), b, state);
-    let load_step: FetchedStep(fetch, data, state, s1) = Exists(EmitLoad(filter_load()),
-        ⟨FetchedFrom(resident_readable(fetch, state.memory, byte_load_bytes(filter_load()), state.rip,
-            resident_state(fetch, byte_load_bytes(filter_load()), IoMemory(file, head.page), eof_rip(fc_at_load(c, p)), state, head.memory_is, head.rip_is,
-                here.load_at))),
-         Exists(b, ByteLoadStep(canonical := canonical, present := present, execution := refl))⟩);
-    let s1_rip: (s1.rip = eof_rip(fc_at_step(c, p))) = rip_advance(entry, state.rip, fc_at_load(c, p), filter_load_len(), head.rip_is);
-    let s1_held: shape.rep(s1.gprs, s) = facts.framed(state.gprs, s1.gprs, s, ⟨refl, ⟨refl, ⟨refl, refl⟩⟩⟩, refl, head.held);
-    have ran = facts.piece(s1, s, b, s1_held, refl, fits);
-    let went: PieceRan(IoMemory(file, head.page), fc_at_store(c, p), s1, ran.after) =
-        step_runs(shape.code, s1, shape.rep, shape.step(s, b), ran, IoMemory(file, head.page), fc_at_step(c, p), here.step_at, head.memory_is, s1_rip);
-    Exists(ran.after, FilterStepped(
-        steps := fetched_steps_cons(fetch, data, state, s1, ran.after, load_step, went.steps),
-        memory_is := ran.memory_preserved,
-        rip_is := went.rip_is,
-        next_held := ran.next_held,
-        flag_is := ran.flag_is,
-        byte_is := ran.byte_is,
-        rsi := ran.registers_preserved(Rsi, trivial),
-        rcx := ran.registers_preserved(Rcx, trivial),
-        rdi := ran.registers_preserved(Rdi, trivial),
-        r12 := ran.registers_preserved(R12, trivial)))
-}
-
-// The byte at the write cursor, `o` bytes into the page, stored.
-record FilterStored(file: IoImage, page: Nat → BitVec(8), o: Nat, x: BitVec(8), c, p: Nat, stepped, stored: MachineState<IoMemory>) {
-    step: StoreStep(io_fetch_access(), linux_writes(io_linux()), stepped, stored),
-    memory_is: stored.memory = io_store_offset(IoMemory(file, page), o, [x]),
-    rip_is: stored.rip = eof_rip(fc_at_advance(c, p)),
-    gprs_is: stored.gprs = stepped.gprs,
-}
-theorem filter_stored(code: StructuredCode, jumps: FilterJumps, pj: PrintJumps, c: Nat, file: IoImage,
-    page: Nat → BitVec(8), o: Nat, inside: o < 4096, x: BitVec(8),
-    pieces: (page: Nat → BitVec(8)) → FilterCore(IoMemory(file, page), c, code, jumps, pj),
-    stepped: MachineState<IoMemory>, memory_is: stepped.memory = IoMemory(file, page),
-    rip_is: stepped.rip = eof_rip(fc_at_store(c, structured_bytes(code).len())),
-    at: read_gpr(Rdi, stepped.gprs).toNat() = io_page_base() + o, low: imm_byte0(read_gpr(Rdx, stepped.gprs)) = x):
-    Exists<MachineState<IoMemory>>(λ stored => FilterStored(file, page, o, x, c, structured_bytes(code).len(), stepped, stored)) {
-    let fetch = io_fetch_access();
-    let writes = linux_writes(io_linux());
-    let memory = IoMemory(file, page);
-    let room = filter_writable(o, inside);
-    let rdi = read_gpr(Rdi, stepped.gprs);
-    let writable: IoWritable(stepped.memory, rdi, 1) =
-        Inl(⟨j(sym(at), λ v _ => io_page_base() <= v, room.left), j(sym(at), λ v _ => v + 1 <= io_page_base() + 4096, room.right)⟩);
-    let stored = byte_store_after(writes, filter_store(), stepped);
-    Exists(stored, FilterStored(
-        step := byte_store_step(fetch, writes, filter_store(), stepped, refl,
-            FetchedFrom(resident_readable(fetch, stepped.memory, byte_store_bytes(filter_store()), stepped.rip,
-                resident_state(fetch, byte_store_bytes(filter_store()), memory, eof_rip(fc_at_store(c, structured_bytes(code).len())), stepped,
-                    memory_is, rip_is, pieces(page).store_at))),
-            writable),
-        memory_is := trans(cong_fn<IoMemory, IoMemory>(λ m => io_store(m, rdi, [imm_byte0(read_gpr(Rdx, stepped.gprs))]), memory_is),
-            trans(cong_fn<BitVec(8), IoMemory>(λ y => io_store(memory, rdi, [y]), low), store_at_offset(memory, rdi, o, [x], inside, at))),
-        rip_is := rip_advance(io_entry(), stepped.rip, fc_at_store(c, structured_bytes(code).len()), 3, rip_is),
-        gprs_is := refl))
 }
 
 // The page after the store: what came before the cursor, then what the byte
@@ -599,125 +537,193 @@ theorem filter_rdi_next(o, n: Nat, inside: o < 4096, small: n <= 1, rdi, flag: B
     let sum = bitvec_nat::toNat_add(64, rdi, flag, { omega });
     omega
 }
+// What ZF says of the count: some left when it is clear, none when set.
+theorem left_of_flag(x: BitVec(64), n: Nat, value: x.toNat() = n, flag: is_zero_bits(64, x) = False): 0 < n {
+    (match n as λ k => x.toNat() = k → 0 < k {
+        Zero => λ zero => absurd(trans(sym(flag), zero_bits_of_zero(64, x, zero))),
+        Succ(_) => λ _ => trivial,
+    })(value)
+}
+theorem none_of_flag(x: BitVec(64), n: Nat, value: x.toNat() = n, flag: is_zero_bits(64, x) = True): n = 0 {
+    (match n as λ k => x.toNat() = k → k = 0 {
+        Zero => λ _ => refl,
+        Succ(_) => λ some => absurd(trans(sym(flag), zero_bits_of_pos(64, x, j(sym(some), λ v _ => 0 < v, trivial)))),
+    })(value)
+}
 
-// One byte: load it, step, store what it emits at the write cursor, advance.
-// ZF says whether the chunk is done.
-theorem filter_byte<C>(shape: FilterShape<C>, facts: LoopFacts<C>(shape), jumps: FilterJumps, pj: PrintJumps, c: Nat,
-    file: IoImage, s0: C, front, rest: List<BitVec(8)>, b: BitVec(8), inside: front.len() < 4096,
-    fits: CountsFit(shape.counts, shape.step(filter_state(shape.step, front, s0), b).next),
-    pieces: (page: Nat → BitVec(8)) → FilterCore(IoMemory(file, page), c, shape.code, jumps, pj),
-    state: MachineState<IoMemory>, head: FilterAt<C>(shape, file, s0, front, Cons(b, rest), fc_at_load(c, structured_bytes(shape.code).len()), state)):
-    Exists<MachineState<IoMemory>>(λ body => LinuxSteps(io_linux(), state, body) ∧
-        (FilterAt<C>(shape, file, s0, front ++ [b], rest, fc_at_jnz(c, structured_bytes(shape.code).len()), body) ∧
-            (body.flags.zf = is_zero_bits(64, read_gpr(Rcx, body.gprs))))) {
-    let fetch = io_fetch_access();
-    let data = io_data_access();
-    let entry = io_entry();
-    let p = structured_bytes(shape.code).len();
+// After the byte: back to the load with `rest` left, or on to the close
+// with nothing left.
+fn ByteAgain<C>(shape: FilterShape<C>, file: IoImage, s0: C, front, rest: List<BitVec(8)>, c: Nat, goal: MachineState<IoMemory> → Type) → Type {
+    (state: MachineState<IoMemory>) → FilterAt<C>(shape, file, s0, front, rest, load_rip(c), state) → 0 < rest.len() → goal(state)
+}
+fn ByteDone<C>(shape: FilterShape<C>, file: IoImage, s0: C, front, rest: List<BitVec(8)>, c: Nat, goal: MachineState<IoMemory> → Type) → Type {
+    (state: MachineState<IoMemory>) → FilterAt<C>(shape, file, s0, front, rest, close_rip(c, structured_bytes(shape.code).len()), state) →
+        rest.len() = 0 → goal(state)
+}
+
+// Byte `front.len()` loaded and stepped, at the store: the next state in the
+// state registers, the flag in RBX, the byte in RDX, the page as it was, the
+// loop's registers kept.
+record FilterStepped<C>(shape: FilterShape<C>, file: IoImage, s0: C, front: List<BitVec(8)>, b: BitVec(8), rip: BitVec(64),
+    state: MachineState<IoMemory>) {
+    page: Nat → BitVec(8),
+    memory_is: state.memory = IoMemory(file, page),
+    rip_is: state.rip = rip,
+    emitted: Stored(page, 0, filter_emitted(shape.step, front, s0)),
+    next_held: shape.rep(state.gprs, shape.step(filter_state(shape.step, front, s0), b).next),
+    flag_is: read_gpr(Rbx, state.gprs) = emit_flag(shape.step(filter_state(shape.step, front, s0), b).emit),
+    byte_is: read_gpr(Rdx, state.gprs) = emit_word(shape.step(filter_state(shape.step, front, s0), b).emit),
+    cursor: read_gpr(Rsi, state.gprs).toNat() = io_page_base() + front.len(),
+    out: read_gpr(Rdi, state.gprs).toNat() = io_page_base() + filter_emitted(shape.step, front, s0).len(),
+    one: read_gpr(R12, state.gprs) = BitVec::ofNat(1),
+}
+
+// The store, the advance and the JNZ, from `stepped` to `after`: the byte's
+// output stored at the write cursor, the cursors on, the count down.
+theorem filter_advanced_at<C>(shape: FilterShape<C>, facts: LoopFacts<C>(shape), file: IoImage, s0: C, front, rest: List<BitVec(8)>, b: BitVec(8),
+    inside: front.len() < 4096, rp0: BitVec(64), stepped: MachineState<IoMemory>, at: FilterStepped<C>(shape, file, s0, front, b, rp0, stepped),
+    left: Stored(at.page, front.len(), Cons(b, rest)), d: BitVec(32),
+    count: read_gpr(Rcx, execute_block_normal(filter_advance_block(), byte_store_after(linux_writes(io_linux()), filter_store(), stepped)).gprs).toNat() =
+        rest.len(),
+    rp: BitVec(64), after: MachineState<IoMemory>, rip: after.rip = rp,
+    m: after.memory = IoMemory(file, page_stored(file, at.page, filter_emitted(shape.step, front, s0).len(), imm_byte0(read_gpr(Rdx, stepped.gprs)))),
+    same: after = execute_near_control(JumpIfNear(NE, d),
+        execute_block_normal(filter_advance_block(), byte_store_after(linux_writes(io_linux()), filter_store(), stepped)))):
+    FilterAt<C>(shape, file, s0, front ++ [b], rest, rp, after) {
     let s = filter_state(shape.step, front, s0);
     let e = shape.step(s, b).emit;
     let emitted = filter_emitted(shape.step, front, s0);
     let o = emitted.len();
     let short: (o <= front.len()) = filter_emitted_len(shape.step, front, s0);
     let o_inside: (o < 4096) = lt_of_le_below(o, front.len(), 4096, short, inside);
-    have st = filter_stepped(shape, facts, jumps, pj, c, file, s0, front, rest, b, inside, fits, pieces, state, head);
-    let s2 = st.witness;
-    let at_out: (read_gpr(Rdi, s2.gprs).toNat() = io_page_base() + o) = trans(cong_fn<BitVec(64), Nat>(λ v => v.toNat(), st.proof.rdi), head.out);
-    let low: (imm_byte0(read_gpr(Rdx, s2.gprs)) = emit_low(e)) = cong_fn<BitVec(64), BitVec(8)>(λ v => imm_byte0(v), st.proof.byte_is);
-    have sd = filter_stored(shape.code, jumps, pj, c, file, head.page, o, o_inside, emit_low(e), pieces, s2,
-        trans(st.proof.memory_is, head.memory_is), st.proof.rip_is, at_out, low);
-    let s3 = sd.witness;
-    let next = io_store_offset(IoMemory(file, head.page), o, [emit_low(e)]).page;
-    let advanced = block_fetched(fetch, data, filter_advance_block(), s3, trivial,
-        resident_state(fetch, canonical_block_bytes(filter_advance_block()), IoMemory(file, next), eof_rip(fc_at_advance(c, p)), s3,
-            sd.proof.memory_is, sd.proof.rip_is, pieces(next).advance_at));
-    let s4 = execute_block_normal(filter_advance_block(), s3);
-    let reg = λ (r: Gpr) => cong_fn<Gprs, BitVec(64)>(λ g => read_gpr(r, g), sd.proof.gprs_is);
-    let one: (read_gpr(R12, s3.gprs) = BitVec::ofNat(1)) = trans(reg(R12), trans(st.proof.r12, head.one));
-    let one_value: (read_gpr(R12, s3.gprs).toNat() = 1) =
-        trans(cong_fn<BitVec(64), Nat>(λ v => v.toNat(), one), BitVec::toNat_ofNat(64, 1, trivial));
-    let rsi3: (read_gpr(Rsi, s3.gprs).toNat() = io_page_base() + front.len()) =
-        trans(cong_fn<BitVec(64), Nat>(λ v => v.toNat(), trans(reg(Rsi), st.proof.rsi)), head.cursor);
-    let rcx3: (read_gpr(Rcx, s3.gprs).toNat() = Succ(rest.len())) =
-        trans(cong_fn<BitVec(64), Nat>(λ v => v.toNat(), trans(reg(Rcx), st.proof.rcx)), head.count);
-    let rdi3: (read_gpr(Rdi, s3.gprs).toNat() = io_page_base() + o) = trans(cong_fn<BitVec(64), Nat>(λ v => v.toNat(), reg(Rdi)), at_out);
-    let flag3: (read_gpr(Rbx, s3.gprs).toNat() = emitted_byte(e).len()) =
-        trans(cong_fn<BitVec(64), Nat>(λ v => v.toNat(), trans(reg(Rbx), st.proof.flag_is)), emit_flag_value(e));
+    let ended = execute_near_control(JumpIfNear(NE, d),
+        execute_block_normal(filter_advance_block(), byte_store_after(linux_writes(io_linux()), filter_store(), stepped)));
+    let next = page_stored(file, at.page, o, emit_low(e));
+    let low: (imm_byte0(read_gpr(Rdx, stepped.gprs)) = emit_low(e)) = cong_fn<BitVec(64), BitVec(8)>(λ v => imm_byte0(v), at.byte_is);
+    let one_value: (read_gpr(R12, stepped.gprs).toNat() = 1) =
+        trans(cong_fn<BitVec(64), Nat>(λ v => v.toNat(), at.one), BitVec::toNat_ofNat(64, 1, trivial));
+    let flag: (read_gpr(Rbx, stepped.gprs).toNat() = emitted_byte(e).len()) =
+        trans(cong_fn<BitVec(64), Nat>(λ v => v.toNat(), at.flag_is), emit_flag_value(e));
     // `front.len() + 1` is `Succ(front.len())` by computation: addition
     // recurses on its second argument.
     let grown: ((front ++ [b]).len() = Succ(front.len())) = List::len_append(front, [b]);
     let emitted_next: (filter_emitted(shape.step, front ++ [b], s0) = emitted ++ emitted_byte(e)) = filter_emitted_snoc(shape.step, front, b, s0);
     let out_len: ((emitted ++ emitted_byte(e)).len() = o + emitted_byte(e).len()) = List::len_append(emitted, emitted_byte(e));
-    let rdi4: (read_gpr(Rdi, s4.gprs).toNat() = io_page_base() + filter_emitted(shape.step, front ++ [b], s0).len()) =
-        trans(filter_rdi_next(o, emitted_byte(e).len(), o_inside, emitted_byte_len(e), read_gpr(Rdi, s3.gprs), read_gpr(Rbx, s3.gprs), rdi3, flag3),
+    let rdi: (read_gpr(Rdi, ended.gprs).toNat() = io_page_base() + filter_emitted(shape.step, front ++ [b], s0).len()) =
+        trans(filter_rdi_next(o, emitted_byte(e).len(), o_inside, emitted_byte_len(e), read_gpr(Rdi, stepped.gprs), read_gpr(Rbx, stepped.gprs), at.out, flag),
             cong_fn<Nat, Nat>(λ k => io_page_base() + k, sym(trans(cong_fn<List<BitVec(8)>, Nat>(λ l => l.len(), emitted_next), out_len))));
-    let rsi4: (read_gpr(Rsi, s4.gprs).toNat() = io_page_base() + (front ++ [b]).len()) =
-        trans(filter_rsi_next(front.len(), inside, read_gpr(Rsi, s3.gprs), read_gpr(R12, s3.gprs), rsi3, one_value),
+    let rsi: (read_gpr(Rsi, ended.gprs).toNat() = io_page_base() + (front ++ [b]).len()) =
+        trans(filter_rsi_next(front.len(), inside, read_gpr(Rsi, stepped.gprs), read_gpr(R12, stepped.gprs), at.cursor, one_value),
             cong_fn<Nat, Nat>(λ k => io_page_base() + k, sym(grown)));
-    let rcx4: (read_gpr(Rcx, s4.gprs).toNat() = rest.len()) = filter_rcx_next(rest.len(), read_gpr(Rcx, s3.gprs), read_gpr(R12, s3.gprs), rcx3, one_value);
-    let held4: shape.rep(s4.gprs, filter_state(shape.step, front ++ [b], s0)) =
-        j(sym(filter_state_snoc(shape.step, front, b, s0)), λ t _ => shape.rep(s4.gprs, t),
-            facts.framed(s2.gprs, s4.gprs, shape.step(s, b).next,
-                ⟨trans(refl, reg(R13)), ⟨trans(refl, reg(R14)), ⟨trans(refl, reg(R15)), trans(refl, reg(R8))⟩⟩⟩, trans(refl, reg(Rsp)), st.proof.next_held));
+    let held: shape.rep(ended.gprs, filter_state(shape.step, front ++ [b], s0)) =
+        j(sym(filter_state_snoc(shape.step, front, b, s0)), λ t _ => shape.rep(ended.gprs, t),
+            facts.framed(stepped.gprs, ended.gprs, shape.step(s, b).next, ⟨refl, ⟨refl, ⟨refl, refl⟩⟩⟩, refl, at.next_held));
     let page_emitted: Stored(next, 0, filter_emitted(shape.step, front ++ [b], s0)) =
-        j(sym(emitted_next), λ l _ => Stored(next, 0, l), filter_emitted_page(IoMemory(file, head.page), emitted, e, head.emitted));
+        j(sym(emitted_next), λ l _ => Stored(next, 0, l), filter_emitted_page(IoMemory(file, at.page), emitted, e, at.emitted));
     let page_left: Stored(next, (front ++ [b]).len(), rest) =
-        j(sym(grown), λ k _ => Stored(next, k, rest), filter_left_page(IoMemory(file, head.page), o, front.len(), short, emit_low(e), b, rest, head.left));
-    Exists(s4, ⟨linux_steps_trans(io_linux(), state, s2, s4, linux_steps_of_fetched(io_linux(), state, s2, st.proof.steps),
-            linux_steps_trans(io_linux(), s2, s3, s4, linux_steps_store(io_linux(), s2, s3, sd.proof.step),
-                linux_steps_of_fetched(io_linux(), s3, s4, advanced.left))),
-        ⟨FilterAt(
-            page := next,
-            memory_is := trans(pure_block_memory(filter_advance_block(), s3), sd.proof.memory_is),
-            rip_is := trans(advanced.right, rip_advance(entry, s3.rip, fc_at_advance(c, p), filter_advance_len(), sd.proof.rip_is)),
-            emitted := page_emitted,
-            left := page_left,
-            held := held4,
-            cursor := rsi4,
-            count := rcx4,
-            out := rdi4,
-            one := one),
-         refl⟩⟩)
+        j(sym(grown), λ k _ => Stored(next, k, rest), filter_left_page(IoMemory(file, at.page), o, front.len(), short, emit_low(e), b, rest, left));
+    j(sym(same), λ x _ => FilterAt<C>(shape, file, s0, front ++ [b], rest, rp, x), FilterAt(
+        page := next,
+        memory_is := trans(j(same, λ x _ => x.memory = IoMemory(file, page_stored(file, at.page, o, imm_byte0(read_gpr(Rdx, stepped.gprs)))), m),
+            cong_fn<BitVec(8), IoMemory>(λ y => IoMemory(file, page_stored(file, at.page, o, y)), low)),
+        rip_is := j(same, λ x _ => x.rip = rp, rip),
+        emitted := page_emitted,
+        left := page_left,
+        held := held,
+        cursor := rsi,
+        count := count,
+        out := rdi,
+        one := at.one))
 }
 
-// The JNZ, taken while bytes are left.
-theorem filter_again<C>(shape: FilterShape<C>, jumps: FilterJumps, pj: PrintJumps, c: Nat, file: IoImage, s0: C,
-    front, back: List<BitVec(8)>,
-    loop_target: near_branch_target(eof_rip(fc_at_jnz(c, structured_bytes(shape.code).len())), 6, jumps.ld) = eof_rip(fc_at_load(c, structured_bytes(shape.code).len())),
-    pieces: (page: Nat → BitVec(8)) → FilterCore(IoMemory(file, page), c, shape.code, jumps, pj),
-    state: MachineState<IoMemory>, body: FilterAt<C>(shape, file, s0, front, back, fc_at_jnz(c, structured_bytes(shape.code).len()), state),
-    flag: state.flags.zf = False):
-    Exists<MachineState<IoMemory>>(λ next => FetchedStep(io_fetch_access(), io_data_access(), state, next) ∧
-        FilterAt<C>(shape, file, s0, front, back, fc_at_load(c, structured_bytes(shape.code).len()), next)) {
+// From the store: one stretch of three items, the store, the advance and the
+// JNZ, whose sides are the two ways on.
+theorem filter_advanced<C>(shape: FilterShape<C>, facts: LoopFacts<C>(shape), c: Nat, file: IoImage,
+    placed: Placed(file, loop_bytes(structured_bytes(shape.code)), eof_rip(c)), again: LoopAgain(structured_bytes(shape.code).len()), s0: C,
+    front, rest: List<BitVec(8)>, b: BitVec(8), inside: front.len() < 4096, goal: MachineState<IoMemory> → Type, back: StepsBack(goal),
+    next: ByteAgain<C>(shape, file, s0, front ++ [b], rest, c, goal), done: ByteDone<C>(shape, file, s0, front ++ [b], rest, c, goal),
+    stepped: MachineState<IoMemory>,
+    at: FilterStepped<C>(shape, file, s0, front, b, next_rip(eof_rip(c), prog_len(lf_step(structured_bytes(shape.code).len()))), stepped),
+    count: read_gpr(Rcx, stepped.gprs).toNat() = Succ(rest.len()), left: Stored(at.page, front.len(), Cons(b, rest))): goal(stepped) {
     let p = structured_bytes(shape.code).len();
-    let jump = near_fetched_step(io_fetch_access(), io_data_access(), JumpIfNear(NE, jumps.ld), state,
-        resident_state(io_fetch_access(), near_control_bytes(JumpIfNear(NE, jumps.ld)), IoMemory(file, body.page), eof_rip(fc_at_jnz(c, p)), state,
-            body.memory_is, body.rip_is, pieces(body.page).jnz_at));
-    let next = execute_near_control(JumpIfNear(NE, jumps.ld), state);
-    let taken: (condition_holds(NE, state.flags) = True) = cong_fn<Bool, Bool>(λ z => !z, flag);
-    Exists(next, ⟨jump, FilterAt(page := body.page, memory_is := body.memory_is,
-        rip_is := trans(near_if_taken_rip(NE, jumps.ld, state, taken),
-            trans(cong_fn<BitVec(64), BitVec(64)>(λ address => near_branch_target(address, 6, jumps.ld), body.rip_is), loop_target)),
-        emitted := body.emitted, left := body.left, held := body.held, cursor := body.cursor, count := body.count, out := body.out, one := body.one)⟩)
+    let emitted = filter_emitted(shape.step, front, s0);
+    let o = emitted.len();
+    let o_inside: (o < 4096) = lt_of_le_below(o, front.len(), 4096, filter_emitted_len(shape.step, front, s0), inside);
+    let advanced = execute_block_normal(filter_advance_block(), byte_store_after(linux_writes(io_linux()), filter_store(), stepped));
+    let one_value: (read_gpr(R12, stepped.gprs).toNat() = 1) =
+        trans(cong_fn<BitVec(64), Nat>(λ v => v.toNat(), at.one), BitVec::toNat_ofNat(64, 1, trivial));
+    let rcx: (read_gpr(Rcx, advanced.gprs).toNat() = rest.len()) =
+        filter_rcx_next(rest.len(), read_gpr(Rcx, stepped.gprs), read_gpr(R12, stepped.gprs), count, one_value);
+    let d = near_rel(prog_len(lf_advance(p)) + 6, loop_labels(p, tf_load()));
+    let from = next_rip(eof_rip(c), prog_len(lf_step(p)));
+    loop_straight(file, c, structured_bytes(shape.code), placed, at.page, goal, back, lf_jnz(p), refl, 3, stepped, at.rip_is, at.memory_is,
+        Exists(o, ⟨o_inside, ⟨at.out, ⟨
+            λ taken e rip m same => next(e,
+                filter_advanced_at(shape, facts, file, s0, front, rest, b, inside, from, stepped, at, left, d, rcx, load_rip(c), e,
+                    trans(rip, jumps_back(eof_rip(c), prog_len(lf_advance(p)), 6, d, asm_at(lf_load()), again)), m, same),
+                left_of_flag(read_gpr(Rcx, advanced.gprs), rest.len(), rcx, not_true_is(advanced.flags.zf, taken))),
+            λ passed e rip m same => done(e,
+                filter_advanced_at(shape, facts, file, s0, front, rest, b, inside, from, stepped, at, left, d, rcx, close_rip(c, p), e, rip, m, same),
+                none_of_flag(read_gpr(Rcx, advanced.gprs), rest.len(), rcx, not_false_is(advanced.flags.zf, passed)))⟩⟩⟩))
 }
 
-// The JNZ, falling through to the close once the chunk is done.
-theorem filter_done<C>(shape: FilterShape<C>, jumps: FilterJumps, pj: PrintJumps, c: Nat, file: IoImage, s0: C,
-    front, back: List<BitVec(8)>,
-    pieces: (page: Nat → BitVec(8)) → FilterCore(IoMemory(file, page), c, shape.code, jumps, pj),
-    state: MachineState<IoMemory>, body: FilterAt<C>(shape, file, s0, front, back, fc_at_jnz(c, structured_bytes(shape.code).len()), state),
-    flag: state.flags.zf = True):
-    Exists<MachineState<IoMemory>>(λ next => FetchedStep(io_fetch_access(), io_data_access(), state, next) ∧
-        FilterAt<C>(shape, file, s0, front, back, fc_at_close(c, structured_bytes(shape.code).len()), next)) {
-    let p = structured_bytes(shape.code).len();
-    let jump = near_fetched_step(io_fetch_access(), io_data_access(), JumpIfNear(NE, jumps.ld), state,
-        resident_state(io_fetch_access(), near_control_bytes(JumpIfNear(NE, jumps.ld)), IoMemory(file, body.page), eof_rip(fc_at_jnz(c, p)), state,
-            body.memory_is, body.rip_is, pieces(body.page).jnz_at));
-    let next = execute_near_control(JumpIfNear(NE, jumps.ld), state);
-    let passed: (condition_holds(NE, state.flags) = False) = cong_fn<Bool, Bool>(λ z => !z, flag);
-    Exists(next, ⟨jump, FilterAt(page := body.page, memory_is := body.memory_is,
-        rip_is := trans(near_if_not_taken_rip(NE, jumps.ld, state, passed), rip_advance(io_entry(), state.rip, fc_at_jnz(c, p), 6, body.rip_is)),
-        emitted := body.emitted, left := body.left, held := body.held, cursor := body.cursor, count := body.count, out := body.out, one := body.one)⟩)
+// The step, from the load's end: the program's piece, by its certificate.
+theorem filter_stepped<C>(shape: FilterShape<C>, facts: LoopFacts<C>(shape), c: Nat, file: IoImage,
+    placed: Placed(file, loop_bytes(structured_bytes(shape.code)), eof_rip(c)), again: LoopAgain(structured_bytes(shape.code).len()), s0: C,
+    front, rest: List<BitVec(8)>, b: BitVec(8), inside: front.len() < 4096,
+    fits: CountsFit(shape.counts, shape.step(filter_state(shape.step, front, s0), b).next), goal: MachineState<IoMemory> → Type, back: StepsBack(goal),
+    next: ByteAgain<C>(shape, file, s0, front ++ [b], rest, c, goal), done: ByteDone<C>(shape, file, s0, front ++ [b], rest, c, goal),
+    loaded: MachineState<IoMemory>, at: FilterAt<C>(shape, file, s0, front, Cons(b, rest), next_rip(eof_rip(c), prog_len(lf_load())), loaded),
+    rax: read_gpr(Rax, loaded.gprs) = b.zero_extend(56)): goal(loaded) {
+    let step = structured_bytes(shape.code);
+    let p = step.len();
+    let s = filter_state(shape.step, front, s0);
+    have ran = facts.piece(loaded, s, b, at.held, rax, fits);
+    let resident: CodeResident(io_fetch_access(), IoMemory(file, at.page), step, next_rip(eof_rip(c), prog_len(lf_load()))) =
+        asm_placed(file, loop_fills(step), loop_prog(p), loop_fits(step), eof_rip(c), placed)(lf_step(p))(at.page);
+    let went = step_runs(shape.code, loaded, shape.rep, shape.step(s, b), ran, IoMemory(file, at.page), eof_rip(c), prog_len(lf_load()), resident,
+        at.memory_is, at.rip_is);
+    back(loaded, ran.after, linux_steps_of_fetched(io_linux(), loaded, ran.after, went.left),
+        filter_advanced(shape, facts, c, file, placed, again, s0, front, rest, b, inside, goal, back, next, done, ran.after,
+            FilterStepped(page := at.page, memory_is := went.right.left, rip_is := went.right.right, emitted := at.emitted,
+                next_held := ran.next_held, flag_is := ran.flag_is, byte_is := ran.byte_is,
+                cursor := trans(cong_fn<BitVec(64), Nat>(λ v => v.toNat(), ran.registers_preserved(Rsi, trivial)), at.cursor),
+                out := trans(cong_fn<BitVec(64), Nat>(λ v => v.toNat(), ran.registers_preserved(Rdi, trivial)), at.out),
+                one := trans(ran.registers_preserved(R12, trivial), at.one)),
+            trans(cong_fn<BitVec(64), Nat>(λ v => v.toNat(), ran.registers_preserved(Rcx, trivial)), at.count), at.left))
+}
+
+// One byte, from the load: a stretch of one item to the step, the step, then
+// the store, advance and JNZ.
+theorem filter_byte<C>(shape: FilterShape<C>, facts: LoopFacts<C>(shape), c: Nat, file: IoImage,
+    placed: Placed(file, loop_bytes(structured_bytes(shape.code)), eof_rip(c)), again: LoopAgain(structured_bytes(shape.code).len()), s0: C,
+    front, rest: List<BitVec(8)>, b: BitVec(8), inside: front.len() < 4096,
+    fits: CountsFit(shape.counts, shape.step(filter_state(shape.step, front, s0), b).next), goal: MachineState<IoMemory> → Type, back: StepsBack(goal),
+    next: ByteAgain<C>(shape, file, s0, front ++ [b], rest, c, goal), done: ByteDone<C>(shape, file, s0, front ++ [b], rest, c, goal),
+    state: MachineState<IoMemory>, head: FilterAt<C>(shape, file, s0, front, Cons(b, rest), load_rip(c), state)): goal(state) {
+    let s = filter_state(shape.step, front, s0);
+    let rsi = read_gpr(Rsi, state.gprs);
+    let loaded: (head.page(front.len()) = b) = j(Nat::add_left_zero(front.len()), λ k _ => head.page(k) = b, head.left(0, b, refl));
+    let present: (io_read(IoMemory(file, head.page), rsi) = Some(b)) =
+        trans(io_read_page(file, head.page, rsi, front.len(), inside, head.cursor), cong_fn<BitVec(8), Option<BitVec(8)>>(λ x => Some(x), loaded));
+    let low: (rsi.toNat() < Nat::pow(2, 47)) = j(sym(head.cursor), λ v _ => v < Nat::pow(2, 47), filter_low(front.len(), inside));
+    let after = byte_load_after(filter_load(), b, state);
+    let rip_to = next_rip(eof_rip(c), prog_len(lf_load()));
+    loop_straight(file, c, structured_bytes(shape.code), placed, head.page, goal, back, lf_load(), refl, 1, state, head.rip_is, head.memory_is,
+        Exists(b, Exists(rsi, ⟨refl, ⟨present, ⟨low, λ e rip m same =>
+            filter_stepped(shape, facts, c, file, placed, again, s0, front, rest, b, inside, fits, goal, back, next, done, e,
+                j(sym(same), λ x _ => FilterAt<C>(shape, file, s0, front, Cons(b, rest), rip_to, x), FilterAt(
+                    page := head.page,
+                    memory_is := j(same, λ x _ => x.memory = IoMemory(file, head.page), m),
+                    rip_is := j(same, λ x _ => x.rip = rip_to, rip),
+                    emitted := head.emitted,
+                    left := head.left,
+                    held := facts.framed(state.gprs, after.gprs, s, ⟨refl, ⟨refl, ⟨refl, refl⟩⟩⟩, refl, head.held),
+                    cursor := head.cursor,
+                    count := head.count,
+                    out := head.out,
+                    one := head.one)),
+                j(sym(same), λ x _ => read_gpr(Rax, x.gprs) = b.zero_extend(56), refl))⟩⟩⟩)))
 }
 
 // Every prefix of the chunk leaves counts that fit.
@@ -733,49 +739,37 @@ theorem filter_front_inside(front, rest: List<BitVec(8)>, b: BitVec(8), bytes: L
 }
 
 // The chunk, by recursion on what is left of it: every byte stepped and its
-// output stored, and the close reached.
-fn FilterLoopFrom<C>(shape: FilterShape<C>, c: Nat, file: IoImage, s0: C, bytes, back: List<BitVec(8)>) → Type {
-    (front: List<BitVec(8)>) → (state: MachineState<IoMemory>) → front ++ back = bytes → 0 < back.len() →
-    FilterAt<C>(shape, file, s0, front, back, fc_at_load(c, structured_bytes(shape.code).len()), state) →
-    Exists<MachineState<IoMemory>>(λ done => LinuxSteps(io_linux(), state, done) ∧
-        FilterAt<C>(shape, file, s0, bytes, Nil, fc_at_close(c, structured_bytes(shape.code).len()), done))
+// output stored, then `done` at the close.
+fn LoopDone<C>(shape: FilterShape<C>, c: Nat, file: IoImage, s0: C, bytes: List<BitVec(8)>, goal: MachineState<IoMemory> → Type) → Type {
+    (state: MachineState<IoMemory>) → FilterAt<C>(shape, file, s0, bytes, Nil, close_rip(c, structured_bytes(shape.code).len()), state) → goal(state)
 }
-theorem filter_loop<C>(shape: FilterShape<C>, facts: LoopFacts<C>(shape), jumps: FilterJumps, pj: PrintJumps, c: Nat,
-    loop_target: near_branch_target(eof_rip(fc_at_jnz(c, structured_bytes(shape.code).len())), 6, jumps.ld) = eof_rip(fc_at_load(c, structured_bytes(shape.code).len())),
-    file: IoImage, s0: C, bytes: List<BitVec(8)>, fits: bytes.len() <= 4096, counts_fit: ChunkFits(shape, s0, bytes),
-    pieces: (page: Nat → BitVec(8)) → FilterCore(IoMemory(file, page), c, shape.code, jumps, pj), back: List<BitVec(8)>):
-    FilterLoopFrom(shape, c, file, s0, bytes, back) {
+fn FilterLoopFrom<C>(shape: FilterShape<C>, c: Nat, file: IoImage, s0: C, bytes, back: List<BitVec(8)>, goal: MachineState<IoMemory> → Type) → Type {
+    (front: List<BitVec(8)>) → (state: MachineState<IoMemory>) → front ++ back = bytes → 0 < back.len() →
+    FilterAt<C>(shape, file, s0, front, back, load_rip(c), state) → goal(state)
+}
+theorem filter_loop<C>(shape: FilterShape<C>, facts: LoopFacts<C>(shape), c: Nat, file: IoImage,
+    placed: Placed(file, loop_bytes(structured_bytes(shape.code)), eof_rip(c)), again: LoopAgain(structured_bytes(shape.code).len()), s0: C,
+    bytes: List<BitVec(8)>, fits: bytes.len() <= 4096, counts_fit: ChunkFits(shape, s0, bytes), goal: MachineState<IoMemory> → Type,
+    back: StepsBack(goal), done: LoopDone<C>(shape, c, file, s0, bytes, goal), left: List<BitVec(8)>):
+    FilterLoopFrom(shape, c, file, s0, bytes, left, goal) {
     let p = structured_bytes(shape.code).len();
-    match back {
+    match left {
         Nil => λ front state prefix none head => false_elim(none),
         Cons(b, rest) => λ front state prefix some head => {
             let inside = filter_front_inside(front, rest, b, bytes, prefix, fits);
             let prefix_next: ((front ++ [b]) ++ rest = bytes) = trans(List::append_assoc(front, [b], rest), prefix);
             let fits_next: CountsFit(shape.counts, shape.step(filter_state(shape.step, front, s0), b).next) =
                 j(filter_state_snoc(shape.step, front, b, s0), λ t _ => CountsFit(shape.counts, t), counts_fit(front ++ [b], rest, prefix_next));
-            have stepped = filter_byte(shape, facts, jumps, pj, c, file, s0, front, rest, b, inside, fits_next, pieces, state, head);
-            let body = stepped.witness;
-            (match rest as λ r => FilterLoopFrom(shape, c, file, s0, bytes, r) → (front ++ [b]) ++ r = bytes →
-                    FilterAt<C>(shape, file, s0, front ++ [b], r, fc_at_jnz(c, p), body) → body.flags.zf = is_zero_bits(64, read_gpr(Rcx, body.gprs)) →
-                    Exists<MachineState<IoMemory>>(λ done => LinuxSteps(io_linux(), state, done) ∧ FilterAt<C>(shape, file, s0, bytes, Nil, fc_at_close(c, p), done)) {
-                Nil => λ _ whole at flag => {
-                    have out = filter_done(shape, jumps, pj, c, file, s0, front ++ [b], Nil, pieces, body, at,
-                        trans(flag, zero_bits_of_zero(64, read_gpr(Rcx, body.gprs), at.count)));
-                    let all: (front ++ [b] = bytes) = trans(sym(List::append_nil(front ++ [b])), whole);
-                    Exists(out.witness, ⟨linux_steps_trans(io_linux(), state, body, out.witness, stepped.proof.left,
-                            linux_steps_of_fetched(io_linux(), body, out.witness, fetched_steps_one(io_fetch_access(), io_data_access(), body, out.witness, out.proof.left))),
-                        j(all, λ f _ => FilterAt<C>(shape, file, s0, f, Nil, fc_at_close(c, p), out.witness), out.proof.right)⟩)
-                },
-                Cons(d, more) => λ later whole at flag => {
-                    have again = filter_again(shape, jumps, pj, c, file, s0, front ++ [b], Cons(d, more), loop_target, pieces, body, at,
-                        trans(flag, zero_bits_of_pos(64, read_gpr(Rcx, body.gprs), j(sym(at.count), λ v _ => 0 < v, trivial))));
-                    have rest_done = later(front ++ [b], again.witness, whole, trivial, again.proof.right);
-                    Exists(rest_done.witness, ⟨linux_steps_trans(io_linux(), state, body, rest_done.witness, stepped.proof.left,
-                            linux_steps_cons(io_linux(), body, again.witness, rest_done.witness, Inl(again.proof.left), rest_done.proof.left)),
-                        rest_done.proof.right⟩)
-                },
-            })(filter_loop(shape, facts, jumps, pj, c, loop_target, file, s0, bytes, fits, counts_fit, pieces, rest), prefix_next,
-                stepped.proof.right.left, stepped.proof.right.right)
+            let later = filter_loop(shape, facts, c, file, placed, again, s0, bytes, fits, counts_fit, goal, back, done, rest);
+            filter_byte(shape, facts, c, file, placed, again, s0, front, rest, b, inside, fits_next, goal, back,
+                λ s at more => later(front ++ [b], s, prefix_next, more, at),
+                λ s at none => (match rest as λ r => (front ++ [b]) ++ r = bytes → FilterAt<C>(shape, file, s0, front ++ [b], r, close_rip(c, p), s) →
+                        r.len() = 0 → goal(s) {
+                    Nil => λ whole closing _ => done(s, j(trans(sym(List::append_nil(front ++ [b])), whole),
+                        λ f _ => FilterAt<C>(shape, file, s0, f, Nil, close_rip(c, p), s), closing)),
+                    Cons(_, more) => λ _ _ zero => false_elim({ let z: (Succ(more.len()) = 0) = zero; omega }),
+                })(prefix_next, at, none),
+                state, head)
         },
     }
 }
@@ -789,43 +783,9 @@ theorem filter_page_read(memory: IoMemory, bytes: List<BitVec(8)>): Stored(io_st
     stored_store(memory, 0, bytes)
 }
 
-// After the setup: nothing done, the whole chunk to go.
-theorem filter_entered<C>(shape: FilterShape<C>, facts: LoopFacts<C>(shape), jumps: FilterJumps, pj: PrintJumps, c: Nat,
-    file: IoImage, pieces: (page: Nat → BitVec(8)) → FilterCore(IoMemory(file, page), c, shape.code, jumps, pj),
-    page: Nat → BitVec(8), s0: C, bytes: List<BitVec(8)>, fits: bytes.len() <= 4096,
-    going: MachineState<IoMemory>, memory_is: going.memory = io_store_offset(IoMemory(file, page), 0, bytes),
-    rip_is: going.rip = eof_rip(c),
-    length_word: read_gpr(Rax, going.gprs) = bitvec_nat::word_of_nat(64, bytes.len()), held: shape.rep(going.gprs, s0)):
-    FetchedSteps(io_fetch_access(), io_data_access(), going, execute_block_normal(filter_setup_block(), going)) ∧
-    FilterAt<C>(shape, file, s0, Nil, bytes, fc_at_load(c, structured_bytes(shape.code).len()), execute_block_normal(filter_setup_block(), going)) {
-    let fetch = io_fetch_access();
-    let data = io_data_access();
-    let p = structured_bytes(shape.code).len();
-    let stored = io_store_offset(IoMemory(file, page), 0, bytes);
-    let set = block_fetched(fetch, data, filter_setup_block(), going, trivial,
-        resident_state(fetch, canonical_block_bytes(filter_setup_block()), stored, eof_rip(c), going,
-            memory_is, rip_is, pieces(stored.page).setup_at));
-    let ready = execute_block_normal(filter_setup_block(), going);
-    let counted: (read_gpr(Rax, going.gprs).toNat() = bytes.len()) =
-        trans(cong_fn<BitVec(64), Nat>(λ v => v.toNat(), length_word), bitvec_nat::toNat_word_of_nat(64, bytes.len(), count_below_word(bytes.len(), fits)));
-    let page_value: (BitVec::ofNat(io_page_base(), n := 64).toNat() = io_page_base()) = BitVec::toNat_ofNat(64, io_page_base(), trivial);
-    ⟨set.left, FilterAt(
-        page := stored.page,
-        memory_is := trans(pure_block_memory(filter_setup_block(), going), memory_is),
-        rip_is := trans(set.right, rip_advance(io_entry(), going.rip, c, filter_setup_len(), rip_is)),
-        emitted := λ i byte none => false_elim(j(none, λ found _ => match found as λ _ => Type { None => True, Some(_) => False }, trivial)),
-        left := filter_page_read(IoMemory(file, page), bytes),
-        held := facts.framed(going.gprs, ready.gprs, s0, ⟨refl, ⟨refl, ⟨refl, refl⟩⟩⟩, refl, held),
-        cursor := page_value,
-        count := counted,
-        out := page_value,
-        one := refl)⟩
-}
-
 // The close, at the JZ: R9 at the page, R10 the output's length, ZF whether
 // it is empty, the page holding the output, the state the chunk left.
-record FilterClosed<C>(shape: FilterShape<C>, c: Nat, file: IoImage, out: List<BitVec(8)>, s: C, going, closed: MachineState<IoMemory>) {
-    steps: LinuxSteps(io_linux(), going, closed),
+record FilterClosed<C>(shape: FilterShape<C>, c: Nat, file: IoImage, out: List<BitVec(8)>, s: C, closed: MachineState<IoMemory>) {
     page: Nat → BitVec(8),
     memory_is: closed.memory = IoMemory(file, page),
     rip_is: closed.rip = eof_rip(fc_at_cjz(c, structured_bytes(shape.code).len())),
@@ -834,6 +794,14 @@ record FilterClosed<C>(shape: FilterShape<C>, c: Nat, file: IoImage, out: List<B
     length: read_gpr(R10, closed.gprs).toNat() = out.len(),
     flag: closed.flags.zf = is_zero_bits(64, read_gpr(R10, closed.gprs)),
     held: shape.rep(closed.gprs, s),
+}
+fn ClosedReach<C>(shape: FilterShape<C>, c: Nat, file: IoImage, out: List<BitVec(8)>, s: C, state: MachineState<IoMemory>) → Type {
+    Exists<MachineState<IoMemory>>(λ closed => LinuxSteps(io_linux(), state, closed) ∧ FilterClosed<C>(shape, c, file, out, s, closed))
+}
+theorem closed_back<C>(shape: FilterShape<C>, c: Nat, file: IoImage, out: List<BitVec(8)>, s: C):
+    StepsBack(λ state => ClosedReach<C>(shape, c, file, out, s, state)) {
+    λ before middle steps reach => Exists(reach.witness, ⟨linux_steps_trans(io_linux(), before, middle, reach.witness, steps, reach.proof.left),
+        reach.proof.right⟩)
 }
 
 // The output's length, from where the write cursor stopped.
@@ -844,46 +812,61 @@ theorem filter_out_len(rdi, r9: BitVec(64), o: Nat, at_out: rdi.toNat() = io_pag
     omega
 }
 
-theorem filter_closed<C>(shape: FilterShape<C>, facts: LoopFacts<C>(shape), jumps: FilterJumps, pj: PrintJumps, c: Nat,
-    loop_target: near_branch_target(eof_rip(fc_at_jnz(c, structured_bytes(shape.code).len())), 6, jumps.ld) = eof_rip(fc_at_load(c, structured_bytes(shape.code).len())),
-    file: IoImage, pieces: (page: Nat → BitVec(8)) → FilterCore(IoMemory(file, page), c, shape.code, jumps, pj),
+// The close, from the loop's end: a stretch of one item to the JZ.
+theorem filter_close<C>(shape: FilterShape<C>, facts: LoopFacts<C>(shape), c: Nat, file: IoImage,
+    placed: Placed(file, loop_bytes(structured_bytes(shape.code)), eof_rip(c)), s0: C, bytes: List<BitVec(8)>, state: MachineState<IoMemory>,
+    at: FilterAt<C>(shape, file, s0, bytes, Nil, close_rip(c, structured_bytes(shape.code).len()), state)):
+    ClosedReach<C>(shape, c, file, filter_emitted(shape.step, bytes, s0), filter_state(shape.step, bytes, s0), state) {
+    let p = structured_bytes(shape.code).len();
+    let out = filter_emitted(shape.step, bytes, s0);
+    let s = filter_state(shape.step, bytes, s0);
+    let closed = execute_block_normal(filter_close_block(), state);
+    let base: (read_gpr(R9, closed.gprs).toNat() = io_page_base()) = BitVec::toNat_ofNat(64, io_page_base(), trivial);
+    let to = eof_rip(fc_at_cjz(c, p));
+    loop_straight(file, c, structured_bytes(shape.code), placed, at.page, λ x => ClosedReach<C>(shape, c, file, out, s, x), closed_back(shape, c, file, out, s),
+        lf_close(p), refl, 1, state, at.rip_is, at.memory_is,
+        λ e rip m same => Exists(e, ⟨Exists(Zero, refl), j(sym(same), λ x _ => FilterClosed<C>(shape, c, file, out, s, x), FilterClosed(
+            page := at.page,
+            memory_is := j(same, λ x _ => x.memory = IoMemory(file, at.page), m),
+            rip_is := trans(j(same, λ x _ => x.rip = next_rip(eof_rip(c), prog_len(lf_close(p))), rip), rip_compose(io_entry(), c, prog_len(lf_close(p)))),
+            emitted := at.emitted,
+            base := base,
+            length := filter_out_len(read_gpr(Rdi, state.gprs), read_gpr(R9, closed.gprs), out.len(), at.out, base),
+            flag := refl,
+            held := facts.framed(state.gprs, closed.gprs, s, ⟨refl, ⟨refl, ⟨refl, refl⟩⟩⟩, refl, at.held)))⟩))
+}
+
+// The chunk from the setup: a stretch of one item, the loop, the close.
+theorem filter_closed<C>(shape: FilterShape<C>, facts: LoopFacts<C>(shape), c: Nat, file: IoImage,
+    placed: Placed(file, loop_bytes(structured_bytes(shape.code)), eof_rip(c)), again: LoopAgain(structured_bytes(shape.code).len()),
     page: Nat → BitVec(8), s0: C, bytes: List<BitVec(8)>, some: 0 < bytes.len(), fits: bytes.len() <= 4096, counts_fit: ChunkFits(shape, s0, bytes),
     going: MachineState<IoMemory>, memory_is: going.memory = io_store_offset(IoMemory(file, page), 0, bytes),
     rip_is: going.rip = eof_rip(c),
     length_word: read_gpr(Rax, going.gprs) = bitvec_nat::word_of_nat(64, bytes.len()), held: shape.rep(going.gprs, s0)):
-    Exists<MachineState<IoMemory>>(λ closed =>
-        FilterClosed<C>(shape, c, file, filter_emitted(shape.step, bytes, s0), filter_state(shape.step, bytes, s0), going, closed)) {
-    let fetch = io_fetch_access();
-    let data = io_data_access();
-    let p = structured_bytes(shape.code).len();
+    ClosedReach<C>(shape, c, file, filter_emitted(shape.step, bytes, s0), filter_state(shape.step, bytes, s0), going) {
     let out = filter_emitted(shape.step, bytes, s0);
-    let entered = filter_entered(shape, facts, jumps, pj, c, file, pieces, page, s0, bytes, fits, going, memory_is, rip_is, length_word, held);
+    let s = filter_state(shape.step, bytes, s0);
+    let goal = λ (x: MachineState<IoMemory>) => ClosedReach<C>(shape, c, file, out, s, x);
+    let back = closed_back(shape, c, file, out, s);
+    let stored = io_store_offset(IoMemory(file, page), 0, bytes);
     let ready = execute_block_normal(filter_setup_block(), going);
-    have done = filter_loop(shape, facts, jumps, pj, c, loop_target, file, s0, bytes, fits, counts_fit, pieces, bytes)(Nil, ready, refl, some,
-        entered.right);
-    let last = done.witness;
-    let at = done.proof.right;
-    let shut = block_fetched(fetch, data, filter_close_block(), last, trivial,
-        resident_state(fetch, canonical_block_bytes(filter_close_block()), IoMemory(file, at.page), eof_rip(fc_at_close(c, p)), last,
-            at.memory_is, at.rip_is, pieces(at.page).close_at));
-    let closed = execute_block_normal(filter_close_block(), last);
-    let base: (read_gpr(R9, closed.gprs).toNat() = io_page_base()) = BitVec::toNat_ofNat(64, io_page_base(), trivial);
-    let rdi = read_gpr(Rdi, last.gprs);
-    let r9 = read_gpr(R9, closed.gprs);
-    let short: (out.len() <= bytes.len()) = filter_emitted_len(shape.step, bytes, s0);
-    let length: (rdi.sub(r9).toNat() = out.len()) = filter_out_len(rdi, r9, out.len(), at.out, base);
-    Exists(closed, FilterClosed(
-        steps := linux_steps_trans(io_linux(), going, last, closed,
-            linux_steps_trans(io_linux(), going, ready, last, linux_steps_of_fetched(io_linux(), going, ready, entered.left), done.proof.left),
-            linux_steps_of_fetched(io_linux(), last, closed, shut.left)),
-        page := at.page,
-        memory_is := trans(pure_block_memory(filter_close_block(), last), at.memory_is),
-        rip_is := trans(shut.right, rip_advance(io_entry(), last.rip, fc_at_close(c, p), filter_close_len(), at.rip_is)),
-        emitted := at.emitted,
-        base := base,
-        length := length,
-        flag := refl,
-        held := facts.framed(last.gprs, closed.gprs, filter_state(shape.step, bytes, s0), ⟨refl, ⟨refl, ⟨refl, refl⟩⟩⟩, refl, at.held)))
+    let counted: (read_gpr(Rax, going.gprs).toNat() = bytes.len()) =
+        trans(cong_fn<BitVec(64), Nat>(λ v => v.toNat(), length_word), bitvec_nat::toNat_word_of_nat(64, bytes.len(), count_below_word(bytes.len(), fits)));
+    let page_value: (BitVec::ofNat(io_page_base(), n := 64).toNat() = io_page_base()) = BitVec::toNat_ofNat(64, io_page_base(), trivial);
+    loop_straight(file, c, structured_bytes(shape.code), placed, stored.page, goal, back, lf_setup(), refl, 1, going, rip_is, memory_is,
+        λ e rip m same => filter_loop(shape, facts, c, file, placed, again, s0, bytes, fits, counts_fit, goal, back,
+            λ x closing => filter_close(shape, facts, c, file, placed, s0, bytes, x, closing), bytes, Nil, e, refl, some,
+            j(sym(same), λ x _ => FilterAt<C>(shape, file, s0, Nil, bytes, load_rip(c), x), FilterAt(
+                page := stored.page,
+                memory_is := j(same, λ x _ => x.memory = IoMemory(file, stored.page), m),
+                rip_is := j(same, λ x _ => x.rip = load_rip(c), rip),
+                emitted := λ i byte none => false_elim(j(none, λ found _ => match found as λ _ => Type { None => True, Some(_) => False }, trivial)),
+                left := filter_page_read(IoMemory(file, page), bytes),
+                held := facts.framed(going.gprs, ready.gprs, s0, ⟨refl, ⟨refl, ⟨refl, refl⟩⟩⟩, refl, held),
+                cursor := page_value,
+                count := counted,
+                out := page_value,
+                one := refl))))
 }
 
 // What a chunk's history makes: no write when it emitted nothing, else its
@@ -917,7 +900,7 @@ fn ChunkThenIf<C>(shape: FilterShape<C>, ar: Nat, file: IoImage, s: C, out: List
 theorem filter_after_close<C>(shape: FilterShape<C>, facts: LoopFacts<C>(shape), jumps: FilterJumps, pj: PrintJumps, c: Nat,
     ar: Nat, targets: CoreTargets(c, ar, structured_bytes(shape.code).len(), jumps, pj),
     file: IoImage, pieces: (page: Nat → BitVec(8)) → FilterCore(IoMemory(file, page), c, shape.code, jumps, pj),
-    out: List<BitVec(8)>, short: out.len() <= 4096, s: C, going, closed: MachineState<IoMemory>, at: FilterClosed<C>(shape, c, file, out, s, going, closed),
+    out: List<BitVec(8)>, short: out.len() <= 4096, s: C, closed: MachineState<IoMemory>, at: FilterClosed<C>(shape, c, file, out, s, closed),
     writes: List<WriteStep>, written: WritesFor(out, writes), ending: WriteEnding, ending_ok: WriteEndingOk(ending), after: List<LinuxEvent>,
     then: ChunkThenIf(shape, ar, file, s, out, ending, after)):
     LinuxRuns(io_linux(), chunk_events(out, writes, ending, after), closed) {
@@ -982,12 +965,13 @@ theorem filter_chunk<C>(shape: FilterShape<C>, facts: LoopFacts<C>(shape), jumps
     then: ChunkThenIf(shape, ar, file, filter_state(shape.step, bytes, s0), filter_emitted(shape.step, bytes, s0), ending, after)):
     LinuxRuns(io_linux(), chunk_events(filter_emitted(shape.step, bytes, s0), writes, ending, after), going) {
     let out = filter_emitted(shape.step, bytes, s0);
-    have closed = filter_closed(shape, facts, jumps, pj, c, targets.again, file, pieces, page, s0, bytes, some, fits, counts_fit,
+    let placed: Placed(file, loop_bytes(structured_bytes(shape.code)), eof_rip(c)) = λ pg => pieces(pg).loop_at;
+    have closed = filter_closed(shape, facts, c, file, placed, targets.again, page, s0, bytes, some, fits, counts_fit,
         going, memory_is, rip_is, length_word, held);
     let short: (out.len() <= 4096) = Nat::le_trans(out.len(), bytes.len(), 4096, filter_emitted_len(shape.step, bytes, s0), fits);
-    linux_runs_after_linux_steps(io_linux(), chunk_events(out, writes, ending, after), going, closed.witness, closed.proof.steps,
+    linux_runs_after_linux_steps(io_linux(), chunk_events(out, writes, ending, after), going, closed.witness, closed.proof.left,
         filter_after_close(shape, facts, jumps, pj, c, ar, targets, file, pieces, out, short, filter_state(shape.step, bytes, s0),
-            going, closed.witness, closed.proof, writes, written, ending, ending_ok, after, then))
+            closed.witness, closed.proof.right, writes, written, ending, ending_ok, after, then))
 }
 
 // ---------------------------------------------------------------------------
