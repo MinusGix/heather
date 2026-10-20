@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/numeral", "crates/kernel", "crates/syntax", "crates/elab", "crates/elab-unit", "crates/cache", "crates/cli", "crates/lsp"]
+members = ["crates/numeral", "crates/kernel", "crates/syntax", "crates/elab", "crates/elab-unit", "crates/cache", "crates/cli", "crates/lsp", "crates/export"]
 
 [workspace.package]
 version = "0.0.1"

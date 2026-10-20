@@ -1,0 +1,17 @@
+[package]
+name = "heather-export"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "heather_export"
+
+[dependencies]
+heather-kernel = { path = "../kernel" }
+
+[dev-dependencies]
+heather-elab = { path = "../elab" }
+
+[lints]
+workspace = true

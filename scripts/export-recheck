@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Recheck the export prototype's output in Lean 4 and Rocq/Coq.
+#
+# Runs the heather-export acceptance test with HEATHER_EXPORT_OUT set, which
+# writes Exported.lean / Exported.v; copies the hand-written preludes beside
+# them; and hands each file to its checker under the same address-space and
+# CPU rails as scripts/test (a runaway conversion in the target must not take
+# the machine down — a large unary numeral in Rocq does exactly that).
+#
+# Usage: scripts/export-recheck [OUT_DIR]
+#   LEAN=/path/to/lean  (default: `lean` on PATH)
+#   COQC=/path/to/coqc  (default: `coqc` on PATH)
+# A missing checker is reported and skipped, not an error.
+# Design and expected results: docs/export-fragment-design.md §7.
+set -u
+root="$(cd "$(dirname "$0")/.." && pwd)"
+out="${1:-$root/target/export-recheck}"
+mkdir -p "$out"
+out="$(cd "$out" && pwd)"
+
+HEATHER_EXPORT_OUT="$out" "$root/scripts/test" -p heather-export --test nat_fragment >"$out/test.log" 2>&1 \
+  || { echo "export test failed; see $out/test.log"; exit 1; }
+cp "$root/crates/export/prelude/Hx.lean" "$root/crates/export/prelude/Hx.v" "$out/"
+
+lean="${LEAN:-$(command -v lean || true)}"
+coqc="${COQC:-$(command -v coqc || true)}"
+status=0
+cd "$out" || exit 1
+
+if [ -n "$lean" ]; then
+  if (ulimit -v 8388608 -t 300 -c 0; "$lean" -o Hx.olean Hx.lean && LEAN_PATH="$out" "$lean" Exported.lean) >lean.log 2>&1; then
+    echo "lean: ok ($(grep -c '^@\[reducible\] def\|^axiom' Exported.lean) declarations)"
+  else
+    echo "lean: FAILED; see $out/lean.log"; status=1
+  fi
+else
+  echo "lean: not found (set LEAN), skipped"
+fi
+
+if [ -n "$coqc" ]; then
+  if (ulimit -v 8388608 -t 300 -c 0; "$coqc" -Q . "" Hx.v && "$coqc" -Q . "" Exported.v) >coq.log 2>&1; then
+    echo "coq: ok"
+  else
+    # Rocq stops at the first failing declaration; name its line.
+    where="$(grep -B1 '^Error' coq.log | grep -o 'line [0-9]*' | tail -1)"
+    echo "coq: FAILED at Exported.v ${where:-?}; see $out/coq.log"
+    status=1
+  fi
+else
+  echo "coq: not found (set COQC), skipped"
+fi
+exit $status

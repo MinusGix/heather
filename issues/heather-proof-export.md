@@ -23,3 +23,17 @@ replacement symbol where the two theories differ. The first round:
    terms (not surface syntax), and recheck it there.
 3. Record which kernel features stopped the translation, as the list a
    trusted-fragment theorem would later have to cover.
+
+## Log
+
+- 2026-10-20: exploration round. Design: `docs/export-fragment-design.md`;
+  prototype `crates/export` (kernel Ψ → HX → Lean and Rocq printers, two
+  hand-written preludes) with `scripts/export-recheck`; probes in
+  `crates/export/probes/`. On a Nat-and-enum slice, Lean 4.20 checks all 22
+  declarations and Coq 8.18 checks 20. Coq stops at unit η and at unary
+  numerals. Decisions proposed, pending Minus: **Lean is the first target**
+  (step 1 above). Translate from kernel terms through HX (step 2). The stops
+  (step 3) are §6 of the design. Follow-ups: [[export-keeps-proofs]],
+  [[export-typed-translation]], [[export-library-sweep]],
+  [[export-wf-native-inductives]], [[export-checks-theorem]]. Rocq as a full
+  second target is parked here until unit η is answered (design §5.3).
