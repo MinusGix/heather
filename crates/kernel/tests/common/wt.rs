@@ -268,7 +268,7 @@ pub fn gen_wt_ctx(env: &WtEnv, r: &mut Rng, b: u32, layer: Layer) -> LocalCtx {
 pub fn gen_wt_type(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Type>, Level) {
     assert!(env.layer != Layer::Var);
     for _ in 0..8 {
-        match r.below(19) {
+        match r.below(20) {
             // Unit^l / Empty^l — level-indexed, so a generated level rather
             // than 0 (docs/unit-empty-level-indexing.md). Without these the
             // property suite never sees the round at all.
@@ -427,6 +427,26 @@ pub fn gen_wt_type(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Type>, Level) {
                 let e = env.push_entry(rty(Type::Fin { len: Rc::clone(&len) }), Level::Zero);
                 let (fam, l) = gen_wt_type(&e, r, b / 2);
                 return (rty(Type::DVec { level: l.clone(), len, fam }), l);
+            }
+            // IWf (extension; docs/iwf-former-design.md §1.2): the arity and
+            // output index under `x : S`, the child index under `x, i : Fin
+            // n`, the index in Γ — each component a checked term of its type,
+            // or the arm is a miss. Computing layers only, as DVec.
+            19 if b > 0 && env.layer.computes() => {
+                let (idx, li) = gen_wt_type(env, r, b / 3);
+                let (shape, l) = gen_wt_type(env, r, b / 3);
+                let e_x = env.push_entry(Rc::clone(&shape), l.clone());
+                let arity = gen_wt_nat(&e_x, r, b / 3);
+                let e_xi = e_x.push_entry(rty(Type::Fin { len: Rc::clone(&arity) }), Level::Zero);
+                let (Some(out), Some(child), Some(index)) = (
+                    gen_wt_term_at(&e_x, r, b / 3, &idx.shift_local(1), &li),
+                    gen_wt_term_at(&e_xi, r, b / 3, &idx.shift_local(2), &li),
+                    gen_wt_term_at(env, r, b / 3, &idx, &li),
+                ) else {
+                    continue;
+                };
+                let ty = Type::IWf { level: l.clone(), idx_level: li.clone(), idx, shape, arity, out, child, index };
+                return (rty(ty), Level::max(l, li));
             }
             _ => continue,
         }

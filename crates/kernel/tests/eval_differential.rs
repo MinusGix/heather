@@ -244,6 +244,28 @@ impl<'a, 'v> Agree<'a, 'v> {
                 self.under_tm(arity, n2, gamma, 1, d)
             }
             (
+                VTy::IWf { level: a1, idx_level: a2, idx, shape, arity, out, child, index },
+                Type::IWf {
+                    level: b1,
+                    idx_level: b2,
+                    idx: x2,
+                    shape: s2,
+                    arity: n2,
+                    out: o2,
+                    child: c2,
+                    index: m2,
+                },
+            ) => {
+                self.lev(a1, b1, "IWf level")?;
+                self.lev(a2, b2, "IWf index level")?;
+                self.lazy_ty(idx, x2, gamma, d)?;
+                self.lazy_ty(shape, s2, gamma, d)?;
+                self.under_tm(arity, n2, gamma, 1, d)?;
+                self.under_tm(out, o2, gamma, 1, d)?;
+                self.under_tm(child, c2, gamma, 2, d)?;
+                self.lazy_tm(index, m2, gamma, d)
+            }
+            (
                 VTy::Sum { lhs_level: a1, rhs_level: a2, lhs, rhs },
                 Type::Sum { lhs_level: b1, rhs_level: b2, lhs: l2, rhs: r2 },
             ) => {
@@ -627,6 +649,31 @@ impl<'a, 'v> Agree<'a, 'v> {
                 self.lazy_tm(children, c2, gamma, d)
             }
 
+            (
+                Val::Supi { level: a1, idx_level: a2, idx, shape, arity, out, child, label, children },
+                Term::Supi {
+                    level: b1,
+                    idx_level: b2,
+                    idx: x2,
+                    shape: s2,
+                    arity: n2,
+                    out: o2,
+                    child: c2,
+                    label: l2,
+                    children: cs2,
+                },
+            ) => {
+                self.lev(a1, b1, "sup_i level")?;
+                self.lev(a2, b2, "sup_i index level")?;
+                self.lazy_ty(idx, x2, gamma, d)?;
+                self.lazy_ty(shape, s2, gamma, d)?;
+                self.under_tm(arity, n2, gamma, 1, d)?;
+                self.under_tm(out, o2, gamma, 1, d)?;
+                self.under_tm(child, c2, gamma, 2, d)?;
+                self.lazy_tm(label, l2, gamma, d)?;
+                self.lazy_tm(children, cs2, gamma, d)
+            }
+
             // -- functions: the closure case of the adequacy relation --
             (
                 Val::Lam { dom_level: a1, cod_level: a2, dom, body },
@@ -911,6 +958,49 @@ impl<'a, 'v> Agree<'a, 'v> {
                 self.under_tm(arity, n2, gamma, 1, d)?;
                 self.under_ty(motive, m2, gamma, 1, d)?;
                 self.under_tm(step, st2, gamma, 3, d)?;
+                self.ne(&prefix, scrut, gamma, depth)
+            }
+            (
+                Elim::ElimIWf {
+                    level: a1,
+                    idx_level: a2,
+                    motive_level: a3,
+                    idx,
+                    shape,
+                    arity,
+                    out,
+                    child,
+                    motive,
+                    step,
+                    index,
+                    ..
+                },
+                Term::ElimIWf {
+                    level: b1,
+                    idx_level: b2,
+                    motive_level: b3,
+                    idx: x2,
+                    shape: s2,
+                    arity: n2,
+                    out: o2,
+                    child: c2,
+                    motive: m2,
+                    step: st2,
+                    index: i2,
+                    scrut,
+                },
+            ) => {
+                self.lev(a1, b1, "elim_IWf level")?;
+                self.lev(a2, b2, "elim_IWf index level")?;
+                self.lev(a3, b3, "elim_IWf motive level")?;
+                self.lazy_ty(idx, x2, gamma, d)?;
+                self.lazy_ty(shape, s2, gamma, d)?;
+                self.under_tm(arity, n2, gamma, 1, d)?;
+                self.under_tm(out, o2, gamma, 1, d)?;
+                self.under_tm(child, c2, gamma, 2, d)?;
+                self.under_ty(motive, m2, gamma, 2, d)?;
+                self.under_tm(step, st2, gamma, 3, d)?;
+                self.lazy_tm(index, i2, gamma, d)?;
                 self.ne(&prefix, scrut, gamma, depth)
             }
             (

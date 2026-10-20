@@ -428,7 +428,7 @@ pub fn gen_type(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Type> {
     }
 
     for _ in 0..8 {
-        let arm = if b == 0 { r.below(3) } else { r.below(22) };
+        let arm = if b == 0 { r.below(3) } else { r.below(23) };
         match arm {
             0 => return Rc::new(Type::Nat),
             1 => return Rc::new(Type::Ty(gen_level(sc, r, 1))),
@@ -575,6 +575,23 @@ pub fn gen_type(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Type> {
                     level: gen_level(sc, r, 1),
                     len: gen_term(sc, r, b / 2),
                     fam: gen_type(&inner, r, b / 2),
+                });
+            }
+            22 if b > 0 => {
+                // IWf: arity and output index under `x : S`, child index
+                // under `x, i`, the index in the ambient scope.
+                let (mut in1, mut in2) = (sc.clone(), sc.clone());
+                in1.local.len += 1;
+                in2.local.len += 2;
+                return Rc::new(Type::IWf {
+                    level: gen_level(sc, r, 1),
+                    idx_level: gen_level(sc, r, 1),
+                    idx: gen_type(sc, r, b / 4),
+                    shape: gen_type(sc, r, b / 4),
+                    arity: gen_term(&in1, r, b / 4),
+                    out: gen_term(&in1, r, b / 4),
+                    child: gen_term(&in2, r, b / 4),
+                    index: gen_term(sc, r, b / 4),
                 });
             }
             _ => continue,
@@ -975,6 +992,44 @@ pub fn gen_term(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Term> {
                     scrut: gen_term(sc, r, b / 2),
                 });
             }
+            // sup_i / elim_IWf: the signature as IWf's; the motive binds two
+            // (j, z), the step three (a, cs, ih).
+            39 if b > 0 => {
+                let (mut in1, mut in2) = (sc.clone(), sc.clone());
+                in1.local.len += 1;
+                in2.local.len += 2;
+                return Rc::new(Term::Supi {
+                    level: gen_level(sc, r, 1),
+                    idx_level: gen_level(sc, r, 1),
+                    idx: gen_type(sc, r, b / 4),
+                    shape: gen_type(sc, r, b / 4),
+                    arity: gen_term(&in1, r, b / 4),
+                    out: gen_term(&in1, r, b / 4),
+                    child: gen_term(&in2, r, b / 4),
+                    label: gen_term(sc, r, b / 2),
+                    children: gen_term(sc, r, b / 2),
+                });
+            }
+            40 if b > 0 => {
+                let (mut in1, mut in2, mut in3) = (sc.clone(), sc.clone(), sc.clone());
+                in1.local.len += 1;
+                in2.local.len += 2;
+                in3.local.len += 3;
+                return Rc::new(Term::ElimIWf {
+                    level: gen_level(sc, r, 1),
+                    idx_level: gen_level(sc, r, 1),
+                    motive_level: gen_level(sc, r, 1),
+                    idx: gen_type(sc, r, b / 4),
+                    shape: gen_type(sc, r, b / 4),
+                    arity: gen_term(&in1, r, b / 4),
+                    out: gen_term(&in1, r, b / 4),
+                    child: gen_term(&in2, r, b / 4),
+                    motive: gen_type(&in2, r, b / 2),
+                    step: gen_term(&in3, r, b / 2),
+                    index: gen_term(sc, r, b / 4),
+                    scrut: gen_term(sc, r, b / 2),
+                });
+            }
             // Vec/Fin/Wf codes: the lengths are terms of the ambient scope
             // (no binder); only the Wf code's arity binds `x : El s`.
             36 if b > 0 => {
@@ -1102,6 +1157,10 @@ pub fn count_type(t: &Type) -> u64 {
         Type::Fin { len } => count_term(len),
         Type::Wf { shape, arity, .. } => count_type(shape) + count_term(arity),
         Type::DVec { len, fam, .. } => count_term(len) + count_type(fam),
+        Type::IWf { idx, shape, arity, out, child, index, .. } => {
+            count_type(idx) + count_type(shape) + count_term(arity) + count_term(out)
+                + count_term(child) + count_term(index)
+        }
         Type::Squash { ty, .. } => count_type(ty),
         Type::UPi { body, .. } => count_type(body),
         Type::El { tm, .. } => count_term(tm),
@@ -1161,6 +1220,15 @@ pub fn count_term(t: &Term) -> u64 {
         }
         Term::ElimWf { shape, arity, motive, step, scrut, .. } => {
             count_type(shape) + count_term(arity) + count_type(motive) + count_term(step)
+                + count_term(scrut)
+        }
+        Term::Supi { idx, shape, arity, out, child, label, children, .. } => {
+            count_type(idx) + count_type(shape) + count_term(arity) + count_term(out)
+                + count_term(child) + count_term(label) + count_term(children)
+        }
+        Term::ElimIWf { idx, shape, arity, out, child, motive, step, index, scrut, .. } => {
+            count_type(idx) + count_type(shape) + count_term(arity) + count_term(out)
+                + count_term(child) + count_type(motive) + count_term(step) + count_term(index)
                 + count_term(scrut)
         }
         Term::Succ(t) => count_term(t),

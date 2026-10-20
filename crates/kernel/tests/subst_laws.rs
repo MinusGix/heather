@@ -227,6 +227,41 @@ fn instantiation_at_the_top_is_a_substitution() {
     }
 }
 
+/// `IWf`'s schemas (`term::iwf_fam`, `term::iwf_ih`) instantiate the child
+/// index at a shape under its position binder: `t.inst_top_above(k, c, s)`
+/// is `inst_top(k, s)` lifted under `c` binders, for `t` in `Γ, x, Θ` with
+/// `|Θ| = c` and `s` in `Γ, Δ`, `|Δ| = k`; the result is in `Γ, Δ, Θ`.
+#[test]
+fn instantiation_above_binders_is_a_lifted_substitution() {
+    heather_kernel::checks::set_skip_verification(heather_kernel::checks::SkipVerification::Full);
+    for seed in 0..CASES {
+        let mut r = Rng::new(seed ^ 0x4f1bbcdcbfa53e0a);
+        let sc = gen_scope(&mut r);
+        let gamma = materialize(&sc, sc.local);
+        for cutoff in 0..3 {
+            let mut sc_xt = sc.clone();
+            sc_xt.local.len += 1 + cutoff;
+            let t = gen_term(&sc_xt, &mut r, BUDGET);
+            let ty = gen_type(&sc_xt, &mut r, BUDGET);
+            for by in 0..3 {
+                let mut sc_d = sc.clone();
+                sc_d.local.len += by;
+                let s = gen_term(&sc_d, &mut r, BUDGET);
+                let mut delta = LocalSubst::id(&gamma).shift_local(by).extended(Rc::clone(&s));
+                for _ in 0..cutoff {
+                    delta = delta.shift_local(1).extended(Rc::new(Term::Var(LocalVar(0))));
+                }
+                law!(seed, t.inst_top_above(by, cutoff, &s), t.apply_local(&delta));
+                law!(seed, ty.inst_top_above(by, cutoff, &s), ty.apply_local(&delta));
+            }
+            if cutoff == 0 {
+                let s = gen_term(&sc, &mut r, BUDGET);
+                law!(seed, t.inst_top_above(0, 0, &s), t.inst_top(0, &s));
+            }
+        }
+    }
+}
+
 /// Shifting by zero must not just *equal* the input, it must **share** it:
 /// that is the point of the fast path, and equality alone would pass just as
 /// well against the deep-copying traversal it replaced
