@@ -1383,7 +1383,7 @@ fn stream4_code_recursors() {
         let mut r = Rng::new(seed ^ 0xc3a5c85c97cb3127);
         let mut env = gen_wt_env(&mut r);
         env.layer = Layer::Meta; // recursors are layer-m forms
-        let delta = gen_wt_ctx(&env, &mut r, 4, Layer::Prog);
+        let delta = gen_wt_ctx(&env, &mut r, 4, Layer::Code);
         let ce = env.in_ctx(delta.clone(), Layer::Code);
 
         // elim^Typ over generated code of a type.
