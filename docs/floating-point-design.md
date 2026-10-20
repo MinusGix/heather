@@ -1,9 +1,11 @@
 # Floating point: a design for Heather
 
-Status: design proposal, 2026-10-20, for discussion before any code. Owns the
-roadmap milestone `math-float` (`docs/roadmap.md`); tracking issue
+Status: design, 2026-10-20. Minus reviewed the first draft the same day and
+settled most of its questions; §9 records the answers and the few points
+still open, and §3.1, §4 and §5.5 were written in response to the review.
+No code yet. Owns the roadmap milestone `math-float` and its submilestones
+(`docs/roadmap.md`); tracking issue
 [floating-point-formalization](../issues/floating-point-formalization.md).
-The open questions are collected in §9 and nothing below them is decided.
 
 The starting point is Minus's Lean library, **flean**
 (github.com/MinusGix/flean, read at its default branch on 2026-10-20: about
@@ -148,7 +150,7 @@ in from the start but layered (§7.2), so mathematics never sees them.
 ## 3. Formats and values
 
 ```heather
-// Only radix 2 (flean dropped radix too; see §9 Q6).
+// Only radix 2 (flean dropped radix too; decided in §9).
 record Format {
     prec: Nat,                    // significand digits, implicit bit included
     prec_ok: 2 <= prec,
@@ -213,23 +215,119 @@ territory once the shift is a literal or named. `Dyadic` is also the natural
 home for later work (exact interval endpoints, the `Rat`-free fast path for
 evaluation).
 
+### 3.1 The value domain in detail
+
+There are three layers, and each theorem lives in the lowest one that can
+state it.
+
+**Integers: the representation.** Canonical form, the rounding routine's
+branches (shift, quotient, carry, overflow), successor and predecessor, and
+the encoding are all facts about `Nat`/`Int` triples. Their proofs are
+`omega` and evaluation. Nothing in this layer mentions a fraction.
+
+**`Dyadic`: the exact values.**
+
+- *Carrier.* `Dyadic { mant: Int, exp: Int }`, unnormalised. `Dyadic::Same`
+  is `≈`, by aligning to the smaller exponent: `a ≈ b` iff `a.mant ·
+  2^(a.exp - e) = b.mant · 2^(b.exp - e)` at `e = min(a.exp, b.exp)`, with
+  the shifts as `Nat` powers, so `Int` arithmetic decides it. Normalising
+  (odd mantissa, or zero) would make `=` value equality, but every operation
+  would then pay for a normalisation and a proof that it normalises. The
+  setoid follows the same convention as `Rat` and `CReal` and costs nothing.
+  `Finite(F)` is canonical anyway, so normal forms already exist where they
+  are wanted.
+- *Operations.* `+`, `-`, `*` and `shift(k)` (multiply by `2^k`, which only
+  changes the exponent) are exact and computable, and each respects `≈`.
+  There is no division. `Dyadic` gets the relation-indexed
+  `CommRing(≈, +, *)` instance (`semiring.hthr`) and `Lt`/`Le` by aligned
+  `Int` comparison, decidable. It is an ordered commutative ring but not a
+  field, and the design does not pretend otherwise.
+- *Embedding.* `Dyadic::rat` splits on the exponent's sign: `mant · 2^exp`
+  as an `Int` when `exp ≥ 0`, else `Rat(mant, 2^(-exp))`. That needs no
+  `Rat::pow` and no `PowOk` evidence, and it evaluates. It is a ring
+  embedding that preserves and reflects `≈`, `<` and `<=`; these are the
+  only facts that cross into `Rat`.
+
+**Any ordered field `K`: the statements.** `RoundsTo`, the standard model
+and every error bound are stated at `K: OrderedField(≈, <, <=, +, *)` from
+`ordered_field.hthr`, through `Dyadic::into<K>`. That is
+`ofInt(mant) * two^exp`, where `two^exp` uses `K`'s inverse at `2`, and
+`0 < 2` supplies the apartness. At `K = Rat` it is `Dyadic::rat` up to `≈`,
+and at `K = CReal` it is `CReal::ofRat ∘ Dyadic::rat`. The proof route is
+always the same. Prove the fact at `Rat`, where order is decidable and
+`RoundsTo` is decidable over the finitely many floats, often by
+evaluation for a concrete format. Then **transfer** it along one lemma: an
+ordered-ring embedding `Rat → K` that preserves and reflects `<` preserves
+`RoundsTo` and every bound whose constants are dyadic. So a generic-`K`
+theorem costs one transfer call, not a second proof. Flean's `(R := R)`
+annotations disappear because the carrier is read off the argument, as
+everywhere in `ordered_field.hthr`.
+
+What is computed where:
+
+| exact value of | carrier | how |
+|---|---|---|
+| a float | `Dyadic` | `x.dyadic()` |
+| `a + b`, `a - b`, `a * b`, `fma(a, b, c)` | `Dyadic` | exact ring operations |
+| `a / b`, `sqrt(a)` | `Rat` (not dyadic) | represented for rounding as a dyadic plus sticky, by integer quotient or integer square root |
+| a decimal literal, `round_rat(q)` | `Rat` | integer division of `num` by `den` to `prec + 2` bits, with the remainder as sticky |
+| `exp(x)`, `log(x)`, any real | `CReal` | §6 |
+
+**Why not a generic carrier throughout (flean's choice).** A generic `R`
+gives nothing computable, so flean built ERat and ENNRat beside it. And
+because a generic `R` has no integer-level normal form, a comparison of two
+powers of two needs `zpow` lemmas instead of `omega`. Here everything below
+`K` computes, and only the final statement is generic.
+
 ## 4. Equality and order
 
-- `=` at `Finite(F)` is structural; the only structural difference between
+### 4.1 The relations
+
+- `=` at `Finite(F)` is structural. The only structural difference between
   value-equal finite floats is the sign of zero.
 - `≈` at `Finite(F)` designates `x.val ≈ y.val` (equivalently: equal, or
-  both zero), decidable. `<` designates value order, `<=` its Bishop dual.
-  `Finite(F)` gets `Equivalence` and `StrictOrder` instances, so every
-  `ordered_field.hthr` lemma that needs only a strict order applies, and
-  `calc` chains over floats mix freely with `Rat` steps through `val`.
-- At `Float(F)`, no relation gets a symbol by default. IEEE comparison is a
-  function to `{Lt, Eq, Gt, Unordered}`; `totalOrder` (IEEE §5.10, with
-  `-0 < +0` and NaNs at the ends) is a separate named predicate with its
-  own `Decide`. The predicates `x.is_finite()`, `x.is_zero()` and so on are
-  Bool functions.
+  both zero), and it is decidable. `<` designates the value order and `<=`
+  its Bishop dual. `Finite(F)` gets `Equivalence` and `StrictOrder`
+  instances, so every `ordered_field.hthr` lemma that needs only a strict
+  order applies, and `calc` chains over floats mix freely with `Rat` steps
+  through `val`.
+- At `Float(F)` there are three more relations, each IEEE-defined and each
+  needing its own notation (§4.2):
+  - **IEEE comparison**, the quiet predicates of IEEE §5.11: `x <ᵢ y`,
+    `x ≤ᵢ y`, `x =ᵢ y`. Every one is false when either side is NaN, and
+    `+0 =ᵢ -0`. `=ᵢ` is not reflexive, so it is no `Equivalence`, and it is
+    never `≈`. `compare(x, y)` returns `{Lt, Eq, Gt, Unordered}`.
+  - **`totalOrder`** (IEEE §5.10): `x ≤ₜ y`, a decidable total order on
+    `Float(F)` with `-0 <ₜ +0` and the NaNs at the ends (payload order is a
+    bits-level refinement).
+  - **Value sameness of non-NaN floats**, `≈` at `Float(F)` restricted to
+    the non-NaN values, if a client needs it. Round 1 does not add it.
 
-This settles flean's issue #15 by never overloading: the symbol means the
-mathematical order, and the two IEEE orders are named.
+This settles flean's issue #15 by never overloading: the plain symbol means
+the mathematical order, and the two IEEE orders carry a decoration.
+
+### 4.2 Decorated symbols
+
+The lexicon is a curated, context-free table (`crates/syntax/src/lexer.rs`,
+`issues/notation-extensibility.md`): a new symbol is a token added there and
+then given meaning by a `designation` (`docs/operators-onto-classes-design.md`).
+The float library wants one general addition rather than three special
+tokens: **a relation symbol immediately followed by one Unicode subscript
+letter is a symbol of its own.** So `<ᵢ`, `≤ᵢ`, `=ᵢ` and `≤ₜ`, `<ₜ` are
+five names in the symbol namespace, each designated per carrier like `<`.
+The rule is the one `·₁₂` already uses, where adjacency plus the subscript
+alphabet makes the lexing unambiguous. It also needs `≤` as a Unicode
+spelling of `<=`, which the lexer does not have today. The subscript
+alphabet is small (`ₐ ₑ ₒ ₓ ₕ ₖ ₗ ₘ ₙ ₚ ₛ ₜ ᵢ ⱼ ᵣ ᵤ ᵥ`) but covers the cases
+that matter, and other libraries get the mechanism for free: `≤ₗ` for a
+lexicographic order, `≈ₛ` for a second setoid.
+
+That lexer change belongs to the `language` lane, and the lexer is a shared
+hotspot, so it is filed as its own issue
+([decorated-relation-symbols](../issues/decorated-relation-symbols.md)),
+with `math-float` as its customer. The float rounds do not wait for it.
+Until it lands they use the named functions (`ieee_lt`, `total_le`), and the
+notation is a later designation with no change to any theorem.
 
 ## 5. Rounding
 
@@ -302,6 +400,61 @@ record Rounding(F: Format) { rel: Rat → Float(F) → Type, faithful: …, mono
 with `Mode::rounding(F, mode)` as the IEEE instances. Most of the library
 never sees it.
 
+**Stochastic rounding** (ML, later) is the one mode that is not a function
+even on `Rat`: it is a distribution over the two neighbours. In the set
+reading of §5.5 it is not odd at all. Its support is the faithful set, so
+every bound that holds for faithful rounding holds for each outcome
+pointwise, and the expectation bounds that make it attractive need
+probability theory, which comes with the ML milestones. Until then the
+`Mode` enum stays the five IEEE modes (Minus, 2026-10-20: practical, and
+what people use). Round-to-odd joins as an internal mode for
+double-rounding proofs when a round needs it.
+
+### 5.5 Syntax
+
+Two things need spelling: the **relation** ("`r` is a correct rounding of
+`x`"), which makes sense at any carrier, and the **function** ("compute the
+rounding of `x`"), which exists only at `Dyadic` and `Rat`. The proposal
+reads the rounding of `x` as the *set* of its correct roundings, so a single
+notation serves both:
+
+```heather
+○x                  // the set of correct roundings of x: a predicate on Float(F)
+r ∈ ○x              // RoundsTo(F, NearestEven, x, r), at any ordered field
+r ∈ ○[TowardZero] x // the same under another mode
+r ∈ ▽x,  r ∈ △x     // round down / round up: the two directed modes interval proofs use
+r ∈ ○ᶠx             // faithful: r is one of the two neighbours of x
+
+round(x)            // the function, at Dyadic and Rat; F from the expected type,
+                    // mode a default argument (named-arguments-design §9.6)
+round(x, mode := TowardPos)
+round::mem(x): round(x) ∈ ○x        // the bridge theorem
+```
+
+Reasons for this shape:
+
+- For the IEEE modes `○x` is a singleton up to `≈`
+  (`RoundsTo::unique`), so `r ∈ ○x` reads as "`r` is the rounding". For a
+  faithful rounding it has two elements, and for stochastic rounding it is
+  the support. One notation covers the deterministic and non-deterministic
+  cases, which is what a constructive treatment of the reals needs (§6): a
+  real has a computable faithful rounding but only a set-valued correct
+  rounding until apartness is supplied.
+- `○` (U+25CB, white circle) is the handbook's and flean's symbol for
+  "rounded", so it reads naturally to anyone coming from either. `▽`/`△`
+  match the handbook's RD/RU and interval-arithmetic usage.
+- The format is read from the type of `r`, the expected type, as for
+  carrier-directed numerals. Where nothing pins it, `○[binary32] x` names
+  it.
+- The standard model reads as written in the literature:
+  `r ∈ ○x → ∃ δ, AbsLe(δ, u(F)) ∧ r.val ≈ x * (1 + δ)` for `x` in the
+  normal range.
+
+`○`, `▽` and `△` are prefix tokens and `∈` an infix one (it also has uses
+outside floats), so they are part of the same language-lane issue as §4.2.
+Until it lands the spellings are `x.RoundsTo(F, mode, r)`, `round(…)` and
+`round::correct`.
+
 ## 6. The reals, constructively
 
 Rounding a real number to a float is not a computable function: at a
@@ -331,6 +484,29 @@ computable:
   every error bound stated with `u` doubled.
 
 No classical axiom appears anywhere, and nothing returns a junk value.
+
+**Classical users get the same theorems, not a second profile** (Minus,
+2026-10-20). The constraint the correct-rounding statements actually need is
+weaker than apartness. It is that `x` is *placed* relative to each
+breakpoint: `x < b ∨ x ≈ b ∨ b < x`, for the finitely many breakpoints of
+`F` near `x`. Call it `F.Placed(x)`. Apartness from the breakpoints implies
+it constructively. Excluded middle implies it for every `x`. So the theorem
+is stated once:
+
+```heather
+theorem RoundsTo::exists(F, mode, x: K, placed: F.Placed(x) := infer): ∃ r, r ∈ ○[mode] x
+```
+
+A constructive caller supplies `placed` from an apartness proof or from a
+decision at `Rat`. A classical caller works under an assumption scope
+(`issues/implicit-logical-assumptions.md`) whose provider derives `Placed`
+from excluded middle, and the parameter is discharged by `infer` without
+being written: the constraint dissolves. The difference shows only in
+computation. Under the classical provider the witness is opaque and does not
+evaluate, which is exactly the boundary that issue draws between logical
+evidence and `Decide`. Rounds 1–5 never need it: every exact value they
+round is a dyadic or a rational, whose placement is decided. It is recorded
+for the reals submilestone.
 
 ## 7. Operations, bits and the machine
 
@@ -376,61 +552,68 @@ decode(b)))` under the policy", which is what lets compiled floating-point
 code carry certificates. That work touches `lib/std/arch/` and the native
 support lists and is out of scope here.
 
-## 8. Rounds
+## 8. Rounds and submilestones
 
-One PR each; each lands its own modules under a new `lib/std/float/`
+One PR per round. Each lands its own modules under a new `lib/std/float/`
 directory (the mathematics lane), and none touches the shared hotspots.
+`math-float` is done when rounds 1–5 have landed (Minus, 2026-10-20). The
+later work is submilestones of it that do not block it. The ids are the
+roadmap's.
 
-1. **Formats and values.** `Format`, the standard formats as values,
-   `Finite(F)`, `Float(F)`, `Dyadic`, `val`, `≈`/`<` with `StrictOrder`,
-   successor and predecessor, and the literal constants (`max_finite`,
-   `min_normal`, `min_subnormal`) proved canonical by evaluation.
-2. **Rounding.** `RoundsTo`, `round` on dyadics with sticky, `round_rat`,
-   `round::correct`, and the mode laws.
-3. **Error bounds.** The standard model, absolute subnormal bounds, `ulp`,
-   γ-composition.
-4. **Arithmetic.** Add/sub/mul/fma with value, zero-sign and special
-   theorems; then div and sqrt by sticky quotients.
-5. **Error-free transformations.** Sterbenz, Fast2Sum, TwoSum,
-   TwoProduct (by fma), Veltkamp; then Kahan summation.
-6. **Bits.** Encode/decode and the round trip; the OCP storage formats;
-   conversions.
-7. **Reals.** Transfer to `CReal`, faithful rounding, `round_real` with
-   apartness.
-8. **Later:** flags and payload policies; correctly rounded `exp`/`log`
-   (a CReal series plus a Padé apartness proof); ML numerics on top
-   (dot products, softmax), when the ML milestones pull them.
+| round | submilestone | content |
+|---|---|---|
+| 1 | `float-values` | `Format`, the standard formats as values, `Finite(F)`, `Float(F)`, `Dyadic` with its ring and order, `val`, `≈`/`<` with `StrictOrder`, successor and predecessor, and the literal constants (`max_finite`, `min_normal`, `min_subnormal`) proved canonical by evaluation. |
+| 2 | `float-rounding` | `RoundsTo`, `round` on dyadics with sticky, `round_rat`, `round::correct`, uniqueness, the mode laws, and the transfer lemma to any `OrderedField`. |
+| 3 | `float-error` | The standard model, absolute subnormal bounds, `ulp`, γ-composition. |
+| 4 | `float-arith` | Add/sub/mul/fma with value, zero-sign and special-value theorems; then div and sqrt by sticky quotients; format conversion. |
+| 5 | `float-eft` | Sterbenz, Fast2Sum, TwoSum, TwoProduct (by fma), Veltkamp; then Kahan summation. |
+| later | `float-bits` | Encode/decode and the round trip, the OCP storage formats, NaN payload policies and flags. |
+| later | `float-reals` | Transfer to `CReal`, faithful rounding, `round_real` with apartness, `Placed`. |
+| later | `float-transcendental` | Correctly rounded `exp`/`log`: a `CReal` series plus a Padé apartness proof. |
+
+ML numerics on top (dot products, softmax, stochastic rounding) belong to
+the ML milestones that pull them, not here. The notation of §4.2 and §5.5
+arrives through
+[decorated-relation-symbols](../issues/decorated-relation-symbols.md) in
+the language lane, whenever that lands. No round waits for it.
 
 Tactics, per the project principle: rounds 2–4 will repeat "shift to a
 common exponent and compare integers", and the error-analysis rounds will
 repeat "multiply out `(1 + δᵢ)` and bound". Each gets a `tactics` issue the
-third time it is written by hand, naming `math-float` as its customer;
-flean's `linearize` and `bound_calc` are evidence of what those tactics
-need to do.
+third time it is written by hand, naming `math-float` as its customer.
+Flean's `linearize` and `bound_calc` are evidence of what those tactics need
+to do.
 
-## 9. Open questions for Minus
+## 9. Decisions and what is still open
 
-1. **Value carrier.** Exact values as `Dyadic`, embedded in `Rat`, with
-   theorems stated over any `OrderedField` only where they must hold at
-   `CReal` (recommended), or flean's style of a generic carrier throughout?
-2. **Exponent convention.** Store the quantum exponent `q` (value `m·2^q`,
-   Flocq's choice, recommended) or IEEE's leading exponent as flean does?
-3. **Rounding mode.** An enum argument defaulting to nearest-even, laws by
-   cases (recommended), or keep context-style modes?
-4. **One format record for IEEE and OCP storage formats**, with
-   evidence-carrying `Inf`/`NaN` constructors, or keep storage formats as a
-   separate encoding-only type as flean does?
-5. **NaN and flags.** Payloads only at the bits layer behind a platform
-   policy, and flags as a separate output (recommended)? Or should NaN carry
-   a payload in `Float(F)`?
-6. **Radix.** Binary only (flean's decision), or keep radix as a parameter
-   for decimal later?
-7. **Reals.** Is "correct rounding of a real takes apartness from the
-   breakpoints; faithful rounding needs nothing" the API you want, or do you
-   want a profile that assumes decidable order on `CReal` for classical
-   users (`implicit-logical-assumptions`)?
-8. **Order symbols.** `≈`/`<` at `Finite(F)` as value sameness and order,
-   IEEE compare and `totalOrder` named and never symbolic?
-9. **Scope of the first milestone.** Is `math-float` "done" at rounds 1–5
-   (formats through EFTs, the part GPU and ML cite), with bits, reals and
-   transcendentals as submilestones?
+Minus's answers to the first draft (2026-10-20):
+
+1. **Value carrier:** dyadics embedded in `Rat`, with generic `OrderedField`
+   statements only where `CReal` needs them. Agreed. Minus asked for more
+   detail, which is now §3.1.
+2. **Exponent:** store the quantum exponent. Agreed.
+3. **Rounding mode:** an enum argument. Agreed, "not one hundred percent a
+   fan but practically that's what people use". Stochastic rounding is
+   deferred, and §5.4 records how it fits the set reading.
+4. **One `Format` record** for IEEE and OCP storage formats. Agreed.
+5. **NaN payloads and flags** at the bits layer, behind a platform policy.
+   Agreed.
+6. **Binary only.** Agreed.
+7. **Classical users:** no separate profile. Constraints that dissolve under
+   classical assumptions, with the same theorems (§6, `Placed`). Not urgent.
+8. **Orders:** the IEEE orders get special notation. §4.2 proposes
+   subscript-decorated relation symbols.
+9. **Scope:** `math-float` is rounds 1–5, and the rest are submilestones
+   (§8).
+
+Still open, for review on this design:
+
+- **The rounding notation of §5.5**, Minus asked for syntax. The proposal
+  is `○x` as the set of correct roundings, `r ∈ ○x` the relation,
+  `round(x)` the function, and `▽`/`△`/`○ᶠ` the directed and faithful
+  variants.
+- **The decoration letters of §4.2**: `ᵢ` for the IEEE quiet comparisons
+  and `ₜ` for totalOrder.
+- **Whether `Float(F)` is a parameterised inductive or a record with a
+  tag.** This is a round-1 implementation detail. It decides only how the
+  evidence-carrying `Inf`/`NaN` constructors are spelled.

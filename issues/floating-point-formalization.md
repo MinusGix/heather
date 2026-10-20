@@ -43,3 +43,10 @@ of the area.
   embedded in `Rat`; formats as data indexing `Float(F)`; one `encode`/`decode`
   pair over `BitVec`) and lists nine open questions for Minus (§9) and an
   eight-round plan (§8). No code yet.
+- 2026-10-20: Minus reviewed the design and agreed with dyadic values, the
+  quantum exponent, the mode enum, one `Format` record, payloads and flags at
+  the bits layer, and binary only. Classical users get the same theorems
+  through constraints that dissolve. `math-float` is rounds 1–5, with
+  submilestones `float-values` … `float-transcendental` in the roadmap.
+  Notation for the IEEE orders and for rounding is a language-lane ask:
+  [[decorated-relation-symbols]].
