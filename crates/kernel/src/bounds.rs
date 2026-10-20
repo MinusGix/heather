@@ -338,6 +338,13 @@ impl Cache {
             }
             Type::W { shape, pos, .. } => self.type_use(shape).join(self.type_use(pos).under(1)),
             Type::DVec { len, fam, .. } => self.term_use(len).join(self.type_use(fam).under(1)),
+            Type::IWf { idx, shape, arity, out, child, index, .. } => self
+                .type_use(idx)
+                .join(self.type_use(shape))
+                .join(self.term_use(arity).under(1))
+                .join(self.term_use(out).under(1))
+                .join(self.term_use(child).under(2))
+                .join(self.term_use(index)),
             Type::GlobalTy { subst, .. } => self.subst_use(subst),
             Type::CtxPi { body, .. } => self.type_use(body),
             Type::TyPi { body, .. } => self.type_use(body),
@@ -531,6 +538,44 @@ impl Cache {
                 .join(self.term_use(arity).under(1))
                 .join(self.type_use(motive).under(1))
                 .join(self.term_use(step).under(3))
+                .join(self.term_use(scrut)),
+            Term::Supi {
+                idx,
+                shape,
+                arity,
+                out,
+                child,
+                label,
+                children,
+                ..
+            } => self
+                .type_use(idx)
+                .join(self.type_use(shape))
+                .join(self.term_use(arity).under(1))
+                .join(self.term_use(out).under(1))
+                .join(self.term_use(child).under(2))
+                .join(self.term_use(label))
+                .join(self.term_use(children)),
+            Term::ElimIWf {
+                idx,
+                shape,
+                arity,
+                out,
+                child,
+                motive,
+                step,
+                index,
+                scrut,
+                ..
+            } => self
+                .type_use(idx)
+                .join(self.type_use(shape))
+                .join(self.term_use(arity).under(1))
+                .join(self.term_use(out).under(1))
+                .join(self.term_use(child).under(2))
+                .join(self.type_use(motive).under(2))
+                .join(self.term_use(step).under(3))
+                .join(self.term_use(index))
                 .join(self.term_use(scrut)),
             Term::Lam { dom, body, .. } => self.type_use(dom).join(self.term_use(body).under(1)),
             Term::App {

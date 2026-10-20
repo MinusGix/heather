@@ -187,6 +187,10 @@ impl fmt::Debug for Type {
                 write!(f, "Wf[{level:?}]({shape:?}). {arity:?}")
             }
             Type::DVec { level, len, fam } => write!(f, "DVec[{level:?}]({len:?}; {fam:?})"),
+            Type::IWf { level, idx_level, idx, shape, arity, out, child, index } => write!(
+                f,
+                "IWf[{level:?},{idx_level:?}]({idx:?}; {shape:?}. {arity:?}; {out:?}; {child:?})({index:?})"
+            ),
             Type::GlobalTy { var, subst } => write!(f, "U{}^{subst:?}", var.0),
             Type::CtxPi { level, body } => write!(f, "Π[g:Ctx@{level:?}]. {body:?}"),
             Type::TyPi { ctx, arg_level, body_level, body } => {
@@ -338,6 +342,27 @@ impl fmt::Debug for Term {
             Term::ElimWf { level, motive_level, shape, arity, motive, step, scrut } => write!(
                 f,
                 "elimWf[{level:?},{motive_level:?}]({shape:?}. {arity:?}; M {motive:?}; s {step:?}; {scrut:?})"
+            ),
+            Term::Supi { level, idx_level, idx, shape, arity, out, child, label, children } => write!(
+                f,
+                "supi[{level:?},{idx_level:?}]({idx:?}; {shape:?}. {arity:?}; {out:?}; {child:?}; {label:?}; {children:?})"
+            ),
+            Term::ElimIWf {
+                level,
+                idx_level,
+                motive_level,
+                idx,
+                shape,
+                arity,
+                out,
+                child,
+                motive,
+                step,
+                index,
+                scrut,
+            } => write!(
+                f,
+                "elimIWf[{level:?},{idx_level:?},{motive_level:?}]({idx:?}; {shape:?}. {arity:?}; {out:?}; {child:?}; M {motive:?}; s {step:?}; {index:?}; {scrut:?})"
             ),
             Term::Lam { dom_level, cod_level, dom, body } => {
                 write!(f, "λ[{dom_level:?},{cod_level:?}]({dom:?}). {body:?}")

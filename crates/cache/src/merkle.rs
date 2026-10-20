@@ -176,6 +176,7 @@ mod tag {
     pub const T_CODETM: u8 = 0x34;
     pub const T_SQUASH: u8 = 0x35;
     pub const T_DVEC: u8 = 0x36;
+    pub const T_IWF: u8 = 0x37;
 
     // terms
     pub const E_VAR: u8 = 0x40;
@@ -246,6 +247,8 @@ mod tag {
     /// A literal past `u64` (docs/wide-numerals-design.md): its own tag, so a
     /// literal that fits keeps the hash it always had.
     pub const E_NATLIT_WIDE: u8 = 0x7c;
+    pub const E_SUPI: u8 = 0x7d;
+    pub const E_ELIMIWF: u8 = 0x7e;
 }
 
 /// The walk in progress: a SHA-256 state, a small staging buffer, and the Ψ
@@ -537,6 +540,17 @@ impl<'a> Walk<'a> {
                 self.level(level);
                 self.term(len);
                 self.ty(fam);
+            }
+            Type::IWf { level, idx_level, idx, shape, arity, out, child, index } => {
+                self.tag(tag::T_IWF);
+                self.level(level);
+                self.level(idx_level);
+                self.ty(idx);
+                self.ty(shape);
+                self.term(arity);
+                self.term(out);
+                self.term(child);
+                self.term(index);
             }
             // Reference site 2 of 5.
             Type::GlobalTy { var, subst } => {
@@ -892,6 +906,46 @@ impl<'a> Walk<'a> {
                 self.term(arity);
                 self.ty(motive);
                 self.term(step);
+                self.term(scrut);
+            }
+            Term::Supi { level, idx_level, idx, shape, arity, out, child, label, children } => {
+                self.tag(tag::E_SUPI);
+                self.level(level);
+                self.level(idx_level);
+                self.ty(idx);
+                self.ty(shape);
+                self.term(arity);
+                self.term(out);
+                self.term(child);
+                self.term(label);
+                self.term(children);
+            }
+            Term::ElimIWf {
+                level,
+                idx_level,
+                motive_level,
+                idx,
+                shape,
+                arity,
+                out,
+                child,
+                motive,
+                step,
+                index,
+                scrut,
+            } => {
+                self.tag(tag::E_ELIMIWF);
+                self.level(level);
+                self.level(idx_level);
+                self.level(motive_level);
+                self.ty(idx);
+                self.ty(shape);
+                self.term(arity);
+                self.term(out);
+                self.term(child);
+                self.ty(motive);
+                self.term(step);
+                self.term(index);
                 self.term(scrut);
             }
             Term::Lam { dom_level, cod_level, dom, body } => {

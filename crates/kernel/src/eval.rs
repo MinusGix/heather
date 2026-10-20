@@ -55,7 +55,7 @@ use crate::reduce::{
 };
 use crate::subst::{GlobalEntry, GlobalSubst};
 use crate::term::{
-    nth, Branches, CtxBase, CtxEntries, CtxEntry, GlobalVar, LocalCtx, LocalSubst, LocalVar,
+    iwf_ih, nth, Branches, IWfSig, CtxBase, CtxEntries, CtxEntry, GlobalVar, LocalCtx, LocalSubst, LocalVar,
     Motives, Term, Type,
 };
 use crate::value::{
@@ -740,6 +740,16 @@ impl<'a, 'v> Eval<'a, 'v> {
                 shape: yclo(env, shape),
                 arity: tclo(env, arity),
             },
+            Type::IWf { level, idx_level, idx, shape, arity, out, child, index } => VTy::IWf {
+                level: level.clone(),
+                idx_level: idx_level.clone(),
+                idx: yclo(env, idx),
+                shape: yclo(env, shape),
+                arity: tclo(env, arity),
+                out: tclo(env, out),
+                child: tclo(env, child),
+                index: tclo(env, index),
+            },
             Type::Sum { lhs_level, rhs_level, lhs, rhs } => VTy::Sum {
                 lhs_level: lhs_level.clone(),
                 rhs_level: rhs_level.clone(),
@@ -1318,6 +1328,19 @@ impl<'a, 'v> Eval<'a, 'v> {
                 label: tclo(env, label),
                 children: tclo(env, children),
             },
+            Term::Supi { level, idx_level, idx, shape, arity, out, child, label, children } => {
+                Val::Supi {
+                    level: level.clone(),
+                    idx_level: idx_level.clone(),
+                    idx: yclo(env, idx),
+                    shape: yclo(env, shape),
+                    arity: tclo(env, arity),
+                    out: tclo(env, out),
+                    child: tclo(env, child),
+                    label: tclo(env, label),
+                    children: tclo(env, children),
+                }
+            }
 
             // -- functions --
             Term::Lam { dom_level, cod_level, dom, body } => Val::Lam {
@@ -1526,6 +1549,37 @@ impl<'a, 'v> Eval<'a, 'v> {
                     arity: tclo(env, arity),
                     motive: yclo(env, motive),
                     step: tclo(env, step),
+                    env: env.clone(),
+                };
+                return Ok(Work::Elim(s, e));
+            }
+            Term::ElimIWf {
+                level,
+                idx_level,
+                motive_level,
+                idx,
+                shape,
+                arity,
+                out,
+                child,
+                motive,
+                step,
+                index,
+                scrut,
+            } => {
+                let s = self.eval_tm(scrut, env)?;
+                let e = Elim::ElimIWf {
+                    level: level.clone(),
+                    idx_level: idx_level.clone(),
+                    motive_level: motive_level.clone(),
+                    idx: yclo(env, idx),
+                    shape: yclo(env, shape),
+                    arity: tclo(env, arity),
+                    out: tclo(env, out),
+                    child: tclo(env, child),
+                    motive: yclo(env, motive),
+                    step: tclo(env, step),
+                    index: tclo(env, index),
                     env: env.clone(),
                 };
                 return Ok(Work::Elim(s, e));
@@ -1952,6 +2006,15 @@ impl<'a, 'v> Eval<'a, 'v> {
                     None => Ok(Work::Val(stuck(self.arena, &head, &e))),
                 }
             }
+            // At any index: β does not look at the index (design §4).
+            (Val::Supi { label, children, .. }, Elim::ElimIWf { .. }) => {
+                self.spend()?;
+                let (label, children) = (*label, *children);
+                match self.fire_elim_iwf(label, children, &e)? {
+                    Some(v) => Ok(v),
+                    None => Ok(Work::Val(stuck(self.arena, &head, &e))),
+                }
+            }
             (Val::BoxTy(code), Elim::LetBoxTy { body, .. }) => {
                 self.spend()?;
                 let Some((benv, bbody)) = body.as_syn() else { return Ok(Work::Val(stuck(self.arena, &head, &e))) };
@@ -2195,6 +2258,88 @@ impl<'a, 'v> Eval<'a, 'v> {
             )),
             body: self.arena.tm(TmClo::syn(rho_acs, Rc::new(rec))),
         }))
+    }
+
+    /// `elim_IWf(…; m; sup_i(…; a; cs)) ⇝ s[a, cs, iwfIH a cs]`, at any
+    /// index (docs/iwf-former-design.md §4). The ih is `reduce.rs`'s, from
+    /// the one schema [`iwf_ih`]: built as syntax in `(Γ, a, cs)` — the
+    /// annotations weakened past the two slots, `a` and `cs` named by them —
+    /// and closed over the environment `ρ, a, cs`, as [`Eval::fire_elim_w`]
+    /// builds `elim_W`'s. No [`Val::WfIh`]-style shortcut: nothing hot runs
+    /// on `IWf` yet.
+    fn fire_elim_iwf(
+        &mut self,
+        label: &'v TmClo<'v>,
+        children: &'v TmClo<'v>,
+        e: &Elim<'v>,
+    ) -> Res<Option<Work<'v>>> {
+        let Elim::ElimIWf {
+            level,
+            idx_level,
+            motive_level,
+            idx,
+            shape,
+            arity,
+            out,
+            child,
+            motive,
+            step,
+            env,
+            ..
+        } = e
+        else {
+            return Ok(None);
+        };
+        let (
+            Some((_, idx_b)),
+            Some((_, shape_b)),
+            Some((_, arity_b)),
+            Some((_, out_b)),
+            Some((_, child_b)),
+            Some((_, motive_b)),
+            Some((_, step_b)),
+        ) = (
+            idx.as_syn(),
+            shape.as_syn(),
+            arity.as_syn(),
+            out.as_syn(),
+            child.as_syn(),
+            motive.as_syn(),
+            step.as_syn(),
+        )
+        else {
+            return Ok(None);
+        };
+        let sig = IWfSig {
+            level: level.clone(),
+            idx_level: idx_level.clone(),
+            idx: Rc::clone(idx_b),
+            shape: Rc::clone(shape_b),
+            arity: Rc::clone(arity_b),
+            out: Rc::clone(out_b),
+            child: Rc::clone(child_b),
+        }
+        .shift_local(2);
+        let ih = iwf_ih(
+            &sig,
+            motive_level,
+            &Rc::new(motive_b.shift_local_above(2, 2)),
+            &Rc::new(step_b.shift_local_above(2, 3)),
+            &Term::Var(LocalVar(1)),
+            &Term::Var(LocalVar(0)),
+        );
+        let Term::Lam { dom_level, cod_level, dom, body } = ih else {
+            unreachable!("iwf_ih builds a λ")
+        };
+        let rho_acs = env.push(self.arena, label).push(self.arena, children);
+        let ih = Rc::new(Val::Lam {
+            dom_level,
+            cod_level,
+            dom: self.arena.ty(TyClo::new(rho_acs, dom)),
+            body: self.arena.tm(TmClo::syn(rho_acs, body)),
+        });
+        let step = *step;
+        Ok(Some(Work::Apply(step, vec![label, children, self.vclo(ih)])))
     }
 
     /// `ih i` for a [`Val::WfIh`]: when the index is a canonical `Fin` value

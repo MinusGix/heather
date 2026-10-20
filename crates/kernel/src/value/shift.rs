@@ -314,6 +314,33 @@ fn elimination<'v>(e: &Elim<'v>, o: Outer<'v>) -> Elim<'v> {
                 env: env(e, o),
             }
         }
+        Elim::ElimIWf {
+            level: l,
+            idx_level,
+            motive_level,
+            idx,
+            shape,
+            arity,
+            out,
+            child,
+            motive,
+            step,
+            index,
+            env: e,
+        } => Elim::ElimIWf {
+            level: level(l, o),
+            idx_level: level(idx_level, o),
+            motive_level: level(motive_level, o),
+            idx: ty_clo(idx, o),
+            shape: ty_clo(shape, o),
+            arity: tm_clo(arity, o),
+            out: tm_clo(out, o),
+            child: tm_clo(child, o),
+            motive: ty_clo(motive, o),
+            step: tm_clo(step, o),
+            index: tm_clo(index, o),
+            env: env(e, o),
+        },
         Elim::J { ty_level, motive_level, ty, lhs, motive, case, rhs } => Elim::J {
             ty_level: level(ty_level, o),
             motive_level: level(motive_level, o),
@@ -454,6 +481,16 @@ pub fn vty<'v>(v: &Rc<VTy<'v>>, o: Outer<'v>) -> Rc<VTy<'v>> {
             level: level(l, o),
             shape: ty_clo(shape, o),
             arity: tm_clo(arity, o),
+        },
+        VTy::IWf { level: l, idx_level, idx, shape, arity, out, child, index } => VTy::IWf {
+            level: level(l, o),
+            idx_level: level(idx_level, o),
+            idx: ty_clo(idx, o),
+            shape: ty_clo(shape, o),
+            arity: tm_clo(arity, o),
+            out: tm_clo(out, o),
+            child: tm_clo(child, o),
+            index: tm_clo(index, o),
         },
         VTy::Sum { lhs_level, rhs_level, lhs, rhs } => VTy::Sum {
             lhs_level: level(lhs_level, o),
@@ -648,6 +685,19 @@ pub fn val<'v>(v: &Rc<Val<'v>>, o: Outer<'v>) -> Rc<Val<'v>> {
             label: tm_clo(label, o),
             children: tm_clo(children, o),
         },
+        Val::Supi { level: l, idx_level, idx, shape, arity, out, child, label, children } => {
+            Val::Supi {
+                level: level(l, o),
+                idx_level: level(idx_level, o),
+                idx: ty_clo(idx, o),
+                shape: ty_clo(shape, o),
+                arity: tm_clo(arity, o),
+                out: tm_clo(out, o),
+                child: tm_clo(child, o),
+                label: tm_clo(label, o),
+                children: tm_clo(children, o),
+            }
+        }
         Val::WfIh { elim, label, children } => Val::WfIh {
             elim: Rc::new(elimination(elim, o)),
             label: tm_clo(label, o),

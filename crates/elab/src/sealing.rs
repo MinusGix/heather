@@ -113,6 +113,7 @@ impl<'v> Walk<'_, '_, 'v> {
             | VTy::Sum { .. }
             | VTy::W { .. }
             | VTy::Wf { .. }
+            | VTy::IWf { .. }
             | VTy::Fin { .. }
             | VTy::CodeTy { .. }
             | VTy::CodeTm { .. } => true,

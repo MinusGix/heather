@@ -1231,6 +1231,19 @@ pub enum VTy<'v> {
         shape: &'v TyClo<'v>,
         arity: &'v TmClo<'v>,
     },
+    /// `arity` and `out` have one pending binder (`x : S`), `child` two
+    /// (`x : S, i : Fin n`); `idx`, `shape` and the index none. All six are
+    /// built from one `Type::IWf` node, so they share its environment.
+    IWf {
+        level: Level,
+        idx_level: Level,
+        idx: &'v TyClo<'v>,
+        shape: &'v TyClo<'v>,
+        arity: &'v TmClo<'v>,
+        out: &'v TmClo<'v>,
+        child: &'v TmClo<'v>,
+        index: &'v TmClo<'v>,
+    },
     /// Non-dependent: neither summand binds, so neither is a closure — both
     /// are lazy 0-binder sub-structures.
     Sum {
@@ -1504,6 +1517,18 @@ pub enum Val<'v> {
         level: Level,
         shape: &'v TyClo<'v>,
         arity: &'v TmClo<'v>,
+        label: &'v TmClo<'v>,
+        children: &'v TmClo<'v>,
+    },
+    /// The signature's closures as [`VTy::IWf`]'s.
+    Supi {
+        level: Level,
+        idx_level: Level,
+        idx: &'v TyClo<'v>,
+        shape: &'v TyClo<'v>,
+        arity: &'v TmClo<'v>,
+        out: &'v TmClo<'v>,
+        child: &'v TmClo<'v>,
         label: &'v TmClo<'v>,
         children: &'v TmClo<'v>,
     },
@@ -1849,6 +1874,23 @@ pub enum Elim<'v> {
         step: &'v TmClo<'v>,
         env: Env<'v>,
     },
+    /// The signature's closures as [`VTy::IWf`]'s; `motive` has two pending
+    /// binders (`j, z`), `step` three. Its β rebuilds syntax
+    /// (`term::iwf_ih`), so it carries its environment as `ElimWf` does.
+    ElimIWf {
+        level: Level,
+        idx_level: Level,
+        motive_level: Level,
+        idx: &'v TyClo<'v>,
+        shape: &'v TyClo<'v>,
+        arity: &'v TmClo<'v>,
+        out: &'v TmClo<'v>,
+        child: &'v TmClo<'v>,
+        motive: &'v TyClo<'v>,
+        step: &'v TmClo<'v>,
+        index: &'v TmClo<'v>,
+        env: Env<'v>,
+    },
     J {
         ty_level: Level,
         motive_level: Level,
@@ -1947,6 +1989,7 @@ impl Elim<'_> {
             Elim::Case { .. } => "case",
             Elim::ElimW { .. } => "elim_W",
             Elim::ElimWf { .. } => "elim_Wf",
+            Elim::ElimIWf { .. } => "elim_IWf",
             Elim::J { .. } => "J",
             Elim::Transp { .. } => "transp",
             Elim::LetBoxTy { .. } => "letbox_Ty",
@@ -2070,6 +2113,9 @@ impl fmt::Debug for VTy<'_> {
             VTy::Sigma { fst, snd, .. } => write!(f, "Σ({fst:?}). {snd:?}"),
             VTy::W { shape, pos, .. } => write!(f, "W({shape:?}). {pos:?}"),
             VTy::Wf { shape, arity, .. } => write!(f, "Wf({shape:?}). {arity:?}"),
+            VTy::IWf { idx, shape, arity, out, child, index, .. } => {
+                write!(f, "IWf({idx:?}; {shape:?}. {arity:?}; {out:?}; {child:?})({index:?})")
+            }
             VTy::Sum { lhs, rhs, .. } => write!(f, "({lhs:?} + {rhs:?})"),
             VTy::Id { ty, lhs, rhs, .. } => write!(f, "Id({ty:?}; {lhs:?}; {rhs:?})"),
             VTy::SEq { ty, lhs, rhs, .. } => write!(f, "sEq({ty:?}; {lhs:?}; {rhs:?})"),
@@ -2129,6 +2175,7 @@ impl fmt::Debug for Val<'_> {
             Val::Inr { val, .. } => write!(f, "inr({val:?})"),
             Val::Sup { label, children, .. } => write!(f, "sup({label:?}; {children:?})"),
             Val::Supf { label, children, .. } => write!(f, "sup_f({label:?}; {children:?})"),
+            Val::Supi { label, children, .. } => write!(f, "sup_i({label:?}; {children:?})"),
             Val::Lam { dom, body, .. } => write!(f, "λ({dom:?}). {body:?}"),
             Val::WfIh { children, .. } => write!(f, "ih_Wf({children:?})"),
             Val::ULam { num_vars, body, .. } => write!(f, "Λ[{num_vars}ℓ]. {body:?}"),

@@ -451,6 +451,51 @@ impl Walk<'_> {
                 self.term(scrut, d);
             }
 
+            // Nothing emits these until the generator round
+            // (docs/iwf-former-design.md §13 step 6); walked so the answer
+            // exists when something does. The signature's two types are
+            // slots, its three terms are walked under their binders.
+            Term::Supi {
+                idx,
+                shape,
+                arity,
+                out,
+                child,
+                label,
+                children,
+                ..
+            } => {
+                self.slot("Supi.idx", idx, d);
+                self.slot("Supi.shape", shape, d);
+                self.term(arity, d + 1);
+                self.term(out, d + 1);
+                self.term(child, d + 2);
+                self.term(label, d);
+                self.term(children, d);
+            }
+            Term::ElimIWf {
+                idx,
+                shape,
+                arity,
+                out,
+                child,
+                motive,
+                step,
+                index,
+                scrut,
+                ..
+            } => {
+                self.slot("ElimIWf.idx", idx, d);
+                self.slot("ElimIWf.shape", shape, d);
+                self.term(arity, d + 1);
+                self.term(out, d + 1);
+                self.term(child, d + 2);
+                self.slot("ElimIWf.motive", motive, d + 2);
+                self.term(step, d + 3);
+                self.term(index, d);
+                self.term(scrut, d);
+            }
+
             Term::Lam { dom, body, .. } => {
                 self.slot("Lam.dom", dom, d);
                 self.term(body, d + 1);

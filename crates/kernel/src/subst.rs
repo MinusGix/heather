@@ -493,6 +493,17 @@ fn map_type<M: Mapper>(t: &Type, m: &mut M, at: Depths) -> Type {
             len: sub_tm(len, m, at),
             fam: sub_ty(fam, m, at + dep(0, 0, 1)),
         },
+        // IWf: `arity` and `out` under `x : S`, `child` under `x, i`.
+        Type::IWf { level, idx_level, idx, shape, arity, out, child, index } => Type::IWf {
+            level: m.level(level, at),
+            idx_level: m.level(idx_level, at),
+            idx: sub_ty(idx, m, at),
+            shape: sub_ty(shape, m, at),
+            arity: sub_tm(arity, m, at + dep(0, 0, 1)),
+            out: sub_tm(out, m, at + dep(0, 0, 1)),
+            child: sub_tm(child, m, at + dep(0, 0, 2)),
+            index: sub_tm(index, m, at),
+        },
         Type::GlobalTy { var, subst } => {
             let subst = map_subst(subst, m, at);
             m.global_ty(*var, subst, at)
@@ -771,6 +782,48 @@ fn map_term<M: Mapper>(t: &Term, m: &mut M, at: Depths) -> Term {
             arity: sub_tm(arity, m, at + dep(0, 0, 1)),
             motive: sub_ty(motive, m, at + dep(0, 0, 1)),
             step: sub_tm(step, m, at + dep(0, 0, 3)),
+            scrut: sub_tm(scrut, m, at),
+        },
+        // sup_i / elim_IWf: the signature as `IWf`'s; the motive binds
+        // `j, z`, the step `a, cs, ih`.
+        Term::Supi { level, idx_level, idx, shape, arity, out, child, label, children } => {
+            Term::Supi {
+                level: m.level(level, at),
+                idx_level: m.level(idx_level, at),
+                idx: sub_ty(idx, m, at),
+                shape: sub_ty(shape, m, at),
+                arity: sub_tm(arity, m, at + dep(0, 0, 1)),
+                out: sub_tm(out, m, at + dep(0, 0, 1)),
+                child: sub_tm(child, m, at + dep(0, 0, 2)),
+                label: sub_tm(label, m, at),
+                children: sub_tm(children, m, at),
+            }
+        }
+        Term::ElimIWf {
+            level,
+            idx_level,
+            motive_level,
+            idx,
+            shape,
+            arity,
+            out,
+            child,
+            motive,
+            step,
+            index,
+            scrut,
+        } => Term::ElimIWf {
+            level: m.level(level, at),
+            idx_level: m.level(idx_level, at),
+            motive_level: m.level(motive_level, at),
+            idx: sub_ty(idx, m, at),
+            shape: sub_ty(shape, m, at),
+            arity: sub_tm(arity, m, at + dep(0, 0, 1)),
+            out: sub_tm(out, m, at + dep(0, 0, 1)),
+            child: sub_tm(child, m, at + dep(0, 0, 2)),
+            motive: sub_ty(motive, m, at + dep(0, 0, 2)),
+            step: sub_tm(step, m, at + dep(0, 0, 3)),
+            index: sub_tm(index, m, at),
             scrut: sub_tm(scrut, m, at),
         },
         Term::Lam { dom_level, cod_level, dom, body } => Term::Lam {
@@ -1607,6 +1660,19 @@ macro_rules! ops {
             /// [`InstTop`].
             pub fn inst_top(&self, by: u32, payload: &Term) -> $ty {
                 $map(self, &mut InstTop { payload, by, changes: 0 }, Depths::default())
+            }
+
+            /// [`Self::inst_top`] below `cutoff` binders that stay fixed:
+            /// `self` is scoped in `Γ, x, Θ` with `|Θ| = cutoff`, `s` in
+            /// `Γ, Δ`, and the result in `Γ, Δ, Θ` (the Coq formalization's
+            /// `⟨rlift ↑⟩ⁿ…[llift (lsingle s)]`). `IWf`'s child index is
+            /// instantiated at a shape this way, under its position binder.
+            pub fn inst_top_above(&self, by: u32, cutoff: u32, payload: &Term) -> $ty {
+                $map(
+                    self,
+                    &mut InstTop { payload, by, changes: 0 },
+                    Depths { local: cutoff, ..Depths::default() },
+                )
             }
 
             /// Weaken the ambient local context by `by` entries.

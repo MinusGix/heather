@@ -115,6 +115,16 @@ impl<'v, 'g> Readback<'v, 'g> {
                 len: Rc::new(self.val(len)?),
                 fam: self.ty(fam, 1)?,
             },
+            VTy::IWf { level, idx_level, idx, shape, arity, out, child, index } => Type::IWf {
+                level: level.clone(),
+                idx_level: idx_level.clone(),
+                idx: self.ty(idx, 0)?,
+                shape: self.ty(shape, 0)?,
+                arity: self.tm(arity, 1)?,
+                out: self.tm(out, 1)?,
+                child: self.tm(child, 2)?,
+                index: self.tm(index, 0)?,
+            },
             VTy::UPi { .. }
             | VTy::CtxPi { .. }
             | VTy::TyPi { .. }

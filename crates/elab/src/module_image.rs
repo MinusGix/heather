@@ -524,6 +524,9 @@ fn put_type(w: &mut Writer, ty: &Type) {
         Type::DVec { level, len, fam } => {
             w.byte(22); put_level(w, level); put_term(w, len); put_type(w, fam);
         }
+        Type::IWf { level, idx_level, idx, shape, arity, out, child, index } => {
+            w.byte(23); put_level(w, level); put_level(w, idx_level); put_type(w, idx); put_type(w, shape); put_term(w, arity); put_term(w, out); put_term(w, child); put_term(w, index);
+        }
         Type::CtxPi { level, body } => { w.byte(18); put_level(w, level); put_type(w, body); }
         Type::TyPi { ctx, arg_level, body_level, body } => {
             w.byte(19); put_ctx(w, ctx); put_level(w, arg_level); put_level(w, body_level); put_type(w, body);
@@ -573,6 +576,7 @@ fn get_type(r: &mut Reader<'_>) -> Result<Type, ModuleImageDecodeError> {
         20 => Type::CodeTy { ctx: get_ctx(r)?, level: get_level(r)? },
         21 => Type::CodeTm { ctx: get_ctx(r)?, ty: type_rc(r)?, level: get_level(r)? },
         22 => Type::DVec { level: get_level(r)?, len: term_rc(r)?, fam: type_rc(r)? },
+        23 => Type::IWf { level: get_level(r)?, idx_level: get_level(r)?, idx: type_rc(r)?, shape: type_rc(r)?, arity: term_rc(r)?, out: term_rc(r)?, child: term_rc(r)?, index: term_rc(r)? },
         tag => return Err(ModuleImageDecodeError::InvalidTag { sort: "type", tag }),
     }))
 }
@@ -671,6 +675,12 @@ fn put_term(w: &mut Writer, term: &Term) {
         }
         Term::ElimWf { level, motive_level, shape, arity, motive, step, scrut } => {
             w.byte(37); put_level(w, level); put_level(w, motive_level); put_type(w, shape); put_term(w, arity); put_type(w, motive); put_term(w, step); put_term(w, scrut);
+        }
+        Term::Supi { level, idx_level, idx, shape, arity, out, child, label, children } => {
+            w.byte(63); put_level(w, level); put_level(w, idx_level); put_type(w, idx); put_type(w, shape); put_term(w, arity); put_term(w, out); put_term(w, child); put_term(w, label); put_term(w, children);
+        }
+        Term::ElimIWf { level, idx_level, motive_level, idx, shape, arity, out, child, motive, step, index, scrut } => {
+            w.byte(64); put_level(w, level); put_level(w, idx_level); put_level(w, motive_level); put_type(w, idx); put_type(w, shape); put_term(w, arity); put_term(w, out); put_term(w, child); put_type(w, motive); put_term(w, step); put_term(w, index); put_term(w, scrut);
         }
         Term::Lam { dom_level, cod_level, dom, body } => {
             w.byte(38); put_level(w, dom_level); put_level(w, cod_level); put_type(w, dom); put_term(w, body);
@@ -792,6 +802,8 @@ fn get_term(r: &mut Reader<'_>) -> Result<Term, ModuleImageDecodeError> {
         60 => Term::InlAt { ty: None, val: term_rc(r)? },
         61 => Term::InrAt { ty: None, val: term_rc(r)? },
         62 => Term::AppAt { fun: term_rc(r)?, arg: term_rc(r)? },
+        63 => Term::Supi { level: get_level(r)?, idx_level: get_level(r)?, idx: type_rc(r)?, shape: type_rc(r)?, arity: term_rc(r)?, out: term_rc(r)?, child: term_rc(r)?, label: term_rc(r)?, children: term_rc(r)? },
+        64 => Term::ElimIWf { level: get_level(r)?, idx_level: get_level(r)?, motive_level: get_level(r)?, idx: type_rc(r)?, shape: type_rc(r)?, arity: term_rc(r)?, out: term_rc(r)?, child: term_rc(r)?, motive: type_rc(r)?, step: term_rc(r)?, index: term_rc(r)?, scrut: term_rc(r)? },
         tag => return Err(ModuleImageDecodeError::InvalidTag { sort: "term", tag }),
     }))
 }
