@@ -502,30 +502,26 @@ theorem OrderedAddGroup::same_zero_of_abs_lt<A: OrderedAddGroup(≈, <, <=, +)>(
 }
 
 theorem OrderedAddGroup::close_sym<A: OrderedAddGroup(≈, <, <=, +)>(x, y, e: A, h: Close(x, y, e)): Close(y, x, e) {
-    let bound: AbsLt(x + A.neg(y), e) = h;
     OrderedAddGroup::abs_lt_respects(A.neg(x + A.neg(y)), y + A.neg(x), e, e, OrderedAddGroup::neg_sub(x, y), A.rel_refl(e),
-        OrderedAddGroup::abs_lt_neg(x + A.neg(y), e, bound))
+        OrderedAddGroup::abs_lt_neg(x + A.neg(y), e, h))
 }
 
 theorem OrderedAddGroup::close_triangle<A: OrderedAddGroup(≈, <, <=, +)>(x, y, z, e, d: A, hxy: Close(x, y, e),
     hyz: Close(y, z, d)): Close(x, z, e + d)
 {
-    let first: AbsLt(x + A.neg(y), e) = hxy;
-    let second: AbsLt(y + A.neg(z), d) = hyz;
     OrderedAddGroup::abs_lt_respects((x + A.neg(y)) + (y + A.neg(z)), x + A.neg(z), e + d, e + d,
         OrderedAddGroup::sub_add_sub(x, y, z), A.rel_refl(e + d),
-        OrderedAddGroup::abs_lt_add(x + A.neg(y), y + A.neg(z), e, d, first, second))
+        OrderedAddGroup::abs_lt_add(x + A.neg(y), y + A.neg(z), e, d, hxy, hyz))
 }
 
 // Points within every positive distance of each other are the same.
 theorem OrderedAddGroup::same_of_close<A: OrderedAddGroup(≈, <, <=, +)>(x, y: A,
     all: (e: A) → A.zero < e → Close(x, y, e)): x ≈ y
 {
-    let bounds: ((e: A) → A.zero < e → AbsLt(x + A.neg(y), e)) = all;
     calc {
         x ≈ (x + A.neg(y)) + y := A.rel_sym((x + A.neg(y)) + y, x, OrderedAddGroup::sub_add_cancel(x, y)),
         ≈ A.zero + y := OrderedAddGroup::add_respects(x + A.neg(y), A.zero, y, y,
-            OrderedAddGroup::same_zero_of_abs_lt(x + A.neg(y), bounds), A.rel_refl(y)),
+            OrderedAddGroup::same_zero_of_abs_lt(x + A.neg(y), all), A.rel_refl(y)),
         ≈ y := OrderedAddGroup::zero_add(y),
     }
 }
@@ -559,8 +555,7 @@ theorem LocatedAddGroup::pos_of_add_pos<A: LocatedAddGroup(≈, <, <=, +)>(x, y:
 // A bound with a point under it is positive. This one needs locatedness:
 // -e < e places zero, and zero below -e makes e positive by negation.
 theorem LocatedAddGroup::abs_lt_pos<A: LocatedAddGroup(≈, <, <=, +)>(x, e: A, h: AbsLt(x, e)): A.zero < e {
-    let between: Between(<, A.neg(e), x, e) = h;
-    match A.rel_cotrans(A.neg(e), e, A.zero, StrictOrder::between_lt(A.neg(e), x, e, between)) {
+    match A.rel_cotrans(A.neg(e), e, A.zero, StrictOrder::between_lt(A.neg(e), x, e, h)) {
         Inl(below) => A.lt_respects(A.neg(A.zero), A.zero, A.neg(A.neg(e)), e,
             OrderedAddGroup::neg_zero(x), OrderedAddGroup::neg_neg(e), OrderedAddGroup::neg_lt(A.neg(e), A.zero, below)),
         Inr(above) => above,
@@ -580,9 +575,7 @@ theorem LocatedAddGroup::neg_le<A: LocatedAddGroup(≈, <, <=, +)>(x, y: A, h: x
 }
 
 theorem LocatedAddGroup::abs_le_of_abs_lt<A: LocatedAddGroup(≈, <, <=, +)>(x, e: A, h: AbsLt(x, e)): AbsLe(x, e) {
-    let between: Between(<, A.neg(e), x, e) = h;
-    let within: Within(<=, A.neg(e), x, e) = StrictOrder::within_of_between(A.neg(e), x, e, between);
-    within
+    StrictOrder::within_of_between(A.neg(e), x, e, h)
 }
 
 theorem LocatedAddGroup::abs_le_add<A: LocatedAddGroup(≈, <, <=, +)>(x, y, e, d: A, hx: AbsLe(x, e), hy: AbsLe(y, d)):
@@ -598,8 +591,7 @@ theorem LocatedAddGroup::abs_le_add<A: LocatedAddGroup(≈, <, <=, +)>(x, y, e, 
 theorem LocatedAddGroup::abs_lt_of_abs_le<A: LocatedAddGroup(≈, <, <=, +)>(x, e, d: A, h: AbsLe(x, e), ed: e < d):
     AbsLt(x, d)
 {
-    let within: Within(<=, A.neg(e), x, e) = h;
-    PseudoOrder::between_of_within(A.neg(e), x, e, A.neg(d), d, OrderedAddGroup::neg_lt(e, d, ed), ed, within)
+    PseudoOrder::between_of_within(A.neg(e), x, e, A.neg(d), d, OrderedAddGroup::neg_lt(e, d, ed), ed, h)
 }
 
 // ---------------------------------------------------------------------------

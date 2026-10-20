@@ -187,17 +187,18 @@ theorem derives it from `0 < x < y`.
 ## Calling a generic theorem
 
 A generic theorem's indices are filled from its carrier, and the carrier is
-read off an explicit point, so every generic theorem takes its points
-explicitly: `StrictOrder::le_antisymm(x, y, hxy, hyx)`, not `(hxy, hyx)`. With
-implicit endpoints, the hypothesis `?lt(?x, ?y)` is not a pattern the unifier
-can solve against `Rat::Lt(a, b)` before the carrier is known.
+read off an explicit point (or a type argument, `le_of_lt<Rat>(x, y, h)`), so
+every generic theorem takes its points explicitly:
+`StrictOrder::le_antisymm(x, y, hxy, hyx)`, not `(hxy, hyx)`. With implicit
+endpoints, the hypothesis `?lt(?x, ?y)` is not a pattern the unifier can solve
+against `Rat::Lt(a, b)` before the carrier is known.
 
-Inside generic proofs, and at a carrier when a result is written in its
-unfolded form, a predicate like `AbsLt` must meet its own name: an expected
-type `-e < x ∧ x < e` does not pin the indices of a callee whose result is
-`AbsLt(x, e)`, so the call is refused for want of an instance. A `let` naming
-the predicate is the workaround in the module and the client; the elaborator
-side is [constrained-predicate-expected-type](../issues/constrained-predicate-expected-type.md).
+A predicate meets its own unfolding: a `Close(x, y, e)` hypothesis passes
+where `AbsLt(x - y, e)` is expected, and a result `AbsLt(x, e)` checks against
+`-e < x ∧ x < e` at a carrier. The unifier learns nothing from two different
+predicates' argument lists, the carrier's designations fill the indices, and
+conversion does the unfolding
+([constrained-predicate-expected-type](../issues/constrained-predicate-expected-type.md)).
 
 ## Cost
 

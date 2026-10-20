@@ -411,6 +411,16 @@ fn rigid_head(mut t: &Term) -> bool {
     matches!(t, Term::Var(_) | Term::GlobalTm { .. })
 }
 
+/// A pattern spine head that cannot be solved: a local, or a committed
+/// global (index `n` or above in the scratch world).
+fn rigid_atom(head: &Term, n: u32) -> bool {
+    match head {
+        Term::Var(_) => true,
+        Term::GlobalTm { var, .. } => var.0 >= n,
+        _ => false,
+    }
+}
+
 /// Align value arguments, allowing only a leading type-argument prefix on
 /// the rigid side: `?op(x, y)` can learn `append<A>`, but `?f(x)` must not
 /// learn `add(a)` from `add(a, x)`.
@@ -527,6 +537,21 @@ fn unify_tm(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]
                 && var.0 < n
                 && sols[var.0 as usize].solved().is_none()
                 && !matching_value_spine(u, pat, subj, d)
+            {
+                return;
+            }
+            // Two rigid spines of different lengths are never the same
+            // application, so their arguments have nothing to pair: aligned
+            // from the right, they pair a predicate's class indices with
+            // whatever sits at the other's positions — `AbsLt(?A, ?≈, ?<,
+            // ?≤, ?+, ?d, x, e)` against `-e < x ∧ x < e` taught `?+ :=
+            // Rat::Lt`, and against `Close(x, y, e)`, every index one place
+            // over (issues/constrained-predicate-expected-type.md). Either
+            // side may still unfold to the other; that is a whnf's to find,
+            // and the callers' retries take it.
+            if rigid_atom(head, n)
+                && rigid_head(s)
+                && spine_len(p) != spine_len(s)
             {
                 return;
             }
@@ -842,7 +867,7 @@ pub(super) fn partially_zonked(dom: &Type, n: u32, sols: &[Sol], gamma: &LocalCt
 /// exactly when every metavariable the term mentions is already solved, in
 /// which case the result is scoped in the committed Ψ. Used by the congruence
 /// rule, whose witnesses are compared with `==` and so must be real terms.
-pub(super) fn zonked_tm(t: &Term, n: u32, sols: &[Sol]) -> Option<Term> {
+pub(crate) fn zonked_tm(t: &Term, n: u32, sols: &[Sol]) -> Option<Term> {
     let with = |marker: Term| {
         let entries = (0..n)
             .map(|k| {
@@ -1022,6 +1047,34 @@ mod tests {
         let mut withheld = [Sol::Withheld];
         unify_tm(&U::syntactic(&gamma), &pat, &subject, 1, 0, &mut withheld);
         assert!(matches!(withheld[0], Sol::Withheld));
+    }
+
+    #[test]
+    fn rigid_spines_of_different_lengths_pair_no_arguments() {
+        let gamma = LocalCtx::nil();
+        // Pattern global 1 is the subject's committed global 0 (`n = 1`).
+        let committed = |i| Term::GlobalTm { var: GlobalVar(i), subst: embed(&gamma, 0) };
+        let Type::El { tm: hole, .. } = meta(&gamma) else {
+            unreachable!()
+        };
+        // `F(?0, 0)` against `F(1, 0)`: one application, so `?0 := 1`.
+        let pat = app(app(committed(1), Type::Nat, (*hole).clone()), Type::Nat, Term::Zero);
+        let one = Term::Succ(Rc::new(Term::Zero));
+        let same = app(app(committed(0), Type::Nat, one.clone()), Type::Nat, Term::Zero);
+        let mut solutions = [Sol::Unsolved];
+        unify_tm(&U::syntactic(&gamma), &pat, &same, 1, 0, &mut solutions);
+        assert!(matches!(&solutions[0], Sol::Solved(t) if **t == one));
+        // `F(?0, 0)` against `F(Nat, 1, 0)`: aligned from the right the hole
+        // would meet `1`, which is not its argument
+        // (issues/constrained-predicate-expected-type.md).
+        let longer = app(
+            app(app(committed(0), Type::Ty(Level::Zero), Term::TmNat), Type::Nat, one),
+            Type::Nat,
+            Term::Zero,
+        );
+        let mut solutions = [Sol::Unsolved];
+        unify_tm(&U::syntactic(&gamma), &pat, &longer, 1, 0, &mut solutions);
+        assert!(matches!(solutions[0], Sol::Unsolved));
     }
 
     #[test]

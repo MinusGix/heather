@@ -191,6 +191,54 @@ fn the_layers_are_there_at_both_carriers() {
     check(&mut e, "ordered_field_kit", &src);
 }
 
+// A predicate meets its own unfolding wherever it is written: a hypothesis
+// of `Close` where `AbsLt` is expected, a bound passed as `Between`, and a
+// result checked against the carrier's spelled-out order. The carrier, from
+// the first point or a type argument, fills the indices through its
+// designations; the unfolding is conversion's
+// (issues/constrained-predicate-expected-type.md).
+#[test]
+fn an_unfolded_predicate_meets_its_name() {
+    let mut e = base();
+    check(
+        &mut e,
+        "unfolded_predicates",
+        &format!(
+            "{IMPORTS} theorem close_neg<A: OrderedAddGroup(≈, <, <=, +)>(x, y, e: A, h: Close(x, y, e)):
+                AbsLt(A.neg(x + A.neg(y)), e)
+            {{
+                OrderedAddGroup::abs_lt_neg(x + A.neg(y), e, h)
+            }}
+            theorem bound_lt<A: OrderedAddGroup(≈, <, <=, +)>(x, e: A, h: AbsLt(x, e)): A.neg(e) < e {{
+                StrictOrder::between_lt(A.neg(e), x, e, h)
+            }}
+            theorem rat_sum(x, y, e, d: Rat, hx: -e < x ∧ x < e, hy: -d < y ∧ y < d):
+                -(e + d) < x + y ∧ x + y < e + d
+            {{
+                OrderedAddGroup::abs_lt_add(x, y, e, d, hx, hy)
+            }}
+            theorem creal_within(x, e: CReal, h: -e < x ∧ x < e): -e <= x ∧ x <= e {{
+                LocatedAddGroup::abs_le_of_abs_lt(x, e, h)
+            }}
+            // A carrier given as a type argument pins the indices too.
+            theorem rat_le_typed(x, y: Rat, h: x < y): x <= y {{ StrictOrder::le_of_lt<Rat>(x, y, h) }}
+            theorem creal_le_typed(x, y: CReal, h: x < y): x <= y {{ StrictOrder::le_of_lt<CReal>(x, y, h) }}"
+        ),
+    );
+    // The unfolding is checked, not assumed: the bound's two halves the
+    // wrong way round are refused.
+    refused(
+        "unfolded_predicate_swapped",
+        &format!(
+            "{IMPORTS} theorem bad(x, y, e, d: Rat, hx: -e < x ∧ x < e, hy: -d < y ∧ y < d):
+                x + y < e + d ∧ -(e + d) < x + y
+            {{
+                OrderedAddGroup::abs_lt_add(x, y, e, d, hx, hy)
+            }}"
+        ),
+    );
+}
+
 #[test]
 fn each_layer_is_refused_one_layer_down() {
     // `≤` is transitive only where `<` is located ...

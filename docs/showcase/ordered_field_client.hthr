@@ -38,17 +38,14 @@ theorem creal_close_through(a, b, x, e, d: CReal, ha: Close(x, a, e), hb: Close(
 
 // The bounds unfold to each carrier's own order and negation: `AbsLt(x, e)`
 // at `Rat` is `-e < x ∧ x < e`, with `Rat::neg` and `Rat::Lt`. A hypothesis
-// may be written either way; a result written unfolded is reached through a
-// `let` naming the bound, because an unfolded expected type does not pin the
-// generic theorem's indices (issues/constrained-predicate-expected-type.md).
+// may be written either way, and so may a result: the carrier, read off the
+// first point, fills the theorem's indices whichever spelling it meets.
 theorem rat_abs_lt_add(x, y, e, d: Rat, hx: -e < x ∧ x < e, hy: -d < y ∧ y < d): -(e + d) < x + y ∧ x + y < e + d {
-    let sum: AbsLt(x + y, e + d) = OrderedAddGroup::abs_lt_add(x, y, e, d, hx, hy);
-    sum
+    OrderedAddGroup::abs_lt_add(x, y, e, d, hx, hy)
 }
 
 theorem creal_abs_lt_add(x, y, e, d: CReal, hx: -e < x ∧ x < e, hy: -d < y ∧ y < d): -(e + d) < x + y ∧ x + y < e + d {
-    let sum: AbsLt(x + y, e + d) = OrderedAddGroup::abs_lt_add(x, y, e, d, hx, hy);
-    sum
+    OrderedAddGroup::abs_lt_add(x, y, e, d, hx, hy)
 }
 
 // ---------------------------------------------------------------------------
