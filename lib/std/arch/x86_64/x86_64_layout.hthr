@@ -12,6 +12,7 @@ import x86_64_block;
 import x86_64_fetch;
 import x86_64_fetched_code;
 import bitvec;
+import bool;
 import list;
 import logic;
 import nat;
@@ -104,6 +105,21 @@ theorem layout_len(pieces: List<List<BitVec(8)>>, last: List<BitVec(8)>, lens: L
         trans(layout_len_from(last, pieces, lens, measured, 0), cong_fn<Nat, Nat>(λ n => layout_end(0, lens) + n, last_is)))
 }
 
+// A piece too long for one declaration, `n` bytes at a time: each chunk as
+// written, and nothing past the last. It needs nothing of how the piece is
+// made.
+fn ChunksAre(n: Nat, chunks: List<List<BitVec(8)>>) → List<BitVec(8)> → Type {
+    match chunks { Nil => λ bytes => bytes = Nil, Cons(c, cs) => λ bytes => (bytes.take(n) = c) ∧ ChunksAre(n, cs)(bytes.drop(n)) }
+}
+theorem chunks_same(n: Nat, chunks: List<List<BitVec(8)>>): (bytes: List<BitVec(8)>) → ChunksAre(n, chunks)(bytes) → bytes = layout_code(chunks, Nil) {
+    match chunks {
+        Nil => λ bytes each => each,
+        Cons(c, cs) => λ bytes each => trans(sym(List::take_append_drop(bytes, n)),
+            trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ x => x ++ bytes.drop(n), each.left),
+                cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ t => c ++ t, chunks_same(n, cs, bytes.drop(n), each.right)))),
+    }
+}
+
 // A layout placed further on: every offset moves by as much.
 theorem layout_shift(lens: List<Nat>): (at, base, i: Nat) → layout_at(at + base, lens, i) = at + layout_at(base, lens, i) {
     match lens {
@@ -130,6 +146,24 @@ fn JumpsBack(from, size: Nat, displacement: BitVec(32), to: Nat) → Type {
     from + size + displacement.sign_extend(32).toNat() = to + Nat::pow(2, 64)
 }
 
+// Where a jump lands, by evaluation: both sides of the landing equation
+// are closed numbers, compared by `leb` each way and proved `= True` by
+// `refl`, so the kernel evaluates them and the elaborator does not. Meeting
+// them by conversion instead unfolds the two offsets' sums against each
+// other and runs out of fuel once the jump spans much of a program.
+fn asm_same(a, b: Nat) → Bool { a.leb(b) && b.leb(a) }
+theorem asm_same_eq(a, b: Nat, same: asm_same(a, b) = True): a = b {
+    let both = a.leb(b).is_true_and(b.leb(a), j(sym(same), λ x _ => x.IsTrue(), trivial));
+    a.le_antisym(b, a.leb_sound(b, both.left), b.leb_sound(a, both.right))
+}
+theorem asm_lands_forward(from, size: Nat, displacement: BitVec(32), to: Nat,
+    same: asm_same(from + size + displacement.sign_extend(32).toNat(), to) = True): JumpsForward(from, size, displacement, to) {
+    asm_same_eq(from + size + displacement.sign_extend(32).toNat(), to, same)
+}
+theorem asm_lands_back(from, size: Nat, displacement: BitVec(32), to: Nat,
+    same: asm_same(from + size + displacement.sign_extend(32).toNat(), to + Nat::pow(2, 64)) = True): JumpsBack(from, size, displacement, to) {
+    asm_same_eq(from + size + displacement.sign_extend(32).toNat(), to + Nat::pow(2, 64), same)
+}
 theorem jumps_forward(origin: BitVec(64), from, size: Nat, displacement: BitVec(32), to: Nat, lands: JumpsForward(from, size, displacement, to)):
     near_branch_target(next_rip(origin, from), size, displacement) = next_rip(origin, to) {
     let reading = displacement.sign_extend(32).toNat();

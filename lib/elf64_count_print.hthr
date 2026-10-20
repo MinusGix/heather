@@ -39,20 +39,24 @@ import pair;
 // three words (the line's word, where it starts, how long it is), the store,
 // then the write loop.
 
-fn count_tail_parts(word, start, length: StructuredCode) → List<List<BitVec(8)>> {
-    [canonical_block_bytes(print_base_block()), structured_bytes(word), structured_bytes(start), structured_bytes(length),
-     word_store_bytes(print_store())]
+fn count_tail_parts(word, start, length: List<BitVec(8)>) → List<List<BitVec(8)>> {
+    [canonical_block_bytes(print_base_block()), word, start, length, word_store_bytes(print_store())]
 }
 fn count_tail_lens(word_len, start_len, length_len: Nat) → List<Nat> {
     [print_base_len(), word_len, start_len, length_len, word_store_bytes(print_store()).len()]
 }
-fn count_tail(word, start, length: StructuredCode, pj: PrintJumps) → List<BitVec(8)> {
+// Over the formatter's bytes, as the producer evaluates and spells it.
+fn count_tail_bytes(word, start, length: List<BitVec(8)>, pj: PrintJumps) → List<BitVec(8)> {
     layout_code(count_tail_parts(word, start, length), write_loop_code(pj))
+}
+fn count_tail(word, start, length: StructuredCode, pj: PrintJumps) → List<BitVec(8)> {
+    count_tail_bytes(structured_bytes(word), structured_bytes(start), structured_bytes(length), pj)
 }
 theorem count_tail_measured(word, start, length: StructuredCode, word_len, start_len, length_len: Nat,
     word_is: structured_bytes(word).len() = word_len, start_is: structured_bytes(start).len() = start_len,
     length_is: structured_bytes(length).len() = length_len):
-    LayoutMeasured(count_tail_parts(word, start, length), count_tail_lens(word_len, start_len, length_len)) {
+    LayoutMeasured(count_tail_parts(structured_bytes(word), structured_bytes(start), structured_bytes(length)),
+        count_tail_lens(word_len, start_len, length_len)) {
     ⟨refl, ⟨word_is, ⟨start_is, ⟨length_is, ⟨refl, trivial⟩⟩⟩⟩⟩
 }
 
@@ -78,7 +82,8 @@ record CountPieces(memory: IoMemory, at: Nat, word, start, length: StructuredCod
 theorem count_pieces(memory: IoMemory, at: Nat, word, start, length: StructuredCode, pj: PrintJumps,
     resident: CodeResident(io_fetch_access(), memory, count_tail(word, start, length, pj), eof_rip(at))):
     CountPieces(memory, at, word, start, length, pj) {
-    let piece = layout_resident(io_fetch_access(), memory, io_entry(), write_loop_code(pj), count_tail_parts(word, start, length),
+    let piece = layout_resident(io_fetch_access(), memory, io_entry(), write_loop_code(pj),
+        count_tail_parts(structured_bytes(word), structured_bytes(start), structured_bytes(length)),
         count_tail_lens(structured_bytes(word).len(), structured_bytes(start).len(), structured_bytes(length).len()),
         count_tail_measured(word, start, length, structured_bytes(word).len(), structured_bytes(start).len(), structured_bytes(length).len(),
             refl, refl, refl), at, resident);
