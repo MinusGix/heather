@@ -1339,11 +1339,17 @@ struct AbstractLocal<'a> {
     /// goal spells two ways, and catching only one of them is worse than
     /// catching neither.
     pats: &'a [(Term, Term)],
-    /// `witness[k]` is `pats` weakened past `k` further binders — each `pat`
-    /// by `k + 1` (it is scoped in `Γ`, and `z` is one more), each `rep` by
-    /// `k` (it already lives under `z`). Memoized: the walk asks at every
-    /// node.
+    /// `witness[k]` is `pats` weakened past `k` further local binders — each
+    /// `pat` by `k + 1` (it is scoped in `Γ`, and `z` is one more), each
+    /// `rep` by `k` (it already lives under `z`). Memoized: the walk asks at
+    /// every node.
     witness: Vec<Vec<(Term, Term)>>,
+    /// The same below binders of the global or universe context too (a code
+    /// eliminator's branches, `letbox`'s body, a context abstraction), keyed
+    /// by all three depths: there `pat` and `rep` are also weakened past
+    /// those binders, or a pattern mentioning a global variable would match
+    /// (and capture) the one the binder shifted onto its index.
+    witness_under: Vec<(Depths, Vec<(Term, Term)>)>,
     /// Occurrences replaced — the caller's "did this find anything".
     hits: u64,
     changes: u64,
@@ -1358,16 +1364,36 @@ impl Mapper for AbstractLocal<'_> {
     }
 
     fn pre_tm(&mut self, t: &Rc<Term>, at: Depths) -> Option<Term> {
-        while self.witness.len() as u32 <= at.local {
-            let i = self.witness.len() as u32;
-            let row = self
-                .pats
-                .iter()
-                .map(|(p, r)| (p.shift_local(i + 1), r.shift_local(i)))
-                .collect();
-            self.witness.push(row);
-        }
-        let hit = self.witness[at.local as usize]
+        let row = if at.global == 0 && at.univ == 0 {
+            while self.witness.len() as u32 <= at.local {
+                let i = self.witness.len() as u32;
+                let row = self
+                    .pats
+                    .iter()
+                    .map(|(p, r)| (p.shift_local(i + 1), r.shift_local(i)))
+                    .collect();
+                self.witness.push(row);
+            }
+            &self.witness[at.local as usize]
+        } else {
+            let k = match self.witness_under.iter().position(|(d, _)| *d == at) {
+                Some(k) => k,
+                None => {
+                    let under = |t: &Term, by: u32| {
+                        t.shift_local(by).shift_global(at.global).shift_univ(at.univ)
+                    };
+                    let row = self
+                        .pats
+                        .iter()
+                        .map(|(p, r)| (under(p, at.local + 1), under(r, at.local)))
+                        .collect();
+                    self.witness_under.push((at, row));
+                    self.witness_under.len() - 1
+                }
+            };
+            &self.witness_under[k].1
+        };
+        let hit = row
             .iter()
             .find(|(pat, _)| **t == *pat)
             .map(|(_, rep)| rep.clone());
@@ -1706,7 +1732,7 @@ impl Type {
     }
 
     fn abstract_pats(&self, pats: &[(Term, Term)]) -> Option<Type> {
-        let mut m = AbstractLocal { pats, witness: Vec::new(), hits: 0, changes: 0 };
+        let mut m = AbstractLocal { pats, witness: Vec::new(), witness_under: Vec::new(), hits: 0, changes: 0 };
         let out = map_type(&self.shift_local(1), &mut m, Depths::default());
         (m.hits > 0).then_some(out)
     }
