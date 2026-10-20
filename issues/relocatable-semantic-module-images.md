@@ -2,6 +2,7 @@
 title: Relocate semantic module images across equivalent dependency worlds
 status: open
 labels: [tooling,elaboration,caching,performance,design]
+area: infrastructure
 created: 2026-08-30
 updated: 2026-09-04
 ---

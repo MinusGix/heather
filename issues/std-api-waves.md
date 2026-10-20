@@ -2,6 +2,7 @@
 title: "Meta: the std API waves for Nat, List and Int"
 status: open
 labels: [stdlib,meta,design]
+area: mathematics
 created: 2026-08-16
 updated: 2026-08-17
 ---

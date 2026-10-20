@@ -2,6 +2,8 @@
 title: Choose the effects story (uniqueness threading vs interaction trees)
 status: open
 labels: [design, effects]
+area: interaction-trees
+milestone: [it-library]
 created: 2026-07-22
 updated: 2026-09-24
 ---

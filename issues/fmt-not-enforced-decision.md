@@ -2,6 +2,7 @@
 title: cargo fmt is not clean and not enforced: record the decision
 status: open
 labels: [meta,tooling]
+area: infrastructure
 created: 2026-08-06
 updated: 2026-08-06
 ---

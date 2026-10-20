@@ -2,6 +2,8 @@
 title: Build complete certifying LIA with a shared arithmetic substrate and CutSat
 status: open
 labels: [proofs,elaboration,arithmetic,solver,design]
+area: tactics
+milestone: [tac-arith]
 blocked-by: [omega-linear-arithmetic]
 created: 2026-08-27
 updated: 2026-09-24

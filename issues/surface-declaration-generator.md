@@ -2,6 +2,7 @@
 title: Property-test generator over surface declarations
 status: open
 labels: [elaboration,testing,inductives]
+area: infrastructure
 created: 2026-07-26
 updated: 2026-07-26
 ---

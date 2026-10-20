@@ -2,6 +2,7 @@
 title: A generic congruence whose type argument is inferred is rejected with LevelMismatch
 status: open
 labels: [frontend, elaboration, kernel, stdlib]
+area: language
 created: 2026-09-18
 updated: 2026-09-18
 ---

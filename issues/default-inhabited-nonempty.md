@@ -2,6 +2,8 @@
 title: The inhabitation ladder: Default -> Inhabited -> Nonempty
 status: open
 labels: [frontend,stdlib,design,traits]
+area: mathematics
+milestone: [math-specific-choice]
 created: 2026-08-07
 updated: 2026-08-16
 ---

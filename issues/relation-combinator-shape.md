@@ -2,6 +2,7 @@
 title: Decide whether relation combinators should uniformly return relations
 status: open
 labels: [stdlib,logic,semantics,ergonomics,design]
+area: mathematics
 created: 2026-08-26
 updated: 2026-08-26
 ---

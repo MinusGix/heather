@@ -2,6 +2,7 @@
 title: Stop making clients hand-import the modules a language feature is stated over
 status: open
 labels: [frontend,modules,elaboration,ergonomics,design]
+area: language
 created: 2026-09-16
 updated: 2026-09-16
 ---

@@ -2,6 +2,7 @@
 title: Structural mutual recursion: synthesize the measure when none is written
 status: open
 labels: [frontend,elaboration,design]
+area: language
 created: 2026-09-05
 updated: 2026-09-16
 ---

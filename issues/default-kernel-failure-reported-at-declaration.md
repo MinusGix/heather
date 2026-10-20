@@ -2,6 +2,7 @@
 title: Report a default's kernel-only failure at the call, not the declaration
 status: open
 labels: [frontend,elaboration,defaults,diagnostics]
+area: language
 created: 2026-10-12
 updated: 2026-10-12
 ---

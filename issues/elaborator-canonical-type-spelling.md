@@ -2,6 +2,7 @@
 title: One canonical spelling for every type the kernel compares against itself
 status: open
 labels: [elaboration,inductives,representation,performance,design]
+area: language
 created: 2026-09-06
 updated: 2026-10-03
 ---

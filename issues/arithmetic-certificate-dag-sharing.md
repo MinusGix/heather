@@ -2,6 +2,7 @@
 title: Preserve arithmetic certificate DAG sharing through elaboration
 status: open
 labels: [proofs,elaboration,arithmetic,performance]
+area: tactics
 created: 2026-08-27
 updated: 2026-09-25
 ---

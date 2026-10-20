@@ -2,6 +2,7 @@
 title: Make generated FunctionIR x86 refinement scale past small DAGs
 status: open
 labels: [compiler,function-ir,x86,proofs,performance]
+area: heather-in-heather
 created: 2026-09-01
 updated: 2026-09-23
 ---

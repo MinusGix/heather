@@ -2,6 +2,7 @@
 title: "Syntax-highlight source excerpts in terminal diagnostics"
 status: open
 labels: [tooling,cli,diagnostics,syntax,ergonomics]
+area: language
 created: 2026-08-22
 updated: 2026-08-22
 ---

@@ -2,6 +2,7 @@
 title: A packed vector-literal term: designed and deferred behind a customer
 status: open
 labels: [kernel,elaboration,representation,bitvec,design]
+area: kernel
 created: 2026-09-13
 updated: 2026-09-13
 ---

@@ -2,6 +2,7 @@
 title: Retry reducible argument types after partial implicit inference
 status: open
 labels: [frontend,elaboration,inference,proofs]
+area: language
 created: 2026-08-28
 updated: 2026-08-28
 ---

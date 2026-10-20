@@ -2,6 +2,7 @@
 title: Fixed syntax schemas are rebuilt fresh per check; cache or share their skeletons
 status: open
 labels: [kernel,performance]
+area: kernel
 created: 2026-07-31
 updated: 2026-08-01
 ---

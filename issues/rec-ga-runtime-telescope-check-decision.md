@@ -2,6 +2,7 @@
 title: rec_ga trusts its telescope tables at runtime: record the decision
 status: open
 labels: [kernel,design]
+area: kernel
 created: 2026-08-06
 updated: 2026-08-06
 code: crates/kernel/src/typing.rs @ HEAD

@@ -2,6 +2,7 @@
 title: Cache solver-proved sequents as persistent certified facts
 status: open
 labels: [proofs,elaboration,arithmetic,caching,design]
+area: tactics
 created: 2026-08-27
 updated: 2026-08-27
 ---

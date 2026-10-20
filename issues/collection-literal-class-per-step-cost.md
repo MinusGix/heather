@@ -2,6 +2,7 @@
 title: prelude::class CollectionLiteral checks at 70–105 µs per evaluator step, 60–100× the median, in every file
 status: open
 labels: [performance,kernel,prelude,traits]
+area: kernel
 created: 2026-09-22
 updated: 2026-09-23
 ---

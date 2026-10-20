@@ -2,6 +2,7 @@
 title: "Dependent decidable if should convert through a definition using the same decision"
 status: open
 labels: [frontend,elaboration,conversion,stdlib,ergonomics]
+area: language
 created: 2026-08-20
 updated: 2026-08-20
 ---

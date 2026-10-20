@@ -2,6 +2,7 @@
 title: The slots the emission walker still lists on the library: route each emitter through emit_ty, or quote the respelled type once
 status: open
 labels: [elaboration,representation,performance]
+area: language
 created: 2026-09-06
 updated: 2026-09-23
 ---

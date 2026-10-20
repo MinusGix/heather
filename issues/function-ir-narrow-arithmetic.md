@@ -2,6 +2,7 @@
 title: Certify modular narrow arithmetic and signed comparisons
 status: open
 labels: [compiler,function-ir,x86]
+area: heather-in-heather
 created: 2026-09-20
 updated: 2026-09-30
 ---

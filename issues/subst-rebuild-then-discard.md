@@ -2,6 +2,7 @@
 title: Substitution builds every unchanged node and drops it: the refcount pair the Arc tax lands on
 status: open
 labels: [kernel,performance,representation,substitution]
+area: kernel
 created: 2026-09-11
 updated: 2026-09-11
 ---

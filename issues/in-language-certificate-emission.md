@@ -2,6 +2,8 @@
 title: Certificate emission in-language: the Psi-staging route, and its two rivals
 status: open
 labels: [compiler,metaprogramming,kernel,design,delam]
+area: heather-in-heather
+milestone: [hih-passes]
 created: 2026-08-11
 updated: 2026-08-14
 ---

@@ -2,6 +2,7 @@
 title: A classified bitvector fold computes its whole word where the structural chain computed one forced bit
 status: open
 labels: [kernel,evaluator,performance,bitvec,design]
+area: kernel
 created: 2026-09-13
 updated: 2026-09-13
 ---

@@ -2,6 +2,7 @@
 title: Infer an anonymous predicate index from a subtype representation argument
 status: open
 labels: [elaboration,inference,subtypes]
+area: language
 created: 2026-09-05
 updated: 2026-09-05
 ---

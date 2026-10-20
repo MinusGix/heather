@@ -2,6 +2,7 @@
 title: A missing constructor in an inner pattern column reports at the outer match's span
 status: open
 labels: [frontend,diagnostics,elaboration]
+area: language
 created: 2026-08-16
 updated: 2026-08-16
 ---

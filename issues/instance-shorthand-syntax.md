@@ -2,6 +2,7 @@
 title: Instance shorthand: anonymous-constructor literals for trivial instances
 status: open
 labels: [frontend,syntax,ergonomics,traits]
+area: language
 created: 2026-08-07
 updated: 2026-08-20
 ---

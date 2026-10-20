@@ -2,6 +2,7 @@
 title: A  declaration form for the fn … → Type families that specifications are made of
 status: open
 labels: [frontend,syntax,ergonomics,design,tooling]
+area: language
 created: 2026-09-18
 updated: 2026-09-19
 ---

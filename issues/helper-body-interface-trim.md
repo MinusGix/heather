@@ -2,6 +2,7 @@
 title: Helper bodies name every value in scope, so their arguments cannot be consumed in place
 status: open
 labels: [x86,codegen]
+area: heather-in-heather
 created: 2026-09-30
 updated: 2026-09-30
 ---

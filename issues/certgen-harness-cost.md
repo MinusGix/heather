@@ -2,6 +2,7 @@
 title: Certgen harness and kit costs: recorded levers if either grows
 status: open
 labels: [elaboration,performance,compiler,testing]
+area: heather-in-heather
 created: 2026-08-02
 updated: 2026-09-20
 ---

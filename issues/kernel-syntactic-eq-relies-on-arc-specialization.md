@@ -2,6 +2,7 @@
 title: The conversion shortcut's speed is a std Arc specialization the kernel never wrote down
 status: open
 labels: [kernel,conversion,performance,representation,docs]
+area: kernel
 created: 2026-09-13
 updated: 2026-09-13
 ---

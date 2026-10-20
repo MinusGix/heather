@@ -18,6 +18,11 @@ INDEX = ISSUES / "INDEX.md"
 
 STATUSES = ["open", "blocked", "closed"]
 
+# The areas and milestones an issue's `area:`/`milestone:` may name, and their
+# importance order, live in two tables of the roadmap (docs/roadmap.md owns
+# them; this script only reads them).
+ROADMAP = ROOT / "docs" / "roadmap.md"
+
 
 def parse_list(val: str):
     val = val.strip()
@@ -37,7 +42,7 @@ def parse_issue(path: Path):
             continue
         key, _, val = line.partition(":")
         key, val = key.strip(), val.strip()
-        if key in ("labels", "blocked-by"):
+        if key in ("labels", "blocked-by", "milestone"):
             meta[key] = parse_list(val)
         else:
             if len(val) >= 2 and val[0] == val[-1] and val[0] in "\"'":
@@ -47,6 +52,8 @@ def parse_issue(path: Path):
     meta.setdefault("status", "open")
     meta.setdefault("labels", [])
     meta.setdefault("blocked-by", [])
+    meta.setdefault("milestone", [])
+    meta.setdefault("area", "")
     meta["body"] = m.group(2)
     return meta
 
@@ -62,6 +69,34 @@ def load_all():
             continue
         issues.append(meta)
     return issues
+
+
+def roadmap_table(name: str):
+    """Rows of the table between `<!-- name -->` and `<!-- /name -->` in the
+    roadmap, header and separator dropped, backticks stripped from cells."""
+    text = ROADMAP.read_text() if ROADMAP.exists() else ""
+    m = re.search(rf"<!-- {name} -->\n(.*?)<!-- /{name} -->", text, re.DOTALL)
+    if not m:
+        return []
+    rows = []
+    for line in m.group(1).splitlines():
+        if not line.startswith("|"):
+            continue
+        cells = [c.strip().strip("`") for c in line.strip().strip("|").split("|")]
+        if all(set(c) <= set("-: ") for c in cells):
+            continue
+        rows.append(cells)
+    return rows[1:]
+
+
+def load_roadmap():
+    """(areas, milestones) in roadmap order, as lists of dicts."""
+    areas = [dict(rank=r[0], area=r[1], tier=r[2], name=r[3], direction=r[4])
+             for r in roadmap_table("areas") if len(r) >= 5]
+    milestones = [dict(milestone=r[0], area=r[1], status=r[2], done=r[3],
+                       parent=r[4] if len(r) > 4 else "")
+                  for r in roadmap_table("milestones") if len(r) >= 4]
+    return areas, milestones
 
 
 def set_field(path: Path, key: str, value: str):
@@ -128,6 +163,7 @@ def index_entries(issues):
     for m in issues:
         tags = " ".join(
             ([f"`{m['thread']}`"] if m.get("thread") else [])
+            + ([f"**{m['area']}**"] if m["area"] else [])
             + [f"`{l}`" for l in m["labels"]]
         )
         blocked = (
@@ -164,16 +200,21 @@ def cmd_list(args):
         issues = [m for m in issues if m.get("thread") == args.thread]
     if args.label:
         issues = [m for m in issues if args.label in m["labels"]]
+    if args.area:
+        issues = [m for m in issues if m["area"] == ("" if args.area == "none" else args.area)]
+    if args.milestone:
+        issues = [m for m in issues if args.milestone in m["milestone"]]
     if not issues:
         print("no issues match")
         return
     order = {s: i for i, s in enumerate(STATUSES)}
     issues.sort(key=lambda m: (order.get(m["status"], 99), m["slug"]))
     wslug = max(len(m["slug"]) for m in issues)
+    warea = max(len(m["area"]) for m in issues)
     for m in issues:
         thread = m.get("thread", "")
         labels = ",".join(m["labels"])
-        print(f"{m['status']:<8} {m['slug']:<{wslug}}  {thread:<4} {m['title']}" + (f"  [{labels}]" if labels else ""))
+        print(f"{m['status']:<8} {m['slug']:<{wslug}}  {thread:<4} {m['area']:<{warea}}  {m['title']}" + (f"  [{labels}]" if labels else ""))
 
 
 def find(slug: str) -> Path:
@@ -227,6 +268,10 @@ def cmd_new(args):
         front.append(f"thread: {args.thread}")
     if args.labels:
         front.append(f"labels: [{args.labels}]")
+    if args.area:
+        front.append(f"area: {args.area}")
+    if args.milestone:
+        front.append(f"milestone: [{args.milestone}]")
     front += [f"created: {date}", f"updated: {date}"]
     text = read_prose(args.body, args.body_file, "body", default_stdin=False)
     body = text.strip("\n") + "\n" if text and text.strip() else "\n"
@@ -273,6 +318,51 @@ def cmd_log(args):
     print_backlinks(path.stem, "Assumes something about this — re-read before moving on:")
 
 
+def cmd_tag(args):
+    """Set an issue's area and/or milestones. Leaves `updated:` alone: a tag
+    is bookkeeping about the issue, not progress on it, and bumping it would
+    reorder every "last updated" view after a retagging sweep."""
+    if args.area is None and args.milestone is None:
+        sys.exit("error: give --area and/or --milestone")
+    areas, milestones = load_roadmap()
+    if args.area is not None and args.area not in {a["area"] for a in areas}:
+        sys.exit(f"error: unknown area '{args.area}' (see docs/roadmap.md)")
+    ms = parse_list(args.milestone or "")
+    unknown = [x for x in ms if x not in {m["milestone"] for m in milestones}]
+    if unknown:
+        sys.exit(f"error: unknown milestone(s) {', '.join(unknown)} (see docs/roadmap.md)")
+    for slug in args.slugs:
+        path = find(slug)
+        if args.area is not None:
+            set_field(path, "area", args.area)
+        if args.milestone is not None:
+            set_field(path, "milestone", f"[{', '.join(ms)}]")
+        print(f"{path.stem}: tagged")
+
+
+def cmd_areas(_args):
+    """The roadmap's areas in priority order, with issue counts, and each
+    milestone with the open issues that name it, submilestones nested under
+    their parent."""
+    areas, milestones = load_roadmap()
+    issues = load_all()
+    live = lambda m: m["status"] != "closed"
+    wname = max([len(a["area"]) for a in areas] + [9])
+    print(f"{'pri':>4}  {'area':<{wname}}  {'tier':<9} open  closed")
+    for a in areas:
+        ms = [m for m in issues if m["area"] == a["area"]]
+        print(f"{a['rank']:>4}  {a['area']:<{wname}}  {a['tier']:<9} {sum(map(live, ms)):>4}  {len(ms) - sum(map(live, ms)):>6}")
+        mine = [x for x in milestones if x["area"] == a["area"]]
+        for mi in [x for x in mine if not x["parent"]] + [x for x in mine if x["parent"] and x["parent"] not in {y["milestone"] for y in mine}]:
+            for depth, x in [(0, mi)] + [(1, c) for c in mine if c["parent"] == mi["milestone"]]:
+                serving = sorted(m["slug"] for m in issues if x["milestone"] in m["milestone"] and live(m))
+                print(f"{'':>4}    {'  ' * depth}- {x['milestone']} ({x['status']}): {len(serving)} open"
+                      + (f": {', '.join(serving)}" if serving else ""))
+    untagged = [m for m in issues if not m["area"] and live(m)]
+    if untagged:
+        print(f"\n{len(untagged)} open issue(s) with no area: scripts/issue list --area none --status open")
+
+
 def cmd_threads(_args):
     issues = load_all()
     threads = {}
@@ -291,6 +381,9 @@ def cmd_threads(_args):
 def cmd_check(_args):
     issues = load_all()
     slugs = {m["slug"] for m in issues}
+    areas, milestones = load_roadmap()
+    area_names = {a["area"] for a in areas}
+    milestone_names = {mi["milestone"] for mi in milestones}
     problems = []
     for m in issues:
         for b in m["blocked-by"]:
@@ -301,6 +394,18 @@ def cmd_check(_args):
                 problems.append(f"{m['slug']}: [[{link}]] does not resolve")
         if m["status"] not in STATUSES:
             problems.append(f"{m['slug']}: unknown status '{m['status']}'")
+        if m["area"] and m["area"] not in area_names:
+            problems.append(f"{m['slug']}: unknown area '{m['area']}' (docs/roadmap.md)")
+        for x in m["milestone"]:
+            if x not in milestone_names:
+                problems.append(f"{m['slug']}: unknown milestone '{x}' (docs/roadmap.md)")
+    by_ms = {mi["milestone"]: mi for mi in milestones}
+    for mi in milestones:
+        if mi["area"] not in area_names:
+            problems.append(f"roadmap: milestone '{mi['milestone']}' names unknown area '{mi['area']}'")
+        parent = by_ms.get(mi["parent"]) if mi["parent"] else None
+        if mi["parent"] and (parent is None or parent["area"] != mi["area"] or parent["parent"]):
+            problems.append(f"roadmap: submilestone '{mi['milestone']}' needs a top-level parent in its own area, not '{mi['parent']}'")
 
     # Warnings, not errors: judgement calls the README's ownership rules ask
     # for, which were both live in the tracker on 2026-07-27.
@@ -308,6 +413,9 @@ def cmd_check(_args):
     linked = set()
     for m in issues:
         linked |= set(re.findall(r"\[\[([^\]]+)\]\]", m["body"])) | set(m["blocked-by"])
+    # The roadmap is a finder too: an issue it links is not unfindable.
+    if ROADMAP.exists():
+        linked |= set(re.findall(r"issues/([a-z0-9-]+)\.md", ROADMAP.read_text()))
     for m in issues:
         if m["status"] != "open":
             continue
@@ -316,6 +424,10 @@ def cmd_check(_args):
             warnings.append(f"{m['slug']}: open, but its last log entry says it landed (README rule 3)")
         if m["slug"] not in linked:
             warnings.append(f"{m['slug']}: open and nothing links to it — unfindable (README rule 1)")
+
+    untagged = [m for m in issues if m["status"] != "closed" and not m["area"]]
+    if untagged:
+        warnings.append(f"{len(untagged)} open issue(s) have no area: scripts/issue list --area none --status open")
 
     for p in problems:
         print(p)
@@ -333,6 +445,7 @@ WEB = Path(__file__).resolve().parent / "issue-web.html"
 def stamp():
     """Changes whenever an issue file is added, removed, or edited."""
     paths = [p for p in ISSUES.glob("*.md") if p.name not in ("README.md", "INDEX.md")]
+    paths += [ROADMAP] if ROADMAP.exists() else []
     return f"{len(paths)}:{max((p.stat().st_mtime_ns for p in paths), default=0)}"
 
 
@@ -351,6 +464,8 @@ def issues_json():
             "title": m["title"],
             "status": m["status"],
             "labels": m["labels"],
+            "area": m["area"],
+            "milestones": m["milestone"],
             "blockedBy": [b for b in m["blocked-by"] if b in slugs],
             "thread": m.get("thread", ""),
             "code": m.get("code", ""),
@@ -359,7 +474,9 @@ def issues_json():
             "links": links,
             "body": m["body"],
         })
-    return json.dumps({"stamp": stamp(), "today": today(), "issues": out})
+    areas, milestones = load_roadmap()
+    return json.dumps({"stamp": stamp(), "today": today(), "issues": out,
+                       "areas": areas, "milestones": milestones})
 
 
 def cmd_serve(args):
@@ -423,6 +540,8 @@ def main():
     sp.add_argument("--status", choices=STATUSES)
     sp.add_argument("--thread")
     sp.add_argument("--label")
+    sp.add_argument("--area", help="an area from docs/roadmap.md, or `none` for untagged")
+    sp.add_argument("--milestone")
     sp.set_defaults(fn=cmd_list)
 
     sp = sub.add_parser("show", help="print one issue")
@@ -434,6 +553,8 @@ def main():
     sp.add_argument("--title", required=True)
     sp.add_argument("--thread")
     sp.add_argument("--labels", help="comma-separated")
+    sp.add_argument("--area", help="an area from docs/roadmap.md")
+    sp.add_argument("--milestone", help="comma-separated milestones from docs/roadmap.md")
     sp.add_argument("--body", help="short body; unsafe for prose with `code spans`")
     sp.add_argument("--body-file", metavar="PATH", help="read the body from a file, or `-` for stdin")
     sp.set_defaults(fn=cmd_new)
@@ -455,6 +576,15 @@ def main():
     sp.add_argument("text", nargs="?", help="short entry; omit to read the entry from stdin")
     sp.add_argument("--body-file", metavar="PATH", help="read the entry from a file, or `-` for stdin")
     sp.set_defaults(fn=cmd_log)
+
+    sp = sub.add_parser("tag", help="set area and/or milestones (does not bump updated:)")
+    sp.add_argument("slugs", nargs="+")
+    sp.add_argument("--area")
+    sp.add_argument("--milestone", help="comma-separated; empty string clears")
+    sp.set_defaults(fn=cmd_tag)
+
+    sp = sub.add_parser("areas", help="roadmap areas in priority order, with counts and milestones")
+    sp.set_defaults(fn=cmd_areas)
 
     sp = sub.add_parser("threads", help="per-thread status counts")
     sp.set_defaults(fn=cmd_threads)

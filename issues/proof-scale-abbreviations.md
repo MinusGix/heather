@@ -2,6 +2,7 @@
 title: Local abbreviations usable at proof scale
 status: open
 labels: [frontend,ergonomics,design]
+area: language
 created: 2026-08-15
 updated: 2026-08-15
 ---

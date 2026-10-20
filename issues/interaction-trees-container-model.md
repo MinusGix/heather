@@ -2,6 +2,8 @@
 title: Interaction trees over container events, cut at fuel: check the investigation against code
 status: open
 labels: [effects,semantics,design,research]
+area: interaction-trees
+milestone: [it-core, it-refinement]
 created: 2026-09-24
 updated: 2026-10-08
 ---

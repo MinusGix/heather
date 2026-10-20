@@ -2,6 +2,7 @@
 title: Add a small relation-indexed setoid core
 status: open
 labels: [stdlib,mathematics,setoids,relations]
+area: mathematics
 created: 2026-09-02
 updated: 2026-10-10
 ---

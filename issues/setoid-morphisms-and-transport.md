@@ -2,6 +2,7 @@
 title: Transfer operations and theorems across related representations
 status: open
 labels: [stdlib,mathematics,setoids,automation,design]
+area: mathematics
 created: 2026-09-02
 updated: 2026-09-04
 ---

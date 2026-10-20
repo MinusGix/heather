@@ -2,6 +2,7 @@
 title: Preserve parameter expected types while elaborating named arguments
 status: open
 labels: [frontend,elaboration,syntax,proofs,ergonomics]
+area: language
 created: 2026-08-31
 updated: 2026-08-31
 ---

@@ -2,6 +2,7 @@
 title: Compare cached parser cursors on nested and long-input workloads
 status: open
 labels: [stdlib,parsing,performance,proofs]
+area: heather-in-heather
 created: 2026-09-14
 updated: 2026-09-15
 ---

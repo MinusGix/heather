@@ -2,6 +2,8 @@
 title: "Indexed finitary families: how an index reaches the surface"
 status: open
 labels: [frontend,elaboration,inductives,design]
+area: language
+milestone: [math-metatheory]
 created: 2026-07-26
 updated: 2026-09-30
 ---

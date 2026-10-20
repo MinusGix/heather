@@ -2,6 +2,7 @@
 title: Decide which additional relation laws deserve standard-library names
 status: open
 labels: [stdlib,logic,semantics,proofs,design]
+area: mathematics
 created: 2026-08-26
 updated: 2026-08-26
 ---

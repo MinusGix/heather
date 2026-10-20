@@ -2,6 +2,7 @@
 title: Keep concurrent heavy semantic test targets under the per-binary CPU rail (ulimit -t 300)
 status: open
 labels: [testing,tooling,performance,parallelism,memory]
+area: infrastructure
 created: 2026-09-02
 updated: 2026-09-11
 ---

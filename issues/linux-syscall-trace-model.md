@@ -2,6 +2,8 @@
 title: Flesh out the Linux syscall trace beyond read-once and exit
 status: open
 labels: [x86,semantics,runtime,design]
+area: heather-in-heather
+milestone: [hih-program-logic]
 created: 2026-09-24
 updated: 2026-10-03
 ---

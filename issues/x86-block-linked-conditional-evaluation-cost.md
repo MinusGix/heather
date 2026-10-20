@@ -2,6 +2,7 @@
 title: x86_64_block's LinkedConditionalDecodes/Layout are a million evaluator steps each, the corpus's heaviest declarations
 status: open
 labels: [x86,performance,kernel]
+area: heather-in-heather
 created: 2026-09-23
 updated: 2026-09-23
 ---

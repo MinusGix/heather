@@ -2,6 +2,7 @@
 title: Decide when Unsupported coverage should carry a structured reason
 status: open
 labels: [stdlib,semantics,diagnostics,design]
+area: heather-in-heather
 created: 2026-08-26
 updated: 2026-08-26
 ---

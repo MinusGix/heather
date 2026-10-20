@@ -2,6 +2,7 @@
 title: The elaborator emits the normal form of a type argument it normalized to decide a match: 3.5× per combinator layer, written down
 status: open
 labels: [elaboration,representation,performance,design]
+area: language
 created: 2026-09-16
 updated: 2026-09-22
 ---

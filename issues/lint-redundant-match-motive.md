@@ -2,6 +2,7 @@
 title: "Lint explicit match motives that ordinary synthesis can recover"
 status: open
 labels: [tooling,lint,frontend,elaboration,ergonomics]
+area: language
 created: 2026-08-22
 updated: 2026-08-22
 ---

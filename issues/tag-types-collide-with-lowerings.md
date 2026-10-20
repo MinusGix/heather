@@ -2,6 +2,7 @@
 title: Tag types are built from the same formers as lowerings, so structural guards can mistake one for the other
 status: open
 labels: [elaboration,inductives,representation]
+area: language
 created: 2026-09-06
 updated: 2026-09-06
 ---

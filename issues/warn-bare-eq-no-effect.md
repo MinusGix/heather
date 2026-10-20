@@ -2,6 +2,7 @@
 title: "Warn on a bare `a = b;` statement with no effect (likely meant `:=`)"
 status: open
 labels: [frontend,diagnostics]
+area: language
 created: 2026-07-24
 updated: 2026-08-16
 ---

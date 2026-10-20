@@ -2,6 +2,7 @@
 title: omega renders a member function by its base name, which is unbound at the goal
 status: open
 labels: [proofs,omega,elaboration,bug]
+area: tactics
 created: 2026-09-05
 updated: 2026-09-05
 ---

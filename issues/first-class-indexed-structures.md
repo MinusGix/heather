@@ -2,6 +2,7 @@
 title: Probe first-class packaging of value-indexed structures
 status: open
 labels: [design,traits,elaboration,frontend,mathematics]
+area: mathematics
 created: 2026-08-09
 updated: 2026-08-09
 ---

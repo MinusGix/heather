@@ -2,6 +2,8 @@
 title: Cost as a provable property: investigate calf's phase distinction for Heather
 status: open
 labels: [semantics,metatheory,design,research]
+area: heather-in-heather
+milestone: [hih-memory]
 created: 2026-09-24
 updated: 2026-09-24
 ---

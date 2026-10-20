@@ -2,6 +2,7 @@
 title: Char and String as specification types, with literals
 status: open
 labels: [stdlib,frontend,syntax,elaboration,design]
+area: heather-in-heather
 created: 2026-09-18
 updated: 2026-09-18
 ---

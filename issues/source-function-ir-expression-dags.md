@@ -2,6 +2,8 @@
 title: Reflect pure source expression DAGs into FunctionIR
 status: open
 labels: [compiler,function-ir,metaprogramming,proofs,codegen]
+area: heather-in-heather
+milestone: [hih-passes]
 created: 2026-09-01
 updated: 2026-09-02
 ---

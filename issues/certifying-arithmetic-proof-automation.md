@@ -2,6 +2,7 @@
 title: Certifying arithmetic and bitvector proof automation
 status: open
 labels: [proofs,elaboration,metaprogramming,stdlib,ergonomics]
+area: tactics
 created: 2026-08-26
 updated: 2026-09-26
 ---

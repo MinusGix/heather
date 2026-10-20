@@ -2,6 +2,8 @@
 title: Reflect disequality and divisibility directly into CutSat
 status: open
 labels: [proofs,elaboration,arithmetic,solver]
+area: tactics
+milestone: [tac-arith]
 created: 2026-08-27
 updated: 2026-08-27
 ---

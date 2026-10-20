@@ -2,6 +2,7 @@
 title: Generated names are not ordinary identifiers: the # hygiene boundary
 status: open
 labels: [frontend,elaboration,design,ergonomics]
+area: language
 created: 2026-08-14
 updated: 2026-08-16
 ---

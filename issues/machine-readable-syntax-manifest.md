@@ -2,6 +2,7 @@
 title: "Export one machine-readable manifest of Heather's lexical surface"
 status: open
 labels: [tooling,syntax,editor,testing]
+area: language
 created: 2026-08-20
 updated: 2026-08-20
 ---

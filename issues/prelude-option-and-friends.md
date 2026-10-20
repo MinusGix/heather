@@ -2,6 +2,7 @@
 title: Option/Result/List in the prelude, with helpers and chaining
 status: open
 labels: [frontend,stdlib,elaboration,design]
+area: language
 created: 2026-07-31
 updated: 2026-09-14
 ---

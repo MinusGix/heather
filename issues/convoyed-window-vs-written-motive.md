@@ -2,6 +2,7 @@
 title: A written motive that names the scrutinee meets the convoyed window as a bare NotConvertible
 status: open
 labels: [frontend,elaboration,diagnostics,design]
+area: language
 created: 2026-08-17
 updated: 2026-09-18
 ---

@@ -2,6 +2,7 @@
 title: Polynomial functors as the vocabulary for interfaces, events and wiring
 status: open
 labels: [semantics,effects,design,research]
+area: interaction-trees
 created: 2026-09-24
 updated: 2026-09-24
 ---

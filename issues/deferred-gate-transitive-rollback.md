@@ -2,6 +2,7 @@
 title: Deferred gate failure path: transitive rollback and cone-vouching instead of a serial replay
 status: open
 labels: [elaboration,kernel,parallelism,caching,design,diagnostics]
+area: infrastructure
 created: 2026-09-11
 updated: 2026-09-11
 ---

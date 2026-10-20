@@ -2,6 +2,7 @@
 title: Shard the full lane's longest unit-test binary (heather-cli, ~58 s of a 64 s lane) by test
 status: open
 labels: [testing,performance]
+area: infrastructure
 created: 2026-09-24
 updated: 2026-09-24
 ---

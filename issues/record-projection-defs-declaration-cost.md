@@ -2,6 +2,7 @@
 title: Naming a big record's projections costs seconds at its declaration
 status: open
 labels: [elaborator,performance]
+area: language
 created: 2026-08-15
 updated: 2026-08-15
 ---

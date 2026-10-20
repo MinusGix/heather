@@ -2,6 +2,8 @@
 title: Probe regular Cauchy reals constructively
 status: open
 labels: [stdlib,mathematics,reals,analysis,setoids]
+area: mathematics
+milestone: [math-reals]
 created: 2026-09-02
 updated: 2026-10-17
 ---

@@ -2,6 +2,8 @@
 title: Prove polynomial inequalities with the ring normalizer
 status: open
 labels: [proofs,arithmetic,mathematics,solver,design]
+area: tactics
+milestone: [tac-arith]
 created: 2026-10-12
 updated: 2026-10-15
 ---

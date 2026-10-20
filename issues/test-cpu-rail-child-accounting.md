@@ -2,6 +2,7 @@
 title: Distinguish aggregate child CPU from per-process test rails
 status: open
 labels: [tests,tooling]
+area: infrastructure
 created: 2026-09-20
 updated: 2026-09-20
 ---

@@ -2,6 +2,7 @@
 title: Compute with a theorem's witness without making the author choose fn
 status: open
 labels: [kernel,elaboration,design,reals,cache]
+area: language
 created: 2026-10-16
 updated: 2026-10-16
 ---

@@ -2,6 +2,7 @@
 title: Machine-check the stated lemmas of ch. 05/06 (and keep sweeping)
 status: open
 labels: [kernel,delam,metatheory,testing]
+area: kernel
 created: 2026-07-25
 updated: 2026-09-06
 code: crates/kernel/tests/ch05_06_lemmas.rs:1 @ HEAD

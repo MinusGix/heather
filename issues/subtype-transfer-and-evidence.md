@@ -2,6 +2,7 @@
 title: Lift subtype operations and compare evidence policies
 status: open
 labels: [stdlib,subtypes,proofs,transfer,design]
+area: mathematics
 created: 2026-09-04
 updated: 2026-09-05
 ---

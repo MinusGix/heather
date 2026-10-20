@@ -2,6 +2,7 @@
 title: Intro-by-type stage 3, deferred: does checking against descriptions carry over to the elaborator's transient reduct?
 status: open
 labels: [elaboration,performance,design,deferred]
+area: language
 created: 2026-09-22
 updated: 2026-09-22
 ---

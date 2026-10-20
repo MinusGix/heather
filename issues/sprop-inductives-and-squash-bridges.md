@@ -2,6 +2,7 @@
 title: Decide user SProp inductives and the atomic Squash release bridges
 status: open
 labels: [kernel,delam,design,sprop]
+area: kernel
 created: 2026-08-25
 updated: 2026-08-25
 ---

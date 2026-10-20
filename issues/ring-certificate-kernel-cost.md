@@ -2,6 +2,7 @@
 title: Make ring certificates cheaper for the kernel
 status: open
 labels: [proofs,arithmetic,performance]
+area: tactics
 created: 2026-10-12
 updated: 2026-10-12
 ---

@@ -2,6 +2,7 @@
 title: Develop a bounded list, trapping stack API, and representation interface
 status: open
 labels: [stdlib,semantics,design]
+area: heather-in-heather
 created: 2026-08-25
 updated: 2026-08-25
 ---

@@ -2,6 +2,7 @@
 title: Name resolution allocates per lookup; elaborator clone grew 2.5x
 status: open
 labels: [frontend, elaboration, performance, modules]
+area: language
 created: 2026-08-05
 updated: 2026-08-05
 ---

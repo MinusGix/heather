@@ -2,6 +2,8 @@
 title: Normalise appends and other monoid terms instead of trans/cong_fn towers
 status: open
 labels: [tactics,proofs,stdlib,ergonomics]
+area: tactics
+milestone: [tac-general]
 created: 2026-10-07
 updated: 2026-10-07
 ---

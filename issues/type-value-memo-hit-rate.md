@@ -2,6 +2,7 @@
 title: The value domain's type memo answers 1.3% of its lookups on the certificate
 status: open
 labels: [kernel,conversion,performance,evaluator]
+area: kernel
 created: 2026-09-13
 updated: 2026-09-13
 ---

@@ -2,6 +2,7 @@
 title: Design collection literal spread and tail syntax
 status: open
 labels: [frontend,syntax,ergonomics]
+area: language
 created: 2026-08-30
 updated: 2026-08-31
 ---

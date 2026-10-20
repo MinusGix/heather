@@ -2,6 +2,7 @@
 title: "Lint removable explicit type arguments and implicit-insertion escapes"
 status: open
 labels: [tooling,lint,frontend,elaboration,inference,ergonomics]
+area: language
 created: 2026-08-22
 updated: 2026-08-22
 ---

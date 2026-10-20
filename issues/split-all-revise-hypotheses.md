@@ -2,6 +2,7 @@
 title: split_all: revise hypotheses that mention the scrutinee it splits
 status: open
 labels: [tactics,proofs,elaboration]
+area: tactics
 created: 2026-10-02
 updated: 2026-10-02
 ---

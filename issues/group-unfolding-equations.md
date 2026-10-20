@@ -2,6 +2,7 @@
 title: Unfolding equations for the members of a mutual-recursion group
 status: open
 labels: [frontend,elaboration,proofs]
+area: language
 created: 2026-09-05
 updated: 2026-09-05
 ---

@@ -2,6 +2,7 @@
 title: Decide denotational equivalence of differently shaped context programs
 status: open
 labels: [kernel,conversion,performance,representation,research]
+area: kernel
 created: 2026-09-01
 updated: 2026-09-01
 ---

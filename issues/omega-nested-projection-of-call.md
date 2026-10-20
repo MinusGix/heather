@@ -2,6 +2,7 @@
 title: omega stops at a projection of a projection of a call
 status: open
 labels: [omega,proofs,elaboration,ergonomics]
+area: tactics
 created: 2026-10-14
 updated: 2026-10-14
 ---

@@ -2,6 +2,7 @@
 title: The emission chokepoint re-walks the type the elaborator has just normalized: seconds per constructor value on the parser family
 status: open
 labels: [elaboration,performance]
+area: language
 created: 2026-09-16
 updated: 2026-09-16
 ---

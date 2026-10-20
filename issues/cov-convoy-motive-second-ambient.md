@@ -2,6 +2,7 @@
 title: Course-of-values convoy may mis-index a motive mentioning a second ambient variable
 status: open
 labels: [elaboration,recursion,proofs,robustness]
+area: language
 created: 2026-09-18
 updated: 2026-09-18
 ---

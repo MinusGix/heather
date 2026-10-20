@@ -2,6 +2,7 @@
 title: "`<…>` type arguments: keep them (decided); allow `Or(Nat, Nat)` as a second spelling"
 status: open
 labels: [frontend,syntax,design,elaboration]
+area: language
 created: 2026-08-16
 updated: 2026-08-16
 ---

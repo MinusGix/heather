@@ -2,6 +2,7 @@
 title: A command bundle that states its columns once
 status: open
 labels: [native,surface-syntax,ergonomics]
+area: heather-in-heather
 created: 2026-10-07
 updated: 2026-10-07
 ---

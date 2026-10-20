@@ -2,6 +2,7 @@
 title: Differentially property-test Omega search and certificates
 status: open
 labels: [proofs,testing,arithmetic,solver]
+area: tactics
 blocked-by: [omega-linear-arithmetic]
 created: 2026-08-27
 updated: 2026-08-27

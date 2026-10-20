@@ -2,6 +2,7 @@
 title: many and some carry no span contract, only a consumption bound
 status: open
 labels: [stdlib,parser,proofs,design]
+area: heather-in-heather
 created: 2026-09-18
 updated: 2026-09-18
 ---

@@ -2,6 +2,7 @@
 title: The module-image writer publishes an image deeper than its reader's depth budget
 status: open
 labels: [cache,robustness]
+area: infrastructure
 created: 2026-09-29
 updated: 2026-09-29
 ---

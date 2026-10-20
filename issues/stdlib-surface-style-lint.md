@@ -2,6 +2,7 @@
 title: "Standard-library surface style: n-ary calls, designated operators, and a lint"
 status: open
 labels: [stdlib,ergonomics,tooling,lint]
+area: language
 created: 2026-08-19
 updated: 2026-09-16
 ---

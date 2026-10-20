@@ -2,6 +2,7 @@
 title: "Lint proof lambdas that read better as sequent binders"
 status: open
 labels: [tooling,lint,syntax,proofs,stdlib,ergonomics]
+area: language
 created: 2026-08-22
 updated: 2026-08-22
 ---

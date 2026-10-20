@@ -2,6 +2,8 @@
 title: "Assumption scopes and profiles: generalize first, discharge explicitly"
 status: open
 labels: [frontend,syntax,elaboration,traits,logic,proofs,design,ergonomics,tooling]
+area: language
+milestone: [math-specific-choice]
 created: 2026-08-24
 updated: 2026-08-25
 ---

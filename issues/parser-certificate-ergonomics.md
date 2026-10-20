@@ -2,6 +2,7 @@
 title: Improve parser certificate composition and inference
 status: open
 labels: [stdlib,parsing,proofs]
+area: heather-in-heather
 created: 2026-09-15
 updated: 2026-09-15
 ---

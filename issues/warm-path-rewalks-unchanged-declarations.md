@@ -2,6 +2,7 @@
 title: "The warm cache path re-walks and re-hashes every unchanged declaration"
 status: open
 labels: [tooling, performance, cli]
+area: infrastructure
 created: 2026-08-06
 updated: 2026-09-17
 code: crates/cache/src/merkle.rs @ 33c65ef

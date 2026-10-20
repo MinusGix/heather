@@ -2,6 +2,8 @@
 title: Infer cong's function by anti-unification, in a goal-solver metaprogram
 status: open
 labels: [frontend,elaboration,metaprogramming,design]
+area: tactics
+milestone: [tac-general]
 created: 2026-07-27
 updated: 2026-08-22
 ---

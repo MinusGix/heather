@@ -2,6 +2,8 @@
 title: ElabCode: metaprograms over a friendly reflected AST, certified against raw Code
 status: open
 labels: [metaprogramming,design,frontend,stdlib]
+area: tactics
+milestone: [tac-host-interface]
 created: 2026-08-11
 updated: 2026-08-11
 ---

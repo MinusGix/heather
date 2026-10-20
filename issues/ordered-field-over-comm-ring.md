@@ -2,6 +2,8 @@
 title: Build the ordered field on the ring layers
 status: open
 labels: [stdlib,mathematics,algebra]
+area: mathematics
+milestone: [math-classes]
 created: 2026-10-20
 updated: 2026-10-20
 ---

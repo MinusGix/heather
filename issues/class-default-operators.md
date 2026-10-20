@@ -2,6 +2,7 @@
 title: Default operator symbols per class, overridable at the binder
 status: open
 labels: [design,traits,ergonomics]
+area: language
 created: 2026-08-09
 updated: 2026-08-09
 ---

@@ -2,6 +2,7 @@
 title: "Parallel checking and the certified cache: many agents, one telescope"
 status: open
 labels: [tooling, design, performance, cli, meta]
+area: infrastructure
 created: 2026-08-06
 updated: 2026-09-11
 ---

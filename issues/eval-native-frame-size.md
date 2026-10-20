@@ -2,6 +2,7 @@
 title: A native evaluator re-entry costs kilobytes of stack, leaving one decade between answering and aborting
 status: open
 labels: [kernel,evaluator,performance]
+area: kernel
 created: 2026-09-09
 updated: 2026-09-09
 ---

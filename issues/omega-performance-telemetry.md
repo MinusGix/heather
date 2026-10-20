@@ -2,6 +2,7 @@
 title: Pin Omega search and certificate growth telemetry
 status: open
 labels: [proofs,performance,arithmetic,testing]
+area: tactics
 blocked-by: [omega-linear-arithmetic]
 created: 2026-08-27
 updated: 2026-09-23

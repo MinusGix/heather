@@ -2,6 +2,7 @@
 title: List::split_by and its lemmas in std
 status: open
 labels: [stdlib]
+area: heather-in-heather
 created: 2026-10-02
 updated: 2026-10-02
 ---

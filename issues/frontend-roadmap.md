@@ -2,6 +2,7 @@
 title: "Meta: frontend roadmap and current focus"
 status: open
 labels: [frontend,meta]
+area: language
 created: 2026-07-23
 updated: 2026-09-15
 ---

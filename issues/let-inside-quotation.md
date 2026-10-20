@@ -2,6 +2,7 @@
 title: Decide whether a block expression may be a quote payload
 status: open
 labels: [metaprogramming,frontend,syntax,elaboration]
+area: language
 created: 2026-08-02
 updated: 2026-08-16
 ---

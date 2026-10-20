@@ -2,6 +2,7 @@
 title: "Lint deeply nested proof returns that have a clearer apply script"
 status: open
 labels: [tooling,lint,frontend,proofs,automation,ergonomics]
+area: language
 blocked-by: [lint-review-only-mode]
 created: 2026-08-22
 updated: 2026-08-22

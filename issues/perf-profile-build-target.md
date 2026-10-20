@@ -2,6 +2,7 @@
 title: A one-command frame-pointer build and module-scoped perf attach
 status: open
 labels: [tooling,performance,kernel,elaboration]
+area: infrastructure
 created: 2026-09-06
 updated: 2026-09-06
 ---

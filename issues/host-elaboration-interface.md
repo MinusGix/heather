@@ -2,6 +2,8 @@
 title: Expose a scoped host elaboration interface usable from Heather
 status: open
 labels: [metaprogramming,elaboration,design]
+area: tactics
+milestone: [tac-host-interface, hih-passes]
 created: 2026-09-07
 updated: 2026-09-08
 ---

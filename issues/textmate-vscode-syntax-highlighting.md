@@ -2,6 +2,7 @@
 title: "Provide a TextMate grammar for VS Code-family editors"
 status: open
 labels: [tooling,editor,syntax,vscode]
+area: language
 created: 2026-08-20
 updated: 2026-08-20
 ---

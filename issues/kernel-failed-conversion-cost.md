@@ -2,6 +2,7 @@
 title: Reject false large conversions without spending a successful proof's budget
 status: open
 labels: [kernel,conversion,performance,diagnostics,testing]
+area: kernel
 created: 2026-09-03
 updated: 2026-09-11
 ---

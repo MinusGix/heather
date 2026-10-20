@@ -2,6 +2,7 @@
 title: The transducer memo is keyed on closure syntax, so a negative verdict is re-derived at every call site with a different environment
 status: open
 labels: [kernel,evaluator,performance,bitvec]
+area: kernel
 created: 2026-09-13
 updated: 2026-09-13
 ---

@@ -2,6 +2,7 @@
 title: A course-of-values window costs O(d²) nodes in its annotations; recorded before it matters
 status: open
 labels: [elaboration,performance,kernel]
+area: language
 created: 2026-08-17
 updated: 2026-09-18
 ---

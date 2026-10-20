@@ -2,6 +2,7 @@
 title: Would multimodal type theory host a later modality beside DeLaM's layers?
 status: open
 labels: [kernel,delam,metatheory,research]
+area: kernel
 created: 2026-09-24
 updated: 2026-09-24
 ---

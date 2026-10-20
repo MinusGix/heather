@@ -2,6 +2,7 @@
 title: What is left of shift_global after the signature memo: Psi-multiplicity times signature size
 status: open
 labels: [kernel,conversion,performance]
+area: kernel
 created: 2026-09-19
 updated: 2026-09-19
 ---

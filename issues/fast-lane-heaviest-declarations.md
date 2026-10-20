@@ -2,6 +2,7 @@
 title: The fast lane's wall clock is guarded_read's four layout declarations (6–13 s each, all kernel gate)
 status: open
 labels: [performance,testing,x86,kernel]
+area: heather-in-heather
 created: 2026-09-23
 updated: 2026-09-24
 ---

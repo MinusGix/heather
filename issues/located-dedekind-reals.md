@@ -2,6 +2,8 @@
 title: Probe located Dedekind real presentations
 status: open
 labels: [stdlib,mathematics,reals,analysis,order]
+area: mathematics
+milestone: [math-reals]
 created: 2026-09-02
 updated: 2026-09-02
 ---

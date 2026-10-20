@@ -2,6 +2,7 @@
 title: Attribute and reduce certified IR-pass probe elaboration cost
 status: open
 labels: [elaborator,kernel,performance,testing]
+area: heather-in-heather
 created: 2026-08-25
 updated: 2026-09-11
 ---

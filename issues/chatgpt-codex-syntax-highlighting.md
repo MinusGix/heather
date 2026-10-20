@@ -2,6 +2,7 @@
 title: "Investigate non-invasive Heather highlighting in ChatGPT and Codex previews"
 status: open
 labels: [tooling,editor,syntax,research]
+area: language
 created: 2026-08-20
 updated: 2026-08-20
 ---

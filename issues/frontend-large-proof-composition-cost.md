@@ -2,6 +2,7 @@
 title: Make large proof composition retain source sharing in the frontend
 status: open
 labels: [frontend,elaboration,performance,proofs,compiler]
+area: language
 created: 2026-08-31
 updated: 2026-09-06
 ---

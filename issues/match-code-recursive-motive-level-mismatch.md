@@ -2,6 +2,7 @@
 title: A match code at a recursive motive is refused when a written arm builds a constructor value
 status: open
 labels: [metaprogramming,elaboration,inductives,defect]
+area: language
 created: 2026-10-03
 updated: 2026-10-03
 ---

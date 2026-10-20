@@ -2,6 +2,7 @@
 title: Elaborator whnf respells structured formers by substitution: Straight's continuations
 status: open
 labels: [elaboration,performance,native]
+area: heather-in-heather
 created: 2026-10-10
 updated: 2026-10-16
 ---

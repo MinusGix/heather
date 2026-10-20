@@ -2,6 +2,7 @@
 title: An if in a module without import bool reports decide_bit's type arguments
 status: open
 labels: [diagnostics,elaboration]
+area: language
 created: 2026-10-02
 updated: 2026-10-02
 ---

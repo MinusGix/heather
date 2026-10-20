@@ -2,6 +2,7 @@
 title: j/refl/cong/absurd/inj as ordinary declarations, not elaborator special forms
 status: open
 labels: [frontend,elaboration,design]
+area: language
 created: 2026-07-27
 updated: 2026-08-02
 ---

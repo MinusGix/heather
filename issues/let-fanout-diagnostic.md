@@ -2,6 +2,7 @@
 title: Say which let multiplies a slow proof, and suggest have
 status: open
 labels: [elaboration,diagnostics,proofs,performance]
+area: language
 created: 2026-09-25
 updated: 2026-09-28
 ---

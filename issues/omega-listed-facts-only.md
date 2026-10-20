@@ -2,6 +2,7 @@
 title: omega reading only its listed facts
 status: open
 labels: [omega,performance,tactics]
+area: tactics
 created: 2026-10-19
 updated: 2026-10-19
 ---

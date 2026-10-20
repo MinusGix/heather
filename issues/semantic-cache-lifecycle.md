@@ -2,6 +2,7 @@
 title: Bound and inspect the persistent semantic module cache
 status: open
 labels: [tooling,caching,performance,robustness,cli]
+area: infrastructure
 created: 2026-08-30
 updated: 2026-08-30
 ---

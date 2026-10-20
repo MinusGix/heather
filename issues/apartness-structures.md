@@ -2,6 +2,7 @@
 title: Develop apartness as a first-class constructive relation
 status: open
 labels: [stdlib,mathematics,logic,relations]
+area: mathematics
 created: 2026-09-02
 updated: 2026-10-19
 ---

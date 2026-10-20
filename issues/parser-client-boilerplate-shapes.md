@@ -2,6 +2,7 @@
 title: The calculator showcase's repeated shapes name two gaps in the parser client API
 status: open
 labels: [frontend,parsing,stdlib,proofs,ergonomics]
+area: heather-in-heather
 created: 2026-09-16
 updated: 2026-09-16
 ---

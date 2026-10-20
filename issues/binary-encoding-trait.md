@@ -2,6 +2,7 @@
 title: Define reusable explicit binary wire-encoding contracts
 status: open
 labels: [library,serialization,proofs]
+area: heather-in-heather
 created: 2026-09-07
 updated: 2026-09-07
 ---

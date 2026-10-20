@@ -2,6 +2,7 @@
 title: Decide whether finite reachability should expose or squash its fuel
 status: open
 labels: [stdlib,logic,semantics,proofs,design]
+area: heather-in-heather
 created: 2026-08-26
 updated: 2026-08-26
 ---

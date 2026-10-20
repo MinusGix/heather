@@ -2,6 +2,7 @@
 title: A conjunction passed for an equation argument is refused only by the kernel
 status: open
 labels: [frontend,elaboration,diagnostics]
+area: language
 created: 2026-10-04
 updated: 2026-10-04
 ---

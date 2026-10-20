@@ -2,6 +2,7 @@
 title: "Unify big-operator syntax while deriving semantics from the domain"
 status: open
 labels: [stdlib,mathematics,notation,research,design]
+area: mathematics
 created: 2026-08-20
 updated: 2026-08-20
 ---

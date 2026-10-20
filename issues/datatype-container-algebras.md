@@ -2,6 +2,7 @@
 title: Develop inductives as containers and recursion algebras
 status: open
 labels: [stdlib,inductives,design,mathematics]
+area: mathematics
 created: 2026-08-09
 updated: 2026-08-18
 ---

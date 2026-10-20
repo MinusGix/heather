@@ -2,6 +2,7 @@
 title: Grow FunctionIR from Add into a useful fixed-width ALU core
 status: open
 labels: [compiler,function-ir,semantics,bitvec,x86]
+area: heather-in-heather
 created: 2026-08-31
 updated: 2026-09-03
 ---

@@ -2,6 +2,8 @@
 title: Define the canonical scoped x86-64 machine model
 status: open
 labels: [compiler,semantics,x86,design]
+area: heather-in-heather
+milestone: [hih-program-logic]
 created: 2026-08-25
 updated: 2026-09-11
 ---

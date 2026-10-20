@@ -2,6 +2,7 @@
 title: "Surface syntax: Rust-flavored core, match, quote/splice, structured proofs"
 status: open
 labels: [frontend,syntax,design]
+area: language
 created: 2026-07-23
 updated: 2026-07-24
 ---

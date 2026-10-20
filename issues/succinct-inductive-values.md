@@ -2,6 +2,7 @@
 title: Represent repeated inductive construction as saturated shared programs
 status: open
 labels: [kernel, inductives, conversion, performance, representation]
+area: kernel
 created: 2026-08-28
 updated: 2026-09-09
 ---

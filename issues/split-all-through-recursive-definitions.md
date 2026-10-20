@@ -2,6 +2,7 @@
 title: split_all: unfold a recursive definition with its recursive calls respelled
 status: open
 labels: [tactics,elaboration,proofs]
+area: tactics
 created: 2026-10-01
 updated: 2026-10-01
 ---

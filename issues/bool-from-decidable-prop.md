@@ -2,6 +2,7 @@
 title: Write a decidable proposition where a Bool is expected
 status: open
 labels: [frontend,elaboration,surface-syntax,design]
+area: language
 created: 2026-10-07
 updated: 2026-10-08
 ---

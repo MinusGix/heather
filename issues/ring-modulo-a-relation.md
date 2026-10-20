@@ -2,6 +2,7 @@
 title: Normalize ring identities modulo a relation
 status: open
 labels: [proofs,solver,algebra,setoids]
+area: tactics
 created: 2026-10-20
 updated: 2026-10-20
 ---

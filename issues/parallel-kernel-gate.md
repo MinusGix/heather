@@ -2,6 +2,7 @@
 title: Deferred kernel gate over Arc terms: check independent proofs on a worker pool while the elaborator continues
 status: open
 labels: [kernel,elaboration,parallelism,performance,design,cli]
+area: infrastructure
 created: 2026-09-11
 updated: 2026-09-12
 ---

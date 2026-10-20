@@ -2,6 +2,8 @@
 title: Decide how order classes present strict and non-strict relations
 status: open
 labels: [design,traits,notation,stdlib,orders]
+area: mathematics
+milestone: [math-classes]
 created: 2026-08-09
 updated: 2026-08-20
 ---

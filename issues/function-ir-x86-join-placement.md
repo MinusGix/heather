@@ -2,6 +2,7 @@
 title: Reconcile FunctionIR branch result placements at machine joins
 status: open
 labels: [compiler,function-ir,x86,register-allocation,control-flow]
+area: heather-in-heather
 blocked-by: [function-ir-conditional-regions]
 created: 2026-09-01
 updated: 2026-09-20

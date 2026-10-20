@@ -2,6 +2,7 @@
 title: "`∃`/`∀` notation cannot appear in a type-argument slot, even parenthesized"
 status: open
 labels: [frontend,syntax,parser,stdlib]
+area: language
 created: 2026-08-16
 updated: 2026-08-16
 ---

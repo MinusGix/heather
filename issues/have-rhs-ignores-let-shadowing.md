@@ -2,6 +2,7 @@
 title: have's right-hand side sees a let-shadowed name as the outer binding; the kernel rejects with a bare HeadMismatch
 status: open
 labels: [frontend,elaboration,diagnostics]
+area: language
 created: 2026-09-30
 updated: 2026-09-30
 ---

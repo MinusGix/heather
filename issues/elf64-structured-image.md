@@ -2,6 +2,7 @@
 title: Represent ELF64 headers and images with structured records
 status: open
 labels: [compiler,elf]
+area: heather-in-heather
 created: 2026-09-07
 updated: 2026-09-07
 ---

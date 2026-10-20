@@ -2,6 +2,7 @@
 title: wc as a command: file operands, flags in one binary, argv and open in the process model
 status: open
 labels: [native,x86,semantics,design]
+area: heather-in-heather
 created: 2026-10-02
 updated: 2026-10-07
 ---

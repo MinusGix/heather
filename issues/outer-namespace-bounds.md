@@ -2,6 +2,7 @@
 title: Global/universe-namespace operations still walk everything; bounds generalize if asked
 status: open
 labels: [kernel,performance]
+area: kernel
 created: 2026-07-31
 updated: 2026-07-31
 ---

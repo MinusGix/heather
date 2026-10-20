@@ -2,6 +2,7 @@
 title: Inverse and power notation without junk values
 status: open
 labels: [stdlib,mathematics,reals,syntax]
+area: mathematics
 created: 2026-10-18
 updated: 2026-10-19
 ---

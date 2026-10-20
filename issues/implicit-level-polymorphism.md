@@ -2,6 +2,7 @@
 title: Type parameters implicitly polymorphic in their level
 status: open
 labels: [frontend,elaboration,design]
+area: language
 created: 2026-07-27
 updated: 2026-07-27
 ---

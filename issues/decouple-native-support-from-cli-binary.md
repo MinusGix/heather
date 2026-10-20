@@ -2,6 +2,7 @@
 title: Decouple native proof support from the core CLI binary
 status: open
 labels: [compiler,x86,architecture,performance]
+area: heather-in-heather
 code: crates/cli/src/native/support.rs:2 @ e7870e2
 created: 2026-09-21
 updated: 2026-09-21

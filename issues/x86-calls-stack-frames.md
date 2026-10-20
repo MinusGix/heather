@@ -2,6 +2,7 @@
 title: Certify x86 calls and concrete stack frames
 status: open
 labels: [compiler,x86,proofs]
+area: heather-in-heather
 created: 2026-09-07
 updated: 2026-09-19
 ---

@@ -2,6 +2,7 @@
 title: One selection language for search, hint sets, and the used-subset that comes back
 status: open
 labels: [tooling,frontend,design,metaprogramming]
+area: tactics
 created: 2026-08-05
 updated: 2026-08-25
 ---

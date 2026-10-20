@@ -2,6 +2,7 @@
 title: Find out where a furnace round trip's 2-3 minutes go
 status: open
 labels: [tooling,infrastructure,performance,measurement]
+area: infrastructure
 created: 2026-09-16
 updated: 2026-09-16
 ---

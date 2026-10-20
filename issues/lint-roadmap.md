@@ -2,6 +2,7 @@
 title: "Grow lints as conservative checks with explicit style profiles"
 status: open
 labels: [tooling,lint,diagnostics,design,ergonomics]
+area: language
 created: 2026-08-22
 updated: 2026-09-16
 ---

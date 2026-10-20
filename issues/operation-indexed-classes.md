@@ -2,6 +2,8 @@
 title: Operation-indexed classes: Monoid<A>(op) — the structure names its operation
 status: open
 labels: [frontend,elaboration,design,traits,stdlib]
+area: language
+milestone: [math-classes]
 created: 2026-08-07
 updated: 2026-08-09
 ---

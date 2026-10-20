@@ -2,6 +2,7 @@
 title: Derive injectivity and congruence lemmas for records and constructors
 status: open
 labels: [stdlib,elaboration,inductives,proofs,ergonomics]
+area: tactics
 created: 2026-09-18
 updated: 2026-09-18
 ---

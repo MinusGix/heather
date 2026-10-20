@@ -2,6 +2,7 @@
 title: "Lint imports that contribute nothing to a module"
 status: open
 labels: [tooling,lint,frontend,modules,ergonomics]
+area: language
 created: 2026-08-22
 updated: 2026-09-16
 ---

@@ -2,6 +2,7 @@
 title: bv_omega costs several times the hand proofs it replaces
 status: open
 labels: [performance,proofs,bitvec,omega]
+area: tactics
 created: 2026-09-26
 updated: 2026-09-28
 ---

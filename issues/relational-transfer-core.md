@@ -2,6 +2,7 @@
 title: Build a heterogeneous relational transfer core
 status: open
 labels: [stdlib,relations,transfer,design]
+area: mathematics
 created: 2026-09-04
 updated: 2026-09-24
 ---

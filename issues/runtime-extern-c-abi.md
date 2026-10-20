@@ -2,6 +2,7 @@
 title: Define explicit C ABI imports and runtime exports
 status: open
 labels: [compiler,abi,design]
+area: heather-in-heather
 created: 2026-09-07
 updated: 2026-09-07
 ---

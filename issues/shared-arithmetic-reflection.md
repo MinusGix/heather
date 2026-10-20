@@ -2,6 +2,7 @@
 title: Expose shared arithmetic reflection for future solvers
 status: open
 labels: [proofs,elaboration,arithmetic,design]
+area: tactics
 created: 2026-08-27
 updated: 2026-08-27
 ---

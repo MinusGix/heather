@@ -2,6 +2,7 @@
 title: "Make lib documentation concise, current, and API-facing"
 status: open
 labels: [stdlib,docs,cleanup]
+area: language
 created: 2026-08-20
 updated: 2026-08-20
 ---

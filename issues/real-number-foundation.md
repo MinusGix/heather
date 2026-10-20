@@ -2,6 +2,7 @@
 title: "Research a constructive core and classical interface for real numbers"
 status: open
 labels: [stdlib,mathematics,research,design]
+area: mathematics
 created: 2026-08-20
 updated: 2026-09-02
 ---

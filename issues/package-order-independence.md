@@ -2,6 +2,7 @@
 title: Order-independent declarations within a package
 status: open
 labels: [frontend,elaboration,modules,parallelism,caching,design]
+area: language
 created: 2026-09-22
 updated: 2026-09-22
 ---

@@ -2,6 +2,7 @@
 title: Extend the kernel with Id and a small fixed former set
 status: open
 labels: [kernel,delam,design]
+area: kernel
 created: 2026-07-23
 updated: 2026-07-26
 ---

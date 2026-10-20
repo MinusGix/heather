@@ -2,6 +2,7 @@
 title: Refinement between open components: CompCertO-style language interfaces
 status: open
 labels: [compiler,abi,semantics,design,research]
+area: heather-in-heather
 created: 2026-09-24
 updated: 2026-09-24
 ---
