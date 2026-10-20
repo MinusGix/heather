@@ -57,7 +57,7 @@ use crate::rec;
 use crate::reduce::{step_term, step_term_delta, step_type, step_type_delta, OutOfFuel};
 use crate::subst::{GlobalEntry, GlobalSubst};
 use crate::term::{
-    wf_step_telescope, Branches, GlobalVar, LocalCtx, LocalSubst, LocalVar, Motives, Term, Type,
+    iwf_children_ty, iwf_motive_scrut_ty, iwf_step_telescope, wf_step_telescope, Branches, IWfSig, GlobalVar, LocalCtx, LocalSubst, LocalVar, Motives, Term, Type,
 };
 
 use super::{Conv, ConvError, Env, R, NC};
@@ -93,6 +93,17 @@ pub(super) enum TyView<'a, 'v, D: Dom<'v>> {
     Fin { len: D::TmC },
     /// `fam` is under one binder, `i : Fin len`.
     DVec { level: &'a Level, len: D::TmC, fam: D::TyC },
+    /// `arity` and `out` are under `x : S`, `child` under `x, i : Fin n`.
+    IWf {
+        level: &'a Level,
+        idx_level: &'a Level,
+        idx: D::TyC,
+        shape: D::TyC,
+        arity: D::TmC,
+        out: D::TmC,
+        child: D::TmC,
+        index: D::TmC,
+    },
     UPi { num_vars: u32, level: &'a Level, body: D::TyC },
     CtxPi { level: &'a Level, body: D::TyC },
     TyPi { ctx: &'a LocalCtx, arg_level: &'a Level, body_level: &'a Level, body: D::TyC },
@@ -145,6 +156,7 @@ pub(super) enum TmView<'a, 'v, D: Dom<'v>> {
     Inr { val: D::TmC },
     Sup { label: D::TmC, children: D::TmC },
     Supf { label: D::TmC, children: D::TmC },
+    Supi { label: D::TmC, children: D::TmC },
     BoxTy(&'a Rc<Type>),
     BoxTm(&'a Rc<Term>),
 
@@ -189,6 +201,21 @@ pub(super) enum TmView<'a, 'v, D: Dom<'v>> {
         arity: D::TmC,
         motive: D::TyC,
         step: D::TmC,
+        scrut: D::TmC,
+    },
+    /// The motive is under `j, z`, the step under `a, cs, ih`.
+    ElimIWf {
+        level: &'a Level,
+        idx_level: &'a Level,
+        motive_level: &'a Level,
+        idx: D::TyC,
+        shape: D::TyC,
+        arity: D::TmC,
+        out: D::TmC,
+        child: D::TmC,
+        motive: D::TyC,
+        step: D::TmC,
+        index: D::TmC,
         scrut: D::TmC,
     },
     J {
@@ -287,6 +314,7 @@ impl<'v, D: Dom<'v>> TmView<'_, 'v, D> {
                 | TmView::Case { .. }
                 | TmView::ElimW { .. }
                 | TmView::ElimWf { .. }
+                | TmView::ElimIWf { .. }
                 | TmView::J { .. }
                 | TmView::Transp { .. }
                 | TmView::App { .. }
@@ -332,6 +360,18 @@ impl<'v, D: Dom<'v>> TmView<'_, 'v, D> {
     pub(super) fn is_nat_data(&self) -> bool {
         matches!(self, TmView::Zero | TmView::Succ(_))
     }
+}
+
+/// An `IWf` signature as the views carry it (see `term::IWfSig`): the
+/// components the elimination's telescope is built from.
+pub(super) struct IWfSigC<'a, 'v, D: Dom<'v>> {
+    pub level: &'a Level,
+    pub idx_level: &'a Level,
+    pub idx: &'a D::TyC,
+    pub shape: &'a D::TyC,
+    pub arity: &'a D::TmC,
+    pub out: &'a D::TmC,
+    pub child: &'a D::TmC,
 }
 
 // ---------------------------------------------------------------------------
@@ -815,6 +855,26 @@ pub(super) trait Dom<'v>: Sized {
         arity: &Self::TmC,
         motive: &Self::TyC,
     ) -> R<(Self::TyC, Self::TyC, Self::TyC)>;
+    /// The `elim_IWf` telescope of ch. 04's extension, from the shared
+    /// schemas (`term::iwf_motive_scrut_ty`, `term::iwf_step_telescope`):
+    /// the motive's scrutinee type `IWf(…)(j)` in `(Γ, j)`, and the step's
+    /// `(cs, ih, s)` in `(Γ, a)`, `(Γ, a, cs)`, `(Γ, a, cs, ih)`.
+    #[allow(clippy::too_many_arguments)]
+    fn iwf_telescope(
+        cv: &mut Conv<'v, Self>,
+        env: &Env<'v>,
+        sig: &IWfSigC<'_, 'v, Self>,
+        motive_level: &Level,
+        motive: &Self::TyC,
+    ) -> R<(Self::TyC, Self::TyC, Self::TyC, Self::TyC)>;
+    /// The children's type `DVec^{l⊔li}(n[a/x]; k. IWf(…)(c[a/x, k/i]))` of a
+    /// `sup_i(a; _)` at the weak head `IWf` type `w`.
+    fn iwf_children(
+        cv: &mut Conv<'v, Self>,
+        env: &Env<'v>,
+        w: &Self::Ty,
+        label: &Self::TmC,
+    ) -> R<Self::TyC>;
     /// `M_Typ[l/ℓ, Δ/g, t/x_T]` — the code type recursor's conclusion.
     #[allow(clippy::too_many_arguments)]
     fn inst_ty_motive(
@@ -1039,6 +1099,16 @@ impl<'v> Dom<'v> for Syn {
             Type::DVec { level, len, fam } => {
                 TyView::DVec { level, len: Rc::clone(len), fam: Rc::clone(fam) }
             }
+            Type::IWf { sig, index } => TyView::IWf {
+                level: &sig.level,
+                idx_level: &sig.idx_level,
+                idx: Rc::clone(&sig.idx),
+                shape: Rc::clone(&sig.shape),
+                arity: Rc::clone(&sig.arity),
+                out: Rc::clone(&sig.out),
+                child: Rc::clone(&sig.child),
+                index: Rc::clone(index),
+            },
             Type::UPi { num_vars, level, body } => {
                 TyView::UPi { num_vars: *num_vars, level, body: Rc::clone(body) }
             }
@@ -1118,6 +1188,9 @@ impl<'v> Dom<'v> for Syn {
             }
             Term::Supf { label, children, .. } => {
                 TmView::Supf { label: Rc::clone(label), children: Rc::clone(children) }
+            }
+            Term::Supi { label, children, .. } => {
+                TmView::Supi { label: Rc::clone(label), children: Rc::clone(children) }
             }
             Term::BoxTy(t) => TmView::BoxTy(t),
             Term::BoxTm(t) => TmView::BoxTm(t),
@@ -1203,6 +1276,20 @@ impl<'v> Dom<'v> for Syn {
                     scrut: Rc::clone(scrut),
                 }
             }
+            Term::ElimIWf { sig, motive_level, motive, step, index, scrut } => TmView::ElimIWf {
+                level: &sig.level,
+                idx_level: &sig.idx_level,
+                motive_level,
+                idx: Rc::clone(&sig.idx),
+                shape: Rc::clone(&sig.shape),
+                arity: Rc::clone(&sig.arity),
+                out: Rc::clone(&sig.out),
+                child: Rc::clone(&sig.child),
+                motive: Rc::clone(motive),
+                step: Rc::clone(step),
+                index: Rc::clone(index),
+                scrut: Rc::clone(scrut),
+            },
             Term::J { ty_level, motive_level, ty, lhs, motive, case, rhs, proof } => TmView::J {
                 ty_level,
                 motive_level,
@@ -1939,6 +2026,39 @@ impl<'v> Dom<'v> for Syn {
         let (cs, ih, step) =
             wf_step_telescope(&env.gamma, level, motive_level, shape, arity, motive);
         Ok((Rc::new(cs), Rc::new(ih), Rc::new(step)))
+    }
+
+    fn iwf_telescope(
+        _cv: &mut Conv<'v, Self>,
+        _env: &Env<'v>,
+        sig: &IWfSigC<'_, 'v, Self>,
+        motive_level: &Level,
+        motive: &Rc<Type>,
+    ) -> R<(Rc<Type>, Rc<Type>, Rc<Type>, Rc<Type>)> {
+        let sig = Rc::new(IWfSig {
+            level: sig.level.clone(),
+            idx_level: sig.idx_level.clone(),
+            idx: Rc::clone(sig.idx),
+            shape: Rc::clone(sig.shape),
+            arity: Rc::clone(sig.arity),
+            out: Rc::clone(sig.out),
+            child: Rc::clone(sig.child),
+        });
+        let mot = iwf_motive_scrut_ty(&sig);
+        let (cs, ih, step) = iwf_step_telescope(&sig, motive_level, motive);
+        Ok((Rc::new(mot), Rc::new(cs), Rc::new(ih), Rc::new(step)))
+    }
+
+    fn iwf_children(
+        _cv: &mut Conv<'v, Self>,
+        _env: &Env<'v>,
+        w: &Type,
+        label: &Rc<Term>,
+    ) -> R<Rc<Type>> {
+        let Type::IWf { sig, .. } = w else {
+            return Err(NC);
+        };
+        Ok(Rc::new(iwf_children_ty(sig, label)))
     }
 
     #[inline]

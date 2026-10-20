@@ -1,7 +1,8 @@
 # The `IWf` former: finitary inductive families without a stored equation
 
 Status: **rule set (§1–§6) reviewed and frozen, 2026-10-13**; `DVec` and
-`dnth` in the kernel (§13 step 2, 2026-10-17), `IWf` not yet. §7–§13 stay open where §12 says so: they are the generator's, not the
+`dnth` in the kernel (§13 step 2, 2026-10-17), `IWf`/`sup_i`/`elim_IWf`
+in the kernel (§13 step 3, 2026-10-20); the codes (step 4) not yet. §7–§13 stay open where §12 says so: they are the generator's, not the
 kernel's. The review's edits are §1's layer paragraph, §1.1's and §10's
 neutral-length caveat, and §3's note on the ih's type. It is
 [[indexed-families]]'s route 4, promoted, and extended with an output-index
@@ -466,8 +467,13 @@ a typing or reduction rule.
    `Type::DVec`, its two reductions in both reducers, its neutral
    congruence, and `term::dnth` transcribed from heather-coq's `tmDNth`.
    Gated to layers p and m (`Tc::computing_layer`) until step 4.
-3. `IWf`/`sup_i`/`elim_IWf`, with β on open data at a computed index as
-   the headline test, and value equality with no irrelevance arm.
+3. ~~`IWf`/`sup_i`/`elim_IWf`, with β on open data at a computed index as
+   the headline test, and value equality with no irrelevance arm.~~ Done
+   2026-10-20 (`crates/kernel/tests/iwf.rs`). The three in both reducers,
+   typing, both conversion domains, with the neutral `elim_IWf` arm typed
+   as heather-coq's (scrutinees, motive level, motive, step; not the
+   signature, the index or the ih types). F1–F3 are hand-built and
+   type-checked there. Gated to layers p and m until step 4.
 4. The rec.rs round (§6).
 5. The ch. 07 round (§9).
 6. The generator: route 2b's declarations re-lowered, F1–F3 lifted,

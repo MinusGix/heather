@@ -43,7 +43,7 @@ theorem positive_add_respects(x, x2: PositiveNat, hx: SameValue(x, x2),
         j(hy, λ m h => x.value + y.value = x.value + m, refl))
 }
 
-instance Semigroup<PositiveNat>(SameValue, positive_add) {
+instance SemigroupRel<PositiveNat>(SameValue, positive_add) {
     rel_refl := λ x => refl,
     rel_sym := λ x y h => sym(h),
     rel_trans := λ x y z hxy hyz => trans(hxy, hyz),
@@ -62,7 +62,7 @@ theorem twice_value(x: PositiveNat): twice(x).value = x.value + x.value
 { refl }
 
 // An ordinary semigroup client can rewrite inside another operation.
-theorem reassociate_inside<A: Semigroup(≈, ∙)>(a, b, c, d: A):
+theorem reassociate_inside<A: SemigroupRel(≈, ∙)>(a, b, c, d: A):
     ((a ∙ b) ∙ c) ∙ d ≈ (a ∙ (b ∙ c)) ∙ d
 { rel_cong(A.assoc(a, b, c)) }
 

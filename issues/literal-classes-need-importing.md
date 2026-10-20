@@ -3,7 +3,7 @@ title: Byte literals need algebra, char and byte imported
 status: open
 labels: [elaboration,surface-syntax,ergonomics]
 created: 2026-10-02
-updated: 2026-10-02
+updated: 2026-10-20
 ---
 
 To write `10` or `'\n'` at a byte, a program needs `import algebra; import
@@ -25,3 +25,7 @@ Wanted: a literal at a carrier resolves its class whenever an instance for that
 carrier exists in the session, whether or not the class name is in scope, and
 a character literal's intro does not need `Char` in the importer's scope. Then
 a program writes `import bitvec;` and nothing else for byte literals.
+
+## Log
+
+- 2026-10-20: `rat` and `creal` now `export algebra::{Numeral}` so their clients write `0` without `import algebra` ([[rat-numerals-and-semigroup-clash]]): a per-carrier workaround; `bitvec` could do the same until this lands.

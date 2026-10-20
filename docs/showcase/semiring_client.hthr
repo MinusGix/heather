@@ -1,0 +1,88 @@
+// One theory, three carriers: the semiring and ring layers
+// (lib/std/semiring.hthr, issues/semiring-ring-structure-api.md) at `Nat`
+// and `Int` under identity and at `Rat` under `≈`.
+//
+// Each generic theorem is proved once, at the weakest layer it needs. At
+// `Nat` and `Int`, `≈` designates `RelId`, so the same theorem is stated by
+// its caller with `=`; at `Rat` it stays `≈`, because unreduced fractions
+// are equal only up to cross-multiplication.
+
+import logic;
+import nat;
+import int;
+import list;
+import relation;
+import relation_props;
+import algebra_rel;
+import semiring;
+import rat;
+
+// ---------------------------------------------------------------------------
+// A client's own generic theorem: the square of a sum, at any commutative
+// semiring. Distributivity multiplies it out; the product's commutativity,
+// reached through the `commutative` tag, turns `b * a` round.
+theorem square_of_sum<A: CommSemiring(≈, +, *)>(a, b: A):
+    (a + b) * (a + b) ≈ (a * a + a * b) + (a * b + b * b)
+{
+    calc {
+        (a + b) * (a + b)
+            ≈ (a * a + a * b) + (b * a + b * b) := Semiring::mul_add_add(a, b, a, b),
+            ≈ (a * a + a * b) + (a * b + b * b) := rel_cong(A.commutative.comm(b, a)),
+    }
+}
+
+theorem nat_square_of_sum(a, b: Nat): (a + b) * (a + b) = (a * a + a * b) + (a * b + b * b) {
+    square_of_sum(a, b)
+}
+
+theorem int_square_of_sum(a, b: Int): (a + b) * (a + b) = (a * a + a * b) + (a * b + b * b) {
+    square_of_sum(a, b)
+}
+
+theorem rat_square_of_sum(a, b: Rat): (a + b) * (a + b) ≈ (a * a + a * b) + (a * b + b * b) {
+    square_of_sum(a, b)
+}
+
+// ---------------------------------------------------------------------------
+// Signs of products: a ring's, from the uniqueness of additive inverses.
+
+theorem int_neg_mul_neg(x, y: Int): -x * -y = x * y { Ring::neg_mul_neg(x, y) }
+
+theorem rat_neg_mul_neg(x, y: Rat): -x * -y ≈ x * y { Ring::neg_mul_neg(x, y) }
+
+// ---------------------------------------------------------------------------
+// Finite sums and products. The fold is `MonoidRel`'s, at `+` or at `*`; a
+// semiring's product reaches it through the `multiplicative` tag.
+
+fn sum(xs: List<Nat>) → Nat { MonoidRel::fold(Nat::add, xs) }
+
+fn product(xs: List<Nat>) → Nat { MonoidRel::fold(Nat::mul, xs) }
+
+theorem product_example(): product([2, 3, 4]) = 24 { refl }
+
+theorem sum_append(xs, ys: List<Nat>): sum(xs ++ ys) = sum(xs) + sum(ys) { MonoidRel::fold_append(Nat::add, xs, ys) }
+
+theorem product_append(xs, ys: List<Nat>): product(xs ++ ys) = product(xs) * product(ys) {
+    MonoidRel::fold_append(Nat::mul, xs, ys)
+}
+
+// A constant factor comes out of a sum: x · Σ y = Σ x·y.
+theorem scale_sum(x: Nat, ys: List<Nat>): x * sum(ys) = sum(ys.map(λ y => x * y)) { Semiring::mul_sum_l(x, ys) }
+
+// Σ (f + g) = Σ f + Σ g, and the same law at the product: Π (f · g) = Π f · Π g.
+theorem sum_of_sums(xs: List<Nat>, f, g: Nat → Nat): sum(xs.map(λ x => f(x) + g(x))) = sum(xs.map(f)) + sum(xs.map(g)) {
+    CommMonoidRel::fold_map_op(RelId, Nat::add, xs, f, g)
+}
+
+theorem product_of_products(xs: List<Nat>, f, g: Nat → Nat):
+    product(xs.map(λ x => f(x) * g(x))) = product(xs.map(f)) * product(xs.map(g))
+{
+    CommMonoidRel::fold_map_op(RelId, Nat::mul, xs, f, g)
+}
+
+// The same product law, generically: a commutative semiring's product.
+theorem product_of_products_at<A: CommSemiring(≈, +, *), B>(xs: List<B>, f, g: B → A):
+    MonoidRel::fold(*, xs.map(λ x => f(x) * g(x))) ≈ MonoidRel::fold(*, xs.map(f)) * MonoidRel::fold(*, xs.map(g))
+{
+    CommMonoidRel::fold_map_op(≈, *, xs, f, g)
+}

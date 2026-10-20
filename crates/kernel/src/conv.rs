@@ -86,7 +86,7 @@ use crate::value::ValueMetrics;
 
 mod dom;
 
-use dom::{Dom, Syn, TmView, TyView, Values};
+use dom::{Dom, IWfSigC, Syn, TmView, TyView, Values};
 
 /// Why a convertibility check did not succeed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -714,7 +714,8 @@ fn delta_head_in(t: &Term, defs: Defs<'_>, eliminated: bool) -> Option<GlobalVar
         | Term::ElimEmpty { scrut, .. }
         | Term::Case { scrut, .. }
         | Term::ElimW { scrut, .. }
-        | Term::ElimWf { scrut, .. } => delta_head_in(scrut, defs, true),
+        | Term::ElimWf { scrut, .. }
+        | Term::ElimIWf { scrut, .. } => delta_head_in(scrut, defs, true),
         Term::ElimSEmpty { scrut, .. }
         | Term::LetBoxTy { scrut, .. }
         | Term::LetBoxTm { scrut, .. }
@@ -1173,6 +1174,44 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                 self.ty(env, s1, s2, l1)?;
                 let e_x = D::push_entry(env, s1, l1);
                 self.tm_at_nat(&e_x, n1, n2)
+            }
+            // IWf congruence (extension; docs/iwf-former-design.md §5):
+            // structural, every component, index included, with levels equal.
+            // The components under the shape's binder are compared in
+            // (Γ, x : S), the child index in (Γ, x : S, i : Fin n).
+            (
+                TyView::IWf {
+                    level: l1,
+                    idx_level: li1,
+                    idx: x1,
+                    shape: s1,
+                    arity: n1,
+                    out: o1,
+                    child: c1,
+                    index: m1,
+                },
+                TyView::IWf {
+                    level: l2,
+                    idx_level: li2,
+                    idx: x2,
+                    shape: s2,
+                    arity: n2,
+                    out: o2,
+                    child: c2,
+                    index: m2,
+                },
+            ) => {
+                self.lev_eq(l1, l2)?;
+                self.lev_eq(li1, li2)?;
+                self.ty(env, x1, x2, li1)?;
+                self.ty(env, s1, s2, l1)?;
+                let e_x = D::push_entry(env, s1, l1);
+                self.tm_at_nat(&e_x, n1, n2)?;
+                self.tm(&e_x, o1, o2, &D::weaken_ty(env, x1, 1), li1)?;
+                let fin = D::fin(self, &e_x, n1)?;
+                let e_xi = D::push_entry(&e_x, &fin, &Level::Zero);
+                self.tm(&e_xi, c1, c2, &D::weaken_ty(env, x1, 2), li1)?;
+                self.tm(env, m1, m2, x1, li1)
             }
             // W congruence (extension; mirrors Π/Σ).
             (
@@ -1945,6 +1984,28 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                     _ => self.tm_nee(env, a, b).map(drop),
                 }
             }
+            // IWf (extension; docs/iwf-former-design.md §5): positive, like
+            // Wf, and `sup_i` stores nothing but its shape and its children —
+            // the constructor is at its output index — so two of them are
+            // equal exactly when their visible data is: the shapes, then the
+            // children at the left shape's `DVec`, which reduces to Σ/Unit and
+            // takes their η. No irrelevance arm is involved. The annotations
+            // are forced by the type, as `sup_f`'s (heather-coq `actmnf_supi`).
+            TyView::IWf { level, idx_level, shape, .. } => {
+                match (&D::view_tm(self, env, a), &D::view_tm(self, env, b)) {
+                    (
+                        TmView::Supi { label: a1, children: c1 },
+                        TmView::Supi { label: a2, children: c2 },
+                    ) => {
+                        self.tm(env, a1, a2, shape, level)?;
+                        let cs_ty = D::iwf_children(self, env, w, a1)?;
+                        let fl = Level::join((*level).clone(), (*idx_level).clone());
+                        self.tm(env, c1, c2, &cs_ty, &fl)
+                    }
+                    (TmView::Supi { .. }, _) | (_, TmView::Supi { .. }) => Err(NC),
+                    _ => self.tm_nee(env, a, b).map(drop),
+                }
+            }
             // Neutral type: only neutral terms inhabit it. `Vec`/`Fin` reach
             // here only at a neutral length (a canonical one reduces to
             // Σ/Unit resp. Sum/Empty first, and those arms then supply the
@@ -2265,6 +2326,60 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                 self.tm(&e_step, st1, st2, &step_ty, ml1)?;
                 self.tm_nee_c(env, n1, n2)?; // inferred Wf: forces S, n
                 Ok((D::inst_ty(self, env, env, m1, std::slice::from_ref(n1))?, (*ml1).clone()))
+            }
+            // elim_IWf neutral congruence (extension), **typed** from the
+            // start (heather-coq ELIM_CONGRUENCE.md, `actmne_elimIWf`): the
+            // motive's level, the motive and the step, both in the *left*
+            // elimination's telescope, then the scrutinees as neutrals, last
+            // as in the other eliminators' arms (a scrutinee-first order ran
+            // a certificate test out of fuel there, heather#80). Never the
+            // signature `I`/`S`/`n`/`o`/`c`, its two levels or the index:
+            // the scrutinees' convertibility at their annotated types forces
+            // them, levels included (level uniqueness plus the former's
+            // injectivity). Nor the induction hypotheses' types, which equal
+            // signatures and equal motives force too (heather-coq#24,
+            // `IWf_ihty_eq`). The motive's level stays: it is the one premise
+            // the algorithm's soundness argument needs.
+            (
+                TmView::ElimIWf {
+                    level: l1,
+                    idx_level: li1,
+                    motive_level: ml1,
+                    idx: x1,
+                    shape: s1,
+                    arity: k1,
+                    out: o1,
+                    child: c1,
+                    motive: m1,
+                    step: st1,
+                    index: i1,
+                    scrut: n1,
+                },
+                TmView::ElimIWf { motive_level: ml2, motive: m2, step: st2, scrut: n2, .. },
+            ) => {
+                self.lev_eq(ml1, ml2)?;
+                let sig = IWfSigC {
+                    level: l1,
+                    idx_level: li1,
+                    idx: x1,
+                    shape: s1,
+                    arity: k1,
+                    out: o1,
+                    child: c1,
+                };
+                let (mot, cs_ty, ih_ty, step_ty) = D::iwf_telescope(self, env, &sig, ml1, m1)?;
+                let fl = Level::join((*l1).clone(), (*li1).clone());
+                // M in (Γ, j : I, z : IWf(…)(j)).
+                let e_j = D::push_entry(env, x1, li1);
+                let e_jz = D::push_entry(&e_j, &mot, &fl);
+                self.ty(&e_jz, m1, m2, ml1)?;
+                // The step in (Γ, a : S, cs, ih).
+                let e_a = D::push_entry(env, s1, l1);
+                let e_cs = D::push_entry(&e_a, &cs_ty, &fl);
+                let e_step = D::push_entry(&e_cs, &ih_ty, ml1);
+                self.tm(&e_step, st1, st2, &step_ty, ml1)?;
+                self.tm_nee_c(env, n1, n2)?; // inferred IWf: forced, not read
+                Ok((D::inst_ty(self, env, env, m1, &[i1.clone(), n1.clone()])?, (*ml1).clone()))
             }
             // J neutral congruence (extension beyond ch. 04); typed like
             // Case — the motive's level, the motive, the refl case and then

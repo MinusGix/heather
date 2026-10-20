@@ -1,9 +1,9 @@
 ---
 title: A lemma's own name makes a same-named dot call on another carrier ambiguous
-status: open
+status: closed
 labels: [frontend,elaboration,ergonomics]
 created: 2026-10-15
-updated: 2026-10-15
+updated: 2026-10-20
 ---
 
 Found moving `lib/std/rat.hthr` to implicit endpoints (PR #42, 2026-10-15).
@@ -43,3 +43,7 @@ Possible fixes, to decide:
   qualified `Int::mul_le_mono_r`/`Int::mul_lt_mono_r` calls.
 - A real ambiguity (an ambient function whose subject could take the receiver)
   is still reported.
+
+## Log
+
+- 2026-10-20: Fixed: the subject test widens from "known carrier differs" to "every type the subject's type can reduce to is disjoint from the receiver's carrier" (`subject_excludes`, docs/receiver-member-resolution-design.md §2). A closed definition is read at its own parameters, `case`/`elim_Nat` stuck on a neutral are read branch by branch (an `elim_Nat` recursive result adds nothing), Π/universe/equation/Unit/Empty are disjoint from every carrier; anything else declines. Applies to the self-reference, committed globals and locals alike. `rat.hthr` spells both main scaling calls as dot calls (the two at a literal `0` receiver stay qualified, since a bare `0` receiver defaults to `Nat`); `type_members` pins three positives and two negative controls (a family with a `Nat` branch, a local family `F: Nat -> Type`).

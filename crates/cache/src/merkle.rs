@@ -82,7 +82,7 @@
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
 use heather_kernel::term::{
-    Branches, CtxBase, CtxEntry, GlobalBinding, LocalCtx, LocalSubst, Motives, SubstTail, Term,
+    Branches, CtxBase, CtxEntry, GlobalBinding, IWfSig, LocalCtx, LocalSubst, Motives, SubstTail, Term,
     Type,
 };
 
@@ -176,6 +176,7 @@ mod tag {
     pub const T_CODETM: u8 = 0x34;
     pub const T_SQUASH: u8 = 0x35;
     pub const T_DVEC: u8 = 0x36;
+    pub const T_IWF: u8 = 0x37;
 
     // terms
     pub const E_VAR: u8 = 0x40;
@@ -246,6 +247,8 @@ mod tag {
     /// A literal past `u64` (docs/wide-numerals-design.md): its own tag, so a
     /// literal that fits keeps the hash it always had.
     pub const E_NATLIT_WIDE: u8 = 0x7c;
+    pub const E_SUPI: u8 = 0x7d;
+    pub const E_ELIMIWF: u8 = 0x7e;
 }
 
 /// The walk in progress: a SHA-256 state, a small staging buffer, and the Ψ
@@ -439,6 +442,21 @@ impl<'a> Walk<'a> {
         }
     }
 
+    /// An `IWf` signature's two levels, then its components: `elim_IWf`
+    /// hashes its motive level between the two, as the flat variant did.
+    fn iwf_sig_levels(&mut self, sig: &IWfSig) {
+        self.level(&sig.level);
+        self.level(&sig.idx_level);
+    }
+
+    fn iwf_sig_parts(&mut self, sig: &IWfSig) {
+        self.ty(&sig.idx);
+        self.ty(&sig.shape);
+        self.term(&sig.arity);
+        self.term(&sig.out);
+        self.term(&sig.child);
+    }
+
     fn ty(&mut self, t: &Type) {
         match t {
             Type::Nat => self.tag(tag::T_NAT),
@@ -537,6 +555,12 @@ impl<'a> Walk<'a> {
                 self.level(level);
                 self.term(len);
                 self.ty(fam);
+            }
+            Type::IWf { sig, index } => {
+                self.tag(tag::T_IWF);
+                self.iwf_sig_levels(sig);
+                self.iwf_sig_parts(sig);
+                self.term(index);
             }
             // Reference site 2 of 5.
             Type::GlobalTy { var, subst } => {
@@ -892,6 +916,23 @@ impl<'a> Walk<'a> {
                 self.term(arity);
                 self.ty(motive);
                 self.term(step);
+                self.term(scrut);
+            }
+            Term::Supi { sig, label, children } => {
+                self.tag(tag::E_SUPI);
+                self.iwf_sig_levels(sig);
+                self.iwf_sig_parts(sig);
+                self.term(label);
+                self.term(children);
+            }
+            Term::ElimIWf { sig, motive_level, motive, step, index, scrut } => {
+                self.tag(tag::E_ELIMIWF);
+                self.iwf_sig_levels(sig);
+                self.level(motive_level);
+                self.iwf_sig_parts(sig);
+                self.ty(motive);
+                self.term(step);
+                self.term(index);
                 self.term(scrut);
             }
             Term::Lam { dom_level, cod_level, dom, body } => {

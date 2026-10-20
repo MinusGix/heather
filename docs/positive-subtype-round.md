@@ -68,9 +68,10 @@ theorem positive_add_assoc(x, y, z: PositiveNat):
 
 The record's computation rules make this proof fit. No comparison of the
 closure proofs is needed. Compatibility of addition is also checked, so the
-example registers `Semigroup<PositiveNat>(SameValue, positive_add)`.
+example registers `SemigroupRel<PositiveNat>(SameValue, positive_add)`.
 
-The relation-indexed `Semigroup` in `algebra_rel` composes equivalence,
+The relation-indexed `SemigroupRel` in `algebra_rel` (named `Semigroup` until
+issues/rat-numerals-and-semigroup-clash.md) composes equivalence,
 operation compatibility, and associativity. `Mergeable` now extends this
 composition with commutativity and idempotence. The older identity-based
 `algebra::Semigroup` remains a separate interface.

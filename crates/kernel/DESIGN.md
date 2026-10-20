@@ -194,6 +194,38 @@ checks them here, at an open length). `DVec` has **no code yet**: it is
 admitted at layers p and m only (`Tc::computing_layer`) until the rec.rs
 round gives it `TmDVec` and its branches, as `Vec` was before its phase 3.
 
+`IWf^{l,li}(I; x:S. n; x. o; x i. c)(m)` (2026-10-20,
+`docs/iwf-former-design.md` §13 step 3) is `Wf` with an index: `sup_i(a;
+cs)` is at its output index `o[a/x]`, its children a `DVec^{l ⊔ li}(n[a];
+k. IWf(…)(c[a, k]))`, and nothing else is stored, so there is no equation,
+no `transp` and no irrelevance arm. The family level is `l ⊔ li`.
+`elim_IWf`'s motive binds the index and the scrutinee, its step `a, cs, ih`
+with `ih : Π(i : Fin n[a]). M[c[a,i], dnth(…; cs; i)]`, and β fires at a
+`sup_i` whatever the index (heather-coq `red_elimIWf_supi`): the headline,
+β on open data at a computed index, is `tests/iwf.rs`. Every schema is
+built once in `term.rs` around `IWfSig` (`iwf_children_ty`,
+`iwf_step_telescope`, `iwf_ih`), which typing, both reducers and conversion
+share. The signature is also how the six variants (`Type::IWf`,
+`Term::Supi`, `Term::ElimIWf` and their values) carry it, behind one
+pointer: flat, its two levels and five components made `Type` and `VTy` a
+third larger and `Term` and `Elim` larger too, and since the checker's
+recursion holds them in every frame, a 1000-deep constructor value
+overflowed the 8 MiB stack (`size_tests`, and the value-size test, now pin
+the four). The one new substitution operation is `inst_top_above`
+(`t[s/x]` under the position binder that the child index keeps). The
+evaluator's β takes the closures' syntax apart, as `DVec`'s tail does,
+and builds the ih as a `Val::Lam` whose body is the eliminator at
+`dnth(…; cs; i)`. Two values compare by their label (at the shape) and
+their children (at the children's `DVec`, so Σ- and Unit-η come through
+its reduct); the annotations are the type's. The neutral `elim_IWf` arm is
+typed from the start: the motive's level, the motive in `(Γ, j : I, z :
+IWf(…)(j))` and the step in the left telescope, then the scrutinees as
+neutrals, whose inferred `IWf` forces the signature and the index.
+It does not compare the ih types either: equal signatures and motives
+force them (heather-coq `ELIM_CONGRUENCE.md`, `Validity/IWfIhEq.v`,
+MinusGix/heather-coq#24). Like `DVec`, `IWf` has **no code yet** and is
+admitted at layers p and m only until the rec.rs round.
+
 `sEq^l(I; a; b)` (2026-07-28) is **strict equality** — `Id` minus proof
 relevance plus strictness, the SProp round's customer former
 (`docs/sprop-design.md`; the sort itself dissolved into per-former
@@ -486,8 +518,10 @@ paper too).
   soundness, completeness and decidability of the algorithm with these
   premises, no axioms). On a Wf-lowered inductive the skipped shape is the
   sum-of-Σs, the size of the declaration, at every meeting of two matches.
-  `elim_Nat` had nothing forced to drop; `transp` has no scrutinee (its
-  proof is irrelevant), so it still compares every annotation.
+  `elim_IWf`'s arm was written the same way when it landed, its induction
+  hypotheses' types skipped as well (heather-coq#24). `elim_Nat` had
+  nothing forced to drop; `transp` has no scrutinee (its proof is
+  irrelevant), so it still compares every annotation.
 - **Typing a spine is one walk** (2026-09-26,
   `issues/application-spine-substitution-cost.md`): `app@(…app@(f; a₁)…; aₖ)`
   holds the arguments while `f`'s type stays a syntactic Π telescope, checks

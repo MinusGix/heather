@@ -46,6 +46,7 @@ const MODULES: &[(&str, &str)] = &[
         "ordered_field",
         include_str!("../../../lib/std/ordered_field.hthr"),
     ),
+    ("semiring", include_str!("../../../lib/std/semiring.hthr")),
     ("rat", include_str!("../../../lib/std/rat.hthr")),
     ("creal", include_str!("../../../lib/std/creal.hthr")),
 ];
@@ -174,12 +175,12 @@ fn the_layers_are_there_at_both_carriers() {
             let g = CReal::OrderedField(CReal::Same, CReal::Lt, CReal::Le, CReal::add, CReal::mul);
             0
         }
-        theorem rat_zero(): Rat::OrderedField(Rat::Same, Rat::Lt, Rat::Le, Rat::add, Rat::mul).zero = Rat::zero() { refl }
+        theorem rat_zero(): Rat::OrderedField(Rat::Same, Rat::Lt, Rat::Le, Rat::add, Rat::mul).zero = 0 { refl }
         theorem rat_neg(x: Rat): Rat::OrderedField(Rat::Same, Rat::Lt, Rat::Le, Rat::add, Rat::mul).neg(x) = -x { refl }
-        theorem rat_inv(x: Rat, h: x.Apart(Rat::zero())):
+        theorem rat_inv(x: Rat, h: x.Apart(0)):
             Rat::OrderedField(Rat::Same, Rat::Lt, Rat::Le, Rat::add, Rat::mul).inv(x, h) = x.inv(h := h) { refl }
-        theorem creal_one(): CReal::OrderedField(CReal::Same, CReal::Lt, CReal::Le, CReal::add, CReal::mul).one = CReal::one() { refl }
-        theorem creal_inv(x: CReal, h: x.Apart(CReal::zero())):
+        theorem creal_one(): CReal::OrderedField(CReal::Same, CReal::Lt, CReal::Le, CReal::add, CReal::mul).one = 1 { refl }
+        theorem creal_inv(x: CReal, h: x.Apart(0)):
             CReal::OrderedField(CReal::Same, CReal::Lt, CReal::Le, CReal::add, CReal::mul).inv(x, h) = x.inv(h := h) { refl }
         // `≤` at the reals is Bishop's by definition; at the rationals it is
         // the cross-multiplied one, reached through the instance's laws.
