@@ -1438,6 +1438,45 @@ theorem CReal::mul_pos({x, y: CReal}, hx: CReal::zero() < x, hy: CReal::zero() <
     }
 }
 
+// A positive factor reflects the product's sign. The product reads both
+// factors at one index a; past both gaps' starts x_a · y_a is at least
+// 1/(j+1) and x_a lies in (0, l+1], l the bound of x, so y_a is at least
+// 1/((l+1)(j+1)) (`Rat::le_of_mul_le_bounded`). That is one term, and a
+// is chosen far enough out for one term to be enough (`lt_of_term`).
+theorem CReal::pos_of_mul_pos({x, y: CReal}, hx: CReal::zero() < x, h: CReal::zero() < x * y): CReal::zero() < y {
+    match hx {
+        Exists(k, rx) => match rx {
+            Exists(s, gx) => match h {
+                Exists(j, rp) => match rp {
+                    Exists(t, gp) => {
+                        let l = x.bound();
+                        let m = l * (j + 1) + j;
+                        let start = s.max(t);
+                        let n = start.max(16 * m + 15);
+                        let a = x.mul_at(y, n);
+                        let at_n: (n <= a) = x.mul_at_ge(y, n);
+                        let at_start: (start <= n) = start.le_max_l(16 * m + 15);
+                        let far: (16 * m + 15 <= a) = (16 * m + 15).le_trans(n, a, start.le_max_r(16 * m + 15), at_n);
+                        let at_s: (s <= a) = s.le_trans(n, a, s.le_trans(start, n, s.le_max_l(t), at_start), at_n);
+                        let at_t: (t <= n) = t.le_trans(start, n, s.le_max_r(t), at_start);
+                        let fk = Rat::inv_succ(k);
+                        let fj = Rat::inv_succ(j);
+                        let lx: (fk <= x.seq(a)) = Rat::le_trans(Rat::le_of_same(Rat::same_sym(Rat::zero_add(fk))), gx(a, at_s));
+                        let px: (Rat::zero() < x.seq(a)) = Rat::lt_of_lt_of_le(Rat::inv_succ_pos(k), lx);
+                        let bx: (x.seq(a) <= Rat::ofInt(OfNat(l + 1))) =
+                            Rat::le_trans(x.seq(a).le_abs(), x.bound_below(a, l + 1, l.le_succ_r(l, l.le_refl())));
+                        let lp: (fj <= x.seq(a) * y.seq(a)) = Rat::le_trans(Rat::le_of_same(Rat::same_sym(Rat::zero_add(fj))), gp(n, at_t));
+                        let ly: (Rat::inv_succ(m) <= y.seq(a)) = Rat::le_of_mul_le_bounded(j, l, px, bx, lp);
+                        let step = Rat::inv_succ(m + m + 1);
+                        CReal::zero().lt_of_term(y, m, a, far, Rat::le_trans(Rat::le_of_same(Rat::zero_add(step)),
+                            Rat::le_trans(Rat::inv_succ_antitone(m, m + m + 1, m.le_add_l(m + 1)), ly)))
+                    },
+                },
+            },
+        },
+    }
+}
+
 theorem CReal::mul_nonneg({x, y: CReal}, hx: CReal::zero() <= x, hy: CReal::zero() <= y): CReal::zero() <= x * y {
     let bx = CReal::bishop_of_le(hx);
     let by = CReal::bishop_of_le(hy);
@@ -1608,6 +1647,7 @@ instance OrderedField<CReal>(CReal::Same, CReal::Lt, CReal::Le, CReal::add, CRea
     mul_inv := λ x h => x.mul_inv(h := h),
     zero_lt_one := CReal::zero_lt_one(),
     mul_pos := λ x y hx hy => CReal::mul_pos(hx, hy),
+    pos_of_mul_pos := λ x y hx h => CReal::pos_of_mul_pos(hx, h),
     of_nat_zero := CReal::zero().same_refl(),
     of_nat_succ := CReal::ofNat_succ,
     archimedean := CReal::archimedean,

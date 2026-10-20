@@ -137,12 +137,52 @@ does now (`CReal::archimedean`): a real is below one past its canonical
 bound, since every term is at most the bound, so the gap of one holds from
 index zero.
 
-The `inv_succ` form ("`0 < x` gives some `1/(k+1) < x`") is not derived:
-it needs the inverse of a positive to be positive, and that needs
-multiplication to reflect positivity (`0 < x * y`, `0 < x` give `0 < y`),
-which is a constructive axiom of its own (strong extensionality of `*`),
-not a consequence of the laws above. Neither carrier proves it yet; it is
-filed as [ordered-field-inverse-sign](../issues/ordered-field-inverse-sign.md).
+## The inverse's sign
+
+For [ordered-field-inverse-sign](../issues/ordered-field-inverse-sign.md).
+The inverse of a positive being positive needs multiplication to reflect
+positivity: `0 < x` and `0 < x * y` give `0 < y`. That is a law of
+`OrderedField` (`pos_of_mul_pos`), not a theorem, because the other laws
+cannot produce it. From `mul_pos` and the ring laws, `y ≤ 0` gives
+`x * y ≤ 0`, so `0 < x * y` refutes `y ≤ 0`; but refuting `y ≤ 0` is
+`¬¬(0 < y)` in Bishop's reading, and a gap cannot be read off a
+refutation. The law is strong extensionality of `*` at zero (a product
+apart from `x * 0` has its factor apart from `0`), which constructive
+axiomatisations of the reals take as an axiom for the same reason.
+
+Each carrier proves it its own way:
+
+- **`Rat`** decides `≤`, so the refutation is enough
+  (`Rat::pos_of_mul_pos`, by `lt_of_not_le`), with no arithmetic beyond
+  `mul_le_mono_r`.
+- **`CReal`** builds the gap (`CReal::pos_of_mul_pos`). The product reads
+  both factors at one index `a`. Past both gaps' starts, `x_a · y_a ≥
+  1/(j+1)` and `x_a` lies in `(0, l+1]`, `l` the canonical bound of `x`,
+  so `y_a ≥ 1/((l+1)(j+1))` (`Rat::le_of_mul_le_bounded`). That is a
+  single term, and `a` is chosen far enough out (`16m + 15`, `m` the new
+  gap's index) for `lt_of_term` to turn one term into a gap.
+
+Derived once, at both carriers:
+
+| Theorem | Statement | From |
+|---|---|---|
+| `inv_pos` | `0 < x` gives `0 < x⁻¹` | `x · x⁻¹ ≈ 1 > 0`, reflected by `x` |
+| `inv_neg` | `x < 0` gives `x⁻¹ < 0` | `(-x) · (-x⁻¹) ≈ 1`, reflected by `-x` |
+| `inv_inv` | `(x⁻¹)⁻¹ ≈ x` | `inv_unique` |
+| `inv_lt_inv` | `0 < x < y` gives `y⁻¹ < x⁻¹` | `x < y` times the positive `x⁻¹ · y⁻¹` |
+| `archimedean_inv` | `0 < x` gives some `1/(n+1) < x` | `x⁻¹` is below some `of_nat(n) < of_nat(n+1)`; invert |
+
+Each theorem takes the apartness proofs it inverts at explicitly, so it
+applies whatever proof a client's `x⁻¹` found; `inv_respects` makes the
+choice immaterial. `archimedean_inv` states its `1/(n+1)` as
+`inv(of_nat(n+1))` at the proof `of_nat_pos` gives. At `CReal` the client
+writes it as `CReal::ofRat(Rat::ofInt(OfNat(Succ(n))))⁻¹`, with the
+apartness searched, and the two inverses are convertible.
+
+At a call site with `x⁻¹` notation the searched apartness of each inverted
+point must be findable, so `docs/showcase/ordered_field_client.hthr`'s
+`creal_inv_lt_inv` takes `0 < y` as a hypothesis, even though the generic
+theorem derives it from `0 < x < y`.
 
 ## Calling a generic theorem
 
@@ -162,7 +202,8 @@ side is [constrained-predicate-expected-type](../issues/constrained-predicate-ex
 ## Cost
 
 The module elaborates in a few seconds; every proof is a short chain of
-dictionary laws. The instances cost the carriers one lemma each at `Rat`
+dictionary laws. The reflection law costs `Rat` two lemmas
+(`pos_of_mul_pos`, `le_of_mul_le_bounded`) and `CReal` one. The instances cost the carriers one lemma each at `Rat`
 (`not_lt_of_le`, `zero_lt_one`) and three at `CReal` (`archimedean`,
 `zero_lt_one`, `ofNat_succ`). `rat` now imports `ordered_field`, so `rat`,
 `creal` and their clients re-elaborate once.
