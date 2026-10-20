@@ -51,11 +51,11 @@ theorem creal_abs_lt_add(x, y, e, d: CReal, hx: -e < x ∧ x < e, hy: -d < y ∧
 // ---------------------------------------------------------------------------
 // Tightness: what is within every positive distance is the same.
 
-theorem rat_same_of_close(x, y: Rat, all: (e: Rat) → Rat::zero() < e → Close(x, y, e)): x ≈ y {
+theorem rat_same_of_close(x, y: Rat, all: (e: Rat) → 0 < e → Close(x, y, e)): x ≈ y {
     OrderedAddGroup::same_of_close(x, y, all)
 }
 
-theorem creal_same_of_close(x, y: CReal, all: (e: CReal) → CReal::zero() < e → Close(x, y, e)): x ≈ y {
+theorem creal_same_of_close(x, y: CReal, all: (e: CReal) → 0 < e → Close(x, y, e)): x ≈ y {
     OrderedAddGroup::same_of_close(x, y, all)
 }
 
@@ -80,27 +80,28 @@ theorem creal_nested(a, x, b, a2, b2: CReal, ha: a2 <= a, hb: b <= b2, h: a <= x
 theorem creal_locate(a, b, x: CReal, h: a < b): a < x ∨ x < b { PseudoOrder::locate(a, b, x, h) }
 
 // A bound with a point under it is positive: a located-group theorem.
-theorem creal_bound_pos(x, e: CReal, h: -e < x ∧ x < e): CReal::zero() < e { LocatedAddGroup::abs_lt_pos(x, e, h) }
+theorem creal_bound_pos(x, e: CReal, h: -e < x ∧ x < e): 0 < e { LocatedAddGroup::abs_lt_pos(x, e, h) }
 
 // ---------------------------------------------------------------------------
 // The field. The inverse is unique whichever apartness proof built it, which
 // the reals did not have on their own.
 
-theorem creal_inv_unique(x, u: CReal, h: x.Apart(CReal::zero()), hu: x * u ≈ CReal::one()): u ≈ x.inv(h := h) {
+theorem creal_inv_unique(x, u: CReal, h: x.Apart(0), hu: x * u ≈ 1): u ≈ x.inv(h := h) {
     OrderedField::inv_unique(x, h, u, hu)
 }
 
-theorem creal_inv_any_proof(x: CReal, h, h2: x.Apart(CReal::zero())): x.inv(h := h) ≈ x.inv(h := h2) {
+theorem creal_inv_any_proof(x: CReal, h, h2: x.Apart(0)): x.inv(h := h) ≈ x.inv(h := h2) {
     OrderedField::inv_respects(x, x, h, h2, x.same_refl())
 }
 
-theorem rat_mul_lt(x, y, z: Rat, h: x < y, hz: Rat::zero() < z): z * x < z * y { OrderedField::mul_lt_mono_l(x, y, z, h, hz) }
+theorem rat_mul_lt(x, y, z: Rat, h: x < y, hz: 0 < z): z * x < z * y { OrderedField::mul_lt_mono_l(x, y, z, h, hz) }
 
 // Every real is below some natural number, and the naturals climb.
 theorem creal_below_nat(x: CReal): ∃ n: Nat, x < CReal::ofRat(Rat::ofInt(OfNat(n))) { CReal::archimedean(x) }
 
 theorem creal_nat_climbs(n: Nat): CReal::ofRat(Rat::ofInt(OfNat(n))) < CReal::ofRat(Rat::ofInt(OfNat(Succ(n)))) {
-    OrderedField::of_nat_lt_succ(CReal::zero(), n)
+    let x: CReal = 0;
+    OrderedField::of_nat_lt_succ(x, n)
 }
 
 // ---------------------------------------------------------------------------
@@ -108,21 +109,21 @@ theorem creal_nat_climbs(n: Nat): CReal::ofRat(Rat::ofInt(OfNat(n))) < CReal::of
 // carriers (`pos_of_mul_pos`, a law), so the inverse has its argument's sign
 // and reverses the order of positives, once for both.
 
-theorem rat_inv_pos(x: Rat, hx: Rat::zero() < x): Rat::zero() < x⁻¹ { OrderedField::inv_pos(x, Inr(hx), hx) }
+theorem rat_inv_pos(x: Rat, hx: 0 < x): 0 < x⁻¹ { OrderedField::inv_pos(x, Inr(hx), hx) }
 
-theorem creal_inv_pos(x: CReal, hx: CReal::zero() < x): CReal::zero() < x⁻¹ { OrderedField::inv_pos(x, Inr(hx), hx) }
+theorem creal_inv_pos(x: CReal, hx: 0 < x): 0 < x⁻¹ { OrderedField::inv_pos(x, Inr(hx), hx) }
 
-theorem creal_inv_neg(x: CReal, hx: x < CReal::zero()): x⁻¹ < CReal::zero() { OrderedField::inv_neg(x, Inl(hx), hx) }
+theorem creal_inv_neg(x: CReal, hx: x < 0): x⁻¹ < 0 { OrderedField::inv_neg(x, Inl(hx), hx) }
 
 // `y⁻¹` is searched, so the client names y's positivity; the generic
 // theorem derives it from x < y.
-theorem creal_inv_lt_inv(x, y: CReal, hx: CReal::zero() < x, hy: CReal::zero() < y, h: x < y): y⁻¹ < x⁻¹ {
+theorem creal_inv_lt_inv(x, y: CReal, hx: 0 < x, hy: 0 < y, h: x < y): y⁻¹ < x⁻¹ {
     OrderedField::inv_lt_inv(x, y, Inr(hx), Inr(hy), hx, h)
 }
 
 // Every positive real is above some 1/(n+1), the form the Cauchy reals'
 // own estimates are written in.
-theorem creal_archimedean_inv(x: CReal, hx: CReal::zero() < x):
+theorem creal_archimedean_inv(x: CReal, hx: 0 < x):
     ∃ n: Nat, CReal::ofRat(Rat::ofInt(OfNat(Succ(n))))⁻¹ < x
 {
     OrderedField::archimedean_inv(x, hx)

@@ -40,7 +40,7 @@
 import logic;
 import nat;
 import relation_props;
-import algebra_rel::{Semigroup, Commutative};
+import algebra_rel;
 
 // ---------------------------------------------------------------------------
 // Relations built from the strict order.
@@ -258,13 +258,13 @@ theorem PseudoOrder::between_of_within<A: PseudoOrder(≈, <, <=)>(a, x, b, a2, 
 // ---------------------------------------------------------------------------
 // The ordered additive group.
 
-// An abelian group under `+` modulo `≈` (the `Semigroup` and `Commutative`
+// An abelian group under `+` modulo `≈` (the `SemigroupRel` and `Commutative`
 // parents are `algebra_rel`'s, so `rel_cong` reaches through `+`), whose
 // strict order is invariant under translation. Zero and negation are fields,
 // as `Group`'s inverse is.
 class OrderedAddGroup<A>(same as ≈: A → A → Type, lt as <: A → A → Type, le as <=: A → A → Type,
     add as +: A → A → A)
-    extends StrictOrder<A>(same, lt, le), Semigroup<A>(same, add), Commutative<A>(same, add)
+    extends StrictOrder<A>(same, lt, le), SemigroupRel<A>(same, add), Commutative<A>(same, add)
 {
     zero: A,
     neg: A → A,

@@ -19,7 +19,7 @@ import algebra_rel;
 // Cancel a pair inside a sum: `rel_cong` carries `y + -y ≈ 0` under `x + _`.
 theorem cancel_inside(x, y: CReal): x + (y + -y) ≈ x {
     calc {
-        x + (y + -y) ≈ x + CReal::zero() := rel_cong(y.add_neg()),
+        x + (y + -y) ≈ x + 0 := rel_cong(y.add_neg()),
         ≈ x := x.add_zero(),
     }
 }
@@ -51,14 +51,14 @@ theorem embedded_sum_below(p, q, r: Rat, h: p + q < r): CReal::ofRat(p) + CReal:
 
 // Distinct rationals embed apart; apartness, not a decision, is what tells
 // reals apart.
-theorem zero_below_one(): CReal::zero() < CReal::one() {
-    let gap: (Rat::zero() < Rat::one()) = omega;
+theorem zero_below_one(): CReal::Lt(0, 1) {
+    let gap: Rat::Lt(0, 1) = omega;
     CReal::ofRat_lt(gap)
 }
 
-theorem one_not_le_zero(): ¬(CReal::one() <= CReal::zero()) { λ h => h(zero_below_one()) }
+theorem one_not_le_zero(): ¬CReal::Le(1, 0) { λ h => h(zero_below_one()) }
 
-theorem zero_apart_one(): CReal::zero().Apart(CReal::one()) { Inl(zero_below_one()) }
+theorem zero_apart_one(): CReal::Apart(0, 1) { Inl(zero_below_one()) }
 
 // Reals that are not apart are the same.
 theorem tight(x, y: CReal, h: ¬(x.Apart(y))): y ≈ x { CReal::same_sym(CReal::same_of_not_apart(h)) }
@@ -67,7 +67,7 @@ theorem tight(x, y: CReal, h: ¬(x.Apart(y))): y ≈ x { CReal::same_sym(CReal::
 // Products and the non-strict order.
 
 // `rel_cong` carries `≈` through `*` as through `+`.
-theorem drop_one_inside(x, y: CReal): x * (y * CReal::one()) ≈ x * y { rel_cong(y.mul_one()) }
+theorem drop_one_inside(x, y: CReal): x * (y * 1) ≈ x * y { rel_cong(y.mul_one()) }
 
 // Distributing from the right goes through commutativity.
 theorem mul_add_distr_r(x, y, z: CReal): (x + y) * z ≈ x * z + y * z {
@@ -83,7 +83,7 @@ theorem embedded_square(q: Rat): CReal::ofRat(q) * CReal::ofRat(q) ≈ CReal::of
     CReal::same_sym(CReal::ofRat_mul(q, q))
 }
 
-theorem times_zero(x, y: CReal): (x + y) * CReal::zero() ≈ CReal::zero() { (x + y).mul_zero() }
+theorem times_zero(x, y: CReal): (x + y) * 0 ≈ 0 { (x + y).mul_zero() }
 
 // `≤` is the refutation of `>`, and a chain may mix it with `≈` and `<`.
 theorem le_chain(x, y, z, w: CReal, a: x ≈ y, b: y <= z, c: z < w): x < w {
@@ -101,47 +101,47 @@ theorem squeeze(x, y: CReal, a: x <= y, b: y <= x): x ≈ y { CReal::le_antisymm
 // The inverse, at a proof of apartness from zero.
 
 // Dividing and multiplying back. `y⁻¹` finds the apartness in scope.
-theorem div_mul_cancel(x, y: CReal, h: y.Apart(CReal::zero())): (x * y⁻¹) * y ≈ x {
+theorem div_mul_cancel(x, y: CReal, h: y.Apart(0)): (x * y⁻¹) * y ≈ x {
     calc {
         (x * y⁻¹) * y ≈ x * (y⁻¹ * y) := x.mul_assoc(y⁻¹, y),
-        ≈ x * CReal::one() := rel_cong(y.inv_mul()),
+        ≈ x * 1 := rel_cong(y.inv_mul()),
         ≈ x := x.mul_one(),
     }
 }
 
 // Which apartness proof is used does not matter, though their gaps may
 // differ and with them where the inverse reads.
-theorem inv_any_proof(x: CReal, h, h2: x.Apart(CReal::zero())): x.inv(h := h) ≈ x.inv(h := h2) {
+theorem inv_any_proof(x: CReal, h, h2: x.Apart(0)): x.inv(h := h) ≈ x.inv(h := h2) {
     CReal::inv_respects(x.same_refl(), h := h, h2 := h2)
 }
 
 // A sign is enough, and the inverse is the power at -1.
-theorem inv_of_positive(x: CReal, h: CReal::zero() < x): x * x⁻¹ ≈ CReal::one() { x.mul_inv() }
+theorem inv_of_positive(x: CReal, h: 0 < x): x * x⁻¹ ≈ 1 { x.mul_inv() }
 
-theorem inv_is_pow(x: CReal, h: x.Apart(CReal::zero())): x ^ (-1) ≈ x⁻¹ { x.pow_neg_one() }
+theorem inv_is_pow(x: CReal, h: x.Apart(0)): x ^ (-1) ≈ x⁻¹ { x.pow_neg_one() }
 
 // ---------------------------------------------------------------------------
 // Order and addition, and Bishop's pointwise forms.
 
 // Positive reals have a positive sum, and a gap between sums lies between
 // one pair of summands.
-theorem sum_pos(x, y: CReal, a: CReal::zero() < x, b: CReal::zero() < y): CReal::zero() < x + y { CReal::add_pos(a, b) }
+theorem sum_pos(x, y: CReal, a: 0 < x, b: 0 < y): 0 < x + y { CReal::add_pos(a, b) }
 
 theorem gap_splits(x, y, z, w: CReal, h: x + y < z + w): x < z ∨ y < w { CReal::add_lt_cancel(h) }
 
 // Adding to both sides keeps `≤`, so translation is monotone in a chain.
-theorem shift_chain(x, y, z: CReal, a: x <= y, b: y < z): x + CReal::one() < z + CReal::one() {
+theorem shift_chain(x, y, z: CReal, a: x <= y, b: y < z): x + 1 < z + 1 {
     calc {
-        x + CReal::one() <= y + CReal::one() := x.add_le_mono_r(y, CReal::one(), a),
-        < z + CReal::one() := y.add_lt_mono_r(z, CReal::one(), b),
+        x + 1 <= y + 1 := x.add_le_mono_r(y, 1, a),
+        < z + 1 := y.add_lt_mono_r(z, 1, b),
     }
 }
 
 // Products against the order: positive factors, a positive product; and a
 // nonnegative factor scales both sides of `≤`, a positive one both of `<`.
-theorem square_pos(x: CReal, h: CReal::zero() < x): CReal::zero() < x * x { CReal::mul_pos(h, h) }
+theorem square_pos(x: CReal, h: 0 < x): 0 < x * x { CReal::mul_pos(h, h) }
 
-theorem scale_chain(x, y, z, w: CReal, a: x <= y, b: y < z, hw: CReal::zero() < w): x * w < z * w {
+theorem scale_chain(x, y, z, w: CReal, a: x <= y, b: y < z, hw: 0 < w): x * w < z * w {
     calc {
         x * w <= y * w := CReal::mul_le_mono_r(a, CReal::le_of_lt(hw)),
         < z * w := CReal::mul_lt_mono_r(b, hw),
@@ -169,7 +169,7 @@ theorem sum_term(): (CReal::ofRat(half()) + CReal::ofRat(third())).seq(5) ≈ Ra
 
 // The modulus is data: `add_zero` says how far out `x + 0` is within
 // 1/(k+1) of `x`, and the answer evaluates.
-theorem add_zero_start(): (CReal::one().add_zero()(3)).witness = 7 { refl }
+theorem add_zero_start(): CReal::add_zero(1, 3).witness = 7 { refl }
 
 // So is a gap: `0 < 1` is witnessed by 1/(k+1) below the rational gap, and
 // the k that `Rat::archimedean_inv` finds is the denominator of 1/1.
@@ -185,13 +185,13 @@ theorem product_term(): (CReal::ofRat(half()) * CReal::ofRat(third())).seq(0) �
 // The product laws' moduli compute too, through `mul_close`: for 1 · 1 the
 // bound is 3 on each side, so the factors must be within 1/14 of each other,
 // which regularity grants from index 55 on.
-theorem mul_comm_start(): (CReal::one().mul_comm(CReal::one())(0)).witness = 55 { refl }
+theorem mul_comm_start(): CReal::mul_comm(1, 1, 0).witness = 55 { refl }
 
 // The inverse computes: 0 < 2 carries the gap 1/2 (k = 1) from index 0 on,
 // so term n reads index (k+1)²(n+1) + n, and every term inverts the
 // constant 2.
-theorem two_apart(): CReal::ofRat(Rat(OfNat(2), 1)).Apart(CReal::zero()) {
-    let gap: (Rat::zero() < Rat(OfNat(2), 1)) = omega;
+theorem two_apart(): CReal::ofRat(Rat(OfNat(2), 1)).Apart(0) {
+    let gap: (0 < Rat(OfNat(2), 1)) = omega;
     Inr(CReal::ofRat_lt(gap))
 }
 
@@ -210,7 +210,7 @@ theorem inv_two_searched(): CReal::ofRat(Rat(OfNat(2), 1))⁻¹ ≈ CReal::ofRat
 
 // Adding to both sides of a gap keeps it: the same 1/(k+1), from the same
 // start.
-theorem shifted_gap(z: CReal): CReal::zero().add_lt_mono_r(CReal::one(), z, zero_below_one()).witness = 1 { refl }
+theorem shifted_gap(z: CReal): CReal::add_lt_mono_r(0, 1, z, zero_below_one()).witness = 1 { refl }
 
 // A product of positive reals clears zero by the product of the gaps: 0 < 1
 // has the gap 1/2, so 1 · 1 has 1/4.

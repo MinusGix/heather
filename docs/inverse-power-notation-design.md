@@ -100,9 +100,10 @@ without unfolding, which the prefilter never does. This is what keeps
 
 - `-1` and `2` at `Int` are numerals, which need `import algebra` directly.
 - A defaulted parameter is passed by name: `x.inv(h := p)`, `x.pow(n, h := p)`.
-- `algebra` and `algebra_rel` both declare `Semigroup`; a module importing
-  both, as `rat` and `creal` now do, imports `algebra_rel::{Semigroup,
-  Commutative}` by name.
+- `algebra` and `algebra_rel` both declared `Semigroup` when this round
+  landed, so `rat` and `creal` imported `algebra_rel::{Semigroup,
+  Commutative}` by name. The relational class is now `SemigroupRel`, and both
+  modules import `algebra_rel` whole (issues/rat-numerals-and-semigroup-clash.md).
 
 ## 6. Left open
 
