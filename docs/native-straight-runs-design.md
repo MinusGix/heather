@@ -459,7 +459,11 @@ and lands by `loop_again`, proved by evaluation at the step's length.
   and the close (one item, `filter_close`), stated over `LinuxSteps`
   (`ClosedReach`, `closed_back`).
 
-STEPS_PLACEHOLDER
+Cold, a byte's path (the old `filter_byte` with the step, store, JNZ and
+writability lemmas it chained) fell to about a sixth of its kernel steps,
+`filter_loop` by about a third, the filter library's to about three fifths
+and the command closure's by about a thirtieth; no item rose by more than
+a few hundred steps.
 
 ## Not yet
 
