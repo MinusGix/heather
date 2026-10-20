@@ -2341,8 +2341,10 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
             }
             // elim_IWf neutral congruence (extension), **typed** from the
             // start (heather-coq ELIM_CONGRUENCE.md, `actmne_elimIWf`): the
-            // scrutinees as neutrals, then the motive's level, the motive and
-            // the step, both in the *left* elimination's telescope. Never the
+            // motive's level, the motive and the step, both in the *left*
+            // elimination's telescope, then the scrutinees as neutrals, last
+            // as in the other eliminators' arms (a scrutinee-first order ran
+            // a certificate test out of fuel there, heather#80). Never the
             // signature `I`/`S`/`n`/`o`/`c`, its two levels or the index:
             // the scrutinees' convertibility at their annotated types forces
             // them, levels included (level uniqueness plus the former's
@@ -2367,7 +2369,6 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                 },
                 TmView::ElimIWf { motive_level: ml2, motive: m2, step: st2, scrut: n2, .. },
             ) => {
-                self.tm_nee_c(env, n1, n2)?; // inferred IWf: forced, not read
                 self.lev_eq(ml1, ml2)?;
                 let sig = IWfSigC {
                     level: l1,
@@ -2389,6 +2390,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                 let e_cs = D::push_entry(&e_a, &cs_ty, &fl);
                 let e_step = D::push_entry(&e_cs, &ih_ty, ml1);
                 self.tm(&e_step, st1, st2, &step_ty, ml1)?;
+                self.tm_nee_c(env, n1, n2)?; // inferred IWf: forced, not read
                 Ok((D::inst_ty(self, env, env, m1, &[i1.clone(), n1.clone()])?, (*ml1).clone()))
             }
             // J neutral congruence (extension beyond ch. 04); mirrors the

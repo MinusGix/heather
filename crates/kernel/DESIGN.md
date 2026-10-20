@@ -218,9 +218,9 @@ and builds the ih as a `Val::Lam` whose body is the eliminator at
 `dnth(…; cs; i)`. Two values compare by their label (at the shape) and
 their children (at the children's `DVec`, so Σ- and Unit-η come through
 its reduct); the annotations are the type's. The neutral `elim_IWf` arm is
-typed from the start: the scrutinees as neutrals first, whose inferred
-`IWf` forces the signature and the index, then the motive's level, the
-motive in `(Γ, j : I, z : IWf(…)(j))` and the step in the left telescope.
+typed from the start: the motive's level, the motive in `(Γ, j : I, z :
+IWf(…)(j))` and the step in the left telescope, then the scrutinees as
+neutrals, whose inferred `IWf` forces the signature and the index.
 It does not compare the ih types either: equal signatures and motives
 force them (heather-coq `ELIM_CONGRUENCE.md`, `Validity/IWfIhEq.v`,
 MinusGix/heather-coq#24). Like `DVec`, `IWf` has **no code yet** and is
