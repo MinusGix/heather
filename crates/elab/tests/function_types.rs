@@ -479,19 +479,19 @@ mod rejections {
     // What makes a function field infinitary is a *self-occurrence* inside
     // it, not the arrow (corrected 2026-07-27, docs/surface-records.md §11 —
     // the original check keyed on the shape of the field type and so rejected
-    // `Nat -> Nat` too, which is an ordinary payload). `Acc` is still the
-    // motivating rejection, and it is one because its field mentions `Acc`.
+    // `Nat -> Nat` too, which is an ordinary payload). Since 2026-10-20 the
+    // strictly positive shape is the infinitary tier, lowered on `W`
+    // (docs/inductive-tier2-w-lowering.md; its own acceptance is
+    // inductive_tier2.rs), so `Acc`-style `Intro(h: Nat -> Acc)` declares.
     #[test]
     fn a_recursive_function_field_is_the_infinitary_tier() {
-        let msg = elab_err("inductive Acc { Intro(h: Nat -> Acc) }");
-        assert!(msg.contains("function type"), "{msg}");
-        assert!(msg.contains("infinitary"), "{msg}");
-        assert!(msg.contains("Acc"), "{msg}");
+        elab("inductive Acc { Intro(h: Nat -> Acc) }");
 
-        // …in the domain too: that is the *negative* occurrence, which is a
-        // rejection for a second reason and must not slip past this one.
+        // …in the domain it is the *negative* occurrence, and stays a
+        // rejection, by name.
         let neg = elab_err("inductive Bad { Mk(h: Bad -> Nat) }");
-        assert!(neg.contains("infinitary"), "{neg}");
+        assert!(neg.contains("function type"), "{neg}");
+        assert!(neg.contains("not strictly positive"), "{neg}");
     }
 
     // The other side of the same correction: a function field that does not
