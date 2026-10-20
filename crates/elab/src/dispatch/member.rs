@@ -5,7 +5,10 @@
 
 use std::sync::Arc as Rc;
 
-use heather_kernel::term::{CtxBase, GlobalBinding, Type};
+use heather_kernel::level::Level;
+use heather_kernel::term::{
+    CtxBase, GlobalBinding, LocalSubst, LocalVar, SubstTail, Term, Type,
+};
 use heather_syntax::{Expr, ExprKind, NamedArg, Span, Ty};
 
 use crate::{
@@ -22,6 +25,20 @@ use super::receiver::OtherReading;
 enum ReceiverCarrier {
     Named(String),
     Vector,
+}
+
+/// The walk behind [`Elaborator::subject_excludes`]: the definitions whose
+/// reducts are already being read, and a budget on the types it visits.
+/// `recursive` holds the context positions bound to an eliminator's
+/// recursive result while its step is read.
+struct Reach {
+    seen: Vec<usize>,
+    recursive: Vec<usize>,
+    fuel: u32,
+}
+
+impl Reach {
+    const FUEL: u32 = 128;
 }
 
 impl Elaborator {
@@ -431,13 +448,9 @@ impl Elaborator {
             return takes;
         }
         let selfref = cx.selfref.as_ref().is_some_and(|s| s.matches(name))
-            && !self
-                .selfref_subject_carrier(cx, name, span)
-                .is_some_and(|subject| subject != *carrier);
+            && !self.selfref_subject_excludes(cx, name, carrier, span);
         let global = self.lookup_global(name).is_some()
-            && !self
-                .global_subject_carrier(name, span)
-                .is_some_and(|subject| subject != *carrier);
+            && !self.global_subject_excludes(name, carrier, span);
         selfref || global
     }
 
@@ -479,10 +492,7 @@ impl Elaborator {
             match self.whnf(&cx, &ty, span) {
                 Ok(Type::Pi { dom, dom_level, cod, .. }) => {
                     if i == subject {
-                        let disjoint = self
-                            .receiver_carrier(&cx, &dom, span)
-                            .is_some_and(|subject| subject != *carrier);
-                        return Some(!disjoint);
+                        return Some(!self.subject_excludes(&cx, &dom, carrier, span));
                     }
                     cx.push(format!("#{i}"), (*dom).clone(), dom_level);
                     ty = (*cod).clone();
@@ -521,26 +531,30 @@ impl Elaborator {
         Some((ReceiverCarrier::Named(key), ind.name.clone()))
     }
 
-    /// The outer carrier of the in-progress declaration's method subject.
-    /// Its parameters are the outermost entries of `cx`; each stored type is
-    /// scoped over the prefix before its binder, so inspect it in that prefix
-    /// rather than in the (possibly much deeper) use-site context.
-    fn selfref_subject_carrier(
-        &self,
-        cx: &Cx,
-        name: &str,
-        span: Span,
-    ) -> Option<ReceiverCarrier> {
-        let self_ref = cx.selfref.as_ref().filter(|s| s.matches(name))?;
-        let (subject, _) = self_ref
+    /// Does the in-progress declaration's method subject provably reject a
+    /// receiver of `carrier`? Its parameters are the outermost entries of
+    /// `cx`; each stored type is scoped over the prefix before its binder,
+    /// so inspect it in that prefix rather than in the (possibly much
+    /// deeper) use-site context.
+    fn selfref_subject_excludes(&self, cx: &Cx, name: &str, carrier: &ReceiverCarrier, span: Span) -> bool {
+        let Some(self_ref) = cx.selfref.as_ref().filter(|s| s.matches(name)) else {
+            return false;
+        };
+        let Some((subject, _)) = self_ref
             .params
             .iter()
             .enumerate()
             .skip(self_ref.n_tyvars)
             .filter(|(_, (_, implicit))| !implicit)
-            .nth(self_ref.receiver_slot)?;
-        let ty = Rc::clone(&cx.gamma.entries.get(subject)?.ty);
-        self.receiver_carrier(&cx.prefix(subject), &ty, span)
+            .nth(self_ref.receiver_slot)
+        else {
+            return false;
+        };
+        let Some(entry) = cx.gamma.entries.get(subject) else {
+            return false;
+        };
+        let ty = Rc::clone(&entry.ty);
+        self.subject_excludes(&cx.prefix(subject), &ty, carrier, span)
     }
 
     fn receiver_carrier(&self, cx: &Cx, ty: &Type, span: Span) -> Option<ReceiverCarrier> {
@@ -549,6 +563,204 @@ impl Elaborator {
             return Some(ReceiverCarrier::Vector);
         }
         self.carrier_of_ty(cx, ty, span).map(|c| ReceiverCarrier::Named(c.key))
+    }
+
+    /// Can a value of `ty` provably never have the outer carrier `carrier`?
+    /// [`Self::receiver_carrier`] answers for a type that reduces to a
+    /// carrier. This also answers for a type family stuck on a neutral, the
+    /// type of a proof parameter such as `h: x <= y` at `Rat`
+    /// (issues/self-name-shadows-dot-call.md): it reads every type the
+    /// family can reduce to, and answers yes only when each one has a known
+    /// carrier other than `carrier`, or is a former no carrier converts to
+    /// (a Π, a universe, an equation, `True`'s `Unit`). Anything it cannot
+    /// read — a type variable, an opaque family, a stuck eliminator it does
+    /// not walk, a spent budget — answers no, which keeps the ambiguity.
+    fn subject_excludes(&self, cx: &Cx, ty: &Type, carrier: &ReceiverCarrier, span: Span) -> bool {
+        let mut reach = Reach { seen: Vec::new(), recursive: Vec::new(), fuel: Reach::FUEL };
+        self.reach_excludes(cx, ty, carrier, &mut reach, span)
+    }
+
+    fn reach_excludes(
+        &self,
+        cx: &Cx,
+        ty: &Type,
+        carrier: &ReceiverCarrier,
+        reach: &mut Reach,
+        span: Span,
+    ) -> bool {
+        if reach.fuel == 0 {
+            return false;
+        }
+        reach.fuel -= 1;
+        if let Some(c) = self.receiver_carrier(cx, ty, span) {
+            return c != *carrier;
+        }
+        if let Type::El { level, tm } = ty
+            && let Some(excludes) = self.family_excludes(level, tm, carrier, reach, span)
+        {
+            return excludes;
+        }
+        self.reduct_excludes(cx, ty, carrier, reach, span)
+    }
+
+    /// A definition applied to arguments, `El(F a₁ … aₖ)`: read `F` applied to
+    /// its own parameters, so that every type it can reduce to, at these
+    /// arguments or any others, is covered. A definition read once needs no
+    /// second read (`Q::Le` reaching `Nat::Le` twice): any reduct that could
+    /// take the receiver has already ended the walk. `None` when the head is
+    /// not a closed definition.
+    fn family_excludes(
+        &self,
+        level: &Level,
+        tm: &Term,
+        carrier: &ReceiverCarrier,
+        reach: &mut Reach,
+        span: Span,
+    ) -> Option<bool> {
+        let (head, args) = crate::spelling::app_spine(tm);
+        let Term::GlobalTm { var, subst } = head else {
+            return None;
+        };
+        if !subst.terms.is_empty() || !matches!(subst.tail, SubstTail::Empty { .. }) {
+            return None;
+        }
+        let abs = self.global_abs_of(*var)?;
+        let GlobalBinding::Tm { ctx, ty, body: Some(_), .. } = self.psi.bindings.get(abs)? else {
+            return None;
+        };
+        if !matches!(ctx.base, CtxBase::Nil) || ctx.len() != 0 {
+            return None;
+        }
+        if reach.seen.contains(&abs) {
+            return Some(true);
+        }
+        reach.seen.push(abs);
+        let growth = self.psi.bindings.len() as u32 - abs as u32
+            + self.global_padding() + self.meta_pushed.borrow().len() as u32;
+        let mut ty = ty.shift_global(growth);
+        let mut cx = Cx::empty();
+        for i in 0..args.len() {
+            let Ok(Type::Pi { dom, dom_level, cod, .. }) = self.whnf(&cx, &ty, span) else {
+                return Some(false);
+            };
+            cx.push(format!("#{i}"), (*dom).clone(), dom_level);
+            ty = (*cod).clone();
+        }
+        let k = args.len() as u32;
+        // The generic application is read in a context of its own, where the
+        // recursive results bound around this occurrence do not exist.
+        let recursive = std::mem::take(&mut reach.recursive);
+        let mut tm = Term::GlobalTm {
+            var: *var,
+            subst: LocalSubst {
+                tail: SubstTail::Empty { len: k, base: CtxBase::Nil },
+                terms: Vec::new(),
+            },
+        };
+        for i in 0..k {
+            tm = Term::AppAt { fun: Rc::new(tm), arg: Rc::new(Term::Var(LocalVar(k - 1 - i))) };
+        }
+        let generic = Type::El { level: level.clone(), tm: Rc::new(tm) };
+        let excludes = self.reduct_excludes(&cx, &generic, carrier, reach, span);
+        reach.recursive = recursive;
+        Some(excludes)
+    }
+
+    /// What `ty` reduces to: a former no carrier converts to, or a code stuck
+    /// on a neutral ([`Self::stuck_code_excludes`]).
+    fn reduct_excludes(
+        &self,
+        cx: &Cx,
+        ty: &Type,
+        carrier: &ReceiverCarrier,
+        reach: &mut Reach,
+        span: Span,
+    ) -> bool {
+        match self.whnf(cx, ty, span) {
+            Ok(
+                Type::Pi { .. }
+                | Type::UPi { .. }
+                | Type::Ty(_)
+                | Type::Id { .. }
+                | Type::SEq { .. }
+                | Type::SEmpty { .. }
+                | Type::Squash { .. }
+                | Type::Unit { .. }
+                | Type::Empty { .. },
+            ) => true,
+            Ok(Type::El { level, tm }) => self.stuck_code_excludes(cx, &level, &tm, carrier, reach, span),
+            _ => false,
+        }
+    }
+
+    /// A code stuck on a neutral scrutinee, applied to arguments: read every
+    /// branch, each a λ over those arguments read under its own binders, so
+    /// that every argument is covered at once. Inside `elim_Nat`'s step the
+    /// recursive result is a value of this same eliminator at a smaller
+    /// scrutinee (`k.Le(l)` inside `Nat::Le`), so a reduct headed by it adds
+    /// nothing the branches do not: the eliminator is well founded. A branch
+    /// that does not take every argument as a λ is read at no arguments in
+    /// particular, so it declines, as does any other eliminator.
+    fn stuck_code_excludes(
+        &self,
+        cx: &Cx,
+        level: &Level,
+        tm: &Term,
+        carrier: &ReceiverCarrier,
+        reach: &mut Reach,
+        span: Span,
+    ) -> bool {
+        let depth = cx.names.len();
+        let (head, args) = crate::spelling::app_spine(tm);
+        // (binders the branch sits under, whether the last is a recursive
+        // result, the branch)
+        let branches: Vec<(Vec<(Type, Level)>, bool, &Rc<Term>)> = match head {
+            Term::Var(LocalVar(v)) => {
+                return depth.checked_sub(*v as usize + 1).is_some_and(|at| reach.recursive.contains(&at));
+            }
+            Term::Case { lhs_level, rhs_level, lhs, rhs, case_l, case_r, .. } => vec![
+                (vec![((**lhs).clone(), lhs_level.clone())], false, case_l),
+                (vec![((**rhs).clone(), rhs_level.clone())], false, case_r),
+            ],
+            Term::ElimNat { level: motive_level, motive, base, step, .. } => vec![
+                (Vec::new(), false, base),
+                (
+                    vec![(Type::Nat, Level::Zero), ((**motive).clone(), motive_level.clone())],
+                    true,
+                    step,
+                ),
+            ],
+            _ => return false,
+        };
+        let marked = reach.recursive.len();
+        let excludes = branches.into_iter().all(|(binders, recursive, branch)| {
+            let mut cx = cx.clone();
+            for (ty, lvl) in binders {
+                cx.push("#branch".to_string(), ty, lvl);
+            }
+            if recursive {
+                reach.recursive.push(cx.names.len() - 1);
+            }
+            let mut branch = Rc::clone(branch);
+            let mut taken = 0;
+            while taken < args.len() {
+                let Term::Lam { dom, dom_level, body, .. } = &*branch else {
+                    break;
+                };
+                cx.push("#arg".to_string(), (**dom).clone(), dom_level.clone());
+                branch = Rc::clone(body);
+                taken += 1;
+            }
+            if taken < args.len() {
+                reach.recursive.truncate(marked);
+                return false;
+            }
+            let branch = Type::El { level: level.clone(), tm: branch };
+            let excludes = self.reach_excludes(&cx, &branch, carrier, reach, span);
+            reach.recursive.truncate(marked);
+            excludes
+        });
+        excludes
     }
 
     /// A desugared method call failed: say what the author can act on, when
@@ -857,6 +1069,21 @@ impl Elaborator {
             },
             |cx, dom| self.receiver_carrier(cx, dom, span),
         )
+    }
+
+    /// [`Self::global_subject_carrier`]'s subject, asked whether it provably
+    /// rejects a receiver of `carrier` ([`Self::subject_excludes`]).
+    fn global_subject_excludes(&self, name: &str, carrier: &ReceiverCarrier, span: Span) -> bool {
+        self.read_signature(
+            name,
+            span,
+            |params| {
+                params.iter().position(|p| p.is_self)
+                    .or_else(|| params.iter().position(|p| !p.implicit && !p.is_type))
+            },
+            |cx, dom| Some(self.subject_excludes(cx, dom, carrier, span)),
+        )
+        .unwrap_or(false)
     }
 
     /// Walk a committed global's parameter telescope and `read` one type

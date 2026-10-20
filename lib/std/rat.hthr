@@ -585,7 +585,7 @@ theorem Rat::mul_le_mono_r({x, y, z: Rat}, h: x <= y, hz: Rat::zero() <= z): x *
     let r = z.den.int();
     let zr = Int::zero_mul(r);
     let he: (OfNat(0) <= e) = omega(zr);
-    let scaled = Int::mul_le_mono_r(a * q, c * p, e * r, h, omega(zr, Int::mul_le_mono_r(OfNat(0), e, r, he, trivial)));
+    let scaled = (a * q).mul_le_mono_r(c * p, e * r, h, omega(zr, OfNat(0).mul_le_mono_r(e, r, he, trivial)));
     let left: ((a * e) * (y * z).den.int() = (a * q) * (e * r)) = ring(y.den_mul(z));
     let right: ((c * e) * (x * z).den.int() = (c * p) * (e * r)) = ring(x.den_mul(z));
     omega(scaled, left, right)
@@ -600,8 +600,8 @@ theorem Rat::mul_lt_mono_r({x, y, z: Rat}, h: x < y, hz: Rat::zero() < z): x * z
     let r = z.den.int();
     let zr = Int::zero_mul(r);
     let he: (OfNat(0) < e) = omega(zr);
-    let her = Int::mul_lt_mono_r(OfNat(0), e, r, he, omega(z.den_pos));
-    let scaled = Int::mul_lt_mono_r(a * q, c * p, e * r, h, omega(zr, her));
+    let her = OfNat(0).mul_lt_mono_r(e, r, he, omega(z.den_pos));
+    let scaled = (a * q).mul_lt_mono_r(c * p, e * r, h, omega(zr, her));
     let left: ((a * e) * (y * z).den.int() = (a * q) * (e * r)) = ring(y.den_mul(z));
     let right: ((c * e) * (x * z).den.int() = (c * p) * (e * r)) = ring(x.den_mul(z));
     omega(scaled, left, right)

@@ -100,7 +100,32 @@ the receiver:
 
 Everything else keeps the ambiguity: an unknown receiver carrier, a generic
 subject (`self a: A`), equal carriers, or a subject carrier that cannot be
-computed. That matches the `ReceiverCarrier` doc comment ("an unknown carrier
+computed.
+
+**Subjects with no carrier of their own (2026-10-20,
+`issues/self-name-shadows-dot-call.md`).** A proof subject such as
+`h: x <= y` at `Rat` has a type stuck on its endpoints, so it has no outer
+carrier, and a member with implicit endpoints made its own name a rival of
+the receiver's `Int::mul_le_mono_r` inside its body. The subject test is
+therefore "every type the subject's type can reduce to is disjoint from the
+receiver's carrier" (`subject_excludes` in `dispatch/member.rs`), and it
+reads a stuck type as follows:
+
+- a known carrier compares as above; a Π, universe, `Id`/`sEq`, `Unit`,
+  `Empty`, `sEmpty` or squash is disjoint from every carrier;
+- a closed definition applied to arguments, `El(F a⃗)`, is read as `F`
+  applied to its own parameters, so the reducts at every argument are
+  covered (`Rat::Le` → `Int::Le` → `Nat::Le`, `True`, `False`);
+- a `case` or `elim_Nat` stuck on a neutral is read branch by branch, each
+  branch a λ over the spine's arguments read under its binders. In
+  `elim_Nat`'s step, a reduct headed by the recursive result adds nothing,
+  since it is a value of the same well-founded eliminator.
+
+Anything else declines and keeps the ambiguity: a type variable or a local
+family (`F: Nat → Type`), an opaque global, another eliminator, a branch that
+is not a λ over the arguments, or a spent budget. This is still a proof that
+the reading cannot typecheck, never a preference, so §0 holds: only readings
+that could not have elaborated at this receiver are dropped. That matches the `ReceiverCarrier` doc comment ("an unknown carrier
 keeps the ambiguity"). The discarded reading must also stop counting as the
 `OtherReading` handed to `class_dispatch`.
 
