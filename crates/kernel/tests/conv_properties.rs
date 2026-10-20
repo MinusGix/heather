@@ -152,7 +152,7 @@ fn identity_recursor_is_identity_on_code_of_types() {
         let mut r = Rng::new(seed ^ 0xc3a5c85c97cb3127);
         let mut env = gen_wt_env(&mut r);
         env.layer = Layer::Meta; // recursors are layer-m forms
-        let delta = gen_wt_ctx(&env, &mut r, 4, Layer::Prog);
+        let delta = gen_wt_ctx(&env, &mut r, 4, Layer::Code);
         let ce = env.in_ctx(delta.clone(), Layer::Code);
         let (code, cl) = gen_wt_type(&ce, &mut r, 4);
         let t = Term::ElimCodeTy {
@@ -186,7 +186,7 @@ fn identity_recursor_is_identity_on_code_of_terms() {
         let mut r = Rng::new(seed ^ 0xff51afd7ed558ccd);
         let mut env = gen_wt_env(&mut r);
         env.layer = Layer::Meta;
-        let delta = gen_wt_ctx(&env, &mut r, 4, Layer::Prog);
+        let delta = gen_wt_ctx(&env, &mut r, 4, Layer::Code);
         let ce = env.in_ctx(delta.clone(), Layer::Code);
         let (code, cty, cl) = gen_wt_term(&ce, &mut r, 4);
         let t = Term::ElimCodeTm {

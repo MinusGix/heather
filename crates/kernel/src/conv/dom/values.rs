@@ -41,7 +41,8 @@ use crate::level::Level;
 use crate::rec;
 use crate::subst::{GlobalEntry, GlobalSubst};
 use crate::term::{
-    wf_step_telescope, CtxEntries, CtxEntry, GlobalVar, LocalCtx, LocalVar, Term, Type,
+    iwf_children_ty, iwf_motive_scrut_ty, iwf_step_telescope, wf_step_telescope, CtxEntries,
+    IWfSig, CtxEntry, GlobalVar, LocalCtx, LocalVar, Term, Type,
 };
 use crate::value::{
     self, shift::Outer, Elim, Head, PiAnn, SigAnn, SumAnn, TmClo, TyClo, VNeTy, VNeutral,
@@ -51,7 +52,7 @@ use crate::value::{
 use crate::typing::ity::{ITy, Sel};
 
 use super::super::{Conv, Env, R, NC};
-use super::{Dom, TmView, TyView};
+use super::{Dom, IWfSigC, TmView, TyView};
 
 /// The value domain: `Conv<'v, Values>` is the kernel's conversion checker.
 pub(crate) struct Values;
@@ -824,6 +825,16 @@ impl<'v> Dom<'v> for Values {
                 shape: TyC::here(env, *shape),
                 arity: TmC::under(env, *arity, 1),
             },
+            VTy::IWf { sig, index } => TyView::IWf {
+                level: &sig.level,
+                idx_level: &sig.idx_level,
+                idx: TyC::here(env, sig.idx),
+                shape: TyC::here(env, sig.shape),
+                arity: TmC::under(env, sig.arity, 1),
+                out: TmC::under(env, sig.out, 1),
+                child: TmC::under(env, sig.child, 2),
+                index: TmC::here(env, *index),
+            },
             VTy::Sum { lhs_level, rhs_level, lhs, rhs } => TyView::Sum {
                 lhs_level,
                 rhs_level,
@@ -950,6 +961,10 @@ impl<'v> Dom<'v> for Values {
                 children: TmC::here(env, *children),
             },
             Val::Supf { label, children, .. } => TmView::Supf {
+                label: TmC::here(env, *label),
+                children: TmC::here(env, *children),
+            },
+            Val::Supi { label, children, .. } => TmView::Supi {
                 label: TmC::here(env, *label),
                 children: TmC::here(env, *children),
             },
@@ -1815,6 +1830,65 @@ impl<'v> Dom<'v> for Values {
         ))
     }
 
+    /// `IWf`'s telescope as [`Values::wf_step_telescope`] builds `Wf`'s: the
+    /// closures' syntax and their common environment taken apart, the shared
+    /// schemas run on the syntax, and each result closed over that
+    /// environment extended by the binders conversion is about to push.
+    fn iwf_telescope(
+        _cv: &mut Conv<'v, Self>,
+        env: &Env<'v>,
+        sig: &IWfSigC<'_, 'v, Self>,
+        motive_level: &Level,
+        motive: &TyC<'v>,
+    ) -> R<(TyC<'v>, TyC<'v>, TyC<'v>, TyC<'v>)> {
+        let Some((senv, sig)) = iwf_sig_syn(sig) else { return Err(NC) };
+        let Some((menv, mbody)) = motive.clo.as_syn() else { return Err(NC) };
+        if menv.len() != senv.len() {
+            return Err(NC);
+        }
+        let mbody = amb_ty(menv, mbody);
+        let mot = iwf_motive_scrut_ty(&sig);
+        let (cs, ih, step) = iwf_step_telescope(&sig, motive_level, &mbody);
+        let l = glen(env);
+        let senv = &senv.with_gshift(0);
+        let e1 = senv.push(env.arena, fresh(env.arena, l));
+        let e2 = e1.push(env.arena, fresh(env.arena, l + 1));
+        let e3 = e2.push(env.arena, fresh(env.arena, l + 2));
+        Ok((
+            TyC { clo: env.arena.ty(TyClo::new(e1, Rc::new(mot))), home: l + 1, sat: l + 1 },
+            TyC { clo: env.arena.ty(TyClo::new(e1, Rc::new(cs))), home: l + 1, sat: l + 1 },
+            TyC { clo: env.arena.ty(TyClo::new(e2, Rc::new(ih))), home: l + 2, sat: l + 2 },
+            TyC { clo: env.arena.ty(TyClo::new(e3, Rc::new(step))), home: l + 3, sat: l + 3 },
+        ))
+    }
+
+    /// The step telescope's `cs` entry, `iwf_children_ty` at `a := x`, closed
+    /// over the signature's environment with the label in `x`'s cell.
+    fn iwf_children(
+        cv: &mut Conv<'v, Self>,
+        env: &Env<'v>,
+        w: &Rc<VTy<'v>>,
+        label: &TmC<'v>,
+    ) -> R<TyC<'v>> {
+        let wv = Self::whnf_ty(cv, env, &TyC::value(env, Rc::clone(w)))?;
+        let VTy::IWf { sig, .. } = &*wv else {
+            return Err(NC);
+        };
+        let parts = IWfSigC::<Values> {
+            level: &sig.level,
+            idx_level: &sig.idx_level,
+            idx: &TyC::here(env, sig.idx),
+            shape: &TyC::here(env, sig.shape),
+            arity: &TmC::under(env, sig.arity, 1),
+            out: &TmC::under(env, sig.out, 1),
+            child: &TmC::under(env, sig.child, 2),
+        };
+        let Some((senv, sig)) = iwf_sig_syn(&parts) else { return Err(NC) };
+        let cs = iwf_children_ty(&sig.shift_local(1), &Term::Var(LocalVar(0)));
+        let rho = senv.with_gshift(0).push(env.arena, open_tm(env, label, 0));
+        Ok(TyC::here(env, env.arena.ty(TyClo::new(rho, Rc::new(cs)))))
+    }
+
     /// `M_Typ[l/ℓ, Δ/g, t/x_T]`. The universe and global halves are syntactic
     /// (design §3.1); the local half — `M[…]` at the scrutinee under `id_Γ` —
     /// is one environment cell.
@@ -1861,6 +1935,32 @@ impl<'v> Dom<'v> for Values {
 
 /// Spend a closure's pending global offset on syntax read out of it
 /// (`docs/lazy-global-offset-design.md` §5).
+/// An `IWf` signature's closures taken apart: their common environment and
+/// the syntax, each body with its closure's pending global offset spent (see
+/// [`Values::wf_step_telescope`]). `None` when a component is not syntactic
+/// or the five were not built in one scope.
+fn iwf_sig_syn<'v>(sig: &IWfSigC<'_, 'v, Values>) -> Option<(value::Env<'v>, Rc<IWfSig>)> {
+    let (ienv, ibody) = sig.idx.clo.as_syn()?;
+    let (senv, sbody) = sig.shape.clo.as_syn()?;
+    let (aenv, abody) = sig.arity.clo.as_syn()?;
+    let (oenv, obody) = sig.out.clo.as_syn()?;
+    let (cenv, cbody) = sig.child.clo.as_syn()?;
+    let n = senv.len();
+    if [ienv.len(), aenv.len(), oenv.len(), cenv.len()].iter().any(|&k| k != n) {
+        return None;
+    }
+    let syn = IWfSig {
+        level: sig.level.clone(),
+        idx_level: sig.idx_level.clone(),
+        idx: amb_ty(ienv, ibody),
+        shape: amb_ty(senv, sbody),
+        arity: amb_tm(aenv, abody),
+        out: amb_tm(oenv, obody),
+        child: amb_tm(cenv, cbody),
+    };
+    Some((senv.clone(), Rc::new(syn)))
+}
+
 fn amb_ty<'v>(env: &value::Env<'v>, t: &Rc<Type>) -> Rc<Type> {
     match env.gshift() {
         0 => Rc::clone(t),
@@ -2044,6 +2144,22 @@ fn view_neutral<'a, 'v>(env: &Env<'v>, n: &'a Rc<VNeutral<'v>>) -> TmView<'a, 'v
                 scrut: head,
             }
         }
+        Elim::ElimIWf { sig, motive_level, motive, step, index, .. } => TmView::ElimIWf {
+            level: &sig.level,
+            idx_level: &sig.idx_level,
+            motive_level,
+            idx: TyC::here(env, sig.idx),
+            shape: TyC::here(env, sig.shape),
+            arity: TmC::under(env, sig.arity, 1),
+            out: TmC::under(env, sig.out, 1),
+            child: TmC::under(env, sig.child, 2),
+            // `(Γ, j, z)`.
+            motive: TyC::under(env, *motive, 2),
+            // `(Γ, a, cs, ih)`.
+            step: TmC::under(env, *step, 3),
+            index: TmC::here(env, *index),
+            scrut: head,
+        },
         Elim::J { ty_level, motive_level, ty, lhs, motive, case, rhs } => TmView::J {
             ty_level,
             motive_level,

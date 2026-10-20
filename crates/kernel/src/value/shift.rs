@@ -30,7 +30,7 @@ use crate::level::Level;
 use crate::term::{Branches, LocalCtx, Motives, Term, Type};
 
 use super::{
-    BitTy, Elim, Env, Head, PiAnn, SigAnn, SumAnn, TmClo, TyClo, VNeTy, VNeutral, VSubst, VTy,
+    BitTy, Elim, Env, Head, PiAnn, VIWfSig, SigAnn, SumAnn, TmClo, TyClo, VNeTy, VNeutral, VSubst, VTy,
     Val, ValueArena,
 };
 
@@ -64,6 +64,18 @@ fn level<'v>(l: &Level, o: Outer<'v>) -> Level {
 /// The optional Σ / sum annotation of a pair value, an injection or a
 /// projection elimination (design §2.1): absent for the unannotated checked
 /// spellings, and then there is nothing to shift.
+fn iwf_sig<'v>(sig: &VIWfSig<'v>, o: Outer<'v>) -> Rc<VIWfSig<'v>> {
+    Rc::new(VIWfSig {
+        level: level(&sig.level, o),
+        idx_level: level(&sig.idx_level, o),
+        idx: ty_clo(sig.idx, o),
+        shape: ty_clo(sig.shape, o),
+        arity: tm_clo(sig.arity, o),
+        out: tm_clo(sig.out, o),
+        child: tm_clo(sig.child, o),
+    })
+}
+
 fn sig_ann<'v>(a: &Option<SigAnn<'v>>, o: Outer<'v>) -> Option<SigAnn<'v>> {
     a.as_ref().map(|a| SigAnn {
         fst_level: level(&a.fst_level, o),
@@ -314,6 +326,14 @@ fn elimination<'v>(e: &Elim<'v>, o: Outer<'v>) -> Elim<'v> {
                 env: env(e, o),
             }
         }
+        Elim::ElimIWf { sig, motive_level, motive, step, index, env: e } => Elim::ElimIWf {
+            sig: iwf_sig(sig, o),
+            motive_level: level(motive_level, o),
+            motive: ty_clo(motive, o),
+            step: tm_clo(step, o),
+            index: tm_clo(index, o),
+            env: env(e, o),
+        },
         Elim::J { ty_level, motive_level, ty, lhs, motive, case, rhs } => Elim::J {
             ty_level: level(ty_level, o),
             motive_level: level(motive_level, o),
@@ -455,6 +475,7 @@ pub fn vty<'v>(v: &Rc<VTy<'v>>, o: Outer<'v>) -> Rc<VTy<'v>> {
             shape: ty_clo(shape, o),
             arity: tm_clo(arity, o),
         },
+        VTy::IWf { sig, index } => VTy::IWf { sig: iwf_sig(sig, o), index: tm_clo(index, o) },
         VTy::Sum { lhs_level, rhs_level, lhs, rhs } => VTy::Sum {
             lhs_level: level(lhs_level, o),
             rhs_level: level(rhs_level, o),
@@ -645,6 +666,11 @@ pub fn val<'v>(v: &Rc<Val<'v>>, o: Outer<'v>) -> Rc<Val<'v>> {
             level: level(l, o),
             shape: ty_clo(shape, o),
             arity: tm_clo(arity, o),
+            label: tm_clo(label, o),
+            children: tm_clo(children, o),
+        },
+        Val::Supi { sig, label, children } => Val::Supi {
+            sig: iwf_sig(sig, o),
             label: tm_clo(label, o),
             children: tm_clo(children, o),
         },

@@ -1231,6 +1231,9 @@ pub enum VTy<'v> {
         shape: &'v TyClo<'v>,
         arity: &'v TmClo<'v>,
     },
+    /// The signature behind one pointer, as [`Type::IWf`]'s (see
+    /// [`VIWfSig`]); the index has no pending binder.
+    IWf { sig: Rc<VIWfSig<'v>>, index: &'v TmClo<'v> },
     /// Non-dependent: neither summand binds, so neither is a closure — both
     /// are lazy 0-binder sub-structures.
     Sum {
@@ -1507,6 +1510,13 @@ pub enum Val<'v> {
         label: &'v TmClo<'v>,
         children: &'v TmClo<'v>,
     },
+    /// The signature behind one pointer, as [`Term::Supi`]'s: nothing on a
+    /// hot path reads it — β and comparison read the label and the children.
+    Supi {
+        sig: Rc<VIWfSig<'v>>,
+        label: &'v TmClo<'v>,
+        children: &'v TmClo<'v>,
+    },
 
     // -- functions --
     /// The induction hypothesis an `elim_Wf` β hands its step,
@@ -1748,6 +1758,24 @@ pub struct SigAnn<'v> {
     pub snd_ty: &'v TyClo<'v>,
 }
 
+/// An `IWf` signature as a value carries it ([`VTy::IWf`], [`Val::Supi`],
+/// [`Elim::ElimIWf`]): [`crate::term::IWfSig`]'s components as closures
+/// sharing the environment of the one node they were built from. `arity` and `out` have
+/// one pending binder (`x : S`), `child` two (`x : S, i : Fin n`), `idx` and
+/// `shape` none. Behind one pointer in each variant, as the syntax's is:
+/// inline, its two levels and five closures would grow every value, type
+/// and elimination (`hot_value_handles_stay_four_words_or_smaller`).
+#[derive(Clone)]
+pub struct VIWfSig<'v> {
+    pub level: Level,
+    pub idx_level: Level,
+    pub idx: &'v TyClo<'v>,
+    pub shape: &'v TyClo<'v>,
+    pub arity: &'v TmClo<'v>,
+    pub out: &'v TmClo<'v>,
+    pub child: &'v TmClo<'v>,
+}
+
 /// A sum's annotation as a value carries; see [`SigAnn`].
 #[derive(Clone)]
 pub struct SumAnn<'v> {
@@ -1849,6 +1877,17 @@ pub enum Elim<'v> {
         step: &'v TmClo<'v>,
         env: Env<'v>,
     },
+    /// The signature's closures as [`VTy::IWf`]'s; `motive` has two pending
+    /// binders (`j, z`), `step` three. Its β rebuilds syntax
+    /// (`term::iwf_ih`), so it carries its environment as `ElimWf` does.
+    ElimIWf {
+        sig: Rc<VIWfSig<'v>>,
+        motive_level: Level,
+        motive: &'v TyClo<'v>,
+        step: &'v TmClo<'v>,
+        index: &'v TmClo<'v>,
+        env: Env<'v>,
+    },
     J {
         ty_level: Level,
         motive_level: Level,
@@ -1947,6 +1986,7 @@ impl Elim<'_> {
             Elim::Case { .. } => "case",
             Elim::ElimW { .. } => "elim_W",
             Elim::ElimWf { .. } => "elim_Wf",
+            Elim::ElimIWf { .. } => "elim_IWf",
             Elim::J { .. } => "J",
             Elim::Transp { .. } => "transp",
             Elim::LetBoxTy { .. } => "letbox_Ty",
@@ -2070,6 +2110,10 @@ impl fmt::Debug for VTy<'_> {
             VTy::Sigma { fst, snd, .. } => write!(f, "Σ({fst:?}). {snd:?}"),
             VTy::W { shape, pos, .. } => write!(f, "W({shape:?}). {pos:?}"),
             VTy::Wf { shape, arity, .. } => write!(f, "Wf({shape:?}). {arity:?}"),
+            VTy::IWf { sig, index } => {
+                let VIWfSig { idx, shape, arity, out, child, .. } = &**sig;
+                write!(f, "IWf({idx:?}; {shape:?}. {arity:?}; {out:?}; {child:?})({index:?})")
+            }
             VTy::Sum { lhs, rhs, .. } => write!(f, "({lhs:?} + {rhs:?})"),
             VTy::Id { ty, lhs, rhs, .. } => write!(f, "Id({ty:?}; {lhs:?}; {rhs:?})"),
             VTy::SEq { ty, lhs, rhs, .. } => write!(f, "sEq({ty:?}; {lhs:?}; {rhs:?})"),
@@ -2129,6 +2173,7 @@ impl fmt::Debug for Val<'_> {
             Val::Inr { val, .. } => write!(f, "inr({val:?})"),
             Val::Sup { label, children, .. } => write!(f, "sup({label:?}; {children:?})"),
             Val::Supf { label, children, .. } => write!(f, "sup_f({label:?}; {children:?})"),
+            Val::Supi { label, children, .. } => write!(f, "sup_i({label:?}; {children:?})"),
             Val::Lam { dom, body, .. } => write!(f, "λ({dom:?}). {body:?}"),
             Val::WfIh { children, .. } => write!(f, "ih_Wf({children:?})"),
             Val::ULam { num_vars, body, .. } => write!(f, "Λ[{num_vars}ℓ]. {body:?}"),
@@ -2143,7 +2188,7 @@ impl fmt::Debug for Val<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Elim, ElimSpine, Env, EnvNode, TmClo, TyClo, Val, ValueArena, ValueMetrics};
+    use super::{Elim, ElimSpine, Env, EnvNode, TmClo, TyClo, VTy, Val, ValueArena, ValueMetrics};
     use std::sync::Arc as Rc;
 
     #[test]
@@ -2158,6 +2203,11 @@ mod tests {
         // raise the alignment to 16 and round every value up, which is why
         // §3.4's preferred `WIDTH_CAP` is not the one that shipped.
         assert_eq!(std::mem::size_of::<Val<'_>>(), 88);
+        // Types and eliminations ride the evaluator's and conversion's
+        // recursion; a former with many components keeps them behind one
+        // pointer (`VIWfSig`) instead of growing every one.
+        assert_eq!(std::mem::size_of::<VTy<'_>>(), 72);
+        assert_eq!(std::mem::size_of::<Elim<'_>>(), 128);
     }
 
     #[test]

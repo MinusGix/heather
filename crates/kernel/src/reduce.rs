@@ -40,7 +40,7 @@ use std::sync::Arc as Rc;
 use crate::level::Level;
 use crate::subst::{GlobalEntry, GlobalSubst};
 use crate::term::{
-    nth, wf_step_telescope, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, LocalCtx,
+    iwf_ih, nth, wf_step_telescope, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, LocalCtx,
     LocalSubst, LocalVar, Term, Type,
 };
 
@@ -946,6 +946,28 @@ fn step_term_frame(t: &Term, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) 
                 arity: Rc::clone(arity),
                 motive: Rc::clone(motive),
                 step: Rc::clone(step),
+                scrut: Rc::new(s),
+            }),
+        },
+        // elim_IWf(…; m; sup_i(…; a; cs)) ⇝ s[a, cs, iwfIH a cs] — at a
+        // `sup_i` of any annotations and at any index `m`, open data included
+        // (docs/iwf-former-design.md §4; heather-coq `red_elimIWf_supi`). The
+        // ih is `term::iwf_ih`, shared with the value machine.
+        Term::ElimIWf { sig, motive_level, motive, step, index, scrut } => match &**scrut {
+            Term::Supi { label, children, .. } => {
+                let ih = iwf_ih(sig, motive_level, motive, step, label, children);
+                let delta = LocalSubst::id(gamma)
+                    .extended(Rc::clone(label))
+                    .extended(Rc::clone(children))
+                    .extended(Rc::new(ih));
+                Some(step.apply_local(&delta))
+            }
+            _ => step_scrut(scrut, gamma, defs, frames).map(|s| Term::ElimIWf {
+                sig: Rc::clone(sig),
+                motive_level: motive_level.clone(),
+                motive: Rc::clone(motive),
+                step: Rc::clone(step),
+                index: Rc::clone(index),
                 scrut: Rc::new(s),
             }),
         },
@@ -2592,6 +2614,7 @@ pub fn is_whnf_type(t: &Type) -> bool {
         | Type::Sum { .. }
         | Type::W { .. }
         | Type::Wf { .. }
+        | Type::IWf { .. }
         | Type::Ty(_)
         | Type::UPi { .. }
         | Type::CtxPi { .. }
@@ -2621,6 +2644,7 @@ pub fn is_neutral_term(t: &Term) -> bool {
         Term::Case { scrut, .. } => is_neutral_term(scrut),
         Term::ElimW { scrut, .. } => is_neutral_term(scrut),
         Term::ElimWf { scrut, .. } => is_neutral_term(scrut),
+        Term::ElimIWf { scrut, .. } => is_neutral_term(scrut),
         Term::J { proof, .. } => is_neutral_term(proof),
         // For *reduction* purposes a transp is stuck exactly when its proof
         // is (β fires on srefl only); conversion additionally strips it when
@@ -2688,6 +2712,7 @@ pub fn is_whnf_term(t: &Term) -> bool {
         | Term::InrAt { .. }
         | Term::Sup { .. }
         | Term::Supf { .. }
+        | Term::Supi { .. }
         | Term::Lam { .. }
         | Term::ULam { .. }
         | Term::CtxLam { .. }

@@ -19,7 +19,7 @@ use std::sync::Arc as Rc;
 use heather_kernel::level::{Level, UnivVar};
 use heather_kernel::subst::{GlobalEntry, GlobalSubst};
 use heather_kernel::term::{
-    Branches, CtxBase, CtxEntry, GlobalVar, LocalCtx, LocalSubst, LocalVar, Motives, SubstTail,
+    Branches, CtxBase, CtxEntry, GlobalVar, IWfSig, LocalCtx, LocalSubst, LocalVar, Motives, SubstTail,
     Term, Type,
 };
 
@@ -408,6 +408,16 @@ pub fn gen_branches(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Branches> {
     })
 }
 
+/// An `IWf` signature: `arity` and `out` in `in1` (under `x : S`), `child`
+/// in `in2` (under `x, i`), the rest in `sc`.
+fn gen_iwf_sig(sc: &Sc, in1: &Sc, in2: &Sc, r: &mut Rng, b: u32) -> Rc<IWfSig> {
+    let (level, idx_level) = (gen_level(sc, r, 1), gen_level(sc, r, 1));
+    let (idx, shape) = (gen_type(sc, r, b / 4), gen_type(sc, r, b / 4));
+    let (arity, out) = (gen_term(in1, r, b / 4), gen_term(in1, r, b / 4));
+    let child = gen_term(in2, r, b / 4);
+    Rc::new(IWfSig { level, idx_level, idx, shape, arity, out, child })
+}
+
 pub fn gen_type(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Type> {
     // Referencable global type bindings.
     let ty_refs: Vec<(u32, Shape)> = sc
@@ -428,7 +438,7 @@ pub fn gen_type(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Type> {
     }
 
     for _ in 0..8 {
-        let arm = if b == 0 { r.below(3) } else { r.below(22) };
+        let arm = if b == 0 { r.below(3) } else { r.below(23) };
         match arm {
             0 => return Rc::new(Type::Nat),
             1 => return Rc::new(Type::Ty(gen_level(sc, r, 1))),
@@ -576,6 +586,15 @@ pub fn gen_type(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Type> {
                     len: gen_term(sc, r, b / 2),
                     fam: gen_type(&inner, r, b / 2),
                 });
+            }
+            22 if b > 0 => {
+                // IWf: arity and output index under `x : S`, child index
+                // under `x, i`, the index in the ambient scope.
+                let (mut in1, mut in2) = (sc.clone(), sc.clone());
+                in1.local.len += 1;
+                in2.local.len += 2;
+                let sig = gen_iwf_sig(sc, &in1, &in2, r, b);
+                return Rc::new(Type::IWf { sig, index: gen_term(sc, r, b / 4) });
             }
             _ => continue,
         }
@@ -975,6 +994,40 @@ pub fn gen_term(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Term> {
                     scrut: gen_term(sc, r, b / 2),
                 });
             }
+            // sup_i / elim_IWf: the signature as IWf's; the motive binds two
+            // (j, z), the step three (a, cs, ih).
+            39 if b > 0 => {
+                let (mut in1, mut in2) = (sc.clone(), sc.clone());
+                in1.local.len += 1;
+                in2.local.len += 2;
+                let sig = gen_iwf_sig(sc, &in1, &in2, r, b);
+                return Rc::new(Term::Supi {
+                    sig,
+                    label: gen_term(sc, r, b / 2),
+                    children: gen_term(sc, r, b / 2),
+                });
+            }
+            40 if b > 0 => {
+                let (mut in1, mut in2, mut in3) = (sc.clone(), sc.clone(), sc.clone());
+                in1.local.len += 1;
+                in2.local.len += 2;
+                in3.local.len += 3;
+                // The draws in the order the flat variant made them, so the
+                // stream is the one the laws were last run over.
+                let (level, idx_level, motive_level) =
+                    (gen_level(sc, r, 1), gen_level(sc, r, 1), gen_level(sc, r, 1));
+                let (idx, shape) = (gen_type(sc, r, b / 4), gen_type(sc, r, b / 4));
+                let (arity, out) = (gen_term(&in1, r, b / 4), gen_term(&in1, r, b / 4));
+                let child = gen_term(&in2, r, b / 4);
+                return Rc::new(Term::ElimIWf {
+                    sig: Rc::new(IWfSig { level, idx_level, idx, shape, arity, out, child }),
+                    motive_level,
+                    motive: gen_type(&in2, r, b / 2),
+                    step: gen_term(&in3, r, b / 2),
+                    index: gen_term(sc, r, b / 4),
+                    scrut: gen_term(sc, r, b / 2),
+                });
+            }
             // Vec/Fin/Wf codes: the lengths are terms of the ambient scope
             // (no binder); only the Wf code's arity binds `x : El s`.
             36 if b > 0 => {
@@ -1088,6 +1141,11 @@ pub fn gen_sigma(sc: &Sc, r: &mut Rng, b: u32) -> (GlobalSubst, Sc) {
 // Node counting (guards against runaway growth when reducing untyped terms)
 // -------------------------------------------------------------------------
 
+fn count_iwf_sig(sig: &IWfSig) -> u64 {
+    count_type(&sig.idx) + count_type(&sig.shape) + count_term(&sig.arity) + count_term(&sig.out)
+        + count_term(&sig.child)
+}
+
 pub fn count_type(t: &Type) -> u64 {
     1 + match t {
         Type::Nat | Type::Ty(_) | Type::Unit { .. } | Type::Empty { .. }
@@ -1102,6 +1160,7 @@ pub fn count_type(t: &Type) -> u64 {
         Type::Fin { len } => count_term(len),
         Type::Wf { shape, arity, .. } => count_type(shape) + count_term(arity),
         Type::DVec { len, fam, .. } => count_term(len) + count_type(fam),
+        Type::IWf { sig, index } => count_iwf_sig(sig) + count_term(index),
         Type::Squash { ty, .. } => count_type(ty),
         Type::UPi { body, .. } => count_type(body),
         Type::El { tm, .. } => count_term(tm),
@@ -1161,6 +1220,13 @@ pub fn count_term(t: &Term) -> u64 {
         }
         Term::ElimWf { shape, arity, motive, step, scrut, .. } => {
             count_type(shape) + count_term(arity) + count_type(motive) + count_term(step)
+                + count_term(scrut)
+        }
+        Term::Supi { sig, label, children } => {
+            count_iwf_sig(sig) + count_term(label) + count_term(children)
+        }
+        Term::ElimIWf { sig, motive, step, index, scrut, .. } => {
+            count_iwf_sig(sig) + count_type(motive) + count_term(step) + count_term(index)
                 + count_term(scrut)
         }
         Term::Succ(t) => count_term(t),

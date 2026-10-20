@@ -312,7 +312,7 @@ fn box_is_intensional() {
         let mut r = Rng::new(seed ^ 0xe7037ed1a0b428db);
         let mut env = gen_wt_env(&mut r);
         env.layer = Layer::Meta; // box is a layer-m form
-        let delta = gen_wt_ctx(&env, &mut r, 2, Layer::Prog);
+        let delta = gen_wt_ctx(&env, &mut r, 2, Layer::Code);
         let ce = env.in_ctx(delta.clone(), Layer::Code);
         let code = gen_wt_term_at(&ce, &mut r, 2, &Type::Nat, &Level::Zero)
             .unwrap_or_else(|| panic!("seed {seed}: Nat is always inhabitable"));

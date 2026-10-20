@@ -109,7 +109,7 @@ use std::sync::Arc as Rc;
 use crate::bounds;
 use crate::level::Level;
 use crate::term::{
-    Branches, CtxBase, CtxEntries, CtxEntry, GlobalVar, LocalCtx, LocalSubst, LocalVar, Motives,
+    Branches, CtxBase, CtxEntries, CtxEntry, GlobalVar, IWfSig, LocalCtx, LocalSubst, LocalVar, Motives,
     SubstTail, Term, Type,
 };
 
@@ -326,6 +326,27 @@ fn sub_ty<M: Mapper>(t: &Rc<Type>, m: &mut M, at: Depths) -> Rc<Type> {
     }
 }
 
+/// An `IWf` signature (`docs/iwf-former-design.md` §1.2): `arity` and
+/// `out` under `x : S`, `child` under `x, i`. Shared when nothing in it
+/// changed, as [`sub_ty`]/[`sub_tm`] share a node.
+fn sub_iwf_sig<M: Mapper>(sig: &Rc<IWfSig>, m: &mut M, at: Depths) -> Rc<IWfSig> {
+    let before = *m.changes();
+    let mapped = IWfSig {
+        level: m.level(&sig.level, at),
+        idx_level: m.level(&sig.idx_level, at),
+        idx: sub_ty(&sig.idx, m, at),
+        shape: sub_ty(&sig.shape, m, at),
+        arity: sub_tm(&sig.arity, m, at + dep(0, 0, 1)),
+        out: sub_tm(&sig.out, m, at + dep(0, 0, 1)),
+        child: sub_tm(&sig.child, m, at + dep(0, 0, 2)),
+    };
+    if *m.changes() == before {
+        Rc::clone(sig)
+    } else {
+        Rc::new(mapped)
+    }
+}
+
 fn sub_tm<M: Mapper>(t: &Rc<Term>, m: &mut M, at: Depths) -> Rc<Term> {
     if M::COUNT_NODES {
         crate::stats::shift_global_nodes(1);
@@ -493,6 +514,8 @@ fn map_type<M: Mapper>(t: &Type, m: &mut M, at: Depths) -> Type {
             len: sub_tm(len, m, at),
             fam: sub_ty(fam, m, at + dep(0, 0, 1)),
         },
+        // IWf: `arity` and `out` under `x : S`, `child` under `x, i`.
+        Type::IWf { sig, index } => Type::IWf { sig: sub_iwf_sig(sig, m, at), index: sub_tm(index, m, at) },
         Type::GlobalTy { var, subst } => {
             let subst = map_subst(subst, m, at);
             m.global_ty(*var, subst, at)
@@ -771,6 +794,21 @@ fn map_term<M: Mapper>(t: &Term, m: &mut M, at: Depths) -> Term {
             arity: sub_tm(arity, m, at + dep(0, 0, 1)),
             motive: sub_ty(motive, m, at + dep(0, 0, 1)),
             step: sub_tm(step, m, at + dep(0, 0, 3)),
+            scrut: sub_tm(scrut, m, at),
+        },
+        // sup_i / elim_IWf: the signature as `IWf`'s; the motive binds
+        // `j, z`, the step `a, cs, ih`.
+        Term::Supi { sig, label, children } => Term::Supi {
+            sig: sub_iwf_sig(sig, m, at),
+            label: sub_tm(label, m, at),
+            children: sub_tm(children, m, at),
+        },
+        Term::ElimIWf { sig, motive_level, motive, step, index, scrut } => Term::ElimIWf {
+            sig: sub_iwf_sig(sig, m, at),
+            motive_level: m.level(motive_level, at),
+            motive: sub_ty(motive, m, at + dep(0, 0, 2)),
+            step: sub_tm(step, m, at + dep(0, 0, 3)),
+            index: sub_tm(index, m, at),
             scrut: sub_tm(scrut, m, at),
         },
         Term::Lam { dom_level, cod_level, dom, body } => Term::Lam {
@@ -1339,11 +1377,17 @@ struct AbstractLocal<'a> {
     /// goal spells two ways, and catching only one of them is worse than
     /// catching neither.
     pats: &'a [(Term, Term)],
-    /// `witness[k]` is `pats` weakened past `k` further binders — each `pat`
-    /// by `k + 1` (it is scoped in `Γ`, and `z` is one more), each `rep` by
-    /// `k` (it already lives under `z`). Memoized: the walk asks at every
-    /// node.
+    /// `witness[k]` is `pats` weakened past `k` further local binders — each
+    /// `pat` by `k + 1` (it is scoped in `Γ`, and `z` is one more), each
+    /// `rep` by `k` (it already lives under `z`). Memoized: the walk asks at
+    /// every node.
     witness: Vec<Vec<(Term, Term)>>,
+    /// The same below binders of the global or universe context too (a code
+    /// eliminator's branches, `letbox`'s body, a context abstraction), keyed
+    /// by all three depths: there `pat` and `rep` are also weakened past
+    /// those binders, or a pattern mentioning a global variable would match
+    /// (and capture) the one the binder shifted onto its index.
+    witness_under: Vec<(Depths, Vec<(Term, Term)>)>,
     /// Occurrences replaced — the caller's "did this find anything".
     hits: u64,
     changes: u64,
@@ -1358,16 +1402,36 @@ impl Mapper for AbstractLocal<'_> {
     }
 
     fn pre_tm(&mut self, t: &Rc<Term>, at: Depths) -> Option<Term> {
-        while self.witness.len() as u32 <= at.local {
-            let i = self.witness.len() as u32;
-            let row = self
-                .pats
-                .iter()
-                .map(|(p, r)| (p.shift_local(i + 1), r.shift_local(i)))
-                .collect();
-            self.witness.push(row);
-        }
-        let hit = self.witness[at.local as usize]
+        let row = if at.global == 0 && at.univ == 0 {
+            while self.witness.len() as u32 <= at.local {
+                let i = self.witness.len() as u32;
+                let row = self
+                    .pats
+                    .iter()
+                    .map(|(p, r)| (p.shift_local(i + 1), r.shift_local(i)))
+                    .collect();
+                self.witness.push(row);
+            }
+            &self.witness[at.local as usize]
+        } else {
+            let k = match self.witness_under.iter().position(|(d, _)| *d == at) {
+                Some(k) => k,
+                None => {
+                    let under = |t: &Term, by: u32| {
+                        t.shift_local(by).shift_global(at.global).shift_univ(at.univ)
+                    };
+                    let row = self
+                        .pats
+                        .iter()
+                        .map(|(p, r)| (under(p, at.local + 1), under(r, at.local)))
+                        .collect();
+                    self.witness_under.push((at, row));
+                    self.witness_under.len() - 1
+                }
+            };
+            &self.witness_under[k].1
+        };
+        let hit = row
             .iter()
             .find(|(pat, _)| **t == *pat)
             .map(|(_, rep)| rep.clone());
@@ -1583,6 +1647,19 @@ macro_rules! ops {
                 $map(self, &mut InstTop { payload, by, changes: 0 }, Depths::default())
             }
 
+            /// [`Self::inst_top`] below `cutoff` binders that stay fixed:
+            /// `self` is scoped in `Γ, x, Θ` with `|Θ| = cutoff`, `s` in
+            /// `Γ, Δ`, and the result in `Γ, Δ, Θ` (the Coq formalization's
+            /// `⟨rlift ↑⟩ⁿ…[llift (lsingle s)]`). `IWf`'s child index is
+            /// instantiated at a shape this way, under its position binder.
+            pub fn inst_top_above(&self, by: u32, cutoff: u32, payload: &Term) -> $ty {
+                $map(
+                    self,
+                    &mut InstTop { payload, by, changes: 0 },
+                    Depths { local: cutoff, ..Depths::default() },
+                )
+            }
+
             /// Weaken the ambient local context by `by` entries.
             pub fn shift_local(&self, by: u32) -> $ty {
                 if by == 0 {
@@ -1706,7 +1783,7 @@ impl Type {
     }
 
     fn abstract_pats(&self, pats: &[(Term, Term)]) -> Option<Type> {
-        let mut m = AbstractLocal { pats, witness: Vec::new(), hits: 0, changes: 0 };
+        let mut m = AbstractLocal { pats, witness: Vec::new(), witness_under: Vec::new(), hits: 0, changes: 0 };
         let out = map_type(&self.shift_local(1), &mut m, Depths::default());
         (m.hits > 0).then_some(out)
     }
