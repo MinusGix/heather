@@ -599,7 +599,7 @@ const PROPOSITION_UNFOLD_STEPS: u64 = 64;
 /// `x.num * y.den.int() <= y.num * x.den.int()`. Its head is unfolded step by
 /// step and the first reduct `reads` accepts is kept, not the weak head
 /// normal form, which would unfold `Le` itself into its recursor; then the
-/// arguments, which arrive as passed (`Rat::zero().num`), are simplified as a
+/// arguments, which arrive as passed (`Rat::ofInt(0).num`), are simplified as a
 /// goal's are. Only an applied global that is not a type former is asked: a
 /// local `x: Rat` or `l: List<Int>` is data, and asking it would cost every
 /// call a reduction per binder.
@@ -966,7 +966,7 @@ fn affine_syntax(
                 });
             }
             // A factor that computes to a numeral is that numeral, as an
-            // atom is (`x.num * Rat::one().den.int()` is `x.num * 1`); the
+            // atom is (`x.num * Rat::ofInt(1).den.int()` is `x.num * 1`); the
             // checker's conversion computes it again.
             for (factor, inner, factor_on_left) in [(left, right, true), (right, left, false)] {
                 if let Some(factor) = int_value(elab, cx, factor).filter(|value| *value != Z::MIN) {
@@ -1108,7 +1108,7 @@ fn affine_syntax(
 /// is a constructor whose Nat payload computes to a numeral
 /// ([`SemanticOracle::nat_value`](crate::oracle::SemanticOracle::nat_value)).
 fn int_value(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>) -> Option<Z> {
-    // A field of a call (`Rat::one().num`) computes as the call does.
+    // A field of a call (`Rat::ofInt(1).num`) computes as the call does.
     if !head_is_global(projection_path(tm).1) {
         return None;
     }
@@ -1383,7 +1383,7 @@ fn nat_affine_syntax_within(
                     inner: Box::new(nat_affine_syntax_within(elab, cx, left, atoms, depth)?),
                 });
             }
-            // A factor that computes to a numeral (`Rat::one().den`) is that
+            // A factor that computes to a numeral (`Rat::ofInt(1).den`) is that
             // numeral, as on the Int side; it keeps its own spelling, which
             // the checker's conversion computes.
             if let (Some(left_nat), Some(right_nat)) = (left_source, right_source) {

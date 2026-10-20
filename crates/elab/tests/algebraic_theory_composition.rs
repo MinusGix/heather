@@ -332,3 +332,105 @@ theorem second_survives(): both().second_laws.point = On {{ refl }}
 "
     ));
 }
+
+// ---------------------------------------------------------------------------
+// The relation-indexed shape (lib/std/semiring.hthr): a setoid inherited by
+// both monoids of a two-operation class, and laws written in body symbols.
+
+const SETOID: &str = r#"
+inductive Bit { Off, On }
+
+fn right(x, y: Bit) -> Bit { y }
+fn right2(x, y: Bit) -> Bit { y }
+fn Same(x, y: Bit) -> Type { x = y }
+fn Loose(x, y: Bit) -> Type { Bit }
+
+class Refl<A>(R: A -> A -> Type) { refl_at: (x: A) -> R(x, x) }
+
+class Mon<A>(same as ≈: A -> A -> Type, op as ∙: A -> A -> A) extends Refl<A>(same) {
+    unit: A,
+    unit_l: (x: A) -> unit ∙ x ≈ x,
+}
+"#;
+
+#[test]
+fn inherited_laws_take_the_childs_spelling_and_their_symbols_count_as_occurrences() {
+    // `Mon`'s laws are written with `∙`. A child spelling the operation `+`
+    // inherits them at its own index, and two tagged fibers of `Mon` are
+    // told apart by the operation the symbol spells.
+    ok(&format!(
+        "{SETOID}
+class AddMon<A>(same as ≈: A -> A -> Type, add as +: A -> A -> A) extends Mon<A>(same, add) {{}}
+instance Refl<Bit>(Same) {{ refl_at := λ x => refl }}
+instance AddMon<Bit>(Same, right) {{ unit := Off, unit_l := λ x => refl }}
+theorem add_law<A: AddMon(≈, +)>(x: A): A.unit + x ≈ x {{ A.unit_l(x) }}
+
+class BothMon<A>(same: A -> A -> Type, f, g: A -> A -> A)
+    extends Mon<A>(same, f) as one, Mon<A>(same, g) as two
+{{}}
+"
+    ));
+}
+
+#[test]
+fn a_flat_and_a_tagged_fiber_coexist_and_the_flat_one_answers_unqualified() {
+    ok(&format!(
+        "{SETOID}
+class Two<A>(same as ≈: A -> A -> Type, add as +: A -> A -> A, mul as *: A -> A -> A)
+    extends Mon<A>(same, add), Mon<A>(same, mul) as mult
+{{}}
+instance Refl<Bit>(Same) {{ refl_at := λ x => refl }}
+instance Mon<Bit>(Same, right) {{ unit := Off, unit_l := λ x => refl }}
+instance Mon<Bit>(Same, right2) {{ unit := On, unit_l := λ x => refl }}
+instance Two<Bit>(Same, right, right2) {{}}
+
+theorem flat_unit<A: Two(≈, +, *)>(x: A): A.unit + x ≈ x {{ A.unit_l(x) }}
+theorem tagged_unit<A: Two(≈, +, *)>(x: A): A.mult.unit * x ≈ x {{ A.mult.unit_l(x) }}
+theorem bit_add_unit(): Bit::Two(Same, right, right2).unit = Off {{ refl }}
+theorem bit_mul_unit(): Bit::Two(Same, right, right2).mult.unit = On {{ refl }}
+"
+    ));
+}
+
+#[test]
+fn a_proof_only_ancestor_shared_with_a_tag_owes_agreement() {
+    // `Refl(same)` is reached untagged and again inside `mult`. At `Loose`
+    // its proofs are values of `Bit`, so the two copies can differ — and an
+    // instance whose copies differ is refused.
+    let two = "
+class Two<A>(same as ≈: A -> A -> Type, add as +: A -> A -> A, mul as *: A -> A -> A)
+    extends Mon<A>(same, add), Mon<A>(same, mul) as mult
+{}
+instance Refl<Bit>(Loose) { refl_at := λ x => Off }
+instance Mon<Bit>(Loose, right) { unit := Off, unit_l := λ x => Off }
+";
+    let message = bad(&format!(
+        "{SETOID}{two}
+instance Two<Bit>(Loose, right, right2) {{ mult := Mon(λ x => On, On, λ x => On) }}
+"
+    ));
+    assert!(message.contains("mult.refl_at"), "{message}");
+    assert!(message.contains("owes agreement"), "{message}");
+    // The control: the same instance with the canonical proof under the tag.
+    ok(&format!(
+        "{SETOID}{two}
+instance Two<Bit>(Loose, right, right2) {{ mult := Mon(λ x => Off, On, λ x => On) }}
+"
+    ));
+}
+
+#[test]
+fn a_data_carrying_ancestor_reached_twice_is_refused() {
+    // Two copies of a unit are different terms in generic code, so a class
+    // may not hold `Mon(same, op)` both untagged and inside a tag.
+    let message = bad(&format!(
+        "{SETOID}
+class Wrap<A>(same: A -> A -> Type, op: A -> A -> A) extends Mon<A>(same, op) as inner {{}}
+class Bad<A>(same: A -> A -> Type, op: A -> A -> A)
+    extends Mon<A>(same, op), Wrap<A>(same, op) as w
+{{}}
+"
+    ));
+    assert!(message.contains("carries data"), "{message}");
+    assert!(message.contains("w.inner"), "{message}");
+}

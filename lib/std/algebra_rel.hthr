@@ -2,6 +2,7 @@
 // algebra hierarchy while its migration is designed, and from lean execution
 // semantics so importing relation does not elaborate an unused law hierarchy.
 
+import relation;
 import relation_props;
 
 // An evidence-bearing interface over the shared relator. Its arguments are
@@ -11,6 +12,14 @@ class Respects2<A, B, C>(RA: A → A → Type, RB: B → B → Type,
 {
     respects2: Respectful<A, A, B → C, B → C>(
         RA, Respectful<B, B, C, C>(RB, RC), op, op),
+}
+
+// Every operation respects identity: the `Respects2` field of any carrier
+// whose structure relation is `RelId`.
+theorem respects2_relid<A>(op: A → A → A):
+    Respectful<A, A, A → A, A → A>(RelId<A>, Respectful<A, A, A, A>(RelId<A>, RelId<A>), op, op)
+{
+    λ x x2 hx y y2 hy => j(hx, λ w q => op(x, y) = op(w, y2), j(hy, λ w q => op(x, y) = op(x, w), refl))
 }
 
 class Associative<A>(same: A → A → Type, op: A → A → A) {
@@ -25,15 +34,38 @@ class Idempotent<A>(same: A → A → Type, op: A → A → A) {
     idem: (x: A) → same(op(x, x), x),
 }
 
-class Semigroup<A>(same: A → A → Type, op: A → A → A)
+class SemigroupRel<A>(same: A → A → Type, op: A → A → A)
     extends Equivalence<A>(same), Respects2<A, A, A>(same, same, same, op),
             Associative<A>(same, op)
 {}
 
+// The monoid modulo `≈`: a semigroup with a two-sided unit, the unit a field
+// as `algebra`'s `Monoid` keeps it. The body symbols are local spellings of
+// the two indices; a child that writes its own (`add as +`) inherits these
+// laws in its spelling.
+class MonoidRel<A>(same as ≈: A → A → Type, op as ∙: A → A → A) extends SemigroupRel<A>(same, op) {
+    unit: A,
+    unit_l: (x: A) → unit ∙ x ≈ x,
+    unit_r: (x: A) → x ∙ unit ≈ x,
+}
+
+class CommMonoidRel<A>(same as ≈: A → A → Type, op as ∙: A → A → A)
+    extends MonoidRel<A>(same, op), Commutative<A>(same, op)
+{}
+
+// The group modulo `≈`. The inverse is an operation like `op`, so it owes
+// respect for `≈` as `op` does through `Respects2`.
+class GroupRel<A>(same as ≈: A → A → Type, op as ∙: A → A → A) extends MonoidRel<A>(same, op) {
+    inv: A → A,
+    inv_l: (x: A) → inv(x) ∙ x ≈ unit,
+    inv_r: (x: A) → x ∙ inv(x) ≈ unit,
+    inv_respects: (x, y: A) → x ≈ y → inv(x) ≈ inv(y),
+}
+
 // A named composition, not a second copy of each law. Independent law classes
 // remain useful to clients that do not require the complete interface.
 class Mergeable<A>(same: A → A → Type, merge: A → A → A)
-    extends Semigroup<A>(same, merge), Commutative<A>(same, merge),
+    extends SemigroupRel<A>(same, merge), Commutative<A>(same, merge),
             Idempotent<A>(same, merge)
 {}
 

@@ -47,6 +47,7 @@ const MODULES: &[(&str, &str)] = &[
         "ordered_field",
         include_str!("../../../lib/std/ordered_field.hthr"),
     ),
+    ("semiring", include_str!("../../../lib/std/semiring.hthr")),
     ("rat", include_str!("../../../lib/std/rat.hthr")),
     ("creal", include_str!("../../../lib/std/creal.hthr")),
 ];
@@ -227,7 +228,7 @@ fn same_is_not_identity() {
     refused(
         "creal_not_same",
         &format!(
-            "{IMPORTS} fn bad() → CReal::zero() ≈ CReal::one() {{
+            "{IMPORTS} fn bad() → CReal::Same(0, 1) {{
                 CReal::ofRat_respects(refl)
             }}"
         ),
@@ -249,8 +250,8 @@ fn a_wrong_law_is_refused() {
     refused(
         "creal_add_zero_termwise",
         &format!(
-            "{IMPORTS} fn bad(x: CReal) → x + CReal::zero() ≈ x {{
-                (x + CReal::zero()).same_of_terms(x, λ n => x.seq(n + n + 1).add_zero())
+            "{IMPORTS} fn bad(x: CReal) → x + 0 ≈ x {{
+                (x + 0).same_of_terms(x, λ n => x.seq(n + n + 1).add_zero())
             }}"
         ),
     );
@@ -280,8 +281,8 @@ fn strict_order_is_strict() {
     refused(
         "creal_lt_zero_zero",
         &format!(
-            "{IMPORTS} fn bad() → CReal::zero() < CReal::zero() {{
-                let gap: (Rat::zero() < Rat::zero()) = omega;
+            "{IMPORTS} fn bad() → CReal::Lt(0, 0) {{
+                let gap: (Rat::Lt(0, 0)) = omega;
                 CReal::ofRat_lt(gap)
             }}"
         ),
@@ -309,8 +310,8 @@ fn strict_order_is_strict() {
         &mut e,
         "creal_lt_control",
         &format!(
-            "{IMPORTS} fn ok() → CReal::zero() < CReal::one() {{
-                let gap: (Rat::zero() < Rat::one()) = omega;
+            "{IMPORTS} fn ok() → CReal::Lt(0, 1) {{
+                let gap: (Rat::Lt(0, 1)) = omega;
                 CReal::ofRat_lt(gap)
             }}"
         ),
@@ -328,13 +329,13 @@ fn witnesses_compute() {
         &mut e,
         "creal_witnesses",
         &format!(
-            "{IMPORTS} theorem modulus(): (CReal::zero().add_zero()(2)).witness = 5 {{ refl }}
+            "{IMPORTS} theorem modulus(): (CReal::add_zero(0)(2)).witness = 5 {{ refl }}
             theorem trans_start(x: CReal): (CReal::same_trans(x.same_refl(), x.same_refl())(4)).witness = 0 {{ refl }}"
         ),
     );
     refused(
         "creal_wrong_modulus",
-        &format!("{IMPORTS} theorem bad(): (CReal::zero().add_zero()(2)).witness = 4 {{ refl }}"),
+        &format!("{IMPORTS} theorem bad(): (CReal::add_zero(0)(2)).witness = 4 {{ refl }}"),
     );
 }
 
@@ -376,7 +377,7 @@ fn a_product_reads_its_factors_further_out() {
     // Zero absorbs, but one does not.
     refused(
         "creal_mul_one_is_zero",
-        &format!("{IMPORTS} fn bad() → CReal::one() * CReal::one() ≈ CReal::zero() {{ CReal::one().mul_zero() }}"),
+        &format!("{IMPORTS} fn bad() → CReal::Same(1 * 1, 0) {{ CReal::mul_zero(1) }}"),
     );
 }
 
@@ -393,8 +394,8 @@ fn le_is_not_lt() {
         &mut e,
         "creal_le_control",
         &format!(
-            "{IMPORTS} theorem ok(): ¬(CReal::one() <= CReal::zero()) {{
-                let gap: (Rat::zero() < Rat::one()) = omega;
+            "{IMPORTS} theorem ok(): ¬(CReal::Le(1, 0)) {{
+                let gap: (Rat::Lt(0, 1)) = omega;
                 λ h => h(CReal::ofRat_lt(gap))
             }}"
         ),
@@ -402,8 +403,8 @@ fn le_is_not_lt() {
     refused(
         "creal_le_wrong_way",
         &format!(
-            "{IMPORTS} fn bad() → CReal::one() <= CReal::zero() {{
-                let le: (Rat::zero() <= Rat::one()) = omega;
+            "{IMPORTS} fn bad() → CReal::Le(1, 0) {{
+                let le: (Rat::Le(0, 1)) = omega;
                 CReal::ofRat_le(le)
             }}"
         ),
@@ -420,18 +421,18 @@ fn product_witnesses_compute() {
         &mut e,
         "creal_product_witnesses",
         &format!(
-            "{IMPORTS} theorem modulus(): (CReal::one().mul_comm(CReal::one())(0)).witness = 55 {{ refl }}
+            "{IMPORTS} theorem modulus(): (CReal::mul_comm(1, 1)(0)).witness = 55 {{ refl }}
             theorem bound(): CReal::ofRat(Rat(-OfNat(7), 2)).bound() = 9 {{ refl }}"
         ),
     );
     refused(
         "creal_wrong_product_modulus",
-        &format!("{IMPORTS} theorem bad(): (CReal::one().mul_comm(CReal::one())(0)).witness = 54 {{ refl }}"),
+        &format!("{IMPORTS} theorem bad(): (CReal::mul_comm(1, 1)(0)).witness = 54 {{ refl }}"),
     );
 }
 
-const ONE_APART: &str = "theorem one_apart(): CReal::one().Apart(CReal::zero()) {
-        let gap: (Rat::zero() < Rat::one()) = omega;
+const ONE_APART: &str = "theorem one_apart(): CReal::Apart(1, 0) {
+        let gap: (Rat::Lt(0, 1)) = omega;
         Inr(CReal::ofRat_lt(gap))
     }\n";
 
@@ -442,13 +443,13 @@ fn the_inverse_needs_a_gap() {
         "creal_inv_zero",
         &format!(
             "{IMPORTS} fn bad() → CReal {{
-                let above: (Rat::zero() + Rat::inv_succ(0) <= Rat::zero()) = omega;
-                CReal::zero().inv(h := Inr(Exists(0, Exists(0, λ n from => above))))
+                let above: (0 + Rat::inv_succ(0) <= 0) = omega;
+                CReal::inv(0, h := Inr(Exists(0, Exists(0, λ n from => above))))
             }}"
         ),
     );
     // ... nor can the inverse be asked for without one ...
-    refused("creal_inv_no_gap", &format!("{IMPORTS} fn bad() → CReal {{ CReal::zero().inv() }}"));
+    refused("creal_inv_no_gap", &format!("{IMPORTS} fn bad() → CReal {{ CReal::inv(0) }}"));
     // ... and an apartness proof at zero is absurd.
     let mut e = base();
     check(
@@ -456,10 +457,10 @@ fn the_inverse_needs_a_gap() {
         "creal_inv_gap_control",
         &format!(
             "{IMPORTS} fn ok() → CReal {{
-                let above: (Rat::zero() + Rat::inv_succ(0) <= Rat::one()) = omega;
-                CReal::one().inv(h := Inr(Exists(0, Exists(0, λ n from => above))))
+                let above: (0 + Rat::inv_succ(0) <= 1) = omega;
+                CReal::inv(1, h := Inr(Exists(0, Exists(0, λ n from => above))))
             }}
-            theorem zero_absurd(h: CReal::zero().Apart(CReal::zero())): False {{ CReal::zero().apart_irrefl(h) }}"
+            theorem zero_absurd(h: CReal::Apart(0, 0)): False {{ CReal::apart_irrefl(0, h) }}"
         ),
     );
 }
@@ -471,7 +472,7 @@ fn the_inverse_reads_further_out() {
     refused(
         "creal_inv_same_index",
         &format!(
-            "{IMPORTS} theorem bad(x: CReal, h: x.Apart(CReal::zero()), n: Nat): x⁻¹.seq(n) = x.seq(n).recip() {{ refl }}"
+            "{IMPORTS} theorem bad(x: CReal, h: x.Apart(0), n: Nat): x⁻¹.seq(n) = x.seq(n).recip() {{ refl }}"
         ),
     );
     let mut e = base();
@@ -487,7 +488,7 @@ fn the_inverse_reads_further_out() {
     refused(
         "creal_mul_inv_wrong",
         &format!(
-            "{IMPORTS} fn bad(x: CReal, h: x.Apart(CReal::zero())) → x * x⁻¹ ≈ CReal::zero() {{ x.mul_inv() }}"
+            "{IMPORTS} fn bad(x: CReal, h: x.Apart(0)) → x * x⁻¹ ≈ 0 {{ x.mul_inv() }}"
         ),
     );
 }
@@ -503,10 +504,10 @@ fn the_inverse_computes() {
         "creal_inv_computes",
         &format!(
             "{IMPORTS} {ONE_APART}
-            theorem gap_size(): (CReal::one().away_of_apart(one_apart())).witness = 1 {{ refl }}
-            theorem inv_one_term(): CReal::one().inv(h := one_apart()).seq(3) = Rat::one() {{ refl }}
-            theorem neg_two_apart(): CReal::ofRat(Rat(-OfNat(2), 1)).Apart(CReal::zero()) {{
-                let gap: (Rat(-OfNat(2), 1) < Rat::zero()) = omega;
+            theorem gap_size(): (CReal::away_of_apart(1, one_apart())).witness = 1 {{ refl }}
+            theorem inv_one_term(): CReal::inv(1, h := one_apart()).seq(3) = 1 {{ refl }}
+            theorem neg_two_apart(): CReal::ofRat(Rat(-OfNat(2), 1)).Apart(0) {{
+                let gap: (Rat(-OfNat(2), 1) < 0) = omega;
                 Inl(CReal::ofRat_lt(gap))
             }}
             theorem inv_neg_two_term(): CReal::ofRat(Rat(-OfNat(2), 1)).inv(h := neg_two_apart()).seq(5) = Rat(-OfNat(1), 2) {{ refl }}"
@@ -514,11 +515,11 @@ fn the_inverse_computes() {
     );
     refused(
         "creal_inv_wrong_value",
-        &format!("{IMPORTS} {ONE_APART} theorem bad(): CReal::one().inv(h := one_apart()).seq(3) = Rat::zero() {{ refl }}"),
+        &format!("{IMPORTS} {ONE_APART} theorem bad(): CReal::inv(1, h := one_apart()).seq(3) = 0 {{ refl }}"),
     );
     refused(
         "creal_inv_wrong_gap",
-        &format!("{IMPORTS} {ONE_APART} theorem bad(): (CReal::one().away_of_apart(one_apart())).witness = 0 {{ refl }}"),
+        &format!("{IMPORTS} {ONE_APART} theorem bad(): (CReal::away_of_apart(1, one_apart())).witness = 0 {{ refl }}"),
     );
 }
 
@@ -535,7 +536,7 @@ fn order_and_addition() {
     refused(
         "creal_pos_of_add_both",
         &format!(
-            "{IMPORTS} fn bad(x, y: CReal, h: CReal::zero() < x + y) → CReal::zero() < x ∧ CReal::zero() < y {{
+            "{IMPORTS} fn bad(x, y: CReal, h: 0 < x + y) → 0 < x ∧ 0 < y {{
                 CReal::pos_of_add_pos(h)
             }}"
         ),
@@ -556,15 +557,15 @@ fn order_and_addition() {
         &mut e,
         "creal_shift_control",
         &format!(
-            "{IMPORTS} theorem gap(): (Rat::zero() < Rat::one()) {{ omega }}
-            theorem shifted(z: CReal): CReal::zero().add_lt_mono_r(CReal::one(), z, CReal::ofRat_lt(gap())).witness = 1 {{ refl }}"
+            "{IMPORTS} theorem gap(): (Rat::Lt(0, 1)) {{ omega }}
+            theorem shifted(z: CReal): CReal::add_lt_mono_r(0, 1, z, CReal::ofRat_lt(gap())).witness = 1 {{ refl }}"
         ),
     );
     refused(
         "creal_shift_wrong_gap",
         &format!(
-            "{IMPORTS} theorem gap(): (Rat::zero() < Rat::one()) {{ omega }}
-            theorem shifted(z: CReal): CReal::zero().add_lt_mono_r(CReal::one(), z, CReal::ofRat_lt(gap())).witness = 2 {{ refl }}"
+            "{IMPORTS} theorem gap(): (Rat::Lt(0, 1)) {{ omega }}
+            theorem shifted(z: CReal): CReal::add_lt_mono_r(0, 1, z, CReal::ofRat_lt(gap())).witness = 2 {{ refl }}"
         ),
     );
 }
@@ -584,8 +585,8 @@ fn inverse_and_power_notation() {
         "creal_power_notation",
         &format!(
             "{POWER_IMPORTS}
-            theorem from_apart(x: CReal, h: x.Apart(CReal::zero())): x * x⁻¹ ≈ CReal::one() {{ x.mul_inv() }}
-            theorem from_negative(x: CReal, h: x < CReal::zero()): x ^ (-1) ≈ x⁻¹ {{ x.pow_neg_one() }}
+            theorem from_apart(x: CReal, h: x.Apart(0)): x * x⁻¹ ≈ 1 {{ x.mul_inv() }}
+            theorem from_negative(x: CReal, h: x < 0): x ^ (-1) ≈ x⁻¹ {{ x.pow_neg_one() }}
             theorem square(x: CReal): x ^ 2 ≈ x * x {{ x.pow_two() }}
             theorem embedded(): CReal::ofRat(Rat(OfNat(2), 1))⁻¹ ≈ CReal::ofRat(Rat(OfNat(2), 1)⁻¹) {{
                 CReal::ofRat_inv(Rat(OfNat(2), 1))
@@ -594,10 +595,10 @@ fn inverse_and_power_notation() {
     );
     refused("creal_inv_unknown_sign", &format!("{POWER_IMPORTS} fn bad(x: CReal) → CReal {{ x⁻¹ }}"));
     refused("creal_power_negative_unknown", &format!("{POWER_IMPORTS} fn bad(x: CReal) → CReal {{ x ^ (-2) }}"));
-    refused("creal_inv_of_zero", &format!("{POWER_IMPORTS} fn bad() → CReal {{ CReal::ofRat(Rat::zero())⁻¹ }}"));
+    refused("creal_inv_of_zero", &format!("{POWER_IMPORTS} fn bad() → CReal {{ CReal::ofRat(0)⁻¹ }}"));
     refused(
         "creal_pow_neg_one_wrong",
-        &format!("{POWER_IMPORTS} theorem bad(x: CReal, h: x.Apart(CReal::zero())): x ^ (-1) ≈ x {{ x.pow_neg_one() }}"),
+        &format!("{POWER_IMPORTS} theorem bad(x: CReal, h: x.Apart(0)): x ^ (-1) ≈ x {{ x.pow_neg_one() }}"),
     );
 }
 
@@ -608,7 +609,7 @@ fn order_and_multiplication() {
     refused(
         "creal_mul_pos_of_nonneg",
         &format!(
-            "{IMPORTS} fn bad(x, y: CReal, hx: CReal::zero() <= x, hy: CReal::zero() < y) → CReal::zero() < x * y {{
+            "{IMPORTS} fn bad(x, y: CReal, hx: 0 <= x, hy: 0 < y) → 0 < x * y {{
                 CReal::mul_pos(hx, hy)
             }}"
         ),
@@ -617,7 +618,7 @@ fn order_and_multiplication() {
     refused(
         "creal_mul_le_reversed",
         &format!(
-            "{IMPORTS} fn bad(x, y, z: CReal, h: x <= y, hz: CReal::zero() <= z) → y * z <= x * z {{
+            "{IMPORTS} fn bad(x, y, z: CReal, h: x <= y, hz: 0 <= z) → y * z <= x * z {{
                 CReal::mul_le_mono_r(h, hz)
             }}"
         ),
@@ -626,7 +627,7 @@ fn order_and_multiplication() {
     refused(
         "creal_mul_nonneg_strict",
         &format!(
-            "{IMPORTS} fn bad(x, y: CReal, hx: CReal::zero() <= x, hy: CReal::zero() <= y) → CReal::zero() < x * y {{
+            "{IMPORTS} fn bad(x, y: CReal, hx: 0 <= x, hy: 0 <= y) → 0 < x * y {{
                 CReal::mul_nonneg(hx, hy)
             }}"
         ),
@@ -638,14 +639,14 @@ fn order_and_multiplication() {
         &mut e,
         "creal_mul_gap_control",
         &format!(
-            "{IMPORTS} theorem gap(): (Rat::zero() < Rat::one()) {{ omega }}
+            "{IMPORTS} theorem gap(): (Rat::Lt(0, 1)) {{ omega }}
             theorem squared(): CReal::mul_pos(CReal::ofRat_lt(gap()), CReal::ofRat_lt(gap())).witness = 3 {{ refl }}"
         ),
     );
     refused(
         "creal_mul_wrong_gap",
         &format!(
-            "{IMPORTS} theorem gap(): (Rat::zero() < Rat::one()) {{ omega }}
+            "{IMPORTS} theorem gap(): (Rat::Lt(0, 1)) {{ omega }}
             theorem squared(): CReal::mul_pos(CReal::ofRat_lt(gap()), CReal::ofRat_lt(gap())).witness = 1 {{ refl }}"
         ),
     );
