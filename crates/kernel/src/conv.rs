@@ -2157,10 +2157,25 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                 let inner = D::inst_ty(self, &e_z, env, m1, std::slice::from_ref(n1))?;
                 Ok((D::squash(env, d1, &inner), (*d1).clone()))
             }
-            // case neutral congruence (extension); mirrors ElimNat — all
-            // annotations compared (branches at M[inl x/z] / M[inr y/z]), the
-            // scrutinee via tm_nee, result inferred as M[scrut/z]. Fires only
-            // on a neutral scrutinee (canonical inl/inr β-fired in reduce).
+            // case neutral congruence (extension); typed like ElimNat — the
+            // motive's level, the motive, the branches (at M[inl x/z] /
+            // M[inr y/z]) and then the scrutinees via tm_nee; result
+            // inferred as M[scrut/z]. Fires only on a neutral scrutinee
+            // (canonical inl/inr β-fired in reduce). The scrutinees stay
+            // *last*: comparing them first ran a function_ir certificate
+            // (`an_immediate_add_certifies_at_its_sign_extension`) out of
+            // fuel; this order passes it (2026-10-20).
+            //
+            // `A`, `B` and their levels are *not* compared: the scrutinees'
+            // type `A + B` forces them (convertible neutrals infer
+            // convertible types, and `+` is injective), so on the well-typed
+            // inputs conversion presupposes the right side's copies add
+            // nothing. The motive and branches are compared in the *left*
+            // elimination's stored telescope, which converts with the
+            // scrutinee's inferred one, so no type is read off the scrutinee
+            // (heather-coq `ELIM_CONGRUENCE.md`, which re-proves the
+            // algorithm's soundness and completeness with exactly these
+            // premises; issues/conversion-typed-eliminator-congruence.md).
             (
                 TmView::Case {
                     lhs_level: dl1,
@@ -2174,22 +2189,15 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                     scrut: n1,
                 },
                 TmView::Case {
-                    lhs_level: dl2,
-                    rhs_level: cl2,
                     motive_level: ml2,
-                    lhs: s2,
-                    rhs: t2,
                     motive: m2,
                     case_l: l2,
                     case_r: r2,
                     scrut: n2,
+                    ..
                 },
             ) => {
-                self.lev_eq(dl1, dl2)?;
-                self.lev_eq(cl1, cl2)?;
                 self.lev_eq(ml1, ml2)?;
-                self.ty(env, s1, s2, dl1)?;
-                self.ty(env, t1, t2, cl1)?;
                 let lmax = Level::max((*dl1).clone(), (*cl1).clone());
                 let sum = D::sum(self, env, dl1, cl1, s1, t1)?;
                 // M scoped in (Γ, z : A + B), as in typing.rs.
@@ -2211,14 +2219,16 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                     D::inj(self, &e_y, false, dl1, cl1, &s1_up, &t1_up, &y0)?;
                 let right_ty = D::inst_ty(self, env, &e_y, m1, std::slice::from_ref(&inr_y))?;
                 self.tm(&e_y, r1, r2, &right_ty, ml1)?;
-                self.tm_nee_c(env, n1, n2)?; // inferred A + B: redundant, ignored
+                self.tm_nee_c(env, n1, n2)?; // inferred A + B: forces A, B
                 Ok((D::inst_ty(self, env, env, m1, std::slice::from_ref(n1))?, (*ml1).clone()))
             }
-            // elim_W neutral congruence (extension); mirrors ElimNat/Case —
-            // all annotations compared (the step at M[sup(a,f)/z] under the
-            // (a, f, ih) telescope, as in typing.rs), the scrutinee via
-            // tm_nee, result inferred as M[scrut/z]. Fires only on a neutral
-            // scrutinee (a canonical sup β-fired in reduce).
+            // elim_W neutral congruence (extension); typed like Case — the
+            // motive's level, the motive, the step (at M[sup(a,f)/z] under
+            // the (a, f, ih) telescope, as in typing.rs) and then the
+            // scrutinees via tm_nee, result inferred as M[scrut/z]; the shape,
+            // positions and their levels are forced by the scrutinees' W
+            // type and not compared (Case's argument). Fires only on a
+            // neutral scrutinee (a canonical sup β-fired in reduce).
             (
                 TmView::ElimW {
                     shape_level: dl1,
@@ -2230,23 +2240,9 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                     step: st1,
                     scrut: n1,
                 },
-                TmView::ElimW {
-                    shape_level: dl2,
-                    pos_level: cl2,
-                    motive_level: ml2,
-                    shape: s2,
-                    pos: t2,
-                    motive: m2,
-                    step: st2,
-                    scrut: n2,
-                },
+                TmView::ElimW { motive_level: ml2, motive: m2, step: st2, scrut: n2, .. },
             ) => {
-                self.lev_eq(dl1, dl2)?;
-                self.lev_eq(cl1, cl2)?;
                 self.lev_eq(ml1, ml2)?;
-                self.ty(env, s1, s2, dl1)?;
-                let e_x = D::push_entry(env, s1, dl1);
-                self.ty(&e_x, t1, t2, cl1)?;
                 let lmax = Level::max((*dl1).clone(), (*cl1).clone());
                 let w_ty = D::w(self, env, dl1, cl1, s1, t1)?;
                 // M scoped in (Γ, z : W).
@@ -2294,14 +2290,18 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                 let step_ty =
                     D::inst_ty(self, env, &e_step, m1, &[D::weaken_tm(&e_step, &sup_af, 1)])?;
                 self.tm(&e_step, st1, st2, &step_ty, ml1)?;
-                self.tm_nee_c(env, n1, n2)?; // inferred W: redundant, ignored
+                self.tm_nee_c(env, n1, n2)?; // inferred W: forces S, T
                 Ok((D::inst_ty(self, env, env, m1, std::slice::from_ref(n1))?, (*ml1).clone()))
             }
             // elim_Wf neutral congruence (extension): same shape as elim_W's,
             // with the step telescope taken from `wf_step_telescope` — the
             // single source shared with typing.rs, so the two cannot drift.
             // Fires only on a neutral scrutinee; this is what makes two
-            // inductions over the *same* open term convertible.
+            // inductions over the *same* open term convertible. The shape,
+            // the arity and their level are forced by the scrutinees' Wf
+            // type and not compared (Case's argument) — on a Wf-lowered
+            // inductive the shape is the sum-of-Σs, so that comparison was
+            // the size of the declaration at every meeting of two matches.
             (
                 TmView::ElimWf {
                     level: l1,
@@ -2312,21 +2312,9 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                     step: st1,
                     scrut: n1,
                 },
-                TmView::ElimWf {
-                    level: l2,
-                    motive_level: ml2,
-                    shape: s2,
-                    arity: k2,
-                    motive: m2,
-                    step: st2,
-                    scrut: n2,
-                },
+                TmView::ElimWf { motive_level: ml2, motive: m2, step: st2, scrut: n2, .. },
             ) => {
-                self.lev_eq(l1, l2)?;
                 self.lev_eq(ml1, ml2)?;
-                self.ty(env, s1, s2, l1)?;
-                let e_x = D::push_entry(env, s1, l1);
-                self.tm_at_nat(&e_x, k1, k2)?;
                 let wf = D::wf(self, env, l1, s1, k1)?;
                 let e_z = D::push_entry(env, &wf, l1);
                 self.ty(&e_z, m1, m2, ml1)?;
@@ -2336,7 +2324,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                 let e_cs = D::push_entry(&e_a, &cs_ty, l1);
                 let e_step = D::push_entry(&e_cs, &ih_ty, ml1);
                 self.tm(&e_step, st1, st2, &step_ty, ml1)?;
-                self.tm_nee_c(env, n1, n2)?; // inferred Wf: redundant, ignored
+                self.tm_nee_c(env, n1, n2)?; // inferred Wf: forces S, n
                 Ok((D::inst_ty(self, env, env, m1, std::slice::from_ref(n1))?, (*ml1).clone()))
             }
             // elim_IWf neutral congruence (extension), **typed** from the
@@ -2393,8 +2381,11 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                 self.tm_nee_c(env, n1, n2)?; // inferred IWf: forced, not read
                 Ok((D::inst_ty(self, env, env, m1, &[i1.clone(), n1.clone()])?, (*ml1).clone()))
             }
-            // J neutral congruence (extension beyond ch. 04); mirrors the
-            // ElimNat arm — annotations compared, scrutinee via tm_nee.
+            // J neutral congruence (extension beyond ch. 04); typed like
+            // Case — the motive's level, the motive, the refl case and then
+            // the proofs via tm_nee. `A`, `a`, the right endpoint `u` and
+            // `A`'s level are forced by the proofs' type `Id(A; a; u)` and
+            // not compared (Case's argument).
             (
                 TmView::J {
                     ty_level: al1,
@@ -2406,21 +2397,9 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                     rhs: r1,
                     proof: p1,
                 },
-                TmView::J {
-                    ty_level: al2,
-                    motive_level: ml2,
-                    ty: s2,
-                    lhs: a2,
-                    motive: m2,
-                    case: c2,
-                    rhs: r2,
-                    proof: p2,
-                },
+                TmView::J { motive_level: ml2, motive: m2, case: c2, proof: p2, .. },
             ) => {
-                self.lev_eq(al1, al2)?;
                 self.lev_eq(ml1, ml2)?;
-                self.ty(env, s1, s2, al1)?;
-                self.tm(env, a1, a2, s1, al1)?;
                 // M scoped in (Γ, y : S, p : Id^l(S; a; y)), as in typing.rs.
                 let e_y = D::push_entry(env, s1, al1);
                 let p_ty = D::id(
@@ -2436,8 +2415,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                 let refl_a = D::refl(self, env, al1, s1, a1)?;
                 let case_ty = D::inst_ty(self, env, env, m1, &[a1.clone(), refl_a])?;
                 self.tm(env, c1, c2, &case_ty, ml1)?;
-                self.tm(env, r1, r2, s1, al1)?;
-                self.tm_nee_c(env, p1, p2)?; // inferred Id: redundant, ignored
+                self.tm_nee_c(env, p1, p2)?; // inferred Id(A; a; u): forces A, a, u
                 Ok((D::inst_ty(self, env, env, m1, &[r1.clone(), p1.clone()])?, (*ml1).clone()))
             }
             // transp congruence (extension; docs/sprop-design.md §5.3) —
@@ -2449,6 +2427,11 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
             // proofs must still be equal — the proofs are deliberately not
             // compared (their type is sEq, whose irrelevance arm accepts any
             // two terms; skipping is that arm applied, not a special case).
+            // So there is no scrutinee whose type forces `I`, `a` or `b`,
+            // and unlike the eliminators above this arm still compares
+            // every annotation (transp is slated to leave the kernel,
+            // docs/iwf-former-design.md §13 step 6, so it is left as is;
+            // issues/conversion-typed-eliminator-congruence.md).
             (
                 TmView::Transp {
                     ty_level: al1,
