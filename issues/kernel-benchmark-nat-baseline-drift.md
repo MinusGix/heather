@@ -2,6 +2,7 @@
 title: Reconcile the saved Nat benchmark timings with the current unchanged kernel
 status: open
 labels: [kernel,performance,benchmarking]
+area: infrastructure
 created: 2026-09-14
 updated: 2026-09-14
 ---

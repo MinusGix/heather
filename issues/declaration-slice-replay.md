@@ -2,6 +2,7 @@
 title: "Replay unchanged declarations of an edited module from its previous image"
 status: open
 labels: [tooling, performance, caching, elaboration, design]
+area: infrastructure
 created: 2026-09-17
 updated: 2026-09-17
 ---

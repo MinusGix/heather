@@ -2,6 +2,7 @@
 title: Attribute warm semantic replay cost by phase
 status: open
 labels: [tooling,performance,caching,measurement]
+area: infrastructure
 created: 2026-08-30
 updated: 2026-09-17
 ---

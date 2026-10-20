@@ -2,6 +2,7 @@
 title: The right API for variable-obscured code analysis: markers are staged substitution
 status: open
 labels: [metaprogramming,kernel,delam,design]
+area: kernel
 created: 2026-08-11
 updated: 2026-08-11
 ---

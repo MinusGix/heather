@@ -2,6 +2,7 @@
 title: Stop rebuilding the same prelude and library state in every integration test
 status: open
 labels: [testing,elaboration,performance,caching]
+area: infrastructure
 created: 2026-08-25
 updated: 2026-09-17
 ---

@@ -2,6 +2,7 @@
 title: "Dependency policy: kernel at zero, crates above it"
 status: open
 labels: [meta, kernel, tooling]
+area: infrastructure
 created: 2026-07-24
 updated: 2026-09-26
 ---

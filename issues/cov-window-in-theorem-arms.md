@@ -2,6 +2,7 @@
 title: Course-of-values window in a theorem: a goal with a hypothesis on the scrutinee is refused, a chain match under a λ gets the outer goal
 status: open
 labels: [frontend,elaboration,recursion,proofs]
+area: language
 created: 2026-09-18
 updated: 2026-09-18
 ---

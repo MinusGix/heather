@@ -2,6 +2,7 @@
 title: calc ≈ and rel_cong cost far more kernel steps than the terms they stand for
 status: open
 labels: [setoids,relations,elaborator,performance]
+area: tactics
 created: 2026-10-13
 updated: 2026-10-13
 ---

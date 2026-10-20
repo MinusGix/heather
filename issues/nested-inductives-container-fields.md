@@ -2,6 +2,7 @@
 title: Nested inductives: a children-container field type at the surface
 status: open
 labels: [frontend,elaboration,inductives,surface]
+area: language
 created: 2026-07-26
 updated: 2026-07-26
 ---

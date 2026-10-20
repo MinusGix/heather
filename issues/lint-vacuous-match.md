@@ -2,6 +2,7 @@
 title: "Lint matches whose reachable arms do no meaningful case analysis"
 status: open
 labels: [tooling,lint,frontend,patterns,proofs,ergonomics]
+area: language
 blocked-by: [lint-review-only-mode]
 created: 2026-08-22
 updated: 2026-08-22

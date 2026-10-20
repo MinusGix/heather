@@ -2,6 +2,7 @@
 title: The fast lane grew 6x with the wc command's library tests; where the suite's time goes (2026-10)
 status: open
 labels: [testing,performance,tooling]
+area: infrastructure
 created: 2026-10-11
 updated: 2026-10-13
 ---

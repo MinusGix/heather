@@ -2,6 +2,7 @@
 title: "Let decision instances own recursive procedures without public helper names"
 status: open
 labels: [design,frontend,traits,stdlib,ergonomics]
+area: language
 created: 2026-08-20
 updated: 2026-08-20
 ---

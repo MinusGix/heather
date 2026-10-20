@@ -2,6 +2,7 @@
 title: Traits and instances: classes as records, disciplined resolution, programmable later
 status: open
 labels: [frontend,syntax,elaboration,design,metaprogramming]
+area: language
 created: 2026-08-07
 updated: 2026-08-10
 ---

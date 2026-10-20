@@ -2,6 +2,7 @@
 title: Keep projection and equality checking local across long state-update chains
 status: open
 labels: [kernel,conversion,performance,proofs]
+area: kernel
 created: 2026-09-08
 updated: 2026-09-11
 ---

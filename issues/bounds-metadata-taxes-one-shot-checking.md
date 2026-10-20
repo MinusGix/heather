@@ -2,6 +2,7 @@
 title: Free-variable bounds tax one-shot checking ~1.17x; accepted, with levers if it grows
 status: open
 labels: [kernel,performance]
+area: kernel
 created: 2026-07-31
 updated: 2026-09-11
 ---

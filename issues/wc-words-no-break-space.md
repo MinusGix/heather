@@ -2,6 +2,7 @@
 title: wc's words differ from GNU wc 9.x at byte 0xA0
 status: open
 labels: [native,examples]
+area: heather-in-heather
 created: 2026-10-01
 updated: 2026-10-01
 ---

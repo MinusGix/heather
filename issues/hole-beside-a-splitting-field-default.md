@@ -2,6 +2,7 @@
 title: A hole beside a splitting field default is an internal error
 status: open
 labels: [elaborator,tactics,bug]
+area: tactics
 created: 2026-10-01
 updated: 2026-10-12
 ---

@@ -2,6 +2,7 @@
 title: Parse an ordinary match on a variable named code in Tree-sitter
 status: open
 labels: [tooling,editor,syntax]
+area: language
 created: 2026-09-14
 updated: 2026-09-14
 ---

@@ -2,6 +2,7 @@
 title: Let a parameter default mention a type parameter (xs: List<A> := Nil<A>)
 status: open
 labels: [frontend,elaboration,defaults]
+area: language
 created: 2026-10-12
 updated: 2026-10-12
 ---

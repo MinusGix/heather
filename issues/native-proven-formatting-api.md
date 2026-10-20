@@ -2,6 +2,7 @@
 title: A proven C-style formatting API for native programs (POSIX %d first)
 status: open
 labels: [x86,native,stdlib,design]
+area: heather-in-heather
 created: 2026-09-28
 updated: 2026-10-04
 ---

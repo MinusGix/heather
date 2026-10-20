@@ -2,6 +2,7 @@
 title: Automatically prove parametricity of supported functions
 status: open
 labels: [metaprogramming,relations,proofs,design]
+area: tactics
 created: 2026-09-04
 updated: 2026-09-24
 ---

@@ -2,6 +2,7 @@
 title: Recover inline record projections in diagnostics
 status: open
 labels: [frontend,diagnostics,records]
+area: language
 created: 2026-09-05
 updated: 2026-09-05
 ---

@@ -2,6 +2,7 @@
 title: Field reads still on the inline walk after per-instantiation projection names: dependent telescoped spines, non-local receivers, closed non-dependent records
 status: open
 labels: [elaboration,representation,performance]
+area: language
 created: 2026-09-10
 updated: 2026-09-14
 ---

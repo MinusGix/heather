@@ -2,6 +2,7 @@
 title: Pin surface code analysis of all four Squash constructors
 status: open
 labels: [elaboration,staging,testing,kernel]
+area: language
 created: 2026-08-25
 updated: 2026-08-25
 ---

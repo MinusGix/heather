@@ -2,6 +2,7 @@
 title: Record-type relations compare structurally where a wrapper global compared by head: 6-24x kernel steps on calc_text's bodies
 status: open
 labels: [kernel,conversion,performance,records,representation]
+area: kernel
 created: 2026-09-24
 updated: 2026-09-24
 ---

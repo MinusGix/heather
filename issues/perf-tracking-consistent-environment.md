@@ -2,6 +2,7 @@
 title: Consistent perf measurement: a place where a regression is a signal, not noise
 status: open
 labels: [performance,tooling,testing,meta]
+area: infrastructure
 created: 2026-08-11
 updated: 2026-09-17
 ---

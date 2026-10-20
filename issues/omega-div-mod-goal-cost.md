@@ -2,6 +2,7 @@
 title: omega closes one-line div/mod goals in seconds: attribute the cost per atom
 status: open
 labels: [omega,performance,arithmetic]
+area: tactics
 created: 2026-09-25
 updated: 2026-09-25
 ---

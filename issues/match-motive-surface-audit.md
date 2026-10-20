@@ -2,6 +2,7 @@
 title: "Audit explicit match motives and reconsider the as λ surface"
 status: open
 labels: [frontend,syntax,elaboration,stdlib,ergonomics]
+area: language
 created: 2026-08-20
 updated: 2026-08-22
 ---

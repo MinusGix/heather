@@ -2,6 +2,7 @@
 title: The surface story for mconcat: name (fold?), and whether it deserves syntax
 status: open
 labels: [design,library,ergonomics]
+area: language
 created: 2026-08-11
 updated: 2026-08-11
 ---

@@ -2,6 +2,7 @@
 title: Memoized values live in Rc beside the arena: ~1.94 M heap allocations per module that no pooling reaches
 status: open
 labels: [kernel,conversion,performance,representation]
+area: kernel
 created: 2026-09-11
 updated: 2026-09-11
 ---

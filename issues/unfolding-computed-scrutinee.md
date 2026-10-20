@@ -2,6 +2,7 @@
 title: Unfolding equations for a decreases body that matches on a computed scrutinee
 status: open
 labels: [frontend,elaboration,proofs]
+area: language
 created: 2026-09-05
 updated: 2026-09-25
 ---

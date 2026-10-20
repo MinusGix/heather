@@ -2,6 +2,7 @@
 title: A type argument that mentions a display binder still prints as `<…>`
 status: open
 labels: [frontend,diagnostics]
+area: language
 created: 2026-09-17
 updated: 2026-09-17
 ---

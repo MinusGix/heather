@@ -2,6 +2,7 @@
 title: A stack-address call_memory_read walks the whole ELF file list before reaching the stack
 status: open
 labels: [x86,elf,stdlib,performance]
+area: heather-in-heather
 created: 2026-09-12
 updated: 2026-09-24
 ---

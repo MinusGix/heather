@@ -2,6 +2,7 @@
 title: A proposition over computed Nat operands costs gigabytes to reduce at the type level where its term-level decision is cheap
 status: open
 labels: [kernel,elaboration,conversion,performance]
+area: kernel
 created: 2026-09-09
 updated: 2026-09-09
 ---

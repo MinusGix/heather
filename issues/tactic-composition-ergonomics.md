@@ -2,6 +2,8 @@
 title: Add concise general tactic-composition syntax
 status: open
 labels: [surface,proofs,elaboration,syntax]
+area: tactics
+milestone: [tac-in-heather]
 created: 2026-08-27
 updated: 2026-10-01
 ---

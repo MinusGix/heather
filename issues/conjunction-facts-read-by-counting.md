@@ -2,6 +2,7 @@
 title: Deep conjunction facts are read by counting .right; name them
 status: open
 labels: [surface,proofs,ergonomics]
+area: language
 created: 2026-10-04
 updated: 2026-10-04
 ---

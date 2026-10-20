@@ -2,6 +2,7 @@
 title: Sketch: functions defined per-constructor, dispatch as an object
 status: open
 labels: [frontend,syntax,elaboration,metaprogramming,design]
+area: language
 created: 2026-07-31
 updated: 2026-08-19
 ---

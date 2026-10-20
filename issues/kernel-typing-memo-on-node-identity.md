@@ -2,6 +2,7 @@
 title: Memoize kernel typing on node identity, so a shared let value is checked once
 status: open
 labels: [kernel,performance,proofs]
+area: kernel
 created: 2026-09-25
 updated: 2026-09-25
 ---

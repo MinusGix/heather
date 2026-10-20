@@ -2,6 +2,7 @@
 title: Nested motive-less matches on tier-1 arm aliases: the elaborator accepts a term the kernel refuses
 status: open
 labels: [frontend,elaboration,kernel,robustness]
+area: language
 created: 2026-09-18
 updated: 2026-09-18
 ---

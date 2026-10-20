@@ -2,6 +2,7 @@
 title: Guarded total fns get their Option/Result face by adapter, not by twin definition
 status: open
 labels: [frontend,design,ergonomics,stdlib]
+area: language
 created: 2026-08-14
 updated: 2026-08-17
 ---

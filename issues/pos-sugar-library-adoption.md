@@ -2,6 +2,7 @@
 title: Adopt Pos<Nat> on the library's 0 < d parameters
 status: open
 labels: [stdlib,ergonomics]
+area: mathematics
 created: 2026-10-13
 updated: 2026-10-13
 ---

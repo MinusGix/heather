@@ -2,6 +2,7 @@
 title: Answer "what does this import contribute" without deleting it and re-checking
 status: open
 labels: [tooling,modules,elaboration,diagnostics,ergonomics]
+area: language
 created: 2026-09-16
 updated: 2026-09-16
 ---

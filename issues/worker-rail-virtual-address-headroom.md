@@ -2,6 +2,7 @@
 title: Eight kernel workers under the 6 GiB address-space rail: one unreproduced allocation failure at ~2 GB RSS
 status: open
 labels: [testing,elaboration,parallelism,memory,robustness]
+area: infrastructure
 created: 2026-09-11
 updated: 2026-09-11
 ---

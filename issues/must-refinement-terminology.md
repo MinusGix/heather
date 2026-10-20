@@ -2,6 +2,7 @@
 title: Decide what MustRefines should mean—or whether to keep the name
 status: open
 labels: [stdlib,logic,semantics,design]
+area: heather-in-heather
 created: 2026-08-26
 updated: 2026-08-26
 ---

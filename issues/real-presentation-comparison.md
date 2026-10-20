@@ -2,6 +2,8 @@
 title: Compare real presentations by explicit structure-preserving maps
 status: open
 labels: [stdlib,mathematics,reals,setoids,axioms]
+area: mathematics
+milestone: [math-reals]
 created: 2026-09-02
 updated: 2026-09-02
 ---

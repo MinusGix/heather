@@ -2,6 +2,7 @@
 title: Preserve sharing in generated source-semantic endpoints
 status: open
 labels: [compiler,elaboration,performance,proofs,codegen]
+area: heather-in-heather
 created: 2026-09-02
 updated: 2026-09-11
 ---

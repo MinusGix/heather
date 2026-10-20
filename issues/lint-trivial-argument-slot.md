@@ -2,6 +2,7 @@
 title: "Lint trivial lambdas that have a clear argument-slot spelling"
 status: open
 labels: [tooling,lint,syntax,stdlib,ergonomics]
+area: language
 created: 2026-08-20
 updated: 2026-08-20
 ---

@@ -2,6 +2,7 @@
 title: Where do requires binders live? Sketch the call-signature syntax options
 status: open
 labels: [frontend,syntax,design,ergonomics]
+area: language
 created: 2026-08-07
 updated: 2026-08-09
 ---

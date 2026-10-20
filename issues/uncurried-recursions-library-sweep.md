@@ -2,6 +2,7 @@
 title: Sweep the library's hand-curried recursions and written motives onto IH generalization
 status: open
 labels: [stdlib,cleanup,elaboration,proofs]
+area: language
 created: 2026-09-05
 updated: 2026-09-05
 ---

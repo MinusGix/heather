@@ -2,6 +2,7 @@
 title: A wrong dictionary field is refused at the checking position naming a generated projection reference, not the offending declaration
 status: open
 labels: [frontend,diagnostics,traits,ergonomics]
+area: language
 created: 2026-09-15
 updated: 2026-09-15
 ---

@@ -2,6 +2,7 @@
 title: "split_all: split a match on decide<P>() (an evidence if) without ill-typed motives"
 status: open
 labels: [tactics,proofs,elaboration]
+area: tactics
 created: 2026-10-02
 updated: 2026-10-02
 ---

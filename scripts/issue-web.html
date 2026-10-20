@@ -153,6 +153,16 @@ select.ctl {
 .card li:hover .t { text-decoration: underline; }
 .card li .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
 .card li .a { color: var(--faint); font-size: 11.5px; }
+.card .dir { color: var(--muted); font-size: 12px; margin: 4px 0 2px; line-height: 1.4; }
+.card .tier { font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); background: var(--sunk); border-radius: 4px; padding: 1px 5px; }
+.card .rank { color: var(--faint); font-variant-numeric: tabular-nums; font-size: 12px; }
+.card .mst { margin: 6px 0 4px; font-size: 12px; }
+.card .mst div { display: flex; gap: 6px; padding: 1px 0; color: var(--muted); }
+.card .mst b { font-weight: 550; color: var(--fg); font-family: var(--mono, ui-monospace, monospace); font-size: 11.5px; }
+.card .mst .done { text-decoration: line-through; }
+.card .mst span:last-child { margin-left: auto; color: var(--faint); font-variant-numeric: tabular-nums; }
+#areas .avbar { grid-column: 1 / -1; display: flex; gap: 10px; align-items: center; color: var(--muted); font-size: 12px; }
+.stbtn .sw { width: 9px; height: 9px; border-radius: 3px; background: hsl(var(--h), var(--node-s), var(--node-l)); flex: none; }
 .card .co { margin-top: 7px; font-size: 11.5px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
 
 /* ---------- graph ---------- */
@@ -261,6 +271,9 @@ kbd { font-family: inherit; font-size: 11px; border: 1px solid var(--line); bord
     <div class="sect"><h3>Status <a href="#" id="clear" hidden>clear filters</a></h3><div id="statuses"></div>
       <button class="toggle" id="ready" title="Open, and every blocked-by issue is closed"><span class="dot st-open"></span>ready to pick up<span class="n"></span></button>
     </div>
+    <div class="sect" id="areasect"><h3>Area</h3><div id="areabtns"></div>
+      <div class="hint">click: toggle · shift-click: only this</div>
+    </div>
     <div class="sect"><h3>Order</h3>
       <div class="ctlrow">sort
         <select class="ctl" id="sort">
@@ -275,7 +288,7 @@ kbd { font-family: inherit; font-size: 11px; border: 1px solid var(--line); bord
       <div class="ctlrow" style="margin-top:4px">group
         <select class="ctl" id="group">
           <option value="none">none</option>
-          <option value="area">area (first label)</option>
+          <option value="area">area</option>
           <option value="status">status</option>
           <option value="age">last touched</option>
         </select>
@@ -321,13 +334,13 @@ kbd { font-family: inherit; font-size: 11px; border: 1px solid var(--line); bord
 const $ = (s, r = document) => r.querySelector(s);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const STATUSES = ["open", "blocked", "closed"];
-// Labels that describe a kind of work rather than a part of the system; the
-// "area" of an issue is its first label not in this set.
-const GENERIC = new Set(["design", "meta", "backlog", "research", "ergonomics", "performance", "testing", "diagnostics", "lint"]);
+// An issue's area is its `area:` field; the areas, their importance order and
+// their milestones come from docs/roadmap.md through api/issues.
+const NOAREA = "(no area)";
 
 let D = null;
 const S = { v: "list", q: "", st: new Set(["open", "blocked"]), inc: new Set(), exc: new Set(), ready: false,
-            sort: "updated", g: "none", sel: null, h: 0, n: 0, c: "area" };
+            sort: "updated", g: "none", sel: null, h: 0, n: 0, c: "area", a: new Set(), al: false };
 let ORDER = [];
 
 const store = {
@@ -361,9 +374,13 @@ async function load() {
   const ranked = [...totals].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(x => x[0]);
   const hue = new Map(ranked.map((l, i) => [l, Math.round((i * 137.508 + 215) % 360)]));
   const live = s => by.get(s).status !== "closed";
+  const areas = j.areas || [], milestones = j.milestones || [];
+  const anames = areas.map(a => a.area);
+  const ahue = new Map(anames.map((a, i) => [a, Math.round((i * 137.508 + 215) % 360)]));
   for (const m of j.issues) {
-    m.area = m.labels.find(l => !GENERIC.has(l)) || m.labels[0] || "(unlabelled)";
-    m.hay = (m.title + " " + m.slug + " " + m.labels.join(" ")).toLowerCase();
+    m.area = m.area || NOAREA;
+    m.milestones = m.milestones || [];
+    m.hay = (m.title + " " + m.slug + " " + m.labels.join(" ") + " " + m.area + " " + m.milestones.join(" ")).toLowerCase();
     m.low = m.body.toLowerCase();
     m.openBlockers = m.blockedBy.filter(live);
     m.refOpen = m.backlinks.filter(live).length;
@@ -371,9 +388,11 @@ async function load() {
     m.age = days(j.today, m.updated);
     m.nbrs = new Set([...m.links, ...m.backlinks, ...m.blockedBy, ...m.blocks]);
   }
-  D = { stamp: j.stamp, today: j.today, issues: j.issues, by, totals, ranked, hue };
+  D = { stamp: j.stamp, today: j.today, issues: j.issues, by, totals, ranked, hue, areas, milestones, ahue,
+        aorder: new Map([...anames, NOAREA].map((a, i) => [a, i])) };
 }
 const hueOf = l => D.hue.get(l) ?? 0;
+const ahueOf = a => D.ahue.get(a) ?? 0;
 const isReady = m => m.status === "open" && m.openBlockers.length === 0;
 const held = m => m.status === "open" && m.openBlockers.length > 0;
 
@@ -382,6 +401,7 @@ function filtered(ignore = {}) {
   const out = [];
   for (const m of D.issues) {
     if (!ignore.st && !S.st.has(m.status)) continue;
+    if (!ignore.a && S.a.size && !S.a.has(m.area)) continue;
     if (!ignore.l) {
       let ok = true;
       for (const l of S.inc) if (!m.labels.includes(l)) { ok = false; break; }
@@ -422,6 +442,8 @@ function readHash() {
   S.inc = new Set(); S.exc = new Set();
   for (const l of (p.get("l") || "").split(",").filter(Boolean)) l[0] === "-" ? S.exc.add(l.slice(1)) : S.inc.add(l);
   S.ready = p.get("r") === "1";
+  S.a = new Set((p.get("a") || "").split(",").filter(Boolean));
+  S.al = p.get("av") === "labels";
   S.sort = SORTS[p.get("sort")] ? p.get("sort") : "updated";
   S.g = p.get("g") || "none";
   S.sel = p.get("sel") || null;
@@ -438,6 +460,8 @@ function hashStr() {
   const l = [...S.inc, ...[...S.exc].map(x => "-" + x)];
   if (l.length) p.set("l", l.join(","));
   if (S.ready) p.set("r", "1");
+  if (S.a.size) p.set("a", [...S.a].join(","));
+  if (S.al) p.set("av", "labels");
   if (S.sort !== "updated") p.set("sort", S.sort);
   if (S.g !== "none") p.set("g", S.g);
   if (S.h) p.set("h", S.h);
@@ -574,6 +598,7 @@ function md(src, hs = 2) {
 
 /* ================= render ================= */
 const chip = l => `<span class="chip" data-lab="${esc(l)}" style="--h:${hueOf(l)}">${esc(l)}</span>`;
+const achip = a => `<span class="chip" data-ar="${esc(a)}" style="--h:${ahueOf(a)};font-weight:600" title="area">${esc(a)}</span>`;
 const dot = m => `<span class="dot st-${m.status}${held(m) ? " held" : ""}" title="${m.status}${held(m) ? ", waiting on " + m.openBlockers.length : ""}"></span>`;
 
 function render() {
@@ -602,7 +627,14 @@ function renderSide(list) {
     `<button class="stbtn ${S.st.has(s) ? "on" : ""}" data-st="${s}"><span class="dot st-${s}"></span>${s}<span class="n">${sc[s] || 0}</span></button>`).join("");
   $("#ready").classList.toggle("on", S.ready);
   $("#ready .n").textContent = base.filter(isReady).length;
-  $("#clear").hidden = !(S.q || S.inc.size || S.exc.size || S.ready);
+  $("#clear").hidden = !(S.q || S.inc.size || S.exc.size || S.ready || S.a.size);
+  const abase = filtered({ a: true });
+  const ac = new Map();
+  for (const m of abase) ac.set(m.area, (ac.get(m.area) || 0) + 1);
+  const anames = [...D.areas.map(a => a.area), ...(ac.has(NOAREA) ? [NOAREA] : [])];
+  $("#areasect").hidden = !D.areas.length;
+  $("#areabtns").innerHTML = anames.map(a =>
+    `<button class="stbtn ${S.a.has(a) ? "on" : ""}" data-ar="${esc(a)}"><span class="sw" style="--h:${ahueOf(a)}"></span>${esc(a)}<span class="n">${ac.get(a) || 0}</span></button>`).join("");
   $("#sort").value = S.sort;
   $("#group").value = S.g;
 
@@ -632,6 +664,7 @@ function groupsOf(list) {
   return [...g].sort((a, b) =>
     S.g === "status" ? STATUSES.indexOf(a[0]) - STATUSES.indexOf(b[0])
     : S.g === "age" ? orderAge.indexOf(a[0]) - orderAge.indexOf(b[0])
+    : S.g === "area" ? (D.aorder.get(a[0]) ?? 99) - (D.aorder.get(b[0]) ?? 99)
     : b[1].length - a[1].length || cmp(a[0], b[0]));
 }
 
@@ -640,7 +673,7 @@ function renderList(list) {
   const top = el.scrollTop;
   if (!list.length) { el.innerHTML = `<div class="empty">No issues match.</div>`; return; }
   el.innerHTML = groupsOf(list).map(([k, ms]) =>
-    (k === null ? "" : `<div class="group-h">${S.g === "area" && D.hue.has(k) ? chip(k) : esc(k)}<span>${ms.length}</span></div>`) +
+    (k === null ? "" : `<div class="group-h">${S.g === "area" ? achip(k) : esc(k)}<span>${ms.length}</span></div>`) +
     ms.map(m => {
       const badges = [];
       if (m.openBlockers.length) badges.push(`<span class="badge block" title="waiting on: ${esc(m.openBlockers.join(", "))}">⧗ waiting on ${m.openBlockers.length}</span>`);
@@ -649,13 +682,46 @@ function renderList(list) {
       const stale = m.status !== "closed" && m.age > 30;
       return `<div class="row ${m.status}${m.slug === S.sel ? " sel" : ""}" data-slug="${m.slug}">${dot(m)}
         <div class="rmain"><div class="rtitle">${esc(m.title)}</div>
-        <div class="rmeta"><span class="slug mono">${m.slug}</span>${m.labels.map(chip).join("")}${badges.join("")}</div></div>
+        <div class="rmeta"><span class="slug mono">${m.slug}</span>${S.g === "area" ? "" : achip(m.area)}${m.labels.map(chip).join("")}${badges.join("")}</div></div>
         <div class="rage${stale ? " stale" : ""}" title="updated ${esc(m.updated)} · created ${esc(m.created)}">${rel(m.age)}</div></div>`;
     }).join("")).join("");
   el.scrollTop = top;
 }
 
 function renderAreas() {
+  const bar = `<div class="avbar">show <span class="seg" id="avseg"><button data-al="0" class="${S.al ? "" : "on"}" ${D.areas.length ? "" : "disabled"}>roadmap areas</button><button data-al="1" class="${S.al ? "on" : ""}">labels</button></span>
+    ${S.al || !D.areas.length ? "" : `<span>in importance order, from docs/roadmap.md</span>`}</div>`;
+  if (!S.al && D.areas.length) { $("#areas").innerHTML = bar + roadmapCards(); return; }
+  $("#areas").innerHTML = bar + labelCards();
+}
+
+function roadmapCards() {
+  const base = filtered({ st: true, a: true });
+  const cards = [...D.areas, ...(base.some(m => m.area === NOAREA) ? [{ area: NOAREA, rank: "", tier: "", name: "No area", direction: "Open issues not yet given an area." }] : [])];
+  return cards.map(a => {
+    const ms = base.filter(m => m.area === a.area);
+    const c = { open: 0, blocked: 0, closed: 0 };
+    for (const m of ms) c[m.status] = (c[m.status] || 0) + 1;
+    const tot = ms.length || 1;
+    const liveMs = ms.filter(m => m.status !== "closed").sort(SORTS.updated);
+    const waiting = liveMs.filter(held).length;
+    const mst = D.milestones.filter(x => x.area === a.area).map(x => {
+      const serving = D.issues.filter(m => m.milestones.includes(x.milestone) && m.status !== "closed").length;
+      return `<div title="${esc(x.done)}"><b class="${x.status === "done" ? "done" : ""}" data-ms="${esc(x.milestone)}">${esc(x.milestone)}</b><span>${serving} open</span></div>`;
+    }).join("");
+    return `<div class="card"><div class="card-h" data-ar1="${esc(a.area)}" title="show these in the list"><span class="sw" style="--h:${ahueOf(a.area)}"></span>
+      ${a.rank && a.rank !== "—" ? `<span class="rank">${esc(a.rank)}</span>` : ""}<span class="name">${esc(a.name || a.area)}</span>${a.tier ? `<span class="tier">${esc(a.tier)}</span>` : ""}
+      <span class="cnt">${c.open + c.blocked} open</span></div>
+      <div class="dir">${esc(a.direction)}</div>
+      <div class="bar"><i style="width:${100 * c.open / tot}%;background:var(--open)"></i><i style="width:${100 * c.blocked / tot}%;background:var(--blocked)"></i><i style="width:${100 * c.closed / tot}%;background:var(--closed)"></i></div>
+      ${mst ? `<div class="mst">${mst}</div>` : ""}
+      ${waiting ? `<div class="rmeta"><span class="badge block">${waiting} waiting</span></div>` : ""}
+      <ul>${liveMs.slice(0, 5).map(m => `<li data-slug="${m.slug}">${dot(m)}<span class="t" title="${esc(m.title)}">${esc(m.title)}</span><span class="a">${rel(m.age)}</span></li>`).join("")}</ul>
+      ${liveMs.length > 5 ? `<div class="hint" style="padding:3px 0 0">+ ${liveMs.length - 5} more</div>` : ""}</div>`;
+  }).join("") || `<div class="empty">No issues match.</div>`;
+}
+
+function labelCards() {
   const base = filtered({ st: true, l: true });
   const by = new Map();
   for (const m of base) for (const l of m.labels) { if (!by.has(l)) by.set(l, []); by.get(l).push(m); }
@@ -664,7 +730,7 @@ function renderAreas() {
     for (const m of ms) c[m.status] = (c[m.status] || 0) + 1;
     return { l, ms, c, live: c.open + c.blocked };
   }).sort((a, b) => b.live - a.live || b.ms.length - a.ms.length);
-  $("#areas").innerHTML = cards.map(({ l, ms, c, live }) => {
+  return cards.map(({ l, ms, c, live }) => {
     const tot = ms.length;
     const liveMs = ms.filter(m => m.status !== "closed").sort(SORTS.updated);
     const week = liveMs.filter(m => m.age <= 7).length;
@@ -718,7 +784,7 @@ function renderDetail() {
         <button class="btn" data-act="focus" title="n — show its neighbourhood in the graph">◎ neighbourhood</button>
         <button class="btn" data-act="close" title="Esc">✕</button></div>
       <h1 class="dtitle">${esc(m.title)}</h1>
-      <div class="dmeta">${m.labels.map(chip).join("")}<span>created ${esc(m.created)}</span><span>updated ${esc(m.updated)} (${rel(m.age)})</span>
+      <div class="dmeta">${achip(m.area)}${m.milestones.map(x => `<span class="mono" data-ms="${esc(x)}" title="${esc((D.milestones.find(y => y.milestone === x) || {}).done || "")}" style="cursor:pointer">◆ ${esc(x)}</span>`).join("")}${m.labels.map(chip).join("")}<span>created ${esc(m.created)}</span><span>updated ${esc(m.updated)} (${rel(m.age)})</span>
         ${m.thread ? `<span>thread ${esc(m.thread)}</span>` : ""}${m.code ? `<span class="mono">${esc(m.code)}</span>` : ""}</div>
     </div>
     <div class="dbody">
@@ -885,8 +951,8 @@ function fit() {
 const radius = nd => Math.max(4 + Math.sqrt(nd.m.refOpen) * 1.7, (3 + Math.sqrt(nd.m.refOpen)) / G.scale);
 function nodeColor(m, cs) {
   if (S.c === "status") return cs(m.status === "closed" ? "--closed" : m.status === "blocked" ? "--blocked" : "--open");
-  if (!D.hue.has(m.area)) return cs("--faint");
-  return `hsl(${hueOf(m.area)}, ${cs("--node-s")}, ${cs("--node-l")})`;
+  if (!D.ahue.has(m.area)) return cs("--faint");
+  return `hsl(${ahueOf(m.area)}, ${cs("--node-s")}, ${cs("--node-l")})`;
 }
 
 function legend() {
@@ -900,7 +966,7 @@ function legend() {
   for (const { m } of G.nodes) cnt.set(m.area, (cnt.get(m.area) || 0) + 1);
   const top = [...cnt].sort((a, b) => b[1] - a[1]);
   el.innerHTML = top.slice(0, 14).map(([l, n]) =>
-    `<span data-lab="${esc(l)}" title="click to require this label"><i style="background:hsl(${hueOf(l)}, var(--node-s), var(--node-l))"></i>${esc(l)} ${n}</span>`).join("") +
+    `<span data-ar="${esc(l)}" title="click to filter to this area"><i style="background:hsl(${ahueOf(l)}, var(--node-s), var(--node-l))"></i>${esc(l)} ${n}</span>`).join("") +
     (top.length > 14 ? `<span style="color:var(--faint)">+${top.length - 14} more</span>` : "") +
     `<span><i style="background:var(--blocked);border-radius:0;height:2px;width:14px"></i>blocker → blocked</span>`;
 }
@@ -1067,7 +1133,7 @@ function wire() {
     commit(false);
   });
   $("#ready").addEventListener("click", () => { S.ready = !S.ready; if (S.ready) S.st.add("open"); commit(false); });
-  $("#clear").addEventListener("click", e => { e.preventDefault(); S.q = ""; S.inc.clear(); S.exc.clear(); S.ready = false; $("#q").value = ""; commit(false); });
+  $("#clear").addEventListener("click", e => { e.preventDefault(); S.q = ""; S.inc.clear(); S.exc.clear(); S.ready = false; S.a.clear(); $("#q").value = ""; commit(false); });
   $("#sort").addEventListener("change", e => { S.sort = e.target.value; commit(false); });
   $("#group").addEventListener("change", e => { S.g = e.target.value; commit(false); });
   $("#labq").addEventListener("input", () => renderSide(ORDER));
@@ -1079,6 +1145,19 @@ function wire() {
     if (lab && !t.closest("#tip")) { e.preventDefault(); e.stopPropagation(); toggleLabel(lab.dataset.lab, e.shiftKey || e.altKey); return; }
     const area = t.closest("[data-area]");
     if (area) { S.inc = new Set([area.dataset.area]); S.exc.clear(); S.v = "list"; commit(true); return; }
+    const ar1 = t.closest("[data-ar1]");
+    if (ar1) { S.a = new Set([ar1.dataset.ar1]); S.v = "list"; commit(true); return; }
+    const ar = t.closest("[data-ar]");
+    if (ar && !t.closest("#tip")) {
+      e.preventDefault(); e.stopPropagation();
+      const a = ar.dataset.ar;
+      if (e.shiftKey || e.altKey) S.a = new Set([a]); else S.a.has(a) ? S.a.delete(a) : S.a.add(a);
+      commit(false); return;
+    }
+    const ms = t.closest("[data-ms]");
+    if (ms) { S.q = ms.dataset.ms; $("#q").value = S.q; S.v = "list"; commit(true); return; }
+    const al = t.closest("[data-al]");
+    if (al) { if (!al.disabled) { S.al = al.dataset.al === "1"; commit(false); } return; }
     const sl = t.closest("[data-slug]");
     if (sl && !t.closest("#cv")) { e.preventDefault(); select(sl.dataset.slug); return; }
     const act = t.closest("[data-act]");
@@ -1091,7 +1170,7 @@ function wire() {
     }
     const pre = t.closest("[data-preset]");
     if (pre) {
-      S.q = ""; S.inc.clear(); S.exc.clear(); S.ready = false; S.v = "list"; S.st = new Set(["open", "blocked"]);
+      S.q = ""; S.inc.clear(); S.exc.clear(); S.ready = false; S.a.clear(); S.v = "list"; S.st = new Set(["open", "blocked"]);
       const p = pre.dataset.preset;
       if (p === "ready") S.ready = true;
       if (p === "week") { S.sort = "updated"; S.g = "age"; }

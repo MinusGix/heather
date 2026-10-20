@@ -2,6 +2,8 @@
 title: Formalize lower reals as one-sided ordered objects
 status: open
 labels: [stdlib,mathematics,reals,domain-theory,order]
+area: mathematics
+milestone: [math-reals]
 created: 2026-09-02
 updated: 2026-09-02
 ---

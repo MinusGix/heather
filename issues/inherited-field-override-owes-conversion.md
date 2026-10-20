@@ -2,6 +2,7 @@
 title: Repeating an inherited class field in a sub-class instance owes a conversion between two proofs
 status: open
 labels: [traits,design,proofs]
+area: language
 created: 2026-08-17
 updated: 2026-08-17
 ---

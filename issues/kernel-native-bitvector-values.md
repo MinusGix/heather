@@ -2,6 +2,7 @@
 title: Native closed-bitvector values in the evaluator, with an adequacy argument
 status: open
 labels: [kernel,evaluator,representation,bitvec,performance,design]
+area: kernel
 created: 2026-09-12
 updated: 2026-09-13
 ---

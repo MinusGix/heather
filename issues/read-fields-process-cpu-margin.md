@@ -2,6 +2,7 @@
 title: read_fields_process sits closest to the per-test CPU limit; load alone can cross it
 status: open
 labels: [perf,test]
+area: infrastructure
 created: 2026-09-30
 updated: 2026-10-03
 ---

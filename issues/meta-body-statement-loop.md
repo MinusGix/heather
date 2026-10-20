@@ -2,6 +2,7 @@
 title: The meta-fn body has its own statement loop, and annotated `let` stops at its edge
 status: open
 labels: [metaprogramming,elaboration,frontend]
+area: language
 created: 2026-08-02
 updated: 2026-08-12
 ---

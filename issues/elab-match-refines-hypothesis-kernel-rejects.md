@@ -2,6 +2,7 @@
 title: A match refines an earlier hypothesis in the elaborator but not in the kernel term
 status: open
 labels: [frontend,elaboration,motives,bug]
+area: language
 created: 2026-10-10
 updated: 2026-10-10
 ---

@@ -2,6 +2,7 @@
 title: All-numeral relations elaborate at Nat silently
 status: open
 labels: [frontend,elaboration,notation,ergonomics]
+area: language
 created: 2026-10-20
 updated: 2026-10-20
 ---

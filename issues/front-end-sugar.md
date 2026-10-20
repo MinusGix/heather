@@ -2,6 +2,7 @@
 title: Front-end sugar over the fixed-former kernel
 status: open
 labels: [kernel,frontend,design]
+area: language
 created: 2026-07-23
 updated: 2026-07-23
 ---

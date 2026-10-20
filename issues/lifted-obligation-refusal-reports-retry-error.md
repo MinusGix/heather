@@ -2,6 +2,7 @@
 title: A refused lifted decreases obligation reports the un-lifted retry's error, not its own
 status: open
 labels: [frontend,diagnostics,elaboration,proofs]
+area: language
 created: 2026-09-06
 updated: 2026-09-06
 ---

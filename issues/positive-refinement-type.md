@@ -2,6 +2,7 @@
 title: A refinement type for positions binder sugar cannot reach
 status: open
 labels: [stdlib,subtypes,design]
+area: language
 created: 2026-10-10
 updated: 2026-10-10
 ---

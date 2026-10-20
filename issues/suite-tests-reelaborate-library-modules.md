@@ -2,6 +2,7 @@
 title: Tests re-elaborate library modules from source: list in 109 tests, nat in 182, the x86 structured block in 14
 status: open
 labels: [performance,testing,tooling]
+area: infrastructure
 created: 2026-09-23
 updated: 2026-10-11
 ---

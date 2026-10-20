@@ -2,6 +2,7 @@
 title: A scannerless String calculator, over an abstract parser source
 status: open
 labels: [stdlib,parser,showcase,design,elaboration]
+area: heather-in-heather
 created: 2026-09-18
 updated: 2026-09-18
 ---

@@ -2,6 +2,7 @@
 title: Inline enum types in signatures: Result<T, enum EOF|Unexpected(Char)>
 status: open
 labels: [frontend,syntax,design]
+area: language
 created: 2026-08-13
 updated: 2026-09-18
 ---

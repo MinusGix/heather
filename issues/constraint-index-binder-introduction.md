@@ -2,6 +2,7 @@
 title: Introduce named implicit class indices with local notation in constraints
 status: open
 labels: [frontend,traits,notation,ergonomics,design]
+area: language
 created: 2026-09-04
 updated: 2026-09-05
 ---

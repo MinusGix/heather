@@ -2,6 +2,7 @@
 title: Derive Decide for definitions built from decidable parts
 status: open
 labels: [stdlib,elaboration,traits,decidability,ergonomics]
+area: tactics
 created: 2026-09-18
 updated: 2026-09-18
 ---

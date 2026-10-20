@@ -2,6 +2,8 @@
 title: Make algebraic theories generic over their equality relation
 status: open
 labels: [stdlib,mathematics,algebra,setoids,design]
+area: mathematics
+milestone: [math-classes]
 created: 2026-09-04
 updated: 2026-10-20
 ---

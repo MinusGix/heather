@@ -2,6 +2,7 @@
 title: Add role-bearing aliases for classes
 status: open
 labels: [design,traits,elaboration,ergonomics,stdlib]
+area: language
 created: 2026-08-09
 updated: 2026-08-09
 ---

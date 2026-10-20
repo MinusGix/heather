@@ -2,6 +2,8 @@
 title: Rewrite a goal along an equation without writing j's motive
 status: open
 labels: [frontend,elaboration,proofs,ergonomics]
+area: tactics
+milestone: [tac-general]
 created: 2026-10-07
 updated: 2026-10-07
 ---

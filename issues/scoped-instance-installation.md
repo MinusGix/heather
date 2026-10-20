@@ -2,6 +2,7 @@
 title: Scoped instance installation: use instance at module/block scope
 status: open
 labels: [frontend,elaboration,traits,ergonomics]
+area: language
 created: 2026-08-07
 updated: 2026-08-07
 ---

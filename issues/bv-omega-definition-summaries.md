@@ -2,6 +2,7 @@
 title: bv_omega proves a summary lemma per definition instead of unfolding it at every use
 status: open
 labels: [performance,proofs,bitvec,metaprogramming]
+area: tactics
 created: 2026-09-27
 updated: 2026-09-27
 ---

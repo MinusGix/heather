@@ -2,6 +2,7 @@
 title: A kernel NotConvertible inside a term no checking site recorded stays unlocated
 status: open
 labels: [kernel,diagnostics]
+area: kernel
 created: 2026-09-24
 updated: 2026-09-24
 ---

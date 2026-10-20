@@ -2,6 +2,7 @@
 title: Keep computation and theorem requirements minimal in relational interfaces
 status: open
 labels: [setoids,design,backlog]
+area: tactics
 created: 2026-09-05
 updated: 2026-09-05
 ---

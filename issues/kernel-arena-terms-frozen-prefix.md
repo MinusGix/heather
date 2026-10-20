@@ -2,6 +2,7 @@
 title: Arena-indexed kernel terms over a frozen prefix: one representation for the allocation constant and parallel checking
 status: open
 labels: [kernel,representation,performance,parallelism,design,conversion,evaluator]
+area: kernel
 created: 2026-09-11
 updated: 2026-09-13
 ---

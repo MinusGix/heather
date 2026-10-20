@@ -2,6 +2,7 @@
 title: "Lint local bindings whose names are never used"
 status: open
 labels: [tooling,lint,frontend,blocks,ergonomics]
+area: language
 created: 2026-08-22
 updated: 2026-08-22
 ---

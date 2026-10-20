@@ -2,6 +2,7 @@
 title: Elaborator unifier: postponement, general pattern inversion, level inference
 status: open
 labels: [frontend,elaboration]
+area: language
 created: 2026-07-24
 updated: 2026-09-28
 ---

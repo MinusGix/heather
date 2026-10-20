@@ -2,6 +2,8 @@
 title: AI-facing tooling: every failure returns the search state that produced it, as data
 status: open
 labels: [tooling,design,meta,diagnostics]
+area: tactics
+milestone: [tac-general]
 created: 2026-08-05
 updated: 2026-09-04
 ---

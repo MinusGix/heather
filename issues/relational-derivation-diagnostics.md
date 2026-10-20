@@ -2,6 +2,7 @@
 title: Explain relational derivation failures at the responsible expression
 status: open
 labels: [setoids,design,backlog]
+area: tactics
 created: 2026-09-05
 updated: 2026-09-05
 ---

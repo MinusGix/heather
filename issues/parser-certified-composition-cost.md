@@ -2,6 +2,7 @@
 title: Reduce checker cost for proof-carrying parser composition
 status: open
 labels: [frontend,parsing,performance,proofs]
+area: heather-in-heather
 created: 2026-09-15
 updated: 2026-09-16
 ---

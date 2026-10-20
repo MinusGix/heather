@@ -2,6 +2,8 @@
 title: Separate Cauchy, conditional, and order completeness
 status: open
 labels: [stdlib,mathematics,reals,analysis,design]
+area: mathematics
+milestone: [math-reals]
 created: 2026-09-02
 updated: 2026-09-02
 ---

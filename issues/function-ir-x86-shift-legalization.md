@@ -2,6 +2,7 @@
 title: Legalize FunctionIR shifts against x86 masked shift counts
 status: open
 labels: [compiler,function-ir,x86,semantics,legalization,bitvec]
+area: heather-in-heather
 blocked-by: [function-ir-x86-constants]
 created: 2026-09-01
 updated: 2026-09-01

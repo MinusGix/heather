@@ -2,6 +2,7 @@
 title: Certified bitvector decisions: bit-blast, external SAT, kerneltime LRAT check
 status: open
 labels: [proofs,solver,bitvec,x86,design,research]
+area: tactics
 created: 2026-09-24
 updated: 2026-09-24
 ---

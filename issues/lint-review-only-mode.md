@@ -2,6 +2,7 @@
 title: "A review-only lint tier for optional simplification advice"
 status: open
 labels: [tooling,lint,diagnostics,design,ergonomics]
+area: language
 created: 2026-08-22
 updated: 2026-08-22
 ---

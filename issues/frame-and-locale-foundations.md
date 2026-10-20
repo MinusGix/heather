@@ -2,6 +2,7 @@
 title: Develop frame and locale foundations
 status: open
 labels: [stdlib,mathematics,locale-theory,order,research]
+area: mathematics
 created: 2026-09-02
 updated: 2026-09-02
 ---

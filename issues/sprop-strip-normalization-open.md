@@ -2,6 +2,7 @@
 title: The sEq strip is Werner's rule: MX §19.2 needs normalization, which is open predicatively
 status: open
 labels: [kernel,delam,metatheory,sprop]
+area: kernel
 created: 2026-09-30
 updated: 2026-09-30
 ---

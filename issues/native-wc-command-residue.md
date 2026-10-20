@@ -2,6 +2,7 @@
 title: wc as a command: GNU behaviours deferred from the first round
 status: open
 labels: [native,x86,design]
+area: heather-in-heather
 created: 2026-10-03
 updated: 2026-10-07
 ---

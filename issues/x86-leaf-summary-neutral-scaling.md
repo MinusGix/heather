@@ -2,6 +2,7 @@
 title: Stage generic leaf summaries for larger arithmetic bodies
 status: open
 labels: [compiler,x86,proofs]
+area: heather-in-heather
 created: 2026-09-19
 updated: 2026-09-19
 ---

@@ -2,6 +2,7 @@
 title: Give relational rewrites explicit direction and occurrence controls
 status: open
 labels: [relations,setoids,ergonomics,design]
+area: tactics
 created: 2026-09-05
 updated: 2026-09-05
 ---

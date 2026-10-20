@@ -2,6 +2,7 @@
 title: "List membership notation"
 status: open
 labels: [frontend,syntax,notation,stdlib,lists,ergonomics]
+area: language
 created: 2026-08-20
 updated: 2026-08-20
 ---

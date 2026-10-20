@@ -2,6 +2,7 @@
 title: Write the command's trace so stdout and status follow by homomorphism
 status: open
 labels: [native,semantics,proofs,design]
+area: heather-in-heather
 created: 2026-10-07
 updated: 2026-10-07
 ---

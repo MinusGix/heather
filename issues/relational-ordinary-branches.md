@@ -2,6 +2,7 @@
 title: Derive compatibility through ordinary Boolean branches
 status: open
 labels: [setoids,design,backlog]
+area: tactics
 created: 2026-09-05
 updated: 2026-09-05
 ---

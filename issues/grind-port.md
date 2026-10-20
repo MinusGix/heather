@@ -2,6 +2,8 @@
 title: A grind of our own, whose failures hand back the e-graph
 status: open
 labels: [tooling,elaboration,metaprogramming,design]
+area: tactics
+milestone: [tac-general]
 created: 2026-08-05
 updated: 2026-08-06
 ---

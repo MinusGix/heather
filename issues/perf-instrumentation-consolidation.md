@@ -2,6 +2,7 @@
 title: One instrumentation layer: scoped counters and timers on every phase, dumped from heather check
 status: open
 labels: [tooling,performance,measurement,kernel,elaboration,cli]
+area: infrastructure
 created: 2026-09-11
 updated: 2026-09-17
 ---

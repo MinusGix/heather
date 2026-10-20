@@ -2,6 +2,7 @@
 title: "Notation: how open, and open along which axis"
 status: open
 labels: [frontend, syntax, design]
+area: language
 created: 2026-07-24
 updated: 2026-08-11
 ---

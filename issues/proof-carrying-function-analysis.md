@@ -2,6 +2,8 @@
 title: Explore composable proof-carrying function analysis interfaces
 status: open
 labels: [metaprogramming,elaboration,design]
+area: heather-in-heather
+milestone: [hih-passes]
 created: 2026-09-07
 updated: 2026-09-07
 ---

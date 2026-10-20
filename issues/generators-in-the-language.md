@@ -2,6 +2,8 @@
 title: Move the declaration generators out of Rust and into the meta layer
 status: open
 labels: [metaprogramming,elaboration,design]
+area: heather-in-heather
+milestone: [hih-passes]
 created: 2026-07-26
 updated: 2026-08-15
 ---

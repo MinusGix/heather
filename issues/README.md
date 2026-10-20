@@ -15,6 +15,8 @@ title: Short imperative title
 status: open          # open | blocked | closed
 thread: T1            # optional; work thread (see THREADS section below if/when we add one)
 labels: [kernel, ir]  # optional
+area: kernel          # one area from docs/roadmap.md; every open issue has one
+milestone: [hih-memory]   # optional; roadmap milestones this issue serves
 blocked-by: [other-slug]  # optional; slugs of blocking issues
 code: crates/kernel/src/term.rs:120 @ 980b47e  # optional; path:line @ commit
 created: 2026-07-22
@@ -25,6 +27,12 @@ Body: problem statement, then iterative notes appended under `## Log` with dates
 Link related issues as [[other-slug]].
 ```
 
+- **Areas and milestones** are owned by `docs/roadmap.md`, which also ranks
+  the areas by importance; `scripts/issue check` refuses a name it does not
+  list. An area is where the issue's work lands (labels stay free-form
+  topics); a milestone is a result the issue helps reach, possibly in another
+  area (`inductive-compiler` is `language` work serving `it-library`). Give a
+  new issue its area when filing it.
 - Code references are `path:line @ shorthash` — resolve with `git show <hash>:<path>`.
 - History of an issue: `git log --follow issues/<slug>.md`.
 - Closing keeps the file (set `status: closed`); it stays greppable.
@@ -67,8 +75,12 @@ open issues whose last log says LANDED/DONE, and open issues nothing links to.
 
 ```
 scripts/issue list [--status S] [--thread T] [--label L]   # table of issues
+           [--area A|none] [--milestone M]
 scripts/issue show <slug>                                  # print one issue
 scripts/issue new <slug> --title "..." [--thread T] [--labels a,b] [--body-file F]
+           [--area A] [--milestone M,N]
+scripts/issue tag <slug>… [--area A] [--milestone M,N]     # retag; leaves updated: alone
+scripts/issue areas                                        # areas by importance, milestones' open issues
 scripts/issue close <slug> / reopen <slug>
 scripts/issue log <slug> < entry.md                        # dated entry under ## Log
 scripts/issue log <slug> --body-file entry.md              # same, named file
@@ -81,8 +93,9 @@ scripts/issue export <dir>                                 # the same viewer as 
 ```
 
 `serve` (page: `scripts/issue-web.html`, stdlib server, localhost only) is for
-the human view of the whole tracker: facet filters over status and labels, an
-**Areas** overview per label, and a **Graph** of `[[links]]` and `blocked-by`
+the human view of the whole tracker: facet filters over status, area and labels, an
+**Areas** overview (the roadmap's areas in importance order with their
+direction and milestones, or one card per label), and a **Graph** of `[[links]]` and `blocked-by`
 edges with a focus-on-neighbourhood mode. The detail pane shows links in both
 directions. It re-reads `issues/` on every request and the page reloads itself
 when a file changes, so it can stay open while rounds edit the tracker. Filter

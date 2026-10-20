@@ -2,6 +2,7 @@
 title: The value domain costs a 1.5-3x constant where there is no sharing to win
 status: open
 labels: [kernel,conversion,performance]
+area: kernel
 created: 2026-07-31
 updated: 2026-09-11
 ---

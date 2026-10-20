@@ -2,6 +2,7 @@
 title: Make equality orientation matter only at explicit elimination boundaries
 status: open
 labels: [frontend,proofs,elaboration,ergonomics,research,design]
+area: language
 created: 2026-08-19
 updated: 2026-08-19
 ---

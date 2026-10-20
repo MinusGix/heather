@@ -105,6 +105,10 @@
   `docs/testing-generated-terms.md` — vary all four axes (literal *and*
   neutral scrutinee, an **open** element type, a *checking* position and not
   only computation, and a negative control); defects have hidden behind each.
+- **Areas and importance: `docs/roadmap.md`** owns the project's areas, their
+  rank, and the milestones effort goes toward; read it before choosing what
+  a round works on. Every open issue carries `area:` (and `milestone:` when it
+  serves one); `scripts/issue areas` is the overview.
 - Issue tracker: `scripts/issue` over `issues/*.md` (see `issues/README.md`).
   The issue files are the only tracked state: there is no committed index.
   `scripts/issue index` prints the one-line-per-issue overview to stdout and

@@ -2,6 +2,7 @@
 title: Comparing two lazily unrolled Nat recursions on a literal at a stuck argument descends the literal
 status: open
 labels: [kernel,conversion,perf]
+area: kernel
 created: 2026-09-18
 updated: 2026-09-18
 ---

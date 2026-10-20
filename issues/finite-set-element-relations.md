@@ -2,6 +2,7 @@
 title: Compose finite-set semantics with an equivalence on elements
 status: open
 labels: [setoids,design,backlog]
+area: mathematics
 created: 2026-09-05
 updated: 2026-09-05
 ---

@@ -2,6 +2,7 @@
 title: IWf: finitary inductive families as a former, with no stored index equation
 status: open
 labels: [kernel,design,delam,metatheory]
+area: kernel
 created: 2026-09-30
 updated: 2026-10-20
 ---

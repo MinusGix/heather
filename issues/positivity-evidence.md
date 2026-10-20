@@ -2,6 +2,7 @@
 title: Replace the shifted Pos with Pos<A> binder sugar over a smarter infer
 status: open
 labels: [stdlib,elaboration,traits,design,ergonomics]
+area: language
 created: 2026-10-10
 updated: 2026-10-14
 ---

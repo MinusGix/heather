@@ -2,6 +2,7 @@
 title: Lay out certified code fragments and resolve symbolic references
 status: open
 labels: [compiler,x86,proofs]
+area: heather-in-heather
 created: 2026-09-07
 updated: 2026-10-07
 ---

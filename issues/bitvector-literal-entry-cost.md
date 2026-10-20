@@ -2,6 +2,7 @@
 title: A bitvector literal is born structural and packed on every use: the remaining floor under closed machine-word items
 status: open
 labels: [kernel,elaboration,representation,performance,bitvec]
+area: kernel
 created: 2026-09-13
 updated: 2026-09-13
 ---

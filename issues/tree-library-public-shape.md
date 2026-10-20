@@ -2,6 +2,7 @@
 title: "Give Tree a conventional public API and re-home its algebra probes"
 status: open
 labels: [stdlib,design,cleanup,inductives]
+area: heather-in-heather
 created: 2026-08-20
 updated: 2026-08-20
 ---

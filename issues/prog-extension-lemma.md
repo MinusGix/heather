@@ -2,6 +2,7 @@
 title: Program extension preserves convergence (the linking lemma)
 status: open
 labels: [ir,stdlib,compiler,design]
+area: heather-in-heather
 created: 2026-08-02
 updated: 2026-08-11
 ---

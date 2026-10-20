@@ -2,6 +2,7 @@
 title: field_prints' kernel gate grew across the structured-lowering round
 status: open
 labels: [perf]
+area: infrastructure
 created: 2026-09-30
 updated: 2026-09-30
 ---

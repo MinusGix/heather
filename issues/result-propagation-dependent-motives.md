@@ -2,6 +2,7 @@
 title: Preserve written dependent motives through non-tail Result propagation
 status: open
 labels: [frontend,elaboration,proofs,design]
+area: language
 created: 2026-09-14
 updated: 2026-09-14
 ---

@@ -2,6 +2,7 @@
 title: Layer 1's two parent-synthesis directions do not cost the same downstream
 status: open
 labels: [elaboration,performance,traits]
+area: language
 created: 2026-08-08
 updated: 2026-08-08
 ---

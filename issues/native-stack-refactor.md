@@ -2,6 +2,8 @@
 title: Refine the native program stack before the next process
 status: open
 labels: [x86,native,design,refactor]
+area: heather-in-heather
+milestone: [hih-program-logic]
 created: 2026-09-30
 updated: 2026-10-01
 ---

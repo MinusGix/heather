@@ -2,6 +2,7 @@
 title: omega's CutSat lemmas lead the corpus after app@: complexity or overhead?
 status: open
 labels: [omega,performance,kernel,elaboration]
+area: tactics
 created: 2026-09-22
 updated: 2026-09-22
 ---

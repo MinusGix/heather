@@ -2,6 +2,7 @@
 title: Infer implicit values through nominal constructor fields
 status: open
 labels: [frontend,elaboration,inference,inductives,proofs]
+area: language
 created: 2026-08-28
 updated: 2026-08-28
 ---

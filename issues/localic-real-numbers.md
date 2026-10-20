@@ -2,6 +2,7 @@
 title: Present the real line as a locale
 status: blocked
 labels: [stdlib,mathematics,reals,locale-theory,research]
+area: mathematics
 blocked-by: [frame-and-locale-foundations]
 created: 2026-09-02
 updated: 2026-09-02

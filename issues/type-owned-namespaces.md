@@ -2,6 +2,7 @@
 title: "Type-owned namespaces: names attach to subjects, reachability through evidence"
 status: open
 labels: [frontend, syntax, elaboration, design, modules]
+area: language
 created: 2026-08-05
 updated: 2026-09-24
 ---

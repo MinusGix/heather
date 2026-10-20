@@ -2,6 +2,7 @@
 title: Name ABI contracts and make unspecified behavior explicit
 status: open
 labels: [compiler,abi,semantics,proofs]
+area: heather-in-heather
 created: 2026-09-07
 updated: 2026-09-07
 ---

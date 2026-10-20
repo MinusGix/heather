@@ -2,6 +2,7 @@
 title: "Investigate first-class function composition notation"
 status: open
 labels: [frontend,syntax,operators,functions,programming,ergonomics]
+area: language
 created: 2026-08-22
 updated: 2026-08-22
 ---

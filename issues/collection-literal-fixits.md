@@ -2,6 +2,7 @@
 title: Offer structured fixes for manual list construction
 status: open
 labels: [frontend,lint,ergonomics]
+area: language
 created: 2026-08-30
 updated: 2026-08-30
 ---

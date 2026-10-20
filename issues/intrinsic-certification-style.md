@@ -2,6 +2,7 @@
 title: Intrinsic certification: functions that return their correctness proof, split at elaboration
 status: open
 labels: [design,frontend,proofs,compiler,metaprogramming]
+area: heather-in-heather
 created: 2026-08-15
 updated: 2026-08-15
 ---

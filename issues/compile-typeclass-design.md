@@ -2,6 +2,7 @@
 title: Design the Compile typeclass and certificate coupling
 status: open
 labels: [compiler, typeclass, design]
+area: heather-in-heather
 blocked-by: [ir-simulate-design]
 created: 2026-07-22
 updated: 2026-09-07

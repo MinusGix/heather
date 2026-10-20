@@ -2,6 +2,7 @@
 title: Iterators are a runtime representation of List, not a spec type
 status: open
 labels: [design,stdlib,runtime,compiler]
+area: heather-in-heather
 created: 2026-08-13
 updated: 2026-08-14
 ---

@@ -2,6 +2,8 @@
 title: Build a checked Heather-side API for declarations and proof construction
 status: open
 labels: [metaprogramming,elaboration,proofs,design]
+area: tactics
+milestone: [tac-in-heather]
 created: 2026-09-08
 updated: 2026-09-08
 ---

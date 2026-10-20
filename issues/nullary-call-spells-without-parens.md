@@ -2,6 +2,7 @@
 title: A nullary call displays without its parentheses
 status: open
 labels: [diagnostics,display]
+area: language
 created: 2026-10-19
 updated: 2026-10-19
 ---

@@ -2,6 +2,7 @@
 title: Reuse process-accepted semantic worlds across consumers
 status: open
 labels: [tooling,elaboration,performance,caching,design]
+area: infrastructure
 created: 2026-08-30
 updated: 2026-08-30
 ---

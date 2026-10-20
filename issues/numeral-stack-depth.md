@@ -2,6 +2,7 @@
 title: "~47 KB of stack per `Succ` level caps numerals at ~150"
 status: open
 labels: [elaboration, kernel, tooling]
+area: kernel
 created: 2026-07-27
 updated: 2026-07-28
 ---

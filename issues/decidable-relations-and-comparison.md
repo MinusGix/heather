@@ -2,6 +2,7 @@
 title: Factor decidable relations from evidence-producing comparison
 status: open
 labels: [stdlib,mathematics,order,decidability,design]
+area: mathematics
 created: 2026-09-02
 updated: 2026-09-09
 ---

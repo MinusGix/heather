@@ -2,6 +2,7 @@
 title: Make the refused recursion spellings mean what they say
 status: open
 labels: [elaboration,recursion,design]
+area: language
 created: 2026-09-25
 updated: 2026-09-25
 ---

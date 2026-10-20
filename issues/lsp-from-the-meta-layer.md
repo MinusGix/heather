@@ -2,6 +2,7 @@
 title: "LSP: what the meta-layer can tell an editor directly"
 status: open
 labels: [tooling, metaprogramming, design]
+area: language
 created: 2026-07-24
 updated: 2026-08-25
 ---

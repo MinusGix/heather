@@ -2,6 +2,7 @@
 title: Stress-test transfer through dependent families
 status: open
 labels: [stdlib,relations,dependent-types,design]
+area: mathematics
 created: 2026-09-04
 updated: 2026-09-05
 ---

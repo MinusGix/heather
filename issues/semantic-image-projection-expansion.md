@@ -2,6 +2,7 @@
 title: Keep dependent projection metadata compact in semantic module images
 status: open
 labels: [elaborator,caching,performance,representation,records]
+area: infrastructure
 created: 2026-09-03
 updated: 2026-09-03
 ---

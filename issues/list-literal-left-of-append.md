@@ -2,6 +2,7 @@
 title: A list literal left of ++ has no carrier in an expression
 status: open
 labels: [frontend,elaborator,ergonomics]
+area: language
 created: 2026-10-04
 updated: 2026-10-20
 ---

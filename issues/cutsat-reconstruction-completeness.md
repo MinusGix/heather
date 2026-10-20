@@ -2,6 +2,8 @@
 title: Complete kernel reconstruction for CutSat derivations
 status: open
 labels: [proofs,elaboration,arithmetic,solver]
+area: tactics
+milestone: [tac-arith]
 blocked-by: [arithmetic-certificate-dag-sharing]
 created: 2026-08-27
 updated: 2026-08-27

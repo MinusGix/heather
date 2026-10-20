@@ -2,6 +2,7 @@
 title: A fn statement's Π levels are raw ⊔ trees, copied into every App annotation read off it
 status: open
 labels: [elaboration,representation,performance]
+area: language
 created: 2026-09-15
 updated: 2026-09-15
 ---

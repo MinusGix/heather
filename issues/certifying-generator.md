@@ -2,6 +2,7 @@
 title: Certifying generator for Compile instances (runtime_func)
 status: open
 labels: [compiler, metaprogramming]
+area: heather-in-heather
 blocked-by: [end-to-end-compile-instance]
 created: 2026-07-22
 updated: 2026-08-15

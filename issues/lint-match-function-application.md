@@ -2,6 +2,7 @@
 title: "Lint matches that return a function only to be immediately applied"
 status: open
 labels: [tooling,lint,frontend,elaboration,stdlib,ergonomics]
+area: language
 created: 2026-08-22
 updated: 2026-08-22
 ---

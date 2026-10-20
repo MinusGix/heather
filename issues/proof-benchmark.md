@@ -2,6 +2,7 @@
 title: Proof benchmark: statements with holes, the kernel as the ungameable judge
 status: open
 labels: [tooling,testing,design,meta]
+area: infrastructure
 created: 2026-08-05
 updated: 2026-08-05
 ---

@@ -2,6 +2,7 @@
 title: Require explicit Compile instances or runtime derivation markers
 status: open
 labels: [compiler,frontend,metaprogramming]
+area: heather-in-heather
 created: 2026-09-07
 updated: 2026-09-07
 ---

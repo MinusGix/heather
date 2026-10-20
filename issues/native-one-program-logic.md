@@ -2,6 +2,8 @@
 title: One program logic for native code, designed to meet interaction trees
 status: open
 labels: [native,x86,ir,semantics,design]
+area: heather-in-heather
+milestone: [hih-program-logic, it-native]
 created: 2026-10-01
 updated: 2026-10-07
 ---

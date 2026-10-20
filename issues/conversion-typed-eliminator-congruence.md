@@ -2,6 +2,7 @@
 title: Typed neutral congruence for the eliminators: stop re-comparing annotations well-typedness forces
 status: open
 labels: [kernel,conversion,performance,design]
+area: kernel
 created: 2026-09-06
 updated: 2026-10-20
 ---

@@ -2,6 +2,7 @@
 title: A perf diary and dashboard: what is slow now, and where it comes from
 status: open
 labels: [tooling,performance,measurement,testing,meta]
+area: infrastructure
 created: 2026-09-17
 updated: 2026-09-17
 ---

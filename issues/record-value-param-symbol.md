@@ -2,6 +2,7 @@
 title: Extend `as` to record/inductive value parameters when a customer shows up
 status: open
 labels: [design,frontend,ergonomics]
+area: language
 created: 2026-08-11
 updated: 2026-08-11
 ---

@@ -2,6 +2,7 @@
 title: "Render resolved operations with their operator notation in diagnostics"
 status: open
 labels: [frontend,diagnostics,notation,ergonomics]
+area: language
 created: 2026-08-20
 updated: 2026-09-15
 ---

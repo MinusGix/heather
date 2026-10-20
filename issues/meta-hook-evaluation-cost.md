@@ -2,6 +2,7 @@
 title: The evaluation hook re-evaluates and re-infers map_code per use site
 status: open
 labels: [elaboration,performance,metaprogramming]
+area: language
 created: 2026-08-02
 updated: 2026-08-02
 ---

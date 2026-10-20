@@ -2,6 +2,7 @@
 title: Validate relational abstraction through an ideal finite-set client
 status: open
 labels: [stdlib,setoids,transfer,ergonomics,design]
+area: mathematics
 created: 2026-09-04
 updated: 2026-09-05
 ---

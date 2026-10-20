@@ -2,6 +2,7 @@
 title: Stream filters whose output is longer than their input
 status: open
 labels: [x86,native,design]
+area: heather-in-heather
 created: 2026-10-01
 updated: 2026-10-01
 ---

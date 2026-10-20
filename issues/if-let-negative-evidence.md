@@ -2,6 +2,7 @@
 title: Give an if-let failure branch evidence that the pattern did not match
 status: open
 labels: [frontend,elaboration,patterns,proofs,design]
+area: language
 created: 2026-08-19
 updated: 2026-08-19
 ---

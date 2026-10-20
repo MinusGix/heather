@@ -2,6 +2,7 @@
 title: furnace run: take a shell command, and own the log
 status: open
 labels: [tooling,infrastructure,ergonomics]
+area: infrastructure
 created: 2026-09-16
 updated: 2026-09-16
 ---

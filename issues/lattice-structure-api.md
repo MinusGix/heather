@@ -2,6 +2,8 @@
 title: Develop lattice structures from orders and indexed operations
 status: open
 labels: [stdlib,mathematics,order,algebra]
+area: mathematics
+milestone: [math-classes]
 created: 2026-09-02
 updated: 2026-09-02
 ---

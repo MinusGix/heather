@@ -2,6 +2,7 @@
 title: Class operations across the kerneltime/runtime split: Prop laws, Bool programs, certificates between
 status: open
 labels: [design,traits,compiler,stdlib,delam]
+area: heather-in-heather
 created: 2026-08-07
 updated: 2026-08-17
 ---

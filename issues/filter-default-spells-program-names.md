@@ -2,6 +2,7 @@
 title: Filter's advances default spells program names its scope cannot see
 status: open
 labels: [native,tactics,ergonomics]
+area: heather-in-heather
 created: 2026-10-02
 updated: 2026-10-03
 ---

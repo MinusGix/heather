@@ -2,6 +2,7 @@
 title: Develop state locations, updates, and frame reasoning
 status: open
 labels: [stdlib,logic,semantics,design]
+area: heather-in-heather
 created: 2026-08-25
 updated: 2026-09-08
 ---

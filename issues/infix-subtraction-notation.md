@@ -2,6 +2,7 @@
 title: "Carrier-directed infix subtraction notation"
 status: open
 labels: [frontend,syntax,notation,stdlib,ergonomics]
+area: language
 created: 2026-08-20
 updated: 2026-10-14
 ---

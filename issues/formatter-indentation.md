@@ -2,6 +2,7 @@
 title: Indent Heather source from its nesting depth
 status: open
 labels: [tooling,syntax,ergonomics]
+area: language
 created: 2026-09-16
 updated: 2026-09-16
 ---

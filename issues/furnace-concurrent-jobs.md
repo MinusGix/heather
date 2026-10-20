@@ -2,6 +2,7 @@
 title: Let the furnace run concurrent jobs, isolated per worktree
 status: open
 labels: [tooling,infrastructure,testing,performance]
+area: infrastructure
 created: 2026-09-16
 updated: 2026-09-16
 ---

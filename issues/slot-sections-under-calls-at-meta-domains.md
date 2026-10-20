@@ -2,6 +2,7 @@
 title: Slot sections under a call are refused at a meta-bearing parameter
 status: open
 labels: [frontend,elaboration,ergonomics]
+area: language
 created: 2026-10-08
 updated: 2026-10-08
 ---

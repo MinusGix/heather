@@ -2,6 +2,7 @@
 title: Specify finite enumeration and lawful finite-set observations
 status: open
 labels: [setoids,design,backlog]
+area: mathematics
 created: 2026-09-05
 updated: 2026-09-05
 ---

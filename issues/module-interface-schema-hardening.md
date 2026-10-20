@@ -2,6 +2,7 @@
 title: Make module-interface projection changes reviewable and differential
 status: open
 labels: [tooling,elaboration,caching,robustness,testing]
+area: infrastructure
 created: 2026-08-30
 updated: 2026-08-30
 ---

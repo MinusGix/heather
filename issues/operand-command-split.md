@@ -2,6 +2,7 @@
 title: Split the operand loop from what wc prints, with cat as a second client
 status: open
 labels: [native,x86,design]
+area: heather-in-heather
 created: 2026-10-07
 updated: 2026-10-07
 ---

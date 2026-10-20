@@ -2,6 +2,8 @@
 title: Ownership/linearity as certified static analyses over reflected code, never in the kernel
 status: open
 labels: [compiler,design,runtime,metaprogramming]
+area: heather-in-heather
+milestone: [hih-memory]
 created: 2026-08-11
 updated: 2026-08-11
 ---

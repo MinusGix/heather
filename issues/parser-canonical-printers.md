@@ -2,6 +2,7 @@
 title: Pair parsers with canonical printers and checked round trips
 status: open
 labels: [stdlib,parsing,proofs]
+area: heather-in-heather
 created: 2026-09-15
 updated: 2026-09-15
 ---

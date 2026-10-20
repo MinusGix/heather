@@ -2,6 +2,7 @@
 title: Code payloads have no sharing: a tower-typed value inside a quote is spelled as its reduct
 status: open
 labels: [kernel,metaprogramming,design,performance]
+area: kernel
 created: 2026-09-22
 updated: 2026-09-22
 ---

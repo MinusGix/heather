@@ -2,6 +2,8 @@
 title: "Inductive declaration compiler: tiered encodings"
 status: open
 labels: [frontend,elaboration,inductives,design]
+area: language
+milestone: [it-library]
 created: 2026-07-23
 updated: 2026-07-26
 ---

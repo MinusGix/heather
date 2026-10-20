@@ -2,6 +2,7 @@
 title: "A first-class proposition for three-way order cases"
 status: open
 labels: [design,stdlib,logic,orders,ergonomics]
+area: mathematics
 created: 2026-08-20
 updated: 2026-08-20
 ---

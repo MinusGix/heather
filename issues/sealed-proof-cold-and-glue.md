@@ -2,6 +2,7 @@
 title: Keep sealed proofs unloaded on a cold run and through value-machine glue
 status: open
 labels: [kernel,cache,memory]
+area: kernel
 created: 2026-10-17
 updated: 2026-10-17
 ---

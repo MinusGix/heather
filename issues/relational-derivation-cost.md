@@ -2,6 +2,7 @@
 title: Measure and bound relational search and generated proof cost
 status: open
 labels: [setoids,design,backlog]
+area: tactics
 created: 2026-09-05
 updated: 2026-09-12
 ---

@@ -2,6 +2,7 @@
 title: A byte type name and C-locale byte classes in the library
 status: open
 labels: [stdlib,native,surface-syntax,design]
+area: heather-in-heather
 created: 2026-10-07
 updated: 2026-10-07
 ---

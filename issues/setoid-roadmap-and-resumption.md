@@ -2,6 +2,7 @@
 title: Pause setoid expansion until a concrete client drives the next slice
 status: open
 labels: [setoids,planning,backlog]
+area: mathematics
 created: 2026-09-05
 updated: 2026-10-13
 ---

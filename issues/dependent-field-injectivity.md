@@ -2,6 +2,7 @@
 title: Injectivity at a field whose type depends on an earlier one
 status: open
 labels: [frontend,elaboration,inductives]
+area: language
 created: 2026-07-26
 updated: 2026-07-26
 ---

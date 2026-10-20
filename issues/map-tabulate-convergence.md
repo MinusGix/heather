@@ -2,6 +2,7 @@
 title: map and tabulate do not converge at a neutral length
 status: open
 labels: [elab,vec,ir,design]
+area: language
 created: 2026-07-26
 updated: 2026-07-26
 ---

@@ -2,6 +2,8 @@
 title: Add cancellative algebra with explicit side conditions
 status: open
 labels: [stdlib,mathematics,algebra,arithmetic]
+area: mathematics
+milestone: [math-classes]
 created: 2026-09-02
 updated: 2026-10-14
 ---

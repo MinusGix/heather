@@ -2,6 +2,7 @@
 title: Let proof lemmas take their operation implicitly: mconcat_single(x)
 status: open
 labels: [design,frontend,ergonomics,traits]
+area: language
 created: 2026-08-11
 updated: 2026-08-11
 ---

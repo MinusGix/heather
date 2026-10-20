@@ -2,6 +2,7 @@
 title: "Cache verdicts don't record the fuel/univs they were earned under"
 status: open
 labels: [tooling, cli, robustness]
+area: infrastructure
 created: 2026-08-06
 updated: 2026-08-16
 code: crates/cache/src/store.rs @ 33c65ef

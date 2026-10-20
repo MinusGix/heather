@@ -2,6 +2,7 @@
 title: Cloning a prelude'd elaborator went 300 ns -> 6.9 us; the fixture argument that rests on it should be re-checked
 status: open
 labels: [elaboration,performance,tooling]
+area: language
 created: 2026-08-17
 updated: 2026-09-11
 ---

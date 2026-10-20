@@ -2,6 +2,7 @@
 title: instance_match declines List with hole-match-Wf/Sigma: the largest remaining decline row, unattributed
 status: open
 labels: [elaboration,representation,performance]
+area: language
 created: 2026-09-15
 updated: 2026-09-15
 ---

@@ -2,6 +2,7 @@
 title: Retire the braced record literal now that a named call says the same thing
 status: open
 labels: [frontend,syntax,cleanup]
+area: language
 created: 2026-08-18
 updated: 2026-08-18
 ---

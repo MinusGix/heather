@@ -2,6 +2,7 @@
 title: Resolution tries every instance of a class; Decide makes that the widest it has been
 status: open
 labels: [elaboration,performance,traits]
+area: language
 created: 2026-08-17
 updated: 2026-09-09
 ---

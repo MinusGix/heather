@@ -2,6 +2,7 @@
 title: Generate relational compatibility, lifted operations, and transfer proofs
 status: open
 labels: [kernel,metaprogramming,design]
+area: tactics
 created: 2026-07-23
 updated: 2026-09-05
 ---

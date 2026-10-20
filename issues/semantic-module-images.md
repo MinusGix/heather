@@ -2,6 +2,7 @@
 title: Load checked semantic module images without re-elaboration
 status: open
 labels: [tooling,elaboration,performance,caching,design]
+area: infrastructure
 created: 2026-08-29
 updated: 2026-09-04
 ---

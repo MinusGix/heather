@@ -2,6 +2,7 @@
 title: Apply the lints that determine their own fix
 status: open
 labels: [tooling,lint,frontend,ergonomics]
+area: language
 created: 2026-09-16
 updated: 2026-09-16
 ---

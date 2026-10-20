@@ -2,6 +2,7 @@
 title: No spelling for giving some type arguments and inferring the rest
 status: open
 labels: [frontend,syntax,ergonomics]
+area: language
 created: 2026-08-18
 updated: 2026-08-18
 ---

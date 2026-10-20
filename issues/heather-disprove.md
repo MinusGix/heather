@@ -2,6 +2,7 @@
 title: heather disprove: a counterexample before anyone pays for a proof
 status: open
 labels: [tooling,testing,design]
+area: tactics
 created: 2026-08-05
 updated: 2026-09-04
 ---
