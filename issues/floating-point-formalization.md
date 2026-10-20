@@ -35,3 +35,11 @@ of the area.
   against an order-complete presentation.
 - **[[ordered-field-over-comm-ring]]** owns the ordered-field layer. Assumed
   here: only that error bounds can be stated in it.
+
+## Log
+
+- 2026-10-20: design proposal in `docs/floating-point-design.md`, after
+  reading flean. It answers questions 1–3 provisionally (dyadic values
+  embedded in `Rat`; formats as data indexing `Float(F)`; one `encode`/`decode`
+  pair over `BitVec`) and lists nine open questions for Minus (§9) and an
+  eight-round plan (§8). No code yet.
