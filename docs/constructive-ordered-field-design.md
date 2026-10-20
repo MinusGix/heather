@@ -43,7 +43,7 @@ Zero, one, negation, the inverse and the embedding of `Nat` are fields, as
 | `StrictOrder(≈, <, ≤)` | `Equivalence(≈)`; `<` irreflexive, transitive, respecting `≈`, tight; `≤` ⇔ `¬>` | open intervals, apartness laws, `≤` reflexive and antisymmetric modulo `≈` |
 | `Cotransitive(<)` | `x < y → x < z ∨ z < y` | (a capability, alone) |
 | `PseudoOrder` | the two above | `≤` transitivity, mixed `<`/`≤` steps, closed intervals, apartness cotransitivity |
-| `OrderedAddGroup(≈, <, ≤, +)` | `StrictOrder`, `algebra_rel`'s `Semigroup`/`Commutative` at `+`, zero, negation, `<` translation-invariant | group algebra, `≤` translation, the bounded triangle inequality, tightness of bounds |
+| `OrderedAddGroup(≈, <, ≤, +)` | `StrictOrder`, `algebra_rel`'s `SemigroupRel`/`Commutative` at `+`, zero, negation, `<` translation-invariant | group algebra, `≤` translation, the bounded triangle inequality, tightness of bounds |
 | `LocatedAddGroup` | `OrderedAddGroup` and `PseudoOrder` | a sum's gap splitting between summands, a bound's positivity, `≤` bounds |
 | `OrderedField(≈, <, ≤, +, *)` | one, `of_nat`, the inverse at apartness, ring laws, `0 < 1`, `mul_pos`, Archimedean | strict monotonicity of products, uniqueness and invariance of the inverse |
 

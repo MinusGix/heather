@@ -51,6 +51,7 @@ const MODULES: &[(&str, &str)] = &[
         "ordered_field",
         include_str!("../../../lib/std/ordered_field.hthr"),
     ),
+    ("semiring", include_str!("../../../lib/std/semiring.hthr")),
     ("rat", include_str!("../../../lib/std/rat.hthr")),
 ];
 
@@ -188,7 +189,7 @@ fn a_wrong_law_or_step_is_refused() {
     refused(
         "rat_wrong_cong",
         &format!(
-            "{IMPORTS} theorem bad(x, y: Rat): (y + -y) + x ≈ Rat::zero() {{
+            "{IMPORTS} theorem bad(x, y: Rat): (y + -y) + x ≈ 0 {{
                 rel_cong(Rat::add_neg(y))
             }}"
         ),
@@ -200,24 +201,24 @@ fn inverse_needs_a_nonzero_argument() {
     // The raw reciprocal sends 0 to 0, so 0 · recip(0) is 0, not 1.
     refused(
         "rat_zero_recip",
-        &format!("{IMPORTS} theorem bad(): Rat::zero() * Rat::zero().recip() ≈ Rat::one() {{ refl }}"),
+        &format!("{IMPORTS} theorem bad(): 0 * Rat::recip(0) ≈ 1 {{ refl }}"),
     );
     refused(
         "rat_recip_without_hypothesis",
         &format!(
-            "{IMPORTS} theorem bad(x: Rat): x * x.recip() ≈ Rat::one() {{
+            "{IMPORTS} theorem bad(x: Rat): x * x.recip() ≈ 1 {{
                 Rat::mul_recip(x, λ h => h)
             }}"
         ),
     );
     // The inverse has no value at 0 at all: no apartness proof exists, so
     // the search for one fails, at a literal zero and at an unknown `x`.
-    refused("rat_zero_inverse", &format!("{IMPORTS} fn bad() → Rat {{ Rat::zero()⁻¹ }}"));
+    refused("rat_zero_inverse", &format!("{IMPORTS} fn bad() → Rat {{ Rat::inv(0) }}"));
     refused("rat_inverse_unknown_sign", &format!("{IMPORTS} fn bad(x: Rat) → Rat {{ x⁻¹ }}"));
     // `¬(x ≈ 0)` is not apartness until it is converted.
     refused(
         "rat_inverse_from_nonzero_unconverted",
-        &format!("{IMPORTS} fn bad(x: Rat, h: ¬(x ≈ Rat::zero())) → Rat {{ x⁻¹ }}"),
+        &format!("{IMPORTS} fn bad(x: Rat, h: ¬(x ≈ 0)) → Rat {{ x⁻¹ }}"),
     );
 }
 
@@ -238,26 +239,26 @@ fn inverse_and_power_notation() {
         "rat_power_notation",
         &format!(
             "{POWER_IMPORTS}
-            theorem from_apart(x: Rat, h: x.Apart(Rat::zero())): x * x⁻¹ ≈ Rat::one() {{ x.mul_inv() }}
-            theorem from_positive(x: Rat, h: Rat::zero() < x): x⁻¹ * x ≈ Rat::one() {{ x.inv_mul() }}
-            theorem from_negative(x: Rat, h: x < Rat::zero()): x ^ (-1) ≈ x⁻¹ {{ x.pow_neg_one() }}
-            theorem of_product(x, y: Rat, hx: x.Apart(Rat::zero()), hy: Rat::zero() < y): (x * y) * (x * y)⁻¹ ≈ Rat::one() {{
+            theorem from_apart(x: Rat, h: x.Apart(0)): x * x⁻¹ ≈ 1 {{ x.mul_inv() }}
+            theorem from_positive(x: Rat, h: 0 < x): x⁻¹ * x ≈ 1 {{ x.inv_mul() }}
+            theorem from_negative(x: Rat, h: x < 0): x ^ (-1) ≈ x⁻¹ {{ x.pow_neg_one() }}
+            theorem of_product(x, y: Rat, hx: x.Apart(0), hy: 0 < y): (x * y) * (x * y)⁻¹ ≈ 1 {{
                 (x * y).mul_inv()
             }}
-            theorem of_inverse(x: Rat, h: x.Apart(Rat::zero())): x⁻¹ * x⁻¹⁻¹ ≈ Rat::one() {{ x⁻¹.mul_inv() }}
-            theorem of_power(x: Rat, h: x.Apart(Rat::zero()), k: Nat): (x ^ NegSucc(k)).Apart(Rat::zero()) {{ Rat::apart_pow() }}
+            theorem of_inverse(x: Rat, h: x.Apart(0)): x⁻¹ * x⁻¹⁻¹ ≈ 1 {{ x⁻¹.mul_inv() }}
+            theorem of_power(x: Rat, h: x.Apart(0), k: Nat): (x ^ NegSucc(k)).Apart(0) {{ Rat::apart_pow() }}
             fn half() → Rat {{ 2⁻¹ }}
             theorem half_value(): half() ≈ Rat(OfNat(1), 2) {{ refl }}
             theorem neg_third(): (-3)⁻¹ ≈ Rat(-OfNat(1), 3) {{ refl }}
-            theorem quarter(): 2 ^ (-2) * 4 ≈ Rat::one() {{ refl }}
+            theorem quarter(): Rat::Same(2 ^ (-2) * 4, 1) {{ refl }}
             theorem square(x: Rat): x ^ 2 ≈ x * x {{ x.pow_two() }}
             theorem nat_exponent(x: Rat, n: Nat): x ^ OfNat(n) = x.npow(n) {{ refl }}
-            theorem neutral_negative(x: Rat, h: x.Apart(Rat::zero()), k: Nat): x ^ NegSucc(k) ≈ (x ^ OfNat(Succ(k)))⁻¹ {{
+            theorem neutral_negative(x: Rat, h: x.Apart(0), k: Nat): x ^ NegSucc(k) ≈ (x ^ OfNat(Succ(k)))⁻¹ {{
                 x.pow_negSucc_inv(k)
             }}
             theorem precedence(x: Rat): -x ^ 2 = -(x ^ 2) {{ refl }}
-            theorem any_proof(x: Rat, h, h2: x.Apart(Rat::zero())): x.inv(h := h) = x.inv(h := h2) {{ refl }}
-            theorem checked(x: Rat, h: Rat::zero() < x): Rat::one() ≈ x * x⁻¹ {{ Rat::same_sym(x.mul_inv()) }}"
+            theorem any_proof(x: Rat, h, h2: x.Apart(0)): x.inv(h := h) = x.inv(h := h2) {{ refl }}
+            theorem checked(x: Rat, h: 0 < x): 1 ≈ x * x⁻¹ {{ Rat::same_sym(x.mul_inv()) }}"
         ),
     );
     // A neutral exponent's sign is unknown, so its side condition is.
@@ -268,7 +269,7 @@ fn inverse_and_power_notation() {
     refused("rat_half_wrong", &format!("{POWER_IMPORTS} theorem bad(): 2⁻¹ ≈ 2 {{ refl }}"));
     refused(
         "rat_pow_neg_one_wrong",
-        &format!("{POWER_IMPORTS} theorem bad(x: Rat, h: x.Apart(Rat::zero())): x ^ (-1) ≈ x {{ x.pow_neg_one() }}"),
+        &format!("{POWER_IMPORTS} theorem bad(x: Rat, h: x.Apart(0)): x ^ (-1) ≈ x {{ x.pow_neg_one() }}"),
     );
     // `^` binds tighter than negation, so `-x ^ 2` is not `(-x) ^ 2`
     // syntactically, though the two are `≈`.
@@ -395,8 +396,8 @@ fn order_calc_chains_mix_relations() {
             theorem eqs(x, y, z, w: Rat, a: x = y, b: y < z, c: z = w): x < w {{
                 calc {{ x = y := a, < z := b, = w := c }}
             }}
-            theorem refl_step(x, y: Rat, a: x + Rat::zero() <= y): x + Rat::zero() <= y {{
-                calc {{ x + Rat::zero() = x + Rat::zero() := refl, <= y := a }}
+            theorem refl_step(x, y: Rat, a: x + 0 <= y): x + 0 <= y {{
+                calc {{ x + 0 = x + 0 := refl, <= y := a }}
             }}
             theorem one(x, y: Rat, a: x < y): x < y {{ calc {{ x < y := a }} }}
             theorem nat_mixed(x, y, z, w: Nat, a: x < y, b: y <= z, c: z < w): x < w {{
@@ -470,8 +471,8 @@ fn order_laws_need_their_side_conditions() {
     refused(
         "rat_archimedean_at_zero",
         &format!(
-            "{IMPORTS} theorem bad(): ∃ n: Nat, Rat::inv_succ(n) < Rat::zero() {{
-                Rat::archimedean_inv(Rat::zero(), Rat::le_refl(Rat::zero()))
+            "{IMPORTS} theorem bad(): ∃ n: Nat, Rat::inv_succ(n) < 0 {{
+                Rat::archimedean_inv(0, Rat::le_refl(0))
             }}"
         ),
     );

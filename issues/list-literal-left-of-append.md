@@ -3,7 +3,7 @@ title: A list literal left of ++ has no carrier in an expression
 status: open
 labels: [frontend,elaborator,ergonomics]
 created: 2026-10-04
-updated: 2026-10-04
+updated: 2026-10-20
 ---
 
 In an expression, `[x] ++ y` is refused: "`++` has no meaning here: no
@@ -35,3 +35,7 @@ stays refused with the same diagnostic.
 In a type position `[x] ++ y = …` is a parse error instead (a vector type
 `[T; n]` is expected), which is a separate question for
 [[list-literal-syntax]].
+
+## Log
+
+- 2026-10-20: Same refusal with a generic call on the left: `MonoidRel::fold(Nat::add, xs) + MonoidRel::fold(Nat::add, ys)` is refused ("`+` has no meaning here"), because the call's carrier is still a metavariable when `+` is resolved; `Nat::add(…, …)` or a `fn sum(xs: List<Nat>) → Nat` wrapper elaborates. Found writing docs/showcase/semiring_client.hthr.
