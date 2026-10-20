@@ -446,6 +446,43 @@ convertible record types even though their registry keys differ. Multiple
 tagged fibers are therefore refused at such an index. Algebraic structures
 naturally pass this gate because their law fields mention the operation.
 
+### 8.1 Relation-indexed two-operation classes
+
+The first library customer, `lib/std/semiring.hthr`
+(issues/semiring-ring-structure-api.md), is relation-indexed: both monoids
+of `Semiring<A>(≈, +, *)` extend `SemigroupRel`, so both carry the setoid
+`Equivalence(≈)`. That shape needed four rules beyond the ones above.
+
+- **A flat and a tagged fiber coexist.** `extends CommMonoidRel<A>(same,
+  add), MonoidRel<A>(same, mul) as multiplicative` holds `MonoidRel` at two
+  fibers, one untagged. The paths tell them apart as two tags do. An
+  unqualified member request (`A.unit`) means the untagged fiber, whose
+  fields are the dictionary's own; the tagged one is reached through its tag
+  (`A.multiplicative.unit`), and a goal pinned to `*` upcasts through it.
+  Index slots filled from scope take only what every fiber agrees on: both
+  monoids share `≈` and differ in their operation, so the relation is filled
+  and the operation is left to the call.
+- **A proof-only ancestor may be shared.** `Equivalence(≈)` is reached
+  untagged and again inside `multiplicative`. One copy is canonical (the
+  untagged one, else the first reached), and every instance owes the other
+  copies agreement with it, field by field, as a kernel-checked conversion
+  (`…#shared` theorems, the diamond form of §4.5's override agreement). A
+  class whose fields hold data — a unit, an inverse — may not be reached
+  twice: two copies are different terms in generic code, and a theorem
+  stated through one does not apply through the other. "Proof-only" is read
+  syntactically (every field ends in an equation, a squash or an applied
+  relation), so a proposition spelled as a named type is conservatively data.
+- **Body symbols are the parent's index.** A parent whose laws say `unit ∙ x`
+  is inherited at the child's argument: the instantiation spells `∙` as that
+  argument, so a child binding `add as +` reads the law in its own
+  spelling, and the phantom-index check counts a symbol as an occurrence of
+  the index it spells.
+- **A second law, not a second monoid.** `CommSemiring` adds `Commutative<A>(
+  same, mul) as commutative`, not `CommMonoidRel` at `*`, which would hold
+  the multiplicative monoid twice. Consumers that need a commutative monoid
+  ask for `MonoidRel(same, op) + Commutative(same, op)`, which a commutative
+  product and a `CommMonoidRel` both answer.
+
 ## 9. Rejected alternatives, with reasons
 
 Both rejects were the design's own earlier drafts, in order; this section is

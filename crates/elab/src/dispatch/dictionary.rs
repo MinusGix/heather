@@ -44,20 +44,13 @@ impl Elaborator {
             } else {
                 // Not this binder's class and not one of its ancestors: try the
                 // next binder out rather than giving up on the scope.
-                let mut matching = dinfo
-                    .ancestors
-                    .iter()
-                    .filter(|r| self.key_of(&r.name).as_deref() == Some(tkey.as_str()));
-                let Some(anc) = matching.next() else {
+                // A descendant containing two tagged fibers does not
+                // determine an unqualified index. The caller will issue the
+                // ordinary value-slot ambiguity diagnostic; an explicit tagged
+                // projection remains available.
+                let Some(anc) = self.unqualified_ancestor(dinfo, &tkey) else {
                     continue;
                 };
-                // A descendant containing two fibers does not determine an
-                // unqualified index. The caller will issue the ordinary
-                // value-slot ambiguity diagnostic; an explicit tagged
-                // projection remains available.
-                if matching.next().is_some() {
-                    continue;
-                }
                 // The ancestor's index is written in the child's own
                 // value-parameter names (layer 1's `extends` restriction), so
                 // instantiating it is the positional lookup.
@@ -163,7 +156,7 @@ impl Elaborator {
             let Some(idx) = r.index.iter().position(|x| std::ptr::eq(x, a)) else {
                 continue;
             };
-            let Some(e) = e.get(idx).cloned() else {
+            let Some(Some(e)) = e.get(idx).cloned() else {
                 continue;
             };
             let Ok((t, _, _)) = self.elab_infer(cx, &e) else {
@@ -320,9 +313,34 @@ impl Elaborator {
         self.carrier_of_ty(cx, &ty, span)
     }
 
+    /// The ancestor of `dinfo` at class `tkey` that an **unqualified**
+    /// request means: the only one, or, where the class has several fibers
+    /// of it, the one inherited untagged — its fields are the dictionary's
+    /// own flat fields, and a tagged fiber is reached through its tag.
+    /// `None` where there is none, or only tagged fibers to choose among.
+    fn unqualified_ancestor<'a>(
+        &self,
+        dinfo: &'a traits::ClassInfo,
+        tkey: &str,
+    ) -> Option<&'a heather_syntax::ClassRef> {
+        let matching: Vec<&heather_syntax::ClassRef> = dinfo
+            .ancestors
+            .iter()
+            .filter(|r| self.key_of(&r.name).as_deref() == Some(tkey))
+            .collect();
+        if let [one] = matching.as_slice() {
+            return Some(one);
+        }
+        let mut flat = matching.into_iter().filter(|r| r.path.is_empty());
+        match (flat.next(), flat.next()) {
+            (Some(one), None) => Some(one),
+            _ => None,
+        }
+    }
+
     /// The innermost dictionary in scope whose class is `tkey` or a descendant
     /// of it, with its index expressed **at that class**.
-    pub(crate) fn scope_dict_index(&self, cx: &Cx, tkey: &str) -> Option<Vec<Expr>> {
+    pub(crate) fn scope_dict_index(&self, cx: &Cx, tkey: &str) -> Option<Vec<Option<Expr>>> {
         for d in cx.dicts.iter().rev() {
             let Some(dkey) = self.key_of(&d.class) else {
                 continue;
@@ -331,19 +349,9 @@ impl Elaborator {
                 continue;
             };
             if dkey == tkey {
-                return Some(d.index.clone());
+                return Some(d.index.iter().cloned().map(Some).collect());
             }
-            let mut matching = dinfo
-                .ancestors
-                .iter()
-                .filter(|r| self.key_of(&r.name).as_deref() == Some(tkey));
-            let Some(anc) = matching.next() else {
-                continue;
-            };
-            if matching.next().is_some() {
-                continue;
-            }
-            return Some(
+            let at_binder = |anc: &heather_syntax::ClassRef| -> Vec<Expr> {
                 anc.index
                     .iter()
                     .map(|a| match &a.kind {
@@ -354,6 +362,31 @@ impl Elaborator {
                             .and_then(|i| d.index.get(i).cloned())
                             .unwrap_or_else(|| a.clone()),
                         _ => a.clone(),
+                    })
+                    .collect()
+            };
+            let fibers: Vec<Vec<Expr>> = dinfo
+                .ancestors
+                .iter()
+                .filter(|r| self.key_of(&r.name).as_deref() == Some(tkey))
+                .map(at_binder)
+                .collect();
+            let Some((first, rest)) = fibers.split_first() else {
+                continue;
+            };
+            // Several fibers of the class propose only the slots they agree
+            // on: a semiring's two monoids share their relation and differ in
+            // their operation, so `≈` is filled and the operation is left to
+            // the call's own argument.
+            return Some(
+                first
+                    .iter()
+                    .enumerate()
+                    .map(|(i, e)| {
+                        let spelled = traits::render_expr(e);
+                        rest.iter()
+                            .all(|f| f.get(i).is_some_and(|g| traits::render_expr(g) == spelled))
+                            .then(|| e.clone())
                     })
                     .collect(),
             );

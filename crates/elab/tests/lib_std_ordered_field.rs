@@ -46,6 +46,7 @@ const MODULES: &[(&str, &str)] = &[
         "ordered_field",
         include_str!("../../../lib/std/ordered_field.hthr"),
     ),
+    ("semiring", include_str!("../../../lib/std/semiring.hthr")),
     ("rat", include_str!("../../../lib/std/rat.hthr")),
     ("creal", include_str!("../../../lib/std/creal.hthr")),
 ];
