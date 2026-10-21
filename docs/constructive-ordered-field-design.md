@@ -35,17 +35,19 @@ member of any layer decides.
 Each layer is a class indexed by its relations and operations, in the
 library's convention (`relation_props`, `algebra_rel`): `≈`, `<`, `≤`, `+`
 and `*` are indices, never fields, so one carrier could carry two orders.
-Zero, one, negation, the inverse and the embedding of `Nat` are fields, as
-`Group`'s inverse is.
+Zero, one, negation, the reciprocal and the embedding of `Nat` are fields,
+as `Group`'s inverse is. The algebra is not restated: the additive group is
+`algebra_rel`'s `GroupRel` and the field's ring is `semiring`'s `CommRing`
+(see "Built on the ring layers" below).
 
 | Layer | Adds | What first needs it |
 |---|---|---|
 | `StrictOrder(≈, <, ≤)` | `Equivalence(≈)`; `<` irreflexive, transitive, respecting `≈`, tight; `≤` ⇔ `¬>` | open intervals, apartness laws, `≤` reflexive and antisymmetric modulo `≈` |
 | `Cotransitive(<)` | `x < y → x < z ∨ z < y` | (a capability, alone) |
 | `PseudoOrder` | the two above | `≤` transitivity, mixed `<`/`≤` steps, closed intervals, apartness cotransitivity |
-| `OrderedAddGroup(≈, <, ≤, +)` | `StrictOrder`, `algebra_rel`'s `SemigroupRel`/`Commutative` at `+`, zero, negation, `<` translation-invariant | group algebra, `≤` translation, the bounded triangle inequality, tightness of bounds |
+| `OrderedAddGroup(≈, <, ≤, +)` | `StrictOrder`, `algebra_rel`'s `GroupRel`/`Commutative` at `+` (zero `unit`, negation `inv`), `<` translation-invariant | group algebra, `≤` translation, the bounded triangle inequality, tightness of bounds |
 | `LocatedAddGroup` | `OrderedAddGroup` and `PseudoOrder` | a sum's gap splitting between summands, a bound's positivity, `≤` bounds |
-| `OrderedField(≈, <, ≤, +, *)` | one, `of_nat`, the inverse at apartness, ring laws, `0 < 1`, `mul_pos`, Archimedean | strict monotonicity of products, uniqueness and invariance of the inverse |
+| `OrderedField(≈, <, ≤, +, *)` | `semiring`'s `CommRing` (one `multiplicative.unit`), `of_nat`, the reciprocal `recip` at apartness, `0 < 1`, `mul_pos`, `pos_of_mul_pos`, Archimedean | strict monotonicity of products, uniqueness and invariance of the reciprocal |
 
 Two decisions in that table are worth their reasons.
 
@@ -63,6 +65,39 @@ meaning while letting each carrier keep its own spelling: at `CReal` the two
 laws are the identity, and at `Rat` generic results arrive in `Rat::Le`, the
 relation the rest of `rat.hthr` uses, rather than in a negation a client
 must convert.
+
+## Built on the ring layers
+
+For [ordered-field-over-comm-ring](../issues/ordered-field-over-comm-ring.md).
+The interface first restated the ring laws as fields of its own (`zero`,
+`neg`, `add_zero`, `add_neg`, `one`, `mul_assoc`, `mul_comm`, `mul_one`,
+`mul_add_distr`, `mul_respects`) and re-proved `Ring`'s sign lemmas, so a
+`Ring` theorem did not apply to an `OrderedField` binder. Now:
+
+- `OrderedAddGroup` extends `GroupRel(≈, +)` and `Commutative(≈, +)`,
+  untagged. Zero is `A.unit`, negation `A.inv`; the group's own laws
+  (`unit_l`, `inv_l`, `inv_respects`, …) replace the restated ones, and
+  `GroupRel::inv_unique`/`inv_inv` and `CommMonoidRel::interchange` replace
+  `neg_unique`, `neg_neg` and `add_add_add_comm`. The theorems about
+  negation keep `neg` in their names (`neg_lt`, `neg_add`), as `Ring`'s
+  `neg_mul` does.
+- `OrderedField` extends `LocatedAddGroup` and `CommRing(≈, +, *)`. The
+  additive group is reached twice, through the located group and through
+  the ring, at the same untagged fiber, so it is one copy. One is
+  `A.multiplicative.unit`; associativity and the unit laws of `*` are
+  `A.multiplicative.*`, commutativity `A.commutative.comm`, distributivity
+  `distrib_l`/`distrib_r`, and `Ring::mul_neg`, `neg_mul`, `neg_mul_neg` and
+  the field `mul_zero` replace the re-proved copies. Congruence of `*` is
+  `OrderedField::mul_respects`, one projection of the tagged semigroup's
+  `Respects2`.
+- The field's reciprocal is `recip` (law `mul_recip`), because `inv` is the
+  additive group's, inherited untagged; its theorems are `recip_unique`,
+  `recip_pos`, … . At the carriers it is still `x⁻¹`.
+
+The carriers register their `CommRing` before their ordered instances.
+`Rat` had its ring already; `CReal` gains one from its existing lemmas plus
+`one_mul`, `zero_mul` and `neg_add_self`, each its mirror read through
+commutativity.
 
 ## Locatedness is a separate capability
 
@@ -116,15 +151,15 @@ At `Rat`, `AbsLt(x, e)` unfolds to `-e < x ∧ x < e` with `Rat::neg` and
 `abs` can connect it by one lemma (`|x| < e ⇔ AbsLt(x, e)`); `Rat` does not
 need to yet.
 
-## The inverse, positivity and the Archimedean property
+## The reciprocal, positivity and the Archimedean property
 
-The inverse is `inv: (x: A) → ApartBy(<, x, zero) → A`, the same shape as
+The reciprocal is `recip: (x: A) → ApartBy(<, x, unit) → A`, the same shape as
 `x⁻¹` at both carriers (`x.inv(h := infer)` over `x.Apart(0)`); the
 instances pass the proof through, and `refl` shows the field is the
-carrier's own `x⁻¹`. `OrderedField::inv_unique` and `inv_respects` are
-proved once from `mul_inv` and the ring laws, so the inverse is independent
+carrier's own `x⁻¹`. `OrderedField::recip_unique` and `recip_respects` are
+proved once from `mul_recip` and the ring laws, so the inverse is independent
 of the apartness proof that built it at every carrier. `CReal` had
-`inv_respects` already, proved through gaps; it gets `inv_unique` for free.
+`inv_respects` already, proved through gaps; it gets `recip_unique` for free.
 
 Positivity is `0 < x` (both carriers' `Positive` unfold to it).
 `mul_pos` is a law, and strict monotonicity of products is derived from it
@@ -166,16 +201,16 @@ Derived once, at both carriers:
 
 | Theorem | Statement | From |
 |---|---|---|
-| `inv_pos` | `0 < x` gives `0 < x⁻¹` | `x · x⁻¹ ≈ 1 > 0`, reflected by `x` |
-| `inv_neg` | `x < 0` gives `x⁻¹ < 0` | `(-x) · (-x⁻¹) ≈ 1`, reflected by `-x` |
-| `inv_inv` | `(x⁻¹)⁻¹ ≈ x` | `inv_unique` |
-| `inv_lt_inv` | `0 < x < y` gives `y⁻¹ < x⁻¹` | `x < y` times the positive `x⁻¹ · y⁻¹` |
-| `archimedean_inv` | `0 < x` gives some `1/(n+1) < x` | `x⁻¹` is below some `of_nat(n) < of_nat(n+1)`; invert |
+| `recip_pos` | `0 < x` gives `0 < x⁻¹` | `x · x⁻¹ ≈ 1 > 0`, reflected by `x` |
+| `recip_neg` | `x < 0` gives `x⁻¹ < 0` | `(-x) · (-x⁻¹) ≈ 1`, reflected by `-x` |
+| `recip_recip` | `(x⁻¹)⁻¹ ≈ x` | `recip_unique` |
+| `recip_lt_recip` | `0 < x < y` gives `y⁻¹ < x⁻¹` | `x < y` times the positive `x⁻¹ · y⁻¹` |
+| `archimedean_recip` | `0 < x` gives some `1/(n+1) < x` | `x⁻¹` is below some `of_nat(n) < of_nat(n+1)`; invert |
 
 Each theorem takes the apartness proofs it inverts at explicitly, so it
-applies whatever proof a client's `x⁻¹` found; `inv_respects` makes the
-choice immaterial. `archimedean_inv` states its `1/(n+1)` as
-`inv(of_nat(n+1))` at the proof `of_nat_pos` gives. At `CReal` the client
+applies whatever proof a client's `x⁻¹` found; `recip_respects` makes the
+choice immaterial. `archimedean_recip` states its `1/(n+1)` as
+`recip(of_nat(n+1))` at the proof `of_nat_pos` gives. At `CReal` the client
 writes it as `CReal::ofRat(Rat::ofInt(OfNat(Succ(n))))⁻¹`, with the
 apartness searched, and the two inverses are convertible.
 

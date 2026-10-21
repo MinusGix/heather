@@ -302,9 +302,13 @@ fn snippet(src: &str, span: Span) -> String {
     let (line, _) = line_col(src, span.start);
     let col = src[line_start..offset].chars().count();
     let line_rest = text.chars().count().saturating_sub(col);
-    let span_chars = src[offset..span.end.clamp(offset, src.len())]
-        .chars()
-        .count();
+    // A span a lexer error measured in bytes can end inside a multi-byte
+    // character (an unexpected `δ`); widen it to the character's end.
+    let mut end = span.end.clamp(offset, src.len());
+    while !src.is_char_boundary(end) {
+        end += 1;
+    }
+    let span_chars = src[offset..end].chars().count();
     let width = span_chars.clamp(1, line_rest.max(1));
     let num = line.to_string();
     let pad = " ".repeat(num.len());
@@ -693,6 +697,13 @@ pub struct Elaborator {
     /// How many `ring` certificates are being checked above this point
     /// (`ring.rs`): their library names resolve as `omega`'s do.
     ring_depth: Cell<usize>,
+    /// The evidence rule a search is citing right now (`resolve.rs`,
+    /// `build_candidate`). Its qualified name resolves when the module being
+    /// elaborated can see the rule's module, even inside a default that runs
+    /// in another declaring scope: `Rat(1, F.top())` in a float module runs
+    /// `Rat`'s `den_pos` default in `rat`'s scope, which does not import
+    /// `float`, yet the rule about `F.top()` is the caller's to use.
+    rule_citation: RefCell<Option<String>>,
     /// The Ψ-extending binders of the `meta fn` currently elaborating (its
     /// `Ctx`/`TyCode` binders, plus letbox-bound code globals during quote
     /// assembly). The whnf/conv oracles append these to Ψ so meta-bound
@@ -1681,6 +1692,7 @@ impl Elaborator {
             omega_failure_reports: RefCell::new(Vec::new()),
             omega_depth: Cell::new(0),
             ring_depth: Cell::new(0),
+            rule_citation: RefCell::new(None),
             meta_pushed: RefCell::new(Vec::new()),
             quote_depth: Cell::new(0),
             result_only_memo: RefCell::new(HashMap::new()),
@@ -2505,6 +2517,13 @@ impl Elaborator {
             && let Some((module, base)) = split_qual(name)
             && matches!(module, "omega" | "nat" | "int" | "logic" | "list")
             && self.names.declares(module, base)
+        {
+            return NameRes::Found(module.to_string());
+        }
+        if self.rule_citation.borrow().as_deref() == Some(name)
+            && let Some((module, base)) = split_qual(name)
+            && self.names.declares(module, base)
+            && (self.names.module() == module || self.names.scope().imports_module(module))
         {
             return NameRes::Found(module.to_string());
         }

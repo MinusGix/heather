@@ -4,7 +4,7 @@ status: open
 labels: [frontend,elaborator,ergonomics]
 area: language
 created: 2026-10-04
-updated: 2026-10-20
+updated: 2026-10-21
 ---
 
 In an expression, `[x] ++ y` is refused: "`++` has no meaning here: no
@@ -40,3 +40,4 @@ In a type position `[x] ++ y = …` is a parse error instead (a vector type
 ## Log
 
 - 2026-10-20: Same refusal with a generic call on the left: `MonoidRel::fold(Nat::add, xs) + MonoidRel::fold(Nat::add, ys)` is refused ("`+` has no meaning here"), because the call's carrier is still a metavariable when `+` is resolved; `Nat::add(…, …)` or a `fn sum(xs: List<Nat>) → Nat` wrapper elaborates. Found writing docs/showcase/semiring_client.hthr.
+- 2026-10-21: A method call on a list literal has the same missing carrier: `[x, x].len()` is refused with "unbound name `len`", found writing the float-error tests (`[d1, d2, d3].prod_one_add()`; they spell `List::prod_one_add([…])`). A fix that gives a carrier-less literal its carrier from the method's owner, or from the expected type, should cover both.
