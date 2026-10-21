@@ -1597,7 +1597,7 @@ theorem Nat::ldiv_pick_spec(n, d, q, r: Nat, c: d <= r ∨ ¬(d <= r), parts: (q
     DivMod::Spec(n, d, Nat::ldiv_pick(d, q, r, c))
 {
     let dbl: ((q * 2) * d = q * d + q * d) = trans(Nat::cong(λ (x: Nat) => x * d, q.mul_two()), q.add_mul_distr(q, d));
-    match c as λ cc => DivMod::Spec(n, d, Nat::ldiv_pick(d, q, r, cc)) {
+    match c {
         Inl(le) => {
             let back: ((r -d) + d = r) = d.sub_add_cancel(r, le);
             let sum = calc {
@@ -1654,11 +1654,11 @@ theorem Nat::ldiv_fuel_spec(self fuel: Nat): (n, d: Nat) → n <= fuel → DivMo
     match fuel {
         Zero => λ n d le => And(trans(Nat::cong(λ (x: Nat) => x + n, d.mul_left_zero()), n.add_left_zero()),
             match n as λ m => m <= 0 → (d <= 0 ∨ m < d) {
-                Zero => λ _ => match d as λ e => e <= 0 ∨ 0 < e { Zero => Inl(trivial), Succ(_) => Inr(trivial) },
+                Zero => λ _ => match d { Zero => Inl(trivial), Succ(_) => Inr(trivial) },
                 Succ(_) => λ bad => false_elim(bad),
             }(le)),
-        Succ(f, ih) => λ n d => match n as λ m => m <= Succ(f) → DivMod::Spec(m, d, m.ldiv_fuel(d, Succ(f))) {
-            Zero => λ _ => And(d.mul_left_zero(), match d as λ e => e <= 0 ∨ 0 < e { Zero => Inl(trivial), Succ(_) => Inr(trivial) }),
+        Succ(f, ih) => λ n d => match n {
+            Zero => λ _ => And(d.mul_left_zero(), match d { Zero => Inl(trivial), Succ(_) => Inr(trivial) }),
             Succ(k) => λ le => Nat::ldiv_step_spec(Succ(k), d, Succ(k).half().ldiv_fuel(d, f),
                 ih(Succ(k).half(), d, Succ(k).half().le_trans(k, f, k.half_succ_le(), le))),
         },
