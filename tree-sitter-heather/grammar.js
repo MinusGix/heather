@@ -393,6 +393,7 @@ module.exports = grammar({
       $.j_expression,
       $.squash_ind_expression,
       $.refl_expression,
+      $.by_expression,
       $.explicit_call_expression,
       $.record_expression,
       $.record_update_expression,
@@ -496,6 +497,16 @@ module.exports = grammar({
     squash_ind_expression: $ => seq('squash_ind', '(', $._expression, ',', $._expression, ',', $._expression, ')'),
     refl_expression: _ => 'refl',
 
+    // `by t` runs the tactic `t` (docs/host-elaboration-interface-design.md §7);
+    // the compiler reads it only when a name follows, so `by` stays a name.
+    by_expression: $ => prec.right(PREC.POSTFIX, seq('by', field('tactic', choice(
+      $._qualified_name,
+      alias($.by_tactic_call, $.call_expression),
+    )))),
+    by_tactic_call: $ => prec.left(PREC.POSTFIX, seq(
+      field('function', $._qualified_name), repeat1(field('arguments', $.argument_list)),
+    )),
+
     explicit_call_expression: $ => prec(PREC.POSTFIX, seq('@', $._qualified_name, optional($.type_arguments), $.argument_list)),
     propagation_expression: $ => prec.left(PREC.POSTFIX, seq(field('value', $._expression), token.immediate('?'))),
     decreasing_expression: $ => prec.left(PREC.POSTFIX, seq(field('call', $._expression), 'decreasing', field('label', $.identifier))),
@@ -563,6 +574,7 @@ module.exports = grammar({
       alias('apply', $.identifier),
       alias('give', $.identifier),
       alias('refl', $.identifier),
+      alias('by', $.identifier),
       alias('have', $.identifier),
       alias('with', $.identifier),
     ),

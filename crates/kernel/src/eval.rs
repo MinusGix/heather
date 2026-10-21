@@ -60,7 +60,7 @@ use crate::term::{
 };
 use crate::value::{
     Elim, ElimSpine, Env, Head, Lookup, PiAnn, VIWfSig, SigAnn, SumAnn, TmClo, TyClo, VNeTy, VNeutral,
-    VSubst, VTail, VTy, Val, ValueArena,
+    VSubst, VTail, VTy, Val, ValueArena, WIhSyntax,
 };
 use crate::value::algebra::{AffineTree, FoldClass};
 use crate::value::program::ContextProgram;
@@ -2102,53 +2102,70 @@ impl<'a, 'v> Eval<'a, 'v> {
             return Ok(None);
         };
         let rho_af = env.push(self.arena, label).push(self.arena, children);
-        let lmax = Level::max(shape_level.clone(), pos_level.clone());
-        let w_syn = Type::W {
-            shape_level: shape_level.clone(),
-            pos_level: pos_level.clone(),
-            shape: Rc::clone(shape_body),
-            pos: Rc::clone(pos_body),
-        };
-        let template = Term::ElimW {
-            shape_level: shape_level.clone(),
-            pos_level: pos_level.clone(),
-            motive_level: motive_level.clone(),
-            shape: Rc::clone(shape_body),
-            pos: Rc::clone(pos_body),
-            motive: Rc::clone(motive_body),
-            step: Rc::clone(step_body),
-            scrut: Rc::new(Term::Zero),
-        }
-        .shift_local(3);
-        let Term::ElimW { shape: s3, pos: p3, motive: m3, step: st3, .. } = template else {
-            unreachable!("shifting an elim_W yields an elim_W")
-        };
-        // `f y` in `(Γ, a, f, y)`: `f` is slot 1, `y` slot 0, and the App's
-        // codomain annotation binds one more.
-        let f_y = Term::App {
-            fun: Rc::new(Term::Var(LocalVar(1))),
-            dom_level: pos_level.clone(),
-            cod_level: lmax.clone(),
-            dom: Rc::new(pos_body.shift_local(2)),
-            cod: Rc::new(w_syn.shift_local(4)),
-            arg: Rc::new(Term::Var(LocalVar(0))),
-        };
-        let rec = Term::ElimW {
-            shape_level: shape_level.clone(),
-            pos_level: pos_level.clone(),
-            motive_level: motive_level.clone(),
-            shape: s3,
-            pos: p3,
-            motive: m3,
-            step: st3,
-            scrut: Rc::new(f_y),
-        };
+        let syntax = self.arena.w_ih_syntax(
+            [shape_level, pos_level, motive_level],
+            (shape_body, pos_body, motive_body, step_body),
+            || {
+                let lmax = Level::max(shape_level.clone(), pos_level.clone());
+                let w_syn = Type::W {
+                    shape_level: shape_level.clone(),
+                    pos_level: pos_level.clone(),
+                    shape: Rc::clone(shape_body),
+                    pos: Rc::clone(pos_body),
+                };
+                let template = Term::ElimW {
+                    shape_level: shape_level.clone(),
+                    pos_level: pos_level.clone(),
+                    motive_level: motive_level.clone(),
+                    shape: Rc::clone(shape_body),
+                    pos: Rc::clone(pos_body),
+                    motive: Rc::clone(motive_body),
+                    step: Rc::clone(step_body),
+                    scrut: Rc::new(Term::Zero),
+                }
+                .shift_local(3);
+                let Term::ElimW { shape: s3, pos: p3, motive: m3, step: st3, .. } = template else {
+                    unreachable!("shifting an elim_W yields an elim_W")
+                };
+                // `f y` in `(Γ, a, f, y)`: `f` is slot 1, `y` slot 0, and the App's
+                // codomain annotation binds one more.
+                let f_y = Term::App {
+                    fun: Rc::new(Term::Var(LocalVar(1))),
+                    dom_level: pos_level.clone(),
+                    cod_level: lmax.clone(),
+                    dom: Rc::new(pos_body.shift_local(2)),
+                    cod: Rc::new(w_syn.shift_local(4)),
+                    arg: Rc::new(Term::Var(LocalVar(0))),
+                };
+                let rec = Term::ElimW {
+                    shape_level: shape_level.clone(),
+                    pos_level: pos_level.clone(),
+                    motive_level: motive_level.clone(),
+                    shape: s3,
+                    pos: p3,
+                    motive: m3,
+                    step: st3,
+                    scrut: Rc::new(f_y),
+                };
+                WIhSyntax {
+                    levels: [shape_level.clone(), pos_level.clone(), motive_level.clone()],
+                    _keep: (
+                        Rc::clone(shape_body),
+                        Rc::clone(pos_body),
+                        Rc::clone(motive_body),
+                        Rc::clone(step_body),
+                    ),
+                    rec: Rc::new(rec),
+                    // `T[a/x]` in `(Γ, a, f)`: `a` is slot 1.
+                    dom: Rc::new(pos_body.shift_local(1)),
+                }
+            },
+        );
         let ih = Rc::new(Val::Lam {
             dom_level: pos_level.clone(),
             cod_level: motive_level.clone(),
-            // `T[a/x]` in `(Γ, a, f)`: `a` is slot 1.
-            dom: self.arena.ty(TyClo::new(rho_af, Rc::new(pos_body.shift_local(1)))),
-            body: self.arena.tm(TmClo::syn(rho_af, Rc::new(rec))),
+            dom: self.arena.ty(TyClo::new(rho_af, Rc::clone(&syntax.dom))),
+            body: self.arena.tm(TmClo::syn(rho_af, Rc::clone(&syntax.rec))),
         });
         let step = *step;
         Ok(Some(Work::Apply(

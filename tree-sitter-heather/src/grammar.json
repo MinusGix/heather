@@ -4856,6 +4856,10 @@
         },
         {
           "type": "SYMBOL",
+          "name": "by_expression"
+        },
+        {
+          "type": "SYMBOL",
           "name": "explicit_call_expression"
         },
         {
@@ -6443,6 +6447,69 @@
       "type": "STRING",
       "value": "refl"
     },
+    "by_expression": {
+      "type": "PREC_RIGHT",
+      "value": 12,
+      "content": {
+        "type": "SEQ",
+        "members": [
+          {
+            "type": "STRING",
+            "value": "by"
+          },
+          {
+            "type": "FIELD",
+            "name": "tactic",
+            "content": {
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "SYMBOL",
+                  "name": "_qualified_name"
+                },
+                {
+                  "type": "ALIAS",
+                  "content": {
+                    "type": "SYMBOL",
+                    "name": "by_tactic_call"
+                  },
+                  "named": true,
+                  "value": "call_expression"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "by_tactic_call": {
+      "type": "PREC_LEFT",
+      "value": 12,
+      "content": {
+        "type": "SEQ",
+        "members": [
+          {
+            "type": "FIELD",
+            "name": "function",
+            "content": {
+              "type": "SYMBOL",
+              "name": "_qualified_name"
+            }
+          },
+          {
+            "type": "REPEAT1",
+            "content": {
+              "type": "FIELD",
+              "name": "arguments",
+              "content": {
+                "type": "SYMBOL",
+                "name": "argument_list"
+              }
+            }
+          }
+        ]
+      }
+    },
     "explicit_call_expression": {
       "type": "PREC",
       "value": 12,
@@ -7802,6 +7869,15 @@
           "content": {
             "type": "STRING",
             "value": "refl"
+          },
+          "named": true,
+          "value": "identifier"
+        },
+        {
+          "type": "ALIAS",
+          "content": {
+            "type": "STRING",
+            "value": "by"
           },
           "named": true,
           "value": "identifier"

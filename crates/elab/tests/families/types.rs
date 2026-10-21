@@ -33,3 +33,5 @@ mod inductive_value_parameters;
 mod surface_fin;
 #[path = "../surface_existential_probe.rs"]
 mod surface_existential_probe;
+#[path = "../tactic_request_tree.rs"]
+mod tactic_request_tree;

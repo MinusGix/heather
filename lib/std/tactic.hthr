@@ -1,0 +1,230 @@
+// Tactics written in Heather, as request trees
+// (docs/host-elaboration-interface-design.md).
+//
+// A tactic is an ordinary value of type `Tac<A>`: either a result, or a
+// request to the elaborator with a continuation that receives the answer.
+// `by t` in a proof position runs `t : Tac<Expr>` against the goal. The
+// elaborator answers each request, and the `Expr` the tactic finally returns
+// is checked at the goal like any other proof, so a tactic is never trusted:
+// a wrong one is refused at its `by`.
+//
+// Importing this module imports the *protocol*, never an implementation.
+// What answers is the elaborator running the build; a Heather handler for the
+// same requests is an ordinary function over `Tac<A>` (the probe in
+// crates/elab/tests/tactic_request_tree.rs runs one by `refl`).
+
+import logic;
+import bool;
+import nat;
+import list;
+import char;
+import string;
+
+// ---------------------------------------------------------------------------
+// Terms, as a tactic holds them.
+//
+// A tactic never holds a kernel term. It holds an `Expr`: a handle to a term
+// or type the elaborator has, a local of the goal's context, or structure it
+// built itself. Handles and local references are numbers the elaborator
+// issued during this run; it validates every one it is given, so forging one
+// is an error at the `by`, never a soundness question.
+
+record Handle { id: Nat }
+record LocalRef { id: Nat }
+
+inductive Expr {
+    Hd(h: Handle),
+    Local(x: LocalRef),
+    App(f: Expr, a: Expr),
+    NatLit(n: Nat),
+}
+
+// One local of the goal's context: how to refer to it, its name for
+// messages, and its type.
+record LocalInfo { ref: LocalRef, name: String, ty: Handle }
+
+// The goal: its statement, and its locals, the most recent first.
+record GoalInfo { target: Handle, locals: List<LocalInfo> }
+
+// One line of a failure's search state.
+inductive Note { Tried(what: String, verdict: String) }
+
+// ---------------------------------------------------------------------------
+// The requests, and the request tree.
+
+inductive Req {
+    // The goal and its local context.
+    Goal,
+    // Are the two definitionally equal, at the goal's context?
+    Defeq(a: Expr, b: Expr),
+    // End the run: the invocation fails with the message and the notes.
+    Fail(msg: String, notes: List<Note>),
+}
+
+inductive Never {}
+
+// What each request is answered with. `Fail` is answered in the empty type,
+// so a failure has no continuation by type.
+fn Resp(r: Req) → Type {
+    match r { Goal => GoalInfo, Defeq(_, _) => Bool, Fail(_, _) => Never }
+}
+
+inductive Tac<A> { Pure(a: A), Ask(r: Req, k: Resp(r) → Tac<A>) }
+
+fn Tac::bind<A, B>(self t: Tac<A>, f: A → Tac<B>) → Tac<B> {
+    match t { Pure(a) => f(a), Ask(r, k) => Ask(r, λ x => k(x).bind(f)) }
+}
+
+fn goal() → Tac<GoalInfo> { Ask(Goal, λ g => Pure(g)) }
+
+fn defeq(a: Expr, b: Expr) → Tac<Bool> { Ask(Defeq(a, b), λ same => Pure(same)) }
+
+fn fail<A>(msg: String, notes: List<Note>) → Tac<A> {
+    Ask(Fail(msg, notes), λ never => match never {})
+}
+
+// ---------------------------------------------------------------------------
+// Tactics.
+
+// `assumption`: a local whose type is the goal, up to definitional equality.
+// The most recent local is tried first; a failure lists every local tried.
+fn assumption_among(target: Handle, ls: List<LocalInfo>, tried: List<Note>) → Tac<Expr> {
+    match ls {
+        Nil => fail("no local's type is the goal", tried),
+        Cons(l, rest) => defeq(Hd(l.ty), Hd(target)).bind(λ same => match same {
+            True => Pure(Local(l.ref)),
+            False => assumption_among(target, rest, tried ++ [Tried(l.name, "its type is not the goal")]),
+        }),
+    }
+}
+
+fn assumption() → Tac<Expr> {
+    goal().bind(λ g => assumption_among(g.target, g.locals, []))
+}
+
+// ---------------------------------------------------------------------------
+// The host's side of the protocol.
+//
+// The elaborator runs a `Tac<Expr>` through these functions instead of
+// decoding the lowered encodings by hand: each one asks a single question of
+// the tree, and its answer is a numeral, an `Expr` or a `String`. They are
+// part of the protocol's definition, not of any tactic, and a tactic has no
+// reason to call them.
+
+inductive Answer { AGoal(g: GoalInfo), ABool(b: Bool) }
+
+inductive Fit<R> { Mismatch, Fits(a: R) }
+
+// The answer at the request's own type, if it is the right kind. A `match`
+// on `r` inside `host_resume` would not refine `k`'s domain, so the
+// dependent answer is computed here (design §9).
+fn fit(r: Req, a: Answer) → Fit<Resp(r)> {
+    match r {
+        Goal => match a { AGoal(g) => Fits(g), ABool(_) => Mismatch },
+        Defeq(_, _) => match a { ABool(b) => Fits(b), AGoal(_) => Mismatch },
+        Fail(_, _) => Mismatch,
+    }
+}
+
+// 0: a result. 1: `Goal`. 2: `Defeq`. 3: `Fail`.
+fn host_tag(t: Tac<Expr>) → Nat {
+    match t {
+        Pure(_) => 0,
+        Ask(r, _) => match r { Goal => 1, Defeq(_, _) => 2, Fail(_, _) => 3 },
+    }
+}
+
+fn host_result(t: Tac<Expr>) → Expr {
+    match t { Pure(e) => e, Ask(_, _) => NatLit(0) }
+}
+
+fn host_lhs(t: Tac<Expr>) → Expr {
+    match t {
+        Pure(e) => e,
+        Ask(r, _) => match r { Defeq(a, _) => a, Goal => NatLit(0), Fail(_, _) => NatLit(0) },
+    }
+}
+
+fn host_rhs(t: Tac<Expr>) → Expr {
+    match t {
+        Pure(e) => e,
+        Ask(r, _) => match r { Defeq(_, b) => b, Goal => NatLit(0), Fail(_, _) => NatLit(0) },
+    }
+}
+
+fn render_notes(ns: List<Note>) → String {
+    match ns {
+        Nil => "",
+        Cons(n, rest) => match n {
+            Tried(what, verdict) => "\n  tried " ++ what ++ ": " ++ verdict ++ render_notes(rest),
+        },
+    }
+}
+
+// A failure's message followed by its notes, one per line.
+fn host_failure(t: Tac<Expr>) → String {
+    match t {
+        Pure(_) => "",
+        Ask(r, _) => match r { Fail(msg, notes) => msg ++ render_notes(notes), Goal => "", Defeq(_, _) => "" },
+    }
+}
+
+// The tree after its request is answered with `a`. An answer of the wrong
+// kind leaves the tree as it is, which the host reports as its own error.
+fn host_resume(t: Tac<Expr>, a: Answer) → Tac<Expr> {
+    match t {
+        Pure(e) => Pure(e),
+        Ask(r, k) => match fit(r, a) { Mismatch => Ask(r, k), Fits(x) => k(x) },
+    }
+}
+
+// 0: `Hd`. 1: `Local`. 2: `App`. 3: `NatLit`.
+fn expr_tag(e: Expr) → Nat {
+    match e { Hd(_) => 0, Local(_) => 1, App(_, _) => 2, NatLit(_) => 3 }
+}
+
+// The number a leaf carries: a handle, a local or a literal.
+fn expr_nat(e: Expr) → Nat {
+    match e { Hd(h) => h.id, Local(x) => x.id, App(_, _) => 0, NatLit(n) => n }
+}
+
+fn expr_fn(e: Expr) → Expr { match e { App(f, _) => f, Hd(h) => Hd(h), Local(x) => Local(x), NatLit(n) => NatLit(n) } }
+
+fn expr_arg(e: Expr) → Expr { match e { App(_, a) => a, Hd(h) => Hd(h), Local(x) => Local(x), NatLit(n) => NatLit(n) } }
+
+fn chars_len(cs: List<Char>) → Nat { match cs { Nil => 0, Cons(_, rest) => Succ(chars_len(rest)) } }
+
+fn chars_code(cs: List<Char>, i: Nat) → Nat {
+    match cs {
+        Nil => 0,
+        Cons(c, rest) => match i { Zero => c.code, Succ(j) => chars_code(rest, j) },
+    }
+}
+
+fn str_len(s: String) → Nat { chars_len(s.chars) }
+
+fn str_code(s: String, i: Nat) → Nat { chars_code(s.chars, i) }
+
+// Answers, built by the host from numerals: a goal is its target and then
+// one local at a time, the most recent first.
+fn host_goal(target: Nat) → Answer { AGoal(GoalInfo(Handle(target), [])) }
+
+fn host_goal_local(a: Answer, ref: Nat, name: String, ty: Nat) → Answer {
+    match a {
+        AGoal(g) => AGoal(GoalInfo(g.target, g.locals ++ [LocalInfo(LocalRef(ref), name, Handle(ty))])),
+        ABool(b) => ABool(b),
+    }
+}
+
+// 0 is `False`, anything else `True`.
+fn host_bool(n: Nat) → Answer { match n { Zero => ABool(False), Succ(_) => ABool(True) } }
+
+// A character from its code; the host only sends scalar values, and anything
+// else becomes U+FFFD.
+fn char_of_code(code: Nat) → Char {
+    match is_scalar(code).is_true_dec() { Inl(p) => ofNat(code, p), Inr(_) => '\u{FFFD}' }
+}
+
+fn str_empty() → String { String([]) }
+
+fn str_push(s: String, code: Nat) → String { String(s.chars ++ [char_of_code(code)]) }

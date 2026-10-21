@@ -3140,7 +3140,7 @@ enum RIr {
 /// The reader walks the analyzer's answer in the kernel's **value domain**:
 /// every sub-structure it holds is a [`TmClo`], forced on demand and shared
 /// through the query cache (docs/analyzer-evaluation-design.md).
-struct Reader<'a, 'v> {
+pub(crate) struct Reader<'a, 'v> {
     psi: &'a heather_kernel::term::GlobalCtx,
     arena: &'v ValueArena<'v>,
     /// Rescoped definition bodies, memoized for the duration of one read.
@@ -3164,7 +3164,7 @@ struct Reader<'a, 'v> {
 const READ_BUDGET: u32 = 4096;
 
 impl<'a, 'v> Reader<'a, 'v> {
-    fn new(psi: &'a heather_kernel::term::GlobalCtx, arena: &'v ValueArena<'v>) -> Reader<'a, 'v> {
+    pub(crate) fn new(psi: &'a heather_kernel::term::GlobalCtx, arena: &'v ValueArena<'v>) -> Reader<'a, 'v> {
         Reader {
             psi,
             arena,
@@ -3178,7 +3178,7 @@ impl<'v> Reader<'_, 'v> {
     /// A closed term as a sub-structure of the value graph — the root a read
     /// starts from. The empty environment is the identity environment of the
     /// empty Γ, which is the context every analyzer application is built at.
-    fn root(&self, t: Term) -> &'v TmClo<'v> {
+    pub(crate) fn root(&self, t: Term) -> &'v TmClo<'v> {
         self.arena
             .tm(TmClo::syn(Env::empty(), Rc::new(t)))
     }
@@ -3260,7 +3260,7 @@ impl<'v> Reader<'_, 'v> {
         }
     }
 
-    fn nat(&self, c: &'v TmClo<'v>) -> Result<u64, String> {
+    pub(crate) fn nat(&self, c: &'v TmClo<'v>) -> Result<u64, String> {
         let mut v = self.force(c)?;
         let mut n = 0u64;
         loop {

@@ -5,7 +5,7 @@ labels: [metaprogramming,design,frontend,stdlib]
 area: tactics
 milestone: [tac-host-interface]
 created: 2026-08-11
-updated: 2026-08-11
+updated: 2026-10-21
 ---
 
 User plan, stated 2026-08-11: most metaprograms should eventually NOT touch raw Code terms — arcane, iffy, disconnected from the normal code view. Instead: an ElabCode inductive (quote-style / simplified-elaborator-ish AST as ordinary data), manipulated by ordinary functions, theorems, tactics, DSL-ish parts, with a translation to the true underlying Code that is what actually gets kernel-checked. Tricky Annoying Stuff obscured behind the layer.
@@ -24,3 +24,4 @@ Wants: fn-reflection-for-analyzers (the reflect inputs), retire-rust-transcriber
 
 - 2026-08-11: Cross-link (2026-08-11, coordinator bookkeeping): [[ownership-discipline-over-code]] is this pattern's first named client — a decidable judgment over reflected code plus one soundness theorem, behind the layer fence, the kernel never learning the word. The link existed only in the 2026-08-11 commit message; it belongs here.
 - 2026-08-11: Coordinator note (2026-08-11): the reflect direction's globals blocker is discharged fragment-scoped only — Elaborator::fn_body_code's interface is general but its DOMAIN is the certgen Nat fragment (markers typed at Nat, callee signatures Nat-chains), and each fragment widening reopens the marker recognizer's unambiguity argument; recorded in docs/opaque-globals-analysis-design.md sec. 2 so the general-reflect round prices it up front.
+- 2026-10-21: docs/host-elaboration-interface-design.md places this pattern for tactics: the reflected AST is a lazy surface-level `Expr`/`Head` view with host-issued handles, manipulated as ordinary data, and the translation to the real thing is the host's elaboration of a returned `Expr` against the goal, re-checked by the kernel. Raw Code stays the carrier for typed generators.

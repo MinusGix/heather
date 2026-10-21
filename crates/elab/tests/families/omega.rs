@@ -53,3 +53,5 @@ mod typed_termination_contexts;
 mod bv_omega;
 #[path = "../positivity_tactic.rs"]
 mod positivity_tactic;
+#[path = "../tactic_host.rs"]
+mod tactic_host;

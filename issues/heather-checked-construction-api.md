@@ -5,7 +5,7 @@ labels: [metaprogramming,elaboration,proofs,design]
 area: tactics
 milestone: [tac-host-interface]
 created: 2026-09-08
-updated: 2026-09-08
+updated: 2026-10-21
 ---
 
 The reusable x86 callee round (`cb877f2`) still assembles scoped names, dependent
@@ -35,3 +35,7 @@ group and publish it in the caller's scope, with useful errors at construction.
 - [[host-elaboration-interface]] owns access to the active compiler and environment.
 - [[scoped-declaration-generators]] owns invocation and scope publication.
 - [[generators-in-the-language]] owns the broader migration.
+
+## Log
+
+- 2026-10-21: Retargeted by docs/host-elaboration-interface-design.md §10: the named customer (crates/cli/src/native/calls.rs) was burned in B1 (PR #90). This issue becomes round R4 of that design: a `Publish(group)` host request that kernel-checks a small declaration group and publishes it in the caller's scope only if every member passes.
