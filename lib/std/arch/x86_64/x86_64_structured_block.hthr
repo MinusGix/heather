@@ -272,7 +272,7 @@ record StructuredArtifact<M>(code: StructuredCode, before: MachineState<M>,
 fn Kept(scratch: List<Gpr>, register: Gpr) → Type {
     match scratch {
         Nil => True,
-        Cons(s, rest) => match nat_same(gpr_index(s), gpr_index(register)) { True => False, False => Kept(rest, register) },
+        Cons(s, rest) => match s.same(register) { True => False, False => Kept(rest, register) },
     }
 }
 

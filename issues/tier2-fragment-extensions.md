@@ -4,7 +4,7 @@ status: open
 labels: [inductives,elaboration]
 area: language
 created: 2026-10-20
-updated: 2026-10-20
+updated: 2026-10-21
 ---
 
 `docs/inductive-tier2-w-lowering.md` §1 lowers a fragment and refuses the
@@ -37,3 +37,16 @@ interaction-tree library, which is why they are grouped.
 
 Each bullet is either lowered with four-axis tests or recorded here as
 declined with its reason.
+
+## Log
+- 2026-10-21: The generated-definitions bullet is now measured, by the first
+  real client (`lib/std/itree.hthr`, `docs/itree-core-round.md`). Each law
+  proved by induction over `ITree<R>(E)` (a four-arm `match` at a motive
+  computed by a large elimination, `ITree::Same`) costs seconds of kernel gate
+  at width one, and a callgrind profile of one of them (`bind_ret_r`) puts
+  most of the gate in `conv_ty` (the W type's structural comparison, `ty_w`)
+  and `ShiftLocal` copies of the inline spelling. The library's cold check is
+  the suite's slowest target (`lib_std_itree`, most of the process's CPU rail
+  spent building the prefix). Naming `⟦D⟧`, `P` and the leaf predicate is the
+  candidate fix; the readback half of the cost was fixed in the same round
+  (an `elim_W` induction hypothesis now reads back).

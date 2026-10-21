@@ -276,9 +276,11 @@ tier scheme itself is owned by
 [inductive-compiler](../issues/inductive-compiler.md)). Events as a *value*
 parameter (`ITree<R>(E)`) lower since 2026-10-21
 ([tier2-value-parameters](../issues/tier2-value-parameters.md),
-`docs/surface-value-parameters.md` §6). One thing the library will meet at
-once: tree laws through `Vis` (`bind(t, Ret) = t`) need funext, so they are stated up
-to the depth-indexed equivalence, not `=`. The native program logic has to
+`docs/surface-value-parameters.md` §6). The core library is
+`lib/std/itree.hthr` (`docs/itree-core-round.md`): events, the tree with a
+`Cut` leaf, `bind`/`iter`/`interp`/`mrec`, and the laws, the ones through `Vis`
+up to a structural equivalence `ITree::Same` (finite trees need no depth
+index; fuel plays its part). The native program logic has to
 be designed to meet the trees
 ([native-one-program-logic](../issues/native-one-program-logic.md)).
 

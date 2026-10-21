@@ -5,7 +5,7 @@ labels: [effects,semantics,design,research]
 area: interaction-trees
 milestone: [it-core, it-refinement]
 created: 2026-09-24
-updated: 2026-10-08
+updated: 2026-10-21
 ---
 
 Owns the follow-ups of `docs/interaction-trees-fit.md` (the 2026-09-24
@@ -74,3 +74,16 @@ on a customer that needs liveness or concurrency.
     `a^ω`) satisfies every approximant and fails the gfp, so choice trees
     (doc §6.2) reopen Q1. Nothing the finitary route needs is lost for
     deterministic trees.
+- 2026-10-21: Q2, first half (`it-core`): `lib/std/itree.hthr`, written up in
+  `docs/itree-core-round.md`. Events, sums and container morphisms; the tree
+  with a `Cut` leaf; `bind`, `map`, `translate`, `iter` and `mrec` (fuel as an
+  argument), `interp` (structural, no fuel). The fit doc's claim checks: the
+  Fig. 5 laws with a constructor on the left are `refl`. The laws through
+  `Vis` hold up to `ITree::Same`, a structural equivalence read off the left
+  tree, with no depth index (the trees are finite) and no command equation
+  (both sides share the left tree's command, so the probe's proof-irrelevance
+  caveat does not arise). Found on the way:
+  [[ih-generalization-misses-call-under-j]], and an elaborator readback gap on
+  `elim_W` induction hypotheses (fixed in the same round). Left for the second
+  half (`it-refinement`): traces, `is_trace_of`, refinement, the bridge to
+  `converges`/`fuel_monotone`; and Q3, the state handler.

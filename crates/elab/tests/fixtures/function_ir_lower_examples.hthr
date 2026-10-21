@@ -1,0 +1,161 @@
+// Regions lowered by `function_ir_lower`'s one theorem
+// (issues/function-ir-verified-lowering.md, round 1): the code is computed
+// by evaluation, and each region's claim is the theorem instantiated. No
+// proof here is about the region's own code.
+
+import function_ir;
+import function_ir_lower;
+import x86_64;
+import x86_64_block;
+import bitvec;
+import list;
+import logic;
+import option;
+
+// add64: x + y, as the per-function certificate path lowers it.
+fn add64_code() → List<Instruction> { [MovRR(Rax, Rdi), AddRR(Rax, Rsi)] }
+
+theorem add64_lowers(): add64_raw().lower_planned([Rdi, Rsi], [Rax]) = Some(add64_code()) {
+    refl
+}
+
+theorem add64_bytes(): canonical_block_bytes(add64_code()).len() = 6 { refl }
+
+theorem add64_computes<M>(values: Valuation(), s: MachineState<M>,
+    left: values(64, 0) = read_gpr(Rdi, s.gprs),
+    right: values(64, 1) = read_gpr(Rsi, s.gprs),
+    graph: RegionHolds(add64_raw(), values)):
+    values(64, 2) = read_gpr(Rax, execute_block_normal(add64_code(), s).gprs)
+{
+    add64_raw().lower_correct<M>([Rdi, Rsi], [Rax],
+        add64_raw().plan([Rdi, Rsi], [Rax]), add64_code(), values, s,
+        add64_lowers(), ⟨left, ⟨right, trivial⟩⟩, graph).left
+}
+
+// sum4: two independent additions and their join, in either schedule.
+fn sum4_code() → List<Instruction> {
+    [AddRR(Rdi, Rsi), AddRR(Rdx, Rcx), MovRR(Rax, Rdi), AddRR(Rax, Rdx)]
+}
+
+theorem sum4_lowers():
+    sum4_left_first_raw().lower_planned([Rdi, Rsi, Rdx, Rcx], [Rax]) = Some(sum4_code())
+{
+    refl
+}
+
+theorem sum4_computes<M>(values: Valuation(), s: MachineState<M>,
+    a: values(64, 0) = read_gpr(Rdi, s.gprs), b: values(64, 1) = read_gpr(Rsi, s.gprs),
+    c: values(64, 2) = read_gpr(Rdx, s.gprs), d: values(64, 3) = read_gpr(Rcx, s.gprs),
+    graph: RegionHolds(sum4_left_first_raw(), values)):
+    values(64, 6) = read_gpr(Rax, execute_block_normal(sum4_code(), s).gprs)
+{
+    sum4_left_first_raw().lower_correct<M>([Rdi, Rsi, Rdx, Rcx], [Rax],
+        sum4_left_first_raw().plan([Rdi, Rsi, Rdx, Rcx], [Rax]), sum4_code(), values, s,
+        sum4_lowers(), ⟨a, ⟨b, ⟨c, ⟨d, trivial⟩⟩⟩⟩, graph).left
+}
+
+// mix (examples/x86-native/mix.hthr): a shared sum, a full-width constant,
+// and an XOR of the two.
+fn mix_region() → Region {
+    Region(
+        inputs := Ports([Port(id := 0, width := 64), Port(id := 1, width := 64)]),
+        nodes := [
+            Add(width := 64, output := 2, left := 0, right := 1),
+            Const(width := 64, output := 3, value := 81985529216486895),
+            Add(width := 64, output := 4, left := 2, right := 3),
+            BitXor(width := 64, output := 5, left := 2, right := 4),
+        ],
+        outputs := Ports([Port(id := 5, width := 64)]))
+}
+
+fn mix_code() → List<Instruction> {
+    [AddRR(Rdi, Rsi), MovRI(Rax, BitVec::ofNat(81985529216486895)), MovRR(Rcx, Rdi),
+     AddRR(Rcx, Rax), MovRR(Rax, Rdi), XorRR(Rax, Rcx)]
+}
+
+theorem mix_lowers(): mix_region().lower_planned([Rdi, Rsi], [Rax]) = Some(mix_code()) {
+    refl
+}
+
+theorem mix_computes<M>(values: Valuation(), s: MachineState<M>,
+    left: values(64, 0) = read_gpr(Rdi, s.gprs),
+    right: values(64, 1) = read_gpr(Rsi, s.gprs),
+    graph: RegionHolds(mix_region(), values)):
+    values(64, 5) = read_gpr(Rax, execute_block_normal(mix_code(), s).gprs)
+{
+    mix_region().lower_correct<M>([Rdi, Rsi], [Rax],
+        mix_region().plan([Rdi, Rsi], [Rax]), mix_code(), values, s,
+        mix_lowers(), ⟨left, ⟨right, trivial⟩⟩, graph).left
+}
+
+// A comparison's bit, zero-extended in RAX.
+fn below_region() → Region {
+    Region(
+        inputs := Ports([Port(id := 0, width := 64), Port(id := 1, width := 64)]),
+        nodes := [UnsignedLessThan(width := 64, output := 2, left := 0, right := 1)],
+        outputs := Ports([Port(id := 2, width := 1)]))
+}
+
+fn below_code() → List<Instruction> { [XorRR(Rax, Rax), CmpRR(Rdi, Rsi), SetBelow(Al)] }
+
+theorem below_lowers(): below_region().lower_planned([Rdi, Rsi], [Rax]) = Some(below_code()) {
+    refl
+}
+
+theorem below_computes<M>(values: Valuation(), s: MachineState<M>,
+    left: values(64, 0) = read_gpr(Rdi, s.gprs),
+    right: values(64, 1) = read_gpr(Rsi, s.gprs),
+    graph: RegionHolds(below_region(), values)):
+    values(1, 2).zero_extend(63) = read_gpr(Rax, execute_block_normal(below_code(), s).gprs)
+{
+    below_region().lower_correct<M>([Rdi, Rsi], [Rax],
+        below_region().plan([Rdi, Rsi], [Rax]), below_code(), values, s,
+        below_lowers(), ⟨left, ⟨right, trivial⟩⟩, graph).left
+}
+
+// Negative controls. A placement that writes x's copy over y before the
+// ADD reads y is refused, not lowered wrong.
+theorem clobbering_placement_refused():
+    add64_raw().lower([Rdi, Rsi], [Rax], [Rsi]) = None
+{
+    refl
+}
+
+// The comparison's XOR would clear an operand.
+theorem cleared_operand_refused():
+    below_region().lower([Rdi, Rsi], [Rax], [Rsi]) = None
+{
+    refl
+}
+
+// Shifts have no instruction in the ISA model yet.
+fn shift_region() → Region {
+    Region(
+        inputs := Ports([Port(id := 0, width := 64)]),
+        nodes := [ShiftLeft(width := 64, output := 1, value := 0, amount := 3)],
+        outputs := Ports([Port(id := 1, width := 64)]))
+}
+
+theorem shift_refused(): shift_region().lower_planned([Rdi], [Rax]) = None { refl }
+
+// Nor do other widths.
+fn narrow_region() → Region {
+    Region(
+        inputs := Ports([Port(id := 0, width := 32), Port(id := 1, width := 32)]),
+        nodes := [Add(width := 32, output := 2, left := 0, right := 1)],
+        outputs := Ports([Port(id := 2, width := 32)]))
+}
+
+theorem narrow_refused(): narrow_region().lower_planned([Rdi, Rsi], [Rax]) = None { refl }
+
+// The rest of mix's contract, from the frame lemmas: memory untouched, RIP
+// past the block, and the callee-saved registers kept.
+theorem mix_frame<M>(s: MachineState<M>):
+    execute_block_normal(mix_code(), s).memory = s.memory ∧
+    (execute_block_normal(mix_code(), s).rip = block_end(mix_code(), s.rip) ∧
+     Kept(callee_saved(), s.gprs, execute_block_normal(mix_code(), s).gprs))
+{
+    ⟨execute_block_memory<M>(mix_code(), s),
+     ⟨execute_block_rip<M>(mix_code(), s),
+      execute_block_kept<M>(mix_code(), s, callee_saved(), trivial)⟩⟩
+}

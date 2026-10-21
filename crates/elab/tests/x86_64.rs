@@ -278,7 +278,7 @@ import nat;
 import list;
 import option;
 
-theorem register_indices(): gpr_index(Rax) = 0 ∧ gpr_index(R15) = 15
+theorem register_indices(): Rax.index() = 0 ∧ R15.index() = 15
 { And(refl, refl) }
 
 theorem register_write_is_observable(register: Gpr, value: BitVec(64),

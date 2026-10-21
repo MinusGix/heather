@@ -1,0 +1,147 @@
+// A client of `lib/std/itree.hthr`: programs over a small console, run by
+// evaluation, plus recursion as events and a handler.
+//
+// Everything closed computes by `refl`: a tree is inductive, so a program's
+// unrolling at a given fuel is an ordinary value, and running it against a
+// list of inputs is structural recursion over that value.
+
+import logic;
+import nat;
+import list;
+import option;
+import itree;
+
+// ---------------------------------------------------------------------------
+// The console: read a number, or write one.
+
+inductive ConsoleCmd { Read, Write(n: Nat) }
+
+fn ConsoleResp(c: ConsoleCmd) → Type { match c { Read => Nat, Write(_) => True } }
+
+fn Console() → Events { Events(ConsoleCmd, λ c => ConsoleResp(c)) }
+
+fn read() → ITree<Nat>(Console()) { ITree::trigger(Console(), Read) }
+
+fn write(n: Nat) → ITree<True>(Console()) { ITree::trigger(Console(), Write(n)) }
+
+// Run a console program against the inputs it will read, collecting what it
+// writes. `None` when it reads past the inputs or runs out of fuel.
+record Ran<R> { result: R, output: List<Nat> }
+
+fn console_answer(c: ConsoleCmd, input: List<Nat>) → Option<ConsoleResp(c)> {
+    match c {
+        Read => match input { Nil => None, Cons(n, _) => Some(n) },
+        Write(_) => Some(trivial),
+    }
+}
+
+fn console_rest(c: ConsoleCmd, input: List<Nat>) → List<Nat> {
+    match c { Read => match input { Nil => Nil, Cons(_, rest) => rest }, Write(_) => input }
+}
+
+fn console_said(c: ConsoleCmd) → List<Nat> {
+    match c { Read => Nil, Write(n) => Cons(n, Nil) }
+}
+
+fn prepend<R>(said: List<Nat>, r: Option<Ran<R>>) → Option<Ran<R>> {
+    match r { None => None, Some(x) => Some(Ran(x.result, said.append(x.output))) }
+}
+
+fn run<R>(t: ITree<R>(Console()), input: List<Nat>) → Option<Ran<R>> {
+    match t {
+        Ret(r) => Some(Ran(r, Nil)),
+        Tau(s) => run(s, input),
+        Vis(c, k) => match console_answer(c, input) {
+            None => None,
+            Some(a) => prepend(console_said(c), run(k(a), console_rest(c, input))),
+        },
+        Cut => None,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Programs
+
+// Read one number and write it back.
+fn echo() → ITree<True>(Console()) {
+    ITree::bind(Console(), read(), λ n => write(n))
+}
+
+theorem echo_runs(): run(echo(), [7]) = Some(Ran(trivial, [7])) { refl }
+
+// Reading past the input is a failure, not a value.
+theorem echo_starves(): run(echo(), []) = None { refl }
+
+// Add up numbers until a zero, writing each running total: a loop, so its
+// meaning is one tree per amount of fuel.
+fn total_step(acc: Nat) → ITree<Step<Nat, Nat>>(Console()) {
+    ITree::bind(Console(), read(), λ n => match n {
+        Zero => Ret(Break(acc)),
+        Succ(_) => ITree::bind(Console(), write(acc + n), λ u => Ret(Continue(acc + n))),
+    })
+}
+
+fn total(fuel: Nat) → ITree<Nat>(Console()) { ITree::iter(Console(), fuel, total_step, 0) }
+
+theorem total_runs(): run(total(5), [3, 4, 0]) = Some(Ran(7, [3, 7])) { refl }
+
+// Three times round needs three units of fuel; with two the tree is cut.
+theorem total_cut(): run(total(2), [3, 4, 0]) = None { refl }
+
+// The loop's first pass is its unfolding, definitionally.
+theorem total_unfolds(n: Nat):
+    total(Succ(n)) = ITree::bind(Console(), total_step(0), λ x => match x {
+        Continue(a) => Tau(ITree::iter(Console(), n, total_step, a)),
+        Break(b) => Ret(b),
+    })
+{ refl }
+
+// ---------------------------------------------------------------------------
+// Recursion as events: factorial, its recursive call a command whose answer
+// is the call's result.
+
+fn Calls() → Events { Events(Nat, λ n => Nat) }
+
+fn fact_body(n: Nat) → ITree<Nat>(Events::sum(Calls(), Events::none())) {
+    match n {
+        Zero => Ret(1),
+        Succ(m) => ITree::bind(Events::sum(Calls(), Events::none()),
+            ITree::trigger(Events::sum(Calls(), Events::none()), Inl(m)),
+            λ r => Ret(n * r)),
+    }
+}
+
+// The value a tree with no commands returns, if it returns within its fuel.
+fn returned<R>(t: ITree<R>(Events::none())) → Option<R> {
+    match t { Ret(r) => Some(r), Tau(s) => returned(s), Vis(c, _) => match c {}, Cut => None }
+}
+
+fn fact(fuel: Nat, n: Nat) → Option<Nat> {
+    returned(ITree::rec(Calls(), Events::none(), fact_body, fuel, n))
+}
+
+theorem fact_four(): fact(5, 4) = Some(24) { refl }
+
+// Four nested calls need four units of fuel past the first.
+theorem fact_cut(): fact(4, 4) = None { refl }
+
+// ---------------------------------------------------------------------------
+// A handler: a console whose every read answers 5 and whose writes vanish,
+// interpreted into a tree with no commands at all.
+
+fn fives(c: ConsoleCmd) → ITree<ConsoleResp(c)>(Events::none()) {
+    match c { Read => Ret(5), Write(_) => Ret(trivial) }
+}
+
+theorem total_of_fives(): returned(ITree::interp(Console(), Events::none(), fives, total(3))) = None { refl }
+
+fn add_two() → ITree<Nat>(Console()) {
+    ITree::bind(Console(), read(), λ a => ITree::bind(Console(), read(), λ b => Ret(a + b)))
+}
+
+theorem add_two_of_fives(): returned(ITree::interp(Console(), Events::none(), fives, add_two())) = Some(10) { refl }
+
+// The laws hold of these programs as of any: right identity, up to `Same`.
+theorem echo_ret(): ITree::Same(Console(), ITree::bind(Console(), echo(), λ r => Ret(r)), echo()) {
+    ITree::bind_ret_r(Console(), echo())
+}
