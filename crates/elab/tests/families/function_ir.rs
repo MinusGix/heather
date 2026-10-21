@@ -39,6 +39,8 @@ mod linux_determinism;
 mod native_foundation;
 #[path = "../linux_spec.rs"]
 mod linux_spec;
+#[path = "../x86_64_stack_runs.rs"]
+mod x86_64_stack_runs;
 #[path = "../crossing_link_cost.rs"]
 mod crossing_link_cost;
 #[path = "../function_ir_narrow_certificates.rs"]

@@ -139,6 +139,48 @@ costs a refusal, never a wrong program.
 3. **Calls and the stack** (`calls`, `composition`, `sharing`,
    `stack_local`, `stack_save`, …): a callee's contract as a `Proved`-shaped
    item, the frame view, spills.
+
+   *Round 3 foundation as built:* `x86_64_calls` and its friends burn in
+   B2, so the stack is new foundation, not salvage.
+   - `lib/std/arch/x86_64/x86_64_stack.hthr` has four step forms: a word
+     spilled to and reloaded from `[rsp + disp8]`, CALL rel32 and RET. A
+     `MachineStep` is a fetched step, a store, or one of them. A process
+     gives its program a `Stack`: `size` bytes from `low`, writable,
+     canonical, word reads seeing exactly the stores made into them, and
+     code untouched by those stores. These are a profile's laws, proved
+     once for its memory. Proofs name stack addresses by offset from `low`
+     (`push_at`, `pop_at`, `slot_at`), so none does arithmetic on an open
+     address. `BitVec::sign_extend_clear_toNat` is what lets a small
+     displacement read as itself.
+   - `x86_64_asm` gains `CallTo(target)`, `Ret`, `Spill` and `Reload`
+     items. `Prog::laid_out` checks that a call lands on its label, ahead or
+     behind (`call_lands`).
+   - Round 1's frame lemmas (`Kept`, `leaves`, `execute_block_kept`,
+     `callee_saved`) moved down to `x86_64_kept` so the foundation can
+     state them.
+   - `lib/std/arch/x86_64/x86_64_stack_runs.hthr` has `Site::Moves`, the
+     state-level `Runs`. Conditions are over whole states, the program
+     stays resident, and a frame is stated against a ghost state.
+     `moves_of_runs` lifts round 2's pure runs, so round 2 is unchanged. The
+     stack forms' lemmas are `moves_spill`, `moves_reload` and
+     `moves_call`. A callee's contract is `Site::Returns`: entered at stack
+     offset `i` with the return address there, it returns there with RSP
+     at `i + 8` and `post(i, entry, exit)`. `returns_by` closes a body by
+     RET into one.
+   - The fixture (`fixtures/x86_64_stack_runs_examples.hthr`, checked by
+     `x86_64_stack_runs.rs`) proves a two-instruction callee's contract and
+     composes a caller's CALL against it by hand. A toy memory (code a map
+     of its own, one byte per address value) meets the `Stack` laws, so they
+     are satisfiable, and the caller's theorem is instantiated at it.
+
+   Left for the rest of the round: calls in FunctionIR and their lowering
+   (the frame across a branch, `Kept` in the theorem, a `moves_branch` with
+   machine-run arms), and spills. Left for later:
+   - elf64's process stack meets the `Stack` laws only once the process
+     theorem is rebuilt on these runs; the toy memory is the one instance.
+   - `x86_64_step_forms`' decoder does not know the stack forms, so
+     `MachineStep` has no determinism theorem
+     (`linux_x86_64_determinism`'s counterpart).
 4. **The CLI through the compiler**: `compile-x86` evaluates `lower` and
    instantiates the theorem instead of generating a certificate per
    function; the immediate forms (`AddRI8`/`AddRI32`, CMP-and-Jcc without a

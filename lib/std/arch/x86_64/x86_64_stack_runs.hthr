@@ -1,0 +1,252 @@
+// Runs of the machine over a label program (issues/function-ir-verified-
+// lowering.md, round 3): round 2's `Site::Runs` with the stack. From one
+// offset of a program resident at its origin to another, a state satisfying
+// `pre` takes machine steps (fetched steps, stores, and the stack forms) to
+// one satisfying `post`, the program still resident. Conditions are on the
+// whole state, so a frame (registers kept, the caller's stack words
+// unchanged) is stated against a ghost state the caller quantifies over.
+//
+// A pure run is a machine run (`moves_of_runs`), so round 2's lemmas and
+// theorem carry over unchanged; the lemmas here are the stack forms': a word
+// spilled and reloaded at a frame slot, a CALL against its callee's
+// contract (`Site::Returns`), and RET closing a function into one.
+import x86_64;
+import x86_64_block;
+import x86_64_fetch;
+import x86_64_data_read;
+import x86_64_fetched_code;
+import x86_64_layout;
+import x86_64_store;
+import x86_64_stack;
+import x86_64_kept;
+import x86_64_asm;
+import x86_64_asm_runs;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+
+// From `s`, a machine run to offset `to`, the program still resident, the
+// state satisfying `post`.
+fn Site::Arrives<M>(self site: Site<M>, writes: ByteWrites<M>, s: MachineState<M>, to: Nat, post: MachineState<M> → Type) → Type {
+    Exists<MachineState<M>>(λ t => MachineSteps(site.fetch, site.data, writes, s, t) ∧
+        (t.rip = next_rip(site.origin, to) ∧ (site.Resident(t.memory) ∧ post(t))))
+}
+
+// Every state at offset `from`, the program resident, satisfying `pre`,
+// arrives at `to` satisfying `post`.
+fn Site::Moves<M>(self site: Site<M>, writes: ByteWrites<M>, from, to: Nat, pre, post: MachineState<M> → Type) → Type {
+    (s: MachineState<M>) → s.rip = next_rip(site.origin, from) → site.Resident(s.memory) → pre(s) →
+        site.Arrives(writes, s, to, post)
+}
+
+theorem Site::arrives_after<M>(self site: Site<M>, writes: ByteWrites<M>, s, t: MachineState<M>, to: Nat, post: MachineState<M> → Type,
+    steps: MachineSteps(site.fetch, site.data, writes, s, t), rest: site.Arrives(writes, t, to, post)): site.Arrives(writes, s, to, post) {
+    Exists(rest.witness, ⟨machine_steps_trans(site.fetch, site.data, writes, s, t, rest.witness, steps, rest.proof.left), rest.proof.right⟩)
+}
+
+theorem Site::moves_trans<M>(self site: Site<M>, writes: ByteWrites<M>, from, middle, to: Nat, pre, between, post: MachineState<M> → Type,
+    first: site.Moves(writes, from, middle, pre, between), second: site.Moves(writes, middle, to, between, post)):
+    site.Moves(writes, from, to, pre, post) {
+    λ s here resident holds => {
+        let one = first(s, here, resident, holds);
+        site.arrives_after(writes, s, one.witness, to, post, one.proof.left,
+            second(one.witness, one.proof.right.left, one.proof.right.right.left, one.proof.right.right.right))
+    }
+}
+
+theorem Site::moves_weaken<M>(self site: Site<M>, writes: ByteWrites<M>, from, to: Nat, pre, post, entry, exit: MachineState<M> → Type,
+    moves: site.Moves(writes, from, to, pre, post), into: (s: MachineState<M>) → entry(s) → pre(s),
+    out: (t: MachineState<M>) → post(t) → exit(t)): site.Moves(writes, from, to, entry, exit) {
+    λ s here resident holds => {
+        let reached = moves(s, here, resident, into(s, holds));
+        Exists(reached.witness, ⟨reached.proof.left, ⟨reached.proof.right.left, ⟨reached.proof.right.right.left,
+            out(reached.witness, reached.proof.right.right.right)⟩⟩⟩)
+    }
+}
+
+// A pure run is a machine run: memory untouched, whatever held of it still
+// does.
+theorem Site::moves_of_runs<M>(self site: Site<M>, writes: ByteWrites<M>, from, to: Nat, pre, post: Gprs → Type, frame: M → Type,
+    runs: site.Runs(from, to, pre, post)):
+    site.Moves(writes, from, to, λ (s: MachineState<M>) => pre(s.gprs) ∧ frame(s.memory),
+        λ (t: MachineState<M>) => post(t.gprs) ∧ frame(t.memory)) {
+    λ s here resident holds => {
+        let reached = runs(s, here, resident, holds.left);
+        let t = reached.witness;
+        let same: (t.memory = s.memory) = reached.proof.right.right.left;
+        Exists(t, ⟨machine_steps_of_fetched(site.fetch, site.data, writes, s, t, reached.proof.left),
+            ⟨reached.proof.right.left, ⟨j(sym(same), λ memory _ => site.Resident(memory), resident),
+                ⟨reached.proof.right.right.right, j(sym(same), λ memory _ => frame(memory), holds.right)⟩⟩⟩⟩)
+    }
+}
+
+// The item at a label, fetched at the state's RIP.
+theorem Site::item_fetched<M>(self site: Site<M>, fits: FillsFit(site.program, no_fills()), s: MachineState<M>,
+    resident: site.Resident(s.memory), k: Nat, before: Prog, name: Nat, item: Asm,
+    at: asm_back(site.program, k) = At(before, name, item), here: s.rip = next_rip(site.origin, prog_len(before))):
+    FetchedFrom(site.fetch, s.memory, InstructionBytes(s.rip, asm_bytes(no_fills(), asm_labels(site.program), prog_len(before), item))) {
+    let bytes = asm_bytes(no_fills(), asm_labels(site.program), prog_len(before), item);
+    FetchedFrom(resident_readable(site.fetch, s.memory, bytes, s.rip,
+        j(sym(here), λ address _ => CodeResident(site.fetch, s.memory, bytes, address),
+            site.item_resident(fits, s.memory, resident, k, before, name, item, at))))
+}
+
+theorem Site::rip_after<M>(self site: Site<M>, s: MachineState<M>, from, length: Nat, here: s.rip = next_rip(site.origin, from)):
+    next_rip(s.rip, length) = next_rip(site.origin, from + length) {
+    trans(cong_fn<BitVec(64), BitVec(64)>(λ address => next_rip(address, length), here), rip_compose(site.origin, from, length))
+}
+
+// ---------------------------------------------------------------------------
+// A frame slot
+
+// A word spilled where the stack has room: the store stays off the code.
+theorem Site::moves_spill<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), fits: FillsFit(site.program, no_fills()),
+    k: Nat, before: Prog, name: Nat, store: StackStore, at: asm_back(site.program, k) = At(before, name, Spill(store)),
+    pre, post: MachineState<M> → Type,
+    step: (s: MachineState<M>) → pre(s) → Exists<Nat>(λ i => (stack_address(s.gprs, store.offset) = stack.at(i)) ∧
+        (i + 8 <= stack.size ∧ post(store.after(stack.writes, s))))):
+    site.Moves(stack.writes, prog_len(before), prog_len(before) + 5, pre, post) {
+    λ s here resident holds => {
+        let found = step(s, holds);
+        let i = found.witness;
+        let address: (stack_address(s.gprs, store.offset) = stack.at(i)) = found.proof.left;
+        let room: (i + 8 <= stack.size) = found.proof.right.left;
+        let word = read_gpr(store.source, s.gprs);
+        let after = store.after(stack.writes, s);
+        let executes: SpillWord(store).Executes(site.data, stack.writes, s, after) =
+            ⟨j(sym(address), λ a _ => WordCanonical(a), stack.canonical(i, room)),
+             ⟨j(sym(address), λ a _ => stack.writes.writable(s.memory, a, 8), stack.writable(s.memory, i, room)), refl⟩⟩;
+        Exists(after, ⟨stack_step_machine(site.fetch, site.data, stack.writes, SpillWord(store), s, after,
+                site.item_fetched(fits, s, resident, k, before, name, Spill(store), at, here), executes),
+            ⟨site.rip_after(s, prog_len(before), 5, here),
+             ⟨j(sym(address), λ a _ => site.Resident(stack.writes.store(s.memory, a, word_bytes(word))),
+                stack.keeps_code(s.memory, i, room, word, assemble(no_fills(), site.program, site.last), next_rip(site.origin, 0), resident)),
+              found.proof.right.right⟩⟩⟩)
+    }
+}
+
+// A word reloaded from where it reads.
+theorem Site::moves_reload<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), fits: FillsFit(site.program, no_fills()),
+    k: Nat, before: Prog, name: Nat, load: StackLoad, at: asm_back(site.program, k) = At(before, name, Reload(load)),
+    pre, post: MachineState<M> → Type,
+    step: (s: MachineState<M>) → pre(s) → Exists<Nat>(λ i => (stack_address(s.gprs, load.offset) = stack.at(i)) ∧
+        (i + 8 <= stack.size ∧ Exists<BitVec(64)>(λ word => (read_word(site.data, s.memory, stack.at(i)) = Some(word)) ∧
+            post(load.after(word, s)))))):
+    site.Moves(stack.writes, prog_len(before), prog_len(before) + 5, pre, post) {
+    λ s here resident holds => {
+        let found = step(s, holds);
+        let i = found.witness;
+        let address: (stack_address(s.gprs, load.offset) = stack.at(i)) = found.proof.left;
+        let room: (i + 8 <= stack.size) = found.proof.right.left;
+        let read = found.proof.right.right;
+        let after = load.after(read.witness, s);
+        let executes: ReloadWord(load).Executes(site.data, stack.writes, s, after) =
+            ⟨j(sym(address), λ a _ => WordCanonical(a), stack.canonical(i, room)),
+             Exists(read.witness, ⟨j(sym(address), λ a _ => read_word(site.data, s.memory, a) = Some(read.witness), read.proof.left), refl⟩)⟩;
+        Exists(after, ⟨stack_step_machine(site.fetch, site.data, stack.writes, ReloadWord(load), s, after,
+                site.item_fetched(fits, s, resident, k, before, name, Reload(load), at, here), executes),
+            ⟨site.rip_after(s, prog_len(before), 5, here), ⟨resident, read.proof.right⟩⟩⟩)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Calls
+
+// A function at offset `entry`: entered with the stack pointer at offset `i`
+// of the stack, the return address there, and `pre`, it runs to that
+// address, the program still resident, the stack pointer just above it, and
+// `post` relating where it was entered to where it returned. A callee's frame
+// (registers kept, its caller's words unchanged) is part of its `post`, and
+// the room it needs below `i` part of its `pre`.
+fn Site::Returns<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), entry: Nat, pre: Nat → MachineState<M> → Type,
+    post: Nat → MachineState<M> → MachineState<M> → Type) → Type {
+    (s: MachineState<M>) → s.rip = next_rip(site.origin, entry) → site.Resident(s.memory) →
+    (i: Nat) → read_gpr(Rsp, s.gprs) = stack.at(i) → i + 8 <= stack.size → pre(i, s) →
+    (ret: BitVec(64)) → read_word(site.data, s.memory, stack.at(i)) = Some(ret) →
+    Exists<MachineState<M>>(λ t => MachineSteps(site.fetch, site.data, stack.writes, s, t) ∧
+        (t.rip = ret ∧ (site.Resident(t.memory) ∧ ((read_gpr(Rsp, t.gprs) = stack.at(i + 8)) ∧ post(i, s, t)))))
+}
+
+// A CALL at a label, its callee's contract given: from the call to the item
+// after it. The stack has room for the return address below the stack
+// pointer; after the call the stack pointer is back.
+theorem Site::moves_call<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), fits: FillsFit(site.program, no_fills()),
+    k: Nat, before: Prog, name, target: Nat, at: asm_back(site.program, k) = At(before, name, CallTo(target)),
+    entry: Nat, lands: CallLands(prog_len(before), asm_jump_of(asm_labels(site.program), prog_len(before), CallTo(target)), entry),
+    callee_pre: Nat → MachineState<M> → Type, callee_post: Nat → MachineState<M> → MachineState<M> → Type,
+    callee: site.Returns(stack, entry, callee_pre, callee_post),
+    pre, post: MachineState<M> → Type,
+    enter: (s: MachineState<M>) → pre(s) → Exists<Nat>(λ i => (read_gpr(Rsp, s.gprs) = stack.at(i + 8)) ∧ (i + 8 <= stack.size ∧
+        callee_pre(i, call_near_after(stack.writes, asm_jump_of(asm_labels(site.program), prog_len(before), CallTo(target)), s)))),
+    leave: (s, t: MachineState<M>) → (i: Nat) → pre(s) → read_gpr(Rsp, s.gprs) = stack.at(i + 8) → read_gpr(Rsp, t.gprs) = stack.at(i + 8) →
+        callee_post(i, call_near_after(stack.writes, asm_jump_of(asm_labels(site.program), prog_len(before), CallTo(target)), s), t) →
+        post(t)):
+    site.Moves(stack.writes, prog_len(before), prog_len(before) + 5, pre, post) {
+    λ s here resident holds => {
+        let displacement = asm_jump_of(asm_labels(site.program), prog_len(before), CallTo(target));
+        let found = enter(s, holds);
+        let i = found.witness;
+        let rsp: (read_gpr(Rsp, s.gprs) = stack.at(i + 8)) = found.proof.left;
+        let room: (i + 8 <= stack.size) = found.proof.right.left;
+        let pushed: (push_address(s.gprs) = stack.at(i)) =
+            trans(cong_fn<BitVec(64), BitVec(64)>(λ a => a.sub(BitVec::ofNat(8)), rsp), push_at(stack.low, i));
+        let ret = next_rip(s.rip, 5);
+        let u = call_near_after(stack.writes, displacement, s);
+        let executes: CallNear(displacement).Executes(site.data, stack.writes, s, u) =
+            ⟨j(sym(pushed), λ a _ => WordCanonical(a), stack.canonical(i, room)),
+             ⟨j(sym(pushed), λ a _ => stack.writes.writable(s.memory, a, 8), stack.writable(s.memory, i, room)), refl⟩⟩;
+        let call = stack_step_machine(site.fetch, site.data, stack.writes, CallNear(displacement), s, u,
+            site.item_fetched(fits, s, resident, k, before, name, CallTo(target), at, here), executes);
+        let u_rip: (u.rip = next_rip(site.origin, entry)) =
+            trans(cong_fn<BitVec(64), BitVec(64)>(λ a => near_branch_target(a, 5, displacement), here),
+                call_lands_target(site.origin, prog_len(before), displacement, entry, lands));
+        let u_resident: site.Resident(u.memory) =
+            j(sym(pushed), λ a _ => site.Resident(stack.writes.store(s.memory, a, word_bytes(ret))),
+                stack.keeps_code(s.memory, i, room, ret, assemble(no_fills(), site.program, site.last), next_rip(site.origin, 0), resident));
+        let u_rsp: (read_gpr(Rsp, u.gprs) = stack.at(i)) =
+            trans(read_gpr_after_write(Rsp, push_address(s.gprs), s.gprs), pushed);
+        let u_ret: (read_word(site.data, u.memory, stack.at(i)) = Some(ret)) =
+            j(sym(pushed), λ a _ => read_word(site.data, stack.writes.store(s.memory, a, word_bytes(ret)), stack.at(i)) = Some(ret),
+                stack.stored(s.memory, i, room, ret));
+        let returned = callee(u, u_rip, u_resident, i, u_rsp, room, found.proof.right.right, ret, u_ret);
+        let t = returned.witness;
+        Exists(t, ⟨machine_steps_trans(site.fetch, site.data, stack.writes, s, u, t, call, returned.proof.left),
+            ⟨trans(returned.proof.right.left, site.rip_after(s, prog_len(before), 5, here)),
+             ⟨returned.proof.right.right.left,
+                leave(s, t, i, holds, rsp, returned.proof.right.right.right.left, returned.proof.right.right.right.right)⟩⟩⟩)
+    }
+}
+
+// A function closed by RET: its body runs from its entry to the RET with
+// the stack pointer back where it entered and the return address still
+// there, and `post` holds of where it returns.
+theorem Site::returns_by<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), fits: FillsFit(site.program, no_fills()),
+    entry: Nat, k: Nat, before: Prog, name: Nat, at: asm_back(site.program, k) = At(before, name, Ret),
+    pre: Nat → MachineState<M> → Type, post: Nat → MachineState<M> → MachineState<M> → Type,
+    body: (s0: MachineState<M>) → (i: Nat) → (ret: BitVec(64)) → site.Moves(stack.writes, entry, prog_len(before),
+        λ (s: MachineState<M>) => (s = s0) ∧ ((read_gpr(Rsp, s0.gprs) = stack.at(i)) ∧ (i + 8 <= stack.size ∧
+            (pre(i, s0) ∧ read_word(site.data, s0.memory, stack.at(i)) = Some(ret)))),
+        λ (t: MachineState<M>) => (read_gpr(Rsp, t.gprs) = stack.at(i)) ∧
+            ((read_word(site.data, t.memory, stack.at(i)) = Some(ret)) ∧ post(i, s0, return_near_after(ret, t))))):
+    site.Returns(stack, entry, pre, post) {
+    λ s here resident i rsp room holds ret read => {
+        let ran = body(s, i, ret, s, here, resident, ⟨refl, ⟨rsp, ⟨room, ⟨holds, read⟩⟩⟩⟩);
+        let t = ran.witness;
+        let done = ran.proof.right.right.right;
+        let t_rsp: (read_gpr(Rsp, t.gprs) = stack.at(i)) = done.left;
+        let r = return_near_after(ret, t);
+        let executes: ReturnNear.Executes(site.data, stack.writes, t, r) =
+            ⟨j(sym(t_rsp), λ a _ => WordCanonical(a), stack.canonical(i, room)),
+             Exists(ret, ⟨j(sym(t_rsp), λ a _ => read_word(site.data, t.memory, a) = Some(ret), done.right.left), refl⟩)⟩;
+        let step = stack_step_machine(site.fetch, site.data, stack.writes, ReturnNear, t, r,
+            site.item_fetched(fits, t, ran.proof.right.right.left, k, before, name, Ret, at, ran.proof.right.left), executes);
+        Exists(r, ⟨machine_steps_trans(site.fetch, site.data, stack.writes, s, t, r, ran.proof.left, step),
+            ⟨refl, ⟨ran.proof.right.right.left,
+                ⟨trans(read_gpr_after_write(Rsp, read_gpr(Rsp, t.gprs).add(BitVec::ofNat(8)), t.gprs),
+                    trans(cong_fn<BitVec(64), BitVec(64)>(λ a => a.add(BitVec::ofNat(8)), t_rsp), pop_at(stack.low, i))),
+                 done.right.right⟩⟩⟩⟩)
+    }
+}

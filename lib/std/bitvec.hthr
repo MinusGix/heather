@@ -1915,6 +1915,31 @@ theorem BitVec::toNat_lt_pow(n: Nat): (x: BitVec(n)) → x.toNat() < Nat::pow(2,
     }
 }
 
+theorem BitVec::zero_toNat(n: Nat): BitVec::zero(n := n).toNat() = 0 {
+    match n as λ k => BitVec::zero(n := k).toNat() = 0 {
+        Zero => refl,
+        Succ(k, ih) => trans(BitVec::zero(n := k).toNat().twice().add_left_zero(),
+            j(sym(ih), λ v _ => v.twice() = 0, refl)),
+    }
+}
+
+// Zeros above a vector add nothing to its value: zero extension keeps it.
+theorem BitVec::concat_zero_toNat(n: Nat): (m: Nat) → (lo: BitVec(n)) → (lo.concat(BitVec::zero(n := m))).toNat() = lo.toNat() {
+    match n as λ k => (m: Nat) → (lo: BitVec(k)) → (lo.concat(BitVec::zero(n := m))).toNat() = lo.toNat() {
+        Zero => λ m lo => BitVec::zero_toNat(m),
+        Succ(k, ih) => λ m lo => j(sym(ih(m, lo.tail_bits())),
+            λ v _ => Nat::of_bit(lo.head_bit()) + v.twice() = Nat::of_bit(lo.head_bit()) + (lo.tail_bits()).toNat().twice(), refl),
+    }
+}
+
+// Sign extension of a vector whose sign bit is clear is zero extension, so
+// it keeps the value (a small positive displacement reads as itself).
+theorem BitVec::sign_extend_clear_toNat(n, extra: Nat, x: BitVec(Succ(n)), clear: x.sign_bit() = False):
+    (x.sign_extend(extra)).toNat() = x.toNat() {
+    j(sym(clear), λ b _ => (x.concat(BitVec::repeat_bit(b, n := extra))).toNat() = x.toNat(),
+        BitVec::concat_zero_toNat(Succ(n), extra, x))
+}
+
 theorem BitVec::ofNat_zero(n: Nat): BitVec::ofNat(0, n := n) = BitVec::zero() {
     match n as λ k => BitVec::ofNat(0, n := k) = BitVec::zero() {
         Zero => refl,
