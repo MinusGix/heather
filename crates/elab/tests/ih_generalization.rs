@@ -363,3 +363,68 @@ fn an_implicit_parameter_varied_without_at_is_named() {
     );
     assert!(msg.contains("pass it explicitly"), "{msg}");
 }
+
+// -- self-calls under `j` and a record update ---------------------------------
+// (issues/ih-generalization-misses-call-under-j.md: the scan's walk skipped
+// these forms, so the varying call met the by-binder refusal)
+
+#[test]
+fn a_varying_call_as_the_case_of_j_generalizes() {
+    // The congruence shape (`ITree::same_sym`): rewrite the other side with
+    // `j`, then recurse with `b` and the equation both varied. A neutral
+    // scrutinee, a dependent goal, and the call in `j`'s case — which is
+    // checked at the motive's instance, not inferred.
+    ok(&format!(
+        "{LE}\n\
+         theorem le_of_eq(a: Nat, b: Nat, e: a = b): Le(a, b) {{\n\
+             match a {{\n\
+                 Zero => trivial,\n\
+                 Succ(k) => j(e, λ y q => Le(Succ(k), y), le_of_eq(k, k, refl)),\n\
+             }}\n\
+         }}\n\
+         theorem three_le_three(): Le(3, 3) {{ le_of_eq(3, 3, refl) }}"
+    ));
+}
+
+#[test]
+fn a_varying_call_under_j_computes_at_a_literal() {
+    // A program, so the recursor has to reduce: each step's `j` is at `refl`
+    // and contracts to its case, which is the ih at the varied arguments.
+    ok(r#"
+        fn walk(n: Nat, m: Nat, e: n = m) -> Nat {
+            match n { Zero => m, Succ(k) => j(e, λ y q => Nat, Succ(walk(k, k, refl))) }
+        }
+        theorem walk_three(): walk(3, 3, refl) = 3 { refl }
+    "#);
+}
+
+#[test]
+fn a_varying_call_in_a_record_update_generalizes() {
+    ok(r#"
+        record P { x: Nat, y: Nat }
+        fn spread(n: Nat, m: Nat) -> P {
+            match n {
+                Zero => P { x: m, y: m },
+                Succ(k) => spread(k, Succ(m)) with { y = 0 },
+            }
+        }
+        theorem spread_two(): spread(2, 1) = P(3, 0) { refl }
+    "#);
+}
+
+#[test]
+fn a_wrong_varied_argument_under_j_is_still_refused() {
+    // Negative control: the scan now plans the generalization, and the ih's
+    // Π domain is what refuses `e` (a proof of `Succ(k) = b`) where `k = k`
+    // is due — the call is not waved through because it was found.
+    let msg = any_err(&format!(
+        "{LE}\n\
+         theorem bad(a: Nat, b: Nat, e: a = b): Le(a, b) {{\n\
+             match a {{\n\
+                 Zero => trivial,\n\
+                 Succ(k) => j(e, λ y q => Le(Succ(k), y), bad(k, k, e)),\n\
+             }}\n\
+         }}"
+    ));
+    assert!(!msg.contains("unchanged"), "{msg}");
+}

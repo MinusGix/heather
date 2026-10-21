@@ -1,6 +1,6 @@
 ---
 title: IH generalization misses a varying recursive call passed as `j`'s base
-status: open
+status: closed
 labels: [frontend,elaboration,recursion,motives]
 area: language
 created: 2026-10-21
@@ -39,3 +39,7 @@ shape: rewrite the other side with `j`, then recurse.
 
 The `j`-argument form checks like the `let` form, or the diagnostic says
 where the call must move.
+
+## Log
+
+- 2026-10-21: Fixed. The scan was right and the walk under it was not: `surface::for_each_child`, the one walk every recursion scan uses (`recurses_on`, `varying_params`, `cov_depth`), fell through `_ => {}` on `j`, a record update and a `let code` statement, so a self-call there was invisible to the planning and met the by-binder refusal when elaborated. The walk is now exhaustive over `ExprKind` (a new surface form without a line there is a compile error) and also enters a written `match` motive. Tests in `crates/elab/tests/ih_generalization.rs`: the issue's shape, a program computing through `j` at a literal, a call inside `with { … }`, and a negative control (a wrong varied argument under `j` is still refused by the ih's domain). Types (`TyLit`, annotations) are still not entered: a self-call written inside type syntax is not scanned.
