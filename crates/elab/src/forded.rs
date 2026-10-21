@@ -2289,6 +2289,7 @@ impl Elaborator {
                             depth: acx.names.len(),
                             children,
                             container: None,
+                            fn_children: Vec::new(),
                             // An indexed family fords by `Id` and is not
                             // chain-shaped for the window's purposes.
                             cov: None,

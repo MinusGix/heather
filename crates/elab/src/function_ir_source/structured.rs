@@ -302,7 +302,7 @@ fn result_type(elaborator: &Elaborator, caller: usize, ty: &Type) -> Result<(Str
         return Ok((scalar, None, None, true));
     }
     let ind = elaborator.types.by_tag(*tag).ok_or_else(|| SourceError::Unsupported("missing result declaration".into()))?;
-    if ind.recursive || ind.index.is_some() || !ind.valparams.is_empty() || ind.params.len() != 1 || args.len() != 1 || ind.ctors.len() != 2
+    if ind.recursive || ind.infinitary() || ind.index.is_some() || !ind.valparams.is_empty() || ind.params.len() != 1 || args.len() != 1 || ind.ctors.len() != 2
         || !ind.ctors.iter().all(|ctor| ctor.fields.len() == 1 && matches!(&ctor.fields[0].1.kind, TyKind::Named { name, args } if name == &ind.params[0] && args.is_empty())) {
         return unsupported("choice results require two single-field constructors with the same scalar type parameter");
     }

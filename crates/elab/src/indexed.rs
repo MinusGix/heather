@@ -891,8 +891,8 @@ impl Elaborator {
                         l.clone(),
                     );
                 }
-                FieldKind::Container { .. } => {
-                    unreachable!("indexed classification never emits a container")
+                FieldKind::Container { .. } | FieldKind::FnChild => {
+                    unreachable!("indexed classification never emits a container or a function child")
                 }
                 FieldKind::Payload => {
                     let (t, lvl) = self.elab_ty(&fcx, ty)?;
@@ -1837,6 +1837,7 @@ impl Elaborator {
                             depth: acx.names.len(),
                             children,
                             container: None,
+                            fn_children: Vec::new(),
                             // An indexed family fords by `Id` and is not
                             // chain-shaped for the window's purposes.
                             cov: None,

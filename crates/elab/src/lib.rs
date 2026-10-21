@@ -120,6 +120,7 @@ mod generalize;
 mod goal_combinators;
 mod goals;
 mod indexed;
+mod infinitary;
 mod inductive;
 mod spelling;
 mod lgg;

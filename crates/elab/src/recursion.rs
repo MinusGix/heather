@@ -447,6 +447,9 @@ pub(crate) fn elab_self_call(
     }
     let mut descendant = 0usize;
     let mut cov_at = 0usize;
+    // A descent through a recursive function field: which field, and the
+    // argument the field was applied to.
+    let mut through_fn: Option<(usize, Rc<Term>)> = None;
     // Arguments at generalized positions, in position order: applied to the
     // ih below, and checked there against its Π domains.
     let mut varied: Vec<&Expr> = Vec::new();
@@ -487,6 +490,7 @@ pub(crate) fn elab_self_call(
                     depth,
                     children,
                     cov,
+                    fn_children,
                     ..
                 },
                 true,
@@ -515,7 +519,15 @@ pub(crate) fn elab_self_call(
                             descendant = index;
                             true
                         }
-                        None => false,
+                        // Through a recursive function field: `k e` at any
+                        // `e`, matched by the application's head term.
+                        None => match fn_call(fn_children, shift, &argument_term) {
+                            Some(hit) => {
+                                through_fn = Some(hit);
+                                true
+                            }
+                            None => false,
+                        },
                     },
                 }
             }
@@ -576,6 +588,18 @@ pub(crate) fn elab_self_call(
                         )
                     }
                 }
+                // Tier 2: the subtrees are the plain child and `k` applied
+                // to anything (docs/inductive-tier2-w-lowering.md §8).
+                GuardKind::Wf { fn_children, .. } if !fn_children.is_empty() => (
+                    "a recursive field, or the function field applied to an argument, \
+                     bound by"
+                        .to_string(),
+                    ". Through a function field `k` every `k(e)` is a subtree, \
+                     whatever `e` is; a value built *around* one is not, so it has no \
+                     induction hypothesis to elaborate to \
+                     (docs/inductive-tier2-w-lowering.md §8)"
+                        .to_string(),
+                ),
                 GuardKind::Wf { cov, .. } => match cov {
                     // The window exists, so the rule is not "the immediate
                     // field": it is "within the chain the recursion carries".
@@ -676,14 +700,42 @@ pub(crate) fn elab_self_call(
                         window.mlvl.clone(),
                     )
                 }
-                None => {
-                    let (_, ih, ty, level) = &children[descendant];
-                    (
-                        (**ih).shift_local(shift),
-                        ty.shift_local(shift),
-                        level.clone(),
-                    )
-                }
+                None => match (&through_fn, &guard.kind) {
+                    (Some((at, arg)), GuardKind::Wf { fn_children, .. }) => {
+                        // `(λy. ih' y (c y)) e`, at `M[k e]`: the ih's Π
+                        // instantiated at the argument the call wrote.
+                        let field = &fn_children[*at];
+                        let Type::Pi {
+                            dom_level,
+                            cod_level,
+                            dom,
+                            cod,
+                        } = field.ih_ty.shift_local(shift)
+                        else {
+                            return err("internal: a function child's ih is not a `Π`", span);
+                        };
+                        let ty = cod.apply_local(
+                            &crate::embed(&cx.gamma, 0).extended(Rc::clone(arg)),
+                        );
+                        let term = crate::spelling::checked_app(
+                            Rc::new(field.ih.shift_local(shift)),
+                            dom_level,
+                            cod_level.clone(),
+                            dom,
+                            cod,
+                            Rc::clone(arg),
+                        );
+                        (term, ty, cod_level)
+                    }
+                    _ => {
+                        let (_, ih, ty, level) = &children[descendant];
+                        (
+                            (**ih).shift_local(shift),
+                            ty.shift_local(shift),
+                            level.clone(),
+                        )
+                    }
+                },
             }
         }
     };
@@ -731,6 +783,20 @@ pub(crate) fn elab_self_call(
         level,
         spill,
     )
+}
+
+/// A self-call's decreasing argument read as `k e`, for `k` one of an arm's
+/// recursive function fields (docs/inductive-tier2-w-lowering.md §8): the
+/// field it goes through and `e`. By **term**, never by name, like every
+/// other descent: the application's head has to be the field binder's own
+/// term, so a shadowing name cannot fake it.
+fn fn_call(fields: &[FnChildIh], shift: u32, argument: &Term) -> Option<(usize, Rc<Term>)> {
+    let (fun, arg) = match argument {
+        Term::App { fun, arg, .. } | Term::AppAt { fun, arg } => (fun, arg),
+        _ => return None,
+    };
+    let at = fields.iter().position(|f| f.fun.shift_local(shift) == **fun)?;
+    Some((at, Rc::clone(arg)))
 }
 
 /// The enclosing declaration, in scope throughout its own body so that a
@@ -928,7 +994,26 @@ pub(crate) enum GuardKind {
         /// descends — and the thing it maps to is the ih *tabulated* over the
         /// container's index range.
         container: Option<ContainerIh>,
+        /// The arm's recursive **function** fields — a tier-2 arm's `k : A ->
+        /// D` (docs/inductive-tier2-w-lowering.md §8). Empty for every `Wf`
+        /// arm. A self-call descends through one at *any* argument: its
+        /// decreasing argument is `k e`, matched by the application's head.
+        fn_children: Vec<FnChildIh>,
     },
+}
+
+/// What a self-call through a recursive function field needs
+/// (docs/inductive-tier2-w-lowering.md §8), scoped like the rest of
+/// [`GuardKind::Wf`], at `depth` binders.
+pub(crate) struct FnChildIh {
+    /// The field binder's own term, `λy. ⟨f' y, c y⟩`: a call's decreasing
+    /// argument must be an application *of this term*.
+    pub(crate) fun: Rc<Term>,
+    /// The ih as a function of the argument, `λy. ih' y (c y)`.
+    pub(crate) ih: Rc<Term>,
+    /// Its type, `Π(y : A). M[k y]`, kept whole so that a call site shifts it
+    /// like any other type and reads the codomain under its own binder.
+    pub(crate) ih_ty: Type,
 }
 
 /// The window of past values a course-of-values `Wf` arm carries

@@ -16,8 +16,13 @@
 //! it is what makes a divergence in payload handling impossible rather than
 //! merely unlikely.
 //!
-//! Not here yet: nested recursion (`Rose`) and tier 2 (W). Both are
-//! classified and rejected, not mis-lowered.
+//! Tier 2 (a recursive *function* field, `k: A -> D`) shares it the same way:
+//! the shape is again this lowering with the recursive fields deleted, and the
+//! `W` former plus a leaf predicate wraps it
+//! (`docs/inductive-tier2-w-lowering.md`, mechanized in `infinitary.rs`).
+//!
+//! Not here yet: nested recursion (`Rose`). It is classified and rejected,
+//! not mis-lowered.
 
 use std::borrow::{Borrow, Cow};
 use std::sync::Arc as Rc;
@@ -178,6 +183,16 @@ impl IdxTy {
 }
 
 impl Inductive {
+    /// Tier 2: some constructor has a recursive function field, so the
+    /// lowering is `Σ(t : W₀). El(canon t)` (docs/inductive-tier2-w-lowering.md
+    /// §5) and [`Self::recursive`] — which means "lowered onto `Wf`" — is false.
+    /// Derived from the field kinds, so it needs no storage of its own.
+    pub fn infinitary(&self) -> bool {
+        self.ctors
+            .iter()
+            .any(|c| c.kind.contains(&FieldKind::FnChild))
+    }
+
     /// The index of field `name` in this record's single constructor, or
     /// `None`. Always `None` for a non-record: an `inductive`'s field names
     /// are positional and are not accessors.
@@ -279,6 +294,12 @@ pub(crate) enum FieldKind {
     /// result index. It is **not stored** — the branch's `elim_Nat` binder is
     /// what it denotes — so it is neither payload nor child.
     IndexVar,
+    /// `(y: A) -> D` — a recursive **function** field
+    /// (docs/inductive-tier2-w-lowering.md §1): one child per inhabitant of
+    /// `A`. Its presence puts the whole declaration on tier 2, the `W`
+    /// lowering (`infinitary.rs`), where a [`FieldKind::Plain`] child is the
+    /// `Unit`-positioned case of the same thing.
+    FnChild,
 }
 
 impl FieldKind {
@@ -1014,12 +1035,45 @@ impl Elaborator {
         // classifies `Rose` as non-recursive and silently drops its children —
         // which is the hazard class, not a rejection, so
         // `container_fields::a_container_is_not_dropped` is the observer.
-        let recursive = ctors.iter().any(|c| c.kind.iter().any(|k| k.is_child()));
+        let any_child = ctors.iter().any(|c| c.kind.iter().any(|k| k.is_child()));
+        // Tier 2 (docs/inductive-tier2-w-lowering.md §1): a recursive function
+        // field anywhere puts the whole declaration on `W`, and `recursive`
+        // keeps meaning "lowered onto `Wf`".
+        let infinitary = ctors.iter().any(|c| c.kind.contains(&FieldKind::FnChild));
+        let recursive = any_child && !infinitary;
+        if infinitary {
+            for (c, cd) in ctors.iter().zip(&d.ctors) {
+                if c.container().is_some() {
+                    return err(
+                        format!(
+                            "`{}` has a container field, and `{}` is infinitary (it has a \
+                             recursive function field): the two child kinds do not mix this \
+                             round (docs/inductive-tier2-w-lowering.md §1)",
+                            c.name, d.name
+                        ),
+                        cd.span,
+                    );
+                }
+                if c.kind.iter().filter(|k| k.is_child()).count() > 1 {
+                    return err(
+                        format!(
+                            "`{}` has more than one recursive field, and `{}` is infinitary \
+                             (it has a recursive function field): its children would be one \
+                             function out of a sum, which a `match` cannot rebuild without \
+                             funext. Split the constructor, or keep `{}` finitary \
+                             (docs/inductive-tier2-w-lowering.md §2.2)",
+                            c.name, d.name, d.name
+                        ),
+                        cd.span,
+                    );
+                }
+            }
+        }
         // A `record` is tier 0 by construction (docs/surface-records.md §2):
         // a recursive one is an `inductive`, and saying so is more useful than
         // silently lowering it onto `Wf` where the field names would still
         // project but the declaration would no longer be a record.
-        if d.is_record && recursive {
+        if d.is_record && any_child {
             return err(
                 format!(
                     "`{}` is a `record` but mentions itself: a recursive declaration is \
@@ -1088,6 +1142,14 @@ impl Elaborator {
             index_ty,
             skel,
         });
+        // A tier-2 declaration's lowering can fail on what the declaration
+        // *says* — a function domain with no code, domains at two levels
+        // (docs/inductive-tier2-w-lowering.md §1.5) — so an unparameterized
+        // one is lowered once here, where that is a declaration error rather
+        // than a surprise at its first use.
+        if ind.infinitary() && ind.params.is_empty() {
+            self.lower_instance(&Cx::empty(), &ind, &[], &[], d.span)?;
+        }
         // From here on registration is infallible. The type registry installs
         // all nominal views together; the ambiguity index then exposes the
         // same declarations to surface resolution.
@@ -1104,7 +1166,12 @@ impl Elaborator {
         // declaration time, never edited afterwards (§14.6's discipline, the
         // same one the skeleton above follows). Everything the declaration
         // emits later references them; see `gendefs.rs`.
-        self.register_gen_defs(&ind, d.span);
+        //
+        // Not for tier 2 yet: its lowering is spelled inline at every use
+        // (docs/inductive-tier2-w-lowering.md §1, generated-definition naming).
+        if !ind.infinitary() {
+            self.register_gen_defs(&ind, d.span);
+        }
         Ok(())
     }
 
@@ -1163,6 +1230,16 @@ impl Elaborator {
                     "`{iname}` has a container field (`[{iname}; n]`), so its recursive \
                      arguments are not a fixed list; an index type's constructors must \
                      have a literal arity (docs/container-fields.md §3.1)"
+                ),
+                dom.span,
+            );
+        }
+        if ind.infinitary() {
+            return err(
+                format!(
+                    "`{iname}` has a recursive function field, so its recursive \
+                     arguments are not a fixed list; an index type's constructors must \
+                     have a literal arity (docs/inductive-tier2-w-lowering.md §1)"
                 ),
                 dom.span,
             );
@@ -1674,6 +1751,11 @@ impl Elaborator {
                 span,
             );
         }
+        // Tier 2 (docs/inductive-tier2-w-lowering.md §5): the shape is this
+        // same sum-of-Σs, wrapped in `W` and the leaf predicate.
+        if ind.infinitary() {
+            return self.lower_instance_w(cx, ind, args, vargs, span);
+        }
         let (shape, level) = self.lower_shape(cx, ind, args, vargs, span)?;
         if !ind.recursive {
             return Ok((shape, level));
@@ -1794,6 +1876,26 @@ impl Elaborator {
         vargs: &[(Term, Type, Level)],
         span: Span,
     ) -> R<(Type, Level)> {
+        self.lower_ctor_with_domain(cx, ind, i, args, vargs, span)
+            .map(|(t, l, _)| (t, l))
+    }
+
+    /// [`Self::lower_ctor`], also returning the **domain** of the
+    /// constructor's recursive function field, if it has one
+    /// (docs/inductive-tier2-w-lowering.md §4): `(A, its level, j)` with `A`
+    /// lowered by this same walk at the point the field sits, so scoped over
+    /// `(Γ, #tag, p₀, …, p_{j-1})` — the tag and the `j` payload fields
+    /// declared before it. One walk for both, so the domain sees exactly the
+    /// field context the shape's own field types see.
+    pub(crate) fn lower_ctor_with_domain(
+        &self,
+        cx: &Cx,
+        ind: &Inductive,
+        i: usize,
+        args: &[(Type, Level)],
+        vargs: &[(Term, Type, Level)],
+        span: Span,
+    ) -> R<(Type, Level, Option<(Type, Level, usize)>)> {
         let _scope = self.use_inductive_scope(ind);
         // Field types see the type parameters and the earlier *named* fields;
         // nothing else from the ambient declaration. The arguments are scoped
@@ -1856,7 +1958,22 @@ impl Elaborator {
         // bind it in a pattern.
         let mut entries = vec![(tag_type(ind.tag), Level::Zero)];
         fcx.push("#tag".into(), tag_type(ind.tag), Level::Zero);
-        for (_, (name, ty)) in ind.ctors[i].payload() {
+        let mut domain = None;
+        let ctor = &ind.ctors[i];
+        for (k, (name, ty)) in ctor.fields.iter().enumerate() {
+            if ctor.kind[k] == FieldKind::FnChild {
+                // Lowered where it sits, and *not* pushed: a recursive field
+                // is not in scope in later field types (tier 1 §2).
+                let TyKind::Fn { dom, .. } = &ty.kind else {
+                    return err("internal: a recursive function field is not a `->`", ty.span);
+                };
+                let (t, l) = self.elab_ty(&fcx, dom)?;
+                domain = Some((t, l, entries.len() - 1));
+                continue;
+            }
+            if ctor.kind[k] != FieldKind::Payload {
+                continue;
+            }
             let (t, l) = self.elab_ty(&fcx, ty)?;
             entries.push((t.clone(), l.clone()));
             let fname = name.clone().unwrap_or_else(|| "#field".into());
@@ -1893,7 +2010,7 @@ impl Elaborator {
             // tree compounds per field and is copied into every Σ level slot.
             acc_lvl = Level::max(lvl, acc_lvl).normalize().canonical();
         }
-        Ok((acc, acc_lvl))
+        Ok((acc, acc_lvl, domain))
     }
 
     // -- reading a lowered type back ----------------------------------------
@@ -1913,7 +2030,13 @@ impl Elaborator {
             // `Wf`'s shape lives at the `Wf`'s own level (kernel formation
             // rule), so there is no second level to read off.
             Type::Wf { shape, level, .. } => (Rc::clone(shape), level.clone()),
-            other => (Rc::new(other.clone()), lvl.clone()),
+            // Tier 2: `Σ(t : W(x : S). P). El(canon t)`, and the summands are
+            // `S`'s at the `W`'s shape level
+            // (docs/inductive-tier2-w-lowering.md §5).
+            other => match crate::infinitary::w_of(other) {
+                Some((shape, shape_level)) => (shape, shape_level),
+                None => (Rc::new(other.clone()), lvl.clone()),
+            },
         };
         let mut cur = cur;
         let mut cur_lvl = cur_lvl;
@@ -1989,6 +2112,11 @@ impl Elaborator {
             // Tier 1: the tag is in the `Wf`'s shape (tier 1 §4).
             Type::Wf { shape, .. } => self.tag_of(shape),
             Type::Sum { lhs, .. } => self.tag_of(lhs),
+            // Tier 2: through the `Σ` and the `W` to the shape
+            // (docs/inductive-tier2-w-lowering.md §5).
+            Type::Sigma { .. } if crate::infinitary::w_of(ty).is_some() => {
+                self.tag_of(&crate::infinitary::w_of(ty)?.0)
+            }
             Type::Sigma { fst, .. } => self.types.by_tag(read_tag(fst)?).cloned(),
             _ => None,
         }
@@ -2277,6 +2405,10 @@ impl Elaborator {
             return self.build_indexed_ctor(cx, ind, i, args, expected, expected_lvl, span);
         }
         let args: Vec<&Expr> = args.iter().map(|a| a.borrow()).collect();
+        if ind.infinitary() {
+            // Tier 2 (docs/inductive-tier2-w-lowering.md §6).
+            return self.build_ctor_w(cx, ind, i, &args, expected, span);
+        }
         let prepared = self.prepare_ctor(cx, ind, i, &args, expected, expected_lvl, span)?;
         if !ind.recursive { return Ok(prepared.term); }
         let child_ty = self.whnf(cx, expected, span)?;
@@ -2742,6 +2874,11 @@ impl Elaborator {
             // (docs/inductive-tier1-wf-lowering.md §6). Everything above is
             // surface bookkeeping and is shared.
             return self.elab_match_wf(cx, ind, &arms, scrut, scrut_ty, motive, mlvl, span);
+        }
+        if ind.infinitary() {
+            // Tier 2: one `elim_W` over the tree, applied to its leaf proof
+            // (docs/inductive-tier2-w-lowering.md §7).
+            return self.elab_match_w(cx, ind, &arms, scrut, scrut_ty, motive, mlvl, span);
         }
         let spine = self.spine(scrut_ty, scrut_lvl, n, span)?;
         // The tier-0 twin of `wf.rs`'s motive respell
@@ -3338,6 +3475,16 @@ fn classify_fields(c: &CtorDecl, name: &str, params: &[String]) -> R<Vec<FieldKi
                 );
             };
             kinds.push(FieldKind::Container { len_payload: *idx });
+            continue;
+        }
+        // `(y: A) -> D` — a recursive function field (tier 2 §1). Only the
+        // exact shape reaches here: `reject_function_fields` has already
+        // refused every other function type that mentions `D`.
+        if let TyKind::Fn { dom, cod, .. } = &f.ty.kind
+            && occurs(dom, name).is_none()
+            && classify_field(cod, name, params, &c.name)?
+        {
+            kinds.push(FieldKind::FnChild);
             continue;
         }
         if classify_field(&f.ty, name, params, &c.name)? {
@@ -4480,11 +4627,18 @@ fn occurs(t: &Ty, name: &str) -> Option<Span> {
 }
 
 /// A `Π` field whose domain or codomain mentions the declaration puts it in
-/// the **infinitary** tier, which neither the tier-0 nor the tier-1 lowering
-/// handles: both assume finitary children throughout. Diagnosed rather than
+/// the **infinitary** tier. Exactly one shape of it is lowered
+/// (docs/inductive-tier2-w-lowering.md §1): a *top-level* field
+/// `(y: A) -> D<p̄>` of an unindexed declaration, with `A` free of `D` — a
+/// strictly positive occurrence, `D` as the codomain and nowhere else. That
+/// field is classified [`FieldKind::FnChild`] by `classify_fields`, and the
+/// declaration lowers onto `W` (`infinitary.rs`).
+///
+/// Every other `Π` that mentions the declaration is diagnosed rather than
 /// mis-lowered — the hazard class `docs/inductive-tier0-lowering.md` opens by
-/// naming (docs/surface-function-types.md §8). `Acc.intro`'s
-/// `h: (b: A) -> Acc<A>` is the motivating rejection, and stays one.
+/// naming (docs/surface-function-types.md §8): `D` in a domain (not strictly
+/// positive), a curried field (`A -> B -> D`, one arrow this round), a
+/// function field nested under another type, or one on an indexed family.
 ///
 /// A function field that does **not** mention the declaration is an ordinary
 /// **payload** and is accepted (corrected 2026-07-27, docs/surface-records.md
@@ -4518,18 +4672,76 @@ pub(crate) fn reject_function_fields(d: &InductiveDecl) -> Result<(), crate::Ela
             TyKind::Code { ty, .. } => recursive_fn(ty, name),
         }
     }
+    let fail = |msg: String, span: Span| Err(crate::ElabError::Elab { msg, span });
     for c in &d.ctors {
         for f in &c.fields {
-            if let Some(sp) = recursive_fn(&f.ty, &d.name) {
-                return Err(crate::ElabError::Elab {
-                    msg: format!(
-                        "field of `{}` is a function type mentioning `{}`: that is the \
-                         infinitary tier, which is not lowered yet \
-                         (issues/inductive-compiler.md)",
-                        c.name, d.name
+            // The one lowered shape (tier 2 §1), at the top of a field.
+            if let TyKind::Fn {
+                dom, cod, implicit, ..
+            } = &f.ty.kind
+                && (occurs(dom, &d.name).is_some() || occurs(cod, &d.name).is_some())
+            {
+                if occurs(dom, &d.name).is_some() {
+                    return fail(
+                        format!(
+                            "field of `{}` mentions `{}` in the domain of a function type: \
+                             that occurrence is not strictly positive, and only `A -> {}` with \
+                             `A` free of `{}` is lowered (docs/inductive-tier2-w-lowering.md §1)",
+                            c.name, d.name, d.name, d.name
+                        ),
+                        f.ty.span,
+                    );
+                }
+                if matches!(cod.kind, TyKind::Fn { .. }) {
+                    return fail(
+                        format!(
+                            "field of `{}` is a curried function into `{}`: a recursive \
+                             function field takes one argument this round — take a pair, or \
+                             a record of the arguments (docs/inductive-tier2-w-lowering.md §1)",
+                            c.name, d.name
+                        ),
+                        f.ty.span,
+                    );
+                }
+                if *implicit {
+                    return fail(crate::IMPLICIT_MARK_REFUSED.to_string(), f.ty.span);
+                }
+                if d.index.is_some() {
+                    return fail(
+                        format!(
+                            "field of `{}` is a function into `{}`, and `{}` is an indexed \
+                             family: the infinitary tier lowers unindexed declarations only \
+                             this round (docs/inductive-tier2-w-lowering.md §1)",
+                            c.name, d.name, d.name
+                        ),
+                        f.ty.span,
+                    );
+                }
+                // `A -> D<…>` itself: classified by `classify_fields`, which
+                // also checks that the occurrence is the uniform one.
+                if matches!(&cod.kind, TyKind::Named { name, .. } if *name == d.name) {
+                    continue;
+                }
+                return fail(
+                    format!(
+                        "field of `{}` is a function whose result mentions `{}` under \
+                         another type: only `A -> {}` itself is lowered \
+                         (docs/inductive-tier2-w-lowering.md §1)",
+                        c.name, d.name, d.name
                     ),
-                    span: sp,
-                });
+                    f.ty.span,
+                );
+            }
+            if let Some(sp) = recursive_fn(&f.ty, &d.name) {
+                return fail(
+                    format!(
+                        "field of `{}` nests a function type mentioning `{}` inside another \
+                         type: only a field that *is* `A -> {}` is lowered \
+                         (docs/inductive-tier2-w-lowering.md §1)",
+                        c.name, d.name, d.name
+                    ),
+                    sp,
+                );
             }
         }
     }
@@ -4775,6 +4987,21 @@ impl Elaborator {
             } => (&**label, Some(&**children)),
             _ => (t, None),
         };
+        // Tier 2: `⟨sup(ℓ; f), q⟩`, and the label is inside the `sup`
+        // (docs/inductive-tier2-w-lowering.md §9). The children are a function,
+        // not a tuple, and nothing reads them back: `inj` at a recursive field
+        // of a tier-2 type is refused before it would look (§9), so each child
+        // field gets the whole value as a stand-in, only to keep the field
+        // list aligned with the declaration.
+        let tier2 = ind.infinitary();
+        let label = match (tier2, crate::spelling::pair_of(t)) {
+            (true, Some((fst, _))) => match &**fst {
+                Term::Sup { label, .. } => &**label,
+                _ => return Ok(None),
+            },
+            (true, None) => return Ok(None),
+            (false, _) => label,
+        };
         let n = ind.ctors.len();
         let mut i = 0usize;
         let mut cur = label;
@@ -4856,6 +5083,10 @@ impl Elaborator {
             }
         } else if ctor.container().is_some() {
             return Ok(None);
+        } else if tier2 {
+            for _ in ctor.kind.iter().filter(|k| k.is_child()) {
+                kids.push(Rc::new(t.clone()));
+            }
         }
         // Re-interleave into declaration order, which is the order `inj`'s
         // field index and every surface message speak in.
@@ -5077,6 +5308,9 @@ impl Elaborator {
         if ind.recursive {
             return self.const_elim_wf(mcx, ind, d_ty, spine, motive, mlvl, scrut, body, 2, span);
         }
+        if ind.infinitary() {
+            return self.const_elim_w(mcx, ind, d_ty, spine, motive, mlvl, scrut, body, span);
+        }
         self.const_case_tree(
             mcx,
             spine,
@@ -5229,6 +5463,17 @@ impl Elaborator {
                      `[{}; …]` depends on the length field before it, so the two sides' \
                      lengths would have to be definitionally equal \
                      (docs/container-fields.md §6)",
+                    ind.ctors[i].name, ind.name
+                ),
+                span,
+            );
+        }
+        if ind.infinitary() && ind.ctors[i].kind[k].is_child() {
+            return err(
+                format!(
+                    "`inj` at the recursive field of `{}` is not supported: `{}` has a \
+                     recursive function field, and a child's injectivity there would need \
+                     funext (docs/inductive-tier2-w-lowering.md §9)",
                     ind.ctors[i].name, ind.name
                 ),
                 span,
