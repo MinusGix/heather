@@ -248,3 +248,96 @@ fn a_local_named_rewrite_is_an_ordinary_name() {
     ok("fn rewrite(a, b: Nat) → Nat { a + b }
         theorem t(a: Nat): rewrite(a, 0) = a { refl }");
 }
+
+// -- unapplied lemmas: arguments found by matching ----------------------------
+
+#[test]
+fn an_unapplied_lemma_takes_its_arguments_from_the_goal() {
+    ok("theorem t(n: Nat, h: n <= 5): 0 + n <= 5 { rewrite(Nat::add_left_zero, h) }");
+}
+
+#[test]
+fn a_partly_applied_lemma_matches_the_rest() {
+    // `Nat::add_comm(k)` still takes `b`: the first `k + _` fixes it, so the
+    // second call reaches the other side.
+    ok("theorem t(k, n, m: Nat, h: n <= m): k + n <= k + m {
+            rewrite(Nat::add_comm(k), Nat::add_comm(k), k.add_le_mono_r(n, m, h))
+        }");
+}
+
+#[test]
+fn a_generic_lemma_matches_at_an_open_element_type() {
+    ok("theorem t<A>(xs: List<A>, h: xs.len() = 3): (xs ++ Nil).len() = 3 {
+            rewrite(List::append_nil, h)
+        }");
+}
+
+#[test]
+fn the_first_instance_is_rewritten_everywhere_and_only_it() {
+    // `0 + a` fixes the instance; `0 + b` is another instance and stays.
+    ok("theorem t(a, b: Nat, h: a + (0 + b) <= a + (0 + b)): (0 + a) + (0 + b) <= (0 + a) + (0 + b) {
+            rewrite(Nat::add_left_zero, h)
+        }");
+    let e = bad("theorem t(a, b: Nat, h: a + b <= a + b): (0 + a) + (0 + b) <= (0 + a) + (0 + b) {
+            rewrite(Nat::add_left_zero, h)
+        }");
+    assert!(e.contains("is expected here") || e.contains("kernel rejected"), "{e}");
+}
+
+#[test]
+fn a_hypothesis_with_a_telescope_is_a_lemma_too() {
+    ok("theorem t(f: Nat → Nat, w: (x: Nat) → f(x) = x, n: Nat, h: n <= 2): f(n) <= 2 {
+            rewrite(w, h)
+        }");
+}
+
+#[test]
+fn a_left_side_that_is_an_argument_is_refused() {
+    let e = bad("theorem t(w: (x: Nat) → x = x + 0, n: Nat, h: n + 0 <= 2): n <= 2 { rewrite(w, h) }");
+    assert!(e.contains("one of its own arguments"), "{e}");
+}
+
+#[test]
+fn an_argument_only_the_right_side_mentions_is_asked_for() {
+    let e = bad("theorem t(w: (x, y: Nat) → x + 0 = x + y * 0, n: Nat, h: n <= 2): n + 0 <= 2 {
+            rewrite(w, h)
+        }");
+    assert!(e.contains("argument 2") && e.contains("give it explicitly"), "{e}");
+    ok("theorem t(w: (x, y: Nat) → x + 0 = x + y * 0, n: Nat, h: n + 7 * 0 <= 2): n + 0 <= 2 {
+            rewrite(w(n, 7), h)
+        }");
+}
+
+#[test]
+fn no_instance_is_an_error_naming_the_goal() {
+    let e = bad("theorem t(n: Nat, h: n <= 5): n + 0 <= 5 { rewrite(Nat::add_left_zero, h) }");
+    assert!(e.contains("no subterm of the goal") && e.contains("is an instance"), "{e}");
+}
+
+// -- occurrences up to conversion -------------------------------------------
+
+#[test]
+fn an_occurrence_spelled_differently_is_found_by_conversion() {
+    // `double(a + 0)` has the left side's head and converts to `double(a)`.
+    ok("fn double(n: Nat) → Nat { n + n }
+        theorem t(a: Nat, h: double(a) = 4, k: 4 <= 4): double(a + 0) <= 4 { rewrite(h, k) }");
+}
+
+#[test]
+fn a_same_headed_term_that_does_not_convert_stays() {
+    // The control: `double(b)` shares the head and is left alone, so the goal
+    // after the rewrite still mentions it. Neutral arguments, so nothing
+    // decides `<=` by computing.
+    ok("fn double(n: Nat) → Nat { n + n }
+        theorem t(a, b: Nat, h: double(a) = 4, k: 4 <= double(b)): double(a + 0) <= double(b) {
+            rewrite(h, k)
+        }");
+    bad("fn double(n: Nat) → Nat { n + n }
+         theorem t(a, b: Nat, h: double(a) = 4, k: 4 <= 4): double(a + 0) <= double(b) { rewrite(h, k) }");
+}
+
+#[test]
+fn every_spelling_is_rewritten_together() {
+    ok("fn double(n: Nat) → Nat { n + n }
+        theorem t(a: Nat, h: double(a) = 4, k: 4 <= 4): double(a + 0) <= double(a) { rewrite(h, k) }");
+}

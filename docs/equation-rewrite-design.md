@@ -54,26 +54,27 @@ statement spelling later without changing meaning.
 
 For one equation `h : a = b` at goal `G`:
 
-1. `M := G.abstract_local(a)` — a type over `Γ, y : S` with every occurrence
-   of `a` replaced by `y`. Occurrence is `==` on de Bruijn terms; no
-   conversion call, so the walk is linear (the synthesis's §3 decisions,
-   inherited, not re-made).
+1. `M := G.abstract_local_any(spellings of a)` — a type over `Γ, y : S` with
+   every occurrence of `a` replaced by `y`. An occurrence is `a` itself
+   (`==` on de Bruijn terms), or, since round 2, a subterm under no binder
+   with `a`'s head that converts to it (§6.2).
 2. `M` is checked to be a type, at the goal's level, by the kernel's type
    formation. Abstracting a term that something *else's* type depends on —
    `v : P(n)` in a goal `v = v`, rewriting `n` — leaves `Id(P(y), v, v)`,
    which is not one. The error says so and points at `j`; it is not left to
    the declaration gate, whose message would name a motive nobody wrote.
 3. `e` is checked at `M[b/y]`.
-4. The term is `J(sym h; y q. M; e) : M[a/y]`, and `M[a/y]` is `G`
-   **syntactically**, because the abstraction replaced only positions that
-   held `a`. `sym h` is written out as `J(h; y q. y = a; refl a)`, so the
+4. The term is `J(sym h; y q. M; e) : M[a/y]`, and `M[a/y]` is `G` —
+   syntactically when every occurrence was `a` itself, up to conversion when
+   one was a respelling, which the kernel's gate checks like any other
+   expected type. `sym h` is written out as `J(h; y q. y = a; refl a)`, so the
    form needs no library import.
 
 Nothing is trusted: the declaration still passes the kernel gate.
 
 **Where `a` is looked for.** The goal as written, then — only when that finds
 nothing — its exposed form (head and an equation's sides one weak-head step
-down, the synthesis's §4.3 rung). Not deeper, and not up to conversion. A
+down, the synthesis's §4.3 rung). Not deeper. A
 goal whose occurrence appears only after reduction (`Nat::Even(Succ(l) +
 Succ(l))` stepping to `Even(Succ(Succ(l) + l))`) is out of reach; such a site
 keeps its `j`, whose motive states the reduct, or restates the goal first
@@ -137,11 +138,78 @@ The per-module counts are in the PR description.
   the hypothesis's *type* as a goal, which is a different elaboration (the
   hypothesis is a term to transport, not a goal to prove) and has no
   customer yet.
-- **No search.** It does not try `sym`, unfold the goal beyond one exposed
-  layer, or match up to conversion. Each would be a guess with a cost on
-  every miss.
+- **No search.** It does not try `sym` or unfold the goal beyond one exposed
+  layer. Conversion is asked only at subterms that already share the left
+  side's head (§6.2), never at every node.
 
-Follow-ups are filed: `issues/rewrite-lemma-instantiation.md`,
-`rewrite-keyed-conversion-matching.md`, `subst-local-equation.md`,
+Follow-ups are filed: `rewrite-lemma-instantiation.md` and
+`rewrite-keyed-conversion-matching.md` (done in round 2, §6),
+`issues/subst-local-equation.md`,
 `rewrite-in-hypothesis.md`, `rewrite-pattern-occurrences.md`,
 `rewrite-setoid-relations.md`, `rewrite-conveniences.md`.
+
+## 6. Round 2: unapplied lemmas and keyed matching
+
+Lean's `rw [Nat.add_comm]` takes the lemma unapplied and finds its arguments
+in the goal; this round does the same, and finds occurrences the way Lean's
+`kabstract` does — by head symbol, then conversion — instead of by `==`
+alone (`issues/rewrite-lemma-instantiation.md`,
+`issues/rewrite-keyed-conversion-matching.md`).
+
+### 6.1 Instantiation
+
+The proof's type is read up to weak head normal form as a telescope
+`Π x₁ … xₖ. a = b` (k ≤ 32). With k = 0 nothing changes. Otherwise the `x`s
+are pattern variables and the goal's terms under no binder
+(`Type::root_terms`, in the order `at :=` numbers by) are tried in turn,
+filtered by **key** — the same application head and argument count as `a`.
+The first that matches fixes every `x`, the proof is applied to them, and
+the step continues with that instance like an applied equation: every
+occurrence *of that instance* is rewritten, which is Lean's semantics.
+`rewrite(Nat::add_comm(k), …)` (a partial application) and a hypothesis of
+telescope type (`w : (x: Nat) → f(x) = x`) are the same case.
+
+Matching is first-order along application spines: a variable binds the
+subterm it meets (and must meet a convertible one if already bound); a part
+of the pattern that mentions no variable must be equal or convertible; a
+part that mentions variables but is not an application (a constructor
+value annotated with a type argument, `Nil` at `A`) is deferred until the
+variables it mentions are bound by other arguments, then instantiated and
+compared. Spine annotations are not read during matching — the instance is
+built from the bindings and §6.2's conversion test re-checks it, so a match
+that read past a differing annotation finds no occurrence rather than a
+wrong one.
+
+Refused: a left side that is itself one of the arguments (it would match
+every subterm), and an argument only the right side mentions (nothing in the
+goal determines it — the error names it and asks for it explicitly).
+
+Applying an unapplied commutativity lemma twice rewrites the first instance
+back (`rewrite(Nat::add_comm, Nat::add_comm, …)` on `k + n <= k + m` turns
+`k + n` into `n + k`, then the first `_ + _` is `n + k` again). That is
+Lean's behaviour too and the fix is the same: pin an argument,
+`Nat::add_comm(k)`.
+
+### 6.2 Keyed occurrences
+
+An occurrence of `a` is `a` itself or a term under no binder, with `a`'s
+head **global** and argument count, that converts to `a` at its type
+(`MotiveSynthesisElab::motive_candidate_converts`, which also checks the
+candidate's own type, the guard the motive synthesis needed at irrelevant
+types). At most 256 candidates per step are tested; misses cost one
+bounded conversion each, and a goal with no same-headed term costs none.
+All spellings are abstracted in one pass (`abstract_local_any`), so the
+motive never sees half a rewrite; `at :=` numbers them together
+(`abstract_local_at` takes several patterns).
+
+A local-variable head is matched by `==` only: a variable converts to
+nothing but itself short of a `let`, and the elaborator inlines those.
+
+What this recovered, measured by re-running the per-site conversion over
+the `j` sites round 1 left: 13 more convert (bitvec 6, utf8 4, int 2, nat 1)
+— occurrences whose spelling differed from the equation's below the head,
+the `BitVec::ofNat_toNat` sites among them. The rest are what §4 already
+said: motives stated about a reduct the goal reaches only after more than a
+head step, and motives that mention the proof. And the bit-vector site PR #93 had to write with `sym`
+(`ofNat(toNat(x))`, whose implicit width was spelled differently in the goal
+and the equation) is `rewrite(none, refl)` again.

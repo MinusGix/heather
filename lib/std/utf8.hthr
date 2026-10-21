@@ -517,11 +517,8 @@ theorem decode_encode_chars(cs: List<Char>):
         Cons(c, more) => {
             let ih = decode_encode_chars(more);
             trans(decode_step(width_of(c.code), c.code, encode_chars(more)),
-                j(sym(decode_char_encode_char(c, encode_chars(more))),
-                    λ y _ => push_char(y, decode(encode_chars(more)))
-                        = Some(String(chars := Cons(c, more))),
-                    rewrite(ih,
-                        refl)))
+                rewrite(decode_char_encode_char(c, encode_chars(more)), ih,
+                        refl))
         },
     }
 }
@@ -840,9 +837,7 @@ theorem encode_2_of(b, c1: BitVec(8), hb: Header(C2, b),
     let v = cont_payload(c1).concat(lead2_payload(b));
     rewrite(width_of_bounds(W2, code_2(b, c1),
             And(low, Succ(code_2(b, c1)).leb_complete(0x800, BitVec::toNat_lt_pow(11, v)))),
-        j(sym(BitVec::ofNat_toNat(11, v)),
-            λ p _ => Cons(lead2_byte(p.drop_low(6, 5)), Cons(cont_byte(p.take_low(6, 5)), Nil<BitVec(8)>))
-                = [b, c1],
+        rewrite(BitVec::ofNat_toNat(11, v),
             List::cons_eq<BitVec(8)>([cont_byte(cont_payload(c1))], [c1], lead2_byte(lead2_payload(b)), b,
                 rebuild(5, 3, b, BitVec::from_bits([False, True, True]), hb),
                 cong_fn(λ (z: BitVec(8)) => [z],
@@ -858,11 +853,7 @@ theorem encode_3_of(b, c1, c2: BitVec(8), hb: Header(C3, b),
     rewrite(width_of_bounds(W3, code_3(b, c1, c2),
             And(low, Succ(code_3(b, c1, c2)).leb_complete(0x10000,
                 BitVec::toNat_lt_pow(16, v)))),
-        j(sym(BitVec::ofNat_toNat(16, v)),
-            λ p _ => Cons(lead3_byte(p.drop_low(6, 10).drop_low(6, 4)),
-                Cons(cont_byte(p.drop_low(6, 10).take_low(6, 4)),
-                    Cons(cont_byte(p.take_low(6, 10)), Nil<BitVec(8)>)))
-                = [b, c1, c2],
+        rewrite(BitVec::ofNat_toNat(16, v),
             List::cons_eq<BitVec(8)>(
                 [cont_byte(cont_payload(c1)), cont_byte(cont_payload(c2))], [c1, c2], lead3_byte(lead3_payload(b)), b,
                 rebuild(4, 4, b, BitVec::from_bits([False, True, True, True]), hb),
@@ -881,12 +872,7 @@ theorem encode_4_of(b, c1, c2, c3: BitVec(8), hb: Header(C4, b),
     let v = cont_payload(c3).concat(
         cont_payload(c2).concat(cont_payload(c1).concat(lead4_payload(b))));
     rewrite(width_of_bounds(W4, code_4(b, c1, c2, c3), low),
-        j(sym(BitVec::ofNat_toNat(21, v)),
-            λ p _ => Cons(lead4_byte(p.drop_low(6, 15).drop_low(6, 9).drop_low(6, 3)),
-                Cons(cont_byte(p.drop_low(6, 15).drop_low(6, 9).take_low(6, 3)),
-                    Cons(cont_byte(p.drop_low(6, 15).take_low(6, 9)),
-                        Cons(cont_byte(p.take_low(6, 15)), Nil<BitVec(8)>))))
-                = [b, c1, c2, c3],
+        rewrite(BitVec::ofNat_toNat(21, v),
             List::cons_eq<BitVec(8)>(
                 [cont_byte(cont_payload(c1)), cont_byte(cont_payload(c2)),
                     cont_byte(cont_payload(c3))], [c1, c2, c3], lead4_byte(lead4_payload(b)), b,

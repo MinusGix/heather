@@ -1859,15 +1859,15 @@ theorem BitVec::one_add(x: Nat): 1 + x = Succ(x) {
 
 theorem BitVec::odd_bit_digit(b: Bool, m: Nat): BitVec::odd_bit(Nat::of_bit(b) + Nat::twice(m)) = b {
     match b as λ x => BitVec::odd_bit(Nat::of_bit(x) + Nat::twice(m)) = x {
-        False => j(sym(Nat::add_left_zero(Nat::twice(m))), λ y _ => BitVec::odd_bit(y) = False, BitVec::odd_bit_twice(m)),
-        True => j(sym(BitVec::one_add(Nat::twice(m))), λ y _ => BitVec::odd_bit(y) = True, BitVec::odd_bit_succ_twice(m)),
+        False => rewrite(Nat::add_left_zero(Nat::twice(m)), BitVec::odd_bit_twice(m)),
+        True => rewrite(BitVec::one_add(Nat::twice(m)), BitVec::odd_bit_succ_twice(m)),
     }
 }
 
 theorem BitVec::half_digit(b: Bool, m: Nat): Nat::half(Nat::of_bit(b) + Nat::twice(m)) = m {
     match b as λ x => Nat::half(Nat::of_bit(x) + Nat::twice(m)) = m {
-        False => j(sym(Nat::add_left_zero(Nat::twice(m))), λ y _ => Nat::half(y) = m, BitVec::half_twice(m)),
-        True => j(sym(BitVec::one_add(Nat::twice(m))), λ y _ => Nat::half(y) = m, BitVec::half_succ_twice(m)),
+        False => rewrite(Nat::add_left_zero(Nat::twice(m)), BitVec::half_twice(m)),
+        True => rewrite(BitVec::one_add(Nat::twice(m)), BitVec::half_succ_twice(m)),
     }
 }
 
@@ -1897,9 +1897,9 @@ theorem BitVec::ofNat_toNat(n: Nat): (x: BitVec(n)) → BitVec::ofNat(x.toNat())
 // successor the bit may add is absorbed by doubling the strict inequality.
 theorem BitVec::bit_twice_lt(b: Bool, m, p: Nat, h: m < p): Nat::of_bit(b) + Nat::twice(m) < Nat::twice(p) {
     match b as λ x => Nat::of_bit(x) + Nat::twice(m) < Nat::twice(p) {
-        False => j(sym(Nat::add_left_zero(Nat::twice(m))), λ y _ => y < Nat::twice(p),
+        False => rewrite(Nat::add_left_zero(Nat::twice(m)),
             Nat::twice_lt_twice_iff(m, p).mpr(h)),
-        True => j(sym(BitVec::one_add(Nat::twice(m))), λ y _ => y < Nat::twice(p),
+        True => rewrite(BitVec::one_add(Nat::twice(m)),
             Nat::twice_le_twice_iff(Succ(m), p).mpr(h)),
     }
 }
@@ -1931,7 +1931,7 @@ theorem BitVec::drop_low_zero_of_lt(n: Nat): (m: Nat) → (x: BitVec(m + n)) →
         Zero => λ m x h => {
             let none = Nat::le_antisym(x.toNat(), 0, h, (x.toNat()).nonneg());
             trans(sym(BitVec::ofNat_toNat(m, x)),
-                trans(rewrite(sym(none), refl),
+                trans(rewrite(none, refl),
                     BitVec::ofNat_zero(m)))
         },
         Succ(k, ih) => λ m x h => {

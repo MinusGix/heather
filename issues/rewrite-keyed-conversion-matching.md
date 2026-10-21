@@ -1,6 +1,6 @@
 ---
 title: Find a rewrite's occurrences by head symbol, then conversion
-status: open
+status: closed
 labels: [frontend,elaboration,proofs,ergonomics]
 area: tactics
 milestone: [tac-general]
@@ -37,3 +37,13 @@ claims a number.
 
 - **[[rewrite-lemma-instantiation]]** shares the candidate walk; the two can
   land together.
+
+## Log
+
+- 2026-10-21: done (`docs/equation-rewrite-design.md` §6.2). Occurrences are
+  the left side plus every subterm under no binder with its global head and
+  arity that converts to it (type checked too), capped at 256 candidates,
+  abstracted in one pass; `at :=` numbers all spellings together. Measured
+  over the `j` sites round 1 left: 13 more convert; the rest need reduction
+  past one head step or mention the proof. The `bitvec.hthr` `ofNat(toNat(x))`
+  site is `rewrite(none, refl)` again.

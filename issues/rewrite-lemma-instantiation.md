@@ -1,6 +1,6 @@
 ---
 title: Instantiate a rewrite's equation by matching its left side against the goal
-status: open
+status: closed
 labels: [frontend,elaboration,proofs,ergonomics]
 area: tactics
 milestone: [tac-general]
@@ -32,3 +32,14 @@ asks for it explicitly.
 ## What it assumes from elsewhere
 
 - **[[equation-rewrite-in-goal]]** (closed) owns the form and its motive.
+
+## Log
+
+- 2026-10-21: done with [[rewrite-keyed-conversion-matching]]
+  (`docs/equation-rewrite-design.md` §6.1). The proof's type is opened as a
+  telescope (≤ 32 binders); the first same-keyed goal subterm under no binder
+  that matches fixes the arguments; spine matching is first-order, non-spine
+  parts that mention variables are compared once those are bound. Refused: a
+  left side that is a bare argument, and an argument only the right side
+  mentions. Partial applications and telescope-typed hypotheses are the same
+  case.

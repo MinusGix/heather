@@ -1064,13 +1064,13 @@ theorem Int::add_le_mono_r(self a, b, c: Int, h: a <= b): a + c <= b + c {
           rewrite(b.add_zero(), h)),
         λ (k: Nat) (ih: a + OfNat(k) <= b + OfNat(k)) =>
             j(sym(a.add_isucc(OfNat(k))), λ y q => y <= b + OfNat(Succ(k)),
-              j(sym(b.add_isucc(OfNat(k))), λ y q => (a + OfNat(k)).isucc() <= y,
+              rewrite(b.add_isucc(OfNat(k)),
               (a + OfNat(k)).le_isucc(b + OfNat(k), ih))),
         j(sym(a.add_neg_one()), λ y q => y <= b + NegSucc(0),
           rewrite(b.add_neg_one(), a.le_ipred(b, h))),
         λ (k: Nat) (ih: a + NegSucc(k) <= b + NegSucc(k)) =>
             j(sym(a.add_ipred(NegSucc(k))), λ y q => y <= b + NegSucc(Succ(k)),
-              j(sym(b.add_ipred(Int::NegSucc(k))), λ y q => (a + NegSucc(k)).ipred() <= y,
+              rewrite(b.add_ipred(Int::NegSucc(k)),
                 (a + NegSucc(k)).le_ipred(b + NegSucc(k), ih))),
         c)
 }

@@ -22,6 +22,7 @@ use heather_kernel::term::{LocalSubst, LocalVar, Term, Type};
 use heather_kernel::typing;
 use heather_syntax::{Expr, ExprKind, NamedArg, Span};
 
+use crate::matching::MotiveSynthesisElab;
 use crate::{Cx, ElabError, Elaborator, R};
 
 impl Elaborator {
@@ -87,16 +88,7 @@ impl Elaborator {
             return self.elab_check(cx, body, goal, lvl);
         };
         let (proof, proof_ty, _) = self.elab_infer(cx, h)?;
-        let Type::Id { level, ty, lhs, rhs } = self.whnf(cx, &proof_ty, h.span)? else {
-            let shown = self.display_type(cx, &proof_ty);
-            return Err(ElabError::Elab {
-                msg: format!(
-                    "`rewrite` rewrites along an equation `a = b`, and this proof is of `{shown}`\n  \
-                     hint: a relation other than `=` rewrites with `rel_cong(h)` or a `calc` step"
-                ),
-                span: h.span,
-            });
-        };
+        let (proof, Equation { level, ty, lhs, rhs }) = self.rewrite_instance(cx, h, proof, &proof_ty, goal)?;
         let motive = self.rewrite_motive(cx, h, at, goal, &ty, &level, &lhs, &rhs, lvl)?;
         // The goal after this step: `M[b/y]`.
         let next = motive.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(&rhs)));
@@ -153,15 +145,17 @@ impl Elaborator {
     ) -> R<Type> {
         let shown = |t: &Term| self.spell_term_clean(cx, t).map_or_else(String::new, |s| format!(" `{s}`"));
         let exposed = || crate::matching::expose(self, cx, goal, h.span);
+        let spellings = |g: &Type| self.spellings(cx, g, lhs, carrier, carrier_level);
         let motive = match at {
-            None => goal
-                .abstract_local(lhs)
-                .or_else(|| exposed().and_then(|g| g.abstract_local(lhs))),
+            None => goal.abstract_local_any(&spellings(goal)).or_else(|| {
+                let g = exposed()?;
+                g.abstract_local_any(&spellings(&g))
+            }),
             // Numbered against the goal as written, and only that: a number
             // that meant one thing as written and another after reduction
             // would be worse than a refusal.
             Some(at) => {
-                let (motive, seen) = goal.abstract_local_at(lhs, at);
+                let (motive, seen) = goal.abstract_local_at(&spellings(goal), at);
                 if let Some(&past) = at.iter().find(|&&k| k > seen) {
                     return Err(ElabError::Elab {
                         msg: format!(
@@ -191,8 +185,8 @@ impl Elaborator {
             return Err(ElabError::Elab {
                 msg: format!(
                     "`rewrite`: the goal `{}` does not mention the equation's left side{}\n  \
-                     note: occurrences are matched as elaborated, implicit arguments included, \
-                     and through at most one unfolding of the goal{hint}",
+                     note: an occurrence is a subterm with the left side's head that converts \
+                     to it, in the goal as written or one unfolding of it{hint}",
                     self.display_type(cx, goal),
                     shown(lhs)
                 ),
@@ -214,6 +208,245 @@ impl Elaborator {
             }
         })?;
         Ok(motive)
+    }
+    /// The equation `h` proves, instantiated. A proof whose type is a Π
+    /// telescope ending in an equation — a lemma left unapplied, or applied
+    /// to fewer arguments than it takes — has its remaining arguments found
+    /// by matching the left side against the goal: the first subterm, in the
+    /// order [`Type::root_terms`] meets them, that has the left side's head
+    /// and matches it fixes them, and the proof is applied to them.
+    fn rewrite_instance(
+        &self,
+        cx: &Cx,
+        h: &Expr,
+        proof: Term,
+        proof_ty: &Type,
+        goal: &Type,
+    ) -> R<(Term, Equation)> {
+        let not_an_equation = |ty: &Type| ElabError::Elab {
+            msg: format!(
+                "`rewrite` rewrites along an equation `a = b`, and this proof is of `{}`\n  \
+                 hint: a relation other than `=` rewrites with `rel_cong(h)` or a `calc` step",
+                self.display_type(cx, ty)
+            ),
+            span: h.span,
+        };
+        // Open the telescope: `pcx` is Γ, x₁ … xₖ, and the equation is
+        // scoped there.
+        let mut pcx = cx.clone();
+        let mut k = 0u32;
+        let mut cur = self.whnf(cx, proof_ty, h.span)?;
+        let (level, ty, lhs, rhs) = loop {
+            match cur {
+                Type::Id { level, ty, lhs, rhs } => break (level, ty, lhs, rhs),
+                Type::Pi { dom_level, dom, cod, .. } if k < MAX_OPEN => {
+                    pcx.push(format!("_{k}"), (*dom).clone(), dom_level);
+                    k += 1;
+                    cur = self.whnf(&pcx, &cod, h.span)?;
+                }
+                _ => return Err(not_an_equation(proof_ty)),
+            }
+        };
+        if k == 0 {
+            return Ok((proof, Equation { level, ty, lhs, rhs }));
+        }
+        if matches!(&*lhs, Term::Var(x) if x.0 < k) {
+            return Err(ElabError::Elab {
+                msg: "`rewrite`: this equation's left side is one of its own arguments, so it \
+                      would match every subterm; apply it to that argument"
+                    .into(),
+                span: h.span,
+            });
+        }
+        let found = goal_terms(goal, |t| same_key(&lhs, t, k), || crate::matching::expose(self, cx, goal, h.span))
+            .into_iter()
+            .take(CANDIDATES)
+            .find_map(|t| {
+                let mut binds = vec![None; k as usize];
+                self.match_pattern(cx, &lhs, &t, k, &mut binds).then_some(binds)
+            });
+        let Some(binds) = found else {
+            return Err(ElabError::Elab {
+                msg: format!(
+                    "`rewrite`: no subterm of the goal `{}` is an instance of this equation's \
+                     left side\n  note: an instance has the left side's head, and its other \
+                     parts convert",
+                    self.display_type(cx, goal)
+                ),
+                span: h.span,
+            });
+        };
+        // Binder `j` (outermost first) is `Var(k - 1 - j)` in `pcx`.
+        let mut args = Vec::with_capacity(k as usize);
+        for j in 0..k {
+            let Some(arg) = binds[(k - 1 - j) as usize].clone() else {
+                return Err(ElabError::Elab {
+                    msg: format!(
+                        "`rewrite`: matching the left side does not determine this equation's \
+                         argument {}, which only its right side mentions; give it explicitly",
+                        j + 1
+                    ),
+                    span: h.span,
+                });
+            };
+            args.push(arg);
+        }
+        let mut term = proof;
+        let mut ty_now = proof_ty.clone();
+        for arg in args {
+            let Type::Pi { dom_level, cod_level, dom, cod } = self.whnf(cx, &ty_now, h.span)? else {
+                return Err(not_an_equation(proof_ty));
+            };
+            ty_now = cod.inst_top(0, &arg);
+            term = crate::spelling::checked_app(Rc::new(term), dom_level, cod_level, dom, cod, arg);
+        }
+        let Type::Id { level, ty, lhs, rhs } = self.whnf(cx, &ty_now, h.span)? else {
+            return Err(not_an_equation(proof_ty));
+        };
+        Ok((term, Equation { level, ty, lhs, rhs }))
+    }
+
+    /// First-order matching of `pat` (scoped in Γ, x₁ … xₖ, the `x`s its
+    /// variables) against `t` (scoped in Γ), along application spines. A part
+    /// of `pat` that is not an application is compared once every variable
+    /// it mentions is bound — instantiated, then equal to or convertible with
+    /// its counterpart — so a type argument bound by one argument decides a
+    /// constructor value's annotation in another. Annotations of the spines
+    /// themselves are not read: the instance is built from the bindings, and
+    /// the caller's abstraction re-checks it by conversion, which decides.
+    fn match_pattern(&self, cx: &Cx, pat: &Term, t: &Rc<Term>, k: u32, binds: &mut [Option<Rc<Term>>]) -> bool {
+        let mut deferred = Vec::new();
+        if !self.match_spine(cx, pat, t, k, binds, &mut deferred) {
+            return false;
+        }
+        deferred.into_iter().all(|(p, t)| match instantiate(&cx.gamma, &p, k, binds) {
+            Some(p) => p == *t || self.terms_convert(cx, &p, &t),
+            None => false,
+        })
+    }
+
+    fn match_spine(
+        &self,
+        cx: &Cx,
+        pat: &Term,
+        t: &Rc<Term>,
+        k: u32,
+        binds: &mut [Option<Rc<Term>>],
+        deferred: &mut Vec<(Term, Rc<Term>)>,
+    ) -> bool {
+        if let Term::Var(x) = pat
+            && x.0 < k
+        {
+            let slot = &mut binds[x.0 as usize];
+            return match slot {
+                Some(bound) => **bound == **t || self.terms_convert(cx, &bound.clone(), t),
+                None => {
+                    *slot = Some(Rc::clone(t));
+                    true
+                }
+            };
+        }
+        if let Some(closed) = crate::strengthen_tm(&cx.gamma, pat, k) {
+            return closed == **t || self.terms_convert(cx, &closed, t);
+        }
+        match (crate::spelling::app_of(pat), crate::spelling::app_of(t)) {
+            (Some((pf, pa)), Some((tf, ta))) => {
+                let (tf, ta) = (Rc::clone(tf), Rc::clone(ta));
+                self.match_spine(cx, pf, &tf, k, binds, deferred) && self.match_spine(cx, pa, &ta, k, binds, deferred)
+            }
+            (Some(_), None) => false,
+            _ => {
+                deferred.push((pat.clone(), Rc::clone(t)));
+                true
+            }
+        }
+    }
+
+    /// The spellings of `lhs` the goal uses: `lhs` itself, and every term
+    /// under no binder with `lhs`'s head (a global's application) that
+    /// converts to it, capped. Abstracting them all in one pass is the
+    /// match-motive synthesis's §4.4 move: half a rewrite is worse than none.
+    fn spellings(&self, cx: &Cx, goal: &Type, lhs: &Term, carrier: &Type, level: &Level) -> Vec<Term> {
+        let mut out = vec![lhs.clone()];
+        let (head, _) = crate::spelling::app_spine(lhs);
+        if !matches!(head, Term::GlobalTm { .. }) {
+            return out;
+        }
+        for t in goal.root_terms().into_iter().filter(|t| same_key(lhs, t, 0)).take(CANDIDATES) {
+            if !out.iter().any(|o| *o == *t)
+                && self.motive_candidate_converts(cx, &t, lhs, carrier, level)
+            {
+                out.push((*t).clone());
+            }
+        }
+        out
+    }
+
+    /// Do two terms scoped in `cx` convert, at the first one's type?
+    fn terms_convert(&self, cx: &Cx, a: &Term, b: &Term) -> bool {
+        let oracle = self.goal_oracle();
+        let Ok((ty, level)) = typing::infer_term(oracle.world(), 0, Layer::Prog, &cx.gamma, a, self.fuel) else {
+            return false;
+        };
+        self.motive_candidate_converts(cx, b, a, &ty, &level)
+    }
+}
+
+/// The equation a rewrite step uses, instantiated, scoped in Γ.
+struct Equation {
+    level: Level,
+    ty: Rc<Type>,
+    lhs: Rc<Term>,
+    rhs: Rc<Term>,
+}
+
+/// Arguments an unapplied equation may leave open.
+const MAX_OPEN: u32 = 32;
+
+/// Candidate subterms tried per equation, in either search: each costs a
+/// match or a conversion call.
+const CANDIDATES: usize = 256;
+
+/// The goal's terms under no binder that `keep` accepts, and — only when the
+/// goal as written has none — its exposed form's.
+fn goal_terms(goal: &Type, keep: impl Fn(&Term) -> bool, exposed: impl FnOnce() -> Option<Type>) -> Vec<Rc<Term>> {
+    let terms: Vec<_> = goal.root_terms().into_iter().filter(|t| keep(t)).collect();
+    if !terms.is_empty() {
+        return terms;
+    }
+    exposed().map_or_else(Vec::new, |g| g.root_terms().into_iter().filter(|t| keep(t)).collect())
+}
+
+/// `pat`, scoped in Γ, x₁ … xₖ, with every `x` replaced by its binding
+/// (`binds[i]` is `Var(i)`'s); `None` while one it mentions is unbound —
+/// told by instantiating the unbound ones at two different placeholders,
+/// [`crate::mentions_binder`]'s marker trick.
+fn instantiate(gamma: &heather_kernel::term::LocalCtx, pat: &Term, k: u32, binds: &[Option<Rc<Term>>]) -> Option<Term> {
+    let at = |placeholder: &Term| {
+        let mut sigma = LocalSubst::id(gamma);
+        for i in (0..k).rev() {
+            sigma = sigma.extended(binds[i as usize].clone().unwrap_or_else(|| Rc::new(placeholder.clone())));
+        }
+        pat.apply_local(&sigma)
+    };
+    let one = at(&Term::Zero);
+    (binds.iter().all(Option::is_some) || one == at(&Term::Succ(Rc::new(Term::Zero)))).then_some(one)
+}
+
+/// The key a candidate must share with a pattern: the same application
+/// head (a pattern variable never heads one here) and the same number of
+/// arguments. `k` is how many binders the pattern is scoped under beyond
+/// the candidate.
+fn same_key(pat: &Term, t: &Term, k: u32) -> bool {
+    let (ph, pargs) = crate::spelling::app_spine(pat);
+    let (th, targs) = crate::spelling::app_spine(t);
+    if pargs.len() != targs.len() {
+        return false;
+    }
+    match (ph, th) {
+        (Term::GlobalTm { var: a, .. }, Term::GlobalTm { var: b, .. }) => a == b,
+        (Term::Var(a), Term::Var(b)) => a.0 >= k && a.0 - k == b.0,
+        _ => *ph == th.shift_local(k),
     }
 }
 

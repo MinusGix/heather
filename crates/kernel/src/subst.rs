@@ -1451,6 +1451,29 @@ impl Mapper for AbstractLocal<'_> {
     }
 }
 
+/// Collects [`Type::root_terms`]: a mapper that changes nothing and only
+/// looks, through [`Mapper::pre_tm`], at the nodes under no binder.
+struct RootTerms {
+    out: Vec<Rc<Term>>,
+    changes: u64,
+}
+
+impl Mapper for RootTerms {
+    const LOCAL_OP: bool = true;
+    const NAME: &'static str = "root_terms";
+
+    fn changes(&mut self) -> &mut u64 {
+        &mut self.changes
+    }
+
+    fn pre_tm(&mut self, t: &Rc<Term>, at: Depths) -> Option<Term> {
+        if at == Depths::default() {
+            self.out.push(Rc::clone(t));
+        }
+        None
+    }
+}
+
 /// Global substitution `σ` (instantiation form, see [`GlobalSubst`]).
 struct SubstGlobal<'a> {
     sigma: &'a GlobalSubst,
@@ -1799,13 +1822,28 @@ impl Type {
     ///
     /// Still the inverse of the singleton substitution, by the same argument:
     /// every replaced position held `pat`, so `[pat/z]` gives `self` back.
-    pub fn abstract_local_at(&self, pat: &Term, at: &[u32]) -> (Option<Type>, u32) {
-        let pats = [(pat.clone(), Term::Var(LocalVar(0)))];
+    ///
+    /// Several patterns are several spellings of one term, as in
+    /// [`Self::abstract_local_any`], numbered together: an occurrence is a
+    /// position holding any of them.
+    pub fn abstract_local_at(&self, pats: &[Term], at: &[u32]) -> (Option<Type>, u32) {
+        let z = Term::Var(LocalVar(0));
+        let pats: Vec<(Term, Term)> = pats.iter().map(|p| (p.clone(), z.clone())).collect();
         let mut m = AbstractLocal {
             pats: &pats, witness: Vec::new(), witness_under: Vec::new(), hits: 0, select: Some(at), seen: 0, changes: 0,
         };
         let out = map_type(&self.shift_local(1), &mut m, Depths::default());
         ((m.hits > 0).then_some(out), m.seen)
+    }
+
+    /// Every term node of `self` that sits under no binder of any of the
+    /// three namespaces — so is scoped in `self`'s own context — in the order
+    /// the traversal meets them (the order [`Self::abstract_local_at`]
+    /// numbers by), outermost first. A node's subterms follow it.
+    pub fn root_terms(&self) -> Vec<Rc<Term>> {
+        let mut m = RootTerms { out: Vec::new(), changes: 0 };
+        map_type(self, &mut m, Depths::default());
+        m.out
     }
 
     fn abstract_pats(&self, pats: &[(Term, Term)]) -> Option<Type> {

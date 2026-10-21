@@ -1011,7 +1011,7 @@ theorem Nat::le_div_of_mul_le(self n: Nat, d: Pos<Nat>, k: Nat, h: d * k <= n): 
         Inl(fits) => fits,
         Inr(short) => false_elim(n.lt_irrefl(Succ(n).le_trans(d * Succ(n.div(d)), n,
             j(n.div_mul_add_mod(d), λ y _ => Succ(y) <= d * n.div(d) + d,
-                j(n.div(d).mul_comm(d), λ y _ => Succ(n.div(d) * d + n.mod(d)) <= y + d,
+                rewrite(sym(n.div(d).mul_comm(d)),
                     (n.div(d) * d).add_le_mono_l(Succ(n.mod(d)), d, n.mod_lt(d)))),
             (d * Succ(n.div(d))).le_trans(d * k, n, d.mul_le_mono_l(Succ(n.div(d)), k, n.div(d).lt_of_not_le(k, short)), h)))),
     }
