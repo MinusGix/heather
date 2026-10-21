@@ -1,10 +1,10 @@
 ---
 title: Write the command's trace so stdout and status follow by homomorphism
-status: open
+status: closed
 labels: [native,semantics,proofs,design]
 area: heather-in-heather
 created: 2026-10-07
-updated: 2026-10-07
+updated: 2026-10-21
 ---
 
 The command's trace and its observables are four recursions over one
@@ -37,3 +37,7 @@ short.
   does not conflict with them (it needs no recursive function fields).
 - **[[native-wc-command-residue]]** owns the missing corollary. Assumed here:
   only that it is still unwritten.
+
+## Log
+
+- 2026-10-21: Closed as not planned: the layer it is about was burned in B1 with the hand-proved native process stack (docs/native-program-logic-design.md §3.1, [[native-burn-process-stack]]); the last commit with it is 189659d (tag native-v0). The rebuild states programs as interaction trees and compiles them, so this per-program work does not come back in this form.

@@ -4,7 +4,7 @@ status: open
 labels: [stdlib,native,surface-syntax,design]
 area: heather-in-heather
 created: 2026-10-07
-updated: 2026-10-07
+updated: 2026-10-21
 ---
 
 A byte-reading program spells its byte type `BitVec(8)` everywhere and writes
@@ -51,3 +51,7 @@ Questions to settle:
   connectives keep lowering as they do.
 - **[[bool-from-decidable-prop]]** owns whether `decide_bit<…>()` can be
   dropped from a Bool-valued body.
+
+## Log
+
+- 2026-10-21: The code cited above (crates/elab/tests/fixtures/open_read_close.hthr, examples/x86-native/wc.hthr) was burned in B1 ([[native-burn-process-stack]]; last at 189659d, tag native-v0); the language ask stands on its own.

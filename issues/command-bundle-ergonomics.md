@@ -1,10 +1,10 @@
 ---
 title: A command bundle that states its columns once
-status: open
+status: closed
 labels: [native,surface-syntax,ergonomics]
 area: heather-in-heather
 created: 2026-10-07
-updated: 2026-10-07
+updated: 2026-10-21
 ---
 
 The end of `wc.hthr` (`:75-91`) carries bookkeeping a reader has to check by
@@ -38,3 +38,7 @@ fn wc_command() → Command<WcState>(counting(wc_step), WcState(0, 0, 0, False),
 
 - **[[native-wc-as-a-command]]** owns `Command` as built. Assumed here: only
   that its fields may change shape while the claim stays the same.
+
+## Log
+
+- 2026-10-21: Closed as not planned: the layer it is about was burned in B1 with the hand-proved native process stack (docs/native-program-logic-design.md §3.1, [[native-burn-process-stack]]); the last commit with it is 189659d (tag native-v0). The rebuild states programs as interaction trees and compiles them, so this per-program work does not come back in this form.

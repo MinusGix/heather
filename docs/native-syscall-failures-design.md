@@ -1,5 +1,9 @@
 # Syscall failures in the trace and in `wc -l` — design
 
+> **Burned in B1 (2026-10-21).** The code this document describes was deleted with the
+> hand-proved process stack (`docs/native-program-logic-design.md` §3.1); the document
+> stays for its reasoning. The last commit with the code is `189659d` (tag `native-v0`).
+
 Status: **landed 2026-09-27.** The probes' results are in §10; the amendments
 made while building are in §9 and override the sections above them. Owner:
 `issues/linux-syscall-trace-model.md` (decisions logged there 2026-09-27).

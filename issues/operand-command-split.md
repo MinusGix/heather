@@ -1,10 +1,10 @@
 ---
 title: Split the operand loop from what wc prints, with cat as a second client
-status: open
+status: closed
 labels: [native,x86,design]
 area: heather-in-heather
 created: 2026-10-07
-updated: 2026-10-07
+updated: 2026-10-21
 ---
 
 The command library is named for commands in general but encodes `wc`'s
@@ -37,3 +37,7 @@ counts in registers (`elf64_command.hthr:55`), at most eight columns
   the same thing.
 - **[[native-label-assembler]]** and [[command-trace-by-append]] make this
   much cheaper; neither is required first.
+
+## Log
+
+- 2026-10-21: Closed as not planned: the layer it is about was burned in B1 with the hand-proved native process stack (docs/native-program-logic-design.md §3.1, [[native-burn-process-stack]]); the last commit with it is 189659d (tag native-v0). The rebuild states programs as interaction trees and compiles them, so this per-program work does not come back in this form.
