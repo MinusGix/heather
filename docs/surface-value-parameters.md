@@ -1,7 +1,8 @@
 # Value parameters on `record`: the surface's value-indexed Σ
 
 Status: **landed**, 2026-08-01; on `inductive` 2026-10-21 (§6,
-`issues/tier2-value-parameters.md`). Tracking issue: `issues/surface-existential.md`
+`issues/tier2-value-parameters.md`); inference position 2026-10-21 (§4.1,
+`issues/value-param-constructor-implicit-inference.md`). Tracking issue: `issues/surface-existential.md`
 (route 1). The feasibility report this implements is
 `docs/surface-existential-investigation.md`; its §C is the gap list, its §F the
 consumer shapes, its §H the risks. Read that first — this document records the
@@ -145,9 +146,42 @@ fn h4() -> Halts(4) { Halts { n: 2, h: refl } }   -- literal spelling
 fn from_argument() -> Nat { takes(Halts(2, refl)) }
 ```
 
-Inference position is a named diagnostic that says which positions do work.
-`R<Nat>(a, b)` is *not* a spelling: `<…>` supplies type arguments, and value
-arguments are a different list it cannot reach.
+Inference position was, until §4.1, a named diagnostic that said which
+positions do work. `R<Nat>(a, b)` is *not* a spelling: `<…>` supplies type
+arguments, and value arguments are a different list it cannot reach.
+
+### 4.1 Inference position, since 2026-10-21
+
+The reading above was too pessimistic: the parameter's occurrences in a field
+type are rigid spines (`Finite(F)`, `F.specials.has_inf().IsTrue()`), so
+recovering it is the same first-order problem a call poses when its domain is
+`Float(?F)`, and the call unifier already solves that one. Where nothing
+checks a construction, `infer_ctor` now hands value parameters to
+`infer_ctor_values` (`constructor.rs`), after the type parameters are found by
+the narrow reading:
+
+1. the constructor's payload Σ is lowered (`lower_ctor`) with the value
+   parameters as binders past the use site, each declared type read under the
+   earlier ones;
+2. those binders become the metas of a scratch world, exactly as a callee's
+   `Π` binders do in `apply_implicit`;
+3. the payload fields are walked in order: a field type with an unsolved meta
+   is unified with its argument's inferred type (`unify_arg_ty`, the call
+   path's entry), a meta-free one is *checked*, so `refl` and lambdas there
+   cost nothing; each argument instantiates the next field's binder, and the
+   walk stops once every parameter is solved;
+4. the construction is then built at the solved instance by the checking route
+   (`lower_instance` + `build_ctor`), which checks every argument against its
+   field again — a wrong solution is a type error there, never a mis-lowering.
+
+A parameter no payload field fixes may still be fixed by a child, whose type
+is the whole instance (`ctor_from_child`; `Tau(t)` at tier 2). What remains a
+refusal names the parameter and, when a field would have fixed it but its
+argument only checks (`Halts(2, refl)` alone), that field and why. Pinned in
+`crates/elab/tests/inductive_value_parameters.rs` §7.
+
+The call's own note for an unpinned value implicit now suggests the named
+spelling (`Float::Le(F := …, …)`), not `<…>`, which is refused for a value.
 
 **Edge behaviour worth knowing (corrected 2026-08-02).** The annotated
 `let x: T = e;` was *not* one of the working checking positions when this was

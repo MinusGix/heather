@@ -130,7 +130,7 @@ fn a_value_at_one_parameter_is_not_at_another() {
 #[test]
 fn inference_position_names_the_checking_positions() {
     let m = bad(&format!("{BASE}\nfn f() -> Nat {{ let x = C; 0 }}"));
-    assert!(m.contains("cannot infer the value argument(s) of `Two`"), "{m}");
+    assert!(m.contains("cannot infer the value argument `m` of `Two`"), "{m}");
 }
 
 // -- 3-4: tier 1 -----------------------------------------------------------
@@ -379,3 +379,100 @@ fn the_declaration_refusals_carry_their_messages() {
     let m = bad("record R(m: Nat) { x: R(m) }");
     assert!(m.contains("a recursive declaration is an `inductive`"), "{m}");
 }
+
+// -- 7: inference position reads the parameter off the arguments -----------
+
+/// issues/value-param-constructor-implicit-inference.md: where nothing checks
+/// a construction, its value parameters are solved as a call's implicits are,
+/// by unifying each field's type with its argument's. `W`'s field is another
+/// value-parameterised declaration (`Float::Fin(f)` at `f : Finite(F)`), `P`'s
+/// a proposition (`Float::Inf(b, h)`), and `N` has nothing to read.
+/// `Wrap::at` returns the parameter itself, so every `refl` against `m` is the
+/// observer that the solution is the argument's and not a captured binder's.
+const WRAP: &str = r#"
+inductive Wrap(m: Nat) { W(w: Witness(m)), P(n: Nat, h: dbl(n) = m), N }
+fn Wrap::get({m: Nat}, x: Wrap(m)) -> Nat { match x { W(w) => w.n, P(n, _) => n, N => 0 } }
+fn Wrap::at({m: Nat}, x: Wrap(m)) -> Nat { m }
+"#;
+
+#[test]
+fn inference_position_reads_the_parameter_off_a_field() {
+    ok(&format!(
+        r#"
+        {BASE}
+        {WRAP}
+        theorem by_record(m: Nat, w: Witness(m)): Wrap::get(W(w)) = w.n {{ refl }}
+        theorem by_evidence(m: Nat, n: Nat, h: dbl(n) = m): Wrap::get(P(n, h)) = n {{ refl }}
+        theorem at_record(m: Nat, w: Witness(m)): Wrap::at(W(w)) = m {{ refl }}
+        theorem at_evidence(m: Nat, n: Nat, h: dbl(n) = m): Wrap::at(P(n, h)) = m {{ refl }}
+        theorem at_literal(h: dbl(2) = 4): Wrap::at(P(2, h)) = 4 {{ refl }}
+        theorem lit_get(w: Witness(4)): Wrap::get(W(w)) = w.n {{ refl }}
+        fn let_bound(m: Nat, n: Nat, h: dbl(n) = m) -> Nat {{ let x = P(n, h); x.get() }}
+        theorem let_bound_is(m: Nat, n: Nat, h: dbl(n) = m): let_bound(m, n, h) = n {{ refl }}
+        theorem nested(m: Nat, n: Nat, h: dbl(n) = m): Wrap::at(W(Witness(n, h))) = m {{ refl }}
+        theorem record_too(m: Nat, n: Nat, h: dbl(n) = m): Witness(n, h).n = n {{ refl }}
+        "#
+    ));
+    // The observer has teeth: the parameter is `m`, not anything else.
+    let m = bad(&format!(
+        "{BASE}\n{WRAP}\ntheorem t(m: Nat, w: Witness(m)): Wrap::at(W(w)) = Succ(m) {{ refl }}"
+    ));
+    assert!(m.contains("NotConvertible"), "{m}");
+}
+
+/// An open element type beside the parameter (`A` from `a`, then `m` from
+/// `h`), a child-only constructor (the child's type is the whole instance),
+/// and tier 2: `Tau(t)` reads its instance off the child, while `Ret(r)` has
+/// nothing that fixes `E` and says so.
+#[test]
+fn inference_position_with_type_parameters_children_and_tier_2() {
+    ok(&format!(
+        r#"
+        {BASE}
+        inductive Bag<A>(m: Nat) {{ Nil0, Put(a: A, n: Nat, h: dbl(n) = m, rest: Bag<A>(m)) }}
+        fn bag_m<A>({{m: Nat}}, b: Bag<A>(m)) -> Nat {{ m }}
+        theorem bag<A>(m: Nat, a: A, n: Nat, h: dbl(n) = m, rest: Bag<A>(m)):
+            bag_m(Put(a, n, h, rest)) = m {{ refl }}
+        inductive Ch(m: Nat) {{ Lf(w: Witness(m)), Br2(l: Ch(m), r: Ch(m)) }}
+        fn ch_m({{m: Nat}}, c: Ch(m)) -> Nat {{ m }}
+        theorem child(m: Nat, l: Ch(m), r: Ch(m)): ch_m(Br2(l, r)) = m {{ refl }}
+        theorem both(m: Nat, w: Witness(m)): ch_m(Br2(Lf(w), Lf(w))) = m {{ refl }}
+        "#
+    ));
+    ok(&format!(
+        r#"
+        {ITREE}
+        fn ev_of<R>({{E: Events}}, t: ITree<R>(E)) -> Events {{ E }}
+        theorem tau<R>(E: Events, t: ITree<R>(E)): ev_of(Tau(t)) = E {{ refl }}
+        "#
+    ));
+    let m = bad(&format!("{ITREE}\nfn f(r: Nat) -> Nat {{ let t = Ret(r); 0 }}"));
+    assert!(m.contains("cannot infer the value argument `E` of `ITree`"), "{m}");
+}
+
+/// The negative controls: two fields that disagree about the parameter are
+/// a type error at the second (the construction is re-checked at the
+/// solution), and a field that would fix the parameter but whose argument
+/// only checks is named in the refusal.
+#[test]
+fn inference_position_refusals() {
+    let m = bad(&format!(
+        r#"
+        {BASE}
+        inductive Pr(m: Nat) {{ Pr2(a: Witness(m), b: Witness(m)) }}
+        fn pr_m({{m: Nat}}, x: Pr(m)) -> Nat {{ m }}
+        fn f(m: Nat, a: Witness(m), b: Witness(Succ(m))) -> Nat {{ pr_m(Pr2(a, b)) }}
+        "#
+    ));
+    assert!(m.contains("but `Witness(m)` is expected"), "{m}");
+    let m = bad(&format!(
+        "{BASE}\nfn two_m({{m: Nat}}, t: Two(m)) -> Nat {{ m }}\nfn f() -> Nat {{ two_m(A(2, refl)) }}"
+    ));
+    assert!(m.contains("cannot infer the value argument `m` of `Two`"), "{m}");
+    assert!(m.contains("its field `h` would"), "{m}");
+    // The call's own note suggests the spelling that works for a value
+    // implicit — by name — and not `<…>`, which is refused for one.
+    assert!(m.contains("`two_m(m := …, …)`"), "{m}");
+    assert!(!m.contains("two_m<"), "{m}");
+}
+

@@ -160,21 +160,43 @@ fn checking_position_supplies_the_parameters() {
     ));
 }
 
-/// …and the *absence* of a checking position is a named diagnostic, not a
-/// wrong guess. `<…>` is called out too: it supplies type arguments, and value
-/// arguments are a different list that it cannot reach.
+/// …and where nothing fixes the parameter, a named diagnostic, not a wrong
+/// guess: `h`'s argument is `refl`, which only checks, so the field that would
+/// fix `m` cannot (docs/surface-value-parameters.md §4.1). Written type
+/// arguments do not change that — `<…>` supplies types, and the value
+/// arguments are read off the fields either way.
 #[test]
 fn inference_position_is_refused_by_name() {
     let m = bad(&format!(
         "{HALTS}\nfn inf() -> Nat {{ let c = Halts(2, refl); c.n }}"
     ));
-    assert!(m.contains("cannot infer the value argument"), "{m}");
+    assert!(m.contains("cannot infer the value argument `m` of `Halts`"), "{m}");
+    assert!(m.contains("its field `h` would"), "{m}");
     assert!(m.contains("checking position"), "{m}");
     let m = bad(&format!(
         "{HALTS}\nrecord Box<A>(k: Nat) {{ v: A, n: Nat, h: dbl(n) = k }}\n\
-         fn f() -> Nat {{ let x = Box<Nat>(7, 2, refl); 0 }}"
+         fn f() -> Nat {{ let x = Box<Nat>(7, 2, refl); x.n }}"
     ));
-    assert!(m.contains("`<…>` cannot supply"), "{m}");
+    assert!(m.contains("cannot infer the value argument `k` of `Box`"), "{m}");
+}
+
+/// The same constructions infer once an argument's type carries the
+/// parameter — with the type arguments written or not.
+#[test]
+fn inference_position_reads_the_parameter_off_a_field() {
+    ok(&format!(
+        r#"
+        {HALTS}
+        record Box<A>(k: Nat) {{ v: A, n: Nat, h: dbl(n) = k }}
+        fn halts_k({{k: Nat}}, c: Halts(k)) -> Nat {{ k }}
+        fn box_k<A>({{k: Nat}}, b: Box<A>(k)) -> Nat {{ k }}
+        theorem h(k: Nat, n: Nat, p: dbl(n) = k): halts_k(Halts(n, p)) = k {{ refl }}
+        theorem b(k: Nat, n: Nat, p: dbl(n) = k): box_k(Box<Nat>(7, n, p)) = k {{ refl }}
+        theorem b2<A>(a: A, k: Nat, n: Nat, p: dbl(n) = k): box_k(Box(a, n, p)) = k {{ refl }}
+        fn let_bound(n: Nat, p: dbl(n) = 4) -> Nat {{ let c = Halts(n, p); halts_k(c) }}
+        theorem lit(n: Nat, p: dbl(n) = 4): let_bound(n, p) = 4 {{ refl }}
+        "#
+    ));
 }
 
 // -- 6: encoding-level negative controls -----------------------------------

@@ -357,14 +357,15 @@ fn unpinned_domain_message(
     param: usize,
     inner: &str,
 ) -> String {
-    let unpinned: Vec<String> = slot_param
+    let pending: Vec<&ParamMeta> = slot_param
         .iter()
         .enumerate()
         .filter(|&(slot, _)| matches!(sols.get(slot), Some(Sol::Unsolved)))
         .filter_map(|(_, &p)| params.get(p))
         .filter(|p| p.implicit && p.solver.is_none())
-        .map(|p| format!("`{}`", p.name))
         .collect();
+    let unpinned: Vec<String> = pending.iter().map(|p| format!("`{}`", p.name)).collect();
+    let spelling = written_implicits(name, &pending);
     let what = match unpinned.as_slice() {
         [] => "an implicit argument".to_string(),
         [one] => format!("the implicit {one}"),
@@ -376,8 +377,23 @@ fn unpinned_domain_message(
     format!(
         "{inner}. Here the argument is checked against {param}'s type in `{name}`, and \
          that type still mentions {what}, which nothing in the call determines: \
-         write it (`{name}<…>(…)`) or pass an argument that fixes it"
+         write it (`{spelling}`) or pass an argument that fixes it"
     )
+}
+
+/// How a call writes the implicits it could not infer: a type argument in
+/// `<…>`, a value implicit by name (`Float::Le(F := …, …)`) — `<…>` is refused
+/// for a value, so suggesting it for one sends the writer to a second error
+/// (issues/value-param-constructor-implicit-inference.md, ask 2).
+fn written_implicits(name: &str, pending: &[&ParamMeta]) -> String {
+    let types = pending.is_empty() || pending.iter().any(|p| p.is_type);
+    let values: Vec<String> =
+        pending.iter().filter(|p| !p.is_type).map(|p| format!("{} := …", p.name)).collect();
+    match (types, values.is_empty()) {
+        (_, true) => format!("{name}<…>(…)"),
+        (false, false) => format!("{name}({}, …)", values.join(", ")),
+        (true, false) => format!("{name}<…>({}, …)", values.join(", ")),
+    }
 }
 
 /// The implicitness skeleton of a surface-written function type

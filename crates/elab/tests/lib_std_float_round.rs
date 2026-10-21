@@ -192,7 +192,7 @@ theorem gap(f, s: Finite(e4m3()), pos: f.neg = False, is: f.next_up() = Some(s))
 }
 
 // The mode laws.
-theorem le_unfolds({F: Format}, f, g: Finite(F), h: Float::Le(F := F, a := Float::Fin(f), b := Float::Fin(g))): f.val() <= g.val() { h }
+theorem le_unfolds({F: Format}, f, g: Finite(F), h: Float::Le(Float::Fin(f), Float::Fin(g))): f.val() <= g.val() { h }
 theorem bracket_lo(F: Format, mode: Mode, x: Rat): Float::Le(F.round_rat(TowardNeg, x), F.round_rat(mode, x)) {
     F.rounds_ge_down(mode, x, F.round_rat(TowardNeg, x), F.round_rat(mode, x), F.round_rat_correct(TowardNeg, x), F.round_rat_correct(mode, x))
 }

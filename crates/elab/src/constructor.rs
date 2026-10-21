@@ -9,7 +9,7 @@ use std::borrow::Borrow;
 use std::sync::Arc as Rc;
 
 use heather_kernel::level::Level;
-use heather_kernel::term::{Term, Type};
+use heather_kernel::term::{GlobalVar, LocalSubst, LocalVar, Term, Type};
 use heather_syntax::{
     ANON_CTOR_LEFT, ANON_CTOR_ONLY, ANON_CTOR_RIGHT, Expr, ExprKind, NamedArg,
     RecordLitField, Span, Ty, TyKind,
@@ -18,9 +18,10 @@ use heather_syntax::{
 use crate::inductive::{self, Inductive};
 use crate::names::{NameKind, qkey};
 use crate::traits::instance_key;
+use crate::unification::{Sol, zonked};
 use crate::{
-    Cx, Elaborator, IMPLICIT_MARK_REFUSED, PRELUDE_MODULE, R, application, err,
-    has_implicit_mark,
+    Alias, Cx, ElabError, Elaborator, IMPLICIT_MARK_REFUSED, PRELUDE_MODULE, R, TyVar,
+    application, err, has_implicit_mark,
 };
 
 /// A defaulted field a construction left out: the marker's arguments are the
@@ -666,27 +667,8 @@ impl Elaborator {
         // parameter (`Some(A)`), by inferring that argument. Deliberately
         // narrow: anything deeper is unification, which belongs to
         // issues/elab-unifier-completeness.md, not here. A `None` on its own
-        // is genuinely ambiguous and says so.
-        // Value parameters are **not** inferred, by decision rather than by
-        // omission (docs/surface-value-parameters.md §4, closing
-        // `docs/surface-existential-investigation.md` §C.5): a parameter
-        // appears only inside a *field type*, so recovering it from the
-        // arguments is higher-order unification, not the narrow
-        // field-type-is-a-parameter reading below. Checking position supplies
-        // them; nothing else does.
-        if !ind.valparams.is_empty() {
-            return err(
-                format!(
-                    "cannot infer the value argument(s) of `{}` here — a value parameter \
-                     appears only inside a field's type, so nothing in `{}(…)` determines \
-                     it. Put the expression in a checking position: a `fn`/`theorem` \
-                     body whose declared result is `{}(…)`, or an argument of a \
-                     declaration that expects one",
-                    ind.name, ind.name, ind.name
-                ),
-                span,
-            );
-        }
+        // is genuinely ambiguous and says so. Value parameters are solved
+        // after these, by the call unifier ([`Self::infer_ctor_values`]).
         let mut sols: Vec<Option<(Type, Level)>> = vec![None; ind.params.len()];
         // A field that cannot be inferred on its own (`Nil` in `Cons(Nil,
         // xs)`) may still be fixed by a later child argument: its error is
@@ -748,6 +730,9 @@ impl Elaborator {
             };
             targs.push(sol);
         }
+        if !ind.valparams.is_empty() {
+            return self.infer_ctor_values(cx, ind, i, args, &targs, span);
+        }
         let (ty, lvl) = if ind.skel.is_some() && args.len() == ind.ctors[i].fields.len() {
             // Route 2b: the index is the constructor's *written* result index
             // at the arguments it was given (docs/inductive-fording-lowering.md
@@ -763,6 +748,166 @@ impl Elaborator {
         } else {
             self.lower_instance(cx, ind, &targs, &[], span)?
         };
+        let t = self.build_ctor(cx, ind, i, args, &ty, &lvl, span)?;
+        Ok((t, ty, lvl))
+    }
+
+    /// The value parameters of a constructor used where nothing is checking
+    /// it, solved the way a call solves its implicits
+    /// (issues/value-param-constructor-implicit-inference.md): the
+    /// constructor's payload is lowered with the parameters as binders, the
+    /// binders become the metas of a scratch world, and each field's type is
+    /// unified with its argument's — `Fin(f)` at `f : Finite(F)` meets
+    /// `Finite(?F)`, `Inf(b, h)` at `h : F.specials.has_inf().IsTrue()` meets
+    /// that proposition at `?F`. A field whose type is already meta-free is
+    /// checked rather than inferred, so `refl` and lambdas in it cost
+    /// nothing; the walk stops once every parameter is solved, and the
+    /// construction is then built at the solved instance by the checking
+    /// route, which checks every argument against its field again. A wrong
+    /// solution is therefore a type error there, never a mis-lowering.
+    ///
+    /// This replaces the old refusal (docs/surface-value-parameters.md §4),
+    /// which read the problem as higher-order unification; it is the same
+    /// first-order problem a call's domain `Float(?F)` poses, because the
+    /// parameter's occurrences in the field types are rigid spines. A
+    /// parameter no payload field fixes may still be fixed by a child, whose
+    /// type is the whole instance ([`Self::ctor_from_child`]).
+    fn infer_ctor_values<A: Borrow<Expr>>(
+        &self,
+        cx: &Cx,
+        ind: &Rc<Inductive>,
+        i: usize,
+        args: &[A],
+        targs: &[(Type, Level)],
+        span: Span,
+    ) -> R<(Term, Type, Level)> {
+        let n = ind.valparams.len() as u32;
+        // The value-parameter telescope as binders past `cx`, each declared
+        // type read under the type arguments and the earlier parameters, as
+        // `valparam_args` reads them at a written use.
+        let mut tcx = cx.clone();
+        let depth = cx.names.len();
+        tcx.tyvars.extend(ind.params.iter().zip(targs).map(|(name, (ty, level))| TyVar {
+            name: name.clone(),
+            ty: ty.clone(),
+            level: level.clone(),
+            depth,
+        }));
+        tcx.op_locals.clear();
+        let mut decls: Vec<(Type, Level)> = Vec::with_capacity(n as usize);
+        for (j, (pname, pty)) in ind.valparams.iter().enumerate() {
+            let (ty, level) = {
+                let _scope = self.use_inductive_scope(ind);
+                self.elab_ty(&tcx, pty)?
+            };
+            tcx.push(format!("#v{j}"), ty.clone(), level.clone());
+            tcx.aliases.push(Rc::new(Alias {
+                skel: None,
+                name: pname.clone(),
+                depth: tcx.names.len(),
+                term: Rc::new(Term::Var(LocalVar(0))),
+                ty: ty.shift_local(1),
+                level: level.clone(),
+            }));
+            if let Some((sym, _)) = ind.op_symbols.iter().find(|(_, n)| n == pname) {
+                tcx.op_locals.push((sym.clone(), pname.clone()));
+            }
+            decls.push((ty, level));
+        }
+        let open_targs: Vec<(Type, Level)> =
+            targs.iter().map(|(t, l)| (t.shift_local(n), l.clone())).collect();
+        let open_vargs: Vec<(Term, Type, Level)> = decls
+            .iter()
+            .enumerate()
+            .map(|(j, (t, l))| {
+                (Term::Var(LocalVar(n - 1 - j as u32)), t.shift_local(n - j as u32), l.clone())
+            })
+            .collect();
+        let (shape, _) = self.lower_ctor(&tcx, ind, i, &open_targs, &open_vargs, span)?;
+        // Into the scratch world: the parameter binders become metas `< n`,
+        // exactly as a callee's `Π` binders do in `apply_implicit`.
+        let to_scratch = (0..n).fold(LocalSubst::id(&cx.gamma), |s, j| {
+            s.extended(Rc::new(Term::GlobalTm {
+                var: GlobalVar(j),
+                subst: LocalSubst::id(&cx.gamma),
+            }))
+        });
+        let mut pat = shape.shift_global(n).apply_local(&to_scratch);
+        let mut sols = vec![Sol::Unsolved; n as usize];
+        let solved = |sols: &[Sol]| sols.iter().all(|s| s.solved().is_some());
+        let step = |pat: &Type, tm: Term| match pat {
+            Type::Sigma { snd, .. } => Some(
+                snd.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::new(tm.shift_global(n)))),
+            ),
+            _ => None,
+        };
+        // Entry 0 of the payload is the tag, which no field type mentions.
+        if let Type::Sigma { fst, .. } = &pat {
+            let tag = inductive::tag_value(fst);
+            pat = step(&pat, tag).unwrap_or(pat);
+        }
+        // A field whose argument did not infer while its type waited on a
+        // parameter: named in the refusal if nothing else fixes it.
+        let mut stuck: Option<(usize, ElabError)> = None;
+        let ctor = &ind.ctors[i];
+        for (k, arg) in args.iter().enumerate() {
+            if ctor.kind.get(k) != Some(&inductive::FieldKind::Payload) {
+                continue;
+            }
+            if solved(&sols) {
+                break;
+            }
+            let Type::Sigma { fst, fst_level, .. } = &pat else { break };
+            let tm = match zonked(fst, n, &sols) {
+                Some(real) => self.elab_check(cx, arg.borrow(), &real, fst_level)?,
+                None => match self.elab_infer(cx, arg.borrow()) {
+                    Ok((tm, ty, _)) => {
+                        self.unify_arg_ty(cx, fst, &ty, n, &mut sols, span);
+                        tm
+                    }
+                    Err(e) => {
+                        stuck = Some((k, e));
+                        break;
+                    }
+                },
+            };
+            let Some(next) = step(&pat, tm) else { break };
+            pat = next;
+        }
+        if !solved(&sols) {
+            if let Some(r) = self.ctor_from_child(cx, ind, i, args, span) {
+                return r;
+            }
+            let p = sols
+                .iter()
+                .position(|s| s.solved().is_none())
+                .map_or("?", |j| ind.valparams[j].0.as_str());
+            let why = match &stuck {
+                Some((k, ElabError::Elab { msg, .. })) => format!(
+                    " (its field `{}` would, but that argument does not infer on its own: {msg})",
+                    ctor.fields[*k].0.as_deref().unwrap_or("_")
+                ),
+                _ => String::new(),
+            };
+            return err(
+                format!(
+                    "cannot infer the value argument `{p}` of `{}` here — no argument of \
+                     `{}` determines it{why}. Put the expression in a checking position: a \
+                     `fn`/`theorem` body whose declared result is `{}(…)`, an annotated \
+                     `let`, or an argument of a declaration that expects one",
+                    ind.name, ctor.name, ind.name
+                ),
+                span,
+            );
+        }
+        let mut vargs: Vec<(Term, Type, Level)> = Vec::with_capacity(n as usize);
+        let mut inst = LocalSubst::id(&cx.gamma);
+        for (sol, (ty, level)) in sols.iter().zip(&decls) {
+            let Some(v) = sol.solved() else { unreachable!() };
+            vargs.push(((**v).clone(), ty.apply_local(&inst), level.clone()));
+            inst = inst.extended(Rc::clone(v));
+        }
+        let (ty, lvl) = self.lower_instance(cx, ind, targs, &vargs, span)?;
         let t = self.build_ctor(cx, ind, i, args, &ty, &lvl, span)?;
         Ok((t, ty, lvl))
     }
@@ -891,19 +1036,12 @@ impl Elaborator {
                 }
                 lowered.push(self.elab_ty(cx, a)?);
             }
-            // `R<Nat>(a, b)` is not a spelling: the type arguments are
-            // explicit here but the value arguments are still only recoverable
-            // from the checking type (docs/surface-value-parameters.md §4).
+            // `R<Nat>(a, b)`: the type arguments are written, and the value
+            // arguments are read off the fields as they are with none written
+            // (docs/surface-value-parameters.md §4.1) — `<…>` cannot supply
+            // them, and the refusal when nothing fixes one says what does.
             if !ind.valparams.is_empty() {
-                return err(
-                    format!(
-                        "`{}` takes value parameters, which `<…>` cannot supply — they \
-                         are read off the expected type. Put the expression where a \
-                         `{}(…)` is expected instead",
-                        ind.name, ind.name
-                    ),
-                    span,
-                );
+                return self.infer_ctor_values(cx, &ind, i, args, &lowered, span);
             }
             // An **indexed** family at a written instantiation: the index is
             // not written — it is the constructor's own result index at the
