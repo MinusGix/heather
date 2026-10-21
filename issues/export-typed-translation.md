@@ -28,7 +28,8 @@ The round:
 3. Keep sharing. Heather terms are DAGs, and a tree printer is exponential in
    the worst case. Emit Lean through its kernel (an `addDecl` import program,
    or the hash-consed export format) rather than as surface text.
-4. Names: module-qualified Heather names instead of `g<index>`. The
+4. Names: module-qualified Heather names instead of `g<index>` (decided by
+   Minus 2026-10-21). The
    elaborator's `global_name_at` is crate-private today, so this needs a
    public accessor (or the names from module images, as in
    [[export-keeps-proofs]]).

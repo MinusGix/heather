@@ -468,14 +468,18 @@ Rocq as a full second target is parked inside
 answered (§5.3). The printer and prelude stay, and the probes record exactly
 what Rocq lacks.
 
-## 11. Open questions for Minus
+## 11. Decisions (Minus, 2026-10-21)
 
-1. **Lean first?** The evidence says yes (§0.5). Is anything about the Lean
-   ecosystem (a Mathlib-free import, a particular Lean version) a hard
-   requirement?
-2. **Names.** Exported globals are `g<index>` in the prototype. Should they
-   be module-qualified Heather names (`Heather.std.nat.Nat.add_assoc`), and
-   should exported inductives get Lean-idiomatic constructor names?
-3. **The open-tag β side condition.** Accept §5.1's realisation and let the
-   sweep find violations, or make "no β at an open tag" an elaborator
-   invariant that the export can rely on?
+1. **Lean is the first target.** Rocq stays a second printer over HX for
+   the fragment it can carry (§6).
+2. **Exported names are module-qualified Heather names**, not `g<index>`
+   (`issues/export-typed-translation.md`, item 4).
+3. **The open-tag β condition** (§5.1) is still open; Minus asked for a
+   recommendation. Proposed: accept the realisation and let the library
+   sweep count violations, rather than make it an elaborator invariant now.
+   The exporter is untrusted and a violation is loud (Lean rejects the
+   declaration). An invariant on the elaborator's *output* would not cover
+   the redexes that conversion creates by substitution anyway. Syntactic
+   open-tag redexes, if the sweep finds any, can be pre-reduced by the
+   exporter. Only conversion-created ones would need a change on the Heather
+   side.
