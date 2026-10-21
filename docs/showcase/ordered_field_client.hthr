@@ -87,11 +87,11 @@ theorem creal_bound_pos(x, e: CReal, h: -e < x ∧ x < e): 0 < e { LocatedAddGro
 // the reals did not have on their own.
 
 theorem creal_inv_unique(x, u: CReal, h: x.Apart(0), hu: x * u ≈ 1): u ≈ x.inv(h := h) {
-    OrderedField::inv_unique(x, h, u, hu)
+    OrderedField::recip_unique(x, h, u, hu)
 }
 
 theorem creal_inv_any_proof(x: CReal, h, h2: x.Apart(0)): x.inv(h := h) ≈ x.inv(h := h2) {
-    OrderedField::inv_respects(x, x, h, h2, x.same_refl())
+    OrderedField::recip_respects(x, x, h, h2, x.same_refl())
 }
 
 theorem rat_mul_lt(x, y, z: Rat, h: x < y, hz: 0 < z): z * x < z * y { OrderedField::mul_lt_mono_l(x, y, z, h, hz) }
@@ -109,16 +109,16 @@ theorem creal_nat_climbs(n: Nat): CReal::ofRat(Rat::ofInt(OfNat(n))) < CReal::of
 // carriers (`pos_of_mul_pos`, a law), so the inverse has its argument's sign
 // and reverses the order of positives, once for both.
 
-theorem rat_inv_pos(x: Rat, hx: 0 < x): 0 < x⁻¹ { OrderedField::inv_pos(x, Inr(hx), hx) }
+theorem rat_inv_pos(x: Rat, hx: 0 < x): 0 < x⁻¹ { OrderedField::recip_pos(x, Inr(hx), hx) }
 
-theorem creal_inv_pos(x: CReal, hx: 0 < x): 0 < x⁻¹ { OrderedField::inv_pos(x, Inr(hx), hx) }
+theorem creal_inv_pos(x: CReal, hx: 0 < x): 0 < x⁻¹ { OrderedField::recip_pos(x, Inr(hx), hx) }
 
-theorem creal_inv_neg(x: CReal, hx: x < 0): x⁻¹ < 0 { OrderedField::inv_neg(x, Inl(hx), hx) }
+theorem creal_inv_neg(x: CReal, hx: x < 0): x⁻¹ < 0 { OrderedField::recip_neg(x, Inl(hx), hx) }
 
 // `y⁻¹` is searched, so the client names y's positivity; the generic
 // theorem derives it from x < y.
 theorem creal_inv_lt_inv(x, y: CReal, hx: 0 < x, hy: 0 < y, h: x < y): y⁻¹ < x⁻¹ {
-    OrderedField::inv_lt_inv(x, y, Inr(hx), Inr(hy), hx, h)
+    OrderedField::recip_lt_recip(x, y, Inr(hx), Inr(hy), hx, h)
 }
 
 // Every positive real is above some 1/(n+1), the form the Cauchy reals'
@@ -126,5 +126,5 @@ theorem creal_inv_lt_inv(x, y: CReal, hx: 0 < x, hy: 0 < y, h: x < y): y⁻¹ < 
 theorem creal_archimedean_inv(x: CReal, hx: 0 < x):
     ∃ n: Nat, CReal::ofRat(Rat::ofInt(OfNat(Succ(n))))⁻¹ < x
 {
-    OrderedField::archimedean_inv(x, hx)
+    OrderedField::archimedean_recip(x, hx)
 }
