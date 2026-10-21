@@ -32,3 +32,7 @@ Heather, and the compiler's correctness theorem proved once.
 - **[[function-ir-verified-lowering]]** owns pure regions' code; assumed
   here only as `Proved` items with the lowering's theorem as contract.
 - **[[effects-direction]]** owns the surface that elaborates to this source.
+
+## Log
+
+- 2026-10-21: Minus's answers (design §10): the surface is uniqueness threading that denotes trees (item 5); the source's shape stays open, with the input for this round in item 6 (external effects in the tree layer, internal effects as FunctionIR state edges; decide by writing `tr` both ways first). Where loops live is decided with it: [[function-ir-lowering-loops]]. Before B2, also [[function-ir-source-denotation-after-b2]].

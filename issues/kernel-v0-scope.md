@@ -23,3 +23,5 @@ First concrete artifact: the term/judgment representation in
 
 - 2026-07-22: Read ch.04 fully + 05 (subst ops), 06, 08. Scope pinned in crates/kernel/DESIGN.md; docs/delam/README.md warns 01-03 is the simplified warm-up system. Representation landed: layer.rs, level.rs (count/adjust normalization, tested), term.rs (full ch.04 syntax, de Bruijn, 3 namespaces). Conversion will be ch.06 WHNF-reduction style, NOT NbE.
 - 2026-07-22: Scope fully pinned and representation landed (DESIGN.md, layer/level/term/subst/fmt.rs). The 'checker verifying hand-elaborated terms' artifact is tracked by kernel-typing; closing this as the scoping decision itself is done.
+
+- 2026-10-21: Coinduction, out of v0 here, is now planned: [[kernel-coinductive-types]] (Minus's decision).

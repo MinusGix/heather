@@ -104,7 +104,7 @@ through `milestone:`; the list of issues is `scripts/issue list --milestone
 | `math-classes` | mathematics | open | The algebra and order class hierarchy (semiring to ordered field, lattices) is settled, with a documented API that clients use without restating laws. |  |
 | `math-reals` | mathematics | open | Reals have their completeness interfaces and basic analysis (sequences, limits, continuity) on top of the regular Cauchy reals. |  |
 | `math-float` | mathematics | open | Binary floating point (formats as data, a relational rounding spec with one executable rounding, error bounds, arithmetic and the error-free transformations) is in `lib/std/float/`, proved over dyadics and transferable to any ordered field (`docs/floating-point-design.md`; rounds 1–5). |  |
-| `float-values` | mathematics | open | Formats, finite floats and floats, `Dyadic` with its ring and order, value order as a `StrictOrder`, successor and predecessor, and the standard constants proved canonical by evaluation. | math-float |
+| `float-values` | mathematics | done | Formats, finite floats and floats, `Dyadic` with its ring and order, value order as a `StrictOrder`, successor and predecessor, and the standard constants proved canonical by evaluation. | math-float |
 | `float-rounding` | mathematics | done | `RoundsTo` for the five IEEE modes, one executable rounding on a dyadic plus sticky proved to satisfy it, its uniqueness, successor/predecessor with spacing, and the mode laws (landed, design §11–§12). | math-float |
 | `float-error` | mathematics | open | The standard model (relative error at most `u` in the normal range), the subnormal absolute bound, `ulp`, and γ-composition. | math-float |
 | `float-arith` | mathematics | open | Add, sub, mul, fma, div, sqrt and format conversion, each with value, signed-zero and special-value theorems. | math-float |
@@ -503,3 +503,13 @@ separate machines do not slow each other's tests.
   done. `it-refinement`'s depth-indexed equivalence is carried by the
   structural `ITree::Same` plus refinement across the fuel family
   (`docs/itree-refinement-round.md`), not by a relation of its own.
+- 2026-10-21: `float-values` marked done: round 1 (PR #85) and round 2's
+  successor/predecessor (PR #95) cover its "done when"
+  (`docs/floating-point-design.md` §10, §12).
+- 2026-10-21: Minus's answers on the native rebuild
+  (`docs/native-program-logic-design.md` §10): the ideal version from the
+  beginning (abstract read sizes in S1), kernel evaluation of the compiler
+  first with native speed later, a uniqueness-threaded surface that denotes
+  trees, and a kernel round for coinductive types planned now rather than
+  waiting for a customer (`issues/kernel-coinductive-types.md`, area
+  `kernel`). The source's shape (S3) stays open.
