@@ -5,7 +5,7 @@ labels: [translation,export]
 area: heather-in-lean-coq
 milestone: [export-fragment]
 created: 2026-10-20
-updated: 2026-10-20
+updated: 2026-10-21
 ---
 
 The prototype exporter (`crates/export`) is syntax-directed and prints
@@ -37,3 +37,22 @@ The round:
 Done when the prototype's acceptance test exports with no hole, Lean rechecks
 it through its kernel without the elaborator, and `B::not_not`-shaped
 declarations need nothing from the target's unifier.
+
+## Log
+
+- 2026-10-21 (PR #87): items 1 and 4 done another way, item 2 partly.
+  Checked spellings are erased by the kernel's own `⌊·⌋`
+  (`typing::spell_checked_in_code{,_ty}`) before translation, so the walker
+  stays syntax-directed; a body whose spelling fails falls back to holes (two
+  in the library sweep). Names are module-qualified, generated definitions
+  included (`Elaborator::generated_key_at`: `bool::Bool#tycode`). For
+  irrelevance the exporter prints the **canonical element** of a closed
+  singleton type wherever it can read the type without inference (binder
+  domains, global statements, application codomains, projections; design
+  §5.2), and leaves types as written: collapsing the types to `Unit` made
+  Lean reject an `inl` whose expected type reached the singleton only by
+  δ-unfolding an open definition. What is left: neutrals at *open* types
+  that become singletons by substitution (both targets), unit η in Rocq, and
+  item 3. Printing with minimal parentheses was needed for Lean to parse a
+  library-sized file in reasonable time; the kernel route of item 3 is still
+  the real fix for size.

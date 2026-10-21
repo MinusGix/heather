@@ -256,6 +256,22 @@ reduction in Lean and the special reduction of an SProp equality under
 Definitional UIP in Rocq, and both fire at a neutral proof (both
 `Definitional.*`).
 
+**What the prototype does (2026-10-21).** A *closed singleton* is a closed
+type whose whnf is `Unit`, an `sEq` between whnf-equal endpoints, or a
+non-dependent `Σ` of singletons; Heather's η makes any two of its terms
+convertible, neutrals included. Wherever the exporter can read a term's type
+without inference (a binder's domain, a global's statement, an application's
+codomain, a projection's component, an intro's own annotation) and that type
+is a closed singleton, it prints the type's **canonical element** (`tt`,
+`srefl`, or a pair of them) instead of the term. Two canonical elements are
+syntactically equal, and a neutral the exporter could not type meets one
+through structure η, which fires against a constructor. The *types* are
+printed as written. An earlier version collapsed singleton types themselves
+to `Hx.Unit`, so that Lean's unit η would cover neutrals; that disagreed with
+the δ-unfolding of an open definition that reaches the same type only by
+substitution (`Or<Unit, Not<Unit>>`'s `inl` in `bool::True::Decide`), and
+Lean rejected it.
+
 The invariant is what the typed exporter maintains (§5.6), and it has a known
 gap. A neutral whose type becomes irrelevant only after a substitution (a
 `f n : Vec(sEq…; n)` at `n := 1`) is not expanded. The target then rejects a
@@ -324,7 +340,15 @@ translation of `docs/intro-by-type-design.md` §2.4), and in the same pass
 writes eta-long terms at irrelevant types (§5.2). Its output has no holes, so
 it can go to the target's kernel directly: Lean through `addDecl` from a small
 import program, bypassing the elaborator, or through the kernel export
-format. Heather's terms are DAGs, and printing them as trees is exponential in
+format.
+
+Half of that landed on 2026-10-21 without a new walker: the exporter erases
+checked spellings by calling the kernel's own `⌊·⌋`
+(`typing::spell_checked_in_code`, `spell_checked_in_code_ty`) on each
+statement and body before translating. A body whose spelling fails (two in
+the sweep's 293, both `NotConvertible` at a spelling the kernel reached by a
+different route) falls back to the hole-printing route. Heather's terms are
+DAGs, and printing them as trees is exponential in
 the worst case. That is the reason the checked spellings exist. Lean's export
 format is hash-consed and keeps the sharing; Rocq would need `let`s or a
 MetaCoq quotation.

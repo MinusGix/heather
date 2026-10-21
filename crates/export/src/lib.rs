@@ -22,8 +22,10 @@
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
 use heather_kernel::reduce::{Defs, whnf_term_delta, whnf_type_delta};
+use heather_kernel::subst::local_bound_ty;
 use heather_kernel::term::{CtxBase, GlobalBinding, GlobalCtx, LocalCtx, LocalSubst, SubstTail, Term, Type};
 use heather_kernel::typing::{DEFAULT_FUEL, spell_checked_in_code, spell_checked_in_code_ty};
+use std::cell::RefCell;
 use std::sync::Arc as Rc;
 use std::fmt::Write as _;
 
@@ -100,6 +102,10 @@ struct Tr<'a> {
     at: usize,
     /// The declaration's own Ψ prefix: what its globals unfold to.
     psi: &'a GlobalCtx,
+    /// One entry per enclosing binder, innermost last: the canonical element
+    /// of its domain when that domain is a closed singleton. Closed, so it
+    /// needs no shifting to be used under further binders.
+    ctx: RefCell<Vec<Option<Hx>>>,
 }
 
 /// Fuel for the exporter's own reductions (the collapse test); a type that
@@ -115,15 +121,18 @@ impl Tr<'_> {
     /// whose whnf is `Unit`, an `sEq` between convertible endpoints, or a
     /// non-dependent `Σ` of singletons. Heather's η makes every two terms of
     /// such a type convertible, neutrals included; the targets' structure η
-    /// does not reach two neutrals (design §5.2), but Lean's unit η does. So
-    /// a singleton translates to `Hx.Unit` and each of its introductions and
-    /// projections to `Hx.tt`, and the neutrals that remain compare by
-    /// Lean's own unit η.
+    /// does not reach two neutrals (design §5.2). So a term whose type is
+    /// known to be a closed singleton translates to that type's canonical
+    /// element ([`Self::canon`]), and a neutral the exporter cannot see the
+    /// type of meets it through structure η, which fires against a
+    /// constructor. The type itself is translated as written: collapsing it
+    /// to `Unit` would disagree with the δ-unfolding of an open definition
+    /// that reaches the same type only by substitution.
     fn singleton(&self, t: &Type) -> Option<Level> {
         if !matches!(t, Type::Unit { .. } | Type::SEq { .. } | Type::Sigma { .. } | Type::El { .. } | Type::Vec { .. }) {
             return None;
         }
-        if t.shift_local(1) != *t {
+        if local_bound_ty(&Rc::new(t.clone())) != 0 {
             return None;
         }
         let nil = LocalCtx::nil();
@@ -135,7 +144,7 @@ impl Tr<'_> {
                 let r = whnf_term_delta(rhs, &nil, Defs::transparent(self.psi), FUEL).ok()?;
                 (l == r).then(|| level.clone())
             }
-            Type::Sigma { fst_level, snd_level, fst, snd } if snd.shift_local(1) == **snd => {
+            Type::Sigma { fst_level, snd_level, fst, snd } if local_bound_ty(snd) == 0 => {
                 self.singleton(fst)?;
                 self.singleton(snd)?;
                 Some(lmax(fst_level, snd_level))
@@ -144,12 +153,52 @@ impl Tr<'_> {
         }
     }
 
-    fn unit(&self, l: &Level) -> R<Hx> {
-        konst("Unit", &[l], vec![])
+    /// The canonical element of a closed singleton ([`Self::singleton`]):
+    /// `tt`, `srefl`, or a pair of canonical elements.
+    fn canon(&self, t: &Type) -> Option<R<Hx>> {
+        self.singleton(t)?;
+        let nil = LocalCtx::nil();
+        let w = whnf_type_delta(t, &nil, Defs::transparent(self.psi), FUEL).ok()?;
+        Some(match &w {
+            Type::Unit { level } => konst("tt", &[level], vec![]),
+            Type::SEq { level, ty, lhs, .. } => (|| konst("srefl", &[level], vec![self.ty(ty)?, self.tm(lhs)?]))(),
+            Type::Sigma { fst_level, snd_level, fst, snd } => {
+                let (a, b) = (self.canon(fst)?, self.canon(snd)?);
+                (|| konst(
+                    "pair",
+                    &[fst_level, snd_level],
+                    vec![self.ty(fst)?, self.lam_ty(fst, snd)?, a?, b?],
+                ))()
+            }
+            _ => return None,
+        })
     }
 
-    fn tt(&self, l: &Level) -> R<Hx> {
-        konst("tt", &[l], vec![])
+    /// Translate under one binder whose domain is `dom` (`None` when the
+    /// exporter does not have it at hand).
+    fn under<T>(&self, dom: Option<&Type>, f: impl FnOnce() -> R<T>) -> R<T> {
+        let entry = match dom.and_then(|d| self.canon(d)) {
+            Some(c) => Some(c?),
+            None => None,
+        };
+        self.ctx.borrow_mut().push(entry);
+        let out = f();
+        self.ctx.borrow_mut().pop();
+        out
+    }
+
+    /// `fun (x : dom) => cod` for a type family.
+    fn lam_ty(&self, dom: &Type, cod: &Type) -> R<Hx> {
+        Ok(lam(self.ty(dom)?, self.under(Some(dom), || self.ty(cod))?))
+    }
+
+    /// `n` binders the prelude constant's type determines, none of them at
+    /// a domain the exporter has at hand.
+    fn binds<T>(&self, n: usize, f: impl FnOnce() -> R<T>) -> R<T> {
+        match n {
+            0 => f(),
+            _ => self.under(None, || self.binds(n - 1, f)),
+        }
     }
 
     fn global(&self, var: u32, subst: &LocalSubst) -> R<Hx> {
@@ -166,12 +215,9 @@ impl Tr<'_> {
     }
 
     fn ty(&self, t: &Type) -> R<Hx> {
-        if let Some(l) = self.singleton(t) {
-            return self.unit(&l);
-        }
         Ok(match t {
             Type::Nat => Hx::Const("Nat", vec![]),
-            Type::Pi { dom, cod, .. } => Hx::Pi(Box::new(self.ty(dom)?), Box::new(self.ty(cod)?)),
+            Type::Pi { dom, cod, .. } => Hx::Pi(Box::new(self.ty(dom)?), Box::new(self.under(Some(dom), || self.ty(cod))?)),
             Type::Ty(l) => Hx::Sort(lvl(l)?),
             Type::El { tm, .. } => self.tm(tm)?,
             Type::Id { level, ty, lhs, rhs } => konst("Id", &[level], vec![self.ty(ty)?, self.tm(lhs)?, self.tm(rhs)?])?,
@@ -179,7 +225,7 @@ impl Tr<'_> {
             Type::SEmpty { level } => konst("SEmpty", &[level], vec![])?,
             Type::Squash { level, ty } => konst("Squash", &[level], vec![self.ty(ty)?])?,
             Type::Sigma { fst_level, snd_level, fst, snd } => {
-                konst("Sig", &[fst_level, snd_level], vec![self.ty(fst)?, lam(self.ty(fst)?, self.ty(snd)?)])?
+                konst("Sig", &[fst_level, snd_level], vec![self.ty(fst)?, self.lam_ty(fst, snd)?])?
             }
             Type::Unit { level } => konst("Unit", &[level], vec![])?,
             Type::Empty { level } => konst("Empty", &[level], vec![])?,
@@ -187,7 +233,7 @@ impl Tr<'_> {
                 konst("Sum", &[lhs_level, rhs_level], vec![self.ty(lhs)?, self.ty(rhs)?])?
             }
             Type::W { shape_level, pos_level, shape, pos } => {
-                konst("W", &[shape_level, pos_level], vec![self.ty(shape)?, lam(self.ty(shape)?, self.ty(pos)?)])?
+                konst("W", &[shape_level, pos_level], vec![self.ty(shape)?, self.lam_ty(shape, pos)?])?
             }
             Type::Vec { level, elem, len } => konst("Vec", &[level], vec![self.ty(elem)?, self.tm(len)?])?,
             Type::Fin { len } => konst("Fin", &[], vec![self.tm(len)?])?,
@@ -200,31 +246,56 @@ impl Tr<'_> {
         })
     }
 
-    fn tm(&self, t: &Term) -> R<Hx> {
-        // A code decodes to its type, so a code of a singleton is the code
-        // of `Unit`: the same collapse, read through `El`.
-        let code_level = match t {
-            Term::TmSigma { fst_level, snd_level, .. } => Some(lmax(fst_level, snd_level)),
-            Term::TmSEq { level, .. } | Term::TmUnit { level } | Term::TmVec { level, .. } => Some(level.clone()),
-            _ => None,
-        };
-        if let Some(level) = code_level {
-            if let Some(l) = self.singleton(&Type::El { level, tm: Rc::new(t.clone()) }) {
-                return self.unit(&l);
+    /// The type of a term the exporter can read off without inference, when
+    /// that type is closed: a variable's domain is in `ctx` already, so this
+    /// covers globals, applications and projections.
+    fn known_ty(&self, t: &Term) -> Option<Type> {
+        match t {
+            Term::GlobalTm { var, subst } if subst.terms.is_empty() => {
+                let abs = self.at.checked_sub(1 + var.0 as usize)?;
+                match self.psi.bindings.get(abs)? {
+                    GlobalBinding::Tm { ctx, ty, .. } if ctx.is_empty() => Some((**ty).clone()),
+                    _ => None,
+                }
             }
+            Term::App { cod, .. } if local_bound_ty(cod) == 0 => Some((**cod).clone()),
+            Term::Fst { fst_ty, .. } => Some((**fst_ty).clone()),
+            Term::Snd { snd_ty, .. } if local_bound_ty(snd_ty) == 0 => Some((**snd_ty).clone()),
+            Term::Pair { fst_level, snd_level, fst_ty, snd_ty, .. } => Some(Type::Sigma {
+                fst_level: fst_level.clone(),
+                snd_level: snd_level.clone(),
+                fst: fst_ty.clone(),
+                snd: snd_ty.clone(),
+            }),
+            Term::SRefl { level, ty, tm } => {
+                Some(Type::SEq { level: level.clone(), ty: ty.clone(), lhs: tm.clone(), rhs: tm.clone() })
+            }
+            _ => None,
+        }
+    }
+
+    fn tm(&self, t: &Term) -> R<Hx> {
+        if let Term::Var(v) = t {
+            let ctx = self.ctx.borrow();
+            if let Some(Some(c)) = ctx.len().checked_sub(1 + v.0 as usize).map(|i| &ctx[i]) {
+                return Ok(c.clone());
+            }
+        }
+        if let Some(c) = self.known_ty(t).and_then(|ty| self.canon(&ty)) {
+            return c;
         }
         Ok(match t {
             Term::Var(v) => Hx::Var(v.0),
             // ---- codes decode to themselves (Tarski → Russell) ----
             Term::TmNat => Hx::Const("Nat", vec![]),
-            Term::TmPi { dom, cod, .. } => Hx::Pi(Box::new(self.tm(dom)?), Box::new(self.tm(cod)?)),
+            Term::TmPi { dom, cod, .. } => Hx::Pi(Box::new(self.tm(dom)?), Box::new(self.binds(1, || self.tm(cod))?)),
             Term::TmTy(l) => Hx::Sort(lvl(l)?),
             Term::TmId { level, ty, lhs, rhs } => konst("Id", &[level], vec![self.tm(ty)?, self.tm(lhs)?, self.tm(rhs)?])?,
             Term::TmSEq { level, ty, lhs, rhs } => konst("SEq", &[level], vec![self.tm(ty)?, self.tm(lhs)?, self.tm(rhs)?])?,
             Term::TmSEmpty { level } => konst("SEmpty", &[level], vec![])?,
             Term::TmSquash { level, ty } => konst("Squash", &[level], vec![self.tm(ty)?])?,
             Term::TmSigma { fst_level, snd_level, fst, snd } => {
-                konst("Sig", &[fst_level, snd_level], vec![self.tm(fst)?, lam(self.tm(fst)?, self.tm(snd)?)])?
+                konst("Sig", &[fst_level, snd_level], vec![self.tm(fst)?, lam(self.tm(fst)?, self.binds(1, || self.tm(snd))?)])?
             }
             Term::TmUnit { level } => konst("Unit", &[level], vec![])?,
             Term::TmEmpty { level } => konst("Empty", &[level], vec![])?,
@@ -232,7 +303,7 @@ impl Tr<'_> {
                 konst("Sum", &[lhs_level, rhs_level], vec![self.tm(lhs)?, self.tm(rhs)?])?
             }
             Term::TmW { shape_level, pos_level, shape, pos } => {
-                konst("W", &[shape_level, pos_level], vec![self.tm(shape)?, lam(self.tm(shape)?, self.tm(pos)?)])?
+                konst("W", &[shape_level, pos_level], vec![self.tm(shape)?, lam(self.tm(shape)?, self.binds(1, || self.tm(pos))?)])?
             }
             Term::TmVec { level, elem, len } => konst("Vec", &[level], vec![self.tm(elem)?, self.tm(len)?])?,
             Term::TmFin { len } => konst("Fin", &[], vec![self.tm(len)?])?,
@@ -244,7 +315,12 @@ impl Tr<'_> {
             Term::ElimNat { level, motive, base, step, scrut } => konst(
                 "elimNat",
                 &[level],
-                vec![bind(self.ty(motive)?), self.tm(base)?, bind(bind(self.tm(step)?)), self.tm(scrut)?],
+                vec![
+                    bind(self.binds(1, || self.ty(motive))?),
+                    self.tm(base)?,
+                    bind(bind(self.binds(2, || self.tm(step))?)),
+                    self.tm(scrut)?,
+                ],
             )?,
             // ---- Id ----
             Term::Refl { level, ty, tm } => konst("refl", &[level], vec![self.ty(ty)?, self.tm(tm)?])?,
@@ -254,20 +330,14 @@ impl Tr<'_> {
                 vec![
                     self.ty(ty)?,
                     self.tm(lhs)?,
-                    bind(bind(self.ty(motive)?)),
+                    bind(bind(self.binds(2, || self.ty(motive))?)),
                     self.tm(case)?,
                     self.tm(rhs)?,
                     self.tm(proof)?,
                 ],
             )?,
             // ---- strict equality and squash ----
-            Term::SRefl { level, ty, tm } => {
-                let at = Type::SEq { level: level.clone(), ty: ty.clone(), lhs: tm.clone(), rhs: tm.clone() };
-                match self.singleton(&at) {
-                    Some(l) => self.tt(&l)?,
-                    None => konst("srefl", &[level], vec![self.ty(ty)?, self.tm(tm)?])?,
-                }
-            }
+            Term::SRefl { level, ty, tm } => konst("srefl", &[level], vec![self.ty(ty)?, self.tm(tm)?])?,
             // At a singleton equality the transport is its payload: the two
             // endpoints convert, which is the strip rule.
             Term::Transp { ty_level, ty, lhs, rhs, tm, .. }
@@ -280,52 +350,44 @@ impl Tr<'_> {
             Term::Transp { ty_level, motive_level, ty, motive, lhs, rhs, proof, tm } => konst(
                 "transp",
                 &[ty_level, motive_level],
-                vec![self.ty(ty)?, bind(self.ty(motive)?), self.tm(lhs)?, self.tm(rhs)?, self.tm(proof)?, self.tm(tm)?],
+                vec![
+                    self.ty(ty)?,
+                    bind(self.under(Some(ty), || self.ty(motive))?),
+                    self.tm(lhs)?,
+                    self.tm(rhs)?,
+                    self.tm(proof)?,
+                    self.tm(tm)?,
+                ],
             )?,
             Term::ElimSEmpty { level, scrut_level, motive, scrut } => {
-                konst("elimSEmpty", &[level, scrut_level], vec![bind(self.ty(motive)?), self.tm(scrut)?])?
+                konst("elimSEmpty", &[level, scrut_level], vec![bind(self.binds(1, || self.ty(motive))?), self.tm(scrut)?])?
             }
             Term::Squash { level, ty, tm } => konst("squash", &[level], vec![self.ty(ty)?, self.tm(tm)?])?,
             Term::ElimSquash { src_level, dst_level, src_ty, motive, case, scrut } => konst(
                 "elimSquash",
                 &[src_level, dst_level],
-                vec![self.ty(src_ty)?, bind(self.ty(motive)?), bind(self.tm(case)?), self.tm(scrut)?],
+                vec![
+                    self.ty(src_ty)?,
+                    bind(self.binds(1, || self.ty(motive))?),
+                    bind(self.under(Some(src_ty), || self.tm(case))?),
+                    self.tm(scrut)?,
+                ],
             )?,
             // ---- Σ ----
-            Term::Pair { fst_level, snd_level, fst_ty, snd_ty, .. }
-                if self
-                    .singleton(&Type::Sigma {
-                        fst_level: fst_level.clone(),
-                        snd_level: snd_level.clone(),
-                        fst: fst_ty.clone(),
-                        snd: snd_ty.clone(),
-                    })
-                    .is_some() =>
-            {
-                self.tt(&lmax(fst_level, snd_level))?
-            }
-            Term::Fst { fst_ty, .. } if self.singleton(fst_ty).is_some() => {
-                let l = self.singleton(fst_ty).expect("checked");
-                self.tt(&l)?
-            }
-            Term::Snd { snd_ty, .. } if snd_ty.shift_local(1) == **snd_ty && self.singleton(snd_ty).is_some() => {
-                let l = self.singleton(snd_ty).expect("checked");
-                self.tt(&l)?
-            }
             Term::Pair { fst_level, snd_level, fst_ty, snd_ty, fst, snd } => konst(
                 "pair",
                 &[fst_level, snd_level],
-                vec![self.ty(fst_ty)?, lam(self.ty(fst_ty)?, self.ty(snd_ty)?), self.tm(fst)?, self.tm(snd)?],
+                vec![self.ty(fst_ty)?, self.lam_ty(fst_ty, snd_ty)?, self.tm(fst)?, self.tm(snd)?],
             )?,
             Term::Fst { fst_level, snd_level, fst_ty, snd_ty, pair } => konst(
                 "fst",
                 &[fst_level, snd_level],
-                vec![self.ty(fst_ty)?, lam(self.ty(fst_ty)?, self.ty(snd_ty)?), self.tm(pair)?],
+                vec![self.ty(fst_ty)?, self.lam_ty(fst_ty, snd_ty)?, self.tm(pair)?],
             )?,
             Term::Snd { fst_level, snd_level, fst_ty, snd_ty, pair } => konst(
                 "snd",
                 &[fst_level, snd_level],
-                vec![self.ty(fst_ty)?, lam(self.ty(fst_ty)?, self.ty(snd_ty)?), self.tm(pair)?],
+                vec![self.ty(fst_ty)?, self.lam_ty(fst_ty, snd_ty)?, self.tm(pair)?],
             )?,
             // ---- checked spellings: the components are the target's to infer ----
             Term::PairAt { ty, fst, snd } => self.at_ty(ty, "pair", 2, vec![self.tm(fst)?, self.tm(snd)?])?,
@@ -337,7 +399,7 @@ impl Tr<'_> {
             // ---- Unit, Empty, sums ----
             Term::Triv { level } => konst("tt", &[level], vec![])?,
             Term::ElimEmpty { level, scrut_level, motive, scrut } => {
-                konst("elimEmpty", &[level, scrut_level], vec![bind(self.ty(motive)?), self.tm(scrut)?])?
+                konst("elimEmpty", &[level, scrut_level], vec![bind(self.binds(1, || self.ty(motive))?), self.tm(scrut)?])?
             }
             Term::Inl { lhs_level, rhs_level, lhs, rhs, val } => {
                 konst("inl", &[lhs_level, rhs_level], vec![self.ty(lhs)?, self.ty(rhs)?, self.tm(val)?])?
@@ -351,9 +413,9 @@ impl Tr<'_> {
                 vec![
                     self.ty(lhs)?,
                     self.ty(rhs)?,
-                    bind(self.ty(motive)?),
-                    bind(self.tm(case_l)?),
-                    bind(self.tm(case_r)?),
+                    bind(self.binds(1, || self.ty(motive))?),
+                    bind(self.under(Some(lhs), || self.tm(case_l))?),
+                    bind(self.under(Some(rhs), || self.tm(case_r))?),
                     self.tm(scrut)?,
                 ],
             )?,
@@ -361,23 +423,23 @@ impl Tr<'_> {
             Term::Sup { shape_level, pos_level, shape_ty, pos_ty, label, children } => konst(
                 "sup",
                 &[shape_level, pos_level],
-                vec![self.ty(shape_ty)?, lam(self.ty(shape_ty)?, self.ty(pos_ty)?), self.tm(label)?, self.tm(children)?],
+                vec![self.ty(shape_ty)?, self.lam_ty(shape_ty, pos_ty)?, self.tm(label)?, self.tm(children)?],
             )?,
             Term::ElimW { shape_level, pos_level, motive_level, shape, pos, motive, step, scrut } => konst(
                 "elimW",
                 &[shape_level, pos_level, motive_level],
                 vec![
                     self.ty(shape)?,
-                    lam(self.ty(shape)?, self.ty(pos)?),
-                    bind(self.ty(motive)?),
-                    bind(bind(bind(self.tm(step)?))),
+                    self.lam_ty(shape, pos)?,
+                    bind(self.binds(1, || self.ty(motive))?),
+                    bind(bind(bind(self.under(Some(shape), || self.binds(2, || self.tm(step)))?))),
                     self.tm(scrut)?,
                 ],
             )?,
             Term::Supf { .. } | Term::ElimWf { .. } => return refuse(WF),
             Term::Supi { .. } | Term::ElimIWf { .. } => return refuse("IWf (no code yet; not in declarations)"),
             // ---- functions ----
-            Term::Lam { dom, body, .. } => lam(self.ty(dom)?, self.tm(body)?),
+            Term::Lam { dom, body, .. } => lam(self.ty(dom)?, self.under(Some(dom), || self.tm(body))?),
             Term::App { fun, arg, .. } => app(self.tm(fun)?, vec![self.tm(arg)?]),
             Term::GlobalTm { var, subst } => self.global(var.0, subst)?,
             Term::ULam { .. } | Term::UApp { .. } => return refuse("universe abstraction/application"),
@@ -453,7 +515,7 @@ pub fn export(src: &Source) -> Vec<Exported> {
     let mut refused = vec![false; psi.bindings.len()];
     for (abs, b) in psi.bindings.iter().enumerate() {
         let prefix = psi.prefix(abs);
-        let tr = Tr { at: abs, psi: &prefix };
+        let tr = Tr { at: abs, psi: &prefix, ctx: RefCell::new(Vec::new()) };
         let name = (src.name)(abs);
         let decl = (|| -> R<Decl> {
             let GlobalBinding::Tm { ctx, ty, body, level, .. } = b else {
@@ -595,31 +657,44 @@ impl Printer {
         }
     }
 
-    fn term(&mut self, t: &Hx, depth: u32) {
+    /// Print `t`, parenthesised only where it is an argument (`arg`) and not
+    /// an atom. Lean's parser is far from linear in parenthesis nesting: a
+    /// fully parenthesised library file spent nearly all its check time
+    /// parsing.
+    fn term(&mut self, t: &Hx, depth: u32, arg: bool) {
+        let atom = match t {
+            Hx::Var(_) | Hx::Hole | Hx::NatLit(_) => true,
+            // Rocq parses `f @c` as a syntax error, so there a constant is
+            // an atom only in head position.
+            Hx::Const(..) | Hx::Global(_) => self.target == Target::Lean,
+            Hx::Sort(_) => self.target == Target::Coq,
+            Hx::Pi(..) | Hx::Lam(..) | Hx::App(..) => false,
+        };
+        let open = arg && !atom;
+        if open {
+            self.out.push('(');
+        }
         match t {
             Hx::Var(i) => {
                 let _ = write!(self.out, "x{}", depth - 1 - i);
             }
             Hx::Sort(l) => {
-                let s = match self.target {
-                    Target::Lean => format!("Type {}", self.level(*l)),
-                    Target::Coq => format!("Type@{{{}}}", self.level(*l)),
+                let _ = match self.target {
+                    Target::Lean => write!(self.out, "Type {}", self.level(*l)),
+                    Target::Coq => write!(self.out, "Type@{{{}}}", self.level(*l)),
                 };
-                let _ = write!(self.out, "({s})");
             }
             Hx::Pi(a, b) => {
-                let _ = write!(self.out, "(forall (x{depth} : ");
-                self.term(a, depth);
+                let _ = write!(self.out, "forall (x{depth} : ");
+                self.term(a, depth, false);
                 self.out.push_str("), ");
-                self.term(b, depth + 1);
-                self.out.push(')');
+                self.term(b, depth + 1, false);
             }
             Hx::Lam(a, b) => {
-                let _ = write!(self.out, "(fun (x{depth} : ");
-                self.term(a, depth);
+                let _ = write!(self.out, "fun (x{depth} : ");
+                self.term(a, depth, false);
                 self.out.push_str(") => ");
-                self.term(b, depth + 1);
-                self.out.push(')');
+                self.term(b, depth + 1, false);
             }
             Hx::App(..) => {
                 let mut spine = Vec::new();
@@ -628,17 +703,31 @@ impl Printer {
                     spine.push(a);
                     head = f;
                 }
-                self.out.push('(');
-                self.term(head, depth);
+                match head {
+                    Hx::Const(..) | Hx::Global(_) => self.atom(head),
+                    _ => self.term(head, depth, true),
+                }
                 for a in spine.into_iter().rev() {
                     self.out.push(' ');
-                    self.term(a, depth);
+                    self.term(a, depth, true);
                 }
-                self.out.push(')');
             }
-            // Parenthesised: Rocq parses `f @c` as a syntax error.
+            Hx::Const(..) | Hx::Global(_) => self.atom(t),
+            Hx::NatLit(n) => {
+                let _ = write!(self.out, "({n} : Hx.Nat)");
+            }
+            Hx::Hole => self.out.push('_'),
+        }
+        if open {
+            self.out.push(')');
+        }
+    }
+
+    /// A constant or global, explicit (`@`), with its levels.
+    fn atom(&mut self, t: &Hx) {
+        match t {
             Hx::Const(name, levels) => {
-                let _ = write!(self.out, "(@Hx.{name}");
+                let _ = write!(self.out, "@Hx.{name}");
                 if !levels.is_empty() {
                     let ls: Vec<String> = levels.iter().map(|l| self.level(*l)).collect();
                     let _ = match self.target {
@@ -646,15 +735,11 @@ impl Printer {
                         Target::Coq => write!(self.out, "@{{{}}}", ls.join(" ")),
                     };
                 }
-                self.out.push(')');
             }
             Hx::Global(g) => {
-                let _ = write!(self.out, "(@{})", self.names[*g]);
+                let _ = write!(self.out, "@{}", self.names[*g]);
             }
-            Hx::NatLit(n) => {
-                let _ = write!(self.out, "({n} : Hx.Nat)");
-            }
-            Hx::Hole => self.out.push('_'),
+            _ => unreachable!("atom: a constant or a global"),
         }
     }
 }
@@ -684,10 +769,10 @@ pub fn print(target: Target, decls: &[Exported]) -> String {
                     (Target::Coq, None) => "Axiom",
                 };
                 let _ = write!(p.out, "{kw} {name} : ");
-                p.term(&d.ty, 0);
+                p.term(&d.ty, 0, false);
                 if let Some(b) = &d.body {
                     p.out.push_str(" :=\n  ");
-                    p.term(b, 0);
+                    p.term(b, 0, false);
                 }
                 p.out.push_str(match target {
                     Target::Lean => "\n\n",
