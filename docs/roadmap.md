@@ -259,11 +259,11 @@ tier-2 (W) generator since 2026-10-20, with `match` and structural recursion
 through `k` (`docs/inductive-tier2-w-lowering.md`;
 [recursive-function-fields](../issues/recursive-function-fields.md); the
 tier scheme itself is owned by
-[inductive-compiler](../issues/inductive-compiler.md)). Two things the
-library will meet at once: events as a *value* parameter (`ITree<R>(E)`)
-are not lowered yet
-([tier2-value-parameters](../issues/tier2-value-parameters.md)), and tree
-laws through `Vis` (`bind(t, Ret) = t`) need funext, so they are stated up
+[inductive-compiler](../issues/inductive-compiler.md)). Events as a *value*
+parameter (`ITree<R>(E)`) lower since 2026-10-21
+([tier2-value-parameters](../issues/tier2-value-parameters.md),
+`docs/surface-value-parameters.md` §6). One thing the library will meet at
+once: tree laws through `Vis` (`bind(t, Ret) = t`) need funext, so they are stated up
 to the depth-indexed equivalence, not `=`. The native program logic has to
 be designed to meet the trees
 ([native-one-program-logic](../issues/native-one-program-logic.md)).

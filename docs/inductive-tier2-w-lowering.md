@@ -54,11 +54,14 @@ Everything outside it is rejected with a message naming the restriction,
 never lowered. A declaration with no function field stays on tier 1, byte for
 byte: the classification adds a case, it does not move the tier-1 boundary.
 
-Not in this round, each its own follow-up: value parameters on an
-`inductive` (ITree's `E: Events`), curried function fields, constructors
+Not in this round, each its own follow-up: curried function fields, constructors
 with several recursive fields, the course-of-values window, `inj` at a
 recursive field, generated-definition naming (`gendefs.rs`), and the native
-and certificate generators (which keep refusing a tier-2 type).
+and certificate generators (which keep refusing a tier-2 type). Value
+parameters on an `inductive` (ITree's `E: Events`) landed 2026-10-21 for both
+recursive tiers (`docs/surface-value-parameters.md` §6): the codomain
+`ITree<R>(E)` is the uniform occurrence when its value arguments are the
+declaration's own, in order.
 
 ## 2. Why not the bare `W`
 

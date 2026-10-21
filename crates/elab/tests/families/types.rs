@@ -27,6 +27,8 @@ mod function_types;
 mod vector_types;
 #[path = "../value_parameters.rs"]
 mod value_parameters;
+#[path = "../inductive_value_parameters.rs"]
+mod inductive_value_parameters;
 #[path = "../surface_fin.rs"]
 mod surface_fin;
 #[path = "../surface_existential_probe.rs"]
