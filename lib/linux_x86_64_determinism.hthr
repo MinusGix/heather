@@ -434,7 +434,6 @@ theorem linux_runs_determine<M>(io: LinuxIo<M>, claim: List<LinuxEvent>): (run: 
     }
 }
 
-
 // A claimed run is a run: Linux may leave anything in RCX, R11 and a failed
 // call's buffer, the claim covers all of it, and zeros and an empty buffer
 // are one choice. So the runs `linux_runs_every` speaks of exist.

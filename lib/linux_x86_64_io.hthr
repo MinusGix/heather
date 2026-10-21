@@ -279,7 +279,6 @@ theorem linux_steps_store<M>(io: LinuxIo<M>, before, after: MachineState<M>,
     Exists(Succ(Zero), Exists(after, ⟨Inr(stored), refl⟩))
 }
 
-
 // ---------------------------------------------------------------------------
 // One call: what the process asks, what Linux needs, how it resumes.
 
@@ -459,7 +458,6 @@ theorem linux_runs_exit<M>(io: LinuxIo<M>, before, at: MachineState<M>, status: 
     LinuxRuns(io, [ExitEvent(status)], before) {
     Exists(at, ⟨linux_steps_of_fetched(io, before, at, steps), ⟨syscall, ⟨⟨number, code⟩, refl⟩⟩⟩)
 }
-
 
 theorem linux_runs_call<M>(io: LinuxIo<M>, before, at: MachineState<M>, c: LinuxCmd<Nat>, a: c.Resp(),
     rest: List<LinuxEvent>, steps: LinuxSteps(io, before, at), syscall: LinuxSyscallAt(io, at),
