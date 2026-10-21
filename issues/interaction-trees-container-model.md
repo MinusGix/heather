@@ -1,6 +1,6 @@
 ---
 title: Interaction trees over container events, cut at fuel: check the investigation against code
-status: open
+status: closed
 labels: [effects,semantics,design,research]
 area: interaction-trees
 milestone: [it-core, it-refinement]
@@ -87,3 +87,18 @@ on a customer that needs liveness or concurrency.
   `elim_W` induction hypotheses (fixed in the same round). Left for the second
   half (`it-refinement`): traces, `is_trace_of`, refinement, the bridge to
   `converges`/`fuel_monotone`; and Q3, the state handler.
+- 2026-10-21: Q2, second half, and Q3 (`it-refinement`):
+  `lib/std/itree_trace.hthr` and `lib/std/itree_state.hthr`, written up in
+  `docs/itree-refinement-round.md`. Traces end in a prefix, a pending call or
+  a return; `IsTrace` (Fig. 20) is computed from the tree, and a `Cut`
+  produces only the empty prefix. A program is a family over fuel:
+  `Below`/`Grows` order it, `fuel_monotone` and `Converges` are `simulate`'s
+  interface, and `Refines` is trace inclusion across fuel, so the
+  depth-indexed equivalence of Q1 is not needed as a relation of its own
+  (round 1's `Same` plus the family carry it). Q3 answered: `run_state`
+  interprets state events as world threading and is a monad morphism up to
+  `Same` (`run_state_bind`); with no other events, `thread(t, s)` computes
+  the final state and result by `refl`. Left open: splitting a trace of
+  `bind(t, h)` (the converse of `IsTrace::bind`), for S1 to add when a proof
+  needs it. Every question here is now answered; the choice-tree boundary of
+  Q1 waits on a customer.

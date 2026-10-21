@@ -96,10 +96,10 @@ through `milestone:`; the list of issues is `scripts/issue list --milestone
 | `tac-first-port` | tactics | open | One tactic that lives in Rust today (candidate: `split_all` or `monoid` normalisation) has a Heather implementation that closes the same goals. | tac-in-heather |
 | `tac-general` | tactics | open | A general-purpose rewriting and congruence-closure tactic (grind-like) closes the routine goals that today need hand `trans`/`cong` towers, and hands back its search state when it fails. |  |
 | `tac-arith` | tactics | open | Linear integer arithmetic is complete and certified (CutSat), and polynomial inequalities go through the ring normaliser. |  |
-| `it-library` | interaction-trees | open | The container-event interaction-tree library exists: bind, iter, trace refinement, and the bridge to `converges`/`fuel_monotone`. |  |
+| `it-library` | interaction-trees | done | The container-event interaction-tree library exists: bind, iter, trace refinement, and the bridge to `converges`/`fuel_monotone`. |  |
 | `it-function-fields` | interaction-trees | done | A surface inductive can have a recursive function-typed field (`Vis(c, k: Resp(c) -> Tree)`), lowered through W, with match and recursion over it. | it-library |
-| `it-core` | interaction-trees | open | Events as containers, the fuel-cut tree, `bind`/`iter`/`mrec`, and the structural laws, with the definitional ones checked as such. | it-library |
-| `it-refinement` | interaction-trees | open | Trace refinement and depth-indexed equivalence, with the bridge to `converges`/`fuel_monotone` and one handler into world threading. | it-library |
+| `it-core` | interaction-trees | done | Events as containers, the fuel-cut tree, `bind`/`iter`/`mrec`, and the structural laws, with the definitional ones checked as such. | it-library |
+| `it-refinement` | interaction-trees | done | Trace refinement and depth-indexed equivalence, with the bridge to `converges`/`fuel_monotone` and one handler into world threading. | it-library |
 | `it-native` | interaction-trees | open | A native program's theorem says its run refines an interaction tree. |  |
 | `math-classes` | mathematics | open | The algebra and order class hierarchy (semiring to ordered field, lattices) is settled, with a documented API that clients use without restating laws. |  |
 | `math-reals` | mathematics | open | Reals have their completeness interfaces and basic analysis (sequences, limits, continuity) on top of the regular Cauchy reals. |  |
@@ -280,7 +280,10 @@ parameter (`ITree<R>(E)`) lower since 2026-10-21
 `lib/std/itree.hthr` (`docs/itree-core-round.md`): events, the tree with a
 `Cut` leaf, `bind`/`iter`/`interp`/`mrec`, and the laws, the ones through `Vis`
 up to a structural equivalence `ITree::Same` (finite trees need no depth
-index; fuel plays its part). The native program logic has to
+index; fuel plays its part). Traces, refinement across fuel, the bridge to
+`converges`/`fuel_monotone`, and a state handler that is world threading are
+`lib/std/itree_trace.hthr` and `lib/std/itree_state.hthr`
+(`docs/itree-refinement-round.md`), so `it-library` is done. The native program logic has to
 be designed to meet the trees
 ([native-one-program-logic](../issues/native-one-program-logic.md)).
 
@@ -496,3 +499,7 @@ separate machines do not slow each other's tests.
   tree library; the hand-proved process stack burns first.
   `hih-program-logic`'s "done when" is restated to match and its
   submilestones are `hih-pl-*` (`docs/native-program-logic-design.md`).
+- 2026-10-21: `it-core` (PR #94) and `it-refinement` landed, so `it-library` is
+  done. `it-refinement`'s depth-indexed equivalence is carried by the
+  structural `ITree::Same` plus refinement across the fuel family
+  (`docs/itree-refinement-round.md`), not by a relation of its own.

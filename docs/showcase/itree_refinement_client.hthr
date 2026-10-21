@@ -1,0 +1,99 @@
+// A client of `lib/std/itree_trace.hthr` and `lib/std/itree_state.hthr`:
+// traces of a console program, a loop's fuel not being observable, and a
+// stateful program threaded as a world.
+
+import logic;
+import nat;
+import option;
+import pair;
+import itree;
+import itree_trace;
+import itree_state;
+
+// ---------------------------------------------------------------------------
+// Traces of a console program
+
+inductive ConsoleCmd { Read, Write(n: Nat) }
+
+fn ConsoleResp(c: ConsoleCmd) → Type { match c { Read => Nat, Write(_) => True } }
+
+fn Console() → Events { Events(ConsoleCmd, λ c => ConsoleResp(c)) }
+
+fn echo() → ITree<True>(Console()) {
+    ITree::bind(Console(), ITree::trigger(Console(), Read), λ n => ITree::trigger(Console(), Write(n)))
+}
+
+// Read 7, write 7, return: the trace is built answer by answer.
+fn echo_seven() → Trace<True>(Console()) { TAns(Read, 7, TAns(Write(7), trivial, TRet(trivial))) }
+
+theorem echo_seven_is_a_trace(): IsTrace(Console(), echo(), echo_seven()) {
+    Answered(7, TAns(Write(7), trivial, TRet(trivial)), refl,
+        Answered(trivial, TRet(trivial), refl, Returned(refl)))
+}
+
+// Asking and never hearing back is a trace too: a pending call.
+theorem echo_pending(): IsTrace<True>(Console(), echo(), TCall(Read)) { Pending(refl) }
+
+// …but echo never writes before it reads.
+theorem echo_reads_first(h: IsTrace<True>(Console(), echo(), TCall(Write(7)))): False {
+    let w: VisTrace<True>(Console(), Read, TCall(Write(7)), λ a rest => IsTrace(Console(), ITree::trigger(Console(), Write(a)), rest)) = h;
+    match w {
+        Prefix(e) => absurd(e),
+        Pending(e) => absurd(inj(e)),
+        Answered(_, _, e, _) => absurd(e),
+    }
+}
+
+// The program as a constant family converges to that trace.
+theorem echo_converges(): Converges<True>(Console(), λ n => echo(), echo_seven()) {
+    Converges(0, echo_seven_is_a_trace())
+}
+
+// ---------------------------------------------------------------------------
+// Fuel is not observable: a loop refines itself at more fuel.
+
+fn count_step(k: Nat) → ITree<Step<Nat, Nat>>(Console()) {
+    match k { Zero => Ret(Break(0)), Succ(j) => ITree::bind(Console(), ITree::trigger(Console(), Write(k)), λ u => Ret(Continue(j))) }
+}
+
+fn countdown(fuel: Nat) → ITree<Nat>(Console()) { ITree::iter(Console(), fuel, count_step, 3) }
+
+theorem countdown_grows(): ITree::Grows<Nat>(Console(), countdown) {
+    ITree::iter_family_grows(Console(), count_step, 3)
+}
+
+theorem countdown_refines_later(d: Nat): ITree::Refines<Nat>(Console(), countdown, λ n => countdown(n + d)) {
+    ITree::refines_shift(Console(), countdown, countdown_grows(), d)
+}
+
+// ---------------------------------------------------------------------------
+// A stateful program, threaded
+
+fn Counter() → Events { Events::sum(Events::state<Nat>(), Events::none()) }
+
+fn get() → ITree<Nat>(Counter()) { ITree::trigger(Counter(), Inl(Get)) }
+
+fn put(n: Nat) → ITree<True>(Counter()) { ITree::trigger(Counter(), Inl(Put(n))) }
+
+// Add one to the state and return its old value.
+fn tick() → ITree<Nat>(Counter()) {
+    ITree::bind(Counter(), get(), λ n => ITree::bind(Counter(), put(Succ(n)), λ u => Ret(n)))
+}
+
+fn twice() → ITree<Nat>(Counter()) {
+    ITree::bind(Counter(), tick(), λ a => ITree::bind(Counter(), tick(), λ b => Ret(a + b)))
+}
+
+theorem tick_threads(): ITree::thread(tick(), 5) = Some(Pair(6, 5)) { refl }
+
+theorem twice_threads(): ITree::thread(twice(), 5) = Some(Pair(7, 11)) { refl }
+
+// Threading `twice` is threading the first tick and then the second from the
+// state it left: the handler respects sequencing, up to `Same`.
+theorem twice_splits(s: Nat): ITree::Same(Events::none(),
+    ITree::run_state(Events::none(), twice(), s),
+    ITree::bind(Events::none(), ITree::run_state(Events::none(), tick(), s),
+        λ p => ITree::run_state(Events::none(), ITree::bind(Counter(), tick(), λ b => Ret(p.snd + b)), p.fst)))
+{
+    ITree::run_state_bind(Events::none(), tick(), λ a => ITree::bind(Counter(), tick(), λ b => Ret(a + b)), s)
+}

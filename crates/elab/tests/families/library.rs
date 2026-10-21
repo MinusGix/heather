@@ -28,6 +28,8 @@ mod lib_std_evidence;
 mod lib_std_float;
 #[path = "../lib_std_itree.rs"]
 mod lib_std_itree;
+#[path = "../lib_std_itree_trace.rs"]
+mod lib_std_itree_trace;
 #[path = "../lib_std_int.rs"]
 mod lib_std_int;
 #[path = "../lib_std_list.rs"]
