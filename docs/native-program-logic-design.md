@@ -1,6 +1,7 @@
 # Native code, rebuilt: interaction trees, one program logic, a compiler proved once
 
 Status: **design, revised 2026-10-21 after Minus's review; not implemented.**
+§10 records his answers to its open questions (2026-10-21, second review).
 Milestone `hih-program-logic` (`docs/roadmap.md`). This doc replaces the open
 question of `issues/native-one-program-logic.md` and §1 answers its three
 questions.
@@ -160,6 +161,10 @@ examples:
   and B1 left without a caller: `generate_elaborated_piece_x86` (a
   process piece's `Computes` contract) and the `filtered` publication;
 - `ir_v1`, certgen and their tests (`issues/ir-v1-retirement.md`);
+- not before their replacements exist: loops have no verified lowering yet
+  (`issues/function-ir-lowering-loops.md`), and what proves a reflected
+  region means its source function once the publication goes is
+  `issues/function-ir-source-denotation-after-b2.md`;
 - the remaining `native_*` CLI tests, replaced by the same programs through
   the compiler.
 
@@ -340,6 +345,7 @@ Decided in round S3; the constraints the rest of the design puts on it:
 - **Surface:** an effectful Heather program elaborating to this source is
   `effects-direction`'s question; the source is its target, whatever the
   surface becomes (uniqueness threading denotes the same trees, fit doc §6.5).
+  Minus chose a uniqueness-threaded surface that denotes trees (§10, item 5).
 
 ## 8. What waits on what
 
@@ -369,21 +375,63 @@ B1 needs nothing and is independent of all of it.
 over abstract inputs it matters less than in the first draft, and may not be
 needed.
 
-## 10. Open questions
+## 10. Open questions, and Minus's answers (2026-10-21)
 
-1. **Abstract specs.** `ReadCmd` names `max`, so the buffer size is in the
-   spec. A source whose read is "a chunk of any size" needs a container
-   morphism and a refinement condition; S3 decides whether the source fixes
-   the buffer.
+Minus answered these on 2026-10-21, after reading a map of the native
+state. His standing rule for the rebuild: **do the ideal version from the
+beginning**, since building cruft into a core piece "is part of what caused
+us to burn a lot of code".
+
+1. **Abstract specs.** *Decided: abstract from the start.* The read in the
+   spec is "a chunk of any size the program allows", not `ReadCmd(fd, max)`
+   with the buffer size fixed into a program's meaning. S1 states the
+   container that way (the call carries what the program asks for, and the
+   answer's length is bounded by it), and specs are written over any chunk
+   size. The design above still writes `ReadCmd(fd, max)`; read it as the
+   machine-side call, related to the abstract one by the container
+   morphism (`EventMap`) S1 defines.
 2. **Contracts that make calls**: a `Proved` item whose post is a `Sim`, for
    called procedures that do I/O. Not needed until the source has
    procedures.
-3. **Running the compiler in the kernel**: evaluating `compile(p)` by `refl`
-   is linear in program size but has a constant to measure in S5. If it is
-   too high, the fallback is a certified evaluation of the compiler outside
-   the kernel's conversion, which is `hih-self`'s territory.
+3. **Running the compiler in the kernel.** *Decided: kernel evaluation
+   first* (`refl` on the bytes of `compile(p)`), measured in S5. The goal is
+   to run the compiler at full native speed eventually, through a certified
+   evaluation outside conversion (`hih-self`).
 4. **Divergence, signals, concurrency** stay with
-   `issues/linux-syscall-trace-model.md` and `effects-direction`.
+   `issues/linux-syscall-trace-model.md` and `effects-direction`. Liveness,
+   which fuel-cut trees cannot state, is no longer deferred indefinitely:
+   Minus wants the kernel round for coinductive types planned now
+   (`issues/kernel-coinductive-types.md`), with heather-coq probing the
+   worries.
+5. **The surface.** *Decided: uniqueness threading that denotes trees*
+   (`issues/effects-direction.md`).
+6. **The source's shape (S3).** *Open.* Minus likes the lean (a tree-shaped
+   layer whose leaves are FunctionIR regions) but is unsure. The input for
+   S3, from the same discussion:
+   - **Split effects by where they live, not by IR.** *External* effects
+     (syscalls, anything Linux answers) are the only ones that need trees,
+     because the answer is chosen outside the program; they are the layer's
+     constructs (a call binds its answer as `Vis` does, sequencing is
+     `bind`, a loop is `iter`). *Internal* effects (memory, owned buffers,
+     mutable locals) belong in FunctionIR as state edges, RVSDG style, with
+     pure semantics: a `uniq Buf` is a value threaded through. An array load
+     as a tree event would split a region per access. `run_state_bind`
+     (`docs/itree-refinement-round.md`) is the theorem that the two
+     readings agree. `hih-memory` needs the state edges anyway.
+   - **What the layer costs.** Values live across a syscall cross a region
+     boundary, so the layer, not the pure allocator, places them (§7's
+     invariant between constructs); the first version will spill more than
+     it needs to around syscalls, fixable without changing the theorem
+     since placement is outside the proof. Passes that move pure code
+     across a call (hoisting out of a read loop) see both levels.
+   - **Where loops live** is the sub-question
+     (`issues/function-ir-lowering-loops.md`): one loop construct in the
+     layer, with a pure loop a layer loop without calls and FunctionIR
+     regions loop-free, or FunctionIR keeping its own loops, lowered by a
+     pure instance of the same rule.
+   - **How to decide.** S3's first step writes `tr` both ways (the layer,
+     and FunctionIR with effect nodes), each with its `denote` and the
+     construct lemma it needs, before choosing.
 
 ## 11. How it meets the principles
 

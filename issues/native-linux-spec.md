@@ -36,6 +36,7 @@ Library only; touches no elaborator file and no native producer.
 
 ## Log
 
+- 2026-10-21: Unblocked: [[interaction-trees-container-model]] closed with the tree library (PRs #94, #99). Minus's decision for this round (design §10, item 1): the read is abstract from the start, "a chunk of any size the program allows", not a buffer size fixed into the spec; the machine-side `ReadCmd(fd, max)` relates to it through an `EventMap`. His standing rule for the rebuild is the ideal version from the beginning, with no cruft in core pieces.
 - 2026-10-21: landed (S1). What it is, and where it departs from the design:
   - `lib/linux_calls.hthr` (machine-free): `LinuxCmd<Size>` with `Resp`
     (the design's `LinuxAns` is `c.Resp()`, one result type per kind) and

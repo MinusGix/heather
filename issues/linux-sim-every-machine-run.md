@@ -23,7 +23,7 @@ tree is the events of some returned trace of the tree.
   fuel (an `iter` that loops forever) while the machine exits. `Sim` is partial
   correctness, so such a machine simulates it. Either state the converse as
   "a prefix of a trace up to a cut", or wait for the kernel coinduction round
-  (the explainer thread files that one) and state divergence as a coinductive
+  ([[kernel-coinductive-types]]) and state divergence as a coinductive
   `Sim`.
 
 ## What it assumes from elsewhere
