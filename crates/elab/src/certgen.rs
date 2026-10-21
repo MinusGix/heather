@@ -3188,7 +3188,7 @@ impl<'v> Reader<'_, 'v> {
     /// The arena's bounded cache, rather than the reader, shares recent
     /// forces while allowing values the walk has left behind to be reclaimed.
     /// See the design doc's §2.
-    fn force(&self, c: &'v TmClo<'v>) -> Result<Rc<Val<'v>>, String> {
+    pub(crate) fn force(&self, c: &'v TmClo<'v>) -> Result<Rc<Val<'v>>, String> {
         let mut ev = Eval::new(
             READ_FUEL,
             Defs::transparent_cached(self.psi, &self.cache),

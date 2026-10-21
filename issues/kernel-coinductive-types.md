@@ -69,12 +69,12 @@ since July.
 ## Constraints from elsewhere
 
 - **Export** (`docs/export-fragment-design.md`). Lean 4's kernel has no
-  coinductive types, and mathlib builds M types as limits. So an exported
-  M term would be realised by option 2's construction on the Lean side,
-  which may not carry option 1's β rule definitionally. Rocq has
-  `CoInductive` with primitive projections. This should be settled in the
-  design round, since export is how Heather means to show it can be
-  trusted.
+  coinductive types, and mathlib builds M types as limits, so an exported
+  M term would arrive as option 2's construction on the Lean side, possibly
+  without option 1's β rule holding definitionally. Minus (2026-10-21):
+  export does not have to match the language; Heather works differently
+  and may grow more special. So this is a note for the exporter (a
+  realisation, or an unexported fragment), not a constraint on the choice.
 - **The tree library stays.** Coinductive trees would come with `approx(n)`
   into today's fuel-cut trees, so every finite theorem, including the
   native `Sim` stated over approximations, carries over unchanged.

@@ -35,6 +35,7 @@ import relation_props;
 import algebra;
 import algebra_rel;
 import order;
+import semiring;
 import ordered_field;
 import rat;
 export algebra::{Numeral};
@@ -1576,6 +1577,47 @@ theorem CReal::mul_lt_mono_l({x, y, z: CReal}, h: x < y, hz: 0 < z): z * x < z *
 }
 
 // ---------------------------------------------------------------------------
+// The commutative ring modulo `≈` (lib/std/semiring.hthr). The semigroups
+// and commutativity registered with `+` and `*` fill their parents; what is
+// new is the units, the additive inverse, the second distributive law and
+// zero's annihilation, each the law above read from the other side.
+
+theorem CReal::one_mul(self x: CReal): 1 * x ≈ x { CReal::same_trans(CReal::mul_comm(1, x), x.mul_one()) }
+
+theorem CReal::zero_mul(self x: CReal): 0 * x ≈ 0 { CReal::same_trans(CReal::mul_comm(0, x), x.mul_zero()) }
+
+theorem CReal::neg_add_self(self x: CReal): -x + x ≈ 0 { CReal::same_trans(CReal::add_comm(-x, x), x.add_neg()) }
+
+instance CommMonoidRel<CReal>(CReal::Same, CReal::add) {
+    unit := 0,
+    unit_l := CReal::zero_add,
+    unit_r := CReal::add_zero,
+}
+
+instance GroupRel<CReal>(CReal::Same, CReal::add) {
+    inv := CReal::neg,
+    inv_l := CReal::neg_add_self,
+    inv_r := CReal::add_neg,
+    inv_respects := λ x y h => CReal::neg_respects(h),
+}
+
+instance MonoidRel<CReal>(CReal::Same, CReal::mul) {
+    unit := 1,
+    unit_l := CReal::one_mul,
+    unit_r := CReal::mul_one,
+}
+
+instance Distributes<CReal>(CReal::Same, CReal::add, CReal::mul) {
+    distrib_l := CReal::mul_add_distr,
+    distrib_r := CReal::add_mul_distr,
+}
+
+instance CommRing<CReal>(CReal::Same, CReal::add, CReal::mul) {
+    zero_mul := CReal::zero_mul,
+    mul_zero := CReal::mul_zero,
+}
+
+// ---------------------------------------------------------------------------
 // The Archimedean property and the ordered-field interface
 // (std/ordered_field). A real is below the natural number one past its
 // canonical bound: every term is at most the bound, so a gap of one holds
@@ -1613,26 +1655,15 @@ instance Cotransitive<CReal>(CReal::Lt) {
 instance PseudoOrder<CReal>(CReal::Same, CReal::Lt, CReal::Le) {}
 
 instance OrderedAddGroup<CReal>(CReal::Same, CReal::Lt, CReal::Le, CReal::add) {
-    zero := 0,
-    neg := CReal::neg,
-    add_zero := CReal::add_zero,
-    add_neg := CReal::add_neg,
-    neg_respects := λ x x2 h => CReal::neg_respects(h),
     add_lt_mono_r := CReal::add_lt_mono_r,
 }
 
 instance LocatedAddGroup<CReal>(CReal::Same, CReal::Lt, CReal::Le, CReal::add) {}
 
 instance OrderedField<CReal>(CReal::Same, CReal::Lt, CReal::Le, CReal::add, CReal::mul) {
-    one := 1,
     of_nat := λ n => CReal::ofRat(Rat::ofInt(OfNat(n))),
-    inv := λ x h => x.inv(h := h),
-    mul_respects := λ x x2 y y2 hx hy => CReal::mul_respects(hx, hy),
-    mul_assoc := CReal::mul_assoc,
-    mul_comm := CReal::mul_comm,
-    mul_one := CReal::mul_one,
-    mul_add_distr := CReal::mul_add_distr,
-    mul_inv := λ x h => x.mul_inv(h := h),
+    recip := λ x h => x.inv(h := h),
+    mul_recip := λ x h => x.mul_inv(h := h),
     zero_lt_one := CReal::zero_lt_one(),
     mul_pos := λ x y hx hy => CReal::mul_pos(hx, hy),
     pos_of_mul_pos := λ x y hx h => CReal::pos_of_mul_pos(hx, h),

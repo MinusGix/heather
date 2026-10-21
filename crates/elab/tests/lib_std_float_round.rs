@@ -50,11 +50,11 @@ const MODULES: &[(&str, &str)] = &[
         include_str!("../../../lib/std/algebra_rel.hthr"),
     ),
     ("order", include_str!("../../../lib/std/order.hthr")),
+    ("semiring", include_str!("../../../lib/std/semiring.hthr")),
     (
         "ordered_field",
         include_str!("../../../lib/std/ordered_field.hthr"),
     ),
-    ("semiring", include_str!("../../../lib/std/semiring.hthr")),
     ("rat", include_str!("../../../lib/std/rat.hthr")),
     ("dyadic", include_str!("../../../lib/std/float/dyadic.hthr")),
     ("float", include_str!("../../../lib/std/float/float.hthr")),

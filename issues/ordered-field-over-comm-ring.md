@@ -1,11 +1,11 @@
 ---
 title: Build the ordered field on the ring layers
-status: open
+status: closed
 labels: [stdlib,mathematics,algebra]
 area: mathematics
 milestone: [math-classes]
 created: 2026-10-20
-updated: 2026-10-20
+updated: 2026-10-21
 ---
 
 `OrderedField<A>(≈, <, ≤, +, *)` (lib/std/ordered_field.hthr) restates the ring
@@ -28,3 +28,7 @@ needs its `CommRing` instance, which its existing lemmas fill.
   field names (`unit`, `inv`, `multiplicative.unit`) are what the ordered
   layers would inherit.
 - **[[constructive-ordered-field-interface]]** owns the ordered layers.
+
+## Log
+
+- 2026-10-21: done. `OrderedAddGroup` extends `GroupRel(≈, +)` + `Commutative(≈, +)` (zero `A.unit`, negation `A.inv`); `OrderedField` extends `LocatedAddGroup` + `CommRing(≈, +, *)` (one `A.multiplicative.unit`). The restated fields and the re-proved `zero_add`, `neg_add_self`, `neg_unique`, `neg_neg`, `add_add_add_comm`, `one_mul`, `mul_zero`, `mul_neg`, `neg_mul`, `neg_mul_neg` are gone; the field's inverse is `recip` (law `mul_recip`, theorems `recip_*`) because `inv` is now the additive group's. The additive `GroupRel` reached through both parents is one untagged fiber, so no class-system change was needed. `CReal` registers `CommRing` from its lemmas plus `one_mul`, `zero_mul`, `neg_add_self`. Design: docs/constructive-ordered-field-design.md, "Built on the ring layers".

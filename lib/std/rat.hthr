@@ -28,8 +28,8 @@ import algebra;
 import algebra_rel;
 import order;
 import bool;
-import ordered_field;
 import semiring;
+import ordered_field;
 export algebra::{Numeral};
 
 record Rat { num: Int, den: Pos<Nat> }
@@ -1365,57 +1365,6 @@ theorem Rat::pow_negSucc_inv(self x: Rat, k: Nat, h: x.Apart(0) := infer): x ^ N
 }
 
 // ---------------------------------------------------------------------------
-// The ordered-field interface (std/ordered_field). Every layer is filled
-// from the laws above; `≤` is the cross-multiplied one, which means
-// `¬(y < x)`, and the inverse is `x⁻¹` at the same apartness proof.
-
-theorem Rat::zero_lt_one(): Rat::Lt(0, 1) { omega }
-
-instance StrictOrder<Rat>(Rat::Same, Rat::Lt, Rat::Le) {
-    lt_irrefl := Rat::lt_irrefl,
-    lt_trans := λ x y z h1 h2 => Rat::lt_trans(h1, h2),
-    lt_respects := λ x x2 y y2 hx hy h => Rat::lt_respects(hx, hy, h),
-    lt_tight := λ x y h1 h2 => Rat::same_of_not_lt(h1, h2),
-    le_of_not_lt := λ x y h => Rat::le_of_not_lt(h),
-    not_lt_of_le := λ x y h => Rat::not_lt_of_le(h),
-}
-
-instance Cotransitive<Rat>(Rat::Lt) {
-    rel_cotrans := Rat::lt_cotrans,
-}
-
-instance PseudoOrder<Rat>(Rat::Same, Rat::Lt, Rat::Le) {}
-
-instance OrderedAddGroup<Rat>(Rat::Same, Rat::Lt, Rat::Le, Rat::add) {
-    zero := 0,
-    neg := Rat::neg,
-    add_zero := Rat::add_zero,
-    add_neg := Rat::add_neg,
-    neg_respects := λ x x2 h => Rat::neg_respects(h),
-    add_lt_mono_r := Rat::add_lt_mono_r,
-}
-
-instance LocatedAddGroup<Rat>(Rat::Same, Rat::Lt, Rat::Le, Rat::add) {}
-
-instance OrderedField<Rat>(Rat::Same, Rat::Lt, Rat::Le, Rat::add, Rat::mul) {
-    one := 1,
-    of_nat := λ n => Rat::ofInt(OfNat(n)),
-    inv := λ x h => x.inv(h := h),
-    mul_respects := λ x x2 y y2 hx hy => Rat::mul_respects(hx, hy),
-    mul_assoc := Rat::mul_assoc,
-    mul_comm := Rat::mul_comm,
-    mul_one := Rat::mul_one,
-    mul_add_distr := Rat::mul_add_distr,
-    mul_inv := λ x h => x.mul_inv(h := h),
-    zero_lt_one := Rat::zero_lt_one(),
-    mul_pos := λ x y hx hy => Rat::mul_pos(hx, hy),
-    pos_of_mul_pos := λ x y hx h => Rat::pos_of_mul_pos(hx, h),
-    of_nat_zero := Rat::same_refl(0),
-    of_nat_succ := λ n => omega,
-    archimedean := Rat::archimedean,
-}
-
-// ---------------------------------------------------------------------------
 // The commutative ring modulo `≈` (lib/std/semiring.hthr): the identity-free
 // carrier of the semiring layers. The semigroups and commutativity above fill
 // their parents; what is new is the units, the additive inverse, the second
@@ -1458,6 +1407,47 @@ instance Distributes<Rat>(Rat::Same, Rat::add, Rat::mul) {
 instance CommRing<Rat>(Rat::Same, Rat::add, Rat::mul) {
     zero_mul := Rat::zero_mul,
     mul_zero := Rat::mul_zero,
+}
+
+// ---------------------------------------------------------------------------
+// The ordered-field interface (std/ordered_field). Every layer is filled
+// from the laws above, its algebra from the ring just registered; `≤` is the
+// cross-multiplied one, which means `¬(y < x)`, and the reciprocal is `x⁻¹`
+// at the same apartness proof.
+
+theorem Rat::zero_lt_one(): Rat::Lt(0, 1) { omega }
+
+instance StrictOrder<Rat>(Rat::Same, Rat::Lt, Rat::Le) {
+    lt_irrefl := Rat::lt_irrefl,
+    lt_trans := λ x y z h1 h2 => Rat::lt_trans(h1, h2),
+    lt_respects := λ x x2 y y2 hx hy h => Rat::lt_respects(hx, hy, h),
+    lt_tight := λ x y h1 h2 => Rat::same_of_not_lt(h1, h2),
+    le_of_not_lt := λ x y h => Rat::le_of_not_lt(h),
+    not_lt_of_le := λ x y h => Rat::not_lt_of_le(h),
+}
+
+instance Cotransitive<Rat>(Rat::Lt) {
+    rel_cotrans := Rat::lt_cotrans,
+}
+
+instance PseudoOrder<Rat>(Rat::Same, Rat::Lt, Rat::Le) {}
+
+instance OrderedAddGroup<Rat>(Rat::Same, Rat::Lt, Rat::Le, Rat::add) {
+    add_lt_mono_r := Rat::add_lt_mono_r,
+}
+
+instance LocatedAddGroup<Rat>(Rat::Same, Rat::Lt, Rat::Le, Rat::add) {}
+
+instance OrderedField<Rat>(Rat::Same, Rat::Lt, Rat::Le, Rat::add, Rat::mul) {
+    of_nat := λ n => Rat::ofInt(OfNat(n)),
+    recip := λ x h => x.inv(h := h),
+    mul_recip := λ x h => x.mul_inv(h := h),
+    zero_lt_one := Rat::zero_lt_one(),
+    mul_pos := λ x y hx hy => Rat::mul_pos(hx, hy),
+    pos_of_mul_pos := λ x y hx h => Rat::pos_of_mul_pos(hx, h),
+    of_nat_zero := Rat::same_refl(0),
+    of_nat_succ := λ n => omega,
+    archimedean := Rat::archimedean,
 }
 
 // Subtraction is monotone in its left argument and antitone in its right,
@@ -1589,4 +1579,44 @@ theorem Rat::le_mid_of_dist({g, f, y: Rat}, lt: g < f, d: (g -y).abs() <= (f -y)
             }
         },
     }
+}
+
+// Dividing a bound through by a positive natural: `c·g <= y` puts `g` at most
+// `y / c`.
+theorem Rat::le_div_of_mul_le(c: Pos<Nat>, {g, y: Rat}, h: Rat::ofInt(c.int()) * g <= y): g <= Rat(1, c) * y {
+    let dm = Rat(1, c).den_mul(Rat::ofInt(c.int()));
+    let dc: (Rat(1, c).den.int() = c.int()) = refl;
+    let d1: ((Rat::ofInt(c.int())).den.int() = 1) = refl;
+    let one: (Rat(1, c) * Rat::ofInt(c.int()) ≈ 1) = omega;
+    calc {
+        g ≈ 1 * g := Rat::same_sym(g.one_mul()),
+        ≈ (Rat(1, c) * Rat::ofInt(c.int())) * g := Rat::mul_respects(Rat::same_sym(one), g.same_refl()),
+        ≈ Rat(1, c) * (Rat::ofInt(c.int()) * g) := Rat(1, c).mul_assoc(Rat::ofInt(c.int()), g),
+        <= Rat(1, c) * y := Rat::mul_le_mono_l(h, omega),
+    }
+}
+
+// The relative form of an error bound (Higham's standard model): if `y` is
+// within `u·|x|` of a nonzero `x`, then `y = x·(1 + e)` with `|e| <= u`,
+// taking `e = (y - x) / x`.
+theorem Rat::rel_of_abs_le({x, y, u: Rat}, nz: ¬(x ≈ 0), h: (y -x).abs() <= u * x.abs()): ∃ e: Rat, e.abs() <= u ∧ y ≈ x * (1 + e) {
+    let r = x.recip();
+    let xr = x.mul_recip(nz);
+    let size = calc {
+        ((y -x) * r).abs() ≈ (y -x).abs() * r.abs() := (y -x).abs_mul(r),
+        <= (u * x.abs()) * r.abs() := Rat::mul_le_mono_r(h, r.abs_nonneg()),
+        ≈ u * (x.abs() * r.abs()) := u.mul_assoc(x.abs(), r.abs()),
+        ≈ u * (x * r).abs() := Rat::mul_respects(u.same_refl(), Rat::same_sym(x.abs_mul(r))),
+        ≈ u * Rat::abs(1) := Rat::mul_respects(u.same_refl(), Rat::abs_respects(xr)),
+        ≈ u := u.mul_one(),
+    };
+    let back = calc {
+        y ≈ x + (y -x) := Rat::same_sym(Rat::same_trans(x.add_comm(y -x), y.sub_add_cancel(x))),
+        ≈ x * 1 + (y -x) * 1 := Rat::add_respects(Rat::same_sym(x.mul_one()), Rat::same_sym((y -x).mul_one())),
+        ≈ x * 1 + (y -x) * (x * r) := Rat::add_respects((x * 1).same_refl(), Rat::mul_respects((y -x).same_refl(), Rat::same_sym(xr))),
+        ≈ x * 1 + x * ((y -x) * r) := Rat::add_respects((x * 1).same_refl(), Rat::same_trans(Rat::same_sym((y -x).mul_assoc(x, r)),
+            Rat::same_trans(Rat::mul_respects((y -x).mul_comm(x), r.same_refl()), x.mul_assoc(y -x, r)))),
+        ≈ x * (1 + (y -x) * r) := Rat::same_sym(x.mul_add_distr(1, (y -x) * r)),
+    };
+    Exists((y -x) * r, And(size, back))
 }

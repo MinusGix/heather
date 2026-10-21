@@ -217,3 +217,41 @@ fn native_tactics_speak_the_same_protocol() {
     let msg = refused_in(e, "import tactic;\ntheorem t(n: Nat, q: n = 4): n = 3 { by assumption }");
     assert!(msg.contains("no local's type is the goal"), "{msg}");
 }
+
+/// A run is not limited by the length of its conversation
+/// (issues/tactic-run-continuation-chain.md): a resumed tree's proof is the
+/// previous tree's applied, and the host pins each one as it is made, so
+/// reading the result after thousands of answers is as shallow as after one.
+/// Past the old ceiling (about a thousand) at both kinds of request, with
+/// each continuation using its answer, ending in a result and in a failure.
+#[test]
+fn long_runs() {
+    check(
+        "fn walk(k: Nat, t: Handle) → tactic::Tac<tactic::Expr> {
+             match k {
+                 Zero => assumption(),
+                 Succ(j) => goal().bind(λ g => defeq(Hd(g.target), Hd(t)).bind(λ same => match same {
+                     True => walk(j, g.target),
+                     False => Pure(NatLit(0)),
+                 })),
+             }
+         }
+         theorem many(n: Nat, h: n = 3): n = 3 { by walk(1500, Handle(0)) }",
+    );
+    let msg = refused(
+        "fn spin(k: Nat) → tactic::Tac<tactic::Expr> {
+             match k { Zero => assumption(), Succ(j) => defeq(NatLit(0), NatLit(0)).bind(λ g => spin(j)) }
+         }
+         theorem late(n: Nat, q: n = 4): n = 3 { by spin(1500) }",
+    );
+    assert!(msg.contains("the tactic failed: no local's type is the goal"), "{msg}");
+    assert!(msg.contains("tried q: its type is not the goal"), "{msg}");
+    // The conversation itself is still bounded.
+    let msg = refused(
+        "fn spin(k: Nat) → tactic::Tac<tactic::Expr> {
+             match k { Zero => assumption(), Succ(j) => defeq(NatLit(0), NatLit(0)).bind(λ g => spin(j)) }
+         }
+         theorem t(n: Nat, h: n = 3): n = 3 { by spin(10500) }",
+    );
+    assert!(msg.contains("the tactic made more than 10000 requests without finishing"), "{msg}");
+}

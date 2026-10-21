@@ -8,7 +8,10 @@
 //!  2. the layers and their theorems are *there*, resolution finds every
 //!     instance at both carriers, and the instances' fields are the
 //!     carriers' own operations by `refl`;
-//!  3. negative controls: each layer's theorems are refused one layer down
+//!  3. the ordered layers are the algebraic ones extended
+//!     (`issues/ordered-field-over-comm-ring.md`): group and ring theorems
+//!     apply to them, and `CReal` is a `CommRing`;
+//!  4. negative controls: each layer's theorems are refused one layer down
 //!     (`≤` transitivity and a bound's positivity need locatedness), a wrong
 //!     law is refused, the inverse wants apartness of its own argument and
 //!     has its argument's sign (`issues/ordered-field-inverse-sign.md`), `≤`
@@ -42,11 +45,11 @@ const MODULES: &[(&str, &str)] = &[
         include_str!("../../../lib/std/algebra_rel.hthr"),
     ),
     ("order", include_str!("../../../lib/std/order.hthr")),
+    ("semiring", include_str!("../../../lib/std/semiring.hthr")),
     (
         "ordered_field",
         include_str!("../../../lib/std/ordered_field.hthr"),
     ),
-    ("semiring", include_str!("../../../lib/std/semiring.hthr")),
     ("rat", include_str!("../../../lib/std/rat.hthr")),
     ("creal", include_str!("../../../lib/std/creal.hthr")),
 ];
@@ -91,7 +94,7 @@ fn refused_with(name: &str, src: &str, needle: &str) {
 }
 
 const IMPORTS: &str = "import logic; import nat; import int; import omega; import relation_props;
-    import algebra_rel; import ordered_field; import rat; import creal;\n";
+    import algebra_rel; import semiring; import ordered_field; import rat; import creal;\n";
 
 #[test]
 fn the_interface_and_its_client_check() {
@@ -116,10 +119,9 @@ const THEOREMS: &[&str] = &[
     "PseudoOrder::le_trans", "PseudoOrder::apart_cotrans", "PseudoOrder::within_le",
     "PseudoOrder::within_widen", "PseudoOrder::between_widen_le", "PseudoOrder::between_of_within",
     // The ordered additive group.
-    "OrderedAddGroup::add_respects", "OrderedAddGroup::zero_add", "OrderedAddGroup::neg_add_self",
+    "OrderedAddGroup::add_respects",
     "OrderedAddGroup::add_neg_add", "OrderedAddGroup::neg_add_add", "OrderedAddGroup::add_neg_cancel_r",
-    "OrderedAddGroup::sub_add_cancel", "OrderedAddGroup::neg_unique", "OrderedAddGroup::neg_neg",
-    "OrderedAddGroup::neg_zero", "OrderedAddGroup::add_add_add_comm", "OrderedAddGroup::neg_add",
+    "OrderedAddGroup::sub_add_cancel", "OrderedAddGroup::neg_zero", "OrderedAddGroup::neg_add",
     "OrderedAddGroup::sub_add_sub", "OrderedAddGroup::neg_sub", "OrderedAddGroup::add_lt_mono_l",
     "OrderedAddGroup::add_lt_mono", "OrderedAddGroup::add_lt_cancel_r", "OrderedAddGroup::add_lt_cancel_l",
     "OrderedAddGroup::add_le_mono_r", "OrderedAddGroup::add_le_mono_l", "OrderedAddGroup::neg_lt",
@@ -133,17 +135,17 @@ const THEOREMS: &[&str] = &[
     "LocatedAddGroup::add_le_mono", "LocatedAddGroup::neg_le", "LocatedAddGroup::abs_le_of_abs_lt",
     "LocatedAddGroup::abs_le_add", "LocatedAddGroup::abs_lt_of_abs_le",
     // The field.
-    "OrderedField::one_apart_zero", "OrderedField::one_mul", "OrderedField::mul_zero",
-    "OrderedField::mul_neg", "OrderedField::mul_lt_mono_l", "OrderedField::mul_lt_mono_r",
-    "OrderedField::inv_unique", "OrderedField::inv_respects", "OrderedField::inv_mul",
-    "OrderedField::of_nat_lt_succ", "OrderedField::of_nat_pos", "OrderedField::neg_mul",
-    "OrderedField::neg_mul_neg",
-    // The inverse's sign, from the reflection law.
-    "OrderedField::inv_pos", "OrderedField::inv_neg", "OrderedField::inv_inv",
-    "OrderedField::inv_lt_inv", "OrderedField::archimedean_inv",
+    "OrderedField::mul_respects", "OrderedField::one_apart_zero",
+    "OrderedField::mul_lt_mono_l", "OrderedField::mul_lt_mono_r",
+    "OrderedField::recip_unique", "OrderedField::recip_respects", "OrderedField::recip_mul",
+    "OrderedField::of_nat_lt_succ", "OrderedField::of_nat_pos",
+    // The reciprocal's sign, from the reflection law.
+    "OrderedField::recip_pos", "OrderedField::recip_neg", "OrderedField::recip_recip",
+    "OrderedField::recip_lt_recip", "OrderedField::archimedean_recip",
     // What the carriers added for their instances.
     "Rat::not_lt_of_le", "Rat::zero_lt_one", "CReal::archimedean", "CReal::zero_lt_one",
     "CReal::ofNat_succ", "Rat::pos_of_mul_pos", "Rat::le_of_mul_le_bounded", "CReal::pos_of_mul_pos",
+    "CReal::one_mul", "CReal::zero_mul", "CReal::neg_add_self",
 ];
 
 #[test]
@@ -164,6 +166,7 @@ fn the_layers_are_there_at_both_carriers() {
             let d = Rat::OrderedAddGroup(Rat::Same, Rat::Lt, Rat::Le, Rat::add);
             let f = Rat::LocatedAddGroup(Rat::Same, Rat::Lt, Rat::Le, Rat::add);
             let g = Rat::OrderedField(Rat::Same, Rat::Lt, Rat::Le, Rat::add, Rat::mul);
+            let r = Rat::CommRing(Rat::Same, Rat::add, Rat::mul);
             0
         }
         fn creal_layers() → Nat {
@@ -173,15 +176,16 @@ fn the_layers_are_there_at_both_carriers() {
             let d = CReal::OrderedAddGroup(CReal::Same, CReal::Lt, CReal::Le, CReal::add);
             let f = CReal::LocatedAddGroup(CReal::Same, CReal::Lt, CReal::Le, CReal::add);
             let g = CReal::OrderedField(CReal::Same, CReal::Lt, CReal::Le, CReal::add, CReal::mul);
+            let r = CReal::CommRing(CReal::Same, CReal::add, CReal::mul);
             0
         }
-        theorem rat_zero(): Rat::OrderedField(Rat::Same, Rat::Lt, Rat::Le, Rat::add, Rat::mul).zero = 0 { refl }
-        theorem rat_neg(x: Rat): Rat::OrderedField(Rat::Same, Rat::Lt, Rat::Le, Rat::add, Rat::mul).neg(x) = -x { refl }
-        theorem rat_inv(x: Rat, h: x.Apart(0)):
-            Rat::OrderedField(Rat::Same, Rat::Lt, Rat::Le, Rat::add, Rat::mul).inv(x, h) = x.inv(h := h) { refl }
-        theorem creal_one(): CReal::OrderedField(CReal::Same, CReal::Lt, CReal::Le, CReal::add, CReal::mul).one = 1 { refl }
-        theorem creal_inv(x: CReal, h: x.Apart(0)):
-            CReal::OrderedField(CReal::Same, CReal::Lt, CReal::Le, CReal::add, CReal::mul).inv(x, h) = x.inv(h := h) { refl }
+        theorem rat_zero(): Rat::OrderedField(Rat::Same, Rat::Lt, Rat::Le, Rat::add, Rat::mul).unit = 0 { refl }
+        theorem rat_neg(x: Rat): Rat::OrderedField(Rat::Same, Rat::Lt, Rat::Le, Rat::add, Rat::mul).inv(x) = -x { refl }
+        theorem rat_recip(x: Rat, h: x.Apart(0)):
+            Rat::OrderedField(Rat::Same, Rat::Lt, Rat::Le, Rat::add, Rat::mul).recip(x, h) = x.inv(h := h) { refl }
+        theorem creal_one(): CReal::OrderedField(CReal::Same, CReal::Lt, CReal::Le, CReal::add, CReal::mul).multiplicative.unit = 1 { refl }
+        theorem creal_recip(x: CReal, h: x.Apart(0)):
+            CReal::OrderedField(CReal::Same, CReal::Lt, CReal::Le, CReal::add, CReal::mul).recip(x, h) = x.inv(h := h) { refl }
         // `≤` at the reals is Bishop's by definition; at the rationals it is
         // the cross-multiplied one, reached through the instance's laws.
         theorem creal_le_is_not_lt(x, y: CReal, h: ¬(y < x)): x <= y { h }
@@ -206,12 +210,12 @@ fn an_unfolded_predicate_meets_its_name() {
         "unfolded_predicates",
         &format!(
             "{IMPORTS} theorem close_neg<A: OrderedAddGroup(≈, <, <=, +)>(x, y, e: A, h: Close(x, y, e)):
-                AbsLt(A.neg(x + A.neg(y)), e)
+                AbsLt(A.inv(x + A.inv(y)), e)
             {{
-                OrderedAddGroup::abs_lt_neg(x + A.neg(y), e, h)
+                OrderedAddGroup::abs_lt_neg(x + A.inv(y), e, h)
             }}
-            theorem bound_lt<A: OrderedAddGroup(≈, <, <=, +)>(x, e: A, h: AbsLt(x, e)): A.neg(e) < e {{
-                StrictOrder::between_lt(A.neg(e), x, e, h)
+            theorem bound_lt<A: OrderedAddGroup(≈, <, <=, +)>(x, e: A, h: AbsLt(x, e)): A.inv(e) < e {{
+                StrictOrder::between_lt(A.inv(e), x, e, h)
             }}
             theorem rat_sum(x, y, e, d: Rat, hx: -e < x ∧ x < e, hy: -d < y ∧ y < d):
                 -(e + d) < x + y ∧ x + y < e + d
@@ -266,7 +270,7 @@ fn each_layer_is_refused_one_layer_down() {
     refused_with(
         "bound_pos_needs_locatedness",
         &format!(
-            "{IMPORTS} theorem bad<A: OrderedAddGroup(≈, <, <=, +)>(x, e: A, h: AbsLt(x, e)): A.zero < e {{
+            "{IMPORTS} theorem bad<A: OrderedAddGroup(≈, <, <=, +)>(x, e: A, h: AbsLt(x, e)): A.unit < e {{
                 LocatedAddGroup::abs_lt_pos(x, e, h)
             }}"
         ),
@@ -282,7 +286,7 @@ fn each_layer_is_refused_one_layer_down() {
             "{IMPORTS} theorem le_trans<A: PseudoOrder(≈, <, <=)>(x, y, z: A, h1: x <= y, h2: y <= z): x <= z {{
                 PseudoOrder::le_trans(x, y, z, h1, h2)
             }}
-            theorem bound_pos<A: LocatedAddGroup(≈, <, <=, +)>(x, e: A, h: AbsLt(x, e)): A.zero < e {{
+            theorem bound_pos<A: LocatedAddGroup(≈, <, <=, +)>(x, e: A, h: AbsLt(x, e)): A.unit < e {{
                 LocatedAddGroup::abs_lt_pos(x, e, h)
             }}
             theorem antisymm<A: StrictOrder(≈, <, <=)>(x, y: A, h1: x <= y, h2: y <= x): x ≈ y {{
@@ -338,7 +342,7 @@ fn the_inverse_wants_its_own_argument_apart() {
     refused_with(
         "inverse_of_unrelated_proof",
         &format!(
-            "{IMPORTS} fn bad<A: OrderedField(≈, <, <=, +, *)>(x: A) → A {{ A.inv(x, Inr(A.zero_lt_one)) }}"
+            "{IMPORTS} fn bad<A: OrderedField(≈, <, <=, +, *)>(x: A) → A {{ A.recip(x, Inr(A.zero_lt_one)) }}"
         ),
         "is expected here",
     );
@@ -346,15 +350,15 @@ fn the_inverse_wants_its_own_argument_apart() {
     // refutable, so no proof reaches the field.
     refused(
         "inverse_without_proof",
-        &format!("{IMPORTS} fn bad<A: OrderedField(≈, <, <=, +, *)>() → A {{ A.inv(A.zero) }}"),
+        &format!("{IMPORTS} fn bad<A: OrderedField(≈, <, <=, +, *)>() → A {{ A.recip(A.unit) }}"),
     );
     // The inverse's sign is its argument's: a negative argument does not
     // give a positive inverse.
     refused(
         "inverse_sign_of_negative",
         &format!(
-            "{IMPORTS} theorem bad<A: OrderedField(≈, <, <=, +, *)>(x: A, hx: x < A.zero): A.zero < A.inv(x, Inl(hx)) {{
-                OrderedField::inv_pos(x, Inl(hx), hx)
+            "{IMPORTS} theorem bad<A: OrderedField(≈, <, <=, +, *)>(x: A, hx: x < A.unit): A.unit < A.recip(x, Inl(hx)) {{
+                OrderedField::recip_pos(x, Inl(hx), hx)
             }}"
         ),
     );
@@ -363,12 +367,12 @@ fn the_inverse_wants_its_own_argument_apart() {
         &mut e,
         "inverse_control",
         &format!(
-            "{IMPORTS} fn ok<A: OrderedField(≈, <, <=, +, *)>(x: A) → A {{ A.inv(A.one, Inr(A.zero_lt_one)) }}
-            theorem neg_inv<A: OrderedField(≈, <, <=, +, *)>(x: A, hx: x < A.zero): A.inv(x, Inl(hx)) < A.zero {{
-                OrderedField::inv_neg(x, Inl(hx), hx)
+            "{IMPORTS} fn ok<A: OrderedField(≈, <, <=, +, *)>(x: A) → A {{ A.recip(A.multiplicative.unit, Inr(A.zero_lt_one)) }}
+            theorem neg_recip<A: OrderedField(≈, <, <=, +, *)>(x: A, hx: x < A.unit): A.recip(x, Inl(hx)) < A.unit {{
+                OrderedField::recip_neg(x, Inl(hx), hx)
             }}
-            theorem zero_not_apart<A: OrderedField(≈, <, <=, +, *)>(x: A): ¬(ApartBy(<, A.zero, A.zero)) {{
-                StrictOrder::apart_irrefl(A.zero)
+            theorem zero_not_apart<A: OrderedField(≈, <, <=, +, *)>(x: A): ¬(ApartBy(<, A.unit, A.unit)) {{
+                StrictOrder::apart_irrefl(A.unit)
             }}"
         ),
     );
@@ -381,8 +385,8 @@ fn nothing_in_the_interface_decides() {
     refused_with(
         "no_trichotomy",
         &format!(
-            "{IMPORTS} theorem bad<A: OrderedField(≈, <, <=, +, *)>(x: A): x < A.zero ∨ x ≈ A.zero ∨ A.zero < x {{
-                A.lt_trichotomy(x, A.zero)
+            "{IMPORTS} theorem bad<A: OrderedField(≈, <, <=, +, *)>(x: A): x < A.unit ∨ x ≈ A.unit ∨ A.unit < x {{
+                A.lt_trichotomy(x, A.unit)
             }}"
         ),
         "lt_trichotomy",
@@ -399,5 +403,55 @@ fn nothing_in_the_interface_decides() {
         &mut e,
         "rat_decides_as_an_extra",
         &format!("{IMPORTS} fn ok(x, y: Rat) → x <= y ∨ ¬(x <= y) {{ x.le_dec(y) }}"),
+    );
+}
+
+// The ordered layers extend the algebraic ones
+// (issues/ordered-field-over-comm-ring.md): a `GroupRel` theorem applies to
+// an ordered group, a `Ring` or `Semiring` theorem to an ordered field, and a
+// generic ring theorem lands at `CReal` through its `CommRing` instance.
+#[test]
+fn the_ordered_layers_are_rings() {
+    let mut e = base();
+    check(
+        &mut e,
+        "ordered_layers_are_rings",
+        &format!(
+            "{IMPORTS} theorem group_neg_neg<A: OrderedAddGroup(≈, <, <=, +)>(x: A): A.inv(A.inv(x)) ≈ x {{
+                GroupRel::inv_inv(+, x)
+            }}
+            theorem field_neg_mul<A: OrderedField(≈, <, <=, +, *)>(x, y: A): A.inv(x) * y ≈ A.inv(x * y) {{
+                Ring::neg_mul(x, y)
+            }}
+            theorem field_mul_add_add<A: OrderedField(≈, <, <=, +, *)>(a, b, c, d: A):
+                (a + b) * (c + d) ≈ (a * c + a * d) + (b * c + b * d)
+            {{
+                Semiring::mul_add_add(a, b, c, d)
+            }}
+            theorem field_mul_comm<A: OrderedField(≈, <, <=, +, *)>(x, y: A): x * y ≈ y * x {{
+                A.commutative.comm(x, y)
+            }}
+            theorem creal_neg_mul_neg(x, y: CReal): -x * -y ≈ x * y {{ Ring::neg_mul_neg(x, y) }}
+            theorem creal_interchange(a, b, c, d: CReal): (a * b) * (c * d) ≈ (a * c) * (b * d) {{
+                CommMonoidRel::interchange(≈, *, a, b, c, d)
+            }}"
+        ),
+    );
+    // The reciprocal is `recip`: `inv` is the additive group's negation, one
+    // argument and no apartness.
+    refused(
+        "inv_is_negation",
+        &format!(
+            "{IMPORTS} fn bad<A: OrderedField(≈, <, <=, +, *)>(x: A, h: ApartBy(<, x, A.unit)) → A {{ A.inv(x, h) }}"
+        ),
+    );
+    // A ring theorem needs a ring: a located group has no product.
+    refused(
+        "ring_theorem_needs_a_ring",
+        &format!(
+            "{IMPORTS} theorem bad<A: LocatedAddGroup(≈, <, <=, +)>(x, y: A): A.inv(x) * y ≈ A.inv(x * y) {{
+                Ring::neg_mul(x, y)
+            }}"
+        ),
     );
 }

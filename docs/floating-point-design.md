@@ -565,7 +565,7 @@ roadmap's.
 |---|---|---|
 | 1 | `float-values` | `Format`, the standard formats as values, `Finite(F)`, `Float(F)`, `Dyadic` with its ring and order, `val`, `≈`/`<` with `StrictOrder`, and the constants (`zero`, `min_subnormal`, `min_normal`, `max_finite`) canonical for every format. Landed; §10. |
 | 2 | `float-rounding` | Successor and predecessor with their spacing, `RoundsTo`, `round` on dyadics with sticky, `round_rat`, `round::correct`, uniqueness, the mode laws. Part A (the relation, the executable rounding and its correctness in every mode, sign symmetry) landed, §11; part B (successor/predecessor with spacing, uniqueness, bracketing, monotonicity, idempotence) landed, §12. The transfer lemma to any `OrderedField` moved to `float-reals`, its only customer. |
-| 3 | `float-error` | The standard model, absolute subnormal bounds, `ulp`, γ-composition. |
+| 3 | `float-error` | The standard model, absolute subnormal bounds, `ulp`, γ-composition. Landed; §13. |
 | 4 | `float-arith` | Add/sub/mul/fma with value, zero-sign and special-value theorems; then div and sqrt by sticky quotients; format conversion. |
 | 5 | `float-eft` | Sterbenz, Fast2Sum, TwoSum, TwoProduct (by fma), Veltkamp; then Kahan summation. |
 | later | `float-bits` | Encode/decode and the round trip, the OCP storage formats, NaN payload policies and flags. |
@@ -815,3 +815,78 @@ Observations:
   from the field; the library names it (`Float::Le(F := F, a := …, b :=
   …)`). That is
   [value-param-constructor-implicit-inference](../issues/value-param-constructor-implicit-inference.md).
+
+## 13. Round 3 as landed (`float-error`)
+
+One module, `lib/std/float/error.hthr`, over round 2's internals. Two
+general facts went home: `Rat::le_div_of_mul_le` and `Rat::rel_of_abs_le`
+(an absolute bound `|y - x| <= u·|x|` at a nonzero `x` as a relative error
+`y ≈ x·(1 + e)`, `|e| <= u`) in `rat.hthr`, and the evidence rules
+`Format::half_pos`/`Format::top_pos` in `float.hthr`.
+
+**One picture.** A nonnegative value `x` lies in the cell of the greatest
+float at or below it, `d = F.down(F.rat_h(x))`. The cell is `2^(d.bexp + 1)`
+half-units wide, one ulp of `d`, and its other end is `d`'s step up (or the
+cell has none and `d` is the largest float). Every finite correct rounding
+is one of the two ends (`rounds_faithful`), so it is within a cell width of
+`x` (`nbr_err`), and a nearest one within half of it (`nearest_err`).
+Negative values round `-x` under the conjugate mode (`rounds_flip`). The
+module never re-derives anything about rounding: every bound is a property
+of where the cell is.
+
+**Ulps and errors.** `Format::ulp_at(x)` is the ulp of the cell's float and
+`Format::err_at(mode, x)` the error a mode allows there, as a power of two
+in half-units (`Mode::err_exp`: half an ulp for the nearest modes, one for
+the directed ones). Both compute on literal formats. The headline is
+`Format::rounding_error`: for `|x| <= max_finite`, a correct finite rounding
+`r` has `|r - x| <= err_at(mode, x)`; `err_le_ulp` and `err_half_ulp` relate
+it to the ulp.
+
+**The standard model.** `u = 1 / u_den` with `u_den` the format's `top`
+(`2^prec`) for the nearest modes and `half` for the directed ones, so `u` is
+`2^-prec` or `2^(1-prec)`, as §5.3 says. In the normal range the cell's
+float has a full significand, so `err_at <= u·|x|` (`relative_error`), and
+`standard_model` states it Higham's way: `∃ e, |e| <= u ∧ r ≈ x·(1 + e)`. In
+the subnormal range `d.bexp` is zero and the error is the absolute `η`
+(`Format::eta`, half or one `2^qmin`; `subnormal_error`). `error_bound`
+combines them: `|r - x| <= u·|x| + η` everywhere in range.
+
+**γ.** `Format::gamma(mode, n) = n / (u_den - n)`, which is `n·u / (1 -
+n·u)` cleared of its fraction; it is meaningful for `n < u_den`, and
+`gamma_at` reads it as `n / D` when `u_den = D + n`. The algebra is
+`gamma_add` (`γm + γn + γm·γn <= γ(m + n)`), `gamma_mono`, `u_le_gamma` and
+`theta_mul` (`|a| <= γm`, `|b| <= γn` give `|(1 + a)(1 + b) - 1| <= γ(m +
+n)`). Composition is over lists: `List::prod_one_add(ds)` is `∏(1 + dᵢ)`,
+`List::AllAbsLe(ds, u)` the hypotheses, and `gamma_prod` concludes
+`|∏(1 + dᵢ) - 1| <= γ(len ds)` for `len ds < u_den`. The bounds are stated
+at `Rat` with `abs`; the transfer to an arbitrary ordered field stays in
+`float-reals` with the rest of the transfer.
+
+Not in this round, filed or left for the customer that pulls them: the
+bound relative to the result (`|r - x| <= u·|r|`), bounds for the overflow
+band between `max_finite` and the overflow threshold in the nearest modes,
+and inverse factors `(1 + δ)⁻¹` inside a γ product (Higham's `ρ = ±1`).
+
+Observations:
+
+- `omega` does not split a conjunction hypothesis it is handed; binding
+  `.left` and `.right` as separate `let`s does. Large integer contexts are
+  slow for it, so the cell facts are small lemmas (`up_H`, `top_H`) rather
+  than one omega call.
+- `ring` with hint equations fails once the cross-multiplied degree is high
+  (γ's algebra has three denominators). The robust form states the
+  inequality's Int cross-multiplication explicitly, which converts to
+  `Rat::Le` definitionally, and proves it with hint-free `ring` plus `omega`
+  over nonnegative Nat casts (`gamma_add_core`).
+- A record field's `Pos` default ran in the record's module, so a default
+  citing an evidence rule from a module the record's module cannot see
+  (`Rat(1, F.top())` with `top_pos` in `float.hthr`) failed. Rule citation
+  now resolves the rule's own qualified name when the module being
+  elaborated imports it (test `a_field_default_cites_a_rule_its_record_module_cannot_see`).
+- A non-ASCII character in source (an attempted `δ` identifier) was reported
+  as a byte and the snippet renderer panicked on the split character; both
+  are fixed.
+- `[d1, d2].prod_one_add()` is refused ("unbound name"): a list literal has
+  no carrier for method lookup until it is checked against a type, the same
+  gap as [list-literal-left-of-append](../issues/list-literal-left-of-append.md).
+  The tests write `List::prod_one_add([d1, d2])`.
