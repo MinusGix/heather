@@ -269,7 +269,7 @@ theorem RingPoly::then_same(o, next: RingOrder, a, b: Nat, ms, ns: List<Nat>):
         RLess => λ h t => refl,
         RSame => λ h => match next {
             RLess => λ t => refl,
-            RSame => λ t => j(h, λ b2 q => Cons(a, ms) = Cons(b2, ns), List::cong_cons(a, t)),
+            RSame => λ t => rewrite(sym(h), List::cong_cons(a, t)),
             RMore => λ t => refl,
         },
         RMore => λ h t => refl,
@@ -319,8 +319,7 @@ theorem RingPoly::add_step_eval(o: RingOrder, c: Int, m: List<Nat>, d: Int, n: L
                 = (c * RingPoly::mono(m, xs) + r) + (d * RingPoly::mono(n, xs) + s)
                     := sym((c * RingPoly::mono(m, xs)).add_assoc(r, d * RingPoly::mono(n, xs) + s)),
         },
-        RSame => λ h => j(h, λ n2 q => RingPoly::term(c + d, m, same).eval(xs)
-                = (c * RingPoly::mono(m, xs) + r) + (d * RingPoly::mono(n2, xs) + s),
+        RSame => λ h => rewrite(sym(h),
             calc {
                 RingPoly::term(c + d, m, same).eval(xs)
                     = (c + d) * RingPoly::mono(m, xs) + same.eval(xs) := RingPoly::term_eval(c + d, m, same, xs),
@@ -498,7 +497,7 @@ theorem RingExpr::sound(xs: List<Int>, a, b: RingExpr, h: a.norm() = b.norm()): 
     calc {
         a.eval(xs)
             = a.norm().eval(xs) := sym(RingExpr::norm_eval(xs, a)),
-            = b.norm().eval(xs) := j(h, λ q p => a.norm().eval(xs) = q.eval(xs), refl),
+            = b.norm().eval(xs) := rewrite(h, refl),
             = b.eval(xs) := RingExpr::norm_eval(xs, b),
     }
 }

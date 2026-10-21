@@ -1390,6 +1390,13 @@ struct AbstractLocal<'a> {
     witness_under: Vec<(Depths, Vec<(Term, Term)>)>,
     /// Occurrences replaced — the caller's "did this find anything".
     hits: u64,
+    /// Which occurrences to replace, 1-based in traversal order, when the
+    /// caller selects (`elab`'s `rewrite(h, e, at := …)`); `None` replaces
+    /// every one. An occurrence passed over is descended into like any other
+    /// node, which finds nothing: a term does not contain itself.
+    select: Option<&'a [u32]>,
+    /// Occurrences met, replaced or not — what a selection is numbered by.
+    seen: u32,
     changes: u64,
 }
 
@@ -1434,11 +1441,13 @@ impl Mapper for AbstractLocal<'_> {
         let hit = row
             .iter()
             .find(|(pat, _)| **t == *pat)
-            .map(|(_, rep)| rep.clone());
-        if hit.is_some() {
-            self.hits += 1;
+            .map(|(_, rep)| rep.clone())?;
+        self.seen += 1;
+        if self.select.is_some_and(|select| !select.contains(&self.seen)) {
+            return None;
         }
-        hit
+        self.hits += 1;
+        Some(hit)
     }
 }
 
@@ -1782,8 +1791,27 @@ impl Type {
         self.abstract_pats(pats)
     }
 
+    /// [`Self::abstract_local`] at **selected** occurrences only: `at` lists
+    /// them 1-based, in the order the traversal meets them — left to right
+    /// through the goal as written, an application's annotations before its
+    /// argument. Also returns how many occurrences there were, which is what
+    /// a caller says when a selection names one past the end.
+    ///
+    /// Still the inverse of the singleton substitution, by the same argument:
+    /// every replaced position held `pat`, so `[pat/z]` gives `self` back.
+    pub fn abstract_local_at(&self, pat: &Term, at: &[u32]) -> (Option<Type>, u32) {
+        let pats = [(pat.clone(), Term::Var(LocalVar(0)))];
+        let mut m = AbstractLocal {
+            pats: &pats, witness: Vec::new(), witness_under: Vec::new(), hits: 0, select: Some(at), seen: 0, changes: 0,
+        };
+        let out = map_type(&self.shift_local(1), &mut m, Depths::default());
+        ((m.hits > 0).then_some(out), m.seen)
+    }
+
     fn abstract_pats(&self, pats: &[(Term, Term)]) -> Option<Type> {
-        let mut m = AbstractLocal { pats, witness: Vec::new(), witness_under: Vec::new(), hits: 0, changes: 0 };
+        let mut m = AbstractLocal {
+            pats, witness: Vec::new(), witness_under: Vec::new(), hits: 0, select: None, seen: 0, changes: 0,
+        };
         let out = map_type(&self.shift_local(1), &mut m, Depths::default());
         (m.hits > 0).then_some(out)
     }

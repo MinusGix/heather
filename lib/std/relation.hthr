@@ -115,7 +115,7 @@ theorem compose_left_id<A, B>(R: A → B → Type):
     RelEquivalent(Compose<A, A, B>(λ a b => RelId(a, b), R), R)
 {
     And(
-        λ a b h => j(sym(h.proof.left), λ y q => R(y, b), h.proof.right),
+        λ a b h => rewrite(h.proof.left, h.proof.right),
         λ a b h => Exists(a, And(refl, h)),
     )
 }
@@ -124,7 +124,7 @@ theorem compose_right_id<A, B>(R: A → B → Type):
     RelEquivalent(Compose<A, B, B>(R, λ a b => RelId(a, b)), R)
 {
     And(
-        λ a b h => j(h.proof.right, λ y q => R(a, y), h.proof.left),
+        λ a b h => rewrite(sym(h.proof.right), h.proof.left),
         λ a b h => Exists(b, And(h, refl)),
     )
 }
@@ -302,7 +302,7 @@ theorem steps_concat_reversed<A>(R: A → A → Type, first: Nat):
 {
     match first {
         Zero => λ second start middle finish left right =>
-            j(sym(left), λ y q => Steps(R, second, y, finish), right),
+            rewrite(left, right),
         Succ(_, ih) => λ second start middle finish left right =>
             Exists(left.witness, And(
                 left.proof.left,
@@ -316,8 +316,7 @@ theorem steps_concat<A>(R: A → A → Type, first, second: Nat,
     right: Steps(R, second, middle, finish)):
     Steps(R, first + second, start, finish)
 {
-    j(second.add_comm(first),
-        λ count q => Steps(R, count, start, finish),
+    rewrite(first.add_comm(second),
         steps_concat_reversed(R, first, second, start, middle, finish, left, right))
 }
 

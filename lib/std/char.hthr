@@ -62,12 +62,11 @@ fn Char::toNat(self c: Char) → Nat { c.code }
 theorem code_injective(a, b: Char, p: a.code = b.code): a = b {
     j(p, λ y q => (w: scalar(y)) → a = Char(code := y, valid := w),
         λ (w: scalar(a.code)) =>
-            j(scalar_unique(a.code, a.valid, w),
-                λ z r => a = Char(code := a.code, valid := z), refl))(b.valid)
+            rewrite(sym(scalar_unique(a.code, a.valid, w)), refl))(b.valid)
 }
 
 theorem cong_code(a, b: Char, p: a = b): a.code = b.code {
-    j(p, λ y q => a.code = y.code, refl)
+    rewrite(p, refl)
 }
 
 // The arithmetic reading of the witness, for a client that wants the bounds

@@ -183,7 +183,7 @@ fn Rat::Le(x, y: Rat) → Type { x.num * y.den.int() <= y.num * x.den.int() }
 designation <= at Rat := Rat::Le
 
 theorem Rat::le_of_same({x, y: Rat}, h: x ≈ y): x <= y {
-    j(h, λ right q => x.num * y.den.int() <= right, (x.num * y.den.int()).le_refl())
+    rewrite(sym(h), (x.num * y.den.int()).le_refl())
 }
 
 theorem Rat::le_refl(self x: Rat): x <= x { Rat::le_of_same(x.same_refl()) }

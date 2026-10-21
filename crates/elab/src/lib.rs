@@ -84,6 +84,7 @@ pub mod omega;
 mod omega_cert;
 mod bv_omega;
 mod ring;
+mod rewrite;
 pub use omega_cert::{CutSatReport, OmegaPhases, OmegaReport, OmegaResidualConstraint};
 pub mod certgen;
 pub mod function_ir_cert;
@@ -4961,6 +4962,21 @@ impl Elaborator {
                 && self.ctor_here_expected(cx, name, expected).is_none() => {
                 relational_context::proof::derive(self, cx, expected, lvl, e.span)
             }
+            // `rewrite(h, …, e)` rewrites the goal along equations, writing
+            // `j`'s motive by abstracting each left side
+            // (docs/equation-rewrite-design.md).
+            ExprKind::App {
+                head,
+                args,
+                named,
+                explicit: false,
+                goal_oriented: false,
+            } if matches!(&head.kind, ExprKind::Var(name) if name == "rewrite")
+                && !self.shadowed(cx, "rewrite")
+                && self.ctor_here_expected(cx, "rewrite", expected).is_none() =>
+            {
+                self.elab_rewrite(cx, args, named, expected, lvl, e.span)
+            }
             // `ring` normalizes both sides of an equation at `Int` or `Nat`
             // by reflection; `ring(h, …)` also combines equations
             // (docs/ring-normalization-design.md).
@@ -8793,6 +8809,15 @@ impl Elaborator {
                 // (§5.2), and saying so names both constraints.
                 if let Some((_, why)) = cx.index_ambiguity.iter().find(|(n, _)| n == name) {
                     return err(why.clone(), span);
+                }
+                // A checking-only form used where nothing is expected.
+                if name == "rewrite" {
+                    return err(
+                        "`rewrite(h, …, e)` needs an expected type: it rewrites a goal, so it \
+                         only means anything where one is known (a `theorem` body, an \
+                         annotated `let`, an argument)",
+                        span,
+                    );
                 }
                 Err(self.name_miss(name, format!("unbound name `{name}`"), span))
             }

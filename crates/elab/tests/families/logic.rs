@@ -17,6 +17,8 @@ mod true_prop;
 mod goal_combinators;
 #[path = "../goal_holes.rs"]
 mod goal_holes;
+#[path = "../equation_rewrite.rs"]
+mod equation_rewrite;
 #[path = "../constructor_values.rs"]
 mod constructor_values;
 #[path = "../annotation_cost.rs"]

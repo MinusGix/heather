@@ -18,7 +18,7 @@ theorem add_ofNat_sum(n: Nat, a, b: BitVec(n),
 theorem toNat_add(n: Nat, a, b: BitVec(n),
     bounded: a.toNat() + b.toNat() < Nat::pow(2, n)):
     a.add(b).toNat() = a.toNat() + b.toNat() {
-    trans(j(add_ofNat_sum(n, a, b, bounded), λ word _ => a.add(b).toNat() = word.toNat(), refl),
+    trans(rewrite(sym(add_ofNat_sum(n, a, b, bounded)), refl),
         BitVec::toNat_ofNat(n, a.toNat() + b.toNat(), bounded))
 }
 
@@ -33,7 +33,7 @@ theorem unsigned_lt_nat(n: Nat, a, b: BitVec(n)):
             (Succ(a.toNat()).leb(b.toNat()) = found) → bool::False = found {
             False => λ same => refl,
             True => λ yes => absurd(trans(sym(no), BitVec::borrow_sub_bit_of_borrow(n, a, b,
-                Succ(a.toNat()).leb_sound(b.toNat(), j(sym(yes), λ flag _ => flag.IsTrue(), trivial))))),
+                Succ(a.toNat()).leb_sound(b.toNat(), rewrite(yes, trivial))))),
         })(refl),
     })(refl)
 }
@@ -50,8 +50,8 @@ theorem add_words(n: Nat, a, b: BitVec(n), left, right: Nat,
     bounded: left + right < Nat::pow(2, n)):
     a.add(b).toNat() = left + right {
     let same = j(a_word, λ x _ => a.toNat() + b.toNat() = x + right,
-        j(b_word, λ y _ => a.toNat() + b.toNat() = a.toNat() + y, refl));
-    trans(toNat_add(n, a, b, j(sym(same), λ total _ => total < Nat::pow(2, n), bounded)), same)
+        rewrite(sym(b_word), refl));
+    trans(toNat_add(n, a, b, rewrite(same, bounded)), same)
 }
 
 // The modular image of a Nat at a width: `value` increments from zero. It is
@@ -86,7 +86,7 @@ theorem toNat_sub(n: Nat, a, b: BitVec(n), fits: b.toNat() <= a.toNat()):
     let total: (c.toNat() + b.toNat() = a.toNat()) =
         trans(@cong(λ (x: Nat) => x + b.toNat(), c.toNat(), d, c_value), Nat::sub_add_cancel(b.toNat(), a.toNat(), fits));
     let fits_sum: (c.toNat() + b.toNat() < Nat::pow(2, n)) =
-        j(sym(total), λ t _ => t < Nat::pow(2, n), BitVec::toNat_lt_pow(n, a));
+        rewrite(total, BitVec::toNat_lt_pow(n, a));
     let back: (c.add(b) = a) = trans(add_ofNat_sum(n, c, b, fits_sum),
         trans(@cong(λ (t: Nat) => BitVec::ofNat(t, n := n), c.toNat() + b.toNat(), a.toNat(), total), BitVec::ofNat_toNat(n, a)));
     let same: (a.sub(b) = c) = trans(@cong(λ (x: BitVec(n)) => x.sub(b), a, c.add(b), sym(back)), BitVec::add_sub_cancel(n, c, b));

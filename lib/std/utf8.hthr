@@ -97,9 +97,9 @@ theorem bounds_ge_800(code: Nat, low: Nat::leb(0x800, code).IsTrue()):
     match Succ(code).leb(0x10000) as λ b =>
             (b = Succ(code).leb(0x10000)) →
             WidthBounds(match b { True => W3, False => W4 }, code) {
-        True => λ eq => And(low, j(eq, λ y _ => y.IsTrue(), trivial)),
+        True => λ eq => And(low, rewrite(sym(eq), trivial)),
         False => λ eq =>
-            code.leb_not_lt(0x10000, j(eq, λ y _ => y.not().IsTrue(), trivial)),
+            code.leb_not_lt(0x10000, rewrite(sym(eq), trivial)),
     }(refl)
 }
 
@@ -108,10 +108,10 @@ theorem bounds_ge_80(code: Nat, low: Nat::leb(0x80, code).IsTrue()):
     match Succ(code).leb(0x800) as λ b =>
             (b = Succ(code).leb(0x800)) →
             WidthBounds(match b { True => W2, False => width_ge_800(code) }, code) {
-        True => λ eq => And(low, j(eq, λ y _ => y.IsTrue(), trivial)),
+        True => λ eq => And(low, rewrite(sym(eq), trivial)),
         False => λ eq =>
             bounds_ge_800(code,
-                code.leb_not_lt(0x800, j(eq, λ y _ => y.not().IsTrue(), trivial))),
+                code.leb_not_lt(0x800, rewrite(sym(eq), trivial))),
     }(refl)
 }
 
@@ -122,7 +122,7 @@ theorem width_bounds(code: Nat): WidthBounds(width_of(code), code) {
         True => λ eq => j(eq, λ y _ => y.IsTrue(), trivial),
         False => λ eq =>
             bounds_ge_80(code,
-                code.leb_not_lt(0x80, j(eq, λ y _ => y.not().IsTrue(), trivial))),
+                code.leb_not_lt(0x80, rewrite(sym(eq), trivial))),
     }(refl)
 }
 
@@ -450,8 +450,7 @@ theorem decode_emit(min, n, code: Nat, p: char::scalar(code),
         rest: List<BitVec(8)>):
         emit(min, BitVec::ofNat(code, n := n).toNat(), rest)
             = Some(Pair(char::ofNat(code, p), rest)) {
-    j(sym(BitVec::toNat_ofNat(n, code, bound)),
-        λ y _ => emit(min, y, rest) = Some(Pair(char::ofNat(code, p), rest)),
+    rewrite(BitVec::toNat_ofNat(n, code, bound),
         emit_yes(min, code, p, low, rest))
 }
 
@@ -521,9 +520,7 @@ theorem decode_encode_chars(cs: List<Char>):
                 j(sym(decode_char_encode_char(c, encode_chars(more))),
                     λ y _ => push_char(y, decode(encode_chars(more)))
                         = Some(String(chars := Cons(c, more))),
-                    j(sym(ih),
-                        λ z _ => push_char(Some(Pair(c, encode_chars(more))), z)
-                            = Some(String(chars := Cons(c, more))),
+                    rewrite(ih,
                         refl)))
         },
     }
@@ -596,7 +593,7 @@ theorem none_ne_some<A>(a: A): ¬((None<A>) = Some(a)) {
 // the high bits rewritten to what a class says they are.
 theorem rebuild(n, m: Nat, x: BitVec(m + n), hi: BitVec(m), h: x.drop_low(n, m) = hi):
         x.take_low(n, m).concat(hi) = x {
-    j(h, λ y _ => x.take_low(n, m).concat(y) = x, BitVec::concat_split(n, m, x))
+    rewrite(sym(h), BitVec::concat_split(n, m, x))
 }
 
 // What a class says about the lead byte it was read from, as the equation
@@ -620,22 +617,16 @@ theorem header_1(b: BitVec(8), e7: bit7(b) = False): b.drop_low(7, 1) = BitVec::
 theorem header_2(b: BitVec(8), e7: bit7(b) = True, e6: bit6(b) = True, e5: bit5(b) = False):
         b.drop_low(5, 3) = BitVec::from_bits([False, True, True]) {
     j(sym(e5), λ y _ => BitVec::from_bits([y, bit6(b), bit7(b)]) = BitVec::from_bits([False, True, True]),
-        j(sym(e6), λ y _ => BitVec::from_bits([False, y, bit7(b)]) = BitVec::from_bits([False, True, True]),
-            j(sym(e7), λ y _ => BitVec::from_bits([False, True, y]) = BitVec::from_bits([False, True, True]),
-                refl)))
+        rewrite(e6, e7,
+                refl))
 }
 
 theorem header_3(b: BitVec(8), e7: bit7(b) = True, e6: bit6(b) = True, e5: bit5(b) = True,
         e4: bit4(b) = False): b.drop_low(4, 4) = BitVec::from_bits([False, True, True, True]) {
     j(sym(e4), λ y _ => BitVec::from_bits([y, bit5(b), bit6(b), bit7(b)])
             = BitVec::from_bits([False, True, True, True]),
-        j(sym(e5), λ y _ => BitVec::from_bits([False, y, bit6(b), bit7(b)])
-                = BitVec::from_bits([False, True, True, True]),
-            j(sym(e6), λ y _ => BitVec::from_bits([False, True, y, bit7(b)])
-                    = BitVec::from_bits([False, True, True, True]),
-                j(sym(e7), λ y _ => BitVec::from_bits([False, True, True, y])
-                        = BitVec::from_bits([False, True, True, True]),
-                    refl))))
+        rewrite(e5, e6, e7,
+                    refl))
 }
 
 theorem header_4(b: BitVec(8), e7: bit7(b) = True, e6: bit6(b) = True, e5: bit5(b) = True,
@@ -643,15 +634,8 @@ theorem header_4(b: BitVec(8), e7: bit7(b) = True, e6: bit6(b) = True, e5: bit5(
         b.drop_low(3, 5) = BitVec::from_bits([False, True, True, True, True]) {
     j(sym(e3), λ y _ => BitVec::from_bits([y, bit4(b), bit5(b), bit6(b), bit7(b)])
             = BitVec::from_bits([False, True, True, True, True]),
-        j(sym(e4), λ y _ => BitVec::from_bits([False, y, bit5(b), bit6(b), bit7(b)])
-                = BitVec::from_bits([False, True, True, True, True]),
-            j(sym(e5), λ y _ => BitVec::from_bits([False, True, y, bit6(b), bit7(b)])
-                    = BitVec::from_bits([False, True, True, True, True]),
-                j(sym(e6), λ y _ => BitVec::from_bits([False, True, True, y, bit7(b)])
-                        = BitVec::from_bits([False, True, True, True, True]),
-                    j(sym(e7), λ y _ => BitVec::from_bits([False, True, True, True, y])
-                            = BitVec::from_bits([False, True, True, True, True]),
-                        refl)))))
+        rewrite(e4, e5, e6, e7,
+                        refl))
 }
 
 // The class ladder read forwards, one rung per declaration: each rung
@@ -712,7 +696,7 @@ theorem cont_marked_spec(b: BitVec(8), rest: List<BitVec(8)>, e7: bit7(b) = True
         True => λ _ => trivial,
         False => λ e6 => And(refl,
             j(sym(e6), λ y _ => BitVec::from_bits([y, bit7(b)]) = BitVec::from_bits([False, True]),
-                j(sym(e7), λ y _ => BitVec::from_bits([False, y]) = BitVec::from_bits([False, True]), refl))),
+                rewrite(e7, refl))),
     }(refl)
 }
 
@@ -742,7 +726,7 @@ theorem emit_spec(min, code: Nat, rest: List<BitVec(8)>): EmitSpec(min, code, re
         True => λ e => match char::is_scalar(code).is_true_dec() as λ d =>
                 EmitSpec(min, code, rest, emit_dec(code, d, rest)) {
             Inr(_) => trivial,
-            Inl(_) => And(j(sym(e), λ y _ => y.IsTrue(), trivial), refl),
+            Inl(_) => And(rewrite(e, trivial), refl),
         },
     }(refl)
 }
@@ -753,7 +737,7 @@ theorem emit_spec(min, code: Nat, rest: List<BitVec(8)>): EmitSpec(min, code, re
 // against the class's upper bound (`rung_refuted`).
 theorem rung_absurd(code, bnd: Nat, e: Succ(code).leb(bnd) = True,
         low: bnd.leb(code).IsTrue()): False {
-    code.leb_lt_le_absurd(bnd, j(sym(e), λ y _ => y.IsTrue(), trivial), low)
+    code.leb_lt_le_absurd(bnd, rewrite(e, trivial), low)
 }
 
 theorem rung_refuted(code, bnd: Nat, e: Succ(code).leb(bnd) = False,
@@ -842,9 +826,8 @@ fn code_4(b, c1, c2, c3: BitVec(8)) → Nat {
 // each byte is a `rebuild` and the list is a `cons_eq` per byte.
 theorem encode_1_of(b: BitVec(8), h: Header(C1, b)):
         encode_width(width_of(code_1(b)), code_1(b)) = [b] {
-    j(sym(width_of_bounds(W1, code_1(b),
-            Succ(code_1(b)).leb_complete(0x80, BitVec::toNat_lt_pow(7, ascii_payload(b))))),
-        λ w _ => encode_width(w, code_1(b)) = [b],
+    rewrite(width_of_bounds(W1, code_1(b),
+            Succ(code_1(b)).leb_complete(0x80, BitVec::toNat_lt_pow(7, ascii_payload(b)))),
         cong_fn(λ (z: BitVec(8)) => [z],
             j(sym(BitVec::ofNat_toNat(7, ascii_payload(b))), λ p _ => ascii_byte(p) = b,
                 rebuild(7, 1, b, BitVec::from_bits([False]), h))))
@@ -855,9 +838,8 @@ theorem encode_2_of(b, c1: BitVec(8), hb: Header(C2, b),
         low: Nat::leb(0x80, code_2(b, c1)).IsTrue()):
         encode_width(width_of(code_2(b, c1)), code_2(b, c1)) = [b, c1] {
     let v = cont_payload(c1).concat(lead2_payload(b));
-    j(sym(width_of_bounds(W2, code_2(b, c1),
-            And(low, Succ(code_2(b, c1)).leb_complete(0x800, BitVec::toNat_lt_pow(11, v))))),
-        λ w _ => encode_width(w, code_2(b, c1)) = [b, c1],
+    rewrite(width_of_bounds(W2, code_2(b, c1),
+            And(low, Succ(code_2(b, c1)).leb_complete(0x800, BitVec::toNat_lt_pow(11, v)))),
         j(sym(BitVec::ofNat_toNat(11, v)),
             λ p _ => Cons(lead2_byte(p.drop_low(6, 5)), Cons(cont_byte(p.take_low(6, 5)), Nil<BitVec(8)>))
                 = [b, c1],
@@ -873,10 +855,9 @@ theorem encode_3_of(b, c1, c2: BitVec(8), hb: Header(C3, b),
         low: Nat::leb(0x800, code_3(b, c1, c2)).IsTrue()):
         encode_width(width_of(code_3(b, c1, c2)), code_3(b, c1, c2)) = [b, c1, c2] {
     let v = cont_payload(c2).concat(cont_payload(c1).concat(lead3_payload(b)));
-    j(sym(width_of_bounds(W3, code_3(b, c1, c2),
+    rewrite(width_of_bounds(W3, code_3(b, c1, c2),
             And(low, Succ(code_3(b, c1, c2)).leb_complete(0x10000,
-                BitVec::toNat_lt_pow(16, v))))),
-        λ w _ => encode_width(w, code_3(b, c1, c2)) = [b, c1, c2],
+                BitVec::toNat_lt_pow(16, v)))),
         j(sym(BitVec::ofNat_toNat(16, v)),
             λ p _ => Cons(lead3_byte(p.drop_low(6, 10).drop_low(6, 4)),
                 Cons(cont_byte(p.drop_low(6, 10).take_low(6, 4)),
@@ -899,8 +880,7 @@ theorem encode_4_of(b, c1, c2, c3: BitVec(8), hb: Header(C4, b),
         encode_width(width_of(code_4(b, c1, c2, c3)), code_4(b, c1, c2, c3)) = [b, c1, c2, c3] {
     let v = cont_payload(c3).concat(
         cont_payload(c2).concat(cont_payload(c1).concat(lead4_payload(b))));
-    j(sym(width_of_bounds(W4, code_4(b, c1, c2, c3), low)),
-        λ w _ => encode_width(w, code_4(b, c1, c2, c3)) = [b, c1, c2, c3],
+    rewrite(width_of_bounds(W4, code_4(b, c1, c2, c3), low),
         j(sym(BitVec::ofNat_toNat(21, v)),
             λ p _ => Cons(lead4_byte(p.drop_low(6, 15).drop_low(6, 9).drop_low(6, 3)),
                 Cons(cont_byte(p.drop_low(6, 15).drop_low(6, 9).take_low(6, 3)),
@@ -926,7 +906,7 @@ fn Strict(bytes: List<BitVec(8)>) → Type {
 }
 
 theorem strict_nil(s: String, p: decode(Nil<BitVec(8)>) = Some(s)): encode(s) = Nil<BitVec(8)> {
-    j(Option::some_inj(String(chars := Nil<Char>), s, p), λ y _ => encode(y) = Nil<BitVec(8)>, refl)
+    rewrite(sym(Option::some_inj(String(chars := Nil<Char>), s, p)), refl)
 }
 
 // One taken step. `push_char` at a taken `emit` and a decoded tail says the
@@ -945,8 +925,7 @@ theorem strict_step(min, code: Nat, r, tail, bs: List<BitVec(8)>, s: String,
                 push_tail(st.fst, y) = Some(s) → encode(s) = bs ++ tail {
             None => λ _ q2 => false_elim(none_ne_some(s, q2)),
             Some(t) => λ e q2 =>
-                j(Option::some_inj(String(chars := Cons(st.fst, t.chars)), s, q2),
-                    λ y _ => encode(y) = bs ++ tail,
+                rewrite(sym(Option::some_inj(String(chars := Cons(st.fst, t.chars)), s, q2)),
                     j(sym(ih(t, e)), λ z _ => encode_char(st.fst) ++ z = bs ++ tail,
                         cong_fn(λ (z: List<BitVec(8)>) => z ++ tail,
                             j(sym(es.right), λ c _ => encode_width(width_of(c), c) = bs,
@@ -1222,8 +1201,7 @@ theorem decode_toString(u: Utf8): decode(u.bytes) = Some(u.toString()) {
 theorem bytes_injective(u, v: Utf8, p: u.bytes = v.bytes): u = v {
     j(p, λ y _ => (w: utf8_valid(y)) → u = Utf8(bytes := y, valid := w),
         λ (w: utf8_valid(u.bytes)) =>
-            j(is_utf8(u.bytes).is_true_unique(u.valid, w),
-                λ z _ => u = Utf8(bytes := u.bytes, valid := z), refl))(v.valid)
+            rewrite(sym(is_utf8(u.bytes).is_true_unique(u.valid, w)), refl))(v.valid)
 }
 
 theorem ofString_toString(u: Utf8): ofString(u.toString()) = u {
