@@ -1534,3 +1534,59 @@ theorem Rat::sub_lt_sub_of_mid_lt({x, m, a, b: Rat}, h: m < x, e: m + m ≈ a + 
     let xx = Rat::lt_respects(e, (x + x).same_refl(), Rat::add_lt_mono(h1 := h, h2 := Rat::le_of_lt(h)));
     (b -x).lt_of_add_lt_add_r(x -a, a + x, Rat::lt_respects(Rat::same_sym(s.right), Rat::same_sym(s.left), xx))
 }
+
+// The converses: a distance comparison places `x` against the midpoint.
+theorem Rat::mid_le_of_sub_le({x, a, b: Rat}, h: x -a <= b -x): x + x <= a + b {
+    let s = x.sub_shift(a, b);
+    Rat::le_respects(s.left, s.right, (x -a).add_le_mono_r(b -x, a + x, h))
+}
+
+theorem Rat::le_mid_of_sub_le({x, a, b: Rat}, h: b -x <= x -a): a + b <= x + x {
+    let s = x.sub_shift(a, b);
+    Rat::le_respects(s.right, s.left, (b -x).add_le_mono_r(x -a, a + x, h))
+}
+
+// Halving an order between doubles.
+theorem Rat::le_of_double_le({x, y: Rat}, h: x + x <= y + y): x <= y {
+    Rat::le_of_not_lt(x := x, y := y, h := λ lt => Rat::not_le_of_lt(x := y + y, y := x + x, h := Rat::add_lt_mono(h1 := lt, h2 := Rat::le_of_lt(lt)))(h))
+}
+
+// For `g < f`: `x` at least as close to `f` as to `g` is at or above their
+// midpoint, and `y` at least as close to `g` is at or below it.
+theorem Rat::mid_le_of_dist({g, f, x: Rat}, lt: g < f, d: (f -x).abs() <= (g -x).abs()): g + f <= x + x {
+    match f.le_total(x) as λ _ => g + f <= x + x {
+        Inl(fx) => Rat::add_le_mono(h1 := Rat::le_of_lt(Rat::lt_of_lt_of_le(lt, fx)), h2 := fx),
+        Inr(xf) => {
+            let df = (f -x).abs_of_nonneg(Rat::sub_nonneg(x := f, y := x, h := xf));
+            match g.le_total(x) as λ _ => g + f <= x + x {
+                Inl(gx) => {
+                    let dg = Rat::same_trans(g.abs_sub_comm(x), (x -g).abs_of_nonneg(Rat::sub_nonneg(x := x, y := g, h := gx)));
+                    Rat::le_mid_of_sub_le(x := x, a := g, b := f, h := Rat::le_respects(df, dg, d))
+                },
+                Inr(xg) => {
+                    let dg = (g -x).abs_of_nonneg(Rat::sub_nonneg(x := g, y := x, h := xg));
+                    false_elim(Rat::not_le_of_lt(x := g, y := f, h := lt)(x.le_of_sub_le_sub_r(f, g, Rat::le_respects(df, dg, d))))
+                },
+            }
+        },
+    }
+}
+
+theorem Rat::le_mid_of_dist({g, f, y: Rat}, lt: g < f, d: (g -y).abs() <= (f -y).abs()): y + y <= g + f {
+    match y.le_total(g) as λ _ => y + y <= g + f {
+        Inl(yg) => Rat::add_le_mono(h1 := yg, h2 := Rat::le_of_lt(Rat::lt_of_le_of_lt(yg, lt))),
+        Inr(gy) => {
+            let dg = Rat::same_trans(g.abs_sub_comm(y), (y -g).abs_of_nonneg(Rat::sub_nonneg(x := y, y := g, h := gy)));
+            match y.le_total(f) as λ _ => y + y <= g + f {
+                Inl(yf) => {
+                    let df = (f -y).abs_of_nonneg(Rat::sub_nonneg(x := f, y := y, h := yf));
+                    Rat::mid_le_of_sub_le(x := y, a := g, b := f, h := Rat::le_respects(dg, df, d))
+                },
+                Inr(fy) => {
+                    let df = Rat::same_trans(f.abs_sub_comm(y), (y -f).abs_of_nonneg(Rat::sub_nonneg(x := y, y := f, h := fy)));
+                    false_elim(Rat::not_le_of_lt(x := g, y := f, h := lt)(y.le_of_sub_le_sub_l(f, g, Rat::le_respects(dg, df, d))))
+                },
+            }
+        },
+    }
+}

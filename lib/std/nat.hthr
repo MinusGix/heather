@@ -1469,6 +1469,16 @@ theorem Nat::even_succ_of_not_even(self n: Nat, h: ¬Nat::Even(n)): Nat::Even(Su
     match n.even_or_odd() { Inl(e) => false_elim(h(e)), Inr(o) => n.even_succ_of_odd(o) }
 }
 
+theorem Nat::not_even_succ_of_even(self n: Nat): Nat::Even(n) → ¬Nat::Even(Succ(n)) {
+    match n {
+        Zero => λ _ (b: Nat::Even(1)) => b,
+        Succ(k) => match k {
+            Zero => λ (h: Nat::Even(1)) _ => false_elim(h),
+            Succ(l) => { let ih = l.not_even_succ_of_even(); λ h => ih(h) },
+        },
+    }
+}
+
 theorem Nat::even_pow_two(self k: Nat): Nat::Even(Nat::pow(2, Succ(k))) {
     j(sym(Nat::pow(2, k).mul_two()), λ y _ => Nat::Even(y), Nat::pow(2, k).even_double())
 }

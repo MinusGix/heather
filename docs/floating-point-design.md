@@ -564,7 +564,7 @@ roadmap's.
 | round | submilestone | content |
 |---|---|---|
 | 1 | `float-values` | `Format`, the standard formats as values, `Finite(F)`, `Float(F)`, `Dyadic` with its ring and order, `val`, `≈`/`<` with `StrictOrder`, and the constants (`zero`, `min_subnormal`, `min_normal`, `max_finite`) canonical for every format. Landed; §10. |
-| 2 | `float-rounding` | Successor and predecessor with their spacing, `RoundsTo`, `round` on dyadics with sticky, `round_rat`, `round::correct`, uniqueness, the mode laws. Part A (the relation, the executable rounding and its correctness in every mode, sign symmetry) landed; §11. Part B is successor/predecessor, uniqueness and the mode laws. The transfer lemma to any `OrderedField` moved to `float-reals`, its only customer. |
+| 2 | `float-rounding` | Successor and predecessor with their spacing, `RoundsTo`, `round` on dyadics with sticky, `round_rat`, `round::correct`, uniqueness, the mode laws. Part A (the relation, the executable rounding and its correctness in every mode, sign symmetry) landed, §11; part B (successor/predecessor with spacing, uniqueness, bracketing, monotonicity, idempotence) landed, §12. The transfer lemma to any `OrderedField` moved to `float-reals`, its only customer. |
 | 3 | `float-error` | The standard model, absolute subnormal bounds, `ulp`, γ-composition. |
 | 4 | `float-arith` | Add/sub/mul/fma with value, zero-sign and special-value theorems; then div and sqrt by sticky quotients; format conversion. |
 | 5 | `float-eft` | Sterbenz, Fast2Sum, TwoSum, TwoProduct (by fma), Veltkamp; then Kahan summation. |
@@ -753,3 +753,65 @@ Observations for later rounds:
   with a short motive.
 - The transfer lemma to an `OrderedField` has no customer before
   `float-reals`, so it moved there.
+
+## 12. Round 2 as landed, part B (`float-rounding`)
+
+Same module, `lib/std/float/round.hthr`; new general facts went home too:
+`Nat::not_even_succ_of_even` in `nat.hthr`, and the distance-to-midpoint
+lemmas (`mid_le_of_dist`, `le_mid_of_dist`, `le_of_double_le` and their
+subtraction forms) in `rat.hthr`.
+
+**Uniqueness.** `Format::rounds_unique` says two correct roundings of one
+value in one mode are `Float::Same`: finite with equal values (so `+0` and
+`-0` agree), or the same infinity. The directed modes are unique from the
+relation alone (`Below`/`Above` are extremal; a saturated result and an
+infinity exclude each other through `has_inf`). The nearest modes need more
+than the relation states, because "every other nearest float" could in
+principle include a third float. It comes from the computation:
+two nearest floats to a nonnegative value are either equal in value or
+exactly the cell's float and its step up (`Format::near_split`), and those
+two have significands of different parity (`UpIs.odd`, the converse of
+`UpIs.even`). Two canonical floats with equal values have equal fields
+(`Format::canon_eq`, `Finite::parts_of_same`), so parity is a property of
+the value. Negative values flip to positive with `nearest_flip`. Two
+corollaries: `rounds_is_round_rat` (every correct rounding is the
+executable one) and `rounds_exact`/`round_rat_exact` (a representable value
+rounds to itself in every mode).
+
+**Neighbours.** `Finite::next_up(f)` is the least float strictly above `f`,
+`None` above the largest; `next_down` is it through negation. Above a
+nonnegative float it is the cell's step up from the float's own half-unit
+count; above a negative one it is the greatest float strictly below the
+magnitude, negated; both zeros step to the least positive subnormal. The
+specifications are `Finite::IsNextUp`/`IsNextDown` (strictly beyond, and
+least/greatest among those beyond), proved by `next_up_spec` and
+`next_down_spec`. Spacing is `next_up_spacing`: above a nonnegative float
+the next is `2^(bexp + 1)` half-units further, one quantum `2^(bexp +
+qmin)` in value (`next_up_gap`), across binade boundaries included because
+the carry keeps the lower float's exponent.
+
+**Mode laws.** `Float::Le` extends the value order by `-∞` least and `+∞`
+greatest, with NaN unrelated. Every finite correct rounding is one of the
+value's two neighbours (`rounds_faithful`), so
+
+- bracketing: `rounds_ge_down` and `rounds_le_up` put a correct rounding in
+  any mode between the roundings toward `-∞` and toward `+∞`;
+- monotonicity: `rounds_mono` (and `round_rat_mono` for the executable
+  rounding) say `x <= y` never rounds lower. The only case the neighbour
+  argument leaves is the lower value rounding up past where the higher one
+  rounds down; each directed mode excludes it directly, `TowardZero`
+  through the zero float, and in a nearest mode it forces the two values to
+  be one tie (`near_cross`), where uniqueness finishes it. That needs
+  `rounds_respects` (a correct rounding depends on the value up to `≈`).
+- `rounds_exact` above is idempotence.
+
+Observations:
+
+- `omega` sees a `Rat` `≈` fact as a cross-multiplied equation between
+  opaque atoms, so a distance fact like `f.dist(x) ≈ x - f.val()` does not
+  connect to `f.val() < g.val()`; the order lemmas on subtraction
+  (`le_of_sub_le_sub_l`) do it in one step.
+- `Float::Le(Float::Fin(f), Float::Inf(…))` cannot infer `Float`'s format
+  from the field; the library names it (`Float::Le(F := F, a := …, b :=
+  …)`). That is
+  [value-param-constructor-implicit-inference](../issues/value-param-constructor-implicit-inference.md).

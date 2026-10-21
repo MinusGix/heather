@@ -13,7 +13,14 @@
 //!  3. negative controls: a wrong neighbour, a wrong overflow verdict and a
 //!     wrong sign of zero are refused, and so are a correctness proof cited
 //!     at the wrong mode, sign symmetry without the conjugate, and a cut
-//!     proof for a different value.
+//!     proof for a different value;
+//!  4. part B: neighbours compute on a literal format (`next_up` across a
+//!     binade, past the largest float, from below zero and from both zeros;
+//!     `next_down` by negation), and uniqueness, exactness, the neighbour
+//!     specification and spacing, bracketing and monotonicity hold at open
+//!     values, with negative controls for a wrong neighbour, the reversed
+//!     order, the wrong bracket side, spacing below zero and uniqueness
+//!     across modes.
 
 use std::cell::OnceCell;
 use std::sync::Mutex;
@@ -84,10 +91,13 @@ fn refused(name: &str, src: &str) {
     );
 }
 
-const IMPORTS: &str = "import logic; import bool; import nat; import int; import omega; import rat;
+const IMPORTS: &str = "import logic; import bool; import nat; import option; import int; import omega; import rat;
     import dyadic; import float; import round; import relation_props; import algebra_rel; import ordered_field;
 fn val_or({F: Format}, r: Float(F), d: Rat) → Rat { match r { Fin(f) => f.val(), Inf(_, _) => d, NaN(_) => d } }
 fn neg_bit({F: Format}, r: Float(F)) → Bool { match r { Fin(f) => f.neg, Inf(n, _) => n, NaN(_) => False } }
+fn opt_val({F: Format}, o: Option<Finite(F)>, d: Rat) → Rat { match o { Some(s) => s.val(), None => d } }
+fn up_val({F: Format}, r: Float(F), d: Rat) → Rat { match r { Fin(f) => opt_val(f.next_up(), d), Inf(_, _) => d, NaN(_) => d } }
+fn down_val({F: Format}, r: Float(F), d: Rat) → Rat { match r { Fin(f) => opt_val(f.next_down(), d), Inf(_, _) => d, NaN(_) => d } }
 ";
 
 const LITERAL: &str = "
@@ -143,6 +153,61 @@ theorem up_sticky(F: Format, h: Nat): F.round_h(TowardPos, h, True) = F.up_or_ov
 theorem conj_neg(F: Format, h: Nat, st: Bool): F.round_signed(TowardPos, True, h, st) = -F.round_h(TowardNeg, h, st) { refl }
 ";
 
+const NEIGHBOURS: &str = "
+// e2m1's nonnegative floats: 0, 1/2, 1, 3/2, 2, 3, 4, 6.
+theorem up_one(): Rat::Same(up_val(e2m1().round_rat(NearestEven, 1), 99), Rat(3, 2)) { refl }
+theorem up_binade(): Rat::Same(up_val(e2m1().round_rat(NearestEven, Rat(3, 2)), 99), 2) { refl }
+theorem up_wide(): Rat::Same(up_val(e2m1().round_rat(NearestEven, 4), 99), 6) { refl }
+theorem up_top(): Rat::Same(up_val(e2m1().round_rat(NearestEven, 6), 99), 99) { refl }
+theorem up_neg(): Rat::Same(up_val(e2m1().round_rat(NearestEven, -1), 99), Rat(-1, 2)) { refl }
+theorem up_neg_wide(): Rat::Same(up_val(e2m1().round_rat(NearestEven, -6), 99), -4) { refl }
+theorem up_zero(): Rat::Same(up_val(e2m1().round_rat(NearestEven, 0), 99), Rat(1, 2)) { refl }
+theorem up_neg_zero(): Rat::Same(up_val(e2m1().round_rat(NearestEven, Rat(-1, 8)), 99), Rat(1, 2)) { refl }
+theorem up_neg_least(): neg_bit(e2m1().round_rat(NearestEven, Rat(-1, 2))) = True { refl }
+theorem down_one(): Rat::Same(down_val(e2m1().round_rat(NearestEven, 1), 99), Rat(1, 2)) { refl }
+theorem down_zero(): Rat::Same(down_val(e2m1().round_rat(NearestEven, 0), 99), Rat(-1, 2)) { refl }
+theorem down_bottom(): Rat::Same(down_val(e2m1().round_rat(NearestEven, -6), 99), 99) { refl }
+theorem down_e3m2(): Rat::Same(down_val(e3m2().round_rat(NearestEven, 4), 99), Rat(7, 2)) { refl }
+";
+
+const LAWS: &str = "
+theorem uniq(F: Format, mode: Mode, x: Rat, r, s: Float(F), hr: RoundsTo(F, mode, x, r), hs: RoundsTo(F, mode, x, s)): Float::Same(r, s) {
+    F.rounds_unique(mode, x, r, s, hr, hs)
+}
+theorem only_round(F: Format, mode: Mode, x: Rat, r: Float(F), hr: RoundsTo(F, mode, x, r)): Float::Same(r, F.round_rat(mode, x)) { F.rounds_is_round_rat(mode, x, r, hr) }
+theorem exact(F: Format, mode: Mode, f: Finite(F)): Float::Same(F.round_rat(mode, f.val()), Fin(f)) { F.round_rat_exact(mode, f) }
+theorem exact_e5m2(f: Finite(e5m2())): RoundsTo(e5m2(), TowardZero, f.val(), Fin(f)) { e5m2().rounds_exact(TowardZero, f) }
+
+// The neighbours, at an open float.
+theorem up_spec({F: Format}, f: Finite(F)): Finite::IsNextUp(f, f.next_up()) { f.next_up_spec() }
+theorem down_spec({F: Format}, f: Finite(F)): Finite::IsNextDown(f, f.next_down()) { f.next_down_spec() }
+theorem up_least({F: Format}, f, s, g: Finite(F), is: f.next_up() = Some(s), lt: f.val() < g.val()): s.val() <= g.val() {
+    (j(is, λ o _ => Finite::IsNextUp(f, o), f.next_up_spec())).right(g, lt)
+}
+theorem spacing({F: Format}, f, s: Finite(F), pos: f.neg = False, is: f.next_up() = Some(s)): s.H() = f.H() + Nat::pow(2, Succ(f.bexp)).int() {
+    Finite::next_up_spacing(f, s, pos, is)
+}
+theorem gap(f, s: Finite(e4m3()), pos: f.neg = False, is: f.next_up() = Some(s)): s.val() ≈ f.val() + e4m3().grid(Nat::pow(2, Succ(f.bexp)).int()) {
+    Finite::next_up_gap(f, s, pos, is)
+}
+
+// The mode laws.
+theorem le_unfolds({F: Format}, f, g: Finite(F), h: Float::Le(F := F, a := Float::Fin(f), b := Float::Fin(g))): f.val() <= g.val() { h }
+theorem bracket_lo(F: Format, mode: Mode, x: Rat): Float::Le(F.round_rat(TowardNeg, x), F.round_rat(mode, x)) {
+    F.rounds_ge_down(mode, x, F.round_rat(TowardNeg, x), F.round_rat(mode, x), F.round_rat_correct(TowardNeg, x), F.round_rat_correct(mode, x))
+}
+theorem bracket_hi(F: Format, mode: Mode, x: Rat): Float::Le(F.round_rat(mode, x), F.round_rat(TowardPos, x)) {
+    F.rounds_le_up(mode, x, F.round_rat(mode, x), F.round_rat(TowardPos, x), F.round_rat_correct(mode, x), F.round_rat_correct(TowardPos, x))
+}
+theorem mono(F: Format, mode: Mode, x, y: Rat, xy: x <= y): Float::Le(F.round_rat(mode, x), F.round_rat(mode, y)) { F.round_rat_mono(mode, x, y, xy) }
+theorem mono_fin_ne({F: Format}, x, y: Rat, xy: x <= y, f, g: Finite(F), hf: RoundsTo(F, NearestEven, x, Fin(f)), hg: RoundsTo(F, NearestEven, y, Fin(g))): f.val() <= g.val() {
+    F.rounds_mono(NearestEven, x, y, xy, Fin(f), Fin(g), hf, hg)
+}
+theorem faithful({F: Format}, mode: Mode, x: Rat, f: Finite(F), h: RoundsTo(F, mode, x, Fin(f))): Finite::Below(x, f) ∨ Finite::Above(x, f) {
+    F.rounds_faithful(mode, x, f, h)
+}
+";
+
 #[test]
 fn literal_roundings_compute() {
     let mut e = base();
@@ -153,6 +218,39 @@ fn literal_roundings_compute() {
 fn rounding_is_correct_at_open_values() {
     let mut e = base();
     check(&mut e, "round_open", &format!("{IMPORTS}{OPEN}"));
+}
+
+#[test]
+fn neighbours_compute() {
+    let mut e = base();
+    check(&mut e, "round_neighbours", &format!("{IMPORTS}{NEIGHBOURS}"));
+}
+
+#[test]
+fn mode_laws_hold_at_open_values() {
+    let mut e = base();
+    check(&mut e, "round_laws", &format!("{IMPORTS}{LAWS}"));
+}
+
+#[test]
+fn a_wrong_neighbour_or_law_is_refused() {
+    for (i, bad) in [
+        "theorem bad(): Rat::Same(up_val(e2m1().round_rat(NearestEven, 1), 99), 2) { refl }",
+        "theorem bad(): Rat::Same(down_val(e2m1().round_rat(NearestEven, 0), 99), 0) { refl }",
+        "theorem bad(): Rat::Same(up_val(e2m1().round_rat(NearestEven, 6), 99), 8) { refl }",
+        "theorem bad(F: Format, mode: Mode, x, y: Rat, xy: x <= y): Float::Le(F.round_rat(mode, y), F.round_rat(mode, x)) { F.round_rat_mono(mode, x, y, xy) }",
+        "theorem bad(F: Format, mode: Mode, x: Rat): Float::Le(F.round_rat(TowardPos, x), F.round_rat(mode, x)) {
+            F.rounds_ge_down(mode, x, F.round_rat(TowardPos, x), F.round_rat(mode, x), F.round_rat_correct(TowardPos, x), F.round_rat_correct(mode, x)) }",
+        "theorem bad({F: Format}, f, s: Finite(F), t: f.neg = True, is: f.next_up() = Some(s)): s.H() = f.H() + Nat::pow(2, Succ(f.bexp)).int() {
+            Finite::next_up_spacing(f, s, t, is) }",
+        "theorem bad(F: Format, x: Rat): Float::Same(F.round_rat(NearestEven, x), F.round_rat(NearestAway, x)) {
+            F.rounds_unique(NearestEven, x, F.round_rat(NearestEven, x), F.round_rat(NearestAway, x), F.round_rat_correct(NearestEven, x), F.round_rat_correct(NearestAway, x)) }",
+    ]
+    .iter()
+    .enumerate()
+    {
+        refused(&format!("round_bad_law_{i}"), &format!("{IMPORTS}{bad}"));
+    }
 }
 
 #[test]

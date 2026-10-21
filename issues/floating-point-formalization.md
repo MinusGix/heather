@@ -64,3 +64,9 @@ of the area.
   (successor/predecessor, uniqueness, the mode laws) is next; the transfer
   lemma moved to `float-reals`. `round_rat`'s evaluation cost is
   [[float-round-rat-division-cost]].
+- 2026-10-21: round 2 part B, on the same PR: uniqueness
+  (`rounds_unique`, through the computed neighbour pair for the nearest
+  modes), exactness/idempotence, `next_up`/`next_down` with their
+  specification and spacing, `Float::Le`, faithfulness, bracketing and
+  monotonicity. Design §12. An inference gap it hit is
+  [[value-param-constructor-implicit-inference]].
