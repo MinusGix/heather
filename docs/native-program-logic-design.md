@@ -325,6 +325,48 @@ the computed type structural"):
   the obligations are small and fixed; nothing scales with program size. That
   is the main cost argument for the whole redesign.
 
+### 6.4 As built (round S2)
+
+`lib/linux_x86_64_wp.hthr` and `lib/linux_x86_64_views.hthr`; the controls
+are `crates/elab/tests/linux_wp.rs`. Where the build differs from §6.1–6.2:
+
+- **`Proved(index, bytes, len, measured)` names its contract in a table**
+  (`contracts: Nat → Contract`, a parameter of `Wp`), not by a field. A
+  contract is a pair of predicates over registers, so a field of type
+  `Contract` lifts `Asm` a universe and every `Exists<Prog>`/`List<Asm>` with
+  it; Heather's universes are not cumulative. `WpHonest` asks, once per
+  program, that each `Proved` item's bytes run as its contract
+  (`Contract::Runs`: from the precondition, a fetched run to the item's end,
+  memory unchanged, the postcondition). `Syscall` is the two bytes `0f 05`.
+- **The post sees a `passed` flag, and the loop invariant a ghost variant
+  `w`**, as designed; `LoopPost` is `Back` (at the head, the invariant at
+  some `w'`, and `passed ∨ w' < w`) or, on leaving, `Holds(v, memory) →
+  Sim(io, t, state)` — leaving is proved from wherever it lands, with the
+  view's own holding in hand to start a further `wp_sound`.
+- **Jumps land by `wp_reach`**, a Bool over the items checked by evaluation
+  (`trivial` at a literal program), which asks each JCC/JMP to land forward
+  or back on its label's offset. `laid_out` asks forward only and loops jump
+  back; the two should become one (see `issues/asm-landing-both-ways.md`).
+- **Views** carry `Holds(v, m)` and four arms: `Word` and `Byte` (the caller
+  names the value read), `Stores` (the caller names where it goes and the
+  view after it) and `Asks` (what a call asks of memory). `ViewSound` proves
+  each arm once against the access model. `io_page_view` holds the I/O page
+  (`v` is the page; a store is a span of it); `io_frame_view` holds the frame
+  as 32 word slots plus the page (`v` is a `Framed`; a store is a slot set or
+  a page span).
+- **Syscall answers** go through `linux_buffer`/`linux_stored`/`linux_left`:
+  what Linux leaves in memory on answering is stated once, and the view's
+  `Stores` arm is asked for it, so a view sees a read's bytes land.
+
+Cost, from the probe (`--only --timings` on the controls, cached prefix):
+the view record is not the cost — the pure loop's pass, over the frame view,
+elaborates in about the time its gate takes. The I/O loop's pass, whose
+syscall arm checks three answer branches against continuations carrying
+`linux_answered`'s state, spends several times its gate in the elaborator's
+whnf: the respelling `issues/elab-whnf-copies-straight-continuations.md`
+names, now on `Wp`. So no monomorphic specialisation; the lever is that
+issue's, and `drain_pass` is its workload now that `Straight` is gone.
+
 ## 7. The source and its compiler
 
 Decided in round S3; the constraints the rest of the design puts on it:

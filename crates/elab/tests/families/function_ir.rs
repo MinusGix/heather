@@ -39,6 +39,10 @@ mod linux_determinism;
 mod native_foundation;
 #[path = "../linux_spec.rs"]
 mod linux_spec;
+#[path = "../linux_wp.rs"]
+mod linux_wp;
+#[path = "../linux_wp_count.rs"]
+mod linux_wp_count;
 #[path = "../crossing_link_cost.rs"]
 mod crossing_link_cost;
 #[path = "../function_ir_narrow_certificates.rs"]
