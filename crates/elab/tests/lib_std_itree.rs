@@ -51,12 +51,17 @@ fn check(e: &mut Elaborator, name: &str, src: &str) {
     }
 }
 
+/// Refused by conversion, not by some earlier inference failure: every
+/// negative control here is a false equation.
 fn refused(name: &str, src: &str) {
     let mut e = base();
-    assert!(
-        e.elab_module_source(name, src).is_err(),
-        "{name} should be refused"
-    );
+    match e.elab_module_source(name, src) {
+        Ok(()) => panic!("{name} should be refused"),
+        Err(err) => {
+            let msg = err.render(src);
+            assert!(msg.contains("NotConvertible"), "{name}: {msg}");
+        }
+    }
 }
 
 const IMPORTS: &str = "import logic; import nat; import itree;\n";
@@ -138,7 +143,9 @@ fn no_fuel_is_a_cut() {
         "itree_iter_zero_ret",
         &format!(
             "{IMPORTS}
-            theorem bad<A>(E: Events, a: A): ITree::iter(E, 0, λ (x: A) => Ret<Step<A, A>>(Break(x)), a) = Ret(a) {{ refl }}"
+            fn stop<A>(E: Events, x: A) → ITree<Step<A, A>>(E) {{ Ret(Break(x)) }}
+            fn done<A>(E: Events, x: A) → ITree<A>(E) {{ Ret(x) }}
+            theorem bad<A>(E: Events, a: A): ITree::iter(E, 0, λ x => stop(E, x), a) = done(E, a) {{ refl }}"
         ),
     );
     let mut e = base();
@@ -147,7 +154,9 @@ fn no_fuel_is_a_cut() {
         "itree_iter_one_ret",
         &format!(
             "{IMPORTS}
-            theorem ok<A>(E: Events, a: A): ITree::iter(E, 1, λ (x: A) => Ret<Step<A, A>>(Break(x)), a) = Ret(a) {{ refl }}"
+            fn stop<A>(E: Events, x: A) → ITree<Step<A, A>>(E) {{ Ret(Break(x)) }}
+            fn done<A>(E: Events, x: A) → ITree<A>(E) {{ Ret(x) }}
+            theorem ok<A>(E: Events, a: A): ITree::iter(E, 1, λ x => stop(E, x), a) = done(E, a) {{ refl }}"
         ),
     );
 }
@@ -170,7 +179,7 @@ fn right_identity_is_same_not_equal() {
         &format!(
             "{IMPORTS}
             theorem bad<R>(E: Events, c: E.Cmd, k: E.Resp(c) → ITree<R>(E)):
-                ITree::bind(E, Vis(c, k), λ r => Ret(r)) = Vis(c, k) {{ refl }}"
+                ITree::bind<R, R>(E, Vis(c, k), λ r => Ret(r)) = Vis(c, k) {{ refl }}"
         ),
     );
     // The law in a checking position, then composed: `Same` is transitive
@@ -229,7 +238,7 @@ fn same_tells_trees_apart() {
                 SameTau(Ret(1), refl, refl)
             }}
             theorem vis<R>(E: Events, c: E.Cmd, k: E.Resp(c) → ITree<R>(E)):
-                ITree::Same(E, ITree::bind(E, Vis(c, k), λ r => Ret(r)), Vis(c, k)) {{
+                ITree::Same(E, ITree::bind<R, R>(E, Vis(c, k), λ r => Ret(r)), Vis(c, k)) {{
                 ITree::bind_ret_r(E, Vis(c, k))
             }}"
         ),

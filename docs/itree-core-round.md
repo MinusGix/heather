@@ -108,9 +108,15 @@ The value machine found the former, but its readback declined on the `elim_W`
 which copies the definitions it unfolds. `crates/elab/src/readback.rs` now
 reads that λ back (a unit test checks it spells exactly the reducer's
 reduct), which removed roughly half of the module's elaborate time with every
-count column unchanged. What remains is the kernel gate on the tier-2
-encoding's terms, in proportion to the size of the encoded `match`, and is a
-kernel-cost question rather than this library's.
+count column unchanged. What remains is the kernel gate: tier 2 has no generated
+definitions, so `ITree<R>(E)` is spelled inline at every use, and a profile of
+one law puts most of its gate in comparing and shifting that spelling. Each
+law proved by induction costs seconds, and the library's cold check is the
+suite's slowest target, inside its CPU rail but not by much. Naming the
+lowered type is the fix
+([tier2-fragment-extensions](../issues/tier2-fragment-extensions.md),
+generated definitions), and it should come before round 2 adds more
+induction proofs.
 
 ## Frictions met
 
