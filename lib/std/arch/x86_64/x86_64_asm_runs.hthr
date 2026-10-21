@@ -296,7 +296,7 @@ theorem Site::item_resident<M>(self site: Site<M>, fits: FillsFit(site.program, 
         next_rip(site.origin, prog_len(before))) {
     let labels = asm_labels(site.program);
     let found = asm_resident_from(site.fetch, memory, site.origin, no_fills(), labels, 0, site.program, fits, site.last, resident, k);
-    let moved = j(at, λ l _ => CodeResident(site.fetch, memory, item_bytes(no_fills(), labels, l), next_rip(site.origin, 0 + asm_at(l))), found);
+    let moved = rewrite(at, in := found);
     j(prog_len(before).add_left_zero(),
         λ n _ => CodeResident(site.fetch, memory, asm_bytes(no_fills(), labels, prog_len(before), item), next_rip(site.origin, n)), moved)
 }

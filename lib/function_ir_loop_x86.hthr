@@ -87,7 +87,7 @@ theorem loop_cursor_advance(width: Nat, cursor_word, length_word, one_word: BitV
     unit: LoopWord(width, one_word, 1), selected: cursor_word.unsigned_lt_bit(length_word) = True):
     LoopWord(width, cursor_word.add(one_word), Succ(cursor)) {
     let inside = loop_selected_cursor_bound(width, cursor_word, length_word, cursor, length, cw, lw, selected);
-    let bounded = j(lw, λ found _ => found < Nat::pow(2, width), BitVec::toNat_lt_pow(width, length_word));
+    let bounded = rewrite(lw, in := BitVec::toNat_lt_pow(width, length_word));
     bitvec_nat::add_words(width, cursor_word, one_word, cursor, 1, cw, unit,
         Succ(Succ(cursor)).le_trans(Succ(length), Nat::pow(2, width), inside, bounded))
 }

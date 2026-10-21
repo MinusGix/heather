@@ -72,8 +72,7 @@ theorem Finite::ulp_grid({F: Format}, self f: Finite(F)): f.ulp().rat() ≈ F.gr
     let qd: (f.q() = F.qmin() + f.bexp.int()) = refl;
     let ex: (F.qmin() -1 + Succ(f.bexp).int() = f.q()) = omega;
     let one: (OfNat(1) * Nat::pow(2, Succ(f.bexp)).int() = Nat::pow(2, Succ(f.bexp)).int()) = Nat::pow(2, Succ(f.bexp)).int().one_mul();
-    let moved = j(one, λ m _ => Dyadic(m, F.qmin() -1) ≈ Dyadic(1, f.q()),
-        j(ex, λ e _ => Dyadic(OfNat(1) * Nat::pow(2, Succ(f.bexp)).int(), F.qmin() -1) ≈ Dyadic(1, e), al));
+    let moved = rewrite(ex, one, in := al);
     Dyadic::same_sym(moved)
 }
 
@@ -202,7 +201,7 @@ theorem Format::nearest_err(self F: Format, x: Rat, h: Nat, st: Bool, a: F.Appro
     let P = Nat::pow(2, Succ(d.bexp)).int();
     let dd = Finite::dist_below(d, x, bd.left);
     let dbl: (Nat::pow(2, d.bexp).int() + Nat::pow(2, d.bexp).int() = P) = { let pd: (Nat::pow(2, Succ(d.bexp)) = Nat::pow(2, d.bexp) * 2) = refl; omega };
-    let halves: (half + half ≈ F.grid(P)) = j(dbl, λ v _ => half + half ≈ F.grid(v), F.grid_add(Nat::pow(2, d.bexp).int(), Nat::pow(2, d.bexp).int()));
+    let halves: (half + half ≈ F.grid(P)) = rewrite(dbl, in := F.grid_add(Nat::pow(2, d.bexp).int(), Nat::pow(2, d.bexp).int()));
     let c2 = (F.cut_in_cell(h, st, below)).right;
     let half_nn: (0 <= half) = Rat::le_respects(F.grid_zero(), half.same_refl(), F.grid_le(0, Nat::pow(2, d.bexp).int(), omega));
     let twice = match F.up_cases(h, below) as λ _ => r.dist(x) + r.dist(x) <= half + half {

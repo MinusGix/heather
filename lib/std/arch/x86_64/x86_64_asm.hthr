@@ -254,11 +254,10 @@ theorem asm_resident_from<M>(fetch: FetchAccess<M>, memory: M, origin: BitVec(64
         At(before, name, item) => λ fits last resident => {
             let code = asm_code(fills, labels, before);
             let bytes = asm_bytes(fills, labels, prog_len(before), item);
-            let moved = j(List::append_assoc(code, bytes, last), λ c _ => CodeResident(fetch, memory, c, next_rip(origin, at)), resident);
+            let moved = rewrite(List::append_assoc(code, bytes, last), in := resident);
             let parts = resident_split_at(fetch, memory, code, bytes ++ last, origin, at, moved);
             let fits_before = fills_fit_before(fills, before, name, item, fits);
-            let here = j(asm_code_len(fills, labels, before, fits_before), λ n _ => CodeResident(fetch, memory, bytes ++ last, next_rip(origin, at + n)),
-                parts.right);
+            let here = rewrite(asm_code_len(fills, labels, before, fits_before), in := parts.right);
             λ k => match k as λ i => CodeResident(fetch, memory, item_bytes(fills, labels, asm_back(At(before, name, item), i)),
                     next_rip(origin, at + asm_at(asm_back(At(before, name, item), i)))) {
                 Zero => resident_split_at(fetch, memory, bytes, last, origin, at + prog_len(before), here).left,

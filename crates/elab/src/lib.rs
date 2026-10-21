@@ -85,6 +85,7 @@ mod omega_cert;
 mod bv_omega;
 mod ring;
 mod rewrite;
+mod subst_local;
 pub use omega_cert::{CutSatReport, OmegaPhases, OmegaReport, OmegaResidualConstraint};
 pub mod certgen;
 pub mod function_ir_cert;
@@ -5076,10 +5077,25 @@ impl Elaborator {
                 explicit: false,
                 goal_oriented: false,
             } if matches!(&head.kind, ExprKind::Var(name) if name == "rewrite")
+                && !named.iter().any(|a| a.name == "in")
                 && !self.shadowed(cx, "rewrite")
                 && self.ctor_here_expected(cx, "rewrite", expected).is_none() =>
             {
                 self.elab_rewrite(cx, args, named, expected, lvl, e.span)
+            }
+            // `subst(h, e)` eliminates a local variable along `h`, reverting
+            // the locals that depend on it (docs/equation-rewrite-design.md §8).
+            ExprKind::App {
+                head,
+                args,
+                named,
+                explicit: false,
+                goal_oriented: false,
+            } if matches!(&head.kind, ExprKind::Var(name) if name == "subst")
+                && !self.shadowed(cx, "subst")
+                && self.ctor_here_expected(cx, "subst", expected).is_none() =>
+            {
+                self.elab_subst(cx, args, named, expected, lvl, e.span)
             }
             // `ring` normalizes both sides of an equation at `Int` or `Nat`
             // by reflection; `ring(h, …)` also combines equations
@@ -6390,6 +6406,23 @@ impl Elaborator {
             && self.ctor_here(cx, e.as_named().unwrap().0).is_none()
         {
             return err(format!("`{}` needs an expected relation goal; annotate this proof position", e.as_named().unwrap().0), e.span);
+        }
+        // `rewrite(h, …, in := hyp)` transports a hypothesis: its type is
+        // what it proves (docs/equation-rewrite-design.md §7). In checking
+        // position it arrives here through the inference fallback.
+        if let ExprKind::App {
+            head,
+            args,
+            named,
+            explicit: false,
+            goal_oriented: false,
+        } = &e.kind
+            && matches!(&head.kind, ExprKind::Var(name) if name == "rewrite")
+            && named.iter().any(|a| a.name == "in")
+            && !self.shadowed(cx, "rewrite")
+            && self.ctor_here(cx, "rewrite").is_none()
+        {
+            return self.elab_rewrite_in(cx, args, named, e.span);
         }
         if let ExprKind::App {
             head,
@@ -8928,7 +8961,16 @@ impl Elaborator {
                     return err(
                         "`rewrite(h, …, e)` needs an expected type: it rewrites a goal, so it \
                          only means anything where one is known (a `theorem` body, an \
-                         annotated `let`, an argument)",
+                         annotated `let`, an argument)\n  hint: to rewrite a hypothesis's \
+                         type instead, write `rewrite(h, …, in := hyp)`",
+                        span,
+                    );
+                }
+                if name == "subst" {
+                    return err(
+                        "`subst(h, e)` needs an expected type: it eliminates a variable from a \
+                         goal, so it only means anything where one is known (a `theorem` body, \
+                         an annotated `let`, an argument)",
                         span,
                     );
                 }

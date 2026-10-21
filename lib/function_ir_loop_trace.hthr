@@ -53,7 +53,7 @@ theorem loop_fits_step(cursor, rest, carry, next: Nat, fits: loop_fits(cursor, S
     advance: next <= Succ(carry)):
     loop_fits(Succ(cursor), rest, next) {
     let grown = Nat::add_le_mono_r(rest, next, Succ(carry), advance);
-    let shifted = j(Nat::add_succ_left(carry, rest), λ total _ => next + rest <= total, grown);
+    let shifted = rewrite(Nat::add_succ_left(carry, rest), in := grown);
     Succ(next + rest).le_trans(Succ(carry + Succ(rest)), Nat::pow(2, 64), shifted, fits)
 }
 
@@ -62,8 +62,8 @@ theorem loop_fits_step(cursor, rest, carry, next: Nat, fits: loop_fits(cursor, S
 theorem loop_fits_from(carry, start, seen, budget: Nat, grown: carry <= start + seen, zero: start = 0,
     room: seen + budget < Nat::pow(2, 64)): loop_fits(0, budget, carry) {
     let moved = Nat::add_le_mono_r(budget, carry, start + seen, grown);
-    let started = j(zero, λ s _ => carry + budget <= (s + seen) + budget, moved);
-    let shifted = j(Nat::add_left_zero(seen), λ s _ => carry + budget <= s + budget, started);
+    let started = rewrite(zero, in := moved);
+    let shifted = rewrite(Nat::add_left_zero(seen), in := started);
     Succ(carry + budget).le_trans(Succ(seen + budget), Nat::pow(2, 64), shifted, room)
 }
 

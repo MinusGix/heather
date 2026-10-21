@@ -214,10 +214,8 @@ theorem counts_runs<C>(g: C → BitVec(8) → C, count: C → Nat, inside: C →
         Nil => λ s => match inside(s) as λ i => count(s) + inside_runs<BitVec(8)>(i, [Nil]) = count(s) + 0 { True => refl, False => refl },
         Cons(b, rest) => λ s => {
             let ih = counts_runs(g, count, inside, sep, grows, flag, rest, g(s, b));
-            let flagged = j(flag(s, b), λ i _ => count(fold_bytes(g, rest, g(s, b))) + inside_runs(i, rest.split_by(sep)) =
-                count(g(s, b)) + runs_of(rest.split_by(sep)), ih);
-            let grown = j(grows(s, b), λ n _ => count(fold_bytes(g, rest, g(s, b))) + inside_runs(!sep(b), rest.split_by(sep)) =
-                n + runs_of(rest.split_by(sep)), flagged);
+            let flagged = rewrite(flag(s, b), in := ih);
+            let grown = rewrite(grows(s, b), in := flagged);
             runs_one(b, rest.split_by(sep), count(fold_bytes(g, rest, g(s, b))), count(s), sep(b), inside(s), grown)
         },
     }

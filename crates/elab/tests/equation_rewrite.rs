@@ -330,3 +330,97 @@ fn every_spelling_is_rewritten_together() {
     ok("fn double(n: Nat) → Nat { n + n }
         theorem t(a: Nat, h: double(a) = 4, k: 4 <= 4): double(a + 0) <= double(a) { rewrite(h, k) }");
 }
+
+// -- in a hypothesis: `rewrite(h, …, in := hyp)` -------------------------------
+
+#[test]
+fn a_hypothesis_is_rewritten_left_to_right() {
+    // Inference position: the result's type is what the rewrite left.
+    ok("theorem t(a, b: Nat, p: a = b, h: a <= 3): b <= 3 {
+            let moved = rewrite(p, in := h);
+            moved
+        }");
+    // Checking position, through the inference fallback.
+    ok("theorem t2(a, b: Nat, p: a = b, h: a <= 3): b <= 3 { rewrite(p, in := h) }");
+}
+
+#[test]
+fn a_rewritten_hypothesis_is_an_argument() {
+    ok("theorem t(a, b, c: Nat, p: a = b, h: a <= c, k: c <= 3): b <= 3 {
+            b.le_trans(c, 3, rewrite(p, in := h), k)
+        }");
+}
+
+#[test]
+fn hypothesis_equations_apply_in_turn() {
+    ok("theorem t(a, b, c: Nat, p: a = b, q: b = c, h: a <= 5): c <= 5 {
+            let moved = rewrite(p, q, in := h);
+            moved
+        }");
+}
+
+#[test]
+fn a_hypothesis_rewrite_instantiates_an_unapplied_lemma() {
+    ok("theorem t(n, k: Nat, h: n + k <= 3): k + n <= 3 {
+            let moved = rewrite(Nat::add_comm, in := h);
+            moved
+        }");
+}
+
+#[test]
+fn a_hypothesis_over_an_open_element_type() {
+    ok("theorem t<A>(xs, ys, zs: List<A>, p: xs = ys, h: (xs ++ zs).len() = 0): (ys ++ zs).len() = 0 {
+            let moved = rewrite(p, in := h);
+            moved
+        }");
+}
+
+#[test]
+fn a_dependent_hypothesis_is_transported() {
+    // `v : P(n)` itself is the hypothesis, a family index rewritten.
+    ok("theorem t(P: Nat → Type, n, m: Nat, h: n = m, v: P(n)): P(m) {
+            let moved = rewrite(h, in := v);
+            moved
+        }");
+}
+
+#[test]
+fn at_selects_occurrences_in_a_hypothesis() {
+    ok("theorem t(n, m: Nat, h: n = m, k: n <= n): n <= m {
+            let moved = rewrite(h, in := k, at := 2);
+            moved
+        }");
+    // The control: every occurrence moves without `at`.
+    let e = bad("theorem t(n, m: Nat, h: n = m, k: n <= n): n <= m {
+            let moved = rewrite(h, in := k);
+            moved
+        }");
+    assert!(e.contains("m <= m") || e.contains("Le(m, m)"), "{e}");
+}
+
+#[test]
+fn a_hypothesis_without_the_left_side_hints_sym() {
+    let e = bad("theorem t(a, b: Nat, p: a = b, h: b <= 3): a <= 3 { rewrite(p, in := h) }");
+    assert!(e.contains("the hypothesis's type") && e.contains("does not mention the equation's left side `a`"), "{e}");
+    assert!(e.contains("sym("), "{e}");
+    // With `sym` it is accepted: the direction is never guessed.
+    ok("theorem t(a, b: Nat, p: a = b, h: b <= 3): a <= 3 { rewrite(sym(p), in := h) }");
+}
+
+#[test]
+fn hypothesis_rewrite_refusals() {
+    let e = bad("theorem t(a, b, c: Nat, p: a = b, q: b = c, h: a <= 5): c <= 5 {
+            rewrite(p, q, in := h, at := 1)
+        }");
+    assert!(e.contains("rewrite one at a time"), "{e}");
+    let e = bad("theorem t(a: Nat, h: a <= 5): a <= 5 { rewrite(in := h) }");
+    assert!(e.contains("one or more equations"), "{e}");
+    let e = bad("theorem t(a, b: Nat, p: a = b, h: a <= 5): b <= 5 { rewrite(p, in := h, by := 2) }");
+    assert!(e.contains("not this `by :=`"), "{e}");
+}
+
+#[test]
+fn a_bare_rewrite_in_inference_position_points_at_in() {
+    let e = bad("theorem t(a, b: Nat, p: a = b, h: a <= 3): b <= 3 { let m = rewrite(p, h); m }");
+    assert!(e.contains("needs an expected type") && e.contains("in := hyp"), "{e}");
+}
