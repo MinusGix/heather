@@ -903,7 +903,9 @@ impl Elaborator {
                 // for a deep surface pattern to select here; retain an
                 // explicitly constructor-less column so sibling payloads do
                 // not lose their type evidence.
-                FieldKind::Container { .. } | FieldKind::IndexVar => Some(unknown()),
+                FieldKind::Container { .. } | FieldKind::IndexVar | FieldKind::FnChild => {
+                    Some(unknown())
+                }
             })
             .collect::<Option<Vec<_>>>()?;
         Some(fields)
