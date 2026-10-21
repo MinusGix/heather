@@ -5,7 +5,7 @@ labels: [metaprogramming,elaboration,design]
 area: tactics
 milestone: [tac-host-interface, hih-passes]
 created: 2026-09-07
-updated: 2026-09-08
+updated: 2026-10-21
 ---
 
 Own the public interface between user metafunctions and the active compiler:
@@ -41,3 +41,4 @@ string. Identity and correctness are separate claims.
 ## Log
 
 - 2026-09-08: [[heather-checked-construction-api]] owns the first bounded Heather-side construction customer; this issue retains the host capability boundary.
+- 2026-10-21: Design proposal: docs/host-elaboration-interface-design.md. Tactics are ordinary Heather values of a request tree `Tac<A>` (an interaction tree over a `Req`/`Resp` container) that the elaborator runs like an in-language analyzer, seeing terms through a lazy surface-level view with host-issued handles; layer-m Code stays the home of typed generators (design §2 says why tactics are the opposite case). Four decisions for Minus in §0; rounds R1–R4 in §10. The probe (crates/elab/tests/tactic_request_tree.rs) checks the protocol, `bind` and a Heather handler compute in today's surface.
