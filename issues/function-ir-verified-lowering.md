@@ -82,7 +82,8 @@ costs a refusal, never a wrong program.
    `MOV r, r`; `OP d, b` into the right operand's register for commutative
    ops (today that placement is refused); the immediate forms; one-bit
    constants and copies. The frame lemmas are about any instruction list
-   and may belong in `x86_64_block`.
+   and may belong in `x86_64_block`. `read_gpr`/`write_gpr` as `Gprs`
+   methods is [[gprs-read-write-methods]].
 2. **Conditionals** (`StructuredRegion`'s `Conditional`, `Sequence`,
    `Compose`): code as a `Prog` with `Jcc`/`Jmp` to labels, proved over
    the assembled bytes. This is where S2's `Wp` (its `Jcc`/`Jmp`
