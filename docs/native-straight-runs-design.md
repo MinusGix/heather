@@ -1,5 +1,9 @@
 # Straight label code, computed: `Straight` and `straight_runs`
 
+> **Burned in B1 (2026-10-21).** The code this document describes was deleted with the
+> hand-proved process stack (`docs/native-program-logic-design.md` §3.1); the document
+> stays for its reasoning. The last commit with the code is `189659d` (tag `native-v0`).
+
 Issue: `issues/native-symbolic-execution-step.md`. Library:
 `lib/elf64_straight.hthr`; client: `lib/elf64_command.hthr` (`cmd_straight`
 and the phases listed under "Moved" below).

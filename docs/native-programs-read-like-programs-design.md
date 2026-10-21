@@ -1,5 +1,9 @@
 # A native program reads like a program
 
+> **Burned in B1 (2026-10-21).** The code this document describes was deleted with the
+> hand-proved process stack (`docs/native-program-logic-design.md` §3.1); the document
+> stays for its reasoning. The last commit with the code is `189659d` (tag `native-v0`).
+
 Status: **scoped 2026-10-02; V1–V5 run (§4.1); S6, S1, S2 and S3 landed (part 3 after a design round: `Decide` carries its bit, `native-frontend-decided-matches`); S4 and S5 landed 2026-10-03.** Anchor issue:
 `issues/native-programs-read-like-programs.md`. This round comes after step 2
 of `docs/automatic-author-surface-design.md` (the stream filter) and before

@@ -1,10 +1,10 @@
 ---
 title: Follow-ups from the wc review: order of rounds
-status: open
+status: closed
 labels: [native,design]
 area: heather-in-heather
 created: 2026-10-07
-updated: 2026-10-07
+updated: 2026-10-21
 ---
 
 Anchor for the follow-ups of the 2026-10-06 review of `wc` and the library
@@ -37,3 +37,7 @@ and the existing [[tactic-composition-ergonomics]].
 Diagnostics found while probing for this list:
 [[prop-in-bool-position-reaches-kernel]],
 [[width-specific-method-on-other-width]].
+
+## Log
+
+- 2026-10-21: Closed as not planned: the layer it is about was burned in B1 with the hand-proved native process stack (docs/native-program-logic-design.md §3.1, [[native-burn-process-stack]]); the last commit with it is 189659d (tag native-v0). The rebuild states programs as interaction trees and compiles them, so this per-program work does not come back in this form.

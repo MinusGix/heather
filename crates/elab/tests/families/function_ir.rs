@@ -12,8 +12,6 @@ mod common;
 mod composed_fixture;
 #[path = "../support/read_loop.rs"]
 mod read_loop_fixture;
-#[path = "../support/command_prefix.rs"]
-mod command_prefix;
 
 #[path = "../function_ir.rs"]
 mod function_ir;
@@ -31,40 +29,10 @@ mod function_ir_guarded_read;
 mod function_ir_loop;
 #[path = "../function_ir_loop_trace.rs"]
 mod function_ir_loop_trace;
-#[path = "../read_loop_process.rs"]
-mod read_loop_process;
-#[path = "../field_line_format.rs"]
-mod field_line_format;
-#[path = "../field_line_high_format.rs"]
-mod field_line_high_format;
-#[path = "../read_filter_process.rs"]
-mod read_filter_process;
-#[path = "../format_width_process.rs"]
-mod format_width_process;
-#[path = "../open_read_close_process.rs"]
-mod open_read_close_process;
-#[path = "../arg_scan_process.rs"]
-mod arg_scan_process;
-#[path = "../stat_width_process.rs"]
-mod stat_width_process;
-#[path = "../operand_cursor_refusals.rs"]
-mod operand_cursor_refusals;
-#[path = "../stat_width_refusals.rs"]
-mod stat_width_refusals;
-#[path = "../row_fields_process.rs"]
-mod row_fields_process;
-#[path = "../row_fields_refusals.rs"]
-mod row_fields_refusals;
-#[path = "../command_process.rs"]
-mod command_process;
-#[path = "../command_refusals.rs"]
-mod command_refusals;
-#[path = "../filter_step_generation.rs"]
-mod filter_step_generation;
-#[path = "../read_print_process.rs"]
-mod read_print_process;
 #[path = "../linux_determinism.rs"]
 mod linux_determinism;
+#[path = "../native_foundation.rs"]
+mod native_foundation;
 #[path = "../crossing_link_cost.rs"]
 mod crossing_link_cost;
 #[path = "../function_ir_narrow_certificates.rs"]

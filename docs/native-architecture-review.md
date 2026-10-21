@@ -1,5 +1,9 @@
 # The native program stack: an architecture review
 
+> **Burned in B1 (2026-10-21).** The code this document describes was deleted with the
+> hand-proved process stack (`docs/native-program-logic-design.md` §3.1); the document
+> stays for its reasoning. The last commit with the code is `189659d` (tag `native-v0`).
+
 Status: **review, 2026-09-30. R0–R7 chosen and landed the same day (§8).** Read-only
 survey of what `wc -l`, `wc` and `tr` left behind, taken before a fourth
 program (`tr -s`/`-d`, `issues/native-loop-emitting-stores.md`) adds another

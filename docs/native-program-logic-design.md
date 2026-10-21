@@ -111,20 +111,31 @@ hand. Nothing else depends on them, and the rebuild does not reuse them.
 
 | Where | What |
 | --- | --- |
-| `lib/` | every `elf64_*` module except `elf64.hthr` and `elf64_load.hthr`; `command_program`, `filter_program`, `filter_step_piece` |
-| `lib/`, `lib/std/arch/x86_64/` | the older fetched-block generation nothing imports any more: `linux_x86_64_fetch`, `x86_64_fetch_block` |
-| `crates/cli/src/native/` | the read-loop, read-filter and command producers (`read_loop.rs`, `read_filter.rs`, `read_command.rs`, `order.rs`, `evaluate.rs`, `support.rs` where only they use it), and the `build-x86` profiles that select them |
-| tests | `native_wc`, `native_tr`, `native_filter`, `native_read_loop`; the elab process tests (`*_process.rs`, `command_refusals`, `semantic_command_warmup`, `filter_step_generation`); the command warm-up in `scripts/test` |
+| `lib/` | every `elf64_*` module except `elf64`, `elf64_load`, `elf64_io` (which `x86_64_fetched_code` imports) and `elf64_calls` (the call examples' library, B2); `command_program`, `filter_program`, `decimal_line`, `field_line` |
+| `crates/cli/src/native/` | the read-loop, read-filter and command producers (`read_loop.rs`, `read_filter.rs`, `read_command.rs`, `evaluate.rs`), and the `Filter` and `Command` profiles of `build-x86`, which now builds only functions of two `--arg`s |
+| `crates/elab/src/function_ir_source/` | `filter_step.rs`, the filter step generator |
+| tests | `native_wc`, `native_tr`, `native_filter`, `native_read_loop`; the elab process tests (`*_process.rs`, `*_refusals.rs` of the process layers, `command_refusals`, `field_line_*format`, `filter_step_generation`, `semantic_command_warmup` and its `command_prefix` support); the command warm-ups in `scripts/test`; the `wc` builds in `scripts/perf` |
 | `examples/x86-native/` | `wc.hthr`, `wc_l.hthr`, `tr.hthr`, `tr_s.hthr`, `tr_d.hthr` |
 | docs, issues | design docs of the burned layers get a one-line "burned in B1, see …" header, not deletion; their open issues close as not planned, with a link |
 
-**Salvaged, not burned:** the pure specs inside these modules (`decimal`,
-`field_is_decimal`, the filter's fold `filter_state`, the counts) move to
-`lib/std` where a rebuilt program's tree spec will want them. `stream_filter`
-is spec-level and stays.
+**Salvaged, not burned:** the pure specs. `decimal`, `decimal_line`,
+`pad_left`, `places` and their lemmas, and `three_fields_line` (`wc`'s line on
+a pipe) are `lib/std/decimal.hthr`; the counting folds' lemmas
+(`fold_counts_filtered`, `fold_counts_len`, `fold_counts_runs`) moved into
+`stream_filter`, which already held the filter's fold `filter_state`.
+`stream_filter` and `filter_step_piece` stay (the structured generator's
+filtered publication imports the latter, so it goes with B2), and with
+`x86_64_asm` and the decimal spec they are checked by
+`crates/elab/tests/native_foundation.rs`, since no program imports them until
+the compiler does. `field_is_decimal` (the 7-column machine formatter's
+equation) was a fact about a burned formatter and went with it.
 
-Before the burn, the last commit with the stack is tagged (`native-v0`), so
-the executables and proofs stay findable.
+**Kept for B2, not B1:** `linux_x86_64_fetch` and `x86_64_fetch_block` (first
+listed here) are on the call profile's path: `build-x86 --callee` imports
+both. So are `order.rs` and `support.rs`.
+
+Before the burn, the last commit with the stack is tagged (`native-v0`, at
+`189659d`), so the executables and proofs stay findable.
 
 ### 3.2 Burn when the compiler replaces it (B2): per-function certificates
 
@@ -143,6 +154,11 @@ examples:
   `execute_block_normal`. `x86_64_fetched_code` imports the structured and
   access modules today, so B2 first moves `FetchedStep`'s dependencies onto
   the instruction forms alone;
+- `elf64_calls`, `linux_x86_64_fetch`, `x86_64_fetch_block`, `filter_step_piece`,
+  and in the CLI `order.rs`, `support.rs` and the call generator;
+- in the structured generator, what only the burned process layers called
+  and B1 left without a caller: `generate_elaborated_piece_x86` (a
+  process piece's `Computes` contract) and the `filtered` publication;
 - `ir_v1`, certgen and their tests (`issues/ir-v1-retirement.md`);
 - the remaining `native_*` CLI tests, replaced by the same programs through
   the compiler.
