@@ -115,7 +115,7 @@ through `milestone:`; the list of issues is `scripts/issue list --milestone
 | `math-metatheory` | mathematics | open | A result from heather-coq (for example a small logical-relation proof) is restated and proved in Heather. |  |
 | `math-specific-choice` | mathematics | open | A library convention, with inference behind it, for asking for the specific property instead of choice, with per-type instances that discharge it without an axiom. |  |
 | `export-fragment` | heather-in-lean-coq | open | A closed, layer-free fragment of the library (Nat and List lemmas) is translated to Coq or Lean and rechecked there. |  |
-| `ml-survey` | machine-learning | open | Wick is surveyed: what transfers, what must be redone better, and the mathematics and tooling it needs from Heather. |  |
+| `ml-survey` | machine-learning | done | Wick is surveyed: what transfers, what must be redone better, and the mathematics and tooling it needs from Heather. |  |
 | `gpu-model` | gpu | open | A design note fixes the GPU execution model and the kernel-language level (tile IR, Triton-like) to prove against, with what it needs from the other areas. |  |
 | `rust-design` | rust-in-heather | open | A design note fixes the Rust subset, the semantics source (MIR or surface), and what the translation needs from `hih-memory` and `it-library`. |  |
 | `lean-fragment` | lean-in-heather | open | A design note says which fragment of Lean translates into Heather and how impredicative `Prop` is handled. |  |
@@ -367,8 +367,14 @@ of machine learning, and bring it into Heather. It needs work to become
 fundamentally better, and it is a good target for both mathematical and
 programming tooling.
 
-**Where it stands.** Nothing in Heather yet. It depends on `math-classes`,
-`math-reals`, `math-float`, and later on measure and probability.
+**Where it stands.** Wick is surveyed (`docs/wick-survey.md`): what
+transfers, what to redo (models as programs at `Rat`/`CReal`/`Float`,
+canonical structure computed rather than searched, algebra before measure),
+and what it needs, with follow-up issues. Nothing is implemented yet. It
+depends on `math-classes`, `math-reals`, `math-float`, finite linear algebra,
+and later on measure and probability. The survey proposes milestones
+(`ml-layers`, `ml-float-forward`, `ml-descent`, `ml-gaussian-states`) that
+are not adopted yet.
 
 **Milestone.** `ml-survey` ([wick-survey](../issues/wick-survey.md)).
 
@@ -503,3 +509,5 @@ separate machines do not slow each other's tests.
   done. `it-refinement`'s depth-indexed equivalence is carried by the
   structural `ITree::Same` plus refinement across the fuel family
   (`docs/itree-refinement-round.md`), not by a relation of its own.
+- 2026-10-21: `ml-survey` done (`docs/wick-survey.md`). Its proposed ML
+  milestones wait for Minus's review before they are added here.
