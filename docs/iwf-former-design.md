@@ -353,7 +353,7 @@ a family value, is now available: for `t : IWf(…)(m)`,
 
 ---
 
-## 9. Metatheory (ch. 07) obligation
+## 9. Metatheory (ch. 07) obligation — **done**, checked in Coq (M17)
 
 This is expected to be a restriction of `W`'s and an extension of `Wf`'s,
 by the same three moves `wf-former-design.md` §8 recorded:
@@ -372,6 +372,31 @@ This is the property the whole round is for. `transp`'s metatheory stalled
 on exactly those (`issues/sprop-strip-normalization-open.md`,
 `../Lean/delam/M10_DESIGN.md` S1–S5). The Coq formalization would take `IWf`
 as its own milestone, after `W`/`Wf`, which it does not have yet.
+
+**Outcome (2026-10-21).** All three predictions hold, mechanized rather
+than on paper, in heather-coq's M17 (`M17_DESIGN.md`; no admits, no
+axioms; the frozen §1–§6 unchanged):
+- `DVec` has no LR case: `LogRel/Def.v`'s relation gains no constructor
+  for it. At a canonical length it is `Unit`'s or `Σ`'s case by typed
+  weak-head expansion, at a neutral length a neutral type, built by
+  `LR_dvec_nat` (`Validity/DVec.v`) over a semantic family `DFam`
+  (the family moves along the recursion, unlike `Vec`'s). It owes the one
+  neutral-type law with a binder, `gne_ty_dvec`, and the algorithm's
+  `actne_dvec`.
+- `IWf`'s relation is `Wf`'s plus the index: `LRiwf` over `IWfRel`,
+  `IWfNf` and the spine `DVecISp` (`LogRel/Def.v`), with the index an
+  index of the three families, not a parameter. A `sup_i` at a
+  convertible index goes through conversion: `IWfNf` relates `o[a]` to the
+  type's index at `I`. Validity: `V_iwf`, `V_supi` (`Validity/IWf.v`),
+  `V_elimIWf`, `V_elimIWf_supi` (`Validity/IWfElim.v`).
+- `dnth`'s index lemma replaces `nth`'s: `V_dnth`
+  (`Validity/DVecNth.v`). The ih's type being `F[i]` only up to β (§3)
+  added one validity step to `V_nth`'s composition, and a Unit-η step at
+  the `inl` arm.
+The fundamental theorem, decidable conversion, type checking and the
+consequences (canonicity, preservation) hold with these cases at layers
+D and M, and the codes and the six recursor branches at every layer but
+V (M17c).
 
 ---
 
@@ -439,9 +464,17 @@ a typing or reduction rule.
 1. **Inversion at a parameterized or container index type.** The motive's
    index case is `I`'s eliminator, so it is as available as that
    eliminator is. It is probably free, but the generator's form A device
-   was written against the restricted index types.
+   was written against the restricted index types. Checked at `List a` (heather-coq
+   `probes/IwfLowering.v`, `IwfLowering3.v`), including form A into the
+   family itself (`All p (x :: xs) → All p xs`), which needs `I`'s and the
+   shapes' codes and a convoy in the motive when it reads the index's
+   child; a container index type is not checked.
 2. **Mutual families.** They come as one family indexed by `Σ(tag). I_tag`,
-   as for tier 0. Unexamined.
+   as for tier 0. Checked in heather-coq's rules
+   (`probes/IwfLowering.v`, `IwfLowering2.v`; `issues/iwf-former.md`,
+   2026-10-20 and 2026-10-21): at a common `I_tag` nothing new; at a
+   tag-dependent one the `I_tag` need codes and the motive's case on
+   `snd j` is a convoy on `fst j`.
 3. ~~**No-UIP, checked.**~~ Paper argument done, 2026-09-30:
    `docs/no-uip-model.md`. The model is the groupoid model, with `Ty 0` as
    sets and bijections. The strict propositions are unions of connected
@@ -475,6 +508,8 @@ a typing or reduction rule.
    signature, the index or the ih types). F1–F3 are hand-built and
    type-checked there. Gated to layers p and m until step 4.
 4. The rec.rs round (§6).
-5. The ch. 07 round (§9).
+5. ~~The ch. 07 round (§9).~~ Done in heather-coq's M17, checked by Coq
+   (2026-10-16; recorded 2026-10-21): §9's three predictions hold, with
+   the lemma names there.
 6. The generator: route 2b's declarations re-lowered, F1–F3 lifted,
    `match` tiers 1–2, and `transp` removed from the kernel.
