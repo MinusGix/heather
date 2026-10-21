@@ -246,6 +246,14 @@ fn Nat::leb(self n, m: Nat) → Bool {
 }
 
 // truncated subtraction; both arguments descend together, `n` generalized
+// Equality as a `Bool`.
+fn Nat::same(self n, m: Nat) → Bool {
+    match n {
+        Zero => match m { Zero => True, Succ(_) => False },
+        Succ(k) => match m { Zero => False, Succ(l) => k.same(l) },
+    }
+}
+
 fn Nat::sub(self m, n: Nat) → Nat {
     match m {
         Zero => Zero,

@@ -10,7 +10,7 @@ import logic;
 import relation;
 
 theorem read_gpr_after_other_write(query, register: Gpr, value: BitVec(64), registers: Gprs,
-    different: nat_same(gpr_index(register), gpr_index(query)) = False):
+    different: register.same(query) = False):
     read_gpr(query, write_gpr(register, value, registers)) = read_gpr(query, registers) {
     j(sym(different), λ decision _ =>
         (match decision { False => read_gpr(query, registers), True => value }) = read_gpr(query, registers), refl)
