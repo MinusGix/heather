@@ -266,6 +266,26 @@ fn written(k: Nat, h: 0 < k) -> Frac {{ Frac(1, k, h) }}
 }
 
 #[test]
+fn a_field_default_cites_a_rule_its_record_module_cannot_see() {
+    // The `den_pos` default runs in `a`'s scope, which does not import `b`,
+    // but `b`'s rule about its own `two` is `b`'s to use when `b` builds a
+    // `Frac`.
+    let mut e = base();
+    let a = format!("{HEAD}{FRAC}");
+    if let Err(err) = e.elab_module_source("a", &a) {
+        panic!("module a: {}", err.render(&a));
+    }
+    let b = "import nat; import a;
+fn two(k: Nat) -> Nat { k + k + 2 }
+evidence theorem two_pos({k: Nat}): 0 < two(k) { Nat::add_pos_r(a := k + k, b := 2) }
+fn half(k: Nat) -> Frac { Frac(1, two(k)) }
+";
+    if let Err(err) = e.elab_module_source("b", b) {
+        panic!("module b: {}", err.render(b));
+    }
+}
+
+#[test]
 fn a_field_declares_a_rule_about_its_projection() {
     // `0 < f.den` is not a local, and `Frac::den_positive` is what reads it,
     // alone, under a rule and in a checking position.

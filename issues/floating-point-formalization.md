@@ -70,3 +70,9 @@ of the area.
   specification and spacing, `Float::Le`, faithfulness, bracketing and
   monotonicity. Design §12. An inference gap it hit is
   [[value-param-constructor-implicit-inference]].
+- 2026-10-21: round 3 (`float-error`): `lib/std/float/error.hthr` with
+  `ulp_at`/`err_at`, the rounding error in every mode (half an ulp nearest,
+  one directed), the standard model in the normal range, the subnormal
+  absolute bound `η`, the combined `u·|x| + η` bound, and γ with its algebra
+  and the product composition `gamma_prod`. Design §13. An inference gap it
+  hit is [[list-literal-left-of-append]] (a method call on a list literal has the same missing carrier).

@@ -608,7 +608,9 @@ impl Elaborator {
             let mark = SearchMark::of(self);
             tr.push(line(depth, "candidate", g.clone()));
             self.resolve_depth.set(depth + 1);
+            let outer = self.rule_citation.replace(Some(g.clone()));
             let built = self.build_candidate(cx, &g, goal, lvl, span);
+            *self.rule_citation.borrow_mut() = outer;
             self.resolve_depth.set(depth);
             match built {
                 Ok(t) if self.checks_at(cx, &t, goal, lvl) => return Some(t),

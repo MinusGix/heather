@@ -1580,3 +1580,43 @@ theorem Rat::le_mid_of_dist({g, f, y: Rat}, lt: g < f, d: (g -y).abs() <= (f -y)
         },
     }
 }
+
+// Dividing a bound through by a positive natural: `c·g <= y` puts `g` at most
+// `y / c`.
+theorem Rat::le_div_of_mul_le(c: Pos<Nat>, {g, y: Rat}, h: Rat::ofInt(c.int()) * g <= y): g <= Rat(1, c) * y {
+    let dm = Rat(1, c).den_mul(Rat::ofInt(c.int()));
+    let dc: (Rat(1, c).den.int() = c.int()) = refl;
+    let d1: ((Rat::ofInt(c.int())).den.int() = 1) = refl;
+    let one: (Rat(1, c) * Rat::ofInt(c.int()) ≈ 1) = omega;
+    calc {
+        g ≈ 1 * g := Rat::same_sym(g.one_mul()),
+        ≈ (Rat(1, c) * Rat::ofInt(c.int())) * g := Rat::mul_respects(Rat::same_sym(one), g.same_refl()),
+        ≈ Rat(1, c) * (Rat::ofInt(c.int()) * g) := Rat(1, c).mul_assoc(Rat::ofInt(c.int()), g),
+        <= Rat(1, c) * y := Rat::mul_le_mono_l(h, omega),
+    }
+}
+
+// The relative form of an error bound (Higham's standard model): if `y` is
+// within `u·|x|` of a nonzero `x`, then `y = x·(1 + e)` with `|e| <= u`,
+// taking `e = (y - x) / x`.
+theorem Rat::rel_of_abs_le({x, y, u: Rat}, nz: ¬(x ≈ 0), h: (y -x).abs() <= u * x.abs()): ∃ e: Rat, e.abs() <= u ∧ y ≈ x * (1 + e) {
+    let r = x.recip();
+    let xr = x.mul_recip(nz);
+    let size = calc {
+        ((y -x) * r).abs() ≈ (y -x).abs() * r.abs() := (y -x).abs_mul(r),
+        <= (u * x.abs()) * r.abs() := Rat::mul_le_mono_r(h, r.abs_nonneg()),
+        ≈ u * (x.abs() * r.abs()) := u.mul_assoc(x.abs(), r.abs()),
+        ≈ u * (x * r).abs() := Rat::mul_respects(u.same_refl(), Rat::same_sym(x.abs_mul(r))),
+        ≈ u * Rat::abs(1) := Rat::mul_respects(u.same_refl(), Rat::abs_respects(xr)),
+        ≈ u := u.mul_one(),
+    };
+    let back = calc {
+        y ≈ x + (y -x) := Rat::same_sym(Rat::same_trans(x.add_comm(y -x), y.sub_add_cancel(x))),
+        ≈ x * 1 + (y -x) * 1 := Rat::add_respects(Rat::same_sym(x.mul_one()), Rat::same_sym((y -x).mul_one())),
+        ≈ x * 1 + (y -x) * (x * r) := Rat::add_respects((x * 1).same_refl(), Rat::mul_respects((y -x).same_refl(), Rat::same_sym(xr))),
+        ≈ x * 1 + x * ((y -x) * r) := Rat::add_respects((x * 1).same_refl(), Rat::same_trans(Rat::same_sym((y -x).mul_assoc(x, r)),
+            Rat::same_trans(Rat::mul_respects((y -x).mul_comm(x), r.same_refl()), x.mul_assoc(y -x, r)))),
+        ≈ x * (1 + (y -x) * r) := Rat::same_sym(x.mul_add_distr(1, (y -x) * r)),
+    };
+    Exists((y -x) * r, And(size, back))
+}
