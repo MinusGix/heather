@@ -4,7 +4,7 @@ status: open
 labels: [relations,setoids,ergonomics,design]
 area: tactics
 created: 2026-09-05
-updated: 2026-09-05
+updated: 2026-10-21
 ---
 
 Build on [[proof-position-relational-congruence]]: provide an explicit reverse-step spelling, a way to select or explain changed occurrences, and useful mismatch diagnostics. Keep direction and occurrence choices visible; do not silently guess symmetry, unfold operations, or claim a failed derivation proves a goal false. Validate repeated/partial occurrences, equal witness endpoints, and distinct relations on one carrier. Relational calculation chains remain owned by [[setoid-auto-lifting]]; coordinate their step syntax with this issue.
@@ -18,3 +18,12 @@ Build on [[proof-position-relational-congruence]]: provide an explicit reverse-s
   report the first unexplained change using the user's expressions.
 - Keep unsupported structural derivation separate from a checked refutation;
   counterexample search is optional, never required for ordinary diagnostics.
+
+## Log
+
+- 2026-10-21: the `=` case landed with a spelling this issue should agree
+  with or replace (`docs/equation-rewrite-design.md` §1, §3): direction is
+  the written proof, reversed only by an explicit `sym(h)`; occurrences are
+  `at := k` / `at := [k, …]`, counted from 1 left to right through the goal
+  as written, refused past the last with the count, and refused with several
+  equations in one call (nest instead).

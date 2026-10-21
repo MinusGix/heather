@@ -53,13 +53,13 @@ designation<A> ++ at List<A> := List::append
 theorem List::cong_cons<A>(h: A, {a, b: List<A>}, p: a = b):
     Cons(h, a) = Cons(h, b)
 {
-    j(p, λ y q => Cons(h, a) = Cons(h, y), refl)
+    rewrite(p, refl)
 }
 
 theorem List::cong_append_l<A>({a: List<A>}, {b: List<A>}, zs: List<A>, p: a = b):
     a ++ zs = b ++ zs
 {
-    j(p, λ y q => a ++ zs = y ++ zs, refl)
+    rewrite(p, refl)
 }
 
 fn ListElim::append_nil_elim<A>() → ListElim<A>(λ (xs: List<A>) => xs ++ Nil = xs) {
@@ -71,7 +71,7 @@ fn ListElim::append_nil_elim<A>() → ListElim<A>(λ (xs: List<A>) => xs ++ Nil 
 
 theorem List::cong_append_r<A>(self xs: List<A>, {a: List<A>}, {b: List<A>}, p: a = b):
         xs ++ a = xs ++ b {
-    j(p, λ y q => xs ++ a = xs ++ y, refl)
+    rewrite(p, refl)
 }
 
 theorem List::append_nil<A>(self xs: List<A>): xs ++ Nil = xs {
@@ -205,7 +205,7 @@ fn List::foldl<A, B>(self xs: List<A>, f: B → A → B, z: B) → B {
 
 // TODO: this should go in general file
 theorem cong_fn<A, B>(g: A → B, {a, b: A}, p: a = b): g(a) = g(b) {
-    j(p, λ y q => g(a) = g(y), refl)
+    rewrite(p, refl)
 }
 
 theorem List::foldr_append<A, B>(self xs, ys: List<A>, f: A → B → B, z: B):
@@ -773,17 +773,17 @@ theorem List::cons_ne_nil<A>(tail: List<A>, head: A): ¬(Cons(head, tail) = Nil<
 theorem List::cong_head<A>({xs, ys: List<A>}, fallback: A, p: xs = ys):
     xs.head_or(fallback) = ys.head_or(fallback)
 {
-    j(p, λ y q => xs.head_or(fallback) = y.head_or(fallback), refl)
+    rewrite(p, refl)
 }
 
 theorem List::cong_tail<A>({xs, ys: List<A>}, p: xs = ys): xs.tail() = ys.tail() {
-    j(p, λ y q => xs.tail() = y.tail(), refl)
+    rewrite(p, refl)
 }
 
 theorem List::cons_eq<A>(tail1, tail2: List<A>, head1, head2: A,
     ph: head1 = head2, pt: tail1 = tail2): Cons(head1, tail1) = Cons(head2, tail2)
 {
-    j(ph, λ y q => Cons(head1, tail1) = Cons(y, tail2), List::cong_cons(head1, pt))
+    rewrite(sym(ph), List::cong_cons(head1, pt))
 }
 
 fn List::list_eq_dec<A: DecEq>(self xs: List<A>) → (ys: List<A>) → xs = ys ∨ ¬(xs = ys) {
