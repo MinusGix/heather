@@ -1,6 +1,9 @@
 # Coinductive types in the kernel: an indexed `M` former
 
-Status: **design, for review** (2026-10-21). No kernel code. Tracking issue:
+Status: **kernel round implemented** (2026-10-21, §10 step 3: `Type::M`,
+`Term::Corec`, `Term::Out`, `crates/kernel/tests/m.rs`; `crates/kernel/DESIGN.md`
+has the summary). Minus asked for it after reading the design ("Let's
+implement now"), ahead of heather-coq's §9 check, which is still open. Tracking issue:
 `issues/kernel-coinductive-types.md`, planned now by Minus's decision of
 2026-10-21 ("might as well get full proper power sooner"). Written before
 the code, per repo discipline, as the specification a kernel round would be

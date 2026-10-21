@@ -117,3 +117,16 @@ copatterns).
   no eliminator after `transp`'s removal; the bridge `Bisim ⇔ Π n.
   Same(approx)` needs UIP on the shapes (§4). `Sim`'s converse has a
   kernel-free route too (§6.1).
+- 2026-10-21: Kernel round landed (design §10 step 3, on Minus's "Let's
+  implement now", ahead of heather-coq's §9 check): `Type::M`,
+  `Term::Corec`, `Term::Out` and their values, typing at layers p and m,
+  β under `out` in both reducers from one schema (`term::m_out_corec`),
+  conversion of design §2.1 in both checkers (structural `M`, corec
+  congruence by coalgebra, `corec` against anything else refused, `out`
+  neutral by its scrutinee), module-image and Merkle tags, export refusal.
+  `crates/kernel/tests/m.rs` covers the four axes with the negative
+  controls (two corecs of one tree, corec against a neutral, `t` against
+  `in(out t)`, the copying coalgebra); `M`, `corec` and `out` joined the
+  random and well-typed generators and the evaluator differential. Still
+  open: heather-coq's §9 Q1–Q3 (the relation, decidability, the bridge),
+  the elaborator round (§10 step 4) and the library (§10 step 5).

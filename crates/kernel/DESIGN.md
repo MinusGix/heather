@@ -226,6 +226,36 @@ force them (heather-coq `ELIM_CONGRUENCE.md`, `Validity/IWfIhEq.v`,
 MinusGix/heather-coq#24). Like `DVec`, `IWf` has **no code yet** and is
 admitted at layers p and m only until the rec.rs round.
 
+`M^{l,l',li}(I; i. S; i s. P; i s p. o)(j)` (2026-10-21,
+`docs/kernel-coinduction-design.md` §10 step 3) is the indexed
+**coinductive** former, in Petersson–Synek form: a node at index `j` has a
+shape `s : S[j]` and, for each position `p : P[j, s]`, a child at the
+computed index `o[j, s, p]`. Nothing is stored and the family level is
+`l ⊔ l' ⊔ li`. Its only eliminator is `out(…; j; m) : Σ(s : S[j]). Π(p).
+M(o[j, s, p])`, neutral on a neutral `m`; its only introduction is
+`corec^{k}(…; i. X; i x. c; j; x)`, an apomorphism: the step returns at
+each position `X[o] + M(o)`, a new seed or an existing tree, so a
+constructor is a `corec` at carrier `Unit` whose children all exit and
+`out(in(s, f)) ≡ (s, f)` exactly (`tests/m.rs`). β is one step and only
+under `out` (`out(corec) ⇝ (fst r, λp. case(snd r p; y. corec(…; o; y);
+t. t))`, `r := c[j, x]`); there is **no η** and no rule unfolds a `corec`
+anywhere else, so two `corec`s describing one tree, a `corec` and a
+neutral, and `t` and `in(out t)` are all distinct. Every schema
+(`m_out_ty`, `m_step_ty`, `m_out_corec`) is built once in `term.rs` around
+`MSig`, which the six variants carry behind one pointer, as `IWf`'s do.
+The rewriter duplicates `r` in the reduct; the evaluator's β rebuilds the
+reduct as syntax in `(Γ, j, x)` and evaluates it in the coalgebra's own
+environment (`VCorec`, which a `Val::Corec` carries so the step's syntax
+can be read back) extended by the index and the seed, so `r` is one
+closure the two projections share. Conversion compares `M` types
+structurally, two `corec`s by their coalgebras (the carrier's level, the
+carrier in `(Γ, i)`, the step in `(Γ, i, x)` at the left one's step type,
+the seed at `X[j]`; the signature and index are the type's), a `corec`
+against anything else as not convertible, and two `out`s by their
+scrutinees alone, whose inferred `M` forces the rest. `M` has **no code
+yet** and is admitted at layers p and m only. Its metatheory
+(heather-coq, design §9 Q1–Q3) has not been checked yet.
+
 `sEq^l(I; a; b)` (2026-07-28) is **strict equality** — `Id` minus proof
 relevance plus strictness, the SProp round's customer former
 (`docs/sprop-design.md`; the sort itself dissolved into per-former
