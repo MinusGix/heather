@@ -9,20 +9,19 @@
 # the machine down — a large unary numeral in Rocq does exactly that).
 #
 # Lean checks the .hxk files through its kernel alone (prelude/Import.lean:
-# addDecl, no parser, no elaborator) and the slice also as source text. The
-# sweep's source text is not checked by default: Lean's parser is superlinear
-# in a declaration's size, and since `List` exports it does not finish within
-# the rail (design §7). --text-sweep tries anyway.
+# addDecl, no parser, no elaborator), and the slice and the sweep also as
+# source text: the sweep as one file per module (Sweep/, compiled in the
+# order Sweep/order lists, each importing what it mentions). The text keeps
+# the kernel term's sharing as hoisted definitions (crates/export/src/share.rs);
+# without it the sweep is too large for Lean's parser (design §5.6, §7).
 #
-# Usage: scripts/export-recheck [--text-sweep] [OUT_DIR]
+# Usage: scripts/export-recheck [OUT_DIR]
 #   LEAN=/path/to/lean  (default: `lean` on PATH)
 #   COQC=/path/to/coqc  (default: `coqc` on PATH)
 # A missing checker is reported and skipped, not an error.
 # Design and expected results: docs/export-fragment-design.md §7.
 set -u
 root="$(cd "$(dirname "$0")/.." && pwd)"
-text_sweep=0
-if [ "${1:-}" = "--text-sweep" ]; then text_sweep=1; shift; fi
 out="${1:-$root/target/export-recheck}"
 mkdir -p "$out"
 out="$(cd "$out" && pwd)"
@@ -58,15 +57,21 @@ if [ -n "$lean" ]; then
     else
       echo "lean kernel, Control: FAILED (the open-tag control was not the one rejection); see $out/kernel-Control.log"; status=1
     fi
-    texts=Exported
-    [ "$text_sweep" = 1 ] && texts="Exported Sweep"
-    for f in $texts; do
-      if (ulimit -v 8388608 -t 1200 -c 0; LEAN_PATH="$out" "$lean" "$f.lean") >"lean-$f.log" 2>&1; then
-        echo "lean text, $f: ok ($(grep -c '^@\[reducible\] def\|^axiom' "$f.lean") declarations)"
+    if (ulimit -v 8388608 -t 600 -c 0; LEAN_PATH="$out" "$lean" Exported.lean) >lean-Exported.log 2>&1; then
+      echo "lean text, Exported: ok ($(grep '^@\[reducible\] def\|^axiom\|^inductive' Exported.lean | grep -vc 'share#') declarations)"
+    else
+      echo "lean text, Exported: FAILED; see $out/lean-Exported.log"; status=1
+    fi
+    swept=0
+    for f in $(cat Sweep/order); do
+      if (ulimit -v 8388608 -t 1200 -c 0; LEAN_PATH="$out:$out/Sweep" "$lean" -o "Sweep/$f.olean" "Sweep/$f.lean") >"lean-$f.log" 2>&1; then
+        swept=$((swept + 1))
       else
-        echo "lean text, $f: FAILED; see $out/lean-$f.log"; status=1
+        echo "lean text, Sweep/$f: FAILED; see $out/lean-$f.log"; status=1
+        break
       fi
     done
+    [ "$swept" = "$(wc -l <Sweep/order)" ] && echo "lean text, Sweep: ok ($swept module files)"
   else
     echo "lean: prelude FAILED; see $out/lean.log"; status=1
   fi

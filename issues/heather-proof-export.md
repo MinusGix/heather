@@ -49,3 +49,8 @@ replacement symbol where the two theories differ. The first round:
   [[export-keeps-proofs]], [[export-wf-native-inductives]] and
   [[export-library-sweep]] are closed. Next: a wider sweep,
   [[export-typed-translation]]'s leftovers, and [[export-checks-theorem]].
+- 2026-10-21, later (PR #87): the two hole bodies were a `⌊·⌋` bug in the
+  kernel (a shared node's two views collided in its record), now fixed;
+  Lean's kernel accepts the whole sweep with nothing skipped. The text route
+  restores the DAG's sharing as hoisted definitions and can print one file
+  per module, and Lean checks the whole sweep as text again.

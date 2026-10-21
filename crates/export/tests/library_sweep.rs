@@ -1,12 +1,13 @@
 //! The library sweep (`issues/export-library-sweep.md`): export the closure
 //! of `lib/std/list.hthr` (list, nat, bool, logic, option, pair) and report
 //! every refusal by cause. With `HEATHER_EXPORT_OUT` set it writes
-//! `Sweep.lean` and its kernel-route twin `Sweep.hxk` for
-//! `scripts/export-recheck` to hand to Lean.
+//! `Sweep.lean`, the same split one file per module under `Sweep/` (listed
+//! in dependency order in `Sweep/order`), and the kernel-route twin
+//! `Sweep.hxk`, for `scripts/export-recheck` to hand to Lean.
 
 use heather_cli::loader;
 use heather_elab::Elaborator;
-use heather_export::{Source, Target, export, print, print_kernel};
+use heather_export::{Source, Target, export, print, print_kernel, print_lean_files};
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
 use heather_kernel::term::{GlobalBinding, LocalCtx, LocalVar, Term, Type};
@@ -45,16 +46,24 @@ fn std_list_closure_exports() {
     // Nothing in this closure is modal or level-polymorphic, and `List`'s
     // `Wf` is realised as a native inductive: nothing is refused.
     assert!(causes.is_empty(), "refused: {causes:#?}");
-    // The kernel route skips only the few bodies whose checked spellings the
-    // kernel could not erase (they keep holes) and what mentions them.
+    // Every checked spelling is erased by the kernel's own `⌊·⌋`, so no
+    // body keeps a hole and the kernel route skips nothing.
     let kernel = print_kernel(&decls);
     let holes: Vec<&str> = kernel.lines().filter(|l| l.starts_with("x\t")).collect();
-    eprintln!("kernel route skips:\n{}", holes.join("\n"));
-    assert!(holes.len() <= 3, "{} skipped by the kernel route", holes.len());
+    assert!(holes.is_empty(), "skipped by the kernel route:\n{}", holes.join("\n"));
     assert!(kernel.contains("\ni\tlist::List\t1\t"), "List is a native inductive with one parameter");
     if let Some(dir) = std::env::var_os("HEATHER_EXPORT_OUT") {
         let dir = PathBuf::from(dir);
         std::fs::write(dir.join("Sweep.lean"), print(Target::Lean, &decls)).unwrap();
+        // The same, one Lean file per module, in dependency order.
+        let split = dir.join("Sweep");
+        std::fs::create_dir_all(&split).unwrap();
+        let files = print_lean_files(&decls);
+        for (name, text) in &files {
+            std::fs::write(split.join(format!("{name}.lean")), text).unwrap();
+        }
+        let order: Vec<&str> = files.iter().map(|(n, _)| n.as_str()).collect();
+        std::fs::write(split.join("order"), order.join("\n") + "\n").unwrap();
         std::fs::write(dir.join("Sweep.hxk"), kernel).unwrap();
         std::fs::write(dir.join("Control.hxk"), open_tag_control(&e)).unwrap();
     }

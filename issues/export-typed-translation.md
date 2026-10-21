@@ -64,3 +64,13 @@ declarations need nothing from the target's unifier.
   (`bool::is_true_dec_yes`), `elimW`'s step domains, and real DAG sharing
   (the table shares equal subtrees of the printed tree, but the tree itself
   is still built by walking the kernel term as a tree).
+- 2026-10-21, later (PR #87): the fallback bodies are gone. Both failed in
+  `⌊·⌋`'s record, which is keyed by node address: one `@` node shared
+  between a motive and a branch annotation was viewed at two formers and
+  the second view overwrote the first. The record now marks the node
+  ambiguous and the rebuild unshares it (kernel test
+  `spelling_a_shared_node_viewed_at_two_formers`). The sweep exports with no
+  hole and the kernel route skips nothing. Real DAG sharing landed for the
+  text route as hoisted definitions (`crates/export/src/share.rs`), so the
+  sweep's source text checks again. Left for "done": `elimW`'s step domains,
+  and a sweep wider than the `list` closure to show no fallback is left.

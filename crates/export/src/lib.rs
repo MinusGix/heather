@@ -29,6 +29,7 @@ use std::cell::RefCell;
 use std::sync::Arc as Rc;
 use std::fmt::Write as _;
 
+mod share;
 mod wf;
 
 /// A universe level of the exported fragment: closed, because the library is
@@ -612,9 +613,10 @@ pub fn export(src: &Source) -> Vec<Exported> {
             let nil = LocalCtx::nil();
             let spelled_ty = spell_checked_in_code_ty(&prefix, 0, Layer::Prog, &nil, ty.clone(), level, DEFAULT_FUEL)
                 .map_err(|e| Refusal(format!("statement spelling: {e:?}")))?;
-            // A body the eager checker cannot spell (it refused two of the
-            // 387 bindings in the `list` closure) keeps its checked
-            // spellings, which print as holes for the target to fill.
+            // A body the eager checker cannot spell keeps its checked
+            // spellings, which print as holes for the target to fill. None
+            // in the `list` closure does since the record learned to tell a
+            // shared node's occurrences apart.
             let spelled = proof.map(|t| {
                 spell_checked_in_code(&prefix, 0, Layer::Code, &nil, Rc::clone(&t), ty, level, DEFAULT_FUEL).unwrap_or(t)
             });
@@ -870,6 +872,13 @@ impl Printer {
         });
     }
 
+    /// A shared subterm's definition (`share.rs`), its type left to Lean.
+    fn shared(&mut self, name: &str, body: &Hx) {
+        let _ = write!(self.out, "@[reducible] def {name} :=\n  ");
+        self.term(body, 0, false);
+        self.out.push_str("\n\n");
+    }
+
     /// A native inductive, its parameters as binders. Rocq has no
     /// realisation of `Wf` here (design §5.1), so it gets a comment.
     fn inductive(&mut self, name: &str, ty: &Hx, ind: &Inductive) {
@@ -938,38 +947,168 @@ impl Printer {
     }
 }
 
+const LEAN_HEADER: &str = "set_option autoImplicit false\nset_option linter.unusedVariables false\nnoncomputable section\n\n";
+
 /// Print the exported declarations as a source file for `target`, which
 /// imports the prelude. Refused declarations become comments naming why.
 pub fn print(target: Target, decls: &[Exported]) -> String {
     let mut p = Printer { target, out: String::new(), names: spellings(target, decls) };
     p.out.push_str(match target {
-        Target::Lean => "import Hx\n\nset_option autoImplicit false\nset_option linter.unusedVariables false\nnoncomputable section\n\n",
+        Target::Lean => "import Hx\n\n",
         Target::Coq => "Require Import Hx.\n\n",
     });
+    if target == Target::Lean {
+        p.out.push_str(LEAN_HEADER);
+    }
+    print_run(&mut p, decls.iter(), "");
+    p.out
+}
+
+/// [`print`] for Lean, one file per Heather module: `(module name, text)`
+/// in dependency order, each importing `Hx` and the files whose
+/// declarations it mentions. Ψ elaborates a module's bindings together, so
+/// a module is one run of consecutive declarations (a module that came
+/// back later would be a second file).
+pub fn print_lean_files(decls: &[Exported]) -> Vec<(String, String)> {
+    let names = spellings(Target::Lean, decls);
+    let module = |e: &Exported| e.name.as_deref().and_then(|k| k.split("::").next()).unwrap_or("anon").to_string();
+    let mut runs: Vec<(String, Vec<&Exported>)> = Vec::new();
     for e in decls {
-        let name = p.names[e.abs].clone();
-        match &e.decl {
-            Err(Refusal(why)) => {
-                let _ = match target {
-                    Target::Lean => writeln!(p.out, "-- {name}: refused: {why}\n"),
-                    Target::Coq => writeln!(p.out, "(* {name}: refused: {why} *)\n"),
-                };
+        let m = module(e);
+        match runs.last_mut() {
+            Some((last, run)) if *last == m => run.push(e),
+            _ => runs.push((m, vec![e])),
+        }
+    }
+    // Who declares what: bindings by index, target-only constants by key.
+    let mut file_of_abs = std::collections::HashMap::new();
+    let mut file_of_key = std::collections::HashMap::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut files = Vec::new();
+    for (i, (m, run)) in runs.iter().enumerate() {
+        let mut file = format!("Heather_{m}");
+        while !seen.insert(file.clone()) {
+            file.push('_');
+        }
+        for e in run {
+            file_of_abs.insert(e.abs, i);
+            if let Ok(d) = &e.decl {
+                let keys = d.before.iter().chain(&d.after).map(|a| &a.name).chain(d.inductive.iter().flat_map(|ind| ind.ctors.iter().map(|c| &c.0)));
+                for k in keys.chain(d.name.iter()) {
+                    file_of_key.insert(k.clone(), i);
+                }
             }
-            Ok(d) => {
-                for a in &d.before {
-                    p.def(&target_name(target, &a.name), &a.ty, Some(&a.body));
+        }
+        files.push(file);
+    }
+    let mut out = Vec::new();
+    for (i, (m, run)) in runs.iter().enumerate() {
+        let mut p = Printer { target: Target::Lean, out: String::new(), names: names.clone() };
+        print_run(&mut p, run.iter().copied(), &format!("{m}::"));
+        let mut deps = std::collections::BTreeSet::new();
+        for e in run {
+            let Ok(d) = &e.decl else { continue };
+            for_each_constant(d, &mut |c| {
+                let dep = match c {
+                    Hx::Global(g) => file_of_abs.get(g).copied(),
+                    // A recursor is its inductive's (`D::rec`).
+                    Hx::Named(k, _) => file_of_key.get(k).or_else(|| k.rsplit_once("::").and_then(|(d, _)| file_of_key.get(d))).copied(),
+                    _ => None,
+                };
+                if let Some(j) = dep.filter(|&j| j != i) {
+                    deps.insert(j);
                 }
-                match &d.inductive {
-                    Some(ind) => p.inductive(&name, &d.ty, ind),
-                    None => p.def(&name, &d.ty, d.body.as_ref()),
+            });
+        }
+        let mut text = String::from("import Hx\n");
+        for j in deps {
+            let _ = writeln!(text, "import {}", files[j]);
+        }
+        text.push('\n');
+        text.push_str(LEAN_HEADER);
+        text.push_str(&p.out);
+        out.push((files[i].clone(), text));
+    }
+    out
+}
+
+/// Every global and target-only constant `d` mentions.
+fn for_each_constant(d: &Decl, f: &mut dyn FnMut(&Hx)) {
+    fn go(t: &Hx, f: &mut dyn FnMut(&Hx)) {
+        match t {
+            Hx::Pi(a, b) | Hx::Lam(a, b) | Hx::App(a, b) => {
+                go(a, f);
+                go(b, f);
+            }
+            Hx::Global(_) | Hx::Named(..) => f(t),
+            _ => {}
+        }
+    }
+    go(&d.ty, f);
+    d.body.iter().for_each(|b| go(b, f));
+    d.inductive.iter().flat_map(|i| &i.ctors).for_each(|(_, t)| go(t, f));
+    for a in d.before.iter().chain(&d.after) {
+        go(&a.ty, f);
+        go(&a.body, f);
+    }
+}
+
+/// The declarations of one output file. Shared subterms' definitions are
+/// named under `ns` (a module's key prefix, so files do not collide).
+fn print_run<'e>(p: &mut Printer, decls: impl Iterator<Item = &'e Exported> + Clone, ns: &str) {
+    // Lean gets the kernel term's sharing back (`share.rs`): unshared, the
+    // `List` closure is too large for its parser.
+    let mut share = (p.target == Target::Lean).then(|| share::Share::new(ns));
+    if let Some(s) = &mut share {
+        for e in decls.clone() {
+            if let Ok(d) = &e.decl {
+                for a in d.before.iter().chain(&d.after) {
+                    s.count(&a.ty);
+                    s.count(&a.body);
                 }
-                for a in &d.after {
-                    p.def(&target_name(target, &a.name), &a.ty, Some(&a.body));
+                if d.inductive.is_none() {
+                    s.count(&d.ty);
+                    d.body.as_ref().map(|b| s.count(b));
                 }
             }
         }
     }
-    p.out
+    for e in decls {
+        let name = p.names[e.abs].clone();
+        let d = match &e.decl {
+            Err(Refusal(why)) => {
+                let _ = match p.target {
+                    Target::Lean => writeln!(p.out, "-- {name}: refused: {why}\n"),
+                    Target::Coq => writeln!(p.out, "(* {name}: refused: {why} *)\n"),
+                };
+                continue;
+            }
+            Ok(d) => d,
+        };
+        // Each definition's shared subterms are declared just before it, so
+        // after whatever they mention (a realised inductive comes before the
+        // helpers that follow it).
+        let mut def = |p: &mut Printer, name: &str, ty: &Hx, body: Option<&Hx>| match &mut share {
+            Some(s) => {
+                let (ty, body) = (s.rewrite(ty), body.map(|b| s.rewrite(b)));
+                for (n, b) in std::mem::take(&mut s.fresh) {
+                    p.shared(&target_name(p.target, &n), &b);
+                }
+                p.def(name, &ty, body.as_ref());
+            }
+            None => p.def(name, ty, body),
+        };
+        for a in &d.before {
+            def(p, &target_name(p.target, &a.name), &a.ty, Some(&a.body));
+        }
+        match &d.inductive {
+            Some(ind) => p.inductive(&name, &d.ty, ind),
+            None => def(p, &name, &d.ty, d.body.as_ref()),
+        }
+        for a in &d.after {
+            def(p, &target_name(p.target, &a.name), &a.ty, Some(&a.body));
+        }
+    }
 }
 
 /// Hash-consed nodes for [`print_kernel`]: one line per distinct subterm,

@@ -372,12 +372,30 @@ format.
 Half of that landed on 2026-10-21 without a new walker: the exporter erases
 checked spellings by calling the kernel's own `⌊·⌋`
 (`typing::spell_checked_in_code`, `spell_checked_in_code_ty`) on each
-statement and body before translating. A body whose spelling fails (two in
-the sweep's 293, both `NotConvertible` at a spelling the kernel reached by a
-different route) falls back to the hole-printing route. Heather's terms are
-DAGs, and printing them as trees is exponential in
-the worst case. That is the reason the checked spellings exist. Lean's export
-format is hash-consed and keeps the sharing; Rocq would need `let`s or a
+statement and body before translating. A body whose spelling fails falls
+back to the hole-printing route. Two in the sweep did, both
+`NotConvertible`, and the cause was in `⌊·⌋` itself: its record of what
+each checked spelling was viewed at is keyed by the node's address, and
+both bodies share one `@` node between a `case` motive and a branch
+annotation, where the scrutinee is a variable in one and a constructor in
+the other. The second view overwrote the first. The record now marks such a
+node ambiguous and the rebuild gives each occurrence its own copy, which
+the next pass records apart (`crates/kernel/tests/typing.rs`,
+`spelling_a_shared_node_viewed_at_two_formers`). No body in the sweep keeps
+a hole since. The fix also reaches the elaborator's own uses of `⌊·⌋` at
+the quote boundary, where the same sharing would have refused a payload.
+
+Heather's terms are DAGs, and printing them as trees is exponential in the
+worst case. That is the reason the checked spellings exist. Lean's export
+format is hash-consed and keeps the sharing, and so does the kernel route's
+node table. The text route gets it back by hoisting
+(`crates/export/src/share.rs`): every subterm of some size that occurs twice
+becomes a reducible definition, abstracted over the variables it uses and
+those their types need, keyed by its closed body, and declared just before
+its first user. The definitions are δ-equal to what they replace and Lean
+checks them, so hoisting adds nothing to trust. Abstracting over the whole
+context prefix instead was tried first: the binder prefixes were nine
+tenths of the text. Rocq would take the same hoisting, or `let`s, or a
 MetaCoq quotation.
 
 ### 5.7 Opacity
@@ -457,14 +475,22 @@ binary tree added to the slice:
 | negative control, Lean kernel route | the sweep + 1 | exactly the open-tag β declaration rejected |
 | slice, Lean kernel route and text | 34 | all accepted, no axioms |
 | sweep, Lean source text | 7 MB of text | no error, but Lean has not finished parsing when a 20-minute CPU rail stops it |
-
-The source text is now only for reading.
 | slice, Coq 8.18 | 20 of 22 | unchanged: stops at `B::not_not` (§5.3) |
 
 Lean's parser is superlinear in one declaration's size (a synthetic tree of
 applications or `fun`s quadruples when it doubles), and Heather's largest
-proofs print to hundreds of kilobytes as trees. The text route stays for
-reading and for the slice; the kernel route is the one to measure.
+proofs print to hundreds of kilobytes as trees. Then, with the two hole
+bodies' spellings fixed and the text route's sharing restored (§5.6):
+
+| | declarations | result |
+|---|---|---|
+| sweep, Lean kernel route | 387 + 3 added | all accepted, none skipped, in a few seconds |
+| sweep, Lean source text, one file | 1 MB of text (from 7 MB) | all accepted in about half a minute, no error |
+| sweep, Lean source text, one file per module | 7 files | all accepted; `list` dominates, then `nat` |
+
+So the text route checks the whole sweep again. The kernel route stays the
+one to measure (no elaborator in it); the text is for reading and for the
+elaborator's opinion on the same declarations.
 
 The probes (`crates/export/probes/`) are the evidence behind §3 and §5.1. They
 are not part of `scripts/test`, because the suite does not assume Lean or
