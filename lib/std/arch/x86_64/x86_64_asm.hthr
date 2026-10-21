@@ -42,10 +42,11 @@ inductive Asm {
     // store.
     Code(bytes: List<BitVec(8)>),
     // A word loaded and a word stored: bytes as `Code`, with what they do,
-    // so a run over them can be computed (lib/elf64_frame.hthr, `go_runs`).
+    // so a run over them can be computed (as the burned elf64_frame's
+    // `go_runs` did, at the native-v0 tag).
     Load(load: WordLoad),
     Store(store: WordStore),
-    // A byte loaded (MOVZX), likewise (lib/elf64_straight.hthr).
+    // A byte loaded (MOVZX), likewise (the burned elf64_straight).
     LoadByte(load: ByteLoad),
     // A byte stored (to the page, where the command writes its rows),
     // likewise.

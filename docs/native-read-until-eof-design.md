@@ -1,5 +1,9 @@
 # Read until end of file — design
 
+> **Burned in B1 (2026-10-21).** The code this document describes was deleted with the
+> hand-proved process stack (`docs/native-program-logic-design.md` §3.1); the document
+> stays for its reasoning. The last commit with the code is `189659d` (tag `native-v0`).
+
 Status: **landed 2026-09-27.** Since 2026-09-29 `wc -l` runs on the state
 process instead of this document's R11-count-and-save shape (docs/native-wc-design.md §9);
 the process theorems described below (`eof_from`, `read_loop_runs`) were removed then. Probes in §6; the suite and the built programs are in §7. Owner:

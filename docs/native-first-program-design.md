@@ -1,5 +1,9 @@
 # First real program: `wc -l` as a certified static executable — design
 
+> **Burned in B1 (2026-10-21).** The code this document describes was deleted with the
+> hand-proved process stack (`docs/native-program-logic-design.md` §3.1); the document
+> stays for its reasoning. The last commit with the code is `189659d` (tag `native-v0`).
+
 Status: **slices A–C landed 2026-09-24 (§8): `wc -l` builds as a certified
 executable and runs.** Amendments from probing and building are folded into
 §3–§5 and listed in §8. **Slice 4 landed 2026-09-25 (§10): `build-x86

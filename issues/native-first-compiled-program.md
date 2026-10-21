@@ -1,0 +1,30 @@
+---
+title: tr through the verified compiler, then burn the per-function certificates (B2)
+status: open
+labels: [native,x86,proofs]
+area: heather-in-heather
+blocked-by: [native-effect-source-compiler]
+created: 2026-10-21
+updated: 2026-10-21
+milestone: [hih-pl-first-program]
+---
+
+Round S5 of `docs/native-program-logic-design.md` (§9): the first program
+built through the verified compiler.
+
+## Scope
+
+- `tr` written in the effectful source, built by `compile`, with its claim
+  `Sim(io_linux(), denote(tr))` from the compiler's theorem and its stdout
+  fact from its tree. No per-program proof beyond instantiating the theorem.
+- Measure what checking costs now: evaluating `compile` in the kernel
+  (design §10, question 3), against `native-v0`'s certificate cost.
+- Then burn B2 (design §3.2): the per-function certificate path and the
+  old execution shapes.
+
+## What it assumes from elsewhere
+
+- **[[native-effect-source-compiler]]** owns the source, `compile` and the
+  theorem.
+- **[[function-ir-verified-lowering]]** owns the pure lowering B2 replaces
+  the old path with.

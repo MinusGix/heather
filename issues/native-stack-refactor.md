@@ -1,11 +1,11 @@
 ---
 title: Refine the native program stack before the next process
-status: open
+status: closed
 labels: [x86,native,design,refactor]
 area: heather-in-heather
 milestone: [hih-program-logic]
 created: 2026-09-30
-updated: 2026-10-01
+updated: 2026-10-20
 ---
 
 The native program stack grew one process library per program (`wc -l`,
@@ -34,3 +34,4 @@ Emitting stores ([[native-loop-emitting-stores]]) waits on R3, which makes
 - 2026-09-30: 2026-09-30: R6 landed (review §8): a read program is one checked bundle, CountProgram(step, needle, spec) / FieldsProgram<C>(step, needle, init, counts, first, second, third) in function_ir_loop, facts as fields, refused at the author's source when wrong; LoopCountsAdvance for record advance; build-x86 takes the bundle's name (profile from its written type, byte map by type), per-program flags and the bounded_readonly wrappers gone; producer context module restates the facts before generation; count/fields producers share one skeleton; stdin-program test helpers shared in native_support. Executables byte-identical. R7 (output) next when chosen.
 - 2026-09-30: 2026-09-30: R7 landed (review §8): one stored-bytes kit in elf64_io (pointwise Stored with store/kept/join/part/sends; wc -l's print_sends, wc's StoredList family and tr's byte-store facts replaced); R5's block_runs folded into R1's block_ran; one formatting spec: decimal_places over every width and field_is_decimal (field(n) = pad_left(7, ' ', decimal(n)) for n < 10^7), and wc's claim line is %7d over decimal. Not done: the restoring kit over the shift (omega needs literal constants) and cursor stores in the tails (belongs to the first emitting program). The review's R0-R7 are all landed; next is tr -s/-d (issues/native-loop-emitting-stores.md) when chosen.
 - 2026-10-01: 2026-10-01: Programs are now written at their own step type, with routine obligations as bundle defaults: [[automatic-author-surface]]. The bundles moved to lib/read_program.hthr and the loop generator takes fold_body steps. The next process is the stream filter ([[native-loop-emitting-stores]]), and the unification the review deferred is [[native-one-program-logic]].
+- 2026-10-21: R0-R7 all landed (2026-09-30), and the stack they refined is to be burned rather than refined further (docs/native-program-logic-design.md §3, [[native-burn-process-stack]]). Closed: nothing left in this issue's scope.

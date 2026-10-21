@@ -85,22 +85,8 @@ def showcase(name):
 # with these arguments instead of `check`; everything else about the entry
 # (modes, cache, `--timings`, the report) is the same.
 X86_CERTIFICATE = ("examples/x86-native/reused_callee.hthr", [])
-# The `wc` command as `native_wc` builds it: a stream filter's step piece
-# placed in the command's library process (docs/native-wc-command-design.md);
-# until 2026-10-05 a filter with the three counts' generated field formatters
-# (docs/structured-lowering-code-size-design.md §8).
-WC_BUILD = ("examples/x86-native/wc.hthr", [])
-# `wc -l` as `native_read_loop` builds it: a stream filter's counting step and
-# decimal_line's formatter (docs/native-stream-filter-design.md).
-WC_L_BUILD = ("examples/x86-native/wc_l.hthr", [])
 BUILD_X86 = {
     X86_CERTIFICATE[0]: ["caller", "--callee", "leaf", "--arg", "21", "--arg", "1"],
-    # Named by their bundles since 2026-09-30 (docs/native-architecture-review.md
-    # R6), so their certificates' items are `wc_program_native_*` and
-    # `wc_l_program_native_*` from then on; `wc_command_native_*` since the
-    # command replaced the filter (2026-10-05).
-    WC_BUILD[0]: ["wc_command"],
-    WC_L_BUILD[0]: ["wc_l_program"],
 }
 
 # The corpus: (path, search dirs). `quick` is the inner-loop set; `full` is
