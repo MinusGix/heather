@@ -53,9 +53,9 @@ theorem leaf_value(a, v, p: Nat, h: a = v, hv: v = p): a + 0 = p { trans(h, hv) 
 // or `x = a - b` where `a` and `b` have its two forms. No search.
 theorem fact_value(x, p, r: Nat, f: x + 0 = p, hr: r = p): x = r { trans(f, sym(hr)) }
 
-theorem fact_diff(x, q, p, a, b: Nat, f: x + q = p, ha: a = p, hb: b = q): x = a -b {
-    sym(trans(@cong(λ (t: Nat) => t -b, a, x + q, trans(ha, sym(f))),
-        trans(@cong(λ (t: Nat) => (x + q) -t, b, q, hb), Nat::add_sub_cancel(x, q))))
+theorem fact_diff(x, q, p, a, b: Nat, f: x + q = p, ha: a = p, hb: b = q): x = a - b {
+    sym(trans(@cong(λ (t: Nat) => t - b, a, x + q, trans(ha, sym(f))),
+        trans(@cong(λ (t: Nat) => (x + q) - t, b, q, hb), Nat::add_sub_cancel(x, q))))
 }
 
 // A bound the writer stated, `x < k` or `x <= k` with `k` a literal within
@@ -163,7 +163,7 @@ theorem sub_form(n: Nat, a, b: BitVec(n), qa, pa, qb, pb, q, p: Nat, fa: a.toNat
     hp: pa + qb = p, hq: qa + pb = q, fits: q <= p): a.sub(b).toNat() + q = p {
     let le = sub_fits_arith(a.toNat(), b.toNat(), qa, pa, qb, pb, q, p, fa, fb, hp, hq, fits);
     rewrite(bitvec_nat::toNat_sub(n, a, b, le),
-        sub_arith(a.toNat(), b.toNat(), a.toNat() -b.toNat(), qa, pa, qb, pb, q, p, fa, fb, hp, hq, Nat::sub_add_cancel(b.toNat(), a.toNat(), le)))
+        sub_arith(a.toNat(), b.toNat(), a.toNat() - b.toNat(), qa, pa, qb, pb, q, p, fa, fb, hp, hq, Nat::sub_add_cancel(b.toNat(), a.toNat(), le)))
 }
 
 // Equality and Boolean comparisons reduce to arithmetic over values.

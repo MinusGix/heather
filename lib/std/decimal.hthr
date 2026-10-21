@@ -112,7 +112,7 @@ fn places(k: Nat) → Nat → List<BitVec(8)> {
 // `bytes` right-aligned in `width` columns of `fill`, as `printf("%*d")`
 // pads.
 fn pad_left(width: Nat, fill: BitVec(8), bytes: List<BitVec(8)>) → List<BitVec(8)> {
-    List::replicate(fill, width -bytes.len()) ++ bytes
+    List::replicate(fill, width - bytes.len()) ++ bytes
 }
 
 theorem tens_of_zero(k: Nat): tens(k, 0) = 0 {

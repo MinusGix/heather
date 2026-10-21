@@ -498,7 +498,7 @@ fn Rat::sub(self x, y: Rat) → Rat { x + -y }
 
 designation - at Rat := Rat::sub
 
-theorem Rat::sub_respects({x, x2, y, y2: Rat}, hx: x ≈ x2, hy: y ≈ y2): x -y ≈ x2 -y2 {
+theorem Rat::sub_respects({x, x2, y, y2: Rat}, hx: x ≈ x2, hy: y ≈ y2): x - y ≈ x2 - y2 {
     Rat::add_respects(hx, Rat::neg_respects(hy))
 }
 
@@ -555,12 +555,12 @@ theorem Rat::add_lt_mono({x, y, z, w: Rat}, h1: x < y, h2: z <= w): x + z < y + 
     Rat::lt_of_lt_of_le(x.add_lt_mono_r(y, z, h1), z.add_le_mono_l(w, y, h2))
 }
 
-theorem Rat::sub_nonneg({x, y: Rat}, h: y <= x): 0 <= x -y {
-    Rat::le_respects(y.add_neg(), (x -y).same_refl(), y.add_le_mono_r(x, -y, h))
+theorem Rat::sub_nonneg({x, y: Rat}, h: y <= x): 0 <= x - y {
+    Rat::le_respects(y.add_neg(), (x - y).same_refl(), y.add_le_mono_r(x, -y, h))
 }
 
-theorem Rat::sub_pos({x, y: Rat}, h: y < x): 0 < x -y {
-    Rat::lt_respects(y.add_neg(), (x -y).same_refl(), y.add_lt_mono_r(x, -y, h))
+theorem Rat::sub_pos({x, y: Rat}, h: y < x): 0 < x - y {
+    Rat::lt_respects(y.add_neg(), (x - y).same_refl(), y.add_lt_mono_r(x, -y, h))
 }
 
 // ---------------------------------------------------------------------------
@@ -797,24 +797,24 @@ theorem Rat::two_add_ofNat(n: Nat): (1 + 1) + Rat::ofInt(OfNat(n)) ≈ Rat::ofIn
 // Distances: |x - y| is symmetric and obeys the triangle inequality, the two
 // facts a modulus-of-convergence estimate chains.
 
-theorem Rat::neg_sub(self x, y: Rat): -(x -y) ≈ y -x {
+theorem Rat::neg_sub(self x, y: Rat): -(x - y) ≈ y - x {
     calc {
-        -(x -y) ≈ -x + -(-y) := x.neg_add(-y),
+        -(x - y) ≈ -x + -(-y) := x.neg_add(-y),
         ≈ -x + y := rel_cong(y.neg_neg()),
         ≈ y + -x := (-x).add_comm(y),
     }
 }
 
-theorem Rat::abs_sub_comm(self x, y: Rat): (x -y).abs() ≈ (y -x).abs() {
+theorem Rat::abs_sub_comm(self x, y: Rat): (x - y).abs() ≈ (y - x).abs() {
     calc {
-        (x -y).abs() ≈ (-(x -y)).abs() := Rat::same_sym((x -y).abs_neg()),
-        ≈ (y -x).abs() := Rat::abs_respects(x.neg_sub(y)),
+        (x - y).abs() ≈ (-(x - y)).abs() := Rat::same_sym((x - y).abs_neg()),
+        ≈ (y - x).abs() := Rat::abs_respects(x.neg_sub(y)),
     }
 }
 
-theorem Rat::sub_add_sub(self x, y, z: Rat): (x -y) + (y -z) ≈ x -z {
+theorem Rat::sub_add_sub(self x, y, z: Rat): (x - y) + (y - z) ≈ x - z {
     calc {
-        (x -y) + (y -z) ≈ x + (-y + (y + -z)) := x.add_assoc(-y, y -z),
+        (x - y) + (y - z) ≈ x + (-y + (y + -z)) := x.add_assoc(-y, y - z),
         ≈ x + ((-y + y) + -z) := rel_cong(Rat::same_sym((-y).add_assoc(y, -z))),
         ≈ x + ((y + -y) + -z) := rel_cong((-y).add_comm(y)),
         ≈ x + (0 + -z) := rel_cong(y.add_neg()),
@@ -823,10 +823,10 @@ theorem Rat::sub_add_sub(self x, y, z: Rat): (x -y) + (y -z) ≈ x -z {
     }
 }
 
-theorem Rat::dist_triangle(self x, y, z: Rat): (x -z).abs() <= (x -y).abs() + (y -z).abs() {
+theorem Rat::dist_triangle(self x, y, z: Rat): (x - z).abs() <= (x - y).abs() + (y - z).abs() {
     calc {
-        (x -z).abs() ≈ ((x -y) + (y -z)).abs() := Rat::abs_respects(Rat::same_sym(x.sub_add_sub(y, z))),
-        <= (x -y).abs() + (y -z).abs() := (x -y).abs_triangle(y -z),
+        (x - z).abs() ≈ ((x - y) + (y - z)).abs() := Rat::abs_respects(Rat::same_sym(x.sub_add_sub(y, z))),
+        <= (x - y).abs() + (y - z).abs() := (x - y).abs_triangle(y - z),
     }
 }
 
@@ -834,19 +834,19 @@ theorem Rat::dist_triangle(self x, y, z: Rat): (x -z).abs() <= (x -y).abs() + (y
 // to itself, negation and sums moved through a distance, and tightness read
 // off distances.
 
-theorem Rat::abs_sub_self(self x: Rat): (x -x).abs() ≈ 0 {
+theorem Rat::abs_sub_self(self x: Rat): (x - x).abs() ≈ 0 {
     calc {
-        (x -x).abs() ≈ Rat::abs(0) := Rat::abs_respects(x.add_neg()),
+        (x - x).abs() ≈ Rat::abs(0) := Rat::abs_respects(x.add_neg()),
         ≈ 0 := refl,
     }
 }
 
-theorem Rat::neg_sub_neg(self x, y: Rat): (-x) -(-y) ≈ -(x -y) { Rat::same_sym(x.neg_add(-y)) }
+theorem Rat::neg_sub_neg(self x, y: Rat): (-x) - (-y) ≈ -(x - y) { Rat::same_sym(x.neg_add(-y)) }
 
-theorem Rat::abs_neg_sub_neg(self x, y: Rat): ((-x) -(-y)).abs() ≈ (x -y).abs() {
+theorem Rat::abs_neg_sub_neg(self x, y: Rat): ((-x) - (-y)).abs() ≈ (x - y).abs() {
     calc {
-        ((-x) -(-y)).abs() ≈ (-(x -y)).abs() := Rat::abs_respects(x.neg_sub_neg(y)),
-        ≈ (x -y).abs() := (x -y).abs_neg(),
+        ((-x) - (-y)).abs() ≈ (-(x - y)).abs() := Rat::abs_respects(x.neg_sub_neg(y)),
+        ≈ (x - y).abs() := (x - y).abs_neg(),
     }
 }
 
@@ -858,41 +858,41 @@ theorem Rat::add_left_comm(self a, b, c: Rat): a + (b + c) ≈ b + (a + c) {
     ring(b.den_add(c), a.den_add(b + c), a.den_add(c), b.den_add(a + c))
 }
 
-theorem Rat::add_sub_add(self a, b, c, d: Rat): (a + b) -(c + d) ≈ (a -c) + (b -d) {
+theorem Rat::add_sub_add(self a, b, c, d: Rat): (a + b) - (c + d) ≈ (a - c) + (b - d) {
     calc {
-        (a + b) -(c + d) ≈ (a + b) + (-c + -d) := Rat::add_respects((a + b).same_refl(), c.neg_add(d)),
-        ≈ (a -c) + (b -d) := a.add_add_add_comm(b, -c, -d),
+        (a + b) - (c + d) ≈ (a + b) + (-c + -d) := Rat::add_respects((a + b).same_refl(), c.neg_add(d)),
+        ≈ (a - c) + (b - d) := a.add_add_add_comm(b, -c, -d),
     }
 }
 
 // Two sums are as close as their summands' distances added.
-theorem Rat::dist_add_le({a, b, c, d, u, v: Rat}, h1: (a -c).abs() <= u, h2: (b -d).abs() <= v):
-    ((a + b) -(c + d)).abs() <= u + v
+theorem Rat::dist_add_le({a, b, c, d, u, v: Rat}, h1: (a - c).abs() <= u, h2: (b - d).abs() <= v):
+    ((a + b) - (c + d)).abs() <= u + v
 {
     calc {
-        ((a + b) -(c + d)).abs() ≈ ((a -c) + (b -d)).abs() := Rat::abs_respects(a.add_sub_add(b, c, d)),
-        <= (a -c).abs() + (b -d).abs() := (a -c).abs_triangle(b -d),
+        ((a + b) - (c + d)).abs() ≈ ((a - c) + (b - d)).abs() := Rat::abs_respects(a.add_sub_add(b, c, d)),
+        <= (a - c).abs() + (b - d).abs() := (a - c).abs_triangle(b - d),
         <= u + v := Rat::add_le_mono(h1, h2),
     }
 }
 
 // Two products are as close as their factors, each distance weighted by the
 // size of the other side's factor: ab - cd = a(b - d) + d(a - c).
-theorem Rat::mul_sub_mul(self a, b, c, d: Rat): a * b -c * d ≈ a * (b -d) + d * (a -c) {
-    ring(a.den_mul(b), c.den_mul(d), (a * b).den_add(-(c * d)), b.den_add(-d), a.den_mul(b -d), a.den_add(-c),
-        d.den_mul(a -c), (a * (b -d)).den_add(d * (a -c)))
+theorem Rat::mul_sub_mul(self a, b, c, d: Rat): a * b - c * d ≈ a * (b - d) + d * (a - c) {
+    ring(a.den_mul(b), c.den_mul(d), (a * b).den_add(-(c * d)), b.den_add(-d), a.den_mul(b - d), a.den_add(-c),
+        d.den_mul(a - c), (a * (b - d)).den_add(d * (a - c)))
 }
 
 theorem Rat::dist_mul_le({a, b, c, d, m, e: Rat}, ha: a.abs() <= m, hd: d.abs() <= m,
-    hbd: (b -d).abs() <= e, hac: (a -c).abs() <= e): (a * b -c * d).abs() <= m * e + m * e
+    hbd: (b - d).abs() <= e, hac: (a - c).abs() <= e): (a * b - c * d).abs() <= m * e + m * e
 {
     calc {
-        (a * b -c * d).abs() ≈ (a * (b -d) + d * (a -c)).abs() := Rat::abs_respects(a.mul_sub_mul(b, c, d)),
-        <= (a * (b -d)).abs() + (d * (a -c)).abs() := (a * (b -d)).abs_triangle(d * (a -c)),
-        ≈ a.abs() * (b -d).abs() + d.abs() * (a -c).abs() := Rat::add_respects(a.abs_mul(b -d), d.abs_mul(a -c)),
+        (a * b - c * d).abs() ≈ (a * (b - d) + d * (a - c)).abs() := Rat::abs_respects(a.mul_sub_mul(b, c, d)),
+        <= (a * (b - d)).abs() + (d * (a - c)).abs() := (a * (b - d)).abs_triangle(d * (a - c)),
+        ≈ a.abs() * (b - d).abs() + d.abs() * (a - c).abs() := Rat::add_respects(a.abs_mul(b - d), d.abs_mul(a - c)),
         <= m * e + m * e := Rat::add_le_mono(
-            Rat::mul_le_mul(ha, hbd, a.abs_nonneg(), (b -d).abs_nonneg()),
-            Rat::mul_le_mul(hd, hac, d.abs_nonneg(), (a -c).abs_nonneg())),
+            Rat::mul_le_mul(ha, hbd, a.abs_nonneg(), (b - d).abs_nonneg()),
+            Rat::mul_le_mul(hd, hac, d.abs_nonneg(), (a - c).abs_nonneg())),
     }
 }
 
@@ -903,11 +903,11 @@ theorem Rat::mul_add_twice(self m, p, q: Rat): m * (p + q) + m * (p + q) ≈ (m 
     }
 }
 
-theorem Rat::sub_add_cancel(self a, b: Rat): (a -b) + b ≈ a { ring(a.den_add(-b), (a -b).den_add(b)) }
+theorem Rat::sub_add_cancel(self a, b: Rat): (a - b) + b ≈ a { ring(a.den_add(-b), (a - b).den_add(b)) }
 
-theorem Rat::add_sub_cancel_l(self a, b: Rat): (a + b) -a ≈ b { ring(a.den_add(b), (a + b).den_add(-a)) }
+theorem Rat::add_sub_cancel_l(self a, b: Rat): (a + b) - a ≈ b { ring(a.den_add(b), (a + b).den_add(-a)) }
 
-theorem Rat::add_sub_self(self a, b: Rat): a + (b -a) ≈ b { ring(b.den_add(-a), a.den_add(b -a)) }
+theorem Rat::add_sub_self(self a, b: Rat): a + (b - a) ≈ b { ring(b.den_add(-a), a.den_add(b - a)) }
 
 // ---------------------------------------------------------------------------
 // Reciprocals away from zero: the estimates the inverse of a regular Cauchy
@@ -940,7 +940,7 @@ theorem Rat::scale_inv_succ_le({e: Rat}, m, j, n: Nat, far: m * (n + 1) + n <= j
 // A gap below zero, or above it, is a lower bound on the size.
 theorem Rat::le_abs_of_add_le_zero({a, g: Rat}, h: a + g <= 0): g <= a.abs() {
     calc {
-        g ≈ (a + g) -a := Rat::same_sym(a.add_sub_cancel_l(g)),
+        g ≈ (a + g) - a := Rat::same_sym(a.add_sub_cancel_l(g)),
         <= 0 + -a := (a + g).add_le_mono_r(0, -a, h),
         ≈ -a + 0 := Rat::add_comm(0, -a),
         ≈ -a := (-a).add_zero(),
@@ -987,7 +987,7 @@ theorem Rat::recip_abs_le({a: Rat}, k: Nat, h: Rat::inv_succ(k) <= a.abs()): a.r
 // Differences of inverses: with a·u ≈ 1 and b·v ≈ 1, u - v ≈ uv(b - a), and
 // a·u - 1 ≈ u(a - b) when b·u ≈ 1.
 theorem Rat::sub_of_inverses({a, b, u, v: Rat}, hu: a * u ≈ 1, hv: b * v ≈ 1):
-    u -v ≈ (u * v) * (b -a)
+    u - v ≈ (u * v) * (b - a)
 {
     let left = calc {
         u ≈ u * 1 := Rat::same_sym(u.mul_one()),
@@ -999,37 +999,37 @@ theorem Rat::sub_of_inverses({a, b, u, v: Rat}, hu: a * u ≈ 1, hv: b * v ≈ 1
         ≈ (a * u) * v := v.mul_comm(a * u),
     };
     calc {
-        u -v ≈ u * (b * v) -(a * u) * v := Rat::sub_respects(left, right),
-        ≈ (u * v) * (b -a) := ring(b.den_mul(v), u.den_mul(b * v), a.den_mul(u), (a * u).den_mul(v),
-            (u * (b * v)).den_add(-((a * u) * v)), u.den_mul(v), b.den_add(-a), (u * v).den_mul(b -a)),
+        u - v ≈ u * (b * v) - (a * u) * v := Rat::sub_respects(left, right),
+        ≈ (u * v) * (b - a) := ring(b.den_mul(v), u.den_mul(b * v), a.den_mul(u), (a * u).den_mul(v),
+            (u * (b * v)).den_add(-((a * u) * v)), u.den_mul(v), b.den_add(-a), (u * v).den_mul(b - a)),
     }
 }
 
-theorem Rat::mul_sub_one_of_inverse({a, b, u: Rat}, hu: b * u ≈ 1): a * u -1 ≈ u * (a -b) {
+theorem Rat::mul_sub_one_of_inverse({a, b, u: Rat}, hu: b * u ≈ 1): a * u - 1 ≈ u * (a - b) {
     calc {
-        a * u -1 ≈ a * u -b * u := Rat::sub_respects((a * u).same_refl(), Rat::same_sym(hu)),
-        ≈ u * (a -b) := ring(a.den_mul(u), b.den_mul(u), (a * u).den_add(-(b * u)), a.den_add(-b), u.den_mul(a -b)),
+        a * u - 1 ≈ a * u - b * u := Rat::sub_respects((a * u).same_refl(), Rat::same_sym(hu)),
+        ≈ u * (a - b) := ring(a.den_mul(u), b.den_mul(u), (a * u).den_add(-(b * u)), a.den_add(-b), u.den_mul(a - b)),
     }
 }
 
 // Reciprocals of two rationals at least 1/(k+1) and 1/(l+1) in size are
 // within (k+1)(l+1) times their distance.
 theorem Rat::dist_recip_le({a, b: Rat}, k, l: Nat, ha: Rat::inv_succ(k) <= a.abs(), hb: Rat::inv_succ(l) <= b.abs()):
-    (a.recip() -b.recip()).abs() <= Rat::ofInt(OfNat((k + 1) * (l + 1))) * (a -b).abs()
+    (a.recip() - b.recip()).abs() <= Rat::ofInt(OfNat((k + 1) * (l + 1))) * (a - b).abs()
 {
     let u = a.recip();
     let v = b.recip();
     let du = Rat::ofInt(OfNat(k + 1));
     let dv = Rat::ofInt(OfNat(l + 1));
     calc {
-        (u -v).abs() ≈ ((u * v) * (b -a)).abs()
+        (u - v).abs() ≈ ((u * v) * (b - a)).abs()
             := Rat::abs_respects(Rat::sub_of_inverses(a.mul_recip(Rat::nonzero_of_gap(k, ha)), b.mul_recip(Rat::nonzero_of_gap(l, hb)))),
-        ≈ (u * v).abs() * (b -a).abs() := (u * v).abs_mul(b -a),
-        ≈ (u.abs() * v.abs()) * (a -b).abs() := Rat::mul_respects(u.abs_mul(v), b.abs_sub_comm(a)),
-        <= (du * dv) * (a -b).abs() := Rat::mul_le_mono_r(
-            Rat::mul_le_mul(Rat::recip_abs_le(k, ha), Rat::recip_abs_le(l, hb), u.abs_nonneg(), v.abs_nonneg()), (a -b).abs_nonneg()),
-        ≈ Rat::ofInt(OfNat((k + 1) * (l + 1))) * (a -b).abs()
-            := Rat::mul_respects(Rat::same_sym(Rat::ofInt_mul(OfNat(k + 1), OfNat(l + 1))), (a -b).abs().same_refl()),
+        ≈ (u * v).abs() * (b - a).abs() := (u * v).abs_mul(b - a),
+        ≈ (u.abs() * v.abs()) * (a - b).abs() := Rat::mul_respects(u.abs_mul(v), b.abs_sub_comm(a)),
+        <= (du * dv) * (a - b).abs() := Rat::mul_le_mono_r(
+            Rat::mul_le_mul(Rat::recip_abs_le(k, ha), Rat::recip_abs_le(l, hb), u.abs_nonneg(), v.abs_nonneg()), (a - b).abs_nonneg()),
+        ≈ Rat::ofInt(OfNat((k + 1) * (l + 1))) * (a - b).abs()
+            := Rat::mul_respects(Rat::same_sym(Rat::ofInt_mul(OfNat(k + 1), OfNat(l + 1))), (a - b).abs().same_refl()),
     }
 }
 
@@ -1078,25 +1078,25 @@ theorem Rat::mul_nonneg_approx({p, q, e, m: Rat}, hp: 0 <= p + e, hq: 0 <= q + e
 }
 
 // A distance bound as two one-sided bounds, and back.
-theorem Rat::le_add_of_dist({a, b, e: Rat}, h: (a -b).abs() <= e): a <= b + e {
+theorem Rat::le_add_of_dist({a, b, e: Rat}, h: (a - b).abs() <= e): a <= b + e {
     calc {
-        a ≈ (a -b) + b := Rat::same_sym(a.sub_add_cancel(b)),
-        <= e + b := (a -b).add_le_mono_r(e, b, Rat::le_trans((a -b).le_abs(), h)),
+        a ≈ (a - b) + b := Rat::same_sym(a.sub_add_cancel(b)),
+        <= e + b := (a - b).add_le_mono_r(e, b, Rat::le_trans((a - b).le_abs(), h)),
         ≈ b + e := e.add_comm(b),
     }
 }
 
-theorem Rat::sub_le_of_le_add({a, b, c: Rat}, h: a <= b + c): a -b <= c {
+theorem Rat::sub_le_of_le_add({a, b, c: Rat}, h: a <= b + c): a - b <= c {
     calc {
-        a -b <= (b + c) -b := a.add_le_mono_r(b + c, -b, h),
+        a - b <= (b + c) - b := a.add_le_mono_r(b + c, -b, h),
         ≈ c := b.add_sub_cancel_l(c),
     }
 }
 
-theorem Rat::dist_le_of_le_add({a, b, c: Rat}, h1: a <= b + c, h2: b <= a + c): (a -b).abs() <= c {
+theorem Rat::dist_le_of_le_add({a, b, c: Rat}, h1: a <= b + c, h2: b <= a + c): (a - b).abs() <= c {
     let below = calc {
-        -c <= -(b -a) := Rat::neg_le(Rat::sub_le_of_le_add(h2)),
-        ≈ a -b := b.neg_sub(a),
+        -c <= -(b - a) := Rat::neg_le(Rat::sub_le_of_le_add(h2)),
+        ≈ a - b := b.neg_sub(a),
     };
     Rat::abs_le(below, Rat::sub_le_of_le_add(h1))
 }
@@ -1118,8 +1118,8 @@ theorem Rat::le_of_close_gap({a, a2, b, b2, e, q: Rat}, ha: a2 <= a + e, hb: b <
 
 // Two rationals within every 1/(k+1) of each other are the same number: a
 // positive distance would sit above some 1/(k+1) (`archimedean_inv`).
-theorem Rat::same_of_close(self x, y: Rat, close: (k: Nat) → (x -y).abs() <= Rat::inv_succ(k)): x ≈ y {
-    let d = x -y;
+theorem Rat::same_of_close(self x, y: Rat, close: (k: Nat) → (x - y).abs() <= Rat::inv_succ(k)): x ≈ y {
+    let d = x - y;
     let small: (d.abs() <= 0) = Rat::le_of_not_lt(λ positive => {
         match d.abs().archimedean_inv(positive) {
             Exists(k, gap) => Rat::not_le_of_lt(gap, close(k)),
@@ -1139,7 +1139,7 @@ theorem Rat::same_of_close(self x, y: Rat, close: (k: Nat) → (x -y).abs() <= R
 // an excess over b would sit above some 1/(k+1).
 theorem Rat::le_of_le_add_inv_succ({a, b: Rat}, close: (k: Nat) → a <= b + Rat::inv_succ(k)): a <= b {
     Rat::le_of_not_lt(λ above => {
-        match (a -b).archimedean_inv(Rat::sub_pos(above)) {
+        match (a - b).archimedean_inv(Rat::sub_pos(above)) {
             Exists(k, gap) => Rat::not_le_of_lt(gap, Rat::sub_le_of_le_add(close(k))),
         }
     })
@@ -1505,25 +1505,25 @@ instance OrderedField<Rat>(Rat::Same, Rat::Lt, Rat::Le, Rat::add, Rat::mul) {
 
 // Subtraction is monotone in its left argument and antitone in its right,
 // and both directions cancel.
-theorem Rat::sub_le_sub_r(self x, a, b: Rat, h: a <= b): a -x <= b -x { a.add_le_mono_r(b, -x, h) }
+theorem Rat::sub_le_sub_r(self x, a, b: Rat, h: a <= b): a - x <= b - x { a.add_le_mono_r(b, -x, h) }
 
-theorem Rat::sub_lt_sub_r(self x, a, b: Rat, h: a < b): a -x < b -x { a.add_lt_mono_r(b, -x, h) }
+theorem Rat::sub_lt_sub_r(self x, a, b: Rat, h: a < b): a - x < b - x { a.add_lt_mono_r(b, -x, h) }
 
-theorem Rat::sub_le_sub_l(self x, a, b: Rat, h: a <= b): x -b <= x -a { (-b).add_le_mono_l(-a, x, Rat::neg_le(x := a, y := b, h := h)) }
+theorem Rat::sub_le_sub_l(self x, a, b: Rat, h: a <= b): x - b <= x - a { (-b).add_le_mono_l(-a, x, Rat::neg_le(x := a, y := b, h := h)) }
 
-theorem Rat::sub_lt_sub_l(self x, a, b: Rat, h: a < b): x -b < x -a { (-b).add_lt_mono_l(-a, x, Rat::neg_lt(x := a, y := b, h := h)) }
+theorem Rat::sub_lt_sub_l(self x, a, b: Rat, h: a < b): x - b < x - a { (-b).add_lt_mono_l(-a, x, Rat::neg_lt(x := a, y := b, h := h)) }
 
-theorem Rat::le_of_sub_le_sub_r(self x, a, b: Rat, h: a -x <= b -x): a <= b {
+theorem Rat::le_of_sub_le_sub_r(self x, a, b: Rat, h: a - x <= b - x): a <= b {
     match a.le_dec(b) as λ _ => a <= b {
         Inl(le) => le,
-        Inr(no) => false_elim(Rat::not_le_of_lt(x := b -x, y := a -x, h := x.sub_lt_sub_r(b, a, Rat::lt_of_not_le(x := b, y := a, h := no)))(h)),
+        Inr(no) => false_elim(Rat::not_le_of_lt(x := b - x, y := a - x, h := x.sub_lt_sub_r(b, a, Rat::lt_of_not_le(x := b, y := a, h := no)))(h)),
     }
 }
 
-theorem Rat::le_of_sub_le_sub_l(self x, a, b: Rat, h: x -b <= x -a): a <= b {
+theorem Rat::le_of_sub_le_sub_l(self x, a, b: Rat, h: x - b <= x - a): a <= b {
     match a.le_dec(b) as λ _ => a <= b {
         Inl(le) => le,
-        Inr(no) => false_elim(Rat::not_le_of_lt(x := x -a, y := x -b, h := x.sub_lt_sub_l(b, a, Rat::lt_of_not_le(x := b, y := a, h := no)))(h)),
+        Inr(no) => false_elim(Rat::not_le_of_lt(x := x - a, y := x - b, h := x.sub_lt_sub_l(b, a, Rat::lt_of_not_le(x := b, y := a, h := no)))(h)),
     }
 }
 
@@ -1549,44 +1549,44 @@ theorem Rat::lt_of_add_lt_add_r(self x, y, z: Rat, h: x + z < y + z): x < y {
 
 // Comparing the distances from `x` to `a` and to `b` is comparing `x` with
 // their midpoint `m`.
-theorem Rat::sub_shift(self x, a, b: Rat): (x -a) + (a + x) ≈ x + x ∧ (b -x) + (a + x) ≈ a + b {
-    And(ring((x -a).den_add(a + x), x.den_add(-a), a.den_add(x), x.den_add(x)),
-        ring((b -x).den_add(a + x), b.den_add(-x), a.den_add(x), a.den_add(b)))
+theorem Rat::sub_shift(self x, a, b: Rat): (x - a) + (a + x) ≈ x + x ∧ (b - x) + (a + x) ≈ a + b {
+    And(ring((x - a).den_add(a + x), x.den_add(-a), a.den_add(x), x.den_add(x)),
+        ring((b - x).den_add(a + x), b.den_add(-x), a.den_add(x), a.den_add(b)))
 }
 
-theorem Rat::sub_le_sub_of_le_mid({x, m, a, b: Rat}, h: x <= m, e: m + m ≈ a + b): x -a <= b -x {
+theorem Rat::sub_le_sub_of_le_mid({x, m, a, b: Rat}, h: x <= m, e: m + m ≈ a + b): x - a <= b - x {
     let s = x.sub_shift(a, b);
     let xx = Rat::le_respects((x + x).same_refl(), e, Rat::add_le_mono(h1 := h, h2 := h));
-    (x -a).add_le_cancel_r(b -x, a + x, Rat::le_respects(Rat::same_sym(s.left), Rat::same_sym(s.right), xx))
+    (x - a).add_le_cancel_r(b - x, a + x, Rat::le_respects(Rat::same_sym(s.left), Rat::same_sym(s.right), xx))
 }
 
-theorem Rat::sub_le_sub_of_mid_le({x, m, a, b: Rat}, h: m <= x, e: m + m ≈ a + b): b -x <= x -a {
+theorem Rat::sub_le_sub_of_mid_le({x, m, a, b: Rat}, h: m <= x, e: m + m ≈ a + b): b - x <= x - a {
     let s = x.sub_shift(a, b);
     let xx = Rat::le_respects(e, (x + x).same_refl(), Rat::add_le_mono(h1 := h, h2 := h));
-    (b -x).add_le_cancel_r(x -a, a + x, Rat::le_respects(Rat::same_sym(s.right), Rat::same_sym(s.left), xx))
+    (b - x).add_le_cancel_r(x - a, a + x, Rat::le_respects(Rat::same_sym(s.right), Rat::same_sym(s.left), xx))
 }
 
-theorem Rat::sub_lt_sub_of_lt_mid({x, m, a, b: Rat}, h: x < m, e: m + m ≈ a + b): x -a < b -x {
+theorem Rat::sub_lt_sub_of_lt_mid({x, m, a, b: Rat}, h: x < m, e: m + m ≈ a + b): x - a < b - x {
     let s = x.sub_shift(a, b);
     let xx = Rat::lt_respects((x + x).same_refl(), e, Rat::add_lt_mono(h1 := h, h2 := Rat::le_of_lt(h)));
-    (x -a).lt_of_add_lt_add_r(b -x, a + x, Rat::lt_respects(Rat::same_sym(s.left), Rat::same_sym(s.right), xx))
+    (x - a).lt_of_add_lt_add_r(b - x, a + x, Rat::lt_respects(Rat::same_sym(s.left), Rat::same_sym(s.right), xx))
 }
 
-theorem Rat::sub_lt_sub_of_mid_lt({x, m, a, b: Rat}, h: m < x, e: m + m ≈ a + b): b -x < x -a {
+theorem Rat::sub_lt_sub_of_mid_lt({x, m, a, b: Rat}, h: m < x, e: m + m ≈ a + b): b - x < x - a {
     let s = x.sub_shift(a, b);
     let xx = Rat::lt_respects(e, (x + x).same_refl(), Rat::add_lt_mono(h1 := h, h2 := Rat::le_of_lt(h)));
-    (b -x).lt_of_add_lt_add_r(x -a, a + x, Rat::lt_respects(Rat::same_sym(s.right), Rat::same_sym(s.left), xx))
+    (b - x).lt_of_add_lt_add_r(x - a, a + x, Rat::lt_respects(Rat::same_sym(s.right), Rat::same_sym(s.left), xx))
 }
 
 // The converses: a distance comparison places `x` against the midpoint.
-theorem Rat::mid_le_of_sub_le({x, a, b: Rat}, h: x -a <= b -x): x + x <= a + b {
+theorem Rat::mid_le_of_sub_le({x, a, b: Rat}, h: x - a <= b - x): x + x <= a + b {
     let s = x.sub_shift(a, b);
-    Rat::le_respects(s.left, s.right, (x -a).add_le_mono_r(b -x, a + x, h))
+    Rat::le_respects(s.left, s.right, (x - a).add_le_mono_r(b - x, a + x, h))
 }
 
-theorem Rat::le_mid_of_sub_le({x, a, b: Rat}, h: b -x <= x -a): a + b <= x + x {
+theorem Rat::le_mid_of_sub_le({x, a, b: Rat}, h: b - x <= x - a): a + b <= x + x {
     let s = x.sub_shift(a, b);
-    Rat::le_respects(s.right, s.left, (b -x).add_le_mono_r(x -a, a + x, h))
+    Rat::le_respects(s.right, s.left, (b - x).add_le_mono_r(x - a, a + x, h))
 }
 
 // Halving an order between doubles.
@@ -1596,18 +1596,18 @@ theorem Rat::le_of_double_le({x, y: Rat}, h: x + x <= y + y): x <= y {
 
 // For `g < f`: `x` at least as close to `f` as to `g` is at or above their
 // midpoint, and `y` at least as close to `g` is at or below it.
-theorem Rat::mid_le_of_dist({g, f, x: Rat}, lt: g < f, d: (f -x).abs() <= (g -x).abs()): g + f <= x + x {
+theorem Rat::mid_le_of_dist({g, f, x: Rat}, lt: g < f, d: (f - x).abs() <= (g - x).abs()): g + f <= x + x {
     match f.le_total(x) as λ _ => g + f <= x + x {
         Inl(fx) => Rat::add_le_mono(h1 := Rat::le_of_lt(Rat::lt_of_lt_of_le(lt, fx)), h2 := fx),
         Inr(xf) => {
-            let df = (f -x).abs_of_nonneg(Rat::sub_nonneg(x := f, y := x, h := xf));
+            let df = (f - x).abs_of_nonneg(Rat::sub_nonneg(x := f, y := x, h := xf));
             match g.le_total(x) as λ _ => g + f <= x + x {
                 Inl(gx) => {
-                    let dg = Rat::same_trans(g.abs_sub_comm(x), (x -g).abs_of_nonneg(Rat::sub_nonneg(x := x, y := g, h := gx)));
+                    let dg = Rat::same_trans(g.abs_sub_comm(x), (x - g).abs_of_nonneg(Rat::sub_nonneg(x := x, y := g, h := gx)));
                     Rat::le_mid_of_sub_le(x := x, a := g, b := f, h := Rat::le_respects(df, dg, d))
                 },
                 Inr(xg) => {
-                    let dg = (g -x).abs_of_nonneg(Rat::sub_nonneg(x := g, y := x, h := xg));
+                    let dg = (g - x).abs_of_nonneg(Rat::sub_nonneg(x := g, y := x, h := xg));
                     false_elim(Rat::not_le_of_lt(x := g, y := f, h := lt)(x.le_of_sub_le_sub_r(f, g, Rat::le_respects(df, dg, d))))
                 },
             }
@@ -1615,18 +1615,18 @@ theorem Rat::mid_le_of_dist({g, f, x: Rat}, lt: g < f, d: (f -x).abs() <= (g -x)
     }
 }
 
-theorem Rat::le_mid_of_dist({g, f, y: Rat}, lt: g < f, d: (g -y).abs() <= (f -y).abs()): y + y <= g + f {
+theorem Rat::le_mid_of_dist({g, f, y: Rat}, lt: g < f, d: (g - y).abs() <= (f - y).abs()): y + y <= g + f {
     match y.le_total(g) as λ _ => y + y <= g + f {
         Inl(yg) => Rat::add_le_mono(h1 := yg, h2 := Rat::le_of_lt(Rat::lt_of_le_of_lt(yg, lt))),
         Inr(gy) => {
-            let dg = Rat::same_trans(g.abs_sub_comm(y), (y -g).abs_of_nonneg(Rat::sub_nonneg(x := y, y := g, h := gy)));
+            let dg = Rat::same_trans(g.abs_sub_comm(y), (y - g).abs_of_nonneg(Rat::sub_nonneg(x := y, y := g, h := gy)));
             match y.le_total(f) as λ _ => y + y <= g + f {
                 Inl(yf) => {
-                    let df = (f -y).abs_of_nonneg(Rat::sub_nonneg(x := f, y := y, h := yf));
+                    let df = (f - y).abs_of_nonneg(Rat::sub_nonneg(x := f, y := y, h := yf));
                     Rat::mid_le_of_sub_le(x := y, a := g, b := f, h := Rat::le_respects(dg, df, d))
                 },
                 Inr(fy) => {
-                    let df = Rat::same_trans(f.abs_sub_comm(y), (y -f).abs_of_nonneg(Rat::sub_nonneg(x := y, y := f, h := fy)));
+                    let df = Rat::same_trans(f.abs_sub_comm(y), (y - f).abs_of_nonneg(Rat::sub_nonneg(x := y, y := f, h := fy)));
                     false_elim(Rat::not_le_of_lt(x := g, y := f, h := lt)(y.le_of_sub_le_sub_l(f, g, Rat::le_respects(dg, df, d))))
                 },
             }
@@ -1652,11 +1652,11 @@ theorem Rat::le_div_of_mul_le(c: Pos<Nat>, {g, y: Rat}, h: Rat::ofInt(c.int()) *
 // The relative form of an error bound (Higham's standard model): if `y` is
 // within `u·|x|` of a nonzero `x`, then `y = x·(1 + e)` with `|e| <= u`,
 // taking `e = (y - x) / x`.
-theorem Rat::rel_of_abs_le({x, y, u: Rat}, nz: ¬(x ≈ 0), h: (y -x).abs() <= u * x.abs()): ∃ e: Rat, e.abs() <= u ∧ y ≈ x * (1 + e) {
+theorem Rat::rel_of_abs_le({x, y, u: Rat}, nz: ¬(x ≈ 0), h: (y - x).abs() <= u * x.abs()): ∃ e: Rat, e.abs() <= u ∧ y ≈ x * (1 + e) {
     let r = x.recip();
     let xr = x.mul_recip(nz);
     let size = calc {
-        ((y -x) * r).abs() ≈ (y -x).abs() * r.abs() := (y -x).abs_mul(r),
+        ((y - x) * r).abs() ≈ (y - x).abs() * r.abs() := (y - x).abs_mul(r),
         <= (u * x.abs()) * r.abs() := Rat::mul_le_mono_r(h, r.abs_nonneg()),
         ≈ u * (x.abs() * r.abs()) := u.mul_assoc(x.abs(), r.abs()),
         ≈ u * (x * r).abs() := Rat::mul_respects(u.same_refl(), Rat::same_sym(x.abs_mul(r))),
@@ -1664,12 +1664,12 @@ theorem Rat::rel_of_abs_le({x, y, u: Rat}, nz: ¬(x ≈ 0), h: (y -x).abs() <= u
         ≈ u := u.mul_one(),
     };
     let back = calc {
-        y ≈ x + (y -x) := Rat::same_sym(Rat::same_trans(x.add_comm(y -x), y.sub_add_cancel(x))),
-        ≈ x * 1 + (y -x) * 1 := Rat::add_respects(Rat::same_sym(x.mul_one()), Rat::same_sym((y -x).mul_one())),
-        ≈ x * 1 + (y -x) * (x * r) := Rat::add_respects((x * 1).same_refl(), Rat::mul_respects((y -x).same_refl(), Rat::same_sym(xr))),
-        ≈ x * 1 + x * ((y -x) * r) := Rat::add_respects((x * 1).same_refl(), Rat::same_trans(Rat::same_sym((y -x).mul_assoc(x, r)),
-            Rat::same_trans(Rat::mul_respects((y -x).mul_comm(x), r.same_refl()), x.mul_assoc(y -x, r)))),
-        ≈ x * (1 + (y -x) * r) := Rat::same_sym(x.mul_add_distr(1, (y -x) * r)),
+        y ≈ x + (y - x) := Rat::same_sym(Rat::same_trans(x.add_comm(y - x), y.sub_add_cancel(x))),
+        ≈ x * 1 + (y - x) * 1 := Rat::add_respects(Rat::same_sym(x.mul_one()), Rat::same_sym((y - x).mul_one())),
+        ≈ x * 1 + (y - x) * (x * r) := Rat::add_respects((x * 1).same_refl(), Rat::mul_respects((y - x).same_refl(), Rat::same_sym(xr))),
+        ≈ x * 1 + x * ((y - x) * r) := Rat::add_respects((x * 1).same_refl(), Rat::same_trans(Rat::same_sym((y - x).mul_assoc(x, r)),
+            Rat::same_trans(Rat::mul_respects((y - x).mul_comm(x), r.same_refl()), x.mul_assoc(y - x, r)))),
+        ≈ x * (1 + (y - x) * r) := Rat::same_sym(x.mul_add_distr(1, (y - x) * r)),
     };
-    Exists((y -x) * r, And(size, back))
+    Exists((y - x) * r, And(size, back))
 }

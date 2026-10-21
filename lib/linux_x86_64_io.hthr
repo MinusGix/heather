@@ -25,21 +25,21 @@ import nat;
 import omega;
 import relation_props;
 
-fn errno_word(errno: Nat) → BitVec(64) { BitVec::ofNat(Nat::pow(2, 64) -errno) }
+fn errno_word(errno: Nat) → BitVec(64) { BitVec::ofNat(Nat::pow(2, 64) - errno) }
 fn eintr() → Nat { 4 }
 
-theorem errno_value(e: Nat, error: Errno(e)): errno_word(e).toNat() = Nat::pow(2, 64) -e {
+theorem errno_value(e: Nat, error: Errno(e)): errno_word(e).toNat() = Nat::pow(2, 64) - e {
     let low: (1 <= e) = error.left;
     let high: (e <= 4095) = error.right;
-    let back: ((Nat::pow(2, 64) -e) + e = Nat::pow(2, 64)) = Nat::sub_add_cancel(e, Nat::pow(2, 64), { omega });
-    BitVec::toNat_ofNat(64, Nat::pow(2, 64) -e, { omega })
+    let back: ((Nat::pow(2, 64) - e) + e = Nat::pow(2, 64)) = Nat::sub_add_cancel(e, Nat::pow(2, 64), { omega });
+    BitVec::toNat_ofNat(64, Nat::pow(2, 64) - e, { omega })
 }
 // An errno word is in the top half of the range, so TEST sets SF; no count
 // the rules return is.
 theorem errno_negative(e: Nat, error: Errno(e)): Nat::pow(2, 63) <= errno_word(e).toNat() {
     let value = errno_value(e, error);
     let high: (e <= 4095) = error.right;
-    let back: ((Nat::pow(2, 64) -e) + e = Nat::pow(2, 64)) = Nat::sub_add_cancel(e, Nat::pow(2, 64), { omega });
+    let back: ((Nat::pow(2, 64) - e) + e = Nat::pow(2, 64)) = Nat::sub_add_cancel(e, Nat::pow(2, 64), { omega });
     omega
 }
 theorem errno_nonzero(e: Nat, error: Errno(e)): 0 < errno_word(e).toNat() {
@@ -56,7 +56,7 @@ theorem other_errno_plus_four(e: Nat, error: Errno(e), other: Not(e = eintr())):
         let four: BitVec(64) = BitVec::ofNat(4);
         let value = errno_value(e, error);
         let high: (e <= 4095) = error.right;
-        let back: ((Nat::pow(2, 64) -e) + e = Nat::pow(2, 64)) = Nat::sub_add_cancel(e, Nat::pow(2, 64), { omega });
+        let back: ((Nat::pow(2, 64) - e) + e = Nat::pow(2, 64)) = Nat::sub_add_cancel(e, Nat::pow(2, 64), { omega });
         let four_value: (four.toNat() = 4) = BitVec::toNat_ofNat(64, 4, trivial);
         let sum: (a.add(four).toNat() = a.toNat() + four.toNat()) = bitvec_nat::toNat_add(64, a, four, { omega });
         zero_bits_of_pos(64, a.add(four), { omega })
@@ -178,7 +178,7 @@ fn ArgvAt<M>(data: ByteReadAccess<M>, memory: M, rsp: BitVec(64), args: List<Lis
 
 // openat(AT_FDCWD, path, O_RDONLY) and close(fd) return in RAX, as a write
 // does (`linux_write_return`): a descriptor, zero, or the negated errno.
-fn at_fdcwd() → BitVec(64) { BitVec::ofNat(Nat::pow(2, 64) -100) }
+fn at_fdcwd() → BitVec(64) { BitVec::ofNat(Nat::pow(2, 64) - 100) }
 fn OpenRequest<M>(io: LinuxIo<M>, at: MachineState<M>, path: List<BitVec(8)>) → Type {
     (read_gpr(Rax, at.gprs) = BitVec::ofNat(257)) ∧ ((read_gpr(Rdi, at.gprs) = at_fdcwd()) ∧
     ((read_gpr(Rdx, at.gprs) = BitVec::ofNat(0)) ∧ CStringAt(io.data, at.memory, read_gpr(Rsi, at.gprs), path)))

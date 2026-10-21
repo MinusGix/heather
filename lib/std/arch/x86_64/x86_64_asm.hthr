@@ -209,7 +209,7 @@ theorem asm_jump_lands_back(labels: Nat → Nat, l: Prog, size, to: Nat, same: a
 // proof that cites `l` converts by.
 fn asm_back(p: Prog, k: Nat) → Prog { match k { Zero => p, Succ(j) => match p { Start => Start, At(before, _, _) => asm_back(before, j) } } }
 fn prog_depth(p: Prog) → Nat { match p { Start => 0, At(before, _, _) => Succ(prog_depth(before)) } }
-fn asm_find(p, l: Prog) → Prog { asm_back(p, prog_depth(p) -prog_depth(l)) }
+fn asm_find(p, l: Prog) → Prog { asm_back(p, prog_depth(p) - prog_depth(l)) }
 
 // ---------------------------------------------------------------------------
 // Every item is as long as `asm_len` says, once each hole is filled with
@@ -309,7 +309,7 @@ theorem asm_resident<M>(fetch: FetchAccess<M>, memory: M, origin: BitVec(64), fi
     (l: Prog) → CodeResident(fetch, memory, item_bytes(fills, labels, asm_find(p, l)), next_rip(origin, asm_at(asm_find(p, l)))) {
     λ l => j(Nat::add_left_zero(asm_at(asm_find(p, l))),
         λ n _ => CodeResident(fetch, memory, item_bytes(fills, labels, asm_find(p, l)), next_rip(origin, n)),
-        asm_resident_from(fetch, memory, origin, fills, labels, 0, p, fits, last, resident, prog_depth(p) -prog_depth(l)))
+        asm_resident_from(fetch, memory, origin, fills, labels, 0, p, fits, last, resident, prog_depth(p) - prog_depth(l)))
 }
 // And `last` after the program.
 theorem asm_last_resident<M>(fetch: FetchAccess<M>, memory: M, origin: BitVec(64), fills: Nat → List<BitVec(8)>, labels: Nat → Nat, p: Prog,

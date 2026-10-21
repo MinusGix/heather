@@ -99,9 +99,9 @@ theorem Finite::add_correct({F: Format}, a, b: Finite(F), mode: Mode): RoundsTo(
         F.round_exact_correct(mode, a.dyadic() + b.dyadic(), mode.sum_zero_neg(a.neg, b.neg)))
 }
 
-theorem Finite::sub_correct({F: Format}, a, b: Finite(F), mode: Mode): RoundsTo(F, mode, a.val() -b.val(), a.sub(b, mode := mode)) {
-    let e: (a.val() -b.val() ≈ a.val() + (-b).val()) = Rat::add_respects(a.val().same_refl(), Rat::same_sym(Finite::val_neg(b)));
-    F.rounds_respects(mode, a.val() -b.val(), a.val() + (-b).val(), e, a.sub(b, mode := mode), Finite::add_correct(a, -b, mode))
+theorem Finite::sub_correct({F: Format}, a, b: Finite(F), mode: Mode): RoundsTo(F, mode, a.val() - b.val(), a.sub(b, mode := mode)) {
+    let e: (a.val() - b.val() ≈ a.val() + (-b).val()) = Rat::add_respects(a.val().same_refl(), Rat::same_sym(Finite::val_neg(b)));
+    F.rounds_respects(mode, a.val() - b.val(), a.val() + (-b).val(), e, a.sub(b, mode := mode), Finite::add_correct(a, -b, mode))
 }
 
 theorem Finite::mul_correct({F: Format}, a, b: Finite(F), mode: Mode): RoundsTo(F, mode, a.val() * b.val(), a.mul(b, mode := mode)) {
@@ -240,7 +240,7 @@ theorem Format::model_of(self F: Format, mode: Mode, x: Rat, o: Float(F), r: Fin
 }
 
 theorem Format::bound_of(self F: Format, mode: Mode, x: Rat, o: Float(F), r: Finite(F), is: o = Fin(r), hr: RoundsTo(F, mode, x, o),
-    range: x.abs() <= (Finite::max_finite(F)).val()): (r.val() -x).abs() <= F.u(mode) * x.abs() + F.eta(mode)
+    range: x.abs() <= (Finite::max_finite(F)).val()): (r.val() - x).abs() <= F.u(mode) * x.abs() + F.eta(mode)
 {
     F.error_bound(mode, x, r, range, j(is, λ v _ => RoundsTo(F, mode, x, v), hr))
 }
@@ -253,10 +253,10 @@ theorem Finite::add_model({F: Format}, a, b, r: Finite(F), mode: Mode, is: a.add
 }
 
 theorem Finite::sub_model({F: Format}, a, b, r: Finite(F), mode: Mode, is: a.sub(b, mode := mode) = Fin(r),
-    range: (a.val() -b.val()).abs() <= (Finite::max_finite(F)).val(), normal: (Finite::min_normal(F)).val() <= (a.val() -b.val()).abs()):
-    ∃ d: Rat, d.abs() <= F.u(mode) ∧ r.val() ≈ (a.val() -b.val()) * (1 + d)
+    range: (a.val() - b.val()).abs() <= (Finite::max_finite(F)).val(), normal: (Finite::min_normal(F)).val() <= (a.val() - b.val()).abs()):
+    ∃ d: Rat, d.abs() <= F.u(mode) ∧ r.val() ≈ (a.val() - b.val()) * (1 + d)
 {
-    F.model_of(mode, a.val() -b.val(), a.sub(b, mode := mode), r, is, Finite::sub_correct(a, b, mode), range, normal)
+    F.model_of(mode, a.val() - b.val(), a.sub(b, mode := mode), r, is, Finite::sub_correct(a, b, mode), range, normal)
 }
 
 theorem Finite::mul_model({F: Format}, a, b, r: Finite(F), mode: Mode, is: a.mul(b, mode := mode) = Fin(r),

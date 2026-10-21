@@ -73,7 +73,7 @@ instance Equivalence<Dyadic>(Dyadic::Same) {
 
 // Any split of the exponent into a difference of naturals gives the same
 // rational: `m · 2^e` is `m · 2^p / 2^q` whenever `e = p - q`.
-theorem Dyadic::rat_split(m, e: Int, p, q: Nat, h: e = p.int() -q.int()):
+theorem Dyadic::rat_split(m, e: Int, p, q: Nat, h: e = p.int() - q.int()):
     Dyadic(m, e).rat() ≈ Rat(m * Nat::pow(2, p).int(), Nat::pow(2, q))
 {
     let parts = e.pos_sub_neg();
@@ -100,8 +100,8 @@ instance Numeral<Dyadic> { ofNat := λ (n: Nat) => Dyadic::ofInt(OfNat(n)) }
 fn Dyadic::neg(self a: Dyadic) → Dyadic { Dyadic(-a.mant, a.exp) }
 
 fn Dyadic::add(self a, b: Dyadic) → Dyadic {
-    let d = a.exp -b.exp;
-    Dyadic(a.mant * Nat::pow(2, d.pos_part()).int() + b.mant * Nat::pow(2, d.neg_part()).int(), a.exp -d.pos_part().int())
+    let d = a.exp - b.exp;
+    Dyadic(a.mant * Nat::pow(2, d.pos_part()).int() + b.mant * Nat::pow(2, d.neg_part()).int(), a.exp - d.pos_part().int())
 }
 
 fn Dyadic::mul(self a, b: Dyadic) → Dyadic { Dyadic(a.mant * b.mant, a.exp + b.exp) }
@@ -135,8 +135,8 @@ theorem Dyadic::rat_mul(self a, b: Dyadic): (a * b).rat() ≈ a.rat() * b.rat() 
 }
 
 theorem Dyadic::rat_add(self a, b: Dyadic): (a + b).rat() ≈ a.rat() + b.rat() {
-    let d = a.exp -b.exp;
-    let c = a.exp -d.pos_part().int();
+    let d = a.exp - b.exp;
+    let c = a.exp - d.pos_part().int();
     let pd = d.pos_sub_neg();
     let pc = c.pos_sub_neg();
     let s = c.pos_part();
@@ -155,7 +155,7 @@ theorem Dyadic::rat_add(self a, b: Dyadic): (a + b).rat() ≈ a.rat() + b.rat() 
     Rat::same_trans(sum, Rat::same_trans(parts, Rat::add_respects(Rat::same_sym(ra), Rat::same_sym(rb))))
 }
 
-theorem Dyadic::rat_sub(self a, b: Dyadic): (a -b).rat() ≈ a.rat() -b.rat() {
+theorem Dyadic::rat_sub(self a, b: Dyadic): (a - b).rat() ≈ a.rat() - b.rat() {
     Rat::same_trans(a.rat_add(-b), Rat::add_respects(a.rat().same_refl(), b.rat_neg()))
 }
 
