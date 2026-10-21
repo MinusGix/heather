@@ -90,7 +90,7 @@ theorem byte_load_result<M>(load: ByteLoad, byte: BitVec(8), before: MachineStat
     read_gpr_after_write(load.destination, byte.zero_extend(56), before.gprs)
 }
 theorem byte_load_preserves<M>(load: ByteLoad, byte: BitVec(8), before: MachineState<M>, register: Gpr,
-    distinct: nat_same(gpr_index(load.destination), gpr_index(register)) = False):
+    distinct: load.destination.same(register) = False):
     read_gpr(register, byte_load_after(load, byte, before).gprs) = read_gpr(register, before.gprs) {
     cong_fn<Bool, BitVec(64)>(λ same => match same {
         False => read_gpr(register, before.gprs), True => byte.zero_extend(56),
@@ -178,14 +178,14 @@ theorem word_load_result<M>(load: WordLoad, word: BitVec(64), before: MachineSta
     read_gpr_after_write(load.destination, word, before.gprs)
 }
 theorem word_load_preserves<M>(load: WordLoad, word: BitVec(64), before: MachineState<M>, register: Gpr,
-    distinct: nat_same(gpr_index(load.destination), gpr_index(register)) = False):
+    distinct: load.destination.same(register) = False):
     read_gpr(register, word_load_after(load, word, before).gprs) = read_gpr(register, before.gprs) {
     cong_fn<Bool, BitVec(64)>(λ same => match same {
         False => read_gpr(register, before.gprs), True => word,
     }, distinct)
 }
 fn ReadThenProtected(load: ByteLoad, protected: Gpr → Type, register: Gpr) → Type {
-    (nat_same(gpr_index(load.destination), gpr_index(register)) = False) ∧ protected(register)
+    (load.destination.same(register) = False) ∧ protected(register)
 }
 record ReadThenArtifact<M>(access: ByteReadAccess<M>, load: ByteLoad, byte: BitVec(8),
     code: StructuredCode, bytes: List<BitVec(8)>, before: MachineState<M>,

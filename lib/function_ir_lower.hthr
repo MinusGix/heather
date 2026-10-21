@@ -2,7 +2,7 @@
 // correct once (issues/function-ir-verified-lowering.md, round 1:
 // straight-line dataflow regions).
 //
-// Register allocation is outside the proof. `lower` takes a placement (a
+// Register allocation is outside the proof. `Region::lower` takes a placement (a
 // destination register per node) from anywhere, and tracks an abstract
 // register file, which value each register holds, while it emits. An operand
 // is read from a register the file says holds it, so a placement that
@@ -23,10 +23,6 @@ import option;
 // ---------------------------------------------------------------------------
 // Registers and what they hold
 
-fn gpr_same(left, right: Gpr) → Bool {
-    nat_same(gpr_index(left), gpr_index(right))
-}
-
 // A value a register holds: a 64-bit value as itself, a one-bit value
 // zero-extended (as `BitValuePlaced` places it today).
 inductive Kind { Word, Bit }
@@ -36,17 +32,17 @@ record Held { id: Nat, kind: Kind }
 // The abstract register file.
 record File { at: Gpr → Option<Held> }
 
-fn empty_file() → File { File(at := λ (register: Gpr) => None) }
+fn File::empty() → File { File(at := λ (register: Gpr) => None) }
 
-fn file_write(register: Gpr, held: Option<Held>, file: File) → File {
+fn File::write(self file: File, register: Gpr, held: Option<Held>) → File {
     File(at := λ (query: Gpr) =>
-        match nat_same(gpr_index(register), gpr_index(query)) {
+        match register.same(query) {
             False => file.at(query),
             True => held,
         })
 }
 
-fn HeldRep(values: Valuation(), held: Held, word: BitVec(64)) → Type {
+fn Held::Rep(self held: Held, values: Valuation(), word: BitVec(64)) → Type {
     match held.kind {
         Word => values(64, held.id) = word,
         Bit => values(1, held.id).zero_extend(63) = word,
@@ -54,36 +50,54 @@ fn HeldRep(values: Valuation(), held: Held, word: BitVec(64)) → Type {
 }
 
 fn SlotRep(values: Valuation(), slot: Option<Held>, word: BitVec(64)) → Type {
-    match slot { None => True, Some(held) => HeldRep(values, held, word) }
+    match slot { None => True, Some(held) => held.Rep(values, word) }
 }
 
 // Every register the file names holds its value.
-fn Represents(file: File, values: Valuation(), gprs: Gprs) → Type {
+fn File::Represents(self file: File, values: Valuation(), gprs: Gprs) → Type {
     (register: Gpr) → SlotRep(values, file.at(register), read_gpr(register, gprs))
 }
 
-theorem represents_empty(values: Valuation(), gprs: Gprs):
-    Represents(empty_file(), values, gprs)
+theorem File::empty_represents(values: Valuation(), gprs: Gprs):
+    File::empty().Represents(values, gprs)
 {
     λ register => trivial
 }
 
 // The one lemma every write goes through: the register written holds what
 // the file now says, and every other register is as it was.
-theorem represents_write(file: File, values: Valuation(), gprs: Gprs,
+theorem File::represents_write(self file: File, values: Valuation(), gprs: Gprs,
     register: Gpr, slot: Option<Held>, word: BitVec(64),
-    before: Represents(file, values, gprs),
+    before: file.Represents(values, gprs),
     written: SlotRep(values, slot, word)):
-    Represents(file_write(register, slot, file), values,
+    file.write(register, slot).Represents(values,
         write_gpr(register, word, gprs))
 {
     λ query =>
-        match nat_same(gpr_index(register), gpr_index(query)) as λ b =>
+        match register.same(query) as λ b =>
             SlotRep(values, match b { False => file.at(query), True => slot },
                 match b { False => gprs.at(query), True => word }) {
             False => before(query),
             True => written,
         }
+}
+
+// The register already holds the word the file now says it holds.
+theorem File::represents_retag(self file: File, values: Valuation(), gprs: Gprs,
+    register: Gpr, slot: Option<Held>,
+    before: file.Represents(values, gprs),
+    here: SlotRep(values, slot, read_gpr(register, gprs))):
+    file.write(register, slot).Represents(values, gprs)
+{
+    λ query =>
+        (match register.same(query) as λ b =>
+            register.same(query) = b →
+            SlotRep(values, match b { False => file.at(query), True => slot },
+                read_gpr(query, gprs)) {
+            False => λ _ => before(query),
+            True => λ same => j(register.same_sound(query, same),
+                λ q _ => SlotRep(values, slot, read_gpr(q, gprs)), here),
+        })(refl)
 }
 
 // The file says `register` holds `held`.
@@ -97,26 +111,26 @@ record Found(file: File, held: Held) {
     at: FoundAt(file, held, register),
 }
 
-theorem found_rep(file: File, held: Held, register: Gpr, values: Valuation(),
-    gprs: Gprs, found: FoundAt(file, held, register),
-    represents: Represents(file, values, gprs)):
-    HeldRep(values, held, read_gpr(register, gprs))
+theorem FoundAt::rep({file: File}, {held: Held}, {register: Gpr},
+    self found: FoundAt(file, held, register), values: Valuation(), gprs: Gprs,
+    represents: file.Represents(values, gprs)):
+    held.Rep(values, read_gpr(register, gprs))
 {
     j(found.holds, λ slot _ => SlotRep(values, slot, read_gpr(register, gprs)),
         represents(register))
 }
 
-fn kind_eq_dec(left, right: Kind) → left = right ∨ left ≠ right {
+fn Kind::eq_dec(self left, right: Kind) → left = right ∨ left ≠ right {
     match left {
         Word => match right { Word => Inl(refl), Bit => Inr(λ no => absurd(no)) },
         Bit => match right { Word => Inr(λ no => absurd(no)), Bit => Inl(refl) },
     }
 }
 
-fn held_eq_dec(left, right: Held) → left = right ∨ left ≠ right {
+fn Held::eq_dec(self left, right: Held) → left = right ∨ left ≠ right {
     match left.id.eq_dec(right.id) {
         Inr(differ) => Inr(λ (same: left = right) => differ(j(same, λ h _ => left.id = h.id, refl))),
-        Inl(ids) => match kind_eq_dec(left.kind, right.kind) {
+        Inl(ids) => match left.kind.eq_dec(right.kind) {
             Inr(differ) => Inr(λ (same: left = right) => differ(j(same, λ h _ => left.kind = h.kind, refl))),
             Inl(kinds) => Inl(j(ids, λ i _ => Held(left.id, left.kind) = Held(i, right.kind),
                 j(kinds, λ k _ => Held(left.id, left.kind) = Held(left.id, k), refl))),
@@ -124,11 +138,11 @@ fn held_eq_dec(left, right: Held) → left = right ∨ left ≠ right {
     }
 }
 
-fn found_at(file: File, held: Held, register: Gpr) → Option<FoundAt(file, held, register)> {
+fn File::found_at(self file: File, held: Held, register: Gpr) → Option<FoundAt(file, held, register)> {
     (match file.at(register) as λ slot =>
         file.at(register) = slot → Option<FoundAt(file, held, register)> {
         None => λ _ => None,
-        Some(here) => λ at => match held_eq_dec(here, held) {
+        Some(here) => λ at => match here.eq_dec(held) {
             Inl(same) => Some(FoundAt(j(same, λ h _ => file.at(register) = Some(h), at))),
             Inr(_) => None,
         },
@@ -140,18 +154,18 @@ fn search_order() → List<Gpr> {
     [Rax, Rcx, Rdx, Rsi, Rdi, R8, R9, R10, R11, Rbx, Rbp, R12, R13, R14, R15, Rsp]
 }
 
-fn find_in(file: File, held: Held, registers: List<Gpr>) → Option<Found(file, held)> {
+fn File::find_in(self file: File, held: Held, registers: List<Gpr>) → Option<Found(file, held)> {
     match registers {
         Nil => None,
-        Cons(register, rest) => match found_at(file, held, register) {
-            None => find_in(file, held, rest),
+        Cons(register, rest) => match file.found_at(held, register) {
+            None => file.find_in(held, rest),
             Some(at) => Some(Found(register, at)),
         },
     }
 }
 
-fn find(file: File, held: Held) → Option<Found(file, held)> {
-    find_in(file, held, search_order())
+fn File::find(self file: File, held: Held) → Option<Found(file, held)> {
+    file.find_in(held, search_order())
 }
 
 // ---------------------------------------------------------------------------
@@ -159,26 +173,35 @@ fn find(file: File, held: Held) → Option<Found(file, held)> {
 
 record Lowered { code: List<Instruction>, file: File }
 
-fn OptionAll<A>(P: A → Type, o: Option<A>) → Type {
+fn Option::All<A>(self o: Option<A>, P: A → Type) → Type {
     match o { None => True, Some(a) => P(a) }
 }
 
-theorem option_all_some<A>(P: A → Type, o: Option<A>, a: A,
-    some: o = Some(a), all: OptionAll(P, o)): P(a)
+fn Option::is_some<A>(self o: Option<A>) → Bool {
+    match o { None => False, Some(_) => True }
+}
+
+// The value an option known to be `Some` holds.
+fn Option::get<A>(self o: Option<A>) → o.is_some().IsTrue() → A {
+    match o { None => λ absent => false_elim(absent), Some(v) => λ _ => v }
+}
+
+theorem Option::all_some<A>(self o: Option<A>, P: A → Type, a: A,
+    some: o = Some(a), all: o.All(P)): P(a)
 {
-    j(some, λ x _ => OptionAll(P, x), all)
+    j(some, λ x _ => x.All(P), all)
 }
 
 // Run from a state `file` describes, where `facts` hold, the code ends in a
 // state its own file describes.
 fn Keeps<M>(values: Valuation(), file: File, facts: Type, out: Lowered) → Type {
-    (s: MachineState<M>) → Represents(file, values, s.gprs) → facts →
-        Represents(out.file, values, execute_block_normal(out.code, s).gprs)
+    (s: MachineState<M>) → file.Represents(values, s.gprs) → facts →
+        out.file.Represents(values, execute_block_normal(out.code, s).gprs)
 }
 
 // What a lowering step proves: if it emitted code, the code keeps the file.
 fn MayKeep<M>(values: Valuation(), file: File, facts: Type, out: Option<Lowered>) → Type {
-    OptionAll(λ (lowered: Lowered) => Keeps<M>(values, file, facts, lowered), out)
+    out.All(λ (lowered: Lowered) => Keeps<M>(values, file, facts, lowered))
 }
 
 theorem execute_block_append<M>(first: List<Instruction>):
@@ -194,7 +217,7 @@ theorem execute_block_append<M>(first: List<Instruction>):
     }
 }
 
-fn then_lowered(first, second: Lowered) → Lowered {
+fn Lowered::then(self first, second: Lowered) → Lowered {
     Lowered(first.code ++ second.code, second.file)
 }
 
@@ -202,11 +225,11 @@ theorem keeps_seq<M>(values: Valuation(), file: File, first_facts, second_facts:
     first, second: Lowered,
     first_keeps: Keeps<M>(values, file, first_facts, first),
     second_keeps: Keeps<M>(values, first.file, second_facts, second)):
-    Keeps<M>(values, file, first_facts ∧ second_facts, then_lowered(first, second))
+    Keeps<M>(values, file, first_facts ∧ second_facts, first.then(second))
 {
     λ s represents facts =>
         j(sym(execute_block_append<M>(first.code, second.code, s)),
-            λ state _ => Represents(second.file, values, state.gprs),
+            λ state _ => second.file.Represents(values, state.gprs),
             second_keeps(execute_block_normal(first.code, s),
                 first_keeps(s, represents, facts.left), facts.right))
 }
@@ -215,7 +238,7 @@ theorem keeps_then<M>(values: Valuation(), file: File, facts: Type,
     first, second: Lowered,
     first_keeps: Keeps<M>(values, file, True, first),
     second_keeps: Keeps<M>(values, first.file, facts, second)):
-    Keeps<M>(values, file, facts, then_lowered(first, second))
+    Keeps<M>(values, file, facts, first.then(second))
 {
     λ s represents fact =>
         keeps_seq<M>(values, file, True, facts, first, second,
@@ -225,72 +248,71 @@ theorem keeps_then<M>(values: Valuation(), file: File, facts: Type,
 // ---------------------------------------------------------------------------
 // Moving a value into a register
 
-fn place_found(file: File, held: Held, destination: Gpr, found: Found(file, held),
+fn File::place_found(self file: File, held: Held, destination: Gpr, found: Found(file, held),
     same: Bool) → Lowered
 {
     match same {
         True => Lowered([], file),
         False => Lowered([MovRR(destination, found.register)],
-            file_write(destination, Some(held), file)),
+            file.write(destination, Some(held))),
     }
 }
 
-fn place_from(file: File, held: Held, destination: Gpr,
+fn File::place_from(self file: File, held: Held, destination: Gpr,
     found: Option<Found(file, held)>) → Option<Lowered>
 {
     match found {
         None => None,
-        Some(here) => Some(place_found(file, held, destination, here,
-            gpr_same(destination, here.register))),
+        Some(here) => Some(file.place_found(held, destination, here,
+            destination.same(here.register))),
     }
 }
 
 // `held` in `destination`, by a MOV unless it is there already.
-fn place(file: File, held: Held, destination: Gpr) → Option<Lowered> {
-    place_from(file, held, destination, find(file, held))
+fn File::place(self file: File, held: Held, destination: Gpr) → Option<Lowered> {
+    file.place_from(held, destination, file.find(held))
 }
 
-theorem place_found_keeps<M>(values: Valuation(), file: File, held: Held,
+theorem File::place_found_keeps<M>(self file: File, values: Valuation(), held: Held,
     destination: Gpr, found: Found(file, held), same: Bool):
-    Keeps<M>(values, file, True, place_found(file, held, destination, found, same))
+    Keeps<M>(values, file, True, file.place_found(held, destination, found, same))
 {
     match same {
         True => λ s represents _ => represents,
         False => λ s represents _ =>
-            represents_write(file, values, s.gprs, destination, Some(held),
+            file.represents_write(values, s.gprs, destination, Some(held),
                 read_gpr(found.register, s.gprs), represents,
-                found_rep(file, held, found.register, values, s.gprs,
-                    found.at, represents)),
+                found.at.rep(values, s.gprs, represents)),
     }
 }
 
-theorem place_from_keeps<M>(values: Valuation(), file: File, held: Held,
+theorem File::place_from_keeps<M>(self file: File, values: Valuation(), held: Held,
     destination: Gpr, found: Option<Found(file, held)>):
-    MayKeep<M>(values, file, True, place_from(file, held, destination, found))
+    MayKeep<M>(values, file, True, file.place_from(held, destination, found))
 {
     match found {
         None => trivial,
-        Some(here) => place_found_keeps<M>(values, file, held, destination, here,
-            gpr_same(destination, here.register)),
+        Some(here) => file.place_found_keeps<M>(values, held, destination, here,
+            destination.same(here.register)),
     }
 }
 
-theorem place_keeps<M>(values: Valuation(), file: File, held: Held,
+theorem File::place_keeps<M>(self file: File, values: Valuation(), held: Held,
     destination: Gpr):
-    MayKeep<M>(values, file, True, place(file, held, destination))
+    MayKeep<M>(values, file, True, file.place(held, destination))
 {
-    place_from_keeps<M>(values, file, held, destination, find(file, held))
+    file.place_from_keeps<M>(values, held, destination, file.find(held))
 }
 
-fn then_option(first: Lowered, second: Option<Lowered>) → Option<Lowered> {
-    match second { None => None, Some(step) => Some(then_lowered(first, step)) }
+fn Lowered::then_option(self first: Lowered, second: Option<Lowered>) → Option<Lowered> {
+    match second { None => None, Some(step) => Some(first.then(step)) }
 }
 
 theorem then_option_seq<M>(values: Valuation(), file: File, first_facts, second_facts: Type,
     first: Lowered, first_keeps: Keeps<M>(values, file, first_facts, first),
     second: Option<Lowered>):
     MayKeep<M>(values, first.file, second_facts, second) →
-    MayKeep<M>(values, file, first_facts ∧ second_facts, then_option(first, second))
+    MayKeep<M>(values, file, first_facts ∧ second_facts, first.then_option(second))
 {
     match second {
         None => λ _ => trivial,
@@ -303,7 +325,7 @@ theorem then_option_keeps<M>(values: Valuation(), file: File, facts: Type,
     first: Lowered, first_keeps: Keeps<M>(values, file, True, first),
     second: Option<Lowered>):
     MayKeep<M>(values, first.file, facts, second) →
-    MayKeep<M>(values, file, facts, then_option(first, second))
+    MayKeep<M>(values, file, facts, first.then_option(second))
 {
     match second {
         None => λ _ => trivial,
@@ -318,7 +340,7 @@ theorem then_option_keeps<M>(values: Valuation(), file: File, facts: Type,
 
 inductive BinaryOp { OpAdd, OpSub, OpAnd, OpOr, OpXor }
 
-fn binary_instruction(op: BinaryOp, destination, source: Gpr) → Instruction {
+fn BinaryOp::instruction(self op: BinaryOp, destination, source: Gpr) → Instruction {
     match op {
         OpAdd => AddRR(destination, source),
         OpSub => SubRR(destination, source),
@@ -328,7 +350,7 @@ fn binary_instruction(op: BinaryOp, destination, source: Gpr) → Instruction {
     }
 }
 
-fn binary_apply(op: BinaryOp, left, right: BitVec(64)) → BitVec(64) {
+fn BinaryOp::apply(self op: BinaryOp, left, right: BitVec(64)) → BitVec(64) {
     match op {
         OpAdd => left.add(right),
         OpSub => left.sub(right),
@@ -338,25 +360,25 @@ fn binary_apply(op: BinaryOp, left, right: BitVec(64)) → BitVec(64) {
     }
 }
 
-theorem binary_executes<M>(op: BinaryOp, destination, source: Gpr, s: MachineState<M>):
-    execute_block_normal([binary_instruction(op, destination, source)], s).gprs =
-        write_gpr(destination, binary_apply(op, read_gpr(destination, s.gprs),
+theorem BinaryOp::executes<M>(self op: BinaryOp, destination, source: Gpr, s: MachineState<M>):
+    execute_block_normal([op.instruction(destination, source)], s).gprs =
+        write_gpr(destination, op.apply(read_gpr(destination, s.gprs),
             read_gpr(source, s.gprs)), s.gprs)
 {
     match op { OpAdd => refl, OpSub => refl, OpAnd => refl, OpOr => refl, OpXor => refl }
 }
 
-fn BinaryHolds(values: Valuation(), op: BinaryOp, output, left, right: Nat) → Type {
-    values(64, output) = binary_apply(op, values(64, left), values(64, right))
+fn BinaryOp::Holds(self op: BinaryOp, values: Valuation(), output, left, right: Nat) → Type {
+    values(64, output) = op.apply(values(64, left), values(64, right))
 }
 
 theorem binary_written(values: Valuation(), op: BinaryOp, output, left, right: Nat,
-    a, b: BitVec(64), holds: BinaryHolds(values, op, output, left, right),
+    a, b: BitVec(64), holds: op.Holds(values, output, left, right),
     left_rep: values(64, left) = a, right_rep: values(64, right) = b):
-    values(64, output) = binary_apply(op, a, b)
+    values(64, output) = op.apply(a, b)
 {
-    j(left_rep, λ x _ => values(64, output) = binary_apply(op, x, b),
-        j(right_rep, λ y _ => values(64, output) = binary_apply(op, values(64, left), y),
+    j(left_rep, λ x _ => values(64, output) = op.apply(x, b),
+        j(right_rep, λ y _ => values(64, output) = op.apply(values(64, left), y),
             holds))
 }
 
@@ -369,8 +391,8 @@ fn binary_after(op: BinaryOp, moved: Lowered, destination: Gpr, output, left, ri
         Some(_) => match other {
             None => None,
             Some(found) => Some(Lowered(
-                [binary_instruction(op, destination, found.register)],
-                file_write(destination, Some(Held(output, Word)), moved.file))),
+                [op.instruction(destination, found.register)],
+                moved.file.write(destination, Some(Held(output, Word))))),
         },
     }
 }
@@ -379,7 +401,7 @@ theorem binary_after_keeps<M>(values: Valuation(), op: BinaryOp, moved: Lowered,
     destination: Gpr, output, left, right: Nat,
     at: Option<FoundAt(moved.file, Held(left, Word), destination)>,
     other: Option<Found(moved.file, Held(right, Word))>):
-    MayKeep<M>(values, moved.file, BinaryHolds(values, op, output, left, right),
+    MayKeep<M>(values, moved.file, op.Holds(values, output, left, right),
         binary_after(op, moved, destination, output, left, right, at, other))
 {
     match at {
@@ -387,22 +409,18 @@ theorem binary_after_keeps<M>(values: Valuation(), op: BinaryOp, moved: Lowered,
         Some(here) => match other {
             None => trivial,
             Some(found) => λ s represents holds =>
-                j(sym(binary_executes<M>(op, destination, found.register, s)),
-                    λ gprs _ => Represents(
-                        file_write(destination, Some(Held(output, Word)), moved.file),
-                        values, gprs),
-                    represents_write(moved.file, values, s.gprs, destination,
+                j(sym(op.executes<M>(destination, found.register, s)),
+                    λ gprs _ => moved.file.write(destination, Some(Held(output, Word))).Represents(values, gprs),
+                    moved.file.represents_write(values, s.gprs, destination,
                         Some(Held(output, Word)),
-                        binary_apply(op, read_gpr(destination, s.gprs),
+                        op.apply(read_gpr(destination, s.gprs),
                             read_gpr(found.register, s.gprs)),
                         represents,
                         binary_written(values, op, output, left, right,
                             read_gpr(destination, s.gprs), read_gpr(found.register, s.gprs),
                             holds,
-                            found_rep(moved.file, Held(left, Word), destination, values,
-                                s.gprs, here, represents),
-                            found_rep(moved.file, Held(right, Word), found.register,
-                                values, s.gprs, found.at, represents)))),
+                            here.rep(values, s.gprs, represents),
+                            found.at.rep(values, s.gprs, represents)))),
         },
     }
 }
@@ -412,146 +430,100 @@ fn binary_placed(op: BinaryOp, destination: Gpr, output, left, right: Nat,
 {
     match placed {
         None => None,
-        Some(moved) => then_option(moved,
-            binary_after(op, moved, destination, output, left, right,
-                found_at(moved.file, Held(left, Word), destination),
-                find(moved.file, Held(right, Word)))),
+        Some(moved) => moved.then_option(binary_after(op, moved, destination, output, left, right,
+                moved.file.found_at(Held(left, Word), destination),
+                moved.file.find(Held(right, Word)))),
     }
 }
 
-fn binary(op: BinaryOp, file: File, destination: Gpr, output, left, right: Nat) → Option<Lowered> {
+fn File::binary(self file: File, op: BinaryOp, destination: Gpr, output, left, right: Nat) → Option<Lowered> {
     binary_placed(op, destination, output, left, right,
-        place(file, Held(left, Word), destination))
+        file.place(Held(left, Word), destination))
 }
 
 theorem binary_placed_keeps<M>(values: Valuation(), op: BinaryOp, file: File,
     destination: Gpr, output, left, right: Nat, placed: Option<Lowered>):
     MayKeep<M>(values, file, True, placed) →
-    MayKeep<M>(values, file, BinaryHolds(values, op, output, left, right),
+    MayKeep<M>(values, file, op.Holds(values, output, left, right),
         binary_placed(op, destination, output, left, right, placed))
 {
     match placed {
         None => λ _ => trivial,
         Some(moved) => λ moved_keeps =>
-            then_option_keeps<M>(values, file, BinaryHolds(values, op, output, left, right),
+            then_option_keeps<M>(values, file, op.Holds(values, output, left, right),
                 moved, moved_keeps,
                 binary_after(op, moved, destination, output, left, right,
-                    found_at(moved.file, Held(left, Word), destination),
-                    find(moved.file, Held(right, Word))),
+                    moved.file.found_at(Held(left, Word), destination),
+                    moved.file.find(Held(right, Word))),
                 binary_after_keeps<M>(values, op, moved, destination, output, left, right,
-                    found_at(moved.file, Held(left, Word), destination),
-                    find(moved.file, Held(right, Word)))),
+                    moved.file.found_at(Held(left, Word), destination),
+                    moved.file.find(Held(right, Word)))),
     }
 }
 
-theorem binary_keeps<M>(values: Valuation(), op: BinaryOp, file: File,
+theorem File::binary_keeps<M>(self file: File, values: Valuation(), op: BinaryOp,
     destination: Gpr, output, left, right: Nat):
-    MayKeep<M>(values, file, BinaryHolds(values, op, output, left, right),
-        binary(op, file, destination, output, left, right))
+    MayKeep<M>(values, file, op.Holds(values, output, left, right),
+        file.binary(op, destination, output, left, right))
 {
     binary_placed_keeps<M>(values, op, file, destination, output, left, right,
-        place(file, Held(left, Word), destination),
-        place_keeps<M>(values, file, Held(left, Word), destination))
-}
-
-// ---------------------------------------------------------------------------
-// One register, by its index
-
-theorem gpr_same_sound(register: Gpr): (query: Gpr) →
-    nat_same(gpr_index(register), gpr_index(query)) = True → register = query
-{
-    match register {
-        Rax => λ query => match query { Rax => λ _ => refl, _ => λ no => absurd(no) },
-        Rcx => λ query => match query { Rcx => λ _ => refl, _ => λ no => absurd(no) },
-        Rdx => λ query => match query { Rdx => λ _ => refl, _ => λ no => absurd(no) },
-        Rbx => λ query => match query { Rbx => λ _ => refl, _ => λ no => absurd(no) },
-        Rsp => λ query => match query { Rsp => λ _ => refl, _ => λ no => absurd(no) },
-        Rbp => λ query => match query { Rbp => λ _ => refl, _ => λ no => absurd(no) },
-        Rsi => λ query => match query { Rsi => λ _ => refl, _ => λ no => absurd(no) },
-        Rdi => λ query => match query { Rdi => λ _ => refl, _ => λ no => absurd(no) },
-        R8 => λ query => match query { R8 => λ _ => refl, _ => λ no => absurd(no) },
-        R9 => λ query => match query { R9 => λ _ => refl, _ => λ no => absurd(no) },
-        R10 => λ query => match query { R10 => λ _ => refl, _ => λ no => absurd(no) },
-        R11 => λ query => match query { R11 => λ _ => refl, _ => λ no => absurd(no) },
-        R12 => λ query => match query { R12 => λ _ => refl, _ => λ no => absurd(no) },
-        R13 => λ query => match query { R13 => λ _ => refl, _ => λ no => absurd(no) },
-        R14 => λ query => match query { R14 => λ _ => refl, _ => λ no => absurd(no) },
-        R15 => λ query => match query { R15 => λ _ => refl, _ => λ no => absurd(no) },
-    }
-}
-
-// The register already holds the word the file now says it holds.
-theorem represents_retag(file: File, values: Valuation(), gprs: Gprs,
-    register: Gpr, slot: Option<Held>,
-    before: Represents(file, values, gprs),
-    here: SlotRep(values, slot, read_gpr(register, gprs))):
-    Represents(file_write(register, slot, file), values, gprs)
-{
-    λ query =>
-        (match nat_same(gpr_index(register), gpr_index(query)) as λ b =>
-            nat_same(gpr_index(register), gpr_index(query)) = b →
-            SlotRep(values, match b { False => file.at(query), True => slot },
-                read_gpr(query, gprs)) {
-            False => λ _ => before(query),
-            True => λ same => j(gpr_same_sound(register, query, same),
-                λ q _ => SlotRep(values, slot, read_gpr(q, gprs)), here),
-        })(refl)
+        file.place(Held(left, Word), destination),
+        file.place_keeps<M>(values, Held(left, Word), destination))
 }
 
 // ---------------------------------------------------------------------------
 // Constants and copies
 
-fn const_node(file: File, destination: Gpr, output, value: Nat) → Option<Lowered> {
+fn File::constant(self file: File, destination: Gpr, output, value: Nat) → Option<Lowered> {
     Some(Lowered([MovRI(destination, BitVec::ofNat(value))],
-        file_write(destination, Some(Held(output, Word)), file)))
+        file.write(destination, Some(Held(output, Word)))))
 }
 
-theorem const_node_keeps<M>(values: Valuation(), file: File, destination: Gpr,
+theorem File::constant_keeps<M>(self file: File, values: Valuation(), destination: Gpr,
     output, value: Nat):
     MayKeep<M>(values, file, values(64, output) = BitVec::ofNat(value),
-        const_node(file, destination, output, value))
+        file.constant(destination, output, value))
 {
     λ s represents holds =>
-        represents_write(file, values, s.gprs, destination, Some(Held(output, Word)),
+        file.represents_write(values, s.gprs, destination, Some(Held(output, Word)),
             BitVec::ofNat(value), represents, holds)
 }
 
-fn move_from(file: File, destination: Gpr, output, source: Nat,
+fn File::copy_from(self file: File, destination: Gpr, output, source: Nat,
     found: Option<Found(file, Held(source, Word))>) → Option<Lowered>
 {
     match found {
         None => None,
         Some(here) => Some(Lowered([MovRR(destination, here.register)],
-            file_write(destination, Some(Held(output, Word)), file))),
+            file.write(destination, Some(Held(output, Word))))),
     }
 }
 
-fn move_node(file: File, destination: Gpr, output, source: Nat) → Option<Lowered> {
-    move_from(file, destination, output, source, find(file, Held(source, Word)))
+fn File::copy(self file: File, destination: Gpr, output, source: Nat) → Option<Lowered> {
+    file.copy_from(destination, output, source, file.find(Held(source, Word)))
 }
 
-theorem move_from_keeps<M>(values: Valuation(), file: File, destination: Gpr,
+theorem File::copy_from_keeps<M>(self file: File, values: Valuation(), destination: Gpr,
     output, source: Nat, found: Option<Found(file, Held(source, Word))>):
     MayKeep<M>(values, file, values(64, output) = values(64, source),
-        move_from(file, destination, output, source, found))
+        file.copy_from(destination, output, source, found))
 {
     match found {
         None => trivial,
         Some(here) => λ s represents holds =>
-            represents_write(file, values, s.gprs, destination, Some(Held(output, Word)),
+            file.represents_write(values, s.gprs, destination, Some(Held(output, Word)),
                 read_gpr(here.register, s.gprs), represents,
-                trans(holds, found_rep(file, Held(source, Word), here.register, values,
-                    s.gprs, here.at, represents))),
+                trans(holds, here.at.rep(values, s.gprs, represents))),
     }
 }
 
-theorem move_node_keeps<M>(values: Valuation(), file: File, destination: Gpr,
+theorem File::copy_keeps<M>(self file: File, values: Valuation(), destination: Gpr,
     output, source: Nat):
     MayKeep<M>(values, file, values(64, output) = values(64, source),
-        move_node(file, destination, output, source))
+        file.copy(destination, output, source))
 {
-    move_from_keeps<M>(values, file, destination, output, source,
-        find(file, Held(source, Word)))
+    file.copy_from_keeps<M>(values, destination, output, source,
+        file.find(Held(source, Word)))
 }
 
 // ---------------------------------------------------------------------------
@@ -560,11 +532,11 @@ theorem move_node_keeps<M>(values: Valuation(), file: File, destination: Gpr,
 
 inductive CompareOp { Below, Less, Same }
 
-fn compare_instruction(op: CompareOp, low: LowByteGpr) → Instruction {
+fn CompareOp::instruction(self op: CompareOp, low: LowByteGpr) → Instruction {
     match op { Below => SetBelow(low), Less => SetLess(low), Same => SetEqual(low) }
 }
 
-fn compare_apply(op: CompareOp, left, right: BitVec(64)) → Bool {
+fn CompareOp::apply(self op: CompareOp, left, right: BitVec(64)) → Bool {
     match op {
         Below => left.unsigned_lt_bit(right),
         Less => left.signed_lt_bit(right),
@@ -572,19 +544,19 @@ fn compare_apply(op: CompareOp, left, right: BitVec(64)) → Bool {
     }
 }
 
-fn compare_flag(op: CompareOp, flags: Flags) → Bool {
+fn CompareOp::flag(self op: CompareOp, flags: Flags) → Bool {
     match op { Below => flags.cf, Less => flags.sf.xor(flags.of), Same => flags.zf }
 }
 
-theorem compare_flag_sub(op: CompareOp, left, right: BitVec(64)):
-    compare_flag(op, sub_flags(left, right)) = compare_apply(op, left, right)
+theorem CompareOp::flag_sub(self op: CompareOp, left, right: BitVec(64)):
+    op.flag(sub_flags(left, right)) = op.apply(left, right)
 {
     match op { Below => refl, Less => refl, Same => zero_bits_sub(64, left, right) }
 }
 
-theorem compare_executes<M>(op: CompareOp, low: LowByteGpr, s: MachineState<M>):
-    execute_normal(decoded_canonical(compare_instruction(op, low)), s).gprs =
-        write_low_byte(low, compare_flag(op, s.flags), s.gprs)
+theorem CompareOp::executes<M>(self op: CompareOp, low: LowByteGpr, s: MachineState<M>):
+    execute_normal(decoded_canonical(op.instruction(low)), s).gprs =
+        write_low_byte(low, op.flag(s.flags), s.gprs)
 {
     match op { Below => refl, Less => refl, Same => refl }
 }
@@ -596,11 +568,11 @@ theorem condition_byte_extends(condition: Bool):
     match condition { False => refl, True => refl }
 }
 
-fn CompareHolds(values: Valuation(), op: CompareOp, output, left, right: Nat) → Type {
-    values(1, output) = BitVec::ofBool(compare_apply(op, values(64, left), values(64, right)))
+fn CompareOp::Holds(self op: CompareOp, values: Valuation(), output, left, right: Nat) → Type {
+    values(1, output) = BitVec::ofBool(op.apply(values(64, left), values(64, right)))
 }
 
-fn low_byte_of(register: Gpr) → Option<LowByteGpr> {
+fn Gpr::low_byte(self register: Gpr) → Option<LowByteGpr> {
     match register {
         Rax => Some(Al), Rcx => Some(Cl), Rdx => Some(Dl), Rbx => Some(Bl),
         Rsp => None, Rbp => Some(Bpl), Rsi => Some(Sil), Rdi => Some(Dil),
@@ -609,13 +581,13 @@ fn low_byte_of(register: Gpr) → Option<LowByteGpr> {
     }
 }
 
-fn cleared(file: File, low: LowByteGpr) → File {
-    file_write(low_byte_gpr(low), None, file)
+fn File::cleared(self file: File, low: LowByteGpr) → File {
+    file.write(low_byte_gpr(low), None)
 }
 
-fn compare_found(op: CompareOp, file: File, low: LowByteGpr, output, left, right: Nat,
-    first: Option<Found(cleared(file, low), Held(left, Word))>,
-    second: Option<Found(cleared(file, low), Held(right, Word))>) → Option<Lowered>
+fn File::compare_found(self file: File, op: CompareOp, low: LowByteGpr, output, left, right: Nat,
+    first: Option<Found(file.cleared(low), Held(left, Word))>,
+    second: Option<Found(file.cleared(low), Held(right, Word))>) → Option<Lowered>
 {
     match first {
         None => None,
@@ -624,51 +596,51 @@ fn compare_found(op: CompareOp, file: File, low: LowByteGpr, output, left, right
             Some(b) => Some(Lowered(
                 [XorRR(low_byte_gpr(low), low_byte_gpr(low)),
                  CmpRR(a.register, b.register),
-                 compare_instruction(op, low)],
-                file_write(low_byte_gpr(low), Some(Held(output, Bit)), cleared(file, low)))),
+                 op.instruction(low)],
+                file.cleared(low).write(low_byte_gpr(low), Some(Held(output, Bit))))),
         },
     }
 }
 
-fn compare_with(op: CompareOp, file: File, output, left, right: Nat,
+fn File::compare_with(self file: File, op: CompareOp, output, left, right: Nat,
     low: Option<LowByteGpr>) → Option<Lowered>
 {
     match low {
         None => None,
-        Some(byte) => compare_found(op, file, byte, output, left, right,
-            find(cleared(file, byte), Held(left, Word)),
-            find(cleared(file, byte), Held(right, Word))),
+        Some(byte) => file.compare_found(op, byte, output, left, right,
+            file.cleared(byte).find(Held(left, Word)),
+            file.cleared(byte).find(Held(right, Word))),
     }
 }
 
-fn compare(op: CompareOp, file: File, destination: Gpr, output, left, right: Nat) → Option<Lowered> {
-    compare_with(op, file, output, left, right, low_byte_of(destination))
+fn File::compare(self file: File, op: CompareOp, destination: Gpr, output, left, right: Nat) → Option<Lowered> {
+    file.compare_with(op, output, left, right, destination.low_byte())
 }
 
 theorem compare_written(values: Valuation(), op: CompareOp, output, left, right: Nat,
-    a, b, zeroed: BitVec(64), holds: CompareHolds(values, op, output, left, right),
+    a, b, zeroed: BitVec(64), holds: op.Holds(values, output, left, right),
     left_rep: values(64, left) = a, right_rep: values(64, right) = b,
     zero: zeroed = BitVec::zero()):
     values(1, output).zero_extend(63) =
-        condition_byte(compare_flag(op, sub_flags(a, b))).concat(zeroed.drop_low(8, 56))
+        condition_byte(op.flag(sub_flags(a, b))).concat(zeroed.drop_low(8, 56))
 {
-    let bit: (values(1, output) = BitVec::ofBool(compare_flag(op, sub_flags(a, b)))) =
-        trans(j(left_rep, λ x _ => values(1, output) = BitVec::ofBool(compare_apply(op, x, b)),
-                j(right_rep, λ y _ => values(1, output) = BitVec::ofBool(compare_apply(op, values(64, left), y)),
+    let bit: (values(1, output) = BitVec::ofBool(op.flag(sub_flags(a, b)))) =
+        trans(j(left_rep, λ x _ => values(1, output) = BitVec::ofBool(op.apply(x, b)),
+                j(right_rep, λ y _ => values(1, output) = BitVec::ofBool(op.apply(values(64, left), y)),
                     holds)),
-            j(sym(compare_flag_sub(op, a, b)), λ c _ =>
-                BitVec::ofBool(compare_apply(op, a, b)) = BitVec::ofBool(c), refl));
-    j(sym(zero), λ z _ => values(1, output).zero_extend(63) = condition_byte(compare_flag(op, sub_flags(a, b))).concat(z.drop_low(8, 56)),
+            j(sym(op.flag_sub(a, b)), λ c _ =>
+                BitVec::ofBool(op.apply(a, b)) = BitVec::ofBool(c), refl));
+    j(sym(zero), λ z _ => values(1, output).zero_extend(63) = condition_byte(op.flag(sub_flags(a, b))).concat(z.drop_low(8, 56)),
         trans(j(bit, λ v _ => values(1, output).zero_extend(63) = v.zero_extend(63), refl),
-            sym(condition_byte_extends(compare_flag(op, sub_flags(a, b))))))
+            sym(condition_byte_extends(op.flag(sub_flags(a, b))))))
 }
 
-theorem compare_found_keeps<M>(values: Valuation(), op: CompareOp, file: File,
+theorem File::compare_found_keeps<M>(self file: File, values: Valuation(), op: CompareOp,
     low: LowByteGpr, output, left, right: Nat,
-    first: Option<Found(cleared(file, low), Held(left, Word))>,
-    second: Option<Found(cleared(file, low), Held(right, Word))>):
-    MayKeep<M>(values, file, CompareHolds(values, op, output, left, right),
-        compare_found(op, file, low, output, left, right, first, second))
+    first: Option<Found(file.cleared(low), Held(left, Word))>,
+    second: Option<Found(file.cleared(low), Held(right, Word))>):
+    MayKeep<M>(values, file, op.Holds(values, output, left, right),
+        file.compare_found(op, low, output, left, right, first, second))
 {
     match first {
         None => trivial,
@@ -678,27 +650,23 @@ theorem compare_found_keeps<M>(values: Valuation(), op: CompareOp, file: File,
                 let register = low_byte_gpr(low);
                 let zeroing = execute_normal(decoded_canonical(XorRR(register, register)), s);
                 let compared = execute_normal(decoded_canonical(CmpRR(a.register, b.register)), zeroing);
-                let zeroed: Represents(cleared(file, low), values, zeroing.gprs) =
-                    represents_write(file, values, s.gprs, register, None,
+                let zeroed: file.cleared(low).Represents(values, zeroing.gprs) =
+                    file.represents_write(values, s.gprs, register, None,
                         read_gpr(register, s.gprs).bxor(read_gpr(register, s.gprs)),
                         represents, trivial);
-                j(sym(compare_executes<M>(op, low, compared)),
-                    λ gprs _ => Represents(
-                        file_write(register, Some(Held(output, Bit)), cleared(file, low)),
-                        values, gprs),
-                    represents_write(cleared(file, low), values, zeroing.gprs, register,
+                j(sym(op.executes<M>(low, compared)),
+                    λ gprs _ => file.cleared(low).write(register, Some(Held(output, Bit))).Represents(values, gprs),
+                    file.cleared(low).represents_write(values, zeroing.gprs, register,
                         Some(Held(output, Bit)),
-                        condition_byte(compare_flag(op, compared.flags)).concat(
+                        condition_byte(op.flag(compared.flags)).concat(
                             read_gpr(register, zeroing.gprs).drop_low(8, 56)),
                         zeroed,
                         compare_written(values, op, output, left, right,
                             read_gpr(a.register, zeroing.gprs),
                             read_gpr(b.register, zeroing.gprs),
                             read_gpr(register, zeroing.gprs), holds,
-                            found_rep(cleared(file, low), Held(left, Word), a.register,
-                                values, zeroing.gprs, a.at, zeroed),
-                            found_rep(cleared(file, low), Held(right, Word), b.register,
-                                values, zeroing.gprs, b.at, zeroed),
+                            a.at.rep(values, zeroing.gprs, zeroed),
+                            b.at.rep(values, zeroing.gprs, zeroed),
                             trans(read_gpr_after_write(register,
                                     read_gpr(register, s.gprs).bxor(read_gpr(register, s.gprs)),
                                     s.gprs),
@@ -708,25 +676,25 @@ theorem compare_found_keeps<M>(values: Valuation(), op: CompareOp, file: File,
     }
 }
 
-theorem compare_with_keeps<M>(values: Valuation(), op: CompareOp, file: File,
+theorem File::compare_with_keeps<M>(self file: File, values: Valuation(), op: CompareOp,
     output, left, right: Nat, low: Option<LowByteGpr>):
-    MayKeep<M>(values, file, CompareHolds(values, op, output, left, right),
-        compare_with(op, file, output, left, right, low))
+    MayKeep<M>(values, file, op.Holds(values, output, left, right),
+        file.compare_with(op, output, left, right, low))
 {
     match low {
         None => trivial,
-        Some(byte) => compare_found_keeps<M>(values, op, file, byte, output, left, right,
-            find(cleared(file, byte), Held(left, Word)),
-            find(cleared(file, byte), Held(right, Word))),
+        Some(byte) => file.compare_found_keeps<M>(values, op, byte, output, left, right,
+            file.cleared(byte).find(Held(left, Word)),
+            file.cleared(byte).find(Held(right, Word))),
     }
 }
 
-theorem compare_keeps<M>(values: Valuation(), op: CompareOp, file: File,
+theorem File::compare_keeps<M>(self file: File, values: Valuation(), op: CompareOp,
     destination: Gpr, output, left, right: Nat):
-    MayKeep<M>(values, file, CompareHolds(values, op, output, left, right),
-        compare(op, file, destination, output, left, right))
+    MayKeep<M>(values, file, op.Holds(values, output, left, right),
+        file.compare(op, destination, output, left, right))
 {
-    compare_with_keeps<M>(values, op, file, output, left, right, low_byte_of(destination))
+    file.compare_with_keeps<M>(values, op, output, left, right, destination.low_byte())
 }
 
 // ---------------------------------------------------------------------------
@@ -750,81 +718,81 @@ theorem word_only_keeps<M>(values: Valuation(), file: File, width: Nat,
 
 // One node, its result in `destination` (the placement's choice). Shifts
 // wait for shift instructions in the ISA model.
-fn lower_node(node: Node, destination: Gpr, file: File) → Option<Lowered> {
+fn Node::lower(self node: Node, destination: Gpr, file: File) → Option<Lowered> {
     match node {
         Const(width, output, value) => word_only(width, width.eq_dec(64),
-            const_node(file, destination, output, value)),
+            file.constant(destination, output, value)),
         Move(width, output, source) => word_only(width, width.eq_dec(64),
-            move_node(file, destination, output, source)),
+            file.copy(destination, output, source)),
         Add(width, output, left, right) => word_only(width, width.eq_dec(64),
-            binary(OpAdd, file, destination, output, left, right)),
+            file.binary(OpAdd, destination, output, left, right)),
         Sub(width, output, left, right) => word_only(width, width.eq_dec(64),
-            binary(OpSub, file, destination, output, left, right)),
+            file.binary(OpSub, destination, output, left, right)),
         BitAnd(width, output, left, right) => word_only(width, width.eq_dec(64),
-            binary(OpAnd, file, destination, output, left, right)),
+            file.binary(OpAnd, destination, output, left, right)),
         BitOr(width, output, left, right) => word_only(width, width.eq_dec(64),
-            binary(OpOr, file, destination, output, left, right)),
+            file.binary(OpOr, destination, output, left, right)),
         BitXor(width, output, left, right) => word_only(width, width.eq_dec(64),
-            binary(OpXor, file, destination, output, left, right)),
+            file.binary(OpXor, destination, output, left, right)),
         ShiftLeft(_, _, _, _) => None,
         LogicalShiftRight(_, _, _, _) => None,
         ArithmeticShiftRight(_, _, _, _) => None,
         UnsignedLessThan(width, output, left, right) => word_only(width, width.eq_dec(64),
-            compare(Below, file, destination, output, left, right)),
+            file.compare(Below, destination, output, left, right)),
         SignedLessThan(width, output, left, right) => word_only(width, width.eq_dec(64),
-            compare(Less, file, destination, output, left, right)),
+            file.compare(Less, destination, output, left, right)),
         Equal(width, output, left, right) => word_only(width, width.eq_dec(64),
-            compare(Same, file, destination, output, left, right)),
+            file.compare(Same, destination, output, left, right)),
     }
 }
 
-theorem lower_node_keeps<M>(values: Valuation(), node: Node, destination: Gpr, file: File):
-    MayKeep<M>(values, file, NodeHolds(values, node), lower_node(node, destination, file))
+theorem Node::lower_keeps<M>(self node: Node, values: Valuation(), destination: Gpr, file: File):
+    MayKeep<M>(values, file, NodeHolds(values, node), node.lower(destination, file))
 {
     match node {
         Const(width, output, value) => word_only_keeps<M>(values, file, width,
             λ w => NodeHolds(values, Const(w, output, value)), width.eq_dec(64),
-            const_node(file, destination, output, value),
-            const_node_keeps<M>(values, file, destination, output, value)),
+            file.constant(destination, output, value),
+            file.constant_keeps<M>(values, destination, output, value)),
         Move(width, output, source) => word_only_keeps<M>(values, file, width,
             λ w => NodeHolds(values, Move(w, output, source)), width.eq_dec(64),
-            move_node(file, destination, output, source),
-            move_node_keeps<M>(values, file, destination, output, source)),
+            file.copy(destination, output, source),
+            file.copy_keeps<M>(values, destination, output, source)),
         Add(width, output, left, right) => word_only_keeps<M>(values, file, width,
             λ w => NodeHolds(values, Add(w, output, left, right)), width.eq_dec(64),
-            binary(OpAdd, file, destination, output, left, right),
-            binary_keeps<M>(values, OpAdd, file, destination, output, left, right)),
+            file.binary(OpAdd, destination, output, left, right),
+            file.binary_keeps<M>(values, OpAdd, destination, output, left, right)),
         Sub(width, output, left, right) => word_only_keeps<M>(values, file, width,
             λ w => NodeHolds(values, Sub(w, output, left, right)), width.eq_dec(64),
-            binary(OpSub, file, destination, output, left, right),
-            binary_keeps<M>(values, OpSub, file, destination, output, left, right)),
+            file.binary(OpSub, destination, output, left, right),
+            file.binary_keeps<M>(values, OpSub, destination, output, left, right)),
         BitAnd(width, output, left, right) => word_only_keeps<M>(values, file, width,
             λ w => NodeHolds(values, BitAnd(w, output, left, right)), width.eq_dec(64),
-            binary(OpAnd, file, destination, output, left, right),
-            binary_keeps<M>(values, OpAnd, file, destination, output, left, right)),
+            file.binary(OpAnd, destination, output, left, right),
+            file.binary_keeps<M>(values, OpAnd, destination, output, left, right)),
         BitOr(width, output, left, right) => word_only_keeps<M>(values, file, width,
             λ w => NodeHolds(values, BitOr(w, output, left, right)), width.eq_dec(64),
-            binary(OpOr, file, destination, output, left, right),
-            binary_keeps<M>(values, OpOr, file, destination, output, left, right)),
+            file.binary(OpOr, destination, output, left, right),
+            file.binary_keeps<M>(values, OpOr, destination, output, left, right)),
         BitXor(width, output, left, right) => word_only_keeps<M>(values, file, width,
             λ w => NodeHolds(values, BitXor(w, output, left, right)), width.eq_dec(64),
-            binary(OpXor, file, destination, output, left, right),
-            binary_keeps<M>(values, OpXor, file, destination, output, left, right)),
+            file.binary(OpXor, destination, output, left, right),
+            file.binary_keeps<M>(values, OpXor, destination, output, left, right)),
         ShiftLeft(_, _, _, _) => trivial,
         LogicalShiftRight(_, _, _, _) => trivial,
         ArithmeticShiftRight(_, _, _, _) => trivial,
         UnsignedLessThan(width, output, left, right) => word_only_keeps<M>(values, file, width,
             λ w => NodeHolds(values, UnsignedLessThan(w, output, left, right)), width.eq_dec(64),
-            compare(Below, file, destination, output, left, right),
-            compare_keeps<M>(values, Below, file, destination, output, left, right)),
+            file.compare(Below, destination, output, left, right),
+            file.compare_keeps<M>(values, Below, destination, output, left, right)),
         SignedLessThan(width, output, left, right) => word_only_keeps<M>(values, file, width,
             λ w => NodeHolds(values, SignedLessThan(w, output, left, right)), width.eq_dec(64),
-            compare(Less, file, destination, output, left, right),
-            compare_keeps<M>(values, Less, file, destination, output, left, right)),
+            file.compare(Less, destination, output, left, right),
+            file.compare_keeps<M>(values, Less, destination, output, left, right)),
         Equal(width, output, left, right) => word_only_keeps<M>(values, file, width,
             λ w => NodeHolds(values, Equal(w, output, left, right)), width.eq_dec(64),
-            compare(Same, file, destination, output, left, right),
-            compare_keeps<M>(values, Same, file, destination, output, left, right)),
+            file.compare(Same, destination, output, left, right),
+            file.compare_keeps<M>(values, Same, destination, output, left, right)),
     }
 }
 
@@ -834,9 +802,9 @@ fn lower_nodes(nodes: List<Node>, placement: List<Gpr>, file: File) → Option<L
         Nil => Some(Lowered([], file)),
         Cons(node, rest) => match placement {
             Nil => None,
-            Cons(destination, later) => match lower_node(node, destination, file) {
+            Cons(destination, later) => match node.lower(destination, file) {
                 None => None,
-                Some(first) => then_option(first, lower_nodes(rest, later, first.file)),
+                Some(first) => first.then_option(lower_nodes(rest, later, first.file)),
             },
         },
     }
@@ -851,12 +819,12 @@ theorem lower_nodes_keeps<M>(values: Valuation(), nodes: List<Node>):
         Cons(node, rest) => λ placement => match placement {
             Nil => λ file => trivial,
             Cons(destination, later) => λ file =>
-                (match lower_node(node, destination, file) as λ step =>
+                (match node.lower(destination, file) as λ step =>
                     MayKeep<M>(values, file, NodeHolds(values, node), step) →
                     MayKeep<M>(values, file, NodeHolds(values, node) ∧ NodesHold(values, rest),
                         match step {
                             None => None,
-                            Some(first) => then_option(first, lower_nodes(rest, later, first.file)),
+                            Some(first) => first.then_option(lower_nodes(rest, later, first.file)),
                         }) {
                     None => λ _ => trivial,
                     Some(first) => λ first_keeps =>
@@ -864,7 +832,7 @@ theorem lower_nodes_keeps<M>(values: Valuation(), nodes: List<Node>):
                             NodesHold(values, rest), first, first_keeps,
                             lower_nodes(rest, later, first.file),
                             lower_nodes_keeps<M>(values, rest, later, first.file)),
-                })(lower_node_keeps<M>(values, node, destination, file)),
+                })(node.lower_keeps<M>(values, destination, file)),
         },
     }
 }
@@ -874,7 +842,7 @@ theorem lower_nodes_keeps<M>(values: Valuation(), nodes: List<Node>):
 
 // How a port's width sits in a register: 64 bits as a word, one bit
 // zero-extended, and nothing else yet.
-fn width_kind(width: Nat) → Option<Kind> {
+fn Kind::of_width(width: Nat) → Option<Kind> {
     match width.eq_dec(64) {
         Inl(_) => Some(Word),
         Inr(_) => match width.eq_dec(1) { Inl(_) => Some(Bit), Inr(_) => None },
@@ -882,11 +850,11 @@ fn width_kind(width: Nat) → Option<Kind> {
 }
 
 fn KindRep(values: Valuation(), id: Nat, kind: Option<Kind>, word: BitVec(64)) → Type {
-    match kind { None => False, Some(k) => HeldRep(values, Held(id, k), word) }
+    match kind { None => False, Some(k) => Held(id, k).Rep(values, word) }
 }
 
-fn PortRep(values: Valuation(), port: Port, word: BitVec(64)) → Type {
-    KindRep(values, port.id, width_kind(port.width), word)
+fn Port::Rep(self port: Port, values: Valuation(), word: BitVec(64)) → Type {
+    KindRep(values, port.id, Kind::of_width(port.width), word)
 }
 
 // Each port's value in its register: a region's inputs before its code,
@@ -897,7 +865,7 @@ fn PortsAt(values: Valuation(), entries: List<Port>) → List<Gpr> → Gprs → 
         Cons(port, rest) => λ registers gprs => match registers {
             Nil => False,
             Cons(register, later) =>
-                PortRep(values, port, read_gpr(register, gprs)) ∧
+                port.Rep(values, read_gpr(register, gprs)) ∧
                 PortsAt(values, rest, later, gprs),
         },
     }
@@ -908,18 +876,18 @@ fn input_with(register: Gpr, id: Nat, kind: Option<Kind>, rest: Option<File>) �
         None => None,
         Some(k) => match rest {
             None => None,
-            Some(file) => Some(file_write(register, Some(Held(id, k)), file)),
+            Some(file) => Some(file.write(register, Some(Held(id, k)))),
         },
     }
 }
 
 fn input_file(entries: List<Port>, registers: List<Gpr>) → Option<File> {
     match entries {
-        Nil => Some(empty_file()),
+        Nil => Some(File::empty()),
         Cons(port, rest) => match registers {
             Nil => None,
             Cons(register, later) => input_with(register, port.id,
-                width_kind(port.width), input_file(rest, later)),
+                Kind::of_width(port.width), input_file(rest, later)),
         },
     }
 }
@@ -928,16 +896,15 @@ theorem input_with_represents(values: Valuation(), gprs: Gprs, register: Gpr,
     id: Nat, kind: Option<Kind>):
     KindRep(values, id, kind, read_gpr(register, gprs)) →
     (rest: Option<File>) →
-    OptionAll(λ (file: File) => Represents(file, values, gprs), rest) →
-    OptionAll(λ (file: File) => Represents(file, values, gprs),
-        input_with(register, id, kind, rest))
+    rest.All(λ (file: File) => file.Represents(values, gprs)) →
+    input_with(register, id, kind, rest).All(λ (file: File) => file.Represents(values, gprs))
 {
     match kind {
         None => λ no rest _ => trivial,
         Some(k) => λ here rest => match rest {
             None => λ _ => trivial,
             Some(file) => λ represents =>
-                represents_retag(file, values, gprs, register, Some(Held(id, k)),
+                file.represents_retag(values, gprs, register, Some(Held(id, k)),
                     represents, here),
         },
     }
@@ -945,31 +912,30 @@ theorem input_with_represents(values: Valuation(), gprs: Gprs, register: Gpr,
 
 theorem input_file_represents(values: Valuation(), gprs: Gprs, entries: List<Port>):
     (registers: List<Gpr>) → PortsAt(values, entries, registers, gprs) →
-    OptionAll(λ (file: File) => Represents(file, values, gprs),
-        input_file(entries, registers))
+    input_file(entries, registers).All(λ (file: File) => file.Represents(values, gprs))
 {
     match entries {
-        Nil => λ registers _ => represents_empty(values, gprs),
+        Nil => λ registers _ => File::empty_represents(values, gprs),
         Cons(port, rest) => λ registers => match registers {
             Nil => λ _ => trivial,
             Cons(register, later) => λ placed =>
                 input_with_represents(values, gprs, register, port.id,
-                    width_kind(port.width), placed.left, input_file(rest, later),
+                    Kind::of_width(port.width), placed.left, input_file(rest, later),
                     input_file_represents(values, gprs, rest, later, placed.right)),
         },
     }
 }
 
-fn move_outputs(file: File, entries: List<Port>, registers: List<Gpr>) → Option<Lowered> {
+fn File::move_outputs(self file: File, entries: List<Port>, registers: List<Gpr>) → Option<Lowered> {
     match entries {
         Nil => Some(Lowered([], file)),
         Cons(port, rest) => match registers {
             Nil => None,
-            Cons(register, later) => match width_kind(port.width) {
+            Cons(register, later) => match Kind::of_width(port.width) {
                 None => None,
-                Some(kind) => match place(file, Held(port.id, kind), register) {
+                Some(kind) => match file.place(Held(port.id, kind), register) {
                     None => None,
-                    Some(moved) => then_option(moved, move_outputs(moved.file, rest, later)),
+                    Some(moved) => moved.then_option(moved.file.move_outputs(rest, later)),
                 },
             },
         },
@@ -978,80 +944,73 @@ fn move_outputs(file: File, entries: List<Port>, registers: List<Gpr>) → Optio
 
 theorem move_outputs_keeps<M>(values: Valuation(), entries: List<Port>):
     (file: File) → (registers: List<Gpr>) →
-    MayKeep<M>(values, file, True, move_outputs(file, entries, registers))
+    MayKeep<M>(values, file, True, file.move_outputs(entries, registers))
 {
     match entries {
         Nil => λ file registers s represents _ => represents,
         Cons(port, rest) => λ file registers => match registers {
             Nil => trivial,
             Cons(register, later) =>
-                match width_kind(port.width) as λ kind =>
+                match Kind::of_width(port.width) as λ kind =>
                     MayKeep<M>(values, file, True, match kind {
                         None => None,
-                        Some(k) => match place(file, Held(port.id, k), register) {
+                        Some(k) => match file.place(Held(port.id, k), register) {
                             None => None,
-                            Some(moved) => then_option(moved, move_outputs(moved.file, rest, later)),
+                            Some(moved) => moved.then_option(moved.file.move_outputs(rest, later)),
                         },
                     }) {
                     None => trivial,
                     Some(k) =>
-                        (match place(file, Held(port.id, k), register) as λ placed =>
+                        (match file.place(Held(port.id, k), register) as λ placed =>
                             MayKeep<M>(values, file, True, placed) →
                             MayKeep<M>(values, file, True, match placed {
                                 None => None,
-                                Some(moved) => then_option(moved, move_outputs(moved.file, rest, later)),
+                                Some(moved) => moved.then_option(moved.file.move_outputs(rest, later)),
                             }) {
                             None => λ _ => trivial,
                             Some(moved) => λ moved_keeps =>
                                 then_option_keeps<M>(values, file, True, moved, moved_keeps,
-                                    move_outputs(moved.file, rest, later),
+                                    moved.file.move_outputs(rest, later),
                                     move_outputs_keeps<M>(values, rest, moved.file, later)),
-                        })(place_keeps<M>(values, file, Held(port.id, k), register)),
+                        })(file.place_keeps<M>(values, Held(port.id, k), register)),
                 },
         },
     }
 }
 
-fn is_some<A>(o: Option<A>) → Bool { match o { None => False, Some(_) => True } }
-
-theorem some_of<A>(o: Option<A>): is_some(o).IsTrue() → A {
-    match o { None => λ no => false_elim(no), Some(a) => λ _ => a }
-}
-
-fn check_one(file: File, id: Nat, kind: Option<Kind>, register: Gpr) → Bool {
-    match kind { None => False, Some(k) => is_some(found_at(file, Held(id, k), register)) }
+fn File::check_one(self file: File, id: Nat, kind: Option<Kind>, register: Gpr) → Bool {
+    match kind { None => False, Some(k) => file.found_at(Held(id, k), register).is_some() }
 }
 
 // The file, after the moves, says every output is in its register: a later
 // move did not overwrite an earlier one.
-fn outputs_check(file: File, entries: List<Port>, registers: List<Gpr>) → Bool {
+fn File::outputs_check(self file: File, entries: List<Port>, registers: List<Gpr>) → Bool {
     match entries {
         Nil => True,
         Cons(port, rest) => match registers {
             Nil => False,
             Cons(register, later) =>
-                check_one(file, port.id, width_kind(port.width), register) &&
-                outputs_check(file, rest, later),
+                file.check_one(port.id, Kind::of_width(port.width), register) &&
+                file.outputs_check(rest, later),
         },
     }
 }
 
 theorem check_one_sound(values: Valuation(), file: File, gprs: Gprs,
-    represents: Represents(file, values, gprs), id: Nat, kind: Option<Kind>,
+    represents: file.Represents(values, gprs), id: Nat, kind: Option<Kind>,
     register: Gpr):
-    check_one(file, id, kind, register).IsTrue() →
+    file.check_one(id, kind, register).IsTrue() →
     KindRep(values, id, kind, read_gpr(register, gprs))
 {
     match kind {
         None => λ no => false_elim(no),
-        Some(k) => λ checked => found_rep(file, Held(id, k), register, values, gprs,
-            some_of(found_at(file, Held(id, k), register), checked), represents),
+        Some(k) => λ checked => file.found_at(Held(id, k), register).get(checked).rep(values, gprs, represents),
     }
 }
 
 theorem outputs_check_sound(values: Valuation(), file: File, gprs: Gprs,
-    represents: Represents(file, values, gprs), entries: List<Port>):
-    (registers: List<Gpr>) → outputs_check(file, entries, registers).IsTrue() →
+    represents: file.Represents(values, gprs), entries: List<Port>):
+    (registers: List<Gpr>) → file.outputs_check(entries, registers).IsTrue() →
     PortsAt(values, entries, registers, gprs)
 {
     match entries {
@@ -1060,10 +1019,10 @@ theorem outputs_check_sound(values: Valuation(), file: File, gprs: Gprs,
             Nil => λ no => false_elim(no),
             Cons(register, later) => λ checked => {
                 let both = Bool::is_true_and(
-                    check_one(file, port.id, width_kind(port.width), register),
-                    outputs_check(file, rest, later), checked);
+                    file.check_one(port.id, Kind::of_width(port.width), register),
+                    file.outputs_check(rest, later), checked);
                 ⟨check_one_sound(values, file, gprs, represents, port.id,
-                        width_kind(port.width), register, both.left),
+                        Kind::of_width(port.width), register, both.left),
                  outputs_check_sound(values, file, gprs, represents, rest, later, both.right)⟩
             },
         },
@@ -1077,15 +1036,15 @@ fn finish(body, moves: Lowered, checked: Bool) → Option<List<Instruction>> {
 // The region's code: its inputs in `inputs`, one placement register per
 // node, its outputs left in `outputs`. `None` is a refusal: an unsupported
 // node, or a placement that overwrote a value still needed.
-fn lower_region(region: Region, inputs, outputs, placement: List<Gpr>) → Option<List<Instruction>> {
+fn Region::lower(self region: Region, inputs, outputs, placement: List<Gpr>) → Option<List<Instruction>> {
     match input_file(region.inputs.entries, inputs) {
         None => None,
         Some(file) => match lower_nodes(region.nodes, placement, file) {
             None => None,
-            Some(body) => match move_outputs(body.file, region.outputs.entries, outputs) {
+            Some(body) => match body.file.move_outputs(region.outputs.entries, outputs) {
                 None => None,
                 Some(moves) => finish(body, moves,
-                    outputs_check(moves.file, region.outputs.entries, outputs)),
+                    moves.file.outputs_check(region.outputs.entries, outputs)),
             },
         },
     }
@@ -1104,16 +1063,16 @@ fn Computes<M>(region: Region, inputs, outputs: List<Gpr>, values: Valuation(),
 fn MayCompute<M>(region: Region, inputs, outputs: List<Gpr>, values: Valuation(),
     code: Option<List<Instruction>>) → Type
 {
-    OptionAll(λ (c: List<Instruction>) => Computes<M>(region, inputs, outputs, values, c), code)
+    code.All(λ (c: List<Instruction>) => Computes<M>(region, inputs, outputs, values, c))
 }
 
 theorem finish_computes<M>(region: Region, inputs, outputs: List<Gpr>, values: Valuation(),
     file: File, body, moves: Lowered,
     entered: (s: MachineState<M>) → PortsAt(values, region.inputs.entries, inputs, s.gprs) →
-        Represents(file, values, s.gprs),
+        file.Represents(values, s.gprs),
     body_keeps: Keeps<M>(values, file, RegionHolds(region, values), body),
     moves_keeps: Keeps<M>(values, body.file, True, moves), checked: Bool):
-    (checked.IsTrue() → (gprs: Gprs) → Represents(moves.file, values, gprs) →
+    (checked.IsTrue() → (gprs: Gprs) → moves.file.Represents(values, gprs) →
         PortsAt(values, region.outputs.entries, outputs, gprs)) →
     MayCompute<M>(region, inputs, outputs, values,
         finish(body, moves, checked))
@@ -1128,23 +1087,23 @@ theorem finish_computes<M>(region: Region, inputs, outputs: List<Gpr>, values: V
     }
 }
 
-theorem lower_region_computes<M>(values: Valuation(), region: Region,
+theorem Region::lower_computes<M>(self region: Region, values: Valuation(),
     inputs, outputs, placement: List<Gpr>):
     MayCompute<M>(region, inputs, outputs, values,
-        lower_region(region, inputs, outputs, placement))
+        region.lower(inputs, outputs, placement))
 {
     (match input_file(region.inputs.entries, inputs) as λ entry =>
         ((s: MachineState<M>) → PortsAt(values, region.inputs.entries, inputs, s.gprs) →
-            OptionAll(λ (file: File) => Represents(file, values, s.gprs), entry)) →
+            entry.All(λ (file: File) => file.Represents(values, s.gprs))) →
         MayCompute<M>(region, inputs, outputs, values,
             match entry {
                 None => None,
                 Some(file) => match lower_nodes(region.nodes, placement, file) {
                     None => None,
-                    Some(body) => match move_outputs(body.file, region.outputs.entries, outputs) {
+                    Some(body) => match body.file.move_outputs(region.outputs.entries, outputs) {
                         None => None,
                         Some(moves) => finish(body, moves,
-                            outputs_check(moves.file, region.outputs.entries, outputs)),
+                            moves.file.outputs_check(region.outputs.entries, outputs)),
                     },
                 },
             }) {
@@ -1155,27 +1114,27 @@ theorem lower_region_computes<M>(values: Valuation(), region: Region,
                 MayCompute<M>(region, inputs, outputs, values,
                     match lowered {
                         None => None,
-                        Some(body) => match move_outputs(body.file, region.outputs.entries, outputs) {
+                        Some(body) => match body.file.move_outputs(region.outputs.entries, outputs) {
                             None => None,
                             Some(moves) => finish(body, moves,
-                                outputs_check(moves.file, region.outputs.entries, outputs)),
+                                moves.file.outputs_check(region.outputs.entries, outputs)),
                         },
                     }) {
                 None => λ _ => trivial,
                 Some(body) => λ body_keeps =>
-                    (match move_outputs(body.file, region.outputs.entries, outputs) as λ moved =>
+                    (match body.file.move_outputs(region.outputs.entries, outputs) as λ moved =>
                         MayKeep<M>(values, body.file, True, moved) →
                         MayCompute<M>(region, inputs, outputs, values,
                             match moved {
                                 None => None,
                                 Some(moves) => finish(body, moves,
-                                    outputs_check(moves.file, region.outputs.entries, outputs)),
+                                    moves.file.outputs_check(region.outputs.entries, outputs)),
                             }) {
                         None => λ _ => trivial,
                         Some(moves) => λ moves_keeps =>
                             finish_computes<M>(region, inputs, outputs, values, file, body, moves,
                                 entered, body_keeps, moves_keeps,
-                                outputs_check(moves.file, region.outputs.entries, outputs),
+                                moves.file.outputs_check(region.outputs.entries, outputs),
                                 λ checked gprs represents =>
                                     outputs_check_sound(values, moves.file, gprs, represents,
                                         region.outputs.entries, outputs, checked)),
@@ -1186,16 +1145,15 @@ theorem lower_region_computes<M>(values: Valuation(), region: Region,
 
 // The theorem, proved once: whatever the placement, code `lower_region`
 // returns computes the region.
-theorem lower_region_correct<M>(region: Region, inputs, outputs, placement: List<Gpr>,
+theorem Region::lower_correct<M>(self region: Region, inputs, outputs, placement: List<Gpr>,
     code: List<Instruction>, values: Valuation(), s: MachineState<M>,
-    lowered: lower_region(region, inputs, outputs, placement) = Some(code),
+    lowered: region.lower(inputs, outputs, placement) = Some(code),
     placed: PortsAt(values, region.inputs.entries, inputs, s.gprs),
     holds: RegionHolds(region, values)):
     PortsAt(values, region.outputs.entries, outputs, execute_block_normal(code, s).gprs)
 {
-    option_all_some(λ (c: List<Instruction>) => Computes<M>(region, inputs, outputs, values, c),
-        lower_region(region, inputs, outputs, placement), code, lowered,
-        lower_region_computes<M>(values, region, inputs, outputs, placement), s, placed, holds)
+    region.lower(inputs, outputs, placement).all_some(λ (c: List<Instruction>) => Computes<M>(region, inputs, outputs, values, c), code, lowered,
+        region.lower_computes<M>(values, inputs, outputs, placement), s, placed, holds)
 }
 
 // ---------------------------------------------------------------------------
@@ -1230,7 +1188,7 @@ theorem execute_block_rip<M>(instructions: List<Instruction>):
 }
 
 // The register an instruction writes, if any.
-fn instruction_writes(instruction: Instruction) → Option<Gpr> {
+fn Instruction::writes(self instruction: Instruction) → Option<Gpr> {
     match instruction {
         MovRR(destination, _) => Some(destination),
         MovRI(destination, _) => Some(destination),
@@ -1250,22 +1208,22 @@ fn instruction_writes(instruction: Instruction) → Option<Gpr> {
 }
 
 fn spares(written: Option<Gpr>, query: Gpr) → Bool {
-    match written { None => True, Some(register) => !gpr_same(register, query) }
+    match written { None => True, Some(register) => !register.same(query) }
 }
 
 fn leaves(instructions: List<Instruction>, query: Gpr) → Bool {
     match instructions {
         Nil => True,
         Cons(instruction, rest) =>
-            spares(instruction_writes(instruction), query) && leaves(rest, query),
+            spares(instruction.writes(), query) && leaves(rest, query),
     }
 }
 
 theorem write_spares(register, query: Gpr, value: BitVec(64), gprs: Gprs):
-    (!gpr_same(register, query)).IsTrue() →
+    (!register.same(query)).IsTrue() →
     read_gpr(query, write_gpr(register, value, gprs)) = read_gpr(query, gprs)
 {
-    (match nat_same(gpr_index(register), gpr_index(query)) as λ b =>
+    (match register.same(query) as λ b =>
         (!b).IsTrue() → match b { False => gprs.at(query), True => value } = gprs.at(query) {
         False => λ _ => refl,
         True => λ no => false_elim(no),
@@ -1273,7 +1231,7 @@ theorem write_spares(register, query: Gpr, value: BitVec(64), gprs: Gprs):
 }
 
 theorem execute_spares<M>(instruction: Instruction, s: MachineState<M>, query: Gpr):
-    spares(instruction_writes(instruction), query).IsTrue() →
+    spares(instruction.writes(), query).IsTrue() →
     read_gpr(query, execute_normal(decoded_canonical(instruction), s).gprs) =
         read_gpr(query, s.gprs)
 {
@@ -1316,7 +1274,7 @@ theorem execute_block_leaves<M>(instructions: List<Instruction>):
     match instructions {
         Nil => λ s query _ => refl,
         Cons(instruction, rest) => λ s query left => {
-            let both = Bool::is_true_and(spares(instruction_writes(instruction), query),
+            let both = Bool::is_true_and(spares(instruction.writes(), query),
                 leaves(rest, query), left);
             trans(execute_block_leaves<M>(rest,
                     execute_normal(decoded_canonical(instruction), s), query, both.right),
@@ -1364,7 +1322,7 @@ theorem execute_block_kept<M>(instructions: List<Instruction>, s: MachineState<M
 // A placement heuristic. Nothing above depends on it: a poor choice costs a
 // MOV or a refusal, never a wrong program.
 
-fn node_reads(node: Node) → List<Nat> {
+fn Node::reads(self node: Node) → List<Nat> {
     match node {
         Const(_, _, _) => [],
         Move(_, _, source) => [source],
@@ -1383,7 +1341,7 @@ fn node_reads(node: Node) → List<Nat> {
 }
 
 fn mentions(ids: List<Nat>, id: Nat) → Bool {
-    match ids { Nil => False, Cons(here, rest) => nat_same(here, id) || mentions(rest, id) }
+    match ids { Nil => False, Cons(here, rest) => here.same(id) || mentions(rest, id) }
 }
 
 fn port_ids(entries: List<Port>) → List<Nat> {
@@ -1392,7 +1350,7 @@ fn port_ids(entries: List<Port>) → List<Nat> {
 
 // Every id the nodes read, then the outputs: what is live before them.
 fn reads_of(nodes: List<Node>, outputs: List<Nat>) → List<Nat> {
-    match nodes { Nil => outputs, Cons(node, rest) => node_reads(node) ++ reads_of(rest, outputs) }
+    match nodes { Nil => outputs, Cons(node, rest) => node.reads() ++ reads_of(rest, outputs) }
 }
 
 fn slot_free(slot: Option<Held>, live: List<Nat>) → Bool {
@@ -1402,12 +1360,12 @@ fn slot_free(slot: Option<Held>, live: List<Nat>) → Bool {
 // The SysV caller-saved registers, the only ones the heuristic writes.
 fn scratch_pool() → List<Gpr> { [Rax, Rcx, Rdx, Rsi, Rdi, R8, R9, R10, R11] }
 
-fn first_free(file: File, live: List<Nat>, pool: List<Gpr>) → Option<Gpr> {
+fn File::first_free(self file: File, live: List<Nat>, pool: List<Gpr>) → Option<Gpr> {
     match pool {
         Nil => None,
         Cons(register, rest) => match slot_free(file.at(register), live) {
             True => Some(register),
-            False => first_free(file, live, rest),
+            False => file.first_free(live, rest),
         },
     }
 }
@@ -1417,7 +1375,7 @@ fn target_of(id: Nat, entries: List<Port>, registers: List<Gpr>) → Option<Gpr>
         Nil => None,
         Cons(port, rest) => match registers {
             Nil => None,
-            Cons(register, later) => match nat_same(port.id, id) {
+            Cons(register, later) => match port.id.same(id) {
                 True => Some(register),
                 False => target_of(id, rest, later),
             },
@@ -1425,14 +1383,14 @@ fn target_of(id: Nat, entries: List<Port>, registers: List<Gpr>) → Option<Gpr>
     }
 }
 
-fn node_output_id(node: Node) → Nat { node_output(node).id }
+fn Node::output_id(self node: Node) → Nat { node_output(node).id }
 
-fn in_place(node: Node, file: File, later: List<Nat>) → Option<Gpr> {
-    match node_reads(node) {
+fn Node::in_place(self node: Node, file: File, later: List<Nat>) → Option<Gpr> {
+    match node.reads() {
         Nil => None,
         Cons(left, _) => match mentions(later, left) {
             True => None,
-            False => match find(file, Held(left, Word)) {
+            False => match file.find(Held(left, Word)) {
                 None => None,
                 Some(found) => Some(found.register),
             },
@@ -1450,16 +1408,16 @@ fn is_binary(node: Node) → Bool {
 // The output's own register if it is free; else, for arithmetic, the left
 // operand's register when the operand dies here; else the first free
 // scratch register.
-fn choose(node: Node, file: File, later: List<Nat>, entries: List<Port>,
+fn Node::choose(self node: Node, file: File, later: List<Nat>, entries: List<Port>,
     registers: List<Gpr>) → Gpr
 {
-    let live = node_reads(node) ++ later;
-    let fresh = match first_free(file, live, scratch_pool()) { None => Rax, Some(r) => r };
+    let live = node.reads() ++ later;
+    let fresh = match file.first_free(live, scratch_pool()) { None => Rax, Some(r) => r };
     let reuse = match is_binary(node) {
         False => fresh,
-        True => match in_place(node, file, later) { None => fresh, Some(r) => r },
+        True => match node.in_place(file, later) { None => fresh, Some(r) => r },
     };
-    match target_of(node_output_id(node), entries, registers) {
+    match target_of(node.output_id(), entries, registers) {
         None => reuse,
         Some(target) => match slot_free(file.at(target), live) { True => target, False => reuse },
     }
@@ -1470,8 +1428,8 @@ fn plan_nodes(nodes: List<Node>, file: File, entries: List<Port>, registers: Lis
         Nil => [],
         Cons(node, rest) => {
             let later = reads_of(rest, port_ids(entries));
-            let destination = choose(node, file, later, entries, registers);
-            match lower_node(node, destination, file) {
+            let destination = node.choose(file, later, entries, registers);
+            match node.lower(destination, file) {
                 None => [destination],
                 Some(step) => Cons(destination, plan_nodes(rest, step.file, entries, registers)),
             }
@@ -1479,7 +1437,7 @@ fn plan_nodes(nodes: List<Node>, file: File, entries: List<Port>, registers: Lis
     }
 }
 
-fn plan(region: Region, inputs, outputs: List<Gpr>) → List<Gpr> {
+fn Region::plan(self region: Region, inputs, outputs: List<Gpr>) → List<Gpr> {
     match input_file(region.inputs.entries, inputs) {
         None => [],
         Some(file) => plan_nodes(region.nodes, file, region.outputs.entries, outputs),
@@ -1487,6 +1445,6 @@ fn plan(region: Region, inputs, outputs: List<Gpr>) → List<Gpr> {
 }
 
 // The region lowered with the heuristic's placement.
-fn lower_planned(region: Region, inputs, outputs: List<Gpr>) → Option<List<Instruction>> {
-    lower_region(region, inputs, outputs, plan(region, inputs, outputs))
+fn Region::lower_planned(self region: Region, inputs, outputs: List<Gpr>) → Option<List<Instruction>> {
+    region.lower(inputs, outputs, region.plan(inputs, outputs))
 }

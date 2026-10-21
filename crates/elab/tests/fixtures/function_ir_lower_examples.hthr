@@ -15,7 +15,7 @@ import option;
 // add64: x + y, as the per-function certificate path lowers it.
 fn add64_code() → List<Instruction> { [MovRR(Rax, Rdi), AddRR(Rax, Rsi)] }
 
-theorem add64_lowers(): lower_planned(add64_raw(), [Rdi, Rsi], [Rax]) = Some(add64_code()) {
+theorem add64_lowers(): add64_raw().lower_planned([Rdi, Rsi], [Rax]) = Some(add64_code()) {
     refl
 }
 
@@ -27,8 +27,8 @@ theorem add64_computes<M>(values: Valuation(), s: MachineState<M>,
     graph: RegionHolds(add64_raw(), values)):
     values(64, 2) = read_gpr(Rax, execute_block_normal(add64_code(), s).gprs)
 {
-    lower_region_correct<M>(add64_raw(), [Rdi, Rsi], [Rax],
-        plan(add64_raw(), [Rdi, Rsi], [Rax]), add64_code(), values, s,
+    add64_raw().lower_correct<M>([Rdi, Rsi], [Rax],
+        add64_raw().plan([Rdi, Rsi], [Rax]), add64_code(), values, s,
         add64_lowers(), ⟨left, ⟨right, trivial⟩⟩, graph).left
 }
 
@@ -38,7 +38,7 @@ fn sum4_code() → List<Instruction> {
 }
 
 theorem sum4_lowers():
-    lower_planned(sum4_left_first_raw(), [Rdi, Rsi, Rdx, Rcx], [Rax]) = Some(sum4_code())
+    sum4_left_first_raw().lower_planned([Rdi, Rsi, Rdx, Rcx], [Rax]) = Some(sum4_code())
 {
     refl
 }
@@ -49,8 +49,8 @@ theorem sum4_computes<M>(values: Valuation(), s: MachineState<M>,
     graph: RegionHolds(sum4_left_first_raw(), values)):
     values(64, 6) = read_gpr(Rax, execute_block_normal(sum4_code(), s).gprs)
 {
-    lower_region_correct<M>(sum4_left_first_raw(), [Rdi, Rsi, Rdx, Rcx], [Rax],
-        plan(sum4_left_first_raw(), [Rdi, Rsi, Rdx, Rcx], [Rax]), sum4_code(), values, s,
+    sum4_left_first_raw().lower_correct<M>([Rdi, Rsi, Rdx, Rcx], [Rax],
+        sum4_left_first_raw().plan([Rdi, Rsi, Rdx, Rcx], [Rax]), sum4_code(), values, s,
         sum4_lowers(), ⟨a, ⟨b, ⟨c, ⟨d, trivial⟩⟩⟩⟩, graph).left
 }
 
@@ -73,7 +73,7 @@ fn mix_code() → List<Instruction> {
      AddRR(Rcx, Rax), MovRR(Rax, Rdi), XorRR(Rax, Rcx)]
 }
 
-theorem mix_lowers(): lower_planned(mix_region(), [Rdi, Rsi], [Rax]) = Some(mix_code()) {
+theorem mix_lowers(): mix_region().lower_planned([Rdi, Rsi], [Rax]) = Some(mix_code()) {
     refl
 }
 
@@ -83,8 +83,8 @@ theorem mix_computes<M>(values: Valuation(), s: MachineState<M>,
     graph: RegionHolds(mix_region(), values)):
     values(64, 5) = read_gpr(Rax, execute_block_normal(mix_code(), s).gprs)
 {
-    lower_region_correct<M>(mix_region(), [Rdi, Rsi], [Rax],
-        plan(mix_region(), [Rdi, Rsi], [Rax]), mix_code(), values, s,
+    mix_region().lower_correct<M>([Rdi, Rsi], [Rax],
+        mix_region().plan([Rdi, Rsi], [Rax]), mix_code(), values, s,
         mix_lowers(), ⟨left, ⟨right, trivial⟩⟩, graph).left
 }
 
@@ -98,7 +98,7 @@ fn below_region() → Region {
 
 fn below_code() → List<Instruction> { [XorRR(Rax, Rax), CmpRR(Rdi, Rsi), SetBelow(Al)] }
 
-theorem below_lowers(): lower_planned(below_region(), [Rdi, Rsi], [Rax]) = Some(below_code()) {
+theorem below_lowers(): below_region().lower_planned([Rdi, Rsi], [Rax]) = Some(below_code()) {
     refl
 }
 
@@ -108,22 +108,22 @@ theorem below_computes<M>(values: Valuation(), s: MachineState<M>,
     graph: RegionHolds(below_region(), values)):
     values(1, 2).zero_extend(63) = read_gpr(Rax, execute_block_normal(below_code(), s).gprs)
 {
-    lower_region_correct<M>(below_region(), [Rdi, Rsi], [Rax],
-        plan(below_region(), [Rdi, Rsi], [Rax]), below_code(), values, s,
+    below_region().lower_correct<M>([Rdi, Rsi], [Rax],
+        below_region().plan([Rdi, Rsi], [Rax]), below_code(), values, s,
         below_lowers(), ⟨left, ⟨right, trivial⟩⟩, graph).left
 }
 
 // Negative controls. A placement that writes x's copy over y before the
 // ADD reads y is refused, not lowered wrong.
 theorem clobbering_placement_refused():
-    lower_region(add64_raw(), [Rdi, Rsi], [Rax], [Rsi]) = None
+    add64_raw().lower([Rdi, Rsi], [Rax], [Rsi]) = None
 {
     refl
 }
 
 // The comparison's XOR would clear an operand.
 theorem cleared_operand_refused():
-    lower_region(below_region(), [Rdi, Rsi], [Rax], [Rsi]) = None
+    below_region().lower([Rdi, Rsi], [Rax], [Rsi]) = None
 {
     refl
 }
@@ -136,7 +136,7 @@ fn shift_region() → Region {
         outputs := Ports([Port(id := 1, width := 64)]))
 }
 
-theorem shift_refused(): lower_planned(shift_region(), [Rdi], [Rax]) = None { refl }
+theorem shift_refused(): shift_region().lower_planned([Rdi], [Rax]) = None { refl }
 
 // Nor do other widths.
 fn narrow_region() → Region {
@@ -146,7 +146,7 @@ fn narrow_region() → Region {
         outputs := Ports([Port(id := 2, width := 32)]))
 }
 
-theorem narrow_refused(): lower_planned(narrow_region(), [Rdi, Rsi], [Rax]) = None { refl }
+theorem narrow_refused(): narrow_region().lower_planned([Rdi, Rsi], [Rax]) = None { refl }
 
 // The rest of mix's contract, from the frame lemmas: memory untouched, RIP
 // past the block, and the callee-saved registers kept.

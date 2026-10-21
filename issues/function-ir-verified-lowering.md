@@ -62,17 +62,17 @@ costs a refusal, never a wrong program.
    placement heuristic produces the placements.
 
    *Round 1 as built:* `lib/function_ir_lower.hthr`, theorem
-   `lower_region_correct` (with `execute_block_memory`,
+   `Region::lower_correct` (with `execute_block_memory`,
    `execute_block_rip` and `execute_block_kept` for the frame). The
    examples and refusal controls are
    `crates/elab/tests/fixtures/function_ir_lower_examples.hthr`, checked by
    `crates/elab/tests/function_ir_lower.rs`; each region's claim is the
-   theorem applied to a `refl` fact about `lower_planned`, and the code
+   theorem applied to a `refl` fact about `Region::lower_planned`, and the code
    matches what the Rust lowering emits for `add64`. Proof idiom: every
    function that branches on a computed value takes it as a parameter (a
    `Found`, an `Option<Lowered>`, a decision), so each proof matches on a
-   variable; the list and region proofs (`lower_nodes`, `move_outputs`,
-   `lower_region`), which cannot, match with an explicit `as` motive
+   variable; the list and region proofs (`lower_nodes`, `File::move_outputs`,
+   `Region::lower`), which cannot, match with an explicit `as` motive
    applied to the step's lemma.
    The theorem needs no `RegionValid`: validity only makes the valuation
    it quantifies over exist.
