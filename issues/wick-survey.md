@@ -1,11 +1,11 @@
 ---
 title: Survey Wick, the Lean ML formalization, for what Heather should take
-status: open
+status: closed
 labels: [research,design]
 area: machine-learning
 milestone: [ml-survey]
 created: 2026-10-20
-updated: 2026-10-20
+updated: 2026-10-21
 ---
 
 Owns the roadmap's `ml-survey` milestone (`docs/roadmap.md`). Wick is
@@ -21,10 +21,18 @@ touched for a while. Before anything is ported, survey it:
    data, numerics), each mapped to a roadmap milestone or a new issue.
 
 The output is a short doc under `docs/` and a list of follow-up issues in
-the `machine-learning` area. The Wick repository is not attached to this
-project yet; add it before starting.
+the `machine-learning` area.
 
 ## What it assumes from elsewhere
 
 - **[[floating-point-formalization]]** owns floats. Assumed here: only that
   ML accuracy claims will be stated over it.
+
+## Log
+
+- 2026-10-21: Surveyed at Wick `b1b88a2`: `docs/wick-survey.md`. Follow-ups:
+  [[ml-tensor-shapes]], [[ml-layers-reverse-mode]], [[ml-scalar-refinement]],
+  [[ml-gaussian-states]], [[ml-deterministic-descent]] (machine-learning);
+  [[finite-linear-algebra]], [[real-functions-and-derivatives]],
+  [[set-partition-combinatorics]], [[finite-probability]] (mathematics).
+  Proposed ML milestones are in the doc's §6, not yet in the roadmap.
