@@ -236,8 +236,7 @@ costs a refusal, never a wrong program.
      call depth, and a CALL does not keep SysV's 16-byte alignment. That
      only matters when calling foreign code.
    - Word arguments and results only, at most six arguments, and no
-     recursion or loops. Pure loops in the verified lowering are their own
-     issue.
+     recursion. Loops are [[function-ir-lowering-loops]].
    - The placement planner has no `Call` arm, and nothing plans a whole
      program, so the fixture's placements are written by hand.
    - elf64's process stack meets the `Stack` laws only once the process
