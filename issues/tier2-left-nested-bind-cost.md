@@ -1,6 +1,6 @@
 ---
 title: Left-nested binds over a tier-2 tree cost exponentially in their depth
-status: open
+status: closed
 labels: [metaprogramming,performance,tier2]
 area: tactics
 milestone: [tac-host-interface]
@@ -27,7 +27,7 @@ instead. It was the same before the continuation chain fix
 nor cures it. The right-nested shape (`step.bind(λ _ => loop(j))`) is linear
 and runs thousands of requests.
 
-## Likely mechanism, not yet confirmed
+## Likely mechanism (confirmed 2026-10-21, see the log)
 
 A tier-2 constructor with a function child stores the child twice:
 `⟨sup(ℓ; λy. fst(k y)), λy. snd(k y)⟩`
@@ -62,3 +62,29 @@ interaction tree should show it too (not measured).
 
 - [[tier2-fragment-extensions]] owns the tier-2 encoding.
 - [[host-elaboration-interface]] owns the host loop.
+
+## Log
+
+- 2026-10-21: Mechanism confirmed and fixed (docs/inductive-tier2-w-lowering.md
+  §14). Counters at master: `lspin(8/10/12)` spent 127k / 502k / 2.0M
+  evaluation steps, ×2 per level. Two duplications, both needed fixing:
+  the constructor wrote the child into the tree and the proof separately
+  (two closures), and a function child's halves `fst(k y)`/`snd(k y)` are two
+  applications. Fixed by binding the child once in `build_ctor_w`
+  (`(λc. ⟨sup(ℓ; …c…), …c…⟩) child`) and by `Eval::eval_projected`, which
+  memoizes a projected application of a bound variable to a bound variable by
+  the two closures (`shared_apps` counts the hits). Ablation: either alone
+  leaves the `2^d`. With both, a third cliff showed past a few dozen levels:
+  the host's one arena for the run evicted values from its bounded force cache
+  that later resumes reach through the tree, and recomputing them walked back
+  through the run's history (a 64× cache made it go away). The host now uses
+  `ValueArena::retaining`, which keeps every forced value; the run's work, and
+  so what it keeps, is bounded by the request budget. After: `lspin(12)` 9.7k
+  steps, `lspin(100)` 289k, `lspin(200)` 1.06M — quadratic, each request
+  walking the binds above it, as any left-nested free monad does. Seen at
+  `lspin(~400)`: the first request sits that many matches deep and the native
+  depth rail stops it, which is a different limit (not filed: no tactic nests
+  that deep yet). The interaction-tree `bind` had the same shape and is fixed
+  by the same change: `thread(lticks(24), 0)` checks by `refl`. Tests:
+  `left_nested_runs` (crates/elab/tests/tactic_host.rs) and
+  `left_nested_binds_thread` (crates/elab/tests/lib_std_itree_trace.rs).

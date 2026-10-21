@@ -222,6 +222,9 @@ type, rather than re-lowering the field, is tier 0's annotation discipline.
 `q_i`'s type is `El(canon(sup(ℓᵢ; f_i)))`, which reduces by `elim_W` β and the
 case on the injection to exactly the per-kind form of §5.
 
+As landed the child is bound once, `(λc. ⟨sup(ℓᵢ; f_i[c]), q_i[c]⟩) child`,
+so the tree and the proof read one closure of it (§14).
+
 ## 7. `match`
 
 Given `M` over `(Γ, z : ⟦D⟧)` at `lm` and a scrutinee `s`:
@@ -425,3 +428,48 @@ fell by an order of magnitude and more, with the query, miss and step counts
 falling in step; the shape is the per-copy cost of a predicate the terms now
 mention once per annotation instead of spelling.
 
+## 14. The child, evaluated once
+
+Added 2026-10-21 (`issues/tier2-left-nested-bind-cost.md`).
+
+**The defect.** §6 writes a child into both components: a plain child as
+`fst t` in the tree and `snd t` in the proof, a function child as
+`λy. fst(k y)` and `λy. snd(k y)`. Each is an evaluation of its own, because
+the evaluator memoizes a closure, not a term, and the two occurrences are
+two closures. So reading a constructor's tree and its proof evaluated the
+child twice. A `bind`'s `Ask`/`Vis` arm is such a constructor over
+`k' = λx. bind(k x, f)`, and `bind(k x, f)` reads both halves of `k x`, so
+each level of a left-nested `bind` doubled the work below it: a tactic
+`lspin(d)` (`lspin(j).bind(λ _ => tick())`) cost `2^d` in its depth, and an
+interaction tree built the same way did the same under `thread`.
+
+**The fix, in three parts, each of which the measurement needed.**
+
+1. *The constructor binds the child once* (`build_ctor_w`):
+   `(λ(c : C). ⟨sup(ℓᵢ; λy. fst(c…)), …snd(c…)…⟩) child`, with `C` the
+   child's type (`⟦D⟧`, or `Π(y : A_i[ā]). ⟦D⟧`). A plain child is then one
+   closure that both projections force; that alone is the whole fix for
+   `Tau`-like children.
+2. *The kernel shares `fst(k y)` with `snd(k y)`* (`Eval::eval_projected`):
+   a projection of an application whose head and argument are both bound
+   variables memoizes the application's value by the two closures they are
+   bound to (seen through closures that are only a variable: the match's
+   alias `k := λy. ⟨f' y, c y⟩` passes each half its own closure of `y`).
+   This is what a function child needs, since its halves apply `c` to an
+   answer only when asked. The table is the arena's, bounded like the force
+   cache; `shared_apps` counts its hits.
+3. *The tactic host's arena keeps what it forces* (`ValueArena::retaining`).
+   A run builds every resumed tree out of closures earlier resumes forced; with
+   the query-sized bound, once a run had forced more values than the cache
+   holds, the oldest were evicted and recomputed back through the run's
+   history, which brought the steep growth back at a few dozen levels.
+
+**Effect.** A left-nested run is quadratic in its depth instead of
+exponential: each request still walks the `d` binds above it, which is the
+cost of a left-nested free monad, not of the encoding. A right-nested run is
+unchanged in shape. The parts were checked by ablation: without the
+first, or without the second, the `2^d` remains; without the third it is
+gone at small depths and the growth turns steep again past a few dozen
+levels. The remaining wall is the native depth: a run
+whose first request sits under a few hundred left-nested binds fails before
+answering it.
