@@ -339,3 +339,33 @@ fn a_function_binder_shows_its_written_domain() {
     };
     assert!(shown.contains("k : Resp(c) -> Tree"), "{shown}");
 }
+
+// The leaf predicate is a generated definition, `D#canon`, registered at the
+// all-`Ty 0` profile (docs/inductive-tier2-w-lowering.md §13). Every test
+// above runs through the named spelling; an instance at another profile —
+// a tree of types — keeps the inline one, and must build, match, compute and
+// refuse exactly as the named one does, beside it in one module.
+#[test]
+fn both_spellings_of_the_leaf_predicate() {
+    const BX: &str = r#"
+inductive Bx<R> { Leaf(r: R), Node(k: Nat -> Bx<R>) }
+fn leftmost(t: Bx<Type>) -> Type { match t { Leaf(r) => r, Node(k) => leftmost(k(0)) } }
+fn depth(t: Bx<Type>) -> Nat { match t { Leaf(_) => 0, Node(k) => Succ(depth(k(0))) } }
+fn depthn(t: Bx<Nat>) -> Nat { match t { Leaf(_) => 0, Node(k) => Succ(depthn(k(0))) } }
+"#;
+    elab(&format!(
+        "{BX}
+         theorem lm(): leftmost(Node(λ n => Leaf(Nat))) = Nat {{ refl }}
+         theorem d_open(k: Nat -> Bx<Type>): depth(Node(k)) = Succ(depth(k(0))) {{ refl }}
+         theorem dn_open(k: Nat -> Bx<Nat>): depthn(Node(k)) = Succ(depthn(k(0))) {{ refl }}
+         theorem dn_leaf(r: Nat): depthn(Leaf(r)) = 0 {{ refl }}
+         theorem d_leaf(r: Type): depth(Leaf(r)) = 0 {{ refl }}"
+    ));
+    for bad in [
+        "theorem bad(): leftmost(Node(λ n => Leaf(Nat))) = (Nat -> Nat) { refl }",
+        "theorem bad(): depthn(Node(λ n => Leaf(n))) = 0 { refl }",
+    ] {
+        let msg = elab_err(&format!("{BX}{bad}"));
+        assert!(msg.contains("NotConvertible"), "{msg}");
+    }
+}

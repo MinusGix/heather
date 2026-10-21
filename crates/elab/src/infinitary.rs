@@ -21,9 +21,10 @@
 use std::sync::Arc as Rc;
 
 use heather_kernel::level::Level;
-use heather_kernel::term::{LocalCtx, LocalSubst, LocalVar, Term, Type};
+use heather_kernel::term::{GlobalBinding, LocalCtx, LocalSubst, LocalVar, Term, Type};
 use heather_syntax::{Arm, Expr, Span};
 
+use crate::gendefs::GenDef;
 use crate::inductive::{FieldKind, Inductive, Spine, decoded, inject, tag_type, tag_value};
 use crate::recursion::{FnChildIh, Guard, GuardKind};
 use crate::spelling::checked_app;
@@ -44,6 +45,19 @@ fn app_at(fun: Rc<Term>, arg: Rc<Term>) -> Rc<Term> {
 pub(crate) fn w_of(ty: &Type) -> Option<(Rc<Type>, Level)> {
     let p = WParts::read(ty, &LocalCtx::nil())?;
     Some((p.shape, p.ls))
+}
+
+/// Whether `t` is an application spine whose head is a global: the named
+/// leaf predicate, `app(D#canon^δ; ā, t)`. It always has at least the tree
+/// as an argument.
+fn canon_app(t: &Term) -> bool {
+    let mut cur = t;
+    let mut applied = false;
+    while let Some((fun, _)) = crate::spelling::app_of(cur) {
+        cur = fun;
+        applied = true;
+    }
+    applied && matches!(cur, Term::GlobalTm { .. })
 }
 
 /// What a constructor contributes to the positions and the leaf predicate:
@@ -82,8 +96,11 @@ impl WParts {
         let Type::W { shape_level, pos_level, shape, pos } = &*fst else {
             return None;
         };
+        // Inline, the predicate is an `elim_W`; named, an application of the
+        // declaration's `D#canon` (`Elaborator::w_canon_ref`). Neither is read
+        // further: the second component is reused exactly as it was found.
         match &**snd {
-            Type::El { tm, .. } if matches!(&**tm, Term::ElimW { .. }) => {}
+            Type::El { tm, .. } if matches!(&**tm, Term::ElimW { .. }) || canon_app(tm) => {}
             _ => return None,
         }
         Some(WParts {
@@ -348,6 +365,23 @@ impl Elaborator {
             // Not read until `canon` exists: nothing below asks for it.
             canon: Rc::new(Type::Nat),
         };
+        if crate::code::code_of(&p.w0()).is_none() {
+            return err(
+                format!(
+                    "a field type of `{}` has no code, which the leaf predicate of a type with a \
+                     recursive function field needs (docs/inductive-tier2-w-lowering.md §5)",
+                    ind.name
+                ),
+                span,
+            );
+        }
+        // Once the declaration has registered its leaf predicate, every
+        // instance at the registered profile names it instead of spelling it
+        // (`GenDef::WCanon`): inline it is nearly all of `⟦D⟧`.
+        if let Some(canon) = self.w_canon_ref(cx, ind, args, vargs, &lw) {
+            p.canon = Rc::new(canon);
+            return Ok((p.d_at(0), lw));
+        }
         let lf = p.lf();
         let ty_lw = Type::Ty(lw.clone());
         let succ_lw = Level::succ(lw.clone());
@@ -373,16 +407,6 @@ impl Elaborator {
                 cod: Rc::new(ty_lw.clone()),
             }),
         };
-        if crate::code::code_of(&p.w0()).is_none() {
-            return err(
-                format!(
-                    "a field type of `{}` has no code, which the leaf predicate of a type with a \
-                     recursive function field needs (docs/inductive-tier2-w-lowering.md §5)",
-                    ind.name
-                ),
-                span,
-            );
-        }
         // CANON over Γ₃ = (Γ, a : S, f, ih).
         let mut c3 = cx.clone();
         c3.push("#a".into(), shape.clone(), ls.clone());
@@ -480,6 +504,112 @@ impl Elaborator {
         };
         p.canon = Rc::new(canon);
         Ok((p.d_at(0), lw))
+    }
+
+    // -- the leaf predicate as a generated definition ------------------------
+
+    /// `D#canon := λ(A₁ : Ty 0)…(v_m : T_m). λ(t : W₀). canon t`, at
+    /// declaration time ([`GenDef::WCanon`]). The telescope is
+    /// [`GenDef::TyCodeFn`]'s, at the same all-`Ty 0` profile, and the body is
+    /// the inline predicate [`Self::lower_instance_w`] builds there — inline
+    /// because the key is not registered yet. Best-effort like every
+    /// generated definition: no registration leaves every instance inline.
+    pub(crate) fn register_w_canon(&mut self, ind: &Rc<Inductive>, span: Span) {
+        let key = GenDef::WCanon(ind.tag);
+        if self.types.gdefs().abs_for(&key).is_some() {
+            return;
+        }
+        let Some((cx, binders, targs, vargs)) = self.tycode_fn_telescope(ind, span) else {
+            return;
+        };
+        let Ok((d_ty, lw)) = self.lower_instance_w(&cx, ind, &targs, &vargs, span) else {
+            return;
+        };
+        let Some(p) = WParts::read(&d_ty, &cx.gamma) else {
+            return;
+        };
+        let Type::El { tm, .. } = &*p.canon else {
+            return;
+        };
+        let succ_lw = Level::succ(lw.clone());
+        let w0 = Rc::new(p.w0());
+        let mut body = Term::Lam {
+            dom_level: lw.clone(),
+            cod_level: succ_lw.clone(),
+            dom: Rc::clone(&w0),
+            body: Rc::clone(tm),
+        };
+        let mut ty = Type::Pi {
+            dom_level: lw.clone(),
+            cod_level: succ_lw.clone(),
+            dom: w0,
+            cod: Rc::new(Type::Ty(lw.clone())),
+        };
+        let mut ty_level = Level::max(lw, succ_lw).normalize().canonical();
+        // The telescope's domains in the emission spelling, as
+        // `register_ty_code_fn`'s: the statement and the λ read one list.
+        for (dom, dom_level) in self.emitted_tel(&binders).iter().rev() {
+            body = Term::Lam {
+                dom_level: dom_level.clone(),
+                cod_level: ty_level.clone(),
+                dom: Rc::new(dom.clone()),
+                body: Rc::new(body),
+            };
+            ty = Type::Pi {
+                dom_level: dom_level.clone(),
+                cod_level: ty_level.clone(),
+                dom: Rc::new(dom.clone()),
+                cod: Rc::new(ty),
+            };
+            ty_level = Level::max(dom_level.clone(), ty_level).normalize().canonical();
+        }
+        let _ = self.push_gen_def(key, &ind.name, ty, ty_level, body, span);
+    }
+
+    /// `El (app(D#canon^δ; ⌜A₁⌝, …, v̄, t))` over `(cx, t : W₀)` — the leaf
+    /// predicate of the instance `args`/`vargs` as a reference, when the
+    /// declaration registered one and the instance is at its profile: every
+    /// type argument at `Ty 0`, and the predicate's level the registered one.
+    /// `None` keeps the inline spelling.
+    fn w_canon_ref(
+        &self,
+        cx: &Cx,
+        ind: &Inductive,
+        args: &[(Type, Level)],
+        vargs: &[(Term, Type, Level)],
+        lw: &Level,
+    ) -> Option<Type> {
+        let key = GenDef::WCanon(ind.tag);
+        let abs = *self.types.gdefs().abs_for(&key)?;
+        if args.iter().any(|(_, l)| !l.equiv(&Level::Zero)) {
+            return None;
+        }
+        let GlobalBinding::Tm { ty, .. } = self.psi.bindings.get(abs as usize)? else {
+            return None;
+        };
+        let mut cod = &**ty;
+        for _ in 0..args.len() + vargs.len() + 1 {
+            let Type::Pi { cod: next, .. } = cod else {
+                return None;
+            };
+            cod = next;
+        }
+        match cod {
+            Type::Ty(l) if l.equiv(lw) => {}
+            _ => return None,
+        }
+        // One binder past `cx`: the tree's.
+        let mut tm = Rc::new(self.gen_ref_deeper(cx, key, 1)?);
+        for (a, _) in args {
+            tm = app_at(tm, Rc::new(crate::code::code_of(a)?.shift_local(1)));
+        }
+        for (v, _, _) in vargs {
+            tm = app_at(tm, Rc::new(v.shift_local(1)));
+        }
+        Some(Type::El {
+            level: lw.clone(),
+            tm: app_at(tm, var(0)),
+        })
     }
 
     /// Tier 0 §6.1's right-nested case tree over the shape, the motive
@@ -960,4 +1090,118 @@ impl Elaborator {
 
 fn sh_ty(t: &Rc<Type>, by: u32) -> Rc<Type> {
     Rc::new(t.shift_local(by))
+}
+
+#[cfg(test)]
+mod canon {
+    //! `D#canon`, the named leaf predicate ([`GenDef::WCanon`]). Emission is
+    //! checked by elaborating real source (`crates/elab/tests/inductive_tier2.rs`
+    //! runs every tier-2 acceptance test through it); what is checked here is
+    //! the boundary: which declarations register one, which instances name it,
+    //! and which keep the inline spelling.
+
+    use super::*;
+
+    const SPAN: Span = Span { start: 0, end: 0 };
+
+    const SRC: &str = "
+inductive Tree { Ret(n: Nat), Tau(t: Tree), Vis(c: Nat, k: Nat -> Tree), Cut }
+inductive ITree<R>(m: Nat) { IRet(r: R), IVis(c: Nat, k: Nat -> ITree<R>(m)) }
+inductive List1 { Nil1, Cons1(x: Nat, r: List1) }
+";
+
+    struct Env {
+        el: Elaborator,
+        cx: Cx,
+    }
+
+    fn env() -> Env {
+        let mut el = Elaborator::with_prelude().expect("prelude");
+        el.elab_source(SRC).expect("the declarations elaborate");
+        Env { el, cx: Cx::empty() }
+    }
+
+    impl Env {
+        fn ind(&self, name: &str) -> Rc<Inductive> {
+            Rc::clone(
+                self.el
+                    .types
+                    .inductive(&crate::names::qkey("main", name))
+                    .unwrap_or_else(|| panic!("`{name}` was declared")),
+            )
+        }
+
+        /// The leaf predicate of an instance, over `(cx, t)`.
+        fn canon(&self, name: &str, args: &[(Type, Level)], vargs: &[(Term, Type, Level)]) -> Type {
+            let (ty, _) = self
+                .el
+                .lower_instance(&self.cx, &self.ind(name), args, vargs, SPAN)
+                .expect("the instance lowers");
+            let p = WParts::read(&ty, &self.cx.gamma).expect("a tier-2 lowering");
+            (*p.canon).clone()
+        }
+    }
+
+    fn nat() -> (Type, Level) {
+        (Type::Nat, Level::Zero)
+    }
+
+    fn two() -> (Term, Type, Level) {
+        (Term::NatLit(2u64.into()), Type::Nat, Level::Zero)
+    }
+
+    #[test]
+    fn a_tier2_declaration_registers_its_leaf_predicate_and_tier1_does_not() {
+        let e = env();
+        for name in ["Tree", "ITree"] {
+            assert!(
+                e.el.gen_ref(&e.cx, GenDef::WCanon(e.ind(name).tag)).is_some(),
+                "`{name}` registers `{name}#canon`"
+            );
+        }
+        assert!(e.el.gen_ref(&e.cx, GenDef::WCanon(e.ind("List1").tag)).is_none());
+    }
+
+    /// The reference is `D#canon` itself — the Ψ index, not a shape — applied
+    /// to the instance's codes, its value arguments and the tree, in that
+    /// order.
+    #[test]
+    fn an_instance_names_its_own_declarations_predicate() {
+        let e = env();
+        let tree = e.ind("Tree");
+        let itree = e.ind("ITree");
+        for (ind, args, vargs, other) in [
+            (&tree, vec![], vec![], &itree),
+            (&itree, vec![nat()], vec![two()], &tree),
+        ] {
+            let canon = e.canon(&ind.name, &args, &vargs);
+            let Type::El { tm, .. } = &canon else {
+                panic!("the predicate is a decoded code")
+            };
+            let (head, spine) = crate::spelling::app_spine(tm);
+            assert!(e.el.is_gen_ref(head, GenDef::WCanon(ind.tag)), "`{}`'s own", ind.name);
+            assert!(!e.el.is_gen_ref(head, GenDef::WCanon(other.tag)), "not `{}`'s", other.name);
+            let mut want: Vec<Term> = args
+                .iter()
+                .map(|(a, _)| crate::code::code_of(a).unwrap().shift_local(1))
+                .collect();
+            want.extend(vargs.iter().map(|(v, _, _)| v.shift_local(1)));
+            want.push(Term::Var(LocalVar(0)));
+            let got: Vec<Term> = spine.iter().map(|a| (***a).clone()).collect();
+            assert_eq!(got, want);
+        }
+    }
+
+    /// The definition is registered at the all-`Ty 0` profile, so an instance
+    /// at a type argument of another level cannot be an application of it,
+    /// and keeps the predicate it always had.
+    #[test]
+    fn another_level_profile_keeps_the_inline_predicate() {
+        let e = env();
+        let ty0 = (Type::Ty(Level::Zero), Level::succ(Level::Zero));
+        let Type::El { tm, .. } = e.canon("ITree", &[ty0], &[two()]) else {
+            panic!("the predicate is a decoded code")
+        };
+        assert!(matches!(&*tm, Term::ElimW { .. }), "inline");
+    }
 }

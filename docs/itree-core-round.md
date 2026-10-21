@@ -116,7 +116,8 @@ suite's slowest target, inside its CPU rail but not by much. Naming the
 lowered type is the fix
 ([tier2-fragment-extensions](../issues/tier2-fragment-extensions.md),
 generated definitions), and it should come before round 2 adds more
-induction proofs.
+induction proofs. (Landed 2026-10-21 for the leaf predicate, which was nearly
+all of the spelling: `docs/inductive-tier2-w-lowering.md` §13.)
 
 ## Frictions met
 
