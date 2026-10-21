@@ -374,6 +374,56 @@ fn LinuxExits<M>(at: MachineState<M>, status: BitVec(64)) → Type {
     (read_gpr(Rax, at.gprs) = BitVec::ofNat(60)) ∧ (read_gpr(Rdi, at.gprs) = status)
 }
 
+// Where Linux may store into the process on answering `c` (a read's buffer
+// at RSI, a stat's), and what it stores there: the answer's bytes, or what a
+// failure left behind. Every other call leaves memory as it was.
+fn linux_buffer(c: LinuxCmd<Nat>, gprs: Gprs) → Option<BitVec(64)> {
+    match c {
+        ReadCmd(_, _) => Some(read_gpr(Rsi, gprs)),
+        WriteCmd(_, _) => None,
+        OpenCmd(_) => None,
+        CloseCmd(_) => None,
+        StatCmd(target) => Some(stat_buffer(target, gprs)),
+    }
+}
+fn linux_stored(c: LinuxCmd<Nat>) → c.Resp() → List<BitVec(8)> → List<BitVec(8)> {
+    match c as λ d => d.Resp() → List<BitVec(8)> → List<BitVec(8)> {
+        ReadCmd(_, _) => λ (r: ReadResult) junk => match r { ReadBytes(bytes) => bytes, ReadFailed(_) => junk },
+        WriteCmd(_, _) => λ _ _ => Nil,
+        OpenCmd(_) => λ _ _ => Nil,
+        CloseCmd(_) => λ _ _ => Nil,
+        StatCmd(_) => λ (r: StatResult) junk => match r { Stated(st) => st, StatFailed(_) => junk },
+    }
+}
+fn linux_left<M>(io: LinuxIo<M>, memory: M, c: LinuxCmd<Nat>, gprs: Gprs, a: c.Resp(), junk: List<BitVec(8)>) → M {
+    match linux_buffer(c, gprs) { None => memory, Some(buffer) => io.store(memory, buffer, linux_stored(c, a, junk)) }
+}
+
+// Every answer resumes past the SYSCALL, with that memory.
+theorem linux_answered_memory<M>(io: LinuxIo<M>, at: MachineState<M>, c: LinuxCmd<Nat>): (a: c.Resp()) →
+    (junk: List<BitVec(8)>) → (rcx, r11: BitVec(64)) →
+    linux_answered(io, at, c, a, junk, rcx, r11).memory = linux_left(io, at.memory, c, at.gprs, a, junk) {
+    match c as λ d => (a: d.Resp()) → (junk: List<BitVec(8)>) → (rcx, r11: BitVec(64)) →
+            linux_answered(io, at, d, a, junk, rcx, r11).memory = linux_left(io, at.memory, d, at.gprs, a, junk) {
+        ReadCmd(_, _) => λ (r: ReadResult) junk rcx r11 => match r { ReadBytes(_) => refl, ReadFailed(_) => refl },
+        WriteCmd(_, _) => λ (r: WriteResult) junk rcx r11 => match r { Wrote(_) => refl, WriteFailed(_) => refl },
+        OpenCmd(_) => λ _ junk rcx r11 => refl,
+        CloseCmd(_) => λ _ junk rcx r11 => refl,
+        StatCmd(_) => λ (r: StatResult) junk rcx r11 => match r { Stated(_) => refl, StatFailed(_) => refl },
+    }
+}
+theorem linux_answered_rip<M>(io: LinuxIo<M>, at: MachineState<M>, c: LinuxCmd<Nat>): (a: c.Resp()) →
+    (junk: List<BitVec(8)>) → (rcx, r11: BitVec(64)) → linux_answered(io, at, c, a, junk, rcx, r11).rip = next_rip(at.rip, 2) {
+    match c as λ d => (a: d.Resp()) → (junk: List<BitVec(8)>) → (rcx, r11: BitVec(64)) →
+            linux_answered(io, at, d, a, junk, rcx, r11).rip = next_rip(at.rip, 2) {
+        ReadCmd(_, _) => λ (r: ReadResult) junk rcx r11 => match r { ReadBytes(_) => refl, ReadFailed(_) => refl },
+        WriteCmd(_, _) => λ (r: WriteResult) junk rcx r11 => match r { Wrote(_) => refl, WriteFailed(_) => refl },
+        OpenCmd(_) => λ _ junk rcx r11 => refl,
+        CloseCmd(_) => λ _ junk rcx r11 => refl,
+        StatCmd(_) => λ (r: StatResult) junk rcx r11 => match r { Stated(_) => refl, StatFailed(_) => refl },
+    }
+}
+
 // Nothing left behind is always one choice.
 theorem linux_leaves_nil(c: LinuxCmd<Nat>): (a: c.Resp()) → LinuxLeaves(c, a, Nil) {
     match c as λ d => (a: d.Resp()) → LinuxLeaves(d, a, Nil) {

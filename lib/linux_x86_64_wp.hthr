@@ -1,0 +1,665 @@
+// One computed weakest precondition over label code
+// (docs/native-program-logic-design.md §6; issues/native-one-wp.md,
+// issues/native-loop-rule.md): what the compiler's per-construct lemmas are
+// proved with.
+//
+// `Wp(…, l, n, post)(t, v, state)` reads the `n` items ending at label `l`
+// off the program and states, in their order, what running them from
+// `state` comes to, against the tree `t` the code is to meet and what the
+// memory view knows (`v`). A block's, load's and store's state is the item's
+// own result over the one before it; a JCC is two obligations, one per value
+// of its condition; a taken JCC or a JMP ends the run at its target, and the
+// last item's end is a leaf too, where `post` is asked of the state, bound
+// (`wp_leaf`). A SYSCALL reads the tree's next move: its exit, or its call,
+// asked of the registers, with every answer Linux may give continuing from
+// the tree's continuation at it; there the run has `passed` a syscall, and
+// every leaf after it is told so. A `Proved` item asks its contract's
+// precondition and binds the state after it, its postcondition holding. An
+// item the logic cannot run (bytes, a piece, a hole) leaves `False`.
+//
+// Memory is seen through a view (`View`): what a load reads, where a store
+// may go and what the view knows after it, and what a call asks of memory
+// are the view's arms, each stated over `v` and not over a memory; the view
+// proves them sound once (`ViewSound`). `io_page_view` and `io_frame_view`
+// (linux_x86_64_views) are the two the process stack used.
+//
+// `wp_runs` proves it once, per trace: from `Wp(post)` and a valid trace of
+// the tree, the machine runs as the trace, given that every leaf does from
+// where it ends, along a trace of its own tree that is the starting one when
+// no syscall was passed and shorter when one was. `wp_sound` is its `Sim`
+// form, and `loop_at` is the loop rule built on it: a loop's body either
+// comes back to its head with an invariant, having passed a syscall or with
+// a smaller variant, or leaves meeting the rest of the tree.
+//
+// What the type computes is the items' structure only, as `Straight`'s did
+// (docs/native-straight-runs-design.md): values, places and answers are
+// named by the caller; a jump's target is the label's offset, which
+// `wp_reach`, checked by evaluation, says it lands on.
+import linux_calls;
+import linux_trees;
+import linux_x86_64_io;
+import linux_x86_64_sim;
+import itree;
+import itree_trace;
+import x86_64;
+import x86_64_block;
+import x86_64_fetch;
+import x86_64_fetched_code;
+import x86_64_data_read;
+import x86_64_store;
+import x86_64_layout;
+import x86_64_asm;
+import x86_64_asm_runs;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+import omega;
+
+// ---------------------------------------------------------------------------
+// Views
+
+// What a proof knows of memory (`V`), and what it reads off that: the word
+// and the byte at an address, where bytes may be stored and what is known
+// after, and what a call asks of memory. Each arm hands what it names to
+// `then`, so the caller names a value or a place and the computed type
+// carries on from it.
+record View<M, V> {
+    Holds: V → M → Type,
+    Word: V → BitVec(64) → (BitVec(64) → Type) → Type,
+    Byte: V → BitVec(64) → (BitVec(8) → Type) → Type,
+    Stores: V → BitVec(64) → List<BitVec(8)> → (V → Type) → Type,
+    Asks: V → MachineState<M> → LinuxCmd<Nat> → Type,
+}
+
+// The arms are sound for Linux's memory: in a memory the view holds of, a
+// word is there to load, below the canonical boundary; a byte too; a store
+// is writable and the view holds of the memory after; and a call's request
+// is Linux's.
+record ViewSound<M, V>(io: LinuxIo<M>, view: View<M, V>) {
+    word: (v: V) → (m: M) → (a: BitVec(64)) → (then: BitVec(64) → Type) → view.Holds(v, m) → view.Word(v, a, then) →
+        Exists<BitVec(64)>(λ w => WordAt(io.data, m, a, w) ∧ then(w)),
+    byte: (v: V) → (m: M) → (a: BitVec(64)) → (then: BitVec(8) → Type) → view.Holds(v, m) → view.Byte(v, a, then) →
+        Exists<BitVec(8)>(λ b => (io.data.read(m, a) = Some(b)) ∧ ((a.toNat() < Nat::pow(2, 47)) ∧ then(b))),
+    stores: (v: V) → (m: M) → (a: BitVec(64)) → (bytes: List<BitVec(8)>) → (then: V → Type) → view.Holds(v, m) →
+        view.Stores(v, a, bytes, then) → io.writable(m, a, bytes.len()) ∧ Exists<V>(λ w => view.Holds(w, io.store(m, a, bytes)) ∧ then(w)),
+    asks: (v: V) → (state: MachineState<M>) → (c: LinuxCmd<Nat>) → view.Holds(v, state.memory) → view.Asks(v, state, c) →
+        LinuxRequests(io, state, c),
+}
+
+// ---------------------------------------------------------------------------
+// Contracts
+
+// What code needs of the registers it starts with, and what it leaves them
+// as, related to the start. Flags are not kept.
+record Contract { pre: Gprs → Type, post: Gprs → Gprs → Type }
+
+// Bytes meet a contract wherever they are placed: from any state with them
+// resident at RIP and the precondition holding, a fetched run reaches their
+// end, memory untouched, the postcondition holding. A pure region's verified
+// lowering is one (issues/function-ir-verified-lowering.md).
+fn Contract::Runs<M>(self k: Contract, fetch: FetchAccess<M>, data: ByteReadAccess<M>, bytes: List<BitVec(8)>) → Type {
+    (s: MachineState<M>) → CodeResident(fetch, s.memory, bytes, s.rip) → k.pre(s.gprs) →
+        Exists<MachineState<M>>(λ e => FetchedSteps(fetch, data, s, e) ∧
+            ((e.rip = next_rip(s.rip, bytes.len())) ∧ ((e.memory = s.memory) ∧ k.post(s.gprs, e.gprs))))
+}
+
+// Every `Proved` item of the `n` ending at `l` meets its contract.
+fn wp_item_honest<M>(io: LinuxIo<M>, contracts: Nat → Contract, item: Asm) → Type {
+    match item { Proved(index, bytes, _, _) => contracts(index).Runs(io.fetch, io.data, bytes), _ => True }
+}
+fn wp_honest_from<M>(io: LinuxIo<M>, contracts: Nat → Contract, n: Nat) → Prog → Type {
+    match n {
+        Zero => λ l => True,
+        Succ(m) => λ l => match l {
+            Start => True,
+            At(before, _, item) => wp_item_honest(io, contracts, item) ∧ wp_honest_from(io, contracts, m, before),
+        },
+    }
+}
+fn WpHonest<M>(io: LinuxIo<M>, contracts: Nat → Contract, l: Prog, n: Nat) → Type { wp_honest_from(io, contracts, n, l) }
+
+// ---------------------------------------------------------------------------
+// Jumps land on their labels, ahead or behind
+
+fn wp_reaches(labels: Nat → Nat, here: Nat, item: Asm) → Bool {
+    match item {
+        Jcc(cc, target) => asm_item_lands(labels, here, 6, Jcc(cc, target), labels(target)) ||
+            asm_item_lands_back(labels, here, 6, Jcc(cc, target), labels(target)),
+        Jmp(target) => asm_item_lands(labels, here, 5, Jmp(target), labels(target)) ||
+            asm_item_lands_back(labels, here, 5, Jmp(target), labels(target)),
+        _ => True,
+    }
+}
+fn wp_reach_from(labels: Nat → Nat, n: Nat) → Prog → Bool {
+    match n {
+        Zero => λ l => True,
+        Succ(m) => λ l => match l { Start => True, At(before, _, item) => wp_reaches(labels, prog_len(before), item) && wp_reach_from(labels, m, before) },
+    }
+}
+fn wp_reach(labels: Nat → Nat, l: Prog, n: Nat) → Bool { wp_reach_from(labels, n, l) }
+
+theorem wp_lands(origin: BitVec(64), labels: Nat → Nat, here, size: Nat, item: Asm, to: Nat,
+    reaches: (asm_item_lands(labels, here, size, item, to) || asm_item_lands_back(labels, here, size, item, to)).IsTrue()):
+    near_branch_target(next_rip(origin, here), size, asm_jump_of(labels, here, item)) = next_rip(origin, to) {
+    (match asm_item_lands(labels, here, size, item, to) as λ b => asm_item_lands(labels, here, size, item, to) = b →
+            (b || asm_item_lands_back(labels, here, size, item, to)).IsTrue() →
+            near_branch_target(next_rip(origin, here), size, asm_jump_of(labels, here, item)) = next_rip(origin, to) {
+        True => λ ahead _ => jumps_forward(origin, here, size, asm_jump_of(labels, here, item), to,
+            asm_lands_forward(here, size, asm_jump_of(labels, here, item), to, ahead)),
+        False => λ _ behind => jumps_back(origin, here, size, asm_jump_of(labels, here, item), to,
+            asm_lands_back(here, size, asm_jump_of(labels, here, item), to, eq_true_of_is_true(asm_item_lands_back(labels, here, size, item, to), behind))),
+    })(refl, reaches)
+}
+
+// ---------------------------------------------------------------------------
+// The computation
+
+// A leaf: where the run ends at offset `to`, `post` of the state there, the
+// state bound (`after`) and `same` saying which it is.
+fn wp_leaf<M, V>(origin: BitVec(64), to: Nat, post: Bool → ITree<BitVec(64)>(Events::linux()) → V → MachineState<M> → Type)
+    → Bool → ITree<BitVec(64)>(Events::linux()) → V → MachineState<M> → Type {
+    λ passed t v state => (after: MachineState<M>) → after.rip = next_rip(origin, to) → after = state → post(passed, t, v, after)
+}
+
+// After Linux answers, what the view knows: the bytes it stored, where it
+// stored any.
+fn wp_left<M, V>(view: View<M, V>, v: V, c: LinuxCmd<Nat>, gprs: Gprs, a: c.Resp(), junk: List<BitVec(8)>, then: V → Type) → Type {
+    match linux_buffer(c, gprs) { None => then(v), Some(buffer) => view.Stores(v, buffer, linux_stored(c, a, junk), then) }
+}
+
+// A SYSCALL, by the tree's next move: the exit; or the call, asked of the
+// registers and the view, and every answer, whatever Linux leaves, going on
+// from the continuation at it, a syscall passed; or nothing, at a cut.
+fn wp_next<M, V>(io: LinuxIo<M>, view: View<M, V>, n: Next<BitVec(64)>(Events::linux()),
+    then: Bool → ITree<BitVec(64)>(Events::linux()) → V → MachineState<M> → Type) → V → MachineState<M> → Type {
+    match n {
+        Exits(status) => λ v state => LinuxExits(state, status),
+        Calls(c, k) => λ v state => view.Asks(v, state, c) ∧
+            ((a: c.Resp()) → c.Answers(a) → (junk: List<BitVec(8)>) → LinuxLeaves(c, a, junk) → (rcx, r11: BitVec(64)) →
+                wp_left(view, v, c, state.gprs, a, junk, λ w => then(True, k(a), w, linux_answered(io, state, c, a, junk, rcx, r11)))),
+        Stops => λ v state => True,
+    }
+}
+
+// The item at `here`, then what follows it (`then`).
+fn wp_item<M, V>(io: LinuxIo<M>, view: View<M, V>, origin: BitVec(64), labels: Nat → Nat, contracts: Nat → Contract,
+    post: Bool → ITree<BitVec(64)>(Events::linux()) → V → MachineState<M> → Type, here: Nat, item: Asm,
+    then: Bool → ITree<BitVec(64)>(Events::linux()) → V → MachineState<M> → Type)
+    → Bool → ITree<BitVec(64)>(Events::linux()) → V → MachineState<M> → Type {
+    match item {
+        Block(instructions) => λ passed t v state => then(passed, t, v, execute_block_normal(instructions, state)),
+        Load(load) => λ passed t v state =>
+            view.Word(v, read_gpr(load.base, state.gprs), λ word => then(passed, t, v, word_load_after(load, word, state))),
+        LoadByte(load) => λ passed t v state =>
+            view.Byte(v, read_gpr(load.base, state.gprs), λ byte => then(passed, t, v, byte_load_after(load, byte, state))),
+        Store(store) => λ passed t v state => match store_base_plain(store.base) {
+            True => view.Stores(v, read_gpr(store.base, state.gprs), word_bytes(read_gpr(store.source, state.gprs)),
+                λ w => then(passed, t, w, word_store_after(linux_writes(io), store, state))),
+            False => False,
+        },
+        StoreByte(store) => λ passed t v state => match store_base_plain(store.base) {
+            True => view.Stores(v, read_gpr(store.base, state.gprs), [imm_byte0(read_gpr(store.source, state.gprs))],
+                λ w => then(passed, t, w, byte_store_after(linux_writes(io), store, state))),
+            False => False,
+        },
+        Jcc(cc, target) => λ passed t v state =>
+            ((condition_holds(cc, state.flags) = True) →
+                wp_leaf(origin, labels(target), post, passed, t, v, execute_near_control(JumpIfNear(cc, near_rel(here + 6, labels(target))), state))) ∧
+            ((condition_holds(cc, state.flags) = False) →
+                then(passed, t, v, execute_near_control(JumpIfNear(cc, near_rel(here + 6, labels(target))), state))),
+        Jmp(target) => λ passed t v state =>
+            wp_leaf(origin, labels(target), post, passed, t, v, execute_near_control(JumpNear(near_rel(here + 5, labels(target))), state)),
+        Syscall => λ passed t v state => wp_next(io, view, ITree::next(Events::linux(), t), then, v, state),
+        Proved(index, _, _, _) => λ passed t v state => contracts(index).pre(state.gprs) ∧
+            ((after: MachineState<M>) → contracts(index).post(state.gprs, after.gprs) → then(passed, t, v, after)),
+        _ => λ _ _ _ _ => False,
+    }
+}
+
+// The `n` items ending at label `l`, then `then`.
+fn wp_run<M, V>(io: LinuxIo<M>, view: View<M, V>, origin: BitVec(64), labels: Nat → Nat, contracts: Nat → Contract,
+    post: Bool → ITree<BitVec(64)>(Events::linux()) → V → MachineState<M> → Type, l: Prog, n: Nat,
+    then: Bool → ITree<BitVec(64)>(Events::linux()) → V → MachineState<M> → Type)
+    → Bool → ITree<BitVec(64)>(Events::linux()) → V → MachineState<M> → Type {
+    match n {
+        Zero => then,
+        Succ(m) => match l {
+            Start => then,
+            At(before, _, item) => wp_run(io, view, origin, labels, contracts, post, before, m,
+                wp_item(io, view, origin, labels, contracts, post, prog_len(before), item, then)),
+        },
+    }
+}
+
+// What running the `n` items ending at `l` needs, from their start
+// (`prog_len(asm_back(l, n))`), no syscall passed yet.
+fn Wp<M, V>(io: LinuxIo<M>, view: View<M, V>, origin: BitVec(64), labels: Nat → Nat, contracts: Nat → Contract, l: Prog, n: Nat,
+    post: Bool → ITree<BitVec(64)>(Events::linux()) → V → MachineState<M> → Type)
+    → ITree<BitVec(64)>(Events::linux()) → V → MachineState<M> → Type {
+    λ t v state => wp_run(io, view, origin, labels, contracts, post, l, n, wp_leaf(origin, prog_len(l), post), False, t, v, state)
+}
+
+// ---------------------------------------------------------------------------
+// The proof, per trace
+
+// The trace a leaf goes on with, against the one the run started with: the
+// same when no syscall was passed, shorter when one was.
+fn wp_shorter(passed: Bool, cur, tr: Trace<BitVec(64)>(Events::linux())) → Type {
+    match passed { False => cur = tr, True => Trace::len(Events::linux(), cur) < Trace::len(Events::linux(), tr) }
+}
+
+theorem wp_succ_lt(a, b: Nat, less: Succ(a) < b): a < b { omega }
+
+theorem wp_shorter_answered(passed: Bool, c: LinuxCmd<Nat>, a: c.Resp(), rest, tr: Trace<BitVec(64)>(Events::linux()),
+    short: wp_shorter(passed, TAns(c, a, rest), tr)): wp_shorter(True, rest, tr) {
+    (match passed as λ p => wp_shorter(p, TAns(c, a, rest), tr) → wp_shorter(True, rest, tr) {
+        False => λ same => j(same, λ y _ => Trace::len(Events::linux(), rest) < Trace::len(Events::linux(), y), Trace::len(Events::linux(), rest).lt_succ_self()),
+        True => λ less => wp_succ_lt(Trace::len(Events::linux(), rest), Trace::len(Events::linux(), tr), less),
+    })(short)
+}
+
+// What the leaves must give: from where each ends, its post holding and the
+// view holding of memory, the machine runs as any valid trace of the leaf's
+// tree that is the run's own, or shorter past a syscall.
+fn WpLeaves<M, V>(io: LinuxIo<M>, view: View<M, V>, post: Bool → ITree<BitVec(64)>(Events::linux()) → V → MachineState<M> → Type, tr: Trace<BitVec(64)>(Events::linux())) → Type {
+    (passed: Bool) → (t: ITree<BitVec(64)>(Events::linux())) → (v: V) → (state: MachineState<M>) → (cur: Trace<BitVec(64)>(Events::linux())) → post(passed, t, v, state) →
+        view.Holds(v, state.memory) → IsTrace(Events::linux(), t, cur) → Trace::LinuxValid(cur) → wp_shorter(passed, cur, tr) →
+        RunsAs(io, cur, state)
+}
+
+// A continuation goes from offset `at`: from a state there that meets it,
+// the machine runs as the trace.
+fn WpGoes<M, V>(io: LinuxIo<M>, view: View<M, V>, origin: BitVec(64), tr: Trace<BitVec(64)>(Events::linux()), at: Nat, then: Bool → ITree<BitVec(64)>(Events::linux()) → V → MachineState<M> → Type) → Type {
+    (passed: Bool) → (t: ITree<BitVec(64)>(Events::linux())) → (v: V) → (state: MachineState<M>) → (cur: Trace<BitVec(64)>(Events::linux())) → state.rip = next_rip(origin, at) →
+        view.Holds(v, state.memory) → IsTrace(Events::linux(), t, cur) → Trace::LinuxValid(cur) → wp_shorter(passed, cur, tr) →
+        then(passed, t, v, state) → RunsAs(io, cur, state)
+}
+
+theorem wp_leaf_goes<M, V>(io: LinuxIo<M>, view: View<M, V>, origin: BitVec(64), post: Bool → ITree<BitVec(64)>(Events::linux()) → V → MachineState<M> → Type, tr: Trace<BitVec(64)>(Events::linux()),
+    leaves: WpLeaves(io, view, post, tr), to: Nat): WpGoes(io, view, origin, tr, to, wp_leaf(origin, to, post)) {
+    λ passed t v state cur rip holds trace_of valid short leaf => leaves(passed, t, v, state, cur, leaf(state, rip, refl), holds, trace_of, valid, short)
+}
+
+// Steps first, then a continuation that goes from where they end.
+theorem wp_after<M, V>(io: LinuxIo<M>, view: View<M, V>, origin: BitVec(64), tr: Trace<BitVec(64)>(Events::linux()), at: Nat, then: Bool → ITree<BitVec(64)>(Events::linux()) → V → MachineState<M> → Type,
+    goes: WpGoes(io, view, origin, tr, at, then), passed: Bool, t: ITree<BitVec(64)>(Events::linux()), v: V, state, after: MachineState<M>, cur: Trace<BitVec(64)>(Events::linux()),
+    steps: LinuxSteps(io, state, after), rip: after.rip = next_rip(origin, at), holds: view.Holds(v, after.memory),
+    trace_of: IsTrace(Events::linux(), t, cur), valid: Trace::LinuxValid(cur), short: wp_shorter(passed, cur, tr), held: then(passed, t, v, after)):
+    RunsAs(io, cur, state) {
+    runs_as_back(io, cur, state, after, steps, goes(passed, t, v, after, cur, rip, holds, trace_of, valid, short, held))
+}
+
+theorem wp_left_sound<M, V>(io: LinuxIo<M>, view: View<M, V>, sound: ViewSound<M, V>(io, view), v: V, m: M, c: LinuxCmd<Nat>,
+    gprs: Gprs, a: c.Resp(), junk: List<BitVec(8)>, then: V → Type, holds: view.Holds(v, m),
+    left: wp_left(view, v, c, gprs, a, junk, then)): Exists<V>(λ w => view.Holds(w, linux_left(io, m, c, gprs, a, junk)) ∧ then(w)) {
+    (match linux_buffer(c, gprs) as λ b => (match b { None => then(v), Some(buffer) => view.Stores(v, buffer, linux_stored(c, a, junk), then) }) →
+            Exists<V>(λ w => view.Holds(w, match b { None => m, Some(buffer) => io.store(m, buffer, linux_stored(c, a, junk)) }) ∧ then(w)) {
+        None => λ held => Exists(v, ⟨holds, held⟩),
+        Some(buffer) => λ held => sound.stores(v, m, buffer, linux_stored(c, a, junk), then, holds, held).right,
+    })(left)
+}
+
+// A SYSCALL at offset `here`, by the tree's next move.
+theorem wp_next_runs<M, V>(io: LinuxIo<M>, view: View<M, V>, sound: ViewSound<M, V>(io, view), origin: BitVec(64), tr: Trace<BitVec(64)>(Events::linux()),
+    here: Nat, then: Bool → ITree<BitVec(64)>(Events::linux()) → V → MachineState<M> → Type, goes: WpGoes(io, view, origin, tr, here + 2, then), n: Next<BitVec(64)>(Events::linux())):
+    (v: V) → (state: MachineState<M>) → (cur: Trace<BitVec(64)>(Events::linux())) → state.rip = next_rip(origin, here) → view.Holds(v, state.memory) →
+    LinuxSyscallAt(io, state) → (passed: Bool) → wp_shorter(passed, cur, tr) → NextTrace(Events::linux(), n, cur) → Trace::LinuxValid(cur) →
+    wp_next(io, view, n, then, v, state) → RunsAs(io, cur, state) {
+    match n {
+        Exits(status) => λ v state cur rip holds syscall passed short (w: RetTrace<BitVec(64)>(Events::linux(), status, cur)) valid exits => {
+            let none: LinuxSteps(io, state, state) = Exists(Zero, refl);
+            match w {
+                Stopped(e) => j(sym(e), λ y _ => RunsAs(io, y, state), trivial),
+                Returned(e) => j(sym(e), λ y _ => RunsAs(io, y, state), Exists(state, ⟨none, ⟨syscall, exits⟩⟩)),
+            }
+        },
+        Calls(c, k) => λ v state cur rip holds syscall passed short
+                (w: VisTrace<BitVec(64)>(Events::linux(), c, cur, λ a rest => IsTrace(Events::linux(), k(a), rest))) valid held => {
+            let none: LinuxSteps(io, state, state) = Exists(Zero, refl);
+            let requests: LinuxRequests(io, state, c) = sound.asks(v, state, c, holds, held.left);
+            match w {
+                Prefix(e) => j(sym(e), λ y _ => RunsAs(io, y, state), trivial),
+                Pending(e) => j(sym(e), λ y _ => RunsAs(io, y, state), Exists(state, ⟨none, ⟨syscall, requests⟩⟩)),
+                Answered(a, rest, e, sub) => {
+                    let moved: Trace::LinuxValid<BitVec(64)>(TAns(c, a, rest)) = j(e, λ y _ => Trace::LinuxValid(y), valid);
+                    let shorter = wp_shorter_answered(passed, c, a, rest, tr, j(e, λ y _ => wp_shorter(passed, y, tr), short));
+                    j(sym(e), λ y _ => RunsAs(io, y, state), Exists(state, ⟨none, ⟨syscall, ⟨requests, ⟨moved.left,
+                        λ junk leaves rcx r11 => {
+                            let answered = linux_answered(io, state, c, a, junk, rcx, r11);
+                            let left = wp_left_sound(io, view, sound, v, state.memory, c, state.gprs, a, junk,
+                                λ w2 => then(True, k(a), w2, answered), holds, held.right(a, moved.left, junk, leaves, rcx, r11));
+                            goes(True, k(a), left.witness, answered, rest,
+                                trans(linux_answered_rip(io, state, c, a, junk, rcx, r11), rip_advance(origin, state.rip, here, 2, rip)),
+                                j(sym(linux_answered_memory(io, state, c, a, junk, rcx, r11)), λ m _ => view.Holds(left.witness, m), left.proof.left),
+                                sub, moved.right, shorter, left.proof.right)
+                        }⟩⟩⟩⟩))
+                },
+            }
+        },
+        Stops => λ v state cur rip holds syscall passed short (w: CutTrace<BitVec(64)>(Events::linux(), cur)) valid _ =>
+            j(sym(CutTrace::ended(Events::linux(), cur, w)), λ y _ => RunsAs(io, y, state), trivial),
+    }
+}
+
+// One item, resident at `here` in every memory the view holds of, then what
+// follows.
+theorem wp_item_goes<M, V>(io: LinuxIo<M>, view: View<M, V>, sound: ViewSound<M, V>(io, view), origin: BitVec(64),
+    fills: Nat → List<BitVec(8)>, labels: Nat → Nat, contracts: Nat → Contract, post: Bool → ITree<BitVec(64)>(Events::linux()) → V → MachineState<M> → Type, tr: Trace<BitVec(64)>(Events::linux()),
+    leaves: WpLeaves(io, view, post, tr), here: Nat, item: Asm, then: Bool → ITree<BitVec(64)>(Events::linux()) → V → MachineState<M> → Type):
+    ((v: V) → (m: M) → view.Holds(v, m) → CodeResident(io.fetch, m, asm_bytes(fills, labels, here, item), next_rip(origin, here))) →
+    wp_reaches(labels, here, item).IsTrue() → wp_item_honest(io, contracts, item) →
+    WpGoes(io, view, origin, tr, here + asm_len(item), then) →
+    WpGoes(io, view, origin, tr, here, wp_item(io, view, origin, labels, contracts, post, here, item, then)) {
+    match item as λ it => ((v: V) → (m: M) → view.Holds(v, m) → CodeResident(io.fetch, m, asm_bytes(fills, labels, here, it), next_rip(origin, here))) →
+            wp_reaches(labels, here, it).IsTrue() → wp_item_honest(io, contracts, it) →
+            WpGoes(io, view, origin, tr, here + asm_len(it), then) →
+            WpGoes(io, view, origin, tr, here, wp_item(io, view, origin, labels, contracts, post, here, it, then)) {
+        Block(instructions) => λ code reach honest goes passed t v state cur rip holds trace_of valid short held => {
+            let resident = j(sym(rip), λ a _ => CodeResident(io.fetch, state.memory, canonical_block_bytes(instructions), a), code(v, state.memory, holds));
+            let ran = block_steps(io.fetch, io.data, instructions, state, resident);
+            let after = execute_block_normal(instructions, state);
+            wp_after(io, view, origin, tr, here + block_length(instructions), then, goes, passed, t, v, state, after, cur,
+                linux_steps_of_fetched(io, state, after, ran.left),
+                trans(ran.right.left, rip_advance(origin, state.rip, here, block_length(instructions), rip)),
+                j(sym(ran.right.right), λ m _ => view.Holds(v, m), holds), trace_of, valid, short, held)
+        },
+        Code(_) => λ code reach honest goes passed t v state cur rip holds trace_of valid short never => false_elim(never),
+        Load(load) => λ code reach honest goes passed t v state cur rip holds trace_of valid short held => {
+            let got = sound.word(v, state.memory, read_gpr(load.base, state.gprs),
+                λ word => then(passed, t, v, word_load_after(load, word, state)), holds, held);
+            let after = word_load_after(load, got.witness, state);
+            let resident = j(sym(rip), λ a _ => CodeResident(io.fetch, state.memory, word_load_bytes(load), a), code(v, state.memory, holds));
+            let step: FetchedStep(io.fetch, io.data, state, after) = Exists(EmitWordLoad(load),
+                ⟨FetchedFrom(resident_readable(io.fetch, state.memory, word_load_bytes(load), state.rip, resident)),
+                 Exists(got.witness, WordLoadStep(canonical := got.proof.left.left, present := got.proof.left.right, execution := refl))⟩);
+            wp_after(io, view, origin, tr, here + word_load_bytes(load).len(), then, goes, passed, t, v, state, after, cur,
+                linux_steps_of_fetched(io, state, after, fetched_steps_one(io.fetch, io.data, state, after, step)),
+                rip_advance(origin, state.rip, here, word_load_bytes(load).len(), rip), holds, trace_of, valid, short, got.proof.right)
+        },
+        Store(store) => λ code reach honest goes passed t v state cur rip holds trace_of valid short =>
+            (match store_base_plain(store.base) as λ b => store_base_plain(store.base) = b →
+                (match b as λ _ => Type {
+                    True => view.Stores(v, read_gpr(store.base, state.gprs), word_bytes(read_gpr(store.source, state.gprs)),
+                        λ w => then(passed, t, w, word_store_after(linux_writes(io), store, state))),
+                    False => False,
+                }) → RunsAs(io, cur, state) {
+                True => λ plain held => {
+                    let after = word_store_after(linux_writes(io), store, state);
+                    let stored = sound.stores(v, state.memory, read_gpr(store.base, state.gprs), word_bytes(read_gpr(store.source, state.gprs)),
+                        λ w => then(passed, t, w, after), holds, held);
+                    let resident = j(sym(rip), λ a _ => CodeResident(io.fetch, state.memory, word_store_bytes(store), a), code(v, state.memory, holds));
+                    let steps = linux_steps_store(io, state, after, store_step(io.fetch, linux_writes(io), store, state, plain,
+                        FetchedFrom(resident_readable(io.fetch, state.memory, word_store_bytes(store), state.rip, resident)), stored.left));
+                    wp_after(io, view, origin, tr, here + 3, then, goes, passed, t, stored.right.witness, state, after, cur, steps,
+                        rip_advance(origin, state.rip, here, 3, rip), stored.right.proof.left, trace_of, valid, short, stored.right.proof.right)
+                },
+                False => λ _ never => false_elim(never),
+            })(refl),
+        LoadByte(load) => λ code reach honest goes passed t v state cur rip holds trace_of valid short held => {
+            let got = sound.byte(v, state.memory, read_gpr(load.base, state.gprs),
+                λ byte => then(passed, t, v, byte_load_after(load, byte, state)), holds, held);
+            let after = byte_load_after(load, got.witness, state);
+            let resident = j(sym(rip), λ a _ => CodeResident(io.fetch, state.memory, byte_load_bytes(load), a), code(v, state.memory, holds));
+            let step: FetchedStep(io.fetch, io.data, state, after) = Exists(EmitLoad(load),
+                ⟨FetchedFrom(resident_readable(io.fetch, state.memory, byte_load_bytes(load), state.rip, resident)),
+                 Exists(got.witness, ByteLoadStep(canonical := BitVec::drop_low_zero_of_lt(47, 17, read_gpr(load.base, state.gprs), got.proof.right.left),
+                    present := got.proof.left, execution := refl))⟩);
+            wp_after(io, view, origin, tr, here + byte_load_bytes(load).len(), then, goes, passed, t, v, state, after, cur,
+                linux_steps_of_fetched(io, state, after, fetched_steps_one(io.fetch, io.data, state, after, step)),
+                rip_advance(origin, state.rip, here, byte_load_bytes(load).len(), rip), holds, trace_of, valid, short, got.proof.right.right)
+        },
+        StoreByte(store) => λ code reach honest goes passed t v state cur rip holds trace_of valid short =>
+            (match store_base_plain(store.base) as λ b => store_base_plain(store.base) = b →
+                (match b as λ _ => Type {
+                    True => view.Stores(v, read_gpr(store.base, state.gprs), [imm_byte0(read_gpr(store.source, state.gprs))],
+                        λ w => then(passed, t, w, byte_store_after(linux_writes(io), store, state))),
+                    False => False,
+                }) → RunsAs(io, cur, state) {
+                True => λ plain held => {
+                    let after = byte_store_after(linux_writes(io), store, state);
+                    let stored = sound.stores(v, state.memory, read_gpr(store.base, state.gprs), [imm_byte0(read_gpr(store.source, state.gprs))],
+                        λ w => then(passed, t, w, after), holds, held);
+                    let resident = j(sym(rip), λ a _ => CodeResident(io.fetch, state.memory, byte_store_bytes(store), a), code(v, state.memory, holds));
+                    let steps = linux_steps_store(io, state, after, byte_store_step(io.fetch, linux_writes(io), store, state, plain,
+                        FetchedFrom(resident_readable(io.fetch, state.memory, byte_store_bytes(store), state.rip, resident)), stored.left));
+                    wp_after(io, view, origin, tr, here + 3, then, goes, passed, t, stored.right.witness, state, after, cur, steps,
+                        rip_advance(origin, state.rip, here, 3, rip), stored.right.proof.left, trace_of, valid, short, stored.right.proof.right)
+                },
+                False => λ _ never => false_elim(never),
+            })(refl),
+        Jcc(cc, target) => λ code reach honest goes passed t v state cur rip holds trace_of valid short held => {
+            let d = near_rel(here + 6, labels(target));
+            let jcc = JumpIfNear(cc, d);
+            let after = execute_near_control(jcc, state);
+            let resident = j(sym(rip), λ a _ => CodeResident(io.fetch, state.memory, near_control_bytes(jcc), a), code(v, state.memory, holds));
+            let steps = linux_steps_of_fetched(io, state, after, fetched_steps_one(io.fetch, io.data, state, after,
+                near_fetched_step(io.fetch, io.data, jcc, state, resident)));
+            runs_as_back(io, cur, state, after, steps,
+                (match condition_holds(cc, state.flags) as λ b => condition_holds(cc, state.flags) = b → RunsAs(io, cur, after) {
+                    True => λ yes => leaves(passed, t, v, after, cur,
+                        held.left(yes)(after, trans(near_if_taken_rip(cc, d, state, yes),
+                            trans(cong_fn<BitVec(64), BitVec(64)>(λ a => near_branch_target(a, 6, d), rip),
+                                wp_lands(origin, labels, here, 6, Jcc(cc, target), labels(target), reach))), refl),
+                        holds, trace_of, valid, short),
+                    False => λ no => goes(passed, t, v, after, cur,
+                        trans(near_if_not_taken_rip(cc, d, state, no), rip_advance(origin, state.rip, here, 6, rip)),
+                        holds, trace_of, valid, short, held.right(no)),
+                })(refl))
+        },
+        Jmp(target) => λ code reach honest goes passed t v state cur rip holds trace_of valid short held => {
+            let d = near_rel(here + 5, labels(target));
+            let jmp = JumpNear(d);
+            let after = execute_near_control(jmp, state);
+            let resident = j(sym(rip), λ a _ => CodeResident(io.fetch, state.memory, near_control_bytes(jmp), a), code(v, state.memory, holds));
+            let steps = linux_steps_of_fetched(io, state, after, fetched_steps_one(io.fetch, io.data, state, after,
+                near_fetched_step(io.fetch, io.data, jmp, state, resident)));
+            runs_as_back(io, cur, state, after, steps,
+                leaves(passed, t, v, after, cur,
+                    held(after, trans(cong_fn<BitVec(64), BitVec(64)>(λ a => near_branch_target(a, 5, d), rip),
+                        wp_lands(origin, labels, here, 5, Jmp(target), labels(target), reach)), refl),
+                    holds, trace_of, valid, short))
+        },
+        Syscall => λ code reach honest goes passed t v state cur rip holds trace_of valid short held => {
+            let resident = j(sym(rip), λ a _ => CodeResident(io.fetch, state.memory, syscall_bytes(), a), code(v, state.memory, holds));
+            let syscall: LinuxSyscallAt(io, state) = FetchedFrom(resident_readable(io.fetch, state.memory, syscall_bytes(), state.rip, resident));
+            wp_next_runs(io, view, sound, origin, tr, here, then, goes, ITree::next(Events::linux(), t), v, state, cur, rip, holds, syscall, passed, short,
+                IsTrace::next(Events::linux(), t, cur, trace_of), valid, held)
+        },
+        Proved(_, bytes, len, measured) => λ code reach honest goes passed t v state cur rip holds trace_of valid short held => {
+            let resident = j(sym(rip), λ a _ => CodeResident(io.fetch, state.memory, bytes, a), code(v, state.memory, holds));
+            let ran = honest(state, resident, held.left);
+            let after = ran.witness;
+            wp_after(io, view, origin, tr, here + len, then, goes, passed, t, v, state, after, cur,
+                linux_steps_of_fetched(io, state, after, ran.proof.left),
+                trans(ran.proof.right.left, trans(rip_advance(origin, state.rip, here, bytes.len(), rip),
+                    rip_count(origin, cong_fn<Nat, Nat>(λ k => here + k, measured)))),
+                j(sym(ran.proof.right.right.left), λ m _ => view.Holds(v, m), holds),
+                trace_of, valid, short, held.right(after, ran.proof.right.right.right))
+        },
+        Piece(_, _, _) => λ code reach honest goes passed t v state cur rip holds trace_of valid short never => false_elim(never),
+        Refer(_, _, _) => λ code reach honest goes passed t v state cur rip holds trace_of valid short never => false_elim(never),
+        Hole(_, _) => λ code reach honest goes passed t v state cur rip holds trace_of valid short never => false_elim(never),
+    }
+}
+
+// The chain's items, each resident where the chain's code is.
+theorem wp_run_goes<M, V>(io: LinuxIo<M>, view: View<M, V>, sound: ViewSound<M, V>(io, view), origin: BitVec(64),
+    fills: Nat → List<BitVec(8)>, labels: Nat → Nat, contracts: Nat → Contract, post: Bool → ITree<BitVec(64)>(Events::linux()) → V → MachineState<M> → Type, tr: Trace<BitVec(64)>(Events::linux()),
+    leaves: WpLeaves(io, view, post, tr), n: Nat): (l: Prog) → FillsFit(l, fills) → (rest: List<BitVec(8)>) →
+    ((v: V) → (m: M) → view.Holds(v, m) → CodeResident(io.fetch, m, asm_code(fills, labels, l) ++ rest, next_rip(origin, 0))) →
+    wp_reach(labels, l, n).IsTrue() → WpHonest(io, contracts, l, n) → (then: Bool → ITree<BitVec(64)>(Events::linux()) → V → MachineState<M> → Type) → WpGoes(io, view, origin, tr, prog_len(l), then) →
+    WpGoes(io, view, origin, tr, prog_len(asm_back(l, n)), wp_run(io, view, origin, labels, contracts, post, l, n, then)) {
+    match n {
+        Zero => λ l fits rest code reach honest then goes => goes,
+        Succ(m) => λ l => match l as λ x => FillsFit(x, fills) → (rest: List<BitVec(8)>) →
+                ((v: V) → (mem: M) → view.Holds(v, mem) → CodeResident(io.fetch, mem, asm_code(fills, labels, x) ++ rest, next_rip(origin, 0))) →
+                wp_reach(labels, x, Succ(m)).IsTrue() → WpHonest(io, contracts, x, Succ(m)) → (then: Bool → ITree<BitVec(64)>(Events::linux()) → V → MachineState<M> → Type) →
+                WpGoes(io, view, origin, tr, prog_len(x), then) →
+                WpGoes(io, view, origin, tr, prog_len(asm_back(x, Succ(m))), wp_run(io, view, origin, labels, contracts, post, x, Succ(m), then)) {
+            Start => λ fits rest code reach honest then goes => goes,
+            At(before, name, item) => λ fits rest code reach honest then goes => {
+                let fits_before = fills_fit_before(fills, before, name, item, fits);
+                let front = asm_code(fills, labels, before);
+                let bytes = asm_bytes(fills, labels, prog_len(before), item);
+                let moved = λ (v: V) (mem: M) (h: view.Holds(v, mem)) =>
+                    j(List::append_assoc(front, bytes, rest), λ c _ => CodeResident(io.fetch, mem, c, next_rip(origin, 0)), code(v, mem, h));
+                let item_code = λ (v: V) (mem: M) (h: view.Holds(v, mem)) => {
+                    let tail = resident_split_at(io.fetch, mem, front, bytes ++ rest, origin, 0, moved(v, mem, h)).right;
+                    let at: CodeResident(io.fetch, mem, bytes ++ rest, next_rip(origin, prog_len(before))) =
+                        j(trans(Nat::add_left_zero(front.len()), asm_code_len(fills, labels, before, fits_before)),
+                            λ k _ => CodeResident(io.fetch, mem, bytes ++ rest, next_rip(origin, k)), tail);
+                    resident_split(io.fetch, mem, bytes, rest, next_rip(origin, prog_len(before)), at).left
+                };
+                let both = Bool::is_true_and(wp_reaches(labels, prog_len(before), item), wp_reach(labels, before, m), reach);
+                wp_run_goes(io, view, sound, origin, fills, labels, contracts, post, tr, leaves, m, before, fits_before, bytes ++ rest, moved,
+                    both.right, honest.right, wp_item(io, view, origin, labels, contracts, post, prog_len(before), item, then),
+                    wp_item_goes(io, view, sound, origin, fills, labels, contracts, post, tr, leaves, prog_len(before), item, then,
+                        item_code, both.left, honest.left, goes))
+            },
+        },
+    }
+}
+
+// From `Wp`, at the run's start, the machine runs as any valid trace of the
+// tree, given the leaves do.
+theorem wp_runs<M, V>(io: LinuxIo<M>, view: View<M, V>, sound: ViewSound<M, V>(io, view), origin: BitVec(64),
+    fills: Nat → List<BitVec(8)>, labels: Nat → Nat, contracts: Nat → Contract, l: Prog, n: Nat, post: Bool → ITree<BitVec(64)>(Events::linux()) → V → MachineState<M> → Type,
+    fits: FillsFit(l, fills), rest: List<BitVec(8)>,
+    code: (v: V) → (m: M) → view.Holds(v, m) → CodeResident(io.fetch, m, asm_code(fills, labels, l) ++ rest, next_rip(origin, 0)),
+    reach: wp_reach(labels, l, n).IsTrue(), honest: WpHonest(io, contracts, l, n), tr: Trace<BitVec(64)>(Events::linux()), leaves: WpLeaves(io, view, post, tr),
+    t: ITree<BitVec(64)>(Events::linux()), v: V, state: MachineState<M>, rip: state.rip = next_rip(origin, prog_len(asm_back(l, n))),
+    holds: view.Holds(v, state.memory), trace_of: IsTrace(Events::linux(), t, tr), valid: Trace::LinuxValid(tr),
+    wp: Wp(io, view, origin, labels, contracts, l, n, post, t, v, state)): RunsAs(io, tr, state) {
+    wp_run_goes(io, view, sound, origin, fills, labels, contracts, post, tr, leaves, n, l, fits, rest, code, reach, honest,
+        wp_leaf(origin, prog_len(l), post), wp_leaf_goes(io, view, origin, post, tr, leaves, prog_len(l)),
+        False, t, v, state, tr, rip, holds, trace_of, valid, refl, wp)
+}
+
+// …and its `Sim` form: leaves that meet their trees make the start meet its.
+theorem wp_sound<M, V>(io: LinuxIo<M>, view: View<M, V>, sound: ViewSound<M, V>(io, view), origin: BitVec(64),
+    fills: Nat → List<BitVec(8)>, labels: Nat → Nat, contracts: Nat → Contract, l: Prog, n: Nat, post: Bool → ITree<BitVec(64)>(Events::linux()) → V → MachineState<M> → Type,
+    fits: FillsFit(l, fills), rest: List<BitVec(8)>,
+    code: (v: V) → (m: M) → view.Holds(v, m) → CodeResident(io.fetch, m, asm_code(fills, labels, l) ++ rest, next_rip(origin, 0)),
+    reach: wp_reach(labels, l, n).IsTrue(), honest: WpHonest(io, contracts, l, n),
+    leaves: (passed: Bool) → (t: ITree<BitVec(64)>(Events::linux())) → (v: V) → (state: MachineState<M>) → post(passed, t, v, state) →
+        view.Holds(v, state.memory) → Sim(io, t, state),
+    t: ITree<BitVec(64)>(Events::linux()), v: V, state: MachineState<M>, rip: state.rip = next_rip(origin, prog_len(asm_back(l, n))),
+    holds: view.Holds(v, state.memory), wp: Wp(io, view, origin, labels, contracts, l, n, post, t, v, state)): Sim(io, t, state) {
+    λ tr trace_of valid => wp_runs(io, view, sound, origin, fills, labels, contracts, l, n, post, fits, rest, code, reach, honest, tr,
+        λ passed t2 v2 s2 cur p h it2 valid2 _ => leaves(passed, t2, v2, s2, p, h, cur, it2, valid2),
+        t, v, state, rip, holds, trace_of, valid, wp)
+}
+
+// ---------------------------------------------------------------------------
+// One loop rule (docs/native-program-logic-design.md §6.2)
+
+// A pass round the loop made progress: it passed a syscall, which consumed
+// an answer, or it lowered the variant.
+fn wp_progress(passed: Bool, w2, w: Nat) → Type { match passed { True => True, False => w2 < w } }
+
+// Where a pass of the body ends: back at the head (offset `head`), the
+// invariant holding at a variant, with progress; or out of the loop, meeting
+// the rest of the tree.
+fn LoopPost<M, V>(io: LinuxIo<M>, origin: BitVec(64), head: Nat, inv: Nat → ITree<BitVec(64)>(Events::linux()) → V → MachineState<M> → Type, w: Nat) → Bool → ITree<BitVec(64)>(Events::linux()) → V → MachineState<M> → Type {
+    λ passed t v state => Exists<Nat>(λ w2 => (state.rip = next_rip(origin, head)) ∧ (inv(w2, t, v, state) ∧ wp_progress(passed, w2, w))) ∨
+        Sim(io, t, state)
+}
+
+// The body: the `n` items ending at `l`, from the head, where the invariant
+// holds at `w`.
+fn LoopBody<M, V>(io: LinuxIo<M>, view: View<M, V>, origin: BitVec(64), labels: Nat → Nat, contracts: Nat → Contract, l: Prog, n: Nat,
+    inv: Nat → ITree<BitVec(64)>(Events::linux()) → V → MachineState<M> → Type) → Type {
+    (w: Nat) → (t: ITree<BitVec(64)>(Events::linux())) → (v: V) → (state: MachineState<M>) → state.rip = next_rip(origin, prog_len(asm_back(l, n))) →
+        view.Holds(v, state.memory) → inv(w, t, v, state) →
+        Wp(io, view, origin, labels, contracts, l, n, LoopPost(io, origin, prog_len(asm_back(l, n)), inv, w), t, v, state)
+}
+
+// The loop runs as the trace `tr` from its head, wherever the invariant holds.
+fn LoopRuns<M, V>(io: LinuxIo<M>, view: View<M, V>, origin: BitVec(64), head: Nat, inv: Nat → ITree<BitVec(64)>(Events::linux()) → V → MachineState<M> → Type,
+    tr: Trace<BitVec(64)>(Events::linux())) → Type {
+    (w: Nat) → (t: ITree<BitVec(64)>(Events::linux())) → (v: V) → (state: MachineState<M>) → state.rip = next_rip(origin, head) → view.Holds(v, state.memory) →
+        inv(w, t, v, state) → IsTrace(Events::linux(), t, tr) → Trace::LinuxValid(tr) → RunsAs(io, tr, state)
+}
+
+theorem wp_lt_zero(a, b: Nat, less: a < b, small: b <= 0): False { omega }
+theorem wp_lt_le(a, b, c: Nat, less: a < b, small: b <= Succ(c)): a <= c { omega }
+
+// One pass: a pass back with a syscall is a shorter trace (`outer`), one
+// back without is the same trace at a lower variant (`inner`).
+theorem loop_pass<M, V>(io: LinuxIo<M>, view: View<M, V>, sound: ViewSound<M, V>(io, view), origin: BitVec(64),
+    fills: Nat → List<BitVec(8)>, labels: Nat → Nat, contracts: Nat → Contract, l: Prog, n: Nat,
+    fits: FillsFit(l, fills), rest: List<BitVec(8)>,
+    code: (v: V) → (m: M) → view.Holds(v, m) → CodeResident(io.fetch, m, asm_code(fills, labels, l) ++ rest, next_rip(origin, 0)),
+    reach: wp_reach(labels, l, n).IsTrue(), honest: WpHonest(io, contracts, l, n),
+    inv: Nat → ITree<BitVec(64)>(Events::linux()) → V → MachineState<M> → Type, body: LoopBody(io, view, origin, labels, contracts, l, n, inv), tr: Trace<BitVec(64)>(Events::linux()),
+    outer: (tr2: Trace<BitVec(64)>(Events::linux())) → Trace::len(Events::linux(), tr2) < Trace::len(Events::linux(), tr) → LoopRuns(io, view, origin, prog_len(asm_back(l, n)), inv, tr2),
+    w: Nat, inner: (w2: Nat) → w2 < w → (t: ITree<BitVec(64)>(Events::linux())) → (v: V) → (state: MachineState<M>) →
+        state.rip = next_rip(origin, prog_len(asm_back(l, n))) → view.Holds(v, state.memory) → inv(w2, t, v, state) →
+        IsTrace(Events::linux(), t, tr) → Trace::LinuxValid(tr) → RunsAs(io, tr, state)):
+    (t: ITree<BitVec(64)>(Events::linux())) → (v: V) → (state: MachineState<M>) → state.rip = next_rip(origin, prog_len(asm_back(l, n))) →
+    view.Holds(v, state.memory) → inv(w, t, v, state) → IsTrace(Events::linux(), t, tr) → Trace::LinuxValid(tr) → RunsAs(io, tr, state) {
+    λ t v state rip holds held trace_of valid => wp_runs(io, view, sound, origin, fills, labels, contracts, l, n,
+        LoopPost(io, origin, prog_len(asm_back(l, n)), inv, w), fits, rest, code, reach, honest, tr,
+        λ passed t2 v2 s2 cur out holds2 it2 valid2 short => match out {
+            Inl(back) => (match passed as λ p => wp_progress(p, back.witness, w) → wp_shorter(p, cur, tr) → RunsAs(io, cur, s2) {
+                True => λ _ less => outer(cur, less, back.witness, t2, v2, s2, back.proof.left, holds2, back.proof.right.left, it2, valid2),
+                False => λ lower same => j(sym(same), λ y _ => RunsAs(io, y, s2),
+                    inner(back.witness, lower, t2, v2, s2, back.proof.left, holds2, back.proof.right.left,
+                        j(same, λ y _ => IsTrace(Events::linux(), t2, y), it2), j(same, λ y _ => Trace::LinuxValid(y), valid2))),
+            })(back.proof.right.right, short),
+            Inr(sim) => sim(cur, it2, valid2),
+        },
+        t, v, state, rip, holds, trace_of, valid, body(w, t, v, state, rip, holds, held))
+}
+
+// By the variant, at one trace.
+theorem loop_variant<M, V>(io: LinuxIo<M>, view: View<M, V>, sound: ViewSound<M, V>(io, view), origin: BitVec(64),
+    fills: Nat → List<BitVec(8)>, labels: Nat → Nat, contracts: Nat → Contract, l: Prog, n: Nat,
+    fits: FillsFit(l, fills), rest: List<BitVec(8)>,
+    code: (v: V) → (m: M) → view.Holds(v, m) → CodeResident(io.fetch, m, asm_code(fills, labels, l) ++ rest, next_rip(origin, 0)),
+    reach: wp_reach(labels, l, n).IsTrue(), honest: WpHonest(io, contracts, l, n),
+    inv: Nat → ITree<BitVec(64)>(Events::linux()) → V → MachineState<M> → Type, body: LoopBody(io, view, origin, labels, contracts, l, n, inv), tr: Trace<BitVec(64)>(Events::linux()),
+    outer: (tr2: Trace<BitVec(64)>(Events::linux())) → Trace::len(Events::linux(), tr2) < Trace::len(Events::linux(), tr) → LoopRuns(io, view, origin, prog_len(asm_back(l, n)), inv, tr2),
+    c: Nat): (w: Nat) → w <= c → (t: ITree<BitVec(64)>(Events::linux())) → (v: V) → (state: MachineState<M>) →
+    state.rip = next_rip(origin, prog_len(asm_back(l, n))) → view.Holds(v, state.memory) → inv(w, t, v, state) →
+    IsTrace(Events::linux(), t, tr) → Trace::LinuxValid(tr) → RunsAs(io, tr, state) {
+    match c {
+        Zero => λ w small => loop_pass(io, view, sound, origin, fills, labels, contracts, l, n, fits, rest, code, reach, honest, inv, body, tr,
+            outer, w, λ w2 lower t v state rip holds held trace_of valid => false_elim(wp_lt_zero(w2, w, lower, small))),
+        Succ(d, ih) => λ w small => loop_pass(io, view, sound, origin, fills, labels, contracts, l, n, fits, rest, code, reach, honest, inv, body, tr,
+            outer, w, λ w2 lower => ih(w2, wp_lt_le(w2, w, d, lower, small))),
+    }
+}
+
+// By the trace's length, every trace within `b`.
+theorem loop_bound<M, V>(io: LinuxIo<M>, view: View<M, V>, sound: ViewSound<M, V>(io, view), origin: BitVec(64),
+    fills: Nat → List<BitVec(8)>, labels: Nat → Nat, contracts: Nat → Contract, l: Prog, n: Nat,
+    fits: FillsFit(l, fills), rest: List<BitVec(8)>,
+    code: (v: V) → (m: M) → view.Holds(v, m) → CodeResident(io.fetch, m, asm_code(fills, labels, l) ++ rest, next_rip(origin, 0)),
+    reach: wp_reach(labels, l, n).IsTrue(), honest: WpHonest(io, contracts, l, n),
+    inv: Nat → ITree<BitVec(64)>(Events::linux()) → V → MachineState<M> → Type, body: LoopBody(io, view, origin, labels, contracts, l, n, inv), b: Nat):
+    (tr: Trace<BitVec(64)>(Events::linux())) → Trace::len(Events::linux(), tr) <= b → LoopRuns(io, view, origin, prog_len(asm_back(l, n)), inv, tr) {
+    match b {
+        Zero => λ tr bound w => loop_variant(io, view, sound, origin, fills, labels, contracts, l, n, fits, rest, code, reach, honest, inv, body, tr,
+            λ tr2 less => false_elim(wp_lt_zero(Trace::len(Events::linux(), tr2), Trace::len(Events::linux(), tr), less, bound)), w, w, w.le_refl()),
+        Succ(d, ih) => λ tr bound w => loop_variant(io, view, sound, origin, fills, labels, contracts, l, n, fits, rest, code, reach, honest, inv, body, tr,
+            λ tr2 less => ih(tr2, wp_lt_le(Trace::len(Events::linux(), tr2), Trace::len(Events::linux(), tr), d, less, bound)), w, w, w.le_refl()),
+    }
+}
+
+// The loop rule: where the invariant holds at the head, the machine meets
+// the tree. Proved by induction on the history's length, then the variant.
+theorem loop_at<M, V>(io: LinuxIo<M>, view: View<M, V>, sound: ViewSound<M, V>(io, view), origin: BitVec(64),
+    fills: Nat → List<BitVec(8)>, labels: Nat → Nat, contracts: Nat → Contract, l: Prog, n: Nat,
+    fits: FillsFit(l, fills), rest: List<BitVec(8)>,
+    code: (v: V) → (m: M) → view.Holds(v, m) → CodeResident(io.fetch, m, asm_code(fills, labels, l) ++ rest, next_rip(origin, 0)),
+    reach: wp_reach(labels, l, n).IsTrue(), honest: WpHonest(io, contracts, l, n),
+    inv: Nat → ITree<BitVec(64)>(Events::linux()) → V → MachineState<M> → Type, body: LoopBody(io, view, origin, labels, contracts, l, n, inv),
+    w: Nat, t: ITree<BitVec(64)>(Events::linux()), v: V, state: MachineState<M>, rip: state.rip = next_rip(origin, prog_len(asm_back(l, n))),
+    holds: view.Holds(v, state.memory), held: inv(w, t, v, state)): Sim(io, t, state) {
+    λ tr trace_of valid => loop_bound(io, view, sound, origin, fills, labels, contracts, l, n, fits, rest, code, reach, honest, inv, body,
+        Trace::len(Events::linux(), tr), tr, Trace::len(Events::linux(), tr).le_refl(), w, t, v, state, rip, holds, held, trace_of, valid)
+}

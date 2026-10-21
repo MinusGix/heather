@@ -38,8 +38,7 @@ import nat;
 inductive Asm {
     // An instruction block: its length is its instructions' summed.
     Block(instructions: List<Instruction>),
-    // Bytes short enough to read their length off: a syscall, a byte
-    // store.
+    // Bytes short enough to read their length off, which no proof runs.
     Code(bytes: List<BitVec(8)>),
     // A word loaded and a word stored: bytes as `Code`, with what they do,
     // so a run over them can be computed (as the burned elf64_frame's
@@ -54,6 +53,13 @@ inductive Asm {
     // A near JCC or JMP to the label named `target`.
     Jcc(cc: ConditionCode, target: Nat),
     Jmp(target: Nat),
+    // A SYSCALL: the call it makes is read off the registers there
+    // (linux_x86_64_wp).
+    Syscall,
+    // Code that enters with a contract, wherever it is placed: the
+    // program's `index`th, from a table beside the program
+    // (linux_x86_64_wp's `Contract`), since an item holds no type.
+    Proved(index: Nat, bytes: List<BitVec(8)>, len: Nat, measured: bytes.len() = len),
     // A piece measured by its lemma: a library's layout, too long to read
     // its length off its bytes.
     Piece(bytes: List<BitVec(8)>, len: Nat, measured: bytes.len() = len),
@@ -94,6 +100,8 @@ fn asm_len(item: Asm) → Nat {
         StoreByte(_) => 3,
         Jcc(_, _) => 6,
         Jmp(_) => 5,
+        Syscall => 2,
+        Proved(_, _, len, _) => len,
         Piece(_, len, _) => len,
         Refer(_, len, _) => len,
         Hole(_, len) => len,
@@ -120,6 +128,8 @@ fn asm_bytes(fills: Nat → List<BitVec(8)>, labels: Nat → Nat, here: Nat, ite
         StoreByte(store) => byte_store_bytes(store),
         Jcc(cc, target) => near_control_bytes(JumpIfNear(cc, near_rel(here + 6, labels(target)))),
         Jmp(target) => near_control_bytes(JumpNear(near_rel(here + 5, labels(target)))),
+        Syscall => syscall_bytes(),
+        Proved(_, bytes, _, _) => bytes,
         Piece(bytes, _, _) => bytes,
         Refer(bytes, _, _) => bytes(labels, here),
         Hole(index, _) => fills(index),
@@ -206,6 +216,8 @@ theorem fills_fit_before(fills: Nat → List<BitVec(8)>, before: Prog, name: Nat
         StoreByte(_) => λ f => f,
         Jcc(_, _) => λ f => f,
         Jmp(_) => λ f => f,
+        Syscall => λ f => f,
+        Proved(_, _, _, _) => λ f => f,
         Piece(_, _, _) => λ f => f,
         Refer(_, _, _) => λ f => f,
         Hole(_, _) => λ f => f.right,
@@ -222,6 +234,8 @@ theorem asm_bytes_len(fills: Nat → List<BitVec(8)>, labels: Nat → Nat, here:
         StoreByte(_) => λ _ => refl,
         Jcc(_, _) => λ _ => refl,
         Jmp(_) => λ _ => refl,
+        Syscall => λ _ => refl,
+        Proved(_, _, _, measured) => λ _ => measured,
         Piece(_, _, measured) => λ _ => measured,
         Refer(_, _, measured) => λ _ => measured(labels, here),
         Hole(_, _) => λ f => f.left,
