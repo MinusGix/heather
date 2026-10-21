@@ -562,10 +562,10 @@ fn wp_progress(passed: Bool, w2, w: Nat) → Type { match passed { True => True,
 
 // Where a pass of the body ends: back at the head (offset `head`), the
 // invariant holding at a variant, with progress; or out of the loop, meeting
-// the rest of the tree.
-fn LoopPost<M, V>(io: LinuxIo<M>, origin: BitVec(64), head: Nat, inv: Nat → ITree<BitVec(64)>(Events::linux()) → V → MachineState<M> → Type, w: Nat) → Bool → ITree<BitVec(64)>(Events::linux()) → V → MachineState<M> → Type {
+// the rest of the tree wherever the view holds.
+fn LoopPost<M, V>(io: LinuxIo<M>, view: View<M, V>, origin: BitVec(64), head: Nat, inv: Nat → ITree<BitVec(64)>(Events::linux()) → V → MachineState<M> → Type, w: Nat) → Bool → ITree<BitVec(64)>(Events::linux()) → V → MachineState<M> → Type {
     λ passed t v state => Exists<Nat>(λ w2 => (state.rip = next_rip(origin, head)) ∧ (inv(w2, t, v, state) ∧ wp_progress(passed, w2, w))) ∨
-        Sim(io, t, state)
+        (view.Holds(v, state.memory) → Sim(io, t, state))
 }
 
 // The body: the `n` items ending at `l`, from the head, where the invariant
@@ -574,7 +574,7 @@ fn LoopBody<M, V>(io: LinuxIo<M>, view: View<M, V>, origin: BitVec(64), labels: 
     inv: Nat → ITree<BitVec(64)>(Events::linux()) → V → MachineState<M> → Type) → Type {
     (w: Nat) → (t: ITree<BitVec(64)>(Events::linux())) → (v: V) → (state: MachineState<M>) → state.rip = next_rip(origin, prog_len(asm_back(l, n))) →
         view.Holds(v, state.memory) → inv(w, t, v, state) →
-        Wp(io, view, origin, labels, contracts, l, n, LoopPost(io, origin, prog_len(asm_back(l, n)), inv, w), t, v, state)
+        Wp(io, view, origin, labels, contracts, l, n, LoopPost(io, view, origin, prog_len(asm_back(l, n)), inv, w), t, v, state)
 }
 
 // The loop runs as the trace `tr` from its head, wherever the invariant holds.
@@ -602,7 +602,7 @@ theorem loop_pass<M, V>(io: LinuxIo<M>, view: View<M, V>, sound: ViewSound<M, V>
     (t: ITree<BitVec(64)>(Events::linux())) → (v: V) → (state: MachineState<M>) → state.rip = next_rip(origin, prog_len(asm_back(l, n))) →
     view.Holds(v, state.memory) → inv(w, t, v, state) → IsTrace(Events::linux(), t, tr) → Trace::LinuxValid(tr) → RunsAs(io, tr, state) {
     λ t v state rip holds held trace_of valid => wp_runs(io, view, sound, origin, fills, labels, contracts, l, n,
-        LoopPost(io, origin, prog_len(asm_back(l, n)), inv, w), fits, rest, code, reach, honest, tr,
+        LoopPost(io, view, origin, prog_len(asm_back(l, n)), inv, w), fits, rest, code, reach, honest, tr,
         λ passed t2 v2 s2 cur out holds2 it2 valid2 short => match out {
             Inl(back) => (match passed as λ p => wp_progress(p, back.witness, w) → wp_shorter(p, cur, tr) → RunsAs(io, cur, s2) {
                 True => λ _ less => outer(cur, less, back.witness, t2, v2, s2, back.proof.left, holds2, back.proof.right.left, it2, valid2),
@@ -610,7 +610,7 @@ theorem loop_pass<M, V>(io: LinuxIo<M>, view: View<M, V>, sound: ViewSound<M, V>
                     inner(back.witness, lower, t2, v2, s2, back.proof.left, holds2, back.proof.right.left,
                         j(same, λ y _ => IsTrace(Events::linux(), t2, y), it2), j(same, λ y _ => Trace::LinuxValid(y), valid2))),
             })(back.proof.right.right, short),
-            Inr(sim) => sim(cur, it2, valid2),
+            Inr(out) => out(holds2, cur, it2, valid2),
         },
         t, v, state, rip, holds, trace_of, valid, body(w, t, v, state, rip, holds, held))
 }
@@ -662,4 +662,17 @@ theorem loop_at<M, V>(io: LinuxIo<M>, view: View<M, V>, sound: ViewSound<M, V>(i
     holds: view.Holds(v, state.memory), held: inv(w, t, v, state)): Sim(io, t, state) {
     λ tr trace_of valid => loop_bound(io, view, sound, origin, fills, labels, contracts, l, n, fits, rest, code, reach, honest, inv, body,
         Trace::len(Events::linux(), tr), tr, Trace::len(Events::linux(), tr).le_refl(), w, t, v, state, rip, holds, held, trace_of, valid)
+}
+
+// ---------------------------------------------------------------------------
+// Where the code is
+
+// What is resident for a program is for each of its labels' chains, with the
+// rest of the program after it.
+theorem wp_code_at<M>(fetch: FetchAccess<M>, m: M, origin: BitVec(64), fills: Nat → List<BitVec(8)>, labels: Nat → Nat, p: Prog,
+    k: Nat, last: List<BitVec(8)>, resident: CodeResident(fetch, m, asm_code(fills, labels, p) ++ last, next_rip(origin, 0))):
+    CodeResident(fetch, m, asm_code(fills, labels, asm_back(p, k)) ++ (asm_code_after(fills, labels, p, k) ++ last), next_rip(origin, 0)) {
+    j(List::append_assoc(asm_code(fills, labels, asm_back(p, k)), asm_code_after(fills, labels, p, k), last),
+        λ c _ => CodeResident(fetch, m, c, next_rip(origin, 0)),
+        j(asm_code_back(fills, labels, k, p), λ c _ => CodeResident(fetch, m, c ++ last, next_rip(origin, 0)), resident))
 }
