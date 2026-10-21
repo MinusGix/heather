@@ -16,6 +16,7 @@
 //! like any other declaration, so sharing adds nothing to trust.
 
 use crate::Hx;
+use std::sync::Arc as Rc;
 use std::collections::HashMap;
 
 /// A node with its children interned.
@@ -59,6 +60,12 @@ pub(crate) struct Share {
     made: HashMap<u32, String>,
     /// Hoisted definitions not yet printed, in dependency order.
     pub(crate) fresh: Vec<(String, Hx)>,
+    /// The two passes' results by (node address, context id): the input is
+    /// a DAG, and a node met again in the same context is not walked again.
+    /// Counting a shared node again counts its own site, not its subterms':
+    /// those occur once inside its definition.
+    counted: HashMap<(usize, u32), u32>,
+    rewritten: HashMap<(usize, u32), (u32, Hx, Vec<u32>)>,
 }
 
 /// A binder on the way down: its context id, its domain as printed, and the
@@ -148,18 +155,23 @@ impl Share {
         Some((id, ctx))
     }
 
-    fn id_of(&mut self, t: &Hx) -> u32 {
-        match t {
+    fn id_of(&mut self, t: &Hx, memo: &mut HashMap<usize, u32>) -> u32 {
+        if let Some(&id) = memo.get(&(t as *const Hx as usize)) {
+            return id;
+        }
+        let id = match t {
             Hx::Pi(a, b) | Hx::Lam(a, b) => {
-                let (ia, ib) = (self.id_of(a), self.id_of(b));
+                let (ia, ib) = (self.id_of(a, memo), self.id_of(b, memo));
                 self.binder(matches!(t, Hx::Pi(..)), ia, ib)
             }
             Hx::App(f, a) => {
-                let (i_f, ia) = (self.id_of(f), self.id_of(a));
+                let (i_f, ia) = (self.id_of(f, memo), self.id_of(a, memo));
                 self.app(i_f, ia)
             }
             _ => self.leaf(Self::leaf_key(t)),
-        }
+        };
+        memo.insert(t as *const Hx as usize, id);
+        id
     }
 
     /// First pass: count every candidate's occurrences. Returns the node's id.
@@ -168,6 +180,13 @@ impl Share {
     }
 
     fn count_in(&mut self, t: &Hx, ctxs: &mut Vec<u32>) -> u32 {
+        let key = (t as *const Hx as usize, ctxs.last().copied().unwrap_or(0));
+        if let Some(&id) = self.counted.get(&key) {
+            if let Some(site) = self.site(id, ctxs) {
+                *self.counts.entry(site).or_default() += 1;
+            }
+            return id;
+        }
         let id = match t {
             Hx::Pi(a, b) | Hx::Lam(a, b) => {
                 let ia = self.count_in(a, ctxs);
@@ -187,6 +206,7 @@ impl Share {
         if let Some(site) = self.site(id, ctxs) {
             *self.counts.entry(site).or_default() += 1;
         }
+        self.counted.insert(key, id);
         id
     }
 
@@ -201,6 +221,16 @@ impl Share {
     /// binders its domains need too, so the rewrite can use more than the
     /// original.
     fn rewrite_in(&mut self, t: &Hx, scopes: &mut Vec<Scope>) -> (u32, Hx, Vec<u32>) {
+        let key = (t as *const Hx as usize, scopes.last().map_or(0, |s| s.ctx));
+        if let Some(out) = self.rewritten.get(&key) {
+            return out.clone();
+        }
+        let out = self.rewrite_node(t, scopes);
+        self.rewritten.insert(key, out.clone());
+        out
+    }
+
+    fn rewrite_node(&mut self, t: &Hx, scopes: &mut Vec<Scope>) -> (u32, Hx, Vec<u32>) {
         let depth = scopes.len();
         let (id, out, levels) = match t {
             Hx::Pi(a, b) | Hx::Lam(a, b) => {
@@ -211,12 +241,12 @@ impl Share {
                 let (ib, rb, lb) = self.rewrite_in(b, scopes);
                 let Scope { dom: ra, levels: la, .. } = scopes.pop().unwrap();
                 let pi = matches!(t, Hx::Pi(..));
-                let out = if pi { Hx::Pi(Box::new(ra), Box::new(rb)) } else { Hx::Lam(Box::new(ra), Box::new(rb)) };
+                let out = if pi { Hx::Pi(Rc::new(ra), Rc::new(rb)) } else { Hx::Lam(Rc::new(ra), Rc::new(rb)) };
                 (self.binder(pi, ia, ib), out, union(&la, lb.iter().copied().filter(|&l| (l as usize) < depth)))
             }
             Hx::App(f, a) => {
                 let ((i_f, rf, lf), (ia, ra, la)) = (self.rewrite_in(f, scopes), self.rewrite_in(a, scopes));
-                (self.app(i_f, ia), Hx::App(Box::new(rf), Box::new(ra)), union(&lf, la.into_iter()))
+                (self.app(i_f, ia), Hx::App(Rc::new(rf), Rc::new(ra)), union(&lf, la.into_iter()))
             }
             Hx::Var(i) => (self.leaf(Key::Var(*i)), t.clone(), vec![(depth - 1 - *i as usize) as u32]),
             _ => (self.leaf(Self::leaf_key(t)), t.clone(), vec![]),
@@ -245,9 +275,9 @@ impl Share {
         let mut body = remap(&out, depth, &map, kept.len() as u32, 0);
         for (j, &l) in kept.iter().enumerate().rev() {
             let dom = remap(&scopes[l as usize].dom, l as usize, &map, j as u32, 0);
-            body = Hx::Lam(Box::new(dom), Box::new(body));
+            body = Hx::Lam(Rc::new(dom), Rc::new(body));
         }
-        let key = self.id_of(&body);
+        let key = self.id_of(&body, &mut HashMap::new());
         let name = match self.made.get(&key) {
             Some(n) => n.clone(),
             None => {
@@ -259,7 +289,7 @@ impl Share {
         };
         let mut use_ = Hx::Named(name, vec![]);
         for &l in &kept {
-            use_ = Hx::App(Box::new(use_), Box::new(Hx::Var((depth - 1 - l as usize) as u32)));
+            use_ = Hx::App(Rc::new(use_), Rc::new(Hx::Var((depth - 1 - l as usize) as u32)));
         }
         (id, use_, kept)
     }
@@ -275,15 +305,24 @@ fn union(a: &[u32], b: impl Iterator<Item = u32>) -> Vec<u32> {
 /// `t`, a term under `outer` binders (and `cut` more of its own), moved
 /// under `new_outer` binders: binder level `l` becomes level `map[l]`.
 fn remap(t: &Hx, outer: usize, map: &[Option<u32>], new_outer: u32, cut: u32) -> Hx {
-    match t {
-        Hx::Var(i) if *i >= cut => {
-            let level = outer - 1 - (i - cut) as usize;
-            let new = map[level].expect("a kept binder");
-            Hx::Var(cut + new_outer - 1 - new)
+    fn go(t: &Hx, outer: usize, map: &[Option<u32>], new_outer: u32, cut: u32, memo: &mut HashMap<(usize, u32), Rc<Hx>>) -> Rc<Hx> {
+        let key = (t as *const Hx as usize, cut);
+        if let Some(out) = memo.get(&key) {
+            return out.clone();
         }
-        Hx::Pi(a, b) => Hx::Pi(Box::new(remap(a, outer, map, new_outer, cut)), Box::new(remap(b, outer, map, new_outer, cut + 1))),
-        Hx::Lam(a, b) => Hx::Lam(Box::new(remap(a, outer, map, new_outer, cut)), Box::new(remap(b, outer, map, new_outer, cut + 1))),
-        Hx::App(f, a) => Hx::App(Box::new(remap(f, outer, map, new_outer, cut)), Box::new(remap(a, outer, map, new_outer, cut))),
-        _ => t.clone(),
+        let out = Rc::new(match t {
+            Hx::Var(i) if *i >= cut => {
+                let level = outer - 1 - (i - cut) as usize;
+                let new = map[level].expect("a kept binder");
+                Hx::Var(cut + new_outer - 1 - new)
+            }
+            Hx::Pi(a, b) => Hx::Pi(go(a, outer, map, new_outer, cut, memo), go(b, outer, map, new_outer, cut + 1, memo)),
+            Hx::Lam(a, b) => Hx::Lam(go(a, outer, map, new_outer, cut, memo), go(b, outer, map, new_outer, cut + 1, memo)),
+            Hx::App(f, a) => Hx::App(go(f, outer, map, new_outer, cut, memo), go(a, outer, map, new_outer, cut, memo)),
+            _ => t.clone(),
+        });
+        memo.insert(key, out.clone());
+        out
     }
+    (*go(t, outer, map, new_outer, cut, &mut HashMap::new())).clone()
 }

@@ -22,9 +22,9 @@
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
 use heather_kernel::reduce::{Defs, whnf_term_delta, whnf_type_delta};
-use heather_kernel::subst::local_bound_ty;
+use heather_kernel::subst::{local_bound, local_bound_ty};
 use heather_kernel::term::{CtxBase, GlobalBinding, GlobalCtx, LocalCtx, LocalSubst, LocalVar, SubstTail, Term, Type};
-use heather_kernel::typing::{DEFAULT_FUEL, spell_checked_in_code, spell_checked_in_code_ty};
+use heather_kernel::typing::{DEFAULT_FUEL, spell_checked_for_export, spell_checked_for_export_ty};
 use std::cell::RefCell;
 use std::sync::Arc as Rc;
 use std::fmt::Write as _;
@@ -43,9 +43,9 @@ pub enum Hx {
     Var(u32),
     /// `Type l` (Russell): the image of both `Ty l` and the code `TmTy l`.
     Sort(Lvl),
-    Pi(Box<Hx>, Box<Hx>),
-    Lam(Box<Hx>, Box<Hx>),
-    App(Box<Hx>, Box<Hx>),
+    Pi(Rc<Hx>, Rc<Hx>),
+    Lam(Rc<Hx>, Rc<Hx>),
+    App(Rc<Hx>, Rc<Hx>),
     /// A prelude constant at explicit levels.
     Const(&'static str, Vec<Lvl>),
     /// An exported declaration, by absolute Ψ index.
@@ -85,7 +85,7 @@ fn lvl(l: &Level) -> R<Lvl> {
 }
 
 fn app(f: Hx, args: Vec<Hx>) -> Hx {
-    args.into_iter().fold(f, |f, a| Hx::App(Box::new(f), Box::new(a)))
+    args.into_iter().fold(f, |f, a| Hx::App(Rc::new(f), Rc::new(a)))
 }
 
 fn konst(name: &'static str, levels: &[&Level], args: Vec<Hx>) -> R<Hx> {
@@ -96,14 +96,47 @@ fn konst(name: &'static str, levels: &[&Level], args: Vec<Hx>) -> R<Hx> {
 /// `t` under one binder fewer: indices above `cut` drop by one. `None` when
 /// `t` names the binder at `cut`.
 fn strengthen(t: &Hx, cut: u32) -> Option<Hx> {
-    Some(match t {
-        Hx::Var(i) if *i == cut => return None,
-        Hx::Var(i) if *i > cut => Hx::Var(i - 1),
-        Hx::Pi(a, b) => Hx::Pi(Box::new(strengthen(a, cut)?), Box::new(strengthen(b, cut + 1)?)),
-        Hx::Lam(a, b) => Hx::Lam(Box::new(strengthen(a, cut)?), Box::new(strengthen(b, cut + 1)?)),
-        Hx::App(f, a) => Hx::App(Box::new(strengthen(f, cut)?), Box::new(strengthen(a, cut)?)),
-        _ => t.clone(),
-    })
+    fn go(t: &Hx, cut: u32, memo: &mut Nodes<Option<Rc<Hx>>>) -> Option<Rc<Hx>> {
+        let key = (t as *const Hx as usize, cut);
+        if let Some(out) = memo.get(&key) {
+            return out.clone();
+        }
+        let out = (|| {
+            Some(Rc::new(match t {
+                Hx::Var(i) if *i == cut => return None,
+                Hx::Var(i) if *i > cut => Hx::Var(i - 1),
+                Hx::Pi(a, b) => Hx::Pi(go(a, cut, memo)?, go(b, cut + 1, memo)?),
+                Hx::Lam(a, b) => Hx::Lam(go(a, cut, memo)?, go(b, cut + 1, memo)?),
+                Hx::App(f, a) => Hx::App(go(f, cut, memo)?, go(a, cut, memo)?),
+                _ => t.clone(),
+            }))
+        })();
+        memo.insert(key, out.clone());
+        out
+    }
+    go(t, cut, &mut Nodes::new()).map(|t| (*t).clone())
+}
+
+/// A rewrite's results by node address and the binder depth it is met at,
+/// so that a rewrite of a shared node runs once (`Hx` is a DAG: the
+/// translation shares what the kernel term shares). Addresses are those of
+/// nodes alive for the whole rewrite.
+type Nodes<T> = std::collections::HashMap<(usize, u32), T>;
+
+/// Every node of `roots`, a shared node once.
+fn each_node<'t>(roots: impl IntoIterator<Item = &'t Hx>, f: &mut dyn FnMut(&'t Hx)) {
+    let mut seen = std::collections::HashSet::new();
+    let mut todo: Vec<&Hx> = roots.into_iter().collect();
+    while let Some(t) = todo.pop() {
+        if !seen.insert(t as *const Hx) {
+            continue;
+        }
+        f(t);
+        if let Hx::Pi(a, b) | Hx::Lam(a, b) | Hx::App(a, b) = t {
+            todo.push(b);
+            todo.push(a);
+        }
+    }
 }
 
 /// The realised inductives' recursors (`list::List::rec`), each with its
@@ -114,13 +147,23 @@ type Recs = std::collections::HashMap<String, (usize, Vec<(u32, u32)>)>;
 /// recursor takes a constructor's fields, then its children's hypotheses;
 /// Rocq's `D_rect` puts each child's hypothesis right after the child. The
 /// minor premises are `λ`-chains `wf.rs` wrote, so their binders reorder.
-fn rocq_minors(t: &Hx, recs: &Recs) -> Hx {
+fn rocq_minors(t: &Hx, recs: &Recs, memo: &mut Nodes<Rc<Hx>>) -> Rc<Hx> {
+    let key = (t as *const Hx as usize, 0);
+    if let Some(out) = memo.get(&key) {
+        return out.clone();
+    }
+    let out = Rc::new(rocq_minors_node(t, recs, memo));
+    memo.insert(key, out.clone());
+    out
+}
+
+fn rocq_minors_node(t: &Hx, recs: &Recs, memo: &mut Nodes<Rc<Hx>>) -> Hx {
     match t {
         Hx::App(..) => {
             let mut spine = Vec::new();
             let mut head = t;
             while let Hx::App(f, a) = head {
-                spine.push(rocq_minors(a, recs));
+                spine.push((*rocq_minors(a, recs, memo)).clone());
                 head = f;
             }
             spine.reverse();
@@ -138,12 +181,12 @@ fn rocq_minors(t: &Hx, recs: &Recs) -> Hx {
             }
             let head = match head {
                 Hx::Named(..) | Hx::Const(..) | Hx::Global(_) => head.clone(),
-                _ => rocq_minors(head, recs),
+                _ => (*rocq_minors(head, recs, memo)).clone(),
             };
             app(head, spine)
         }
-        Hx::Pi(a, b) => Hx::Pi(Box::new(rocq_minors(a, recs)), Box::new(rocq_minors(b, recs))),
-        Hx::Lam(a, b) => Hx::Lam(Box::new(rocq_minors(a, recs)), Box::new(rocq_minors(b, recs))),
+        Hx::Pi(a, b) => Hx::Pi(rocq_minors(a, recs, memo), rocq_minors(b, recs, memo)),
+        Hx::Lam(a, b) => Hx::Lam(rocq_minors(a, recs, memo), rocq_minors(b, recs, memo)),
         _ => t.clone(),
     }
 }
@@ -166,8 +209,12 @@ fn permute_lams(t: &Hx, order: &[usize]) -> Option<Hx> {
     }
     // A variable under `cut` inner binders in a context of the chain's old
     // binders 0..have, written for its new binders 0..now.
-    fn go(t: &Hx, have: usize, now: usize, new_of: &[usize], cut: u32) -> Hx {
-        match t {
+    fn go(t: &Hx, have: usize, now: usize, new_of: &[usize], cut: u32, memo: &mut Nodes<Rc<Hx>>) -> Rc<Hx> {
+        let key = (t as *const Hx as usize, cut);
+        if let Some(out) = memo.get(&key) {
+            return out.clone();
+        }
+        let out = Rc::new(match t {
             Hx::Var(i) if *i >= cut => {
                 let k = (i - cut) as usize;
                 if k < have {
@@ -177,21 +224,23 @@ fn permute_lams(t: &Hx, order: &[usize]) -> Option<Hx> {
                     Hx::Var(cut + (now + k - have) as u32)
                 }
             }
-            Hx::Pi(a, b) => Hx::Pi(Box::new(go(a, have, now, new_of, cut)), Box::new(go(b, have, now, new_of, cut + 1))),
-            Hx::Lam(a, b) => Hx::Lam(Box::new(go(a, have, now, new_of, cut)), Box::new(go(b, have, now, new_of, cut + 1))),
-            Hx::App(f, a) => Hx::App(Box::new(go(f, have, now, new_of, cut)), Box::new(go(a, have, now, new_of, cut))),
+            Hx::Pi(a, b) => Hx::Pi(go(a, have, now, new_of, cut, memo), go(b, have, now, new_of, cut + 1, memo)),
+            Hx::Lam(a, b) => Hx::Lam(go(a, have, now, new_of, cut, memo), go(b, have, now, new_of, cut + 1, memo)),
+            Hx::App(f, a) => Hx::App(go(f, have, now, new_of, cut, memo), go(a, have, now, new_of, cut, memo)),
             _ => t.clone(),
-        }
+        });
+        memo.insert(key, out.clone());
+        out
     }
-    let mut out = go(body, len, len, &new_of, 0);
+    let mut out = go(body, len, len, &new_of, 0, &mut Nodes::new());
     for new in (0..len).rev() {
         let old = order[new];
         // Its domain is under the old binders before it, all of which come
         // before it in the new order too.
-        let dom = go(doms[old], old, new, &new_of, 0);
-        out = Hx::Lam(Box::new(dom), Box::new(out));
+        let dom = go(doms[old], old, new, &new_of, 0, &mut Nodes::new());
+        out = Rc::new(Hx::Lam(dom, out));
     }
-    Some(out)
+    Some((*out).clone())
 }
 
 /// The levels Lean's prelude takes for constant `name`: Rocq's `etaSig` has
@@ -201,13 +250,7 @@ fn lean_levels<'a>(name: &str, levels: &'a [Lvl]) -> &'a [Lvl] {
 }
 
 fn lam(dom: Hx, body: Hx) -> Hx {
-    Hx::Lam(Box::new(dom), Box::new(body))
-}
-
-/// A binder whose domain the prelude constant's type determines: printed as
-/// a hole, which both targets infer from the expected type.
-fn bind(body: Hx) -> Hx {
-    lam(Hx::Hole, body)
+    Hx::Lam(Rc::new(dom), Rc::new(body))
 }
 
 /// The translation of one declaration's types and terms. `at` is the
@@ -223,6 +266,52 @@ struct Tr<'a> {
     ctx: RefCell<Vec<Option<(Hx, Rc<Term>)>>>,
     /// The tier-1 declarations met so far (`wf.rs`).
     wf: &'a wf::WfTable,
+    /// The translation's sharing, which keeps it linear in the kernel
+    /// term's DAG rather than in the tree it unfolds to (design §5.6).
+    memo: RefCell<Memo>,
+}
+
+/// What [`Tr`]'s translation of a node depends on beyond the node: the
+/// canonical elements `ctx` holds for the variables it names. Each context
+/// gets an id, interned so that two binders with no canonical element under
+/// the same context share one; a closed node is translated in context 0.
+/// Nodes are keyed by address and carry a copy to check against, since a
+/// node built during the translation can be freed and its address reused
+/// (the copy's children are shared, so the check is shallow when it hits).
+#[derive(Default)]
+struct Memo {
+    ids: Vec<u32>,
+    /// Contexts by (enclosing context, the address of the domain whose
+    /// canonical element the binder holds, or 0 for none), with that domain
+    /// to check the address against.
+    interned: std::collections::HashMap<(u32, usize), (Option<Type>, u32)>,
+    next: u32,
+    tms: std::collections::HashMap<(usize, u32), (Term, Hx)>,
+    tys: std::collections::HashMap<(usize, u32), (Type, Hx)>,
+}
+
+impl Memo {
+    fn push(&mut self, canonical: Option<&Type>) {
+        let parent = self.ids.last().copied().unwrap_or(0);
+        let key = (parent, canonical.map_or(0, |d| d as *const Type as usize));
+        let id = match self.interned.get(&key) {
+            Some((seen, id)) if seen.as_ref() == canonical => *id,
+            _ => {
+                self.next += 1;
+                self.interned.insert(key, (canonical.cloned(), self.next));
+                self.next
+            }
+        };
+        self.ids.push(id);
+    }
+
+    fn pop(&mut self) {
+        self.ids.pop();
+    }
+
+    fn at(&self, closed: bool) -> u32 {
+        if closed { 0 } else { self.ids.last().copied().unwrap_or(0) }
+    }
 }
 
 /// Fuel for the exporter's own reductions (the collapse test); a type that
@@ -330,7 +419,9 @@ impl Tr<'_> {
     /// (`under` prints it as the canonical element), out from under its
     /// binder. `None` when the body names it after all.
     fn singleton_branch(&self, dom: &Type, branch: &Term) -> Option<R<Hx>> {
-        self.canon(&self.close(dom)?)?;
+        if let Err(e) = self.canon(&self.close(dom)?)? {
+            return Some(Err(e));
+        }
         let body = match self.bound(dom, || self.tm(branch)) {
             Ok(Hx::Lam(_, body)) => body,
             Ok(_) => unreachable!("bound makes a binder"),
@@ -372,14 +463,17 @@ impl Tr<'_> {
     /// Translate under one binder whose domain is `dom` (`None` when the
     /// exporter does not have it at hand).
     fn under<T>(&self, dom: Option<&Type>, f: impl FnOnce() -> R<T>) -> R<T> {
+        let written = dom;
         let dom = dom.and_then(|d| self.close(d));
         let entry = match dom.as_ref().and_then(|d| Some((self.canon(d)?, self.canon_term(d)?))) {
             Some((c, k)) => Some((c?, Rc::new(k))),
             None => None,
         };
+        self.memo.borrow_mut().push(entry.as_ref().and(written));
         self.ctx.borrow_mut().push(entry);
         let out = f();
         self.ctx.borrow_mut().pop();
+        self.memo.borrow_mut().pop();
         out
     }
 
@@ -404,21 +498,43 @@ impl Tr<'_> {
 
     fn global(&self, var: u32, subst: &LocalSubst) -> R<Hx> {
         match subst.tail {
-            // `·^k`: the empty substitution weakened to the ambient Γ — a
-            // closed global used under k binders.
-            SubstTail::Empty { base: CtxBase::Nil, .. } if subst.terms.is_empty() => {}
-            _ => return refuse("global with a non-empty local substitution"),
+            // `·^k, t̄`: a global over the context t̄ substitutes (none for a
+            // closed one), used under k binders: exported closed over its
+            // context, so it applies to t̄, outermost first.
+            SubstTail::Empty { base: CtxBase::Nil, .. } => {}
+            _ => return refuse("global with a weakening substitution"),
         }
         match self.at.checked_sub(1 + var as usize) {
-            Some(abs) => Ok(Hx::Global(abs)),
+            Some(abs) => Ok(app(Hx::Global(abs), subst.terms.iter().map(|t| self.tm(t)).collect::<R<_>>()?)),
             None => refuse("global variable out of scope"),
         }
     }
 
+    /// `f()`'s statement and body under the binders of a global's local
+    /// context, closed over them: `Π Δ. T` and `λ Δ. t`.
+    fn over(&self, ctx: &[Rc<Type>], f: &dyn Fn() -> R<(Hx, Option<Hx>)>) -> R<(Hx, Option<Hx>)> {
+        let Some((first, rest)) = ctx.split_first() else { return f() };
+        let dom = self.ty(first)?;
+        let (ty, body) = self.under(Some(first), || self.over(rest, f))?;
+        Ok((Hx::Pi(Rc::new(dom.clone()), Rc::new(ty)), body.map(|b| lam(dom, b))))
+    }
+
     fn ty(&self, t: &Type) -> R<Hx> {
+        let key = (t as *const Type as usize, self.memo.borrow().at(local_bound_ty(&Rc::new(t.clone())) == 0));
+        if let Some((seen, out)) = self.memo.borrow().tys.get(&key) {
+            if seen == t {
+                return Ok(out.clone());
+            }
+        }
+        let out = self.ty_node(t)?;
+        self.memo.borrow_mut().tys.insert(key, (t.clone(), out.clone()));
+        Ok(out)
+    }
+
+    fn ty_node(&self, t: &Type) -> R<Hx> {
         Ok(match t {
             Type::Nat => Hx::Const("Nat", vec![]),
-            Type::Pi { dom, cod, .. } => Hx::Pi(Box::new(self.ty(dom)?), Box::new(self.under(Some(dom), || self.ty(cod))?)),
+            Type::Pi { dom, cod, .. } => Hx::Pi(Rc::new(self.ty(dom)?), Rc::new(self.under(Some(dom), || self.ty(cod))?)),
             Type::Ty(l) => Hx::Sort(lvl(l)?),
             Type::El { tm, .. } => self.tm(tm)?,
             Type::Id { level, ty, lhs, rhs } => konst("Id", &[level], vec![self.ty(ty)?, self.tm_at_ty(lhs, ty)?, self.tm_at_ty(rhs, ty)?])?,
@@ -438,7 +554,7 @@ impl Tr<'_> {
             }
             Type::Vec { level, elem, len } => konst("Vec", &[level], vec![self.ty(elem)?, self.tm(len)?])?,
             Type::Fin { len } => konst("Fin", &[], vec![self.tm(len)?])?,
-            Type::Wf { shape, .. } => self.wf_type(shape)?,
+            Type::Wf { level, shape, .. } => self.wf_type(level, shape)?,
             Type::DVec { .. } | Type::IWf { .. } => return refuse("DVec/IWf (no code yet; not in declarations)"),
             Type::UPi { .. } => return refuse("ΠΠ (universe polymorphism)"),
             Type::GlobalTy { .. } => return refuse("global type variable (layer c/p meta binding)"),
@@ -496,6 +612,18 @@ impl Tr<'_> {
     }
 
     fn tm(&self, t: &Term) -> R<Hx> {
+        let key = (t as *const Term as usize, self.memo.borrow().at(local_bound(&Rc::new(t.clone())) == 0));
+        if let Some((seen, out)) = self.memo.borrow().tms.get(&key) {
+            if seen == t {
+                return Ok(out.clone());
+            }
+        }
+        let out = self.tm_node(t)?;
+        self.memo.borrow_mut().tms.insert(key, (t.clone(), out.clone()));
+        Ok(out)
+    }
+
+    fn tm_node(&self, t: &Term) -> R<Hx> {
         if let Term::Var(v) = t {
             let ctx = self.ctx.borrow();
             if let Some(Some((c, _))) = ctx.len().checked_sub(1 + v.0 as usize).map(|i| &ctx[i]) {
@@ -509,7 +637,7 @@ impl Tr<'_> {
             Term::Var(v) => Hx::Var(v.0),
             // ---- codes decode to themselves (Tarski → Russell) ----
             Term::TmNat => Hx::Const("Nat", vec![]),
-            Term::TmPi { dom, cod, .. } => Hx::Pi(Box::new(self.tm(dom)?), Box::new(self.binds(1, || self.tm(cod))?)),
+            Term::TmPi { dom, cod, .. } => Hx::Pi(Rc::new(self.tm(dom)?), Rc::new(self.binds(1, || self.tm(cod))?)),
             Term::TmTy(l) => Hx::Sort(lvl(l)?),
             Term::TmId { level, ty, lhs, rhs } => konst("Id", &[level], vec![self.tm(ty)?, self.tm(lhs)?, self.tm(rhs)?])?,
             Term::TmSEq { level, ty, lhs, rhs } => konst("SEq", &[level], vec![self.tm(ty)?, self.tm(lhs)?, self.tm(rhs)?])?,
@@ -528,7 +656,7 @@ impl Tr<'_> {
             }
             Term::TmVec { level, elem, len } => konst("Vec", &[level], vec![self.tm(elem)?, self.tm(len)?])?,
             Term::TmFin { len } => konst("Fin", &[], vec![self.tm(len)?])?,
-            Term::TmWf { level, shape, .. } => self.wf_type(&Type::El { level: level.clone(), tm: shape.clone() })?,
+            Term::TmWf { level, shape, .. } => self.wf_type(level, &Type::El { level: level.clone(), tm: shape.clone() })?,
             // ---- Nat ----
             Term::Zero => Hx::NatLit("0".into()),
             Term::NatLit(n) => Hx::NatLit(n.to_string()),
@@ -682,28 +810,45 @@ impl Tr<'_> {
                 &[shape_level, pos_level],
                 vec![self.ty(shape_ty)?, self.lam_ty(shape_ty, pos_ty)?, self.tm(label)?, self.tm(children)?],
             )?,
-            Term::ElimW { shape_level, pos_level, motive_level, shape, pos, motive, step, scrut } => konst(
-                "elimW",
-                &[shape_level, pos_level, motive_level],
-                vec![
-                    self.ty(shape)?,
-                    self.lam_ty(shape, pos)?,
-                    self.bound(
-                        &Type::W {
-                            shape_level: shape_level.clone(),
-                            pos_level: pos_level.clone(),
-                            shape: shape.clone(),
-                            pos: pos.clone(),
-                        },
-                        || self.ty(motive),
-                    )?,
-                    // The step's `f` and `ih` domains are left to the target
-                    // (a hole): the kernel route refuses it.
-                    lam(self.ty(shape)?, bind(bind(self.under(Some(shape), || self.binds(2, || self.tm(step)))?))),
-                    self.tm(scrut)?,
-                ],
-            )?,
-            Term::Supf { shape, label, children, .. } => self.wf_supf(shape, label, children)?,
+            Term::ElimW { shape_level, pos_level, motive_level, shape, pos, motive, step, scrut } => {
+                let w = Type::W {
+                    shape_level: shape_level.clone(),
+                    pos_level: pos_level.clone(),
+                    shape: shape.clone(),
+                    pos: pos.clone(),
+                };
+                // The step telescope (a : S, f : Π(y : T a). W,
+                // ih : Π(y : T a). M[f y/z]) as the kernel builds it, with
+                // `inst_top` in place of its Γ-identity substitution.
+                let lmax = Level::join(shape_level.clone(), pos_level.clone());
+                let f_ty = Type::Pi {
+                    dom_level: pos_level.clone(),
+                    cod_level: lmax.clone(),
+                    dom: pos.clone(),
+                    cod: Rc::new(w.shift_local(2)),
+                };
+                let f_y = Term::App {
+                    fun: Rc::new(Term::Var(LocalVar(1))),
+                    dom_level: pos_level.clone(),
+                    cod_level: lmax,
+                    dom: Rc::new(pos.shift_local(2)),
+                    cod: Rc::new(w.shift_local(4)),
+                    arg: Rc::new(Term::Var(LocalVar(0))),
+                };
+                let ih_ty = Type::Pi {
+                    dom_level: pos_level.clone(),
+                    cod_level: motive_level.clone(),
+                    dom: Rc::new(pos.shift_local(1)),
+                    cod: Rc::new(motive.inst_top(3, &f_y)),
+                };
+                let step = self.bound(shape, || self.bound(&f_ty, || self.bound(&ih_ty, || self.tm(step))))?;
+                konst(
+                    "elimW",
+                    &[shape_level, pos_level, motive_level],
+                    vec![self.ty(shape)?, self.lam_ty(shape, pos)?, self.bound(&w, || self.ty(motive))?, step, self.tm(scrut)?],
+                )?
+            }
+            Term::Supf { level, shape, label, children, .. } => self.wf_supf(level, shape, label, children)?,
             Term::ElimWf { level, motive_level, shape, arity, motive, step, scrut } => {
                 self.wf_elim(level, motive_level, shape, arity, motive, step, scrut)?
             }
@@ -811,52 +956,56 @@ pub struct Exported {
 /// Translate every binding of Ψ. A binding is refused when it is outside the
 /// fragment *or mentions a refused binding*, so the `Ok` declarations are
 /// closed under dependency.
+
 pub fn export(src: &Source) -> Vec<Exported> {
     let psi = src.psi;
     let mut out: Vec<Exported> = Vec::new();
     let mut refused = vec![false; psi.bindings.len()];
     let table = wf::WfTable::default();
+    let mut interned = Interned::default();
     for (abs, b) in psi.bindings.iter().enumerate() {
         let prefix = psi.prefix(abs);
-        let tr = Tr { at: abs, psi: &prefix, ctx: RefCell::new(Vec::new()), wf: &table };
+        let tr = Tr { at: abs, psi: &prefix, ctx: RefCell::new(Vec::new()), wf: &table, memo: RefCell::default() };
         let mut name = (src.name)(abs);
         table.wanted.borrow_mut().clear();
         let decl = (|| -> R<Decl> {
             let GlobalBinding::Tm { ctx, ty, body, level, .. } = b else {
                 return refuse("context or type global binding");
             };
-            if ctx.len() != 0 {
-                return refuse("global over a non-empty local context Δ");
+            if ctx.base != CtxBase::Nil {
+                return refuse("global over a context variable");
             }
             let proof = body.clone().or_else(|| psi.sealed_proof(abs).cloned()).or_else(|| (src.proof)(abs));
             // The checked spellings first: the kernel's own `⌊·⌋` writes
             // each one's components back, so the translation never guesses
             // them (design §5.6). Statements are types, checked at layer p.
-            let nil = LocalCtx::nil();
-            let spelled_ty = spell_checked_in_code_ty(&prefix, 0, Layer::Prog, &nil, ty.clone(), level, DEFAULT_FUEL)
+            // A global over a local context Δ (a helper the elaborator
+            // abstracted out of a body) is exported closed, over Δ's
+            // entries, and its uses `g[σ]` apply it to σ's terms.
+            let entries: Vec<_> = ctx.entries.iter().cloned().collect();
+            let spelled_ctx = entries
+                .iter()
+                .enumerate()
+                .map(|(i, e)| {
+                    spell_checked_for_export_ty(&prefix, 0, Layer::Prog, &ctx.prefix(i), e.ty.clone(), &e.level, DEFAULT_FUEL)
+                        .map_err(|e| Refusal(format!("context spelling: {e:?}")))
+                })
+                .collect::<R<Vec<_>>>()?;
+            let spelled_ty = spell_checked_for_export_ty(&prefix, 0, Layer::Prog, ctx, ty.clone(), level, DEFAULT_FUEL)
                 .map_err(|e| Refusal(format!("statement spelling: {e:?}")))?;
             // A body the eager checker cannot spell keeps its checked
-            // spellings, which print as holes for the target to fill. None
-            // in the `list` closure does since the record learned to tell a
-            // shared node's occurrences apart.
+            // spellings, which print as holes for the target to fill.
             let spelled = proof.map(|t| {
-                spell_checked_in_code(&prefix, 0, Layer::Code, &nil, Rc::clone(&t), ty, level, DEFAULT_FUEL).unwrap_or(t)
+                spell_checked_for_export(&prefix, 0, Layer::Code, ctx, Rc::clone(&t), ty, level, DEFAULT_FUEL).unwrap_or(t)
             });
-            if let Some(code) = body {
+            if let Some(code) = body.as_ref().filter(|_| entries.is_empty()) {
                 if let Some(w) = tr.register_wf(name.as_deref(), code, ty_tag_ctors(src, &prefix, code))? {
                     name = Some(w.key.clone());
                     return tr.wf_inductive(&w, tr.ty(&spelled_ty)?);
                 }
             }
-            let mut d = Decl {
-                abs,
-                name: name.clone(),
-                ty: tr.ty(&spelled_ty)?,
-                body: spelled.map(|t| tr.tm(&t)).transpose()?,
-                inductive: None,
-                before: Vec::new(),
-                after: Vec::new(),
-            };
+            let (ty, body) = tr.over(&spelled_ctx, &|| Ok((tr.ty(&spelled_ty)?, spelled.as_ref().map(|t| tr.tm(t)).transpose()?)))?;
+            let mut d = Decl { abs, name: name.clone(), ty, body, inductive: None, before: Vec::new(), after: Vec::new() };
             // The eliminators this declaration is the first to use, each
             // translated where its declaration is.
             let wanted = std::mem::take(&mut *table.wanted.borrow_mut());
@@ -865,7 +1014,7 @@ pub fn export(src: &Source) -> Vec<Exported> {
                     continue;
                 }
                 let w = table.by_tag.borrow()[&tag].clone();
-                let at = Tr { at: w.abs, psi: &w.psi, ctx: RefCell::new(Vec::new()), wf: &table };
+                let at = Tr { at: w.abs, psi: &w.psi, ctx: RefCell::new(Vec::new()), wf: &table, memo: RefCell::default() };
                 match at.wf_elim_def(&w, ml) {
                     Ok(aux) => d.before.push(aux),
                     Err(e) => {
@@ -880,10 +1029,71 @@ pub fn export(src: &Source) -> Vec<Exported> {
             }
             Ok(d)
         })();
+        let decl = decl.map(|d| interned.decl(d));
         refused[abs] = decl.is_err();
         out.push(Exported { abs, name, decl });
     }
     out
+}
+
+/// The exported terms, hash-consed across declarations: a library's
+/// statements repeat the same instantiated types from one declaration to
+/// the next, and each translation shares only within its own.
+#[derive(Default)]
+struct Interned {
+    nodes: std::collections::HashMap<Node, Rc<Hx>>,
+}
+
+/// A node by its interned children's addresses, or a leaf.
+#[derive(PartialEq, Eq, Hash)]
+enum Node {
+    Pi(usize, usize),
+    Lam(usize, usize),
+    App(usize, usize),
+    Leaf(Hx),
+}
+
+impl Interned {
+    fn node(&mut self, t: &Hx, memo: &mut std::collections::HashMap<usize, Rc<Hx>>) -> Rc<Hx> {
+        if let Some(out) = memo.get(&(t as *const Hx as usize)) {
+            return out.clone();
+        }
+        let addr = |r: &Rc<Hx>| Rc::as_ptr(r) as usize;
+        let (key, rebuilt) = match t {
+            Hx::Pi(a, b) | Hx::Lam(a, b) | Hx::App(a, b) => {
+                let (a, b) = (self.node(a, memo), self.node(b, memo));
+                let key = match t {
+                    Hx::Pi(..) => Node::Pi(addr(&a), addr(&b)),
+                    Hx::Lam(..) => Node::Lam(addr(&a), addr(&b)),
+                    _ => Node::App(addr(&a), addr(&b)),
+                };
+                let rebuilt = match t {
+                    Hx::Pi(..) => Hx::Pi(a, b),
+                    Hx::Lam(..) => Hx::Lam(a, b),
+                    _ => Hx::App(a, b),
+                };
+                (key, rebuilt)
+            }
+            leaf => (Node::Leaf(leaf.clone()), leaf.clone()),
+        };
+        let out = self.nodes.entry(key).or_insert_with(|| Rc::new(rebuilt)).clone();
+        memo.insert(t as *const Hx as usize, out.clone());
+        out
+    }
+
+    fn decl(&mut self, d: Decl) -> Decl {
+        let mut memo = std::collections::HashMap::new();
+        let mut f = |t: &Hx| (*self.node(t, &mut memo)).clone();
+        let aux = |a: &Aux, f: &mut dyn FnMut(&Hx) -> Hx| Aux { name: a.name.clone(), ty: f(&a.ty), body: f(&a.body) };
+        Decl {
+            ty: f(&d.ty),
+            body: d.body.as_ref().map(&mut f),
+            inductive: d.inductive.as_ref().map(|i| Inductive { ctors: i.ctors.iter().map(|(k, t)| (k.clone(), f(t))).collect(), ..i.clone() }),
+            before: d.before.iter().map(|a| aux(a, &mut f)).collect(),
+            after: d.after.iter().map(|a| aux(a, &mut f)).collect(),
+            ..d
+        }
+    }
 }
 
 /// The constructor names of the tier-1 declaration whose type code `code`
@@ -899,29 +1109,26 @@ fn ty_tag_ctors(src: &Source, prefix: &GlobalCtx, code: &Term) -> Option<Vec<Str
     (src.ctors)(Tr::tag_in(prefix, &shape, depth)?)
 }
 
-fn mentions(d: &Decl) -> Vec<usize> {
-    fn go(t: &Hx, out: &mut Vec<usize>) {
-        match t {
-            Hx::Global(g) => out.push(*g),
-            Hx::Pi(a, b) | Hx::Lam(a, b) | Hx::App(a, b) => {
-                go(a, out);
-                go(b, out);
-            }
-            _ => {}
-        }
-    }
-    let mut out = Vec::new();
-    go(&d.ty, &mut out);
-    if let Some(b) = &d.body {
-        go(b, &mut out);
-    }
-    for (_, t) in d.inductive.iter().flat_map(|i| &i.ctors) {
-        go(t, &mut out);
-    }
+/// Every term `d` declares: its statement, body, constructors and helpers.
+fn roots(d: &Decl) -> Vec<&Hx> {
+    let mut out = vec![&d.ty];
+    out.extend(&d.body);
+    out.extend(d.inductive.iter().flat_map(|i| &i.ctors).map(|(_, t)| t));
     for a in d.before.iter().chain(&d.after) {
-        go(&a.ty, &mut out);
-        go(&a.body, &mut out);
+        out.extend([&a.ty, &a.body]);
     }
+    out
+}
+
+fn mentions(d: &Decl) -> Vec<usize> {
+    let mut out = Vec::new();
+    each_node(roots(d), &mut |t| {
+        if let Hx::Global(g) = t {
+            out.push(*g);
+        }
+    });
+    out.sort_unstable();
+    out.dedup();
     out.retain(|&g| g != d.abs);
     out
 }
@@ -1270,43 +1477,20 @@ const COQ_MAX_LITERAL_DIGITS: usize = 5;
 
 /// Every numeral `d` spells.
 fn for_each_literal(d: &Decl, f: &mut dyn FnMut(&str)) {
-    fn go(t: &Hx, f: &mut dyn FnMut(&str)) {
-        match t {
-            Hx::Pi(a, b) | Hx::Lam(a, b) | Hx::App(a, b) => {
-                go(a, f);
-                go(b, f);
-            }
-            Hx::NatLit(n) => f(n),
-            _ => {}
+    each_node(roots(d), &mut |t| {
+        if let Hx::NatLit(n) = t {
+            f(n)
         }
-    }
-    go(&d.ty, f);
-    d.body.iter().for_each(|b| go(b, f));
-    for a in d.before.iter().chain(&d.after) {
-        go(&a.ty, f);
-        go(&a.body, f);
-    }
+    });
 }
 
 /// Every global and target-only constant `d` mentions.
 fn for_each_constant(d: &Decl, f: &mut dyn FnMut(&Hx)) {
-    fn go(t: &Hx, f: &mut dyn FnMut(&Hx)) {
-        match t {
-            Hx::Pi(a, b) | Hx::Lam(a, b) | Hx::App(a, b) => {
-                go(a, f);
-                go(b, f);
-            }
-            Hx::Global(_) | Hx::Named(..) => f(t),
-            _ => {}
+    each_node(roots(d), &mut |t| {
+        if let Hx::Global(_) | Hx::Named(..) = t {
+            f(t)
         }
-    }
-    go(&d.ty, f);
-    d.body.iter().for_each(|b| go(b, f));
-    d.inductive.iter().flat_map(|i| &i.ctors).for_each(|(_, t)| go(t, f));
-    for a in d.before.iter().chain(&d.after) {
-        go(&a.ty, f);
-        go(&a.body, f);
-    }
+    });
 }
 
 /// The declarations of one output file. Shared subterms' definitions are
@@ -1322,16 +1506,19 @@ fn print_run<'e>(p: &mut Printer, decls: impl Iterator<Item = &'e Exported> + Cl
                 recs.insert(format!("{key}::rec"), (ind.nparams, ind.fields.clone()));
             }
         }
-        let fix = |t: &Hx| rocq_minors(t, &recs);
+        let memo = RefCell::new(Nodes::new());
+        let fix = |t: &Hx| (*rocq_minors(t, &recs, &mut memo.borrow_mut())).clone();
         rocq = decls
+            // The memo is keyed by node address, so it reads the
+            // declarations in place, never a copy that is dropped after.
             .map(|e| Exported {
-                decl: e.decl.clone().map(|d| Decl {
+                decl: e.decl.as_ref().map(|d| Decl {
                     ty: fix(&d.ty),
                     body: d.body.as_ref().map(fix),
                     before: d.before.iter().map(|a| Aux { name: a.name.clone(), ty: fix(&a.ty), body: fix(&a.body) }).collect(),
                     after: d.after.iter().map(|a| Aux { name: a.name.clone(), ty: fix(&a.ty), body: fix(&a.body) }).collect(),
-                    ..d
-                }),
+                    ..d.clone()
+                }).map_err(Refusal::clone),
                 ..e.clone()
             })
             .collect();
@@ -1419,7 +1606,10 @@ fn print_run<'e>(p: &mut Printer, decls: impl Iterator<Item = &'e Exported> + Cl
 /// children named by their line number among the node lines.
 struct Dag {
     out: String,
-    ids: std::collections::HashMap<Hx, usize>,
+    /// Lines by their text, and by the node they were made for: a shared
+    /// node is visited once.
+    ids: std::collections::HashMap<String, usize>,
+    by_node: std::collections::HashMap<*const Hx, usize>,
     names: Vec<String>,
     /// Declarations the kernel route skipped, which their dependents skip.
     skipped: std::collections::HashSet<usize>,
@@ -1427,7 +1617,7 @@ struct Dag {
 
 impl Dag {
     fn node(&mut self, t: &Hx) -> Result<usize, String> {
-        if let Some(&id) = self.ids.get(t) {
+        if let Some(&id) = self.by_node.get(&(t as *const Hx)) {
             return Ok(id);
         }
         let line = match t {
@@ -1455,10 +1645,13 @@ impl Dag {
             Hx::NatLit(n) => format!("n\t{n}"),
             Hx::Hole => return Err("a hole (a component only the target's elaborator can infer)".into()),
         };
-        let id = self.ids.len();
-        self.out.push_str(&line);
-        self.out.push('\n');
-        self.ids.insert(t.clone(), id);
+        let next = self.ids.len();
+        let id = *self.ids.entry(line).or_insert_with_key(|line| {
+            self.out.push_str(line);
+            self.out.push('\n');
+            next
+        });
+        self.by_node.insert(t as *const Hx, id);
         Ok(id)
     }
 }
@@ -1480,7 +1673,7 @@ pub fn print_kernel(decls: &[Exported]) -> String {
             }
         }
     }
-    let mut dag = Dag { out: String::new(), ids: Default::default(), names, skipped: Default::default() };
+    let mut dag = Dag { out: String::new(), ids: Default::default(), by_node: Default::default(), names, skipped: Default::default() };
     for e in decls {
         let name = dag.names[e.abs].clone();
         let line = match &e.decl {

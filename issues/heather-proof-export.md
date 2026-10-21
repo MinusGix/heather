@@ -61,3 +61,8 @@ replacement symbol where the two theories differ. The first round:
   assumes only Definitional UIP. The library sweep in Rocq stops at
   theorems whose statement is unit η; those wait on
   [[export-typed-translation]].
+- 2026-10-21, later: the whole library but the ordered-field tower exports
+  (2461 of 2510 bindings) and Lean's kernel accepts all of it except 16
+  `utf8` proofs that evaluate on large numerals (design §7). What stops
+  the rest is filed: [[export-inductive-coverage]] and
+  [[export-spelling-cost]].
