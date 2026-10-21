@@ -363,6 +363,57 @@ composition issue's job once some of them live in Heather.
 
 ---
 
+## 8a. Execution tiers, oracles and outside integration
+
+The request tree fixes a **protocol**: what a tactic may ask and what comes
+back. It does not fix *who runs the tactic's own code*, and soundness never
+depends on that, because every result is elaborated against the goal and
+re-checked by the kernel. So a tactic is untrusted however it runs, and three
+ways of running one share the protocol:
+
+1. **Interpreted Heather** (R1). The tree is evaluated as §3.1 says. Each step
+   costs an evaluator force, so this suits strategy, composition and glue,
+   not hot loops. It is the tier you can prove theorems about directly.
+2. **Native protocol speakers.** A Rust tactic implements the same protocol
+   as a coroutine: it yields a `Req` and resumes with the `Resp`. The host
+   loop drives both kinds alike. Two consequences follow. Existing Rust
+   tactics (`omega`, `ring`, `split_all`) can be wrapped as protocol speakers,
+   so a Heather `first_of` composes them with Heather tactics. And an
+   **outside process** speaks it over a serialised `Req`/`Resp` stream: the
+   data types are first-order apart from the continuation, which stays on the
+   speaker's side. R1 ships the Rust trait beside the interpreter, so a
+   native tactic works from the start.
+3. **Compiled Heather.** Later, the native compiler compiles a Heather
+   tactic to machine code. You keep the source as the thing to reason
+   about and gain native speed, and no tactic changes.
+
+**Certificates: native search, checked in Heather.** For expensive search,
+the split is an untrusted **oracle** plus a checker. A request
+`Oracle(name, input)` calls a registered native procedure (in-process, or an
+outside tool such as a SAT/SMT solver or a CAS) and answers with certificate
+*data*; the Heather side then checks it in one of two ways:
+
+- **by reflection**: a Heather checker `check(input, cert) = true` proved
+  sound once, its run discharged by evaluation (`decide`-style). The proof
+  term stays small, and the cost is kernel evaluation of the check. SAT with
+  DRAT-style traces, linear-arithmetic witnesses and ring certificates fit;
+- **by reconstruction**: the tactic builds a proof term from the
+  certificate and the host elaborates it, which is what `omega` does today
+  in Rust.
+
+An oracle is never trusted, only the check is. That is the same stance as
+the rest of the design, and it is what makes outside integration safe to
+add. The oracle registry (which names exist, how outside tools are launched
+and pinned for a build) is part of the build's identity (§3.3), never of
+correctness.
+
+**Where the work should live.** Search and normalisation go in native code,
+as oracles or as native protocol speakers. Strategy and the last step of a
+proof go in Heather. Compiling Heather tactics later removes most of the
+interpretation cost without moving that line.
+
+---
+
 ## 9. Probe (in this round)
 
 `crates/elab/tests/tactic_request_tree.rs` checks that the protocol is
@@ -390,9 +441,10 @@ the generalisation.
 
 | round | builds | done when |
 |---|---|---|
-| R1 | `lib/std/tactic.hthr` (protocol, `bind`, helpers), `host.rs` loop, `by`, requests `Goal`/`View`/`Defeq`/`Fail`, the speller's recogniser shared with `View` | `by assumption` closes goals at open types and neutral hypotheses, and its failure lists every hypothesis tried |
+| R1 | `lib/std/tactic.hthr` (protocol, `bind`, helpers), `host.rs` loop, `by`, requests `Goal`/`View`/`Defeq`/`Fail`, the speller's recogniser shared with `View`, the Rust protocol-speaker trait (§8a) | `by assumption` closes goals at open types and neutral hypotheses, and its failure lists every hypothesis tried |
 | R2 | `Intro`, `Resolve`, `Infer`, `Whnf`, `Check`/`Attempt` with rollback; `exact`, `intro`, `apply`, `first_of` in Heather | a Heather `apply` closes an implication chain; a failed `first_of` reports each branch |
 | R3 | `tac-first-port`: `split_all` or `monoid` normalisation in Heather | it closes the same goals as the Rust one on the existing tests |
+| R3½ | `Oracle(name, input)` with one registered native procedure and a reflection-checked certificate (§8a) | a goal closes by native search plus a Heather check whose proof term is small |
 | R4 | publication (`heather-checked-construction-api`, retargeted): a `Publish(group)` request that checks a small declaration group and adds it only if every member passes the kernel | a Heather generator publishes a lemma group in the caller's scope; a failing member publishes nothing |
 
 R1 tests follow `docs/testing-generated-terms.md`'s axes: a closed and a
@@ -415,7 +467,8 @@ forged handle is refused).
   provenance.
 - **A Rust tactic trait first, Heather later.** Cheaper for one round, but
   the milestone is about Heather code, and the Rust-side shape would be
-  fixed by Rust's needs.
+  fixed by Rust's needs. (Native tactics are not rejected: §8a makes them
+  speakers of the same protocol.)
 - **An effect-system or monad-transformer `TacticM`.** Heather has no
   effects; a request tree is the pure encoding of one, and it is the same
   object the interaction-tree area is building.
