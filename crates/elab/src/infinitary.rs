@@ -771,7 +771,15 @@ impl Elaborator {
         let fields = self.build_fields(cx, &spine.ctors[i].0, &payload, true, span)?;
         let label = Rc::new(inject(&spine, i, n, fields, 0));
         let child = ctor.kind.iter().position(|k| k.is_child());
-        let (kids, proof) = match child {
+        // A child is bound once, `(λc. ⟨sup(ℓ; …c…), …c…⟩) child`, and the
+        // tree and the proof both read the bound `c`: written into each
+        // directly, the child was evaluated once for the tree and again for
+        // the proof, and a `bind` nested to the left paid that at every
+        // level (issues/tier2-left-nested-bind-cost.md). A function child's
+        // two halves apply `c` to the same `y`, which the evaluator shares
+        // (`Eval::eval_projected` in the kernel).
+        let lab1 = || Rc::new(label.shift_local(1));
+        let (child_ty, child_level, child_tm, kids, proof) = match child {
             None => {
                 let kids = p.leaf_kids(0, Rc::clone(&label));
                 let proof = Term::Refl {
@@ -779,17 +787,17 @@ impl Elaborator {
                     ty: Rc::new(p.kids_ty(0, Rc::clone(&label))),
                     tm: Rc::new(kids.clone()),
                 };
-                (kids, proof)
+                return Ok(p.pair(0, Rc::new(p.sup(0, label, Rc::new(kids))), Rc::new(proof)));
             }
             Some(k) if ctor.kind[k] == FieldKind::Plain => {
                 let t = Rc::new(self.elab_check(cx, args[k], &ty, &p.lw)?);
                 let kids = Term::Lam {
                     dom_level: p.lp.clone(),
                     cod_level: p.lw.clone(),
-                    dom: Rc::new(p.pos_at(0, Rc::clone(&label))),
-                    body: Rc::new(p.fst(1, Rc::new(t.shift_local(1)))),
+                    dom: Rc::new(p.pos_at(1, lab1())),
+                    body: Rc::new(p.fst(2, var(1))),
                 };
-                (kids, p.snd(0, t))
+                (ty.clone(), p.lw.clone(), t, kids, p.snd(1, var(0)))
             }
             Some(k) => {
                 // `k` is checked at `Π(y : A[ā]). ⟦D⟧`, `A[ā]` read off the
@@ -803,23 +811,37 @@ impl Elaborator {
                 };
                 let kt = Rc::new(self.elab_check(cx, args[k], &k_ty, &p.lf())?);
                 let at_y = Rc::new(checked_app(
-                    Rc::new(kt.shift_local(1)),
+                    var(1),
                     p.lp.clone(),
                     p.lw.clone(),
-                    Rc::new(dom.shift_local(1)),
-                    Rc::new(ty.shift_local(2)),
+                    Rc::new(dom.shift_local(2)),
+                    Rc::new(ty.shift_local(3)),
                     var(0),
                 ));
                 let lam = |body: Term| Term::Lam {
                     dom_level: p.lp.clone(),
                     cod_level: p.lw.clone(),
-                    dom: Rc::new(p.pos_at(0, Rc::clone(&label))),
+                    dom: Rc::new(p.pos_at(1, lab1())),
                     body: Rc::new(body),
                 };
-                (lam(p.fst(1, Rc::clone(&at_y))), lam(p.snd(1, at_y)))
+                (k_ty, p.lf(), kt, lam(p.fst(2, Rc::clone(&at_y))), lam(p.snd(2, at_y)))
             }
         };
-        Ok(p.pair(0, Rc::new(p.sup(0, label, Rc::new(kids))), Rc::new(proof)))
+        let body = p.pair(1, Rc::new(p.sup(1, lab1(), Rc::new(kids))), Rc::new(proof));
+        let child_ty = Rc::new(child_ty);
+        Ok(Term::App {
+            fun: Rc::new(Term::Lam {
+                dom_level: child_level.clone(),
+                cod_level: p.lw.clone(),
+                dom: Rc::clone(&child_ty),
+                body: Rc::new(body),
+            }),
+            dom_level: child_level,
+            cod_level: p.lw.clone(),
+            dom: child_ty,
+            cod: Rc::new(ty.shift_local(1)),
+            arg: child_tm,
+        })
     }
 
     // -- match (§7, §8) -----------------------------------------------------

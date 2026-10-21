@@ -200,6 +200,40 @@ fn tick() → ITree<Nat>(Counter()) {
     );
 }
 
+// Binds nested to the left thread in time quadratic in their depth, not
+// `2^d` (issues/tier2-left-nested-bind-cost.md): every `Vis` a `bind` builds
+// reads its child once for the tree and once for the proof, and those two
+// reads now share one evaluation.
+#[test]
+fn left_nested_binds_thread() {
+    let src = "
+fn Counter() → Events { Events::sum(Events::state<Nat>(), Events::none()) }
+fn tick() → ITree<Nat>(Counter()) {
+    ITree::bind(Counter(), ITree::trigger(Counter(), Inl(Get)), λ n =>
+        ITree::bind(Counter(), ITree::trigger(Counter(), Inl(Put(Succ(n)))), λ u => Ret(n)))
+}
+fn lticks(k: Nat) → ITree<Nat>(Counter()) {
+    match k { Zero => Ret(0), Succ(j) => ITree::bind(Counter(), lticks(j), λ n => tick()) }
+}
+";
+    let mut e = base();
+    check(
+        &mut e,
+        "itree_left_nested",
+        &format!(
+            "{IMPORTS}{src}
+            theorem deep(): ITree::thread(lticks(24), 0) = Some(Pair(24, 23)) {{ refl }}"
+        ),
+    );
+    refused(
+        "itree_left_nested_wrong",
+        &format!(
+            "{IMPORTS}{src}
+            theorem bad(): ITree::thread(lticks(24), 0) = Some(Pair(24, 24)) {{ refl }}"
+        ),
+    );
+}
+
 // A program built by `rec` grows with fuel and is a `Program`; the spin
 // proof's induction goes through for a loop that only goes round and is
 // refused for one that breaks.
