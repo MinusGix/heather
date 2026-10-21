@@ -29,6 +29,7 @@ import x86_64_fetched_code;
 import x86_64_layout;
 import x86_64_data_read;
 import x86_64_store;
+import x86_64_stack;
 import bitvec;
 import bool;
 import list;
@@ -60,6 +61,12 @@ inductive Asm {
     // program's `index`th, from a table beside the program
     // (linux_x86_64_wp's `Contract`), since an item holds no type.
     Proved(index: Nat, bytes: List<BitVec(8)>, len: Nat, measured: bytes.len() = len),
+    // A near CALL to the label named `target`, RET, and a word stored to
+    // and loaded from a frame slot (x86_64_stack).
+    CallTo(target: Nat),
+    Ret,
+    Spill(store: StackStore),
+    Reload(load: StackLoad),
     // A piece measured by its lemma: a library's layout, too long to read
     // its length off its bytes.
     Piece(bytes: List<BitVec(8)>, len: Nat, measured: bytes.len() = len),
@@ -102,6 +109,10 @@ fn asm_len(item: Asm) → Nat {
         Jmp(_) => 5,
         Syscall => 2,
         Proved(_, _, len, _) => len,
+        CallTo(_) => 5,
+        Ret => 1,
+        Spill(_) => 5,
+        Reload(_) => 5,
         Piece(_, len, _) => len,
         Refer(_, len, _) => len,
         Hole(_, len) => len,
@@ -130,6 +141,10 @@ fn asm_bytes(fills: Nat → List<BitVec(8)>, labels: Nat → Nat, here: Nat, ite
         Jmp(target) => near_control_bytes(JumpNear(near_rel(here + 5, labels(target)))),
         Syscall => syscall_bytes(),
         Proved(_, bytes, _, _) => bytes,
+        CallTo(target) => CallNear(near_rel(here + 5, labels(target))).bytes(),
+        Ret => ReturnNear.bytes(),
+        Spill(store) => store.bytes(),
+        Reload(load) => load.bytes(),
         Piece(bytes, _, _) => bytes,
         Refer(bytes, _, _) => bytes(labels, here),
         Hole(index, _) => fills(index),
@@ -153,6 +168,7 @@ fn asm_jump_of(labels: Nat → Nat, here: Nat, item: Asm) → BitVec(32) {
     match item {
         Jcc(_, target) => near_rel(here + 6, labels(target)),
         Jmp(target) => near_rel(here + 5, labels(target)),
+        CallTo(target) => near_rel(here + 5, labels(target)),
         _ => BitVec::ofNat(0),
     }
 }
@@ -218,6 +234,10 @@ theorem fills_fit_before(fills: Nat → List<BitVec(8)>, before: Prog, name: Nat
         Jmp(_) => λ f => f,
         Syscall => λ f => f,
         Proved(_, _, _, _) => λ f => f,
+        CallTo(_) => λ f => f,
+        Ret => λ f => f,
+        Spill(_) => λ f => f,
+        Reload(_) => λ f => f,
         Piece(_, _, _) => λ f => f,
         Refer(_, _, _) => λ f => f,
         Hole(_, _) => λ f => f.right,
@@ -236,6 +256,10 @@ theorem asm_bytes_len(fills: Nat → List<BitVec(8)>, labels: Nat → Nat, here:
         Jmp(_) => λ _ => refl,
         Syscall => λ _ => refl,
         Proved(_, _, _, measured) => λ _ => measured,
+        CallTo(_) => λ _ => refl,
+        Ret => λ _ => refl,
+        Spill(_) => λ _ => refl,
+        Reload(_) => λ _ => refl,
         Piece(_, _, measured) => λ _ => measured,
         Refer(_, _, measured) => λ _ => measured(labels, here),
         Hole(_, _) => λ f => f.left,
@@ -268,11 +292,10 @@ theorem asm_resident_from<M>(fetch: FetchAccess<M>, memory: M, origin: BitVec(64
         At(before, name, item) => λ fits last resident => {
             let code = asm_code(fills, labels, before);
             let bytes = asm_bytes(fills, labels, prog_len(before), item);
-            let moved = j(List::append_assoc(code, bytes, last), λ c _ => CodeResident(fetch, memory, c, next_rip(origin, at)), resident);
+            let moved = rewrite(List::append_assoc(code, bytes, last), in := resident);
             let parts = resident_split_at(fetch, memory, code, bytes ++ last, origin, at, moved);
             let fits_before = fills_fit_before(fills, before, name, item, fits);
-            let here = j(asm_code_len(fills, labels, before, fits_before), λ n _ => CodeResident(fetch, memory, bytes ++ last, next_rip(origin, at + n)),
-                parts.right);
+            let here = rewrite(asm_code_len(fills, labels, before, fits_before), in := parts.right);
             λ k => match k as λ i => CodeResident(fetch, memory, item_bytes(fills, labels, asm_back(At(before, name, item), i)),
                     next_rip(origin, at + asm_at(asm_back(At(before, name, item), i)))) {
                 Zero => resident_split_at(fetch, memory, bytes, last, origin, at + prog_len(before), here).left,

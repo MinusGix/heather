@@ -401,8 +401,8 @@ theorem test_self_nonzero(n: Nat): (x: BitVec(n)) → 0 < x.toNat() → is_zero_
             (match x.head_bit() as λ h => 0 < Nat::of_bit(h) + t.toNat().twice() →
                     (h && h).not() && is_zero_bits(k, t.band(t)) = False {
                 False => λ sum => {
-                    let s0: (0 < t.toNat().twice()) = j(Nat::add_left_zero(t.toNat().twice()), λ v _ => 0 < v, sum);
-                    let doubled: (0 < t.toNat() + t.toNat()) = j(Nat::twice_add_self(t.toNat()), λ v _ => 0 < v, s0);
+                    let s0: (0 < t.toNat().twice()) = rewrite(Nat::add_left_zero(t.toNat().twice()), in := sum);
+                    let doubled: (0 < t.toNat() + t.toNat()) = rewrite(Nat::twice_add_self(t.toNat()), in := s0);
                     let part: (0 < t.toNat()) = omega;
                     ih(t, part)
                 },

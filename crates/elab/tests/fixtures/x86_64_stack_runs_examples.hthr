@@ -1,0 +1,284 @@
+// The stack runs composed by hand (issues/function-ir-verified-lowering.md,
+// round 3): a callee closed by RET into its contract, and a caller that
+// sets its argument, calls it, and has the result with its stack pointer
+// back. The lowering does this from FunctionIR once; this keeps the lemmas
+// it stands on composing on their own. A toy memory meets the stack laws.
+import x86_64;
+import x86_64_block;
+import x86_64_fetch;
+import x86_64_data_read;
+import x86_64_fetched_code;
+import x86_64_layout;
+import x86_64_store;
+import x86_64_stack;
+import x86_64_kept;
+import x86_64_asm;
+import x86_64_asm_runs;
+import x86_64_stack_runs;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+import omega;
+
+fn Prog::put(self p: Prog, item: Asm) → Prog { At(p, 0, item) }
+fn Prog::label(self p: Prog, name: Nat) → Prog { At(p, name, Block([])) }
+
+// double (label 1): rax = rdi + rdi. The caller (label 2): rdi = 21, call
+// double.
+fn double_code() → List<Instruction> { [MovRR(Rax, Rdi), AddRR(Rax, Rax)] }
+fn double_body() → Prog { Start.label(1).put(Block(double_code())) }
+fn caller_start() → Prog { double_body().put(Ret).label(2) }
+fn caller_set() → Prog { caller_start().put(Block([MovRI(Rdi, BitVec::ofNat(21))])) }
+fn calls_program() → Prog { caller_set().put(CallTo(1)).put(Block([])) }
+
+theorem calls_laid_out(): calls_program().laid_out().IsTrue() { trivial }
+theorem calls_offsets(): (prog_len(double_body()) = 6) ∧ ((prog_len(caller_start()) = 7) ∧ (prog_len(caller_set()) = 17)) {
+    ⟨refl, ⟨refl, refl⟩⟩
+}
+theorem calls_bytes(): assemble(no_fills(), calls_program(), []).len() = 22 { refl }
+
+fn DoublePre<M>(i: Nat, s: MachineState<M>) → Type { True }
+fn DoublePost<M>(i: Nat, s, t: MachineState<M>) → Type {
+    read_gpr(Rax, t.gprs) = read_gpr(Rdi, s.gprs).add(read_gpr(Rdi, s.gprs))
+}
+
+// double returns rdi + rdi in rax.
+theorem double_returns<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, stack: Stack<M>(fetch, data), last: List<BitVec(8)>,
+    origin: BitVec(64)):
+    Site<M>(fetch, data, calls_program(), last, origin).Returns(stack, 0, DoublePre<M>, DoublePost<M>) {
+    let site = Site<M>(fetch, data, calls_program(), last, origin);
+    let fits = calls_program().laid_out_fits(calls_laid_out());
+    site.returns_by(stack, fits, 0, 4, double_body(), 0, refl, DoublePre<M>, DoublePost<M>,
+        λ s0 i ret => {
+            let pre = λ (g: Gprs) => (g = s0.gprs) ∧ (read_gpr(Rsp, s0.gprs) = stack.at(i));
+            let post = λ (g: Gprs) => (read_gpr(Rsp, g) = stack.at(i)) ∧
+                (read_gpr(Rax, g) = read_gpr(Rdi, s0.gprs).add(read_gpr(Rdi, s0.gprs)));
+            let frame = λ (memory: M) => read_word(data, memory, stack.at(i)) = Some(ret);
+            site.moves_weaken(stack.writes, 0, 6,
+                λ (s: MachineState<M>) => pre(s.gprs) ∧ frame(s.memory), λ (t: MachineState<M>) => post(t.gprs) ∧ frame(t.memory),
+                λ (s: MachineState<M>) => (s = s0) ∧ ((read_gpr(Rsp, s0.gprs) = stack.at(i)) ∧ (i + 8 <= stack.size ∧
+                    (DoublePre<M>(i, s0) ∧ read_word(data, s0.memory, stack.at(i)) = Some(ret)))),
+                λ (t: MachineState<M>) => (read_gpr(Rsp, t.gprs) = stack.at(i)) ∧
+                    ((read_word(data, t.memory, stack.at(i)) = Some(ret)) ∧ DoublePost<M>(i, s0, return_near_after(ret, t))),
+                site.moves_of_runs(stack.writes, 0, 6, pre, post, frame,
+                    site.runs_block(fits, 5, Start.label(1), 0, double_code(), refl, pre, post,
+                        λ s held => ⟨trans(cong_fn<Gprs, BitVec(64)>(λ g => read_gpr(Rsp, g), held.left), held.right),
+                            cong_fn<Gprs, BitVec(64)>(λ g => read_gpr(Rdi, g).add(read_gpr(Rdi, g)), held.left)⟩)),
+                λ s held => ⟨⟨cong_fn<MachineState<M>, Gprs>(λ x => x.gprs, held.left), held.right.left⟩,
+                    j(sym(held.left), λ x _ => frame(x.memory), held.right.right.right.right)⟩,
+                λ t held => ⟨held.left.left, ⟨held.right, held.left.right⟩⟩)
+        })
+}
+
+// The caller: from label 2 with room for the return address below the stack
+// pointer, to the end with 42 in rax and the stack pointer where it was.
+theorem caller_moves<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, stack: Stack<M>(fetch, data), last: List<BitVec(8)>,
+    origin: BitVec(64), i: Nat):
+    Site<M>(fetch, data, calls_program(), last, origin).Moves(stack.writes, 7, 22,
+        λ (s: MachineState<M>) => (read_gpr(Rsp, s.gprs) = stack.at(i + 8)) ∧ (i + 8 <= stack.size),
+        λ (t: MachineState<M>) => (read_gpr(Rax, t.gprs) = BitVec::ofNat(42)) ∧ (read_gpr(Rsp, t.gprs) = stack.at(i + 8))) {
+    let site = Site<M>(fetch, data, calls_program(), last, origin);
+    let program = calls_program();
+    let laid = calls_laid_out();
+    let fits = program.laid_out_fits(laid);
+    let entered = λ (g: Gprs) => (read_gpr(Rsp, g) = stack.at(i + 8)) ∧ (i + 8 <= stack.size);
+    let set = λ (g: Gprs) => entered(g) ∧ (read_gpr(Rdi, g) = BitVec::ofNat(21));
+    let always: M → Type = λ (memory: M) => True;
+    let displacement = asm_jump_of(asm_labels(program), 17, CallTo(1));
+    site.moves_trans(stack.writes, 7, 17, 22,
+        λ (s: MachineState<M>) => entered(s.gprs),
+        λ (s: MachineState<M>) => set(s.gprs) ∧ always(s.memory),
+        λ (t: MachineState<M>) => (read_gpr(Rax, t.gprs) = BitVec::ofNat(42)) ∧ (read_gpr(Rsp, t.gprs) = stack.at(i + 8)),
+        site.moves_weaken(stack.writes, 7, 17,
+            λ (s: MachineState<M>) => entered(s.gprs) ∧ always(s.memory), λ (s: MachineState<M>) => set(s.gprs) ∧ always(s.memory),
+            λ (s: MachineState<M>) => entered(s.gprs), λ (s: MachineState<M>) => set(s.gprs) ∧ always(s.memory),
+            site.moves_of_runs(stack.writes, 7, 17, entered, set, always,
+                site.runs_block(fits, 2, caller_start(), 0, [MovRI(Rdi, BitVec::ofNat(21))], refl, entered, set,
+                    λ s held => ⟨held, refl⟩)),
+            λ s held => ⟨held, trivial⟩, λ t held => held),
+        site.moves_call(stack, fits, 1, caller_set(), 0, 1, refl, 0,
+            call_lands(asm_labels(program), 1, program, caller_set(), 0, 1, program.laid_out_lands(laid), refl),
+            DoublePre<M>, DoublePost<M>, double_returns<M>(fetch, data, stack, last, origin),
+            λ (s: MachineState<M>) => set(s.gprs) ∧ always(s.memory),
+            λ (t: MachineState<M>) => (read_gpr(Rax, t.gprs) = BitVec::ofNat(42)) ∧ (read_gpr(Rsp, t.gprs) = stack.at(i + 8)),
+            λ _ => i,
+            λ s held => ⟨held.left.left.left, ⟨held.left.left.right, trivial⟩⟩,
+            λ s t held at_t doubled => ⟨trans(doubled, j(sym(held.left.right),
+                    λ x _ => x.add(x) = BitVec::ofNat(42), refl)), at_t⟩))
+}
+
+// ---------------------------------------------------------------------------
+// The stack laws are satisfiable: a toy memory meets them. Code is a map of
+// its own (nothing stores to it); data is one byte per address, read by the
+// address's value; a store writes its bytes from there up.
+
+record Toy { code: BitVec(64) → Option<BitVec(8)>, bytes: Nat → BitVec(8) }
+
+fn store_at(f: Nat → BitVec(8), base: Nat, bytes: List<BitVec(8)>, n: Nat) → BitVec(8) {
+    match base.leb(n) { False => f(n), True => match bytes.nth(n -base) { None => f(n), Some(byte) => byte } }
+}
+
+fn toy_fetch() → FetchAccess<Toy> {
+    FetchAccess(λ (m: Toy) (a: BitVec(64)) => m.code(a), λ (m: Toy) (a: BitVec(64)) => match m.code(a) { None => False, Some(_) => True })
+}
+fn toy_data() → ByteReadAccess<Toy> { ByteReadAccess(λ (m: Toy) (a: BitVec(64)) => Some(m.bytes(a.toNat()))) }
+fn toy_store(m: Toy, a: BitVec(64), bytes: List<BitVec(8)>) → Toy { Toy(m.code, λ (n: Nat) => store_at(m.bytes, a.toNat(), bytes, n)) }
+fn toy_writes() → ByteWrites<Toy> { ByteWrites(λ (m: Toy) (a: BitVec(64)) (n: Nat) => True, toy_store) }
+
+theorem zero_at(i: Nat, small: i < Nat::pow(2, 64)): next_rip(BitVec::zero(), i).toNat() = i {
+    let value: (BitVec::ofNat(i, n := 64).toNat() = i) = BitVec::toNat_ofNat(64, i, small);
+    trans(cong_fn<BitVec(64), Nat>(λ x => x.toNat(),
+        trans(rip_count(BitVec::zero(), sym(value)), BitVec::iterate_increment_toNat(64, BitVec::ofNat(i)))), value)
+}
+
+theorem leb_false(a, b: Nat, below: b < a): a.leb(b) = False {
+    (match a.leb(b) as λ found => (a.leb(b) = found) → found = False {
+        False => λ _ => refl,
+        True => λ found => false_elim(Nat::lt_irrefl(b, Nat::le_trans(Succ(b), a, b, below,
+            Nat::leb_sound(a, b, j(sym(found), λ decided _ => decided.IsTrue(), trivial))))),
+    })(refl)
+}
+theorem leb_true(a, b: Nat, le: a <= b): a.leb(b) = True { eq_true_of_is_true(a.leb(b), Nat::leb_complete(a, b, le)) }
+
+theorem nth_past<A>(xs: List<A>): (i: Nat) → xs.len() <= i → xs.nth(i) = None {
+    match xs {
+        Nil => λ i _ => refl,
+        Cons(_, rest) => λ i => match i as λ k => Succ(rest.len()) <= k → Cons(_, rest).nth(k) = None {
+            Zero => λ no => false_elim(no),
+            Succ(k) => λ past => nth_past(rest, k, past),
+        },
+    }
+}
+
+// Byte `j` of a store from `base` is the store's `j`th byte.
+theorem store_inside(f: Nat → BitVec(8), base: Nat, bytes: List<BitVec(8)>, j: Nat):
+    store_at(f, base, bytes, base + j) = match bytes.nth(j) { None => f(base + j), Some(byte) => byte } {
+    let back: ((base + j) -base = j) = trans(cong_fn<Nat, Nat>(λ n => n -base, base.add_comm(j)), j.add_sub_cancel(base));
+    j(sym(leb_true(base, base + j, base.le_add_l(j))),
+        λ found _ => (match found { False => f(base + j), True => match bytes.nth((base + j) -base) { None => f(base + j), Some(byte) => byte } }) =
+            (match bytes.nth(j) { None => f(base + j), Some(byte) => byte }),
+        cong_fn<Nat, BitVec(8)>(λ d => match bytes.nth(d) { None => f(base + j), Some(byte) => byte }, back))
+}
+
+// A byte below the store or past its end is as it was.
+theorem store_below(f: Nat → BitVec(8), base: Nat, bytes: List<BitVec(8)>, n: Nat, below: n < base): store_at(f, base, bytes, n) = f(n) {
+    j(sym(leb_false(base, n, below)),
+        λ found _ => (match found { False => f(n), True => match bytes.nth(n -base) { None => f(n), Some(byte) => byte } }) = f(n), refl)
+}
+theorem store_past(f: Nat → BitVec(8), base: Nat, bytes: List<BitVec(8)>, n: Nat, past: base + bytes.len() <= n): store_at(f, base, bytes, n) = f(n) {
+    let le: (base <= n) = Nat::le_trans(base, base + bytes.len(), n, base.le_add_l(bytes.len()), past);
+    let off: (bytes.len() <= n -base) = { let back: ((n -base) + base = n) = Nat::sub_add_cancel(base, n, le); omega };
+    j(sym(leb_true(base, n, le)),
+        λ found _ => (match found { False => f(n), True => match bytes.nth(n -base) { None => f(n), Some(byte) => byte } }) = f(n),
+        j(sym(nth_past(bytes, n -base, off)), λ o _ => (match o { None => f(n), Some(byte) => byte }) = f(n), refl))
+}
+
+theorem bytes8_same(a0, a1, a2, a3, a4, a5, a6, a7, b0, b1, b2, b3, b4, b5, b6, b7: BitVec(8),
+    e0: a0 = b0, e1: a1 = b1, e2: a2 = b2, e3: a3 = b3, e4: a4 = b4, e5: a5 = b5, e6: a6 = b6, e7: a7 = b7):
+    immediate_from_bytes(a0, a1, a2, a3, a4, a5, a6, a7) = immediate_from_bytes(b0, b1, b2, b3, b4, b5, b6, b7) {
+    j(e0, λ x _ => immediate_from_bytes(a0, a1, a2, a3, a4, a5, a6, a7) = immediate_from_bytes(x, b1, b2, b3, b4, b5, b6, b7),
+    j(e1, λ x _ => immediate_from_bytes(a0, a1, a2, a3, a4, a5, a6, a7) = immediate_from_bytes(a0, x, b2, b3, b4, b5, b6, b7),
+    j(e2, λ x _ => immediate_from_bytes(a0, a1, a2, a3, a4, a5, a6, a7) = immediate_from_bytes(a0, a1, x, b3, b4, b5, b6, b7),
+    j(e3, λ x _ => immediate_from_bytes(a0, a1, a2, a3, a4, a5, a6, a7) = immediate_from_bytes(a0, a1, a2, x, b4, b5, b6, b7),
+    j(e4, λ x _ => immediate_from_bytes(a0, a1, a2, a3, a4, a5, a6, a7) = immediate_from_bytes(a0, a1, a2, a3, x, b5, b6, b7),
+    j(e5, λ x _ => immediate_from_bytes(a0, a1, a2, a3, a4, a5, a6, a7) = immediate_from_bytes(a0, a1, a2, a3, a4, x, b6, b7),
+    j(e6, λ x _ => immediate_from_bytes(a0, a1, a2, a3, a4, a5, a6, a7) = immediate_from_bytes(a0, a1, a2, a3, a4, a5, x, b7),
+    j(e7, λ x _ => immediate_from_bytes(a0, a1, a2, a3, a4, a5, a6, a7) = immediate_from_bytes(a0, a1, a2, a3, a4, a5, a6, x),
+        refl))))))))
+}
+
+// A word at offset `i` reads the bytes there.
+theorem toy_word(m: Toy, i: Nat, fits: i + 8 <= 4096): read_word(toy_data(), m, next_rip(BitVec::zero(), i)) =
+    Some(immediate_from_bytes(m.bytes(i), m.bytes(i + 1), m.bytes(i + 2), m.bytes(i + 3), m.bytes(i + 4), m.bytes(i + 5),
+        m.bytes(i + 6), m.bytes(i + 7))) {
+    let base = next_rip(BitVec::zero(), i);
+    let at = λ (k: Nat) (small: i + k < Nat::pow(2, 64)) => cong_fn<Nat, BitVec(8)>(λ n => m.bytes(n),
+        trans(cong_fn<BitVec(64), Nat>(λ x => x.toNat(), rip_compose(BitVec::zero(), i, k)), zero_at(i + k, small)));
+    cong_fn<BitVec(64), Option<BitVec(64)>>(λ w => Some(w), bytes8_same(
+        m.bytes(base.toNat()), m.bytes(next_rip(base, 1).toNat()),
+        m.bytes(next_rip(base, 2).toNat()), m.bytes(next_rip(base, 3).toNat()),
+        m.bytes(next_rip(base, 4).toNat()), m.bytes(next_rip(base, 5).toNat()),
+        m.bytes(next_rip(base, 6).toNat()), m.bytes(next_rip(base, 7).toNat()),
+        m.bytes(i), m.bytes(i + 1), m.bytes(i + 2), m.bytes(i + 3), m.bytes(i + 4), m.bytes(i + 5), m.bytes(i + 6), m.bytes(i + 7),
+        cong_fn<Nat, BitVec(8)>(λ n => m.bytes(n), zero_at(i, { omega })), at(1, { omega }), at(2, { omega }), at(3, { omega }),
+        at(4, { omega }), at(5, { omega }), at(6, { omega }), at(7, { omega })))
+}
+
+theorem toy_canonical(i: Nat, fits: i + 8 <= 4096): WordCanonical(next_rip(BitVec::zero(), i)) {
+    j(sym(zero_at(i, { omega })), λ v _ => v + 8 <= Nat::pow(2, 47), { omega })
+}
+
+// A word stored at offset `i` from offset `i` up.
+theorem toy_stored_byte(m: Toy, i: Nat, fits: i + 8 <= 4096, w: BitVec(64), k: Nat):
+    store_at(m.bytes, next_rip(BitVec::zero(), i).toNat(), word_bytes(w), i + k) =
+        match word_bytes(w).nth(k) { None => m.bytes(i + k), Some(byte) => byte } {
+    trans(cong_fn<Nat, BitVec(8)>(λ b => store_at(m.bytes, b, word_bytes(w), i + k), zero_at(i, { omega })),
+        store_inside(m.bytes, i, word_bytes(w), k))
+}
+
+theorem toy_stored(m: Toy, i: Nat, fits: i + 8 <= 4096, w: BitVec(64)):
+    read_word(toy_data(), toy_store(m, next_rip(BitVec::zero(), i), word_bytes(w)), next_rip(BitVec::zero(), i)) = Some(w) {
+    let stored = toy_store(m, next_rip(BitVec::zero(), i), word_bytes(w));
+    trans(toy_word(stored, i, fits), cong_fn<BitVec(64), Option<BitVec(64)>>(λ x => Some(x), trans(bytes8_same(
+        stored.bytes(i), stored.bytes(i + 1), stored.bytes(i + 2), stored.bytes(i + 3),
+        stored.bytes(i + 4), stored.bytes(i + 5), stored.bytes(i + 6), stored.bytes(i + 7),
+        imm_byte0(w), imm_byte1(w), imm_byte2(w), imm_byte3(w), imm_byte4(w), imm_byte5(w), imm_byte6(w), imm_byte7(w),
+        toy_stored_byte(m, i, fits, w, 0), toy_stored_byte(m, i, fits, w, 1), toy_stored_byte(m, i, fits, w, 2),
+        toy_stored_byte(m, i, fits, w, 3), toy_stored_byte(m, i, fits, w, 4), toy_stored_byte(m, i, fits, w, 5),
+        toy_stored_byte(m, i, fits, w, 6), toy_stored_byte(m, i, fits, w, 7)), immediate_bytes_roundtrip(w))))
+}
+
+// A byte of a word apart from the store is as it was.
+theorem toy_apart_byte(m: Toy, i, k: Nat, fits: i + 8 <= 4096, apart: WordsApart(i, k), w: BitVec(64), d: Nat, small: d < 8):
+    store_at(m.bytes, next_rip(BitVec::zero(), i).toNat(), word_bytes(w), k + d) = m.bytes(k + d) {
+    trans(cong_fn<Nat, BitVec(8)>(λ b => store_at(m.bytes, b, word_bytes(w), k + d), zero_at(i, { omega })),
+        match apart as λ _ => store_at(m.bytes, i, word_bytes(w), k + d) = m.bytes(k + d) {
+            Inl(above) => store_past(m.bytes, i, word_bytes(w), k + d, { omega }),
+            Inr(below) => store_below(m.bytes, i, word_bytes(w), k + d, { omega }),
+        })
+}
+
+theorem toy_apart(m: Toy, i, k: Nat, fits: i + 8 <= 4096, k_fits: k + 8 <= 4096, apart: WordsApart(i, k), w: BitVec(64)):
+    read_word(toy_data(), toy_store(m, next_rip(BitVec::zero(), i), word_bytes(w)), next_rip(BitVec::zero(), k)) =
+        read_word(toy_data(), m, next_rip(BitVec::zero(), k)) {
+    let stored = toy_store(m, next_rip(BitVec::zero(), i), word_bytes(w));
+    trans(toy_word(stored, k, k_fits), trans(cong_fn<BitVec(64), Option<BitVec(64)>>(λ x => Some(x), bytes8_same(
+        stored.bytes(k), stored.bytes(k + 1), stored.bytes(k + 2), stored.bytes(k + 3),
+        stored.bytes(k + 4), stored.bytes(k + 5), stored.bytes(k + 6), stored.bytes(k + 7),
+        m.bytes(k), m.bytes(k + 1), m.bytes(k + 2), m.bytes(k + 3), m.bytes(k + 4), m.bytes(k + 5), m.bytes(k + 6), m.bytes(k + 7),
+        toy_apart_byte(m, i, k, fits, apart, w, 0, trivial), toy_apart_byte(m, i, k, fits, apart, w, 1, trivial),
+        toy_apart_byte(m, i, k, fits, apart, w, 2, trivial), toy_apart_byte(m, i, k, fits, apart, w, 3, trivial),
+        toy_apart_byte(m, i, k, fits, apart, w, 4, trivial), toy_apart_byte(m, i, k, fits, apart, w, 5, trivial),
+        toy_apart_byte(m, i, k, fits, apart, w, 6, trivial), toy_apart_byte(m, i, k, fits, apart, w, 7, trivial))),
+        sym(toy_word(m, k, k_fits))))
+}
+
+// Stores never reach code.
+theorem toy_code(m: Toy, a: BitVec(64), stored, bytes: List<BitVec(8)>): (at: BitVec(64)) →
+    CodeResident(toy_fetch(), m, bytes, at) → CodeResident(toy_fetch(), toy_store(m, a, stored), bytes, at) {
+    match bytes {
+        Nil => λ at resident => resident,
+        Cons(_, rest) => λ at resident => ⟨resident.left, ⟨resident.right.left, ⟨resident.right.right.left,
+            toy_code(m, a, stored, rest, next_rip(at, 1), resident.right.right.right)⟩⟩⟩,
+    }
+}
+
+fn toy_stack() → Stack<Toy>(toy_fetch(), toy_data()) {
+    Stack(toy_writes(), BitVec::zero(), 4096,
+        λ i fits => toy_canonical(i, fits),
+        λ m i fits => trivial,
+        λ m i fits w => toy_stored(m, i, fits, w),
+        λ m i k fits k_fits apart w => toy_apart(m, i, k, fits, k_fits, apart, w),
+        λ m i fits w bytes at resident => toy_code(m, next_rip(BitVec::zero(), i), word_bytes(w), bytes, at, resident))
+}
+
+// The caller's theorem at the toy memory.
+theorem toy_caller_moves(last: List<BitVec(8)>, origin: BitVec(64), i: Nat):
+    Site<Toy>(toy_fetch(), toy_data(), calls_program(), last, origin).Moves(toy_writes(), 7, 22,
+        λ (s: MachineState<Toy>) => (read_gpr(Rsp, s.gprs) = next_rip(BitVec::zero(), i + 8)) ∧ (i + 8 <= 4096),
+        λ (t: MachineState<Toy>) => (read_gpr(Rax, t.gprs) = BitVec::ofNat(42)) ∧ (read_gpr(Rsp, t.gprs) = next_rip(BitVec::zero(), i + 8))) {
+    caller_moves<Toy>(toy_fetch(), toy_data(), toy_stack(), last, origin, i)
+}

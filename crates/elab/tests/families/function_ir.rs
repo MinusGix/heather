@@ -29,6 +29,8 @@ mod function_ir_guarded_read;
 mod function_ir_lower;
 #[path = "../function_ir_lower_structured.rs"]
 mod function_ir_lower_structured;
+#[path = "../function_ir_lower_calls.rs"]
+mod function_ir_lower_calls;
 #[path = "../function_ir_loop.rs"]
 mod function_ir_loop;
 #[path = "../function_ir_loop_trace.rs"]
@@ -43,6 +45,8 @@ mod linux_spec;
 mod linux_wp;
 #[path = "../linux_wp_count.rs"]
 mod linux_wp_count;
+#[path = "../x86_64_stack_runs.rs"]
+mod x86_64_stack_runs;
 #[path = "../crossing_link_cost.rs"]
 mod crossing_link_cost;
 #[path = "../function_ir_narrow_certificates.rs"]

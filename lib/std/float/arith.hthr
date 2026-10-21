@@ -1,0 +1,487 @@
+// Arithmetic on floats (docs/floating-point-design.md §7.1, §14; roadmap
+// submilestone `float-arith`).
+//
+// Every operation computes its exact result and rounds it once. Addition,
+// subtraction, multiplication and fused multiply-add have an exact `Dyadic`
+// result and round it with `Format::round_exact`; division's exact result is
+// the rational `a / b`, whose magnitude meets the half-unit grid through the
+// binary long division `round_rat` uses. Each operation then has three kinds
+// of theorem:
+//
+// - a value theorem: the result is a correct rounding of the exact value, in
+//   every mode, with no side condition (`Finite::add_correct` …), and the
+//   error bounds of `error.hthr` follow for it (`Finite::add_model` …);
+// - a sign theorem: the result carries the exact value's sign, and an exact
+//   zero gives the zero IEEE 754 §6.3 names (`+0` from a sum of opposite
+//   signs except toward `-∞`, the sign of the operands when they agree, the
+//   exclusive or of the signs for a product or a quotient);
+// - the special values: NaN propagates, infinities follow the IEEE table,
+//   and the invalid cases (`∞ - ∞`, `0 · ∞`, `0 / 0`, `∞ / ∞`) give NaN.
+//
+// Operations on two finite floats live on `Finite` and return a `Float`,
+// since the result can overflow. The `Float` operations add the special
+// values. Division by zero and conversion into another format may need a NaN
+// the operands do not carry, so those two take the target format's NaN
+// evidence, `trivial` at every literal format that has one; a format with
+// neither infinities nor NaN (the OCP FP4 and FP6 formats) has no value for
+// `0 / 0` and uses the finite operations.
+
+import logic;
+import bool;
+import nat;
+import int;
+import omega;
+import ring;
+import option;
+import relation_props;
+import algebra;
+import algebra_rel;
+import order;
+import ordered_field;
+import semiring;
+import rat;
+import dyadic;
+import float;
+import round;
+import error;
+
+// ---------------------------------------------------------------------------
+// Signs of an exact zero (IEEE 754 §6.3).
+
+fn Mode::is_toward_neg(self m: Mode) → Bool {
+    match m { NearestEven => False, NearestAway => False, TowardPos => False, TowardNeg => True, TowardZero => False }
+}
+
+// The sign of an exact zero sum of operands signed `a` and `b`: their sign
+// when they agree (`-0 + -0 = -0`), otherwise `+0`, except `-0` toward `-∞`.
+fn Mode::sum_zero_neg(self m: Mode, a, b: Bool) → Bool {
+    match a {
+        False => match b { False => False, True => m.is_toward_neg() },
+        True => match b { False => m.is_toward_neg(), True => True },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Finite operands.
+
+fn Finite::add({F: Format}, self a, b: Finite(F), mode: Mode := NearestEven) → Float(F) {
+    F.round_exact(mode, a.dyadic() + b.dyadic(), mode.sum_zero_neg(a.neg, b.neg))
+}
+
+// `a - b` is `a + (-b)`, as IEEE defines it, so `x - x` is `+0`.
+fn Finite::sub({F: Format}, self a, b: Finite(F), mode: Mode := NearestEven) → Float(F) { a.add(-b, mode := mode) }
+
+fn Finite::mul({F: Format}, self a, b: Finite(F), mode: Mode := NearestEven) → Float(F) {
+    F.round_exact(mode, a.dyadic() * b.dyadic(), a.neg.xor(b.neg))
+}
+
+// `a · b + c` with one rounding. An exact zero takes the sum's rule with the
+// product signed as a product.
+fn Finite::fma({F: Format}, self a, b, c: Finite(F), mode: Mode := NearestEven) → Float(F) {
+    F.round_exact(mode, a.dyadic() * b.dyadic() + c.dyadic(), mode.sum_zero_neg(a.neg.xor(b.neg), c.neg))
+}
+
+// The exact quotient. `Rat::recip` is total, so at a zero divisor this is
+// zero; `Float::div` never asks for it there.
+fn Finite::quot({F: Format}, self a, b: Finite(F)) → Rat { a.val() * b.val().recip() }
+
+// The quotient's magnitude in half-units with its sticky bit, and the
+// exclusive or of the signs.
+fn Finite::div({F: Format}, self a, b: Finite(F), mode: Mode := NearestEven) → Float(F) {
+    F.round_signed(mode, a.neg.xor(b.neg), F.rat_h(a.quot(b)), F.rat_st(a.quot(b)))
+}
+
+// ---------------------------------------------------------------------------
+// Value theorems: each result is a correct rounding of the exact value.
+
+theorem Finite::add_correct({F: Format}, a, b: Finite(F), mode: Mode): RoundsTo(F, mode, a.val() + b.val(), a.add(b, mode := mode)) {
+    F.rounds_respects(mode, a.val() + b.val(), (a.dyadic() + b.dyadic()).rat(), Rat::same_sym(a.dyadic().rat_add(b.dyadic())), a.add(b, mode := mode),
+        F.round_exact_correct(mode, a.dyadic() + b.dyadic(), mode.sum_zero_neg(a.neg, b.neg)))
+}
+
+theorem Finite::sub_correct({F: Format}, a, b: Finite(F), mode: Mode): RoundsTo(F, mode, a.val() -b.val(), a.sub(b, mode := mode)) {
+    let e: (a.val() -b.val() ≈ a.val() + (-b).val()) = Rat::add_respects(a.val().same_refl(), Rat::same_sym(Finite::val_neg(b)));
+    F.rounds_respects(mode, a.val() -b.val(), a.val() + (-b).val(), e, a.sub(b, mode := mode), Finite::add_correct(a, -b, mode))
+}
+
+theorem Finite::mul_correct({F: Format}, a, b: Finite(F), mode: Mode): RoundsTo(F, mode, a.val() * b.val(), a.mul(b, mode := mode)) {
+    F.rounds_respects(mode, a.val() * b.val(), (a.dyadic() * b.dyadic()).rat(), Rat::same_sym(a.dyadic().rat_mul(b.dyadic())), a.mul(b, mode := mode),
+        F.round_exact_correct(mode, a.dyadic() * b.dyadic(), a.neg.xor(b.neg)))
+}
+
+theorem Finite::fma_correct({F: Format}, a, b, c: Finite(F), mode: Mode): RoundsTo(F, mode, a.val() * b.val() + c.val(), a.fma(b, c, mode := mode)) {
+    let d = a.dyadic() * b.dyadic() + c.dyadic();
+    let e: (d.rat() ≈ a.val() * b.val() + c.val()) =
+        Rat::same_trans((a.dyadic() * b.dyadic()).rat_add(c.dyadic()), Rat::add_respects(a.dyadic().rat_mul(b.dyadic()), c.val().same_refl()));
+    F.rounds_respects(mode, a.val() * b.val() + c.val(), d.rat(), Rat::same_sym(e), a.fma(b, c, mode := mode),
+        F.round_exact_correct(mode, d, mode.sum_zero_neg(a.neg.xor(b.neg), c.neg)))
+}
+
+// The quotient's sign is the exclusive or of the operands' signs, so its
+// magnitude is the quotient or its negation.
+theorem Finite::quot_signed({F: Format}, a, b: Finite(F)): F.SignedApprox(a.quot(b), a.neg.xor(b.neg), F.rat_h(a.quot(b)), F.rat_st(a.quot(b))) {
+    let x = a.quot(b);
+    let h = F.rat_h(x);
+    let st = F.rat_st(x);
+    let ap = F.rat_approx(x);
+    let pos = λ (nn: 0 <= x) => F.approx_respects(x.abs(), x, h, st, x.abs_of_nonneg(nn), ap);
+    let neg = λ (np: x <= 0) => F.approx_respects(x.abs(), -x, h, st, x.abs_of_nonpos(np), ap);
+    match a.neg as λ s => a.neg = s → F.SignedApprox(x, s.xor(b.neg), h, st) {
+        False => λ ea => match b.neg as λ t => b.neg = t → F.SignedApprox(x, t, h, st) {
+            False => λ eb => pos(Rat::mul_nonneg(Finite::val_nonneg_of_pos(a, ea), Rat::recip_nonneg(Finite::val_nonneg_of_pos(b, eb)))),
+            True => λ eb => neg(Rat::mul_nonpos_r(Finite::val_nonneg_of_pos(a, ea), Rat::recip_nonpos(Finite::val_nonpos_of_neg(b, eb)))),
+        }(refl),
+        True => λ ea => match b.neg as λ t => b.neg = t → F.SignedApprox(x, !t, h, st) {
+            False => λ eb => neg(Rat::mul_nonpos_l(Finite::val_nonpos_of_neg(a, ea), Rat::recip_nonneg(Finite::val_nonneg_of_pos(b, eb)))),
+            True => λ eb => pos(Rat::mul_nonneg_of_nonpos(Finite::val_nonpos_of_neg(a, ea), Rat::recip_nonpos(Finite::val_nonpos_of_neg(b, eb)))),
+        }(refl),
+    }(refl)
+}
+
+theorem Finite::div_correct({F: Format}, a, b: Finite(F), mode: Mode): RoundsTo(F, mode, a.quot(b), a.div(b, mode := mode)) {
+    F.round_signed_correct(mode, a.quot(b), a.neg.xor(b.neg), F.rat_h(a.quot(b)), F.rat_st(a.quot(b)), Finite::quot_signed(a, b))
+}
+
+// ---------------------------------------------------------------------------
+// Signs.
+
+// A sum's result carries the exact sum's sign, and an exact zero sum is the
+// zero `sum_zero_neg` names.
+theorem Finite::add_sign({F: Format}, a, b: Finite(F), mode: Mode): (a.add(b, mode := mode)).SignIs((a.dyadic() + b.dyadic()).sign_or(mode.sum_zero_neg(a.neg, b.neg))) {
+    F.round_exact_sign(mode, a.dyadic() + b.dyadic(), mode.sum_zero_neg(a.neg, b.neg))
+}
+
+theorem Dyadic::zero_of_rat({d: Dyadic}, h: d.rat() ≈ 0): d ≈ 0 { Rat::same_trans(x := d.rat(), y := 0, z := Dyadic::rat(0), hxy := h, hyz := Rat::same_sym(Dyadic::rat_zero())) }
+
+theorem Finite::add_zero({F: Format}, a, b: Finite(F), mode: Mode, zero: a.val() + b.val() ≈ 0):
+    a.add(b, mode := mode) = Fin(Finite::zero(F, mode.sum_zero_neg(a.neg, b.neg)))
+{
+    F.round_exact_zero(mode, a.dyadic() + b.dyadic(), mode.sum_zero_neg(a.neg, b.neg),
+        Dyadic::zero_of_rat(Rat::same_trans(a.dyadic().rat_add(b.dyadic()), zero)))
+}
+
+// `x - x` is `+0`, except `-0` toward `-∞`, whatever the sign of `x`.
+theorem Finite::sub_self({F: Format}, a: Finite(F), mode: Mode): a.sub(a, mode := mode) = Fin(Finite::zero(F, mode.is_toward_neg())) {
+    let zero: (a.val() + (-a).val() ≈ 0) = Rat::same_trans(Rat::add_respects(a.val().same_refl(), Finite::val_neg(a)), a.val().add_neg());
+    trans(Finite::add_zero(a, -a, mode, zero),
+        match a.neg as λ s => Float::Fin(Finite::zero(F, mode.sum_zero_neg(s, !s))) = Float::Fin(Finite::zero(F, mode.is_toward_neg())) {
+            False => refl,
+            True => refl,
+        })
+}
+
+// The sign of a dyadic built from a sign bit and a magnitude is that bit, or
+// `z` at zero.
+theorem Finite::sign_or_parts(s: Bool, m: Nat, e: Int): Dyadic(match s { False => m.int(), True => -m.int() }, e).sign_or(s) = s {
+    match s as λ t => Dyadic(match t { False => m.int(), True => -m.int() }, e).sign_or(t) = t {
+        False => match m as λ k => Dyadic(k.int(), e).sign_or(False) = False { Zero => refl, Succ(_) => refl },
+        True => match m as λ k => Dyadic(-k.int(), e).sign_or(True) = True { Zero => refl, Succ(_) => refl },
+    }
+}
+
+// A product's sign bit is the exclusive or of its operands', a zero product
+// included.
+theorem Finite::sign_or_mul_parts(s, t: Bool, m, n: Nat, e: Int):
+    Dyadic((match s { False => m.int(), True => -m.int() }) * (match t { False => n.int(), True => -n.int() }), e).sign_or(s.xor(t)) = s.xor(t)
+{
+    let left_zero = λ (y: Int) (z: Bool) => j(sym(Int::zero_mul(y)), λ v _ => Dyadic(v, e).sign_or(z) = z, refl);
+    let right_zero = λ (x: Int) (z: Bool) => j(sym(x.mul_zero()), λ v _ => Dyadic(v, e).sign_or(z) = z, refl);
+    match m as λ k => Dyadic((match s { False => k.int(), True => -k.int() }) * (match t { False => n.int(), True => -n.int() }), e).sign_or(s.xor(t)) = s.xor(t) {
+        Zero => match s as λ u => Dyadic((match u { False => OfNat(0), True => -OfNat(0) }) * (match t { False => n.int(), True => -n.int() }), e).sign_or(u.xor(t)) = u.xor(t) {
+            False => left_zero(match t { False => n.int(), True => -n.int() }, t),
+            True => left_zero(match t { False => n.int(), True => -n.int() }, !t),
+        },
+        Succ(i) => match n as λ k => Dyadic((match s { False => OfNat(Succ(i)), True => -OfNat(Succ(i)) }) * (match t { False => k.int(), True => -k.int() }), e).sign_or(s.xor(t)) = s.xor(t) {
+            Zero => match t as λ u => Dyadic((match s { False => OfNat(Succ(i)), True => -OfNat(Succ(i)) }) * (match u { False => OfNat(0), True => -OfNat(0) }), e).sign_or(s.xor(u)) = s.xor(u) {
+                False => right_zero(match s { False => OfNat(Succ(i)), True => -OfNat(Succ(i)) }, s.xor(False)),
+                True => right_zero(match s { False => OfNat(Succ(i)), True => -OfNat(Succ(i)) }, s.xor(True)),
+            },
+            Succ(l) => match s as λ u => Dyadic((match u { False => OfNat(Succ(i)), True => -OfNat(Succ(i)) }) * (match t { False => OfNat(Succ(l)), True => -OfNat(Succ(l)) }), e).sign_or(u.xor(t)) = u.xor(t) {
+                False => match t as λ w => Dyadic(OfNat(Succ(i)) * (match w { False => OfNat(Succ(l)), True => -OfNat(Succ(l)) }), e).sign_or(w) = w { False => refl, True => refl },
+                True => match t as λ w => Dyadic(-OfNat(Succ(i)) * (match w { False => OfNat(Succ(l)), True => -OfNat(Succ(l)) }), e).sign_or(!w) = !w { False => refl, True => refl },
+            },
+        },
+    }
+}
+
+theorem Finite::mul_sign({F: Format}, a, b: Finite(F), mode: Mode): (a.mul(b, mode := mode)).SignIs(a.neg.xor(b.neg)) {
+    j(Finite::sign_or_mul_parts(a.neg, b.neg, a.mag, b.mag, a.q() + b.q()), λ s _ => (a.mul(b, mode := mode)).SignIs(s),
+        F.round_exact_sign(mode, a.dyadic() * b.dyadic(), a.neg.xor(b.neg)))
+}
+
+theorem Finite::fma_sign({F: Format}, a, b, c: Finite(F), mode: Mode):
+    (a.fma(b, c, mode := mode)).SignIs((a.dyadic() * b.dyadic() + c.dyadic()).sign_or(mode.sum_zero_neg(a.neg.xor(b.neg), c.neg)))
+{
+    F.round_exact_sign(mode, a.dyadic() * b.dyadic() + c.dyadic(), mode.sum_zero_neg(a.neg.xor(b.neg), c.neg))
+}
+
+theorem Finite::fma_zero({F: Format}, a, b, c: Finite(F), mode: Mode, zero: a.val() * b.val() + c.val() ≈ 0):
+    a.fma(b, c, mode := mode) = Fin(Finite::zero(F, mode.sum_zero_neg(a.neg.xor(b.neg), c.neg)))
+{
+    let d = a.dyadic() * b.dyadic() + c.dyadic();
+    let e: (d.rat() ≈ a.val() * b.val() + c.val()) =
+        Rat::same_trans((a.dyadic() * b.dyadic()).rat_add(c.dyadic()), Rat::add_respects(a.dyadic().rat_mul(b.dyadic()), c.val().same_refl()));
+    F.round_exact_zero(mode, d, mode.sum_zero_neg(a.neg.xor(b.neg), c.neg), Dyadic::zero_of_rat(Rat::same_trans(e, zero)))
+}
+
+theorem Finite::div_sign({F: Format}, a, b: Finite(F), mode: Mode): (a.div(b, mode := mode)).SignIs(a.neg.xor(b.neg)) {
+    F.round_signed_sign(mode, a.neg.xor(b.neg), F.rat_h(a.quot(b)), F.rat_st(a.quot(b)))
+}
+
+// ---------------------------------------------------------------------------
+// Error bounds for a finite result, from `error.hthr`: the standard model in
+// the normal range and the combined bound everywhere in range.
+
+theorem Format::model_of(self F: Format, mode: Mode, x: Rat, o: Float(F), r: Finite(F), is: o = Fin(r), hr: RoundsTo(F, mode, x, o),
+    range: x.abs() <= (Finite::max_finite(F)).val(), normal: (Finite::min_normal(F)).val() <= x.abs()):
+    ∃ d: Rat, d.abs() <= F.u(mode) ∧ r.val() ≈ x * (1 + d)
+{
+    F.standard_model(mode, x, r, range, normal, j(is, λ v _ => RoundsTo(F, mode, x, v), hr))
+}
+
+theorem Format::bound_of(self F: Format, mode: Mode, x: Rat, o: Float(F), r: Finite(F), is: o = Fin(r), hr: RoundsTo(F, mode, x, o),
+    range: x.abs() <= (Finite::max_finite(F)).val()): (r.val() -x).abs() <= F.u(mode) * x.abs() + F.eta(mode)
+{
+    F.error_bound(mode, x, r, range, j(is, λ v _ => RoundsTo(F, mode, x, v), hr))
+}
+
+theorem Finite::add_model({F: Format}, a, b, r: Finite(F), mode: Mode, is: a.add(b, mode := mode) = Fin(r),
+    range: (a.val() + b.val()).abs() <= (Finite::max_finite(F)).val(), normal: (Finite::min_normal(F)).val() <= (a.val() + b.val()).abs()):
+    ∃ d: Rat, d.abs() <= F.u(mode) ∧ r.val() ≈ (a.val() + b.val()) * (1 + d)
+{
+    F.model_of(mode, a.val() + b.val(), a.add(b, mode := mode), r, is, Finite::add_correct(a, b, mode), range, normal)
+}
+
+theorem Finite::sub_model({F: Format}, a, b, r: Finite(F), mode: Mode, is: a.sub(b, mode := mode) = Fin(r),
+    range: (a.val() -b.val()).abs() <= (Finite::max_finite(F)).val(), normal: (Finite::min_normal(F)).val() <= (a.val() -b.val()).abs()):
+    ∃ d: Rat, d.abs() <= F.u(mode) ∧ r.val() ≈ (a.val() -b.val()) * (1 + d)
+{
+    F.model_of(mode, a.val() -b.val(), a.sub(b, mode := mode), r, is, Finite::sub_correct(a, b, mode), range, normal)
+}
+
+theorem Finite::mul_model({F: Format}, a, b, r: Finite(F), mode: Mode, is: a.mul(b, mode := mode) = Fin(r),
+    range: (a.val() * b.val()).abs() <= (Finite::max_finite(F)).val(), normal: (Finite::min_normal(F)).val() <= (a.val() * b.val()).abs()):
+    ∃ d: Rat, d.abs() <= F.u(mode) ∧ r.val() ≈ (a.val() * b.val()) * (1 + d)
+{
+    F.model_of(mode, a.val() * b.val(), a.mul(b, mode := mode), r, is, Finite::mul_correct(a, b, mode), range, normal)
+}
+
+theorem Finite::fma_model({F: Format}, a, b, c, r: Finite(F), mode: Mode, is: a.fma(b, c, mode := mode) = Fin(r),
+    range: (a.val() * b.val() + c.val()).abs() <= (Finite::max_finite(F)).val(),
+    normal: (Finite::min_normal(F)).val() <= (a.val() * b.val() + c.val()).abs()):
+    ∃ d: Rat, d.abs() <= F.u(mode) ∧ r.val() ≈ (a.val() * b.val() + c.val()) * (1 + d)
+{
+    F.model_of(mode, a.val() * b.val() + c.val(), a.fma(b, c, mode := mode), r, is, Finite::fma_correct(a, b, c, mode), range, normal)
+}
+
+theorem Finite::div_model({F: Format}, a, b, r: Finite(F), mode: Mode, is: a.div(b, mode := mode) = Fin(r),
+    range: (a.quot(b)).abs() <= (Finite::max_finite(F)).val(), normal: (Finite::min_normal(F)).val() <= (a.quot(b)).abs()):
+    ∃ d: Rat, d.abs() <= F.u(mode) ∧ r.val() ≈ a.quot(b) * (1 + d)
+{
+    F.model_of(mode, a.quot(b), a.div(b, mode := mode), r, is, Finite::div_correct(a, b, mode), range, normal)
+}
+
+// The operations commute up to value: both orders are correct roundings of
+// one value, and correct roundings agree (`rounds_unique`).
+theorem Finite::add_comm({F: Format}, a, b: Finite(F), mode: Mode): Float::Same(a.add(b, mode := mode), b.add(a, mode := mode)) {
+    F.rounds_unique(mode, a.val() + b.val(), a.add(b, mode := mode), b.add(a, mode := mode), Finite::add_correct(a, b, mode),
+        F.rounds_respects(mode, a.val() + b.val(), b.val() + a.val(), a.val().add_comm(b.val()), b.add(a, mode := mode), Finite::add_correct(b, a, mode)))
+}
+
+theorem Finite::mul_comm({F: Format}, a, b: Finite(F), mode: Mode): Float::Same(a.mul(b, mode := mode), b.mul(a, mode := mode)) {
+    F.rounds_unique(mode, a.val() * b.val(), a.mul(b, mode := mode), b.mul(a, mode := mode), Finite::mul_correct(a, b, mode),
+        F.rounds_respects(mode, a.val() * b.val(), b.val() * a.val(), a.val().mul_comm(b.val()), b.mul(a, mode := mode), Finite::mul_correct(b, a, mode)))
+}
+
+// ---------------------------------------------------------------------------
+// Format conversion: the source's exact value rounded into the target. A
+// zero keeps its sign.
+
+fn Finite::convert({F: Format}, self f: Finite(F), G: Format, mode: Mode := NearestEven) → Float(G) { G.round_exact(mode, f.dyadic(), f.neg) }
+
+theorem Finite::convert_correct({F: Format}, f: Finite(F), G: Format, mode: Mode): RoundsTo(G, mode, f.val(), f.convert(G, mode := mode)) {
+    G.round_exact_correct(mode, f.dyadic(), f.neg)
+}
+
+theorem Finite::convert_sign({F: Format}, f: Finite(F), G: Format, mode: Mode): (f.convert(G, mode := mode)).SignIs(f.neg) {
+    j(Finite::sign_or_parts(f.neg, f.mag, f.q()), λ s _ => (f.convert(G, mode := mode)).SignIs(s), G.round_exact_sign(mode, f.dyadic(), f.neg))
+}
+
+// A value the target can hold converts to it exactly: widening is exact, and
+// a narrowing that happens to fit loses nothing.
+theorem Finite::convert_exact({F: Format}, f: Finite(F), G: Format, mode: Mode, g: Finite(G), e: g.val() ≈ f.val()): Float::Same(f.convert(G, mode := mode), Fin(g)) {
+    G.rounds_unique(mode, f.val(), f.convert(G, mode := mode), Fin(g), Finite::convert_correct(f, G, mode),
+        G.rounds_respects(mode, f.val(), g.val(), Rat::same_sym(e), Fin(g), G.rounds_exact(mode, g)))
+}
+
+// ---------------------------------------------------------------------------
+// The special values.
+
+// `∞` signed `s` plus `y`: infinities of opposite signs are invalid.
+fn Float::inf_add({F: Format}, s: Bool, hi: F.specials.has_inf().IsTrue(), y: Float(F)) → Float(F) {
+    match y {
+        Fin(_) => Inf(s, hi),
+        Inf(t, _) => match s.xor(t) { False => Inf(s, hi), True => NaN(F.specials.nan_of_inf(hi)) },
+        NaN(h) => NaN(h),
+    }
+}
+
+// `∞` signed `s` times a finite `b`: invalid at zero.
+fn Float::inf_times({F: Format}, s: Bool, hi: F.specials.has_inf().IsTrue(), b: Finite(F)) → Float(F) {
+    match b.mag { Zero => NaN(F.specials.nan_of_inf(hi)), Succ(_) => Inf(s.xor(b.neg), hi) }
+}
+
+fn Float::add({F: Format}, self x, y: Float(F), mode: Mode := NearestEven) → Float(F) {
+    match x {
+        Fin(a) => match y { Fin(b) => a.add(b, mode := mode), Inf(m, hm) => Inf(m, hm), NaN(h) => NaN(h) },
+        Inf(n, hn) => Float::inf_add(n, hn, y),
+        NaN(h) => NaN(h),
+    }
+}
+
+fn Float::sub({F: Format}, self x, y: Float(F), mode: Mode := NearestEven) → Float(F) { x.add(-y, mode := mode) }
+
+fn Float::mul({F: Format}, self x, y: Float(F), mode: Mode := NearestEven) → Float(F) {
+    match x {
+        Fin(a) => match y { Fin(b) => a.mul(b, mode := mode), Inf(m, hm) => Float::inf_times(m, hm, a), NaN(h) => NaN(h) },
+        Inf(n, hn) => match y { Fin(b) => Float::inf_times(n, hn, b), Inf(m, _) => Inf(n.xor(m), hn), NaN(h) => NaN(h) },
+        NaN(h) => NaN(h),
+    }
+}
+
+fn Float::fma({F: Format}, self x, y, z: Float(F), mode: Mode := NearestEven) → Float(F) {
+    match x {
+        Fin(a) => match y {
+            Fin(b) => match z { Fin(c) => a.fma(b, c, mode := mode), Inf(t, ht) => Inf(t, ht), NaN(h) => NaN(h) },
+            Inf(m, hm) => match a.mag { Zero => NaN(F.specials.nan_of_inf(hm)), Succ(_) => Float::inf_add(a.neg.xor(m), hm, z) },
+            NaN(h) => NaN(h),
+        },
+        Inf(n, hn) => match y {
+            Fin(b) => match b.mag { Zero => NaN(F.specials.nan_of_inf(hn)), Succ(_) => Float::inf_add(n.xor(b.neg), hn, z) },
+            Inf(m, _) => Float::inf_add(n.xor(m), hn, z),
+            NaN(h) => NaN(h),
+        },
+        NaN(h) => NaN(h),
+    }
+}
+
+// A nonzero finite over zero: infinity where the format has one, else NaN.
+fn Format::div_by_zero(self F: Format, s: Bool, nan: F.specials.has_nan().IsTrue()) → Float(F) {
+    match F.specials.has_inf().is_true_dec() { Inl(has) => Inf(s, has), Inr(_) => NaN(nan) }
+}
+
+fn Float::div({F: Format}, self x, y: Float(F), mode: Mode := NearestEven, nan: F.specials.has_nan().IsTrue() := trivial) → Float(F) {
+    match x {
+        Fin(a) => match y {
+            Fin(b) => match b.mag {
+                Zero => match a.mag { Zero => NaN(nan), Succ(_) => F.div_by_zero(a.neg.xor(b.neg), nan) },
+                Succ(_) => a.div(b, mode := mode),
+            },
+            Inf(m, _) => Fin(Finite::zero(F, a.neg.xor(m))),
+            NaN(h) => NaN(h),
+        },
+        Inf(n, hn) => match y { Fin(b) => Inf(n.xor(b.neg), hn), Inf(_, _) => NaN(F.specials.nan_of_inf(hn)), NaN(h) => NaN(h) },
+        NaN(h) => NaN(h),
+    }
+}
+
+// Conversion of the special values: an infinity stays one where the target
+// has infinities and is NaN otherwise.
+fn Float::convert({F: Format}, self x: Float(F), G: Format, mode: Mode := NearestEven, nan: G.specials.has_nan().IsTrue() := trivial) → Float(G) {
+    match x {
+        Fin(f) => f.convert(G, mode := mode),
+        Inf(n, _) => match G.specials.has_inf().is_true_dec() { Inl(h) => Inf(n, h), Inr(_) => NaN(nan) },
+        NaN(_) => NaN(nan),
+    }
+}
+
+theorem Bool::xor_self(self b: Bool): b.xor(b) = False { match b as λ c => c.xor(c) = False { False => refl, True => refl } }
+
+theorem Bool::xor_not(self b: Bool): b.xor(!b) = True { match b as λ c => c.xor(!c) = True { False => refl, True => refl } }
+
+// NaN propagates through every operation.
+theorem Float::add_nan({F: Format}, x: Float(F), h: F.specials.has_nan().IsTrue(), mode: Mode): (x.add(NaN(h), mode := mode)).is_nan() = True ∧ (Float::add(NaN(h), x, mode := mode)).is_nan() = True {
+    And(match x as λ y => (y.add(NaN(h), mode := mode)).is_nan() = True { Float::Fin(_) => refl, Inf(_, _) => refl, NaN(_) => refl }, refl)
+}
+
+theorem Float::mul_nan({F: Format}, x: Float(F), h: F.specials.has_nan().IsTrue(), mode: Mode): (x.mul(NaN(h), mode := mode)).is_nan() = True ∧ (Float::mul(NaN(h), x, mode := mode)).is_nan() = True {
+    And(match x as λ y => (y.mul(NaN(h), mode := mode)).is_nan() = True { Float::Fin(_) => refl, Inf(_, _) => refl, NaN(_) => refl }, refl)
+}
+
+theorem Float::div_nan({F: Format}, x: Float(F), h, nan: F.specials.has_nan().IsTrue(), mode: Mode):
+    (x.div(NaN(h), mode := mode, nan := nan)).is_nan() = True ∧ (Float::div(NaN(h), x, mode := mode, nan := nan)).is_nan() = True
+{
+    And(match x as λ y => (y.div(NaN(h), mode := mode, nan := nan)).is_nan() = True { Float::Fin(_) => refl, Inf(_, _) => refl, NaN(_) => refl }, refl)
+}
+
+// Infinities: same-signed ones add, opposite ones are invalid.
+theorem Float::add_inf_same({F: Format}, n: Bool, h1, h2: F.specials.has_inf().IsTrue(), mode: Mode): Float::add(Inf(n, h1), Inf(n, h2), mode := mode) = Inf(n, h1) {
+    j(sym(n.xor_self()), λ b _ => (match b { False => Inf(n, h1), True => NaN(F.specials.nan_of_inf(h1)) }) = Inf(n, h1), refl)
+}
+
+theorem Float::add_inf_opp({F: Format}, n: Bool, h1, h2: F.specials.has_inf().IsTrue(), mode: Mode): (Float::add(Inf(n, h1), Inf(!n, h2), mode := mode)).is_nan() = True {
+    j(sym(n.xor_not()), λ b _ => (match b as λ _ => Float(F) { False => Inf(n, h1), True => NaN(F.specials.nan_of_inf(h1)) }).is_nan() = True, refl)
+}
+
+theorem Float::add_inf_fin({F: Format}, n: Bool, h: F.specials.has_inf().IsTrue(), b: Finite(F), mode: Mode):
+    Float::add(Inf(n, h), Float::Fin(b), mode := mode) = Inf(n, h) ∧ Float::add(Float::Fin(b), Inf(n, h), mode := mode) = Inf(n, h)
+{
+    And(refl, refl)
+}
+
+// `0 · ∞` is invalid; any other finite times infinity is infinite with the
+// exclusive or of the signs.
+theorem Float::mul_zero_inf({F: Format}, b: Finite(F), z: b.mag = 0, n: Bool, h: F.specials.has_inf().IsTrue(), mode: Mode):
+    (Float::mul(Inf(n, h), Float::Fin(b), mode := mode)).is_nan() = True
+{
+    j(sym(z), λ m _ => (match m as λ _ => Float(F) { Zero => NaN(F.specials.nan_of_inf(h)), Succ(_) => Inf(n.xor(b.neg), h) }).is_nan() = True, refl)
+}
+
+theorem Float::mul_inf({F: Format}, b: Finite(F), k: Nat, nz: b.mag = Succ(k), n: Bool, h: F.specials.has_inf().IsTrue(), mode: Mode):
+    Float::mul(Inf(n, h), Float::Fin(b), mode := mode) = Inf(n.xor(b.neg), h)
+{
+    j(sym(nz), λ m _ => (match m as λ _ => Float(F) { Zero => NaN(F.specials.nan_of_inf(h)), Succ(_) => Inf(n.xor(b.neg), h) }) = Inf(n.xor(b.neg), h), refl)
+}
+
+// Division: `0 / 0` and `∞ / ∞` are invalid, a nonzero over zero is the
+// signed infinity, a finite over infinity the signed zero.
+theorem Float::div_zero_zero({F: Format}, a, b: Finite(F), za: a.mag = 0, zb: b.mag = 0, nan: F.specials.has_nan().IsTrue(), mode: Mode):
+    (Float::div(Float::Fin(a), Float::Fin(b), mode := mode, nan := nan)).is_nan() = True
+{
+    let inner = j(sym(za), λ m _ => (match m as λ _ => Float(F) { Zero => NaN(nan), Succ(_) => F.div_by_zero(a.neg.xor(b.neg), nan) }).is_nan() = True, refl);
+    j(sym(zb), λ m _ => (match m as λ _ => Float(F) {
+        Zero => match a.mag as λ _ => Float(F) { Zero => NaN(nan), Succ(_) => F.div_by_zero(a.neg.xor(b.neg), nan) },
+        Succ(_) => a.div(b, mode := mode),
+    }).is_nan() = True, inner)
+}
+
+theorem Float::div_by_zero_inf({F: Format}, a, b: Finite(F), k: Nat, na: a.mag = Succ(k), zb: b.mag = 0, nan: F.specials.has_nan().IsTrue(),
+    has: F.specials.has_inf().IsTrue(), mode: Mode): Float::div(Float::Fin(a), Float::Fin(b), mode := mode, nan := nan) = Inf(a.neg.xor(b.neg), has)
+{
+    let dz: (F.div_by_zero(a.neg.xor(b.neg), nan) = Inf(a.neg.xor(b.neg), has)) =
+        j(sym(is_true_dec_yes(F.specials.has_inf(), has)), λ c _ => (match c as λ _ => Float(F) { Inl(hh) => Inf(a.neg.xor(b.neg), hh), Inr(_) => NaN(nan) }) = Inf(a.neg.xor(b.neg), has), refl);
+    let inner = j(sym(na), λ m _ => (match m as λ _ => Float(F) { Zero => NaN(nan), Succ(_) => F.div_by_zero(a.neg.xor(b.neg), nan) }) = Inf(a.neg.xor(b.neg), has), dz);
+    j(sym(zb), λ m _ => (match m as λ _ => Float(F) {
+        Zero => match a.mag as λ _ => Float(F) { Zero => NaN(nan), Succ(_) => F.div_by_zero(a.neg.xor(b.neg), nan) },
+        Succ(_) => a.div(b, mode := mode),
+    }) = Inf(a.neg.xor(b.neg), has), inner)
+}
+
+theorem Float::div_inf_inf({F: Format}, n, m: Bool, h1, h2: F.specials.has_inf().IsTrue(), nan: F.specials.has_nan().IsTrue(), mode: Mode):
+    (Float::div(Inf(n, h1), Inf(m, h2), mode := mode, nan := nan)).is_nan() = True
+{
+    refl
+}
+
+theorem Float::div_fin_inf({F: Format}, a: Finite(F), m: Bool, h: F.specials.has_inf().IsTrue(), nan: F.specials.has_nan().IsTrue(), mode: Mode):
+    Float::div(Float::Fin(a), Inf(m, h), mode := mode, nan := nan) = Float::Fin(Finite::zero(F, a.neg.xor(m)))
+{
+    refl
+}
+
+// `∞ · 0 + c` is invalid for every `c`.
+theorem Float::fma_inf_zero({F: Format}, b: Finite(F), z: b.mag = 0, n: Bool, h: F.specials.has_inf().IsTrue(), c: Float(F), mode: Mode):
+    (Float::fma(Inf(n, h), Float::Fin(b), c, mode := mode)).is_nan() = True
+{
+    j(sym(z), λ m _ => (match m as λ _ => Float(F) { Zero => NaN(F.specials.nan_of_inf(h)), Succ(_) => Float::inf_add(n.xor(b.neg), h, c) }).is_nan() = True, refl)
+}

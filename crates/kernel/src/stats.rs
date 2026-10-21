@@ -118,6 +118,11 @@ counters! {
     eval_delta_steps,
     /// Re-entries of the evaluator's trampoline.
     eval_drives,
+    /// Projections of an application `k y` answered by the value a sibling
+    /// projection of the same application already computed
+    /// (`Eval::eval_projected`): a tier-2 function child's tree and proof
+    /// sharing one evaluation of the child.
+    shared_apps,
     /// Nodes the `shift_global` traversal visited — every rescoping of a
     /// global's body, type or context into the ambient Ψ pays one per node
     /// (`issues/refl-theorem-step-cost.md`: the copying a fuel pin cannot

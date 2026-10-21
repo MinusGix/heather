@@ -566,7 +566,7 @@ roadmap's.
 | 1 | `float-values` | `Format`, the standard formats as values, `Finite(F)`, `Float(F)`, `Dyadic` with its ring and order, `val`, `≈`/`<` with `StrictOrder`, and the constants (`zero`, `min_subnormal`, `min_normal`, `max_finite`) canonical for every format. Landed; §10. |
 | 2 | `float-rounding` | Successor and predecessor with their spacing, `RoundsTo`, `round` on dyadics with sticky, `round_rat`, `round::correct`, uniqueness, the mode laws. Part A (the relation, the executable rounding and its correctness in every mode, sign symmetry) landed, §11; part B (successor/predecessor with spacing, uniqueness, bracketing, monotonicity, idempotence) landed, §12. The transfer lemma to any `OrderedField` moved to `float-reals`, its only customer. |
 | 3 | `float-error` | The standard model, absolute subnormal bounds, `ulp`, γ-composition. Landed; §13. |
-| 4 | `float-arith` | Add/sub/mul/fma with value, zero-sign and special-value theorems; then div and sqrt by sticky quotients; format conversion. |
+| 4 | `float-arith` | Add/sub/mul/fma with value, zero-sign and special-value theorems; then div and sqrt by sticky quotients; format conversion. Landed except sqrt, §14; sqrt is [float-sqrt](../issues/float-sqrt.md). |
 | 5 | `float-eft` | Sterbenz, Fast2Sum, TwoSum, TwoProduct (by fma), Veltkamp; then Kahan summation. |
 | later | `float-bits` | Encode/decode and the round trip, the OCP storage formats, NaN payload policies and flags. |
 | later | `float-reals` | Transfer to `CReal`, faithful rounding, `round_real` with apartness, `Placed`. |
@@ -891,3 +891,110 @@ Observations:
   no carrier for method lookup until it is checked against a type, the same
   gap as [list-literal-left-of-append](../issues/list-literal-left-of-append.md).
   The tests write `List::prod_one_add([d1, d2])`.
+
+## 14. Round 4 as landed (`float-arith`)
+
+Module: `lib/std/float/arith.hthr`. General facts went home: binary long
+division `Nat::ldiv` with `ldiv_div`/`ldiv_mod` in `nat.hthr`; the sign rules
+for products and reciprocals (`Rat::mul_nonpos_l`/`_r`,
+`mul_nonneg_of_nonpos`, `recip_nonneg`/`nonpos`) in `rat.hthr`;
+`Dyadic::mant_zero` and `Dyadic::sign_or` in `dyadic.hthr`;
+`Specials::nan_of_inf` in `float.hthr`; and the rounding-side pieces in
+`round.hthr` (below). Tests are in `crates/elab/tests/lib_std_float_arith.rs`.
+
+**One signed rounding.** Every operation computes a sign bit, a magnitude in
+half-units and a sticky bit, and calls `Format::round_signed` once. The sign
+theorem is then one lemma for every operation: `round_signed_sign` says the
+result carries the sign it was given (`Float::SignIs`), because a rounding of
+a magnitude is never negative (`round_h_sign`, by cases through the
+rounding's branches, with `up_pos` for the step up). That is what makes an
+inexact result that rounds to zero keep the exact value's sign, and an
+overflow's infinity carry it, as IEEE 754 §6.3 asks, without a case in any
+operation.
+
+- Add, sub, mul and fma have an exact `Dyadic` and round it with
+  `Format::round_exact(mode, d, z)`: the dyadic's sign, or `z` when it is
+  zero (`Dyadic::sign_or`). The operation passes §6.3's zero sign as `z`:
+  `Mode::sum_zero_neg` for a sum (the operands' sign when they agree,
+  otherwise `+0`, `-0` toward `-∞`), the exclusive or for a product, and the
+  sum's rule with the product signed as a product for fma. An exact zero
+  rounds to exactly `Finite::zero(F, z)` (`round_exact_zero`, from
+  uniqueness and the sign, since a value-zero float with a given sign is that
+  zero: `Finite::zero_of_val`). `round_exact` differs from `round_dyadic`
+  only at zero, where `round_dyadic` gives `+0`.
+- Sub is `a + (-b)`, so `x - x` is `+0` except toward `-∞`
+  (`Finite::sub_self`) whatever `x`'s sign.
+- Div has no exact dyadic: the quotient is the rational `a.quot(b) =
+  a.val() · b.val()⁻¹` (`Rat::recip`, total), its magnitude meets the grid
+  through `rat_h`/`rat_st` as `round_rat` does, and its sign is the exclusive
+  or. The value theorem needs that sign to agree with the rational's
+  (`quot_signed`, four cases through the `Rat` sign rules).
+- Conversion is `round_exact` into the target with the source's sign for
+  zero. `convert_exact` says a value the target holds converts to it
+  exactly, which covers widening; a theorem that every float of a narrower
+  format is a float of a wider one (constructing the target float, with its
+  canonical form) is left for the round that needs it.
+
+**Theorems.** Each operation has its value theorem at every mode with no
+side condition (`Finite::add_correct`, `sub_correct`, `mul_correct`,
+`fma_correct`, `div_correct`, `convert_correct`), its sign theorem
+(`add_sign` and `fma_sign` as the exact value's sign or the zero rule;
+`mul_sign` and `div_sign` as the exclusive or; `convert_sign`), the exact-zero
+results (`add_zero`, `fma_zero`, `sub_self`), and the standard model and
+combined error bound for a finite result (`add_model` … `div_model`, through
+`Format::model_of` and `bound_of`). Commutativity holds up to value
+(`add_comm`, `mul_comm` as `Float::Same`), since the two orders round one
+value.
+
+**Special values.** `Float::add`, `sub`, `mul`, `fma`, `div` and `convert`
+add IEEE's table on top of the finite operations: NaN propagates, infinities
+of one sign add, and `∞ - ∞`, `0 · ∞`, `0 / 0` and `∞ / ∞` are NaN
+(`Float::add_inf_opp`, `mul_zero_inf`, `div_zero_zero`, `div_inf_inf`,
+`fma_inf_zero` …). A NaN produced from infinities uses the infinity's
+evidence (`Specials::nan_of_inf`: a format with infinities has NaN). Division
+by zero and conversion may need a NaN the operands do not carry, so they take
+the target format's NaN evidence as a parameter that defaults to `trivial`:
+it is found at every literal format that has NaN, and refused at the OCP
+FP4/FP6 formats, which have neither infinities nor NaN and so have no value
+for `0 / 0`; those use the finite operations. A nonzero over zero is the
+signed infinity where the format has infinities and NaN otherwise (E4M3). An
+infinity converted into a format without infinities is NaN; saturating
+conversion (the OCP option) is a policy for `float-bits`.
+
+**API shape.** The finite operations are methods on `Finite` returning a
+`Float` (`a.add(b)`, `a.div(b, mode := TowardZero)`), and the special-value
+operations methods on `Float`. The mode defaults to `NearestEven`; a default
+parameter has no positional slot, so an explicit mode is passed by name.
+None of them is a designation of `+` or `*`: the result is a different type
+from the operands, and `Float::Same` is not an equivalence on NaN.
+
+**Binary long division.** `round_rat` divided with `Nat::div`, whose state
+machine costs the quotient itself under evaluation
+([float-round-rat-division-cost](../issues/float-round-rat-division-cost.md)).
+`Nat::ldiv` divides `⌊n/2⌋` and doubles, one halving, multiplication,
+subtraction and comparison per quotient bit, with `n` itself as fuel and the
+recursion stopping at zero; `ldiv_div` and `ldiv_mod` prove it is `div` and
+`mod` at a positive divisor, so `round_rat_correct` kept its statement.
+`round_rat` and division now evaluate at binary16 (`1/3` computes by `refl`).
+The quotient is built as `q * 2`, not `q + q`: a sum of a value with itself
+stays a composed run program whose later comparison walks every fragment,
+where a multiplication by a literal produces one run.
+
+Observations:
+
+- Binary32 does not evaluate yet, by any route: comparing two numerals past
+  about `2^96` built by different routes runs out of fuel in the kernel's
+  run cancellation, and an ordinary binary32 value is near `2^150`
+  half-units. That is [kernel-wide-run-comparison](../issues/kernel-wide-run-comparison.md);
+  the tests evaluate at binary16 and E5M2 and state everything else at an
+  open format.
+- `nat.hthr` cannot import `omega` or `ring`, so `ldiv`'s proofs are by hand
+  over the additive kit; the low bit of the numerator comes from a
+  comparison (`Succ(2h) ≤ n`), not a subtraction, which keeps them so.
+- A method call on a `match` expression has no carrier
+  (`(match c { … }).SignIs(s)` is refused), and an inner `match` in an
+  argument needs a motive (`as λ _ => Float(F)`); the module writes
+  `Float::SignIs(match … as λ _ => Float(F) { … }, s)`.
+- `Fin(b)` in a position with no expected type resolves to another
+  constructor named `Fin`; the special-value theorems write `Float::Fin`.
+

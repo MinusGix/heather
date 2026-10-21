@@ -1,0 +1,1534 @@
+// FunctionIR with calls lowered to x86 by a Heather function proved correct
+// once (issues/function-ir-verified-lowering.md, round 3: calls and the
+// stack).
+//
+// A program is a list of functions, last first, each calling only the ones
+// after it (function_ir: `program_callees`). Each function is emitted at the
+// label `Succ(f)`: it allocates a frame of eight slots below its return
+// address, runs its body, moves its result into RAX, frees the frame, and
+// returns. A call inside a body spills the eight caller-saved registers
+// other than RAX into the frame, moves its arguments into the SysV argument
+// registers, CALLs, and reloads them, so the file after it is the file
+// before it with the result in RAX. Body code keeps the callee-saved
+// registers (checked by evaluation, `leaves_all`), and every callee keeps
+// them by its contract, so values in them would survive a call too.
+//
+// The theorem is round 2's over machine runs (x86_64_stack_runs): whatever
+// the placement, if `lower` returns a program then, resident anywhere and
+// with any stack meeting the stack laws, each function's code meets its
+// contract: entered with its arguments in their registers and the return
+// address on the stack, it returns there with its result in RAX, the
+// callee-saved registers kept, and its caller's stack words unchanged.
+
+import function_ir;
+import function_ir_lower;
+import function_ir_lower_structured;
+import x86_64;
+import x86_64_block;
+import x86_64_fetch;
+import x86_64_data_read;
+import x86_64_fetched_code;
+import x86_64_layout;
+import x86_64_store;
+import x86_64_stack;
+import x86_64_kept;
+import x86_64_asm;
+import x86_64_asm_runs;
+import x86_64_stack_runs;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+import omega;
+
+// ---------------------------------------------------------------------------
+// The calling convention
+
+// SysV's: arguments in RDI, RSI, RDX, RCX, R8, R9, the result in RAX.
+fn argument_registers() → List<Gpr> { [Rdi, Rsi, Rdx, Rcx, R8, R9] }
+
+// What a caller saves around a call: the caller-saved registers but RAX,
+// slot `k` holding the `k`th.
+fn saved_registers() → List<Gpr> { [Rcx, Rdx, Rsi, Rdi, R8, R9, R10, R11] }
+
+// What a callee keeps besides the stack pointer.
+fn callee_kept() → List<Gpr> { [Rbx, Rbp, R12, R13, R14, R15] }
+
+// The words in the registers, one each.
+fn ArgsIn(words: List<BitVec(64)>) → List<Gpr> → Gprs → Type {
+    match words {
+        Nil => λ _ _ => True,
+        Cons(word, rest) => λ registers gprs => match registers {
+            Nil => False,
+            Cons(register, later) => (read_gpr(register, gprs) = word) ∧ ArgsIn(rest, later, gprs),
+        },
+    }
+}
+
+theorem ports_args(values: Valuation(), ids: List<Nat>): (registers: List<Gpr>) → (gprs: Gprs) →
+    PortsAt(values, word_ports(ids), registers, gprs) → ArgsIn(words_of(values, ids), registers, gprs) {
+    match ids {
+        Nil => λ registers gprs _ => trivial,
+        Cons(id, rest) => λ registers gprs => match registers as λ r =>
+            PortsAt(values, word_ports(Cons(id, rest)), r, gprs) → ArgsIn(words_of(values, Cons(id, rest)), r, gprs) {
+            Nil => λ no => false_elim(no),
+            Cons(register, later) => λ placed => ⟨sym(placed.left), ports_args(values, rest, later, gprs, placed.right)⟩,
+        },
+    }
+}
+
+theorem args_ports(values: Valuation(), ids: List<Nat>): (registers: List<Gpr>) → (gprs: Gprs) →
+    ArgsIn(words_of(values, ids), registers, gprs) → PortsAt(values, word_ports(ids), registers, gprs) {
+    match ids {
+        Nil => λ registers gprs _ => trivial,
+        Cons(id, rest) => λ registers gprs => match registers as λ r =>
+            ArgsIn(words_of(values, Cons(id, rest)), r, gprs) → PortsAt(values, word_ports(Cons(id, rest)), r, gprs) {
+            Nil => λ no => false_elim(no),
+            Cons(register, later) => λ placed => ⟨sym(placed.left), args_ports(values, rest, later, gprs, placed.right)⟩,
+        },
+    }
+}
+
+// `writer` is none of the registers.
+fn Gpr::misses(self writer: Gpr, registers: List<Gpr>) → Bool {
+    match registers { Nil => True, Cons(register, rest) => !writer.same(register) && writer.misses(rest) }
+}
+
+theorem args_after_write(words: List<BitVec(64)>): (registers: List<Gpr>) → (gprs: Gprs) → (writer: Gpr) → (value: BitVec(64)) →
+    writer.misses(registers).IsTrue() → ArgsIn(words, registers, gprs) → ArgsIn(words, registers, write_gpr(writer, value, gprs)) {
+    match words {
+        Nil => λ registers gprs writer value _ _ => trivial,
+        Cons(word, rest) => λ registers gprs writer value => match registers as λ r =>
+            writer.misses(r).IsTrue() → ArgsIn(Cons(word, rest), r, gprs) → ArgsIn(Cons(word, rest), r, write_gpr(writer, value, gprs)) {
+            Nil => λ _ no => false_elim(no),
+            Cons(register, later) => λ misses held => {
+                let both = Bool::is_true_and(!writer.same(register), writer.misses(later), misses);
+                ⟨trans(write_spares(writer, register, value, gprs, both.left), held.left),
+                 args_after_write(rest, later, gprs, writer, value, both.right, held.right)⟩
+            },
+        },
+    }
+}
+
+theorem kept_trans(registers: List<Gpr>, a, b, c: Gprs): Kept(registers, a, b) → Kept(registers, b, c) → Kept(registers, a, c) {
+    match registers {
+        Nil => λ _ _ => trivial,
+        Cons(register, rest) => λ first second => ⟨trans(second.left, first.left), kept_trans(rest, a, b, c, first.right, second.right)⟩,
+    }
+}
+
+// The callee-saved registers are the stack pointer and the ones a callee
+// keeps besides.
+theorem kept_saved(before, after: Gprs, rsp: read_gpr(Rsp, after) = read_gpr(Rsp, before), kept: Kept(callee_kept(), before, after)):
+    Kept(callee_saved(), before, after) {
+    ⟨kept.left, ⟨kept.right.left, ⟨rsp, kept.right.right⟩⟩⟩
+}
+theorem saved_kept(before, after: Gprs, kept: Kept(callee_saved(), before, after)): Kept(callee_kept(), before, after) {
+    ⟨kept.left, ⟨kept.right.left, kept.right.right.right⟩⟩
+}
+
+// What function `f` promises, called on `arguments` where the program's
+// functions say it may return `result`: entered at stack offset `i` with
+// room below for itself and its callees (`72` bytes a level: its frame,
+// and the return address of a call it makes), it returns with `result` in
+// RAX, the callee-saved registers kept, and the stack from `i + 8` up as it
+// was.
+fn CalleePre<M>(callees: Callees(), f: Nat, arguments: List<BitVec(64)>, result: BitVec(64)) → Nat → MachineState<M> → Type {
+    λ i s => ArgsIn(arguments, argument_registers(), s.gprs) ∧ (callees(f, arguments, result) ∧ 72 * Succ(f) <= i)
+}
+fn Stack::CalleePost<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), result: BitVec(64)) →
+    Nat → MachineState<M> → MachineState<M> → Type {
+    λ i s t => (read_gpr(Rax, t.gprs) = result) ∧ (Kept(callee_kept(), s.gprs, t.gprs) ∧ stack.Unchanged(i + 8, s.memory, t.memory))
+}
+
+// Every function below `bound` meets its contract at its label.
+fn Site::Calls<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), callees: Callees(), bound: Nat) → Type {
+    (f: Nat) → Succ(f) <= bound → (arguments: List<BitVec(64)>) → (result: BitVec(64)) →
+        site.Returns(stack, asm_labels(site.program)(Succ(f)), CalleePre<M>(callees, f, arguments, result), stack.CalleePost(result))
+}
+
+// What a body keeps of where it started (`s0`, its frame at offset `d`):
+// the callee-saved registers, and the stack above its frame.
+fn Stack::Framed<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), d: Nat,
+    s0, s: MachineState<M>) → Type {
+    Kept(callee_saved(), s0.gprs, s.gprs) ∧ stack.Unchanged(d + 64, s0.memory, s.memory)
+}
+
+// Words a callee leaves at and above `d` keep the slots there.
+theorem Stack::saved_unchanged<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), d: Nat,
+    gprs: Gprs, before, after: M, unchanged: stack.Unchanged(d, before, after), registers: List<Gpr>):
+    (k: Nat) → d + 8 * (k + registers.len()) <= stack.size → stack.Saved(d, registers, k, gprs, before) → stack.Saved(d, registers, k, gprs, after) {
+    match registers {
+        Nil => λ k _ _ => trivial,
+        Cons(register, rest) => λ k room saved =>
+            ⟨trans(unchanged(d + 8 * k, { omega }, { omega }), saved.left),
+             stack.saved_unchanged(d, gprs, before, after, unchanged, rest, Succ(k), { omega }, saved.right)⟩,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Emitting with calls
+
+// What emitting proves now: round 2's `Emits` over machine runs, the frame
+// kept. `s0` is where the body started, its frame at stack offset `d`.
+fn EmitsIn<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data), values: Valuation(), d: Nat, s0: MachineState<M>,
+    prog: Prog, file: File, facts: Type, out: Emitted) → Type {
+    prog.Within(out.prog) ∧ (out.prog.Within(site.program) →
+        site.Moves(stack.writes, prog_len(prog), prog_len(out.prog),
+            λ (s: MachineState<M>) => (file.Represents(values, s.gprs) ∧ facts) ∧ stack.Framed(d, s0, s),
+            λ (t: MachineState<M>) => out.file.Represents(values, t.gprs) ∧ stack.Framed(d, s0, t)))
+}
+
+fn MayEmitIn<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data), values: Valuation(), d: Nat, s0: MachineState<M>,
+    prog: Prog, file: File, facts: Type, out: Option<Emitted>) → Type {
+    out.All(λ (emitted: Emitted) => EmitsIn<M>(site, stack, values, d, s0, prog, file, facts, emitted))
+}
+
+// A call's code after `prog`: the spills, the argument moves, the CALL,
+// the reloads.
+fn call_prog(prog: Prog, moves: List<Instruction>, callee: Nat) → Prog {
+    saved_registers().reloads(At(At(saved_registers().spills(prog, 0), 0, Block(moves)), 0, CallTo(Succ(callee))), 0)
+}
+
+// What a call's code has done by its CALL: the arguments in their
+// registers, the callee-saved registers as at the call's start (`g0`), and
+// the saved registers' words in their slots.
+fn Stack::ArgsReady<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), d: Nat,
+    s0: MachineState<M>, g0: Gprs, words: List<BitVec(64)>, x: MachineState<M>) → Type {
+    ArgsIn(words, argument_registers(), x.gprs) ∧ (Kept(callee_saved(), g0, x.gprs) ∧
+        (stack.Unchanged(d + 64, s0.memory, x.memory) ∧ stack.Saved(d, saved_registers(), 0, g0, x.memory)))
+}
+
+// And after it: the stack pointer back, the answer in RAX, the rest kept.
+fn Stack::Returned<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), d: Nat,
+    s0: MachineState<M>, g0: Gprs, answer: BitVec(64), t: MachineState<M>) → Type {
+    (read_gpr(Rsp, t.gprs) = stack.at(d)) ∧ ((read_gpr(Rax, t.gprs) = answer) ∧ (Kept(callee_kept(), g0, t.gprs) ∧
+        (stack.Unchanged(d + 64, s0.memory, t.memory) ∧ stack.Saved(d, saved_registers(), 0, g0, t.memory))))
+}
+
+// The CALL, against the callee's contract.
+theorem call_step<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
+    callees: Callees(), bound: Nat, calls: site.Calls(stack, callees, bound), d: Nat, s0: MachineState<M>,
+    room: 72 * bound + 8 <= d, fits: d + 64 <= stack.size, prog: Prog, callee: Nat, below: Succ(callee) <= bound,
+    words: List<BitVec(64)>, answer: BitVec(64), answered: callees(callee, words, answer),
+    g0: Gprs, rsp_g0: read_gpr(Rsp, g0) = stack.at(d), k: Nat, at: asm_back(site.program, k) = At(prog, 0, CallTo(Succ(callee)))):
+    site.Moves(stack.writes, prog_len(prog), prog_len(prog) + 5,
+        λ (x: MachineState<M>) => stack.ArgsReady(d, s0, g0, words, x), λ (t: MachineState<M>) => stack.Returned(d, s0, g0, answer, t)) {
+    let back: ((d -8) + 8 = d) = Nat::sub_add_cancel(8, d, { omega });
+    let entered: ((d -8) + 8 <= stack.size) = { omega };
+    let deep: (72 * Succ(callee) <= d -8) = { omega };
+    let slots: (d + 8 * (0 + saved_registers().len()) <= stack.size) = { omega };
+    let at_d: (stack.at((d -8) + 8) = stack.at(d)) = cong_fn<Nat, BitVec(64)>(λ n => stack.at(n), back);
+    let displacement = asm_jump_of(asm_labels(site.program), prog_len(prog), CallTo(Succ(callee)));
+    site.moves_call(stack, site.program.laid_out_fits(laid), k, prog, 0, Succ(callee), at,
+        asm_labels(site.program)(Succ(callee)),
+        call_lands(asm_labels(site.program), k, site.program, prog, 0, Succ(callee), site.program.laid_out_lands(laid), at),
+        CalleePre<M>(callees, callee, words, answer), stack.CalleePost(answer), calls(callee, below, words, answer),
+        λ (x: MachineState<M>) => stack.ArgsReady(d, s0, g0, words, x), λ (t: MachineState<M>) => stack.Returned(d, s0, g0, answer, t),
+        λ _ => d -8,
+        λ x held => ⟨trans(held.right.left.right.right.left, trans(rsp_g0, sym(at_d))),
+            ⟨entered, ⟨args_after_write(words, argument_registers(), x.gprs, Rsp, push_address(x.gprs), trivial, held.left),
+                ⟨answered, deep⟩⟩⟩⟩,
+        λ x t held rsp_t returned => {
+            let rsp_x: (read_gpr(Rsp, x.gprs) = stack.at((d -8) + 8)) = trans(held.right.left.right.right.left, trans(rsp_g0, sym(at_d)));
+            let pushed: (push_address(x.gprs) = stack.at(d -8)) =
+                trans(cong_fn<BitVec(64), BitVec(64)>(λ a => a.sub(BitVec::ofNat(8)), rsp_x), push_at(stack.low, d -8));
+            let u = call_near_after(stack.writes, displacement, x);
+            let pushed_below: stack.Unchanged(d, x.memory, u.memory) =
+                j(sym(pushed), λ a _ => stack.Unchanged(d, x.memory, stack.writes.store(x.memory, a, word_bytes(next_rip(x.rip, 5)))),
+                    stack.store_below(x.memory, d -8, d, { omega }, { omega }, next_rip(x.rip, 5)));
+            let callee_left: stack.Unchanged(d, u.memory, t.memory) =
+                j(back, λ n _ => stack.Unchanged(n, u.memory, t.memory), returned.right.right);
+            let unchanged = stack.unchanged_trans(d, x.memory, u.memory, t.memory, pushed_below, callee_left);
+            let kept_u: Kept(callee_kept(), x.gprs, t.gprs) = returned.right.left;
+            ⟨trans(rsp_t, at_d), ⟨returned.left, ⟨kept_trans(callee_kept(), g0, x.gprs, t.gprs, saved_kept(g0, x.gprs, held.right.left), kept_u),
+              ⟨stack.unchanged_trans(d + 64, s0.memory, x.memory, t.memory, held.right.right.left,
+                  stack.unchanged_above(d, d + 64, { omega }, x.memory, t.memory, unchanged)),
+               stack.saved_unchanged(d, g0, x.memory, t.memory, unchanged, saved_registers(), 0, slots, held.right.right.right)⟩⟩⟩⟩
+        })
+}
+
+// After the reloads: the file before the call, with the answer in RAX.
+theorem call_restores(values: Valuation(), file: File, result: Nat, before, after: Gprs,
+    represents: file.Represents(values, before), rax: read_gpr(Rax, after) = values(64, result),
+    kept: Kept(callee_kept(), before, after), rsp: read_gpr(Rsp, after) = read_gpr(Rsp, before)):
+    file.write(Rax, Some(Held(result, Word))).Represents(values, restore(saved_registers(), before, after)) {
+    λ query => match query as λ q => SlotRep(values, file.write(Rax, Some(Held(result, Word))).at(q), read_gpr(q, restore(saved_registers(), before, after))) {
+        Rax => sym(rax),
+        Rcx => represents(Rcx), Rdx => represents(Rdx),
+        Rbx => j(sym(kept.left), λ w _ => SlotRep(values, file.at(Rbx), w), represents(Rbx)),
+        Rsp => j(sym(rsp), λ w _ => SlotRep(values, file.at(Rsp), w), represents(Rsp)),
+        Rbp => j(sym(kept.right.left), λ w _ => SlotRep(values, file.at(Rbp), w), represents(Rbp)),
+        Rsi => represents(Rsi), Rdi => represents(Rdi), R8 => represents(R8), R9 => represents(R9),
+        R10 => represents(R10), R11 => represents(R11),
+        R12 => j(sym(kept.right.right.left), λ w _ => SlotRep(values, file.at(R12), w), represents(R12)),
+        R13 => j(sym(kept.right.right.right.left), λ w _ => SlotRep(values, file.at(R13), w), represents(R13)),
+        R14 => j(sym(kept.right.right.right.right.left), λ w _ => SlotRep(values, file.at(R14), w), represents(R14)),
+        R15 => j(sym(kept.right.right.right.right.right.left), λ w _ => SlotRep(values, file.at(R15), w), represents(R15)),
+    }
+}
+
+// A word in the slots lies below the frame's top.
+theorem slot_inside(d, i, size: Nat, high: i + 8 <= d + 8 * (0 + saved_registers().len()), fits: d + 64 <= size):
+    (i + 8 <= size) ∧ (i + 8 <= d + 64) {
+    let eight: (saved_registers().len() = 8) = refl;
+    ⟨{ omega }, { omega }⟩
+}
+
+// The spills.
+theorem call_spills<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
+    d: Nat, s0: MachineState<M>, fits: d + 64 <= stack.size, prog: Prog,
+    g0: Gprs, rsp_g0: read_gpr(Rsp, g0) = stack.at(d), within: saved_registers().spills(prog, 0).Within(site.program)):
+    site.Moves(stack.writes, prog_len(prog), prog_len(saved_registers().spills(prog, 0)),
+        λ (x: MachineState<M>) => (x.gprs = g0) ∧ stack.Unchanged(d + 64, s0.memory, x.memory),
+        λ (x: MachineState<M>) => (x.gprs = g0) ∧ (stack.Unchanged(d + 64, s0.memory, x.memory) ∧
+            stack.Saved(d, saved_registers(), 0, g0, x.memory))) {
+    let small: (0 + saved_registers().len() <= 16) = { omega };
+    let slots: (d + 8 * (0 + saved_registers().len()) <= stack.size) = { omega };
+    site.moves_spills(stack, site.program.laid_out_fits(laid), d, g0, rsp_g0, saved_registers(), prog, 0, small, slots,
+        λ (m: M) => stack.Unchanged(d + 64, s0.memory, m),
+        λ memory i low high word kept => {
+            let inside = slot_inside(d, i, stack.size, high, fits);
+            stack.unchanged_trans(d + 64, s0.memory, memory,
+                stack.writes.store(memory, stack.at(i), word_bytes(word)), kept,
+                stack.store_below(memory, i, d + 64, inside.left, inside.right, word))
+        },
+        within)
+}
+
+// The argument moves.
+theorem call_moves<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
+    values: Valuation(), d: Nat, s0: MachineState<M>, prog: Prog, file: File, arguments: List<Nat>,
+    moves: Lowered, moves_keeps: Keeps<M>(values, file, True, moves),
+    placed: moves.file.outputs_check(word_ports(arguments), argument_registers()).IsTrue(),
+    leaves: leaves_all(moves.code, callee_saved()).IsTrue(),
+    g0: Gprs, represents: file.Represents(values, g0), k: Nat, at: asm_back(site.program, k) = At(prog, 0, Block(moves.code))):
+    site.Moves(stack.writes, prog_len(prog), prog_len(prog) + block_length(moves.code),
+        λ (x: MachineState<M>) => (x.gprs = g0) ∧ (stack.Unchanged(d + 64, s0.memory, x.memory) ∧
+            stack.Saved(d, saved_registers(), 0, g0, x.memory)),
+        λ (x: MachineState<M>) => stack.ArgsReady(d, s0, g0, words_of(values, arguments), x)) {
+    let rest = λ (m: M) => stack.Unchanged(d + 64, s0.memory, m) ∧ stack.Saved(d, saved_registers(), 0, g0, m);
+    let pre = λ (g: Gprs) (m: M) => (g = g0) ∧ rest(m);
+    let post = λ (g: Gprs) (m: M) => ArgsIn(words_of(values, arguments), argument_registers(), g) ∧ (Kept(callee_saved(), g0, g) ∧ rest(m));
+    site.moves_of_pure(stack.writes, prog_len(prog), prog_len(prog) + block_length(moves.code), pre, post,
+        λ memory => site.runs_block(site.program.laid_out_fits(laid), k, prog, 0, moves.code, at,
+            λ (g: Gprs) => pre(g, memory), λ (g: Gprs) => post(g, memory),
+            λ x held => {
+                let y = execute_block_normal(moves.code, x);
+                let kept_moves = moves_keeps(x, j(sym(held.left), λ g _ => file.Represents(values, g), represents), trivial);
+                ⟨ports_args(values, arguments, argument_registers(), y.gprs,
+                    outputs_check_sound(values, moves.file, y.gprs, kept_moves, word_ports(arguments), argument_registers(), placed)),
+                 ⟨j(held.left, λ g _ => Kept(callee_saved(), g, y.gprs), execute_block_kept<M>(moves.code, x, callee_saved(), leaves)),
+                  held.right⟩⟩
+            }))
+}
+
+theorem saved_fit(d, size: Nat, fits: d + 64 <= size):
+    (0 + saved_registers().len() <= 16) ∧ (d + 8 * (0 + saved_registers().len()) <= size) {
+    let eight: (saved_registers().len() = 8) = refl;
+    ⟨{ omega }, { omega }⟩
+}
+
+// From the call's start to its return: spills, argument moves, CALL.
+theorem call_returns<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
+    callees: Callees(), bound: Nat, calls: site.Calls(stack, callees, bound), values: Valuation(), d: Nat, s0: MachineState<M>,
+    room: 72 * bound + 8 <= d, fits: d + 64 <= stack.size,
+    prog: Prog, file: File, callee: Nat, arguments: List<Nat>, result: Nat,
+    below: Succ(callee) <= bound, moves: Lowered, moves_keeps: Keeps<M>(values, file, True, moves),
+    placed: moves.file.outputs_check(word_ports(arguments), argument_registers()).IsTrue(),
+    leaves: leaves_all(moves.code, callee_saved()).IsTrue(),
+    g0: Gprs, represents: file.Represents(values, g0), rsp_g0: read_gpr(Rsp, g0) = stack.at(d),
+    answered: callees(callee, words_of(values, arguments), values(64, result)),
+    within: At(At(saved_registers().spills(prog, 0), 0, Block(moves.code)), 0, CallTo(Succ(callee))).Within(site.program)):
+    site.Moves(stack.writes, prog_len(prog), prog_len(At(At(saved_registers().spills(prog, 0), 0, Block(moves.code)), 0, CallTo(Succ(callee)))),
+        λ (x: MachineState<M>) => (x.gprs = g0) ∧ stack.Unchanged(d + 64, s0.memory, x.memory),
+        λ (t: MachineState<M>) => stack.Returned(d, s0, g0, values(64, result), t)) {
+    let saved = saved_registers();
+    let spilled = saved.spills(prog, 0);
+    let moved = At(spilled, 0, Block(moves.code));
+    let words = words_of(values, arguments);
+    let answer = values(64, result);
+    let moved_in = moved.within_before(0, CallTo(Succ(callee)), site.program, within);
+    let spilled_in = spilled.within_before(0, Block(moves.code), site.program, moved_in);
+    site.moves_trans(stack.writes, prog_len(prog), prog_len(spilled), prog_len(moved) + 5,
+        λ (x: MachineState<M>) => (x.gprs = g0) ∧ stack.Unchanged(d + 64, s0.memory, x.memory),
+        λ (x: MachineState<M>) => (x.gprs = g0) ∧ (stack.Unchanged(d + 64, s0.memory, x.memory) ∧ stack.Saved(d, saved, 0, g0, x.memory)),
+        λ (t: MachineState<M>) => stack.Returned(d, s0, g0, answer, t),
+        call_spills<M>(site, laid, stack, d, s0, fits, prog, g0, rsp_g0, spilled_in),
+        site.moves_trans(stack.writes, prog_len(spilled), prog_len(moved), prog_len(moved) + 5,
+            λ (x: MachineState<M>) => (x.gprs = g0) ∧ (stack.Unchanged(d + 64, s0.memory, x.memory) ∧ stack.Saved(d, saved, 0, g0, x.memory)),
+            λ (x: MachineState<M>) => stack.ArgsReady(d, s0, g0, words, x),
+            λ (t: MachineState<M>) => stack.Returned(d, s0, g0, answer, t),
+            call_moves<M>(site, laid, stack, values, d, s0, spilled, file, arguments, moves, moves_keeps, placed, leaves, g0, represents,
+                moved_in.witness, moved_in.proof),
+            call_step<M>(site, laid, stack, callees, bound, calls, d, s0, room, fits, moved, callee, below, words, answer,
+                answered, g0, rsp_g0, within.witness, within.proof)))
+}
+
+// The reloads keep what the callee kept.
+theorem kept_restored(before, saved, after: Gprs, kept: Kept(callee_saved(), before, after)):
+    Kept(callee_saved(), before, restore(saved_registers(), saved, after)) { kept }
+
+theorem call_within(prog: Prog, code: List<Instruction>, callee: Nat): prog.Within(call_prog(prog, code, callee)) {
+    let saved = saved_registers();
+    let spilled = saved.spills(prog, 0);
+    let moved = At(spilled, 0, Block(code));
+    let called = At(moved, 0, CallTo(Succ(callee)));
+    let out_prog = saved.reloads(called, 0);
+    prog.within_trans(spilled, out_prog, Prog::within_spills(saved, prog, 0),
+        spilled.within_trans(moved, out_prog, spilled.within_then(0, Block(code)),
+            moved.within_trans(called, out_prog, moved.within_then(0, CallTo(Succ(callee))), Prog::within_reloads(saved, called, 0))))
+}
+
+// From the return through the reloads.
+theorem call_finishes<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
+    values: Valuation(), d: Nat, s0: MachineState<M>, rsp0: read_gpr(Rsp, s0.gprs) = stack.at(d), fits: d + 64 <= stack.size,
+    file: File, result: Nat, called: Prog, g0: Gprs, represents: file.Represents(values, g0),
+    rsp_g0: read_gpr(Rsp, g0) = stack.at(d), kept_g0: Kept(callee_saved(), s0.gprs, g0),
+    within: saved_registers().reloads(called, 0).Within(site.program)):
+    site.Moves(stack.writes, prog_len(called), prog_len(saved_registers().reloads(called, 0)),
+        λ (t: MachineState<M>) => stack.Returned(d, s0, g0, values(64, result), t),
+        λ (t: MachineState<M>) => file.write(Rax, Some(Held(result, Word))).Represents(values, t.gprs) ∧ stack.Framed(d, s0, t)) {
+    let saved = saved_registers();
+    let sizes = saved_fit(d, stack.size, fits);
+    let out_file = file.write(Rax, Some(Held(result, Word)));
+    λ s3 here resident after_call => {
+        let reloading = site.moves_reloads(stack, site.program.laid_out_fits(laid), d, g0, saved, called, 0, s3.gprs, sizes.left,
+            sizes.right, trivial, after_call.left, λ (m: M) => stack.Unchanged(d + 64, s0.memory, m), within);
+        let e = reloading(s3, here, resident, ⟨refl, after_call.right.right.right⟩);
+        let kept_s3: Kept(callee_saved(), s0.gprs, s3.gprs) =
+            kept_saved(s0.gprs, s3.gprs, trans(after_call.left, sym(rsp0)),
+                kept_trans(callee_kept(), s0.gprs, g0, s3.gprs, saved_kept(s0.gprs, g0, kept_g0), after_call.right.right.left));
+        let finished = j(sym(e.proof.right.right.right.left), λ g _ => out_file.Represents(values, g) ∧ Kept(callee_saved(), s0.gprs, g),
+            ⟨call_restores(values, file, result, g0, s3.gprs, represents, after_call.right.left, after_call.right.right.left,
+                trans(after_call.left, sym(rsp_g0))), kept_restored(s0.gprs, g0, s3.gprs, kept_s3)⟩);
+        Exists(e.witness, ⟨e.proof.left, ⟨e.proof.right.left, ⟨e.proof.right.right.left,
+            ⟨finished.left, ⟨finished.right, e.proof.right.right.right.right⟩⟩⟩⟩⟩)
+    }
+}
+
+// The call, its argument moves found.
+theorem call_emits<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
+    callees: Callees(), bound: Nat, calls: site.Calls(stack, callees, bound), values: Valuation(), d: Nat, s0: MachineState<M>,
+    rsp0: read_gpr(Rsp, s0.gprs) = stack.at(d), room: 72 * bound + 8 <= d, fits: d + 64 <= stack.size,
+    prog: Prog, file: File, callee: Nat, arguments: List<Nat>, result: Nat, placement: List<Gpr>, names: Nat,
+    below: Succ(callee) <= bound, moves: Lowered, moves_keeps: Keeps<M>(values, file, True, moves),
+    placed: moves.file.outputs_check(word_ports(arguments), argument_registers()).IsTrue(),
+    leaves: leaves_all(moves.code, callee_saved()).IsTrue()):
+    EmitsIn<M>(site, stack, values, d, s0, prog, file, StructuredRegionHoldsIn(callees, values, Call(callee, arguments, result)),
+        Emitted(call_prog(prog, moves.code, callee), file.write(Rax, Some(Held(result, Word))), placement, names)) {
+    let called = At(At(saved_registers().spills(prog, 0), 0, Block(moves.code)), 0, CallTo(Succ(callee)));
+    let out_prog = saved_registers().reloads(called, 0);
+    ⟨call_within(prog, moves.code, callee),
+     λ within s here resident holds => {
+        let framed: stack.Framed(d, s0, s) = holds.right;
+        let rsp_s: (read_gpr(Rsp, s.gprs) = stack.at(d)) = trans(framed.left.right.right.left, rsp0);
+        site.moves_trans(stack.writes, prog_len(prog), prog_len(called), prog_len(out_prog),
+            λ (x: MachineState<M>) => (x.gprs = s.gprs) ∧ stack.Unchanged(d + 64, s0.memory, x.memory),
+            λ (t: MachineState<M>) => stack.Returned(d, s0, s.gprs, values(64, result), t),
+            λ (t: MachineState<M>) => file.write(Rax, Some(Held(result, Word))).Represents(values, t.gprs) ∧ stack.Framed(d, s0, t),
+            call_returns<M>(site, laid, stack, callees, bound, calls, values, d, s0, room, fits, prog, file, callee, arguments,
+                result, below, moves, moves_keeps, placed, leaves, s.gprs, holds.left.left, rsp_s, holds.left.right,
+                called.within_trans(out_prog, site.program, Prog::within_reloads(saved_registers(), called, 0), within)),
+            call_finishes<M>(site, laid, stack, values, d, s0, rsp0, fits, file, result, called, s.gprs, holds.left.left, rsp_s,
+                framed.left, within),
+            s, here, resident, ⟨refl, framed.right⟩)
+     }⟩
+}
+
+// The call, refused where the callee is not below `bound` or the
+// arguments do not all reach their registers.
+fn File::emit_call(self file: File, prog: Prog, callee: Nat, arguments: List<Nat>, result: Nat, placement: List<Gpr>,
+    names, bound: Nat) → Option<Emitted> {
+    match Succ(callee).leb(bound) {
+        False => None,
+        True => match file.move_outputs(word_ports(arguments), argument_registers()) {
+            None => None,
+            Some(moves) => match moves.file.outputs_check(word_ports(arguments), argument_registers()) &&
+                leaves_all(moves.code, callee_saved()) {
+                False => None,
+                True => Some(Emitted(call_prog(prog, moves.code, callee), file.write(Rax, Some(Held(result, Word))), placement, names)),
+            },
+        },
+    }
+}
+
+// A dataflow leaf, its code keeping the callee-saved registers.
+fn emit_kept_nodes(prog: Prog, file: File, nodes: List<Node>, placement: List<Gpr>, names: Nat) → Option<Emitted> {
+    match lower_nodes(nodes, placement, file) {
+        None => None,
+        Some(lowered) => match leaves_all(lowered.code, callee_saved()) {
+            False => None,
+            True => Some(Emitted(At(prog, 0, Block(lowered.code)), lowered.file, skip_nodes(nodes, placement), names)),
+        },
+    }
+}
+
+// Round 2's `emit` with calls of the functions below `bound`.
+fn StructuredRegion::emit_calls(self region: StructuredRegion, prog: Prog, file: File, placement: List<Gpr>, names, bound: Nat) →
+    Option<Emitted> {
+    match region {
+        Dataflow(body) => emit_kept_nodes(prog, file, body.nodes, placement, names),
+        Sequence(prefix, continuation) => match emit_kept_nodes(prog, file, prefix.nodes, placement, names) {
+            None => None,
+            Some(first) => continuation.emit_calls(first.prog, first.file, first.placement, first.names, bound),
+        },
+        Compose(prefix, continuation) => match prefix.emit_calls(prog, file, placement, names, bound) {
+            None => None,
+            Some(first) => continuation.emit_calls(first.prog, first.file, first.placement, first.names, bound),
+        },
+        Conditional(_, condition, _, _, when_true, when_false) => match file.find(Held(condition, Bit)) {
+            None => None,
+            Some(found) => match when_true.emit_calls(prog.branch_label(found.register, Succ(names)), file, placement, Succ(Succ(names)), bound) {
+                None => None,
+                Some(yes) => match when_false.emit_calls(yes.prog.else_label(Succ(names), Succ(Succ(names))), file, yes.placement, yes.names, bound) {
+                    None => None,
+                    Some(no) => Some(Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file), no.placement, no.names)),
+                },
+            },
+        },
+        Call(callee, arguments, result) => file.emit_call(prog, callee, arguments, result, placement, names, bound),
+    }
+}
+
+theorem emits_in_seq<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data), values: Valuation(), d: Nat, s0: MachineState<M>,
+    prog: Prog, file: File, first_facts, second_facts: Type, first, out: Emitted,
+    first_emits: EmitsIn<M>(site, stack, values, d, s0, prog, file, first_facts, first),
+    second_emits: EmitsIn<M>(site, stack, values, d, s0, first.prog, first.file, second_facts, out)):
+    EmitsIn<M>(site, stack, values, d, s0, prog, file, first_facts ∧ second_facts, out) {
+    ⟨prog.within_trans(first.prog, out.prog, first_emits.left, second_emits.left),
+     λ within => site.moves_trans(stack.writes, prog_len(prog), prog_len(first.prog), prog_len(out.prog),
+        λ (s: MachineState<M>) => (file.Represents(values, s.gprs) ∧ (first_facts ∧ second_facts)) ∧ stack.Framed(d, s0, s),
+        λ (s: MachineState<M>) => (first.file.Represents(values, s.gprs) ∧ second_facts) ∧ stack.Framed(d, s0, s),
+        λ (t: MachineState<M>) => out.file.Represents(values, t.gprs) ∧ stack.Framed(d, s0, t),
+        site.moves_weaken(stack.writes, prog_len(prog), prog_len(first.prog),
+            λ (s: MachineState<M>) => ((file.Represents(values, s.gprs) ∧ first_facts) ∧ stack.Framed(d, s0, s)) ∧ second_facts,
+            λ (t: MachineState<M>) => (first.file.Represents(values, t.gprs) ∧ stack.Framed(d, s0, t)) ∧ second_facts,
+            λ (s: MachineState<M>) => (file.Represents(values, s.gprs) ∧ (first_facts ∧ second_facts)) ∧ stack.Framed(d, s0, s),
+            λ (s: MachineState<M>) => (first.file.Represents(values, s.gprs) ∧ second_facts) ∧ stack.Framed(d, s0, s),
+            site.moves_carry(stack.writes, prog_len(prog), prog_len(first.prog),
+                λ (s: MachineState<M>) => (file.Represents(values, s.gprs) ∧ first_facts) ∧ stack.Framed(d, s0, s),
+                λ (t: MachineState<M>) => first.file.Represents(values, t.gprs) ∧ stack.Framed(d, s0, t), second_facts,
+                first_emits.right(first.prog.within_trans(out.prog, site.program, second_emits.left, within))),
+            λ s held => ⟨⟨⟨held.left.left, held.left.right.left⟩, held.right⟩, held.left.right.right⟩,
+            λ t held => ⟨⟨held.left.left, held.right⟩, held.left.right⟩),
+        second_emits.right(within))⟩
+}
+
+theorem may_emit_in_seq<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data), values: Valuation(), d: Nat, s0: MachineState<M>,
+    prog: Prog, file: File, first_facts, second_facts: Type, first: Emitted,
+    first_emits: EmitsIn<M>(site, stack, values, d, s0, prog, file, first_facts, first), second: Option<Emitted>):
+    MayEmitIn<M>(site, stack, values, d, s0, first.prog, first.file, second_facts, second) →
+    MayEmitIn<M>(site, stack, values, d, s0, prog, file, first_facts ∧ second_facts, second) {
+    match second {
+        None => λ _ => trivial,
+        Some(out) => λ second_emits => emits_in_seq<M>(site, stack, values, d, s0, prog, file, first_facts, second_facts, first, out,
+            first_emits, second_emits),
+    }
+}
+
+// A block that keeps the file's description and the callee-saved registers.
+theorem kept_block_emits<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
+    values: Valuation(), d: Nat, s0: MachineState<M>, prog: Prog, file: File, facts: Type, lowered: Lowered,
+    keeps: Keeps<M>(values, file, facts, lowered), leaves: leaves_all(lowered.code, callee_saved()).IsTrue(),
+    placement: List<Gpr>, names: Nat):
+    EmitsIn<M>(site, stack, values, d, s0, prog, file, facts, Emitted(At(prog, 0, Block(lowered.code)), lowered.file, placement, names)) {
+    let pre = λ (g: Gprs) (m: M) => (file.Represents(values, g) ∧ facts) ∧
+        (Kept(callee_saved(), s0.gprs, g) ∧ stack.Unchanged(d + 64, s0.memory, m));
+    let post = λ (g: Gprs) (m: M) => lowered.file.Represents(values, g) ∧
+        (Kept(callee_saved(), s0.gprs, g) ∧ stack.Unchanged(d + 64, s0.memory, m));
+    ⟨prog.within_then(0, Block(lowered.code)),
+     λ within => site.moves_of_pure(stack.writes, prog_len(prog), prog_len(prog) + block_length(lowered.code), pre, post,
+        λ memory => site.runs_block(site.program.laid_out_fits(laid), within.witness, prog, 0, lowered.code, within.proof,
+            λ (g: Gprs) => pre(g, memory), λ (g: Gprs) => post(g, memory),
+            λ x held => ⟨keeps(x, held.left.left, held.left.right),
+                ⟨kept_trans(callee_saved(), s0.gprs, x.gprs, execute_block_normal(lowered.code, x).gprs, held.right.left,
+                    execute_block_kept<M>(lowered.code, x, callee_saved(), leaves)), held.right.right⟩⟩))⟩
+}
+
+theorem is_true_of_eq(b: Bool, same: b = True): b.IsTrue() { j(sym(same), λ c _ => c.IsTrue(), trivial) }
+
+theorem emit_kept_nodes_emits<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
+    values: Valuation(), d: Nat, s0: MachineState<M>, prog: Prog, file: File, nodes: List<Node>, placement: List<Gpr>, names: Nat):
+    MayEmitIn<M>(site, stack, values, d, s0, prog, file, NodesHold(values, nodes), emit_kept_nodes(prog, file, nodes, placement, names)) {
+    (match lower_nodes(nodes, placement, file) as λ lowered =>
+        MayKeep<M>(values, file, NodesHold(values, nodes), lowered) →
+        MayEmitIn<M>(site, stack, values, d, s0, prog, file, NodesHold(values, nodes), match lowered {
+            None => None,
+            Some(l) => match leaves_all(l.code, callee_saved()) {
+                False => None,
+                True => Some(Emitted(At(prog, 0, Block(l.code)), l.file, skip_nodes(nodes, placement), names)),
+            },
+        }) {
+        None => λ _ => trivial,
+        Some(lowered) => λ keeps =>
+            (match leaves_all(lowered.code, callee_saved()) as λ b => leaves_all(lowered.code, callee_saved()) = b →
+                MayEmitIn<M>(site, stack, values, d, s0, prog, file, NodesHold(values, nodes), match b {
+                    False => None,
+                    True => Some(Emitted(At(prog, 0, Block(lowered.code)), lowered.file, skip_nodes(nodes, placement), names)),
+                }) {
+                False => λ _ => trivial,
+                True => λ left => kept_block_emits<M>(site, laid, stack, values, d, s0, prog, file, NodesHold(values, nodes), lowered,
+                    keeps, is_true_of_eq(leaves_all(lowered.code, callee_saved()), left), skip_nodes(nodes, placement), names),
+            })(refl),
+    })(lower_nodes_keeps<M>(values, nodes, placement, file))
+}
+
+theorem when_nonzero_in(callees: Callees(), values: Valuation(), inputs: Ports, condition: Nat, arguments, outputs: Ports,
+    when_true, when_false: StructuredRegion, clear: !values(1, condition).head_bit() = False,
+    holds: StructuredRegionHoldsIn(callees, values, Conditional(inputs, condition, arguments, outputs, when_true, when_false))):
+    StructuredRegionHoldsIn(callees, values, when_true) {
+    (match values(1, condition).head_bit() as λ h => !h = False →
+        (match h { False => StructuredRegionHoldsIn(callees, values, when_false), True => StructuredRegionHoldsIn(callees, values, when_true) }) →
+        StructuredRegionHoldsIn(callees, values, when_true) {
+        False => λ no _ => absurd(no),
+        True => λ _ held => held,
+    })(clear, holds)
+}
+
+theorem when_zero_in(callees: Callees(), values: Valuation(), inputs: Ports, condition: Nat, arguments, outputs: Ports,
+    when_true, when_false: StructuredRegion, set: !values(1, condition).head_bit() = True,
+    holds: StructuredRegionHoldsIn(callees, values, Conditional(inputs, condition, arguments, outputs, when_true, when_false))):
+    StructuredRegionHoldsIn(callees, values, when_false) {
+    (match values(1, condition).head_bit() as λ h => !h = True →
+        (match h { False => StructuredRegionHoldsIn(callees, values, when_false), True => StructuredRegionHoldsIn(callees, values, when_true) }) →
+        StructuredRegionHoldsIn(callees, values, when_false) {
+        False => λ _ held => held,
+        True => λ no _ => absurd(no),
+    })(set, holds)
+}
+
+theorem branch_emits_in<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
+    callees: Callees(), values: Valuation(), d: Nat, s0: MachineState<M>, prog: Prog, file: File,
+    inputs: Ports, condition: Nat, arguments, outputs: Ports, when_true, when_false: StructuredRegion,
+    found: Found(file, Held(condition, Bit)), names: Nat, yes, no: Emitted,
+    yes_emits: EmitsIn<M>(site, stack, values, d, s0, prog.branch_label(found.register, Succ(names)), file, StructuredRegionHoldsIn(callees, values, when_true), yes),
+    no_emits: EmitsIn<M>(site, stack, values, d, s0, yes.prog.else_label(Succ(names), Succ(Succ(names))), file, StructuredRegionHoldsIn(callees, values, when_false), no)):
+    EmitsIn<M>(site, stack, values, d, s0, prog, file,
+        StructuredRegionHoldsIn(callees, values, Conditional(inputs, condition, arguments, outputs, when_true, when_false)),
+        Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file), no.placement, no.names)) {
+    let register = found.register;
+    let else_name = Succ(names);
+    let join_name = Succ(Succ(names));
+    let branched = prog.branch_label(register, else_name);
+    let jumped = At(yes.prog, 0, Jmp(join_name));
+    let second = yes.prog.else_label(else_name, join_name);
+    let to_branch = prog.within_step(prog.test_label(register), 0, Jcc(E, else_name),
+        prog.within_then(0, Block([TestRR(register, register)])));
+    let to_second = prog.within_step(jumped, else_name, Block([]),
+        prog.within_step(yes.prog, 0, Jmp(join_name), prog.within_trans(branched, yes.prog, to_branch, yes_emits.left)));
+    let holds = StructuredRegionHoldsIn(callees, values, Conditional(inputs, condition, arguments, outputs, when_true, when_false));
+    let framed = λ (g: Gprs) (m: M) => Kept(callee_saved(), s0.gprs, g) ∧ stack.Unchanged(d + 64, s0.memory, m);
+    let pre = λ (g: Gprs) (m: M) => (file.Represents(values, g) ∧ holds) ∧ framed(g, m);
+    let post = λ (g: Gprs) (m: M) => yes.file.meet(no.file).Represents(values, g) ∧ framed(g, m);
+    ⟨prog.within_step(no.prog, join_name, Block([]), prog.within_trans(second, no.prog, to_second, no_emits.left)),
+     λ within => {
+        let program = site.program;
+        let labels = asm_labels(program);
+        let unique = program.laid_out_unique(laid);
+        let lands = program.laid_out_lands(laid);
+        let no_in = no.prog.within_before(join_name, Block([]), program, within);
+        let second_in = second.within_trans(no.prog, program, no_emits.left, no_in);
+        let jumped_in = jumped.within_before(else_name, Block([]), program, second_in);
+        let yes_in = yes.prog.within_before(0, Jmp(join_name), program, jumped_in);
+        let branched_in = branched.within_trans(yes.prog, program, yes_emits.left, yes_in);
+        let tested_in = prog.test_label(register).within_before(0, Jcc(E, else_name), program, branched_in);
+        let else_lands = j(label_target(second_in.witness, program, jumped, names, Block([]), unique, second_in.proof),
+            λ to _ => JumpsForward(prog_len(prog.test_label(register)), 6,
+                asm_jump_of(labels, prog_len(prog.test_label(register)), Jcc(E, else_name)), to),
+            jcc_lands(labels, branched_in.witness, program, prog.test_label(register), 0, E, else_name, lands, branched_in.proof));
+        let join_lands = j(label_target(within.witness, program, no.prog, Succ(names), Block([]), unique, within.proof),
+            λ to _ => JumpsForward(prog_len(yes.prog), 5, asm_jump_of(labels, prog_len(yes.prog), Jmp(join_name)), to),
+            jmp_lands(labels, jumped_in.witness, program, yes.prog, 0, join_name, lands, jumped_in.proof));
+        let selects = λ (g: Gprs) (represents: file.Represents(values, g)) =>
+            register.tests_zero_bit(g, values(1, condition), found.at.rep(values, g, represents));
+        site.moves_branch(stack.writes, program.laid_out_fits(laid), prog, register, else_name, join_name, yes.prog, no.prog,
+            tested_in.witness, tested_in.proof, branched_in.witness, branched_in.proof, jumped_in.witness, jumped_in.proof,
+            else_lands, join_lands, pre, post,
+            site.moves_weaken(stack.writes, prog_len(branched), prog_len(yes.prog),
+                λ (s: MachineState<M>) => (file.Represents(values, s.gprs) ∧ StructuredRegionHoldsIn(callees, values, when_true)) ∧ stack.Framed(d, s0, s),
+                λ (t: MachineState<M>) => yes.file.Represents(values, t.gprs) ∧ stack.Framed(d, s0, t),
+                λ (s: MachineState<M>) => pre(s.gprs, s.memory) ∧ register.tests_zero(s.gprs) = False,
+                λ (t: MachineState<M>) => post(t.gprs, t.memory),
+                yes_emits.right(yes_in),
+                λ s held => ⟨⟨held.left.left.left, when_nonzero_in(callees, values, inputs, condition, arguments, outputs, when_true, when_false,
+                    trans(sym(selects(s.gprs, held.left.left.left)), held.right), held.left.left.right)⟩, held.left.right⟩,
+                λ t held => ⟨yes.file.meet_left(values, t.gprs, no.file, held.left), held.right⟩),
+            site.moves_weaken(stack.writes, prog_len(second), prog_len(no.prog),
+                λ (s: MachineState<M>) => (file.Represents(values, s.gprs) ∧ StructuredRegionHoldsIn(callees, values, when_false)) ∧ stack.Framed(d, s0, s),
+                λ (t: MachineState<M>) => no.file.Represents(values, t.gprs) ∧ stack.Framed(d, s0, t),
+                λ (s: MachineState<M>) => pre(s.gprs, s.memory) ∧ register.tests_zero(s.gprs) = True,
+                λ (t: MachineState<M>) => post(t.gprs, t.memory),
+                no_emits.right(no_in),
+                λ s held => ⟨⟨held.left.left.left, when_zero_in(callees, values, inputs, condition, arguments, outputs, when_true, when_false,
+                    trans(sym(selects(s.gprs, held.left.left.left)), held.right), held.left.left.right)⟩, held.left.right⟩,
+                λ t held => ⟨yes.file.meet_right(values, t.gprs, no.file, held.left), held.right⟩))
+     }⟩
+}
+
+theorem File::emit_call_emits<M>(self file: File, site: Site<M>, laid: site.program.laid_out().IsTrue(),
+    stack: Stack<M>(site.fetch, site.data), callees: Callees(), bound: Nat, calls: site.Calls(stack, callees, bound),
+    values: Valuation(), d: Nat, s0: MachineState<M>, rsp0: read_gpr(Rsp, s0.gprs) = stack.at(d), room: 72 * bound + 8 <= d,
+    fits: d + 64 <= stack.size, prog: Prog, callee: Nat, arguments: List<Nat>, result: Nat, placement: List<Gpr>, names: Nat):
+    MayEmitIn<M>(site, stack, values, d, s0, prog, file, StructuredRegionHoldsIn(callees, values, Call(callee, arguments, result)),
+        file.emit_call(prog, callee, arguments, result, placement, names, bound)) {
+    let facts = StructuredRegionHoldsIn(callees, values, Call(callee, arguments, result));
+    let ports = word_ports(arguments);
+    let out_file = file.write(Rax, Some(Held(result, Word)));
+    (match Succ(callee).leb(bound) as λ b => Succ(callee).leb(bound) = b →
+        MayEmitIn<M>(site, stack, values, d, s0, prog, file, facts, match b {
+            False => None,
+            True => match file.move_outputs(ports, argument_registers()) {
+                None => None,
+                Some(moves) => match moves.file.outputs_check(ports, argument_registers()) && leaves_all(moves.code, callee_saved()) {
+                    False => None,
+                    True => Some(Emitted(call_prog(prog, moves.code, callee), out_file, placement, names)),
+                },
+            },
+        }) {
+        False => λ _ => trivial,
+        True => λ under =>
+            (match file.move_outputs(ports, argument_registers()) as λ moved =>
+                MayKeep<M>(values, file, True, moved) →
+                MayEmitIn<M>(site, stack, values, d, s0, prog, file, facts, match moved {
+                    None => None,
+                    Some(moves) => match moves.file.outputs_check(ports, argument_registers()) && leaves_all(moves.code, callee_saved()) {
+                        False => None,
+                        True => Some(Emitted(call_prog(prog, moves.code, callee), out_file, placement, names)),
+                    },
+                }) {
+                None => λ _ => trivial,
+                Some(moves) => λ keeps =>
+                    (match moves.file.outputs_check(ports, argument_registers()) && leaves_all(moves.code, callee_saved()) as λ c =>
+                        (moves.file.outputs_check(ports, argument_registers()) && leaves_all(moves.code, callee_saved())) = c →
+                        MayEmitIn<M>(site, stack, values, d, s0, prog, file, facts, match c {
+                            False => None,
+                            True => Some(Emitted(call_prog(prog, moves.code, callee), out_file, placement, names)),
+                        }) {
+                        False => λ _ => trivial,
+                        True => λ checked => {
+                            let both = Bool::is_true_and(moves.file.outputs_check(ports, argument_registers()),
+                                leaves_all(moves.code, callee_saved()),
+                                is_true_of_eq(moves.file.outputs_check(ports, argument_registers()) && leaves_all(moves.code, callee_saved()),
+                                    checked));
+                            call_emits<M>(site, laid, stack, callees, bound, calls, values, d, s0, rsp0, room, fits, prog, file, callee,
+                                arguments, result, placement, names,
+                                Succ(callee).leb_sound(bound, is_true_of_eq(Succ(callee).leb(bound), under)),
+                                moves, keeps, both.left, both.right)
+                        },
+                    })(refl),
+            })(move_outputs_keeps<M>(values, ports, file, argument_registers())),
+    })(refl)
+}
+
+// Round 2's theorem over machine runs: whatever `emit_calls` emits keeps
+// the frame and computes the region, its calls answered by the functions
+// below `bound`.
+theorem StructuredRegion::emit_calls_emits<M>(self region: StructuredRegion, site: Site<M>, laid: site.program.laid_out().IsTrue(),
+    stack: Stack<M>(site.fetch, site.data), callees: Callees(), bound: Nat, calls: site.Calls(stack, callees, bound),
+    values: Valuation(), d: Nat, s0: MachineState<M>, rsp0: read_gpr(Rsp, s0.gprs) = stack.at(d), room: 72 * bound + 8 <= d,
+    fits: d + 64 <= stack.size): (prog: Prog) → (file: File) → (placement: List<Gpr>) → (names: Nat) →
+    MayEmitIn<M>(site, stack, values, d, s0, prog, file, StructuredRegionHoldsIn(callees, values, region),
+        region.emit_calls(prog, file, placement, names, bound)) {
+    match region {
+        Dataflow(body) => λ prog file placement names => emit_kept_nodes_emits<M>(site, laid, stack, values, d, s0, prog, file, body.nodes, placement, names),
+        Sequence(prefix, continuation) => λ prog file placement names =>
+            (match emit_kept_nodes(prog, file, prefix.nodes, placement, names) as λ e =>
+                MayEmitIn<M>(site, stack, values, d, s0, prog, file, NodesHold(values, prefix.nodes), e) →
+                MayEmitIn<M>(site, stack, values, d, s0, prog, file, RegionHolds(prefix, values) ∧ StructuredRegionHoldsIn(callees, values, continuation), match e {
+                    None => None,
+                    Some(first) => continuation.emit_calls(first.prog, first.file, first.placement, first.names, bound),
+                }) {
+                None => λ _ => trivial,
+                Some(first) => λ first_emits => may_emit_in_seq<M>(site, stack, values, d, s0, prog, file, NodesHold(values, prefix.nodes),
+                    StructuredRegionHoldsIn(callees, values, continuation), first, first_emits,
+                    continuation.emit_calls(first.prog, first.file, first.placement, first.names, bound),
+                    continuation.emit_calls_emits<M>(site, laid, stack, callees, bound, calls, values, d, s0, rsp0, room, fits, first.prog, first.file, first.placement, first.names)),
+            })(emit_kept_nodes_emits<M>(site, laid, stack, values, d, s0, prog, file, prefix.nodes, placement, names)),
+        Compose(prefix, continuation) => λ prog file placement names =>
+            (match prefix.emit_calls(prog, file, placement, names, bound) as λ e =>
+                MayEmitIn<M>(site, stack, values, d, s0, prog, file, StructuredRegionHoldsIn(callees, values, prefix), e) →
+                MayEmitIn<M>(site, stack, values, d, s0, prog, file, StructuredRegionHoldsIn(callees, values, prefix) ∧ StructuredRegionHoldsIn(callees, values, continuation), match e {
+                    None => None,
+                    Some(first) => continuation.emit_calls(first.prog, first.file, first.placement, first.names, bound),
+                }) {
+                None => λ _ => trivial,
+                Some(first) => λ first_emits => may_emit_in_seq<M>(site, stack, values, d, s0, prog, file, StructuredRegionHoldsIn(callees, values, prefix),
+                    StructuredRegionHoldsIn(callees, values, continuation), first, first_emits,
+                    continuation.emit_calls(first.prog, first.file, first.placement, first.names, bound),
+                    continuation.emit_calls_emits<M>(site, laid, stack, callees, bound, calls, values, d, s0, rsp0, room, fits, first.prog, first.file, first.placement, first.names)),
+            })(prefix.emit_calls_emits<M>(site, laid, stack, callees, bound, calls, values, d, s0, rsp0, room, fits, prog, file, placement, names)),
+        Conditional(inputs, condition, arguments, outputs, when_true, when_false) => λ prog file placement names =>
+            match file.find(Held(condition, Bit)) as λ located =>
+                MayEmitIn<M>(site, stack, values, d, s0, prog, file,
+                    StructuredRegionHoldsIn(callees, values, Conditional(inputs, condition, arguments, outputs, when_true, when_false)),
+                    match located {
+                        None => None,
+                        Some(found) => match when_true.emit_calls(prog.branch_label(found.register, Succ(names)), file, placement, Succ(Succ(names)), bound) {
+                            None => None,
+                            Some(yes) => match when_false.emit_calls(yes.prog.else_label(Succ(names), Succ(Succ(names))), file, yes.placement, yes.names, bound) {
+                                None => None,
+                                Some(no) => Some(Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file), no.placement, no.names)),
+                            },
+                        },
+                    }) {
+                None => trivial,
+                Some(found) =>
+                    (match when_true.emit_calls(prog.branch_label(found.register, Succ(names)), file, placement, Succ(Succ(names)), bound) as λ y =>
+                        MayEmitIn<M>(site, stack, values, d, s0, prog.branch_label(found.register, Succ(names)), file, StructuredRegionHoldsIn(callees, values, when_true), y) →
+                        MayEmitIn<M>(site, stack, values, d, s0, prog, file,
+                            StructuredRegionHoldsIn(callees, values, Conditional(inputs, condition, arguments, outputs, when_true, when_false)),
+                            match y {
+                                None => None,
+                                Some(yes) => match when_false.emit_calls(yes.prog.else_label(Succ(names), Succ(Succ(names))), file, yes.placement, yes.names, bound) {
+                                    None => None,
+                                    Some(no) => Some(Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file), no.placement, no.names)),
+                                },
+                            }) {
+                        None => λ _ => trivial,
+                        Some(yes) => λ yes_emits =>
+                            (match when_false.emit_calls(yes.prog.else_label(Succ(names), Succ(Succ(names))), file, yes.placement, yes.names, bound) as λ n =>
+                                MayEmitIn<M>(site, stack, values, d, s0, yes.prog.else_label(Succ(names), Succ(Succ(names))), file,
+                                    StructuredRegionHoldsIn(callees, values, when_false), n) →
+                                MayEmitIn<M>(site, stack, values, d, s0, prog, file,
+                                    StructuredRegionHoldsIn(callees, values, Conditional(inputs, condition, arguments, outputs, when_true, when_false)),
+                                    match n {
+                                        None => None,
+                                        Some(no) => Some(Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file), no.placement, no.names)),
+                                    }) {
+                                None => λ _ => trivial,
+                                Some(no) => λ no_emits => branch_emits_in<M>(site, laid, stack, callees, values, d, s0, prog, file, inputs, condition, arguments, outputs,
+                                    when_true, when_false, found, names, yes, no, yes_emits, no_emits),
+                            })(when_false.emit_calls_emits<M>(site, laid, stack, callees, bound, calls, values, d, s0, rsp0, room, fits, yes.prog.else_label(Succ(names), Succ(Succ(names))), file,
+                                yes.placement, yes.names)),
+                    })(when_true.emit_calls_emits<M>(site, laid, stack, callees, bound, calls, values, d, s0, rsp0, room, fits, prog.branch_label(found.register, Succ(names)), file, placement,
+                        Succ(Succ(names)))),
+            },
+        Call(callee, arguments, result) => λ prog file placement names =>
+            file.emit_call_emits<M>(site, laid, stack, callees, bound, calls, values, d, s0, rsp0, room, fits, prog, callee, arguments,
+                result, placement, names),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Functions
+
+// A frame of eight slots, allocated and freed by ADD RSP, imm8.
+fn frame_allocate() → Instruction { AddRI8(Rsp, BitVec::ofNat(256 -64)) }
+fn frame_free() → Instruction { AddRI8(Rsp, BitVec::ofNat(64)) }
+
+theorem frame_allocated(low: BitVec(64), i: Nat):
+    next_rip(low, i + 64).add(BitVec::ofNat(256 -64, n := 8).sign_extend(56)) = next_rip(low, i) {
+    let reading: (BitVec::ofNat(256 -64, n := 8).sign_extend(56).toNat() = Nat::pow(2, 64) -64) = refl;
+    let back: ((Nat::pow(2, 64) -64) + 64 = Nat::pow(2, 64)) = Nat::sub_add_cancel(64, Nat::pow(2, 64), trivial);
+    let count: ((i + 64) + (Nat::pow(2, 64) -64) = i + Nat::pow(2, 64)) = { omega };
+    trans(sym(BitVec::iter_add_eq_add(64, next_rip(low, i + 64), BitVec::ofNat(256 -64, n := 8).sign_extend(56))),
+    trans(rip_count(next_rip(low, i + 64), reading),
+    trans(rip_compose(low, i + 64, Nat::pow(2, 64) -64),
+    trans(rip_count(low, count),
+    trans(sym(rip_compose(low, i, Nat::pow(2, 64))), BitVec::iterate_increment_period(64, next_rip(low, i)))))))
+}
+
+theorem frame_freed(low: BitVec(64), i: Nat):
+    next_rip(low, i).add(BitVec::ofNat(64, n := 8).sign_extend(56)) = next_rip(low, i + 64) {
+    trans(sym(BitVec::iter_add_eq_add(64, next_rip(low, i), BitVec::ofNat(64, n := 8).sign_extend(56))), rip_compose(low, i, 64))
+}
+
+theorem kept_refl(registers: List<Gpr>, gprs: Gprs): Kept(registers, gprs, gprs) {
+    match registers { Nil => trivial, Cons(_, rest) => ⟨refl, kept_refl(rest, gprs)⟩ }
+}
+
+// Where a function's body starts: the frame allocated below the return
+// address at `d + 64`, everything else as it was entered.
+fn Stack::opened<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), d: Nat,
+    s0: MachineState<M>) → MachineState<M> {
+    MachineState(write_gpr(Rsp, stack.at(d), s0.gprs), s0.flags, s0.rip, s0.memory)
+}
+
+// The prologue.
+theorem prologue_moves<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
+    prog: Prog, k: Nat, at: asm_back(site.program, k) = At(prog, 0, Block([frame_allocate()])),
+    s0: MachineState<M>, d: Nat, rsp: read_gpr(Rsp, s0.gprs) = stack.at(d + 64)):
+    site.Moves(stack.writes, prog_len(prog), prog_len(prog) + block_length([frame_allocate()]),
+        λ (x: MachineState<M>) => (x.gprs = s0.gprs) ∧ (x.memory = s0.memory),
+        λ (x: MachineState<M>) => (x.gprs = stack.opened(d, s0).gprs) ∧ (x.memory = s0.memory)) {
+    let c = BitVec::ofNat(256 -64, n := 8).sign_extend(56);
+    let opened: (write_gpr(Rsp, read_gpr(Rsp, s0.gprs).add(c), s0.gprs) = write_gpr(Rsp, stack.at(d), s0.gprs)) =
+        cong_fn<BitVec(64), Gprs>(λ a => write_gpr(Rsp, a, s0.gprs),
+            trans(cong_fn<BitVec(64), BitVec(64)>(λ a => a.add(c), rsp), frame_allocated(stack.low, d)));
+    let pre = λ (g: Gprs) (m: M) => (g = s0.gprs) ∧ (m = s0.memory);
+    let post = λ (g: Gprs) (m: M) => (g = write_gpr(Rsp, stack.at(d), s0.gprs)) ∧ (m = s0.memory);
+    site.moves_of_pure(stack.writes, prog_len(prog), prog_len(prog) + block_length([frame_allocate()]), pre, post,
+        λ memory => site.runs_block(site.program.laid_out_fits(laid), k, prog, 0, [frame_allocate()], at,
+            λ (g: Gprs) => pre(g, memory), λ (g: Gprs) => post(g, memory),
+            λ x held => {
+                let ran: (execute_block_normal([frame_allocate()], x).gprs = write_gpr(Rsp, stack.at(d), s0.gprs)) =
+                    j(sym(held.left), λ g _ => write_gpr(Rsp, read_gpr(Rsp, g).add(c), g) = write_gpr(Rsp, stack.at(d), s0.gprs), opened);
+                ⟨ran, held.right⟩
+            }))
+}
+
+// The result moved into RAX.
+theorem result_moves<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
+    values: Valuation(), d: Nat, s1: MachineState<M>, prog: Prog, file: File, result: Nat, moves: Lowered,
+    keeps: Keeps<M>(values, file, True, moves), placed: moves.file.outputs_check([Port(id := result, width := 64)], [Rax]).IsTrue(),
+    leaves: leaves_all(moves.code, callee_saved()).IsTrue(), k: Nat, at: asm_back(site.program, k) = At(prog, 0, Block(moves.code))):
+    site.Moves(stack.writes, prog_len(prog), prog_len(prog) + block_length(moves.code),
+        λ (s: MachineState<M>) => file.Represents(values, s.gprs) ∧ stack.Framed(d, s1, s),
+        λ (t: MachineState<M>) => (read_gpr(Rax, t.gprs) = values(64, result)) ∧ stack.Framed(d, s1, t)) {
+    let pre = λ (g: Gprs) (m: M) => file.Represents(values, g) ∧
+        (Kept(callee_saved(), s1.gprs, g) ∧ stack.Unchanged(d + 64, s1.memory, m));
+    let post = λ (g: Gprs) (m: M) => (read_gpr(Rax, g) = values(64, result)) ∧
+        (Kept(callee_saved(), s1.gprs, g) ∧ stack.Unchanged(d + 64, s1.memory, m));
+    site.moves_of_pure(stack.writes, prog_len(prog), prog_len(prog) + block_length(moves.code), pre, post,
+        λ memory => site.runs_block(site.program.laid_out_fits(laid), k, prog, 0, moves.code, at,
+            λ (g: Gprs) => pre(g, memory), λ (g: Gprs) => post(g, memory),
+            λ x held => {
+                let y = execute_block_normal(moves.code, x);
+                ⟨sym(outputs_check_sound(values, moves.file, y.gprs, keeps(x, held.left, trivial),
+                    [Port(id := result, width := 64)], [Rax], placed).left),
+                 ⟨kept_trans(callee_saved(), s1.gprs, x.gprs, y.gprs, held.right.left,
+                    execute_block_kept<M>(moves.code, x, callee_saved(), leaves)), held.right.right⟩⟩
+            }))
+}
+
+// The epilogue: the frame freed, the stack pointer back at the return
+// address.
+theorem epilogue_moves<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
+    d: Nat, s1: MachineState<M>, rsp1: read_gpr(Rsp, s1.gprs) = stack.at(d), answer: BitVec(64),
+    prog: Prog, k: Nat, at: asm_back(site.program, k) = At(prog, 0, Block([frame_free()]))):
+    site.Moves(stack.writes, prog_len(prog), prog_len(prog) + block_length([frame_free()]),
+        λ (s: MachineState<M>) => (read_gpr(Rax, s.gprs) = answer) ∧ stack.Framed(d, s1, s),
+        λ (t: MachineState<M>) => (read_gpr(Rax, t.gprs) = answer) ∧ (Kept(callee_kept(), s1.gprs, t.gprs) ∧
+            ((read_gpr(Rsp, t.gprs) = stack.at(d + 64)) ∧ stack.Unchanged(d + 64, s1.memory, t.memory)))) {
+    let c = BitVec::ofNat(64, n := 8).sign_extend(56);
+    let pre = λ (g: Gprs) (m: M) => (read_gpr(Rax, g) = answer) ∧
+        (Kept(callee_saved(), s1.gprs, g) ∧ stack.Unchanged(d + 64, s1.memory, m));
+    let post = λ (g: Gprs) (m: M) => (read_gpr(Rax, g) = answer) ∧ (Kept(callee_kept(), s1.gprs, g) ∧
+        ((read_gpr(Rsp, g) = stack.at(d + 64)) ∧ stack.Unchanged(d + 64, s1.memory, m)));
+    site.moves_of_pure(stack.writes, prog_len(prog), prog_len(prog) + block_length([frame_free()]), pre, post,
+        λ memory => site.runs_block(site.program.laid_out_fits(laid), k, prog, 0, [frame_free()], at,
+            λ (g: Gprs) => pre(g, memory), λ (g: Gprs) => post(g, memory),
+            λ x held => {
+                let rsp_x: (read_gpr(Rsp, x.gprs) = stack.at(d)) = trans(held.right.left.right.right.left, rsp1);
+                let freed: (read_gpr(Rsp, x.gprs).add(c) = stack.at(d + 64)) =
+                    trans(cong_fn<BitVec(64), BitVec(64)>(λ a => a.add(c), rsp_x), frame_freed(stack.low, d));
+                ⟨held.left, ⟨kept_trans(callee_kept(), s1.gprs, x.gprs, execute_block_normal([frame_free()], x).gprs,
+                    saved_kept(s1.gprs, x.gprs, held.right.left), execute_block_kept<M>([frame_free()], x, callee_kept(), trivial)),
+                  ⟨freed, held.right.right⟩⟩⟩
+            }))
+}
+
+// The prologue, the body from where it starts.
+theorem function_enters<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
+    callees: Callees(), values: Valuation(), function: Function, prog: Prog, k: Nat,
+    at: asm_back(site.program, k) = At(prog, 0, Block([frame_allocate()])), file: File,
+    entered: (g: Gprs) → PortsAt(values, word_ports(function.parameters), argument_registers(), g) → file.Represents(values, g),
+    s0: MachineState<M>, d: Nat, rsp: read_gpr(Rsp, s0.gprs) = stack.at(d + 64),
+    args: ArgsIn(words_of(values, function.parameters), argument_registers(), s0.gprs),
+    holds: StructuredRegionHoldsIn(callees, values, function.body)):
+    site.Moves(stack.writes, prog_len(prog), prog_len(prog) + block_length([frame_allocate()]),
+        λ (x: MachineState<M>) => (x.gprs = s0.gprs) ∧ (x.memory = s0.memory),
+        λ (x: MachineState<M>) => (file.Represents(values, x.gprs) ∧ StructuredRegionHoldsIn(callees, values, function.body)) ∧
+            stack.Framed(d, stack.opened(d, s0), x)) {
+    let s1 = stack.opened(d, s0);
+    let ready: file.Represents(values, s1.gprs) = entered(s1.gprs, args_ports(values, function.parameters, argument_registers(), s1.gprs,
+        args_after_write(words_of(values, function.parameters), argument_registers(), s0.gprs, Rsp, stack.at(d), trivial, args)));
+    site.moves_weaken(stack.writes, prog_len(prog), prog_len(prog) + block_length([frame_allocate()]),
+        λ (x: MachineState<M>) => (x.gprs = s0.gprs) ∧ (x.memory = s0.memory),
+        λ (x: MachineState<M>) => (x.gprs = s1.gprs) ∧ (x.memory = s0.memory),
+        λ (x: MachineState<M>) => (x.gprs = s0.gprs) ∧ (x.memory = s0.memory),
+        λ (x: MachineState<M>) => (file.Represents(values, x.gprs) ∧ StructuredRegionHoldsIn(callees, values, function.body)) ∧
+            stack.Framed(d, s1, x),
+        prologue_moves<M>(site, laid, stack, prog, k, at, s0, d, rsp),
+        λ x held => held,
+        λ x held => ⟨⟨j(sym(held.left), λ g _ => file.Represents(values, g), ready), holds⟩,
+            ⟨j(sym(held.left), λ g _ => Kept(callee_saved(), s1.gprs, g), kept_refl(callee_saved(), s1.gprs)),
+             j(sym(held.right), λ m _ => stack.Unchanged(d + 64, s1.memory, m), stack.unchanged_refl(d + 64, s1.memory))⟩⟩)
+}
+
+// A function's code after the label at `prog`: the frame, the body, the
+// result into RAX, the frame freed, RET.
+fn function_opened(prog: Prog, k: Nat) → Prog { At(At(prog, Succ(k), Block([])), 0, Block([frame_allocate()])) }
+fn function_closed(body: Prog, moves: List<Instruction>) → Prog {
+    At(At(body, 0, Block(moves)), 0, Block([frame_free()]))
+}
+
+// What the function's code does up to its RET, its parameters bound by
+// `values`.
+fn Stack::Closed<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), d: Nat,
+    s1: MachineState<M>, answer: BitVec(64), t: MachineState<M>) → Type {
+    (read_gpr(Rax, t.gprs) = answer) ∧ (Kept(callee_kept(), s1.gprs, t.gprs) ∧
+        ((read_gpr(Rsp, t.gprs) = stack.at(d + 64)) ∧ stack.Unchanged(d + 64, s1.memory, t.memory)))
+}
+
+theorem function_runs<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
+    callees: Callees(), k: Nat, calls: site.Calls(stack, callees, k), function: Function, prog: Prog, file: File,
+    placement: List<Gpr>, names: Nat, body: Emitted,
+    emitted: function.body.emit_calls(function_opened(prog, k), file, placement, names, k) = Some(body),
+    moves: Lowered, keeps: (values: Valuation()) → Keeps<M>(values, body.file, True, moves),
+    placed: moves.file.outputs_check([Port(id := function.result, width := 64)], [Rax]).IsTrue(),
+    leaves: leaves_all(moves.code, callee_saved()).IsTrue(),
+    entered: (values: Valuation()) → (g: Gprs) → PortsAt(values, word_ports(function.parameters), argument_registers(), g) →
+        file.Represents(values, g),
+    within: function_closed(body.prog, moves.code).Within(site.program),
+    values: Valuation(), s0: MachineState<M>, d: Nat, rsp: read_gpr(Rsp, s0.gprs) = stack.at(d + 64),
+    room: 72 * k + 8 <= d, fits: d + 64 <= stack.size,
+    args: ArgsIn(words_of(values, function.parameters), argument_registers(), s0.gprs),
+    holds: StructuredRegionHoldsIn(callees, values, function.body)):
+    site.Moves(stack.writes, prog_len(prog), prog_len(function_closed(body.prog, moves.code)),
+        λ (x: MachineState<M>) => (x.gprs = s0.gprs) ∧ (x.memory = s0.memory),
+        λ (t: MachineState<M>) => stack.Closed(d, stack.opened(d, s0), values(64, function.result), t)) {
+    let s1 = stack.opened(d, s0);
+    let opened = function_opened(prog, k);
+    let returned = At(body.prog, 0, Block(moves.code));
+    let closed = function_closed(body.prog, moves.code);
+    let answer = values(64, function.result);
+    let returned_in = returned.within_before(0, Block([frame_free()]), site.program, within);
+    let body_in = body.prog.within_before(0, Block(moves.code), site.program, returned_in);
+    let rsp1: (read_gpr(Rsp, s1.gprs) = stack.at(d)) = read_gpr_after_write(Rsp, stack.at(d), s0.gprs);
+    let body_emits = function.body.emit_calls(opened, file, placement, names, k).all_some(
+        λ (e: Emitted) => EmitsIn<M>(site, stack, values, d, s1, opened, file, StructuredRegionHoldsIn(callees, values, function.body), e),
+        body, emitted,
+        function.body.emit_calls_emits<M>(site, laid, stack, callees, k, calls, values, d, s1, rsp1, room, fits, opened, file,
+            placement, names));
+    let opened_in = opened.within_trans(body.prog, site.program, body_emits.left, body_in);
+    let entry_in = At(prog, Succ(k), Block([])).within_before(0, Block([frame_allocate()]), site.program, opened_in);
+    site.moves_trans(stack.writes, prog_len(prog), prog_len(opened), prog_len(closed),
+        λ (x: MachineState<M>) => (x.gprs = s0.gprs) ∧ (x.memory = s0.memory),
+        λ (x: MachineState<M>) => (file.Represents(values, x.gprs) ∧ StructuredRegionHoldsIn(callees, values, function.body)) ∧
+            stack.Framed(d, s1, x),
+        λ (t: MachineState<M>) => stack.Closed(d, s1, answer, t),
+        function_enters<M>(site, laid, stack, callees, values, function, At(prog, Succ(k), Block([])), opened_in.witness,
+            opened_in.proof, file, entered(values), s0, d, rsp, args, holds),
+        site.moves_trans(stack.writes, prog_len(opened), prog_len(body.prog), prog_len(closed),
+            λ (x: MachineState<M>) => (file.Represents(values, x.gprs) ∧ StructuredRegionHoldsIn(callees, values, function.body)) ∧
+                stack.Framed(d, s1, x),
+            λ (t: MachineState<M>) => body.file.Represents(values, t.gprs) ∧ stack.Framed(d, s1, t),
+            λ (t: MachineState<M>) => stack.Closed(d, s1, answer, t),
+            body_emits.right(body_in),
+            site.moves_trans(stack.writes, prog_len(body.prog), prog_len(returned), prog_len(closed),
+                λ (s: MachineState<M>) => body.file.Represents(values, s.gprs) ∧ stack.Framed(d, s1, s),
+                λ (t: MachineState<M>) => (read_gpr(Rax, t.gprs) = answer) ∧ stack.Framed(d, s1, t),
+                λ (t: MachineState<M>) => stack.Closed(d, s1, answer, t),
+                result_moves<M>(site, laid, stack, values, d, s1, body.prog, body.file, function.result, moves, keeps(values), placed,
+                    leaves, returned_in.witness, returned_in.proof),
+                epilogue_moves<M>(site, laid, stack, d, s1, rsp1, answer, returned, within.witness, within.proof))))
+}
+
+// Writing the stack pointer keeps the rest.
+theorem kept_past_rsp(gprs: Gprs, word: BitVec(64)): Kept(callee_kept(), gprs, write_gpr(Rsp, word, gprs)) {
+    ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, trivial⟩⟩⟩⟩⟩⟩
+}
+
+// The arithmetic of a frame below the return address at offset `i`.
+theorem frame_room(k, i, size: Nat, deep: 72 * Succ(k) <= i, room: i + 8 <= size):
+    ((i -64) + 64 = i) ∧ ((72 * k + 8 <= i -64) ∧ (((i -64) + 64 <= size) ∧ ((((i -64) + 64) + 8 <= size) ∧ ((i -64) + 64 <= i + 8)))) {
+    let back: ((i -64) + 64 = i) = Nat::sub_add_cancel(64, i, { omega });
+    ⟨back, ⟨{ omega }, ⟨{ omega }, ⟨{ omega }, { omega }⟩⟩⟩⟩
+}
+
+// The function's code from its label to its RET, entered as its contract
+// says.
+theorem function_body<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
+    callees: Callees(), k: Nat, calls: site.Calls(stack, callees, k), function: Function, prog: Prog, file: File,
+    placement: List<Gpr>, names: Nat, body: Emitted,
+    emitted: function.body.emit_calls(function_opened(prog, k), file, placement, names, k) = Some(body),
+    moves: Lowered, keeps: (values: Valuation()) → Keeps<M>(values, body.file, True, moves),
+    placed: moves.file.outputs_check([Port(id := function.result, width := 64)], [Rax]).IsTrue(),
+    leaves: leaves_all(moves.code, callee_saved()).IsTrue(),
+    entered: (values: Valuation()) → (g: Gprs) → PortsAt(values, word_ports(function.parameters), argument_registers(), g) →
+        file.Represents(values, g),
+    within: function_closed(body.prog, moves.code).Within(site.program),
+    words: List<BitVec(64)>, result: BitVec(64), s0: MachineState<M>, i: Nat, ret: BitVec(64)):
+    site.Moves(stack.writes, prog_len(prog), prog_len(function_closed(body.prog, moves.code)),
+        λ (s: MachineState<M>) => (s = s0) ∧ ((read_gpr(Rsp, s0.gprs) = stack.at(i)) ∧ ((i + 8 <= stack.size) ∧
+            ((ArgsIn(words, argument_registers(), s0.gprs) ∧ (function.Computes(callees, words, result) ∧ 72 * Succ(k) <= i)) ∧
+             read_word(site.data, s0.memory, stack.at(i)) = Some(ret)))),
+        λ (t: MachineState<M>) => (read_gpr(Rsp, t.gprs) = stack.at(i)) ∧ ((read_word(site.data, t.memory, stack.at(i)) = Some(ret)) ∧
+            stack.CalleePost(result)(i, s0, return_near_after(ret, t)))) {
+    λ s here resident held => {
+        let computes = held.right.right.right.left.right.left;
+        let values = computes.witness;
+        let d = i -64;
+        let sizes = frame_room(k, i, stack.size, held.right.right.right.left.right.right, held.right.right.left);
+        let back: (d + 64 = i) = sizes.left;
+        let s1 = stack.opened(d, s0);
+        let at_back: (stack.at(d + 64) = stack.at(i)) = cong_fn<Nat, BitVec(64)>(λ n => stack.at(n), back);
+        let ran = function_runs<M>(site, laid, stack, callees, k, calls, function, prog, file, placement, names, body, emitted,
+            moves, keeps, placed, leaves, entered, within, values, s0, d,
+            trans(held.right.left, sym(at_back)), sizes.right.left, sizes.right.right.left,
+            j(sym(computes.proof.left), λ w _ => ArgsIn(w, argument_registers(), s0.gprs), held.right.right.right.left.left),
+            computes.proof.right.left);
+        let a = ran(s, here, resident, ⟨cong_fn<MachineState<M>, Gprs>(λ x => x.gprs, held.left),
+            cong_fn<MachineState<M>, M>(λ x => x.memory, held.left)⟩);
+        let t = a.witness;
+        let done: stack.Closed(d, s1, values(64, function.result), t) = a.proof.right.right.right;
+        let kept: Kept(callee_kept(), s0.gprs, t.gprs) =
+            kept_trans(callee_kept(), s0.gprs, s1.gprs, t.gprs, kept_past_rsp(s0.gprs, stack.at(d)), done.right.left);
+        let popped = read_gpr(Rsp, t.gprs).add(BitVec::ofNat(8));
+        let unchanged_top: (read_word(site.data, t.memory, stack.at(d + 64)) = read_word(site.data, s0.memory, stack.at(d + 64))) =
+            done.right.right.right(d + 64, (d + 64).le_refl(), sizes.right.right.right.left);
+        Exists(t, ⟨a.proof.left, ⟨a.proof.right.left, ⟨a.proof.right.right.left,
+            ⟨trans(done.right.right.left, at_back),
+             ⟨trans(j(back, λ n _ => read_word(site.data, t.memory, stack.at(n)) = read_word(site.data, s0.memory, stack.at(n)),
+                    unchanged_top), held.right.right.right.right),
+              ⟨trans(done.left, computes.proof.right.right),
+               ⟨kept_trans(callee_kept(), s0.gprs, t.gprs, write_gpr(Rsp, popped, t.gprs), kept, kept_past_rsp(t.gprs, popped)),
+                stack.unchanged_above(d + 64, i + 8, sizes.right.right.right.right, s0.memory, t.memory, done.right.right.right)⟩⟩⟩⟩⟩⟩⟩)
+    }
+}
+
+// The function at the label at `prog` meets its contract: its parameters
+// bound to the arguments, its body holding, it returns its result.
+theorem function_returns<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
+    callees: Callees(), k: Nat, calls: site.Calls(stack, callees, k), function: Function, prog: Prog, file: File,
+    placement: List<Gpr>, names: Nat, body: Emitted,
+    emitted: function.body.emit_calls(function_opened(prog, k), file, placement, names, k) = Some(body),
+    moves: Lowered, keeps: (values: Valuation()) → Keeps<M>(values, body.file, True, moves),
+    placed: moves.file.outputs_check([Port(id := function.result, width := 64)], [Rax]).IsTrue(),
+    leaves: leaves_all(moves.code, callee_saved()).IsTrue(),
+    entered: (values: Valuation()) → (g: Gprs) → PortsAt(values, word_ports(function.parameters), argument_registers(), g) →
+        file.Represents(values, g),
+    within: At(function_closed(body.prog, moves.code), 0, Ret).Within(site.program),
+    words: List<BitVec(64)>, result: BitVec(64)):
+    site.Returns(stack, prog_len(prog),
+        λ (i: Nat) (s: MachineState<M>) => ArgsIn(words, argument_registers(), s.gprs) ∧
+            (function.Computes(callees, words, result) ∧ 72 * Succ(k) <= i),
+        stack.CalleePost(result)) {
+    let closed = function_closed(body.prog, moves.code);
+    site.returns_by(stack, site.program.laid_out_fits(laid), prog_len(prog), within.witness, closed, 0, within.proof,
+        λ (i: Nat) (s: MachineState<M>) => ArgsIn(words, argument_registers(), s.gprs) ∧
+            (function.Computes(callees, words, result) ∧ 72 * Succ(k) <= i),
+        stack.CalleePost(result),
+        λ s0 i ret => function_body<M>(site, laid, stack, callees, k, calls, function, prog, file, placement, names, body, emitted,
+            moves, keeps, placed, leaves, entered, closed.within_before(0, Ret, site.program, within), words, result, s0, i, ret))
+}
+
+// ---------------------------------------------------------------------------
+// What emitting grows
+
+fn Grows(prog: Prog, out: Option<Emitted>) → Type { out.All(λ (emitted: Emitted) => prog.Within(emitted.prog)) }
+
+theorem grows_trans(prog: Prog, first: Emitted, within: prog.Within(first.prog), second: Option<Emitted>):
+    Grows(first.prog, second) → Grows(prog, second) {
+    match second {
+        None => λ _ => trivial,
+        Some(out) => λ grown => prog.within_trans(first.prog, out.prog, within, grown),
+    }
+}
+
+theorem emit_kept_nodes_grows(prog: Prog, file: File, nodes: List<Node>, placement: List<Gpr>, names: Nat):
+    Grows(prog, emit_kept_nodes(prog, file, nodes, placement, names)) {
+    match lower_nodes(nodes, placement, file) as λ lowered => Grows(prog, match lowered {
+        None => None,
+        Some(l) => match leaves_all(l.code, callee_saved()) {
+            False => None,
+            True => Some(Emitted(At(prog, 0, Block(l.code)), l.file, skip_nodes(nodes, placement), names)),
+        },
+    }) {
+        None => trivial,
+        Some(lowered) => match leaves_all(lowered.code, callee_saved()) as λ b => Grows(prog, match b {
+            False => None,
+            True => Some(Emitted(At(prog, 0, Block(lowered.code)), lowered.file, skip_nodes(nodes, placement), names)),
+        }) {
+            False => trivial,
+            True => prog.within_then(0, Block(lowered.code)),
+        },
+    }
+}
+
+theorem File::emit_call_grows(self file: File, prog: Prog, callee: Nat, arguments: List<Nat>, result: Nat, placement: List<Gpr>,
+    names, bound: Nat): Grows(prog, file.emit_call(prog, callee, arguments, result, placement, names, bound)) {
+    let ports = word_ports(arguments);
+    let out_file = file.write(Rax, Some(Held(result, Word)));
+    match Succ(callee).leb(bound) as λ b => Grows(prog, match b {
+        False => None,
+        True => match file.move_outputs(ports, argument_registers()) {
+            None => None,
+            Some(moves) => match moves.file.outputs_check(ports, argument_registers()) && leaves_all(moves.code, callee_saved()) {
+                False => None,
+                True => Some(Emitted(call_prog(prog, moves.code, callee), out_file, placement, names)),
+            },
+        },
+    }) {
+        False => trivial,
+        True => match file.move_outputs(ports, argument_registers()) as λ moved => Grows(prog, match moved {
+            None => None,
+            Some(moves) => match moves.file.outputs_check(ports, argument_registers()) && leaves_all(moves.code, callee_saved()) {
+                False => None,
+                True => Some(Emitted(call_prog(prog, moves.code, callee), out_file, placement, names)),
+            },
+        }) {
+            None => trivial,
+            Some(moves) => match moves.file.outputs_check(ports, argument_registers()) && leaves_all(moves.code, callee_saved()) as λ c =>
+                Grows(prog, match c { False => None, True => Some(Emitted(call_prog(prog, moves.code, callee), out_file, placement, names)) }) {
+                False => trivial,
+                True => call_within(prog, moves.code, callee),
+            },
+        },
+    }
+}
+
+theorem StructuredRegion::emit_calls_grows(self region: StructuredRegion, bound: Nat):
+    (prog: Prog) → (file: File) → (placement: List<Gpr>) → (names: Nat) → Grows(prog, region.emit_calls(prog, file, placement, names, bound)) {
+    match region {
+        Dataflow(body) => λ prog file placement names => emit_kept_nodes_grows(prog, file, body.nodes, placement, names),
+        Sequence(prefix, continuation) => λ prog file placement names =>
+            (match emit_kept_nodes(prog, file, prefix.nodes, placement, names) as λ e => Grows(prog, e) → Grows(prog, match e {
+                None => None,
+                Some(first) => continuation.emit_calls(first.prog, first.file, first.placement, first.names, bound),
+            }) {
+                None => λ _ => trivial,
+                Some(first) => λ grown => grows_trans(prog, first, grown,
+                    continuation.emit_calls(first.prog, first.file, first.placement, first.names, bound),
+                    continuation.emit_calls_grows(bound, first.prog, first.file, first.placement, first.names)),
+            })(emit_kept_nodes_grows(prog, file, prefix.nodes, placement, names)),
+        Compose(prefix, continuation) => λ prog file placement names =>
+            (match prefix.emit_calls(prog, file, placement, names, bound) as λ e => Grows(prog, e) → Grows(prog, match e {
+                None => None,
+                Some(first) => continuation.emit_calls(first.prog, first.file, first.placement, first.names, bound),
+            }) {
+                None => λ _ => trivial,
+                Some(first) => λ grown => grows_trans(prog, first, grown,
+                    continuation.emit_calls(first.prog, first.file, first.placement, first.names, bound),
+                    continuation.emit_calls_grows(bound, first.prog, first.file, first.placement, first.names)),
+            })(prefix.emit_calls_grows(bound, prog, file, placement, names)),
+        Conditional(_, condition, _, _, when_true, when_false) => λ prog file placement names =>
+            match file.find(Held(condition, Bit)) as λ located => Grows(prog, match located {
+                None => None,
+                Some(found) => match when_true.emit_calls(prog.branch_label(found.register, Succ(names)), file, placement, Succ(Succ(names)), bound) {
+                    None => None,
+                    Some(yes) => match when_false.emit_calls(yes.prog.else_label(Succ(names), Succ(Succ(names))), file, yes.placement, yes.names, bound) {
+                        None => None,
+                        Some(no) => Some(Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file), no.placement, no.names)),
+                    },
+                },
+            }) {
+                None => trivial,
+                Some(found) => {
+                    let register = found.register;
+                    let branched = prog.branch_label(register, Succ(names));
+                    (match when_true.emit_calls(branched, file, placement, Succ(Succ(names)), bound) as λ y =>
+                        Grows(branched, y) → Grows(prog, match y {
+                            None => None,
+                            Some(yes) => match when_false.emit_calls(yes.prog.else_label(Succ(names), Succ(Succ(names))), file, yes.placement, yes.names, bound) {
+                                None => None,
+                                Some(no) => Some(Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file), no.placement, no.names)),
+                            },
+                        }) {
+                        None => λ _ => trivial,
+                        Some(yes) => λ yes_grown => {
+                            let second = yes.prog.else_label(Succ(names), Succ(Succ(names)));
+                            (match when_false.emit_calls(second, file, yes.placement, yes.names, bound) as λ n =>
+                                Grows(second, n) → Grows(prog, match n {
+                                    None => None,
+                                    Some(no) => Some(Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file), no.placement, no.names)),
+                                }) {
+                                None => λ _ => trivial,
+                                Some(no) => λ no_grown => {
+                                    let to_branch = prog.within_step(prog.test_label(register), 0, Jcc(E, Succ(names)),
+                                        prog.within_then(0, Block([TestRR(register, register)])));
+                                    let to_second = prog.within_step(At(yes.prog, 0, Jmp(Succ(Succ(names)))), Succ(names), Block([]),
+                                        prog.within_step(yes.prog, 0, Jmp(Succ(Succ(names))), prog.within_trans(branched, yes.prog, to_branch, yes_grown)));
+                                    prog.within_step(no.prog, Succ(Succ(names)), Block([]), prog.within_trans(second, no.prog, to_second, no_grown))
+                                },
+                            })(when_false.emit_calls_grows(bound, second, file, yes.placement, yes.names))
+                        },
+                    })(when_true.emit_calls_grows(bound, branched, file, placement, Succ(Succ(names))))
+                },
+            },
+        Call(callee, arguments, result) => λ prog file placement names =>
+            file.emit_call_grows(prog, callee, arguments, result, placement, names, bound),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Functions
+
+// The function's code once its body is emitted: the result into RAX,
+// refused where the moves lose it or touch a callee-saved register.
+fn Function::closing(self function: Function, body: Emitted) → Option<Emitted> {
+    match body.file.move_outputs([Port(id := function.result, width := 64)], [Rax]) {
+        None => None,
+        Some(moves) => match moves.file.outputs_check([Port(id := function.result, width := 64)], [Rax]) &&
+            leaves_all(moves.code, callee_saved()) {
+            False => None,
+            True => Some(Emitted(At(function_closed(body.prog, moves.code), 0, Ret), File::empty(), body.placement, body.names)),
+        },
+    }
+}
+
+fn Function::emit_body(self function: Function, prog: Prog, k: Nat, file: File, placement: List<Gpr>, names: Nat) → Option<Emitted> {
+    match function.body.emit_calls(function_opened(prog, k), file, placement, names, k) {
+        None => None,
+        Some(body) => function.closing(body),
+    }
+}
+
+// Function `k`'s code after `prog`: its label, its frame, its body calling
+// the functions below `k`, its result into RAX, RET.
+fn Function::emit(self function: Function, prog: Prog, k: Nat, placement: List<Gpr>, names: Nat) → Option<Emitted> {
+    match input_file(word_ports(function.parameters), argument_registers()) {
+        None => None,
+        Some(file) => function.emit_body(prog, k, file, placement, names),
+    }
+}
+
+// What emitting a function proves: the code holds its label, and resident
+// with the functions below `k` meeting their contracts, it meets its own.
+fn MayReturn<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data), callees: Callees(), k: Nat, function: Function, prog: Prog,
+    out: Option<Emitted>) → Type {
+    out.All(λ (emitted: Emitted) => At(prog, Succ(k), Block([])).Within(emitted.prog) ∧
+        (emitted.prog.Within(site.program) → site.Calls(stack, callees, k) →
+            (words: List<BitVec(64)>) → (result: BitVec(64)) → site.Returns(stack, prog_len(prog),
+                λ (i: Nat) (s: MachineState<M>) => ArgsIn(words, argument_registers(), s.gprs) ∧
+                    (function.Computes(callees, words, result) ∧ 72 * Succ(k) <= i),
+                stack.CalleePost(result))))
+}
+
+theorem closed_within(body: Prog, moves: List<Instruction>): body.Within(At(function_closed(body, moves), 0, Ret)) {
+    body.within_step(function_closed(body, moves), 0, Ret,
+        body.within_step(At(body, 0, Block(moves)), 0, Block([frame_free()]), body.within_then(0, Block(moves))))
+}
+
+theorem Function::closing_returns<M>(self function: Function, site: Site<M>, laid: site.program.laid_out().IsTrue(),
+    stack: Stack<M>(site.fetch, site.data), callees: Callees(), k: Nat, prog: Prog, file: File, placement: List<Gpr>, names: Nat,
+    body: Emitted, emitted: function.body.emit_calls(function_opened(prog, k), file, placement, names, k) = Some(body),
+    grown: At(prog, Succ(k), Block([])).Within(body.prog),
+    entered: (values: Valuation()) → (g: Gprs) → PortsAt(values, word_ports(function.parameters), argument_registers(), g) →
+        file.Represents(values, g)):
+    MayReturn<M>(site, stack, callees, k, function, prog, function.closing(body)) {
+    let outs: List<Port> = [Port(id := function.result, width := 64)];
+    (match body.file.move_outputs(outs, [Rax]) as λ moved => ((values: Valuation()) → MayKeep<M>(values, body.file, True, moved)) →
+        MayReturn<M>(site, stack, callees, k, function, prog, match moved {
+            None => None,
+            Some(moves) => match moves.file.outputs_check(outs, [Rax]) && leaves_all(moves.code, callee_saved()) {
+                False => None,
+                True => Some(Emitted(At(function_closed(body.prog, moves.code), 0, Ret), File::empty(), body.placement, body.names)),
+            },
+        }) {
+        None => λ _ => trivial,
+        Some(moves) => λ keeps =>
+            (match moves.file.outputs_check(outs, [Rax]) && leaves_all(moves.code, callee_saved()) as λ c =>
+                (c.IsTrue() → moves.file.outputs_check(outs, [Rax]).IsTrue() ∧ leaves_all(moves.code, callee_saved()).IsTrue()) →
+                MayReturn<M>(site, stack, callees, k, function, prog, match c {
+                    False => None,
+                    True => Some(Emitted(At(function_closed(body.prog, moves.code), 0, Ret), File::empty(), body.placement, body.names)),
+                }) {
+                False => λ _ => trivial,
+                True => λ parts => {
+                    let checked = parts(trivial);
+                    ⟨At(prog, Succ(k), Block([])).within_trans(body.prog, At(function_closed(body.prog, moves.code), 0, Ret), grown,
+                        closed_within(body.prog, moves.code)),
+                     λ within calls words result => function_returns<M>(site, laid, stack, callees, k, calls, function, prog, file,
+                        placement, names, body, emitted, moves, keeps, checked.left, checked.right, entered, within, words, result)⟩
+                },
+            })(λ ok => Bool::is_true_and(moves.file.outputs_check(outs, [Rax]), leaves_all(moves.code, callee_saved()), ok)),
+    })(λ values => move_outputs_keeps<M>(values, outs, body.file, [Rax]))
+}
+
+theorem label_opened(prog: Prog, k: Nat): At(prog, Succ(k), Block([])).Within(function_opened(prog, k)) {
+    At(prog, Succ(k), Block([])).within_then(0, Block([frame_allocate()]))
+}
+
+theorem Function::emit_body_returns<M>(self function: Function, site: Site<M>, laid: site.program.laid_out().IsTrue(),
+    stack: Stack<M>(site.fetch, site.data), callees: Callees(), k: Nat, prog: Prog, file: File, placement: List<Gpr>, names: Nat,
+    entered: (values: Valuation()) → (g: Gprs) → PortsAt(values, word_ports(function.parameters), argument_registers(), g) →
+        file.Represents(values, g)):
+    MayReturn<M>(site, stack, callees, k, function, prog, function.emit_body(prog, k, file, placement, names)) {
+    let opened = function_opened(prog, k);
+    let label = At(prog, Succ(k), Block([]));
+    (match function.body.emit_calls(opened, file, placement, names, k) as λ e =>
+        (function.body.emit_calls(opened, file, placement, names, k) = e) → Grows(opened, e) →
+        MayReturn<M>(site, stack, callees, k, function, prog, match e { None => None, Some(body) => function.closing(body) }) {
+        None => λ _ _ => trivial,
+        Some(body) => λ emitted grown => function.closing_returns(site, laid, stack, callees, k, prog, file, placement, names,
+            body, emitted, label.within_trans(opened, body.prog, label_opened(prog, k), grown), entered),
+    })(refl, function.body.emit_calls_grows(k, opened, file, placement, names))
+}
+
+// The theorem for one function, proved once: whatever the placement, code
+// `emit` returns meets the function's contract wherever it is resident,
+// given its callees meet theirs.
+theorem Function::emit_returns<M>(self function: Function, site: Site<M>, laid: site.program.laid_out().IsTrue(),
+    stack: Stack<M>(site.fetch, site.data), callees: Callees(), k: Nat, prog: Prog, placement: List<Gpr>, names: Nat):
+    MayReturn<M>(site, stack, callees, k, function, prog, function.emit(prog, k, placement, names)) {
+    let ins = word_ports(function.parameters);
+    (match input_file(ins, argument_registers()) as λ entry =>
+        ((values: Valuation()) → (g: Gprs) → PortsAt(values, ins, argument_registers(), g) →
+            entry.All(λ (file: File) => file.Represents(values, g))) →
+        MayReturn<M>(site, stack, callees, k, function, prog, match entry {
+            None => None,
+            Some(file) => function.emit_body(prog, k, file, placement, names),
+        }) {
+        None => λ _ => trivial,
+        Some(file) => λ entered => function.emit_body_returns(site, laid, stack, callees, k, prog, file, placement, names, entered),
+    })(λ values g placed => input_file_represents(values, g, ins, argument_registers(), placed))
+}
+
+// ---------------------------------------------------------------------------
+// Programs
+
+// The program's functions, first to last, after `Start`: each `emit` of
+// function `k` calls only the ones before it in the code.
+fn emit_functions(functions: List<Function>, placement: List<Gpr>, names: Nat) → Option<Emitted> {
+    match functions {
+        Nil => Some(Emitted(Start, File::empty(), placement, names)),
+        Cons(last, earlier) => match emit_functions(earlier, placement, names) {
+            None => None,
+            Some(before) => last.emit(before.prog, earlier.len(), before.placement, before.names),
+        },
+    }
+}
+
+// The program's code: function `f` at the label `Succ(f)`, the
+// conditionals' labels after every function's. `None` is a refusal, as
+// round 2's `lower`.
+fn lower_program(functions: List<Function>, placement: List<Gpr>) → Option<Prog> {
+    match emit_functions(functions, placement, functions.len()) {
+        None => None,
+        Some(out) => match out.prog.laid_out() { False => None, True => Some(out.prog) },
+    }
+}
+
+// The last function answers the calls of it.
+theorem program_callees_last(last: Function, earlier: List<Function>, arguments: List<BitVec(64)>, result: BitVec(64)):
+    program_callees(Cons(last, earlier))(earlier.len(), arguments, result) → last.Computes(program_callees(earlier), arguments, result) {
+    match earlier.len().eq_dec(earlier.len()) as λ dec => (match dec as λ _ => Type {
+        Inl(_) => last.Computes(program_callees(earlier), arguments, result),
+        Inr(_) => program_callees(earlier)(earlier.len(), arguments, result),
+    }) → last.Computes(program_callees(earlier), arguments, result) {
+        Inl(_) => λ held => held,
+        Inr(differs) => λ _ => false_elim(differs(refl)),
+    }
+}
+
+// The earlier ones answer the rest.
+theorem program_callees_earlier(last: Function, earlier: List<Function>, f: Nat, differs: f ≠ earlier.len(),
+    arguments: List<BitVec(64)>, result: BitVec(64)):
+    program_callees(Cons(last, earlier))(f, arguments, result) → program_callees(earlier)(f, arguments, result) {
+    match f.eq_dec(earlier.len()) as λ dec => (match dec as λ _ => Type {
+        Inl(_) => last.Computes(program_callees(earlier), arguments, result),
+        Inr(_) => program_callees(earlier)(f, arguments, result),
+    }) → program_callees(earlier)(f, arguments, result) {
+        Inl(same) => λ _ => false_elim(differs(same)),
+        Inr(_) => λ held => held,
+    }
+}
+
+theorem below_other(f, n: Nat, below: Succ(f) <= Succ(n), differs: f ≠ n): Succ(f) <= n { omega }
+
+theorem nothing_below_zero(f: Nat, below: Succ(f) <= 0): False { omega }
+
+// One more function meeting its contract at its label.
+theorem Site::calls_extend<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), last: Function, earlier: List<Function>,
+    entry: Nat, label: asm_labels(site.program)(Succ(earlier.len())) = entry,
+    calls: site.Calls(stack, program_callees(earlier), earlier.len()),
+    returns: (words: List<BitVec(64)>) → (result: BitVec(64)) → site.Returns(stack, entry,
+        λ (i: Nat) (s: MachineState<M>) => ArgsIn(words, argument_registers(), s.gprs) ∧
+            (last.Computes(program_callees(earlier), words, result) ∧ 72 * Succ(earlier.len()) <= i),
+        stack.CalleePost(result))):
+    site.Calls(stack, program_callees(Cons(last, earlier)), Succ(earlier.len())) {
+    let callees = program_callees(Cons(last, earlier));
+    let n = earlier.len();
+    λ f below words result => match f.eq_dec(n) {
+        Inl(same) => j(sym(same), λ m _ => site.Returns(stack, asm_labels(site.program)(Succ(m)), CalleePre<M>(callees, m, words, result),
+                stack.CalleePost(result)),
+            j(sym(label), λ e _ => site.Returns(stack, e, CalleePre<M>(callees, n, words, result), stack.CalleePost(result)),
+                site.returns_weaken(stack, entry,
+                    λ (i: Nat) (s: MachineState<M>) => ArgsIn(words, argument_registers(), s.gprs) ∧
+                        (last.Computes(program_callees(earlier), words, result) ∧ 72 * Succ(n) <= i),
+                    CalleePre<M>(callees, n, words, result), stack.CalleePost(result), returns(words, result),
+                    λ i s held => ⟨held.left, ⟨program_callees_last(last, earlier, words, result, held.right.left), held.right.right⟩⟩))),
+        Inr(differs) => site.returns_weaken(stack, asm_labels(site.program)(Succ(f)),
+            CalleePre<M>(program_callees(earlier), f, words, result), CalleePre<M>(callees, f, words, result), stack.CalleePost(result),
+            calls(f, below_other(f, n, below, differs), words, result),
+            λ i s held => ⟨held.left, ⟨program_callees_earlier(last, earlier, f, differs, words, result, held.right.left), held.right.right⟩⟩),
+    }
+}
+
+// What emitting functions proves: resident, they meet their contracts.
+fn MayCall<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data), functions: List<Function>, out: Option<Emitted>) → Type {
+    out.All(λ (emitted: Emitted) => emitted.prog.Within(site.program) → site.Calls(stack, program_callees(functions), functions.len()))
+}
+
+theorem program_step<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
+    last: Function, earlier: List<Function>, before: Emitted,
+    earlier_calls: before.prog.Within(site.program) → site.Calls(stack, program_callees(earlier), earlier.len())):
+    (out: Option<Emitted>) → MayReturn<M>(site, stack, program_callees(earlier), earlier.len(), last, before.prog, out) →
+    MayCall<M>(site, stack, Cons(last, earlier), out) {
+    λ out => match out {
+        None => λ _ => trivial,
+        Some(emitted) => λ returns within => {
+            let label_in = At(before.prog, Succ(earlier.len()), Block([])).within_trans(emitted.prog, site.program, returns.left, within);
+            let calls = earlier_calls(before.prog.within_before(Succ(earlier.len()), Block([]), site.program, label_in));
+            site.calls_extend(stack, last, earlier, prog_len(before.prog),
+                label_target(label_in.witness, site.program, before.prog, earlier.len(), Block([]),
+                    site.program.laid_out_unique(laid), label_in.proof),
+                calls, returns.right(within, calls))
+        },
+    }
+}
+
+theorem emit_functions_calls<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
+    placement: List<Gpr>, names: Nat, functions: List<Function>):
+    MayCall<M>(site, stack, functions, emit_functions(functions, placement, names)) {
+    match functions {
+        Nil => λ _ f below words result => false_elim(nothing_below_zero(f, below)),
+        Cons(last, earlier) =>
+            (match emit_functions(earlier, placement, names) as λ e => MayCall<M>(site, stack, earlier, e) →
+                MayCall<M>(site, stack, Cons(last, earlier), match e {
+                    None => None,
+                    Some(before) => last.emit(before.prog, earlier.len(), before.placement, before.names),
+                }) {
+                None => λ _ => trivial,
+                Some(before) => λ earlier_calls => program_step<M>(site, laid, stack, last, earlier, before, earlier_calls,
+                    last.emit(before.prog, earlier.len(), before.placement, before.names),
+                    last.emit_returns(site, laid, stack, program_callees(earlier), earlier.len(), before.prog, before.placement, before.names)),
+            })(emit_functions_calls<M>(site, laid, stack, placement, names, earlier)),
+    }
+}
+
+// What a program does, resident at `origin` with `stack`: every function
+// meets its contract at its label.
+fn ProgramCalls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data),
+    functions: List<Function>, program: Prog) → Type {
+    Site<M>(fetch, data, program, last, origin).Calls(stack, program_callees(functions), functions.len())
+}
+
+theorem lower_program_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
+    stack: Stack<M>(fetch, data), functions: List<Function>, placement: List<Gpr>):
+    lower_program(functions, placement).All(λ (p: Prog) => ProgramCalls<M>(fetch, data, last, origin, stack, functions, p)) {
+    (match emit_functions(functions, placement, functions.len()) as λ e =>
+        ((site: Site<M>) → site.program.laid_out().IsTrue() → (stack: Stack<M>(site.fetch, site.data)) → MayCall<M>(site, stack, functions, e)) →
+        (match e as λ _ => Option<Prog> {
+            None => None,
+            Some(out) => match out.prog.laid_out() { False => None, True => Some(out.prog) },
+        }).All(λ (p: Prog) => ProgramCalls<M>(fetch, data, last, origin, stack, functions, p)) {
+        None => λ _ => trivial,
+        Some(out) => λ calls =>
+            (match out.prog.laid_out() as λ b => (b.IsTrue() → out.prog.laid_out().IsTrue()) →
+                (match b as λ _ => Option<Prog> { False => None, True => Some(out.prog) }).All(λ (p: Prog) =>
+                    ProgramCalls<M>(fetch, data, last, origin, stack, functions, p)) {
+                False => λ _ => trivial,
+                True => λ laid => calls(Site<M>(fetch, data, out.prog, last, origin), laid(trivial), stack, out.prog.within_self()),
+            })(λ ok => ok),
+    })(λ site laid stack => emit_functions_calls<M>(site, laid, stack, placement, functions.len(), functions))
+}
+
+// The theorem, proved once: whatever the placement, a program
+// `lower_program` returns, resident at any origin and with any stack
+// meeting the stack laws, has each function meet its contract: called on
+// arguments its functions say may give `result`, with room on the stack,
+// it returns `result` in RAX, the callee-saved registers and its caller's
+// stack as they were.
+theorem lower_program_correct<M>(functions: List<Function>, placement: List<Gpr>, program: Prog,
+    lowered: lower_program(functions, placement) = Some(program),
+    fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data)):
+    Site<M>(fetch, data, program, last, origin).Calls(stack, program_callees(functions), functions.len()) {
+    lower_program(functions, placement).all_some(λ (p: Prog) => ProgramCalls<M>(fetch, data, last, origin, stack, functions, p),
+        program, lowered, lower_program_calls<M>(fetch, data, last, origin, stack, functions, placement))
+}

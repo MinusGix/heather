@@ -1118,7 +1118,7 @@ theorem Int::mul_lt_mono_r(self a, b, k: Int, h: a < b, hk: OfNat(0) < k): a * k
             = k * a.isucc() := sym(k.mul_isucc(a)),
             = a.isucc() * k := k.mul_comm(a.isucc()),
     };
-    let step = j((a * k).add_one(), λ left q => left <= a * k + k, OfNat(1).add_le_mono_l(k, a * k, hk));
+    let step = rewrite((a * k).add_one(), in := OfNat(1).add_le_mono_l(k, a * k, hk));
     (a * k).isucc().le_trans(a.isucc() * k, b * k, rewrite(sym(expand), step), grown)
 }
 

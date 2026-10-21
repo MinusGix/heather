@@ -1,6 +1,6 @@
 ---
 title: Rewrite a hypothesis's type along an equation
-status: open
+status: closed
 labels: [frontend,elaboration,proofs,ergonomics,design]
 area: tactics
 milestone: [tac-general]
@@ -19,3 +19,7 @@ The design question is the spelling. Candidates: a second form
 a checking-position form), or a `let`-statement form
 (`let hyp' = rewrite(h) in hyp;`). Pick with a real customer in hand; `let`
 heavy proofs in `int.hthr`'s division section are candidates.
+
+## Log
+
+- 2026-10-21: Done: spelling `rewrite(h, …, in := hyp)`, an inference form (Rocq's `rewrite h in H`), chosen against the library's `let x = j(p, λ y _ => M, hyp);` customers (float/round.hthr, function_ir_loop_trace.hthr, x86_64_asm.hthr, …): one form and one rule set with the goal form, no new grammar, `at :=` kept for occurrences. Step is J(h; y q. M; hyp) with no sym. Design: docs/equation-rewrite-design.md §7.

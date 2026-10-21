@@ -8,6 +8,7 @@ use crate::read_loop_fixture::checker_with;
 #[test]
 fn the_kept_foundation_checks() {
     checker_with(&[
+        ("x86_64_stack", include_str!("../../../lib/std/arch/x86_64/x86_64_stack.hthr")),
         ("x86_64_asm", include_str!("../../../lib/std/arch/x86_64/x86_64_asm.hthr")),
         ("stream_filter", include_str!("../../../lib/stream_filter.hthr")),
         ("filter_step_piece", include_str!("../../../lib/filter_step_piece.hthr")),

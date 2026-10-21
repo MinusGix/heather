@@ -134,10 +134,9 @@ The per-module counts are in the PR description.
   `Rat`/`CReal` rewriting is mostly setoid rewriting, which is
   `relational_context`'s; this form serves `Nat`, `Int`, lists, bit-vectors,
   and the interaction-tree laws stated with `=`.
-- **No rewriting in hypotheses.** Lean's `rw … at h` is `rewrite` applied to
-  the hypothesis's *type* as a goal, which is a different elaboration (the
-  hypothesis is a term to transport, not a goal to prove) and has no
-  customer yet.
+- **No rewriting in hypotheses** in this form. Lean's `rw … at h` is a
+  different elaboration — the hypothesis is a term to transport, not a goal
+  to prove — and has its own spelling, `rewrite(h, in := hyp)` (§7).
 - **No search.** It does not try `sym` or unfold the goal beyond one exposed
   layer. Conversion is asked only at subterms that already share the left
   side's head (§6.2), never at every node.
@@ -213,3 +212,122 @@ said: motives stated about a reduct the goal reaches only after more than a
 head step, and motives that mention the proof. And the bit-vector site PR #93 had to write with `sym`
 (`ofNat(toNat(x))`, whose implicit width was spelled differently in the goal
 and the equation) is `rewrite(none, refl)` again.
+
+## 7. Rewriting a hypothesis: `rewrite(h, …, in := hyp)`
+
+`issues/rewrite-in-hypothesis.md`. Lean's `rw [h] at hyp`, Rocq's
+`rewrite h in H`: from `hyp : P` and `h : a = b`, a proof of `P` with every
+`a` turned into `b`.
+
+```heather
+let moved = rewrite(es, in := fl.left);
+```
+
+is `j(es, λ y _ => m * Nat::pow(2, Succ(y)) <= h, fl.left)` — the motive is
+`fl.left`'s type with `es`'s left side abstracted, which the elaborator writes.
+
+**The form.** `rewrite(h₁, …, hₙ, in := hyp)`: every positional argument is
+an equation, applied in turn exactly as in the goal form, and `at :=` selects
+occurrences with one equation (several: rewrite one at a time, nesting
+`in :=`). It is an **inference** form: the result's type is what the rewrite
+leaves, so the customer — an unannotated `let` — needs no annotation. At a
+checking position it is inferred and compared, like any inferred term.
+
+**Direction.** The same as the goal form: left sides become right sides,
+`sym(h)` reverses, nothing is guessed. Applied to a type that is *proved*
+rather than *wanted*, that direction is `J`'s own: the step is
+`J(h; y q. M; hyp) : M[b/y]`, with no `sym`. Unapplied lemmas are
+instantiated against the hypothesis's type (§6.1), and occurrences are keyed
+(§6.2), unchanged.
+
+**Why this spelling.** The candidates were a second name
+(`rewrite_at(h, hyp)`), a named argument on the existing form, and a `let`
+statement form (`let hyp' = rewrite(h) in hyp;`).
+
+- The library's customers (§7.1) are all `let x = j(p, λ y _ => M, hyp);` —
+  an expression in a `let`. A statement form would need new grammar to say
+  what `let x = <expression>;` already says.
+- A second name would be a second entry point with the same equations,
+  direction, `at :=` and instantiation; one form with a named argument is one
+  set of rules. `at` already means occurrences here, so Lean's `at hyp`
+  reading was not available.
+- `in :=` is Rocq's word for the same operation and reads as what it does.
+  It is a named argument, not a keyword: `in` stays an ordinary identifier
+  everywhere, and the parser and editor grammar are unchanged.
+
+The issue's worry — that a named argument makes it "not a checking-position
+form" — is the point rather than a cost: the hypothesis is a term with a type
+of its own, so inference is the natural mode, and checking positions still
+work through the ordinary fallback.
+
+### 7.1 Library adoption
+
+The customers were the `let` sites whose right side is a `j` transport of a
+hypothesis with a motive that does not mention the proof. Converted
+mechanically (`let x = j(p, λ y _ => M, hyp);` → `let x = rewrite(p, in :=
+hyp);`, annotated lets too), kept only where the module still checked. A site
+stays `j` for the reasons §4 lists for the goal form: its motive abstracts
+only some occurrences in a way `at :=` was not worth spelling, states a
+reduct, or names a different left side than the equation's spelling reaches.
+The per-module counts are in the PR description.
+
+## 8. Eliminating a variable: `subst(h, e)`
+
+`issues/subst-local-equation.md`. `rewrite` refuses when abstracting the left
+side leaves a motive that is not a type: `v : P(n)` in a goal `v = v`,
+rewriting `n` (§2). When the side being replaced is a **local variable**, the
+rewrite can always be done — Lean's `subst` — by generalising everything that
+depends on it.
+
+```heather
+theorem t(P: Nat → Type, n: Nat, v: P(n), h: n = 0, k: (w: P(0)) → w = w): v = v {
+    subst(h, k(v))
+}
+```
+
+**The form.** `subst(h, e)` at a checking position with goal `G`. `h` proves
+`t = x` or `x = t` where `x` is a local and `t` does not mention it; when
+both sides qualify, the right one is eliminated (Lean's order). `e` is
+checked at `G` with `t` for `x`, in a context where:
+
+- every **later local whose type depends on `x`** — directly, or through `h`
+  or another such local — is bound again, under its own name, at its type
+  with `t` for `x`;
+- `x` itself is a `let` alias of `t`, so an annotation in `e` that says `x`
+  says `t`;
+- `h` is a `let` alias of `refl` at `t = t`;
+- every `let` alias that mentioned `x`, `h` or a reverted local means what it
+  does at them.
+
+**What it elaborates to.** With `Γ = Γ₀, x : A, Δ` and the reverted locals
+`d₁ … dₖ` (in context order), the motive over `Γ, y : A, q : t = y` is
+
+```text
+M = Π (d₁' : T₁σ) … (dₖ' : Tₖσ). Gσ        σ = [y/x, q/h, d'/d]
+```
+
+and the term is `J(p; y q. M; λ d₁' … dₖ'. e) d₁ … dₖ` with `p : t = x`.
+At `y := x, q := p`, `σ` is the identity on everything it mapped, so the
+term's type is `G` syntactically. No local leaves `Γ` and none is reordered:
+`x` stays a binder the case no longer mentions, which is what lets `t`
+mention locals declared after `x` (`h: x = y + 1` with `y` later) without the
+reordering Lean's `revert` would need.
+
+**`h` itself.** With `h : t = x`, `p` is `h` and `h ↦ q` in the motive, so a
+goal that mentions `h` sees `refl` in the case — the elimination is genuinely
+dependent, `J` with the goal as its motive. With `h : x = t`, `p` is
+`sym(h)`, and `h ↦ sym(q)` would leave `sym(sym(h))` where `h` was, which is
+not `h` again (`Id` is proof-relevant). So in that orientation `h` is mapped
+only when nothing mentions it; when the goal or a reverted local does, `h` is
+reverted like any other dependent local and the case sees it at `t = t`.
+
+**Refused**, each with its own message: a proof of something other than an
+equation; neither side a local the other side does not mention (pointing at
+`rewrite`); a `t` that mentions a local depending on `x` (it would be
+reverted out from under itself); inference position.
+
+What it does not do: eliminate a variable bound in the global context or a
+`let` (aliases are inlined, so `h : k = 3` with `let k = n` is `h : n = 3`
+already), or search for which equation to use. It is an elaborator entry
+point recognised by name at a checking position, like `rewrite`; a local or
+declaration named `subst` is an ordinary name.

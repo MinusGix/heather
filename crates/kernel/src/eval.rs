@@ -1122,6 +1122,44 @@ impl<'a, 'v> Eval<'a, 'v> {
         self.drive(w)
     }
 
+    /// The pair a projection eliminates. When it is an application of a
+    /// bound variable to a bound variable, `fst(k y)` or `snd(k y)`, its value
+    /// is shared through the arena by the closures the two variables are
+    /// bound to, so the sibling projection of the same application reads it
+    /// instead of evaluating it again.
+    ///
+    /// This is the shape of a tier-2 function child, whose tree and proof
+    /// are `λy. fst(k y)` and `λy. snd(k y)` over one `k`
+    /// (docs/inductive-tier2-w-lowering.md §6): without the sharing, every
+    /// read of a child evaluated `k y` twice, and a `bind` nested `d` deep to
+    /// the left evaluated its innermost tree `2^d` times
+    /// (issues/tier2-left-nested-bind-cost.md). Sound because evaluation is
+    /// pure: the same closures applied give the same value, and only a
+    /// success is remembered. Only a `k` that is a λ is shared: its
+    /// application is β and reads nothing of the site's Π annotation, where
+    /// a stuck application would keep the first site's annotation in its
+    /// spine.
+    fn eval_projected(&mut self, pair: &Rc<Term>, env: &Env<'v>) -> Res<Rc<Val<'v>>> {
+        let (fun, arg) = match &**pair {
+            Term::App { fun, arg, .. } | Term::AppAt { fun, arg } => (fun, arg),
+            _ => return self.eval_tm(pair, env),
+        };
+        let (Some(k), Some(y)) = (bound_root(env, fun), bound_root(env, arg)) else {
+            return self.eval_tm(pair, env);
+        };
+        if !matches!(&*self.force(k)?, Val::Lam { .. }) {
+            return self.eval_tm(pair, env);
+        }
+        let key = (k as *const TmClo<'v> as usize, y as *const TmClo<'v> as usize);
+        if let Some(v) = self.arena.shared_app(key) {
+            crate::stats::shared_apps(1);
+            return Ok(v);
+        }
+        let v = self.eval_tm(pair, env)?;
+        self.arena.cache_shared_app(key, &v);
+        Ok(v)
+    }
+
     /// One step of [`Eval::eval_tm`], with its **tail positions returned**
     /// rather than called: see [`Eval::drive`].
     fn step_eval(&mut self, t: &Term, env: &Env<'v>) -> Res<Work<'v>> {
@@ -1417,7 +1455,7 @@ impl<'a, 'v> Eval<'a, 'v> {
                 return Ok(Work::Elim(f, Elim::TyApp { arg: amb_ty(env, arg) }));
             }
             Term::Fst { fst_level, snd_level, fst_ty, snd_ty, pair } => {
-                let p = self.eval_tm(pair, env)?;
+                let p = self.eval_projected(pair, env)?;
                 let e = Elim::Fst {
                     ann: Some(SigAnn {
                         fst_level: fst_level.clone(),
@@ -1429,7 +1467,7 @@ impl<'a, 'v> Eval<'a, 'v> {
                 return Ok(Work::Elim(p, e));
             }
             Term::Snd { fst_level, snd_level, fst_ty, snd_ty, pair } => {
-                let p = self.eval_tm(pair, env)?;
+                let p = self.eval_projected(pair, env)?;
                 let e = Elim::Snd {
                     ann: Some(SigAnn {
                         fst_level: fst_level.clone(),
@@ -1448,7 +1486,7 @@ impl<'a, 'v> Eval<'a, 'v> {
             // it reads the Σ inferred for the pair, never the annotation.
             Term::FstAt { pair } | Term::SndAt { pair } => {
                 let second = matches!(t, Term::SndAt { .. });
-                let p = self.eval_tm(pair, env)?;
+                let p = self.eval_projected(pair, env)?;
                 let e = if second {
                     Elim::Snd { ann: None }
                 } else {
@@ -2537,6 +2575,21 @@ fn nat_lit_program(n: &crate::term::Numeral) -> Rc<ContextProgram<()>> {
         }
     }
     acc.expect("a nonzero literal has a set bit")
+}
+
+/// The closure a variable term is bound to in `env`, seen through closures
+/// that are themselves only a bound variable (an argument passed on as it
+/// is: `λy. ⟨f y, c y⟩` hands `f` and `c` each a closure of `y`). `None` for
+/// any other term and for a variable of the base context.
+fn bound_root<'v>(env: &Env<'v>, t: &Term) -> Option<&'v TmClo<'v>> {
+    let Term::Var(x) = t else { return None };
+    let Lookup::Bound(mut c) = env.lookup(x.0) else { return None };
+    while let TmClo::Syn { env, body } = c {
+        let Term::Var(x) = &**body else { break };
+        let Lookup::Bound(next) = env.lookup(x.0) else { break };
+        c = next;
+    }
+    Some(c)
 }
 
 #[cfg(test)]

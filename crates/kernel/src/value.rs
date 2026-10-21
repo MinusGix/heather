@@ -343,6 +343,14 @@ pub struct ValueArena<'v> {
     /// tier-2 tree paid a copy of its matches at every step. The entry holds
     /// the bodies it is keyed on, so no address is freed and reused under it.
     w_ih: RefCell<PtrMap<[usize; 4], Rc<WIhSyntax>>>,
+    /// The value of an application `k y` that a projection eliminates, by
+    /// the closures `k` and `y` are bound to (`Eval::eval_projected`): the
+    /// two halves of a tier-2 function child, `λy. fst(k y)` and
+    /// `λy. snd(k y)`, read one application instead of evaluating it twice
+    /// (issues/tier2-left-nested-bind-cost.md). The keys are arena closures,
+    /// which live as long as this map, so no address is freed and reused
+    /// under it; bounded like the force cache.
+    shared_apps: RefCell<ValueCache<(usize, usize), Val<'v>>>,
     envs: Arena<EnvNode<'v>>,
     levels: Arena<Level>,
     elims: Arena<ElimNode<'v>>,
@@ -669,11 +677,18 @@ type PtrMap<K, V> = HashMap<K, V, std::hash::BuildHasherDefault<PtrHasher>>;
 struct ValueCache<K, V> {
     values: PtrMap<K, Rc<V>>,
     order: VecDeque<K>,
+    /// `false` for a [`ValueArena::retaining`] arena's caches, which keep
+    /// every entry and so need no insertion order.
+    bounded: bool,
 }
 
 impl<K: Copy + Eq + std::hash::Hash, V> ValueCache<K, V> {
     fn new() -> ValueCache<K, V> {
-        ValueCache { values: PtrMap::default(), order: VecDeque::new() }
+        ValueCache { values: PtrMap::default(), order: VecDeque::new(), bounded: true }
+    }
+
+    fn retaining() -> ValueCache<K, V> {
+        ValueCache { values: PtrMap::default(), order: VecDeque::new(), bounded: false }
     }
 
     fn get(&self, key: K) -> Option<Rc<V>> {
@@ -684,6 +699,7 @@ impl<K: Copy + Eq + std::hash::Hash, V> ValueCache<K, V> {
     fn insert(&mut self, key: K, value: &Rc<V>) {
         if self.values.contains_key(&key) { return; }
         self.values.insert(key, Rc::clone(value));
+        if !self.bounded { return; }
         self.order.push_back(key);
         if self.order.len() > VALUE_CACHE_CAPACITY {
             if let Some(oldest) = self.order.pop_front() { self.values.remove(&oldest); }
@@ -694,6 +710,7 @@ impl<K: Copy + Eq + std::hash::Hash, V> ValueCache<K, V> {
     fn insert_profiled(&mut self, key: K, value: &Rc<V>) -> (bool, bool) {
         if self.values.contains_key(&key) { return (false, false); }
         self.values.insert(key, Rc::clone(value));
+        if !self.bounded { return (true, false); }
         self.order.push_back(key);
         let evicted = self.order.len() > VALUE_CACHE_CAPACITY;
         if evicted {
@@ -747,6 +764,19 @@ impl<'v> ValueArena<'v> {
         built
     }
 
+    /// See `shared_apps`.
+    pub(crate) fn shared_app(&self, key: (usize, usize)) -> Option<Rc<Val<'v>>> {
+        self.shared_apps.borrow().get(key)
+    }
+
+    pub(crate) fn cache_shared_app(&self, key: (usize, usize), value: &Rc<Val<'v>>) {
+        let mut cache = self.shared_apps.borrow_mut();
+        #[cfg(feature = "value-metrics")]
+        cache.insert_profiled(key, value);
+        #[cfg(not(feature = "value-metrics"))]
+        cache.insert(key, value);
+    }
+
     pub fn new() -> ValueArena<'v> {
         ValueArena {
             #[cfg(feature = "value-metrics")]
@@ -760,12 +790,36 @@ impl<'v> ValueArena<'v> {
             sealed_glues: RefCell::new(Vec::new()),
             sealed_any: Cell::new(false),
             w_ih: RefCell::new(PtrMap::default()),
+            shared_apps: RefCell::new(ValueCache::new()),
             envs: Arena::new(),
             levels: Arena::new(),
             elims: Arena::new(),
             terms: Arena::new(),
             types: Arena::new(),
         }
+    }
+
+    /// An arena whose caches keep every value they are given, for a region
+    /// that lives across many evaluations of one growing lazy structure:
+    /// the tactic host's run, whose every resume builds the next tree out of
+    /// closures the earlier ones forced (`crates/elab/src/host.rs`).
+    ///
+    /// The bound of [`ValueArena::new`] is right for a query, which forces a
+    /// graph once and is done with it. Across a run it is not: once the
+    /// oldest values are evicted, a later resume that reaches them through
+    /// its tree evaluates them again, and what they were made of, back
+    /// through the run's history. A `bind` nested 64 deep to the left paid
+    /// over ten times the evaluation of the same run with nothing evicted,
+    /// and at 100 deep ran out of fuel (issues/tier2-left-nested-bind-cost.md).
+    /// What this keeps is bounded by the work the region does, which the
+    /// host bounds by its request budget; the arena already holds every
+    /// closure and environment cell of that work.
+    pub fn retaining() -> ValueArena<'v> {
+        let mut arena = Self::new();
+        arena.term_cache = RefCell::new(ValueCache::retaining());
+        arena.type_cache = RefCell::new(ValueCache::retaining());
+        arena.shared_apps = RefCell::new(ValueCache::retaining());
+        arena
     }
 
     /// Make a region whose activity contributes to `metrics`.
@@ -784,6 +838,7 @@ impl<'v> ValueArena<'v> {
                 sealed_glues: RefCell::new(Vec::new()),
                 sealed_any: Cell::new(false),
                 w_ih: RefCell::new(PtrMap::default()),
+                shared_apps: RefCell::new(ValueCache::new()),
                 envs: Arena::new(),
                 levels: Arena::new(),
                 elims: Arena::new(),

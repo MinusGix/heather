@@ -27,6 +27,7 @@
 // `self`.
 
 import logic;
+import bool;
 import nat;
 import int;
 import omega;
@@ -447,4 +448,30 @@ theorem Dyadic::zero_mant(e: Int): Dyadic(0, e) ≈ 0 {
     let mid: Rat::Same(Rat(OfNat(0) * p.int(), q), 0) = cross;
     Rat::same_trans(Dyadic::rat_split(0, e, e.pos_part(), e.neg_part(), e.pos_sub_neg()),
         Rat::same_trans(mid, Rat::same_sym(Dyadic::rat_zero())))
+}
+
+// A dyadic that is zero has a zero mantissa: `m · 2^p` vanishes only at
+// `m = 0`.
+theorem Dyadic::mant_zero(self d: Dyadic, h: d ≈ 0): d.mant = 0 {
+    let p = Nat::pow(2, d.exp.pos_part()).int();
+    let q = Nat::pow(2, d.exp.neg_part()).int();
+    let pp: (OfNat(0) < p) = Nat::pow_pos(a := 2, n := d.exp.pos_part());
+    let cross: ((d.mant * p) * OfNat(1) = OfNat(0) * q) = h;
+    let eqn: (d.mant * p = OfNat(0)) = omega(cross, Int::zero_mul(q));
+    match d.mant as λ m => m * p = OfNat(0) → m = OfNat(0) {
+        OfNat(n) => match n as λ k => OfNat(k) * p = OfNat(0) → OfNat(k) = OfNat(0) {
+            Zero => λ _ => refl,
+            Succ(k) => λ e => false_elim(omega(e, OfNat(Succ(k)).mul_pos(p, trivial, p_pos := pp))),
+        },
+        NegSucc(k) => λ e => false_elim(omega(e, NegSucc(k).mul_neg(p, Int::negsucc_lt_ofnat(k, 0), p_pos := pp))),
+    }(eqn)
+}
+
+// The sign of a dyadic as a sign bit, with `z` standing for zero's sign.
+fn Dyadic::sign_or(self d: Dyadic, z: Bool) → Bool {
+    match d.mant { OfNat(n) => match n { Zero => z, Succ(_) => False }, NegSucc(_) => True }
+}
+
+theorem Dyadic::sign_or_zero(self d: Dyadic, z: Bool, h: d ≈ 0): d.sign_or(z) = z {
+    j(sym(d.mant_zero(h)), λ v _ => Dyadic(v, d.exp).sign_or(z) = z, refl)
 }

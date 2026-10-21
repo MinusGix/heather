@@ -84,6 +84,10 @@ theorem Prog::no_holes_fit(self p: Prog): p.no_holes().IsTrue() → FillsFit(p, 
             Jmp(_) => λ ok => before.no_holes_fit(ok),
             Syscall => λ ok => before.no_holes_fit(ok),
             Proved(_, _, _, _) => λ ok => before.no_holes_fit(ok),
+            CallTo(_) => λ ok => before.no_holes_fit(ok),
+            Ret => λ ok => before.no_holes_fit(ok),
+            Spill(_) => λ ok => before.no_holes_fit(ok),
+            Reload(_) => λ ok => before.no_holes_fit(ok),
             Piece(_, _, _) => λ ok => before.no_holes_fit(ok),
             Refer(_, _, _) => λ ok => before.no_holes_fit(ok),
             Hole(_, _) => λ no => false_elim(no),
@@ -150,11 +154,14 @@ theorem label_target(k: Nat): (p, q: Prog) → (n: Nat) → (item: Asm) → p.na
     }
 }
 
-// Every jump lands on its target, the labels those of the whole program.
+// Every jump lands on its target, the labels those of the whole program; a
+// call, on its target ahead of it or behind it.
 fn item_lands(labels: Nat → Nat, here: Nat, item: Asm) → Bool {
     match item {
         Jcc(cc, target) => asm_item_lands(labels, here, 6, Jcc(cc, target), labels(target)),
         Jmp(target) => asm_item_lands(labels, here, 5, Jmp(target), labels(target)),
+        CallTo(target) => asm_item_lands(labels, here, 5, CallTo(target), labels(target)) ||
+            asm_item_lands_back(labels, here, 5, CallTo(target), labels(target)),
         _ => True,
     }
 }
@@ -200,6 +207,45 @@ theorem jmp_lands(labels: Nat → Nat, k: Nat): (p, before: Prog) → (name: Nat
             Start => λ before name target _ no => absurd(no),
             At(earlier, _, item) => λ before name target lands at =>
                 jmp_lands(labels, i, earlier, before, name, target,
+                    Bool::is_true_and(item_lands(labels, prog_len(earlier), item), jumps_land_in(labels, earlier), lands).right, at),
+        },
+    }
+}
+
+// A near CALL lands on `to`, ahead or behind.
+fn CallLands(from: Nat, displacement: BitVec(32), to: Nat) → Type {
+    JumpsForward(from, 5, displacement, to) ∨ JumpsBack(from, 5, displacement, to)
+}
+
+theorem call_lands_target(origin: BitVec(64), from: Nat, displacement: BitVec(32), to: Nat, lands: CallLands(from, displacement, to)):
+    near_branch_target(next_rip(origin, from), 5, displacement) = next_rip(origin, to) {
+    match lands {
+        Inl(ahead) => jumps_forward(origin, from, 5, displacement, to, ahead),
+        Inr(behind) => jumps_back(origin, from, 5, displacement, to, behind),
+    }
+}
+
+theorem call_lands(labels: Nat → Nat, k: Nat): (p, before: Prog) → (name: Nat) → (target: Nat) →
+    jumps_land_in(labels, p).IsTrue() → asm_back(p, k) = At(before, name, CallTo(target)) →
+    CallLands(prog_len(before), asm_jump_of(labels, prog_len(before), CallTo(target)), labels(target)) {
+    match k {
+        Zero => λ p before name target lands at => {
+            let here = Bool::is_true_and(item_lands(labels, prog_len(before), CallTo(target)), jumps_land_in(labels, before),
+                j(at, λ x _ => jumps_land_in(labels, x).IsTrue(), lands));
+            let ahead = asm_item_lands(labels, prog_len(before), 5, CallTo(target), labels(target));
+            let behind = asm_item_lands_back(labels, prog_len(before), 5, CallTo(target), labels(target));
+            let displacement = asm_jump_of(labels, prog_len(before), CallTo(target));
+            match ahead.is_true_or(behind, here.left) {
+                Inl(yes) => Inl(asm_lands_forward(prog_len(before), 5, displacement, labels(target), eq_true_of_is_true(ahead, yes))),
+                Inr(yes) => Inr(asm_lands_back(prog_len(before), 5, displacement, labels(target), eq_true_of_is_true(behind, yes))),
+            }
+        },
+        Succ(i) => λ p => match p as λ x => (before: Prog) → (name: Nat) → (target: Nat) →
+                jumps_land_in(labels, x).IsTrue() → asm_back(x, Succ(i)) = At(before, name, CallTo(target)) →
+                CallLands(prog_len(before), asm_jump_of(labels, prog_len(before), CallTo(target)), labels(target)) {
+            Start => λ before name target _ no => absurd(no),
+            At(earlier, _, item) => λ before name target lands at =>
+                call_lands(labels, i, earlier, before, name, target,
                     Bool::is_true_and(item_lands(labels, prog_len(earlier), item), jumps_land_in(labels, earlier), lands).right, at),
         },
     }
@@ -298,7 +344,7 @@ theorem Site::item_resident<M>(self site: Site<M>, fits: FillsFit(site.program, 
         next_rip(site.origin, prog_len(before))) {
     let labels = asm_labels(site.program);
     let found = asm_resident_from(site.fetch, memory, site.origin, no_fills(), labels, 0, site.program, fits, site.last, resident, k);
-    let moved = j(at, λ l _ => CodeResident(site.fetch, memory, item_bytes(no_fills(), labels, l), next_rip(site.origin, 0 + asm_at(l))), found);
+    let moved = rewrite(at, in := found);
     j(prog_len(before).add_left_zero(),
         λ n _ => CodeResident(site.fetch, memory, asm_bytes(no_fills(), labels, prog_len(before), item), next_rip(site.origin, n)), moved)
 }

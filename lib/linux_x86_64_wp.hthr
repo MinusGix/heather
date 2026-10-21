@@ -15,7 +15,8 @@
 // the tree's continuation at it; there the run has `passed` a syscall, and
 // every leaf after it is told so. A `Proved` item asks its contract's
 // precondition and binds the state after it, its postcondition holding. An
-// item the logic cannot run (bytes, a piece, a hole) leaves `False`.
+// item the logic cannot run yet (bytes, a piece, a hole, and for now a call,
+// a return or a stack slot, issues/wp-stack-items.md) leaves `False`.
 //
 // Memory is seen through a view (`View`): what a load reads, where a store
 // may go and what the view knows after it, and what a call asks of memory
@@ -479,6 +480,10 @@ theorem wp_item_goes<M, V>(io: LinuxIo<M>, view: View<M, V>, sound: ViewSound<M,
                 j(sym(ran.proof.right.right.left), λ m _ => view.Holds(v, m), holds),
                 trace_of, valid, short, held.right(after, ran.proof.right.right.right))
         },
+        CallTo(_) => λ code reach honest goes passed t v state cur rip holds trace_of valid short never => false_elim(never),
+        Ret => λ code reach honest goes passed t v state cur rip holds trace_of valid short never => false_elim(never),
+        Spill(_) => λ code reach honest goes passed t v state cur rip holds trace_of valid short never => false_elim(never),
+        Reload(_) => λ code reach honest goes passed t v state cur rip holds trace_of valid short never => false_elim(never),
         Piece(_, _, _) => λ code reach honest goes passed t v state cur rip holds trace_of valid short never => false_elim(never),
         Refer(_, _, _) => λ code reach honest goes passed t v state cur rip holds trace_of valid short never => false_elim(never),
         Hole(_, _) => λ code reach honest goes passed t v state cur rip holds trace_of valid short never => false_elim(never),

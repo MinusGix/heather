@@ -45,7 +45,7 @@ theorem static_elf64_read_split(header, code: List<BitVec(8)>, count, index: Nat
     offset: address.take_low(16, 48).toNat() = index + count,
     found: code.nth(index) = Some(byte)):
     static_elf64_read(header ++ code, address) = Some(byte) {
-    let indexed = j(length, λ size _ => (header ++ code).nth(index + size) = code.nth(index), header.nth_append_r(code, index));
+    let indexed = rewrite(length, in := header.nth_append_r(code, index));
     let read = trans(cong_fn<Nat, Option<BitVec(8)>>(λ position => (header ++ code).nth(position), offset), trans(indexed, found));
     j(sym(page), λ decision _ =>
         (match decision as λ _ => Option<BitVec(8)> {

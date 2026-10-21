@@ -361,7 +361,10 @@ impl Elaborator {
                 span,
             );
         };
-        let arena = ValueArena::new();
+        // One arena for the whole run, keeping what it forces: each resumed
+        // tree is built from closures the earlier ones forced
+        // (`ValueArena::retaining`).
+        let arena = ValueArena::retaining();
         let reader = Reader::new(&world, &arena);
         let tree = reader.root(closed);
         let mut speaker = Interpreted { elab: self, world: &world, reader, arena: &arena, tree, globals: Default::default() };

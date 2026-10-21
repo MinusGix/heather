@@ -253,3 +253,24 @@ fn long_runs() {
     );
     assert!(msg.contains("the tactic made more than 10000 requests without finishing"), "{msg}");
 }
+
+/// Binds nested to the left (issues/tier2-left-nested-bind-cost.md): "the
+/// first `j` steps, then one more". Each level of `bind` used to evaluate the
+/// tree below it once for the tree and once for its proof, so the run cost
+/// `2^d` in the depth and `lspin(14)` ran out of fuel. Now the halves share
+/// one evaluation of the child (`shared_apps` counts the kernel's part) and
+/// the run is quadratic: forty levels, two requests each, then the
+/// assumption. A failure at the bottom of the nest is still reported.
+#[test]
+fn left_nested_runs() {
+    let tick = "fn tick() → tactic::Tac<tactic::Expr> { defeq(NatLit(0), NatLit(0)).bind(λ g => assumption()) }
+         fn lspin(k: Nat) → tactic::Tac<tactic::Expr> {
+             match k { Zero => assumption(), Succ(j) => lspin(j).bind(λ e => tick()) }
+         }";
+    let before = heather_kernel::stats::snapshot();
+    check(&format!("{tick}\ntheorem deep(n: Nat, h: n = 3): n = 3 {{ by lspin(40) }}"));
+    let shared = heather_kernel::stats::snapshot().since(&before).shared_apps;
+    assert!(shared > 0, "the function child's halves did not share an evaluation");
+    let msg = refused(&format!("{tick}\ntheorem bad(n: Nat, q: n = 4): n = 3 {{ by lspin(40) }}"));
+    assert!(msg.contains("the tactic failed: no local's type is the goal"), "{msg}");
+}
