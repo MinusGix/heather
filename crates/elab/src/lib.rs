@@ -119,6 +119,7 @@ mod gendefs;
 mod generalize;
 mod goal_combinators;
 mod goals;
+pub mod host;
 mod indexed;
 mod infinitary;
 mod inductive;
@@ -641,6 +642,9 @@ pub struct Elaborator {
     /// `omega` ([`resolve::PositivityRun`]). `None` everywhere else, so plain
     /// `:= infer` never runs omega.
     positivity: RefCell<Option<resolve::PositivityRun>>,
+    /// Tactics implemented in Rust, available as `by name`
+    /// ([`Elaborator::register_native_tactic`], docs/host-elaboration-interface-design.md §8a).
+    native_tactics: RefCell<HashMap<String, fn() -> Box<dyn host::NativeTactic>>>,
     fuel: u64,
     /// Optional explicit collector for evaluator-region activity. Clones
     /// share it so speculative and generated checking contribute to the same
@@ -1653,6 +1657,7 @@ impl Elaborator {
             misplaced_recursion: RefCell::new(None),
             resolve_depth: Cell::new(0),
             positivity: RefCell::new(None),
+            native_tactics: RefCell::new(HashMap::new()),
             fuel: DEFAULT_FUEL,
             value_metrics: None,
             emission_findings: None,
@@ -4961,6 +4966,16 @@ impl Elaborator {
                 && self.ctor_here_expected(cx, name, expected).is_none() => {
                 relational_context::proof::derive(self, cx, expected, lvl, e.span)
             }
+            // `by t` runs the tactic `t` against the expected type
+            // (docs/host-elaboration-interface-design.md, `host.rs`).
+            ExprKind::App { head, args, .. }
+                if matches!(&head.kind, ExprKind::Var(name) if name == heather_syntax::BY_TACTIC) =>
+            {
+                let [tactic] = args.as_slice() else {
+                    return err("`by` runs one tactic", e.span);
+                };
+                self.run_by(cx, tactic, expected, lvl, e.span)
+            }
             // `ring` normalizes both sides of an equation at `Int` or `Nat`
             // by reflection; `ring(h, …)` also combines equations
             // (docs/ring-normalization-design.md).
@@ -6135,6 +6150,15 @@ impl Elaborator {
     }
 
     fn elab_infer_uncached(&self, cx: &Cx, e: &Expr, expected: Option<&Type>) -> R<(Term, Type, Level)> {
+        if let ExprKind::App { head, .. } = &e.kind {
+            if matches!(&head.kind, ExprKind::Var(name) if name == heather_syntax::BY_TACTIC) {
+                return err(
+                    "`by` runs a tactic against the statement it must prove, and there is none here; \
+                     use it where the expected type is known, or annotate: `let p: P = by t;`",
+                    e.span,
+                );
+            }
+        }
         let (term, ty, level) = self.elab_infer_written(cx, e, expected)?;
         Ok((self.reduced_decision(cx, e, term), ty, level))
     }

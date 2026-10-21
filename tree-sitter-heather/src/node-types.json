@@ -32,6 +32,10 @@
         "named": true
       },
       {
+        "type": "by_expression",
+        "named": true
+      },
+      {
         "type": "calc_expression",
         "named": true
       },
@@ -886,6 +890,26 @@
     "type": "builtin_type",
     "named": true,
     "fields": {}
+  },
+  {
+    "type": "by_expression",
+    "named": true,
+    "fields": {
+      "tactic": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "call_expression",
+            "named": true
+          },
+          {
+            "type": "qualified_identifier",
+            "named": true
+          }
+        ]
+      }
+    }
   },
   {
     "type": "calc_expression",
@@ -6497,6 +6521,10 @@
   },
   {
     "type": "axiom",
+    "named": false
+  },
+  {
+    "type": "by",
     "named": false
   },
   {

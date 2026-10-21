@@ -335,6 +335,14 @@ pub struct ValueArena<'v> {
     /// the check off every other force.
     sealed_glues: RefCell<Vec<(*const TmClo<'v>, usize)>>,
     sealed_any: Cell<bool>,
+    /// [`Eval::fire_elim_w`](crate::eval::Eval)'s environment-free syntax —
+    /// the recursive eliminator and the ih's domain, both weakened past the
+    /// `a`/`f` slots — by the identity of the eliminator's four bodies.
+    /// Building it shifts the whole step (a `match`'s every arm), and an
+    /// eliminator fires once per node it walks, so without this a run over a
+    /// tier-2 tree paid a copy of its matches at every step. The entry holds
+    /// the bodies it is keyed on, so no address is freed and reused under it.
+    w_ih: RefCell<PtrMap<[usize; 4], Rc<WIhSyntax>>>,
     envs: Arena<EnvNode<'v>>,
     levels: Arena<Level>,
     elims: Arena<ElimNode<'v>>,
@@ -701,7 +709,44 @@ impl<K: Copy + Eq + std::hash::Hash, V> ValueCache<K, V> {
 
 }
 
+/// One [`ValueArena`] `w_ih` entry: the syntax it was built from, and what
+/// was built.
+pub(crate) struct WIhSyntax {
+    pub(crate) levels: [Level; 3],
+    /// The bodies the entry is keyed on, held so their addresses stay theirs.
+    pub(crate) _keep: (Rc<Type>, Rc<Type>, Rc<Type>, Rc<Term>),
+    /// `elim_W` at `f y`, in `(Γ, a, f, y)`.
+    pub(crate) rec: Rc<Term>,
+    /// The ih's domain `T[a/x]`, in `(Γ, a, f)`.
+    pub(crate) dom: Rc<Type>,
+}
+
 impl<'v> ValueArena<'v> {
+    /// The memoized [`WIhSyntax`] for these bodies at these levels, or the
+    /// one `build` makes, remembered.
+    pub(crate) fn w_ih_syntax(
+        &self,
+        levels: [&Level; 3],
+        bodies: (&Rc<Type>, &Rc<Type>, &Rc<Type>, &Rc<Term>),
+        build: impl FnOnce() -> WIhSyntax,
+    ) -> Rc<WIhSyntax> {
+        let (shape, pos, motive, step) = bodies;
+        let key = [
+            Rc::as_ptr(shape) as usize,
+            Rc::as_ptr(pos) as usize,
+            Rc::as_ptr(motive) as usize,
+            Rc::as_ptr(step) as usize,
+        ];
+        if let Some(hit) = self.w_ih.borrow().get(&key) {
+            if hit.levels.iter().zip(levels).all(|(a, b)| a == b) {
+                return Rc::clone(hit);
+            }
+        }
+        let built = Rc::new(build());
+        self.w_ih.borrow_mut().insert(key, Rc::clone(&built));
+        built
+    }
+
     pub fn new() -> ValueArena<'v> {
         ValueArena {
             #[cfg(feature = "value-metrics")]
@@ -714,6 +759,7 @@ impl<'v> ValueArena<'v> {
             transducers: RefCell::new(PtrMap::default()),
             sealed_glues: RefCell::new(Vec::new()),
             sealed_any: Cell::new(false),
+            w_ih: RefCell::new(PtrMap::default()),
             envs: Arena::new(),
             levels: Arena::new(),
             elims: Arena::new(),
@@ -737,6 +783,7 @@ impl<'v> ValueArena<'v> {
                 transducers: RefCell::new(PtrMap::default()),
                 sealed_glues: RefCell::new(Vec::new()),
                 sealed_any: Cell::new(false),
+                w_ih: RefCell::new(PtrMap::default()),
                 envs: Arena::new(),
                 levels: Arena::new(),
                 elims: Arena::new(),

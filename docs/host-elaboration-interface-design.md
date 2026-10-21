@@ -8,9 +8,9 @@ It answers `issues/host-elaboration-interface.md`, retargets
 B1) and places `issues/elabcode-abstraction-layer.md`. Round pattern as
 usual: this document first, the implementing rounds against §10.
 
-Status: **proposal; §0 is what Minus decides.** Nothing here is built yet
-except the probe in §9, which checks that the request tree is writable in
-today's surface.
+Status: **§0 decided by Minus on 2026-10-21** (the request-tree model, with
+native tactics and certificate oracles as §8a describes). **Round 1 landed**:
+§12 records what building it changed.
 
 ---
 
@@ -441,8 +441,8 @@ the generalisation.
 
 | round | builds | done when |
 |---|---|---|
-| R1 | `lib/std/tactic.hthr` (protocol, `bind`, helpers), `host.rs` loop, `by`, requests `Goal`/`View`/`Defeq`/`Fail`, the speller's recogniser shared with `View`, the Rust protocol-speaker trait (§8a) | `by assumption` closes goals at open types and neutral hypotheses, and its failure lists every hypothesis tried |
-| R2 | `Intro`, `Resolve`, `Infer`, `Whnf`, `Check`/`Attempt` with rollback; `exact`, `intro`, `apply`, `first_of` in Heather | a Heather `apply` closes an implication chain; a failed `first_of` reports each branch |
+| R1 (landed) | `lib/std/tactic.hthr` (protocol, `bind`, helpers), `host.rs` loop, `by`, requests `Goal`/`Defeq`/`Fail`, the Rust protocol-speaker trait (§8a) | `by assumption` closes goals at open types and neutral hypotheses, and its failure lists every hypothesis tried |
+| R2 | `View` with the speller's recogniser shared (moved from R1, §12), `Intro`, `Resolve`, `Infer`, `Whnf`, `Check`/`Attempt` with rollback; tactic arguments that mention locals; `exact`, `intro`, `apply`, `first_of` in Heather | a Heather `apply` closes an implication chain; a failed `first_of` reports each branch |
 | R3 | `tac-first-port`: `split_all` or `monoid` normalisation in Heather | it closes the same goals as the Rust one on the existing tests |
 | R3½ | `Oracle(name, input)` with one registered native procedure and a reflection-checked certificate (§8a) | a goal closes by native search plus a Heather check whose proof term is small |
 | R4 | publication (`heather-checked-construction-api`, retargeted): a `Publish(group)` request that checks a small declaration group and adds it only if every member passes the kernel | a Heather generator publishes a lemma group in the caller's scope; a failing member publishes nothing |
@@ -474,3 +474,44 @@ forged handle is refused).
   object the interaction-tree area is building.
 - **Waiting for `it-core`.** The host needs two constructors; §3.2's local
   type keeps the protocol identical to the library's tree.
+
+---
+
+## 12. What round 1 changed
+
+Recorded after building it, as the inductive-tier designs do.
+
+- **`View` moved to R2.** `assumption` needs only `Goal` and `Defeq`, and the
+  speller's recogniser is a refactor of its own. Round 1's `Expr` has no
+  `Global` constructor yet for the same reason: a tactic builds terms from
+  locals, literals and applications.
+- **The host never decodes `Tac`'s encoding by hand** (§3.1 said it would
+  reuse the analyzer reader's decoding). Every question is an application of
+  one of the library's `host_*` functions, read back as a numeral, an `Expr`
+  or a `String`, and every answer is built by the library's builders
+  (`host_goal`, `host_goal_local`, `host_bool`, `str_push`). The tier-2 tree's
+  lowering stays the elaborator's business, and the protocol's definition is
+  all Heather. `host_resume` uses §9's `reply` pattern (`fit`).
+- **Answers are built in the value domain, not elaborated from text**: a
+  string literal elaborated in the caller's scope would need the caller to
+  import `char`, which is exactly the scope leak §4.2 forbids.
+- **Round 1 runs closed trees.** `by t(h)` with an argument naming a local is
+  refused with a message; the tactic reaches locals through `Goal`. Lifting
+  this (evaluating under the goal's context) is R2's.
+- **The returned `Expr` is reified straight to a kernel term** (locals and
+  literals are terms, an application is formed against its head's Π after a
+  conversion check), not elaborated through a pre-resolved syntax leaf as §5
+  proposed. Nothing is resolved by name. `Hole` waits for the elaboration
+  route, with `View` in R2.
+- **Cost, found and fixed in the kernel.** The first runs used tens of MB per
+  request: every `elim_W` step rebuilt its recursive eliminator by shifting
+  the whole step (a `match`'s every arm), and a tier-2 tree pays one per
+  `match`. `ValueArena` now memoizes that syntax by the identity of the
+  eliminator's bodies (`fire_elim_w`, `WIhSyntax`); a request costs tens of
+  microseconds and a few hundred requests run in well under a second.
+- **A run is limited to about a thousand requests.** Reading the final `Pure`
+  leaf nests one evaluator level per earlier request and hits
+  `NATIVE_DEPTH_LIMIT`; the error says so.
+  `issues/tactic-run-continuation-chain.md` has the measurements and the
+  likely mechanism (the tier-2 leaf proof is projected from the parent's).
+

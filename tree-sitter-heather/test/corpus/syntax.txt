@@ -573,3 +573,77 @@ theorem uses(n: Nat, h: 0 < n := infer): 0 < n { h }
       (identifier))
     (block
       (identifier))))
+
+==================
+Tactic invocation with by
+==================
+
+theorem t(n: Nat, h: n = 3): n = 3 { by assumption }
+theorem u(n: Nat, h: n = 3): n = 3 { by tactic::spin(3) }
+fn f(by: Nat -> Nat) -> Nat { by(1) }
+
+---
+
+(source_file
+  (theorem_declaration
+    (qualified_identifier)
+    (parameter_list
+      (parameter
+        (parameter_run
+          (parameter_name
+            (identifier))
+          (identifier)))
+      (parameter
+        (parameter_run
+          (parameter_name
+            (identifier))
+          (binary_expression
+            (identifier)
+            (number)))))
+    (declaration_binary_type
+      (identifier)
+      (number))
+    (block
+      (by_expression
+        (qualified_identifier))))
+  (theorem_declaration
+    (qualified_identifier)
+    (parameter_list
+      (parameter
+        (parameter_run
+          (parameter_name
+            (identifier))
+          (identifier)))
+      (parameter
+        (parameter_run
+          (parameter_name
+            (identifier))
+          (binary_expression
+            (identifier)
+            (number)))))
+    (declaration_binary_type
+      (identifier)
+      (number))
+    (block
+      (by_expression
+        (call_expression
+          (qualified_identifier)
+          (argument_list
+            (number))))))
+  (function_declaration
+    (qualified_identifier)
+    (parameter_list
+      (parameter
+        (parameter_run
+          (parameter_name
+            (identifier))
+          (function_type
+            (identifier)
+            (identifier)))))
+    (identifier)
+    (block
+      (call_expression
+        (contextual_identifier
+          (identifier))
+        (argument_list
+          (number))))))

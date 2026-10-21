@@ -396,6 +396,11 @@ pub const POS_RESULT: &str = "__pos_result";
 /// rules; no omega), over the constructing scope.
 pub const POS_SEARCH: &str = "__pos_search";
 
+/// The call head `by t` parses to (docs/host-elaboration-interface-design.md
+/// §7): the elaborator runs `t` as a tactic against the expected type. Not a
+/// name a user can write, like [`POS_SEARCH`].
+pub const BY_TACTIC: &str = "__by";
+
 /// The name of that fact: `x_pos` beside `x`.
 pub fn positivity_name(name: &str) -> String {
     format!("{name}_pos")
@@ -4294,6 +4299,25 @@ impl Parser {
             self.bump();
             return Ok(Expr { kind: ExprKind::Refl, span: start });
         }
+        // `by t` runs the tactic `t` against the expected type. Rule 1: only
+        // when a name follows, so a local called `by` (`by(a)`, `by + 1`)
+        // still reads as itself.
+        if self.at_kw("by") && matches!(self.nth(1), TokKind::Ident(_)) {
+            self.bump();
+            let tactic = self.postfix()?;
+            let span = start.join(tactic.span);
+            let head = Expr { kind: ExprKind::Var(BY_TACTIC.to_string()), span: start };
+            return Ok(Expr {
+                kind: ExprKind::App {
+                    head: Box::new(head),
+                    args: vec![tactic],
+                    named: Vec::new(),
+                    explicit: false,
+                    goal_oriented: false,
+                },
+                span,
+            });
+        }
         if self.at_kw("j") && matches!(self.nth(1), TokKind::LParen) {
             return self.j_expr();
         }
@@ -6616,6 +6640,24 @@ mod tests {
             other => panic!("expected a name target, got {other:?}"),
         }
         assert!(matches!(d.body.ons[2].target, OnTarget::Stmt(_)));
+    }
+
+    /// `by t` is the tactic form only before a name (Rule 1), so a local
+    /// called `by` still reads as itself.
+    #[test]
+    fn by_runs_a_tactic_only_before_a_name() {
+        let k = body("by assumption");
+        let (head, args, _) = as_call(&k);
+        assert_eq!(head, BY_TACTIC);
+        assert!(matches!(&args[0].kind, ExprKind::Var(n) if n == "assumption"));
+        let k = body("by tactic::spin(3)");
+        let (head, args, _) = as_call(&k);
+        assert_eq!(head, BY_TACTIC);
+        assert!(matches!(&args[0].kind, ExprKind::App { .. }));
+        let k = body("by(1)");
+        let (head, _, _) = as_call(&k);
+        assert_eq!(head, "by");
+        assert!(parse_file("fn f(by: Nat) -> Nat { by + 1 }").is_ok());
     }
 
     #[test]
