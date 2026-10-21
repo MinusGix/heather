@@ -9,8 +9,8 @@ B1) and places `issues/elabcode-abstraction-layer.md`. Round pattern as
 usual: this document first, the implementing rounds against §10.
 
 Status: **§0 decided by Minus on 2026-10-21** (the request-tree model, with
-native tactics and certificate oracles as §8a describes). **Round 1 landed**:
-§12 records what building it changed.
+native tactics and certificate oracles as §8a describes). **Rounds 1 and 2
+landed**: §12 and §13 record what building them changed.
 
 ---
 
@@ -442,7 +442,8 @@ the generalisation.
 | round | builds | done when |
 |---|---|---|
 | R1 (landed) | `lib/std/tactic.hthr` (protocol, `bind`, helpers), `host.rs` loop, `by`, requests `Goal`/`Defeq`/`Fail`, the Rust protocol-speaker trait (§8a) | `by assumption` closes goals at open types and neutral hypotheses, and its failure lists every hypothesis tried |
-| R2 | `View` with the speller's recogniser shared (moved from R1, §12), `Intro`, `Resolve`, `Infer`, `Whnf`, `Check`/`Attempt` with rollback; tactic arguments that mention locals; `exact`, `intro`, `apply`, `first_of` in Heather | a Heather `apply` closes an implication chain; a failed `first_of` reports each branch |
+| R2 (landed) | `Open` (the design's `Intro`), `Infer`, `Resolve`, `Lam` in `Expr`, binder scopes in the host; quoting the goal's terms into `Expr` arguments; `focus`, `attempt`, `first_of`, `exact`, `intro`, `apply` in Heather (§13) | a Heather `apply` closes an implication chain; a failed `first_of` reports each branch |
+| R2½ | `View` with the speller's recogniser shared (moved from R1 and R2), `Whnf`, `Hole` through the elaboration route | a Heather tactic dispatches on the goal's head (`=`, `∧`, a Π) |
 | R3 | `tac-first-port`: `split_all` or `monoid` normalisation in Heather | it closes the same goals as the Rust one on the existing tests |
 | R3½ | `Oracle(name, input)` with one registered native procedure and a reflection-checked certificate (§8a) | a goal closes by native search plus a Heather check whose proof term is small |
 | R4 | publication (`heather-checked-construction-api`, retargeted): a `Publish(group)` request that checks a small declaration group and adds it only if every member passes the kernel | a Heather generator publishes a lemma group in the caller's scope; a failing member publishes nothing |
@@ -520,4 +521,57 @@ Recorded after building it, as the inductive-tier designs do.
   What remains is a cost of the tactic's own shape: binds nested to the
   left are exponential in their depth (`issues/tier2-left-nested-bind-cost.md`),
   so a loop should recurse in the continuation, `step.bind(λ _ => loop(j))`.
+
+---
+
+## 13. What round 2 changed
+
+- **`Open` instead of a goal-moving `Intro`.** `Open(h, name)` introduces the
+  binder of *any* function-type handle and answers the new local and the
+  body; it does not change "the goal". The goal a sub-tactic sees is set by
+  a library handler, `focus(g, t)`, which answers `t`'s `Goal` requests with
+  `g` and passes everything else on. `intro(t)` is `Open` on the target,
+  `focus` on the body, and `Lam(x, e)` around the result; `apply` uses
+  `Open` to reach a premise's type. So the host has no goal stack, and
+  subgoals are ordinary values.
+- **Scopes, not a goal stack, in the host.** Every handle and local belongs
+  to a scope (the goal's context, or a binder `Open` introduced under its
+  parent's scope). An `Expr` is elaborated at the deepest scope it mentions;
+  handles from enclosing scopes are weakened into it, and two scopes neither
+  of which encloses the other are refused (a local used outside its
+  binder). `Lam(x, b)` must sit exactly at `x`'s parent scope. These are
+  protocol errors and end the run, like a forged handle.
+- **Recoverable failure is a library handler, not host rollback.** §6
+  planned `Check`/`Attempt` with `SearchMark` rollback. Every request is
+  free of side effects on the elaborator (conversion is the kernel's, and
+  answers create only handles and scopes the run owns), so `attempt(t)` is a
+  Heather function that turns `t`'s `Fail` into a value, and `first_of`
+  is built on it. `Resolve` is the one request that elaborates, and it rolls
+  itself back when it fails. `Infer` and `Open` answer `Checked<…>`
+  (`Accepted`/`Refused(why)`), so a tactic can act on why an `Expr` was
+  ill-typed.
+- **Tactic arguments mention locals by quotation.** While the tactic
+  expression is elaborated, a position that expects an `Expr` and is given a
+  term of another type takes a handle to that term (`by exact(h)`,
+  `by apply(h2, apply(h1, assumption()))`). Checking alone cannot tell the
+  two apart, because it defers a mismatch to the kernel, so the term's type
+  is inferred on a clone first. The quoted term becomes a closed
+  `host_quote(n)`, so the tactic value is still closed and evaluated as in
+  round 1; any other mention of a local is refused. A term of the tactic
+  expression's own binders cannot be quoted.
+- **`Note` is flat.** Nested inductives are not supported
+  (`nested-inductives-container-fields`), so §6's `Nested(label, notes)` is
+  `Under(n: Note)`: a sub-search's notes are each wrapped once per level.
+  `first_of` reports each alternative as `tried an alternative: <its
+  failure>` with that alternative's notes beneath it. `At(e, note)` waits
+  for `View`'s speller.
+- **`apply` proves premises eagerly.** It compares the function's type with
+  the goal, and otherwise opens the next premise, proves it with the premise
+  tactic at the premise's type, and continues with the applied function's
+  inferred type. A later premise may depend on an earlier proof. There is
+  no unification: a premise is never left for the conclusion to determine,
+  which waits for `Hole`.
+- **Still not here:** `View`, `Whnf` and `Hole` (R2½ above); they share the
+  speller refactor and are only needed by tactics that dispatch on a goal's
+  shape.
 

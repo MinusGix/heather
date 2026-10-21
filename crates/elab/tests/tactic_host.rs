@@ -1,6 +1,8 @@
-//! Round 1 of `docs/host-elaboration-interface-design.md`: `by t` runs a
-//! Heather tactic (`lib/std/tactic.hthr`'s `Tac<Expr>`) or a registered Rust
-//! one against the goal, and checks what it returns.
+//! Rounds 1 and 2 of `docs/host-elaboration-interface-design.md`: `by t` runs
+//! a Heather tactic (`lib/std/tactic.hthr`'s `Tac<Expr>`) or a registered Rust
+//! one against the goal, and checks what it returns. Round 2 adds binders
+//! (`Open`, `Lam`), `Infer` and `Resolve`, quoting of hypotheses into `Expr`
+//! arguments, and the library's `exact`, `intro`, `apply` and `first_of`.
 //!
 //! The axes of `docs/testing-generated-terms.md`: a closed and a neutral
 //! hypothesis, an open element type, a checking position (the goal comes from
@@ -122,7 +124,7 @@ fn wrong_results_are_refused_at_the_by() {
         "fn forged() → tactic::Tac<tactic::Expr> { Pure(Local(LocalRef(9))) }
          theorem t(n: Nat, h: n = 3): n = 3 { by forged }",
     );
-    assert!(msg.contains("there is no local 9 in this goal"), "{msg}");
+    assert!(msg.contains("there is no local 9 in this run"), "{msg}");
     let msg = refused(
         "fn a_type() → tactic::Tac<tactic::Expr> { goal().bind(λ g => Pure(Hd(g.target))) }
          theorem t(n: Nat, h: n = 3): n = 3 { by a_type }",
@@ -146,13 +148,14 @@ fn by_needs_a_goal_and_the_protocol() {
     assert!(msg.contains("there is none here"), "{msg}");
     let msg = refused_in(elaborator(), "theorem t(n: Nat, h: n = 3): n = 3 { by assumption }");
     assert!(msg.contains("import tactic;"), "{msg}");
-    // Round 1 runs a closed tree: an argument naming a local is refused, and
-    // the tactic reaches the local through the `Goal` request instead.
+    // The tree is closed apart from what is quoted: an argument naming a
+    // local where the tactic does not expect an `Expr` is refused, and the
+    // tactic reaches the local through the `Goal` request instead.
     let msg = refused(
         "fn with_fact<P>(p: P) → tactic::Tac<tactic::Expr> { assumption() }
          theorem t(n: Nat, h: n = 3): n = 3 { by with_fact(h) }",
     );
-    assert!(msg.contains("cannot mention the goal's locals yet"), "{msg}");
+    assert!(msg.contains("can mention the goal's locals only where it expects an `Expr`"), "{msg}");
 }
 
 /// `by` is recognised only before a name, so a local called `by` still reads
@@ -185,6 +188,7 @@ impl NativeTactic for NativeAssumption {
             }
             Answer::Bool(true) => return Ok(Step::Done(RExpr::Local(self.locals[self.tried.len() - 1].0))),
             Answer::Bool(false) => {}
+            other => return Err(format!("an answer to a request it did not make: {other:?}")),
         }
         match self.locals.get(self.tried.len()) {
             Some(&(_, ty)) => {
@@ -273,4 +277,169 @@ fn left_nested_runs() {
     assert!(shared > 0, "the function child's halves did not share an evaluation");
     let msg = refused(&format!("{tick}\ntheorem bad(n: Nat, q: n = 4): n = 3 {{ by lspin(40) }}"));
     assert!(msg.contains("the tactic failed: no local's type is the goal"), "{msg}");
+}
+
+/// `intro` opens the goal's binder, proves the body under the new local, and
+/// abstracts it: a non-dependent and a dependent binder, an open type, and
+/// binders under hypotheses.
+#[test]
+fn intro_opens_binders() {
+    check(
+        "theorem implication(n: Nat, q: n = 2): n = 1 → n = 2 { by intro(assumption()) }
+         theorem itself(n: Nat): n = 1 → n = 1 { by intro(assumption()) }
+         theorem dependent(): (n: Nat) → n = 1 → n = 1 { by intro(intro(assumption())) }
+         theorem open_type<A>(a: A, b: A): a = b → b = a → a = b { by intro(intro(assumption())) }",
+    );
+    let msg = refused("theorem t(n: Nat, h: n = 1): n = 1 { by intro(assumption()) }");
+    assert!(msg.contains("intro: `n = 1` is not a function type"), "{msg}");
+}
+
+/// Where a tactic's parameter is an `Expr`, a term of the goal's context is
+/// quoted: a hypothesis, a local of a data type, and an application of
+/// hypotheses. `exact` checks the quoted term's type against the goal.
+#[test]
+fn exact_quotes_hypotheses() {
+    check(
+        "theorem hypothesis(n: Nat, p: n = 3): n = 3 { by exact(p) }
+         theorem data(n: Nat): Nat { by exact(n) }
+         theorem applied(a: Nat, h: a = 1 → a = 2, p: a = 1): a = 2 { by exact(h(p)) }",
+    );
+    let msg = refused("theorem t(a: Nat, p: a = 1): a = 2 { by exact(p) }");
+    assert!(msg.contains("exact: the term's type is not the goal"), "{msg}");
+    // A term of the tactic expression's own binders is not the goal's, so
+    // it cannot be quoted.
+    let msg = refused("theorem t(a: Nat, p: a = 1): a = 1 { by goal().bind(λ g => exact(g)) }");
+    assert!(msg.contains("mentions a local of the tactic expression"), "{msg}");
+}
+
+/// The milestone's check (design §10, R2): a Heather `apply` closes an
+/// implication chain. Premises are proved left to right by the premise
+/// tactic, a later one may depend on an earlier one, and a recursive client
+/// tactic searches by `first_of` over `assumption` and `apply` of each local.
+#[test]
+fn apply_closes_implication_chains() {
+    check(
+        "import list;
+         theorem chain(a: Nat, b: Nat, h1: a = 1 → b = 2, h2: b = 2 → a = b, p: a = 1): a = b {
+             by apply(h2, apply(h1, assumption()))
+         }
+         theorem two(a: Nat, f: a = 1 → a = 2 → a = 3, p: a = 1, q: a = 2): a = 3 { by apply(f, assumption()) }
+         theorem dependent(a: Nat, f: (m: Nat) → m = 1 → m = 2, p: a = 1): a = 2 { by apply(f, assumption()) }
+         theorem none_needed(a: Nat, p: a = 1): a = 1 { by apply(p, assumption()) }
+         fn auto(d: Nat) → tactic::Tac<tactic::Expr> {
+             match d {
+                 Zero => assumption(),
+                 Succ(e) => first_of([assumption(), goal().bind(λ g => first_of(g.locals.map(λ l => apply(Local(l.ref), auto(e)))))]),
+             }
+         }
+         theorem searched(a: Nat, b: Nat, c: Nat, h1: a = 1 → b = 2, h2: b = 2 → c = 3, p: a = 1): c = 3 { by auto(3) }",
+    );
+    let msg = refused("theorem t(a: Nat): a = 1 → a = 1 { by apply(a, assumption()) }");
+    assert!(msg.contains("apply: its conclusion is not the goal"), "{msg}");
+    // A premise the premise tactic cannot prove ends the run with its failure.
+    let msg = refused("theorem t(a: Nat, h: a = 1 → a = 2): a = 2 { by apply(h, assumption()) }");
+    assert!(msg.contains("no local's type is the goal"), "{msg}");
+}
+
+/// A failed `first_of` reports each alternative's failure, with that
+/// alternative's own notes indented beneath it.
+#[test]
+fn first_of_reports_each_branch() {
+    let msg = refused(
+        "import list;
+         theorem t(a: Nat, h: a = 1 → a = 2, q: a = 3): a = 2 { by first_of([assumption(), apply(h, assumption())]) }",
+    );
+    assert!(msg.contains("the tactic failed: no alternative succeeded"), "{msg}");
+    let first = msg.find("\n  tried an alternative: no local's type is the goal").expect(&msg);
+    let nested = msg.find("\n    tried q: its type is not the goal").expect(&msg);
+    let second = msg.rfind("\n  tried an alternative: no local's type is the goal").expect(&msg);
+    assert!(first < nested && nested < second, "{msg}");
+    // Catching a failure is pure: what succeeds after a caught failure is
+    // the run's result.
+    check(
+        "import list;
+         theorem u(a: Nat, p: a = 1): a = 1 { by first_of([exact(NatLit(0)), assumption()]) }",
+    );
+}
+
+/// `Resolve` elaborates a name where the `by` is; `Lam` and locals are
+/// checked against the binders the run opened.
+#[test]
+fn resolve_and_binder_discipline() {
+    check(
+        "import bool;
+         import list;
+         import string;
+         import char;
+         fn named(x: String) → tactic::Tac<tactic::Expr> {
+             resolve(x).bind(λ c => match c { Accepted(h) => Pure(Hd(h)), Refused(why) => fail(why, Nil) })
+         }
+         theorem t(a: Nat, p: a = 1): a = 1 { by named(\"p\") }",
+    );
+    let msg = refused(
+        "import bool;
+         import list;
+         import string;
+         import char;
+         fn named(x: String) → tactic::Tac<tactic::Expr> {
+             resolve(x).bind(λ c => match c { Accepted(h) => Pure(Hd(h)), Refused(why) => fail(why, Nil) })
+         }
+         theorem t(a: Nat, p: a = 1): a = 1 { by named(\"nowhere\") }",
+    );
+    assert!(msg.contains("the tactic failed:") && msg.contains("nowhere"), "{msg}");
+    // `Lam` abstracts only a local the run opened, at the binder it opened.
+    let msg = refused("theorem t(a: Nat): a = 1 → a = 1 { by goal().bind(λ g => Pure(Lam(LocalRef(0), Local(LocalRef(0))))) }");
+    assert!(msg.contains("`Lam` abstracts local 0, which is not bound here"), "{msg}");
+    let msg = refused(
+        "theorem t(a: Nat): a = 1 → a = 1 { by intro(goal().bind(λ g => Pure(Lam(LocalRef(1), Local(LocalRef(1)))))) }",
+    );
+    assert!(msg.contains("`Lam` abstracts local 1, which is not bound here"), "{msg}");
+    // An opened local returned without its `Lam` is outside its binder.
+    let msg = refused(
+        "import bool;
+         import list;
+         import string;
+         import char;
+         fn escape() → tactic::Tac<tactic::Expr> {
+             goal().bind(λ g => open(g.target, \"x\").bind(λ c => match c {
+                 Accepted(o) => Pure(Local(o.local.ref)),
+                 Refused(why) => fail(why, Nil),
+             }))
+         }
+         theorem t(a: Nat): a = 1 → a = 1 { by escape }",
+    );
+    assert!(msg.contains("local 1 is used outside its binder"), "{msg}");
+}
+
+/// A native tactic opens binders through the same protocol: `λ x. x`.
+struct NativeIdentity {
+    local: u64,
+}
+
+impl NativeTactic for NativeIdentity {
+    fn start(&mut self) -> Result<Step, String> {
+        Ok(Step::Ask(Request::Goal))
+    }
+
+    fn resume(&mut self, answer: Answer) -> Result<Step, String> {
+        match answer {
+            Answer::Goal(g) => Ok(Step::Ask(Request::Open(g.target, "x".into()))),
+            Answer::Opened(Ok(o)) => {
+                self.local = o.local.id;
+                Ok(Step::Ask(Request::Infer(RExpr::Local(o.local.id))))
+            }
+            Answer::Handle(Ok(_)) => Ok(Step::Done(RExpr::Lam(self.local, Box::new(RExpr::Local(self.local))))),
+            Answer::Opened(Err(why)) | Answer::Handle(Err(why)) => Ok(Step::Ask(Request::Fail(why))),
+            other => Err(format!("an answer to a request it did not make: {other:?}")),
+        }
+    }
+}
+
+#[test]
+fn native_tactics_open_binders() {
+    let mut e = elaborator();
+    e.register_native_tactic("native_identity", || Box::new(NativeIdentity { local: 0 }));
+    check_in(e.clone(), "theorem t(n: Nat): n = 1 → n = 1 { by native_identity }");
+    let msg = refused_in(e, "theorem t(n: Nat, h: n = 1): n = 1 { by native_identity }");
+    assert!(msg.contains("the tactic failed: `n = 1` is not a function type"), "{msg}");
 }
