@@ -4,7 +4,6 @@ status: open
 labels: [translation,export]
 area: heather-in-lean-coq
 milestone: [export-fragment]
-blocked-by: [export-keeps-proofs]
 created: 2026-10-20
 updated: 2026-10-20
 ---

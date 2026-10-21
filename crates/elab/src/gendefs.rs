@@ -193,6 +193,17 @@ pub(crate) enum GenDef {
 }
 
 impl GenDef {
+    /// The nominal tag the definition is keyed by: its declaration's, or its
+    /// index type's for the index devices.
+    pub(crate) fn tag(&self) -> u32 {
+        match *self {
+            GenDef::Mu(t) | GenDef::IdxTag(t, _) | GenDef::IdxChild(t, _, _) | GenDef::IdxCode(t)
+            | GenDef::SkelCode(t) | GenDef::TyCode(t) | GenDef::TyCodeFn(t) | GenDef::ShapeCode(t)
+            | GenDef::ArityFn(t) | GenDef::Fam(t) | GenDef::RecProj(t, _) | GenDef::RecTail(t, _)
+            | GenDef::RecFam(t, _) | GenDef::PayloadCode(t, _) | GenDef::SuffixCode(t, _) => t,
+        }
+    }
+
     /// The machine name, for diagnostics only — `#` is unwritable at the
     /// surface, the same convention `skeleton_of` uses.
     pub(crate) fn name(&self, owner: &str) -> String {

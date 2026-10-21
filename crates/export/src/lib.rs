@@ -19,8 +19,12 @@
 //! the one place the prototype leans on an elaborator, and the design doc
 //! says how a typed exporter removes it.
 
+use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
-use heather_kernel::term::{CtxBase, GlobalBinding, GlobalCtx, LocalSubst, SubstTail, Term, Type};
+use heather_kernel::reduce::{Defs, whnf_term_delta, whnf_type_delta};
+use heather_kernel::term::{CtxBase, GlobalBinding, GlobalCtx, LocalCtx, LocalSubst, SubstTail, Term, Type};
+use heather_kernel::typing::{DEFAULT_FUEL, spell_checked_in_code, spell_checked_in_code_ty};
+use std::sync::Arc as Rc;
 use std::fmt::Write as _;
 
 /// A universe level of the exported fragment: closed, because the library is
@@ -46,6 +50,10 @@ pub enum Hx {
     /// erased annotation); the target elaborator recovers it.
     Hole,
 }
+
+/// `Wf` has a realisation per target still to build: native inductives in
+/// Lean, the positivity bypass in Rocq (design §5.1).
+const WF: &str = "Wf (no target realisation yet: issues/export-wf-native-inductives.md)";
 
 /// Why a term or declaration is outside the fragment.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -88,11 +96,62 @@ fn bind(body: Hx) -> Hx {
 
 /// The translation of one declaration's types and terms. `at` is the
 /// declaration's absolute Ψ index, which resolves its global variables.
-struct Tr {
+struct Tr<'a> {
     at: usize,
+    /// The declaration's own Ψ prefix: what its globals unfold to.
+    psi: &'a GlobalCtx,
 }
 
-impl Tr {
+/// Fuel for the exporter's own reductions (the collapse test); a type that
+/// does not settle within it is simply not collapsed.
+const FUEL: u64 = 1 << 16;
+
+fn lmax(a: &Level, b: &Level) -> Level {
+    Level::max(a.clone(), b.clone())
+}
+
+impl Tr<'_> {
+    /// The level of `t` when `t` is a **closed singleton**: a closed type
+    /// whose whnf is `Unit`, an `sEq` between convertible endpoints, or a
+    /// non-dependent `Σ` of singletons. Heather's η makes every two terms of
+    /// such a type convertible, neutrals included; the targets' structure η
+    /// does not reach two neutrals (design §5.2), but Lean's unit η does. So
+    /// a singleton translates to `Hx.Unit` and each of its introductions and
+    /// projections to `Hx.tt`, and the neutrals that remain compare by
+    /// Lean's own unit η.
+    fn singleton(&self, t: &Type) -> Option<Level> {
+        if !matches!(t, Type::Unit { .. } | Type::SEq { .. } | Type::Sigma { .. } | Type::El { .. } | Type::Vec { .. }) {
+            return None;
+        }
+        if t.shift_local(1) != *t {
+            return None;
+        }
+        let nil = LocalCtx::nil();
+        let w = whnf_type_delta(t, &nil, Defs::transparent(self.psi), FUEL).ok()?;
+        match &w {
+            Type::Unit { level } => Some(level.clone()),
+            Type::SEq { level, lhs, rhs, .. } => {
+                let l = whnf_term_delta(lhs, &nil, Defs::transparent(self.psi), FUEL).ok()?;
+                let r = whnf_term_delta(rhs, &nil, Defs::transparent(self.psi), FUEL).ok()?;
+                (l == r).then(|| level.clone())
+            }
+            Type::Sigma { fst_level, snd_level, fst, snd } if snd.shift_local(1) == **snd => {
+                self.singleton(fst)?;
+                self.singleton(snd)?;
+                Some(lmax(fst_level, snd_level))
+            }
+            _ => None,
+        }
+    }
+
+    fn unit(&self, l: &Level) -> R<Hx> {
+        konst("Unit", &[l], vec![])
+    }
+
+    fn tt(&self, l: &Level) -> R<Hx> {
+        konst("tt", &[l], vec![])
+    }
+
     fn global(&self, var: u32, subst: &LocalSubst) -> R<Hx> {
         match subst.tail {
             // `·^k`: the empty substitution weakened to the ambient Γ — a
@@ -107,6 +166,9 @@ impl Tr {
     }
 
     fn ty(&self, t: &Type) -> R<Hx> {
+        if let Some(l) = self.singleton(t) {
+            return self.unit(&l);
+        }
         Ok(match t {
             Type::Nat => Hx::Const("Nat", vec![]),
             Type::Pi { dom, cod, .. } => Hx::Pi(Box::new(self.ty(dom)?), Box::new(self.ty(cod)?)),
@@ -129,9 +191,7 @@ impl Tr {
             }
             Type::Vec { level, elem, len } => konst("Vec", &[level], vec![self.ty(elem)?, self.tm(len)?])?,
             Type::Fin { len } => konst("Fin", &[], vec![self.tm(len)?])?,
-            Type::Wf { level, shape, arity } => {
-                konst("Wf", &[level], vec![self.ty(shape)?, lam(self.ty(shape)?, self.tm(arity)?)])?
-            }
+            Type::Wf { .. } => return refuse(WF),
             Type::DVec { .. } | Type::IWf { .. } => return refuse("DVec/IWf (no code yet; not in declarations)"),
             Type::UPi { .. } => return refuse("ΠΠ (universe polymorphism)"),
             Type::GlobalTy { .. } => return refuse("global type variable (layer c/p meta binding)"),
@@ -141,6 +201,18 @@ impl Tr {
     }
 
     fn tm(&self, t: &Term) -> R<Hx> {
+        // A code decodes to its type, so a code of a singleton is the code
+        // of `Unit`: the same collapse, read through `El`.
+        let code_level = match t {
+            Term::TmSigma { fst_level, snd_level, .. } => Some(lmax(fst_level, snd_level)),
+            Term::TmSEq { level, .. } | Term::TmUnit { level } | Term::TmVec { level, .. } => Some(level.clone()),
+            _ => None,
+        };
+        if let Some(level) = code_level {
+            if let Some(l) = self.singleton(&Type::El { level, tm: Rc::new(t.clone()) }) {
+                return self.unit(&l);
+            }
+        }
         Ok(match t {
             Term::Var(v) => Hx::Var(v.0),
             // ---- codes decode to themselves (Tarski → Russell) ----
@@ -164,9 +236,7 @@ impl Tr {
             }
             Term::TmVec { level, elem, len } => konst("Vec", &[level], vec![self.tm(elem)?, self.tm(len)?])?,
             Term::TmFin { len } => konst("Fin", &[], vec![self.tm(len)?])?,
-            Term::TmWf { level, shape, arity } => {
-                konst("Wf", &[level], vec![self.tm(shape)?, lam(self.tm(shape)?, self.tm(arity)?)])?
-            }
+            Term::TmWf { .. } => return refuse(WF),
             // ---- Nat ----
             Term::Zero => Hx::NatLit("0".into()),
             Term::NatLit(n) => Hx::NatLit(n.to_string()),
@@ -191,7 +261,22 @@ impl Tr {
                 ],
             )?,
             // ---- strict equality and squash ----
-            Term::SRefl { level, ty, tm } => konst("srefl", &[level], vec![self.ty(ty)?, self.tm(tm)?])?,
+            Term::SRefl { level, ty, tm } => {
+                let at = Type::SEq { level: level.clone(), ty: ty.clone(), lhs: tm.clone(), rhs: tm.clone() };
+                match self.singleton(&at) {
+                    Some(l) => self.tt(&l)?,
+                    None => konst("srefl", &[level], vec![self.ty(ty)?, self.tm(tm)?])?,
+                }
+            }
+            // At a singleton equality the transport is its payload: the two
+            // endpoints convert, which is the strip rule.
+            Term::Transp { ty_level, ty, lhs, rhs, tm, .. }
+                if self
+                    .singleton(&Type::SEq { level: ty_level.clone(), ty: ty.clone(), lhs: lhs.clone(), rhs: rhs.clone() })
+                    .is_some() =>
+            {
+                self.tm(tm)?
+            }
             Term::Transp { ty_level, motive_level, ty, motive, lhs, rhs, proof, tm } => konst(
                 "transp",
                 &[ty_level, motive_level],
@@ -207,6 +292,26 @@ impl Tr {
                 vec![self.ty(src_ty)?, bind(self.ty(motive)?), bind(self.tm(case)?), self.tm(scrut)?],
             )?,
             // ---- Σ ----
+            Term::Pair { fst_level, snd_level, fst_ty, snd_ty, .. }
+                if self
+                    .singleton(&Type::Sigma {
+                        fst_level: fst_level.clone(),
+                        snd_level: snd_level.clone(),
+                        fst: fst_ty.clone(),
+                        snd: snd_ty.clone(),
+                    })
+                    .is_some() =>
+            {
+                self.tt(&lmax(fst_level, snd_level))?
+            }
+            Term::Fst { fst_ty, .. } if self.singleton(fst_ty).is_some() => {
+                let l = self.singleton(fst_ty).expect("checked");
+                self.tt(&l)?
+            }
+            Term::Snd { snd_ty, .. } if snd_ty.shift_local(1) == **snd_ty && self.singleton(snd_ty).is_some() => {
+                let l = self.singleton(snd_ty).expect("checked");
+                self.tt(&l)?
+            }
             Term::Pair { fst_level, snd_level, fst_ty, snd_ty, fst, snd } => konst(
                 "pair",
                 &[fst_level, snd_level],
@@ -269,22 +374,7 @@ impl Tr {
                     self.tm(scrut)?,
                 ],
             )?,
-            Term::Supf { level, shape, arity, label, children } => konst(
-                "supf",
-                &[level],
-                vec![self.ty(shape)?, lam(self.ty(shape)?, self.tm(arity)?), self.tm(label)?, self.tm(children)?],
-            )?,
-            Term::ElimWf { level, motive_level, shape, arity, motive, step, scrut } => konst(
-                "elimWf",
-                &[level, motive_level],
-                vec![
-                    self.ty(shape)?,
-                    lam(self.ty(shape)?, self.tm(arity)?),
-                    bind(self.ty(motive)?),
-                    bind(bind(bind(self.tm(step)?))),
-                    self.tm(scrut)?,
-                ],
-            )?,
+            Term::Supf { .. } | Term::ElimWf { .. } => return refuse(WF),
             Term::Supi { .. } | Term::ElimIWf { .. } => return refuse("IWf (no code yet; not in declarations)"),
             // ---- functions ----
             Term::Lam { dom, body, .. } => lam(self.ty(dom)?, self.tm(body)?),
@@ -318,40 +408,87 @@ impl Tr {
 #[derive(Clone, Debug)]
 pub struct Decl {
     pub abs: usize,
+    /// The module-qualified Heather name (`nat::Nat::add`), when the
+    /// binding has one.
+    pub name: Option<String>,
     pub ty: Hx,
     /// The definition's body, or the proof of a theorem; `None` for an
     /// assumption (an axiom, or a theorem whose proof Ψ did not keep).
     pub body: Option<Hx>,
 }
 
-/// Translate every binding of Ψ from absolute index `from`. A binding is
-/// refused when it is outside the fragment *or mentions a refused binding*,
-/// so the `Ok` declarations are closed under dependency.
-pub fn export(psi: &GlobalCtx) -> Vec<(usize, R<Decl>)> {
-    let mut out: Vec<(usize, R<Decl>)> = Vec::new();
+/// What the exporter reads: Ψ, plus what the elaborator knows beside it.
+/// The kernel crate cannot see the elaborator, so the two are lookups.
+pub struct Source<'a> {
+    pub psi: &'a GlobalCtx,
+    /// A theorem's proof by absolute index, when Ψ itself keeps none
+    /// (`Elaborator::export_proof`).
+    pub proof: &'a dyn Fn(usize) -> Option<std::sync::Arc<Term>>,
+    /// A binding's module-qualified name (`Elaborator::global_key_at`).
+    pub name: &'a dyn Fn(usize) -> Option<String>,
+}
+
+impl<'a> Source<'a> {
+    /// Ψ alone: sealed proofs only, and no names.
+    pub fn psi(psi: &'a GlobalCtx) -> Source<'a> {
+        Source { psi, proof: &|_| None, name: &|_| None }
+    }
+}
+
+/// One binding's export: its index, its Heather name, and the declaration
+/// or why it was refused.
+#[derive(Clone, Debug)]
+pub struct Exported {
+    pub abs: usize,
+    pub name: Option<String>,
+    pub decl: R<Decl>,
+}
+
+/// Translate every binding of Ψ. A binding is refused when it is outside the
+/// fragment *or mentions a refused binding*, so the `Ok` declarations are
+/// closed under dependency.
+pub fn export(src: &Source) -> Vec<Exported> {
+    let psi = src.psi;
+    let mut out: Vec<Exported> = Vec::new();
     let mut refused = vec![false; psi.bindings.len()];
     for (abs, b) in psi.bindings.iter().enumerate() {
-        let tr = Tr { at: abs };
+        let prefix = psi.prefix(abs);
+        let tr = Tr { at: abs, psi: &prefix };
+        let name = (src.name)(abs);
         let decl = (|| -> R<Decl> {
-            let GlobalBinding::Tm { ctx, ty, body, .. } = b else {
+            let GlobalBinding::Tm { ctx, ty, body, level, .. } = b else {
                 return refuse("context or type global binding");
             };
             if ctx.len() != 0 {
                 return refuse("global over a non-empty local context Δ");
             }
-            let proof = body.clone().or_else(|| psi.sealed_proof(abs).cloned());
+            let proof = body.clone().or_else(|| psi.sealed_proof(abs).cloned()).or_else(|| (src.proof)(abs));
+            // The checked spellings first: the kernel's own `⌊·⌋` writes
+            // each one's components back, so the translation never guesses
+            // them (design §5.6). Statements are types, checked at layer p.
+            let nil = LocalCtx::nil();
+            let spelled_ty = spell_checked_in_code_ty(&prefix, 0, Layer::Prog, &nil, ty.clone(), level, DEFAULT_FUEL)
+                .map_err(|e| Refusal(format!("statement spelling: {e:?}")))?;
+            // A body the eager checker cannot spell (it refused two of the
+            // 387 bindings in the `list` closure) keeps its checked
+            // spellings, which print as holes for the target to fill.
+            let spelled = proof.map(|t| {
+                spell_checked_in_code(&prefix, 0, Layer::Code, &nil, Rc::clone(&t), ty, level, DEFAULT_FUEL).unwrap_or(t)
+            });
             let d = Decl {
                 abs,
-                ty: tr.ty(ty)?,
-                body: proof.map(|t| tr.tm(&t)).transpose()?,
+                name: name.clone(),
+                ty: tr.ty(&spelled_ty)?,
+                body: spelled.map(|t| tr.tm(&t)).transpose()?,
             };
             if let Some(dep) = mentions(&d).into_iter().find(|&g| refused[g]) {
-                return Err(Refusal(format!("mentions refused declaration g{dep}")));
+                let dep = (src.name)(dep).unwrap_or_else(|| format!("g{dep}"));
+                return Err(Refusal(format!("mentions refused declaration {dep}")));
             }
             Ok(d)
         })();
         refused[abs] = decl.is_err();
-        out.push((abs, decl));
+        out.push(Exported { abs, name, decl });
     }
     out
 }
@@ -388,6 +525,63 @@ pub enum Target {
 struct Printer {
     target: Target,
     out: String,
+    /// The target spelling of each exported binding, by absolute index.
+    names: Vec<String>,
+}
+
+/// Lean's keywords that can also be Heather name components; a component
+/// that is one, or is not a plain identifier, is written `«…»`.
+const LEAN_KEYWORDS: &[&str] = &[
+    "fun", "at", "by", "do", "then", "else", "if", "let", "in", "have", "show", "from", "match", "with", "end",
+    "where", "deriving", "instance", "structure", "class", "theorem", "def", "axiom", "example", "open",
+    "namespace", "section", "universe", "variable", "import", "Type", "Sort", "Prop", "forall", "exists",
+    "calc", "mut", "for", "unless", "return", "try", "catch", "finally", "local", "private", "protected",
+];
+
+fn plain_ident(s: &str) -> bool {
+    let mut cs = s.chars();
+    cs.next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && cs.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// The target spelling of a module-qualified Heather name. Lean keeps the
+/// structure (`nat::Nat::add` is `Heather.nat.Nat.add`); Rocq identifiers
+/// have no dots inside a file, so its components join with `__`.
+fn target_name(target: Target, key: &str) -> String {
+    let parts: Vec<&str> = key.split("::").collect();
+    match target {
+        Target::Lean => {
+            let parts: Vec<String> = parts
+                .iter()
+                .map(|p| if plain_ident(p) && !LEAN_KEYWORDS.contains(p) { p.to_string() } else { format!("«{p}»") })
+                .collect();
+            format!("Heather.{}", parts.join("."))
+        }
+        Target::Coq => {
+            let parts: Vec<String> = parts
+                .iter()
+                .map(|p| p.chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' }).collect())
+                .collect();
+            format!("H__{}", parts.join("__"))
+        }
+    }
+}
+
+/// One spelling per binding: its name where it has one, `g<abs>` where it
+/// has none or where the name is already taken.
+fn spellings(target: Target, exported: &[Exported]) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let len = exported.iter().map(|e| e.abs + 1).max().unwrap_or(0);
+    let mut names = (0..len).map(|g| format!("g{g}")).collect::<Vec<_>>();
+    for e in exported {
+        if let Some(key) = &e.name {
+            let n = target_name(target, key);
+            if seen.insert(n.clone()) {
+                names[e.abs] = n;
+            }
+        }
+    }
+    names
 }
 
 impl Printer {
@@ -455,7 +649,7 @@ impl Printer {
                 self.out.push(')');
             }
             Hx::Global(g) => {
-                let _ = write!(self.out, "(@g{g})");
+                let _ = write!(self.out, "(@{})", self.names[*g]);
             }
             Hx::NatLit(n) => {
                 let _ = write!(self.out, "({n} : Hx.Nat)");
@@ -467,18 +661,19 @@ impl Printer {
 
 /// Print the exported declarations as a source file for `target`, which
 /// imports the prelude. Refused declarations become comments naming why.
-pub fn print(target: Target, decls: &[(usize, R<Decl>)]) -> String {
-    let mut p = Printer { target, out: String::new() };
+pub fn print(target: Target, decls: &[Exported]) -> String {
+    let mut p = Printer { target, out: String::new(), names: spellings(target, decls) };
     p.out.push_str(match target {
         Target::Lean => "import Hx\n\nset_option autoImplicit false\nset_option linter.unusedVariables false\nnoncomputable section\n\n",
         Target::Coq => "Require Import Hx.\n\n",
     });
-    for (abs, d) in decls {
-        match d {
+    for e in decls {
+        let name = p.names[e.abs].clone();
+        match &e.decl {
             Err(Refusal(why)) => {
                 let _ = match target {
-                    Target::Lean => writeln!(p.out, "-- g{abs}: refused: {why}\n"),
-                    Target::Coq => writeln!(p.out, "(* g{abs}: refused: {why} *)\n"),
+                    Target::Lean => writeln!(p.out, "-- {name}: refused: {why}\n"),
+                    Target::Coq => writeln!(p.out, "(* {name}: refused: {why} *)\n"),
                 };
             }
             Ok(d) => {
@@ -488,7 +683,7 @@ pub fn print(target: Target, decls: &[(usize, R<Decl>)]) -> String {
                     (Target::Coq, Some(_)) => "Definition",
                     (Target::Coq, None) => "Axiom",
                 };
-                let _ = write!(p.out, "{kw} g{abs} : ");
+                let _ = write!(p.out, "{kw} {name} : ");
                 p.term(&d.ty, 0);
                 if let Some(b) = &d.body {
                     p.out.push_str(" :=\n  ");

@@ -101,6 +101,7 @@ dependencies = [
 name = "heather-export"
 version = "0.0.1"
 dependencies = [
+ "heather-cli",
  "heather-elab",
  "heather-kernel",
 ]

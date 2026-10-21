@@ -12,6 +12,7 @@ heather-kernel = { path = "../kernel" }
 
 [dev-dependencies]
 heather-elab = { path = "../elab" }
+heather-cli = { path = "../cli" }
 
 [lints]
 workspace = true
