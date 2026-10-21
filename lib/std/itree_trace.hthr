@@ -94,6 +94,31 @@ fn IsTrace<R>(E: Events, t: ITree<R>(E), tr: Trace<R>(E)) → Type {
     }
 }
 
+// A trace's length: how many answers it records. A program logic measures
+// a loop by it (linux_x86_64_wp's `loop_at`).
+fn Trace::len<R>(E: Events, tr: Trace<R>(E)) → Nat {
+    match tr { TEnd => 0, TRet(_) => 0, TCall(_) => 0, TAns(_, _, rest) => Succ(Trace::len(E, rest)) }
+}
+
+// A tree's traces, read off its next move: what a logic that evaluates
+// `ITree::next` meets.
+fn NextTrace<R>(E: Events, n: Next<R>(E), tr: Trace<R>(E)) → Type {
+    match n {
+        Exits(r) => RetTrace<R>(E, r, tr),
+        Calls(c, k) => VisTrace<R>(E, c, tr, λ a rest => IsTrace(E, k(a), rest)),
+        Stops => CutTrace<R>(E, tr),
+    }
+}
+
+theorem IsTrace::next<R>(E: Events, t: ITree<R>(E), tr: Trace<R>(E)): IsTrace(E, t, tr) → NextTrace(E, ITree::next(E, t), tr) {
+    match t {
+        Ret(_) => λ it => it,
+        Tau(s) => λ it => IsTrace::next(E, s, tr, it),
+        Vis(_, _) => λ it => it,
+        Cut => λ it => it,
+    }
+}
+
 // Every tree has the empty trace.
 theorem IsTrace::nil<R>(E: Events, t: ITree<R>(E)): IsTrace(E, t, TEnd) {
     match t {

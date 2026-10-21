@@ -1,0 +1,105 @@
+// The pure loop control of the one-Wp round (issues/native-loop-rule.md):
+// seven items that count slot 0 of the frame down to zero, then exit 0. No
+// call inside the loop, so `loop_at` measures each pass by the variant, the
+// slot's value. The frame view (`io_frame_view`) carries the slots; the
+// proofs are one pass (`count_pass`) and the exit (`count_exit`).
+import linux_x86_64_wp;
+import linux_x86_64_views;
+import linux_x86_64_sim;
+import linux_x86_64_io;
+import linux_trees;
+import linux_calls;
+import elf64_io;
+import itree;
+import itree_trace;
+import x86_64;
+import x86_64_block;
+import x86_64_asm;
+import x86_64_data_read;
+import x86_64_store;
+import x86_64_fetched_code;
+import bitvec;
+import bitvec_nat;
+import bool;
+import list;
+import logic;
+import nat;
+import omega;
+
+// Count slot 0 of the frame down to zero, then exit 0: the pure loop control.
+fn count_loop() → Prog {
+    At(At(At(At(At(At(At(Start,
+        1, Block([MovRI(Rbx, frame_at(0))])),
+        0, Load(WordLoad(Rcx, Rbx))),
+        0, Block([TestRR(Rcx, Rcx)])),
+        0, Jcc(E, 2)),
+        0, Block([MovRI(R8, BitVec::ofNat(1)), SubRR(Rcx, R8)])),
+        0, Store(WordStore(Rbx, Rcx))),
+        0, Jmp(1))
+}
+fn count_prog() → Prog {
+    At(At(count_loop(), 2, Block([MovRI(Rax, BitVec::ofNat(60)), MovRI(Rdi, BitVec::ofNat(0))])), 0, Syscall)
+}
+fn count_labels() → Nat → Nat { asm_labels(count_prog()) }
+fn count_contracts() → Nat → Contract { λ _ => Contract(λ _ => True, λ _ _ => True) }
+
+theorem count_reach(): wp_reach(count_labels(), count_loop(), 7).IsTrue() { trivial }
+theorem count_exit_reach(): wp_reach(count_labels(), count_prog(), 2).IsTrue() { trivial }
+
+fn CountCode(file: IoImage, origin: BitVec(64)) → Type {
+    (m: IoMemory) → CodeResident(io_fetch_access(), m, asm_code(no_fills(), count_labels(), count_prog()), next_rip(origin, 0))
+}
+
+theorem count_exit(file: IoImage, origin: BitVec(64), code: CountCode(file, origin),
+    f: Framed, state: MachineState<IoMemory>, rip: state.rip = next_rip(origin, prog_len(count_loop())),
+    holds: FrameIn(file, f, state.memory)): Sim(io_linux(), Ret(BitVec::ofNat(0)), state) {
+    wp_sound(io_linux(), io_frame_view(file), io_frame_view_sound(file), origin, no_fills(), count_labels(), count_contracts(), count_prog(), 2,
+        λ _ _ _ _ => False, trivial, Nil,
+        λ v m h => j(sym(List::append_nil(asm_code(no_fills(), count_labels(), count_prog()))),
+            λ c _ => CodeResident(io_fetch_access(), m, c, next_rip(origin, 0)), code(m)),
+        count_exit_reach(), ⟨trivial, ⟨trivial, trivial⟩⟩,
+        λ _ _ _ _ never _ => false_elim(never),
+        Ret(BitVec::ofNat(0)), f, state, rip, holds, ⟨refl, refl⟩)
+}
+
+fn count_inv(file: IoImage) → Nat → ITree<BitVec(64)>(Events::linux()) → Framed → MachineState<IoMemory> → Type {
+    λ w t f state => (t = Ret(BitVec::ofNat(0))) ∧ (f.vars(0).toNat() = w)
+}
+
+theorem count_down(x: BitVec(64), m: Nat, at: x.toNat() = Succ(m)): x.sub(BitVec::ofNat(1)).toNat() = m {
+    let one = BitVec::toNat_ofNat(64, 1, { omega });
+    let fits: (BitVec::ofNat(1, n := 64).toNat() <= x.toNat()) = j(sym(one), λ k _ => k <= x.toNat(), { omega });
+    trans(bitvec_nat::toNat_sub(64, x, BitVec::ofNat(1), fits),
+        trans(cong_fn<Nat, Nat>(λ k => k -BitVec::ofNat(1, n := 64).toNat(), at), trans(cong_fn<Nat, Nat>(λ k => Succ(m) -k, one), Nat::sub_zero(m))))
+}
+
+// One pass of the loop: back to the head one lower, or out at zero.
+theorem count_pass(file: IoImage, origin: BitVec(64), code: CountCode(file, origin), w: Nat):
+    (t: ITree<BitVec(64)>(Events::linux())) → (f: Framed) → (state: MachineState<IoMemory>) → count_inv(file, w, t, f, state) →
+    Wp(io_linux(), io_frame_view(file), origin, count_labels(), count_contracts(), count_loop(), 7,
+        LoopPost(io_linux(), io_frame_view(file), origin, prog_len(asm_back(count_loop(), 7)), count_inv(file), w), t, f, state) {
+    match w {
+        Zero => λ t f state held => Exists(0, ⟨trivial, ⟨refl,
+            ⟨λ yes after rip same => Inr(λ holds => j(sym(held.left), λ s _ => Sim(io_linux(), s, after), count_exit(file, origin, code, f, after, rip, holds))),
+             λ no => absurd(trans(sym(test_self_zero(64, f.vars(0), held.right)), no))⟩⟩⟩),
+        Succ(m) => λ t f state held => Exists(0, ⟨trivial, ⟨refl,
+            ⟨λ yes => absurd(trans(sym(yes), test_self_nonzero(64, f.vars(0), j(sym(held.right), λ k _ => 0 < k, { omega })))),
+             λ no => Inl(Exists(f.vars(0).sub(BitVec::ofNat(1)), ⟨refl, Exists(0, ⟨trivial, ⟨refl,
+                λ after rip same => Inl(Exists(m, ⟨rip, ⟨⟨held.left, count_down(f.vars(0), m, held.right)⟩, { omega }⟩⟩))⟩⟩)⟩))⟩⟩⟩),
+    }
+}
+
+// From the head, with `w` in slot 0, the machine counts it down and exits 0.
+theorem count_runs(file: IoImage, origin: BitVec(64), code: CountCode(file, origin),
+    f: Framed, state: MachineState<IoMemory>, rip: state.rip = next_rip(origin, 0),
+    holds: FrameIn(file, f, state.memory)): Sim(io_linux(), Ret(BitVec::ofNat(0)), state) {
+    loop_at(io_linux(), io_frame_view(file), io_frame_view_sound(file), origin, no_fills(), count_labels(), count_contracts(), count_loop(), 7,
+        trivial, asm_code_after(no_fills(), count_labels(), count_prog(), 2) ++ Nil,
+        λ v m h => wp_code_at(io_fetch_access(), m, origin, no_fills(), count_labels(), count_prog(), 2, Nil,
+            j(sym(List::append_nil(asm_code(no_fills(), count_labels(), count_prog()))),
+                λ c _ => CodeResident(io_fetch_access(), m, c, next_rip(origin, 0)), code(m))),
+        count_reach(), ⟨trivial, ⟨trivial, ⟨trivial, ⟨trivial, ⟨trivial, ⟨trivial, ⟨trivial, trivial⟩⟩⟩⟩⟩⟩⟩,
+        count_inv(file),
+        λ w t v s at h held => count_pass(file, origin, code, w, t, v, s, held),
+        f.vars(0).toNat(), Ret(BitVec::ofNat(0)), f, state, rip, holds, ⟨refl, refl⟩)
+}
