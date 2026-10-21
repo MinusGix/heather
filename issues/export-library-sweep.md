@@ -26,7 +26,10 @@ list a trusted-fragment theorem would have to cover
 ([[export-checks-theorem]]). It also tests the conjecture of §5.1: that the
 elaborator's generated code never uses `elim_Wf`'s β at an open tag. That
 needs [[export-wf-native-inductives]] for `List`, and the sweep can land Nat,
-Bool and logic before it.
+Bool and logic before it. Decided 2026-10-21 (design §11.3): violations
+are counted here, syntactic open-tag redexes are pre-reduced by the
+exporter, and only conversion-created ones would motivate a Heather-side
+change.
 
 Rechecking stays opt-in (`scripts/export-recheck`): the suite does not
 assume Lean or Rocq is installed.

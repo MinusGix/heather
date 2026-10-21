@@ -39,5 +39,5 @@ replacement symbol where the two theories differ. The first round:
   second target is parked here until unit η is answered (design §5.3).
 - 2026-10-21: Minus decided: Lean first; module-qualified exported names.
   The open-tag β side condition is recommended to stay an exporter-side
-  condition measured by [[export-library-sweep]] (design §11.3), pending
-  Minus.
+  condition measured by [[export-library-sweep]] (design §11.3); Minus
+  agreed.

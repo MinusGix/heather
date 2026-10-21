@@ -474,9 +474,9 @@ what Rocq lacks.
    the fragment it can carry (§6).
 2. **Exported names are module-qualified Heather names**, not `g<index>`
    (`issues/export-typed-translation.md`, item 4).
-3. **The open-tag β condition** (§5.1) is still open; Minus asked for a
-   recommendation. Proposed: accept the realisation and let the library
-   sweep count violations, rather than make it an elaborator invariant now.
+3. **The open-tag β condition** (§5.1) stays an exporter-side condition:
+   the realisation is accepted and the library sweep counts violations,
+   rather than making it an elaborator invariant now.
    The exporter is untrusted and a violation is loud (Lean rejects the
    declaration). An invariant on the elaborator's *output* would not cover
    the redexes that conversion creates by substitution anyway. Syntactic
