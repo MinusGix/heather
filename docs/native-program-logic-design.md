@@ -1,0 +1,377 @@
+# Native code, rebuilt: interaction trees, one program logic, a compiler proved once
+
+Status: **design, revised 2026-10-21 after Minus's review; not implemented.**
+Milestone `hih-program-logic` (`docs/roadmap.md`). This doc replaces the open
+question of `issues/native-one-program-logic.md` and §1 answers its three
+questions.
+
+The first draft (2026-10-20) proposed moving the existing native programs onto
+one program logic, one program at a time. Minus's review changed the direction:
+
+> the native work got kinda funky, where work that was more temporary testing
+> ossified into real setups. We shouldn't be having to do huge work, our work
+> should instead be intelligent, like proving compiler correct translation in
+> a general sense. My leaning is burning a lot of it, waiting for the full tree
+> library, and rebuilding from the ashes once we can.
+
+So this design does three things:
+
+1. It says what the native stack is **for** from now on: a compiler from an
+   effectful source to x86-64 whose correctness is **one theorem proved once**,
+   stated against interaction trees. Per-program machine proofs stop being how
+   programs are proved (§2).
+2. It says what **burns** now, what burns once the compiler replaces it, and
+   what stays as the foundation (§3).
+3. It keeps the program logic of the first draft, but as the **target side of
+   that theorem**: the tools a compiler proof uses for each construct's code,
+   and for the few runtime pieces written by hand (§4–§7). It is built on the
+   tree library, which it waits for (§8).
+
+## 1. The issue's three questions
+
+**1. One step relation with derived rules, or a structured code tree with
+Hoare rules?** One step relation at the bottom (`LinuxStep`: a fetched
+instruction or a store, between syscalls). Above it, the labelled program
+`Prog` of `Asm` items, with one computed weakest precondition and one loop
+rule. No per-shape judgments: the five "this code runs" shapes go (§3).
+
+**2. Do processes become FunctionIR regions with state edges?** Processes as
+hand-written x86 libraries go away entirely. Programs are written in an
+effectful source whose meaning is an interaction tree (§2.2). Whether that
+source is FunctionIR grown with effect nodes or a separate layer over
+FunctionIR's pure regions is the source round's first decision (§9, S3);
+the lean is a small tree-shaped layer whose leaves are FunctionIR regions.
+
+**3. Is `ir_v1`/certgen retired onto FunctionIR?** Yes, with the second burn
+(§3.2). `issues/ir-v1-retirement.md` owns the timing.
+
+## 2. Where native code is going
+
+### 2.1 What went wrong
+
+The stack was built program by program, each one a test of the layer below,
+and each test became infrastructure:
+
+- **Every program is proved at register level, by hand.** `wc`, `wc -l`, `tr`
+  and the command are about 15k lines of process libraries (`lib/elf64_*`),
+  3.2k of them the command written in assembly. Each new program meant new
+  process proofs, then a refactor round to share them.
+- **The checker pays per program.** A certificate is emitted and kernel-checked
+  for every program, so certificate cost grows with code size, and native
+  tests sit at the CPU rail.
+- **Specs were never named.** `EofStep`/`EofEnd`, `eof_run` and
+  `filter_events` are a spec language for "read until end of file, write as
+  you go": interaction trees, written as history encodings, once per process.
+- **Five execution relations** for overlapping code shapes, each a stage of
+  the stack's history (`docs/native-architecture-review.md` §2.4).
+- **Performance workarounds became library design.** Much of `Straight`'s
+  shape (the caller names every slot, landings spelled in the stretch's own
+  form) works around the elaborator's whnf
+  (`issues/elab-whnf-copies-straight-continuations.md`).
+
+### 2.2 The target shape
+
+```
+source program  ──denotes──▶  interaction tree over Linux events   (spec)
+      │                                  ▲
+   compile (a Heather fn)                │  Sim: the machine produces
+      ▼                                  │  exactly the tree's traces
+x86-64 bytes in an ELF  ──runs as──▶  LinuxStep between syscalls
+```
+
+- **Meaning.** A program denotes a tree over a container of Linux calls and
+  answers (§4). Facts users care about (`stdout = spec(stdin)`) are proved
+  about the tree, with no machine in sight.
+- **Compilation** is a Heather function from the source to `Prog`
+  (labelled `Asm` items), assembled by the existing label assembler.
+- **Correctness** is one theorem, proved once by induction on the source:
+  for a well-formed source `p`, the assembled image of `compile(p)` satisfies
+  `Sim` at `denote(p)` (§5). Each source construct contributes one lemma
+  about the code it emits, proved with the program logic (§6, §7).
+- **Per-program cost** is running `compile` and instantiating the theorem.
+  The first version runs `compile` by kernel evaluation (`refl` on the bytes),
+  which costs what evaluating the compiler costs and no proof per program;
+  running it natively is `hih-self`'s business later.
+- **Logic in Heather.** The compiler, its theorem, the assembler and layout
+  are Heather. Rust keeps parsing, the ELF writer and the encoder as
+  untrusted plumbing, and is checked against Heather's encoding where they
+  overlap.
+
+This is CompCert's shape (a simulation proved per pass), at a much smaller
+scale, with interaction trees for the observable behaviour as in Xia et al.
+§5 (`docs/interaction-trees-fit.md` §6.2). It is translation proved once, not
+translation validated per program.
+
+## 3. What burns, what stays
+
+### 3.1 Burn now (B1): the process stack
+
+These exist only to prove `wc`, `wc -l`, `tr`/the filters and the command by
+hand. Nothing else depends on them, and the rebuild does not reuse them.
+
+| Where | What |
+| --- | --- |
+| `lib/` | every `elf64_*` module except `elf64.hthr` and `elf64_load.hthr`; `command_program`, `filter_program`, `filter_step_piece` |
+| `lib/`, `lib/std/arch/x86_64/` | the older fetched-block generation nothing imports any more: `linux_x86_64_fetch`, `x86_64_fetch_block` |
+| `crates/cli/src/native/` | the read-loop, read-filter and command producers (`read_loop.rs`, `read_filter.rs`, `read_command.rs`, `order.rs`, `evaluate.rs`, `support.rs` where only they use it), and the `build-x86` profiles that select them |
+| tests | `native_wc`, `native_tr`, `native_filter`, `native_read_loop`; the elab process tests (`*_process.rs`, `command_refusals`, `semantic_command_warmup`, `filter_step_generation`); the command warm-up in `scripts/test` |
+| `examples/x86-native/` | `wc.hthr`, `wc_l.hthr`, `tr.hthr`, `tr_s.hthr`, `tr_d.hthr` |
+| docs, issues | design docs of the burned layers get a one-line "burned in B1, see …" header, not deletion; their open issues close as not planned, with a link |
+
+**Salvaged, not burned:** the pure specs inside these modules (`decimal`,
+`field_is_decimal`, the filter's fold `filter_state`, the counts) move to
+`lib/std` where a rebuilt program's tree spec will want them. `stream_filter`
+is spec-level and stays.
+
+Before the burn, the last commit with the stack is tagged (`native-v0`), so
+the executables and proofs stay findable.
+
+### 3.2 Burn when the compiler replaces it (B2): per-function certificates
+
+The pure-function path (FunctionIR → x86 with a certificate per function,
+`examples/x86-native/{branches,calls,…}`) still works and still exercises the
+ISA model. It burns when the verified pure lowering (§9, S4) compiles the same
+examples:
+
+- `crates/elab/src/function_ir_x86_lower*`, `heather_emit.rs`, the
+  `function_ir_source` publication and loop generators;
+- `lib/function_ir_x86*`, `function_ir_loop_x86`, `function_ir_loop_trace`;
+- `x86_64_structured_block`, `x86_64_access_code`, `x86_64_access_memory`,
+  `x86_64_control_block`, `x86_64_control_flow`, the call composition
+  modules (`x86_64_calls`, `x86_64_call_frame`, `x86_64_call_summary`, used by
+  the CLI's call examples), and the `ExecuteBlock` family beyond
+  `execute_block_normal`. `x86_64_fetched_code` imports the structured and
+  access modules today, so B2 first moves `FetchedStep`'s dependencies onto
+  the instruction forms alone;
+- `ir_v1`, certgen and their tests (`issues/ir-v1-retirement.md`);
+- the remaining `native_*` CLI tests, replaced by the same programs through
+  the compiler.
+
+### 3.3 Stays: the foundation
+
+- The ISA model and its byte boundary: `x86_64`, `x86_64_fetch`,
+  `x86_64_data_read`, `x86_64_store`, `x86_64_fetched_code`,
+  `x86_64_step_forms`, `x86_64_block`'s `execute_block_normal`
+  (`issues/x86-64-machine-model.md` continues).
+- The label assembler, `x86_64_asm` with `x86_64_layout` under it:
+  codegen's data structure and its layout-by-evaluation, used by the
+  compiler.
+- The Linux model: `linux_x86_64_io` (re-founded on the event container in
+  S1), `linux_x86_64_determinism`, `linux_x86_64_entry`.
+- ELF: `elf64`, `elf64_load`, and the Rust writer.
+- FunctionIR's pure semantics (`function_ir`, `function_ir_loop`,
+  `function_ir_certificates`), the source for pure regions.
+
+## 4. Specifications are trees
+
+Assumed from the tree library (`issues/interaction-trees-container-model.md`,
+milestones `it-core`, `it-refinement`): container events, fuel-cut trees
+with `Ret`, `Vis` and a `Cut` leaf, `bind`/`iter`, `is_trace_of`, and the
+depth-indexed equivalence for laws through `Vis`.
+
+**Linux's events as a container.** Split `LinuxEvent` into the call and the
+answer:
+
+```heather
+inductive LinuxCmd { ReadCmd(fd, max), WriteCmd(fd, bytes), OpenCmd(path), CloseCmd(fd), StatCmd(target) }
+inductive LinuxAns { Read(ReadResult), Write(WriteResult), Open(OpenResult), Close(CloseResult), Stat(StatResult) }
+fn Answers(c: LinuxCmd, a: LinuxAns) → Type   // the answer fits the call: bytes ≤ max, errno 1..4095, …
+```
+
+Exit is the tree's `Ret`. What Linux leaves that no trace observes (RCX, R11,
+a failed read's junk) is not an answer; the machine side quantifies over it,
+as `LinuxRuns` does today.
+
+**A spec is a tree** `t : ITree(Linux, BitVec(64))`, written with `bind` and
+`iter`. `tr`'s spec is `iter` over "read a chunk; if empty, `Ret(0)`; else
+write the fold's output", with the fold a pure function.
+
+**What the logic evaluates is the tree's observation**, not the tree:
+`next(t) : Exit(status) | Call(c, k) | Cut`, stripping `Tau`s by structural
+recursion (a fuel-cut tree is well-founded). The fit doc's warning that
+left-nested binds are quadratic to observe (§5 there) is why: the compiler
+proof meets `next` of a *source construct's* denotation, one constructor at
+a time, never a deep bind chain unfolded by the elaborator.
+
+## 5. The judgment: `Sim`
+
+```heather
+// From `s`, along answers `h`, the machine meets the tree: Linux steps to a
+// syscall whose request is the tree's call (or exit), and for every junk,
+// RCX and R11, the state after answer `a` meets `k(a)` along the rest.
+fn RunsAs<M>(io: LinuxIo<M>, t: Tree, h: List<LinuxAns>) → MachineState<M> → Type   // recursion on h
+fn Sim<M>(io: LinuxIo<M>, t: Tree) → MachineState<M> → Type {
+    λ s => (h: List<LinuxAns>) → Valid(t, h) → RunsAs(io, t, h, s)
+}
+```
+
+- `Valid(t, h)`: every answer fits its call, and `h` ends where the tree
+  returns. At `Cut`, `RunsAs` is `True`: a claim says nothing past the fuel,
+  so the statement is "for every `n`, `Sim` at `approx(n, t)`", which covers
+  every finite trace (fit doc §4). Liveness is what is lost; no native claim
+  states it.
+- `RunsAs` is `LinuxRuns`' arms factored (`Requests(io, s, c)` for the
+  request, `answered(…)` for the state after), and bridged both ways:
+  `RunsAs(t, h, s) ↔ LinuxRuns(trace(t, h), s)`. That keeps
+  `linux_runs_every` (determinism): with it, `Sim` is trace *equivalence*
+  with the tree, not only refinement.
+- `Sim(io, t)` is closed backward under `LinuxSteps`.
+- `trace(t, h) = is_trace_of`'s trace (by recursion on `h`), so "this code
+  refines `t`" (`it-native`) is `Sim` plus that lemma.
+
+The compiler's theorem is `Sim(io_linux(), denote(p))(io_initial(file(p), page,
+gprs, flags))` for every page, registers and flags, with `file(p)` the ELF of
+`compile(p)`.
+
+## 6. The program logic: target-side tools
+
+The compiler proof needs, for each source construct, a lemma "the code this
+construct emits, run from a state where the construct's inputs are in place,
+meets the construct's tree". Those lemmas are proved with these tools, once
+per construct, not per program.
+
+### 6.1 One computed weakest precondition
+
+`Stretch` and `Straight` are weakest preconditions computed by evaluation and
+proved sound once. They stop at syscalls and loops, and they differ only in
+the memory they carry. `Wp` generalises them:
+
+```heather
+fn Wp<M, V>(io: LinuxIo<M>, view: View<M, V>, origin: BitVec(64), labels: Nat → Nat,
+    l: Prog, n: Nat, post: Bool → Tree → V → MachineState<M> → Type) → Tree → V → MachineState<M> → Type
+```
+
+| Item | Obligation |
+| --- | --- |
+| `Block(is)` | `then(t, v, execute_block_normal(is, s))` |
+| `Load`, `LoadByte`, `Store`, `StoreByte` | the view's arm: the caller names the value or place; access premises explicit |
+| `Jcc(cc, x)` | `(flag = True → leaf at x) ∧ (flag = False → then(…))` |
+| `Jmp(x)` | the leaf at `x` |
+| `Proved(…, c)` | `c.pre(s) ∧ ((e) → c.post(s, e) → then(t, v', e))` |
+| `Syscall` | by `next(t)`: the exit request; or `Requests(io, s, c) ∧ ((a) → Answers(c, a) → (junk…) → then(k(a), v', answered(…)))`, setting `passed`; or `True` at `Cut` |
+| `Code`, `Piece`, `Refer`, `Hole` | `False` |
+
+New items: `Syscall` (today it is `Code` bytes the wp cannot read), and
+`Proved(bytes, len, measured, contract)`, code entering with a relational
+triple (`pre`, `post(before, after)`, placement-independent `runs`). In the
+compiler, `Proved` is how a pure FunctionIR region's lowering enters an
+effectful construct's code: its contract is the pure lowering's theorem.
+
+Views: the page (`Stretch`'s) and the frame of slots (`Straight`'s) are two
+`View<M, V>` records. A view over `hih-memory-model`'s byte memory is a third,
+with its access outcomes in the arms; a separation-style footprint is that
+milestone's to add, and the view interface should not preclude it.
+
+Proved once: `wp_runs`, per history: from `Wp(…, post)(t, v, s)` and a valid
+`h`, `RunsAs(t, h, s)` follows from `post` at each leaf, at the leaf's tree
+`t'` and remaining `h'`, with `h' = h` if the path passed no syscall and `h'`
+shorter if it passed one. `wp_sound` is its `Sim` form.
+
+### 6.2 One loop rule
+
+```heather
+theorem loop_at(…, l: Prog, inv: Nat → Tree → V → MachineState<M> → Type,
+    body: (w, t, v, s) → inv(w, t, v, s) →
+        Wp(…, from l, λ passed t' v' s' =>
+            Either(Back(passed, w, inv, t', v', s'),   // at l, inv at w', and passed ∨ w' < w
+                   Sim(io, t')(s')))                    // left the loop
+        (t, v, s)):
+    (w, t, v, s) → inv(w, t, v, s) → Sim(io, t)(s)
+```
+
+Proved once, by induction on the history's length and then the variant. A
+pass that made a syscall consumed an answer; a pass that made none lowered
+the variant. I/O loops (read until end of file, a write loop over short
+writes, including `Wrote(0)`) need no variant; pure loops take what is left.
+The compiler's `iter` lemma is one use of it.
+
+### 6.3 Cost discipline
+
+From the straight-code rounds (`docs/native-straight-runs-design.md`, "Keep
+the computed type structural"):
+
+- `Wp` reads constructors, registers and labels; numbers are `refl` facts or
+  citations; slots, offsets and answers are named by the caller.
+- End states are bound at every leaf and after every `Proved` item; no
+  `let`-bound runs.
+- `Wp` adds two continuation arguments and a view record where the
+  elaborator's whnf is already the cost. The first tool round probes that
+  with `scripts/perf ab` and specialises (two monomorphic wps, one soundness
+  proof) if the record costs.
+- Since the compiler proof uses these per construct, over *abstract* inputs,
+  the obligations are small and fixed; nothing scales with program size. That
+  is the main cost argument for the whole redesign.
+
+## 7. The source and its compiler
+
+Decided in round S3; the constraints the rest of the design puts on it:
+
+- **Denotes trees.** `denote : Source → ITree(Linux, BitVec(64))`, compositional
+  (`denote(Seq(a, b)) = bind(denote(a), …)`, `denote(Loop(…)) = iter(…)`).
+- **Pure parts are FunctionIR regions**, compiled by the verified pure
+  lowering (S4) and entering effectful code as `Proved` items.
+- **Calls are explicit nodes** whose arguments are region outputs and whose
+  answers are bound for what follows, matching `Vis(c, k)`.
+- **The theorem is by induction on the source**, one case per construct,
+  each a `Wp`/`loop_at` proof over abstract inputs, glued by `Sim`'s
+  backward closure and the `bind` lemma ("code for `a` then code for `b`
+  meets `bind(denote(a), denote(b))`").
+- **State between calls** (registers, a frame) is the compiler's register
+  and frame conventions, stated once as the invariant every construct's
+  lemma preserves; this is where `Straight`'s frame view earns its keep.
+- **Surface:** an effectful Heather program elaborating to this source is
+  `effects-direction`'s question; the source is its target, whatever the
+  surface becomes (uniqueness threading denotes the same trees, fit doc §6.5).
+
+## 8. What waits on what
+
+| Needs | Before |
+| --- | --- |
+| Tier-2 inductives (landed, PR #88) and `tier2-value-parameters` | the tree library with events as a parameter |
+| `it-core` (trees, `bind`, `iter`, laws up to depth-indexed equivalence) | S1 |
+| `it-refinement` (`is_trace_of`, trace refinement) | S1's refinement lemma; S5 |
+| S1 | S2, S3 |
+| S2 | S3's construct lemmas |
+| S4 (verified pure lowering, `hih-passes`) | S3's `Proved` regions; B2 |
+
+B1 needs nothing and is independent of all of it.
+
+## 9. Rounds
+
+| Round | Submilestone | Issue | Done when |
+| --- | --- | --- | --- |
+| B1 | (none) | `native-burn-process-stack` | §3.1 deleted, specs salvaged, `native-v0` tagged; suite green without the burned tests. |
+| S1 | `hih-pl-spec` | `native-linux-spec` | Linux events as a container, `RunsAs`/`Sim` over trees, the bridge to `LinuxRuns`, refinement lemma, and `tr`'s spec as a tree with its stdout fact. |
+| S2 | `hih-pl-wp` | `native-one-wp`, `native-loop-rule` | `Wp` with `Syscall`, `Proved` and views; `wp_sound`; `loop_at`; probed for elaborator cost. |
+| S3 | `hih-pl-source` | `native-effect-source-compiler` | The effectful source, `denote`, `compile` in Heather, and the correctness theorem proved once. |
+| S4 | (`hih-passes`) | `function-ir-verified-lowering` | FunctionIR's pure regions lowered by a Heather function with its theorem proved once; B2 can start. |
+| S5 | `hih-pl-first-program` | `native-first-compiled-program` | `tr` built from its source through the compiler, its claim from the theorem, its stdout fact from its tree; then B2. |
+
+`wp-obligation-tactic` follows S2's obligations; with the compiler proof
+over abstract inputs it matters less than in the first draft, and may not be
+needed.
+
+## 10. Open questions
+
+1. **Abstract specs.** `ReadCmd` names `max`, so the buffer size is in the
+   spec. A source whose read is "a chunk of any size" needs a container
+   morphism and a refinement condition; S3 decides whether the source fixes
+   the buffer.
+2. **Contracts that make calls**: a `Proved` item whose post is a `Sim`, for
+   called procedures that do I/O. Not needed until the source has
+   procedures.
+3. **Running the compiler in the kernel**: evaluating `compile(p)` by `refl`
+   is linear in program size but has a constant to measure in S5. If it is
+   too high, the fallback is a certified evaluation of the compiler outside
+   the kernel's conversion, which is `hih-self`'s territory.
+4. **Divergence, signals, concurrency** stay with
+   `issues/linux-syscall-trace-model.md` and `effects-direction`.
+
+## 11. How it meets the principles
+
+- **Logic in Heather.** Compiler, theorem, assembler and layout are
+  Heather; Rust is plumbing.
+- **Tactics everywhere.** The intelligence moves from per-program proofs to
+  per-construct lemmas proved once; what remains routine is a tactic's.
+- **Constructive.** Recursion and evaluation throughout; `Sim` quantifies
+  over finite histories rather than asserting infinite behaviour.
