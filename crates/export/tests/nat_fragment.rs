@@ -4,7 +4,7 @@
 //! preludes, for `scripts/export-recheck` to hand to Lean and Rocq.
 
 use heather_elab::Elaborator;
-use heather_export::{Source, Target, export, print};
+use heather_export::{Source, Target, export, print, print_kernel};
 
 const SOURCE: &str = r#"
 fn Nat::add(self a: Nat, b: Nat) → Nat { match b { Zero => a, Succ(k) => Succ(a.add(k)) } }
@@ -44,6 +44,7 @@ fn nat_and_enum_export_without_refusal() {
         let dir = std::path::PathBuf::from(dir);
         std::fs::write(dir.join("Exported.lean"), lean).unwrap();
         std::fs::write(dir.join("Exported.v"), print(Target::Coq, &decls)).unwrap();
+        std::fs::write(dir.join("Exported.hxk"), print_kernel(&decls)).unwrap();
     }
 }
 

@@ -23,7 +23,7 @@ use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
 use heather_kernel::reduce::{Defs, whnf_term_delta, whnf_type_delta};
 use heather_kernel::subst::local_bound_ty;
-use heather_kernel::term::{CtxBase, GlobalBinding, GlobalCtx, LocalCtx, LocalSubst, SubstTail, Term, Type};
+use heather_kernel::term::{CtxBase, GlobalBinding, GlobalCtx, LocalCtx, LocalSubst, LocalVar, SubstTail, Term, Type};
 use heather_kernel::typing::{DEFAULT_FUEL, spell_checked_in_code, spell_checked_in_code_ty};
 use std::cell::RefCell;
 use std::sync::Arc as Rc;
@@ -31,11 +31,11 @@ use std::fmt::Write as _;
 
 /// A universe level of the exported fragment: closed, because the library is
 /// universe-monomorphic (`UPi` is layer m, which declarations never use).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Lvl(pub u64);
 
 /// The intermediate language: de Bruijn terms over prelude constants.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Hx {
     Var(u32),
     /// `Type l` (Russell): the image of both `Ty l` and the code `TmTy l`.
@@ -192,6 +192,11 @@ impl Tr<'_> {
         Ok(lam(self.ty(dom)?, self.under(Some(dom), || self.ty(cod))?))
     }
 
+    /// `fun (x : dom) => f()`, with `f` translated under the binder.
+    fn bound(&self, dom: &Type, f: impl FnOnce() -> R<Hx>) -> R<Hx> {
+        Ok(lam(self.ty(dom)?, self.under(Some(dom), f)?))
+    }
+
     /// `n` binders the prelude constant's type determines, none of them at
     /// a domain the exporter has at hand.
     fn binds<T>(&self, n: usize, f: impl FnOnce() -> R<T>) -> R<T> {
@@ -316,9 +321,9 @@ impl Tr<'_> {
                 "elimNat",
                 &[level],
                 vec![
-                    bind(self.binds(1, || self.ty(motive))?),
+                    self.bound(&Type::Nat, || self.ty(motive))?,
                     self.tm(base)?,
-                    bind(bind(self.binds(2, || self.tm(step))?)),
+                    self.bound(&Type::Nat, || self.bound(motive, || self.tm(step)))?,
                     self.tm(scrut)?,
                 ],
             )?,
@@ -330,7 +335,15 @@ impl Tr<'_> {
                 vec![
                     self.ty(ty)?,
                     self.tm(lhs)?,
-                    bind(bind(self.binds(2, || self.ty(motive))?)),
+                    self.bound(ty, || {
+                        let id = Type::Id {
+                            level: ty_level.clone(),
+                            ty: Rc::new(ty.shift_local(1)),
+                            lhs: Rc::new(lhs.shift_local(1)),
+                            rhs: Rc::new(Term::Var(LocalVar(0))),
+                        };
+                        self.bound(&id, || self.ty(motive))
+                    })?,
                     self.tm(case)?,
                     self.tm(rhs)?,
                     self.tm(proof)?,
@@ -352,7 +365,7 @@ impl Tr<'_> {
                 &[ty_level, motive_level],
                 vec![
                     self.ty(ty)?,
-                    bind(self.under(Some(ty), || self.ty(motive))?),
+                    self.bound(ty, || self.ty(motive))?,
                     self.tm(lhs)?,
                     self.tm(rhs)?,
                     self.tm(proof)?,
@@ -360,7 +373,11 @@ impl Tr<'_> {
                 ],
             )?,
             Term::ElimSEmpty { level, scrut_level, motive, scrut } => {
-                konst("elimSEmpty", &[level, scrut_level], vec![bind(self.binds(1, || self.ty(motive))?), self.tm(scrut)?])?
+                konst(
+                    "elimSEmpty",
+                    &[level, scrut_level],
+                    vec![self.bound(&Type::SEmpty { level: scrut_level.clone() }, || self.ty(motive))?, self.tm(scrut)?],
+                )?
             }
             Term::Squash { level, ty, tm } => konst("squash", &[level], vec![self.ty(ty)?, self.tm(tm)?])?,
             Term::ElimSquash { src_level, dst_level, src_ty, motive, case, scrut } => konst(
@@ -368,8 +385,8 @@ impl Tr<'_> {
                 &[src_level, dst_level],
                 vec![
                     self.ty(src_ty)?,
-                    bind(self.binds(1, || self.ty(motive))?),
-                    bind(self.under(Some(src_ty), || self.tm(case))?),
+                    self.bound(&Type::Squash { level: src_level.clone(), ty: src_ty.clone() }, || self.ty(motive))?,
+                    self.bound(src_ty, || self.tm(case))?,
                     self.tm(scrut)?,
                 ],
             )?,
@@ -399,7 +416,11 @@ impl Tr<'_> {
             // ---- Unit, Empty, sums ----
             Term::Triv { level } => konst("tt", &[level], vec![])?,
             Term::ElimEmpty { level, scrut_level, motive, scrut } => {
-                konst("elimEmpty", &[level, scrut_level], vec![bind(self.binds(1, || self.ty(motive))?), self.tm(scrut)?])?
+                konst(
+                    "elimEmpty",
+                    &[level, scrut_level],
+                    vec![self.bound(&Type::Empty { level: scrut_level.clone() }, || self.ty(motive))?, self.tm(scrut)?],
+                )?
             }
             Term::Inl { lhs_level, rhs_level, lhs, rhs, val } => {
                 konst("inl", &[lhs_level, rhs_level], vec![self.ty(lhs)?, self.ty(rhs)?, self.tm(val)?])?
@@ -413,9 +434,17 @@ impl Tr<'_> {
                 vec![
                     self.ty(lhs)?,
                     self.ty(rhs)?,
-                    bind(self.binds(1, || self.ty(motive))?),
-                    bind(self.under(Some(lhs), || self.tm(case_l))?),
-                    bind(self.under(Some(rhs), || self.tm(case_r))?),
+                    self.bound(
+                        &Type::Sum {
+                            lhs_level: lhs_level.clone(),
+                            rhs_level: rhs_level.clone(),
+                            lhs: lhs.clone(),
+                            rhs: rhs.clone(),
+                        },
+                        || self.ty(motive),
+                    )?,
+                    self.bound(lhs, || self.tm(case_l))?,
+                    self.bound(rhs, || self.tm(case_r))?,
                     self.tm(scrut)?,
                 ],
             )?,
@@ -431,8 +460,18 @@ impl Tr<'_> {
                 vec![
                     self.ty(shape)?,
                     self.lam_ty(shape, pos)?,
-                    bind(self.binds(1, || self.ty(motive))?),
-                    bind(bind(bind(self.under(Some(shape), || self.binds(2, || self.tm(step)))?))),
+                    self.bound(
+                        &Type::W {
+                            shape_level: shape_level.clone(),
+                            pos_level: pos_level.clone(),
+                            shape: shape.clone(),
+                            pos: pos.clone(),
+                        },
+                        || self.ty(motive),
+                    )?,
+                    // The step's `f` and `ih` domains are left to the target
+                    // (a hole): the kernel route refuses it.
+                    lam(self.ty(shape)?, bind(bind(self.under(Some(shape), || self.binds(2, || self.tm(step)))?))),
                     self.tm(scrut)?,
                 ],
             )?,
@@ -782,4 +821,89 @@ pub fn print(target: Target, decls: &[Exported]) -> String {
         }
     }
     p.out
+}
+
+/// Hash-consed nodes for [`print_kernel`]: one line per distinct subterm,
+/// children named by their line number among the node lines.
+struct Dag {
+    out: String,
+    ids: std::collections::HashMap<Hx, usize>,
+    names: Vec<String>,
+    /// Declarations the kernel route skipped, which their dependents skip.
+    skipped: std::collections::HashSet<usize>,
+}
+
+impl Dag {
+    fn node(&mut self, t: &Hx) -> Result<usize, String> {
+        if let Some(&id) = self.ids.get(t) {
+            return Ok(id);
+        }
+        let line = match t {
+            Hx::Var(i) => format!("v\t{i}"),
+            Hx::Sort(l) => format!("s\t{}", l.0),
+            Hx::Pi(a, b) => format!("p\t{}\t{}", self.node(a)?, self.node(b)?),
+            Hx::Lam(a, b) => format!("l\t{}\t{}", self.node(a)?, self.node(b)?),
+            Hx::App(f, a) => format!("a\t{}\t{}", self.node(f)?, self.node(a)?),
+            Hx::Const(name, levels) => {
+                let mut s = format!("c\t{name}");
+                for l in levels {
+                    let _ = write!(s, "\t{}", l.0);
+                }
+                s
+            }
+            Hx::Global(g) if self.skipped.contains(g) => return Err(format!("mentions skipped {}", self.names[*g])),
+            Hx::Global(g) => format!("g\t{}", self.names[*g]),
+            Hx::NatLit(n) => format!("n\t{n}"),
+            Hx::Hole => return Err("a hole (a component only the target's elaborator can infer)".into()),
+        };
+        let id = self.ids.len();
+        self.out.push_str(&line);
+        self.out.push('\n');
+        self.ids.insert(t.clone(), id);
+        Ok(id)
+    }
+}
+
+/// Print the exported declarations for Lean's **kernel**: the hash-consed
+/// line format `prelude/Import.lean` reads and hands to `addDecl`, with no
+/// parser and no elaborator in between (design §5.6). Names are Heather
+/// keys (`nat::Nat::add`, or `g<abs>` where a binding has none or shares
+/// one), which the importer roots at `Heather`. A declaration with a hole,
+/// or one mentioning such a declaration, is written as skipped (`x`).
+pub fn print_kernel(decls: &[Exported]) -> String {
+    let mut seen = std::collections::HashSet::new();
+    let len = decls.iter().map(|e| e.abs + 1).max().unwrap_or(0);
+    let mut names = (0..len).map(|g| format!("g{g}")).collect::<Vec<_>>();
+    for e in decls {
+        if let Some(key) = &e.name {
+            if seen.insert(key.clone()) {
+                names[e.abs] = key.clone();
+            }
+        }
+    }
+    let mut dag = Dag { out: String::new(), ids: Default::default(), names, skipped: Default::default() };
+    for e in decls {
+        let name = dag.names[e.abs].clone();
+        let line = match &e.decl {
+            Err(Refusal(why)) => Err(format!("refused: {why}")),
+            Ok(d) => (|| {
+                let ty = dag.node(&d.ty)?;
+                Ok(match &d.body {
+                    Some(b) => format!("d\t{name}\t{ty}\t{}", dag.node(b)?),
+                    None => format!("ax\t{name}\t{ty}"),
+                })
+            })(),
+        };
+        match line {
+            Ok(line) => {
+                dag.out.push_str(&line);
+                dag.out.push('\n');
+            }
+            Err(why) => {
+                dag.skipped.insert(e.abs);
+                let _ = writeln!(dag.out, "x\t{name}\t{why}");
+            }
+        }
+    }
+    dag.out
 }

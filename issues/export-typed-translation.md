@@ -54,5 +54,13 @@ declarations need nothing from the target's unifier.
   δ-unfolding an open definition. What is left: neutrals at *open* types
   that become singletons by substitution (both targets), unit η in Rocq, and
   item 3. Printing with minimal parentheses was needed for Lean to parse a
-  library-sized file in reasonable time; the kernel route of item 3 is still
-  the real fix for size.
+  library-sized file in reasonable time.
+- 2026-10-21, later: item 3's kernel route landed. `print_kernel` hash-conses
+  the HX tree into a node table and `crates/export/prelude/Import.lean`
+  `addDecl`s each declaration; eliminator binder domains are now written out
+  (all but `elimW`'s step), so a declaration with no checked-spelling
+  fallback has no hole. The sweep's 292 hole-free declarations check in
+  about two seconds this way. Left for "done": the fallback bodies
+  (`bool::is_true_dec_yes`), `elimW`'s step domains, and real DAG sharing
+  (the table shares equal subtrees of the printed tree, but the tree itself
+  is still built by walking the kernel term as a tree).

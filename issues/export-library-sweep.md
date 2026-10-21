@@ -5,7 +5,7 @@ labels: [translation,export]
 area: heather-in-lean-coq
 milestone: [export-fragment]
 created: 2026-10-20
-updated: 2026-10-20
+updated: 2026-10-21
 ---
 
 The `export-fragment` milestone is done when a closed, layer-free fragment of
@@ -32,3 +32,15 @@ change.
 
 Rechecking stays opt-in (`scripts/export-recheck`): the suite does not
 assume Lean or Rocq is installed.
+
+## Log
+
+- 2026-10-21 (PR #87): first sweep, over the closure of `lib/std/list.hthr`
+  (`crates/export/tests/library_sweep.rs`, which pins the refusal causes).
+  387 bindings, 293 exported; every refusal is `Wf` (90) or mentions one
+  (4), so Nat, Bool, logic, option and pair export whole and `List` waits
+  on [[export-wf-native-inductives]]. Lean accepts all of them: 292 through
+  the kernel route in about two seconds (`bool::is_true_dec_yes` keeps a
+  hole, [[export-typed-translation]]) and all 293 as source text, slowly
+  (design §7). No target rejection is left to classify yet; the open-tag β
+  count waits for the `Wf` realisation.

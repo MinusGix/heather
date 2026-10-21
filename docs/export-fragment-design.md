@@ -405,6 +405,27 @@ and the test's source (`crates/export/tests/nat_fragment.rs`), it gave:
 | Lean 4.20.0 | 22 | all check; `#print axioms` on `not_not` and the literal proof: none |
 | Coq 8.18.0 | 20 of 22 | stops at `B::not_not` (§5.3); the literal proof does not finish (§5.4) |
 
+On 2026-10-21 the exporter gained kept proofs, qualified names, spelling
+erasure, canonical elements (§5.2) and the **kernel route**:
+`print_kernel` writes a hash-consed node table (`.hxk`, one line per
+distinct subterm), and `prelude/Import.lean` rebuilds each declaration as a
+Lean `Expr` and hands it to `addDecl`. No parser and no elaborator sees an
+exported term. The library sweep (`crates/export/tests/library_sweep.rs`,
+the closure of `lib/std/list.hthr`) gave:
+
+| | declarations | result |
+|---|---|---|
+| export | 387 bindings | 293 exported; 90 refused for `Wf`, 4 for mentioning a refused one |
+| slice, Lean kernel route | 22 | all accepted, no axioms; a corrupted literal is rejected |
+| sweep, Lean kernel route | 292 | all accepted in about two seconds; `bool::is_true_dec_yes` skipped (its body keeps a hole, §5.6) |
+| sweep, Lean source text | 293 | all accepted, but parsing takes nearly the whole run: minutes, against a fraction of a second of type checking |
+| slice, Coq 8.18 | 20 of 22 | unchanged: stops at `B::not_not` (§5.3) |
+
+Lean's parser is superlinear in one declaration's size (a synthetic tree of
+applications or `fun`s quadruples when it doubles), and Heather's largest
+proofs print to hundreds of kilobytes as trees. The text route stays for
+reading and for the slice; the kernel route is the one to measure.
+
 The probes (`crates/export/probes/`) are the evidence behind §3 and §5.1. They
 are not part of `scripts/test`, because the suite does not assume Lean or
 Rocq is installed. The design keeps that so: rechecking in a target is an

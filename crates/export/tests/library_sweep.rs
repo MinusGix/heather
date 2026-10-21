@@ -1,11 +1,12 @@
 //! The library sweep (`issues/export-library-sweep.md`): export the closure
 //! of `lib/std/list.hthr` (list, nat, bool, logic, option, pair) and report
 //! every refusal by cause. With `HEATHER_EXPORT_OUT` set it writes
-//! `Sweep.lean` for `scripts/export-recheck` to hand to Lean.
+//! `Sweep.lean` and its kernel-route twin `Sweep.hxk` for
+//! `scripts/export-recheck` to hand to Lean.
 
 use heather_cli::loader;
 use heather_elab::Elaborator;
-use heather_export::{Source, Target, export, print};
+use heather_export::{Source, Target, export, print, print_kernel};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -42,7 +43,16 @@ fn std_list_closure_exports() {
         "refused: {causes:#?}"
     );
     assert!(ok >= 290, "{ok} exported");
+    // The kernel route skips what was refused, plus the few bodies whose
+    // checked spellings the kernel could not erase (they keep holes) and
+    // what mentions them.
+    let kernel = print_kernel(&decls);
+    let holes: Vec<&str> = kernel.lines().filter(|l| l.starts_with("x\t") && !l.contains("\trefused: ")).collect();
+    eprintln!("kernel route skips beyond refusals:\n{}", holes.join("\n"));
+    assert!(holes.len() <= 3, "{} skipped by the kernel route", holes.len());
     if let Some(dir) = std::env::var_os("HEATHER_EXPORT_OUT") {
-        std::fs::write(PathBuf::from(dir).join("Sweep.lean"), print(Target::Lean, &decls)).unwrap();
+        let dir = PathBuf::from(dir);
+        std::fs::write(dir.join("Sweep.lean"), print(Target::Lean, &decls)).unwrap();
+        std::fs::write(dir.join("Sweep.hxk"), kernel).unwrap();
     }
 }

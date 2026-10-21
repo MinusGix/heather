@@ -1,26 +1,36 @@
 #!/usr/bin/env bash
 # Recheck the export prototype's output in Lean 4 and Rocq/Coq.
 #
-# Runs the heather-export acceptance test with HEATHER_EXPORT_OUT set, which
-# writes Exported.lean / Exported.v; copies the hand-written preludes beside
+# Runs the heather-export tests with HEATHER_EXPORT_OUT set, which write the
+# prototype slice (Exported.lean / Exported.v / Exported.hxk) and the library
+# sweep (Sweep.lean / Sweep.hxk); copies the hand-written preludes beside
 # them; and hands each file to its checker under the same address-space and
 # CPU rails as scripts/test (a runaway conversion in the target must not take
 # the machine down — a large unary numeral in Rocq does exactly that).
 #
-# Usage: scripts/export-recheck [OUT_DIR]
+# Lean checks the .hxk files through its kernel alone (prelude/Import.lean:
+# addDecl, no parser, no elaborator) and the slice also as source text. The
+# sweep's source text is not checked by default: Lean's parser is superlinear
+# in a declaration's size and spends minutes on it (design §7). Pass
+# --text-sweep to check it anyway.
+#
+# Usage: scripts/export-recheck [--text-sweep] [OUT_DIR]
 #   LEAN=/path/to/lean  (default: `lean` on PATH)
 #   COQC=/path/to/coqc  (default: `coqc` on PATH)
 # A missing checker is reported and skipped, not an error.
 # Design and expected results: docs/export-fragment-design.md §7.
 set -u
 root="$(cd "$(dirname "$0")/.." && pwd)"
+text_sweep=0
+if [ "${1:-}" = "--text-sweep" ]; then text_sweep=1; shift; fi
 out="${1:-$root/target/export-recheck}"
 mkdir -p "$out"
 out="$(cd "$out" && pwd)"
 
-HEATHER_EXPORT_OUT="$out" "$root/scripts/test" -p heather-export --test nat_fragment >"$out/test.log" 2>&1 \
-  || { echo "export test failed; see $out/test.log"; exit 1; }
-cp "$root/crates/export/prelude/Hx.lean" "$root/crates/export/prelude/Hx.v" "$out/"
+HEATHER_EXPORT_OUT="$out" "$root/scripts/test" -p heather-export >"$out/test.log" 2>&1 \
+  || { echo "export tests failed; see $out/test.log"; exit 1; }
+cp "$root/crates/export/prelude/Hx.lean" "$root/crates/export/prelude/Import.lean" \
+  "$root/crates/export/prelude/Hx.v" "$out/"
 
 lean="${LEAN:-$(command -v lean || true)}"
 coqc="${COQC:-$(command -v coqc || true)}"
@@ -28,10 +38,27 @@ status=0
 cd "$out" || exit 1
 
 if [ -n "$lean" ]; then
-  if (ulimit -v 8388608 -t 300 -c 0; "$lean" -o Hx.olean Hx.lean && LEAN_PATH="$out" "$lean" Exported.lean) >lean.log 2>&1; then
-    echo "lean: ok ($(grep -c '^@\[reducible\] def\|^axiom' Exported.lean) declarations)"
+  # Import.lean's findSysroot runs `lean` from PATH.
+  export PATH="$(dirname "$lean"):$PATH"
+  if (ulimit -v 8388608 -t 300 -c 0; "$lean" -o Hx.olean Hx.lean) >lean.log 2>&1; then
+    for f in Exported Sweep; do
+      if (ulimit -v 8388608 -t 300 -c 0; LEAN_PATH="$out" "$lean" --run Import.lean "$f.hxk") >"kernel-$f.log" 2>&1; then
+        echo "lean kernel, $f: $(tail -1 "kernel-$f.log")"
+      else
+        echo "lean kernel, $f: FAILED; see $out/kernel-$f.log"; status=1
+      fi
+    done
+    texts=Exported
+    [ "$text_sweep" = 1 ] && texts="Exported Sweep"
+    for f in $texts; do
+      if (ulimit -v 8388608 -t 1200 -c 0; LEAN_PATH="$out" "$lean" "$f.lean") >"lean-$f.log" 2>&1; then
+        echo "lean text, $f: ok ($(grep -c '^@\[reducible\] def\|^axiom' "$f.lean") declarations)"
+      else
+        echo "lean text, $f: FAILED; see $out/lean-$f.log"; status=1
+      fi
+    done
   else
-    echo "lean: FAILED; see $out/lean.log"; status=1
+    echo "lean: prelude FAILED; see $out/lean.log"; status=1
   fi
 else
   echo "lean: not found (set LEAN), skipped"
