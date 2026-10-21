@@ -19,7 +19,7 @@ use std::sync::Arc as Rc;
 use heather_kernel::level::{Level, UnivVar};
 use heather_kernel::subst::{GlobalEntry, GlobalSubst};
 use heather_kernel::term::{
-    Branches, CtxBase, CtxEntry, GlobalVar, IWfSig, LocalCtx, LocalSubst, LocalVar, Motives, SubstTail,
+    Branches, CtxBase, CtxEntry, GlobalVar, IWfSig, MSig, LocalCtx, LocalSubst, LocalVar, Motives, SubstTail,
     Term, Type,
 };
 
@@ -410,6 +410,22 @@ pub fn gen_branches(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Branches> {
 
 /// An `IWf` signature: `arity` and `out` in `in1` (under `x : S`), `child`
 /// in `in2` (under `x, i`), the rest in `sc`.
+/// An `M` signature: `shape` under `i : I`, `pos` under `i, s`, `next`
+/// under `i, s, p`.
+fn gen_m_sig(sc: &Sc, r: &mut Rng, b: u32) -> Rc<MSig> {
+    let under = |k: u32| {
+        let mut inner = sc.clone();
+        inner.local.len += k;
+        inner
+    };
+    let (level, pos_level, idx_level) = (gen_level(sc, r, 1), gen_level(sc, r, 1), gen_level(sc, r, 1));
+    let idx = gen_type(sc, r, b / 4);
+    let shape = gen_type(&under(1), r, b / 4);
+    let pos = gen_type(&under(2), r, b / 4);
+    let next = gen_term(&under(3), r, b / 4);
+    Rc::new(MSig { level, pos_level, idx_level, idx, shape, pos, next })
+}
+
 fn gen_iwf_sig(sc: &Sc, in1: &Sc, in2: &Sc, r: &mut Rng, b: u32) -> Rc<IWfSig> {
     let (level, idx_level) = (gen_level(sc, r, 1), gen_level(sc, r, 1));
     let (idx, shape) = (gen_type(sc, r, b / 4), gen_type(sc, r, b / 4));
@@ -438,7 +454,7 @@ pub fn gen_type(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Type> {
     }
 
     for _ in 0..8 {
-        let arm = if b == 0 { r.below(3) } else { r.below(23) };
+        let arm = if b == 0 { r.below(3) } else { r.below(24) };
         match arm {
             0 => return Rc::new(Type::Nat),
             1 => return Rc::new(Type::Ty(gen_level(sc, r, 1))),
@@ -596,6 +612,12 @@ pub fn gen_type(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Type> {
                 let sig = gen_iwf_sig(sc, &in1, &in2, r, b);
                 return Rc::new(Type::IWf { sig, index: gen_term(sc, r, b / 4) });
             }
+            // M: the signature's components under one, two and three of its
+            // own binders, the index in the ambient scope.
+            23 if b > 0 => {
+                let sig = gen_m_sig(sc, r, b);
+                return Rc::new(Type::M { sig, index: gen_term(sc, r, b / 4) });
+            }
             _ => continue,
         }
     }
@@ -619,7 +641,7 @@ pub fn gen_term(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Term> {
     }
 
     for _ in 0..8 {
-        let arm = if b == 0 { r.below(5) } else { r.below(42) };
+        let arm = if b == 0 { r.below(5) } else { r.below(44) };
         match arm {
             0 if sc.local.len > 0 => return Rc::new(Term::Var(LocalVar(r.below(sc.local.len)))),
             0 | 1 => return Rc::new(Term::Zero),
@@ -1028,6 +1050,27 @@ pub fn gen_term(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Term> {
                     scrut: gen_term(sc, r, b / 2),
                 });
             }
+            // corec / out: the carrier binds `i`, the step `i, x`.
+            42 if b > 0 => {
+                let (mut in1, mut in2) = (sc.clone(), sc.clone());
+                in1.local.len += 1;
+                in2.local.len += 2;
+                return Rc::new(Term::Corec {
+                    sig: gen_m_sig(sc, r, b),
+                    carrier_level: gen_level(sc, r, 1),
+                    carrier: gen_type(&in1, r, b / 4),
+                    step: gen_term(&in2, r, b / 2),
+                    index: gen_term(sc, r, b / 4),
+                    seed: gen_term(sc, r, b / 4),
+                });
+            }
+            43 if b > 0 => {
+                return Rc::new(Term::Out {
+                    sig: gen_m_sig(sc, r, b),
+                    index: gen_term(sc, r, b / 4),
+                    scrut: gen_term(sc, r, b / 2),
+                });
+            }
             // Vec/Fin/Wf codes: the lengths are terms of the ambient scope
             // (no binder); only the Wf code's arity binds `x : El s`.
             36 if b > 0 => {
@@ -1146,6 +1189,10 @@ fn count_iwf_sig(sig: &IWfSig) -> u64 {
         + count_term(&sig.child)
 }
 
+fn count_m_sig(sig: &MSig) -> u64 {
+    count_type(&sig.idx) + count_type(&sig.shape) + count_type(&sig.pos) + count_term(&sig.next)
+}
+
 pub fn count_type(t: &Type) -> u64 {
     1 + match t {
         Type::Nat | Type::Ty(_) | Type::Unit { .. } | Type::Empty { .. }
@@ -1161,6 +1208,7 @@ pub fn count_type(t: &Type) -> u64 {
         Type::Wf { shape, arity, .. } => count_type(shape) + count_term(arity),
         Type::DVec { len, fam, .. } => count_term(len) + count_type(fam),
         Type::IWf { sig, index } => count_iwf_sig(sig) + count_term(index),
+        Type::M { sig, index } => count_m_sig(sig) + count_term(index),
         Type::Squash { ty, .. } => count_type(ty),
         Type::UPi { body, .. } => count_type(body),
         Type::El { tm, .. } => count_term(tm),
@@ -1229,6 +1277,11 @@ pub fn count_term(t: &Term) -> u64 {
             count_iwf_sig(sig) + count_type(motive) + count_term(step) + count_term(index)
                 + count_term(scrut)
         }
+        Term::Corec { sig, carrier, step, index, seed, .. } => {
+            count_m_sig(sig) + count_type(carrier) + count_term(step) + count_term(index)
+                + count_term(seed)
+        }
+        Term::Out { sig, index, scrut } => count_m_sig(sig) + count_term(index) + count_term(scrut),
         Term::Succ(t) => count_term(t),
         Term::Refl { ty, tm, .. } => count_type(ty) + count_term(tm),
         Term::J { ty, lhs, motive, case, rhs, proof, .. } => {
