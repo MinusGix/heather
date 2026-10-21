@@ -282,15 +282,13 @@ theorem ITree::same_bind<A, B>(E: Events, t: ITree<A>(E), t2: ITree<A>(E), h: A 
         Tau(s) => {
             let g: SameTau<A>(E, t2, λ v => ITree::Same(E, s, v)) = st;
             let ih: ITree::Same(E, ITree::bind(E, s, h), ITree::bind(E, g.t, h2)) = ITree::same_bind(E, s, g.t, h, h2, g.sub, sh);
-            j(sym(g.at), λ y q => ITree::Same(E, ITree::bind(E, Tau(s), h), ITree::bind(E, y, h2)),
-                SameTau(ITree::bind(E, g.t, h2), refl, ih))
+            SameTau(ITree::bind(E, g.t, h2), @cong<ITree<A>(E), ITree<B>(E)>(λ y => ITree::bind(E, y, h2), t2, Tau(g.t), g.at), ih)
         },
         Vis(c, k) => {
             let g: SameVis<A>(E, c, t2, λ a v => ITree::Same(E, k(a), v)) = st;
             let ih: (a: E.Resp(c)) → ITree::Same(E, ITree::bind(E, k(a), h), ITree::bind(E, g.k(a), h2)) =
                 λ a => ITree::same_bind(E, k(a), g.k(a), h, h2, g.sub(a), sh);
-            j(sym(g.at), λ y q => ITree::Same(E, ITree::bind(E, Vis(c, k), h), ITree::bind(E, y, h2)),
-                SameVis(λ a => ITree::bind(E, g.k(a), h2), refl, ih))
+            SameVis(λ a => ITree::bind(E, g.k(a), h2), @cong<ITree<A>(E), ITree<B>(E)>(λ y => ITree::bind(E, y, h2), t2, Vis(c, g.k), g.at), ih)
         },
         Cut => j(@sym<ITree<A>(E)>(t2, Cut, st), λ y q => ITree::bind(E, y, h2) = Cut, refl),
     }

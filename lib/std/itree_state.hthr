@@ -1,0 +1,122 @@
+// A state handler: state events interpreted as world threading
+// (docs/itree-refinement-round.md; issues/interaction-trees-container-model.md
+// Q3, docs/interaction-trees-fit.md §6.5).
+//
+// A program that reads and writes a state `S` issues `Get` and `Put(s)`
+// beside its other events `E`. `run_state` answers them by threading a state
+// value through the tree, the way a program written in state-passing style
+// would, and leaves the other events in place: the tree over `State + E`
+// becomes a tree over `E` that returns the final state with the result. So
+// the interpreted view of an effectful program *is* its world-threading
+// semantics, and `run_state_bind` is the statement that this view composes:
+// it maps sequencing to sequencing with the state passed along.
+//
+// With no other events, a tree only returns, steps or runs out of fuel, and
+// `returned` reads its value off; `returned_of_trace` says that value is the
+// one its traces return.
+
+import logic;
+import nat;
+import option;
+import pair;
+import itree;
+import itree_trace;
+
+inductive StateCmd<S> { Get, Put(s: S) }
+
+fn StateResp<S>(c: StateCmd<S>) → Type { match c { Get => S, Put(_) => True } }
+
+fn Events::state<S>() → Events { Events(StateCmd<S>, λ c => StateResp(c)) }
+
+// One command of `State + E`, answered with the state `s` and handed to the
+// continuation `kr` (an answer and the state after it). The answer type
+// depends on the command, so the split returns a function to refine it.
+fn ITree::state_vis<S, R>(E: Events, c: Or<StateCmd<S>, E.Cmd>)
+    → (Events::sum(Events::state<S>(), E).Resp(c) → S → ITree<Pair<S, R>>(E))
+    → S → ITree<Pair<S, R>>(E)
+{
+    match c {
+        Inl(sc) => match sc {
+            Get => λ kr s => kr(s, s),
+            Put(s2) => λ kr s => kr(trivial, s2),
+        },
+        Inr(e) => λ kr s => Vis(e, λ a => kr(a, s)),
+    }
+}
+
+// Thread the state through the tree, from `s`.
+fn ITree::run_state<S, R>(E: Events, t: ITree<R>(Events::sum(Events::state<S>(), E)), s: S) → ITree<Pair<S, R>>(E) {
+    match t {
+        Ret(r) => Ret(Pair(s, r)),
+        Tau(u) => Tau(ITree::run_state(E, u, s)),
+        Vis(c, k) => ITree::state_vis<S, R>(E, c, λ a s2 => ITree::run_state(E, k(a), s2), s),
+        Cut => Cut,
+    }
+}
+
+// `state_vis` commutes with continuing every outcome by `g`, given that the
+// two continuations agree up to it.
+theorem ITree::state_vis_bind<S, A, B>(E: Events, c: Or<StateCmd<S>, E.Cmd>, g: Pair<S, A> → ITree<Pair<S, B>>(E)):
+    (kr1: Events::sum(Events::state<S>(), E).Resp(c) → S → ITree<Pair<S, B>>(E))
+    → (kr2: Events::sum(Events::state<S>(), E).Resp(c) → S → ITree<Pair<S, A>>(E))
+    → ((a: Events::sum(Events::state<S>(), E).Resp(c)) → (s2: S) → ITree::Same(E, kr1(a, s2), ITree::bind(E, kr2(a, s2), g)))
+    → (s: S) → ITree::Same(E, ITree::state_vis(E, c, kr1, s), ITree::bind(E, ITree::state_vis(E, c, kr2, s), g))
+{
+    match c {
+        Inl(sc) => match sc {
+            Get => λ kr1 kr2 h s => h(s, s),
+            Put(s2) => λ kr1 kr2 h s => h(trivial, s2),
+        },
+        Inr(_) => λ kr1 kr2 h s => SameVis(λ a => ITree::bind(E, kr2(a, s), g), refl, λ a => h(a, s)),
+    }
+}
+
+// Threading a sequence is sequencing the threadings, with the state passed
+// along: the handler is a monad morphism into state-passing trees.
+theorem ITree::run_state_bind<S, A, B>(E: Events, t: ITree<A>(Events::sum(Events::state<S>(), E)),
+    h: A → ITree<B>(Events::sum(Events::state<S>(), E)), s: S):
+    ITree::Same(E, ITree::run_state(E, ITree::bind(Events::sum(Events::state<S>(), E), t, h), s),
+        ITree::bind(E, ITree::run_state(E, t, s), λ p => ITree::run_state(E, h(p.snd), p.fst)))
+{
+    match t {
+        Ret(r) => ITree::same_refl(E, ITree::run_state(E, h(r), s)),
+        Tau(u) => SameTau(ITree::bind(E, ITree::run_state(E, u, s), λ p => ITree::run_state(E, h(p.snd), p.fst)), refl,
+            ITree::run_state_bind(E, u, h, s)),
+        Vis(c, k) => {
+            let ih: (a: Events::sum(Events::state<S>(), E).Resp(c)) → (s2: S) →
+                ITree::Same(E, ITree::run_state(E, ITree::bind(Events::sum(Events::state<S>(), E), k(a), h), s2),
+                    ITree::bind(E, ITree::run_state(E, k(a), s2), λ p => ITree::run_state(E, h(p.snd), p.fst))) =
+                λ a s2 => ITree::run_state_bind(E, k(a), h, s2);
+            ITree::state_vis_bind<S, A, B>(E, c, λ p => ITree::run_state(E, h(p.snd), p.fst),
+                λ a s2 => ITree::run_state(E, ITree::bind(Events::sum(Events::state<S>(), E), k(a), h), s2),
+                λ a s2 => ITree::run_state(E, k(a), s2), ih, s)
+        },
+        Cut => refl,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// No other events: world threading as a function
+
+// The value a tree with no commands returns within its fuel, if any.
+fn ITree::returned<R>(t: ITree<R>(Events::none())) → Option<R> {
+    match t { Ret(r) => Some(r), Tau(u) => ITree::returned(u), Vis(c, _) => match c {}, Cut => None }
+}
+
+// A program over state alone, run from `s`: the final state and result, or
+// `None` when it runs out of fuel.
+fn ITree::thread<S, R>(t: ITree<R>(Events::sum(Events::state<S>(), Events::none())), s: S) → Option<Pair<S, R>> {
+    ITree::returned(ITree::run_state(Events::none(), t, s))
+}
+
+// `returned` is what the traces say.
+theorem ITree::returned_of_trace<R>(t: ITree<R>(Events::none()), r: R):
+    IsTrace(Events::none(), t, TRet(r)) → ITree::returned(t) = Some(r)
+{
+    match t {
+        Ret(x) => λ w => cong(RetTrace::returns(Events::none(), x, r, w)),
+        Tau(u) => λ h => ITree::returned_of_trace(u, r, h),
+        Vis(c, _) => match c {},
+        Cut => λ w => absurd(CutTrace::ended<R>(Events::none(), TRet(r), w)),
+    }
+}

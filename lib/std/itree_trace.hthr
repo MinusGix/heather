@@ -1,0 +1,550 @@
+// Traces of interaction trees, and refinement between programs
+// (docs/itree-refinement-round.md; issues/interaction-trees-container-model.md
+// Q2 and Q3, milestone `it-refinement`).
+//
+// A trace is a finite record of one interaction: the commands issued, the
+// answers they got, and how the record ends: it may stop anywhere (`TEnd`, a
+// prefix), at a command still unanswered (`TCall`), or at the return value
+// (`TRet`). `IsTrace(E, t, tr)` says `t` can produce `tr`: Xia et al.'s
+// Fig. 20, inductive already, here read off the tree. A `Cut` produces only
+// the empty prefix, so a tree cut at fuel claims nothing past the cut.
+//
+// A program is a family of trees, one per amount of fuel (`iter`, `mrec`).
+// Its traces are those of any member; `Refines(p, q)` is inclusion of those
+// sets, which for deterministic trees loses nothing weak bisimilarity would
+// see (the paper's §7). The family's members are ordered by `Below`, a tree
+// being another with some subtrees cut sooner; a family going up in that
+// order has `fuel_monotone`, and `Converges` is a trace reached at some
+// fuel, the shape `simulate`'s interface has (docs/ir-simulate-design.md §6).
+
+import logic;
+import nat;
+import itree;
+
+// ---------------------------------------------------------------------------
+// Traces
+
+inductive Trace<R>(E: Events) {
+    TEnd,
+    TRet(r: R),
+    TCall(c: E.Cmd),
+    TAns(c: E.Cmd, a: E.Resp(c), rest: Trace<R>(E)),
+}
+
+// What a `Vis(c, k)` produces: the empty prefix, the call still pending, or
+// an answer to `c` and a trace of the continuation at it. The command is the
+// tree's own, so no answer is transported between response types.
+inductive VisTrace<R>(E: Events, c: E.Cmd, tr: Trace<R>(E), S: E.Resp(c) → Trace<R>(E) → Type) {
+    Prefix(at: tr = TEnd),
+    Pending(at: tr = TCall(c)),
+    Answered(a: E.Resp(c), rest: Trace<R>(E), at: tr = TAns(c, a, rest), sub: S(a, rest)),
+}
+
+// What a `Ret(r)` produces: the empty prefix, or the return.
+inductive RetTrace<R>(E: Events, r: R, tr: Trace<R>(E)) {
+    Stopped(at: tr = TEnd),
+    Returned(at: tr = TRet(r)),
+}
+
+// What a `Cut` produces: only the empty prefix.
+inductive CutTrace<R>(E: Events, tr: Trace<R>(E)) { Ended(at: tr = TEnd) }
+
+// A pending-or-answered trace of `Vis(c, k)` moves to `Vis(c, k2)` when every
+// trace of `k(a)` is one of `k2(a)`.
+theorem VisTrace::map<R>(E: Events, c: E.Cmd, tr: Trace<R>(E), S: E.Resp(c) → Trace<R>(E) → Type,
+    S2: E.Resp(c) → Trace<R>(E) → Type, f: (a: E.Resp(c)) → (rest: Trace<R>(E)) → S(a, rest) → S2(a, rest),
+    w: VisTrace<R>(E, c, tr, S)): VisTrace<R>(E, c, tr, S2)
+{
+    match w {
+        Prefix(e) => Prefix(e),
+        Pending(e) => Pending(e),
+        Answered(a, rest, e, sub) => Answered(a, rest, e, f(a, rest, sub)),
+    }
+}
+
+theorem CutTrace::ended<R>(E: Events, tr: Trace<R>(E), w: CutTrace<R>(E, tr)): tr = TEnd {
+    match w { Ended(e) => e }
+}
+
+fn IsTrace<R>(E: Events, t: ITree<R>(E), tr: Trace<R>(E)) → Type {
+    match t {
+        Ret(r) => RetTrace<R>(E, r, tr),
+        Tau(s) => IsTrace(E, s, tr),
+        Vis(c, k) => VisTrace<R>(E, c, tr, λ a rest => IsTrace(E, k(a), rest)),
+        Cut => CutTrace<R>(E, tr),
+    }
+}
+
+// Every tree has the empty trace.
+theorem IsTrace::nil<R>(E: Events, t: ITree<R>(E)): IsTrace(E, t, TEnd) {
+    match t {
+        Ret(_) => Stopped(refl),
+        Tau(s) => IsTrace::nil(E, s),
+        Vis(_, _) => Prefix(refl),
+        Cut => Ended(refl),
+    }
+}
+
+// `Same` trees have the same traces.
+theorem IsTrace::of_same<R>(E: Events, t: ITree<R>(E), u: ITree<R>(E), tr: Trace<R>(E),
+    h: ITree::Same(E, t, u), it: IsTrace(E, t, tr)): IsTrace(E, u, tr)
+{
+    match t {
+        Ret(r) => j(@sym<ITree<R>(E)>(u, Ret(r), h), λ y q => IsTrace(E, y, tr), it),
+        Tau(s) => {
+            let g: SameTau<R>(E, u, λ v => ITree::Same(E, s, v)) = h;
+            let ih: IsTrace(E, g.t, tr) = IsTrace::of_same(E, s, g.t, tr, g.sub, it);
+            j(sym(g.at), λ y q => IsTrace(E, y, tr), ih)
+        },
+        Vis(c, k) => {
+            let g: SameVis<R>(E, c, u, λ a v => ITree::Same(E, k(a), v)) = h;
+            let ih: (a: E.Resp(c)) → (rest: Trace<R>(E)) → IsTrace(E, k(a), rest) → IsTrace(E, g.k(a), rest) =
+                λ a rest sub => IsTrace::of_same(E, k(a), g.k(a), rest, g.sub(a), sub);
+            j(sym(g.at), λ y q => IsTrace(E, y, tr),
+                VisTrace::map(E, c, tr, λ a rest => IsTrace(E, k(a), rest), λ a rest => IsTrace(E, g.k(a), rest), ih, it))
+        },
+        Cut => j(@sym<ITree<R>(E)>(u, Cut, h), λ y q => IsTrace(E, y, tr), it),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The approximation order
+//
+// `Below(E, t, u)`: `u` is `t` with some of its cuts grown into subtrees.
+// Read off `t`, as `Same` is, with one more freedom: a `Cut` is below
+// anything.
+
+fn ITree::Below<R>(E: Events, t: ITree<R>(E), u: ITree<R>(E)) → Type {
+    match t {
+        Ret(r) => u = Ret(r),
+        Tau(s) => SameTau<R>(E, u, λ v => ITree::Below(E, s, v)),
+        Vis(c, k) => SameVis<R>(E, c, u, λ a v => ITree::Below(E, k(a), v)),
+        Cut => True,
+    }
+}
+
+theorem ITree::below_refl<R>(E: Events, t: ITree<R>(E)): ITree::Below(E, t, t) {
+    match t {
+        Ret(_) => refl,
+        Tau(s) => SameTau(s, refl, ITree::below_refl(E, s)),
+        Vis(_, k) => SameVis(k, refl, λ a => ITree::below_refl(E, k(a))),
+        Cut => trivial,
+    }
+}
+
+// Growing a tree keeps every trace it had.
+theorem IsTrace::of_below<R>(E: Events, t: ITree<R>(E), u: ITree<R>(E), tr: Trace<R>(E),
+    h: ITree::Below(E, t, u), it: IsTrace(E, t, tr)): IsTrace(E, u, tr)
+{
+    match t {
+        Ret(r) => j(@sym<ITree<R>(E)>(u, Ret(r), h), λ y q => IsTrace(E, y, tr), it),
+        Tau(s) => {
+            let g: SameTau<R>(E, u, λ v => ITree::Below(E, s, v)) = h;
+            let ih: IsTrace(E, g.t, tr) = IsTrace::of_below(E, s, g.t, tr, g.sub, it);
+            j(sym(g.at), λ y q => IsTrace(E, y, tr), ih)
+        },
+        Vis(c, k) => {
+            let g: SameVis<R>(E, c, u, λ a v => ITree::Below(E, k(a), v)) = h;
+            let ih: (a: E.Resp(c)) → (rest: Trace<R>(E)) → IsTrace(E, k(a), rest) → IsTrace(E, g.k(a), rest) =
+                λ a rest sub => IsTrace::of_below(E, k(a), g.k(a), rest, g.sub(a), sub);
+            j(sym(g.at), λ y q => IsTrace(E, y, tr),
+                VisTrace::map(E, c, tr, λ a rest => IsTrace(E, k(a), rest), λ a rest => IsTrace(E, g.k(a), rest), ih, it))
+        },
+        Cut => j(@sym<Trace<R>(E)>(tr, TEnd, CutTrace::ended(E, tr, it)), λ y q => IsTrace(E, u, y), IsTrace::nil(E, u)),
+    }
+}
+
+// `bind` grows when either side grows.
+theorem ITree::below_bind<A, B>(E: Events, t: ITree<A>(E), t2: ITree<A>(E), h: A → ITree<B>(E), h2: A → ITree<B>(E),
+    bt: ITree::Below(E, t, t2), bh: (a: A) → ITree::Below(E, h(a), h2(a))):
+    ITree::Below(E, ITree::bind(E, t, h), ITree::bind(E, t2, h2))
+{
+    match t {
+        Ret(r) => j(@sym<ITree<A>(E)>(t2, Ret(r), bt), λ y q => ITree::Below(E, h(r), ITree::bind(E, y, h2)), bh(r)),
+        Tau(s) => {
+            let g: SameTau<A>(E, t2, λ v => ITree::Below(E, s, v)) = bt;
+            let ih: ITree::Below(E, ITree::bind(E, s, h), ITree::bind(E, g.t, h2)) = ITree::below_bind(E, s, g.t, h, h2, g.sub, bh);
+            SameTau(ITree::bind(E, g.t, h2), @cong<ITree<A>(E), ITree<B>(E)>(λ y => ITree::bind(E, y, h2), t2, Tau(g.t), g.at), ih)
+        },
+        Vis(c, k) => {
+            let g: SameVis<A>(E, c, t2, λ a v => ITree::Below(E, k(a), v)) = bt;
+            let ih: (a: E.Resp(c)) → ITree::Below(E, ITree::bind(E, k(a), h), ITree::bind(E, g.k(a), h2)) =
+                λ a => ITree::below_bind(E, k(a), g.k(a), h, h2, g.sub(a), bh);
+            SameVis(λ a => ITree::bind(E, g.k(a), h2), @cong<ITree<A>(E), ITree<B>(E)>(λ y => ITree::bind(E, y, h2), t2, Vis(c, g.k), g.at), ih)
+        },
+        Cut => trivial,
+    }
+}
+
+// What `iter` does with one pass's outcome, at `n` more passes.
+fn ITree::iter_next<A, B>(E: Events, n: Nat, body: A → ITree<Step<A, B>>(E), x: Step<A, B>) → ITree<B>(E) {
+    match x {
+        Continue(a2) => Tau(ITree::iter(E, n, body, a2)),
+        Break(b) => Ret(b),
+    }
+}
+
+// One more unit of fuel grows a loop.
+theorem ITree::iter_grows<A, B>(E: Events, n: Nat, body: A → ITree<Step<A, B>>(E), a: A):
+    ITree::Below(E, ITree::iter(E, n, body, a), ITree::iter(E, Succ(n), body, a))
+{
+    match n {
+        Zero => trivial,
+        Succ(m) => {
+            let ih: (a2: A) → ITree::Below(E, ITree::iter(E, m, body, a2), ITree::iter(E, Succ(m), body, a2)) =
+                λ a2 => ITree::iter_grows(E, m, body, a2);
+            let step: (x: Step<A, B>) → ITree::Below(E, ITree::iter_next(E, m, body, x), ITree::iter_next(E, Succ(m), body, x)) =
+                λ x => match x {
+                    Continue(a2) => SameTau(ITree::iter(E, Succ(m), body, a2), refl, ih(a2)),
+                    Break(_) => refl,
+                };
+            ITree::below_bind(E, body(a), body(a), λ x => ITree::iter_next(E, m, body, x),
+                λ x => ITree::iter_next(E, Succ(m), body, x), ITree::below_refl(E, body(a)), step)
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Programs: families of trees indexed by fuel
+
+// A family that only grows with fuel: what `iter` and `mrec` produce.
+fn ITree::Grows<R>(E: Events, p: Nat → ITree<R>(E)) → Type {
+    (n: Nat) → ITree::Below(E, p(n), p(Succ(n)))
+}
+
+theorem ITree::iter_family_grows<A, B>(E: Events, body: A → ITree<Step<A, B>>(E), a: A):
+    ITree::Grows<B>(E, λ n => ITree::iter(E, n, body, a))
+{
+    λ n => ITree::iter_grows(E, n, body, a)
+}
+
+// One `mrec` layer grows when the calls it hands out grow. The split on a
+// sum command returns a function, as `mrec_vis` does, so each arm sees its
+// continuation at the refined answer type.
+theorem ITree::mrec_vis_below<R>(D: Events, E: Events,
+    call1: (d: D.Cmd) → (D.Resp(d) → ITree<R>(Events::sum(D, E))) → ITree<R>(E),
+    call2: (d: D.Cmd) → (D.Resp(d) → ITree<R>(Events::sum(D, E))) → ITree<R>(E),
+    hc: (d: D.Cmd) → (k: D.Resp(d) → ITree<R>(Events::sum(D, E))) → ITree::Below(E, call1(d, k), call2(d, k)),
+    c: Or<D.Cmd, E.Cmd>):
+    (k: Events::sum(D, E).Resp(c) → ITree<R>(Events::sum(D, E)))
+    → (kr1: Events::sum(D, E).Resp(c) → ITree<R>(E))
+    → (kr2: Events::sum(D, E).Resp(c) → ITree<R>(E))
+    → ((a: Events::sum(D, E).Resp(c)) → ITree::Below(E, kr1(a), kr2(a)))
+    → ITree::Below(E, ITree::mrec_vis(D, E, call1, c, k, kr1), ITree::mrec_vis(D, E, call2, c, k, kr2))
+{
+    match c {
+        Inl(d) => λ k kr1 kr2 h => hc(d, k),
+        Inr(_) => λ k kr1 kr2 h => SameVis(kr2, refl, h),
+    }
+}
+
+theorem ITree::mrec_layer_below<R>(D: Events, E: Events,
+    call1: (d: D.Cmd) → (D.Resp(d) → ITree<R>(Events::sum(D, E))) → ITree<R>(E),
+    call2: (d: D.Cmd) → (D.Resp(d) → ITree<R>(Events::sum(D, E))) → ITree<R>(E),
+    hc: (d: D.Cmd) → (k: D.Resp(d) → ITree<R>(Events::sum(D, E))) → ITree::Below(E, call1(d, k), call2(d, k)),
+    t: ITree<R>(Events::sum(D, E))):
+    ITree::Below(E, ITree::mrec_layer(D, E, call1, t), ITree::mrec_layer(D, E, call2, t))
+{
+    match t {
+        Ret(_) => refl,
+        Tau(s) => SameTau(ITree::mrec_layer(D, E, call2, s), refl, ITree::mrec_layer_below(D, E, call1, call2, hc, s)),
+        Vis(c, k) => {
+            let ih: (a: Events::sum(D, E).Resp(c)) →
+                ITree::Below(E, ITree::mrec_layer(D, E, call1, k(a)), ITree::mrec_layer(D, E, call2, k(a))) =
+                λ a => ITree::mrec_layer_below(D, E, call1, call2, hc, k(a));
+            ITree::mrec_vis_below<R>(D, E, call1, call2, hc, c, k,
+                λ a => ITree::mrec_layer(D, E, call1, k(a)), λ a => ITree::mrec_layer(D, E, call2, k(a)), ih)
+        },
+        Cut => trivial,
+    }
+}
+
+// One more unit of fuel grows a recursion: each call is unrolled once more.
+theorem ITree::mrec_grows<R>(D: Events, E: Events, body: (d: D.Cmd) → ITree<D.Resp(d)>(Events::sum(D, E)),
+    n: Nat, t: ITree<R>(Events::sum(D, E))):
+    ITree::Below(E, ITree::mrec(D, E, body, n, t), ITree::mrec(D, E, body, Succ(n), t))
+{
+    match n {
+        Zero => trivial,
+        Succ(m) => {
+            let ih: (d: D.Cmd) → (k: D.Resp(d) → ITree<R>(Events::sum(D, E))) →
+                ITree::Below<R>(E, Tau(ITree::mrec(D, E, body, m, ITree::bind(Events::sum(D, E), body(d), k))),
+                    Tau(ITree::mrec(D, E, body, Succ(m), ITree::bind(Events::sum(D, E), body(d), k)))) =
+                λ d k => SameTau(ITree::mrec(D, E, body, Succ(m), ITree::bind(Events::sum(D, E), body(d), k)), refl,
+                    ITree::mrec_grows(D, E, body, m, ITree::bind(Events::sum(D, E), body(d), k)));
+            ITree::mrec_layer_below(D, E,
+                λ d k => Tau(ITree::mrec(D, E, body, m, ITree::bind(Events::sum(D, E), body(d), k))),
+                λ d k => Tau(ITree::mrec(D, E, body, Succ(m), ITree::bind(Events::sum(D, E), body(d), k))), ih, t)
+        },
+    }
+}
+
+theorem ITree::rec_family_grows(D: Events, E: Events, body: (d: D.Cmd) → ITree<D.Resp(d)>(Events::sum(D, E)),
+    d: D.Cmd): ITree::Grows<D.Resp(d)>(E, λ n => ITree::rec(D, E, body, n, d))
+{
+    λ n => ITree::mrec_grows(D, E, body, n, body(d))
+}
+
+theorem IsTrace::up<R>(E: Events, p: Nat → ITree<R>(E), g: ITree::Grows(E, p), n: Nat, d: Nat, tr: Trace<R>(E),
+    it: IsTrace(E, p(n), tr)): IsTrace(E, p(n + d), tr)
+{
+    match d {
+        Zero => it,
+        Succ(d2) => IsTrace::of_below(E, p(n + d2), p(Succ(n + d2)), tr, g(n + d2), IsTrace::up(E, p, g, n, d2, tr, it)),
+    }
+}
+
+// A trace seen at some fuel is seen at every larger fuel.
+theorem IsTrace::fuel_monotone<R>(E: Events, p: Nat → ITree<R>(E), g: ITree::Grows(E, p), n: Nat, m: Nat,
+    le: n <= m, tr: Trace<R>(E), it: IsTrace(E, p(n), tr)): IsTrace(E, p(m), tr)
+{
+    let e: (n + (m -n) = m) = trans(n.add_comm(m -n), n.sub_add_cancel(m, le));
+    j(e, λ y q => IsTrace(E, p(y), tr), IsTrace::up(E, p, g, n, m -n, tr, it))
+}
+
+// A trace the program produces at some fuel: the `converges` of
+// docs/ir-simulate-design.md §6, with the bound hidden.
+record Converges<R>(E: Events, p: Nat → ITree<R>(E), tr: Trace<R>(E)) {
+    n: Nat,
+    h: IsTrace(E, p(n), tr),
+}
+
+// …and the bound may always be raised.
+theorem Converges::at<R>(E: Events, p: Nat → ITree<R>(E), g: ITree::Grows(E, p), tr: Trace<R>(E),
+    c: Converges<R>(E, p, tr), m: Nat, le: c.n <= m): IsTrace(E, p(m), tr)
+{
+    IsTrace::fuel_monotone(E, p, g, c.n, m, le, tr, c.h)
+}
+
+// A return trace of a `Ret` names its value; a `Vis` has none.
+theorem RetTrace::returns<R>(E: Events, x: R, r: R, w: RetTrace<R>(E, x, TRet(r))): x = r {
+    match w { Stopped(e) => absurd(e), Returned(e) => sym(inj(e)) }
+}
+
+theorem VisTrace::never_returns<R>(E: Events, c: E.Cmd, r: R, S: E.Resp(c) → Trace<R>(E) → Type,
+    w: VisTrace<R>(E, c, TRet(r), S)): False
+{
+    match w { Prefix(e) => absurd(e), Pending(e) => absurd(e), Answered(_, _, e, _) => absurd(e) }
+}
+
+// A tree returns at most one value.
+theorem IsTrace::ret_unique<R>(E: Events, t: ITree<R>(E), r: R, s: R):
+    IsTrace(E, t, TRet(r)) → IsTrace(E, t, TRet(s)) → r = s
+{
+    match t {
+        Ret(x) => λ a b => trans(sym(RetTrace::returns(E, x, r, a)), RetTrace::returns(E, x, s, b)),
+        Tau(u) => λ h1 h2 => IsTrace::ret_unique(E, u, r, s, h1, h2),
+        Vis(c, k) => λ a h2 => false_elim(VisTrace::never_returns(E, c, r, λ x rest => IsTrace(E, k(x), rest), a)),
+        Cut => λ (w: CutTrace<R>(E, TRet(r))) h2 => match w { Ended(e) => absurd(e) },
+    }
+}
+
+// A growing program returns at most one value, whatever fuel each return
+// was seen at.
+theorem Converges::ret_unique<R>(E: Events, p: Nat → ITree<R>(E), g: ITree::Grows(E, p), r: R, s: R,
+    c1: Converges<R>(E, p, TRet(r)), c2: Converges<R>(E, p, TRet(s))): r = s
+{
+    let m = c1.n + c2.n;
+    IsTrace::ret_unique(E, p(m), r, s,
+        Converges::at(E, p, g, TRet(r), c1, m, c1.n.le_add_l(c2.n)),
+        Converges::at(E, p, g, TRet(s), c2, m, c1.n.le_add_r(c2.n)))
+}
+
+// ---------------------------------------------------------------------------
+// Refinement
+
+// Every trace `p` produces, `q` produces too (at some fuel of its own).
+fn ITree::Refines<R>(E: Events, p: Nat → ITree<R>(E), q: Nat → ITree<R>(E)) → Type {
+    (n: Nat) → (tr: Trace<R>(E)) → IsTrace(E, p(n), tr) → Converges<R>(E, q, tr)
+}
+
+theorem ITree::refines_refl<R>(E: Events, p: Nat → ITree<R>(E)): ITree::Refines(E, p, p) {
+    λ n tr it => Converges(n, it)
+}
+
+theorem ITree::refines_trans<R>(E: Events, p: Nat → ITree<R>(E), q: Nat → ITree<R>(E), v: Nat → ITree<R>(E),
+    pq: ITree::Refines(E, p, q), qv: ITree::Refines(E, q, v)): ITree::Refines(E, p, v)
+{
+    λ n tr it => {
+        let c: Converges<R>(E, q, tr) = pq(n, tr, it);
+        qv(c.n, tr, c.h)
+    }
+}
+
+// Trees that are the `Same` at every fuel refine each other.
+theorem ITree::refines_of_same<R>(E: Events, p: Nat → ITree<R>(E), q: Nat → ITree<R>(E),
+    h: (n: Nat) → ITree::Same(E, p(n), q(n))): ITree::Refines(E, p, q)
+{
+    λ n tr it => Converges(n, IsTrace::of_same(E, p(n), q(n), tr, h(n), it))
+}
+
+// A family refines its own later fuel, and the other way round when it
+// grows: fuel is not observable.
+theorem ITree::refines_shift<R>(E: Events, p: Nat → ITree<R>(E), g: ITree::Grows(E, p), d: Nat):
+    ITree::Refines(E, p, λ n => p(n + d))
+{
+    λ n tr it => Converges(n, IsTrace::up(E, p, g, n, d, tr, it))
+}
+
+// ---------------------------------------------------------------------------
+// Traces of a sequence
+
+// Continue a trace past its return: a trace of `t` that returns `r` goes on
+// as `k(r)`.
+fn Trace::seq<A, B>(E: Events, tr: Trace<A>(E), k: A → Trace<B>(E)) → Trace<B>(E) {
+    match tr {
+        TEnd => TEnd,
+        TRet(r) => k(r),
+        TCall(c) => TCall(c),
+        TAns(c, a, rest) => TAns(c, a, Trace::seq(E, rest, k)),
+    }
+}
+
+// A trace of `Vis(c, k)`, continued past its return.
+theorem VisTrace::seq<A, B>(E: Events, c: E.Cmd, tr: Trace<A>(E), k: A → Trace<B>(E),
+    S: E.Resp(c) → Trace<A>(E) → Type, S2: E.Resp(c) → Trace<B>(E) → Type,
+    f: (a: E.Resp(c)) → (rest: Trace<A>(E)) → S(a, rest) → S2(a, Trace::seq(E, rest, k)),
+    w: VisTrace<A>(E, c, tr, S)): VisTrace<B>(E, c, Trace::seq(E, tr, k), S2)
+{
+    match w {
+        Prefix(e) => Prefix(j(sym(e), λ y q => Trace::seq(E, y, k) = TEnd, refl)),
+        Pending(e) => Pending(j(sym(e), λ y q => Trace::seq(E, y, k) = TCall(c), refl)),
+        Answered(a, rest, e, sub) => Answered(a, Trace::seq(E, rest, k),
+            j(sym(e), λ y q => Trace::seq(E, y, k) = TAns(c, a, Trace::seq(E, rest, k)), refl), f(a, rest, sub)),
+    }
+}
+
+// A trace of `t`, continued by traces of `h` at each return value, is a trace
+// of `bind(t, h)`.
+theorem IsTrace::bind<A, B>(E: Events, t: ITree<A>(E), h: A → ITree<B>(E), tr: Trace<A>(E), k: A → Trace<B>(E),
+    it: IsTrace(E, t, tr), ik: (r: A) → IsTrace(E, h(r), k(r))): IsTrace(E, ITree::bind(E, t, h), Trace::seq(E, tr, k))
+{
+    match t {
+        Ret(x) => {
+            let w: RetTrace<A>(E, x, tr) = it;
+            match w {
+                Stopped(e) => j(sym(e), λ y q => IsTrace(E, h(x), Trace::seq(E, y, k)), IsTrace::nil(E, h(x))),
+                Returned(e) => j(sym(e), λ y q => IsTrace(E, h(x), Trace::seq(E, y, k)), ik(x)),
+            }
+        },
+        Tau(s) => IsTrace::bind(E, s, h, tr, k, it, ik),
+        Vis(c, k0) => {
+            let ih: (a: E.Resp(c)) → (rest: Trace<A>(E)) → IsTrace(E, k0(a), rest)
+                → IsTrace(E, ITree::bind(E, k0(a), h), Trace::seq(E, rest, k)) =
+                λ a rest sub => IsTrace::bind(E, k0(a), h, rest, k, sub, ik);
+            VisTrace::seq(E, c, tr, k, λ a rest => IsTrace(E, k0(a), rest),
+                λ a rest => IsTrace(E, ITree::bind(E, k0(a), h), rest), ih, it)
+        },
+        Cut => {
+            let out: CutTrace<B>(E, Trace::seq(E, tr, k)) =
+                Ended(j(sym(CutTrace::ended(E, tr, it)), λ y q => Trace::seq(E, y, k) = TEnd, refl));
+            out
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Programs: a family that carries its growth
+//
+// A program is its family of unrollings together with the proof that it only
+// grows with fuel, so a family that uses its fuel any other way cannot be
+// called a program. Everything stated about programs is about the traces they
+// produce at *some* fuel: no statement names an amount.
+
+record Program<R>(E: Events) {
+    at: Nat → ITree<R>(E),
+    grows: ITree::Grows(E, at),
+}
+
+// A program that returns at once, at every fuel.
+fn Program::pure<R>(E: Events, r: R) → Program<R>(E) {
+    Program(λ n => Ret(r), λ n => refl)
+}
+
+fn Program::iter<A, B>(E: Events, body: A → ITree<Step<A, B>>(E), a: A) → Program<B>(E) {
+    Program(λ n => ITree::iter(E, n, body, a), ITree::iter_family_grows(E, body, a))
+}
+
+fn Program::rec(D: Events, E: Events, body: (d: D.Cmd) → ITree<D.Resp(d)>(Events::sum(D, E)), d: D.Cmd)
+    → Program<D.Resp(d)>(E)
+{
+    Program(λ n => ITree::rec(D, E, body, n, d), ITree::rec_family_grows(D, E, body, d))
+}
+
+// Sequencing, one fuel shared by both sides.
+fn Program::bind<A, B>(E: Events, p: Program<A>(E), q: A → Program<B>(E)) → Program<B>(E) {
+    Program(λ n => ITree::bind(E, p.at(n), λ r => q(r).at(n)),
+        λ n => ITree::below_bind(E, p.at(n), p.at(Succ(n)), λ r => q(r).at(n), λ r => q(r).at(Succ(n)),
+            p.grows(n), λ r => q(r).grows(n)))
+}
+
+// The traces of a program: those of any member of its family.
+fn Program::Produces<R>(E: Events, p: Program<R>(E), tr: Trace<R>(E)) → Type { Converges<R>(E, p.at, tr) }
+
+// Refinement with the fuel gone from the statement: every trace `p` produces,
+// `q` produces.
+fn Program::Refines<R>(E: Events, p: Program<R>(E), q: Program<R>(E)) → Type {
+    (tr: Trace<R>(E)) → Program::Produces(E, p, tr) → Program::Produces(E, q, tr)
+}
+
+theorem Program::refines_refl<R>(E: Events, p: Program<R>(E)): Program::Refines(E, p, p) { λ tr c => c }
+
+theorem Program::refines_trans<R>(E: Events, p: Program<R>(E), q: Program<R>(E), v: Program<R>(E),
+    pq: Program::Refines(E, p, q), qv: Program::Refines(E, q, v)): Program::Refines(E, p, v)
+{
+    λ tr c => qv(tr, pq(tr, c))
+}
+
+// The fuel-indexed refinement of the families is the same thing.
+theorem Program::refines_of_families<R>(E: Events, p: Program<R>(E), q: Program<R>(E),
+    h: ITree::Refines(E, p.at, q.at)): Program::Refines(E, p, q)
+{
+    λ tr (c: Converges<R>(E, p.at, tr)) => h(c.n, tr, c.h)
+}
+
+theorem Program::families_of_refines<R>(E: Events, p: Program<R>(E), q: Program<R>(E),
+    h: Program::Refines(E, p, q)): ITree::Refines(E, p.at, q.at)
+{
+    λ n tr it => h(tr, Converges(n, it))
+}
+
+// A program returns at most one value.
+theorem Program::ret_unique<R>(E: Events, p: Program<R>(E), r: R, s: R,
+    c1: Program::Produces(E, p, TRet(r)), c2: Program::Produces(E, p, TRet(s))): r = s
+{
+    Converges::ret_unique(E, p.at, p.grows, r, s, c1, c2)
+}
+
+// A program diverges when it returns at no fuel at all. It may still interact
+// forever (its traces need not be short), but none of them returns. For a
+// program built from `iter` and `rec`, fuel is the only source of `Cut`, so
+// this is divergence and not missing fuel; a `Cut` written by hand claims
+// nothing and so returns nothing either.
+fn Program::Diverges<R>(E: Events, p: Program<R>(E)) → Type {
+    (r: R) → Program::Produces(E, p, TRet(r)) → False
+}
+
+// The loop that only goes round, and the proof it never returns, by
+// induction on the fuel: each pass is one `Tau`, and the last is a `Cut`.
+fn ITree::spin_step(E: Events, u: True) → ITree<Step<True, True>>(E) { Ret(Continue(u)) }
+
+theorem ITree::spin_never_returns(E: Events, n: Nat, r: True):
+    IsTrace(E, ITree::iter<True, True>(E, n, λ u => ITree::spin_step(E, u), trivial), TRet(r)) → False
+{
+    match n {
+        Zero => λ w => absurd(CutTrace::ended<True>(E, TRet(r), w)),
+        Succ(m) => λ h => ITree::spin_never_returns(E, m, r, h),
+    }
+}
+
+fn Program::spin(E: Events) → Program<True>(E) { Program::iter<True, True>(E, λ u => ITree::spin_step(E, u), trivial) }
+
+theorem Program::spin_diverges(E: Events): Program::Diverges(E, Program::spin(E)) {
+    λ r (c: Converges<True>(E, λ n => ITree::iter<True, True>(E, n, λ u => ITree::spin_step(E, u), trivial), TRet(r))) =>
+        ITree::spin_never_returns(E, c.n, r, c.h)
+}
+
+// …and a program that returns does not diverge.
+theorem Program::pure_not_diverges<R>(E: Events, r: R, d: Program::Diverges(E, Program::pure(E, r))): False {
+    d(r, Converges(0, Returned(refl)))
+}
