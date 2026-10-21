@@ -1,0 +1,266 @@
+// The stack (issues/function-ir-verified-lowering.md, round 3): the four
+// forms a compiled function uses on it, and what a process gives its program
+// to run them on.
+//
+// The forms: a word stored to and loaded from `[rsp + disp8]` (a frame
+// slot), a near CALL rel32 (the return address pushed), and RET (popped).
+// Each is a step of its own beside the fetched steps and the stores
+// (`MachineStep`), so a run over a program that calls is a count of them.
+//
+// What a process gives (`Stack`): `size` bytes from `low` up, writable in
+// every memory, below the canonical boundary, whose word reads see the stores
+// made into them and nothing else, and into which a store leaves code where
+// it was. These are a profile's laws, proved once for its memory; a proof
+// that runs over the stack names its addresses by their offsets from `low`
+// (`next_rip(low, i)`), so it never does arithmetic on an open address.
+import x86_64;
+import x86_64_block;
+import x86_64_fetch;
+import x86_64_data_read;
+import x86_64_fetched_code;
+import x86_64_store;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+import omega;
+
+// ---------------------------------------------------------------------------
+// The forms
+
+// `mov qword [rsp + offset], source` and `mov destination, qword [rsp + offset]`.
+record StackStore { source: Gpr, offset: BitVec(8) }
+record StackLoad { destination: Gpr, offset: BitVec(8) }
+
+// ModRM mod 01 (a byte displacement follows), the register in reg, r/m 100
+// (a SIB byte follows); SIB 0x24 is RSP as the base and no index.
+fn stack_modrm(register: Gpr) → BitVec(8) {
+    byte_from_fields(False, False, True, gpr_bit0(register), gpr_bit1(register), gpr_bit2(register), True, False)
+}
+fn stack_operand_bytes(opcode: Nat, register: Gpr, offset: BitVec(8)) → List<BitVec(8)> {
+    [rex_w_rr(Rsp, register), BitVec::ofNat(opcode), stack_modrm(register), BitVec::ofNat(0x24), offset]
+}
+fn StackStore::bytes(self store: StackStore) → List<BitVec(8)> { stack_operand_bytes(0x89, store.source, store.offset) }
+fn StackLoad::bytes(self load: StackLoad) → List<BitVec(8)> { stack_operand_bytes(0x8b, load.destination, load.offset) }
+
+inductive StackForm {
+    SpillWord(store: StackStore),
+    ReloadWord(load: StackLoad),
+    // CALL rel32: the displacement from the end of the call.
+    CallNear(displacement: BitVec(32)),
+    ReturnNear,
+}
+fn StackForm::bytes(self form: StackForm) → List<BitVec(8)> {
+    match form {
+        SpillWord(store) => store.bytes(),
+        ReloadWord(load) => load.bytes(),
+        CallNear(displacement) => Cons(BitVec::ofNat(0xe8), rel32_bytes(displacement)),
+        ReturnNear => [BitVec::ofNat(0xc3)],
+    }
+}
+
+// The slot a form names.
+fn stack_address(gprs: Gprs, offset: BitVec(8)) → BitVec(64) { read_gpr(Rsp, gprs).add(offset.sign_extend(56)) }
+// Where CALL pushes the return address.
+fn push_address(gprs: Gprs) → BitVec(64) { read_gpr(Rsp, gprs).sub(BitVec::ofNat(8)) }
+
+fn StackStore::after<M>(self store: StackStore, writes: ByteWrites<M>, before: MachineState<M>) → MachineState<M> {
+    MachineState(before.gprs, before.flags, next_rip(before.rip, 5),
+        writes.store(before.memory, stack_address(before.gprs, store.offset), word_bytes(read_gpr(store.source, before.gprs))))
+}
+fn StackLoad::after<M>(self load: StackLoad, word: BitVec(64), before: MachineState<M>) → MachineState<M> {
+    MachineState(write_gpr(load.destination, word, before.gprs), before.flags, next_rip(before.rip, 5), before.memory)
+}
+fn call_near_after<M>(writes: ByteWrites<M>, displacement: BitVec(32), before: MachineState<M>) → MachineState<M> {
+    MachineState(write_gpr(Rsp, push_address(before.gprs), before.gprs), before.flags,
+        near_branch_target(before.rip, 5, displacement),
+        writes.store(before.memory, push_address(before.gprs), word_bytes(next_rip(before.rip, 5))))
+}
+fn return_near_after<M>(word: BitVec(64), before: MachineState<M>) → MachineState<M> {
+    MachineState(write_gpr(Rsp, read_gpr(Rsp, before.gprs).add(BitVec::ofNat(8)), before.gprs), before.flags, word, before.memory)
+}
+
+// All eight bytes of a word lie below the canonical boundary, so none wraps
+// (as `WordLoadStep` asks).
+fn WordCanonical(address: BitVec(64)) → Type { address.toNat() + 8 <= Nat::pow(2, 47) }
+
+// The normal path of each form: its word canonical, writable where it
+// writes and present where it reads.
+fn StackForm::Executes<M>(self form: StackForm, data: ByteReadAccess<M>, writes: ByteWrites<M>, before, after: MachineState<M>) → Type {
+    match form {
+        SpillWord(store) => WordCanonical(stack_address(before.gprs, store.offset)) ∧
+            (writes.writable(before.memory, stack_address(before.gprs, store.offset), 8) ∧ after = store.after(writes, before)),
+        ReloadWord(load) => WordCanonical(stack_address(before.gprs, load.offset)) ∧
+            Exists<BitVec(64)>(λ word => read_word(data, before.memory, stack_address(before.gprs, load.offset)) = Some(word) ∧
+                after = load.after(word, before)),
+        CallNear(displacement) => WordCanonical(push_address(before.gprs)) ∧
+            (writes.writable(before.memory, push_address(before.gprs), 8) ∧ after = call_near_after(writes, displacement, before)),
+        ReturnNear => WordCanonical(read_gpr(Rsp, before.gprs)) ∧
+            Exists<BitVec(64)>(λ word => read_word(data, before.memory, read_gpr(Rsp, before.gprs)) = Some(word) ∧
+                after = return_near_after(word, before)),
+    }
+}
+
+// One fetched stack step: the form's exact bytes at RIP, run on its normal
+// path.
+fn StackStep<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, writes: ByteWrites<M>, before, after: MachineState<M>) → Type {
+    Exists<StackForm>(λ form => FetchedFrom(fetch, before.memory, InstructionBytes(before.rip, form.bytes())) ∧
+        form.Executes(data, writes, before, after))
+}
+
+// ---------------------------------------------------------------------------
+// Runs of every step a compiled program takes
+
+fn MachineStep<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, writes: ByteWrites<M>, before, after: MachineState<M>) → Type {
+    FetchedStep(fetch, data, before, after) ∨ (StoreStep(fetch, writes, before, after) ∨ StackStep(fetch, data, writes, before, after))
+}
+fn MachineRuns<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, writes: ByteWrites<M>, n: Nat) →
+    MachineState<M> → MachineState<M> → Type {
+    match n {
+        Zero => λ before after => before = after,
+        Succ(k) => λ before after => Exists<MachineState<M>>(λ middle =>
+            MachineStep(fetch, data, writes, before, middle) ∧ MachineRuns(fetch, data, writes, k, middle, after)),
+    }
+}
+fn MachineSteps<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, writes: ByteWrites<M>, before, after: MachineState<M>) → Type {
+    Exists<Nat>(λ n => MachineRuns(fetch, data, writes, n, before, after))
+}
+
+theorem machine_steps_refl<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, writes: ByteWrites<M>, state: MachineState<M>):
+    MachineSteps(fetch, data, writes, state, state) { Exists(Zero, refl) }
+
+theorem machine_steps_one<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, writes: ByteWrites<M>, before, after: MachineState<M>,
+    step: MachineStep(fetch, data, writes, before, after)): MachineSteps(fetch, data, writes, before, after) {
+    Exists(Succ(Zero), Exists(after, ⟨step, refl⟩))
+}
+
+theorem machine_runs_append<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, writes: ByteWrites<M>, n: Nat):
+    (before, middle, after: MachineState<M>) → MachineRuns(fetch, data, writes, n, before, middle) →
+    MachineSteps(fetch, data, writes, middle, after) → MachineSteps(fetch, data, writes, before, after) {
+    match n {
+        Zero => λ before middle after same rest => j(sym(same), λ s _ => MachineSteps(fetch, data, writes, s, after), rest),
+        Succ(k) => λ before middle after first rest => {
+            let tail = machine_runs_append(fetch, data, writes, k, first.witness, middle, after, first.proof.right, rest);
+            Exists(Succ(tail.witness), Exists(first.witness, ⟨first.proof.left, tail.proof⟩))
+        },
+    }
+}
+
+theorem machine_steps_trans<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, writes: ByteWrites<M>, before, middle, after: MachineState<M>,
+    first: MachineSteps(fetch, data, writes, before, middle), second: MachineSteps(fetch, data, writes, middle, after)):
+    MachineSteps(fetch, data, writes, before, after) {
+    machine_runs_append(fetch, data, writes, first.witness, before, middle, after, first.proof, second)
+}
+
+// A fetched run is a run of the machine.
+theorem machine_runs_of_fetched<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, writes: ByteWrites<M>, n: Nat):
+    (before, after: MachineState<M>) → FetchedRuns(fetch, data, n, before, after) → MachineRuns(fetch, data, writes, n, before, after) {
+    match n {
+        Zero => λ before after same => same,
+        Succ(k) => λ before after run => Exists(run.witness, ⟨Inl(run.proof.left),
+            machine_runs_of_fetched(fetch, data, writes, k, run.witness, after, run.proof.right)⟩),
+    }
+}
+theorem machine_steps_of_fetched<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, writes: ByteWrites<M>, before, after: MachineState<M>,
+    steps: FetchedSteps(fetch, data, before, after)): MachineSteps(fetch, data, writes, before, after) {
+    Exists(steps.witness, machine_runs_of_fetched(fetch, data, writes, steps.witness, before, after, steps.proof))
+}
+
+theorem stack_step_machine<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, writes: ByteWrites<M>, form: StackForm,
+    before, after: MachineState<M>, fetched: FetchedFrom(fetch, before.memory, InstructionBytes(before.rip, form.bytes())),
+    executes: form.Executes(data, writes, before, after)): MachineSteps(fetch, data, writes, before, after) {
+    machine_steps_one(fetch, data, writes, before, after, Inr(Inr(Exists(form, ⟨fetched, executes⟩))))
+}
+
+// ---------------------------------------------------------------------------
+// What a process gives its program: the stack and its laws
+
+// Two words at offsets `i` and `k` share no byte.
+fn WordsApart(i, k: Nat) → Type { (i + 8 <= k) ∨ (k + 8 <= i) }
+
+record Stack<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>) {
+    writes: ByteWrites<M>,
+    low: BitVec(64),
+    size: Nat,
+    canonical: (i: Nat) → i + 8 <= size → WordCanonical(next_rip(low, i)),
+    writable: (memory: M) → (i: Nat) → i + 8 <= size → writes.writable(memory, next_rip(low, i), 8),
+    // A word stored reads back, and the others read as they did.
+    stored: (memory: M) → (i: Nat) → i + 8 <= size → (word: BitVec(64)) →
+        read_word(data, writes.store(memory, next_rip(low, i), word_bytes(word)), next_rip(low, i)) = Some(word),
+    apart: (memory: M) → (i, k: Nat) → i + 8 <= size → k + 8 <= size → WordsApart(i, k) → (word: BitVec(64)) →
+        read_word(data, writes.store(memory, next_rip(low, i), word_bytes(word)), next_rip(low, k)) = read_word(data, memory, next_rip(low, k)),
+    // Code is never on the stack.
+    keeps_code: (memory: M) → (i: Nat) → i + 8 <= size → (word: BitVec(64)) → (bytes: List<BitVec(8)>) → (at: BitVec(64)) →
+        CodeResident(fetch, memory, bytes, at) → CodeResident(fetch, writes.store(memory, next_rip(low, i), word_bytes(word)), bytes, at),
+}
+
+fn Stack::at<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat) → BitVec(64) {
+    next_rip(stack.low, i)
+}
+
+// The words at and above offset `from` read in `after` as in `before`: what
+// a callee leaves of its caller's frame.
+fn Stack::Unchanged<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), from: Nat, before, after: M) → Type {
+    (k: Nat) → from <= k → k + 8 <= stack.size → read_word(data, after, stack.at(k)) = read_word(data, before, stack.at(k))
+}
+
+theorem Stack::unchanged_refl<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), from: Nat, memory: M):
+    stack.Unchanged(from, memory, memory) {
+    λ k _ _ => refl
+}
+
+theorem Stack::unchanged_trans<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), from: Nat,
+    a, b, c: M, first: stack.Unchanged(from, a, b), second: stack.Unchanged(from, b, c)): stack.Unchanged(from, a, c) {
+    λ k above fits => trans(second(k, above, fits), first(k, above, fits))
+}
+
+// Unchanged above a higher offset too.
+theorem Stack::unchanged_above<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), from, higher: Nat,
+    le: from <= higher, a, b: M, unchanged: stack.Unchanged(from, a, b)): stack.Unchanged(higher, a, b) {
+    λ k above fits => unchanged(k, Nat::le_trans(from, higher, k, le, above), fits)
+}
+
+// A word stored wholly below `from` leaves what is above it.
+theorem Stack::store_below<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), memory: M,
+    i, from: Nat, fits: i + 8 <= stack.size, below: i + 8 <= from, word: BitVec(64)):
+    stack.Unchanged(from, memory, stack.writes.store(memory, stack.at(i), word_bytes(word))) {
+    λ k above k_fits => stack.apart(memory, i, k, fits, k_fits, Inl(Nat::le_trans(i + 8, from, k, below, above)), word)
+}
+
+// ---------------------------------------------------------------------------
+// Addresses as offsets
+
+// CALL's push from offset `i + 8` lands at `i`, and RET's pop from `i`
+// returns to `i + 8`.
+theorem push_at(low: BitVec(64), i: Nat): next_rip(low, i + 8).sub(BitVec::ofNat(8)) = next_rip(low, i) {
+    trans(sym(BitVec::iter_sub_eq_sub(64, next_rip(low, i + 8), BitVec::ofNat(8))),
+        BitVec::iterate_add_sub_cancel(64, 8, next_rip(low, i)))
+}
+theorem pop_at(low: BitVec(64), i: Nat): next_rip(low, i).add(BitVec::ofNat(8)) = next_rip(low, i + 8) {
+    sym(BitVec::iter_add_eq_add(64, next_rip(low, i), BitVec::ofNat(8)))
+}
+
+// A displacement below 128 reads as itself.
+theorem displaced_at(low: BitVec(64), i: Nat, offset: BitVec(8), clear: offset.sign_bit() = False):
+    next_rip(low, i).add(offset.sign_extend(56)) = next_rip(low, i + offset.toNat()) {
+    trans(sym(BitVec::iter_add_eq_add(64, next_rip(low, i), offset.sign_extend(56))),
+        trans(rip_count(next_rip(low, i), BitVec::sign_extend_clear_toNat(7, 56, offset, clear)),
+            rip_compose(low, i, offset.toNat())))
+}
+
+// Slot `k` of a frame: a word at `8 * k`, for `k` below 16.
+fn slot_offset(k: Nat) → BitVec(8) { BitVec::ofNat(8 * k) }
+
+theorem slot_offset_value(k: Nat, small: k < 16): slot_offset(k).toNat() = 8 * k {
+    BitVec::toNat_ofNat(8, 8 * k, { omega })
+}
+theorem slot_offset_clear(k: Nat, small: k < 16): slot_offset(k).sign_bit() = False {
+    sign_bit_small(7, slot_offset(k), j(sym(slot_offset_value(k, small)), λ v _ => v < Nat::pow(2, 7), { omega }))
+}
+theorem slot_at(low: BitVec(64), i, k: Nat, small: k < 16):
+    next_rip(low, i).add(slot_offset(k).sign_extend(56)) = next_rip(low, i + 8 * k) {
+    trans(displaced_at(low, i, slot_offset(k), slot_offset_clear(k, small)),
+        rip_count(low, cong_fn<Nat, Nat>(λ v => i + v, slot_offset_value(k, small))))
+}

@@ -285,6 +285,13 @@ theorem Bool::is_true_and(self a: Bool): (b: Bool) → (a && b).IsTrue() → a.I
     }
 }
 
+theorem Bool::is_true_or(self a: Bool): (b: Bool) → (a || b).IsTrue() → a.IsTrue() ∨ b.IsTrue() {
+    match a {
+        False => λ b h => Inr(h),
+        True => λ b h => Inl(trivial),
+    }
+}
+
 theorem Bool::is_true_and_intro(self a: Bool): (b: Bool) → a.IsTrue() → b.IsTrue() → (a && b).IsTrue() {
     match a {
         False => λ b p q => false_elim(p),

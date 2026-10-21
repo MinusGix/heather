@@ -139,6 +139,111 @@ costs a refusal, never a wrong program.
 3. **Calls and the stack** (`calls`, `composition`, `sharing`,
    `stack_local`, `stack_save`, …): a callee's contract as a `Proved`-shaped
    item, the frame view, spills.
+
+   *Round 3 foundation as built:* `x86_64_calls` and its friends burn in
+   B2, so the stack is new foundation, not salvage.
+   - `lib/std/arch/x86_64/x86_64_stack.hthr` has four step forms: a word
+     spilled to and reloaded from `[rsp + disp8]`, CALL rel32 and RET. A
+     `MachineStep` is a fetched step, a store, or one of them. A process
+     gives its program a `Stack`: `size` bytes from `low`, writable,
+     canonical, word reads seeing exactly the stores made into them, and
+     code untouched by those stores. These are a profile's laws, proved
+     once for its memory. Proofs name stack addresses by offset from `low`
+     (`push_at`, `pop_at`, `slot_at`), so none does arithmetic on an open
+     address. `BitVec::sign_extend_clear_toNat` is what lets a small
+     displacement read as itself.
+   - `x86_64_asm` gains `CallTo(target)`, `Ret`, `Spill` and `Reload`
+     items. `Prog::laid_out` checks that a call lands on its label, ahead or
+     behind (`call_lands`).
+   - Round 1's frame lemmas (`Kept`, `leaves`, `execute_block_kept`,
+     `callee_saved`) moved down to `x86_64_kept` so the foundation can
+     state them.
+   - `lib/std/arch/x86_64/x86_64_stack_runs.hthr` has `Site::Moves`, the
+     state-level `Runs`. Conditions are over whole states, the program
+     stays resident, and a frame is stated against a ghost state.
+     `moves_of_runs` lifts round 2's pure runs, so round 2 is unchanged. The
+     stack forms' lemmas are `moves_spill`, `moves_reload` and
+     `moves_call`. A callee's contract is `Site::Returns`: entered at stack
+     offset `i` with the return address there, it returns there with RSP
+     at `i + 8` and `post(i, entry, exit)`. `returns_by` closes a body by
+     RET into one.
+   - The fixture (`fixtures/x86_64_stack_runs_examples.hthr`, checked by
+     `x86_64_stack_runs.rs`) proves a two-instruction callee's contract and
+     composes a caller's CALL against it by hand. A toy memory (code a map
+     of its own, one byte per address value) meets the `Stack` laws, so they
+     are satisfiable, and the caller's theorem is instantiated at it.
+
+   *Round 3 calls as built:* option A of the design question, a `Call`
+   node in `StructuredRegion` (Minus, 2026-10-21).
+   - `lib/function_ir.hthr`: `Call(callee, arguments, result)`, at most
+     six word arguments. Round 2's `StructuredRegionHolds` says `False` of
+     it, so `emit` refuses it and round 2's theorem is unchanged.
+     `StructuredRegionHoldsIn(callees, values, region)` reads a call
+     through `callees: Callees()`, a relation from a function, its
+     arguments and a result. A `Function` is parameters, a body and a
+     result id, and `Function::Computes(callees, arguments, result)` is
+     that some valuation binds the parameters, satisfies the body and gives
+     the result. A program is a list of functions, last first; function `f`
+     calls only the ones after it, so a program cannot recurse
+     (`program_callees`).
+   - `x86_64_stack_runs` gains the spill and reload runs over register
+     lists (`List::spills`/`reloads`, `Site::moves_spills`/`moves_reloads`
+     against `Stack::Saved`), `moves_branch` with machine-run arms, and
+     `returns_weaken`. `moves_call` takes the return address's offset as a
+     function of the state.
+   - `lib/function_ir_lower_calls.hthr` lowers with SysV's registers. A
+     call spills the eight caller-saved registers other than RAX into the
+     caller's frame, moves the arguments into RDI…R9, CALLs `Succ(f)` and
+     reloads, so the file after it is the file before it with the result
+     in RAX. Body code may not write a callee-saved register (checked by
+     evaluation, `leaves_all`), and every callee keeps them by contract.
+     Each function is its label, a 64-byte frame, the body
+     (`StructuredRegion::emit_calls`, round 2's `emit` with calls), the
+     result moved to RAX, the frame freed and RET. Function `k` asks for
+     `72 * Succ(k)` bytes of stack below its return address.
+   - The contract is `Site::Calls(stack, callees, bound)`. Every function
+     below `bound`, entered at its label with its arguments in their
+     registers, words its body says may give `result`, and room on the
+     stack, returns `result` in RAX. RSP is back, the callee-saved
+     registers are kept, and the stack above its return address is
+     unchanged. The theorem is `lower_program_correct`: whatever the
+     placement, a program `lower_program` returns has every function meet
+     it, at any origin and with any stack meeting the `Stack` laws. It is
+     proved per function (`Function::emit_returns`, given the earlier
+     functions' contracts) and by induction over the list
+     (`emit_functions_calls`).
+   - The fixture (`fixtures/function_ir_lower_calls_examples.hthr`, checked
+     by `function_ir_lower_calls.rs`) lowers `double`, `add_double` (a
+     value live across a call) and `pick` (a call in a conditional's arm)
+     by `refl`, and instantiates the theorem for one function at its
+     offset. Its refusal controls are a value left in RAX across a call
+     (the same function lowers when the placement puts it in RCX),
+     recursion, a forward call, and seven arguments.
+   - Proof-engineering lesson: compose `Moves` stages as separate theorems
+     with explicit statements. One theorem composing them inline with lets
+     and inferred lambdas cost tens of seconds and millions of conversion
+     queries; split into stages, each checks in a fraction of a second. Keep
+     `omega` in small lemmas, because inside a large context it slows the
+     kernel gate.
+
+   Left for later:
+   - A call saves all eight caller-saved registers, live or not, and a
+     value may never sit in a callee-saved register, because functions
+     have no prologue saves. Saving only the live registers, and letting a
+     function save the callee-saved ones it uses, are selection rules with
+     their own cases.
+   - The stack bound is by function index (`72` bytes a level), not by
+     call depth, and a CALL does not keep SysV's 16-byte alignment. That
+     only matters when calling foreign code.
+   - Word arguments and results only, at most six arguments, and no
+     recursion. Loops are [[function-ir-lowering-loops]].
+   - The placement planner has no `Call` arm, and nothing plans a whole
+     program, so the fixture's placements are written by hand.
+   - elf64's process stack meets the `Stack` laws only once the process
+     theorem is rebuilt on these runs. The toy memory is the one instance.
+   - `x86_64_step_forms`' decoder does not know the stack forms, so
+     `MachineStep` has no determinism theorem
+     (`linux_x86_64_determinism`'s counterpart).
 4. **The CLI through the compiler**: `compile-x86` evaluates `lower` and
    instantiates the theorem instead of generating a certificate per
    function; the immediate forms (`AddRI8`/`AddRI32`, CMP-and-Jcc without a

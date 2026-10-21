@@ -29,6 +29,7 @@ import x86_64_fetched_code;
 import x86_64_layout;
 import x86_64_data_read;
 import x86_64_store;
+import x86_64_stack;
 import bitvec;
 import bool;
 import list;
@@ -54,6 +55,12 @@ inductive Asm {
     // A near JCC or JMP to the label named `target`.
     Jcc(cc: ConditionCode, target: Nat),
     Jmp(target: Nat),
+    // A near CALL to the label named `target`, RET, and a word stored to
+    // and loaded from a frame slot (x86_64_stack).
+    CallTo(target: Nat),
+    Ret,
+    Spill(store: StackStore),
+    Reload(load: StackLoad),
     // A piece measured by its lemma: a library's layout, too long to read
     // its length off its bytes.
     Piece(bytes: List<BitVec(8)>, len: Nat, measured: bytes.len() = len),
@@ -94,6 +101,10 @@ fn asm_len(item: Asm) → Nat {
         StoreByte(_) => 3,
         Jcc(_, _) => 6,
         Jmp(_) => 5,
+        CallTo(_) => 5,
+        Ret => 1,
+        Spill(_) => 5,
+        Reload(_) => 5,
         Piece(_, len, _) => len,
         Refer(_, len, _) => len,
         Hole(_, len) => len,
@@ -120,6 +131,10 @@ fn asm_bytes(fills: Nat → List<BitVec(8)>, labels: Nat → Nat, here: Nat, ite
         StoreByte(store) => byte_store_bytes(store),
         Jcc(cc, target) => near_control_bytes(JumpIfNear(cc, near_rel(here + 6, labels(target)))),
         Jmp(target) => near_control_bytes(JumpNear(near_rel(here + 5, labels(target)))),
+        CallTo(target) => CallNear(near_rel(here + 5, labels(target))).bytes(),
+        Ret => ReturnNear.bytes(),
+        Spill(store) => store.bytes(),
+        Reload(load) => load.bytes(),
         Piece(bytes, _, _) => bytes,
         Refer(bytes, _, _) => bytes(labels, here),
         Hole(index, _) => fills(index),
@@ -143,6 +158,7 @@ fn asm_jump_of(labels: Nat → Nat, here: Nat, item: Asm) → BitVec(32) {
     match item {
         Jcc(_, target) => near_rel(here + 6, labels(target)),
         Jmp(target) => near_rel(here + 5, labels(target)),
+        CallTo(target) => near_rel(here + 5, labels(target)),
         _ => BitVec::ofNat(0),
     }
 }
@@ -206,6 +222,10 @@ theorem fills_fit_before(fills: Nat → List<BitVec(8)>, before: Prog, name: Nat
         StoreByte(_) => λ f => f,
         Jcc(_, _) => λ f => f,
         Jmp(_) => λ f => f,
+        CallTo(_) => λ f => f,
+        Ret => λ f => f,
+        Spill(_) => λ f => f,
+        Reload(_) => λ f => f,
         Piece(_, _, _) => λ f => f,
         Refer(_, _, _) => λ f => f,
         Hole(_, _) => λ f => f.right,
@@ -222,6 +242,10 @@ theorem asm_bytes_len(fills: Nat → List<BitVec(8)>, labels: Nat → Nat, here:
         StoreByte(_) => λ _ => refl,
         Jcc(_, _) => λ _ => refl,
         Jmp(_) => λ _ => refl,
+        CallTo(_) => λ _ => refl,
+        Ret => λ _ => refl,
+        Spill(_) => λ _ => refl,
+        Reload(_) => λ _ => refl,
         Piece(_, _, measured) => λ _ => measured,
         Refer(_, _, measured) => λ _ => measured(labels, here),
         Hole(_, _) => λ f => f.left,
