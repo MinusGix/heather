@@ -39,8 +39,37 @@ use heather_kernel::term::GlobalCtx;
 /// definition or kernel-checks it (stored theorems are statement-checked;
 /// they carry no proof). The returned elaborator has `NoGate`, so fixture
 /// theorems, mutations and controls always reach the real kernel.
+///
+/// The replay itself runs **once per test process** per module list, and
+/// every call forks the resulting image (`SemanticImage::elaborator`), so a
+/// test that asks for its prefix per call no longer re-decodes and rechecks
+/// the stored images per call (see [`process_base`] on why a per-thread memo
+/// does not do this).
 pub fn semantic_test_base(modules: &[(&str, &str)]) -> heather_elab::Elaborator {
-    semantic_test_base_with(modules, |_| {})
+    use std::sync::Mutex;
+    static BUILT: Mutex<Vec<(u64, heather_elab::SemanticImage)>> = Mutex::new(Vec::new());
+    let key = module_list_key(modules);
+    // Held across the replay, as in `library`.
+    let mut built = BUILT.lock().unwrap_or_else(|p| p.into_inner());
+    if let Some((_, image)) = built.iter().find(|(k, _)| *k == key) {
+        return image.elaborator();
+    }
+    let image = semantic_test_base_with(modules, |_| {}).semantic_image();
+    let fork = image.elaborator();
+    built.push((key, image));
+    fork
+}
+
+/// The identity of an ordered module list: names and exact sources.
+fn module_list_key(modules: &[(&str, &str)]) -> u64 {
+    let mut key = Fnv1a::new();
+    for (name, src) in modules {
+        key.write(name.as_bytes());
+        key.write(&[0]);
+        key.write(src.as_bytes());
+        key.write(&[0]);
+    }
+    key.0
 }
 
 /// [`semantic_test_base`] with the elaborator configured *before* the prefix
@@ -259,6 +288,28 @@ pub fn with_decl_cache(e: &mut heather_elab::Elaborator, prefix: impl FnOnce(&mu
     }
 }
 
+/// A binary's fixed base, built by `build` **once per test process** and
+/// forked on every call (`SemanticImage::elaborator`: fresh attempt, report,
+/// policy and gate state around the shared committed prefix).
+///
+/// Keep such a base in a process-wide `static … OnceLock`, never in a
+/// `thread_local!`: libtest runs every test on a thread of its own, so a
+/// thread-local "once per worker" base is rebuilt by every test. Until
+/// 2026-10-21 thirty-three binaries did exactly that
+/// (`issues/suite-full-lane-cost-2026-10.md`). `OnceLock` also makes the
+/// other tests wait for the first build instead of replaying a cold store
+/// beside it. A build that fails is kept as its message, so every test
+/// reports it.
+pub fn process_base(
+    slot: &'static std::sync::OnceLock<Result<heather_elab::SemanticImage, String>>,
+    build: impl FnOnce() -> Result<heather_elab::Elaborator, String>,
+) -> Result<heather_elab::Elaborator, String> {
+    slot.get_or_init(|| build().map(|e| e.semantic_image()))
+        .as_ref()
+        .map(heather_elab::SemanticImage::elaborator)
+        .map_err(Clone::clone)
+}
+
 /// `modules` elaborated from source on top of the prelude **once per test
 /// process**, and every call a fork of that checked state
 /// (`issues/suite-tests-reelaborate-library-modules.md`).
@@ -273,14 +324,7 @@ pub fn with_decl_cache(e: &mut heather_elab::Elaborator, prefix: impl FnOnce(&mu
 pub fn library(modules: &[(&str, &str)]) -> heather_elab::Elaborator {
     use std::sync::{Mutex, OnceLock};
     static BUILT: OnceLock<Mutex<Vec<(u64, heather_elab::SemanticImage)>>> = OnceLock::new();
-    let mut key = Fnv1a::new();
-    for (name, src) in modules {
-        key.write(name.as_bytes());
-        key.write(&[0]);
-        key.write(src.as_bytes());
-        key.write(&[0]);
-    }
-    let key = key.0;
+    let key = module_list_key(modules);
     // Held across the build, so parallel tests of one binary wait for the
     // first rather than all elaborating the same prefix at once.
     let mut built = BUILT.get_or_init(|| Mutex::new(Vec::new())).lock().unwrap_or_else(|p| p.into_inner());

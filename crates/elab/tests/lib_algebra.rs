@@ -31,9 +31,9 @@
 //! `scripts/test` still runs all of it; the fast lane keeps one positive per
 //! load-bearing axis instead of paying the full 35-probe cross-product.
 
-use std::cell::OnceCell;
+use std::sync::OnceLock;
 
-use heather_elab::{ElabError, Elaborator};
+use heather_elab::{ElabError, Elaborator, SemanticImage};
 
 use crate::support;
 
@@ -87,19 +87,17 @@ fn load_modules(gated: bool) -> Result<Elaborator, String> {
     Ok(e)
 }
 
-// A clone is an isolated elaborator snapshot by design. Each libtest worker
-// builds the checked library closure once; probes clone it and add only their
-// own ungated module. The empty acceptance path below deliberately remains a
-// fresh, uncached front-to-back check.
-thread_local! {
-    static BASE: OnceCell<Result<Elaborator, String>> = const { OnceCell::new() };
-}
+// The checked library closure is built once per process
+// (`support::process_base`); probes fork it and add only their own ungated
+// module. The empty acceptance path below deliberately remains a fresh,
+// uncached front-to-back check.
+static BASE: OnceLock<Result<SemanticImage, String>> = OnceLock::new();
 
 fn run(extra: &str) -> Result<Elaborator, String> {
     if extra.is_empty() {
         return load_modules(false);
     }
-    let mut e = BASE.with(|base| base.get_or_init(|| load_modules(true)).clone())?;
+    let mut e = support::process_base(&BASE, || load_modules(true))?;
     if !extra.is_empty() {
         // The probe module imports the whole closure, exactly as a user file
         // would; `import` lines have to come first, so they are prepended here.

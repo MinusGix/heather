@@ -26,9 +26,11 @@
 //! `the_equal_arity_rule_and_its_negative_control` (item 7), and
 //! `the_linked_slot_forward_references` (item 8).
 
-use std::cell::OnceCell;
+use std::sync::OnceLock;
 
-use heather_elab::{ElabError, Elaborator};
+use heather_elab::{ElabError, Elaborator, SemanticImage};
+
+use crate::support;
 
 const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
 const BOOL: &str = include_str!("../../../lib/std/bool.hthr");
@@ -70,12 +72,10 @@ instance<A> Mon<List<A>>(List::append) {
 }
 "#;
 
-// Clone the fixed prefix per probe. This is isolated committed state, not a
-// shared mutable elaborator; thread-local storage pays the build at most once
-// on each of libtest's two workers.
-thread_local! {
-    static BASE: OnceCell<Result<Elaborator, String>> = const { OnceCell::new() };
-}
+// The fixed prefix, built once per process and forked per probe
+// (`support::process_base`): isolated committed state, not a shared mutable
+// elaborator.
+static BASE: OnceLock<Result<SemanticImage, String>> = OnceLock::new();
 
 fn build_base() -> Result<Elaborator, String> {
     let mut e = Elaborator::with_prelude().expect("prelude");
@@ -95,7 +95,7 @@ fn build_base() -> Result<Elaborator, String> {
 }
 
 fn run(extra: &str) -> Result<Elaborator, String> {
-    let mut e = BASE.with(|base| base.get_or_init(build_base).clone())?;
+    let mut e = support::process_base(&BASE, build_base)?;
     let src = format!("import bool;\nimport nat;\nimport option;\nimport list;\n{extra}");
     match e.elab_module_source("probe", &src) {
         Ok(()) => Ok(e),

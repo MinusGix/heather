@@ -7,7 +7,7 @@
 //! an annotation or a parameter, not only a statement), and negative controls
 //! (no match, a wrong proof, forged references, no goal, no protocol).
 
-use std::cell::OnceCell;
+use std::sync::OnceLock;
 
 use heather_elab::host::{Answer, NativeTactic, RExpr, Request, Step};
 use heather_elab::{ElabError, Elaborator, SemanticImage};
@@ -26,12 +26,10 @@ const MODULES: &[(&str, &str)] = &[
     ("tactic", include_str!("../../../lib/std/tactic.hthr")),
 ];
 
-thread_local! {
-    static BASE: OnceCell<SemanticImage> = const { OnceCell::new() };
-}
+static BASE: OnceLock<SemanticImage> = OnceLock::new();
 
 fn elaborator() -> Elaborator {
-    BASE.with(|base| base.get_or_init(|| support::semantic_test_base(MODULES).semantic_image()).elaborator())
+    BASE.get_or_init(|| support::semantic_test_base(MODULES).semantic_image()).elaborator()
 }
 
 fn message(error: ElabError) -> String {

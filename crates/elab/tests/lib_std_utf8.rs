@@ -10,16 +10,13 @@
 //! byte above the scalar range all have to come back `None`.
 
 use heather_elab::{ElabError, Elaborator, SemanticImage};
-use std::cell::OnceCell;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 use crate::support;
 
 static ELAB_LOCK: Mutex<()> = Mutex::new(());
 
-thread_local! {
-    static BASE: OnceCell<SemanticImage> = const { OnceCell::new() };
-}
+static BASE: OnceLock<SemanticImage> = OnceLock::new();
 
 /// The first nine entries are `semantic_x86_warmup.rs`'s list in its order,
 /// so this target reads the images that warmup wrote instead of elaborating
@@ -57,10 +54,7 @@ fn probe(body: &str) -> Result<(), String> {
         }
         return Ok(());
     }
-    let mut e = BASE.with(|base| {
-        base.get_or_init(|| support::semantic_test_base(MODULES).semantic_image())
-            .elaborator()
-    });
+    let mut e = BASE.get_or_init(|| support::semantic_test_base(MODULES).semantic_image()).elaborator();
     let src = format!("{PREAMBLE}{body}");
     match e.elab_module_source("probe", &src) {
         Ok(()) => Ok(()),

@@ -27,9 +27,7 @@ fn chain(depth: usize, seed: &str) -> String {
 // Kernel steps of every `_link`/`_link_at` item, by name within the
 // certificate, the gate run serially.
 fn link_steps(clients: &str, function: &str) -> Vec<(String, u64)> {
-    let mut elab = common::base_image(common::MODULES.len());
-    let model = include_str!("../../../lib/std/arch/x86_64/x86_64_structured_block.hthr");
-    elab.elab_module_source("x86_64_structured_block", model).unwrap_or_else(|e| panic!("{}", e.render(model)));
+    let mut elab = common::structured_base();
     elab.set_kernel_workers(1);
     elab.elab_module_source("clients", clients).unwrap_or_else(|e| panic!("{}", e.render(clients)));
     let emission = generate_elaborated_typed_x86(&elab, "c", &format!("clients::{function}"),

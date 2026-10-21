@@ -10,8 +10,7 @@
 //! names the atoms `s.words` and `s.bytes`, and a motive's field that
 //! computes to `Succ(s.words)` is not below `s.words`.
 
-use std::cell::OnceCell;
-use std::sync::Mutex;
+use std::sync::OnceLock;
 
 use heather_elab::{ElabError, Elaborator, SemanticImage};
 
@@ -41,21 +40,16 @@ const MODULES: &[(&str, &str)] = &[
     ("omega", OMEGA),
 ];
 
-static PREFIX_LOAD: Mutex<()> = Mutex::new(());
-
-thread_local! {
-    static BASE: OnceCell<SemanticImage> = const { OnceCell::new() };
-}
+static BASE: OnceLock<SemanticImage> = OnceLock::new();
 
 fn load_image() -> SemanticImage {
-    // As in `omega_atoms_computation.rs`: one libtest worker fills the cold
-    // image store, the others wait and replay it.
-    let _serial = PREFIX_LOAD.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    // Built once per process (`BASE` is a process-wide `OnceLock`; the other
+    // tests wait for it): see `support`'s note on per-test threads.
     support::semantic_test_base(MODULES).semantic_image()
 }
 
 fn base() -> Elaborator {
-    BASE.with(|base| base.get_or_init(load_image).elaborator())
+    BASE.get_or_init(load_image).elaborator()
 }
 
 const PRELUDE: &str = "import logic;\nimport bool;\nimport nat;\nimport list;\nimport omega;\n\

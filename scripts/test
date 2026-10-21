@@ -231,8 +231,9 @@ fi
 # An unfiltered workspace run has no Cargo selection semantics left to
 # preserve, so run its independent binaries in bounded parallel. Focused
 # invocations retain Cargo's native serial path below. By default the runner
-# chooses the smaller of the available two-thread CPU slots minus one
-# (libtest gets two threads) and the number of children a 3 GiB working-set
+# chooses the smaller of a CPU bound (two-thread slots minus one on eight or
+# more CPUs, three children per four CPUs below that; `jobBounds` in
+# run-test-targets.mjs says why) and the number of children a 3 GiB working-set
 # budget each fits in MemAvailable while leaving 2 GiB for the host (the
 # address-space cap is 6 GiB; LIMIT_KIB/BUDGET_KIB in run-test-targets.mjs).
 # HEATHER_TEST_JOBS
