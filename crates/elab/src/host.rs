@@ -20,14 +20,15 @@
 //! built from the library's builders the same way. Each step is a pending
 //! application over the previous tree's closure, so nothing is read back into
 //! syntax and re-evaluated, and the force cache shares the tree's spine
-//! between steps.
+//! between steps. The one exception is [`Interpreted::pin`], which looks at
+//! a resumed tree's outer pair to keep its proof from chaining.
 
 use std::sync::Arc as Rc;
 
 use heather_kernel::level::Level;
 use heather_kernel::term::{GlobalBinding, GlobalCtx, GlobalVar, LocalCtx, LocalSubst, LocalVar, Term, Type};
 use heather_kernel::layer::Layer;
-use heather_kernel::value::{Elim, Env, PiAnn, TmClo, TyClo, ValueArena};
+use heather_kernel::value::{Elim, Env, PiAnn, TmClo, TyClo, Val, ValueArena};
 use heather_syntax::ast::{Expr, Span};
 
 use crate::certgen::Reader;
@@ -37,10 +38,6 @@ use crate::{err, Elaborator, R};
 /// Requests one run may make before it is stopped. A tactic is library code
 /// and may loop; fuel bounds each evaluation, this bounds the conversation.
 const REQUEST_BUDGET: usize = 10_000;
-
-/// Past this many answered requests, an evaluation failure is most likely
-/// the continuation chain's depth (issues/tactic-run-continuation-chain.md).
-const LONG_RUN: usize = 900;
 
 /// Nodes of one returned `Expr`, and characters of one `String`, the host
 /// will read before declining (the runaway discipline: the value is produced
@@ -281,8 +278,39 @@ impl Speaker for Interpreted<'_, '_, '_> {
 
     fn resume(&mut self, answer: Answer) -> Result<Step, String> {
         let a = self.answer(&answer)?;
-        self.tree = self.call("host_resume", vec![self.tree, a])?;
+        self.tree = self.pin(self.call("host_resume", vec![self.tree, a])?)?;
         self.step()
+    }
+}
+
+impl<'v> Interpreted<'_, '_, 'v> {
+    /// The tree as a value whose two components are values too.
+    ///
+    /// `Tac` is tier 2, `Σ(t : W). canon t` (docs/inductive-tier2-w-lowering.md
+    /// §5), and `host_resume`'s `match` rebuilds the continuation as
+    /// `k := λy. ⟨f' y, c y⟩` with `c` the scrutinee's *proof*, `snd t`
+    /// (§7). So the resumed tree's proof is the previous tree's proof
+    /// applied, and nothing forces it until a leaf arm's `J` does: left
+    /// pending, the proof of the n-th tree is a chain of n projections, and
+    /// forcing it at the final `Pure` stood on one native frame per answered
+    /// request, which capped a run near `NATIVE_DEPTH_LIMIT` requests
+    /// (issues/tactic-run-continuation-chain.md). Forcing both components here,
+    /// one step at a time, and handing the next `host_resume` closures that
+    /// *are* values, keeps every chain one link long whatever the cache keeps.
+    ///
+    /// This is the only place the host looks at the lowering, and only at its
+    /// outer pair; a value of any other shape is left as it is.
+    fn pin(&self, tree: &'v TmClo<'v>) -> Result<&'v TmClo<'v>, String> {
+        let force = |c| {
+            self.reader.force(c).map_err(|_| "evaluating the tactic ran out of fuel or nesting depth".to_string())
+        };
+        let v = force(tree)?;
+        let Val::Pair { ann, fst, snd } = &*v else {
+            return Ok(tree);
+        };
+        let fst = self.arena.tm(TmClo::val(force(fst)?));
+        let snd = self.arena.tm(TmClo::val(force(snd)?));
+        Ok(self.arena.tm(TmClo::val(Rc::new(Val::Pair { ann: ann.clone(), fst, snd }))))
     }
 }
 
@@ -356,13 +384,6 @@ impl Elaborator {
         let mut step = speaker.start();
         for answered in 0..REQUEST_BUDGET {
             let request = match step {
-                Err(msg) if answered >= LONG_RUN => {
-                    return fail(format!(
-                        "{msg}, after {answered} requests; reading the result of a long run replays \
-                         its whole chain of continuations, so one run is limited to about a thousand \
-                         requests for now (issues/tactic-run-continuation-chain.md)"
-                    ))
-                }
                 Err(msg) => return fail(format!("{msg}, after {answered} requests")),
                 Ok(Step::Done(e)) => {
                     let r = match self.reify(cx, &handles, &e) {

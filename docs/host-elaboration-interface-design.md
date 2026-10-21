@@ -509,9 +509,15 @@ Recorded after building it, as the inductive-tier designs do.
   `match`. `ValueArena` now memoizes that syntax by the identity of the
   eliminator's bodies (`fire_elim_w`, `WIhSyntax`); a request costs tens of
   microseconds and a few hundred requests run in well under a second.
-- **A run is limited to about a thousand requests.** Reading the final `Pure`
-  leaf nests one evaluator level per earlier request and hits
-  `NATIVE_DEPTH_LIMIT`; the error says so.
-  `issues/tactic-run-continuation-chain.md` has the measurements and the
-  likely mechanism (the tier-2 leaf proof is projected from the parent's).
+- **A run was limited to about a thousand requests** (fixed 2026-10-21).
+  A `match` on a tier-2 tree rebuilds the continuation over the scrutinee's
+  proof, so each resumed tree's proof was the previous one's applied, and the
+  final `Pure` leaf's `J` forced the whole chain at once, one evaluator level
+  per earlier request, into `NATIVE_DEPTH_LIMIT`. The host now forces both
+  components of each resumed tree and holds them as values
+  (`Interpreted::pin`), so the chain stays one link long and the request
+  budget is the only bound (`issues/tactic-run-continuation-chain.md`).
+  What remains is a cost of the tactic's own shape: binds nested to the
+  left are exponential in their depth (`issues/tier2-left-nested-bind-cost.md`),
+  so a loop should recurse in the continuation, `step.bind(λ _ => loop(j))`.
 
