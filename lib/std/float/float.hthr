@@ -65,6 +65,12 @@ fn Specials::has_nan(self s: Specials) → Bool { match s { Ieee => True, NanOnl
 
 fn Specials::reserves_top(self s: Specials) → Bool { match s { Ieee => False, NanOnly => True, FiniteOnly => False } }
 
+// A format with infinities has NaN too: an invalid operation on infinities
+// has a value.
+theorem Specials::nan_of_inf(self s: Specials, has: s.has_inf().IsTrue()): s.has_nan().IsTrue() {
+    match s as λ t => t.has_inf().IsTrue() → t.has_nan().IsTrue() { Ieee => λ _ => trivial, NanOnly => λ _ => trivial, FiniteOnly => λ no => false_elim(no) }(has)
+}
+
 // Only a format without infinities reserves its top significand.
 theorem Specials::inf_free(self s: Specials, has: s.has_inf().IsTrue()): ¬s.reserves_top().IsTrue() {
     match s as λ t => t.has_inf().IsTrue() → ¬t.reserves_top().IsTrue() { Ieee => λ _ r => r, NanOnly => λ no _ => no, FiniteOnly => λ no _ => no }(has)

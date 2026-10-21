@@ -1543,6 +1543,149 @@ fn Nat::even_dec(self n: Nat) → Nat::Even(n) ∨ ¬Nat::Even(n) {
 instance(n: Nat) Decide<Nat::Even(n)> { dec := Nat::even_dec(n), bit := or_bit(Nat::even_dec(n)), reflects := or_bit_reflects(Nat::even_dec(n)) }
 
 // ---------------------------------------------------------------------------
+// Binary long division. `divmod` counts the quotient out one unit at a time,
+// so under evaluation it costs the quotient itself; the kernel does not
+// accelerate its state machine (`crates/kernel/DESIGN.md`, acceleration
+// policy). `ldiv` divides `⌊n/2⌋` first and doubles: one halving, one
+// multiplication, one subtraction and one comparison per quotient bit, each
+// of which the kernel evaluates on numerals directly, so a quotient of `b`
+// bits costs `b` steps. Its result is `divmod`'s at every positive divisor
+// (`ldiv_div`, `ldiv_mod`); the numerator itself is the fuel, and the
+// recursion stops when the numerator reaches zero.
+
+fn DivMod::quot(self s: DivMod) → Nat { match s { MkDivMod(q, _) => q } }
+
+fn DivMod::rem(self s: DivMod) → Nat { match s { MkDivMod(_, r) => r } }
+
+// The next bit of the quotient: `r` is what is left of `n` after twice the
+// quotient so far.
+fn Nat::ldiv_pick(d, q, r: Nat, c: d <= r ∨ ¬(d <= r)) → DivMod {
+    match c { Inl(_) => MkDivMod(Succ(q * 2), r -d), Inr(_) => MkDivMod(q * 2, r) }
+}
+
+// The bit halving drops: `n = 2·h + bit` when `h = ⌊n/2⌋`.
+fn Nat::ldiv_bit(n, h: Nat) → Nat { match Succ(h + h).le_dec(n) { Inl(_) => 1, Inr(_) => 0 } }
+
+fn Nat::ldiv_step(n, d: Nat, s: DivMod) → DivMod {
+    match s {
+        MkDivMod(q, r) => Nat::ldiv_pick(d, q, (r + r) + Nat::ldiv_bit(n, n.half()), d.le_dec((r + r) + Nat::ldiv_bit(n, n.half()))),
+    }
+}
+
+fn Nat::ldiv_fuel(self n, d, fuel: Nat) → DivMod {
+    match fuel {
+        Zero => MkDivMod(0, n),
+        Succ(f) => match n {
+            Zero => MkDivMod(0, 0),
+            Succ(k) => Nat::ldiv_step(Succ(k), d, Succ(k).half().ldiv_fuel(d, f)),
+        },
+    }
+}
+
+fn Nat::ldiv(self n, d: Nat) → DivMod { n.ldiv_fuel(d, n) }
+
+theorem Nat::half_succ_le(self k: Nat): Succ(k).half() <= k { match k { Zero => trivial, Succ(l) => l.half_le() } }
+
+theorem Nat::ldiv_bit_parts(self n: Nat): (n.half() + n.half()) + Nat::ldiv_bit(n, n.half()) = n ∧ Nat::ldiv_bit(n, n.half()) <= 1 {
+    match Succ(n.half() + n.half()).le_dec(n) as λ c => (n.half() + n.half()) + (match c { Inl(_) => 1, Inr(_) => 0 }) = n ∧ Nat::Le(match c { Inl(_) => 1, Inr(_) => 0 }, 1) {
+        Inl(le) => And(Succ(n.half() + n.half()).le_antisym(n, le, n.le_succ_half_add()), trivial),
+        Inr(nle) => And((n.half() + n.half()).le_antisym(n, n.half_add_le(), Nat::lt_of_not_le(n, Succ(n.half() + n.half()), nle)), trivial),
+    }
+}
+
+theorem Nat::ldiv_pick_spec(n, d, q, r: Nat, c: d <= r ∨ ¬(d <= r), parts: (q * d + q * d) + r = n, bound: d <= 0 ∨ r < d + d):
+    DivMod::Spec(n, d, Nat::ldiv_pick(d, q, r, c))
+{
+    let dbl: ((q * 2) * d = q * d + q * d) = trans(Nat::cong(λ (x: Nat) => x * d, q.mul_two()), q.add_mul_distr(q, d));
+    match c {
+        Inl(le) => {
+            let back: ((r -d) + d = r) = d.sub_add_cancel(r, le);
+            let sum = calc {
+                Succ(q * 2) * d + (r -d)
+                    = (d + (q * 2) * d) + (r -d) := Nat::cong(λ (x: Nat) => x + (r -d), (q * 2).mul_succ_left(d)),
+                    = ((q * 2) * d + d) + (r -d) := Nat::cong(λ (x: Nat) => x + (r -d), d.add_comm((q * 2) * d)),
+                    = (q * 2) * d + (d + (r -d)) := ((q * 2) * d).add_assoc(d, r -d),
+                    = (q * 2) * d + ((r -d) + d) := Nat::cong(λ (x: Nat) => (q * 2) * d + x, d.add_comm(r -d)),
+                    = (q * 2) * d + r := Nat::cong(λ (x: Nat) => (q * 2) * d + x, back),
+                    = (q * d + q * d) + r := Nat::cong(λ (x: Nat) => x + r, dbl),
+                    = n := parts,
+            };
+            let lower: (d <= 0 ∨ r -d < d) = match bound {
+                Inl(zero) => Inl(zero),
+                Inr(lt) => {
+                    let shifted: (Succ((r -d) + d) <= d + d) = j(sym(back), λ y _ => Succ(y) <= d + d, lt);
+                    Inr(d.le_of_add_le_add_r(Succ(r -d), d, j(sym((r -d).add_succ_left(d)), λ y _ => y <= d + d, shifted)))
+                },
+            };
+            And(sum, lower)
+        },
+        Inr(nle) => And(trans(Nat::cong(λ (x: Nat) => x + r, dbl), parts),
+            match bound { Inl(zero) => Inl(zero), Inr(_) => Inr(Nat::lt_of_not_le(r, d, nle)) }),
+    }
+}
+
+theorem Nat::ldiv_step_spec(n, d: Nat, s: DivMod, h: DivMod::Spec(n.half(), d, s)): DivMod::Spec(n, d, Nat::ldiv_step(n, d, s)) {
+    let bits = n.ldiv_bit_parts();
+    let b = Nat::ldiv_bit(n, n.half());
+    match s as λ ss => DivMod::Spec(n.half(), d, ss) → DivMod::Spec(n, d, Nat::ldiv_step(n, d, ss)) {
+        MkDivMod(q, r0) => λ (sp: (q * d + r0 = n.half()) ∧ (d <= 0 ∨ r0 < d)) => {
+            let parts = calc {
+                (q * d + q * d) + ((r0 + r0) + b)
+                    = ((q * d + q * d) + (r0 + r0)) + b := sym((q * d + q * d).add_assoc(r0 + r0, b)),
+                    = ((q * d + r0) + (q * d + r0)) + b := Nat::cong(λ (x: Nat) => x + b, (q * d).add_swap_middle(q * d, r0, r0)),
+                    = (n.half() + n.half()) + b := Nat::cong(λ (x: Nat) => (x + x) + b, sp.left),
+                    = n := bits.left,
+            };
+            let bound: (d <= 0 ∨ (r0 + r0) + b < d + d) = match sp.right {
+                Inl(zero) => Inl(zero),
+                Inr(lt) => {
+                    let low: ((r0 + r0) + b <= Succ(r0 + r0)) = (r0 + r0).add_le_mono_l(b, 1, bits.right);
+                    let two: (Succ(r0) + Succ(r0) <= d + d) = Succ(r0).add_le_mono(d, Succ(r0), d, lt, lt);
+                    let top: (Succ(Succ(r0 + r0)) <= d + d) = j(Nat::cong_succ(r0.add_succ_left(r0)), λ y _ => y <= d + d, two);
+                    Inr(Succ((r0 + r0) + b).le_trans(Succ(Succ(r0 + r0)), d + d, low, top))
+                },
+            };
+            Nat::ldiv_pick_spec(n, d, q, (r0 + r0) + b, d.le_dec((r0 + r0) + b), parts, bound)
+        },
+    }(h)
+}
+
+theorem Nat::ldiv_fuel_spec(self fuel: Nat): (n, d: Nat) → n <= fuel → DivMod::Spec(n, d, n.ldiv_fuel(d, fuel)) {
+    match fuel {
+        Zero => λ n d le => And(trans(Nat::cong(λ (x: Nat) => x + n, d.mul_left_zero()), n.add_left_zero()),
+            match n as λ m => m <= 0 → (d <= 0 ∨ m < d) {
+                Zero => λ _ => match d { Zero => Inl(trivial), Succ(_) => Inr(trivial) },
+                Succ(_) => λ bad => false_elim(bad),
+            }(le)),
+        Succ(f, ih) => λ n d => match n {
+            Zero => λ _ => And(d.mul_left_zero(), match d { Zero => Inl(trivial), Succ(_) => Inr(trivial) }),
+            Succ(k) => λ le => Nat::ldiv_step_spec(Succ(k), d, Succ(k).half().ldiv_fuel(d, f),
+                ih(Succ(k).half(), d, Succ(k).half().le_trans(k, f, k.half_succ_le(), le))),
+        },
+    }
+}
+
+theorem Nat::ldiv_spec(self n, d: Nat): DivMod::Spec(n, d, n.ldiv(d)) { n.ldiv_fuel_spec(n, d, n.le_refl()) }
+
+theorem Nat::ldiv_parts(self n, d: Nat): n.ldiv(d).quot() * d + n.ldiv(d).rem() = n {
+    match n.ldiv(d) as λ s => DivMod::Spec(n, d, s) → s.quot() * d + s.rem() = n { MkDivMod(_, _) => λ sp => sp.left }(n.ldiv_spec(d))
+}
+
+theorem Nat::ldiv_rem_lt(self n: Nat, d: Pos<Nat>): n.ldiv(d).rem() < d {
+    match n.ldiv(d) as λ s => DivMod::Spec(n, d, s) → s.rem() < d {
+        MkDivMod(_, _) => λ sp => match sp.right { Inl(zero) => false_elim(Nat::le_trans(1, d, 0, d_pos, zero)), Inr(lt) => lt },
+    }(n.ldiv_spec(d))
+}
+
+theorem Nat::ldiv_div(self n: Nat, d: Pos<Nat>): n.ldiv(d).quot() = n.div(d) {
+    sym(n.div_mod_unique(d, n.ldiv(d).quot(), n.ldiv(d).rem(), n.ldiv_parts(d), n.ldiv_rem_lt(d, d_pos := d_pos)).left)
+}
+
+theorem Nat::ldiv_mod(self n: Nat, d: Pos<Nat>): n.ldiv(d).rem() = n.mod(d) {
+    sym(n.div_mod_unique(d, n.ldiv(d).quot(), n.ldiv(d).rem(), n.ldiv_parts(d), n.ldiv_rem_lt(d, d_pos := d_pos)).right)
+}
+
+// ---------------------------------------------------------------------------
 // The bridge between the Boolean decision and the propositional order. `leb`
 // and `Le` are the same two-argument recursion written into `Bool` and into
 // `Type`.

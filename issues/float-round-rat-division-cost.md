@@ -1,6 +1,6 @@
 ---
 title: Binary division so round_rat evaluates at real formats
-status: open
+status: closed
 labels: [floating-point,mathematics,performance]
 area: mathematics
 milestone: [math-float]
@@ -33,3 +33,15 @@ it and `round_rat_correct` follows by rewriting. A wider use is any literal
 `round_rat` on a binary32 rounding of a literal like `1/3` computes by
 `refl` within the suite's rails, and `round_rat_correct` is unchanged in
 statement.
+
+## Log
+
+- 2026-10-21: done in float-arith (design §14). `Nat::ldiv` in `nat.hthr` is
+  binary long division with `ldiv_div`/`ldiv_mod`; `rat_h`/`rat_st` use it
+  and `round_rat_correct` is unchanged in statement. `round_rat` and float
+  division now compute by `refl` at binary16 (`1/3` included). The done-when
+  asked for binary32: that is blocked by the kernel, not by division —
+  comparing numerals past about `2^96` runs out of fuel, which also stops
+  `round_dyadic` at binary32 — so it moved to
+  [[kernel-wide-run-comparison]], whose done-when names the same test.
+

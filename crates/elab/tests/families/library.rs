@@ -30,6 +30,8 @@ mod lib_std_float;
 mod lib_std_float_round;
 #[path = "../lib_std_float_error.rs"]
 mod lib_std_float_error;
+#[path = "../lib_std_float_arith.rs"]
+mod lib_std_float_arith;
 #[path = "../lib_std_itree.rs"]
 mod lib_std_itree;
 #[path = "../lib_std_itree_trace.rs"]
