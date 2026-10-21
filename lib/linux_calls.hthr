@@ -1,0 +1,153 @@
+// Linux's calls and answers (docs/native-program-logic-design.md §4;
+// issues/native-linux-spec.md): what a process asks of Linux, what Linux may
+// answer, and the events a run is a list of. Nothing here is about machines:
+// `linux_x86_64_io` says how a process makes these calls, `linux_trees` makes
+// them a container of events for interaction trees.
+//
+// A read names how many bytes it asks for at most, at a type `Size`: Linux's
+// own calls count it (`Size = Nat`), and Linux may answer with any number of
+// bytes up to that count. A spec that does not care which chunks its input
+// comes in leaves the count out (`Size = True`); `linux_trees` relates the
+// two. Exit is not a call: it is where a run, or a tree, returns.
+import bitvec;
+import list;
+import logic;
+import nat;
+
+// What a read or a write came back with. An errno is 1 to 4095, and RAX
+// holds its negation.
+inductive ReadResult {
+    ReadBytes(bytes: List<BitVec(8)>),
+    ReadFailed(errno: Nat),
+}
+inductive WriteResult {
+    Wrote(count: Nat),
+    WriteFailed(errno: Nat),
+}
+
+// An opened descriptor is any below 2^31: the rule doesn't promise the
+// lowest free one. A stat stores the 144 bytes of x86-64's `struct stat`,
+// whatever they are; a stat names a path or a descriptor.
+inductive OpenResult {
+    Opened(fd: Nat),
+    OpenFailed(errno: Nat),
+}
+inductive CloseResult {
+    Closed,
+    CloseFailed(errno: Nat),
+}
+inductive StatResult {
+    Stated(st: List<BitVec(8)>),
+    StatFailed(errno: Nat),
+}
+inductive StatTarget {
+    StatPath(path: List<BitVec(8)>),
+    StatFd(fd: BitVec(64)),
+}
+
+fn Errno(errno: Nat) → Type { (1 <= errno) ∧ (errno <= 4095) }
+fn stat_length() → Nat { 144 }
+
+// A call. A write names the bytes it asks to send; an open or a stat of a
+// path names the path's bytes, without its NUL.
+inductive LinuxCmd<Size> {
+    ReadCmd(fd: BitVec(64), size: Size),
+    WriteCmd(fd: BitVec(64), bytes: List<BitVec(8)>),
+    OpenCmd(path: List<BitVec(8)>),
+    CloseCmd(fd: BitVec(64)),
+    StatCmd(target: StatTarget),
+}
+
+// What a call is answered with.
+fn LinuxCmd::Resp<Size>(self c: LinuxCmd<Size>) → Type {
+    match c {
+        ReadCmd(_, _) => ReadResult,
+        WriteCmd(_, _) => WriteResult,
+        OpenCmd(_) => OpenResult,
+        CloseCmd(_) => CloseResult,
+        StatCmd(_) => StatResult,
+    }
+}
+
+// What Linux may answer a call with: a read's bytes, as many as it asked for
+// or fewer (none at the end of the input); a prefix of a write's bytes; a
+// descriptor below 2^31; a whole `struct stat`; or an errno.
+fn LinuxCmd::Answers(self c: LinuxCmd<Nat>) → c.Resp() → Type {
+    match c as λ d => d.Resp() → Type {
+        ReadCmd(_, max) => λ (r: ReadResult) => match r {
+            ReadBytes(bytes) => bytes.len() <= max,
+            ReadFailed(errno) => Errno(errno),
+        },
+        WriteCmd(_, bytes) => λ (r: WriteResult) => match r {
+            Wrote(count) => count <= bytes.len(),
+            WriteFailed(errno) => Errno(errno),
+        },
+        OpenCmd(_) => λ (r: OpenResult) => match r {
+            Opened(fd) => fd < Nat::pow(2, 31),
+            OpenFailed(errno) => Errno(errno),
+        },
+        CloseCmd(_) => λ (r: CloseResult) => match r {
+            Closed => True,
+            CloseFailed(errno) => Errno(errno),
+        },
+        StatCmd(_) => λ (r: StatResult) => match r {
+            Stated(st) => st.len() = stat_length(),
+            StatFailed(errno) => Errno(errno),
+        },
+    }
+}
+
+// What a call sent to `fd`, and what it read from it: the first `count` of a
+// write's bytes, and a read's bytes.
+fn LinuxCmd::sent<Size>(self c: LinuxCmd<Size>, fd: BitVec(64)) → c.Resp() → List<BitVec(8)> {
+    match c as λ d => d.Resp() → List<BitVec(8)> {
+        ReadCmd(_, _) => λ _ => Nil,
+        WriteCmd(to, bytes) => λ (r: WriteResult) => match to.eq_dec(fd) {
+            Inl(_) => match r { Wrote(count) => bytes.take(count), WriteFailed(_) => Nil },
+            Inr(_) => Nil,
+        },
+        OpenCmd(_) => λ _ => Nil,
+        CloseCmd(_) => λ _ => Nil,
+        StatCmd(_) => λ _ => Nil,
+    }
+}
+fn LinuxCmd::received<Size>(self c: LinuxCmd<Size>, fd: BitVec(64)) → c.Resp() → List<BitVec(8)> {
+    match c as λ d => d.Resp() → List<BitVec(8)> {
+        ReadCmd(from, _) => λ (r: ReadResult) => match from.eq_dec(fd) {
+            Inl(_) => match r { ReadBytes(bytes) => bytes, ReadFailed(_) => Nil },
+            Inr(_) => Nil,
+        },
+        WriteCmd(_, _) => λ _ => Nil,
+        OpenCmd(_) => λ _ => Nil,
+        CloseCmd(_) => λ _ => Nil,
+        StatCmd(_) => λ _ => Nil,
+    }
+}
+
+// One event of a run: a call with Linux's answer, or the exit. The exit
+// status is the full request word, as LinuxExitRequest states it; the parent
+// observes its low eight bits.
+inductive LinuxEvent {
+    CallEvent(c: LinuxCmd<Nat>, a: c.Resp()),
+    ExitEvent(status: BitVec(64)),
+}
+
+// What a run sent to `fd`, and read from it, in order.
+fn sent_to(fd: BitVec(64), events: List<LinuxEvent>) → List<BitVec(8)> {
+    match events {
+        Nil => Nil,
+        Cons(event, rest) => match event {
+            CallEvent(c, a) => c.sent(fd, a) ++ sent_to(fd, rest),
+            ExitEvent(_) => sent_to(fd, rest),
+        },
+    }
+}
+fn received_from(fd: BitVec(64), events: List<LinuxEvent>) → List<BitVec(8)> {
+    match events {
+        Nil => Nil,
+        Cons(event, rest) => match event {
+            CallEvent(c, a) => c.received(fd, a) ++ received_from(fd, rest),
+            ExitEvent(_) => received_from(fd, rest),
+        },
+    }
+}

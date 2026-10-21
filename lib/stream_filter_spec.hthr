@@ -1,0 +1,277 @@
+// A stream filter's spec as a tree over Linux's calls
+// (issues/native-linux-spec.md; docs/native-program-logic-design.md §4).
+//
+// The filter reads its input a chunk at a time, runs the step over the chunk
+// (`stream_filter`'s fold), and writes what it emitted, as many times as a
+// short write needs; an empty read is the end of the input, and it exits 0.
+// A failed read or write exits 1. Reads name no size: the spec is over
+// `Events::linux_spec()`, so whatever buffer a program reads into, it
+// implements this spec (`linux_trees`). `tr` is the filter of a byte map.
+//
+// What reaches the output is a fact about the tree alone: every trace that
+// exits 0 sent the fold's output of everything it read (`filter_sends`), at
+// whatever fuel, and so does every valid trace of a program implementing
+// the spec (`filter_implementation_sends`).
+import stream_filter;
+import linux_calls;
+import linux_trees;
+import itree;
+import itree_trace;
+import bitvec;
+import list;
+import logic;
+import nat;
+import option;
+
+// Where the filter is: about to read, or with emitted bytes still to write.
+inductive FilterAt<C> {
+    Reading(state: C),
+    Writing(state: C, pending: List<BitVec(8)>),
+}
+
+fn FilterAt::state<C>(self at: FilterAt<C>) → C { match at { Reading(s) => s, Writing(s, _) => s } }
+fn FilterAt::owed<C>(self at: FilterAt<C>) → List<BitVec(8)> { match at { Reading(_) => Nil, Writing(_, pending) => pending } }
+
+fn filter_ok() → BitVec(64) { BitVec::ofNat(0) }
+fn filter_failed() → BitVec(64) { BitVec::ofNat(1) }
+
+theorem filter_failed_not_ok(same: filter_failed() = filter_ok()): False {
+    absurd(cong_fn(λ (word: BitVec(64)) => word.toNat(), same))
+}
+
+// What a read leads to: the end, the emitted bytes to write, or a failure.
+fn filter_read<C>(step: C → BitVec(8) → Filtered<C>, s: C, r: ReadResult)
+    → ITree<Step<FilterAt<C>, BitVec(64)>>(Events::linux_spec()) {
+    match r {
+        ReadBytes(bytes) => match bytes {
+            Nil => Ret(Break(filter_ok())),
+            Cons(_, _) => Ret(Continue(Writing(filter_state(step, bytes, s), filter_emitted(step, bytes, s)))),
+        },
+        ReadFailed(_) => Ret(Break(filter_failed())),
+    }
+}
+
+// What a write leads to: the rest still to write, or a failure.
+fn filter_wrote<C>(s: C, pending: List<BitVec(8)>, w: WriteResult)
+    → ITree<Step<FilterAt<C>, BitVec(64)>>(Events::linux_spec()) {
+    match w {
+        Wrote(count) => Ret(Continue(Writing(s, pending.drop(count)))),
+        WriteFailed(_) => Ret(Break(filter_failed())),
+    }
+}
+
+// One pass of the loop.
+fn filter_pass<C>(input, output: BitVec(64), step: C → BitVec(8) → Filtered<C>, at: FilterAt<C>)
+    → ITree<Step<FilterAt<C>, BitVec(64)>>(Events::linux_spec()) {
+    match at {
+        Reading(s) => Vis(ReadCmd(input, trivial), λ (r: ReadResult) => filter_read(step, s, r)),
+        Writing(s, pending) => match pending {
+            Nil => Ret(Continue(Reading(s))),
+            Cons(_, _) => Vis(WriteCmd(output, pending), λ (w: WriteResult) => filter_wrote(s, pending, w)),
+        },
+    }
+}
+
+fn filter_tree<C>(input, output: BitVec(64), step: C → BitVec(8) → Filtered<C>, n: Nat, at: FilterAt<C>)
+    → ITree<BitVec(64)>(Events::linux_spec()) {
+    ITree::iter(Events::linux_spec(), n, λ a => filter_pass(input, output, step, a), at)
+}
+
+// The filter from `start`, reading `input` and writing `output`.
+fn filter_spec<C>(input, output: BitVec(64), step: C → BitVec(8) → Filtered<C>, start: C)
+    → Program<BitVec(64)>(Events::linux_spec()) {
+    Program::iter(Events::linux_spec(), λ a => filter_pass(input, output, step, a), Reading(start))
+}
+
+// `tr`: stdin to stdout, each byte mapped.
+fn tr_spec(f: BitVec(8) → BitVec(8)) → Program<BitVec(64)>(Events::linux_spec()) {
+    filter_spec(BitVec::ofNat(0), BitVec::ofNat(1), mapping(f), Stateless())
+}
+
+// ---------------------------------------------------------------------------
+// What reaches the output
+
+// A read of `fd` is what it read from `fd`; a write to `fd` sent a prefix.
+fn read_bytes(r: ReadResult) → List<BitVec(8)> { match r { ReadBytes(bytes) => bytes, ReadFailed(_) => Nil } }
+fn written_bytes(bytes: List<BitVec(8)>, w: WriteResult) → List<BitVec(8)> {
+    match w { Wrote(count) => bytes.take(count), WriteFailed(_) => Nil }
+}
+
+theorem read_received<Size>(fd: BitVec(64), size: Size, r: ReadResult):
+    ReadCmd(fd, size).received(fd, r) = read_bytes(r) {
+    (match fd.eq_dec(fd) as λ d => (match d {
+            Inl(_) => match r { ReadBytes(bytes) => bytes, ReadFailed(_) => Nil },
+            Inr(_) => Nil,
+        }) = read_bytes(r) {
+        Inl(_) => match r { ReadBytes(_) => refl, ReadFailed(_) => refl },
+        Inr(other) => false_elim(other(refl)),
+    })
+}
+
+theorem write_sent<Size>(fd: BitVec(64), bytes: List<BitVec(8)>, w: WriteResult):
+    @LinuxCmd::sent<Size>(WriteCmd(fd, bytes), fd, w) = written_bytes(bytes, w) {
+    (match fd.eq_dec(fd) as λ d => (match d {
+            Inl(_) => match w { Wrote(count) => bytes.take(count), WriteFailed(_) => Nil },
+            Inr(_) => Nil,
+        }) = written_bytes(bytes, w) {
+        Inl(_) => match w { Wrote(_) => refl, WriteFailed(_) => refl },
+        Inr(other) => false_elim(other(refl)),
+    })
+}
+
+// A pass that ends the loop with a failure returns no success.
+theorem filter_failed_return(rest: Trace<BitVec(64)>(Events::linux_spec()),
+    it: IsTrace(Events::linux_spec(), Ret(filter_failed()), rest),
+    returns: Trace::ReturnsWith(Events::linux_spec(), rest, filter_ok())): False {
+    let w: RetTrace<BitVec(64)>(Events::linux_spec(), filter_failed(), rest) = it;
+    match w {
+        Stopped(e) => j(e, λ y _ => Trace::ReturnsWith(Events::linux_spec(), y, filter_ok()), returns),
+        Returned(e) => filter_failed_not_ok(j(e, λ y _ => Trace::ReturnsWith(Events::linux_spec(), y, filter_ok()), returns)),
+    }
+}
+
+// What the output gets from `at` on, along a trace that exits 0: what is
+// still owed, then what the rest of the input emits from the state now.
+fn FilterSends<C>(input, output: BitVec(64), step: C → BitVec(8) → Filtered<C>, n: Nat) → Type {
+    (at: FilterAt<C>) → (tr: Trace<BitVec(64)>(Events::linux_spec())) →
+        IsTrace(Events::linux_spec(), filter_tree(input, output, step, n, at), tr) →
+        Trace::ReturnsWith(Events::linux_spec(), tr, filter_ok()) →
+        Trace::sent<True, BitVec(64)>(output, tr)
+            = at.owed() ++ filter_emitted(step, Trace::received<True, BitVec(64)>(input, tr), at.state())
+}
+
+// A read: the end of the input sends nothing more; a chunk is owed what it
+// emits.
+theorem filter_sends_read<C>(input, output: BitVec(64), step: C → BitVec(8) → Filtered<C>, m: Nat,
+    ih: FilterSends(input, output, step, m), s: C, r: ReadResult, rest: Trace<BitVec(64)>(Events::linux_spec()),
+    sub: IsTrace(Events::linux_spec(), ITree::bind(Events::linux_spec(), filter_read(step, s, r),
+        λ x => ITree::iter_next(Events::linux_spec(), m, λ a => filter_pass(input, output, step, a), x)), rest),
+    returns: Trace::ReturnsWith(Events::linux_spec(), rest, filter_ok())):
+    Trace::sent<True, BitVec(64)>(output, TAns(ReadCmd(input, trivial), r, rest))
+        = Nil<BitVec(8)> ++ filter_emitted(step, Trace::received<True, BitVec(64)>(input, TAns(ReadCmd(input, trivial), r, rest)), s) {
+    let next = λ (x: Step<FilterAt<C>, BitVec(64)>) => ITree::iter_next(Events::linux_spec(), m, λ a => filter_pass(input, output, step, a), x);
+    let sends: (Trace::sent<True, BitVec(64)>(output, rest)
+            = filter_emitted(step, read_bytes(r) ++ Trace::received<True, BitVec(64)>(input, rest), s)) =
+        (match r as λ x => IsTrace(Events::linux_spec(), ITree::bind(Events::linux_spec(), filter_read(step, s, x), next), rest) →
+                Trace::sent<True, BitVec(64)>(output, rest)
+                    = filter_emitted(step, read_bytes(x) ++ Trace::received<True, BitVec(64)>(input, rest), s) {
+            ReadBytes(bytes) => match bytes as λ bs =>
+                    IsTrace(Events::linux_spec(), ITree::bind(Events::linux_spec(), filter_read(step, s, ReadBytes(bs)), next), rest) →
+                    Trace::sent<True, BitVec(64)>(output, rest)
+                        = filter_emitted(step, bs ++ Trace::received<True, BitVec(64)>(input, rest), s) {
+                Nil => λ it => {
+                    let w: RetTrace<BitVec(64)>(Events::linux_spec(), filter_ok(), rest) = it;
+                    match w {
+                        Stopped(e) => false_elim(j(e, λ y _ => Trace::ReturnsWith(Events::linux_spec(), y, filter_ok()), returns)),
+                        Returned(e) => j(sym(e), λ y _ => Trace::sent<True, BitVec(64)>(output, y)
+                            = filter_emitted(step, Nil<BitVec(8)> ++ Trace::received<True, BitVec(64)>(input, y), s), refl),
+                    }
+                },
+                Cons(b, bs) => λ it => trans(
+                    ih(Writing(filter_state(step, Cons(b, bs), s), filter_emitted(step, Cons(b, bs), s)), rest, it, returns),
+                    sym(filter_emitted_append(step, Cons(b, bs), Trace::received<True, BitVec(64)>(input, rest), s))),
+            },
+            ReadFailed(_) => λ it => false_elim(filter_failed_return(rest, it, returns)),
+        })(sub);
+    trans(sends, cong_fn(λ (bytes: List<BitVec(8)>) => filter_emitted(step, bytes ++ Trace::received<True, BitVec(64)>(input, rest), s),
+        sym(read_received<True>(input, trivial, r))))
+}
+
+// A write sends a prefix of what is owed, and the rest stays owed.
+theorem filter_sends_write<C>(input, output: BitVec(64), step: C → BitVec(8) → Filtered<C>, m: Nat,
+    ih: FilterSends(input, output, step, m), s: C, pending: List<BitVec(8)>, w: WriteResult,
+    rest: Trace<BitVec(64)>(Events::linux_spec()),
+    sub: IsTrace(Events::linux_spec(), ITree::bind(Events::linux_spec(), filter_wrote(s, pending, w),
+        λ x => ITree::iter_next(Events::linux_spec(), m, λ a => filter_pass(input, output, step, a), x)), rest),
+    returns: Trace::ReturnsWith(Events::linux_spec(), rest, filter_ok())):
+    Trace::sent<True, BitVec(64)>(output, TAns(WriteCmd(output, pending), w, rest))
+        = pending ++ filter_emitted(step, Trace::received<True, BitVec(64)>(input, TAns(WriteCmd(output, pending), w, rest)), s) {
+    let next = λ (x: Step<FilterAt<C>, BitVec(64)>) => ITree::iter_next(Events::linux_spec(), m, λ a => filter_pass(input, output, step, a), x);
+    let later = filter_emitted(step, Trace::received<True, BitVec(64)>(input, rest), s);
+    let sends: (written_bytes(pending, w) ++ Trace::sent<True, BitVec(64)>(output, rest) = pending ++ later) =
+        (match w as λ x => IsTrace(Events::linux_spec(), ITree::bind(Events::linux_spec(), filter_wrote(s, pending, x), next), rest) →
+                written_bytes(pending, x) ++ Trace::sent<True, BitVec(64)>(output, rest) = pending ++ later {
+            Wrote(count) => λ it => trans(
+                cong_fn(λ (bytes: List<BitVec(8)>) => pending.take(count) ++ bytes, ih(Writing(s, pending.drop(count)), rest, it, returns)),
+                trans(sym(List::append_assoc(pending.take(count), pending.drop(count), later)),
+                    cong_fn(λ (bytes: List<BitVec(8)>) => bytes ++ later, List::take_append_drop(pending, count)))),
+            WriteFailed(_) => λ it => false_elim(filter_failed_return(rest, it, returns)),
+        })(sub);
+    trans(cong_fn(λ (bytes: List<BitVec(8)>) => bytes ++ Trace::sent<True, BitVec(64)>(output, rest), write_sent<True>(output, pending, w)),
+        sends)
+}
+
+theorem filter_sends<C>(input, output: BitVec(64), step: C → BitVec(8) → Filtered<C>, n: Nat): FilterSends(input, output, step, n) {
+    match n {
+        Zero => λ at tr (w: CutTrace<BitVec(64)>(Events::linux_spec(), tr)) returns => false_elim(
+            j(CutTrace::ended(Events::linux_spec(), tr, w), λ y _ => Trace::ReturnsWith(Events::linux_spec(), y, filter_ok()), returns)),
+        Succ(m) => {
+            let ih: FilterSends(input, output, step, m) = λ at tr it returns => filter_sends(input, output, step, m, at, tr, it, returns);
+            let next = λ (x: Step<FilterAt<C>, BitVec(64)>) => ITree::iter_next(Events::linux_spec(), m, λ a => filter_pass(input, output, step, a), x);
+            λ at => match at as λ a => (tr: Trace<BitVec(64)>(Events::linux_spec())) →
+                    IsTrace(Events::linux_spec(), filter_tree(input, output, step, Succ(m), a), tr) →
+                    Trace::ReturnsWith(Events::linux_spec(), tr, filter_ok()) →
+                    Trace::sent<True, BitVec(64)>(output, tr)
+                        = a.owed() ++ filter_emitted(step, Trace::received<True, BitVec(64)>(input, tr), a.state()) {
+                Reading(s) => λ tr (w: VisTrace<BitVec(64)>(Events::linux_spec(), ReadCmd(input, trivial), tr,
+                        λ (r: ReadResult) rest => IsTrace(Events::linux_spec(),
+                            ITree::bind(Events::linux_spec(), filter_read(step, s, r), next), rest))) returns => match w {
+                    Prefix(e) => false_elim(j(e, λ y _ => Trace::ReturnsWith(Events::linux_spec(), y, filter_ok()), returns)),
+                    Pending(e) => false_elim(j(e, λ y _ => Trace::ReturnsWith(Events::linux_spec(), y, filter_ok()), returns)),
+                    Answered(r, rest, e, sub) => j(sym(e), λ y _ => Trace::sent<True, BitVec(64)>(output, y)
+                            = Nil<BitVec(8)> ++ filter_emitted(step, Trace::received<True, BitVec(64)>(input, y), s),
+                        filter_sends_read(input, output, step, m, ih, s, r, rest, sub,
+                            j(e, λ y _ => Trace::ReturnsWith(Events::linux_spec(), y, filter_ok()), returns))),
+                },
+                Writing(s, pending) => match pending as λ p => (tr: Trace<BitVec(64)>(Events::linux_spec())) →
+                        IsTrace(Events::linux_spec(), filter_tree(input, output, step, Succ(m), Writing(s, p)), tr) →
+                        Trace::ReturnsWith(Events::linux_spec(), tr, filter_ok()) →
+                        Trace::sent<True, BitVec(64)>(output, tr)
+                            = p ++ filter_emitted(step, Trace::received<True, BitVec(64)>(input, tr), s) {
+                    Nil => λ tr it returns => ih(Reading(s), tr, it, returns),
+                    Cons(b, bs) => λ tr (w: VisTrace<BitVec(64)>(Events::linux_spec(), WriteCmd(output, Cons(b, bs)), tr,
+                            λ (written: WriteResult) rest => IsTrace(Events::linux_spec(),
+                                ITree::bind(Events::linux_spec(), filter_wrote(s, Cons(b, bs), written), next), rest))) returns => match w {
+                        Prefix(e) => false_elim(j(e, λ y _ => Trace::ReturnsWith(Events::linux_spec(), y, filter_ok()), returns)),
+                        Pending(e) => false_elim(j(e, λ y _ => Trace::ReturnsWith(Events::linux_spec(), y, filter_ok()), returns)),
+                        Answered(written, rest, e, sub) => j(sym(e), λ y _ => Trace::sent<True, BitVec(64)>(output, y)
+                                = Cons(b, bs) ++ filter_emitted(step, Trace::received<True, BitVec(64)>(input, y), s),
+                            filter_sends_write(input, output, step, m, ih, s, Cons(b, bs), written, rest, sub,
+                                j(e, λ y _ => Trace::ReturnsWith(Events::linux_spec(), y, filter_ok()), returns))),
+                    },
+                },
+            }
+        },
+    }
+}
+
+// Every trace the filter produces that exits 0 sent the fold's output of all
+// it read, whatever fuel it was produced at and however the input came.
+theorem filter_spec_sends<C>(input, output: BitVec(64), step: C → BitVec(8) → Filtered<C>, start: C,
+    tr: Trace<BitVec(64)>(Events::linux_spec()),
+    produces: Program::Produces(Events::linux_spec(), filter_spec(input, output, step, start), tr),
+    returns: Trace::ReturnsWith(Events::linux_spec(), tr, filter_ok())):
+    Trace::sent<True, BitVec(64)>(output, tr) = filter_emitted(step, Trace::received<True, BitVec(64)>(input, tr), start) {
+    filter_sends(input, output, step, produces.n, Reading(start), tr, produces.h, returns)
+}
+
+// `tr` writes each byte it read, mapped.
+theorem tr_sends(f: BitVec(8) → BitVec(8), tr: Trace<BitVec(64)>(Events::linux_spec()),
+    produces: Program::Produces(Events::linux_spec(), tr_spec(f), tr),
+    returns: Trace::ReturnsWith(Events::linux_spec(), tr, filter_ok())):
+    Trace::sent<True, BitVec(64)>(BitVec::ofNat(1), tr) = Trace::received<True, BitVec(64)>(BitVec::ofNat(0), tr).map(f) {
+    trans(filter_spec_sends(BitVec::ofNat(0), BitVec::ofNat(1), mapping(f), Stateless(), tr, produces, returns),
+        mapping_emitted(f, Trace::received<True, BitVec(64)>(BitVec::ofNat(0), tr), Stateless()))
+}
+
+// What implements the filter's spec, whatever its buffers, sends the same.
+theorem filter_implementation_sends<C>(input, output: BitVec(64), step: C → BitVec(8) → Filtered<C>, start: C,
+    p: Program<BitVec(64)>(Events::linux()), implements: Program::Implements(p, filter_spec(input, output, step, start)),
+    tr: Trace<BitVec(64)>(Events::linux()), produces: Program::Produces(Events::linux(), p, tr),
+    valid: Trace::LinuxValid(tr), returns: Trace::ReturnsWith(Events::linux(), tr, filter_ok())):
+    Trace::sent<Nat, BitVec(64)>(output, tr) = filter_emitted(step, Trace::received<Nat, BitVec(64)>(input, tr), start) {
+    trans(sym(Trace::forget_sent(output, tr)),
+        trans(filter_spec_sends(input, output, step, start, Trace::forget(tr), implements(tr, produces, valid).right,
+                Trace::forget_returns_with(tr, filter_ok(), returns)),
+            cong_fn(λ (bytes: List<BitVec(8)>) => filter_emitted(step, bytes, start), Trace::forget_received(input, tr))))
+}

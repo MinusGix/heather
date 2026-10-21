@@ -1,13 +1,14 @@
 // The Linux trace (docs/native-first-program-design.md §4, §10;
 // docs/native-syscall-failures-design.md §2): a run of a process is steps
-// between syscalls, and each syscall is an event, the call together with
-// Linux's response. A read returns bytes or fails with an errno; a write
-// sends a prefix of what it asked (possibly all, possibly none) or fails;
-// exit ends the run. Opening a path, closing a descriptor and stat-ing either
-// (docs/native-wc-command-design.md §4.3) return a descriptor, nothing, or
-// the bytes of a `struct stat`, or fail. The rest of the model is
+// between syscalls, and each syscall is an event, a call of `linux_calls`
+// together with Linux's answer. This module says how a process makes each
+// call (its registers and memory), what Linux needs of it (the buffers it
+// writes are writable), and the states Linux resumes it in; `LinuxRuns`
+// reads those definitions, and so does `linux_x86_64_sim`'s `RunsAs`
+// (docs/native-program-logic-design.md §5). The rest of the model is
 // issues/linux-syscall-trace-model.md. Syscall delivery and Linux itself are
 // environment assumptions, not theorems here.
+import linux_calls;
 import linux_x86_64_entry;
 import x86_64;
 import x86_64_block;
@@ -22,52 +23,8 @@ import list;
 import logic;
 import nat;
 import omega;
+import relation_props;
 
-// What a read or a write came back with. An errno is 1 to 4095, and RAX
-// holds its negation.
-inductive ReadResult {
-    ReadBytes(bytes: List<BitVec(8)>),
-    ReadFailed(errno: Nat),
-}
-inductive WriteResult {
-    Wrote(count: Nat),
-    WriteFailed(errno: Nat),
-}
-
-// An opened descriptor is any below 2^31: the rule doesn't promise the
-// lowest free one. A stat stores the 144 bytes of x86-64's `struct stat`,
-// whatever they are; a stat names a path or a descriptor.
-inductive OpenResult {
-    Opened(fd: Nat),
-    OpenFailed(errno: Nat),
-}
-inductive CloseResult {
-    Closed,
-    CloseFailed(errno: Nat),
-}
-inductive StatResult {
-    Stated(st: List<BitVec(8)>),
-    StatFailed(errno: Nat),
-}
-inductive StatTarget {
-    StatPath(path: List<BitVec(8)>),
-    StatFd(fd: BitVec(64)),
-}
-
-// A write names what it asked to send, the buffer's bytes, and the result;
-// what left is the first `count` of them. The exit status is the full request
-// word, as LinuxExitRequest states it; the parent observes its low eight bits.
-// An open or a stat of a path names the path's bytes, without its NUL.
-inductive LinuxEvent {
-    ReadEvent(fd: BitVec(64), result: ReadResult),
-    WriteEvent(fd: BitVec(64), bytes: List<BitVec(8)>, result: WriteResult),
-    ExitEvent(status: BitVec(64)),
-    OpenEvent(path: List<BitVec(8)>, result: OpenResult),
-    CloseEvent(fd: BitVec(64), result: CloseResult),
-    StatEvent(target: StatTarget, result: StatResult),
-}
-
-fn Errno(errno: Nat) → Type { (1 <= errno) ∧ (errno <= 4095) }
 fn errno_word(errno: Nat) → BitVec(64) { BitVec::ofNat(Nat::pow(2, 64) -errno) }
 fn eintr() → Nat { 4 }
 
@@ -129,27 +86,6 @@ theorem other_errno_plus_four(e: Nat, error: Errno(e), other: Not(e = eintr())):
             },
         },
     })(error.left, other, large)
-}
-
-// What a run sent to `fd`, in order.
-fn sent_to(fd: BitVec(64), events: List<LinuxEvent>) → List<BitVec(8)> {
-    match events {
-        Nil => Nil,
-        Cons(event, rest) => match event {
-            WriteEvent(to, bytes, result) => match to.eq_dec(fd) {
-                Inl(_) => match result {
-                    Wrote(count) => bytes.take(count) ++ sent_to(fd, rest),
-                    WriteFailed(_) => sent_to(fd, rest),
-                },
-                Inr(_) => sent_to(fd, rest),
-            },
-            ReadEvent(_, _) => sent_to(fd, rest),
-            ExitEvent(_) => sent_to(fd, rest),
-            OpenEvent(_, _) => sent_to(fd, rest),
-            CloseEvent(_, _) => sent_to(fd, rest),
-            StatEvent(_, _) => sent_to(fd, rest),
-        },
-    }
 }
 
 // What the environment needs to know about a memory: how code is fetched and
@@ -247,14 +183,8 @@ fn OpenRequest<M>(io: LinuxIo<M>, at: MachineState<M>, path: List<BitVec(8)>) �
     (read_gpr(Rax, at.gprs) = BitVec::ofNat(257)) ∧ ((read_gpr(Rdi, at.gprs) = at_fdcwd()) ∧
     ((read_gpr(Rdx, at.gprs) = BitVec::ofNat(0)) ∧ CStringAt(io.data, at.memory, read_gpr(Rsi, at.gprs), path)))
 }
-fn OpenReturns(result: OpenResult) → Type {
-    match result { Opened(fd) => fd < Nat::pow(2, 31), OpenFailed(errno) => Errno(errno) }
-}
 fn open_rax(result: OpenResult) → BitVec(64) {
     match result { Opened(fd) => bitvec_nat::word_of_nat(64, fd), OpenFailed(errno) => errno_word(errno) }
-}
-fn CloseReturns(result: CloseResult) → Type {
-    match result { Closed => True, CloseFailed(errno) => Errno(errno) }
 }
 fn close_rax(result: CloseResult) → BitVec(64) {
     match result { Closed => BitVec::ofNat(0), CloseFailed(errno) => errno_word(errno) }
@@ -263,7 +193,6 @@ fn close_rax(result: CloseResult) → BitVec(64) {
 // newfstatat(AT_FDCWD, path, buffer, 0) or fstat(fd, buffer): the buffer is
 // RDX for the first and RSI for the second. Linux stores the stat there on
 // success and, as for a failed read, may have stored anything on failure.
-fn stat_length() → Nat { 144 }
 fn stat_buffer(target: StatTarget, gprs: Gprs) → BitVec(64) {
     match target { StatPath(_) => read_gpr(Rdx, gprs), StatFd(_) => read_gpr(Rsi, gprs) }
 }
@@ -273,9 +202,6 @@ fn StatAsked<M>(io: LinuxIo<M>, at: MachineState<M>, target: StatTarget) → Typ
             ((read_gpr(R10, at.gprs) = BitVec::ofNat(0)) ∧ CStringAt(io.data, at.memory, read_gpr(Rsi, at.gprs), path))),
         StatFd(fd) => (read_gpr(Rax, at.gprs) = BitVec::ofNat(5)) ∧ (read_gpr(Rdi, at.gprs) = fd),
     }
-}
-fn StatRequest<M>(io: LinuxIo<M>, at: MachineState<M>, target: StatTarget) → Type {
-    StatAsked(io, at, target) ∧ io.writable(at.memory, stat_buffer(target, at.gprs), stat_length())
 }
 fn linux_stat_return<M>(io: LinuxIo<M>, state: MachineState<M>, target: StatTarget, bytes: List<BitVec(8)>,
     rax, rcx, r11: BitVec(64)) → MachineState<M> {
@@ -353,6 +279,150 @@ theorem linux_steps_store<M>(io: LinuxIo<M>, before, after: MachineState<M>,
     Exists(Succ(Zero), Exists(after, ⟨Inr(stored), refl⟩))
 }
 
+// ---------------------------------------------------------------------------
+// One call: what the process asks, what Linux needs, how it resumes.
+
+// The registers and memory at a SYSCALL name the call: read(fd, RSI, max),
+// write(fd, RSI, bytes), openat, close(fd), newfstatat or fstat.
+fn LinuxAsks<M>(io: LinuxIo<M>, at: MachineState<M>, c: LinuxCmd<Nat>) → Type {
+    match c {
+        ReadCmd(fd, max) =>
+            (read_gpr(Rax, at.gprs) = BitVec::ofNat(0)) ∧
+            ((read_gpr(Rdi, at.gprs) = fd) ∧ (read_gpr(Rdx, at.gprs).toNat() = max)),
+        WriteCmd(fd, bytes) =>
+            (read_gpr(Rax, at.gprs) = BitVec::ofNat(1)) ∧
+            ((read_gpr(Rdi, at.gprs) = fd) ∧
+            ((read_gpr(Rdx, at.gprs).toNat() = bytes.len()) ∧ LinuxWritesFrom(io, at.memory, read_gpr(Rsi, at.gprs), bytes))),
+        OpenCmd(path) => OpenRequest(io, at, path),
+        CloseCmd(fd) => (read_gpr(Rax, at.gprs) = BitVec::ofNat(3)) ∧ (read_gpr(Rdi, at.gprs) = fd),
+        StatCmd(target) => StatAsked(io, at, target),
+    }
+}
+
+// What Linux needs of the call to answer it as `Answers` says: the buffer a
+// read or a stat may store into is writable, all of it, whatever comes back.
+fn LinuxBuffers<M>(io: LinuxIo<M>, at: MachineState<M>, c: LinuxCmd<Nat>) → Type {
+    match c {
+        ReadCmd(_, max) => io.writable(at.memory, read_gpr(Rsi, at.gprs), max),
+        WriteCmd(_, _) => True,
+        OpenCmd(_) => True,
+        CloseCmd(_) => True,
+        StatCmd(target) => io.writable(at.memory, stat_buffer(target, at.gprs), stat_length()),
+    }
+}
+
+fn LinuxRequests<M>(io: LinuxIo<M>, at: MachineState<M>, c: LinuxCmd<Nat>) → Type {
+    LinuxAsks(io, at, c) ∧ LinuxBuffers(io, at, c)
+}
+
+// What Linux may leave in the buffer besides an answer: anything up to the
+// buffer's length after a failed read or stat, nothing otherwise.
+fn LinuxLeaves(c: LinuxCmd<Nat>) → c.Resp() → List<BitVec(8)> → Type {
+    match c as λ d => d.Resp() → List<BitVec(8)> → Type {
+        ReadCmd(_, max) => λ (r: ReadResult) junk => match r {
+            ReadBytes(_) => junk = Nil,
+            ReadFailed(_) => junk.len() <= max,
+        },
+        WriteCmd(_, _) => λ _ junk => junk = Nil,
+        OpenCmd(_) => λ _ junk => junk = Nil,
+        CloseCmd(_) => λ _ junk => junk = Nil,
+        StatCmd(_) => λ (r: StatResult) junk => match r {
+            Stated(_) => junk = Nil,
+            StatFailed(_) => junk.len() <= stat_length(),
+        },
+    }
+}
+
+// The state Linux resumes the process in after answering `a`, having left
+// `junk` and the given RCX and R11.
+fn linux_answered<M>(io: LinuxIo<M>, at: MachineState<M>, c: LinuxCmd<Nat>) →
+    c.Resp() → List<BitVec(8)> → BitVec(64) → BitVec(64) → MachineState<M> {
+    match c as λ d => d.Resp() → List<BitVec(8)> → BitVec(64) → BitVec(64) → MachineState<M> {
+        ReadCmd(_, _) => λ (r: ReadResult) junk rcx r11 => match r {
+            ReadBytes(bytes) => linux_read_return(io, at, bytes, rcx, r11),
+            ReadFailed(errno) => linux_read_failed_return(io, at, errno, junk, rcx, r11),
+        },
+        WriteCmd(_, _) => λ (r: WriteResult) junk rcx r11 => match r {
+            Wrote(count) => linux_write_return(at, bitvec_nat::word_of_nat(64, count), rcx, r11),
+            WriteFailed(errno) => linux_write_return(at, errno_word(errno), rcx, r11),
+        },
+        OpenCmd(_) => λ (r: OpenResult) junk rcx r11 => linux_write_return(at, open_rax(r), rcx, r11),
+        CloseCmd(_) => λ (r: CloseResult) junk rcx r11 => linux_write_return(at, close_rax(r), rcx, r11),
+        StatCmd(target) => λ (r: StatResult) junk rcx r11 => match r {
+            Stated(st) => linux_stat_return(io, at, target, st, BitVec::ofNat(0), rcx, r11),
+            StatFailed(errno) => linux_stat_return(io, at, target, junk, errno_word(errno), rcx, r11),
+        },
+    }
+}
+
+// Every way Linux may resume the process after answering `a` meets `next`:
+// a claim cannot depend on what Linux leaves behind.
+fn LinuxResumes<M>(io: LinuxIo<M>, at: MachineState<M>, c: LinuxCmd<Nat>, a: c.Resp(),
+    next: MachineState<M> → Type) → Type {
+    (junk: List<BitVec(8)>) → LinuxLeaves(c, a, junk) → (rcx, r11: BitVec(64)) →
+        next(linux_answered(io, at, c, a, junk, rcx, r11))
+}
+
+// The call at `at` is `c`, Linux answered it with `a`, as it may, and every
+// way it resumes the process meets `next`.
+fn LinuxAnswered<M>(io: LinuxIo<M>, at: MachineState<M>, c: LinuxCmd<Nat>, a: c.Resp(),
+    next: MachineState<M> → Type) → Type {
+    LinuxRequests(io, at, c) ∧ (c.Answers(a) ∧ LinuxResumes(io, at, c, a, next))
+}
+
+fn LinuxExits<M>(at: MachineState<M>, status: BitVec(64)) → Type {
+    (read_gpr(Rax, at.gprs) = BitVec::ofNat(60)) ∧ (read_gpr(Rdi, at.gprs) = status)
+}
+
+// Nothing left behind is always one choice.
+theorem linux_leaves_nil(c: LinuxCmd<Nat>): (a: c.Resp()) → LinuxLeaves(c, a, Nil) {
+    match c as λ d => (a: d.Resp()) → LinuxLeaves(d, a, Nil) {
+        ReadCmd(_, _) => λ (r: ReadResult) => match r { ReadBytes(_) => refl, ReadFailed(_) => trivial },
+        WriteCmd(_, _) => λ _ => refl,
+        OpenCmd(_) => λ _ => refl,
+        CloseCmd(_) => λ _ => refl,
+        StatCmd(_) => λ (r: StatResult) => match r { Stated(_) => refl, StatFailed(_) => trivial },
+    }
+}
+
+// Resuming meets anything weaker than what it met.
+theorem linux_resumes_mono<M>(io: LinuxIo<M>, at: MachineState<M>, c: LinuxCmd<Nat>, a: c.Resp(),
+    next, more: MachineState<M> → Type, weaker: (state: MachineState<M>) → next(state) → more(state),
+    resumes: LinuxResumes(io, at, c, a, next)): LinuxResumes(io, at, c, a, more) {
+    λ junk leaves rcx r11 => weaker(linux_answered(io, at, c, a, junk, rcx, r11), resumes(junk, leaves, rcx, r11))
+}
+
+// Linux's answers read only defined components and keep the flags, so each
+// commutes with erasing AF by `refl`.
+theorem linux_answered_respects<M>(io: LinuxIo<M>, c: LinuxCmd<Nat>): (a: c.Resp()) → (junk: List<BitVec(8)>) →
+    (rcx, r11: BitVec(64)) →
+    PreservesRelation(SameDefinedState<M>, SameDefinedState<M>, λ state => linux_answered(io, state, c, a, junk, rcx, r11)) {
+    match c as λ d => (a: d.Resp()) → (junk: List<BitVec(8)>) → (rcx, r11: BitVec(64)) →
+            PreservesRelation(SameDefinedState<M>, SameDefinedState<M>, λ state => linux_answered(io, state, d, a, junk, rcx, r11)) {
+        ReadCmd(_, _) => λ (r: ReadResult) junk rcx r11 => match r {
+            ReadBytes(bytes) => same_defined_respects<M>(λ state => linux_read_return(io, state, bytes, rcx, r11), λ state => refl),
+            ReadFailed(errno) =>
+                same_defined_respects<M>(λ state => linux_read_failed_return(io, state, errno, junk, rcx, r11), λ state => refl),
+        },
+        WriteCmd(_, _) => λ (r: WriteResult) junk rcx r11 => match r {
+            Wrote(count) => same_defined_respects<M>(
+                λ state => linux_write_return(state, bitvec_nat::word_of_nat(64, count), rcx, r11), λ state => refl),
+            WriteFailed(errno) =>
+                same_defined_respects<M>(λ state => linux_write_return(state, errno_word(errno), rcx, r11), λ state => refl),
+        },
+        OpenCmd(_) => λ (r: OpenResult) junk rcx r11 =>
+            same_defined_respects<M>(λ state => linux_write_return(state, open_rax(r), rcx, r11), λ state => refl),
+        CloseCmd(_) => λ (r: CloseResult) junk rcx r11 =>
+            same_defined_respects<M>(λ state => linux_write_return(state, close_rax(r), rcx, r11), λ state => refl),
+        StatCmd(target) => λ (r: StatResult) junk rcx r11 => match r {
+            Stated(st) => same_defined_respects<M>(
+                λ state => linux_stat_return(io, state, target, st, BitVec::ofNat(0), rcx, r11), λ state => refl),
+            StatFailed(errno) => same_defined_respects<M>(
+                λ state => linux_stat_return(io, state, target, junk, errno_word(errno), rcx, r11), λ state => refl),
+        },
+    }
+}
+
 // A run producing exactly `events`, ending at an exit.
 fn LinuxRuns<M>(io: LinuxIo<M>, events: List<LinuxEvent>) → MachineState<M> → Type {
     match events {
@@ -360,56 +430,12 @@ fn LinuxRuns<M>(io: LinuxIo<M>, events: List<LinuxEvent>) → MachineState<M> �
         Cons(event, rest) => λ state => Exists<MachineState<M>>(λ at =>
             LinuxSteps(io, state, at) ∧ (LinuxSyscallAt(io, at) ∧
             match event as λ _ => Type {
-                ReadEvent(fd, result) =>
-                    (read_gpr(Rax, at.gprs) = BitVec::ofNat(0)) ∧
-                    ((read_gpr(Rdi, at.gprs) = fd) ∧
-                    match result as λ _ => Type {
-                        ReadBytes(bytes) =>
-                            (bytes.len() <= read_gpr(Rdx, at.gprs).toNat()) ∧
-                            (io.writable(at.memory, read_gpr(Rsi, at.gprs), bytes.len()) ∧
-                            ((rcx, r11: BitVec(64)) → LinuxRuns(io, rest, linux_read_return(io, at, bytes, rcx, r11)))),
-                        ReadFailed(errno) =>
-                            Errno(errno) ∧
-                            (io.writable(at.memory, read_gpr(Rsi, at.gprs), read_gpr(Rdx, at.gprs).toNat()) ∧
-                            ((junk: List<BitVec(8)>) → junk.len() <= read_gpr(Rdx, at.gprs).toNat() → (rcx, r11: BitVec(64)) →
-                                LinuxRuns(io, rest, linux_read_failed_return(io, at, errno, junk, rcx, r11)))),
-                    }),
-                WriteEvent(fd, bytes, result) =>
-                    (read_gpr(Rax, at.gprs) = BitVec::ofNat(1)) ∧
-                    ((read_gpr(Rdi, at.gprs) = fd) ∧
-                    ((read_gpr(Rdx, at.gprs).toNat() = bytes.len()) ∧
-                    (LinuxWritesFrom(io, at.memory, read_gpr(Rsi, at.gprs), bytes) ∧
-                    match result as λ _ => Type {
-                        Wrote(count) => (count <= bytes.len()) ∧
-                            ((rcx, r11: BitVec(64)) →
-                                LinuxRuns(io, rest, linux_write_return(at, bitvec_nat::word_of_nat(64, count), rcx, r11))),
-                        WriteFailed(errno) => Errno(errno) ∧
-                            ((rcx, r11: BitVec(64)) → LinuxRuns(io, rest, linux_write_return(at, errno_word(errno), rcx, r11))),
-                    }))),
-                ExitEvent(status) =>
-                    (read_gpr(Rax, at.gprs) = BitVec::ofNat(60)) ∧
-                    ((read_gpr(Rdi, at.gprs) = status) ∧ (rest = Nil)),
-                OpenEvent(path, result) =>
-                    OpenRequest(io, at, path) ∧ (OpenReturns(result) ∧
-                    ((rcx, r11: BitVec(64)) → LinuxRuns(io, rest, linux_write_return(at, open_rax(result), rcx, r11)))),
-                CloseEvent(fd, result) =>
-                    (read_gpr(Rax, at.gprs) = BitVec::ofNat(3)) ∧ ((read_gpr(Rdi, at.gprs) = fd) ∧ (CloseReturns(result) ∧
-                    ((rcx, r11: BitVec(64)) → LinuxRuns(io, rest, linux_write_return(at, close_rax(result), rcx, r11))))),
-                StatEvent(target, result) =>
-                    StatRequest(io, at, target) ∧
-                    match result as λ _ => Type {
-                        Stated(st) => (st.len() = stat_length()) ∧
-                            ((rcx, r11: BitVec(64)) →
-                                LinuxRuns(io, rest, linux_stat_return(io, at, target, st, BitVec::ofNat(0), rcx, r11))),
-                        StatFailed(errno) => Errno(errno) ∧
-                            ((junk: List<BitVec(8)>) → junk.len() <= stat_length() → (rcx, r11: BitVec(64)) →
-                                LinuxRuns(io, rest, linux_stat_return(io, at, target, junk, errno_word(errno), rcx, r11))),
-                    },
+                CallEvent(c, a) => LinuxAnswered(io, at, c, a, LinuxRuns(io, rest)),
+                ExitEvent(status) => LinuxExits(at, status) ∧ (rest = Nil),
             })),
     }
 }
 
-// Steps before a run are part of it.
 theorem linux_runs_after_linux_steps<M>(io: LinuxIo<M>, events: List<LinuxEvent>, before, middle: MachineState<M>,
     steps: LinuxSteps(io, before, middle), runs: LinuxRuns(io, events, middle)):
     LinuxRuns(io, events, before) {
@@ -430,82 +456,14 @@ theorem linux_runs_exit<M>(io: LinuxIo<M>, before, at: MachineState<M>, status: 
     steps: FetchedSteps(io.fetch, io.data, before, at), syscall: LinuxSyscallAt(io, at),
     number: read_gpr(Rax, at.gprs) = BitVec::ofNat(60), code: read_gpr(Rdi, at.gprs) = status):
     LinuxRuns(io, [ExitEvent(status)], before) {
-    Exists(at, ⟨linux_steps_of_fetched(io, before, at, steps), ⟨syscall, ⟨number, ⟨code, refl⟩⟩⟩⟩)
+    Exists(at, ⟨linux_steps_of_fetched(io, before, at, steps), ⟨syscall, ⟨⟨number, code⟩, refl⟩⟩⟩)
 }
 
-theorem linux_runs_read<M>(io: LinuxIo<M>, before, at: MachineState<M>, fd: BitVec(64), bytes: List<BitVec(8)>,
-    rest: List<LinuxEvent>, steps: FetchedSteps(io.fetch, io.data, before, at), syscall: LinuxSyscallAt(io, at),
-    number: read_gpr(Rax, at.gprs) = BitVec::ofNat(0), descriptor: read_gpr(Rdi, at.gprs) = fd,
-    capacity: bytes.len() <= read_gpr(Rdx, at.gprs).toNat(),
-    writable: io.writable(at.memory, read_gpr(Rsi, at.gprs), bytes.len()),
-    after: (rcx, r11: BitVec(64)) → LinuxRuns(io, rest, linux_read_return(io, at, bytes, rcx, r11))):
-    LinuxRuns(io, Cons(ReadEvent(fd, ReadBytes(bytes)), rest), before) {
-    Exists(at, ⟨linux_steps_of_fetched(io, before, at, steps), ⟨syscall, ⟨number, ⟨descriptor, ⟨capacity, ⟨writable, after⟩⟩⟩⟩⟩⟩)
-}
-
-theorem linux_runs_read_failed<M>(io: LinuxIo<M>, before, at: MachineState<M>, fd: BitVec(64), errno: Nat,
+theorem linux_runs_call<M>(io: LinuxIo<M>, before, at: MachineState<M>, c: LinuxCmd<Nat>, a: c.Resp(),
     rest: List<LinuxEvent>, steps: LinuxSteps(io, before, at), syscall: LinuxSyscallAt(io, at),
-    number: read_gpr(Rax, at.gprs) = BitVec::ofNat(0), descriptor: read_gpr(Rdi, at.gprs) = fd,
-    error: Errno(errno), writable: io.writable(at.memory, read_gpr(Rsi, at.gprs), read_gpr(Rdx, at.gprs).toNat()),
-    after: (junk: List<BitVec(8)>) → junk.len() <= read_gpr(Rdx, at.gprs).toNat() → (rcx, r11: BitVec(64)) →
-        LinuxRuns(io, rest, linux_read_failed_return(io, at, errno, junk, rcx, r11))):
-    LinuxRuns(io, Cons(ReadEvent(fd, ReadFailed(errno)), rest), before) {
-    Exists(at, ⟨steps, ⟨syscall, ⟨number, ⟨descriptor, ⟨error, ⟨writable, after⟩⟩⟩⟩⟩⟩)
-}
-
-theorem linux_runs_write<M>(io: LinuxIo<M>, before, at: MachineState<M>, fd: BitVec(64), bytes: List<BitVec(8)>,
-    rest: List<LinuxEvent>, steps: LinuxSteps(io, before, at), syscall: LinuxSyscallAt(io, at),
-    number: read_gpr(Rax, at.gprs) = BitVec::ofNat(1), descriptor: read_gpr(Rdi, at.gprs) = fd,
-    length: read_gpr(Rdx, at.gprs).toNat() = bytes.len(),
-    sends: LinuxWritesFrom(io, at.memory, read_gpr(Rsi, at.gprs), bytes),
-    count: Nat, some: count <= bytes.len(),
-    after: (rcx, r11: BitVec(64)) → LinuxRuns(io, rest, linux_write_return(at, bitvec_nat::word_of_nat(64, count), rcx, r11))):
-    LinuxRuns(io, Cons(WriteEvent(fd, bytes, Wrote(count)), rest), before) {
-    Exists(at, ⟨steps, ⟨syscall, ⟨number, ⟨descriptor, ⟨length, ⟨sends, ⟨some, after⟩⟩⟩⟩⟩⟩⟩)
-}
-
-theorem linux_runs_write_failed<M>(io: LinuxIo<M>, before, at: MachineState<M>, fd: BitVec(64), bytes: List<BitVec(8)>,
-    rest: List<LinuxEvent>, steps: LinuxSteps(io, before, at), syscall: LinuxSyscallAt(io, at),
-    number: read_gpr(Rax, at.gprs) = BitVec::ofNat(1), descriptor: read_gpr(Rdi, at.gprs) = fd,
-    length: read_gpr(Rdx, at.gprs).toNat() = bytes.len(),
-    sends: LinuxWritesFrom(io, at.memory, read_gpr(Rsi, at.gprs), bytes), errno: Nat, error: Errno(errno),
-    after: (rcx, r11: BitVec(64)) → LinuxRuns(io, rest, linux_write_return(at, errno_word(errno), rcx, r11))):
-    LinuxRuns(io, Cons(WriteEvent(fd, bytes, WriteFailed(errno)), rest), before) {
-    Exists(at, ⟨steps, ⟨syscall, ⟨number, ⟨descriptor, ⟨length, ⟨sends, ⟨error, after⟩⟩⟩⟩⟩⟩⟩)
-}
-
-theorem linux_runs_open<M>(io: LinuxIo<M>, before, at: MachineState<M>, path: List<BitVec(8)>, result: OpenResult,
-    rest: List<LinuxEvent>, steps: LinuxSteps(io, before, at), syscall: LinuxSyscallAt(io, at),
-    request: OpenRequest(io, at, path), returns: OpenReturns(result),
-    after: (rcx, r11: BitVec(64)) → LinuxRuns(io, rest, linux_write_return(at, open_rax(result), rcx, r11))):
-    LinuxRuns(io, Cons(OpenEvent(path, result), rest), before) {
-    Exists(at, ⟨steps, ⟨syscall, ⟨request, ⟨returns, after⟩⟩⟩⟩)
-}
-
-theorem linux_runs_close<M>(io: LinuxIo<M>, before, at: MachineState<M>, fd: BitVec(64), result: CloseResult,
-    rest: List<LinuxEvent>, steps: LinuxSteps(io, before, at), syscall: LinuxSyscallAt(io, at),
-    number: read_gpr(Rax, at.gprs) = BitVec::ofNat(3), descriptor: read_gpr(Rdi, at.gprs) = fd,
-    returns: CloseReturns(result),
-    after: (rcx, r11: BitVec(64)) → LinuxRuns(io, rest, linux_write_return(at, close_rax(result), rcx, r11))):
-    LinuxRuns(io, Cons(CloseEvent(fd, result), rest), before) {
-    Exists(at, ⟨steps, ⟨syscall, ⟨number, ⟨descriptor, ⟨returns, after⟩⟩⟩⟩⟩)
-}
-
-theorem linux_runs_stat<M>(io: LinuxIo<M>, before, at: MachineState<M>, target: StatTarget, st: List<BitVec(8)>,
-    rest: List<LinuxEvent>, steps: LinuxSteps(io, before, at), syscall: LinuxSyscallAt(io, at),
-    request: StatRequest(io, at, target), length: st.len() = stat_length(),
-    after: (rcx, r11: BitVec(64)) → LinuxRuns(io, rest, linux_stat_return(io, at, target, st, BitVec::ofNat(0), rcx, r11))):
-    LinuxRuns(io, Cons(StatEvent(target, Stated(st)), rest), before) {
-    Exists(at, ⟨steps, ⟨syscall, ⟨request, ⟨length, after⟩⟩⟩⟩)
-}
-
-theorem linux_runs_stat_failed<M>(io: LinuxIo<M>, before, at: MachineState<M>, target: StatTarget, errno: Nat,
-    rest: List<LinuxEvent>, steps: LinuxSteps(io, before, at), syscall: LinuxSyscallAt(io, at),
-    request: StatRequest(io, at, target), error: Errno(errno),
-    after: (junk: List<BitVec(8)>) → junk.len() <= stat_length() → (rcx, r11: BitVec(64)) →
-        LinuxRuns(io, rest, linux_stat_return(io, at, target, junk, errno_word(errno), rcx, r11))):
-    LinuxRuns(io, Cons(StatEvent(target, StatFailed(errno)), rest), before) {
-    Exists(at, ⟨steps, ⟨syscall, ⟨request, ⟨error, after⟩⟩⟩⟩)
+    answered: LinuxAnswered(io, at, c, a, LinuxRuns(io, rest))):
+    LinuxRuns(io, Cons(CallEvent(c, a), rest), before) {
+    Exists(at, ⟨steps, ⟨syscall, answered⟩⟩)
 }
 
 // The exit-only profile's request is this relation's exit event.

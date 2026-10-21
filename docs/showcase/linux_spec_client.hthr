@@ -1,0 +1,71 @@
+// A client of the Linux spec as trees (issues/native-linux-spec.md): `tr`'s
+// spec run on a short input, at the fuel it needs; what implements the spec
+// with a 4096-byte buffer; and what reaches stdout from a machine that meets
+// an implementation, from its run alone.
+import linux_calls;
+import linux_x86_64_io;
+import linux_x86_64_determinism;
+import linux_trees;
+import linux_x86_64_sim;
+import stream_filter;
+import stream_filter_spec;
+import itree;
+import itree_trace;
+import x86_64;
+import bitvec;
+import list;
+import logic;
+import nat;
+
+// One byte in, its image out in one write, then the end of the input.
+fn one_byte(f: BitVec(8) → BitVec(8), x: BitVec(8)) → Trace<BitVec(64)>(Events::linux_spec()) {
+    TAns(ReadCmd(BitVec::ofNat(0), trivial), ReadBytes([x]),
+        TAns(WriteCmd(BitVec::ofNat(1), [f(x)]), Wrote(1),
+            TAns(ReadCmd(BitVec::ofNat(0), trivial), ReadBytes(Nil), TRet(filter_ok()))))
+}
+
+// Four passes: read, write, back to reading, the end.
+theorem one_byte_is_a_trace(f: BitVec(8) → BitVec(8), x: BitVec(8)):
+    IsTrace(Events::linux_spec(), tr_spec(f).at(4), one_byte(f, x)) {
+    let end: Trace<BitVec(64)>(Events::linux_spec()) = TRet(filter_ok());
+    let wrote: Trace<BitVec(64)>(Events::linux_spec()) =
+        TAns(ReadCmd(BitVec::ofNat(0), trivial), ReadBytes(Nil), end);
+    let read: Trace<BitVec(64)>(Events::linux_spec()) =
+        TAns(WriteCmd(BitVec::ofNat(1), [f(x)]), Wrote(1), wrote);
+    Answered(ReadBytes([x]), read, refl, Answered(Wrote(1), wrote, refl, Answered(ReadBytes(Nil), end, refl, Returned(refl))))
+}
+
+theorem one_byte_sends(f: BitVec(8) → BitVec(8), x: BitVec(8)):
+    Trace::sent<True, BitVec(64)>(BitVec::ofNat(1), one_byte(f, x))
+        = Trace::received<True, BitVec(64)>(BitVec::ofNat(0), one_byte(f, x)).map(f) {
+    tr_sends(f, one_byte(f, x), Converges(4, one_byte_is_a_trace(f, x)), refl)
+}
+
+// A read of up to 4096 bytes at every pass implements the spec.
+theorem sized_tr_implements(f: BitVec(8) → BitVec(8), n: Nat):
+    ITree::Implements(ITree::sized(4096, tr_spec(f).at(n)), tr_spec(f).at(n)) {
+    ITree::implements_sized(4096, trivial, tr_spec(f).at(n))
+}
+
+// A machine that meets a program implementing `tr`'s spec: every run that got
+// the answers of a whole trace exiting 0 wrote to stdout, as its events show,
+// the image of what it read from stdin.
+theorem tr_machine_sends<M>(io: LinuxIo<M>, f: BitVec(8) → BitVec(8), p: Program<BitVec(64)>(Events::linux()),
+    implements: Program::Implements(p, tr_spec(f)), state: MachineState<M>, sim: SimProgram(io, p, state),
+    tr: Trace<BitVec(64)>(Events::linux()), produces: Program::Produces(Events::linux(), p, tr),
+    valid: Trace::LinuxValid(tr), returns: Trace::ReturnsWith(Events::linux(), tr, filter_ok()),
+    run: List<LinuxEvent>, ran: LinuxRun(io, run, state), responses: SameResponses(Trace::linux_events(tr), run)):
+    sent_to(BitVec::ofNat(1), run) = received_from(BitVec::ofNat(0), run).map(f) {
+    let whole = Trace::returns_of_with(Events::linux(), tr, filter_ok(), returns);
+    let events: (run = Trace::linux_events(tr)) =
+        sim_every_run(io, p.at(produces.n), state, sim(produces.n), tr, produces.h, valid, whole, run, ran, responses);
+    let read: (received_from(BitVec::ofNat(0), run) = Trace::received<Nat, BitVec(64)>(BitVec::ofNat(0), tr)) =
+        trans(cong_fn(λ (e: List<LinuxEvent>) => received_from(BitVec::ofNat(0), e), events),
+            Trace::received_events(BitVec::ofNat(0), tr));
+    trans(sim_run_sends(io, p.at(produces.n), state, sim(produces.n), tr, produces.h, valid, whole, run, ran, responses,
+            BitVec::ofNat(1)),
+        trans(filter_implementation_sends(BitVec::ofNat(0), BitVec::ofNat(1), mapping(f), Stateless(), p, implements,
+                tr, produces, valid, returns),
+            trans(mapping_emitted(f, Trace::received<Nat, BitVec(64)>(BitVec::ofNat(0), tr), Stateless()),
+                cong_fn(λ (bytes: List<BitVec(8)>) => bytes.map(f), sym(read)))))
+}
