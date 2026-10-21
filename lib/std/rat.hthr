@@ -1459,3 +1459,78 @@ instance CommRing<Rat>(Rat::Same, Rat::add, Rat::mul) {
     zero_mul := Rat::zero_mul,
     mul_zero := Rat::mul_zero,
 }
+
+// Subtraction is monotone in its left argument and antitone in its right,
+// and both directions cancel.
+theorem Rat::sub_le_sub_r(self x, a, b: Rat, h: a <= b): a -x <= b -x { a.add_le_mono_r(b, -x, h) }
+
+theorem Rat::sub_lt_sub_r(self x, a, b: Rat, h: a < b): a -x < b -x { a.add_lt_mono_r(b, -x, h) }
+
+theorem Rat::sub_le_sub_l(self x, a, b: Rat, h: a <= b): x -b <= x -a { (-b).add_le_mono_l(-a, x, Rat::neg_le(x := a, y := b, h := h)) }
+
+theorem Rat::sub_lt_sub_l(self x, a, b: Rat, h: a < b): x -b < x -a { (-b).add_lt_mono_l(-a, x, Rat::neg_lt(x := a, y := b, h := h)) }
+
+theorem Rat::le_of_sub_le_sub_r(self x, a, b: Rat, h: a -x <= b -x): a <= b {
+    match a.le_dec(b) as λ _ => a <= b {
+        Inl(le) => le,
+        Inr(no) => false_elim(Rat::not_le_of_lt(x := b -x, y := a -x, h := x.sub_lt_sub_r(b, a, Rat::lt_of_not_le(x := b, y := a, h := no)))(h)),
+    }
+}
+
+theorem Rat::le_of_sub_le_sub_l(self x, a, b: Rat, h: x -b <= x -a): a <= b {
+    match a.le_dec(b) as λ _ => a <= b {
+        Inl(le) => le,
+        Inr(no) => false_elim(Rat::not_le_of_lt(x := x -a, y := x -b, h := x.sub_lt_sub_l(b, a, Rat::lt_of_not_le(x := b, y := a, h := no)))(h)),
+    }
+}
+
+theorem Rat::abs_of_nonneg(self a: Rat, h: 0 <= a): a.abs() ≈ a {
+    match a.abs_cases() as λ _ => a.abs() ≈ a {
+        Inl(c) => c.right,
+        Inr(c) => false_elim(Rat::not_le_of_lt(x := a, y := 0, h := c.left)(h)),
+    }
+}
+
+theorem Rat::abs_of_nonpos(self a: Rat, h: a <= 0): a.abs() ≈ -a {
+    let nz: Rat::Same(Rat::neg(0), 0) = omega;
+    let neg: (0 <= -a) = Rat::le_respects(nz, (-a).same_refl(), Rat::neg_le(x := a, y := 0, h := h));
+    Rat::same_trans(Rat::same_sym(a.abs_neg()), (-a).abs_of_nonneg(neg))
+}
+
+theorem Rat::lt_of_add_lt_add_r(self x, y, z: Rat, h: x + z < y + z): x < y {
+    match y.le_dec(x) as λ _ => x < y {
+        Inl(le) => false_elim(Rat::not_le_of_lt(x := x + z, y := y + z, h := h)(y.add_le_mono_r(x, z, le))),
+        Inr(no) => Rat::lt_of_not_le(x := x, y := y, h := no),
+    }
+}
+
+// Comparing the distances from `x` to `a` and to `b` is comparing `x` with
+// their midpoint `m`.
+theorem Rat::sub_shift(self x, a, b: Rat): (x -a) + (a + x) ≈ x + x ∧ (b -x) + (a + x) ≈ a + b {
+    And(ring((x -a).den_add(a + x), x.den_add(-a), a.den_add(x), x.den_add(x)),
+        ring((b -x).den_add(a + x), b.den_add(-x), a.den_add(x), a.den_add(b)))
+}
+
+theorem Rat::sub_le_sub_of_le_mid({x, m, a, b: Rat}, h: x <= m, e: m + m ≈ a + b): x -a <= b -x {
+    let s = x.sub_shift(a, b);
+    let xx = Rat::le_respects((x + x).same_refl(), e, Rat::add_le_mono(h1 := h, h2 := h));
+    (x -a).add_le_cancel_r(b -x, a + x, Rat::le_respects(Rat::same_sym(s.left), Rat::same_sym(s.right), xx))
+}
+
+theorem Rat::sub_le_sub_of_mid_le({x, m, a, b: Rat}, h: m <= x, e: m + m ≈ a + b): b -x <= x -a {
+    let s = x.sub_shift(a, b);
+    let xx = Rat::le_respects(e, (x + x).same_refl(), Rat::add_le_mono(h1 := h, h2 := h));
+    (b -x).add_le_cancel_r(x -a, a + x, Rat::le_respects(Rat::same_sym(s.right), Rat::same_sym(s.left), xx))
+}
+
+theorem Rat::sub_lt_sub_of_lt_mid({x, m, a, b: Rat}, h: x < m, e: m + m ≈ a + b): x -a < b -x {
+    let s = x.sub_shift(a, b);
+    let xx = Rat::lt_respects((x + x).same_refl(), e, Rat::add_lt_mono(h1 := h, h2 := Rat::le_of_lt(h)));
+    (x -a).lt_of_add_lt_add_r(b -x, a + x, Rat::lt_respects(Rat::same_sym(s.left), Rat::same_sym(s.right), xx))
+}
+
+theorem Rat::sub_lt_sub_of_mid_lt({x, m, a, b: Rat}, h: m < x, e: m + m ≈ a + b): b -x < x -a {
+    let s = x.sub_shift(a, b);
+    let xx = Rat::lt_respects(e, (x + x).same_refl(), Rat::add_lt_mono(h1 := h, h2 := Rat::le_of_lt(h)));
+    (b -x).lt_of_add_lt_add_r(x -a, a + x, Rat::lt_respects(Rat::same_sym(s.right), Rat::same_sym(s.left), xx))
+}

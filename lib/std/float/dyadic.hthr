@@ -402,6 +402,43 @@ theorem Dyadic::lt_of_mant_lt(m, n, e: Int, h: m < n): Dyadic(m, e) < Dyadic(n, 
     Int::mul_lt_mono_r(m * p, n * p, q, Int::mul_lt_mono_r(m, n, p, h, pp), qp)
 }
 
+theorem Dyadic::le_of_mant_le(m, n, e: Int, h: m <= n): Dyadic(m, e) <= Dyadic(n, e) {
+    let p = Nat::pow(2, e.pos_part()).int();
+    let q = Nat::pow(2, e.neg_part()).int();
+    let pp: (OfNat(0) < p) = Nat::pow_pos(a := 2, n := e.pos_part());
+    let qp: (OfNat(0) < q) = Nat::pow_pos(a := 2, n := e.neg_part());
+    Int::mul_le_mono_r(m * p, n * p, q, Int::mul_le_mono_r(m, n, p, h, omega), omega)
+}
+
+theorem Dyadic::mant_le_of_le(m, n, e: Int, h: Dyadic(m, e) <= Dyadic(n, e)): m <= n {
+    match m.le_dec(n) {
+        Inl(yes) => yes,
+        Inr(no) => false_elim(Rat::not_le_of_lt(x := Dyadic(n, e).rat(), y := Dyadic(m, e).rat(),
+            h := Dyadic::lt_of_mant_lt(n, m, e, n.lt_of_not_le(m, no)))(h)),
+    }
+}
+
+theorem Dyadic::mant_lt_of_lt(m, n, e: Int, h: Dyadic(m, e) < Dyadic(n, e)): m < n {
+    match n.le_dec(m) {
+        Inl(le) => false_elim(Rat::not_le_of_lt(x := Dyadic(m, e).rat(), y := Dyadic(n, e).rat(), h := h)(Dyadic::le_of_mant_le(n, m, e, le))),
+        Inr(no) => m.lt_of_not_le(n, no),
+    }
+}
+
+// At one exponent the sum adds the mantissas.
+theorem Dyadic::rat_add_exp(m, n, e: Int): Dyadic(m, e).rat() + Dyadic(n, e).rat() ≈ Dyadic(m + n, e).rat() {
+    let x = Dyadic(m, e).rat();
+    let y = Dyadic(n, e).rat();
+    let z = Dyadic(m + n, e).rat();
+    let nx: (x.num = m * Nat::pow(2, e.pos_part()).int()) = refl;
+    let ny: (y.num = n * Nat::pow(2, e.pos_part()).int()) = refl;
+    let nz: (z.num = (m + n) * Nat::pow(2, e.pos_part()).int()) = refl;
+    let dx: (x.den.int() = Nat::pow(2, e.neg_part()).int()) = refl;
+    let dy: (y.den.int() = Nat::pow(2, e.neg_part()).int()) = refl;
+    let dz: (z.den.int() = Nat::pow(2, e.neg_part()).int()) = refl;
+    ring(x.den_add(y), nx, ny, nz, dx, dy, dz)
+}
+
 // A zero mantissa is zero at every exponent.
 theorem Dyadic::zero_mant(e: Int): Dyadic(0, e) ≈ 0 {
     let p = Nat::pow(2, e.pos_part());
