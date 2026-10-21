@@ -88,6 +88,15 @@ if [ -n "$coqc" ]; then
     echo "coq: FAILED at Exported.v ${where:-?}; see $out/coq.log"
     status=1
   fi
+  # The library sweep in Rocq is informational: it stops at the first
+  # theorem that is unit η itself (design §5.3), which only a typed exporter
+  # can prove propositionally.
+  if (ulimit -v 8388608 -t 1200 -c 0; "$coqc" -Q . "" Sweep.v) >coq-Sweep.log 2>&1; then
+    echo "coq, Sweep (informational): ok"
+  else
+    where="$(grep -B1 '^Error' coq-Sweep.log | grep -o 'line [0-9]*' | tail -1)"
+    echo "coq, Sweep (informational): stops at Sweep.v ${where:-?} of $(wc -l <Sweep.v); see $out/coq-Sweep.log"
+  fi
 else
   echo "coq: not found (set COQC), skipped"
 fi

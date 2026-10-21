@@ -93,6 +93,113 @@ fn konst(name: &'static str, levels: &[&Level], args: Vec<Hx>) -> R<Hx> {
     Ok(app(Hx::Const(name, levels), args))
 }
 
+/// `t` under one binder fewer: indices above `cut` drop by one. `None` when
+/// `t` names the binder at `cut`.
+fn strengthen(t: &Hx, cut: u32) -> Option<Hx> {
+    Some(match t {
+        Hx::Var(i) if *i == cut => return None,
+        Hx::Var(i) if *i > cut => Hx::Var(i - 1),
+        Hx::Pi(a, b) => Hx::Pi(Box::new(strengthen(a, cut)?), Box::new(strengthen(b, cut + 1)?)),
+        Hx::Lam(a, b) => Hx::Lam(Box::new(strengthen(a, cut)?), Box::new(strengthen(b, cut + 1)?)),
+        Hx::App(f, a) => Hx::App(Box::new(strengthen(f, cut)?), Box::new(strengthen(a, cut)?)),
+        _ => t.clone(),
+    })
+}
+
+/// The realised inductives' recursors (`list::List::rec`), each with its
+/// parameter count and its constructors' fields.
+type Recs = std::collections::HashMap<String, (usize, Vec<(u32, u32)>)>;
+
+/// `t` with each realised recursor's minor premises in Rocq's order. Lean's
+/// recursor takes a constructor's fields, then its children's hypotheses;
+/// Rocq's `D_rect` puts each child's hypothesis right after the child. The
+/// minor premises are `λ`-chains `wf.rs` wrote, so their binders reorder.
+fn rocq_minors(t: &Hx, recs: &Recs) -> Hx {
+    match t {
+        Hx::App(..) => {
+            let mut spine = Vec::new();
+            let mut head = t;
+            while let Hx::App(f, a) = head {
+                spine.push(rocq_minors(a, recs));
+                head = f;
+            }
+            spine.reverse();
+            if let Hx::Named(key, _) = head
+                && let Some((np, fields)) = recs.get(key)
+            {
+                for (k, &(q, n)) in fields.iter().enumerate() {
+                    let Some(m) = spine.get_mut(np + 1 + k) else { break };
+                    let mut order: Vec<usize> = (0..q as usize).collect();
+                    for i in 0..n as usize {
+                        order.extend([q as usize + i, (q + n) as usize + i]);
+                    }
+                    *m = permute_lams(m, &order).expect("a minor premise is a λ-chain over its fields and hypotheses");
+                }
+            }
+            let head = match head {
+                Hx::Named(..) | Hx::Const(..) | Hx::Global(_) => head.clone(),
+                _ => rocq_minors(head, recs),
+            };
+            app(head, spine)
+        }
+        Hx::Pi(a, b) => Hx::Pi(Box::new(rocq_minors(a, recs)), Box::new(rocq_minors(b, recs))),
+        Hx::Lam(a, b) => Hx::Lam(Box::new(rocq_minors(a, recs)), Box::new(rocq_minors(b, recs))),
+        _ => t.clone(),
+    }
+}
+
+/// `t`'s first `order.len()` binders, a `λ`-chain, in the order `order`
+/// gives (new position ↦ old position), every index renumbered to follow.
+/// `None` when `t` has fewer binders. The order must keep each binder after
+/// those its domain mentions.
+fn permute_lams(t: &Hx, order: &[usize]) -> Option<Hx> {
+    let len = order.len();
+    let (mut doms, mut body) = (Vec::new(), t);
+    for _ in 0..len {
+        let Hx::Lam(a, b) = body else { return None };
+        doms.push(&**a);
+        body = b;
+    }
+    let mut new_of = vec![0; len];
+    for (new, &old) in order.iter().enumerate() {
+        new_of[old] = new;
+    }
+    // A variable under `cut` inner binders in a context of the chain's old
+    // binders 0..have, written for its new binders 0..now.
+    fn go(t: &Hx, have: usize, now: usize, new_of: &[usize], cut: u32) -> Hx {
+        match t {
+            Hx::Var(i) if *i >= cut => {
+                let k = (i - cut) as usize;
+                if k < have {
+                    let level = new_of[have - 1 - k];
+                    Hx::Var(cut + (now - 1 - level) as u32)
+                } else {
+                    Hx::Var(cut + (now + k - have) as u32)
+                }
+            }
+            Hx::Pi(a, b) => Hx::Pi(Box::new(go(a, have, now, new_of, cut)), Box::new(go(b, have, now, new_of, cut + 1))),
+            Hx::Lam(a, b) => Hx::Lam(Box::new(go(a, have, now, new_of, cut)), Box::new(go(b, have, now, new_of, cut + 1))),
+            Hx::App(f, a) => Hx::App(Box::new(go(f, have, now, new_of, cut)), Box::new(go(a, have, now, new_of, cut))),
+            _ => t.clone(),
+        }
+    }
+    let mut out = go(body, len, len, &new_of, 0);
+    for new in (0..len).rev() {
+        let old = order[new];
+        // Its domain is under the old binders before it, all of which come
+        // before it in the new order too.
+        let dom = go(doms[old], old, new, &new_of, 0);
+        out = Hx::Lam(Box::new(dom), Box::new(out));
+    }
+    Some(out)
+}
+
+/// The levels Lean's prelude takes for constant `name`: Rocq's `etaSig` has
+/// a third, the pair's own (it cannot write `max`), which Lean's computes.
+fn lean_levels<'a>(name: &str, levels: &'a [Lvl]) -> &'a [Lvl] {
+    if name == "etaSig" { &levels[..2] } else { levels }
+}
+
 fn lam(dom: Hx, body: Hx) -> Hx {
     Hx::Lam(Box::new(dom), Box::new(body))
 }
@@ -110,9 +217,10 @@ struct Tr<'a> {
     /// The declaration's own Ψ prefix: what its globals unfold to.
     psi: &'a GlobalCtx,
     /// One entry per enclosing binder, innermost last: the canonical element
-    /// of its domain when that domain is a closed singleton. Closed, so it
-    /// needs no shifting to be used under further binders.
-    ctx: RefCell<Vec<Option<Hx>>>,
+    /// of its domain when that domain is a closed singleton, translated and
+    /// as a kernel term. Closed, so it needs no shifting to be used under
+    /// further binders.
+    ctx: RefCell<Vec<Option<(Hx, Rc<Term>)>>>,
     /// The tier-1 declarations met so far (`wf.rs`).
     wf: &'a wf::WfTable,
 }
@@ -164,7 +272,7 @@ impl Tr<'_> {
 
     /// The canonical element of a closed singleton ([`Self::singleton`]):
     /// `tt`, `srefl`, or a pair of canonical elements.
-    fn canon(&self, t: &Type) -> Option<R<Hx>> {
+    pub(crate) fn canon(&self, t: &Type) -> Option<R<Hx>> {
         self.singleton(t)?;
         let nil = LocalCtx::nil();
         let w = whnf_type_delta(t, &nil, Defs::transparent(self.psi), FUEL).ok()?;
@@ -183,11 +291,90 @@ impl Tr<'_> {
         })
     }
 
+    /// [`Self::canon`] as a kernel term, for the terms `wf.rs` builds.
+    pub(crate) fn canon_term(&self, t: &Type) -> Option<Term> {
+        self.singleton(t)?;
+        let nil = LocalCtx::nil();
+        let w = whnf_type_delta(t, &nil, Defs::transparent(self.psi), FUEL).ok()?;
+        Some(match w {
+            Type::Unit { level } => Term::Triv { level },
+            Type::SEq { level, ty, lhs, .. } => Term::SRefl { level, ty, tm: lhs },
+            Type::Sigma { fst_level, snd_level, fst, snd } => {
+                let (a, b) = (self.canon_term(&fst)?, self.canon_term(&snd)?);
+                Term::Pair { fst_level, snd_level, fst_ty: fst, snd_ty: snd, fst: Rc::new(a), snd: Rc::new(b) }
+            }
+            _ => return None,
+        })
+    }
+
+    /// A proof that the canonical element of the closed singleton `t` is
+    /// every element, `Π(x : t). canon = x` (`etaUnit`, `etaSEq`, `etaSig`):
+    /// what a singleton-aware `case` transports its branch along (§5.3).
+    pub(crate) fn eta(&self, t: &Type) -> Option<R<Hx>> {
+        let level = self.singleton(t)?;
+        let nil = LocalCtx::nil();
+        let w = whnf_type_delta(t, &nil, Defs::transparent(self.psi), FUEL).ok()?;
+        Some(match &w {
+            Type::Unit { level } => konst("etaUnit", &[level], vec![]),
+            Type::SEq { level, ty, lhs, .. } => (|| konst("etaSEq", &[level], vec![self.ty(ty)?, self.tm(lhs)?]))(),
+            Type::Sigma { fst_level, snd_level, fst, snd } => {
+                let (a, b, ea, eb) = (self.canon(fst)?, self.canon(snd)?, self.eta(fst)?, self.eta(snd)?);
+                (|| konst("etaSig", &[fst_level, snd_level, &level], vec![self.ty(fst)?, self.ty(snd)?, a?, b?, ea?, eb?]))()
+            }
+            _ => return None,
+        })
+    }
+
+    /// A `case` branch over a closed singleton, stated at its canonical
+    /// element: the branch's body, which never names the bound payload
+    /// (`under` prints it as the canonical element), out from under its
+    /// binder. `None` when the body names it after all.
+    fn singleton_branch(&self, dom: &Type, branch: &Term) -> Option<R<Hx>> {
+        self.canon(&self.close(dom)?)?;
+        let body = match self.bound(dom, || self.tm(branch)) {
+            Ok(Hx::Lam(_, body)) => body,
+            Ok(_) => unreachable!("bound makes a binder"),
+            Err(e) => return Some(Err(e)),
+        };
+        strengthen(&body, 0).map(Ok)
+    }
+
+    /// `t` with the enclosing binders that have canonical elements
+    /// replaced by them, when that closes it: a domain such as
+    /// `IsTrue(inr x)` under a branch whose payload `x` is a singleton is a
+    /// closed singleton only once `x` is its canonical element. Heather's η
+    /// sees that; Rocq does not, so the exporter must (design §5.3).
+    fn close(&self, t: &Type) -> Option<Type> {
+        if local_bound_ty(&Rc::new(t.clone())) == 0 {
+            return Some(t.clone());
+        }
+        let ctx = self.ctx.borrow();
+        if ctx.iter().all(Option::is_none) {
+            return None;
+        }
+        let mut t = t.clone();
+        for entry in ctx.iter().rev() {
+            t = match entry {
+                Some((_, c)) => t.inst_top(0, c),
+                // A binder with no canonical element must not occur.
+                None => {
+                    let a = t.inst_top(0, &Term::Zero);
+                    (a == t.inst_top(0, &Term::Succ(Rc::new(Term::Zero)))).then_some(a)?
+                }
+            };
+            if local_bound_ty(&Rc::new(t.clone())) == 0 {
+                return Some(t);
+            }
+        }
+        None
+    }
+
     /// Translate under one binder whose domain is `dom` (`None` when the
     /// exporter does not have it at hand).
     fn under<T>(&self, dom: Option<&Type>, f: impl FnOnce() -> R<T>) -> R<T> {
-        let entry = match dom.and_then(|d| self.canon(d)) {
-            Some(c) => Some(c?),
+        let dom = dom.and_then(|d| self.close(d));
+        let entry = match dom.as_ref().and_then(|d| Some((self.canon(d)?, self.canon_term(d)?))) {
+            Some((c, k)) => Some((c?, Rc::new(k))),
             None => None,
         };
         self.ctx.borrow_mut().push(entry);
@@ -234,7 +421,7 @@ impl Tr<'_> {
             Type::Pi { dom, cod, .. } => Hx::Pi(Box::new(self.ty(dom)?), Box::new(self.under(Some(dom), || self.ty(cod))?)),
             Type::Ty(l) => Hx::Sort(lvl(l)?),
             Type::El { tm, .. } => self.tm(tm)?,
-            Type::Id { level, ty, lhs, rhs } => konst("Id", &[level], vec![self.ty(ty)?, self.tm(lhs)?, self.tm(rhs)?])?,
+            Type::Id { level, ty, lhs, rhs } => konst("Id", &[level], vec![self.ty(ty)?, self.tm_at_ty(lhs, ty)?, self.tm_at_ty(rhs, ty)?])?,
             Type::SEq { level, ty, lhs, rhs } => konst("SEq", &[level], vec![self.ty(ty)?, self.tm(lhs)?, self.tm(rhs)?])?,
             Type::SEmpty { level } => konst("SEmpty", &[level], vec![])?,
             Type::Squash { level, ty } => konst("Squash", &[level], vec![self.ty(ty)?])?,
@@ -288,10 +475,30 @@ impl Tr<'_> {
         }
     }
 
+    /// `t` where its type `ty` is at hand. A term of a squash type prints
+    /// eta-long (`squashEta`): every two such terms are equal in Heather,
+    /// and Rocq's record over an SProp field has no η to see it, while two
+    /// eta-long ones convert by irrelevance of the field (design §5.3).
+    fn tm_at_ty(&self, t: &Term, ty: &Type) -> R<Hx> {
+        let squash = match ty {
+            Type::Squash { level, ty } => Some((level, self.ty(ty))),
+            Type::El { tm, .. } => match &**tm {
+                Term::TmSquash { level, ty } => Some((level, self.tm(ty))),
+                _ => None,
+            },
+            _ => None,
+        };
+        let out = self.tm(t)?;
+        match squash {
+            Some((level, a)) if !matches!(t, Term::Squash { .. }) => konst("squashEta", &[level], vec![a?, out]),
+            _ => Ok(out),
+        }
+    }
+
     fn tm(&self, t: &Term) -> R<Hx> {
         if let Term::Var(v) = t {
             let ctx = self.ctx.borrow();
-            if let Some(Some(c)) = ctx.len().checked_sub(1 + v.0 as usize).map(|i| &ctx[i]) {
+            if let Some(Some((c, _))) = ctx.len().checked_sub(1 + v.0 as usize).map(|i| &ctx[i]) {
                 return Ok(c.clone());
             }
         }
@@ -337,7 +544,7 @@ impl Tr<'_> {
                 ],
             )?,
             // ---- Id ----
-            Term::Refl { level, ty, tm } => konst("refl", &[level], vec![self.ty(ty)?, self.tm(tm)?])?,
+            Term::Refl { level, ty, tm } => konst("refl", &[level], vec![self.ty(ty)?, self.tm_at_ty(tm, ty)?])?,
             Term::J { ty_level, motive_level, ty, lhs, motive, case, rhs, proof } => konst(
                 "J",
                 &[ty_level, motive_level],
@@ -437,26 +644,38 @@ impl Tr<'_> {
             Term::Inr { lhs_level, rhs_level, lhs, rhs, val } => {
                 konst("inr", &[lhs_level, rhs_level], vec![self.ty(lhs)?, self.ty(rhs)?, self.tm(val)?])?
             }
-            Term::Case { lhs_level, rhs_level, motive_level, lhs, rhs, motive, case_l, case_r, scrut } => konst(
-                "case",
-                &[lhs_level, rhs_level, motive_level],
-                vec![
-                    self.ty(lhs)?,
-                    self.ty(rhs)?,
-                    self.bound(
-                        &Type::Sum {
-                            lhs_level: lhs_level.clone(),
-                            rhs_level: rhs_level.clone(),
-                            lhs: lhs.clone(),
-                            rhs: rhs.clone(),
-                        },
-                        || self.ty(motive),
+            Term::Case { lhs_level, rhs_level, motive_level, lhs, rhs, motive, case_l, case_r, scrut } => {
+                let motive = self.bound(
+                    &Type::Sum { lhs_level: lhs_level.clone(), rhs_level: rhs_level.clone(), lhs: lhs.clone(), rhs: rhs.clone() },
+                    || self.ty(motive),
+                )?;
+                // A side whose payload is a closed singleton is stated at its
+                // canonical element (`caseL`/`caseR`/`caseLR`, design §5.3):
+                // Rocq has no unit η to convert `M (inl x)` with it.
+                let side = |dom: &Type, branch: &Term| -> R<Option<(Hx, Hx, Hx)>> {
+                    let Some(closed) = self.close(dom) else { return Ok(None) };
+                    let (Some(c), Some(e), Some(b)) = (self.canon(&closed), self.eta(&closed), self.singleton_branch(dom, branch)) else {
+                        return Ok(None);
+                    };
+                    Ok(Some((c?, e?, b?)))
+                };
+                let levels = [lhs_level, rhs_level, motive_level];
+                let (a, b) = (self.ty(lhs)?, self.ty(rhs)?);
+                match (side(lhs, case_l)?, side(rhs, case_r)?) {
+                    (Some((ca, ea, bl)), Some((cb, eb, br))) => konst("caseLR", &levels, vec![a, b, ca, cb, ea, eb, motive, bl, br, self.tm(scrut)?])?,
+                    (Some((ca, ea, bl)), None) => {
+                        konst("caseL", &levels, vec![a, b, ca, ea, motive, bl, self.bound(rhs, || self.tm(case_r))?, self.tm(scrut)?])?
+                    }
+                    (None, Some((cb, eb, br))) => {
+                        konst("caseR", &levels, vec![a, b, cb, eb, motive, self.bound(lhs, || self.tm(case_l))?, br, self.tm(scrut)?])?
+                    }
+                    (None, None) => konst(
+                        "case",
+                        &levels,
+                        vec![a, b, motive, self.bound(lhs, || self.tm(case_l))?, self.bound(rhs, || self.tm(case_r))?, self.tm(scrut)?],
                     )?,
-                    self.bound(lhs, || self.tm(case_l))?,
-                    self.bound(rhs, || self.tm(case_r))?,
-                    self.tm(scrut)?,
-                ],
-            )?,
+                }
+            }
             // ---- W and Wf ----
             Term::Sup { shape_level, pos_level, shape_ty, pos_ty, label, children } => konst(
                 "sup",
@@ -491,7 +710,7 @@ impl Tr<'_> {
             Term::Supi { .. } | Term::ElimIWf { .. } => return refuse("IWf (no code yet; not in declarations)"),
             // ---- functions ----
             Term::Lam { dom, body, .. } => lam(self.ty(dom)?, self.under(Some(dom), || self.tm(body))?),
-            Term::App { fun, arg, .. } => app(self.tm(fun)?, vec![self.tm(arg)?]),
+            Term::App { fun, arg, dom, .. } => app(self.tm(fun)?, vec![self.tm_at_ty(arg, dom)?]),
             Term::GlobalTm { var, subst } => self.global(var.0, subst)?,
             Term::ULam { .. } | Term::UApp { .. } => return refuse("universe abstraction/application"),
             Term::CtxLam { .. } | Term::CtxApp { .. } | Term::TyLam { .. } | Term::TyApp { .. } => {
@@ -545,6 +764,9 @@ pub struct Inductive {
     pub nparams: usize,
     /// Each constructor's key and full type.
     pub ctors: Vec<(String, Hx)>,
+    /// Each constructor's fields after the parameters: how many come first
+    /// that are not children (0 or 1, the payload), then how many children.
+    pub fields: Vec<(u32, u32)>,
 }
 
 /// A definition the target needs that Ψ has no binding for.
@@ -874,18 +1096,15 @@ impl Printer {
 
     /// A shared subterm's definition (`share.rs`), its type left to Lean.
     fn shared(&mut self, name: &str, body: &Hx) {
-        let _ = write!(self.out, "@[reducible] def {name} :=\n  ");
+        let kw = if self.target == Target::Lean { "@[reducible] def" } else { "Definition" };
+        let _ = write!(self.out, "{kw} {name} :=\n  ");
         self.term(body, 0, false);
-        self.out.push_str("\n\n");
+        self.out.push_str(if self.target == Target::Lean { "\n\n" } else { ".\n\n" });
     }
 
     /// A native inductive, its parameters as binders. Rocq has no
     /// realisation of `Wf` here (design §5.1), so it gets a comment.
     fn inductive(&mut self, name: &str, ty: &Hx, ind: &Inductive) {
-        if self.target == Target::Coq {
-            let _ = writeln!(self.out, "(* {name}: refused: Wf is realised for Lean only *)\n");
-            return;
-        }
         let strip = |mut t: &Hx, out: &mut Vec<Hx>| {
             for _ in 0..ind.nparams {
                 let Hx::Pi(a, b) = t else { unreachable!("an inductive's parameters are binders") };
@@ -896,7 +1115,7 @@ impl Printer {
         };
         let mut params = Vec::new();
         let rest = strip(ty, &mut params);
-        let _ = write!(self.out, "inductive {name}");
+        let _ = write!(self.out, "{} {name}", if self.target == Target::Lean { "inductive" } else { "Inductive" });
         for (i, a) in params.iter().enumerate() {
             let _ = write!(self.out, " (x{i} : ");
             self.term(a, i as u32, false);
@@ -904,16 +1123,23 @@ impl Printer {
         }
         self.out.push_str(" : ");
         self.term(&rest, ind.nparams as u32, false);
-        self.out.push_str(" where\n");
+        self.out.push_str(if self.target == Target::Lean { " where\n" } else { " :=\n" });
         for (key, cty) in &ind.ctors {
-            let short = key.rsplit("::").next().unwrap_or(key);
-            let short = if plain_ident(short) && !LEAN_KEYWORDS.contains(&short) { short.to_string() } else { format!("«{short}»") };
-            let _ = write!(self.out, "  | {short} : ");
+            // Lean names a constructor inside its inductive's namespace;
+            // Rocq's constructors are file-level names.
+            let ctor = match self.target {
+                Target::Lean => {
+                    let short = key.rsplit("::").next().unwrap_or(key);
+                    if plain_ident(short) && !LEAN_KEYWORDS.contains(&short) { short.to_string() } else { format!("«{short}»") }
+                }
+                Target::Coq => target_name(Target::Coq, key),
+            };
+            let _ = write!(self.out, "  | {ctor} : ");
             let c = strip(cty, &mut Vec::new());
             self.term(&c, ind.nparams as u32, false);
             self.out.push('\n');
         }
-        self.out.push('\n');
+        self.out.push_str(if self.target == Target::Lean { "\n" } else { ".\n\n" });
     }
 
     /// A constant or global, explicit (`@`), with its levels.
@@ -921,6 +1147,7 @@ impl Printer {
         match t {
             Hx::Const(name, levels) => {
                 let _ = write!(self.out, "@Hx.{name}");
+                let levels = if self.target == Target::Lean { lean_levels(name, levels) } else { levels };
                 if !levels.is_empty() {
                     let ls: Vec<String> = levels.iter().map(|l| self.level(*l)).collect();
                     let _ = match self.target {
@@ -931,6 +1158,11 @@ impl Printer {
             }
             Hx::Global(g) => {
                 let _ = write!(self.out, "@{}", self.names[*g]);
+            }
+            // Rocq names a monomorphic inductive's recursor into `Type`
+            // `D_rect`, at no instance.
+            Hx::Named(key, _) if self.target == Target::Coq && key.ends_with("::rec") => {
+                let _ = write!(self.out, "@{}_rect", target_name(self.target, &key[..key.len() - 5]));
             }
             Hx::Named(key, levels) => {
                 let _ = write!(self.out, "@{}", target_name(self.target, key));
@@ -1032,6 +1264,30 @@ pub fn print_lean_files(decls: &[Exported]) -> Vec<(String, String)> {
     out
 }
 
+/// The longest numeral Rocq gets: `65536` appears in every collection
+/// literal's tag and checks; `10^21` does not finish.
+const COQ_MAX_LITERAL_DIGITS: usize = 5;
+
+/// Every numeral `d` spells.
+fn for_each_literal(d: &Decl, f: &mut dyn FnMut(&str)) {
+    fn go(t: &Hx, f: &mut dyn FnMut(&str)) {
+        match t {
+            Hx::Pi(a, b) | Hx::Lam(a, b) | Hx::App(a, b) => {
+                go(a, f);
+                go(b, f);
+            }
+            Hx::NatLit(n) => f(n),
+            _ => {}
+        }
+    }
+    go(&d.ty, f);
+    d.body.iter().for_each(|b| go(b, f));
+    for a in d.before.iter().chain(&d.after) {
+        go(&a.ty, f);
+        go(&a.body, f);
+    }
+}
+
 /// Every global and target-only constant `d` mentions.
 fn for_each_constant(d: &Decl, f: &mut dyn FnMut(&Hx)) {
     fn go(t: &Hx, f: &mut dyn FnMut(&Hx)) {
@@ -1056,9 +1312,37 @@ fn for_each_constant(d: &Decl, f: &mut dyn FnMut(&Hx)) {
 /// The declarations of one output file. Shared subterms' definitions are
 /// named under `ns` (a module's key prefix, so files do not collide).
 fn print_run<'e>(p: &mut Printer, decls: impl Iterator<Item = &'e Exported> + Clone, ns: &str) {
-    // Lean gets the kernel term's sharing back (`share.rs`): unshared, the
-    // `List` closure is too large for its parser.
-    let mut share = (p.target == Target::Lean).then(|| share::Share::new(ns));
+    // Rocq's recursor takes its minor premises in another order; rewrite
+    // them first, so the sharing below sees the terms as printed.
+    let rocq: Vec<Exported>;
+    let decls: Vec<&Exported> = if p.target == Target::Coq {
+        let mut recs = Recs::new();
+        for e in decls.clone() {
+            if let Ok(Decl { name: Some(key), inductive: Some(ind), .. }) = &e.decl {
+                recs.insert(format!("{key}::rec"), (ind.nparams, ind.fields.clone()));
+            }
+        }
+        let fix = |t: &Hx| rocq_minors(t, &recs);
+        rocq = decls
+            .map(|e| Exported {
+                decl: e.decl.clone().map(|d| Decl {
+                    ty: fix(&d.ty),
+                    body: d.body.as_ref().map(fix),
+                    before: d.before.iter().map(|a| Aux { name: a.name.clone(), ty: fix(&a.ty), body: fix(&a.body) }).collect(),
+                    after: d.after.iter().map(|a| Aux { name: a.name.clone(), ty: fix(&a.ty), body: fix(&a.body) }).collect(),
+                    ..d
+                }),
+                ..e.clone()
+            })
+            .collect();
+        rocq.iter().collect()
+    } else {
+        decls.collect()
+    };
+    let decls = decls.into_iter();
+    // Both targets get the kernel term's sharing back (`share.rs`):
+    // unshared, the `List` closure is too large for Lean's parser.
+    let mut share = Some(share::Share::new(ns));
     if let Some(s) = &mut share {
         for e in decls.clone() {
             if let Ok(d) = &e.decl {
@@ -1073,9 +1357,29 @@ fn print_run<'e>(p: &mut Printer, decls: impl Iterator<Item = &'e Exported> + Cl
             }
         }
     }
+    // Rocq's `nat` is unary: a large literal is a term of its size, and a
+    // conversion that forces one runs out of memory (design §5.4). Such
+    // declarations, and what mentions them, are refused for Rocq alone.
+    let mut too_large = std::collections::HashMap::new();
+    if p.target == Target::Coq {
+        for e in decls.clone() {
+            let Ok(d) = &e.decl else { continue };
+            let mut why = None;
+            for_each_literal(d, &mut |n| {
+                if why.is_none() && n.len() > COQ_MAX_LITERAL_DIGITS {
+                    why = Some(format!("numeral {n} is too large for Rocq's unary nat"));
+                }
+            });
+            let why = why.or_else(|| mentions(d).into_iter().find(|g| too_large.contains_key(g)).map(|g| format!("mentions refused {}", p.names[g])));
+            if let Some(why) = why {
+                too_large.insert(e.abs, why);
+            }
+        }
+    }
     for e in decls {
         let name = p.names[e.abs].clone();
-        let d = match &e.decl {
+        let refused = too_large.get(&e.abs).map(|why| Err(Refusal(why.clone())));
+        let d = match refused.as_ref().unwrap_or(&e.decl) {
             Err(Refusal(why)) => {
                 let _ = match p.target {
                     Target::Lean => writeln!(p.out, "-- {name}: refused: {why}\n"),
@@ -1134,7 +1438,7 @@ impl Dag {
             Hx::App(f, a) => format!("a\t{}\t{}", self.node(f)?, self.node(a)?),
             Hx::Const(name, levels) => {
                 let mut s = format!("c\t{name}");
-                for l in levels {
+                for l in lean_levels(name, levels) {
                     let _ = write!(s, "\t{}", l.0);
                 }
                 s

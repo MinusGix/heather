@@ -311,14 +311,49 @@ relevant field), and an SProp field does not count. Eta-long translation
 covers the `⟨⟩`-typed terms that are written in the source, but not those that
 reduction creates. The prelude's own `case` hands its branch the type
 `M (inl x)` at the *bound* `x`, which no translation of the branch can
-expand. That is exactly the prototype's `B::not_not` failure: `not(not(inl
-x)) ⇝ inl(pair(srefl, ⟨⟩))` must convert with `inl x` for a neutral payload
-`x`. Every tier-0 enum's case analysis has this shape, so **Rocq cannot be a
-full target for the enum-using library** until either Rocq gains unit η or the
-export stops relying on it. The latter would mean conversion certificates:
-the exporter replays Heather's conversion and inserts propositional
-rewrites, the ETT-to-ITT direction. That is far heavier than anything here,
-and it is not proposed.
+expand. That was the prototype's `B::not_not` failure: `not(not(inl x)) ⇝
+inl(pair(srefl, ⟨⟩))` must convert with `inl x` for a neutral payload `x`.
+Every tier-0 enum's case analysis has this shape.
+
+The routes, as weighed on 2026-10-21:
+
+- **Wait for unit η in Rocq, or patch it.** Neither is on offer.
+- **Put `Unit` and `sEq` in SProp**, where irrelevance is definitional η.
+  That needs sort polymorphism (Rocq ≥ 8.19) for `Σ` over a mix, and breaks
+  where Heather needs `Unit` relevant: `Vec A 0` is a `Fixpoint` into one
+  sort.
+- **Native enums with no payload.** They work, but make `B` a different
+  type from the `Sum` it unfolds to.
+- **Conversion certificates** (the ETT-to-ITT direction): the exporter
+  replays Heather's conversions and inserts rewrites. This is far heavier than
+  anything else here.
+- **Singleton-aware `case` (taken).** When a summand's payload is a closed
+  singleton, the exporter emits `caseL`/`caseR`/`caseLR` instead of `case`.
+  The branch is stated at the canonical element `c` (`M (inl c)`, under no
+  binder). The prelude reaches it by `J` along an η *lemma* `∀x. c = x`
+  (`etaUnit`, `etaSEq`, `etaSig`), which Rocq proves by `destruct`. That
+  reduces whenever the payload is a constructor, and the exporter already
+  prints a payload of a closed singleton type as its canonical element (§5.2).
+  Lean's lemmas are `refl` by its own η, so there the case also computes at
+  a neutral payload. The same rule removes singleton payload fields from
+  realised `Wf` constructors (§5.1): a bound payload would meet the same wall
+  in the recursor's minor premises.
+
+Two neighbours needed the same treatment in the library sweep:
+
+- A term at a squash type prints eta-long (`squashEta`). Rocq's `Squash` is a
+  record over an SProp field, so it has no η, but two eta-long terms convert
+  by irrelevance.
+- A binder domain that becomes a closed singleton only once an enclosing
+  payload is its canonical element (`IsTrue(inr x)` in a branch) is closed
+  over those canonical elements before the singleton test.
+
+What is left is the honest core: a theorem whose statement *is* unit η.
+`Bool::is_true_unique` proves `p = q` at `IsTrue(True)` by `refl`. Rocq
+needs a propositional proof there, which the η lemmas give
+(`trans(sym(eta p), eta q)`), but the exporter can only write it if it knows
+the endpoints the `refl` is checked against. That is the typed exporter of
+§5.6, so the sweep stays informational in Rocq until it exists.
 
 ### 5.4 Numerals and acceleration
 
@@ -335,7 +370,11 @@ along. A Heather proof by evaluation that leans on them (an x86 certificate, a
 reach for the target's checker in cost. The first fragment therefore excludes
 the native certificates. Mapping Heather's `Nat::add` to Lean's accelerated
 `Nat.add` would change δ-behaviour at open arguments, so it is not a free
-optimisation.
+optimisation. Rocq's binary `N` is no way out either: Heather's `elimNat`
+computes on `succ n` for a symbolic `n`, and `N.peano_rect` does not. So
+the Rocq printer refuses a declaration spelling a numeral of more than five
+digits, and what mentions it (`65536` appears in every collection literal's
+tag and checks; `10^21` does not finish).
 
 ### 5.5 Universes
 
@@ -487,6 +526,15 @@ bodies' spellings fixed and the text route's sharing restored (§5.6):
 | sweep, Lean kernel route | 387 + 3 added | all accepted, none skipped, in a few seconds |
 | sweep, Lean source text, one file | 1 MB of text (from 7 MB) | all accepted in about half a minute, no error |
 | sweep, Lean source text, one file per module | 7 files | all accepted; `list` dominates, then `nat` |
+
+Then Rocq, after the singleton-aware `case` (§5.3), the literal bound for
+Rocq (§5.4) and native `Wf` inductives for Rocq (§5.1):
+
+| | declarations | result |
+|---|---|---|
+| slice, Coq 8.18 | 33 (`big` refused for Rocq) | all accepted; the only assumption reported is the prelude's Definitional UIP |
+| sweep, Coq 8.18 | 6.5k lines | stops at `Bool::is_true_unique`, a theorem that is unit η itself (§5.3) |
+| slice and sweep, Lean, both routes | unchanged | all accepted |
 
 So the text route checks the whole sweep again. The kernel route stays the
 one to measure (no elaborator in it); the text is for reading and for the

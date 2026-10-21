@@ -16,7 +16,8 @@
    - Sig: a primitive record (eta against a constructor).
    - Unit: an inductive. Coq has NO unit eta, and a record with no relevant
      field cannot be primitive: Heather's unit eta is the one rule this
-     target lacks outright.
+     target lacks outright. The exporter works around it where it matters,
+     a case over a singleton payload (caseL/caseR/caseLR below).
    - Wf: positivity and guard checks bypassed, the two assumptions
      Print Assumptions reports. *)
 
@@ -63,6 +64,10 @@ Definition squash@{l} (A : Type@{l}) (a : A) : Squash A := mkSquash (sintro A a)
    record, `B s` and `B (squash A x)` do not convert at a neutral `s`. The
    exporter writes every term at a Squash type eta-long, which makes the two
    statements agree. *)
+(* A term at a squash type, eta-long: two of these convert by irrelevance of
+   the SProp field, which a neutral and a constructor do not (no eta for a
+   record with no relevant field). *)
+Definition squashEta@{l} (A : Type@{l}) (s : Squash@{l} A) : Squash@{l} A := mkSquash (spf s).
 Definition elimSquash@{l l'} (A : Type@{l}) (B : Squash A -> Type@{l'})
   (c : forall x : A, Squash (B (squash A x))) (s : Squash A) : Squash (B (mkSquash (spf s))) :=
   mkSquash (match spf s with sintro _ x => spf (c x) end).
@@ -83,6 +88,37 @@ Definition inr@{l l'} (A : Type@{l}) (B : Type@{l'}) (b : B) : Sum A B := inr_ A
 Definition case@{l l' l''} (A : Type@{l}) (B : Type@{l'}) (M : Sum A B -> Type@{l''})
   (cl : forall x : A, M (inl A B x)) (cr : forall y : B, M (inr A B y)) (s : Sum A B) : M s :=
   match s with inl_ _ _ x => cl x | inr_ _ _ y => cr y end.
+
+(* A case whose summand is a closed singleton (design §5.3). Coq has no unit
+   eta, so the prelude's case cannot hand that branch `M (inl x)` at a bound
+   `x` and expect `x` to convert with the canonical element. These state the
+   branch at the canonical element `a` and reach it by J along
+   `ea : forall x, a = x`, which Coq proves by destruct: it reduces whenever
+   the payload is a constructor, and the exporter prints a payload of a
+   closed singleton type as its canonical element. *)
+Definition etaUnit@{l} (u : Unit@{l}) : Id@{l} Unit@{l} tt@{l} u := match u with tt_ => refl@{l} _ _ end.
+Definition etaSEq@{l} (A : Type@{l}) (a : A) (p : SEq@{l} A a a) : Id@{l} (SEq@{l} A a a) (srefl@{l} A a) p :=
+  match p with mkSEq q => refl@{l} _ _ end.
+Definition etaSig@{l l' m | l <= m, l' <= m} (A : Type@{l}) (B : Type@{l'}) (a : A) (b : B)
+  (ea : forall x : A, Id@{l} A a x) (eb : forall y : B, Id@{l'} B b y) (p : Sig@{l l'} A (fun _ => B)) :
+  Id@{m} (Sig@{l l'} A (fun _ => B)) (pair@{l l'} A (fun _ => B) a b) p :=
+  J@{l m} A a (fun x _ => Id@{m} (Sig@{l l'} A (fun _ => B)) (pair@{l l'} A (fun _ => B) a b) (pair@{l l'} A (fun _ => B) x (snd@{l l'} A (fun _ => B) p)))
+    (J@{l' m} B b (fun y _ => Id@{m} (Sig@{l l'} A (fun _ => B)) (pair@{l l'} A (fun _ => B) a b) (pair@{l l'} A (fun _ => B) a y))
+      (refl@{m} _ _) (snd@{l l'} A (fun _ => B) p) (eb (snd@{l l'} A (fun _ => B) p)))
+    (fst@{l l'} A (fun _ => B) p) (ea (fst@{l l'} A (fun _ => B) p)).
+Definition caseL@{l l' l''} (A : Type@{l}) (B : Type@{l'}) (a : A) (ea : forall x : A, Id@{l} A a x)
+  (M : Sum@{l l'} A B -> Type@{l''}) (cl : M (inl A B a)) (cr : forall y : B, M (inr A B y)) (s : Sum A B) : M s :=
+  match s with inl_ _ _ x => J@{l l''} A a (fun y _ => M (inl A B y)) cl x (ea x) | inr_ _ _ y => cr y end.
+Definition caseR@{l l' l''} (A : Type@{l}) (B : Type@{l'}) (b : B) (eb : forall y : B, Id@{l'} B b y)
+  (M : Sum@{l l'} A B -> Type@{l''}) (cl : forall x : A, M (inl A B x)) (cr : M (inr A B b)) (s : Sum A B) : M s :=
+  match s with inl_ _ _ x => cl x | inr_ _ _ y => J@{l' l''} B b (fun z _ => M (inr A B z)) cr y (eb y) end.
+Definition caseLR@{l l' l''} (A : Type@{l}) (B : Type@{l'}) (a : A) (b : B)
+  (ea : forall x : A, Id@{l} A a x) (eb : forall y : B, Id@{l'} B b y)
+  (M : Sum@{l l'} A B -> Type@{l''}) (cl : M (inl A B a)) (cr : M (inr A B b)) (s : Sum A B) : M s :=
+  match s with
+  | inl_ _ _ x => J@{l l''} A a (fun y _ => M (inl A B y)) cl x (ea x)
+  | inr_ _ _ y => J@{l' l''} B b (fun z _ => M (inr A B z)) cr y (eb y)
+  end.
 
 Inductive W@{l l'} (A : Type@{l}) (B : A -> Type@{l'}) : Type@{max(l,l')} := sup_ (a : A) (f : B a -> W A B).
 Definition sup@{l l'} (A : Type@{l}) (B : A -> Type@{l'}) (a : A) (f : B a -> W A B) : W A B := sup_ A B a f.

@@ -50,6 +50,8 @@ abbrev elimSEmpty (M : SEmpty.{v} → Type u) (e : SEmpty.{v}) : M e := e.pf.eli
 structure Squash (A : Type u) : Type u where
   pf : Nonempty A
 abbrev squash (A : Type u) (a : A) : Squash A := ⟨⟨a⟩⟩
+-- Rocq writes a squash term eta-long (`Hx.v`); Lean's η needs nothing.
+abbrev squashEta (A : Type u) (s : Squash A) : Squash A := s
 abbrev elimSquash (A : Type u) (B : Squash A → Type v) (c : (x : A) → Squash (B (squash A x)))
     (s : Squash A) : Squash (B s) :=
   ⟨@Nonempty.rec A (fun _ => Nonempty (B s)) (fun x => (c x).pf) s.pf⟩
@@ -76,6 +78,29 @@ abbrev inr (A : Type u) (B : Type v) (b : B) : Sum A B := Sum.inr b
 abbrev case (A : Type u) (B : Type v) (M : Sum A B → Type w) (cl : (x : A) → M (inl A B x))
     (cr : (y : B) → M (inr A B y)) (s : Sum A B) : M s :=
   @Sum.rec A B M cl cr s
+
+-- A `case` whose summand is a closed singleton (design §5.3): that branch is
+-- stated at the canonical element `a`, and the case reaches it by `J` along
+-- `ea : ∀ x, a = x`. Here every `etaX` is `refl` by Lean's own η, so the
+-- case computes at a neutral payload too; Rocq needs the forms for real.
+abbrev etaUnit (u : Unit.{w}) : Id Unit tt u := Id.refl
+abbrev etaSEq (A : Type u) (a : A) (p : SEq A a a) : Id (SEq A a a) (srefl A a) p := Id.refl
+-- Rocq's instance has a third level (the pair's, which Rocq cannot write as
+-- `max`); the printers drop it here.
+abbrev etaSig (A : Type u) (B : Type v) (a : A) (b : B) (ea : (x : A) → Id A a x) (eb : (y : B) → Id B b y)
+    (p : Sig A (fun _ => B)) : Id (Sig A (fun _ => B)) (pair A (fun _ => B) a b) p :=
+  J A a (fun x _ => Id (Sig A (fun _ => B)) (pair A (fun _ => B) a b) (pair A (fun _ => B) x p.2))
+    (J B b (fun y _ => Id (Sig A (fun _ => B)) (pair A (fun _ => B) a b) (pair A (fun _ => B) a y)) Id.refl p.2 (eb p.2))
+    p.1 (ea p.1)
+abbrev caseL (A : Type u) (B : Type v) (a : A) (ea : (x : A) → Id A a x) (M : Sum A B → Type w)
+    (cl : M (inl A B a)) (cr : (y : B) → M (inr A B y)) (s : Sum A B) : M s :=
+  case A B M (fun x => J A a (fun y _ => M (inl A B y)) cl x (ea x)) cr s
+abbrev caseR (A : Type u) (B : Type v) (b : B) (eb : (y : B) → Id B b y) (M : Sum A B → Type w)
+    (cl : (x : A) → M (inl A B x)) (cr : M (inr A B b)) (s : Sum A B) : M s :=
+  case A B M cl (fun y => J B b (fun z _ => M (inr A B z)) cr y (eb y)) s
+abbrev caseLR (A : Type u) (B : Type v) (a : A) (b : B) (ea : (x : A) → Id A a x) (eb : (y : B) → Id B b y)
+    (M : Sum A B → Type w) (cl : M (inl A B a)) (cr : M (inr A B b)) (s : Sum A B) : M s :=
+  case A B M (fun x => J A a (fun y _ => M (inl A B y)) cl x (ea x)) (fun y => J B b (fun z _ => M (inr A B z)) cr y (eb y)) s
 
 inductive W (A : Type u) (B : A → Type v) : Type (max u v)
   | sup (a : A) (f : B a → W A B) : W A B

@@ -74,3 +74,13 @@ declarations need nothing from the target's unifier.
   text route as hoisted definitions (`crates/export/src/share.rs`), so the
   sweep's source text checks again. Left for "done": `elimW`'s step domains,
   and a sweep wider than the `list` closure to show no fallback is left.
+- 2026-10-21, later (PR #87, Rocq round): Rocq checks the whole slice
+  (`big` refused: unary `nat`, design §5.4). The tier-0 `case` is now
+  singleton-aware (`caseL`/`caseR`/`caseLR`, design §5.3): a branch at a
+  closed singleton is stated at the canonical element and reached by `J`
+  along an η lemma, which in Lean is `refl`. Wf is realised as native Rocq
+  inductives too, with singleton payload fields dropped and the minor
+  premises reordered for `D_rect`. The library sweep in Rocq stops at
+  `bool::Bool::is_true_unique`, whose statement *is* unit η: the untyped
+  route cannot see which `refl` is checked against an η-equation, so this
+  is the typed exporter's job (it knows the endpoints).

@@ -54,3 +54,10 @@ replacement symbol where the two theories differ. The first round:
   Lean's kernel accepts the whole sweep with nothing skipped. The text route
   restores the DAG's sharing as hoisted definitions and can print one file
   per module, and Lean checks the whole sweep as text again.
+- 2026-10-21, later (PR #87): Rocq is unparked as a second target. Unit η
+  is answered on the exporter side by a singleton-aware `case` (design
+  §5.3), and Wf is realised as native Rocq inductives. Coq 8.18 checks the
+  whole slice except `big` (unary numerals, refused by the exporter) and
+  assumes only Definitional UIP. The library sweep in Rocq stops at
+  theorems whose statement is unit η; those wait on
+  [[export-typed-translation]].

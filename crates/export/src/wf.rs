@@ -369,25 +369,32 @@ impl Tr<'_> {
 
     /// The inductive: its statement and its constructors' types.
     pub(crate) fn wf_inductive(&self, d: &WfDecl, ty: Hx) -> R<Decl> {
-        let mut ctors = Vec::new();
+        let (mut ctors, mut fields) = (Vec::new(), Vec::new());
         for (k, (p, n)) in d.summands.iter().enumerate() {
-            // Π Δ. Π(p : P_k). Π(x_1 … x_n : D Δ). D Δ, innermost first.
-            let mut t = app(Hx::Global(d.abs), Self::param_vars(d, 1 + *n as u32));
+            // Π Δ. Π(p : P_k). Π(x_1 … x_n : D Δ). D Δ, innermost first. A
+            // closed singleton payload is no field: Rocq has no unit η to
+            // convert a bound one with its canonical element (design §5.3).
+            let field = self.canon_term(p).is_none();
+            let q = field as u32;
+            let mut t = app(Hx::Global(d.abs), Self::param_vars(d, q + *n as u32));
             for i in (0..*n as u32).rev() {
-                t = Hx::Pi(Box::new(app(Hx::Global(d.abs), Self::param_vars(d, 1 + i))), Box::new(t));
+                t = Hx::Pi(Box::new(app(Hx::Global(d.abs), Self::param_vars(d, q + i))), Box::new(t));
             }
-            t = Hx::Pi(Box::new(self.ty_at(d.np(), p)?), Box::new(t));
+            if field {
+                t = Hx::Pi(Box::new(self.ty_at(d.np(), p)?), Box::new(t));
+            }
             for l in d.params.iter().rev() {
                 t = Hx::Pi(Box::new(Hx::Sort(lvl(l)?)), Box::new(t));
             }
             ctors.push((d.ctors[k].clone(), t));
+            fields.push((q, *n as u32));
         }
         Ok(Decl {
             abs: d.abs,
             name: Some(d.key.clone()),
             ty,
             body: None,
-            inductive: Some(Inductive { nparams: d.params.len(), ctors }),
+            inductive: Some(Inductive { nparams: d.params.len(), ctors, fields }),
             before: Vec::new(),
             after: vec![self.wf_supf_def(d)?],
         })
@@ -411,7 +418,7 @@ impl Tr<'_> {
         for l in d.params.iter().rev() {
             ty = Type::Pi { dom_level: Level::succ(l.clone()), cod_level: d.level.clone(), dom: Rc::new(Type::Ty(l.clone())), cod: Rc::new(ty) };
         }
-        let chain = if d.summands.len() == 1 { self.supf_arm(d, 0, 0)? } else { self.supf_chain(d, 0)? };
+        let chain = if d.summands.len() == 1 { self.supf_arm(d, 0, 0, None)? } else { self.supf_chain(d, 0)? };
         let body = app(chain, vec![Hx::Var(0)]);
         let body = lam(self.ty_at(d.np(), &d.shape)?, lam(self.ty_at(d.np() + 1, &cs_ty)?, body));
         Ok(Aux { name: d.supf_key(), ty: self.ty(&ty)?, body: Self::param_lams(d, body)? })
@@ -434,20 +441,55 @@ impl Tr<'_> {
         let node = Type::Sum { lhs_level: ll.clone(), rhs_level: rl.clone(), lhs: Rc::new(l.shift_local(by)), rhs: Rc::new(r.shift_local(by)) };
         let at = d.np() + by;
         let motive = lam(self.ty_at(at, &node)?, self.ty_at(at + 1, &motive)?);
-        let left = lam(self.ty_at(at, &l.shift_local(by))?, self.supf_arm(d, j, j + 1)?);
-        let right_arm = if j + 2 < d.summands.len() { self.supf_chain(d, j + 1)? } else { self.supf_arm(d, j + 1, j + 1)? };
-        let right = lam(self.ty_at(at, &r.shift_local(by))?, right_arm);
-        konst("case", &[ll, rl, &d.level], vec![self.ty_at(at, &l.shift_local(by))?, self.ty_at(at, &r.shift_local(by))?, motive, left, right, scrut])
+        let (lt, rt) = (self.ty_at(at, &l.shift_local(by))?, self.ty_at(at, &r.shift_local(by))?);
+        // A summand whose payload is a closed singleton has its arm at the
+        // canonical element, under no binder (`caseL`/`caseR`/`caseLR`).
+        let last = j + 2 == d.summands.len();
+        let (cl, cr) = (self.canon_term(l), if last { self.canon_term(r) } else { None });
+        let left = match &cl {
+            Some(c) => self.supf_arm(d, j, j, Some(c.clone()))?,
+            None => lam(lt.clone(), self.supf_arm(d, j, j + 1, None)?),
+        };
+        let right = match &cr {
+            Some(c) => self.supf_arm(d, j + 1, j, Some(c.clone()))?,
+            None if !last => lam(rt.clone(), self.supf_chain(d, j + 1)?),
+            None => lam(rt.clone(), self.supf_arm(d, j + 1, j + 1, None)?),
+        };
+        let levels = [ll, rl, &d.level];
+        let single = |t: &Type| -> R<(Hx, Hx)> { Ok((self.canon(t).expect("a singleton")?, self.eta(t).expect("a singleton")?)) };
+        match (cl.is_some(), cr.is_some()) {
+            (true, true) => {
+                let ((ca, ea), (cb, eb)) = (single(l)?, single(r)?);
+                konst("caseLR", &levels, vec![lt, rt, ca, cb, ea, eb, motive, left, right, scrut])
+            }
+            (true, false) => {
+                let (ca, ea) = single(l)?;
+                konst("caseL", &levels, vec![lt, rt, ca, ea, motive, left, right, scrut])
+            }
+            (false, true) => {
+                let (cb, eb) = single(r)?;
+                konst("caseR", &levels, vec![lt, rt, cb, eb, motive, left, right, scrut])
+            }
+            (false, false) => konst("case", &levels, vec![lt, rt, motive, left, right, scrut]),
+        }
     }
 
     /// `λ(cs : Vec(D; n_k)). c_k Δ p (fst cs) (fst (snd cs)) …`, in
     /// (Δ, a, cs, r_1 … r_depth) whose last binder is `p : P_k` (or `a`
     /// itself when the shape has one summand).
-    fn supf_arm(&self, d: &WfDecl, k: usize, depth: usize) -> R<Hx> {
+    /// `single` is the payload's canonical element when it is a closed
+    /// singleton under no binder of its own; a singleton payload is no
+    /// constructor field either way.
+    fn supf_arm(&self, d: &WfDecl, k: usize, depth: usize, single: Option<Term>) -> R<Hx> {
         let n = d.summands[k].1;
         // In (Δ, a, cs, r…, cs'): the binders beyond Δ.
         let by = depth as u32 + 2;
-        let p = if depth == 0 { Term::Var(LocalVar(1)) } else { Term::Var(LocalVar(0)) };
+        let field = self.canon_term(&d.summands[k].0).is_none();
+        let p = match single {
+            Some(c) => c,
+            None if depth == 0 => Term::Var(LocalVar(1)),
+            None => Term::Var(LocalVar(0)),
+        };
         let cs_ty = Type::Vec {
             level: d.level.clone(),
             elem: Rc::new(d.wf_at(by)),
@@ -455,7 +497,9 @@ impl Tr<'_> {
         };
         let mut args = Self::param_vars(d, by + 1);
         let at = d.np() + by;
-        args.push(self.tm_at(at + 1, &p.shift_local(1))?);
+        if field {
+            args.push(self.tm_at(at + 1, &p.shift_local(1))?);
+        }
         let mut cur = Term::Var(LocalVar(0));
         for i in 0..n {
             let (fst_ty, snd_ty) = (Rc::new(d.wf_at(by + 1)), Rc::new(Type::Vec { level: d.level.clone(), elem: Rc::new(d.wf_at(by + 2)), len: lit(n - 1 - i) }));
@@ -548,19 +592,25 @@ impl Tr<'_> {
             level: mlv.clone(),
             tm: Rc::new(Term::App { fun: var(m), dom_level: d.level.clone(), cod_level: Level::succ(mlv.clone()), dom: Rc::new(d.wf_at(wf_by)), cod: Rc::new(Type::Ty(mlv.clone())), arg: var(x) }),
         };
-        // Binder domains, outermost first.
+        // Binder domains, outermost first. A closed singleton payload is no
+        // field (`wf_inductive`): the label takes its canonical element.
         let np = d.np();
-        let mut doms = vec![self.ty_at(np + 3, &p.shift_local(3))?];
+        let single = self.canon_term(p);
+        let q = single.is_none() as u32;
+        let mut doms = Vec::new();
+        if single.is_none() {
+            doms.push(self.ty_at(np + 3, &p.shift_local(3))?);
+        }
         for i in 0..n32 {
-            doms.push(self.ty_at(np + 4 + i, &d.wf_at(4 + i))?);
+            doms.push(self.ty_at(np + 3 + q + i, &d.wf_at(3 + q + i))?);
         }
         for i in 1..=n32 {
-            doms.push(self.ty_at(np + 4 + n32 + i - 1, &el_m(n32 + i + 2, n32 - 1, 4 + n32 + i - 1))?);
+            doms.push(self.ty_at(np + 3 + q + n32 + i - 1, &el_m(n32 + i + 1 + q, n32 - 1, 3 + q + n32 + i - 1))?);
         }
-        // The body, in C = (Δ, M, step, t, p, x_1 … x_n, ih_1 … ih_n).
-        let cdelta = 4 + 2 * n32;
-        let (step_ix, m_ix, p_ix) = (2 * n32 + 2, 2 * n32 + 3, 2 * n32);
-        let label = d.inj(k, Term::Var(LocalVar(p_ix)), cdelta);
+        // The body, in C = (Δ, M, step, t, [p], x_1 … x_n, ih_1 … ih_n).
+        let cdelta = 3 + q + 2 * n32;
+        let (step_ix, m_ix) = (2 * n32 + 1 + q, 2 * n32 + 2 + q);
+        let label = d.inj(k, single.unwrap_or(Term::Var(LocalVar(2 * n32))), cdelta);
         let mut tuple = Term::Triv { level: d.level.clone() };
         for i in (1..=n).rev() {
             tuple = Term::Pair {

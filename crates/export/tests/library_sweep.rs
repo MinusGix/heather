@@ -2,8 +2,8 @@
 //! of `lib/std/list.hthr` (list, nat, bool, logic, option, pair) and report
 //! every refusal by cause. With `HEATHER_EXPORT_OUT` set it writes
 //! `Sweep.lean`, the same split one file per module under `Sweep/` (listed
-//! in dependency order in `Sweep/order`), and the kernel-route twin
-//! `Sweep.hxk`, for `scripts/export-recheck` to hand to Lean.
+//! in dependency order in `Sweep/order`), the kernel-route twin
+//! `Sweep.hxk`, and the Rocq file `Sweep.v`, for `scripts/export-recheck`.
 
 use heather_cli::loader;
 use heather_elab::Elaborator;
@@ -55,6 +55,7 @@ fn std_list_closure_exports() {
     if let Some(dir) = std::env::var_os("HEATHER_EXPORT_OUT") {
         let dir = PathBuf::from(dir);
         std::fs::write(dir.join("Sweep.lean"), print(Target::Lean, &decls)).unwrap();
+        std::fs::write(dir.join("Sweep.v"), print(Target::Coq, &decls)).unwrap();
         // The same, one Lean file per module, in dependency order.
         let split = dir.join("Sweep");
         std::fs::create_dir_all(&split).unwrap();
