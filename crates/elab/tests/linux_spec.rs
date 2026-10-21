@@ -53,14 +53,16 @@ fn check(e: &mut Elaborator, name: &str, src: &str) {
     }
 }
 
-/// Refused by conversion, not by some earlier inference failure.
+/// Refused where it is wrong: a proof that does not prove the statement,
+/// not a missing name or a parse.
 fn refused(name: &str, src: &str) {
     let mut e = base();
     match e.elab_module_source(name, src) {
         Ok(()) => panic!("{name} should be refused"),
         Err(err) => {
             let msg = err.render(src);
-            assert!(msg.contains("NotConvertible"), "{name}: {msg}");
+            assert!(msg.contains("NotConvertible") || msg.contains("is expected here"), "{name}: {msg}");
+            assert!(!msg.contains("unbound") && !msg.contains("ambiguous") && !msg.contains("parse"), "{name}: {msg}");
         }
     }
 }
@@ -158,7 +160,10 @@ fn tr_writes_what_it_mapped() {
         &format!(
             "{IMPORTS}{ONE_BYTE}
             theorem bad(f: BitVec(8) → BitVec(8), x: BitVec(8)): IsTrace(Events::linux_spec(), tr_spec(f).at(4), wrong(f, x)) {{
-                Answered(ReadBytes([x]), _, refl, Answered(Wrote(1), _, refl, Answered(ReadBytes(Nil), TRet(filter_ok()), refl, Returned(refl))))
+                let end: Trace<BitVec(64)>(Events::linux_spec()) = TRet(filter_ok());
+                let wrote: Trace<BitVec(64)>(Events::linux_spec()) = TAns(ReadCmd(BitVec::ofNat(0), trivial), ReadBytes(Nil), end);
+                let read: Trace<BitVec(64)>(Events::linux_spec()) = TAns(WriteCmd(BitVec::ofNat(1), [x]), Wrote(1), wrote);
+                Answered(ReadBytes([x]), read, refl, Answered(Wrote(1), wrote, refl, Answered(ReadBytes(Nil), end, refl, Returned(refl))))
             }}"
         ),
     );
