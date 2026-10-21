@@ -1,0 +1,306 @@
+// Linux's calls as a container of events, and trees over it
+// (docs/native-program-logic-design.md §4; issues/native-linux-spec.md).
+//
+// A spec is a tree over Linux's calls: it reads, writes, opens, closes and
+// stats, and returns its exit status. Facts users care about (what reaches
+// stdout) are facts about its traces, with no machine in sight;
+// `linux_x86_64_sim` relates a machine to a tree.
+//
+// Two containers share `LinuxCmd`. Over `Events::linux()` a read names the
+// most bytes it asks for, as Linux's read does, and `LinuxCmd::Answers` says
+// which answers Linux may give. Over `Events::linux_spec()` a read names no
+// size: its answer is a chunk of the input of any length, empty only at the
+// end. A spec written there says nothing about buffers. A tree over Linux's
+// calls `Implements` such a spec when every trace Linux may produce from it,
+// with the sizes forgotten, is one of the spec's, and every read in it asks
+// for at least one byte (a read of none answers empty without being at the
+// end). Giving every read of a spec one size implements it
+// (`implements_sized`).
+import linux_calls;
+import itree;
+import itree_trace;
+import bitvec;
+import list;
+import logic;
+import nat;
+
+fn Events::linux_sized<Size>() → Events { Events(LinuxCmd<Size>, λ c => c.Resp()) }
+
+// Linux's calls, a read naming its size.
+fn Events::linux() → Events { Events::linux_sized<Nat>() }
+
+// Linux's calls as a spec sees them: a read of any size.
+fn Events::linux_spec() → Events { Events::linux_sized<True>() }
+
+// ---------------------------------------------------------------------------
+// Traces over Linux's calls
+
+// Every answer is one Linux may give.
+fn Trace::LinuxValid<R>(tr: Trace<R>(Events::linux())) → Type {
+    match tr {
+        TEnd => True,
+        TRet(_) => True,
+        TCall(_) => True,
+        TAns(c, a, rest) => c.Answers(a) ∧ Trace::LinuxValid(rest),
+    }
+}
+
+// The events of a whole trace, as a run lists them: each answered call, then
+// the exit with the returned status. A prefix has no exit, and lists none.
+fn Trace::linux_events(tr: Trace<BitVec(64)>(Events::linux())) → List<LinuxEvent> {
+    match tr {
+        TEnd => Nil,
+        TRet(status) => [ExitEvent(status)],
+        TCall(_) => Nil,
+        TAns(c, a, rest) => Cons(CallEvent(c, a), Trace::linux_events(rest)),
+    }
+}
+
+// What a trace sent to `fd`, and read from it, in order.
+fn Trace::sent<Size, R>(fd: BitVec(64), tr: Trace<R>(Events::linux_sized<Size>())) → List<BitVec(8)> {
+    match tr {
+        TEnd => Nil,
+        TRet(_) => Nil,
+        TCall(_) => Nil,
+        TAns(c, a, rest) => c.sent(fd, a) ++ Trace::sent(fd, rest),
+    }
+}
+fn Trace::received<Size, R>(fd: BitVec(64), tr: Trace<R>(Events::linux_sized<Size>())) → List<BitVec(8)> {
+    match tr {
+        TEnd => Nil,
+        TRet(_) => Nil,
+        TCall(_) => Nil,
+        TAns(c, a, rest) => c.received(fd, a) ++ Trace::received(fd, rest),
+    }
+}
+
+// A whole trace sends and reads what its events do.
+theorem Trace::sent_events(fd: BitVec(64), tr: Trace<BitVec(64)>(Events::linux())):
+    sent_to(fd, Trace::linux_events(tr)) = Trace::sent<Nat, BitVec(64)>(fd, tr) {
+    match tr {
+        TEnd => refl,
+        TRet(_) => refl,
+        TCall(_) => refl,
+        TAns(c, a, rest) => cong_fn(λ (bytes: List<BitVec(8)>) => c.sent(fd, a) ++ bytes, Trace::sent_events(fd, rest)),
+    }
+}
+theorem Trace::received_events(fd: BitVec(64), tr: Trace<BitVec(64)>(Events::linux())):
+    received_from(fd, Trace::linux_events(tr)) = Trace::received<Nat, BitVec(64)>(fd, tr) {
+    match tr {
+        TEnd => refl,
+        TRet(_) => refl,
+        TCall(_) => refl,
+        TAns(c, a, rest) => cong_fn(λ (bytes: List<BitVec(8)>) => c.received(fd, a) ++ bytes, Trace::received_events(fd, rest)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Forgetting the size of a read
+
+fn LinuxCmd::forget(self c: LinuxCmd<Nat>) → LinuxCmd<True> {
+    match c {
+        ReadCmd(fd, _) => ReadCmd(fd, trivial),
+        WriteCmd(fd, bytes) => WriteCmd(fd, bytes),
+        OpenCmd(path) => OpenCmd(path),
+        CloseCmd(fd) => CloseCmd(fd),
+        StatCmd(target) => StatCmd(target),
+    }
+}
+
+// The answer is the same answer.
+fn LinuxCmd::forget_answer(self c: LinuxCmd<Nat>) → c.Resp() → c.forget().Resp() {
+    match c as λ d => d.Resp() → d.forget().Resp() {
+        ReadCmd(_, _) => λ r => r,
+        WriteCmd(_, _) => λ r => r,
+        OpenCmd(_) => λ r => r,
+        CloseCmd(_) => λ r => r,
+        StatCmd(_) => λ r => r,
+    }
+}
+
+// A read asks for at least one byte.
+fn LinuxCmd::AsksSome(self c: LinuxCmd<Nat>) → Type {
+    match c {
+        ReadCmd(_, max) => 0 < max,
+        WriteCmd(_, _) => True,
+        OpenCmd(_) => True,
+        CloseCmd(_) => True,
+        StatCmd(_) => True,
+    }
+}
+
+fn Trace::forget<R>(tr: Trace<R>(Events::linux())) → Trace<R>(Events::linux_spec()) {
+    match tr {
+        TEnd => TEnd,
+        TRet(r) => TRet(r),
+        TCall(c) => TCall(c.forget()),
+        TAns(c, a, rest) => TAns(c.forget(), c.forget_answer(a), Trace::forget(rest)),
+    }
+}
+
+fn Trace::AsksSome<R>(tr: Trace<R>(Events::linux())) → Type {
+    match tr {
+        TEnd => True,
+        TRet(_) => True,
+        TCall(c) => c.AsksSome(),
+        TAns(c, _, rest) => c.AsksSome() ∧ Trace::AsksSome(rest),
+    }
+}
+
+// Forgetting keeps what was sent and read.
+theorem Trace::forget_sent<R>(fd: BitVec(64), tr: Trace<R>(Events::linux())):
+    Trace::sent<True, R>(fd, Trace::forget(tr)) = Trace::sent<Nat, R>(fd, tr) {
+    let answer = λ (c: LinuxCmd<Nat>) => (match c as λ d => (a: d.Resp()) → d.forget().sent(fd, d.forget_answer(a)) = d.sent(fd, a) {
+        ReadCmd(_, _) => λ _ => refl, WriteCmd(_, _) => λ _ => refl, OpenCmd(_) => λ _ => refl,
+        CloseCmd(_) => λ _ => refl, StatCmd(_) => λ _ => refl,
+    });
+    match tr {
+        TEnd => refl,
+        TRet(_) => refl,
+        TCall(_) => refl,
+        TAns(c, a, rest) => trans(cong_fn(λ (bytes: List<BitVec(8)>) => c.forget().sent(fd, c.forget_answer(a)) ++ bytes,
+                Trace::forget_sent(fd, rest)),
+            cong_fn(λ (bytes: List<BitVec(8)>) => bytes ++ Trace::sent<Nat, R>(fd, rest), answer(c, a))),
+    }
+}
+theorem Trace::forget_received<R>(fd: BitVec(64), tr: Trace<R>(Events::linux())):
+    Trace::received<True, R>(fd, Trace::forget(tr)) = Trace::received<Nat, R>(fd, tr) {
+    let answer = λ (c: LinuxCmd<Nat>) => (match c as λ d => (a: d.Resp()) →
+            d.forget().received(fd, d.forget_answer(a)) = d.received(fd, a) {
+        ReadCmd(_, _) => λ _ => refl, WriteCmd(_, _) => λ _ => refl, OpenCmd(_) => λ _ => refl,
+        CloseCmd(_) => λ _ => refl, StatCmd(_) => λ _ => refl,
+    });
+    match tr {
+        TEnd => refl,
+        TRet(_) => refl,
+        TCall(_) => refl,
+        TAns(c, a, rest) => trans(cong_fn(λ (bytes: List<BitVec(8)>) => c.forget().received(fd, c.forget_answer(a)) ++ bytes,
+                Trace::forget_received(fd, rest)),
+            cong_fn(λ (bytes: List<BitVec(8)>) => bytes ++ Trace::received<Nat, R>(fd, rest), answer(c, a))),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Implementing a size-free spec
+
+// Every trace Linux may produce from `t` asks for some bytes at each read and
+// is, sizes forgotten, a trace of `spec`.
+fn ITree::Implements<R>(t: ITree<R>(Events::linux()), spec: ITree<R>(Events::linux_spec())) → Type {
+    (tr: Trace<R>(Events::linux())) → IsTrace(Events::linux(), t, tr) → Trace::LinuxValid(tr) →
+        Trace::AsksSome(tr) ∧ IsTrace(Events::linux_spec(), spec, Trace::forget(tr))
+}
+
+// …and the same of programs, at whatever fuel each side needs.
+fn Program::Implements<R>(p: Program<R>(Events::linux()), spec: Program<R>(Events::linux_spec())) → Type {
+    (tr: Trace<R>(Events::linux())) → Program::Produces(Events::linux(), p, tr) → Trace::LinuxValid(tr) →
+        Trace::AsksSome(tr) ∧ Program::Produces(Events::linux_spec(), spec, Trace::forget(tr))
+}
+
+theorem Program::implements_of_trees<R>(p: Program<R>(Events::linux()), spec: Program<R>(Events::linux_spec()),
+    h: (n: Nat) → ITree::Implements(p.at(n), spec.at(n))): Program::Implements(p, spec) {
+    λ tr (c: Converges<R>(Events::linux(), p.at, tr)) valid => {
+        let both = h(c.n, tr, c.h, valid);
+        ⟨both.left, Converges(c.n, both.right)⟩
+    }
+}
+
+// A spec's facts hold of what implements it: what a trace sent and read is
+// what its forgotten trace did.
+theorem ITree::implements_trace<R>(t: ITree<R>(Events::linux()), spec: ITree<R>(Events::linux_spec()),
+    h: ITree::Implements(t, spec), tr: Trace<R>(Events::linux()), it: IsTrace(Events::linux(), t, tr),
+    valid: Trace::LinuxValid(tr)): IsTrace(Events::linux_spec(), spec, Trace::forget(tr)) {
+    h(tr, it, valid).right
+}
+
+// Giving every read one size: the size of each read is `max`.
+fn LinuxCmd::sized(self c: LinuxCmd<True>, max: Nat) → LinuxCmd<Nat> {
+    match c {
+        ReadCmd(fd, _) => ReadCmd(fd, max),
+        WriteCmd(fd, bytes) => WriteCmd(fd, bytes),
+        OpenCmd(path) => OpenCmd(path),
+        CloseCmd(fd) => CloseCmd(fd),
+        StatCmd(target) => StatCmd(target),
+    }
+}
+fn LinuxCmd::sized_answer(self c: LinuxCmd<True>, max: Nat) → c.sized(max).Resp() → c.Resp() {
+    match c as λ d => d.sized(max).Resp() → d.Resp() {
+        ReadCmd(_, _) => λ r => r,
+        WriteCmd(_, _) => λ r => r,
+        OpenCmd(_) => λ r => r,
+        CloseCmd(_) => λ r => r,
+        StatCmd(_) => λ r => r,
+    }
+}
+fn EventMap::linux_sized(max: Nat) → EventMap(Events::linux_spec(), Events::linux()) {
+    EventMap(λ c => c.sized(max), λ c b => c.sized_answer(max, b))
+}
+fn ITree::sized<R>(max: Nat, spec: ITree<R>(Events::linux_spec())) → ITree<R>(Events::linux()) {
+    ITree::translate(Events::linux_spec(), Events::linux(), EventMap::linux_sized(max), spec)
+}
+
+// Sizing a command and forgetting it again is the command, and the answer.
+theorem LinuxCmd::sized_forget_call<R>(c: LinuxCmd<True>, max: Nat): Trace::forget<R>(TCall(c.sized(max))) = TCall(c) {
+    match c {
+        ReadCmd(_, _) => refl, WriteCmd(_, _) => refl, OpenCmd(_) => refl, CloseCmd(_) => refl, StatCmd(_) => refl,
+    }
+}
+theorem LinuxCmd::sized_forget_answer<R>(c: LinuxCmd<True>, max: Nat): (b: c.sized(max).Resp()) →
+    (rest: Trace<R>(Events::linux())) →
+    Trace::forget<R>(TAns(c.sized(max), b, rest)) = TAns(c, c.sized_answer(max, b), Trace::forget(rest)) {
+    match c as λ d => (b: d.sized(max).Resp()) → (rest: Trace<R>(Events::linux())) →
+            Trace::forget<R>(TAns(d.sized(max), b, rest)) = TAns(d, d.sized_answer(max, b), Trace::forget(rest)) {
+        ReadCmd(_, _) => λ _ _ => refl, WriteCmd(_, _) => λ _ _ => refl, OpenCmd(_) => λ _ _ => refl,
+        CloseCmd(_) => λ _ _ => refl, StatCmd(_) => λ _ _ => refl,
+    }
+}
+theorem LinuxCmd::sized_asks_some(c: LinuxCmd<True>, max: Nat, some: 0 < max): c.sized(max).AsksSome() {
+    match c {
+        ReadCmd(_, _) => some, WriteCmd(_, _) => trivial, OpenCmd(_) => trivial, CloseCmd(_) => trivial, StatCmd(_) => trivial,
+    }
+}
+
+// A spec with every read given one size of at least one byte implements it.
+theorem ITree::implements_sized<R>(max: Nat, some: 0 < max, spec: ITree<R>(Events::linux_spec())):
+    ITree::Implements(ITree::sized(max, spec), spec) {
+    match spec {
+        Ret(r) => λ tr (w: RetTrace<R>(Events::linux(), r, tr)) valid => match w {
+            Stopped(e) => j(sym(e), λ y _ => Trace::AsksSome(y) ∧ IsTrace(Events::linux_spec(), Ret(r), Trace::forget(y)),
+                ⟨trivial, Stopped(refl)⟩),
+            Returned(e) => j(sym(e), λ y _ => Trace::AsksSome(y) ∧ IsTrace(Events::linux_spec(), Ret(r), Trace::forget(y)),
+                ⟨trivial, Returned(refl)⟩),
+        },
+        Tau(s) => ITree::implements_sized(max, some, s),
+        Vis(c, k) => λ tr (w: VisTrace<R>(Events::linux(), c.sized(max), tr,
+                λ b rest => IsTrace(Events::linux(), ITree::sized(max, k(c.sized_answer(max, b))), rest))) valid =>
+            match w {
+                Prefix(e) => j(sym(e), λ y _ => Trace::AsksSome(y) ∧ IsTrace(Events::linux_spec(), Vis(c, k), Trace::forget(y)),
+                    ⟨trivial, Prefix(refl)⟩),
+                Pending(e) => j(sym(e), λ y _ => Trace::AsksSome(y) ∧ IsTrace(Events::linux_spec(), Vis(c, k), Trace::forget(y)),
+                    ⟨LinuxCmd::sized_asks_some(c, max, some),
+                        Pending(LinuxCmd::sized_forget_call<R>(c, max))⟩),
+                Answered(b, rest, e, sub) => {
+                    let moved: Trace::LinuxValid<R>(TAns(c.sized(max), b, rest)) =
+                        j(e, λ y _ => Trace::LinuxValid(y), valid);
+                    let ih = ITree::implements_sized(max, some, k(c.sized_answer(max, b)), rest, sub, moved.right);
+                    j(sym(e), λ y _ => Trace::AsksSome(y) ∧ IsTrace(Events::linux_spec(), Vis(c, k), Trace::forget(y)),
+                        ⟨⟨LinuxCmd::sized_asks_some(c, max, some), ih.left⟩,
+                            Answered(c.sized_answer(max, b), Trace::forget(rest),
+                                LinuxCmd::sized_forget_answer<R>(c, max, b, rest), ih.right)⟩)
+                },
+            },
+        Cut => λ tr (w: CutTrace<R>(Events::linux(), tr)) valid =>
+            j(sym(CutTrace::ended(Events::linux(), tr, w)),
+                λ y _ => Trace::AsksSome(y) ∧ IsTrace(Events::linux_spec(), Cut, Trace::forget(y)), ⟨trivial, Ended(refl)⟩),
+    }
+}
+
+// Forgetting keeps where a trace returns.
+theorem Trace::forget_returns_with<R>(tr: Trace<R>(Events::linux()), r: R):
+    Trace::ReturnsWith(Events::linux(), tr, r) → Trace::ReturnsWith(Events::linux_spec(), Trace::forget(tr), r) {
+    match tr {
+        TEnd => λ never => never,
+        TRet(_) => λ same => same,
+        TCall(_) => λ never => never,
+        TAns(_, _, rest) => λ returns => Trace::forget_returns_with(rest, r, returns),
+    }
+}

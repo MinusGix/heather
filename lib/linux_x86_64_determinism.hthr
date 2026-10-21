@@ -4,8 +4,9 @@
 // from Linux produced those events. A step is a function of the state's
 // defined components (x86_64_step_forms), no step runs where SYSCALL is
 // fetched, so two runs meet at the same syscall with the same request; the
-// response is Linux's, and what Linux leaves in RCX, R11 and a failed read's
+// answer is Linux's, and what Linux leaves in RCX, R11 and a failed call's
 // buffer the claim already quantifies over.
+import linux_calls;
 import linux_x86_64_io;
 import linux_x86_64_entry;
 import x86_64;
@@ -21,36 +22,19 @@ import nat;
 import option;
 
 // ---------------------------------------------------------------------------
-// A run, as it happened: at each syscall, one response and one choice of
-// what Linux left behind. Where `LinuxRuns` quantifies over RCX, R11 and a
-// failed read's junk, a run picks them.
+// A run, as it happened: at each syscall, one answer and one choice of what
+// Linux left behind. Where `LinuxRuns` quantifies over RCX, R11 and junk, a
+// run picks them. A run's call is what its registers ask (`LinuxAsks`);
+// whether Linux could write its buffers is the claim's business.
 
 fn Resumes(next: BitVec(64) → BitVec(64) → Type) → Type {
     Exists<BitVec(64)>(λ rcx => Exists<BitVec(64)>(λ r11 => next(rcx, r11)))
 }
 
-fn ReadResumes<M>(io: LinuxIo<M>, at: MachineState<M>, result: ReadResult, next: MachineState<M> → Type) → Type {
-    match result {
-        ReadBytes(bytes) => Resumes(λ rcx r11 => next(linux_read_return(io, at, bytes, rcx, r11))),
-        ReadFailed(errno) => Exists<List<BitVec(8)>>(λ junk => (junk.len() <= read_gpr(Rdx, at.gprs).toNat()) ∧
-            Resumes(λ rcx r11 => next(linux_read_failed_return(io, at, errno, junk, rcx, r11)))),
-    }
-}
-
-fn WriteResumes<M>(at: MachineState<M>, result: WriteResult, next: MachineState<M> → Type) → Type {
-    match result {
-        Wrote(count) => Resumes(λ rcx r11 => next(linux_write_return(at, bitvec_nat::word_of_nat(64, count), rcx, r11))),
-        WriteFailed(errno) => Resumes(λ rcx r11 => next(linux_write_return(at, errno_word(errno), rcx, r11))),
-    }
-}
-
-fn StatResumes<M>(io: LinuxIo<M>, at: MachineState<M>, target: StatTarget, result: StatResult,
+fn LinuxResumed<M>(io: LinuxIo<M>, at: MachineState<M>, c: LinuxCmd<Nat>, a: c.Resp(),
     next: MachineState<M> → Type) → Type {
-    match result {
-        Stated(st) => Resumes(λ rcx r11 => next(linux_stat_return(io, at, target, st, BitVec::ofNat(0), rcx, r11))),
-        StatFailed(errno) => Exists<List<BitVec(8)>>(λ junk => (junk.len() <= stat_length()) ∧
-            Resumes(λ rcx r11 => next(linux_stat_return(io, at, target, junk, errno_word(errno), rcx, r11)))),
-    }
+    Exists<List<BitVec(8)>>(λ junk => LinuxLeaves(c, a, junk) ∧
+        Resumes(λ rcx r11 => next(linux_answered(io, at, c, a, junk, rcx, r11))))
 }
 
 fn LinuxRun<M>(io: LinuxIo<M>, events: List<LinuxEvent>) → MachineState<M> → Type {
@@ -59,37 +43,35 @@ fn LinuxRun<M>(io: LinuxIo<M>, events: List<LinuxEvent>) → MachineState<M> →
         Cons(event, rest) => λ state => Exists<MachineState<M>>(λ at =>
             LinuxSteps(io, state, at) ∧ (LinuxSyscallAt(io, at) ∧
             match event as λ _ => Type {
-                ReadEvent(fd, result) =>
-                    (read_gpr(Rax, at.gprs) = BitVec::ofNat(0)) ∧ ((read_gpr(Rdi, at.gprs) = fd) ∧
-                    ReadResumes(io, at, result, LinuxRun(io, rest))),
-                WriteEvent(fd, bytes, result) =>
-                    (read_gpr(Rax, at.gprs) = BitVec::ofNat(1)) ∧ ((read_gpr(Rdi, at.gprs) = fd) ∧
-                    ((read_gpr(Rdx, at.gprs).toNat() = bytes.len()) ∧
-                    (LinuxWritesFrom(io, at.memory, read_gpr(Rsi, at.gprs), bytes) ∧
-                    WriteResumes(at, result, LinuxRun(io, rest))))),
-                ExitEvent(status) =>
-                    (read_gpr(Rax, at.gprs) = BitVec::ofNat(60)) ∧ ((read_gpr(Rdi, at.gprs) = status) ∧ (rest = Nil)),
-                OpenEvent(path, result) =>
-                    OpenRequest(io, at, path) ∧ Resumes(λ rcx r11 => LinuxRun(io, rest, linux_write_return(at, open_rax(result), rcx, r11))),
-                CloseEvent(fd, result) =>
-                    (read_gpr(Rax, at.gprs) = BitVec::ofNat(3)) ∧ ((read_gpr(Rdi, at.gprs) = fd) ∧
-                    Resumes(λ rcx r11 => LinuxRun(io, rest, linux_write_return(at, close_rax(result), rcx, r11)))),
-                StatEvent(target, result) =>
-                    StatRequest(io, at, target) ∧ StatResumes(io, at, target, result, LinuxRun(io, rest)),
+                CallEvent(c, a) => LinuxAsks(io, at, c) ∧ LinuxResumed(io, at, c, a, LinuxRun(io, rest)),
+                ExitEvent(status) => LinuxExits(at, status) ∧ (rest = Nil),
             })),
     }
 }
 
+// Two calls got the same answer: the same kind of call, answered alike.
+// Requests are not compared; they are what is proved equal.
+fn SameAnswer(c: LinuxCmd<Nat>) → c.Resp() → (d: LinuxCmd<Nat>) → d.Resp() → Type {
+    match c as λ x => x.Resp() → (d: LinuxCmd<Nat>) → d.Resp() → Type {
+        ReadCmd(_, _) => λ (result: ReadResult) d => match d as λ y => y.Resp() → Type {
+            ReadCmd(_, _) => λ (other: ReadResult) => result = other, _ => λ _ => False },
+        WriteCmd(_, _) => λ (result: WriteResult) d => match d as λ y => y.Resp() → Type {
+            WriteCmd(_, _) => λ (other: WriteResult) => result = other, _ => λ _ => False },
+        OpenCmd(_) => λ (result: OpenResult) d => match d as λ y => y.Resp() → Type {
+            OpenCmd(_) => λ (other: OpenResult) => result = other, _ => λ _ => False },
+        CloseCmd(_) => λ (result: CloseResult) d => match d as λ y => y.Resp() → Type {
+            CloseCmd(_) => λ (other: CloseResult) => result = other, _ => λ _ => False },
+        StatCmd(_) => λ (result: StatResult) d => match d as λ y => y.Resp() → Type {
+            StatCmd(_) => λ (other: StatResult) => result = other, _ => λ _ => False },
+    }
+}
+
 // Two event lists got the same answers: event by event, the same kind with
-// the same result. Requests are not compared; they are what is proved equal.
+// the same answer.
 fn SameResponse(claim, run: LinuxEvent) → Type {
     match claim {
-        ReadEvent(_, result) => match run { ReadEvent(_, other) => result = other, _ => False },
-        WriteEvent(_, _, result) => match run { WriteEvent(_, _, other) => result = other, _ => False },
-        ExitEvent(_) => match run { ExitEvent(_) => True, _ => False },
-        OpenEvent(_, result) => match run { OpenEvent(_, other) => result = other, _ => False },
-        CloseEvent(_, result) => match run { CloseEvent(_, other) => result = other, _ => False },
-        StatEvent(_, result) => match run { StatEvent(_, other) => result = other, _ => False },
+        CallEvent(c, a) => match run { CallEvent(d, b) => SameAnswer(c, a, d, b), ExitEvent(_) => False },
+        ExitEvent(_) => match run { ExitEvent(_) => True, CallEvent(_, _) => False },
     }
 }
 fn SameResponses(claim: List<LinuxEvent>) → List<LinuxEvent> → Type {
@@ -102,11 +84,14 @@ fn SameResponses(claim: List<LinuxEvent>) → List<LinuxEvent> → Type {
     }
 }
 
-theorem same_response_refl(event: LinuxEvent): SameResponse(event, event) {
-    match event {
-        ReadEvent(_, _) => refl, WriteEvent(_, _, _) => refl, ExitEvent(_) => trivial,
-        OpenEvent(_, _) => refl, CloseEvent(_, _) => refl, StatEvent(_, _) => refl,
+theorem same_answer_refl(c: LinuxCmd<Nat>): (a: c.Resp()) → SameAnswer(c, a, c, a) {
+    match c as λ x => (a: x.Resp()) → SameAnswer(x, a, x, a) {
+        ReadCmd(_, _) => λ _ => refl, WriteCmd(_, _) => λ _ => refl, OpenCmd(_) => λ _ => refl,
+        CloseCmd(_) => λ _ => refl, StatCmd(_) => λ _ => refl,
     }
+}
+theorem same_response_refl(event: LinuxEvent): SameResponse(event, event) {
+    match event { CallEvent(c, a) => same_answer_refl(c, a), ExitEvent(_) => trivial }
 }
 theorem same_responses_refl(events: List<LinuxEvent>): SameResponses(events, events) {
     match events {
@@ -185,229 +170,6 @@ theorem writes_from_unique<M>(io: LinuxIo<M>, memory: M, buffer: BitVec(64), lef
         length, first, second)
 }
 
-// ---------------------------------------------------------------------------
-// One syscall. The claim's side of an event, spelled as `LinuxRuns` spells it.
-
-fn ClaimReadRest<M>(io: LinuxIo<M>, rest: List<LinuxEvent>, at: MachineState<M>, result: ReadResult) → Type {
-    match result as λ _ => Type {
-        ReadBytes(bytes) =>
-            (bytes.len() <= read_gpr(Rdx, at.gprs).toNat()) ∧
-            (io.writable(at.memory, read_gpr(Rsi, at.gprs), bytes.len()) ∧
-            ((rcx, r11: BitVec(64)) → LinuxRuns(io, rest, linux_read_return(io, at, bytes, rcx, r11)))),
-        ReadFailed(errno) =>
-            Errno(errno) ∧
-            (io.writable(at.memory, read_gpr(Rsi, at.gprs), read_gpr(Rdx, at.gprs).toNat()) ∧
-            ((junk: List<BitVec(8)>) → junk.len() <= read_gpr(Rdx, at.gprs).toNat() → (rcx, r11: BitVec(64)) →
-                LinuxRuns(io, rest, linux_read_failed_return(io, at, errno, junk, rcx, r11)))),
-    }
-}
-fn ClaimWriteRest<M>(io: LinuxIo<M>, rest: List<LinuxEvent>, at: MachineState<M>, bytes: List<BitVec(8)>,
-    result: WriteResult) → Type {
-    match result as λ _ => Type {
-        Wrote(count) => (count <= bytes.len()) ∧
-            ((rcx, r11: BitVec(64)) →
-                LinuxRuns(io, rest, linux_write_return(at, bitvec_nat::word_of_nat(64, count), rcx, r11))),
-        WriteFailed(errno) => Errno(errno) ∧
-            ((rcx, r11: BitVec(64)) → LinuxRuns(io, rest, linux_write_return(at, errno_word(errno), rcx, r11))),
-    }
-}
-fn ClaimStatRest<M>(io: LinuxIo<M>, rest: List<LinuxEvent>, at: MachineState<M>, target: StatTarget,
-    result: StatResult) → Type {
-    match result as λ _ => Type {
-        Stated(st) => (st.len() = stat_length()) ∧
-            ((rcx, r11: BitVec(64)) →
-                LinuxRuns(io, rest, linux_stat_return(io, at, target, st, BitVec::ofNat(0), rcx, r11))),
-        StatFailed(errno) => Errno(errno) ∧
-            ((junk: List<BitVec(8)>) → junk.len() <= stat_length() → (rcx, r11: BitVec(64)) →
-                LinuxRuns(io, rest, linux_stat_return(io, at, target, junk, errno_word(errno), rcx, r11))),
-    }
-}
-fn ClaimAt<M>(io: LinuxIo<M>, event: LinuxEvent, rest: List<LinuxEvent>, at: MachineState<M>) → Type {
-    match event as λ _ => Type {
-        ReadEvent(fd, result) =>
-            (read_gpr(Rax, at.gprs) = BitVec::ofNat(0)) ∧ ((read_gpr(Rdi, at.gprs) = fd) ∧ ClaimReadRest(io, rest, at, result)),
-        WriteEvent(fd, bytes, result) =>
-            (read_gpr(Rax, at.gprs) = BitVec::ofNat(1)) ∧
-            ((read_gpr(Rdi, at.gprs) = fd) ∧
-            ((read_gpr(Rdx, at.gprs).toNat() = bytes.len()) ∧
-            (LinuxWritesFrom(io, at.memory, read_gpr(Rsi, at.gprs), bytes) ∧ ClaimWriteRest(io, rest, at, bytes, result)))),
-        ExitEvent(status) =>
-            (read_gpr(Rax, at.gprs) = BitVec::ofNat(60)) ∧
-            ((read_gpr(Rdi, at.gprs) = status) ∧ (rest = Nil)),
-        OpenEvent(path, result) =>
-            OpenRequest(io, at, path) ∧ (OpenReturns(result) ∧
-            ((rcx, r11: BitVec(64)) → LinuxRuns(io, rest, linux_write_return(at, open_rax(result), rcx, r11)))),
-        CloseEvent(fd, result) =>
-            (read_gpr(Rax, at.gprs) = BitVec::ofNat(3)) ∧ ((read_gpr(Rdi, at.gprs) = fd) ∧ (CloseReturns(result) ∧
-            ((rcx, r11: BitVec(64)) → LinuxRuns(io, rest, linux_write_return(at, close_rax(result), rcx, r11))))),
-        StatEvent(target, result) => StatRequest(io, at, target) ∧ ClaimStatRest(io, rest, at, target, result),
-    }
-}
-fn RunAt<M>(io: LinuxIo<M>, event: LinuxEvent, rest: List<LinuxEvent>, at: MachineState<M>) → Type {
-    match event as λ _ => Type {
-        ReadEvent(fd, result) =>
-            (read_gpr(Rax, at.gprs) = BitVec::ofNat(0)) ∧ ((read_gpr(Rdi, at.gprs) = fd) ∧
-            ReadResumes(io, at, result, LinuxRun(io, rest))),
-        WriteEvent(fd, bytes, result) =>
-            (read_gpr(Rax, at.gprs) = BitVec::ofNat(1)) ∧ ((read_gpr(Rdi, at.gprs) = fd) ∧
-            ((read_gpr(Rdx, at.gprs).toNat() = bytes.len()) ∧
-            (LinuxWritesFrom(io, at.memory, read_gpr(Rsi, at.gprs), bytes) ∧
-            WriteResumes(at, result, LinuxRun(io, rest))))),
-        ExitEvent(status) =>
-            (read_gpr(Rax, at.gprs) = BitVec::ofNat(60)) ∧ ((read_gpr(Rdi, at.gprs) = status) ∧ (rest = Nil)),
-        OpenEvent(path, result) =>
-            OpenRequest(io, at, path) ∧ Resumes(λ rcx r11 => LinuxRun(io, rest, linux_write_return(at, open_rax(result), rcx, r11))),
-        CloseEvent(fd, result) =>
-            (read_gpr(Rax, at.gprs) = BitVec::ofNat(3)) ∧ ((read_gpr(Rdi, at.gprs) = fd) ∧
-            Resumes(λ rcx r11 => LinuxRun(io, rest, linux_write_return(at, close_rax(result), rcx, r11)))),
-        StatEvent(target, result) =>
-            StatRequest(io, at, target) ∧ StatResumes(io, at, target, result, LinuxRun(io, rest)),
-    }
-}
-
-// What the rest of the lists must satisfy: related states after the call
-// give the same remaining events.
-fn TailsAgree<M>(io: LinuxIo<M>, rest, more: List<LinuxEvent>) → Type {
-    (left, right: MachineState<M>) → SameDefinedState<M>(left, right) →
-        LinuxRuns(io, rest, left) → LinuxRun(io, more, right) → rest = more
-}
-
-// Linux's returns read only defined components and keep the flags, so each
-// commutes with erasing AF by `refl`.
-theorem read_bytes_resume<M>(io: LinuxIo<M>, rest, more: List<LinuxEvent>, left, right: MachineState<M>,
-    same: SameDefinedState<M>(left, right), bytes: List<BitVec(8)>, tails: TailsAgree(io, rest, more),
-    claimed: (rcx, r11: BitVec(64)) → LinuxRuns(io, rest, linux_read_return(io, left, bytes, rcx, r11)),
-    ran: ReadResumes(io, right, ReadBytes(bytes), LinuxRun(io, more))): rest = more {
-    let rcx = ran.witness;
-    let r11 = ran.proof.witness;
-    tails(linux_read_return(io, left, bytes, rcx, r11), linux_read_return(io, right, bytes, rcx, r11),
-        same_defined_respects<M>(λ state => linux_read_return(io, state, bytes, rcx, r11), λ state => refl)(left, right, same),
-        claimed(rcx, r11), ran.proof.proof)
-}
-
-theorem read_failed_resume<M>(io: LinuxIo<M>, rest, more: List<LinuxEvent>, left, right: MachineState<M>,
-    same: SameDefinedState<M>(left, right), errno: Nat, tails: TailsAgree(io, rest, more),
-    claimed: (junk: List<BitVec(8)>) → junk.len() <= read_gpr(Rdx, left.gprs).toNat() → (rcx, r11: BitVec(64)) →
-        LinuxRuns(io, rest, linux_read_failed_return(io, left, errno, junk, rcx, r11)),
-    ran: ReadResumes(io, right, ReadFailed(errno), LinuxRun(io, more))): rest = more {
-    let junk = ran.witness;
-    let rcx = ran.proof.right.witness;
-    let r11 = ran.proof.right.proof.witness;
-    let fits: (junk.len() <= read_gpr(Rdx, left.gprs).toNat()) =
-        j(sym(register_related(Rdx, left, right, same)), λ word _ => junk.len() <= word.toNat(), ran.proof.left);
-    tails(linux_read_failed_return(io, left, errno, junk, rcx, r11), linux_read_failed_return(io, right, errno, junk, rcx, r11),
-        same_defined_respects<M>(λ state => linux_read_failed_return(io, state, errno, junk, rcx, r11), λ state => refl)(left, right, same),
-        claimed(junk, fits, rcx, r11), ran.proof.right.proof.proof)
-}
-
-theorem write_resume<M>(io: LinuxIo<M>, rest, more: List<LinuxEvent>, left, right: MachineState<M>,
-    same: SameDefinedState<M>(left, right), rax: BitVec(64), tails: TailsAgree(io, rest, more),
-    claimed: (rcx, r11: BitVec(64)) → LinuxRuns(io, rest, linux_write_return(left, rax, rcx, r11)),
-    ran: Resumes(λ rcx r11 => LinuxRun(io, more, linux_write_return(right, rax, rcx, r11)))): rest = more {
-    let rcx = ran.witness;
-    let r11 = ran.proof.witness;
-    tails(linux_write_return(left, rax, rcx, r11), linux_write_return(right, rax, rcx, r11),
-        same_defined_respects<M>(λ state => linux_write_return(state, rax, rcx, r11), λ state => refl)(left, right, same),
-        claimed(rcx, r11), ran.proof.proof)
-}
-
-// The claim at one syscall, as `LinuxRuns` states it, is `ClaimAt`.
-theorem claim_at<M>(io: LinuxIo<M>, event: LinuxEvent, rest: List<LinuxEvent>, start: MachineState<M>,
-    claimed: LinuxRuns(io, Cons(event, rest), start)): ClaimAt(io, event, rest, claimed.witness) {
-    claimed.proof.right.right
-}
-theorem run_at<M>(io: LinuxIo<M>, event: LinuxEvent, rest: List<LinuxEvent>, start: MachineState<M>,
-    ran: LinuxRun(io, Cons(event, rest), start)): RunAt(io, event, rest, ran.witness) {
-    ran.proof.right.right
-}
-
-// Each kind of event: the request is read off related states, the response
-// is shared, and the rest of the run starts from related states.
-theorem read_determines<M>(io: LinuxIo<M>, fd: BitVec(64), result: ReadResult, rest, more: List<LinuxEvent>,
-    left, right: MachineState<M>, same: SameDefinedState<M>(left, right), tails: TailsAgree(io, rest, more),
-    claimed: ClaimAt(io, ReadEvent(fd, result), rest, left)): (other: LinuxEvent) → RunAt(io, other, more, right) →
-    SameResponse(ReadEvent(fd, result), other) → Cons(ReadEvent(fd, result), rest) = Cons(other, more) {
-    λ other => match other as λ o => RunAt(io, o, more, right) → SameResponse(ReadEvent(fd, result), o) →
-            Cons(ReadEvent(fd, result), rest) = Cons(o, more) {
-        ReadEvent(fd2, result2) => λ ran response => {
-            let fds: (fd = fd2) = trans(sym(claimed.right.left), trans(register_related(Rdi, left, right, same), ran.right.left));
-            let resumes: ReadResumes(io, right, result, LinuxRun(io, more)) =
-                j(sym(response), λ r _ => ReadResumes(io, right, r, LinuxRun(io, more)), ran.right.right);
-            let tail: (rest = more) = (match result as λ r => ClaimReadRest(io, rest, left, r) →
-                    ReadResumes(io, right, r, LinuxRun(io, more)) → rest = more {
-                ReadBytes(bytes) => λ c r => read_bytes_resume(io, rest, more, left, right, same, bytes, tails, c.right.right, r),
-                ReadFailed(errno) => λ c r => read_failed_resume(io, rest, more, left, right, same, errno, tails, c.right.right, r),
-            })(claimed.right.right, resumes);
-            List::cons_eq(rest, more, ReadEvent(fd, result), ReadEvent(fd2, result2),
-                trans(cong_fn(λ (f: BitVec(64)) => ReadEvent(f, result), fds),
-                    cong_fn(λ (r: ReadResult) => ReadEvent(fd2, r), response)), tail)
-        },
-        WriteEvent(_, _, _) => λ _ never => false_elim(never),
-        ExitEvent(_) => λ _ never => false_elim(never),
-        OpenEvent(_, _) => λ _ never => false_elim(never),
-        CloseEvent(_, _) => λ _ never => false_elim(never),
-        StatEvent(_, _) => λ _ never => false_elim(never),
-    }
-}
-
-theorem write_determines<M>(io: LinuxIo<M>, fd: BitVec(64), bytes: List<BitVec(8)>, result: WriteResult,
-    rest, more: List<LinuxEvent>, left, right: MachineState<M>, same: SameDefinedState<M>(left, right),
-    tails: TailsAgree(io, rest, more), claimed: ClaimAt(io, WriteEvent(fd, bytes, result), rest, left)):
-    (other: LinuxEvent) → RunAt(io, other, more, right) →
-    SameResponse(WriteEvent(fd, bytes, result), other) → Cons(WriteEvent(fd, bytes, result), rest) = Cons(other, more) {
-    λ other => match other as λ o => RunAt(io, o, more, right) → SameResponse(WriteEvent(fd, bytes, result), o) →
-            Cons(WriteEvent(fd, bytes, result), rest) = Cons(o, more) {
-        WriteEvent(fd2, bytes2, result2) => λ ran response => {
-            let fds: (fd = fd2) = trans(sym(claimed.right.left), trans(register_related(Rdi, left, right, same), ran.right.left));
-            let length: (bytes.len() = bytes2.len()) = trans(sym(claimed.right.right.left),
-                trans(cong_fn(λ (word: BitVec(64)) => word.toNat(), register_related(Rdx, left, right, same)),
-                    ran.right.right.left));
-            let sends: LinuxWritesFrom(io, left.memory, read_gpr(Rsi, left.gprs), bytes2) =
-                j(sym(register_related(Rsi, left, right, same)), λ buffer _ => LinuxWritesFrom(io, left.memory, buffer, bytes2),
-                    j(sym(SameDefinedState::memory(same)), λ memory _ => LinuxWritesFrom(io, memory, read_gpr(Rsi, right.gprs), bytes2),
-                        ran.right.right.right.left));
-            let requests: (bytes = bytes2) = writes_from_unique(io, left.memory, read_gpr(Rsi, left.gprs), bytes, bytes2,
-                length, claimed.right.right.right.left, sends);
-            let resumes: WriteResumes(right, result, LinuxRun(io, more)) =
-                j(sym(response), λ r _ => WriteResumes(right, r, LinuxRun(io, more)), ran.right.right.right.right);
-            let tail: (rest = more) = (match result as λ r => ClaimWriteRest(io, rest, left, bytes, r) →
-                    WriteResumes(right, r, LinuxRun(io, more)) → rest = more {
-                Wrote(count) => λ c r => write_resume(io, rest, more, left, right, same,
-                    bitvec_nat::word_of_nat(64, count), tails, c.right, r),
-                WriteFailed(errno) => λ c r => write_resume(io, rest, more, left, right, same, errno_word(errno), tails, c.right, r),
-            })(claimed.right.right.right.right, resumes);
-            List::cons_eq(rest, more, WriteEvent(fd, bytes, result), WriteEvent(fd2, bytes2, result2),
-                trans(cong_fn(λ (f: BitVec(64)) => WriteEvent(f, bytes, result), fds),
-                trans(cong_fn(λ (b: List<BitVec(8)>) => WriteEvent(fd2, b, result), requests),
-                    cong_fn(λ (r: WriteResult) => WriteEvent(fd2, bytes2, r), response))), tail)
-        },
-        ReadEvent(_, _) => λ _ never => false_elim(never),
-        ExitEvent(_) => λ _ never => false_elim(never),
-        OpenEvent(_, _) => λ _ never => false_elim(never),
-        CloseEvent(_, _) => λ _ never => false_elim(never),
-        StatEvent(_, _) => λ _ never => false_elim(never),
-    }
-}
-
-theorem exit_determines<M>(io: LinuxIo<M>, status: BitVec(64), rest, more: List<LinuxEvent>,
-    left, right: MachineState<M>, same: SameDefinedState<M>(left, right),
-    claimed: ClaimAt(io, ExitEvent(status), rest, left)): (other: LinuxEvent) → RunAt(io, other, more, right) →
-    SameResponse(ExitEvent(status), other) → Cons(ExitEvent(status), rest) = Cons(other, more) {
-    λ other => match other as λ o => RunAt(io, o, more, right) → SameResponse(ExitEvent(status), o) →
-            Cons(ExitEvent(status), rest) = Cons(o, more) {
-        ExitEvent(status2) => λ ran _ =>
-            List::cons_eq(rest, more, ExitEvent(status), ExitEvent(status2),
-                cong_fn(λ (s: BitVec(64)) => ExitEvent(s),
-                    trans(sym(claimed.right.left), trans(register_related(Rdi, left, right, same), ran.right.left))),
-                trans(claimed.right.right, sym(ran.right.right))),
-        ReadEvent(_, _) => λ _ never => false_elim(never),
-        WriteEvent(_, _, _) => λ _ never => false_elim(never),
-        OpenEvent(_, _) => λ _ never => false_elim(never),
-        CloseEvent(_, _) => λ _ never => false_elim(never),
-        StatEvent(_, _) => λ _ never => false_elim(never),
-    }
-}
-
 // A C string is where its NUL is: two read from one source are one.
 theorem c_strings_alike(left: List<BitVec(8)>): (right: List<BitVec(8)>) → (source: Nat → Option<BitVec(8)>) →
     CStringFrom(left, source) → CStringFrom(right, source) → left = right {
@@ -445,57 +207,6 @@ theorem stat_numbers_differ<M>(left, right: MachineState<M>, same: SameDefinedSt
     absurd(cong_fn(λ (word: BitVec(64)) => byte_bit1(word.take_low(8, 56)), equal))
 }
 
-theorem open_determines<M>(io: LinuxIo<M>, path: List<BitVec(8)>, result: OpenResult, rest, more: List<LinuxEvent>,
-    left, right: MachineState<M>, same: SameDefinedState<M>(left, right), tails: TailsAgree(io, rest, more),
-    claimed: ClaimAt(io, OpenEvent(path, result), rest, left)): (other: LinuxEvent) → RunAt(io, other, more, right) →
-    SameResponse(OpenEvent(path, result), other) → Cons(OpenEvent(path, result), rest) = Cons(other, more) {
-    λ other => match other as λ o => RunAt(io, o, more, right) → SameResponse(OpenEvent(path, result), o) →
-            Cons(OpenEvent(path, result), rest) = Cons(o, more) {
-        OpenEvent(path2, result2) => λ ran response => {
-            let paths: (path = path2) = paths_related(io, left, right, same, path, path2,
-                claimed.left.right.right.right, ran.left.right.right.right);
-            let resumes: Resumes(λ rcx r11 => LinuxRun(io, more, linux_write_return(right, open_rax(result), rcx, r11))) =
-                j(sym(response), λ r _ => Resumes(λ rcx r11 => LinuxRun(io, more, linux_write_return(right, open_rax(r), rcx, r11))),
-                    ran.right);
-            let tail: (rest = more) = write_resume(io, rest, more, left, right, same, open_rax(result), tails,
-                claimed.right.right, resumes);
-            List::cons_eq(rest, more, OpenEvent(path, result), OpenEvent(path2, result2),
-                trans(cong_fn(λ (p: List<BitVec(8)>) => OpenEvent(p, result), paths),
-                    cong_fn(λ (r: OpenResult) => OpenEvent(path2, r), response)), tail)
-        },
-        ReadEvent(_, _) => λ _ never => false_elim(never),
-        WriteEvent(_, _, _) => λ _ never => false_elim(never),
-        ExitEvent(_) => λ _ never => false_elim(never),
-        CloseEvent(_, _) => λ _ never => false_elim(never),
-        StatEvent(_, _) => λ _ never => false_elim(never),
-    }
-}
-
-theorem close_determines<M>(io: LinuxIo<M>, fd: BitVec(64), result: CloseResult, rest, more: List<LinuxEvent>,
-    left, right: MachineState<M>, same: SameDefinedState<M>(left, right), tails: TailsAgree(io, rest, more),
-    claimed: ClaimAt(io, CloseEvent(fd, result), rest, left)): (other: LinuxEvent) → RunAt(io, other, more, right) →
-    SameResponse(CloseEvent(fd, result), other) → Cons(CloseEvent(fd, result), rest) = Cons(other, more) {
-    λ other => match other as λ o => RunAt(io, o, more, right) → SameResponse(CloseEvent(fd, result), o) →
-            Cons(CloseEvent(fd, result), rest) = Cons(o, more) {
-        CloseEvent(fd2, result2) => λ ran response => {
-            let fds: (fd = fd2) = trans(sym(claimed.right.left), trans(register_related(Rdi, left, right, same), ran.right.left));
-            let resumes: Resumes(λ rcx r11 => LinuxRun(io, more, linux_write_return(right, close_rax(result), rcx, r11))) =
-                j(sym(response), λ r _ => Resumes(λ rcx r11 => LinuxRun(io, more, linux_write_return(right, close_rax(r), rcx, r11))),
-                    ran.right.right);
-            let tail: (rest = more) = write_resume(io, rest, more, left, right, same, close_rax(result), tails,
-                claimed.right.right.right, resumes);
-            List::cons_eq(rest, more, CloseEvent(fd, result), CloseEvent(fd2, result2),
-                trans(cong_fn(λ (f: BitVec(64)) => CloseEvent(f, result), fds),
-                    cong_fn(λ (r: CloseResult) => CloseEvent(fd2, r), response)), tail)
-        },
-        ReadEvent(_, _) => λ _ never => false_elim(never),
-        WriteEvent(_, _, _) => λ _ never => false_elim(never),
-        ExitEvent(_) => λ _ never => false_elim(never),
-        OpenEvent(_, _) => λ _ never => false_elim(never),
-        StatEvent(_, _) => λ _ never => false_elim(never),
-    }
-}
-
 // A stat of a path and of a descriptor are told apart by their numbers.
 theorem stat_targets_related<M>(io: LinuxIo<M>, left, right: MachineState<M>, same: SameDefinedState<M>(left, right),
     target: StatTarget): (other: StatTarget) → StatAsked(io, left, target) → StatAsked(io, right, other) → target = other {
@@ -515,46 +226,176 @@ theorem stat_targets_related<M>(io: LinuxIo<M>, left, right: MachineState<M>, sa
     }
 }
 
-theorem stat_resume<M>(io: LinuxIo<M>, rest, more: List<LinuxEvent>, left, right: MachineState<M>,
-    same: SameDefinedState<M>(left, right), target: StatTarget, bytes: List<BitVec(8)>, rax: BitVec(64),
-    tails: TailsAgree(io, rest, more),
-    claimed: (rcx, r11: BitVec(64)) → LinuxRuns(io, rest, linux_stat_return(io, left, target, bytes, rax, rcx, r11)),
-    ran: Resumes(λ rcx r11 => LinuxRun(io, more, linux_stat_return(io, right, target, bytes, rax, rcx, r11)))): rest = more {
-    let rcx = ran.witness;
-    let r11 = ran.proof.witness;
-    tails(linux_stat_return(io, left, target, bytes, rax, rcx, r11), linux_stat_return(io, right, target, bytes, rax, rcx, r11),
-        same_defined_respects<M>(λ state => linux_stat_return(io, state, target, bytes, rax, rcx, r11), λ state => refl)(left, right, same),
-        claimed(rcx, r11), ran.proof.proof)
+// ---------------------------------------------------------------------------
+// One syscall. The claim's side of an event, as `LinuxRuns` spells it.
+
+fn ClaimAt<M>(io: LinuxIo<M>, event: LinuxEvent, rest: List<LinuxEvent>, at: MachineState<M>) → Type {
+    match event as λ _ => Type {
+        CallEvent(c, a) => LinuxAnswered(io, at, c, a, LinuxRuns(io, rest)),
+        ExitEvent(status) => LinuxExits(at, status) ∧ (rest = Nil),
+    }
+}
+fn RunAt<M>(io: LinuxIo<M>, event: LinuxEvent, rest: List<LinuxEvent>, at: MachineState<M>) → Type {
+    match event as λ _ => Type {
+        CallEvent(c, a) => LinuxAsks(io, at, c) ∧ LinuxResumed(io, at, c, a, LinuxRun(io, rest)),
+        ExitEvent(status) => LinuxExits(at, status) ∧ (rest = Nil),
+    }
 }
 
-theorem stat_determines<M>(io: LinuxIo<M>, target: StatTarget, result: StatResult, rest, more: List<LinuxEvent>,
+// What the rest of the lists must satisfy: related states after the call
+// give the same remaining events.
+fn TailsAgree<M>(io: LinuxIo<M>, rest, more: List<LinuxEvent>) → Type {
+    (left, right: MachineState<M>) → SameDefinedState<M>(left, right) →
+        LinuxRuns(io, rest, left) → LinuxRun(io, more, right) → rest = more
+}
+
+// The claim at one syscall, as `LinuxRuns` states it, is `ClaimAt`.
+theorem claim_at<M>(io: LinuxIo<M>, event: LinuxEvent, rest: List<LinuxEvent>, start: MachineState<M>,
+    claimed: LinuxRuns(io, Cons(event, rest), start)): ClaimAt(io, event, rest, claimed.witness) {
+    claimed.proof.right.right
+}
+theorem run_at<M>(io: LinuxIo<M>, event: LinuxEvent, rest: List<LinuxEvent>, start: MachineState<M>,
+    ran: LinuxRun(io, Cons(event, rest), start)): RunAt(io, event, rest, ran.witness) {
+    ran.proof.right.right
+}
+
+// Linux resumes related states in related states: the claim covers whatever
+// the run was left with.
+theorem call_resume<M>(io: LinuxIo<M>, c: LinuxCmd<Nat>, a: c.Resp(), rest, more: List<LinuxEvent>,
     left, right: MachineState<M>, same: SameDefinedState<M>(left, right), tails: TailsAgree(io, rest, more),
-    claimed: ClaimAt(io, StatEvent(target, result), rest, left)): (other: LinuxEvent) → RunAt(io, other, more, right) →
-    SameResponse(StatEvent(target, result), other) → Cons(StatEvent(target, result), rest) = Cons(other, more) {
-    λ other => match other as λ o => RunAt(io, o, more, right) → SameResponse(StatEvent(target, result), o) →
-            Cons(StatEvent(target, result), rest) = Cons(o, more) {
-        StatEvent(target2, result2) => λ ran response => {
-            let targets: (target = target2) = stat_targets_related(io, left, right, same, target, target2,
-                claimed.left.left, ran.left.left);
-            let resumes: StatResumes(io, right, target, result, LinuxRun(io, more)) =
-                j(sym(targets), λ t _ => StatResumes(io, right, t, result, LinuxRun(io, more)),
-                    j(sym(response), λ r _ => StatResumes(io, right, target2, r, LinuxRun(io, more)), ran.right));
-            let tail: (rest = more) = (match result as λ r => ClaimStatRest(io, rest, left, target, r) →
-                    StatResumes(io, right, target, r, LinuxRun(io, more)) → rest = more {
-                Stated(st) => λ c r => stat_resume(io, rest, more, left, right, same, target, st, BitVec::ofNat(0), tails,
-                    c.right, r),
-                StatFailed(errno) => λ c r => stat_resume(io, rest, more, left, right, same, target, r.witness,
-                    errno_word(errno), tails, λ rcx r11 => c.right(r.witness, r.proof.left, rcx, r11), r.proof.right),
-            })(claimed.right, resumes);
-            List::cons_eq(rest, more, StatEvent(target, result), StatEvent(target2, result2),
-                trans(cong_fn(λ (t: StatTarget) => StatEvent(t, result), targets),
-                    cong_fn(λ (r: StatResult) => StatEvent(target2, r), response)), tail)
+    claimed: LinuxResumes(io, left, c, a, LinuxRuns(io, rest)),
+    ran: LinuxResumed(io, right, c, a, LinuxRun(io, more))): rest = more {
+    let junk = ran.witness;
+    let rcx = ran.proof.right.witness;
+    let r11 = ran.proof.right.proof.witness;
+    tails(linux_answered(io, left, c, a, junk, rcx, r11), linux_answered(io, right, c, a, junk, rcx, r11),
+        linux_answered_respects<M>(io, c, a, junk, rcx, r11)(left, right, same),
+        claimed(junk, ran.proof.left, rcx, r11), ran.proof.right.proof.proof)
+}
+
+// The descriptor two related states name is one.
+theorem descriptors_related<M>(left, right: MachineState<M>, same: SameDefinedState<M>(left, right), fd, fd2: BitVec(64),
+    here: read_gpr(Rdi, left.gprs) = fd, there: read_gpr(Rdi, right.gprs) = fd2): fd = fd2 {
+    trans(sym(here), trans(register_related(Rdi, left, right, same), there))
+}
+
+// The call two related states ask is one call, and with the same answer one
+// event: the request is read off the registers and memory they share.
+theorem call_meets<M>(io: LinuxIo<M>, left, right: MachineState<M>, same: SameDefinedState<M>(left, right),
+    c: LinuxCmd<Nat>): (a: c.Resp()) → (d: LinuxCmd<Nat>) → (b: d.Resp()) →
+    LinuxAsks(io, left, c) → LinuxAsks(io, right, d) → SameAnswer(c, a, d, b) → CallEvent(c, a) = CallEvent(d, b) {
+    match c as λ x => (a: x.Resp()) → (d: LinuxCmd<Nat>) → (b: d.Resp()) →
+            LinuxAsks(io, left, x) → LinuxAsks(io, right, d) → SameAnswer(x, a, d, b) → CallEvent(x, a) = CallEvent(d, b) {
+        ReadCmd(fd, max) => λ (a: ReadResult) d => match d as λ y => (b: y.Resp()) →
+                LinuxAsks(io, left, ReadCmd(fd, max)) → LinuxAsks(io, right, y) → SameAnswer(ReadCmd(fd, max), a, y, b) →
+                CallEvent(ReadCmd(fd, max), a) = CallEvent(y, b) {
+            ReadCmd(fd2, max2) => λ (b: ReadResult) here there (answer: a = b) => {
+                let fds: (fd = fd2) = descriptors_related(left, right, same, fd, fd2, here.right.left, there.right.left);
+                let maxes: (max = max2) = trans(sym(here.right.right),
+                    trans(cong_fn(λ (word: BitVec(64)) => word.toNat(), register_related(Rdx, left, right, same)), there.right.right));
+                trans(cong_fn(λ (f: BitVec(64)) => CallEvent(ReadCmd(f, max), a), fds),
+                trans(cong_fn(λ (m: Nat) => CallEvent(ReadCmd(fd2, m), a), maxes),
+                    cong_fn(λ (r: ReadResult) => CallEvent(ReadCmd(fd2, max2), r), answer)))
+            },
+            WriteCmd(_, _) => λ _ _ _ never => false_elim(never),
+            OpenCmd(_) => λ _ _ _ never => false_elim(never),
+            CloseCmd(_) => λ _ _ _ never => false_elim(never),
+            StatCmd(_) => λ _ _ _ never => false_elim(never),
         },
-        ReadEvent(_, _) => λ _ never => false_elim(never),
-        WriteEvent(_, _, _) => λ _ never => false_elim(never),
+        WriteCmd(fd, bytes) => λ (a: WriteResult) d => match d as λ y => (b: y.Resp()) →
+                LinuxAsks(io, left, WriteCmd(fd, bytes)) → LinuxAsks(io, right, y) → SameAnswer(WriteCmd(fd, bytes), a, y, b) →
+                CallEvent(WriteCmd(fd, bytes), a) = CallEvent(y, b) {
+            WriteCmd(fd2, bytes2) => λ (b: WriteResult) here there (answer: a = b) => {
+                let fds: (fd = fd2) = descriptors_related(left, right, same, fd, fd2, here.right.left, there.right.left);
+                let length: (bytes.len() = bytes2.len()) = trans(sym(here.right.right.left),
+                    trans(cong_fn(λ (word: BitVec(64)) => word.toNat(), register_related(Rdx, left, right, same)),
+                        there.right.right.left));
+                let sends: LinuxWritesFrom(io, left.memory, read_gpr(Rsi, left.gprs), bytes2) =
+                    j(sym(register_related(Rsi, left, right, same)), λ buffer _ => LinuxWritesFrom(io, left.memory, buffer, bytes2),
+                        j(sym(SameDefinedState::memory(same)), λ memory _ => LinuxWritesFrom(io, memory, read_gpr(Rsi, right.gprs), bytes2),
+                            there.right.right.right));
+                let requests: (bytes = bytes2) = writes_from_unique(io, left.memory, read_gpr(Rsi, left.gprs), bytes, bytes2,
+                    length, here.right.right.right, sends);
+                trans(cong_fn(λ (f: BitVec(64)) => CallEvent(WriteCmd(f, bytes), a), fds),
+                trans(cong_fn(λ (sent: List<BitVec(8)>) => CallEvent(WriteCmd(fd2, sent), a), requests),
+                    cong_fn(λ (r: WriteResult) => CallEvent(WriteCmd(fd2, bytes2), r), answer)))
+            },
+            ReadCmd(_, _) => λ _ _ _ never => false_elim(never),
+            OpenCmd(_) => λ _ _ _ never => false_elim(never),
+            CloseCmd(_) => λ _ _ _ never => false_elim(never),
+            StatCmd(_) => λ _ _ _ never => false_elim(never),
+        },
+        OpenCmd(path) => λ (a: OpenResult) d => match d as λ y => (b: y.Resp()) →
+                LinuxAsks(io, left, OpenCmd(path)) → LinuxAsks(io, right, y) → SameAnswer(OpenCmd(path), a, y, b) →
+                CallEvent(OpenCmd(path), a) = CallEvent(y, b) {
+            OpenCmd(path2) => λ (b: OpenResult) here there (answer: a = b) => {
+                let paths: (path = path2) = paths_related(io, left, right, same, path, path2,
+                    here.right.right.right, there.right.right.right);
+                trans(cong_fn(λ (p: List<BitVec(8)>) => CallEvent(OpenCmd(p), a), paths),
+                    cong_fn(λ (r: OpenResult) => CallEvent(OpenCmd(path2), r), answer))
+            },
+            ReadCmd(_, _) => λ _ _ _ never => false_elim(never),
+            WriteCmd(_, _) => λ _ _ _ never => false_elim(never),
+            CloseCmd(_) => λ _ _ _ never => false_elim(never),
+            StatCmd(_) => λ _ _ _ never => false_elim(never),
+        },
+        CloseCmd(fd) => λ (a: CloseResult) d => match d as λ y => (b: y.Resp()) →
+                LinuxAsks(io, left, CloseCmd(fd)) → LinuxAsks(io, right, y) → SameAnswer(CloseCmd(fd), a, y, b) →
+                CallEvent(CloseCmd(fd), a) = CallEvent(y, b) {
+            CloseCmd(fd2) => λ (b: CloseResult) here there (answer: a = b) =>
+                trans(cong_fn(λ (f: BitVec(64)) => CallEvent(CloseCmd(f), a), descriptors_related(left, right, same, fd, fd2, here.right, there.right)),
+                    cong_fn(λ (r: CloseResult) => CallEvent(CloseCmd(fd2), r), answer)),
+            ReadCmd(_, _) => λ _ _ _ never => false_elim(never),
+            WriteCmd(_, _) => λ _ _ _ never => false_elim(never),
+            OpenCmd(_) => λ _ _ _ never => false_elim(never),
+            StatCmd(_) => λ _ _ _ never => false_elim(never),
+        },
+        StatCmd(target) => λ (a: StatResult) d => match d as λ y => (b: y.Resp()) →
+                LinuxAsks(io, left, StatCmd(target)) → LinuxAsks(io, right, y) → SameAnswer(StatCmd(target), a, y, b) →
+                CallEvent(StatCmd(target), a) = CallEvent(y, b) {
+            StatCmd(target2) => λ (b: StatResult) here there (answer: a = b) =>
+                trans(cong_fn(λ (t: StatTarget) => CallEvent(StatCmd(t), a),
+                        stat_targets_related(io, left, right, same, target, target2, here, there)),
+                    cong_fn(λ (r: StatResult) => CallEvent(StatCmd(target2), r), answer)),
+            ReadCmd(_, _) => λ _ _ _ never => false_elim(never),
+            WriteCmd(_, _) => λ _ _ _ never => false_elim(never),
+            OpenCmd(_) => λ _ _ _ never => false_elim(never),
+            CloseCmd(_) => λ _ _ _ never => false_elim(never),
+        },
+    }
+}
+
+// Each kind of event: the request is read off related states, the answer is
+// shared, and the rest of the run starts from related states.
+theorem call_determines<M>(io: LinuxIo<M>, c: LinuxCmd<Nat>, a: c.Resp(), rest, more: List<LinuxEvent>,
+    left, right: MachineState<M>, same: SameDefinedState<M>(left, right), tails: TailsAgree(io, rest, more),
+    claimed: ClaimAt(io, CallEvent(c, a), rest, left)): (other: LinuxEvent) → RunAt(io, other, more, right) →
+    SameResponse(CallEvent(c, a), other) → Cons(CallEvent(c, a), rest) = Cons(other, more) {
+    λ other => match other as λ o => RunAt(io, o, more, right) → SameResponse(CallEvent(c, a), o) →
+            Cons(CallEvent(c, a), rest) = Cons(o, more) {
+        CallEvent(d, b) => λ ran response => {
+            let events: (CallEvent(c, a) = CallEvent(d, b)) =
+                call_meets(io, left, right, same, c, a, d, b, claimed.left.left, ran.left, response);
+            let moved: RunAt(io, CallEvent(c, a), more, right) = j(sym(events), λ e _ => RunAt(io, e, more, right), ran);
+            List::cons_eq(rest, more, CallEvent(c, a), CallEvent(d, b), events,
+                call_resume(io, c, a, rest, more, left, right, same, tails, claimed.right.right, moved.right))
+        },
         ExitEvent(_) => λ _ never => false_elim(never),
-        OpenEvent(_, _) => λ _ never => false_elim(never),
-        CloseEvent(_, _) => λ _ never => false_elim(never),
+    }
+}
+
+theorem exit_determines<M>(io: LinuxIo<M>, status: BitVec(64), rest, more: List<LinuxEvent>,
+    left, right: MachineState<M>, same: SameDefinedState<M>(left, right),
+    claimed: ClaimAt(io, ExitEvent(status), rest, left)): (other: LinuxEvent) → RunAt(io, other, more, right) →
+    SameResponse(ExitEvent(status), other) → Cons(ExitEvent(status), rest) = Cons(other, more) {
+    λ other => match other as λ o => RunAt(io, o, more, right) → SameResponse(ExitEvent(status), o) →
+            Cons(ExitEvent(status), rest) = Cons(o, more) {
+        ExitEvent(status2) => λ ran _ =>
+            List::cons_eq(rest, more, ExitEvent(status), ExitEvent(status2),
+                cong_fn(λ (s: BitVec(64)) => ExitEvent(s),
+                    trans(sym(claimed.left.right), trans(register_related(Rdi, left, right, same), ran.left.right))),
+                trans(claimed.right, sym(ran.right))),
+        CallEvent(_, _) => λ _ never => false_elim(never),
     }
 }
 
@@ -563,16 +404,10 @@ theorem event_determines<M>(io: LinuxIo<M>, event, other: LinuxEvent, rest, more
     claimed: ClaimAt(io, event, rest, left), ran: RunAt(io, other, more, right), response: SameResponse(event, other)):
     Cons(event, rest) = Cons(other, more) {
     (match event as λ e => ClaimAt(io, e, rest, left) → SameResponse(e, other) → Cons(e, rest) = Cons(other, more) {
-        ReadEvent(fd, result) => λ c r => read_determines(io, fd, result, rest, more, left, right, same, tails, c, other, ran, r),
-        WriteEvent(fd, bytes, result) => λ c r =>
-            write_determines(io, fd, bytes, result, rest, more, left, right, same, tails, c, other, ran, r),
-        ExitEvent(status) => λ c r => exit_determines(io, status, rest, more, left, right, same, c, other, ran, r),
-        OpenEvent(path, result) => λ c r => open_determines(io, path, result, rest, more, left, right, same, tails, c, other, ran, r),
-        CloseEvent(fd, result) => λ c r => close_determines(io, fd, result, rest, more, left, right, same, tails, c, other, ran, r),
-        StatEvent(target, result) => λ c r => stat_determines(io, target, result, rest, more, left, right, same, tails, c, other, ran, r),
+        CallEvent(c, a) => λ cl r => call_determines(io, c, a, rest, more, left, right, same, tails, cl, other, ran, r),
+        ExitEvent(status) => λ cl r => exit_determines(io, status, rest, more, left, right, same, cl, other, ran, r),
     })(claimed, response)
 }
-
 // ---------------------------------------------------------------------------
 // The run is the run: from related states, a claimed run and any actual run
 // that got the same answers produced the same events.
@@ -599,40 +434,18 @@ theorem linux_runs_determine<M>(io: LinuxIo<M>, claim: List<LinuxEvent>): (run: 
     }
 }
 
+
 // A claimed run is a run: Linux may leave anything in RCX, R11 and a failed
-// read's buffer, the claim covers all of it, and zeros and an empty buffer
+// call's buffer, the claim covers all of it, and zeros and an empty buffer
 // are one choice. So the runs `linux_runs_every` speaks of exist.
 theorem claim_is_run_at<M>(io: LinuxIo<M>, event: LinuxEvent, rest: List<LinuxEvent>, at: MachineState<M>,
     claimed: ClaimAt(io, event, rest, at), next: (state: MachineState<M>) → LinuxRuns(io, rest, state) → LinuxRun(io, rest, state)):
     RunAt(io, event, rest, at) {
     let zero: BitVec(64) = BitVec::zero();
     (match event as λ e => ClaimAt(io, e, rest, at) → RunAt(io, e, rest, at) {
-        ReadEvent(fd, result) => λ c => ⟨c.left, ⟨c.right.left,
-            (match result as λ r => ClaimReadRest(io, rest, at, r) → ReadResumes(io, at, r, LinuxRun(io, rest)) {
-                ReadBytes(bytes) => λ k => Exists(zero, Exists(zero,
-                    next(linux_read_return(io, at, bytes, zero, zero), k.right.right(zero, zero)))),
-                ReadFailed(errno) => λ k => Exists(Nil<BitVec(8)>, ⟨trivial, Exists(zero, Exists(zero,
-                    next(linux_read_failed_return(io, at, errno, Nil, zero, zero), k.right.right(Nil, trivial, zero, zero))))⟩),
-            })(c.right.right)⟩⟩,
-        WriteEvent(fd, bytes, result) => λ c => ⟨c.left, ⟨c.right.left, ⟨c.right.right.left, ⟨c.right.right.right.left,
-            (match result as λ r => ClaimWriteRest(io, rest, at, bytes, r) → WriteResumes(at, r, LinuxRun(io, rest)) {
-                Wrote(count) => λ k => Exists(zero, Exists(zero,
-                    next(linux_write_return(at, bitvec_nat::word_of_nat(64, count), zero, zero), k.right(zero, zero)))),
-                WriteFailed(errno) => λ k => Exists(zero, Exists(zero,
-                    next(linux_write_return(at, errno_word(errno), zero, zero), k.right(zero, zero)))),
-            })(c.right.right.right.right)⟩⟩⟩⟩,
-        ExitEvent(status) => λ c => c,
-        OpenEvent(path, result) => λ c => ⟨c.left, Exists(zero, Exists(zero,
-            next(linux_write_return(at, open_rax(result), zero, zero), c.right.right(zero, zero))))⟩,
-        CloseEvent(fd, result) => λ c => ⟨c.left, ⟨c.right.left, Exists(zero, Exists(zero,
-            next(linux_write_return(at, close_rax(result), zero, zero), c.right.right.right(zero, zero))))⟩⟩,
-        StatEvent(target, result) => λ c => ⟨c.left,
-            (match result as λ r => ClaimStatRest(io, rest, at, target, r) → StatResumes(io, at, target, r, LinuxRun(io, rest)) {
-                Stated(st) => λ k => Exists(zero, Exists(zero,
-                    next(linux_stat_return(io, at, target, st, BitVec::ofNat(0), zero, zero), k.right(zero, zero)))),
-                StatFailed(errno) => λ k => Exists(Nil<BitVec(8)>, ⟨trivial, Exists(zero, Exists(zero,
-                    next(linux_stat_return(io, at, target, Nil, errno_word(errno), zero, zero), k.right(Nil, trivial, zero, zero))))⟩),
-            })(c.right)⟩,
+        CallEvent(c, a) => λ cl => ⟨cl.left.left, Exists(Nil<BitVec(8)>, ⟨linux_leaves_nil(c, a), Exists(zero, Exists(zero,
+            next(linux_answered(io, at, c, a, Nil, zero, zero), cl.right.right(Nil, linux_leaves_nil(c, a), zero, zero))))⟩)⟩,
+        ExitEvent(_) => λ cl => cl,
     })(claimed)
 }
 

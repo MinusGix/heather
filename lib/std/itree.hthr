@@ -101,6 +101,25 @@ fn ITree::translate<R>(E: Events, F: Events, m: EventMap(E, F), t: ITree<R>(E)) 
     }
 }
 
+// What a tree does next, its silent steps stripped: return, issue a
+// command, or stop at a cut. A finite tree has finitely many `Tau`s in a
+// row, so this is structural; a logic reads a tree one `next` at a time,
+// never a deep bind chain at once (docs/native-program-logic-design.md §4).
+inductive Next<R>(E: Events) {
+    Exits(r: R),
+    Calls(c: E.Cmd, k: E.Resp(c) → ITree<R>(E)),
+    Stops,
+}
+
+fn ITree::next<R>(E: Events, t: ITree<R>(E)) → Next<R>(E) {
+    match t {
+        Ret(r) => Exits(r),
+        Tau(s) => ITree::next(E, s),
+        Vis(c, k) => Calls(c, k),
+        Cut => Stops,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Loops, cut at fuel
 

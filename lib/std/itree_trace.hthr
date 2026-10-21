@@ -31,6 +31,25 @@ inductive Trace<R>(E: Events) {
     TAns(c: E.Cmd, a: E.Resp(c), rest: Trace<R>(E)),
 }
 
+// A trace that ends at the return: a whole interaction, not a prefix of one.
+fn Trace::Returns<R>(E: Events, tr: Trace<R>(E)) → Type {
+    match tr { TEnd => False, TRet(_) => True, TCall(_) => False, TAns(_, _, rest) => Trace::Returns(E, rest) }
+}
+
+// …and one that returns `r`.
+fn Trace::ReturnsWith<R>(E: Events, tr: Trace<R>(E), r: R) → Type {
+    match tr { TEnd => False, TRet(x) => x = r, TCall(_) => False, TAns(_, _, rest) => Trace::ReturnsWith(E, rest, r) }
+}
+
+theorem Trace::returns_of_with<R>(E: Events, tr: Trace<R>(E), r: R): Trace::ReturnsWith(E, tr, r) → Trace::Returns(E, tr) {
+    match tr {
+        TEnd => λ never => never,
+        TRet(_) => λ _ => trivial,
+        TCall(_) => λ never => never,
+        TAns(_, _, rest) => λ returns => Trace::returns_of_with(E, rest, r, returns),
+    }
+}
+
 // What a `Vis(c, k)` produces: the empty prefix, the call still pending, or
 // an answer to `c` and a trace of the continuation at it. The command is the
 // tree's own, so no answer is transported between response types.

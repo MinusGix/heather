@@ -17,8 +17,8 @@ fn claimed_runs_are_every_run() {
 // immediate, looks for SYSCALL at another opcode, or reads a byte store's
 // opcode as the word store's, or misses the word load's opcode, is not
 // complete on the forms; a run in which a failed read or stat may leave more
-// junk than it asked for, or whose answers are compared by kind alone, is not
-// the claimed run.
+// junk than Linux may (`LinuxLeaves`), or whose answers are compared by kind
+// alone, is not the claimed run.
 #[test]
 fn determinism_refusals() {
     let library = checker().semantic_image();
@@ -37,10 +37,9 @@ fn determinism_refusals() {
     }
     let forms = checker_with(&[("x86_64_step_forms", FORMS)]).semantic_image();
     for (name, from, to) in [
-        ("junk_unbounded", "(junk.len() <= read_gpr(Rdx, at.gprs).toNat()) ∧\n", "True ∧\n"),
-        ("answers_by_kind", "ReadEvent(_, other) => result = other,", "ReadEvent(_, other) => True,"),
-        ("stat_answers_by_kind", "StatEvent(_, other) => result = other,", "StatEvent(_, other) => True,"),
-        ("stat_junk_unbounded", "(junk.len() <= stat_length()) ∧\n", "True ∧\n"),
+        ("junk_unbounded", "Exists<List<BitVec(8)>>(λ junk => LinuxLeaves(c, a, junk) ∧", "Exists<List<BitVec(8)>>(λ junk => True ∧"),
+        ("answers_by_kind", "ReadCmd(_, _) => λ (other: ReadResult) => result = other,", "ReadCmd(_, _) => λ (other: ReadResult) => True,"),
+        ("stat_answers_by_kind", "StatCmd(_) => λ (other: StatResult) => result = other,", "StatCmd(_) => λ (other: StatResult) => True,"),
     ] {
         let bad = DETERMINISM.replacen(from, to, 1);
         assert_ne!(bad, DETERMINISM, "{name}");
