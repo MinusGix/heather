@@ -8,10 +8,10 @@
 //! `tests/generic_delimiter_roles.rs`, which requires the derived closers to
 //! be exactly the file's `Gt` tokens over the whole repository corpus.
 //!
-//! `<` is the first token whose role its kind does not determine, and will not
-//! be the last: infix subtraction would make `a - b` vs `-b` the second
-//! (issues/infix-subtraction-notation.md). Hence [`TokenRole`] rather than a
-//! `<`-shaped answer.
+//! `<` is the first token whose role its kind does not determine, and not the
+//! last: infix subtraction makes `a - b` vs `-b` the second
+//! (issues/infix-subtraction-notation.md), read off the same walk. Hence
+//! [`TokenRole`] rather than a `<`-shaped answer.
 
 use crate::ast::*;
 use crate::lexer::{Tok, TokKind};
@@ -28,15 +28,22 @@ pub enum TokenRole {
     /// `designation prefix - at Int := neg`. It has no operands, so none of
     /// the spacing rules about operands apply to it.
     OperatorName,
+    /// A `-` standing between two operands: subtraction, spaced like `+`,
+    /// rather than a prefix negation hugging the operand after it.
+    InfixMinus,
 }
 
 /// Every token in `file` whose role its [`TokKind`] does not determine, keyed
 /// by byte offset.
 pub fn token_roles(toks: &[Tok], file: &File) -> std::collections::HashMap<usize, TokenRole> {
     let mut map = std::collections::HashMap::new();
-    for (_, d) in argument_lists(toks, file).lists {
+    let w = walk(toks, file);
+    for (_, d) in w.sites {
         map.insert(d.open, TokenRole::ArgumentDelimiter);
         map.insert(d.close, TokenRole::ArgumentDelimiter);
+    }
+    for at in w.infix_minus {
+        map.insert(at, TokenRole::InfixMinus);
     }
     for it in &file.items {
         let Item::Designation(d) = it else { continue };
@@ -71,11 +78,16 @@ pub struct ArgumentLists {
 
 /// Derive every argument list in `file`, whose source lexed to `toks`.
 pub fn argument_lists(toks: &[Tok], file: &File) -> ArgumentLists {
-    let mut w = Walk { toks, sites: Vec::new(), unlocated: Vec::new() };
+    let w = walk(toks, file);
+    ArgumentLists { lists: w.sites, undelimited: w.unlocated }
+}
+
+fn walk<'a>(toks: &'a [Tok], file: &File) -> Walk<'a> {
+    let mut w = Walk { toks, sites: Vec::new(), unlocated: Vec::new(), infix_minus: Vec::new() };
     for it in &file.items {
         w.item(it);
     }
-    ArgumentLists { lists: w.sites, undelimited: w.unlocated }
+    w
 }
 
 /// One derived argument list: the byte offsets of its `<` and `>`.
@@ -98,6 +110,8 @@ struct Walk<'a> {
     /// list the author never wrote. A formatter must tolerate these rather
     /// than assume every argument-bearing node has delimiters.
     unlocated: Vec<(&'static str, Span)>,
+    /// Byte offset of each `-` that subtracts rather than negates.
+    infix_minus: Vec<usize>,
 }
 
 impl<'a> Walk<'a> {
@@ -128,6 +142,19 @@ impl<'a> Walk<'a> {
             .iter()
             .find(|t| matches!(t.kind, TokKind::Gt) && t.span.start >= from)
             .map(|t| t.span.start)
+    }
+
+    /// The operator of `l - r`. The head's span is the whole application, so
+    /// the token is found between the operands: the **first** `Minus` after
+    /// `l`, since only closing parentheses can precede it there, while a
+    /// parenthesised `r` may open with a negation of its own (`a - (-b)`).
+    fn minus_between(&mut self, l: Span, r: Span) {
+        let at = self.toks.iter().find(|t| {
+            matches!(t.kind, TokKind::Minus) && t.span.start >= l.end && t.span.start < r.start
+        });
+        if let Some(t) = at {
+            self.infix_minus.push(t.span.start);
+        }
     }
 
     /// An argument list whose arguments carry spans: `Name<A, B>` in any
@@ -257,6 +284,13 @@ impl<'a> Walk<'a> {
                 }
             }
             ExprKind::App { head, args, named, .. } => {
+                if let (ExprKind::OpSymbol { symbol, fixity: OpFixity::Infix }, [l, r]) =
+                    (&head.kind, args.as_slice())
+                {
+                    if symbol == "-" {
+                        self.minus_between(l.span, r.span);
+                    }
+                }
                 self.expr(head);
                 for a in args {
                     self.expr(a);

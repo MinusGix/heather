@@ -156,6 +156,32 @@ fn prefix_negation_is_written_tight() {
     check("fn f(b: Bool) -> Bool { ! b }", "fn f(b: Bool) -> Bool { !b }");
 }
 
+/// `-` is both: subtraction where the parse puts it between two operands,
+/// negation where it opens one. The two lex identically, so only the role
+/// table can tell `d - 8` from `-8` (issues/fmt-infix-minus-tight.md).
+#[test]
+fn infix_minus_is_spaced_and_prefix_minus_tight() {
+    check("fn f(d: Int) -> Int { d -8 }", "fn f(d: Int) -> Int { d - 8 }");
+    check("fn f(d: Int) -> Int { d-8 }", "fn f(d: Int) -> Int { d - 8 }");
+    check("fn f(d: Int) -> Int { - d }", "fn f(d: Int) -> Int { -d }");
+    check("fn f(a, b: Int) -> Int { - a -  - b }", "fn f(a, b: Int) -> Int { -a -  -b }");
+    check("fn f(a, b: Int) -> Int { (a) -(- b) }", "fn f(a, b: Int) -> Int { (a) - (-b) }");
+    check("fn f(a, b, c: Int) -> Int { a+b -c }", "fn f(a, b, c: Int) -> Int { a + b - c }");
+    check("fn f(x: Rat) -> Rat { (x -y).abs() }", "fn f(x: Rat) -> Rat { (x - y).abs() }");
+    check("fn f(a: Int) -> Int { g(a) -h(-a, 1) }", "fn f(a: Int) -> Int { g(a) - h(-a, 1) }");
+    check("theorem t(n: Nat): n -0 = n { p }", "theorem t(n: Nat): n - 0 = n { p }");
+    check("fn f(i: Nat) -> Vec<Nat, i -1> { v }", "fn f(i: Nat) -> Vec<Nat, i - 1> { v }");
+}
+
+/// Without a parse a `-` has no role, and neither reading is guessed at.
+#[test]
+fn minus_is_left_alone_without_a_parse() {
+    for src in ["fn f(a,b) -> { a -b ???\n", "fn f(a,b) -> { a - b ???\n", "fn f(a,b) -> { - b ???\n"] {
+        let out = format_source(src);
+        assert_eq!(out.trim_end(), src.trim_end().replacen("a,b", "a, b", 1), "guessed at `-`: {out:?}");
+    }
+}
+
 #[test]
 fn boolean_reflection_delimiters_are_written_tight() {
     check("theorem t(b: Bool): ⟦ b ⟧ { p }", "theorem t(b: Bool): ⟦b⟧ { p }");

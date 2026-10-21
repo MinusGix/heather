@@ -33,3 +33,4 @@ continuing to recognize prefix `-` and `->` unambiguously.
 - 2026-10-12: The `designation - at Int` / `at Nat` half is in the library, but the formatter still writes every `-` as a tight prefix, so binary subtraction is checked in as `a -b` (`lib/std/int.hthr`, and `lib/std/ring.hthr` from the ring round, which `repository_sources_are_formatted` rejected spelt `a - b`). The 2026-09-16 entry's AST disambiguation is the fix; one reformat of `lib/` follows it.
 - 2026-10-14: `Rat` now designates binary `-` too ([[rational-order-completion]]), and its distance laws (`abs_sub_comm`, `dist_triangle`, the showcase's `two_halves_close`) are checked in as `(x -y).abs()`.
 - 2026-10-21: The formatter still treats `-` as prefix-only and writes infix subtraction tight; [[fmt-infix-minus-tight]].
+- 2026-10-21: [[fmt-infix-minus-tight]] closed: the formatter spaces binary `-` from the parse and the library is reformatted, so subtraction reads `a - b` again.
