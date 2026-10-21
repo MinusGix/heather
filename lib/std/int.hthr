@@ -9,19 +9,19 @@ inductive Int { OfNat(n: Nat), NegSucc(n: Nat) }
 // They remain explicit where the surrounding chain does not determine the
 // one-place context (issues/congruence-by-anti-unification.md).
 theorem Int::cong(f: Int → Int, {a, b: Int}, p: a = b): f(a) = f(b) {
-    j(p, λ y q => f(a) = f(y), refl)
+    rewrite(p, refl)
 }
 
 theorem Int::cong_of(f: Nat → Int, {a, b: Nat}, p: a = b): f(a) = f(b) {
-    j(p, λ y q => f(a) = f(y), refl)
+    rewrite(p, refl)
 }
 
 theorem Int::cong_ofnat({a, b: Nat}, p: a = b): OfNat(a) = OfNat(b) {
-    j(p, λ y q => OfNat(a) = OfNat(y), refl)
+    rewrite(p, refl)
 }
 
 theorem Int::cong_negsucc({a, b: Nat}, p: a = b): NegSucc(a) = NegSucc(b) {
-    j(p, λ y q => NegSucc(a) = NegSucc(y), refl)
+    rewrite(p, refl)
 }
 
 // ---------------------------------------------------------------------------
@@ -966,7 +966,7 @@ theorem Int::le_of_not_lt(self a, b: Int, h: ¬(a < b)): b <= a {
     match a.lt_trichotomy(b) {
         Inl(forward) => false_elim(h(forward)),
         Inr(rest) => match rest {
-            Inl(eq) => j(eq, λ y q => y <= a, a.le_refl()),
+            Inl(eq) => rewrite(sym(eq), a.le_refl()),
             Inr(back) => b.le_of_lt(a, back),
         },
     }
@@ -976,7 +976,7 @@ theorem Int::lt_of_not_le(self a, b: Int, h: ¬(b <= a)): a < b {
     match a.lt_trichotomy(b) {
         Inl(forward) => forward,
         Inr(rest) => match rest {
-            Inl(eq) => false_elim(h(j(eq, λ y q => y <= a, a.le_refl()))),
+            Inl(eq) => false_elim(h(rewrite(sym(eq), a.le_refl()))),
             Inr(back) => false_elim(h(b.le_of_lt(a, back))),
         },
     }
@@ -1061,23 +1061,22 @@ theorem Int::le_ipred(self a: Int): (b: Int) → a <= b → a.ipred() <= b.ipred
 theorem Int::add_le_mono_r(self a, b, c: Int, h: a <= b): a + c <= b + c {
     Int::ind(λ (z: Int) => a + z <= b + z,
         j(sym(a.add_zero()), λ y q => y <= b + OfNat(0),
-          j(sym(b.add_zero()), λ y q => a <= y, h)),
+          rewrite(b.add_zero(), h)),
         λ (k: Nat) (ih: a + OfNat(k) <= b + OfNat(k)) =>
             j(sym(a.add_isucc(OfNat(k))), λ y q => y <= b + OfNat(Succ(k)),
-              j(sym(b.add_isucc(OfNat(k))), λ y q => (a + OfNat(k)).isucc() <= y,
+              rewrite(b.add_isucc(OfNat(k)),
               (a + OfNat(k)).le_isucc(b + OfNat(k), ih))),
         j(sym(a.add_neg_one()), λ y q => y <= b + NegSucc(0),
-          j(sym(b.add_neg_one()), λ y q => a.ipred() <= y, a.le_ipred(b, h))),
+          rewrite(b.add_neg_one(), a.le_ipred(b, h))),
         λ (k: Nat) (ih: a + NegSucc(k) <= b + NegSucc(k)) =>
             j(sym(a.add_ipred(NegSucc(k))), λ y q => y <= b + NegSucc(Succ(k)),
-              j(sym(b.add_ipred(Int::NegSucc(k))), λ y q => (a + NegSucc(k)).ipred() <= y,
+              rewrite(b.add_ipred(Int::NegSucc(k)),
                 (a + NegSucc(k)).le_ipred(b + NegSucc(k), ih))),
         c)
 }
 
 theorem Int::add_le_mono_l(self a, b, c: Int, h: a <= b): c + a <= c + b {
-    j(a.add_comm(c), λ y q => y <= c + b,
-      j(b.add_comm(c), λ y q => a + c <= y, a.add_le_mono_r(b, c, h)))
+    rewrite(c.add_comm(a), c.add_comm(b), a.add_le_mono_r(b, c, h))
 }
 
 theorem Int::add_le_mono(self a, b, c, d: Int, h1: a <= b, h2: c <= d): a + c <= b + d {
@@ -1090,17 +1089,13 @@ theorem Int::mul_le_mono_r(self a, b, k: Int, h: a <= b, hk: OfNat(0) <= k): a *
     Int::ind(
         λ (z: Int) => OfNat(0) <= z → a <= b → a * z <= b * z,
         λ hz hab =>
-            j(sym(a.mul_zero()), λ left q => left <= b * OfNat(0),
-            j(sym(b.mul_zero()), λ right q => OfNat(0) <= right, OfNat(0).le_refl())),
+            rewrite(a.mul_zero(), b.mul_zero(), OfNat(0).le_refl()),
         λ (n: Nat)
           (ih: OfNat(0) <= OfNat(n) → a <= b → a * OfNat(n) <= b * OfNat(n))
           hz hab =>
-            j(sym(a.mul_ofnat_succ(n)),
-              λ left q => left <= b * OfNat(Succ(n)),
-              j(sym(b.mul_ofnat_succ(n)),
-                λ right q => a * OfNat(n) + a <= right,
+            rewrite(a.mul_ofnat_succ(n), b.mul_ofnat_succ(n),
                 (a * OfNat(n)).add_le_mono(b * OfNat(n), a, b,
-                    ih(trivial, hab), hab))),
+                    ih(trivial, hab), hab)),
         λ hz hab => false_elim(hz),
         λ (n: Nat)
           (ih: OfNat(0) <= NegSucc(n) → a <= b → a * NegSucc(n) <= b * NegSucc(n))
@@ -1109,9 +1104,8 @@ theorem Int::mul_le_mono_r(self a, b, k: Int, h: a <= b, hk: OfNat(0) <= k): a *
 }
 
 theorem Int::mul_le_mono_l(self a, b, k: Int, h: a <= b, hk: OfNat(0) <= k): k * a <= k * b {
-    j(a.mul_comm(k), λ left q => left <= k * b,
-      j(b.mul_comm(k), λ right q => a * k <= right,
-        a.mul_le_mono_r(b, k, h, hk)))
+    rewrite(k.mul_comm(a), k.mul_comm(b),
+        a.mul_le_mono_r(b, k, h, hk))
 }
 
 // a < b scaled by a positive k: (a + 1)·k ≤ b·k, and (a + 1)·k is a·k + k,
@@ -1125,7 +1119,7 @@ theorem Int::mul_lt_mono_r(self a, b, k: Int, h: a < b, hk: OfNat(0) < k): a * k
             = a.isucc() * k := k.mul_comm(a.isucc()),
     };
     let step = j((a * k).add_one(), λ left q => left <= a * k + k, OfNat(1).add_le_mono_l(k, a * k, hk));
-    (a * k).isucc().le_trans(a.isucc() * k, b * k, j(expand, λ right q => (a * k).isucc() <= right, step), grown)
+    (a * k).isucc().le_trans(a.isucc() * k, b * k, rewrite(sym(expand), step), grown)
 }
 
 theorem Int::le_neg(self a: Int): (b: Int) → a <= b → -b <= -a {
@@ -1629,10 +1623,7 @@ theorem Int::negate_divmod_bounds(positive_divisor: Int, state: DivMod,
     {
         MkIntDivMod(_, _) => λ bounds => And(
             bounds.left,
-            j(sym(same_abs),
-              λ y p => match state as λ z => Type {
-                  MkIntDivMod(_, remainder) => remainder < y,
-              },
+            rewrite(same_abs,
               bounds.right)),
     }(h)
 }
@@ -1717,19 +1708,19 @@ theorem Int::mul_le_cancel_pos_r(self a, b: Int, p: Pos<Int>, h: a * p <= b * p)
 // factor's sign, and the other factor has the product's.
 
 theorem Int::mul_pos(self a: Int, p: Pos<Int>, ha: OfNat(0) < a): OfNat(0) < a * p {
-    j(p.zero_mul(), λ left q => left < a * p, OfNat(0).mul_lt_mono_r(a, p, ha, p_pos))
+    rewrite(sym(p.zero_mul()), OfNat(0).mul_lt_mono_r(a, p, ha, p_pos))
 }
 
 theorem Int::mul_neg(self a: Int, p: Pos<Int>, ha: a < OfNat(0)): a * p < OfNat(0) {
-    j(p.zero_mul(), λ right q => a * p < right, a.mul_lt_mono_r(OfNat(0), p, ha, p_pos))
+    rewrite(sym(p.zero_mul()), a.mul_lt_mono_r(OfNat(0), p, ha, p_pos))
 }
 
 theorem Int::pos_of_mul_pos(self a: Int, p: Pos<Int>, h: OfNat(0) < a * p): OfNat(0) < a {
     OfNat(0).lt_of_not_le(a, λ le => (a * p).not_lt_of_ge(OfNat(0),
-        j(p.zero_mul(), λ right q => a * p <= right, a.mul_le_mono_r(OfNat(0), p, le, OfNat(0).le_of_lt(p, p_pos))))(h))
+        rewrite(sym(p.zero_mul()), a.mul_le_mono_r(OfNat(0), p, le, OfNat(0).le_of_lt(p, p_pos))))(h))
 }
 
 theorem Int::neg_of_mul_neg(self a: Int, p: Pos<Int>, h: a * p < OfNat(0)): a < OfNat(0) {
     a.lt_of_not_le(OfNat(0), λ le => OfNat(0).not_lt_of_ge(a * p,
-        j(p.zero_mul(), λ left q => left <= a * p, OfNat(0).mul_le_mono_r(a, p, le, OfNat(0).le_of_lt(p, p_pos))))(h))
+        rewrite(sym(p.zero_mul()), OfNat(0).mul_le_mono_r(a, p, le, OfNat(0).le_of_lt(p, p_pos))))(h))
 }

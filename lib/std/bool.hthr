@@ -258,7 +258,7 @@ fn Bool::is_true_dec(self b: Bool) → b.IsTrue() ∨ ¬b.IsTrue() {
 instance(b: Bool) Decide<Bool::IsTrue(b)> {
     dec := b.is_true_dec(),
     bit := b,
-    reflects := And(λ e => j(sym(e), λ z _ => z.IsTrue(), trivial), λ e => j(sym(e), λ z _ => ¬z.IsTrue(), λ (u: False) => u)),
+    reflects := And(λ e => rewrite(e, trivial), λ e => rewrite(e, λ (u: False) => u)),
 }
 
 // The two rewrites a consumer of a reflected guard needs: a proved guard IS

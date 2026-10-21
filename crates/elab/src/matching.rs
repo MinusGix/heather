@@ -557,7 +557,7 @@ fn abstract_stuck(
     exposed.abstract_local_any(&hits)
 }
 
-fn expose(elab: &impl MotiveSynthesisElab, cx: &Cx, ty: &Type, span: Span) -> Option<Type> {
+pub(crate) fn expose(elab: &impl MotiveSynthesisElab, cx: &Cx, ty: &Type, span: Span) -> Option<Type> {
     match elab.read_motive_type(cx, ty, span)? {
         Type::Id {
             level,

@@ -17,7 +17,7 @@ fn Nat::add(self a: Nat, b: Nat) → Nat { match b { Zero => a, Succ(k) => Succ(
 designation + at Nat := Nat::add
 
 theorem Nat::cong(f: Nat → Nat, {a, b: Nat}, p: a = b): f(a) = f(b) {
-    j(p, λ y q => f(a) = f(y), refl)
+    rewrite(p, refl)
 }
 
 theorem Nat::add_left_zero(self x: Nat): 0 + x = x {
@@ -376,15 +376,13 @@ theorem Nat::le_of_succ_succ(self n, m: Nat, h: Succ(n) <= Succ(m)): n <= m { h 
 theorem Nat::le_congr_iff(a, b, c, d: Nat, left: a = b, right: c = d):
     (a <= c) ↔ (b <= d)
 {
-    j(left, λ y p => (a <= c) ↔ (y <= d),
-      j(right, λ z q => (a <= c) ↔ (a <= z), iff_refl()))
+    rewrite(sym(left), sym(right), iff_refl())
 }
 
 theorem Nat::lt_congr_iff(a, b, c, d: Nat, left: a = b, right: c = d):
     (a < c) ↔ (b < d)
 {
-    j(left, λ y p => (a < c) ↔ (y < d),
-      j(right, λ z q => (a < c) ↔ (a < z), iff_refl()))
+    rewrite(sym(left), sym(right), iff_refl())
 }
 
 theorem Nat::le_succ_r(self n, m: Nat): n <= m → n <= Succ(m) {
@@ -836,7 +834,7 @@ theorem Nat::le_iff_exists_add(self n, m: Nat): n <= m ↔ ∃ k: Nat, n + k = m
     Iff(
         mp := λ (h: n <= m) => Exists(m -n, n.le_add(m, h)),
         mpr := λ (h: ∃ k: Nat, n + k = m) =>
-            j(h.proof, λ y q => n <= y, n.le_add_l(h.witness)),
+            rewrite(sym(h.proof), n.le_add_l(h.witness)),
     )
 }
 
@@ -890,8 +888,7 @@ theorem Nat::add_le_mono_r(self k: Nat): (n: Nat) → (m: Nat) → n <= m → n 
 }
 
 theorem Nat::add_le_mono_l(self k, n, m: Nat, h: n <= m): k + n <= k + m {
-    j(n.add_comm(k), λ y q => y <= k + m,
-      j(m.add_comm(k), λ y q => n + k <= y, k.add_le_mono_r(n, m, h)))
+    rewrite(k.add_comm(n), k.add_comm(m), k.add_le_mono_r(n, m, h))
 }
 
 theorem Nat::add_le_mono(self a, b, c, d: Nat, h1: a <= b, h2: c <= d): a + c <= b + d {
@@ -908,8 +905,7 @@ theorem Nat::le_of_add_le_add_r(self k: Nat): (n: Nat) → (m: Nat) → n + k <=
 
 theorem Nat::le_of_add_le_add_l(self k, n, m: Nat, h: k + n <= k + m): n <= m {
     k.le_of_add_le_add_r(n, m,
-        j(k.add_comm(n), λ y q => y <= m + k,
-          j(k.add_comm(m), λ y q => k + n <= y, h)))
+        rewrite(n.add_comm(k), m.add_comm(k), h))
 }
 
 theorem Nat::mul_le_mono_r(self k: Nat): (n: Nat) → (m: Nat) → n <= m → n * k <= m * k {
@@ -921,8 +917,7 @@ theorem Nat::mul_le_mono_r(self k: Nat): (n: Nat) → (m: Nat) → n <= m → n 
 }
 
 theorem Nat::mul_le_mono_l(self k, n, m: Nat, h: n <= m): k * n <= k * m {
-    j(n.mul_comm(k), λ y q => y <= k * m,
-      j(m.mul_comm(k), λ y q => n * k <= y, k.mul_le_mono_r(n, m, h)))
+    rewrite(k.mul_comm(n), k.mul_comm(m), k.mul_le_mono_r(n, m, h))
 }
 
 theorem Nat::mul_le_mono(self a, b, c, d: Nat, h1: a <= b, h2: c <= d): a * c <= b * d {
@@ -936,8 +931,7 @@ theorem Nat::mul_le_mono(self a, b, c, d: Nat, h1: a <= b, h2: c <= d): a * c <=
 // group closes every recursive call's scaled obligation with one of these.
 theorem Nat::scaled_lt(self a, b, r, s, n: Nat, h: a < b, q: r < n): a * n + r < b * n + s {
     Succ(a * n + r).le_trans(Succ(a) * n, b * n + s,
-        j(trans((a * n).add_comm(n), sym(a.mul_succ_left(n))),
-          λ y p => Succ(a * n + r) <= y, (a * n).add_le_mono_l(Succ(r), n, q)),
+        rewrite(a.mul_succ_left(n), n.add_comm(a * n), (a * n).add_le_mono_l(Succ(r), n, q)),
         (Succ(a) * n).le_trans(b * n, b * n + s,
             n.mul_le_mono_r(Succ(a), b, h), (b * n).le_add_l(s)))
 }
@@ -966,8 +960,8 @@ theorem Nat::add_mul_distr(self a, b, c: Nat): (a + b) * c = a * c + b * c {
 
 theorem Nat::add_left_cancel(self k, n, m: Nat, h: k + n = k + m): n = m {
     n.le_antisym(m,
-        k.le_of_add_le_add_l(n, m, j(h, λ y _ => k + n <= y, (k + n).le_refl())),
-        k.le_of_add_le_add_l(m, n, j(h, λ y _ => y <= k + n, (k + n).le_refl())))
+        k.le_of_add_le_add_l(n, m, rewrite(sym(h), (k + n).le_refl())),
+        k.le_of_add_le_add_l(m, n, rewrite(sym(h), (k + n).le_refl())))
 }
 
 // A quotient and remainder that rebuild `n`, with the remainder below the
@@ -1013,8 +1007,8 @@ theorem Nat::div_lt_of_lt_mul(self n, d, k: Nat, h: n < d * k): n.div(d) < k {
     match k.le_dec(n.div(d)) {
         Inl(enough) => false_elim(n.lt_irrefl(Succ(n).le_trans(d * k, n, h,
             (d * k).le_trans(n.div(d) * d, n,
-                j(d.mul_comm(n.div(d)), λ y _ => d * k <= y, d.mul_le_mono_l(k, n.div(d), enough)),
-                j(n.div_mul_add_mod(d), λ y _ => n.div(d) * d <= y, (n.div(d) * d).le_add_l(n.mod(d))))))),
+                rewrite(n.div(d).mul_comm(d), d.mul_le_mono_l(k, n.div(d), enough)),
+                rewrite(sym(n.div_mul_add_mod(d)), (n.div(d) * d).le_add_l(n.mod(d)), at := 2))))),
         Inr(short) => n.div(d).lt_of_not_le(k, short),
     }
 }
@@ -1025,7 +1019,7 @@ theorem Nat::le_div_of_mul_le(self n: Nat, d: Pos<Nat>, k: Nat, h: d * k <= n): 
         Inl(fits) => fits,
         Inr(short) => false_elim(n.lt_irrefl(Succ(n).le_trans(d * Succ(n.div(d)), n,
             j(n.div_mul_add_mod(d), λ y _ => Succ(y) <= d * n.div(d) + d,
-                j(n.div(d).mul_comm(d), λ y _ => Succ(n.div(d) * d + n.mod(d)) <= y + d,
+                rewrite(sym(n.div(d).mul_comm(d)),
                     (n.div(d) * d).add_le_mono_l(Succ(n.mod(d)), d, n.mod_lt(d)))),
             (d * Succ(n.div(d))).le_trans(d * k, n, d.mul_le_mono_l(Succ(n.div(d)), k, n.div(d).lt_of_not_le(k, short)), h)))),
     }
@@ -1307,8 +1301,7 @@ evidence theorem Nat::add_pos_r({a, b: Nat}, pb: 0 < b := infer): 0 < a + b {
 evidence theorem Nat::pow_pos({a, n: Nat}, pa: 0 < a := infer): 0 < a.pow(n) { a.one_le_pow(n, pa) }
 
 theorem Nat::fact_le_succ(self n: Nat): n.fact() <= Succ(n).fact() {
-    j(n.fact().mul_left_one(), λ y q => y <= Succ(n) * n.fact(),
-      n.fact().mul_le_mono_r(1, Succ(n), trivial))
+    rewrite(sym(n.fact().mul_left_one()), n.fact().mul_le_mono_r(1, Succ(n), trivial))
 }
 
 // ---------------------------------------------------------------------------

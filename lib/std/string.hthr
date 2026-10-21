@@ -46,7 +46,7 @@ theorem chars_injective(s, t: String, p: s.chars = t.chars): s = t {
 }
 
 theorem cong_chars(s, t: String, p: s = t): s.chars = t.chars {
-    j(p, λ y q => s.chars = y.chars, refl)
+    rewrite(p, refl)
 }
 
 theorem take_drop(s: String, n: Nat): s.take(n) ++ s.drop(n) = s {
