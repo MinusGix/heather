@@ -1937,7 +1937,7 @@ theorem BitVec::drop_low_zero_of_lt(n: Nat): (m: Nat) → (x: BitVec(m + n)) →
         Succ(k, ih) => λ m x h => {
             let tail = (x.tail_bits()).toNat();
             let p = Nat::pow(2, k);
-            let under = j(BitVec::pow_two_succ_twice(k), λ y _ => x.toNat() < y, h);
+            let under = rewrite(BitVec::pow_two_succ_twice(k), in := h);
             let twice = Succ(Nat::twice(tail)).le_trans(Succ(Nat::of_bit(x.head_bit()) + Nat::twice(tail)), Nat::twice(p),
                 Nat::le_add_r(Nat::of_bit(x.head_bit()), Nat::twice(tail)), under);
             ih(m, x.tail_bits(), Nat::twice_lt_twice_iff(tail, p).mp(twice))

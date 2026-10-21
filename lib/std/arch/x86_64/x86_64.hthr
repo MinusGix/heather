@@ -2272,7 +2272,7 @@ theorem zero_bits_sub_self(n: Nat, a: BitVec(n)): is_zero_bits(n, a.sub(a)) = Tr
     let spec: (a.sub(a) = a.iterate_decrement(v)) = BitVec::sub_bits_spec(n, a, a, False);
     let back: ((BitVec::zero(n := n).iterate_increment(v)).iterate_decrement(v) = BitVec::zero()) = BitVec::iterate_add_sub_cancel(n, v, BitVec::zero());
     let from: (BitVec::zero(n := n).iterate_increment(v) = a) = BitVec::iterate_increment_toNat(n, a);
-    let at_a: (a.iterate_decrement(v) = BitVec::zero()) = j(from, λ y _ => y.iterate_decrement(v) = BitVec::zero(), back);
+    let at_a: (a.iterate_decrement(v) = BitVec::zero()) = rewrite(from, in := back);
     j(sym(trans(spec, at_a)), λ y _ => is_zero_bits(n, y) = True, zero_bits_zero(n))
 }
 
@@ -2281,7 +2281,7 @@ theorem eq_of_zero_bits_sub(n: Nat, a, b: BitVec(n), zf: is_zero_bits(n, a.sub(b
     let is_zero: (BitVec::zero(n := n) = a.sub(b)) = sym(zero_of_zero_bits(n, a.sub(b), zf));
     let spec: (a.sub(b) = a.iterate_decrement(v)) = BitVec::sub_bits_spec(n, a, b, False);
     let undo: ((a.iterate_decrement(v)).iterate_increment(v) = a) = BitVec::iterate_sub_add(n, v, a);
-    let via: (BitVec::zero(n := n).iterate_increment(v) = a) = j(sym(trans(is_zero, spec)), λ y _ => y.iterate_increment(v) = a, undo);
+    let via: (BitVec::zero(n := n).iterate_increment(v) = a) = rewrite(sym(trans(is_zero, spec)), in := undo);
     trans(sym(via), BitVec::iterate_increment_toNat(n, b))
 }
 

@@ -19,6 +19,8 @@ mod goal_combinators;
 mod goal_holes;
 #[path = "../equation_rewrite.rs"]
 mod equation_rewrite;
+#[path = "../subst_local.rs"]
+mod subst_local;
 #[path = "../constructor_values.rs"]
 mod constructor_values;
 #[path = "../annotation_cost.rs"]

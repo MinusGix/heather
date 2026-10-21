@@ -88,8 +88,8 @@ impl Elaborator {
             return self.elab_check(cx, body, goal, lvl);
         };
         let (proof, proof_ty, _) = self.elab_infer(cx, h)?;
-        let (proof, Equation { level, ty, lhs, rhs }) = self.rewrite_instance(cx, h, proof, &proof_ty, goal)?;
-        let motive = self.rewrite_motive(cx, h, at, goal, &ty, &level, &lhs, &rhs, lvl)?;
+        let (proof, Equation { level, ty, lhs, rhs }) = self.rewrite_instance(cx, h, proof, &proof_ty, goal, GOAL)?;
+        let motive = self.rewrite_motive(cx, h, at, goal, GOAL, &ty, &level, &lhs, &rhs, lvl)?;
         // The goal after this step: `M[b/y]`.
         let next = motive.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(&rhs)));
         let case = self.rewrite_from(cx, rest, None, body, &next, lvl)?;
@@ -124,6 +124,75 @@ impl Elaborator {
         })
     }
 
+    /// `rewrite(h₁, …, hₙ, in := hyp)`: `hyp : P` transported along each
+    /// `hᵢ : aᵢ = bᵢ` in turn, every occurrence of `aᵢ` in its type turned
+    /// into `bᵢ` — the goal form's direction, applied to a type that is
+    /// proved rather than wanted, so the step is `J(hᵢ; y q. M; hyp) : M[b/y]`
+    /// with no `sym` (docs/equation-rewrite-design.md §7). An inference form:
+    /// the result's type is what the rewrite leaves.
+    pub(crate) fn elab_rewrite_in(&self, cx: &Cx, args: &[Expr], named: &[NamedArg], span: Span) -> R<(Term, Type, Level)> {
+        if args.is_empty() {
+            return Err(ElabError::Elab {
+                msg: "`rewrite(…, in := hyp)` takes one or more equations: `rewrite(h, in := hyp)`".into(),
+                span,
+            });
+        }
+        let (mut hyp, mut at) = (None, None);
+        for arg in named {
+            let slot = match arg.name.as_str() {
+                "in" => hyp.is_none().then_some(&mut hyp),
+                "at" => at.is_none().then_some(&mut at),
+                _ => None,
+            };
+            let Some(slot) = slot else {
+                return Err(ElabError::Elab {
+                    msg: format!(
+                        "`rewrite(…, in := hyp)` takes `in :=` once and at most one `at :=`, \
+                         and not this `{} :=`",
+                        arg.name
+                    ),
+                    span: arg.name_span,
+                });
+            };
+            *slot = Some(arg);
+        }
+        let hyp = hyp.expect("routed here only with `in :=`");
+        let at = match at {
+            Some(arg) if args.len() > 1 => {
+                return Err(ElabError::Elab {
+                    msg: "`at :=` selects occurrences of one equation's left side; with several \
+                          equations, rewrite one at a time: \
+                          `rewrite(h₂, in := rewrite(h₁, in := hyp, at := k))`"
+                        .into(),
+                    span: arg.span,
+                });
+            }
+            Some(arg) => Some(occurrences(&arg.expr)?),
+            None => None,
+        };
+        let (mut term, mut ty_now, lvl) = self.elab_infer(cx, &hyp.expr)?;
+        for h in args {
+            let (proof, proof_ty, _) = self.elab_infer(cx, h)?;
+            let (proof, Equation { level, ty, lhs, rhs }) =
+                self.rewrite_instance(cx, h, proof, &proof_ty, &ty_now, HYPOTHESIS)?;
+            let motive =
+                self.rewrite_motive(cx, h, at.as_deref(), &ty_now, HYPOTHESIS, &ty, &level, &lhs, &rhs, &lvl)?;
+            ty_now = motive.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(&rhs)));
+            term = Term::J {
+                ty_level: level,
+                motive_level: lvl.clone(),
+                ty,
+                lhs,
+                // Weakened past `q`, which the motive does not mention.
+                motive: Rc::new(motive.shift_local(1)),
+                case: Rc::new(term),
+                rhs,
+                proof: Rc::new(proof),
+            };
+        }
+        Ok((term, ty_now, lvl))
+    }
+
     /// The goal with `a` abstracted: a type over `Γ, y : S` whose instance at
     /// `a` is `goal`. The goal as written first, then its exposed form (the
     /// head and an equation's sides one weak-head step down, the
@@ -137,6 +206,7 @@ impl Elaborator {
         h: &Expr,
         at: Option<&[u32]>,
         goal: &Type,
+        what: &str,
         carrier: &Rc<Type>,
         carrier_level: &Level,
         lhs: &Rc<Term>,
@@ -159,7 +229,7 @@ impl Elaborator {
                 if let Some(&past) = at.iter().find(|&&k| k > seen) {
                     return Err(ElabError::Elab {
                         msg: format!(
-                            "`rewrite`: `at := {past}`, but the goal `{}` has {seen} occurrence(s) \
+                            "`rewrite`: `at := {past}`, but {what} `{}` has {seen} occurrence(s) \
                              of the equation's left side{}",
                             self.display_type(cx, goal),
                             shown(lhs)
@@ -175,7 +245,7 @@ impl Elaborator {
                 || exposed().is_some_and(|g| g.abstract_local(rhs).is_some());
             let hint = if reversed {
                 format!(
-                    "\n  hint: the goal mentions its right side{}; to rewrite right to left, \
+                    "\n  hint: {what} mentions its right side{}; to rewrite right to left, \
                      write `sym(…)` around the equation",
                     shown(rhs)
                 )
@@ -184,9 +254,9 @@ impl Elaborator {
             };
             return Err(ElabError::Elab {
                 msg: format!(
-                    "`rewrite`: the goal `{}` does not mention the equation's left side{}\n  \
+                    "`rewrite`: {what} `{}` does not mention the equation's left side{}\n  \
                      note: an occurrence is a subterm with the left side's head that converts \
-                     to it, in the goal as written or one unfolding of it{hint}",
+                     to it, as written or one unfolding of it{hint}",
                     self.display_type(cx, goal),
                     shown(lhs)
                 ),
@@ -199,8 +269,8 @@ impl Elaborator {
         typing::check_type(&psi, 0, Layer::Prog, &mcx.gamma, &motive, lvl, self.fuel).map_err(|_| {
             ElabError::Elab {
                 msg: format!(
-                    "`rewrite`: abstracting the left side{} from the goal does not leave a type: \
-                     something else in the goal depends on it being exactly that term\n  \
+                    "`rewrite`: abstracting the left side{} from {what} does not leave a type: \
+                     something else in it depends on it being exactly that term\n  \
                      hint: write the motive by hand with `j`",
                     shown(lhs)
                 ),
@@ -222,6 +292,7 @@ impl Elaborator {
         proof: Term,
         proof_ty: &Type,
         goal: &Type,
+        what: &str,
     ) -> R<(Term, Equation)> {
         let not_an_equation = |ty: &Type| ElabError::Elab {
             msg: format!(
@@ -268,7 +339,7 @@ impl Elaborator {
         let Some(binds) = found else {
             return Err(ElabError::Elab {
                 msg: format!(
-                    "`rewrite`: no subterm of the goal `{}` is an instance of this equation's \
+                    "`rewrite`: no subterm of {what} `{}` is an instance of this equation's \
                      left side\n  note: an instance has the left side's head, and its other \
                      parts convert",
                     self.display_type(cx, goal)
@@ -399,6 +470,10 @@ struct Equation {
     lhs: Rc<Term>,
     rhs: Rc<Term>,
 }
+
+/// What a rewrite step's errors call the type it rewrites.
+const GOAL: &str = "the goal";
+const HYPOTHESIS: &str = "the hypothesis's type";
 
 /// Arguments an unapplied equation may leave open.
 const MAX_OPEN: u32 = 32;

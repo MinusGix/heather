@@ -67,7 +67,7 @@ theorem layout_resident<M>(fetch: FetchAccess<M>, memory: M, origin: BitVec(64),
             Nil => λ measured => false_elim(measured),
             Cons(len, more) => λ measured at resident => {
                 let parts = resident_split_at(fetch, memory, piece, layout_code(rest, last), origin, at, resident);
-                let moved = j(measured.left, λ n _ => CodeResident(fetch, memory, layout_code(rest, last), next_rip(origin, at + n)), parts.right);
+                let moved = rewrite(measured.left, in := parts.right);
                 λ i => match i as λ k => CodeResident(fetch, memory, layout_piece(Cons(piece, rest), last, k),
                         next_rip(origin, layout_at(at, Cons(len, more), k))) {
                     Zero => parts.left,

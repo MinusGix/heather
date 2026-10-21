@@ -1417,7 +1417,7 @@ theorem Nat::shr_mul_le(self k: Nat): (n: Nat) → n.shr(k) * Nat::pow(2, k) <= 
             let p = Nat::pow(2, i);
             let ih: (s * p <= n.half()) = Nat::shr_mul_le(i, n.half());
             let doubled: ((s * p) * 2 <= n.half() * 2) = Nat::mul_le_mono_r(2, s * p, n.half(), ih);
-            let back: (n.half() * 2 <= n) = j(sym(n.half().mul_two()), λ y _ => y <= n, n.half_add_le());
+            let back: (n.half() * 2 <= n) = rewrite(sym(n.half().mul_two()), in := n.half_add_le());
             let assoc: ((s * p) * 2 = s * (p * 2)) = s.mul_assoc(p, 2);
             j(assoc, λ y _ => y <= n, ((s * p) * 2).le_trans(n.half() * 2, n, doubled, back))
         },
