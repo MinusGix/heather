@@ -1473,6 +1473,7 @@ fn put_field_kind(w: &mut Writer, kind: FieldKind) {
         FieldKind::Payload => w.byte(0), FieldKind::Plain => w.byte(1),
         FieldKind::Container { len_payload } => { w.byte(2); w.usize(len_payload); }
         FieldKind::IndexVar => w.byte(3),
+        FieldKind::FnChild => w.byte(4),
     }
 }
 
@@ -1481,6 +1482,7 @@ fn get_field_kind(r: &mut Reader<'_>) -> Result<FieldKind, ModuleImageDecodeErro
         0 => Ok(FieldKind::Payload), 1 => Ok(FieldKind::Plain),
         2 => Ok(FieldKind::Container { len_payload: r.usize()? }),
         3 => Ok(FieldKind::IndexVar),
+        4 => Ok(FieldKind::FnChild),
         tag => Err(ModuleImageDecodeError::InvalidTag { sort: "inductive field kind", tag }),
     }
 }

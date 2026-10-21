@@ -27,6 +27,8 @@ mod certgen_tier1;
 mod inductive_tier0;
 #[path = "../inductive_tier1.rs"]
 mod inductive_tier1;
+#[path = "../inductive_tier2.rs"]
+mod inductive_tier2;
 #[path = "../tier1_fording.rs"]
 mod tier1_fording;
 #[path = "../tier1_list_proofs.rs"]
