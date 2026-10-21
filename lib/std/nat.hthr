@@ -1257,6 +1257,15 @@ theorem Nat::one_le_pow(self a, n: Nat, h: 1 <= a): 1 <= a.pow(n) {
     }
 }
 
+// A positive power is at least its base.
+theorem Nat::le_pow_self(self a, n: Nat, ha: 1 <= a, hn: 1 <= n): a <= a.pow(n) {
+    match n as λ m => 1 <= m → a <= a.pow(m) {
+        Zero => λ h => false_elim(h),
+        Succ(k) => λ _ => j(a.mul_left_one(), λ y _ => y <= a.pow(k) * a,
+            (1).mul_le_mono(a.pow(k), a, a, a.one_le_pow(k, ha), a.le_refl())),
+    }(hn)
+}
+
 fn Nat::fact(self n: Nat) → Nat { match n { Zero => 1, Succ(k) => Succ(k) * k.fact() } }
 
 theorem Nat::fact_zero(): (0).fact() = 1 { refl }
@@ -1284,6 +1293,10 @@ evidence theorem Nat::add_pos_l({a, b: Nat}, pa: 0 < a := infer): 0 < a + b {
 evidence theorem Nat::add_pos_r({a, b: Nat}, pb: 0 < b := infer): 0 < a + b {
     (1).le_trans(b, a + b, pb, a.le_add_r(b))
 }
+
+// A power of a positive base is positive, so `Rat(n, Nat::pow(2, k))` finds its
+// denominator's positivity with no argument.
+evidence theorem Nat::pow_pos({a, n: Nat}, pa: 0 < a := infer): 0 < a.pow(n) { a.one_le_pow(n, pa) }
 
 theorem Nat::fact_le_succ(self n: Nat): n.fact() <= Succ(n).fact() {
     j(n.fact().mul_left_one(), λ y q => y <= Succ(n) * n.fact(),

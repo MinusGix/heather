@@ -35,3 +35,24 @@ of the area.
   against an order-complete presentation.
 - **[[ordered-field-over-comm-ring]]** owns the ordered-field layer. Assumed
   here: only that error bounds can be stated in it.
+
+## Log
+
+- 2026-10-20: design proposal in `docs/floating-point-design.md`, after
+  reading flean. It answers questions 1–3 provisionally (dyadic values
+  embedded in `Rat`; formats as data indexing `Float(F)`; one `encode`/`decode`
+  pair over `BitVec`) and lists nine open questions for Minus (§9) and an
+  eight-round plan (§8). No code yet.
+- 2026-10-20: Minus reviewed the design and agreed with dyadic values, the
+  quantum exponent, the mode enum, one `Format` record, payloads and flags at
+  the bits layer, and binary only. Classical users get the same theorems
+  through constraints that dissolve. `math-float` is rounds 1–5, with
+  submilestones `float-values` … `float-transcendental` in the roadmap.
+  Notation for the IEEE orders and for rounding is a language-lane ask:
+  [[decorated-relation-symbols]].
+- 2026-10-20: round 1 (`float-values`) landed on the design PR:
+  `lib/std/float/dyadic.hthr` (Dyadic, CommRing and strict order through the
+  embedding into Rat) and `lib/std/float/float.hthr` (formats, canonical
+  finite floats, `Float(F)` as `Extended`, value order, generic constants).
+  What changed from the sketch is in design §10.
+
