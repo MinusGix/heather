@@ -59,5 +59,6 @@ derive_set_functions	lib/std	test	crates/elab/tests/lib_setoid_mergeable.rs.
 derive_set_function_clients	lib/std	test	crates/elab/tests/lib_setoid_mergeable.rs.
 rat_client	lib/std	test	crates/elab/tests/lib_std_rat.rs.
 creal_client	lib/std	test	crates/elab/tests/lib_std_creal.rs.
+itree_client	lib/std	test	crates/elab/tests/lib_std_itree.rs.
 ordered_field_client	lib/std	test	crates/elab/tests/lib_std_ordered_field.rs.
 semiring_client	lib/std	test	crates/elab/tests/lib_std_semiring.rs.

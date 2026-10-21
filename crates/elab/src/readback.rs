@@ -205,6 +205,16 @@ impl<'v, 'g> Readback<'v, 'g> {
                 }
             }
             Val::WfIh { elim, label, children } => self.wf_ih(elim, label, children),
+            // An `elim_W` β's induction hypothesis, `λ y. elim_W(…; f y)`:
+            // the machine builds it as a λ over the step's environment
+            // (`Eval::fire_elim_w`), whose two closures are the syntax the
+            // reducer's β substitutes, so it reads back as that λ.
+            Val::Lam { dom_level, cod_level, dom, body } => Some(Term::Lam {
+                dom_level: dom_level.clone(),
+                cod_level: cod_level.clone(),
+                dom: self.ty(dom, 0)?,
+                body: self.tm(body, 1)?,
+            }),
             Val::Neutral(n) => {
                 let mut out = match &n.head {
                     Head::Var(level) if *level < self.len => Term::Var(LocalVar(self.len - 1 - level)),
@@ -532,6 +542,36 @@ mod tests {
             assert!(matches!(read, Type::Pi { .. }));
             assert_eq!(read, reducer);
         }
+    }
+
+    /// A family computed by recursion over a tier-2 (W-lowered) inductive:
+    /// the arm's former sits in the step's environment, which holds the
+    /// `elim_W` β's induction hypothesis — a λ the machine builds over that
+    /// environment (`Eval::fire_elim_w`) — so the readback reads that λ back
+    /// rather than declining to the reducer, and spells what the reducer
+    /// spells.
+    #[test]
+    fn an_elim_w_induction_hypothesis_reads_back_as_the_reducers_lambda() {
+        let mut el = crate::Elaborator::with_prelude().expect("prelude");
+        el.elab_source(
+            "inductive Tree { Leaf, Node(k: Nat -> Tree) }
+             fn F(t: Tree) -> Type { match t { Leaf => Nat, Node(k) => Nat -> F(k(0)) } }
+             fn probe() -> F(Node(λ n => Node(λ m => Leaf))) { λ a b => 0 }",
+        )
+        .expect("the declarations elaborate");
+        let GlobalBinding::Tm { ty, .. } = el.psi.bindings.last().expect("a binding") else {
+            panic!("a `fn` is a term binding")
+        };
+        // Minted against the Ψ before its own binding; re-key it into today's.
+        let ty = ty.shift_global(1);
+        let gamma = LocalCtx::nil();
+        let defs = Defs::transparent(&el.psi);
+        let arena = ValueArena::new();
+        let value = eval::whnf_value_ty(&arena, &Rc::new(ty.clone()), &gamma, defs, FUEL).unwrap();
+        let read = Readback::new(&gamma).head(&value).expect("the ih is a form read back here");
+        let reducer = reduce::whnf_type_delta(&ty, &gamma, defs, FUEL).unwrap();
+        assert!(matches!(read, Type::Pi { .. }));
+        assert_eq!(read, reducer);
     }
 
     /// A stuck head has no former to read: the caller keeps the reducer.

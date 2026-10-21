@@ -1,0 +1,412 @@
+// Interaction trees over container events, cut at fuel
+// (docs/interaction-trees-fit.md, docs/itree-core-round.md;
+// issues/interaction-trees-container-model.md, milestone `it-core`).
+//
+// A program that talks to its environment is a tree: it returns (`Ret`),
+// takes a silent step (`Tau`), or issues a command and continues with
+// whatever the answer is (`Vis`). Events are a container, a type of commands
+// and, for each command, the type of its answers, so the whole library lives
+// at one level and a handler is an ordinary dependent function.
+//
+// The tree is inductive: a value is a *finite* tree. Unbounded behaviour
+// (`iter`, `mrec`) is unrolled a given number of times and then stops at
+// `Cut`, which means "nothing is claimed past here". A program is the family
+// of its unrollings, one per amount of fuel; trace refinement and the bridge
+// to `converges`/`fuel_monotone` relate those families (milestone
+// `it-refinement`).
+//
+// Because the tree is inductive, the structural laws of Xia et al.'s Fig. 5
+// whose left side is a constructor hold by `refl` (`bind(Ret(a), h)` *is*
+// `h(a)`). The ones that need a law under every answer of a `Vis` (right
+// identity, associativity, the handler distributing over `bind`) are not
+// equations: two trees agreeing under every answer are equal only with
+// funext, which Heather does not assume. They hold up to `ITree::Same`,
+// structural equality with the continuations compared pointwise, which is an
+// equivalence and a congruence for `bind`. On a finite tree that relation
+// needs no depth index: the depth-indexed bisimilarity of the container-model
+// issue is for coinductive trees, and fuel plays its part here.
+
+import logic;
+import nat;
+
+// ---------------------------------------------------------------------------
+// Events
+
+// A container: commands, and what each command can be answered with.
+record Events { Cmd: Type, Resp: Cmd → Type }
+
+// Two event sets side by side. A command is one of either; its answers are
+// that side's.
+fn Events::sum(D: Events, E: Events) → Events {
+    Events(Or<D.Cmd, E.Cmd>, λ c => match c { Inl(d) => D.Resp(d), Inr(e) => E.Resp(e) })
+}
+
+// No commands at all: a tree over these is a computation that only returns,
+// steps or runs out of fuel.
+fn Events::none() → Events { Events(False, λ c => match c {}) }
+
+// A container morphism: each command of `E` is sent to a command of `F`, and
+// each answer to the image comes back as an answer to the original. This is
+// the paper's subevent relation `E -< F`.
+record EventMap(E: Events, F: Events) {
+    cmd: E.Cmd → F.Cmd,
+    back: (c: E.Cmd) → F.Resp(cmd(c)) → E.Resp(c),
+}
+
+fn EventMap::left(D: Events, E: Events) → EventMap(D, Events::sum(D, E)) {
+    EventMap(λ d => Inl(d), λ d a => a)
+}
+
+fn EventMap::right(D: Events, E: Events) → EventMap(E, Events::sum(D, E)) {
+    EventMap(λ e => Inr(e), λ e a => a)
+}
+
+// ---------------------------------------------------------------------------
+// Trees
+
+inductive ITree<R>(E: Events) {
+    Ret(r: R),
+    Tau(t: ITree<R>(E)),
+    Vis(c: E.Cmd, k: E.Resp(c) → ITree<R>(E)),
+    Cut,
+}
+
+// Issue one command and return its answer.
+fn ITree::trigger(E: Events, c: E.Cmd) → ITree<E.Resp(c)>(E) {
+    Vis(c, λ a => Ret(a))
+}
+
+// Sequencing: run `t`, and continue from each of its leaves with `h`. A cut
+// stays a cut.
+fn ITree::bind<A, B>(E: Events, t: ITree<A>(E), h: A → ITree<B>(E)) → ITree<B>(E) {
+    match t {
+        Ret(r) => h(r),
+        Tau(s) => Tau(ITree::bind(E, s, h)),
+        Vis(c, k) => Vis(c, λ a => ITree::bind(E, k(a), h)),
+        Cut => Cut,
+    }
+}
+
+fn ITree::map<A, B>(E: Events, t: ITree<A>(E), f: A → B) → ITree<B>(E) {
+    ITree::bind(E, t, λ r => Ret(f(r)))
+}
+
+// Rename a tree's commands along a container morphism.
+fn ITree::translate<R>(E: Events, F: Events, m: EventMap(E, F), t: ITree<R>(E)) → ITree<R>(F) {
+    match t {
+        Ret(r) => Ret(r),
+        Tau(s) => Tau(ITree::translate(E, F, m, s)),
+        Vis(c, k) => Vis(m.cmd(c), λ b => ITree::translate(E, F, m, k(m.back(c, b)))),
+        Cut => Cut,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Loops, cut at fuel
+
+// One pass of a loop body either goes round again from a new state or leaves
+// with a result.
+inductive Step<A, B> { Continue(a: A), Break(b: B) }
+
+// `iter(E, n, body, a)` runs `body` from `a`, going round at most `n` times;
+// each time round is a `Tau`, and the `n+1`-th is a `Cut`.
+fn ITree::iter<A, B>(E: Events, n: Nat, body: A → ITree<Step<A, B>>(E), a: A) → ITree<B>(E) {
+    match n {
+        Zero => Cut,
+        Succ(m) => ITree::bind(E, body(a), λ x => match x {
+            Continue(a2) => Tau(ITree::iter(E, m, body, a2)),
+            Break(b) => Ret(b),
+        }),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Handlers
+
+// Interpret every command of `E` as a tree over `F`: the handler's tree runs,
+// and its answer feeds the continuation. Structural, so it needs no fuel.
+fn ITree::interp<R>(E: Events, F: Events, h: (c: E.Cmd) → ITree<E.Resp(c)>(F), t: ITree<R>(E)) → ITree<R>(F) {
+    match t {
+        Ret(r) => Ret(r),
+        Tau(s) => Tau(ITree::interp(E, F, h, s)),
+        Vis(c, k) => ITree::bind(F, h(c), λ a => ITree::interp(E, F, h, k(a))),
+        Cut => Cut,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Recursion as events (McBride's trick, the paper's `mrec`)
+//
+// A recursive call is a command of `D`, answered by running the body at that
+// call. `mrec` ties the knot `n` times: a call made with no fuel left is a
+// `Cut`. The commands of `E` pass through.
+
+// What one `Vis` of the sum does, split on which side its command is from.
+// The answer type depends on the command, so the continuation's type is
+// refined by returning a function from the split (a match does not refine an
+// earlier parameter's type).
+fn ITree::mrec_vis<R>(D: Events, E: Events,
+    call: (d: D.Cmd) → (D.Resp(d) → ITree<R>(Events::sum(D, E))) → ITree<R>(E),
+    c: Or<D.Cmd, E.Cmd>)
+    → (Events::sum(D, E).Resp(c) → ITree<R>(Events::sum(D, E)))
+    → (Events::sum(D, E).Resp(c) → ITree<R>(E)) → ITree<R>(E)
+{
+    match c {
+        Inl(d) => λ k kr => call(d, k),
+        Inr(e) => λ k kr => Vis(e, kr),
+    }
+}
+
+// One layer: walk the tree, passing `E`'s commands through and handing each
+// call (with its continuation) to `call`.
+fn ITree::mrec_layer<R>(D: Events, E: Events,
+    call: (d: D.Cmd) → (D.Resp(d) → ITree<R>(Events::sum(D, E))) → ITree<R>(E),
+    t: ITree<R>(Events::sum(D, E))) → ITree<R>(E)
+{
+    match t {
+        Ret(r) => Ret(r),
+        Tau(s) => Tau(ITree::mrec_layer(D, E, call, s)),
+        Vis(c, k) => ITree::mrec_vis(D, E, call, c, k, λ a => ITree::mrec_layer(D, E, call, k(a))),
+        Cut => Cut,
+    }
+}
+
+fn ITree::mrec<R>(D: Events, E: Events,
+    body: (d: D.Cmd) → ITree<D.Resp(d)>(Events::sum(D, E)),
+    n: Nat, t: ITree<R>(Events::sum(D, E))) → ITree<R>(E)
+{
+    match n {
+        Zero => Cut,
+        Succ(m) => ITree::mrec_layer(D, E,
+            λ d k => Tau(ITree::mrec(D, E, body, m, ITree::bind(Events::sum(D, E), body(d), k))), t),
+    }
+}
+
+// Run one call of the recursive family.
+fn ITree::rec(D: Events, E: Events,
+    body: (d: D.Cmd) → ITree<D.Resp(d)>(Events::sum(D, E)),
+    n: Nat, d: D.Cmd) → ITree<D.Resp(d)>(E)
+{
+    ITree::mrec(D, E, body, n, body(d))
+}
+
+// ---------------------------------------------------------------------------
+// Structural equivalence
+//
+// `Same(E, t, u)`: `u` has `t`'s shape, with equal leaves, and under a `Vis`
+// the same command and continuations related at every answer. It is read off
+// `t` alone, each case saying "`u` is this constructor, with children so
+// related"; that keeps the command equation off the relation (both sides
+// share `t`'s command), so no transport of answers is ever needed.
+
+record SameTau<R>(E: Events, u: ITree<R>(E), S: ITree<R>(E) → Type) {
+    t: ITree<R>(E),
+    at: u = Tau(t),
+    sub: S(t),
+}
+
+record SameVis<R>(E: Events, c: E.Cmd, u: ITree<R>(E), S: E.Resp(c) → ITree<R>(E) → Type) {
+    k: E.Resp(c) → ITree<R>(E),
+    at: u = Vis(c, k),
+    sub: (a: E.Resp(c)) → S(a, k(a)),
+}
+
+fn ITree::Same<R>(E: Events, t: ITree<R>(E), u: ITree<R>(E)) → Type {
+    match t {
+        Ret(r) => u = Ret(r),
+        Tau(s) => SameTau<R>(E, u, λ v => ITree::Same(E, s, v)),
+        Vis(c, k) => SameVis<R>(E, c, u, λ a v => ITree::Same(E, k(a), v)),
+        Cut => u = Cut,
+    }
+}
+
+theorem ITree::same_refl<R>(E: Events, t: ITree<R>(E)): ITree::Same(E, t, t) {
+    match t {
+        Ret(_) => refl,
+        Tau(s) => SameTau(s, refl, ITree::same_refl(E, s)),
+        Vis(_, k) => SameVis(k, refl, λ a => ITree::same_refl(E, k(a))),
+        Cut => refl,
+    }
+}
+
+// Equal trees are the same.
+theorem ITree::same_of_eq<R>(E: Events, t: ITree<R>(E), u: ITree<R>(E), h: t = u): ITree::Same(E, t, u) {
+    j(h, λ y q => ITree::Same(E, t, y), ITree::same_refl(E, t))
+}
+
+theorem ITree::same_sym<R>(E: Events, t: ITree<R>(E), u: ITree<R>(E), h: ITree::Same(E, t, u)): ITree::Same(E, u, t) {
+    match t {
+        Ret(r) => j(@sym<ITree<R>(E)>(u, Ret(r), h), λ y q => ITree::Same(E, y, Ret(r)), refl),
+        Tau(s) => {
+            let g: SameTau<R>(E, u, λ v => ITree::Same(E, s, v)) = h;
+            let ih: ITree::Same(E, g.t, s) = ITree::same_sym(E, s, g.t, g.sub);
+            j(sym(g.at), λ y q => ITree::Same(E, y, Tau(s)), SameTau(s, refl, ih))
+        },
+        Vis(c, k) => {
+            let g: SameVis<R>(E, c, u, λ a v => ITree::Same(E, k(a), v)) = h;
+            let ih: (a: E.Resp(c)) → ITree::Same(E, g.k(a), k(a)) = λ a => ITree::same_sym(E, k(a), g.k(a), g.sub(a));
+            j(sym(g.at), λ y q => ITree::Same(E, y, Vis(c, k)), SameVis(k, refl, ih))
+        },
+        Cut => j(@sym<ITree<R>(E)>(u, Cut, h), λ y q => ITree::Same(E, y, Cut), refl),
+    }
+}
+
+theorem ITree::same_trans<R>(E: Events, t: ITree<R>(E), u: ITree<R>(E), v: ITree<R>(E),
+    h1: ITree::Same(E, t, u), h2: ITree::Same(E, u, v)): ITree::Same(E, t, v)
+{
+    match t {
+        Ret(_) => j(h1, λ y q => ITree::Same(E, y, v), h2),
+        Tau(s) => {
+            let f: SameTau<R>(E, u, λ w => ITree::Same(E, s, w)) = h1;
+            let g: SameTau<R>(E, v, λ w => ITree::Same(E, f.t, w)) =
+                j(f.at, λ y q => ITree::Same(E, y, v), h2);
+            SameTau(g.t, g.at, ITree::same_trans(E, s, f.t, g.t, f.sub, g.sub))
+        },
+        Vis(c, k) => {
+            let f: SameVis<R>(E, c, u, λ a w => ITree::Same(E, k(a), w)) = h1;
+            let g: SameVis<R>(E, c, v, λ a w => ITree::Same(E, f.k(a), w)) =
+                j(f.at, λ y q => ITree::Same(E, y, v), h2);
+            SameVis(g.k, g.at, λ a => ITree::same_trans(E, k(a), f.k(a), g.k(a), f.sub(a), g.sub(a)))
+        },
+        Cut => j(h1, λ y q => ITree::Same(E, y, v), h2),
+    }
+}
+
+// `bind` respects `Same` on both sides.
+theorem ITree::same_bind<A, B>(E: Events, t: ITree<A>(E), t2: ITree<A>(E), h: A → ITree<B>(E), h2: A → ITree<B>(E),
+    st: ITree::Same(E, t, t2), sh: (a: A) → ITree::Same(E, h(a), h2(a))):
+    ITree::Same(E, ITree::bind(E, t, h), ITree::bind(E, t2, h2))
+{
+    match t {
+        Ret(r) => j(@sym<ITree<A>(E)>(t2, Ret(r), st), λ y q => ITree::Same(E, h(r), ITree::bind(E, y, h2)), sh(r)),
+        Tau(s) => {
+            let g: SameTau<A>(E, t2, λ v => ITree::Same(E, s, v)) = st;
+            let ih: ITree::Same(E, ITree::bind(E, s, h), ITree::bind(E, g.t, h2)) = ITree::same_bind(E, s, g.t, h, h2, g.sub, sh);
+            j(sym(g.at), λ y q => ITree::Same(E, ITree::bind(E, Tau(s), h), ITree::bind(E, y, h2)),
+                SameTau(ITree::bind(E, g.t, h2), refl, ih))
+        },
+        Vis(c, k) => {
+            let g: SameVis<A>(E, c, t2, λ a v => ITree::Same(E, k(a), v)) = st;
+            let ih: (a: E.Resp(c)) → ITree::Same(E, ITree::bind(E, k(a), h), ITree::bind(E, g.k(a), h2)) =
+                λ a => ITree::same_bind(E, k(a), g.k(a), h, h2, g.sub(a), sh);
+            j(sym(g.at), λ y q => ITree::Same(E, ITree::bind(E, Vis(c, k), h), ITree::bind(E, y, h2)),
+                SameVis(λ a => ITree::bind(E, g.k(a), h2), refl, ih))
+        },
+        Cut => j(@sym<ITree<A>(E)>(t2, Cut, st), λ y q => ITree::bind(E, y, h2) = Cut, refl),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The structural laws (Xia et al. Fig. 5)
+//
+// Definitional: each is `refl`, at open subtrees and continuations.
+
+theorem ITree::bind_ret_l<A, B>(E: Events, a: A, h: A → ITree<B>(E)): ITree::bind(E, Ret(a), h) = h(a) { refl }
+
+theorem ITree::bind_tau<A, B>(E: Events, t: ITree<A>(E), h: A → ITree<B>(E)):
+    ITree::bind(E, Tau(t), h) = Tau(ITree::bind(E, t, h)) { refl }
+
+theorem ITree::bind_vis<A, B>(E: Events, c: E.Cmd, k: E.Resp(c) → ITree<A>(E), h: A → ITree<B>(E)):
+    ITree::bind(E, Vis(c, k), h) = Vis(c, λ a => ITree::bind(E, k(a), h)) { refl }
+
+theorem ITree::bind_cut<A, B>(E: Events, h: A → ITree<B>(E)): ITree::bind(E, Cut, h) = Cut { refl }
+
+theorem ITree::bind_trigger<B>(E: Events, c: E.Cmd, h: E.Resp(c) → ITree<B>(E)):
+    ITree::bind(E, ITree::trigger(E, c), h) = Vis(c, h) { refl }
+
+theorem ITree::iter_zero<A, B>(E: Events, body: A → ITree<Step<A, B>>(E), a: A):
+    ITree::iter(E, 0, body, a) = Cut { refl }
+
+// The loop's unfolding, at one more unit of fuel.
+theorem ITree::iter_succ<A, B>(E: Events, n: Nat, body: A → ITree<Step<A, B>>(E), a: A):
+    ITree::iter(E, Succ(n), body, a) = ITree::bind(E, body(a), λ x => match x {
+        Continue(a2) => Tau(ITree::iter(E, n, body, a2)),
+        Break(b) => Ret(b),
+    }) { refl }
+
+theorem ITree::interp_ret<R>(E: Events, F: Events, h: (c: E.Cmd) → ITree<E.Resp(c)>(F), r: R):
+    ITree::interp<R>(E, F, h, Ret(r)) = Ret(r) { refl }
+
+theorem ITree::interp_tau<R>(E: Events, F: Events, h: (c: E.Cmd) → ITree<E.Resp(c)>(F), t: ITree<R>(E)):
+    ITree::interp<R>(E, F, h, Tau(t)) = Tau(ITree::interp(E, F, h, t)) { refl }
+
+theorem ITree::interp_vis<R>(E: Events, F: Events, h: (c: E.Cmd) → ITree<E.Resp(c)>(F),
+    c: E.Cmd, k: E.Resp(c) → ITree<R>(E)):
+    ITree::interp<R>(E, F, h, Vis(c, k)) = ITree::bind(F, h(c), λ a => ITree::interp(E, F, h, k(a))) { refl }
+
+theorem ITree::mrec_zero<R>(D: Events, E: Events, body: (d: D.Cmd) → ITree<D.Resp(d)>(Events::sum(D, E)),
+    t: ITree<R>(Events::sum(D, E))): ITree::mrec(D, E, body, 0, t) = Cut { refl }
+
+// A call, at one more unit of fuel, runs the body at that call and continues.
+theorem ITree::mrec_call<R>(D: Events, E: Events, body: (d: D.Cmd) → ITree<D.Resp(d)>(Events::sum(D, E)),
+    n: Nat, d: D.Cmd, k: D.Resp(d) → ITree<R>(Events::sum(D, E))):
+    ITree::mrec<R>(D, E, body, Succ(n), Vis(Inl(d), k))
+        = Tau(ITree::mrec(D, E, body, n, ITree::bind(Events::sum(D, E), body(d), k))) { refl }
+
+// A command of `E` passes through, at the same fuel.
+theorem ITree::mrec_pass<R>(D: Events, E: Events, body: (d: D.Cmd) → ITree<D.Resp(d)>(Events::sum(D, E)),
+    n: Nat, e: E.Cmd, k: E.Resp(e) → ITree<R>(Events::sum(D, E))):
+    ITree::mrec<R>(D, E, body, Succ(n), Vis(Inr(e), k))
+        = Vis(e, λ a => ITree::mrec_layer(D, E,
+            λ d k2 => Tau(ITree::mrec(D, E, body, n, ITree::bind(Events::sum(D, E), body(d), k2))), k(a))) { refl }
+
+// Up to `Same`: the laws whose proof needs the law under every answer.
+
+theorem ITree::bind_ret_r<R>(E: Events, t: ITree<R>(E)): ITree::Same(E, ITree::bind(E, t, λ r => Ret(r)), t) {
+    match t {
+        Ret(_) => refl,
+        Tau(s) => SameTau(s, refl, ITree::bind_ret_r(E, s)),
+        Vis(_, k) => SameVis(k, refl, λ a => ITree::bind_ret_r(E, k(a))),
+        Cut => refl,
+    }
+}
+
+theorem ITree::bind_assoc<A, B, C>(E: Events, t: ITree<A>(E), f: A → ITree<B>(E), g: B → ITree<C>(E)):
+    ITree::Same(E, ITree::bind(E, ITree::bind(E, t, f), g), ITree::bind(E, t, λ x => ITree::bind(E, f(x), g)))
+{
+    match t {
+        Ret(r) => ITree::same_refl(E, ITree::bind(E, f(r), g)),
+        Tau(s) => SameTau(ITree::bind(E, s, λ x => ITree::bind(E, f(x), g)), refl, ITree::bind_assoc(E, s, f, g)),
+        Vis(_, k) => SameVis(λ a => ITree::bind(E, k(a), λ x => ITree::bind(E, f(x), g)), refl,
+            λ a => ITree::bind_assoc(E, k(a), f, g)),
+        Cut => refl,
+    }
+}
+
+theorem ITree::map_id<R>(E: Events, t: ITree<R>(E)): ITree::Same(E, ITree::map(E, t, λ r => r), t) {
+    ITree::bind_ret_r(E, t)
+}
+
+// The handler is a monad morphism: interpreting a sequence is sequencing the
+// interpretations.
+theorem ITree::interp_bind<A, B>(E: Events, F: Events, h: (c: E.Cmd) → ITree<E.Resp(c)>(F),
+    t: ITree<A>(E), k: A → ITree<B>(E)):
+    ITree::Same(F, ITree::interp(E, F, h, ITree::bind(E, t, k)),
+        ITree::bind(F, ITree::interp(E, F, h, t), λ r => ITree::interp(E, F, h, k(r))))
+{
+    match t {
+        Ret(r) => ITree::same_refl(F, ITree::interp(E, F, h, k(r))),
+        Tau(s) => SameTau(ITree::bind(F, ITree::interp(E, F, h, s), λ r => ITree::interp(E, F, h, k(r))), refl,
+            ITree::interp_bind(E, F, h, s, k)),
+        Vis(c, j2) => ITree::same_trans(F,
+            ITree::bind(F, h(c), λ a => ITree::interp(E, F, h, ITree::bind(E, j2(a), k))),
+            ITree::bind(F, h(c), λ a => ITree::bind(F, ITree::interp(E, F, h, j2(a)), λ r => ITree::interp(E, F, h, k(r)))),
+            ITree::bind<A, B>(F, ITree::bind<E.Resp(c), A>(F, h(c), λ a => ITree::interp(E, F, h, j2(a))), λ r => ITree::interp(E, F, h, k(r))),
+            ITree::same_bind(F, h(c), h(c),
+                λ a => ITree::interp(E, F, h, ITree::bind(E, j2(a), k)),
+                λ a => ITree::bind(F, ITree::interp(E, F, h, j2(a)), λ r => ITree::interp(E, F, h, k(r))),
+                ITree::same_refl(F, h(c)), λ a => ITree::interp_bind(E, F, h, j2(a), k)),
+            ITree::same_sym(F,
+                ITree::bind<A, B>(F, ITree::bind<E.Resp(c), A>(F, h(c), λ a => ITree::interp(E, F, h, j2(a))), λ r => ITree::interp(E, F, h, k(r))),
+                ITree::bind(F, h(c), λ a => ITree::bind(F, ITree::interp(E, F, h, j2(a)), λ r => ITree::interp(E, F, h, k(r)))),
+                ITree::bind_assoc(F, h(c), λ a => ITree::interp(E, F, h, j2(a)), λ r => ITree::interp(E, F, h, k(r))))),
+        Cut => refl,
+    }
+}
+
+// Interpreting a single command is running its handler.
+theorem ITree::interp_trigger(E: Events, F: Events, h: (c: E.Cmd) → ITree<E.Resp(c)>(F), c: E.Cmd):
+    ITree::Same(F, ITree::interp(E, F, h, ITree::trigger(E, c)), h(c))
+{
+    ITree::bind_ret_r(F, h(c))
+}
