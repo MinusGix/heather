@@ -30,3 +30,14 @@ tree is the events of some returned trace of the tree.
 
 - **[[native-linux-spec]]** owns `Sim`, `RunsAs` and the bridge. Assumed
   here: only that `RunsAs` is read off the shared `LinuxAnswered`/`LinuxExits`.
+
+## Log
+
+- 2026-10-21: `docs/kernel-coinduction-design.md` §6.1 names a kernel-free
+  route for the diverging case: make a `Tau` cost the machine at least one
+  step (non-stuttering simulation, CompCert's measure in its simplest form),
+  so a machine that exits after `k` steps meets a tree that does something
+  within `k` `Tau`s; then determinism gives the converse. Traces do not see
+  `Tau`s, so this changes `Sim`'s definition (a step-wise reading beside
+  `RunsAs`), not only `sim_tau`. The coinductive `Sim` stays the statement the compiler
+  theorem should end with, after the kernel round.

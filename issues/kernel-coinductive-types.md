@@ -33,7 +33,9 @@ since July.
    decidable. There is no definitional η. Bisimilarity is a propositional
    relation, and "bisimilar implies equal" is either an axiom in the same
    family as the funext tier 2 already assumes, or left out, with
-   bisimilarity as the working equivalence. This is the negative
+   bisimilarity as the working equivalence. (Correction, 2026-10-21: tier
+   2 does not assume funext; `lib/std/itree.hthr` states its laws up to
+   `ITree::Same` because Heather assumes none.) This is the negative
    presentation (copatterns, primitive projections), which avoids the
    subject-reduction failure of Coq's positive `CoInductive`. It is the
    most likely answer.
@@ -95,3 +97,23 @@ copatterns).
   behaviour.
 - **[[interaction-trees-container-model]]** (closed) recorded the
   depth-indexed probe this round builds on.
+
+## Log
+
+- 2026-10-21: Design written, for review: `docs/kernel-coinduction-design.md`.
+  Recommends option 1 in its **indexed** form (shapes depend on the index,
+  children's indices computed, nothing stored), introduced by a
+  **primitive corecursor** (each child a new seed or an existing tree, so
+  constructors are exact under `out`), β under `out`, no η, no
+  identification axiom; guarded recursion deferred, sized types rejected.
+  Library probe checked in (`crates/elab/tests/coinduction_probe.rs`): the
+  sum-of-coalgebras encoding `Nu` already has `out ∘ unfold` by `refl` but
+  sits a level above its events (`ITree::bind` at `Nu` is `LevelMismatch`),
+  and the limit encoding `Lim` is small but coheres only up to `Same` and
+  has no usable `out`; a kernel `M` is `Nu` with the level dropped. Answers
+  for the questions above, as proposals for heather-coq: the relation at
+  `M` by observations (`∀ n. MRelₙ`), never mentioning the carrier (design
+  §9 Q1); bisimilarity's shape equation over `Id` with `J`, since `sEq` has
+  no eliminator after `transp`'s removal; the bridge `Bisim ⇔ Π n.
+  Same(approx)` needs UIP on the shapes (§4). `Sim`'s converse has a
+  kernel-free route too (§6.1).

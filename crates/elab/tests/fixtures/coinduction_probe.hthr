@@ -1,0 +1,215 @@
+// Coinductive trees without a kernel change: two encodings, probed
+// (docs/kernel-coinduction-design.md §3; issues/kernel-coinductive-types.md).
+//
+// What a kernel `M` would give, measured against what Heather can already
+// write. Each encoding is built far enough to see which laws are `refl`,
+// which hold only up to a relation, and what the encoding costs.
+//
+// A. `Nu`: a final coalgebra as the sum of all coalgebras, a carrier, its
+//    step and a seed. Corecursion is the identity and its β rule is `refl`,
+//    so this is option 1's computation, already here. The cost is a level:
+//    the carrier is a field of type `Type`, so the tree is one level up
+//    from its events and cannot be an answer to one of their commands.
+//
+// B. `Lim`: the limit of the fuel-cut trees (Ahrens, Capriotti and
+//    Spadotti), a sequence of depth-cut trees each the cut of the next.
+//    It is at the events' level. Corecursion is unrolling, and coherence
+//    holds only up to `ITree::Same`, because two trees that agree under every
+//    answer of a `Vis` are not equal without funext. Reading the head of a
+//    sequence back out is where it costs: the command at depth one is the
+//    command at every depth only through the coherence proofs.
+
+import logic;
+import nat;
+import itree;
+
+// ---------------------------------------------------------------------------
+// One layer of a tree over a carrier: the functor both encodings share.
+
+inductive Head<R, X>(E: Events) {
+    HRet(r: R),
+    HTau(x: X),
+    HVis(c: E.Cmd, k: E.Resp(c) → X),
+}
+
+fn Head::map<R, X, Y>(E: Events, h: Head<R, X>(E), f: X → Y) → Head<R, Y>(E) {
+    match h {
+        HRet(r) => HRet(r),
+        HTau(x) => HTau(f(x)),
+        HVis(c, k) => HVis(c, λ a => f(k(a))),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A. The sum of all coalgebras.
+
+record Nu<R>(E: Events) {
+    X: Type,
+    step: X → Head<R, X>(E),
+    seed: X,
+}
+
+// Corecursion packs the coalgebra; nothing runs.
+fn Nu::unfold<R>(E: Events, X: Type, step: X → Head<R, X>(E), x: X) → Nu<R>(E) {
+    Nu(X, step, x)
+}
+
+// One observation: run the step once, and repack each child. `Head<R, X>`
+// takes its carrier at level zero and `Nu` is at level one, so the
+// observation needs a head of its own: with no level variables on the
+// surface, every level the tree is used at needs its own copy.
+inductive NuHead<R>(E: Events) {
+    NRet(r: R),
+    NTau(x: Nu<R>(E)),
+    NVis(c: E.Cmd, k: E.Resp(c) → Nu<R>(E)),
+}
+
+fn Nu::repack<R>(E: Events, X: Type, step: X → Head<R, X>(E), h: Head<R, X>(E)) → NuHead<R>(E) {
+    match h {
+        HRet(r) => NRet(r),
+        HTau(y) => NTau(Nu(X, step, y)),
+        HVis(c, k) => NVis(c, λ a => Nu(X, step, k(a))),
+    }
+}
+
+fn Nu::out<R>(E: Events, m: Nu<R>(E)) → NuHead<R>(E) {
+    Nu::repack(E, m.X, m.step, m.step(m.seed))
+}
+
+// The β rule of a negative `M`, by `refl`, at an open carrier, step and seed.
+theorem Nu::out_unfold<R>(E: Events, X: Type, step: X → Head<R, X>(E), x: X):
+    Nu::out(E, Nu::unfold(E, X, step, x)) = Nu::repack(E, X, step, step(x)) { refl }
+
+// The tree that answers forever: a `Tau` and then itself, as a value.
+fn Nu::spin<R>(E: Events) → Nu<R>(E) { Nu::unfold(E, True, λ u => HTau(u), trivial) }
+
+theorem Nu::spin_out<R>(E: Events): Nu::out(E, Nu::spin<R>(E)) = NTau(Nu::spin<R>(E)) { refl }
+
+// Fuel-cut approximations: every finite theorem is stated through these.
+fn Nu::approx<R>(E: Events, n: Nat, m: Nu<R>(E)) → ITree<R>(E) {
+    match n {
+        Zero => Cut,
+        Succ(k) => match Nu::out(E, m) {
+            NRet(r) => Ret(r),
+            NTau(y) => Tau(Nu::approx(E, k, y)),
+            NVis(c, f) => Vis(c, λ a => Nu::approx(E, k, f(a))),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// B. The limit of the cuts.
+
+// A tree cut at depth `n`: `n` constructors, then `Cut`.
+fn ITree::cut<R>(E: Events, n: Nat, t: ITree<R>(E)) → ITree<R>(E) {
+    match n {
+        Zero => Cut,
+        Succ(k) => match t {
+            Ret(r) => Ret(r),
+            Tau(s) => Tau(ITree::cut(E, k, s)),
+            Vis(c, f) => Vis(c, λ a => ITree::cut(E, k, f(a))),
+            Cut => Cut,
+        },
+    }
+}
+
+// A coherent sequence: each tree is the cut of the next, up to `Same`.
+record Lim<R>(E: Events) {
+    at: Nat → ITree<R>(E),
+    coh: (n: Nat) → ITree::Same(E, ITree::cut(E, n, at(Succ(n))), at(n)),
+}
+
+// Unrolling a coalgebra `n` times.
+fn ITree::unroll<R, X>(E: Events, step: X → Head<R, X>(E), n: Nat, x: X) → ITree<R>(E) {
+    match n {
+        Zero => Cut,
+        Succ(k) => match step(x) {
+            HRet(r) => Ret(r),
+            HTau(y) => Tau(ITree::unroll(E, step, k, y)),
+            HVis(c, f) => Vis(c, λ a => ITree::unroll(E, step, k, f(a))),
+        },
+    }
+}
+
+// One layer of the unrolling, at a head: `unroll(Succ(k), x)` is this at
+// `step(x)`, which lets a proof split the head while the goal still reads
+// as the unrolling.
+fn ITree::unroll_head<R, X>(E: Events, step: X → Head<R, X>(E), k: Nat, h: Head<R, X>(E)) → ITree<R>(E) {
+    match h {
+        HRet(r) => Ret(r),
+        HTau(y) => Tau(ITree::unroll(E, step, k, y)),
+        HVis(c, f) => Vis(c, λ a => ITree::unroll(E, step, k, f(a))),
+    }
+}
+
+theorem ITree::unroll_succ<R, X>(E: Events, step: X → Head<R, X>(E), k: Nat, x: X):
+    ITree::unroll(E, step, Succ(k), x) = ITree::unroll_head(E, step, k, step(x)) { refl }
+
+// The unrollings cohere, by induction on the depth; the `Vis` case is
+// where `Same` stands in for the funext an equation would need. The head
+// is split in a lemma over an abstract head, with the depth's hypothesis
+// passed in.
+theorem ITree::unroll_head_coh<R, X>(E: Events, step: X → Head<R, X>(E), k: Nat, h: Head<R, X>(E),
+    ih: (y: X) → ITree::Same(E, ITree::cut(E, k, ITree::unroll(E, step, Succ(k), y)), ITree::unroll(E, step, k, y))):
+    ITree::Same(E, ITree::cut(E, Succ(k), ITree::unroll_head(E, step, Succ(k), h)), ITree::unroll_head(E, step, k, h))
+{
+    match h {
+        HRet(r) => refl,
+        HTau(y) => SameTau(ITree::unroll(E, step, k, y), refl, ih(y)),
+        HVis(c, f) => SameVis(λ a => ITree::unroll(E, step, k, f(a)), refl, λ a => ih(f(a))),
+    }
+}
+
+theorem ITree::unroll_coh<R, X>(E: Events, step: X → Head<R, X>(E), n: Nat, x: X):
+    ITree::Same(E, ITree::cut(E, n, ITree::unroll(E, step, Succ(n), x)), ITree::unroll(E, step, n, x))
+{
+    match n {
+        Zero => refl,
+        Succ(k) => ITree::unroll_head_coh(E, step, k, step(x), λ y => ITree::unroll_coh(E, step, k, y)),
+    }
+}
+
+fn Lim::unfold<R, X>(E: Events, step: X → Head<R, X>(E), x: X) → Lim<R>(E) {
+    Lim(λ n => ITree::unroll(E, step, n, x), λ n => ITree::unroll_coh(E, step, n, x))
+}
+
+// At a literal depth the limit computes: depth two of `spin` is two `Tau`s.
+fn Lim::spin_step<R>(E: Events, u: True) → Head<R, True>(E) { HTau(u) }
+
+fn Lim::spin<R>(E: Events) → Lim<R>(E) { Lim::unfold(E, λ u => Lim::spin_step<R>(E, u), trivial) }
+
+theorem Lim::spin_two<R>(E: Events): Lim::spin<R>(E).at(2) = Tau(Tau(Cut)) { refl }
+
+// The two encodings agree at every depth: `Nu`'s approximations of an
+// unfolding are the limit's unrollings. Up to `Same`, not `=`: under a `Vis`
+// the two continuations agree at every answer, which is funext again.
+fn Nu::approx_head<R>(E: Events, k: Nat, h: NuHead<R>(E)) → ITree<R>(E) {
+    match h {
+        NRet(r) => Ret(r),
+        NTau(y) => Tau(Nu::approx(E, k, y)),
+        NVis(c, f) => Vis(c, λ a => Nu::approx(E, k, f(a))),
+    }
+}
+
+theorem Nu::approx_succ<R>(E: Events, k: Nat, m: Nu<R>(E)):
+    Nu::approx(E, Succ(k), m) = Nu::approx_head(E, k, Nu::out(E, m)) { refl }
+
+theorem Nu::approx_unfold_head<R, X>(E: Events, step: X → Head<R, X>(E), k: Nat, h: Head<R, X>(E),
+    ih: (y: X) → ITree::Same(E, Nu::approx(E, k, Nu::unfold(E, X, step, y)), ITree::unroll(E, step, k, y))):
+    ITree::Same(E, Nu::approx_head(E, k, Nu::repack(E, X, step, h)), ITree::unroll_head(E, step, k, h))
+{
+    match h {
+        HRet(r) => refl,
+        HTau(y) => SameTau(ITree::unroll(E, step, k, y), refl, ih(y)),
+        HVis(c, f) => SameVis(λ a => ITree::unroll(E, step, k, f(a)), refl, λ a => ih(f(a))),
+    }
+}
+
+theorem Nu::approx_unfold<R, X>(E: Events, step: X → Head<R, X>(E), n: Nat, x: X):
+    ITree::Same(E, Nu::approx(E, n, Nu::unfold(E, X, step, x)), ITree::unroll(E, step, n, x))
+{
+    match n {
+        Zero => refl,
+        Succ(k) => Nu::approx_unfold_head(E, step, k, step(x), λ y => Nu::approx_unfold(E, step, k, y)),
+    }
+}
