@@ -52,3 +52,7 @@ Where loops live is a sub-question of the effectful source's shape
 - **[[function-ir-verified-lowering]]** owns the lowering and its rounds.
 - **[[native-loop-rule]]** owns `loop_at`.
 - **[[native-effect-source-compiler]]** owns the source's shape.
+
+## Log
+
+- 2026-10-21: `docs/native-effect-source-design.md` §5 adds a third option and recommends it, pending Minus's decision: **split loops by totality**. FunctionIR gains a *bounded* loop (at most `bound` passes, with an early-exit bit; `bounded_readonly`'s shape), which keeps FunctionIR total and is lowered by a fifth S4 round proved by induction on the bound; the effectful layer keeps the one *general* loop, proved by `loop_at` with the tree's remaining fuel as the ghost variant. Option 1 would give total pure functions a partial meaning; option 2 would make FunctionIR's evaluator need fuel.
