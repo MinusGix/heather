@@ -610,9 +610,11 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
                 b'>' => (TokKind::Gt, 1),
                 b'=' => (TokKind::Eq, 1),
                 _ => {
+                    // The whole character, not its first byte: `δ` is two.
+                    let ch = src[start..].chars().next().unwrap_or(c as char);
                     return Err(LexError {
-                        msg: format!("unexpected character {:?}", c as char),
-                        span: Span { start, end: start + 1 },
+                        msg: format!("unexpected character {ch:?}"),
+                        span: Span { start, end: start + ch.len_utf8() },
                     })
                 }
             },
@@ -641,6 +643,15 @@ mod tests {
             Ok(toks) => panic!("{src} lexed: {toks:?}"),
             Err(e) => e.msg,
         }
+    }
+
+    #[test]
+    fn an_unexpected_non_ascii_character_is_reported_whole() {
+        // Identifiers are ASCII; a Greek letter is refused as itself, and its
+        // span covers both of its bytes so a snippet never cuts it in half.
+        let e = lex("theorem t(δ: Type)").unwrap_err();
+        assert!(e.msg.contains("'δ'"), "{}", e.msg);
+        assert_eq!(e.span.end - e.span.start, 'δ'.len_utf8());
     }
 
     #[test]

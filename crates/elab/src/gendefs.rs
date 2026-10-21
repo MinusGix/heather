@@ -215,7 +215,7 @@ impl GenDef {
             GenDef::Mu(t) | GenDef::IdxTag(t, _) | GenDef::IdxChild(t, _, _) | GenDef::IdxCode(t)
             | GenDef::SkelCode(t) | GenDef::TyCode(t) | GenDef::TyCodeFn(t) | GenDef::ShapeCode(t)
             | GenDef::ArityFn(t) | GenDef::Fam(t) | GenDef::RecProj(t, _) | GenDef::RecTail(t, _)
-            | GenDef::RecFam(t, _) | GenDef::PayloadCode(t, _) | GenDef::SuffixCode(t, _) => t,
+            | GenDef::RecFam(t, _) | GenDef::PayloadCode(t, _) | GenDef::SuffixCode(t, _) | GenDef::WCanon(t) => t,
         }
     }
 

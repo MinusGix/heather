@@ -99,6 +99,12 @@ fn Format::top(self F: Format) → Nat { Nat::pow(2, F.prec()) }
 
 theorem Format::top_double(self F: Format): F.top() = F.half() * 2 { refl }
 
+// Both are positive, as evidence, so `Rat(1, F.top())` finds its
+// denominator's proof.
+evidence theorem Format::half_pos({F: Format}): 0 < F.half() { Nat::pow_pos(a := 2, n := F.frac) }
+
+evidence theorem Format::top_pos({F: Format}): 0 < F.top() { Nat::pow_pos(a := 2, n := F.prec()) }
+
 // IEEE 754 interchange formats and bfloat16.
 fn binary16() → Format { Format(10, trivial, -14, 29, Ieee) }
 fn binary32() → Format { Format(23, trivial, -126, 253, Ieee) }
