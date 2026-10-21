@@ -50,3 +50,9 @@ of the area.
   submilestones `float-values` … `float-transcendental` in the roadmap.
   Notation for the IEEE orders and for rounding is a language-lane ask:
   [[decorated-relation-symbols]].
+- 2026-10-20: round 1 (`float-values`) landed on the design PR:
+  `lib/std/float/dyadic.hthr` (Dyadic, CommRing and strict order through the
+  embedding into Rat) and `lib/std/float/float.hthr` (formats, canonical
+  finite floats, `Float(F)` as `Extended`, value order, generic constants).
+  What changed from the sketch is in design §10.
+

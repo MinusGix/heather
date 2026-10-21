@@ -1,0 +1,437 @@
+// Binary floating-point formats and their values
+// (docs/floating-point-design.md §3–§4; roadmap submilestone `float-values`).
+//
+// A `Format` is data: a precision, an exponent range and a policy for the
+// special values. Every float type is indexed by one, so `Finite(binary32())`
+// and `Finite(e4m3())` are different types that can meet in one scope, and a
+// conversion between them is an ordinary function.
+//
+// Representation. A finite float is a sign, an integer significand `mag` and
+// a biased exponent `bexp`; its value is `±mag · 2^q` with the quantum exponent
+// (the exponent of the significand's last bit) `q = qmin + bexp`. Storing the
+// quantum exponent means no `e - prec + 1` anywhere, and biasing it from the
+// format's least exponent makes the canonical-form condition a fact about
+// naturals only. The canonical form is the IEEE one: the significand has at
+// most `prec` bits, and only the least exponent holds significands below
+// `2^(prec - 1)` (the subnormals and zero). It is a `Bool` computed from the
+// parts, so a literal float's proof is `trivial`, and two finite floats with
+// the same three parts are equal (`Finite::ext`): `IsTrue` proofs are unique.
+//
+// Precision is given by its fraction bits, `frac = prec - 1`, the trailing
+// significand width IEEE calls `t` and the OCP formats call `M`. Then
+// `2^prec` is `2^frac · 2` by computation, with no subtraction under a power.
+//
+// Equality and order (§4). `=` is structural, so `+0` and `-0` differ. `≈`
+// is value sameness and `<` the value order, both read through the value as
+// a `Dyadic`, so `Finite(F)` is a strict order like `Rat` and the
+// `ordered_field` lemmas that need only that apply to it. The IEEE orders on
+// `Float(F)` (quiet comparison, totalOrder) are named functions and come with
+// the operations.
+//
+// Special values. `Float(F)` adds infinities and NaN to the finite floats.
+// Its constructors carry evidence that the format has them, so a format with
+// no infinity has no infinite value: a match dismisses that case by
+// evaluation. (Inductives do not take value parameters yet, so `Float(F)` is
+// the generic `Extended` at the format's evidence types.)
+
+import logic;
+import bool;
+import nat;
+import int;
+import omega;
+import ring;
+import option;
+import relation_props;
+import algebra;
+import algebra_rel;
+import order;
+import ordered_field;
+import semiring;
+import rat;
+import dyadic;
+
+// ---------------------------------------------------------------------------
+// Formats.
+
+// What the format keeps for special values. `Ieee`: infinities and NaNs in
+// the top exponent field, so finite values stop at the top binade. `NanOnly`:
+// no infinity, and the one pattern with every exponent and significand bit
+// set is NaN (OCP E4M3), so the top binade loses its largest significand.
+// `FiniteOnly`: every pattern is finite (OCP FP6 and FP4).
+inductive Specials { Ieee, NanOnly, FiniteOnly }
+
+fn Specials::has_inf(self s: Specials) → Bool { match s { Ieee => True, NanOnly => False, FiniteOnly => False } }
+
+fn Specials::has_nan(self s: Specials) → Bool { match s { Ieee => True, NanOnly => True, FiniteOnly => False } }
+
+fn Specials::reserves_top(self s: Specials) → Bool { match s { Ieee => False, NanOnly => True, FiniteOnly => False } }
+
+// `frac` fraction bits (precision `frac + 1`, at least two); `emin` the least
+// normal exponent, IEEE's emin; `span` the number of binades above it, so
+// IEEE's emax is `emin + span`.
+record Format {
+    frac: Nat,
+    frac_ok: 1 <= frac,
+    emin: Int,
+    span: Nat,
+    specials: Specials,
+}
+
+fn Format::prec(self F: Format) → Nat { Succ(F.frac) }
+
+fn Format::emax(self F: Format) → Int { F.emin + F.span.int() }
+
+// The quantum exponent of the least binade: subnormals are multiples of
+// `2^qmin`.
+fn Format::qmin(self F: Format) → Int { F.emin -F.frac.int() }
+
+fn Format::qmax(self F: Format) → Int { F.qmin() + F.span.int() }
+
+// `2^(prec - 1)`, the least normal significand, and `2^prec`, one past the
+// largest.
+fn Format::half(self F: Format) → Nat { Nat::pow(2, F.frac) }
+
+fn Format::top(self F: Format) → Nat { Nat::pow(2, F.prec()) }
+
+theorem Format::top_double(self F: Format): F.top() = F.half() * 2 { refl }
+
+// IEEE 754 interchange formats and bfloat16.
+fn binary16() → Format { Format(10, trivial, -14, 29, Ieee) }
+fn binary32() → Format { Format(23, trivial, -126, 253, Ieee) }
+fn binary64() → Format { Format(52, trivial, -1022, 2045, Ieee) }
+fn bfloat16() → Format { Format(7, trivial, -126, 253, Ieee) }
+
+// OCP microscaling element formats (OCP MX v1.0). E8M0 is a scale with no
+// significand and no zero, so it is not a `Format`.
+fn e5m2() → Format { Format(2, trivial, -14, 29, Ieee) }
+fn e4m3() → Format { Format(3, trivial, -6, 14, NanOnly) }
+fn e3m2() → Format { Format(2, trivial, -2, 6, FiniteOnly) }
+fn e2m3() → Format { Format(3, trivial, 0, 2, FiniteOnly) }
+fn e2m1() → Format { Format(1, trivial, 0, 2, FiniteOnly) }
+
+// ---------------------------------------------------------------------------
+// Canonical form.
+
+// The significand fits in `prec` bits, the exponent is in range, only the
+// least exponent holds significands below `2^(prec - 1)`, and the pattern the
+// format reserves for NaN is not taken.
+fn Format::canonical(self F: Format, mag, bexp: Nat) → Bool {
+    let normal = match bexp { Zero => True, Succ(_) => F.half().leb(mag) };
+    let reserved = F.specials.reserves_top() && F.span.leb(bexp) && F.top().leb(Succ(mag));
+    Succ(mag).leb(F.top()) && bexp.leb(F.span) && normal && !reserved
+}
+
+record Finite(F: Format) { neg: Bool, mag: Nat, bexp: Nat, ok: F.canonical(mag, bexp).IsTrue() }
+
+// A finite float is its three parts: the canonical-form proof is unique.
+theorem Finite::eta_parts({F: Format}, x: Finite(F), n: Bool, m, b: Nat, w: F.canonical(m, b).IsTrue(),
+    hn: x.neg = n, hm: x.mag = m, hb: x.bexp = b): x = Finite(n, m, b, w)
+{
+    j(hn, λ n1 _ => (v: F.canonical(m, b).IsTrue()) → x = Finite(n1, m, b, v),
+        j(hm, λ m1 _ => (v: F.canonical(m1, b).IsTrue()) → x = Finite(x.neg, m1, b, v),
+            j(hb, λ b1 _ => (v: F.canonical(x.mag, b1).IsTrue()) → x = Finite(x.neg, x.mag, b1, v),
+                λ (v: F.canonical(x.mag, x.bexp).IsTrue()) =>
+                    j(F.canonical(x.mag, x.bexp).is_true_unique(x.ok, v),
+                        λ z _ => x = Finite(x.neg, x.mag, x.bexp, z), refl))))(w)
+}
+
+theorem Finite::ext({F: Format}, x, y: Finite(F), neg: x.neg = y.neg, mag: x.mag = y.mag, bexp: x.bexp = y.bexp): x = y {
+    Finite::eta_parts(x, y.neg, y.mag, y.bexp, y.ok, neg, mag, bexp)
+}
+
+// ---------------------------------------------------------------------------
+// Values.
+
+fn Finite::q({F: Format}, self x: Finite(F)) → Int { F.qmin() + x.bexp.int() }
+
+fn Finite::signed({F: Format}, self x: Finite(F)) → Int { match x.neg { False => x.mag.int(), True => -x.mag.int() } }
+
+// The exact value, `±mag · 2^q`.
+fn Finite::dyadic({F: Format}, self x: Finite(F)) → Dyadic { Dyadic(x.signed(), x.q()) }
+
+fn Finite::val({F: Format}, self x: Finite(F)) → Rat { x.dyadic().rat() }
+
+fn Finite::Same({F: Format}, x, y: Finite(F)) → Type { x.dyadic() ≈ y.dyadic() }
+
+fn Finite::Lt({F: Format}, x, y: Finite(F)) → Type { x.dyadic() < y.dyadic() }
+
+fn Finite::Le({F: Format}, x, y: Finite(F)) → Type { x.dyadic() <= y.dyadic() }
+
+designation ≈ at Finite(F) := Finite::Same
+designation < at Finite(F) := Finite::Lt
+designation <= at Finite(F) := Finite::Le
+
+theorem Finite::same_refl({F: Format}, self x: Finite(F)): x ≈ x { x.dyadic().same_refl() }
+
+theorem Finite::same_sym({F: Format}, {x, y: Finite(F)}, h: x ≈ y): y ≈ x { Dyadic::same_sym(a := x.dyadic(), b := y.dyadic(), h := h) }
+
+theorem Finite::same_trans({F: Format}, {x, y, z: Finite(F)}, hxy: x ≈ y, hyz: y ≈ z): x ≈ z {
+    Dyadic::same_trans(a := x.dyadic(), b := y.dyadic(), c := z.dyadic(), hab := hxy, hbc := hyz)
+}
+
+instance(F: Format) Equivalence<Finite(F)>(Finite::Same) {
+    rel_refl := Finite::same_refl,
+    rel_sym := λ x y h => Finite::same_sym(h),
+    rel_trans := λ x y z hxy hyz => Finite::same_trans(hxy, hyz),
+}
+
+theorem Finite::lt_irrefl({F: Format}, self x: Finite(F)): ¬(x < x) { x.dyadic().lt_irrefl() }
+
+theorem Finite::lt_trans({F: Format}, {x, y, z: Finite(F)}, h1: x < y, h2: y < z): x < z {
+    Dyadic::lt_trans(a := x.dyadic(), b := y.dyadic(), c := z.dyadic(), h1 := h1, h2 := h2)
+}
+
+theorem Finite::lt_respects({F: Format}, {x, x2, y, y2: Finite(F)}, hx: x ≈ x2, hy: y ≈ y2, h: x < y): x2 < y2 {
+    Dyadic::lt_respects(a := x.dyadic(), a2 := x2.dyadic(), b := y.dyadic(), b2 := y2.dyadic(), ha := hx, hb := hy, h := h)
+}
+
+theorem Finite::same_of_not_lt({F: Format}, {x, y: Finite(F)}, h1: ¬(x < y), h2: ¬(y < x)): x ≈ y {
+    Dyadic::same_of_not_lt(a := x.dyadic(), b := y.dyadic(), h1 := h1, h2 := h2)
+}
+
+theorem Finite::le_of_not_lt({F: Format}, {x, y: Finite(F)}, h: ¬(y < x)): x <= y {
+    Dyadic::le_of_not_lt(a := x.dyadic(), b := y.dyadic(), h := h)
+}
+
+theorem Finite::not_lt_of_le({F: Format}, {x, y: Finite(F)}, h: x <= y): ¬(y < x) {
+    Dyadic::not_lt_of_le(a := x.dyadic(), b := y.dyadic(), h := h)
+}
+
+theorem Finite::lt_cotrans({F: Format}, self x, y, z: Finite(F), h: x < y): x < z ∨ z < y {
+    x.dyadic().lt_cotrans(y.dyadic(), z.dyadic(), h)
+}
+
+fn Finite::le_dec({F: Format}, self x, y: Finite(F)) → x <= y ∨ ¬(x <= y) { x.dyadic().le_dec(y.dyadic()) }
+
+// The relation kit `calc` and `relation_step` resolve against.
+
+theorem Finite::le_refl({F: Format}, self x: Finite(F)): x <= x { x.dyadic().le_refl() }
+
+theorem Finite::le_of_same({F: Format}, {x, y: Finite(F)}, h: x ≈ y): x <= y { Dyadic::le_of_same(a := x.dyadic(), b := y.dyadic(), h := h) }
+
+theorem Finite::le_of_lt({F: Format}, {x, y: Finite(F)}, h: x < y): x <= y { Dyadic::le_of_lt(a := x.dyadic(), b := y.dyadic(), h := h) }
+
+theorem Finite::le_trans({F: Format}, {x, y, z: Finite(F)}, h1: x <= y, h2: y <= z): x <= z {
+    Dyadic::le_trans(a := x.dyadic(), b := y.dyadic(), c := z.dyadic(), h1 := h1, h2 := h2)
+}
+
+theorem Finite::le_total({F: Format}, self x, y: Finite(F)): x <= y ∨ y <= x { x.dyadic().le_total(y.dyadic()) }
+
+theorem Finite::lt_of_lt_of_le({F: Format}, {x, y, z: Finite(F)}, h1: x < y, h2: y <= z): x < z {
+    Dyadic::lt_of_lt_of_le(a := x.dyadic(), b := y.dyadic(), c := z.dyadic(), h1 := h1, h2 := h2)
+}
+
+theorem Finite::lt_of_le_of_lt({F: Format}, {x, y, z: Finite(F)}, h1: x <= y, h2: y < z): x < z {
+    Dyadic::lt_of_le_of_lt(a := x.dyadic(), b := y.dyadic(), c := z.dyadic(), h1 := h1, h2 := h2)
+}
+
+instance(F: Format) Preorder<Finite(F)>(Finite::Le) {
+    rel_refl := Finite::le_refl,
+    rel_trans := λ x y z h1 h2 => Finite::le_trans(h1, h2),
+}
+
+instance(F: Format) Total<Finite(F)>(Finite::Le) { rel_total := Finite::le_total }
+
+instance(F: Format) Irreflexive<Finite(F)>(Finite::Lt) { rel_irrefl := Finite::lt_irrefl }
+
+instance(F: Format) Transitive<Finite(F)>(Finite::Lt) { rel_trans := λ x y z h1 h2 => Finite::lt_trans(h1, h2) }
+
+instance(F: Format) Trans<Finite(F)>(Finite::Le, Finite::Lt, Finite::Lt) { rel_chain := λ x y z h1 h2 => Finite::lt_of_le_of_lt(h1, h2) }
+instance(F: Format) Trans<Finite(F)>(Finite::Lt, Finite::Le, Finite::Lt) { rel_chain := λ x y z h1 h2 => Finite::lt_of_lt_of_le(h1, h2) }
+instance(F: Format) Trans<Finite(F)>(Finite::Same, Finite::Le, Finite::Le) { rel_chain := λ x y z h1 h2 => Finite::le_trans(Finite::le_of_same(h1), h2) }
+instance(F: Format) Trans<Finite(F)>(Finite::Le, Finite::Same, Finite::Le) { rel_chain := λ x y z h1 h2 => Finite::le_trans(h1, Finite::le_of_same(h2)) }
+instance(F: Format) Trans<Finite(F)>(Finite::Same, Finite::Lt, Finite::Lt) { rel_chain := λ x y z h1 h2 => Finite::lt_of_le_of_lt(Finite::le_of_same(h1), h2) }
+instance(F: Format) Trans<Finite(F)>(Finite::Lt, Finite::Same, Finite::Lt) { rel_chain := λ x y z h1 h2 => Finite::lt_of_lt_of_le(h1, Finite::le_of_same(h2)) }
+
+instance(F: Format) StrictOrder<Finite(F)>(Finite::Same, Finite::Lt, Finite::Le) {
+    rel_refl := Finite::same_refl,
+    rel_sym := λ x y h => Finite::same_sym(h),
+    rel_trans := λ x y z hxy hyz => Finite::same_trans(hxy, hyz),
+    lt_irrefl := Finite::lt_irrefl,
+    lt_trans := λ x y z h1 h2 => Finite::lt_trans(h1, h2),
+    lt_respects := λ x x2 y y2 hx hy h => Finite::lt_respects(hx, hy, h),
+    lt_tight := λ x y h1 h2 => Finite::same_of_not_lt(h1, h2),
+    le_of_not_lt := λ x y h => Finite::le_of_not_lt(h),
+    not_lt_of_le := λ x y h => Finite::not_lt_of_le(h),
+}
+
+instance(F: Format) Cotransitive<Finite(F)>(Finite::Lt) {
+    rel_cotrans := Finite::lt_cotrans,
+}
+
+instance(F: Format) PseudoOrder<Finite(F)>(Finite::Same, Finite::Lt, Finite::Le) {
+    rel_refl := Finite::same_refl,
+    rel_sym := λ x y h => Finite::same_sym(h),
+    rel_trans := λ x y z hxy hyz => Finite::same_trans(hxy, hyz),
+    lt_irrefl := Finite::lt_irrefl,
+    lt_trans := λ x y z h1 h2 => Finite::lt_trans(h1, h2),
+    lt_respects := λ x x2 y y2 hx hy h => Finite::lt_respects(hx, hy, h),
+    lt_tight := λ x y h1 h2 => Finite::same_of_not_lt(h1, h2),
+    le_of_not_lt := λ x y h => Finite::le_of_not_lt(h),
+    not_lt_of_le := λ x y h => Finite::not_lt_of_le(h),
+    rel_cotrans := Finite::lt_cotrans,
+}
+
+// Negation flips the sign bit and nothing else.
+fn Finite::neg({F: Format}, self x: Finite(F)) → Finite(F) { Finite(!x.neg, x.mag, x.bexp, x.ok) }
+
+designation prefix - at Finite(F) := Finite::neg
+
+theorem Finite::neg_neg({F: Format}, self x: Finite(F)): -(-x) = x {
+    Finite::ext(-(-x), x, match x.neg as λ s => !(!s) = s { False => refl, True => refl }, refl, refl)
+}
+
+theorem Finite::dyadic_neg({F: Format}, self x: Finite(F)): (-x).dyadic() ≈ -x.dyadic() {
+    match x.neg as λ s => Dyadic(match !s { False => x.mag.int(), True => -x.mag.int() }, x.q()) ≈ -Dyadic(match s { False => x.mag.int(), True => -x.mag.int() }, x.q()) {
+        False => Dyadic(-x.mag.int(), x.q()).same_refl(),
+        True => j(sym(x.mag.int().neg_neg()), λ m _ => Dyadic(x.mag.int(), x.q()) ≈ Dyadic(m, x.q()), Dyadic(x.mag.int(), x.q()).same_refl()),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Floats: the finite values with the infinities and NaN the format keeps.
+
+inductive Extended<X, I, N> { Fin(x: X), Inf(neg: Bool, has: I), NaN(has: N) }
+
+fn Float(F: Format) → Type { Extended<Finite(F), F.specials.has_inf().IsTrue(), F.specials.has_nan().IsTrue()> }
+
+fn Extended::is_finite<X, I, N>(self x: Extended<X, I, N>) → Bool { match x { Fin(_) => True, Inf(_, _) => False, NaN(_) => False } }
+
+fn Extended::is_nan<X, I, N>(self x: Extended<X, I, N>) → Bool { match x { Fin(_) => False, Inf(_, _) => False, NaN(_) => True } }
+
+fn Extended::is_inf<X, I, N>(self x: Extended<X, I, N>) → Bool { match x { Fin(_) => False, Inf(_, _) => True, NaN(_) => False } }
+
+fn Extended::finite<X, I, N>(self x: Extended<X, I, N>) → Option<X> { match x { Fin(f) => Some(f), Inf(_, _) => None, NaN(_) => None } }
+
+// A format without infinities has no infinite float, and one without NaN has
+// no NaN: both by evaluation of the format's policy.
+theorem Float::not_inf({F: Format}, x: Float(F), none: F.specials.has_inf() = False): x.is_inf() = False {
+    match x {
+        Fin(_) => refl,
+        Inf(_, has) => false_elim(j(none, λ b _ => b.IsTrue(), has)),
+        NaN(_) => refl,
+    }
+}
+
+theorem Float::not_nan({F: Format}, x: Float(F), none: F.specials.has_nan() = False): x.is_nan() = False {
+    match x {
+        Fin(_) => refl,
+        Inf(_, _) => refl,
+        NaN(has) => false_elim(j(none, λ b _ => b.IsTrue(), has)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Building canonical floats.
+
+theorem Format::two_le_half(self F: Format): 2 <= F.half() { Nat::le_pow_self(2, F.frac, trivial, F.frac_ok) }
+
+theorem Format::four_le_top(self F: Format): 4 <= F.top() {
+    let h = F.two_le_half();
+    let t: (F.top() = F.half() * 2) = F.top_double();
+    omega
+}
+
+// The canonical form from its four conditions, each stated as a fact about
+// naturals: the significand fits, the exponent is in range, a significand
+// below `2^(prec - 1)` sits at the least exponent, and a format that reserves
+// its top pattern for NaN leaves room below it in the top binade.
+theorem Format::canonical_intro(self F: Format, mag, bexp: Nat,
+    fits: Succ(mag) <= F.top(),
+    range: bexp <= F.span,
+    normal: bexp = 0 ∨ F.half() <= mag,
+    free: F.specials.reserves_top().IsTrue() → F.span <= bexp → Succ(Succ(mag)) <= F.top()):
+    F.canonical(mag, bexp).IsTrue()
+{
+    let fits_bit = Succ(mag).leb_complete(F.top(), fits);
+    let range_bit = bexp.leb_complete(F.span, range);
+    let normal_bit = match bexp as λ b => (b = 0 ∨ F.half() <= mag) → (match b { Zero => True, Succ(_) => F.half().leb(mag) }).IsTrue() {
+        Zero => λ _ => trivial,
+        Succ(k) => λ n => match n {
+            Inl(zero) => false_elim(omega),
+            Inr(le) => F.half().leb_complete(mag, le),
+        },
+    }(normal);
+    let reserved = F.specials.reserves_top() && F.span.leb(bexp) && F.top().leb(Succ(mag));
+    let free_bit = reserved.is_true_not_intro(λ r => {
+        let rs = (F.specials.reserves_top() && F.span.leb(bexp)).is_true_and(F.top().leb(Succ(mag)), r);
+        let rr = F.specials.reserves_top().is_true_and(F.span.leb(bexp), rs.left);
+        let room = free(rr.left, F.span.leb_sound(bexp, rr.right));
+        let over = F.top().leb_sound(Succ(mag), rs.right);
+        omega
+    });
+    (Succ(mag).leb(F.top()) && bexp.leb(F.span) && (match bexp { Zero => True, Succ(_) => F.half().leb(mag) })).is_true_and_intro(!reserved,
+        (Succ(mag).leb(F.top()) && bexp.leb(F.span)).is_true_and_intro(match bexp { Zero => True, Succ(_) => F.half().leb(mag) },
+            Succ(mag).leb(F.top()).is_true_and_intro(bexp.leb(F.span), fits_bit, range_bit), normal_bit),
+        free_bit)
+}
+
+// Zero of either sign.
+fn Finite::zero(F: Format, neg: Bool) → Finite(F) {
+    Finite(neg, 0, 0, F.canonical_intro(0, 0, Nat::pow_pos(a := 2, n := F.prec()), trivial, Inl(refl),
+        λ _ _ => Nat::le_trans(2, 4, F.top(), trivial, F.four_le_top())))
+}
+
+// The least positive subnormal, `2^qmin`.
+fn Finite::min_subnormal(F: Format) → Finite(F) {
+    Finite(False, 1, 0, F.canonical_intro(1, 0, Nat::le_trans(2, 4, F.top(), trivial, F.four_le_top()), trivial, Inl(refl),
+        λ _ _ => Nat::le_trans(3, 4, F.top(), trivial, F.four_le_top())))
+}
+
+// The least positive normal, `2^emin`.
+fn Finite::min_normal(F: Format) → Finite(F) {
+    let h = F.two_le_half();
+    let t: (F.top() = F.half() * 2) = F.top_double();
+    Finite(False, F.half(), 0, F.canonical_intro(F.half(), 0, omega, trivial, Inl(refl), λ _ _ => omega))
+}
+
+// The largest significand the top binade holds: all ones, or one less where
+// the all-ones pattern is NaN.
+fn Format::max_mag(self F: Format) → Nat {
+    match F.specials.reserves_top() { True => F.top() -2, False => F.top() -1 }
+}
+
+// The largest finite value, `max_mag · 2^qmax`.
+fn Finite::max_finite(F: Format) → Finite(F) {
+    let h = F.two_le_half();
+    let t: (F.top() = F.half() * 2) = F.top_double();
+    let four = F.four_le_top();
+    let s1 = Nat::sub_add_cancel(1, F.top(), Nat::le_trans(1, 4, F.top(), trivial, four));
+    let s2 = Nat::sub_add_cancel(2, F.top(), Nat::le_trans(2, 4, F.top(), trivial, four));
+    let fits = match F.specials.reserves_top() as λ r => Succ(match r { True => F.top() -2, False => F.top() -1 }) <= F.top() {
+        True => { let g: (F.top() -2 + 1 <= F.top()) = omega; g },
+        False => { let g: (F.top() -1 + 1 <= F.top()) = omega; g },
+    };
+    let normal = match F.specials.reserves_top() as λ r => F.half() <= match r { True => F.top() -2, False => F.top() -1 } {
+        True => { let g: (F.half() <= F.top() -2) = omega; g },
+        False => { let g: (F.half() <= F.top() -1) = omega; g },
+    };
+    let free = λ (rt: F.specials.reserves_top().IsTrue()) (_: F.span <= F.span) =>
+        match F.specials.reserves_top() as λ r => r.IsTrue() → Succ(Succ(match r { True => F.top() -2, False => F.top() -1 })) <= F.top() {
+            True => λ _ => { let g: (F.top() -2 + 2 <= F.top()) = omega; g },
+            False => λ no => false_elim(no),
+        }(rt);
+    let ok = F.canonical_intro(F.max_mag(), F.span, fits, F.span.le_refl(), Inr(normal), free);
+    Finite(False, F.max_mag(), F.span, ok)
+}
+
+// One unit in the last place: the spacing of the floats at `x`'s exponent.
+fn Finite::ulp({F: Format}, self x: Finite(F)) → Dyadic { Dyadic(1, x.q()) }
+
+theorem Finite::zero_dyadic(F: Format, neg: Bool): (Finite::zero(F, neg)).dyadic() ≈ 0 {
+    match neg as λ s => Dyadic(match s { False => OfNat(0), True => -OfNat(0) }, F.qmin() + OfNat(0)) ≈ 0 {
+        False => Dyadic::zero_mant(F.qmin() + OfNat(0)),
+        True => Dyadic::zero_mant(F.qmin() + OfNat(0)),
+    }
+}
+
+// The least normal is `2^emin`, read at the least exponent.
+theorem Finite::min_normal_dyadic(F: Format): (Finite::min_normal(F)).dyadic() ≈ Dyadic(1, F.emin) {
+    let shift = Dyadic::align(1, F.qmin() + OfNat(0), F.frac);
+    let qd: (F.qmin() = F.emin -F.frac.int()) = refl;
+    let exp: (F.qmin() + OfNat(0) + F.frac.int() = F.emin) = omega;
+    let one: (OfNat(1) * F.half().int() = F.half().int()) = OfNat(F.half()).one_mul();
+    Dyadic::same_trans(
+        j(one, λ m _ => Dyadic(m, F.qmin() + OfNat(0)) ≈ Dyadic(1, F.qmin() + OfNat(0) + F.frac.int()), shift),
+        j(exp, λ e _ => Dyadic(1, F.qmin() + OfNat(0) + F.frac.int()) ≈ Dyadic(1, e), Dyadic(1, F.qmin() + OfNat(0) + F.frac.int()).same_refl()))
+}

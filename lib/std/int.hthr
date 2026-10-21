@@ -48,6 +48,14 @@ designation prefix - at Int := Int::neg
 // says when that is lossless.
 fn Int::toNat(self a: Int) → Nat { match a { OfNat(n) => n, NegSucc(_) => 0 } }
 
+// An integer as the difference of two naturals, at most one of them nonzero:
+// `a = a.pos_part() - a.neg_part()` (`Int::pos_sub_neg`). Unlike `toNat`
+// and `-a`, the split needs no case analysis by its client, and the Nat
+// halves are atoms that `omega` reasons about through that equation.
+fn Int::pos_part(self a: Int) → Nat { a.toNat() }
+
+fn Int::neg_part(self a: Int) → Nat { match a { OfNat(_) => 0, NegSucc(k) => Succ(k) } }
+
 theorem Int::toNat_ofNat(n: Nat): OfNat(n).toNat() = n { refl }
 
 theorem Int::neg_negOfNat(n: Nat): -Int::negOfNat(n) = OfNat(n) {
@@ -640,6 +648,14 @@ theorem Int::ofNat_mul(m, n: Nat): OfNat(m * n) = OfNat(m) * OfNat(n) { refl }
 fn Nat::int(self n: Nat) → Int { OfNat(n) }
 
 theorem Nat::int_mul(self a, b: Nat): (a * b).int() = a.int() * b.int() { refl }
+
+theorem Nat::int_pow_add(self a: Nat, b, c: Nat): a.pow(b + c).int() = a.pow(b).int() * a.pow(c).int() {
+    Int::cong_ofnat(a.pow_add(b, c))
+}
+
+theorem Int::pos_sub_neg(self a: Int): a = a.pos_part().int() -a.neg_part().int() {
+    match a { OfNat(_) => refl, NegSucc(_) => refl }
+}
 
 theorem Int::mul_neg_one(self a: Int): a * NegSucc(0) = -a {
     apply trans;

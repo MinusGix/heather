@@ -149,49 +149,43 @@ in from the start but layered (§7.2), so mathematics never sees them.
 
 ## 3. Formats and values
 
+As landed in round 1 (`lib/std/float/float.hthr`; §10 records what changed
+from the first sketch):
+
 ```heather
-// Only radix 2 (flean dropped radix too; decided in §9).
-record Format {
-    prec: Nat,                    // significand digits, implicit bit included
-    prec_ok: 2 <= prec,
-    emin: Int,                    // IEEE's emin and emax: the leading exponents
-    emax: Int,
-    range_ok: emin <= emax,
-    specials: Specials,
-}
+// What the format keeps for special values. E4M3 is `NanOnly`: no infinity,
+// and its all-ones pattern is NaN. The OCP FP6/FP4 formats are `FiniteOnly`.
+// E8M0 is a scale with no significand or zero, so it is not a `Format`.
+inductive Specials { Ieee, NanOnly, FiniteOnly }
 
-// What the top binade holds. IEEE interchange formats are `Ieee`; the OCP
-// formats pick the others (E4M3 "FN": one NaN pattern, no infinity; E8M0:
-// no sign, no zero).
-inductive Specials { Ieee, NanOnly, Saturating, UnsignedNoZero }
+// Only radix 2. `frac` fraction bits (precision `frac + 1`), `emin` IEEE's
+// least normal exponent, `span` binades above it (IEEE's emax is
+// `emin + span`).
+record Format { frac: Nat, frac_ok: 1 <= frac, emin: Int, span: Nat, specials: Specials }
 
-fn Format::qmin(self F: Format) → Int { F.emin - F.prec.int() + 1 }
-fn Format::qmax(self F: Format) → Int { F.emax - F.prec.int() + 1 }
+fn Format::qmin(self F: Format) → Int { F.emin - F.frac.int() }  // subnormals are multiples of 2^qmin
+fn Format::half(self F: Format) → Nat { Nat::pow(2, F.frac) }      // least normal significand
+fn Format::top(self F: Format) → Nat { Nat::pow(2, F.prec()) }     // = half · 2, by computation
 ```
 
-The canonical-form condition is a **Boolean function**, so validity is a
-proof of `… = True` closed by evaluation for any literal float, and two
-finite floats with the same three fields are equal with no proof
-comparison:
+The canonical-form condition is a **Boolean function** of naturals only.
+Validity is an `IsTrue` proof, which closes by `trivial` for any literal
+float. `IsTrue` proofs are unique, so two finite floats with the same three
+parts are equal (`Finite::ext`):
 
 ```heather
-fn Format::canonical(self F: Format, mag: Nat, q: Int) → Bool {
-    mag < 2 ^ F.prec  &&  F.qmin <= q  &&  q <= F.qmax
-        &&  (q == F.qmin  ||  2 ^ (F.prec - 1) <= mag)
-}
+fn Format::canonical(self F: Format, mag, bexp: Nat) → Bool  // fits, in range, normal above bexp 0, not the NaN pattern
 
-record Finite(F: Format) { neg: Bool, mag: Nat, q: Int, ok: F.canonical(mag, q) = True }
+record Finite(F: Format) { neg: Bool, mag: Nat, bexp: Nat, ok: F.canonical(mag, bexp).IsTrue() }
+fn Finite::q({F: Format}, self x: Finite(F)) → Int { F.qmin() + x.bexp.int() }   // the quantum exponent
 
-inductive Float(F: Format) {
-    Fin(x: Finite(F)),
-    Inf(neg: Bool, has: F.has_inf() = True),
-    NaN(has: F.has_nan() = True),
-}
+inductive Extended<X, I, N> { Fin(x: X), Inf(neg: Bool, has: I), NaN(has: N) }
+fn Float(F: Format) → Type { Extended<Finite(F), F.specials.has_inf().IsTrue(), F.specials.has_nan().IsTrue()> }
 ```
 
 Evidence-carrying constructors make "this format has no infinity" a type
-fact: a match on `Float(e4m3fn)` dismisses `Inf` by evaluation, and no
-operation on it can produce one. `binary16`, `binary32`, `binary64`,
+fact: a match on `Float(e4m3())` dismisses `Inf` by evaluation
+(`Float::not_inf`), and no operation on it can produce one. `binary16`, `binary32`, `binary64`,
 `bfloat16`, `e5m2`, `e4m3`, `e3m2`, `e2m3`, `e2m1` and `e8m0` are values
 of `Format`. (Parameterised inductives exist in the elaborator's probes;
 whether `Float(F)` should be an inductive or a record with a tag is an
@@ -228,9 +222,11 @@ the encoding are all facts about `Nat`/`Int` triples. Their proofs are
 **`Dyadic`: the exact values.**
 
 - *Carrier.* `Dyadic { mant: Int, exp: Int }`, unnormalised. `Dyadic::Same`
-  is `≈`, by aligning to the smaller exponent: `a ≈ b` iff `a.mant ·
-  2^(a.exp - e) = b.mant · 2^(b.exp - e)` at `e = min(a.exp, b.exp)`, with
-  the shifts as `Nat` powers, so `Int` arithmetic decides it. Normalising
+  is `≈`, defined through the embedding: `a ≈ b` iff `a.rat() ≈ b.rat()`,
+  which unfolds to one `Int` equation between cross products of powers of
+  two, so `Int` arithmetic decides it. The aligned form ("shift both
+  mantissas to the smaller exponent") is a theorem, `Dyadic::align`, not the
+  definition. Normalising
   (odd mantissa, or zero) would make `=` value equality, but every operation
   would then pay for a normalisation and a proof that it normalises. The
   setoid follows the same convention as `Rat` and `CReal` and costs nothing.
@@ -242,9 +238,13 @@ the encoding are all facts about `Nat`/`Int` triples. Their proofs are
   `CommRing(≈, +, *)` instance (`semiring.hthr`) and `Lt`/`Le` by aligned
   `Int` comparison, decidable. It is an ordered commutative ring but not a
   field, and the design does not pretend otherwise.
-- *Embedding.* `Dyadic::rat` splits on the exponent's sign: `mant · 2^exp`
-  as an `Int` when `exp ≥ 0`, else `Rat(mant, 2^(-exp))`. That needs no
-  `Rat::pow` and no `PowOk` evidence, and it evaluates. It is a ring
+- *Embedding.* `Dyadic::rat` splits the exponent into its positive and
+  negative halves, `Rat(mant · 2^e⁺, 2^e⁻)` with `e = e⁺ - e⁻`
+  (`Int::pos_part`, `Int::neg_part`). That needs no case on the sign, no
+  `Rat::pow` and no `PowOk` evidence, and it evaluates. `Dyadic::rat_split`
+  says that any split `e = p - q` gives the same rational, and every
+  homomorphism proof goes through it, because `omega` reasons about the
+  natural halves but not about `toNat`. It is a ring
   embedding that preserves and reflects `≈`, `<` and `<=`; these are the
   only facts that cross into `Rat`.
 
@@ -562,8 +562,8 @@ roadmap's.
 
 | round | submilestone | content |
 |---|---|---|
-| 1 | `float-values` | `Format`, the standard formats as values, `Finite(F)`, `Float(F)`, `Dyadic` with its ring and order, `val`, `≈`/`<` with `StrictOrder`, successor and predecessor, and the literal constants (`max_finite`, `min_normal`, `min_subnormal`) proved canonical by evaluation. |
-| 2 | `float-rounding` | `RoundsTo`, `round` on dyadics with sticky, `round_rat`, `round::correct`, uniqueness, the mode laws, and the transfer lemma to any `OrderedField`. |
+| 1 | `float-values` | `Format`, the standard formats as values, `Finite(F)`, `Float(F)`, `Dyadic` with its ring and order, `val`, `≈`/`<` with `StrictOrder`, and the constants (`zero`, `min_subnormal`, `min_normal`, `max_finite`) canonical for every format. Landed; §10. |
+| 2 | `float-rounding` | Successor and predecessor with their spacing, `RoundsTo`, `round` on dyadics with sticky, `round_rat`, `round::correct`, uniqueness, the mode laws, and the transfer lemma to any `OrderedField`. |
 | 3 | `float-error` | The standard model, absolute subnormal bounds, `ulp`, γ-composition. |
 | 4 | `float-arith` | Add/sub/mul/fma with value, zero-sign and special-value theorems; then div and sqrt by sticky quotients; format conversion. |
 | 5 | `float-eft` | Sterbenz, Fast2Sum, TwoSum, TwoProduct (by fma), Veltkamp; then Kahan summation. |
@@ -617,3 +617,57 @@ Still open, for review on this design:
 - **Whether `Float(F)` is a parameterised inductive or a record with a
   tag.** This is a round-1 implementation detail. It decides only how the
   evidence-carrying `Inf`/`NaN` constructors are spelled.
+
+## 10. Round 1 as landed (`float-values`)
+
+Modules: `lib/std/float/dyadic.hthr` and `lib/std/float/float.hthr`, with
+three general facts added to their home files: `Nat::pow_pos` (an evidence
+rule, so `Rat(n, Nat::pow(2, k))` finds its denominator's positivity) and
+`Nat::le_pow_self` in `nat.hthr`, and `Nat::int_pow_add` and
+`Int::pos_part`/`neg_part`/`pos_sub_neg` in `int.hthr`. Tests are in
+`crates/elab/tests/lib_std_float.rs`.
+
+What changed from the sketch in §3, and why:
+
+- **`Float(F)` is `Extended<Finite(F), I, N>`**, a generic three-constructor
+  inductive applied to the format's evidence types. Surface inductives do
+  not take value parameters yet (`docs/surface-value-parameters.md` §6: no
+  consumer needed them). The evidence-carrying constructors work unchanged
+  (`Float::not_inf` dismisses `Inf` at E4M3 by evaluation), and methods
+  defined on `Extended` resolve on `Float(F)` values. If value parameters on
+  inductives land, `Float` can become one with no change to its clients.
+- **The exponent is stored biased, `bexp: Nat`, with `q = qmin + bexp`.**
+  It is still the quantum exponent (§9, decision 2), offset from the
+  format's least one, so the canonical-form condition involves only
+  naturals: `omega` does not reason about `Int::toNat`, and the condition
+  never needs it.
+- **Precision is `frac` fraction bits** (precision `frac + 1`), so `2^prec`
+  is `2^frac · 2` by computation and nothing takes a power of a truncated
+  subtraction. The exponent range is `emin` plus `span` binades, so
+  `emin <= emax` needs no proof field.
+- **`Specials` is `Ieee`, `NanOnly` and `FiniteOnly`.** Saturation is a
+  conversion policy rather than a property of a format, and it belongs to
+  the arithmetic rounds. E8M0 has no significand and no zero, so it is not a
+  `Format`. It will be a separate scale type when the microscaling block
+  formats are needed.
+- **The constants are generic**, each built through
+  `Format::canonical_intro` from facts about naturals. The sketch had them
+  only for literal formats, but round 2 needs `max_finite(F)` for overflow at
+  every `F`.
+- **Successor and predecessor moved to round 2**, because the rounding
+  spec is what states and uses their spacing.
+
+Observations for later rounds:
+
+- `omega` treats `Nat` subtraction as an atom, so `max_finite` feeds it
+  `Nat::sub_add_cancel` facts. Projections of a constructor application
+  (`Rat(a, b).num`) are atoms to `omega` and `ring` as well; a typed `let`
+  that states the unfolded cross-product equation works around that.
+- When a `Dyadic`, `Finite` or `Rat` relation unfolds into another
+  carrier's, the implicit arguments of that carrier's lemmas are mis-inferred
+  (the kernel then refuses the term), so the module passes them by name
+  (`Rat::same_sym(x := a.rat(), y := b.rat(), h := h)`). If this recurs in
+  round 2 it is a language issue worth filing.
+- `Dyadic::rat_add` is the costliest item in the module (a `ring` call over
+  large atoms) but well inside the rails.
+

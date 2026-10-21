@@ -24,6 +24,8 @@ mod lib_std_creal;
 mod lib_std_certified_lookup;
 #[path = "../lib_std_evidence.rs"]
 mod lib_std_evidence;
+#[path = "../lib_std_float.rs"]
+mod lib_std_float;
 #[path = "../lib_std_int.rs"]
 mod lib_std_int;
 #[path = "../lib_std_list.rs"]
