@@ -1,0 +1,442 @@
+// Memory views over the I/O profile's image (elf64_io) for the program logic
+// (linux_x86_64_wp; docs/native-program-logic-design.md §6.1): the page view,
+// where the file is fixed and the view knows the page, and the frame view,
+// where the view knows the page and a word per frame slot, whatever else the
+// frame holds. They are the burned `Stretch`'s and `Straight`'s memories
+// (native-v0, lib/elf64_stretch.hthr and lib/elf64_straight.hthr); the frame
+// lemmas are the burned elf64_frame's, kept because the frame view reads its
+// slots through them.
+import elf64_io;
+import linux_calls;
+import linux_x86_64_io;
+import linux_x86_64_wp;
+import x86_64;
+import x86_64_fetch;
+import x86_64_data_read;
+import x86_64_fetched_code;
+import x86_64_store;
+import bitvec;
+import bitvec_nat;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+import omega;
+
+// ---------------------------------------------------------------------------
+// The frame page's words
+
+// The address of offset `o`: a literal word, so a program's code that
+// names a slot evaluates to its bytes (a count up from zero, as `next_rip`
+// counts, does not; `frame_counted` says they agree inside the frame).
+fn frame_at(o: Nat) → BitVec(64) { BitVec::ofNat(io_frame_base() + o) }
+// The word at offset `o`, low byte first.
+fn frame_word(frame: Nat → BitVec(8), o: Nat) → BitVec(64) {
+    immediate_from_bytes(frame(o), frame(o + 1), frame(o + 2), frame(o + 3), frame(o + 4), frame(o + 5), frame(o + 6), frame(o + 7))
+}
+// The frame after `w` is stored at offset `o`.
+fn frame_stored(file: IoImage, o: Nat, w: BitVec(64)) → IoImage { io_frame_store_offset(file, o, word_bytes(w)) }
+
+// ---------------------------------------------------------------------------
+// Where a frame address reads from: not the page (the frame starts where it
+// ends), not the file's window (which ends at the page), the frame.
+
+theorem frame_bound(i: Nat, inside: i < 4096): io_frame_base() + i < Nat::pow(2, 64) {
+    let closed: (io_frame_base() + 4096 <= Nat::pow(2, 64)) = Nat::leb_sound(io_frame_base() + 4096, Nat::pow(2, 64), trivial);
+    omega
+}
+theorem frame_value(i: Nat, inside: i < 4096): frame_at(i).toNat() = io_frame_base() + i {
+    BitVec::toNat_ofNat(64, io_frame_base() + i, frame_bound(i, inside))
+}
+theorem frame_counted(i: Nat, inside: i < 4096): word_of_nat(64, io_frame_base() + i) = frame_at(i) {
+    trans(BitVec::cong_iterate_increment_count(64, BitVec::zero(), sym(BitVec::toNat_ofNat(64, io_frame_base() + i, frame_bound(i, inside)))),
+        BitVec::iterate_increment_toNat(64, frame_at(i)))
+}
+theorem io_offset_frame(i: Nat): io_offset_of(io_frame_base() + i) = None {
+    let low = eq_true_of_is_true(io_page_base().leb(io_frame_base() + i),
+        Nat::leb_complete(io_page_base(), io_frame_base() + i, { let b: (io_page_base() <= io_frame_base()) = Nat::leb_sound(io_page_base(), io_frame_base(), trivial); omega }));
+    let high = io_leb_false(Succ(io_frame_base() + i), io_page_base() + 4096, { omega });
+    j(sym(low), λ below _ => (match below as λ _ => Option<Nat> {
+            False => None,
+            True => match Succ(io_frame_base() + i).leb(io_page_base() + 4096) { False => None, True => Some((io_frame_base() + i) -io_page_base()) },
+        }) = None,
+        j(sym(high), λ above _ => (match above as λ _ => Option<Nat> { False => None, True => Some((io_frame_base() + i) -io_page_base()) }) = None, refl))
+}
+theorem io_file_offset_frame(i: Nat): io_file_offset(io_frame_base() + i) = None {
+    let low = eq_true_of_is_true(0x400000.leb(io_frame_base() + i),
+        Nat::leb_complete(0x400000, io_frame_base() + i, { let b: (0x400000 <= io_frame_base()) = Nat::leb_sound(0x400000, io_frame_base(), trivial); omega }));
+    let high = io_leb_false(Succ(io_frame_base() + i), 0x400000 + 65536, { omega });
+    j(sym(low), λ below _ => (match below as λ _ => Option<Nat> {
+            False => None,
+            True => match Succ(io_frame_base() + i).leb(0x400000 + 65536) { False => None, True => Some((io_frame_base() + i) -0x400000) },
+        }) = None,
+        j(sym(high), λ above _ => (match above as λ _ => Option<Nat> { False => None, True => Some((io_frame_base() + i) -0x400000) }) = None, refl))
+}
+theorem io_frame_offset_in(i: Nat, inside: i < 4096): io_frame_offset(io_frame_base() + i) = Some(i) {
+    let low = eq_true_of_is_true(io_frame_base().leb(io_frame_base() + i),
+        Nat::leb_complete(io_frame_base(), io_frame_base() + i, Nat::le_add_l(io_frame_base(), i)));
+    let fits: (Succ(io_frame_base() + i) <= io_frame_base() + 4096) = omega;
+    let high = eq_true_of_is_true(Succ(io_frame_base() + i).leb(io_frame_base() + 4096),
+        Nat::leb_complete(Succ(io_frame_base() + i), io_frame_base() + 4096, fits));
+    let offset: ((io_frame_base() + i) -io_frame_base() = i) =
+        trans(cong_fn<Nat, Nat>(λ a => a -io_frame_base(), Nat::add_comm(io_frame_base(), i)), Nat::add_sub_cancel(i, io_frame_base()));
+    j(sym(low), λ below _ => (match below as λ _ => Option<Nat> {
+            False => None,
+            True => match Succ(io_frame_base() + i).leb(io_frame_base() + 4096) { False => None, True => Some((io_frame_base() + i) -io_frame_base()) },
+        }) = Some(i),
+        j(sym(high), λ above _ => (match above { False => None, True => Some((io_frame_base() + i) -io_frame_base()) }) = Some(i),
+            cong_fn<Nat, Option<Nat>>(λ k => Some(k), offset)))
+}
+
+// The frame's byte `i`, whatever the page.
+theorem frame_read(file: IoImage, page: Nat → BitVec(8), i: Nat, inside: i < 4096):
+    io_read(IoMemory(file, page), frame_at(i)) = Some(file.frame(i)) {
+    let a = frame_at(i);
+    let value = frame_value(i, inside);
+    let not_page: (io_offset_of(a.toNat()) = None) = trans(cong_fn<Nat, Option<Nat>>(λ v => io_offset_of(v), value), io_offset_frame(i));
+    let not_file: (io_file_offset(a.toNat()) = None) = trans(cong_fn<Nat, Option<Nat>>(λ v => io_file_offset(v), value), io_file_offset_frame(i));
+    let in_frame: (io_frame_offset(a.toNat()) = Some(i)) = trans(cong_fn<Nat, Option<Nat>>(λ v => io_frame_offset(v), value), io_frame_offset_in(i, inside));
+    j(sym(not_page), λ found _ => (match found { Some(k) => Some(page(k)), None => io_image_read(file, a) }) = Some(file.frame(i)),
+        j(sym(not_file), λ found _ => (match found {
+                None => match io_frame_offset(a.toNat()) { Some(offset) => Some(file.frame(offset)), None => file.rest(a) },
+                Some(offset) => file.bytes.nth(offset),
+            }) = Some(file.frame(i)),
+            j(sym(in_frame), λ found _ => (match found { Some(offset) => Some(file.frame(offset)), None => file.rest(a) }) = Some(file.frame(i)),
+                refl)))
+}
+theorem frame_step(o, k: Nat, inside: o + k < 4096): next_rip(frame_at(o), k) = frame_at(o + k) {
+    trans(cong_fn<BitVec(64), BitVec(64)>(λ a => next_rip(a, k), sym(frame_counted(o, { omega }))),
+        trans(BitVec::iterate_increment_compose(64, BitVec::zero(), io_frame_base() + o, k),
+            trans(cong_fn<Nat, BitVec(64)>(λ v => word_of_nat(64, v), Nat::add_assoc(io_frame_base(), o, k)), frame_counted(o + k, inside))))
+}
+theorem frame_byte(file: IoImage, page: Nat → BitVec(8), o, k: Nat, inside: o + k < 4096):
+    io_read(IoMemory(file, page), next_rip(frame_at(o), k)) = Some(file.frame(o + k)) {
+    trans(cong_fn<BitVec(64), Option<BitVec(8)>>(λ a => io_read(IoMemory(file, page), a), frame_step(o, k, inside)), frame_read(file, page, o + k, inside))
+}
+
+// The word at offset `o`, whatever the page.
+theorem frame_word_at(file: IoImage, page: Nat → BitVec(8), o: Nat, room: o + 8 <= 4096):
+    WordAt(io_data_access(), IoMemory(file, page), frame_at(o), frame_word(file.frame, o)) {
+    let memory = IoMemory(file, page);
+    let low: (frame_at(o).toNat() + 8 <= Nat::pow(2, 47)) = {
+        let v = frame_value(o, { omega });
+        let top: (io_frame_base() + 4096 <= Nat::pow(2, 47)) = Nat::leb_sound(io_frame_base() + 4096, Nat::pow(2, 47), trivial);
+        omega
+    };
+    ⟨low, word_of_eight(io_read(memory, frame_at(o)), io_read(memory, next_rip(frame_at(o), 1)), io_read(memory, next_rip(frame_at(o), 2)),
+        io_read(memory, next_rip(frame_at(o), 3)), io_read(memory, next_rip(frame_at(o), 4)), io_read(memory, next_rip(frame_at(o), 5)),
+        io_read(memory, next_rip(frame_at(o), 6)), io_read(memory, next_rip(frame_at(o), 7)),
+        file.frame(o), file.frame(o + 1), file.frame(o + 2), file.frame(o + 3), file.frame(o + 4), file.frame(o + 5), file.frame(o + 6),
+        file.frame(o + 7),
+        frame_read(file, page, o, { omega }), frame_byte(file, page, o, 1, { omega }), frame_byte(file, page, o, 2, { omega }),
+        frame_byte(file, page, o, 3, { omega }), frame_byte(file, page, o, 4, { omega }), frame_byte(file, page, o, 5, { omega }),
+        frame_byte(file, page, o, 6, { omega }), frame_byte(file, page, o, 7, { omega }))⟩
+}
+
+// ---------------------------------------------------------------------------
+// A word stored in the frame: it reads back, and every word it does not
+// overlap is as it was.
+
+theorem frame_store_lands(memory: IoMemory, o: Nat, room: o + 8 <= 4096, bytes: List<BitVec(8)>):
+    io_store(memory, frame_at(o), bytes) = IoMemory(io_frame_store_offset(memory.file, o, bytes), memory.page) {
+    let in_frame: (io_frame_offset(frame_at(o).toNat()) = Some(o)) =
+        trans(cong_fn<Nat, Option<Nat>>(λ v => io_frame_offset(v), frame_value(o, { omega })), io_frame_offset_in(o, { omega }));
+    j(sym(in_frame), λ found _ => (match found {
+            Some(start) => IoMemory(io_frame_store_offset(memory.file, start, bytes), memory.page),
+            None => io_store_offset(memory, frame_at(o).toNat() -io_page_base(), bytes),
+        }) = IoMemory(io_frame_store_offset(memory.file, o, bytes), memory.page), refl)
+}
+theorem frame_writable(memory: IoMemory, o: Nat, room: o + 8 <= 4096): IoWritable(memory, frame_at(o), 8) {
+    let value = frame_value(o, { omega });
+    Inr(⟨j(sym(value), λ a _ => io_frame_base() <= a, { omega }), j(sym(value), λ a _ => a + 8 <= io_frame_base() + 4096, { omega })⟩)
+}
+
+theorem frame_store_reads(file: IoImage, offset, k: Nat, bytes: List<BitVec(8)>, byte: BitVec(8), present: bytes.nth(k) = Some(byte)):
+    io_frame_store_offset(file, offset, bytes).frame(offset + k) = byte {
+    let reached = eq_true_of_is_true(offset.leb(offset + k), Nat::leb_complete(offset, offset + k, Nat::le_add_l(offset, k)));
+    let back: ((offset + k) -offset = k) = trans(cong_fn<Nat, Nat>(λ a => a -offset, Nat::add_comm(offset, k)), Nat::add_sub_cancel(k, offset));
+    let found: (bytes.nth((offset + k) -offset) = Some(byte)) = trans(cong_fn<Nat, Option<BitVec(8)>>(λ i => bytes.nth(i), back), present);
+    j(sym(reached), λ b _ => (match b {
+            False => file.frame(offset + k),
+            True => match bytes.nth((offset + k) -offset) { None => file.frame(offset + k), Some(x) => x },
+        }) = byte,
+        j(sym(found), λ f _ => (match f { None => file.frame(offset + k), Some(x) => x }) = byte, refl))
+}
+theorem frame_store_below(file: IoImage, offset, i: Nat, bytes: List<BitVec(8)>, below: i < offset):
+    io_frame_store_offset(file, offset, bytes).frame(i) = file.frame(i) {
+    j(sym(io_leb_false(offset, i, below)), λ b _ => (match b {
+            False => file.frame(i),
+            True => match bytes.nth(i -offset) { None => file.frame(i), Some(x) => x },
+        }) = file.frame(i), refl)
+}
+theorem frame_store_above(file: IoImage, offset, i: Nat, bytes: List<BitVec(8)>, above: offset + bytes.len() <= i):
+    io_frame_store_offset(file, offset, bytes).frame(i) = file.frame(i) {
+    let reached = eq_true_of_is_true(offset.leb(i), Nat::leb_complete(offset, i, { omega }));
+    let past: (bytes.len() <= i -offset) = {
+        let back: ((i -offset) + offset = i) = Nat::sub_add_cancel(offset, i, { omega });
+        omega
+    };
+    let none: (bytes.nth(i -offset) = None) = bytes.nth_past_end(i -offset, past);
+    j(sym(reached), λ b _ => (match b {
+            False => file.frame(i),
+            True => match bytes.nth(i -offset) { None => file.frame(i), Some(x) => x },
+        }) = file.frame(i),
+        j(sym(none), λ f _ => (match f { None => file.frame(i), Some(x) => x }) = file.frame(i), refl))
+}
+
+theorem frame_stored_word(file: IoImage, o: Nat, w: BitVec(64)): frame_word(frame_stored(file, o, w).frame, o) = w {
+    let bytes = word_bytes(w);
+    let f = frame_stored(file, o, w).frame;
+    let b0: (f(o) = imm_byte0(w)) = frame_store_reads(file, o, 0, bytes, imm_byte0(w), refl);
+    let b1: (f(o + 1) = imm_byte1(w)) = frame_store_reads(file, o, 1, bytes, imm_byte1(w), refl);
+    let b2: (f(o + 2) = imm_byte2(w)) = frame_store_reads(file, o, 2, bytes, imm_byte2(w), refl);
+    let b3: (f(o + 3) = imm_byte3(w)) = frame_store_reads(file, o, 3, bytes, imm_byte3(w), refl);
+    let b4: (f(o + 4) = imm_byte4(w)) = frame_store_reads(file, o, 4, bytes, imm_byte4(w), refl);
+    let b5: (f(o + 5) = imm_byte5(w)) = frame_store_reads(file, o, 5, bytes, imm_byte5(w), refl);
+    let b6: (f(o + 6) = imm_byte6(w)) = frame_store_reads(file, o, 6, bytes, imm_byte6(w), refl);
+    let b7: (f(o + 7) = imm_byte7(w)) = frame_store_reads(file, o, 7, bytes, imm_byte7(w), refl);
+    let whole: (frame_word(f, o) = immediate_from_bytes(imm_byte0(w), imm_byte1(w), imm_byte2(w), imm_byte3(w), imm_byte4(w), imm_byte5(w),
+        imm_byte6(w), imm_byte7(w))) =
+        j(b0, λ x _ => immediate_from_bytes(f(o), f(o + 1), f(o + 2), f(o + 3), f(o + 4), f(o + 5), f(o + 6), f(o + 7)) =
+                immediate_from_bytes(x, imm_byte1(w), imm_byte2(w), imm_byte3(w), imm_byte4(w), imm_byte5(w), imm_byte6(w), imm_byte7(w)),
+        j(b1, λ x _ => immediate_from_bytes(f(o), f(o + 1), f(o + 2), f(o + 3), f(o + 4), f(o + 5), f(o + 6), f(o + 7)) =
+                immediate_from_bytes(f(o), x, imm_byte2(w), imm_byte3(w), imm_byte4(w), imm_byte5(w), imm_byte6(w), imm_byte7(w)),
+        j(b2, λ x _ => immediate_from_bytes(f(o), f(o + 1), f(o + 2), f(o + 3), f(o + 4), f(o + 5), f(o + 6), f(o + 7)) =
+                immediate_from_bytes(f(o), f(o + 1), x, imm_byte3(w), imm_byte4(w), imm_byte5(w), imm_byte6(w), imm_byte7(w)),
+        j(b3, λ x _ => immediate_from_bytes(f(o), f(o + 1), f(o + 2), f(o + 3), f(o + 4), f(o + 5), f(o + 6), f(o + 7)) =
+                immediate_from_bytes(f(o), f(o + 1), f(o + 2), x, imm_byte4(w), imm_byte5(w), imm_byte6(w), imm_byte7(w)),
+        j(b4, λ x _ => immediate_from_bytes(f(o), f(o + 1), f(o + 2), f(o + 3), f(o + 4), f(o + 5), f(o + 6), f(o + 7)) =
+                immediate_from_bytes(f(o), f(o + 1), f(o + 2), f(o + 3), x, imm_byte5(w), imm_byte6(w), imm_byte7(w)),
+        j(b5, λ x _ => immediate_from_bytes(f(o), f(o + 1), f(o + 2), f(o + 3), f(o + 4), f(o + 5), f(o + 6), f(o + 7)) =
+                immediate_from_bytes(f(o), f(o + 1), f(o + 2), f(o + 3), f(o + 4), x, imm_byte6(w), imm_byte7(w)),
+        j(b6, λ x _ => immediate_from_bytes(f(o), f(o + 1), f(o + 2), f(o + 3), f(o + 4), f(o + 5), f(o + 6), f(o + 7)) =
+                immediate_from_bytes(f(o), f(o + 1), f(o + 2), f(o + 3), f(o + 4), f(o + 5), x, imm_byte7(w)),
+        j(b7, λ x _ => immediate_from_bytes(f(o), f(o + 1), f(o + 2), f(o + 3), f(o + 4), f(o + 5), f(o + 6), f(o + 7)) =
+                immediate_from_bytes(f(o), f(o + 1), f(o + 2), f(o + 3), f(o + 4), f(o + 5), f(o + 6), x), refl))))))));
+    trans(whole, immediate_bytes_roundtrip(w))
+}
+
+// A word the store does not overlap.
+fn FrameApart(o, p: Nat) → Type { (p + 8 <= o) ∨ (o + 8 <= p) }
+theorem frame_byte_apart(file: IoImage, o, p, k: Nat, w: BitVec(64), apart: FrameApart(o, p), inside: k < 8):
+    frame_stored(file, o, w).frame(p + k) = file.frame(p + k) {
+    (match apart as λ _ => frame_stored(file, o, w).frame(p + k) = file.frame(p + k) {
+        Inl(below) => frame_store_below(file, o, p + k, word_bytes(w), { omega }),
+        Inr(above) => frame_store_above(file, o, p + k, word_bytes(w), { let l: (word_bytes(w).len() = 8) = refl; omega }),
+    })
+}
+theorem frame_word_apart(file: IoImage, o, p: Nat, w: BitVec(64), apart: FrameApart(o, p)):
+    frame_word(frame_stored(file, o, w).frame, p) = frame_word(file.frame, p) {
+    let f = frame_stored(file, o, w).frame;
+    let g = file.frame;
+    let b0: (f(p) = g(p)) = frame_byte_apart(file, o, p, 0, w, apart, trivial);
+    let b1 = frame_byte_apart(file, o, p, 1, w, apart, trivial);
+    let b2 = frame_byte_apart(file, o, p, 2, w, apart, trivial);
+    let b3 = frame_byte_apart(file, o, p, 3, w, apart, trivial);
+    let b4 = frame_byte_apart(file, o, p, 4, w, apart, trivial);
+    let b5 = frame_byte_apart(file, o, p, 5, w, apart, trivial);
+    let b6 = frame_byte_apart(file, o, p, 6, w, apart, trivial);
+    let b7 = frame_byte_apart(file, o, p, 7, w, apart, trivial);
+    j(b0, λ x _ => frame_word(f, p) = immediate_from_bytes(x, g(p + 1), g(p + 2), g(p + 3), g(p + 4), g(p + 5), g(p + 6), g(p + 7)),
+    j(b1, λ x _ => frame_word(f, p) = immediate_from_bytes(f(p), x, g(p + 2), g(p + 3), g(p + 4), g(p + 5), g(p + 6), g(p + 7)),
+    j(b2, λ x _ => frame_word(f, p) = immediate_from_bytes(f(p), f(p + 1), x, g(p + 3), g(p + 4), g(p + 5), g(p + 6), g(p + 7)),
+    j(b3, λ x _ => frame_word(f, p) = immediate_from_bytes(f(p), f(p + 1), f(p + 2), x, g(p + 4), g(p + 5), g(p + 6), g(p + 7)),
+    j(b4, λ x _ => frame_word(f, p) = immediate_from_bytes(f(p), f(p + 1), f(p + 2), f(p + 3), x, g(p + 5), g(p + 6), g(p + 7)),
+    j(b5, λ x _ => frame_word(f, p) = immediate_from_bytes(f(p), f(p + 1), f(p + 2), f(p + 3), f(p + 4), x, g(p + 6), g(p + 7)),
+    j(b6, λ x _ => frame_word(f, p) = immediate_from_bytes(f(p), f(p + 1), f(p + 2), f(p + 3), f(p + 4), f(p + 5), x, g(p + 7)),
+    j(b7, λ x _ => frame_word(f, p) = immediate_from_bytes(f(p), f(p + 1), f(p + 2), f(p + 3), f(p + 4), f(p + 5), f(p + 6), x), refl))))))))
+}
+
+// ---------------------------------------------------------------------------
+// Slots: a word per eight bytes, `vars(i)` at slot `i`. A store to one slot
+// sets it and keeps every other, by one lemma, so what the frame holds is a
+// function updated slot by slot.
+
+fn frame_slots() → Nat { 32 }
+fn FrameHolds(frame: Nat → BitVec(8), vars: Nat → BitVec(64)) → Type {
+    (i: Nat) → i < frame_slots() → frame_word(frame, 8 * i) = vars(i)
+}
+fn set_var(vars: Nat → BitVec(64), q: Nat, w: BitVec(64)) → Nat → BitVec(64) {
+    λ i => match Nat::eq_dec(i, q) { Inl(_) => w, Inr(_) => vars(i) }
+}
+// Whatever the frame holds, it holds its own words.
+theorem frame_holds_self(frame: Nat → BitVec(8)): FrameHolds(frame, λ i => frame_word(frame, 8 * i)) { λ _ _ => refl }
+
+theorem slots_apart(i, q: Nat, other: Not(i = q)): FrameApart(8 * q, 8 * i) {
+    match Nat::lt_trichotomy(i, q) as λ _ => FrameApart(8 * q, 8 * i) {
+        Inl(below) => Inl({ omega }),
+        Inr(rest) => match rest as λ _ => FrameApart(8 * q, 8 * i) {
+            Inl(same) => false_elim(other(same)),
+            Inr(above) => Inr({ omega }),
+        },
+    }
+}
+// A word stored to slot `q`.
+theorem frame_holds_store(file: IoImage, vars: Nat → BitVec(64), q: Nat, w: BitVec(64), holds: FrameHolds(file.frame, vars)):
+    FrameHolds(frame_stored(file, 8 * q, w).frame, set_var(vars, q, w)) {
+    λ i inside => match Nat::eq_dec(i, q) as λ d => frame_word(frame_stored(file, 8 * q, w).frame, 8 * i) =
+            (match d { Inl(_) => w, Inr(_) => vars(i) }) {
+        Inl(same) => j(same, λ x _ => frame_word(frame_stored(file, 8 * x, w).frame, 8 * i) = w, frame_stored_word(file, 8 * i, w)),
+        Inr(other) => trans(frame_word_apart(file, 8 * q, 8 * i, w, slots_apart(i, q, other)), holds(i, inside)),
+    }
+}
+// The word slot `i` holds, whatever the page.
+theorem frame_var_at(file: IoImage, page: Nat → BitVec(8), vars: Nat → BitVec(64), holds: FrameHolds(file.frame, vars), i: Nat,
+    inside: i < frame_slots()): WordAt(io_data_access(), IoMemory(file, page), frame_at(8 * i), vars(i)) {
+    j(holds(i, inside), λ v _ => WordAt(io_data_access(), IoMemory(file, page), frame_at(8 * i), v), frame_word_at(file, page, 8 * i, { omega }))
+}
+
+// ---------------------------------------------------------------------------
+// A span of the page
+
+theorem page_span_writable(memory: IoMemory, a: BitVec(64), c, len: Nat, room: c + len <= 4096,
+    at: a.toNat() = io_page_base() + c): IoWritable(memory, a, len) {
+    let low: (io_page_base() <= io_page_base() + c) = omega;
+    let high: (io_page_base() + c + len <= io_page_base() + 4096) = omega;
+    Inl(⟨j(sym(at), λ x _ => io_page_base() <= x, low), j(sym(at), λ x _ => x + len <= io_page_base() + 4096, high)⟩)
+}
+
+// The page with `bytes` stored at offset `c`: `io_store_offset`'s, which
+// reads no image.
+fn page_stored(page: Nat → BitVec(8), c: Nat, bytes: List<BitVec(8)>) → Nat → BitVec(8) {
+    λ offset => match c.leb(offset) {
+        False => page(offset),
+        True => match bytes.nth(offset -c) { None => page(offset), Some(byte) => byte },
+    }
+}
+
+// A store into the page, at offset `c`, whatever the image.
+theorem page_store_lands(file: IoImage, page: Nat → BitVec(8), a: BitVec(64), c: Nat, bytes: List<BitVec(8)>,
+    inside: c < 4096, at: a.toNat() = io_page_base() + c): io_store(IoMemory(file, page), a, bytes) = IoMemory(file, page_stored(page, c, bytes)) {
+    store_at_offset(IoMemory(file, page), a, c, bytes, inside, at)
+}
+
+// What the page view needs of a store: its offset, inside the page.
+fn PageSpan(page: Nat → BitVec(8), a: BitVec(64), bytes: List<BitVec(8)>, then: (Nat → BitVec(8)) → Type) → Type {
+    Exists<Nat>(λ c => (c < 4096) ∧ ((c + bytes.len() <= 4096) ∧ ((a.toNat() = io_page_base() + c) ∧ then(page_stored(page, c, bytes)))))
+}
+
+// ---------------------------------------------------------------------------
+// The page view: the file as loaded, the page what the view knows. A load
+// names its value and address over that image; a store names its offset in
+// the page; a call is asked of that image.
+
+fn io_page_view(file: IoImage) → View<IoMemory, Nat → BitVec(8)> {
+    View(
+        λ page m => m = IoMemory(file, page),
+        λ page a then => Exists<BitVec(64)>(λ w => WordAt(io_data_access(), IoMemory(file, page), a, w) ∧ then(w)),
+        λ page a then => Exists<BitVec(8)>(λ b => (io_data_access().read(IoMemory(file, page), a) = Some(b)) ∧
+            ((a.toNat() < Nat::pow(2, 47)) ∧ then(b))),
+        λ page a bytes then => PageSpan(page, a, bytes, then),
+        λ page state c => LinuxRequests(io_linux(), MachineState(state.gprs, state.flags, state.rip, IoMemory(file, page)), c))
+}
+
+theorem io_page_view_sound(file: IoImage): ViewSound<IoMemory, Nat → BitVec(8)>(io_linux(), io_page_view(file)) {
+    ViewSound(
+        word := λ page m a then holds got =>
+            j(sym(holds), λ x _ => Exists<BitVec(64)>(λ w => WordAt(io_data_access(), x, a, w) ∧ then(w)), got),
+        byte := λ page m a then holds got =>
+            j(sym(holds), λ x _ => Exists<BitVec(8)>(λ b => (io_data_access().read(x, a) = Some(b)) ∧ ((a.toNat() < Nat::pow(2, 47)) ∧ then(b))), got),
+        stores := λ page m a bytes then holds span => {
+            let c = span.witness;
+            let at = span.proof.right.right.left;
+            ⟨page_span_writable(m, a, c, bytes.len(), span.proof.right.left, at),
+             Exists(page_stored(page, c, bytes), ⟨trans(cong_fn<IoMemory, IoMemory>(λ x => io_store(x, a, bytes), holds),
+                page_store_lands(file, page, a, c, bytes, span.proof.left, at)), span.proof.right.right.right⟩)⟩
+        },
+        asks := λ page state c holds asked =>
+            j(sym(holds), λ x _ => LinuxRequests(io_linux(), MachineState(state.gprs, state.flags, state.rip, x), c), asked))
+}
+
+// ---------------------------------------------------------------------------
+// The frame view: the file's bytes and the rest as loaded, the page and a
+// word per frame slot what the view knows, whatever else the frame holds. A
+// word load reads a slot the caller names; a byte load names its byte, read
+// alike whatever the frame; a store goes to a slot, setting it, or to the
+// page; a call is asked of every frame that holds the slots.
+
+fn with_frame(file: IoImage, frame: Nat → BitVec(8)) → IoImage { IoImage(file.bytes, frame, file.rest) }
+
+record Framed { page: Nat → BitVec(8), vars: Nat → BitVec(64) }
+
+fn FrameIn(file: IoImage, f: Framed, m: IoMemory) → Type {
+    Exists<Nat → BitVec(8)>(λ frame => (m = IoMemory(with_frame(file, frame), f.page)) ∧ FrameHolds(frame, f.vars))
+}
+
+// A slot the caller names, at the address.
+fn SlotAt(a: BitVec(64), then: Nat → Type) → Type {
+    Exists<Nat>(λ q => (q < frame_slots()) ∧ ((a = frame_at(8 * q)) ∧ then(q)))
+}
+
+fn io_frame_view(file: IoImage) → View<IoMemory, Framed> {
+    View(
+        λ f m => FrameIn(file, f, m),
+        λ f a then => SlotAt(a, λ q => then(f.vars(q))),
+        λ f a then => Exists<BitVec(8)>(λ b =>
+            (((frame: Nat → BitVec(8)) → io_data_access().read(IoMemory(with_frame(file, frame), f.page), a) = Some(b)) ∧
+            ((a.toNat() < Nat::pow(2, 47)) ∧ then(b)))),
+        λ f a bytes then =>
+            Exists<BitVec(64)>(λ w => (bytes = word_bytes(w)) ∧ SlotAt(a, λ q => then(Framed(f.page, set_var(f.vars, q, w))))) ∨
+            PageSpan(f.page, a, bytes, λ page => then(Framed(page, f.vars))),
+        λ f state c => (frame: Nat → BitVec(8)) → FrameHolds(frame, f.vars) →
+            LinuxRequests(io_linux(), MachineState(state.gprs, state.flags, state.rip, IoMemory(with_frame(file, frame), f.page)), c))
+}
+
+theorem slot_room(q: Nat, inside: q < frame_slots()): 8 * q + 8 <= 4096 { omega }
+
+theorem io_frame_view_sound(file: IoImage): ViewSound<IoMemory, Framed>(io_linux(), io_frame_view(file)) {
+    ViewSound(
+        word := λ f m a then holds slot => {
+            let q = slot.witness;
+            let frame = holds.witness;
+            let read: WordAt(io_data_access(), IoMemory(with_frame(file, frame), f.page), a, f.vars(q)) =
+                j(sym(slot.proof.right.left), λ x _ => WordAt(io_data_access(), IoMemory(with_frame(file, frame), f.page), x, f.vars(q)),
+                    frame_var_at(with_frame(file, frame), f.page, f.vars, holds.proof.right, q, slot.proof.left));
+            Exists(f.vars(q), ⟨j(sym(holds.proof.left), λ x _ => WordAt(io_data_access(), x, a, f.vars(q)), read), slot.proof.right.right⟩)
+        },
+        byte := λ f m a then holds got => {
+            let frame = holds.witness;
+            let b = got.witness;
+            Exists(b, ⟨j(sym(holds.proof.left), λ x _ => io_data_access().read(x, a) = Some(b), got.proof.left(frame)), got.proof.right⟩)
+        },
+        stores := λ f m a bytes then holds place => {
+            let frame = holds.witness;
+            let memory = IoMemory(with_frame(file, frame), f.page);
+            (match place {
+                Inl(slot_store) => {
+                    let w = slot_store.witness;
+                    let slot = slot_store.proof.right;
+                    let q = slot.witness;
+                    let same: (bytes = word_bytes(w)) = slot_store.proof.left;
+                    let room: (8 * q + 8 <= 4096) = slot_room(q, slot.proof.left);
+                    let lands: (io_store(memory, frame_at(8 * q), word_bytes(w)) =
+                            IoMemory(with_frame(file, frame_stored(with_frame(file, frame), 8 * q, w).frame), f.page)) =
+                        frame_store_lands(memory, 8 * q, room, word_bytes(w));
+                    let held: FrameIn(file, Framed(f.page, set_var(f.vars, q, w)), io_store(m, a, bytes)) =
+                        Exists(frame_stored(with_frame(file, frame), 8 * q, w).frame,
+                            ⟨trans(cong_fn<IoMemory, IoMemory>(λ x => io_store(x, a, bytes), holds.proof.left),
+                                trans(cong_fn<BitVec(64), IoMemory>(λ x => io_store(memory, x, bytes), slot.proof.right.left),
+                                    trans(cong_fn<List<BitVec(8)>, IoMemory>(λ x => io_store(memory, frame_at(8 * q), x), same), lands))),
+                             frame_holds_store(with_frame(file, frame), f.vars, q, w, holds.proof.right)⟩);
+                    let writable: IoWritable(m, a, bytes.len()) =
+                        j(sym(same), λ x _ => IoWritable(m, a, x.len()),
+                            j(sym(slot.proof.right.left), λ x _ => IoWritable(m, x, 8), frame_writable(m, 8 * q, room)));
+                    ⟨writable, Exists(Framed(f.page, set_var(f.vars, q, w)), ⟨held, slot.proof.right.right⟩)⟩
+                },
+                Inr(span) => {
+                    let c = span.witness;
+                    let at = span.proof.right.right.left;
+                    ⟨page_span_writable(m, a, c, bytes.len(), span.proof.right.left, at),
+                     Exists(Framed(page_stored(f.page, c, bytes), f.vars),
+                        ⟨Exists(frame, ⟨trans(cong_fn<IoMemory, IoMemory>(λ x => io_store(x, a, bytes), holds.proof.left),
+                            page_store_lands(with_frame(file, frame), f.page, a, c, bytes, span.proof.left, at)), holds.proof.right⟩),
+                         span.proof.right.right.right⟩)⟩
+                },
+            })
+        },
+        asks := λ f state c holds asked =>
+            j(sym(holds.proof.left), λ x _ => LinuxRequests(io_linux(), MachineState(state.gprs, state.flags, state.rip, x), c),
+                asked(holds.witness, holds.proof.right)))
+}
+

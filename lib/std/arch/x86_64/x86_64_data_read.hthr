@@ -123,6 +123,21 @@ fn read_word<M>(access: ByteReadAccess<M>, memory: M, address: BitVec(64)) → O
         access.read(memory, next_rip(address, 4)), access.read(memory, next_rip(address, 5)),
         access.read(memory, next_rip(address, 6)), access.read(memory, next_rip(address, 7)))
 }
+// Eight bytes present read as their word.
+theorem word_of_eight(o0, o1, o2, o3, o4, o5, o6, o7: Option<BitVec(8)>, b0, b1, b2, b3, b4, b5, b6, b7: BitVec(8),
+    e0: o0 = Some(b0), e1: o1 = Some(b1), e2: o2 = Some(b2), e3: o3 = Some(b3), e4: o4 = Some(b4), e5: o5 = Some(b5),
+    e6: o6 = Some(b6), e7: o7 = Some(b7)):
+    word_of_reads(o0, o1, o2, o3, o4, o5, o6, o7) = Some(immediate_from_bytes(b0, b1, b2, b3, b4, b5, b6, b7)) {
+    let goal = Some(immediate_from_bytes(b0, b1, b2, b3, b4, b5, b6, b7));
+    j(sym(e0), λ x _ => word_of_reads(x, o1, o2, o3, o4, o5, o6, o7) = goal,
+    j(sym(e1), λ x _ => word_of_reads(Some(b0), x, o2, o3, o4, o5, o6, o7) = goal,
+    j(sym(e2), λ x _ => word_of_reads(Some(b0), Some(b1), x, o3, o4, o5, o6, o7) = goal,
+    j(sym(e3), λ x _ => word_of_reads(Some(b0), Some(b1), Some(b2), x, o4, o5, o6, o7) = goal,
+    j(sym(e4), λ x _ => word_of_reads(Some(b0), Some(b1), Some(b2), Some(b3), x, o5, o6, o7) = goal,
+    j(sym(e5), λ x _ => word_of_reads(Some(b0), Some(b1), Some(b2), Some(b3), Some(b4), x, o6, o7) = goal,
+    j(sym(e6), λ x _ => word_of_reads(Some(b0), Some(b1), Some(b2), Some(b3), Some(b4), Some(b5), x, o7) = goal,
+    j(sym(e7), λ x _ => word_of_reads(Some(b0), Some(b1), Some(b2), Some(b3), Some(b4), Some(b5), Some(b6), x) = goal, refl))))))))
+}
 fn word_load_after<M>(load: WordLoad, word: BitVec(64), before: MachineState<M>) → MachineState<M> {
     MachineState(gprs := write_gpr(load.destination, word, before.gprs),
         flags := before.flags, rip := next_rip(before.rip, word_load_bytes(load).len()), memory := before.memory)
