@@ -31,8 +31,7 @@
 // Special values. `Float(F)` adds infinities and NaN to the finite floats.
 // Its constructors carry evidence that the format has them, so a format with
 // no infinity has no infinite value: a match dismisses that case by
-// evaluation. (Inductives do not take value parameters yet, so `Float(F)` is
-// the generic `Extended` at the format's evidence types.)
+// evaluation.
 
 import logic;
 import bool;
@@ -291,21 +290,23 @@ theorem Finite::dyadic_neg({F: Format}, self x: Finite(F)): (-x).dyadic() ≈ -x
 // ---------------------------------------------------------------------------
 // Floats: the finite values with the infinities and NaN the format keeps.
 
-inductive Extended<X, I, N> { Fin(x: X), Inf(neg: Bool, has: I), NaN(has: N) }
+inductive Float(F: Format) {
+    Fin(x: Finite(F)),
+    Inf(neg: Bool, has: F.specials.has_inf().IsTrue()),
+    NaN(has: F.specials.has_nan().IsTrue()),
+}
 
-fn Float(F: Format) → Type { Extended<Finite(F), F.specials.has_inf().IsTrue(), F.specials.has_nan().IsTrue()> }
+fn Float::is_finite({F: Format}, self x: Float(F)) → Bool { match x { Fin(_) => True, Inf(_, _) => False, NaN(_) => False } }
 
-fn Extended::is_finite<X, I, N>(self x: Extended<X, I, N>) → Bool { match x { Fin(_) => True, Inf(_, _) => False, NaN(_) => False } }
+fn Float::is_nan({F: Format}, self x: Float(F)) → Bool { match x { Fin(_) => False, Inf(_, _) => False, NaN(_) => True } }
 
-fn Extended::is_nan<X, I, N>(self x: Extended<X, I, N>) → Bool { match x { Fin(_) => False, Inf(_, _) => False, NaN(_) => True } }
+fn Float::is_inf({F: Format}, self x: Float(F)) → Bool { match x { Fin(_) => False, Inf(_, _) => True, NaN(_) => False } }
 
-fn Extended::is_inf<X, I, N>(self x: Extended<X, I, N>) → Bool { match x { Fin(_) => False, Inf(_, _) => True, NaN(_) => False } }
-
-fn Extended::finite<X, I, N>(self x: Extended<X, I, N>) → Option<X> { match x { Fin(f) => Some(f), Inf(_, _) => None, NaN(_) => None } }
+fn Float::finite({F: Format}, self x: Float(F)) → Option<Finite(F)> { match x { Fin(f) => Some(f), Inf(_, _) => None, NaN(_) => None } }
 
 // A format without infinities has no infinite float, and one without NaN has
 // no NaN: both by evaluation of the format's policy.
-theorem Float::not_inf({F: Format}, x: Float(F), none: F.specials.has_inf() = False): x.is_inf() = False {
+theorem Float::not_inf({F: Format}, self x: Float(F), none: F.specials.has_inf() = False): x.is_inf() = False {
     match x {
         Fin(_) => refl,
         Inf(_, has) => false_elim(j(none, λ b _ => b.IsTrue(), has)),
@@ -313,7 +314,7 @@ theorem Float::not_inf({F: Format}, x: Float(F), none: F.specials.has_inf() = Fa
     }
 }
 
-theorem Float::not_nan({F: Format}, x: Float(F), none: F.specials.has_nan() = False): x.is_nan() = False {
+theorem Float::not_nan({F: Format}, self x: Float(F), none: F.specials.has_nan() = False): x.is_nan() = False {
     match x {
         Fin(_) => refl,
         Inf(_, _) => refl,

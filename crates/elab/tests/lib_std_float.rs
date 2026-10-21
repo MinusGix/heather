@@ -113,7 +113,15 @@ theorem min_norm32(): Rat::Same((Finite::min_normal(binary32())).val(), Rat(1, N
 theorem zeros_same(): Finite::zero(binary32(), False) ≈ Finite::zero(binary32(), True) { refl }
 
 // E4M3 has no infinity: a float of that format is never infinite.
-theorem e4m3_not_inf(x: Float(e4m3())): x.is_inf() = False { Float::not_inf(x, refl) }
+theorem e4m3_not_inf(x: Float(e4m3())): x.is_inf() = False { x.not_inf(refl) }
+
+// Constructors build at a literal format and at an open one, and the methods
+// compute through them.
+fn inf32() → Float(binary32()) { Inf(False, trivial) }
+theorem inf32_is_inf(): inf32().is_inf() = True { refl }
+fn wrap({F: Format}, x: Finite(F)) → Float(F) { Fin(x) }
+theorem wrap_is_finite({F: Format}, x: Finite(F)): wrap(x).is_finite() = True { refl }
+theorem wrap_finite({F: Format}, x: Finite(F)): wrap(x).finite() = Some(x) { refl }
 
 // The order kit resolves at Finite(F), the ring kit at Dyadic.
 theorem chain({F: Format}, x, y, z: Finite(F), a: x < y, b: y < z): x < z { relation_step(Finite::Lt, x, y, z, a, b) }
@@ -165,7 +173,8 @@ const LAWS: &[&str] = &[
     "Finite::zero", "Finite::min_subnormal", "Finite::min_normal", "Finite::max_finite",
     "Finite::zero_dyadic", "Finite::min_normal_dyadic",
     // Floats.
-    "Float", "Float::not_inf", "Float::not_nan",
+    "Float::is_finite", "Float::is_nan", "Float::is_inf", "Float::finite",
+    "Float::not_inf", "Float::not_nan",
     // The general facts the module added to nat and int.
     "Nat::pow_pos", "Nat::le_pow_self", "Nat::int_pow_add", "Int::pos_part", "Int::neg_part",
     "Int::pos_sub_neg",
@@ -248,6 +257,35 @@ fn the_zeros_are_same_but_not_equal() {
             "{IMPORTS} theorem ok(): Finite::zero(binary32(), False) ≈ Finite::zero(binary32(), True) {{
                 Dyadic::same_trans(Finite::zero_dyadic(binary32(), False), Dyadic::same_sym(Finite::zero_dyadic(binary32(), True)))
             }}"
+        ),
+    );
+}
+
+#[test]
+fn a_float_reads_its_format_at_an_open_parameter() {
+    // At an open format a wrapped finite value is not a NaN: the parameter
+    // reaches the constructor's field rather than being captured, so the
+    // false claim does not compute to `True`.
+    refused(
+        "float_open_not_nan",
+        &format!(
+            "{IMPORTS} fn wrap({{F: Format}}, x: Finite(F)) → Float(F) {{ Fin(x) }}
+            theorem bad({{F: Format}}, x: Finite(F)): wrap(x).is_nan() = True {{ refl }}"
+        ),
+    );
+    // An infinity at an open format needs the format's evidence: it is not
+    // built from nothing.
+    refused(
+        "float_open_inf_needs_evidence",
+        &format!("{IMPORTS} fn bad({{F: Format}}) → Float(F) {{ Inf(False, trivial) }}"),
+    );
+    // The control: given the evidence, it builds.
+    let mut e = base();
+    check(
+        &mut e,
+        "float_open_control",
+        &format!(
+            "{IMPORTS} fn inf({{F: Format}}, h: F.specials.has_inf().IsTrue()) → Float(F) {{ Inf(False, h) }}"
         ),
     );
 }

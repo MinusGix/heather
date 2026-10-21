@@ -179,17 +179,18 @@ fn Format::canonical(self F: Format, mag, bexp: Nat) → Bool  // fits, in range
 record Finite(F: Format) { neg: Bool, mag: Nat, bexp: Nat, ok: F.canonical(mag, bexp).IsTrue() }
 fn Finite::q({F: Format}, self x: Finite(F)) → Int { F.qmin() + x.bexp.int() }   // the quantum exponent
 
-inductive Extended<X, I, N> { Fin(x: X), Inf(neg: Bool, has: I), NaN(has: N) }
-fn Float(F: Format) → Type { Extended<Finite(F), F.specials.has_inf().IsTrue(), F.specials.has_nan().IsTrue()> }
+inductive Float(F: Format) {
+    Fin(x: Finite(F)),
+    Inf(neg: Bool, has: F.specials.has_inf().IsTrue()),
+    NaN(has: F.specials.has_nan().IsTrue()),
+}
 ```
 
 Evidence-carrying constructors make "this format has no infinity" a type
 fact: a match on `Float(e4m3())` dismisses `Inf` by evaluation
 (`Float::not_inf`), and no operation on it can produce one. `binary16`, `binary32`, `binary64`,
 `bfloat16`, `e5m2`, `e4m3`, `e3m2`, `e2m3`, `e2m1` and `e8m0` are values
-of `Format`. (Parameterised inductives exist in the elaborator's probes;
-whether `Float(F)` should be an inductive or a record with a tag is an
-implementation detail for round 1.)
+of `Format`.
 
 The value of a finite float goes through a small exact type:
 
@@ -614,9 +615,6 @@ Still open, for review on this design:
   variants.
 - **The decoration letters of §4.2**: `ᵢ` for the IEEE quiet comparisons
   and `ₜ` for totalOrder.
-- **Whether `Float(F)` is a parameterised inductive or a record with a
-  tag.** This is a round-1 implementation detail. It decides only how the
-  evidence-carrying `Inf`/`NaN` constructors are spelled.
 
 ## 10. Round 1 as landed (`float-values`)
 
@@ -629,13 +627,15 @@ rule, so `Rat(n, Nat::pow(2, k))` finds its denominator's positivity) and
 
 What changed from the sketch in §3, and why:
 
-- **`Float(F)` is `Extended<Finite(F), I, N>`**, a generic three-constructor
-  inductive applied to the format's evidence types. Surface inductives do
-  not take value parameters yet (`docs/surface-value-parameters.md` §6: no
-  consumer needed them). The evidence-carrying constructors work unchanged
-  (`Float::not_inf` dismisses `Inf` at E4M3 by evaluation), and methods
-  defined on `Extended` resolve on `Float(F)` values. If value parameters on
-  inductives land, `Float` can become one with no change to its clients.
+- **`Float(F)` is an inductive with a value parameter.** Round 1 first
+  wrote it as a generic `Extended<Finite(F), I, N>` applied to the format's
+  evidence types, because surface inductives did not take value parameters
+  (`docs/surface-value-parameters.md` §6). That was the one design oddity
+  Minus flagged, and value parameters on `inductive` landed in PR #89, so
+  `Float(F)` is now declared directly. Its methods live on `Float`
+  (`x.is_inf()`, `x.not_inf(refl)`), which a type-valued function could not
+  give: a method call on an `Extended` application did not resolve the
+  `Float::` members.
 - **The exponent is stored biased, `bexp: Nat`, with `q = qmin + bexp`.**
   It is still the quantum exponent (§9, decision 2), offset from the
   format's least one, so the canonical-form condition involves only
