@@ -798,22 +798,25 @@ impl Elaborator {
                 return err(format!("duplicate type parameter `{p}`"), d.span);
             }
         }
-        // Value parameters (docs/surface-value-parameters.md §1). Record-only
-        // this round: a `record` has one constructor, so *every* constructor
-        // trivially targets the parameter uniformly, which is what makes
-        // "substitute at lowering" the whole lowering. On an `inductive` the
-        // same list is meaningful but needs the uniformity check per
-        // constructor, and that is deferred rather than half-done (§6).
-        if !d.valparams.is_empty() && !d.is_record {
+        // Value parameters (docs/surface-value-parameters.md §1, §6). On a
+        // `record` uniformity across constructors is free; on an `inductive`
+        // it is what `classify_fields` checks at every recursive occurrence
+        // (`D<p̄>(v̄)` with the declaration's own parameters, in order), so a
+        // parameter is substituted at lowering and never read as an index.
+        // Beside an index it stays refused: the index telescope would have to
+        // be read under the parameters, and nothing asks for that yet.
+        if !d.valparams.is_empty()
+            && let Some(ix) = &d.index
+        {
             return err(
                 format!(
-                    "`{}` is an `inductive` and cannot take value parameters this round: \
-                     write it as a `record` if it has one constructor, or state the \
-                     varying argument as an index \
+                    "`{}` has both value parameters and an index: the two do not combine \
+                     this round. Write the uniform argument as a value parameter and drop \
+                     the index, or state the varying one as the index alone \
                      (docs/surface-value-parameters.md §6)",
                     d.name
                 ),
-                d.valparams[0].span,
+                ix.span,
             );
         }
         for (i, p) in d.valparams.iter().enumerate() {
@@ -855,18 +858,29 @@ impl Elaborator {
                 );
             }
             // A field shadows a value parameter of the same name in the later
-            // field types, which is legal but never what anyone means.
-            if d.ctors[0]
-                .fields
-                .iter()
-                .any(|f| f.name.as_deref() == Some(p.name.as_str()))
-            {
+            // field types, which is legal but never what anyone means — and on
+            // an `inductive` it would also make a recursive `D(p)` after it
+            // name the field rather than the parameter. Every constructor.
+            if let Some(c) = d.ctors.iter().find(|c| {
+                c.fields
+                    .iter()
+                    .any(|f| f.name.as_deref() == Some(p.name.as_str()))
+            }) {
                 return err(
-                    format!(
-                        "`{}` is both a value parameter and a field of `{}`: the field \
-                         would shadow the parameter in the field types after it",
-                        p.name, d.name
-                    ),
+                    if d.is_record {
+                        format!(
+                            "`{}` is both a value parameter and a field of `{}`: the field \
+                             would shadow the parameter in the field types after it",
+                            p.name, d.name
+                        )
+                    } else {
+                        format!(
+                            "`{}` is both a value parameter of `{}` and a field of its \
+                             constructor `{}`: the field would shadow the parameter in the \
+                             field types after it",
+                            p.name, d.name, c.name
+                        )
+                    },
                     p.span,
                 );
             }
@@ -981,7 +995,9 @@ impl Elaborator {
             // decided which, for the declaration as a whole.
             let (res, res_expr, kind, rec_at) = match &route {
                 None => {
-                    let kind = classify_fields(c, &d.name, &d.params)?;
+                    let vnames: Vec<String> =
+                        d.valparams.iter().map(|p| p.name.clone()).collect();
+                    let kind = classify_fields(c, &d.name, &d.params, &vnames)?;
                     let rec_at = vec![None; kind.len()];
                     (None, None, kind, rec_at)
                 }
@@ -1147,7 +1163,7 @@ impl Elaborator {
         // (docs/inductive-tier2-w-lowering.md §1.5) — so an unparameterized
         // one is lowered once here, where that is a declaration error rather
         // than a surprise at its first use.
-        if ind.infinitary() && ind.params.is_empty() {
+        if ind.infinitary() && ind.params.is_empty() && ind.valparams.is_empty() {
             self.lower_instance(&Cx::empty(), &ind, &[], &[], d.span)?;
         }
         // From here on registration is infallible. The type registry installs
@@ -3425,7 +3441,12 @@ impl Elaborator {
 /// field's length names an *earlier* field, and the position restrictions
 /// ("at most one container, last among the children") are properties of the
 /// sequence.
-fn classify_fields(c: &CtorDecl, name: &str, params: &[String]) -> R<Vec<FieldKind>> {
+fn classify_fields(
+    c: &CtorDecl,
+    name: &str,
+    params: &[String],
+    vparams: &[String],
+) -> R<Vec<FieldKind>> {
     let mut kinds: Vec<FieldKind> = Vec::with_capacity(c.fields.len());
     let mut payload_k = 0usize;
     // (payload index, span) of each `Nat` field seen so far, by name — the
@@ -3434,7 +3455,7 @@ fn classify_fields(c: &CtorDecl, name: &str, params: &[String]) -> R<Vec<FieldKi
     for f in &c.fields {
         // `[D; len]` — a container field.
         if let TyKind::Vec { elem, len } = &f.ty.kind
-            && classify_field(elem.as_ref(), name, params, &c.name)?
+            && classify_field(elem.as_ref(), name, params, vparams, &c.name)?
         {
             if let Some((prev, _)) = kinds
                 .iter()
@@ -3482,12 +3503,12 @@ fn classify_fields(c: &CtorDecl, name: &str, params: &[String]) -> R<Vec<FieldKi
         // refused every other function type that mentions `D`.
         if let TyKind::Fn { dom, cod, .. } = &f.ty.kind
             && occurs(dom, name).is_none()
-            && classify_field(cod, name, params, &c.name)?
+            && classify_field(cod, name, params, vparams, &c.name)?
         {
             kinds.push(FieldKind::FnChild);
             continue;
         }
-        if classify_field(&f.ty, name, params, &c.name)? {
+        if classify_field(&f.ty, name, params, vparams, &c.name)? {
             if kinds
                 .iter()
                 .any(|k| matches!(k, FieldKind::Container { .. }))
@@ -3633,8 +3654,9 @@ fn parse_result_index<'a>(
                 "`{}`'s result index `{v}` is a bare variable in *every* constructor of \
                  `{name}`, which makes it a **parameter**, not an index — it does not \
                  vary per constructor result. Write it as one: \
-                 `record {name}({v}: Nat) {{ … }}` if `{name}` has a single constructor \
-                 (docs/surface-value-parameters.md §1). A genuinely varying index is the \
+                 `inductive {name}({v}: Nat) {{ … }}`, or `record {name}({v}: Nat) {{ … }}` \
+                 if `{name}` has a single constructor \
+                 (docs/surface-value-parameters.md §1, §6). A genuinely varying index is the \
                  fording case (issues/indexed-families.md route 2b), and this is not it.",
                 c.name
             ),
@@ -4468,16 +4490,103 @@ pub(crate) fn named_head(e: &Expr) -> Option<(&str, &[Ty])> {
     }
 }
 
-fn classify_field(t: &Ty, name: &str, params: &[String], ctor: &str) -> R<bool> {
-    if let TyKind::Named { name: n, args } = &t.kind
-        && n == name
-    {
-        let uniform = args.len() == params.len()
-            && args.iter().zip(params).all(|(a, p)| {
-                matches!(&a.kind, TyKind::Named { name: an, args } if an == p && args.is_empty())
-            });
+/// `t` *is* the declaration applied to something — `D<ā>` (a
+/// [`TyKind::Named`]) or `D<ā>(ē)`, which reaches a field type as a
+/// [`TyKind::OfExpr`] application (docs/surface-value-parameters.md §3) —
+/// read as its type arguments and, for the applied spelling, its value
+/// arguments. `None` for every other type, including one that mentions `D`
+/// only further in.
+fn self_head<'a>(t: &'a Ty, name: &str) -> Option<(&'a [Ty], Option<&'a [Expr]>)> {
+    match &t.kind {
+        TyKind::Named { name: n, args } if n == name => Some((args, None)),
+        TyKind::OfExpr(e) => match &e.kind {
+            ExprKind::App { head, args, .. } => match named_head(head) {
+                Some((n, targs)) if n == name => Some((targs, Some(args))),
+                _ => None,
+            },
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Is `t` the **uniform** recursive occurrence — the declaration at its own
+/// type parameters and its own value parameters, each bare and in order
+/// (tier 1 §1's rule, extended by docs/surface-value-parameters.md §6)? Only
+/// that occurrence is a child: it is the one whose type is the instance being
+/// declared, so lowering it as the `Wf`/`W` itself substitutes nothing. A
+/// value argument that differs (`ITree<R>(F)`, `D(Succ(n))`) would be an
+/// *index*, and lowering it as a child would silently drop the difference.
+fn uniform_occurrence(t: &Ty, name: &str, params: &[String], vparams: &[String]) -> Option<bool> {
+    let (targs, vargs) = self_head(t, name)?;
+    let targs_uniform = targs.len() == params.len()
+        && targs.iter().zip(params).all(|(a, p)| {
+            matches!(&a.kind, TyKind::Named { name: an, args } if an == p && args.is_empty())
+        });
+    let vargs_uniform = match (vargs, &t.kind) {
+        (None, _) => vparams.is_empty(),
+        (Some(vargs), TyKind::OfExpr(e)) => {
+            !vparams.is_empty()
+                && matches!(&e.kind, ExprKind::App { named, explicit: false, goal_oriented: false, .. }
+                    if named.is_empty())
+                && vargs.len() == vparams.len()
+                && vargs
+                    .iter()
+                    .zip(vparams)
+                    .all(|(a, v)| matches!(&a.kind, ExprKind::Var(an) if an == v))
+        }
+        (Some(_), _) => false,
+    };
+    Some(targs_uniform && vargs_uniform)
+}
+
+fn classify_field(
+    t: &Ty,
+    name: &str,
+    params: &[String],
+    vparams: &[String],
+    ctor: &str,
+) -> R<bool> {
+    if let Some(uniform) = uniform_occurrence(t, name, params, vparams) {
         if uniform {
             return Ok(true);
+        }
+        let own = format!(
+            "{name}{}{}",
+            if params.is_empty() {
+                String::new()
+            } else {
+                format!("<{}>", params.join(", "))
+            },
+            if vparams.is_empty() {
+                String::new()
+            } else {
+                format!("({})", vparams.join(", "))
+            }
+        );
+        if vparams.is_empty() && self_head(t, name).is_some_and(|(_, v)| v.is_some()) {
+            return err(
+                format!(
+                    "field of `{ctor}` applies `{name}` to value arguments, but `{name}` \
+                     declares no value parameters: the recursive occurrence is `{own}`. An \
+                     argument that is the same in every occurrence is a value parameter \
+                     (`inductive {name}(m: Nat) {{ … }}`); one that varies is an index \
+                     (docs/surface-value-parameters.md §6)"
+                ),
+                t.span,
+            );
+        }
+        if !vparams.is_empty() {
+            return err(
+                format!(
+                    "field of `{ctor}` uses `{name}` at arguments other than its own \
+                     parameters: a recursive occurrence must be `{own}` exactly — its type \
+                     parameters and then its value parameters, each bare and in order. A \
+                     value argument that varies is an index, not a parameter \
+                     (docs/surface-value-parameters.md §6)"
+                ),
+                t.span,
+            );
         }
         return err(
             format!(
@@ -4719,7 +4828,7 @@ pub(crate) fn reject_function_fields(d: &InductiveDecl) -> Result<(), crate::Ela
                 }
                 // `A -> D<…>` itself: classified by `classify_fields`, which
                 // also checks that the occurrence is the uniform one.
-                if matches!(&cod.kind, TyKind::Named { name, .. } if *name == d.name) {
+                if self_head(cod, &d.name).is_some() {
                     continue;
                 }
                 return fail(
