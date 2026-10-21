@@ -490,6 +490,9 @@ struct PendingDecl {
     /// A theorem's proof, kept sealed beside its opaque binding when its
     /// statement carries data (`sealing.rs`).
     sealed: Option<Rc<Term>>,
+    /// A theorem's proof for [`Elaborator::keep_proofs_for_export`], whether
+    /// or not it is also sealed.
+    export_proof: Option<Rc<Term>>,
     registration: GlobalRegistration,
     is_axiom: bool,
     direct_dependencies: Vec<String>,
@@ -629,6 +632,14 @@ pub struct Elaborator {
     /// item, which is a cost no ordinary check should pay to say nothing
     /// (`issues/lint-redundant-match-motive.md`, 2026-09-17).
     review_lints: bool,
+    /// Every theorem's proof, by absolute Ψ index, when an exporter asked
+    /// for them ([`Self::keep_proofs_for_export`]); `None` otherwise. Kept
+    /// beside Ψ and never sealed: sealing would let conversion unseal the
+    /// proof at a stuck elimination and could change verdicts, while export
+    /// only reads it (`issues/export-keeps-proofs.md`). Each entry carries
+    /// its statement, so an entry left behind by a rolled-back declaration
+    /// never answers for the binding that later reuses its index.
+    export_proofs: Option<std::collections::BTreeMap<usize, (Rc<Type>, Rc<Term>)>>,
     /// The declaration being elaborated, if its recursion plan is
     /// [`recursion::RecursionPlan::Misplaced`]: its recursion name, the
     /// parameter, and the refusal a self-call lowered on it raises
@@ -1655,6 +1666,7 @@ impl Elaborator {
             warnings: RefCell::new(Vec::new()),
             lint_profile: LintProfile::Default,
             review_lints: false,
+            export_proofs: None,
             misplaced_recursion: RefCell::new(None),
             resolve_depth: Cell::new(0),
             positivity: RefCell::new(None),
@@ -1916,6 +1928,46 @@ impl Elaborator {
         self.review_lints = on;
     }
 
+    /// Keep every theorem's proof from here on, for an exporter
+    /// (`docs/export-fragment-design.md` §1). Off by default: an ordinary
+    /// check drops a proof whose statement carries no data.
+    pub fn keep_proofs_for_export(&mut self) {
+        self.export_proofs.get_or_insert_with(Default::default);
+    }
+
+    /// The proof of the theorem at absolute Ψ index `abs`, if
+    /// [`Self::keep_proofs_for_export`] was on when it committed.
+    pub fn export_proof(&self, abs: usize) -> Option<&Rc<Term>> {
+        let (stmt, proof) = self.export_proofs.as_ref()?.get(&abs)?;
+        match self.psi.bindings.get(abs)? {
+            GlobalBinding::Tm { ty, body: None, .. } if ty == stmt => Some(proof),
+            _ => None,
+        }
+    }
+
+    /// The module-qualified name of the declaration at absolute Ψ index
+    /// `abs` (`std::nat::Nat::add`), or `None` for a binding no name
+    /// resolves to: a lifted tactic proof, a generated intermediate.
+    pub fn global_key_at(&self, abs: usize) -> Option<&str> {
+        self.names.global_name_at(abs as u32)
+    }
+
+    /// The machine name of the generated definition at `abs`
+    /// (`logic::And#tycode_fn`), qualified by its owner's module: what an
+    /// exporter names a binding no declaration committed.
+    pub fn generated_key_at(&self, abs: usize) -> Option<String> {
+        let key = self.types.gdefs().key_for_abs(&(abs as u32))?;
+        let owner = self.types.by_tag(key.tag())?;
+        Some(names::qkey(&owner.scope.module, &key.name(&owner.name)))
+    }
+
+    /// The constructor names of the nominal type with tag `tag`, in
+    /// declaration order: what an exporter calls a native inductive's
+    /// constructors.
+    pub fn constructor_names(&self, tag: u32) -> Option<Vec<String>> {
+        Some(self.types.by_tag(tag)?.ctors.iter().map(|c| c.name.clone()).collect())
+    }
+
     /// Begin aggregating value-machine allocation and cache activity across
     /// kernel gates and in-language analyzer evaluation.
     pub fn enable_value_metrics(&mut self) {
@@ -2046,6 +2098,15 @@ impl Elaborator {
         // shipping code alike, and nothing said how much that cost
         // (`issues/prelude-clone-cost-grew.md`).
         let _prelude = stats::guard(stats::Timer::Prelude);
+        e.elab_module_source(PRELUDE_MODULE, PRELUDE)?;
+        Ok(e)
+    }
+
+    /// [`Self::with_prelude`] with [`Self::keep_proofs_for_export`] on from
+    /// the start, so the prelude's own theorems keep their proofs too.
+    pub fn with_prelude_for_export() -> R<Self> {
+        let mut e = Self::new();
+        e.keep_proofs_for_export();
         e.elab_module_source(PRELUDE_MODULE, PRELUDE)?;
         Ok(e)
     }
@@ -3625,6 +3686,7 @@ impl Elaborator {
             aux,
             binding,
             sealed,
+            export_proof,
             registration,
             is_axiom,
             direct_dependencies,
@@ -3635,6 +3697,9 @@ impl Elaborator {
             self.psi.push(lemma);
         }
         let abs = self.psi.bindings.len() as u32;
+        if let (Some(kept), Some(proof), GlobalBinding::Tm { ty, .. }) = (&mut self.export_proofs, export_proof, &binding) {
+            kept.insert(abs as usize, (Rc::clone(ty), proof));
+        }
         match sealed {
             Some(proof) => self.psi.push_sealed(binding, proof),
             None => self.psi.push(binding),
@@ -4160,6 +4225,10 @@ impl Elaborator {
             }
             _ => None,
         };
+        let export_proof = match (decl.kind, &term) {
+            (DeclKind::Theorem, Some(proof)) if self.export_proofs.is_some() => Some(Rc::new(proof.clone())),
+            _ => None,
+        };
         let binding = GlobalBinding::Tm {
             ctx: LocalCtx::nil(),
             layer: Layer::Code,
@@ -4186,6 +4255,7 @@ impl Elaborator {
             aux,
             binding,
             sealed,
+            export_proof,
             is_axiom: decl.kind == DeclKind::Axiom,
             direct_dependencies,
             registration: GlobalRegistration {

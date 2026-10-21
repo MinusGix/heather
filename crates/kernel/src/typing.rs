@@ -443,11 +443,27 @@ pub fn infer_term(
 /// A checked spelling's former, as the eager checker viewed it: what the
 /// translation `⌊·⌋` (`docs/intro-by-type-design.md` §2.4) writes into the
 /// component form in its place.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) enum Spelled {
     Sigma { fst_level: Level, snd_level: Level, fst: Rc<Type>, snd: Rc<Type> },
     Sum { lhs_level: Level, rhs_level: Level, lhs: Rc<Type>, rhs: Rc<Type> },
     Pi { dom_level: Level, cod_level: Level, dom: Rc<Type>, cod: Rc<Type> },
+}
+
+/// Record `spelled` at `key`, or mark the key ambiguous (`None`) when the
+/// node was already viewed at a different former.
+fn keep_spelled(rec: &RefCell<HashMap<(usize, u32), Option<Spelled>>>, key: (usize, u32), spelled: Spelled) {
+    let mut rec = rec.borrow_mut();
+    match rec.get_mut(&key) {
+        None => {
+            rec.insert(key, Some(spelled));
+        }
+        Some(slot) => {
+            if slot.as_ref() != Some(&spelled) {
+                *slot = None;
+            }
+        }
+    }
 }
 
 /// **The quote boundary** (`docs/intro-by-type-design.md` §2.3, amended
@@ -501,6 +517,8 @@ pub fn spell_checked_in_code(
         tc.tm_check_ty(&env, &t, ty, level)?;
         let spelled = tc.spellings.take().expect("set above").into_inner();
         let (next, replaced) = crate::subst::rebuild_checked_spellings(&t, &spelled, base);
+        // `replaced` counts the nodes unshared for an ambiguous record too:
+        // the next pass sees each occurrence on its own.
         if replaced == 0 {
             // Checked, yet a checked spelling was never visited at a depth
             // the walk can name: refuse as the `box` rule would.
@@ -544,6 +562,8 @@ pub fn spell_checked_in_code_ty(
         tc.ty_check(&env, &t, level)?;
         let spelled = tc.spellings.take().expect("set above").into_inner();
         let (next, replaced) = crate::subst::rebuild_checked_spellings_ty(&t, &spelled, base);
+        // `replaced` counts the nodes unshared for an ambiguous record too:
+        // the next pass sees each occurrence on its own.
         if replaced == 0 {
             return Err(TypeError::UnderBox);
         }
@@ -823,7 +843,13 @@ struct Tc {
     /// at each checked spelling the eager checker visits, the components of
     /// the former it viewed, keyed by the node's address and Γ's length.
     /// `None` on every checker but that one.
-    spellings: Option<RefCell<HashMap<(usize, u32), Spelled>>>,
+    ///
+    /// The key names a node, not an occurrence: a node the term shares
+    /// between two places at the same Γ length can be viewed at two
+    /// different formers (a motive's `inl@`, and the same node in a branch
+    /// annotation where the scrutinee is a constructor). Such a node's entry
+    /// is `None`, and the rebuild unshares it for the next pass.
+    spellings: Option<RefCell<HashMap<(usize, u32), Option<Spelled>>>>,
     /// Successful conversions whose syntax has different outer constructors.
     /// The cache lives for one public kernel gate; identity keys own every `Rc`
     /// they identify, so allocator reuse cannot create an aliasing key.
@@ -1498,8 +1524,7 @@ impl Tc {
             }
             _ => return,
         };
-        let key = (t as *const Term as usize, env.gamma.entries.len() as u32);
-        rec.borrow_mut().insert(key, spelled);
+        keep_spelled(rec, (t as *const Term as usize, env.gamma.entries.len() as u32), spelled);
     }
 
     /// [`Tc::view_v`] of a borrowed expected type — the unannotated intros'
@@ -2309,9 +2334,9 @@ impl Tc {
     fn app_at_node(&self, env: &Env, t: &Term, fun_ty: ITy, arg: &Rc<Term>) -> R<(ITy, Level)> {
         if let Some(Type::Pi { dom_level, cod_level, dom, cod }) = fun_ty.as_syn() {
             if let Some(rec) = &self.spellings {
-                let key = (t as *const Term as usize, env.gamma.entries.len() as u32);
-                rec.borrow_mut().insert(
-                    key,
+                keep_spelled(
+                    rec,
+                    (t as *const Term as usize, env.gamma.entries.len() as u32),
                     Spelled::Pi {
                         dom_level: dom_level.clone(),
                         cod_level: cod_level.clone(),

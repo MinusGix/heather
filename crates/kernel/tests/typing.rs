@@ -2147,6 +2147,42 @@ fn checked_application_reads_its_head() {
     check_closed(Layer::Meta, &Term::BoxTm(spelled), &code_ty, &Level::Zero).unwrap();
 }
 
+/// The quote boundary's record names a node, and a term may share one node
+/// between two places that view it at different formers: here one `inl@`
+/// is both components of a pair, once at `Unit + Nat` and once at
+/// `Unit + Empty`. Each occurrence must get its own components (the
+/// `list` closure's `is_true_dec_yes` and `List::filter_map` share an `@`
+/// node between a motive and a branch annotation the same way).
+#[test]
+fn spelling_a_shared_node_viewed_at_two_formers() {
+    let psi = GlobalCtx::default();
+    let unit = || rty(Type::Unit { level: Level::Zero });
+    let sum = |rhs: Type| Type::Sum { lhs_level: Level::Zero, rhs_level: Level::Zero, lhs: unit(), rhs: rty(rhs) };
+    let (a, b) = (sum(Type::Nat), sum(Type::Empty { level: Level::Zero }));
+    let shared = rt(Term::InlAt { ty: None, val: rt(Term::Triv { level: Level::Zero }) });
+    let ty = Type::Sigma { fst_level: Level::Zero, snd_level: Level::Zero, fst: rty(a.clone()), snd: rty(b.clone()) };
+    let pair = rt(Term::Pair {
+        fst_level: Level::Zero,
+        snd_level: Level::Zero,
+        fst_ty: rty(a),
+        snd_ty: rty(b),
+        fst: Rc::clone(&shared),
+        snd: shared,
+    });
+    check_closed(Layer::Code, &pair, &ty, &Level::Zero).unwrap();
+    let spelled = heather_kernel::typing::spell_checked_in_code(
+        &psi, 0, Layer::Code, &nil_ctx(), pair, &ty, &Level::Zero, FUEL,
+    )
+    .unwrap();
+    let Term::Pair { fst, snd, .. } = &*spelled else { panic!("a pair") };
+    let rhs = |t: &Term| match t {
+        Term::Inl { rhs, .. } => (**rhs).clone(),
+        _ => panic!("spelled as inl"),
+    };
+    assert!(rhs(fst) == Type::Nat && rhs(snd) == Type::Empty { level: Level::Zero });
+    check_closed(Layer::Code, &spelled, &ty, &Level::Zero).unwrap();
+}
+
 // -------------------------------------------------------------------------
 // Unit and Empty (extension beyond ch. 04; kernel-v1-extensions)
 // -------------------------------------------------------------------------

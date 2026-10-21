@@ -2099,7 +2099,7 @@ mod tests {
 /// keyed at the root. A checked spelling with no record is left in place and
 /// counted, so the caller can tell "nothing to do" from "could not".
 struct RebuildChecked<'a> {
-    spelled: &'a std::collections::HashMap<(usize, u32), crate::typing::Spelled>,
+    spelled: &'a std::collections::HashMap<(usize, u32), Option<crate::typing::Spelled>>,
     base: u32,
     replaced: u64,
     seen: u64,
@@ -2129,7 +2129,13 @@ impl Mapper for RebuildChecked<'_> {
         }
         self.seen += 1;
         let key = (Rc::as_ptr(t) as usize, self.base + at.local);
-        let spelled = self.spelled.get(&key)?.clone();
+        let Some(spelled) = self.spelled.get(&key)?.clone() else {
+            // Viewed at two formers: the node is shared between places
+            // that mean different things. Each occurrence gets a node of
+            // its own, which the next pass records apart.
+            self.replaced += 1;
+            return Some((**t).clone());
+        };
         let out = match (&**t, spelled) {
             (Term::PairAt { fst, snd, .. }, Spelled::Sigma { fst_level, snd_level, fst: s, snd: u }) => {
                 Term::Pair {
@@ -2180,7 +2186,7 @@ impl Mapper for RebuildChecked<'_> {
 /// returns the term and how many were replaced.
 pub(crate) fn rebuild_checked_spellings(
     t: &Rc<Term>,
-    spelled: &std::collections::HashMap<(usize, u32), crate::typing::Spelled>,
+    spelled: &std::collections::HashMap<(usize, u32), Option<crate::typing::Spelled>>,
     base: u32,
 ) -> (Rc<Term>, u64) {
     let mut m = RebuildChecked { spelled, base, replaced: 0, seen: 0, changes: 0 };
@@ -2199,7 +2205,7 @@ pub(crate) fn count_checked_spellings(t: &Rc<Term>) -> u64 {
 /// [`rebuild_checked_spellings`] over a type.
 pub(crate) fn rebuild_checked_spellings_ty(
     t: &Rc<Type>,
-    spelled: &std::collections::HashMap<(usize, u32), crate::typing::Spelled>,
+    spelled: &std::collections::HashMap<(usize, u32), Option<crate::typing::Spelled>>,
     base: u32,
 ) -> (Rc<Type>, u64) {
     let mut m = RebuildChecked { spelled, base, replaced: 0, seen: 0, changes: 0 };

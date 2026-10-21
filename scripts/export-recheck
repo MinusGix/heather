@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+# Recheck the export prototype's output in Lean 4 and Rocq/Coq.
+#
+# Runs the heather-export tests with HEATHER_EXPORT_OUT set, which write the
+# prototype slice (Exported.lean / Exported.v / Exported.hxk) and the library
+# sweep (Sweep.lean / Sweep.hxk); copies the hand-written preludes beside
+# them; and hands each file to its checker under the same address-space and
+# CPU rails as scripts/test (a runaway conversion in the target must not take
+# the machine down — a large unary numeral in Rocq does exactly that).
+#
+# Lean checks the .hxk files through its kernel alone (prelude/Import.lean:
+# addDecl, no parser, no elaborator), and the slice and the sweep also as
+# source text: the sweep as one file per module (Sweep/, compiled in the
+# order Sweep/order lists, each importing what it mentions). The text keeps
+# the kernel term's sharing as hoisted definitions (crates/export/src/share.rs);
+# without it the sweep is too large for Lean's parser (design §5.6, §7).
+#
+# Usage: scripts/export-recheck [OUT_DIR]
+#   LEAN=/path/to/lean  (default: `lean` on PATH)
+#   COQC=/path/to/coqc  (default: `coqc` on PATH)
+# A missing checker is reported and skipped, not an error.
+# Design and expected results: docs/export-fragment-design.md §7.
+set -u
+root="$(cd "$(dirname "$0")/.." && pwd)"
+out="${1:-$root/target/export-recheck}"
+mkdir -p "$out"
+out="$(cd "$out" && pwd)"
+
+HEATHER_EXPORT_OUT="$out" "$root/scripts/test" -p heather-export >"$out/test.log" 2>&1 \
+  || { echo "export tests failed; see $out/test.log"; exit 1; }
+cp "$root/crates/export/prelude/Hx.lean" "$root/crates/export/prelude/Import.lean" \
+  "$root/crates/export/prelude/Hx.v" "$out/"
+
+lean="${LEAN:-$(command -v lean || true)}"
+coqc="${COQC:-$(command -v coqc || true)}"
+status=0
+cd "$out" || exit 1
+
+if [ -n "$lean" ]; then
+  # Import.lean's findSysroot runs `lean` from PATH.
+  export PATH="$(dirname "$lean"):$PATH"
+  if (ulimit -v 8388608 -t 300 -c 0; "$lean" -o Hx.olean Hx.lean) >lean.log 2>&1; then
+    for f in Exported Sweep; do
+      if (ulimit -v 8388608 -t 300 -c 0; LEAN_PATH="$out" "$lean" --run Import.lean "$f.hxk") >"kernel-$f.log" 2>&1; then
+        echo "lean kernel, $f: $(tail -1 "kernel-$f.log")"
+      else
+        echo "lean kernel, $f: FAILED; see $out/kernel-$f.log"; status=1
+      fi
+    done
+    # The negative control (crates/export/tests/library_sweep.rs): β at an
+    # open tag, which Heather has and the native-inductive realisation of
+    # `Wf` does not. Lean must reject exactly that declaration.
+    (ulimit -v 8388608 -t 300 -c 0; LEAN_PATH="$out" "$lean" --run Import.lean Control.hxk) >kernel-Control.log 2>&1
+    if [ "$(grep -c 'kernel rejected' kernel-Control.log)" = 1 ] \
+      && grep -q '^Heather.control.open_tag_beta: kernel rejected' kernel-Control.log; then
+      echo "lean kernel, Control: ok (open-tag β rejected, as it must be)"
+    else
+      echo "lean kernel, Control: FAILED (the open-tag control was not the one rejection); see $out/kernel-Control.log"; status=1
+    fi
+    if (ulimit -v 8388608 -t 600 -c 0; LEAN_PATH="$out" "$lean" Exported.lean) >lean-Exported.log 2>&1; then
+      echo "lean text, Exported: ok ($(grep '^@\[reducible\] def\|^axiom\|^inductive' Exported.lean | grep -vc 'share#') declarations)"
+    else
+      echo "lean text, Exported: FAILED; see $out/lean-Exported.log"; status=1
+    fi
+    swept=0
+    for f in $(cat Sweep/order); do
+      if (ulimit -v 8388608 -t 1200 -c 0; LEAN_PATH="$out:$out/Sweep" "$lean" -o "Sweep/$f.olean" "Sweep/$f.lean") >"lean-$f.log" 2>&1; then
+        swept=$((swept + 1))
+      else
+        echo "lean text, Sweep/$f: FAILED; see $out/lean-$f.log"; status=1
+        break
+      fi
+    done
+    [ "$swept" = "$(wc -l <Sweep/order)" ] && echo "lean text, Sweep: ok ($swept module files)"
+  else
+    echo "lean: prelude FAILED; see $out/lean.log"; status=1
+  fi
+else
+  echo "lean: not found (set LEAN), skipped"
+fi
+
+if [ -n "$coqc" ]; then
+  if (ulimit -v 8388608 -t 300 -c 0; "$coqc" -Q . "" Hx.v && "$coqc" -Q . "" Exported.v) >coq.log 2>&1; then
+    echo "coq: ok"
+  else
+    # Rocq stops at the first failing declaration; name its line.
+    where="$(grep -B1 '^Error' coq.log | grep -o 'line [0-9]*' | tail -1)"
+    echo "coq: FAILED at Exported.v ${where:-?}; see $out/coq.log"
+    status=1
+  fi
+  # The library sweep in Rocq is informational: it stops at the first
+  # theorem that is unit η itself (design §5.3), which only a typed exporter
+  # can prove propositionally.
+  if (ulimit -v 8388608 -t 1200 -c 0; "$coqc" -Q . "" Sweep.v) >coq-Sweep.log 2>&1; then
+    echo "coq, Sweep (informational): ok"
+  else
+    where="$(grep -B1 '^Error' coq-Sweep.log | grep -o 'line [0-9]*' | tail -1)"
+    echo "coq, Sweep (informational): stops at Sweep.v ${where:-?} of $(wc -l <Sweep.v); see $out/coq-Sweep.log"
+  fi
+else
+  echo "coq: not found (set COQC), skipped"
+fi
+exit $status
