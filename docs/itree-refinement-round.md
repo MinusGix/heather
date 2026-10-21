@@ -23,9 +23,11 @@ families over fuel, and the fact that fuel is not observable.
 | A tree produces a trace (Fig. 20) | `fn IsTrace(E, t, tr) → Type`, by recursion on `t` into `RetTrace`, `VisTrace`, `CutTrace` |
 | Basic facts | `IsTrace::nil` (every tree has the empty trace), `IsTrace::of_same`, `IsTrace::ret_unique`, `IsTrace::bind` with `Trace::seq` |
 | The approximation order | `ITree::Below` (a `Cut` is below anything), `below_refl`, `below_bind`, `IsTrace::of_below` |
-| Loops grow with fuel | `ITree::iter_grows`, `ITree::Grows(E, p)`, `ITree::iter_family_grows` |
+| Loops and recursion grow with fuel | `ITree::iter_grows`, `ITree::mrec_grows` (via `mrec_layer_below`), `ITree::Grows(E, p)`, `iter_family_grows`, `rec_family_grows` |
 | The bridge to `simulate` | `IsTrace::up`, `IsTrace::fuel_monotone`, `record Converges(E, p, tr) { n, h }`, `Converges::at`, `Converges::ret_unique` |
 | Refinement | `ITree::Refines(E, p, q)`, `refines_refl`, `refines_trans`, `refines_of_same`, `refines_shift` |
+| Programs | `record Program<R>(E) { at, grows }`, `Program::pure`/`iter`/`rec`/`bind`, `Program::Produces`, `Program::Refines` (no fuel in the statement; `refines_of_families` and `families_of_refines` relate it to `ITree::Refines`), `Program::ret_unique` |
+| Divergence | `Program::Diverges` (returns at no fuel), `Program::spin`, `Program::spin_diverges`, `Program::pure_not_diverges` |
 | State handler (Q3) | `Events::state<S>()` (`Get`, `Put(s)`), `ITree::run_state`, `ITree::run_state_bind` |
 | World threading | `ITree::returned`, `ITree::thread(t, s) → Option<Pair<S, R>>`, `ITree::returned_of_trace` |
 
@@ -70,6 +72,34 @@ seen at every larger fuel (`fuel_monotone`). That is `simulate`'s
 `Converges::ret_unique` says a growing program returns at most one value,
 whatever fuel each return was seen at. `refines_shift` is the payoff: a
 family refines itself shifted by any amount of fuel.
+
+**A program carries its growth, so fuel stays inside the definitions.**
+Fuel has the usual hazards: running out confused with a result, specs that
+name an amount, monotonicity re-proved at every use, and divergence that
+cannot be told from too little fuel. The first cannot happen here, since
+`Cut` is a leaf of its own and returns nothing. For the others, `Program<R>(E)`
+packs the family with its `Grows` proof, so a family that uses fuel in any
+other way (`if n > 5 then Ret(1) else Ret(2)`) is not a program. Growth is
+proved once per combinator (`pure`, `iter`, `rec` through `mrec_grows`, and
+`bind` through `below_bind`), and the statements about programs name no fuel:
+`Produces(p, tr)` is "at some fuel", and `Program::Refines(p, q)` is plain trace
+inclusion, equivalent to the fuel-indexed `ITree::Refines` of the families.
+`Diverges(p)` says `p` returns at no fuel at all. For programs built from
+`iter` and `rec`, fuel is the only source of `Cut`, so that is divergence and
+not missing fuel, and it is proved by induction on the fuel
+(`spin_diverges`). A `Cut` written by hand claims nothing, so a program built
+from one "diverges" vacuously; that is the honest reading of a tree that
+claims nothing.
+
+**Where fuel is weaker.** Safety, refinement and termination of deterministic
+programs are what this states well, and they are S1's job. Liveness over
+unbounded interaction ("every request is eventually answered" by a server
+that never stops) can only be written as a nested "every prefix, some fuel
+further" statement, and fairness and concurrency are out of reach; those are
+the customers that kernel coinduction waits on
+([interaction-trees-container-model](../issues/interaction-trees-container-model.md)).
+Trace inclusion is eutt only for deterministic trees, so choice trees reopen
+the question, as Q1 records.
 
 **`bind`'s traces are sequenced traces.** `Trace::seq(tr, k)` continues a
 trace past its return; `IsTrace::bind` says a trace of `t` continued by traces

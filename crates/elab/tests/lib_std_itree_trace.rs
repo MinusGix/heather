@@ -91,6 +91,13 @@ const KIT: &[&str] = &[
     // Convergence and refinement.
     "Converges::at", "Converges::ret_unique", "ITree::Refines", "ITree::refines_refl",
     "ITree::refines_trans", "ITree::refines_of_same", "ITree::refines_shift",
+    // Recursion grows with fuel too.
+    "ITree::mrec_vis_below", "ITree::mrec_layer_below", "ITree::mrec_grows", "ITree::rec_family_grows",
+    // Programs: families carrying their growth.
+    "Program::pure", "Program::iter", "Program::rec", "Program::bind", "Program::Produces",
+    "Program::Refines", "Program::refines_refl", "Program::refines_trans", "Program::refines_of_families",
+    "Program::families_of_refines", "Program::ret_unique", "Program::Diverges", "ITree::spin_step",
+    "ITree::spin_never_returns", "Program::spin", "Program::spin_diverges", "Program::pure_not_diverges",
     // The state handler.
     "Events::state", "ITree::state_vis", "ITree::run_state", "ITree::state_vis_bind",
     "ITree::run_state_bind", "ITree::returned", "ITree::thread", "ITree::returned_of_trace",
@@ -203,3 +210,51 @@ fn tick() → ITree<Nat>(Counter()) {
         ),
     );
 }
+
+// A program built by `rec` grows with fuel and is a `Program`; the spin
+// proof's induction goes through for a loop that only goes round and is
+// refused for one that breaks.
+#[test]
+fn programs_grow_and_divergence_is_returning_at_no_fuel() {
+    let mut e = base();
+    check(
+        &mut e,
+        "itree_program_ok",
+        &format!(
+            "{IMPORTS}{CONSOLE}
+            fn body(c: Cmd) → ITree<Resp(c)>(Events::sum(C(), C())) {{
+                match c {{ Ask => Ret(7), Say(_) => Ret(trivial) }}
+            }}
+            fn asks() → Program<Nat>(C()) {{ Program::rec(C(), C(), λ c => body(c), Ask) }}
+            theorem asks_grows(n: Nat): ITree::Below(C(), asks().at(n), asks().at(Succ(n))) {{ asks().grows(n) }}
+            theorem asks_seven(): Program::Produces<Nat>(C(), asks(), TRet(7)) {{ Converges(1, Returned(refl)) }}
+            theorem twice(): Program::Produces<Nat>(C(), Program::bind(C(), asks(), λ a => Program::pure(C(), a + a)), TRet(14)) {{
+                Converges(1, Returned(refl))
+            }}"
+        ),
+    );
+    // At a breaking loop the step is a `Ret`, not the loop at one less fuel,
+    // so the recursive call has the wrong type: a mismatch the elaborator
+    // reports before any conversion is attempted.
+    let src = format!(
+        "{IMPORTS}
+        fn stop(u: True) → ITree<Step<True, True>>(Events::none()) {{ Ret(Break(u)) }}
+        theorem bad(n: Nat, r: True):
+            IsTrace(Events::none(), ITree::iter<True, True>(Events::none(), n, λ u => stop(u), trivial), TRet(r)) → False
+        {{
+            match n {{
+                Zero => λ w => absurd(CutTrace::ended<True>(Events::none(), TRet(r), w)),
+                Succ(m) => λ h => bad(m, r, h),
+            }}
+        }}"
+    );
+    let mut e = base();
+    match e.elab_module_source("itree_spin_breaks", &src) {
+        Ok(()) => panic!("itree_spin_breaks should be refused"),
+        Err(err) => {
+            let msg = err.render(&src);
+            assert!(msg.contains("is expected here"), "itree_spin_breaks: {msg}");
+        }
+    }
+}
+

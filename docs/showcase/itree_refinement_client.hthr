@@ -66,6 +66,19 @@ theorem countdown_refines_later(d: Nat): ITree::Refines<Nat>(Console(), countdow
     ITree::refines_shift(Console(), countdown, countdown_grows(), d)
 }
 
+// As a program, the loop carries its growth, and statements about it name no
+// fuel: whatever fuel two of its returns were seen at, they agree.
+fn countdown_program() → Program<Nat>(Console()) { Program::iter(Console(), count_step, 3) }
+
+theorem countdown_returns_once(r: Nat, s: Nat, c1: Program::Produces(Console(), countdown_program(), TRet(r)),
+    c2: Program::Produces(Console(), countdown_program(), TRet(s))): r = s
+{
+    Program::ret_unique(Console(), countdown_program(), r, s, c1, c2)
+}
+
+// A loop that never breaks diverges: it returns at no fuel.
+theorem spin_diverges(): Program::Diverges(Console(), Program::spin(Console())) { Program::spin_diverges(Console()) }
+
 // ---------------------------------------------------------------------------
 // A stateful program, threaded
 
