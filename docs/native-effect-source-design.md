@@ -363,6 +363,17 @@ environment and its bytes in memory are related by `view.Holds`. With §2.4's
 footprints, a region that stores into a buffer enters `Wp` as a `Proved`
 item whose footprint is that range. Filed as `function-ir-buffer-state-edges`.
 
+**Faults.** `lib/std/memory.hthr` (the memory-model round, in parallel)
+gives checked accesses as `Result<_, Fault>`, and a buffer is a
+`Memory` over the index space `0..capacity`. A region with loads or stores
+then evaluates to a `Result`, and the layer's `Pure` leaf turns `Err` into a
+separate process-end outcome, `Faulted`, beside `Exited(status)`. It is not
+mapped onto an exit status. Its machine side, a trap path whose meaning is a
+signal, belongs to `issues/linux-syscall-trace-model.md`. Regions whose
+indices are guarded below the capacity discharge the `Ok` case by the
+model's span lemma, and a compiled program that cannot fault never reaches
+that path.
+
 The first S3 round does not need this. Its first program is `cat`, whose
 buffer is touched only by calls (§10).
 
