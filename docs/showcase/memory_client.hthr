@@ -1,0 +1,86 @@
+// Byte memory at work (lib/std/memory.hthr, docs/byte-memory-design.md).
+//
+// The first half runs a 16-byte memory by evaluation: 4-bit addresses, so an
+// offset past 15 wraps to 0. What wrapping, self-overlap and refusal do is
+// the model's stated choice, checked here rather than left to a host. The
+// second half proves things about memories it does not know: two adjacent
+// words at any 64-bit address, and a word in a buffer.
+
+import logic;
+import algebra;
+import nat;
+import omega;
+import option;
+import result;
+import bitvec;
+import bitvec_bytes;
+import vector;
+import memory;
+
+// ---------------------------------------------------------------------------
+// Sixteen bytes, run
+
+// Address 5 is read-only and 12 is neither readable nor writable; nothing is
+// executable.
+fn perms16(a: BitVec(4)) → Perm {
+    match a.eq_bit(5) {
+        True => Perm(True, False, False),
+        False => match a.eq_bit(12) { True => Perm::none(), False => Perm::data() },
+    }
+}
+
+fn zeros16() → Memory<BitVec(4), BitVec(8)> {
+    Memory<BitVec(4), BitVec(8)>(BitVec::space(4), λ (a: BitVec(4)) => BitVec::zero(), perms16)
+}
+
+// A word written reads back, and the bytes sit in the order the packing says.
+theorem word_reads_back(): zeros16().write_le(0, 2, 0x0102).and_then(λ (m: Memory<BitVec(4), BitVec(8)>) => m.read_le(0, 2)) = Ok(BitVec::ofNat(0x0102)) { refl }
+theorem little_endian_low_first(): zeros16().set_le(0, 2, 0x0102).get(0) = BitVec::ofNat(0x02) { refl }
+theorem big_endian_high_first(): zeros16().set_be(0, 2, 0x0102).get(0) = BitVec::ofNat(0x01) { refl }
+theorem endianness_is_the_packing(): zeros16().set_be(0, 2, 0x0102).get_le(0, 2) = BitVec::ofNat(0x0201) { refl }
+
+// Wrapping: a span from 15 continues at 0.
+theorem span_wraps(): zeros16().set_span(15, [1, 2]).get(0) = BitVec::ofNat(2) { refl }
+
+// Self-overlap: seventeen bytes from 0 store index 16 over index 0 — the
+// later index is the one left, so the span does not read back.
+fn seventeen() → [BitVec(8); 17] {
+    [BitVec::ofNat(1), BitVec::ofNat(2), BitVec::ofNat(3), BitVec::ofNat(4), BitVec::ofNat(5), BitVec::ofNat(6),
+     BitVec::ofNat(7), BitVec::ofNat(8), BitVec::ofNat(9), BitVec::ofNat(10), BitVec::ofNat(11), BitVec::ofNat(12),
+     BitVec::ofNat(13), BitVec::ofNat(14), BitVec::ofNat(15), BitVec::ofNat(16), BitVec::ofNat(17)]
+}
+theorem later_index_wins(): zeros16().set_span(0, seventeen()).get(0) = BitVec::ofNat(17) { refl }
+
+// A refused span stores nothing: the outcome is the first refused address,
+// and there is no memory after it.
+theorem refused_write_is_first(): zeros16().write_span(4, [1, 2, 3]) = Err(WriteFault(BitVec::ofNat(5))) { refl }
+theorem refused_read_is_first(): zeros16().read_span(10, 4) = Err(ReadFault(BitVec::ofNat(12))) { refl }
+theorem read_only_reads(): zeros16().read(5) = Ok(BitVec::zero()) { refl }
+theorem nothing_executes(): zeros16().fetch(0) = Err(ExecuteFault(BitVec::zero())) { refl }
+
+// ---------------------------------------------------------------------------
+// Proved for every memory
+
+// Two adjacent words at any 64-bit address that does not wrap: storing the
+// second leaves the first. `a.iterate_increment(8)` is x86's `next_rip(a, 8)`.
+theorem adjacent_words(cells: BitVec(64) → BitVec(8), perms: BitVec(64) → Perm, a, x, y: BitVec(64),
+    fits: a.toNat() + 16 <= Nat::pow(2, 64)):
+    Memory<BitVec(64), BitVec(8)>(BitVec::space(64), cells, perms).set_le(a, 8, x).set_le(a.iterate_increment(8), 8, y).get_le(a, 8) = x {
+    let m = Memory<BitVec(64), BitVec(8)>(BitVec::space(64), cells, perms);
+    let next: (a.iterate_increment(8).toNat() = a.toNat() + 8) = BitVec::offset_toNat(64, a, 8, omega(fits));
+    let apart: BitVec::space(64).Apart(a.iterate_increment(8), 8, a, 8) =
+        BitVec::space_apart_above(64, a.iterate_increment(8), 8, a, 8, omega(next), omega(next, fits));
+    let kept: (m.set_le(a, 8, x).set_span(a.iterate_increment(8), y.bytes_le(8)).get_span(a, 8) = m.set_le(a, 8, x).get_span(a, 8)) =
+        m.set_le(a, 8, x).get_set_span_apart(a.iterate_increment(8), y.bytes_le(8), a, 8, apart);
+    trans(rewrite(kept, refl), m.get_set_le(BitVec::space_laws(64), a, 8, x, BitVec::space_distinct(64, a, 8, omega(fits))))
+}
+
+// A buffer of `cap` bytes: any word stored below the capacity reads back,
+// through the checked operations, with the permission premises discharged
+// once by the bound.
+theorem buffer_word(cap: Nat, cells: Nat → BitVec(8), i: Nat, w: BitVec(32), fits: i + 4 <= cap):
+    Memory<Nat, BitVec(8)>(Nat::space(), cells, Perm::below(cap)).write_le(i, 4, w)
+        .and_then(λ (m: Memory<Nat, BitVec(8)>) => m.read_le(i, 4)) = Ok(w) {
+    Memory<Nat, BitVec(8)>(Nat::space(), cells, Perm::below(cap)).read_write_le(Nat::space_laws(), i, 4, w,
+        Nat::space_distinct(i, 4), Memory::buffer_reads(cap, cells, i, 4, fits), Memory::buffer_writes(cap, cells, i, 4, fits))
+}

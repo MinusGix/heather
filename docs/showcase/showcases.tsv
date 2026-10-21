@@ -64,3 +64,4 @@ itree_refinement_client	lib/std	test	crates/elab/tests/lib_std_itree_trace.rs.
 ordered_field_client	lib/std	test	crates/elab/tests/lib_std_ordered_field.rs.
 semiring_client	lib/std	test	crates/elab/tests/lib_std_semiring.rs.
 linux_spec_client	lib/std,lib	test	crates/elab/tests/linux_spec.rs: tr's spec run on one byte, sized reads, and stdout read off a machine's run.
+memory_client	lib/std	test	crates/elab/tests/lib_std_memory.rs.

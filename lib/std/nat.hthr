@@ -258,6 +258,23 @@ fn Nat::same(self n, m: Nat) → Bool {
     }
 }
 
+theorem Nat::same_self(self n: Nat): n.same(n) = True {
+    match n { Zero => refl, Succ(k) => k.same_self() }
+}
+
+theorem Nat::same_sound(self n: Nat): (m: Nat) → n.same(m) = True → n = m {
+    match n {
+        Zero => λ m => match m {
+            Zero => λ h => refl,
+            Succ(_) => λ h => absurd(h),
+        },
+        Succ(_, ih) => λ m => match m {
+            Zero => λ h => absurd(h),
+            Succ(l) => λ h => rewrite(ih(l, h), refl),
+        },
+    }
+}
+
 fn Nat::sub(self m, n: Nat) → Nat {
     match m {
         Zero => Zero,

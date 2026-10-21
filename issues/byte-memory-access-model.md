@@ -1,11 +1,11 @@
 ---
 title: Develop byte-addressed memory and explicit access outcomes
-status: open
+status: closed
 labels: [stdlib,semantics,runtime,design]
 area: heather-in-heather
 milestone: [hih-memory-model]
 created: 2026-08-25
-updated: 2026-08-25
+updated: 2026-10-21
 ---
 
 Heather needs a specification-level memory on which reads and writes have
@@ -56,3 +56,34 @@ normal-access theorems.
 - 2026-08-25: Filed from the requirement that omitted page tables and
   privilege checks remain visible as assumptions rather than becoming total
   loads/stores by accident.
+- 2026-10-21: Landed as `lib/std/memory.hthr`, with `lib/std/vector.hthr` (`snoc`,
+  `reverse`) and `lib/std/bitvec/bitvec_bytes.hthr` (packing). The design is in
+  `docs/byte-memory-design.md`, which says where the model sits in the
+  program-logic redesign. The showcase is `docs/showcase/memory_client.hthr`
+  and the controls are `crates/elab/tests/lib_std_memory.rs`. Against the
+  acceptance:
+
+  - Address spaces are generic (`Space<A>`). Finiteness and wraparound belong
+    to the space: `BitVec::space(n)` wraps modulo `2^n`, and its offset is
+    `next_rip` at width 64; `Nat::space()` never wraps. The cell type is
+    generic too (`Memory<A, C>`), with the policy (`perms`) a separate field.
+  - Outcomes are `Result<_, Fault<A>>`. A refused write has no memory after
+    it. Spans are checked whole first, so a refused span stores nothing and
+    reports its first refused address (`refused_some`/`FirstRefused` makes
+    that exact).
+  - Laws: read-after-write (`get_set_same`, `get_set_span` under `Distinct`),
+    preservation (`get_set_other`, `get_set_span_outside`,
+    `get_set_span_apart` under `Apart`), and commutation of apart spans up to
+    pointwise agreement (`set_span_comm`). LE/BE round trips are in
+    `bitvec_bytes`.
+  - Normal-path theorems: `*_allowed` for single, span and word access, with
+    `read_write_le` as the whole path, and `buffer_reads`/`buffer_writes`
+    discharging a whole bounded span of a buffer at once.
+  - Wrapping and self-overlapping spans are exercised by evaluation, and the
+    policy is recorded: a wrapping span continues at 0, and the later index
+    wins on overlap.
+  - Paging, privilege, alignment, atomics, devices and allocation are left
+    out, and the design (§7) names a seam for each.
+
+  Wiring the model into the x86 access records, `Stack` and a `Wp` view is
+  `[[memory-model-machine-instances]]`.

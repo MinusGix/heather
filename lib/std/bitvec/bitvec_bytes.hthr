@@ -1,0 +1,69 @@
+// Words as bytes. Endianness is a packing choice made here, never a property
+// of memory: memory holds cells at addresses (`lib/std/memory.hthr`), and a
+// word becomes cells only through one of these. A `k`-byte word is a
+// `BitVec(8 * k)` and its bytes a `[BitVec(8); k]`, so both round trips are
+// stated without a cast: `8 * Succ(k)` is `8 * k + 8`, `concat`'s index for
+// one low byte below `k` more.
+//
+// Little-endian puts the low byte first, big-endian the high byte first; the
+// big-endian forms are the little-endian ones read through `reverse`.
+
+import bitvec;
+import logic;
+import nat;
+import vector;
+
+fn BitVec::bytes_le(k: Nat, self w: BitVec(8 * k)) → [BitVec(8); k] {
+    (match k as λ j => BitVec(8 * j) → [BitVec(8); j] {
+        Zero => λ w => [],
+        Succ(j, ih) => λ w => cons(w.take_low(8, 8 * j), ih(w.drop_low(8, 8 * j))),
+    })(w)
+}
+
+fn BitVec::of_bytes_le({k: Nat}, bytes: [BitVec(8); k]) → BitVec(8 * k) {
+    (match k as λ j => [BitVec(8); j] → BitVec(8 * j) {
+        Zero => λ bytes => BitVec::nil(),
+        Succ(_, ih) => λ bytes => head(bytes).concat(ih(tail(bytes))),
+    })(bytes)
+}
+
+fn BitVec::bytes_be(k: Nat, self w: BitVec(8 * k)) → [BitVec(8); k] { reverse(w.bytes_le(k)) }
+
+fn BitVec::of_bytes_be({k: Nat}, bytes: [BitVec(8); k]) → BitVec(8 * k) { BitVec::of_bytes_le(reverse(bytes)) }
+
+theorem BitVec::of_bytes_le_bytes_le(k: Nat): (w: BitVec(8 * k)) → BitVec::of_bytes_le(w.bytes_le(k)) = w {
+    match k as λ j => (w: BitVec(8 * j)) → BitVec::of_bytes_le(w.bytes_le(j)) = w {
+        Zero => λ w => refl,
+        Succ(j, ih) => λ w => {
+            let rest: (w.take_low(8, 8 * j).concat(BitVec::of_bytes_le(w.drop_low(8, 8 * j).bytes_le(j))) =
+                w.take_low(8, 8 * j).concat(w.drop_low(8, 8 * j))) = rewrite(ih(w.drop_low(8, 8 * j)), refl);
+            trans(rest, BitVec::concat_split(8, 8 * j, w))
+        },
+    }
+}
+
+theorem BitVec::bytes_le_of_bytes_le(k: Nat): (bytes: [BitVec(8); k]) → BitVec::of_bytes_le(bytes).bytes_le(k) = bytes {
+    match k as λ j => (bytes: [BitVec(8); j]) → BitVec::of_bytes_le(bytes).bytes_le(j) = bytes {
+        Zero => λ bytes => refl,
+        Succ(j, ih) => λ bytes => {
+            let word = head(bytes).concat(BitVec::of_bytes_le(tail(bytes)));
+            let low: (word.take_low(8, 8 * j) = head(bytes)) =
+                BitVec::split_concat_low(8, 8 * j, head(bytes), BitVec::of_bytes_le(tail(bytes)));
+            let high: (word.drop_low(8, 8 * j) = BitVec::of_bytes_le(tail(bytes))) =
+                BitVec::split_concat_high(8, 8 * j, head(bytes), BitVec::of_bytes_le(tail(bytes)));
+            let step: (cons(word.take_low(8, 8 * j), word.drop_low(8, 8 * j).bytes_le(j)) =
+                cons(head(bytes), BitVec::of_bytes_le(tail(bytes)).bytes_le(j))) = rewrite(low, high, refl);
+            let inner: (cons(head(bytes), BitVec::of_bytes_le(tail(bytes)).bytes_le(j)) = cons(head(bytes), tail(bytes))) =
+                rewrite(ih(tail(bytes)), refl);
+            trans(step, inner)
+        },
+    }
+}
+
+theorem BitVec::of_bytes_be_bytes_be(k: Nat, w: BitVec(8 * k)): BitVec::of_bytes_be(w.bytes_be(k)) = w {
+    trans(rewrite(reverse_reverse(k, w.bytes_le(k)), refl), BitVec::of_bytes_le_bytes_le(k, w))
+}
+
+theorem BitVec::bytes_be_of_bytes_be(k: Nat, bytes: [BitVec(8); k]): BitVec::of_bytes_be(bytes).bytes_be(k) = bytes {
+    trans(rewrite(BitVec::bytes_le_of_bytes_le(k, reverse(bytes)), refl), reverse_reverse(k, bytes))
+}

@@ -1,0 +1,45 @@
+// Length-indexed vectors `[A; n]` beyond the builtin `map`/`fold`: appending
+// at the end and reversal. A vector is eliminated by recursion on its length
+// with the vector abstracted (`head`/`tail` need a successor length), the way
+// `BitVec` is; `cons(head(v), tail(v))` is `v` by η, so no lemma states it.
+
+import logic;
+import nat;
+
+fn snoc<A>({n: Nat}, xs: [A; n], x: A) → [A; Succ(n)] {
+    (match n as λ k => [A; k] → [A; Succ(k)] {
+        Zero => λ xs => [x],
+        Succ(_, ih) => λ xs => cons(head(xs), ih(tail(xs))),
+    })(xs)
+}
+
+fn reverse<A>({n: Nat}, xs: [A; n]) → [A; n] {
+    (match n as λ k => [A; k] → [A; k] {
+        Zero => λ xs => [],
+        Succ(_, ih) => λ xs => snoc(ih(tail(xs)), head(xs)),
+    })(xs)
+}
+
+theorem reverse_snoc<A>(n: Nat): (xs: [A; n]) → (x: A) →
+        reverse(snoc(xs, x)) = cons(x, reverse(xs)) {
+    match n as λ k => (xs: [A; k]) → (x: A) →
+            reverse(snoc(xs, x)) = cons(x, reverse(xs)) {
+        Zero => λ xs x => refl,
+        Succ(_, ih) => λ xs x => {
+            let step: (snoc(reverse(snoc(tail(xs), x)), head(xs)) = snoc(cons(x, reverse(tail(xs))), head(xs))) =
+                rewrite(ih(tail(xs), x), refl);
+            step
+        },
+    }
+}
+
+theorem reverse_reverse<A>(n: Nat): (xs: [A; n]) → reverse(reverse(xs)) = xs {
+    match n as λ k => (xs: [A; k]) → reverse(reverse(xs)) = xs {
+        Zero => λ xs => refl,
+        Succ(k, ih) => λ xs => {
+            let inner: (cons(head(xs), reverse(reverse(tail(xs)))) = cons(head(xs), tail(xs))) =
+                rewrite(ih(tail(xs)), refl);
+            trans(reverse_snoc(k, reverse(tail(xs)), head(xs)), inner)
+        },
+    }
+}
