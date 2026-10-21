@@ -437,6 +437,44 @@ context prefix instead was tried first: the binder prefixes were nine
 tenths of the text. Rocq would take the same hoisting, or `let`s, or a
 MetaCoq quotation.
 
+**The translation keeps the sharing too (2026-10-21, later).** Exporting
+the whole library showed the tree walk had been the cost all along, only
+out of sight in the `list` closure: `ordered_field`'s proofs unfold to
+trees of millions of nodes, and the sweep ran out of memory there. Three
+changes, each shaped by what it cost:
+
+- **The translation is memoised per kernel node** and per *context*: the
+  canonical elements its binders hold for singleton domains (§5.2), interned
+  so that two binders with the same domain under the same context share an
+  id, and context 0 for a closed node. Nodes are keyed by address and carry
+  a copy to check against, since the translation builds kernel nodes of its
+  own that can be freed and their addresses reused. `Hx`'s children are
+  shared (`Arc`), and every pass after it (the Rocq minor reordering,
+  hoisting, the node table, the dependency walks) visits a shared node once.
+- **Exported terms are hash-consed across declarations** (`Interned`): a
+  library's statements repeat the same instantiated class types from one
+  theorem to the next, and each declaration's translation shares only
+  within itself. An `ordered_field` proof comes to thousands of distinct
+  nodes this way.
+- **`⌊·⌋` for export leaves `app@`** (`typing::spell_checked_for_export`).
+  An export target reads `app@(f; a)` as the plain application `f a`, so
+  its annotations are never written. Spelling it was what made the passes
+  cascade: an `app@`'s components are the callee's statement instantiated at
+  the arguments, every instantiation brings the statement's own spellings,
+  and the next pass spells those. Leaving it cut the spelling of
+  `ordered_field`'s proofs by more than an order of magnitude. And `⌊·⌋`
+  now shares equal component types across its record (`share_spelled`):
+  each spelling was viewed at its own copy of the same class record `Σ`,
+  and rebuilt unshared, the copies multiplied the term by their size. The
+  elaborator's quote boundary gets that sharing as well.
+
+What is left is the eager checker inside `⌊·⌋` itself, a tree walk: it
+re-checks the class's record type at every theorem's binder, tens of
+seconds a theorem in `ordered_field`, and past the address-space rail on
+one (`one_apart_zero`). That is
+[export-spelling-cost](../issues/export-spelling-cost.md); the typed
+exporter would do the same work once, in the walk that translates.
+
 ### 5.7 Opacity
 
 Heather unseals a theorem's proof at a stuck elimination
@@ -453,16 +491,20 @@ cheaper or costlier, never wrong.
 - **F (common):** declarations whose types and proofs are closed kernel
   terms over Nat, Id, Σ, Unit, Empty, sums, W, Vec, Fin, sEq, sEmpty, Squash,
   codes and global definitions, at closed levels, with no modal former, no
-  `ΠΠ`/`Λ`/`$`, and no `DVec`/`IWf`; `Wf` only in Lean (below). The exporter refuses everything
+  `ΠΠ`/`Λ`/`$`, and no `DVec`/`IWf`; `Wf` through native inductives (below). The exporter refuses everything
   else by name (`Refusal` in `crates/export/src/lib.rs`), and a declaration
   that mentions a refused one is itself refused.
 - **F_Lean = F + Wf**, through per-declaration native inductives, under the
   side condition of §5.1 (no β at an open tag, no ih compared at an open
   index). The side condition is checked by Lean itself: a violation is a
   rejected export.
-- **F_Rocq = F minus what needs unit η or irrelevant-record η after reduction,
-  minus large literals; + Wf through the two bypasses.** In practice that is
-  the Nat-and-Id part, not the enum part.
+- **F_Rocq = F + Wf (native inductives, §5.1), minus large literals, minus
+  what needs unit η that the singleton-aware `case` does not reach** (§5.3):
+  a statement that *is* an η equation, such as `Bool::is_true_unique`.
+
+A global over a local context Δ (a definition the elaborator lifted out of
+a binder) is in F: it exports closed over Δ, as `Π Δ. T` and `λ Δ. t`, and
+each use applies it to the substitution's terms.
 
 The refusal list *is* the milestone's step 3, the list of kernel features
 that stopped the translation:
@@ -472,8 +514,15 @@ that stopped the translation:
 2. non-prenex level polymorphism;
 3. `Wf`/`IWf` in Lean beyond the side condition; unit and irrelevant-record
    η in Rocq;
-4. irrelevance that only appears after a substitution (§5.2's gap);
-5. cost: accelerated evaluation (§5.4).
+4. inductives the realisation does not cover yet: tier-2 inductives (`W`
+   plus a leaf predicate, PR #88), and a tier-1 inductive used at a level
+   other than its declaration's
+   ([export-inductive-coverage](../issues/export-inductive-coverage.md));
+5. irrelevance that only appears after a substitution (§5.2's gap);
+6. cost: accelerated evaluation (§5.4), which Lean's kernel meets as deep
+   recursion when a proof evaluates on large numerals (`utf8`'s byte
+   arithmetic); and the cost of spelling proofs for export
+   ([export-spelling-cost](../issues/export-spelling-cost.md)).
 
 ## 7. The prototype
 
@@ -539,6 +588,25 @@ Rocq (§5.4) and native `Wf` inductives for Rocq (§5.1):
 So the text route checks the whole sweep again. The kernel route stays the
 one to measure (no elaborator in it); the text is for reading and for the
 elaborator's opinion on the same declarations.
+
+Then the whole library (`crates/export/tests/library_wide.rs`, run by
+`scripts/export-recheck --wide`, a release build that takes minutes): every
+module of `lib/std` but `ordered_field` and its importers `rat` and `creal`
+([export-spelling-cost](../issues/export-spelling-cost.md)). It needed the
+translation to keep the kernel term's sharing (§5.6), globals over a local
+context (§6) and `elimW`'s step domains written out, which removed the last
+hole. On 2026-10-21:
+
+| | declarations | result |
+|---|---|---|
+| export | 44 modules, 2510 bindings | 2461 exported; refused: 26 tier-2 inductive uses (`itree_trace`, `itree_state`), 1 use at another level (`relation::AnyOf`), 22 that mention a refused one |
+| wide, Lean kernel route | 2461 | all accepted but 16 in `utf8`: two proofs evaluate byte arithmetic on large numerals and Lean's kernel stops at deep recursion (§5.4), and 14 depend on them; no axioms |
+| slice and sweep, Lean, both routes | unchanged | all accepted |
+| slice, Coq 8.18 | unchanged | all accepted |
+
+So the refusals by cause are the whole of what stops the library today,
+inside the rails: inductive coverage, one evaluation cost, and the
+spelling cost that keeps three modules out.
 
 The probes (`crates/export/probes/`) are the evidence behind §3 and §5.1. They
 are not part of `scripts/test`, because the suite does not assume Lean or
@@ -622,10 +690,14 @@ they pay off:
    statement over HX, lemma 1 first in heather-coq. This is design until
    the sweep says which fragment matters.
 
-Rocq as a full second target is parked inside
-[heather-proof-export](../issues/heather-proof-export.md) until unit η is
-answered (§5.3). The printer and prelude stay, and the probes record exactly
-what Rocq lacks.
+Items 1, 3 and 4 are closed (PR #87). Rocq is a second target since the
+singleton-aware `case` (§5.3); what it still lacks is §6's F_Rocq. The
+whole-library sweep (§7) added two:
+
+6. [export-spelling-cost](../issues/export-spelling-cost.md): bring
+   `ordered_field`, `rat` and `creal` inside the rails.
+7. [export-inductive-coverage](../issues/export-inductive-coverage.md):
+   tier-2 inductives and level-polymorphic uses as native inductives.
 
 ## 11. Decisions (Minus, 2026-10-21)
 

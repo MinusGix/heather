@@ -2101,6 +2101,10 @@ mod tests {
 struct RebuildChecked<'a> {
     spelled: &'a std::collections::HashMap<(usize, u32), Option<crate::typing::Spelled>>,
     base: u32,
+    /// Whether `app@` is among the spellings rewritten (and counted): the
+    /// exporter's spelling leaves it, which its targets read as an
+    /// application without annotations.
+    apps: bool,
     replaced: u64,
     seen: u64,
     changes: u64,
@@ -2124,7 +2128,8 @@ impl Mapper for RebuildChecked<'_> {
                 | Term::FstAt { .. }
                 | Term::SndAt { .. }
                 | Term::AppAt { .. }
-        ) {
+        ) || (!self.apps && matches!(&**t, Term::AppAt { .. }))
+        {
             return None;
         }
         self.seen += 1;
@@ -2188,16 +2193,17 @@ pub(crate) fn rebuild_checked_spellings(
     t: &Rc<Term>,
     spelled: &std::collections::HashMap<(usize, u32), Option<crate::typing::Spelled>>,
     base: u32,
+    apps: bool,
 ) -> (Rc<Term>, u64) {
-    let mut m = RebuildChecked { spelled, base, replaced: 0, seen: 0, changes: 0 };
+    let mut m = RebuildChecked { spelled, base, apps, replaced: 0, seen: 0, changes: 0 };
     let out = sub_tm(t, &mut m, Depths::default());
     (out, m.replaced)
 }
 
 /// How many checked spellings `t` holds, anywhere.
-pub(crate) fn count_checked_spellings(t: &Rc<Term>) -> u64 {
+pub(crate) fn count_checked_spellings(t: &Rc<Term>, apps: bool) -> u64 {
     let empty = std::collections::HashMap::new();
-    let mut m = RebuildChecked { spelled: &empty, base: 0, replaced: 0, seen: 0, changes: 0 };
+    let mut m = RebuildChecked { spelled: &empty, base: 0, apps, replaced: 0, seen: 0, changes: 0 };
     let _ = sub_tm(t, &mut m, Depths::default());
     m.seen
 }
@@ -2207,16 +2213,17 @@ pub(crate) fn rebuild_checked_spellings_ty(
     t: &Rc<Type>,
     spelled: &std::collections::HashMap<(usize, u32), Option<crate::typing::Spelled>>,
     base: u32,
+    apps: bool,
 ) -> (Rc<Type>, u64) {
-    let mut m = RebuildChecked { spelled, base, replaced: 0, seen: 0, changes: 0 };
+    let mut m = RebuildChecked { spelled, base, apps, replaced: 0, seen: 0, changes: 0 };
     let out = sub_ty(t, &mut m, Depths::default());
     (out, m.replaced)
 }
 
 /// [`count_checked_spellings`] over a type.
-pub(crate) fn count_checked_spellings_ty(t: &Rc<Type>) -> u64 {
+pub(crate) fn count_checked_spellings_ty(t: &Rc<Type>, apps: bool) -> u64 {
     let empty = std::collections::HashMap::new();
-    let mut m = RebuildChecked { spelled: &empty, base: 0, replaced: 0, seen: 0, changes: 0 };
+    let mut m = RebuildChecked { spelled: &empty, base: 0, apps, replaced: 0, seen: 0, changes: 0 };
     let _ = sub_ty(t, &mut m, Depths::default());
     m.seen
 }
@@ -2224,12 +2231,12 @@ pub(crate) fn count_checked_spellings_ty(t: &Rc<Type>) -> u64 {
 /// Whether `t` holds a checked spelling anywhere — the cheap question a caller
 /// asks before paying for [`crate::typing::spell_checked_in_code`].
 pub fn holds_checked_spelling(t: &Rc<Term>) -> bool {
-    count_checked_spellings(t) > 0
+    count_checked_spellings(t, true) > 0
 }
 
 /// [`holds_checked_spelling`] over a type.
 pub fn holds_checked_spelling_ty(t: &Rc<Type>) -> bool {
-    count_checked_spellings_ty(t) > 0
+    count_checked_spellings_ty(t, true) > 0
 }
 
 /// 1 + the largest free local de Bruijn index of `t` (0 when it is locally

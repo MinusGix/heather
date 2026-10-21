@@ -450,6 +450,32 @@ pub(crate) enum Spelled {
     Pi { dom_level: Level, cod_level: Level, dom: Rc<Type>, cod: Rc<Type> },
 }
 
+/// One node for each component type the record holds twice. The checker
+/// views each checked spelling at its own expected type, so the record holds
+/// a fresh copy of the same type for every spelling viewed at it (a class's
+/// record `Σ`, once per pair in a proof about it); rebuilt unshared, the
+/// copies multiply the term by their size, and every later pass and reader
+/// walks each one. Copies are found by the bounded `Debug` spelling
+/// (`fmt.rs`) and then compared in full.
+fn share_spelled(rec: &mut HashMap<(usize, u32), Option<Spelled>>) {
+    let mut seen: HashMap<String, Vec<Rc<Type>>> = HashMap::new();
+    let mut one = |t: &mut Rc<Type>| {
+        let same = seen.entry(format!("{t:?}")).or_default();
+        match same.iter().find(|u| ***u == **t) {
+            Some(u) => *t = Rc::clone(u),
+            None => same.push(Rc::clone(t)),
+        }
+    };
+    for s in rec.values_mut().flatten() {
+        match s {
+            Spelled::Sigma { fst: a, snd: b, .. } | Spelled::Sum { lhs: a, rhs: b, .. } | Spelled::Pi { dom: a, cod: b, .. } => {
+                one(a);
+                one(b);
+            }
+        }
+    }
+}
+
 /// Record `spelled` at `key`, or mark the key ambiguous (`None`) when the
 /// node was already viewed at a different former.
 fn keep_spelled(rec: &RefCell<HashMap<(usize, u32), Option<Spelled>>>, key: (usize, u32), spelled: Spelled) {
@@ -495,15 +521,52 @@ pub fn spell_checked_in_code(
     level: &Level,
     fuel: u64,
 ) -> R<Rc<Term>> {
+    spell_checked(psi, univs, layer, gamma, t, ty, level, fuel, true)
+}
+
+/// [`spell_checked_in_code`] for an **export**: every checked spelling but
+/// `app@`, which an export target reads as an application with no
+/// annotations to write. Spelling `app@` is what makes the passes cascade
+/// on a library proof: its components are the callee's statement
+/// instantiated at the arguments, each instantiation carrying the
+/// statement's own spellings, which the next pass spells again
+/// (`docs/export-fragment-design.md` §5.6).
+#[allow(clippy::too_many_arguments)]
+pub fn spell_checked_for_export(
+    psi: &GlobalCtx,
+    univs: u32,
+    layer: Layer,
+    gamma: &LocalCtx,
+    t: Rc<Term>,
+    ty: &Type,
+    level: &Level,
+    fuel: u64,
+) -> R<Rc<Term>> {
+    spell_checked(psi, univs, layer, gamma, t, ty, level, fuel, false)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spell_checked(
+    psi: &GlobalCtx,
+    univs: u32,
+    layer: Layer,
+    gamma: &LocalCtx,
+    t: Rc<Term>,
+    ty: &Type,
+    level: &Level,
+    fuel: u64,
+    apps: bool,
+) -> R<Rc<Term>> {
     const PASSES: usize = 16;
     let base = gamma.entries.len() as u32;
     let mut t = t;
     for _ in 0..PASSES {
-        if crate::subst::count_checked_spellings(&t) == 0 {
+        if crate::subst::count_checked_spellings(&t, apps) == 0 {
             return Ok(t);
         }
         let mut tc = Tc::eager(fuel);
         tc.spellings = Some(RefCell::new(HashMap::new()));
+        tc.spell_apps = apps;
         let env = Env {
             psi: psi.clone(),
             cache: Rc::new(GlobalCache::new()),
@@ -515,8 +578,9 @@ pub fn spell_checked_in_code(
             value_metrics: None,
         };
         tc.tm_check_ty(&env, &t, ty, level)?;
-        let spelled = tc.spellings.take().expect("set above").into_inner();
-        let (next, replaced) = crate::subst::rebuild_checked_spellings(&t, &spelled, base);
+        let mut spelled = tc.spellings.take().expect("set above").into_inner();
+        share_spelled(&mut spelled);
+        let (next, replaced) = crate::subst::rebuild_checked_spellings(&t, &spelled, base, apps);
         // `replaced` counts the nodes unshared for an ambiguous record too:
         // the next pass sees each occurrence on its own.
         if replaced == 0 {
@@ -540,15 +604,43 @@ pub fn spell_checked_in_code_ty(
     level: &Level,
     fuel: u64,
 ) -> R<Rc<Type>> {
+    spell_checked_ty(psi, univs, layer, gamma, t, level, fuel, true)
+}
+
+/// [`spell_checked_for_export`] for a type.
+pub fn spell_checked_for_export_ty(
+    psi: &GlobalCtx,
+    univs: u32,
+    layer: Layer,
+    gamma: &LocalCtx,
+    t: Rc<Type>,
+    level: &Level,
+    fuel: u64,
+) -> R<Rc<Type>> {
+    spell_checked_ty(psi, univs, layer, gamma, t, level, fuel, false)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spell_checked_ty(
+    psi: &GlobalCtx,
+    univs: u32,
+    layer: Layer,
+    gamma: &LocalCtx,
+    t: Rc<Type>,
+    level: &Level,
+    fuel: u64,
+    apps: bool,
+) -> R<Rc<Type>> {
     const PASSES: usize = 16;
     let base = gamma.entries.len() as u32;
     let mut t = t;
     for _ in 0..PASSES {
-        if crate::subst::count_checked_spellings_ty(&t) == 0 {
+        if crate::subst::count_checked_spellings_ty(&t, apps) == 0 {
             return Ok(t);
         }
         let mut tc = Tc::eager(fuel);
         tc.spellings = Some(RefCell::new(HashMap::new()));
+        tc.spell_apps = apps;
         let env = Env {
             psi: psi.clone(),
             cache: Rc::new(GlobalCache::new()),
@@ -560,8 +652,9 @@ pub fn spell_checked_in_code_ty(
             value_metrics: None,
         };
         tc.ty_check(&env, &t, level)?;
-        let spelled = tc.spellings.take().expect("set above").into_inner();
-        let (next, replaced) = crate::subst::rebuild_checked_spellings_ty(&t, &spelled, base);
+        let mut spelled = tc.spellings.take().expect("set above").into_inner();
+        share_spelled(&mut spelled);
+        let (next, replaced) = crate::subst::rebuild_checked_spellings_ty(&t, &spelled, base, apps);
         // `replaced` counts the nodes unshared for an ambiguous record too:
         // the next pass sees each occurrence on its own.
         if replaced == 0 {
@@ -850,6 +943,9 @@ struct Tc {
     /// annotation where the scrutinee is a constructor). Such a node's entry
     /// is `None`, and the rebuild unshares it for the next pass.
     spellings: Option<RefCell<HashMap<(usize, u32), Option<Spelled>>>>,
+    /// Whether `spellings` records `app@` (the export's spelling does not:
+    /// [`spell_checked_for_export`]).
+    spell_apps: bool,
     /// Successful conversions whose syntax has different outer constructors.
     /// The cache lives for one public kernel gate; identity keys own every `Rc`
     /// they identify, so allocator reuse cannot create an aliasing key.
@@ -993,6 +1089,7 @@ impl Tc {
             fuel,
             materialize_eagerly,
             spellings: None,
+            spell_apps: true,
             conv_memo: RefCell::new(HashMap::new()),
             conv_memo_entries: Cell::new(0),
             #[cfg(feature = "value-metrics")]
@@ -2333,7 +2430,7 @@ impl Tc {
     /// One `app@` node `t = app@(f; arg)`, `f` inferred as `fun_ty`.
     fn app_at_node(&self, env: &Env, t: &Term, fun_ty: ITy, arg: &Rc<Term>) -> R<(ITy, Level)> {
         if let Some(Type::Pi { dom_level, cod_level, dom, cod }) = fun_ty.as_syn() {
-            if let Some(rec) = &self.spellings {
+            if let Some(rec) = self.spellings.as_ref().filter(|_| self.spell_apps) {
                 keep_spelled(
                     rec,
                     (t as *const Term as usize, env.gamma.entries.len() as u32),

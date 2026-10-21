@@ -15,19 +15,37 @@
 # the kernel term's sharing as hoisted definitions (crates/export/src/share.rs);
 # without it the sweep is too large for Lean's parser (design §5.6, §7).
 #
-# Usage: scripts/export-recheck [OUT_DIR]
+# Usage: scripts/export-recheck [--wide] [OUT_DIR]
+#   --wide also exports the whole library (crates/export/tests/library_wide.rs,
+#          a release build under its own rails: minutes) and hands Wide.hxk
+#          to Lean's kernel. Informational: it reports what Lean rejects.
 #   LEAN=/path/to/lean  (default: `lean` on PATH)
 #   COQC=/path/to/coqc  (default: `coqc` on PATH)
 # A missing checker is reported and skipped, not an error.
 # Design and expected results: docs/export-fragment-design.md §7.
 set -u
 root="$(cd "$(dirname "$0")/.." && pwd)"
+wide=0
+if [ "${1:-}" = --wide ]; then wide=1; shift; fi
 out="${1:-$root/target/export-recheck}"
 mkdir -p "$out"
 out="$(cd "$out" && pwd)"
 
 HEATHER_EXPORT_OUT="$out" "$root/scripts/test" -p heather-export >"$out/test.log" 2>&1 \
   || { echo "export tests failed; see $out/test.log"; exit 1; }
+if [ "$wide" = 1 ]; then
+  # Built before entering the rails (the linker reserves more address space
+  # than they allow), then run under them.
+  bin="$(cd "$root" && cargo test --release -p heather-export --test library_wide --no-run 2>&1 \
+    | grep -o 'target/release/deps/library_wide-[0-9a-f]*' | tail -1)"
+  [ -n "$bin" ] || { echo "wide sweep: build failed"; exit 1; }
+  if (cd "$root/crates/export" && ulimit -v 6291456 -t 3000 -c 0 \
+    && HEATHER_EXPORT_OUT="$out" "$root/$bin" --ignored --nocapture) >"$out/wide.log" 2>&1; then
+    echo "wide sweep: $(grep '^wide:' "$out/wide.log" | cut -d, -f1-3)"
+  else
+    echo "wide sweep: FAILED; see $out/wide.log"; exit 1
+  fi
+fi
 cp "$root/crates/export/prelude/Hx.lean" "$root/crates/export/prelude/Import.lean" \
   "$root/crates/export/prelude/Hx.v" "$out/"
 
@@ -47,6 +65,10 @@ if [ -n "$lean" ]; then
         echo "lean kernel, $f: FAILED; see $out/kernel-$f.log"; status=1
       fi
     done
+    if [ "$wide" = 1 ]; then
+      (ulimit -v 8388608 -t 900 -c 0; LEAN_PATH="$out" "$lean" --run Import.lean Wide.hxk) >kernel-Wide.log 2>&1
+      echo "lean kernel, Wide (informational): $(tail -1 kernel-Wide.log)"
+    fi
     # The negative control (crates/export/tests/library_sweep.rs): β at an
     # open tag, which Heather has and the native-inductive realisation of
     # `Wf` does not. Lean must reject exactly that declaration.

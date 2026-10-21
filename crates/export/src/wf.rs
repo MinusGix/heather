@@ -151,8 +151,10 @@ impl Tr<'_> {
     fn at_depth<T>(&self, depth: u32, f: impl FnOnce() -> R<T>) -> R<T> {
         debug_assert!(self.ctx.borrow().is_empty(), "a written definition is translated from the top");
         self.ctx.borrow_mut().extend((0..depth).map(|_| None));
+        (0..depth).for_each(|_| self.memo.borrow_mut().push(None));
         let out = f();
         self.ctx.borrow_mut().clear();
+        self.memo.borrow_mut().ids.clear();
         out
     }
 
@@ -292,12 +294,17 @@ impl Tr<'_> {
     }
 
     /// Which declaration `Wf(shape; arity)` is, and its arguments.
-    fn recognise(&self, shape: &Type) -> R<(Rc<WfDecl>, Vec<Hx>)> {
+    fn recognise(&self, level: &Level, shape: &Type) -> R<(Rc<WfDecl>, Vec<Hx>)> {
         let depth = self.ctx.borrow().len() as u32;
         let Some(tag) = Self::tag_in(self.psi, shape, depth) else { return refuse(WF) };
         let Some(d) = self.wf.by_tag.borrow().get(&tag).cloned() else {
             return refuse("Wf instance of a declaration the exporter has not met");
         };
+        // The native inductive is realised at its declaration's level; a use
+        // at another (`List<A → B → Type>`) would need one more.
+        if lvl(level)? != lvl(&d.level)? {
+            return refuse("Wf instance at a level other than its declaration's");
+        }
         let mut out = vec![None; d.params.len()];
         if !out.is_empty() {
             let Some((_, inst)) = Self::summands_in(self.psi, shape, depth) else { return refuse(WF) };
@@ -317,14 +324,14 @@ impl Tr<'_> {
     }
 
     /// `⟦Wf(x : S). n⟧ = D args`.
-    pub(crate) fn wf_type(&self, shape: &Type) -> R<Hx> {
-        let (d, args) = self.recognise(shape)?;
+    pub(crate) fn wf_type(&self, level: &Level, shape: &Type) -> R<Hx> {
+        let (d, args) = self.recognise(level, shape)?;
         Ok(app(Hx::Global(d.abs), args))
     }
 
     /// `⟦sup_f(a; cs)⟧ = D::supf# args a cs`.
-    pub(crate) fn wf_supf(&self, shape: &Type, label: &Term, children: &Term) -> R<Hx> {
-        let (d, mut args) = self.recognise(shape)?;
+    pub(crate) fn wf_supf(&self, level: &Level, shape: &Type, label: &Term, children: &Term) -> R<Hx> {
+        let (d, mut args) = self.recognise(level, shape)?;
         args.push(self.tm(label)?);
         args.push(self.tm(children)?);
         Ok(app(Hx::Named(d.supf_key(), vec![]), args))
@@ -343,7 +350,7 @@ impl Tr<'_> {
         step: &Term,
         scrut: &Term,
     ) -> R<Hx> {
-        let (d, mut args) = self.recognise(shape)?;
+        let (d, mut args) = self.recognise(level, shape)?;
         let ml = lvl(motive_level)?.0;
         if !self.wf.emitted.borrow().contains(&(d.tag, ml)) {
             self.wf.wanted.borrow_mut().push((d.tag, ml));
@@ -378,13 +385,13 @@ impl Tr<'_> {
             let q = field as u32;
             let mut t = app(Hx::Global(d.abs), Self::param_vars(d, q + *n as u32));
             for i in (0..*n as u32).rev() {
-                t = Hx::Pi(Box::new(app(Hx::Global(d.abs), Self::param_vars(d, q + i))), Box::new(t));
+                t = Hx::Pi(Rc::new(app(Hx::Global(d.abs), Self::param_vars(d, q + i))), Rc::new(t));
             }
             if field {
-                t = Hx::Pi(Box::new(self.ty_at(d.np(), p)?), Box::new(t));
+                t = Hx::Pi(Rc::new(self.ty_at(d.np(), p)?), Rc::new(t));
             }
             for l in d.params.iter().rev() {
-                t = Hx::Pi(Box::new(Hx::Sort(lvl(l)?)), Box::new(t));
+                t = Hx::Pi(Rc::new(Hx::Sort(lvl(l)?)), Rc::new(t));
             }
             ctors.push((d.ctors[k].clone(), t));
             fields.push((q, *n as u32));

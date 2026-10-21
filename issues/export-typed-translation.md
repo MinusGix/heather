@@ -84,3 +84,12 @@ declarations need nothing from the target's unifier.
   `bool::Bool::is_true_unique`, whose statement *is* unit η: the untyped
   route cannot see which `refl` is checked against an η-equation, so this
   is the typed exporter's job (it knows the endpoints).
+- 2026-10-21, later (whole-library sweep): `elimW`'s step domains are
+  written out (the kernel's step telescope, built with `inst_top`), so no
+  export has a hole left: Lean's kernel accepts `ITree#canon` and
+  `Tac#canon` and everything that depends on them. The translation keeps
+  the kernel term's sharing now (memoised per node and binder context,
+  hash-consed across declarations; design §5.6), and `⌊·⌋` for export
+  leaves `app@` unspelled. Left for "done": the eta-long invariant as a
+  typed pass (Rocq's `is_true_unique`) and the spelling cost of
+  [[export-spelling-cost]].
