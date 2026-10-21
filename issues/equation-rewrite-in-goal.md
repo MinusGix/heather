@@ -47,3 +47,8 @@ controls as [[relational-rewrite-controls]] defines them.
   design §5: relations other than `=` (that is
   [[relational-rewrite-controls]]'s), rewriting in hypotheses, matching up to
   conversion.
+- 2026-10-21: follow-ups filed (Minus asked for them):
+  [[rewrite-lemma-instantiation]], [[rewrite-keyed-conversion-matching]]
+  (the next round, together), [[subst-local-equation]],
+  [[rewrite-in-hypothesis]], [[rewrite-pattern-occurrences]],
+  [[rewrite-setoid-relations]], [[rewrite-conveniences]].

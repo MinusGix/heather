@@ -140,3 +140,8 @@ The per-module counts are in the PR description.
 - **No search.** It does not try `sym`, unfold the goal beyond one exposed
   layer, or match up to conversion. Each would be a guess with a cost on
   every miss.
+
+Follow-ups are filed: `issues/rewrite-lemma-instantiation.md`,
+`rewrite-keyed-conversion-matching.md`, `subst-local-equation.md`,
+`rewrite-in-hypothesis.md`, `rewrite-pattern-occurrences.md`,
+`rewrite-setoid-relations.md`, `rewrite-conveniences.md`.
