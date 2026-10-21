@@ -80,12 +80,11 @@ through `milestone:`; the list of issues is `scripts/issue list --milestone
 <!-- milestones -->
 | milestone | area | status | done when | parent |
 |---|---|---|---|---|
-| `hih-program-logic` | heather-in-heather | open | Native code is stated and proved through one program logic (one effectful code tree, rules proved once) instead of the five "this code runs" shapes, and the assembly layer is redesigned on it. |  |
-| `hih-pl-spec` | heather-in-heather | open | Linux's calls and answers are a container, a program's spec is a coalgebra over it, and `Sim` (every allowed history is produced) is bridged both ways to `LinuxRuns`, with one filter spec and its stdout fact stated over it. | hih-program-logic |
-| `hih-pl-wp` | heather-in-heather | open | One computed weakest precondition over every `Asm` item, syscalls and proved pieces included, is sound once, and `Stretch` and `Straight` are its instances. | hih-program-logic |
-| `hih-pl-loops` | heather-in-heather | open | One loop rule, measured by the remaining history and a variant, closes the filter's byte loop and its read-until-EOF loop. | hih-program-logic |
-| `hih-pl-first-program` | heather-in-heather | open | The stream filter's claim is `Sim` at its spec end to end, with its process library's hand inductions deleted. | hih-program-logic |
-| `hih-pl-retire` | heather-in-heather | open | Every native program is on the logic and the five execution shapes are gone as client judgments. | hih-program-logic |
+| `hih-program-logic` | heather-in-heather | open | Native code's meaning is stated against interaction trees through one program logic, and a compiler from an effectful source to x86-64 is proved correct against it once, replacing the hand-proved per-program stack. |  |
+| `hih-pl-spec` | heather-in-heather | open | Linux's calls and answers are a tree container, and `Sim` (the machine produces exactly a tree's traces) is bridged both ways to `LinuxRuns`, with `tr`'s spec written as a tree. | hih-program-logic |
+| `hih-pl-wp` | heather-in-heather | open | One computed weakest precondition over every `Asm` item (syscalls and proved pieces included) and one loop rule are sound once, probed for elaborator cost. | hih-program-logic |
+| `hih-pl-source` | heather-in-heather | open | An effectful source denotes Linux trees, compiles to x86-64 by a Heather function, and the compiler's correctness theorem is proved once. | hih-program-logic |
+| `hih-pl-first-program` | heather-in-heather | open | `tr` is built through the verified compiler with no per-program proof, and the per-function certificate path is retired. | hih-program-logic |
 | `hih-memory` | heather-in-heather | open | A native program allocates on the heap, under a byte-addressed memory model whose certificates bound and track the allocation. |  |
 | `hih-memory-model` | heather-in-heather | open | Byte-addressed memory with explicit access outcomes is a library model that the native machine model and the program logic both use. | hih-memory |
 | `hih-alloc-metering` | heather-in-heather | open | Certificates state an allocation bound, over a platform model that meters allocation. | hih-memory |
@@ -209,8 +208,9 @@ and above all a way to track allocations.
   [function-ir-x86-proof-scaling](../issues/function-ir-x86-proof-scaling.md)).
 
 **Milestones.** `hih-program-logic` first, since every later program is
-written on it (submilestones `hih-pl-spec`, `hih-pl-wp`, `hih-pl-loops`,
-`hih-pl-first-program`, `hih-pl-retire`), then `hih-memory` (submilestones `hih-memory-model`,
+written on it (submilestones `hih-pl-spec`, `hih-pl-wp`, `hih-pl-source`,
+`hih-pl-first-program`; it waits on `it-core` and burns the hand-proved
+process stack first), then `hih-memory` (submilestones `hih-memory-model`,
 `hih-alloc-metering`, `hih-first-alloc`). `hih-passes` can proceed in parallel
 because it is meta-layer work. `hih-self` comes after both
 ([self-hosting-first-component](../issues/self-hosting-first-component.md)).
@@ -475,3 +475,8 @@ separate machines do not slow each other's tests.
   as cross-cutting, for code as well as proofs. Function-typed fields are
   interaction-tree work (`it-function-fields`). Export is wanted for showing
   trustworthiness, more than import.
+- 2026-10-21: Minus's review of the program logic design: native code is
+  rebuilt on interaction trees as a compiler proved correct once, after the
+  tree library; the hand-proved process stack burns first.
+  `hih-program-logic`'s "done when" is restated to match and its
+  submilestones are `hih-pl-*` (`docs/native-program-logic-design.md`).

@@ -28,6 +28,11 @@ precondition decides it. It must not spell the type's whnf in a diagnostic
 `tac-host-interface` lands, so it is a candidate for `tac-first-port`'s
 successor rather than a new Rust tactic.
 
+Since the 2026-10-21 revision these obligations arise in the compiler's
+per-construct lemmas over abstract inputs rather than in every program, so
+there are far fewer of them. File the work only if those rounds write the
+shape by hand a third time.
+
 ## What it assumes from elsewhere
 
 - **[[native-one-wp]]** owns the obligation's shape.

@@ -4,33 +4,33 @@ status: open
 labels: [native,x86,semantics,proofs]
 area: heather-in-heather
 milestone: [hih-pl-spec]
+blocked-by: [interaction-trees-container-model]
 created: 2026-10-20
 updated: 2026-10-20
 ---
 
-Round P1 of `docs/native-program-logic-design.md` (§2): specifications as
-coalgebras over Linux's events, and the judgment `Sim`.
+Round S1 of `docs/native-program-logic-design.md` (§4, §5): Linux's events as
+a tree container, and the judgment `Sim` against a tree.
 
 ## Scope
 
 - `LinuxCmd` and `LinuxAns` (a read names its `max`), `Answers(c, a)`, and
   `Requests`/`answered` factored out of `LinuxRuns`' arms so that `LinuxRuns`
   and `RunsAs` read the same definitions.
-- `Move<Q>` (`Exit`, `Call(c, k)`, `Cut`) and `Spec<Q>`; `Valid`, `trace`,
-  `RunsAs` by recursion on the history; `Sim`, and that it is a
-  `StepsBack` goal.
-- The bridge both ways: `RunsAs(spec, q, h, s)` iff
-  `LinuxRuns(trace(spec, q, h), s)`.
-- One spec: the stream filter's (`filter_spec(step)`), with a lemma that
-  `filter_events(…)` is its `trace` at the history the steps and ending
-  encode, and `filter_prints` restated over `trace` alone (§2.5).
+- Trees over that container from the tree library; `next(t)` (exit, call or
+  cut, Taus stripped by structural recursion) as what the logic evaluates.
+- `Valid`, `trace`, `RunsAs` by recursion on the history; `Sim`, and that it
+  is closed backward under `LinuxSteps`.
+- The bridge both ways (`RunsAs(t, h, s)` iff `LinuxRuns(trace(t, h), s)`),
+  and `trace = is_trace_of`'s trace, so refinement of a tree is a lemma.
+- One spec: `tr`'s tree (iter over read, fold, write), with its stdout fact
+  proved about the tree alone.
 
-Library only: new module(s) beside `linux_x86_64_io`; no program or
-producer moves. Touches no elaborator file.
+Library only; touches no elaborator file and no native producer.
 
 ## What it assumes from elsewhere
 
+- **[[interaction-trees-container-model]]** owns the tree library. Assumed
+  here: container events, fuel-cut trees with `bind`/`iter`, `is_trace_of`.
 - **[[linux-syscall-trace-model]]** owns which calls and answers Linux has.
   Assumed here: only today's six events.
-- **[[interaction-trees-container-model]]** owns trees. Assumed here:
-  nothing; `Cut` is reserved for its bridge (design §7).

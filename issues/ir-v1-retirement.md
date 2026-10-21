@@ -15,10 +15,10 @@ source IR.
 Split out of [[native-one-program-logic]]'s third question: the native
 program logic (`docs/native-program-logic-design.md` §1) does not touch
 `ir_v1`, so the question belongs to the round that picks one source IR for
-a compiler pass written in Heather (`hih-passes`). Lean at filing: retire it
-then, since FunctionIR is what the x86 path lowers and what passes would
-read; keep it until that pass exists, because the certgen tests are its
-only users and cost nothing while frozen.
+a compiler pass written in Heather (`hih-passes`). The design's lean (§3.2):
+retire it in burn B2, once [[function-ir-verified-lowering]] compiles the
+pure examples, since FunctionIR is what the verified compiler reads; keep it
+frozen until then, because the certgen tests are its only users.
 
 ## What it assumes from elsewhere
 

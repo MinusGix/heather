@@ -9,28 +9,29 @@ created: 2026-10-20
 updated: 2026-10-20
 ---
 
-Round P2 of `docs/native-program-logic-design.md` (§4, §5): one computed
-weakest precondition over every `Asm` item.
+Round S2 of `docs/native-program-logic-design.md` (§6.1, §6.3): one computed
+weakest precondition over every `Asm` item, the target-side tool the
+compiler's per-construct lemmas are proved with.
 
 ## Scope
 
-- `Asm` gains `Syscall` and `Proved(bytes, len, measured, contract)` with
-  `Contract<M>` (pre, relational post, placement-independent runs).
+- `Asm` gains `Syscall` and `Proved(bytes, len, measured, contract)` with a
+  relational, placement-independent contract.
 - `View<M, V>`: the page view (`Stretch`'s) and the frame view
   (`Straight`'s), with their load and store arms.
-- `Wp` carrying the spec position and the `passed` flag, and `wp_runs` /
-  `wp_sound` proved once. `stretch_runs` and `straight_runs` become
-  instances or are deleted with their callers moved.
-- **Probe first** (design §8): move one frame phase (`loop_last`) and one
-  page stretch (the filter's byte load) onto `Wp` and compare with
-  `scripts/perf ab` before moving anything else. If the view record or the
-  two extra continuation arguments cost the elaborator, specialise to two
-  monomorphic wps sharing the soundness proof.
-- Decide whether `Runs` stays as notation (design §10, question 5).
+- `Wp` carrying the tree and the `passed` flag; `wp_runs` and `wp_sound`
+  proved once.
+- **Probe first** (design §6.3): one frame run and one page run on `Wp`
+  against their `Straight`/`Stretch` versions with `scripts/perf ab`. If the
+  view record or the extra continuation arguments cost the elaborator,
+  specialise to two monomorphic wps sharing the soundness proof.
+- `Stretch`/`Straight` are not migrated callers: their callers burn in
+  [[native-burn-process-stack]]. They are deleted once `Wp` covers them.
 
 ## What it assumes from elsewhere
 
-- **[[native-linux-spec]]** owns `Spec`, `Requests`, `answered` and `Sim`.
-- **[[elab-whnf-copies-straight-continuations]]** owns the elaborator cost
-  of computed continuations. Assumed here: only that it is unchanged; a fix
-  there makes this round cheaper, not different.
+- **[[native-linux-spec]]** owns `Sim`, `Requests`, `answered` and `next`.
+- **[[wp-obligation-tactic]]** owns a tactic for these obligations, if the
+  compiler rounds turn out to need one.
+- **[[elab-whnf-copies-straight-continuations]]** owns the elaborator cost of
+  computed continuations.
