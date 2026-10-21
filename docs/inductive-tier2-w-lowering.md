@@ -56,7 +56,8 @@ byte: the classification adds a case, it does not move the tier-1 boundary.
 
 Not in this round, each its own follow-up: curried function fields, constructors
 with several recursive fields, the course-of-values window, `inj` at a
-recursive field, generated-definition naming (`gendefs.rs`), and the native
+recursive field, generated-definition naming (`gendefs.rs`; the leaf
+predicate's landed 2026-10-21, §13), and the native
 and certificate generators (which keep refusing a tier-2 type). Value
 parameters on an `inductive` (ITree's `E: Events`) landed 2026-10-21 for both
 recursive tiers (`docs/surface-value-parameters.md` §6): the codomain
@@ -349,6 +350,7 @@ it changed or added the following.
    `split`'s finite case domains, the function-IR structured source, and an
    index type. `register_gen_defs` is skipped (§1), so tier 2 has no
    generated globals and no module-image entry beyond its field kinds (byte 4).
+   (Since §13 it has one: the leaf predicate, `D#canon`.)
 8. **What the encoding cannot prove.** Two trees that agree pointwise under a
    `Vis` are not equal: `rebuild(Vis(c, k)) = Vis(c, k)` is refused, and so
    is `bind(t, Ret) = t`, because their `Vis` cases need funext. That is a
@@ -361,3 +363,65 @@ it changed or added the following.
    `match` on a field has a non-dependent motive
    (docs/nested-match-patterns-design.md §10.2). Filed as
    `issues/deep-pattern-dependent-later-field.md`.
+
+## 13. The leaf predicate as a generated definition
+
+Added 2026-10-21 (`issues/tier2-fragment-extensions.md`, generated
+definitions), measured first on the library that made it matter,
+`lib/std/itree.hthr`.
+
+**Why this one.** `canon` (§5) is a large elimination whose step is a case
+tree carrying, per constructor, the children's type, the ih's type and, at a
+leaf, an `Id` code over `f₀`, so it writes `W₀` (and with it `P`) out several
+times per constructor. Inline it was about 97% of `⟦D⟧`'s spelling for a
+four-constructor tree, and `⟦D⟧` is in every `fst`/`snd`/pair annotation of
+a tier-2 value: the `match` of §7 alone writes it into the scrutinee's
+projections, each recursive binder's alias, and the motive at each branch.
+The kernel spent the gate comparing and shifting those copies. `S` and `P`
+are an order of magnitude smaller and stay inline.
+
+**The definition.** At declaration time, over the telescope `D#tycode_fn`
+uses (`docs/per-instantiation-type-codes-design.md` §2: every type parameter
+at `Ty 0`, the value parameters at their declared types, domains in the
+emission spelling):
+
+```
+D#canon : Π(A₁ : Ty 0)…(v_m : T_m). Π(t : W₀). Ty lw
+D#canon = λ(A₁ : Ty 0)…(v_m : T_m). λ(t : W₀). elim_W(…; t)     -- §5's canon
+```
+
+with the body the inline predicate `lower_instance_w` builds in that context
+(inline because the key is not registered yet). It is an ordinary bodied Ψ
+binding and faces the same gate as every generated definition.
+
+**The spelling.** `lower_instance_w` itself writes the second component as
+
+```
+El^{lw}(app(D#canon^δ; ⌜A₁⌝, …, v₁, …, t))
+```
+
+(`AppAt` nodes: the head is a global and infers its own Π) whenever the
+declaration registered one, every type argument is at level `0`, and the
+registered statement ends in `Ty lw` at the instance's own `lw`. Anything
+else, today a type argument at another level such as a tree of `Type`s,
+keeps the inline `elim_W`. The two spellings are δ-convertible, and
+`crates/elab/tests/inductive_tier2.rs` builds, matches, computes and refuses
+at both in one module.
+
+**Why the lowering and not an emission respell.** Tier 0 and tier 1 keep
+`⟦D⟧` inline as the elaborator's identity and respell only at emission,
+behind a structural guard, because their structural readers
+(`tag_of`, `spine`, `const_elim_wf`, the fingerprints) pattern-match `⟦D⟧`
+itself. No reader looks inside the leaf predicate: `WParts::read` takes `⟦D⟧`
+apart at the `Σ` and the `W`, the tag and the spine come from `S`, and every
+emission reuses the second component exactly as it was found. So the
+reference can be the lowering, with no inline copy to guard against, and
+every site that builds a tier-2 annotation shrinks without being touched.
+`WParts::read` accepts either spelling of the second component (an `elim_W`,
+or an application spine headed by a global), and neither is read further.
+
+**Effect.** On `lib/std/itree.hthr` the gate of each law proved by induction
+fell by an order of magnitude and more, with the query, miss and step counts
+falling in step; the shape is the per-copy cost of a predicate the terms now
+mention once per annotation instead of spelling.
+

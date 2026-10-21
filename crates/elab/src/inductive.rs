@@ -1183,9 +1183,12 @@ impl Elaborator {
         // same one the skeleton above follows). Everything the declaration
         // emits later references them; see `gendefs.rs`.
         //
-        // Not for tier 2 yet: its lowering is spelled inline at every use
-        // (docs/inductive-tier2-w-lowering.md §1, generated-definition naming).
-        if !ind.infinitary() {
+        // Tier 2 names its leaf predicate and nothing else
+        // (docs/inductive-tier2-w-lowering.md §13): its lowering is spelled
+        // with that definition, and the rest stays inline.
+        if ind.infinitary() {
+            self.register_w_canon(&ind, d.span);
+        } else {
             self.register_gen_defs(&ind, d.span);
         }
         Ok(())

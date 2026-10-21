@@ -190,6 +190,21 @@ pub(crate) enum GenDef {
     /// `k < n - 2` only: the last tail *is* the last payload, and takes
     /// [`GenDef::PayloadCode`]`(tag, n - 1)`.
     SuffixCode(u32, usize),
+    /// `D#canon : Π(A₁ : Ty 0)…(v_m : T_m). Π(t : W₀). Ty lw` — a **tier-2**
+    /// declaration's leaf predicate (`docs/inductive-tier2-w-lowering.md`
+    /// §2.4, §5), abstracted over the declaration's telescope and the tree,
+    /// consumed as `El (app(D#canon^δ; ā, t))` in the second component of
+    /// `⟦D⟧ = Σ(t : W₀). El(canon t)`. Keyed by the declaration's tag.
+    ///
+    /// Unlike every key above, this one is not an emission respelling: the
+    /// tier-2 lowering **is** spelled with it (`lower_instance_w`), because
+    /// nothing reads the leaf predicate structurally — every reader takes
+    /// `⟦D⟧` apart at the `Σ` and the `W` and reuses the second component as
+    /// it found it. Inline, the predicate is nearly all of `⟦D⟧`'s mass, and
+    /// every `fst`/`snd`/pair annotation of a tier-2 value carries it.
+    /// Registered at the all-type-parameters-`Ty 0` profile, as
+    /// [`GenDef::TyCodeFn`] is; another profile keeps the inline spelling.
+    WCanon(u32),
 }
 
 impl GenDef {
@@ -212,6 +227,7 @@ impl GenDef {
             GenDef::RecFam(_, j) => format!("{owner}#fam{j}"),
             GenDef::PayloadCode(_, k) => format!("{owner}#payload{k}"),
             GenDef::SuffixCode(_, k) => format!("{owner}#suffix{k}"),
+            GenDef::WCanon(_) => format!("{owner}#canon"),
         }
     }
 }
@@ -1372,7 +1388,7 @@ impl Elaborator {
     /// the **template** from, and the template is the inline identity §4's
     /// inverse re-lowers against (`register_ty_code_fn` quotes the emitted
     /// copy for the *body* and stores the inline one).
-    fn emitted_tel(&self, binders: &[(Type, Level)]) -> Vec<(Type, Level)> {
+    pub(crate) fn emitted_tel(&self, binders: &[(Type, Level)]) -> Vec<(Type, Level)> {
         let mut cx = Cx::empty();
         let mut out = Vec::with_capacity(binders.len());
         for (i, (dom, level)) in binders.iter().enumerate() {
@@ -1395,7 +1411,7 @@ impl Elaborator {
     /// when a declared value-parameter type does not elaborate here, which is
     /// this device's only decline.
     #[allow(clippy::type_complexity)]
-    fn tycode_fn_telescope(
+    pub(crate) fn tycode_fn_telescope(
         &self,
         ind: &Rc<Inductive>,
         span: Span,
@@ -3500,7 +3516,7 @@ impl Elaborator {
     /// empty local context — so a definition is a checked term like any other
     /// bodied global and its transparency is the kernel's layer-indexed rule,
     /// not anything configured here.
-    fn push_gen_def(
+    pub(crate) fn push_gen_def(
         &mut self,
         key: GenDef,
         owner: &str,
@@ -3649,7 +3665,7 @@ impl Elaborator {
     /// the substitution tail's length is the only thing that moves, since the
     /// definition is closed and its Ψ index is context-independent. One caller:
     /// the arity slot, which is always read under the shape's binder.
-    fn gen_ref_deeper(&self, cx: &Cx, key: GenDef, extra: u32) -> Option<Term> {
+    pub(crate) fn gen_ref_deeper(&self, cx: &Cx, key: GenDef, extra: u32) -> Option<Term> {
         let abs = *self.types.gdefs().abs_for(&key)?;
         let len = self.psi.bindings.len() as u32;
         // Goals sit innermost, exactly as in `resolve` — and so do a

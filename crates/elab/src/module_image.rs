@@ -1448,6 +1448,7 @@ fn put_gen_def(w: &mut Writer, key: GenDef) {
         GenDef::PayloadCode(tag, ctor) => { w.byte(12); w.u32(tag); w.usize(ctor); }
         GenDef::SuffixCode(tag, ctor) => { w.byte(13); w.u32(tag); w.usize(ctor); }
         GenDef::TyCodeFn(tag) => { w.byte(14); w.u32(tag); }
+        GenDef::WCanon(tag) => { w.byte(15); w.u32(tag); }
     }
 }
 
@@ -1463,7 +1464,7 @@ fn get_gen_def(r: &mut Reader<'_>) -> Result<GenDef, ModuleImageDecodeError> {
         11 => GenDef::RecFam(r.u32()?, r.usize()?),
         12 => GenDef::PayloadCode(r.u32()?, r.usize()?),
         13 => GenDef::SuffixCode(r.u32()?, r.usize()?),
-        14 => GenDef::TyCodeFn(r.u32()?),
+        14 => GenDef::TyCodeFn(r.u32()?), 15 => GenDef::WCanon(r.u32()?),
         tag => return Err(ModuleImageDecodeError::InvalidTag { sort: "generated definition", tag }),
     })
 }
