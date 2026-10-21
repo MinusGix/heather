@@ -55,11 +55,11 @@ use crate::reduce::{
 };
 use crate::subst::{GlobalEntry, GlobalSubst};
 use crate::term::{
-    iwf_ih, nth, Branches, IWfSig, CtxBase, CtxEntries, CtxEntry, GlobalVar, LocalCtx, LocalSubst, LocalVar,
+    iwf_ih, m_out_corec, nth, Branches, IWfSig, MSig, CtxBase, CtxEntries, CtxEntry, GlobalVar, LocalCtx, LocalSubst, LocalVar,
     Motives, Term, Type,
 };
 use crate::value::{
-    Elim, ElimSpine, Env, Head, Lookup, PiAnn, VIWfSig, SigAnn, SumAnn, TmClo, TyClo, VNeTy, VNeutral,
+    Elim, ElimSpine, Env, Head, Lookup, PiAnn, VCorec, VIWfSig, VMSig, SigAnn, SumAnn, TmClo, TyClo, VNeTy, VNeutral,
     VSubst, VTail, VTy, Val, ValueArena, WIhSyntax,
 };
 use crate::value::algebra::{AffineTree, FoldClass};
@@ -277,6 +277,19 @@ impl Drop for Eval<'_, '_> {
         crate::stats::eval_delta_steps(self.delta_steps);
         crate::stats::eval_drives(self.drives);
     }
+}
+
+/// An `M` signature's closures, all built in `env` (see [`VMSig`]).
+fn vm_sig<'v>(arena: &'v ValueArena<'v>, env: &Env<'v>, sig: &MSig) -> Rc<VMSig<'v>> {
+    Rc::new(VMSig {
+        level: sig.level.clone(),
+        pos_level: sig.pos_level.clone(),
+        idx_level: sig.idx_level.clone(),
+        idx: arena.ty(TyClo::new(*env, Rc::clone(&sig.idx))),
+        shape: arena.ty(TyClo::new(*env, Rc::clone(&sig.shape))),
+        pos: arena.ty(TyClo::new(*env, Rc::clone(&sig.pos))),
+        next: arena.tm(TmClo::syn(*env, Rc::clone(&sig.next))),
+    })
 }
 
 impl<'a, 'v> Eval<'a, 'v> {
@@ -752,6 +765,7 @@ impl<'a, 'v> Eval<'a, 'v> {
                 }),
                 index: tclo(env, index),
             },
+            Type::M { sig, index } => VTy::M { sig: vm_sig(self.arena, env, sig), index: tclo(env, index) },
             Type::Sum { lhs_level, rhs_level, lhs, rhs } => VTy::Sum {
                 lhs_level: lhs_level.clone(),
                 rhs_level: rhs_level.clone(),
@@ -1344,6 +1358,18 @@ impl<'a, 'v> Eval<'a, 'v> {
                 children: tclo(env, children),
             },
 
+            Term::Corec { sig, carrier_level, carrier, step, index, seed } => Val::Corec {
+                sig: vm_sig(self.arena, env, sig),
+                coalg: Rc::new(VCorec {
+                    carrier_level: carrier_level.clone(),
+                    carrier: yclo(env, carrier),
+                    step: tclo(env, step),
+                    env: *env,
+                }),
+                index: tclo(env, index),
+                seed: tclo(env, seed),
+            },
+
             // -- functions --
             Term::Lam { dom_level, cod_level, dom, body } => Val::Lam {
                 dom_level: dom_level.clone(),
@@ -1573,6 +1599,11 @@ impl<'a, 'v> Eval<'a, 'v> {
                     index: tclo(env, index),
                     env: env.clone(),
                 };
+                return Ok(Work::Elim(s, e));
+            }
+            Term::Out { sig, index, scrut } => {
+                let s = self.eval_tm(scrut, env)?;
+                let e = Elim::Out { sig: vm_sig(self.arena, env, sig), index: tclo(env, index) };
                 return Ok(Work::Elim(s, e));
             }
             Term::J { ty_level, motive_level, ty, lhs, motive, case, rhs, proof } => {
@@ -2006,6 +2037,14 @@ impl<'a, 'v> Eval<'a, 'v> {
                     None => Ok(Work::Val(stuck(self.arena, &head, &e))),
                 }
             }
+            // One step, only under `out` (docs/kernel-coinduction-design.md §1.4).
+            (Val::Corec { sig, coalg, index, seed }, Elim::Out { .. }) => {
+                self.spend()?;
+                match self.fire_out(sig, coalg, index, seed) {
+                    Some(w) => Ok(w),
+                    None => Ok(Work::Val(stuck(self.arena, &head, &e))),
+                }
+            }
             (Val::BoxTy(code), Elim::LetBoxTy { body, .. }) => {
                 self.spend()?;
                 let Some((benv, bbody)) = body.as_syn() else { return Ok(Work::Val(stuck(self.arena, &head, &e))) };
@@ -2335,6 +2374,49 @@ impl<'a, 'v> Eval<'a, 'v> {
         });
         let step = *step;
         Ok(Some(Work::Apply(step, vec![label, children, self.vclo(ih)])))
+    }
+
+    /// `out(corec^{k}(…; X; c; j; x)) ⇝ m_out_corec(…)`
+    /// (docs/kernel-coinduction-design.md §1.4). The reduct is `reduce.rs`'s,
+    /// from the one schema [`m_out_corec`]: built as syntax in `(Γ, j, x)` —
+    /// the signature and the coalgebra weakened past the two slots, `j` and
+    /// `x` named by them — and evaluated in the coalgebra's environment
+    /// extended by the index and the seed, so `c[j, x]` is one closure that
+    /// both projections share. `None` when a closure is not syntax.
+    fn fire_out(
+        &mut self,
+        sig: &VMSig<'v>,
+        coalg: &VCorec<'v>,
+        index: &'v TmClo<'v>,
+        seed: &'v TmClo<'v>,
+    ) -> Option<Work<'v>> {
+        let VMSig { level, pos_level, idx_level, idx, shape, pos, next } = sig;
+        let (_, idx_b) = idx.as_syn()?;
+        let (_, shape_b) = shape.as_syn()?;
+        let (_, pos_b) = pos.as_syn()?;
+        let (_, next_b) = next.as_syn()?;
+        let (_, carrier_b) = coalg.carrier.as_syn()?;
+        let (_, step_b) = coalg.step.as_syn()?;
+        let sig = Rc::new(MSig {
+            level: level.clone(),
+            pos_level: pos_level.clone(),
+            idx_level: idx_level.clone(),
+            idx: Rc::clone(idx_b),
+            shape: Rc::clone(shape_b),
+            pos: Rc::clone(pos_b),
+            next: Rc::clone(next_b),
+        })
+        .shift_local(2);
+        let reduct = m_out_corec(
+            &sig,
+            &coalg.carrier_level,
+            &Rc::new(carrier_b.shift_local_above(2, 1)),
+            &Rc::new(step_b.shift_local_above(2, 2)),
+            &Term::Var(LocalVar(1)),
+            &Term::Var(LocalVar(0)),
+        );
+        let rho = coalg.env.push(self.arena, index).push(self.arena, seed);
+        Some(Work::Eval(Rc::new(reduct), rho))
     }
 
     /// `ih i` for a [`Val::WfIh`]: when the index is a canonical `Fin` value

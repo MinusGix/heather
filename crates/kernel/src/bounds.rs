@@ -58,7 +58,7 @@
 use std::cell::RefCell;
 use std::sync::Arc as Rc;
 
-use crate::term::{Branches, IWfSig, LocalSubst, Motives, Term, Type};
+use crate::term::{Branches, IWfSig, LocalSubst, MSig, Motives, Term, Type};
 
 /// What a subtree exposes to local-namespace operations, relative to its
 /// own root. See the module docs for the two components.
@@ -304,6 +304,15 @@ impl Cache {
             .join(self.term_use(&sig.child).under(2))
     }
 
+    /// An `M` signature: `shape` under `i`, `pos` under `i, s`, `next` under
+    /// `i, s, p`.
+    fn m_sig_use(&mut self, sig: &MSig) -> LocalUse {
+        self.type_use(&sig.idx)
+            .join(self.type_use(&sig.shape).under(1))
+            .join(self.type_use(&sig.pos).under(2))
+            .join(self.term_use(&sig.next).under(3))
+    }
+
     /// Every `δ` has a tail, and the local operations rewrite tails
     /// unconditionally; the payload terms live in the current scope.
     fn subst_use(&mut self, s: &LocalSubst) -> LocalUse {
@@ -349,6 +358,7 @@ impl Cache {
             Type::W { shape, pos, .. } => self.type_use(shape).join(self.type_use(pos).under(1)),
             Type::DVec { len, fam, .. } => self.term_use(len).join(self.type_use(fam).under(1)),
             Type::IWf { sig, index } => self.iwf_sig_use(sig).join(self.term_use(index)),
+            Type::M { sig, index } => self.m_sig_use(sig).join(self.term_use(index)),
             Type::GlobalTy { subst, .. } => self.subst_use(subst),
             Type::CtxPi { body, .. } => self.type_use(body),
             Type::TyPi { body, .. } => self.type_use(body),
@@ -551,6 +561,16 @@ impl Cache {
                 .iwf_sig_use(sig)
                 .join(self.type_use(motive).under(2))
                 .join(self.term_use(step).under(3))
+                .join(self.term_use(index))
+                .join(self.term_use(scrut)),
+            Term::Corec { sig, carrier, step, index, seed, .. } => self
+                .m_sig_use(sig)
+                .join(self.type_use(carrier).under(1))
+                .join(self.term_use(step).under(2))
+                .join(self.term_use(index))
+                .join(self.term_use(seed)),
+            Term::Out { sig, index, scrut } => self
+                .m_sig_use(sig)
                 .join(self.term_use(index))
                 .join(self.term_use(scrut)),
             Term::Lam { dom, body, .. } => self.type_use(dom).join(self.term_use(body).under(1)),

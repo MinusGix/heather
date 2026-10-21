@@ -40,7 +40,7 @@ use std::sync::Arc as Rc;
 use crate::level::Level;
 use crate::subst::{GlobalEntry, GlobalSubst};
 use crate::term::{
-    iwf_ih, nth, wf_step_telescope, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, LocalCtx,
+    iwf_ih, m_out_corec, nth, wf_step_telescope, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, LocalCtx,
     LocalSubst, LocalVar, Term, Type,
 };
 
@@ -967,6 +967,19 @@ fn step_term_frame(t: &Term, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) 
                 motive_level: motive_level.clone(),
                 motive: Rc::clone(motive),
                 step: Rc::clone(step),
+                index: Rc::clone(index),
+                scrut: Rc::new(s),
+            }),
+        },
+        // out(…; corec^{k}(…; X; c; j; x)) ⇝ m_out_corec(…) — one step, only
+        // under `out` (docs/kernel-coinduction-design.md §1.4). The reduct
+        // writes `c[j, x]` twice; this rewriter duplicates it (design §7).
+        Term::Out { sig, index, scrut } => match &**scrut {
+            Term::Corec { sig: csig, carrier_level, carrier, step, index: cindex, seed } => {
+                Some(m_out_corec(csig, carrier_level, carrier, step, cindex, seed))
+            }
+            _ => step_scrut(scrut, gamma, defs, frames).map(|s| Term::Out {
+                sig: Rc::clone(sig),
                 index: Rc::clone(index),
                 scrut: Rc::new(s),
             }),
@@ -2615,6 +2628,7 @@ pub fn is_whnf_type(t: &Type) -> bool {
         | Type::W { .. }
         | Type::Wf { .. }
         | Type::IWf { .. }
+        | Type::M { .. }
         | Type::Ty(_)
         | Type::UPi { .. }
         | Type::CtxPi { .. }
@@ -2645,6 +2659,7 @@ pub fn is_neutral_term(t: &Term) -> bool {
         Term::ElimW { scrut, .. } => is_neutral_term(scrut),
         Term::ElimWf { scrut, .. } => is_neutral_term(scrut),
         Term::ElimIWf { scrut, .. } => is_neutral_term(scrut),
+        Term::Out { scrut, .. } => is_neutral_term(scrut),
         Term::J { proof, .. } => is_neutral_term(proof),
         // For *reduction* purposes a transp is stuck exactly when its proof
         // is (β fires on srefl only); conversion additionally strips it when
@@ -2713,6 +2728,7 @@ pub fn is_whnf_term(t: &Term) -> bool {
         | Term::Sup { .. }
         | Term::Supf { .. }
         | Term::Supi { .. }
+        | Term::Corec { .. }
         | Term::Lam { .. }
         | Term::ULam { .. }
         | Term::CtxLam { .. }

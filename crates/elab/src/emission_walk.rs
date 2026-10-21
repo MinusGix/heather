@@ -475,6 +475,27 @@ impl Walk<'_> {
                 self.term(index, d);
                 self.term(scrut, d);
             }
+            // Nothing emits these until the elaborator round
+            // (docs/kernel-coinduction-design.md §10 step 4); walked as
+            // IWf's are.
+            Term::Corec { sig, carrier, step, index, seed, .. } => {
+                self.slot("Corec.idx", &sig.idx, d);
+                self.slot("Corec.shape", &sig.shape, d + 1);
+                self.slot("Corec.pos", &sig.pos, d + 2);
+                self.term(&sig.next, d + 3);
+                self.slot("Corec.carrier", carrier, d + 1);
+                self.term(step, d + 2);
+                self.term(index, d);
+                self.term(seed, d);
+            }
+            Term::Out { sig, index, scrut } => {
+                self.slot("Out.idx", &sig.idx, d);
+                self.slot("Out.shape", &sig.shape, d + 1);
+                self.slot("Out.pos", &sig.pos, d + 2);
+                self.term(&sig.next, d + 3);
+                self.term(index, d);
+                self.term(scrut, d);
+            }
 
             Term::Lam { dom, body, .. } => {
                 self.slot("Lam.dom", dom, d);

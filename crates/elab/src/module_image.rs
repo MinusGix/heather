@@ -13,7 +13,7 @@ use std::sync::Arc as Rc;
 use heather_kernel::layer::Layer;
 use heather_kernel::level::{Level, UnivVar};
 use heather_kernel::term::{Numeral, 
-    Branches, CtxBase, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, IWfSig, LocalCtx, LocalSubst, LocalVar,
+    Branches, CtxBase, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, IWfSig, MSig, LocalCtx, LocalSubst, LocalVar,
     Motives, ProofSource, SealedProof, SubstTail, Term, Type,
 };
 use heather_syntax::{
@@ -528,6 +528,7 @@ fn put_type(w: &mut Writer, ty: &Type) {
             let IWfSig { level, idx_level, idx, shape, arity, out, child } = &**sig;
             w.byte(23); put_level(w, level); put_level(w, idx_level); put_type(w, idx); put_type(w, shape); put_term(w, arity); put_term(w, out); put_term(w, child); put_term(w, index);
         }
+        Type::M { sig, index } => { w.byte(24); put_m_sig(w, sig); put_term(w, index); }
         Type::CtxPi { level, body } => { w.byte(18); put_level(w, level); put_type(w, body); }
         Type::TyPi { ctx, arg_level, body_level, body } => {
             w.byte(19); put_ctx(w, ctx); put_level(w, arg_level); put_level(w, body_level); put_type(w, body);
@@ -575,6 +576,37 @@ fn get_elim_iwf(r: &mut Reader<'_>) -> Result<Term, ModuleImageDecodeError> {
     })
 }
 
+/// An `M` signature, as tags 24, 65 and 66 write it: the three levels,
+/// then the components.
+fn put_m_sig(w: &mut Writer, sig: &MSig) {
+    let MSig { level, pos_level, idx_level, idx, shape, pos, next } = sig;
+    put_level(w, level); put_level(w, pos_level); put_level(w, idx_level);
+    put_type(w, idx); put_type(w, shape); put_type(w, pos); put_term(w, next);
+}
+
+/// [`put_m_sig`]'s reader. Out of line for the reason `term_rc` is.
+#[inline(never)]
+fn get_m_sig(r: &mut Reader<'_>) -> Result<Rc<MSig>, ModuleImageDecodeError> {
+    let (level, pos_level, idx_level) = (get_level(r)?, get_level(r)?, get_level(r)?);
+    let (idx, shape, pos) = (type_rc(r)?, type_rc(r)?, type_rc(r)?);
+    Ok(Rc::new(MSig { level, pos_level, idx_level, idx, shape, pos, next: term_rc(r)? }))
+}
+
+/// Tag 65's fields. Out of line for the reason `term_rc` is.
+#[inline(never)]
+fn get_corec(r: &mut Reader<'_>) -> Result<Term, ModuleImageDecodeError> {
+    let sig = get_m_sig(r)?;
+    let carrier_level = get_level(r)?;
+    Ok(Term::Corec {
+        sig,
+        carrier_level,
+        carrier: type_rc(r)?,
+        step: term_rc(r)?,
+        index: term_rc(r)?,
+        seed: term_rc(r)?,
+    })
+}
+
 #[inline(never)]
 fn type_rc(r: &mut Reader<'_>) -> Result<Rc<Type>, ModuleImageDecodeError> {
     Ok(Rc::new(get_type(r)?))
@@ -606,6 +638,7 @@ fn get_type(r: &mut Reader<'_>) -> Result<Type, ModuleImageDecodeError> {
         21 => Type::CodeTm { ctx: get_ctx(r)?, ty: type_rc(r)?, level: get_level(r)? },
         22 => Type::DVec { level: get_level(r)?, len: term_rc(r)?, fam: type_rc(r)? },
         23 => Type::IWf { sig: get_iwf_sig(r)?, index: term_rc(r)? },
+        24 => Type::M { sig: get_m_sig(r)?, index: term_rc(r)? },
         tag => return Err(ModuleImageDecodeError::InvalidTag { sort: "type", tag }),
     }))
 }
@@ -712,6 +745,12 @@ fn put_term(w: &mut Writer, term: &Term) {
         Term::ElimIWf { sig, motive_level, motive, step, index, scrut } => {
             let IWfSig { level, idx_level, idx, shape, arity, out, child } = &**sig;
             w.byte(64); put_level(w, level); put_level(w, idx_level); put_level(w, motive_level); put_type(w, idx); put_type(w, shape); put_term(w, arity); put_term(w, out); put_term(w, child); put_type(w, motive); put_term(w, step); put_term(w, index); put_term(w, scrut);
+        }
+        Term::Corec { sig, carrier_level, carrier, step, index, seed } => {
+            w.byte(65); put_m_sig(w, sig); put_level(w, carrier_level); put_type(w, carrier); put_term(w, step); put_term(w, index); put_term(w, seed);
+        }
+        Term::Out { sig, index, scrut } => {
+            w.byte(66); put_m_sig(w, sig); put_term(w, index); put_term(w, scrut);
         }
         Term::Lam { dom_level, cod_level, dom, body } => {
             w.byte(38); put_level(w, dom_level); put_level(w, cod_level); put_type(w, dom); put_term(w, body);
@@ -835,6 +874,8 @@ fn get_term(r: &mut Reader<'_>) -> Result<Term, ModuleImageDecodeError> {
         62 => Term::AppAt { fun: term_rc(r)?, arg: term_rc(r)? },
         63 => Term::Supi { sig: get_iwf_sig(r)?, label: term_rc(r)?, children: term_rc(r)? },
         64 => get_elim_iwf(r)?,
+        65 => get_corec(r)?,
+        66 => Term::Out { sig: get_m_sig(r)?, index: term_rc(r)?, scrut: term_rc(r)? },
         tag => return Err(ModuleImageDecodeError::InvalidTag { sort: "term", tag }),
     }))
 }

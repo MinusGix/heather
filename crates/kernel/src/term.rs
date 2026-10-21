@@ -219,6 +219,22 @@ pub enum Type {
     /// **Not code yet**: as [`Type::DVec`], admitted at layers p and m only
     /// until the rec.rs round (design §13 step 4).
     IWf { sig: Rc<IWfSig>, index: Rc<Term> },
+    /// `M^{l,l',li}(I; i. S; i s. P; i s p. o)(j)` — the indexed final
+    /// coalgebra, the dual of [`Type::W`] with [`Type::IWf`]'s index
+    /// (docs/kernel-coinduction-design.md §1.1). `idx` is the index type `I`
+    /// at `li`; `shape` (`S @ l`) binds `i : I`, `pos` (`P @ l'`) binds
+    /// `i, s : S`, and `next` (the child's index `o : I`) binds `i, s,
+    /// p : P`; `index` is `j : I`, in Γ. The shapes depend on the index and
+    /// the children's indices are computed, so a value stores no equation.
+    /// Lives at `l ⊔ l' ⊔ li`. **Negative**: observed only by [`Term::Out`],
+    /// introduced only by [`Term::Corec`], with β under `out` and **no η**
+    /// (design §2.1), so conversion stays intensional.
+    ///
+    /// The signature is one shared [`MSig`], as `IWf`'s is.
+    ///
+    /// **Not code yet**: admitted at layers p and m only, as [`Type::IWf`]
+    /// was until its codes round (design §1.5).
+    M { sig: Rc<MSig>, index: Rc<Term> },
     /// `U^δ` — global type variable under a local substitution.
     GlobalTy { var: GlobalVar, subst: LocalSubst },
     /// `(g : Ctx) ⇒^l T` — meta-function type over context variables; binds
@@ -738,6 +754,29 @@ pub enum Term {
         index: Rc<Term>,
         scrut: Rc<Term>,
     },
+
+    // ---- indexed final coalgebras (extension; docs/kernel-coinduction-design.md) ----
+    /// `corec^{k}(sig; i. X; i x. c; j; x) : M(sig)(j)` — primitive
+    /// corecursion (the apomorphism, design §1.3). `carrier` (`X @ k`) binds
+    /// `i : I`; `step` binds `i, x : X` and has type
+    /// `Σ(s : S). Π(p : P). X[o/i] + M(sig)(o)` ([`m_step_ty`]): each child is
+    /// a new seed (`inl`) or an existing tree (`inr`). The carrier's level `k`
+    /// is free, a rule per `k`. β fires only under [`Term::Out`]
+    /// ([`m_out_corec`]); a `corec` is otherwise a canonical form, compared
+    /// componentwise. Same layer gate as [`Type::M`].
+    Corec {
+        sig: Rc<MSig>,
+        carrier_level: Level,
+        carrier: Rc<Type>,
+        step: Rc<Term>,
+        index: Rc<Term>,
+        seed: Rc<Term>,
+    },
+    /// `out(sig; j; m) : Σ^{l,f}(s : S[j/i]). Π^{l',f}(p : P[j/i]). M(sig)(o[j/i])`
+    /// with `f = l ⊔ l' ⊔ li` ([`m_out_ty`]) — the only eliminator of
+    /// [`Type::M`]: no dependent case analysis exists (design §1.2). Neutral
+    /// on a neutral `scrut`. Same layer gate as [`Type::M`].
+    Out { sig: Rc<MSig>, index: Rc<Term>, scrut: Rc<Term> },
 
     // ---- dependent functions ----
     /// `λ^{l,l'}(x : S). t`; `body` binds one local variable.
@@ -2608,6 +2647,216 @@ pub fn iwf_ih(
         cod_level: motive_level.clone(),
         dom: Rc::new(Type::Fin { len: Rc::new(len) }),
         body: Rc::new(rec),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Derived constructions for `M` (docs/kernel-coinduction-design.md §1)
+//
+// One transcription serves typing, both reducers and conversion, as the `IWf`
+// schemas above do. Scopes are named in each doc comment; `f` is the family's
+// level `l ⊔ l' ⊔ li`.
+// ---------------------------------------------------------------------------
+
+/// The signature of an `M` — every component but the index: `idx` in Γ,
+/// `shape` under `i : I`, `pos` under `i, s : S`, `next` under `i, s, p : P`
+/// (see [`Type::M`]). [`Type::M`], [`Term::Corec`] and [`Term::Out`] share it
+/// behind one pointer. Its `Debug` is [`Type::M`]'s budgeted one, through
+/// `fmt.rs`.
+#[derive(Clone, PartialEq, Eq)]
+pub struct MSig {
+    pub level: Level,
+    pub pos_level: Level,
+    pub idx_level: Level,
+    pub idx: Rc<Type>,
+    pub shape: Rc<Type>,
+    pub pos: Rc<Type>,
+    pub next: Rc<Term>,
+}
+
+impl MSig {
+    /// The family's level, `l ⊔ l' ⊔ li` (design §1.1).
+    pub fn family_level(&self) -> Level {
+        Level::join(Level::join(self.level.clone(), self.pos_level.clone()), self.idx_level.clone())
+    }
+
+    /// `M(…)(j)`.
+    pub fn at(self: &Rc<Self>, index: Rc<Term>) -> Type {
+        Type::M { sig: Rc::clone(self), index }
+    }
+
+    /// The signature weakened past `by` binders, by shifting the whole former
+    /// (the components under binders keep them fixed).
+    pub fn shift_local(self: &Rc<Self>, by: u32) -> Rc<MSig> {
+        if by == 0 {
+            return Rc::clone(self);
+        }
+        match self.at(Rc::new(Term::Zero)).shift_local(by) {
+            Type::M { sig, .. } => sig,
+            _ => unreachable!("shifting an M yields an M"),
+        }
+    }
+
+    /// `S[j/i]`, in Γ for `j` in Γ.
+    pub fn shape_at(&self, j: &Term) -> Type {
+        self.shape.inst_top(0, j)
+    }
+
+    /// `P[j/i, s]`, in `(Γ, s)` for `j` in Γ.
+    pub fn pos_at(&self, j: &Term) -> Type {
+        self.pos.inst_top_above(0, 1, j)
+    }
+
+    /// `o[j/i, s, p]`, in `(Γ, s, p)` for `j` in Γ.
+    pub fn next_at(&self, j: &Term) -> Term {
+        self.next.inst_top_above(0, 2, j)
+    }
+}
+
+/// `out`'s type at index `j` (in Γ):
+///
+/// ```text
+/// Σ^{l,f}(s : S[j/i]). Π^{l',f}(p : P[j/i, s]). M(…)(o[j/i, s, p])
+/// ```
+pub fn m_out_ty(sig: &Rc<MSig>, j: &Term) -> Type {
+    let f = sig.family_level();
+    Type::Sigma {
+        fst_level: sig.level.clone(),
+        snd_level: f.clone(),
+        fst: Rc::new(sig.shape_at(j)),
+        snd: Rc::new(Type::Pi {
+            dom_level: sig.pos_level.clone(),
+            cod_level: f,
+            dom: Rc::new(sig.pos_at(j)),
+            cod: Rc::new(sig.shift_local(2).at(Rc::new(sig.next_at(j)))),
+        }),
+    }
+}
+
+/// The type of `corec`'s step, in `(Γ, i)` (the carrier `X` at `k` in
+/// `(Γ, i)`); the step itself is checked in `(Γ, i, x : X)` at this type
+/// weakened by one, since it does not mention the seed:
+///
+/// ```text
+/// Σ^{l,k⊔f}(s : S). Π^{l',k⊔f}(p : P). X[o/i] +^{k,f} M(…)(o)
+/// ```
+pub fn m_step_ty(sig: &Rc<MSig>, carrier_level: &Level, carrier: &Type) -> Type {
+    let f = sig.family_level();
+    let kf = Level::join(carrier_level.clone(), f.clone());
+    // In (Γ, i, s, p): the child's index, its seed's type and its tree type.
+    let o = sig.next.as_ref();
+    let child_seed = carrier.inst_top(3, o);
+    let child_tree = sig.shift_local(3).at(Rc::new(o.clone()));
+    Type::Sigma {
+        fst_level: sig.level.clone(),
+        snd_level: kf.clone(),
+        fst: Rc::clone(&sig.shape),
+        snd: Rc::new(Type::Pi {
+            dom_level: sig.pos_level.clone(),
+            cod_level: kf,
+            dom: Rc::clone(&sig.pos),
+            cod: Rc::new(Type::Sum {
+                lhs_level: carrier_level.clone(),
+                rhs_level: f,
+                lhs: Rc::new(child_seed),
+                rhs: Rc::new(child_tree),
+            }),
+        }),
+    }
+}
+
+/// `out(corec^{k}(…; X; c; j; x))`'s reduct (design §1.4), in Γ for `j` and
+/// `x` in Γ, with `r := c[j/i, x/x]`:
+///
+/// ```text
+/// pair^{l,f}(s. Π(p : P[j, s]). M(o[j, s, p]);
+///   fst r;
+///   λ^{l',f}(p : P[j, fst r]).
+///     case^{k,f,f}(_. M(o[j, fst r, p]); X[o[j, fst r, p]]; M(o[j, fst r, p]);
+///       y. corec(…; X; c; o[j, fst r, p]; y); t. t;
+///       (snd r) p))
+/// ```
+///
+/// `r` is written twice; the rewriter duplicates it, the value machine shares
+/// it through the environment (design §7).
+pub fn m_out_corec(
+    sig: &Rc<MSig>,
+    carrier_level: &Level,
+    carrier: &Rc<Type>,
+    step: &Rc<Term>,
+    j: &Term,
+    x: &Term,
+) -> Term {
+    let var = |i: u32| Rc::new(Term::Var(LocalVar(i)));
+    let f = sig.family_level();
+    let kf = Level::join(carrier_level.clone(), f.clone());
+    // The step's type at j, in Γ: Σ(s : S[j]). Π(p : P[j, s]). X[o] + M(o).
+    let Type::Sigma { snd: step_snd, .. } = m_step_ty(sig, carrier_level, carrier).inst_top(0, j) else {
+        unreachable!("m_step_ty builds a Σ")
+    };
+    let shape_j = Rc::new(sig.shape_at(j));
+    let r = Rc::new(step.inst_top(0, &x.shift_local(1)).inst_top(0, j));
+    let fst_r = Rc::new(Term::Fst {
+        fst_level: sig.level.clone(),
+        snd_level: kf.clone(),
+        fst_ty: Rc::clone(&shape_j),
+        snd_ty: Rc::clone(&step_snd),
+        pair: Rc::clone(&r),
+    });
+    let snd_r = Term::Snd {
+        fst_level: sig.level.clone(),
+        snd_level: kf.clone(),
+        fst_ty: Rc::clone(&shape_j),
+        snd_ty: Rc::clone(&step_snd),
+        pair: r,
+    };
+    // In (Γ, p): the child's index, its seed's type, its tree type.
+    let pos = Rc::new(sig.pos_at(j).inst_top(0, &fst_r));
+    let o_p = sig.next_at(j).inst_top_above(0, 1, &fst_r);
+    let seed_ty = Rc::new(carrier.inst_top(1, &o_p));
+    let tree_ty = Rc::new(sig.shift_local(1).at(Rc::new(o_p.clone())));
+    let sum_ty = Type::Sum {
+        lhs_level: carrier_level.clone(),
+        rhs_level: f.clone(),
+        lhs: Rc::clone(&seed_ty),
+        rhs: Rc::clone(&tree_ty),
+    };
+    let child = Term::App {
+        fun: Rc::new(snd_r.shift_local(1)),
+        dom_level: sig.pos_level.clone(),
+        cod_level: kf,
+        dom: Rc::new(pos.shift_local(1)),
+        cod: Rc::new(sum_ty.shift_local_above(1, 1)),
+        arg: var(0),
+    };
+    // The new seed's branch, in (Γ, p, y).
+    let again = Term::Corec {
+        sig: sig.shift_local(2),
+        carrier_level: carrier_level.clone(),
+        carrier: Rc::new(carrier.shift_local_above(2, 1)),
+        step: Rc::new(step.shift_local_above(2, 2)),
+        index: Rc::new(o_p.shift_local(1)),
+        seed: var(0),
+    };
+    let case = Term::Case {
+        lhs_level: carrier_level.clone(),
+        rhs_level: f.clone(),
+        motive_level: f.clone(),
+        lhs: seed_ty,
+        rhs: Rc::clone(&tree_ty),
+        motive: Rc::new(tree_ty.shift_local(1)),
+        case_l: Rc::new(again),
+        case_r: var(0),
+        scrut: Rc::new(child),
+    };
+    let Type::Sigma { snd: out_snd, .. } = m_out_ty(sig, j) else { unreachable!("m_out_ty builds a Σ") };
+    Term::Pair {
+        fst_level: sig.level.clone(),
+        snd_level: f.clone(),
+        fst_ty: shape_j,
+        snd_ty: out_snd,
+        fst: fst_r,
+        snd: Rc::new(Term::Lam { dom_level: sig.pos_level.clone(), cod_level: f, dom: pos, body: Rc::new(case) }),
     }
 }
 

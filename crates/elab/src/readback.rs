@@ -35,7 +35,7 @@ use heather_kernel::level::Level;
 #[cfg(debug_assertions)]
 use heather_kernel::reduce::Defs;
 use heather_kernel::subst::{local_bound, local_bound_ty};
-use heather_kernel::term::{nth, IWfSig, LocalCtx, LocalSubst, LocalVar, Numeral, SubstTail, Term, Type};
+use heather_kernel::term::{nth, IWfSig, MSig, LocalCtx, LocalSubst, LocalVar, Numeral, SubstTail, Term, Type};
 use heather_kernel::value::program::ContextProgram;
 use heather_kernel::value::{Elim, Env, Head, TmClo, TyClo, VTail, VTy, Val};
 
@@ -124,6 +124,18 @@ impl<'v, 'g> Readback<'v, 'g> {
                     arity: self.tm(&sig.arity, 1)?,
                     out: self.tm(&sig.out, 1)?,
                     child: self.tm(&sig.child, 2)?,
+                }),
+                index: self.tm(index, 0)?,
+            },
+            VTy::M { sig, index } => Type::M {
+                sig: Rc::new(MSig {
+                    level: sig.level.clone(),
+                    pos_level: sig.pos_level.clone(),
+                    idx_level: sig.idx_level.clone(),
+                    idx: self.ty(&sig.idx, 0)?,
+                    shape: self.ty(&sig.shape, 1)?,
+                    pos: self.ty(&sig.pos, 2)?,
+                    next: self.tm(&sig.next, 3)?,
                 }),
                 index: self.tm(index, 0)?,
             },

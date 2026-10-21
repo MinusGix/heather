@@ -41,18 +41,18 @@ use crate::level::Level;
 use crate::rec;
 use crate::subst::{GlobalEntry, GlobalSubst};
 use crate::term::{
-    iwf_children_ty, iwf_motive_scrut_ty, iwf_step_telescope, wf_step_telescope, CtxEntries,
-    IWfSig, CtxEntry, GlobalVar, LocalCtx, LocalVar, Term, Type,
+    iwf_children_ty, iwf_motive_scrut_ty, iwf_step_telescope, m_out_ty, m_step_ty, wf_step_telescope, CtxEntries,
+    IWfSig, MSig, CtxEntry, GlobalVar, LocalCtx, LocalVar, Term, Type,
 };
 use crate::value::{
-    self, shift::Outer, Elim, Head, PiAnn, SigAnn, SumAnn, TmClo, TyClo, VNeTy, VNeutral,
+    self, shift::Outer, Elim, Head, PiAnn, SigAnn, SumAnn, TmClo, TyClo, VMSig, VNeTy, VNeutral,
     VSubst, VTy, Val, ValueArena,
 };
 
 use crate::typing::ity::{ITy, Sel};
 
 use super::super::{Conv, Env, R, NC};
-use super::{Dom, IWfSigC, TmView, TyView};
+use super::{Dom, IWfSigC, MSigC, TmView, TyView};
 
 /// The value domain: `Conv<'v, Values>` is the kernel's conversion checker.
 pub(crate) struct Values;
@@ -835,6 +835,7 @@ impl<'v> Dom<'v> for Values {
                 child: TmC::under(env, sig.child, 2),
                 index: TmC::here(env, *index),
             },
+            VTy::M { sig, index } => TyView::M { sig: m_sig_view(env, sig), index: TmC::here(env, *index) },
             VTy::Sum { lhs_level, rhs_level, lhs, rhs } => TyView::Sum {
                 lhs_level,
                 rhs_level,
@@ -967,6 +968,13 @@ impl<'v> Dom<'v> for Values {
             Val::Supi { label, children, .. } => TmView::Supi {
                 label: TmC::here(env, *label),
                 children: TmC::here(env, *children),
+            },
+            Val::Corec { sig, coalg, seed, .. } => TmView::Corec {
+                sig: m_sig_view(env, sig),
+                carrier_level: &coalg.carrier_level,
+                carrier: TyC::under(env, coalg.carrier, 1),
+                step: TmC::under(env, coalg.step, 2),
+                seed: TmC::here(env, *seed),
             },
             Val::BoxTy(t) => TmView::BoxTy(t),
             Val::BoxTm(t) => TmView::BoxTm(t),
@@ -1862,6 +1870,39 @@ impl<'v> Dom<'v> for Values {
         ))
     }
 
+    /// `out`'s result type, `term::m_out_ty` run on the signature's syntax
+    /// and closed over its environment with the index in `j`'s cell, as
+    /// [`Values::iwf_children`] closes `cs`.
+    fn m_out_ty(_cv: &mut Conv<'v, Self>, env: &Env<'v>, sig: &MSigC<'_, 'v, Self>, index: &TmC<'v>)
+        -> R<TyC<'v>> {
+        let Some((senv, sig)) = m_sig_syn(sig) else { return Err(NC) };
+        let ty = m_out_ty(&sig.shift_local(1), &Term::Var(LocalVar(0)));
+        let rho = senv.with_gshift(0).push(env.arena, open_tm(env, index, 0));
+        Ok(TyC::here(env, env.arena.ty(TyClo::new(rho, Rc::new(ty)))))
+    }
+
+    /// A step's type, `term::m_step_ty` on the signature's and the
+    /// carrier's syntax, closed over their environment extended by `i` and
+    /// `x`, the two binders conversion is about to push.
+    fn m_step_ty(
+        _cv: &mut Conv<'v, Self>,
+        env: &Env<'v>,
+        sig: &MSigC<'_, 'v, Self>,
+        carrier_level: &Level,
+        carrier: &TyC<'v>,
+    ) -> R<TyC<'v>> {
+        let Some((senv, sig)) = m_sig_syn(sig) else { return Err(NC) };
+        let Some((cenv, cbody)) = carrier.clo.as_syn() else { return Err(NC) };
+        if cenv.len() != senv.len() {
+            return Err(NC);
+        }
+        let ty = m_step_ty(&sig, carrier_level, &amb_ty(cenv, cbody)).shift_local(1);
+        let l = glen(env);
+        let e1 = senv.with_gshift(0).push(env.arena, fresh(env.arena, l));
+        let e2 = e1.push(env.arena, fresh(env.arena, l + 1));
+        Ok(TyC { clo: env.arena.ty(TyClo::new(e2, Rc::new(ty))), home: l + 2, sat: l + 2 })
+    }
+
     /// The step telescope's `cs` entry, `iwf_children_ty` at `a := x`, closed
     /// over the signature's environment with the label in `x`'s cell.
     fn iwf_children(
@@ -1957,6 +1998,42 @@ fn iwf_sig_syn<'v>(sig: &IWfSigC<'_, 'v, Values>) -> Option<(value::Env<'v>, Rc<
         arity: amb_tm(aenv, abody),
         out: amb_tm(oenv, obody),
         child: amb_tm(cenv, cbody),
+    };
+    Some((senv.clone(), Rc::new(syn)))
+}
+
+/// An `M` signature's view: `shape`, `pos` and `next` under one, two and
+/// three of its own binders.
+fn m_sig_view<'a, 'v>(env: &Env<'v>, sig: &'a VMSig<'v>) -> MSigC<'a, 'v, Values> {
+    MSigC {
+        level: &sig.level,
+        pos_level: &sig.pos_level,
+        idx_level: &sig.idx_level,
+        idx: TyC::here(env, sig.idx),
+        shape: TyC::under(env, sig.shape, 1),
+        pos: TyC::under(env, sig.pos, 2),
+        next: TmC::under(env, sig.next, 3),
+    }
+}
+
+/// [`iwf_sig_syn`] for an `M` signature.
+fn m_sig_syn<'v>(sig: &MSigC<'_, 'v, Values>) -> Option<(value::Env<'v>, Rc<MSig>)> {
+    let (ienv, ibody) = sig.idx.clo.as_syn()?;
+    let (senv, sbody) = sig.shape.clo.as_syn()?;
+    let (penv, pbody) = sig.pos.clo.as_syn()?;
+    let (nenv, nbody) = sig.next.clo.as_syn()?;
+    let n = senv.len();
+    if [ienv.len(), penv.len(), nenv.len()].iter().any(|&k| k != n) {
+        return None;
+    }
+    let syn = MSig {
+        level: sig.level.clone(),
+        pos_level: sig.pos_level.clone(),
+        idx_level: sig.idx_level.clone(),
+        idx: amb_ty(ienv, ibody),
+        shape: amb_ty(senv, sbody),
+        pos: amb_ty(penv, pbody),
+        next: amb_tm(nenv, nbody),
     };
     Some((senv.clone(), Rc::new(syn)))
 }
@@ -2160,6 +2237,9 @@ fn view_neutral<'a, 'v>(env: &Env<'v>, n: &'a Rc<VNeutral<'v>>) -> TmView<'a, 'v
             index: TmC::here(env, *index),
             scrut: head,
         },
+        Elim::Out { sig, index } => {
+            TmView::Out { sig: m_sig_view(env, sig), index: TmC::here(env, *index), scrut: head }
+        }
         Elim::J { ty_level, motive_level, ty, lhs, motive, case, rhs } => TmView::J {
             ty_level,
             motive_level,

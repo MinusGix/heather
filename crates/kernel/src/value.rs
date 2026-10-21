@@ -1281,6 +1281,9 @@ pub enum VTy<'v> {
     /// The signature behind one pointer, as [`Type::IWf`]'s (see
     /// [`VIWfSig`]); the index has no pending binder.
     IWf { sig: Rc<VIWfSig<'v>>, index: &'v TmClo<'v> },
+    /// The signature behind one pointer, as [`Type::M`]'s (see [`VMSig`]);
+    /// the index has no pending binder.
+    M { sig: Rc<VMSig<'v>>, index: &'v TmClo<'v> },
     /// Non-dependent: neither summand binds, so neither is a closure — both
     /// are lazy 0-binder sub-structures.
     Sum {
@@ -1564,6 +1567,15 @@ pub enum Val<'v> {
         label: &'v TmClo<'v>,
         children: &'v TmClo<'v>,
     },
+    /// A `corec`: canonical, observed only by [`Elim::Out`], whose β rebuilds
+    /// syntax (`term::m_out_corec`) in the environment the coalgebra carries
+    /// ([`VCorec`]). The index and the seed have no pending binder.
+    Corec {
+        sig: Rc<VMSig<'v>>,
+        coalg: Rc<VCorec<'v>>,
+        index: &'v TmClo<'v>,
+        seed: &'v TmClo<'v>,
+    },
 
     // -- functions --
     /// The induction hypothesis an `elim_Wf` β hands its step,
@@ -1823,6 +1835,33 @@ pub struct VIWfSig<'v> {
     pub child: &'v TmClo<'v>,
 }
 
+/// An `M` signature as a value carries it ([`VTy::M`], [`Val::Corec`],
+/// [`Elim::Out`]): [`crate::term::MSig`]'s components as closures built in
+/// one environment. `shape` has one pending binder (`i : I`), `pos` two
+/// (`i, s`), `next` three (`i, s, p`), `idx` none. Behind one pointer, as
+/// [`VIWfSig`] is.
+#[derive(Clone)]
+pub struct VMSig<'v> {
+    pub level: Level,
+    pub pos_level: Level,
+    pub idx_level: Level,
+    pub idx: &'v TyClo<'v>,
+    pub shape: &'v TyClo<'v>,
+    pub pos: &'v TyClo<'v>,
+    pub next: &'v TmClo<'v>,
+}
+
+/// A `corec`'s coalgebra: the carrier (one pending binder, `i`), the step
+/// (two, `i, x`), and the environment both were built in, which `out`'s β
+/// extends by the index and the seed (`Eval::fire_out`).
+#[derive(Clone)]
+pub struct VCorec<'v> {
+    pub carrier_level: Level,
+    pub carrier: &'v TyClo<'v>,
+    pub step: &'v TmClo<'v>,
+    pub env: Env<'v>,
+}
+
 /// A sum's annotation as a value carries; see [`SigAnn`].
 #[derive(Clone)]
 pub struct SumAnn<'v> {
@@ -1935,6 +1974,9 @@ pub enum Elim<'v> {
         index: &'v TmClo<'v>,
         env: Env<'v>,
     },
+    /// `out` at index `index`: neutral on a neutral tree, β on a
+    /// [`Val::Corec`].
+    Out { sig: Rc<VMSig<'v>>, index: &'v TmClo<'v> },
     J {
         ty_level: Level,
         motive_level: Level,
@@ -2034,6 +2076,7 @@ impl Elim<'_> {
             Elim::ElimW { .. } => "elim_W",
             Elim::ElimWf { .. } => "elim_Wf",
             Elim::ElimIWf { .. } => "elim_IWf",
+            Elim::Out { .. } => "out",
             Elim::J { .. } => "J",
             Elim::Transp { .. } => "transp",
             Elim::LetBoxTy { .. } => "letbox_Ty",
@@ -2161,6 +2204,10 @@ impl fmt::Debug for VTy<'_> {
                 let VIWfSig { idx, shape, arity, out, child, .. } = &**sig;
                 write!(f, "IWf({idx:?}; {shape:?}. {arity:?}; {out:?}; {child:?})({index:?})")
             }
+            VTy::M { sig, index } => {
+                let VMSig { idx, shape, pos, next, .. } = &**sig;
+                write!(f, "M({idx:?}; {shape:?}; {pos:?}; {next:?})({index:?})")
+            }
             VTy::Sum { lhs, rhs, .. } => write!(f, "({lhs:?} + {rhs:?})"),
             VTy::Id { ty, lhs, rhs, .. } => write!(f, "Id({ty:?}; {lhs:?}; {rhs:?})"),
             VTy::SEq { ty, lhs, rhs, .. } => write!(f, "sEq({ty:?}; {lhs:?}; {rhs:?})"),
@@ -2221,6 +2268,9 @@ impl fmt::Debug for Val<'_> {
             Val::Sup { label, children, .. } => write!(f, "sup({label:?}; {children:?})"),
             Val::Supf { label, children, .. } => write!(f, "sup_f({label:?}; {children:?})"),
             Val::Supi { label, children, .. } => write!(f, "sup_i({label:?}; {children:?})"),
+            Val::Corec { coalg, index, seed, .. } => {
+                write!(f, "corec({:?}; {:?}; {index:?}; {seed:?})", coalg.carrier, coalg.step)
+            }
             Val::Lam { dom, body, .. } => write!(f, "λ({dom:?}). {body:?}"),
             Val::WfIh { children, .. } => write!(f, "ih_Wf({children:?})"),
             Val::ULam { num_vars, body, .. } => write!(f, "Λ[{num_vars}ℓ]. {body:?}"),

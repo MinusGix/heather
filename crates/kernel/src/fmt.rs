@@ -34,7 +34,7 @@ use std::fmt;
 
 use crate::level::Level;
 use crate::term::{
-    Branches, CtxBase, CtxEntries, CtxEntry, IWfSig, LocalCtx, LocalSubst, Motives, SubstTail, Term, Type,
+    Branches, CtxBase, CtxEntries, CtxEntry, IWfSig, LocalCtx, MSig, LocalSubst, Motives, SubstTail, Term, Type,
 };
 
 /// Maximum nodes printed per outermost format call (bounds output size and
@@ -192,6 +192,13 @@ impl fmt::Debug for Type {
                 write!(
                     f,
                     "IWf[{level:?},{idx_level:?}]({idx:?}; {shape:?}. {arity:?}; {out:?}; {child:?})({index:?})"
+                )
+            }
+            Type::M { sig, index } => {
+                let MSig { level, pos_level, idx_level, idx, shape, pos, next } = &**sig;
+                write!(
+                    f,
+                    "M[{level:?},{pos_level:?},{idx_level:?}]({idx:?}; {shape:?}; {pos:?}; {next:?})({index:?})"
                 )
             }
             Type::GlobalTy { var, subst } => write!(f, "U{}^{subst:?}", var.0),
@@ -358,6 +365,20 @@ impl fmt::Debug for Term {
                 write!(
                     f,
                     "elimIWf[{level:?},{idx_level:?},{motive_level:?}]({idx:?}; {shape:?}. {arity:?}; {out:?}; {child:?}; M {motive:?}; s {step:?}; {index:?}; {scrut:?})"
+                )
+            }
+            Term::Corec { sig, carrier_level, carrier, step, index, seed } => {
+                let MSig { level, pos_level, idx_level, idx, shape, pos, next } = &**sig;
+                write!(
+                    f,
+                    "corec[{level:?},{pos_level:?},{idx_level:?},{carrier_level:?}]({idx:?}; {shape:?}; {pos:?}; {next:?}; X {carrier:?}; c {step:?}; {index:?}; {seed:?})"
+                )
+            }
+            Term::Out { sig, index, scrut } => {
+                let MSig { level, pos_level, idx_level, idx, shape, pos, next } = &**sig;
+                write!(
+                    f,
+                    "out[{level:?},{pos_level:?},{idx_level:?}]({idx:?}; {shape:?}; {pos:?}; {next:?}; {index:?}; {scrut:?})"
                 )
             }
             Term::Lam { dom_level, cod_level, dom, body } => {

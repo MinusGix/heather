@@ -30,7 +30,7 @@ use crate::level::Level;
 use crate::term::{Branches, LocalCtx, Motives, Term, Type};
 
 use super::{
-    BitTy, Elim, Env, Head, PiAnn, VIWfSig, SigAnn, SumAnn, TmClo, TyClo, VNeTy, VNeutral, VSubst, VTy,
+    BitTy, Elim, Env, Head, PiAnn, VCorec, VIWfSig, VMSig, SigAnn, SumAnn, TmClo, TyClo, VNeTy, VNeutral, VSubst, VTy,
     Val, ValueArena,
 };
 
@@ -73,6 +73,18 @@ fn iwf_sig<'v>(sig: &VIWfSig<'v>, o: Outer<'v>) -> Rc<VIWfSig<'v>> {
         arity: tm_clo(sig.arity, o),
         out: tm_clo(sig.out, o),
         child: tm_clo(sig.child, o),
+    })
+}
+
+fn m_sig<'v>(sig: &VMSig<'v>, o: Outer<'v>) -> Rc<VMSig<'v>> {
+    Rc::new(VMSig {
+        level: level(&sig.level, o),
+        pos_level: level(&sig.pos_level, o),
+        idx_level: level(&sig.idx_level, o),
+        idx: ty_clo(sig.idx, o),
+        shape: ty_clo(sig.shape, o),
+        pos: ty_clo(sig.pos, o),
+        next: tm_clo(sig.next, o),
     })
 }
 
@@ -334,6 +346,7 @@ fn elimination<'v>(e: &Elim<'v>, o: Outer<'v>) -> Elim<'v> {
             index: tm_clo(index, o),
             env: env(e, o),
         },
+        Elim::Out { sig, index } => Elim::Out { sig: m_sig(sig, o), index: tm_clo(index, o) },
         Elim::J { ty_level, motive_level, ty, lhs, motive, case, rhs } => Elim::J {
             ty_level: level(ty_level, o),
             motive_level: level(motive_level, o),
@@ -476,6 +489,7 @@ pub fn vty<'v>(v: &Rc<VTy<'v>>, o: Outer<'v>) -> Rc<VTy<'v>> {
             arity: tm_clo(arity, o),
         },
         VTy::IWf { sig, index } => VTy::IWf { sig: iwf_sig(sig, o), index: tm_clo(index, o) },
+        VTy::M { sig, index } => VTy::M { sig: m_sig(sig, o), index: tm_clo(index, o) },
         VTy::Sum { lhs_level, rhs_level, lhs, rhs } => VTy::Sum {
             lhs_level: level(lhs_level, o),
             rhs_level: level(rhs_level, o),
@@ -673,6 +687,17 @@ pub fn val<'v>(v: &Rc<Val<'v>>, o: Outer<'v>) -> Rc<Val<'v>> {
             sig: iwf_sig(sig, o),
             label: tm_clo(label, o),
             children: tm_clo(children, o),
+        },
+        Val::Corec { sig, coalg, index, seed } => Val::Corec {
+            sig: m_sig(sig, o),
+            coalg: Rc::new(VCorec {
+                carrier_level: level(&coalg.carrier_level, o),
+                carrier: ty_clo(coalg.carrier, o),
+                step: tm_clo(coalg.step, o),
+                env: env(&coalg.env, o),
+            }),
+            index: tm_clo(index, o),
+            seed: tm_clo(seed, o),
         },
         Val::WfIh { elim, label, children } => Val::WfIh {
             elim: Rc::new(elimination(elim, o)),

@@ -105,8 +105,8 @@ use crate::rec::{self, gtm, gty, inst_tm_motive, inst_ty_motive, shift_univ_psi}
 use crate::reduce::{whnf_type_delta, Defs, GlobalCache, Sig};
 use crate::subst::{GlobalEntry, GlobalSubst};
 use crate::term::{
-    inst_motive2, iwf_children_ty, iwf_motive_scrut_ty, iwf_step_telescope, wf_step_telescope,
-    CtxBase, IWfSig, CtxEntries, CtxEntriesIdentity, CtxEntry, GlobalBinding,
+    inst_motive2, iwf_children_ty, iwf_motive_scrut_ty, iwf_step_telescope, m_out_ty, m_step_ty, wf_step_telescope,
+    CtxBase, IWfSig, MSig, CtxEntries, CtxEntriesIdentity, CtxEntry, GlobalBinding,
     GlobalCtx, GlobalVar, LocalCtx, LocalSubst, LocalVar, SubstTail, Term, Type,
 };
 use crate::value::ValueMetrics;
@@ -1585,6 +1585,23 @@ impl Tc {
         self.tm_check_ty(&e_xi, &sig.child, &sig.idx.shift_local(2), &sig.idx_level)
     }
 
+    /// An `M` signature's premises, shared by its formation rule and its two
+    /// term formers (docs/kernel-coinduction-design.md §1.1): `I @ li`,
+    /// `(Γ, i : I) ⊢ S @ l`, `(Γ, i, s : S) ⊢ P @ l'`,
+    /// `(Γ, i, s, p : P) ⊢ o : I`.
+    fn m_sig_wf(&self, env: &Env, sig: &MSig) -> R {
+        self.level_wf(env, &sig.level)?;
+        self.level_wf(env, &sig.pos_level)?;
+        self.level_wf(env, &sig.idx_level)?;
+        self.ty_check(env, &sig.idx, &sig.idx_level)?;
+        let e_i = env.push_entry(Rc::clone(&sig.idx), sig.idx_level.clone());
+        self.ty_check(&e_i, &sig.shape, &sig.level)?;
+        let e_is = e_i.push_entry(Rc::clone(&sig.shape), sig.level.clone());
+        self.ty_check(&e_is, &sig.pos, &sig.pos_level)?;
+        let e_isp = e_is.push_entry(Rc::clone(&sig.pos), sig.pos_level.clone());
+        self.tm_check_ty(&e_isp, &sig.next, &sig.idx.shift_local(3), &sig.idx_level)
+    }
+
     fn meta_layer(&self, env: &Env) -> R {
         if env.layer == Layer::Meta { Ok(()) } else { Err(TypeError::LayerMismatch) }
     }
@@ -1826,6 +1843,16 @@ impl Tc {
             Type::IWf { sig, index } => {
                 self.computing_layer(env)?;
                 self.iwf_sig_wf(env, sig)?;
+                self.tm_check_rc(env, index, &sig.idx, &sig.idx_level)?;
+                Ok(sig.family_level())
+            }
+            // M-formation (extension; docs/kernel-coinduction-design.md
+            // §1.1): ⊢_i M^{l,l',li}(I; i. S; i s. P; i s p. o)(j) @ l ⊔ l' ⊔
+            // li ⟸ the signature (`m_sig_wf`), ⊢_i j : I @ li. Computing
+            // layers only until a codes round (design §1.5).
+            Type::M { sig, index } => {
+                self.computing_layer(env)?;
+                self.m_sig_wf(env, sig)?;
                 self.tm_check_rc(env, index, &sig.idx, &sig.idx_level)?;
                 Ok(sig.family_level())
             }
@@ -3254,6 +3281,37 @@ impl Tc {
                 Ok((inst_motive2(motive, 0, index, scrut), motive_level.clone()))
             }
 
+            // corec^{k}(sig; i. X; i x. c; j; x) : M(sig)(j) @ f, with
+            // (Γ, i) ⊢ X @ k, (Γ, i, x : X) ⊢ c : m_step_ty(…)↑ and
+            // x : X[j/i] (docs/kernel-coinduction-design.md §1.3). The
+            // carrier's level is free: one rule per k, quantifying over
+            // nothing.
+            Term::Corec { sig, carrier_level, carrier, step, index, seed } => {
+                self.computing_layer(env)?;
+                self.m_sig_wf(env, sig)?;
+                self.level_wf(env, carrier_level)?;
+                let e_i = env.push_entry(Rc::clone(&sig.idx), sig.idx_level.clone());
+                self.ty_check(&e_i, carrier, carrier_level)?;
+                let fl = sig.family_level();
+                let step_ty = m_step_ty(sig, carrier_level, carrier).shift_local(1);
+                let e_ix = e_i.push_entry(Rc::clone(carrier), carrier_level.clone());
+                let step_level = Level::join(sig.level.clone(), Level::join(carrier_level.clone(), fl.clone()));
+                self.tm_check_ty(&e_ix, step, &step_ty, &step_level)?;
+                self.tm_check_rc(env, index, &sig.idx, &sig.idx_level)?;
+                self.tm_check_ty(env, seed, &carrier.inst_top(0, index), carrier_level)?;
+                Ok((sig.at(Rc::clone(index)), fl))
+            }
+            // out(sig; j; m) : Σ(s : S[j]). Π(p : P[j, s]). M(sig)(o[j, s, p])
+            // for m : M(sig)(j) (design §1.2).
+            Term::Out { sig, index, scrut } => {
+                self.computing_layer(env)?;
+                self.m_sig_wf(env, sig)?;
+                self.tm_check_rc(env, index, &sig.idx, &sig.idx_level)?;
+                let fl = sig.family_level();
+                self.tm_check_ty(env, scrut, &sig.at(Rc::clone(index)), &fl)?;
+                Ok((m_out_ty(sig, index), Level::join(sig.level.clone(), fl)))
+            }
+
             // -- dependent functions ----------------------------------------
             Term::Lam { dom_level, cod_level, dom, body } => {
                 self.not_var_layer(env)?;
@@ -3619,6 +3677,8 @@ fn term_head(t: &Term) -> &'static str {
         Term::ElimWf { .. } => "ElimWf",
         Term::Supi { .. } => "Supi",
         Term::ElimIWf { .. } => "ElimIWf",
+        Term::Corec { .. } => "Corec",
+        Term::Out { .. } => "Out",
         Term::Lam { .. } => "Lam",
         Term::App { .. } => "App",
         Term::ULam { .. } => "ULam",
@@ -3689,6 +3749,7 @@ fn type_head(ty: &Type) -> &'static str {
         Type::Wf { .. } => "Wf",
         Type::DVec { .. } => "DVec",
         Type::IWf { .. } => "IWf",
+        Type::M { .. } => "M",
         _ => "other",
     }
 }
@@ -3776,6 +3837,7 @@ fn type_anchor(ty: &Type) -> TypeAnchor {
         Type::Vec { elem, .. } => type_anchor(elem),
         Type::DVec { fam, .. } => type_anchor(fam),
         Type::IWf { sig, .. } => TypeAnchor::Type(RcIdentity::new(Rc::clone(&sig.shape))),
+        Type::M { sig, .. } => TypeAnchor::Type(RcIdentity::new(Rc::clone(&sig.shape))),
         Type::Fin { len } => TypeAnchor::Term(RcIdentity::new(Rc::clone(len))),
         Type::CtxPi { body, .. } | Type::TyPi { body, .. } => {
             TypeAnchor::Type(RcIdentity::new(Rc::clone(body)))
