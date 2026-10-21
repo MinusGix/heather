@@ -1,0 +1,150 @@
+// Programs with calls lowered by `function_ir_lower_calls`'s one theorem
+// (issues/function-ir-verified-lowering.md, round 3): the code is computed
+// by evaluation, and each program's claim is the theorem instantiated. No
+// proof here is about a function's own code, its frame, or where its CALLs
+// land.
+
+import function_ir;
+import function_ir_lower;
+import function_ir_lower_structured;
+import function_ir_lower_calls;
+import x86_64;
+import x86_64_block;
+import x86_64_fetch;
+import x86_64_data_read;
+import x86_64_fetched_code;
+import x86_64_stack;
+import x86_64_asm;
+import x86_64_asm_runs;
+import x86_64_stack_runs;
+import bitvec;
+import list;
+import logic;
+import nat;
+import option;
+
+fn word(id: Nat) → Port { Port(id := id, width := 64) }
+fn bit(id: Nat) → Port { Port(id := id, width := 1) }
+fn pair_ports() → Ports { Ports([word(0), word(1)]) }
+
+// A program written forward: an item, an empty block a jump or CALL
+// names, and a call's saves and restores.
+fn Prog::put(self p: Prog, item: Asm) → Prog { At(p, 0, item) }
+fn Prog::label(self p: Prog, name: Nat) → Prog { At(p, name, Block([])) }
+fn Prog::saving(self p: Prog) → Prog { saved_registers().spills(p, 0) }
+fn Prog::restoring(self p: Prog) → Prog { saved_registers().reloads(p, 0) }
+
+// double(a) = a + a, function 0.
+fn double() → Function {
+    Function(parameters := [0],
+        body := Dataflow(Region(inputs := Ports([word(0)]), nodes := [Add(width := 64, output := 1, left := 0, right := 0)],
+            outputs := Ports([word(1)]))),
+        result := 1)
+}
+
+// add_double(a, b) = double(a) + b, function 1: `b` lives in RSI across
+// the call, saved and restored around it.
+fn add_double() → Function {
+    Function(parameters := [0, 1],
+        body := Compose(Call(0, [0], 2),
+            Dataflow(Region(inputs := Ports([word(1), word(2)]), nodes := [Add(width := 64, output := 3, left := 2, right := 1)],
+                outputs := Ports([word(3)])))),
+        result := 3)
+}
+
+fn pair() → List<Function> { [add_double(), double()] }
+
+fn pair_program() → Prog {
+    Start
+        .label(1).put(Block([frame_allocate()]))
+        .put(Block([MovRR(Rax, Rdi), AddRR(Rax, Rax)]))
+        .put(Block([])).put(Block([frame_free()])).put(Ret)
+        .label(2).put(Block([frame_allocate()]))
+        .saving().put(Block([])).put(CallTo(1)).restoring()
+        .put(Block([AddRR(Rax, Rsi)]))
+        .put(Block([])).put(Block([frame_free()])).put(Ret)
+}
+
+theorem pair_lowers(): lower_program(pair(), [Rax, Rax]) = Some(pair_program()) { refl }
+
+// add_double's code starts where double's ends.
+theorem add_double_at(): asm_labels(pair_program())(2) = 15 { refl }
+
+// Each function meets its contract, resident anywhere, with any stack.
+theorem pair_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
+    stack: Stack<M>(fetch, data)):
+    Site<M>(fetch, data, pair_program(), last, origin).Calls(stack, program_callees(pair()), 2) {
+    lower_program_correct<M>(pair(), [Rax, Rax], pair_program(), pair_lowers(), fetch, data, last, origin, stack)
+}
+
+// add_double's, at its offset: called with `a` and `b` in RDI and RSI on
+// words its body says give `result`, it returns `result` in RAX.
+theorem add_double_returns<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
+    stack: Stack<M>(fetch, data), a, b, result: BitVec(64)):
+    Site<M>(fetch, data, pair_program(), last, origin).Returns(stack, 15,
+        CalleePre<M>(program_callees(pair()), 1, [a, b], result), stack.CalleePost(result)) {
+    j(add_double_at(), λ entry _ => Site<M>(fetch, data, pair_program(), last, origin).Returns(stack, entry,
+            CalleePre<M>(program_callees(pair()), 1, [a, b], result), stack.CalleePost(result)),
+        pair_calls<M>(fetch, data, last, origin, stack)(1, Nat::le_refl(2), [a, b], result))
+}
+
+// pick(a, b) = a < b ? double(b) : a, function 2: a call in one arm. Its
+// conditional's labels come after the functions'.
+fn pick() → Function {
+    Function(parameters := [0, 1],
+        body := Sequence(
+            Region(inputs := pair_ports(), nodes := [UnsignedLessThan(width := 64, output := 3, left := 0, right := 1)],
+                outputs := Ports([bit(3)])),
+            Conditional(Ports([word(0), word(1), bit(3)]), 3, pair_ports(), Ports([word(2)]),
+                Call(0, [1], 2),
+                Dataflow(Region(inputs := pair_ports(), nodes := [Move(width := 64, output := 2, source := 0)],
+                    outputs := Ports([word(2)]))))),
+        result := 2)
+}
+
+fn three() → List<Function> { [pick(), add_double(), double()] }
+
+fn three_program() → Prog {
+    pair_program()
+        .label(3).put(Block([frame_allocate()]))
+        .put(Block([XorRR(Rax, Rax), CmpRR(Rdi, Rsi), SetBelow(Al)]))
+        .put(Block([TestRR(Rax, Rax)])).put(Jcc(E, 4))
+        .saving().put(Block([MovRR(Rdi, Rsi)])).put(CallTo(1)).restoring().put(Jmp(5))
+        .label(4).put(Block([MovRR(Rax, Rdi)]))
+        .label(5)
+        .put(Block([])).put(Block([frame_free()])).put(Ret)
+}
+
+theorem three_lowers(): lower_program(three(), [Rax, Rax, Rax, Rax]) = Some(three_program()) { refl }
+
+theorem three_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
+    stack: Stack<M>(fetch, data)):
+    Site<M>(fetch, data, three_program(), last, origin).Calls(stack, program_callees(three()), 3) {
+    lower_program_correct<M>(three(), [Rax, Rax, Rax, Rax], three_program(), three_lowers(), fetch, data, last, origin, stack)
+}
+
+// sum_double(a, b) = (a + b) + double(a), function 1: the sum lives across
+// the call. In RCX the call saves it; in RAX the call's result overwrites
+// it, and the lowering refuses rather than read it back.
+fn sum_double() → Function {
+    Function(parameters := [0, 1],
+        body := Sequence(
+            Region(inputs := pair_ports(), nodes := [Add(width := 64, output := 2, left := 0, right := 1)],
+                outputs := Ports([word(0), word(2)])),
+            Compose(Call(0, [0], 3),
+                Dataflow(Region(inputs := Ports([word(2), word(3)]), nodes := [Add(width := 64, output := 4, left := 3, right := 2)],
+                    outputs := Ports([word(4)]))))),
+        result := 4)
+}
+
+theorem sum_kept_in_rcx(): lower_program([sum_double(), double()], [Rax, Rcx, Rax]).is_some() = True { refl }
+theorem sum_lost_in_rax(): lower_program([sum_double(), double()], [Rax, Rax, Rax]) = None { refl }
+
+// A function may call only those before it: no recursion, no forward call.
+fn calls_itself() → Function { Function(parameters := [0], body := Call(0, [0], 1), result := 1) }
+theorem recursion_refused(): lower_program([calls_itself()], []) = None { refl }
+theorem forward_call_refused(): lower_program([double(), calls_itself()], [Rax]) = None { refl }
+
+// Seven arguments do not fit the six registers.
+fn wide() → Function { Function(parameters := [0], body := Call(0, [0, 0, 0, 0, 0, 0, 0], 1), result := 1) }
+theorem seven_arguments_refused(): lower_program([wide(), double()], [Rax]) = None { refl }

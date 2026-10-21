@@ -104,10 +104,10 @@ theorem caller_moves<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, stack: S
             DoublePre<M>, DoublePost<M>, double_returns<M>(fetch, data, stack, last, origin),
             λ (s: MachineState<M>) => set(s.gprs) ∧ always(s.memory),
             λ (t: MachineState<M>) => (read_gpr(Rax, t.gprs) = BitVec::ofNat(42)) ∧ (read_gpr(Rsp, t.gprs) = stack.at(i + 8)),
-            λ s held => Exists(i, ⟨held.left.left.left, ⟨held.left.left.right, trivial⟩⟩),
-            λ s t k held at_s at_t doubled => ⟨trans(doubled, j(sym(held.left.right),
-                    λ x _ => x.add(x) = BitVec::ofNat(42), refl)),
-                trans(at_t, trans(sym(at_s), held.left.left.left))⟩))
+            λ _ => i,
+            λ s held => ⟨held.left.left.left, ⟨held.left.left.right, trivial⟩⟩,
+            λ s t held at_t doubled => ⟨trans(doubled, j(sym(held.left.right),
+                    λ x _ => x.add(x) = BitVec::ofNat(42), refl)), at_t⟩))
 }
 
 // ---------------------------------------------------------------------------

@@ -130,6 +130,8 @@ fn StructuredRegion::emit(self region: StructuredRegion, prog: Prog, file: File,
                 },
             },
         },
+        // A call needs the stack and its callees: function_ir_lower_calls.
+        Call(_, _, _) => None,
     }
 }
 
@@ -370,6 +372,7 @@ theorem StructuredRegion::emit_emits<M>(self region: StructuredRegion, site: Sit
                     })(when_true.emit_emits<M>(site, laid, values, prog.branch_label(found.register, Succ(names)), file, placement,
                         Succ(Succ(names)))),
             },
+        Call(_, _, _) => λ prog file placement names => trivial,
     }
 }
 
@@ -528,6 +531,7 @@ fn StructuredRegion::reads(self region: StructuredRegion) → List<Nat> {
         Sequence(prefix, continuation) => reads_of(prefix.nodes, continuation.reads()),
         Compose(prefix, continuation) => prefix.reads() ++ continuation.reads(),
         Conditional(_, condition, _, _, when_true, when_false) => Cons(condition, when_true.reads() ++ when_false.reads()),
+        Call(_, arguments, _) => arguments,
     }
 }
 
@@ -587,6 +591,7 @@ fn StructuredRegion::plan_from(self region: StructuredRegion, file: File, after:
             let no = when_false.plan_from(file, after, outputs.entries ++ entries, targets ++ registers);
             Planned(yes.placement ++ no.placement, yes.file.meet(no.file))
         },
+        Call(_, _, _) => Planned([], file),
     }
 }
 
