@@ -93,7 +93,7 @@ through `milestone:`; the list of issues is `scripts/issue list --milestone
 | `tac-general` | tactics | open | A general-purpose rewriting and congruence-closure tactic (grind-like) closes the routine goals that today need hand `trans`/`cong` towers, and hands back its search state when it fails. |  |
 | `tac-arith` | tactics | open | Linear integer arithmetic is complete and certified (CutSat), and polynomial inequalities go through the ring normaliser. |  |
 | `it-library` | interaction-trees | open | The container-event interaction-tree library exists: bind, iter, trace refinement, and the bridge to `converges`/`fuel_monotone`. |  |
-| `it-function-fields` | interaction-trees | open | A surface inductive can have a recursive function-typed field (`Vis(c, k: Resp(c) -> Tree)`), lowered through W, with match and recursion over it. | it-library |
+| `it-function-fields` | interaction-trees | done | A surface inductive can have a recursive function-typed field (`Vis(c, k: Resp(c) -> Tree)`), lowered through W, with match and recursion over it. | it-library |
 | `it-core` | interaction-trees | open | Events as containers, the fuel-cut tree, `bind`/`iter`/`mrec`, and the structural laws, with the definitional ones checked as such. | it-library |
 | `it-refinement` | interaction-trees | open | Trace refinement and depth-indexed equivalence, with the bridge to `converges`/`fuel_monotone` and one handler into world threading. | it-library |
 | `it-native` | interaction-trees | open | A native program's theorem says its run refines an interaction tree. |  |
@@ -261,14 +261,19 @@ coincides with the greatest fixed point over container events
 The effects story (uniqueness threading first, interaction trees for trace
 semantics) is open in [effects-direction](../issues/effects-direction.md).
 
-**First work.** The surface cannot write a tree yet: a continuation field
-`k: Resp(c) -> Tree` is a recursive function-typed field, which needs the
-tier-2 (W-lowered) generator. That is this area's to build, with ITrees as
-its driving client
-([recursive-function-fields](../issues/recursive-function-fields.md); the
+**First work.** The surface can write a tree: a continuation field
+`k: Resp(c) -> Tree` is a recursive function-typed field, lowered by the
+tier-2 (W) generator since 2026-10-20, with `match` and structural recursion
+through `k` (`docs/inductive-tier2-w-lowering.md`;
+[recursive-function-fields](../issues/recursive-function-fields.md); the
 tier scheme itself is owned by
-[inductive-compiler](../issues/inductive-compiler.md)). The native program
-logic has to be designed to meet the trees
+[inductive-compiler](../issues/inductive-compiler.md)). Events as a *value*
+parameter (`ITree<R>(E)`) lower since 2026-10-21
+([tier2-value-parameters](../issues/tier2-value-parameters.md),
+`docs/surface-value-parameters.md` §6). One thing the library will meet at
+once: tree laws through `Vis` (`bind(t, Ret) = t`) need funext, so they are stated up
+to the depth-indexed equivalence, not `=`. The native program logic has to
+be designed to meet the trees
 ([native-one-program-logic](../issues/native-one-program-logic.md)).
 
 **Milestones.** `it-library` through its submilestones `it-function-fields`,

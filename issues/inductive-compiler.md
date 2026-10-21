@@ -5,7 +5,7 @@ labels: [frontend,elaboration,inductives,design]
 area: language
 milestone: [it-function-fields]
 created: 2026-07-23
-updated: 2026-07-26
+updated: 2026-10-20
 ---
 
 Mechanize the encoding doctrine of [[kernel-v1-extensions]]: surface
@@ -70,6 +70,12 @@ W + Id + funext-as-axiom via the standard indexed-containers reduction
 Generator support can lag; a hand-built `Acc` exercises the synthesized-ih
 β rule ([[stress-proof-suite]] item 3).
 
+**Generator for the first fragment, 2026-10-20:**
+`docs/inductive-tier2-w-lowering.md` — a recursive function field, at most
+one recursive field per constructor, unindexed. W + Id with **no** funext
+axiom: a leaf predicate beside the tree does the work funext would have done
+at the leaves. The rest of the tier is [[tier2-fragment-extensions]].
+
 ## Scope notes
 
 - Parameters: straightforward (prenex, substituted through the scheme).
@@ -90,3 +96,4 @@ Generator support can lag; a hand-built `Acc` exercises the synthesized-ih
 - 2026-07-26: Tier-0 defect found 2026-07-26, split out as [[tyvar-scoping-in-lowered-fields]]: a type parameter instantiated at a CONTEXT-DEPENDENT type (the surface's only such form is `=`, whose endpoints are terms) is returned unshifted by lower_named, while lower_ctor has pushed the nominal tag and the earlier fields. So a parameter used in field j is under-shifted by 1+j and its free variables re-point at the tag and the preceding fields. It fails SILENTLY whenever the collision is type-correct — `Box2<A> { Mk(x: Nat, y: A) }` at `Box2<n = n>` lowers y's type to `x = x`, `Mk(3, refl)` is accepted, and the declaration states something the user did not write. That is precisely the hazard class docs/inductive-tier0-lowering.md opens by naming. It fails loudly only when the collision is ill-typed (a one-field constructor collides with the tag's Unit). Survived because every declaration in the suite instantiates its parameters at closed types, so every shift in the lowering is a no-op — the missing-observer pattern of [[unit-level-and-vec-preservation]], now at tier 0 rather than in the kernel.
 - 2026-07-26: Tier 0's deferred 'dependent-field injectivity' item is promoted to its own issue, [[dependent-field-injectivity]], because container fields produced a second instance of the same restriction: a container's type '[D; len]' depends on the length field before it, so inj's constant motive would need both sides' lengths definitionally equal. Two instances of one restriction want a shared fix rather than a paragraph in each tier's scheme — and the container case is the more likely one to be hit, since a dependent payload field is unusual while a container field is dependent by construction.
 - 2026-07-26: Tier 2 has its hand-built instance: Acc via W is kernel-checked (docs/acc-via-w.md, crates/kernel/tests/acc.rs, 13 tests), which is what the tier-2 section said a hand-built Acc would do -- it exercises the synthesized-ih beta rule at an abstract position, and it does so with Psi empty (no funext; see [[kernel-v1-extensions]]). What a tier-2 GENERATOR would now have to emit, from the construction: (1) the code-valued coherence predicate coh by elim_W at the large motive Ty 0, per declaration; (2) the four-argument ih spine -- ih is Pi(y : positions). M[f y/z], so a recursor case applies it to the position FIRST and only then to the index, the index proof and the coherence proof, which is the one place a bug hides; (3) index-fording via Id on the label, with the disjointness/injectivity story unchanged from tiers 0-1. Two surface blockers stay ahead of any of that: a function-typed inductive field (reject_function_fields) and the fact that Acc's positions are a Sigma over the carrier, so the surface would need to write R at all. Not scheduled.
+- 2026-10-20: Tier 2 has a generator for its first fragment: a recursive function field (k: A -> D), at most one recursive field per constructor, unindexed (docs/inductive-tier2-w-lowering.md, crates/elab/src/infinitary.rs, [[recursive-function-fields]]). It is not the funext route this issue's tier-2 section planned: a leaf predicate carried beside the W tree (an Id from the leaf's children to the canonical elim_Empty function, proved by refl and eliminated by J in match) replaces the Empty-domain eta the kernel lacks, so Psi stays empty and constructors stay definitional at open payloads. Index-fording for tier 2 and the rest of the fragment are [[tier2-fragment-extensions]].

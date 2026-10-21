@@ -180,7 +180,7 @@ fn inference_position_is_refused_by_name() {
 // -- 6: encoding-level negative controls -----------------------------------
 
 /// The arity and shape rejections: a bare `Halts`, the wrong number of value
-/// arguments, a value parameter on an `inductive`, and the name collisions.
+/// arguments, and the name collisions.
 /// Each says what to write instead.
 #[test]
 fn the_form_errors_carry_their_messages() {
@@ -188,8 +188,10 @@ fn the_form_errors_carry_their_messages() {
     assert!(m.contains("takes 1 value argument"), "{m}");
     let m = bad(&format!("{HALTS}\ntheorem t(c: Halts(1, 2)): Nat {{ c.n }}"));
     assert!(m.contains("takes 1 value argument(s), found 2"), "{m}");
-    let m = bad("inductive Bad(m: Nat) { A, B }");
-    assert!(m.contains("cannot take value parameters"), "{m}");
+    // An `inductive` takes them too, since 2026-10-21; its refusals are the
+    // non-uniform occurrence and an index beside them
+    // (crates/elab/tests/inductive_value_parameters.rs).
+    ok("inductive Fine(m: Nat) { A, B }");
     let m = bad("record R(m: Nat, m: Nat) { f: Nat }");
     assert!(m.contains("duplicate value parameter"), "{m}");
     let m = bad("record R<A>(A: Nat) { f: Nat }");

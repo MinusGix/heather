@@ -517,6 +517,12 @@ impl ResTy {
                 let ind = e
                     .lookup_inductive(name)
                     .ok_or_else(|| format!("`{name}` is not a declared inductive"))?;
+                if ind.infinitary() {
+                    return Err(format!(
+                        "`{name}` has a recursive function field: a tier-2 type is not \
+                         certified (docs/inductive-tier2-w-lowering.md §1)"
+                    ));
+                }
                 if ind.recursive {
                     return Err(format!(
                         "`{name}` is recursive: a tier-1 result type is deferred \
@@ -652,6 +658,13 @@ impl ParamTy {
                 // is FIELDS, because a tier-0 arm reads a field by
                 // `Fst(Snd^j ·)` over the branch's own binder — an accessor
                 // coordinate the marker pass does not mint (design doc §2).
+                if ind.infinitary() {
+                    return Err(format!(
+                        "parameter `{}`'s type `{name}` has a recursive function field: a \
+                         tier-2 type is not certified (docs/inductive-tier2-w-lowering.md §1)",
+                        p.name
+                    ));
+                }
                 if !ind.recursive {
                     let mut ctors = Vec::new();
                     for c in &ind.ctors {
