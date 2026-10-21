@@ -205,8 +205,13 @@ export function jobBounds(requested, meminfo, cores, cgroupMax = "", cgroupCurre
   // two-thread slot remains free for the editor and other foreground work
   // on a box of eight or more CPUs; below that the slot would be half the
   // box or more (a 4-CPU cloud container ran the whole suite one target at
-  // a time, issues/suite-iteration-chokepoints-2026-10.md).
-  const cpuJobs = Math.max(1, Math.floor(cores / 2) - (cores >= 8 ? 1 : 0));
+  // a time, issues/suite-iteration-chokepoints-2026-10.md). Below eight CPUs
+  // the bound is three children per four CPUs instead: a child's second test
+  // thread is mostly idle (kernel width one, and most targets wait on one
+  // shared base), so two children kept a 4-CPU box ~2.5 CPUs busy, and a
+  // third cut the warm full lane's test wall by about a quarter at the same
+  // CPU (issues/suite-full-lane-cost-2026-10.md); a fourth bought nothing.
+  const cpuJobs = Math.max(1, cores >= 8 ? Math.floor(cores / 2) - 1 : Math.floor(cores * 3 / 4));
   const requestedJobs = requested === "auto" ? cpuJobs : Number(requested);
   if (!Number.isInteger(requestedJobs) || requestedJobs < 1) {
     throw new Error("--jobs must be `auto` or a positive integer");

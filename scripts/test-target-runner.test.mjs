@@ -48,7 +48,7 @@ test("libtest summaries aggregate exactly", () => {
   assert.deepEqual(result, { passed: 7, failed: 1, ignored: 2, duration: 1.75, resultLines: 2 });
 });
 
-test("automatic job bound reserves host memory and two CPUs per child", () => {
+test("automatic job bound reserves host memory and CPUs per child", () => {
   // Memory plans against BUDGET_KIB (3 GiB per child), not the 6 GiB cap:
   // 10 GiB free - 2 GiB reserve = 8 GiB -> 2 jobs; a 16 GiB cgroup with
   // 2 GiB used -> 14 - 2 = 12 GiB -> 4 jobs.
@@ -57,7 +57,9 @@ test("automatic job bound reserves host memory and two CPUs per child", () => {
   assert.equal(jobBounds("auto", tenFree, 16).jobs, 2);
   assert.equal(jobBounds("auto", thirtyFree, 16).jobs, 7);
   assert.equal(jobBounds("auto", thirtyFree, 8).jobs, 3);
-  assert.equal(jobBounds("auto", thirtyFree, 4).jobs, 2);
+  // Below eight CPUs: three children per four CPUs.
+  assert.equal(jobBounds("auto", thirtyFree, 4).jobs, 3);
+  assert.equal(jobBounds("auto", thirtyFree, 6).jobs, 4);
   assert.equal(jobBounds("auto", thirtyFree, 2).jobs, 1);
   assert.equal(jobBounds("8", "", 16).jobs, 1);
   assert.equal(jobBounds("auto", thirtyFree, 16, String(16 * 1024 ** 3), String(2 * 1024 ** 3)).jobs, 4);

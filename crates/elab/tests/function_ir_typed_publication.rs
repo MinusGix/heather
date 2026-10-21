@@ -4,10 +4,7 @@ use heather_elab::function_ir_x86_lower::{Gpr, Placements};
 
 
 fn checker() -> heather_elab::Elaborator {
-    let mut elab = common::base_image(common::MODULES.len());
-    let model = include_str!("../../../lib/std/arch/x86_64/x86_64_structured_block.hthr");
-    elab.elab_module_source("x86_64_structured_block", model).unwrap_or_else(|e| panic!("{}", e.render(model)));
-    elab
+    common::structured_base()
 }
 
 #[test]

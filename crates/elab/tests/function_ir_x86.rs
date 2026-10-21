@@ -12,10 +12,8 @@ use heather_elab::function_ir_source;
 use heather_elab::function_ir_x86_lower::{self as lower, Gpr};
 use heather_elab::{stats, ElabError, Elaborator, SemanticImage};
 use heather_syntax::parse_file;
-use std::cell::RefCell;
-use std::collections::HashMap;
 use std::fmt::Write as _;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
 const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
@@ -61,31 +59,44 @@ pub(crate) const MODULES: &[(&str, &str)] = &[
     ("function_ir_x86", FUNCTION_IR_X86),
 ];
 
-static PREFIX_LOAD: Mutex<()> = Mutex::new(());
-
-thread_local! {
-    // One kernel-checked semantic image per prefix length this binary asks
-    // for, so a test function replays the prefix from the process-local image
-    // instead of re-reading the stored module images once per call.
-    static BASES: RefCell<HashMap<usize, SemanticImage>> = RefCell::new(HashMap::new());
-}
+/// One kernel-checked semantic image per prefix length this binary asks for,
+/// process-wide (`support::process_base`'s note: a thread-local memo is
+/// rebuilt by every test), so a test replays the prefix from the image
+/// instead of re-reading the stored module images once per call.
+static BASES: Mutex<Vec<(usize, SemanticImage)>> = Mutex::new(Vec::new());
 
 /// A fresh elaborator over the first `n` modules of [`MODULES`].
 ///
 /// `SemanticImage::elaborator` forks new attempt, report, policy, metric and
 /// gate state around the shared committed prefix, so a caller may mutate the
-/// result (the stale-source control does) without touching the memo. The fill
-/// is serialized so two libtest workers do not both replay a cold prefix.
+/// result (the stale-source control does) without touching the memo. The lock
+/// is held across a fill so two tests do not both replay a cold prefix.
 pub(crate) fn base_image(n: usize) -> Elaborator {
-    let ready = BASES.with(|bases| bases.borrow().get(&n).map(SemanticImage::elaborator));
-    if let Some(elab) = ready {
-        return elab;
+    let mut bases = BASES.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some((_, image)) = bases.iter().find(|(k, _)| *k == n) {
+        return image.elaborator();
     }
-    let _serial = PREFIX_LOAD.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let image = support::semantic_test_base(&MODULES[..n]).semantic_image();
     let elab = image.elaborator();
-    BASES.with(|bases| bases.borrow_mut().insert(n, image));
+    bases.push((n, image));
     elab
+}
+
+/// [`MODULES`] and the structured-block model over them. The model is
+/// elaborated from source against the real kernel once per process, not once
+/// per test (fourteen tests in seven files asked for it), and every call forks
+/// that state as [`base_image`] does.
+pub(crate) fn structured_base() -> Elaborator {
+    static STRUCTURED: OnceLock<SemanticImage> = OnceLock::new();
+    STRUCTURED
+        .get_or_init(|| {
+            let mut elab = base_image(MODULES.len());
+            let model = include_str!("../../../lib/std/arch/x86_64/x86_64_structured_block.hthr");
+            elab.elab_module_source("x86_64_structured_block", model)
+                .unwrap_or_else(|e| panic!("{}", e.render(model)));
+            elab.semantic_image()
+        })
+        .elaborator()
 }
 
 pub fn run_model_tests() {

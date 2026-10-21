@@ -34,9 +34,9 @@
 //! regression this round decided to *keep*, pinned positively).
 
 use crate::support;
-use std::cell::OnceCell;
+use std::sync::OnceLock;
 
-use heather_elab::{ElabError, Elaborator};
+use heather_elab::{ElabError, Elaborator, SemanticImage};
 
 const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
 const BOOL: &str = include_str!("../../../lib/std/bool.hthr");
@@ -99,14 +99,10 @@ fn fold<A: Mon(op)>(op: A -> A -> A, xs: List<A>) -> A {
 fn sum_all<A: Mon(+)>(xs: List<A>) -> A { fold(+, xs) }
 "#;
 
-// The fixed six-module plus class/instance prefix is expensive, while an
-// `Elaborator` clone is deliberately cheap and gives every probe isolated
-// diagnostics, registries, and committed state. libtest uses two worker
-// threads under `scripts/test`, so a thread-local base pays this prefix at
-// most twice instead of once per test without requiring `Elaborator: Sync`.
-thread_local! {
-    static BASE: OnceCell<Result<Elaborator, String>> = const { OnceCell::new() };
-}
+// The fixed six-module plus class/instance prefix is expensive: it is built
+// once per process, and every probe forks it (`support::process_base`), with
+// isolated diagnostics, registries, and committed state.
+static BASE: OnceLock<Result<SemanticImage, String>> = OnceLock::new();
 
 fn build_base() -> Result<Elaborator, String> {
     let mut e = support::library(&[("logic", LOGIC), ("bool", BOOL), ("nat", NAT), ("option", OPTION), ("pair", PAIR), ("list", LIST)]);
@@ -119,7 +115,7 @@ fn build_base() -> Result<Elaborator, String> {
 }
 
 fn run(extra: &str) -> Result<Elaborator, String> {
-    let mut e = BASE.with(|base| base.get_or_init(build_base).clone())?;
+    let mut e = support::process_base(&BASE, build_base)?;
     let src = format!("import bool;\nimport nat;\nimport option;\nimport list;\n{extra}");
     match e.elab_module_source("probe", &src) {
         Ok(()) => Ok(e),

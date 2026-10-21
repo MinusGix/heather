@@ -6,10 +6,7 @@ use heather_elab::function_ir_x86_lower::{generate_structured, Gpr, Placements};
 const IMPORTS: &str = "import x86_64_structured_block; import function_ir; import function_ir_x86_support; import x86_64; import x86_64_block; import bitvec; import bool; import list; import logic; import nat;";
 
 fn checker() -> heather_elab::Elaborator {
-    let mut elab = common::base_image(common::MODULES.len());
-    let model = include_str!("../../../lib/std/arch/x86_64/x86_64_structured_block.hthr");
-    elab.elab_module_source("x86_64_structured_block", model).unwrap_or_else(|e| panic!("{}", e.render(model)));
-    elab
+    common::structured_base()
 }
 
 #[test]

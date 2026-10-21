@@ -4,7 +4,7 @@
 //! open width, positions other than a declaration's body, nesting depth, and
 //! a negative control for each refusal.
 
-use std::cell::OnceCell;
+use std::sync::OnceLock;
 
 use heather_elab::{ElabError, Elaborator, SemanticImage};
 
@@ -31,12 +31,10 @@ const PREFIX: &str = "import bool;\nimport logic;\nimport nat;\nimport list;\nim
 fn double(x: BitVec(64)) → BitVec(64) { x.add(x) }\n\
 fn times256(x: BitVec(64)) → BitVec(64) { double(double(double(double(double(double(double(double(x)))))))) }\n";
 
-thread_local! {
-    static BASE: OnceCell<SemanticImage> = const { OnceCell::new() };
-}
+static BASE: OnceLock<SemanticImage> = OnceLock::new();
 
 fn elaborator() -> Elaborator {
-    BASE.with(|base| base.get_or_init(|| support::semantic_test_base(MODULES).semantic_image()).elaborator())
+    BASE.get_or_init(|| support::semantic_test_base(MODULES).semantic_image()).elaborator()
 }
 
 fn message(error: ElabError) -> String {

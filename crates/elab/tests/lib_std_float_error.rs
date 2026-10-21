@@ -13,8 +13,7 @@
 //!     relative bound from the subnormal one, a wrong unit roundoff, the γ
 //!     inequality reversed, and a product of more roundings than `u` allows.
 
-use std::cell::OnceCell;
-use std::sync::Mutex;
+use std::sync::OnceLock;
 
 use heather_elab::{Elaborator, SemanticImage};
 
@@ -41,11 +40,11 @@ const MODULES: &[(&str, &str)] = &[
         include_str!("../../../lib/std/algebra_rel.hthr"),
     ),
     ("order", include_str!("../../../lib/std/order.hthr")),
+    ("semiring", include_str!("../../../lib/std/semiring.hthr")),
     (
         "ordered_field",
         include_str!("../../../lib/std/ordered_field.hthr"),
     ),
-    ("semiring", include_str!("../../../lib/std/semiring.hthr")),
     ("rat", include_str!("../../../lib/std/rat.hthr")),
     ("dyadic", include_str!("../../../lib/std/float/dyadic.hthr")),
     ("float", include_str!("../../../lib/std/float/float.hthr")),
@@ -53,20 +52,10 @@ const MODULES: &[(&str, &str)] = &[
     ("error", include_str!("../../../lib/std/float/error.hthr")),
 ];
 
-static PREFIX_LOAD: Mutex<()> = Mutex::new(());
-
-thread_local! {
-    static BASE: OnceCell<SemanticImage> = const { OnceCell::new() };
-}
+static BASE: OnceLock<SemanticImage> = OnceLock::new();
 
 fn base() -> Elaborator {
-    BASE.with(|base| {
-        base.get_or_init(|| {
-            let _serial = PREFIX_LOAD.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            support::semantic_test_base(MODULES).semantic_image()
-        })
-        .elaborator()
-    })
+    BASE.get_or_init(|| support::semantic_test_base(MODULES).semantic_image()).elaborator()
 }
 
 fn check(e: &mut Elaborator, name: &str, src: &str) {

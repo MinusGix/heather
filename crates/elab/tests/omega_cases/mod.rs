@@ -7,8 +7,7 @@
 // leaves the others dormant.
 #![allow(dead_code)]
 
-use std::cell::OnceCell;
-use std::sync::Mutex;
+use std::sync::OnceLock;
 
 use heather_elab::{ElabError, Elaborator, SemanticImage, stats};
 
@@ -36,17 +35,11 @@ const OMEGA_MODULES: &[(&str, &str)] = &[
     ("omega", OMEGA),
 ];
 
-static PREFIX_LOAD: Mutex<()> = Mutex::new(());
-
-thread_local! {
-    static BASE: OnceCell<SemanticImage> = const { OnceCell::new() };
-}
+static BASE: OnceLock<SemanticImage> = OnceLock::new();
 
 fn load_image() -> SemanticImage {
-    // Two libtest workers otherwise miss the cold declaration cache together
-    // and each spends the process's CPU rail checking the same arithmetic
-    // prefix. The first worker fills it; the second waits and replays it.
-    let _serial = PREFIX_LOAD.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    // Built once per process (`BASE` is a process-wide `OnceLock`; the other
+    // tests wait for it): see `support`'s note on per-test threads.
     let timings = stats::Dest::from_env();
     let report_phases = timings.is_some();
     if !report_phases {
@@ -84,7 +77,7 @@ fn elaborator() -> Elaborator {
     // images are kernel-checked before this process-local image is captured.
     // `omega_div_mod.rs` deliberately remains source-only so the full suite
     // still checks this exact library prefix front to back once.
-    BASE.with(|base| base.get_or_init(load_image).elaborator())
+    BASE.get_or_init(load_image).elaborator()
 }
 
 fn message(error: ElabError) -> String {

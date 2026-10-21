@@ -30,9 +30,9 @@
 //! `a_declaration_installs_each_spelling_once` (§5.2 over both namespaces).
 
 use crate::support;
-use std::cell::OnceCell;
+use std::sync::OnceLock;
 
-use heather_elab::{ElabError, Elaborator};
+use heather_elab::{ElabError, Elaborator, SemanticImage};
 
 const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
 const BOOL: &str = include_str!("../../../lib/std/bool.hthr");
@@ -84,12 +84,9 @@ fn fold<A: Mon(op)>(op as ∙: A -> A -> A, xs: List<A>) -> A {
 }
 "#;
 
-// Clone the fixed prefix per probe. `Elaborator`'s clone is deliberately a
-// cheap isolated snapshot; thread-local storage pays the prefix at most once
-// on each of libtest's two worker threads.
-thread_local! {
-    static BASE: OnceCell<Result<Elaborator, String>> = const { OnceCell::new() };
-}
+// The fixed prefix, built once per process and forked per probe
+// (`support::process_base`).
+static BASE: OnceLock<Result<SemanticImage, String>> = OnceLock::new();
 
 fn build_base() -> Result<Elaborator, String> {
     let mut e = support::library(&[("logic", LOGIC), ("bool", BOOL), ("nat", NAT), ("option", OPTION), ("pair", PAIR), ("list", LIST)]);
@@ -102,7 +99,7 @@ fn build_base() -> Result<Elaborator, String> {
 }
 
 fn run(extra: &str) -> Result<Elaborator, String> {
-    let mut e = BASE.with(|base| base.get_or_init(build_base).clone())?;
+    let mut e = support::process_base(&BASE, build_base)?;
     let src = format!("import bool;\nimport nat;\nimport option;\nimport list;\n{extra}");
     match e.elab_module_source("probe", &src) {
         Ok(()) => Ok(e),

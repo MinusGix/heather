@@ -7,16 +7,13 @@
 //! are stable exhaustive acceptance and use the `slow_acceptance_` prefix.
 
 use heather_elab::{ElabError, Elaborator, SemanticImage};
-use std::cell::OnceCell;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 use crate::support;
 
 static ELAB_LOCK: Mutex<()> = Mutex::new(());
 
-thread_local! {
-    static BASE: OnceCell<SemanticImage> = const { OnceCell::new() };
-}
+static BASE: OnceLock<SemanticImage> = OnceLock::new();
 
 const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
 const BOOL: &str = include_str!("../../../lib/std/bool.hthr");
@@ -52,10 +49,7 @@ fn run(extra: &str) -> Result<(), String> {
     }
     // Every probe forks a fresh elaborator from one kernel-checked semantic
     // image of the prefix instead of re-elaborating nine modules per case.
-    let mut e = BASE.with(|base| {
-        base.get_or_init(|| support::semantic_test_base(MODULES).semantic_image())
-            .elaborator()
-    });
+    let mut e = BASE.get_or_init(|| support::semantic_test_base(MODULES).semantic_image()).elaborator();
     let report_metrics = std::env::var_os("HEATHER_VALUE_METRICS").is_some();
     if report_metrics {
         e.enable_value_metrics();
@@ -88,10 +82,7 @@ fn the_bitvec_module_checks() { ok(""); }
 fn valuation_lookup_dispatch_cost_does_not_follow_result_width() {
     use heather_elab::stats;
     let _guard = ELAB_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    let mut e = BASE.with(|base| {
-        base.get_or_init(|| support::semantic_test_base(MODULES).semantic_image())
-            .elaborator()
-    });
+    let mut e = BASE.get_or_init(|| support::semantic_test_base(MODULES).semantic_image()).elaborator();
     e.set_kernel_workers(1);
     let mut body = "values(width, 201)".to_string();
     for i in (0..=200).rev() {

@@ -42,3 +42,9 @@ opt-level = 3
 # is meant to avoid; unoptimized it would dominate its own tests.
 [profile.dev.package.heather-cache]
 opt-level = 3
+
+# The exporter walks and prints every exported term; unoptimized, the library
+# sweep (crates/export/tests/library_sweep.rs) spent nearly all of its time
+# here rather than elaborating, and was the full lane's longest test.
+[profile.dev.package.heather-export]
+opt-level = 3

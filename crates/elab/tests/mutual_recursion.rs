@@ -17,8 +17,7 @@
 //! a site whose obligation cannot be lifted, and a citation of a member's
 //! `f_unfold` (§6, deferred with the reason recorded).
 
-use std::cell::OnceCell;
-use std::sync::Mutex;
+use std::sync::OnceLock;
 
 use heather_elab::{ElabError, Elaborator, SemanticImage};
 
@@ -48,17 +47,11 @@ const MODULES: &[(&str, &str)] = &[
     ("omega", OMEGA),
 ];
 
-static PREFIX_LOAD: Mutex<()> = Mutex::new(());
-
-thread_local! {
-    static BASE: OnceCell<SemanticImage> = const { OnceCell::new() };
-}
+static BASE: OnceLock<SemanticImage> = OnceLock::new();
 
 fn load_image() -> SemanticImage {
-    // Two libtest workers otherwise miss the cold image store together and
-    // each spends the process's CPU rail checking the same arithmetic
-    // prefix. The first worker fills it; the second waits and replays it.
-    let _serial = PREFIX_LOAD.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    // Built once per process (`BASE` is a process-wide `OnceLock`; the other
+    // tests wait for it): see `support`'s note on per-test threads.
     support::semantic_test_base(MODULES).semantic_image()
 }
 
@@ -66,7 +59,7 @@ fn load_image() -> SemanticImage {
 /// the committed-state boundary: every call forks its own attempt, report and
 /// gate state, so a test's module never leaks into the next one's base.
 fn base() -> Elaborator {
-    BASE.with(|base| base.get_or_init(load_image).elaborator())
+    BASE.get_or_init(load_image).elaborator()
 }
 
 /// §3: a module holding a group imports `pair`, whose `Pair` the motive is.

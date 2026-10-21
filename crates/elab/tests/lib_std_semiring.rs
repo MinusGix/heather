@@ -12,8 +12,7 @@
 //!     has no ring, distributivity is not symmetric in its operations, and
 //!     at `Rat` a law holds modulo `≈`, not as `=`.
 
-use std::cell::OnceCell;
-use std::sync::Mutex;
+use std::sync::OnceLock;
 
 use heather_elab::{Elaborator, SemanticImage};
 
@@ -48,20 +47,10 @@ const MODULES: &[(&str, &str)] = &[
     ("rat", include_str!("../../../lib/std/rat.hthr")),
 ];
 
-static PREFIX_LOAD: Mutex<()> = Mutex::new(());
-
-thread_local! {
-    static BASE: OnceCell<SemanticImage> = const { OnceCell::new() };
-}
+static BASE: OnceLock<SemanticImage> = OnceLock::new();
 
 fn base() -> Elaborator {
-    BASE.with(|base| {
-        base.get_or_init(|| {
-            let _serial = PREFIX_LOAD.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            support::semantic_test_base(MODULES).semantic_image()
-        })
-        .elaborator()
-    })
+    BASE.get_or_init(|| support::semantic_test_base(MODULES).semantic_image()).elaborator()
 }
 
 fn check(e: &mut Elaborator, name: &str, src: &str) {

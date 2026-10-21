@@ -18,8 +18,7 @@
 //! Every accepted case is pinned by what it *computes*, at a literal (`refl`)
 //! and, for the fallback, through its unfolding equation at a symbolic one.
 
-use std::cell::OnceCell;
-use std::sync::Mutex;
+use std::sync::OnceLock;
 
 use heather_elab::{ElabError, Elaborator, Lint, SemanticImage};
 
@@ -49,20 +48,10 @@ const MODULES: &[(&str, &str)] = &[
     ("omega", OMEGA),
 ];
 
-static PREFIX_LOAD: Mutex<()> = Mutex::new(());
-
-thread_local! {
-    static BASE: OnceCell<SemanticImage> = const { OnceCell::new() };
-}
+static BASE: OnceLock<SemanticImage> = OnceLock::new();
 
 fn base() -> Elaborator {
-    BASE.with(|base| {
-        base.get_or_init(|| {
-            let _serial = PREFIX_LOAD.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            support::semantic_test_base(MODULES).semantic_image()
-        })
-        .elaborator()
-    })
+    BASE.get_or_init(|| support::semantic_test_base(MODULES).semantic_image()).elaborator()
 }
 
 const IMPORTS: &str = "import logic;\nimport nat;\nimport list;\nimport int;\nimport omega;\n";

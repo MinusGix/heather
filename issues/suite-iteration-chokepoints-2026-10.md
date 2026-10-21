@@ -1,6 +1,6 @@
 ---
 title: The fast lane grew 6x with the wc command's library tests; where the suite's time goes (2026-10)
-status: open
+status: closed
 labels: [testing,performance,tooling]
 area: infrastructure
 created: 2026-10-11
@@ -161,3 +161,4 @@ the first pass's own (542609c: 78.5 / 81.2 s alone), so that is the box, not
 different steps and share nothing.
 - 2026-10-13: field_high's generated certificate reshaped ([[field-high-certificate-shape]]): standalone check 39.9 → 15.8 s, field_low 28.6 → 11.1 s.
 - 2026-10-21: B1 ([[native-burn-process-stack]]) deleted the wc command's library, its elab process tests, the command warm-ups and the native_wc/native_tr/native_filter/native_read_loop gates, so the growth this issue attributes to them is gone; what remains is re-read from the next suite's timing table.
+- 2026-10-21: Re-read after B1 in [[suite-full-lane-cost-2026-10]], which owns what remains (its ranked list replaces this one's); closed.

@@ -12,9 +12,7 @@ fn recursive_physical_model_checks() {
 fn recursive_leaf_certificate_checks() {
     use heather_elab::function_ir_cert::{Node, Port, Region, StructuredRegion};
     use heather_elab::function_ir_x86_lower::{generate_structured, Gpr, Placements};
-    let mut elab = common::base_image(common::MODULES.len());
-    let model = include_str!("../../../lib/std/arch/x86_64/x86_64_structured_block.hthr");
-    elab.elab_module_source("x86_64_structured_block", model).unwrap_or_else(|e| panic!("{}", e.render(model)));
+    let mut elab = common::structured_base();
     let region = StructuredRegion::Dataflow(Region { inputs: vec![Port { id: 0, width: 64 }, Port { id: 1, width: 64 }], nodes: vec![Node::Add { width: 64, output: 2, left: 0, right: 1 }], outputs: vec![Port { id: 2, width: 64 }] });
     let emission = generate_structured("recursive", &region, &Placements::from([(0, Gpr::Rdi), (1, Gpr::Rsi)]), &[Gpr::Rax, Gpr::Rcx, Gpr::Rdx], Gpr::Rax).unwrap();
     let text = format!("import x86_64_structured_block; import function_ir; import function_ir_x86_support; import x86_64; import x86_64_block; import bitvec; import bool; import list; import logic; import nat;\n{}", emission.text);
@@ -25,9 +23,7 @@ fn recursive_leaf_certificate_checks() {
 fn nested_source_physical_certificate_checks() {
     use heather_elab::function_ir_source::generate_elaborated_structured_x86;
     use heather_elab::function_ir_x86_lower::Gpr;
-    let mut elab = common::base_image(common::MODULES.len());
-    let model = include_str!("../../../lib/std/arch/x86_64/x86_64_structured_block.hthr");
-    elab.elab_module_source("x86_64_structured_block", model).unwrap_or_else(|e| panic!("{}", e.render(model)));
+    let mut elab = common::structured_base();
     let source = include_str!("../../../examples/x86-native/branches.hthr");
     elab.elab_module_source("branches", source).unwrap_or_else(|e| panic!("{}", e.render(source)));
     let emission = generate_elaborated_structured_x86(&elab, "nested", "branches::nested_true", [Gpr::Rdi, Gpr::Rsi], &[Gpr::Rax, Gpr::Rcx, Gpr::Rdx, Gpr::R8], Gpr::Rax).unwrap();
@@ -66,9 +62,7 @@ fn fused_compare_certificates_check_and_refuse_another_test() {
     use heather_elab::function_ir_cert::{Node, Port, Region, StructuredRegion};
     use heather_elab::function_ir_source::generate_elaborated_structured_x86;
     use heather_elab::function_ir_x86_lower::{generate_structured, Gpr, Placements, PlannedTest, StructuredPlan, StructuredX86Emission};
-    let mut elab = common::base_image(common::MODULES.len());
-    let model = include_str!("../../../lib/std/arch/x86_64/x86_64_structured_block.hthr");
-    elab.elab_module_source("x86_64_structured_block", model).unwrap_or_else(|e| panic!("{}", e.render(model)));
+    let mut elab = common::structured_base();
     let source = include_str!("../../../examples/x86-native/branches.hthr");
     elab.elab_module_source("branches", source).unwrap_or_else(|e| panic!("{}", e.render(source)));
     let scratch = [Gpr::Rax, Gpr::Rcx, Gpr::Rdx, Gpr::R8];
@@ -117,9 +111,7 @@ fn fused_equal_certificates_check_and_refuse_another_test() {
     use heather_elab::function_ir_cert::{Node, Port, Region, StructuredRegion};
     use heather_elab::function_ir_source::generate_elaborated_structured_x86;
     use heather_elab::function_ir_x86_lower::{generate_structured, Gpr, Placements, PlannedTest, StructuredPlan, StructuredX86Emission, ComparisonOperation};
-    let mut elab = common::base_image(common::MODULES.len());
-    let model = include_str!("../../../lib/std/arch/x86_64/x86_64_structured_block.hthr");
-    elab.elab_module_source("x86_64_structured_block", model).unwrap_or_else(|e| panic!("{}", e.render(model)));
+    let mut elab = common::structured_base();
     let source = "import bitvec; import bool;
 fn equal_threshold(a, b: BitVec(64)) → BitVec(64) {
     match a.eq_bit(BitVec::ofNat(10)) { False => a.sub(b), True => a.add(b) }
@@ -187,9 +179,7 @@ fn equal_select(a, b: BitVec(64)) → BitVec(64) {
 fn a_carried_constant_certifies_and_another_value_is_refused() {
     use heather_elab::function_ir_source::generate_elaborated_structured_x86;
     use heather_elab::function_ir_x86_lower::Gpr;
-    let mut elab = common::base_image(common::MODULES.len());
-    let model = include_str!("../../../lib/std/arch/x86_64/x86_64_structured_block.hthr");
-    elab.elab_module_source("x86_64_structured_block", model).unwrap_or_else(|e| panic!("{}", e.render(model)));
+    let mut elab = common::structured_base();
     let source = include_str!("../../../examples/x86-native/branches.hthr");
     elab.elab_module_source("branches", source).unwrap_or_else(|e| panic!("{}", e.render(source)));
     let scratch = [Gpr::Rax, Gpr::Rcx, Gpr::Rdx, Gpr::R8];
@@ -220,9 +210,7 @@ fn a_consumed_input_is_no_longer_protected() {
     use heather_elab::function_ir_cert::{Node, Port, Region, StructuredRegion};
     use heather_elab::function_ir_x86_lower::{generate_structured_consuming, Gpr, Instruction, Placements, StructuredPlan};
     use std::collections::BTreeSet;
-    let mut elab = common::base_image(common::MODULES.len());
-    let model = include_str!("../../../lib/std/arch/x86_64/x86_64_structured_block.hthr");
-    elab.elab_module_source("x86_64_structured_block", model).unwrap_or_else(|e| panic!("{}", e.render(model)));
+    let elab = common::structured_base();
     let word = |id| Port { id, width: 64 };
     let region = StructuredRegion::Compose {
         prefix: Box::new(StructuredRegion::Dataflow(Region { inputs: vec![word(0), word(1)], nodes: vec![Node::Add { width: 64, output: 2, left: 0, right: 0 }], outputs: vec![word(2)] })),
@@ -264,9 +252,7 @@ fn a_consumed_input_is_no_longer_protected() {
 fn an_empty_passthrough_arm_certifies_and_another_copy_is_refused() {
     use heather_elab::function_ir_source::generate_elaborated_structured_x86;
     use heather_elab::function_ir_x86_lower::Gpr;
-    let mut elab = common::base_image(common::MODULES.len());
-    let model = include_str!("../../../lib/std/arch/x86_64/x86_64_structured_block.hthr");
-    elab.elab_module_source("x86_64_structured_block", model).unwrap_or_else(|e| panic!("{}", e.render(model)));
+    let mut elab = common::structured_base();
     let source = include_str!("../../../examples/x86-native/branches.hthr");
     elab.elab_module_source("branches", source).unwrap_or_else(|e| panic!("{}", e.render(source)));
     let scratch = [Gpr::Rax, Gpr::Rcx, Gpr::Rdx, Gpr::R8];
@@ -300,9 +286,7 @@ fn an_empty_passthrough_arm_certifies_and_another_copy_is_refused() {
 fn an_immediate_add_certifies_at_its_sign_extension() {
     use heather_elab::function_ir_cert::{Node, Port, Region, StructuredRegion};
     use heather_elab::function_ir_x86_lower::{generate_structured, Gpr, Instruction, Placements, StructuredPlan};
-    let mut elab = common::base_image(common::MODULES.len());
-    let model = include_str!("../../../lib/std/arch/x86_64/x86_64_structured_block.hthr");
-    elab.elab_module_source("x86_64_structured_block", model).unwrap_or_else(|e| panic!("{}", e.render(model)));
+    let elab = common::structured_base();
     let word = |id| Port { id, width: 64 };
     let negative = 0xffff_ffff_8000_0000u64;
     for (name, value, form) in [("minus_one", u64::MAX, Instruction::AddRI8 { destination: Gpr::Rax, immediate: 0xff }),
