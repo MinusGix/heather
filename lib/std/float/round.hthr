@@ -961,6 +961,17 @@ theorem Finite::val_nonneg({F: Format}, g: Finite(F), h: 0 <= g.H()): 0 <= g.val
     Rat::le_respects(F.grid_zero(), Rat::same_sym(g.val_grid()), F.grid_le(0, g.H(), h))
 }
 
+// The sign bit is the sign of the value.
+theorem Finite::val_nonneg_of_pos({F: Format}, f: Finite(F), s: f.neg = False): 0 <= f.val() {
+    let hp: (0 <= f.H()) = omega(Finite::H_pos(f, s));
+    Finite::val_nonneg(f, hp)
+}
+
+theorem Finite::val_nonpos_of_neg({F: Format}, f: Finite(F), s: f.neg = True): f.val() <= 0 {
+    let hn: (f.H() <= 0) = omega(Finite::H_neg(f, s));
+    Rat::le_respects(Rat::same_sym(f.val_grid()), F.grid_zero(), F.grid_le(f.H(), 0, hn))
+}
+
 theorem Format::max_H_lt_ovf(self F: Format, has: F.specials.has_inf().IsTrue()): (Finite::max_finite(F)).H() < F.ovf_h().int() {
     let mb = F.max_mag_bounds();
     let eq: (Succ(F.max_mag()) = F.top()) = mb.right.right.right(F.specials.inf_free(has));
@@ -1381,6 +1392,121 @@ theorem Format::round_signed_correct(self F: Format, mode: Mode, x: Rat, neg: Bo
     }(a)
 }
 
+// ---------------------------------------------------------------------------
+// Signs. A rounding of a magnitude is never negative, so the sign of a signed
+// rounding is the sign it was given: `-0` from a negative value that rounds
+// to zero, and the sign of an infinity, both come from it (IEEE 754 §6.3).
+
+// `x` carries the sign bit `s`; NaN carries none.
+fn Float::SignIs({F: Format}, self x: Float(F), s: Bool) → Type {
+    match x { Fin(f) => f.neg = s, Inf(n, _) => n = s, NaN(_) => False }
+}
+
+theorem Float::sign_is_neg({F: Format}, x: Float(F), s: Bool, h: x.SignIs(s)): (-x).SignIs(!s) {
+    match x as λ y => y.SignIs(s) → (-y).SignIs(!s) {
+        Fin(f) => λ e => j(e, λ b _ => !f.neg = !b, refl),
+        Inf(n, _) => λ e => j(e, λ b _ => !n = !b, refl),
+        NaN(_) => λ bad => false_elim(bad),
+    }(h)
+}
+
+fn Format::PosOpt(self F: Format, o: Option<Finite(F)>) → Type { match o { Some(u) => u.neg = False, None => True } }
+
+theorem Format::up_pos(self F: Format, h: Nat): F.PosOpt(F.up(h)) {
+    match Succ(h).le_dec(F.limit_h()) as λ _ => F.PosOpt(F.up(h)) {
+        Inl(below) => match F.up_cases(h, below) {
+            Inl(up) => j(sym(up.is), λ o _ => F.PosOpt(o), up.pos),
+            Inr(none) => j(sym(none.left), λ o _ => F.PosOpt(o), trivial),
+        },
+        Inr(nb) => j(sym(F.up_over(h, Nat::lt_of_not_le(F.limit_h(), Succ(h), nb))), λ o _ => F.PosOpt(o), trivial),
+    }
+}
+
+theorem Format::overflow_up_sign(self F: Format, d: Finite(F), dp: d.neg = False): (F.overflow_up(d)).SignIs(False) {
+    match F.specials.has_inf().is_true_dec() as λ c => Float::SignIs(match c as λ _ => Float(F) { Inl(has) => Inf(False, has), Inr(_) => Fin(d) }, False) {
+        Inl(_) => refl,
+        Inr(_) => dp,
+    }
+}
+
+theorem Format::up_or_over_sign(self F: Format, h: Nat, o: Option<Finite(F)>, po: F.PosOpt(o)): (F.up_or_over(h, o)).SignIs(False) {
+    match o as λ oo => F.PosOpt(oo) → (F.up_or_over(h, oo)).SignIs(False) {
+        Some(_) => λ p => p,
+        None => λ _ => F.overflow_up_sign(F.down(h), F.down_pos(h)),
+    }(po)
+}
+
+theorem Format::tie_h_sign(self F: Format, h: Nat, u: Finite(F), even: Bool, up: u.neg = False): (F.tie_h(h, u, even)).SignIs(False) {
+    match even as λ e => (F.tie_h(h, u, e)).SignIs(False) {
+        True => match Nat::even_dec((F.down(h)).mag) as λ c => Float::SignIs(match c as λ _ => Float(F) { Inl(_) => Fin(F.down(h)), Inr(_) => Fin(u) }, False) {
+            Inl(_) => F.down_pos(h),
+            Inr(_) => up,
+        },
+        False => up,
+    }
+}
+
+theorem Format::mid_h_sign(self F: Format, h: Nat, st: Bool, u: Finite(F), even: Bool, up: u.neg = False): (F.mid_h(h, st, u, even)).SignIs(False) {
+    match Succ(h -(F.down(h)).units() * 2).le_dec(Nat::pow(2, F.e_of(h))) as λ c1 => Float::SignIs(match c1 as λ _ => Float(F) {
+        Inl(_) => Fin(F.down(h)),
+        Inr(_) => match Succ(Nat::pow(2, F.e_of(h))).le_dec(h -(F.down(h)).units() * 2) {
+            Inl(_) => Fin(u),
+            Inr(_) => match st { True => Fin(u), False => F.tie_h(h, u, even) },
+        },
+    }, False) {
+        Inl(_) => F.down_pos(h),
+        Inr(_) => match Succ(Nat::pow(2, F.e_of(h))).le_dec(h -(F.down(h)).units() * 2) as λ c2 => Float::SignIs(match c2 as λ _ => Float(F) {
+            Inl(_) => Fin(u),
+            Inr(_) => match st { True => Fin(u), False => F.tie_h(h, u, even) },
+        }, False) {
+            Inl(_) => up,
+            Inr(_) => match st as λ t => Float::SignIs(match t as λ _ => Float(F) { True => Fin(u), False => F.tie_h(h, u, even) }, False) {
+                True => up,
+                False => F.tie_h_sign(h, u, even, up),
+            },
+        },
+    }
+}
+
+theorem Format::none_h_sign(self F: Format, h: Nat): (F.none_h(h)).SignIs(False) {
+    match F.ovf_h().le_dec(h) as λ c => Float::SignIs(match c as λ _ => Float(F) { Inl(_) => F.overflow_up(F.down(h)), Inr(_) => Fin(F.down(h)) }, False) {
+        Inl(_) => F.overflow_up_sign(F.down(h), F.down_pos(h)),
+        Inr(_) => F.down_pos(h),
+    }
+}
+
+theorem Format::near_at_sign(self F: Format, h: Nat, st, even: Bool, o: Option<Finite(F)>, po: F.PosOpt(o)): (F.near_at(h, st, even, o)).SignIs(False) {
+    match o as λ oo => F.PosOpt(oo) → (F.near_at(h, st, even, oo)).SignIs(False) {
+        None => λ _ => F.none_h_sign(h),
+        Some(u) => λ p => F.mid_h_sign(h, st, u, even, p),
+    }(po)
+}
+
+theorem Format::round_h_sign(self F: Format, mode: Mode, h: Nat, st: Bool): (F.round_h(mode, h, st)).SignIs(False) {
+    match mode as λ m => (F.round_h(m, h, st)).SignIs(False) {
+        NearestEven => F.near_at_sign(h, st, True, F.up(h), F.up_pos(h)),
+        NearestAway => F.near_at_sign(h, st, False, F.up(h), F.up_pos(h)),
+        TowardPos => match st as λ t => (F.round_h(TowardPos, h, t)).SignIs(False) {
+            True => F.up_or_over_sign(h, F.up(h), F.up_pos(h)),
+            False => match Succ((F.down(h)).units() * 2).le_dec(h) as λ c => Float::SignIs(match c as λ _ => Float(F) { Inl(_) => F.up_or_over(h, F.up(h)), Inr(_) => Fin(F.down(h)) }, False) {
+                Inl(_) => F.up_or_over_sign(h, F.up(h), F.up_pos(h)),
+                Inr(_) => F.down_pos(h),
+            },
+        },
+        TowardNeg => F.down_pos(h),
+        TowardZero => F.down_pos(h),
+    }
+}
+
+// The sign theorem every operation cites: its result carries the sign the
+// operation computed.
+theorem Format::round_signed_sign(self F: Format, mode: Mode, neg: Bool, h: Nat, st: Bool): (F.round_signed(mode, neg, h, st)).SignIs(neg) {
+    match neg as λ s => (F.round_signed(mode, s, h, st)).SignIs(s) {
+        False => F.round_h_sign(mode, h, st),
+        True => Float::sign_is_neg(F.round_h(mode.conj(), h, st), False, F.round_h_sign(mode.conj(), h, st)),
+    }
+}
+
 // A dyadic `n · 2^e` against the grid: scale up by `2^up` and down by
 // `2^dn`, where `e - (qmin - 1) = up - dn`; the bits shifted out are sticky.
 fn Format::dy_up(self F: Format, e: Int) → Nat { (e -(F.qmin() -1)).pos_part() }
@@ -1446,17 +1572,53 @@ theorem Format::round_dyadic_correct(self F: Format, mode: Mode, d: Dyadic): Rou
     }
 }
 
+// An exact dyadic with a sign for zero: the magnitude rounds as at
+// `round_dyadic`, and the result carries the dyadic's sign, or `z` when the
+// dyadic is zero. Each operation passes the zero sign IEEE 754 §6.3 gives an
+// exact zero result; an inexact result that rounds to zero keeps the exact
+// value's sign through `round_signed`.
+fn Format::round_exact(self F: Format, mode: Mode, d: Dyadic, z: Bool) → Float(F) {
+    F.round_signed(mode, d.sign_or(z), F.dy_h(d.mant.natAbs(), d.exp), F.dy_st(d.mant.natAbs(), d.exp))
+}
+
+theorem Format::round_exact_correct(self F: Format, mode: Mode, d: Dyadic, z: Bool): RoundsTo(F, mode, d.rat(), F.round_exact(mode, d, z)) {
+    match d.mant as λ v => RoundsTo(F, mode, Dyadic(v, d.exp).rat(), F.round_exact(mode, Dyadic(v, d.exp), z)) {
+        OfNat(n) => match n as λ k => RoundsTo(F, mode, Dyadic(OfNat(k), d.exp).rat(), F.round_exact(mode, Dyadic(OfNat(k), d.exp), z)) {
+            Zero => match z as λ t => RoundsTo(F, mode, Dyadic(OfNat(0), d.exp).rat(), F.round_exact(mode, Dyadic(OfNat(0), d.exp), t)) {
+                False => F.round_signed_correct(mode, Dyadic(OfNat(0), d.exp).rat(), False, F.dy_h(0, d.exp), F.dy_st(0, d.exp), F.dy_approx(0, d.exp)),
+                True => {
+                    let zd: (Dyadic(OfNat(0), d.exp) ≈ 0) = Dyadic::zero_mant(d.exp);
+                    let zr: (Dyadic(OfNat(0), d.exp).rat() ≈ 0) = Rat::same_trans(x := Dyadic(OfNat(0), d.exp).rat(), y := Dyadic::rat(0), z := 0, hxy := zd, hyz := Dyadic::rat_zero());
+                    let nz: Rat::Same(Rat::neg(0), 0) = omega;
+                    let flip: (Dyadic(OfNat(0), d.exp).rat() ≈ -Dyadic(OfNat(0), d.exp).rat()) =
+                        Rat::same_trans(zr, Rat::same_sym(Rat::same_trans(Rat::neg_respects(x := Dyadic(OfNat(0), d.exp).rat(), x2 := 0, hx := zr), nz)));
+                    F.round_signed_correct(mode, Dyadic(OfNat(0), d.exp).rat(), True, F.dy_h(0, d.exp), F.dy_st(0, d.exp),
+                        F.approx_respects(Dyadic(OfNat(0), d.exp).rat(), -Dyadic(OfNat(0), d.exp).rat(), F.dy_h(0, d.exp), F.dy_st(0, d.exp), flip, F.dy_approx(0, d.exp)))
+                },
+            },
+            Succ(k) => F.round_signed_correct(mode, Dyadic(OfNat(Succ(k)), d.exp).rat(), False, F.dy_h(Succ(k), d.exp), F.dy_st(Succ(k), d.exp), F.dy_approx(Succ(k), d.exp)),
+        },
+        NegSucc(k) => F.round_signed_correct(mode, Dyadic(NegSucc(k), d.exp).rat(), True, F.dy_h(Succ(k), d.exp), F.dy_st(Succ(k), d.exp),
+            F.approx_respects(Dyadic((Succ(k)).int(), d.exp).rat(), -Dyadic(NegSucc(k), d.exp).rat(), F.dy_h(Succ(k), d.exp), F.dy_st(Succ(k), d.exp),
+                Dyadic(NegSucc(k), d.exp).rat_neg(), F.dy_approx(Succ(k), d.exp))),
+    }
+}
+
+theorem Format::round_exact_sign(self F: Format, mode: Mode, d: Dyadic, z: Bool): (F.round_exact(mode, d, z)).SignIs(d.sign_or(z)) {
+    F.round_signed_sign(mode, d.sign_or(z), F.dy_h(d.mant.natAbs(), d.exp), F.dy_st(d.mant.natAbs(), d.exp))
+}
+
 // A rational against the grid: with `qmin - 1 = p - q`, the magnitude
 // `|num| / den` is `|num| · 2^q / (den · 2^p)` half-units; the quotient is
-// `h` and a nonzero remainder is sticky. Integer division costs time linear
-// in the quotient under evaluation, so literal tests stay small.
+// `h` and a nonzero remainder is sticky. The division is binary long
+// division (`Nat::ldiv`), so evaluation costs one step per quotient bit.
 fn Format::rat_p(self F: Format) → Nat { Nat::pow(2, (F.qmin() -1).pos_part()) }
 
 fn Format::rat_q(self F: Format) → Nat { Nat::pow(2, (F.qmin() -1).neg_part()) }
 
-fn Format::rat_h(self F: Format, x: Rat) → Nat { (x.num.natAbs() * F.rat_q()).div(x.den * F.rat_p()) }
+fn Format::rat_h(self F: Format, x: Rat) → Nat { (x.num.natAbs() * F.rat_q()).ldiv(x.den * F.rat_p()).quot() }
 
-fn Format::rat_st(self F: Format, x: Rat) → Bool { match (x.num.natAbs() * F.rat_q()).mod(x.den * F.rat_p()) { Zero => False, Succ(_) => True } }
+fn Format::rat_st(self F: Format, x: Rat) → Bool { match (x.num.natAbs() * F.rat_q()).ldiv(x.den * F.rat_p()).rem() { Zero => False, Succ(_) => True } }
 
 theorem Format::approx_div(self F: Format, y: Rat, a: Nat, na: y.num = a.int(), q: Nat):
     (r: Nat) → q * (y.den * F.rat_p()) + r = a * F.rat_q() → r < y.den * F.rat_p() → F.Approx(y, q, match r { Zero => False, Succ(_) => True })
@@ -1489,7 +1651,7 @@ theorem Format::rat_approx(self F: Format, x: Rat): F.Approx(x.abs(), F.rat_h(x)
     let dp: (0 < x.den) = x.den_pos;
     let pp: (0 < F.rat_p()) = Nat::pow_pos(a := 2, n := (F.qmin() -1).pos_part());
     let bp: (0 < B) = Nat::mul_pos(a := x.den, b := F.rat_p(), pa := dp, pb := pp);
-    F.approx_div(x.abs(), x.num.natAbs(), refl, A.div(B))(A.mod(B), A.div_mul_add_mod(B), A.mod_lt(B))
+    F.approx_div(x.abs(), x.num.natAbs(), refl, A.ldiv(B).quot())(A.ldiv(B).rem(), A.ldiv_parts(B), A.ldiv_rem_lt(B))
 }
 
 fn Format::round_rat(self F: Format, mode: Mode, x: Rat) → Float(F) {
@@ -2513,4 +2675,40 @@ theorem Format::rounds_mono(self F: Format, mode: Mode, x, y: Rat, xy: x <= y, r
 // The executable rounding, as a function of the value, is monotone.
 theorem Format::round_rat_mono(self F: Format, mode: Mode, x, y: Rat, xy: x <= y): Float::Le(F.round_rat(mode, x), F.round_rat(mode, y)) {
     F.rounds_mono(mode, x, y, xy, F.round_rat(mode, x), F.round_rat(mode, y), F.round_rat_correct(mode, x), F.round_rat_correct(mode, y))
+}
+
+// ---------------------------------------------------------------------------
+// Exact zeros.
+
+// A finite float of value zero is the zero of its sign: the canonical form
+// leaves no other exponent for a zero significand.
+theorem Finite::zero_of_val({F: Format}, f: Finite(F), v: f.val() ≈ 0): f = Finite::zero(F, f.neg) {
+    let e: (f.val() ≈ (Finite::zero(F, False)).val()) = Rat::same_trans(v, Rat::same_sym(Finite::zero_val(F)));
+    let parts = Finite::parts_of_same(f, Finite::zero(F, False), e, refl);
+    Finite::ext(f, Finite::zero(F, f.neg), refl, parts.left, parts.right)
+}
+
+// A rounding that agrees with zero and carries the sign `s` is the zero of
+// sign `s`.
+theorem Float::eq_zero_of({F: Format}, x: Float(F), s: Bool, same: Float::Same(x, Fin(Finite::zero(F, False))), sg: x.SignIs(s)):
+    x = Fin(Finite::zero(F, s))
+{
+    match x as λ y => Float::Same(y, Fin(Finite::zero(F, False))) → y.SignIs(s) → y = Fin(Finite::zero(F, s)) {
+        Fin(f) => λ e sgn => {
+            let v: (f.val() ≈ 0) = Rat::same_trans(e, Finite::zero_val(F));
+            let fz: (f = Finite::zero(F, s)) = j(sgn, λ b _ => f = Finite::zero(F, b), Finite::zero_of_val(f, v));
+            j(fz, λ g _ => Float::Fin(f) = Float::Fin(g), refl)
+        },
+        Inf(_, _) => λ bad _ => false_elim(bad),
+        NaN(_) => λ bad _ => false_elim(bad),
+    }(same, sg)
+}
+
+// An exact zero rounds to the zero of sign `z`, in every mode.
+theorem Format::round_exact_zero(self F: Format, mode: Mode, d: Dyadic, z: Bool, zero: d ≈ 0): F.round_exact(mode, d, z) = Fin(Finite::zero(F, z)) {
+    let e: (d.rat() ≈ (Finite::zero(F, False)).val()) = Rat::same_trans(Rat::same_trans(x := d.rat(), y := Dyadic::rat(0), z := 0, hxy := zero, hyz := Dyadic::rat_zero()), Rat::same_sym(Finite::zero_val(F)));
+    let at_zero = F.rounds_respects(mode, d.rat(), (Finite::zero(F, False)).val(), e, Fin(Finite::zero(F, False)), F.rounds_exact(mode, Finite::zero(F, False)));
+    let same = F.rounds_unique(mode, d.rat(), F.round_exact(mode, d, z), Fin(Finite::zero(F, False)), F.round_exact_correct(mode, d, z), at_zero);
+    let sg: (F.round_exact(mode, d, z)).SignIs(z) = j(d.sign_or_zero(z, zero), λ b _ => (F.round_exact(mode, d, z)).SignIs(b), F.round_exact_sign(mode, d, z));
+    Float::eq_zero_of(F.round_exact(mode, d, z), z, same, sg)
 }
