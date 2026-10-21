@@ -1,0 +1,214 @@
+// Structured regions lowered by `function_ir_lower_structured`'s one theorem
+// (issues/function-ir-verified-lowering.md, round 2): the program is
+// computed by evaluation, and each region's claim is the theorem
+// instantiated. The shapes are examples/x86-native/branches.hthr's. No proof
+// here is about the region's own code or where its jumps land.
+
+import function_ir;
+import function_ir_lower;
+import function_ir_lower_structured;
+import x86_64;
+import x86_64_block;
+import x86_64_fetch;
+import x86_64_data_read;
+import x86_64_fetched_code;
+import x86_64_asm;
+import x86_64_asm_runs;
+import bitvec;
+import list;
+import logic;
+import option;
+
+fn word(id: Nat) → Port { Port(id := id, width := 64) }
+fn bit(id: Nat) → Port { Port(id := id, width := 1) }
+fn pair_ports() → Ports { Ports([word(0), word(1)]) }
+
+// The arms, each one node into output 2.
+fn arm(node: Node) → StructuredRegion { Dataflow(Region(inputs := pair_ports(), nodes := [node], outputs := Ports([word(2)]))) }
+
+// select: a < b ? a + b : a - b. The comparison, then a conditional on it.
+fn select_region() → StructuredRegion {
+    Sequence(
+        Region(inputs := pair_ports(), nodes := [UnsignedLessThan(width := 64, output := 3, left := 0, right := 1)],
+            outputs := Ports([bit(3)])),
+        Conditional(Ports([word(0), word(1), bit(3)]), 3, pair_ports(), Ports([word(2)]),
+            arm(Add(width := 64, output := 2, left := 0, right := 1)),
+            arm(Sub(width := 64, output := 2, left := 0, right := 1))))
+}
+
+// A program written forward: an item, and an empty block a jump names.
+fn Prog::put(self p: Prog, item: Asm) → Prog { At(p, 0, item) }
+fn Prog::label(self p: Prog, name: Nat) → Prog { At(p, name, Block([])) }
+
+fn select_program() → Prog {
+    Start.put(Block([XorRR(Rax, Rax), CmpRR(Rdi, Rsi), SetBelow(Al)]))
+        .put(Block([TestRR(Rax, Rax)])).put(Jcc(E, 1))
+        .put(Block([MovRR(Rax, Rdi), AddRR(Rax, Rsi)])).put(Jmp(2))
+        .label(1).put(Block([MovRR(Rax, Rdi), SubRR(Rax, Rsi)]))
+        .label(2).put(Block([]))
+}
+
+theorem select_lowers(): select_region().lower_planned([Rdi, Rsi], [Rax]) = Some(select_program()) { refl }
+
+theorem select_bytes(): assemble(no_fills(), select_program(), []).len() = 35 { refl }
+
+theorem select_computes<M>(values: Valuation(), fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>,
+    origin: BitVec(64), s: MachineState<M>, at: s.rip = next_rip(origin, 0),
+    resident: CodeResident(fetch, s.memory, assemble(no_fills(), select_program(), last), next_rip(origin, 0)),
+    a: values(64, 0) = read_gpr(Rdi, s.gprs), b: values(64, 1) = read_gpr(Rsi, s.gprs),
+    graph: StructuredRegionHolds(values, select_region())):
+    Site<M>(fetch, data, select_program(), last, origin).Reaches(s, prog_len(select_program()),
+        λ (g: Gprs) => values(64, 2) = read_gpr(Rax, g) ∧ True) {
+    select_region().lower_correct<M>([Rdi, Rsi], [Rax], select_region().plan([Rdi, Rsi], [Rax]), select_program(), values,
+        select_lowers(), fetch, data, last, origin, s, at, resident, ⟨a, ⟨b, trivial⟩⟩, graph)
+}
+
+// nested_true: a < b ? (b < 10 ? a + b : b ^ a) : a - b. The inner
+// comparison's constant and condition are the true arm's own.
+fn nested_region() → StructuredRegion {
+    Sequence(
+        Region(inputs := pair_ports(), nodes := [UnsignedLessThan(width := 64, output := 3, left := 0, right := 1)],
+            outputs := Ports([bit(3)])),
+        Conditional(Ports([word(0), word(1), bit(3)]), 3, pair_ports(), Ports([word(2)]),
+            Sequence(
+                Region(inputs := pair_ports(),
+                    nodes := [Const(width := 64, output := 5, value := 10),
+                        UnsignedLessThan(width := 64, output := 6, left := 1, right := 5)],
+                    outputs := Ports([bit(6)])),
+                Conditional(Ports([word(0), word(1), bit(6)]), 6, pair_ports(), Ports([word(2)]),
+                    arm(Add(width := 64, output := 2, left := 0, right := 1)),
+                    arm(BitXor(width := 64, output := 2, left := 1, right := 0)))),
+            arm(Sub(width := 64, output := 2, left := 0, right := 1))))
+}
+
+// The inner condition goes to RCX, since RAX holds the constant it reads.
+fn nested_program() → Prog {
+    Start.put(Block([XorRR(Rax, Rax), CmpRR(Rdi, Rsi), SetBelow(Al)]))
+        .put(Block([TestRR(Rax, Rax)])).put(Jcc(E, 1))
+        .put(Block([MovRI(Rax, BitVec::ofNat(10)), XorRR(Rcx, Rcx), CmpRR(Rsi, Rax), SetBelow(Cl)]))
+            .put(Block([TestRR(Rcx, Rcx)])).put(Jcc(E, 3))
+            .put(Block([MovRR(Rax, Rdi), AddRR(Rax, Rsi)])).put(Jmp(4))
+            .label(3).put(Block([MovRR(Rax, Rsi), XorRR(Rax, Rdi)]))
+            .label(4).put(Jmp(2))
+        .label(1).put(Block([MovRR(Rax, Rdi), SubRR(Rax, Rsi)]))
+        .label(2).put(Block([]))
+}
+
+theorem nested_lowers(): nested_region().lower_planned([Rdi, Rsi], [Rax]) = Some(nested_program()) { refl }
+
+theorem nested_computes<M>(values: Valuation(), fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>,
+    origin: BitVec(64), s: MachineState<M>, at: s.rip = next_rip(origin, 0),
+    resident: CodeResident(fetch, s.memory, assemble(no_fills(), nested_program(), last), next_rip(origin, 0)),
+    a: values(64, 0) = read_gpr(Rdi, s.gprs), b: values(64, 1) = read_gpr(Rsi, s.gprs),
+    graph: StructuredRegionHolds(values, nested_region())):
+    Site<M>(fetch, data, nested_program(), last, origin).Reaches(s, prog_len(nested_program()),
+        λ (g: Gprs) => values(64, 2) = read_gpr(Rax, g) ∧ True) {
+    nested_region().lower_correct<M>([Rdi, Rsi], [Rax], nested_region().plan([Rdi, Rsi], [Rax]), nested_program(), values,
+        nested_lowers(), fetch, data, last, origin, s, at, resident, ⟨a, ⟨b, trivial⟩⟩, graph)
+}
+
+// keep_below: a < 2^32 ? a : a - 2^32 + b. The true arm returns an input,
+// a copy into the join's register.
+fn keep_region() → StructuredRegion {
+    Sequence(
+        Region(inputs := pair_ports(),
+            nodes := [Const(width := 64, output := 6, value := 4294967296),
+                UnsignedLessThan(width := 64, output := 3, left := 0, right := 6)],
+            outputs := Ports([bit(3)])),
+        Conditional(Ports([word(0), word(1), bit(3)]), 3, pair_ports(), Ports([word(2)]),
+            arm(Move(width := 64, output := 2, source := 0)),
+            Dataflow(Region(inputs := pair_ports(),
+                nodes := [Const(width := 64, output := 4, value := 4294967296),
+                    Sub(width := 64, output := 5, left := 0, right := 4),
+                    Add(width := 64, output := 2, left := 5, right := 1)],
+                outputs := Ports([word(2)])))))
+}
+
+fn keep_program() → Prog {
+    Start.put(Block([MovRI(Rax, BitVec::ofNat(4294967296)), XorRR(Rcx, Rcx), CmpRR(Rdi, Rax), SetBelow(Cl)]))
+        .put(Block([TestRR(Rcx, Rcx)])).put(Jcc(E, 1))
+        .put(Block([MovRR(Rax, Rdi)])).put(Jmp(2))
+        .label(1).put(Block([MovRI(Rax, BitVec::ofNat(4294967296)), SubRR(Rdi, Rax), MovRR(Rax, Rdi), AddRR(Rax, Rsi)]))
+        .label(2).put(Block([]))
+}
+
+theorem keep_lowers(): keep_region().lower_planned([Rdi, Rsi], [Rax]) = Some(keep_program()) { refl }
+
+// composed: (a < b ? a < b : b < a) ? a + b : a - b. The first
+// conditional's output is a bit both arms leave in one register, and the
+// second tests it.
+fn composed_region() → StructuredRegion {
+    Compose(
+        Sequence(
+            Region(inputs := pair_ports(), nodes := [UnsignedLessThan(width := 64, output := 4, left := 0, right := 1)],
+                outputs := Ports([bit(4)])),
+            Conditional(Ports([word(0), word(1), bit(4)]), 4, pair_ports(), Ports([bit(3)]),
+                Dataflow(Region(inputs := pair_ports(), nodes := [UnsignedLessThan(width := 64, output := 3, left := 0, right := 1)],
+                    outputs := Ports([bit(3)]))),
+                Dataflow(Region(inputs := pair_ports(), nodes := [UnsignedLessThan(width := 64, output := 3, left := 1, right := 0)],
+                    outputs := Ports([bit(3)]))))),
+        Conditional(Ports([word(0), word(1), bit(3)]), 3, pair_ports(), Ports([word(2)]),
+            arm(Add(width := 64, output := 2, left := 0, right := 1)),
+            arm(Sub(width := 64, output := 2, left := 0, right := 1))))
+}
+
+fn composed_program() → Prog {
+    Start.put(Block([XorRR(Rax, Rax), CmpRR(Rdi, Rsi), SetBelow(Al)]))
+        .put(Block([TestRR(Rax, Rax)])).put(Jcc(E, 1))
+        .put(Block([XorRR(Rax, Rax), CmpRR(Rdi, Rsi), SetBelow(Al)])).put(Jmp(2))
+        .label(1).put(Block([XorRR(Rax, Rax), CmpRR(Rsi, Rdi), SetBelow(Al)]))
+        .label(2).put(Block([TestRR(Rax, Rax)])).put(Jcc(E, 3))
+        .put(Block([MovRR(Rax, Rdi), AddRR(Rax, Rsi)])).put(Jmp(4))
+        .label(3).put(Block([MovRR(Rax, Rdi), SubRR(Rax, Rsi)]))
+        .label(4).put(Block([]))
+}
+
+theorem composed_lowers(): composed_region().lower_planned([Rdi, Rsi], [Rax]) = Some(composed_program()) { refl }
+
+// The frame: memory as it was, as for every run the theorem gives.
+theorem select_memory<M>(values: Valuation(), fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>,
+    origin: BitVec(64), s: MachineState<M>, at: s.rip = next_rip(origin, 0),
+    resident: CodeResident(fetch, s.memory, assemble(no_fills(), select_program(), last), next_rip(origin, 0)),
+    a: values(64, 0) = read_gpr(Rdi, s.gprs), b: values(64, 1) = read_gpr(Rsi, s.gprs),
+    graph: StructuredRegionHolds(values, select_region())):
+    Exists<MachineState<M>>(λ t => FetchedSteps(fetch, data, s, t) ∧ (t.memory = s.memory ∧ values(64, 2) = read_gpr(Rax, t.gprs))) {
+    let ran = select_computes<M>(values, fetch, data, last, origin, s, at, resident, a, b, graph);
+    Exists(ran.witness, ⟨ran.proof.left, ⟨ran.proof.right.right.left, ran.proof.right.right.right.left⟩⟩)
+}
+
+// Refusals. The arms leave the result in different registers: the join
+// keeps neither, and the output is nowhere.
+theorem select_arms_apart(): select_region().lower([Rdi, Rsi], [Rax], [Rax, Rax, Rcx]) = None { refl }
+
+// The same placement with the arms agreeing is a program.
+theorem select_arms_together(): select_region().lower([Rdi, Rsi], [Rax], [Rcx, Rax, Rax]).is_some() = True { refl }
+
+// A condition that is not a bit in a register: a 64-bit input.
+fn word_condition_region() → StructuredRegion {
+    Conditional(Ports([word(0), word(1)]), 0, pair_ports(), Ports([word(2)]),
+        arm(Add(width := 64, output := 2, left := 0, right := 1)),
+        arm(Sub(width := 64, output := 2, left := 0, right := 1)))
+}
+
+theorem word_condition_refused(): word_condition_region().lower_planned([Rdi, Rsi], [Rax]) = None { refl }
+
+// The condition clobbered before the branch: the comparison's register
+// written by a constant first.
+fn clobbered_region() → StructuredRegion {
+    Sequence(
+        Region(inputs := pair_ports(),
+            nodes := [UnsignedLessThan(width := 64, output := 3, left := 0, right := 1),
+                Const(width := 64, output := 7, value := 1)],
+            outputs := Ports([bit(3)])),
+        Conditional(Ports([word(0), word(1), bit(3)]), 3, pair_ports(), Ports([word(2)]),
+            arm(Add(width := 64, output := 2, left := 0, right := 1)),
+            arm(Sub(width := 64, output := 2, left := 0, right := 1))))
+}
+
+theorem clobbered_refused(): clobbered_region().lower([Rdi, Rsi], [Rax], [Rax, Rax, Rax, Rax]) = None { refl }
+
+// The check `lower` makes is not vacuous: a jump to a label no item has,
+// and a name given twice, are not laid out.
+theorem missing_label_refused(): Start.put(Jmp(1)).put(Block([TestRR(Rax, Rax)])).label(2).laid_out() = False { refl }
+theorem twice_named_refused(): Start.put(Jmp(1)).label(1).label(1).laid_out() = False { refl }
+theorem one_jump_laid_out(): Start.put(Jmp(1)).put(Block([TestRR(Rax, Rax)])).label(1).laid_out() = True { refl }

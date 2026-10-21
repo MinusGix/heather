@@ -90,6 +90,52 @@ costs a refusal, never a wrong program.
    obligations) would be the natural tool; if S2 is not there yet, the
    round proves the pure, syscall-free fragment of it it needs and S2
    generalises it. `branches.hthr` through it.
+
+   *Round 2 as built:* S2 was not there, so the round proved the pure
+   fragment itself, in the foundation:
+   `lib/std/arch/x86_64/x86_64_asm_runs.hthr`. `Site::Runs(from, to, pre,
+   post)` says that from offset `from` of a label program resident at
+   `origin`, registers satisfying `pre` run fetched to offset `to`, with
+   registers satisfying `post` and memory untouched. It has one lemma per
+   emitted form, each over any program: `runs_block`, `runs_jump`, and
+   `runs_branch` (`TEST r, r; JE else; yes; JMP join; else: no; join:`),
+   plus `runs_trans`/`runs_weaken`/`runs_frame`. No lemma does arithmetic
+   on open offsets. The producer checks the finished program once by
+   evaluation (`Prog::laid_out`: no holes, unique names, every jump landing
+   on its label by `asm_lands`), and `label_target`, `jcc_lands` and
+   `jmp_lands` read the landings off that check.
+
+   `lib/function_ir_lower_structured.hthr` threads round 1's file through
+   `StructuredRegion::emit`:
+   - a dataflow leaf is one `Block`;
+   - a `Conditional` finds its condition as a `Bit` in a register and lowers
+     both arms from the same file;
+   - the join's file is `File::meet`, what both arms agree on. Arms that
+     leave an output apart make the final move fail, so `lower` refuses.
+
+   The theorem is `StructuredRegion::lower_correct`, over every placement.
+   For any origin, fetch and data access, and any bytes `last` after the
+   program, a program `lower` returns, resident, runs fetched from its
+   start to its end and leaves the outputs in their registers. The examples
+   (`fixtures/function_ir_lower_structured_examples.hthr`, checked by
+   `function_ir_lower_structured.rs`) are branches.hthr's shapes: `select`,
+   `nested_true`, `keep_below` (an arm returning an input) and `composed` (a
+   conditional on a conditional's bit). Each program is computed by `refl`.
+   The refusal controls are: arms apart, a word condition, a clobbered
+   condition, and two programs `laid_out` rejects.
+
+   Left for later rounds:
+   - A conditional on a comparison materialises the bit (`XOR; CMP; SETcc;
+     TEST; JE`). CMP and Jcc on its flags is round 4's selection rule.
+   - `Runs` speaks of registers only. The callee-saved frame across a
+     branch (`Kept`, round 1's `execute_block_kept`) is not in its `post`
+     yet, and round 3 needs it.
+   - `laid_out`'s landing check walks the program once per jump.
+   - The examples are StructuredRegions written by hand in the shapes the
+     structured source generator produces. The generator's output goes
+     through `lower` in round 4.
+   - `Site::Runs` is S2's `Wp` restricted to pure code; [[native-one-wp]]
+     generalises it to states and syscalls.
 3. **Calls and the stack** (`calls`, `composition`, `sharing`,
    `stack_local`, `stack_save`, …): a callee's contract as a `Proved`-shaped
    item, the frame view, spills.

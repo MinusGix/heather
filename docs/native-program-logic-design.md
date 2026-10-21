@@ -171,7 +171,9 @@ examples:
   (`issues/x86-64-machine-model.md` continues).
 - The label assembler, `x86_64_asm` with `x86_64_layout` under it:
   codegen's data structure and its layout-by-evaluation, used by the
-  compiler.
+  compiler. `x86_64_asm_runs` (S4 round 2) holds its pure fetched-run
+  lemmas: a block, a JMP and a two-armed branch, each proved over any
+  program checked by `Prog::laid_out`.
 - The Linux model: `linux_x86_64_io` (re-founded on the event container in
   S1), `linux_x86_64_determinism`, `linux_x86_64_entry`.
 - ELF: `elf64`, `elf64_load`, and the Rust writer.
