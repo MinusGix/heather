@@ -2299,7 +2299,7 @@ theorem Format::rounds_ge_down(self F: Format, mode: Mode, x: Rat, r, s: Float(F
     match r as λ r0 => RoundsTo(F, TowardNeg, x, r0) → Float::Le(r0, s) {
         Fin(d) => λ hd => match s as λ s0 => RoundsTo(F, mode, x, s0) → Float::Le(Float::Fin(d), s0) {
             Fin(g) => λ hg => F.down_le_fin(mode, x, d, hd, g, hg),
-            Inf(m, hm) => match m as λ b => RoundsTo(F, mode, x, Float::Inf(b, hm)) → Float::Le(F := F, a := Float::Fin(d), b := Float::Inf(b, hm)) {
+            Inf(m, hm) => match m as λ b => RoundsTo(F, mode, x, Float::Inf(b, hm)) → Float::Le(Float::Fin(d), Float::Inf(b, hm)) {
                 False => λ _ => refl,
                 True => λ hi => false_elim(F.down_not_neg_inf(mode, x, d, hd, hm, hi)),
             },
@@ -2341,7 +2341,7 @@ theorem Format::rounds_le_up(self F: Format, mode: Mode, x: Rat, s, t: Float(F),
     match t as λ t0 => RoundsTo(F, TowardPos, x, t0) → Float::Le(s, t0) {
         Fin(u) => λ hu => match s as λ s0 => RoundsTo(F, mode, x, s0) → Float::Le(s0, Float::Fin(u)) {
             Fin(g) => λ hg => F.fin_le_up(mode, x, g, hg, u, hu),
-            Inf(m, hm) => match m as λ b => RoundsTo(F, mode, x, Float::Inf(b, hm)) → Float::Le(F := F, a := Float::Inf(b, hm), b := Float::Fin(u)) {
+            Inf(m, hm) => match m as λ b => RoundsTo(F, mode, x, Float::Inf(b, hm)) → Float::Le(Float::Inf(b, hm), Float::Fin(u)) {
                 False => λ hi => false_elim(F.up_not_pos_inf(mode, x, u, hu, hm, hi)),
                 True => λ _ => refl,
             },
@@ -2484,7 +2484,7 @@ theorem Format::mono_pinf(self F: Format, mode: Mode, x, y: Rat, xy: x <= y, hn:
 {
     match s as λ s0 => RoundsTo(F, mode, y, s0) → Float::Le(Float::Inf(bool::False, hn), s0) {
         Fin(g) => λ hg => false_elim(F.mono_pinf_fin(mode, x, y, xy, hn, g, hr, hg)),
-        Inf(m, hm) => match m as λ b => RoundsTo(F, mode, y, Float::Inf(b, hm)) → Float::Le(F := F, a := Float::Inf(bool::False, hn), b := Float::Inf(b, hm)) {
+        Inf(m, hm) => match m as λ b => RoundsTo(F, mode, y, Float::Inf(b, hm)) → Float::Le(Float::Inf(bool::False, hn), Float::Inf(b, hm)) {
             False => λ _ => Inr(refl),
             True => λ hi => false_elim(F.mono_pinf_ninf(mode, x, y, xy, hn, hm, hr, hi)),
         },
@@ -2496,7 +2496,7 @@ theorem Format::rounds_mono(self F: Format, mode: Mode, x, y: Rat, xy: x <= y, r
     match r as λ r0 => RoundsTo(F, mode, x, r0) → Float::Le(r0, s) {
         Fin(f) => λ hf => match s as λ s0 => RoundsTo(F, mode, y, s0) → Float::Le(Float::Fin(f), s0) {
             Fin(g) => λ hg => F.mono_fin(mode, x, y, xy, f, g, hf, hg),
-            Inf(m, hm) => match m as λ b => RoundsTo(F, mode, y, Float::Inf(b, hm)) → Float::Le(F := F, a := Float::Fin(f), b := Float::Inf(b, hm)) {
+            Inf(m, hm) => match m as λ b => RoundsTo(F, mode, y, Float::Inf(b, hm)) → Float::Le(Float::Fin(f), Float::Inf(b, hm)) {
                 False => λ _ => refl,
                 True => λ hi => false_elim(F.mono_fin_ninf(mode, x, y, xy, f, hm, hf, hi)),
             },

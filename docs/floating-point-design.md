@@ -811,10 +811,11 @@ Observations:
   opaque atoms, so a distance fact like `f.dist(x) ≈ x - f.val()` does not
   connect to `f.val() < g.val()`; the order lemmas on subtraction
   (`le_of_sub_le_sub_l`) do it in one step.
-- `Float::Le(Float::Fin(f), Float::Inf(…))` cannot infer `Float`'s format
-  from the field; the library names it (`Float::Le(F := F, a := …, b :=
-  …)`). That is
-  [value-param-constructor-implicit-inference](../issues/value-param-constructor-implicit-inference.md).
+- `Float::Le(Float::Fin(f), Float::Inf(…))` could not infer `Float`'s format
+  from the field, and the library named it (`Float::Le(F := F, a := …, b :=
+  …)`) until
+  [value-param-constructor-implicit-inference](../issues/value-param-constructor-implicit-inference.md)
+  (closed 2026-10-21) read it off the fields; the plain spelling is used now.
 
 ## 13. Round 3 as landed (`float-error`)
 
