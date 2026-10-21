@@ -564,7 +564,7 @@ roadmap's.
 | round | submilestone | content |
 |---|---|---|
 | 1 | `float-values` | `Format`, the standard formats as values, `Finite(F)`, `Float(F)`, `Dyadic` with its ring and order, `val`, `≈`/`<` with `StrictOrder`, and the constants (`zero`, `min_subnormal`, `min_normal`, `max_finite`) canonical for every format. Landed; §10. |
-| 2 | `float-rounding` | Successor and predecessor with their spacing, `RoundsTo`, `round` on dyadics with sticky, `round_rat`, `round::correct`, uniqueness, the mode laws, and the transfer lemma to any `OrderedField`. |
+| 2 | `float-rounding` | Successor and predecessor with their spacing, `RoundsTo`, `round` on dyadics with sticky, `round_rat`, `round::correct`, uniqueness, the mode laws. Part A (the relation, the executable rounding and its correctness in every mode, sign symmetry) landed, §11; part B (successor/predecessor with spacing, uniqueness, bracketing, monotonicity, idempotence) landed, §12. The transfer lemma to any `OrderedField` moved to `float-reals`, its only customer. |
 | 3 | `float-error` | The standard model, absolute subnormal bounds, `ulp`, γ-composition. |
 | 4 | `float-arith` | Add/sub/mul/fma with value, zero-sign and special-value theorems; then div and sqrt by sticky quotients; format conversion. |
 | 5 | `float-eft` | Sterbenz, Fast2Sum, TwoSum, TwoProduct (by fma), Veltkamp; then Kahan summation. |
@@ -671,3 +671,147 @@ Observations for later rounds:
 - `Dyadic::rat_add` is the costliest item in the module (a `ring` call over
   large atoms) but well inside the rails.
 
+## 11. Round 2 as landed, part A (`float-rounding`)
+
+Module: `lib/std/float/round.hthr`, with general facts added to their home
+files: `Nat::shr` and its floor bounds, `pow_le_pow_r`,
+`lt_of_mul_lt_mul_r` and the parity steps in `nat.hthr`; the midpoint and
+subtraction-order lemmas in `rat.hthr`; `Option::none_ne_some` in
+`option.hthr`; `Dyadic::le_of_mant_le` and its converses in `dyadic.hthr`;
+`Specials::inf_free`, `Format::canonical_elim`, `Format::max_mag_bounds`
+and `Float::neg` (prefix `-`) in `float.hthr`. Tests are in
+`crates/elab/tests/lib_std_float_round.rs`.
+
+**The relation.** `RoundsTo(F, mode, x, r)` is stated at `Rat` by cases on
+the result and the mode. A finite result is the greatest float at or below
+`x` (`Finite::Below`), the least at or above (`Finite::Above`), or a
+nearest one (`Finite::Nearest`, no float closer) with the tie rule:
+`NearestEven` says every other nearest float has the same value or the
+result's significand is even, `NearestAway` that every nearest float is no
+larger in magnitude. Overflow follows IEEE §7.4: a nearest mode returns
+infinity from the threshold `(2^(prec+1) - 1) · 2^(qmax - 1)` on
+(`Format::ovf`) and a finite nearest result carries `Fits` (below the
+threshold, when the format has infinities); a directed mode returns
+infinity only past every finite float (`Exceeds`/`Undercuts`). A format
+without infinities saturates: a directed rounding past the largest float
+is the largest float, as `TowardPos`'s second disjunct says.
+
+**The computation goes through half-units.** Every finite float is a whole
+number of half-units `2^(qmin - 1)` (`Finite::H`, `Format::grid`), so an
+exact nonnegative value is described to the rounding by `h`, its magnitude
+in half-units rounded down, and a sticky bit (`Format::Approx`). Every
+float-against-`x` comparison is then an integer comparison
+(`Format::le_cut`, `ge_cut`), which is what makes the proofs `omega`-sized.
+The neighbours come from `h` alone: the exponent is the least `e <= span`
+at which `h` shifted right by `e + 1` fits the significand
+(`Format::e_of`, a bounded search that starts at the least exponent, so a
+result above it is normal), the cell's float is `(h >> (e+1), e)`
+(`Format::down`), and the step up is one significand higher, carried into
+the next binade at the top of one, or none past the largest float
+(`Format::up`, characterised by `UpIs`/`UpCases`). The midpoint test
+compares `h`'s offset into the cell with `2^e` and, on equality, the
+sticky bit. Half-units rather than units are what let the midpoint of a
+subnormal cell be a grid point.
+
+**API, and how it differs from §5.2.** `Format::round_h(mode, h, st)` is the
+sticky-aware primitive the arithmetic rounds will call: they compute their
+exact result at half-unit resolution with a sticky bit. `round_signed` adds
+the sign, rounding the magnitude under the conjugate mode
+(`Mode::conj`) and negating. `Format::round_dyadic(mode, d)` rounds an exact
+dyadic by shifting, and `Format::round_rat(mode, x)` rounds a rational by
+integer division with the remainder as sticky. Their theorems are
+`round_h_correct`, `round_signed_correct`, `round_dyadic_correct` and
+`round_rat_correct`, all for every mode; §5.2's single `round(F, mode, neg,
+d, sticky)` was not kept, because a sticky bit at a dyadic's own exponent
+does not locate a value at half-unit resolution when that exponent is
+coarser than the grid. Sign symmetry is `Format::rounds_neg`:
+`RoundsTo(F, mode.conj(), -x, r) → RoundsTo(F, mode, x, -r)`. An exact zero
+rounds to `+0`; a negative value that rounds to zero gives `-0`.
+
+**Cost.** `round_rat` evaluates through `Nat::divmod`, whose cost is linear
+in the quotient, so literal `round_rat` tests stay on E2M1-sized values;
+`round_dyadic` and `round_h` evaluate through the kernel's accelerated
+`half`, `leb` and `le_dec`, so E5M2 and E4M3 overflow cases compute by
+`refl`. A decision that uses `Nat::eq_dec` is not accelerated and ran out of
+fuel at E5M2's magnitudes; the module tests equality as `¬(n + 1 <= m)`
+instead. A binary division for `round_rat` is
+[float-round-rat-division-cost](../issues/float-round-rat-division-cost.md).
+
+Observations for later rounds:
+
+- `omega` splits a conjunction hypothesis only one level deep, and it
+  reflects every arithmetic hypothesis in scope, `Rat` relations included
+  (they unfold to cross-multiplied `Int` facts). The midpoint proof first
+  checked in about a minute with every fact in one context; split into
+  small lemmas whose contexts hold only the integers it needs, and with the
+  arithmetic facts bound one per `let`, it checks in seconds.
+- `omega` does not reason about truncated `Nat` subtraction, so every use
+  feeds it a `Nat::sub_add_cancel` fact, as round 1 found.
+- Dependent definitions (the step up depends on proofs from the search) are
+  written as helper functions that take the decision as an argument
+  (`down_at`, `up_at`, `up_in`), so a proof can match on the same decision
+  with a short motive.
+- The transfer lemma to an `OrderedField` has no customer before
+  `float-reals`, so it moved there.
+
+## 12. Round 2 as landed, part B (`float-rounding`)
+
+Same module, `lib/std/float/round.hthr`; new general facts went home too:
+`Nat::not_even_succ_of_even` in `nat.hthr`, and the distance-to-midpoint
+lemmas (`mid_le_of_dist`, `le_mid_of_dist`, `le_of_double_le` and their
+subtraction forms) in `rat.hthr`.
+
+**Uniqueness.** `Format::rounds_unique` says two correct roundings of one
+value in one mode are `Float::Same`: finite with equal values (so `+0` and
+`-0` agree), or the same infinity. The directed modes are unique from the
+relation alone (`Below`/`Above` are extremal; a saturated result and an
+infinity exclude each other through `has_inf`). The nearest modes need more
+than the relation states, because "every other nearest float" could in
+principle include a third float. It comes from the computation:
+two nearest floats to a nonnegative value are either equal in value or
+exactly the cell's float and its step up (`Format::near_split`), and those
+two have significands of different parity (`UpIs.odd`, the converse of
+`UpIs.even`). Two canonical floats with equal values have equal fields
+(`Format::canon_eq`, `Finite::parts_of_same`), so parity is a property of
+the value. Negative values flip to positive with `nearest_flip`. Two
+corollaries: `rounds_is_round_rat` (every correct rounding is the
+executable one) and `rounds_exact`/`round_rat_exact` (a representable value
+rounds to itself in every mode).
+
+**Neighbours.** `Finite::next_up(f)` is the least float strictly above `f`,
+`None` above the largest; `next_down` is it through negation. Above a
+nonnegative float it is the cell's step up from the float's own half-unit
+count; above a negative one it is the greatest float strictly below the
+magnitude, negated; both zeros step to the least positive subnormal. The
+specifications are `Finite::IsNextUp`/`IsNextDown` (strictly beyond, and
+least/greatest among those beyond), proved by `next_up_spec` and
+`next_down_spec`. Spacing is `next_up_spacing`: above a nonnegative float
+the next is `2^(bexp + 1)` half-units further, one quantum `2^(bexp +
+qmin)` in value (`next_up_gap`), across binade boundaries included because
+the carry keeps the lower float's exponent.
+
+**Mode laws.** `Float::Le` extends the value order by `-∞` least and `+∞`
+greatest, with NaN unrelated. Every finite correct rounding is one of the
+value's two neighbours (`rounds_faithful`), so
+
+- bracketing: `rounds_ge_down` and `rounds_le_up` put a correct rounding in
+  any mode between the roundings toward `-∞` and toward `+∞`;
+- monotonicity: `rounds_mono` (and `round_rat_mono` for the executable
+  rounding) say `x <= y` never rounds lower. The only case the neighbour
+  argument leaves is the lower value rounding up past where the higher one
+  rounds down; each directed mode excludes it directly, `TowardZero`
+  through the zero float, and in a nearest mode it forces the two values to
+  be one tie (`near_cross`), where uniqueness finishes it. That needs
+  `rounds_respects` (a correct rounding depends on the value up to `≈`).
+- `rounds_exact` above is idempotence.
+
+Observations:
+
+- `omega` sees a `Rat` `≈` fact as a cross-multiplied equation between
+  opaque atoms, so a distance fact like `f.dist(x) ≈ x - f.val()` does not
+  connect to `f.val() < g.val()`; the order lemmas on subtraction
+  (`le_of_sub_le_sub_l`) do it in one step.
+- `Float::Le(Float::Fin(f), Float::Inf(…))` cannot infer `Float`'s format
+  from the field; the library names it (`Float::Le(F := F, a := …, b :=
+  …)`). That is
+  [value-param-constructor-implicit-inference](../issues/value-param-constructor-implicit-inference.md).

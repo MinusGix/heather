@@ -23,3 +23,8 @@ fn Option::unwrap_or<A>(self o: Option<A>, d: A) → A {
 theorem Option::some_inj<A>(a, b: A, p: Some(a) = Some(b)): a = b {
     j(p, λ y q => a = y.unwrap_or(a), refl)
 }
+
+// `None` is not `Some`: from such an equation anything follows.
+theorem Option::none_ne_some<A>(a: A, p: None<A>() = Some(a), T: Type): T {
+    j(sym(p), λ y q => match y as λ _ => Type { None => T, Some(_) => A }, a)
+}

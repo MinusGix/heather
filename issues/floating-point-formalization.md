@@ -5,7 +5,7 @@ labels: [mathematics,reals,floating-point,design]
 area: mathematics
 milestone: [math-float]
 created: 2026-10-20
-updated: 2026-10-20
+updated: 2026-10-21
 ---
 
 Owns the roadmap's `math-float` milestone (`docs/roadmap.md`): binary
@@ -55,4 +55,18 @@ of the area.
   embedding into Rat) and `lib/std/float/float.hthr` (formats, canonical
   finite floats, `Float(F)` as `Extended`, value order, generic constants).
   What changed from the sketch is in design §10.
-
+- 2026-10-21: `Float(F)` became an inductive with a value parameter after
+  PR #89; round 1 merged as PR #85.
+- 2026-10-21: round 2 part A (`float-rounding`): `lib/std/float/round.hthr`
+  with `RoundsTo` for all five modes, the executable rounding through
+  half-units and a sticky bit, its correctness in every mode, sign
+  symmetry, `round_dyadic` and `round_rat`. Design §11. Part B
+  (successor/predecessor, uniqueness, the mode laws) is next; the transfer
+  lemma moved to `float-reals`. `round_rat`'s evaluation cost is
+  [[float-round-rat-division-cost]].
+- 2026-10-21: round 2 part B, on the same PR: uniqueness
+  (`rounds_unique`, through the computed neighbour pair for the nearest
+  modes), exactness/idempotence, `next_up`/`next_down` with their
+  specification and spacing, `Float::Le`, faithfulness, bracketing and
+  monotonicity. Design §12. An inference gap it hit is
+  [[value-param-constructor-implicit-inference]].

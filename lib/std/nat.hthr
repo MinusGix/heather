@@ -929,6 +929,14 @@ theorem Nat::mul_le_mono(self a, b, c, d: Nat, h1: a <= b, h2: c <= d): a * c <=
              c.mul_le_mono_r(a, b, h1), b.mul_le_mono_l(c, d, h2))
 }
 
+// A common right factor cancels from a strict comparison.
+theorem Nat::lt_of_mul_lt_mul_r(self a, b, c: Nat, h: a * c < b * c): a < b {
+    match b.le_dec(a) {
+        Inl(le) => false_elim((a * c).lt_irrefl(Succ(a * c).le_trans(b * c, a * c, h, Nat::mul_le_mono_r(c, b, a, le)))),
+        Inr(no) => Nat::lt_of_not_le(a, b, no),
+    }
+}
+
 // The lexicographic order on `(a, r)` flattened into `a * n + r` for `r < n`
 // (docs/mutual-recursion-design.md §4): a smaller `a` wins whatever the ranks,
 // and an unchanged-or-smaller `a` needs a smaller rank. A mutual `decreases`
@@ -1272,6 +1280,23 @@ theorem Nat::le_pow_self(self a, n: Nat, ha: 1 <= a, hn: 1 <= n): a <= a.pow(n) 
     }(hn)
 }
 
+// Powers of a base at least one grow with the exponent.
+theorem Nat::pow_le_pow_add(self a, i: Nat, ha: 1 <= a, d: Nat): a.pow(i) <= a.pow(i + d) {
+    match d {
+        Zero => a.pow(i).le_refl(),
+        Succ(e) => {
+            let ih: (a.pow(i) <= a.pow(i + e)) = a.pow_le_pow_add(i, ha, e);
+            let grow: (a.pow(i + e) * 1 <= a.pow(i + e) * a) = a.pow(i + e).mul_le_mono_l(1, a, ha);
+            let step: (a.pow(i + e) <= a.pow(i + e) * a) = j(a.pow(i + e).add_left_zero(), λ y _ => y <= a.pow(i + e) * a, grow);
+            a.pow(i).le_trans(a.pow(i + e), a.pow(i + e) * a, ih, step)
+        },
+    }
+}
+
+theorem Nat::pow_le_pow_r(self a, i, k: Nat, ha: 1 <= a, h: i <= k): a.pow(i) <= a.pow(k) {
+    j(i.le_add(k, h), λ y _ => a.pow(i) <= a.pow(y), a.pow_le_pow_add(i, ha, k -i))
+}
+
 fn Nat::fact(self n: Nat) → Nat { match n { Zero => 1, Succ(k) => Succ(k) * k.fact() } }
 
 theorem Nat::fact_zero(): (0).fact() = 1 { refl }
@@ -1351,6 +1376,71 @@ theorem Nat::half_double(self n: Nat): (n + n).half() = n {
     }
 }
 
+// Halving loses at most one: `2·⌊n/2⌋ <= n <= 2·⌊n/2⌋ + 1`.
+theorem Nat::half_add_le(self n: Nat): n.half() + n.half() <= n {
+    match n {
+        Zero => trivial,
+        Succ(k) => match k {
+            Zero => trivial,
+            Succ(l) => {
+                let ih: (l.half() + l.half() <= l) = l.half_add_le();
+                j(sym(l.half().add_succ_left(l.half())), λ y _ => y <= Succ(l), ih)
+            },
+        },
+    }
+}
+
+theorem Nat::le_succ_half_add(self n: Nat): n <= Succ(n.half() + n.half()) {
+    match n {
+        Zero => trivial,
+        Succ(k) => match k {
+            Zero => trivial,
+            Succ(l) => {
+                let ih: (l <= Succ(l.half() + l.half())) = l.le_succ_half_add();
+                j(sym(l.half().add_succ_left(l.half())), λ y _ => l <= y, ih)
+            },
+        },
+    }
+}
+
+theorem Nat::mul_two(self n: Nat): n * 2 = n + n { Nat::cong(λ (w: Nat) => w + n, n.add_left_zero()) }
+
+// `⌊n / 2^k⌋`, by halving `k` times: the shift a rounding takes.
+fn Nat::shr(self n, k: Nat) → Nat { match k { Zero => n, Succ(i) => n.half().shr(i) } }
+
+// The shift is the floor of the quotient: `⌊n/2^k⌋ · 2^k <= n < (⌊n/2^k⌋ + 1) · 2^k`.
+theorem Nat::shr_mul_le(self k: Nat): (n: Nat) → n.shr(k) * Nat::pow(2, k) <= n {
+    match k {
+        Zero => λ n => j(sym(n.add_left_zero()), λ y _ => y <= n, n.le_refl()),
+        Succ(i) => λ n => {
+            let s = n.half().shr(i);
+            let p = Nat::pow(2, i);
+            let ih: (s * p <= n.half()) = Nat::shr_mul_le(i, n.half());
+            let doubled: ((s * p) * 2 <= n.half() * 2) = Nat::mul_le_mono_r(2, s * p, n.half(), ih);
+            let back: (n.half() * 2 <= n) = j(sym(n.half().mul_two()), λ y _ => y <= n, n.half_add_le());
+            let assoc: ((s * p) * 2 = s * (p * 2)) = s.mul_assoc(p, 2);
+            j(assoc, λ y _ => y <= n, ((s * p) * 2).le_trans(n.half() * 2, n, doubled, back))
+        },
+    }
+}
+
+theorem Nat::lt_succ_shr_mul(self k: Nat): (n: Nat) → n < Succ(n.shr(k)) * Nat::pow(2, k) {
+    match k {
+        Zero => λ n => j(sym(n.add_left_zero()), λ y _ => n <= y, n.le_refl()),
+        Succ(i) => λ n => {
+            let s = n.half().shr(i);
+            let p = Nat::pow(2, i);
+            let ih: (Succ(n.half()) <= Succ(s) * p) = Nat::lt_succ_shr_mul(i, n.half());
+            let doubled: (Succ(n.half()) * 2 <= (Succ(s) * p) * 2) = Nat::mul_le_mono_r(2, Succ(n.half()), Succ(s) * p, ih);
+            let two: (Succ(n.half()) * 2 = Succ(Succ(n.half() + n.half()))) =
+                trans(Succ(n.half()).mul_two(), Nat::cong_succ(n.half().add_succ_left(n.half())));
+            let low: (Succ(n) <= Succ(n.half()) * 2) = j(sym(two), λ y _ => Succ(n) <= y, n.le_succ_half_add());
+            let assoc: ((Succ(s) * p) * 2 = Succ(s) * (p * 2)) = Succ(s).mul_assoc(p, 2);
+            j(assoc, λ y _ => Succ(n) <= y, Succ(n).le_trans(Succ(n.half()) * 2, (Succ(s) * p) * 2, low, doubled))
+        },
+    }
+}
+
 theorem Nat::even_double(self n: Nat): Nat::Even(n + n) {
     match n {
         Zero => trivial,
@@ -1363,6 +1453,34 @@ theorem Nat::even_or_odd(self n: Nat): Nat::Even(n) ∨ Nat::Odd(n) {
         Zero => Inl(trivial),
         Succ(k) => match k { Zero => Inr(trivial), Succ(l) => l.even_or_odd() },
     }
+}
+
+theorem Nat::even_succ_of_odd(self n: Nat): Nat::Odd(n) → Nat::Even(Succ(n)) {
+    match n {
+        Zero => λ h => false_elim(h),
+        Succ(k) => match k {
+            Zero => λ _ => trivial,
+            Succ(l) => { let ih = l.even_succ_of_odd(); λ h => ih(h) },
+        },
+    }
+}
+
+theorem Nat::even_succ_of_not_even(self n: Nat, h: ¬Nat::Even(n)): Nat::Even(Succ(n)) {
+    match n.even_or_odd() { Inl(e) => false_elim(h(e)), Inr(o) => n.even_succ_of_odd(o) }
+}
+
+theorem Nat::not_even_succ_of_even(self n: Nat): Nat::Even(n) → ¬Nat::Even(Succ(n)) {
+    match n {
+        Zero => λ _ (b: Nat::Even(1)) => b,
+        Succ(k) => match k {
+            Zero => λ (h: Nat::Even(1)) _ => false_elim(h),
+            Succ(l) => { let ih = l.not_even_succ_of_even(); λ h => ih(h) },
+        },
+    }
+}
+
+theorem Nat::even_pow_two(self k: Nat): Nat::Even(Nat::pow(2, Succ(k))) {
+    j(sym(Nat::pow(2, k).mul_two()), λ y _ => Nat::Even(y), Nat::pow(2, k).even_double())
 }
 
 theorem Nat::not_even_and_odd(self n: Nat): ¬(Nat::Even(n) ∧ Nat::Odd(n)) {
