@@ -1,0 +1,604 @@
+// FunctionIR's structured regions lowered to x86 by a Heather function proved
+// correct once (issues/function-ir-verified-lowering.md, round 2:
+// conditionals).
+//
+// The lowering emits a label program (x86_64_asm) and threads round 1's
+// abstract register file through it. A dataflow leaf is one instruction
+// block (`lower_nodes`); a conditional finds its one-bit condition in a
+// register, TESTs it, JEs to its second arm, and lowers both arms from the
+// same file. At the join only what both arms' files agree on survives
+// (`File::meet`), so a placement that leaves an arm's outputs in different
+// registers makes a later lookup fail and `lower` refuses, as a clobber does
+// in round 1. The finished program is checked once by evaluation
+// (`Prog::laid_out`), and the theorem reads its jump landings off that check.
+// Like round 1 it is over every placement: whenever `lower` returns a
+// program, the program, resident at any origin, runs fetched from its start
+// to its end and leaves the outputs in their registers.
+
+import function_ir;
+import function_ir_lower;
+import x86_64;
+import x86_64_block;
+import x86_64_fetch;
+import x86_64_data_read;
+import x86_64_fetched_code;
+import x86_64_layout;
+import x86_64_asm;
+import x86_64_asm_runs;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+
+// ---------------------------------------------------------------------------
+// The join: what both arms' files agree on
+
+fn slot_meet(left, right: Option<Held>) → Option<Held> {
+    match left {
+        None => None,
+        Some(a) => match right { None => None, Some(b) => match a.eq_dec(b) { Inl(_) => Some(a), Inr(_) => None } },
+    }
+}
+
+fn File::meet(self left: File, right: File) → File {
+    File(at := λ (register: Gpr) => slot_meet(left.at(register), right.at(register)))
+}
+
+theorem slot_meet_left(values: Valuation(), word: BitVec(64), left, right: Option<Held>):
+    SlotRep(values, left, word) → SlotRep(values, slot_meet(left, right), word) {
+    match left {
+        None => λ _ => trivial,
+        Some(a) => λ rep => match right as λ r => SlotRep(values, slot_meet(Some(a), r), word) {
+            None => trivial,
+            Some(b) => match a.eq_dec(b) as λ d => SlotRep(values, match d { Inl(_) => Some(a), Inr(_) => None }, word) {
+                Inl(_) => rep,
+                Inr(_) => trivial,
+            },
+        },
+    }
+}
+
+theorem slot_meet_right(values: Valuation(), word: BitVec(64), left, right: Option<Held>):
+    SlotRep(values, right, word) → SlotRep(values, slot_meet(left, right), word) {
+    match left {
+        None => λ _ => trivial,
+        Some(a) => match right as λ r => SlotRep(values, r, word) → SlotRep(values, slot_meet(Some(a), r), word) {
+            None => λ _ => trivial,
+            Some(b) => λ rep => match a.eq_dec(b) as λ d => SlotRep(values, match d { Inl(_) => Some(a), Inr(_) => None }, word) {
+                Inl(same) => j(sym(same), λ h _ => h.Rep(values, word), rep),
+                Inr(_) => trivial,
+            },
+        },
+    }
+}
+
+theorem File::meet_left(self left: File, values: Valuation(), gprs: Gprs, right: File,
+    represents: left.Represents(values, gprs)): left.meet(right).Represents(values, gprs) {
+    λ register => slot_meet_left(values, read_gpr(register, gprs), left.at(register), right.at(register), represents(register))
+}
+
+theorem File::meet_right(self left: File, values: Valuation(), gprs: Gprs, right: File,
+    represents: right.Represents(values, gprs)): left.meet(right).Represents(values, gprs) {
+    λ register => slot_meet_right(values, read_gpr(register, gprs), left.at(register), right.at(register), represents(register))
+}
+
+// ---------------------------------------------------------------------------
+// Emitting a structured region into a program
+
+// What emitting leaves: the program so far, the file, the placement not
+// yet used, and the label names used.
+record Emitted { prog: Prog, file: File, placement: List<Gpr>, names: Nat }
+
+// The placement after `nodes` took theirs, one each.
+fn skip_nodes(nodes: List<Node>, placement: List<Gpr>) → List<Gpr> {
+    match nodes {
+        Nil => placement,
+        Cons(_, rest) => match placement { Nil => Nil, Cons(_, later) => skip_nodes(rest, later) },
+    }
+}
+
+// A dataflow leaf: its nodes as one block.
+fn emit_nodes(prog: Prog, file: File, nodes: List<Node>, placement: List<Gpr>, names: Nat) → Option<Emitted> {
+    match lower_nodes(nodes, placement, file) {
+        None => None,
+        Some(lowered) => Some(Emitted(At(prog, 0, Block(lowered.code)), lowered.file, skip_nodes(nodes, placement), names)),
+    }
+}
+
+// The region after `prog`. A conditional's labels are named `names + 1`
+// (its second arm) and `names + 2` (the join).
+fn StructuredRegion::emit(self region: StructuredRegion, prog: Prog, file: File, placement: List<Gpr>, names: Nat) → Option<Emitted> {
+    match region {
+        Dataflow(body) => emit_nodes(prog, file, body.nodes, placement, names),
+        Sequence(prefix, continuation) => match emit_nodes(prog, file, prefix.nodes, placement, names) {
+            None => None,
+            Some(first) => continuation.emit(first.prog, first.file, first.placement, first.names),
+        },
+        Compose(prefix, continuation) => match prefix.emit(prog, file, placement, names) {
+            None => None,
+            Some(first) => continuation.emit(first.prog, first.file, first.placement, first.names),
+        },
+        Conditional(_, condition, _, _, when_true, when_false) => match file.find(Held(condition, Bit)) {
+            None => None,
+            Some(found) => match when_true.emit(prog.branch_label(found.register, Succ(names)), file, placement, Succ(Succ(names))) {
+                None => None,
+                Some(yes) => match when_false.emit(yes.prog.else_label(Succ(names), Succ(Succ(names))), file, yes.placement, yes.names) {
+                    None => None,
+                    Some(no) => Some(Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file), no.placement, no.names)),
+                },
+            },
+        },
+    }
+}
+
+// What emitting proves: the program grew from `prog`, and in a laid-out
+// program it is part of, running from where `prog` ends to where the
+// emitted code ends takes registers `file` describes, where `facts` hold,
+// to registers the new file describes.
+fn Emits<M>(site: Site<M>, values: Valuation(), prog: Prog, file: File, facts: Type, out: Emitted) → Type {
+    prog.Within(out.prog) ∧ (out.prog.Within(site.program) →
+        site.Runs(prog_len(prog), prog_len(out.prog),
+            λ (g: Gprs) => file.Represents(values, g) ∧ facts,
+            λ (g: Gprs) => out.file.Represents(values, g)))
+}
+
+fn MayEmit<M>(site: Site<M>, values: Valuation(), prog: Prog, file: File, facts: Type, out: Option<Emitted>) → Type {
+    out.All(λ (emitted: Emitted) => Emits<M>(site, values, prog, file, facts, emitted))
+}
+
+theorem emits_seq<M>(site: Site<M>, values: Valuation(), prog: Prog, file: File, first_facts, second_facts: Type,
+    first, out: Emitted, first_emits: Emits<M>(site, values, prog, file, first_facts, first),
+    second_emits: Emits<M>(site, values, first.prog, first.file, second_facts, out)):
+    Emits<M>(site, values, prog, file, first_facts ∧ second_facts, out) {
+    ⟨prog.within_trans(first.prog, out.prog, first_emits.left, second_emits.left),
+     λ within => {
+        let first_runs = first_emits.right(first.prog.within_trans(out.prog, site.program, second_emits.left, within));
+        site.runs_trans(prog_len(prog), prog_len(first.prog), prog_len(out.prog),
+            λ (g: Gprs) => file.Represents(values, g) ∧ (first_facts ∧ second_facts),
+            λ (g: Gprs) => first.file.Represents(values, g) ∧ second_facts,
+            λ (g: Gprs) => out.file.Represents(values, g),
+            site.runs_weaken(prog_len(prog), prog_len(first.prog),
+                λ (g: Gprs) => (file.Represents(values, g) ∧ first_facts) ∧ second_facts,
+                λ (g: Gprs) => first.file.Represents(values, g) ∧ second_facts,
+                λ (g: Gprs) => file.Represents(values, g) ∧ (first_facts ∧ second_facts),
+                λ (g: Gprs) => first.file.Represents(values, g) ∧ second_facts,
+                site.runs_frame(prog_len(prog), prog_len(first.prog),
+                    λ (g: Gprs) => file.Represents(values, g) ∧ first_facts,
+                    λ (g: Gprs) => first.file.Represents(values, g), second_facts, first_runs),
+                λ g held => ⟨⟨held.left, held.right.left⟩, held.right.right⟩, λ g held => held),
+            second_emits.right(within))
+     }⟩
+}
+
+theorem may_emit_seq<M>(site: Site<M>, values: Valuation(), prog: Prog, file: File, first_facts, second_facts: Type,
+    first: Emitted, first_emits: Emits<M>(site, values, prog, file, first_facts, first), second: Option<Emitted>):
+    MayEmit<M>(site, values, first.prog, first.file, second_facts, second) →
+    MayEmit<M>(site, values, prog, file, first_facts ∧ second_facts, second) {
+    match second {
+        None => λ _ => trivial,
+        Some(out) => λ second_emits => emits_seq<M>(site, values, prog, file, first_facts, second_facts, first, out,
+            first_emits, second_emits),
+    }
+}
+
+theorem emit_nodes_emits<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), values: Valuation(), prog: Prog,
+    file: File, nodes: List<Node>, placement: List<Gpr>, names: Nat):
+    MayEmit<M>(site, values, prog, file, NodesHold(values, nodes), emit_nodes(prog, file, nodes, placement, names)) {
+    (match lower_nodes(nodes, placement, file) as λ lowered =>
+        MayKeep<M>(values, file, NodesHold(values, nodes), lowered) →
+        MayEmit<M>(site, values, prog, file, NodesHold(values, nodes), match lowered {
+            None => None,
+            Some(l) => Some(Emitted(At(prog, 0, Block(l.code)), l.file, skip_nodes(nodes, placement), names)),
+        }) {
+        None => λ _ => trivial,
+        Some(lowered) => λ keeps => ⟨prog.within_then(0, Block(lowered.code)),
+            λ within => site.runs_block(site.program.laid_out_fits(laid), within.witness, prog, 0, lowered.code, within.proof,
+                λ (g: Gprs) => file.Represents(values, g) ∧ NodesHold(values, nodes),
+                λ (g: Gprs) => lowered.file.Represents(values, g),
+                λ s held => keeps(s, held.left, held.right))⟩,
+    })(lower_nodes_keeps<M>(values, nodes, placement, file))
+}
+
+// Where the condition's register is nonzero, the condition holds and its
+// first arm's equations do; where it is zero, the second's.
+theorem when_nonzero(values: Valuation(), inputs: Ports, condition: Nat, arguments, outputs: Ports,
+    when_true, when_false: StructuredRegion, clear: !values(1, condition).head_bit() = False,
+    holds: StructuredRegionHolds(values, Conditional(inputs, condition, arguments, outputs, when_true, when_false))):
+    StructuredRegionHolds(values, when_true) {
+    (match values(1, condition).head_bit() as λ h => !h = False →
+        (match h { False => StructuredRegionHolds(values, when_false), True => StructuredRegionHolds(values, when_true) }) →
+        StructuredRegionHolds(values, when_true) {
+        False => λ no _ => absurd(no),
+        True => λ _ held => held,
+    })(clear, holds)
+}
+
+theorem when_zero(values: Valuation(), inputs: Ports, condition: Nat, arguments, outputs: Ports,
+    when_true, when_false: StructuredRegion, set: !values(1, condition).head_bit() = True,
+    holds: StructuredRegionHolds(values, Conditional(inputs, condition, arguments, outputs, when_true, when_false))):
+    StructuredRegionHolds(values, when_false) {
+    (match values(1, condition).head_bit() as λ h => !h = True →
+        (match h { False => StructuredRegionHolds(values, when_false), True => StructuredRegionHolds(values, when_true) }) →
+        StructuredRegionHolds(values, when_false) {
+        False => λ _ held => held,
+        True => λ no _ => absurd(no),
+    })(set, holds)
+}
+
+// The conditional, its arms emitted: TEST, JE, the first arm, JMP, the
+// second arm, the join.
+theorem branch_emits<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), values: Valuation(), prog: Prog, file: File,
+    inputs: Ports, condition: Nat, arguments, outputs: Ports, when_true, when_false: StructuredRegion,
+    found: Found(file, Held(condition, Bit)), names: Nat, yes, no: Emitted,
+    yes_emits: Emits<M>(site, values, prog.branch_label(found.register, Succ(names)), file, StructuredRegionHolds(values, when_true), yes),
+    no_emits: Emits<M>(site, values, yes.prog.else_label(Succ(names), Succ(Succ(names))), file, StructuredRegionHolds(values, when_false), no)):
+    Emits<M>(site, values, prog, file,
+        StructuredRegionHolds(values, Conditional(inputs, condition, arguments, outputs, when_true, when_false)),
+        Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file), no.placement, no.names)) {
+    let register = found.register;
+    let else_name = Succ(names);
+    let join_name = Succ(Succ(names));
+    let branched = prog.branch_label(register, else_name);
+    let jumped = At(yes.prog, 0, Jmp(join_name));
+    let second = yes.prog.else_label(else_name, join_name);
+    let to_branch = prog.within_step(prog.test_label(register), 0, Jcc(E, else_name),
+        prog.within_then(0, Block([TestRR(register, register)])));
+    let to_second = prog.within_step(jumped, else_name, Block([]),
+        prog.within_step(yes.prog, 0, Jmp(join_name), prog.within_trans(branched, yes.prog, to_branch, yes_emits.left)));
+    let holds = StructuredRegionHolds(values, Conditional(inputs, condition, arguments, outputs, when_true, when_false));
+    let pre = λ (g: Gprs) => file.Represents(values, g) ∧ holds;
+    let post = λ (g: Gprs) => yes.file.meet(no.file).Represents(values, g);
+    ⟨prog.within_step(no.prog, join_name, Block([]), prog.within_trans(second, no.prog, to_second, no_emits.left)),
+     λ within => {
+        let program = site.program;
+        let labels = asm_labels(program);
+        let unique = program.laid_out_unique(laid);
+        let lands = program.laid_out_lands(laid);
+        let no_in = no.prog.within_before(join_name, Block([]), program, within);
+        let second_in = second.within_trans(no.prog, program, no_emits.left, no_in);
+        let jumped_in = jumped.within_before(else_name, Block([]), program, second_in);
+        let yes_in = yes.prog.within_before(0, Jmp(join_name), program, jumped_in);
+        let branched_in = branched.within_trans(yes.prog, program, yes_emits.left, yes_in);
+        let tested_in = prog.test_label(register).within_before(0, Jcc(E, else_name), program, branched_in);
+        let else_lands = j(label_target(second_in.witness, program, jumped, names, Block([]), unique, second_in.proof),
+            λ to _ => JumpsForward(prog_len(prog.test_label(register)), 6,
+                asm_jump_of(labels, prog_len(prog.test_label(register)), Jcc(E, else_name)), to),
+            jcc_lands(labels, branched_in.witness, program, prog.test_label(register), 0, E, else_name, lands, branched_in.proof));
+        let join_lands = j(label_target(within.witness, program, no.prog, Succ(names), Block([]), unique, within.proof),
+            λ to _ => JumpsForward(prog_len(yes.prog), 5, asm_jump_of(labels, prog_len(yes.prog), Jmp(join_name)), to),
+            jmp_lands(labels, jumped_in.witness, program, yes.prog, 0, join_name, lands, jumped_in.proof));
+        let selects = λ (g: Gprs) (represents: file.Represents(values, g)) =>
+            register.tests_zero_bit(g, values(1, condition), found.at.rep(values, g, represents));
+        site.runs_branch(program.laid_out_fits(laid), prog, register, else_name, join_name, yes.prog, no.prog,
+            tested_in.witness, tested_in.proof, branched_in.witness, branched_in.proof, jumped_in.witness, jumped_in.proof,
+            else_lands, join_lands, pre, post,
+            site.runs_weaken(prog_len(branched), prog_len(yes.prog),
+                λ (g: Gprs) => file.Represents(values, g) ∧ StructuredRegionHolds(values, when_true),
+                λ (g: Gprs) => yes.file.Represents(values, g),
+                λ (g: Gprs) => pre(g) ∧ register.tests_zero(g) = False, post,
+                yes_emits.right(yes_in),
+                λ g held => ⟨held.left.left, when_nonzero(values, inputs, condition, arguments, outputs, when_true, when_false,
+                    trans(sym(selects(g, held.left.left)), held.right), held.left.right)⟩,
+                λ g represents => yes.file.meet_left(values, g, no.file, represents)),
+            site.runs_weaken(prog_len(second), prog_len(no.prog),
+                λ (g: Gprs) => file.Represents(values, g) ∧ StructuredRegionHolds(values, when_false),
+                λ (g: Gprs) => no.file.Represents(values, g),
+                λ (g: Gprs) => pre(g) ∧ register.tests_zero(g) = True, post,
+                no_emits.right(no_in),
+                λ g held => ⟨held.left.left, when_zero(values, inputs, condition, arguments, outputs, when_true, when_false,
+                    trans(sym(selects(g, held.left.left)), held.right), held.left.right)⟩,
+                λ g represents => yes.file.meet_right(values, g, no.file, represents)))
+     }⟩
+}
+
+theorem StructuredRegion::emit_emits<M>(self region: StructuredRegion, site: Site<M>, laid: site.program.laid_out().IsTrue(),
+    values: Valuation()): (prog: Prog) → (file: File) → (placement: List<Gpr>) → (names: Nat) →
+    MayEmit<M>(site, values, prog, file, StructuredRegionHolds(values, region), region.emit(prog, file, placement, names)) {
+    match region {
+        Dataflow(body) => λ prog file placement names => emit_nodes_emits<M>(site, laid, values, prog, file, body.nodes, placement, names),
+        Sequence(prefix, continuation) => λ prog file placement names =>
+            (match emit_nodes(prog, file, prefix.nodes, placement, names) as λ e =>
+                MayEmit<M>(site, values, prog, file, NodesHold(values, prefix.nodes), e) →
+                MayEmit<M>(site, values, prog, file, RegionHolds(prefix, values) ∧ StructuredRegionHolds(values, continuation), match e {
+                    None => None,
+                    Some(first) => continuation.emit(first.prog, first.file, first.placement, first.names),
+                }) {
+                None => λ _ => trivial,
+                Some(first) => λ first_emits => may_emit_seq<M>(site, values, prog, file, NodesHold(values, prefix.nodes),
+                    StructuredRegionHolds(values, continuation), first, first_emits,
+                    continuation.emit(first.prog, first.file, first.placement, first.names),
+                    continuation.emit_emits<M>(site, laid, values, first.prog, first.file, first.placement, first.names)),
+            })(emit_nodes_emits<M>(site, laid, values, prog, file, prefix.nodes, placement, names)),
+        Compose(prefix, continuation) => λ prog file placement names =>
+            (match prefix.emit(prog, file, placement, names) as λ e =>
+                MayEmit<M>(site, values, prog, file, StructuredRegionHolds(values, prefix), e) →
+                MayEmit<M>(site, values, prog, file, StructuredRegionHolds(values, prefix) ∧ StructuredRegionHolds(values, continuation), match e {
+                    None => None,
+                    Some(first) => continuation.emit(first.prog, first.file, first.placement, first.names),
+                }) {
+                None => λ _ => trivial,
+                Some(first) => λ first_emits => may_emit_seq<M>(site, values, prog, file, StructuredRegionHolds(values, prefix),
+                    StructuredRegionHolds(values, continuation), first, first_emits,
+                    continuation.emit(first.prog, first.file, first.placement, first.names),
+                    continuation.emit_emits<M>(site, laid, values, first.prog, first.file, first.placement, first.names)),
+            })(prefix.emit_emits<M>(site, laid, values, prog, file, placement, names)),
+        Conditional(inputs, condition, arguments, outputs, when_true, when_false) => λ prog file placement names =>
+            match file.find(Held(condition, Bit)) as λ located =>
+                MayEmit<M>(site, values, prog, file,
+                    StructuredRegionHolds(values, Conditional(inputs, condition, arguments, outputs, when_true, when_false)),
+                    match located {
+                        None => None,
+                        Some(found) => match when_true.emit(prog.branch_label(found.register, Succ(names)), file, placement, Succ(Succ(names))) {
+                            None => None,
+                            Some(yes) => match when_false.emit(yes.prog.else_label(Succ(names), Succ(Succ(names))), file, yes.placement, yes.names) {
+                                None => None,
+                                Some(no) => Some(Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file), no.placement, no.names)),
+                            },
+                        },
+                    }) {
+                None => trivial,
+                Some(found) =>
+                    (match when_true.emit(prog.branch_label(found.register, Succ(names)), file, placement, Succ(Succ(names))) as λ y =>
+                        MayEmit<M>(site, values, prog.branch_label(found.register, Succ(names)), file, StructuredRegionHolds(values, when_true), y) →
+                        MayEmit<M>(site, values, prog, file,
+                            StructuredRegionHolds(values, Conditional(inputs, condition, arguments, outputs, when_true, when_false)),
+                            match y {
+                                None => None,
+                                Some(yes) => match when_false.emit(yes.prog.else_label(Succ(names), Succ(Succ(names))), file, yes.placement, yes.names) {
+                                    None => None,
+                                    Some(no) => Some(Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file), no.placement, no.names)),
+                                },
+                            }) {
+                        None => λ _ => trivial,
+                        Some(yes) => λ yes_emits =>
+                            (match when_false.emit(yes.prog.else_label(Succ(names), Succ(Succ(names))), file, yes.placement, yes.names) as λ n =>
+                                MayEmit<M>(site, values, yes.prog.else_label(Succ(names), Succ(Succ(names))), file,
+                                    StructuredRegionHolds(values, when_false), n) →
+                                MayEmit<M>(site, values, prog, file,
+                                    StructuredRegionHolds(values, Conditional(inputs, condition, arguments, outputs, when_true, when_false)),
+                                    match n {
+                                        None => None,
+                                        Some(no) => Some(Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file), no.placement, no.names)),
+                                    }) {
+                                None => λ _ => trivial,
+                                Some(no) => λ no_emits => branch_emits<M>(site, laid, values, prog, file, inputs, condition, arguments, outputs,
+                                    when_true, when_false, found, names, yes, no, yes_emits, no_emits),
+                            })(when_false.emit_emits<M>(site, laid, values, yes.prog.else_label(Succ(names), Succ(Succ(names))), file,
+                                yes.placement, yes.names)),
+                    })(when_true.emit_emits<M>(site, laid, values, prog.branch_label(found.register, Succ(names)), file, placement,
+                        Succ(Succ(names)))),
+            },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A structured region: inputs in registers, outputs moved to theirs
+
+fn finish_prog(program: Prog, checked: Bool) → Option<Prog> {
+    match checked { False => None, True => Some(program) }
+}
+
+// The region's program: its inputs in `inputs`, one placement register per
+// node in the order `emit` visits them, its outputs left in `outputs`.
+// `None` is a refusal: an unsupported node, a placement that overwrote a
+// value still needed or left the arms' values apart, or a program that is
+// not laid out.
+fn StructuredRegion::lower(self region: StructuredRegion, inputs, outputs, placement: List<Gpr>) → Option<Prog> {
+    match input_file(structured_inputs(region).entries, inputs) {
+        None => None,
+        Some(file) => match region.emit(Start, file, placement, 0) {
+            None => None,
+            Some(body) => match body.file.move_outputs(structured_outputs(region).entries, outputs) {
+                None => None,
+                Some(moves) => finish_prog(At(body.prog, 0, Block(moves.code)),
+                    moves.file.outputs_check(structured_outputs(region).entries, outputs) &&
+                        At(body.prog, 0, Block(moves.code)).laid_out()),
+            },
+        },
+    }
+}
+
+// What the program does: resident anywhere, from its start with the inputs
+// in their registers and the region's equations, it runs fetched to its
+// end with the outputs in theirs.
+fn Lowers<M>(region: StructuredRegion, inputs, outputs: List<Gpr>, values: Valuation(), program: Prog) → Type {
+    (fetch: FetchAccess<M>) → (data: ByteReadAccess<M>) → (last: List<BitVec(8)>) → (origin: BitVec(64)) →
+        Site<M>(fetch, data, program, last, origin).Runs(0, prog_len(program),
+            λ (g: Gprs) => PortsAt(values, structured_inputs(region).entries, inputs, g) ∧ StructuredRegionHolds(values, region),
+            λ (g: Gprs) => PortsAt(values, structured_outputs(region).entries, outputs, g))
+}
+
+fn MayLower<M>(region: StructuredRegion, inputs, outputs: List<Gpr>, values: Valuation(), program: Option<Prog>) → Type {
+    program.All(λ (p: Prog) => Lowers<M>(region, inputs, outputs, values, p))
+}
+
+theorem finish_lowers<M>(region: StructuredRegion, inputs, outputs: List<Gpr>, values: Valuation(), file: File,
+    body: Emitted, moves: Lowered,
+    entered: (g: Gprs) → PortsAt(values, structured_inputs(region).entries, inputs, g) → file.Represents(values, g),
+    body_emits: (site: Site<M>) → site.program.laid_out().IsTrue() →
+        Emits<M>(site, values, Start, file, StructuredRegionHolds(values, region), body),
+    moves_keeps: Keeps<M>(values, body.file, True, moves), checked: Bool):
+    (checked.IsTrue() → moves.file.outputs_check(structured_outputs(region).entries, outputs).IsTrue() ∧
+        At(body.prog, 0, Block(moves.code)).laid_out().IsTrue()) →
+    MayLower<M>(region, inputs, outputs, values, finish_prog(At(body.prog, 0, Block(moves.code)), checked)) {
+    match checked {
+        False => λ _ => trivial,
+        True => λ parts fetch data last origin => {
+            let program = At(body.prog, 0, Block(moves.code));
+            let ok = parts(trivial);
+            let site = Site<M>(fetch, data, program, last, origin);
+            let outs = structured_outputs(region).entries;
+            site.runs_trans(0, prog_len(body.prog), prog_len(program),
+                λ (g: Gprs) => PortsAt(values, structured_inputs(region).entries, inputs, g) ∧ StructuredRegionHolds(values, region),
+                λ (g: Gprs) => body.file.Represents(values, g),
+                λ (g: Gprs) => PortsAt(values, outs, outputs, g),
+                site.runs_weaken(0, prog_len(body.prog),
+                    λ (g: Gprs) => file.Represents(values, g) ∧ StructuredRegionHolds(values, region),
+                    λ (g: Gprs) => body.file.Represents(values, g),
+                    λ (g: Gprs) => PortsAt(values, structured_inputs(region).entries, inputs, g) ∧ StructuredRegionHolds(values, region),
+                    λ (g: Gprs) => body.file.Represents(values, g),
+                    body_emits(site, ok.right).right(body.prog.within_then(0, Block(moves.code))),
+                    λ g held => ⟨entered(g, held.left), held.right⟩, λ g represents => represents),
+                site.runs_block(program.laid_out_fits(ok.right), 0, body.prog, 0, moves.code, refl,
+                    λ (g: Gprs) => body.file.Represents(values, g),
+                    λ (g: Gprs) => PortsAt(values, outs, outputs, g),
+                    λ s represents => outputs_check_sound(values, moves.file, execute_block_normal(moves.code, s).gprs,
+                        moves_keeps(s, represents, trivial), outs, outputs, ok.left)))
+        },
+    }
+}
+
+theorem StructuredRegion::lower_lowers<M>(self region: StructuredRegion, values: Valuation(), inputs, outputs, placement: List<Gpr>):
+    MayLower<M>(region, inputs, outputs, values, region.lower(inputs, outputs, placement)) {
+    let ins = structured_inputs(region).entries;
+    let outs = structured_outputs(region).entries;
+    (match input_file(ins, inputs) as λ entry =>
+        ((g: Gprs) → PortsAt(values, ins, inputs, g) → entry.All(λ (file: File) => file.Represents(values, g))) →
+        MayLower<M>(region, inputs, outputs, values, match entry {
+            None => None,
+            Some(file) => match region.emit(Start, file, placement, 0) {
+                None => None,
+                Some(body) => match body.file.move_outputs(outs, outputs) {
+                    None => None,
+                    Some(moves) => finish_prog(At(body.prog, 0, Block(moves.code)),
+                        moves.file.outputs_check(outs, outputs) && At(body.prog, 0, Block(moves.code)).laid_out()),
+                },
+            },
+        }) {
+        None => λ _ => trivial,
+        Some(file) => λ entered =>
+            (match region.emit(Start, file, placement, 0) as λ e =>
+                ((site: Site<M>) → site.program.laid_out().IsTrue() →
+                    MayEmit<M>(site, values, Start, file, StructuredRegionHolds(values, region), e)) →
+                MayLower<M>(region, inputs, outputs, values, match e {
+                    None => None,
+                    Some(body) => match body.file.move_outputs(outs, outputs) {
+                        None => None,
+                        Some(moves) => finish_prog(At(body.prog, 0, Block(moves.code)),
+                            moves.file.outputs_check(outs, outputs) && At(body.prog, 0, Block(moves.code)).laid_out()),
+                    },
+                }) {
+                None => λ _ => trivial,
+                Some(body) => λ body_emits =>
+                    (match body.file.move_outputs(outs, outputs) as λ moved =>
+                        MayKeep<M>(values, body.file, True, moved) →
+                        MayLower<M>(region, inputs, outputs, values, match moved {
+                            None => None,
+                            Some(moves) => finish_prog(At(body.prog, 0, Block(moves.code)),
+                                moves.file.outputs_check(outs, outputs) && At(body.prog, 0, Block(moves.code)).laid_out()),
+                        }) {
+                        None => λ _ => trivial,
+                        Some(moves) => λ moves_keeps =>
+                            finish_lowers<M>(region, inputs, outputs, values, file, body, moves,
+                                λ g placed => entered(g, placed), body_emits, moves_keeps,
+                                moves.file.outputs_check(outs, outputs) && At(body.prog, 0, Block(moves.code)).laid_out(),
+                                λ checked => Bool::is_true_and(moves.file.outputs_check(outs, outputs),
+                                    At(body.prog, 0, Block(moves.code)).laid_out(), checked)),
+                    })(move_outputs_keeps<M>(values, outs, body.file, outputs)),
+            })(λ site laid => region.emit_emits<M>(site, laid, values, Start, file, placement, 0)),
+    })(λ g placed => input_file_represents(values, g, ins, inputs, placed))
+}
+
+// The theorem, proved once: whatever the placement, a program `lower`
+// returns, resident at any origin, runs fetched from its start to its end
+// and computes the region.
+theorem StructuredRegion::lower_correct<M>(self region: StructuredRegion, inputs, outputs, placement: List<Gpr>,
+    program: Prog, values: Valuation(), lowered: region.lower(inputs, outputs, placement) = Some(program),
+    fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), s: MachineState<M>,
+    at: s.rip = next_rip(origin, 0),
+    resident: CodeResident(fetch, s.memory, assemble(no_fills(), program, last), next_rip(origin, 0)),
+    placed: PortsAt(values, structured_inputs(region).entries, inputs, s.gprs),
+    holds: StructuredRegionHolds(values, region)):
+    Site<M>(fetch, data, program, last, origin).Reaches(s, prog_len(program),
+        λ (g: Gprs) => PortsAt(values, structured_outputs(region).entries, outputs, g)) {
+    region.lower(inputs, outputs, placement).all_some(λ (p: Prog) => Lowers<M>(region, inputs, outputs, values, p), program, lowered,
+        region.lower_lowers<M>(values, inputs, outputs, placement), fetch, data, last, origin, s, at, resident, ⟨placed, holds⟩)
+}
+
+// ---------------------------------------------------------------------------
+// A placement heuristic, round 1's per node. Nothing above depends on it: a
+// poor choice costs a MOV or a refusal, never a wrong program.
+
+// Every id the region reads, conditions included.
+fn StructuredRegion::reads(self region: StructuredRegion) → List<Nat> {
+    match region {
+        Dataflow(body) => reads_of(body.nodes, []),
+        Sequence(prefix, continuation) => reads_of(prefix.nodes, continuation.reads()),
+        Compose(prefix, continuation) => prefix.reads() ++ continuation.reads(),
+        Conditional(_, condition, _, _, when_true, when_false) => Cons(condition, when_true.reads() ++ when_false.reads()),
+    }
+}
+
+record Planned { placement: List<Gpr>, file: File }
+
+// The nodes' registers, `after` live once they are done and `entries`
+// wanted in `registers`.
+fn plan_block(nodes: List<Node>, file: File, after: List<Nat>, entries: List<Port>, registers: List<Gpr>) → Planned {
+    match nodes {
+        Nil => Planned([], file),
+        Cons(node, rest) => {
+            let destination = node.choose(file, reads_of(rest, after), entries, registers);
+            match node.lower(destination, file) {
+                None => Planned([destination], file),
+                Some(step) => {
+                    let tail = plan_block(rest, step.file, after, entries, registers);
+                    Planned(Cons(destination, tail.placement), tail.file)
+                },
+            }
+        },
+    }
+}
+
+// Where a conditional's outputs meet: the register the region wants an
+// output in, else one nothing live holds.
+fn pick_targets(entries: List<Port>, file: File, live: List<Nat>, wanted: List<Port>, registers: List<Gpr>) → List<Gpr> {
+    match entries {
+        Nil => [],
+        Cons(port, rest) => {
+            let register: Gpr = match target_of(port.id, wanted, registers) {
+                Some(target) => target,
+                None => match file.first_free(live, scratch_pool()) { None => Rax, Some(free) => free },
+            };
+            Cons(register, pick_targets(rest, file.write(register, Some(Held(port.id, Word))), live, wanted, registers))
+        },
+    }
+}
+
+fn StructuredRegion::plan_from(self region: StructuredRegion, file: File, after: List<Nat>, entries: List<Port>,
+    registers: List<Gpr>) → Planned {
+    match region {
+        Dataflow(body) => plan_block(body.nodes, file, after, entries, registers),
+        Sequence(prefix, continuation) => {
+            let first = plan_block(prefix.nodes, file, continuation.reads() ++ after, entries, registers);
+            let rest = continuation.plan_from(first.file, after, entries, registers);
+            Planned(first.placement ++ rest.placement, rest.file)
+        },
+        Compose(prefix, continuation) => {
+            let first = prefix.plan_from(file, continuation.reads() ++ after, entries, registers);
+            let rest = continuation.plan_from(first.file, after, entries, registers);
+            Planned(first.placement ++ rest.placement, rest.file)
+        },
+        Conditional(_, _, _, outputs, when_true, when_false) => {
+            let live = when_true.reads() ++ (when_false.reads() ++ (port_ids(outputs.entries) ++ after));
+            let targets = pick_targets(outputs.entries, file, live, entries, registers);
+            let yes = when_true.plan_from(file, after, outputs.entries ++ entries, targets ++ registers);
+            let no = when_false.plan_from(file, after, outputs.entries ++ entries, targets ++ registers);
+            Planned(yes.placement ++ no.placement, yes.file.meet(no.file))
+        },
+    }
+}
+
+fn StructuredRegion::plan(self region: StructuredRegion, inputs, outputs: List<Gpr>) → List<Gpr> {
+    match input_file(structured_inputs(region).entries, inputs) {
+        None => [],
+        Some(file) => region.plan_from(file, port_ids(structured_outputs(region).entries),
+            structured_outputs(region).entries, outputs).placement,
+    }
+}
+
+// The region lowered with the heuristic's placement.
+fn StructuredRegion::lower_planned(self region: StructuredRegion, inputs, outputs: List<Gpr>) → Option<Prog> {
+    region.lower(inputs, outputs, region.plan(inputs, outputs))
+}

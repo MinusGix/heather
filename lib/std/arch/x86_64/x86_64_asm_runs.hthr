@@ -1,0 +1,444 @@
+// Pure fetched runs over a label program (issues/function-ir-verified-lowering.md,
+// round 2): from one offset of a program resident at `origin` to another, a
+// state whose registers satisfy `pre` runs fetched to one whose registers
+// satisfy `post`, memory untouched. One lemma per form the compiler emits
+// (an instruction block, a near JMP, and the two-armed branch on a register
+// being zero), each proved once over any program, so a compiler's theorem
+// composes them by induction on its source.
+//
+// What a lemma needs of the program is stated, not computed: the item at a
+// label (`asm_back(program, k)`), and where a jump lands. A producer checks
+// the finished program once by evaluation (`Prog::laid_out`: no holes,
+// unique names, every jump lands on its label) and the lemmas read their
+// facts off that check, so nothing here does arithmetic on open offsets.
+import x86_64;
+import x86_64_block;
+import x86_64_fetch;
+import x86_64_data_read;
+import x86_64_fetched_code;
+import x86_64_layout;
+import x86_64_asm;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+
+// ---------------------------------------------------------------------------
+// Labels within a program
+
+// `q` is a label of `p` (or `p` itself): `p` is `q` with items after it.
+fn Prog::Within(self q: Prog, p: Prog) → Type { Exists<Nat>(λ k => asm_back(p, k) = q) }
+
+theorem asm_back_start(k: Nat): asm_back(Start, k) = Start {
+    match k { Zero => refl, Succ(_) => refl }
+}
+
+theorem asm_back_back(k: Nat): (p: Prog) → (j: Nat) → asm_back(asm_back(p, k), j) = asm_back(p, j + k) {
+    match k {
+        Zero => λ p j => refl,
+        Succ(i) => λ p => match p as λ x => (j: Nat) → asm_back(asm_back(x, Succ(i)), j) = asm_back(x, j + Succ(i)) {
+            Start => λ j => asm_back_start(j),
+            At(before, _, _) => λ j => asm_back_back(i, before, j),
+        },
+    }
+}
+
+theorem Prog::within_self(self p: Prog): p.Within(p) { Exists(Zero, refl) }
+
+theorem Prog::within_then(self p: Prog, name: Nat, item: Asm): p.Within(At(p, name, item)) { Exists(Succ(Zero), refl) }
+
+theorem Prog::within_trans(self a: Prog, b, c: Prog, first: a.Within(b), second: b.Within(c)): a.Within(c) {
+    Exists(first.witness + second.witness,
+        trans(sym(asm_back_back(second.witness, c, first.witness)),
+            trans(cong_fn<Prog, Prog>(λ x => asm_back(x, first.witness), second.proof), first.proof)))
+}
+
+theorem Prog::within_step(self a: Prog, p: Prog, name: Nat, item: Asm, within: a.Within(p)): a.Within(At(p, name, item)) {
+    a.within_trans(p, At(p, name, item), within, p.within_then(name, item))
+}
+
+theorem Prog::within_before(self q: Prog, name: Nat, item: Asm, p: Prog, within: At(q, name, item).Within(p)): q.Within(p) {
+    q.within_trans(At(q, name, item), p, q.within_then(name, item), within)
+}
+
+// ---------------------------------------------------------------------------
+// What the finished program is checked for
+
+// No item is a hole: the program is assembled with nothing.
+fn Prog::no_holes(self p: Prog) → Bool {
+    match p { Start => True, At(before, _, item) => match item { Hole(_, _) => False, _ => before.no_holes() } }
+}
+
+theorem Prog::no_holes_fit(self p: Prog): p.no_holes().IsTrue() → FillsFit(p, no_fills()) {
+    match p {
+        Start => λ _ => trivial,
+        At(before, name, item) => match item as λ it => At(before, name, it).no_holes().IsTrue() → FillsFit(At(before, name, it), no_fills()) {
+            Block(_) => λ ok => before.no_holes_fit(ok),
+            Code(_) => λ ok => before.no_holes_fit(ok),
+            Load(_) => λ ok => before.no_holes_fit(ok),
+            Store(_) => λ ok => before.no_holes_fit(ok),
+            LoadByte(_) => λ ok => before.no_holes_fit(ok),
+            StoreByte(_) => λ ok => before.no_holes_fit(ok),
+            Jcc(_, _) => λ ok => before.no_holes_fit(ok),
+            Jmp(_) => λ ok => before.no_holes_fit(ok),
+            Piece(_, _, _) => λ ok => before.no_holes_fit(ok),
+            Refer(_, _, _) => λ ok => before.no_holes_fit(ok),
+            Hole(_, _) => λ no => false_elim(no),
+        },
+    }
+}
+
+// `name` names no label of `p`.
+fn Prog::lacks(self p: Prog, name: Nat) → Bool {
+    match p { Start => True, At(before, m, _) => !(name.leb(m) && m.leb(name)) && before.lacks(name) }
+}
+
+// Every nonzero name names one label, so a jump to it lands there.
+fn Prog::names_unique(self p: Prog) → Bool {
+    match p {
+        Start => True,
+        At(before, name, _) => match name { Zero => before.names_unique(), Succ(_) => before.lacks(name) && before.names_unique() },
+    }
+}
+
+theorem not_true_false(b: Bool, no: (!b).IsTrue()): b = False {
+    (match b as λ c => (!c).IsTrue() → c = False { False => λ _ => refl, True => λ absent => false_elim(absent) })(no)
+}
+
+theorem lacks_label(name, k: Nat): (p, q: Prog) → (n: Nat) → (item: Asm) → p.lacks(name).IsTrue() →
+    asm_back(p, k) = At(q, n, item) → (name.leb(n) && n.leb(name)) = False {
+    match k {
+        Zero => λ p q n item lacks at => {
+            let here = Bool::is_true_and(!(name.leb(n) && n.leb(name)), q.lacks(name),
+                j(at, λ x _ => x.lacks(name).IsTrue(), lacks));
+            not_true_false(name.leb(n) && n.leb(name), here.left)
+        },
+        Succ(i) => λ p => match p as λ x => (q: Prog) → (n: Nat) → (item: Asm) → x.lacks(name).IsTrue() →
+                asm_back(x, Succ(i)) = At(q, n, item) → (name.leb(n) && n.leb(name)) = False {
+            Start => λ q n item _ no => absurd(no),
+            At(before, m, _) => λ q n item lacks at =>
+                lacks_label(name, i, before, q, n, item,
+                    Bool::is_true_and(!(name.leb(m) && m.leb(name)), before.lacks(name), lacks).right, at),
+        },
+    }
+}
+
+// A label named `Succ(n)` in a program whose names are unique is where a
+// jump to `Succ(n)` lands.
+theorem label_target(k: Nat): (p, q: Prog) → (n: Nat) → (item: Asm) → p.names_unique().IsTrue() →
+    asm_back(p, k) = At(q, Succ(n), item) → asm_target(p, Succ(n)) = prog_len(q) {
+    match k {
+        Zero => λ p q n item _ at => j(sym(at), λ x _ => asm_target(x, Succ(n)) = prog_len(q),
+            j(sym(n.leb_refl()), λ b _ => (match b && b { True => prog_len(q), False => asm_target(q, Succ(n)) }) = prog_len(q), refl)),
+        Succ(i) => λ p => match p as λ x => (q: Prog) → (n: Nat) → (item: Asm) → x.names_unique().IsTrue() →
+                asm_back(x, Succ(i)) = At(q, Succ(n), item) → asm_target(x, Succ(n)) = prog_len(q) {
+            Start => λ q n item _ no => absurd(no),
+            At(before, m, it) => λ q n item => match m as λ x => At(before, x, it).names_unique().IsTrue() →
+                    asm_back(before, i) = At(q, Succ(n), item) → asm_target(At(before, x, it), Succ(n)) = prog_len(q) {
+                Zero => λ unique at => label_target(i, before, q, n, item, unique, at),
+                Succ(l) => λ unique at => {
+                    let both = Bool::is_true_and(before.lacks(Succ(l)), before.names_unique(), unique);
+                    j(sym(lacks_label(Succ(l), i, before, q, Succ(n), item, both.left, at)),
+                        λ b _ => (match b { True => prog_len(before), False => asm_target(before, Succ(n)) }) = prog_len(q),
+                        label_target(i, before, q, n, item, both.right, at))
+                },
+            },
+        },
+    }
+}
+
+// Every jump lands on its target, the labels those of the whole program.
+fn item_lands(labels: Nat → Nat, here: Nat, item: Asm) → Bool {
+    match item {
+        Jcc(cc, target) => asm_item_lands(labels, here, 6, Jcc(cc, target), labels(target)),
+        Jmp(target) => asm_item_lands(labels, here, 5, Jmp(target), labels(target)),
+        _ => True,
+    }
+}
+fn jumps_land_in(labels: Nat → Nat, p: Prog) → Bool {
+    match p { Start => True, At(before, _, item) => item_lands(labels, prog_len(before), item) && jumps_land_in(labels, before) }
+}
+fn Prog::jumps_land(self p: Prog) → Bool { jumps_land_in(asm_labels(p), p) }
+
+theorem jcc_lands(labels: Nat → Nat, k: Nat): (p, before: Prog) → (name: Nat) → (cc: ConditionCode) → (target: Nat) →
+    jumps_land_in(labels, p).IsTrue() → asm_back(p, k) = At(before, name, Jcc(cc, target)) →
+    JumpsForward(prog_len(before), 6, asm_jump_of(labels, prog_len(before), Jcc(cc, target)), labels(target)) {
+    match k {
+        Zero => λ p before name cc target lands at => {
+            let here = Bool::is_true_and(item_lands(labels, prog_len(before), Jcc(cc, target)), jumps_land_in(labels, before),
+                j(at, λ x _ => jumps_land_in(labels, x).IsTrue(), lands));
+            asm_lands_forward(prog_len(before), 6, asm_jump_of(labels, prog_len(before), Jcc(cc, target)), labels(target),
+                eq_true_of_is_true(item_lands(labels, prog_len(before), Jcc(cc, target)), here.left))
+        },
+        Succ(i) => λ p => match p as λ x => (before: Prog) → (name: Nat) → (cc: ConditionCode) → (target: Nat) →
+                jumps_land_in(labels, x).IsTrue() → asm_back(x, Succ(i)) = At(before, name, Jcc(cc, target)) →
+                JumpsForward(prog_len(before), 6, asm_jump_of(labels, prog_len(before), Jcc(cc, target)), labels(target)) {
+            Start => λ before name cc target _ no => absurd(no),
+            At(earlier, _, item) => λ before name cc target lands at =>
+                jcc_lands(labels, i, earlier, before, name, cc, target,
+                    Bool::is_true_and(item_lands(labels, prog_len(earlier), item), jumps_land_in(labels, earlier), lands).right, at),
+        },
+    }
+}
+
+theorem jmp_lands(labels: Nat → Nat, k: Nat): (p, before: Prog) → (name: Nat) → (target: Nat) →
+    jumps_land_in(labels, p).IsTrue() → asm_back(p, k) = At(before, name, Jmp(target)) →
+    JumpsForward(prog_len(before), 5, asm_jump_of(labels, prog_len(before), Jmp(target)), labels(target)) {
+    match k {
+        Zero => λ p before name target lands at => {
+            let here = Bool::is_true_and(item_lands(labels, prog_len(before), Jmp(target)), jumps_land_in(labels, before),
+                j(at, λ x _ => jumps_land_in(labels, x).IsTrue(), lands));
+            asm_lands_forward(prog_len(before), 5, asm_jump_of(labels, prog_len(before), Jmp(target)), labels(target),
+                eq_true_of_is_true(item_lands(labels, prog_len(before), Jmp(target)), here.left))
+        },
+        Succ(i) => λ p => match p as λ x => (before: Prog) → (name: Nat) → (target: Nat) →
+                jumps_land_in(labels, x).IsTrue() → asm_back(x, Succ(i)) = At(before, name, Jmp(target)) →
+                JumpsForward(prog_len(before), 5, asm_jump_of(labels, prog_len(before), Jmp(target)), labels(target)) {
+            Start => λ before name target _ no => absurd(no),
+            At(earlier, _, item) => λ before name target lands at =>
+                jmp_lands(labels, i, earlier, before, name, target,
+                    Bool::is_true_and(item_lands(labels, prog_len(earlier), item), jumps_land_in(labels, earlier), lands).right, at),
+        },
+    }
+}
+
+// The one check: what a producer evaluates before it hands a program out.
+fn Prog::laid_out(self p: Prog) → Bool { p.no_holes() && (p.names_unique() && p.jumps_land()) }
+
+theorem Prog::laid_out_fits(self p: Prog, laid: p.laid_out().IsTrue()): FillsFit(p, no_fills()) {
+    p.no_holes_fit(Bool::is_true_and(p.no_holes(), p.names_unique() && p.jumps_land(), laid).left)
+}
+theorem Prog::laid_out_unique(self p: Prog, laid: p.laid_out().IsTrue()): p.names_unique().IsTrue() {
+    Bool::is_true_and(p.names_unique(), p.jumps_land(), Bool::is_true_and(p.no_holes(), p.names_unique() && p.jumps_land(), laid).right).left
+}
+theorem Prog::laid_out_lands(self p: Prog, laid: p.laid_out().IsTrue()): p.jumps_land().IsTrue() {
+    Bool::is_true_and(p.names_unique(), p.jumps_land(), Bool::is_true_and(p.no_holes(), p.names_unique() && p.jumps_land(), laid).right).right
+}
+
+// ---------------------------------------------------------------------------
+// Runs
+
+// Where a program runs: how code is fetched and data read, the program,
+// the bytes after it, and the address it starts at.
+record Site<M> {
+    fetch: FetchAccess<M>,
+    data: ByteReadAccess<M>,
+    program: Prog,
+    last: List<BitVec(8)>,
+    origin: BitVec(64),
+}
+
+// The program and what follows it, resident in `memory` at the origin.
+fn Site::Resident<M>(self site: Site<M>, memory: M) → Type {
+    CodeResident(site.fetch, memory, assemble(no_fills(), site.program, site.last), next_rip(site.origin, 0))
+}
+
+// From `s`, a fetched run to offset `to`, memory untouched, the registers
+// satisfying `post`.
+fn Site::Reaches<M>(self site: Site<M>, s: MachineState<M>, to: Nat, post: Gprs → Type) → Type {
+    Exists<MachineState<M>>(λ t => FetchedSteps(site.fetch, site.data, s, t) ∧
+        (t.rip = next_rip(site.origin, to) ∧ (t.memory = s.memory ∧ post(t.gprs))))
+}
+
+// Every state at offset `from`, the program resident, its registers
+// satisfying `pre`, reaches `to` with them satisfying `post`.
+fn Site::Runs<M>(self site: Site<M>, from, to: Nat, pre, post: Gprs → Type) → Type {
+    (s: MachineState<M>) → s.rip = next_rip(site.origin, from) → site.Resident(s.memory) → pre(s.gprs) →
+        site.Reaches(s, to, post)
+}
+
+theorem Site::reaches_after<M>(self site: Site<M>, s, t: MachineState<M>, to: Nat, post: Gprs → Type,
+    steps: FetchedSteps(site.fetch, site.data, s, t), memory: t.memory = s.memory, rest: site.Reaches(t, to, post)):
+    site.Reaches(s, to, post) {
+    Exists(rest.witness, ⟨fetched_steps_trans(site.fetch, site.data, s, t, rest.witness, steps, rest.proof.left),
+        ⟨rest.proof.right.left, ⟨trans(rest.proof.right.right.left, memory), rest.proof.right.right.right⟩⟩⟩)
+}
+
+theorem Site::runs_trans<M>(self site: Site<M>, from, middle, to: Nat, pre, between, post: Gprs → Type,
+    first: site.Runs(from, middle, pre, between), second: site.Runs(middle, to, between, post)):
+    site.Runs(from, to, pre, post) {
+    λ s here resident holds => {
+        let one = first(s, here, resident, holds);
+        site.reaches_after(s, one.witness, to, post, one.proof.left, one.proof.right.right.left,
+            second(one.witness, one.proof.right.left,
+                j(sym(one.proof.right.right.left), λ memory _ => site.Resident(memory), resident),
+                one.proof.right.right.right))
+    }
+}
+
+theorem Site::runs_weaken<M>(self site: Site<M>, from, to: Nat, pre, post, entry, exit: Gprs → Type,
+    runs: site.Runs(from, to, pre, post), into: (g: Gprs) → entry(g) → pre(g), out: (g: Gprs) → post(g) → exit(g)):
+    site.Runs(from, to, entry, exit) {
+    λ s here resident holds => {
+        let reached = runs(s, here, resident, into(s.gprs, holds));
+        Exists(reached.witness, ⟨reached.proof.left, ⟨reached.proof.right.left, ⟨reached.proof.right.right.left,
+            out(reached.witness.gprs, reached.proof.right.right.right)⟩⟩⟩)
+    }
+}
+
+// A fact about something other than the state rides along.
+theorem Site::runs_frame<M>(self site: Site<M>, from, to: Nat, pre, post: Gprs → Type, facts: Type,
+    runs: site.Runs(from, to, pre, post)):
+    site.Runs(from, to, λ (g: Gprs) => pre(g) ∧ facts, λ (g: Gprs) => post(g) ∧ facts) {
+    λ s here resident holds => {
+        let reached = runs(s, here, resident, holds.left);
+        Exists(reached.witness, ⟨reached.proof.left, ⟨reached.proof.right.left, ⟨reached.proof.right.right.left,
+            ⟨reached.proof.right.right.right, holds.right⟩⟩⟩⟩)
+    }
+}
+
+// The item at a label is resident at the label's offset.
+theorem Site::item_resident<M>(self site: Site<M>, fits: FillsFit(site.program, no_fills()), memory: M,
+    resident: site.Resident(memory), k: Nat, before: Prog, name: Nat, item: Asm,
+    at: asm_back(site.program, k) = At(before, name, item)):
+    CodeResident(site.fetch, memory, asm_bytes(no_fills(), asm_labels(site.program), prog_len(before), item),
+        next_rip(site.origin, prog_len(before))) {
+    let labels = asm_labels(site.program);
+    let found = asm_resident_from(site.fetch, memory, site.origin, no_fills(), labels, 0, site.program, fits, site.last, resident, k);
+    let moved = j(at, λ l _ => CodeResident(site.fetch, memory, item_bytes(no_fills(), labels, l), next_rip(site.origin, 0 + asm_at(l))), found);
+    j(prog_len(before).add_left_zero(),
+        λ n _ => CodeResident(site.fetch, memory, asm_bytes(no_fills(), labels, prog_len(before), item), next_rip(site.origin, n)), moved)
+}
+
+// An instruction block resident at the state's RIP runs fetched to its end.
+theorem block_steps<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, instructions: List<Instruction>):
+    (s: MachineState<M>) → CodeResident(fetch, s.memory, canonical_block_bytes(instructions), s.rip) →
+    FetchedSteps(fetch, data, s, execute_block_normal(instructions, s)) ∧
+    (execute_block_normal(instructions, s).rip = next_rip(s.rip, block_length(instructions)) ∧
+     execute_block_normal(instructions, s).memory = s.memory) {
+    match instructions {
+        Nil => λ s _ => ⟨fetched_steps_refl(fetch, data, s), ⟨refl, refl⟩⟩,
+        Cons(instruction, rest) => λ s resident => {
+            let middle = execute_normal(decoded_canonical(instruction), s);
+            let parts = resident_split(fetch, s.memory, canonical_bytes(instruction), canonical_block_bytes(rest), s.rip, resident);
+            let advanced: (next_rip(s.rip, canonical_length(instruction)) = middle.rip) =
+                sym(execute_normal_advances_rip(decoded_canonical(instruction), s));
+            let tail = block_steps(fetch, data, rest, middle,
+                j(trans(rip_count(s.rip, canonical_bytes_length(instruction)), advanced),
+                    λ address _ => CodeResident(fetch, s.memory, canonical_block_bytes(rest), address), parts.right));
+            ⟨fetched_steps_cons(fetch, data, s, middle, execute_block_normal(rest, middle),
+                ordinary_fetched_step(fetch, data, instruction, s, parts.left), tail.left),
+             ⟨trans(tail.right.left, trans(
+                cong_fn<BitVec(64), BitVec(64)>(λ address => next_rip(address, block_length(rest)), sym(advanced)),
+                rip_compose(s.rip, canonical_length(instruction), block_length(rest)))),
+              tail.right.right⟩⟩
+        },
+    }
+}
+
+// A block at a label runs from the label to its end.
+theorem Site::runs_block<M>(self site: Site<M>, fits: FillsFit(site.program, no_fills()), k: Nat, before: Prog, name: Nat,
+    instructions: List<Instruction>, at: asm_back(site.program, k) = At(before, name, Block(instructions)),
+    pre, post: Gprs → Type,
+    step: (s: MachineState<M>) → pre(s.gprs) → post(execute_block_normal(instructions, s).gprs)):
+    site.Runs(prog_len(before), prog_len(before) + block_length(instructions), pre, post) {
+    λ s here resident holds => {
+        let item = site.item_resident(fits, s.memory, resident, k, before, name, Block(instructions), at);
+        let ran = block_steps(site.fetch, site.data, instructions, s,
+            j(sym(here), λ address _ => CodeResident(site.fetch, s.memory, canonical_block_bytes(instructions), address), item));
+        Exists(execute_block_normal(instructions, s), ⟨ran.left, ⟨trans(ran.right.left, trans(
+            cong_fn<BitVec(64), BitVec(64)>(λ address => next_rip(address, block_length(instructions)), here),
+            rip_compose(site.origin, prog_len(before), block_length(instructions)))), ⟨ran.right.right, step(s, holds)⟩⟩⟩)
+    }
+}
+
+// A near JMP at a label runs to where it lands, the registers as they were.
+theorem Site::runs_jump<M>(self site: Site<M>, fits: FillsFit(site.program, no_fills()), k: Nat, before: Prog, name, target: Nat,
+    at: asm_back(site.program, k) = At(before, name, Jmp(target)), to: Nat,
+    lands: JumpsForward(prog_len(before), 5, asm_jump_of(asm_labels(site.program), prog_len(before), Jmp(target)), to),
+    pre: Gprs → Type): site.Runs(prog_len(before), to, pre, pre) {
+    λ s here resident holds => {
+        let displacement = asm_jump_of(asm_labels(site.program), prog_len(before), Jmp(target));
+        let control = JumpNear(displacement);
+        let item = site.item_resident(fits, s.memory, resident, k, before, name, Jmp(target), at);
+        let step = near_fetched_step(site.fetch, site.data, control, s,
+            j(sym(here), λ address _ => CodeResident(site.fetch, s.memory, near_control_bytes(control), address), item));
+        Exists(execute_near_control(control, s), ⟨fetched_steps_one(site.fetch, site.data, s, execute_near_control(control, s), step),
+            ⟨trans(cong_fn<BitVec(64), BitVec(64)>(λ address => near_branch_target(address, 5, displacement), here),
+                jumps_forward(site.origin, prog_len(before), 5, displacement, to, lands)), ⟨refl, holds⟩⟩⟩)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Two arms on whether a register is zero
+
+// What TEST register, register sets ZF to.
+fn Gpr::tests_zero(self register: Gpr, gprs: Gprs) → Bool {
+    is_zero_bits(64, read_gpr(register, gprs).band(read_gpr(register, gprs)))
+}
+
+// The branch's labels, from where it starts: TEST, JE to the second arm,
+// then (after the first arm) a JMP over the second arm and the second
+// arm's label, and (after the second arm) the join.
+fn Prog::test_label(self start: Prog, register: Gpr) → Prog { At(start, 0, Block([TestRR(register, register)])) }
+fn Prog::branch_label(self start: Prog, register: Gpr, else_name: Nat) → Prog { At(start.test_label(register), 0, Jcc(E, else_name)) }
+fn Prog::else_label(self yes_end: Prog, else_name, join_name: Nat) → Prog { At(At(yes_end, 0, Jmp(join_name)), else_name, Block([])) }
+fn Prog::join_label(self no_end: Prog, join_name: Nat) → Prog { At(no_end, join_name, Block([])) }
+
+// The first arm runs where the register is nonzero, the second where it is
+// zero, both to the join.
+theorem Site::runs_branch<M>(self site: Site<M>, fits: FillsFit(site.program, no_fills()),
+    start: Prog, register: Gpr, else_name, join_name: Nat, yes_end, no_end: Prog,
+    test_k: Nat, test_at: asm_back(site.program, test_k) = start.test_label(register),
+    branch_k: Nat, branch_at: asm_back(site.program, branch_k) = start.branch_label(register, else_name),
+    jump_k: Nat, jump_at: asm_back(site.program, jump_k) = At(yes_end, 0, Jmp(join_name)),
+    else_lands: JumpsForward(prog_len(start.test_label(register)), 6,
+        asm_jump_of(asm_labels(site.program), prog_len(start.test_label(register)), Jcc(E, else_name)), prog_len(yes_end) + 5),
+    join_lands: JumpsForward(prog_len(yes_end), 5, asm_jump_of(asm_labels(site.program), prog_len(yes_end), Jmp(join_name)),
+        prog_len(no_end)),
+    pre, post: Gprs → Type,
+    yes: site.Runs(prog_len(start.branch_label(register, else_name)), prog_len(yes_end),
+        λ (g: Gprs) => pre(g) ∧ register.tests_zero(g) = False, post),
+    no: site.Runs(prog_len(yes_end) + 5, prog_len(no_end), λ (g: Gprs) => pre(g) ∧ register.tests_zero(g) = True, post)):
+    site.Runs(prog_len(start), prog_len(no_end), pre, post) {
+    λ s here resident holds => {
+        let test = TestRR(register, register);
+        let tested = start.test_label(register);
+        let item = site.item_resident(fits, s.memory, resident, test_k, start, 0, Block([test]), test_at);
+        let ran = block_steps(site.fetch, site.data, [test], s,
+            j(sym(here), λ address _ => CodeResident(site.fetch, s.memory, canonical_block_bytes([test]), address), item));
+        let u = execute_block_normal([test], s);
+        let u_rip: (u.rip = next_rip(site.origin, prog_len(tested))) = trans(ran.right.left, trans(
+            cong_fn<BitVec(64), BitVec(64)>(λ address => next_rip(address, block_length([test])), here),
+            rip_compose(site.origin, prog_len(start), block_length([test]))));
+        let displacement = asm_jump_of(asm_labels(site.program), prog_len(tested), Jcc(E, else_name));
+        let control = JumpIfNear(E, displacement);
+        let jcc = site.item_resident(fits, s.memory, resident, branch_k, tested, 0, Jcc(E, else_name), branch_at);
+        let step = near_fetched_step(site.fetch, site.data, control, u,
+            resident_state(site.fetch, near_control_bytes(control), s.memory, next_rip(site.origin, prog_len(tested)), u,
+                ran.right.right, u_rip, jcc));
+        let v = execute_near_control(control, u);
+        let entry = fetched_steps_trans(site.fetch, site.data, s, u, v, ran.left, fetched_steps_one(site.fetch, site.data, u, v, step));
+        (match register.tests_zero(s.gprs) as λ z => register.tests_zero(s.gprs) = z → site.Reaches(s, prog_len(no_end), post) {
+            False => λ nonzero => {
+                let v_rip: (v.rip = next_rip(site.origin, prog_len(tested) + 6)) =
+                    trans(near_if_not_taken_rip(E, displacement, u, nonzero),
+                        trans(cong_fn<BitVec(64), BitVec(64)>(λ address => next_rip(address, 6), u_rip),
+                            rip_compose(site.origin, prog_len(tested), 6)));
+                let arm = yes(v, v_rip, resident, ⟨holds, nonzero⟩);
+                let w = arm.witness;
+                let jumped = site.runs_jump(fits, jump_k, yes_end, 0, join_name, jump_at, prog_len(no_end), join_lands, post,
+                    w, arm.proof.right.left, j(sym(arm.proof.right.right.left), λ memory _ => site.Resident(memory), resident),
+                    arm.proof.right.right.right);
+                site.reaches_after(s, v, prog_len(no_end), post, entry, refl,
+                    site.reaches_after(v, w, prog_len(no_end), post, arm.proof.left, arm.proof.right.right.left, jumped))
+            },
+            True => λ zero => {
+                let v_rip: (v.rip = next_rip(site.origin, prog_len(yes_end) + 5)) =
+                    trans(near_if_taken_rip(E, displacement, u, zero),
+                        trans(cong_fn<BitVec(64), BitVec(64)>(λ address => near_branch_target(address, 6, displacement), u_rip),
+                            jumps_forward(site.origin, prog_len(tested), 6, displacement, prog_len(yes_end) + 5, else_lands)));
+                site.reaches_after(s, v, prog_len(no_end), post, entry, refl, no(v, v_rip, resident, ⟨holds, zero⟩))
+            },
+        })(refl)
+    }
+}
+
+// A register holding a bit zero-extended tests zero exactly when the bit is
+// clear.
+theorem bit_tests_zero(h: Bool): !(h && h) && True = !h { match h { False => refl, True => refl } }
+theorem Gpr::tests_zero_bit(self register: Gpr, gprs: Gprs, bit: BitVec(1), held: bit.zero_extend(63) = read_gpr(register, gprs)):
+    register.tests_zero(gprs) = !bit.head_bit() {
+    j(held, λ word _ => is_zero_bits(64, word.band(word)) = !bit.head_bit(), bit_tests_zero(bit.head_bit()))
+}

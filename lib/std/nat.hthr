@@ -245,6 +245,10 @@ fn Nat::leb(self n, m: Nat) → Bool {
     }
 }
 
+theorem Nat::leb_refl(self n: Nat): n.leb(n) = True {
+    match n { Zero => refl, Succ(k) => k.leb_refl() }
+}
+
 // truncated subtraction; both arguments descend together, `n` generalized
 // Equality as a `Bool`.
 fn Nat::same(self n, m: Nat) → Bool {
