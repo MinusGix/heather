@@ -1,11 +1,11 @@
 ---
 title: Realise tier-1 Wf instances as native Lean inductives
-status: open
+status: closed
 labels: [translation,export,inductives]
 area: heather-in-lean-coq
 milestone: [export-fragment]
 created: 2026-10-20
-updated: 2026-10-20
+updated: 2026-10-21
 ---
 
 Lean cannot declare Heather's `Wf` former: the children `Vec(Wf; n[a])` are
@@ -39,3 +39,17 @@ The round:
 Rocq has the other half of the trade: `Wf` is exact there behind
 `bypass_check(positivity, guard)` (`crates/export/probes/WfBypass.v`), but
 the property above needs unit η, which Rocq lacks (§5.3).
+
+## Log
+
+- 2026-10-21 (PR #87): done, in `crates/export/src/wf.rs` (design §5.1, "As
+  implemented"). Item 1 took a different route from the one written above.
+  The declaration is identified by the **nominal tag** its shape carries,
+  and its type arguments by walking the instance's payload types beside the
+  declaration's own, after evaluation. Neither step matches spellings. The
+  elaborator's table supplies only the constructor names
+  (`Elaborator::constructor_names`). Items 2 and 3 are as written: the
+  library sweep's `List` and every lemma over it pass Lean's kernel, and the
+  open-tag control is rejected (`scripts/export-recheck` fails otherwise).
+  Still refused by name: arities that depend on the payload, and `IWf`.
+  Rocq has no realisation.

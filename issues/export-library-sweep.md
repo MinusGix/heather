@@ -1,6 +1,6 @@
 ---
 title: Export the Nat, Bool, logic and List library and record every stop
-status: open
+status: closed
 labels: [translation,export]
 area: heather-in-lean-coq
 milestone: [export-fragment]
@@ -44,3 +44,12 @@ assume Lean or Rocq is installed.
   hole, [[export-typed-translation]]) and all 293 as source text, slowly
   (design §7). No target rejection is left to classify yet; the open-tag β
   count waits for the `Wf` realisation.
+- 2026-10-21, later: with [[export-wf-native-inductives]] all 387 bindings
+  export, and Lean's kernel accepts all but the two bodies that keep holes
+  (`bool::is_true_dec_yes`, `List::filter_map`;
+  [[export-typed-translation]]). No target rejection is left to classify.
+  The open-tag β count is zero, because Lean would reject any declaration
+  that needed it, and a negative control shows it does. That meets the
+  milestone's "done when" for this closure, so this issue closes. A sweep
+  over more of `lib/std` (rationals, reals, the native modules) is the next
+  milestone-sized step, and belongs to the owner issue.

@@ -21,6 +21,14 @@ inductive B { T, F }
 fn B::not(self b: B) -> B { match b { T => F, F => T } }
 theorem B::not_not(self b: B): b.not().not() = b { match b { T => refl, F => refl } }
 theorem big(): Nat::add(1000000000000000000000, 1) = 1000000000000000000001 { refl }
+inductive Tree { Leaf, Node(l: Tree, r: Tree) }
+fn Tree::size(self t: Tree) → Nat { match t { Leaf => 1, Node(l, r) => Nat::add(l.size(), r.size()) } }
+theorem Tree::size_node(l: Tree, r: Tree): Node(l, r).size() = Nat::add(l.size(), r.size()) { refl }
+theorem Tree::size_leaf(): Tree::size(Leaf) = 1 { refl }
+fn Tree::mirror(self t: Tree) → Tree { match t { Leaf => Leaf, Node(l, r) => Node(r.mirror(), l.mirror()) } }
+theorem Tree::size_mirror_node(l: Tree, r: Tree): Node(l, r).mirror().size() = Nat::add(r.mirror().size(), l.mirror().size()) {
+    refl
+}
 "#;
 
 #[test]
@@ -31,12 +39,14 @@ fn nat_and_enum_export_without_refusal() {
         psi: e.psi(),
         proof: &|abs| e.export_proof(abs).cloned(),
         name: &|abs| e.global_key_at(abs).map(str::to_string).or_else(|| e.generated_key_at(abs)),
+        ctors: &|tag| e.constructor_names(tag as u32),
     });
     let refused: Vec<_> = decls.iter().filter(|d| d.decl.is_err()).collect();
     assert!(refused.is_empty(), "refused: {refused:?}");
     // Every theorem kept its proof, the prelude's included: nothing exports
     // as an assumption.
-    let assumed: Vec<_> = decls.iter().filter(|d| d.decl.as_ref().is_ok_and(|d| d.body.is_none())).map(|d| &d.name).collect();
+    let assumed: Vec<_> =
+        decls.iter().filter(|d| d.decl.as_ref().is_ok_and(|d| d.body.is_none() && d.inductive.is_none())).map(|d| &d.name).collect();
     assert!(assumed.is_empty(), "exported as axioms: {assumed:?}");
     let lean = print(Target::Lean, &decls);
     assert!(lean.contains("def Heather.main.Nat.add_assoc :"), "{lean}");

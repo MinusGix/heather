@@ -11,8 +11,8 @@
 # Lean checks the .hxk files through its kernel alone (prelude/Import.lean:
 # addDecl, no parser, no elaborator) and the slice also as source text. The
 # sweep's source text is not checked by default: Lean's parser is superlinear
-# in a declaration's size and spends minutes on it (design §7). Pass
-# --text-sweep to check it anyway.
+# in a declaration's size, and since `List` exports it does not finish within
+# the rail (design §7). --text-sweep tries anyway.
 #
 # Usage: scripts/export-recheck [--text-sweep] [OUT_DIR]
 #   LEAN=/path/to/lean  (default: `lean` on PATH)
@@ -48,6 +48,16 @@ if [ -n "$lean" ]; then
         echo "lean kernel, $f: FAILED; see $out/kernel-$f.log"; status=1
       fi
     done
+    # The negative control (crates/export/tests/library_sweep.rs): β at an
+    # open tag, which Heather has and the native-inductive realisation of
+    # `Wf` does not. Lean must reject exactly that declaration.
+    (ulimit -v 8388608 -t 300 -c 0; LEAN_PATH="$out" "$lean" --run Import.lean Control.hxk) >kernel-Control.log 2>&1
+    if [ "$(grep -c 'kernel rejected' kernel-Control.log)" = 1 ] \
+      && grep -q '^Heather.control.open_tag_beta: kernel rejected' kernel-Control.log; then
+      echo "lean kernel, Control: ok (open-tag β rejected, as it must be)"
+    else
+      echo "lean kernel, Control: FAILED (the open-tag control was not the one rejection); see $out/kernel-Control.log"; status=1
+    fi
     texts=Exported
     [ "$text_sweep" = 1 ] && texts="Exported Sweep"
     for f in $texts; do

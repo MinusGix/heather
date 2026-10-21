@@ -238,6 +238,33 @@ table, not from matching spellings (`issues/export-wf-native-inductives.md`).
 A side benefit: an exported `List` is then a real Lean inductive, which is
 what makes exported results *usable* from Lean, and not only checked there.
 
+**As implemented (2026-10-21, `crates/export/src/wf.rs`).** The exporter
+meets a tier-1 declaration as its whole-type code (`D#tycode`, or
+`D#tycode_fn` over its type parameters) and emits there the inductive `D`,
+its constructors named from the elaborator's table, and `D::supf#`. Before
+the first declaration that eliminates at motive level `l'` it emits
+`D::elim#l'`, which is `D.rec` with one minor premise per constructor. The
+premise calls the step at the canonical tag, passes the children re-tupled,
+and passes the ih as a case over the `Fin` index. The step's binder types
+are the kernel's own telescope (`wf_step_telescope`, its `nth` included), so
+the two sides of every comparison are spelled alike.
+
+An instance is recognised by the **nominal tag** its first payload carries
+(`sEq(Nat; t; t)`), which identifies the declaration however the shape is
+spelled. Its type arguments come from walking the instance's payload types
+beside the declaration's own, after evaluation: where the declaration has
+`El(A_i)`, the instance has `A_i`'s argument. The walk compares nothing,
+because Lean does: a wrong argument is a rejected declaration.
+
+The conjecture holds on the sweep. Lean's kernel accepts every exported
+`List` lemma, so nothing in the closure uses β at an open tag. The negative
+control in `crates/export/tests/library_sweep.rs` builds a declaration that
+does use it, `elim_Wf(_. Nat; _ _ _. 0; sup_f(a; cs)) = 0` at an open `a`.
+Heather's kernel accepts it, Lean rejects it, and `scripts/export-recheck`
+fails unless that declaration is exactly the one Lean rejects. Not covered
+yet: indexed families (`IWf`, refused by name) and declarations whose arity
+depends on the payload (refused by name).
+
 ### 5.2 Irrelevance needs eta-long terms
 
 Heather's `sEq`, `sEmpty` and `Squash` are irrelevant: any two terms convert.
@@ -369,7 +396,7 @@ cheaper or costlier, never wrong.
 - **F (common):** declarations whose types and proofs are closed kernel
   terms over Nat, Id, Σ, Unit, Empty, sums, W, Vec, Fin, sEq, sEmpty, Squash,
   codes and global definitions, at closed levels, with no modal former, no
-  `ΠΠ`/`Λ`/`$`, and no `Wf`/`DVec`/`IWf`. The exporter refuses everything
+  `ΠΠ`/`Λ`/`$`, and no `DVec`/`IWf`; `Wf` only in Lean (below). The exporter refuses everything
   else by name (`Refusal` in `crates/export/src/lib.rs`), and a declaration
   that mentions a refused one is itself refused.
 - **F_Lean = F + Wf**, through per-declaration native inductives, under the
@@ -419,6 +446,19 @@ the closure of `lib/std/list.hthr`) gave:
 | slice, Lean kernel route | 22 | all accepted, no axioms; a corrupted literal is rejected |
 | sweep, Lean kernel route | 292 | all accepted in about two seconds; `bool::is_true_dec_yes` skipped (its body keeps a hole, §5.6) |
 | sweep, Lean source text | 293 | all accepted, but parsing takes nearly the whole run: minutes, against a fraction of a second of type checking |
+
+Later the same day, with `Wf` realised as native inductives (§5.1) and a
+binary tree added to the slice:
+
+| | declarations | result |
+|---|---|---|
+| export | 387 bindings | all 387 exported, `List` as a native inductive |
+| sweep, Lean kernel route | 385 + 3 added (`List::supf#`, `List::elim#0`, `#1`) | all accepted in a few seconds; `bool::is_true_dec_yes` and `List::filter_map` skipped for holes |
+| negative control, Lean kernel route | the sweep + 1 | exactly the open-tag β declaration rejected |
+| slice, Lean kernel route and text | 34 | all accepted, no axioms |
+| sweep, Lean source text | 7 MB of text | no error, but Lean has not finished parsing when a 20-minute CPU rail stops it |
+
+The source text is now only for reading.
 | slice, Coq 8.18 | 20 of 22 | unchanged: stops at `B::not_not` (§5.3) |
 
 Lean's parser is superlinear in one declaration's size (a synthetic tree of

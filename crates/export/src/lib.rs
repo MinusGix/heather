@@ -29,6 +29,8 @@ use std::cell::RefCell;
 use std::sync::Arc as Rc;
 use std::fmt::Write as _;
 
+mod wf;
+
 /// A universe level of the exported fragment: closed, because the library is
 /// universe-monomorphic (`UPi` is layer m, which declarations never use).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -47,6 +49,10 @@ pub enum Hx {
     Const(&'static str, Vec<Lvl>),
     /// An exported declaration, by absolute Ψ index.
     Global(usize),
+    /// A constant only the target has, by Heather-style key, at raw target
+    /// levels: a `Wf` realisation's constructors, recursor and helpers
+    /// (`wf.rs`).
+    Named(String, Vec<u64>),
     NatLit(String),
     /// A component the kernel term does not spell (a checked spelling's
     /// erased annotation); the target elaborator recovers it.
@@ -106,6 +112,8 @@ struct Tr<'a> {
     /// of its domain when that domain is a closed singleton. Closed, so it
     /// needs no shifting to be used under further binders.
     ctx: RefCell<Vec<Option<Hx>>>,
+    /// The tier-1 declarations met so far (`wf.rs`).
+    wf: &'a wf::WfTable,
 }
 
 /// Fuel for the exporter's own reductions (the collapse test); a type that
@@ -242,7 +250,7 @@ impl Tr<'_> {
             }
             Type::Vec { level, elem, len } => konst("Vec", &[level], vec![self.ty(elem)?, self.tm(len)?])?,
             Type::Fin { len } => konst("Fin", &[], vec![self.tm(len)?])?,
-            Type::Wf { .. } => return refuse(WF),
+            Type::Wf { shape, .. } => self.wf_type(shape)?,
             Type::DVec { .. } | Type::IWf { .. } => return refuse("DVec/IWf (no code yet; not in declarations)"),
             Type::UPi { .. } => return refuse("ΠΠ (universe polymorphism)"),
             Type::GlobalTy { .. } => return refuse("global type variable (layer c/p meta binding)"),
@@ -312,7 +320,7 @@ impl Tr<'_> {
             }
             Term::TmVec { level, elem, len } => konst("Vec", &[level], vec![self.tm(elem)?, self.tm(len)?])?,
             Term::TmFin { len } => konst("Fin", &[], vec![self.tm(len)?])?,
-            Term::TmWf { .. } => return refuse(WF),
+            Term::TmWf { level, shape, .. } => self.wf_type(&Type::El { level: level.clone(), tm: shape.clone() })?,
             // ---- Nat ----
             Term::Zero => Hx::NatLit("0".into()),
             Term::NatLit(n) => Hx::NatLit(n.to_string()),
@@ -475,7 +483,10 @@ impl Tr<'_> {
                     self.tm(scrut)?,
                 ],
             )?,
-            Term::Supf { .. } | Term::ElimWf { .. } => return refuse(WF),
+            Term::Supf { shape, label, children, .. } => self.wf_supf(shape, label, children)?,
+            Term::ElimWf { level, motive_level, shape, arity, motive, step, scrut } => {
+                self.wf_elim(level, motive_level, shape, arity, motive, step, scrut)?
+            }
             Term::Supi { .. } | Term::ElimIWf { .. } => return refuse("IWf (no code yet; not in declarations)"),
             // ---- functions ----
             Term::Lam { dom, body, .. } => lam(self.ty(dom)?, self.under(Some(dom), || self.tm(body))?),
@@ -514,8 +525,33 @@ pub struct Decl {
     pub name: Option<String>,
     pub ty: Hx,
     /// The definition's body, or the proof of a theorem; `None` for an
-    /// assumption (an axiom, or a theorem whose proof Ψ did not keep).
+    /// assumption (an axiom, or a theorem whose proof Ψ did not keep) and
+    /// for an inductive.
     pub body: Option<Hx>,
+    /// Set when the binding is a tier-1 type code realised as a native
+    /// inductive (`wf.rs`); `ty` is then the inductive's type.
+    pub inductive: Option<Inductive>,
+    /// Target-only definitions to declare just before this one (the
+    /// eliminators it is the first to use) and just after it.
+    pub before: Vec<Aux>,
+    pub after: Vec<Aux>,
+}
+
+/// A native inductive: its parameters are the first `nparams` binders of its
+/// type and of each constructor's.
+#[derive(Clone, Debug)]
+pub struct Inductive {
+    pub nparams: usize,
+    /// Each constructor's key and full type.
+    pub ctors: Vec<(String, Hx)>,
+}
+
+/// A definition the target needs that Ψ has no binding for.
+#[derive(Clone, Debug)]
+pub struct Aux {
+    pub name: String,
+    pub ty: Hx,
+    pub body: Hx,
 }
 
 /// What the exporter reads: Ψ, plus what the elaborator knows beside it.
@@ -527,12 +563,16 @@ pub struct Source<'a> {
     pub proof: &'a dyn Fn(usize) -> Option<std::sync::Arc<Term>>,
     /// A binding's module-qualified name (`Elaborator::global_key_at`).
     pub name: &'a dyn Fn(usize) -> Option<String>,
+    /// A nominal tag's constructor names, in declaration order
+    /// (`Elaborator::constructor_names`): what a native inductive's
+    /// constructors are called.
+    pub ctors: &'a dyn Fn(u64) -> Option<Vec<String>>,
 }
 
 impl<'a> Source<'a> {
     /// Ψ alone: sealed proofs only, and no names.
     pub fn psi(psi: &'a GlobalCtx) -> Source<'a> {
-        Source { psi, proof: &|_| None, name: &|_| None }
+        Source { psi, proof: &|_| None, name: &|_| None, ctors: &|_| None }
     }
 }
 
@@ -552,10 +592,12 @@ pub fn export(src: &Source) -> Vec<Exported> {
     let psi = src.psi;
     let mut out: Vec<Exported> = Vec::new();
     let mut refused = vec![false; psi.bindings.len()];
+    let table = wf::WfTable::default();
     for (abs, b) in psi.bindings.iter().enumerate() {
         let prefix = psi.prefix(abs);
-        let tr = Tr { at: abs, psi: &prefix, ctx: RefCell::new(Vec::new()) };
-        let name = (src.name)(abs);
+        let tr = Tr { at: abs, psi: &prefix, ctx: RefCell::new(Vec::new()), wf: &table };
+        let mut name = (src.name)(abs);
+        table.wanted.borrow_mut().clear();
         let decl = (|| -> R<Decl> {
             let GlobalBinding::Tm { ctx, ty, body, level, .. } = b else {
                 return refuse("context or type global binding");
@@ -576,12 +618,38 @@ pub fn export(src: &Source) -> Vec<Exported> {
             let spelled = proof.map(|t| {
                 spell_checked_in_code(&prefix, 0, Layer::Code, &nil, Rc::clone(&t), ty, level, DEFAULT_FUEL).unwrap_or(t)
             });
-            let d = Decl {
+            if let Some(code) = body {
+                if let Some(w) = tr.register_wf(name.as_deref(), code, ty_tag_ctors(src, &prefix, code))? {
+                    name = Some(w.key.clone());
+                    return tr.wf_inductive(&w, tr.ty(&spelled_ty)?);
+                }
+            }
+            let mut d = Decl {
                 abs,
                 name: name.clone(),
                 ty: tr.ty(&spelled_ty)?,
                 body: spelled.map(|t| tr.tm(&t)).transpose()?,
+                inductive: None,
+                before: Vec::new(),
+                after: Vec::new(),
             };
+            // The eliminators this declaration is the first to use, each
+            // translated where its declaration is.
+            let wanted = std::mem::take(&mut *table.wanted.borrow_mut());
+            for (tag, ml) in wanted {
+                if !table.emitted.borrow_mut().insert((tag, ml)) {
+                    continue;
+                }
+                let w = table.by_tag.borrow()[&tag].clone();
+                let at = Tr { at: w.abs, psi: &w.psi, ctx: RefCell::new(Vec::new()), wf: &table };
+                match at.wf_elim_def(&w, ml) {
+                    Ok(aux) => d.before.push(aux),
+                    Err(e) => {
+                        table.emitted.borrow_mut().remove(&(tag, ml));
+                        return Err(e);
+                    }
+                }
+            }
             if let Some(dep) = mentions(&d).into_iter().find(|&g| refused[g]) {
                 let dep = (src.name)(dep).unwrap_or_else(|| format!("g{dep}"));
                 return Err(Refusal(format!("mentions refused declaration {dep}")));
@@ -592,6 +660,19 @@ pub fn export(src: &Source) -> Vec<Exported> {
         out.push(Exported { abs, name, decl });
     }
     out
+}
+
+/// The constructor names of the tier-1 declaration whose type code `code`
+/// is, by the tag its shape carries (read again by `register_wf`; here only
+/// to name things).
+fn ty_tag_ctors(src: &Source, prefix: &GlobalCtx, code: &Term) -> Option<Vec<String>> {
+    let (mut cur, mut depth) = (code, 0);
+    while let Term::Lam { body, .. } = cur {
+        (cur, depth) = (body, depth + 1);
+    }
+    let Term::TmWf { level, shape, .. } = cur else { return None };
+    let shape = Type::El { level: level.clone(), tm: Rc::clone(shape) };
+    (src.ctors)(Tr::tag_in(prefix, &shape, depth)?)
 }
 
 fn mentions(d: &Decl) -> Vec<usize> {
@@ -610,6 +691,14 @@ fn mentions(d: &Decl) -> Vec<usize> {
     if let Some(b) = &d.body {
         go(b, &mut out);
     }
+    for (_, t) in d.inductive.iter().flat_map(|i| &i.ctors) {
+        go(t, &mut out);
+    }
+    for a in d.before.iter().chain(&d.after) {
+        go(&a.ty, &mut out);
+        go(&a.body, &mut out);
+    }
+    out.retain(|&g| g != d.abs);
     out
 }
 
@@ -705,7 +794,7 @@ impl Printer {
             Hx::Var(_) | Hx::Hole | Hx::NatLit(_) => true,
             // Rocq parses `f @c` as a syntax error, so there a constant is
             // an atom only in head position.
-            Hx::Const(..) | Hx::Global(_) => self.target == Target::Lean,
+            Hx::Const(..) | Hx::Global(_) | Hx::Named(..) => self.target == Target::Lean,
             Hx::Sort(_) => self.target == Target::Coq,
             Hx::Pi(..) | Hx::Lam(..) | Hx::App(..) => false,
         };
@@ -743,7 +832,7 @@ impl Printer {
                     head = f;
                 }
                 match head {
-                    Hx::Const(..) | Hx::Global(_) => self.atom(head),
+                    Hx::Const(..) | Hx::Global(_) | Hx::Named(..) => self.atom(head),
                     _ => self.term(head, depth, true),
                 }
                 for a in spine.into_iter().rev() {
@@ -751,7 +840,7 @@ impl Printer {
                     self.term(a, depth, true);
                 }
             }
-            Hx::Const(..) | Hx::Global(_) => self.atom(t),
+            Hx::Const(..) | Hx::Global(_) | Hx::Named(..) => self.atom(t),
             Hx::NatLit(n) => {
                 let _ = write!(self.out, "({n} : Hx.Nat)");
             }
@@ -760,6 +849,62 @@ impl Printer {
         if open {
             self.out.push(')');
         }
+    }
+
+    fn def(&mut self, name: &str, ty: &Hx, body: Option<&Hx>) {
+        let kw = match (self.target, body) {
+            (Target::Lean, Some(_)) => "@[reducible] def",
+            (Target::Lean, None) => "axiom",
+            (Target::Coq, Some(_)) => "Definition",
+            (Target::Coq, None) => "Axiom",
+        };
+        let _ = write!(self.out, "{kw} {name} : ");
+        self.term(ty, 0, false);
+        if let Some(b) = body {
+            self.out.push_str(" :=\n  ");
+            self.term(b, 0, false);
+        }
+        self.out.push_str(match self.target {
+            Target::Lean => "\n\n",
+            Target::Coq => ".\n\n",
+        });
+    }
+
+    /// A native inductive, its parameters as binders. Rocq has no
+    /// realisation of `Wf` here (design §5.1), so it gets a comment.
+    fn inductive(&mut self, name: &str, ty: &Hx, ind: &Inductive) {
+        if self.target == Target::Coq {
+            let _ = writeln!(self.out, "(* {name}: refused: Wf is realised for Lean only *)\n");
+            return;
+        }
+        let strip = |mut t: &Hx, out: &mut Vec<Hx>| {
+            for _ in 0..ind.nparams {
+                let Hx::Pi(a, b) = t else { unreachable!("an inductive's parameters are binders") };
+                out.push((**a).clone());
+                t = b;
+            }
+            t.clone()
+        };
+        let mut params = Vec::new();
+        let rest = strip(ty, &mut params);
+        let _ = write!(self.out, "inductive {name}");
+        for (i, a) in params.iter().enumerate() {
+            let _ = write!(self.out, " (x{i} : ");
+            self.term(a, i as u32, false);
+            self.out.push(')');
+        }
+        self.out.push_str(" : ");
+        self.term(&rest, ind.nparams as u32, false);
+        self.out.push_str(" where\n");
+        for (key, cty) in &ind.ctors {
+            let short = key.rsplit("::").next().unwrap_or(key);
+            let short = if plain_ident(short) && !LEAN_KEYWORDS.contains(&short) { short.to_string() } else { format!("«{short}»") };
+            let _ = write!(self.out, "  | {short} : ");
+            let c = strip(cty, &mut Vec::new());
+            self.term(&c, ind.nparams as u32, false);
+            self.out.push('\n');
+        }
+        self.out.push('\n');
     }
 
     /// A constant or global, explicit (`@`), with its levels.
@@ -777,6 +922,16 @@ impl Printer {
             }
             Hx::Global(g) => {
                 let _ = write!(self.out, "@{}", self.names[*g]);
+            }
+            Hx::Named(key, levels) => {
+                let _ = write!(self.out, "@{}", target_name(self.target, key));
+                if !levels.is_empty() {
+                    let ls: Vec<String> = levels.iter().map(|l| l.to_string()).collect();
+                    let _ = match self.target {
+                        Target::Lean => write!(self.out, ".{{{}}}", ls.join(", ")),
+                        Target::Coq => write!(self.out, "@{{{}}}", ls.join(" ")),
+                    };
+                }
             }
             _ => unreachable!("atom: a constant or a global"),
         }
@@ -801,22 +956,16 @@ pub fn print(target: Target, decls: &[Exported]) -> String {
                 };
             }
             Ok(d) => {
-                let kw = match (target, &d.body) {
-                    (Target::Lean, Some(_)) => "@[reducible] def",
-                    (Target::Lean, None) => "axiom",
-                    (Target::Coq, Some(_)) => "Definition",
-                    (Target::Coq, None) => "Axiom",
-                };
-                let _ = write!(p.out, "{kw} {name} : ");
-                p.term(&d.ty, 0, false);
-                if let Some(b) = &d.body {
-                    p.out.push_str(" :=\n  ");
-                    p.term(b, 0, false);
+                for a in &d.before {
+                    p.def(&target_name(target, &a.name), &a.ty, Some(&a.body));
                 }
-                p.out.push_str(match target {
-                    Target::Lean => "\n\n",
-                    Target::Coq => ".\n\n",
-                });
+                match &d.inductive {
+                    Some(ind) => p.inductive(&name, &d.ty, ind),
+                    None => p.def(&name, &d.ty, d.body.as_ref()),
+                }
+                for a in &d.after {
+                    p.def(&target_name(target, &a.name), &a.ty, Some(&a.body));
+                }
             }
         }
     }
@@ -853,6 +1002,13 @@ impl Dag {
             }
             Hx::Global(g) if self.skipped.contains(g) => return Err(format!("mentions skipped {}", self.names[*g])),
             Hx::Global(g) => format!("g\t{}", self.names[*g]),
+            Hx::Named(key, levels) => {
+                let mut s = format!("g\t{key}");
+                for l in levels {
+                    let _ = write!(s, "\t{l}");
+                }
+                s
+            }
             Hx::NatLit(n) => format!("n\t{n}"),
             Hx::Hole => return Err("a hole (a component only the target's elaborator can infer)".into()),
         };
@@ -887,11 +1043,29 @@ pub fn print_kernel(decls: &[Exported]) -> String {
         let line = match &e.decl {
             Err(Refusal(why)) => Err(format!("refused: {why}")),
             Ok(d) => (|| {
+                let mut lines = Vec::new();
+                let aux = |dag: &mut Dag, a: &Aux| -> Result<String, String> {
+                    Ok(format!("d\t{}\t{}\t{}", a.name, dag.node(&a.ty)?, dag.node(&a.body)?))
+                };
+                for a in &d.before {
+                    lines.push(aux(&mut dag, a)?);
+                }
                 let ty = dag.node(&d.ty)?;
-                Ok(match &d.body {
-                    Some(b) => format!("d\t{name}\t{ty}\t{}", dag.node(b)?),
-                    None => format!("ax\t{name}\t{ty}"),
-                })
+                lines.push(match (&d.inductive, &d.body) {
+                    (Some(ind), _) => {
+                        let mut l = format!("i\t{name}\t{}\t{ty}", ind.nparams);
+                        for (key, cty) in &ind.ctors {
+                            let _ = write!(l, "\t{key}\t{}", dag.node(cty)?);
+                        }
+                        l
+                    }
+                    (None, Some(b)) => format!("d\t{name}\t{ty}\t{}", dag.node(b)?),
+                    (None, None) => format!("ax\t{name}\t{ty}"),
+                });
+                for a in &d.after {
+                    lines.push(aux(&mut dag, a)?);
+                }
+                Ok(lines.join("\n"))
             })(),
         };
         match line {

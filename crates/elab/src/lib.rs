@@ -1955,6 +1955,13 @@ impl Elaborator {
         Some(names::qkey(&owner.scope.module, &key.name(&owner.name)))
     }
 
+    /// The constructor names of the nominal type with tag `tag`, in
+    /// declaration order: what an exporter calls a native inductive's
+    /// constructors.
+    pub fn constructor_names(&self, tag: u32) -> Option<Vec<String>> {
+        Some(self.types.by_tag(tag)?.ctors.iter().map(|c| c.name.clone()).collect())
+    }
+
     /// Begin aggregating value-machine allocation and cache activity across
     /// kernel gates and in-language analyzer evaluation.
     pub fn enable_value_metrics(&mut self) {

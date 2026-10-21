@@ -14,10 +14,14 @@ Line format, tab-separated; node lines are numbered from 0 in order:
   l a b      `fun (x : #a) => #b`
   a f x      application
   c n l…     prelude constant `Hx.n` at levels l…
-  g k        an exported declaration, Heather key `k` (`nat::Nat::add`)
+  g k l…     an exported declaration, Heather key `k` (`nat::Nat::add`), at
+             raw levels l… (only a native inductive's recursor has any)
   n d        natural-number literal
   d k t v    definition `Heather.k : #t := #v` (reducible)
   ax k t     assumption `Heather.k : #t`
+  i k p t (c ct)…
+             inductive `Heather.k : #t` with `p` parameters and constructors
+             `Heather.c : #ct` (a realised `Wf`, crates/export/src/wf.rs)
   x k why    skipped by the exporter
 -/
 import Lean
@@ -69,7 +73,7 @@ def step (st : St) (line : String) : IO St := do
   | ["l", a, b] => push (return .lam `x (← node st a) (← node st b) .default)
   | ["a", f, x] => push (return .app (← node st f) (← node st x))
   | "c" :: n :: ls => push (return .const (Name.str `Hx n) (← ls.mapM fun l => return .ofNat (← lit l)))
-  | ["g", k] => push (return .const (heatherName k) [])
+  | "g" :: k :: ls => push (return .const (heatherName k) (← ls.mapM fun l => return .ofNat (← lit l)))
   | ["n", d] => push (return .lit (.natVal (← lit d)))
   | ["d", k, t, v] =>
     match (do pure (← node st t, ← node st v)) with
@@ -81,6 +85,14 @@ def step (st : St) (line : String) : IO St := do
     match node st t with
     | .ok ty => add st k (.axiomDecl { name := heatherName k, levelParams := [], type := ty, isUnsafe := false })
     | .error m => throw (IO.userError m)
+  | "i" :: k :: np :: t :: cs =>
+    let rec ctors : List String → Except String (List Constructor)
+      | c :: ct :: rest => do pure ({ name := heatherName c, type := ← node st ct } :: (← ctors rest))
+      | [] => pure []
+      | _ => .error "odd constructor list"
+    match (do pure (← lit np, ← node st t, ← ctors cs)) with
+    | .ok (np, ty, ctors) => add st k (.inductDecl [] np [{ name := heatherName k, type := ty, ctors }] false)
+    | .error m => throw (IO.userError s!"{m} in: {line}")
   | "x" :: k :: why => do
     IO.eprintln s!"{heatherName k}: skipped: {String.intercalate "\t" why}"
     pure { st with skipped := st.skipped + 1 }

@@ -5,7 +5,7 @@ labels: [translation,metatheory,design]
 area: heather-in-lean-coq
 milestone: [export-fragment]
 created: 2026-10-20
-updated: 2026-10-20
+updated: 2026-10-21
 ---
 
 Owns the roadmap's `export-fragment` milestone (`docs/roadmap.md`):
@@ -41,3 +41,11 @@ replacement symbol where the two theories differ. The first round:
   The open-tag β side condition is recommended to stay an exporter-side
   condition measured by [[export-library-sweep]] (design §11.3); Minus
   agreed.
+- 2026-10-21, later (PR #87): the closure of `lib/std/list.hthr` exports
+  whole, 387 bindings with `List` as a native Lean inductive. Lean's kernel
+  accepts it through the `addDecl` route, except two bodies that keep holes
+  ([[export-typed-translation]]). The open-tag β side condition held on
+  every library declaration, and a negative control shows Lean enforces it.
+  [[export-keeps-proofs]], [[export-wf-native-inductives]] and
+  [[export-library-sweep]] are closed. Next: a wider sweep,
+  [[export-typed-translation]]'s leftovers, and [[export-checks-theorem]].
