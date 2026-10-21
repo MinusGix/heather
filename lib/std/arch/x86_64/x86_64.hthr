@@ -25,7 +25,7 @@ inductive Gpr {
     R8, R9, R10, R11, R12, R13, R14, R15,
 }
 
-fn gpr_index(register: Gpr) → Nat {
+fn Gpr::index(self register: Gpr) → Nat {
     match register {
         Rax => 0, Rcx => 1, Rdx => 2, Rbx => 3,
         Rsp => 4, Rbp => 5, Rsi => 6, Rdi => 7,
@@ -34,13 +34,29 @@ fn gpr_index(register: Gpr) → Nat {
     }
 }
 
-fn nat_same(left: Nat) → Nat → Bool {
-    match left as λ n => Nat → Bool {
-        Zero => λ right => match right { Zero => True, Succ(_) => False },
-        Succ(l, ih) => λ right => match right {
-            Zero => False,
-            Succ(r) => ih(r),
-        },
+// The same register, by index: what a register write branches on.
+fn Gpr::same(self left, right: Gpr) → Bool { left.index().same(right.index()) }
+
+theorem Gpr::same_sound(self register: Gpr): (query: Gpr) →
+    register.same(query) = True → register = query
+{
+    match register {
+        Rax => λ query => match query { Rax => λ _ => refl, _ => λ no => absurd(no) },
+        Rcx => λ query => match query { Rcx => λ _ => refl, _ => λ no => absurd(no) },
+        Rdx => λ query => match query { Rdx => λ _ => refl, _ => λ no => absurd(no) },
+        Rbx => λ query => match query { Rbx => λ _ => refl, _ => λ no => absurd(no) },
+        Rsp => λ query => match query { Rsp => λ _ => refl, _ => λ no => absurd(no) },
+        Rbp => λ query => match query { Rbp => λ _ => refl, _ => λ no => absurd(no) },
+        Rsi => λ query => match query { Rsi => λ _ => refl, _ => λ no => absurd(no) },
+        Rdi => λ query => match query { Rdi => λ _ => refl, _ => λ no => absurd(no) },
+        R8 => λ query => match query { R8 => λ _ => refl, _ => λ no => absurd(no) },
+        R9 => λ query => match query { R9 => λ _ => refl, _ => λ no => absurd(no) },
+        R10 => λ query => match query { R10 => λ _ => refl, _ => λ no => absurd(no) },
+        R11 => λ query => match query { R11 => λ _ => refl, _ => λ no => absurd(no) },
+        R12 => λ query => match query { R12 => λ _ => refl, _ => λ no => absurd(no) },
+        R13 => λ query => match query { R13 => λ _ => refl, _ => λ no => absurd(no) },
+        R14 => λ query => match query { R14 => λ _ => refl, _ => λ no => absurd(no) },
+        R15 => λ query => match query { R15 => λ _ => refl, _ => λ no => absurd(no) },
     }
 }
 
@@ -54,7 +70,7 @@ fn read_gpr(register: Gpr, registers: Gprs) → BitVec(64) {
 
 fn write_gpr(register: Gpr, value: BitVec(64), registers: Gprs) → Gprs {
     Gprs(at := λ (query: Gpr) =>
-        match nat_same(gpr_index(register), gpr_index(query)) {
+        match register.same(query) {
             False => registers.at(query),
             True => value,
         })

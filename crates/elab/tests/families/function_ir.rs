@@ -25,6 +25,8 @@ mod function_ir_cert;
 mod function_ir_composed_certificates;
 #[path = "../function_ir_guarded_read.rs"]
 mod function_ir_guarded_read;
+#[path = "../function_ir_lower.rs"]
+mod function_ir_lower;
 #[path = "../function_ir_loop.rs"]
 mod function_ir_loop;
 #[path = "../function_ir_loop_trace.rs"]
