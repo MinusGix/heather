@@ -70,7 +70,7 @@ theorem count_down(x: BitVec(64), m: Nat, at: x.toNat() = Succ(m)): x.sub(BitVec
     let one = BitVec::toNat_ofNat(64, 1, { omega });
     let fits: (BitVec::ofNat(1, n := 64).toNat() <= x.toNat()) = j(sym(one), λ k _ => k <= x.toNat(), { omega });
     trans(bitvec_nat::toNat_sub(64, x, BitVec::ofNat(1), fits),
-        trans(cong_fn<Nat, Nat>(λ k => k - BitVec::ofNat(1, n := 64).toNat(), at), trans(cong_fn<Nat, Nat>(λ k => Succ(m) - k, one), Nat::sub_zero(m))))
+        trans(cong_fn<Nat, Nat>(λ k => k -BitVec::ofNat(1, n := 64).toNat(), at), trans(cong_fn<Nat, Nat>(λ k => Succ(m) -k, one), Nat::sub_zero(m))))
 }
 
 // One pass of the loop: back to the head one lower, or out at zero.

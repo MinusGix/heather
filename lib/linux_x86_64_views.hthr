@@ -439,4 +439,3 @@ theorem io_frame_view_sound(file: IoImage): ViewSound<IoMemory, Framed>(io_linux
             j(sym(holds.proof.left), λ x _ => LinuxRequests(io_linux(), MachineState(state.gprs, state.flags, state.rip, x), c),
                 asked(holds.witness, holds.proof.right)))
 }
-
