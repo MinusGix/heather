@@ -711,10 +711,11 @@ pub(crate) fn strengthen_global(t: &Term, g: u32) -> Term {
 
 /// Pre-order walk over an expression's subexpressions.
 ///
-/// Total over the forms a *self-call* can hide in, which is what its one
-/// caller ([`crate::Elaborator::cov_depth`]) needs; a form missed here can only
-/// under-count a depth, and an under-counted depth is the refusal that stood
-/// before course-of-values existed, never a wrong term.
+/// Total over the expression forms a *self-call* can hide in, which is what
+/// its callers need: the recursion scans (`recursion::recurses_on`,
+/// [`crate::Elaborator::varying_params`], [`crate::Elaborator::cov_depth`]) are
+/// sizing decisions, so a form missed here costs a refusal, never a wrong
+/// term. Types (`TyLit`, type arguments, annotations) are not entered.
 pub(super) fn walk_expr(e: &Expr, f: &mut impl FnMut(&Expr)) {
     f(e);
     for_each_child(e, &mut |c| walk_expr(c, f));
@@ -738,7 +739,14 @@ pub(super) fn for_each_child(e: &Expr, go: &mut impl FnMut(&Expr)) {
             go(a);
             go(b);
         }
-        ExprKind::Match { scrut, arms, .. } | ExprKind::MatchCode { scrut, arms, .. } => {
+        ExprKind::Match {
+            scrut, motive, arms, ..
+        } => {
+            go(scrut);
+            motive.iter().for_each(|m| go(m));
+            arms.iter().for_each(|a| go(&a.body));
+        }
+        ExprKind::MatchCode { scrut, arms, .. } => {
             go(scrut);
             arms.iter().for_each(|a| go(&a.body));
         }
@@ -756,18 +764,46 @@ pub(super) fn for_each_child(e: &Expr, go: &mut impl FnMut(&Expr)) {
             go(idx);
         }
         ExprKind::RecordLit { fields, .. } => fields.iter().for_each(|x| go(&x.expr)),
+        ExprKind::RecordUpdate { base, fields } => {
+            go(base);
+            fields.iter().for_each(|x| go(&x.expr));
+        }
         ExprKind::Block(b) => {
             for s in &b.stmts {
                 match s {
-                    Stmt::Let { expr, .. } | Stmt::LetRecord { expr, .. } => go(expr),
-                    _ => {}
+                    Stmt::Let { expr, .. }
+                    | Stmt::LetRecord { expr, .. }
+                    | Stmt::LetCode { expr, .. } => go(expr),
                 }
             }
             go(&b.result);
             b.ons.iter().for_each(|o| go(&o.expr));
         }
         ExprKind::Quote(x) | ExprKind::Splice(x) => go(x),
-        _ => {}
+        // `j(p, λ y q => T, case)`: a self-call in the case is the arm's own
+        // (issues/ih-generalization-misses-call-under-j.md).
+        ExprKind::J {
+            proof,
+            motive,
+            case,
+        } => {
+            go(proof);
+            go(motive);
+            go(case);
+        }
+        // Exhaustive on purpose: a form added to the surface without a line
+        // here is a compile error, not a self-call the scans silently miss.
+        ExprKind::Var(_)
+        | ExprKind::OpSymbol { .. }
+        | ExprKind::Univ { .. }
+        | ExprKind::Num(_)
+        | ExprKind::Char(_)
+        | ExprKind::Str(_)
+        | ExprKind::ArgSlot(_)
+        | ExprKind::TyLit(_)
+        | ExprKind::Refl
+        | ExprKind::AutoRefl
+        | ExprKind::Hole(_) => {}
     }
 }
 
