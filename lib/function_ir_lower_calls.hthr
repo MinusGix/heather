@@ -216,29 +216,29 @@ theorem call_step<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stac
     g0: Gprs, rsp_g0: read_gpr(Rsp, g0) = stack.at(d), k: Nat, at: asm_back(site.program, k) = At(prog, 0, CallTo(Succ(callee)))):
     site.Moves(stack.writes, prog_len(prog), prog_len(prog) + 5,
         λ (x: MachineState<M>) => stack.ArgsReady(d, s0, g0, words, x), λ (t: MachineState<M>) => stack.Returned(d, s0, g0, answer, t)) {
-    let back: ((d - 8) + 8 = d) = Nat::sub_add_cancel(8, d, { omega });
-    let entered: ((d - 8) + 8 <= stack.size) = { omega };
-    let deep: (72 * Succ(callee) <= d - 8) = { omega };
+    let back: ((d -8) + 8 = d) = Nat::sub_add_cancel(8, d, { omega });
+    let entered: ((d -8) + 8 <= stack.size) = { omega };
+    let deep: (72 * Succ(callee) <= d -8) = { omega };
     let slots: (d + 8 * (0 + saved_registers().len()) <= stack.size) = { omega };
-    let at_d: (stack.at((d - 8) + 8) = stack.at(d)) = cong_fn<Nat, BitVec(64)>(λ n => stack.at(n), back);
+    let at_d: (stack.at((d -8) + 8) = stack.at(d)) = cong_fn<Nat, BitVec(64)>(λ n => stack.at(n), back);
     let displacement = asm_jump_of(asm_labels(site.program), prog_len(prog), CallTo(Succ(callee)));
     site.moves_call(stack, site.program.laid_out_fits(laid), k, prog, 0, Succ(callee), at,
         asm_labels(site.program)(Succ(callee)),
         call_lands(asm_labels(site.program), k, site.program, prog, 0, Succ(callee), site.program.laid_out_lands(laid), at),
         CalleePre<M>(callees, callee, words, answer), stack.CalleePost(answer), calls(callee, below, words, answer),
         λ (x: MachineState<M>) => stack.ArgsReady(d, s0, g0, words, x), λ (t: MachineState<M>) => stack.Returned(d, s0, g0, answer, t),
-        λ _ => d - 8,
+        λ _ => d -8,
         λ x held => ⟨trans(held.right.left.right.right.left, trans(rsp_g0, sym(at_d))),
             ⟨entered, ⟨args_after_write(words, argument_registers(), x.gprs, Rsp, push_address(x.gprs), trivial, held.left),
                 ⟨answered, deep⟩⟩⟩⟩,
         λ x t held rsp_t returned => {
-            let rsp_x: (read_gpr(Rsp, x.gprs) = stack.at((d - 8) + 8)) = trans(held.right.left.right.right.left, trans(rsp_g0, sym(at_d)));
-            let pushed: (push_address(x.gprs) = stack.at(d - 8)) =
-                trans(cong_fn<BitVec(64), BitVec(64)>(λ a => a.sub(BitVec::ofNat(8)), rsp_x), push_at(stack.low, d - 8));
+            let rsp_x: (read_gpr(Rsp, x.gprs) = stack.at((d -8) + 8)) = trans(held.right.left.right.right.left, trans(rsp_g0, sym(at_d)));
+            let pushed: (push_address(x.gprs) = stack.at(d -8)) =
+                trans(cong_fn<BitVec(64), BitVec(64)>(λ a => a.sub(BitVec::ofNat(8)), rsp_x), push_at(stack.low, d -8));
             let u = call_near_after(stack.writes, displacement, x);
             let pushed_below: stack.Unchanged(d, x.memory, u.memory) =
                 j(sym(pushed), λ a _ => stack.Unchanged(d, x.memory, stack.writes.store(x.memory, a, word_bytes(next_rip(x.rip, 5)))),
-                    stack.store_below(x.memory, d - 8, d, { omega }, { omega }, next_rip(x.rip, 5)));
+                    stack.store_below(x.memory, d -8, d, { omega }, { omega }, next_rip(x.rip, 5)));
             let callee_left: stack.Unchanged(d, u.memory, t.memory) =
                 j(back, λ n _ => stack.Unchanged(n, u.memory, t.memory), returned.right.right);
             let unchanged = stack.unchanged_trans(d, x.memory, u.memory, t.memory, pushed_below, callee_left);
@@ -668,7 +668,6 @@ theorem branch_emits_in<M>(site: Site<M>, laid: site.program.laid_out().IsTrue()
      }⟩
 }
 
-
 theorem File::emit_call_emits<M>(self file: File, site: Site<M>, laid: site.program.laid_out().IsTrue(),
     stack: Stack<M>(site.fetch, site.data), callees: Callees(), bound: Nat, calls: site.Calls(stack, callees, bound),
     values: Valuation(), d: Nat, s0: MachineState<M>, rsp0: read_gpr(Rsp, s0.gprs) = stack.at(d), room: 72 * bound + 8 <= d,
@@ -813,22 +812,21 @@ theorem StructuredRegion::emit_calls_emits<M>(self region: StructuredRegion, sit
     }
 }
 
-
 // ---------------------------------------------------------------------------
 // Functions
 
 // A frame of eight slots, allocated and freed by ADD RSP, imm8.
-fn frame_allocate() → Instruction { AddRI8(Rsp, BitVec::ofNat(256 - 64)) }
+fn frame_allocate() → Instruction { AddRI8(Rsp, BitVec::ofNat(256 -64)) }
 fn frame_free() → Instruction { AddRI8(Rsp, BitVec::ofNat(64)) }
 
 theorem frame_allocated(low: BitVec(64), i: Nat):
-    next_rip(low, i + 64).add(BitVec::ofNat(256 - 64, n := 8).sign_extend(56)) = next_rip(low, i) {
-    let reading: (BitVec::ofNat(256 - 64, n := 8).sign_extend(56).toNat() = Nat::pow(2, 64) - 64) = refl;
-    let back: ((Nat::pow(2, 64) - 64) + 64 = Nat::pow(2, 64)) = Nat::sub_add_cancel(64, Nat::pow(2, 64), trivial);
-    let count: ((i + 64) + (Nat::pow(2, 64) - 64) = i + Nat::pow(2, 64)) = { omega };
-    trans(sym(BitVec::iter_add_eq_add(64, next_rip(low, i + 64), BitVec::ofNat(256 - 64, n := 8).sign_extend(56))),
+    next_rip(low, i + 64).add(BitVec::ofNat(256 -64, n := 8).sign_extend(56)) = next_rip(low, i) {
+    let reading: (BitVec::ofNat(256 -64, n := 8).sign_extend(56).toNat() = Nat::pow(2, 64) -64) = refl;
+    let back: ((Nat::pow(2, 64) -64) + 64 = Nat::pow(2, 64)) = Nat::sub_add_cancel(64, Nat::pow(2, 64), trivial);
+    let count: ((i + 64) + (Nat::pow(2, 64) -64) = i + Nat::pow(2, 64)) = { omega };
+    trans(sym(BitVec::iter_add_eq_add(64, next_rip(low, i + 64), BitVec::ofNat(256 -64, n := 8).sign_extend(56))),
     trans(rip_count(next_rip(low, i + 64), reading),
-    trans(rip_compose(low, i + 64, Nat::pow(2, 64) - 64),
+    trans(rip_compose(low, i + 64, Nat::pow(2, 64) -64),
     trans(rip_count(low, count),
     trans(sym(rip_compose(low, i, Nat::pow(2, 64))), BitVec::iterate_increment_period(64, next_rip(low, i)))))))
 }
@@ -856,7 +854,7 @@ theorem prologue_moves<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(),
     site.Moves(stack.writes, prog_len(prog), prog_len(prog) + block_length([frame_allocate()]),
         λ (x: MachineState<M>) => (x.gprs = s0.gprs) ∧ (x.memory = s0.memory),
         λ (x: MachineState<M>) => (x.gprs = stack.opened(d, s0).gprs) ∧ (x.memory = s0.memory)) {
-    let c = BitVec::ofNat(256 - 64, n := 8).sign_extend(56);
+    let c = BitVec::ofNat(256 -64, n := 8).sign_extend(56);
     let opened: (write_gpr(Rsp, read_gpr(Rsp, s0.gprs).add(c), s0.gprs) = write_gpr(Rsp, stack.at(d), s0.gprs)) =
         cong_fn<BitVec(64), Gprs>(λ a => write_gpr(Rsp, a, s0.gprs),
             trans(cong_fn<BitVec(64), BitVec(64)>(λ a => a.add(c), rsp), frame_allocated(stack.low, d)));
@@ -1027,8 +1025,8 @@ theorem kept_past_rsp(gprs: Gprs, word: BitVec(64)): Kept(callee_kept(), gprs, w
 
 // The arithmetic of a frame below the return address at offset `i`.
 theorem frame_room(k, i, size: Nat, deep: 72 * Succ(k) <= i, room: i + 8 <= size):
-    ((i - 64) + 64 = i) ∧ ((72 * k + 8 <= i - 64) ∧ (((i - 64) + 64 <= size) ∧ ((((i - 64) + 64) + 8 <= size) ∧ ((i - 64) + 64 <= i + 8)))) {
-    let back: ((i - 64) + 64 = i) = Nat::sub_add_cancel(64, i, { omega });
+    ((i -64) + 64 = i) ∧ ((72 * k + 8 <= i -64) ∧ (((i -64) + 64 <= size) ∧ ((((i -64) + 64) + 8 <= size) ∧ ((i -64) + 64 <= i + 8)))) {
+    let back: ((i -64) + 64 = i) = Nat::sub_add_cancel(64, i, { omega });
     ⟨back, ⟨{ omega }, ⟨{ omega }, ⟨{ omega }, { omega }⟩⟩⟩⟩
 }
 
@@ -1054,7 +1052,7 @@ theorem function_body<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), 
     λ s here resident held => {
         let computes = held.right.right.right.left.right.left;
         let values = computes.witness;
-        let d = i - 64;
+        let d = i -64;
         let sizes = frame_room(k, i, stack.size, held.right.right.right.left.right.right, held.right.right.left);
         let back: (d + 64 = i) = sizes.left;
         let s1 = stack.opened(d, s0);
