@@ -129,7 +129,7 @@ emits constructors the library no longer has, and the after binary cannot
 check the before tree's. `--whole-tree` (with `--base`) runs the before binary
 inside its worktree, over that commit's sources. Each side is then one whole
 tree, and a moved counter is the round's combined result. The native build
-workloads (`BUILD_X86`, e.g. `examples/x86-native/wc.hthr`) are the usual
+workloads (`BUILD_X86`, e.g. `examples/x86-native/reused_callee.hthr`) are the usual
 reason to use it.
 
 ### A source change: `--source-patch`

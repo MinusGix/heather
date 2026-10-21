@@ -4,7 +4,7 @@ status: open
 labels: [performance,proofs,bitvec,omega]
 area: tactics
 created: 2026-09-26
-updated: 2026-09-28
+updated: 2026-10-21
 ---
 
 `bv_omega` checks the word facts of `lib/decimal_line.hthr`, but it costs
@@ -373,3 +373,4 @@ theorem bv_place_step(s: BitVec(64), r, h, c, w, q, rest: Nat,
   heather-cli --test native_read_loop -- wc_l_prints_every_line` passed
   certificate generation and execution, including fragmented input and
   failed reads/writes. Both ran in the normal lane.
+- 2026-10-21: lib/decimal_line.hthr was burned in B1 ([[native-burn-process-stack]]); the measurement fixture perf/fixtures/bv_omega/bv_decimal_line.hthr is standalone and still reproduces this.

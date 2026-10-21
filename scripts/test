@@ -98,14 +98,7 @@ if [[ "${1:-}" == --fast ]]; then
         --skip native_encoder_is_checked_and_corruption_is_rejected
         --skip loaded_mapping_and_fetch_refusals
         --skip elf_header_mutations_are_rejected_by_heather
-        --skip call_stack_semantics_and_refusals
-        --skip wc_l_prints_every_line
-        --skip wc_is_gnu_wc_on_its_command_lines
-        --skip command_filter_half_is_ready
-        --skip command_stat_pass_is_ready
-        --skip command_bundle_is_ready
-        --skip tr_squeezes_newline_runs
-        --skip tr_deletes_carriage_returns)
+        --skip call_stack_semantics_and_refusals)
 elif [[ "${1:-}" == --long ]]; then
   shift
   TEST_LANE=long
@@ -177,14 +170,6 @@ semantic_warmup() {
   )
 }
 
-# The per-file command's prefix (crates/elab/tests/support/command_prefix.rs)
-# is more than one rail cold: its filter half, then the rest, each in a
-# process of its own, at width one since the rail counts every gate worker.
-command_warmup() {
-  HEATHER_KERNEL_WORKERS="${HEATHER_KERNEL_WORKERS:-1}" semantic_warmup semantic_command_warmup --exact filter_half_is_ready
-  HEATHER_KERNEL_WORKERS="${HEATHER_KERNEL_WORKERS:-1}" semantic_warmup semantic_command_warmup --exact command_prefix_is_ready
-}
-
 # One test of the heather binary's native module, alone in a bounded process.
 native_bin_warmup() {
   (
@@ -202,31 +187,17 @@ native_warmup() {
   native_bin_warmup native_encoder_is_checked_and_corruption_is_rejected
 }
 
-# The command's bundled library (`build-x86` of a `Command`, native_wc) is
-# more than one rail cold: the filter's library, then through the stat pass,
-# then the rest, at width one, into the store native_wc builds with.
-native_command_warmup() {
-  HEATHER_KERNEL_WORKERS="${HEATHER_KERNEL_WORKERS:-1}" native_bin_warmup command_filter_half_is_ready
-  HEATHER_KERNEL_WORKERS="${HEATHER_KERNEL_WORKERS:-1}" native_bin_warmup command_stat_pass_is_ready
-  HEATHER_KERNEL_WORKERS="${HEATHER_KERNEL_WORKERS:-1}" native_bin_warmup command_bundle_is_ready
-}
-
 if (( $# == 0 )); then
   semantic_warmup semantic_x86_warmup
   semantic_warmup semantic_omega_warmup
-  command_warmup
   # The fast lane skips every native certificate gate, so it has no prefix
   # to warm; the warmup alone is ~150 CPU-s.
   if [[ "$TEST_LANE" != fast ]]; then
     native_warmup
-    native_command_warmup
   fi
 else
   if [[ "$requested" == *"--test native"* ]]; then
     native_warmup
-  fi
-  if [[ "$requested" == *"--test native_wc"* ]]; then
-    native_command_warmup
   fi
   whole_elab=false
   if { [[ "$requested" == *" -p heather-elab "* ]] ||
@@ -254,12 +225,6 @@ else
      [[ "$requested" == *"--test decreases_unfolding"* ]] ||
      [[ "$requested" =~ --test[=\ ]family_omega\  ]]; then
     semantic_warmup semantic_omega_warmup
-  fi
-  # `command_process` and `command_refusals` (family_function_ir) replay the
-  # per-file command's prefix.
-  if $whole_elab || [[ "$requested" =~ --test[=\ ]family_function_ir\  ]] ||
-     [[ "$requested" == *"--test semantic_command_warmup"* ]]; then
-    command_warmup
   fi
 fi
 

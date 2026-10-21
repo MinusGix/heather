@@ -275,7 +275,8 @@ fn stitch(text: &str) -> String {
 }
 
 // A loop over a record state (docs/native-wc-design.md §4): `wc`'s step over
-// { lines, words, bytes, inside }, as examples/x86-native/wc.hthr writes it.
+// { lines, words, bytes, inside }, as examples/x86-native/wc.hthr wrote it (burned in
+// B1, at the native-v0 tag).
 // The fields sit in registers of their own and one iteration updates them in
 // place, one at a time. The step's growth is shown by case analysis, then
 // `omega`, which the caller supplies.

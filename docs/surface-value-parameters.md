@@ -1,6 +1,7 @@
 # Value parameters on `record`: the surface's value-indexed Σ
 
-Status: **landed**, 2026-08-01. Tracking issue: `issues/surface-existential.md`
+Status: **landed**, 2026-08-01; on `inductive` 2026-10-21 (§6,
+`issues/tier2-value-parameters.md`). Tracking issue: `issues/surface-existential.md`
 (route 1). The feasibility report this implements is
 `docs/surface-existential-investigation.md`; its §C is the gap list, its §F the
 consumer shapes, its §H the risks. Read that first — this document records the
@@ -53,10 +54,12 @@ parameters `0..j`. A function-valued parameter (`ev: Val -> Ir -> Res`) is
 fine; the field restriction that used to forbid function *fields* keys on
 self-occurrence, not on shape (`surface-records.md` §11.1).
 
-Rejected, each with its own message: a value parameter on an `inductive` (§6),
-a duplicate, a collision with a type parameter, and a collision with a field
-name (the field would shadow the parameter in the field types after it, which
-is legal and never meant).
+Rejected, each with its own message: a duplicate, a collision with a type
+parameter, and a collision with a field name (the field would shadow the
+parameter in the field types after it, which is legal and never meant). On an
+`inductive` (§6, since 2026-10-21) the field check runs over every
+constructor, and two more refusals apply: a recursive occurrence other than
+the uniform `D<p̄>(v̄)`, and value parameters beside an index.
 
 ---
 
@@ -196,14 +199,89 @@ That arm is now split (`inductive.rs`, `parse_result_index`):
 
 Both are pinned in `crates/elab/tests/indexed_families.rs`.
 
-**Record-only this round.** Value parameters are accepted on `record` and
-rejected by name on `inductive`. The reason is not difficulty but discipline: a
-`record` has one constructor, so uniformity across constructors is free, and
-"substitute at lowering" is the *whole* lowering. On an `inductive` the same
-list needs the uniformity check per constructor and an interaction with the
-index telescope, and doing that half-way is how a parameter gets silently
-mis-lowered as an index. Filed as follow-up on
-`issues/surface-existential.md`; no consumer needs it.
+**On `inductive`, since 2026-10-21.** This section used to end "record-only
+this round": a `record` has one constructor, so uniformity across
+constructors is free, and on an `inductive` the same list needed a
+uniformity check per constructor that was deferred rather than half-done.
+That check is now the classifier's (`inductive.rs`, `uniform_occurrence`),
+and value parameters are accepted on every unindexed `inductive`, at all
+three tiers:
+
+```heather
+inductive Res(m: Nat) { Good(n: Nat, h: dbl(n) = m), Bad(why: Nat), Gone }
+inductive Tree(m: Nat) { Leaf(n: Nat, h: dbl(n) = m), Node(l: Tree(m), k: Nat, hk: dbl(k) = m, r: Tree(m)) }
+inductive ITree<R>(E: Events) { Ret(r: R), Tau(t: ITree<R>(E)), Vis(c: E.Cmd, k: E.Resp(c) -> ITree<R>(E)) }
+```
+
+### 6.1 The lowering is the record's
+
+Nothing in the lowering moved. `lower_ctor` binds the parameters as aliases
+at the use site's depth for **every** constructor, not just a record's one,
+so each constructor's field types see the parameter weakened by however many
+binders that constructor's spine has pushed (the tag, then its earlier
+payload fields; at tier 1 the children are not in the shape, so a payload
+after a child sits under fewer binders than its written position). Tier 2
+lowers a function field's *domain* in the same field context, so
+`E.Resp(c)` sees `E` like any other field type. Construction is still
+checking position only (§4) — the injection path and every annotation are
+read off the expected type — and `match`, no-confusion and `inj` read the
+spine they are handed, so none of them needed a change.
+
+### 6.2 The uniform occurrence
+
+What an `inductive` adds is a recursive occurrence, and that is the
+substance of "per-constructor uniformity". A recursive field lowers as a
+*child* — its type is the instance being declared, so nothing in it is
+substituted. That is right only when the occurrence **is** that instance:
+`D<p̄>(v̄)` with the declaration's own type parameters and then its own value
+parameters, each a bare name, in declared order. Any other value argument —
+`D(Succ(m))`, `D(k, m)` for `D(m, k)`, `ITree<R>(F)` — would make that field
+a different instance, i.e. an **index**, and lowering it as a child would
+drop the difference with no type error. So it is refused, naming the spelling
+that is accepted:
+
+```
+field of `F` uses `D` at arguments other than its own parameters: a recursive
+occurrence must be `D(m)` exactly — its type parameters and then its value
+parameters, each bare and in order. A value argument that varies is an index,
+not a parameter
+```
+
+The applied spelling reaches a field type as `TyKind::OfExpr` (§3), not as the
+`TyKind::Named` the tier-1 rule was written for; `self_head` reads both, so a
+bare `D` where `D(m)` was meant, and a `D(0)` on a declaration with no value
+parameters, are the same refusal rather than "nested recursion". Since a field
+may not share a parameter's name (§1), a bare `m` in the occurrence can only
+be the parameter. The same classifier serves the plain child, the container
+element (`[D(m); n]`) and the function child's codomain (`A -> D(m)`), so
+tier 1 and tier 2 cannot disagree about it.
+
+### 6.3 What stays refused
+
+**Value parameters beside an index** (`inductive D(m: Nat) : (n: Nat) ->
+Type`), by name. The index telescope and the result annotations would have to
+be read under the parameters, route 2b's skeleton would have to carry them,
+and nothing asks for it yet. The bare-variable-index arm above now names the
+`inductive` spelling as well as the `record` one.
+
+The generators that already refused a value-parameterized record
+(`datarepr`, certgen) refuse a value-parameterized `inductive` by the
+same test, and an infinitary one with value parameters is not lowered at
+declaration time (there is no instance to lower it at); its first use is.
+
+### 6.4 The observers
+
+`crates/elab/tests/inductive_value_parameters.rs`, on the four axes of
+`docs/testing-generated-terms.md`. As in §2, the load-bearing half is
+propositional: for **each** constructor that mentions the parameter, the
+canonical inhabitant of a captured spelling (`A(0, refl)`, `B(0, 0, refl)`,
+`Node(l, 0, refl, r)`, `Go(0, refl, λ x => Stop)`) is refused at an open
+parameter, and a `match` at an open parameter hands each arm evidence that
+`Witness(m)` accepts at that parameter. Beside them: closed computation by
+`refl` at literal scrutinees, β at open constructor forms, induction at an
+open parameter through a plain child and through `k`, an open element type
+(`Bag<A>(m)`, `ITree<R>(E)`), no-confusion and injectivity at an open
+parameter, and every refusal of §6.2–6.3.
 
 ---
 

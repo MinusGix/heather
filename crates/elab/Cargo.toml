@@ -101,9 +101,6 @@ path = "tests/families/x86.rs"
 name = "frontend_bench_smoke"
 path = "tests/frontend_bench_smoke.rs"
 [[test]]
-name = "semantic_command_warmup"
-path = "tests/semantic_command_warmup.rs"
-[[test]]
 name = "semantic_omega_warmup"
 path = "tests/semantic_omega_warmup.rs"
 [[test]]
