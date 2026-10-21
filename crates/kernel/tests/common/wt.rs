@@ -35,7 +35,7 @@ use heather_kernel::layer::Layer;
 use heather_kernel::level::{Level, UnivVar};
 use heather_kernel::reduce::whnf_type;
 use heather_kernel::term::{
-    nth, Branches, CtxBase, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, IWfSig, LocalCtx,
+    nth, Branches, CtxBase, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, IWfSig, MSig, LocalCtx,
     LocalSubst, LocalVar, Motives, SubstTail, Term, Type,
 };
 use heather_kernel::typing::check_term;
@@ -268,7 +268,7 @@ pub fn gen_wt_ctx(env: &WtEnv, r: &mut Rng, b: u32, layer: Layer) -> LocalCtx {
 pub fn gen_wt_type(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Type>, Level) {
     assert!(env.layer != Layer::Var);
     for _ in 0..8 {
-        match r.below(20) {
+        match r.below(21) {
             // Unit^l / Empty^l — level-indexed, so a generated level rather
             // than 0 (docs/unit-empty-level-indexing.md). Without these the
             // property suite never sees the round at all.
@@ -448,6 +448,27 @@ pub fn gen_wt_type(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Type>, Level) {
                 let sig = IWfSig { level: l.clone(), idx_level: li.clone(), idx, shape, arity, out, child };
                 let ty = Type::IWf { sig: Rc::new(sig), index };
                 return (rty(ty), Level::max(l, li));
+            }
+            // M (extension; docs/kernel-coinduction-design.md §1.1): shapes
+            // under `i : I`, positions under `i, s`, the child index a
+            // checked term of `I` under `i, s, p`, the index in Γ.
+            // Computing layers only, as IWf.
+            20 if b > 0 && env.layer.computes() => {
+                let (idx, li) = gen_wt_type(env, r, b / 4);
+                let e_i = env.push_entry(Rc::clone(&idx), li.clone());
+                let (shape, l) = gen_wt_type(&e_i, r, b / 4);
+                let e_is = e_i.push_entry(Rc::clone(&shape), l.clone());
+                let (pos, lp) = gen_wt_type(&e_is, r, b / 4);
+                let e_isp = e_is.push_entry(Rc::clone(&pos), lp.clone());
+                let (Some(next), Some(index)) = (
+                    gen_wt_term_at(&e_isp, r, b / 4, &idx.shift_local(3), &li),
+                    gen_wt_term_at(env, r, b / 4, &idx, &li),
+                ) else {
+                    continue;
+                };
+                let sig = MSig { level: l, pos_level: lp, idx_level: li, idx, shape, pos, next };
+                let level = sig.family_level();
+                return (rty(Type::M { sig: Rc::new(sig), index }), level);
             }
             _ => continue,
         }

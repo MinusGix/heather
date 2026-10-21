@@ -715,7 +715,8 @@ fn delta_head_in(t: &Term, defs: Defs<'_>, eliminated: bool) -> Option<GlobalVar
         | Term::Case { scrut, .. }
         | Term::ElimW { scrut, .. }
         | Term::ElimWf { scrut, .. }
-        | Term::ElimIWf { scrut, .. } => delta_head_in(scrut, defs, true),
+        | Term::ElimIWf { scrut, .. }
+        | Term::Out { scrut, .. } => delta_head_in(scrut, defs, true),
         Term::ElimSEmpty { scrut, .. }
         | Term::LetBoxTy { scrut, .. }
         | Term::LetBoxTm { scrut, .. }
@@ -1212,6 +1213,23 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                 let e_xi = D::push_entry(&e_x, &fin, &Level::Zero);
                 self.tm(&e_xi, c1, c2, &D::weaken_ty(env, x1, 2), li1)?;
                 self.tm(env, m1, m2, x1, li1)
+            }
+            // M congruence (extension; docs/kernel-coinduction-design.md
+            // §2.1): structural, as IWf's, every component and the index,
+            // with levels equal. Shapes in (Γ, i : I), positions in
+            // (Γ, i, s : S), the child index in (Γ, i, s, p : P) at `I`.
+            (TyView::M { sig: g1, index: m1 }, TyView::M { sig: g2, index: m2 }) => {
+                self.lev_eq(g1.level, g2.level)?;
+                self.lev_eq(g1.pos_level, g2.pos_level)?;
+                self.lev_eq(g1.idx_level, g2.idx_level)?;
+                self.ty(env, &g1.idx, &g2.idx, g1.idx_level)?;
+                let e_i = D::push_entry(env, &g1.idx, g1.idx_level);
+                self.ty(&e_i, &g1.shape, &g2.shape, g1.level)?;
+                let e_is = D::push_entry(&e_i, &g1.shape, g1.level);
+                self.ty(&e_is, &g1.pos, &g2.pos, g1.pos_level)?;
+                let e_isp = D::push_entry(&e_is, &g1.pos, g1.pos_level);
+                self.tm(&e_isp, &g1.next, &g2.next, &D::weaken_ty(env, &g1.idx, 3), g1.idx_level)?;
+                self.tm(env, m1, m2, &g1.idx, g1.idx_level)
             }
             // W congruence (extension; mirrors Π/Σ).
             (
@@ -2006,6 +2024,39 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                     _ => self.tm_nee(env, a, b).map(drop),
                 }
             }
+            // M (extension; docs/kernel-coinduction-design.md §2.1): no η.
+            // Two `corec`s compare by their coalgebras: the carrier's level,
+            // the carrier in (Γ, i : I), the step in (Γ, i, x : X) at the
+            // left one's step type, and the seed at `X[j]` — in that order,
+            // since the step's type depends on the carrier. The signature
+            // and the index are forced by the type (ELIM_CONGRUENCE.md), so
+            // the type's own are used and the corecs' are not compared. A
+            // `corec` against anything else is not convertible, as `sup`
+            // against a neutral is at W: no rule unfolds a `corec` outside
+            // an `out`, so two descriptions of one tree stay distinct.
+            TyView::M { sig, index } => {
+                match (&D::view_tm(self, env, a), &D::view_tm(self, env, b)) {
+                    (
+                        TmView::Corec { sig: g1, carrier_level: k1, carrier: c1, step: t1, seed: x1 },
+                        TmView::Corec { carrier_level: k2, carrier: c2, step: t2, seed: x2, .. },
+                    ) => {
+                        self.lev_eq(k1, k2)?;
+                        let e_i = D::push_entry(env, &sig.idx, sig.idx_level);
+                        self.ty(&e_i, c1, c2, k1)?;
+                        let step_ty = D::m_step_ty(self, env, g1, k1, c1)?;
+                        let step_level = Level::join(
+                            (*g1.level).clone(),
+                            Level::join((*k1).clone(), g1.family_level()),
+                        );
+                        let e_ix = D::push_entry(&e_i, c1, k1);
+                        self.tm(&e_ix, t1, t2, &step_ty, &step_level)?;
+                        let seed_ty = D::inst_ty(self, env, env, c1, std::slice::from_ref(index))?;
+                        self.tm(env, x1, x2, &seed_ty, k1)
+                    }
+                    (TmView::Corec { .. }, _) | (_, TmView::Corec { .. }) => Err(NC),
+                    _ => self.tm_nee(env, a, b).map(drop),
+                }
+            }
             // Neutral type: only neutral terms inhabit it. `Vec`/`Fin` reach
             // here only at a neutral length (a canonical one reduces to
             // Σ/Unit resp. Sum/Empty first, and those arms then supply the
@@ -2380,6 +2431,19 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                 self.tm(&e_step, st1, st2, &step_ty, ml1)?;
                 self.tm_nee_c(env, n1, n2)?; // inferred IWf: forced, not read
                 Ok((D::inst_ty(self, env, env, m1, &[i1.clone(), n1.clone()])?, (*ml1).clone()))
+            }
+            // out neutral congruence (extension; docs/kernel-coinduction-
+            // design.md §2.1): the scrutinees as neutrals and nothing else —
+            // the signature and the index are forced by their inferred type
+            // `M(…)(j)`. The result type is built from the left `out`'s
+            // annotations; its Σ is where η then projects the two sides.
+            (
+                TmView::Out { sig: g1, index: i1, scrut: n1 },
+                TmView::Out { scrut: n2, .. },
+            ) => {
+                self.tm_nee_c(env, n1, n2)?; // inferred M: forced, not read
+                let ty = D::m_out_ty(self, env, g1, i1)?;
+                Ok((ty, Level::join((*g1.level).clone(), g1.family_level())))
             }
             // J neutral congruence (extension beyond ch. 04); typed like
             // Case — the motive's level, the motive, the refl case and then

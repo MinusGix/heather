@@ -59,12 +59,12 @@ use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
 use heather_kernel::reduce::{whnf_term_delta, whnf_type_delta, Defs, NATIVE_DEPTH_LIMIT};
 use heather_kernel::term::{
-    CtxBase, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, IWfSig, LocalCtx, LocalSubst, LocalVar,
+    CtxBase, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, IWfSig, MSig, LocalCtx, LocalSubst, LocalVar,
     SubstTail, Term, Type,
 };
 use heather_kernel::value::{
     Elim, Env, Head, PiAnn, SigAnn, SumAnn, TmClo, TyClo, VNeTy, VNeutral, VSubst, VTail, VTy, Val,
-    VIWfSig, ValueArena,
+    VIWfSig, VMSig, ValueArena,
 };
 
 /// Cases per seed stream. Five streams over `wt.rs`'s generator; the schedule
@@ -176,6 +176,18 @@ impl<'a, 'v> Agree<'a, 'v> {
         self.under_tm(a.child, &b.child, gamma, 2, d)
     }
 
+    /// An `M` signature (`M`, `corec`, `out`): `shape`, `pos` and `next`
+    /// under one, two and three binders.
+    fn m_sig(&mut self, a: &VMSig<'v>, b: &MSig, gamma: &LocalCtx, d: u32) -> A {
+        self.lev(&a.level, &b.level, "M signature shape level")?;
+        self.lev(&a.pos_level, &b.pos_level, "M signature position level")?;
+        self.lev(&a.idx_level, &b.idx_level, "M signature index level")?;
+        self.lazy_ty(a.idx, &b.idx, gamma, d)?;
+        self.under_ty(a.shape, &b.shape, gamma, 1, d)?;
+        self.under_ty(a.pos, &b.pos, gamma, 2, d)?;
+        self.under_tm(a.next, &b.next, gamma, 3, d)
+    }
+
     fn lazy_ty(&mut self, c: &'v TyClo<'v>, t: &Type, gamma: &LocalCtx, depth: u32) -> A {
         if depth == 0 {
             return ok();
@@ -260,6 +272,10 @@ impl<'a, 'v> Agree<'a, 'v> {
                 Type::IWf { sig: sig2, index: m2 },
             ) => {
                 self.iwf_sig(sig, sig2, gamma, d)?;
+                self.lazy_tm(index, m2, gamma, d)
+            }
+            (VTy::M { sig, index }, Type::M { sig: sig2, index: m2 }) => {
+                self.m_sig(sig, sig2, gamma, d)?;
                 self.lazy_tm(index, m2, gamma, d)
             }
             (
@@ -654,6 +670,17 @@ impl<'a, 'v> Agree<'a, 'v> {
                 self.lazy_tm(label, l2, gamma, d)?;
                 self.lazy_tm(children, cs2, gamma, d)
             }
+            (
+                Val::Corec { sig, coalg, index, seed },
+                Term::Corec { sig: sig2, carrier_level, carrier, step, index: i2, seed: x2 },
+            ) => {
+                self.m_sig(sig, sig2, gamma, d)?;
+                self.lev(&coalg.carrier_level, carrier_level, "corec carrier level")?;
+                self.under_ty(coalg.carrier, carrier, gamma, 1, d)?;
+                self.under_tm(coalg.step, step, gamma, 2, d)?;
+                self.lazy_tm(index, i2, gamma, d)?;
+                self.lazy_tm(seed, x2, gamma, d)
+            }
 
             // -- functions: the closure case of the adequacy relation --
             (
@@ -949,6 +976,11 @@ impl<'a, 'v> Agree<'a, 'v> {
                 self.lev(a3, b3, "elim_IWf motive level")?;
                 self.under_ty(motive, m2, gamma, 2, d)?;
                 self.under_tm(step, st2, gamma, 3, d)?;
+                self.lazy_tm(index, i2, gamma, d)?;
+                self.ne(&prefix, scrut, gamma, depth)
+            }
+            (Elim::Out { sig, index }, Term::Out { sig: sig2, index: i2, scrut }) => {
+                self.m_sig(sig, sig2, gamma, d)?;
                 self.lazy_tm(index, i2, gamma, d)?;
                 self.ne(&prefix, scrut, gamma, depth)
             }

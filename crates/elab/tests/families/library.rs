@@ -8,6 +8,8 @@
 #[path = "../support/mod.rs"]
 mod support;
 
+#[path = "../coinduction_probe.rs"]
+mod coinduction_probe;
 #[path = "../lib_algebra.rs"]
 mod lib_algebra;
 #[path = "../lib_list_algos.rs"]

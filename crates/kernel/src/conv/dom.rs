@@ -57,7 +57,7 @@ use crate::rec;
 use crate::reduce::{step_term, step_term_delta, step_type, step_type_delta, OutOfFuel};
 use crate::subst::{GlobalEntry, GlobalSubst};
 use crate::term::{
-    iwf_children_ty, iwf_motive_scrut_ty, iwf_step_telescope, wf_step_telescope, Branches, IWfSig, GlobalVar, LocalCtx, LocalSubst, LocalVar, Motives, Term, Type,
+    iwf_children_ty, iwf_motive_scrut_ty, iwf_step_telescope, m_out_ty, m_step_ty, wf_step_telescope, Branches, IWfSig, MSig, GlobalVar, LocalCtx, LocalSubst, LocalVar, Motives, Term, Type,
 };
 
 use super::{Conv, ConvError, Env, R, NC};
@@ -104,6 +104,9 @@ pub(super) enum TyView<'a, 'v, D: Dom<'v>> {
         child: D::TmC,
         index: D::TmC,
     },
+    /// The signature's components are under its own binders (see
+    /// [`MSigC`]); `index` is not.
+    M { sig: MSigC<'a, 'v, D>, index: D::TmC },
     UPi { num_vars: u32, level: &'a Level, body: D::TyC },
     CtxPi { level: &'a Level, body: D::TyC },
     TyPi { ctx: &'a LocalCtx, arg_level: &'a Level, body_level: &'a Level, body: D::TyC },
@@ -157,6 +160,10 @@ pub(super) enum TmView<'a, 'v, D: Dom<'v>> {
     Sup { label: D::TmC, children: D::TmC },
     Supf { label: D::TmC, children: D::TmC },
     Supi { label: D::TmC, children: D::TmC },
+    /// A `corec`: the carrier under `i`, the step under `i, x`. The
+    /// signature is its own, which the step's type is built from; its index
+    /// is not shown, being forced by the type compared at.
+    Corec { sig: MSigC<'a, 'v, D>, carrier_level: &'a Level, carrier: D::TyC, step: D::TmC, seed: D::TmC },
     BoxTy(&'a Rc<Type>),
     BoxTm(&'a Rc<Term>),
 
@@ -218,6 +225,8 @@ pub(super) enum TmView<'a, 'v, D: Dom<'v>> {
         index: D::TmC,
         scrut: D::TmC,
     },
+    /// `out`, whose signature and index build its result type.
+    Out { sig: MSigC<'a, 'v, D>, index: D::TmC, scrut: D::TmC },
     J {
         ty_level: &'a Level,
         motive_level: &'a Level,
@@ -315,6 +324,7 @@ impl<'v, D: Dom<'v>> TmView<'_, 'v, D> {
                 | TmView::ElimW { .. }
                 | TmView::ElimWf { .. }
                 | TmView::ElimIWf { .. }
+                | TmView::Out { .. }
                 | TmView::J { .. }
                 | TmView::Transp { .. }
                 | TmView::App { .. }
@@ -372,6 +382,25 @@ pub(super) struct IWfSigC<'a, 'v, D: Dom<'v>> {
     pub arity: &'a D::TmC,
     pub out: &'a D::TmC,
     pub child: &'a D::TmC,
+}
+
+/// An `M` signature as the views carry it (see `term::MSig`): `shape` is
+/// under `i : I`, `pos` under `i, s`, `next` under `i, s, p`.
+pub(super) struct MSigC<'a, 'v, D: Dom<'v>> {
+    pub level: &'a Level,
+    pub pos_level: &'a Level,
+    pub idx_level: &'a Level,
+    pub idx: D::TyC,
+    pub shape: D::TyC,
+    pub pos: D::TyC,
+    pub next: D::TmC,
+}
+
+impl<'v, D: Dom<'v>> MSigC<'_, 'v, D> {
+    /// The family's level, `l ⊔ l' ⊔ li`.
+    pub(super) fn family_level(&self) -> Level {
+        Level::join(Level::join(self.level.clone(), self.pos_level.clone()), self.idx_level.clone())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -875,6 +904,20 @@ pub(super) trait Dom<'v>: Sized {
         w: &Self::Ty,
         label: &Self::TmC,
     ) -> R<Self::TyC>;
+    /// `out`'s result type `Σ(s : S[j]). Π(p : P[j, s]). M(o[j, s, p])` at
+    /// index `j`, from the shared schema `term::m_out_ty`.
+    fn m_out_ty(cv: &mut Conv<'v, Self>, env: &Env<'v>, sig: &MSigC<'_, 'v, Self>, index: &Self::TmC)
+        -> R<Self::TyC>;
+    /// A `corec` step's type in `(Γ, i, x)`, from the shared schema
+    /// `term::m_step_ty` at the corec's own signature and carrier (`carrier`
+    /// under `i`).
+    fn m_step_ty(
+        cv: &mut Conv<'v, Self>,
+        env: &Env<'v>,
+        sig: &MSigC<'_, 'v, Self>,
+        carrier_level: &Level,
+        carrier: &Self::TyC,
+    ) -> R<Self::TyC>;
     /// `M_Typ[l/ℓ, Δ/g, t/x_T]` — the code type recursor's conclusion.
     #[allow(clippy::too_many_arguments)]
     fn inst_ty_motive(
@@ -918,6 +961,32 @@ pub(super) struct Syn;
 fn id_at<'v>(home: &Env<'v>, cur: &Env<'v>) -> LocalSubst {
     let k = (cur.gamma.entries.len() - home.gamma.entries.len()) as u32;
     LocalSubst::id(&home.gamma).shift_local(k)
+}
+
+/// An `M` signature's view at the syntax domain: its own components.
+fn syn_m_sig<'a, 'v>(sig: &'a MSig) -> MSigC<'a, 'v, Syn> {
+    MSigC {
+        level: &sig.level,
+        pos_level: &sig.pos_level,
+        idx_level: &sig.idx_level,
+        idx: Rc::clone(&sig.idx),
+        shape: Rc::clone(&sig.shape),
+        pos: Rc::clone(&sig.pos),
+        next: Rc::clone(&sig.next),
+    }
+}
+
+/// The signature a view carries, as syntax again, for the shared schemas.
+fn syn_m_sig_rc(sig: &MSigC<'_, '_, Syn>) -> Rc<MSig> {
+    Rc::new(MSig {
+        level: sig.level.clone(),
+        pos_level: sig.pos_level.clone(),
+        idx_level: sig.idx_level.clone(),
+        idx: Rc::clone(&sig.idx),
+        shape: Rc::clone(&sig.shape),
+        pos: Rc::clone(&sig.pos),
+        next: Rc::clone(&sig.next),
+    })
 }
 
 fn var0() -> Rc<Term> {
@@ -1109,6 +1178,7 @@ impl<'v> Dom<'v> for Syn {
                 child: Rc::clone(&sig.child),
                 index: Rc::clone(index),
             },
+            Type::M { sig, index } => TyView::M { sig: syn_m_sig(sig), index: Rc::clone(index) },
             Type::UPi { num_vars, level, body } => {
                 TyView::UPi { num_vars: *num_vars, level, body: Rc::clone(body) }
             }
@@ -1192,6 +1262,13 @@ impl<'v> Dom<'v> for Syn {
             Term::Supi { label, children, .. } => {
                 TmView::Supi { label: Rc::clone(label), children: Rc::clone(children) }
             }
+            Term::Corec { sig, carrier_level, carrier, step, seed, .. } => TmView::Corec {
+                sig: syn_m_sig(sig),
+                carrier_level,
+                carrier: Rc::clone(carrier),
+                step: Rc::clone(step),
+                seed: Rc::clone(seed),
+            },
             Term::BoxTy(t) => TmView::BoxTy(t),
             Term::BoxTm(t) => TmView::BoxTm(t),
 
@@ -1290,6 +1367,9 @@ impl<'v> Dom<'v> for Syn {
                 index: Rc::clone(index),
                 scrut: Rc::clone(scrut),
             },
+            Term::Out { sig, index, scrut } => {
+                TmView::Out { sig: syn_m_sig(sig), index: Rc::clone(index), scrut: Rc::clone(scrut) }
+            }
             Term::J { ty_level, motive_level, ty, lhs, motive, case, rhs, proof } => TmView::J {
                 ty_level,
                 motive_level,
@@ -2047,6 +2127,21 @@ impl<'v> Dom<'v> for Syn {
         let mot = iwf_motive_scrut_ty(&sig);
         let (cs, ih, step) = iwf_step_telescope(&sig, motive_level, motive);
         Ok((Rc::new(mot), Rc::new(cs), Rc::new(ih), Rc::new(step)))
+    }
+
+    fn m_out_ty(_cv: &mut Conv<'v, Self>, _env: &Env<'v>, sig: &MSigC<'_, 'v, Self>, index: &Rc<Term>)
+        -> R<Rc<Type>> {
+        Ok(Rc::new(m_out_ty(&syn_m_sig_rc(sig), index)))
+    }
+
+    fn m_step_ty(
+        _cv: &mut Conv<'v, Self>,
+        _env: &Env<'v>,
+        sig: &MSigC<'_, 'v, Self>,
+        carrier_level: &Level,
+        carrier: &Rc<Type>,
+    ) -> R<Rc<Type>> {
+        Ok(Rc::new(m_step_ty(&syn_m_sig_rc(sig), carrier_level, carrier).shift_local(1)))
     }
 
     fn iwf_children(

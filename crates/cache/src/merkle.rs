@@ -82,7 +82,7 @@
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
 use heather_kernel::term::{
-    Branches, CtxBase, CtxEntry, GlobalBinding, IWfSig, LocalCtx, LocalSubst, Motives, SubstTail, Term,
+    Branches, CtxBase, CtxEntry, GlobalBinding, IWfSig, MSig, LocalCtx, LocalSubst, Motives, SubstTail, Term,
     Type,
 };
 
@@ -117,7 +117,8 @@ pub type Prefix = [Option<Hash>];
 /// checkable by reading a single table rather than by trusting each `match`.
 ///
 /// The ranges are deliberate: `0x01–0x1F` the small structural sorts,
-/// `0x20–0x3F` [`Type`], `0x40–0x7F` [`Term`]. Values are frozen — changing
+/// `0x20–0x3F` [`Type`], `0x40–0x7F` [`Term`], which continues at `0x80`
+/// once its range is full. Values are frozen — changing
 /// one changes every cache key, so it belongs with a domain-string bump.
 #[rustfmt::skip]
 mod tag {
@@ -177,6 +178,7 @@ mod tag {
     pub const T_SQUASH: u8 = 0x35;
     pub const T_DVEC: u8 = 0x36;
     pub const T_IWF: u8 = 0x37;
+    pub const T_M: u8 = 0x38;
 
     // terms
     pub const E_VAR: u8 = 0x40;
@@ -249,6 +251,8 @@ mod tag {
     pub const E_NATLIT_WIDE: u8 = 0x7c;
     pub const E_SUPI: u8 = 0x7d;
     pub const E_ELIMIWF: u8 = 0x7e;
+    pub const E_COREC: u8 = 0x7f;
+    pub const E_OUT: u8 = 0x80;
 }
 
 /// The walk in progress: a SHA-256 state, a small staging buffer, and the Ψ
@@ -457,6 +461,17 @@ impl<'a> Walk<'a> {
         self.term(&sig.child);
     }
 
+    /// An `M` signature's three levels, then its components.
+    fn m_sig(&mut self, sig: &MSig) {
+        self.level(&sig.level);
+        self.level(&sig.pos_level);
+        self.level(&sig.idx_level);
+        self.ty(&sig.idx);
+        self.ty(&sig.shape);
+        self.ty(&sig.pos);
+        self.term(&sig.next);
+    }
+
     fn ty(&mut self, t: &Type) {
         match t {
             Type::Nat => self.tag(tag::T_NAT),
@@ -560,6 +575,11 @@ impl<'a> Walk<'a> {
                 self.tag(tag::T_IWF);
                 self.iwf_sig_levels(sig);
                 self.iwf_sig_parts(sig);
+                self.term(index);
+            }
+            Type::M { sig, index } => {
+                self.tag(tag::T_M);
+                self.m_sig(sig);
                 self.term(index);
             }
             // Reference site 2 of 5.
@@ -932,6 +952,21 @@ impl<'a> Walk<'a> {
                 self.iwf_sig_parts(sig);
                 self.ty(motive);
                 self.term(step);
+                self.term(index);
+                self.term(scrut);
+            }
+            Term::Corec { sig, carrier_level, carrier, step, index, seed } => {
+                self.tag(tag::E_COREC);
+                self.m_sig(sig);
+                self.level(carrier_level);
+                self.ty(carrier);
+                self.term(step);
+                self.term(index);
+                self.term(seed);
+            }
+            Term::Out { sig, index, scrut } => {
+                self.tag(tag::E_OUT);
+                self.m_sig(sig);
                 self.term(index);
                 self.term(scrut);
             }

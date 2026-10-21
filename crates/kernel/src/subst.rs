@@ -109,7 +109,7 @@ use std::sync::Arc as Rc;
 use crate::bounds;
 use crate::level::Level;
 use crate::term::{
-    Branches, CtxBase, CtxEntries, CtxEntry, GlobalVar, IWfSig, LocalCtx, LocalSubst, LocalVar, Motives,
+    Branches, CtxBase, CtxEntries, CtxEntry, GlobalVar, IWfSig, LocalCtx, MSig, LocalSubst, LocalVar, Motives,
     SubstTail, Term, Type,
 };
 
@@ -347,6 +347,27 @@ fn sub_iwf_sig<M: Mapper>(sig: &Rc<IWfSig>, m: &mut M, at: Depths) -> Rc<IWfSig>
     }
 }
 
+/// An `M` signature (`docs/kernel-coinduction-design.md` §1.1): `shape`
+/// under `i`, `pos` under `i, s`, `next` under `i, s, p`. Shared when nothing
+/// in it changed, as [`sub_iwf_sig`].
+fn sub_m_sig<M: Mapper>(sig: &Rc<MSig>, m: &mut M, at: Depths) -> Rc<MSig> {
+    let before = *m.changes();
+    let mapped = MSig {
+        level: m.level(&sig.level, at),
+        pos_level: m.level(&sig.pos_level, at),
+        idx_level: m.level(&sig.idx_level, at),
+        idx: sub_ty(&sig.idx, m, at),
+        shape: sub_ty(&sig.shape, m, at + dep(0, 0, 1)),
+        pos: sub_ty(&sig.pos, m, at + dep(0, 0, 2)),
+        next: sub_tm(&sig.next, m, at + dep(0, 0, 3)),
+    };
+    if *m.changes() == before {
+        Rc::clone(sig)
+    } else {
+        Rc::new(mapped)
+    }
+}
+
 fn sub_tm<M: Mapper>(t: &Rc<Term>, m: &mut M, at: Depths) -> Rc<Term> {
     if M::COUNT_NODES {
         crate::stats::shift_global_nodes(1);
@@ -516,6 +537,8 @@ fn map_type<M: Mapper>(t: &Type, m: &mut M, at: Depths) -> Type {
         },
         // IWf: `arity` and `out` under `x : S`, `child` under `x, i`.
         Type::IWf { sig, index } => Type::IWf { sig: sub_iwf_sig(sig, m, at), index: sub_tm(index, m, at) },
+        // M: `shape` under `i`, `pos` under `i, s`, `next` under `i, s, p`.
+        Type::M { sig, index } => Type::M { sig: sub_m_sig(sig, m, at), index: sub_tm(index, m, at) },
         Type::GlobalTy { var, subst } => {
             let subst = map_subst(subst, m, at);
             m.global_ty(*var, subst, at)
@@ -808,6 +831,21 @@ fn map_term<M: Mapper>(t: &Term, m: &mut M, at: Depths) -> Term {
             motive_level: m.level(motive_level, at),
             motive: sub_ty(motive, m, at + dep(0, 0, 2)),
             step: sub_tm(step, m, at + dep(0, 0, 3)),
+            index: sub_tm(index, m, at),
+            scrut: sub_tm(scrut, m, at),
+        },
+        // corec / out: the signature as `M`'s; the carrier binds `i`, the
+        // step `i, x`.
+        Term::Corec { sig, carrier_level, carrier, step, index, seed } => Term::Corec {
+            sig: sub_m_sig(sig, m, at),
+            carrier_level: m.level(carrier_level, at),
+            carrier: sub_ty(carrier, m, at + dep(0, 0, 1)),
+            step: sub_tm(step, m, at + dep(0, 0, 2)),
+            index: sub_tm(index, m, at),
+            seed: sub_tm(seed, m, at),
+        },
+        Term::Out { sig, index, scrut } => Term::Out {
+            sig: sub_m_sig(sig, m, at),
             index: sub_tm(index, m, at),
             scrut: sub_tm(scrut, m, at),
         },

@@ -114,6 +114,7 @@ impl<'v> Walk<'_, '_, 'v> {
             | VTy::W { .. }
             | VTy::Wf { .. }
             | VTy::IWf { .. }
+            | VTy::M { .. }
             | VTy::Fin { .. }
             | VTy::CodeTy { .. }
             | VTy::CodeTm { .. } => true,
