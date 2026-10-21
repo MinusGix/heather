@@ -76,3 +76,12 @@ of the area.
   absolute bound `η`, the combined `u·|x| + η` bound, and γ with its algebra
   and the product composition `gamma_prod`. Design §13. An inference gap it
   hit is [[list-literal-left-of-append]] (a method call on a list literal has the same missing carrier).
+- 2026-10-21: round 4 (`float-arith`): `lib/std/float/arith.hthr` with add,
+  sub, mul, fma, div and format conversion on `Finite` and `Float`, each with
+  its value theorem in every mode, the IEEE §6.3 signs (one lemma,
+  `round_signed_sign`, through every operation), the special-value table and
+  the standard model for a finite result. Division rounds through the new
+  binary long division `Nat::ldiv`, which `round_rat` uses too. Design §14.
+  Square root is [[float-sqrt]] (its statement needs the reals or a cut form
+  of `RoundsTo`); binary32 literals wait on [[kernel-wide-run-comparison]].
+

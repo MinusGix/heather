@@ -475,4 +475,3 @@ fn Dyadic::sign_or(self d: Dyadic, z: Bool) → Bool {
 theorem Dyadic::sign_or_zero(self d: Dyadic, z: Bool, h: d ≈ 0): d.sign_or(z) = z {
     j(sym(d.mant_zero(h)), λ v _ => Dyadic(v, d.exp).sign_or(z) = z, refl)
 }
-
