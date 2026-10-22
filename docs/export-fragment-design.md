@@ -23,7 +23,7 @@ can carry, and the evidence for each claim.
 2. **Use one intermediate language and two printers.** The intermediate
    language, **HX** (§4), is a pure type system with constants: sorts, Π, λ,
    application, variables, numerals, and one *prelude constant* per kernel
-   former (`Hx.pair`, `Hx.J`, `Hx.transp`, …) applied to all of that
+   former (`Hx.pair`, `Hx.J`, `Hx.elimNat`, …) applied to all of that
    former's annotations. A printer per target is mechanical. The only trusted
    text per target is a hand-written prelude of about a hundred lines, which
    implements each constant with the target's own inductives and records
@@ -42,8 +42,8 @@ can carry, and the evidence for each claim.
    lowered inductive as a native Lean inductive. That realisation is exact
    except for β at an *open* tag, which the elaborator's generated code does
    not seem to use.
-5. **Recommendation: Lean is the first target.** Lean has unit η, Σ η, the
-   K-like reduction that is Heather's strip rule, proof irrelevance, GMP
+5. **Recommendation: Lean is the first target.** Lean has unit η, Σ η,
+   proof irrelevance, GMP
    numerals and algebraic universe levels. Minus's other projects are in Lean,
    and an exported `List` that is a real Lean inductive can be used from Lean.
    Rocq stays a second printer over the same HX, for the fragment it can
@@ -120,7 +120,7 @@ claim. Every probe in that column was run against the stated versions.
 | `Π`, `λ`, app | β, η | native | native | prototype |
 | `Nat`, `elim_Nat`, literals | ι; literals of any size | builtin `Nat`, `Nat.rec`; GMP literals | unary `nat`: a large literal is a large term | prototype (`big`) |
 | `Id`, `refl`, `J` | Paulin-Mohring J, **no K** | Type-valued inductive | Type-valued inductive | `Definitional.lean` |
-| `sEq`, `srefl`, `transp` | irrelevance; **strip**: `transp` at convertible endpoints is its payload, even at a neutral proof | structure over `Eq`; the strip is `Eq.rec`'s K-like reduction ✓; irrelevance only **eta-long** (§5.2) | record over an SProp `sEq` with `Definitional UIP`; strip ✓; irrelevance only eta-long | both `Definitional.*` |
+| `sEq`, `srefl` | irrelevance (no eliminator: `transp` was removed, docs/iwf-former-design.md §7) | structure over `Eq`; irrelevance only **eta-long** (§5.2) | record over an SProp `sEq`; irrelevance only eta-long | both `Definitional.*` |
 | `sEmpty`, `Squash` | irrelevant | structure over `False` / `Nonempty` | record over SProp; `elimSquash` stated eta-long | prelude |
 | `Σ`, `pair`, `fst`, `snd` | projections with η | structure; η against a constructor | primitive record; η against a constructor | both |
 | `Unit^l`, `⟨⟩` | η: any two terms convert | unit-like structure, η between neutrals ✓ | **no unit η**, and a record without a relevant field cannot be primitive ✗ | `Definitional.v` |
@@ -136,9 +136,11 @@ claim. Every probe in that column was run against the stated versions.
 | `ΠΠ`, `Λ`, `$` | first-class level quantification | prenex only (constants' level params) | prenex only | design |
 
 Two corrections to the roadmap's framing follow from the table. First, "no K"
-holds for `Id`, but `sEq` has definitional UIP and the strip rule, which is K
-behaviour. Both targets supply it, Lean natively for `Eq` and Rocq behind the
-`Definitional UIP` flag. Second, "a layer-free proof asks less of its target"
+holds for `Id`, but `sEq` has definitional UIP, which is K behaviour. Both
+targets supply it, Lean natively for `Eq` and Rocq through SProp. (Until
+2026-10-22 `sEq` also had `transp` and its strip rule, which both targets
+matched; `transp` left the kernel with route 2b's fording,
+docs/iwf-former-design.md §7.) Second, "a layer-free proof asks less of its target"
 is true for the logic but not for conversion. Heather's η for `Unit`, `Σ` and
 irrelevant types is *more* than Rocq's kernel decides, and its `Wf` is more
 than either target's positivity checker admits.
@@ -162,7 +164,6 @@ own field order, with the former's binders turned into λs
 
 ```
 elim_Nat^l(z. M; b; k ih. s; n)  ↦  Hx.elimNat.{l} (λz. ⟦M⟧) ⟦b⟧ (λk. λih. ⟦s⟧) ⟦n⟧
-transp^{l,l'}(I; x.P; a; b; e; t) ↦ Hx.transp.{l,l'} ⟦I⟧ (λx. ⟦P⟧) ⟦a⟧ ⟦b⟧ ⟦e⟧ ⟦t⟧
 El(c) ↦ ⟦c⟧      TmPi(s; x. t) ↦ Π(x : ⟦s⟧). ⟦t⟧      Ty l ↦ Type l
 ```
 
@@ -278,10 +279,7 @@ constructor, so `⟨p.pf⟩ ≡ ⟨q.pf⟩` holds but `p ≡ q` does not
 primitive record. The fix is a translation invariant: **write every term at a
 type whose whnf is `sEq`, `sEmpty` or `Squash` eta-long**, as the constructor
 applied to the projected proof, and do the same through `Σ`s whose
-components need it. The strip rule needs no help. It is `Eq.rec`'s K-like
-reduction in Lean and the special reduction of an SProp equality under
-Definitional UIP in Rocq, and both fire at a neutral proof (both
-`Definitional.*`).
+components need it.
 
 **What the prototype does (2026-10-21).** A *closed singleton* is a closed
 type whose whnf is `Unit`, an `sEq` between whnf-equal endpoints, or a
@@ -651,7 +649,7 @@ It splits into three lemmas, and HX is chosen to make the last two small:
 
 1. **Heather → HX preserves typing and conversion** on F. The work is
    conversion: each Heather conversion rule (β, each ι, Π/Σ/Unit η, the
-   irrelevance arms, the strip rule, δ) has to map to an HX rule, under the
+   irrelevance arms, δ) has to map to an HX rule, under the
    eta-long invariant of §5.2. This lemma lives with the kernel's
    metatheory in **heather-coq**, which already states every one of those
    rules. The acceleration policy's discipline that every fast path

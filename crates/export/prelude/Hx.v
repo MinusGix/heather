@@ -9,10 +9,11 @@
    - Nat: Coq's unary nat. A large numeral is a large term; the exporter
      refuses literals past a bound.
    - Id: a Type-valued inductive (no K, no irrelevance).
-   - SEq: a record over an SProp equality with Definitional UIP, whose
-     special reduction is Heather's strip rule. The record cannot be
-     primitive (its only field is irrelevant), so neutral proofs compare
-     only in eta-long form, as in Lean.
+   - SEq: a record over an SProp equality, so its proofs are irrelevant.
+     The record cannot be primitive (its only field is irrelevant), so
+     neutral proofs compare only in eta-long form, as in Lean. Heather's
+     sEq has no eliminator (transp was removed), so nothing here needs
+     the equality's special reduction.
    - Sig: a primitive record (eta against a constructor).
    - Unit: an inductive. Coq has NO unit eta, and a record with no relevant
      field cannot be primitive: Heather's unit eta is the one rule this
@@ -55,8 +56,6 @@ Arguments mkSEq {A a b} pf. Arguments pf {A a b} s.
 Arguments mkSquash {A} spf. Arguments spf {A} s.
 
 Definition srefl@{l} (A : Type@{l}) (a : A) : SEq A a a := mkSEq (srefl_ A a).
-Definition transp@{l l'} (A : Type@{l}) (P : A -> Type@{l'}) (a b : A) (e : SEq A a b) (t : P a) : P b :=
-  match pf e in sEq _ _ y return P y with srefl_ _ _ => t end.
 Definition elimSEmpty@{l l'} (M : SEmpty@{l'} -> Type@{l}) (e : SEmpty@{l'}) : M e :=
   match epf e with end.
 Definition squash@{l} (A : Type@{l}) (a : A) : Squash A := mkSquash (sintro A a).

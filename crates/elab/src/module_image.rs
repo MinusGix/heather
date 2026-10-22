@@ -33,8 +33,8 @@ use crate::resolve::DerivedInst;
 use crate::slots::Slot;
 use crate::traits::{ClassInfo, DesignationInfo, EvidenceRule, InstanceInfo};
 
-const MAGIC: &[u8; 8] = b"HTHMOD\0\x11";
-const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x0f";
+const MAGIC: &[u8; 8] = b"HTHMOD\0\x12";
+const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x10";
 
 /// Hard limits applied before any decoded collection or string allocation.
 /// The loader may choose a smaller policy; these defaults are deliberately
@@ -736,9 +736,7 @@ fn put_term(w: &mut Writer, term: &Term) {
         Term::Squash { level, ty, tm } => {
             w.byte(22); put_level(w, level); put_type(w, ty); put_term(w, tm);
         }
-        Term::Transp { ty_level, motive_level, ty, motive, lhs, rhs, proof, tm } => {
-            w.byte(23); put_level(w, ty_level); put_level(w, motive_level); put_type(w, ty); put_type(w, motive); put_term(w, lhs); put_term(w, rhs); put_term(w, proof); put_term(w, tm);
-        }
+        // 23 was `transp` (retired with it; docs/iwf-former-design.md §13).
         Term::ElimSEmpty { level, scrut_level, motive, scrut } => {
             w.byte(24); put_level(w, level); put_level(w, scrut_level); put_type(w, motive); put_term(w, scrut);
         }
@@ -873,7 +871,6 @@ fn get_term(r: &mut Reader<'_>) -> Result<Term, ModuleImageDecodeError> {
         20 => Term::J { ty_level: get_level(r)?, motive_level: get_level(r)?, ty: type_rc(r)?, lhs: term_rc(r)?, motive: type_rc(r)?, case: term_rc(r)?, rhs: term_rc(r)?, proof: term_rc(r)? },
         21 => Term::SRefl { level: get_level(r)?, ty: type_rc(r)?, tm: term_rc(r)? },
         22 => Term::Squash { level: get_level(r)?, ty: type_rc(r)?, tm: term_rc(r)? },
-        23 => Term::Transp { ty_level: get_level(r)?, motive_level: get_level(r)?, ty: type_rc(r)?, motive: type_rc(r)?, lhs: term_rc(r)?, rhs: term_rc(r)?, proof: term_rc(r)?, tm: term_rc(r)? },
         24 => Term::ElimSEmpty { level: get_level(r)?, scrut_level: get_level(r)?, motive: type_rc(r)?, scrut: term_rc(r)? },
         25 => Term::ElimSquash { src_level: get_level(r)?, dst_level: get_level(r)?, src_ty: type_rc(r)?, motive: type_rc(r)?, case: term_rc(r)?, scrut: term_rc(r)? },
         26 => Term::Pair { fst_level: get_level(r)?, snd_level: get_level(r)?, fst_ty: type_rc(r)?, snd_ty: type_rc(r)?, fst: term_rc(r)?, snd: term_rc(r)? },
@@ -936,14 +933,14 @@ fn get_motives(r: &mut Reader<'_>) -> Result<Motives, ModuleImageDecodeError> {
     })
 }
 
-fn branch_terms(branches: &Branches) -> [&Rc<Term>; 66] {
+fn branch_terms(branches: &Branches) -> [&Rc<Term>; 65] {
     let Branches {
         ty_nat, ty_pi, ty_ty, ty_el, ty_id, ty_sigma, ty_unit, ty_empty,
         tm_var, tm_nat, tm_pi, tm_ty, tm_zero, tm_succ, tm_elim_nat, tm_lam, tm_app,
         tm_id, tm_refl, tm_j, tm_sigma, tm_pair, tm_fst, tm_snd, tm_unit, tm_empty,
         tm_triv, tm_elim_empty, ty_sum, tm_sum, tm_inl, tm_inr, tm_case, ty_w, tm_w,
         tm_sup, tm_elim_w, ty_vec, tm_vec, ty_fin, tm_fin, ty_wf, tm_wf, tm_supf,
-        tm_elim_wf, ty_seq, tm_seq, ty_sempty, tm_sempty, tm_srefl, tm_transp,
+        tm_elim_wf, ty_seq, tm_seq, ty_sempty, tm_sempty, tm_srefl,
         tm_elim_sempty, ty_squash, tm_squash, tm_squash_in, tm_elim_squash,
         ty_m, tm_m, tm_corec, tm_out,
         ty_dvec, tm_dvec, ty_iwf, tm_iwf, tm_sup_i, tm_elim_iwf,
@@ -954,7 +951,7 @@ fn branch_terms(branches: &Branches) -> [&Rc<Term>; 66] {
         tm_id, tm_refl, tm_j, tm_sigma, tm_pair, tm_fst, tm_snd, tm_unit, tm_empty,
         tm_triv, tm_elim_empty, ty_sum, tm_sum, tm_inl, tm_inr, tm_case, ty_w, tm_w,
         tm_sup, tm_elim_w, ty_vec, tm_vec, ty_fin, tm_fin, ty_wf, tm_wf, tm_supf,
-        tm_elim_wf, ty_seq, tm_seq, ty_sempty, tm_sempty, tm_srefl, tm_transp,
+        tm_elim_wf, ty_seq, tm_seq, ty_sempty, tm_sempty, tm_srefl,
         tm_elim_sempty, ty_squash, tm_squash, tm_squash_in, tm_elim_squash,
         ty_m, tm_m, tm_corec, tm_out,
         ty_dvec, tm_dvec, ty_iwf, tm_iwf, tm_sup_i, tm_elim_iwf,
@@ -968,8 +965,8 @@ fn put_branches(w: &mut Writer, branches: &Branches) {
 }
 
 fn get_branches(r: &mut Reader<'_>) -> Result<Branches, ModuleImageDecodeError> {
-    let mut terms = Vec::with_capacity(66);
-    for _ in 0..66 {
+    let mut terms = Vec::with_capacity(65);
+    for _ in 0..65 {
         terms.push(term_rc(r)?);
     }
     let [
@@ -978,18 +975,18 @@ fn get_branches(r: &mut Reader<'_>) -> Result<Branches, ModuleImageDecodeError> 
         tm_id, tm_refl, tm_j, tm_sigma, tm_pair, tm_fst, tm_snd, tm_unit, tm_empty,
         tm_triv, tm_elim_empty, ty_sum, tm_sum, tm_inl, tm_inr, tm_case, ty_w, tm_w,
         tm_sup, tm_elim_w, ty_vec, tm_vec, ty_fin, tm_fin, ty_wf, tm_wf, tm_supf,
-        tm_elim_wf, ty_seq, tm_seq, ty_sempty, tm_sempty, tm_srefl, tm_transp,
+        tm_elim_wf, ty_seq, tm_seq, ty_sempty, tm_sempty, tm_srefl,
         tm_elim_sempty, ty_squash, tm_squash, tm_squash_in, tm_elim_squash,
         ty_m, tm_m, tm_corec, tm_out,
         ty_dvec, tm_dvec, ty_iwf, tm_iwf, tm_sup_i, tm_elim_iwf,
-    ]: [Rc<Term>; 66] = terms.try_into().unwrap();
+    ]: [Rc<Term>; 65] = terms.try_into().unwrap();
     Ok(Branches {
         ty_nat, ty_pi, ty_ty, ty_el, ty_id, ty_sigma, ty_unit, ty_empty,
         tm_var, tm_nat, tm_pi, tm_ty, tm_zero, tm_succ, tm_elim_nat, tm_lam, tm_app,
         tm_id, tm_refl, tm_j, tm_sigma, tm_pair, tm_fst, tm_snd, tm_unit, tm_empty,
         tm_triv, tm_elim_empty, ty_sum, tm_sum, tm_inl, tm_inr, tm_case, ty_w, tm_w,
         tm_sup, tm_elim_w, ty_vec, tm_vec, ty_fin, tm_fin, ty_wf, tm_wf, tm_supf,
-        tm_elim_wf, ty_seq, tm_seq, ty_sempty, tm_sempty, tm_srefl, tm_transp,
+        tm_elim_wf, ty_seq, tm_seq, ty_sempty, tm_sempty, tm_srefl,
         tm_elim_sempty, ty_squash, tm_squash, tm_squash_in, tm_elim_squash,
         ty_m, tm_m, tm_corec, tm_out,
         ty_dvec, tm_dvec, ty_iwf, tm_iwf, tm_sup_i, tm_elim_iwf,

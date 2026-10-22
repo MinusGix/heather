@@ -17,7 +17,7 @@
 //! - [`crate::reduce::beta_elim_ty`] / [`beta_elim_tm`] — the ~1300-line code
 //!   recursor β. The evaluator hands the box's payload to the *existing*
 //!   function, receives the fired branch as **syntax**, and evaluates it. The
-//!   66 branch telescopes are not written down a sixth time.
+//!   65 branch telescopes are not written down a sixth time.
 //! - [`crate::term::nth`] and the `elim_W`/`elim_Wf` ih λs, which are built
 //!   from the same syntax `reduce.rs` builds — see [`Eval::fire_elim_w`].
 //! - [`crate::reduce::step_type_delta`], for the one annotation that lives in
@@ -1738,19 +1738,6 @@ impl<'a, 'v> Eval<'a, 'v> {
                 };
                 return Ok(Work::Elim(p, e));
             }
-            Term::Transp { ty_level, motive_level, ty, motive, lhs, rhs, proof, tm } => {
-                let p = self.eval_tm(proof, env)?;
-                let e = Elim::Transp {
-                    ty_level: ty_level.clone(),
-                    motive_level: motive_level.clone(),
-                    ty: yclo(env, ty),
-                    motive: yclo(env, motive),
-                    lhs: tclo(env, lhs),
-                    rhs: tclo(env, rhs),
-                    tm: tclo(env, tm),
-                };
-                return Ok(Work::Elim(p, e));
-            }
             Term::LetBoxTy { motive_level, code_level, ctx, motive, body, scrut } => {
                 let s = self.eval_tm(scrut, env)?;
                 let e = Elim::LetBoxTy {
@@ -2087,11 +2074,6 @@ impl<'a, 'v> Eval<'a, 'v> {
                 self.spend()?;
                 let case = *case;
                 Ok(Work::Force(case))
-            }
-            (Val::SRefl { .. }, Elim::Transp { tm, .. }) => {
-                self.spend()?;
-                let tm = *tm;
-                Ok(Work::Force(tm))
             }
             (Val::Squash { tm, .. }, Elim::ElimSquash { case, .. }) => {
                 self.spend()?;

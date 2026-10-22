@@ -13,14 +13,10 @@ mod indexed_declared_index;
 mod indexed_families;
 #[path = "../indexed_route1.rs"]
 mod indexed_route1;
-#[path = "../indexed_route_2b.rs"]
-mod indexed_route_2b;
 #[path = "../indexed_route_2b_declared.rs"]
 mod indexed_route_2b_declared;
 #[path = "../indexed_route_2b_gen.rs"]
 mod indexed_route_2b_gen;
-#[path = "../indexed_route_2b_wf.rs"]
-mod indexed_route_2b_wf;
 #[path = "../branching_route_a.rs"]
 mod branching_route_a;
 #[path = "../branching_route_c.rs"]

@@ -1,10 +1,10 @@
 ---
 title: The sEq strip is Werner's rule: MX §19.2 needs normalization, which is open predicatively
-status: open
+status: closed
 labels: [kernel,delam,metatheory,sprop]
 area: kernel
 created: 2026-09-30
-updated: 2026-09-30
+updated: 2026-10-22
 ---
 
 Found by the Coq formalization of DeLaM's extensions
@@ -100,3 +100,4 @@ These were checked on paper in the formalization (S5 there).
 
 - 2026-09-30: Independent of normalization: `transp` into relevant motives with β at `srefl` (even propositional β), together with `sEq`'s irrelevance, proves UIP for `Id`. `fromS e := transp(z. Id(u; z); e; refl)` and `toS` by J satisfy `fromS (toS p) = p` by J, and `toS p ≡ toS q` by irrelevance. Checked in Coq with an abstract interface (delam `M10_DESIGN.md` S6); this is GCST's "without K" point. The frozen rule set therefore has UIP for `Id`, and so does any CCobs-style variant. Avoiding UIP means `sEq` eliminates only into strict propositions, and route 2b's form-B arm needs another shape.
 - 2026-09-30: Proposed resolution: remove the need for a relevant `transp` rather than justify it. Indexed families become a former with no stored equation, [[iwf-former]]. The strict propositions stay, eliminating only into strict propositions.
+- 2026-10-22: Closed by removal: `transp` and the strip are gone from the kernel (`docs/iwf-former-design.md` §13 step 6, [[iwf-former]]), so Werner's rule is no longer Heather's and the open normalization question no longer applies. Re-adding `transp` at strict motives only would not reopen it, since that needs no strip.

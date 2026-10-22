@@ -686,18 +686,6 @@ fn map_term<M: Mapper>(t: &Term, m: &mut M, at: Depths) -> Term {
             ty: sub_ty(ty, m, at),
             tm: sub_tm(tm, m, at),
         },
-        Term::Transp { ty_level, motive_level, ty, motive, lhs, rhs, proof, tm } => {
-            Term::Transp {
-                ty_level: m.level(ty_level, at),
-                motive_level: m.level(motive_level, at),
-                ty: sub_ty(ty, m, at),
-                motive: sub_ty(motive, m, at + dep(0, 0, 1)),
-                lhs: sub_tm(lhs, m, at),
-                rhs: sub_tm(rhs, m, at),
-                proof: sub_tm(proof, m, at),
-                tm: sub_tm(tm, m, at),
-            }
-        }
         Term::ElimSEmpty { level, scrut_level, motive, scrut } => Term::ElimSEmpty {
             level: m.level(level, at),
             scrut_level: m.level(scrut_level, at),
@@ -1042,7 +1030,6 @@ fn map_branches<M: Mapper>(b: &Branches, m: &mut M, at: Depths) -> Branches {
         ty_sempty: sub_tm(&b.ty_sempty, m, at + dep(1, 1, 0)),
         tm_sempty: sub_tm(&b.tm_sempty, m, at + dep(1, 1, 0)),
         tm_srefl: sub_tm(&b.tm_srefl, m, at + dep(1, 3, 2)),
-        tm_transp: sub_tm(&b.tm_transp, m, at + dep(2, 7, 6)),
         tm_elim_sempty: sub_tm(&b.tm_elim_sempty, m, at + dep(2, 3, 2)),
         ty_squash: sub_tm(&b.ty_squash, m, at + dep(1, 2, 1)),
         tm_squash: sub_tm(&b.tm_squash, m, at + dep(1, 2, 1)),
@@ -1184,7 +1171,7 @@ impl Mapper for ShiftGlobal {
 /// The recursor's motive and branch telescopes, weakened by `by` global
 /// bindings. The value machine's one materialization site that is a
 /// telescope table rather than a term (`docs/lazy-global-offset-design.md`
-/// §5); routed through the generic traversal so the 66 telescopes are not
+/// §5); routed through the generic traversal so the 65 telescopes are not
 /// written down again.
 pub(crate) fn shift_global_tables(
     motives: &Motives,

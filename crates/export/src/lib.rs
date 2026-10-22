@@ -712,27 +712,6 @@ impl Tr<'_> {
             )?,
             // ---- strict equality and squash ----
             Term::SRefl { level, ty, tm } => konst("srefl", &[level], vec![self.ty(ty)?, self.tm(tm)?])?,
-            // At a singleton equality the transport is its payload: the two
-            // endpoints convert, which is the strip rule.
-            Term::Transp { ty_level, ty, lhs, rhs, tm, .. }
-                if self
-                    .singleton(&Type::SEq { level: ty_level.clone(), ty: ty.clone(), lhs: lhs.clone(), rhs: rhs.clone() })
-                    .is_some() =>
-            {
-                self.tm(tm)?
-            }
-            Term::Transp { ty_level, motive_level, ty, motive, lhs, rhs, proof, tm } => konst(
-                "transp",
-                &[ty_level, motive_level],
-                vec![
-                    self.ty(ty)?,
-                    self.bound(ty, || self.ty(motive))?,
-                    self.tm(lhs)?,
-                    self.tm(rhs)?,
-                    self.tm(proof)?,
-                    self.tm(tm)?,
-                ],
-            )?,
             Term::ElimSEmpty { level, scrut_level, motive, scrut } => {
                 konst(
                     "elimSEmpty",

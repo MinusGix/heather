@@ -202,7 +202,7 @@ mod tag {
     pub const E_REFL: u8 = 0x52;
     pub const E_J: u8 = 0x53;
     pub const E_SREFL: u8 = 0x54;
-    pub const E_TRANSP: u8 = 0x55;
+    // 0x55 was `transp`, removed with route 2b's fording.
     pub const E_ELIMSEMPTY: u8 = 0x56;
     pub const E_PAIR: u8 = 0x57;
     pub const E_FST: u8 = 0x58;
@@ -788,17 +788,6 @@ impl<'a> Walk<'a> {
                 self.ty(ty);
                 self.term(tm);
             }
-            Term::Transp { ty_level, motive_level, ty, motive, lhs, rhs, proof, tm } => {
-                self.tag(tag::E_TRANSP);
-                self.level(ty_level);
-                self.level(motive_level);
-                self.ty(ty);
-                self.ty(motive);
-                self.term(lhs);
-                self.term(rhs);
-                self.term(proof);
-                self.term(tm);
-            }
             Term::ElimSEmpty { level, scrut_level, motive, scrut } => {
                 self.tag(tag::E_ELIMSEMPTY);
                 self.level(level);
@@ -1134,7 +1123,7 @@ impl<'a> Walk<'a> {
         self.ty(tm_motive);
     }
 
-    /// All 66 branches of the mutual code recursors, in declaration order.
+    /// All 65 branches of the mutual code recursors, in declaration order.
     ///
     /// Destructured without `..` deliberately: `fmt`'s `Debug` for this struct
     /// prints only 37 of the fields, which is precisely the defect the v1
@@ -1192,7 +1181,6 @@ impl<'a> Walk<'a> {
             ty_sempty,
             tm_sempty,
             tm_srefl,
-            tm_transp,
             tm_elim_sempty,
             ty_squash,
             tm_squash,
@@ -1261,7 +1249,6 @@ impl<'a> Walk<'a> {
             ty_sempty,
             tm_sempty,
             tm_srefl,
-            tm_transp,
             tm_elim_sempty,
             ty_squash,
             tm_squash,

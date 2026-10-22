@@ -4,7 +4,7 @@
 //! disciplines, global contexts and local substitutions, universe
 //! polymorphism, contextual types (box/letbox, checking-only box under
 //! binders), and the code recursors, including a full *identity recursor*
-//! whose 66 branches re-box their telescopes' code — an end-to-end exercise
+//! whose 65 branches re-box their telescopes' code — an end-to-end exercise
 //! of every `G_Typ`/`G_Trm` telescope.
 //!
 //! No generator-based properties: the generators produce ill-typed terms,
@@ -571,7 +571,6 @@ fn constant_branches() -> Rc<Branches> {
         ty_sempty: z(),
         tm_sempty: z(),
         tm_srefl: z(),
-        tm_transp: z(),
         tm_elim_sempty: z(),
         ty_squash: z(),
         tm_squash: z(),
@@ -1073,25 +1072,6 @@ fn identity_branches() -> Rc<Branches> {
             ty: rty(gty(1, &g_ctx(2))),
             tm: rt(gtm(0, &g_ctx(2))),
         }))),
-        tm_transp: {
-            // view: g = 6, U_I = 5, U_P = 4, u_a = 3, u_b = 2, u_e = 1,
-            // u_t = 0; ℓ = lv(1), ℓ' = lv(0).
-            let g6 = g_ctx(6);
-            let gx = ext(&g6, gty(5, &g6), lv(1));
-            rt(Term::BoxTm(rt(Term::Transp {
-                ty_level: lv(1),
-                motive_level: lv(0),
-                ty: rty(gty(5, &g6)),
-                motive: rty(Type::GlobalTy {
-                    var: GlobalVar(4),
-                    subst: LocalSubst::id(&gx),
-                }),
-                lhs: rt(gtm(3, &g6)),
-                rhs: rt(gtm(2, &g6)),
-                proof: rt(gtm(1, &g6)),
-                tm: rt(gtm(0, &g6)),
-            })))
-        },
         tm_elim_sempty: {
             // view: g = 2, U_M = 1, u_t = 0; ℓ = lv(1), ℓ' = lv(0).
             let g2s = g_ctx(2);
@@ -1549,7 +1529,7 @@ fn elim_empty_branch_recursive_call_is_at_the_scrutinee_level() {
 /// The pattern is `elim_empty_branch_recursive_call_is_at_the_scrutinee_level`
 /// generalised: the identity body is routed through `λ(z : claim). <body>`
 /// applied to the entry under test, so only `claim` varies. The harness
-/// recursor is `elim^Typ` on `box Nat`: `rec_ga` checks all 66 branches
+/// recursor is `elim^Typ` on `box Nat`: `rec_ga` checks all 65 branches
 /// whatever the scrutinee is, so a single trivial scrutinee observes any
 /// branch's telescope.
 #[test]
@@ -1588,7 +1568,7 @@ fn type_motive_branch_entries_are_usable_at_their_declared_context_and_level() {
         })
     };
     // `elim^Typ` over `box Nat`, whose only job is to make `rec_ga` walk the
-    // 66 branches; it fires `ty_nat`, which no probe touches.
+    // 65 branches; it fires `ty_nat`, which no probe touches.
     let harness = |branches: Rc<Branches>| Term::ElimCodeTy {
         ty_motive_level: Level::Zero,
         tm_motive_level: Level::Zero,
@@ -2046,7 +2026,7 @@ fn pair_projections_and_dependency() {
 /// 4. the guard is §2.3's box side condition, not a layer: layer v refuses
 ///    them, layer **c** admits them (every body is checked there), and the
 ///    payload of a `box` refuses them, which is what leaves the code grammar
-///    and the 66 recursor branches alone;
+///    and the 65 recursor branches alone;
 /// 5. without an annotation an intro checks against the expected type and
 ///    does not infer (design §2.1).
 #[test]

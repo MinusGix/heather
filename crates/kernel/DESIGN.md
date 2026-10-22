@@ -226,7 +226,8 @@ force them (heather-coq `ELIM_CONGRUENCE.md`, `Validity/IWfIhEq.v`,
 MinusGix/heather-coq#24). Its code is `TmIWf`, the index inside it as in
 `TmM`, and its four branches `ty_iwf`, `tm_iwf`, `tm_sup_i`,
 `tm_elim_iwf` are heather-coq `RecSpec`'s 57–60 (design §13 step 4,
-2026-10-22; `tests/iwf_codes.rs`): the recursor has 66 branches, and
+2026-10-22; `tests/iwf_codes.rs`): the recursor has 65 branches (66 until
+`transp`'s went, §13 step 6), and
 `DVec`, `IWf`, `sup_i` and `elim_IWf` are code.
 
 `M^{l,l',li}(I; i. S; i s. P; i s p. o)(j)` (2026-10-21,
@@ -262,36 +263,28 @@ yet** and is admitted at layers p and m only. Its metatheory
 `sEq^l(I; a; b)` (2026-07-28) is **strict equality** — `Id` minus proof
 relevance plus strictness, the SProp round's customer former
 (`docs/sprop-design.md`; the sort itself dissolved into per-former
-irrelevance arms, design doc §1). Three conversion behaviours are its
-whole content: an irrelevance arm at `Type::SEq` in `tm_nf` (`Unit`'s
-audited pattern — any two proofs convertible, so UIP is definitional and
-`sJ` is derivable rather than primitive); the **strip rule** in `Conv::tm`'s
-term-whnf stage (`Conv::strip`) — a stuck `transp^{l,l'}(I; x.P; a; b; e; t)`
-whose endpoints convert is replaced by its payload, which is what makes
-casts invisible on *open* data (`plus0(n) ≡ n` under a neutral proof) and
-is term-head-keyed, unlike the type-keyed η family, hence its placement;
-and an endpoint-keyed congruence in `tm_ne` that compares `I, P, a, b, t`
-typed and deliberately skips the proofs — the inversion of `J`'s
-discipline (J's proof is its scrutinee; transp's stuckness is keyed on the
-endpoints). Reduction gets ordinary β only (`transp(…; srefl; t) ⇝ t`,
-J's shape; canonicity makes it sufficient closed) — the strip is
-conversion's, preserving the reduce/conv separation. Guard semantics
-(settled against `Conv`'s fuel-only state): catch `NotConvertible`,
-propagate `OutOfFuel`, no refund, each strip pays `spend()`. The hot-path
-discriminant check lives inline in `tm` because a whnf-wrapping helper
-cost 1.35× on `conv/computed-numeral` (caught by `scripts/bench --check`).
+irrelevance arms, design doc §1). Since 2026-10-22 it has **no
+eliminator**: it is a type inhabited exactly when its endpoints convert,
+with one proof up to conversion, and its whole content is one conversion
+behaviour, the irrelevance arm at `Type::SEq` in `tm_nf` (`Unit`'s audited
+pattern — any two proofs convertible, so UIP *at `sEq`* is definitional).
+The nominal tag (`Tag_D = sEq(Nat; k; k)`) is all that uses it. It had an
+eliminator, `transp^{l,l'}(I; x.P; a; b; e; t)`, with β on `srefl`, a
+**strip rule** in `Conv::tm`'s term-whnf stage (a stuck `transp` at
+convertible endpoints replaced by its payload) and an endpoint-keyed
+congruence that skipped the proofs. Route 2b's fording was its only
+producer; `IWf` replaced fording, and `transp`, the strip, its value
+eliminator and its code-recursor branch were removed
+(`docs/iwf-former-design.md` §7, §13 step 6; `tests/seq.rs` keeps what
+stays). Re-adding it at strict motives only is additive and needs no strip.
 The codes landed same-day (`TmSEq`/`TmSEmpty`, decoding as
 `El (sEq^l(s;t;u)) ⇝ sEq^l(El s; t; u)` and `El (sEmpty^l) ⇝ sEmpty^l`),
-and the code recursors gained seven branches (`ty_seq`/`tm_seq` mirror
+and the code recursors gained the branches (`ty_seq`/`tm_seq` mirror
 `ty_id`/`tm_id`; `ty_sempty`/`tm_sempty`/`tm_elim_sempty` mirror the
-Empty trio; `tm_srefl` mirrors `tm_refl`; `tm_transp` is `tm_j` with the
-motive over one binder, globals in `Transp` field order, and the proof
-recursed like any subterm — irrelevance is a conversion fact, code is
-syntax; **52 total**), so the phase gate is gone. A stuck transp inside a
-box round-trips the identity recursor *as syntax*: neither the strip nor
-irrelevance reaches through `□`, the same firewall as ever. Independent
-implementation evidence for the strip-in-conversion placement: the TYPES
-2024 CCobs implementation (design doc §1 note). Its companion `sEmpty^l` (same day) is `Empty` made irrelevant as a
+Empty trio; `tm_srefl` mirrors `tm_refl`; `tm_transp` went with `transp`),
+so the phase gate is gone. A stuck `elim_sEmpty` inside a box round-trips
+the identity recursor *as syntax*: irrelevance does not reach through `□`,
+the same firewall as ever. Its companion `sEmpty^l` (same day) is `Empty` made irrelevant as a
 *separate* former — `Empty`'s structural-neutral comparison is unchanged,
 and the contrast is pinned in tests — with `elim_sEmpty` eliminating
 anywhere (no β, neutral congruence skips the scrutinees) and the same
@@ -561,8 +554,7 @@ paper too).
   sum-of-Σs, the size of the declaration, at every meeting of two matches.
   `elim_IWf`'s arm was written the same way when it landed, its induction
   hypotheses' types skipped as well (heather-coq#24). `elim_Nat` had
-  nothing forced to drop; `transp` has no scrutinee (its proof is
-  irrelevant), so it still compares every annotation.
+  nothing forced to drop.
 - **Typing a spine is one walk** (2026-09-26,
   `issues/application-spine-substitution-cost.md`): `app@(…app@(f; a₁)…; aₖ)`
   holds the arguments while `f`'s type stays a syntactic Π telescope, checks

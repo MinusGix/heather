@@ -1,7 +1,10 @@
 # `sEq`/`transp`: strict equality and definitional irrelevance in the kernel
 
-> **Revision, 2026-09-30: `transp` and the strip are removed** (not yet
-> implemented). A computing `transp` into relevant motives proves UIP for
+> **Revision, 2026-09-30: `transp` and the strip are removed**
+> (implemented 2026-10-22, `docs/iwf-former-design.md` §13 step 6: the
+> kernel, the code recursor, the exporter and the preludes no longer have
+> it; `crates/kernel/tests/seq.rs` keeps the half of `seq_transp.rs` that
+> stays). A computing `transp` into relevant motives proves UIP for
 > `Id`, and the strip is Werner's rule, whose normalization in a
 > predicative theory is open ([[sprop-strip-normalization-open]]). Its only
 > producer, route 2b's fording, is replaced by the `IWf` former
@@ -220,6 +223,9 @@ makes β sufficient in §5.
 ---
 
 ## 4. Elimination: `transp`
+
+> Historical since 2026-10-22: `transp` is removed (see the revision note
+> at the top). `sEq` has no eliminator.
 
 Not OTT-style cast between types: transport along a term-level `sEq`
 through a motive — J's non-dependent cousin (issue decision 2, corrected
