@@ -51,6 +51,8 @@ mod linux_wp;
 mod linux_wp_count;
 #[path = "../x86_64_stack_runs.rs"]
 mod x86_64_stack_runs;
+#[path = "../x86_64_byte_memory.rs"]
+mod x86_64_byte_memory;
 #[path = "../crossing_link_cost.rs"]
 mod crossing_link_cost;
 #[path = "../function_ir_narrow_certificates.rs"]

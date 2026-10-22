@@ -23,6 +23,7 @@ import bool;
 import nat;
 import omega;
 import option;
+import list;
 import result;
 import bitvec;
 import bitvec_nat;
@@ -210,6 +211,64 @@ theorem Memory::get_from_set_span_apart<A, C>(l: Nat): (m: Memory<A, C>) → (a:
 theorem Memory::get_set_span_apart<A, C>(self m: Memory<A, C>, a: A, {k: Nat}, cs: [C; k], b: A, l: Nat,
     apart: m.space.Apart(a, k, b, l)): m.set_span(a, cs).get_span(b, l) = m.get_span(b, l) {
     Memory::get_from_set_span_apart(l, m, a, k, cs, b, 0, λ p q below low high => apart(p, q, below, high))
+}
+
+// Two spans read alike when their cells do, address by address: a span of
+// one memory against a span of another, in any spaces.
+theorem Memory::get_from_agree<A, B, C>(k: Nat): (m: Memory<A, C>) → (n: Memory<B, C>) → (a: A) → (b: B) → (i: Nat) →
+    ((p: Nat) → i <= p → p < k + i → m.get(m.space.offset(a, p)) = n.get(n.space.offset(b, p))) →
+    m.get_from(a, i, k) = n.get_from(b, i, k) {
+    match k as λ j => (m: Memory<A, C>) → (n: Memory<B, C>) → (a: A) → (b: B) → (i: Nat) →
+            ((p: Nat) → i <= p → p < j + i → m.get(m.space.offset(a, p)) = n.get(n.space.offset(b, p))) →
+            m.get_from(a, i, j) = n.get_from(b, i, j) {
+        Zero => λ m n a b i same => refl,
+        Succ(j, ih) => λ m n a b i same => {
+            let here: (m.get(m.space.offset(a, i)) = n.get(n.space.offset(b, i))) = same(i, { omega }, { omega });
+            let later: (m.get_from(a, Succ(i), j) = n.get_from(b, Succ(i), j)) =
+                ih(m, n, a, b, Succ(i), λ p low high => same(p, { omega }, { omega }));
+            let both: (cons(m.get(m.space.offset(a, i)), m.get_from(a, Succ(i), j)) =
+                cons(n.get(n.space.offset(b, i)), n.get_from(b, Succ(i), j))) = rewrite(here, later, refl);
+            both
+        },
+    }
+}
+
+theorem Memory::get_span_agree<A, B, C>(self m: Memory<A, C>, n: Memory<B, C>, a: A, b: B, k: Nat,
+    same: (p: Nat) → p < k → m.get(m.space.offset(a, p)) = n.get(n.space.offset(b, p))): m.get_span(a, k) = n.get_span(b, k) {
+    Memory::get_from_agree(k, m, n, a, b, 0, λ p low high => same(p, high))
+}
+
+// A span given as a list (`List::to_vector`) stores its `r`-th element at
+// its `r`-th address, when it does not overlap itself: the one-cell form of
+// `get_set_span`, for spans whose length is a list's.
+theorem Memory::get_set_from_list<A, C>(xs: List<C>): (m: Memory<A, C>) → SpaceLaws<A>(m.space) → (a: A) → (i, r, p: Nat) → (c: C) →
+    xs.nth(r) = Some(c) → p = r + i →
+    ((p, q: Nat) → i <= p → p < q → q < xs.len() + i → m.space.same(m.space.offset(a, q), m.space.offset(a, p)) = False) →
+    m.set_from(a, i, xs.to_vector()).get(m.space.offset(a, p)) = c {
+    match xs {
+        Nil => λ m laws a i r p c found at distinct => absurd(found),
+        Cons(x, rest) => λ m laws a i r p c => match r {
+            Zero => λ found at distinct => {
+                let at_i = m.space.offset(a, i);
+                let first = m.set(at_i, x);
+                let kept: (first.set_from(a, Succ(i), rest.to_vector()).get(at_i) = first.get(at_i)) =
+                    Memory::get_set_from_outside(rest.len(), first, a, Succ(i), rest.to_vector(), at_i,
+                        λ q low high => distinct(i, q, { omega }, { omega }, { omega }));
+                let stored: (x = c) = inj(found);
+                let hit: (first.set_from(a, Succ(i), rest.to_vector()).get(at_i) = c) =
+                    trans(kept, trans(m.get_set_same(laws, at_i, x), stored));
+                let here: (i = p) = omega(at);
+                j(here, λ y _ => first.set_from(a, Succ(i), rest.to_vector()).get(m.space.offset(a, y)) = c, hit)
+            },
+            Succ(r) => λ found at distinct => Memory::get_set_from_list(rest, m.set(m.space.offset(a, i), x), laws, a, Succ(i), r, p, c,
+                found, omega(at), λ p q low order high => distinct(p, q, { omega }, order, { omega })),
+        },
+    }
+}
+
+theorem Memory::get_set_span_list<A, C>(self m: Memory<A, C>, laws: SpaceLaws<A>(m.space), a: A, xs: List<C>, r: Nat, c: C,
+    found: xs.nth(r) = Some(c), distinct: m.space.Distinct(a, xs.len())): m.set_span(a, xs.to_vector()).get(m.space.offset(a, r)) = c {
+    Memory::get_set_from_list(xs, m, laws, a, 0, r, r, c, found, refl, λ p q low order high => distinct(p, q, order, high))
 }
 
 // Stores to apart spans commute: the two orders agree at every address.

@@ -286,7 +286,10 @@ effectful construct's code: its contract is the pure lowering's theorem.
 Views: the page (`Stretch`'s) and the frame of slots (`Straight`'s) are two
 `View<M, V>` records. A view over `hih-memory-model`'s byte memory is a third,
 with its access outcomes in the arms; a separation-style footprint is that
-milestone's to add, and the view interface should not preclude it.
+milestone's to add, and the view interface should not preclude it. The third
+is `DataRegion::buffer_view` (`lib/linux_x86_64_byte_memory.hthr`): a
+buffer in a data region of an `X86Profile`, its arms reading and
+storing at an index into the buffer.
 
 Proved once: `wp_runs`, per history: from `Wp(…, post)(t, v, s)` and a valid
 `h`, `RunsAs(t, h, s)` follows from `post` at each leaf, at the leaf's tree

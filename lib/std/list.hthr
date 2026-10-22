@@ -738,6 +738,29 @@ theorem List::nth_drop<A>(self xs: List<A>, n: Nat): xs.nth(n) = xs.drop(n).nth(
     }
 }
 
+// Below its length a list has an element at every index.
+theorem List::nth_present<A>(self xs: List<A>): (i: Nat) → i < xs.len() → Exists<A>(λ c => xs.nth(i) = Some(c)) {
+    match xs {
+        Nil => λ i below => false_elim(below),
+        Cons(h, t) => λ i => match i {
+            Zero => λ _ => Exists(h, refl),
+            Succ(k) => λ below => t.nth_present(k, below),
+        },
+    }
+}
+
+// The list as a vector of its length, in order: what a store of a list's
+// bytes stores (`Memory::set_span`, lib/std/memory.hthr).
+fn List::to_vector<A>(self xs: List<A>) → [A; xs.len()] {
+    match xs {
+        Nil => {
+            let empty: [A; 0] = [];
+            empty
+        },
+        Cons(h, t) => cons(h, t.to_vector()),
+    }
+}
+
 instance<A>(n: Nat) CollectionLiteral<List<A>>(n) {
     element := A,
     fromLiteral := λ (xs: [A; n]) => xs.fold(Nil<A>, λ (head: A) (tail: List<A>) => Cons(head, tail)),

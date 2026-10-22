@@ -5,7 +5,7 @@ labels: [native,x86,proofs]
 area: heather-in-heather
 milestone: [hih-pl-wp]
 created: 2026-10-21
-updated: 2026-10-21
+updated: 2026-10-22
 ---
 
 S4 round 3 (PR #106) added `CallTo`, `Ret`, `Spill` and `Reload` to `Asm`.
@@ -28,3 +28,7 @@ program with them can be checked by `Wp` only if they are never reached.
 - **[[native-one-wp]]** owns `Wp` and the view interface.
 - **[[function-ir-verified-lowering]]** owns the stack items and their
   run lemmas.
+
+## Log
+
+- 2026-10-22: A `Stack` over the byte model exists with its laws proved: `DataRegion::stack` (`lib/std/arch/x86_64/x86_64_byte_memory.hthr`, [[memory-model-machine-instances]]). A stack view for `Spill`/`Reload` can be stated over it.

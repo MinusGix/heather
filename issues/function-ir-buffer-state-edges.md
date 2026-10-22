@@ -6,7 +6,7 @@ area: heather-in-heather
 milestone: [hih-pl-source, hih-memory-model]
 blocked-by: [byte-memory-access-model, wp-proved-memory-contracts]
 created: 2026-10-21
-updated: 2026-10-21
+updated: 2026-10-22
 ---
 
 Internal effects belong in FunctionIR as state edges, never as tree events
@@ -34,3 +34,7 @@ Linux read's answer fills a buffer value, and a write's argument reads one.
   the view over a range.
 - **[[function-ir-verified-lowering]]** owns the lowering and its file.
 - **[[function-ir-lowering-loops]]** owns the bounded loop.
+
+## Log
+
+- 2026-10-22: The buffer view these edges need exists: `DataRegion::buffer_view` (`lib/linux_x86_64_byte_memory.hthr`, [[memory-model-machine-instances]]) relates a buffer's cells to a data region of an `X86Profile`, loads and stores at a named index, sound against the profile's `LinuxIo`.
