@@ -33,8 +33,8 @@ use crate::resolve::DerivedInst;
 use crate::slots::Slot;
 use crate::traits::{ClassInfo, DesignationInfo, EvidenceRule, InstanceInfo};
 
-const MAGIC: &[u8; 8] = b"HTHMOD\0\x12";
-const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x10";
+const MAGIC: &[u8; 8] = b"HTHMOD\0\x13";
+const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x11";
 
 /// Hard limits applied before any decoded collection or string allocation.
 /// The loader may choose a smaller policy; these defaults are deliberately
@@ -1586,6 +1586,7 @@ fn put_ctor(w: &mut Writer, ctor: &Ctor) {
     w.option(ctor.res_expr.as_ref(), put_expr);
     w.vec(&ctor.child_idx, |w, e| w.option(e.as_ref(), put_expr));
     w.vec(&ctor.defaults, |w, default| w.option(default.as_ref(), put_expr));
+    w.vec(&ctor.child_index, |w, at| w.option(at.as_ref(), |w, es| w.vec(es, put_expr)));
 }
 
 fn get_ctor(r: &mut Reader<'_>) -> Result<Ctor, ModuleImageDecodeError> {
@@ -1598,6 +1599,7 @@ fn get_ctor(r: &mut Reader<'_>) -> Result<Ctor, ModuleImageDecodeError> {
         res_expr: r.option(get_expr)?,
         child_idx: r.vec(|r| r.option(get_expr))?,
         defaults: r.vec(|r| r.option(get_expr))?,
+        child_index: r.vec(|r| r.option(|r| r.vec(get_expr)))?,
     })
 }
 
@@ -1614,6 +1616,7 @@ fn put_inductive(w: &mut Writer, info: &Inductive) {
         IdxTy::Decl(info) => { w.byte(1); put_inductive(w, info); }
     });
     w.option(info.skel.as_deref(), put_inductive);
+    w.vec(&info.co_index, |w, (name, ty)| { w.string(name); put_ty(w, ty); });
 }
 
 fn get_inductive(r: &mut Reader<'_>) -> Result<Inductive, ModuleImageDecodeError> {
@@ -1629,6 +1632,7 @@ fn get_inductive(r: &mut Reader<'_>) -> Result<Inductive, ModuleImageDecodeError
             tag => Err(ModuleImageDecodeError::InvalidTag { sort: "index type", tag }),
         })?,
         skel: r.option(|r| Ok(Rc::new(get_inductive(r)?)))?,
+        co_index: r.vec(|r| Ok((r.string()?, get_ty(r)?)))?,
     }))
 }
 

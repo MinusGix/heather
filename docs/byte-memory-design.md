@@ -191,6 +191,27 @@ are stated without a cast. `8 * Succ(k)` reduces to `8 * k + 8`, which is
   is asked of every memory holding the buffer. `buffer_view_sound` proves it
   against the profile's `LinuxIo`. A separation-style footprint is `Apart`
   between ranges, which round 1 supplies.
+- **The process image.** The Linux process the I/O profile's ELF makes is a
+  memory of the profile `X86Profile::io()` (`lib/linux_x86_64_image.hthr`;
+  `issues/io-image-on-byte-model.md`). The profile relies on the page
+  (0x410000) and the frame (0x411000) having the data permission and on
+  nothing else, so both are `DataRegion`s of it. The loader
+  `X86Memory::io_load(file)` maps the file's bytes at 0x400000 with
+  `Perm::code()` (read and execute), the RW segment zero-filled, and nothing
+  else. The code is deliberately not part of the profile: a run needs it
+  resident, and residency is a fact about cells, which every store would
+  have to re-prove if the memory carried it. It is in the view instead:
+  `View::with_code` adds `CodeResident` to a view's `Holds`, and
+  `X86Profile::with_code_sound` keeps it across any store that lands on
+  non-executable memory (`store_keeps_code`), which a data region's stores
+  always do. `DataRegion::program_view` is the buffer view with the code.
+  The loader proves the code resident at the entry
+  (`X86Memory::io_load_entry`) and the page and frame zero, so a program's
+  theorem from its loop head becomes one from the loaded process
+  (`drain_entry` in the Wp controls). A word kept in a region (the old
+  frame's slots) is a lemma over the buffer (`DataRegion::x86_word_stored`),
+  not a view of its own; a view over two regions at once is
+  `issues/wp-view-separating-product.md`.
 
 ## 7. Outside v1, and the seam for each
 

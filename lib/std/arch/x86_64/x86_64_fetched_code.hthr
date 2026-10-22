@@ -5,8 +5,8 @@
 // runs, given layout and code resident at the start. A fetched step never
 // writes memory, so residency proved at the start holds on every later state
 // of a fetched run. Stores are steps of their own (x86_64_store); a profile
-// whose stores reach only data it never fetches from (elf64_io's page) keeps
-// residency across them by stating it for every value of that data.
+// whose stores reach only data it never fetches from (a `DataRegion`,
+// x86_64_byte_memory) keeps residency across them (`store_keeps_code`).
 import x86_64;
 import x86_64_block;
 import x86_64_fetch;

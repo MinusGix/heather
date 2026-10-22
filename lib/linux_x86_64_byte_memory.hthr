@@ -172,3 +172,72 @@ theorem DataRegion::buffer_view_sound(self r: DataRegion):
         },
         asks := λ v state c holds asked => asked(state.memory, holds))
 }
+
+// Every store the buffer view allows lands in the region, which nothing
+// executes.
+theorem DataRegion::buffer_data(self r: DataRegion, v: Nat → BitVec(8), m: X86Memory(r.profile), a: BitVec(64), bytes: List<BitVec(8)>,
+    then: (Nat → BitVec(8)) → Type, place: r.buffer_view().Stores(v, a, bytes, then)):
+    (p: Nat) → p < bytes.len() → r.profile.perm(m, next_rip(a, p)).execute = False {
+    let q = place.witness;
+    λ p inside => j(sym(place.proof.right.left), λ y _ => r.profile.perm(m, next_rip(y, p)).execute = False,
+        r.not_executed(m, q, bytes.len(), place.proof.left, p, inside))
+}
+
+// A word stored at index `q` reads back there as the machine reads a word.
+theorem DataRegion::x86_word_stored(self r: DataRegion, v: Nat → BitVec(8), q: Nat, w: BitVec(64)):
+    r.buffer(r.buffer(v).set_span(q, word_bytes(w).to_vector()).cells).x86_word(q) = w {
+    let o = r.buffer(r.buffer(v).set_span(q, word_bytes(w).to_vector()).cells);
+    let b = λ (t: Nat) (c: BitVec(8)) (found: word_bytes(w).nth(t) = Some(c)) =>
+        cong_fn<BitVec(8), Option<BitVec(8)>>(λ x => Some(x), r.buffer(v).get_set_span_list(Nat::space_laws(), q, word_bytes(w), t, c, found,
+            Nat::space_distinct(q, word_bytes(w).len())));
+    let read: (Some(o.x86_word(q)) = Some(immediate_from_bytes(imm_byte0(w), imm_byte1(w), imm_byte2(w), imm_byte3(w),
+            imm_byte4(w), imm_byte5(w), imm_byte6(w), imm_byte7(w)))) =
+        word_of_eight(Some(o.get(q)), Some(o.get(q + 1)), Some(o.get(q + 2)), Some(o.get(q + 3)), Some(o.get(q + 4)), Some(o.get(q + 5)),
+            Some(o.get(q + 6)), Some(o.get(q + 7)),
+            imm_byte0(w), imm_byte1(w), imm_byte2(w), imm_byte3(w), imm_byte4(w), imm_byte5(w), imm_byte6(w), imm_byte7(w),
+            b(0, imm_byte0(w), refl), b(1, imm_byte1(w), refl), b(2, imm_byte2(w), refl), b(3, imm_byte3(w), refl),
+            b(4, imm_byte4(w), refl), b(5, imm_byte5(w), refl), b(6, imm_byte6(w), refl), b(7, imm_byte7(w), refl));
+    trans(Option::some_inj(o.x86_word(q), immediate_from_bytes(imm_byte0(w), imm_byte1(w), imm_byte2(w), imm_byte3(w),
+            imm_byte4(w), imm_byte5(w), imm_byte6(w), imm_byte7(w)), read),
+        immediate_bytes_roundtrip(w))
+}
+
+// ---------------------------------------------------------------------------
+// A view with the program's code in it
+
+// The view, knowing as well that `code` is resident from `at`: what a run
+// needs of every memory its view holds of (`wp_sound`'s `code`).
+fn View::with_code<M, V>(self view: View<M, V>, fetch: FetchAccess<M>, code: List<BitVec(8)>, at: BitVec(64)) → View<M, V> {
+    View(λ v m => view.Holds(v, m) ∧ CodeResident(fetch, m, code, at), view.Word, view.Byte, view.Stores, view.Asks)
+}
+
+// Sound where the view's stores land on data: a store that executes nowhere
+// keeps the code (`X86Profile::store_keeps_code`).
+theorem X86Profile::with_code_sound<V>(self x: X86Profile, view: View<X86Memory(x), V>,
+    sound: ViewSound<X86Memory(x), V>(x.linux(), view),
+    data: (v: V) → (m: X86Memory(x)) → (a: BitVec(64)) → (bytes: List<BitVec(8)>) → (then: V → Type) → view.Stores(v, a, bytes, then) →
+        (p: Nat) → p < bytes.len() → x.perm(m, next_rip(a, p)).execute = False,
+    code: List<BitVec(8)>, at: BitVec(64)): ViewSound<X86Memory(x), V>(x.linux(), view.with_code(x.fetch(), code, at)) {
+    ViewSound(
+        word := λ v m a then holds got => sound.word(v, m, a, then, holds.left, got),
+        byte := λ v m a then holds got => sound.byte(v, m, a, then, holds.left, got),
+        stores := λ v m a bytes then holds place => {
+            let done = sound.stores(v, m, a, bytes, then, holds.left, place);
+            let kept: CodeResident(x.fetch(), x.store(m, a, bytes), code, at) =
+                x.store_keeps_code(m, a, bytes, data(v, m, a, bytes, then, place), code, at, holds.right);
+            ⟨done.left, Exists(done.right.witness, ⟨⟨done.right.proof.left, kept⟩, done.right.proof.right⟩)⟩
+        },
+        asks := λ v state c holds asked => sound.asks(v, state, c, holds.left, asked))
+}
+
+// A program's view of a buffer region: the buffer view, the program's code
+// resident from `at`.
+fn DataRegion::program_view(self r: DataRegion, code: List<BitVec(8)>, at: BitVec(64)) → View<X86Memory(r.profile), Nat → BitVec(8)> {
+    r.buffer_view().with_code(r.profile.fetch(), code, at)
+}
+
+theorem DataRegion::program_view_sound(self r: DataRegion, code: List<BitVec(8)>, at: BitVec(64)):
+    ViewSound<X86Memory(r.profile), Nat → BitVec(8)>(r.profile.linux(), r.program_view(code, at)) {
+    r.profile.with_code_sound(r.buffer_view(), r.buffer_view_sound(),
+        λ v m a bytes then place => r.buffer_data(v, m, a, bytes, then, place), code, at)
+}

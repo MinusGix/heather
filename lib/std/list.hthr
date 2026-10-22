@@ -738,6 +738,11 @@ theorem List::nth_drop<A>(self xs: List<A>, n: Nat): xs.nth(n) = xs.drop(n).nth(
     }
 }
 
+// An index with an element is below the length.
+theorem List::nth_some_below<A>(self xs: List<A>, i: Nat, x: A, present: xs.nth(i) = Some(x)): i < xs.len() {
+    Nat::lt_of_not_le(i, xs.len(), λ past => absurd(trans(sym(present), xs.nth_past_end(i, past))))
+}
+
 // Below its length a list has an element at every index.
 theorem List::nth_present<A>(self xs: List<A>): (i: Nat) → i < xs.len() → Exists<A>(λ c => xs.nth(i) = Some(c)) {
     match xs {

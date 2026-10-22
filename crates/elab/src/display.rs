@@ -61,8 +61,7 @@ impl Elaborator {
                 .and_then(|abs| self.global_qualified_name_at(abs)),
             _ => self.spell_term_clean(cx, head),
         }.unwrap_or_else(|| "…".to_string());
-        let first = self.psi.bindings.len() as u32 + self.global_padding()
-            + self.meta_pushed.borrow().len() as u32;
+        let first = self.placeholder_base();
         let placeholders: Vec<_> = slot_param.iter().enumerate().map(|(slot, &p)| {
             let name = params.get(p).map(|p| p.name.as_str()).unwrap_or("_");
             (GlobalVar(first + slot as u32), format!("?{name}"))
@@ -83,6 +82,27 @@ impl Elaborator {
             format!("`{name}: {ty}`")
         }).collect::<Vec<_>>().join(", ");
         format!("\nselected callee: `{selected}`; rough parameter types: {shown}")
+    }
+
+    /// The first Ψ index past every binding the elaborator knows, where
+    /// display-only placeholder globals start.
+    pub(crate) fn placeholder_base(&self) -> u32 {
+        self.psi.bindings.len() as u32 + self.global_padding() + self.meta_pushed.borrow().len() as u32
+    }
+
+    /// A type mentioning placeholder globals (from [`Self::placeholder_base`]
+    /// on), each spelled by its name. Raw nodes are elided.
+    pub(crate) fn display_rough_type(&self, cx: &Cx, ty: &Type, placeholders: &[(GlobalVar, String)]) -> String {
+        let mut sp = self.speller(cx);
+        sp.rough = Some(placeholders);
+        sp.ty(ty, 0)
+    }
+
+    /// [`Self::display_rough_type`] for a term.
+    pub(crate) fn display_rough_term(&self, cx: &Cx, t: &Term, placeholders: &[(GlobalVar, String)]) -> String {
+        let mut sp = self.speller(cx);
+        sp.rough = Some(placeholders);
+        sp.tm(t, 0)
     }
 
     /// A type as a human should read it: best-effort decoded head, surface
@@ -382,16 +402,35 @@ impl Speller<'_> {
         // A codata instance, `M(…)(⟨⟩)`: its declaration's name, with the type
         // arguments read off the shape it carries (a tier-1 spine), and value
         // arguments elided (docs/codata-elaborator-design.md §2).
-        if let Type::M { sig, .. } = ty
+        if let Type::M { sig, index } = ty
             && let Some(ind) = self.el.tag_of(ty).filter(|i| i.codata)
         {
+            // An indexed one shows its index, the components of the tuple
+            // (docs/codata-indexed-design.md §2).
+            let idx = if ind.co_index.is_empty() {
+                String::new()
+            } else {
+                let mut parts = Vec::new();
+                let mut cur = Rc::clone(index);
+                for _ in 1..ind.co_index.len() {
+                    match crate::spelling::pair_of(&cur) {
+                        Some((fst, snd)) => {
+                            parts.push(self.tm(fst, d + 1));
+                            cur = Rc::clone(snd);
+                        }
+                        None => break,
+                    }
+                }
+                parts.push(self.tm(&cur, d + 1));
+                format!("({})", parts.join(", "))
+            };
             if ind.params.is_empty() && ind.valparams.is_empty() {
-                return ind.name.clone();
+                return format!("{}{idx}", ind.name);
             }
             if self.annotations {
                 return self.raw_ty(ty);
             }
-            let shape = sig.shape_at(&Term::Triv { level: sig.idx_level.clone() });
+            let shape = sig.shape_at(index);
             let targs = if ind.params.is_empty() {
                 String::new()
             } else if let Some(args) = self.el.display_targs(self.cx, &shape, &ind, self.binders()) {
@@ -401,7 +440,7 @@ impl Speller<'_> {
                 "<…>".to_string()
             };
             let vargs = if ind.valparams.is_empty() { "" } else { "(…)" };
-            let shown = format!("{}{targs}{vargs}", ind.name);
+            let shown = format!("{}{targs}{vargs}{idx}", ind.name);
             return if targs == "<…>" || !vargs.is_empty() { self.elided(shown) } else { shown };
         }
         // An inductive instance is its declaration's name, wherever its

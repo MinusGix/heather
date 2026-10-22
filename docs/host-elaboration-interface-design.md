@@ -9,8 +9,8 @@ B1) and places `issues/elabcode-abstraction-layer.md`. Round pattern as
 usual: this document first, the implementing rounds against §10.
 
 Status: **§0 decided by Minus on 2026-10-21** (the request-tree model, with
-native tactics and certificate oracles as §8a describes). **Rounds 1, 2 and
-2½ landed**: §12–§14 record what building them changed.
+native tactics and certificate oracles as §8a describes). **Rounds 1, 2, 2½
+and 2¾ landed**: §12–§15 record what building them changed.
 
 ---
 
@@ -444,6 +444,7 @@ the generalisation.
 | R1 (landed) | `lib/std/tactic.hthr` (protocol, `bind`, helpers), `host.rs` loop, `by`, requests `Goal`/`Defeq`/`Fail`, the Rust protocol-speaker trait (§8a) | `by assumption` closes goals at open types and neutral hypotheses, and its failure lists every hypothesis tried |
 | R2 (landed) | `Open` (the design's `Intro`), `Infer`, `Resolve`, `Lam` in `Expr`, binder scopes in the host; quoting the goal's terms into `Expr` arguments; `focus`, `attempt`, `first_of`, `exact`, `intro`, `apply` in Heather (§13) | a Heather `apply` closes an implication chain; a failed `first_of` reports each branch |
 | R2½ (landed) | `View` on the speller's recognisers (moved from R1 and R2), `Whnf`, `Match`; `apply` solves what its conclusion determines (§14) | a Heather tactic dispatches on the goal's head; `apply(sym, assumption())` closes `b = a` |
+| R2¾ (landed) | `Hole` with `Mark`/`Restore`, `GlobalRef` (`Lookup`, `Global`, `HGlobal`'s reference), `At` notes rendered by the host (§15) | `apply(trans, assumption())` closes `a = c`; a failed alternative's solutions are forgotten |
 | R3 | `tac-first-port`: `split_all` or `monoid` normalisation in Heather | it closes the same goals as the Rust one on the existing tests |
 | R3½ | `Oracle(name, input)` with one registered native procedure and a reflection-checked certificate (§8a) | a goal closes by native search plus a Heather check whose proof term is small |
 | R4 | publication (`heather-checked-construction-api`, retargeted): a `Publish(group)` request that checks a small declaration group and adds it only if every member passes the kernel | a Heather generator publishes a lemma group in the caller's scope; a failing member publishes nothing |
@@ -614,3 +615,63 @@ Recorded after building it, as the inductive-tier designs do.
 - **Still not here:** `Hole` (above), `At(e, note)` (a note about a term,
   spelled by the host), and `GlobalRef`.
 
+---
+
+## 15. What round 2¾ changed
+
+- **Holes are metavariables of the run, in the unifier's own form.**
+  `Hole(ty)` answers a handle to a new metavariable at `ty`'s scope. A run
+  with `m` holes lives in Ψ extended by `m` bindings, newest innermost:
+  exactly the scratch world implicit application uses
+  (`unification.rs`), so the elaborator's unifier works on the run's terms
+  unchanged. Each handle records how many holes existed when it was issued
+  and is shifted on use, and a hole's occurrence is a `GlobalTm` with its
+  home scope's identity substitution, weakened like any term. Solutions are
+  committed-world terms scoped in the home's context.
+- **The kernel never sees a hole.** Every request zonks first. A committed
+  term goes through the existing code; one that still mentions an unsolved
+  hole gets only what its structure answers: `View` gives `HHole` for an
+  unsolved hole itself and `HPi`/`HEq` from a syntactic former; `Open`
+  needs a syntactic Π (and its body's scope then has a hole in its context,
+  so kernel requests there wait until it is solved); `Whnf` and `Match`
+  refuse. A run's result must zonk completely, or it is refused with the
+  holes spelled `?1`, `?2`, ….
+- **The comparing requests solve holes.** `Defeq`, and the domain check of
+  every application an `Expr` builds, compare a side that mentions unsolved
+  holes with a committed one by the unifier, and keep the solutions only if
+  the solved side then converts; a failed comparison solves nothing. Two
+  sides that both mention unsolved holes are not equal for now.
+- **A hole made under fewer binders is unified at its home.** The unifier
+  solves a metavariable whose occurrence is the identity of its context,
+  while a hole used under a binder `Open` introduced occurs weakened. So a
+  comparison unifies one home scope at a time, at that scope, with the
+  deeper scope's locals as binders already crossed (`unify_under`): a
+  solution mentioning one of them does not strengthen to the home and is
+  not learned. Other homes' holes are withheld meanwhile.
+- **Requests now have one side effect, and `attempt` undoes it.** §13's
+  "requests are side-effect free" held until solutions existed. Rather than
+  roll back inside the host, `Mark` answers the current position of the
+  run's solution trail and `Restore(m)` forgets every solution after it, so
+  `attempt` stays a Heather handler: it marks before running its tactic and
+  restores when the tactic fails. `first_of` inherits it.
+- **`apply` postpones what a premise determines.** `Opened` now says
+  whether the body mentions the new local. An open slot that is depended on
+  becomes a hole and the premises after it are proved with the hole in
+  their types, so proving `trans`'s first premise solves the middle point;
+  a hole still open after the premises is proved last at its type and the
+  proof compared with it. `assumption` commits to the first local that
+  fits, so a wrong first fit is not revisited (Lean's `apply` behaves the
+  same way); a searching premise tactic is the client's choice.
+- **`GlobalRef` is an identity.** References are interned per run, by Ψ
+  index, inductive tag, or builtin former (`Nat`, `Succ`, `True`), so
+  `HGlobal(g, name, args)` from `View` and `Lookup(name)` agree and a tactic
+  compares heads by number. `Global(g)` in an `Expr` is that global as a
+  term with its whole type, as quoting gives it; a type or a former is
+  refused there.
+- **The host renders notes.** `At(e, note)` needs the diagnostics' speller,
+  so a failure's notes are read structurally (one `host_note` at a time)
+  and rendered in Rust, in the same layout the library's renderer used.
+  An `At` term with unsolved holes is spelled with the `?n` names.
+- **Still not here:** comparing two sides that both mention unsolved holes
+  (no tactic needs it yet), `Hole` under `Match` (a target with holes is
+  refused), and backtracking `apply` over premise alternatives.

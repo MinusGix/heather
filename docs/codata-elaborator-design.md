@@ -27,10 +27,10 @@ already have.
 
 Refused this round, each with its own message:
 
-- an **index** (`codata D : (n: Nat) -> Type`): the kernel's `M` is indexed,
-  but the elaborator's indexed lowerings are inductive-shaped
-  (`issues/codata-indexed.md`). `Bisim` and eutt want it, so it is the
-  next round's (§8).
+- ~~an **index**~~: done in its own design, `docs/codata-indexed-design.md`.
+  The index binders are in scope in the field types and a child writes its
+  own index; a constructor's result annotation is refused there, since
+  codata has no η.
 - a **container field** (`[D; n]`): write the children as `Fin(n) -> D`.
 - codata in a **certgen** signature, as a parameter or a result: native code
   has no representation for an infinite tree yet.
@@ -216,11 +216,7 @@ image, replayed, and used from an importing module.
 
 ## 8. Next
 
-1. **Indexed codata** (`issues/codata-indexed.md`): the kernel's `M` is
-   already indexed. `Bisim` (index: a pair of trees, shape: `Id` on the
-   labels) and eutt (shape: an inductive `Peel`) are instances
-   (`docs/kernel-coinduction-design.md` §4), and they are what the library
-   needs for its laws.
+1. ~~**Indexed codata**~~: done (`docs/codata-indexed-design.md`).
 2. **The library** (design §10 step 5): the coinductive `ITree` with `bind`
    and `iter`, `approx` into the finite tree, `Bisim`, eutt, and the bridge
    `Bisim ⇔ Π n. Same(approx n t, approx n u)`.

@@ -865,6 +865,9 @@ impl expr::UniverseElab for Elaborator {
         expression: &Expr,
         span: Span,
     ) -> R<Option<(Type, Level)>> {
+        if let Some(lowered) = self.try_codata_indexed_ty(cx, expression, span)? {
+            return Ok(Some(lowered));
+        }
         if let Some(lowered) = self.try_indexed_ty(cx, expression, span)? {
             return Ok(Some(lowered));
         }
@@ -881,7 +884,7 @@ impl expr::UniverseElab for Elaborator {
         }
         let ind = self.lookup_inductive(name)?;
         Some(expr::TypeFormerShape {
-            indexed: ind.index.is_some(),
+            indexed: ind.index.is_some() || !ind.co_index.is_empty(),
             value_parameters: ind.valparams.len(),
         })
     }
@@ -8478,6 +8481,25 @@ impl Elaborator {
             respell: &respell,
         };
         unify_ty_root(&u, pat, subj, n, 0, sols);
+    }
+
+    /// [`Self::unify_root`] for a subject `d` binders past `cx`: the
+    /// metavariables are scoped in `cx`, and a solution that mentions one of
+    /// the `d` is not learned. The tactic host's holes, made in a scope
+    /// enclosing the one a comparison happens in, are unified this way.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn unify_under(&self, cx: &Cx, pat: &Type, subj: &Type, n: u32, d: u32, sols: &mut [Sol], span: Span) {
+        let type_args = |t: &Term, e: u32| self.spine_type_args(cx, t, e, span);
+        let canonical_head = |t: &Term, e: u32| self.canonical_head(cx, t, e);
+        let respell = |t: &Type| self.respell_ty(cx, t);
+        let u = unification::U {
+            gamma: &cx.gamma,
+            subject_metas: None,
+            type_args: &type_args,
+            canonical_head: &canonical_head,
+            respell: &respell,
+        };
+        unify_ty_root(&u, pat, subj, n, d, sols);
     }
 
     /// Application with implicit-argument insertion

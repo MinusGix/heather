@@ -1,6 +1,6 @@
 ---
 title: Indexed codata declarations
-status: open
+status: closed
 labels: [codata,coinduction,elaborator]
 area: interaction-trees
 milestone: [it-coinductive]
@@ -34,3 +34,7 @@ Sketch:
 - Corecursion into an indexed codata type is coinduction proper. The
   carrier is a family `X(i)`, and the self-call's index is checked against
   the child's.
+
+## Log
+
+- 2026-10-22: Implemented on branch claude/project-thread-lozmdm (docs/codata-indexed-design.md). The design departs from this issue's sketch: no result annotations, because codata has no η and an equation like `t = C(…)` at a corecursive `t` is uninhabited. Instead the index binders are in scope in the field types and a child writes its own index, which is the kernel's indexed M directly. Constructors are `in` with the out type as carrier; corecursion carries `Σ varying. Id(g; i)` and moves the step with J. Value parameters and an index combine on codata. Acceptance: crates/elab/tests/codata_indexed.rs (bisimilarity refl/sym/trans by corecursion, Nat index with an equation field, dependent telescope, value parameter + index, image round trip).

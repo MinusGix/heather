@@ -21,8 +21,9 @@
 // Memory is seen through a view (`View`): what a load reads, where a store
 // may go and what the view knows after it, and what a call asks of memory
 // are the view's arms, each stated over `v` and not over a memory; the view
-// proves them sound once (`ViewSound`). `io_page_view` and `io_frame_view`
-// (linux_x86_64_views) are the two the process stack used.
+// proves them sound once (`ViewSound`). `DataRegion::program_view`
+// (linux_x86_64_byte_memory) is a program's view of a data region, its code
+// resident.
 //
 // `wp_runs` proves it once, per trace: from `Wp(post)` and a valid trace of
 // the tree, the machine runs as the trace, given that every leaf does from

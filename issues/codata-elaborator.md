@@ -28,7 +28,7 @@ round's record: `docs/codata-elaborator-design.md`.
 
 ## Follow-ups
 
-- [[codata-indexed]]: indexed codata, which `Bisim` and eutt need.
+- ~~[[codata-indexed]]~~: done, the index is read by observation (`docs/codata-indexed-design.md`).
 - [[codata-nested-guards]]: a constructor nested above a self-call.
 - ~~[[codata-codes]]~~: done, codata declarations are bound at layer c.
 - The library: the coinductive tree, `approx`, `Bisim`, eutt and the bridge
@@ -48,3 +48,4 @@ round's record: `docs/codata-elaborator-design.md`.
   encoding bug: a function child's codomain was left unshifted under its
   binder.
 - 2026-10-22: With [[codata-codes]] done, codata declarations are bound at layer c; §6 rewritten, `layers_follow_codata` became `codata_declarations_are_code`, and codata works as a type argument.
+- 2026-10-22: 2026-10-22: [[codata-indexed]] done: indexed codata reads its index by observation (docs/codata-indexed-design.md).

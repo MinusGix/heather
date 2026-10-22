@@ -4,7 +4,9 @@
 //! (`Open`, `Lam`), `Infer` and `Resolve`, quoting of hypotheses into `Expr`
 //! arguments, and the library's `exact`, `intro`, `apply` and `first_of`.
 //! Round 2½ adds `View`, `Whnf`, and `Match`, through which `apply` solves
-//! the parameters its conclusion determines, implicit ones included.
+//! the parameters its conclusion determines, implicit ones included. Round 3
+//! adds holes shared across premises (`Hole`, undone by `Mark`/`Restore`),
+//! global references (`Lookup`, `Global`) and notes about terms (`At`).
 //!
 //! The axes of `docs/testing-generated-terms.md`: a closed and a neutral
 //! hypothesis, an open element type, a checking position (the goal comes from
@@ -197,7 +199,7 @@ impl NativeTactic for NativeAssumption {
                 self.tried.push(self.names[self.tried.len()].clone());
                 Ok(Step::Ask(Request::Defeq(RExpr::Hd(ty), RExpr::Hd(self.target))))
             }
-            None => Ok(Step::Ask(Request::Fail(format!("natively tried {}", self.tried.join(", "))))),
+            None => Ok(Step::Ask(Request::Fail(format!("natively tried {}", self.tried.join(", ")), Vec::new()))),
         }
     }
 }
@@ -431,7 +433,7 @@ impl NativeTactic for NativeIdentity {
                 Ok(Step::Ask(Request::Infer(RExpr::Local(o.local.id))))
             }
             Answer::Handle(Ok(_)) => Ok(Step::Done(RExpr::Lam(self.local, Box::new(RExpr::Local(self.local))))),
-            Answer::Opened(Err(why)) | Answer::Handle(Err(why)) => Ok(Step::Ask(Request::Fail(why))),
+            Answer::Opened(Err(why)) | Answer::Handle(Err(why)) => Ok(Step::Ask(Request::Fail(why, Vec::new()))),
             other => Err(format!("an answer to a request it did not make: {other:?}")),
         }
     }
@@ -460,11 +462,6 @@ fn apply_solves_what_the_conclusion_determines() {
          theorem explicit_lemma(x: Nat, y: Nat): x + y = y + x { by apply(Nat::add_comm, assumption()) }
          theorem chained(a: Nat, b: Nat, p: a = b): a = b { by apply(sym, apply(sym, assumption())) }",
     );
-    // `trans`'s middle point is not in its conclusion, so it is a premise
-    // like the others, proved first and by the premise tactic alone:
-    // `assumption` picks the most recent `Nat`, and the next premise fails.
-    let msg = refused("theorem t(a: Nat, b: Nat, c: Nat, p: a = b, q: b = c): a = c { by apply(trans, assumption()) }");
-    assert!(msg.contains("no local's type is the goal"), "{msg}");
     let msg = refused("theorem t(a: Nat, b: Nat, p: a = b): Nat { by apply(sym, assumption()) }");
     assert!(msg.contains("no number of arguments makes the conclusion of"), "{msg}");
 }
@@ -490,11 +487,12 @@ fn view_dispatches_on_the_goal() {
          }
          fn say(v: Head) → tactic::Tac<tactic::Expr> {
              match v {
-                 HGlobal(name, args) => fail(\"global \" ++ name ++ \" of \" ++ match args { Nil => \"none\", Cons(_, _) => \"some\" }, Nil),
+                 HGlobal(_, name, args) => fail(\"global \" ++ name ++ \" of \" ++ match args { Nil => \"none\", Cons(_, _) => \"some\" }, Nil),
                  HEq(_, _) => fail(\"an equation\", Nil),
                  HPi(_) => fail(\"a function type\", Nil),
                  HLocal(_, args) => fail(\"a local of \" ++ match args { Nil => \"none\", Cons(_, _) => \"some\" }, Nil),
                  HLit(_) => fail(\"a literal\", Nil),
+                 HHole => fail(\"a hole\", Nil),
                  HOther => fail(\"other\", Nil),
              }
          }
@@ -521,4 +519,147 @@ fn view_dispatches_on_the_goal() {
         let msg = refused(&format!("{kinds}\n{goal}"));
         assert!(msg.contains(&format!("the tactic failed: {kind}")), "{goal}: {msg}");
     }
+}
+
+/// A parameter only a premise determines is a hole: `trans`'s middle point
+/// is solved by proving its first premise, and the second is proved at the
+/// solution. A hole made in an enclosing scope is solved from under a binder
+/// (`intro` inside the premise), and one nothing solves is refused at the
+/// result.
+#[test]
+fn holes_are_shared_across_premises() {
+    check(
+        "import list;
+         theorem middle(a: Nat, b: Nat, c: Nat, p: a = b, q: b = c): a = c { by apply(trans, assumption()) }
+         theorem open_type<A>(a: A, b: A, c: A, p: a = b, q: b = c): a = c { by apply(trans, assumption()) }
+         theorem twice(a: Nat, b: Nat, c: Nat, d: Nat, p: a = b, q: b = c, r: c = d): a = d {
+             by apply(trans, first_of([assumption(), apply(trans, assumption())]))
+         }
+         theorem under(a: Nat, f: (m: Nat) → (m = m → a = a) → a = a): a = a {
+             by apply(f, intro(assumption()))
+         }",
+    );
+    // `assumption` commits to the first local that fits: `r` fits the first
+    // premise with the wrong middle point, and nothing goes back.
+    let msg = refused("theorem t(a: Nat, b: Nat, c: Nat, d: Nat, p: a = b, q: b = c, r: a = d): a = c { by apply(trans, assumption()) }");
+    assert!(msg.contains("no local's type is the goal"), "{msg}");
+    let msg = refused(
+        "import bool;
+         import list;
+         import string;
+         import char;
+         theorem t(n: Nat): Nat {
+             by goal().bind(λ g => hole(g.target).bind(λ c => match c { Accepted(h) => Pure(Hd(h)), Refused(why) => fail(why, Nil) }))
+         }",
+    );
+    assert!(msg.contains("the tactic's proof `?1` mentions a hole nothing solved"), "{msg}");
+}
+
+/// Solving a hole is the one state a request changes, and `attempt` forgets
+/// what a failed alternative solved: the second branch below sees the hole
+/// unsolved, so it can solve it differently.
+#[test]
+fn a_failed_alternative_solves_nothing() {
+    let forgets = "import bool;
+         import list;
+         import string;
+         import char;
+         fn forgets() → tactic::Tac<tactic::Expr> {
+             goal().bind(λ g => view(g.target).bind(λ v => match v {
+                 HEq(l, r) => infer(Hd(l)).bind(λ c => match c {
+                     Accepted(ty) => hole(ty).bind(λ c2 => match c2 {
+                         Accepted(h) => first_of([
+                             defeq(Hd(h), Hd(r)).bind(λ _ => fail(\"after solving it\", Nil)),
+                             defeq(Hd(h), Hd(l)).bind(λ same => match same {
+                                 True => assumption(),
+                                 False => fail(\"the first branch's solution stuck\", Nil),
+                             }),
+                         ]),
+                         Refused(why) => fail(why, Nil),
+                     }),
+                     Refused(why) => fail(why, Nil),
+                 }),
+                 _ => fail(\"not an equation\", Nil),
+             }))
+         }";
+    check(&format!("{forgets}\ntheorem t(a: Nat, b: Nat, p: a = b): a = b {{ by forgets() }}"));
+    // Without `attempt`, the solution stays: the same two comparisons in
+    // sequence disagree.
+    let msg = refused(
+        "import bool;
+         import list;
+         import string;
+         import char;
+         fn keeps() → tactic::Tac<tactic::Expr> {
+             goal().bind(λ g => view(g.target).bind(λ v => match v {
+                 HEq(l, r) => infer(Hd(l)).bind(λ c => match c {
+                     Accepted(ty) => hole(ty).bind(λ c2 => match c2 {
+                         Accepted(h) => defeq(Hd(h), Hd(r)).bind(λ _ => defeq(Hd(h), Hd(l)).bind(λ same => match same {
+                             True => assumption(),
+                             False => fail(\"the solution stuck\", Nil),
+                         })),
+                         Refused(why) => fail(why, Nil),
+                     }),
+                     Refused(why) => fail(why, Nil),
+                 }),
+                 _ => fail(\"not an equation\", Nil),
+             }))
+         }
+         theorem t(a: Nat, b: Nat, p: a = b): a = b { by keeps() }",
+    );
+    assert!(msg.contains("the solution stuck"), "{msg}");
+}
+
+/// `Lookup` and `View` hand out the same reference for the same global, so
+/// a tactic compares heads by identity; `Global(g)` is the global as a
+/// term, with its implicit parameters for `Match` to solve.
+#[test]
+fn globals_by_identity() {
+    let tactics = "import bool;
+         import list;
+         import string;
+         import char;
+         fn named(name: String) → tactic::Tac<tactic::GlobalRef> {
+             lookup(name).bind(λ c => match c { Accepted(g) => Pure(g), Refused(why) => fail(why, Nil) })
+         }
+         fn head_is(name: String) → tactic::Tac<tactic::Expr> {
+             named(name).bind(λ want => goal().bind(λ g => view(g.target).bind(λ v => match v {
+                 HGlobal(got, _, _) => match got.id.same(want.id) {
+                     True => fail(\"the same global\", Nil),
+                     False => fail(\"a different global\", Nil),
+                 },
+                 _ => fail(\"not a global\", Nil),
+             })))
+         }
+         fn by_ref(name: String) → tactic::Tac<tactic::Expr> {
+             named(name).bind(λ s => apply(Global(s), assumption()))
+         }";
+    check(&format!("{tactics}\ntheorem t(a: Nat, b: Nat, p: a = b): b = a {{ by by_ref(\"sym\") }}"));
+    for (goal, verdict) in [
+        ("theorem t(n: Nat, m: Nat): n <= m { by head_is(\"Nat::Le\") }", "the same global"),
+        ("theorem t(n: Nat, m: Nat): n <= m { by head_is(\"Nat\") }", "a different global"),
+        ("theorem t(n: Nat): Nat { by head_is(\"Nat\") }", "the same global"),
+        ("theorem t(n: Nat): Nat { by head_is(\"nowhere\") }", "`nowhere` names no global here"),
+    ] {
+        let msg = refused(&format!("{tactics}\n{goal}"));
+        assert!(msg.contains(verdict), "{goal}: {msg}");
+    }
+    let msg = refused(&format!("{tactics}\ntheorem t(n: Nat): Nat {{ by named(\"Nat\").bind(λ g => Pure(Global(g))) }}"));
+    assert!(msg.contains("is a type or a former, not a term"), "{msg}");
+}
+
+/// An `At` note is about a term, which the host spells as its diagnostics
+/// do, with the note it carries one level deeper.
+#[test]
+fn notes_about_terms_are_spelled() {
+    let msg = refused(
+        "import bool;
+         import list;
+         import string;
+         import char;
+         theorem t(n: Nat, p: n = 1): n = 2 {
+             by goal().bind(λ g => fail(\"stuck\", [At(Hd(g.target), Tried(\"refl\", \"the sides differ\")), At(Local(LocalRef(1)), Under(Tried(\"it\", \"too\")))]))
+         }",
+    );
+    assert!(msg.contains("the tactic failed: stuck\n  at `n = 2`\n    tried refl: the sides differ\n  at `p`\n      tried it: too"), "{msg}");
 }
