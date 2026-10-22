@@ -237,6 +237,30 @@ fn slim_ty(t: &Rc<Type>) -> Rc<Type> {
 }
 
 /// One child of a constructor, as its positions see it (§2).
+/// The first corecursive call inside `e`, which is not itself one: a call
+/// under a *second* constructor needs a carrier that remembers the pending
+/// constructor, which this round's one-step `corec` does not build
+/// (issues/codata-nested-guards.md).
+fn nested_self_call(selfref: &SelfRef, e: &Expr) -> Option<Span> {
+    let mut nested = None;
+    crate::surface::walk_expr(e, &mut |x| {
+        if nested.is_none() && surface_self_call(selfref, x).is_some() {
+            nested = Some(x.span);
+        }
+    });
+    nested
+}
+
+fn nested_guard_msg(name: &str) -> String {
+    format!(
+        "this call to `{name}` sits under a second constructor: a corecursive call \
+         must be a *direct* child of the constructor the step returns, and nesting \
+         one constructor inside another before the call is not supported yet — \
+         name the inner layer as a seed state of its own instead \
+         (issues/codata-nested-guards.md)"
+    )
+}
+
 enum Kid {
     /// `t: D` — one position, `Unit`.
     Plain,
@@ -2159,6 +2183,32 @@ impl Elaborator {
         Ok((*acc).clone())
     }
 
+    /// Whether `expected`, scoped `d` binders past `p`'s context (`cx` is
+    /// that context), is a child position, and the child's index there: one
+    /// fixed type unindexed, `X(e) + ⟦D⟧(e)` at the child's own `e` indexed.
+    fn corec_child_index(&self, cx: &Cx, p: &MParts, carrier: &Carrier, d: u32, expected: &Type, span: Span) -> Option<Rc<Term>> {
+        if !p.indexed {
+            let want = self.child_sum(p, carrier, d, triv());
+            let lvl = Level::join(carrier.level.clone(), p.lw.clone());
+            let ok = *expected == want || {
+                let head = self.whnf(cx, expected, span).ok();
+                matches!(head, Some(Type::Sum { .. })) && self.conv_types(cx, expected, &want, &lvl)
+            };
+            return ok.then(triv);
+        }
+        match self.whnf(cx, expected, span).ok() {
+            Some(Type::Sum { lhs, rhs, .. }) => match &*decoded(&rhs) {
+                Type::M { sig, index } if **sig == *p.sig.shift_local(d)
+                    && self.conv_types(cx, &lhs, &carrier.at(d, index), &carrier.level) =>
+                {
+                    Some(Rc::clone(index))
+                }
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     /// The checking-mode hook while a corecursive body is open (§5.2):
     /// `Some(term)` when `e`, checked at `expected`, is one of the step's two
     /// positions and this function built it; `None` to elaborate it as usual.
@@ -2177,23 +2227,7 @@ impl Elaborator {
             }
         };
         let _ = lvl;
-        // A child position, and the index of the child there: one fixed type
-        // unindexed, `X(e) + ⟦D⟧(e)` at the child's own `e` indexed.
-        let child_idx: Option<Rc<Term>> = if !p.indexed {
-            at(&self.child_sum(&p, &carrier, 0, triv()), &site.child_level).then(triv)
-        } else {
-            match self.whnf(cx, expected, e.span).ok() {
-                Some(Type::Sum { lhs, rhs, .. }) => match &*decoded(&rhs) {
-                    Type::M { sig, index } if **sig == *p.sig
-                        && self.conv_types(cx, &lhs, &carrier.at(0, index), &carrier.level) =>
-                    {
-                        Some(Rc::clone(index))
-                    }
-                    _ => None,
-                },
-                _ => None,
-            }
-        };
+        let child_idx = self.corec_child_index(cx, &p, &carrier, 0, expected, e.span);
         let self_call = surface_self_call(&site.selfref, e);
         if let Some((args, _)) = self_call {
             let Some(idx) = child_idx else {
@@ -2233,24 +2267,8 @@ impl Elaborator {
             // under a *second* constructor needs a carrier that remembers
             // the pending constructor, which this round's one-step `corec`
             // does not build (issues/codata-nested-guards.md).
-            let mut nested = None;
-            crate::surface::walk_expr(e, &mut |x| {
-                if nested.is_none() && surface_self_call(&site.selfref, x).is_some() {
-                    nested = Some(x.span);
-                }
-            });
-            if let Some(at) = nested {
-                let name = &site.selfref.written_name;
-                return err(
-                    format!(
-                        "this call to `{name}` sits under a second constructor: a corecursive call \
-                         must be a *direct* child of the constructor the step returns, and nesting \
-                         one constructor inside another before the call is not supported yet — \
-                         name the inner layer as a seed state of its own instead \
-                         (issues/codata-nested-guards.md)"
-                    ),
-                    at,
-                );
+            if let Some(at) = nested_self_call(&site.selfref, e) {
+                return err(nested_guard_msg(&site.selfref.written_name), at);
             }
             let d_here = p.d_of(0, Rc::clone(&idx));
             let t = self.elab_check(cx, e, &d_here, &p.lw)?;
@@ -2261,6 +2279,47 @@ impl Elaborator {
                 rhs: Rc::new(d_here),
                 val: Rc::new(t),
             }));
+        }
+        // A function child given as a function rather than a λ, `C(…, k, …)`
+        // with `k : (y: A) → D(e(y))` an existing one: the child is its
+        // η-expansion `λ y. inr(k y)`. A λ goes the ordinary way, its body
+        // meeting the child position above.
+        if !control
+            && !matches!(e.kind, ExprKind::Lam { .. })
+            && let Some(Type::Pi { dom_level, dom, cod, .. }) = self.whnf(cx, expected, e.span).ok()
+        {
+            let mut cy = cx.clone();
+            cy.push("#y".into(), (*dom).clone(), dom_level.clone());
+            if let Some(idx) = self.corec_child_index(&cy, &p, &carrier, 1, &cod, e.span) {
+                if let Some(at) = nested_self_call(&site.selfref, e) {
+                    return err(nested_guard_msg(&site.selfref.written_name), at);
+                }
+                let d_here = p.d_of(1, Rc::clone(&idx));
+                let fn_level = Level::join(dom_level.clone(), p.lw.clone());
+                let fn_ty = Type::Pi {
+                    dom_level: dom_level.clone(),
+                    cod_level: p.lw.clone(),
+                    dom: Rc::clone(&dom),
+                    cod: Rc::new(d_here.clone()),
+                };
+                let f = self.elab_check(cx, e, &fn_ty, &fn_level)?;
+                let applied = match f {
+                    Term::Lam { body, .. } => body,
+                    f => Rc::new(Term::AppAt { fun: Rc::new(f.shift_local(1)), arg: var(0) }),
+                };
+                return Ok(Some(Term::Lam {
+                    dom_level,
+                    cod_level: site.child_level.clone(),
+                    dom,
+                    body: Rc::new(Term::Inr {
+                        lhs_level: carrier.level.clone(),
+                        rhs_level: p.lw.clone(),
+                        lhs: Rc::new(carrier.at(1, &idx)),
+                        rhs: Rc::new(d_here),
+                        val: applied,
+                    }),
+                }));
+            }
         }
         if !at(&step_here, &site.step_level) {
             return Ok(None);
