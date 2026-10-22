@@ -1,0 +1,81 @@
+// Linux's `Implements` as a simulation (lib/std/itree_sim.hthr;
+// issues/itree-iter-simulation.md).
+//
+// `ITree::Implements` (`linux_trees`) reads a trace over Linux's calls with
+// each read's size forgotten, takes the answers Linux may give, and asks
+// that every read name a positive size. Those are a `TraceMap`, the valid
+// half of a `Contract` and its owed half, so a tree simulated by its spec
+// under them implements it, and the loop rule (`ITree::sim_iter`) proves a
+// source loop implements a spec loop one pass at a time.
+import linux_calls;
+import linux_trees;
+import itree;
+import itree_trace;
+import itree_sim;
+import logic;
+
+// Forget each read's size.
+fn TraceMap::linux_forget() → TraceMap(Events::linux(), Events::linux_spec()) {
+    TraceMap(λ c => c.forget(), λ c a => c.forget_answer(a))
+}
+
+// Linux's answers, and a positive size at every read.
+fn Contract::linux() → Contract(Events::linux()) { Contract(λ c a => c.Answers(a), λ c => c.AsksSome()) }
+
+theorem Trace::along_forget<R>(tr: Trace<R>(Events::linux())):
+    Trace::along(Events::linux(), Events::linux_spec(), TraceMap::linux_forget(), tr) = Trace::forget(tr)
+{
+    match tr {
+        TEnd => refl,
+        TRet(_) => refl,
+        TCall(_) => refl,
+        TAns(c, a, rest) => @cong<Trace<R>(Events::linux_spec()), Trace<R>(Events::linux_spec())>(λ y => TAns(c.forget(), c.forget_answer(a), y),
+            Trace::along(Events::linux(), Events::linux_spec(), TraceMap::linux_forget(), rest), Trace::forget(rest),
+            Trace::along_forget(rest)),
+    }
+}
+
+theorem Trace::valid_linux<R>(tr: Trace<R>(Events::linux())): Trace::LinuxValid(tr) → Trace::Valid(Events::linux(), Contract::linux(), tr) {
+    match tr {
+        TEnd => λ v => v,
+        TRet(_) => λ v => v,
+        TCall(_) => λ v => v,
+        TAns(_, _, rest) => λ v => ⟨v.left, Trace::valid_linux(rest, v.right)⟩,
+    }
+}
+
+theorem Trace::owes_linux<R>(tr: Trace<R>(Events::linux())): Trace::Owes(Events::linux(), Contract::linux(), tr) → Trace::AsksSome(tr) {
+    match tr {
+        TEnd => λ o => o,
+        TRet(_) => λ o => o,
+        TCall(_) => λ o => o,
+        TAns(_, _, rest) => λ o => ⟨o.left, Trace::owes_linux(rest, o.right)⟩,
+    }
+}
+
+// A program simulated by a spec under Linux's map and contract implements it.
+theorem Program::implements_of_simulates<R>(p: Program<R>(Events::linux()), spec: Program<R>(Events::linux_spec()),
+    h: Program::Simulates(Events::linux(), Events::linux_spec(), TraceMap::linux_forget(), Contract::linux(), p, spec)):
+    Program::Implements(p, spec)
+{
+    λ tr c valid => {
+        let both = h(tr, c, Trace::valid_linux(tr, valid));
+        ⟨Trace::owes_linux(tr, both.left),
+            j(Trace::along_forget(tr), λ y q => Program::Produces(Events::linux_spec(), spec, y), both.right)⟩
+    }
+}
+
+// The loop rule for Linux: a source loop implements a spec loop when each
+// pass from related states is simulated by one spec pass, or makes no call
+// and stays related to the spec's unchanged state.
+theorem Program::implements_iter<A, A2, B>(R: A → A2 → Type,
+    body: A → ITree<Step<A, B>>(Events::linux()), body2: A2 → ITree<Step<A2, B>>(Events::linux_spec()),
+    pass: (a: A) → (a2: A2) → R(a, a2) →
+        ITree::PassSim(Events::linux(), Events::linux_spec(), TraceMap::linux_forget(), Contract::linux(), R, body, body2, a, a2),
+    a: A, a2: A2, r: R(a, a2)):
+    Program::Implements(Program::iter(Events::linux(), body, a), Program::iter(Events::linux_spec(), body2, a2))
+{
+    Program::implements_of_simulates(Program::iter(Events::linux(), body, a), Program::iter(Events::linux_spec(), body2, a2),
+        Program::simulates_iter(Events::linux(), Events::linux_spec(), TraceMap::linux_forget(), Contract::linux(),
+            R, body, body2, pass, a, a2, r))
+}

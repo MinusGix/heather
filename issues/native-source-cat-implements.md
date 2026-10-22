@@ -4,7 +4,6 @@ status: open
 labels: [native,itree,proofs]
 area: heather-in-heather
 milestone: [hih-pl-source]
-blocked-by: [itree-iter-simulation]
 created: 2026-10-22
 updated: 2026-10-22
 ---
@@ -34,3 +33,7 @@ The word facts are small but have to be stated. A read count is at most
 `from + count` stays at most `n`, so the 64-bit `Add`/`Sub` don't wrap. Each
 of these should be a lemma about `count_word`/`errno_word`, not an unfolding
 at a literal width.
+
+## Log
+
+- 2026-10-22: The single-level loop rule landed ([[itree-iter-simulation]], `lib/linux_trees_sim.hthr`'s `Program::implements_iter`), so this is no longer blocked on it. What it does not give is a source pass that is several spec passes: cat's write loop. This round's proof needs one of the two routes above (a nested-loop rule, or folding the inner `iter` into the outer body by a lemma about the layer's `Repeat`).

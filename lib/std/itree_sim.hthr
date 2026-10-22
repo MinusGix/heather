@@ -1,0 +1,461 @@
+// Simulation between interaction trees over different events
+// (docs/itree-simulation-design.md; issues/itree-iter-simulation.md,
+// milestone `it-library`).
+//
+// A source program meets a spec over other events when every trace the
+// source can produce, read through a map of its calls, is one the spec can
+// produce. Refinement (`ITree::Refines`) is the case of one container and
+// the identity map; Linux's `Implements` (`linux_trees`) is the case where a
+// read's size is forgotten, the answers are those Linux may give, and every
+// read owes a positive size.
+//
+// Proving that by induction over traces repeats the same case analysis for
+// every program. `Sim` is the tree-level relation instead: read off the
+// source, as `Same` and `Below` are, each node naming what the spec does
+// next (`ITree::next`, its silent steps skipped). It is a congruence for
+// `bind` (`sim_bind`), it does not care how much fuel the spec has left as
+// long as it has enough (`sim_below`), and it gives the trace statement once
+// (`sim_trace`). `sim_iter` is the loop rule: two loops whose states are
+// related, where each source pass from related states either is simulated
+// by one spec pass or makes no call at all and lands in states related to
+// the spec's unchanged one, simulate each other at the same fuel.
+
+import logic;
+import nat;
+import itree;
+import itree_trace;
+
+// ---------------------------------------------------------------------------
+// Reading a source trace in the spec's events
+
+// Each command of `E` names one of `F`, and each answer to it an answer to
+// the image. The direction is the trace's: forward, from source to spec.
+record TraceMap(E: Events, F: Events) {
+    cmd: E.Cmd → F.Cmd,
+    ans: (c: E.Cmd) → E.Resp(c) → F.Resp(cmd(c)),
+}
+
+fn TraceMap::id(E: Events) → TraceMap(E, E) { TraceMap(λ c => c, λ c a => a) }
+
+fn Trace::along<R>(E: Events, F: Events, m: TraceMap(E, F), tr: Trace<R>(E)) → Trace<R>(F) {
+    match tr {
+        TEnd => TEnd,
+        TRet(r) => TRet(r),
+        TCall(c) => TCall(m.cmd(c)),
+        TAns(c, a, rest) => TAns(m.cmd(c), m.ans(c, a), Trace::along(E, F, m, rest)),
+    }
+}
+
+theorem Trace::along_id<R>(E: Events, tr: Trace<R>(E)): Trace::along(E, E, TraceMap::id(E), tr) = tr {
+    match tr {
+        TEnd => refl,
+        TRet(_) => refl,
+        TCall(_) => refl,
+        TAns(c, a, rest) => @cong<Trace<R>(E), Trace<R>(E)>(λ y => TAns(c, a, y),
+            Trace::along(E, E, TraceMap::id(E), rest), rest, Trace::along_id(E, rest)),
+    }
+}
+
+// What the environment promises (`valid`: the answers it may give) and what
+// the source owes at each call it makes (`owes`).
+record Contract(E: Events) {
+    valid: (c: E.Cmd) → E.Resp(c) → Type,
+    owes: E.Cmd → Type,
+}
+
+fn Contract::none(E: Events) → Contract(E) { Contract(λ c a => True, λ c => True) }
+
+fn Trace::Valid<R>(E: Events, ct: Contract(E), tr: Trace<R>(E)) → Type {
+    match tr {
+        TEnd => True,
+        TRet(_) => True,
+        TCall(_) => True,
+        TAns(c, a, rest) => ct.valid(c, a) ∧ Trace::Valid(E, ct, rest),
+    }
+}
+
+fn Trace::Owes<R>(E: Events, ct: Contract(E), tr: Trace<R>(E)) → Type {
+    match tr {
+        TEnd => True,
+        TRet(_) => True,
+        TCall(c) => ct.owes(c),
+        TAns(c, _, rest) => ct.owes(c) ∧ Trace::Owes(E, ct, rest),
+    }
+}
+
+theorem Trace::valid_none<R>(E: Events, tr: Trace<R>(E)): Trace::Valid(E, Contract::none(E), tr) {
+    match tr {
+        TEnd => trivial,
+        TRet(_) => trivial,
+        TCall(_) => trivial,
+        TAns(_, _, rest) => ⟨trivial, Trace::valid_none(E, rest)⟩,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Reading a tree off its next move
+
+// The converse of `IsTrace::next`: a trace of a tree's next move is one of
+// the tree.
+theorem IsTrace::of_next<R>(E: Events, t: ITree<R>(E), tr: Trace<R>(E)): NextTrace(E, ITree::next(E, t), tr) → IsTrace(E, t, tr) {
+    match t {
+        Ret(_) => λ it => it,
+        Tau(s) => λ it => IsTrace::of_next(E, s, tr, it),
+        Vis(_, _) => λ it => it,
+        Cut => λ it => it,
+    }
+}
+
+// What `bind` does next, from what its first tree does next.
+fn Next::bind<A, B>(E: Events, n: Next<A>(E), h: A → ITree<B>(E)) → Next<B>(E) {
+    match n {
+        Exits(r) => ITree::next(E, h(r)),
+        Calls(c, k) => Calls(c, λ a => ITree::bind(E, k(a), h)),
+        Stops => Stops,
+    }
+}
+
+theorem ITree::next_bind<A, B>(E: Events, t: ITree<A>(E), h: A → ITree<B>(E)):
+    ITree::next(E, ITree::bind(E, t, h)) = Next::bind(E, ITree::next(E, t), h)
+{
+    match t {
+        Ret(_) => refl,
+        Tau(s) => ITree::next_bind(E, s, h),
+        Vis(_, _) => refl,
+        Cut => refl,
+    }
+}
+
+// A grown tree's next move grows its next move: the same exit, the same call
+// with grown continuations, or anything in place of a stop.
+record CallsBelow<R>(E: Events, c: E.Cmd, k: E.Resp(c) → ITree<R>(E), n: Next<R>(E)) {
+    k2: E.Resp(c) → ITree<R>(E),
+    at: n = Calls(c, k2),
+    sub: (a: E.Resp(c)) → ITree::Below(E, k(a), k2(a)),
+}
+
+fn Next::Below<R>(E: Events, n: Next<R>(E), n2: Next<R>(E)) → Type {
+    match n {
+        Exits(r) => n2 = Exits(r),
+        Calls(c, k) => CallsBelow<R>(E, c, k, n2),
+        Stops => True,
+    }
+}
+
+theorem ITree::below_next<R>(E: Events, t: ITree<R>(E), u: ITree<R>(E), h: ITree::Below(E, t, u)):
+    Next::Below(E, ITree::next(E, t), ITree::next(E, u))
+{
+    match t {
+        Ret(r) => @cong<ITree<R>(E), Next<R>(E)>(λ y => ITree::next(E, y), u, Ret(r), h),
+        Tau(s) => {
+            let g: SameTau<R>(E, u, λ v => ITree::Below(E, s, v)) = h;
+            j(sym(g.at), λ y q => Next::Below(E, ITree::next(E, s), ITree::next(E, y)),
+                ITree::below_next(E, s, g.t, g.sub))
+        },
+        Vis(c, k) => {
+            let g: SameVis<R>(E, c, u, λ a v => ITree::Below(E, k(a), v)) = h;
+            CallsBelow(g.k, @cong<ITree<R>(E), Next<R>(E)>(λ y => ITree::next(E, y), u, Vis(c, g.k), g.at), g.sub)
+        },
+        Cut => trivial,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Simulation
+
+// The spec exits with a value the source's return is related to.
+record SimRet<B>(F: Events, s: ITree<B>(F), P: B → Type) {
+    y: B,
+    at: ITree::next(F, s) = Exits(y),
+    ok: P(y),
+}
+
+// The source's call pays its debt, the spec makes the image of the call, and
+// at every valid answer the continuations are related again, the spec's at
+// the answer's image.
+record SimVis<B>(E: Events, F: Events, m: TraceMap(E, F), ct: Contract(E), c: E.Cmd, s: ITree<B>(F),
+    S: E.Resp(c) → ITree<B>(F) → Type)
+{
+    owes: ct.owes(c),
+    k2: F.Resp(m.cmd(c)) → ITree<B>(F),
+    at: ITree::next(F, s) = Calls(m.cmd(c), k2),
+    sub: (a: E.Resp(c)) → ct.valid(c, a) → S(a, k2(m.ans(c, a))),
+}
+
+// `Sim(t, s)`: the spec `s` does what the source `t` does, read through `m`,
+// with returns related by `Q`, and each source call paying what `ct` says it
+// owes. Silent steps on either side are skipped; a `Cut` in the source claims
+// nothing.
+fn ITree::Sim<A, B>(E: Events, F: Events, m: TraceMap(E, F), ct: Contract(E), Q: A → B → Type,
+    t: ITree<A>(E), s: ITree<B>(F)) → Type
+{
+    match t {
+        Ret(x) => SimRet<B>(F, s, λ y => Q(x, y)),
+        Tau(t2) => ITree::Sim(E, F, m, ct, Q, t2, s),
+        Vis(c, k) => SimVis<B>(E, F, m, ct, c, s, λ a v => ITree::Sim(E, F, m, ct, Q, k(a), v)),
+        Cut => True,
+    }
+}
+
+// The spec is only ever looked at through its next move.
+theorem SimRet::moved<B>(F: Events, s: ITree<B>(F), s2: ITree<B>(F), P: B → Type,
+    e: ITree::next(F, s) = ITree::next(F, s2), g: SimRet<B>(F, s, P)): SimRet<B>(F, s2, P)
+{
+    SimRet(g.y, trans(sym(e), g.at), g.ok)
+}
+
+theorem SimVis::moved<B>(E: Events, F: Events, m: TraceMap(E, F), ct: Contract(E), c: E.Cmd, s: ITree<B>(F),
+    s2: ITree<B>(F), S: E.Resp(c) → ITree<B>(F) → Type, e: ITree::next(F, s) = ITree::next(F, s2),
+    g: SimVis<B>(E, F, m, ct, c, s, S)): SimVis<B>(E, F, m, ct, c, s2, S)
+{
+    SimVis(g.owes, g.k2, trans(sym(e), g.at), g.sub)
+}
+
+theorem ITree::sim_next<A, B>(E: Events, F: Events, m: TraceMap(E, F), ct: Contract(E), Q: A → B → Type,
+    t: ITree<A>(E), s: ITree<B>(F), s2: ITree<B>(F), e: ITree::next(F, s) = ITree::next(F, s2)):
+    ITree::Sim(E, F, m, ct, Q, t, s) → ITree::Sim(E, F, m, ct, Q, t, s2)
+{
+    match t {
+        Ret(x) => λ (h: SimRet<B>(F, s, λ y => Q(x, y))) => SimRet::moved<B>(F, s, s2, λ y => Q(x, y), e, h),
+        Tau(t2) => ITree::sim_next(E, F, m, ct, Q, t2, s, s2, e),
+        Vis(c, k) => λ (h: SimVis<B>(E, F, m, ct, c, s, λ a v => ITree::Sim(E, F, m, ct, Q, k(a), v))) =>
+            SimVis::moved<B>(E, F, m, ct, c, s, s2, λ a v => ITree::Sim(E, F, m, ct, Q, k(a), v), e, h),
+        Cut => λ h => trivial,
+    }
+}
+
+// More fuel for the spec keeps a simulation.
+theorem SimRet::below<B>(F: Events, s: ITree<B>(F), s2: ITree<B>(F), P: B → Type, b: ITree::Below(F, s, s2),
+    g: SimRet<B>(F, s, P)): SimRet<B>(F, s2, P)
+{
+    let nb: Next::Below<B>(F, Exits(g.y), ITree::next(F, s2)) =
+        j(g.at, λ z q => Next::Below(F, z, ITree::next(F, s2)), ITree::below_next(F, s, s2, b));
+    SimRet(g.y, nb, g.ok)
+}
+
+theorem ITree::sim_below<A, B>(E: Events, F: Events, m: TraceMap(E, F), ct: Contract(E), Q: A → B → Type,
+    t: ITree<A>(E), s: ITree<B>(F), s2: ITree<B>(F), b: ITree::Below(F, s, s2)):
+    ITree::Sim(E, F, m, ct, Q, t, s) → ITree::Sim(E, F, m, ct, Q, t, s2)
+{
+    match t {
+        Ret(x) => λ (h: SimRet<B>(F, s, λ y => Q(x, y))) => SimRet::below<B>(F, s, s2, λ y => Q(x, y), b, h),
+        Tau(t2) => ITree::sim_below(E, F, m, ct, Q, t2, s, s2, b),
+        Vis(c, k) => λ (g: SimVis<B>(E, F, m, ct, c, s, λ a v => ITree::Sim(E, F, m, ct, Q, k(a), v))) => {
+            let nb: CallsBelow<B>(F, m.cmd(c), g.k2, ITree::next(F, s2)) =
+                j(g.at, λ z q => Next::Below(F, z, ITree::next(F, s2)), ITree::below_next(F, s, s2, b));
+            let out: SimVis<B>(E, F, m, ct, c, s2, λ a v => ITree::Sim(E, F, m, ct, Q, k(a), v)) =
+                SimVis(g.owes, nb.k2, nb.at, λ a v => ITree::sim_below(E, F, m, ct, Q, k(a), g.k2(m.ans(c, a)),
+                    nb.k2(m.ans(c, a)), nb.sub(m.ans(c, a)), g.sub(a, v)));
+            out
+        },
+        Cut => λ h => trivial,
+    }
+}
+
+// Simulation is a congruence for `bind`: related first trees, and
+// continuations related at related returns.
+theorem ITree::sim_bind<A, B, C, D>(E: Events, F: Events, m: TraceMap(E, F), ct: Contract(E),
+    Q: A → B → Type, P: C → D → Type, t: ITree<A>(E), s: ITree<B>(F), h: A → ITree<C>(E), h2: B → ITree<D>(F),
+    sh: (x: A) → (y: B) → Q(x, y) → ITree::Sim(E, F, m, ct, P, h(x), h2(y))):
+    ITree::Sim(E, F, m, ct, Q, t, s) → ITree::Sim(E, F, m, ct, P, ITree::bind(E, t, h), ITree::bind(F, s, h2))
+{
+    match t {
+        Ret(x) => λ (g: SimRet<B>(F, s, λ y => Q(x, y))) => {
+            let e: (ITree::next(F, h2(g.y)) = ITree::next(F, ITree::bind(F, s, h2))) =
+                sym(trans(ITree::next_bind(F, s, h2), @cong<Next<B>(F), Next<D>(F)>(λ z => Next::bind(F, z, h2),
+                    ITree::next(F, s), Exits(g.y), g.at)));
+            ITree::sim_next(E, F, m, ct, P, h(x), h2(g.y), ITree::bind(F, s, h2), e, sh(x, g.y, g.ok))
+        },
+        Tau(t2) => ITree::sim_bind(E, F, m, ct, Q, P, t2, s, h, h2, sh),
+        Vis(c, k) => λ (g: SimVis<B>(E, F, m, ct, c, s, λ a v => ITree::Sim(E, F, m, ct, Q, k(a), v))) => {
+            let out: SimVis<D>(E, F, m, ct, c, ITree::bind(F, s, h2), λ a v => ITree::Sim(E, F, m, ct, P, ITree::bind(E, k(a), h), v)) =
+                SimVis(g.owes, λ b => ITree::bind(F, g.k2(b), h2),
+                    trans(ITree::next_bind(F, s, h2), @cong<Next<B>(F), Next<D>(F)>(λ z => Next::bind(F, z, h2),
+                        ITree::next(F, s), Calls(m.cmd(c), g.k2), g.at)),
+                    λ a v => ITree::sim_bind(E, F, m, ct, Q, P, k(a), g.k2(m.ans(c, a)), h, h2, sh, g.sub(a, v)));
+            out
+        },
+        Cut => λ st => trivial,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Traces
+
+// One answered call of the source, as the spec's trace.
+theorem ITree::sim_trace_vis<R>(E: Events, F: Events, m: TraceMap(E, F), ct: Contract(E), c: E.Cmd,
+    k: E.Resp(c) → ITree<R>(E), s: ITree<R>(F),
+    g: SimVis<R>(E, F, m, ct, c, s, λ a v => ITree::Sim(E, F, m, ct, λ x y => x = y, k(a), v)),
+    ih: (a: E.Resp(c)) → (v: ITree<R>(F)) → ITree::Sim(E, F, m, ct, λ x y => x = y, k(a), v) →
+        (rest: Trace<R>(E)) → IsTrace(E, k(a), rest) → Trace::Valid(E, ct, rest) →
+        Trace::Owes(E, ct, rest) ∧ IsTrace(F, v, Trace::along(E, F, m, rest)),
+    tr: Trace<R>(E), w: VisTrace<R>(E, c, tr, λ a rest => IsTrace(E, k(a), rest)), valid: Trace::Valid(E, ct, tr)):
+    Trace::Owes(E, ct, tr) ∧ IsTrace(F, s, Trace::along(E, F, m, tr))
+{
+    let goal = λ (y: Trace<R>(E)) => Trace::Owes(E, ct, y) ∧ IsTrace(F, s, Trace::along(E, F, m, y));
+    let spec = λ (z: Trace<R>(F)) (n: Next<R>(F)) => NextTrace(F, n, z);
+    match w {
+        Prefix(e) => j(sym(e), λ y q => goal(y), ⟨trivial, IsTrace::nil(F, s)⟩),
+        Pending(e) => j(sym(e), λ y q => goal(y), ⟨g.owes, IsTrace::of_next(F, s, TCall(m.cmd(c)),
+            j(sym(g.at), λ n q => spec(TCall(m.cmd(c)), n), Pending(refl)))⟩),
+        Answered(a, rest, e, sub) => {
+            let moved: Trace::Valid<R>(E, ct, TAns(c, a, rest)) = j(e, λ y q => Trace::Valid(E, ct, y), valid);
+            let after = ih(a, g.k2(m.ans(c, a)), g.sub(a, moved.left), rest, sub, moved.right);
+            let here: NextTrace<R>(F, Calls(m.cmd(c), g.k2), TAns(m.cmd(c), m.ans(c, a), Trace::along(E, F, m, rest))) =
+                Answered(m.ans(c, a), Trace::along(E, F, m, rest), refl, after.right);
+            j(sym(e), λ y q => goal(y), ⟨⟨g.owes, after.left⟩, IsTrace::of_next(F, s,
+                TAns(m.cmd(c), m.ans(c, a), Trace::along(E, F, m, rest)),
+                j(sym(g.at), λ n q => spec(TAns(m.cmd(c), m.ans(c, a), Trace::along(E, F, m, rest)), n), here))⟩)
+        },
+    }
+}
+
+theorem ITree::sim_trace_ret<R>(E: Events, F: Events, m: TraceMap(E, F), ct: Contract(E), x: R, s: ITree<R>(F),
+    g: SimRet<R>(F, s, λ y => x = y), tr: Trace<R>(E), w: RetTrace<R>(E, x, tr)):
+    Trace::Owes(E, ct, tr) ∧ IsTrace(F, s, Trace::along(E, F, m, tr))
+{
+    let goal = λ (y: Trace<R>(E)) => Trace::Owes(E, ct, y) ∧ IsTrace(F, s, Trace::along(E, F, m, y));
+    match w {
+        Stopped(e) => j(sym(e), λ y q => goal(y), ⟨trivial, IsTrace::nil(F, s)⟩),
+        Returned(e) => {
+            let here: NextTrace<R>(F, Exits(g.y), TRet(x)) =
+                Returned(@cong<R, Trace<R>(F)>(λ z => TRet(z), x, g.y, g.ok));
+            j(sym(e), λ y q => goal(y), ⟨trivial, IsTrace::of_next(F, s, TRet(x),
+                j(sym(g.at), λ n q => NextTrace(F, n, TRet(x)), here))⟩)
+        },
+    }
+}
+
+// The trace statement: every valid trace of the source pays its debts and,
+// read through `m`, is a trace of the spec.
+theorem ITree::sim_trace<R>(E: Events, F: Events, m: TraceMap(E, F), ct: Contract(E), t: ITree<R>(E), s: ITree<R>(F)):
+    ITree::Sim(E, F, m, ct, λ x y => x = y, t, s) → (tr: Trace<R>(E)) → IsTrace(E, t, tr) →
+    Trace::Valid(E, ct, tr) → Trace::Owes(E, ct, tr) ∧ IsTrace(F, s, Trace::along(E, F, m, tr))
+{
+    match t {
+        Ret(x) => λ (h: SimRet<R>(F, s, λ y => x = y)) tr it valid => ITree::sim_trace_ret(E, F, m, ct, x, s, h, tr, it),
+        Tau(t2) => ITree::sim_trace(E, F, m, ct, t2, s),
+        Vis(c, k) => λ (h: SimVis<R>(E, F, m, ct, c, s, λ a v => ITree::Sim(E, F, m, ct, λ x y => x = y, k(a), v)))
+            tr it valid => ITree::sim_trace_vis(E, F, m, ct, c, k, s, h,
+                λ a v sub => ITree::sim_trace(E, F, m, ct, k(a), v, sub), tr, it, valid),
+        Cut => λ h tr (it: CutTrace<R>(E, tr)) valid =>
+            j(sym(CutTrace::ended(E, tr, it)), λ y q => Trace::Owes(E, ct, y) ∧ IsTrace(F, s, Trace::along(E, F, m, y)),
+                ⟨trivial, IsTrace::nil(F, s)⟩),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Programs
+
+// Every valid trace a source program produces pays its debts and, read
+// through `m`, is one the spec program produces.
+fn Program::Simulates<R>(E: Events, F: Events, m: TraceMap(E, F), ct: Contract(E), p: Program<R>(E),
+    q: Program<R>(F)) → Type
+{
+    (tr: Trace<R>(E)) → Program::Produces(E, p, tr) → Trace::Valid(E, ct, tr) →
+        Trace::Owes(E, ct, tr) ∧ Program::Produces(F, q, Trace::along(E, F, m, tr))
+}
+
+// Simulation at every fuel, the spec at the same fuel as the source.
+theorem Program::simulates_of_trees<R>(E: Events, F: Events, m: TraceMap(E, F), ct: Contract(E), p: Program<R>(E),
+    q: Program<R>(F), h: (n: Nat) → ITree::Sim(E, F, m, ct, λ x y => x = y, p.at(n), q.at(n))):
+    Program::Simulates(E, F, m, ct, p, q)
+{
+    λ tr (c: Converges<R>(E, p.at, tr)) valid => {
+        let both = ITree::sim_trace(E, F, m, ct, p.at(c.n), q.at(c.n), h(c.n), tr, c.h, valid);
+        ⟨both.left, Converges(c.n, both.right)⟩
+    }
+}
+
+// Refinement is simulation over one container, read through the identity,
+// with nothing promised or owed.
+theorem Program::refines_of_simulates<R>(E: Events, p: Program<R>(E), q: Program<R>(E),
+    h: Program::Simulates(E, E, TraceMap::id(E), Contract::none(E), p, q)): Program::Refines(E, p, q)
+{
+    λ tr c => j(Trace::along_id(E, tr), λ y q2 => Program::Produces(E, q, y), (h(tr, c, Trace::valid_none(E, tr))).right)
+}
+
+// ---------------------------------------------------------------------------
+// Loops
+
+// How two loop passes' outcomes correspond: going round again from related
+// states, or leaving with the same result.
+fn Step::Rel<A, A2, B>(R: A → A2 → Type, x: Step<A, B>, y: Step<A2, B>) → Type {
+    match x {
+        Continue(a) => match y { Continue(a2) => R(a, a2), Break(_) => False },
+        Break(b) => match y { Continue(_) => False, Break(b2) => b = b2 },
+    }
+}
+
+// The spec's side of a silent pass: no call, the same state.
+fn ITree::stay<A2, B>(F: Events, a2: A2) → ITree<Step<A2, B>>(F) { Ret(Continue(a2)) }
+
+// What one source pass does from related states: either one spec pass
+// simulates it, or it makes no call and goes round again from a state related
+// to the spec's unchanged one (simulated by `ITree::stay`, which has no call
+// to offer).
+fn ITree::PassSim<A, A2, B>(E: Events, F: Events, m: TraceMap(E, F), ct: Contract(E), R: A → A2 → Type,
+    body: A → ITree<Step<A, B>>(E), body2: A2 → ITree<Step<A2, B>>(F), a: A, a2: A2) → Type
+{
+    Or<ITree::Sim(E, F, m, ct, λ x y => Step::Rel(R, x, y), body(a), body2(a2)),
+        ITree::Sim(E, F, m, ct, λ x y => Step::Rel(R, x, y), body(a), ITree::stay<A2, B>(F, a2))>
+}
+
+// One pass's outcome, continued.
+theorem ITree::sim_iter_next<A, A2, B>(E: Events, F: Events, m: TraceMap(E, F), ct: Contract(E), R: A → A2 → Type,
+    body: A → ITree<Step<A, B>>(E), body2: A2 → ITree<Step<A2, B>>(F), n: Nat,
+    ih: (a: A) → (a2: A2) → R(a, a2) → ITree::Sim(E, F, m, ct, λ x y => x = y, ITree::iter(E, n, body, a), ITree::iter(F, n, body2, a2)),
+    x: Step<A, B>, y: Step<A2, B>): Step::Rel(R, x, y) →
+    ITree::Sim(E, F, m, ct, λ x y => x = y, ITree::iter_next(E, n, body, x), ITree::iter_next(F, n, body2, y))
+{
+    match x {
+        Continue(a) => match y {
+            Continue(a2) => λ (r: R(a, a2)) => ITree::sim_next(E, F, m, ct, λ x y => x = y, ITree::iter(E, n, body, a),
+                ITree::iter(F, n, body2, a2), Tau(ITree::iter(F, n, body2, a2)), refl, ih(a, a2, r)),
+            Break(_) => λ (r: False) => false_elim(r),
+        },
+        Break(b) => match y {
+            Continue(_) => λ (r: False) => false_elim(r),
+            Break(b2) => λ (r: b = b2) => SimRet(b2, refl, r),
+        },
+    }
+}
+
+// The loop rule. The spec runs at the source's fuel: it needs no more passes
+// than the source makes, and a silent pass leaves it fuel to spare.
+theorem ITree::sim_iter<A, A2, B>(E: Events, F: Events, m: TraceMap(E, F), ct: Contract(E), R: A → A2 → Type,
+    body: A → ITree<Step<A, B>>(E), body2: A2 → ITree<Step<A2, B>>(F),
+    pass: (a: A) → (a2: A2) → R(a, a2) → ITree::PassSim(E, F, m, ct, R, body, body2, a, a2), n: Nat):
+    (a: A) → (a2: A2) → R(a, a2) →
+        ITree::Sim(E, F, m, ct, λ x y => x = y, ITree::iter(E, n, body, a), ITree::iter(F, n, body2, a2))
+{
+    match n {
+        Zero => λ a a2 r => trivial,
+        Succ(k) => λ a a2 r => {
+            let ih = ITree::sim_iter(E, F, m, ct, R, body, body2, pass, k);
+            let cont = λ (x: Step<A, B>) (y: Step<A2, B>) (q: Step::Rel(R, x, y)) =>
+                ITree::sim_iter_next(E, F, m, ct, R, body, body2, k, ih, x, y, q);
+            match pass(a, a2, r) {
+                Inl(moves) => ITree::sim_bind(E, F, m, ct, λ x y => Step::Rel(R, x, y), λ x y => x = y,
+                    body(a), body2(a2), λ x => ITree::iter_next(E, k, body, x), λ y => ITree::iter_next(F, k, body2, y),
+                    cont, moves),
+                Inr(stays) => ITree::sim_below(E, F, m, ct, λ x y => x = y, ITree::iter(E, Succ(k), body, a),
+                    ITree::iter(F, k, body2, a2), ITree::iter(F, Succ(k), body2, a2), ITree::iter_grows(F, k, body2, a2),
+                    ITree::sim_next(E, F, m, ct, λ x y => x = y, ITree::iter(E, Succ(k), body, a),
+                        Tau(ITree::iter(F, k, body2, a2)), ITree::iter(F, k, body2, a2), refl,
+                        ITree::sim_bind(E, F, m, ct, λ x y => Step::Rel(R, x, y), λ x y => x = y,
+                            body(a), ITree::stay<A2, B>(F, a2), λ x => ITree::iter_next(E, k, body, x),
+                            λ y => ITree::iter_next(F, k, body2, y), cont, stays))),
+            }
+        },
+    }
+}
+
+theorem Program::simulates_iter<A, A2, B>(E: Events, F: Events, m: TraceMap(E, F), ct: Contract(E), R: A → A2 → Type,
+    body: A → ITree<Step<A, B>>(E), body2: A2 → ITree<Step<A2, B>>(F),
+    pass: (a: A) → (a2: A2) → R(a, a2) → ITree::PassSim(E, F, m, ct, R, body, body2, a, a2), a: A, a2: A2, r: R(a, a2)):
+    Program::Simulates(E, F, m, ct, Program::iter(E, body, a), Program::iter(F, body2, a2))
+{
+    Program::simulates_of_trees(E, F, m, ct, Program::iter(E, body, a), Program::iter(F, body2, a2),
+        λ n => ITree::sim_iter(E, F, m, ct, R, body, body2, pass, n, a, a2, r))
+}

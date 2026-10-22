@@ -26,6 +26,8 @@ mod lib_std_bitvec;
 mod lib_std_bounded_list;
 #[path = "../lib_std_coitree.rs"]
 mod lib_std_coitree;
+#[path = "../lib_std_coitree_eutt.rs"]
+mod lib_std_coitree_eutt;
 #[path = "../lib_std_creal.rs"]
 mod lib_std_creal;
 #[path = "../lib_std_certified_lookup.rs"]
@@ -44,6 +46,8 @@ mod lib_std_float_arith;
 mod lib_std_itree;
 #[path = "../lib_std_itree_trace.rs"]
 mod lib_std_itree_trace;
+#[path = "../lib_std_itree_sim.rs"]
+mod lib_std_itree_sim;
 #[path = "../lib_std_int.rs"]
 mod lib_std_int;
 #[path = "../lib_std_list.rs"]

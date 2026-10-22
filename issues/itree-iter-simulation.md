@@ -1,11 +1,11 @@
 ---
 title: Two iters related by a state relation refine each other
-status: open
+status: closed
 labels: [itree,proofs]
 area: interaction-trees
 milestone: [it-library, hih-pl-first-program]
 created: 2026-10-21
-updated: 2026-10-21
+updated: 2026-10-22
 ---
 
 A compiled program meets its source's tree; the facts users care about are
@@ -33,3 +33,7 @@ induction over traces by hand. Found while writing
 - **[[interaction-trees-container-model]]** owns `iter`, `Same`,
   `Program::Refines` and `refines_shift`.
 - **[[native-linux-spec]]** owns `Implements`.
+
+## Log
+
+- 2026-10-22: Done (`lib/std/itree_sim.hthr`, `docs/itree-simulation-design.md`). `ITree::Sim` is read off the source through a `TraceMap` (forward, source to spec) and a `Contract` (valid answers, owed debts); `sim_bind`, `sim_below` and `sim_trace` are its laws, and `sim_iter` is the loop rule: a pass from related states is simulated by one spec pass, or is silent and lands related to the spec's unchanged state, and the loops simulate each other at the same fuel. `Program::Refines` and Linux's `Program::Implements` are both instances (`refines_of_simulates`; `lib/linux_trees_sim.hthr`'s `implements_iter`). A source pass that is several spec passes (cat's write loop) is not covered; that is [[native-source-cat-implements]]'s to state.

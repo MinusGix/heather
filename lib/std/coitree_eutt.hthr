@@ -1,0 +1,435 @@
+// Equivalence up to silent steps on coinductive trees
+// (docs/coitree-design.md §7; issues/coitree-eutt.md, milestone
+// `it-coinductive`).
+//
+// Strong bisimilarity (`Bisim`, `coitree`) matches the two trees step for
+// step, so `CTau(t)` and `t` are not related. `Eutt` lets each side drop
+// finitely many `CTau`s before every visible step: a constructor names how
+// many on the left (`nl`) and on the right (`nr`), and states what each side
+// observes after dropping them (`after`). Dropping stops at the first node
+// that is not a `CTau`, so a count larger than the number of taus is
+// harmless. Two trees that both take silent steps forever are related by
+// `ETau` again and again; a tree that diverges silently is related to no
+// tree that returns or calls.
+//
+// This is Coq's `eutt` with the inductive `EqTauL`/`EqTauR` layers counted
+// instead of stacked: the kernel's `M` has no inductive part to stack them
+// in, and a count is an ordinary field (kernel-coinduction-design §4).
+
+import logic;
+import nat;
+import itree;
+import itree_trace;
+import coitree;
+
+// ---------------------------------------------------------------------------
+// Dropping silent steps
+
+// What a tree observes after dropping up to `n` of its leading `CTau`s.
+fn CoTree::after_obs<R>(E: Events, n: Nat, o: Obs<R>(E)) → Obs<R>(E) {
+    match n {
+        Zero => o,
+        Succ(m) => match o {
+            ORet(r) => ORet(r),
+            OTau(s) => CoTree::after_obs(E, m, CoTree::obs(E, s)),
+            OVis(c, k) => OVis(c, k),
+        },
+    }
+}
+
+fn CoTree::after<R>(E: Events, n: Nat, t: CoTree<R>(E)) → Obs<R>(E) { CoTree::after_obs(E, n, CoTree::obs(E, t)) }
+
+// An observation that is not a silent step: dropping stops there.
+fn Obs::Settled<R>(E: Events, o: Obs<R>(E)) → Type {
+    match o { ORet(_) => True, OTau(_) => False, OVis(_, _) => True }
+}
+
+theorem CoTree::after_obs_settled<R>(E: Events, n: Nat, o: Obs<R>(E)): Obs::Settled(E, o) → CoTree::after_obs(E, n, o) = o {
+    match n {
+        Zero => λ so => refl,
+        Succ(_) => match o {
+            ORet(_) => λ so => refl,
+            OTau(_) => λ (so: False) => false_elim(so),
+            OVis(_, _) => λ so => refl,
+        },
+    }
+}
+
+// A tree that observes a settled node at once observes it after any drop.
+theorem CoTree::after_settled<R>(E: Events, n: Nat, t: CoTree<R>(E), o: Obs<R>(E), h: CoTree::obs(E, t) = o,
+    so: Obs::Settled(E, o)): CoTree::after(E, n, t) = o
+{
+    trans(j(sym(h), λ y q => CoTree::after_obs(E, n, y) = y, CoTree::after_obs_settled(E, n, o, so)), h)
+}
+
+// One more drop past a tree whose root is a silent step.
+theorem CoTree::after_succ<R>(E: Events, n: Nat, t: CoTree<R>(E), s: CoTree<R>(E), h: CoTree::obs(E, t) = OTau(s)):
+    CoTree::after(E, Succ(n), t) = CoTree::after(E, n, s)
+{
+    j(sym(h), λ y q => CoTree::after_obs(E, Succ(n), y) = CoTree::after(E, n, s), refl)
+}
+
+// Dropping `k` steps to reach `CTau(s)`, then one more, then `m`, is dropping
+// `m` steps from `s`.
+theorem CoTree::after_obs_join<R>(E: Events, k: Nat, m: Nat, s: CoTree<R>(E)):
+    (o: Obs<R>(E)) → CoTree::after_obs(E, k, o) = OTau(s) →
+    CoTree::after_obs(E, Succ(m + k), o) = CoTree::after(E, m, s)
+{
+    match k {
+        Zero => λ o h => j(sym(h), λ y q => CoTree::after_obs(E, Succ(m), y) = CoTree::after(E, m, s), refl),
+        Succ(k2) => λ o => match o {
+            ORet(_) => λ h => absurd(h),
+            OTau(s2) => λ h => CoTree::after_obs_join(E, k2, m, s, CoTree::obs(E, s2), h),
+            OVis(_, _) => λ h => absurd(h),
+        },
+    }
+}
+
+theorem CoTree::after_join<R>(E: Events, k: Nat, m: Nat, t: CoTree<R>(E), s: CoTree<R>(E),
+    h: CoTree::after(E, k, t) = OTau(s)): CoTree::after(E, Succ(m + k), t) = CoTree::after(E, m, s)
+{
+    CoTree::after_obs_join(E, k, m, s, CoTree::obs(E, t), h)
+}
+
+// [`after_join`] ending at what `s` observes.
+theorem CoTree::after_via<R>(E: Events, k: Nat, m: Nat, t: CoTree<R>(E), s: CoTree<R>(E), o: Obs<R>(E),
+    h: CoTree::after(E, k, t) = OTau(s), h2: CoTree::after(E, m, s) = o): CoTree::after(E, Succ(m + k), t) = o
+{
+    trans(CoTree::after_join(E, k, m, t, s, h), h2)
+}
+
+// ---------------------------------------------------------------------------
+// The relation
+
+codata Eutt<R>(E: Events): (t: CoTree<R>(E)) → (u: CoTree<R>(E)) → Type {
+    ERet(nl: Nat, nr: Nat, r: R, ht: CoTree::after(E, nl, t) = ORet(r), hu: CoTree::after(E, nr, u) = ORet(r)),
+    ETau(nl: Nat, nr: Nat, t2: CoTree<R>(E), u2: CoTree<R>(E),
+         ht: CoTree::after(E, nl, t) = OTau(t2), hu: CoTree::after(E, nr, u) = OTau(u2), next: Eutt<R>(E, t2, u2)),
+    EVis(nl: Nat, nr: Nat, c: E.Cmd, k1: E.Resp(c) → CoTree<R>(E), k2: E.Resp(c) → CoTree<R>(E),
+         ht: CoTree::after(E, nl, t) = OVis(c, k1), hu: CoTree::after(E, nr, u) = OVis(c, k2),
+         next: (a: E.Resp(c)) → Eutt<R>(E, k1(a), k2(a))),
+}
+
+// Strong bisimilarity is equivalence up to taus with nothing dropped.
+fn Eutt::of_bisim<R>(E: Events, t: CoTree<R>(E), u: CoTree<R>(E), b: Bisim<R>(E, t, u)) → Eutt<R>(E, t, u) {
+    match b {
+        BRet(r, ht, hu) => ERet(0, 0, r, ht, hu),
+        BTau(t2, u2, ht, hu, n) => ETau(0, 0, t2, u2, ht, hu, Eutt::of_bisim(E, t2, u2, n)),
+        BVis(c, k1, k2, ht, hu, n) => EVis(0, 0, c, k1, k2, ht, hu, λ a => Eutt::of_bisim(E, k1(a), k2(a), n(a))),
+    }
+}
+
+fn Eutt::refl<R>(E: Events, t: CoTree<R>(E)) → Eutt<R>(E, t, t) { Eutt::of_bisim(E, t, t, Bisim::refl(E, t)) }
+
+fn Eutt::sym<R>(E: Events, t: CoTree<R>(E), u: CoTree<R>(E), e: Eutt<R>(E, t, u)) → Eutt<R>(E, u, t) {
+    match e {
+        ERet(nl, nr, r, ht, hu) => ERet(nr, nl, r, hu, ht),
+        ETau(nl, nr, t2, u2, ht, hu, n) => ETau(nr, nl, u2, t2, hu, ht, Eutt::sym(E, t2, u2, n)),
+        EVis(nl, nr, c, k1, k2, ht, hu, n) => EVis(nr, nl, c, k2, k1, hu, ht, λ a => Eutt::sym(E, k1(a), k2(a), n(a))),
+    }
+}
+
+// A silent step is invisible.
+fn Eutt::tau_l<R>(E: Events, t: CoTree<R>(E)) → Eutt<R>(E, CTau(t), t) {
+    match h: CoTree::obs(E, t) {
+        ORet(r) => ERet(1, 0, r, h, h),
+        OTau(s) => ETau(1, 0, s, s, h, h, Eutt::refl(E, s)),
+        OVis(c, k) => EVis(1, 0, c, k, k, h, h, λ a => Eutt::refl(E, k(a))),
+    }
+}
+
+fn Eutt::tau_r<R>(E: Events, t: CoTree<R>(E)) → Eutt<R>(E, t, CTau(t)) {
+    Eutt::sym(E, CTau(t), t, Eutt::tau_l(E, t))
+}
+
+// The monad laws, which hold step for step and so up to taus.
+fn Eutt::bind_ret_l<A, B>(E: Events, a: A, h: A → CoTree<B>(E)) → Eutt<B>(E, CoTree::bind(E, CRet(a), h), h(a)) {
+    Eutt::of_bisim(E, CoTree::bind(E, CRet(a), h), h(a), CoTree::bind_ret_l(E, a, h))
+}
+
+fn Eutt::bind_ret_r<R>(E: Events, t: CoTree<R>(E)) → Eutt<R>(E, CoTree::bind(E, t, λ r => CRet(r)), t) {
+    Eutt::of_bisim(E, CoTree::bind(E, t, λ r => CRet(r)), t, CoTree::bind_ret_r(E, t))
+}
+
+fn Eutt::bind_assoc<A, B, C>(E: Events, t: CoTree<A>(E), f: A → CoTree<B>(E), g: B → CoTree<C>(E)) →
+    Eutt<C>(E, CoTree::bind(E, CoTree::bind(E, t, f), g), CoTree::bind(E, t, λ x => CoTree::bind(E, f(x), g)))
+{
+    Eutt::of_bisim(E, CoTree::bind(E, CoTree::bind(E, t, f), g), CoTree::bind(E, t, λ x => CoTree::bind(E, f(x), g)),
+        CoTree::bind_assoc(E, t, f, g))
+}
+
+// ---------------------------------------------------------------------------
+// Moving the counts
+
+// More silent steps in front of the left tree: `t` reaches `CTau(s)` after
+// `k` drops, and `s` is related to `u`.
+fn Eutt::peel_l<R>(E: Events, t: CoTree<R>(E), s: CoTree<R>(E), u: CoTree<R>(E), k: Nat,
+    h: CoTree::after(E, k, t) = OTau(s), e: Eutt<R>(E, s, u)) → Eutt<R>(E, t, u)
+{
+    match e {
+        ERet(nl, nr, r, hs, hu) => ERet(Succ(nl + k), nr, r, trans(CoTree::after_join(E, k, nl, t, s, h), hs), hu),
+        ETau(nl, nr, s2, u2, hs, hu, n) => ETau(Succ(nl + k), nr, s2, u2, trans(CoTree::after_join(E, k, nl, t, s, h), hs), hu, n),
+        EVis(nl, nr, c, k1, k2, hs, hu, n) =>
+            EVis(Succ(nl + k), nr, c, k1, k2, trans(CoTree::after_join(E, k, nl, t, s, h), hs), hu, λ a => n(a)),
+    }
+}
+
+fn Eutt::peel_r<R>(E: Events, t: CoTree<R>(E), u: CoTree<R>(E), s: CoTree<R>(E), k: Nat,
+    h: CoTree::after(E, k, u) = OTau(s), e: Eutt<R>(E, t, s)) → Eutt<R>(E, t, u)
+{
+    Eutt::sym(E, u, t, Eutt::peel_l(E, u, s, t, k, h, Eutt::sym(E, t, s, e)))
+}
+
+// Drop one silent step off the left tree. A settled observation after `nl`
+// drops is the same after one fewer from the child.
+theorem CoTree::after_drop1<R>(E: Events, t: CoTree<R>(E), s: CoTree<R>(E), h0: CoTree::obs(E, t) = OTau(s),
+    o: Obs<R>(E), so: Obs::Settled(E, o), nl: Nat): CoTree::after(E, nl, t) = o → CoTree::after(E, nl.pred(), s) = o
+{
+    match nl {
+        Zero => λ (ht: CoTree::obs(E, t) = o) => false_elim(j(trans(sym(ht), h0), λ y q => Obs::Settled(E, y), so)),
+        Succ(k) => λ ht => trans(sym(CoTree::after_succ(E, k, t, s, h0)), ht),
+    }
+}
+
+fn Eutt::drop1_tau<R>(E: Events, t: CoTree<R>(E), s: CoTree<R>(E), u: CoTree<R>(E), h0: CoTree::obs(E, t) = OTau(s),
+    nr: Nat, t2: CoTree<R>(E), u2: CoTree<R>(E), hu: CoTree::after(E, nr, u) = OTau(u2), n: Eutt<R>(E, t2, u2),
+    nl: Nat) → CoTree::after(E, nl, t) = OTau(t2) → Eutt<R>(E, s, u)
+{
+    match nl {
+        Zero => λ (ht: CoTree::obs(E, t) = OTau(t2)) =>
+            Eutt::peel_r(E, s, u, u2, nr, hu, j(inj(trans(sym(ht), h0)), λ y q => Eutt<R>(E, y, u2), n)),
+        Succ(k) => λ ht => ETau(k, nr, t2, u2, trans(sym(CoTree::after_succ(E, k, t, s, h0)), ht), hu, n),
+    }
+}
+
+fn Eutt::drop1<R>(E: Events, t: CoTree<R>(E), s: CoTree<R>(E), u: CoTree<R>(E), h0: CoTree::obs(E, t) = OTau(s),
+    e: Eutt<R>(E, t, u)) → Eutt<R>(E, s, u)
+{
+    match e {
+        ERet(nl, nr, r, ht, hu) => ERet(nl.pred(), nr, r, CoTree::after_drop1(E, t, s, h0, ORet(r), trivial, nl, ht), hu),
+        ETau(nl, nr, t2, u2, ht, hu, n) => Eutt::drop1_tau(E, t, s, u, h0, nr, t2, u2, hu, n, nl, ht),
+        EVis(nl, nr, c, k1, k2, ht, hu, n) =>
+            EVis(nl.pred(), nr, c, k1, k2, CoTree::after_drop1(E, t, s, h0, OVis(c, k1), trivial, nl, ht), hu, λ a => n(a)),
+    }
+}
+
+// Drop `n` silent steps off the left tree, which reaches `CTau(u2)` there.
+fn Eutt::drop_l<R>(E: Events, u: CoTree<R>(E), u2: CoTree<R>(E), v: CoTree<R>(E), b: Eutt<R>(E, u, v), n: Nat) →
+    CoTree::after(E, n, u) = OTau(u2) → Eutt<R>(E, u2, v)
+{
+    match n {
+        Zero => λ (h: CoTree::obs(E, u) = OTau(u2)) => Eutt::drop1(E, u, u2, v, h, b),
+        // The convoy refines the goal: `h` is about `after_obs(Succ(m), o)`.
+        Succ(m) => match h0: CoTree::obs(E, u) {
+            ORet(_) => λ h => absurd(h),
+            OTau(u1) => λ h => Eutt::drop_l(E, u1, u2, v, Eutt::drop1(E, u, u1, v, h0, b), m, h),
+            OVis(_, _) => λ h => absurd(h),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Transitivity
+
+// What a tree related to one that settles at `o` does: returns the same
+// value, or calls the same command with related continuations, after some
+// drops of its own.
+record EuttRetAt<R>(E: Events, v: CoTree<R>(E), r: R) {
+    m: Nat,
+    at: CoTree::after(E, m, v) = ORet(r),
+}
+
+record EuttVisAt<R>(E: Events, v: CoTree<R>(E), c: E.Cmd, k: E.Resp(c) → CoTree<R>(E)) {
+    m: Nat,
+    k2: E.Resp(c) → CoTree<R>(E),
+    at: CoTree::after(E, m, v) = OVis(c, k2),
+    next: (a: E.Resp(c)) → Eutt<R>(E, k(a), k2(a)),
+}
+
+fn Obs::EuttTo<R>(E: Events, o: Obs<R>(E), v: CoTree<R>(E)) → Type {
+    match o {
+        ORet(r) => EuttRetAt<R>(E, v, r),
+        OTau(_) => True,
+        OVis(c, k) => EuttVisAt<R>(E, v, c, k),
+    }
+}
+
+// `u ≈ v` and `u` observes the settled `o` at once.
+theorem Eutt::to0<R>(E: Events, u: CoTree<R>(E), v: CoTree<R>(E), b: Eutt<R>(E, u, v), o: Obs<R>(E),
+    so: Obs::Settled(E, o), h: CoTree::obs(E, u) = o): Obs::EuttTo(E, o, v)
+{
+    match b {
+        ERet(nl, nr, r, hu, hv) =>
+            j(trans(sym(hu), CoTree::after_settled(E, nl, u, o, h, so)), λ y q => Obs::EuttTo(E, y, v),
+                EuttRetAt(nr, hv)),
+        ETau(nl, nr, u2, v2, hu, hv, n) =>
+            false_elim(j(trans(sym(CoTree::after_settled(E, nl, u, o, h, so)), hu), λ y q => Obs::Settled(E, y), so)),
+        EVis(nl, nr, c, k1, k2, hu, hv, n) =>
+            j(trans(sym(hu), CoTree::after_settled(E, nl, u, o, h, so)), λ y q => Obs::EuttTo(E, y, v),
+                EuttVisAt(nr, k2, hv, n)),
+    }
+}
+
+// `u ≈ v` and `u` settles at `o` after `n` drops.
+theorem Eutt::to<R>(E: Events, u: CoTree<R>(E), v: CoTree<R>(E), b: Eutt<R>(E, u, v), o: Obs<R>(E),
+    so: Obs::Settled(E, o), n: Nat): CoTree::after(E, n, u) = o → Obs::EuttTo(E, o, v)
+{
+    match n {
+        Zero => λ (h: CoTree::obs(E, u) = o) => Eutt::to0(E, u, v, b, o, so, h),
+        Succ(m) => match h0: CoTree::obs(E, u) {
+            ORet(r) => λ h => Eutt::to0(E, u, v, b, o, so, trans(h0, h)),
+            OTau(u1) => λ h => Eutt::to(E, u1, v, Eutt::drop1(E, u, u1, v, h0, b), o, so, m, h),
+            OVis(c, k) => λ h => Eutt::to0(E, u, v, b, o, so, trans(h0, h)),
+        },
+    }
+}
+
+// The middle tree's silent steps are absorbed on whichever side drops them:
+// where the left relation stops at a leaf or a call, the right one is read
+// at that observation (`to`); where it steps silently, the right relation
+// is advanced past the same steps (`drop_l`) and read again.
+fn Eutt::trans<R>(E: Events, t: CoTree<R>(E), u: CoTree<R>(E), v: CoTree<R>(E), a: Eutt<R>(E, t, u), b: Eutt<R>(E, u, v))
+    → Eutt<R>(E, t, v)
+{
+    match a {
+        ERet(nl, nr, r, ht, hu) => {
+            let w: EuttRetAt<R>(E, v, r) = Eutt::to(E, u, v, b, ORet(r), trivial, nr, hu);
+            ERet(nl, w.m, r, ht, w.at)
+        },
+        EVis(nl, nr, c, k1, k2, ht, hu, n) => {
+            let w: EuttVisAt<R>(E, v, c, k2) = Eutt::to(E, u, v, b, OVis(c, k2), trivial, nr, hu);
+            EVis(nl, w.m, c, k1, w.k2, ht, w.at, λ x => Eutt::trans(E, k1(x), k2(x), w.k2(x), n(x), w.next(x)))
+        },
+        ETau(nl, nr, t2, u2, ht, hu, n) => match Eutt::drop_l(E, u, u2, v, b, nr, hu) {
+            ERet(nl3, nr3, r, hu2, hv) => {
+                let w: EuttRetAt<R>(E, t2, r) = Eutt::to(E, u2, t2, Eutt::sym(E, t2, u2, n), ORet(r), trivial, nl3, hu2);
+                ERet(Succ(w.m + nl), nr3, r, CoTree::after_via(E, nl, w.m, t, t2, ORet(r), ht, w.at), hv)
+            },
+            EVis(nl3, nr3, c, k1, k2, hu2, hv, nx) => {
+                let w: EuttVisAt<R>(E, t2, c, k1) = Eutt::to(E, u2, t2, Eutt::sym(E, t2, u2, n), OVis(c, k1), trivial, nl3, hu2);
+                EVis(Succ(w.m + nl), nr3, c, w.k2, k2, CoTree::after_via(E, nl, w.m, t, t2, OVis(c, w.k2), ht, w.at), hv,
+                    λ x => Eutt::trans(E, w.k2(x), k1(x), k2(x), Eutt::sym(E, k1(x), w.k2(x), w.next(x)), nx(x)))
+            },
+            ETau(nl3, nr3, u3, v3, hu3, hv3, nx) =>
+                ETau(nl, nr3, t2, v3, ht, hv3, Eutt::trans(E, t2, u2, v3, n, Eutt::peel_l(E, u2, u3, v3, nl3, hu3, nx))),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Equivalent programs
+
+// A trace some approximation of what `t` observes after `k` drops makes is
+// one some approximation of `t` makes: the drops are `Tau`s, which traces do
+// not see.
+theorem CoTree::converges_after<R>(E: Events, t: CoTree<R>(E), o: Obs<R>(E), tr: Trace<R>(E),
+    c: Converges<R>(E, λ n => CoTree::approx_obs(E, n, o), tr), k: Nat):
+    CoTree::after(E, k, t) = o → Converges<R>(E, λ n => CoTree::approx(E, n, t), tr)
+{
+    match k {
+        Zero => λ (h: CoTree::obs(E, t) = o) =>
+            j(sym(h), λ y q => Converges<R>(E, λ n => CoTree::approx_obs(E, n, y), tr), c),
+        Succ(m) => match h0: CoTree::obs(E, t) {
+            ORet(r) => λ h => j(sym(trans(h0, h)), λ y q => Converges<R>(E, λ n => CoTree::approx_obs(E, n, y), tr), c),
+            OTau(t1) => λ h => {
+                let c1: Converges<R>(E, λ n => CoTree::approx(E, n, t1), tr) = CoTree::converges_after(E, t1, o, tr, c, m, h);
+                Converges(Succ(c1.n), j(sym(h0), λ y q => IsTrace(E, CoTree::approx_obs(E, Succ(c1.n), y), tr), c1.h))
+            },
+            OVis(c2, k2) => λ h =>
+                j(sym(trans(h0, h)), λ y q => Converges<R>(E, λ n => CoTree::approx_obs(E, n, y), tr), c),
+        },
+    }
+}
+
+// The empty prefix converges everywhere.
+theorem CoTree::converges_nil<R>(E: Events, u: CoTree<R>(E), tr: Trace<R>(E), e: tr = TEnd):
+    Converges<R>(E, λ n => CoTree::approx(E, n, u), tr)
+{
+    j(sym(e), λ y q => Converges<R>(E, λ n => CoTree::approx(E, n, u), y), Converges(Zero, IsTrace::nil(E, CoTree::approx(E, Zero, u))))
+}
+
+// A leaf of `t`, matched where `u` returns.
+theorem Eutt::traces_ret<R>(E: Events, t: CoTree<R>(E), u: CoTree<R>(E), e: Eutt<R>(E, t, u), tr: Trace<R>(E), r: R,
+    h0: CoTree::obs(E, t) = ORet(r), it: RetTrace<R>(E, r, tr)): Converges<R>(E, λ k => CoTree::approx(E, k, u), tr)
+{
+    let w: EuttRetAt<R>(E, u, r) = Eutt::to0(E, t, u, e, ORet(r), trivial, h0);
+    match it {
+        Stopped(at) => CoTree::converges_nil(E, u, tr, at),
+        Returned(at) => j(sym(at), λ y q => Converges<R>(E, λ k => CoTree::approx(E, k, u), y),
+            CoTree::converges_after(E, u, ORet(r), TRet(r), Converges(Succ(Zero), Returned(refl)), w.m, w.at)),
+    }
+}
+
+// The hypothesis [`Eutt::traces`] carries one depth down.
+fn Eutt::TracesAt<R>(E: Events, m: Nat) → Type {
+    (t1: CoTree<R>(E)) → (u1: CoTree<R>(E)) → Eutt<R>(E, t1, u1) → (tr1: Trace<R>(E)) →
+        IsTrace(E, CoTree::approx(E, m, t1), tr1) → Converges<R>(E, λ k => CoTree::approx(E, k, u1), tr1)
+}
+
+// A call of `t`, matched where `u` makes it, each answer's subtrace by `ih`.
+theorem Eutt::traces_vis<R>(E: Events, t: CoTree<R>(E), u: CoTree<R>(E), e: Eutt<R>(E, t, u), tr: Trace<R>(E), m: Nat,
+    ih: Eutt::TracesAt<R>(E, m), c: E.Cmd, k: E.Resp(c) → CoTree<R>(E), h0: CoTree::obs(E, t) = OVis(c, k),
+    it: VisTrace<R>(E, c, tr, λ a rest => IsTrace(E, CoTree::approx(E, m, k(a)), rest))):
+    Converges<R>(E, λ k3 => CoTree::approx(E, k3, u), tr)
+{
+    let w: EuttVisAt<R>(E, u, c, k) = Eutt::to0(E, t, u, e, OVis(c, k), trivial, h0);
+    match it {
+        Prefix(at) => CoTree::converges_nil(E, u, tr, at),
+        Pending(at) => j(sym(at), λ y q => Converges<R>(E, λ k3 => CoTree::approx(E, k3, u), y),
+            CoTree::converges_after(E, u, OVis(c, w.k2), TCall(c), Converges(Succ(Zero), Pending(refl)), w.m, w.at)),
+        Answered(a, rest, at, sub) => {
+            let c1: Converges<R>(E, λ k3 => CoTree::approx(E, k3, w.k2(a)), rest) = ih(k(a), w.k2(a), w.next(a), rest, sub);
+            j(sym(at), λ y q => Converges<R>(E, λ k3 => CoTree::approx(E, k3, u), y),
+                CoTree::converges_after(E, u, OVis(c, w.k2), TAns(c, a, rest),
+                    Converges(Succ(c1.n), Answered(a, rest, refl, c1.h)), w.m, w.at))
+        },
+    }
+}
+
+// One level of [`Eutt::traces`], at what `t` observes.
+theorem Eutt::traces_obs<R>(E: Events, t: CoTree<R>(E), u: CoTree<R>(E), e: Eutt<R>(E, t, u), tr: Trace<R>(E), m: Nat,
+    ih: Eutt::TracesAt<R>(E, m)):
+    (o: Obs<R>(E)) → CoTree::obs(E, t) = o → IsTrace(E, CoTree::approx_obs(E, Succ(m), o), tr) →
+    Converges<R>(E, λ k => CoTree::approx(E, k, u), tr)
+{
+    λ o => match o {
+        ORet(r) => λ h0 it => Eutt::traces_ret(E, t, u, e, tr, r, h0, it),
+        OTau(t1) => λ h0 it => ih(t1, u, Eutt::drop1(E, t, t1, u, h0, e), tr, it),
+        OVis(c, k) => λ h0 it => Eutt::traces_vis(E, t, u, e, tr, m, ih, c, k, h0, it),
+    }
+}
+
+// Every trace an approximation of `t` makes, some approximation of `u` makes,
+// by induction on the depth: a silent step of `t` is dropped off the
+// relation, and a leaf or a call is matched where `u` settles.
+theorem Eutt::traces<R>(E: Events, t: CoTree<R>(E), u: CoTree<R>(E), e: Eutt<R>(E, t, u), tr: Trace<R>(E), n: Nat):
+    IsTrace(E, CoTree::approx(E, n, t), tr) → Converges<R>(E, λ k => CoTree::approx(E, k, u), tr)
+{
+    match n {
+        Zero => λ (it: CutTrace<R>(E, tr)) => CoTree::converges_nil(E, u, tr, CutTrace::ended(E, tr, it)),
+        Succ(m) => λ it => Eutt::traces_obs(E, t, u, e, tr, m, λ t1 u1 e1 tr1 => Eutt::traces(E, t1, u1, e1, tr1, m),
+            CoTree::obs(E, t), refl, it),
+    }
+}
+
+// Trees equivalent up to taus are programs that refine each other.
+theorem Eutt::refines<R>(E: Events, t: CoTree<R>(E), u: CoTree<R>(E), e: Eutt<R>(E, t, u)):
+    Program::Refines(E, CoTree::program(E, t), CoTree::program(E, u))
+{
+    Program::refines_of_families(E, CoTree::program(E, t), CoTree::program(E, u), λ n tr it => Eutt::traces(E, t, u, e, tr, n, it))
+}
+
+theorem Eutt::refined<R>(E: Events, t: CoTree<R>(E), u: CoTree<R>(E), e: Eutt<R>(E, t, u)):
+    Program::Refines(E, CoTree::program(E, u), CoTree::program(E, t))
+{
+    Eutt::refines(E, u, t, Eutt::sym(E, t, u, e))
+}
+
+// Bisimilar trees are, the same way and also through `Same` approximations.
+theorem Bisim::refines<R>(E: Events, t: CoTree<R>(E), u: CoTree<R>(E), b: Bisim<R>(E, t, u)):
+    Program::Refines(E, CoTree::program(E, t), CoTree::program(E, u))
+{
+    Program::refines_of_families(E, CoTree::program(E, t), CoTree::program(E, u),
+        ITree::refines_of_same(E, λ n => CoTree::approx(E, n, t), λ n => CoTree::approx(E, n, u),
+            λ n => Bisim::approx(E, n, t, u, b)))
+}

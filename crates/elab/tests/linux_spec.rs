@@ -26,6 +26,8 @@ const MODULES: &[(&str, &str)] = &[
     ("itree", include_str!("../../../lib/std/itree.hthr")),
     ("itree_trace", include_str!("../../../lib/std/itree_trace.hthr")),
     ("linux_trees", include_str!("../../../lib/linux_trees.hthr")),
+    ("itree_sim", include_str!("../../../lib/std/itree_sim.hthr")),
+    ("linux_trees_sim", include_str!("../../../lib/linux_trees_sim.hthr")),
     ("linux_x86_64_sim", include_str!("../../../lib/linux_x86_64_sim.hthr")),
     ("stream_filter", include_str!("../../../lib/stream_filter.hthr")),
     ("stream_filter_spec", include_str!("../../../lib/stream_filter_spec.hthr")),
@@ -219,6 +221,56 @@ fn sim_at_a_cut_and_a_return() {
             theorem exits<M>(io: LinuxIo<M>, s: MachineState<M>, status: BitVec(64), sim: Sim<M>(io, Ret(status), s)):
                 LinuxRuns(io, [ExitEvent(status)], s) {{
                 sim_linux_runs(io, Ret(status), s, sim, TRet(status), Returned(refl), trivial, trivial)
+            }}"
+        ),
+    );
+}
+
+// The loop rule for Linux (`linux_trees_sim`): a source loop whose passes
+// make no call implements a spec loop that leaves at once, the source's
+// state a counter and the spec's of another type; a spec that leaves with
+// another status is refused.
+#[test]
+fn a_silent_loop_implements_a_spec_that_leaves() {
+    const DOWN: &str = "
+        fn down_body(a: Nat) → ITree<Step<Nat, Nat>>(Events::linux()) {
+            match a { Zero => Ret(Break(0)), Succ(m) => Ret(Continue(m)) }
+        }
+        fn now_body(u: True) → ITree<Step<True, Nat>>(Events::linux_spec()) { Ret(Break(0)) }
+    ";
+    let mut e = base();
+    check(
+        &mut e,
+        "linux_sim_loop",
+        &format!(
+            "{IMPORTS} import itree_sim; import linux_trees_sim;{DOWN}
+            theorem down_pass(a: Nat, u: True):
+                ITree::PassSim<Nat, True, Nat>(Events::linux(), Events::linux_spec(), TraceMap::linux_forget(),
+                    Contract::linux(), λ x y => True, λ x => down_body(x), λ y => now_body(y), a, u)
+            {{
+                match a {{
+                    Zero => Inl(SimRet(Break(0), refl, refl)),
+                    Succ(_) => Inr(SimRet(Continue(u), refl, trivial)),
+                }}
+            }}
+            theorem down_implements(a: Nat):
+                Program::Implements<Nat>(Program::iter<Nat, Nat>(Events::linux(), λ x => down_body(x), a),
+                    Program::iter<True, Nat>(Events::linux_spec(), λ y => now_body(y), trivial))
+            {{
+                Program::implements_iter(λ x y => True, λ x => down_body(x), λ y => now_body(y),
+                    λ x y r => down_pass(x, y), a, trivial, trivial)
+            }}"
+        ),
+    );
+    refused(
+        "linux_sim_loop_wrong",
+        &format!(
+            "{IMPORTS} import itree_sim; import linux_trees_sim;{DOWN}
+            fn one_body(u: True) → ITree<Step<True, Nat>>(Events::linux_spec()) {{ Ret(Break(1)) }}
+            theorem bad(): ITree::PassSim<Nat, True, Nat>(Events::linux(), Events::linux_spec(), TraceMap::linux_forget(),
+                Contract::linux(), λ x y => True, λ x => down_body(x), λ y => one_body(y), 0, trivial)
+            {{
+                Inl(SimRet(Break(1), refl, refl))
             }}"
         ),
     );

@@ -5310,6 +5310,35 @@ impl Elaborator {
         err("internal: projection walked off the end", span)
     }
 
+    /// [`Self::projection`] in the checked spelling, `fst@(snd@^{k+1} value)`,
+    /// where the caller's receiver infers (a case binder): no component
+    /// annotations, so a field's term does not carry every earlier field's
+    /// projection inside its types. The returned type stays inline, as
+    /// [`Self::projection`]'s does.
+    pub(crate) fn projection_at(
+        &self,
+        cx: &Cx,
+        ctor_ty: &Type,
+        value: &Rc<Term>,
+        k: usize,
+        span: Span,
+    ) -> R<(Rc<Term>, Type, Level)> {
+        let mut cur = ctor_ty.clone();
+        let mut pair = Rc::clone(value);
+        for step in 0..=k + 1 {
+            let Type::Sigma { fst_level, fst, snd, .. } = self.whnf(cx, &cur, span)? else {
+                return err("internal: constructor encoding is too short", span);
+            };
+            let proj = Rc::new(Term::FstAt { pair: Rc::clone(&pair) });
+            if step == k + 1 {
+                return Ok((proj, (*fst).clone(), fst_level));
+            }
+            cur = snd.apply_local(&LocalSubst::id(&cx.gamma).extended(proj));
+            pair = Rc::new(Term::SndAt { pair });
+        }
+        err("internal: projection walked off the end", span)
+    }
+
     /// Read a constructor term back: its index and its field values. Besides a
     /// canonical constructor, accept the injected neutral that a `match` arm's
     /// motive is instantiated at (issues/absurd-on-branch-scrutinee.md). The
