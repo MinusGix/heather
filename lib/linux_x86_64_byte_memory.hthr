@@ -1,13 +1,13 @@
 // Linux's process memory as the byte model, and a buffer seen through it
 // (issues/memory-model-machine-instances.md; docs/byte-memory-design.md §6):
-// the `LinuxIo` record of an `X86Memory` profile, and a `View` for `Wp`
+// the `LinuxIo` record of an `X86Profile`, and a `View` for `Wp`
 // (docs/native-program-logic-design.md §6.1, the third view) over a buffer
 // that lives in a data region.
 //
 // The view's knowledge is a buffer's cells, `Nat → BitVec(8)`, of the
 // buffer `DataRegion::buffer` makes of them: `Memory::buffer`'s shape, the
 // one S3's buffer state edges thread (docs/native-effect-source-design.md
-// §6). `Holds(v, cells)` says the region's cells are the buffer's, index by
+// §6). `Holds(v, m)` says the region's cells are the buffer's, index by
 // index, and so the region's `get_span` is the buffer's
 // (`DataRegion::holds_span`). A load reads the buffer at the index the
 // caller names; a store, the program's or Linux's answer to a read, goes in
@@ -32,7 +32,7 @@ import nat;
 import option;
 import omega;
 
-fn X86Memory::linux(self x: X86Memory) → LinuxIo<BitVec(64) → BitVec(8)> {
+fn X86Profile::linux(self x: X86Profile) → LinuxIo<X86Memory(x)> {
     LinuxIo(x.fetch(), x.data(), x.writes().writable, x.writes().store)
 }
 
@@ -41,21 +41,21 @@ fn X86Memory::linux(self x: X86Memory) → LinuxIo<BitVec(64) → BitVec(8)> {
 
 // The buffer's cells as a buffer of the model, `Memory::buffer`'s shape:
 // readable and writable below the region's size. The view threads the cells
-// and the shape is fixed, as `X86Memory` fixes the machine's.
+// and the shape is fixed.
 fn DataRegion::buffer(self r: DataRegion, cells: Nat → BitVec(8)) → Memory<Nat, BitVec(8)> {
     Memory<Nat, BitVec(8)>(Nat::space(), cells, Perm::below(r.size))
 }
 
-fn DataRegion::Holds(self r: DataRegion, v: Nat → BitVec(8), cells: BitVec(64) → BitVec(8)) → Type {
-    (p: Nat) → p < r.size → r.memory.at(cells).get(next_rip(r.low, p)) = r.buffer(v).get(p)
+fn DataRegion::Holds(self r: DataRegion, v: Nat → BitVec(8), m: X86Memory(r.profile)) → Type {
+    (p: Nat) → p < r.size → r.profile.at(m).get(next_rip(r.low, p)) = r.buffer(v).get(p)
 }
 
-theorem DataRegion::holds_span(self r: DataRegion, v: Nat → BitVec(8), cells: BitVec(64) → BitVec(8), holds: r.Holds(v, cells)):
-    r.memory.at(cells).get_span(r.low, r.size) = r.buffer(v).get_span(0, r.size) {
-    r.memory.at(cells).get_span_agree(r.buffer(v), r.low, 0, r.size, λ p inside => {
-        let here: (r.memory.at(cells).get(next_rip(r.low, p)) = r.buffer(v).get(p)) = holds(p, inside);
+theorem DataRegion::holds_span(self r: DataRegion, v: Nat → BitVec(8), m: X86Memory(r.profile), holds: r.Holds(v, m)):
+    r.profile.at(m).get_span(r.low, r.size) = r.buffer(v).get_span(0, r.size) {
+    r.profile.at(m).get_span_agree(r.buffer(v), r.low, 0, r.size, λ p inside => {
+        let here: (r.profile.at(m).get(next_rip(r.low, p)) = r.buffer(v).get(p)) = holds(p, inside);
         let index: (r.buffer(v).get(p) = r.buffer(v).get(0 + p)) = cong_fn<Nat, BitVec(8)>(λ k => r.buffer(v).get(k), sym(p.add_left_zero()));
-        let both: (r.memory.at(cells).get(BitVec::space(64).offset(r.low, p)) = r.buffer(v).get(Nat::space().offset(0, p))) = trans(here, index);
+        let both: (r.profile.at(m).get(BitVec::space(64).offset(r.low, p)) = r.buffer(v).get(Nat::space().offset(0, p))) = trans(here, index);
         both
     })
 }
@@ -66,27 +66,27 @@ fn Memory::x86_word(self v: Memory<Nat, BitVec(8)>, q: Nat) → BitVec(64) {
 }
 
 // The byte `t` past index `q` reads as the buffer's.
-theorem DataRegion::buffer_read(self r: DataRegion, v: Nat → BitVec(8), cells: BitVec(64) → BitVec(8), holds: r.Holds(v, cells),
-    q, t: Nat, inside: q + t < r.size): r.memory.read(cells, next_rip(next_rip(r.low, q), t)) = Some(r.buffer(v).get(q + t)) {
-    let readable: (r.memory.perm(next_rip(next_rip(r.low, q), t)).read = True) =
-        cong_fn<Perm, Bool>(λ k => k.read, r.perm_from(q, t, inside));
-    let cell: (cells(next_rip(next_rip(r.low, q), t)) = r.buffer(v).get(q + t)) =
-        trans(cong_fn<BitVec(64), BitVec(8)>(λ y => cells(y), rip_compose(r.low, q, t)), holds(q + t, inside));
-    trans(r.memory.read_at(cells, next_rip(next_rip(r.low, q), t), readable), cong_fn<BitVec(8), Option<BitVec(8)>>(λ b => Some(b), cell))
+theorem DataRegion::buffer_read(self r: DataRegion, v: Nat → BitVec(8), m: X86Memory(r.profile), holds: r.Holds(v, m),
+    q, t: Nat, inside: q + t < r.size): r.profile.read(m, next_rip(next_rip(r.low, q), t)) = Some(r.buffer(v).get(q + t)) {
+    let readable: (r.profile.perm(m, next_rip(next_rip(r.low, q), t)).read = True) =
+        cong_fn<Perm, Bool>(λ k => k.read, r.perm_from(m, q, t, inside));
+    let cell: (m.cells(next_rip(next_rip(r.low, q), t)) = r.buffer(v).get(q + t)) =
+        trans(cong_fn<BitVec(64), BitVec(8)>(λ y => m.cells(y), rip_compose(r.low, q, t)), holds(q + t, inside));
+    trans(r.profile.read_at(m, next_rip(next_rip(r.low, q), t), readable), cong_fn<BitVec(8), Option<BitVec(8)>>(λ b => Some(b), cell))
 }
 
 // A list stored at index `q`: the region holds the buffer with the same list
 // stored at `q`.
-theorem DataRegion::store_holds(self r: DataRegion, v: Nat → BitVec(8), cells: BitVec(64) → BitVec(8), holds: r.Holds(v, cells),
+theorem DataRegion::store_holds(self r: DataRegion, v: Nat → BitVec(8), m: X86Memory(r.profile), holds: r.Holds(v, m),
     q: Nat, bytes: List<BitVec(8)>, fits: q + bytes.len() <= r.size):
-    r.Holds(r.buffer(v).set_span(q, bytes.to_vector()).cells, r.memory.store(cells, next_rip(r.low, q), bytes)) {
+    r.Holds(r.buffer(v).set_span(q, bytes.to_vector()).cells, r.profile.store(m, next_rip(r.low, q), bytes)) {
     let base = next_rip(r.low, q);
-    let after = r.memory.store(cells, base, bytes);
+    let after = r.profile.store(m, base, bytes);
     let w = r.buffer(v).set_span(q, bytes.to_vector()).cells;
     λ p inside => {
-        let outside: (((q + bytes.len() <= p) ∨ (p + 1 <= q)) → after(next_rip(r.low, p)) = r.buffer(w).get(p)) = λ away => {
-            let machine: (after(next_rip(r.low, p)) = cells(next_rip(r.low, p))) =
-                r.memory.store_outside(cells, base, bytes, next_rip(r.low, p), λ t below =>
+        let outside: (((q + bytes.len() <= p) ∨ (p + 1 <= q)) → after.cells(next_rip(r.low, p)) = r.buffer(w).get(p)) = λ away => {
+            let machine: (after.cells(next_rip(r.low, p)) = m.cells(next_rip(r.low, p))) =
+                r.profile.store_outside(m, base, bytes, next_rip(r.low, p), λ t below =>
                     r.apart(q, bytes.len(), p, 1, fits, omega(inside), away)(t, 0, below, trivial));
             let apart: ((t: Nat) → t < bytes.len() → Nat::space().same(q + t, p) = False) = match away as λ _ =>
                     ((t: Nat) → t < bytes.len() → Nat::space().same(q + t, p) = False) {
@@ -96,19 +96,19 @@ theorem DataRegion::store_holds(self r: DataRegion, v: Nat → BitVec(8), cells:
             let buffer: (r.buffer(w).get(p) = r.buffer(v).get(p)) = r.buffer(v).get_set_span_outside(q, bytes.to_vector(), p, apart);
             trans(machine, trans(holds(p, inside), sym(buffer)))
         };
-        match p.lt_or_ge(q) as λ _ => after(next_rip(r.low, p)) = r.buffer(w).get(p) {
+        match p.lt_or_ge(q) as λ _ => after.cells(next_rip(r.low, p)) = r.buffer(w).get(p) {
             Inl(under) => outside(Inr(under)),
-            Inr(from) => match p.lt_or_ge(q + bytes.len()) as λ _ => after(next_rip(r.low, p)) = r.buffer(w).get(p) {
+            Inr(from) => match p.lt_or_ge(q + bytes.len()) as λ _ => after.cells(next_rip(r.low, p)) = r.buffer(w).get(p) {
                 Inr(past) => outside(Inl(past)),
                 Inl(within) => {
                     let t = p - q;
                     let back: (q + t = p) = trans(Nat::add_comm(q, t), Nat::sub_add_cancel(q, p, from));
                     let present = bytes.nth_present(t, omega(within, back));
                     let c = present.witness;
-                    let hit: (after(next_rip(base, t)) = c) =
-                        r.memory.at(cells).get_set_span_list(BitVec::space_laws(64), base, bytes, t, c, present.proof, r.distinct(q, bytes.len(), fits));
+                    let hit: (after.cells(next_rip(base, t)) = c) =
+                        r.profile.at(m).get_set_span_list(BitVec::space_laws(64), base, bytes, t, c, present.proof, r.distinct(q, bytes.len(), fits));
                     let address: (next_rip(base, t) = next_rip(r.low, p)) = trans(rip_compose(r.low, q, t), rip_count(r.low, back));
-                    let machine: (after(next_rip(r.low, p)) = c) = j(address, λ y _ => after(y) = c, hit);
+                    let machine: (after.cells(next_rip(r.low, p)) = c) = j(address, λ y _ => after.cells(y) = c, hit);
                     let stored: (r.buffer(w).get(q + t) = c) = r.buffer(v).get_set_span_list(Nat::space_laws(), q, bytes, t, c, present.proof, Nat::space_distinct(q, bytes.len()));
                     let buffer: (r.buffer(w).get(p) = c) = j(back, λ k _ => r.buffer(w).get(k) = c, stored);
                     trans(machine, sym(buffer))
@@ -121,54 +121,54 @@ theorem DataRegion::store_holds(self r: DataRegion, v: Nat → BitVec(8), cells:
 // ---------------------------------------------------------------------------
 // The buffer view
 
-fn DataRegion::buffer_view(self r: DataRegion) → View<BitVec(64) → BitVec(8), Nat → BitVec(8)> {
+fn DataRegion::buffer_view(self r: DataRegion) → View<X86Memory(r.profile), Nat → BitVec(8)> {
     View(
-        λ v cells => r.Holds(v, cells),
+        λ v m => r.Holds(v, m),
         λ v a then => Exists<Nat>(λ q => (q + 8 <= r.size) ∧ ((a = next_rip(r.low, q)) ∧ then(r.buffer(v).x86_word(q)))),
         λ v a then => Exists<Nat>(λ q => (q < r.size) ∧ ((a = next_rip(r.low, q)) ∧ then(r.buffer(v).get(q)))),
         λ v a bytes then => Exists<Nat>(λ q => (q + bytes.len() <= r.size) ∧
             ((a = next_rip(r.low, q)) ∧ then(r.buffer(v).set_span(q, bytes.to_vector()).cells))),
-        λ v state c => (cells: BitVec(64) → BitVec(8)) → r.Holds(v, cells) →
-            LinuxRequests(r.memory.linux(), MachineState(state.gprs, state.flags, state.rip, cells), c))
+        λ v state c => (m: X86Memory(r.profile)) → r.Holds(v, m) →
+            LinuxRequests(r.profile.linux(), MachineState(state.gprs, state.flags, state.rip, m), c))
 }
 
 theorem DataRegion::buffer_view_sound(self r: DataRegion):
-    ViewSound<BitVec(64) → BitVec(8), Nat → BitVec(8)>(r.memory.linux(), r.buffer_view()) {
+    ViewSound<X86Memory(r.profile), Nat → BitVec(8)>(r.profile.linux(), r.buffer_view()) {
     ViewSound(
-        word := λ v cells a then holds got => {
+        word := λ v m a then holds got => {
             let q = got.witness;
             let fits: (q + 8 <= r.size) = got.proof.left;
             let base = next_rip(r.low, q);
-            let o = λ (t: Nat) => r.memory.read(cells, next_rip(base, t));
-            let b = λ (t: Nat) (inside: t < 8) => r.buffer_read(v, cells, holds, q, t, omega(inside, fits));
-            let read: (read_word(r.memory.data(), cells, base) = Some(r.buffer(v).x86_word(q))) =
+            let o = λ (t: Nat) => r.profile.read(m, next_rip(base, t));
+            let b = λ (t: Nat) (inside: t < 8) => r.buffer_read(v, m, holds, q, t, omega(inside, fits));
+            let read: (read_word(r.profile.data(), m, base) = Some(r.buffer(v).x86_word(q))) =
                 word_of_eight(o(0), o(1), o(2), o(3), o(4), o(5), o(6), o(7),
                     r.buffer(v).get(q), r.buffer(v).get(q + 1), r.buffer(v).get(q + 2), r.buffer(v).get(q + 3), r.buffer(v).get(q + 4), r.buffer(v).get(q + 5), r.buffer(v).get(q + 6), r.buffer(v).get(q + 7),
                     b(0, trivial), b(1, trivial), b(2, trivial), b(3, trivial), b(4, trivial), b(5, trivial), b(6, trivial), b(7, trivial));
             let value = r.toNat_at(q, omega(fits));
-            let word: WordAt(r.memory.data(), cells, base, r.buffer(v).x86_word(q)) = ⟨omega(value, fits, r.canonical), read⟩;
-            Exists(r.buffer(v).x86_word(q), ⟨j(sym(got.proof.right.left), λ y _ => WordAt(r.memory.data(), cells, y, r.buffer(v).x86_word(q)), word),
+            let word: WordAt(r.profile.data(), m, base, r.buffer(v).x86_word(q)) = ⟨omega(value, fits, r.canonical), read⟩;
+            Exists(r.buffer(v).x86_word(q), ⟨j(sym(got.proof.right.left), λ y _ => WordAt(r.profile.data(), m, y, r.buffer(v).x86_word(q)), word),
                 got.proof.right.right⟩)
         },
-        byte := λ v cells a then holds got => {
+        byte := λ v m a then holds got => {
             let q = got.witness;
             let inside: (q < r.size) = got.proof.left;
-            let read: (r.memory.read(cells, next_rip(r.low, q)) = Some(r.buffer(v).get(q))) = r.buffer_read(v, cells, holds, q, 0, inside);
+            let read: (r.profile.read(m, next_rip(r.low, q)) = Some(r.buffer(v).get(q))) = r.buffer_read(v, m, holds, q, 0, inside);
             let value = r.toNat_at(q, omega(inside));
             let low: (next_rip(r.low, q).toNat() < Nat::pow(2, 47)) = omega(value, inside, r.canonical);
-            Exists(r.buffer(v).get(q), ⟨j(sym(got.proof.right.left), λ y _ => r.memory.read(cells, y) = Some(r.buffer(v).get(q)), read),
+            Exists(r.buffer(v).get(q), ⟨j(sym(got.proof.right.left), λ y _ => r.profile.read(m, y) = Some(r.buffer(v).get(q)), read),
                 ⟨j(sym(got.proof.right.left), λ y _ => y.toNat() < Nat::pow(2, 47), low), got.proof.right.right⟩⟩)
         },
-        stores := λ v cells a bytes then holds place => {
+        stores := λ v m a bytes then holds place => {
             let q = place.witness;
             let fits: (q + bytes.len() <= r.size) = place.proof.left;
             let at: (a = next_rip(r.low, q)) = place.proof.right.left;
             let w = r.buffer(v).set_span(q, bytes.to_vector()).cells;
-            let writable: r.memory.at(cells).Allows(Perm::writes, next_rip(r.low, q), bytes.len()) =
-                r.allows(Perm::writes, refl, cells, q, bytes.len(), fits);
-            let held: r.Holds(w, r.memory.store(cells, next_rip(r.low, q), bytes)) = r.store_holds(v, cells, holds, q, bytes, fits);
-            ⟨j(sym(at), λ y _ => r.memory.at(cells).Allows(Perm::writes, y, bytes.len()), writable),
-             Exists(w, ⟨j(sym(at), λ y _ => r.Holds(w, r.memory.store(cells, y, bytes)), held), place.proof.right.right⟩)⟩
+            let writable: r.profile.at(m).Allows(Perm::writes, next_rip(r.low, q), bytes.len()) =
+                r.allows(Perm::writes, refl, m, q, bytes.len(), fits);
+            let held: r.Holds(w, r.profile.store(m, next_rip(r.low, q), bytes)) = r.store_holds(v, m, holds, q, bytes, fits);
+            ⟨j(sym(at), λ y _ => r.profile.at(m).Allows(Perm::writes, y, bytes.len()), writable),
+             Exists(w, ⟨j(sym(at), λ y _ => r.Holds(w, r.profile.store(m, y, bytes)), held), place.proof.right.right⟩)⟩
         },
         asks := λ v state c holds asked => asked(state.memory, holds))
 }

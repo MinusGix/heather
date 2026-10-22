@@ -37,4 +37,4 @@ Linux read's answer fills a buffer value, and a write's argument reads one.
 
 ## Log
 
-- 2026-10-22: The buffer view these edges need exists: `DataRegion::buffer_view` (`lib/linux_x86_64_byte_memory.hthr`, [[memory-model-machine-instances]]) relates a buffer's cells to a data region of an `X86Memory` profile, loads and stores at a named index, sound against the profile's `LinuxIo`.
+- 2026-10-22: The buffer view these edges need exists: `DataRegion::buffer_view` (`lib/linux_x86_64_byte_memory.hthr`, [[memory-model-machine-instances]]) relates a buffer's cells to a data region of an `X86Profile`, loads and stores at a named index, sound against the profile's `LinuxIo`.

@@ -49,16 +49,20 @@ assumed by whoever builds the stack. This round connects the two
   `crates/elab/tests/x86_64_byte_memory.rs`. The decisions, against the
   acceptance list:
 
-  - **The machine's `M` is the cells, not a whole `Memory`.** `Stack<M>`
-    states `writable`, `stored` and `keeps_code` for every `M`. Over
+  - **The machine's `M` carries its reliance.** `Stack<M>` states
+    `writable`, `stored` and `keeps_code` for every `M`. Over
     `Memory<BitVec(64), BitVec(8)>` that includes memories with no
-    permissions, where they are false. So the space and permissions are a
-    profile's (`X86Memory { perms }`), `X86Memory::at(cells)` is the model's
-    memory, and every access record goes through it: `read` as an `Option`,
-    the execute bit, `Allows(Perm::writes, …)`, `set_span`. Allocation
-    replaces the profile (design §7).
-  - **Canonical addresses**: `X86Memory::perm` gives no permission at or above
-    `2^47`, whatever the profile says. Checked by evaluation at a literal
+    permissions, where they are false. So `M` is `X86Memory(x)`: cells,
+    permissions, and a proof of what the profile `x` (`X86Profile { relies }`)
+    relies on of them. `x.at(m)` is the model's memory, and every access
+    record goes through it: `read` as an `Option`, the execute bit,
+    `Allows(Perm::writes, …)`, `set_span`. A store keeps the permissions and
+    so the proof; a step that changes permissions proves the reliance again.
+    (First pushed with the permissions fixed in the profile; Minus chose the
+    carried reliance on 2026-10-22 so that allocation and mmap are steps, not
+    a profile swap.)
+  - **Canonical addresses**: `X86Profile::perm` gives no permission at or
+    above `2^47`, whatever the memory's permissions say. Checked by evaluation at a literal
     profile (the first kernel-half address reads `None`), and refused as
     `Some`.
   - **Lists vs vectors**: `List::to_vector`, with one-cell
@@ -66,8 +70,9 @@ assumed by whoever builds the stack. This round connects the two
     and `get_span_agree` (spans of two memories agree when their cells do).
     The list form reads better wherever the machine names bytes by
     `nth`, which is everywhere.
-  - **`DataRegion::stack`**: a `Stack` from `size` bytes below `2^47` with
-    `Perm::data()`. `keeps_code` is the region never executing: an executable
+  - **`DataRegion::stack`**: a `Stack` from `size` bytes below `2^47` that the
+    profile relies on having `Perm::data()`. A fixture unmaps a page outside
+    the stack and the same stack's laws apply to the new memory. `keeps_code` is the region never executing: an executable
     code byte cannot be one a stack store writes. A region that may execute
     is refused as a `DataRegion` (a negative control).
   - **Buffer view**: `DataRegion::buffer_view` knows a buffer's cells `v`, the
@@ -78,4 +83,4 @@ assumed by whoever builds the stack. This round connects the two
     `get_le`. Relating the two is not needed yet.
   - **Wrapping `Distinct`**: not needed. No span inside a canonical region
     wraps.
-- 2026-10-22: Follow-up: [[io-image-on-byte-model]], the Linux process image as an `X86Memory` profile.
+- 2026-10-22: Follow-up: [[io-image-on-byte-model]], the Linux process image as an `X86Profile`'s memory.

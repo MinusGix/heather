@@ -1,5 +1,5 @@
 ---
-title: Load the process image into an X86Memory profile
+title: Load the process image into an X86Profile's memory
 status: open
 labels: [native,x86,memory,proofs]
 area: heather-in-heather
@@ -12,15 +12,15 @@ The Linux process profile (`io_linux()`, `IoMemory` in `lib/elf64_io.hthr`)
 is a memory of its own: a fixed image with a page and a frame, its own
 `io_read`, `io_store` and `IoWritable`, and the page and frame views
 (`lib/linux_x86_64_views.hthr`) prove their store laws over it by hand.
-`X86Memory` (`lib/std/arch/x86_64/x86_64_byte_memory.hthr`) now gives every
+`X86Profile` (`lib/std/arch/x86_64/x86_64_byte_memory.hthr`) now gives every
 access record from `lib/std/memory.hthr`, with a stack and a buffer view
 whose laws come from the model's span lemmas.
 
 ## Scope
 
-- Load an ELF image into an `X86Memory` profile: the file's bytes
-  executable and readable, the page and frame as data regions
-  (`DataRegion`), the rest without permissions.
+- Load an ELF image into an `X86Memory`: the file's bytes executable and
+  readable, the page and frame as data regions (`DataRegion`) its profile
+  relies on, the rest without permissions.
 - The page and frame views restated over it, their store lemmas from
   `get_set_span_list`/`get_set_span_outside` instead of `io_store_offset`
   arithmetic, or retired in favour of `DataRegion::buffer_view` and a
@@ -29,7 +29,7 @@ whose laws come from the model's span lemmas.
 
 ## What it assumes from elsewhere
 
-- **[[memory-model-machine-instances]]** owns `X86Memory`, `DataRegion` and
-  the buffer view. Assumed here: only that a profile's permissions are fixed
-  across a run.
+- **[[memory-model-machine-instances]]** owns `X86Profile`, `X86Memory`,
+  `DataRegion` and the buffer view. Assumed here: only that a memory carries
+  a proof of what its profile relies on.
 - **[[native-one-wp]]** owns `Wp` and the view interface.

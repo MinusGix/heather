@@ -288,7 +288,7 @@ Views: the page (`Stretch`'s) and the frame of slots (`Straight`'s) are two
 with its access outcomes in the arms; a separation-style footprint is that
 milestone's to add, and the view interface should not preclude it. The third
 is `DataRegion::buffer_view` (`lib/linux_x86_64_byte_memory.hthr`): a
-buffer in a data region of an `X86Memory` profile, its arms reading and
+buffer in a data region of an `X86Profile`, its arms reading and
 storing at an index into the buffer.
 
 Proved once: `wp_runs`, per history: from `Wp(…, post)(t, v, s)` and a valid

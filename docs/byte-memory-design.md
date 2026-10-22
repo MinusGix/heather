@@ -159,19 +159,23 @@ are stated without a cast. `8 * Succ(k)` reduces to `8 * k + 8`, which is
   `ByteReadAccess<M>`, `ByteWrites<M>`, `LinuxIo<M>`) are instantiated from
   this model (`lib/std/arch/x86_64/x86_64_byte_memory.hthr`,
   `lib/linux_x86_64_byte_memory.hthr`;
-  `issues/memory-model-machine-instances.md`). The machine's `M` is the
-  cells, `BitVec(64) → BitVec(8)`; the space and the permissions are a
-  profile's (`X86Memory`), and `X86Memory::at(cells)` is the `Memory`. The
-  permissions sit in the profile and not in each memory value because
-  `Stack<M>` states its laws for every `M`: over whole `Memory` values a
-  memory with no permissions would be one of them, and `writable` would be
-  false of it. Allocation, which changes permissions between steps (§7),
-  replaces the profile. Reads go through `read` as an `Option`, an address
+  `issues/memory-model-machine-instances.md`). The machine's `M` is
+  `X86Memory(x)`: cells, permissions, and a proof that the permissions are
+  what the run relies on, which the profile `x` (`X86Profile { relies }`)
+  names. `x.at(m)` is the model's `Memory`, over `BitVec::space(64)`.
+  `Stack<M>` states its laws for every `M`, and over bare `Memory` values a
+  memory with no permissions would be one of them, where `writable` is
+  false. A memory of the profile cannot be one. A store keeps the
+  permissions, so it keeps the proof unchanged. A step that changes
+  permissions (allocation, mmap, mprotect; §7) builds a new memory and proves
+  the reliance again, for the regions the run relies on and nothing else.
+  Reads go through `read` as an `Option`, an address
   is executable by its execute bit, `writable` is `Allows(Perm::writes, …)`
   and `store` is `set_span` of the list's vector (`List::to_vector`). The
   canonical-address rule is in the permissions: at or above `2^47` an address
-  has none, whatever the profile says. `DataRegion::stack` builds the
-  `Stack<M>` of #106 from `size` bytes below `2^47` with the data permission:
+  has none, whatever the memory's permissions say. `DataRegion::stack` builds the
+  `Stack<M>` of #106 from `size` bytes below `2^47` that the profile relies
+  on having the data permission:
   `stored` from `get_set_span_list`, `apart` from `get_set_span_outside` and
   `BitVec::space_apart`/`space_apart_above`, and `keeps_code` because the
   region never executes, so no code byte is in a stored span. No span wraps
