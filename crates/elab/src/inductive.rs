@@ -264,26 +264,26 @@ pub(crate) struct Ctor {
     /// unindexed declaration.
     ///
     /// `None` everywhere on the `IWf` route, whose children carry their index
-    /// in [`Self::child_idx`] instead.
+    /// in [`Self::child_index`] instead.
     pub rec_at: Vec<Option<usize>>,
     /// The `IWf` route (`docs/iwf-former-design.md` §8.1): the constructor's
     /// **written result index**, any expression at the index type over this
     /// constructor's stored fields. `None` on route 1 (where [`Self::res`]
     /// carries the pattern instead) and on every unindexed declaration.
     pub res_expr: Option<Expr>,
-    /// Parallel to [`Self::fields`]: on the `IWf` route, at a **child**, the
-    /// index it is written at (`D(e)`), any expression over the stored fields
-    /// (§8.2: F1–F3 do not apply). `None` at every other field and on every
-    /// other route.
-    pub child_idx: Vec<Option<Expr>>,
     /// Parallel to [`Self::fields`]: a record field's default
     /// (`name: T := e`), what fills it when a construction leaves it out.
     /// It has no positional slot (docs/named-arguments-design.md §9.2).
     pub defaults: Vec<Option<Expr>>,
-    /// Parallel to [`Self::fields`] on an indexed `codata` declaration: at a
-    /// child, the index it writes, one expression per index binder
-    /// (docs/codata-indexed-design.md §2). `None` at every other field; empty
-    /// on every other declaration.
+    /// Parallel to [`Self::fields`] wherever a child is written at an index
+    /// of its own: at a child, the index it is written at, one expression
+    /// per index binder, any expression over the stored fields. Two
+    /// declarations fill it: an indexed `codata` one
+    /// (docs/codata-indexed-design.md §2), and an inductive on the `IWf`
+    /// route (`docs/iwf-former-design.md` §8.2: F1–F3 do not apply), whose
+    /// one index binder makes each entry a singleton. `None` at every other
+    /// field; empty on every other declaration, route 1's included (its
+    /// children's indices are read off [`Self::res`] by [`Self::rec_at`]).
     pub child_index: Vec<Option<Vec<Expr>>>,
 }
 
@@ -1069,14 +1069,11 @@ impl Elaborator {
                     (Some(pat), None, kind, rec_at, Vec::new())
                 }
                 Some(IdxRoute::Iwf(rows)) => {
-                    let (e, kind, _) = rows[i].clone();
+                    let (e, kind, child_idx) = rows[i].clone();
                     let rec_at = vec![None; kind.len()];
-                    (None, Some(e), kind, rec_at, Vec::new())
+                    let child_index = child_idx.into_iter().map(|e| e.map(|e| vec![e])).collect();
+                    (None, Some(e), kind, rec_at, child_index)
                 }
-            };
-            let child_idx = match &route {
-                Some(IdxRoute::Iwf(rows)) => rows[i].2.clone(),
-                _ => vec![None; kind.len()],
             };
             // A default fills a record's field; a constructor of a family
             // has no construction site that could leave one out by name. An
@@ -1110,7 +1107,6 @@ impl Elaborator {
                 res,
                 rec_at,
                 res_expr,
-                child_idx,
                 defaults: c.fields.iter().map(|f| f.default.as_deref().cloned()).collect(),
                 child_index,
             });
@@ -4629,7 +4625,6 @@ fn shape_of(d: &InductiveDecl, ctors: &[Ctor], tag: u32, scope: Rc<Scope>) -> In
                 res: None,
                 rec_at: vec![None; n],
                 res_expr: None,
-                child_idx: vec![None; n],
                 defaults: vec![None; n],
                 child_index: Vec::new(),
             }

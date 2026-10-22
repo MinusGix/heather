@@ -33,8 +33,8 @@ use crate::resolve::DerivedInst;
 use crate::slots::Slot;
 use crate::traits::{ClassInfo, DesignationInfo, EvidenceRule, InstanceInfo};
 
-const MAGIC: &[u8; 8] = b"HTHMOD\0\x13";
-const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x11";
+const MAGIC: &[u8; 8] = b"HTHMOD\0\x14";
+const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x12";
 
 /// Hard limits applied before any decoded collection or string allocation.
 /// The loader may choose a smaller policy; these defaults are deliberately
@@ -1584,7 +1584,6 @@ fn put_ctor(w: &mut Writer, ctor: &Ctor) {
     });
     w.vec(&ctor.rec_at, |w, at| w.option(at.as_ref(), |w, at| w.usize(*at)));
     w.option(ctor.res_expr.as_ref(), put_expr);
-    w.vec(&ctor.child_idx, |w, e| w.option(e.as_ref(), put_expr));
     w.vec(&ctor.defaults, |w, default| w.option(default.as_ref(), put_expr));
     w.vec(&ctor.child_index, |w, at| w.option(at.as_ref(), |w, es| w.vec(es, put_expr)));
 }
@@ -1597,7 +1596,6 @@ fn get_ctor(r: &mut Reader<'_>) -> Result<Ctor, ModuleImageDecodeError> {
         res: r.option(|r| Ok(IdxPat { ctor: r.usize()?, vars: r.vec(Reader::usize)? }))?,
         rec_at: r.vec(|r| r.option(Reader::usize))?,
         res_expr: r.option(get_expr)?,
-        child_idx: r.vec(|r| r.option(get_expr))?,
         defaults: r.vec(|r| r.option(get_expr))?,
         child_index: r.vec(|r| r.option(|r| r.vec(get_expr)))?,
     })
@@ -1938,7 +1936,7 @@ fn validate_inductive(info: &Inductive) -> Result<(), ModuleImageDecodeError> {
     }
     for ctor in &info.ctors {
         if ctor.fields.len() != ctor.kind.len() || ctor.fields.len() != ctor.rec_at.len()
-            || ctor.fields.len() != ctor.child_idx.len()
+            || !(ctor.child_index.is_empty() || ctor.fields.len() == ctor.child_index.len())
         {
             return Err(ModuleImageDecodeError::InvalidStructure("constructor field tables disagree"));
         }

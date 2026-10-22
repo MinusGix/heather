@@ -37,7 +37,7 @@ use heather_kernel::term::{
 };
 use heather_syntax::ast::{Arm, Expr, MatchForm, Span};
 
-use crate::inductive::{FieldKind, Inductive, Spine, inject, nat_lit, tag_value};
+use crate::inductive::{Ctor, FieldKind, Inductive, Spine, inject, nat_lit, tag_value};
 use crate::recursion::{Guard, GuardKind};
 use crate::wf::fin_index;
 use crate::{Alias, Cx, Elaborator, R, embed, err};
@@ -93,10 +93,19 @@ fn child_exprs(ind: &Inductive, k: usize) -> Vec<&Expr> {
     let ctor = &ind.ctors[k];
     ctor.kind
         .iter()
-        .zip(&ctor.child_idx)
-        .filter(|(f, _)| **f == FieldKind::Plain)
-        .map(|(_, e)| e.as_ref().expect("an IWf-route child carries its index"))
+        .enumerate()
+        .filter(|(_, f)| **f == FieldKind::Plain)
+        .map(|(j, _)| child_index(ctor, j))
         .collect()
+}
+
+/// The index an `IWf`-route constructor writes for its child at field `j`:
+/// the route has one index binder, so the entry is a singleton.
+fn child_index(ctor: &Ctor, j: usize) -> &Expr {
+    match ctor.child_index.get(j) {
+        Some(Some(es)) if es.len() == 1 => &es[0],
+        _ => panic!("an IWf-route child carries its index"),
+    }
 }
 
 impl Elaborator {
@@ -511,9 +520,7 @@ impl Elaborator {
             if *kind != FieldKind::Plain {
                 continue;
             }
-            let e = ctor.child_idx[k]
-                .as_ref()
-                .expect("an IWf-route child carries its index");
+            let e = child_index(ctor, k);
             let x = {
                 let _scope = self.use_inductive_scope(ind);
                 self.elab_check(&acx, e, &fam.ity, &fam.ilvl)?
