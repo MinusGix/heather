@@ -260,6 +260,35 @@ theorem LinuxCmd::sized_asks_some(c: LinuxCmd<True>, max: Nat, some: 0 < max): c
 }
 
 // A spec with every read given one size of at least one byte implements it.
+//
+// The call's step is a theorem of its own, its trace stated as a `VisTrace`
+// over the call and continuation: matched inside the λ, where the trace's
+// type is `IsTrace` of the sized tree's `Vis`, the same proof costs the
+// kernel two orders of magnitude more steps
+// (issues/trace-match-under-computed-binder-cost.md).
+theorem ITree::implements_sized_vis<R>(max: Nat, some: 0 < max, c: LinuxCmd<True>, k: c.Resp() → ITree<R>(Events::linux_spec()),
+    ih: (b: c.sized(max).Resp()) → ITree::Implements(ITree::sized(max, k(c.sized_answer(max, b))), k(c.sized_answer(max, b))),
+    tr: Trace<R>(Events::linux()),
+    w: VisTrace<R>(Events::linux(), c.sized(max), tr, λ b rest => IsTrace(Events::linux(), ITree::sized(max, k(c.sized_answer(max, b))), rest)),
+    valid: Trace::LinuxValid(tr)): Trace::AsksSome(tr) ∧ IsTrace(Events::linux_spec(), Vis(c, k), Trace::forget(tr)) {
+    match w {
+        Prefix(e) => j(sym(e), λ y _ => Trace::AsksSome(y) ∧ IsTrace(Events::linux_spec(), Vis(c, k), Trace::forget(y)),
+            ⟨trivial, Prefix(refl)⟩),
+        Pending(e) => j(sym(e), λ y _ => Trace::AsksSome(y) ∧ IsTrace(Events::linux_spec(), Vis(c, k), Trace::forget(y)),
+            ⟨LinuxCmd::sized_asks_some(c, max, some),
+                Pending(LinuxCmd::sized_forget_call<R>(c, max))⟩),
+        Answered(b, rest, e, sub) => {
+            let moved: Trace::LinuxValid<R>(TAns(c.sized(max), b, rest)) =
+                j(e, λ y _ => Trace::LinuxValid(y), valid);
+            let after = ih(b, rest, sub, moved.right);
+            j(sym(e), λ y _ => Trace::AsksSome(y) ∧ IsTrace(Events::linux_spec(), Vis(c, k), Trace::forget(y)),
+                ⟨⟨LinuxCmd::sized_asks_some(c, max, some), after.left⟩,
+                    Answered(c.sized_answer(max, b), Trace::forget(rest),
+                        LinuxCmd::sized_forget_answer<R>(c, max, b, rest), after.right)⟩)
+        },
+    }
+}
+
 theorem ITree::implements_sized<R>(max: Nat, some: 0 < max, spec: ITree<R>(Events::linux_spec())):
     ITree::Implements(ITree::sized(max, spec), spec) {
     match spec {
@@ -270,24 +299,8 @@ theorem ITree::implements_sized<R>(max: Nat, some: 0 < max, spec: ITree<R>(Event
                 ⟨trivial, Returned(refl)⟩),
         },
         Tau(s) => ITree::implements_sized(max, some, s),
-        Vis(c, k) => λ tr (w: VisTrace<R>(Events::linux(), c.sized(max), tr,
-                λ b rest => IsTrace(Events::linux(), ITree::sized(max, k(c.sized_answer(max, b))), rest))) valid =>
-            match w {
-                Prefix(e) => j(sym(e), λ y _ => Trace::AsksSome(y) ∧ IsTrace(Events::linux_spec(), Vis(c, k), Trace::forget(y)),
-                    ⟨trivial, Prefix(refl)⟩),
-                Pending(e) => j(sym(e), λ y _ => Trace::AsksSome(y) ∧ IsTrace(Events::linux_spec(), Vis(c, k), Trace::forget(y)),
-                    ⟨LinuxCmd::sized_asks_some(c, max, some),
-                        Pending(LinuxCmd::sized_forget_call<R>(c, max))⟩),
-                Answered(b, rest, e, sub) => {
-                    let moved: Trace::LinuxValid<R>(TAns(c.sized(max), b, rest)) =
-                        j(e, λ y _ => Trace::LinuxValid(y), valid);
-                    let ih = ITree::implements_sized(max, some, k(c.sized_answer(max, b)), rest, sub, moved.right);
-                    j(sym(e), λ y _ => Trace::AsksSome(y) ∧ IsTrace(Events::linux_spec(), Vis(c, k), Trace::forget(y)),
-                        ⟨⟨LinuxCmd::sized_asks_some(c, max, some), ih.left⟩,
-                            Answered(c.sized_answer(max, b), Trace::forget(rest),
-                                LinuxCmd::sized_forget_answer<R>(c, max, b, rest), ih.right)⟩)
-                },
-            },
+        Vis(c, k) => λ tr w valid => ITree::implements_sized_vis(max, some, c, k,
+            λ b => ITree::implements_sized(max, some, k(c.sized_answer(max, b))), tr, w, valid),
         Cut => λ tr (w: CutTrace<R>(Events::linux(), tr)) valid =>
             j(sym(CutTrace::ended(Events::linux(), tr, w)),
                 λ y _ => Trace::AsksSome(y) ∧ IsTrace(Events::linux_spec(), Cut, Trace::forget(y)), ⟨trivial, Ended(refl)⟩),

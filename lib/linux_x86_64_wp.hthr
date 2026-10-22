@@ -303,6 +303,39 @@ theorem wp_left_sound<M, V>(io: LinuxIo<M>, view: View<M, V>, sound: ViewSound<M
     })(left)
 }
 
+// A SYSCALL making a call, of one trace stated as a `VisTrace`: matched
+// inside `wp_next_runs`' λ, where its type is `NextTrace` of the call, the
+// same proof costs the kernel an order of magnitude more
+// (issues/trace-match-under-computed-binder-cost.md).
+theorem wp_next_calls_runs<M, V>(io: LinuxIo<M>, view: View<M, V>, sound: ViewSound<M, V>(io, view), origin: BitVec(64), tr: Trace<BitVec(64)>(Events::linux()),
+    here: Nat, then: Bool → ITree<BitVec(64)>(Events::linux()) → V → MachineState<M> → Type, goes: WpGoes(io, view, origin, tr, here + 2, then),
+    c: LinuxCmd<Nat>, k: c.Resp() → ITree<BitVec(64)>(Events::linux()),
+    v: V, state: MachineState<M>, cur: Trace<BitVec(64)>(Events::linux()), rip: state.rip = next_rip(origin, here), holds: view.Holds(v, state.memory),
+    syscall: LinuxSyscallAt(io, state), passed: Bool, short: wp_shorter(passed, cur, tr),
+    w: VisTrace<BitVec(64)>(Events::linux(), c, cur, λ a rest => IsTrace(Events::linux(), k(a), rest)), valid: Trace::LinuxValid(cur),
+    held: wp_next(io, view, Calls(c, k), then, v, state)): RunsAs(io, cur, state) {
+    let none: LinuxSteps(io, state, state) = Exists(Zero, refl);
+    let requests: LinuxRequests(io, state, c) = sound.asks(v, state, c, holds, held.left);
+    match w {
+        Prefix(e) => j(sym(e), λ y _ => RunsAs(io, y, state), trivial),
+        Pending(e) => j(sym(e), λ y _ => RunsAs(io, y, state), Exists(state, ⟨none, ⟨syscall, requests⟩⟩)),
+        Answered(a, rest, e, sub) => {
+            let moved: Trace::LinuxValid<BitVec(64)>(TAns(c, a, rest)) = j(e, λ y _ => Trace::LinuxValid(y), valid);
+            let shorter = wp_shorter_answered(passed, c, a, rest, tr, j(e, λ y _ => wp_shorter(passed, y, tr), short));
+            j(sym(e), λ y _ => RunsAs(io, y, state), Exists(state, ⟨none, ⟨syscall, ⟨requests, ⟨moved.left,
+                λ junk leaves rcx r11 => {
+                    let answered = linux_answered(io, state, c, a, junk, rcx, r11);
+                    let left = wp_left_sound(io, view, sound, v, state.memory, c, state.gprs, a, junk,
+                        λ w2 => then(True, k(a), w2, answered), holds, held.right(a, moved.left, junk, leaves, rcx, r11));
+                    goes(True, k(a), left.witness, answered, rest,
+                        trans(linux_answered_rip(io, state, c, a, junk, rcx, r11), rip_advance(origin, state.rip, here, 2, rip)),
+                        j(sym(linux_answered_memory(io, state, c, a, junk, rcx, r11)), λ m _ => view.Holds(left.witness, m), left.proof.left),
+                        sub, moved.right, shorter, left.proof.right)
+                }⟩⟩⟩⟩))
+        },
+    }
+}
+
 // A SYSCALL at offset `here`, by the tree's next move.
 theorem wp_next_runs<M, V>(io: LinuxIo<M>, view: View<M, V>, sound: ViewSound<M, V>(io, view), origin: BitVec(64), tr: Trace<BitVec(64)>(Events::linux()),
     here: Nat, then: Bool → ITree<BitVec(64)>(Events::linux()) → V → MachineState<M> → Type, goes: WpGoes(io, view, origin, tr, here + 2, then), n: Next<BitVec(64)>(Events::linux())):
@@ -317,29 +350,8 @@ theorem wp_next_runs<M, V>(io: LinuxIo<M>, view: View<M, V>, sound: ViewSound<M,
                 Returned(e) => j(sym(e), λ y _ => RunsAs(io, y, state), Exists(state, ⟨none, ⟨syscall, exits⟩⟩)),
             }
         },
-        Calls(c, k) => λ v state cur rip holds syscall passed short
-                (w: VisTrace<BitVec(64)>(Events::linux(), c, cur, λ a rest => IsTrace(Events::linux(), k(a), rest))) valid held => {
-            let none: LinuxSteps(io, state, state) = Exists(Zero, refl);
-            let requests: LinuxRequests(io, state, c) = sound.asks(v, state, c, holds, held.left);
-            match w {
-                Prefix(e) => j(sym(e), λ y _ => RunsAs(io, y, state), trivial),
-                Pending(e) => j(sym(e), λ y _ => RunsAs(io, y, state), Exists(state, ⟨none, ⟨syscall, requests⟩⟩)),
-                Answered(a, rest, e, sub) => {
-                    let moved: Trace::LinuxValid<BitVec(64)>(TAns(c, a, rest)) = j(e, λ y _ => Trace::LinuxValid(y), valid);
-                    let shorter = wp_shorter_answered(passed, c, a, rest, tr, j(e, λ y _ => wp_shorter(passed, y, tr), short));
-                    j(sym(e), λ y _ => RunsAs(io, y, state), Exists(state, ⟨none, ⟨syscall, ⟨requests, ⟨moved.left,
-                        λ junk leaves rcx r11 => {
-                            let answered = linux_answered(io, state, c, a, junk, rcx, r11);
-                            let left = wp_left_sound(io, view, sound, v, state.memory, c, state.gprs, a, junk,
-                                λ w2 => then(True, k(a), w2, answered), holds, held.right(a, moved.left, junk, leaves, rcx, r11));
-                            goes(True, k(a), left.witness, answered, rest,
-                                trans(linux_answered_rip(io, state, c, a, junk, rcx, r11), rip_advance(origin, state.rip, here, 2, rip)),
-                                j(sym(linux_answered_memory(io, state, c, a, junk, rcx, r11)), λ m _ => view.Holds(left.witness, m), left.proof.left),
-                                sub, moved.right, shorter, left.proof.right)
-                        }⟩⟩⟩⟩))
-                },
-            }
-        },
+        Calls(c, k) => λ v state cur rip holds syscall passed short w valid held =>
+            wp_next_calls_runs(io, view, sound, origin, tr, here, then, goes, c, k, v, state, cur, rip, holds, syscall, passed, short, w, valid, held),
         Stops => λ v state cur rip holds syscall passed short (w: CutTrace<BitVec(64)>(Events::linux(), cur)) valid _ =>
             j(sym(CutTrace::ended(Events::linux(), cur, w)), λ y _ => RunsAs(io, y, state), trivial),
     }

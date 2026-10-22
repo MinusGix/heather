@@ -201,44 +201,62 @@ theorem filter_sends_write<C>(input, output: BitVec(64), step: C → BitVec(8) �
         sends)
 }
 
+// The two calls of one pass, each of one trace stated as a `VisTrace`:
+// matched inside `filter_sends`' λ, where its type is `IsTrace` of the
+// filter tree's call, the same proofs cost the kernel an order of magnitude
+// more (issues/trace-match-under-computed-binder-cost.md).
+theorem filter_sends_reading<C>(input, output: BitVec(64), step: C → BitVec(8) → Filtered<C>, m: Nat,
+    ih: FilterSends(input, output, step, m), s: C, tr: Trace<BitVec(64)>(Events::linux_spec()),
+    w: VisTrace<BitVec(64)>(Events::linux_spec(), ReadCmd(input, trivial), tr,
+        λ (r: ReadResult) rest => IsTrace(Events::linux_spec(), ITree::bind(Events::linux_spec(), filter_read(step, s, r),
+            λ x => ITree::iter_next(Events::linux_spec(), m, λ a => filter_pass(input, output, step, a), x)), rest)),
+    returns: Trace::ReturnsWith(Events::linux_spec(), tr, filter_ok())):
+    Trace::sent<True, BitVec(64)>(output, tr) = Nil<BitVec(8)> ++ filter_emitted(step, Trace::received<True, BitVec(64)>(input, tr), s) {
+    match w {
+        Prefix(e) => false_elim(j(e, λ y _ => Trace::ReturnsWith(Events::linux_spec(), y, filter_ok()), returns)),
+        Pending(e) => false_elim(j(e, λ y _ => Trace::ReturnsWith(Events::linux_spec(), y, filter_ok()), returns)),
+        Answered(r, rest, e, sub) => j(sym(e), λ y _ => Trace::sent<True, BitVec(64)>(output, y)
+                = Nil<BitVec(8)> ++ filter_emitted(step, Trace::received<True, BitVec(64)>(input, y), s),
+            filter_sends_read(input, output, step, m, ih, s, r, rest, sub,
+                j(e, λ y _ => Trace::ReturnsWith(Events::linux_spec(), y, filter_ok()), returns))),
+    }
+}
+theorem filter_sends_writing<C>(input, output: BitVec(64), step: C → BitVec(8) → Filtered<C>, m: Nat,
+    ih: FilterSends(input, output, step, m), s: C, b: BitVec(8), bs: List<BitVec(8)>, tr: Trace<BitVec(64)>(Events::linux_spec()),
+    w: VisTrace<BitVec(64)>(Events::linux_spec(), WriteCmd(output, Cons(b, bs)), tr,
+        λ (written: WriteResult) rest => IsTrace(Events::linux_spec(), ITree::bind(Events::linux_spec(), filter_wrote(s, Cons(b, bs), written),
+            λ x => ITree::iter_next(Events::linux_spec(), m, λ a => filter_pass(input, output, step, a), x)), rest)),
+    returns: Trace::ReturnsWith(Events::linux_spec(), tr, filter_ok())):
+    Trace::sent<True, BitVec(64)>(output, tr) = Cons(b, bs) ++ filter_emitted(step, Trace::received<True, BitVec(64)>(input, tr), s) {
+    match w {
+        Prefix(e) => false_elim(j(e, λ y _ => Trace::ReturnsWith(Events::linux_spec(), y, filter_ok()), returns)),
+        Pending(e) => false_elim(j(e, λ y _ => Trace::ReturnsWith(Events::linux_spec(), y, filter_ok()), returns)),
+        Answered(written, rest, e, sub) => j(sym(e), λ y _ => Trace::sent<True, BitVec(64)>(output, y)
+                = Cons(b, bs) ++ filter_emitted(step, Trace::received<True, BitVec(64)>(input, y), s),
+            filter_sends_write(input, output, step, m, ih, s, Cons(b, bs), written, rest, sub,
+                j(e, λ y _ => Trace::ReturnsWith(Events::linux_spec(), y, filter_ok()), returns))),
+    }
+}
+
 theorem filter_sends<C>(input, output: BitVec(64), step: C → BitVec(8) → Filtered<C>, n: Nat): FilterSends(input, output, step, n) {
     match n {
         Zero => λ at tr (w: CutTrace<BitVec(64)>(Events::linux_spec(), tr)) returns => false_elim(
             j(CutTrace::ended(Events::linux_spec(), tr, w), λ y _ => Trace::ReturnsWith(Events::linux_spec(), y, filter_ok()), returns)),
         Succ(m) => {
             let ih: FilterSends(input, output, step, m) = λ at tr it returns => filter_sends(input, output, step, m, at, tr, it, returns);
-            let next = λ (x: Step<FilterAt<C>, BitVec(64)>) => ITree::iter_next(Events::linux_spec(), m, λ a => filter_pass(input, output, step, a), x);
             λ at => match at as λ a => (tr: Trace<BitVec(64)>(Events::linux_spec())) →
                     IsTrace(Events::linux_spec(), filter_tree(input, output, step, Succ(m), a), tr) →
                     Trace::ReturnsWith(Events::linux_spec(), tr, filter_ok()) →
                     Trace::sent<True, BitVec(64)>(output, tr)
                         = a.owed() ++ filter_emitted(step, Trace::received<True, BitVec(64)>(input, tr), a.state()) {
-                Reading(s) => λ tr (w: VisTrace<BitVec(64)>(Events::linux_spec(), ReadCmd(input, trivial), tr,
-                        λ (r: ReadResult) rest => IsTrace(Events::linux_spec(),
-                            ITree::bind(Events::linux_spec(), filter_read(step, s, r), next), rest))) returns => match w {
-                    Prefix(e) => false_elim(j(e, λ y _ => Trace::ReturnsWith(Events::linux_spec(), y, filter_ok()), returns)),
-                    Pending(e) => false_elim(j(e, λ y _ => Trace::ReturnsWith(Events::linux_spec(), y, filter_ok()), returns)),
-                    Answered(r, rest, e, sub) => j(sym(e), λ y _ => Trace::sent<True, BitVec(64)>(output, y)
-                            = Nil<BitVec(8)> ++ filter_emitted(step, Trace::received<True, BitVec(64)>(input, y), s),
-                        filter_sends_read(input, output, step, m, ih, s, r, rest, sub,
-                            j(e, λ y _ => Trace::ReturnsWith(Events::linux_spec(), y, filter_ok()), returns))),
-                },
+                Reading(s) => λ tr w returns => filter_sends_reading(input, output, step, m, ih, s, tr, w, returns),
                 Writing(s, pending) => match pending as λ p => (tr: Trace<BitVec(64)>(Events::linux_spec())) →
                         IsTrace(Events::linux_spec(), filter_tree(input, output, step, Succ(m), Writing(s, p)), tr) →
                         Trace::ReturnsWith(Events::linux_spec(), tr, filter_ok()) →
                         Trace::sent<True, BitVec(64)>(output, tr)
                             = p ++ filter_emitted(step, Trace::received<True, BitVec(64)>(input, tr), s) {
                     Nil => λ tr it returns => ih(Reading(s), tr, it, returns),
-                    Cons(b, bs) => λ tr (w: VisTrace<BitVec(64)>(Events::linux_spec(), WriteCmd(output, Cons(b, bs)), tr,
-                            λ (written: WriteResult) rest => IsTrace(Events::linux_spec(),
-                                ITree::bind(Events::linux_spec(), filter_wrote(s, Cons(b, bs), written), next), rest))) returns => match w {
-                        Prefix(e) => false_elim(j(e, λ y _ => Trace::ReturnsWith(Events::linux_spec(), y, filter_ok()), returns)),
-                        Pending(e) => false_elim(j(e, λ y _ => Trace::ReturnsWith(Events::linux_spec(), y, filter_ok()), returns)),
-                        Answered(written, rest, e, sub) => j(sym(e), λ y _ => Trace::sent<True, BitVec(64)>(output, y)
-                                = Cons(b, bs) ++ filter_emitted(step, Trace::received<True, BitVec(64)>(input, y), s),
-                            filter_sends_write(input, output, step, m, ih, s, Cons(b, bs), written, rest, sub,
-                                j(e, λ y _ => Trace::ReturnsWith(Events::linux_spec(), y, filter_ok()), returns))),
-                    },
+                    Cons(b, bs) => λ tr w returns => filter_sends_writing(input, output, step, m, ih, s, b, bs, tr, w, returns),
                 },
             }
         },
