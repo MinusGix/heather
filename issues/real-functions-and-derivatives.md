@@ -3,9 +3,9 @@ title: Real functions, Lipschitz bounds and a constructive derivative
 status: open
 labels: [stdlib,mathematics,constructive]
 area: mathematics
-milestone: [math-reals]
+milestone: [math-reals, ml-descent]
 created: 2026-10-21
-updated: 2026-10-21
+updated: 2026-10-22
 ---
 
 Functions on `CReal` with a modulus of continuity, Lipschitz bounds, and a

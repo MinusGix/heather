@@ -3,8 +3,9 @@ title: Finitely supported distributions and expectation as a state
 status: open
 labels: [stdlib,mathematics,probability]
 area: mathematics
+milestone: [ml-gaussian-states]
 created: 2026-10-21
-updated: 2026-10-21
+updated: 2026-10-22
 ---
 
 The constructive first layer of probability: distributions with finite

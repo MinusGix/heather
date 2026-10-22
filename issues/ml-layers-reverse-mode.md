@@ -3,8 +3,9 @@ title: Layer grammar with reverse mode defined once and proved once
 status: open
 labels: [design,machine-learning]
 area: machine-learning
+milestone: [ml-layers]
 created: 2026-10-21
-updated: 2026-10-21
+updated: 2026-10-22
 ---
 
 A small layer grammar (linear, pointwise activation, compose, fork,

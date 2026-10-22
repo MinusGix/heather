@@ -3,8 +3,9 @@ title: Perfect matchings and the lattice of set partitions
 status: open
 labels: [stdlib,mathematics,combinatorics]
 area: mathematics
+milestone: [ml-gaussian-states]
 created: 2026-10-21
-updated: 2026-10-21
+updated: 2026-10-22
 ---
 
 Perfect matchings of a finite set (their count `(2k−1)!!`), set partitions

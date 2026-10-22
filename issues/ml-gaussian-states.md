@@ -3,8 +3,9 @@ title: Gaussian states, Wick's theorem and cumulants by Möbius inversion
 status: open
 labels: [mathematics,machine-learning]
 area: machine-learning
+milestone: [ml-gaussian-states]
 created: 2026-10-21
-updated: 2026-10-21
+updated: 2026-10-22
 ---
 
 The algebraic core of PDLT chapter 1, constructively

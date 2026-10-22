@@ -379,10 +379,9 @@ error bounds should be stated per format, not only for binary64.
 
 ---
 
-## 6. Proposed ML milestones
+## 6. ML milestones
 
-Proposals for `docs/roadmap.md`, for Minus to accept or reshape; this note
-does not add them.
+Proposed here and adopted into `docs/roadmap.md` by Minus on 2026-10-22.
 
 | milestone | done when |
 |---|---|

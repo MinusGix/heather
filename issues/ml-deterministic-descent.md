@@ -3,8 +3,9 @@ title: Gradient descent convergence under smoothness and strong convexity
 status: open
 labels: [mathematics,machine-learning]
 area: machine-learning
+milestone: [ml-descent]
 created: 2026-10-21
-updated: 2026-10-21
+updated: 2026-10-22
 ---
 
 The first optimisation theorems (`docs/wick-survey.md` §2.2): L-smoothness
