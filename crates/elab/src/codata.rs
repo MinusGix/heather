@@ -29,9 +29,10 @@
 use std::sync::Arc as Rc;
 
 use heather_kernel::level::Level;
-use heather_kernel::term::{LocalCtx, LocalSubst, LocalVar, MSig, Term, Type, m_out_ty, m_step_ty};
+use heather_kernel::term::{GlobalBinding, LocalCtx, LocalSubst, LocalVar, MSig, Term, Type, m_out_ty, m_step_ty};
 use heather_syntax::{Arm, Expr, ExprKind, Span, TyKind};
 
+use crate::gendefs::GenDef;
 use crate::inductive::{FieldKind, Inductive, Spine, decoded, inject, tag_type, tag_value};
 use crate::recursion::{SelfRef, surface_self_call};
 use crate::spelling::checked_app;
@@ -63,6 +64,178 @@ fn triv() -> Rc<Term> {
     Rc::new(Term::Triv { level: Level::Zero })
 }
 
+/// A codata term in the kernel's **checked spelling**
+/// (`docs/codata-named-signature-design.md` §5): an intro in a checking
+/// position loses its annotation (`pair@`, `inl@`, `inr@`), a projection or
+/// application whose receiver infers is spelled `fst@`/`snd@`/`app@`. The
+/// lowering writes every node annotated, since that is what its readers
+/// take apart; the annotations are then nearly all of the term the kernel is
+/// handed, so the three entry points (constructor, `match`, corecursive
+/// close) hand back this instead. `check` is whether `t` sits in a checking
+/// position. Only the formers below are rewritten — their checking positions
+/// are the kernel's own (`typing.rs`) — and every other node is kept whole.
+fn slim(t: &Rc<Term>, check: bool) -> Rc<Term> {
+    let c = |t: &Rc<Term>| slim(t, true);
+    let i = |t: &Rc<Term>| slim(t, false);
+    Rc::new(match &**t {
+        Term::Pair { fst, snd, .. } if check => Term::PairAt { ty: None, fst: c(fst), snd: c(snd) },
+        Term::Pair { fst_level, snd_level, fst_ty, snd_ty, fst, snd } => Term::Pair {
+            fst_level: fst_level.clone(),
+            snd_level: snd_level.clone(),
+            fst_ty: slim_ty(fst_ty),
+            snd_ty: slim_ty(snd_ty),
+            fst: c(fst),
+            snd: c(snd),
+        },
+        Term::Inl { val, .. } if check => Term::InlAt { ty: None, val: c(val) },
+        Term::Inr { val, .. } if check => Term::InrAt { ty: None, val: c(val) },
+        Term::Inl { lhs_level, rhs_level, lhs, rhs, val } => Term::Inl {
+            lhs_level: lhs_level.clone(),
+            rhs_level: rhs_level.clone(),
+            lhs: slim_ty(lhs),
+            rhs: slim_ty(rhs),
+            val: c(val),
+        },
+        Term::Inr { lhs_level, rhs_level, lhs, rhs, val } => Term::Inr {
+            lhs_level: lhs_level.clone(),
+            rhs_level: rhs_level.clone(),
+            lhs: slim_ty(lhs),
+            rhs: slim_ty(rhs),
+            val: c(val),
+        },
+        Term::PairAt { ty, fst, snd } => Term::PairAt { ty: ty.as_ref().map(slim_ty), fst: c(fst), snd: c(snd) },
+        Term::InlAt { ty, val } => Term::InlAt { ty: ty.as_ref().map(slim_ty), val: c(val) },
+        Term::InrAt { ty, val } => Term::InrAt { ty: ty.as_ref().map(slim_ty), val: c(val) },
+        // A receiver that only checks (an intro the lowering wrote bare) keeps
+        // the annotated projection, which checks it.
+        Term::Fst { fst_level, snd_level, fst_ty, snd_ty, pair } | Term::Snd { fst_level, snd_level, fst_ty, snd_ty, pair } => {
+            let p = i(pair);
+            match (infers(&p), matches!(&**t, Term::Fst { .. })) {
+                (true, true) => Term::FstAt { pair: p },
+                (true, false) => Term::SndAt { pair: p },
+                (false, first) => {
+                    let (fst_level, snd_level, fst_ty, snd_ty, pair) =
+                        (fst_level.clone(), snd_level.clone(), slim_ty(fst_ty), slim_ty(snd_ty), c(pair));
+                    if first {
+                        Term::Fst { fst_level, snd_level, fst_ty, snd_ty, pair }
+                    } else {
+                        Term::Snd { fst_level, snd_level, fst_ty, snd_ty, pair }
+                    }
+                }
+            }
+        }
+        Term::FstAt { pair } => Term::FstAt { pair: i(pair) },
+        Term::SndAt { pair } => Term::SndAt { pair: i(pair) },
+        // A head that does not infer — a `λ` (a β-redex), or an intro written
+        // bare — keeps the annotations it is checked against.
+        Term::App { fun, dom_level, cod_level, dom, cod, arg } => {
+            let f = i(fun);
+            if !matches!(&**fun, Term::Lam { .. }) && infers(&f) {
+                Term::AppAt { fun: f, arg: c(arg) }
+            } else {
+                Term::App {
+                    fun: c(fun),
+                    dom_level: dom_level.clone(),
+                    cod_level: cod_level.clone(),
+                    dom: slim_ty(dom),
+                    cod: slim_ty(cod),
+                    arg: c(arg),
+                }
+            }
+        }
+        Term::AppAt { fun, arg } => Term::AppAt { fun: i(fun), arg: c(arg) },
+        Term::Lam { dom_level, cod_level, dom, body } => Term::Lam {
+            dom_level: dom_level.clone(),
+            cod_level: cod_level.clone(),
+            dom: slim_ty(dom),
+            body: slim(body, check),
+        },
+        Term::Case { lhs_level, rhs_level, motive_level, lhs, rhs, motive, case_l, case_r, scrut } => Term::Case {
+            lhs_level: lhs_level.clone(),
+            rhs_level: rhs_level.clone(),
+            motive_level: motive_level.clone(),
+            lhs: slim_ty(lhs),
+            rhs: slim_ty(rhs),
+            motive: slim_ty(motive),
+            case_l: c(case_l),
+            case_r: c(case_r),
+            scrut: c(scrut),
+        },
+        Term::J { ty_level, motive_level, ty, lhs, motive, case, rhs, proof } => Term::J {
+            ty_level: ty_level.clone(),
+            motive_level: motive_level.clone(),
+            ty: slim_ty(ty),
+            lhs: c(lhs),
+            motive: slim_ty(motive),
+            case: c(case),
+            rhs: c(rhs),
+            proof: c(proof),
+        },
+        Term::Corec { sig, carrier_level, carrier, step, index, seed } => Term::Corec {
+            sig: Rc::clone(sig),
+            carrier_level: carrier_level.clone(),
+            carrier: slim_ty(carrier),
+            step: c(step),
+            index: c(index),
+            seed: c(seed),
+        },
+        Term::Out { sig, index, scrut } => Term::Out { sig: Rc::clone(sig), index: c(index), scrut: c(scrut) },
+        Term::ElimEmpty { level, scrut_level, motive, scrut } => Term::ElimEmpty {
+            level: level.clone(),
+            scrut_level: scrut_level.clone(),
+            motive: slim_ty(motive),
+            scrut: c(scrut),
+        },
+        Term::Refl { level, ty, tm } => Term::Refl { level: level.clone(), ty: slim_ty(ty), tm: c(tm) },
+        _ => return Rc::clone(t),
+    })
+}
+
+/// Whether the kernel can infer `t`'s type, conservatively: [`slim`] only
+/// drops a projection's or an application's annotations when it can.
+fn infers(t: &Term) -> bool {
+    match t {
+        Term::Var(_) | Term::GlobalTm { .. } | Term::Triv { .. } | Term::Zero => true,
+        Term::Pair { .. } | Term::Inl { .. } | Term::Inr { .. } | Term::Fst { .. } | Term::Snd { .. } => true,
+        Term::App { .. } | Term::Corec { .. } | Term::Out { .. } | Term::Case { .. } | Term::J { .. } => true,
+        Term::Refl { .. } | Term::ElimEmpty { .. } => true,
+        Term::PairAt { ty, .. } | Term::InlAt { ty, .. } | Term::InrAt { ty, .. } => ty.is_some(),
+        Term::FstAt { pair } | Term::SndAt { pair } => infers(pair),
+        Term::AppAt { fun, .. } => infers(fun),
+        Term::Lam { body, .. } => infers(body),
+        _ => false,
+    }
+}
+
+/// [`slim`] in a type's term slots, every one of which the kernel checks.
+fn slim_ty(t: &Rc<Type>) -> Rc<Type> {
+    let c = |t: &Rc<Term>| slim(t, true);
+    Rc::new(match &**t {
+        Type::Pi { dom_level, cod_level, dom, cod } => Type::Pi {
+            dom_level: dom_level.clone(),
+            cod_level: cod_level.clone(),
+            dom: slim_ty(dom),
+            cod: slim_ty(cod),
+        },
+        Type::Sigma { fst_level, snd_level, fst, snd } => Type::Sigma {
+            fst_level: fst_level.clone(),
+            snd_level: snd_level.clone(),
+            fst: slim_ty(fst),
+            snd: slim_ty(snd),
+        },
+        Type::Sum { lhs_level, rhs_level, lhs, rhs } => Type::Sum {
+            lhs_level: lhs_level.clone(),
+            rhs_level: rhs_level.clone(),
+            lhs: slim_ty(lhs),
+            rhs: slim_ty(rhs),
+        },
+        Type::El { level, tm } => Type::El { level: level.clone(), tm: c(tm) },
+        Type::Id { level, ty, lhs, rhs } => Type::Id { level: level.clone(), ty: slim_ty(ty), lhs: c(lhs), rhs: c(rhs) },
+        Type::M { sig, index } => Type::M { sig: Rc::clone(sig), index: c(index) },
+        _ => return Rc::clone(t),
+    })
+}
+
 /// One child of a constructor, as its positions see it (§2).
 enum Kid {
     /// `t: D` — one position, `Unit`.
@@ -84,9 +257,14 @@ pub(crate) struct MParts {
     pub lp: Level,
     /// The family's level, `ls ⊔ lp ⊔ li` — the kernel's `family_level`.
     pub lw: Level,
+    /// `S` at `j` as emitted: `El(D#mshape ā j)` for a named signature.
     pub shape: Rc<Type>,
+    /// `S` at `j` inline, for the structural readers (the spine).
+    pub shape_inline: Rc<Type>,
     /// `P`, over `(g, s : S)`.
     pos: Rc<Type>,
+    /// `P` inline, for [`Self::pos_code`].
+    pos_inline: Rc<Type>,
     /// `o`, over `(g, s : S, p : P)`.
     next: Rc<Term>,
     /// The index type is not `Unit`.
@@ -95,11 +273,12 @@ pub(crate) struct MParts {
 
 impl MParts {
     /// Read a lowered `⟦D⟧` back.
-    pub(crate) fn read(ty: &Type, g: &LocalCtx) -> Option<MParts> {
+    pub(crate) fn read(el: &Elaborator, ty: &Type, g: &LocalCtx) -> Option<MParts> {
         let ty = decoded(ty);
         let Type::M { sig, index } = &*ty else {
             return None;
         };
+        let inline = el.m_sig_inline(sig, g)?;
         let indexed = !matches!(&*decoded(&sig.idx), Type::Unit { .. });
         Some(MParts {
             g: g.clone(),
@@ -109,7 +288,9 @@ impl MParts {
             lp: sig.pos_level.clone(),
             lw: sig.family_level(),
             shape: Rc::new(sig.shape_at(index)),
+            shape_inline: Rc::new(inline.shape_at(index)),
             pos: Rc::new(sig.pos_at(index)),
+            pos_inline: Rc::new(inline.pos_at(index)),
             next: Rc::new(sig.next_at(index)),
             indexed,
         })
@@ -202,7 +383,7 @@ impl MParts {
     /// `π₀ + (π₁ + …)` as written by [`Elaborator::lower_instance_m`].
     /// `gamma` is the context `label` is scoped in.
     fn pos_code(&self, k: u32, gamma: &LocalCtx, label: Rc<Term>) -> Rc<Term> {
-        let Type::El { tm, .. } = self.pos_at(k, label) else {
+        let Type::El { tm, .. } = self.pos_inline.apply_local(&embed(&self.g, k).extended(label)) else {
             unreachable!("the positions are `El` of a case tree")
         };
         let mut tm = tm;
@@ -472,6 +653,12 @@ impl Elaborator {
                 );
             }
         };
+        // A declaration that named its signature is spelled with it (§2 of
+        // docs/codata-named-signature-design.md): nothing below is elaborated.
+        if let Some(sig) = self.m_sig_named(cx, ind, args, vargs, span)? {
+            let lw = sig.family_level();
+            return Ok((sig.at(index.map(Rc::new).unwrap_or_else(triv)), lw));
+        }
         // The base every piece is scoped over: `Γ` unindexed, `(Γ, i)` indexed,
         // where the index binders are aliases of `i`'s projections.
         let (bcx, ity, args_b, vargs_b, extra) = if indexed {
@@ -691,6 +878,264 @@ impl Elaborator {
         });
         let lw = sig.family_level();
         Ok((sig.at(Rc::new(index.expect("indexed"))), lw))
+    }
+
+    // -- the named signature (docs/codata-named-signature-design.md) -----------
+
+    /// `D#mshape`, `D#mpos` and (indexed) `D#mnext` at declaration time: the
+    /// inline signature [`Self::lower_instance_m`] builds over
+    /// [`Self::tycode_fn_telescope`]'s all-`Ty 0` telescope, abstracted over
+    /// it and the index binder. From then on every instance at that profile
+    /// is spelled with them (§2). Best-effort like every generated
+    /// definition: a refusal leaves the declaration inline.
+    pub(crate) fn register_m_sig(&mut self, ind: &Rc<Inductive>, span: Span) {
+        if self.types.gdefs().abs_for(&GenDef::MShape(ind.tag)).is_some() {
+            return;
+        }
+        let Some((cx, binders, targs, vargs)) = self.tycode_fn_telescope(ind, span) else {
+            return;
+        };
+        let indexed = !ind.co_index.is_empty();
+        let (ity, li) = if indexed {
+            match self.codata_index_ty(&cx, ind, &targs, &vargs, span) {
+                Ok(i) => i,
+                Err(_) => return,
+            }
+        } else {
+            (Type::Unit { level: Level::Zero }, Level::Zero)
+        };
+        let Ok((d_ty, _)) = self.lower_instance_m(&cx, ind, &targs, &vargs, indexed.then(|| Term::Triv { level: Level::Zero }), span) else {
+            return;
+        };
+        let Type::M { sig, .. } = d_ty else {
+            return;
+        };
+        let (ls, lp) = (sig.level.clone(), sig.pos_level.clone());
+        let tel = self.emitted_tel(&binders);
+        let n = tel.len() as u32;
+        let tel_vars: Vec<Rc<Term>> = (0..n).map(|k| var(n - 1 - k)).collect();
+        let mut icx = cx.clone();
+        icx.push("#i".into(), ity.clone(), li.clone());
+        // The shape in the emission spelling, so that what one δ exposes
+        // already names the declarations its fields mention.
+        let shape_q = self.annotation_type(&icx, &sig.shape, 0);
+        let Some(shape_code) = crate::code::code_of(&shape_q) else {
+            return;
+        };
+        let ity = Rc::new(ity);
+        let ty_ls = Type::Ty(ls.clone());
+        let shape_stmt = Type::Pi { dom_level: li.clone(), cod_level: Level::succ(ls.clone()), dom: Rc::clone(&ity), cod: Rc::new(ty_ls) };
+        let shape_body = Term::Lam { dom_level: li.clone(), cod_level: Level::succ(ls.clone()), dom: Rc::clone(&ity), body: Rc::new(shape_code) };
+        let lvl1 = Level::max(li.clone(), Level::succ(ls.clone())).normalize().canonical();
+        if !self.push_m_def(GenDef::MShape(ind.tag), ind, &tel, shape_stmt, lvl1, shape_body, span) {
+            return;
+        }
+        // `El(D#mshape ā i)` over `(tel, i)`.
+        let Some(s_ref) = self.m_ref_app(&cx, GenDef::MShape(ind.tag), &tel_vars, 1) else {
+            return;
+        };
+        let s_ty = Rc::new(Type::El { level: ls.clone(), tm: s_ref });
+        // Every push moves the globals the pieces built before it mention one
+        // further out (`ty_code_fn_at`'s frame rule), so each later piece is
+        // read past the pushes made since: one for the positions, two for the
+        // child index.
+        let Type::El { tm: ptree, .. } = &*sig.pos else {
+            return;
+        };
+        let tel1: Vec<(Type, Level)> = tel.iter().map(|(t, l)| (t.shift_global(1), l.clone())).collect();
+        let ity1 = Rc::new(ity.shift_global(1));
+        let pos_cod = Type::Pi { dom_level: ls.clone(), cod_level: Level::succ(lp.clone()), dom: Rc::clone(&s_ty), cod: Rc::new(Type::Ty(lp.clone())) };
+        let lvl_s = Level::max(ls.clone(), Level::succ(lp.clone())).normalize().canonical();
+        let pos_stmt = Type::Pi { dom_level: li.clone(), cod_level: lvl_s.clone(), dom: Rc::clone(&ity1), cod: Rc::new(pos_cod) };
+        let pos_body = Term::Lam {
+            dom_level: li.clone(),
+            cod_level: lvl_s.clone(),
+            dom: Rc::clone(&ity1),
+            body: Rc::new(Term::Lam { dom_level: ls.clone(), cod_level: Level::succ(lp.clone()), dom: Rc::clone(&s_ty), body: Rc::new(ptree.shift_global(1)) }),
+        };
+        let lvl2 = Level::max(li.clone(), lvl_s).normalize().canonical();
+        if !self.push_m_def(GenDef::MPos(ind.tag), ind, &tel1, pos_stmt, lvl2, pos_body, span) || !indexed {
+            return;
+        }
+        // `El(D#mshape ā i)` and `El(D#mpos ā i s)` over `(tel, i)` and `(tel,
+        // i, s)`, both minted now.
+        let (Some(s_ref), Some(p_ref)) = (
+            self.m_ref_app(&cx, GenDef::MShape(ind.tag), &tel_vars, 1),
+            self.m_ref_app(&cx, GenDef::MPos(ind.tag), &tel_vars, 2),
+        ) else {
+            return;
+        };
+        let s_ty = Rc::new(Type::El { level: ls.clone(), tm: s_ref });
+        let p_ty = Rc::new(Type::El { level: lp.clone(), tm: p_ref });
+        let tel2: Vec<(Type, Level)> = tel.iter().map(|(t, l)| (t.shift_global(2), l.clone())).collect();
+        let ity2 = Rc::new(ity.shift_global(2));
+        let i3 = Rc::new(ity2.shift_local(3));
+        let next_p = Type::Pi { dom_level: lp.clone(), cod_level: li.clone(), dom: Rc::clone(&p_ty), cod: Rc::clone(&i3) };
+        let lvl_p = Level::max(lp.clone(), li.clone()).normalize().canonical();
+        let next_s = Type::Pi { dom_level: ls.clone(), cod_level: lvl_p.clone(), dom: Rc::clone(&s_ty), cod: Rc::new(next_p) };
+        let lvl_sp = Level::max(ls.clone(), lvl_p.clone()).normalize().canonical();
+        let next_stmt = Type::Pi { dom_level: li.clone(), cod_level: lvl_sp.clone(), dom: Rc::clone(&ity2), cod: Rc::new(next_s) };
+        let next_body = Term::Lam {
+            dom_level: li.clone(),
+            cod_level: lvl_sp.clone(),
+            dom: Rc::clone(&ity2),
+            body: Rc::new(Term::Lam {
+                dom_level: ls.clone(),
+                cod_level: lvl_p.clone(),
+                dom: Rc::clone(&s_ty),
+                body: Rc::new(Term::Lam { dom_level: lp.clone(), cod_level: li.clone(), dom: p_ty, body: Rc::new(sig.next.shift_global(2)) }),
+            }),
+        };
+        let lvl3 = Level::max(li, lvl_sp).normalize().canonical();
+        let _ = self.push_m_def(GenDef::MNext(ind.tag), ind, &tel2, next_stmt, lvl3, next_body, span);
+    }
+
+    /// Close `ty`/`body` (scoped over the telescope) over it and push the
+    /// definition; whether it was pushed.
+    #[allow(clippy::too_many_arguments)]
+    fn push_m_def(&mut self, key: GenDef, ind: &Inductive, tel: &[(Type, Level)], ty: Type, level: Level, body: Term, span: Span) -> bool {
+        let (mut ty, mut level, mut body) = (ty, level, body);
+        for (dom, dom_level) in tel.iter().rev() {
+            body = Term::Lam { dom_level: dom_level.clone(), cod_level: level.clone(), dom: Rc::new(dom.clone()), body: Rc::new(body) };
+            ty = Type::Pi { dom_level: dom_level.clone(), cod_level: level.clone(), dom: Rc::new(dom.clone()), cod: Rc::new(ty) };
+            level = Level::max(dom_level.clone(), level).normalize().canonical();
+        }
+        self.push_gen_def(key, &ind.name, ty, level, body, span).is_ok()
+    }
+
+    /// The result universe of a registered code function's statement, past its
+    /// first `n` binders.
+    fn gen_stmt_level(&self, key: GenDef, n: usize) -> Option<Level> {
+        let abs = *self.types.gdefs().abs_for(&key)?;
+        let GlobalBinding::Tm { ty, .. } = self.psi.bindings.get(abs as usize)? else {
+            return None;
+        };
+        let mut cod: &Type = ty;
+        for _ in 0..n {
+            let Type::Pi { cod: next, .. } = cod else {
+                return None;
+            };
+            cod = next;
+        }
+        match cod {
+            Type::Ty(l) => Some(l.clone()),
+            _ => None,
+        }
+    }
+
+    /// `app(key^δ; tel, x₁, …, x_k)` `k` binders past `cx`, the binders
+    /// applied in order (`tel` is scoped in `cx`).
+    fn m_ref_app(&self, cx: &Cx, key: GenDef, tel: &[Rc<Term>], k: u32) -> Option<Rc<Term>> {
+        let mut t = Rc::new(self.gen_ref_deeper(cx, key, k)?);
+        for a in tel {
+            t = app_at(t, Rc::new(a.shift_local(k)));
+        }
+        for v in (0..k).rev() {
+            t = app_at(t, var(v));
+        }
+        Some(t)
+    }
+
+    /// The named signature of an instance (§2): `None` when the declaration
+    /// registered none, or the instance is not at the registered profile
+    /// (every type argument at `Ty 0`), or a type argument has no code —
+    /// [`Self::lower_instance_m`] then spells it inline.
+    fn m_sig_named(
+        &self,
+        cx: &Cx,
+        ind: &Inductive,
+        args: &[(Type, Level)],
+        vargs: &[(Term, Type, Level)],
+        span: Span,
+    ) -> R<Option<Rc<MSig>>> {
+        let shape_key = GenDef::MShape(ind.tag);
+        if self.types.gdefs().abs_for(&shape_key).is_none() || args.iter().any(|(_, l)| !l.equiv(&Level::Zero)) {
+            return Ok(None);
+        }
+        let mut tel = Vec::with_capacity(args.len() + vargs.len());
+        for (a, _) in args {
+            let Some(c) = crate::code::code_of(a) else {
+                return Ok(None);
+            };
+            tel.push(Rc::new(c));
+        }
+        tel.extend(vargs.iter().map(|(v, _, _)| Rc::new(v.clone())));
+        let n = tel.len();
+        let indexed = !ind.co_index.is_empty();
+        let (Some(ls), Some(lp)) =
+            (self.gen_stmt_level(shape_key, n + 1), self.gen_stmt_level(GenDef::MPos(ind.tag), n + 2))
+        else {
+            return Ok(None);
+        };
+        let (Some(shape), Some(pos)) =
+            (self.m_ref_app(cx, shape_key, &tel, 1), self.m_ref_app(cx, GenDef::MPos(ind.tag), &tel, 2))
+        else {
+            return Ok(None);
+        };
+        let (ity, li, next) = if indexed {
+            let Some(next) = self.m_ref_app(cx, GenDef::MNext(ind.tag), &tel, 3) else {
+                return Ok(None);
+            };
+            let (ity, li) = self.codata_index_ty(cx, ind, args, vargs, span)?;
+            (ity, li, next)
+        } else {
+            (Type::Unit { level: Level::Zero }, Level::Zero, triv())
+        };
+        Ok(Some(Rc::new(MSig {
+            level: ls.clone(),
+            pos_level: lp.clone(),
+            idx_level: li,
+            idx: Rc::new(ity),
+            shape: Rc::new(Type::El { level: ls, tm: shape }),
+            pos: Rc::new(Type::El { level: lp, tm: pos }),
+            next,
+        })))
+    }
+
+    /// A signature with its named components unfolded (§3), the signature
+    /// itself when it is inline. `g` is the context the signature is scoped
+    /// in. `None` only for a named signature whose definitions do not unfold,
+    /// which no lowering writes.
+    pub(crate) fn m_sig_inline(&self, sig: &Rc<MSig>, g: &LocalCtx) -> Option<Rc<MSig>> {
+        let Type::El { tm, .. } = &*sig.shape else {
+            return Some(Rc::clone(sig));
+        };
+        let Some((GenDef::MShape(tag), args)) = self.gen_app_of(tm) else {
+            return Some(Rc::clone(sig));
+        };
+        let len = g.entries.len() as u32;
+        let shape = self.unfold_gen_app(GenDef::MShape(tag), &args, len + 1, g.base)?;
+        let Type::El { tm: ptm, .. } = &*sig.pos else {
+            return None;
+        };
+        let (_, pargs) = self.gen_app_of(ptm)?;
+        let pos = self.unfold_gen_app(GenDef::MPos(tag), &pargs, len + 2, g.base)?;
+        let next = match self.gen_app_of(&sig.next) {
+            Some((GenDef::MNext(t), nargs)) if t == tag => {
+                Rc::new(self.unfold_gen_app(GenDef::MNext(tag), &nargs, len + 3, g.base)?)
+            }
+            _ => Rc::clone(&sig.next),
+        };
+        Some(Rc::new(MSig {
+            level: sig.level.clone(),
+            pos_level: sig.pos_level.clone(),
+            idx_level: sig.idx_level.clone(),
+            idx: Rc::clone(&sig.idx),
+            shape: Rc::new(Type::El { level: sig.level.clone(), tm: Rc::new(shape) }),
+            pos: Rc::new(Type::El { level: sig.pos_level.clone(), tm: Rc::new(pos) }),
+            next,
+        }))
+    }
+
+    /// The declaration a named signature belongs to, by its shape's head.
+    pub(crate) fn m_sig_tag(&self, sig: &MSig) -> Option<u32> {
+        let Type::El { tm, .. } = &*sig.shape else {
+            return None;
+        };
+        match self.gen_app_of(tm)? {
+            (GenDef::MShape(tag), _) => Some(tag),
+            _ => None,
+        }
     }
 
     /// Child `r` of constructor `i`'s written index, at a leaf of the child
@@ -949,6 +1394,19 @@ impl Elaborator {
         expected: &Type,
         span: Span,
     ) -> R<Term> {
+        let t = self.build_ctor_m_annotated(cx, ind, i, args, expected, span)?;
+        Ok((*slim(&Rc::new(t), false)).clone())
+    }
+
+    fn build_ctor_m_annotated(
+        &self,
+        cx: &Cx,
+        ind: &Inductive,
+        i: usize,
+        args: &[&Expr],
+        expected: &Type,
+        span: Span,
+    ) -> R<Term> {
         let ctor = &ind.ctors[i];
         let ty = self.whnf(cx, expected, span)?;
         match self.tag_of(&ty) {
@@ -963,7 +1421,7 @@ impl Elaborator {
                 );
             }
         }
-        let Some(p) = MParts::read(&ty, &cx.gamma) else {
+        let Some(p) = MParts::read(self, &ty, &cx.gamma) else {
             return err("internal: a codata declaration did not lower to its `M` encoding", span);
         };
         let (label, comps, tails, children) = self.ctor_parts(cx, ind, i, &p, args, &mut |cx, arg, at| {
@@ -1145,8 +1603,7 @@ impl Elaborator {
             );
         }
         let n = ind.ctors.len();
-        let ty = p.d_at(0);
-        let spine = self.spine(&ty, &p.lw, n, span)?;
+        let spine = self.spine(&p.shape_inline, &p.ls, n, span)?;
         let payload: Vec<&Expr> = args
             .iter()
             .zip(&ctor.kind)
@@ -1252,7 +1709,23 @@ impl Elaborator {
         mlvl: Level,
         span: Span,
     ) -> R<Term> {
-        let Some(p) = MParts::read(scrut_ty, &cx.gamma) else {
+        let t = self.elab_match_m_annotated(cx, ind, arms, scrut, scrut_ty, motive, mlvl, span)?;
+        Ok((*slim(&Rc::new(t), false)).clone())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn elab_match_m_annotated(
+        &self,
+        cx: &Cx,
+        ind: &Inductive,
+        arms: &[&Arm],
+        scrut: Term,
+        scrut_ty: &Type,
+        motive: Type,
+        mlvl: Level,
+        span: Span,
+    ) -> R<Term> {
+        let Some(p) = MParts::read(self, scrut_ty, &cx.gamma) else {
             return err("internal: a codata declaration did not lower to its `M` encoding", span);
         };
         let scrut = Rc::new(scrut);
@@ -1268,7 +1741,7 @@ impl Elaborator {
                 scrut: Rc::new(p.out_fst(0, Rc::new(p.out(0, scrut)))),
             });
         }
-        let spine = self.spine(scrut_ty, &p.lw, n, span)?;
+        let spine = self.spine(&p.shape_inline, &p.ls, n, span)?;
         let lq = Level::join(lf.clone(), mlvl.clone());
         // Q(v), over (Γ, o, v) at depth `k` = 2.
         let q = |k: u32, v: Rc<Term>| Type::Pi {
@@ -1402,7 +1875,7 @@ impl Elaborator {
         span: Span,
     ) -> R<Term> {
         let g = mcx.gamma.prefix(mcx.gamma.len() - 2);
-        let Some(p) = MParts::read(d_ty, &g) else {
+        let Some(p) = MParts::read(self, d_ty, &g) else {
             return err("internal: a codata declaration did not lower to its `M` encoding", span);
         };
         let label = Rc::new(p.out_fst(2, Rc::new(p.out(2, scrut))));
@@ -1444,7 +1917,7 @@ impl Elaborator {
         let Some(ind) = self.tag_of(&head).filter(|i| i.codata) else {
             return Ok(None);
         };
-        let Some(p) = MParts::read(&head, &cx.gamma) else {
+        let Some(p) = MParts::read(self, &head, &cx.gamma) else {
             return Ok(None);
         };
         if let Some(q) = decl.params.iter().find(|q| q.implicit) {
@@ -1597,7 +2070,12 @@ impl Elaborator {
     /// step moves `b` from `g` to `i` along the carrier's equation
     /// (docs/codata-indexed-design.md §6).
     pub(crate) fn corec_close(&self, cx: &Cx, n_ty: usize, site: &CorecSite, b: Term, span: Span) -> R<Term> {
-        let Some(p) = MParts::read(&site.d_ty, &cx.gamma) else {
+        let t = self.corec_close_annotated(cx, n_ty, site, b, span)?;
+        Ok((*slim(&Rc::new(t), false)).clone())
+    }
+
+    fn corec_close_annotated(&self, cx: &Cx, n_ty: usize, site: &CorecSite, b: Term, span: Span) -> R<Term> {
+        let Some(p) = MParts::read(self, &site.d_ty, &cx.gamma) else {
             return err("internal: a codata declaration did not lower to its `M` encoding", span);
         };
         let n = site.rank.len();
@@ -1686,7 +2164,7 @@ impl Elaborator {
     /// positions and this function built it; `None` to elaborate it as usual.
     pub(crate) fn corec_check(&self, cx: &Cx, site: &CorecSite, e: &Expr, expected: &Type, lvl: &Level) -> R<Option<Term>> {
         let by = site.by(cx);
-        let Some(p) = MParts::read(&site.d_ty.shift_local(by), &cx.gamma) else {
+        let Some(p) = MParts::read(self, &site.d_ty.shift_local(by), &cx.gamma) else {
             return err("internal: a codata declaration did not lower to its `M` encoding", e.span);
         };
         let carrier = site.carrier.under(by);
