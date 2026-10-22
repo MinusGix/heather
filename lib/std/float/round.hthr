@@ -426,12 +426,15 @@ theorem Finite::nearest_top_unique({F: Format}, x: Rat, d, g: Finite(F), below: 
 // ---------------------------------------------------------------------------
 // The exponent of the result: the least `e <= span` at which `h` half-units
 // have a significand below `2^prec`, or `span` when none has. The search
-// starts at the least exponent, so a result above it is normal.
+// starts at the least exponent, so a result above it is normal. The shift
+// `s = h.shr(Succ(b))` is carried along, one halving a step, so the search
+// costs `e` halvings and not `e²`, and the bound `t` is `F.top()`, computed
+// once rather than at every step.
 
-fn Format::pick(self F: Format, h, b, fuel: Nat) → Nat {
+fn Format::pick(self F: Format, t, s, b, fuel: Nat) → Nat {
     match fuel {
         Zero => b,
-        Succ(f) => match Succ(h.shr(Succ(b))).le_dec(F.top()) { Inl(_) => b, Inr(_) => F.pick(h, Succ(b), f) },
+        Succ(f) => match Succ(s).le_dec(t) { Inl(_) => b, Inr(_) => F.pick(t, s.half(), Succ(b), f) },
     }
 }
 
@@ -439,24 +442,29 @@ fn Format::Picked(self F: Format, h, e: Nat) → Type {
     e <= F.span ∧ (e = 0 ∨ F.top() <= h.shr(e)) ∧ (Succ(h.shr(Succ(e))) <= F.top() ∨ e = F.span)
 }
 
-theorem Format::pick_spec(self F: Format, h, fuel: Nat): (b: Nat) → (b = 0 ∨ F.top() <= h.shr(b)) → b + fuel = F.span → F.Picked(h, F.pick(h, b, fuel)) {
+theorem Format::pick_spec(self F: Format, h, fuel: Nat):
+    (b, s: Nat) → s = h.shr(Succ(b)) → (b = 0 ∨ F.top() <= h.shr(b)) → b + fuel = F.span → F.Picked(h, F.pick(F.top(), s, b, fuel))
+{
     match fuel {
-        Zero => λ b inv sum => { let pz: (F.pick(h, b, 0) = b) = refl; And(omega, And(inv, Inr(sum))) },
+        Zero => λ b s _ inv sum => { let pz: (F.pick(F.top(), s, b, 0) = b) = refl; And(omega, And(inv, Inr(sum))) },
         Succ(f) => {
             let ih = F.pick_spec(h, f);
-            λ b inv sum => match Succ(h.shr(Succ(b))).le_dec(F.top()) as λ d => F.Picked(h, match d { Inl(_) => b, Inr(_) => F.pick(h, Succ(b), f) }) {
-                Inl(fits) => { let le: (b <= F.span) = omega; And(le, And(inv, Inl(fits))) },
-                Inr(no) => ih(Succ(b), Inr(Nat::le_of_not_lt(h.shr(Succ(b)), F.top(), no)), omega),
+            λ b s es inv sum => match Succ(s).le_dec(F.top()) as λ d => F.Picked(h, match d { Inl(_) => b, Inr(_) => F.pick(F.top(), s.half(), Succ(b), f) }) {
+                Inl(fits) => { let le: (b <= F.span) = omega; And(le, And(inv, Inl(rewrite(es, in := fits)))) },
+                Inr(no) => {
+                    let next: (s.half() = h.shr(Succ(Succ(b)))) = trans(Nat::cong(λ (w: Nat) => w.half(), es), sym(Nat::shr_succ_half(Succ(b), h)));
+                    ih(Succ(b), s.half(), next, Inr(rewrite(es, in := Nat::le_of_not_lt(s, F.top(), no))), omega)
+                },
             }
         },
     }
 }
 
-fn Format::e_of(self F: Format, h: Nat) → Nat { F.pick(h, 0, F.span) }
+fn Format::e_of(self F: Format, h: Nat) → Nat { F.pick(F.top(), h.half(), 0, F.span) }
 
 fn Format::m_of(self F: Format, h: Nat) → Nat { h.shr(Succ(F.e_of(h))) }
 
-theorem Format::e_of_spec(self F: Format, h: Nat): F.Picked(h, F.e_of(h)) { F.pick_spec(h, F.span)(0, Inl(refl), F.span.add_left_zero()) }
+theorem Format::e_of_spec(self F: Format, h: Nat): F.Picked(h, F.e_of(h)) { F.pick_spec(h, F.span)(0, h.half(), refl, Inl(refl), F.span.add_left_zero()) }
 
 // `h` sits in the cell of `m` at spacing `2^(e+1)`.
 theorem Format::m_floor(self F: Format, h: Nat):

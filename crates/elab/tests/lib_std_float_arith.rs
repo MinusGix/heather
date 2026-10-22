@@ -7,13 +7,16 @@
 //!     division), a fused multiply-add that differs from a multiply then an
 //!     add, overflow, the signs of exact zeros, and the special values
 //!     (division by zero, `0/0`, `∞ - ∞`, `0 · ∞`), and conversion between
-//!     the two formats;
+//!     the two formats; and at binary32, whose half-unit counts are past
+//!     `2^96` (`issues/kernel-wide-run-comparison.md`): a sum on a tie to
+//!     even, a rounded product, and the long division of `1/3` toward zero;
 //!  2. the value, sign and error theorems hold at an open format, mode and
 //!     operands, the relation unfolds at a literal mode in a checking
 //!     position, and binary long division agrees with `div`/`mod` at an open
 //!     numerator;
 //!  3. negative controls: a value theorem cited for the wrong value, a wrong
-//!     sign of a product and of `x - x`, a wrong literal quotient, a quotient
+//!     sign of a product and of `x - x`, a wrong literal quotient, a binary32
+//!     product rounded the wrong way, a quotient
 //!     claimed finite at `0/0`, and `Float::div` at a format with no NaN,
 //!     whose default evidence cannot be built.
 
@@ -90,6 +93,22 @@ fn three() → Finite(binary16()) { h16(False, 1536, 15, trivial) }
 fn pz() → Finite(binary16()) { Finite::zero(binary16(), False) }
 fn nz() → Finite(binary16()) { Finite::zero(binary16(), True) }
 fn pinf() → Float(binary16()) { Inf(False, trivial) }
+fn s32(neg: Bool, m, b: Nat, ok: binary32().canonical(m, b).IsTrue()) → Finite(binary32()) { Finite(neg, m, b, ok) }
+fn one32() → Finite(binary32()) { s32(False, 8388608, 126, trivial) }
+fn next32() → Finite(binary32()) { s32(False, 8388609, 126, trivial) }
+fn half_ulp32() → Finite(binary32()) { s32(False, 8388608, 102, trivial) }
+";
+
+// binary32 has qmin = -149: 1 is significand 2^23 at biased exponent 126, its
+// ulp is 2^-23 and `half_ulp32` is 2^-24, so `1 + 2^-24` is a tie. A value's
+// half-unit count is about 2^150, past where comparing differently built
+// numerals used to run out of fuel.
+const BINARY32: &str = "
+theorem tie(): Rat::Same(val_or(one32().add(half_ulp32()), 99), 1) { refl }
+// (1 + 2^-23)^2 = 1 + 2^-22 + 2^-46.
+theorem sq(): Rat::Same(val_or(next32().mul(next32()), 99), Rat(8388610, 8388608)) { refl }
+// 1/3 = 0x0.AAAAAA…: 0xAAAAAA · 2^-25 truncated.
+theorem third(): Rat::Same(val_or(binary32().round_rat(TowardZero, Rat(1, 3)), 99), Rat(11184810, 33554432)) { refl }
 ";
 
 const LITERAL: &str = "
@@ -199,6 +218,12 @@ fn operations_compute_on_literal_formats() {
 }
 
 #[test]
+fn operations_compute_at_binary32() {
+    let mut e = base();
+    check(&mut e, "arith_binary32", &format!("{IMPORTS}{BINARY32}"));
+}
+
+#[test]
 fn theorems_hold_at_open_operands() {
     let mut e = base();
     check(&mut e, "arith_open", &format!("{IMPORTS}{OPEN}"));
@@ -213,6 +238,7 @@ fn a_wrong_claim_is_refused() {
         "theorem bad(): Rat::Same(val_or(one().div(three()), 99), Rat(1366, 4096)) { refl }",
         "theorem bad(): (Float::div(Float::Fin(pz()), Float::Fin(pz()))).is_finite() = True { refl }",
         "theorem bad(): neg_bit(one().sub(one())) = True { refl }",
+        "theorem bad(): Rat::Same(val_or(next32().mul(next32()), 99), Rat(8388611, 8388608)) { refl }",
         "fn bad(x, y: Float(e2m1())) → Float(e2m1()) { Float::div(x, y) }",
     ]
     .iter()

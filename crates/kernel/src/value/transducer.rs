@@ -350,7 +350,7 @@ mod tests {
         fn go(p: &Rc<ContextProgram<()>>) -> u128 {
             match &**p {
                 ContextProgram::Run { count, .. } => u128::from(count.get()),
-                ContextProgram::Compose { outer, inner } => go(outer) + go(inner),
+                ContextProgram::Compose { outer, inner, .. } => go(outer) + go(inner),
             }
         }
         inc.as_ref().map_or(0, go)

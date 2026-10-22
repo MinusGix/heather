@@ -420,10 +420,16 @@ accelerated is refused with `OutOfFuel`, never a process abort.
 is `Succ(NatLit(n - 1))`; it carries a `heather_numeral::Numeral`, an
 arbitrary-precision natural, rather than a `u64`. Evaluation builds a
 literal past `u64::MAX` as a shared run program from its bits
-(`eval::nat_lit_program`), the shape arithmetic that overflows a run
-already produces. The numeral crate is first-party, dependency-free and
-`unsafe`-free; what the kernel's judgments rely on from it is `is_zero`,
-`pred` and `limbs` (`issues/dependency-policy.md`).
+(`ContextProgram::of_count`), the shape arithmetic that overflows a run
+already produces. A composed program carries its length as a `Numeral` and
+the one context it repeats, when it repeats one (2026-10-22,
+`issues/kernel-wide-run-comparison.md`): two numbers cancel by subtracting
+lengths and cutting the longer along one path, `O(bits)` however each was
+built, and an iterated fold's result is rebuilt in the literal shape when
+its graph outgrows two nodes per bit. The numeral crate is first-party,
+dependency-free and `unsafe`-free; what the kernel's judgments rely on from
+it is `is_zero`, `pred`, `limbs`, its order, and the limb arithmetic
+`value/program.rs` does over `limbs` (`issues/dependency-policy.md`).
 
 **Native bitvector values** (`issues/kernel-native-bitvector-values.md`,
 `docs/native-bitvector-values-design.md`). The second representation change

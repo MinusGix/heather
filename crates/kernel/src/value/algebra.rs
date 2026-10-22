@@ -175,7 +175,24 @@ impl AffineTree {
             }
         }
         let mut memo: HashMap<*const ContextProgram<()>, AffineTree> = HashMap::new();
-        self.iterate_memo(program, &mut memo)
+        let iterated = self.iterate_memo(program, &mut memo)?;
+        drop(memo);
+        Some(iterated.compacted())
+    }
+
+    /// Every increment in the canonical shape when its graph outgrew it
+    /// ([`ContextProgram::compact`]): an iterate's increments are built
+    /// from the input program's graph, and a chain of folds would
+    /// otherwise grow it with every link.
+    fn compacted(self) -> AffineTree {
+        let compact = |inc: Increment| inc.map(|p| ContextProgram::compact(&p));
+        match self {
+            AffineTree::Leaf { inc, path } => AffineTree::Leaf { inc: compact(inc), path },
+            AffineTree::Lit { inc } => AffineTree::Lit { inc: compact(inc) },
+            AffineTree::Pair(fst, snd) => {
+                AffineTree::Pair(Box::new(fst.compacted()), Box::new(snd.compacted()))
+            }
+        }
     }
 
     fn iterate_memo(
@@ -191,7 +208,7 @@ impl AffineTree {
         }
         let out = match &**program {
             ContextProgram::Run { count, .. } => self.power(count.get())?,
-            ContextProgram::Compose { outer, inner } => {
+            ContextProgram::Compose { outer, inner, .. } => {
                 let inner = self.iterate_memo(inner, memo)?;
                 let outer = self.iterate_memo(outer, memo)?;
                 Self::compose(&outer, &inner)?
@@ -238,7 +255,7 @@ mod tests {
             }
             let n = match &**program {
                 ContextProgram::Run { count, .. } => count.get() as u128,
-                ContextProgram::Compose { outer, inner } => go(outer, memo) + go(inner, memo),
+                ContextProgram::Compose { outer, inner, .. } => go(outer, memo) + go(inner, memo),
             };
             memo.insert(Rc::as_ptr(program), n);
             n

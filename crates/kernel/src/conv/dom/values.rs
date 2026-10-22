@@ -352,11 +352,17 @@ mod tests {
         );
     }
 
+    /// What used to be a hostile near-match — two doubling DAGs whose
+    /// leaves differ, so no node pair lines up — is decided by the lengths
+    /// the programs carry: `2^64` against `2^65` is a refutation within a
+    /// handful of inspections, not a walk that exhausts its fuel. (The
+    /// bound itself is still exercised by mixed-context programs in
+    /// `value::program`'s own tests.)
     #[test]
-    fn hostile_near_match_obeys_conversion_fuel() {
+    fn a_wide_near_match_is_refuted_by_its_lengths() {
         assert_eq!(
             compare_nat_runs(doubling_nat(1, 64), doubling_nat(2, 64), 16),
-            Err(crate::conv::ConvError::OutOfFuel),
+            Err(crate::conv::ConvError::NotConvertible),
         );
     }
 }

@@ -1441,6 +1441,15 @@ theorem Nat::lt_succ_shr_mul(self k: Nat): (n: Nat) → n < Succ(n.shr(k)) * Nat
     }
 }
 
+// One more halving is the last one: a shift can be carried along a search
+// that increments `k`, at one halving a step.
+theorem Nat::shr_succ_half(self k: Nat): (n: Nat) → n.shr(Succ(k)) = n.shr(k).half() {
+    match k {
+        Zero => λ n => refl,
+        Succ(i) => λ n => Nat::shr_succ_half(i, n.half()),
+    }
+}
+
 theorem Nat::even_double(self n: Nat): Nat::Even(n + n) {
     match n {
         Zero => trivial,
