@@ -49,3 +49,7 @@ That should be decided before B2 starts, not discovered during it.
 - **[[in-language-certificate-emission]]** and
   **[[generators-in-the-language]]** own moving emission into Heather.
 - **[[native-first-compiled-program]]** owns B2's timing.
+
+## Log
+
+- 2026-10-21: From `docs/native-effect-source-design.md` §9: for effectful programs the answer is option 3 (the program is the effectful source, written or elaborated; nothing is reflected). For pure functions, the bounded loop proposed there for FunctionIR is what lets reflected structural recursion stay total; "1 now, 2 when the host `View` exists" stands.

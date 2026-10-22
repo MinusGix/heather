@@ -477,6 +477,10 @@ us to burn a lot of code".
    - **How to decide.** S3's first step writes `tr` both ways (the layer,
      and FunctionIR with effect nodes), each with its `denote` and the
      construct lemma it needs, before choosing.
+   - **S3's design** (`docs/native-effect-source-design.md`, for Minus's
+     decision) did that, and recommends the layer over a FunctionIR made
+     the *total* level, with loops split by totality: a bounded loop in
+     FunctionIR, the general loop in the layer.
 
 ## 11. How it meets the principles
 
