@@ -61,8 +61,7 @@ impl Elaborator {
                 .and_then(|abs| self.global_qualified_name_at(abs)),
             _ => self.spell_term_clean(cx, head),
         }.unwrap_or_else(|| "…".to_string());
-        let first = self.psi.bindings.len() as u32 + self.global_padding()
-            + self.meta_pushed.borrow().len() as u32;
+        let first = self.placeholder_base();
         let placeholders: Vec<_> = slot_param.iter().enumerate().map(|(slot, &p)| {
             let name = params.get(p).map(|p| p.name.as_str()).unwrap_or("_");
             (GlobalVar(first + slot as u32), format!("?{name}"))
@@ -83,6 +82,27 @@ impl Elaborator {
             format!("`{name}: {ty}`")
         }).collect::<Vec<_>>().join(", ");
         format!("\nselected callee: `{selected}`; rough parameter types: {shown}")
+    }
+
+    /// The first Ψ index past every binding the elaborator knows, where
+    /// display-only placeholder globals start.
+    pub(crate) fn placeholder_base(&self) -> u32 {
+        self.psi.bindings.len() as u32 + self.global_padding() + self.meta_pushed.borrow().len() as u32
+    }
+
+    /// A type mentioning placeholder globals (from [`Self::placeholder_base`]
+    /// on), each spelled by its name. Raw nodes are elided.
+    pub(crate) fn display_rough_type(&self, cx: &Cx, ty: &Type, placeholders: &[(GlobalVar, String)]) -> String {
+        let mut sp = self.speller(cx);
+        sp.rough = Some(placeholders);
+        sp.ty(ty, 0)
+    }
+
+    /// [`Self::display_rough_type`] for a term.
+    pub(crate) fn display_rough_term(&self, cx: &Cx, t: &Term, placeholders: &[(GlobalVar, String)]) -> String {
+        let mut sp = self.speller(cx);
+        sp.rough = Some(placeholders);
+        sp.tm(t, 0)
     }
 
     /// A type as a human should read it: best-effort decoded head, surface
