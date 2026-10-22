@@ -8465,6 +8465,25 @@ impl Elaborator {
         unify_ty_root(&u, pat, subj, n, 0, sols);
     }
 
+    /// [`Self::unify_root`] for a subject `d` binders past `cx`: the
+    /// metavariables are scoped in `cx`, and a solution that mentions one of
+    /// the `d` is not learned. The tactic host's holes, made in a scope
+    /// enclosing the one a comparison happens in, are unified this way.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn unify_under(&self, cx: &Cx, pat: &Type, subj: &Type, n: u32, d: u32, sols: &mut [Sol], span: Span) {
+        let type_args = |t: &Term, e: u32| self.spine_type_args(cx, t, e, span);
+        let canonical_head = |t: &Term, e: u32| self.canonical_head(cx, t, e);
+        let respell = |t: &Type| self.respell_ty(cx, t);
+        let u = unification::U {
+            gamma: &cx.gamma,
+            subject_metas: None,
+            type_args: &type_args,
+            canonical_head: &canonical_head,
+            respell: &respell,
+        };
+        unify_ty_root(&u, pat, subj, n, d, sols);
+    }
+
     /// Application with implicit-argument insertion
     /// (issues/elab-stage2-metas.md). Each implicit parameter becomes a fresh
     /// metavariable — represented, per the architecture, as an *innermost*

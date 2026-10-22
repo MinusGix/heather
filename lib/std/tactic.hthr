@@ -39,9 +39,15 @@ import string;
 // abstracts an introduced `x` out of `b`. The elaborator keeps track of which
 // binder each handle and local lives under, and refuses an `Expr` that uses
 // one outside it.
+//
+// A `GlobalRef` is a global as the elaborator identifies it: `View` and
+// `Lookup` hand one out, the same number for the same global throughout a
+// run, so a tactic compares heads by identity rather than by name.
+// `Global(g)` is that global as a term, with its whole type.
 
 record Handle { id: Nat }
 record LocalRef { id: Nat }
+record GlobalRef { id: Nat }
 
 inductive Expr {
     Hd(h: Handle),
@@ -49,6 +55,7 @@ inductive Expr {
     App(f: Expr, a: Expr),
     NatLit(n: Nat),
     Lam(x: LocalRef, body: Expr),
+    Global(g: GlobalRef),
 }
 
 // One local of the goal's context: how to refer to it, its name for
@@ -69,23 +76,27 @@ inductive Head {
     HEq(lhs: Handle, rhs: Handle),
     // A named global or type applied: `Nat::le(n, m)`, `List<Nat>`. Only the
     // arguments a call writes are listed, implicit ones left out.
-    HGlobal(name: String, args: List<Handle>),
+    HGlobal(g: GlobalRef, name: String, args: List<Handle>),
     // A local, applied to arguments.
     HLocal(x: LocalRef, args: List<Handle>),
     HLit(n: Nat),
+    // A hole nothing has solved yet.
+    HHole,
     HOther,
 }
 
 // One line of a failure's search state. `Under` marks a note about a
-// sub-search, shown one level deeper.
-inductive Note { Tried(what: String, verdict: String), Under(n: Note) }
+// sub-search, shown one level deeper; `At` is a note about a term, which the
+// elaborator spells the way its own diagnostics do.
+inductive Note { Tried(what: String, verdict: String), Under(n: Note), At(e: Expr, n: Note) }
 
 // The answer to a request that may be refused, with the reason.
 inductive Checked<A> { Accepted(a: A), Refused(why: String) }
 
-// A binder `Open` introduced: the new local, and the binder's body, which
-// lives under it.
-record Opened { local: LocalInfo, body: Handle }
+// A binder `Open` introduced: the new local, the binder's body, which lives
+// under it, and whether the body mentions the local (a dependent function
+// type, rather than an implication).
+record Opened { local: LocalInfo, body: Handle, dependent: Bool }
 
 // ---------------------------------------------------------------------------
 // The requests, and the request tree.
@@ -114,6 +125,16 @@ inductive Req {
     // that make it match, each one's value where the match determines it, and
     // `None` where it is left for the caller to prove.
     Match(ty: Handle, target: Handle),
+    // A hole of type `ty`: a term not known yet, which the requests that
+    // compare terms solve (`Defeq`, and checking an `Expr`'s applications).
+    // A run's result may mention holes only once they are solved.
+    Hole(ty: Handle),
+    // The holes' solutions so far, as a mark to come back to.
+    Mark,
+    // Forget every solution found since `mark`.
+    Restore(mark: Nat),
+    // A name, resolved where the `by` is, as the global it denotes.
+    Lookup(name: String),
 }
 
 inductive Never {}
@@ -131,6 +152,10 @@ fn Resp(r: Req) → Type {
         View(_) => Head,
         Whnf(_) => Checked<Handle>,
         Match(_, _) => Checked<List<Option<Handle>>>,
+        Hole(_) => Checked<Handle>,
+        Mark => Nat,
+        Restore(_) => True,
+        Lookup(_) => Checked<GlobalRef>,
     }
 }
 
@@ -160,6 +185,14 @@ fn whnf(h: Handle) → Tac<Checked<Handle>> { Ask(Whnf(h), λ c => Pure(c)) }
 
 fn match_conclusion(ty: Handle, target: Handle) → Tac<Checked<List<Option<Handle>>>> { Ask(Match(ty, target), λ c => Pure(c)) }
 
+fn hole(ty: Handle) → Tac<Checked<Handle>> { Ask(Hole(ty), λ c => Pure(c)) }
+
+fn mark() → Tac<Nat> { Ask(Mark, λ m => Pure(m)) }
+
+fn restore(m: Nat) → Tac<True> { Ask(Restore(m), λ u => Pure(u)) }
+
+fn lookup(name: String) → Tac<Checked<GlobalRef>> { Ask(Lookup(name), λ c => Pure(c)) }
+
 // An answer of any kind, as the elaborator builds one, and the answer at a
 // request's own type. A `match` on the request would not refine the
 // continuation's domain, so the dependent answer is computed by `fit`
@@ -171,6 +204,9 @@ inductive Answer {
     AOpened(c: Checked<Opened>),
     AHead(h: Head),
     AMatch(c: Checked<List<Option<Handle>>>),
+    ANat(n: Nat),
+    AUnit,
+    AGlobal(c: Checked<GlobalRef>),
 }
 
 inductive Fit<R> { Mismatch, Fits(a: R) }
@@ -186,6 +222,10 @@ fn fit(r: Req, a: Answer) → Fit<Resp(r)> {
         View(_) => match a { AHead(h) => Fits(h), _ => Mismatch },
         Whnf(_) => match a { AHandle(c) => Fits(c), _ => Mismatch },
         Match(_, _) => match a { AMatch(c) => Fits(c), _ => Mismatch },
+        Hole(_) => match a { AHandle(c) => Fits(c), _ => Mismatch },
+        Mark => match a { ANat(n) => Fits(n), _ => Mismatch },
+        Restore(_) => match a { AUnit => Fits(trivial), _ => Mismatch },
+        Lookup(_) => match a { AGlobal(c) => Fits(c), _ => Mismatch },
     }
 }
 
@@ -211,17 +251,20 @@ fn focus<A>(g: GoalInfo, t: Tac<A>) → Tac<A> {
 
 inductive Outcome<A> { Done(a: A), Failed(msg: String, notes: List<Note>) }
 
-// Run `t`, catching its failure. Requests are side-effect free, so nothing
-// needs undoing when `t` fails: the elaborator's state is what it was.
-fn attempt<A>(t: Tac<A>) → Tac<Outcome<A>> {
+fn attempt_from<A>(m: Nat, t: Tac<A>) → Tac<Outcome<A>> {
     match t {
         Pure(a) => Pure(Done(a)),
         Ask(r, k) => match r {
-            Fail(msg, notes) => Pure(Failed(msg, notes)),
-            _ => Ask(r, λ x => attempt(k(x))),
+            Fail(msg, notes) => restore(m).bind(λ _ => Pure(Failed(msg, notes))),
+            _ => Ask(r, λ x => attempt_from(m, k(x))),
         },
     }
 }
+
+// Run `t`, catching its failure. Solving holes is the only state a request
+// changes, so when `t` fails its solutions are forgotten and the next thing
+// tried starts where `t` did.
+fn attempt<A>(t: Tac<A>) → Tac<Outcome<A>> { mark().bind(λ m => attempt_from(m, t)) }
 
 fn under_all(ns: List<Note>) → List<Note> {
     match ns { Nil => [], Cons(n, rest) => Cons(Under(n), under_all(rest)) }
@@ -284,38 +327,71 @@ fn intro_as(name: String, t: Tac<Expr>) → Tac<Expr> {
 // `intro(t)`: `intro_as` with the local called `x`.
 fn intro(t: Tac<Expr>) → Tac<Expr> { intro_as("x", t) }
 
-// `f`, whose type is `ty`, applied to one argument per slot: a slot the match
-// determined is that value, and an open one is proved by `premise` at the
-// parameter's type, which by then mentions the arguments before it.
-fn apply_slots(slots: List<Option<Handle>>, f: Expr, ty: Handle, locals: List<LocalInfo>, premise: Tac<Expr>) → Tac<Expr> {
-    match slots {
-        Nil => Pure(f),
-        Cons(s, rest) => match s {
-            Some(h) => infer(App(f, Hd(h))).bind(λ c => match c {
+// The holes `apply` left for later parameters to determine: each one still
+// unsolved is proved by `premise` at its type, and the proof is its solution.
+fn apply_holes(holes: List<Handle>, e: Expr, locals: List<LocalInfo>, premise: Tac<Expr>) → Tac<Expr> {
+    match holes {
+        Nil => Pure(e),
+        Cons(h, rest) => view(h).bind(λ v => match v {
+            HHole => infer(Hd(h)).bind(λ c => match c {
                 Refused(why) => fail("apply: " ++ why, []),
-                Accepted(ty2) => apply_slots(rest, App(f, Hd(h)), ty2, locals, premise),
-            }),
-            None => open(ty, "_").bind(λ c => match c {
-                Refused(why) => fail("apply: " ++ why, []),
-                Accepted(o) => focus(GoalInfo(o.local.ty, locals), premise).bind(λ a => infer(App(f, a)).bind(λ c2 => match c2 {
-                    Refused(why) => fail("apply: " ++ why, []),
-                    Accepted(ty2) => apply_slots(rest, App(f, a), ty2, locals, premise),
+                Accepted(ty) => focus(GoalInfo(ty, locals), premise).bind(λ p => defeq(Hd(h), p).bind(λ same => match same {
+                    True => apply_holes(rest, e, locals, premise),
+                    False => fail("apply: the proof of a postponed argument is not of its type", []),
                 })),
             }),
-        },
+            _ => apply_holes(rest, e, locals, premise),
+        }),
+    }
+}
+
+// One argument of `apply`, and the hole it is if it is one.
+record Argument { a: Expr, holes: List<Handle> }
+
+// The argument for one slot of a match, at the function type `ty`.
+fn argument(s: Option<Handle>, ty: Handle, locals: List<LocalInfo>, premise: Tac<Expr>) → Tac<Argument> {
+    match s {
+        Some(h) => Pure(Argument(Hd(h), [])),
+        None => open(ty, "_").bind(λ c => match c {
+            Refused(why) => fail("apply: " ++ why, []),
+            Accepted(o) => match o.dependent {
+                True => hole(o.local.ty).bind(λ c2 => match c2 {
+                    Refused(why) => fail("apply: " ++ why, []),
+                    Accepted(h) => Pure(Argument(Hd(h), [h])),
+                }),
+                False => focus(GoalInfo(o.local.ty, locals), premise).bind(λ a => Pure(Argument(a, []))),
+            },
+        }),
+    }
+}
+
+// `f`, whose type is `ty`, applied to one argument per slot. A slot the match
+// determined is that value. An open one that later parameters depend on is a
+// hole, which proving them may solve; any other open one is proved by
+// `premise` at the parameter's type, which by then mentions the arguments
+// before it. Holes still open at the end are proved last.
+fn apply_slots(slots: List<Option<Handle>>, f: Expr, ty: Handle, locals: List<LocalInfo>, premise: Tac<Expr>, holes: List<Handle>) → Tac<Expr> {
+    match slots {
+        Nil => apply_holes(holes, f, locals, premise),
+        Cons(s, rest) => argument(s, ty, locals, premise).bind(λ arg => infer(App(f, arg.a)).bind(λ c => match c {
+            Refused(why) => fail("apply: " ++ why, []),
+            Accepted(ty2) => apply_slots(rest, App(f, arg.a), ty2, locals, premise, holes ++ arg.holes),
+        })),
     }
 }
 
 // `apply(f, premise)`: use `f` backwards. Its conclusion is matched against
 // the goal with its parameters as unknowns, as few of them as it takes;
-// those the match determines are filled in, implicit ones included, and the
-// rest are proved left to right by `premise`.
+// those the match determines are filled in, implicit ones included. The
+// premises are proved left to right by `premise`, and a parameter only a
+// premise determines (`trans`'s middle point) is a hole that proving that
+// premise solves.
 fn apply(f: Expr, premise: Tac<Expr>) → Tac<Expr> {
     goal().bind(λ g => infer(f).bind(λ c => match c {
         Refused(why) => fail("apply: " ++ why, []),
         Accepted(ty) => match_conclusion(ty, g.target).bind(λ m => match m {
             Refused(why) => fail("apply: " ++ why, []),
-            Accepted(slots) => apply_slots(slots, f, ty, g.locals, premise),
+            Accepted(slots) => apply_slots(slots, f, ty, g.locals, premise, []),
         }),
     }))
 }
@@ -330,7 +406,8 @@ fn apply(f: Expr, premise: Tac<Expr>) → Tac<Expr> {
 // reason to call them.
 
 // 0: a result. 1: `Goal`. 2: `Defeq`. 3: `Fail`. 4: `Infer`. 5: `Open`.
-// 6: `Resolve`. 7: `View`. 8: `Whnf`. 9: `Match`.
+// 6: `Resolve`. 7: `View`. 8: `Whnf`. 9: `Match`. 10: `Hole`. 11: `Mark`.
+// 12: `Restore`. 13: `Lookup`.
 fn host_tag(t: Tac<Expr>) → Nat {
     match t {
         Pure(_) => 0,
@@ -344,6 +421,10 @@ fn host_tag(t: Tac<Expr>) → Nat {
             View(_) => 7,
             Whnf(_) => 8,
             Match(_, _) => 9,
+            Hole(_) => 10,
+            Mark => 11,
+            Restore(_) => 12,
+            Lookup(_) => 13,
         },
     }
 }
@@ -366,12 +447,25 @@ fn host_rhs(t: Tac<Expr>) → Expr {
     }
 }
 
-// The handle `Open`, `View` and `Whnf` are about; `Match`'s function type.
+// The handle `Open`, `View`, `Whnf` and `Hole` are about; `Match`'s function
+// type.
 fn host_handle(t: Tac<Expr>) → Nat {
     match t {
         Pure(_) => 0,
-        Ask(r, _) => match r { Open(h, _) => h.id, View(h) => h.id, Whnf(h) => h.id, Match(ty, _) => ty.id, _ => 0 },
+        Ask(r, _) => match r {
+            Open(h, _) => h.id,
+            View(h) => h.id,
+            Whnf(h) => h.id,
+            Match(ty, _) => ty.id,
+            Hole(ty) => ty.id,
+            _ => 0,
+        },
     }
+}
+
+// `Restore`'s mark.
+fn host_mark(t: Tac<Expr>) → Nat {
+    match t { Pure(_) => 0, Ask(r, _) => match r { Restore(m) => m, _ => 0 } }
 }
 
 // `Match`'s target.
@@ -379,29 +473,51 @@ fn host_target(t: Tac<Expr>) → Nat {
     match t { Pure(_) => 0, Ask(r, _) => match r { Match(_, target) => target.id, _ => 0 } }
 }
 
-// `Open`'s or `Resolve`'s name.
+// `Open`'s, `Resolve`'s or `Lookup`'s name.
 fn host_name(t: Tac<Expr>) → String {
-    match t { Pure(_) => "", Ask(r, _) => match r { Open(_, name) => name, Resolve(name) => name, _ => "" } }
-}
-
-fn render_note(indent: String, n: Note) → String {
-    match n {
-        Tried(what, verdict) => "\n" ++ indent ++ "tried " ++ what ++ ": " ++ verdict,
-        Under(m) => render_note(indent ++ "  ", m),
+    match t {
+        Pure(_) => "",
+        Ask(r, _) => match r { Open(_, name) => name, Resolve(name) => name, Lookup(name) => name, _ => "" },
     }
 }
 
-fn render_notes(ns: List<Note>) → String {
-    match ns { Nil => "", Cons(n, rest) => render_note("  ", n) ++ render_notes(rest) }
-}
-
-// A failure's message followed by its notes, one per line.
+// A failure's message. Its notes are read one at a time, and the elaborator
+// renders them, since an `At` note's term is spelled by its diagnostics.
 fn host_failure(t: Tac<Expr>) → String {
     match t {
         Pure(_) => "",
-        Ask(r, _) => match r { Fail(msg, notes) => msg ++ render_notes(notes), _ => "" },
+        Ask(r, _) => match r { Fail(msg, _) => msg, _ => "" },
     }
 }
+
+fn host_notes(t: Tac<Expr>) → List<Note> {
+    match t { Pure(_) => [], Ask(r, _) => match r { Fail(_, notes) => notes, _ => [] } }
+}
+
+fn notes_len(ns: List<Note>) → Nat { match ns { Nil => 0, Cons(_, rest) => Succ(notes_len(rest)) } }
+
+fn notes_at(ns: List<Note>, i: Nat) → Note {
+    match ns {
+        Nil => Tried("", ""),
+        Cons(n, rest) => match i { Zero => n, Succ(j) => notes_at(rest, j) },
+    }
+}
+
+fn host_note_count(t: Tac<Expr>) → Nat { notes_len(host_notes(t)) }
+
+fn host_note(t: Tac<Expr>, i: Nat) → Note { notes_at(host_notes(t), i) }
+
+// 0: `Tried`. 1: `Under`. 2: `At`.
+fn note_tag(n: Note) → Nat { match n { Tried(_, _) => 0, Under(_) => 1, At(_, _) => 2 } }
+
+fn note_what(n: Note) → String { match n { Tried(what, _) => what, _ => "" } }
+
+fn note_verdict(n: Note) → String { match n { Tried(_, verdict) => verdict, _ => "" } }
+
+// The note an `Under` or an `At` is about.
+fn note_inner(n: Note) → Note { match n { Under(m) => m, At(_, m) => m, _ => n } }
+
+fn note_expr(n: Note) → Expr { match n { At(e, _) => e, _ => NatLit(0) } }
 
 // The tree after its request is answered with `a`. An answer of the wrong
 // kind leaves the tree as it is, which the host reports as its own error.
@@ -412,14 +528,15 @@ fn host_resume(t: Tac<Expr>, a: Answer) → Tac<Expr> {
     }
 }
 
-// 0: `Hd`. 1: `Local`. 2: `App`. 3: `NatLit`. 4: `Lam`.
+// 0: `Hd`. 1: `Local`. 2: `App`. 3: `NatLit`. 4: `Lam`. 5: `Global`.
 fn expr_tag(e: Expr) → Nat {
-    match e { Hd(_) => 0, Local(_) => 1, App(_, _) => 2, NatLit(_) => 3, Lam(_, _) => 4 }
+    match e { Hd(_) => 0, Local(_) => 1, App(_, _) => 2, NatLit(_) => 3, Lam(_, _) => 4, Global(_) => 5 }
 }
 
-// The number a leaf carries: a handle, a local or a literal; `Lam`'s local.
+// The number a leaf carries: a handle, a local, a literal or a global;
+// `Lam`'s local.
 fn expr_nat(e: Expr) → Nat {
-    match e { Hd(h) => h.id, Local(x) => x.id, App(_, _) => 0, NatLit(n) => n, Lam(x, _) => x.id }
+    match e { Hd(h) => h.id, Local(x) => x.id, App(_, _) => 0, NatLit(n) => n, Lam(x, _) => x.id, Global(g) => g.id }
 }
 
 fn expr_fn(e: Expr) → Expr { match e { App(f, _) => f, _ => e } }
@@ -452,14 +569,16 @@ fn host_goal_local(a: Answer, ref: Nat, name: String, ty: Nat) → Answer {
 }
 
 // 0 is `False`, anything else `True`.
-fn host_bool(n: Nat) → Answer { match n { Zero => ABool(False), Succ(_) => ABool(True) } }
+fn bool_of(n: Nat) → Bool { match n { Zero => False, Succ(_) => True } }
+
+fn host_bool(n: Nat) → Answer { ABool(bool_of(n)) }
 
 fn host_accepted(h: Nat) → Answer { AHandle(Accepted(Handle(h))) }
 
 fn host_refused(why: String) → Answer { AHandle(Refused(why)) }
 
-fn host_opened(ref: Nat, name: String, ty: Nat, body: Nat) → Answer {
-    AOpened(Accepted(Opened(LocalInfo(LocalRef(ref), name, Handle(ty)), Handle(body))))
+fn host_opened(ref: Nat, name: String, ty: Nat, body: Nat, dependent: Nat) → Answer {
+    AOpened(Accepted(Opened(LocalInfo(LocalRef(ref), name, Handle(ty)), Handle(body), bool_of(dependent))))
 }
 
 fn host_not_opened(why: String) → Answer { AOpened(Refused(why)) }
@@ -468,11 +587,13 @@ fn host_head_pi(dom: Nat) → Answer { AHead(HPi(Handle(dom))) }
 
 fn host_head_eq(lhs: Nat, rhs: Nat) → Answer { AHead(HEq(Handle(lhs), Handle(rhs))) }
 
-fn host_head_global(name: String) → Answer { AHead(HGlobal(name, [])) }
+fn host_head_global(g: Nat, name: String) → Answer { AHead(HGlobal(GlobalRef(g), name, [])) }
 
 fn host_head_local(x: Nat) → Answer { AHead(HLocal(LocalRef(x), [])) }
 
 fn host_head_lit(n: Nat) → Answer { AHead(HLit(n)) }
+
+fn host_head_hole() → Answer { AHead(HHole) }
 
 fn host_head_other() → Answer { AHead(HOther) }
 
@@ -480,7 +601,7 @@ fn host_head_other() → Answer { AHead(HOther) }
 fn host_head_arg(a: Answer, h: Nat) → Answer {
     match a {
         AHead(v) => match v {
-            HGlobal(name, args) => AHead(HGlobal(name, args ++ [Handle(h)])),
+            HGlobal(g, name, args) => AHead(HGlobal(g, name, args ++ [Handle(h)])),
             HLocal(x, args) => AHead(HLocal(x, args ++ [Handle(h)])),
             _ => a,
         },
@@ -506,6 +627,14 @@ fn host_open_slot(a: Answer) → Answer {
 }
 
 fn host_not_matched(why: String) → Answer { AMatch(Refused(why)) }
+
+fn host_nat(n: Nat) → Answer { ANat(n) }
+
+fn host_unit() → Answer { AUnit }
+
+fn host_global(g: Nat) → Answer { AGlobal(Accepted(GlobalRef(g))) }
+
+fn host_no_global(why: String) → Answer { AGlobal(Refused(why)) }
 
 // A term of the goal's context, quoted where a tactic's argument expects an
 // `Expr`.
