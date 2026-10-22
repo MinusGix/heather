@@ -524,13 +524,18 @@ pub fn spell_checked_in_code(
     spell_checked(psi, univs, layer, gamma, t, ty, level, fuel, true)
 }
 
-/// [`spell_checked_in_code`] for an **export**: every checked spelling but
-/// `app@`, which an export target reads as an application with no
-/// annotations to write. Spelling `app@` is what makes the passes cascade
-/// on a library proof: its components are the callee's statement
-/// instantiated at the arguments, each instantiation carrying the
-/// statement's own spellings, which the next pass spells again
-/// (`docs/export-fragment-design.md` §5.6).
+/// [`spell_checked_in_code`] for an **export**: the introductions `pair@`,
+/// `inl@`, `inr@` only. An export target reads `app@` as an application and
+/// `fst@`/`snd@` as its own projections, which take the pair's type from the
+/// pair, so none of the three has annotations to write. Spelling them is
+/// what makes the passes cascade on a library proof
+/// (`docs/export-fragment-design.md` §5.6): an `app@`'s components are the
+/// callee's statement instantiated at the arguments, and a projection's are
+/// the rest of a class record, whose later field statements mention the
+/// earlier fields as `fst@`s of the record. Each instantiation carries
+/// spellings of its own, which the next pass spells again, and their
+/// annotations grow exponentially with the field index
+/// (issues/export-spelling-cost.md).
 #[allow(clippy::too_many_arguments)]
 pub fn spell_checked_for_export(
     psi: &GlobalCtx,
@@ -555,18 +560,18 @@ fn spell_checked(
     ty: &Type,
     level: &Level,
     fuel: u64,
-    apps: bool,
+    all: bool,
 ) -> R<Rc<Term>> {
     const PASSES: usize = 16;
     let base = gamma.entries.len() as u32;
     let mut t = t;
     for _ in 0..PASSES {
-        if crate::subst::count_checked_spellings(&t, apps) == 0 {
+        if crate::subst::count_checked_spellings(&t, all) == 0 {
             return Ok(t);
         }
         let mut tc = Tc::eager(fuel);
         tc.spellings = Some(RefCell::new(HashMap::new()));
-        tc.spell_apps = apps;
+        tc.spell_all = all;
         let env = Env {
             psi: psi.clone(),
             cache: Rc::new(GlobalCache::new()),
@@ -580,7 +585,7 @@ fn spell_checked(
         tc.tm_check_ty(&env, &t, ty, level)?;
         let mut spelled = tc.spellings.take().expect("set above").into_inner();
         share_spelled(&mut spelled);
-        let (next, replaced) = crate::subst::rebuild_checked_spellings(&t, &spelled, base, apps);
+        let (next, replaced) = crate::subst::rebuild_checked_spellings(&t, &spelled, base, all);
         // `replaced` counts the nodes unshared for an ambiguous record too:
         // the next pass sees each occurrence on its own.
         if replaced == 0 {
@@ -629,18 +634,18 @@ fn spell_checked_ty(
     t: Rc<Type>,
     level: &Level,
     fuel: u64,
-    apps: bool,
+    all: bool,
 ) -> R<Rc<Type>> {
     const PASSES: usize = 16;
     let base = gamma.entries.len() as u32;
     let mut t = t;
     for _ in 0..PASSES {
-        if crate::subst::count_checked_spellings_ty(&t, apps) == 0 {
+        if crate::subst::count_checked_spellings_ty(&t, all) == 0 {
             return Ok(t);
         }
         let mut tc = Tc::eager(fuel);
         tc.spellings = Some(RefCell::new(HashMap::new()));
-        tc.spell_apps = apps;
+        tc.spell_all = all;
         let env = Env {
             psi: psi.clone(),
             cache: Rc::new(GlobalCache::new()),
@@ -654,7 +659,7 @@ fn spell_checked_ty(
         tc.ty_check(&env, &t, level)?;
         let mut spelled = tc.spellings.take().expect("set above").into_inner();
         share_spelled(&mut spelled);
-        let (next, replaced) = crate::subst::rebuild_checked_spellings_ty(&t, &spelled, base, apps);
+        let (next, replaced) = crate::subst::rebuild_checked_spellings_ty(&t, &spelled, base, all);
         // `replaced` counts the nodes unshared for an ambiguous record too:
         // the next pass sees each occurrence on its own.
         if replaced == 0 {
@@ -943,9 +948,9 @@ struct Tc {
     /// annotation where the scrutinee is a constructor). Such a node's entry
     /// is `None`, and the rebuild unshares it for the next pass.
     spellings: Option<RefCell<HashMap<(usize, u32), Option<Spelled>>>>,
-    /// Whether `spellings` records `app@` (the export's spelling does not:
-    /// [`spell_checked_for_export`]).
-    spell_apps: bool,
+    /// Whether `spellings` records every checked spelling, or only the
+    /// introductions the export spells ([`spell_checked_for_export`]).
+    spell_all: bool,
     /// Successful conversions whose syntax has different outer constructors.
     /// The cache lives for one public kernel gate; identity keys own every `Rc`
     /// they identify, so allocator reuse cannot create an aliasing key.
@@ -1089,7 +1094,7 @@ impl Tc {
             fuel,
             materialize_eagerly,
             spellings: None,
-            spell_apps: true,
+            spell_all: true,
             conv_memo: RefCell::new(HashMap::new()),
             conv_memo_entries: Cell::new(0),
             #[cfg(feature = "value-metrics")]
@@ -1586,6 +1591,9 @@ impl Tc {
     /// translator is not in eager mode, and nothing is kept.
     fn record(&self, env: &Env, t: &Term, form: &TyForm) {
         let Some(rec) = &self.spellings else { return };
+        if !self.spell_all && matches!(t, Term::FstAt { .. } | Term::SndAt { .. } | Term::AppAt { .. }) {
+            return;
+        }
         let syn = |t: &ITy| match t {
             ITy::Syn(t) => Some(Rc::clone(t)),
             ITy::Owned(t) => Some(Rc::new(t.clone())),
@@ -2457,7 +2465,7 @@ impl Tc {
     /// One `app@` node `t = app@(f; arg)`, `f` inferred as `fun_ty`.
     fn app_at_node(&self, env: &Env, t: &Term, fun_ty: ITy, arg: &Rc<Term>) -> R<(ITy, Level)> {
         if let Some(Type::Pi { dom_level, cod_level, dom, cod }) = fun_ty.as_syn() {
-            if let Some(rec) = self.spellings.as_ref().filter(|_| self.spell_apps) {
+            if let Some(rec) = self.spellings.as_ref().filter(|_| self.spell_all) {
                 keep_spelled(
                     rec,
                     (t as *const Term as usize, env.gamma.entries.len() as u32),

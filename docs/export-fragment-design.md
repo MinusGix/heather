@@ -468,12 +468,27 @@ changes, each shaped by what it cost:
   and rebuilt unshared, the copies multiplied the term by their size. The
   elaborator's quote boundary gets that sharing as well.
 
-What is left is the eager checker inside `⌊·⌋` itself, a tree walk: it
-re-checks the class's record type at every theorem's binder, tens of
-seconds a theorem in `ordered_field`, and past the address-space rail on
-one (`one_apart_zero`). That is
-[export-spelling-cost](../issues/export-spelling-cost.md); the typed
-exporter would do the same work once, in the walk that translates.
+**`⌊·⌋` for export leaves the projections too (2026-10-22).** What still
+kept `ordered_field` out was the same cascade one former over
+([export-spelling-cost](../issues/export-spelling-cost.md)). A class whose
+parameters are relations has no named projection definitions, so its
+fields are `fst@`/`snd@` chains on the instance. Spelling `snd@(p)` writes
+the rest of the record `Σ` as its annotation, and the `snd@` rule types it
+as that rest with a fresh `fst@(p)` for the field before it, so every later
+field statement that mentions an earlier field brings a new spelling for
+the next pass. `Ring::neg_mul`'s spellings grew more than tenfold a pass,
+and `one_apart_zero`'s ran past the rail by the fourth. Written in
+full, each such `fst` carries the record's remaining fields as its own
+annotation, so the spelled term grows exponentially with the field index,
+which is the reason the elaborator names record projections
+(`GenDef::RecProj`). The export needs none of it: Lean's kernel types a
+projection from the pair (`Expr.proj`), and so does a Rocq primitive
+projection. `fst@`/`snd@` now translate to [`Hx::Proj`], printed as
+`Expr.proj` on the kernel route (`j` lines), `p.1` in Lean text and
+`p.(@Hx.fst_ _ _)` in Rocq, and `⌊·⌋` for export spells only `pair@`,
+`inl@` and `inr@`. A proof's spelling then finishes in one or two passes,
+and `ordered_field` with its imports exports at the cost of the
+modules before it.
 
 ### 5.7 Opacity
 
@@ -521,8 +536,7 @@ that stopped the translation:
 5. irrelevance that only appears after a substitution (§5.2's gap);
 6. cost: accelerated evaluation (§5.4), which Lean's kernel meets as deep
    recursion when a proof evaluates on large numerals (`utf8`'s byte
-   arithmetic); and the cost of spelling proofs for export
-   ([export-spelling-cost](../issues/export-spelling-cost.md)).
+   arithmetic).
 
 ## 7. The prototype
 
@@ -592,7 +606,7 @@ elaborator's opinion on the same declarations.
 Then the whole library (`crates/export/tests/library_wide.rs`, run by
 `scripts/export-recheck --wide`, a release build that takes minutes): every
 module of `lib/std` but `ordered_field` and its importers `rat` and `creal`
-([export-spelling-cost](../issues/export-spelling-cost.md)). It needed the
+at first ([export-spelling-cost](../issues/export-spelling-cost.md)). It needed the
 translation to keep the kernel term's sharing (§5.6), globals over a local
 context (§6) and `elimW`'s step domains written out, which removed the last
 hole. On 2026-10-21:
@@ -604,9 +618,22 @@ hole. On 2026-10-21:
 | slice and sweep, Lean, both routes | unchanged | all accepted |
 | slice, Coq 8.18 | unchanged | all accepted |
 
-So the refusals by cause are the whole of what stops the library today,
+So the refusals by cause were the whole of what stopped the library,
 inside the rails: inductive coverage, one evaluation cost, and the
-spelling cost that keeps three modules out.
+spelling cost that kept three modules out.
+
+On 2026-10-22, with projections left to the targets (§5.6), the sweep takes
+every module. The singleton test (§5.2) also had to read a global's
+statement in that global's own prefix of Ψ: `rat` was the first module to
+reach a closed singleton statement whose unfolding the unshifted read sent
+to the wrong definition.
+
+| | declarations | result |
+|---|---|---|
+| export | 51 modules, 3660 bindings, release build under the 6 GiB rail | 3575 exported; refused: 61 tier-2 inductive uses, 1 use at another level (`relation::AnyOf`), 23 that mention a refused one |
+| wide, Lean kernel route | 3575 | all accepted but the same 16 in `utf8` (§5.4); `ordered_field`, `rat` and `creal` included; no axioms |
+| slice and sweep, Lean, both routes | unchanged | all accepted |
+| slice, Coq 8.18 | unchanged | all accepted; the sweep still stops at `Bool::is_true_unique` |
 
 The probes (`crates/export/probes/`) are the evidence behind §3 and §5.1. They
 are not part of `scripts/test`, because the suite does not assume Lean or
@@ -695,7 +722,8 @@ singleton-aware `case` (§5.3); what it still lacks is §6's F_Rocq. The
 whole-library sweep (§7) added two:
 
 6. [export-spelling-cost](../issues/export-spelling-cost.md): bring
-   `ordered_field`, `rat` and `creal` inside the rails.
+   `ordered_field`, `rat` and `creal` inside the rails. Closed
+   2026-10-22: `⌊·⌋` leaves the projections (§5.6).
 7. [export-inductive-coverage](../issues/export-inductive-coverage.md):
    tier-2 inductives and level-polymorphic uses as native inductives.
 

@@ -1,22 +1,14 @@
 //! The whole-library sweep (`docs/export-fragment-design.md` §7): every
-//! module of `lib/std` but the ordered-field tower, exported, with each
-//! refusal counted by cause. Opt-in (`#[ignore]`): it elaborates the
+//! module of `lib/std`, exported, with each refusal counted by cause. Opt-in (`#[ignore]`): it elaborates the
 //! library and spells every proof, which is minutes of release time and
 //! past the suite's rails in a debug build. `scripts/export-recheck --wide`
 //! runs it and hands `Wide.hxk` to Lean's kernel.
-//!
-//! Left out: `ordered_field` and what imports it (`rat`, `creal`). The eager
-//! `⌊·⌋` re-checks the class's record type at every theorem's binder, which
-//! is tens of seconds a theorem there and past the address-space rail on
-//! one (`issues/export-spelling-cost.md`).
 
 use heather_cli::loader;
 use heather_elab::Elaborator;
 use heather_export::{Source, export, print_kernel};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-
-const LEFT_OUT: &[&str] = &["ordered_field", "rat", "creal"];
 
 /// The causes a refusal may have today; a new one is a change to look at.
 const KNOWN: &[&str] = &[
@@ -35,12 +27,10 @@ fn std_library_exports() {
         .unwrap()
         .map(|e| e.unwrap().path())
         .filter(|p| p.extension().is_some_and(|x| x == "hthr"))
-        .filter(|p| !LEFT_OUT.iter().any(|m| p.file_stem().is_some_and(|s| s == *m)))
         .collect();
     roots.sort();
     let refs: Vec<&Path> = roots.iter().map(PathBuf::as_path).collect();
     let modules = loader::load_many(&refs, &[root.clone()]).map_err(|e| e.msg).expect("load");
-    assert!(!modules.iter().any(|m| LEFT_OUT.contains(&m.name.as_str())), "a module left out is imported");
     let mut e = Elaborator::with_prelude_for_export().expect("prelude");
     for m in &modules {
         e.elab_module_source(&m.name, &m.src).unwrap_or_else(|err| panic!("{}: {err}", m.name));

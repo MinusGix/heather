@@ -66,3 +66,6 @@ replacement symbol where the two theories differ. The first round:
   `utf8` proofs that evaluate on large numerals (design §7). What stops
   the rest is filed: [[export-inductive-coverage]] and
   [[export-spelling-cost]].
+- 2026-10-22: [[export-spelling-cost]] closed: `⌊·⌋` for export leaves
+  `fst@`/`snd@` to the targets (`Hx::Proj`), and the ordered-field tower,
+  `rat` and `creal` export too (design §7).

@@ -27,6 +27,7 @@ enum Key {
     Pi(u32, u32),
     Lam(u32, u32),
     App(u32, u32),
+    Proj(u8, u32),
     Const(&'static str, Vec<u64>),
     Global(usize),
     Named(String, Vec<u64>),
@@ -127,6 +128,13 @@ impl Share {
         })
     }
 
+    fn proj(&mut self, i: u8, p: u32) -> u32 {
+        self.intern(Key::Proj(i, p), |s| {
+            let ip = &s.info[p as usize];
+            Info { size: 1 + ip.size, free: ip.free.clone(), hole: ip.hole }
+        })
+    }
+
     fn leaf_key(t: &Hx) -> Key {
         match t {
             Hx::Var(i) => Key::Var(*i),
@@ -136,7 +144,7 @@ impl Share {
             Hx::Named(k, ls) => Key::Named(k.clone(), ls.clone()),
             Hx::NatLit(n) => Key::Nat(n.clone()),
             Hx::Hole => Key::Hole,
-            Hx::Pi(..) | Hx::Lam(..) | Hx::App(..) => unreachable!("not a leaf"),
+            Hx::Pi(..) | Hx::Lam(..) | Hx::App(..) | Hx::Proj(..) => unreachable!("not a leaf"),
         }
     }
 
@@ -167,6 +175,10 @@ impl Share {
             Hx::App(f, a) => {
                 let (i_f, ia) = (self.id_of(f, memo), self.id_of(a, memo));
                 self.app(i_f, ia)
+            }
+            Hx::Proj(i, p) => {
+                let ip = self.id_of(p, memo);
+                self.proj(*i, ip)
             }
             _ => self.leaf(Self::leaf_key(t)),
         };
@@ -200,6 +212,10 @@ impl Share {
             Hx::App(f, a) => {
                 let (i_f, ia) = (self.count_in(f, ctxs), self.count_in(a, ctxs));
                 self.app(i_f, ia)
+            }
+            Hx::Proj(i, p) => {
+                let ip = self.count_in(p, ctxs);
+                self.proj(*i, ip)
             }
             _ => self.leaf(Self::leaf_key(t)),
         };
@@ -247,6 +263,10 @@ impl Share {
             Hx::App(f, a) => {
                 let ((i_f, rf, lf), (ia, ra, la)) = (self.rewrite_in(f, scopes), self.rewrite_in(a, scopes));
                 (self.app(i_f, ia), Hx::App(Rc::new(rf), Rc::new(ra)), union(&lf, la.into_iter()))
+            }
+            Hx::Proj(i, p) => {
+                let (ip, rp, lp) = self.rewrite_in(p, scopes);
+                (self.proj(*i, ip), Hx::Proj(*i, Rc::new(rp)), lp)
             }
             Hx::Var(i) => (self.leaf(Key::Var(*i)), t.clone(), vec![(depth - 1 - *i as usize) as u32]),
             _ => (self.leaf(Self::leaf_key(t)), t.clone(), vec![]),
@@ -319,6 +339,7 @@ fn remap(t: &Hx, outer: usize, map: &[Option<u32>], new_outer: u32, cut: u32) ->
             Hx::Pi(a, b) => Hx::Pi(go(a, outer, map, new_outer, cut, memo), go(b, outer, map, new_outer, cut + 1, memo)),
             Hx::Lam(a, b) => Hx::Lam(go(a, outer, map, new_outer, cut, memo), go(b, outer, map, new_outer, cut + 1, memo)),
             Hx::App(f, a) => Hx::App(go(f, outer, map, new_outer, cut, memo), go(a, outer, map, new_outer, cut, memo)),
+            Hx::Proj(i, p) => Hx::Proj(*i, go(p, outer, map, new_outer, cut, memo)),
             _ => t.clone(),
         });
         memo.insert(key, out.clone());
