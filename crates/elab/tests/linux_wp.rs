@@ -20,11 +20,9 @@
 
 use crate::read_loop_fixture::checker_with;
 
+// The byte model's modules come last, so the list up to `linux_x86_64_wp`
+// stays the prefix other targets replay.
 pub(crate) const MODULES: &[(&str, &str)] = &[
-    ("result", include_str!("../../../lib/std/result.hthr")),
-    ("vector", include_str!("../../../lib/std/vector.hthr")),
-    ("bitvec_bytes", include_str!("../../../lib/std/bitvec/bitvec_bytes.hthr")),
-    ("memory", include_str!("../../../lib/std/memory.hthr")),
     ("x86_64_step_forms", include_str!("../../../lib/std/arch/x86_64/x86_64_step_forms.hthr")),
     ("linux_x86_64_determinism", include_str!("../../../lib/linux_x86_64_determinism.hthr")),
     ("itree", include_str!("../../../lib/std/itree.hthr")),
@@ -35,6 +33,10 @@ pub(crate) const MODULES: &[(&str, &str)] = &[
     ("x86_64_asm", include_str!("../../../lib/std/arch/x86_64/x86_64_asm.hthr")),
     ("x86_64_asm_runs", include_str!("../../../lib/std/arch/x86_64/x86_64_asm_runs.hthr")),
     ("linux_x86_64_wp", include_str!("../../../lib/linux_x86_64_wp.hthr")),
+    ("result", include_str!("../../../lib/std/result.hthr")),
+    ("vector", include_str!("../../../lib/std/vector.hthr")),
+    ("bitvec_bytes", include_str!("../../../lib/std/bitvec/bitvec_bytes.hthr")),
+    ("memory", include_str!("../../../lib/std/memory.hthr")),
     ("x86_64_byte_memory", include_str!("../../../lib/std/arch/x86_64/x86_64_byte_memory.hthr")),
     ("linux_x86_64_byte_memory", include_str!("../../../lib/linux_x86_64_byte_memory.hthr")),
     ("linux_x86_64_image", include_str!("../../../lib/linux_x86_64_image.hthr")),
