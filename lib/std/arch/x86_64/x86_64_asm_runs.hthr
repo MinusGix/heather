@@ -257,17 +257,36 @@ theorem jmp_lands(labels: Nat → Nat, k: Nat): (p, before: Prog) → (name: Nat
     }
 }
 
+// Every jump's and call's target is a name `whole` gives. A missing name
+// sits at offset 0, which a JMP or CALL can reach backwards, so landing
+// alone does not refuse it.
+fn targets_named_in(whole: Prog, p: Prog) → Bool {
+    match p {
+        Start => True,
+        At(before, _, item) => (match item {
+            Jcc(_, target) => !whole.lacks(target),
+            Jmp(target) => !whole.lacks(target),
+            CallTo(target) => !whole.lacks(target),
+            _ => True,
+        }) && targets_named_in(whole, before),
+    }
+}
+fn Prog::targets_named(self p: Prog) → Bool { targets_named_in(p, p) }
+
 // The one check: what a producer evaluates before it hands a program out.
-fn Prog::laid_out(self p: Prog) → Bool { p.no_holes() && (p.names_unique() && p.jumps_land()) }
+fn Prog::laid_out(self p: Prog) → Bool { p.no_holes() && (p.names_unique() && (p.jumps_land() && p.targets_named())) }
 
 theorem Prog::laid_out_fits(self p: Prog, laid: p.laid_out().IsTrue()): FillsFit(p, no_fills()) {
-    p.no_holes_fit(Bool::is_true_and(p.no_holes(), p.names_unique() && p.jumps_land(), laid).left)
+    p.no_holes_fit(Bool::is_true_and(p.no_holes(), p.names_unique() && (p.jumps_land() && p.targets_named()), laid).left)
 }
 theorem Prog::laid_out_unique(self p: Prog, laid: p.laid_out().IsTrue()): p.names_unique().IsTrue() {
-    Bool::is_true_and(p.names_unique(), p.jumps_land(), Bool::is_true_and(p.no_holes(), p.names_unique() && p.jumps_land(), laid).right).left
+    Bool::is_true_and(p.names_unique(), p.jumps_land() && p.targets_named(),
+        Bool::is_true_and(p.no_holes(), p.names_unique() && (p.jumps_land() && p.targets_named()), laid).right).left
 }
 theorem Prog::laid_out_lands(self p: Prog, laid: p.laid_out().IsTrue()): p.jumps_land().IsTrue() {
-    Bool::is_true_and(p.names_unique(), p.jumps_land(), Bool::is_true_and(p.no_holes(), p.names_unique() && p.jumps_land(), laid).right).right
+    Bool::is_true_and(p.jumps_land(), p.targets_named(),
+        Bool::is_true_and(p.names_unique(), p.jumps_land() && p.targets_named(),
+            Bool::is_true_and(p.no_holes(), p.names_unique() && (p.jumps_land() && p.targets_named()), laid).right).right).left
 }
 
 // ---------------------------------------------------------------------------

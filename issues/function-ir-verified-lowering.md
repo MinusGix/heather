@@ -280,6 +280,11 @@ costs a refusal, never a wrong program.
      `ofNat(r)`, `r < 2^64`, and decremented by `BitVec::toNat_decrement`.
      The x86 side gained `Site::moves_block`, `moves_jump` (ahead or
      behind) and `moves_test`.
+   - A JMP may now land behind it, as a CALL already could. A name no
+     label has resolves to offset 0, which a backward jump reaches, so
+     `Prog::laid_out` gained `targets_named`: every Jcc, JMP and CALL
+     target must be a name of the program (round 2's missing-label control
+     caught this).
    - **Well-founded functions:** `loop_runs_unexhausted` takes an
      invariant on the state and a measure that every pass which goes round
      decreases, and shows that a loop entered with the measure below the
