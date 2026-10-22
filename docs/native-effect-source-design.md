@@ -426,11 +426,23 @@ buffers as its shape requires.
 
 ### 7.2 The environment
 
-`Env` holds words (a `Valuation()`, so FunctionIR's evaluator applies
-directly) and buffers (`Nat → Bytes`). The update `env.answer(shape, a)`
+`Env` holds words and buffers. The update `env.answer(shape, a)`
 decodes a Linux answer into the environment as the machine sees it: a count
 or a negated errno in `result`, and a read's bytes in `buf`'s prefix. It is
 defined once per call shape.
+
+*As landed (S3.1, `lib/native_source.hthr`):* both files are data, not
+functions: `words: List<Nat>` and `buffers: List<Bytes>`, indexed by id.
+
+- A region sees them through `Env::valuation`, which reads each word at
+  every width as its low bits.
+- What a region writes is read back at each written port's width and stored
+  zero-extended (`Env::settle`).
+
+As functions (`Valuation()`, `Nat → Bytes`), each read re-ran the updates
+that built the value, so evaluation cost compounded with every statement.
+As constructor fields, each word is computed once. Longer runs still meet
+the kernel's bounded value cache: `issues/kernel-value-cache-evaluation-thrash.md`.
 
 ### 7.3 `denote`
 

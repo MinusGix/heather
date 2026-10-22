@@ -1,0 +1,129 @@
+// `cat` in the effectful layer (`native_source`; issues/native-effect-source-compiler.md,
+// round S3.1), run against a scripted world by evaluation.
+//
+// cat reads stdin into its one buffer, and writes what it read to stdout
+// until all of it is sent, then reads again; at the end of the input it
+// exits 0, and on a failed read or write it exits 1: `tr_spec(λ b => b)`'s
+// behaviour, with a buffer.
+//
+// The world answers every read with at most `chunk` bytes of the input and
+// takes at most `chunk` bytes of every write, so a small chunk drives cat
+// round both of its loops; a world whose writes fail answers each with EIO.
+
+import native_source;
+import function_ir;
+import function_ir_eval;
+import linux_calls;
+import linux_trees;
+import itree;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+import pair;
+
+// ---------------------------------------------------------------------------
+// cat
+
+fn ops(nodes: List<Node>) → Stmt { Compute(Dataflow(Region(Ports([]), nodes, Ports([])))) }
+
+// Words: 0 stdin, 1 stdout, 2 the buffer's capacity, 3 what a read
+// returned, 4 how much of it is sent, 5 how much is left, 6 what a write
+// returned, 10 and 11 the statuses 1 and 0, 13 the next sent count, 16 zero.
+// Bits: 7 the read failed, 8 the input ended, 12 the write failed, 14 write
+// again, 15 read again, 17 nothing left, 18 stop writing, 19 one.
+fn cat_setup(capacity: Nat) → Stmt {
+    ops([Const(64, 0, 0), Const(64, 1, 1), Const(64, 2, capacity), Const(64, 10, 1), Const(64, 11, 0),
+        Const(64, 16, 0), Const(1, 15, 1), Const(1, 19, 1)])
+}
+
+// One write of what is left, and whether to write again.
+fn cat_write() → Stmt {
+    Then(Invoke(Writes(1, 0, 4, 5, 6)),
+        Then(ops([SignedLessThan(64, 12, 6, 16), Add(64, 13, 4, 6)]),
+            Then(ops([Move(64, 4, 13), Sub(64, 5, 3, 13)]),
+                ops([Equal(64, 17, 5, 16), BitOr(1, 18, 12, 17), BitXor(1, 14, 18, 19)]))))
+}
+
+// One read, and everything it read written.
+fn cat_pass() → Stmt {
+    Then(Invoke(Reads(0, 0, 2, 3)),
+        Then(ops([SignedLessThan(64, 7, 3, 16), Equal(64, 8, 3, 16)]),
+            Branch(7, Exit(10),
+                Branch(8, Exit(11),
+                    Then(ops([Const(64, 4, 0), Move(64, 5, 3)]),
+                        Then(Repeat(cat_write(), 14),
+                            Branch(12, Exit(10), ops([]))))))))
+}
+
+fn cat(capacity: Nat) → Source {
+    Source(functions := [], buffers := [capacity], main := Then(cat_setup(capacity), Repeat(cat_pass(), 15)))
+}
+
+// ---------------------------------------------------------------------------
+// A scripted world
+
+inductive Ran { Finished(status: BitVec(64), output: List<BitVec(8)>), RanOut }
+
+// Linux's answer from the input left, and the input left after it.
+fn world_answer(chunk: Nat, fails: Bool, c: LinuxCmd<Nat>, input: List<BitVec(8)>) → Pair<c.Resp(), List<BitVec(8)>> {
+    match c as λ d => Pair<d.Resp(), List<BitVec(8)>> {
+        ReadCmd(_, max) => Pair(ReadBytes(input.take(max.min(chunk))), input.drop(max.min(chunk))),
+        WriteCmd(_, bytes) => Pair(match fails { False => Wrote(bytes.len().min(chunk)), True => WriteFailed(5) }, input),
+        OpenCmd(_) => Pair(OpenFailed(2), input),
+        CloseCmd(_) => Pair(Closed, input),
+        StatCmd(_) => Pair(StatFailed(2), input),
+    }
+}
+
+// What the answer took from a write.
+fn world_sent(c: LinuxCmd<Nat>) → c.Resp() → List<BitVec(8)> {
+    match c as λ d => d.Resp() → List<BitVec(8)> {
+        ReadCmd(_, _) => λ _ => Nil,
+        WriteCmd(_, bytes) => λ (r: WriteResult) => match r { Wrote(count) => bytes.take(count), WriteFailed(_) => Nil },
+        OpenCmd(_) => λ _ => Nil,
+        CloseCmd(_) => λ _ => Nil,
+        StatCmd(_) => λ _ => Nil,
+    }
+}
+
+fn world_run(chunk: Nat, fails: Bool, t: ITree<BitVec(64)>(Events::linux())) → List<BitVec(8)> → List<BitVec(8)> → Ran {
+    match t {
+        Ret(status) => λ input output => Finished(status, output),
+        Tau(s) => λ input output => world_run(chunk, fails, s, input, output),
+        Vis(c, k) => λ input output => {
+            let answer = world_answer(chunk, fails, c, input);
+            world_run(chunk, fails, k(answer.fst), answer.snd, output ++ world_sent(c, answer.fst))
+        },
+        Cut => λ input output => RanOut,
+    }
+}
+
+fn byte(n: Nat) → BitVec(8) { BitVec::ofNat(n) }
+
+// ---------------------------------------------------------------------------
+// Runs
+//
+// Each run is evaluated by the kernel, word by word at width 64, so they are
+// kept short: a longer one thrashes the kernel's bounded value cache before
+// it runs out of fuel (issues/kernel-value-cache-evaluation-thrash.md).
+
+// Nothing in, nothing out.
+theorem cat_empty(): world_run(1, False, cat(2).denote().at(3), Nil, Nil) = Finished(BitVec::ofNat(0), Nil) { refl }
+
+// One byte, read and written.
+theorem cat_copies_one(): world_run(1, False, cat(2).denote().at(6), [byte(7)], Nil)
+    = Finished(BitVec::ofNat(0), [byte(7)]) { refl }
+
+// A whole buffer at a time.
+theorem cat_copies_whole(): world_run(2, False, cat(2).denote().at(6), [byte(104), byte(105)], Nil)
+    = Finished(BitVec::ofNat(0), [byte(104), byte(105)]) { refl }
+
+// A write that fails ends cat with status 1, having sent nothing.
+theorem cat_write_fails(): world_run(2, True, cat(2).denote().at(6), [byte(1)], Nil)
+    = Finished(BitVec::ofNat(1), Nil) { refl }
+
+// Too little fuel cuts the run.
+theorem cat_cut(): world_run(1, False, cat(2).denote().at(1), [byte(1)], Nil) = RanOut { refl }
