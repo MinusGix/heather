@@ -729,7 +729,7 @@ the formalization is cited as the `heather-coq` repository.
 ### 4.5 The formal `Id` rules against the model (2026-09-30)
 
 The formalization gained `Id` in its milestone M11
-(`heather-coq/M11_DESIGN.md`). Each rule below is from `Declarative.v`;
+(`heather-coq/docs/design/M11_DESIGN.md`). Each rule below is from `Declarative.v`;
 each is checked against §2's clause.
 
 - **Layers.** Formation, `refl`, `J`, the code `TmId` and their

@@ -370,7 +370,7 @@ by the same three moves `wf-former-design.md` §8 recorded:
 **No negative premise, no conversion premise in reduction, no strip.**
 This is the property the whole round is for. `transp`'s metatheory stalled
 on exactly those (`issues/sprop-strip-normalization-open.md`,
-`../Lean/delam/M10_DESIGN.md` S1–S5). The Coq formalization would take `IWf`
+`../Lean/delam/docs/design/M10_DESIGN.md` S1–S5). The Coq formalization would take `IWf`
 as its own milestone, after `W`/`Wf`, which it does not have yet.
 
 **Outcome (2026-10-21).** All three predictions hold, mechanized rather
