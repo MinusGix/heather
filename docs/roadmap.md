@@ -542,3 +542,6 @@ separate machines do not slow each other's tests.
   surface) as its first submilestone, done on this round's PR.
 - 2026-10-22: `M` got codes on the same PR (`docs/kernel-m-codes-design.md`),
   so codata declarations sit at layer c with everything else.
+- 2026-10-22: indexed codata (`docs/codata-indexed-design.md`), the index
+  read by observation; `SBisim`'s reflexivity, symmetry and transitivity are
+  corecursive functions. The library is next under `it-coinductive`.

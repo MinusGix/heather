@@ -130,6 +130,12 @@ pub(crate) struct Inductive {
     /// Built once, from the declaration, at declaration time, and never edited
     /// afterwards (§14.6: two skeletons, one declaration).
     pub skel: Option<Rc<Inductive>>,
+    /// An indexed `codata` declaration's index telescope, in written order
+    /// (docs/codata-indexed-design.md §2): each binder's name and surface
+    /// type, re-lowered per instance like [`Self::valparams`]. Empty for every
+    /// other declaration. Kept apart from [`Self::index`], which routes an
+    /// *inductive* family onto route 1 or 2b and which codata never takes.
+    pub co_index: Vec<(String, Ty)>,
 }
 
 /// The type an indexed declaration is indexed **by**
@@ -272,6 +278,11 @@ pub(crate) struct Ctor {
     /// (`name: T := e`), what fills it when a construction leaves it out.
     /// It has no positional slot (docs/named-arguments-design.md §9.2).
     pub defaults: Vec<Option<Expr>>,
+    /// Parallel to [`Self::fields`] on an indexed `codata` declaration: at a
+    /// child, the index it writes, one expression per index binder
+    /// (docs/codata-indexed-design.md §2). `None` at every other field; empty
+    /// on every other declaration.
+    pub child_index: Vec<Option<Vec<Expr>>>,
 }
 
 /// A constructor's result index, decomposed: depth-one, constructor-headed,
@@ -808,23 +819,15 @@ impl Elaborator {
             return err("`Nat` is built in", d.span);
         }
         reject_function_fields(d)?;
-        // A coinductive declaration is unindexed this round
-        // (docs/codata-elaborator-design.md §1): an indexed one is a
-        // coinductive *predicate*, whose shapes depend on the index, and that
-        // needs the observation form of §8 rather than constructors.
-        if d.is_codata
-            && let Some(ix) = &d.index
-        {
-            return err(
-                format!(
-                    "`{}` is `codata` with an index: an indexed coinductive declaration is \
-                     not lowered this round, only `codata D<…>(…) {{ … }}` \
-                     (issues/codata-indexed.md)",
-                    d.name
-                ),
-                ix.span,
-            );
-        }
+        // An indexed coinductive declaration reads its index by observation
+        // (docs/codata-indexed-design.md §1–§2): the index binders are in
+        // scope in the field types, a child writes its own index, and none of
+        // the inductive index routes below applies.
+        let co_index = match (&d.index, d.is_codata) {
+            (Some(ix), true) => codata_index_telescope(ix, d)?,
+            _ => Vec::new(),
+        };
+        let d_index = if d.is_codata { None } else { d.index.as_ref() };
         for (i, p) in d.params.iter().enumerate() {
             if d.params[..i].contains(p) {
                 return err(format!("duplicate type parameter `{p}`"), d.span);
@@ -838,7 +841,7 @@ impl Elaborator {
         // Beside an index it stays refused: the index telescope would have to
         // be read under the parameters, and nothing asks for that yet.
         if !d.valparams.is_empty()
-            && let Some(ix) = &d.index
+            && let Some(ix) = d_index
         {
             return err(
                 format!(
@@ -921,7 +924,7 @@ impl Elaborator {
         // `Nat` binder into bare `Type`, this round. The grammar parses any
         // type; the shape is validated here so the message can say what the
         // round supports rather than "parse error".
-        let (index, index_ty) = match &d.index {
+        let (index, index_ty) = match d_index {
             None => (None, None),
             Some(ty) => {
                 let TyKind::Fn {
@@ -1005,6 +1008,22 @@ impl Elaborator {
             // The result annotation: mandatory on an indexed declaration's
             // constructors, an error elsewhere
             // (docs/inductive-indexed-lowering.md §2).
+            if !co_index.is_empty()
+                && let Some(r) = &c.result
+            {
+                return err(
+                    format!(
+                        "`{}` has a result annotation, but `{}` is indexed `codata`: its \
+                         index is read by observation, not stated per constructor. Codata \
+                         has no η, so an equation `t = {}(…)` at a corecursively defined `t` \
+                         is uninhabited; write what the constructor knows about the index \
+                         as a field over the index binders instead, and each child's index \
+                         in its type (docs/codata-indexed-design.md §1)",
+                        c.name, d.name, c.name
+                    ),
+                    r.span,
+                );
+            }
             if index.is_none()
                 && let Some(r) = &c.result
             {
@@ -1025,21 +1044,29 @@ impl Elaborator {
             // route 1's (docs/inductive-indexed-lowering.md §3) or route 2b's
             // (docs/inductive-fording-lowering.md §3.2) — and `route` already
             // decided which, for the declaration as a whole.
-            let (res, res_expr, kind, rec_at) = match &route {
+            let (res, res_expr, kind, rec_at, child_index) = match &route {
+                None if !co_index.is_empty() => {
+                    let vnames: Vec<String> =
+                        d.valparams.iter().map(|p| p.name.clone()).collect();
+                    let (kind, child_index) =
+                        classify_codata_indexed(c, &d.name, &d.params, &vnames, co_index.len())?;
+                    let rec_at = vec![None; kind.len()];
+                    (None, None, kind, rec_at, child_index)
+                }
                 None => {
                     let vnames: Vec<String> =
                         d.valparams.iter().map(|p| p.name.clone()).collect();
                     let kind = classify_fields(c, &d.name, &d.params, &vnames)?;
                     let rec_at = vec![None; kind.len()];
-                    (None, None, kind, rec_at)
+                    (None, None, kind, rec_at, Vec::new())
                 }
                 Some(IdxRoute::One(rows)) => {
                     let (pat, kind, rec_at) = rows[i].clone();
-                    (Some(pat), None, kind, rec_at)
+                    (Some(pat), None, kind, rec_at, Vec::new())
                 }
                 Some(IdxRoute::Forded(rows)) => {
                     let (e, kind, rec_at) = rows[i].clone();
-                    (None, Some(e), kind, rec_at)
+                    (None, Some(e), kind, rec_at, Vec::new())
                 }
             };
             // A default fills a record's field; a constructor of a family
@@ -1075,6 +1102,7 @@ impl Elaborator {
                 rec_at,
                 res_expr,
                 defaults: c.fields.iter().map(|f| f.default.as_deref().cloned()).collect(),
+                child_index,
             });
         }
         // *Any* child-contributing field, not just a plain one: a constructor
@@ -1209,6 +1237,7 @@ impl Elaborator {
             index,
             index_ty,
             skel,
+            co_index,
         });
         // A tier-2 declaration's lowering can fail on what the declaration
         // *says* — a function domain with no code, domains at two levels
@@ -1216,7 +1245,16 @@ impl Elaborator {
         // one is lowered once here, where that is a declaration error rather
         // than a surprise at its first use.
         if (ind.infinitary() || ind.codata) && ind.params.is_empty() && ind.valparams.is_empty() {
-            self.lower_instance(&Cx::empty(), &ind, &[], &[], d.span)?;
+            if ind.co_index.is_empty() {
+                self.lower_instance(&Cx::empty(), &ind, &[], &[], d.span)?;
+            } else {
+                // An indexed one at a neutral index: the field types, the
+                // children's indices and the positions are all read there.
+                let (ity, li) = self.codata_index_ty(&Cx::empty(), &ind, &[], &[], d.span)?;
+                let mut icx = Cx::empty();
+                icx.push("#i".into(), ity, li);
+                self.lower_instance_m(&icx, &ind, &[], &[], Some(Term::Var(LocalVar(0))), d.span)?;
+            }
         }
         // From here on registration is infallible. The type registry installs
         // all nominal views together; the ambiguity index then exposes the
@@ -1823,7 +1861,7 @@ impl Elaborator {
         vargs: &[(Term, Type, Level)],
         span: Span,
     ) -> R<(Type, Level)> {
-        if ind.index.is_some() {
+        if ind.index.is_some() || !ind.co_index.is_empty() {
             return err(
                 format!(
                     "`{}` is an indexed family and needs its index: write `{}{}(i)`",
@@ -1842,7 +1880,7 @@ impl Elaborator {
         // Codata (docs/codata-elaborator-design.md §2): the same shape under
         // the negative `M`.
         if ind.codata {
-            return self.lower_instance_m(cx, ind, args, vargs, span);
+            return self.lower_instance_m(cx, ind, args, vargs, None, span);
         }
         let (shape, level) = self.lower_shape(cx, ind, args, vargs, span)?;
         if !ind.recursive {
@@ -1988,20 +2026,17 @@ impl Elaborator {
         Ok((t, l, domains.pop()))
     }
 
-    /// [`Self::lower_ctor_with_domain`] for every recursive function field of
-    /// the constructor, in field order: a `codata` constructor may have
-    /// several (docs/codata-elaborator-design.md §2), a tier-2 one at most
-    /// one.
-    pub(crate) fn lower_ctor_with_domains(
+    /// The context a declaration's own field types are read in, over the use
+    /// site's `cx`: the type parameters and value parameters bound to `args`
+    /// and `vargs` (scoped in `cx`), the use site's binders out of reach by
+    /// name. Callers push the field spine on top.
+    pub(crate) fn field_scope_cx(
         &self,
         cx: &Cx,
         ind: &Inductive,
-        i: usize,
         args: &[(Type, Level)],
         vargs: &[(Term, Type, Level)],
-        span: Span,
-    ) -> R<(Type, Level, Vec<(Type, Level, usize)>)> {
-        let _scope = self.use_inductive_scope(ind);
+    ) -> Cx {
         // Field types see the type parameters and the earlier *named* fields;
         // nothing else from the ambient declaration. The arguments are scoped
         // in `cx`, so that is the depth every use of one is weakened from.
@@ -2059,6 +2094,42 @@ impl Elaborator {
                 level: level.clone(),
             }));
         }
+        fcx
+    }
+
+    /// [`Self::lower_ctor_with_domain`] for every recursive function field of
+    /// the constructor, in field order: a `codata` constructor may have
+    /// several (docs/codata-elaborator-design.md §2), a tier-2 one at most
+    /// one.
+    pub(crate) fn lower_ctor_with_domains(
+        &self,
+        cx: &Cx,
+        ind: &Inductive,
+        i: usize,
+        args: &[(Type, Level)],
+        vargs: &[(Term, Type, Level)],
+        span: Span,
+    ) -> R<(Type, Level, Vec<(Type, Level, usize)>)> {
+        self.lower_ctor_with_domains_at(cx, ind, i, args, vargs, &[], span)
+    }
+
+    /// [`Self::lower_ctor_with_domains`] with `extra` aliases in scope in the
+    /// field types, scoped at `cx`'s depth: an indexed `codata`
+    /// declaration's index binders (docs/codata-indexed-design.md §3).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn lower_ctor_with_domains_at(
+        &self,
+        cx: &Cx,
+        ind: &Inductive,
+        i: usize,
+        args: &[(Type, Level)],
+        vargs: &[(Term, Type, Level)],
+        extra: &[Rc<Alias>],
+        span: Span,
+    ) -> R<(Type, Level, Vec<(Type, Level, usize)>)> {
+        let _scope = self.use_inductive_scope(ind);
+        let mut fcx = self.field_scope_cx(cx, ind, args, vargs);
+        fcx.aliases.extend(extra.iter().cloned());
         // Entry 0 is the tag; the surface has no name for it and no way to
         // bind it in a pattern.
         let mut entries = vec![(tag_type(ind.tag), Level::Zero)];
@@ -2140,10 +2211,7 @@ impl Elaborator {
             // (docs/inductive-tier2-w-lowering.md §5).
             // Codata: `M(Unit; _. S; …)`, the summands `S`'s at the shape
             // level (docs/codata-elaborator-design.md §2).
-            Type::M { sig, .. } => (
-                Rc::new(sig.shape_at(&Term::Triv { level: sig.idx_level.clone() })),
-                sig.level.clone(),
-            ),
+            Type::M { sig, index } => (Rc::new(sig.shape_at(index)), sig.level.clone()),
             other => match crate::infinitary::w_of(other) {
                 Some((shape, shape_level)) => (shape, shape_level),
                 None => (Rc::new(other.clone()), lvl.clone()),
@@ -2226,7 +2294,7 @@ impl Elaborator {
             // Codata: the tag is in the `M`'s shape, under its index binder,
             // which the shape never mentions (docs/codata-elaborator-design.md
             // §2).
-            Type::M { sig, .. } => self.tag_of(&sig.shape_at(&Term::Triv { level: sig.idx_level.clone() })),
+            Type::M { sig, index } => self.tag_of(&sig.shape_at(index)),
             // Tier 2: through the `Σ` and the `W` to the shape
             // (docs/inductive-tier2-w-lowering.md §5).
             Type::Sigma { .. } if crate::infinitary::w_of(ty).is_some() => {
@@ -3645,6 +3713,146 @@ fn classify_fields(
     Ok(kinds)
 }
 
+/// An indexed `codata` head's telescope, `(i₁: I₁) -> … -> (iₙ: Iₙ) ->
+/// Type`, as (name, surface type) in written order
+/// (docs/codata-indexed-design.md §2). The types are lowered per instance.
+fn codata_index_telescope(ix: &Ty, d: &InductiveDecl) -> R<Vec<(String, Ty)>> {
+    let mut out: Vec<(String, Ty)> = Vec::new();
+    let mut cur = ix;
+    loop {
+        match &cur.kind {
+            TyKind::Fn { binder: Some(n), implicit, dom, cod } => {
+                if *implicit {
+                    return err(crate::IMPLICIT_MARK_REFUSED, cur.span);
+                }
+                if out.iter().any(|(m, _)| m == n)
+                    || d.params.contains(n)
+                    || d.valparams.iter().any(|p| &p.name == n)
+                {
+                    return err(
+                        format!("`{n}` is already bound in `{}`'s head", d.name),
+                        cur.span,
+                    );
+                }
+                if d.ctors.iter().any(|c| c.fields.iter().any(|f| f.name.as_deref() == Some(n.as_str()))) {
+                    return err(
+                        format!(
+                            "`{n}` is both an index binder and a field of `{}`: the field \
+                             would shadow the index in the field types after it",
+                            d.name
+                        ),
+                        cur.span,
+                    );
+                }
+                out.push((n.clone(), (**dom).clone()));
+                cur = cod;
+            }
+            TyKind::Univ { level: 0 } if !out.is_empty() => return Ok(out),
+            _ => {
+                return err(
+                    "an indexed `codata` head is `: (i: I) -> … -> Type`, every index \
+                     binder named and the telescope ending in bare `Type` \
+                     (docs/codata-indexed-design.md §2)",
+                    cur.span,
+                );
+            }
+        }
+    }
+}
+
+/// [`classify_fields`] for an indexed `codata` declaration
+/// (docs/codata-indexed-design.md §2): a child is `D<ā>(v̄, ē)` — the
+/// parameters bare and in order, then one index expression per binder — or
+/// `(y: A) -> D<ā>(v̄, ē)`. Returns the kinds and, at each child, its `ē`.
+fn classify_codata_indexed(
+    c: &CtorDecl,
+    name: &str,
+    params: &[String],
+    vparams: &[String],
+    n_idx: usize,
+) -> R<(Vec<FieldKind>, Vec<Option<Vec<Expr>>>)> {
+    let own = format!(
+        "{name}{}({}{}…)",
+        if params.is_empty() { String::new() } else { format!("<{}>", params.join(", ")) },
+        vparams.join(", "),
+        if vparams.is_empty() { "" } else { ", " },
+    );
+    // `Some(ē)` at a well-formed occurrence, an error at any other mention.
+    let child = |t: &Ty| -> R<Option<Vec<Expr>>> {
+        let Some((targs, vargs)) = self_head(t, name) else {
+            if let Some(sp) = occurs(t, name) {
+                return err(
+                    format!(
+                        "field of `{}` mentions `{name}` nested inside another type: a child \
+                         of indexed `codata` is `{own}` or a function into it \
+                         (docs/codata-indexed-design.md §2)",
+                        c.name
+                    ),
+                    sp,
+                );
+            }
+            return Ok(None);
+        };
+        let targs_uniform = targs.len() == params.len()
+            && targs.iter().zip(params).all(|(a, p)| {
+                matches!(&a.kind, TyKind::Named { name: an, args } if an == p && args.is_empty())
+            });
+        let uniform = targs_uniform
+            && matches!(&t.kind, TyKind::OfExpr(e) if matches!(&e.kind,
+                ExprKind::App { named, explicit: false, goal_oriented: false, .. } if named.is_empty()))
+            && vargs.is_some_and(|v| {
+                v.len() == vparams.len() + n_idx
+                    && v.iter().zip(vparams).all(|(a, p)| matches!(&a.kind, ExprKind::Var(an) if an == p))
+            });
+        if !uniform {
+            return err(
+                format!(
+                    "field of `{}` uses `{name}` at other arguments than a child takes: a child \
+                     of indexed `codata` is `{own}` — the type parameters and value parameters \
+                     bare and in order, then one index per binder ({n_idx}) \
+                     (docs/codata-indexed-design.md §2)",
+                    c.name
+                ),
+                t.span,
+            );
+        }
+        Ok(Some(vargs.expect("checked")[vparams.len()..].to_vec()))
+    };
+    let mut kinds = Vec::with_capacity(c.fields.len());
+    let mut idx = Vec::with_capacity(c.fields.len());
+    for f in &c.fields {
+        if let TyKind::Vec { elem, .. } = &f.ty.kind
+            && occurs(elem, name).is_some()
+        {
+            return err(
+                format!(
+                    "`{}` has a container field, which a `codata` constructor does not take \
+                     this round: write the children as a function from `Fin(n)` \
+                     (docs/codata-elaborator-design.md §2)",
+                    c.name
+                ),
+                f.ty.span,
+            );
+        }
+        if let TyKind::Fn { dom, cod, .. } = &f.ty.kind
+            && occurs(dom, name).is_none()
+            && let Some(e) = child(cod)?
+        {
+            kinds.push(FieldKind::FnChild);
+            idx.push(Some(e));
+            continue;
+        }
+        if let Some(e) = child(&f.ty)? {
+            kinds.push(FieldKind::Plain);
+            idx.push(Some(e));
+            continue;
+        }
+        kinds.push(FieldKind::Payload);
+        idx.push(None);
+    }
+    Ok((kinds, idx))
+}
+
 /// Decompose a constructor's result annotation `D<params>(pattern)` into an
 /// [`IdxPat`] (docs/inductive-indexed-lowering.md §2–§3): the type must be
 /// the declaration at its own parameters, and the index a depth-one, linear,
@@ -4516,6 +4724,7 @@ fn skeleton_of(d: &InductiveDecl, ctors: &[Ctor], tag: u32, scope: Rc<Scope>) ->
                 rec_at,
                 res_expr: None,
                 defaults,
+                child_index: Vec::new(),
             }
         })
         .collect();
@@ -4534,6 +4743,7 @@ fn skeleton_of(d: &InductiveDecl, ctors: &[Ctor], tag: u32, scope: Rc<Scope>) ->
         index: None,
         index_ty: None,
         skel: None,
+        co_index: Vec::new(),
     }
 }
 
@@ -4924,7 +5134,7 @@ pub(crate) fn reject_function_fields(d: &InductiveDecl) -> Result<(), crate::Ela
                 if *implicit {
                     return fail(crate::IMPLICIT_MARK_REFUSED.to_string(), f.ty.span);
                 }
-                if d.index.is_some() {
+                if d.index.is_some() && !d.is_codata {
                     return fail(
                         format!(
                             "field of `{}` is a function into `{}`, and `{}` is an indexed \
@@ -5217,6 +5427,14 @@ impl Elaborator {
         // (docs/codata-elaborator-design.md §4.2). The children are read back
         // as stand-ins, like tier 2's.
         let codata_label = match (ind.codata, t) {
+            // Indexed: the `in` with the out type as carrier, and the label
+            // is the seed's (docs/codata-indexed-design.md §4).
+            (true, Term::Corec { seed, .. }) if !ind.co_index.is_empty() => {
+                match crate::spelling::pair_of(seed) {
+                    Some((fst, _)) => Some((**fst).clone()),
+                    None => return Ok(None),
+                }
+            }
             (true, Term::Corec { step, .. }) => match crate::spelling::pair_of(step) {
                 Some((fst, _)) => match crate::strengthen_tm(&cx.gamma, fst, 2) {
                     Some(l) => Some(l),

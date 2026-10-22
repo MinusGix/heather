@@ -865,6 +865,9 @@ impl expr::UniverseElab for Elaborator {
         expression: &Expr,
         span: Span,
     ) -> R<Option<(Type, Level)>> {
+        if let Some(lowered) = self.try_codata_indexed_ty(cx, expression, span)? {
+            return Ok(Some(lowered));
+        }
         if let Some(lowered) = self.try_indexed_ty(cx, expression, span)? {
             return Ok(Some(lowered));
         }
@@ -881,7 +884,7 @@ impl expr::UniverseElab for Elaborator {
         }
         let ind = self.lookup_inductive(name)?;
         Some(expr::TypeFormerShape {
-            indexed: ind.index.is_some(),
+            indexed: ind.index.is_some() || !ind.co_index.is_empty(),
             value_parameters: ind.valparams.len(),
         })
     }

@@ -320,8 +320,11 @@ fn recursion_out_of_codata_is_refused() {
     assert!(msg.contains("codata has no structural order"), "{msg}");
 }
 
+// Indexed codata reads its index by observation: a result annotation is
+// refused (docs/codata-indexed-design.md §1; the acceptance is
+// `codata_indexed.rs`).
 #[test]
-fn indexed_codata_is_refused() {
+fn indexed_codata_refuses_result_annotations() {
     let msg = elab_err("codata Tg : (n: Nat) -> Type { TZ : Tg(0) }");
-    assert!(msg.contains("issues/codata-indexed.md"), "{msg}");
+    assert!(msg.contains("docs/codata-indexed-design.md §1"), "{msg}");
 }
