@@ -4,14 +4,13 @@
 //! The kernel has had bodied globals with layer-indexed transparency since
 //! `issues/simulate-conversion-cost.md`, and a user `fn` is Ψ-referenced
 //! rather than inlined (`lib.rs`'s header). The *generator's own* artifacts
-//! were not: `μ` — route 2b's index measure — was a whole `elim_Wf` written
-//! out afresh in the family type, twice per Σ projection and several times
-//! per eliminator arm, and form A at a declared index additionally wrote out
-//! one tag predicate per *other* index constructor and one child projection
-//! per child. That is `docs/inductive-fording-lowering.md` §14.2 and §14.9,
-//! and this module is their fix.
+//! were not: route 2b's index measure `μ` was once a whole `elim_Wf` written
+//! out afresh in the family type, several times per eliminator arm
+//! (`docs/inductive-fording-lowering.md` §14.2 and §14.9, superseded by the
+//! `IWf` route), and this module began as the fix; the type codes, record
+//! projections and spine codes below followed.
 //!
-//! The shape is the `#skel` precedent (§14.6): **registered once, at
+//! The shape is the shape-declaration precedent: **registered once, at
 //! declaration time, under a name the surface cannot write, and never edited
 //! afterwards.** Emitted terms reference the definition; δ-unfolding at the
 //! computing layers recovers exactly the term that used to be inlined, so
@@ -21,10 +20,9 @@
 //!
 //! - **The definitions are closed.** An *index* type is unparameterized by
 //!   `inductive.rs`'s own rule (a parameterized index is rejected at the
-//!   declaration), so a tag predicate and a child projection are closed for
-//!   every family that can exist. `μ` is closed exactly when the forded
-//!   declaration itself has no type parameters — see [`Elaborator::mu_def`]
-//!   and the boundary note there.
+//!   declaration), so its code is closed for every family that can exist. A
+//!   declaration's own devices are closed exactly when it has no type
+//!   parameters — see [`Elaborator::register_ty_code`]'s boundary note.
 //! - **Registration is best-effort.** If any piece fails to build or fails
 //!   the kernel gate here, nothing is pushed and the emission site falls back
 //!   to writing the term out inline, exactly as before. A definition is a
@@ -42,38 +40,22 @@ use heather_kernel::term::{
 };
 use heather_syntax::ast::Span;
 
-use crate::inductive::{ConstBody, IdxTy, Inductive};
+use crate::inductive::{IdxTy, Inductive};
 use crate::stats::decline;
 use crate::{Alias, Cx, Elaborator, R, TyVar};
 
 /// The key of a machine-named definition. Keys are **nominal**: a declaration
 /// tag plus, where the device is per-constructor, its position. That is what
-/// makes the recognizers of §6.3/§10.1 re-keyable — a reference to `μ_D` is
-/// recognized by *being* `μ_D`, not by having `μ_D`'s shape.
+/// makes the recognizers re-keyable — a reference to `D#fam` is recognized by
+/// *being* `D#fam`, not by having its shape.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) enum GenDef {
-    /// `μ_D : ⟦Skel⟧ → I` for the forded declaration with this nominal tag
-    /// (`docs/inductive-fording-lowering.md` §5).
-    Mu(u32),
-    /// `is_k : I → Type⁰`, the index type's tag predicate at constructor `k`
-    /// (`docs/inductive-tier1-wf-lowering.md` §7.1). Keyed by the *index*
-    /// type's tag, so every family over that index shares one.
-    IdxTag(u32, usize),
-    /// `proj_{k,t} : I → I → I`, the index type's `t`-th child projection at
-    /// constructor `k`, abstracted over its default (§7.2). Keyed by the
-    /// index type's tag, shared as above.
-    IdxChild(u32, usize, usize),
     /// `I#icode : Trm_c(· ⊢ Ty l_I)` — the index type's **code**, consumed as
     /// `El (I#icode^δ)` (`docs/family-type-code-defs-design.md` §1). Keyed by
-    /// the *index* type's tag, shared by every family over that index, exactly
-    /// as `IdxTag`/`IdxChild`. An index type is unparameterized by
+    /// the *index* type's tag, shared by every family over that index. An
+    /// index type is unparameterized by
     /// `inductive.rs`'s own rule, so this has no closedness boundary at all.
     IdxCode(u32),
-    /// `D#code : Trm_c(· ⊢ Ty l)` — the forded declaration's **skeleton
-    /// code**, consumed as `El (D#code^δ)` (design §1). Keyed by the forded
-    /// declaration's tag. Exists only for an unparameterized declaration —
-    /// the same boundary as [`GenDef::Mu`], for the same reason (§14.12).
-    SkelCode(u32),
     /// `D#tycode : Trm_c(· ⊢ Ty l)` — an **unparameterized, unindexed**
     /// declaration's whole lowered type `⟦D⟧`, consumed as `El (D#tycode^δ)`
     /// (`docs/family-type-code-defs-design.md` §1, dated extension of
@@ -81,10 +63,7 @@ pub(crate) enum GenDef {
     /// or not (a sum-of-Σs) — both are Θ(n²) and both are copied Θ(arms)
     /// times by the two `match` lowerings.
     ///
-    /// The sibling of [`GenDef::SkelCode`], and deliberately a *different*
-    /// key: `SkelCode` names a forded declaration's **skeleton**, this names a
-    /// declaration's **own** lowering. The two boundaries differ too — see
-    /// [`Elaborator::register_ty_code`].
+    /// See [`Elaborator::register_ty_code`] for the boundary.
     TyCode(u32),
     /// `D#tycode_fn : Π(A₁ : Ty l₁)…(v_m : T_m). Ty l :=
     /// λ(A₁ : Ty l₁)…(v_m : T_m). ⌜⟦D<El A₁,…>(v̄)⟧⌝` — a **parameterized or
@@ -125,7 +104,7 @@ pub(crate) enum GenDef {
     /// §6). Keyed by the indexed declaration's tag. Route 1's family *is* a
     /// type-valued eliminator, so unlike route 2b there is one definition and
     /// not two: naming the function names the whole family. Same closedness
-    /// boundary as [`GenDef::Mu`] (§5).
+    /// boundary as [`GenDef::TyCode`] (§5).
     Fam(u32),
     /// `D#projⱼ : Trm_c(· ⊢ Π(v : ⟦D⟧). Tⱼ)` — a **record**'s `j`-th field
     /// projection, keyed by the record's tag and the field's index
@@ -140,7 +119,7 @@ pub(crate) enum GenDef {
     /// `D#projᵢ^δ v` (one node) instead, so the walk, the term it produces,
     /// and everything downstream of both stay linear.
     ///
-    /// Same closedness boundary as [`GenDef::Mu`] and [`GenDef::TyCode`]: only
+    /// Same closedness boundary as [`GenDef::TyCode`]: only
     /// an unparameterized record, whose lowering is one closed type.
     RecProj(u32, usize),
     /// `D#tailⱼ : Trm_c(· ⊢ Π(v : ⟦D⟧). Σ…)` — the same record's Σ spine past
@@ -212,8 +191,7 @@ impl GenDef {
     /// index type's for the index devices.
     pub(crate) fn tag(&self) -> u32 {
         match *self {
-            GenDef::Mu(t) | GenDef::IdxTag(t, _) | GenDef::IdxChild(t, _, _) | GenDef::IdxCode(t)
-            | GenDef::SkelCode(t) | GenDef::TyCode(t) | GenDef::TyCodeFn(t) | GenDef::ShapeCode(t)
+            GenDef::IdxCode(t) | GenDef::TyCode(t) | GenDef::TyCodeFn(t) | GenDef::ShapeCode(t)
             | GenDef::ArityFn(t) | GenDef::Fam(t) | GenDef::RecProj(t, _) | GenDef::RecTail(t, _)
             | GenDef::RecFam(t, _) | GenDef::PayloadCode(t, _) | GenDef::SuffixCode(t, _) | GenDef::WCanon(t) => t,
         }
@@ -223,11 +201,7 @@ impl GenDef {
     /// surface, the same convention `skeleton_of` uses.
     pub(crate) fn name(&self, owner: &str) -> String {
         match self {
-            GenDef::Mu(_) => format!("{owner}#mu"),
-            GenDef::IdxTag(_, k) => format!("{owner}#tag{k}"),
-            GenDef::IdxChild(_, k, t) => format!("{owner}#child{k}.{t}"),
             GenDef::IdxCode(_) => format!("{owner}#icode"),
-            GenDef::SkelCode(_) => format!("{owner}#code"),
             GenDef::TyCode(_) => format!("{owner}#tycode"),
             GenDef::TyCodeFn(_) => format!("{owner}#tycode_fn"),
             GenDef::ShapeCode(_) => format!("{owner}#shape"),
@@ -1132,19 +1106,12 @@ impl Elaborator {
             self.register_rec_projs(ind, span);
             return;
         }
-        // The index type's devices first: they are closed for every family,
-        // and shared across all families over the same index. The **code**
-        // comes before the rest so that a later device's statement may
-        // reference it (Ψ is a telescope — design §1.4, retro-spelling
-        // deferred but the order is kept ready for it).
+        // The `IWf` route (`docs/iwf-former-design.md` §8): the family is
+        // spelled inline, and only the index type's code is named.
         if let Some(IdxTy::Decl(iind)) = ind.index_ty.as_ref() {
             let iind = Rc::clone(iind);
             self.register_idx_code(&iind, span);
-            self.register_index_devices(&iind, span);
         }
-        // The skeleton's code before `μ`, for the same telescope reason.
-        self.register_skel_code(ind, span);
-        let _ = self.register_mu(ind, span);
     }
 
     /// `I#icode := ⌜⟦I⟧⌝`, the index type's code (design §1.1). Best-effort:
@@ -1167,33 +1134,6 @@ impl Elaborator {
         let _ = self.push_gen_def(key, &iind.name, ty, Level::succ(ilvl), body, span);
     }
 
-    /// `D#code := ⌜⟦Skel⟧⌝`, the forded declaration's skeleton code (design
-    /// §1.1). Only an **unparameterized** declaration gets one — the same
-    /// boundary as [`Elaborator::mu_def`], because `⟦Skel⟧` of a parameterized
-    /// family is monomorphized per instantiation and a definition must be
-    /// closed at declaration time (§14.12).
-    fn register_skel_code(&mut self, ind: &Rc<Inductive>, span: Span) {
-        if !ind.params.is_empty() || !ind.valparams.is_empty() {
-            return;
-        }
-        let key = GenDef::SkelCode(ind.tag);
-        if self.types.gdefs().contains_key(&key) {
-            return;
-        }
-        let Some(skel) = ind.skel.as_ref() else {
-            return;
-        };
-        let cx = Cx::empty();
-        let Ok((skel_ty, l)) = self.lower_instance(&cx, skel, &[], &[], span) else {
-            return;
-        };
-        let Some(body) = crate::code::code_of(&skel_ty) else {
-            return;
-        };
-        let ty = Type::Ty(l.clone());
-        let _ = self.push_gen_def(key, &ind.name, ty, Level::succ(l), body, span);
-    }
-
     /// `D#tycode := ⌜⟦D⟧⌝`, a declaration's own whole lowered type
     /// (design §1.1, §10.2 — the 2026-08-12 extension). Best-effort like every
     /// other piece here: no code means every occurrence stays inline, exactly
@@ -1201,7 +1141,7 @@ impl Elaborator {
     ///
     /// **Boundary — two conditions, each for its own reason.**
     ///
-    /// - *Unparameterized* ([`Elaborator::mu_def`]'s reason, §14.12): `⟦D⟧` of
+    /// - *Unparameterized* (§14.12 of the fording doc): `⟦D⟧` of
     ///   a parameterized declaration is monomorphized per instantiation
     ///   (`Cx::tyvars`), so it is not one closed type but one per
     ///   instantiation, and a definition is registered where the
@@ -2666,6 +2606,7 @@ impl Elaborator {
     /// unreadable (81 failures on the 2026-09-06 full suite). Only
     /// [`Self::spine_refs_by_position`] hands these out at emission, where
     /// the whole spine's tag says whose components they are.
+    #[cfg(test)]
     pub(crate) fn spine_type_ref(&self, cx: &Cx, tag: u32, ty: &Type) -> Option<Type> {
         let codes = self.types.gdefs().spine_codes(&tag)?;
         if let Some((k, (_, l))) = codes.ctors.iter().enumerate().find(|(_, (c, _))| **c == *ty) {
@@ -3466,7 +3407,7 @@ impl Elaborator {
 
     /// `D#fam := λ(i : I). elim(…; i)`, a route-1 family function (design §6).
     /// Only an **unparameterized** declaration gets one, for
-    /// [`Elaborator::mu_def`]'s reason: the family's branches mention the
+    /// [`Elaborator::register_ty_code`]'s reason: the family's branches mention the
     /// argument types, which are monomorphized per instantiation.
     fn register_fam(&mut self, ind: &Rc<Inductive>, span: Span) {
         if !ind.params.is_empty() || !ind.valparams.is_empty() {
@@ -3485,44 +3426,6 @@ impl Elaborator {
         {
             self.semantic_commit_gen_fam_levels(ind.tag, l, ilvl);
         }
-    }
-
-    /// §7.1's tag predicates and §7.2's child projections, per index
-    /// constructor. Memoized on the *index* type's tag, so the second family
-    /// over one index pays nothing.
-    fn register_index_devices(&mut self, iind: &Rc<Inductive>, span: Span) {
-        let n = iind.ctors.len();
-        for k in 0..n {
-            let key = GenDef::IdxTag(iind.tag, k);
-            if !self.types.gdefs().contains_key(&key) {
-                if let Ok((ty, lvl, body)) = self.tag_pred_def(iind, k, span) {
-                    let _ = self.push_gen_def(key, &iind.name, ty, lvl, body, span);
-                }
-            }
-            // A child projection only exists at a recursive index type: a flat
-            // index constructor has no child to project.
-            if !iind.recursive {
-                continue;
-            }
-            for t in 0..iind.ctors[k].arity() {
-                let key = GenDef::IdxChild(iind.tag, k, t);
-                if self.types.gdefs().contains_key(&key) {
-                    continue;
-                }
-                if let Ok((ty, lvl, body)) = self.child_proj_def(iind, k, t, span) {
-                    let _ = self.push_gen_def(key, &iind.name, ty, lvl, body, span);
-                }
-            }
-        }
-    }
-
-    fn register_mu(&mut self, ind: &Rc<Inductive>, span: Span) -> R<()> {
-        let key = GenDef::Mu(ind.tag);
-        if self.types.gdefs().contains_key(&key) {
-            return Ok(());
-        }
-        let (ty, lvl, body) = self.mu_def(ind, span)?;
-        self.push_gen_def(key, &ind.name, ty, lvl, body, span)
     }
 
     /// Kernel-check and push. The gate is the same one a `fn` passes
@@ -3717,8 +3620,8 @@ impl Elaborator {
 
     /// The inverse of [`Self::gen_ref`]'s numbering: which definition, if any,
     /// a `GlobalVar` occurring in a term denotes. This is the whole of the
-    /// recognizers' new key — `forded_of` asks "is the head of this `μ`
-    /// position *the* `μ_D`", not "does it have `μ`'s shape".
+    /// recognizers' key — a reader asks "is this global *the* `D#fam`", not
+    /// "does it have its shape".
     pub(crate) fn gen_def_of(&self, var: GlobalVar) -> Option<GenDef> {
         let len = self.psi.bindings.len() as u32;
         // Fully checked: a `GlobalVar` reaching here can be anything the term
@@ -3766,6 +3669,7 @@ impl Elaborator {
 
     /// Whether `t` is exactly `u^δ` for the definition `key` — the head test
     /// the recognizers use.
+    #[cfg(test)]
     pub(crate) fn is_gen_ref(&self, t: &Term, key: GenDef) -> bool {
         matches!(t, Term::GlobalTm { var, .. } if self.gen_def_of(*var) == Some(key))
     }
@@ -3817,62 +3721,13 @@ impl Elaborator {
 
     // -- the bodies ---------------------------------------------------------
 
-    /// `μ_D = λ(s : ⟦Skel⟧). μ-node[s]`, its type and level (§5).
-    ///
-    /// **Boundary.** Only a forded declaration with no type parameters gets
-    /// one. `μ`'s body mentions the skeleton's lowering, which is
-    /// monomorphized at each instantiation (`Cx::tyvars`), so a parameterized
-    /// family's `μ` is not one closed term but one per instantiation — and a
-    /// definition is registered at *declaration* time, where the
-    /// instantiations are not yet known. Abstracting over the parameter would
-    /// need a Π over `Type` in the definition's own statement and a
-    /// `Type`-argument spine at every reference; that is a scheme change, not
-    /// a registration detail. Parameterized forded families therefore keep
-    /// today's inlined `μ` verbatim.
-    fn mu_def(&self, ind: &Rc<Inductive>, span: Span) -> R<(Type, Level, Term)> {
-        if !ind.params.is_empty() || !ind.valparams.is_empty() {
-            return crate::err(
-                "internal: a parameterized forded family keeps its inlined μ",
-                span,
-            );
-        }
-        let cx = Cx::empty();
-        let skel = ind
-            .skel
-            .as_ref()
-            .expect("a forded declaration has a skeleton");
-        let (skel_ty, l) = self.lower_instance(&cx, skel, &[], &[], span)?;
-        let (ity, ilvl) = self.index_type_of(&cx, ind, span)?;
-        let node = self.build_mu(&cx, ind, skel, &skel_ty, &l, &ity, &ilvl, span)?;
-        let body = Term::Lam {
-            dom_level: l.clone(),
-            cod_level: ilvl.clone(),
-            dom: Rc::new(skel_ty.clone()),
-            body: Rc::new(
-                crate::indexed::set_scrut(&node.shift_local(1), Rc::new(Term::Var(LocalVar(0))))
-                    .ok_or_else(|| crate::ElabError::Elab {
-                        msg: "internal: a μ node has a scrutinee slot".into(),
-                        span,
-                    })?,
-            ),
-        };
-        let ty = Type::Pi {
-            dom_level: l.clone(),
-            cod_level: ilvl.clone(),
-            dom: Rc::new(skel_ty),
-            cod: Rc::new(ity.shift_local(1)),
-        };
-        Ok((ty, Level::max(l, ilvl), body))
-    }
-
     /// `D#fam = λ(i : I). elim(…; i) : Π(i : I). Ty l`, its statement, its
     /// level, and the two levels an occurrence needs (design §6).
     ///
     /// The two passes are [`Elaborator::lower_indexed_instance`]'s: the family
     /// is built once at a placeholder level to *read* `l` off its branches,
     /// then rebuilt at `l`. Both passes run at a closed placeholder index,
-    /// because the λ's binder replaces the scrutinee afterwards — the same
-    /// build-then-`set_scrut` motion [`Elaborator::mu_def`] uses.
+    /// because the λ's binder replaces the scrutinee afterwards.
     fn fam_def(&self, ind: &Inductive, span: Span) -> R<(Type, Level, Term, Level, Level)> {
         let cx = Cx::empty();
         let (ity, ilvl) = self.index_type_of(&cx, ind, span)?;
@@ -3937,114 +3792,6 @@ impl Elaborator {
             },
             l,
         ))
-    }
-
-    /// `is_k = λ(z : I). Case-on-tag(z) { c_k ↦ ⌜Unit⌝ ; _ ↦ ⌜Empty⌝ }` (§7.1),
-    /// at type `I → Type⁰`.
-    fn tag_pred_def(&self, iind: &Rc<Inductive>, k: usize, span: Span) -> R<(Type, Level, Term)> {
-        let cx = Cx::empty();
-        let (ity, ilvl) = self.lower_instance(&cx, iind, &[], &[], span)?;
-        let spine = self.spine(&ity, &ilvl, iind.ctors.len(), span)?;
-        let ty0 = Type::Ty(Level::Zero);
-        let l1 = Level::succ(Level::Zero);
-        let mut zcx = cx.clone();
-        zcx.push("#z".into(), ity.clone(), ilvl.clone());
-        // `spine`/`ity` are read back in the *base* context (empty here) and
-        // `d0` counts the binders pushed since — one, the λ's.
-        let node = if iind.recursive {
-            self.const_elim_wf(
-                &zcx,
-                iind,
-                &ity,
-                &spine,
-                &ty0,
-                &l1,
-                Rc::new(Term::Var(LocalVar(0))),
-                &ConstBody::TagCode(k),
-                1,
-                span,
-            )?
-        } else {
-            self.const_case_tree(
-                &zcx,
-                &spine,
-                iind.ctors.len(),
-                &ty0,
-                &l1,
-                Rc::new(Term::Var(LocalVar(0))),
-                &ConstBody::TagCode(k),
-                0,
-                1,
-                span,
-            )?
-        };
-        let body = Term::Lam {
-            dom_level: ilvl.clone(),
-            cod_level: l1.clone(),
-            dom: Rc::new(ity.clone()),
-            body: Rc::new(node),
-        };
-        let ty = Type::Pi {
-            dom_level: ilvl.clone(),
-            cod_level: l1.clone(),
-            dom: Rc::new(ity),
-            cod: Rc::new(ty0),
-        };
-        Ok((ty, Level::max(ilvl, l1), body))
-    }
-
-    /// `proj_{k,t} = λ(d : I). λ(z : I). elim_Wf(z) { c_k ↦ nth_t ; _ ↦ d }`
-    /// (§7.2), at type `I → I → I`.
-    ///
-    /// The **default is abstracted** rather than baked in: it is the one thing
-    /// that varies per use site (`forded_inv_branch` passes the bound `z`),
-    /// and abstracting it is what lets one definition serve every occurrence.
-    fn child_proj_def(
-        &self,
-        iind: &Rc<Inductive>,
-        k: usize,
-        t: usize,
-        span: Span,
-    ) -> R<(Type, Level, Term)> {
-        let cx = Cx::empty();
-        let (ity, ilvl) = self.lower_instance(&cx, iind, &[], &[], span)?;
-        let mut zcx = cx.clone();
-        zcx.push("#default".into(), ity.clone(), ilvl.clone());
-        zcx.push("#z".into(), ity.clone(), ilvl.clone());
-        let node = self.child_projection(
-            &zcx,
-            iind,
-            &ity,
-            &ilvl,
-            k,
-            t,
-            Rc::new(Term::Var(LocalVar(1))),
-            Term::Var(LocalVar(0)),
-            span,
-        )?;
-        let body = Term::Lam {
-            dom_level: ilvl.clone(),
-            cod_level: ilvl.clone(),
-            dom: Rc::new(ity.clone()),
-            body: Rc::new(Term::Lam {
-                dom_level: ilvl.clone(),
-                cod_level: ilvl.clone(),
-                dom: Rc::new(ity.clone()),
-                body: Rc::new(node),
-            }),
-        };
-        let ty = Type::Pi {
-            dom_level: ilvl.clone(),
-            cod_level: ilvl.clone(),
-            dom: Rc::new(ity.clone()),
-            cod: Rc::new(Type::Pi {
-                dom_level: ilvl.clone(),
-                cod_level: ilvl.clone(),
-                dom: Rc::new(ity.clone()),
-                cod: Rc::new(ity),
-            }),
-        };
-        Ok((ty, ilvl, body))
     }
 }
 

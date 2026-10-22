@@ -118,12 +118,11 @@ pub(crate) fn set_scrut(t: &Term, scrut: Rc<Term>) -> Option<Term> {
             case_r: Rc::clone(case_r),
             scrut,
         },
-        // A **definition applied to its scrutinee** — `μ_D^δ s`, since
+        // A **definition applied to its scrutinee** — `D#fam^δ i`, since
         // `issues/generated-term-defs.md` routed the generator's artifacts
         // through Ψ. The argument is the slot. Restricted to a global head so
         // that no ordinary application is mistaken for a family node; which
-        // global it is, is checked by the recognizer that asked
-        // (`forded_of`, via `is_gen_ref`).
+        // global it is, is checked by the recognizer that asked.
         Term::App {
             fun,
             dom_level,
@@ -541,7 +540,7 @@ impl Elaborator {
         // at declaration time, and the skeleton is the record of that decision.
         if ind.skel.is_some() {
             return self
-                .lower_forded_instance(cx, &ind, &lowered, idx_t, span)
+                .lower_iwf_instance(cx, &ind, &lowered, idx_t, span)
                 .map(Some);
         }
         self.lower_indexed_instance(cx, &ind, &lowered, idx_t, span)

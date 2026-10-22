@@ -83,8 +83,10 @@ pub(crate) const STUCK_CANDIDATES: u32 = 64;
 /// The lowering selected for an indexed inductive declaration.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum IndexedRoute {
+    /// Route 1 (`docs/inductive-indexed-lowering.md`).
     One,
-    Forded,
+    /// The `IWf` route (`docs/iwf-former-design.md` §8).
+    Iwf,
 }
 
 #[derive(Debug, Clone)]

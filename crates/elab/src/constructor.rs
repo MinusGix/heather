@@ -749,8 +749,8 @@ impl Elaborator {
             // Route 2b: the index is the constructor's *written* result index
             // at the arguments it was given (docs/inductive-fording-lowering.md
             // §2), which is the whole widening.
-            let (idx, _, _) = self.forded_ctor_index(cx, ind, i, args, span)?;
-            self.lower_forded_instance(cx, ind, &targs, idx, span)?
+            let (idx, _, _) = self.iwf_ctor_index(cx, ind, i, args, span)?;
+            self.lower_iwf_instance(cx, ind, &targs, idx, span)?
         } else if ind.index.is_some() && args.len() == ind.ctors[i].fields.len() {
             // The result index comes from the pattern and the written index
             // argument (docs/inductive-indexed-lowering.md §5); the wrong-
@@ -930,7 +930,7 @@ impl Elaborator {
     ///
     /// The child's inferred type is the family at the child's own index, and
     /// both routes keep the family in a form that can be re-applied at another
-    /// index — `FordedFam::ty_at` and `IndexedFam::el_at`, which is what
+    /// index — `IwfFam::ty_at` and `IndexedFam::el_at`, which is what
     /// `match` uses to name `fam 0` and `fam (S m)` from one read-back type. So
     /// there is nothing to *solve*: the instance comes back whole and the
     /// written result index says where to put it. `None` when no argument is a
@@ -980,11 +980,11 @@ impl Elaborator {
             .position(|f| *f == inductive::FieldKind::Plain)?;
         let (_, cty, _) = self.elab_infer(cx, args[k].borrow()).ok()?;
         let (ty, lvl) = if ind.skel.is_some() {
-            let (found, fam) = self.forded_of_at(cx, &cty)?;
+            let (found, fam) = self.iwf_of_at(cx, &cty)?;
             if found.tag != ind.tag {
                 return None;
             }
-            let idx = match self.forded_ctor_index(cx, ind, i, args, span) {
+            let idx = match self.iwf_ctor_index(cx, ind, i, args, span) {
                 Ok((idx, _, _)) => idx,
                 Err(e) => return Some(Err(e)),
             };
@@ -1076,8 +1076,8 @@ impl Elaborator {
                     );
                 }
                 let (ty, lvl) = if ind.skel.is_some() {
-                    let (idx, _, _) = self.forded_ctor_index(cx, &ind, i, args, span)?;
-                    self.lower_forded_instance(cx, &ind, &lowered, idx, span)?
+                    let (idx, _, _) = self.iwf_ctor_index(cx, &ind, i, args, span)?;
+                    self.lower_iwf_instance(cx, &ind, &lowered, idx, span)?
                 } else {
                     let (idx, _, _) = self.indexed_ctor_index(cx, &ind, i, args, span)?;
                     self.lower_indexed_instance(cx, &ind, &lowered, idx, span)?

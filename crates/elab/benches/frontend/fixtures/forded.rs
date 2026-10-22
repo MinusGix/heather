@@ -104,7 +104,7 @@ fn computed_arms() -> Family {
         // third digit of a fit. Re-centred on the measurement +/-0.35.
         expect_slope: Some((1.85, 2.55)),
         cases: indexed_sweep(
-            "forded/computed-arms", &[2, 3, 4, 5, 6], "F", IndexedRoute::Forded, src,
+            "forded/computed-arms", &[2, 3, 4, 5, 6], "F", IndexedRoute::Iwf, src,
         ),
     }
 }
@@ -153,7 +153,7 @@ fn occurrences() -> Family {
         // rounds have measured it at 0.99–1.01.
         expect_slope: Some((0.70, 1.30)),
         cases: indexed_sweep(
-            "forded/occurrences", &[1, 2, 4, 8], "F", IndexedRoute::Forded, src,
+            "forded/occurrences", &[1, 2, 4, 8], "F", IndexedRoute::Iwf, src,
         ),
     }
 }
@@ -307,7 +307,7 @@ fn declared_index_branching() -> Family {
         expect_slope: Some((0.90, 1.65)),
         cases: indexed_sweep(
             "forded/declared-index-branching", &[2, 3, 4, 5, 6], "Bl",
-            IndexedRoute::Forded, src,
+            IndexedRoute::Iwf, src,
         ),
     }
 }

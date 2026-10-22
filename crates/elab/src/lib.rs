@@ -117,7 +117,7 @@ pub mod reprgen;
 pub use provenance::{AssumptionKind, AxiomReport, AxiomUse};
 mod emission_walk;
 pub use emission_walk::EmissionFinding;
-mod forded;
+mod iwf_family;
 mod gendefs;
 mod generalize;
 mod goal_combinators;
@@ -3259,7 +3259,7 @@ impl Elaborator {
         let ind = self.types.inductive(&key)?;
         ind.index.as_ref()?;
         Some(if ind.skel.is_some() {
-            IndexedRoute::Forded
+            IndexedRoute::Iwf
         } else {
             IndexedRoute::One
         })
@@ -7314,7 +7314,7 @@ impl Elaborator {
                 // Route 2b's forded family (docs/inductive-fording-lowering.md
                 // §12.1): the same two-binder motive rule as route 1's, over
                 // the Σ+`sEq` form instead of the eliminator's.
-                if let Some((ind, fam)) = self.forded_of_at(cx, &scrut_ty) {
+                if let Some((ind, fam)) = self.iwf_of_at(cx, &scrut_ty) {
                     let (binders, body) = matching::motive_lam(
                         m,
                         2,
@@ -7347,7 +7347,7 @@ impl Elaborator {
                         Some((c, a)) => (c, a.as_slice()),
                         None => (cx, arms.as_slice()),
                     };
-                    let t = self.elab_match_forded(
+                    let t = self.elab_match_iwf(
                         acx,
                         *form,
                         &ind,
@@ -7642,7 +7642,7 @@ impl Elaborator {
         // that, and the thing that can is the family's inversion principle —
         // a library device, not a syntax (issues/surface-existential.md).
         if let Some(ind) = self
-            .forded_of_at(cx, scrut_ty)
+            .iwf_of_at(cx, scrut_ty)
             .map(|(ind, _)| ind)
             .or_else(|| self.indexed_of_at(cx, scrut_ty).map(|(ind, _)| ind))
         {

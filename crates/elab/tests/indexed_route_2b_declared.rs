@@ -1,34 +1,31 @@
-//! Acceptance for **form A at a declared index** — route 2b's index inversion
-//! carried by the index type's own eliminator
-//! (`docs/inductive-fording-lowering.md` §8.2, the seam §14.4 recorded and this
-//! file closes; the hand composition of the two ingredients is
-//! `crates/elab/src/forded.rs`'s `decl_inversion` module).
+//! Acceptance for indexed families at a **declared** index type, on the `IWf`
+//! route (`docs/iwf-former-design.md` §8). The file was route 2b's form A at
+//! a declared index (`docs/inductive-fording-lowering.md` §8.2, superseded),
+//! and keeps its tests: on `IWf` every arm is typed at its constructor's own
+//! output index, so what fording split into form A (inversion) and form B
+//! (a `transp`, stalling on open data) is one scheme, and every former form-B
+//! residue here computes.
 //!
 //! Its own file rather than a section of `indexed_route_2b_gen.rs`, for the
 //! reason `indexed_declared_families.rs` gives: every declaration here needs an
 //! *index declaration* above it, and the three index shapes — flat, linear
-//! `Wf`, branching `Wf` — are what the section is about.
-//!
-//! Until 2026-08-04 every constructor of a declared-index forded family took
-//! form B, so §8.4's aggregate limit applied to all of them: **no induction
-//! over open data at all**. What each test below carries is which axis of
-//! `docs/testing-generated-terms.md` makes it falsifiable:
+//! `Wf`, branching `Wf` — are what the section is about. What each test below
+//! carries is which axis of `docs/testing-generated-terms.md` makes it
+//! falsifiable:
 //!
 //! - **axis 1** — a *literal* scrutinee asserted to compute, not merely type;
 //! - **axis 2** — a *neutral* scrutinee, open children and an open index;
 //! - **axis 3** — a **checking** position: every claim is a `theorem`, which
 //!   is a checking position across the index equation;
-//! - **axis 4** — a negative control per decision, including the two the round
-//!   *measured* rather than assumed (form B still stalls; a branching form A at
-//!   a three-constructor index exceeds the conversion budget);
+//! - **axis 4** — a negative control per decision (wrong indices, and a
+//!   `refl` that does not prove an induction);
 //! - **axis 6** — a **three-constructor** index type crossed with an open
 //!   payload, which is what an inversion emitted branch-by-branch gets wrong:
 //!   with two constructors there is no inner `Case` at all.
 //!
-//! Every declaration here is genuinely route 2b and not route 1, and each one
+//! Every declaration here is on the `IWf` route and not route 1, and each one
 //! says why in a comment: route 1 rejects a deep pattern, a non-linear one and
-//! a bare-variable index, so a declaration carrying one of those *and* still
-//! elaborating has gone through the fording generator.
+//! a bare-variable index.
 
 use heather_elab::{ElabError, Elaborator};
 
@@ -144,18 +141,18 @@ fn tsize(s: Shape, t: Tw(s)) -> Nat {
 "#;
 
 #[test]
-fn the_form_b_contrast_in_the_same_family_still_stalls() {
-    // Axis 4, a *deliberate* negative: the documented residue is in a test
-    // rather than in a bug report, and it is the boundary of what this round
-    // moved — form A at a declared index, not form B.
-    let m = elab_err(&format!(
+fn the_form_b_contrast_in_the_same_family_now_computes() {
+    // Fording's form B stalled here on open data, and this test was the
+    // deliberate negative that pinned the residue. On `IWf` (docs/iwf-former-
+    // design.md §8.3) every arm is typed at its own output index with no
+    // cast, so the former form-B constructor computes on open data too…
+    elab(&format!(
         "{ADD}{TWC}
          fn mk(l: Shape, r: Shape, u: Tw(l)) -> Tw(SNode(l, SBud(r))) {{ TX(l, r, u) }}
          theorem tx_beta(l: Shape, r: Shape, u: Tw(l)):
              tsize(SNode(l, SBud(r)), mk(l, r, u)) = Succ(tsize(l, u)) {{ refl }}"
     ));
-    assert!(m.contains("NotConvertible"), "{m}");
-    // …while the form-A constructor of that same declaration computes.
+    // …as the form-A constructor of that same declaration always did.
     elab(&format!(
         "{ADD}{TWC}
          theorem tb_beta(s: Shape, x: Nat, t: Tw(s)):

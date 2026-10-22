@@ -364,6 +364,31 @@ pub(super) fn unify_ty(
             }
             unify_tm(u, j1, j2, n, d, sols);
         }
+        // An `IWf`-route family instance (docs/iwf-former-design.md §8): the
+        // arity and output index are scoped under the shape binder, the child
+        // index under it and the position. A type argument is learned from
+        // the shape, where its stored fields mention it.
+        (Type::IWf { sig: g1, index: j1 }, Type::IWf { sig: g2, index: j2 }) => {
+            if !Rc::ptr_eq(g1, g2) {
+                unify_ty(u, &g1.idx, &g2.idx, n, d, sols);
+                unify_ty(u, &g1.shape, &g2.shape, n, d, sols);
+                unify_tm(u, &g1.arity, &g2.arity, n, d + 1, sols);
+                unify_tm(u, &g1.out, &g2.out, n, d + 1, sols);
+                unify_tm(u, &g1.child, &g2.child, n, d + 2, sols);
+            }
+            unify_tm(u, j1, j2, n, d, sols);
+        }
+        (
+            Type::DVec {
+                len: k1, fam: f1, ..
+            },
+            Type::DVec {
+                len: k2, fam: f2, ..
+            },
+        ) => {
+            unify_tm(u, k1, k2, n, d, sols);
+            unify_ty(u, f1, f2, n, d + 1, sols);
+        }
         (Type::El { tm: t1, .. }, Type::El { tm: t2, .. }) => {
             unify_tm(u, t1, t2, n, d, sols);
         }

@@ -21,7 +21,7 @@ pub(crate) const COLLECTION_LITERAL_TAG: u32 = 1 << 16;
 struct TypeLayer {
     inductives: HashMap<String, Rc<Inductive>>,
     by_tag: HashMap<u32, Rc<Inductive>>,
-    forded_by_skeleton: HashMap<u32, Rc<Inductive>>,
+    iwf_by_shape: HashMap<u32, Rc<Inductive>>,
     constructors: HashMap<String, (Rc<Inductive>, usize)>,
     record_fields: HashSet<String>,
 }
@@ -48,7 +48,7 @@ impl Types {
     fn seal_current(&mut self) {
         let empty = self.current.inductives.is_empty()
             && self.current.by_tag.is_empty()
-            && self.current.forded_by_skeleton.is_empty()
+            && self.current.iwf_by_shape.is_empty()
             && self.current.constructors.is_empty()
             && self.current.record_fields.is_empty();
         if empty {
@@ -74,9 +74,9 @@ impl Types {
         self.layers().find_map(|layer| layer.by_tag.get(&tag))
     }
 
-    pub(crate) fn forded_by_skeleton(&self, tag: u32) -> Option<&Rc<Inductive>> {
+    pub(crate) fn iwf_by_shape(&self, tag: u32) -> Option<&Rc<Inductive>> {
         self.layers()
-            .find_map(|layer| layer.forded_by_skeleton.get(&tag))
+            .find_map(|layer| layer.iwf_by_shape.get(&tag))
     }
 
     pub(crate) fn constructor(&self, key: &str) -> Option<&(Rc<Inductive>, usize)> {
@@ -98,7 +98,7 @@ impl Types {
     /// Install every nominal index for one fully checked declaration.
     ///
     /// Tags are reserved only by this operation, so failed elaboration cannot
-    /// consume one. A forded declaration installs its skeleton immediately
+    /// consume one. An `IWf`-route declaration installs its shape declaration immediately
     /// before the family, matching the tags used while constructing both.
     pub(crate) fn commit(&mut self, module: &str, ind: Rc<Inductive>) {
         let reserved_collection_literal = module == crate::PRELUDE_MODULE
@@ -117,7 +117,7 @@ impl Types {
             layer.by_tag.insert(skeleton.tag, Rc::clone(skeleton));
             layer.inductives
                 .insert(qkey(module, &skeleton.name), Rc::clone(skeleton));
-            layer.forded_by_skeleton
+            layer.iwf_by_shape
                 .insert(skeleton.tag, Rc::clone(&ind));
             self.next_tag += 1;
         }

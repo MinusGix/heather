@@ -33,8 +33,8 @@ use crate::resolve::DerivedInst;
 use crate::slots::Slot;
 use crate::traits::{ClassInfo, DesignationInfo, EvidenceRule, InstanceInfo};
 
-const MAGIC: &[u8; 8] = b"HTHMOD\0\x10";
-const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x0e";
+const MAGIC: &[u8; 8] = b"HTHMOD\0\x11";
+const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x0f";
 
 /// Hard limits applied before any decoded collection or string allocation.
 /// The loader may choose a smaller policy; these defaults are deliberately
@@ -1526,11 +1526,8 @@ fn get_registration(r: &mut Reader<'_>) -> Result<GlobalRegistration, ModuleImag
 
 fn put_gen_def(w: &mut Writer, key: GenDef) {
     match key {
-        GenDef::Mu(tag) => { w.byte(0); w.u32(tag); }
-        GenDef::IdxTag(tag, ctor) => { w.byte(1); w.u32(tag); w.usize(ctor); }
-        GenDef::IdxChild(tag, ctor, child) => { w.byte(2); w.u32(tag); w.usize(ctor); w.usize(child); }
+        // 0–2 and 4 were route 2b's `μ`, index devices and skeleton code.
         GenDef::IdxCode(tag) => { w.byte(3); w.u32(tag); }
-        GenDef::SkelCode(tag) => { w.byte(4); w.u32(tag); }
         GenDef::TyCode(tag) => { w.byte(5); w.u32(tag); }
         GenDef::ShapeCode(tag) => { w.byte(6); w.u32(tag); }
         GenDef::ArityFn(tag) => { w.byte(7); w.u32(tag); }
@@ -1547,9 +1544,7 @@ fn put_gen_def(w: &mut Writer, key: GenDef) {
 
 fn get_gen_def(r: &mut Reader<'_>) -> Result<GenDef, ModuleImageDecodeError> {
     Ok(match r.byte()? {
-        0 => GenDef::Mu(r.u32()?), 1 => GenDef::IdxTag(r.u32()?, r.usize()?),
-        2 => GenDef::IdxChild(r.u32()?, r.usize()?, r.usize()?),
-        3 => GenDef::IdxCode(r.u32()?), 4 => GenDef::SkelCode(r.u32()?),
+        3 => GenDef::IdxCode(r.u32()?),
         5 => GenDef::TyCode(r.u32()?), 6 => GenDef::ShapeCode(r.u32()?),
         7 => GenDef::ArityFn(r.u32()?), 8 => GenDef::Fam(r.u32()?),
         9 => GenDef::RecProj(r.u32()?, r.usize()?),
@@ -1592,6 +1587,7 @@ fn put_ctor(w: &mut Writer, ctor: &Ctor) {
     });
     w.vec(&ctor.rec_at, |w, at| w.option(at.as_ref(), |w, at| w.usize(*at)));
     w.option(ctor.res_expr.as_ref(), put_expr);
+    w.vec(&ctor.child_idx, |w, e| w.option(e.as_ref(), put_expr));
     w.vec(&ctor.defaults, |w, default| w.option(default.as_ref(), put_expr));
 }
 
@@ -1603,6 +1599,7 @@ fn get_ctor(r: &mut Reader<'_>) -> Result<Ctor, ModuleImageDecodeError> {
         res: r.option(|r| Ok(IdxPat { ctor: r.usize()?, vars: r.vec(Reader::usize)? }))?,
         rec_at: r.vec(|r| r.option(Reader::usize))?,
         res_expr: r.option(get_expr)?,
+        child_idx: r.vec(|r| r.option(get_expr))?,
         defaults: r.vec(|r| r.option(get_expr))?,
     })
 }
@@ -1939,7 +1936,9 @@ fn validate_inductive(info: &Inductive) -> Result<(), ModuleImageDecodeError> {
         return Err(ModuleImageDecodeError::InvalidStructure("inductive index name/type disagree"));
     }
     for ctor in &info.ctors {
-        if ctor.fields.len() != ctor.kind.len() || ctor.fields.len() != ctor.rec_at.len() {
+        if ctor.fields.len() != ctor.kind.len() || ctor.fields.len() != ctor.rec_at.len()
+            || ctor.fields.len() != ctor.child_idx.len()
+        {
             return Err(ModuleImageDecodeError::InvalidStructure("constructor field tables disagree"));
         }
         if let Some(pat) = &ctor.res
@@ -2595,7 +2594,7 @@ mod tests {
             dependency_psi: GlobalCtx::default(),
             extension: vec![GlobalBinding::Ctx],
             scope: Scope::new("bad"),
-            events: vec![DeltaEvent::GenDef { key: GenDef::Mu(0), abs: 99 }],
+            events: vec![DeltaEvent::GenDef { key: GenDef::TyCode(0), abs: 99 }],
             items: Vec::new(),
             warnings: Vec::new(),
             scope_at_entry: None,
@@ -2624,8 +2623,8 @@ mod tests {
             extension: vec![GlobalBinding::Ctx, GlobalBinding::Ctx],
             scope: Scope::new("bad"),
             events: vec![
-                DeltaEvent::GenDef { key: GenDef::Mu(0), abs: 0 },
-                DeltaEvent::GenDef { key: GenDef::Mu(0), abs: 1 },
+                DeltaEvent::GenDef { key: GenDef::TyCode(0), abs: 0 },
+                DeltaEvent::GenDef { key: GenDef::TyCode(0), abs: 1 },
             ],
             items: Vec::new(),
             warnings: Vec::new(),
