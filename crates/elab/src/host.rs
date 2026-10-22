@@ -61,6 +61,9 @@ const REQUEST_BUDGET: usize = 10_000;
 /// by library code and may be arbitrarily large).
 const READ_BUDGET: usize = 4096;
 
+/// Leading parameters `Match` will treat as unknowns before giving up.
+const MATCH_PARAMETERS: usize = 64;
+
 /// An `Expr`, as the host reads one back from a tactic.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RExpr {
@@ -109,6 +112,21 @@ pub enum Request {
     /// A handle to a function type, and the name of the local to introduce.
     Open(u64, String),
     Resolve(String),
+    View(u64),
+    Whnf(u64),
+    /// A function type's handle and the target's.
+    Match(u64, u64),
+}
+
+/// One layer of a handle, as `View` answers it (`tactic::Head`).
+#[derive(Clone, Debug)]
+pub enum HeadView {
+    Pi(u64),
+    Eq(u64, u64),
+    Global(String, Vec<u64>),
+    Local(u64, Vec<u64>),
+    Lit(u64),
+    Other,
 }
 
 /// An answer, at the request's own kind. `Err` carries the reason a request
@@ -119,6 +137,9 @@ pub enum Answer {
     Bool(bool),
     Handle(Result<u64, String>),
     Opened(Result<OpenedView, String>),
+    Head(HeadView),
+    /// A match's slots: a handle where the match determined the parameter.
+    Match(Result<Vec<Option<u64>>, String>),
 }
 
 /// Where a tactic is after its last answer.
@@ -293,6 +314,31 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
                 self.call("host_opened", vec![self.lit(o.local.id), name, self.lit(o.local.ty), self.lit(o.body)])
             }
             Answer::Opened(Err(why)) => self.call("host_not_opened", vec![self.string_value(why)?]),
+            Answer::Head(v) => {
+                let (mut out, args) = match v {
+                    HeadView::Pi(dom) => return self.call("host_head_pi", vec![self.lit(*dom)]),
+                    HeadView::Eq(l, r) => return self.call("host_head_eq", vec![self.lit(*l), self.lit(*r)]),
+                    HeadView::Lit(n) => return self.call("host_head_lit", vec![self.lit(*n)]),
+                    HeadView::Other => return self.call("host_head_other", vec![]),
+                    HeadView::Global(name, args) => (self.call("host_head_global", vec![self.string_value(name)?])?, args),
+                    HeadView::Local(x, args) => (self.call("host_head_local", vec![self.lit(*x)])?, args),
+                };
+                for h in args {
+                    out = self.call("host_head_arg", vec![out, self.lit(*h)])?;
+                }
+                Ok(out)
+            }
+            Answer::Match(Ok(slots)) => {
+                let mut out = self.call("host_matched", vec![])?;
+                for slot in slots {
+                    out = match slot {
+                        Some(h) => self.call("host_slot", vec![out, self.lit(*h)])?,
+                        None => self.call("host_open_slot", vec![out])?,
+                    };
+                }
+                Ok(out)
+            }
+            Answer::Match(Err(why)) => self.call("host_not_matched", vec![self.string_value(why)?]),
         }
     }
 
@@ -320,6 +366,12 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
                 Ok(Step::Ask(Request::Open(h, self.string(self.call("host_name", vec![tree])?)?)))
             }
             6 => Ok(Step::Ask(Request::Resolve(self.string(self.call("host_name", vec![tree])?)?))),
+            7 => Ok(Step::Ask(Request::View(self.nat_of("host_handle", vec![tree])?))),
+            8 => Ok(Step::Ask(Request::Whnf(self.nat_of("host_handle", vec![tree])?))),
+            9 => Ok(Step::Ask(Request::Match(
+                self.nat_of("host_handle", vec![tree])?,
+                self.nat_of("host_target", vec![tree])?,
+            ))),
             other => Err(format!("a request tree with tag {other}")),
         }
     }
@@ -373,6 +425,9 @@ impl<'v> Interpreted<'_, '_, 'v> {
 struct Scope {
     parent: Option<usize>,
     cx: Cx,
+    /// The id of the local this scope's binder introduced (`None` at the
+    /// root).
+    local: Option<u64>,
 }
 
 /// What a handle stands for.
@@ -471,6 +526,20 @@ impl Run {
             return Err(Fault::Protocol("a handle is used outside the binder it lives under".into()));
         }
         Ok(shift((self.len(to) - self.len(from)) as u32))
+    }
+
+    /// The id of the local at position `p` of scope `at`'s context.
+    fn local_at(&self, at: usize, p: usize) -> Option<u64> {
+        if p < self.len(0) {
+            return Some(p as u64);
+        }
+        let mut s = at;
+        loop {
+            if self.len(s) == p + 1 {
+                return self.scopes[s].local;
+            }
+            s = self.scopes[s].parent?;
+        }
     }
 
     fn issue(&mut self, scope: usize, held: Held) -> u64 {
@@ -590,6 +659,18 @@ impl Elaborator {
         if !lvl.equiv(&q.level) || !self.conv_types(cx, expected, &q.expr, lvl) {
             return Ok(None);
         }
+        // A bare global is quoted as itself, its implicit parameters still
+        // binders of its type for `Match` to solve; inferring it would
+        // insert them.
+        if let heather_syntax::ast::ExprKind::Var(name) = &e.kind
+            && !self.shadowed(cx, name)
+            && !cx.names.iter().any(|n| n == name)
+            && let Some((term, ty, level)) = self.raw_global(name)
+            && !(level.equiv(&q.level) && self.conv_types(cx, &ty, &q.expr, &level))
+        {
+            let root = q.root.len() as u32;
+            return Ok(Some(self.quoted(&q, cx, term.shift_local(root), ty.shift_local(root), level, e.span)?));
+        }
         q.plain.set(Some(e.span));
         let probe = self.clone().elab_infer(cx, e);
         q.plain.set(None);
@@ -616,6 +697,12 @@ impl Elaborator {
                 e.span,
             );
         };
+        Ok(Some(self.quoted(&q, cx, term, ty, level, e.span)?))
+    }
+
+    /// Record a quoted term of the goal's context and return the closed
+    /// `host_quote(n)` that stands for it, weakened to `cx`.
+    fn quoted(&self, q: &Quoting, cx: &Cx, term: Term, ty: Type, level: Level, span: Span) -> R<Term> {
         let n = {
             let mut terms = q.terms.borrow_mut();
             terms.push((term, ty, level));
@@ -623,7 +710,7 @@ impl Elaborator {
         };
         let (head, pi) = &q.quote;
         let Type::Pi { dom_level, cod_level, dom, cod } = &**pi else {
-            return err("`tactic::host_quote` does not take a handle", e.span);
+            return err("`tactic::host_quote` does not take a handle", span);
         };
         // Built closed, then weakened to `cx` like any closed term.
         let closed = Term::App {
@@ -634,7 +721,7 @@ impl Elaborator {
             cod: Rc::clone(cod),
             arg: Rc::new(crate::inductive::nat_lit(n as usize)),
         };
-        Ok(Some(closed.shift_local(cx.gamma.len() as u32)))
+        Ok(closed.shift_local(cx.gamma.len() as u32))
     }
 
     /// The host loop: drive `speaker` to a result, answering its requests in
@@ -652,7 +739,7 @@ impl Elaborator {
         span: Span,
     ) -> R<Term> {
         let fail = |msg: String| err(format!("`by {shown}`: {msg}"), span);
-        let mut run = Run { scopes: vec![Scope { parent: None, cx: cx.clone() }], held: Vec::new(), opened: Vec::new() };
+        let mut run = Run { scopes: vec![Scope { parent: None, cx: cx.clone(), local: None }], held: Vec::new(), opened: Vec::new() };
         run.issue(0, Held::Type(goal.clone(), lvl.clone()));
         for (term, ty, level) in quoted {
             run.issue(0, Held::Term(term, ty, level));
@@ -695,6 +782,20 @@ impl Elaborator {
                     Ok(o) => Answer::Opened(Ok(o)),
                 },
                 Request::Resolve(name) => Answer::Handle(self.resolve_request(&mut run, &name, span)),
+                Request::View(h) => match self.view_request(&mut run, h) {
+                    Ok(v) => Answer::Head(v),
+                    Err(f) => return fail(f.msg()),
+                },
+                Request::Whnf(h) => match self.whnf_request(&mut run, h) {
+                    Err(Fault::Protocol(msg)) => return fail(msg),
+                    Err(Fault::Ill(why)) => Answer::Handle(Err(why)),
+                    Ok(h) => Answer::Handle(Ok(h)),
+                },
+                Request::Match(ty, target) => match self.match_request(&mut run, ty, target, span) {
+                    Err(Fault::Protocol(msg)) => return fail(msg),
+                    Err(Fault::Ill(why)) => Answer::Match(Err(why)),
+                    Ok(slots) => Answer::Match(Ok(slots)),
+                },
             };
             step = speaker.resume(answer);
         }
@@ -760,10 +861,10 @@ impl Elaborator {
         };
         let mut inner = cx.clone();
         inner.push(name.clone(), (*dom).clone(), dom_level.clone());
-        run.scopes.push(Scope { parent: Some(at), cx: inner });
+        let id = (run.len(0) + run.opened.len()) as u64;
+        run.scopes.push(Scope { parent: Some(at), cx: inner, local: Some(id) });
         let scope = run.scopes.len() - 1;
         run.opened.push(scope);
-        let id = (run.len(0) + run.opened.len() - 1) as u64;
         let ty = run.issue(at, Held::Type((*dom).clone(), dom_level));
         let body = run.issue(scope, Held::Type((*cod).clone(), cod_level));
         Ok(OpenedView { local: LocalView { id, name, ty }, body })
@@ -780,6 +881,13 @@ impl Elaborator {
         if !valid {
             return Err(format!("`{name}` is not a name"));
         }
+        let root = &run.scopes[0].cx;
+        if !root.names.iter().any(|n| n == name) {
+            if let Some((term, ty, level)) = self.raw_global(name) {
+                let n = root.gamma.len() as u32;
+                return Ok(run.issue(0, Held::Term(term.shift_local(n), ty.shift_local(n), level)));
+            }
+        }
         let e = Expr { kind: heather_syntax::ast::ExprKind::Var(name.to_string()), span };
         let mark = crate::resolve::SearchMark::of(self);
         match self.elab_infer(&run.scopes[0].cx, &e) {
@@ -792,6 +900,203 @@ impl Elaborator {
                 })
             }
         }
+    }
+
+    /// A global term as itself, with its whole type: a lemma's implicit
+    /// parameters are ordinary binders of that type, so `Match` can solve
+    /// them. `None` for a name that is not a plain top-level term (a local, a
+    /// universe-polymorphic or context-dependent declaration). The term and
+    /// type are closed.
+    pub(crate) fn raw_global(&self, name: &str) -> Option<(Term, Type, Level)> {
+        let key = self.key_of(name)?;
+        let abs = self.global_abs(&key)?;
+        let world = self.goal_psi();
+        let len = world.bindings.len();
+        let GlobalBinding::Tm { ctx, ty, level, .. } = world.bindings.get(abs)? else {
+            return None;
+        };
+        if !ctx.entries.is_empty() || matches!(**ty, Type::UPi { .. }) {
+            return None;
+        }
+        let head = Term::GlobalTm { var: GlobalVar((len - 1 - abs) as u32), subst: LocalSubst::id(&LocalCtx::nil()) };
+        Some((head, ty.shift_global((len - abs) as u32), level.clone()))
+    }
+
+    /// `t`'s type by the kernel's inference, in scope `at`.
+    fn kernel_type(&self, run: &Run, at: usize, t: &Term) -> Option<(Type, Level)> {
+        let oracle = self.goal_oracle();
+        heather_kernel::typing::infer_term(oracle.world(), 0, Layer::Prog, &run.scopes[at].cx.gamma, t, self.fuel).ok()
+    }
+
+    /// One layer of a handle, read the way the diagnostics read it
+    /// (`display.rs`'s recognisers), never reduced.
+    fn view_request(&self, run: &mut Run, h: u64) -> Result<HeadView, Fault> {
+        let (at, held) = match run.held(h)? {
+            (s, Held::Type(t, _)) => (*s, Ok(t.clone())),
+            (s, Held::Term(t, ..)) => (*s, Err(t.clone())),
+        };
+        Ok(match held {
+            Ok(ty) => self.view_type(run, at, &ty),
+            Err(t) => self.view_term(run, at, &t),
+        })
+    }
+
+    fn view_type(&self, run: &mut Run, at: usize, ty: &Type) -> HeadView {
+        if let Some(inline) = self.unspell_here(ty) {
+            return self.view_type(run, at, &inline);
+        }
+        if matches!(ty, Type::Wf { .. } | Type::Sum { .. } | Type::Sigma { .. })
+            && let Some(ind) = self.display_tag_of(ty)
+        {
+            let Some(targs) = self.display_targs(&run.scopes[at].cx, ty, &ind, 0) else {
+                return HeadView::Other;
+            };
+            let args = targs.into_iter().map(|(t, l)| run.issue(at, Held::Type(t, l))).collect();
+            return HeadView::Global(ind.name.clone(), args);
+        }
+        match ty {
+            Type::Pi { dom, dom_level, .. } => HeadView::Pi(run.issue(at, Held::Type((**dom).clone(), dom_level.clone()))),
+            Type::Id { level, ty: carrier, lhs, rhs } => {
+                let l = run.issue(at, Held::Term((**lhs).clone(), (**carrier).clone(), level.clone()));
+                let r = run.issue(at, Held::Term((**rhs).clone(), (**carrier).clone(), level.clone()));
+                HeadView::Eq(l, r)
+            }
+            Type::Nat => HeadView::Global("Nat".into(), Vec::new()),
+            Type::Unit { .. } => HeadView::Global("True".into(), Vec::new()),
+            Type::Empty { .. } => HeadView::Global("False".into(), Vec::new()),
+            Type::El { tm, .. } => self.view_term(run, at, tm),
+            Type::GlobalTy { var, subst } if subst.terms.is_empty() => {
+                match self.global_abs_of(*var).and_then(|abs| self.global_name_at(abs)) {
+                    Some(name) => HeadView::Global(name, Vec::new()),
+                    None => HeadView::Other,
+                }
+            }
+            _ => HeadView::Other,
+        }
+    }
+
+    fn view_term(&self, run: &mut Run, at: usize, t: &Term) -> HeadView {
+        if let Some(n) = crate::inductive::nat_value(t) {
+            return HeadView::Lit(n as u64);
+        }
+        // `Succ(…)` is what a numeral's weak head normal form is.
+        if let Term::Succ(p) = t {
+            let p = run.issue(at, Held::Term((**p).clone(), Type::Nat, Level::Zero));
+            return HeadView::Global("Succ".into(), vec![p]);
+        }
+        let n = run.len(at);
+        if let Term::Var(LocalVar(i)) = t {
+            return match run.local_at(at, n - 1 - *i as usize) {
+                Some(x) => HeadView::Local(x, Vec::new()),
+                None => HeadView::Other,
+            };
+        }
+        let Some((head, args)) = self.view_call(&run.scopes[at].cx, t) else {
+            return HeadView::Other;
+        };
+        let mut handles = Vec::with_capacity(args.len());
+        for a in &args {
+            let Some((ty, level)) = self.kernel_type(run, at, a) else {
+                return HeadView::Other;
+            };
+            handles.push(run.issue(at, Held::Term((**a).clone(), ty, level)));
+        }
+        match head {
+            crate::display::CallHead::Field(name) | crate::display::CallHead::Global(name, _) => HeadView::Global(name, handles),
+            crate::display::CallHead::Local(i) => match run.local_at(at, n - 1 - i as usize) {
+                Some(x) => HeadView::Local(x, handles),
+                None => HeadView::Other,
+            },
+        }
+    }
+
+    fn whnf_request(&self, run: &mut Run, h: u64) -> Result<u64, Fault> {
+        let out_of_fuel = |_| Fault::Ill("ran out of fuel reducing it".into());
+        let (at, held) = match run.held(h)? {
+            (s, Held::Type(t, l)) => (*s, Held::Type(t.clone(), l.clone())),
+            (s, Held::Term(t, ty, l)) => (*s, Held::Term(t.clone(), ty.clone(), l.clone())),
+        };
+        let gamma = run.scopes[at].cx.gamma.clone();
+        let reduced = match held {
+            Held::Type(t, l) => Held::Type(self.goal_oracle().whnf_type(&gamma, &t).map_err(out_of_fuel)?, l),
+            Held::Term(t, ty, l) => Held::Term(self.goal_oracle().whnf_term(&gamma, &t).map_err(out_of_fuel)?, ty, l),
+        };
+        Ok(run.issue(at, reduced))
+    }
+
+    /// `Match(ty, target)`: for k = 0, 1, … leading parameters of `ty`, read
+    /// the conclusion with those parameters as metavariables and unify it
+    /// with `target` by the elaborator's own unifier (the one implicit
+    /// arguments use). The first k whose conclusion, with what was solved
+    /// substituted, mentions no unsolved parameter and converts to `target`
+    /// is the answer. A solved parameter is a handle to its value; an
+    /// unsolved one is left for the caller, who proves it. Nothing here is
+    /// trusted: the caller's application is checked like any other `Expr`.
+    fn match_request(&self, run: &mut Run, ty: u64, target: u64, span: Span) -> Result<Vec<Option<u64>>, Fault> {
+        let (fs, fty) = match run.held(ty)? {
+            (s, Held::Type(t, _)) => (*s, t.clone()),
+            (_, Held::Term(..)) => return Err(Fault::Ill(format!("handle {ty} stands for a term, not a type"))),
+        };
+        let (ts, tty, tlvl) = match run.held(target)? {
+            (s, Held::Type(t, l)) => (*s, t.clone(), l.clone()),
+            (_, Held::Term(..)) => return Err(Fault::Ill(format!("handle {target} stands for a term, not a type"))),
+        };
+        let at = run.join(fs, ts)?;
+        let fty = run.lift(fs, at, |k| fty.shift_local(k))?;
+        let tty = run.lift(ts, at, |k| tty.shift_local(k))?;
+        let cx = run.scopes[at].cx.clone();
+        let mut inner = cx.clone();
+        let shown = fty.clone();
+        let mut concl = fty;
+        for k in 0..=MATCH_PARAMETERS {
+            if let Some(sols) = self.match_at(&cx, &concl, &tty, &tlvl, k, span) {
+                let mut slots = Vec::with_capacity(sols.len());
+                for sol in sols {
+                    slots.push(match sol.and_then(|t| self.kernel_type(run, at, &t).map(|(ty, l)| (t, ty, l))) {
+                        Some((t, ty, l)) => Some(run.issue(at, Held::Term(t, ty, l))),
+                        None => None,
+                    });
+                }
+                return Ok(slots);
+            }
+            let pi = match &concl {
+                Type::Pi { .. } => concl.clone(),
+                _ => match self.goal_oracle().whnf_type(&inner.gamma, &concl) {
+                    Ok(w) => w,
+                    Err(_) => break,
+                },
+            };
+            let Type::Pi { dom, dom_level, cod, .. } = pi else { break };
+            inner.push("_".into(), (*dom).clone(), dom_level);
+            concl = (*cod).clone();
+        }
+        Err(Fault::Ill(format!(
+            "no number of arguments makes the conclusion of `{}` the goal `{}`",
+            self.display_type(&cx, &shown),
+            self.display_type(&cx, &tty)
+        )))
+    }
+
+    /// One attempt of [`Self::match_request`]: `concl` is scoped in `cx`
+    /// plus `k` parameters, which become metavariables `0..k` of a scratch
+    /// world over the committed one, as in implicit application.
+    fn match_at(&self, cx: &Cx, concl: &Type, target: &Type, lvl: &Level, k: usize, span: Span) -> Option<Vec<Option<Term>>> {
+        if k == 0 {
+            return self.conv_types(cx, concl, target, lvl).then(Vec::new);
+        }
+        let n = k as u32;
+        let mut subst = LocalSubst::id(&cx.gamma);
+        for i in 0..n {
+            subst = subst.extended(Rc::new(Term::GlobalTm { var: GlobalVar(i), subst: LocalSubst::id(&cx.gamma) }));
+        }
+        let pat = concl.shift_global(n).apply_local(&subst);
+        let mut sols = vec![crate::unification::Sol::Unsolved; k];
+        self.unify_root(cx, &pat, target, n, &mut sols, span);
+        let solved = crate::unification::zonked(&pat, n, &sols)?;
+        if !self.conv_types(cx, &solved, target, lvl) {
+            return None;
+        }
+        Some(sols.iter().map(|s| s.solved().map(|t| (**t).clone())).collect())
     }
 
     /// A returned `Expr` as a kernel term of scope `at`, built directly:

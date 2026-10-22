@@ -9,8 +9,8 @@ B1) and places `issues/elabcode-abstraction-layer.md`. Round pattern as
 usual: this document first, the implementing rounds against §10.
 
 Status: **§0 decided by Minus on 2026-10-21** (the request-tree model, with
-native tactics and certificate oracles as §8a describes). **Rounds 1 and 2
-landed**: §12 and §13 record what building them changed.
+native tactics and certificate oracles as §8a describes). **Rounds 1, 2 and
+2½ landed**: §12–§14 record what building them changed.
 
 ---
 
@@ -443,7 +443,7 @@ the generalisation.
 |---|---|---|
 | R1 (landed) | `lib/std/tactic.hthr` (protocol, `bind`, helpers), `host.rs` loop, `by`, requests `Goal`/`Defeq`/`Fail`, the Rust protocol-speaker trait (§8a) | `by assumption` closes goals at open types and neutral hypotheses, and its failure lists every hypothesis tried |
 | R2 (landed) | `Open` (the design's `Intro`), `Infer`, `Resolve`, `Lam` in `Expr`, binder scopes in the host; quoting the goal's terms into `Expr` arguments; `focus`, `attempt`, `first_of`, `exact`, `intro`, `apply` in Heather (§13) | a Heather `apply` closes an implication chain; a failed `first_of` reports each branch |
-| R2½ | `View` with the speller's recogniser shared (moved from R1 and R2), `Whnf`, `Hole` through the elaboration route | a Heather tactic dispatches on the goal's head (`=`, `∧`, a Π) |
+| R2½ (landed) | `View` on the speller's recognisers (moved from R1 and R2), `Whnf`, `Match`; `apply` solves what its conclusion determines (§14) | a Heather tactic dispatches on the goal's head; `apply(sym, assumption())` closes `b = a` |
 | R3 | `tac-first-port`: `split_all` or `monoid` normalisation in Heather | it closes the same goals as the Rust one on the existing tests |
 | R3½ | `Oracle(name, input)` with one registered native procedure and a reflection-checked certificate (§8a) | a goal closes by native search plus a Heather check whose proof term is small |
 | R4 | publication (`heather-checked-construction-api`, retargeted): a `Publish(group)` request that checks a small declaration group and adds it only if every member passes the kernel | a Heather generator publishes a lemma group in the caller's scope; a failing member publishes nothing |
@@ -574,4 +574,43 @@ Recorded after building it, as the inductive-tier designs do.
 - **Still not here:** `View`, `Whnf` and `Hole` (R2½ above); they share the
   speller refactor and are only needed by tactics that dispatch on a goal's
   shape.
+
+---
+
+## 14. What round 2½ changed
+
+- **`View` shares the speller's recognisers, not its string building.** The
+  call recogniser (`Speller::call_parts`: an application spine as a named
+  global, a local or a record field, and how each argument is shown) is
+  now one function that the string speller's `call` and the host's `View`
+  both consume; an inductive instance is recognised by the same
+  `display_tag_of`/`display_targs` the speller uses, and a registered
+  lowering is unspelled first, as there. The rest of the speller (budgets,
+  fallbacks, source spelling) is presentation and stays where it is.
+  `Head` is `HPi(dom)`, `HEq(lhs, rhs)`, `HGlobal(name, args)`,
+  `HLocal(x, args)`, `HLit(n)` or `HOther`; arguments are the ones a
+  diagnostic writes, implicit ones left out. `Succ(p)` is a `HGlobal`,
+  because it is what `Whnf` leaves of a numeral sum. No `GlobalRef` yet:
+  a tactic keys on the name and uses `Resolve` for the term.
+- **`Match` instead of `Hole`.** What `apply` needed from unification is
+  "which of `f`'s parameters does matching its conclusion against the goal
+  determine". `Match(ty, target)` answers exactly that: for the fewest
+  leading parameters that work, it makes them metavariables of a scratch
+  world (the same representation implicit application uses), runs the
+  elaborator's unifier (`unify_root`), and accepts when the conclusion
+  with the solutions substituted mentions no unsolved parameter and
+  converts to the target. Each parameter comes back as a handle to its
+  value or as open. `apply` fills the solved ones and proves the open ones
+  with its premise tactic, left to right; the host checks the application
+  as it checks every `Expr`, so a wrong solution is a refusal, not a
+  soundness question. A parameter only a later premise determines
+  (`trans`'s middle point) is still proved before that premise is seen:
+  metavariables shared across premises are what `Hole` would add, and no
+  tactic needs it yet.
+- **Globals are quoted as themselves.** `by apply(sym, …)` hands the
+  tactic `sym` with its whole type, implicit parameters still binders, so
+  `Match` can solve them. Inferring a bare reference would insert them.
+  `Resolve` does the same for a name that is not a local.
+- **Still not here:** `Hole` (above), `At(e, note)` (a note about a term,
+  spelled by the host), and `GlobalRef`.
 

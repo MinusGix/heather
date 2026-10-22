@@ -5,7 +5,7 @@ labels: [metaprogramming,elaboration,design]
 area: tactics
 milestone: [tac-host-interface, hih-passes]
 created: 2026-09-07
-updated: 2026-10-21
+updated: 2026-10-22
 ---
 
 Own the public interface between user metafunctions and the active compiler:
@@ -46,3 +46,4 @@ string. Identity and correctness are separate claims.
 - 2026-10-21: The ~1000-request cap is lifted host-side ([[tactic-run-continuation-chain]], closed); left-nested binds remain exponential in their depth, [[tier2-left-nested-bind-cost]], which R3's loop combinators should know about.
 - 2026-10-21: Minus: `Tac<A>` moves onto the tree library's `ITree` over a `Host` container (design §0, item 3) once R2 lands, not before (the other condition, the run-length fix of [[tactic-run-continuation-chain]], is in).
 - 2026-10-21: Round 2: binders and composition. Requests Open/Infer/Resolve, `Lam` in `Expr`, binder scopes in host.rs, and quoting of the goal's terms where a tactic argument expects an `Expr` (`by apply(h2, apply(h1, assumption()))`). The library gains `focus`, `attempt`, `first_of` as pure handlers (no host rollback: requests have no side effects) and `exact`, `intro`, `apply`. Done-when met: `apply` closes implication chains (also a recursive client `auto`), and a failed `first_of` reports each alternative with its notes. View/Whnf/Hole move to R2½ with the speller refactor. Design §13 records the departures.
+- 2026-10-22: Round 2½: View (on the speller's shared call recogniser and instance recognisers), Whnf, and Match (the elaborator's unifier with a function type's leading parameters as scratch-world metavariables). `apply` now fills every parameter its conclusion determines, implicit ones included (`by apply(sym, assumption())`), and proves the rest with its premise tactic. Bare globals are quoted and resolved with their whole type. Hole stays deferred: no tactic needs metavariables shared across premises yet. Design §14.
