@@ -244,9 +244,8 @@ impl<'v> Eval<'_, 'v> {
         let v = self.force(c)?;
         Ok(match &*v {
             // `srefl`'s endpoint is not an observation: well-typedness fixes
-            // it up to conversion, every consumer of a strict-equality proof
-            // is `transp`, whose β ignores it, and conversion at `sEq` is
-            // irrelevant.
+            // it up to conversion, nothing eliminates a strict-equality
+            // proof, and conversion at `sEq` is irrelevant.
             Val::Triv { .. } | Val::SRefl { .. } => true,
             Val::Pair { fst, snd, .. } => {
                 self.is_canonical_unit(fst, depth - 1)?

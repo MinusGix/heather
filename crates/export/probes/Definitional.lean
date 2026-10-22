@@ -6,11 +6,6 @@
 import Hx
 noncomputable section
 
--- sEq: the strip rule at a *variable* proof between convertible endpoints
--- (Lean's K-like reduction of `Eq.rec`).
-example (P : Nat → Type) (n : Nat) (e : Hx.SEq Hx.Nat (n + 0) n) (t : P (n + 0)) :
-    Hx.transp Hx.Nat P (n + 0) n e t = t := rfl
-
 -- sEq irrelevance: holds against a constructor, so eta-long proofs compare…
 example (A : Type) (a b : A) (p q : Hx.SEq A a b) : (⟨p.pf⟩ : Hx.SEq A a b) = ⟨q.pf⟩ := rfl
 -- …but two neutral proofs do not: structure eta needs a constructor side.

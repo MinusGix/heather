@@ -2176,15 +2176,6 @@ pub enum Elim<'v> {
         case: &'v TmClo<'v>,
         rhs: &'v TmClo<'v>,
     },
-    Transp {
-        ty_level: Level,
-        motive_level: Level,
-        ty: &'v TyClo<'v>,
-        motive: &'v TyClo<'v>,
-        lhs: &'v TmClo<'v>,
-        rhs: &'v TmClo<'v>,
-        tm: &'v TmClo<'v>,
-    },
     LetBoxTy {
         motive_level: Level,
         code_level: Level,
@@ -2233,14 +2224,13 @@ impl Elim<'_> {
     /// An elimination that unseals a sealed theorem it is stuck on
     /// (`issues/theorem-witness-unfolding.md`, option D): any that can
     /// compute with what a proof built. Applications only extend the spine;
-    /// `transp` and `elim_sEmpty` eliminate strict propositions, whose
-    /// proofs never compute (`reduce::step_scrut` makes the same choice).
+    /// `elim_sEmpty` eliminates a strict proposition, whose proofs never
+    /// compute (`reduce::step_scrut` makes the same choice).
     pub fn unseals(&self) -> bool {
         !self.is_application()
             && !matches!(
                 self,
-                Elim::Transp { .. }
-                    | Elim::ElimSEmpty { .. }
+                Elim::ElimSEmpty { .. }
                     | Elim::LetBoxTy { .. }
                     | Elim::LetBoxTm { .. }
                     | Elim::ElimCodeTy { .. }
@@ -2268,7 +2258,6 @@ impl Elim<'_> {
             Elim::ElimIWf { .. } => "elim_IWf",
             Elim::Out { .. } => "out",
             Elim::J { .. } => "J",
-            Elim::Transp { .. } => "transp",
             Elim::LetBoxTy { .. } => "letbox_Ty",
             Elim::LetBoxTm { .. } => "letbox_Tm",
             Elim::ElimCodeTy { .. } => "elim_CodeTy",

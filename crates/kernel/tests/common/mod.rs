@@ -381,17 +381,6 @@ pub fn gen_branches(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Branches> {
         ty_sempty: t(1, 0, &|_| vec![GK::Ctx]),
         tm_sempty: t(1, 0, &|_| vec![GK::Ctx]),
         tm_srefl: t(1, 2, &|g| vec![GK::Ctx, GK::Ty(sh(g, 0)), GK::Tm(sh(g, 0))]),
-        tm_transp: t(2, 6, &|g| {
-            vec![
-                GK::Ctx,
-                GK::Ty(sh(g, 0)),
-                GK::Ty(sh(g, 1)),
-                GK::Tm(sh(g, 0)),
-                GK::Tm(sh(g, 0)),
-                GK::Tm(sh(g, 0)),
-                GK::Tm(sh(g, 0)),
-            ]
-        }),
         tm_elim_sempty: t(2, 2, &|g| vec![GK::Ctx, GK::Ty(sh(g, 1)), GK::Tm(sh(g, 0))]),
         ty_squash: t(1, 1, &|g| vec![GK::Ctx, GK::Ty(sh(g, 0))]),
         tm_squash: t(1, 1, &|g| vec![GK::Ctx, GK::Tm(sh(g, 0))]),
@@ -943,20 +932,6 @@ pub fn gen_term(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Term> {
                     tm: gen_term(sc, r, b / 2),
                 });
             }
-            40 if b > 0 => {
-                let mut in1 = sc.clone();
-                in1.local.len += 1;
-                return Rc::new(Term::Transp {
-                    ty_level: gen_level(sc, r, 1),
-                    motive_level: gen_level(sc, r, 1),
-                    ty: gen_type(sc, r, b / 2),
-                    motive: gen_type(&in1, r, b / 2),
-                    lhs: gen_term(sc, r, b / 2),
-                    rhs: gen_term(sc, r, b / 2),
-                    proof: gen_term(sc, r, b / 2),
-                    tm: gen_term(sc, r, b / 2),
-                });
-            }
             41 if b > 0 => {
                 let mut in1 = sc.clone();
                 in1.local.len += 1;
@@ -1449,10 +1424,6 @@ pub fn count_term(t: &Term) -> u64 {
         Term::ElimSEmpty { motive, scrut, .. } => count_type(motive) + count_term(scrut),
         Term::ElimSquash { src_ty, motive, case, scrut, .. } => {
             count_type(src_ty) + count_type(motive) + count_term(case) + count_term(scrut)
-        }
-        Term::Transp { ty, motive, lhs, rhs, proof, tm, .. } => {
-            count_type(ty) + count_type(motive) + count_term(lhs) + count_term(rhs)
-                + count_term(proof) + count_term(tm)
         }
         Term::Pair { fst_ty, snd_ty, fst, snd, .. } => {
             count_type(fst_ty) + count_type(snd_ty) + count_term(fst) + count_term(snd)

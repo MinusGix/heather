@@ -1,9 +1,10 @@
-//! Acceptance for indexed families, **route 2b** — the fording generator, end
-//! to end (`docs/inductive-fording-lowering.md` §13.2 items 8–14; the hand
-//! prototype behind it is `indexed_route_2b_wf.rs`, and the fording *layer*'s
-//! acceptance is `indexed_route_2b.rs`).
+//! Acceptance for indexed families on the **`IWf` route**, end to end
+//! (`docs/iwf-former-design.md` §8; the route was route 2b's fording until
+//! the 2026-10-22 re-lowering, whose acceptance this file was, and the file
+//! keeps that name and its section numbers from
+//! `docs/inductive-fording-lowering.md`).
 //!
-//! Every declaration below is lowered to `Σ(s : Skel). sEq(I; μ s; m)` and
+//! Every declaration below is lowered to `IWf(I; S; n; o; c)(m)` and
 //! re-checked by the real kernel, so a wrong encoding is a rejection rather
 //! than a checked theorem about the wrong type. The axes are
 //! `docs/testing-generated-terms.md`'s, and each test names the ones it
@@ -15,13 +16,13 @@
 //!   instantiated at a variable, and a `Type`-valued field at level 1);
 //! - **axis 3** — a **checking** position: every claim below is a `theorem`,
 //!   which is a checking position across the index equation;
-//! - **axis 4** — a **negative control** per encoding decision: F1, F2 and F3
-//!   each have one, the uniform-parameter row has one, and §8.4's form-B
-//!   residue has one (a *deliberate* negative, so the gap is in a test rather
-//!   than in a bug report).
+//! - **axis 4** — a **negative control** per encoding decision: what an `IWf`
+//!   signature cannot say (a label mentioning a child) has one, and the
+//!   uniform-parameter row has one. Fording's F1–F3 rejections and its form-B
+//!   residue were negatives here; on `IWf` they are positives, and each is
+//!   kept as one so the lift stays visible.
 
 use heather_elab::{ElabError, Elaborator, IndexedRoute};
-use heather_kernel::term::{GlobalBinding, Term, Type};
 
 fn elab(src: &str) -> Elaborator {
     let mut e = Elaborator::with_prelude().expect("prelude");
@@ -46,53 +47,90 @@ fn add(a: Nat, b: Nat) -> Nat { match b { Zero => a, Succ(k) => Succ(add(a, k)) 
 // §13.2 item 8 — the classifier
 // ---------------------------------------------------------------------------
 
-// §3.3's rows, each with its own message. Axis 4 for every encoding decision
-// F1–F3 rests on: each of these declarations *would* lower to something under
-// a weaker classifier, and what it would lower to is a quotient of the family
-// the user wrote (§4.2, and the prototype's `f2_falsifier_…`).
+// Fording's F1–F3 (`docs/inductive-fording-lowering.md` §3.3) each rejected
+// a declaration whose children's indices could not be recomputed from the
+// children. The `IWf` route stores a child's index in the label, so each of
+// them declares, constructs, and computes — with `match` β on open data.
 #[test]
-fn f1_a_child_at_a_non_variable_index_rejects() {
-    // `l`'s index is the constant `0`: fording recomputes a child's index from
-    // the child, so a constructor may only pin it by *naming* it.
-    let m = elab_err(&format!(
+fn f1_a_child_at_a_non_variable_index_declares() {
+    // `l`'s index is the constant `0`.
+    elab(&format!(
         "{ADD}
          inductive B1 : (n: Nat) -> Type {{
              B1Z                                      : B1(0),
              B1N(n: Nat, l: B1(0), r: B1(n))          : B1(add(n, n)),
-         }}"
+         }}
+         fn leaves1(n: Nat, t: B1(n)) -> Nat {{
+             match t {{ B1Z => 1, B1N(k, l, r) => add(leaves1(0, l), leaves1(k, r)) }}
+         }}
+         fn t1() -> B1(0) {{ B1N(0, B1Z, B1N(0, B1Z, B1Z)) }}
+         theorem leaves1_lit(): leaves1(0, t1()) = 3 {{ refl }}
+         theorem leaves1_open(n: Nat, l: B1(0), r: B1(n)):
+             leaves1(add(n, n), B1N(n, l, r)) = add(leaves1(0, l), leaves1(n, r)) {{ refl }}"
     ));
-    assert!(m.contains("is not a variable"), "{m}");
-    assert!(m.contains("coherence predicate"), "{m}");
 }
 
 #[test]
-fn f2_two_children_at_one_index_rejects() {
-    // The skeleton cannot record that two children agree — a label cannot
-    // mention its children — so the constraint would need §10.3's predicate.
-    let m = elab_err(&format!(
+fn f2_two_children_at_one_index_declares() {
+    // Two children at one index: the label records it once, so they agree.
+    elab(&format!(
         "{ADD}
          inductive B2 : (n: Nat) -> Type {{
-             B2Z                                      : B2(0),
+             B2Z                                      : B2(1),
              B2N(n: Nat, l: B2(n), r: B2(n))          : B2(add(n, n)),
-         }}"
+         }}
+         fn leaves2(n: Nat, t: B2(n)) -> Nat {{
+             match t {{ B2Z => 1, B2N(k, l, r) => add(leaves2(k, l), leaves2(k, r)) }}
+         }}
+         fn four() -> B2(4) {{ B2N(2, B2N(1, B2Z, B2Z), B2N(1, B2Z, B2Z)) }}
+         theorem leaves2_lit(): leaves2(4, four()) = 4 {{ refl }}
+         theorem leaves2_open(n: Nat, l: B2(n), r: B2(n)):
+             leaves2(add(n, n), B2N(n, l, r)) = add(leaves2(n, l), leaves2(n, r)) {{ refl }}"
     ));
-    assert!(m.contains("share the index variable `n`"), "{m}");
-    assert!(m.contains("coherence predicate"), "{m}");
 }
 
 #[test]
-fn f3_a_payload_depending_on_a_child_index_rejects() {
-    // `x`'s type mentions `n`, which fords away: `n` is recomputed from `xs`,
-    // and a child is not in scope in a payload field's type.
-    let m = elab_err(&format!(
+fn f3_a_payload_depending_on_a_child_index_declares() {
+    // `e`'s type mentions `n`, a child's index: `n` is a stored field now.
+    elab(&format!(
         "{ADD}
          inductive B3 : (n: Nat) -> Type {{
-             B3Z                                      : B3(0),
-             B3C(n: Nat, x: Fin(n), xs: B3(n))        : B3(add(n, n)),
-         }}"
+             B3Z                                      : B3(1),
+             B3C(n: Nat, e: add(n, 0) = n, xs: B3(n)) : B3(add(n, n)),
+         }}
+         fn depth3(n: Nat, t: B3(n)) -> Nat {{
+             match t {{ B3Z => 0, B3C(k, e, xs) => Succ(depth3(k, xs)) }}
+         }}
+         fn b3() -> B3(4) {{ B3C(2, refl, B3C(1, refl, B3Z)) }}
+         theorem depth3_lit(): depth3(4, b3()) = 2 {{ refl }}"
     ));
-    assert!(m.contains("fords away"), "{m}");
-    assert!(m.contains("route-1-eligible if every result index is a pattern"), "{m}");
+}
+
+#[test]
+fn a_label_that_would_mention_a_child_rejects() {
+    // What an `IWf` signature cannot say: the shape, the output index and the
+    // child indices are read off the label, and a child is not in it.
+    let m = elab_err(
+        "inductive R1 : (n: Nat) -> Type {
+             R1Z                                      : R1(0),
+             R1N(l: R1(0))                            : R1(count(l)),
+         }",
+    );
+    assert!(m.contains("result index mentions the child `l`"), "{m}");
+    let m = elab_err(
+        "inductive R2 : (n: Nat) -> Type {
+             R2Z                                      : R2(0),
+             R2N(l: R2(0), r: R2(count(l)))           : R2(0),
+         }",
+    );
+    assert!(m.contains("index mentions the child `l`"), "{m}");
+    let m = elab_err(
+        "inductive R3 : (n: Nat) -> Type {
+             R3Z                                      : R3(0),
+             R3N(l: R3(0), e: l = l)                  : R3(0),
+         }",
+    );
+    assert!(m.contains("type mentions the child `l`"), "{m}");
 }
 
 #[test]
@@ -106,20 +144,21 @@ fn a_uniform_bare_variable_index_is_still_a_parameter() {
 
 #[test]
 fn the_mixed_row_names_both_constructors() {
-    // §3.3's mixed row: `MA` is not route-1-eligible (a deep pattern) and `MB`
-    // is not route-2b-eligible (F2), so the declaration is in neither
-    // fragment — and saying only one is what sends a user in a circle.
+    // The mixed row: `MA` is not route-1-eligible (a deep pattern) and `MB`
+    // is not `IWf`-eligible (its index mentions a child), so the declaration
+    // is in neither fragment — and saying only one is what sends a user in a
+    // circle.
     let m = elab_err(
         "inductive MX : (n: Nat) -> Type {
              MA(n: Nat, p: MX(n))                     : MX(Succ(Succ(n))),
-             MB(n: Nat, l: MX(n), r: MX(n))           : MX(n),
+             MB(n: Nat, l: MX(n))                     : MX(count(l)),
          }",
     );
     assert!(m.contains("in neither indexed fragment"), "{m}");
     assert!(m.contains("`MA` is not route-1-eligible"), "{m}");
-    assert!(m.contains("`MB` is not route-2b-eligible"), "{m}");
+    assert!(m.contains("`MB` is not `IWf`-eligible"), "{m}");
     assert!(m.contains("deeper than one constructor"), "{m}");
-    assert!(m.contains("share the index variable"), "{m}");
+    assert!(m.contains("mentions the child `l`"), "{m}");
 }
 
 // §3.4's worked examples, each routed where §3 says. The route-1 rows keep
@@ -161,7 +200,7 @@ fn every_worked_example_routes_where_section_three_says() {
     for name in ["Tm", "Ev", "Br", "Any"] {
         assert_eq!(
             forded.indexed_route(name),
-            Some(IndexedRoute::Forded),
+            Some(IndexedRoute::Iwf),
             "worked example `{name}` took the wrong indexed route"
         );
     }
@@ -293,31 +332,20 @@ fn form_a_beta_is_definitional_on_open_data() {
 }
 
 #[test]
-fn form_b_beta_stalls_on_open_children_and_this_is_the_documented_residue() {
-    // §8.4's third bullet, as a **deliberate negative**: a forded constructor
-    // manufactures a non-`srefl` proof as soon as one of its children is open
-    // (the proof is a `transp` chain over a variable), the arm's own `transp`
-    // does not β, and the residue is a stuck `App(transp …)` that the
-    // head-only strip never reaches
-    // (`docs/metatheory-ch07-extensions.md` §22.1 in a new position).
-    //
-    // The consequence is bounded and stated: a spurious `NotConvertible` at
-    // check time, never an unsound accept. This test is where that is visible
-    // rather than in a bug report — and it is `count`'s *only* failing claim,
-    // which is what makes it residue and not a defect.
-    //
-    // Written without the `tnode` wrapper since 2026-08-04: `Node(n, m, l, r)`
-    // now infers its instantiation from a child (§14.7), so the claim is the
-    // constructor's own and the residue cannot be blamed on the wrapper.
-    let m = elab_err(&format!(
+fn node_beta_is_definitional_on_open_children() {
+    // Fording's form-B residue (§8.4's third bullet) was a deliberate negative
+    // here: `Node`'s index is not a pattern, its arm cast with `transp`, and β
+    // stalled on open children. On `IWf` every arm is typed at its own output
+    // index, there is no cast, and β fires at any index.
+    elab(&format!(
         "{ADD}{TREE}
          theorem node_beta(n: Nat, m: Nat, l: Tree<Nat>(n), r: Tree<Nat>(m)):
              count(Succ(add(n, m)), Node(n, m, l, r))
+                 = Succ(add(count(n, l), count(m, r))) {{ refl }}
+         fn node_beta_open<A>(n: Nat, m: Nat, l: Tree<A>(n), r: Tree<A>(m))
+             -> count(Succ(add(n, m)), Node(n, m, l, r))
                  = Succ(add(count(n, l), count(m, r))) {{ refl }}"
     ));
-    // The shape of the failure is the claim: a kernel `NotConvertible`, not a
-    // wrong answer and not a loop.
-    assert!(m.contains("NotConvertible"), "{m}");
 }
 
 // ---------------------------------------------------------------------------
@@ -538,304 +566,6 @@ fn fields_above_level_zero() {
          theorem tl_cons(n: Nat, a: Type, t: TL(n)):
              tlen(Succ(n), TLCons(n, a, t)) = Succ(tlen(n, t)) {{ refl }}"
     ));
-}
-
-// -- §9's structural walker -------------------------------------------------
-//
-// > **The generator never emits a `transp` at convertible endpoints — in
-// > VALUE, INDEX or CODE position.**
-//
-// How a violation is caught has to be a *test*, not a promise. This walker
-// runs over **every term the 2b generator emits** — the type and body of every
-// global the sources below produce — and asserts:
-//
-//  1. no `Transp` occurs under a `Type::Vec { len }`, a `Type::Wf { arity }` or
-//     a `Type::El { tm }` (§9 rule 4: index and code positions are cast-free by
-//     construction; §22.4's kernel-side negatives are why that matters, and
-//     they are cited from `issues/seq-strip-type-former-negatives.md` rather
-//     than duplicated);
-//  2. every `Transp` has endpoints the walker cannot prove convertible by
-//     syntactic equality (§9 rule 1: a redundant cast is opaque to elimination;
-//     rule 3 says the arm cast's endpoints `μ ŝ` and the *bound* `m'` do not
-//     convert under any instantiation the generator can see).
-//
-// The walk is deliberately **exhaustive-by-panic**: a node form it does not
-// know fails the test rather than being skipped, so the assertion cannot pass
-// vacuously by walking past the interesting part of a term.
-
-#[derive(Default)]
-struct Walk {
-    transps: usize,
-}
-
-impl Walk {
-    fn tm(&mut self, t: &Term, former: bool) {
-        match t {
-            Term::Transp { ty, motive, lhs, rhs, proof, tm, .. } => {
-                assert!(
-                    !former,
-                    "§9: a `transp` under a `Vec` length, a `Wf` arity or an `El` code — \
-                     a canonical type would read as neutral (docs/sprop-design.md §5.4)"
-                );
-                assert!(
-                    lhs != rhs,
-                    "§9: a `transp` at syntactically equal endpoints is redundant, and a \
-                     redundant cast is opaque to elimination"
-                );
-                self.transps += 1;
-                self.ty(ty, former);
-                self.ty(motive, former);
-                for x in [lhs, rhs, proof, tm] {
-                    self.tm(x, former);
-                }
-            }
-            Term::Var(_) | Term::TmNat | Term::TmTy(_) | Term::Zero | Term::NatLit(_) => {}
-            Term::TmUnit { .. } | Term::TmEmpty { .. } | Term::TmSEmpty { .. } => {}
-            Term::Triv { .. } => {}
-            Term::Succ(a) => self.tm(a, former),
-            Term::TmPi { dom, cod, .. } => {
-                self.tm(dom, former);
-                self.tm(cod, former);
-            }
-            Term::TmSigma { fst, snd, .. } => {
-                self.tm(fst, former);
-                self.tm(snd, former);
-            }
-            Term::TmSum { lhs, rhs, .. } | Term::TmW { shape: lhs, pos: rhs, .. } => {
-                self.tm(lhs, former);
-                self.tm(rhs, former);
-            }
-            Term::TmId { ty, lhs, rhs, .. } | Term::TmSEq { ty, lhs, rhs, .. } => {
-                for x in [ty, lhs, rhs] {
-                    self.tm(x, former);
-                }
-            }
-            Term::TmVec { elem, len, .. } => {
-                self.tm(elem, former);
-                self.tm(len, true);
-            }
-            Term::TmFin { len } => self.tm(len, true),
-            Term::TmWf { shape, arity, .. } => {
-                self.tm(shape, former);
-                self.tm(arity, true);
-            }
-            Term::ElimNat { motive, base, step, scrut, .. } => {
-                self.ty(motive, former);
-                for x in [base, step, scrut] {
-                    self.tm(x, former);
-                }
-            }
-            Term::Refl { ty, tm, .. } | Term::SRefl { ty, tm, .. } => {
-                self.ty(ty, former);
-                self.tm(tm, former);
-            }
-            Term::J { ty, lhs, motive, case, rhs, proof, .. } => {
-                self.ty(ty, former);
-                self.ty(motive, former);
-                for x in [lhs, case, rhs, proof] {
-                    self.tm(x, former);
-                }
-            }
-            Term::ElimSEmpty { motive, scrut, .. } | Term::ElimEmpty { motive, scrut, .. } => {
-                self.ty(motive, former);
-                self.tm(scrut, former);
-            }
-            Term::Pair { fst_ty, snd_ty, fst, snd, .. } => {
-                self.ty(fst_ty, former);
-                self.ty(snd_ty, former);
-                self.tm(fst, former);
-                self.tm(snd, former);
-            }
-            Term::Fst { fst_ty, snd_ty, pair, .. } | Term::Snd { fst_ty, snd_ty, pair, .. } => {
-                self.ty(fst_ty, former);
-                self.ty(snd_ty, former);
-                self.tm(pair, former);
-            }
-            Term::Inl { lhs, rhs, val, .. } | Term::Inr { lhs, rhs, val, .. } => {
-                self.ty(lhs, former);
-                self.ty(rhs, former);
-                self.tm(val, former);
-            }
-            // The checked spellings (docs/intro-by-type-design.md): at most
-            // one annotation, and the projections none.
-            Term::PairAt { ty, fst, snd } => {
-                if let Some(ty) = ty {
-                    self.ty(ty, former);
-                }
-                self.tm(fst, former);
-                self.tm(snd, former);
-            }
-            Term::InlAt { ty, val } | Term::InrAt { ty, val } => {
-                if let Some(ty) = ty {
-                    self.ty(ty, former);
-                }
-                self.tm(val, former);
-            }
-            Term::FstAt { pair } | Term::SndAt { pair } => self.tm(pair, former),
-            Term::Case { lhs, rhs, motive, case_l, case_r, scrut, .. } => {
-                for x in [lhs, rhs, motive] {
-                    self.ty(x, former);
-                }
-                for x in [case_l, case_r, scrut] {
-                    self.tm(x, former);
-                }
-            }
-            Term::Sup { shape_ty, pos_ty, label, children, .. } => {
-                self.ty(shape_ty, former);
-                self.ty(pos_ty, former);
-                self.tm(label, former);
-                self.tm(children, former);
-            }
-            Term::ElimW { shape, pos, motive, step, scrut, .. } => {
-                for x in [shape, pos, motive] {
-                    self.ty(x, former);
-                }
-                self.tm(step, former);
-                self.tm(scrut, former);
-            }
-            Term::Supf { shape, arity, label, children, .. } => {
-                self.ty(shape, former);
-                self.tm(arity, true);
-                self.tm(label, former);
-                self.tm(children, former);
-            }
-            Term::ElimWf { shape, arity, motive, step, scrut, .. } => {
-                self.ty(shape, former);
-                self.tm(arity, true);
-                self.ty(motive, former);
-                self.tm(step, former);
-                self.tm(scrut, former);
-            }
-            Term::Lam { dom, body, .. } => {
-                self.ty(dom, former);
-                self.tm(body, former);
-            }
-            Term::App { fun, dom, cod, arg, .. } => {
-                self.tm(fun, former);
-                self.ty(dom, former);
-                self.ty(cod, former);
-                self.tm(arg, former);
-            }
-            Term::AppAt { fun, arg } => {
-                self.tm(fun, former);
-                self.tm(arg, former);
-            }
-            Term::GlobalTm { subst, .. } => {
-                for x in &subst.terms {
-                    self.tm(x, former);
-                }
-            }
-            other => panic!("the §9 walker does not know this node: {other:?}"),
-        }
-    }
-
-    fn ty(&mut self, t: &Type, former: bool) {
-        match t {
-            Type::Nat | Type::Ty(_) => {}
-            Type::Unit { .. } | Type::Empty { .. } | Type::SEmpty { .. } => {}
-            Type::Pi { dom, cod, .. } | Type::Sigma { fst: dom, snd: cod, .. } => {
-                self.ty(dom, former);
-                self.ty(cod, former);
-            }
-            Type::Sum { lhs, rhs, .. } | Type::W { shape: lhs, pos: rhs, .. } => {
-                self.ty(lhs, former);
-                self.ty(rhs, former);
-            }
-            // §9's CODE position: an `El`'s code is where a `transp` makes a
-            // canonical type read as neutral.
-            Type::El { tm, .. } => self.tm(tm, true),
-            Type::Id { ty, lhs, rhs, .. } | Type::SEq { ty, lhs, rhs, .. } => {
-                self.ty(ty, former);
-                self.tm(lhs, former);
-                self.tm(rhs, former);
-            }
-            // §9's INDEX positions.
-            Type::Vec { elem, len, .. } => {
-                self.ty(elem, former);
-                self.tm(len, true);
-            }
-            Type::Fin { len } => self.tm(len, true),
-            Type::Wf { shape, arity, .. } => {
-                self.ty(shape, former);
-                self.tm(arity, true);
-            }
-            Type::GlobalTy { subst, .. } => {
-                for x in &subst.terms {
-                    self.tm(x, former);
-                }
-            }
-            other => panic!("the §9 walker does not know this type: {other:?}"),
-        }
-    }
-}
-
-fn walk_emitted(src: &str) -> usize {
-    let mut e = Elaborator::with_prelude().expect("prelude");
-    let base = e.psi().bindings.len();
-    e.elab_source(src).unwrap_or_else(|err| panic!("{}", err.render(src)));
-    let mut w = Walk::default();
-    for b in e.psi().bindings.iter().skip(base) {
-        match b {
-            GlobalBinding::Tm { ty, body, .. } => {
-                w.ty(ty, false);
-                if let Some(t) = body {
-                    w.tm(t, false);
-                }
-            }
-            GlobalBinding::Ty { .. } | GlobalBinding::Ctx => {}
-        }
-    }
-    w.transps
-}
-
-#[test]
-fn the_cast_rule_holds_over_every_emitted_term() {
-    // Run the walker on the whole acceptance surface: the `Term`/`App` family,
-    // the branching `Tree` at an open element type, the deep pattern, the
-    // non-recursive skeleton, the boxed field, and the level-1 family.
-    let mut seen = 0usize;
-    seen += walk_emitted(&format!(
-        "{ADD}{TM}
-         fn app(n: Nat, m: Nat, f: Tm(n), a: Tm(m)) -> Tm(add(n, m)) {{ Ap(n, m, f, a) }}
-         inductive Boxed {{ MkBoxed(n: Nat, t: Tm(n)) }}
-         fn box_it(n: Nat, t: Tm(n)) -> Boxed {{ MkBoxed(n, t) }}
-         fn box_size(b: Boxed) -> Nat {{ match b {{ MkBoxed(n, t) => size(n, t) }} }}"
-    ));
-    seen += walk_emitted(&format!(
-        "{ADD}{TREE}
-         fn build<A>(n: Nat, m: Nat, x: A, l: Tree<A>(n), r: Tree<A>(m))
-             -> Tree<A>(Succ(Succ(add(n, m)))) {{ Bud(Succ(add(n, m)), x, Node(n, m, l, r)) }}
-         fn bud_beta_open<A>(n: Nat, x: A, t: Tree<A>(n))
-             -> count(Succ(n), Bud(n, x, t)) = Succ(count(n, t)) {{ refl }}"
-    ));
-    seen += walk_emitted(&format!(
-        "{ADD}
-         inductive Ev : (n: Nat) -> Type {{
-             EZ                                       : Ev(0),
-             ESS(n: Nat, p: Ev(n))                    : Ev(Succ(Succ(n))),
-         }}
-         fn half(n: Nat, e: Ev(n)) -> Nat {{
-             match e {{ EZ => 0, ESS(k, p) => Succ(half(k, p)) }}
-         }}
-         fn four() -> Ev(4) {{ ESS(2, ESS(0, EZ)) }}"
-    ));
-    seen += walk_emitted(&format!(
-        "{ADD}
-         inductive Any : (n: Nat) -> Type {{
-             AZ                                       : Any(0),
-             AA(n: Nat)                               : Any(n),
-         }}
-         fn read(n: Nat, a: Any(n)) -> Nat {{ match a {{ AZ => 0, AA(k) => k }} }}"
-    ));
-    seen += walk_emitted(&format!(
-        "{ADD}{LEVEL1}
-         fn one_ty() -> TL(1) {{ TLCons(0, Nat, TLNil) }}
-         fn two_ty() -> TL(2) {{ TLCat(1, 1, one_ty(), one_ty()) }}"
-    ));
-    // The walk is only worth anything if it *found* the casts the generator is
-    // supposed to emit: §7's `π_c` chains and §8.3's arm casts. Zero would mean
-    // the sources above never reached a forded term.
-    assert!(seen > 0, "the walker found no `transp` at all — it walked past the generator");
 }
 
 // ---------------------------------------------------------------------------

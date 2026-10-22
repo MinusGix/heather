@@ -617,7 +617,7 @@ fn stuck_scrutinees(term: &Term, out: &mut Vec<Term>, budget: &mut u32) {
         | Term::Snd { pair, .. }
         | Term::FstAt { pair, .. }
         | Term::SndAt { pair, .. } => Some(pair),
-        Term::J { proof, .. } | Term::Transp { proof, .. } => Some(proof),
+        Term::J { proof, .. } => Some(proof),
         _ => None,
     };
     if let Some(scrutinee) = scrutinee {

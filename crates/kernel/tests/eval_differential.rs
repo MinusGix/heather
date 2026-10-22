@@ -1017,28 +1017,6 @@ impl<'a, 'v> Agree<'a, 'v> {
                 self.ne(&prefix, proof, gamma, depth)
             }
             (
-                Elim::Transp { ty_level: a1, motive_level: a2, ty, motive, lhs, rhs, tm },
-                Term::Transp {
-                    ty_level: b1,
-                    motive_level: b2,
-                    ty: t2,
-                    motive: m2,
-                    lhs: l2,
-                    rhs: r2,
-                    proof,
-                    tm: x2,
-                },
-            ) => {
-                self.lev(a1, b1, "transp type level")?;
-                self.lev(a2, b2, "transp motive level")?;
-                self.lazy_ty(ty, t2, gamma, d)?;
-                self.under_ty(motive, m2, gamma, 1, d)?;
-                self.lazy_tm(lhs, l2, gamma, d)?;
-                self.lazy_tm(rhs, r2, gamma, d)?;
-                self.lazy_tm(tm, x2, gamma, d)?;
-                self.ne(&prefix, proof, gamma, depth)
-            }
-            (
                 Elim::LetBoxTy { motive_level: a1, code_level: a2, ctx: ca, motive, .. },
                 Term::LetBoxTy {
                     motive_level: b1,

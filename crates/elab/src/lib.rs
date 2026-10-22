@@ -117,7 +117,7 @@ pub mod reprgen;
 pub use provenance::{AssumptionKind, AxiomReport, AxiomUse};
 mod emission_walk;
 pub use emission_walk::EmissionFinding;
-mod forded;
+mod iwf_family;
 mod gendefs;
 mod generalize;
 mod goal_combinators;
@@ -3262,7 +3262,7 @@ impl Elaborator {
         let ind = self.types.inductive(&key)?;
         ind.index.as_ref()?;
         Some(if ind.skel.is_some() {
-            IndexedRoute::Forded
+            IndexedRoute::Iwf
         } else {
             IndexedRoute::One
         })
@@ -6042,6 +6042,20 @@ impl Elaborator {
         located
     }
 
+    /// The first checking mismatch recorded since note `from` that the probe
+    /// decides, as an error: for a construction the declaration gate never
+    /// sees, such as an `IWf`-route family's signature built at its
+    /// declaration (`inductive.rs`), where nothing else would refuse it.
+    pub(crate) fn mismatch_since(&self, from: usize) -> Option<ElabError> {
+        let notes = self.attempt.check_notes.borrow();
+        notes.iter().skip(from).find_map(|note| {
+            self.probed_check_note(note).map(|(m, span)| {
+                let (MismatchNote::Spelled(msg) | MismatchNote::Located(msg)) = m;
+                ElabError::Elab { msg, span }
+            })
+        })
+    }
+
     /// [`Self::note_check_mismatch`] at the one checking form that compares
     /// nothing (`issues/elab-refl-accepts-match-eta-kernel-rejects.md`).
     ///
@@ -7317,7 +7331,7 @@ impl Elaborator {
                 // Route 2b's forded family (docs/inductive-fording-lowering.md
                 // §12.1): the same two-binder motive rule as route 1's, over
                 // the Σ+`sEq` form instead of the eliminator's.
-                if let Some((ind, fam)) = self.forded_of_at(cx, &scrut_ty) {
+                if let Some((ind, fam)) = self.iwf_of_at(cx, &scrut_ty) {
                     let (binders, body) = matching::motive_lam(
                         m,
                         2,
@@ -7350,7 +7364,7 @@ impl Elaborator {
                         Some((c, a)) => (c, a.as_slice()),
                         None => (cx, arms.as_slice()),
                     };
-                    let t = self.elab_match_forded(
+                    let t = self.elab_match_iwf(
                         acx,
                         *form,
                         &ind,
@@ -7359,6 +7373,7 @@ impl Elaborator {
                         scrut_t,
                         motive2,
                         mlvl.clone(),
+                        crate::iwf_family::IndexMotive::Plain,
                         e.span,
                     )?;
                     return Ok((t, result, mlvl));
@@ -7645,7 +7660,7 @@ impl Elaborator {
         // that, and the thing that can is the family's inversion principle —
         // a library device, not a syntax (issues/surface-existential.md).
         if let Some(ind) = self
-            .forded_of_at(cx, scrut_ty)
+            .iwf_of_at(cx, scrut_ty)
             .map(|(ind, _)| ind)
             .or_else(|| self.indexed_of_at(cx, scrut_ty).map(|(ind, _)| ind))
         {

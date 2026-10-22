@@ -288,22 +288,6 @@ impl Walk<'_> {
                 self.slot("Squash.ty", ty, d);
                 self.term(tm, d);
             }
-            Term::Transp {
-                ty,
-                motive,
-                lhs,
-                rhs,
-                proof,
-                tm,
-                ..
-            } => {
-                self.slot("Transp.ty", ty, d);
-                self.slot("Transp.motive", motive, d + 1);
-                self.term(lhs, d);
-                self.term(rhs, d);
-                self.term(proof, d);
-                self.term(tm, d);
-            }
             Term::ElimSEmpty { motive, scrut, .. } => {
                 self.slot("ElimSEmpty.motive", motive, d + 1);
                 self.term(scrut, d);

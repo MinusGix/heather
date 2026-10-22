@@ -441,21 +441,6 @@ impl Cache {
                 .join(self.term_use(case))
                 .join(self.term_use(rhs))
                 .join(self.term_use(proof)),
-            Term::Transp {
-                ty,
-                motive,
-                lhs,
-                rhs,
-                proof,
-                tm,
-                ..
-            } => self
-                .type_use(ty)
-                .join(self.type_use(motive).under(1))
-                .join(self.term_use(lhs))
-                .join(self.term_use(rhs))
-                .join(self.term_use(proof))
-                .join(self.term_use(tm)),
             Term::ElimSEmpty { motive, scrut, .. } | Term::ElimEmpty { motive, scrut, .. } => {
                 self.type_use(motive).under(1).join(self.term_use(scrut))
             }
@@ -694,7 +679,6 @@ impl Cache {
             .join(self.term_use(&b.ty_sempty))
             .join(self.term_use(&b.tm_sempty))
             .join(self.term_use(&b.tm_srefl).under(2))
-            .join(self.term_use(&b.tm_transp).under(6))
             .join(self.term_use(&b.tm_elim_sempty).under(2))
             .join(self.term_use(&b.ty_squash).under(1))
             .join(self.term_use(&b.tm_squash).under(1))

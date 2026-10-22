@@ -10,9 +10,9 @@ the same Lean term, so `El` disappears).
 What each former relies on from Lean's kernel:
 - `Nat`: the builtin, so literals are GMP literals.
 - `Id`: a Type-valued inductive, so no K and no proof irrelevance.
-- `SEq`: a one-field structure over `Eq`. Proof irrelevance and the K-like
-  reduction of `Eq.rec` give Heather's strip rule; *irrelevance between two
-  neutral proofs* additionally needs the exporter to write every proof in
+- `SEq`: a one-field structure over `Eq`, whose proofs are irrelevant
+  (Heather's `sEq` has no eliminator since `transp` was removed);
+  *irrelevance between two neutral proofs* needs the exporter to write every proof in
   eta-long form `⟨p.pf⟩`, because Lean's structure eta only fires against a
   constructor.
 - `Sig`, `Unit`: structures, so Σ-eta (against a constructor) and unit eta
@@ -40,8 +40,6 @@ abbrev J (A : Type u) (a : A) (M : (y : A) → Id A a y → Type v) (c : M a (re
 structure SEq (A : Type u) (a b : A) : Type u where
   pf : a = b
 abbrev srefl (A : Type u) (a : A) : SEq A a a := ⟨rfl⟩
-abbrev transp (A : Type u) (P : A → Type v) (a b : A) (e : SEq A a b) (t : P a) : P b :=
-  @Eq.rec A a (fun x _ => P x) t b e.pf
 
 structure SEmpty : Type u where
   pf : False

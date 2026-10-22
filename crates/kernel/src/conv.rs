@@ -37,7 +37,7 @@
 //! - **Boxed types/terms compare syntactically** (`==`; α-equality is free
 //!   under de Bruijn). Code is static data — β-convertible code is *not*
 //!   convertible.
-//! - Neutral recursors compare motives, all 66 branches (each at its
+//! - Neutral recursors compare motives, all 65 branches (each at its
 //!   instantiated motive type, the ch. 04 `G_A` telescopes), and indices —
 //!   the ch. 06 `C_A` bundle ([`Conv::rec_ca`]).
 //! - The layer index restricts *types*, not terms (ch. 06 intro): layer-m
@@ -696,8 +696,7 @@ fn lookup(psi: &GlobalCtx, v: GlobalVar) -> Option<&GlobalBinding> {
 /// The **definition** at the head of a δ-stuck spine, if any: the one
 /// global whose unfolding would let this term reduce further. Exactly the
 /// scrutinee/head positions [`crate::reduce::is_neutral_term`] recurses
-/// through, minus `transp`'s proof — that head belongs to [`Conv::strip`],
-/// which runs after the δ-lazy stage.
+/// through.
 fn delta_head(t: &Term, defs: Defs<'_>) -> Option<GlobalVar> {
     delta_head_in(t, defs, false)
 }
@@ -843,62 +842,15 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
     /// expansion is materialized. Failure means "unfold and retry", not
     /// "not convertible".
     ///
-    /// Guard semantics are [`Conv::strip`]'s, for the same reason: catch
-    /// `NotConvertible`, propagate `OutOfFuel` (the shared budget is spent
-    /// and the verdict must not depend on *where* it died), and no fuel
-    /// refund — monotone-decreasing fuel is the totality argument.
+    /// Guard semantics: catch `NotConvertible`, propagate `OutOfFuel` (the
+    /// shared budget is spent and the verdict must not depend on *where* it
+    /// died), and no fuel refund — monotone-decreasing fuel is the totality
+    /// argument.
     fn delta_lazy<T>(&mut self, attempt: impl FnOnce(&mut Self) -> R<T>) -> R<Option<T>> {
         match attempt(self) {
             Ok(v) => Ok(Some(v)),
             Err(ConvError::NotConvertible) => Ok(None),
             Err(e) => Err(e),
-        }
-    }
-
-    /// The **strip** loop: a stuck `transp(I; x.P; a; b; e; t)` whose
-    /// endpoints convert is replaced by its payload `t`, re-whnf'd, and
-    /// re-stripped — the equation `transp ≈ t` when `a ≈ b` (well-typed
-    /// by `P[a] ≈ P[b]`), which covers what β cannot: a *neutral* proof
-    /// at convertible endpoints (docs/sprop-design.md §5.2). The rule is
-    /// keyed on the *term's* head, unlike the type-keyed η family, so it
-    /// lives in the term-whnf stage of [`Conv::tm`] (which owns the
-    /// hot-path discriminant check), not in a `tm_nf` type arm.
-    ///
-    /// The guard is an ordinary conversion query caught at this call
-    /// site — not a query mode. `NotConvertible` means "keep the transp;
-    /// the neutral path decides" and is the only caught error;
-    /// `OutOfFuel` propagates (the shared budget is spent, and the
-    /// verdict must not depend on *where* it died). No fuel refund on a
-    /// failed guard: monotone-decreasing fuel is the totality argument
-    /// (module doc). Each successful strip pays `spend()` — morally a
-    /// conversion-level reduction step; the loop terminates because the
-    /// payload is a strict subterm.
-    #[cold]
-    fn strip(&mut self, mut cur: D::Tm, env: &Env<'v>) -> R<D::Tm> {
-        loop {
-            if !D::is_transp(&cur) {
-                return Ok(cur);
-            }
-            let (ty_level, ty, lhs, rhs, tm) = match D::view_tm(self, env, &cur) {
-                TmView::Transp { ty_level, ty, lhs, rhs, tm, .. } => {
-                    (ty_level.clone(), ty, lhs, rhs, tm)
-                }
-                _ => return Ok(cur),
-            };
-            // Fast path: syntactic endpoint equality (α-equality is free
-            // under de Bruijn); the full guarded query — at the transp's
-            // own annotations — only when that misses.
-            let strip = D::tm_eq_fast(&lhs, &rhs)
-                || match self.tm(env, &lhs, &rhs, &ty, &ty_level) {
-                    Ok(()) => true,
-                    Err(ConvError::NotConvertible) => false,
-                    Err(e) => return Err(e),
-                };
-            if !strip {
-                return Ok(cur);
-            }
-            self.spend()?;
-            cur = D::whnf_tm(self, env, &tm)?;
         }
     }
 
@@ -1462,19 +1414,12 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         }
     }
 
-    /// The δ stage, the transp strip and the comparison, shared by the two
-    /// entries above.
+    /// The δ stage and the comparison, shared by the two entries above.
     #[inline]
     fn tm_w(&mut self, env: &Env<'v>, mut wa: D::Tm, mut wb: D::Tm, w: &D::Ty, l: &Level) -> R<TmProgress<D::TmC>> {
         // δ-lazy stage (extension; see [`Conv::ty`]): stop at a definition's
         // spine, and when both sides stop at the *same* one, try the spine
         // comparison before unfolding anything.
-        // whnf, then strip transp heads whose endpoints convert
-        // ([`Conv::strip`]). The check is inline (not a whnf-wrapping
-        // helper) so the hot path — no transp head, i.e. every pre-sEq
-        // program — pays one discriminant read and zero extra `Term`
-        // moves; the helper layering cost 1.35× on `conv/computed-numeral`
-        // (`scripts/bench --check`, 2026-07-28).
         if self.has_defs {
             loop {
                 let heads = (D::delta_head(self, env, &wa), D::delta_head(self, env, &wb));
@@ -1555,12 +1500,6 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                 }
             }
         }
-        if D::is_transp(&wa) {
-            wa = self.strip(wa, env)?;
-        }
-        if D::is_transp(&wb) {
-            wb = self.strip(wb, env)?;
-        }
         // A δ-stuck **type** unfolds before the comparison is directed by it
         // — the mirror of [`Conv::ty_w`]'s δ stage, which until 2026-08-13
         // terms never had: `tm` whnfs its type opaquely, so two canonical
@@ -1601,7 +1540,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
 
     /// Consume Nat-prefix continuations without one native frame per
     /// predecessor. Each iteration is the ordinary `tm` entry (fuel,
-    /// identity, memo, WHNF), followed by the same δ-lazy/strip/type-directed
+    /// identity, memo, WHNF), followed by the same δ-lazy/type-directed
     /// comparison as before. The loop holds one depth slot, including when
     /// entered from `tm_root`, which holds none of its own.
     ///
@@ -1968,9 +1907,8 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
             TyView::Unit { .. } => Ok(()),
             // sEq irrelevance (extension; docs/sprop-design.md §5.2): the
             // Unit pattern generalized — any two proofs of a strict equality
-            // are definitionally equal. This arm is also what lets the
-            // transp congruence in `tm_ne` skip the proofs, and what makes
-            // UIP at sEq definitional (`p ≡ srefl`) rather than a theorem.
+            // are definitionally equal, which makes UIP at sEq definitional
+            // (`p ≡ srefl`) rather than a theorem.
             // Both of Unit's ch. 07 §4 consequences apply verbatim:
             // presupposition holds by assumption on the caller, and the arm
             // must sit here in `tm_nf`, ahead of any structural fallback.
@@ -2537,52 +2475,6 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                 self.tm_nee_c(env, p1, p2)?; // inferred Id(A; a; u): forces A, a, u
                 Ok((D::inst_ty(self, env, env, m1, &[r1.clone(), p1.clone()])?, (*ml1).clone()))
             }
-            // transp congruence (extension; docs/sprop-design.md §5.3) —
-            // reached only when *both* sides' strip guards failed, i.e. two
-            // genuinely stuck transports. Inverts J's discipline: J compares
-            // its proof structurally because the proof is its scrutinee and
-            // neutrality is keyed on it; transp's stuckness is keyed on the
-            // endpoints, so two stuck transps over *different* neutral
-            // proofs must still be equal — the proofs are deliberately not
-            // compared (their type is sEq, whose irrelevance arm accepts any
-            // two terms; skipping is that arm applied, not a special case).
-            // So there is no scrutinee whose type forces `I`, `a` or `b`,
-            // and unlike the eliminators above this arm still compares
-            // every annotation (transp is slated to leave the kernel,
-            // docs/iwf-former-design.md §13 step 6, so it is left as is;
-            // issues/conversion-typed-eliminator-congruence.md).
-            (
-                TmView::Transp {
-                    ty_level: al1,
-                    motive_level: ml1,
-                    ty: s1,
-                    motive: m1,
-                    lhs: a1,
-                    rhs: b1,
-                    tm: t1,
-                },
-                TmView::Transp {
-                    ty_level: al2,
-                    motive_level: ml2,
-                    ty: s2,
-                    motive: m2,
-                    lhs: a2,
-                    rhs: b2,
-                    tm: t2,
-                },
-            ) => {
-                self.lev_eq(al1, al2)?;
-                self.lev_eq(ml1, ml2)?;
-                self.ty(env, s1, s2, al1)?;
-                self.tm(env, a1, a2, s1, al1)?;
-                self.tm(env, b1, b2, s1, al1)?;
-                // P scoped in (Γ, x : I), as in typing.rs.
-                let e_x = D::push_entry(env, s1, al1);
-                self.ty(&e_x, m1, m2, ml1)?;
-                let t_ty = D::inst_ty(self, env, env, m1, std::slice::from_ref(a1))?;
-                self.tm(env, t1, t2, &t_ty, ml1)?;
-                Ok((D::inst_ty(self, env, env, m1, std::slice::from_ref(b1))?, (*ml1).clone()))
-            }
             (
                 TmView::App { levels: ls1, fun: f1, arg: a1 },
                 TmView::App { levels: ls2, fun: f2, arg: a2 },
@@ -2967,7 +2859,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
 
     // -- the C_A bundle for neutral recursors -------------------------------
 
-    /// Ch. 06 `C_A`: motive levels, both motives, and all 66 branches, each
+    /// Ch. 06 `C_A`: motive levels, both motives, and all 65 branches, each
     /// branch compared at its instantiated motive type under its ch. 04
     /// telescope (`G_M G_Typ G_Trm`). Branch types and telescope entry
     /// types are built from the *left* side (left-biased, like all
@@ -2997,7 +2889,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
             self.ty(&e, &x, &y, &spec.level)?;
         }
 
-        // G_Typ G_Trm: the 66 branches, each at its instantiated motive
+        // G_Typ G_Trm: the 65 branches, each at its instantiated motive
         // type under its telescope.
         let branch_specs = rec::branch_specs(&a.motives, a.l1, a.l2, &env.gamma);
         let ba = rec::branch_terms(&a.branches);

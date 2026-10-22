@@ -270,10 +270,6 @@ impl fmt::Debug for Term {
             Term::Squash { level, ty, tm } => {
                 write!(f, "squash[{level:?}]({ty:?}; {tm:?})")
             }
-            Term::Transp { ty_level, motive_level, ty, motive, lhs, rhs, proof, tm } => write!(
-                f,
-                "transp[{ty_level:?},{motive_level:?}]({ty:?}; x.{motive:?}; {lhs:?}; {rhs:?}; {proof:?}; {tm:?})"
-            ),
             Term::ElimSEmpty { level, scrut_level, motive, scrut } => {
                 write!(f, "elim_sEmpty[{level:?},{scrut_level:?}](x. {motive:?}; {scrut:?})")
             }
@@ -521,7 +517,7 @@ impl fmt::Debug for Motives {
     }
 }
 
-/// All 66 branches, labelled and in declaration order — the same order and
+/// All 65 branches, labelled and in declaration order — the same order and
 /// the same no-`..` destructuring as the cache's structural walker
 /// (`heather_cache::merkle`), so the printed form and the content hash cannot
 /// disagree about what a recursor *is*.
@@ -579,7 +575,6 @@ impl fmt::Debug for Branches {
             ty_sempty,
             tm_sempty,
             tm_srefl,
-            tm_transp,
             tm_elim_sempty,
             ty_squash,
             tm_squash,
@@ -650,7 +645,6 @@ impl fmt::Debug for Branches {
                 ("sEmpty", ty_sempty),
                 ("«sEmpty»", tm_sempty),
                 ("srefl", tm_srefl),
-                ("transp", tm_transp),
                 ("elim_sEmpty", tm_elim_sempty),
                 ("Squash", ty_squash),
                 ("«Squash»", tm_squash),

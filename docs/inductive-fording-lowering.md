@@ -1,5 +1,13 @@
 # Indexed families, route 2b: lowering by fording over an irrelevant `sEq`
 
+> **Superseded 2026-10-22.** The declarations this document lowered by
+> fording are lowered onto the kernel's `IWf` former instead
+> (`docs/iwf-former-design.md` §8, `crates/elab/src/iwf_family.rs`), which
+> stores each child's index, so F1–F3 are gone and form B's residue holds by
+> `refl`. `forded.rs`, its prototypes and the kernel's `transp` were deleted
+> (§13 step 6 there). This document is the historical record of the scheme
+> and of its measurements.
+
 Status: **generator implemented**, 2026-08-04 —
 `crates/elab/src/forded.rs` mechanizes §4–§8 (the skeleton, `μ`, the family,
 the constructors, and the eliminator in both arm forms), the §3 classifier

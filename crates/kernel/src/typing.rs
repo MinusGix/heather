@@ -34,7 +34,7 @@
 //!   variables demand `i' ≤ i`; `ω` is accepted nowhere a programmer level
 //!   is demanded ([`crate::level::Level::well_formed`]) and arises only as
 //!   the inferred level of `ΠΠ`/`Λ ℓ⃗`.
-//! - The recursor rules check the two motives and 66 branches against the
+//! - The recursor rules check the two motives and 65 branches against the
 //!   `G_M G_Typ G_Trm` telescopes of [`crate::rec`] — the same tables
 //!   conversion compares against.
 //!
@@ -2246,7 +2246,7 @@ impl Tc {
             // against the expected type instead ([`Tc::tm_check_at`]).
             //
             // The guard is the design's §2.3 and is what leaves the code
-            // grammar and all 66 recursor branches alone: these forms do not
+            // grammar and all 65 recursor branches alone: these forms do not
             // occur inside a `box`, so `code_eq` never meets one and
             // `rec.rs` needs no branch.
             //
@@ -2902,35 +2902,6 @@ impl Tc {
                     level.clone(),
                 ))
             }
-            // transp^{l,l'}(I; x.P; a; b; e; t) : P[b/x] @ l'. The motive
-            // binds one local (x : I) — J's non-dependent cousin; no motive
-            // over the proof exists or is needed (proofs are irrelevant, so
-            // transp + the conv.rs irrelevance arm derive sJ).
-            Term::Transp { ty_level, motive_level, ty, motive, lhs, rhs, proof, tm } => {
-                self.not_var_layer(env)?;
-                self.level_wf(env, ty_level)?;
-                self.level_wf(env, motive_level)?;
-                self.ty_check(env, ty, ty_level)?;
-                self.tm_check_rc(env, lhs, ty, ty_level)?;
-                self.tm_check_rc(env, rhs, ty, ty_level)?;
-                let e_x = env.push_entry(Rc::clone(ty), ty_level.clone());
-                self.ty_check(&e_x, motive, motive_level)?;
-                let seq_ty = Type::SEq {
-                    level: ty_level.clone(),
-                    ty: Rc::clone(ty),
-                    lhs: Rc::clone(lhs),
-                    rhs: Rc::clone(rhs),
-                };
-                self.tm_check_ty(env, proof, &seq_ty, ty_level)?;
-                let tm_ty = motive
-                    .apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(lhs)));
-                self.tm_check_ty(env, tm, &tm_ty, motive_level)?;
-                Ok((
-                    motive.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(rhs))),
-                    motive_level.clone(),
-                ))
-            }
-
             // elim_sEmpty^{l,l'} (x. M; t) : M[t/x] @ l — ElimEmpty's rule;
             // eliminates anywhere (the motive's level is unrestricted).
             Term::ElimSEmpty { level, scrut_level, motive, scrut } => {
@@ -3732,7 +3703,7 @@ impl Tc {
 
     /// The `G_A = G_M G_Typ G_Trm` premise bundle shared by the two
     /// recursor rules: motive levels, both motives well-formed in their
-    /// scopes, and all 66 branches at their instantiated motive types.
+    /// scopes, and all 65 branches at their instantiated motive types.
     fn rec_ga(
         &self,
         env: &Env,
@@ -3793,7 +3764,6 @@ fn term_head(t: &Term) -> &'static str {
         Term::J { .. } => "J",
         Term::SRefl { .. } => "SRefl",
         Term::Squash { .. } => "Squash",
-        Term::Transp { .. } => "Transp",
         Term::ElimSEmpty { .. } => "ElimSEmpty",
         Term::ElimSquash { .. } => "ElimSquash",
         Term::Pair { .. } => "Pair",

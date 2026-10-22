@@ -319,7 +319,7 @@ fn term_head_may_compute(t: &Term) -> bool {
             | Term::LetBoxTm { scrut, .. }
             | Term::ElimCodeTy { scrut, .. }
             | Term::ElimCodeTm { scrut, .. } => scrut,
-            Term::J { proof, .. } | Term::Transp { proof, .. } => proof,
+            Term::J { proof, .. } => proof,
             Term::Fst { pair, .. }
             | Term::Snd { pair, .. }
             | Term::FstAt { pair, .. }

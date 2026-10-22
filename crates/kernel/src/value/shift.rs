@@ -356,15 +356,6 @@ fn elimination<'v>(e: &Elim<'v>, o: Outer<'v>) -> Elim<'v> {
             case: tm_clo(case, o),
             rhs: tm_clo(rhs, o),
         },
-        Elim::Transp { ty_level, motive_level, ty, motive, lhs, rhs, tm } => Elim::Transp {
-            ty_level: level(ty_level, o),
-            motive_level: level(motive_level, o),
-            ty: ty_clo(ty, o),
-            motive: ty_clo(motive, o),
-            lhs: tm_clo(lhs, o),
-            rhs: tm_clo(rhs, o),
-            tm: tm_clo(tm, o),
-        },
         Elim::LetBoxTy { motive_level, code_level, ctx, motive, body } => Elim::LetBoxTy {
             motive_level: level(motive_level, o),
             code_level: level(code_level, o),

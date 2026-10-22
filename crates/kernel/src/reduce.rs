@@ -682,25 +682,6 @@ fn step_term_frame(t: &Term, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) 
                 }),
             }
         }
-        Term::Transp { ty_level, motive_level, ty, motive, lhs, rhs, proof, tm } => {
-            match &**proof {
-                // transp(…; srefl; t) ⇝ t   (extension; fires on head shape
-                // only, like J's β — sufficient for closed computation by
-                // canonicity; the neutral-proof case belongs to conv.rs's
-                // strip rule, never to reduction. docs/sprop-design.md §5.1)
-                Term::SRefl { .. } => Some((**tm).clone()),
-                _ => step_term_in(proof, gamma, defs, frames).map(|p| Term::Transp {
-                    ty_level: ty_level.clone(),
-                    motive_level: motive_level.clone(),
-                    ty: Rc::clone(ty),
-                    motive: Rc::clone(motive),
-                    lhs: Rc::clone(lhs),
-                    rhs: Rc::clone(rhs),
-                    proof: Rc::new(p),
-                    tm: Rc::clone(tm),
-                }),
-            }
-        }
         // fst (pair a b) ⇝ a; else reduce the pair   (extension)
         Term::Fst { fst_level, snd_level, fst_ty, snd_ty, pair } => match &**pair {
             // β fires on **either** pair spelling and reads nothing from the
@@ -1171,7 +1152,7 @@ pub(crate) struct Rec<'a> {
 
 impl<'a> Rec<'a> {
     /// The recursor's copied-forward parts, for [`crate::eval`]'s β: the
-    /// evaluator shares these functions rather than transcribing the 66
+    /// evaluator shares these functions rather than transcribing the 65
     /// branch telescopes a sixth time (docs/nbe-conversion-design.md §2).
     pub(crate) fn new(
         ty_motive_level: &'a Level,
@@ -2115,49 +2096,6 @@ pub(crate) fn beta_elim_tm(
                 gamma,
             ))
         }
-        // (ℓ, ℓ', g, U_I, U_P, u_a, u_b, u_e, u_t, x_I, x_P, x_a, x_b, x_e,
-        // x_t. t_transp) — tm_j with the motive over one binder; globals in
-        // Term::Transp field order; the proof is recursed like any subterm.
-        Term::Transp { ty_level, motive_level, ty, motive, lhs, rhs, proof, tm } => {
-            let s_ty = rec.elim_ty(ty_level.clone(), delta.clone(), Rc::clone(ty));
-            let dx = extend(delta, Rc::clone(ty), ty_level.clone());
-            let s_motive = rec.elim_ty(motive_level.clone(), dx, Rc::clone(motive));
-            let s_lhs =
-                rec.elim_tm(ty_level.clone(), delta.clone(), Rc::clone(ty), Rc::clone(lhs));
-            let s_rhs =
-                rec.elim_tm(ty_level.clone(), delta.clone(), Rc::clone(ty), Rc::clone(rhs));
-            let seq_ty = Rc::new(Type::SEq {
-                level: ty_level.clone(),
-                ty: Rc::clone(ty),
-                lhs: Rc::clone(lhs),
-                rhs: Rc::clone(rhs),
-            });
-            let s_proof =
-                rec.elim_tm(ty_level.clone(), delta.clone(), seq_ty, Rc::clone(proof));
-            let motive_at_lhs =
-                motive.apply_local(&LocalSubst::id(delta).extended(Rc::clone(lhs)));
-            let s_tm = rec.elim_tm(
-                motive_level.clone(),
-                delta.clone(),
-                Rc::new(motive_at_lhs),
-                Rc::clone(tm),
-            );
-            Some(fire(
-                &b.tm_transp,
-                &[motive_level.clone(), ty_level.clone()],
-                vec![
-                    GlobalEntry::Ctx(delta.clone()),
-                    GlobalEntry::Ty(Rc::clone(ty)),
-                    GlobalEntry::Ty(Rc::clone(motive)),
-                    GlobalEntry::Tm(Rc::clone(lhs)),
-                    GlobalEntry::Tm(Rc::clone(rhs)),
-                    GlobalEntry::Tm(Rc::clone(proof)),
-                    GlobalEntry::Tm(Rc::clone(tm)),
-                ],
-                vec![s_ty, s_motive, s_lhs, s_rhs, s_proof, s_tm],
-                gamma,
-            ))
-        }
         // (ℓ, ℓ', g, U_M, u_t, x_M, x_t. t_elim_sE) — mirrors tm_elim_empty.
         Term::ElimSEmpty { level, scrut_level, motive, scrut } => {
             let sempty = || Rc::new(Type::SEmpty { level: scrut_level.clone() });
@@ -2944,11 +2882,6 @@ pub fn is_neutral_term(t: &Term) -> bool {
         Term::ElimIWf { scrut, .. } => is_neutral_term(scrut),
         Term::Out { scrut, .. } => is_neutral_term(scrut),
         Term::J { proof, .. } => is_neutral_term(proof),
-        // For *reduction* purposes a transp is stuck exactly when its proof
-        // is (β fires on srefl only); conversion additionally strips it when
-        // the endpoints convert, but that is conv.rs's business, not a
-        // reduction (docs/sprop-design.md §5.2).
-        Term::Transp { proof, .. } => is_neutral_term(proof),
         Term::ElimSEmpty { scrut, .. } => is_neutral_term(scrut),
         Term::ElimSquash { scrut, .. } => is_neutral_term(scrut),
         Term::Fst { pair, .. }

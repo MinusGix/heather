@@ -248,7 +248,6 @@ fn former_tm(t: &Term) -> &'static str {
         Term::Refl { .. } | Term::SRefl { .. } => "refl",
         Term::Squash { .. } => "squash",
         Term::J { .. } => "J",
-        Term::Transp { .. } => "transp",
         Term::GlobalTm { .. } => "global",
         Term::TmNat | Term::TmTy(_) | Term::TmUnit { .. } | Term::TmEmpty { .. } => "type code",
         Term::TmPi { .. }
@@ -657,37 +656,6 @@ impl Lgg {
                 case: Rc::new(self.tm(c1, c2, k)?),
                 rhs: Rc::new(self.tm(r1, r2, k)?),
                 proof: Rc::new(self.tm(p1, p2, k)?),
-            }),
-            (
-                Term::Transp {
-                    ty_level: tl1,
-                    motive_level: ml1,
-                    ty: i1,
-                    motive: m1,
-                    lhs: a1,
-                    rhs: b1,
-                    proof: p1,
-                    tm: u1,
-                },
-                Term::Transp {
-                    ty_level: tl2,
-                    motive_level: ml2,
-                    ty: i2,
-                    motive: m2,
-                    lhs: a2,
-                    rhs: b2,
-                    proof: p2,
-                    tm: u2,
-                },
-            ) if tl1 == tl2 && ml1 == ml2 => Ok(Term::Transp {
-                ty_level: tl1.clone(),
-                motive_level: ml1.clone(),
-                ty: Rc::new(self.ty(i1, i2, k)?),
-                motive: Rc::new(self.ty(m1, m2, k + 1)?),
-                lhs: Rc::new(self.tm(a1, a2, k)?),
-                rhs: Rc::new(self.tm(b1, b2, k)?),
-                proof: Rc::new(self.tm(p1, p2, k)?),
-                tm: Rc::new(self.tm(u1, u2, k)?),
             }),
             (
                 Term::ElimSEmpty {

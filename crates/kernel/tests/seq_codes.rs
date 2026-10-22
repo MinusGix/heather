@@ -4,13 +4,15 @@
 //!
 //! The gate-lift invariant is `wf_codes.rs`'s: the branch bundle must stay
 //! exhaustive over the layer-c syntactic formers, so the formers enter
-//! layer c exactly when their seven branches exist. The sharp test is the
-//! **identity recursor** round-tripping each new code in a single β-step —
-//! a telescope wrong in either `rec.rs` or `reduce.rs` makes the re-boxed
-//! code ill-typed or unequal. One thing this file pins that `wf_codes.rs`
-//! had no analogue for: a *stuck* `transp` as code (neutral proof from the
-//! code's own context Δ) round-trips as syntax — irrelevance and the strip
-//! are conversion facts about terms, and neither reaches inside a box.
+//! layer c exactly when their branches exist (seven when they landed, six
+//! since `transp` was removed, `docs/iwf-former-design.md` §13 step 6). The
+//! sharp test is the **identity recursor** round-tripping each new code in a
+//! single β-step — a telescope wrong in either `rec.rs` or `reduce.rs` makes
+//! the re-boxed code ill-typed or unequal. One thing this file pins that
+//! `wf_codes.rs` had no analogue for: a *stuck* `elim_sEmpty` as code (a
+//! scrutinee from the code's own context Δ) round-trips as syntax —
+//! irrelevance is a conversion fact about terms, and does not reach inside a
+//! box.
 
 mod common;
 
@@ -161,53 +163,19 @@ fn identity_recursor_round_trips_the_encodings() {
 }
 
 #[test]
-fn identity_recursor_round_trips_srefl_and_closed_transp() {
+fn identity_recursor_round_trips_srefl() {
     identity_tm_in(
         nil_ctx(),
         Term::SRefl { level: c(0), ty: rty(Type::Nat), tm: rt(Term::Zero) },
         seq_nat(Term::Zero, Term::Zero),
         c(0),
     );
-    // A closed transp (proof srefl). Box contents are static data, so the
-    // recursor sees the transp as syntax — no β fires inside the box.
-    identity_tm_in(
-        nil_ctx(),
-        Term::Transp {
-            ty_level: c(0),
-            motive_level: c(0),
-            ty: rty(Type::Nat),
-            motive: rty(Type::Nat),
-            lhs: rt(Term::Zero),
-            rhs: rt(Term::Zero),
-            proof: rt(Term::SRefl { level: c(0), ty: rty(Type::Nat), tm: rt(Term::Zero) }),
-            tm: rt(nat_lit(42)),
-        },
-        Type::Nat,
-        c(0),
-    );
 }
 
 #[test]
 fn identity_recursor_round_trips_stuck_code() {
-    // Δ = e : sEq(Nat; 0; 0) — a stuck transp (neutral proof) and an
-    // elim_sEmpty (Δ = x : sEmpty) as code. Neither the strip nor
-    // irrelevance reaches inside the box: the round-trip is syntactic.
-    let d_seq = ext(&nil_ctx(), seq_nat(Term::Zero, Term::Zero), c(0));
-    identity_tm_in(
-        d_seq,
-        Term::Transp {
-            ty_level: c(0),
-            motive_level: c(0),
-            ty: rty(Type::Nat),
-            motive: rty(Type::Nat),
-            lhs: rt(Term::Zero),
-            rhs: rt(Term::Zero),
-            proof: rt(v(0)),
-            tm: rt(nat_lit(7)),
-        },
-        Type::Nat,
-        c(0),
-    );
+    // Δ = x : sEmpty — an elim_sEmpty as code. Irrelevance does not reach
+    // inside the box: the round-trip is syntactic.
     let d_sempty = ext(&nil_ctx(), Type::SEmpty { level: c(0) }, c(0));
     identity_tm_in(
         d_sempty,

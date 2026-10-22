@@ -3,10 +3,6 @@
    rules it lacks. *)
 Require Import Hx.
 
-(* sEq: the strip rule at a variable proof (Definitional UIP's special
-   reduction of an SProp equality). *)
-Check (fun (P : nat -> Type) (n : nat) (e : Hx.SEq nat (0 + n) n) (t : P (0 + n)) =>
-  (eq_refl : Hx.transp nat P (0 + n) n e t = t)).
 (* sEq irrelevance against a constructor; not between neutrals. *)
 Check (fun (A : Type) (a b : A) (p q : Hx.SEq A a b) =>
   (eq_refl : Hx.mkSEq (Hx.pf p) = Hx.mkSEq (Hx.pf q))).

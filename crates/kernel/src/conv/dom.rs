@@ -258,15 +258,6 @@ pub(super) enum TmView<'a, 'v, D: Dom<'v>> {
         rhs: D::TmC,
         proof: D::TmC,
     },
-    Transp {
-        ty_level: &'a Level,
-        motive_level: &'a Level,
-        ty: D::TyC,
-        motive: D::TyC,
-        lhs: D::TmC,
-        rhs: D::TmC,
-        tm: D::TmC,
-    },
     // The stored Π / Σ annotations are not part of these views: the typed
     // application and projection rules read the head's inferred type
     // instead, so the view never builds closures for them. `levels` is `None`
@@ -347,7 +338,6 @@ impl<'v, D: Dom<'v>> TmView<'_, 'v, D> {
                 | TmView::ElimIWf { .. }
                 | TmView::Out { .. }
                 | TmView::J { .. }
-                | TmView::Transp { .. }
                 | TmView::App { .. }
                 | TmView::Fst { .. }
                 | TmView::Snd { .. }
@@ -495,9 +485,6 @@ pub(super) trait Dom<'v>: Sized {
     /// The definition at the head of a δ-stuck spine, if any.
     fn delta_head(cv: &Conv<'v, Self>, env: &Env<'v>, w: &Self::Tm) -> Option<GlobalVar>;
     fn delta_head_ty(cv: &Conv<'v, Self>, env: &Env<'v>, w: &Self::Ty) -> Option<GlobalVar>;
-    /// Is the head a `transp`? One discriminant read on conversion's hottest
-    /// path — the strip loop must not cost a view construction.
-    fn is_transp(w: &Self::Tm) -> bool;
 
     /// Is this δ-stuck term a **bare application** of its defined head —
     /// `f a⃗`, with nothing but applications between the head and the root?
@@ -762,13 +749,9 @@ pub(super) trait Dom<'v>: Sized {
     /// comparison).
     fn ty_eq_fast(a: &Self::TyC, b: &Self::TyC) -> bool;
     /// Scoped pointer identity of two term sub-structures, for the general
-    /// reflexivity shortcut. Unlike [`Dom::tm_eq_fast`], this must imply that
-    /// the two carriers denote the same term in their present scope.
+    /// reflexivity shortcut. It must imply that the two carriers denote the
+    /// same term in their present scope.
     fn tm_identity_fast(a: &Self::TmC, b: &Self::TmC) -> bool;
-    /// Syntactic equality of two term sub-structures, as a fast path only:
-    /// `false` must always be safe (the caller falls back to a full
-    /// comparison).
-    fn tm_eq_fast(a: &Self::TmC, b: &Self::TmC) -> bool;
     /// If both weak heads expose compressed repetitions of the same unary
     /// constructor context, cancel their equal outer prefix and return the
     /// residual sub-structures. `None` means only that this domain has no
@@ -1108,10 +1091,6 @@ impl<'v> Dom<'v> for Syn {
         super::delta_head_ty(w, cv.defs(env))
     }
 
-    #[inline]
-    fn is_transp(w: &Rc<Term>) -> bool {
-        matches!(**w, Term::Transp { .. })
-    }
 
     fn is_application_spine(w: &Rc<Term>) -> bool {
         let mut t: &Term = w;
@@ -1427,17 +1406,6 @@ impl<'v> Dom<'v> for Syn {
                 rhs: Rc::clone(rhs),
                 proof: Rc::clone(proof),
             },
-            Term::Transp { ty_level, motive_level, ty, motive, lhs, rhs, tm, .. } => {
-                TmView::Transp {
-                    ty_level,
-                    motive_level,
-                    ty: Rc::clone(ty),
-                    motive: Rc::clone(motive),
-                    lhs: Rc::clone(lhs),
-                    rhs: Rc::clone(rhs),
-                    tm: Rc::clone(tm),
-                }
-            }
             Term::App { fun, dom_level, cod_level, arg, .. } => TmView::App {
                 levels: Some((dom_level, cod_level)),
                 fun: Rc::clone(fun),
@@ -1956,11 +1924,6 @@ impl<'v> Dom<'v> for Syn {
     #[inline]
     fn ty_eq_fast(a: &Rc<Type>, b: &Rc<Type>) -> bool {
         Rc::ptr_eq(a, b)
-    }
-
-    #[inline]
-    fn tm_eq_fast(a: &Rc<Term>, b: &Rc<Term>) -> bool {
-        a == b
     }
 
     #[inline]

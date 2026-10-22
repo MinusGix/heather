@@ -67,9 +67,11 @@ pub enum Type {
     /// over `I : Typ` at level `l`; `lhs`, `rhs : I`. Field-for-field the
     /// shape of [`Type::Id`], deliberately: `sEq` is `Id` minus proof
     /// relevance plus strictness. Any two terms at this type are convertible
-    /// (`conv.rs` irrelevance arm); eliminated by [`Term::Transp`], whose
-    /// strip rule is what makes the equality strict. Extension beyond DeLaM
-    /// ch. 04 (docs/sprop-design.md §2.1). Admitted at layer c like every
+    /// (`conv.rs` irrelevance arm). It has no eliminator: it is inhabited
+    /// exactly when its endpoints convert, with one proof up to conversion
+    /// (`transp` was removed with route 2b's fording,
+    /// docs/iwf-former-design.md §7). Extension beyond DeLaM ch. 04
+    /// (docs/sprop-design.md §2.1). Admitted at layer c like every
     /// other former: it has its own code branches (`ty_seq`/`tm_seq`).
     SEq {
         level: Level,
@@ -471,24 +473,6 @@ pub enum Term {
     Squash {
         level: Level,
         ty: Rc<Type>,
-        tm: Rc<Term>,
-    },
-    /// `transp^{l,l'}(I; x.P; a; b; e; t) : P[b/x]` — transport along a
-    /// strict equality through a motive; J's non-dependent cousin. `motive`
-    /// binds one local variable (`x : I`); nothing else binds. `proof :
-    /// sEq^l(I; a; b)` and `tm : P[a/x]`. β fires on `srefl` only; the case
-    /// β cannot see (a *neutral* proof at convertible endpoints) is handled
-    /// by the conversion strip rule, and its stuckness is keyed on the
-    /// endpoints, not the proof — see `conv.rs` and docs/sprop-design.md
-    /// §5. Admitted at layer c with [`Type::SEq`].
-    Transp {
-        ty_level: Level,
-        motive_level: Level,
-        ty: Rc<Type>,
-        motive: Rc<Type>,
-        lhs: Rc<Term>,
-        rhs: Rc<Term>,
-        proof: Rc<Term>,
         tm: Rc<Term>,
     },
     /// `elim_sEmpty^{l,l'} (x. M; t) : M[t/x]` — ex falso from a strict
@@ -1210,17 +1194,6 @@ pub struct Branches {
     pub tm_sempty: Rc<Term>,
     /// `(ℓ, g, U_S, u_t, x_S, x_t. t_srefl)` — mirrors `tm_refl`.
     pub tm_srefl: Rc<Term>,
-    /// `(ℓ, ℓ', g, U_I : Typ_c(g, ℓ),
-    ///  U_P : Typ_c((g, x : U_I^id @ ℓ), ℓ'),
-    ///  u_a, u_b : Trm_c(g ⊢ U_I^id @ ℓ),
-    ///  u_e : Trm_c(g ⊢ sEq^ℓ(U_I^id; u_a^id; u_b^id) @ ℓ),
-    ///  u_t : Trm_c(g ⊢ U_P^{id, u_a/x} @ ℓ'),
-    ///  x_I, x_P, x_a, x_b, x_e, x_t. t_transp)` — `tm_j` with the motive
-    /// scoped over one binder instead of two (transp's motive does not
-    /// abstract the proof); globals in `Term::Transp` field order. The
-    /// proof *is* recursed (`x_e`): irrelevance is a conversion fact, and
-    /// code is syntax.
-    pub tm_transp: Rc<Term>,
     /// `(ℓ, ℓ', g, U_M : Typ_c((g, x : sEmpty^{ℓ'} @ ℓ'), ℓ),
     ///  u_t : Trm_c(g ⊢ sEmpty^{ℓ'} @ ℓ'), x_M, x_t. t_elim_sE)` — mirrors
     /// `tm_elim_empty`.

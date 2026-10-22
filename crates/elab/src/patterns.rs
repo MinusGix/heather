@@ -7,7 +7,7 @@
 //! The doctrine, in one line: **nothing here builds a kernel term.** The pass
 //! rewrites surface arms into surface arms, and every lowering below it —
 //! `elab_match_nat`, `elab_match_fin`, `elab_match_data`, `elab_match_wf`,
-//! `elab_match_indexed`, `elab_match_forded` — is called with exactly the arm
+//! `elab_match_indexed`, `elab_match_iwf` — is called with exactly the arm
 //! shape it accepted before this existed (§1). The one thing that is not pure
 //! surface is the *sharing* device of §5, which elaborates one body early and
 //! parks it in an [`Alias`]; that too is machinery the elaborator already had.
@@ -308,7 +308,7 @@ impl Elaborator {
         // §7: an index field's binder is not a value binder — it is aliased to
         // a component of the index pattern, and the guard's `rebind` reads it.
         let fam = self
-            .forded_of_at(cx, scrut_ty)
+            .iwf_of_at(cx, scrut_ty)
             .map(|(i, _)| i)
             .or_else(|| self.indexed_of_at(cx, scrut_ty).map(|(i, _)| i));
         let Some(ind) = fam else { return Ok(()) };
@@ -1081,7 +1081,7 @@ impl Elaborator {
         ty: &Type,
         span: Span,
     ) -> Option<Rc<crate::inductive::Inductive>> {
-        if let Some((ind, _)) = self.forded_of_at(cx, ty) {
+        if let Some((ind, _)) = self.iwf_of_at(cx, ty) {
             return Some(ind);
         }
         let head = self.whnf(cx, ty, span).ok()?;
@@ -1103,7 +1103,7 @@ impl Elaborator {
                 .map(|c| (c.name.clone(), c.fields.len()))
                 .collect::<Vec<_>>()
         };
-        if let Some((ind, _)) = self.forded_of_at(cx, scrut_ty) {
+        if let Some((ind, _)) = self.iwf_of_at(cx, scrut_ty) {
             return Some(named(&ind));
         }
         let head = self.whnf(cx, scrut_ty, span).ok()?;
