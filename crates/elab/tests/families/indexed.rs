@@ -17,6 +17,8 @@ mod indexed_route1;
 mod indexed_route_2b_declared;
 #[path = "../indexed_route_2b_gen.rs"]
 mod indexed_route_2b_gen;
+#[path = "../iwf_match_tiers.rs"]
+mod iwf_match_tiers;
 #[path = "../branching_route_a.rs"]
 mod branching_route_a;
 #[path = "../branching_route_c.rs"]

@@ -3,8 +3,10 @@
 //!
 //! This replaced route 2b's fording (`docs/inductive-fording-lowering.md`,
 //! superseded): a child's index is **stored** in the label rather than
-//! recomputed from the child, so `match` needs no index inversion and no
-//! `transp`, and the fording fragment's F1–F3 are gone. The doctrine is the
+//! recomputed from the child, so `match` needs no `transp` and β fires on
+//! open data, and the fording fragment's F1–F3 are gone. A `match` at a
+//! specific index inverts or abstracts it in the motive (§8.3,
+//! [`Elaborator::iwf_match_motive`]). The doctrine is the
 //! tiers' (`inductive.rs`): the lowering is untrusted, the kernel re-checks
 //! every emitted term, and annotations are read off the type being
 //! eliminated wherever one exists.
@@ -612,10 +614,216 @@ impl Elaborator {
 
     // -- the eliminator -------------------------------------------------------
 
+    /// The `match` motive over `(Γ, j, z)` from the expected one over
+    /// `(Γ, z)`, for a scrutinee at `fam.idx` (`docs/iwf-former-design.md`
+    /// §8.3). A variable index is generalized as route 1's is. Otherwise,
+    /// in order:
+    ///
+    /// - **Tier 1, inversion**: the index and every constructor's output
+    ///   index are constructor-headed. The motive cases on `j` by the index
+    ///   type's eliminator: `M` with the index's arguments abstracted at the
+    ///   scrutinee's constructor, `Unit` at every other, so an arm that
+    ///   cannot occur is `tt` and may be left out, and each other arm sees
+    ///   its goal at its own index (`vtail : V(S n) → V(n)` needs exactly
+    ///   this). At `j := e` the motive reduces to `M`, so β stays
+    ///   definitional.
+    /// - **Tier 2, abstraction**: `e` abstracted out of `M` wherever it is
+    ///   written, Coq's `match … in D j`.
+    ///
+    /// Each candidate is kept only if the kernel accepts it as a type over
+    /// `(Γ, j : I, z : D(j))`; the last resort is the motive with `j` unused.
+    pub(crate) fn iwf_match_motive(
+        &self,
+        cx: &Cx,
+        ind: &Inductive,
+        fam: &IwfFam,
+        motive: &Type,
+        mlvl: &Level,
+        span: Span,
+    ) -> R<(Type, IndexMotive)> {
+        let plain = self.generalize_index(cx, motive, &fam.idx);
+        if matches!(&*fam.idx, Term::Var(_)) {
+            return Ok((plain, IndexMotive::Plain));
+        }
+        let mut jcx = cx.clone();
+        jcx.push("#j".into(), fam.ity.clone(), fam.ilvl.clone());
+        jcx.push("#z".into(), fam.ty_at(Term::Var(LocalVar(0)), 1), fam.lvl());
+        let psi = self.goal_psi();
+        let fits = |m: &Type| {
+            heather_kernel::typing::check_type(&psi, 0, Layer::Prog, &jcx.gamma, m, mlvl, self.fuel)
+                .is_ok()
+        };
+        if let Some(inv) = self.iwf_inverted_motive(cx, ind, fam, motive, mlvl, span)?
+            && fits(&inv)
+        {
+            let unit = matches!(self.whnf(cx, motive, span), Ok(Type::Unit { .. }));
+            return Ok((inv, IndexMotive::Inverted { unit }));
+        }
+        let pi = Type::Pi {
+            dom_level: fam.lvl(),
+            cod_level: mlvl.clone(),
+            dom: Rc::new(fam.ty_at((*fam.idx).clone(), 0)),
+            cod: Rc::new(motive.clone()),
+        };
+        // A closed index is not abstracted, for the same reason a closed
+        // inversion argument is not: its literals also spell the signature.
+        let open = fam.idx.shift_local(1) != *fam.idx;
+        if open
+            && let Some(Type::Pi { cod, .. }) = pi.abstract_local(&fam.idx)
+            && fits(&cod)
+        {
+            return Ok(((*cod).clone(), IndexMotive::Plain));
+        }
+        Ok((plain, IndexMotive::Plain))
+    }
+
+    /// Tier 1's motive, or `None` where inversion does not apply: the index
+    /// or some constructor's output index is not constructor-headed, or `M`
+    /// has no code to case into.
+    fn iwf_inverted_motive(
+        &self,
+        cx: &Cx,
+        ind: &Inductive,
+        fam: &IwfFam,
+        motive: &Type,
+        mlvl: &Level,
+        span: Span,
+    ) -> R<Option<Type>> {
+        let Some(ity) = ind.index_ty.as_ref() else {
+            return Ok(None);
+        };
+        let Some((j, args)) = self.index_head(cx, ity, &fam.idx, span) else {
+            return Ok(None);
+        };
+        // Every constructor's output index, at a generic payload.
+        let n = ind.ctors.len();
+        let spine = self.spine(&fam.sig.shape, &fam.sig.level, n, span)?;
+        for k in 0..n {
+            let mut pcx = cx.clone();
+            pcx.push("#p".into(), (*spine.ctors[k].0).clone(), spine.ctors[k].1.clone());
+            let dcx = self.decl_payload_cx(&pcx, ind, &spine, k, &Rc::new(Term::Var(LocalVar(0))), 1, span)?;
+            let res = {
+                let _scope = self.use_inductive_scope(ind);
+                self.elab_check(&dcx, res_expr(ind, k), &fam.ity.shift_local(1), &fam.ilvl)?
+            };
+            if self.index_head(&dcx, ity, &res, span).is_none() {
+                return Ok(None);
+            }
+        }
+        // `Π(z : D(e)). M`, in Γ: what the branch at `e`'s constructor
+        // re-spells with the constructor's arguments abstracted.
+        let fl = fam.lvl();
+        let whole = Type::Pi {
+            dom_level: fl.clone(),
+            cod_level: mlvl.clone(),
+            dom: Rc::new(fam.ty_at((*fam.idx).clone(), 0)),
+            cod: Rc::new(motive.clone()),
+        };
+        let code_lvl = Level::succ(mlvl.clone());
+        let missing_code = std::cell::Cell::new(false);
+        let body = |bcx: &Cx, k: usize, branch: &crate::indexed::IdxBranch, e: &Type| -> R<Term> {
+            let Type::Pi { dom, .. } = e else {
+                return err("internal: the inversion's motive is not a Π", span);
+            };
+            let d = (bcx.names.len() - cx.names.len()) as u32;
+            let code = if k == j {
+                // Only a *variable* argument is abstracted: a closed one
+                // (the `0` of `V(1)`) would also be found inside the family's
+                // signature, whose case trees spell their own literals.
+                let pairs: Vec<(Term, Term)> = args
+                    .iter()
+                    .zip(&branch.pat)
+                    .filter(|(a, _)| matches!(&***a, Term::Var(_)))
+                    .map(|(a, (p, _, _))| (a.shift_local(d), p.shift_local(1)))
+                    .collect();
+                let here = whole.shift_local(d);
+                let here = match here.abstract_local_with_all(&pairs) {
+                    Some(t) => t.apply_local(&LocalSubst::id(&bcx.gamma).extended(Rc::new(Term::Zero))),
+                    None => here,
+                };
+                let Type::Pi { cod, .. } = here else {
+                    return err("internal: the inversion's branch is not a Π", span);
+                };
+                match crate::code::code_of(&cod) {
+                    Some(c) => c,
+                    None => {
+                        missing_code.set(true);
+                        Term::TmUnit { level: mlvl.clone() }
+                    }
+                }
+            } else {
+                Term::TmUnit { level: mlvl.clone() }
+            };
+            Ok(Term::Lam {
+                dom_level: fl.clone(),
+                cod_level: code_lvl.clone(),
+                dom: Rc::clone(dom),
+                body: Rc::new(code),
+            })
+        };
+        // The case's motive over (Γ, j, j'): `Π(z : D(j')). Ty mlvl`.
+        let case_motive = Type::Pi {
+            dom_level: fl.clone(),
+            cod_level: code_lvl.clone(),
+            dom: Rc::new(fam.ty_at(Term::Var(LocalVar(0)), 2)),
+            cod: Rc::new(Type::Ty(mlvl.clone())),
+        };
+        let mut hcx = cx.clone();
+        hcx.push("#j".into(), fam.ity.clone(), fam.ilvl.clone());
+        let case = self.index_case(
+            &hcx,
+            ity,
+            case_motive,
+            &Level::max(fl.clone(), code_lvl.clone()),
+            Term::Var(LocalVar(0)),
+            span,
+            &body,
+        )?;
+        if missing_code.get() {
+            return Ok(None);
+        }
+        Ok(Some(Type::El {
+            level: mlvl.clone(),
+            tm: Rc::new(Term::AppAt {
+                fun: Rc::new(case.shift_local(1)),
+                arg: Rc::new(Term::Var(LocalVar(0))),
+            }),
+        }))
+    }
+
+    /// The index constructor heading `t` and its arguments, if `t`'s weak
+    /// head is one.
+    fn index_head(
+        &self,
+        cx: &Cx,
+        ity: &crate::inductive::IdxTy,
+        t: &Term,
+        span: Span,
+    ) -> Option<(usize, Vec<Rc<Term>>)> {
+        let w = self.whnf_tm(cx, t, span).ok()?;
+        match ity {
+            crate::inductive::IdxTy::Nat => match &*w {
+                Term::Zero => Some((0, vec![])),
+                Term::Succ(a) => Some((1, vec![Rc::clone(a)])),
+                Term::NatLit(k) => {
+                    let k = usize::try_from(k.as_u64()?).ok()?;
+                    (k > 0).then(|| (1, vec![Rc::new(nat_lit(k - 1))]))
+                }
+                _ => None,
+            },
+            crate::inductive::IdxTy::Decl(iind) => {
+                let (ty, l) = self.lower_instance(cx, iind, &[], &[], span).ok()?;
+                let spine = self.spine(&ty, &l, iind.ctors.len(), span).ok()?;
+                self.read_ctor(cx, iind, &spine, &w, true, span).ok()?
+            }
+        }
+    }
+
+
     /// `match` on an `IWf`-route family: one `elim_IWf` at the motive over
     /// `(Γ, j, z)`, its step a convoy case tree on the shape. Each arm is
-    /// typed at its constructor's own output index, so no inversion is
-    /// needed.
+    /// typed at its constructor's own output index; under an inverted motive
+    /// ([`Self::iwf_match_motive`]) an arm whose goal is `Unit` is `tt`.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn elab_match_iwf(
         &self,
@@ -627,8 +835,10 @@ impl Elaborator {
         scrut: Term,
         motive: Type,
         mlvl: Level,
+        how: IndexMotive,
         span: Span,
     ) -> R<Term> {
+        let inverted = how != IndexMotive::Plain;
         let n = ind.ctors.len();
         let mut ordered: Vec<Option<&Arm>> = vec![None; n];
         for a in arms {
@@ -659,7 +869,9 @@ impl Elaborator {
             .filter(|(_, a)| a.is_none())
             .map(|(i, _)| ind.ctors[i].name.as_str())
             .collect();
-        if !missing.is_empty() {
+        // Under index inversion an arm may be left out; whether it could be
+        // is decided per arm, by its goal (`Self::iwf_arm`).
+        if !missing.is_empty() && !inverted {
             return err(
                 format!(
                     "`{}` is missing an arm for `{}`",
@@ -710,6 +922,10 @@ impl Elaborator {
             dec,
             idx_param,
             outer_guard: cx.guard.clone(),
+            keyword: form.keyword(),
+            span,
+            inverted,
+            motive_unit: how == IndexMotive::Inverted { unit: true },
         };
         let mut acx = cx.clone();
         acx.push("#a".into(), (*sig.shape).clone(), sig.level.clone());
@@ -773,8 +989,7 @@ impl Elaborator {
         let ind = env.ind;
         let fam = env.fam;
         let ctor = &ind.ctors[k];
-        let arm = env.ordered[k].expect("checked at entry");
-        let span = arm.span;
+        let span = env.ordered[k].map_or(env.span, |a| a.span);
         let Type::Pi { dom: cs_dom, cod, .. } = expected else {
             return err("internal: the IWf step's convoy motive is not a Π", span);
         };
@@ -801,6 +1016,31 @@ impl Elaborator {
                 kids.push(self.elab_check(&dcx, e, &ity_here, &fam.ilvl)?);
             }
             (res, kids)
+        };
+        // Index inversion (design §8.3): an arm whose constructor cannot
+        // build the scrutinee's index has the goal `Unit`, and is `tt`
+        // whether or not it was written.
+        let sup = sig_here.supi(Rc::new(label.clone()), Rc::new(Term::Var(LocalVar(1))));
+        let goal = env.mot_at(res_term.clone(), sup.clone(), dd);
+        let goal = if env.inverted {
+            let g = self.whnf(&ccx, &goal, span)?;
+            if let Type::Unit { level } = &g
+                && !env.motive_unit
+            {
+                return Ok(lam2(fl, mlvl, cs_dom, ih_dom, Term::Triv { level: level.clone() }));
+            }
+            crate::inductive::decode_deep(&g).unwrap_or(g)
+        } else {
+            goal
+        };
+        let Some(arm) = env.ordered[k] else {
+            return err(
+                format!(
+                    "`{}` is missing an arm for `{}`",
+                    env.keyword, ctor.name
+                ),
+                span,
+            );
         };
         let mut acx = ccx.clone();
         let names: Vec<Option<String>> = arm
@@ -882,20 +1122,23 @@ impl Elaborator {
                 })
                 .or_else(|| env.outer_guard.clone());
         }
-        let sup = sig_here.supi(Rc::new(label), Rc::new(Term::Var(LocalVar(1))));
-        let goal = env.mot_at(res_term, sup, dd);
         let body = self.elab_check(&acx, &arm.body, &goal, mlvl)?;
-        Ok(Term::Lam {
-            dom_level: fl,
+        Ok(lam2(fl, mlvl, cs_dom, ih_dom, body))
+    }
+}
+
+/// `λcs. λih. body`, an arm of the step's convoy.
+fn lam2(fl: Level, mlvl: &Level, cs_dom: &Rc<Type>, ih_dom: &Rc<Type>, body: Term) -> Term {
+    Term::Lam {
+        dom_level: fl,
+        cod_level: mlvl.clone(),
+        dom: Rc::clone(cs_dom),
+        body: Rc::new(Term::Lam {
+            dom_level: mlvl.clone(),
             cod_level: mlvl.clone(),
-            dom: Rc::clone(cs_dom),
-            body: Rc::new(Term::Lam {
-                dom_level: mlvl.clone(),
-                cod_level: mlvl.clone(),
-                dom: Rc::clone(ih_dom),
-                body: Rc::new(body),
-            }),
-        })
+            dom: Rc::clone(ih_dom),
+            body: Rc::new(body),
+        }),
     }
 }
 
@@ -944,6 +1187,24 @@ struct ArmEnv<'a> {
     dec: Option<usize>,
     idx_param: Option<usize>,
     outer_guard: Option<Rc<Guard>>,
+    keyword: &'static str,
+    span: Span,
+    /// The motive inverts the scrutinee's index (design §8.3, tier 1).
+    inverted: bool,
+    /// The written motive is itself `Unit`, so a `Unit` goal says nothing
+    /// about whether an arm is reachable.
+    motive_unit: bool,
+}
+
+/// How a `match`'s motive treats the scrutinee's index
+/// (`docs/iwf-former-design.md` §8.3).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum IndexMotive {
+    /// Generalized: the index abstracted (tier 2), or the motive as given.
+    Plain,
+    /// Inverted by the index type's eliminator (tier 1); `unit` when the
+    /// written motive is `Unit` itself.
+    Inverted { unit: bool },
 }
 
 impl ArmEnv<'_> {

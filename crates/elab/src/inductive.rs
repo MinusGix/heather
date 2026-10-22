@@ -1227,6 +1227,19 @@ impl Elaborator {
         if (ind.infinitary() || ind.codata) && ind.params.is_empty() && ind.valparams.is_empty() {
             self.lower_instance(&Cx::empty(), &ind, &[], &[], d.span)?;
         }
+        // The same for an `IWf`-route family: its written indices are only
+        // elaborated when the signature is built, and an elaborated term is
+        // judged by the gate of the declaration it lands in — so a child
+        // index of the wrong type would otherwise surface at the family's
+        // first use. The signature is built here, and its checking sites
+        // probed, since no gate runs on it.
+        if ind.skel.is_some() && ind.params.is_empty() && ind.valparams.is_empty() {
+            let from = self.attempt.check_notes.borrow().len();
+            self.iwf_sig(&Cx::empty(), &ind, &[], d.span)?;
+            if let Some(e) = self.mismatch_since(from) {
+                return Err(e);
+            }
+        }
         // From here on registration is infallible. The type registry installs
         // all nominal views together; the ambiguity index then exposes the
         // same declarations to surface resolution.

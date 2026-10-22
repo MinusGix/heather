@@ -184,7 +184,13 @@ fn rejections_carry_their_messages() {
     // `indexed_route_2b_gen.rs` §13.2 items 9 and 11), so both declarations
     // land — by fording, not by this scheme. What stays a rejection is what
     // neither fragment covers, and the list below is that.
-    elab("inductive P : (n: Nat) -> Type { Mk(a: Nat, b: Nat) : P(plus(a, b)) }");
+    // (`plus` is defined: an `IWf`-route declaration's indices are elaborated
+    // when it is declared, so an unbound name there is an error, not a
+    // first-use surprise.)
+    elab(
+        "fn plus(a: Nat, b: Nat) -> Nat { match b { Zero => a, Succ(k) => Succ(plus(a, k)) } }
+         inductive P : (n: Nat) -> Type { Mk(a: Nat, b: Nat) : P(plus(a, b)) }",
+    );
     elab(
         "inductive E : (n: Nat) -> Type { E0 : E(0), ESS(n: Nat, e: E(n)) : E(Succ(Succ(n))) }",
     );
@@ -198,17 +204,15 @@ fn rejections_carry_their_messages() {
     assert!(m.contains("a **parameter**, not an index"), "{m}");
     assert!(m.contains("record Q(n: Nat)"), "{m}");
     // Non-uniform: one constructor pins its index, so this one really does
-    // target *every* index and really is the fording case. The old message
-    // stands, which is what makes the arm above a distinction and not a
-    // blanket rewording.
-    // Non-uniform: one constructor pins its index, so this one really does
-    // target *every* index and really is the fording case — §3.4's
-    // non-uniform-bare-variable row, which route 2b now generates.
+    // target *every* index — §3.4's non-uniform-bare-variable row, which the
+    // `IWf` route generates.
     elab("inductive Q2 : (n: Nat) -> Type { A : Q2(0), Mk(n: Nat) : Q2(n) }");
-    let m = elab_err(
+    // A child at a literal index, not at a pattern variable: route 1 has no
+    // `rec` for it, and the `IWf` route takes a child at any index.
+    let e = elab(
         "inductive W2 : (n: Nat) -> Type { M0 : W2(0), Mk(n: Nat, w: W2(0)) : W2(Succ(n)) }",
     );
-    assert!(m.contains("pattern variable"), "{m}");
+    assert_eq!(e.indexed_route("W2"), Some(IndexedRoute::Iwf));
     let m = elab_err("inductive M : (n: Nat) -> Type { Mk }");
     assert!(m.contains("result annotation"), "{m}");
     let m = elab_err("inductive U { Mk : U(0) }");

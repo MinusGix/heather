@@ -130,9 +130,9 @@ impl Elaborator {
         // first: a family whose branch at this literal index is `Empty`
         // (`Fin(0)`) is matched as the empty type, arms and all.
         if let Some((ind, fam)) = self.iwf_of_at(cx, scrut_ty) {
-            let motive2 = self.generalize_index(cx, &motive, &fam.idx);
+            let (motive2, how) = self.iwf_match_motive(cx, &ind, &fam, &motive, &mlvl, span)?;
             return self
-                .elab_match_iwf(cx, form, &ind, &fam, arms, scrut_t, motive2, mlvl, span);
+                .elab_match_iwf(cx, form, &ind, &fam, arms, scrut_t, motive2, mlvl, how, span);
         }
         if !matches!(head, Type::Empty { .. })
             && let Some((ind, fam)) = self.indexed_of_at(cx, scrut_ty)

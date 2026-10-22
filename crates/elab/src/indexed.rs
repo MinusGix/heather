@@ -260,15 +260,15 @@ pub(crate) type CaseBody<'a> = dyn Fn(&Cx, usize, &Rc<Term>, u32, &Type) -> R<Te
 /// available there.
 ///
 /// Everything is scoped in the branch context the caller built.
-struct IdxBranch {
+pub(crate) struct IdxBranch {
     /// Per index-constructor argument: `(term, its type, that type's level)`.
     /// A recursive argument is `nth(cs'; ι_t)` (or the `elim_Nat` binder `m`);
     /// a payload one is a projection of the index constructor's label (§8.2
     /// fact 3).
-    pat: Vec<(Rc<Term>, Type, Level)>,
+    pub(crate) pat: Vec<(Rc<Term>, Type, Level)>,
     /// Per index-constructor argument: the `rec` at a recursive one — the
     /// family's *code* (`Ty l`-valued) or the eliminator's ih function.
-    rec: Vec<Option<Rc<Term>>>,
+    pub(crate) rec: Vec<Option<Rc<Term>>>,
 }
 
 /// Everything an indexed `match` arm needs beyond what a tier-0 arm does: what
@@ -623,94 +623,131 @@ impl Elaborator {
             })
         };
 
-        let fam = match ity {
+        let fam = self.index_case(
+            cx,
+            ity,
+            Type::Ty(l.clone()),
+            &Level::succ(l.clone()),
+            idx,
+            span,
+            &|bcx: &Cx, k: usize, branch: &IdxBranch, _e: &Type| class_code(bcx, k, branch),
+        )?;
+        let lvl = lmax.into_inner();
+        Ok((fam, lvl))
+    }
+
+    /// A case on an index value `idx : I` at `motive`, scoped over
+    /// `(cx, h : I)`: `elim_Nat` at `Nat`, one `Case` tree at a flat declared
+    /// index, `elim_Wf` at a recursive one (§8.2). `body` gets each index
+    /// constructor's branch — its argument terms and `rec`s, scoped in the
+    /// branch context — and the motive at that constructor. Shared by the
+    /// family (at the constant motive `Ty l`) and by an `IWf` `match`'s index
+    /// inversion (`docs/iwf-former-design.md` §8.3).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn index_case(
+        &self,
+        cx: &Cx,
+        ity: &IdxTy,
+        motive: Type,
+        mlvl: &Level,
+        idx: Term,
+        span: Span,
+        body: &dyn Fn(&Cx, usize, &IdxBranch, &Type) -> R<Term>,
+    ) -> R<Term> {
+        let icts = ity.ctors();
+        Ok(match ity {
             IdxTy::Nat => {
-                let base = class_code(
+                let at = |by: u32, h: Term| {
+                    motive.apply_local(&crate::embed(&cx.gamma, by).extended(Rc::new(h)))
+                };
+                let base_e = at(0, Term::Zero);
+                let base = body(
                     cx,
                     0,
                     &IdxBranch {
                         pat: vec![],
                         rec: vec![],
                     },
+                    &base_e,
                 )?;
                 let mut bcx = cx.clone();
                 bcx.push("#idx".into(), Type::Nat, Level::Zero);
-                bcx.push("#rec".into(), Type::Ty(l.clone()), Level::succ(l.clone()));
-                let step = class_code(
+                bcx.push("#rec".into(), at(1, Term::Var(LocalVar(0))), mlvl.clone());
+                let step_e = at(2, Term::Succ(Rc::new(Term::Var(LocalVar(1)))));
+                let step = body(
                     &bcx,
                     1,
                     &IdxBranch {
                         pat: vec![(Rc::new(Term::Var(LocalVar(1))), Type::Nat, Level::Zero)],
                         rec: vec![Some(Rc::new(Term::Var(LocalVar(0))))],
                     },
+                    &step_e,
                 )?;
                 Term::ElimNat {
-                    level: Level::succ(l.clone()),
-                    motive: Rc::new(Type::Ty(l.clone())),
+                    level: mlvl.clone(),
+                    motive: Rc::new(motive),
                     base: Rc::new(base),
                     step: Rc::new(step),
                     scrut: Rc::new(idx),
                 }
             }
-            // A flat declared index: one `Case` tree at motive `Ty l`. No
-            // branch has a `rec` — an enum constructor has no recursive
-            // argument to draw one from, which is why a recursive field at
-            // such an index was rejected by shape at declaration time (§8.2).
+            // A flat declared index: one `Case` tree. No branch has a `rec` —
+            // an enum constructor has no recursive argument to draw one from,
+            // which is why a recursive field at such an index was rejected by
+            // shape at declaration time (§8.2).
             IdxTy::Decl(iind) if !iind.recursive => {
                 let (ity_ty, ity_lvl) = self.lower_instance(cx, iind, &[], &[], span)?;
                 let spine = self.spine(&ity_ty, &ity_lvl, iind.ctors.len(), span)?;
-                let body = |bcx: &Cx, k: usize, value: &Rc<Term>, d: u32, _e: &Type| -> R<Term> {
+                let case_body = |bcx: &Cx, k: usize, value: &Rc<Term>, d: u32, e: &Type| -> R<Term> {
                     let ctor_ty = spine.ctors[k].0.shift_local(d);
                     let mut pat = Vec::with_capacity(icts[k].rec.len());
                     for a in 0..icts[k].rec.len() {
                         pat.push(self.projection(bcx, &ctor_ty, value, a, span)?);
                     }
                     let rec = vec![None; pat.len()];
-                    class_code(bcx, k, &IdxBranch { pat, rec })
+                    body(bcx, k, &IdxBranch { pat, rec }, e)
                 };
                 self.idx_case_tree(
                     cx,
                     &spine,
                     iind.ctors.len(),
                     0,
-                    Type::Ty(l.clone()),
-                    &Level::succ(l.clone()),
+                    motive,
+                    mlvl,
                     Rc::new(idx),
                     0,
-                    &body,
+                    &case_body,
                 )?
             }
-            // A recursive declared index: `elim_Wf` at motive `Ty l`, with
-            // `cs`/`ih` threaded through the `Case` motive so each branch sees
-            // them at its own constructor-refined arity (§8.2 fact 1).
+            // A recursive declared index: `elim_Wf`, with `cs`/`ih` threaded
+            // through the `Case` motive so each branch sees them at its own
+            // constructor-refined arity (§8.2 fact 1).
             IdxTy::Decl(iind) => {
                 let (ity_ty, _) = self.lower_instance(cx, iind, &[], &[], span)?;
-                let body = |bcx: &Cx,
-                            tel: &Tel,
-                            k: usize,
-                            value: &Rc<Term>,
-                            d_body: u32,
-                            _e: &Type|
+                let wf_body = |bcx: &Cx,
+                               tel: &Tel,
+                               k: usize,
+                               value: &Rc<Term>,
+                               d_body: u32,
+                               e: &Type|
                  -> R<Term> {
                     let branch = self.wf_branch_env(bcx, iind, tel, k, value, d_body, span)?;
-                    class_code(bcx, k, &branch)
+                    body(bcx, k, &branch, e)
                 };
                 self.build_elim_wf(
                     cx,
                     iind,
                     &ity_ty,
-                    Type::Ty(l.clone()),
-                    Level::succ(l.clone()),
+                    motive,
+                    mlvl.clone(),
                     idx,
-                    &Branches::Custom(&body),
+                    &Branches::Custom(&wf_body),
                     None,
                     &crate::wf::WfRec::None,
                     span,
                 )?
             }
-        };
-        let lvl = lmax.into_inner();
-        Ok((fam, lvl))
+        })
     }
 
     /// The pattern variables and `rec`s of index constructor `k` inside an

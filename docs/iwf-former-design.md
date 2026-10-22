@@ -487,9 +487,13 @@ a typing or reduction rule.
    rule, and `elim_IWf` is Dybjer's eliminator, which Coq and Agda have
    without K. The review backs the claim that Heather does not prove UIP,
    not the soundness of this rule set, which the ch. 07 round (§9) checks.
-4. **Migration of existing 2b declarations.** The acceptance suites
-   (`indexed_route_2b*.rs`) re-run against the new lowering. Their
-   form-B negatives should flip to positives.
+4. ~~**Migration of existing 2b declarations.**~~ Done 2026-10-22 (§13
+   step 6). The generated-route suites (`indexed_route_2b_gen.rs`,
+   `indexed_route_2b_declared.rs`) run against the new lowering, and their
+   F1–F3 and form-B negatives are positives, open-data β by `refl`
+   included. The two hand prototypes (`indexed_route_2b.rs`,
+   `indexed_route_2b_wf.rs`) were built from `transp` and were deleted
+   with it.
 
 ## 13. Sequencing
 
@@ -528,5 +532,24 @@ a typing or reduction rule.
 5. ~~The ch. 07 round (§9).~~ Done in heather-coq's M17, checked by Coq
    (2026-10-16; recorded 2026-10-21): §9's three predictions hold, with
    the lemma names there.
-6. The generator: route 2b's declarations re-lowered, F1–F3 lifted,
-   `match` tiers 1–2, and `transp` removed from the kernel.
+6. ~~The generator: route 2b's declarations re-lowered, F1–F3 lifted,
+   `match` tiers 1–2, and `transp` removed from the kernel.~~ Done
+   2026-10-22. `crates/elab/src/iwf_family.rs` replaces `forded.rs` and its
+   Ψ devices (images bump); the unifier learns `IWf`/`DVec`; an
+   unparameterized family's signature is built, and its index expressions
+   judged, at its declaration. `match` at a specific index
+   (`Elaborator::iwf_match_motive`, `crates/elab/tests/iwf_match_tiers.rs`)
+   inverts when the index and every output index are constructor-headed
+   (`Nat`, or a declared index through `Elaborator::index_case`, the case
+   route 1's family is built by), so an impossible arm is `tt` and may be
+   left out, and otherwise abstracts an open index out of the goal; each
+   candidate motive is kept only if the kernel accepts it, and only a
+   *variable* is abstracted, because a closed index's literals also spell
+   the signature's case trees. Inversion at a recursive declared index is
+   not done (its `read_ctor` needs the `Wf` spine), and falls to tier 2.
+   `transp` is gone from the kernel (term, value, typing, both reducers,
+   conversion and the strip, the code recursor, now 65 branches), the
+   Merkle hasher, the exporter and both preludes; `seq_transp.rs` became
+   `seq.rs`, and `issues/seq-strip-type-former-negatives.md` is moot.
+   heather-coq's `RecSpec` still has `transp`'s branch, so its branch
+   numbering is one ahead of `rec.rs` from 51 on.

@@ -15,7 +15,7 @@
 //! (the polymorphic families below are lowered at a type variable), checking
 //! position (every `theorem` is one), and a negative control per positive.
 
-use heather_elab::{ElabError, Elaborator};
+use heather_elab::{ElabError, Elaborator, IndexedRoute};
 
 fn elab(src: &str) -> Elaborator {
     let mut e = Elaborator::with_prelude().expect("prelude");
@@ -381,9 +381,9 @@ fn cross_class_equations_fail_to_state() {
 
 #[test]
 fn declaration_rejections_carry_their_messages() {
-    // §8.2's classification consequence: at a flat index there is no recursive
-    // argument, so no `rec` exists for a recursive field to read — and the
-    // message says that by shape rather than by policy.
+    // A child at an index that is no index: the `IWf` route takes a child at
+    // any index (docs/iwf-former-design.md §8), so what is left to say is the
+    // type error, and it is said at the declaration rather than at first use.
     let m = elab_err(
         "inductive Col { CZ, CS(n: Nat) }
          inductive Bad : (c: Col) -> Type {
@@ -391,24 +391,21 @@ fn declaration_rejections_carry_their_messages() {
              B1(n: Nat, d: Bad(n))     : Bad(CS(n)),
          }",
     );
-    assert!(m.contains("no recursive argument"), "{m}");
-    // A recursive field away from any pattern variable.
-    let m = elab_err(&format!(
+    assert!(m.contains("`Col` is expected"), "{m}");
+    // A recursive field away from any pattern variable: route 1 has no `rec`
+    // for it, and the `IWf` route stores the child's index, so it declares
+    // (fording's F1, lifted; docs/iwf-former-design.md §8.2).
+    let e = elab(&format!(
         "inductive Sh2 {{ L2, N2(a: Sh2, b: Sh2) }}
          inductive Bad : (s: Sh2) -> Type {{
              D0                                       : Bad(L2),
              D1(l: Sh2, r: Sh2, d: Bad(L2))           : Bad(N2(l, r)),
          }}{ADD}"
     ));
-    assert!(m.contains("pattern variable"), "{m}");
-    // Non-linear pattern: one field filling two arguments.
-    // A *non-linear* result index is no longer a rejection: route 1 still
-    // declines it (its pattern must be linear), but route 2b generates it —
-    // one child at `l`, and `μ` recomputes `N2(μ d, μ d)` faithfully, which is
-    // §3.2's F1–F4 with nothing left to check
-    // (docs/inductive-fording-lowering.md §3.4). What route 2b *does* reject is
-    // two children sharing one index variable (F2), and that has its own
-    // observer in `indexed_route_2b_gen.rs`.
+    assert_eq!(e.indexed_route("Bad"), Some(IndexedRoute::Iwf));
+    // A *non-linear* result index is no longer a rejection either: route 1
+    // still declines it (its pattern must be linear), and the `IWf` route
+    // takes any written index.
     elab(
         "inductive Sh2 { L2, N2(a: Sh2, b: Sh2) }
          inductive Bad : (s: Sh2) -> Type {
@@ -416,10 +413,8 @@ fn declaration_rejections_carry_their_messages() {
              D1(l: Sh2, d: Bad(l)) : Bad(N2(l, l)),
          }",
     );
-    // Deeper than one constructor: route 1 still declines it, but this is
-    // exactly §3.4's "deep pattern" row — route 2b generates it with no special
-    // case at all (`μ(d1 r) = N2(L2, μ… )`), so the declaration now lands
-    // rather than rejecting (docs/inductive-fording-lowering.md §3.4, §15.4).
+    // Deeper than one constructor: route 1 still declines it, and the `IWf`
+    // route takes it with no special case.
     elab(
         "inductive Sh2 { L2, N2(a: Sh2, b: Sh2) }
          inductive Bad : (s: Sh2) -> Type {

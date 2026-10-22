@@ -6039,6 +6039,20 @@ impl Elaborator {
         located
     }
 
+    /// The first checking mismatch recorded since note `from` that the probe
+    /// decides, as an error: for a construction the declaration gate never
+    /// sees, such as an `IWf`-route family's signature built at its
+    /// declaration (`inductive.rs`), where nothing else would refuse it.
+    pub(crate) fn mismatch_since(&self, from: usize) -> Option<ElabError> {
+        let notes = self.attempt.check_notes.borrow();
+        notes.iter().skip(from).find_map(|note| {
+            self.probed_check_note(note).map(|(m, span)| {
+                let (MismatchNote::Spelled(msg) | MismatchNote::Located(msg)) = m;
+                ElabError::Elab { msg, span }
+            })
+        })
+    }
+
     /// [`Self::note_check_mismatch`] at the one checking form that compares
     /// nothing (`issues/elab-refl-accepts-match-eta-kernel-rejects.md`).
     ///
@@ -7356,6 +7370,7 @@ impl Elaborator {
                         scrut_t,
                         motive2,
                         mlvl.clone(),
+                        crate::iwf_family::IndexMotive::Plain,
                         e.span,
                     )?;
                     return Ok((t, result, mlvl));
