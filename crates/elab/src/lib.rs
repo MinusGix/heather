@@ -662,6 +662,10 @@ pub struct Elaborator {
     /// Tactics implemented in Rust, available as `by name`
     /// ([`Elaborator::register_native_tactic`], docs/host-elaboration-interface-design.md §8a).
     native_tactics: RefCell<HashMap<String, fn() -> Box<dyn host::NativeTactic>>>,
+    /// Set while a `by`'s tactic expression is elaborated: terms of the
+    /// goal's context are quoted where it expects a `tactic::Expr`
+    /// (`host::Quoting`).
+    by_quoting: RefCell<Option<Rc<host::Quoting>>>,
     fuel: u64,
     /// Optional explicit collector for evaluator-region activity. Clones
     /// share it so speculative and generated checking contribute to the same
@@ -1683,6 +1687,7 @@ impl Elaborator {
             resolve_depth: Cell::new(0),
             positivity: RefCell::new(None),
             native_tactics: RefCell::new(HashMap::new()),
+            by_quoting: RefCell::new(None),
             fuel: DEFAULT_FUEL,
             value_metrics: None,
             emission_findings: None,
@@ -4626,6 +4631,9 @@ impl Elaborator {
         capture_slots: bool,
     ) -> R<Term> {
         let _depth = expr::ExprDepthGuard::enter(&self.expr_depth, e.span)?;
+        if let Some(quoted) = self.quote_for_by(cx, e, expected, lvl)? {
+            return Ok(quoted);
+        }
         if let Some(receiver) = cx.dot_receiver.as_ref().and_then(|r| r.inference(cx, e))
             && let Some(Ok((t, got, _))) = receiver.get()
         {

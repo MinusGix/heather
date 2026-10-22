@@ -135,7 +135,7 @@ pub(crate) struct PositivityRun {
 /// Everything a rejected proposition candidate may have left behind, so it
 /// can be undone: its dependency edges, its checking notes, and (an `omega`
 /// inside `positivity`) its named atom lists, warnings and Omega reports.
-struct SearchMark {
+pub(crate) struct SearchMark {
     dependencies: std::collections::BTreeSet<String>,
     notes: usize,
     goals: usize,
@@ -145,7 +145,7 @@ struct SearchMark {
 }
 
 impl SearchMark {
-    fn of(e: &Elaborator) -> Self {
+    pub(crate) fn of(e: &Elaborator) -> Self {
         SearchMark {
             dependencies: e.attempt.direct_dependencies.borrow().clone(),
             notes: e.attempt.check_notes.borrow().len(),
@@ -156,7 +156,7 @@ impl SearchMark {
         }
     }
 
-    fn rollback(self, e: &Elaborator) {
+    pub(crate) fn rollback(self, e: &Elaborator) {
         *e.attempt.direct_dependencies.borrow_mut() = self.dependencies;
         e.attempt.check_notes.borrow_mut().truncate(self.notes);
         e.attempt.goal_arena.rollback(self.goals);

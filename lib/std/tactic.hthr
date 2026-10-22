@@ -8,6 +8,11 @@
 // is checked at the goal like any other proof, so a tactic is never trusted:
 // a wrong one is refused at its `by`.
 //
+// A tactic's argument that expects an `Expr` may be any term of the goal's
+// context: `by exact(h)` with `h` a hypothesis hands the tactic a handle to
+// `h`. Everything else about a tactic's arguments is closed; a tactic reaches
+// the goal's locals through `Goal`.
+//
 // Importing this module imports the *protocol*, never an implementation.
 // What answers is the elaborator running the build; a Heather handler for the
 // same requests is an ordinary function over `Tac<A>` (the probe in
@@ -28,6 +33,11 @@ import string;
 // built itself. Handles and local references are numbers the elaborator
 // issued during this run; it validates every one it is given, so forging one
 // is an error at the `by`, never a soundness question.
+//
+// A local is either one of the goal's or one `Open` introduced; `Lam(x, b)`
+// abstracts an introduced `x` out of `b`. The elaborator keeps track of which
+// binder each handle and local lives under, and refuses an `Expr` that uses
+// one outside it.
 
 record Handle { id: Nat }
 record LocalRef { id: Nat }
@@ -37,6 +47,7 @@ inductive Expr {
     Local(x: LocalRef),
     App(f: Expr, a: Expr),
     NatLit(n: Nat),
+    Lam(x: LocalRef, body: Expr),
 }
 
 // One local of the goal's context: how to refer to it, its name for
@@ -46,8 +57,16 @@ record LocalInfo { ref: LocalRef, name: String, ty: Handle }
 // The goal: its statement, and its locals, the most recent first.
 record GoalInfo { target: Handle, locals: List<LocalInfo> }
 
-// One line of a failure's search state.
-inductive Note { Tried(what: String, verdict: String) }
+// One line of a failure's search state. `Under` marks a note about a
+// sub-search, shown one level deeper.
+inductive Note { Tried(what: String, verdict: String), Under(n: Note) }
+
+// The answer to a request that may be refused, with the reason.
+inductive Checked<A> { Accepted(a: A), Refused(why: String) }
+
+// A binder `Open` introduced: the new local, and the binder's body, which
+// lives under it.
+record Opened { local: LocalInfo, body: Handle }
 
 // ---------------------------------------------------------------------------
 // The requests, and the request tree.
@@ -59,6 +78,14 @@ inductive Req {
     Defeq(a: Expr, b: Expr),
     // End the run: the invocation fails with the message and the notes.
     Fail(msg: String, notes: List<Note>),
+    // The type of a term.
+    Infer(e: Expr),
+    // Introduce the binder of a function type, by its head normal form: a
+    // fresh local of its domain, and its body under that local.
+    Open(h: Handle, name: String),
+    // A name, resolved and elaborated where the `by` is (not where the
+    // tactic is declared), as a handle to the term.
+    Resolve(name: String),
 }
 
 inductive Never {}
@@ -66,7 +93,14 @@ inductive Never {}
 // What each request is answered with. `Fail` is answered in the empty type,
 // so a failure has no continuation by type.
 fn Resp(r: Req) → Type {
-    match r { Goal => GoalInfo, Defeq(_, _) => Bool, Fail(_, _) => Never }
+    match r {
+        Goal => GoalInfo,
+        Defeq(_, _) => Bool,
+        Fail(_, _) => Never,
+        Infer(_) => Checked<Handle>,
+        Open(_, _) => Checked<Opened>,
+        Resolve(_) => Checked<Handle>,
+    }
 }
 
 inductive Tac<A> { Pure(a: A), Ask(r: Req, k: Resp(r) → Tac<A>) }
@@ -82,6 +116,83 @@ fn defeq(a: Expr, b: Expr) → Tac<Bool> { Ask(Defeq(a, b), λ same => Pure(same
 fn fail<A>(msg: String, notes: List<Note>) → Tac<A> {
     Ask(Fail(msg, notes), λ never => match never {})
 }
+
+fn infer(e: Expr) → Tac<Checked<Handle>> { Ask(Infer(e), λ c => Pure(c)) }
+
+fn open(h: Handle, name: String) → Tac<Checked<Opened>> { Ask(Open(h, name), λ c => Pure(c)) }
+
+fn resolve(name: String) → Tac<Checked<Handle>> { Ask(Resolve(name), λ c => Pure(c)) }
+
+// An answer of any kind, as the elaborator builds one, and the answer at a
+// request's own type. A `match` on the request would not refine the
+// continuation's domain, so the dependent answer is computed by `fit`
+// (design §9).
+inductive Answer { AGoal(g: GoalInfo), ABool(b: Bool), AHandle(c: Checked<Handle>), AOpened(c: Checked<Opened>) }
+
+inductive Fit<R> { Mismatch, Fits(a: R) }
+
+fn fit(r: Req, a: Answer) → Fit<Resp(r)> {
+    match r {
+        Goal => match a { AGoal(g) => Fits(g), _ => Mismatch },
+        Defeq(_, _) => match a { ABool(b) => Fits(b), _ => Mismatch },
+        Fail(_, _) => Mismatch,
+        Infer(_) => match a { AHandle(c) => Fits(c), _ => Mismatch },
+        Open(_, _) => match a { AOpened(c) => Fits(c), _ => Mismatch },
+        Resolve(_) => match a { AHandle(c) => Fits(c), _ => Mismatch },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Handlers: tactics that run other tactics.
+//
+// Each is an ordinary function over the request tree that answers some of
+// its requests itself and passes the rest on, so the elaborator never knows
+// about them.
+
+// Run `t` against `g`: its `Goal` requests are answered with `g`, and every
+// other request goes to the elaborator. This is how a tactic works on a
+// subgoal, such as the body of a binder it opened.
+fn focus<A>(g: GoalInfo, t: Tac<A>) → Tac<A> {
+    match t {
+        Pure(a) => Pure(a),
+        Ask(r, k) => match fit(r, AGoal(g)) {
+            Fits(x) => focus(g, k(x)),
+            Mismatch => Ask(r, λ x => focus(g, k(x))),
+        },
+    }
+}
+
+inductive Outcome<A> { Done(a: A), Failed(msg: String, notes: List<Note>) }
+
+// Run `t`, catching its failure. Requests are side-effect free, so nothing
+// needs undoing when `t` fails: the elaborator's state is what it was.
+fn attempt<A>(t: Tac<A>) → Tac<Outcome<A>> {
+    match t {
+        Pure(a) => Pure(Done(a)),
+        Ask(r, k) => match r {
+            Fail(msg, notes) => Pure(Failed(msg, notes)),
+            _ => Ask(r, λ x => attempt(k(x))),
+        },
+    }
+}
+
+fn under_all(ns: List<Note>) → List<Note> {
+    match ns { Nil => [], Cons(n, rest) => Cons(Under(n), under_all(rest)) }
+}
+
+fn first_of_among<A>(ts: List<Tac<A>>, tried: List<Note>) → Tac<A> {
+    match ts {
+        Nil => fail("no alternative succeeded", tried),
+        Cons(t, rest) => attempt(t).bind(λ o => match o {
+            Done(a) => Pure(a),
+            Failed(msg, notes) => first_of_among(rest, (tried ++ [Tried("an alternative", msg)]) ++ under_all(notes)),
+        }),
+    }
+}
+
+// The first of `ts` that succeeds. A failure lists every alternative's
+// failure, with its own notes beneath it.
+fn first_of<A>(ts: List<Tac<A>>) → Tac<A> { first_of_among(ts, []) }
 
 // ---------------------------------------------------------------------------
 // Tactics.
@@ -102,6 +213,63 @@ fn assumption() → Tac<Expr> {
     goal().bind(λ g => assumption_among(g.target, g.locals, []))
 }
 
+// `exact(e)`: `e` itself, if its type is the goal.
+fn exact(e: Expr) → Tac<Expr> {
+    goal().bind(λ g => infer(e).bind(λ c => match c {
+        Refused(why) => fail("exact: " ++ why, []),
+        Accepted(ty) => defeq(Hd(ty), Hd(g.target)).bind(λ same => match same {
+            True => Pure(e),
+            False => fail("exact: the term's type is not the goal", []),
+        }),
+    }))
+}
+
+// `intro_as(name, t)`: open the goal's binder as a local called `name`,
+// prove the body with `t`, and abstract the local again. The name is for
+// messages; nothing resolves it.
+fn intro_as(name: String, t: Tac<Expr>) → Tac<Expr> {
+    goal().bind(λ g => open(g.target, name).bind(λ c => match c {
+        Refused(why) => fail("intro: " ++ why, []),
+        Accepted(o) => focus(GoalInfo(o.body, Cons(o.local, g.locals)), t).bind(λ e => Pure(Lam(o.local.ref, e))),
+    }))
+}
+
+// `intro(t)`: `intro_as` with the local called `x`.
+fn intro(t: Tac<Expr>) → Tac<Expr> { intro_as("x", t) }
+
+// `f`, whose type is `ty`, applied to as many arguments as it takes to reach
+// `target`, each proved by `premise` at the parameter's type. At most `n`
+// arguments are supplied.
+fn apply_upto(n: Nat, f: Expr, ty: Handle, target: Handle, locals: List<LocalInfo>, premise: Tac<Expr>) → Tac<Expr> {
+    match n {
+        Zero => defeq(Hd(ty), Hd(target)).bind(λ same => match same {
+            True => Pure(f),
+            False => fail("apply: no number of arguments makes its type the goal", []),
+        }),
+        Succ(m) => defeq(Hd(ty), Hd(target)).bind(λ same => match same {
+            True => Pure(f),
+            False => open(ty, "_").bind(λ c => match c {
+                Refused(_) => fail("apply: its conclusion is not the goal", []),
+                Accepted(o) => focus(GoalInfo(o.local.ty, locals), premise).bind(λ a => infer(App(f, a)).bind(λ c2 => match c2 {
+                    Refused(why) => fail("apply: " ++ why, []),
+                    Accepted(ty2) => apply_upto(m, App(f, a), ty2, target, locals, premise),
+                })),
+            }),
+        }),
+    }
+}
+
+// `apply(f, premise)`: use `f` backwards. Its parameters are proved one at a
+// time, left to right, each by `premise` run against the parameter's type,
+// until what is left is the goal. A later parameter's type may mention an
+// earlier one's proof.
+fn apply(f: Expr, premise: Tac<Expr>) → Tac<Expr> {
+    goal().bind(λ g => infer(f).bind(λ c => match c {
+        Refused(why) => fail("apply: " ++ why, []),
+        Accepted(ty) => apply_upto(64, f, ty, g.target, g.locals, premise),
+    }))
+}
+
 // ---------------------------------------------------------------------------
 // The host's side of the protocol.
 //
@@ -111,26 +279,19 @@ fn assumption() → Tac<Expr> {
 // part of the protocol's definition, not of any tactic, and a tactic has no
 // reason to call them.
 
-inductive Answer { AGoal(g: GoalInfo), ABool(b: Bool) }
-
-inductive Fit<R> { Mismatch, Fits(a: R) }
-
-// The answer at the request's own type, if it is the right kind. A `match`
-// on `r` inside `host_resume` would not refine `k`'s domain, so the
-// dependent answer is computed here (design §9).
-fn fit(r: Req, a: Answer) → Fit<Resp(r)> {
-    match r {
-        Goal => match a { AGoal(g) => Fits(g), ABool(_) => Mismatch },
-        Defeq(_, _) => match a { ABool(b) => Fits(b), AGoal(_) => Mismatch },
-        Fail(_, _) => Mismatch,
-    }
-}
-
-// 0: a result. 1: `Goal`. 2: `Defeq`. 3: `Fail`.
+// 0: a result. 1: `Goal`. 2: `Defeq`. 3: `Fail`. 4: `Infer`. 5: `Open`.
+// 6: `Resolve`.
 fn host_tag(t: Tac<Expr>) → Nat {
     match t {
         Pure(_) => 0,
-        Ask(r, _) => match r { Goal => 1, Defeq(_, _) => 2, Fail(_, _) => 3 },
+        Ask(r, _) => match r {
+            Goal => 1,
+            Defeq(_, _) => 2,
+            Fail(_, _) => 3,
+            Infer(_) => 4,
+            Open(_, _) => 5,
+            Resolve(_) => 6,
+        },
     }
 }
 
@@ -141,31 +302,43 @@ fn host_result(t: Tac<Expr>) → Expr {
 fn host_lhs(t: Tac<Expr>) → Expr {
     match t {
         Pure(e) => e,
-        Ask(r, _) => match r { Defeq(a, _) => a, Goal => NatLit(0), Fail(_, _) => NatLit(0) },
+        Ask(r, _) => match r { Defeq(a, _) => a, Infer(e) => e, _ => NatLit(0) },
     }
 }
 
 fn host_rhs(t: Tac<Expr>) → Expr {
     match t {
         Pure(e) => e,
-        Ask(r, _) => match r { Defeq(_, b) => b, Goal => NatLit(0), Fail(_, _) => NatLit(0) },
+        Ask(r, _) => match r { Defeq(_, b) => b, _ => NatLit(0) },
+    }
+}
+
+// `Open`'s handle.
+fn host_handle(t: Tac<Expr>) → Nat {
+    match t { Pure(_) => 0, Ask(r, _) => match r { Open(h, _) => h.id, _ => 0 } }
+}
+
+// `Open`'s or `Resolve`'s name.
+fn host_name(t: Tac<Expr>) → String {
+    match t { Pure(_) => "", Ask(r, _) => match r { Open(_, name) => name, Resolve(name) => name, _ => "" } }
+}
+
+fn render_note(indent: String, n: Note) → String {
+    match n {
+        Tried(what, verdict) => "\n" ++ indent ++ "tried " ++ what ++ ": " ++ verdict,
+        Under(m) => render_note(indent ++ "  ", m),
     }
 }
 
 fn render_notes(ns: List<Note>) → String {
-    match ns {
-        Nil => "",
-        Cons(n, rest) => match n {
-            Tried(what, verdict) => "\n  tried " ++ what ++ ": " ++ verdict ++ render_notes(rest),
-        },
-    }
+    match ns { Nil => "", Cons(n, rest) => render_note("  ", n) ++ render_notes(rest) }
 }
 
 // A failure's message followed by its notes, one per line.
 fn host_failure(t: Tac<Expr>) → String {
     match t {
         Pure(_) => "",
-        Ask(r, _) => match r { Fail(msg, notes) => msg ++ render_notes(notes), Goal => "", Defeq(_, _) => "" },
+        Ask(r, _) => match r { Fail(msg, notes) => msg ++ render_notes(notes), _ => "" },
     }
 }
 
@@ -178,19 +351,20 @@ fn host_resume(t: Tac<Expr>, a: Answer) → Tac<Expr> {
     }
 }
 
-// 0: `Hd`. 1: `Local`. 2: `App`. 3: `NatLit`.
+// 0: `Hd`. 1: `Local`. 2: `App`. 3: `NatLit`. 4: `Lam`.
 fn expr_tag(e: Expr) → Nat {
-    match e { Hd(_) => 0, Local(_) => 1, App(_, _) => 2, NatLit(_) => 3 }
+    match e { Hd(_) => 0, Local(_) => 1, App(_, _) => 2, NatLit(_) => 3, Lam(_, _) => 4 }
 }
 
-// The number a leaf carries: a handle, a local or a literal.
+// The number a leaf carries: a handle, a local or a literal; `Lam`'s local.
 fn expr_nat(e: Expr) → Nat {
-    match e { Hd(h) => h.id, Local(x) => x.id, App(_, _) => 0, NatLit(n) => n }
+    match e { Hd(h) => h.id, Local(x) => x.id, App(_, _) => 0, NatLit(n) => n, Lam(x, _) => x.id }
 }
 
-fn expr_fn(e: Expr) → Expr { match e { App(f, _) => f, Hd(h) => Hd(h), Local(x) => Local(x), NatLit(n) => NatLit(n) } }
+fn expr_fn(e: Expr) → Expr { match e { App(f, _) => f, _ => e } }
 
-fn expr_arg(e: Expr) → Expr { match e { App(_, a) => a, Hd(h) => Hd(h), Local(x) => Local(x), NatLit(n) => NatLit(n) } }
+// `App`'s argument; `Lam`'s body.
+fn expr_arg(e: Expr) → Expr { match e { App(_, a) => a, Lam(_, b) => b, _ => e } }
 
 fn chars_len(cs: List<Char>) → Nat { match cs { Nil => 0, Cons(_, rest) => Succ(chars_len(rest)) } }
 
@@ -212,12 +386,26 @@ fn host_goal(target: Nat) → Answer { AGoal(GoalInfo(Handle(target), [])) }
 fn host_goal_local(a: Answer, ref: Nat, name: String, ty: Nat) → Answer {
     match a {
         AGoal(g) => AGoal(GoalInfo(g.target, g.locals ++ [LocalInfo(LocalRef(ref), name, Handle(ty))])),
-        ABool(b) => ABool(b),
+        _ => a,
     }
 }
 
 // 0 is `False`, anything else `True`.
 fn host_bool(n: Nat) → Answer { match n { Zero => ABool(False), Succ(_) => ABool(True) } }
+
+fn host_accepted(h: Nat) → Answer { AHandle(Accepted(Handle(h))) }
+
+fn host_refused(why: String) → Answer { AHandle(Refused(why)) }
+
+fn host_opened(ref: Nat, name: String, ty: Nat, body: Nat) → Answer {
+    AOpened(Accepted(Opened(LocalInfo(LocalRef(ref), name, Handle(ty)), Handle(body))))
+}
+
+fn host_not_opened(why: String) → Answer { AOpened(Refused(why)) }
+
+// A term of the goal's context, quoted where a tactic's argument expects an
+// `Expr`.
+fn host_quote(h: Nat) → Expr { Hd(Handle(h)) }
 
 // A character from its code; the host only sends scalar values, and anything
 // else becomes U+FFFD.
