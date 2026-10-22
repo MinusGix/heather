@@ -431,6 +431,30 @@ impl Speller<'_> {
                 return self.raw_ty(ty);
             }
             let shape = sig.shape_at(index);
+            // A named signature carries its arguments: `El(D#mshape ā j)`
+            // (docs/codata-named-signature-design.md §2), type arguments as
+            // codes and value arguments as written.
+            if let Type::El { tm, .. } = &shape
+                && let Some((crate::gendefs::GenDef::MShape(_), args)) = self.el.gen_app_of(tm)
+                && args.len() == ind.params.len() + ind.valparams.len() + 1
+            {
+                let np = ind.params.len();
+                let targs = if np == 0 {
+                    String::new()
+                } else {
+                    let shown = args[..np]
+                        .iter()
+                        .map(|a| self.ty(&Type::El { level: heather_kernel::level::Level::Zero, tm: Rc::clone(a) }, d + 1))
+                        .collect::<Vec<_>>();
+                    format!("<{}>", shown.join(", "))
+                };
+                let mut vals: Vec<String> = args[np..args.len() - 1].iter().map(|a| self.tm(a, d + 1)).collect();
+                if !idx.is_empty() {
+                    vals.push(idx[1..idx.len() - 1].to_string());
+                }
+                let vargs = if vals.is_empty() { String::new() } else { format!("({})", vals.join(", ")) };
+                return format!("{}{targs}{vargs}", ind.name);
+            }
             let targs = if ind.params.is_empty() {
                 String::new()
             } else if let Some(args) = self.el.display_targs(self.cx, &shape, &ind, self.binders()) {

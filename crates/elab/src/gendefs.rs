@@ -184,6 +184,18 @@ pub(crate) enum GenDef {
     /// Registered at the all-type-parameters-`Ty 0` profile, as
     /// [`GenDef::TyCodeFn`] is; another profile keeps the inline spelling.
     WCanon(u32),
+    /// `D#mshape : Π(A₁ : Ty 0)…(v_m : T_m). Π(i : I). Ty ls` — a `codata`
+    /// declaration's shape at index `i` (`docs/codata-named-signature-design.md`),
+    /// consumed as `El (app(D#mshape^δ; ā, i))` in the `M`'s shape slot.
+    /// Like [`GenDef::WCanon`] the lowering **is** spelled with it: the
+    /// structural readers unfold it (`codata.rs`'s `MParts::read`).
+    MShape(u32),
+    /// `D#mpos : Π…. Π(i : I). Π(s : El(D#mshape ā i)). Ty lp` — the
+    /// positions, the `M`'s position slot.
+    MPos(u32),
+    /// `D#mnext : Π…. Π(i : I)(s : …)(p : El(D#mpos ā i s)). I` — the child
+    /// index of an indexed declaration (an unindexed one has `⟨⟩`).
+    MNext(u32),
 }
 
 impl GenDef {
@@ -193,7 +205,8 @@ impl GenDef {
         match *self {
             GenDef::IdxCode(t) | GenDef::TyCode(t) | GenDef::TyCodeFn(t) | GenDef::ShapeCode(t)
             | GenDef::ArityFn(t) | GenDef::Fam(t) | GenDef::RecProj(t, _) | GenDef::RecTail(t, _)
-            | GenDef::RecFam(t, _) | GenDef::PayloadCode(t, _) | GenDef::SuffixCode(t, _) | GenDef::WCanon(t) => t,
+            | GenDef::RecFam(t, _) | GenDef::PayloadCode(t, _) | GenDef::SuffixCode(t, _) | GenDef::WCanon(t)
+            | GenDef::MShape(t) | GenDef::MPos(t) | GenDef::MNext(t) => t,
         }
     }
 
@@ -213,6 +226,9 @@ impl GenDef {
             GenDef::PayloadCode(_, k) => format!("{owner}#payload{k}"),
             GenDef::SuffixCode(_, k) => format!("{owner}#suffix{k}"),
             GenDef::WCanon(_) => format!("{owner}#canon"),
+            GenDef::MShape(_) => format!("{owner}#mshape"),
+            GenDef::MPos(_) => format!("{owner}#mpos"),
+            GenDef::MNext(_) => format!("{owner}#mnext"),
         }
     }
 }
@@ -525,6 +541,19 @@ impl Holes<'_> {
             (Type::El { tm: c1, level: v1 }, Type::El { tm: c2, level: v2 }) => {
                 (v1 == v2).then_some(())?;
                 self.tm(c1, c2, md)
+            }
+            // A codata field (`docs/codata-named-signature-design.md` §4): the
+            // signature's components under their binders, then the index.
+            // Named signatures make these the `El (D#mshape ā i)` spines the
+            // `El` arm reads.
+            (Type::M { sig: g1, index: j1 }, Type::M { sig: g2, index: j2 }) => {
+                (g1.level == g2.level && g1.pos_level == g2.pos_level && g1.idx_level == g2.idx_level)
+                    .then_some(())?;
+                self.ty(&g1.idx, &g2.idx, md)?;
+                self.ty(&g1.shape, &g2.shape, md + 1)?;
+                self.ty(&g1.pos, &g2.pos, md + 2)?;
+                self.tm(&g1.next, &g2.next, md + 3)?;
+                self.tm(j1, j2, md)
             }
             (a, b) => {
                 if a == b {
@@ -2429,6 +2458,29 @@ impl Elaborator {
     /// included.
     fn gen_ref_len(&self, g: u32) -> u32 {
         self.psi.bindings.len() as u32 + self.global_padding() + self.meta_offset() + g
+    }
+
+    /// `body[ā]` for an application `u^δ ā` of the registered definition
+    /// `key` whose arguments are scoped in a context of `len` entries over
+    /// `base`: the stored body read into the committed world (the same
+    /// `shift_global` [`Self::ty_code_fn_at`] applies), its leading `λ`s
+    /// peeled one per argument and instantiated. `None` when `key` is not
+    /// registered or has fewer `λ`s than arguments. The structural readers of
+    /// a named codata signature unfold through this
+    /// (`docs/codata-named-signature-design.md` §3).
+    pub(crate) fn unfold_gen_app(&self, key: GenDef, args: &[Rc<Term>], len: u32, base: CtxBase) -> Option<Term> {
+        let abs = *self.types.gdefs().abs_for(&key)?;
+        let (_, body) = self.global_body_at(abs as usize)?;
+        let by = self.gen_ref_len(0).checked_sub(abs)?;
+        let mut cur: &Term = &body;
+        for _ in args {
+            let Term::Lam { body, .. } = cur else {
+                return None;
+            };
+            cur = body;
+        }
+        let subst = LocalSubst { tail: SubstTail::Empty { len, base }, terms: args.to_vec() };
+        Some(cur.shift_global(by).apply_local(&subst))
     }
 
     /// [`Self::instance_ref`]'s two steps without the spine: the recovered

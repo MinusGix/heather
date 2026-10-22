@@ -1,0 +1,428 @@
+// Coinductive interaction trees: programs that diverge for real
+// (docs/coitree-design.md; milestone `it-coinductive`).
+//
+// `CoTree<R>(E)` is `ITree<R>(E)` without `Cut`, as `codata`: a value is a
+// possibly infinite tree, lowered onto the kernel's `M`
+// (docs/codata-elaborator-design.md). `spin` is one `CTau` after another
+// forever, and `iter` goes round its body for as long as the body says, with
+// no fuel. The finite library is not retired: `approx(n, t)` cuts a tree at
+// depth `n` into an `ITree`, every finite theorem applies there, and a tree
+// is a `Program` whose members are its approximations.
+//
+// There is no dependent `match` on codata (no η, kernel design §0), so a
+// tree is never equal to the constructor it observes as. What a proof can
+// take apart is the tree's **observation** `obs(t) : Obs`, an ordinary
+// inductive with the same three cases whose children are trees. Two habits
+// follow, and the file keeps both:
+//
+// - A corecursive function is written on the observation (`bind_obs(o, h)`,
+//   the seed is an `Obs`) and the tree version applies it to `obs(t)`. Its
+//   unfolding law `obs(bind(t, h)) = Obs::bind(obs(t), h)` is then a
+//   `match` on the observation with `refl` in each case, and a proof meets
+//   `obs(t)` syntactically, where a `j` can rewrite it.
+// - A proof about a tree matches on its observation with the convoy,
+//   `match h : CoTree::obs(E, t)`, and carries `h` into whatever it builds.
+//
+// `Bisim` is strong bisimilarity, coinductive and indexed by the two trees
+// (docs/codata-indexed-design.md): each constructor states both trees'
+// observations, with the children related again. Equal observations give a
+// bisimilarity, and the monad laws hold up to it.
+
+import logic;
+import nat;
+import itree;
+import itree_trace;
+
+// ---------------------------------------------------------------------------
+// Trees and their observations
+
+codata CoTree<R>(E: Events) {
+    CRet(r: R),
+    CTau(t: CoTree<R>(E)),
+    CVis(c: E.Cmd, k: E.Resp(c) → CoTree<R>(E)),
+}
+
+// What a tree is at its root, its children as trees.
+inductive Obs<R>(E: Events) {
+    ORet(r: R),
+    OTau(t: CoTree<R>(E)),
+    OVis(c: E.Cmd, k: E.Resp(c) → CoTree<R>(E)),
+}
+
+fn CoTree::obs<R>(E: Events, t: CoTree<R>(E)) → Obs<R>(E) {
+    match t { CRet(r) => ORet(r), CTau(s) => OTau(s), CVis(c, k) => OVis(c, k) }
+}
+
+// The tree an observation describes. `obs(tree(o)) = o` by `refl`; the other
+// way round is a bisimilarity (`Bisim::tree_obs`).
+fn Obs::tree<R>(E: Events, o: Obs<R>(E)) → CoTree<R>(E) {
+    match o { ORet(r) => CRet(r), OTau(s) => CTau(s), OVis(c, k) => CVis(c, k) }
+}
+
+theorem Obs::obs_tree<R>(E: Events, o: Obs<R>(E)): CoTree::obs(E, Obs::tree(E, o)) = o {
+    match o { ORet(_) => refl, OTau(_) => refl, OVis(_, _) => refl }
+}
+
+// ---------------------------------------------------------------------------
+// Combinators
+
+// Issue one command and return its answer.
+fn CoTree::trigger(E: Events, c: E.Cmd) → CoTree<E.Resp(c)>(E) {
+    CVis(c, λ a => CRet(a))
+}
+
+// Silent steps forever.
+fn CoTree::spin<R>(E: Events) → CoTree<R>(E) { CTau(CoTree::spin(E)) }
+
+// Sequencing, on the observation: continue from each leaf with `h`.
+fn CoTree::bind_obs<A, B>(E: Events, o: Obs<A>(E), h: A → CoTree<B>(E)) → CoTree<B>(E) {
+    match o {
+        ORet(r) => h(r),
+        OTau(s) => CTau(CoTree::bind_obs(E, CoTree::obs(E, s), h)),
+        OVis(c, k) => CVis(c, λ a => CoTree::bind_obs(E, CoTree::obs(E, k(a)), h)),
+    }
+}
+
+fn CoTree::bind<A, B>(E: Events, t: CoTree<A>(E), h: A → CoTree<B>(E)) → CoTree<B>(E) {
+    CoTree::bind_obs(E, CoTree::obs(E, t), h)
+}
+
+fn CoTree::map<A, B>(E: Events, t: CoTree<A>(E), f: A → B) → CoTree<B>(E) {
+    CoTree::bind(E, t, λ r => CRet(f(r)))
+}
+
+// One step of `bind`, as an observation.
+fn Obs::bind<A, B>(E: Events, o: Obs<A>(E), h: A → CoTree<B>(E)) → Obs<B>(E) {
+    match o {
+        ORet(r) => CoTree::obs(E, h(r)),
+        OTau(s) => OTau(CoTree::bind(E, s, h)),
+        OVis(c, k) => OVis(c, λ a => CoTree::bind(E, k(a), h)),
+    }
+}
+
+// Rename a tree's commands along a container morphism.
+fn CoTree::translate_obs<R>(E: Events, F: Events, m: EventMap(E, F), o: Obs<R>(E)) → CoTree<R>(F) {
+    match o {
+        ORet(r) => CRet(r),
+        OTau(s) => CTau(CoTree::translate_obs(E, F, m, CoTree::obs(E, s))),
+        OVis(c, k) => CVis(m.cmd(c), λ b => CoTree::translate_obs(E, F, m, CoTree::obs(E, k(m.back(c, b))))),
+    }
+}
+
+fn CoTree::translate<R>(E: Events, F: Events, m: EventMap(E, F), t: CoTree<R>(E)) → CoTree<R>(F) {
+    CoTree::translate_obs(E, F, m, CoTree::obs(E, t))
+}
+
+// A loop with no fuel: run the body's tree, and at a `Continue` go round
+// again after one `CTau`, so that every pass is productive.
+fn CoTree::iter_obs<A, B>(E: Events, body: A → CoTree<Step<A, B>>(E), o: Obs<Step<A, B>>(E)) → CoTree<B>(E) {
+    match o {
+        ORet(x) => match x {
+            Continue(a) => CTau(CoTree::iter_obs(E, body, CoTree::obs(E, body(a)))),
+            Break(b) => CRet(b),
+        },
+        OTau(s) => CTau(CoTree::iter_obs(E, body, CoTree::obs(E, s))),
+        OVis(c, k) => CVis(c, λ a => CoTree::iter_obs(E, body, CoTree::obs(E, k(a)))),
+    }
+}
+
+fn CoTree::iter<A, B>(E: Events, body: A → CoTree<Step<A, B>>(E), a: A) → CoTree<B>(E) {
+    CoTree::iter_obs(E, body, CoTree::obs(E, body(a)))
+}
+
+// ---------------------------------------------------------------------------
+// Unfolding laws: one observation of each combinator
+
+theorem CoTree::obs_bind_obs<A, B>(E: Events, o: Obs<A>(E), h: A → CoTree<B>(E)):
+    CoTree::obs(E, CoTree::bind_obs(E, o, h)) = Obs::bind(E, o, h)
+{
+    match o { ORet(_) => refl, OTau(_) => refl, OVis(_, _) => refl }
+}
+
+theorem CoTree::obs_bind<A, B>(E: Events, t: CoTree<A>(E), h: A → CoTree<B>(E)):
+    CoTree::obs(E, CoTree::bind(E, t, h)) = Obs::bind(E, CoTree::obs(E, t), h)
+{
+    CoTree::obs_bind_obs(E, CoTree::obs(E, t), h)
+}
+
+// …at a known observation of `t`.
+theorem CoTree::obs_bind_at<A, B>(E: Events, t: CoTree<A>(E), h: A → CoTree<B>(E), o: Obs<A>(E),
+    e: CoTree::obs(E, t) = o): CoTree::obs(E, CoTree::bind(E, t, h)) = Obs::bind(E, o, h)
+{
+    j(e, λ y q => CoTree::obs(E, CoTree::bind(E, t, h)) = Obs::bind(E, y, h), CoTree::obs_bind(E, t, h))
+}
+
+theorem CoTree::obs_spin<R>(E: Events): CoTree::obs<R>(E, CoTree::spin(E)) = OTau(CoTree::spin(E)) { refl }
+
+theorem CoTree::bind_ret_obs<A, B>(E: Events, a: A, h: A → CoTree<B>(E)):
+    CoTree::obs(E, CoTree::bind(E, CRet(a), h)) = CoTree::obs(E, h(a)) { refl }
+
+theorem CoTree::iter_continue<A, B>(E: Events, body: A → CoTree<Step<A, B>>(E), a: A, a2: A,
+    e: CoTree::obs(E, body(a)) = ORet(Continue(a2))):
+    CoTree::obs(E, CoTree::iter(E, body, a)) = OTau(CoTree::iter(E, body, a2))
+{
+    j(sym(e), λ y q => CoTree::obs(E, CoTree::iter_obs(E, body, y)) = OTau(CoTree::iter(E, body, a2)), refl)
+}
+
+theorem CoTree::iter_break<A, B>(E: Events, body: A → CoTree<Step<A, B>>(E), a: A, b: B,
+    e: CoTree::obs(E, body(a)) = ORet(Break(b))):
+    CoTree::obs(E, CoTree::iter(E, body, a)) = ORet(b)
+{
+    j(sym(e), λ y q => CoTree::obs(E, CoTree::iter_obs(E, body, y)) = ORet(b), refl)
+}
+
+// ---------------------------------------------------------------------------
+// Approximation into the finite tree
+
+// The tree cut at depth `n`: `n` constructors deep, then `Cut`.
+fn CoTree::approx_obs<R>(E: Events, n: Nat, o: Obs<R>(E)) → ITree<R>(E) {
+    match n {
+        Zero => Cut,
+        Succ(m) => match o {
+            ORet(r) => Ret(r),
+            OTau(s) => Tau(CoTree::approx_obs(E, m, CoTree::obs(E, s))),
+            OVis(c, k) => Vis(c, λ a => CoTree::approx_obs(E, m, CoTree::obs(E, k(a)))),
+        },
+    }
+}
+
+fn CoTree::approx<R>(E: Events, n: Nat, t: CoTree<R>(E)) → ITree<R>(E) {
+    CoTree::approx_obs(E, n, CoTree::obs(E, t))
+}
+
+// One more unit of depth only grows cuts into subtrees.
+theorem CoTree::approx_obs_grows<R>(E: Events, n: Nat, o: Obs<R>(E)):
+    ITree::Below(E, CoTree::approx_obs(E, n, o), CoTree::approx_obs(E, Succ(n), o))
+{
+    match n {
+        Zero => trivial,
+        Succ(m) => match o {
+            ORet(_) => refl,
+            OTau(s) => SameTau(CoTree::approx_obs(E, Succ(m), CoTree::obs(E, s)), refl,
+                CoTree::approx_obs_grows(E, m, CoTree::obs(E, s))),
+            OVis(_, k) => SameVis(λ a => CoTree::approx_obs(E, Succ(m), CoTree::obs(E, k(a))), refl,
+                λ a => CoTree::approx_obs_grows(E, m, CoTree::obs(E, k(a)))),
+        },
+    }
+}
+
+theorem CoTree::approx_grows<R>(E: Events, t: CoTree<R>(E)): ITree::Grows<R>(E, λ n => CoTree::approx(E, n, t)) {
+    λ n => CoTree::approx_obs_grows(E, n, CoTree::obs(E, t))
+}
+
+// A tree is a program: the family of its approximations.
+fn CoTree::program<R>(E: Events, t: CoTree<R>(E)) → Program<R>(E) {
+    Program(λ n => CoTree::approx(E, n, t), CoTree::approx_grows(E, t))
+}
+
+theorem CoTree::spin_never_returns<R>(E: Events, n: Nat, r: R):
+    IsTrace(E, CoTree::approx(E, n, CoTree::spin<R>(E)), TRet(r)) → False
+{
+    match n {
+        Zero => λ w => absurd(CutTrace::ended<R>(E, TRet(r), w)),
+        Succ(m) => λ h => CoTree::spin_never_returns(E, m, r, h),
+    }
+}
+
+// `spin` diverges with no fuel in sight: none of its approximations returns.
+theorem CoTree::spin_diverges<R>(E: Events): Program::Diverges<R>(E, CoTree::program(E, CoTree::spin<R>(E))) {
+    λ r (c: Converges<R>(E, λ n => CoTree::approx(E, n, CoTree::spin<R>(E)), TRet(r))) =>
+        CoTree::spin_never_returns(E, c.n, r, c.h)
+}
+
+// ---------------------------------------------------------------------------
+// Strong bisimilarity
+
+codata Bisim<R>(E: Events): (t: CoTree<R>(E)) → (u: CoTree<R>(E)) → Type {
+    BRet(r: R, ht: CoTree::obs(E, t) = ORet(r), hu: CoTree::obs(E, u) = ORet(r)),
+    BTau(t2: CoTree<R>(E), u2: CoTree<R>(E), ht: CoTree::obs(E, t) = OTau(t2), hu: CoTree::obs(E, u) = OTau(u2),
+         next: Bisim<R>(E, t2, u2)),
+    BVis(c: E.Cmd, k1: E.Resp(c) → CoTree<R>(E), k2: E.Resp(c) → CoTree<R>(E),
+         ht: CoTree::obs(E, t) = OVis(c, k1), hu: CoTree::obs(E, u) = OVis(c, k2),
+         next: (a: E.Resp(c)) → Bisim<R>(E, k1(a), k2(a))),
+}
+
+fn Bisim::refl<R>(E: Events, t: CoTree<R>(E)) → Bisim<R>(E, t, t) {
+    match h: CoTree::obs(E, t) {
+        ORet(r) => BRet(r, h, h),
+        OTau(s) => BTau(s, s, h, h, Bisim::refl(E, s)),
+        OVis(c, k) => BVis(c, k, k, h, h, λ a => Bisim::refl(E, k(a))),
+    }
+}
+
+fn Bisim::sym<R>(E: Events, t: CoTree<R>(E), u: CoTree<R>(E), b: Bisim<R>(E, t, u)) → Bisim<R>(E, u, t) {
+    match b {
+        BRet(r, ht, hu) => BRet(r, hu, ht),
+        BTau(t2, u2, ht, hu, n) => BTau(u2, t2, hu, ht, Bisim::sym(E, t2, u2, n)),
+        BVis(c, k1, k2, ht, hu, n) => BVis(c, k2, k1, hu, ht, λ a => Bisim::sym(E, k1(a), k2(a), n(a))),
+    }
+}
+
+// Trees with the same observation are bisimilar: the children are the same
+// trees.
+fn Bisim::of_obs<R>(E: Events, t: CoTree<R>(E), u: CoTree<R>(E), e: CoTree::obs(E, t) = CoTree::obs(E, u)) →
+    Bisim<R>(E, t, u)
+{
+    match h: CoTree::obs(E, u) {
+        ORet(r) => BRet(r, trans(e, h), h),
+        OTau(s) => BTau(s, s, trans(e, h), h, Bisim::refl(E, s)),
+        OVis(c, k) => BVis(c, k, k, trans(e, h), h, λ a => Bisim::refl(E, k(a))),
+    }
+}
+
+// A tree is bisimilar to the tree its observation describes.
+fn Bisim::tree_obs<R>(E: Events, t: CoTree<R>(E)) → Bisim<R>(E, Obs::tree(E, CoTree::obs(E, t)), t) {
+    Bisim::of_obs(E, Obs::tree(E, CoTree::obs(E, t)), t, Obs::obs_tree(E, CoTree::obs(E, t)))
+}
+
+// ---------------------------------------------------------------------------
+// The monad laws, up to bisimilarity
+
+fn CoTree::bind_ret_l<A, B>(E: Events, a: A, h: A → CoTree<B>(E)) →
+    Bisim<B>(E, CoTree::bind(E, CRet(a), h), h(a))
+{
+    Bisim::of_obs(E, CoTree::bind(E, CRet(a), h), h(a), refl)
+}
+
+fn CoTree::bind_ret_r<R>(E: Events, t: CoTree<R>(E)) → Bisim<R>(E, CoTree::bind(E, t, λ r => CRet(r)), t) {
+    match h: CoTree::obs(E, t) {
+        ORet(r) => BRet(r, CoTree::obs_bind_at(E, t, λ r => CRet(r), ORet(r), h), h),
+        OTau(s) => BTau(CoTree::bind(E, s, λ r => CRet(r)), s,
+            CoTree::obs_bind_at(E, t, λ r => CRet(r), OTau(s), h), h, CoTree::bind_ret_r(E, s)),
+        OVis(c, k) => BVis(c, λ a => CoTree::bind(E, k(a), λ r => CRet(r)), k,
+            CoTree::obs_bind_at(E, t, λ r => CRet(r), OVis(c, k), h), h, λ a => CoTree::bind_ret_r(E, k(a))),
+    }
+}
+
+fn CoTree::map_id<R>(E: Events, t: CoTree<R>(E)) → Bisim<R>(E, CoTree::map(E, t, λ r => r), t) {
+    CoTree::bind_ret_r(E, t)
+}
+
+fn CoTree::bind_assoc<A, B, C>(E: Events, t: CoTree<A>(E), f: A → CoTree<B>(E), g: B → CoTree<C>(E)) →
+    Bisim<C>(E, CoTree::bind(E, CoTree::bind(E, t, f), g), CoTree::bind(E, t, λ x => CoTree::bind(E, f(x), g)))
+{
+    match h: CoTree::obs(E, t) {
+        ORet(r) => Bisim::of_obs(E, CoTree::bind(E, CoTree::bind(E, t, f), g),
+            CoTree::bind(E, t, λ x => CoTree::bind(E, f(x), g)),
+            trans(CoTree::obs_bind_at(E, CoTree::bind(E, t, f), g, CoTree::obs(E, f(r)),
+                    CoTree::obs_bind_at(E, t, f, ORet(r), h)),
+                sym(trans(CoTree::obs_bind_at(E, t, λ x => CoTree::bind(E, f(x), g), ORet(r), h),
+                    CoTree::obs_bind(E, f(r), g))))),
+        OTau(s) => BTau(CoTree::bind(E, CoTree::bind(E, s, f), g), CoTree::bind(E, s, λ x => CoTree::bind(E, f(x), g)),
+            CoTree::obs_bind_at(E, CoTree::bind(E, t, f), g, OTau(CoTree::bind(E, s, f)),
+                CoTree::obs_bind_at(E, t, f, OTau(s), h)),
+            CoTree::obs_bind_at(E, t, λ x => CoTree::bind(E, f(x), g), OTau(s), h),
+            CoTree::bind_assoc(E, s, f, g)),
+        OVis(c, k) => BVis(c, λ a => CoTree::bind(E, CoTree::bind(E, k(a), f), g),
+            λ a => CoTree::bind(E, k(a), λ x => CoTree::bind(E, f(x), g)),
+            CoTree::obs_bind_at(E, CoTree::bind(E, t, f), g, OVis(c, λ a => CoTree::bind(E, k(a), f)),
+                CoTree::obs_bind_at(E, t, f, OVis(c, k), h)),
+            CoTree::obs_bind_at(E, t, λ x => CoTree::bind(E, f(x), g), OVis(c, k), h),
+            λ a => CoTree::bind_assoc(E, k(a), f, g)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Transitivity
+
+// What a bisimilarity from a tree with observation `o` says about the other
+// tree, read off `o` alone (as `ITree::Same` is): the other tree observes as
+// the same constructor, with children related again. Transitivity meets the
+// middle tree's two observations here, so no command equation is ever
+// transported.
+
+record TauTo<R>(E: Events, s: CoTree<R>(E), v: CoTree<R>(E)) {
+    v2: CoTree<R>(E),
+    at: CoTree::obs(E, v) = OTau(v2),
+    next: Bisim<R>(E, s, v2),
+}
+
+record VisTo<R>(E: Events, c: E.Cmd, k: E.Resp(c) → CoTree<R>(E), v: CoTree<R>(E)) {
+    k2: E.Resp(c) → CoTree<R>(E),
+    at: CoTree::obs(E, v) = OVis(c, k2),
+    next: (a: E.Resp(c)) → Bisim<R>(E, k(a), k2(a)),
+}
+
+fn Obs::BisimTo<R>(E: Events, o: Obs<R>(E), v: CoTree<R>(E)) → Type {
+    match o {
+        ORet(r) => CoTree::obs(E, v) = ORet(r),
+        OTau(s) => TauTo<R>(E, s, v),
+        OVis(c, k) => VisTo<R>(E, c, k, v),
+    }
+}
+
+fn Bisim::step<R>(E: Events, u: CoTree<R>(E), v: CoTree<R>(E), b: Bisim<R>(E, u, v)) →
+    Obs::BisimTo(E, CoTree::obs(E, u), v)
+{
+    match b {
+        BRet(_, hu, hv) => j(sym(hu), λ y q => Obs::BisimTo(E, y, v), hv),
+        BTau(_, v2, hu, hv, n) => j(sym(hu), λ y q => Obs::BisimTo(E, y, v), TauTo(v2, hv, n)),
+        BVis(_, _, k2, hu, hv, n) => j(sym(hu), λ y q => Obs::BisimTo(E, y, v), VisTo(k2, hv, n)),
+    }
+}
+
+fn Bisim::trans<R>(E: Events, t: CoTree<R>(E), u: CoTree<R>(E), v: CoTree<R>(E), a: Bisim<R>(E, t, u),
+    b: Bisim<R>(E, u, v)) → Bisim<R>(E, t, v)
+{
+    match a {
+        BRet(r, ht, hu) => BRet(r, ht, j(hu, λ y q => Obs::BisimTo(E, y, v), Bisim::step(E, u, v, b))),
+        BTau(t2, u2, ht, hu, n) => {
+            let w: TauTo<R>(E, u2, v) = j(hu, λ y q => Obs::BisimTo(E, y, v), Bisim::step(E, u, v, b));
+            BTau(t2, w.v2, ht, w.at, Bisim::trans(E, t2, u2, w.v2, n, w.next))
+        },
+        BVis(c, k1, k2, ht, hu, n) => {
+            let w: VisTo<R>(E, c, k2, v) = j(hu, λ y q => Obs::BisimTo(E, y, v), Bisim::step(E, u, v, b));
+            BVis(c, k1, w.k2, ht, w.at, λ a => Bisim::trans(E, k1(a), k2(a), w.k2(a), n(a), w.next(a)))
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Bisimilar trees have the same approximations
+
+theorem Bisim::approx<R>(E: Events, n: Nat, t: CoTree<R>(E), u: CoTree<R>(E), b: Bisim<R>(E, t, u)):
+    ITree::Same(E, CoTree::approx(E, n, t), CoTree::approx(E, n, u))
+{
+    match n {
+        Zero => refl,
+        Succ(m) => match b {
+            BRet(r, ht, hu) =>
+                j(sym(ht), λ y q => ITree::Same(E, CoTree::approx_obs(E, Succ(m), y), CoTree::approx(E, Succ(m), u)),
+                    j(sym(hu), λ y q => ITree::Same(E, Ret(r), CoTree::approx_obs(E, Succ(m), y)), refl)),
+            BTau(t2, u2, ht, hu, nx) =>
+                j(sym(ht), λ y q => ITree::Same(E, CoTree::approx_obs(E, Succ(m), y), CoTree::approx(E, Succ(m), u)),
+                    j(sym(hu), λ y q => ITree::Same(E, Tau(CoTree::approx(E, m, t2)), CoTree::approx_obs(E, Succ(m), y)),
+                        SameTau(CoTree::approx(E, m, u2), refl, Bisim::approx(E, m, t2, u2, nx)))),
+            BVis(c, k1, k2, ht, hu, nx) =>
+                j(sym(ht), λ y q => ITree::Same(E, CoTree::approx_obs(E, Succ(m), y), CoTree::approx(E, Succ(m), u)),
+                    j(sym(hu), λ y q => ITree::Same(E, Vis(c, λ a => CoTree::approx(E, m, k1(a))),
+                            CoTree::approx_obs(E, Succ(m), y)),
+                        SameVis(λ a => CoTree::approx(E, m, k2(a)), refl, λ a => Bisim::approx(E, m, k1(a), k2(a), nx(a))))),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Bisimilarity is a congruence for `bind`
+
+fn CoTree::bind_cong<A, B>(E: Events, t: CoTree<A>(E), u: CoTree<A>(E), h1: A → CoTree<B>(E), h2: A → CoTree<B>(E),
+    b: Bisim<A>(E, t, u), hh: (a: A) → Bisim<B>(E, h1(a), h2(a))) →
+    Bisim<B>(E, CoTree::bind(E, t, h1), CoTree::bind(E, u, h2))
+{
+    match b {
+        BRet(r, ht, hu) => match hh(r) {
+            BRet(s, h1e, h2e) => BRet(s, trans(CoTree::obs_bind_at(E, t, h1, ORet(r), ht), h1e),
+                trans(CoTree::obs_bind_at(E, u, h2, ORet(r), hu), h2e)),
+            BTau(x, y, hx, hy, n) => BTau(x, y, trans(CoTree::obs_bind_at(E, t, h1, ORet(r), ht), hx),
+                trans(CoTree::obs_bind_at(E, u, h2, ORet(r), hu), hy), n),
+            BVis(c, k1, k2, hx, hy, n) => BVis(c, k1, k2, trans(CoTree::obs_bind_at(E, t, h1, ORet(r), ht), hx),
+                trans(CoTree::obs_bind_at(E, u, h2, ORet(r), hu), hy), n),
+        },
+        BTau(t2, u2, ht, hu, n) => BTau(CoTree::bind(E, t2, h1), CoTree::bind(E, u2, h2),
+            CoTree::obs_bind_at(E, t, h1, OTau(t2), ht), CoTree::obs_bind_at(E, u, h2, OTau(u2), hu),
+            CoTree::bind_cong(E, t2, u2, h1, h2, n, hh)),
+        BVis(c, k1, k2, ht, hu, n) => BVis(c, λ a => CoTree::bind(E, k1(a), h1), λ a => CoTree::bind(E, k2(a), h2),
+            CoTree::obs_bind_at(E, t, h1, OVis(c, k1), ht), CoTree::obs_bind_at(E, u, h2, OVis(c, k2), hu),
+            λ a => CoTree::bind_cong(E, k1(a), k2(a), h1, h2, n(a), hh)),
+    }
+}

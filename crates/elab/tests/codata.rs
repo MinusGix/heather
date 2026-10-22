@@ -149,6 +149,26 @@ fn function_children_and_dependent_domains() {
     ));
 }
 
+// An existing function child passed whole, not as a λ, in a corecursive
+// step: the child is its η-expansion into the step's sum, so its
+// observations are the original's, at a neutral tree and a literal one.
+#[test]
+fn existing_function_child_in_a_corecursive_step() {
+    elab(
+        "inductive Phase { Waiting, Ticking }
+         codata Rose { RNode(label: Nat, kids: Nat -> Rose) }
+         fn grow(n: Nat) -> Rose { RNode(n, λ i => grow(Succ(n))) }
+         fn lab(r: Rose) -> Nat { match r { RNode(l, _) => l } }
+         fn kid(r: Rose, i: Nat) -> Rose { match r { RNode(_, k) => k(i) } }
+         fn keep(r: Rose, w: Phase) -> Rose {
+             match w { Waiting => match r { RNode(l, k) => RNode(l, k) }, Ticking => RNode(0, λ i => keep(r, Waiting)) }
+         }
+         theorem keep_open(r: Rose, i: Nat): kid(keep(r, Waiting), i) = kid(r, i) { refl }
+         theorem keep_lit(): lab(kid(keep(grow(1), Waiting), 5)) = 2 { refl }
+         theorem keep_tick(r: Rose, i: Nat): kid(keep(r, Ticking), i) = keep(r, Waiting) { refl }",
+    );
+}
+
 // The open element type: type parameters on the declaration and on a
 // corecursive function, with the arguments inferred from a codata argument.
 #[test]

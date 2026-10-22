@@ -156,7 +156,10 @@ positions:
   SCons(Succ(h), smap(t)) }`).
 - **at the child type** `X + ⟦D⟧`: a self-call becomes `inl(seed)`, the
   carrier tuple of its varying arguments; anything else is an existing tree,
-  `inr(e)`. A function child is a λ whose body is at the child type.
+  `inr(e)`. A function child is a λ whose body is at the child type, or an
+  existing function of trees `k`, which becomes `λy. inr(k y)` (added
+  2026-10-22: before, a bare `k` reached the kernel unconverted and was
+  refused there; `docs/coitree-design.md`'s `bind_cong` met it).
 
 Every other self-call is refused as unguarded: in a payload (`SCons(hd(bad(n)),
 …)`), under an observation (`tl(bad(n))`), or alone (`bad()`).

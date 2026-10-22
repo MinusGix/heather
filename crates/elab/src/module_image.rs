@@ -33,8 +33,8 @@ use crate::resolve::DerivedInst;
 use crate::slots::Slot;
 use crate::traits::{ClassInfo, DesignationInfo, EvidenceRule, InstanceInfo};
 
-const MAGIC: &[u8; 8] = b"HTHMOD\0\x14";
-const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x12";
+const MAGIC: &[u8; 8] = b"HTHMOD\0\x15";
+const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x13";
 
 /// Hard limits applied before any decoded collection or string allocation.
 /// The loader may choose a smaller policy; these defaults are deliberately
@@ -1536,6 +1536,9 @@ fn put_gen_def(w: &mut Writer, key: GenDef) {
         GenDef::SuffixCode(tag, ctor) => { w.byte(13); w.u32(tag); w.usize(ctor); }
         GenDef::TyCodeFn(tag) => { w.byte(14); w.u32(tag); }
         GenDef::WCanon(tag) => { w.byte(15); w.u32(tag); }
+        GenDef::MShape(tag) => { w.byte(16); w.u32(tag); }
+        GenDef::MPos(tag) => { w.byte(17); w.u32(tag); }
+        GenDef::MNext(tag) => { w.byte(18); w.u32(tag); }
     }
 }
 
@@ -1550,6 +1553,7 @@ fn get_gen_def(r: &mut Reader<'_>) -> Result<GenDef, ModuleImageDecodeError> {
         12 => GenDef::PayloadCode(r.u32()?, r.usize()?),
         13 => GenDef::SuffixCode(r.u32()?, r.usize()?),
         14 => GenDef::TyCodeFn(r.u32()?), 15 => GenDef::WCanon(r.u32()?),
+        16 => GenDef::MShape(r.u32()?), 17 => GenDef::MPos(r.u32()?), 18 => GenDef::MNext(r.u32()?),
         tag => return Err(ModuleImageDecodeError::InvalidTag { sort: "generated definition", tag }),
     })
 }

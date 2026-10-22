@@ -102,6 +102,7 @@ through `milestone:`; the list of issues is `scripts/issue list --milestone
 | `it-refinement` | interaction-trees | done | Trace refinement and depth-indexed equivalence, with the bridge to `converges`/`fuel_monotone` and one handler into world threading. | it-library |
 | `it-native` | interaction-trees | open | A native program's theorem says its run refines an interaction tree. |  |
 | `it-coinductive` | interaction-trees | open | Interaction trees diverge for real: a coinductive tree over container events with `bind` and `iter`, `approx` into the finite tree, and bisimilarity and eutt as `M` instances, bridged to the finite library's `Same` (`docs/kernel-coinduction-design.md` §6). |  |
+| `it-cotree` | interaction-trees | done | `CoTree<R>(E)` with `bind`, `map`, `translate` and fuel-free `iter`, its approximations as a `Program` (`spin` diverges with no fuel), and strong bisimilarity as indexed codata with reflexivity, symmetry, transitivity, the monad laws, a `bind` congruence and the bridge to `Same` (`docs/coitree-design.md`). | it-coinductive |
 | `it-codata` | interaction-trees | done | A surface `codata` declaration lowers onto the kernel's `M`, with constructors, `match` through `out`, and guarded corecursive functions compiled into one `corec` (`docs/codata-elaborator-design.md`). | it-coinductive |
 | `math-classes` | mathematics | open | The algebra and order class hierarchy (semiring to ordered field, lattices) is settled, with a documented API that clients use without restating laws. |  |
 | `math-reals` | mathematics | open | Reals have their completeness interfaces and basic analysis (sequences, limits, continuity) on top of the regular Cauchy reals. |  |
@@ -545,3 +546,8 @@ separate machines do not slow each other's tests.
 - 2026-10-22: indexed codata (`docs/codata-indexed-design.md`), the index
   read by observation; `SBisim`'s reflexivity, symmetry and transitivity are
   corecursive functions. The library is next under `it-coinductive`.
+- 2026-10-22: `it-cotree` added and done: the coinductive tree library with
+  strong bisimilarity (`lib/std/coitree.hthr`), after codata signatures got
+  names of their own (`docs/codata-named-signature-design.md`). eutt and the
+  bridge to the fuelled programs remain (`issues/coitree-eutt.md`,
+  `issues/coitree-program-bridge.md`).

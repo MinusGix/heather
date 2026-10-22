@@ -1297,8 +1297,10 @@ impl Elaborator {
         if ind.infinitary() {
             self.register_w_canon(&ind, d.span);
         } else if ind.codata {
-            // Nothing is named yet (docs/codata-elaborator-design.md §2): `⟦D⟧`
-            // is an `M` over the inline shape and positions.
+            // The signature's shape, positions and child index
+            // (docs/codata-named-signature-design.md): `⟦D⟧` is an `M` over
+            // references to them, and nothing else is named.
+            self.register_m_sig(&ind, d.span);
         } else {
             self.register_gen_defs(&ind, d.span);
         }
@@ -2265,6 +2267,21 @@ impl Elaborator {
         Ok(Spine { ctors, tails })
     }
 
+    /// [`Self::spine`] of a type scoped in `cx`, a named codata signature
+    /// unfolded first (docs/codata-named-signature-design.md §3): the readers
+    /// that take a codata equation apart (`inj`, `absurd`) arrive with one.
+    pub(crate) fn spine_in(&self, cx: &Cx, ty: &Type, lvl: &Level, n: usize, span: Span) -> R<Spine> {
+        if let Type::M { sig, index } = &*decoded(ty)
+            && self.m_sig_tag(sig).is_some()
+        {
+            let Some(inline) = self.m_sig_inline(sig, &cx.gamma) else {
+                return err("internal: a named codata signature did not unfold", span);
+            };
+            return self.spine(&inline.shape_at(index), &sig.level, n, span);
+        }
+        self.spine(ty, lvl, n, span)
+    }
+
     /// The spine with every component's registered sub-lowerings respelled as
     /// references, for **emission** (`inject`'s annotations at a constructor
     /// value). Components that respell nothing keep their `Rc` identity, so
@@ -2312,7 +2329,12 @@ impl Elaborator {
             // Codata: the tag is in the `M`'s shape, under its index binder,
             // which the shape never mentions (docs/codata-elaborator-design.md
             // §2).
-            Type::M { sig, index } => self.tag_of(&sig.shape_at(index)),
+            Type::M { sig, index } => match self.m_sig_tag(sig) {
+                // A named signature (docs/codata-named-signature-design.md):
+                // the tag is its shape definition's key.
+                Some(tag) => self.types.by_tag(tag).cloned(),
+                None => self.tag_of(&sig.shape_at(index)),
+            },
             // Tier 2: through the `Σ` and the `W` to the shape
             // (docs/inductive-tier2-w-lowering.md §5).
             Type::Sigma { .. } if crate::infinitary::w_of(ty).is_some() => {
@@ -5502,7 +5524,7 @@ impl Elaborator {
                 span,
             );
         };
-        let spine = self.spine(&sty, &level, ind.ctors.len(), span)?;
+        let spine = self.spine_in(cx, &sty, &level, ind.ctors.len(), span)?;
         let (Some(l), Some(r)) = (
             self.read_ctor(cx, &ind, &spine, &lhs, read_fields, span)?,
             self.read_ctor(cx, &ind, &spine, &rhs, read_fields, span)?,
@@ -5723,7 +5745,7 @@ impl Elaborator {
             },
             slvl.clone(),
         );
-        let spine = self.spine(&sty, &slvl, ind.ctors.len(), span)?;
+        let spine = self.spine_in(cx, &sty, &slvl, ind.ctors.len(), span)?;
         let pred = self.const_predicate(
             &mcx,
             &ind,
@@ -5799,7 +5821,7 @@ impl Elaborator {
                 span,
             );
         }
-        let spine = self.spine(&sty, &slvl, ind.ctors.len(), span)?;
+        let spine = self.spine_in(cx, &sty, &slvl, ind.ctors.len(), span)?;
         // Which body the projection's case tree gets, and at what type. A
         // recursive field is a child rather than a component of the shape, so
         // its type is `⟦D⟧` itself and there is nothing for it to depend on
