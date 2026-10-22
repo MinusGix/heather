@@ -13,9 +13,9 @@ name = "heather_cache"
 # its hash, so the hash is first-party (docs/cache-v1-design.md §2,
 # issues/dependency-policy.md).
 [dependencies]
-heather-kernel = { path = "../kernel" }
+heather-kernel-lib = { path = "../kernel-lib" }
 heather-numeral = { path = "../numeral" }
-heather-elab = { path = "../elab" }
+heather-elab-lib = { path = "../elab-lib" }
 
 # `sha2` is a DEV-dependency and exists for exactly one reason: to disagree
 # with us. `tests/sha256.rs` runs our SHA-256 against it differentially over

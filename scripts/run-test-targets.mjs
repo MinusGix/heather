@@ -43,7 +43,10 @@ export function parseArtifacts(text, root = process.cwd()) {
     // own manifest directory, and the label should name the file.
     const srcPath = normalize(msg.target.src_path);
     const src = srcPath.startsWith(`${root}/`) ? srcPath.slice(root.length + 1) : srcPath;
-    const packageName = String(msg.package_id).split("#").at(-1).split("@")[0];
+    // `heather-kernel-lib` is `heather-kernel`'s library split into a package
+    // of its own (crates/kernel-lib/Cargo.toml, for the opt-level); its unit
+    // tests keep the label, and so the timing history, they had before.
+    const packageName = String(msg.package_id).split("#").at(-1).split("@")[0].replace(/-lib$/, "");
     artifacts.push({
       executable: msg.executable,
       name: msg.target.name,

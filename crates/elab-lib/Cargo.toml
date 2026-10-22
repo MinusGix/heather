@@ -1,0 +1,36 @@
+[package]
+name = "heather-elab-lib"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+autotests = false
+autobenches = false
+autoexamples = false
+autobins = false
+
+# The elaborator library, compiled from `crates/elab/src`. It is a package of
+# its own so that its opt-level is not its tests' opt-level: Cargo applies a
+# `[profile.dev.package.X]` override to every target of X, so while the lib
+# and the integration tests shared `heather-elab`, every test binary compiled
+# at opt-level 3 too, ~9x the CPU of opt-level 0 for code that only drives
+# the (still optimized) library, and that tail followed the lib compile on a
+# cold build (issues/fresh-container-compile-cost.md). `heather-elab`
+# (crates/elab) keeps the integration tests and the bench, so
+# `-p heather-elab --test X` is unchanged; the lib keeps its crate name
+# `heather_elab`. Unit tests in src/ run as `heather-elab-unit`.
+[lib]
+name = "heather_elab"
+path = "../elab/src/lib.rs"
+test = false
+
+[features]
+value-metrics = ["heather-kernel-lib/value-metrics"]
+
+[dependencies]
+heather-kernel-lib = { path = "../kernel-lib" }
+heather-numeral = { path = "../numeral" }
+heather-syntax = { path = "../syntax" }
+
+[lints]
+workspace = true

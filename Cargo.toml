@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/numeral", "crates/kernel", "crates/syntax", "crates/elab", "crates/elab-unit", "crates/cache", "crates/cli", "crates/lsp", "crates/export"]
+members = ["crates/numeral", "crates/kernel", "crates/kernel-lib", "crates/syntax", "crates/elab", "crates/elab-lib", "crates/elab-unit", "crates/cache", "crates/cli", "crates/lsp", "crates/export"]
 
 [workspace.package]
 version = "0.0.1"
@@ -23,11 +23,16 @@ unsafe_code = "forbid"
 [profile.dev]
 debug = "line-tables-only"
 
-[profile.dev.package.heather-kernel]
+[profile.dev.package.heather-kernel-lib]
 opt-level = 3
 
-[profile.dev.package.heather-elab]
+[profile.dev.package.heather-elab-lib]
 opt-level = 3
+
+# `heather-kernel` and `heather-elab` themselves (crates/kernel, crates/elab:
+# the integration tests and the benches) are deliberately absent: their test
+# binaries only drive the optimized libraries, and at opt-level 3 they cost
+# 5-9x the CPU of opt-level 0 (issues/fresh-container-compile-cost.md).
 
 # The same sources as heather-elab, compiled for its unit tests
 # (crates/elab-unit/Cargo.toml).

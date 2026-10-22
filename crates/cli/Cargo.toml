@@ -15,14 +15,14 @@ name = "heather"
 path = "src/main.rs"
 
 [dependencies]
-heather-kernel = { path = "../kernel" }
+heather-kernel-lib = { path = "../kernel-lib" }
 heather-numeral = { path = "../numeral" }
 heather-syntax = { path = "../syntax" }
-heather-elab = { path = "../elab" }
+heather-elab-lib = { path = "../elab-lib" }
 heather-cache = { path = "../cache" }
 
 [features]
-value-metrics = ["heather-elab/value-metrics"]
+value-metrics = ["heather-elab-lib/value-metrics"]
 
 [lints]
 workspace = true

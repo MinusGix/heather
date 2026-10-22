@@ -48,7 +48,7 @@ node --test scripts/test-target-runner.test.mjs
 # can rot silently, and it did: it did not build at 9c16741 and no test
 # noticed. A `cargo check` of that one feature is seconds and closes the hole.
 # A *check*, not tests: the feature changes instrumentation, not judgments.
-cargo check --quiet -p heather-kernel --features value-metrics
+cargo check --quiet -p heather-kernel-lib --features value-metrics
 
 SKIP=()
 TEST_ARGS=()

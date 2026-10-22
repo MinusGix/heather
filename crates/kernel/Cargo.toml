@@ -7,18 +7,18 @@ license.workspace = true
 # is one (the suite is a directory of modules, not a file per benchmark).
 autobenches = false
 
-[lib]
-name = "heather_kernel"
+# No lib target: src/ is the `heather-kernel-lib` package's
+# (crates/kernel-lib/Cargo.toml, which also runs its unit tests), so this
+# package's integration tests compile at the dev profile's opt-level 0 while
+# the kernel they drive keeps opt-level 3.
+autolib = false
 
 [features]
-value-metrics = []
-# Every slow self-check on every occasion (src/checks.rs); the `--long`
-# lane of scripts/test. Debug builds only have anything to switch.
-long-checks = []
+value-metrics = ["heather-kernel-lib/value-metrics"]
+long-checks = ["heather-kernel-lib/long-checks"]
 
 [dependencies]
-heather-numeral = { path = "../numeral" }
-typed-arena = "=2.0.2"
+heather-kernel-lib = { path = "../kernel-lib" }
 
 # Run through scripts/bench (ulimit), not `cargo bench` directly —
 # docs/benchmarking.md.

@@ -2,10 +2,11 @@
   "hooks": {
     "SessionStart": [
       {
+        "matcher": "startup",
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/scripts/issue setup-git >/dev/null 2>&1 || true"
+            "command": "\"$CLAUDE_PROJECT_DIR\"/scripts/session-start >/dev/null 2>&1 || true"
           }
         ]
       }

@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# SessionStart hook (.claude/settings.json). In a cloud container only
+# (CLAUDE_CODE_REMOTE=true), it gets the box ready to build and starts the
+# test build in the background, so a fresh container's cold compile
+# (issues/fresh-container-compile-cost.md) runs while the session reads
+# instead of when it first calls scripts/test. Elsewhere it does nothing.
+#
+# - mold: .cargo/config.toml links with it and cloud images lack it, so
+#   it is installed first, in the foreground (seconds).
+# - the build: the same `cargo test --workspace --no-run` that scripts/test
+#   starts with, niced, detached, logged to target/session-prebuild.log. A
+#   build the session starts meanwhile waits on Cargo's lock and then finds
+#   the work done. HEATHER_NO_PREBUILD=1 skips it.
+#
+# The hook must never fail or hold up the session: every step is best effort
+# and the script returns as soon as the build is detached.
+set -uo pipefail
+[[ "${CLAUDE_CODE_REMOTE:-}" == true ]] || exit 0
+cd "${CLAUDE_PROJECT_DIR:-$(dirname "$0")/..}" || exit 0
+
+if ! command -v ld.mold >/dev/null 2>&1; then
+  { timeout 120 apt-get install -y mold ||
+    { timeout 120 apt-get update && timeout 120 apt-get install -y mold; }; } >/dev/null 2>&1
+fi
+
+[[ -n "${HEATHER_NO_PREBUILD:-}" ]] && exit 0
+command -v cargo >/dev/null 2>&1 || exit 0
+mkdir -p target
+log=target/session-prebuild.log
+# One prebuild per container: a resumed or compacted session must not start
+# a second one beside the session's own builds.
+[[ -e "$log" ]] && exit 0
+setsid nohup nice -n 10 bash -c '
+  echo "session prebuild started $(date -u +%FT%TZ)"
+  SECONDS=0
+  cargo test --workspace --no-run --quiet --message-format=json >/dev/null
+  echo "exit $? after ${SECONDS}s"
+' >"$log" 2>&1 </dev/null &
+exit 0

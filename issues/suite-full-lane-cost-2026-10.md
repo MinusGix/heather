@@ -4,7 +4,7 @@ status: open
 labels: [testing,performance,tooling]
 area: infrastructure
 created: 2026-10-21
-updated: 2026-10-21
+updated: 2026-10-22
 ---
 
 The full lane is what most pull requests wait on, on a 4-CPU cloud container
@@ -88,7 +88,9 @@ Test counts are unchanged (3529 passed, 5 ignored, with the float_error fix).
   it on the same four CPUs; then ~25 test binaries link. Only fresh cloud
   boxes pay it; the desktop edit loop is [[elab-rebuild-floor]]'s. No cheap
   lever found: elab-unit's own package is deliberate
-  ([[elab-unit-tests-wait-on-cli-dev-dependency]]).
+  ([[elab-unit-tests-wait-on-cli-dev-dependency]]). Addressed by
+  [[fresh-container-compile-cost]]: the tail after the lib was the
+  integration-test binaries, compiled at O3 with their package.
 - **Library images rebuilt after a Rust edit** (the `Exact` policy verifying
   the current frontend): once per build, gate vouched by the verdict store, so
   this is elaborator time. Heaviest per module (item seconds, one run):
@@ -128,3 +130,6 @@ and summing module rows gives image replays per test. The runner's
   model, export opt-level, three jobs below eight CPUs, float_error order).
   Usual PR run (elab edit) on the 4-CPU box: compile 15 s + tests 418 s →
   tests 242 s; warm: 281 → 159 s. 3529 passed.
+- 2026-10-22: The fresh-container compile item is
+  [[fresh-container-compile-cost]] (libraries split into `-lib` packages so
+  integration tests build at O0): cold compile 279 → 216 s on this box.
