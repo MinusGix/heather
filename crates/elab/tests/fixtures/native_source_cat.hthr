@@ -106,9 +106,11 @@ fn byte(n: Nat) → BitVec(8) { BitVec::ofNat(n) }
 // ---------------------------------------------------------------------------
 // Runs
 //
-// Each run is evaluated by the kernel, word by word at width 64, so they are
-// kept short: a longer one thrashes the kernel's bounded value cache before
-// it runs out of fuel (issues/kernel-value-cache-evaluation-thrash.md).
+// Each run is evaluated by the kernel, word by word at width 64. A run's
+// steps grow linearly in its passes: the kernel keeps every value a query
+// forced, so an environment cell read again is not recomputed
+// (issues/kernel-value-cache-evaluation-thrash.md, where three bytes one at
+// a time used to run out of fuel).
 
 // Nothing in, nothing out.
 theorem cat_empty(): world_run(1, False, cat(2).denote().at(3), Nil, Nil) = Finished(BitVec::ofNat(0), Nil) { refl }
@@ -116,6 +118,10 @@ theorem cat_empty(): world_run(1, False, cat(2).denote().at(3), Nil, Nil) = Fini
 // One byte, read and written.
 theorem cat_copies_one(): world_run(1, False, cat(2).denote().at(6), [byte(7)], Nil)
     = Finished(BitVec::ofNat(0), [byte(7)]) { refl }
+
+// Three bytes, one read and one write each.
+theorem cat_copies_three(): world_run(1, False, cat(2).denote().at(14), [byte(1), byte(2), byte(3)], Nil)
+    = Finished(BitVec::ofNat(0), [byte(1), byte(2), byte(3)]) { refl }
 
 // A whole buffer at a time.
 theorem cat_copies_whole(): world_run(2, False, cat(2).denote().at(6), [byte(104), byte(105)], Nil)

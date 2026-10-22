@@ -201,10 +201,11 @@ theorem filter_sends_write<C>(input, output: BitVec(64), step: C → BitVec(8) �
         sends)
 }
 
-// The two calls of one pass, each of one trace stated as a `VisTrace`:
-// matched inside `filter_sends`' λ, where its type is `IsTrace` of the
-// filter tree's call, the same proofs cost the kernel an order of magnitude
-// more (issues/trace-match-under-computed-binder-cost.md).
+// The two calls of one pass, each of one trace stated as a `VisTrace`.
+// (Matched inside `filter_sends`' λ, the binder must be annotated with that
+// `VisTrace`: its expected type is `IsTrace` of the filter tree's call, and
+// arms spelled off that cost the kernel an order of magnitude more;
+// issues/trace-match-under-computed-binder-cost.md.)
 theorem filter_sends_reading<C>(input, output: BitVec(64), step: C → BitVec(8) → Filtered<C>, m: Nat,
     ih: FilterSends(input, output, step, m), s: C, tr: Trace<BitVec(64)>(Events::linux_spec()),
     w: VisTrace<BitVec(64)>(Events::linux_spec(), ReadCmd(input, trivial), tr,

@@ -692,37 +692,31 @@ paper too).
   shared values, but values point back into the arena rather than owning the
   next closure, so they no longer form the recursive destruction chain. This
   also removes the evaluator's former thread-local destruction worklist.
-  Successful thunk results live in bounded FIFO caches owned by the arena
-  (64K term values and 64K type values; 16K until 2026-09-07, when a
-  width-64 structural consumer's working set measured ≈20K values and the
-  FIFO's evictions of shared carries turned its cost from linear to
-  thrashing — a cache entry retains one `Rc` value, so the bound is a
-  retention bound, not a working-set claim). Consumers share a cached value, but
-  eviction reclaims old forced payloads while their stable closure skeletons
-  remain. (Unbounded strong memos made the first arena version exceed the
-  4 GiB test cap on `lib_std_bitvec`; per-node weak memos still retained every
-  dead `Rc` allocation through its control block.) Conversion and the
-  definition-body cache are unchanged; a force after eviction may spend fuel
-  again, which affects cost thresholds but never a verdict.
-  Plain first-in first-out was wrong for two kinds of term value
-  (2026-10-22, `issues/computed-argument-reevaluated-in-rounding.md`: a
-  binary32 rounding of `1/3` ran its long division about ten times and out
-  of fuel, where an unbounded cache checks it in a fraction of the fuel). A
-  value whose force spent at least `COSTLY_FORCE` fuel goes to a **second
-  tier** with its own bound, which cheap entries never push out; each entry
-  there stands for that much fuel spent, so at worst the bound doubles. And
-  a **glued neutral** is cheap to force but is the only path to its
-  unfolding, a closure that evaluation made: once evicted (often while that
-  unfolding was still being forced, its own thunks doing the pushing), the
-  next force of the same closure made a fresh neutral glued to a fresh
-  unfolding, and the work behind the first was unreachable. So an evicted
-  glued neutral leaves its unfolding as a **tomb** keyed by its closure
-  (bounded, two pointers each), and that closure's next force is glued to
-  the old unfolding (`ValueArena::reglue`). This is sharing by closure
-  identity, the same argument as the memo itself: a closure forced again
-  denotes what it denoted, so the unfolding of its first value is the
-  unfolding of its next, and the head and spine are the new force's own.
-  Fuel only.
+  Successful thunk results live in caches owned by the arena, keyed by
+  closure, and **kept for the whole query** (2026-10-22). Each key is a
+  closure of the arena, which the arena keeps until the query ends with its
+  environment cells, so one `Rc` value per forced closure is a constant factor
+  over what the query already holds — the order of its work, which fuel
+  bounds. A bound below the query's live set is not a constant factor of
+  anything: what it evicts and the query reads again is forced again, and so
+  are the evicted cells that force reads, back through the computation.
+  History: the caches were bounded FIFOs (16K entries, then 64K from
+  2026-09-07, when a width-64 structural consumer's working set measured
+  ≈20K values). Unbounded strong memos had made the first arena version
+  exceed the 4 GiB test cap on `lib_std_bitvec`, from when values owned the
+  closures they reached and the bitvector consumers were superlinear; both
+  are gone. The FIFO then grew two patches for one loss
+  (`issues/computed-argument-reevaluated-in-rounding.md`: a tier protecting
+  forces that spent `COSTLY_FORCE` fuel, and tombs regluing an evicted glued
+  neutral's unfolding), and was still what made long evaluations by `refl`
+  fragile: the effectful source's `cat` at width 64 spent nine tenths of its
+  fuel copying one byte, and ran out on three, recomputing evicted
+  environment cells; kept, a run takes about a tenth of the steps and grows
+  linearly in its passes (`issues/kernel-value-cache-evaluation-thrash.md`). Peak
+  memory on the suite's heaviest tests was unchanged or lower, since less
+  recomputation allocates fewer closures. The memo changes the fuel a query
+  spends, never a verdict: it is a function of the closure alone, and only
+  successes are remembered.
   Hot handles are kept compact: an environment closure captures only its
   persistent head and length, while whichever machine extends it supplies the
   already-owned query arena explicitly. Persistent cells remain two pointers.
@@ -734,7 +728,7 @@ paper too).
   may lend a `ValueMetrics` collector to arenas directly, or use the profiled
   typing entry points to aggregate the many conversion arenas created by one
   kernel gate. It counts region/environment/closure allocation plus cache
-  lookups, hits, inserts, evictions and per-region peak residency. Ordinary
+  lookups, hits, inserts and per-region peak residency. Ordinary
   arenas carry no collector. There is deliberately no global or thread-local
   sink: concurrent checks cannot contaminate one another's measurements, and
   enabling counters cannot change fuel, cache policy, or a verdict.

@@ -293,11 +293,23 @@ return Term::Lam { dom_level, cod_level, dom, body }
 ```
 
 An annotation on the binder is elaborated and must be **convertible** with
-the expected `dom` — `conv_type` is already imported (`lib.rs:29`). Using the
-expected domain rather than the annotation keeps the emitted term's
-annotation aligned with the type it is checked against; the written
-annotation is a readability aid and a wrong one is a diagnostic, not a
-silently different term.
+the expected `dom` — `conv_type` is already imported (`lib.rs:29`); a wrong
+one is a diagnostic, not a silently different term.
+
+**A convertible annotation is the binder's type** (2026-10-22): the binder is
+pushed with the annotation and the λ emits it, so the kernel converts it with
+the expected domain once, at the λ. Until then the expected domain was used
+and the annotation was only checked, which kept the emitted annotation
+aligned with the Π by construction. That was costly where the expected
+domain is a *computed* spelling of the annotated type: under
+`Sim(io, Vis(c, k), state)` a trace witness's domain is
+`IsTrace(E, Vis(c, k), tr)`, which whnfs to `VisTrace` with its continuation
+predicate as `IsTrace`'s recursion unfolded, and a `match` on the binder
+spelled every arm off that unfolding — twenty to a hundred and seventy times
+the kernel steps of the same match over a `VisTrace` parameter
+(`issues/trace-match-under-computed-binder-cost.md`). The annotation is the
+spelling the author chose to work at, and an unannotated binder still takes
+the expected domain.
 
 **One consumer reads the annotation anyway, so "readability aid" is not
 unconditional.** The `decreases` obligation generator states a recursive

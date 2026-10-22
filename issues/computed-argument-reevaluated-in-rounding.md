@@ -76,3 +76,4 @@ them.
   (tier); together they reach the unbounded counts. No library change:
   `round_rat` and `Finite::div` are as they were. The float-arith binary32
   tests now carry `third_near` and `div_third`.
+- 2026-10-22: 2026-10-22: The two FIFO patches this issue added (costly tier, glue tombs) are gone: the value cache now keeps everything a query forced, which covers both losses ([[kernel-value-cache-evaluation-thrash]]).

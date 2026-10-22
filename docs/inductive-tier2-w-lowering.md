@@ -456,9 +456,10 @@ interaction tree built the same way did the same under `thread`.
    bound to (seen through closures that are only a variable: the match's
    alias `k := λy. ⟨f' y, c y⟩` passes each half its own closure of `y`).
    This is what a function child needs, since its halves apply `c` to an
-   answer only when asked. The table is the arena's, bounded like the force
+   answer only when asked. The table is the arena's, kept like the force
    cache; `shared_apps` counts its hits.
-3. *The tactic host's arena keeps what it forces* (`ValueArena::retaining`).
+3. *The tactic host's arena keeps what it forces* (then `ValueArena::retaining`;
+   since 2026-10-22 every arena does, `ValueArena::cache_tm`).
    A run builds every resumed tree out of closures earlier resumes forced; with
    the query-sized bound, once a run had forced more values than the cache
    holds, the oldest were evicted and recomputed back through the run's

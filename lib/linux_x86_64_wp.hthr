@@ -304,10 +304,11 @@ theorem wp_left_sound<M, V>(io: LinuxIo<M>, view: View<M, V>, sound: ViewSound<M
     })(left)
 }
 
-// A SYSCALL making a call, of one trace stated as a `VisTrace`: matched
-// inside `wp_next_runs`' λ, where its type is `NextTrace` of the call, the
-// same proof costs the kernel an order of magnitude more
-// (issues/trace-match-under-computed-binder-cost.md).
+// A SYSCALL making a call, of one trace stated as a `VisTrace`. (Matched
+// inside `wp_next_runs`' λ, the binder must be annotated with that
+// `VisTrace`: its expected type is `NextTrace` of the call, and arms spelled
+// off that cost the kernel an order of magnitude more;
+// issues/trace-match-under-computed-binder-cost.md.)
 theorem wp_next_calls_runs<M, V>(io: LinuxIo<M>, view: View<M, V>, sound: ViewSound<M, V>(io, view), origin: BitVec(64), tr: Trace<BitVec(64)>(Events::linux()),
     here: Nat, then: Bool → ITree<BitVec(64)>(Events::linux()) → V → MachineState<M> → Type, goes: WpGoes(io, view, origin, tr, here + 2, then),
     c: LinuxCmd<Nat>, k: c.Resp() → ITree<BitVec(64)>(Events::linux()),

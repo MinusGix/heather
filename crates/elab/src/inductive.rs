@@ -5485,6 +5485,18 @@ impl Elaborator {
     /// on top of this because `Nat` is a kernel type rather than a declared
     /// inductive (issues/absurd-at-nat-numerals.md).
     fn equation(&self, cx: &Cx, e: &Expr, who: &str) -> R<Equation> {
+        let (proof, sty, level, lhs, rhs) = self.equation_as_written(cx, e, who)?;
+        // A constructor equation may be reached by computation. No-confusion
+        // is about the reduced endpoints rather than their source spelling.
+        let (lhs, rhs) = (
+            self.whnf_tm(cx, &lhs, e.span)?,
+            self.whnf_tm(cx, &rhs, e.span)?,
+        );
+        Ok((proof, sty, level, lhs, rhs))
+    }
+
+    /// [`Self::equation`] with the endpoints as the proof's type spells them.
+    fn equation_as_written(&self, cx: &Cx, e: &Expr, who: &str) -> R<Equation> {
         let (proof, proof_ty, _) = self.elab_infer(cx, e)?;
         let Type::Id {
             level,
@@ -5499,12 +5511,6 @@ impl Elaborator {
             );
         };
         let sty = self.whnf(cx, &ty, e.span)?;
-        // A constructor equation may be reached by computation. No-confusion
-        // is about the reduced endpoints rather than their source spelling.
-        let (lhs, rhs) = (
-            self.whnf_tm(cx, &lhs, e.span)?,
-            self.whnf_tm(cx, &rhs, e.span)?,
-        );
         Ok((proof, sty, level, lhs, rhs))
     }
 
@@ -5703,6 +5709,47 @@ impl Elaborator {
         )
     }
 
+    /// The constructor indices both sides of a declared-inductive equation
+    /// evaluate to, or `None` when either side is stuck (or the evaluation runs
+    /// out of fuel). Each side is put through the constant case tree that
+    /// answers constructor `k` with the numeral `k` ([`ConstBody::Arity`] with
+    /// no fields counted), built where [`Self::build_absurd`]'s `J` motive
+    /// builds its tag predicate, and that tree is evaluated by the value
+    /// machine: one evaluation per side, sharing what it computes, where
+    /// spelling the side's constructor by reduction copies every intermediate
+    /// term.
+    fn ctor_indices(&self, cx: &Cx, ind: &Inductive, equation: &Equation, span: Span) -> R<Option<(usize, usize)>> {
+        let (_, sty, slvl, lhs, rhs) = equation;
+        let mut mcx = cx.clone();
+        mcx.push("#y".into(), sty.clone(), slvl.clone());
+        mcx.push(
+            "#p".into(),
+            Type::Id {
+                level: slvl.clone(),
+                ty: Rc::new(sty.shift_local(1)),
+                lhs: Rc::new(lhs.shift_local(1)),
+                rhs: Rc::new(Term::Var(LocalVar(0))),
+            },
+            slvl.clone(),
+        );
+        let spine = self.spine_in(cx, sty, slvl, ind.ctors.len(), span)?;
+        let index = ConstBody::Arity((0..ind.ctors.len()).map(|k| (k, None)).collect());
+        let oracle = self.semantic_oracle();
+        let read = |side: &Rc<Term>| -> R<Option<usize>> {
+            let probe = self.const_predicate(
+                &mcx, ind, sty, &spine, &Type::Nat, &Level::Zero,
+                Rc::new(side.shift_local(2)), &index, span,
+            )?;
+            Ok(oracle
+                .nat_value(&mcx.gamma, &Rc::new(probe), self.fuel)
+                .and_then(|k| usize::try_from(k).ok())
+                .filter(|&k| k < ind.ctors.len()))
+        };
+        let Some(i) = read(lhs)? else { return Ok(None) };
+        let Some(j) = read(rhs)? else { return Ok(None) };
+        Ok(Some((i, j)))
+    }
+
     /// §6.1, disjointness: from an equation between *different* constructors,
     /// anything. The tag predicate ignores the fields, so it lands in `Ty 0`
     /// whatever the field levels are, and both `El` reductions are
@@ -5715,13 +5762,35 @@ impl Elaborator {
         expected_lvl: &Level,
         span: Span,
     ) -> R<Term> {
-        let equation = self.equation(cx, arg, "absurd")?;
-        if matches!(equation.1, Type::Nat) {
-            let (proof, _, _, lhs, rhs) = equation;
+        let written = self.equation_as_written(cx, arg, "absurd")?;
+        if matches!(written.1, Type::Nat) {
+            let (proof, _, _, lhs, rhs) = written;
+            let (lhs, rhs) = (self.whnf_tm(cx, &lhs, arg.span)?, self.whnf_tm(cx, &rhs, arg.span)?);
             return self.build_nat_absurd(cx, proof, lhs, rhs, expected, expected_lvl, span);
         }
-        let (proof, ind, sty, slvl, lhs, rhs, (i, _), (j, _)) =
-            self.declared_equation(cx, equation, "absurd", false, arg.span)?;
+        // The two constructors are all `absurd` needs of the sides, so they
+        // are read off the sides' values first: a side computed from, say,
+        // machine state is then evaluated once, by the machine, instead of
+        // reduced by substitution to spell the constructor it reaches
+        // (issues/absurd-reduces-computed-sides-by-substitution.md). The `J`
+        // keeps the sides as written; the kernel converts them anyway.
+        let read = match self.tag_of(&written.1) {
+            Some(ind) => self.ctor_indices(cx, &ind, &written, span)?.map(|tags| (ind, tags)),
+            None => None,
+        };
+        let (proof, ind, sty, slvl, lhs, rhs, i, j) = match read {
+            Some((ind, (i, j))) => {
+                let (proof, sty, slvl, lhs, rhs) = written;
+                (proof, ind, sty, slvl, lhs, rhs, i, j)
+            }
+            None => {
+                let (proof, sty, level, lhs, rhs) = written;
+                let reduced = (proof, sty, level, self.whnf_tm(cx, &lhs, arg.span)?, self.whnf_tm(cx, &rhs, arg.span)?);
+                let (proof, ind, sty, slvl, lhs, rhs, (i, _), (j, _)) =
+                    self.declared_equation(cx, reduced, "absurd", false, arg.span)?;
+                (proof, ind, sty, slvl, lhs, rhs, i, j)
+            }
+        };
         if i == j {
             return err(
                 format!(

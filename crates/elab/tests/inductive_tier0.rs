@@ -308,6 +308,28 @@ fn distinct_constructors_are_provably_distinct() {
     );
 }
 
+// A side reached by computation is read by evaluating it, not by reducing
+// it to a constructor spelling (issues/absurd-reduces-computed-sides-by-substitution.md):
+// computed sides at nullary constructors and at a constructor with fields,
+// on either side; a computed side at the *same* constructor is still not
+// absurd, and a stuck side is still not a constructor.
+#[test]
+fn computed_sides_are_read_by_evaluation() {
+    elab(&format!(
+        "{BOOL}
+         inductive Option<A> {{ None, Some(A) }}
+         fn wrap(n: Nat) -> Option<Nat> {{ match n {{ Zero => Some(0), Succ(k) => Some(k) }} }}
+         theorem left(p: neg(True) = True): 0 = 1 {{ absurd(p) }}
+         theorem right(p: False = neg(False)): 0 = 1 {{ p.absurd() }}
+         theorem both(p: neg(neg(True)) = neg(True)): 0 = 1 {{ absurd(p) }}
+         theorem fields(n: Nat, p: wrap(Succ(n)) = None): 0 = 1 {{ absurd(p) }}"
+    ));
+    let msg = elab_err(&format!("{BOOL} theorem t(p: neg(False) = True): 0 = 1 {{ absurd(p) }}"));
+    assert!(msg.contains("not absurd"), "{msg}");
+    let msg = elab_err(&format!("{BOOL} theorem t(b: Bool, p: neg(b) = True): 0 = 1 {{ absurd(p) }}"));
+    assert!(msg.contains("constructor applications"), "{msg}");
+}
+
 // Nat is a kernel type rather than a declared inductive, but its numeral
 // constructors have the same no-confusion principle. Matching Succ layers are
 // peeled until the first Zero/Succ mismatch, including after delta reduction.

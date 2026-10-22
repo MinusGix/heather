@@ -306,6 +306,8 @@ fn no_confusion() {
          theorem ret_not_tau(r: Nat, s: Tree, p: Ret(r) = Tau(s)): r = 0 {{ absurd(p) }}
          theorem tau_not_vis(s: Tree, c: Cmd, k: Resp(c) -> Tree, p: Tau(s) = Vis(c, k)): s = s {{ absurd(p) }}
          theorem vis_not_ret(c: Cmd, k: Resp(c) -> Tree, r: Nat, p: Vis(c, k) = Ret(r)): r = 0 {{ absurd(p) }}
+         fn done(r: Nat) -> Tree {{ Ret(r) }}
+         theorem computed_ret_not_tau(r: Nat, s: Tree, p: done(r) = Tau(s)): r = 0 {{ absurd(p) }}
          theorem ret_inj(a: Nat, b: Nat, p: Ret(a) = Ret(b)): a = b {{ inj(p, 0) }}
          theorem vis_say(a: Nat, b: Nat, n: Flag -> Tree, m: Flag -> Tree, p: Vis(Say(a), n) = Vis(Say(b), m)):
              Say(a) = Say(b) {{ inj(p, 0) }}
