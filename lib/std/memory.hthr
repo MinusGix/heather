@@ -1,0 +1,668 @@
+// Byte-addressed memory with explicit access outcomes
+// (issues/byte-memory-access-model.md; the design is
+// docs/byte-memory-design.md). Three layers, each usable without the next:
+//
+// - An address space `Space<A>`: a Boolean `same` and `offset(a, i)`, the
+//   address `i` cells past `a`. Finiteness and wraparound are the space's:
+//   `BitVec::space(n)` wraps modulo `2^n`, `Nat::space()` never wraps. Every
+//   span is addressed by absolute index from its base, `offset(a, 0)`,
+//   `offset(a, 1)`, …, so no law about composing offsets is needed.
+// - Cells: `get` and `set` on a `Memory`, total and policy-free, and spans of
+//   `k` cells as vectors `[C; k]`. Their laws are read-after-write at one
+//   address, preservation elsewhere, and the span forms of both.
+// - Access: a `Perm` per address and checked `read`/`write`/`fetch` whose
+//   outcome is a `Result` — a refused write has no memory after it to state
+//   anything about. A span is checked whole before anything is stored.
+//
+// Cells are any `C`; a byte memory is `Memory<A, BitVec(8)>`, and words go
+// through an explicit packing (`lib/std/bitvec/bitvec_bytes.hthr`). Stores are
+// functions, so two memories agree pointwise (`Agrees`), not by `=`.
+
+import logic;
+import bool;
+import nat;
+import omega;
+import option;
+import result;
+import bitvec;
+import bitvec_nat;
+import bitvec_bytes;
+import vector;
+
+// ---------------------------------------------------------------------------
+// Address spaces
+
+record Space<A> { same: A → A → Bool, offset: A → Nat → A }
+
+// `same` decides equality. Nothing is asked of `offset`: what a span may
+// assume about its addresses is a premise (`Distinct`, `Apart`), discharged
+// per space.
+record SpaceLaws<A>(space: Space<A>) {
+    same_self: (a: A) → space.same(a, a) = True,
+    sound: (a, b: A) → space.same(a, b) = True → a = b,
+}
+
+// The `k` addresses from `a` are pairwise different: a span that does not
+// overlap itself. In a wrapping space this fails once `k` exceeds its size.
+fn Space::Distinct<A>(self space: Space<A>, a: A, k: Nat) → Type {
+    (p, q: Nat) → p < q → q < k → space.same(space.offset(a, q), space.offset(a, p)) = False
+}
+
+// No address of the `k` from `a` is one of the `l` from `b`.
+fn Space::Apart<A>(self space: Space<A>, a: A, k: Nat, b: A, l: Nat) → Type {
+    (p, q: Nat) → p < k → q < l → space.same(space.offset(a, p), space.offset(b, q)) = False
+}
+
+theorem SpaceLaws::same_trans<A>(space: Space<A>, self laws: SpaceLaws<A>(space), {x, y, z: A},
+    xz: space.same(x, z) = True, yz: space.same(y, z) = True): space.same(x, y) = True {
+    let left: (x = z) = laws.sound(x, z, xz);
+    let right: (y = z) = laws.sound(y, z, yz);
+    rewrite(left, right, laws.same_self(z))
+}
+
+// ---------------------------------------------------------------------------
+// Permissions and faults
+
+record Perm { read: Bool, write: Bool, execute: Bool }
+
+// What a refused access reports: which access, at which address. A span
+// reports its first refused address in index order.
+inductive Fault<A> { ReadFault(address: A), WriteFault(address: A), ExecuteFault(address: A) }
+
+record Memory<A, C> { space: Space<A>, cells: A → C, perms: A → Perm }
+
+// ---------------------------------------------------------------------------
+// Cells: total and policy-free
+
+fn Memory::get<A, C>(self m: Memory<A, C>, a: A) → C { m.cells(a) }
+
+// Stores are functions; a store is put at one address, or at the span's
+// addresses from index `i` in index order — so where a span overlaps itself
+// the later index is the one left. A memory's space and permissions sit
+// beside its cells and no store touches them.
+fn Space::put<A, C>(self space: Space<A>, cells: A → C, a: A, c: C) → A → C {
+    λ (x: A) => match space.same(a, x) { True => c, False => cells(x) }
+}
+
+fn Space::put_from<A, C>(self space: Space<A>, cells: A → C, a: A, i: Nat, {k: Nat}, cs: [C; k]) → A → C {
+    (match k as λ j => (A → C) → Nat → [C; j] → A → C {
+        Zero => λ cells i cs => cells,
+        Succ(_, ih) => λ cells i cs => ih(space.put(cells, space.offset(a, i), head(cs)), Succ(i), tail(cs)),
+    })(cells, i, cs)
+}
+
+fn Memory::set<A, C>(self m: Memory<A, C>, a: A, c: C) → Memory<A, C> {
+    Memory<A, C>(m.space, m.space.put(m.cells, a, c), m.perms)
+}
+
+// The `k` cells from index `i` of the span at `a`.
+fn Memory::get_from<A, C>(self m: Memory<A, C>, a: A, i, k: Nat) → [C; k] {
+    (match k as λ j => Nat → [C; j] {
+        Zero => λ i => [],
+        Succ(_, ih) => λ i => cons(m.get(m.space.offset(a, i)), ih(Succ(i))),
+    })(i)
+}
+
+fn Memory::get_span<A, C>(self m: Memory<A, C>, a: A, k: Nat) → [C; k] { m.get_from(a, 0, k) }
+
+fn Memory::set_from<A, C>(self m: Memory<A, C>, a: A, i: Nat, {k: Nat}, cs: [C; k]) → Memory<A, C> {
+    Memory<A, C>(m.space, m.space.put_from(m.cells, a, i, cs), m.perms)
+}
+
+fn Memory::set_span<A, C>(self m: Memory<A, C>, a: A, {k: Nat}, cs: [C; k]) → Memory<A, C> { m.set_from(a, 0, cs) }
+
+// Two memories with the same space and permissions whose cells agree at
+// every address.
+record Agrees<A, C>(m, n: Memory<A, C>) {
+    space: n.space = m.space,
+    perms: n.perms = m.perms,
+    cells: (x: A) → n.get(x) = m.get(x),
+}
+
+// A store is seen at every address `same` takes for its own, and nowhere else.
+theorem Memory::get_set_hit<A, C>(self m: Memory<A, C>, a, x: A, c: C, hit: m.space.same(a, x) = True):
+    m.set(a, c).get(x) = c {
+    j(sym(hit), λ s _ => (match s { True => c, False => m.cells(x) }) = c, refl)
+}
+
+theorem Memory::get_set_other<A, C>(self m: Memory<A, C>, a, x: A, c: C, other: m.space.same(a, x) = False):
+    m.set(a, c).get(x) = m.get(x) {
+    j(sym(other), λ s _ => (match s { True => c, False => m.cells(x) }) = m.cells(x), refl)
+}
+
+theorem Memory::get_set_same<A, C>(self m: Memory<A, C>, laws: SpaceLaws<A>(m.space), a: A, c: C):
+    m.set(a, c).get(a) = c {
+    m.get_set_hit(a, a, c, laws.same_self(a))
+}
+
+// A span leaves every address outside it as it was.
+theorem Memory::get_set_from_outside<A, C>(k: Nat): (m: Memory<A, C>) → (a: A) → (i: Nat) → (cs: [C; k]) → (x: A) →
+    ((p: Nat) → i <= p → p < k + i → m.space.same(m.space.offset(a, p), x) = False) →
+    m.set_from(a, i, cs).get(x) = m.get(x) {
+    match k as λ j => (m: Memory<A, C>) → (a: A) → (i: Nat) → (cs: [C; j]) → (x: A) →
+            ((p: Nat) → i <= p → p < j + i → m.space.same(m.space.offset(a, p), x) = False) →
+            m.set_from(a, i, cs).get(x) = m.get(x) {
+        Zero => λ m a i cs x outside => refl,
+        Succ(_, ih) => λ m a i cs x outside => {
+            let first = m.set(m.space.offset(a, i), head(cs));
+            let rest: (first.set_from(a, Succ(i), tail(cs)).get(x) = first.get(x)) =
+                ih(first, a, Succ(i), tail(cs), x, λ p low high => outside(p, { omega }, { omega }));
+            trans(rest, m.get_set_other(m.space.offset(a, i), x, head(cs), outside(i, { omega }, { omega })))
+        },
+    }
+}
+
+theorem Memory::get_set_span_outside<A, C>(self m: Memory<A, C>, a: A, {k: Nat}, cs: [C; k], x: A,
+    outside: (p: Nat) → p < k → m.space.same(m.space.offset(a, p), x) = False):
+    m.set_span(a, cs).get(x) = m.get(x) {
+    Memory::get_set_from_outside(k, m, a, 0, cs, x, λ p low high => outside(p, high))
+}
+
+// A span reads back what was stored, when it does not overlap itself.
+theorem Memory::get_set_from<A, C>(k: Nat): (m: Memory<A, C>) → SpaceLaws<A>(m.space) → (a: A) → (i: Nat) → (cs: [C; k]) →
+    ((p, q: Nat) → i <= p → p < q → q < k + i → m.space.same(m.space.offset(a, q), m.space.offset(a, p)) = False) →
+    m.set_from(a, i, cs).get_from(a, i, k) = cs {
+    match k as λ j => (m: Memory<A, C>) → SpaceLaws<A>(m.space) → (a: A) → (i: Nat) → (cs: [C; j]) →
+            ((p, q: Nat) → i <= p → p < q → q < j + i → m.space.same(m.space.offset(a, q), m.space.offset(a, p)) = False) →
+            m.set_from(a, i, cs).get_from(a, i, j) = cs {
+        Zero => λ m laws a i cs distinct => refl,
+        Succ(j, ih) => λ m laws a i cs distinct => {
+            let at = m.space.offset(a, i);
+            let first = m.set(at, head(cs));
+            let here: (first.set_from(a, Succ(i), tail(cs)).get(at) = head(cs)) =
+                trans(Memory::get_set_from_outside(j, first, a, Succ(i), tail(cs), at,
+                        λ q low high => distinct(i, q, { omega }, { omega }, { omega })),
+                    m.get_set_same(laws, at, head(cs)));
+            let later: (first.set_from(a, Succ(i), tail(cs)).get_from(a, Succ(i), j) = tail(cs)) =
+                ih(first, laws, a, Succ(i), tail(cs), λ p q low order high => distinct(p, q, { omega }, order, { omega }));
+            let both: (cons(first.set_from(a, Succ(i), tail(cs)).get(at), first.set_from(a, Succ(i), tail(cs)).get_from(a, Succ(i), j)) =
+                cons(head(cs), tail(cs))) = rewrite(here, later, refl);
+            both
+        },
+    }
+}
+
+theorem Memory::get_set_span<A, C>(self m: Memory<A, C>, laws: SpaceLaws<A>(m.space), a: A, {k: Nat}, cs: [C; k],
+    distinct: m.space.Distinct(a, k)): m.set_span(a, cs).get_span(a, k) = cs {
+    Memory::get_set_from(k, m, laws, a, 0, cs, λ p q low order high => distinct(p, q, order, high))
+}
+
+// Reading a span apart from the one stored reads the memory before.
+theorem Memory::get_from_set_span_apart<A, C>(l: Nat): (m: Memory<A, C>) → (a: A) → (k: Nat) → (cs: [C; k]) → (b: A) → (j: Nat) →
+    ((p, q: Nat) → p < k → j <= q → q < l + j → m.space.same(m.space.offset(a, p), m.space.offset(b, q)) = False) →
+    m.set_span(a, cs).get_from(b, j, l) = m.get_from(b, j, l) {
+    match l as λ n => (m: Memory<A, C>) → (a: A) → (k: Nat) → (cs: [C; k]) → (b: A) → (j: Nat) →
+            ((p, q: Nat) → p < k → j <= q → q < n + j → m.space.same(m.space.offset(a, p), m.space.offset(b, q)) = False) →
+            m.set_span(a, cs).get_from(b, j, n) = m.get_from(b, j, n) {
+        Zero => λ m a k cs b j apart => refl,
+        Succ(n, ih) => λ m a k cs b j apart => {
+            let here: (m.set_span(a, cs).get(m.space.offset(b, j)) = m.get(m.space.offset(b, j))) =
+                m.get_set_span_outside(a, cs, m.space.offset(b, j), λ p below => apart(p, j, below, { omega }, { omega }));
+            let later: (m.set_span(a, cs).get_from(b, Succ(j), n) = m.get_from(b, Succ(j), n)) =
+                ih(m, a, k, cs, b, Succ(j), λ p q below low high => apart(p, q, below, { omega }, { omega }));
+            let both: (cons(m.set_span(a, cs).get(m.space.offset(b, j)), m.set_span(a, cs).get_from(b, Succ(j), n)) =
+                cons(m.get(m.space.offset(b, j)), m.get_from(b, Succ(j), n))) = rewrite(here, later, refl);
+            both
+        },
+    }
+}
+
+theorem Memory::get_set_span_apart<A, C>(self m: Memory<A, C>, a: A, {k: Nat}, cs: [C; k], b: A, l: Nat,
+    apart: m.space.Apart(a, k, b, l)): m.set_span(a, cs).get_span(b, l) = m.get_span(b, l) {
+    Memory::get_from_set_span_apart(l, m, a, k, cs, b, 0, λ p q below low high => apart(p, q, below, high))
+}
+
+// Stores to apart spans commute: the two orders agree at every address.
+theorem Memory::agrees_refl<A, C>(self m: Memory<A, C>): Agrees<A, C>(m, m) {
+    Agrees(space := refl, perms := refl, cells := λ x => refl)
+}
+
+theorem Memory::agrees_symm<A, C>(m, n: Memory<A, C>, mn: Agrees<A, C>(m, n)): Agrees<A, C>(n, m) {
+    Agrees(space := sym(mn.space), perms := sym(mn.perms), cells := λ x => sym(mn.cells(x)))
+}
+
+theorem Memory::agrees_trans<A, C>(m, n, o: Memory<A, C>, mn: Agrees<A, C>(m, n), no: Agrees<A, C>(n, o)):
+    Agrees<A, C>(m, o) {
+    Agrees(space := trans(no.space, mn.space), perms := trans(no.perms, mn.perms), cells := λ x => trans(no.cells(x), mn.cells(x)))
+}
+
+theorem Memory::agrees_set<A, C>(m, n: Memory<A, C>, agree: Agrees<A, C>(m, n), a: A, c: C):
+    Agrees<A, C>(m.set(a, c), n.set(a, c)) {
+    Agrees(space := agree.space, perms := agree.perms, cells := λ x =>
+        (match m.space.same(a, x) as λ s => (m.space.same(a, x) = s) →
+                n.set(a, c).get(x) = m.set(a, c).get(x) {
+            True => λ hit => trans(n.get_set_hit(a, x, c, rewrite(agree.space, hit)), sym(m.get_set_hit(a, x, c, hit))),
+            False => λ miss => trans(n.get_set_other(a, x, c, rewrite(agree.space, miss)),
+                trans(agree.cells(x), sym(m.get_set_other(a, x, c, miss)))),
+        })(refl))
+}
+
+theorem Memory::agrees_set_from<A, C>(k: Nat): (m, n: Memory<A, C>) → Agrees<A, C>(m, n) → (a: A) → (i: Nat) → (cs: [C; k]) →
+    Agrees<A, C>(m.set_from(a, i, cs), n.set_from(a, i, cs)) {
+    match k as λ j => (m, n: Memory<A, C>) → Agrees<A, C>(m, n) → (a: A) → (i: Nat) → (cs: [C; j]) →
+            Agrees<A, C>(m.set_from(a, i, cs), n.set_from(a, i, cs)) {
+        Zero => λ m n agree a i cs => agree,
+        Succ(_, ih) => λ m n agree a i cs => {
+            let at: (n.space.offset(a, i) = m.space.offset(a, i)) = rewrite(agree.space, refl);
+            let moved: Agrees<A, C>(m.set(m.space.offset(a, i), head(cs)), n.set(n.space.offset(a, i), head(cs))) =
+                rewrite(at, Memory::agrees_set(m, n, agree, m.space.offset(a, i), head(cs)));
+            ih(m.set(m.space.offset(a, i), head(cs)), n.set(n.space.offset(a, i), head(cs)), moved, a, Succ(i), tail(cs))
+        },
+    }
+}
+
+// Two stores to different addresses commute.
+theorem Memory::set_set_comm<A, C>(self m: Memory<A, C>, laws: SpaceLaws<A>(m.space), y, z: A, d, e: C,
+    other: m.space.same(y, z) = False): Agrees<A, C>(m.set(y, d).set(z, e), m.set(z, e).set(y, d)) {
+    Agrees(space := refl, perms := refl, cells := λ x =>
+        (match m.space.same(y, x) as λ s => (m.space.same(y, x) = s) →
+                m.set(z, e).set(y, d).get(x) = m.set(y, d).set(z, e).get(x) {
+            True => λ yx => (match m.space.same(z, x) as λ t => (m.space.same(z, x) = t) →
+                    m.set(z, e).set(y, d).get(x) = m.set(y, d).set(z, e).get(x) {
+                True => λ zx => absurd(trans(sym(other), laws.same_trans(m.space, yx, zx))),
+                False => λ zx => trans(m.set(z, e).get_set_hit(y, x, d, yx),
+                    sym(trans(m.set(y, d).get_set_other(z, x, e, zx), m.get_set_hit(y, x, d, yx)))),
+            })(refl),
+            False => λ yx => (match m.space.same(z, x) as λ t => (m.space.same(z, x) = t) →
+                    m.set(z, e).set(y, d).get(x) = m.set(y, d).set(z, e).get(x) {
+                True => λ zx => trans(trans(m.set(z, e).get_set_other(y, x, d, yx), m.get_set_hit(z, x, e, zx)),
+                    sym(m.set(y, d).get_set_hit(z, x, e, zx))),
+                False => λ zx => trans(trans(m.set(z, e).get_set_other(y, x, d, yx), m.get_set_other(z, x, e, zx)),
+                    sym(trans(m.set(y, d).get_set_other(z, x, e, zx), m.get_set_other(y, x, d, yx)))),
+            })(refl),
+        })(refl))
+}
+
+// A store outside a span moves past it.
+theorem Memory::set_from_set_outside<A, C>(k: Nat): (m: Memory<A, C>) → SpaceLaws<A>(m.space) → (a: A) → (i: Nat) → (cs: [C; k]) →
+    (y: A) → (d: C) → ((p: Nat) → i <= p → p < k + i → m.space.same(m.space.offset(a, p), y) = False) →
+    Agrees<A, C>(m.set(y, d).set_from(a, i, cs), m.set_from(a, i, cs).set(y, d)) {
+    match k as λ j => (m: Memory<A, C>) → SpaceLaws<A>(m.space) → (a: A) → (i: Nat) → (cs: [C; j]) →
+            (y: A) → (d: C) → ((p: Nat) → i <= p → p < j + i → m.space.same(m.space.offset(a, p), y) = False) →
+            Agrees<A, C>(m.set(y, d).set_from(a, i, cs), m.set_from(a, i, cs).set(y, d)) {
+        Zero => λ m laws a i cs y d outside => Memory::agrees_refl(m.set(y, d)),
+        Succ(j, ih) => λ m laws a i cs y d outside => {
+            let at = m.space.offset(a, i);
+            let swapped: Agrees<A, C>(m.set(y, d).set(at, head(cs)), m.set(at, head(cs)).set(y, d)) =
+                Memory::agrees_symm(m.set(at, head(cs)).set(y, d), m.set(y, d).set(at, head(cs)),
+                    m.set_set_comm(laws, at, y, head(cs), d, outside(i, { omega }, { omega })));
+            let carried: Agrees<A, C>(m.set(y, d).set(at, head(cs)).set_from(a, Succ(i), tail(cs)),
+                    m.set(at, head(cs)).set(y, d).set_from(a, Succ(i), tail(cs))) =
+                Memory::agrees_set_from(j, m.set(y, d).set(at, head(cs)), m.set(at, head(cs)).set(y, d), swapped, a, Succ(i), tail(cs));
+            let moved: Agrees<A, C>(m.set(at, head(cs)).set(y, d).set_from(a, Succ(i), tail(cs)),
+                    m.set(at, head(cs)).set_from(a, Succ(i), tail(cs)).set(y, d)) =
+                ih(m.set(at, head(cs)), laws, a, Succ(i), tail(cs), y, d, λ p low high => outside(p, { omega }, { omega }));
+            Memory::agrees_trans(m.set(y, d).set(at, head(cs)).set_from(a, Succ(i), tail(cs)),
+                m.set(at, head(cs)).set(y, d).set_from(a, Succ(i), tail(cs)),
+                m.set(at, head(cs)).set_from(a, Succ(i), tail(cs)).set(y, d), carried, moved)
+        },
+    }
+}
+
+theorem Memory::set_from_set_span_apart<A, C>(l: Nat): (m: Memory<A, C>) → SpaceLaws<A>(m.space) → (a: A) → (k: Nat) → (cs: [C; k]) →
+    (b: A) → (j: Nat) → (ds: [C; l]) →
+    ((p, q: Nat) → p < k → j <= q → q < l + j → m.space.same(m.space.offset(a, p), m.space.offset(b, q)) = False) →
+    Agrees<A, C>(m.set_span(a, cs).set_from(b, j, ds), m.set_from(b, j, ds).set_span(a, cs)) {
+    match l as λ n => (m: Memory<A, C>) → SpaceLaws<A>(m.space) → (a: A) → (k: Nat) → (cs: [C; k]) →
+            (b: A) → (j: Nat) → (ds: [C; n]) →
+            ((p, q: Nat) → p < k → j <= q → q < n + j → m.space.same(m.space.offset(a, p), m.space.offset(b, q)) = False) →
+            Agrees<A, C>(m.set_span(a, cs).set_from(b, j, ds), m.set_from(b, j, ds).set_span(a, cs)) {
+        Zero => λ m laws a k cs b j ds apart => Memory::agrees_refl(m.set_span(a, cs)),
+        Succ(n, ih) => λ m laws a k cs b j ds apart => {
+            let at = m.space.offset(b, j);
+            let past: Agrees<A, C>(m.set_span(a, cs).set(at, head(ds)), m.set(at, head(ds)).set_span(a, cs)) =
+                Memory::agrees_symm(m.set(at, head(ds)).set_span(a, cs), m.set_span(a, cs).set(at, head(ds)),
+                    Memory::set_from_set_outside(k, m, laws, a, 0, cs, at, head(ds), λ p low high => apart(p, j, high, { omega }, { omega })));
+            let carried: Agrees<A, C>(m.set_span(a, cs).set(at, head(ds)).set_from(b, Succ(j), tail(ds)),
+                    m.set(at, head(ds)).set_span(a, cs).set_from(b, Succ(j), tail(ds))) =
+                Memory::agrees_set_from(n, m.set_span(a, cs).set(at, head(ds)), m.set(at, head(ds)).set_span(a, cs), past, b, Succ(j), tail(ds));
+            let rest: Agrees<A, C>(m.set(at, head(ds)).set_span(a, cs).set_from(b, Succ(j), tail(ds)),
+                    m.set(at, head(ds)).set_from(b, Succ(j), tail(ds)).set_span(a, cs)) =
+                ih(m.set(at, head(ds)), laws, a, k, cs, b, Succ(j), tail(ds), λ p q below low high => apart(p, q, below, { omega }, { omega }));
+            Memory::agrees_trans(m.set_span(a, cs).set(at, head(ds)).set_from(b, Succ(j), tail(ds)),
+                m.set(at, head(ds)).set_span(a, cs).set_from(b, Succ(j), tail(ds)),
+                m.set(at, head(ds)).set_from(b, Succ(j), tail(ds)).set_span(a, cs), carried, rest)
+        },
+    }
+}
+
+theorem Memory::set_span_comm<A, C>(self m: Memory<A, C>, laws: SpaceLaws<A>(m.space), a: A, {k: Nat}, cs: [C; k],
+    b: A, {l: Nat}, ds: [C; l], apart: m.space.Apart(a, k, b, l)):
+    Agrees<A, C>(m.set_span(a, cs).set_span(b, ds), m.set_span(b, ds).set_span(a, cs)) {
+    Memory::set_from_set_span_apart(l, m, laws, a, k, cs, b, 0, ds, λ p q below low high => apart(p, q, below, high))
+}
+
+// ---------------------------------------------------------------------------
+// Access: checked against the permissions, with an outcome
+
+theorem SpaceLaws::same_false<A>(space: Space<A>, self laws: SpaceLaws<A>(space), x, y: A, differ: x ≠ y):
+    space.same(x, y) = False {
+    (match space.same(x, y) as λ s => (space.same(x, y) = s) → s = False {
+        True => λ hit => false_elim(differ(laws.sound(x, y, hit))),
+        False => λ miss => refl,
+    })(refl)
+}
+
+// The span's permission premise: the bit `allowed` picks is set at each of
+// its addresses.
+fn Memory::Allows<A, C>(self m: Memory<A, C>, allowed: Perm → Bool, a: A, k: Nat) → Type {
+    (p: Nat) → p < k → allowed(m.perms(m.space.offset(a, p))) = True
+}
+
+// The first of the `k` addresses from index `i` whose bit is clear.
+fn Memory::refused_from<A, C>(self m: Memory<A, C>, allowed: Perm → Bool, a: A, i, k: Nat) → Option<A> {
+    (match k as λ j => Nat → Option<A> {
+        Zero => λ i => None,
+        Succ(_, ih) => λ i => match allowed(m.perms(m.space.offset(a, i))) {
+            True => ih(Succ(i)),
+            False => Some(m.space.offset(a, i)),
+        },
+    })(i)
+}
+
+fn Memory::refused<A, C>(self m: Memory<A, C>, allowed: Perm → Bool, a: A, k: Nat) → Option<A> {
+    m.refused_from(allowed, a, 0, k)
+}
+
+fn Perm::reads(self p: Perm) → Bool { p.read }
+fn Perm::writes(self p: Perm) → Bool { p.write }
+fn Perm::executes(self p: Perm) → Bool { p.execute }
+
+fn Memory::read<A, C>(self m: Memory<A, C>, a: A) → Result<C, Fault<A>> {
+    match m.perms(a).read { True => Ok(m.get(a)), False => Err(ReadFault(a)) }
+}
+
+fn Memory::fetch<A, C>(self m: Memory<A, C>, a: A) → Result<C, Fault<A>> {
+    match m.perms(a).execute { True => Ok(m.get(a)), False => Err(ExecuteFault(a)) }
+}
+
+// A refused write is an `Err`: there is no memory after it.
+fn Memory::write<A, C>(self m: Memory<A, C>, a: A, c: C) → Result<Memory<A, C>, Fault<A>> {
+    match m.perms(a).write { True => Ok(m.set(a, c)), False => Err(WriteFault(a)) }
+}
+
+fn Memory::read_span<A, C>(self m: Memory<A, C>, a: A, k: Nat) → Result<[C; k], Fault<A>> {
+    match m.refused(Perm::reads, a, k) { None => Ok(m.get_span(a, k)), Some(x) => Err(ReadFault(x)) }
+}
+
+// All or nothing: the whole span is checked before a cell is stored, so a
+// refused span stores none of it, wherever the refusal falls.
+fn Memory::write_span<A, C>(self m: Memory<A, C>, a: A, {k: Nat}, cs: [C; k]) → Result<Memory<A, C>, Fault<A>> {
+    match m.refused(Perm::writes, a, k) { None => Ok(m.set_span(a, cs)), Some(x) => Err(WriteFault(x)) }
+}
+
+theorem Memory::read_allowed<A, C>(self m: Memory<A, C>, a: A, allowed: m.perms(a).read = True): m.read(a) = Ok(m.get(a)) {
+    j(sym(allowed), λ s _ => (match s { True => Ok(m.get(a)), False => Err(ReadFault(a)) }) = Ok<C, Fault<A>>(m.get(a)), refl)
+}
+
+theorem Memory::read_refused<A, C>(self m: Memory<A, C>, a: A, refused: m.perms(a).read = False): m.read(a) = Err(ReadFault(a)) {
+    j(sym(refused), λ s _ => (match s { True => Ok(m.get(a)), False => Err(ReadFault(a)) }) = Err<C, Fault<A>>(ReadFault(a)), refl)
+}
+
+theorem Memory::fetch_allowed<A, C>(self m: Memory<A, C>, a: A, allowed: m.perms(a).execute = True): m.fetch(a) = Ok(m.get(a)) {
+    j(sym(allowed), λ s _ => (match s { True => Ok(m.get(a)), False => Err(ExecuteFault(a)) }) = Ok<C, Fault<A>>(m.get(a)), refl)
+}
+
+theorem Memory::fetch_refused<A, C>(self m: Memory<A, C>, a: A, refused: m.perms(a).execute = False): m.fetch(a) = Err(ExecuteFault(a)) {
+    j(sym(refused), λ s _ => (match s { True => Ok(m.get(a)), False => Err(ExecuteFault(a)) }) = Err<C, Fault<A>>(ExecuteFault(a)), refl)
+}
+
+theorem Memory::write_allowed<A, C>(self m: Memory<A, C>, a: A, c: C, allowed: m.perms(a).write = True):
+    m.write(a, c) = Ok(m.set(a, c)) {
+    j(sym(allowed), λ s _ => (match s { True => Ok(m.set(a, c)), False => Err(WriteFault(a)) }) = Ok<Memory<A, C>, Fault<A>>(m.set(a, c)), refl)
+}
+
+theorem Memory::write_refused<A, C>(self m: Memory<A, C>, a: A, c: C, refused: m.perms(a).write = False):
+    m.write(a, c) = Err(WriteFault(a)) {
+    j(sym(refused), λ s _ => (match s { True => Ok(m.set(a, c)), False => Err(WriteFault(a)) }) = Err<Memory<A, C>, Fault<A>>(WriteFault(a)), refl)
+}
+
+theorem Memory::refused_from_none<A, C>(k: Nat): (m: Memory<A, C>) → (allowed: Perm → Bool) → (a: A) → (i: Nat) →
+    ((p: Nat) → i <= p → p < k + i → allowed(m.perms(m.space.offset(a, p))) = True) →
+    m.refused_from(allowed, a, i, k) = None {
+    match k as λ j => (m: Memory<A, C>) → (allowed: Perm → Bool) → (a: A) → (i: Nat) →
+            ((p: Nat) → i <= p → p < j + i → allowed(m.perms(m.space.offset(a, p))) = True) →
+            m.refused_from(allowed, a, i, j) = None {
+        Zero => λ m allowed a i all => refl,
+        Succ(j, ih) => λ m allowed a i all => {
+            let later: (m.refused_from(allowed, a, Succ(i), j) = None) =
+                ih(m, allowed, a, Succ(i), λ p low high => all(p, { omega }, { omega }));
+            j(sym(all(i, { omega }, { omega })), λ s _ =>
+                (match s { True => m.refused_from(allowed, a, Succ(i), j), False => Some(m.space.offset(a, i)) }) = None<A>, later)
+        },
+    }
+}
+
+theorem Memory::refused_none<A, C>(self m: Memory<A, C>, allowed: Perm → Bool, a: A, k: Nat, all: m.Allows(allowed, a, k)):
+    m.refused(allowed, a, k) = None {
+    Memory::refused_from_none(k, m, allowed, a, 0, λ p low high => all(p, high))
+}
+
+// A refusal is exact: the address reported is in the span with its bit
+// clear, and every address before it has its bit set.
+record FirstRefused<A, C>(m: Memory<A, C>, allowed: Perm → Bool, a: A, i, k: Nat, x: A) {
+    index: Nat,
+    low: i <= index,
+    high: index < k + i,
+    at: x = m.space.offset(a, index),
+    clear: allowed(m.perms(x)) = False,
+    before: (q: Nat) → i <= q → q < index → allowed(m.perms(m.space.offset(a, q))) = True,
+}
+
+theorem Memory::refused_from_some<A, C>(k: Nat): (m: Memory<A, C>) → (allowed: Perm → Bool) → (a: A) → (i: Nat) → (x: A) →
+    m.refused_from(allowed, a, i, k) = Some(x) → FirstRefused<A, C>(m, allowed, a, i, k, x) {
+    match k as λ j => (m: Memory<A, C>) → (allowed: Perm → Bool) → (a: A) → (i: Nat) → (x: A) →
+            m.refused_from(allowed, a, i, j) = Some(x) → FirstRefused<A, C>(m, allowed, a, i, j, x) {
+        Zero => λ m allowed a i x none => absurd(none),
+        Succ(j, ih) => λ m allowed a i x => (match allowed(m.perms(m.space.offset(a, i))) as λ s =>
+                (allowed(m.perms(m.space.offset(a, i))) = s) →
+                (match s { True => m.refused_from(allowed, a, Succ(i), j), False => Some(m.space.offset(a, i)) }) = Some(x) →
+                FirstRefused<A, C>(m, allowed, a, i, Succ(j), x) {
+            True => λ set found => {
+                let later: FirstRefused<A, C>(m, allowed, a, Succ(i), j, x) = ih(m, allowed, a, Succ(i), x, found);
+                FirstRefused(index := later.index, low := omega(later.low), high := omega(later.high), at := later.at,
+                    clear := later.clear, before := λ q low below => (match Nat::eq_dec(q, i) {
+                        Inl(here) => rewrite(here, set),
+                        Inr(other) => later.before(q, omega(low, other), below),
+                    }))
+            },
+            False => λ cleared found => {
+                let at: (m.space.offset(a, i) = x) = inj(found);
+                FirstRefused(index := i, low := { omega }, high := { omega }, at := sym(at),
+                    clear := rewrite(sym(at), cleared), before := λ q low below => false_elim(omega(low, below)))
+            },
+        })(refl)
+    }
+}
+
+theorem Memory::refused_some<A, C>(self m: Memory<A, C>, allowed: Perm → Bool, a: A, k: Nat, x: A,
+    refused: m.refused(allowed, a, k) = Some(x)): FirstRefused<A, C>(m, allowed, a, 0, k, x) {
+    Memory::refused_from_some(k, m, allowed, a, 0, x, refused)
+}
+
+theorem Memory::read_span_allowed<A, C>(self m: Memory<A, C>, a: A, k: Nat, all: m.Allows(Perm::reads, a, k)):
+    m.read_span(a, k) = Ok(m.get_span(a, k)) {
+    j(sym(m.refused_none(Perm::reads, a, k, all)), λ r _ =>
+        (match r { None => Ok(m.get_span(a, k)), Some(x) => Err(ReadFault(x)) }) = Ok<[C; k], Fault<A>>(m.get_span(a, k)), refl)
+}
+
+theorem Memory::read_span_refused<A, C>(self m: Memory<A, C>, a: A, k: Nat, x: A, refused: m.refused(Perm::reads, a, k) = Some(x)):
+    m.read_span(a, k) = Err(ReadFault(x)) {
+    j(sym(refused), λ r _ =>
+        (match r { None => Ok(m.get_span(a, k)), Some(y) => Err(ReadFault(y)) }) = Err<[C; k], Fault<A>>(ReadFault(x)), refl)
+}
+
+theorem Memory::write_span_allowed<A, C>(self m: Memory<A, C>, a: A, {k: Nat}, cs: [C; k], all: m.Allows(Perm::writes, a, k)):
+    m.write_span(a, cs) = Ok(m.set_span(a, cs)) {
+    j(sym(m.refused_none(Perm::writes, a, k, all)), λ r _ =>
+        (match r { None => Ok(m.set_span(a, cs)), Some(x) => Err(WriteFault(x)) }) = Ok<Memory<A, C>, Fault<A>>(m.set_span(a, cs)), refl)
+}
+
+theorem Memory::write_span_refused<A, C>(self m: Memory<A, C>, a: A, {k: Nat}, cs: [C; k], x: A,
+    refused: m.refused(Perm::writes, a, k) = Some(x)): m.write_span(a, cs) = Err(WriteFault(x)) {
+    j(sym(refused), λ r _ =>
+        (match r { None => Ok(m.set_span(a, cs)), Some(y) => Err(WriteFault(y)) }) = Err<Memory<A, C>, Fault<A>>(WriteFault(x)), refl)
+}
+
+// ---------------------------------------------------------------------------
+// Words: `k` bytes packed little- or big-endian, read and written as a span
+
+fn Memory::get_le<A>(self m: Memory<A, BitVec(8)>, a: A, k: Nat) → BitVec(8 * k) { BitVec::of_bytes_le(m.get_span(a, k)) }
+fn Memory::get_be<A>(self m: Memory<A, BitVec(8)>, a: A, k: Nat) → BitVec(8 * k) { BitVec::of_bytes_be(m.get_span(a, k)) }
+
+fn Memory::set_le<A>(self m: Memory<A, BitVec(8)>, a: A, k: Nat, w: BitVec(8 * k)) → Memory<A, BitVec(8)> { m.set_span(a, w.bytes_le(k)) }
+fn Memory::set_be<A>(self m: Memory<A, BitVec(8)>, a: A, k: Nat, w: BitVec(8 * k)) → Memory<A, BitVec(8)> { m.set_span(a, w.bytes_be(k)) }
+
+fn Memory::read_le<A>(self m: Memory<A, BitVec(8)>, a: A, k: Nat) → Result<BitVec(8 * k), Fault<A>> {
+    m.read_span(a, k).map(λ (bytes: [BitVec(8); k]) => BitVec::of_bytes_le(bytes))
+}
+fn Memory::read_be<A>(self m: Memory<A, BitVec(8)>, a: A, k: Nat) → Result<BitVec(8 * k), Fault<A>> {
+    m.read_span(a, k).map(λ (bytes: [BitVec(8); k]) => BitVec::of_bytes_be(bytes))
+}
+
+fn Memory::write_le<A>(self m: Memory<A, BitVec(8)>, a: A, k: Nat, w: BitVec(8 * k)) → Result<Memory<A, BitVec(8)>, Fault<A>> {
+    m.write_span(a, w.bytes_le(k))
+}
+fn Memory::write_be<A>(self m: Memory<A, BitVec(8)>, a: A, k: Nat, w: BitVec(8 * k)) → Result<Memory<A, BitVec(8)>, Fault<A>> {
+    m.write_span(a, w.bytes_be(k))
+}
+
+theorem Memory::get_set_le<A>(self m: Memory<A, BitVec(8)>, laws: SpaceLaws<A>(m.space), a: A, k: Nat, w: BitVec(8 * k),
+    distinct: m.space.Distinct(a, k)): m.set_le(a, k, w).get_le(a, k) = w {
+    trans(rewrite(m.get_set_span(laws, a, w.bytes_le(k), distinct), refl), BitVec::of_bytes_le_bytes_le(k, w))
+}
+
+theorem Memory::get_set_be<A>(self m: Memory<A, BitVec(8)>, laws: SpaceLaws<A>(m.space), a: A, k: Nat, w: BitVec(8 * k),
+    distinct: m.space.Distinct(a, k)): m.set_be(a, k, w).get_be(a, k) = w {
+    trans(rewrite(m.get_set_span(laws, a, w.bytes_be(k), distinct), refl), BitVec::of_bytes_be_bytes_be(k, w))
+}
+
+theorem Memory::read_le_allowed<A>(self m: Memory<A, BitVec(8)>, a: A, k: Nat, all: m.Allows(Perm::reads, a, k)):
+    m.read_le(a, k) = Ok(m.get_le(a, k)) {
+    j(sym(m.read_span_allowed(a, k, all)), λ r _ =>
+        r.map(λ (bytes: [BitVec(8); k]) => BitVec::of_bytes_le(bytes)) = Ok<BitVec(8 * k), Fault<A>>(m.get_le(a, k)), refl)
+}
+
+theorem Memory::write_le_allowed<A>(self m: Memory<A, BitVec(8)>, a: A, k: Nat, w: BitVec(8 * k), all: m.Allows(Perm::writes, a, k)):
+    m.write_le(a, k, w) = Ok(m.set_le(a, k, w)) {
+    m.write_span_allowed(a, w.bytes_le(k), all)
+}
+
+// The normal path whole: with the span readable, writable and not
+// overlapping itself, a word written reads back.
+theorem Memory::read_write_le<A>(self m: Memory<A, BitVec(8)>, laws: SpaceLaws<A>(m.space), a: A, k: Nat, w: BitVec(8 * k),
+    distinct: m.space.Distinct(a, k), readable: m.Allows(Perm::reads, a, k), writable: m.Allows(Perm::writes, a, k)):
+    m.write_le(a, k, w).and_then(λ (n: Memory<A, BitVec(8)>) => n.read_le(a, k)) = Ok(w) {
+    let wrote: (m.write_le(a, k, w) = Ok(m.set_le(a, k, w))) = m.write_le_allowed(a, k, w, writable);
+    let read: (m.set_le(a, k, w).read_le(a, k) = Ok(m.set_le(a, k, w).get_le(a, k))) = m.set_le(a, k, w).read_le_allowed(a, k, readable);
+    let first: (m.write_le(a, k, w).and_then(λ (n: Memory<A, BitVec(8)>) => n.read_le(a, k)) = m.set_le(a, k, w).read_le(a, k)) =
+        rewrite(wrote, refl);
+    let back: (Ok<BitVec(8 * k), Fault<A>>(m.set_le(a, k, w).get_le(a, k)) = Ok(w)) = rewrite(m.get_set_le(laws, a, k, w, distinct), refl);
+    trans(first, trans(read, back))
+}
+
+// ---------------------------------------------------------------------------
+// Address spaces: machine words wrap, naturals do not
+
+// `offset` is `iterate_increment`, which is `next_rip` at width 64: an x86
+// address `i` bytes on is this space's offset by definition.
+fn BitVec::space(n: Nat) → Space<BitVec(n)> {
+    Space<BitVec(n)>(λ (x: BitVec(n)) (y: BitVec(n)) => x.eq_bit(y), λ (x: BitVec(n)) (i: Nat) => x.iterate_increment(i))
+}
+
+theorem BitVec::space_laws(n: Nat): SpaceLaws<BitVec(n)>(BitVec::space(n)) {
+    SpaceLaws(same_self := BitVec::eq_bit_self(n), sound := BitVec::eq_of_eq_bit(n))
+}
+
+fn Nat::space() → Space<Nat> {
+    Space<Nat>(λ (x: Nat) (y: Nat) => x.same(y), λ (x: Nat) (i: Nat) => x + i)
+}
+
+theorem Nat::space_laws(): SpaceLaws<Nat>(Nat::space()) {
+    SpaceLaws(same_self := Nat::same_self, sound := Nat::same_sound)
+}
+
+// Below the top of the space an offset is plain addition.
+theorem BitVec::offset_toNat(n: Nat, a: BitVec(n), i: Nat, fits: a.toNat() + i < Nat::pow(2, n)):
+    a.iterate_increment(i).toNat() = a.toNat() + i {
+    let count: (BitVec::ofNat(i, n := n).toNat() = i) = BitVec::toNat_ofNat(n, i, omega(fits));
+    let as_add: (a.iterate_increment(i) = a.add(BitVec::ofNat(i))) =
+        trans(BitVec::cong_iterate_increment_count(n, a, sym(count)), BitVec::iter_add_eq_add(n, a, BitVec::ofNat(i)));
+    let bounded: (a.toNat() + BitVec::ofNat(i, n := n).toNat() < Nat::pow(2, n)) = rewrite(count, fits);
+    let moved: (a.iterate_increment(i).toNat() = a.add(BitVec::ofNat(i)).toNat()) = rewrite(as_add, refl);
+    let summed: (a.toNat() + BitVec::ofNat(i, n := n).toNat() = a.toNat() + i) = rewrite(count, refl);
+    trans(moved, trans(bitvec_nat::toNat_add(n, a, BitVec::ofNat(i), bounded), summed))
+}
+
+theorem BitVec::space_distinct(n: Nat, a: BitVec(n), k: Nat, fits: a.toNat() + k <= Nat::pow(2, n)):
+    BitVec::space(n).Distinct(a, k) {
+    λ p q order high => BitVec::space_laws(n).same_false(BitVec::space(n), a.iterate_increment(q), a.iterate_increment(p), λ same => {
+        let at_q = BitVec::offset_toNat(n, a, q, omega(high, fits));
+        let at_p = BitVec::offset_toNat(n, a, p, omega(order, high, fits));
+        let numbers: (a.iterate_increment(q).toNat() = a.iterate_increment(p).toNat()) = rewrite(same, refl);
+        false_elim(omega(numbers, at_q, at_p, order))
+    })
+}
+
+theorem BitVec::space_apart(n: Nat, a: BitVec(n), k: Nat, b: BitVec(n), l: Nat,
+    below: a.toNat() + k <= b.toNat(), fits: b.toNat() + l <= Nat::pow(2, n)): BitVec::space(n).Apart(a, k, b, l) {
+    λ p q in_a in_b => BitVec::space_laws(n).same_false(BitVec::space(n), a.iterate_increment(p), b.iterate_increment(q), λ same => {
+        let at_p = BitVec::offset_toNat(n, a, p, omega(in_a, below, fits));
+        let at_q = BitVec::offset_toNat(n, b, q, omega(in_b, fits));
+        let numbers: (a.iterate_increment(p).toNat() = b.iterate_increment(q).toNat()) = rewrite(same, refl);
+        false_elim(omega(numbers, at_p, at_q, in_a, below))
+    })
+}
+
+theorem BitVec::space_apart_above(n: Nat, a: BitVec(n), k: Nat, b: BitVec(n), l: Nat,
+    above: b.toNat() + l <= a.toNat(), fits: a.toNat() + k <= Nat::pow(2, n)): BitVec::space(n).Apart(a, k, b, l) {
+    λ p q in_a in_b => BitVec::space_laws(n).same_false(BitVec::space(n), a.iterate_increment(p), b.iterate_increment(q), λ same => {
+        let at_p = BitVec::offset_toNat(n, a, p, omega(in_a, fits));
+        let at_q = BitVec::offset_toNat(n, b, q, omega(in_b, above, fits));
+        let numbers: (a.iterate_increment(p).toNat() = b.iterate_increment(q).toNat()) = rewrite(same, refl);
+        false_elim(omega(numbers, at_p, at_q, in_b, above))
+    })
+}
+
+theorem Nat::space_distinct(a, k: Nat): Nat::space().Distinct(a, k) {
+    λ p q order high => Nat::space_laws().same_false(Nat::space(), a + q, a + p, λ same => false_elim(omega(same, order)))
+}
+
+theorem Nat::space_apart(a, k, b, l: Nat, below: a + k <= b): Nat::space().Apart(a, k, b, l) {
+    λ p q in_a in_b => Nat::space_laws().same_false(Nat::space(), a + p, b + q, λ same => false_elim(omega(same, in_a, below)))
+}
+
+// ---------------------------------------------------------------------------
+// Buffers: a memory of its own over the indices `0..cap`
+
+fn Perm::none() → Perm { Perm(False, False, False) }
+fn Perm::data() → Perm { Perm(True, True, False) }
+
+// Read and write below `cap`, nothing at or above it.
+fn Perm::below(cap: Nat) → Nat → Perm {
+    λ (i: Nat) => match Succ(i).leb(cap) { True => Perm::data(), False => Perm::none() }
+}
+
+// A buffer of `cap` cells, each `fill`. Stores keep the shape
+// `Memory(Nat::space(), cells, Perm::below(cap))`, so `buffer_allows`
+// applies to every buffer value a program threads, not only the first.
+fn Memory::buffer<C>(cap: Nat, fill: C) → Memory<Nat, C> {
+    Memory<Nat, C>(Nat::space(), λ (i: Nat) => fill, Perm::below(cap))
+}
+
+theorem Perm::below_data(cap, i: Nat, inside: i < cap): Perm::below(cap, i) = Perm::data() {
+    let fits: (Succ(i).leb(cap) = True) = bool::eq_true_of_is_true(Succ(i).leb(cap), Succ(i).leb_complete(cap, inside));
+    j(sym(fits), λ s _ => (match s { True => Perm::data(), False => Perm::none() }) = Perm::data(), refl)
+}
+
+// A span inside the capacity is readable and writable at every index, so a
+// region whose indices are bounded below `cap` discharges each access at once.
+theorem Memory::buffer_reads<C>(cap: Nat, cells: Nat → C, a, k: Nat, fits: a + k <= cap):
+    Memory<Nat, C>(Nat::space(), cells, Perm::below(cap)).Allows(Perm::reads, a, k) {
+    λ p inside => j(sym(Perm::below_data(cap, a + p, omega(inside, fits))), λ q _ => q.reads() = True, refl)
+}
+
+theorem Memory::buffer_writes<C>(cap: Nat, cells: Nat → C, a, k: Nat, fits: a + k <= cap):
+    Memory<Nat, C>(Nat::space(), cells, Perm::below(cap)).Allows(Perm::writes, a, k) {
+    λ p inside => j(sym(Perm::below_data(cap, a + p, omega(inside, fits))), λ q _ => q.writes() = True, refl)
+}

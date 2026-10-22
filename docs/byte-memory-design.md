@@ -1,0 +1,183 @@
+# Byte memory with explicit access outcomes
+
+The `hih-memory-model` milestone's first round
+(`issues/byte-memory-access-model.md`): a library model of byte-addressed
+memory that the native machine model, the program logic and FunctionIR's
+state edges can all use. It is in `lib/std/memory.hthr`, with vector reversal
+in `lib/std/vector.hthr` and word packing in
+`lib/std/bitvec/bitvec_bytes.hthr`. The showcase
+`docs/showcase/memory_client.hthr` runs it and proves things with it. The
+controls are in `crates/elab/tests/lib_std_memory.rs`.
+
+The issue dates from before the program-logic redesign
+(`docs/native-program-logic-design.md`), so this note also says where the
+model sits in that design (§6).
+
+## 1. Three layers
+
+Each layer can be used without the next one.
+
+| Layer | What it is | Its laws |
+| --- | --- | --- |
+| Address space `Space<A>` | `same: A → A → Bool` and `offset(a, i)`, the address `i` cells past `a` | `SpaceLaws`: `same` decides equality |
+| Cells | `Memory::get`/`set`, and spans of `k` cells as `[C; k]` (`get_span`/`set_span`), total and policy-free | read-after-write, preservation elsewhere, the span forms, disjoint spans commute |
+| Access | a `Perm` per address, and checked `read`/`fetch`/`write`/`read_span`/`write_span` returning `Result<_, Fault<A>>` | normal-path theorems turn a checked op into the cell op once the permission premise is met; refusal theorems state the exact `Err` |
+
+A memory is a value:
+
+```heather
+record Memory<A, C> { space: Space<A>, cells: A → C, perms: A → Perm }
+```
+
+The stored cells and the access policy are separate fields, so a policy that
+is left out can't turn into a guarantee by accident. No store changes
+`space` or `perms`. Stores are built on the cells function alone
+(`Space::put`/`put_from`), so `m.set_span(…).perms` *is* `m.perms` even at
+an open span length. If the record were rebuilt step by step, its fields
+would get stuck behind the recursion.
+
+## 2. Addresses: where finiteness and wraparound live
+
+Both belong to the space and not to memory. A span is always addressed by
+absolute index from its base (`offset(a, 0)`, `offset(a, 1)`, …), so no law
+about composing offsets is needed. The two premises a span theorem may need
+are stated as hypotheses and proved separately for each space:
+
+- `space.Distinct(a, k)`: the span does not overlap itself.
+- `space.Apart(a, k, b, l)`: two spans share no address.
+
+| Space | `offset` | Wraps? | Premises discharged by |
+| --- | --- | --- | --- |
+| `BitVec::space(n)` | `a.iterate_increment(i)` | modulo `2^n` | `space_distinct` (`a + k ≤ 2^n`), `space_apart`/`space_apart_above` (one span below the other, both below `2^n`) |
+| `Nat::space()` | `a + i` | never | `space_distinct` (always), `space_apart` (`a + k ≤ b`) |
+
+`BitVec::space(64).offset(a, i)` is x86's `next_rip(a, i)` by definition.
+Both are `iterate_increment`, so an x86 address `i` bytes on needs no lemma
+to be a span address. Only the non-wrapping `Distinct`/`Apart` lemmas are
+proved. A span that wraps without overlapping itself (`k ≤ 2^n` from near the
+top) is still distinct, but proving that needs modular injectivity, which
+nothing needs yet. The controls exercise wrapping spans by evaluation.
+
+**The recorded policy.** A span that wraps continues at address 0 (`span_wraps`
+in the showcase). A span longer than its space overlaps itself. Its cells are
+stored in index order, so the later index is the one left (`later_index_wins`),
+and it doesn't read back (the negative control). Both follow from the
+definitions. Neither is a fault, because a fault is the policy's to raise.
+x86's canonical-address rule, for example, belongs in the x86 instance's
+`perms`, not in the space.
+
+`Space` is generic so that one buffer's index space `0..cap` is a space, not
+only an address range. The effect-source design (S3, PR #117) treats each
+`uniq Buf` as its own small memory (§6).
+
+## 3. Cells
+
+`C` is generic. A byte memory is `Memory<A, BitVec(8)>`. The generality costs
+nothing, and it is the seam for Rust's abstract bytes, where a cell is
+uninitialised or a byte with provenance (`rust-design`).
+
+Stores are functions, so two memories can only be equal pointwise. Heather
+has no function extensionality. `Agrees(m, n)` (same space, same permissions,
+cells equal at every address) is that equality. `set_set_comm` and
+`set_span_comm` (apart spans commute) are stated with it, and so is
+`agrees_set_from` (stores respect it). The read laws need no such relation:
+
+- `get_set_same`, `get_set_hit`, `get_set_other`: one store.
+- `get_set_span` (under `Distinct`): a span reads back what was stored.
+- `get_set_span_outside`: addresses outside a span keep their cells.
+- `get_set_span_apart` (under `Apart`): a span apart from the one stored
+  reads as before.
+
+This is also why a single address can't instantiate `lib/std/location.hthr`'s
+`LocationLaws`. `get_put` there is an `=` between stores. The frame kit
+(`issues/state-location-and-frame-kit.md`) owns how partial or pointwise
+locations meet total lenses. This model supplies memory's own disjointness
+facts (`Apart`, `Distinct`) for it.
+
+## 4. Access and outcomes
+
+```heather
+record Perm { read: Bool, write: Bool, execute: Bool }
+inductive Fault<A> { ReadFault(address: A), WriteFault(address: A), ExecuteFault(address: A) }
+```
+
+The policy is a decidable `Bool` per address and access, so outcomes compute.
+A literal memory evaluates to its `Ok` or `Err`, and the showcase checks
+these by `refl`.
+
+- **Single accesses.** `read`, `fetch` and `write` check the address's bit.
+  A refused `write` is `Err(WriteFault(a))`, and there is no memory after it.
+  The type rules out stating anything about an "updated store after a
+  rejected write".
+- **Spans.** `read_span` and `write_span` check every address first
+  (`Memory::refused`, the first refused address in index order) and then
+  touch the cells. A refused span stores nothing, wherever the refusal falls,
+  and reports its first refused address. `refused_some` makes that exact
+  (`FirstRefused`): the address is in the span, its bit is clear, and every
+  earlier address has its bit set. A machine whose stores fault part way
+  through would be modelled as a sequence of single writes, not as one span.
+- **Normal path.** `read_allowed`/`write_allowed`/`fetch_allowed` take the
+  bit. `read_span_allowed`/`write_span_allowed` take `m.Allows(bit, a, k)`,
+  the bit at each of the span's addresses. Each one rewrites the checked
+  operation to `Ok` of the cell operation, so arithmetic proofs work on
+  `get`/`set` alone.
+- **Buffers.** `Memory::buffer(cap, fill)` is a memory over `Nat` that can be
+  read and written below `cap` and nothing else (`Perm::below(cap)`).
+  `buffer_reads`/`buffer_writes` discharge `Allows` for any span
+  `a + k ≤ cap` at once, for every buffer value of that shape (stores keep
+  it). That way a region whose indices are bounded below `cap` discharges
+  its accesses together rather than one by one, as S3 asked.
+
+## 5. Words and endianness
+
+Endianness is a packing choice, never a property of memory. A `k`-byte word is
+a `BitVec(8 * k)` and its bytes are a `[BitVec(8); k]`, so both round trips
+are stated without a cast. `8 * Succ(k)` reduces to `8 * k + 8`, which is
+`concat`'s index for one low byte below `k` more.
+
+- `BitVec::bytes_le`/`of_bytes_le` put the low byte first. The round trips
+  are `of_bytes_le_bytes_le` and `bytes_le_of_bytes_le`.
+- `BitVec::bytes_be`/`of_bytes_be` are the little-endian forms read through
+  `reverse` (`lib/std/vector.hthr`). Their round trips come from
+  `reverse_reverse`.
+- `Memory::get_le`/`set_le`/`read_le`/`write_le`, and the `_be` forms, are
+  the span operations through a packing. `read_write_le` is the whole normal
+  path: if the span is readable, writable and distinct, a written word reads
+  back as `Ok(w)`.
+
+## 6. Where it sits in the native design
+
+- **FunctionIR state edges.** A memory is a plain value, so a load node is
+  `m ↦ m.read(a)` and a store node is `m ↦ m.write(a, c)`, both pure. S3
+  (`docs/native-effect-source-design.md` §6, PR #117) keeps this outcome
+  shape. FunctionIR's eval of a region returns the `Result`, and the
+  layer's `Pure` leaf turns an `Err` into a process-end outcome (`Faulted`)
+  distinct from `Exited(status)`. The memory model does not depend on
+  `itree`, and a fault is not encoded as an exit code. Its machine side, a
+  trap or signal, belongs to `linux-syscall-trace-model`.
+- **The machine model.** x86's memory is still an abstract `M` with access
+  records (`FetchAccess<M>`, `ByteReadAccess<M>`, `ByteWrites<M>`,
+  `LinuxIo<M>`). `Memory<BitVec(64), BitVec(8)>` is meant to instantiate all
+  four: `read_byte`/`read` from `read` as an `Option`, `executable` from the
+  execute bit, `writable` as `Allows(Perm::writes, …)` and `store` as
+  `set_span`. `Stack<M>`'s laws (#106) then follow from `get_set_span`,
+  `get_set_span_apart` and the non-wrap lemmas, instead of being assumed by
+  whoever builds a stack. That instance, and a `View` over a buffer's range
+  for `Wp` (§6.1's "third view"), are the next round
+  (`issues/memory-model-machine-instances.md`).
+- **Views and footprints.** The `View` interface carries `Holds(v, m)`. A
+  view over this model holds when a range's cells are the buffer's
+  `get_span`. A separation-style footprint is `Apart` between ranges, which
+  this round supplies.
+
+## 7. Outside v1, and the seam for each
+
+| Left out | Seam |
+| --- | --- |
+| Paging and page tables | `perms` is any function. A page-table walk computes it, and a remap replaces it. Cells are untouched. |
+| Privilege levels | A `Perm` per mode, by choosing `perms` per mode (or a `Perm` record per privilege). The checked operations don't change. |
+| Alignment faults | An architecture check before the access. If it needs its own outcome, it becomes another `Fault` constructor. Spans are not aligned by the model. |
+| Atomics and memory ordering | Not representable: this is a sequential model of one memory value. A concurrent model would relate several of these. |
+| Devices and MMIO | An address the architecture routes before memory (or marks refused in `perms`). Cells are plain storage. |
+| Allocation | Changes `perms` (and `cells`) between program steps. Bounds and metering are `memory-bound-certificates`'s (`hih-alloc-metering`). |
+| Uninitialised bytes and provenance | The cell type `C`. |

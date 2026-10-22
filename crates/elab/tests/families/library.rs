@@ -44,6 +44,8 @@ mod lib_std_int;
 mod lib_std_list;
 #[path = "../lib_std_location.rs"]
 mod lib_std_location;
+#[path = "../lib_std_memory.rs"]
+mod lib_std_memory;
 #[path = "../lib_std_ordered_field.rs"]
 mod lib_std_ordered_field;
 #[path = "../lib_std_order.rs"]
