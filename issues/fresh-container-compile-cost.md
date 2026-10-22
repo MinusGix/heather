@@ -87,7 +87,20 @@ Ruled out on the way:
 - The environment's setup script runs at every session start, so it cannot
   carry a prebuilt `target/` between containers.
 
+## Hiding what is left
+
+What remains (~3.5 min here) now starts with the session instead of with its
+first `scripts/test`: `scripts/session-start`, the SessionStart hook (matcher
+`startup`), does nothing outside a cloud container; inside one it installs
+mold if `ld.mold` is missing (the old dead hook's place; it called the
+removed `scripts/issue setup-git`) and detaches a niced `cargo test
+--workspace --no-run`, logged to `target/session-prebuild.log`, once per
+container. A session's own build meanwhile waits on Cargo's lock.
+
 ## Log
 
 - 2026-10-22: Filed and closed with the package split above. Cold compile
   279 → 216 s, CPU 1022 → 786 s.
+- 2026-10-22: Minus asked for the session-start prebuild; added as above.
+  Checked in this container: the hook returns in ~4 s with mold missing
+  (installed) and ~0.01 s with it present; the detached build logs its exit.

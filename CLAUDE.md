@@ -63,6 +63,12 @@
   address space per link, so build (`cargo … --no-run`) *before* entering a
   `ulimit -v` cap; the scripts already do. A capped command that still has to
   link fails with `mold: cannot reserve … bytes of virtual memory`.
+- **Cloud containers prebuild at session start**: `scripts/session-start`
+  (the SessionStart hook in `.claude/settings.json`, active only when
+  `CLAUDE_CODE_REMOTE=true`) installs mold and starts `cargo test --workspace
+  --no-run` in the background, logging to `target/session-prebuild.log`. A
+  first `scripts/test` that says it is waiting on Cargo's lock is waiting on
+  that build, not stuck. `HEATHER_NO_PREBUILD=1` skips it.
 - **Never run `cargo fmt`** (any scope): the repo is deliberately not
   rustfmt-formatted (`issues/fmt-not-enforced-decision.md`); a formatting pass
   buries the real diff under thousands of lines of churn. Match the
