@@ -299,7 +299,7 @@ fn a_match_code_analyses_a_code_argument() {
 #[test]
 fn a_match_code_analyses_a_type_code_argument() {
     // The `ty_*` side (docs/fn-signature-reflection-design.md §3): a
-    // `TyCode(g)` scrutinee assembles an `ElimCodeTy` — same motives, same 56
+    // `TyCode(g)` scrutinee assembles an `ElimCodeTy` — same motives, same 60
     // branches — so this passing means the type-code recursor typed at the
     // meta gate. `ty_pi` binds two recursive results (rec.rs `ty_pi`; ch. 04
     // `G_Typ`), the codomain's at an extended local context, which the
@@ -322,7 +322,7 @@ fn a_match_code_needs_its_default_arm() {
              match code body as Nat { tm_zero => 0 }
          }",
     );
-    assert!(msg.contains("56"), "{msg}");
+    assert!(msg.contains("60"), "{msg}");
 }
 
 #[test]
