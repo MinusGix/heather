@@ -1,0 +1,287 @@
+// x86_64's memory as the byte model (issues/memory-model-machine-instances.md;
+// docs/byte-memory-design.md §6): the machine's access records instantiated
+// from `lib/std/memory.hthr`, and a process stack built from a data region
+// by proof instead of assumed.
+//
+// What the machine threads is the cells, `BitVec(64) → BitVec(8)`. The
+// space (`BitVec::space(64)`) and the permissions are the profile's
+// (`X86Memory`): no store changes them, so a law a stack states for every
+// memory is a law of the one permission map, and holds. Allocation and
+// remapping change the permissions between steps (design §7) and are not
+// modelled here.
+//
+// - `fetch`/`data` read through the model's `read` as an `Option`, and an
+//   address is executable by its execute bit. `writes` asks
+//   `Allows(Perm::writes, …)` and stores a list as `set_span` of its vector.
+// - The canonical-address rule is in the permissions: at or above `2^47`
+//   (the user half) an address has none (`X86Memory::perm`), whatever the
+//   profile says. A word load's own canonical premise (`WordCanonical`)
+//   stays the machine's.
+// - `DataRegion::stack` is a `Stack` whose laws come from `get_set_span`,
+//   `get_set_span_apart`, `get_set_span_outside` and the space's non-wrap
+//   lemmas, given `size` bytes from `low` below `2^47` with the data
+//   permission (read, write, no execute). That the region never executes is
+//   what keeps code where it was.
+import x86_64;
+import x86_64_fetch;
+import x86_64_data_read;
+import x86_64_fetched_code;
+import x86_64_store;
+import x86_64_stack;
+import memory;
+import bitvec;
+import bitvec_nat;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+import omega;
+import result;
+
+// ---------------------------------------------------------------------------
+// The profile and its access records
+
+record X86Memory { perms: BitVec(64) → Perm }
+
+// The canonical-address rule: only the user half has permissions.
+fn X86Memory::perm(self x: X86Memory, a: BitVec(64)) → Perm {
+    match Succ(a.toNat()).leb(Nat::pow(2, 47)) { True => x.perms(a), False => Perm::none() }
+}
+
+// The cells as a memory of the model.
+fn X86Memory::at(self x: X86Memory, cells: BitVec(64) → BitVec(8)) → Memory<BitVec(64), BitVec(8)> {
+    Memory<BitVec(64), BitVec(8)>(BitVec::space(64), cells, λ (a: BitVec(64)) => x.perm(a))
+}
+
+// A checked read, its fault forgotten: what the access records' `Option`
+// is.
+fn X86Memory::read(self x: X86Memory, cells: BitVec(64) → BitVec(8), a: BitVec(64)) → Option<BitVec(8)> {
+    match x.at(cells).read(a) { Ok(byte) => Some(byte), Err(_) => None }
+}
+
+fn X86Memory::fetch(self x: X86Memory) → FetchAccess<BitVec(64) → BitVec(8)> {
+    FetchAccess(λ (cells: BitVec(64) → BitVec(8)) (a: BitVec(64)) => x.read(cells, a),
+        λ (cells: BitVec(64) → BitVec(8)) (a: BitVec(64)) => x.at(cells).perms(a).execute)
+}
+
+fn X86Memory::data(self x: X86Memory) → ByteReadAccess<BitVec(64) → BitVec(8)> {
+    ByteReadAccess(λ (cells: BitVec(64) → BitVec(8)) (a: BitVec(64)) => x.read(cells, a))
+}
+
+fn X86Memory::store(self x: X86Memory, cells: BitVec(64) → BitVec(8), a: BitVec(64), bytes: List<BitVec(8)>) → BitVec(64) → BitVec(8) {
+    x.at(cells).set_span(a, bytes.to_vector()).cells
+}
+
+fn X86Memory::writes(self x: X86Memory) → ByteWrites<BitVec(64) → BitVec(8)> {
+    ByteWrites(λ (cells: BitVec(64) → BitVec(8)) (a: BitVec(64)) (k: Nat) => x.at(cells).Allows(Perm::writes, a, k),
+        λ (cells: BitVec(64) → BitVec(8)) (a: BitVec(64)) (bytes: List<BitVec(8)>) => x.store(cells, a, bytes))
+}
+
+// ---------------------------------------------------------------------------
+// Reads
+
+theorem X86Memory::perm_canonical(self x: X86Memory, a: BitVec(64), low: a.toNat() < Nat::pow(2, 47)): x.perm(a) = x.perms(a) {
+    let below: (Succ(a.toNat()).leb(Nat::pow(2, 47)) = True) =
+        bool::eq_true_of_is_true(Succ(a.toNat()).leb(Nat::pow(2, 47)), Succ(a.toNat()).leb_complete(Nat::pow(2, 47), low));
+    j(sym(below), λ s _ => (match s { True => x.perms(a), False => Perm::none() }) = x.perms(a), refl)
+}
+
+// An executable address is executable in the profile: the canonical rule
+// only takes permissions away.
+theorem X86Memory::perm_executes(self x: X86Memory, a: BitVec(64), set: x.perm(a).execute = True): x.perms(a).execute = True {
+    (match Succ(a.toNat()).leb(Nat::pow(2, 47)) as λ s => (match s { True => x.perms(a), False => Perm::none() }).execute = True →
+            x.perms(a).execute = True {
+        True => λ e => e,
+        False => λ e => absurd(e),
+    })(set)
+}
+
+theorem X86Memory::read_at(self x: X86Memory, cells: BitVec(64) → BitVec(8), a: BitVec(64), readable: x.perm(a).read = True):
+    x.read(cells, a) = Some(cells(a)) {
+    j(sym(x.at(cells).read_allowed(a, readable)), λ r _ =>
+        (match r { Ok(byte) => Some(byte), Err(_) => None }) = Some<BitVec(8)>(cells(a)), refl)
+}
+
+// A read sees the cell and the permission, nothing else: memories whose
+// cell agrees there read alike.
+theorem X86Memory::read_agree(self x: X86Memory, cells, other: BitVec(64) → BitVec(8), a: BitVec(64), same: other(a) = cells(a)):
+    x.read(other, a) = x.read(cells, a) {
+    (match x.perm(a).read as λ s => (x.perm(a).read = s) → x.read(other, a) = x.read(cells, a) {
+        True => λ readable => trans(x.read_at(other, a, readable),
+            trans(cong_fn<BitVec(8), Option<BitVec(8)>>(λ b => Some(b), same), sym(x.read_at(cells, a, readable)))),
+        False => λ refused => {
+            let none: ((cells: BitVec(64) → BitVec(8)) → x.read(cells, a) = None<BitVec(8)>) = λ cells =>
+                j(sym(x.at(cells).read_refused(a, refused)), λ r _ =>
+                    (match r { Ok(byte) => Some(byte), Err(_) => None }) = None<BitVec(8)>, refl);
+            trans(none(other), sym(none(cells)))
+        },
+    })(refl)
+}
+
+// Eight reads that agree read the same word.
+theorem read_word_agree<M>(access: ByteReadAccess<M>, m, n: M, a: BitVec(64),
+    same: (t: Nat) → t < 8 → access.read(m, next_rip(a, t)) = access.read(n, next_rip(a, t))):
+    read_word(access, m, a) = read_word(access, n, a) {
+    let r = λ (memory: M) (t: Nat) => access.read(memory, next_rip(a, t));
+    j(same(0, trivial), λ x _ => read_word(access, m, a) = word_of_reads(x, r(n, 1), r(n, 2), r(n, 3), r(n, 4), r(n, 5), r(n, 6), r(n, 7)),
+    j(same(1, trivial), λ x _ => read_word(access, m, a) = word_of_reads(r(m, 0), x, r(n, 2), r(n, 3), r(n, 4), r(n, 5), r(n, 6), r(n, 7)),
+    j(same(2, trivial), λ x _ => read_word(access, m, a) = word_of_reads(r(m, 0), r(m, 1), x, r(n, 3), r(n, 4), r(n, 5), r(n, 6), r(n, 7)),
+    j(same(3, trivial), λ x _ => read_word(access, m, a) = word_of_reads(r(m, 0), r(m, 1), r(m, 2), x, r(n, 4), r(n, 5), r(n, 6), r(n, 7)),
+    j(same(4, trivial), λ x _ => read_word(access, m, a) = word_of_reads(r(m, 0), r(m, 1), r(m, 2), r(m, 3), x, r(n, 5), r(n, 6), r(n, 7)),
+    j(same(5, trivial), λ x _ => read_word(access, m, a) = word_of_reads(r(m, 0), r(m, 1), r(m, 2), r(m, 3), r(m, 4), x, r(n, 6), r(n, 7)),
+    j(same(6, trivial), λ x _ => read_word(access, m, a) = word_of_reads(r(m, 0), r(m, 1), r(m, 2), r(m, 3), r(m, 4), r(m, 5), x, r(n, 7)),
+    j(same(7, trivial), λ x _ => read_word(access, m, a) = word_of_reads(r(m, 0), r(m, 1), r(m, 2), r(m, 3), r(m, 4), r(m, 5), r(m, 6), x),
+        refl))))))))
+}
+
+// ---------------------------------------------------------------------------
+// Stores
+
+// A store leaves every cell outside its span.
+theorem X86Memory::store_outside(self x: X86Memory, cells: BitVec(64) → BitVec(8), a: BitVec(64), bytes: List<BitVec(8)>, y: BitVec(64),
+    outside: (p: Nat) → p < bytes.len() → BitVec::space(64).same(next_rip(a, p), y) = False): x.store(cells, a, bytes)(y) = cells(y) {
+    x.at(cells).get_set_span_outside(a, bytes.to_vector(), y, outside)
+}
+
+// A store that executes nowhere keeps the code resident wherever it is.
+theorem X86Memory::store_keeps_code(self x: X86Memory, cells: BitVec(64) → BitVec(8), a: BitVec(64), stored: List<BitVec(8)>,
+    data: (p: Nat) → p < stored.len() → x.perm(next_rip(a, p)).execute = False, bytes: List<BitVec(8)>):
+    (at: BitVec(64)) → CodeResident(x.fetch(), cells, bytes, at) → CodeResident(x.fetch(), x.store(cells, a, stored), bytes, at) {
+    match bytes {
+        Nil => λ at _ => trivial,
+        Cons(byte, rest) => λ at resident => {
+            let outside: ((p: Nat) → p < stored.len() → BitVec::space(64).same(next_rip(a, p), at) = False) = λ p inside =>
+                BitVec::space_laws(64).same_false(BitVec::space(64), next_rip(a, p), at, λ same =>
+                    absurd(trans(sym(j(same, λ y _ => x.perm(y).execute = False, data(p, inside))), resident.left)));
+            let read: (x.read(x.store(cells, a, stored), at) = Some(byte)) =
+                trans(x.read_agree(cells, x.store(cells, a, stored), at, x.store_outside(cells, a, stored, at, outside)), resident.right.left);
+            ⟨resident.left, ⟨read, ⟨resident.right.right.left,
+                x.store_keeps_code(cells, a, stored, data, rest, next_rip(at, 1), resident.right.right.right)⟩⟩⟩
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A data region: readable and writable, never executed, below the canonical
+// boundary
+
+record DataRegion {
+    memory: X86Memory,
+    low: BitVec(64),
+    size: Nat,
+    canonical: low.toNat() + size <= Nat::pow(2, 47),
+    data: (i: Nat) → i < size → memory.perms(next_rip(low, i)) = Perm::data(),
+}
+
+theorem canonical_below_top(): Succ(Nat::pow(2, 47)) <= Nat::pow(2, 64) {
+    Nat::leb_sound(Succ(Nat::pow(2, 47)), Nat::pow(2, 64), trivial)
+}
+
+// Inside the region an offset is plain addition.
+theorem DataRegion::toNat_at(self r: DataRegion, i: Nat, inside: i <= r.size):
+    next_rip(r.low, i).toNat() = r.low.toNat() + i {
+    let top = canonical_below_top();
+    let fits: (r.low.toNat() + i < Nat::pow(2, 64)) = omega(r.canonical, inside, top);
+    BitVec::offset_toNat(64, r.low, i, fits)
+}
+
+theorem DataRegion::perm_at(self r: DataRegion, i: Nat, inside: i < r.size): r.memory.perm(next_rip(r.low, i)) = Perm::data() {
+    let value = r.toNat_at(i, omega(inside));
+    trans(r.memory.perm_canonical(next_rip(r.low, i), omega(value, r.canonical, inside)), r.data(i, inside))
+}
+
+// `p` bytes past offset `i`, as the span forms count.
+theorem DataRegion::perm_from(self r: DataRegion, i, p: Nat, inside: i + p < r.size):
+    r.memory.perm(next_rip(next_rip(r.low, i), p)) = Perm::data() {
+    trans(cong_fn<BitVec(64), Perm>(λ y => r.memory.perm(y), rip_compose(r.low, i, p)), r.perm_at(i + p, inside))
+}
+
+// A span from offset `i` inside the region, in any memory, has every bit the
+// data permission sets.
+theorem DataRegion::allows(self r: DataRegion, allowed: Perm → Bool, set: allowed(Perm::data()) = True,
+    cells: BitVec(64) → BitVec(8), i, k: Nat, fits: i + k <= r.size): r.memory.at(cells).Allows(allowed, next_rip(r.low, i), k) {
+    λ p inside => j(sym(r.perm_from(i, p, omega(inside, fits))), λ q _ => allowed(q) = True, set)
+}
+
+theorem DataRegion::not_executed(self r: DataRegion, i, k: Nat, fits: i + k <= r.size):
+    (p: Nat) → p < k → r.memory.perm(next_rip(next_rip(r.low, i), p)).execute = False {
+    λ p inside => j(sym(r.perm_from(i, p, omega(inside, fits))), λ q _ => q.execute = False, refl)
+}
+
+// A span inside the region does not overlap itself.
+theorem DataRegion::distinct(self r: DataRegion, i, k: Nat, fits: i + k <= r.size):
+    BitVec::space(64).Distinct(next_rip(r.low, i), k) {
+    let value = r.toNat_at(i, omega(fits));
+    let top = canonical_below_top();
+    BitVec::space_distinct(64, next_rip(r.low, i), k, omega(value, fits, r.canonical, top))
+}
+
+// Two spans inside the region, one wholly below the other, share no address.
+theorem DataRegion::apart(self r: DataRegion, i, k, l, n: Nat, fi: i + k <= r.size, fl: l + n <= r.size,
+    ordered: (i + k <= l) ∨ (l + n <= i)): BitVec::space(64).Apart(next_rip(r.low, i), k, next_rip(r.low, l), n) {
+    let at_i = r.toNat_at(i, omega(fi));
+    let at_l = r.toNat_at(l, omega(fl));
+    let top = canonical_below_top();
+    match ordered as λ _ => BitVec::space(64).Apart(next_rip(r.low, i), k, next_rip(r.low, l), n) {
+        Inl(below) => BitVec::space_apart(64, next_rip(r.low, i), k, next_rip(r.low, l), n, omega(at_i, at_l, below),
+            omega(at_l, fl, r.canonical, top)),
+        Inr(above) => BitVec::space_apart_above(64, next_rip(r.low, i), k, next_rip(r.low, l), n, omega(at_i, at_l, above),
+            omega(at_i, fi, r.canonical, top)),
+    }
+}
+
+// A list stored from offset `i` reads back, byte by byte.
+theorem DataRegion::read_stored(self r: DataRegion, cells: BitVec(64) → BitVec(8), i: Nat, bytes: List<BitVec(8)>,
+    fits: i + bytes.len() <= r.size, p: Nat, byte: BitVec(8), found: bytes.nth(p) = Some(byte)):
+    r.memory.read(r.memory.store(cells, next_rip(r.low, i), bytes), next_rip(next_rip(r.low, i), p)) = Some(byte) {
+    let inside: (p < bytes.len()) = match p.lt_or_ge(bytes.len()) as λ _ => p < bytes.len() {
+        Inl(below) => below,
+        Inr(past) => absurd(trans(sym(found), bytes.nth_past_end(p, past))),
+    };
+    let readable: (r.memory.perm(next_rip(next_rip(r.low, i), p)).read = True) =
+        cong_fn<Perm, Bool>(λ q => q.read, r.perm_from(i, p, omega(inside, fits)));
+    let cell: (r.memory.store(cells, next_rip(r.low, i), bytes)(next_rip(next_rip(r.low, i), p)) = byte) =
+        r.memory.at(cells).get_set_span_list(BitVec::space_laws(64), next_rip(r.low, i), bytes, p, byte, found, r.distinct(i, bytes.len(), fits));
+    trans(r.memory.read_at(r.memory.store(cells, next_rip(r.low, i), bytes), next_rip(next_rip(r.low, i), p), readable),
+        cong_fn<BitVec(8), Option<BitVec(8)>>(λ b => Some(b), cell))
+}
+
+// ---------------------------------------------------------------------------
+// The stack a process gives its program, its laws proved from the model
+
+fn DataRegion::stack(self r: DataRegion) → Stack<BitVec(64) → BitVec(8)>(r.memory.fetch(), r.memory.data()) {
+    Stack(
+        writes := r.memory.writes(),
+        low := r.low,
+        size := r.size,
+        canonical := λ i fits => {
+            let value = r.toNat_at(i, omega(fits));
+            omega(value, fits, r.canonical)
+        },
+        writable := λ cells i fits => r.allows(Perm::writes, refl, cells, i, 8, fits),
+        stored := λ cells i fits word => {
+            let a = next_rip(r.low, i);
+            let after = r.memory.store(cells, a, word_bytes(word));
+            let o = λ (t: Nat) => r.memory.read(after, next_rip(a, t));
+            let b = λ (t: Nat) (byte: BitVec(8)) (found: word_bytes(word).nth(t) = Some(byte)) =>
+                r.read_stored(cells, i, word_bytes(word), fits, t, byte, found);
+            trans(word_of_eight(o(0), o(1), o(2), o(3), o(4), o(5), o(6), o(7),
+                    imm_byte0(word), imm_byte1(word), imm_byte2(word), imm_byte3(word),
+                    imm_byte4(word), imm_byte5(word), imm_byte6(word), imm_byte7(word),
+                    b(0, imm_byte0(word), refl), b(1, imm_byte1(word), refl), b(2, imm_byte2(word), refl), b(3, imm_byte3(word), refl),
+                    b(4, imm_byte4(word), refl), b(5, imm_byte5(word), refl), b(6, imm_byte6(word), refl), b(7, imm_byte7(word), refl)),
+                cong_fn<BitVec(64), Option<BitVec(64)>>(λ w => Some(w), immediate_bytes_roundtrip(word)))
+        },
+        apart := λ cells i k fi fk ordered word => {
+            let a = next_rip(r.low, i);
+            let after = r.memory.store(cells, a, word_bytes(word));
+            let apart = r.apart(i, 8, k, 8, fi, fk, ordered);
+            read_word_agree(r.memory.data(), after, cells, next_rip(r.low, k), λ t inside =>
+                r.memory.read_agree(cells, after, next_rip(next_rip(r.low, k), t),
+                    r.memory.store_outside(cells, a, word_bytes(word), next_rip(next_rip(r.low, k), t), λ p below => apart(p, t, below, inside))))
+        },
+        keeps_code := λ cells i fits word bytes at resident =>
+            r.memory.store_keeps_code(cells, next_rip(r.low, i), word_bytes(word), r.not_executed(i, 8, fits), bytes, at, resident),
+    )
+}

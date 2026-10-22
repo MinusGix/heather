@@ -1,0 +1,72 @@
+import x86_64;
+import x86_64_data_read;
+import x86_64_store;
+import x86_64_stack;
+import x86_64_byte_memory;
+import linux_x86_64_io;
+import linux_x86_64_wp;
+import linux_x86_64_byte_memory;
+import memory;
+import bitvec;
+import list;
+import logic;
+import nat;
+import option;
+import omega;
+
+// A profile where the whole user half is data: the canonical rule refuses
+// the rest.
+fn flat() → X86Memory { X86Memory(λ (a: BitVec(64)) => Perm::data()) }
+fn blank() → BitVec(64) → BitVec(8) { λ (a: BitVec(64)) => BitVec::zero() }
+fn at(n: Nat) → BitVec(64) { BitVec::ofNat(n) }
+
+// By evaluation, at literal addresses: a read, the kernel half refused, a
+// store read back and its neighbour kept.
+theorem flat_reads(): flat().read(blank(), at(4096)) = Some(BitVec::zero()) { refl }
+theorem flat_refuses_the_kernel_half(): flat().read(blank(), at(Nat::pow(2, 47))) = None { refl }
+theorem flat_stores(): flat().read(flat().store(blank(), at(4096), [BitVec::ofNat(7), BitVec::ofNat(9)]), at(4097)) = Some(BitVec::ofNat(9)) { refl }
+theorem flat_keeps(): flat().read(flat().store(blank(), at(4096), [BitVec::ofNat(7), BitVec::ofNat(9)]), at(4098)) = Some(BitVec::zero()) { refl }
+theorem flat_not_executable(): flat().fetch().executable(blank(), at(4096)) = False { refl }
+
+// A stack of 64 bytes at 0x10000, and its laws at a literal region.
+fn stack_region() → DataRegion {
+    DataRegion(memory := flat(), low := at(65536), size := 64,
+        canonical := Nat::leb_sound(at(65536).toNat() + 64, Nat::pow(2, 47), trivial), data := λ i _ => refl)
+}
+theorem literal_spill(w: BitVec(64)):
+    read_word(flat().data(), flat().store(blank(), next_rip(at(65536), 8), word_bytes(w)), next_rip(at(65536), 8)) = Some(w) {
+    stack_region().stack().stored(blank(), 8, { omega }, w)
+}
+
+// At an open profile, region and memory: a spill reads back, and spilling
+// below a frame leaves the frame.
+theorem spill_reload(r: DataRegion, cells: BitVec(64) → BitVec(8), i: Nat, fits: i + 8 <= r.size, w: BitVec(64)):
+    read_word(r.memory.data(), r.memory.store(cells, next_rip(r.low, i), word_bytes(w)), next_rip(r.low, i)) = Some(w) {
+    r.stack().stored(cells, i, fits, w)
+}
+theorem spill_below(r: DataRegion, cells: BitVec(64) → BitVec(8), i, from: Nat, fits: i + 8 <= r.size, below: i + 8 <= from,
+    w: BitVec(64)): r.stack().Unchanged(from, cells, r.memory.store(cells, next_rip(r.low, i), word_bytes(w))) {
+    r.stack().store_below(cells, i, from, fits, below, w)
+}
+
+// A buffer in a region: Linux's read stores at its start and the view
+// knows the buffer with the bytes there; a word load reads the buffer.
+theorem read_into(r: DataRegion, v: Nat → BitVec(8), cells: BitVec(64) → BitVec(8), holds: r.Holds(v, cells),
+    bytes: List<BitVec(8)>, fits: bytes.len() <= r.size):
+    r.Holds(r.buffer(v).set_span(0, bytes.to_vector()).cells, r.memory.store(cells, r.low, bytes)) {
+    r.store_holds(v, cells, holds, 0, bytes, omega(fits))
+}
+theorem read_into_span(r: DataRegion, v: Nat → BitVec(8), cells: BitVec(64) → BitVec(8), holds: r.Holds(v, cells)):
+    r.memory.at(cells).get_span(r.low, r.size) = r.buffer(v).get_span(0, r.size) {
+    r.holds_span(v, cells, holds)
+}
+theorem load_first(r: DataRegion, v: Nat → BitVec(8), cells: BitVec(64) → BitVec(8), holds: r.Holds(v, cells), room: 8 <= r.size):
+    Exists<BitVec(64)>(λ w => WordAt(r.memory.data(), cells, r.low, w) ∧ (w = r.buffer(v).x86_word(0))) {
+    r.buffer_view_sound().word(v, cells, r.low, λ w => w = r.buffer(v).x86_word(0), holds, Exists(0, ⟨omega(room), ⟨refl, refl⟩⟩))
+}
+// A word stored at the start of an eight-byte buffer fits it.
+theorem store_fits(r: DataRegion, v: Nat → BitVec(8), w: BitVec(64), room: r.size = 8):
+    r.buffer_view().Stores(v, r.low, word_bytes(w), λ _ => True) {
+    let eight: (word_bytes(w).len() = 8) = refl;
+    Exists(0, ⟨omega(eight, room), ⟨refl, trivial⟩⟩)
+}

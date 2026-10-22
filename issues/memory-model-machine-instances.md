@@ -1,11 +1,11 @@
 ---
 title: Instantiate the x86 access records and Stack laws from the byte memory model
-status: open
+status: closed
 labels: [stdlib,x86,memory,proofs]
 area: heather-in-heather
 milestone: [hih-memory-model]
 created: 2026-10-21
-updated: 2026-10-21
+updated: 2026-10-22
 ---
 
 `lib/std/memory.hthr` (docs/byte-memory-design.md) is a library model so far.
@@ -41,3 +41,41 @@ assumed by whoever builds the stack. This round connects the two
   The model's spans are vectors `[C; k]`. The instance needs a list-to-vector
   conversion (`[A; xs.len()]`), or a list-indexed `set_span`. Choose by which
   proofs read better.
+
+## Log
+
+- 2026-10-22: Done. `lib/std/arch/x86_64/x86_64_byte_memory.hthr` and
+  `lib/linux_x86_64_byte_memory.hthr`; tests in
+  `crates/elab/tests/x86_64_byte_memory.rs`. The decisions, against the
+  acceptance list:
+
+  - **The machine's `M` is the cells, not a whole `Memory`.** `Stack<M>`
+    states `writable`, `stored` and `keeps_code` for every `M`. Over
+    `Memory<BitVec(64), BitVec(8)>` that includes memories with no
+    permissions, where they are false. So the space and permissions are a
+    profile's (`X86Memory { perms }`), `X86Memory::at(cells)` is the model's
+    memory, and every access record goes through it: `read` as an `Option`,
+    the execute bit, `Allows(Perm::writes, …)`, `set_span`. Allocation
+    replaces the profile (design §7).
+  - **Canonical addresses**: `X86Memory::perm` gives no permission at or above
+    `2^47`, whatever the profile says. Checked by evaluation at a literal
+    profile (the first kernel-half address reads `None`), and refused as
+    `Some`.
+  - **Lists vs vectors**: `List::to_vector`, with one-cell
+    `Memory::get_set_span_list` (a list's `r`-th element at its `r`-th address)
+    and `get_span_agree` (spans of two memories agree when their cells do).
+    The list form reads better wherever the machine names bytes by
+    `nth`, which is everywhere.
+  - **`DataRegion::stack`**: a `Stack` from `size` bytes below `2^47` with
+    `Perm::data()`. `keeps_code` is the region never executing: an executable
+    code byte cannot be one a stack store writes. A region that may execute
+    is refused as a `DataRegion` (a negative control).
+  - **Buffer view**: `DataRegion::buffer_view` knows a buffer's cells `v`, the
+    buffer being `DataRegion::buffer(v)` (`Memory::buffer`'s shape), so the
+    view threads cells and the shape stays fixed. `Holds` is pointwise, and
+    `holds_span` gives the `get_span` equality. A word load reads
+    `x86_word(q)`, the machine's packing (`immediate_from_bytes`), not
+    `get_le`. Relating the two is not needed yet.
+  - **Wrapping `Distinct`**: not needed. No span inside a canonical region
+    wraps.
+- 2026-10-22: Follow-up: [[io-image-on-byte-model]], the Linux process image as an `X86Memory` profile.

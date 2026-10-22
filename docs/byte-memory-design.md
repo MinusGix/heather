@@ -155,20 +155,38 @@ are stated without a cast. `8 * Succ(k)` reduces to `8 * k + 8`, which is
   distinct from `Exited(status)`. The memory model does not depend on
   `itree`, and a fault is not encoded as an exit code. Its machine side, a
   trap or signal, belongs to `linux-syscall-trace-model`.
-- **The machine model.** x86's memory is still an abstract `M` with access
-  records (`FetchAccess<M>`, `ByteReadAccess<M>`, `ByteWrites<M>`,
-  `LinuxIo<M>`). `Memory<BitVec(64), BitVec(8)>` is meant to instantiate all
-  four: `read_byte`/`read` from `read` as an `Option`, `executable` from the
-  execute bit, `writable` as `Allows(Perm::writes, …)` and `store` as
-  `set_span`. `Stack<M>`'s laws (#106) then follow from `get_set_span`,
-  `get_set_span_apart` and the non-wrap lemmas, instead of being assumed by
-  whoever builds a stack. That instance, and a `View` over a buffer's range
-  for `Wp` (§6.1's "third view"), are the next round
-  (`issues/memory-model-machine-instances.md`).
-- **Views and footprints.** The `View` interface carries `Holds(v, m)`. A
-  view over this model holds when a range's cells are the buffer's
-  `get_span`. A separation-style footprint is `Apart` between ranges, which
-  this round supplies.
+- **The machine model.** x86's access records (`FetchAccess<M>`,
+  `ByteReadAccess<M>`, `ByteWrites<M>`, `LinuxIo<M>`) are instantiated from
+  this model (`lib/std/arch/x86_64/x86_64_byte_memory.hthr`,
+  `lib/linux_x86_64_byte_memory.hthr`;
+  `issues/memory-model-machine-instances.md`). The machine's `M` is the
+  cells, `BitVec(64) → BitVec(8)`; the space and the permissions are a
+  profile's (`X86Memory`), and `X86Memory::at(cells)` is the `Memory`. The
+  permissions sit in the profile and not in each memory value because
+  `Stack<M>` states its laws for every `M`: over whole `Memory` values a
+  memory with no permissions would be one of them, and `writable` would be
+  false of it. Allocation, which changes permissions between steps (§7),
+  replaces the profile. Reads go through `read` as an `Option`, an address
+  is executable by its execute bit, `writable` is `Allows(Perm::writes, …)`
+  and `store` is `set_span` of the list's vector (`List::to_vector`). The
+  canonical-address rule is in the permissions: at or above `2^47` an address
+  has none, whatever the profile says. `DataRegion::stack` builds the
+  `Stack<M>` of #106 from `size` bytes below `2^47` with the data permission:
+  `stored` from `get_set_span_list`, `apart` from `get_set_span_outside` and
+  `BitVec::space_apart`/`space_apart_above`, and `keeps_code` because the
+  region never executes, so no code byte is in a stored span. No span wraps
+  inside a canonical region, so the wrapping form of `Distinct` was not
+  needed.
+- **Views and footprints.** The `View` interface carries `Holds(v, m)`.
+  `DataRegion::buffer_view` (§6.1's third view) knows a buffer's cells `v`:
+  `Holds(v, cells)` says the region's cells are those of `DataRegion::buffer(v)`
+  (`Memory::buffer`'s shape) index by index, so the region's `get_span` is
+  the buffer's (`holds_span`). A load reads the buffer at the index the
+  caller names, a store (the program's, or Linux's read answer) goes in at
+  an index and the view knows the buffer with `set_span` there, and a call
+  is asked of every memory holding the buffer. `buffer_view_sound` proves it
+  against the profile's `LinuxIo`. A separation-style footprint is `Apart`
+  between ranges, which round 1 supplies.
 
 ## 7. Outside v1, and the seam for each
 
