@@ -14,10 +14,13 @@
 //! (`Hx.pair`, `Hx.J`, `Hx.elimNat`, …) to all of its annotations. The two
 //! printers are then dumb, and the only per-target trusted text is the hand
 //! written prelude (`prelude/Hx.lean`, `prelude/Hx.v`). Checked spellings
-//! (`pair@`, `fst@`, …) carry no components; they become [`Hx::Hole`]s that
-//! the target's elaborator fills from the expected or inferred type. That is
-//! the one place the prototype leans on an elaborator, and the design doc
-//! says how a typed exporter removes it.
+//! (`pair@`, `fst@`, …) carry no components. The kernel's `⌊·⌋` writes the
+//! introductions' components back before translation; `fst@`/`snd@` become
+//! the targets' own projections ([`Hx::Proj`]), which need none, and `app@`
+//! a plain application. An introduction `⌊·⌋` cannot spell becomes
+//! [`Hx::Hole`]s that the target's elaborator fills from the expected or
+//! inferred type. That is the one place the prototype leans on an
+//! elaborator, and the design doc says how a typed exporter removes it.
 
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
@@ -46,6 +49,11 @@ pub enum Hx {
     Pi(Rc<Hx>, Rc<Hx>),
     Lam(Rc<Hx>, Rc<Hx>),
     App(Rc<Hx>, Rc<Hx>),
+    /// Field `0` or `1` of a `Sig` pair, written without the pair's type:
+    /// the target reads it off the pair (Lean's `Expr.proj`, Rocq's
+    /// primitive projection). What `fst@`/`snd@` translate to, so that
+    /// `⌊·⌋` never spells a projection (design §5.6).
+    Proj(u8, Rc<Hx>),
     /// A prelude constant at explicit levels.
     Const(&'static str, Vec<Lvl>),
     /// An exported declaration, by absolute Ψ index.
@@ -108,6 +116,7 @@ fn strengthen(t: &Hx, cut: u32) -> Option<Hx> {
                 Hx::Pi(a, b) => Hx::Pi(go(a, cut, memo)?, go(b, cut + 1, memo)?),
                 Hx::Lam(a, b) => Hx::Lam(go(a, cut, memo)?, go(b, cut + 1, memo)?),
                 Hx::App(f, a) => Hx::App(go(f, cut, memo)?, go(a, cut, memo)?),
+                Hx::Proj(i, p) => Hx::Proj(*i, go(p, cut, memo)?),
                 _ => t.clone(),
             }))
         })();
@@ -132,9 +141,13 @@ fn each_node<'t>(roots: impl IntoIterator<Item = &'t Hx>, f: &mut dyn FnMut(&'t 
             continue;
         }
         f(t);
-        if let Hx::Pi(a, b) | Hx::Lam(a, b) | Hx::App(a, b) = t {
-            todo.push(b);
-            todo.push(a);
+        match t {
+            Hx::Pi(a, b) | Hx::Lam(a, b) | Hx::App(a, b) => {
+                todo.push(b);
+                todo.push(a);
+            }
+            Hx::Proj(_, p) => todo.push(p),
+            _ => {}
         }
     }
 }
@@ -187,6 +200,7 @@ fn rocq_minors_node(t: &Hx, recs: &Recs, memo: &mut Nodes<Rc<Hx>>) -> Hx {
         }
         Hx::Pi(a, b) => Hx::Pi(rocq_minors(a, recs, memo), rocq_minors(b, recs, memo)),
         Hx::Lam(a, b) => Hx::Lam(rocq_minors(a, recs, memo), rocq_minors(b, recs, memo)),
+        Hx::Proj(i, p) => Hx::Proj(*i, rocq_minors(p, recs, memo)),
         _ => t.clone(),
     }
 }
@@ -227,6 +241,7 @@ fn permute_lams(t: &Hx, order: &[usize]) -> Option<Hx> {
             Hx::Pi(a, b) => Hx::Pi(go(a, have, now, new_of, cut, memo), go(b, have, now, new_of, cut + 1, memo)),
             Hx::Lam(a, b) => Hx::Lam(go(a, have, now, new_of, cut, memo), go(b, have, now, new_of, cut + 1, memo)),
             Hx::App(f, a) => Hx::App(go(f, have, now, new_of, cut, memo), go(a, have, now, new_of, cut, memo)),
+            Hx::Proj(i, p) => Hx::Proj(*i, go(p, have, now, new_of, cut, memo)),
             _ => t.clone(),
         });
         memo.insert(key, out.clone());
@@ -572,7 +587,8 @@ impl Tr<'_> {
             Term::GlobalTm { var, subst } if subst.terms.is_empty() => {
                 let abs = self.at.checked_sub(1 + var.0 as usize)?;
                 match self.psi.bindings.get(abs)? {
-                    GlobalBinding::Tm { ctx, ty, .. } if ctx.is_empty() => Some((**ty).clone()),
+                    // A statement is scoped over its own binding's prefix of Ψ.
+                    GlobalBinding::Tm { ctx, ty, .. } if ctx.is_empty() => Some(ty.shift_global(var.0 + 1)),
                     _ => None,
                 }
             }
@@ -755,8 +771,8 @@ impl Tr<'_> {
             Term::PairAt { ty, fst, snd } => self.at_ty(ty, "pair", 2, vec![self.tm(fst)?, self.tm(snd)?])?,
             Term::InlAt { ty, val } => self.at_ty(ty, "inl", 2, vec![self.tm(val)?])?,
             Term::InrAt { ty, val } => self.at_ty(ty, "inr", 2, vec![self.tm(val)?])?,
-            Term::FstAt { pair } => app(Hx::Const("fst", vec![]), vec![Hx::Hole, Hx::Hole, self.tm(pair)?]),
-            Term::SndAt { pair } => app(Hx::Const("snd", vec![]), vec![Hx::Hole, Hx::Hole, self.tm(pair)?]),
+            Term::FstAt { pair } => Hx::Proj(0, Rc::new(self.tm(pair)?)),
+            Term::SndAt { pair } => Hx::Proj(1, Rc::new(self.tm(pair)?)),
             Term::AppAt { fun, arg } => app(self.tm(fun)?, vec![self.tm(arg)?]),
             // ---- Unit, Empty, sums ----
             Term::Triv { level } => konst("tt", &[level], vec![])?,
@@ -1052,6 +1068,7 @@ enum Node {
     Pi(usize, usize),
     Lam(usize, usize),
     App(usize, usize),
+    Proj(u8, usize),
     Leaf(Hx),
 }
 
@@ -1075,6 +1092,10 @@ impl Interned {
                     _ => Hx::App(a, b),
                 };
                 (key, rebuilt)
+            }
+            Hx::Proj(i, p) => {
+                let p = self.node(p, memo);
+                (Node::Proj(*i, addr(&p)), Hx::Proj(*i, p))
             }
             leaf => (Node::Leaf(leaf.clone()), leaf.clone()),
         };
@@ -1230,6 +1251,7 @@ impl Printer {
             Hx::Const(..) | Hx::Global(_) | Hx::Named(..) => self.target == Target::Lean,
             Hx::Sort(_) => self.target == Target::Coq,
             Hx::Pi(..) | Hx::Lam(..) | Hx::App(..) => false,
+            Hx::Proj(..) => self.target == Target::Lean,
         };
         let open = arg && !atom;
         if open {
@@ -1278,6 +1300,24 @@ impl Printer {
                 let _ = write!(self.out, "({n} : Hx.Nat)");
             }
             Hx::Hole => self.out.push('_'),
+            Hx::Proj(i, p) => {
+                // `@Hx.c.1` would read as one name; only a variable or
+                // another projection goes bare.
+                let bare = matches!(**p, Hx::Var(_) | Hx::Proj(..));
+                if !bare {
+                    self.out.push('(');
+                }
+                self.term(p, depth, false);
+                if !bare {
+                    self.out.push(')');
+                }
+                let _ = match self.target {
+                    Target::Lean => write!(self.out, ".{}", i + 1),
+                    // Rocq's primitive projection takes the record's
+                    // parameters, which it infers from the pair.
+                    Target::Coq => write!(self.out, ".(@Hx.{} _ _)", if *i == 0 { "fst_" } else { "snd_" }),
+                };
+            }
         }
         if open {
             self.out.push(')');
@@ -1645,6 +1685,7 @@ impl Dag {
                 s
             }
             Hx::NatLit(n) => format!("n\t{n}"),
+            Hx::Proj(i, p) => format!("j\t{i}\t{}", self.node(p)?),
             Hx::Hole => return Err("a hole (a component only the target's elaborator can infer)".into()),
         };
         let next = self.ids.len();

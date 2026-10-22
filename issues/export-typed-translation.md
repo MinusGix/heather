@@ -91,5 +91,6 @@ declarations need nothing from the target's unifier.
   the kernel term's sharing now (memoised per node and binder context,
   hash-consed across declarations; design §5.6), and `⌊·⌋` for export
   leaves `app@` unspelled. Left for "done": the eta-long invariant as a
-  typed pass (Rocq's `is_true_unique`) and the spelling cost of
-  [[export-spelling-cost]].
+  typed pass (Rocq's `is_true_unique`); the spelling cost
+  ([[export-spelling-cost]]) closed 2026-10-22 by leaving projections
+  unspelled.

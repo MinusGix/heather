@@ -29,6 +29,16 @@ fn Tree::mirror(self t: Tree) → Tree { match t { Leaf => Leaf, Node(l, r) => N
 theorem Tree::size_mirror_node(l: Tree, r: Tree): Node(l, r).mirror().size() = Nat::add(r.mirror().size(), l.mirror().size()) {
     refl
 }
+class Rel<A>(R: A → A → Type) {
+    rel_refl: (x: A) → R(x, x),
+    rel_sym: (x, y: A) → R(x, y) → R(y, x),
+}
+class Rel2<A>(R: A → A → Type) extends Rel<A>(R) {
+    rel_trans: (x, y, z: A) → R(x, y) → R(y, z) → R(x, z),
+}
+theorem Rel2::loop<A: Rel2(R)>(R: A → A → Type, x: A): R(x, x) {
+    A.rel_trans(x, x, x, A.rel_sym(x, x, A.rel_refl(x)), A.rel_refl(x))
+}
 "#;
 
 #[test]
@@ -50,11 +60,18 @@ fn nat_and_enum_export_without_refusal() {
     assert!(assumed.is_empty(), "exported as axioms: {assumed:?}");
     let lean = print(Target::Lean, &decls);
     assert!(lean.contains("def Heather.main.Nat.add_assoc :"), "{lean}");
+    // A class's fields are projections of its record, which the targets
+    // type themselves: `⌊·⌋` leaves them, and the kernel route writes each as
+    // `Expr.proj` with nothing skipped (issues/export-spelling-cost.md).
+    let kernel = print_kernel(&decls);
+    assert!(kernel.lines().any(|l| l.starts_with("j\t")), "no projection in:\n{kernel}");
+    let skipped: Vec<&str> = kernel.lines().filter(|l| l.starts_with("x\t")).collect();
+    assert!(skipped.is_empty(), "skipped by the kernel route:\n{}", skipped.join("\n"));
     if let Some(dir) = std::env::var_os("HEATHER_EXPORT_OUT") {
         let dir = std::path::PathBuf::from(dir);
         std::fs::write(dir.join("Exported.lean"), lean).unwrap();
         std::fs::write(dir.join("Exported.v"), print(Target::Coq, &decls)).unwrap();
-        std::fs::write(dir.join("Exported.hxk"), print_kernel(&decls)).unwrap();
+        std::fs::write(dir.join("Exported.hxk"), kernel).unwrap();
     }
 }
 

@@ -13,6 +13,8 @@ Line format, tab-separated; node lines are numbered from 0 in order:
   p a b      `(x : #a) → #b`
   l a b      `fun (x : #a) => #b`
   a f x      application
+  j i e      field `i` of the `Hx.Sig` pair `#e` (`Expr.proj`: the kernel
+             reads the pair's type off `#e`)
   c n l…     prelude constant `Hx.n` at levels l…
   g k l…     an exported declaration, Heather key `k` (`nat::Nat::add`), at
              raw levels l… (only a native inductive's recursor has any)
@@ -72,6 +74,7 @@ def step (st : St) (line : String) : IO St := do
   | ["p", a, b] => push (return .forallE `x (← node st a) (← node st b) .default)
   | ["l", a, b] => push (return .lam `x (← node st a) (← node st b) .default)
   | ["a", f, x] => push (return .app (← node st f) (← node st x))
+  | ["j", i, e] => push (return .proj `Hx.Sig (← lit i) (← node st e))
   | "c" :: n :: ls => push (return .const (Name.str `Hx n) (← ls.mapM fun l => return .ofNat (← lit l)))
   | "g" :: k :: ls => push (return .const (heatherName k) (← ls.mapM fun l => return .ofNat (← lit l)))
   | ["n", d] => push (return .lit (.natVal (← lit d)))
