@@ -37,6 +37,12 @@ run, as before. A larger one is built from its limbs by doubling:
 over that, and the low limb is appended — `O(bits)` shared nodes, which is
 what `ContextProgram` already produces when arithmetic overflows a run.
 
+Comparison (2026-10-22, `issues/kernel-wide-run-comparison.md`): every
+composed node carries its length, so `leb`, `sub` and conversion cancel two
+numbers by their lengths and cut the longer one along one path — `O(bits)`
+however the two were built. Before, numbers built by different routes were
+walked one `≤ 2^63` fragment at a time and ran out of fuel near `2^96`.
+
 ## 3. Surface and elaborator
 
 The lexer reads any digit string in all four radixes into a `Numeral`

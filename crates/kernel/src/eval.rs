@@ -46,7 +46,6 @@
 //! every `El` decode, every `Vec`/`Fin` unfold, every δ-unfold. Exhaustion is
 //! [`OutOfFuel`] and is never a verdict.
 
-use std::num::NonZeroU64;
 use std::sync::Arc as Rc;
 
 use crate::level::Level;
@@ -2636,27 +2635,10 @@ pub fn whnf_value_ty<'v>(
 
 /// The run program a nonzero literal evaluates to
 /// (`docs/wide-numerals-design.md` §2): one saturated run up to `u64::MAX`;
-/// above it, the value's bits from the top by doubling and incrementing.
-/// [`ContextProgram::append`] merges runs while their counts add in a `u64`
-/// and composes them, shared, past that, so the top 64 bits become one run
-/// and each further bit adds a node — `O(bits)`, the shape arithmetic that
-/// overflows a run already produces.
+/// above it, the value's bits from the top by doubling and incrementing
+/// ([`ContextProgram::of_count`]).
 fn nat_lit_program(n: &crate::term::Numeral) -> Rc<ContextProgram<()>> {
-    if let Some(count) = n.as_u64() {
-        return ContextProgram::run((), NonZeroU64::new(count).expect("a nonzero literal"));
-    }
-    let one = || ContextProgram::run((), NonZeroU64::MIN);
-    let mut acc: Option<Rc<ContextProgram<()>>> = None;
-    for i in (0..n.bits()).rev() {
-        acc = acc.map(|a| ContextProgram::append(Rc::clone(&a), a));
-        if n.bit(i) {
-            acc = Some(match acc {
-                None => one(),
-                Some(a) => ContextProgram::append(one(), a),
-            });
-        }
-    }
-    acc.expect("a nonzero literal has a set bit")
+    ContextProgram::of_count((), n)
 }
 
 /// The closure a variable term is bound to in `env`, seen through closures
@@ -2893,7 +2875,7 @@ mod tests {
             }
             let n = match &**program {
                 ContextProgram::Run { count, .. } => count.get() as u128,
-                ContextProgram::Compose { outer, inner } => go(outer, memo) + go(inner, memo),
+                ContextProgram::Compose { outer, inner, .. } => go(outer, memo) + go(inner, memo),
             };
             memo.insert(Rc::as_ptr(program), n);
             n

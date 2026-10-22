@@ -10,13 +10,25 @@ use std::fmt;
 use std::num::NonZeroU64;
 use std::sync::Arc as Rc;
 
+use heather_numeral::Numeral;
+
 use crate::fmt::node;
 
 /// A shared straight-line program for one-hole constructor contexts.
 pub enum ContextProgram<C> {
     Run { context: C, count: NonZeroU64 },
-    /// `outer(inner[-])`.
-    Compose { outer: Rc<ContextProgram<C>>, inner: Rc<ContextProgram<C>> },
+    /// `outer(inner[-])`. Built only by [`ContextProgram::compose`], which
+    /// fills in the two summaries every walk would otherwise recompute:
+    /// `len`, how many contexts the composition holds, and `uniform`, the
+    /// one context every run below repeats, when there is one. A wide
+    /// number is a uniform program, so its length is read here, not counted
+    /// over its graph.
+    Compose {
+        outer: Rc<ContextProgram<C>>,
+        inner: Rc<ContextProgram<C>>,
+        len: Numeral,
+        uniform: Option<C>,
+    },
 }
 
 /// Residual programs after cancelling an equal outer prefix.
@@ -116,6 +128,12 @@ impl<C: Clone + Eq> Bisimulation<C> {
                     }
                     budget.spend()?;
                     self.retained.extend([Rc::clone(&left), Rc::clone(&right)]);
+                    // Programs of different lengths denote different
+                    // contexts, whatever their shapes.
+                    if left.len() != right.len() {
+                        self.memo.insert(key, false);
+                        continue;
+                    }
                     match (&*left, &*right) {
                         (
                             ContextProgram::Run { context: lc, count: ln },
@@ -124,8 +142,8 @@ impl<C: Clone + Eq> Bisimulation<C> {
                             self.memo.insert(key, lc == rc && ln == rn);
                         }
                         (
-                            ContextProgram::Compose { outer: lo, inner: li },
-                            ContextProgram::Compose { outer: ro, inner: ri },
+                            ContextProgram::Compose { outer: lo, inner: li, .. },
+                            ContextProgram::Compose { outer: ro, inner: ri, .. },
                         ) => {
                             let outer = Self::key(lo, ro);
                             let inner = Self::key(li, ri);
@@ -153,9 +171,63 @@ impl<C: Clone + Eq> Bisimulation<C> {
     }
 }
 
+/// `a + b` over counts.
+fn count_add(a: &Numeral, b: &Numeral) -> Numeral {
+    if let (Some(a), Some(b)) = (a.as_u64(), b.as_u64()) {
+        if let Some(sum) = a.checked_add(b) {
+            return Numeral::from_u64(sum);
+        }
+    }
+    let (a, b) = (a.limbs(), b.limbs());
+    let mut out = Vec::with_capacity(a.len().max(b.len()) + 1);
+    let mut carry = false;
+    for i in 0..a.len().max(b.len()) {
+        let (x, c1) = a.get(i).copied().unwrap_or(0).overflowing_add(b.get(i).copied().unwrap_or(0));
+        let (x, c2) = x.overflowing_add(u64::from(carry));
+        out.push(x);
+        carry = c1 || c2;
+    }
+    out.push(u64::from(carry));
+    Numeral::from_limbs(out)
+}
+
+/// `a - b` over counts, for `b <= a`.
+fn count_sub(a: &Numeral, b: &Numeral) -> Numeral {
+    debug_assert!(b <= a);
+    if let (Some(a), Some(b)) = (a.as_u64(), b.as_u64()) {
+        return Numeral::from_u64(a - b);
+    }
+    let (a, b) = (a.limbs(), b.limbs());
+    let mut out = Vec::with_capacity(a.len());
+    let mut borrow = false;
+    for (i, &x) in a.iter().enumerate() {
+        let (x, b1) = x.overflowing_sub(b.get(i).copied().unwrap_or(0));
+        let (x, b2) = x.overflowing_sub(u64::from(borrow));
+        out.push(x);
+        borrow = b1 || b2;
+    }
+    debug_assert!(!borrow);
+    Numeral::from_limbs(out)
+}
+
+/// A cursor's front once it is known to repeat one context: the program
+/// standing for it, a run or a uniform composition, and its length.
+///
+/// Two numbers built by different routes are not bisimilar node for node,
+/// and a cursor that opened them fragment by fragment paid their value over
+/// the largest run (`issues/kernel-wide-run-comparison.md`). A uniform
+/// front is never opened: everything about it is its context and its
+/// length, so two such fronts cancel by one subtraction, and only the
+/// longer one is cut, along one path.
+struct Front<C> {
+    context: C,
+    program: Rc<ContextProgram<C>>,
+    len: Numeral,
+}
+
 struct Cursor<C> {
     pending: Vec<Rc<ContextProgram<C>>>,
-    run: Option<(C, NonZeroU64)>,
+    run: Option<Front<C>>,
 }
 
 impl<C: Clone + Eq> Cursor<C> {
@@ -172,34 +244,57 @@ impl<C: Clone + Eq> Cursor<C> {
         self.pending.pop();
     }
 
+    /// Make the next piece the front when it repeats one context, a run or
+    /// a uniform composition alike, and open a mixed composition otherwise.
     fn step(&mut self, budget: &mut InspectionBudget) -> Result<(), CancellationExhausted> {
         if self.run.is_some() {
             return Ok(());
         }
         let Some(program) = self.pending.pop() else { return Ok(()) };
         budget.spend()?;
-        match &*program {
-            ContextProgram::Run { context, count } => {
-                self.run = Some((context.clone(), *count));
-            }
-            ContextProgram::Compose { outer, inner } => {
-                self.pending.push(Rc::clone(inner));
-                self.pending.push(Rc::clone(outer));
-            }
+        if let Some(context) = program.uniform() {
+            let (context, len) = (context.clone(), program.len());
+            self.run = Some(Front { context, program, len });
+            return Ok(());
         }
+        let ContextProgram::Compose { outer, inner, .. } = &*program else {
+            unreachable!("a run repeats its context")
+        };
+        self.pending.push(Rc::clone(inner));
+        self.pending.push(Rc::clone(outer));
         Ok(())
     }
 
-    fn consume(&mut self, count: u64) {
-        let (_, old) = self.run.as_ref().expect("consume follows next");
-        self.run = NonZeroU64::new(old.get() - count)
-            .map(|rest| (self.run.as_ref().unwrap().0.clone(), rest));
+    /// Absorb the following piece into the front when it repeats the
+    /// front's context; `false` when it does not, or there is none.
+    fn widen(&mut self) -> bool {
+        let front = self.run.as_mut().expect("widen follows step");
+        let Some(next) = self.pending.last() else { return false };
+        if next.uniform() != Some(&front.context) {
+            return false;
+        }
+        let next = self.pending.pop().unwrap();
+        front.len = count_add(&front.len, &next.len());
+        front.program = ContextProgram::append(Rc::clone(&front.program), next);
+        true
+    }
+
+    /// Drop `k` contexts, at most the front's length, from the front.
+    fn consume(&mut self, k: &Numeral, budget: &mut InspectionBudget) -> Result<(), CancellationExhausted> {
+        let front = self.run.as_mut().expect("consume follows step");
+        if *k == front.len {
+            self.run = None;
+            return Ok(());
+        }
+        front.program = ContextProgram::drop_prefix(&front.program, k.clone(), budget)?;
+        front.len = count_sub(&front.len, k);
+        Ok(())
     }
 
     fn remainder(mut self) -> Option<Rc<ContextProgram<C>>> {
         let mut pieces = Vec::with_capacity(self.pending.len() + usize::from(self.run.is_some()));
-        if let Some((context, count)) = self.run.take() {
-            pieces.push(ContextProgram::run(context, count));
+        if let Some(front) = self.run.take() {
+            pieces.push(front.program);
         }
         while let Some(piece) = self.pending.pop() {
             pieces.push(piece);
@@ -223,7 +318,7 @@ impl<C: fmt::Debug> fmt::Debug for ContextProgram<C> {
             ContextProgram::Run { context, count } => {
                 write!(f, "run({context:?}; {count})")
             }
-            ContextProgram::Compose { outer, inner } => {
+            ContextProgram::Compose { outer, inner, .. } => {
                 write!(f, "compose({outer:?}; {inner:?})")
             }
         })
@@ -231,77 +326,29 @@ impl<C: fmt::Debug> fmt::Debug for ContextProgram<C> {
 }
 
 impl<C> ContextProgram<C> {
+    /// How many contexts `program` holds.
+    pub fn len(&self) -> Numeral {
+        match self {
+            ContextProgram::Run { count, .. } => Numeral::from_u64(count.get()),
+            ContextProgram::Compose { len, .. } => len.clone(),
+        }
+    }
+
+    /// The context every run below repeats, when there is one.
+    pub fn uniform(&self) -> Option<&C> {
+        match self {
+            ContextProgram::Run { context, .. } => Some(context),
+            ContextProgram::Compose { uniform, .. } => uniform.as_ref(),
+        }
+    }
+
     /// The exact number of contexts represented by `program`, provided it is
-    /// at most `limit`. Shared composition nodes are counted once and reused,
-    /// so asking about an exponentially denoting DAG costs its graph size,
-    /// not its denotation size. `None` means only "larger than the bound".
+    /// at most `limit`; read off the node, whatever the size of its graph.
+    /// `None` means only "larger than the bound".
     pub fn repetition_count_up_to(program: &Rc<Self>, limit: u64) -> Option<u64> {
-        #[derive(Clone, Copy)]
-        enum Count {
-            Visiting,
-            Exact(u64),
-            TooLarge,
-        }
-
-        enum Visit<C> {
-            Enter(Rc<ContextProgram<C>>),
-            Finish(Rc<ContextProgram<C>>),
-        }
-
-        type Key<C> = *const ContextProgram<C>;
-        // The root retains the whole immutable DAG until this function
-        // returns, so none of these identity keys can be freed or reused.
-        // They are compared and hashed only, never dereferenced.
-        let key = |program: &Rc<Self>| Rc::as_ptr(program);
-        let mut counts = HashMap::<Key<C>, Count>::new();
-        let mut work = vec![Visit::Enter(Rc::clone(program))];
-        while let Some(visit) = work.pop() {
-            match visit {
-                Visit::Enter(program) => {
-                    let k = key(&program);
-                    if counts.contains_key(&k) {
-                        continue;
-                    }
-                    match &*program {
-                        ContextProgram::Run { count, .. } => {
-                            let count = count.get();
-                            counts.insert(
-                                k,
-                                if count <= limit {
-                                    Count::Exact(count)
-                                } else {
-                                    Count::TooLarge
-                                },
-                            );
-                        }
-                        ContextProgram::Compose { outer, inner } => {
-                            counts.insert(k, Count::Visiting);
-                            work.push(Visit::Finish(Rc::clone(&program)));
-                            work.push(Visit::Enter(Rc::clone(outer)));
-                            work.push(Visit::Enter(Rc::clone(inner)));
-                        }
-                    }
-                }
-                Visit::Finish(program) => {
-                    let ContextProgram::Compose { outer, inner } = &*program else {
-                        unreachable!("only compositions schedule a finish visit")
-                    };
-                    let sum = match (counts.get(&key(outer)), counts.get(&key(inner))) {
-                        (Some(Count::Exact(outer)), Some(Count::Exact(inner))) => outer
-                            .checked_add(*inner)
-                            .filter(|count| *count <= limit)
-                            .map_or(Count::TooLarge, Count::Exact),
-                        (Some(Count::TooLarge), _) | (_, Some(Count::TooLarge)) => Count::TooLarge,
-                        _ => unreachable!("children finish before their composition"),
-                    };
-                    counts.insert(key(&program), sum);
-                }
-            }
-        }
-        match counts.get(&key(program)) {
-            Some(Count::Exact(count)) => Some(*count),
-            Some(Count::TooLarge) => None,
-            _ => unreachable!("root count is complete"),
+        match &**program {
+            ContextProgram::Run { count, .. } => Some(count.get()).filter(|n| *n <= limit),
+            ContextProgram::Compose { len, .. } => len.as_u64().filter(|n| *n <= limit),
         }
     }
 }
@@ -321,14 +368,16 @@ impl<C: Clone + Eq> ContextProgram<C> {
                 }
             }
         }
-        Rc::new(ContextProgram::Compose {
-            outer: Self::run(context, count),
-            inner,
-        })
+        Self::compose(Self::run(context, count), inner)
     }
 
     pub fn compose(outer: Rc<Self>, inner: Rc<Self>) -> Rc<Self> {
-        Rc::new(ContextProgram::Compose { outer, inner })
+        let len = count_add(&outer.len(), &inner.len());
+        let uniform = match (outer.uniform(), inner.uniform()) {
+            (Some(o), Some(i)) if o == i => Some(o.clone()),
+            _ => None,
+        };
+        Rc::new(ContextProgram::Compose { outer, inner, len, uniform })
     }
 
     /// `outer` outside `inner`, merged into one saturated run when both are
@@ -364,11 +413,75 @@ impl<C: Clone + Eq> ContextProgram<C> {
                     ContextProgram::Run { context: rc, count: rn },
                 ) => lc == rc && ln == rn,
                 (
-                    ContextProgram::Compose { outer: lo, inner: li },
-                    ContextProgram::Compose { outer: ro, inner: ri },
+                    ContextProgram::Compose { outer: lo, inner: li, .. },
+                    ContextProgram::Compose { outer: ro, inner: ri, .. },
                 ) => Rc::ptr_eq(lo, ro) && Rc::ptr_eq(li, ri),
                 _ => false,
             }
+    }
+
+    /// `context` repeated `n` times, for `n > 0`, in the canonical shape:
+    /// doubling from the top bit, [`ContextProgram::append`] merging runs
+    /// while their counts add in a `u64` and composing them, shared, past
+    /// that, so the top 64 bits become one run and each further bit adds at
+    /// most two nodes — `O(bits)`, the shape arithmetic that overflows a
+    /// run already produces.
+    pub fn of_count(context: C, n: &Numeral) -> Rc<Self> {
+        if let Some(count) = n.as_u64() {
+            return Self::run(context, NonZeroU64::new(count).expect("a nonzero count"));
+        }
+        let one = || Self::run(context.clone(), NonZeroU64::MIN);
+        let mut acc: Option<Rc<Self>> = None;
+        for i in (0..n.bits()).rev() {
+            acc = acc.map(|a| Self::append(Rc::clone(&a), a));
+            if n.bit(i) {
+                acc = Some(match acc {
+                    None => one(),
+                    Some(a) => Self::append(one(), a),
+                });
+            }
+        }
+        acc.expect("a nonzero count has a set bit")
+    }
+
+    /// `program` without its outer `k` contexts, for `0 < k < len(program)`
+    /// over a uniform `program`. One path is descended and rebuilt, so the
+    /// residual shares every subprogram off that path; each composition on
+    /// the path is one inspection.
+    fn drop_prefix(
+        program: &Rc<Self>,
+        mut k: Numeral,
+        budget: &mut InspectionBudget,
+    ) -> Result<Rc<Self>, CancellationExhausted> {
+        let mut current = Rc::clone(program);
+        let mut inners = Vec::new();
+        let mut rest = loop {
+            if k.is_zero() {
+                break current;
+            }
+            match &*current {
+                ContextProgram::Run { context, count } => {
+                    let k = k.as_u64().expect("k is below this run's count");
+                    break Self::run(context.clone(), NonZeroU64::new(count.get() - k).unwrap());
+                }
+                ContextProgram::Compose { outer, inner, .. } => {
+                    budget.spend()?;
+                    let skipped = outer.len();
+                    let (outer, inner) = (Rc::clone(outer), Rc::clone(inner));
+                    if k >= skipped {
+                        k = count_sub(&k, &skipped);
+                        current = inner;
+                    } else {
+                        inners.push(inner);
+                        current = outer;
+                    }
+                }
+            }
+        };
+        while let Some(inner) = inners.pop() {
+            rest = Self::append(rest, inner);
+        }
+        Ok(rest)
     }
 
     /// Cancel an equal sequence of outer contexts without visiting its
@@ -403,6 +516,15 @@ impl<C: Clone + Eq> ContextProgram<C> {
                 let (Some(l), Some(r)) = (left.front(), right.front()) else {
                     break;
                 };
+                // Two fronts that each repeat one context, the same one,
+                // are compared by length below, which decides everything a
+                // bisimulation would and costs their graphs, not their
+                // product.
+                if let (Some(lc), Some(rc)) = (l.uniform(), r.uniform()) {
+                    if lc == rc {
+                        break;
+                    }
+                }
                 if !bisimulation.equivalent(l, r, &mut budget)? {
                     break;
                 }
@@ -422,16 +544,34 @@ impl<C: Clone + Eq> ContextProgram<C> {
             {
                 continue;
             }
-            let (Some((lc, ln)), Some((rc, rn))) = (left.run.clone(), right.run.clone()) else {
+            let (Some(l), Some(r)) = (&left.run, &right.run) else {
                 break;
             };
-            if lc != rc {
+            if l.context != r.context {
                 break;
             }
-            let count = ln.get().min(rn.get());
-            cancelled.push(Self::run(lc, NonZeroU64::new(count).unwrap()));
-            left.consume(count);
-            right.consume(count);
+            // Widen the shorter front while it is the shorter one: only
+            // the common length is cancelled, so the longer side is never
+            // analysed past it, and a short number against a wide one
+            // costs the short one.
+            loop {
+                let (l, r) = (left.run.as_ref().unwrap(), right.run.as_ref().unwrap());
+                let grew = match l.len.cmp(&r.len) {
+                    std::cmp::Ordering::Less => left.widen(),
+                    std::cmp::Ordering::Greater => right.widen(),
+                    std::cmp::Ordering::Equal => false,
+                };
+                if !grew {
+                    break;
+                }
+            }
+            let (l, r) = (left.run.as_ref().unwrap(), right.run.as_ref().unwrap());
+            // The shorter front is exactly the cancelled stretch.
+            let shorter = if l.len <= r.len { l } else { r };
+            let count = shorter.len.clone();
+            cancelled.push(Rc::clone(&shorter.program));
+            left.consume(&count, &mut budget)?;
+            right.consume(&count, &mut budget)?;
             changed = true;
         }
         let cancelled = cancelled
@@ -467,12 +607,51 @@ impl<C: Clone + Eq> ContextProgram<C> {
                     }
                     return (context, rest);
                 }
-                ContextProgram::Compose { outer, inner } => {
+                ContextProgram::Compose { outer, inner, .. } => {
                     inners.push(Rc::clone(inner));
                     current = outer;
                 }
             }
         }
+    }
+}
+
+impl ContextProgram<()> {
+    /// The same count in the canonical `O(bits)` shape
+    /// ([`ContextProgram::of_count`]) when `program`'s graph has grown past
+    /// it, and `program` itself otherwise.
+    ///
+    /// Arithmetic over runs keeps sharing but not shape: iterating an
+    /// algebra over a program builds the result's graph from the input's,
+    /// so a chain of folds (`half` of `half` of …) can grow the graph of
+    /// a 150-bit number to thousands of nodes, and every later fold, walk
+    /// or cancellation pays for each one. Over `()` a program is nothing
+    /// but its count, so rebuilding it from the count is the same value —
+    /// a representation change whose adequacy argument is that equality.
+    /// The check stops one node past the canonical size.
+    pub fn compact(program: &Rc<Self>) -> Rc<Self> {
+        let ContextProgram::Compose { len, .. } = &**program else {
+            return Rc::clone(program);
+        };
+        // The canonical shape has at most two nodes per bit.
+        let bound = (2 * len.bits() + 2) as usize;
+        // The root retains the whole DAG while this runs, so no key is
+        // freed and reused underneath the set.
+        let mut seen = std::collections::HashSet::new();
+        let mut work = vec![program];
+        while let Some(node) = work.pop() {
+            if !seen.insert(Rc::as_ptr(node)) {
+                continue;
+            }
+            if seen.len() > bound {
+                return Self::of_count((), len);
+            }
+            if let ContextProgram::Compose { outer, inner, .. } = &**node {
+                work.push(outer);
+                work.push(inner);
+            }
+        }
+        Rc::clone(program)
     }
 }
 
@@ -617,16 +796,43 @@ mod tests {
         assert!(cancelled.right.is_none());
     }
 
+    /// Two uniform DAGs are compared by length: one visit per node of
+    /// each graph, never one per represented constructor.
     #[test]
-    fn independently_allocated_exponential_dags_cancel_by_bisimulation() {
+    fn independently_allocated_exponential_dags_cancel_in_their_graph_size() {
         let left = doubling('s', 64);
         let right = doubling('s', 64);
         assert!(!Rc::ptr_eq(&left, &right));
-        let cancelled = ContextProgram::cancel_matching_prefix(left, right, 64).unwrap();
+        let cancelled = ContextProgram::cancel_matching_prefix(left, right, 256).unwrap();
         assert!(cancelled.changed);
         assert!(cancelled.left.is_none());
         assert!(cancelled.right.is_none());
-        assert_eq!(cancelled.inspected, 64);
+        assert!(cancelled.inspected <= 2 * 65 + 2, "{}", cancelled.inspected);
+    }
+
+    /// Mixed programs, whose fronts do not each repeat one context, still
+    /// skip a common DAG prefix by bisimulation.
+    #[test]
+    fn mixed_programs_cancel_a_bisimilar_prefix() {
+        let mixed = |depth| {
+            let mut program = ContextProgram::compose(
+                ContextProgram::run('s', n(1)),
+                ContextProgram::run('x', n(1)),
+            );
+            for _ in 0..depth {
+                program = ContextProgram::compose(Rc::clone(&program), program);
+            }
+            program
+        };
+        let left = ContextProgram::compose(mixed(64), ContextProgram::run('x', n(3)));
+        let right = ContextProgram::compose(mixed(64), ContextProgram::run('y', n(3)));
+        let cancelled = ContextProgram::cancel_matching_prefix(left, right, 1_000).unwrap();
+        assert!(cancelled.changed);
+        assert!(cancelled.inspected <= 400, "{}", cancelled.inspected);
+        assert!(matches!(cancelled.left.as_deref(),
+            Some(ContextProgram::Run { context: 'x', count }) if count.get() == 3));
+        assert!(matches!(cancelled.right.as_deref(),
+            Some(ContextProgram::Run { context: 'y', count }) if count.get() == 3));
     }
 
     #[test]
@@ -639,13 +845,129 @@ mod tests {
             doubling('s', 64),
             ContextProgram::run('y', n(u64::MAX)),
         );
-        let cancelled = ContextProgram::cancel_matching_prefix(left, right, 80).unwrap();
-        assert!(cancelled.inspected <= 72, "{}", cancelled.inspected);
+        let cancelled = ContextProgram::cancel_matching_prefix(left, right, 400).unwrap();
+        assert!(cancelled.inspected <= 3 * 67 + 8, "{}", cancelled.inspected);
         assert!(cancelled.changed);
         assert!(matches!(cancelled.left.as_deref(),
             Some(ContextProgram::Run { context: 'x', count }) if count.get() == u64::MAX));
         assert!(matches!(cancelled.right.as_deref(),
             Some(ContextProgram::Run { context: 'y', count }) if count.get() == u64::MAX));
+    }
+
+    /// `n` as a program the way a wide literal is built: doubling from the
+    /// top bit, merging runs while they fit a `u64`.
+    fn by_bits(context: char, n: &[u64]) -> Rc<ContextProgram<char>> {
+        let n = heather_numeral::Numeral::from_limbs(n.to_vec());
+        let one = || ContextProgram::run(context, n_(1));
+        let mut acc: Option<Rc<ContextProgram<char>>> = None;
+        for i in (0..n.bits()).rev() {
+            acc = acc.map(|a| ContextProgram::append(Rc::clone(&a), a));
+            if n.bit(i) {
+                acc = Some(match acc {
+                    None => one(),
+                    Some(a) => ContextProgram::append(one(), a),
+                });
+            }
+        }
+        acc.unwrap()
+    }
+
+    fn n_(value: u64) -> NonZeroU64 {
+        n(value)
+    }
+
+    /// Two numbers built by different routes are not bisimilar node for
+    /// node; their common prefix still cancels by counting, in work
+    /// proportional to their graphs, not to their value over `2^63`.
+    #[test]
+    fn differently_built_wide_numbers_cancel_by_their_counts() {
+        // 2^200 + 1 against 2^200: off by one at the outermost run, so no
+        // pair of nodes lines up after the first fragment.
+        let left = by_bits('s', &[1, 0, 0, 1 << 8]);
+        let right = by_bits('s', &[0, 0, 0, 1 << 8]);
+        let cancelled = ContextProgram::cancel_matching_prefix(left, right, 2_000).unwrap();
+        assert!(cancelled.right.is_none());
+        assert!(matches!(cancelled.left.as_deref(),
+            Some(ContextProgram::Run { count, .. }) if count.get() == 1));
+        assert!(cancelled.inspected < 1_000, "{}", cancelled.inspected);
+
+        // The same 2^148 as a literal and as one successor on 2^148 - 1:
+        // misaligned by one at every level, but bisimilar in places, the
+        // walk that opened fronts node by node visited the value's tree.
+        let left = by_bits('s', &[0, 0, 1 << 20]);
+        let right = ContextProgram::compose(
+            ContextProgram::run('s', n_(1)),
+            by_bits('s', &[u64::MAX, u64::MAX, (1 << 20) - 1]),
+        );
+        let cancelled = ContextProgram::cancel_matching_prefix(left, right, 1 << 20).unwrap();
+        assert!(cancelled.left.is_none() && cancelled.right.is_none());
+        assert!(cancelled.inspected < 2_000, "{}", cancelled.inspected);
+
+        // Doubling against a literal's construction of the same 2^64,
+        // and a residual deep inside the longer one.
+        let left = doubling('s', 64);
+        let right = by_bits('s', &[3, 1]);
+        let cancelled = ContextProgram::cancel_matching_prefix(left, right, 1_000).unwrap();
+        assert!(cancelled.left.is_none());
+        assert_eq!(
+            ContextProgram::repetition_count_up_to(&cancelled.right.unwrap(), 8),
+            Some(3),
+        );
+        assert_eq!(
+            ContextProgram::repetition_count_up_to(&cancelled.cancelled.unwrap(), u64::MAX),
+            None,
+        );
+    }
+
+    /// The denotation, as a string of contexts, outermost first.
+    fn expand(program: &Rc<ContextProgram<char>>) -> String {
+        match &**program {
+            ContextProgram::Run { context, count } => {
+                std::iter::repeat_n(*context, count.get() as usize).collect()
+            }
+            ContextProgram::Compose { outer, inner, .. } => expand(outer) + &expand(inner),
+        }
+    }
+
+    /// Against the specification on small programs: the residuals and the
+    /// cancelled prefix denote exactly the longest common prefix split,
+    /// over random shapes, mixed contexts and shared subprograms.
+    #[test]
+    fn cancellation_agrees_with_expansion() {
+        let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+        let mut next = move |bound: u64| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed % bound
+        };
+        let random = |next: &mut dyn FnMut(u64) -> u64| {
+            let mut pool: Vec<Rc<ContextProgram<char>>> = Vec::new();
+            for _ in 0..1 + next(8) {
+                let program = if pool.is_empty() || next(3) == 0 {
+                    let context = if next(4) == 0 { 'x' } else { 's' };
+                    ContextProgram::run(context, n(1 + next(5)))
+                } else {
+                    let outer = Rc::clone(&pool[next(pool.len() as u64) as usize]);
+                    let inner = Rc::clone(&pool[next(pool.len() as u64) as usize]);
+                    ContextProgram::compose(outer, inner)
+                };
+                pool.push(program);
+            }
+            pool.pop().unwrap()
+        };
+        for case in 0..4_000 {
+            let left = random(&mut next);
+            let right = random(&mut next);
+            let (l, r) = (expand(&left), expand(&right));
+            let common = l.chars().zip(r.chars()).take_while(|(a, b)| a == b).count();
+            let cancelled = ContextProgram::cancel_matching_prefix(left, right, 1 << 20).unwrap();
+            let show = |p: &Option<Rc<ContextProgram<char>>>| p.as_ref().map_or(String::new(), expand);
+            assert_eq!(show(&cancelled.left), l[common..], "case {case}");
+            assert_eq!(show(&cancelled.right), r[common..], "case {case}");
+            assert_eq!(show(&cancelled.cancelled), l[..common], "case {case}");
+            assert_eq!(cancelled.changed, common > 0, "case {case}");
+        }
     }
 
     #[test]
