@@ -395,6 +395,14 @@ impl Cache {
             Term::TmWf { shape, arity, .. } => {
                 self.term_use(shape).join(self.term_use(arity).under(1))
             }
+            Term::TmDVec { len, fam, .. } => self.term_use(len).join(self.term_use(fam).under(1)),
+            Term::TmIWf { idx, shape, arity, out, child, index, .. } => self
+                .term_use(idx)
+                .join(self.term_use(shape))
+                .join(self.term_use(arity).under(1))
+                .join(self.term_use(out).under(1))
+                .join(self.term_use(child).under(2))
+                .join(self.term_use(index)),
             Term::TmM { idx, shape, pos, next, index, .. } => self
                 .term_use(idx)
                 .join(self.term_use(shape).under(1))
@@ -696,6 +704,12 @@ impl Cache {
             .join(self.term_use(&b.tm_m).under(5))
             .join(self.term_use(&b.tm_corec).under(8))
             .join(self.term_use(&b.tm_out).under(6))
+            .join(self.term_use(&b.ty_dvec).under(2))
+            .join(self.term_use(&b.tm_dvec).under(2))
+            .join(self.term_use(&b.ty_iwf).under(6))
+            .join(self.term_use(&b.tm_iwf).under(6))
+            .join(self.term_use(&b.tm_sup_i).under(7))
+            .join(self.term_use(&b.tm_elim_iwf).under(9))
     }
 }
 

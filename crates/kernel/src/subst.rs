@@ -626,6 +626,21 @@ fn map_term<M: Mapper>(t: &Term, m: &mut M, at: Depths) -> Term {
             shape: sub_tm(shape, m, at),
             arity: sub_tm(arity, m, at + dep(0, 0, 1)),
         },
+        Term::TmDVec { level, len, fam } => Term::TmDVec {
+            level: m.level(level, at),
+            len: sub_tm(len, m, at),
+            fam: sub_tm(fam, m, at + dep(0, 0, 1)),
+        },
+        Term::TmIWf { level, idx_level, idx, shape, arity, out, child, index } => Term::TmIWf {
+            level: m.level(level, at),
+            idx_level: m.level(idx_level, at),
+            idx: sub_tm(idx, m, at),
+            shape: sub_tm(shape, m, at),
+            arity: sub_tm(arity, m, at + dep(0, 0, 1)),
+            out: sub_tm(out, m, at + dep(0, 0, 1)),
+            child: sub_tm(child, m, at + dep(0, 0, 2)),
+            index: sub_tm(index, m, at),
+        },
         Term::TmM { level, pos_level, idx_level, idx, shape, pos, next, index } => Term::TmM {
             level: m.level(level, at),
             pos_level: m.level(pos_level, at),
@@ -1037,6 +1052,12 @@ fn map_branches<M: Mapper>(b: &Branches, m: &mut M, at: Depths) -> Branches {
         tm_m: sub_tm(&b.tm_m, m, at + dep(3, 6, 5)),
         tm_corec: sub_tm(&b.tm_corec, m, at + dep(4, 9, 8)),
         tm_out: sub_tm(&b.tm_out, m, at + dep(3, 7, 6)),
+        ty_dvec: sub_tm(&b.ty_dvec, m, at + dep(1, 3, 2)),
+        tm_dvec: sub_tm(&b.tm_dvec, m, at + dep(1, 3, 2)),
+        ty_iwf: sub_tm(&b.ty_iwf, m, at + dep(2, 7, 6)),
+        tm_iwf: sub_tm(&b.tm_iwf, m, at + dep(2, 7, 6)),
+        tm_sup_i: sub_tm(&b.tm_sup_i, m, at + dep(2, 8, 7)),
+        tm_elim_iwf: sub_tm(&b.tm_elim_iwf, m, at + dep(3, 10, 9)),
     }
 }
 
@@ -1163,7 +1184,7 @@ impl Mapper for ShiftGlobal {
 /// The recursor's motive and branch telescopes, weakened by `by` global
 /// bindings. The value machine's one materialization site that is a
 /// telescope table rather than a term (`docs/lazy-global-offset-design.md`
-/// §5); routed through the generic traversal so the 60 telescopes are not
+/// §5); routed through the generic traversal so the 66 telescopes are not
 /// written down again.
 pub(crate) fn shift_global_tables(
     motives: &Motives,

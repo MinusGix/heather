@@ -697,6 +697,21 @@ fn unify_tm(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]
             unify_tm(u, a1, a2, n, d, sols);
             unify_tm(u, b1, b2, n, d + 1, sols);
         }
+        (Term::TmDVec { len: k1, fam: f1, .. }, Term::TmDVec { len: k2, fam: f2, .. }) => {
+            unify_tm(u, k1, k2, n, d, sols);
+            unify_tm(u, f1, f2, n, d + 1, sols);
+        }
+        (
+            Term::TmIWf { idx: x1, shape: s1, arity: a1, out: o1, child: c1, index: m1, .. },
+            Term::TmIWf { idx: x2, shape: s2, arity: a2, out: o2, child: c2, index: m2, .. },
+        ) => {
+            unify_tm(u, x1, x2, n, d, sols);
+            unify_tm(u, s1, s2, n, d, sols);
+            unify_tm(u, a1, a2, n, d + 1, sols);
+            unify_tm(u, o1, o2, n, d + 1, sols);
+            unify_tm(u, c1, c2, n, d + 2, sols);
+            unify_tm(u, m1, m2, n, d, sols);
+        }
         (
             Term::TmM { idx: x1, shape: s1, pos: p1, next: o1, index: j1, .. },
             Term::TmM { idx: x2, shape: s2, pos: p2, next: o2, index: j2, .. },

@@ -610,5 +610,11 @@ fn const_branches(t: Term) -> Rc<Branches> {
         tm_m: z(),
         tm_corec: z(),
         tm_out: z(),
+        ty_dvec: z(),
+        tm_dvec: z(),
+        ty_iwf: z(),
+        tm_iwf: z(),
+        tm_sup_i: z(),
+        tm_elim_iwf: z(),
     })
 }

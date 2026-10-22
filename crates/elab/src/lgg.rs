@@ -257,6 +257,8 @@ fn former_tm(t: &Term) -> &'static str {
         | Term::TmW { .. }
         | Term::TmWf { .. }
         | Term::TmM { .. }
+        | Term::TmDVec { .. }
+        | Term::TmIWf { .. }
         | Term::TmVec { .. }
         | Term::TmFin { .. }
         | Term::TmSEmpty { .. } => "type code",
@@ -531,6 +533,29 @@ impl Lgg {
                 shape: Rc::new(self.tm(s1, s2, k)?),
                 // The arity binds the shape.
                 arity: Rc::new(self.tm(a1, a2, k + 1)?),
+            }),
+            (
+                Term::TmDVec { level: l1, len: k1, fam: f1 },
+                Term::TmDVec { level: l2, len: k2, fam: f2 },
+            ) if l1 == l2 => Ok(Term::TmDVec {
+                level: l1.clone(),
+                len: Rc::new(self.tm(k1, k2, k)?),
+                // The family binds the position.
+                fam: Rc::new(self.tm(f1, f2, k + 1)?),
+            }),
+            (
+                Term::TmIWf { level: l1, idx_level: i1, idx: x1, shape: s1, arity: a1, out: o1, child: c1, index: m1 },
+                Term::TmIWf { level: l2, idx_level: i2, idx: x2, shape: s2, arity: a2, out: o2, child: c2, index: m2 },
+            ) if l1 == l2 && i1 == i2 => Ok(Term::TmIWf {
+                level: l1.clone(),
+                idx_level: i1.clone(),
+                idx: Rc::new(self.tm(x1, x2, k)?),
+                shape: Rc::new(self.tm(s1, s2, k)?),
+                // arity and out bind x, child x i.
+                arity: Rc::new(self.tm(a1, a2, k + 1)?),
+                out: Rc::new(self.tm(o1, o2, k + 1)?),
+                child: Rc::new(self.tm(c1, c2, k + 2)?),
+                index: Rc::new(self.tm(m1, m2, k)?),
             }),
             (
                 Term::TmM { level: l1, pos_level: p1, idx_level: i1, idx: x1, shape: s1, pos: q1, next: n1, index: j1 },

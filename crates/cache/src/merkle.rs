@@ -254,6 +254,8 @@ mod tag {
     pub const E_COREC: u8 = 0x7f;
     pub const E_OUT: u8 = 0x80;
     pub const E_TMM: u8 = 0x81;
+    pub const E_TMDVEC: u8 = 0x82;
+    pub const E_TMIWF: u8 = 0x83;
 }
 
 /// The walk in progress: a SHA-256 state, a small staging buffer, and the Ψ
@@ -701,6 +703,23 @@ impl<'a> Walk<'a> {
                 self.term(shape);
                 self.term(arity);
             }
+            Term::TmDVec { level, len, fam } => {
+                self.tag(tag::E_TMDVEC);
+                self.level(level);
+                self.term(len);
+                self.term(fam);
+            }
+            Term::TmIWf { level, idx_level, idx, shape, arity, out, child, index } => {
+                self.tag(tag::E_TMIWF);
+                self.level(level);
+                self.level(idx_level);
+                self.term(idx);
+                self.term(shape);
+                self.term(arity);
+                self.term(out);
+                self.term(child);
+                self.term(index);
+            }
             Term::TmM { level, pos_level, idx_level, idx, shape, pos, next, index } => {
                 self.tag(tag::E_TMM);
                 self.level(level);
@@ -1115,7 +1134,7 @@ impl<'a> Walk<'a> {
         self.ty(tm_motive);
     }
 
-    /// All 60 branches of the mutual code recursors, in declaration order.
+    /// All 66 branches of the mutual code recursors, in declaration order.
     ///
     /// Destructured without `..` deliberately: `fmt`'s `Debug` for this struct
     /// prints only 37 of the fields, which is precisely the defect the v1
@@ -1183,6 +1202,12 @@ impl<'a> Walk<'a> {
             tm_m,
             tm_corec,
             tm_out,
+            ty_dvec,
+            tm_dvec,
+            ty_iwf,
+            tm_iwf,
+            tm_sup_i,
+            tm_elim_iwf,
         } = b;
         self.tag(tag::BRANCHES);
         for t in [
@@ -1246,6 +1271,12 @@ impl<'a> Walk<'a> {
             tm_m,
             tm_corec,
             tm_out,
+            ty_dvec,
+            tm_dvec,
+            ty_iwf,
+            tm_iwf,
+            tm_sup_i,
+            tm_elim_iwf,
         ] {
             self.term(t);
         }

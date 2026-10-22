@@ -2,7 +2,8 @@
 
 Status: **rule set (§1–§6) reviewed and frozen, 2026-10-13**; `DVec` and
 `dnth` in the kernel (§13 step 2, 2026-10-17), `IWf`/`sup_i`/`elim_IWf`
-in the kernel (§13 step 3, 2026-10-20); the codes (step 4) not yet. §7–§13 stay open where §12 says so: they are the generator's, not the
+in the kernel (§13 step 3, 2026-10-20), and their codes and code-recursor
+branches (§13 step 4, 2026-10-22). §7–§13 stay open where §12 says so: they are the generator's, not the
 kernel's. The review's edits are §1's layer paragraph, §1.1's and §10's
 neutral-length caveat, and §3's note on the ih's type. It is
 [[indexed-families]]'s route 4, promoted, and extended with an output-index
@@ -37,10 +38,10 @@ is then nothing to make irrelevant and nothing to transport.
 Two. `DVec` is `Vec` with a per-position element type; `IWf` is `Wf` with
 an index.
 
-**Layers: as `Wf`'s.** `DVec`, `IWf`, `sup_i` and `elim_IWf` are gated out
-of layer c until the rec.rs round (§13 step 4) gives them their code-recursor
+**Layers: as `Wf`'s.** `DVec`, `IWf`, `sup_i` and `elim_IWf` were gated out
+of layer c until the rec.rs round (§13 step 4) gave them their code-recursor
 branches, as `Wf`'s formers were (`wf-former-design.md` §8 step 5), and are
-code after it. The Coq formalization types them at its layers D and M and
+code since (2026-10-22). The Coq formalization types them at its layers D and M and
 reaches C through codes and static code. For `Wf` that meant porting `nth`'s
 typing to C by hand, since `nth` types only through `Fin`'s and `Vec`'s
 computation rules (its M15b, `nth_wf_g`); `dnth` needs the same port.
@@ -499,15 +500,31 @@ a typing or reduction rule.
    projection test.~~ Done 2026-10-17 (`crates/kernel/tests/dvec.rs`).
    `Type::DVec`, its two reductions in both reducers, its neutral
    congruence, and `term::dnth` transcribed from heather-coq's `tmDNth`.
-   Gated to layers p and m (`Tc::computing_layer`) until step 4.
+   Gated to layers p and m (`Tc::computing_layer`) until step 4, which
+   lifted it.
 3. ~~`IWf`/`sup_i`/`elim_IWf`, with β on open data at a computed index as
    the headline test, and value equality with no irrelevance arm.~~ Done
    2026-10-20 (`crates/kernel/tests/iwf.rs`). The three in both reducers,
    typing, both conversion domains, with the neutral `elim_IWf` arm typed
    as heather-coq's (scrutinees, motive level, motive, step; not the
    signature, the index or the ih types). F1–F3 are hand-built and
-   type-checked there. Gated to layers p and m until step 4.
-4. The rec.rs round (§6).
+   type-checked there. Gated to layers p and m until step 4, which lifted
+   it.
+4. ~~The rec.rs round (§6).~~ Done 2026-10-22
+   (`crates/kernel/tests/iwf_codes.rs`). `Term::TmDVec` and `Term::TmIWf`
+   (the index inside the code, as `TmM`'s), their `El` decodings in both
+   reducers, and the six branches `ty_dvec`, `tm_dvec`, `ty_iwf`, `tm_iwf`,
+   `tm_sup_i`, `tm_elim_iwf`, so the recursor has 66. Each telescope is
+   heather-coq `RecSpec`'s branch 55–60 binder for binder: univs `ℓ`, `ℓi`
+   (and `ℓ'`), globals `g, U_I, U_S, u_n, u_o, u_c` then the branch's own,
+   one recursive result per global; the length's and arity's results are at
+   the *term* motive, as they are terms of `Nat`. `rec.rs`'s own tests
+   check every entry well-formed and every type-motive call against its
+   binding, and the identity recursor (`tests/typing.rs`,
+   `tests/iwf_codes.rs`) rebuilds each boxed form in one β-step. The p/m
+   gate (`Tc::computing_layer`) is gone: `DVec` and `IWf` form at every
+   layer, `sup_i` and `elim_IWf` at every layer but v. Module images bump
+   (`MAGIC`/`INTERFACE`), as the branch count is in them.
 5. ~~The ch. 07 round (§9).~~ Done in heather-coq's M17, checked by Coq
    (2026-10-16; recorded 2026-10-21): §9's three predictions hold, with
    the lemma names there.

@@ -155,6 +155,17 @@ pub(super) enum TmView<'a, 'v, D: Dom<'v>> {
         next: D::TmC,
         index: D::TmC,
     },
+    TmDVec { level: &'a Level, len: D::TmC, fam: D::TmC },
+    TmIWf {
+        level: &'a Level,
+        idx_level: &'a Level,
+        idx: D::TmC,
+        shape: D::TmC,
+        arity: D::TmC,
+        out: D::TmC,
+        child: D::TmC,
+        index: D::TmC,
+    },
     TmId { level: &'a Level, ty: D::TmC, lhs: D::TmC, rhs: D::TmC },
     TmSEq { level: &'a Level, ty: D::TmC, lhs: D::TmC, rhs: D::TmC },
     TmSum { lhs_level: &'a Level, rhs_level: &'a Level, lhs: D::TmC, rhs: D::TmC },
@@ -369,6 +380,8 @@ impl<'v, D: Dom<'v>> TmView<'_, 'v, D> {
                 | TmView::TmW { .. }
                 | TmView::TmWf { .. }
                 | TmView::TmM { .. }
+                | TmView::TmDVec { .. }
+                | TmView::TmIWf { .. }
                 | TmView::TmId { .. }
                 | TmView::TmSEq { .. }
                 | TmView::TmSum { .. }
@@ -1234,6 +1247,19 @@ impl<'v> Dom<'v> for Syn {
             Term::TmWf { level, shape, arity } => {
                 TmView::TmWf { level, shape: Rc::clone(shape), arity: Rc::clone(arity) }
             }
+            Term::TmDVec { level, len, fam } => {
+                TmView::TmDVec { level, len: Rc::clone(len), fam: Rc::clone(fam) }
+            }
+            Term::TmIWf { level, idx_level, idx, shape, arity, out, child, index } => TmView::TmIWf {
+                level,
+                idx_level,
+                idx: Rc::clone(idx),
+                shape: Rc::clone(shape),
+                arity: Rc::clone(arity),
+                out: Rc::clone(out),
+                child: Rc::clone(child),
+                index: Rc::clone(index),
+            },
             Term::TmM { level, pos_level, idx_level, idx, shape, pos, next, index } => TmView::TmM {
                 level,
                 pos_level,

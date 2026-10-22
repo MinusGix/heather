@@ -513,22 +513,26 @@ fn the_level_is_the_join_of_the_shape_and_index_levels() {
 }
 
 #[test]
-fn iwf_and_its_terms_are_gated_out_of_layer_c() {
-    // Design §1: no code yet, so not at layer c until the rec.rs round;
-    // admitted at p and m (Coq's `compt i`).
+fn iwf_and_its_terms_are_admitted_at_layer_c() {
+    // Design §13 step 4: `IWf` has a code (`TmIWf`, `tests/iwf_codes.rs`), so
+    // the former, `sup_i` and `elim_IWf` are admitted at layer c as at p and m.
     let g = ext(&nil_ctx(), Type::Nat, c(0));
     let sig = tm_fam().sig();
     let ty = at(&sig, v(0));
-    assert_eq!(ck_ty_at(Layer::Code, &g, &ty, &c(0)), Err(TypeError::LayerMismatch));
-    assert_eq!(ck_ty_at(Layer::Prog, &g, &ty, &c(0)), Ok(()));
-    assert_eq!(ck_ty_at(Layer::Meta, &g, &ty, &c(0)), Ok(()));
+    for layer in [Layer::Code, Layer::Prog, Layer::Meta] {
+        assert_eq!(ck_ty_at(layer, &g, &ty, &c(0)), Ok(()));
+    }
     let lit_ty = at(&sig, nat(1));
-    assert!(check_term(&psi(), 0, Layer::Code, &nil_ctx(), &tm_lit(), &lit_ty, &c(0), FUEL).is_err());
-    assert!(check_term(&psi(), 0, Layer::Meta, &nil_ctx(), &tm_lit(), &lit_ty, &c(0), FUEL).is_ok());
+    assert!(check_term(&psi(), 0, Layer::Code, &nil_ctx(), &tm_lit(), &lit_ty, &c(0), FUEL).is_ok());
+    assert!(check_term(&psi(), 0, Layer::Code, &nil_ctx(), &tm_lit(), &at(&sig, nat(0)), &c(0), FUEL).is_err());
     let gt = ext(&g, ty, c(0));
     let s = size_at(2, v(1), v(0));
-    assert!(check_term(&psi(), 0, Layer::Code, &gt, &s, &Type::Nat, &c(0), FUEL).is_err());
-    assert!(check_term(&psi(), 0, Layer::Prog, &gt, &s, &Type::Nat, &c(0), FUEL).is_ok());
+    assert!(check_term(&psi(), 0, Layer::Code, &gt, &s, &Type::Nat, &c(0), FUEL).is_ok());
+    // Layer v admits only variables.
+    assert_eq!(
+        check_term(&psi(), 0, Layer::Var, &gt, &s, &Type::Nat, &c(0), FUEL),
+        Err(TypeError::LayerMismatch)
+    );
 }
 
 #[test]

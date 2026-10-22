@@ -37,7 +37,7 @@
 //! - **Boxed types/terms compare syntactically** (`==`; α-equality is free
 //!   under de Bruijn). Code is static data — β-convertible code is *not*
 //!   convertible.
-//! - Neutral recursors compare motives, all 60 branches (each at its
+//! - Neutral recursors compare motives, all 66 branches (each at its
 //!   instantiated motive type, the ch. 04 `G_A` telescopes), and indices —
 //!   the ch. 06 `C_A` bundle ([`Conv::rec_ca`]).
 //! - The layer index restricts *types*, not terms (ch. 06 intro): layer-m
@@ -1870,6 +1870,40 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                     self.tm(&e_isp, o1, o2, &D::weaken_ty(env, &el_i, 3), i1)?;
                     self.tm(env, j1, j2, &el_i, i1)
                 }
+                // TmDVec congruence (docs/iwf-former-design.md §6): the type
+                // former's comparison read through `El`, the family under
+                // `i : Fin k` at the left length.
+                (
+                    TmView::TmDVec { level: l1, len: k1, fam: f1 },
+                    TmView::TmDVec { level: l2, len: k2, fam: f2 },
+                ) => {
+                    self.lev_eq(l1, l2)?;
+                    self.tm_at_nat(env, k1, k2)?;
+                    let fin = D::fin(self, env, k1)?;
+                    let e_i = D::push_entry(env, &fin, &Level::Zero);
+                    self.tm_at_univ(&e_i, f1, f2, l1)
+                }
+                // TmIWf congruence (design §6): `IWf`'s structural
+                // comparison read through `El` — the index type and shapes as
+                // encodings, the arity and output index under `x : El shape`,
+                // the child index under `x, i : Fin n`, the index at `El idx`.
+                (
+                    TmView::TmIWf { level: l1, idx_level: i1, idx: x1, shape: s1, arity: n1, out: o1, child: c1, index: m1 },
+                    TmView::TmIWf { level: l2, idx_level: i2, idx: x2, shape: s2, arity: n2, out: o2, child: c2, index: m2 },
+                ) => {
+                    self.lev_eq(l1, l2)?;
+                    self.lev_eq(i1, i2)?;
+                    self.tm_at_univ(env, x1, x2, i1)?;
+                    self.tm_at_univ(env, s1, s2, l1)?;
+                    let el_i = D::el(self, env, i1, x1)?;
+                    let e_x = self.push_el(env, l1, s1)?;
+                    self.tm_at_nat(&e_x, n1, n2)?;
+                    self.tm(&e_x, o1, o2, &D::weaken_ty(env, &el_i, 1), i1)?;
+                    let fin = D::fin(self, &e_x, n1)?;
+                    let e_xi = D::push_entry(&e_x, &fin, &Level::Zero);
+                    self.tm(&e_xi, c1, c2, &D::weaken_ty(env, &el_i, 2), i1)?;
+                    self.tm(env, m1, m2, &el_i, i1)
+                }
                 (x, y) if x.is_encoding() || y.is_encoding() => Err(NC),
                 _ => self.tm_nee(env, a, b).map(drop),
             },
@@ -2933,7 +2967,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
 
     // -- the C_A bundle for neutral recursors -------------------------------
 
-    /// Ch. 06 `C_A`: motive levels, both motives, and all 60 branches, each
+    /// Ch. 06 `C_A`: motive levels, both motives, and all 66 branches, each
     /// branch compared at its instantiated motive type under its ch. 04
     /// telescope (`G_M G_Typ G_Trm`). Branch types and telescope entry
     /// types are built from the *left* side (left-biased, like all
@@ -2963,7 +2997,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
             self.ty(&e, &x, &y, &spec.level)?;
         }
 
-        // G_Typ G_Trm: the 60 branches, each at its instantiated motive
+        // G_Typ G_Trm: the 66 branches, each at its instantiated motive
         // type under its telescope.
         let branch_specs = rec::branch_specs(&a.motives, a.l1, a.l2, &env.gamma);
         let ba = rec::branch_terms(&a.branches);

@@ -373,17 +373,19 @@ fn formation_and_level() {
 }
 
 #[test]
-fn formation_is_gated_out_of_layer_c() {
-    // Design §1: no code yet, so no `DVec` at layer c (the code recursors'
-    // layer) until the rec.rs round; admitted at p and m (Coq's `compt i`).
+fn formation_is_admitted_at_layer_c() {
+    // Design §13 step 4: `DVec` has a code (`TmDVec`, `tests/iwf_codes.rs`),
+    // so it is admitted at layer c (the code recursors' layer) as at p and m.
     let g = ext(&nil_ctx(), Type::Nat, c(0));
     let dk = dvec(c(0), v(0), Type::Nat);
-    assert_eq!(ck_ty_at(Layer::Code, &g, &dk, &c(0)), Err(TypeError::LayerMismatch));
-    assert_eq!(ck_ty_at(Layer::Prog, &g, &dk, &c(0)), Ok(()));
-    assert_eq!(ck_ty_at(Layer::Meta, &g, &dk, &c(0)), Ok(()));
+    for layer in [Layer::Code, Layer::Prog, Layer::Meta] {
+        assert_eq!(ck_ty_at(layer, &g, &dk, &c(0)), Ok(()));
+    }
     // Nested under another former at layer c too.
     let nested = Type::Pi { dom_level: c(0), cod_level: c(0), dom: rty(Type::Nat), cod: rty(dvec(c(0), v(0), Type::Nat)) };
-    assert_eq!(ck_ty_at(Layer::Code, &nil_ctx(), &nested, &c(0)), Err(TypeError::LayerMismatch));
+    assert_eq!(ck_ty_at(Layer::Code, &nil_ctx(), &nested, &c(0)), Ok(()));
+    // The premises are still checked there: the family must be a type.
+    assert!(ck_ty_at(Layer::Code, &g, &dvec(c(0), v(0), fin(v(0))), &c(0)).is_err());
 }
 
 // -------------------------------------------------------------------------

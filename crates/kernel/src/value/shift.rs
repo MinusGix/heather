@@ -30,7 +30,7 @@ use crate::level::Level;
 use crate::term::{Branches, LocalCtx, Motives, Term, Type};
 
 use super::{
-    BitTy, Elim, Env, Head, PiAnn, VCorec, VIWfSig, VMSig, VTmM, SigAnn, SumAnn, TmClo, TyClo, VNeTy, VNeutral, VSubst, VTy,
+    BitTy, Elim, Env, Head, PiAnn, VCorec, VIWfSig, VMSig, VTmIWf, VTmM, SigAnn, SumAnn, TmClo, TyClo, VNeTy, VNeutral, VSubst, VTy,
     Val, ValueArena,
 };
 
@@ -582,6 +582,24 @@ pub fn val<'v>(v: &Rc<Val<'v>>, o: Outer<'v>) -> Rc<Val<'v>> {
             shape: tm_clo(shape, o),
             arity: tm_clo(arity, o),
         },
+        Val::TmDVec { level: l, len, fam } => Val::TmDVec {
+            level: level(l, o),
+            len: tm_clo(len, o),
+            fam: tm_clo(fam, o),
+        },
+        Val::TmIWf(w) => {
+            let VTmIWf { level: l, idx_level, idx, shape, arity, out, child, index } = &**w;
+            Val::TmIWf(Rc::new(VTmIWf {
+                level: level(l, o),
+                idx_level: level(idx_level, o),
+                idx: tm_clo(idx, o),
+                shape: tm_clo(shape, o),
+                arity: tm_clo(arity, o),
+                out: tm_clo(out, o),
+                child: tm_clo(child, o),
+                index: tm_clo(index, o),
+            }))
+        }
         Val::TmM(m) => {
             let VTmM { level: l, pos_level, idx_level, idx, shape, pos, next, index } = &**m;
             Val::TmM(Rc::new(VTmM {

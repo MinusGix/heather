@@ -385,6 +385,8 @@ fn tm_former(t: &Term) -> &'static str {
         Term::TmVec { .. } => "TmVec",
         Term::TmWf { .. } => "TmWf",
         Term::TmM { .. } => "TmM",
+        Term::TmDVec { .. } => "TmDVec",
+        Term::TmIWf { .. } => "TmIWf",
         _ => "other-tm",
     }
 }

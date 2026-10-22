@@ -34,7 +34,7 @@
 //!   variables demand `i' ≤ i`; `ω` is accepted nowhere a programmer level
 //!   is demanded ([`crate::level::Level::well_formed`]) and arises only as
 //!   the inferred level of `ΠΠ`/`Λ ℓ⃗`.
-//! - The recursor rules check the two motives and 60 branches against the
+//! - The recursor rules check the two motives and 66 branches against the
 //!   `G_M G_Typ G_Trm` telescopes of [`crate::rec`] — the same tables
 //!   conversion compares against.
 //!
@@ -1665,15 +1665,6 @@ impl Tc {
         if env.under_box { Err(TypeError::UnderBox) } else { Ok(()) }
     }
 
-    /// The gate on a former that has no code yet (`DVec`, until the rec.rs
-    /// round of docs/iwf-former-design.md §13 step 4): admitted at the
-    /// computing layers `p`/`m` only, as `Vec`/`Wf` were before their codes
-    /// (the Coq formalization's `compt i`). Layer c is where the code
-    /// recursors range, and they have no branch for it.
-    fn computing_layer(&self, env: &Env) -> R {
-        if env.layer.computes() { Ok(()) } else { Err(TypeError::LayerMismatch) }
-    }
-
     /// An `IWf` signature's premises, shared by its formation rule and its
     /// two term formers (heather-coq `wft_iwf`, `wf_supi`, `wf_elimIWf`):
     /// `I @ li`, `S @ l`, `(Γ, x : S) ⊢ n : Nat`, `(Γ, x : S) ⊢ o : I`,
@@ -1931,10 +1922,9 @@ impl Tc {
             }
             // DVec-formation (extension; docs/iwf-former-design.md §1.1):
             // ⊢_i DVec^l(k; i. F) @ l ⟸ ⊢_i k : Nat @ 0,
-            // (Γ, i : Fin k @ 0) ⊢_i F @ l. Computing layers only until the
-            // rec.rs round gives it a code (design §1).
+            // (Γ, i : Fin k @ 0) ⊢_i F @ l. At every layer: `TmDVec` is its
+            // code (design §6, §13 step 4).
             Type::DVec { level, len, fam } => {
-                self.computing_layer(env)?;
                 self.level_wf(env, level)?;
                 self.tm_check_ty(env, len, &Type::Nat, &Level::Zero)?;
                 let e_i = env.push_entry(Rc::new(Type::Fin { len: Rc::clone(len) }), Level::Zero);
@@ -1943,10 +1933,9 @@ impl Tc {
             }
             // IWf-formation (extension; docs/iwf-former-design.md §1.2):
             // ⊢_i IWf^{l,li}(I; x:S. n; x. o; x i. c)(m) @ l ⊔ li ⟸ the
-            // signature (`iwf_sig_wf`), ⊢_i m : I @ li. Computing layers only
-            // until the rec.rs round gives it a code (design §1).
+            // signature (`iwf_sig_wf`), ⊢_i m : I @ li. At every layer:
+            // `TmIWf` is its code (design §6, §13 step 4).
             Type::IWf { sig, index } => {
-                self.computing_layer(env)?;
                 self.iwf_sig_wf(env, sig)?;
                 self.tm_check_rc(env, index, &sig.idx, &sig.idx_level)?;
                 Ok(sig.family_level())
@@ -2257,7 +2246,7 @@ impl Tc {
             // against the expected type instead ([`Tc::tm_check_at`]).
             //
             // The guard is the design's §2.3 and is what leaves the code
-            // grammar and all 60 recursor branches alone: these forms do not
+            // grammar and all 66 recursor branches alone: these forms do not
             // occur inside a `box`, so `code_eq` never meets one and
             // `rec.rs` needs no branch.
             //
@@ -2756,6 +2745,28 @@ impl Tc {
             // when its decoding is a well-formed `M` signature, since `El u`
             // at `l` checks `u : Ty l`; the index is a term of the decoded
             // index type. A code at every layer but v, like every code.
+            // DVec-code (docs/iwf-former-design.md §6): DVec^l(k; i. f) : Ty l
+            // ⟸ k : Nat, (Γ, i : Fin k) ⊢ f : Ty l. The length is a term of
+            // the ambient scope, the family binds the position.
+            Term::TmDVec { level, len, fam } => {
+                self.not_var_layer(env)?;
+                self.level_wf(env, level)?;
+                self.tm_check_ty(env, len, &Type::Nat, &Level::Zero)?;
+                let e_i = env.push_entry(Rc::new(Type::Fin { len: Rc::clone(len) }), Level::Zero);
+                self.tm_check_ty(&e_i, fam, &Type::Ty(level.clone()), &Level::succ(level.clone()))?;
+                Ok((Type::Ty(level.clone()), Level::succ(level.clone())))
+            }
+            // IWf-code (design §6): well-formed exactly when its decoding is
+            // a well-formed `IWf` signature (`El u` at `l` checks `u : Ty l`),
+            // and the index is a term of the decoded index type, as `TmM`.
+            Term::TmIWf { level, idx_level, idx, shape, arity, out, child, index } => {
+                self.not_var_layer(env)?;
+                let sig = crate::term::iwf_sig_of_code(level, idx_level, idx, shape, arity, out, child);
+                self.iwf_sig_wf(env, &sig)?;
+                self.tm_check_rc(env, index, &sig.idx, &sig.idx_level)?;
+                let family = sig.family_level();
+                Ok((Type::Ty(family.clone()), Level::succ(family)))
+            }
             Term::TmM { level, pos_level, idx_level, idx, shape, pos, next, index } => {
                 self.not_var_layer(env)?;
                 let sig = crate::term::m_sig_of_code(level, pos_level, idx_level, idx, shape, pos, next);
@@ -3364,9 +3375,10 @@ impl Tc {
             // sup_i^{l,li}(sig; a; cs) : IWf(sig)(o[a/x]) @ l ⊔ li, with
             // cs : DVec^{l⊔li}(n[a/x]; k. IWf(sig)(c[a/x, k/i])) — the
             // constructor is at its output index (docs/iwf-former-design.md
-            // §2). A value at a convertible index checks by conversion.
+            // §2). A value at a convertible index checks by conversion. A code
+            // at every layer but v, as `sup_f` is (design §13 step 4).
             Term::Supi { sig, label, children } => {
-                self.computing_layer(env)?;
+                self.not_var_layer(env)?;
                 self.iwf_sig_wf(env, sig)?;
                 self.tm_check_rc(env, label, &sig.shape, &sig.level)?;
                 let fl = sig.family_level();
@@ -3380,7 +3392,7 @@ impl Tc {
             // types are not checked: they are well-formed given the
             // signature and the motive (heather-coq `IWf_ihty_wf`).
             Term::ElimIWf { sig, motive_level, motive, step, index, scrut } => {
-                self.computing_layer(env)?;
+                self.not_var_layer(env)?;
                 self.iwf_sig_wf(env, sig)?;
                 self.level_wf(env, motive_level)?;
                 let fl = sig.family_level();
@@ -3720,7 +3732,7 @@ impl Tc {
 
     /// The `G_A = G_M G_Typ G_Trm` premise bundle shared by the two
     /// recursor rules: motive levels, both motives well-formed in their
-    /// scopes, and all 60 branches at their instantiated motive types.
+    /// scopes, and all 66 branches at their instantiated motive types.
     fn rec_ga(
         &self,
         env: &Env,
@@ -3770,6 +3782,8 @@ fn term_head(t: &Term) -> &'static str {
         Term::TmVec { .. } => "TmVec",
         Term::TmFin { .. } => "TmFin",
         Term::TmWf { .. } => "TmWf",
+        Term::TmDVec { .. } => "TmDVec",
+        Term::TmIWf { .. } => "TmIWf",
         Term::TmM { .. } => "TmM",
         Term::Zero => "Zero",
         Term::NatLit(..) => "NatLit",
@@ -3852,6 +3866,8 @@ fn type_head(ty: &Type) -> &'static str {
             | Term::TmFin { .. }
             | Term::TmWf { .. }
             | Term::TmM { .. }
+            | Term::TmDVec { .. }
+            | Term::TmIWf { .. }
             | Term::TmSEq { .. } => "El⌜⌝",
             _ => "El(?)",
         },

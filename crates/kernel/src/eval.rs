@@ -17,7 +17,7 @@
 //! - [`crate::reduce::beta_elim_ty`] / [`beta_elim_tm`] — the ~1300-line code
 //!   recursor β. The evaluator hands the box's payload to the *existing*
 //!   function, receives the fired branch as **syntax**, and evaluates it. The
-//!   60 branch telescopes are not written down a sixth time.
+//!   66 branch telescopes are not written down a sixth time.
 //! - [`crate::term::nth`] and the `elim_W`/`elim_Wf` ih λs, which are built
 //!   from the same syntax `reduce.rs` builds — see [`Eval::fire_elim_w`].
 //! - [`crate::reduce::step_type_delta`], for the one annotation that lives in
@@ -58,7 +58,7 @@ use crate::term::{
     Motives, Term, Type,
 };
 use crate::value::{
-    Elim, ElimSpine, Env, Head, Lookup, PiAnn, VCorec, VIWfSig, VMSig, VTmM, SigAnn, SumAnn, TmClo, TyClo, VNeTy, VNeutral,
+    Elim, ElimSpine, Env, Head, Lookup, PiAnn, VCorec, VIWfSig, VMSig, VTmIWf, VTmM, SigAnn, SumAnn, TmClo, TyClo, VNeTy, VNeutral,
     VSubst, VTail, VTy, Val, ValueArena, WIhSyntax,
 };
 use crate::value::algebra::{AffineTree, FoldClass};
@@ -964,6 +964,36 @@ impl<'a, 'v> Eval<'a, 'v> {
                     index: *index,
                 }
             }
+            // `El(TmIWf …) ⇝ IWf(El idx; El shape; arity; out; child)(index)`
+            // (docs/iwf-former-design.md §6): the arity, output and child
+            // index and the index are terms and ride across unchanged.
+            Val::TmIWf(w) => {
+                let VTmIWf { level: l, idx_level, idx, shape, arity, out, child, index } = &**w;
+                let (Some(i), Some(s)) = (el(idx_level, idx), el(l, shape)) else {
+                    return stuck_el();
+                };
+                VTy::IWf {
+                    sig: Rc::new(VIWfSig {
+                        level: l.clone(),
+                        idx_level: idx_level.clone(),
+                        idx: i,
+                        shape: s,
+                        arity: *arity,
+                        out: *out,
+                        child: *child,
+                    }),
+                    index: *index,
+                }
+            }
+            // `El (DVec k i. f) ⇝ DVec k (i. El f)`, which then steps at a
+            // canonical length, as `Vec`'s decode does below.
+            Val::TmDVec { level: l, len, fam } => {
+                let Some(f) = el(l, fam) else { return stuck_el() };
+                self.spend()?;
+                let lv = self.force(len)?;
+                let l = l.clone();
+                return self.dvec_ty(&l, f, &lv);
+            }
             // `El (Vec s k) ⇝ Vec (El s) k`, which then steps at a canonical
             // length — so the decode continues into the `Vec` rule.
             Val::TmVec { level: l, elem, len } => {
@@ -1246,6 +1276,23 @@ impl<'a, 'v> Eval<'a, 'v> {
                 shape: tclo(env, shape),
                 arity: tclo(env, arity),
             },
+            Term::TmDVec { level, len, fam } => Val::TmDVec {
+                level: level.clone(),
+                len: tclo(env, len),
+                fam: tclo(env, fam),
+            },
+            Term::TmIWf { level, idx_level, idx, shape, arity, out, child, index } => {
+                Val::TmIWf(Rc::new(VTmIWf {
+                    level: level.clone(),
+                    idx_level: idx_level.clone(),
+                    idx: tclo(env, idx),
+                    shape: tclo(env, shape),
+                    arity: tclo(env, arity),
+                    out: tclo(env, out),
+                    child: tclo(env, child),
+                    index: tclo(env, index),
+                }))
+            }
             Term::TmM { level, pos_level, idx_level, idx, shape, pos, next, index } => Val::TmM(Rc::new(VTmM {
                 level: level.clone(),
                 pos_level: pos_level.clone(),

@@ -35,8 +35,9 @@ use heather_kernel::layer::Layer;
 use heather_kernel::level::{Level, UnivVar};
 use heather_kernel::reduce::whnf_type;
 use heather_kernel::term::{
-    nth, Branches, CtxBase, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, IWfSig, MSig, LocalCtx,
-    LocalSubst, LocalVar, Motives, SubstTail, Term, Type,
+    iwf_motive_scrut_ty, iwf_step_telescope, nth, Branches, CtxBase, CtxEntry, GlobalBinding,
+    GlobalCtx, GlobalVar, IWfSig, MSig, LocalCtx, LocalSubst, LocalVar, Motives, SubstTail, Term,
+    Type,
 };
 use heather_kernel::typing::check_term;
 
@@ -1636,7 +1637,7 @@ fn gen_letbox_ty(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Term>, Rc<Type>, Level
 /// recursive-call entry has that same motive (so `Var(0)` inhabits the
 /// branch type). Order = `Branches` field order. Independent transcription
 /// of docs/delam/04 — a disagreement with `src/rec.rs` is a test failure.
-const BRANCH_DIMS: [(u32, u32, u32, bool, bool); 60] = [
+const BRANCH_DIMS: [(u32, u32, u32, bool, bool); 66] = [
     (0, 1, 0, false, false), // ty_nat
     (2, 3, 2, false, true),  // ty_pi
     (1, 1, 0, false, false), // ty_ty
@@ -1697,6 +1698,12 @@ const BRANCH_DIMS: [(u32, u32, u32, bool, bool); 60] = [
     (3, 6, 5, true, true),   // tm_m
     (4, 9, 8, true, true),   // tm_corec
     (3, 7, 6, true, true),   // tm_out
+    (1, 3, 2, false, true),  // ty_dvec
+    (1, 3, 2, true, true),   // tm_dvec
+    (2, 7, 6, false, false), // ty_iwf (innermost local is a term-motive call)
+    (2, 7, 6, true, true),   // tm_iwf
+    (2, 8, 7, true, true),   // tm_sup_i
+    (3, 10, 9, true, true),  // tm_elim_iwf
 ];
 
 /// A Γ-variable whose WHNF type is a contextual type matching `tm_variant`:
@@ -1752,7 +1759,7 @@ fn gen_const_rec(
         ty_motive: rty(m1ty.shift_univ(1).shift_global(1).shift_local(1)),
         tm_motive: rty(m2ty.shift_univ(1).shift_global(2).shift_local(1)),
     });
-    let mut bs: Vec<Rc<Term>> = Vec::with_capacity(60);
+    let mut bs: Vec<Rc<Term>> = Vec::with_capacity(66);
     for &(tu, tg, tl, tm_kind, var_ok) in &BRANCH_DIMS {
         if var_ok && r.below(3) == 0 {
             bs.push(rt(v(0)));
@@ -1822,6 +1829,12 @@ fn gen_const_rec(
         tm_m: bs[57].clone(),
         tm_corec: bs[58].clone(),
         tm_out: bs[59].clone(),
+        ty_dvec: bs[60].clone(),
+        tm_dvec: bs[61].clone(),
+        ty_iwf: bs[62].clone(),
+        tm_iwf: bs[63].clone(),
+        tm_sup_i: bs[64].clone(),
+        tm_elim_iwf: bs[65].clone(),
     });
     if tm_variant {
         let (scrut, delta, cty, cl) = match neutral {
@@ -2062,7 +2075,7 @@ pub fn gen_nat_rec(base: &WtEnv, r: &mut Rng, tm_variant: bool) -> NatRec {
 impl NatRec {
     /// The recursor over `Var 0` with the given branch bodies, in
     /// [`Branches`] field order. Checks at `Nat @ 0` in `self.env`.
-    pub fn build(&self, bs: &[Rc<Term>; 60]) -> Rc<Term> {
+    pub fn build(&self, bs: &[Rc<Term>; 66]) -> Rc<Term> {
         let motives = Rc::new(Motives {
             ty_motive: rty(Type::Nat),
             tm_motive: rty(Type::Nat),
@@ -2128,6 +2141,12 @@ impl NatRec {
             tm_m: bs[57].clone(),
             tm_corec: bs[58].clone(),
             tm_out: bs[59].clone(),
+            ty_dvec: bs[60].clone(),
+            tm_dvec: bs[61].clone(),
+            ty_iwf: bs[62].clone(),
+            tm_iwf: bs[63].clone(),
+            tm_sup_i: bs[64].clone(),
+            tm_elim_iwf: bs[65].clone(),
         });
         rt(if self.tm_variant {
             Term::ElimCodeTm {
@@ -2692,7 +2711,100 @@ pub fn identity_branches() -> Rc<Branches> {
                 scrut: rt(gtm(0, &g)),
             })))
         },
+        // -- indexed well-founded trees (docs/iwf-former-design.md §13) --
+        // box DVec^ℓ(u_n; i. U_F) — g = 2, u_n = 1, U_F = 0.
+        ty_dvec: {
+            let len = rt(gtm(1, &g2));
+            let gi = ext(&g2, Type::Fin { len: Rc::clone(&len) }, Level::Zero);
+            rt(Term::BoxTy(rty(Type::DVec { level: lv(0), len, fam: rty(gty(0, &gi)) })))
+        },
+        tm_dvec: {
+            let len = rt(gtm(1, &g2));
+            let gi = ext(&g2, Type::Fin { len: Rc::clone(&len) }, Level::Zero);
+            rt(Term::BoxTm(rt(Term::TmDVec { level: lv(0), len, fam: rt(gtm(0, &gi)) })))
+        },
+        // box IWf(U_I; U_S; u_n; u_o; u_c)(u_m) — g = 6, I = 5, S = 4, n =
+        // 3, o = 2, c = 1, m = 0; ℓ = lv(1), ℓi = lv(0).
+        ty_iwf: {
+            let v = iwf_sig_at(1, false, lv(1), lv(0));
+            rt(Term::BoxTy(rty(v.sig.at(rt(gtm(0, &v.g))))))
+        },
+        tm_iwf: {
+            let v = iwf_sig_at(1, true, lv(1), lv(0));
+            rt(Term::BoxTm(rt(Term::TmIWf {
+                level: lv(1),
+                idx_level: lv(0),
+                idx: rt(gtm(5, &v.g)),
+                shape: rt(gtm(4, &v.g)),
+                arity: Rc::clone(&v.sig.arity),
+                out: Rc::clone(&v.sig.out),
+                child: Rc::clone(&v.sig.child),
+                index: rt(gtm(0, &v.g)),
+            })))
+        },
+        // box sup_i(…; u_a; u_cs) — g = 7, …, c = 2, a = 1, cs = 0.
+        tm_sup_i: {
+            let v = iwf_sig_at(2, false, lv(1), lv(0));
+            rt(Term::BoxTm(rt(v.sig.supi(rt(gtm(1, &v.g)), rt(gtm(0, &v.g))))))
+        },
+        // box elim_IWf(…; j z. U_M; a cs ih. u_s; u_m; u_t) — g = 9, I = 8,
+        // S = 7, n = 6, o = 5, c = 4, M = 3, s = 2, m = 1, t = 0; ℓ =
+        // lv(2), ℓi = lv(1), ℓ' = lv(0).
+        tm_elim_iwf: {
+            let v = iwf_sig_at(4, false, lv(2), lv(1));
+            let family = v.sig.family_level();
+            let gj = ext(&v.g, (*v.sig.idx).clone(), lv(1));
+            let gjz = ext(&gj, iwf_motive_scrut_ty(&v.sig), family.clone());
+            let motive = gty(3, &gjz);
+            let (cs_ty, ih_ty, _) = iwf_step_telescope(&v.sig, &lv(0), &motive);
+            let ga = ext(&v.g, (*v.sig.shape).clone(), lv(2));
+            let gacs = ext(&ga, cs_ty, family);
+            let gacsi = ext(&gacs, ih_ty, lv(0));
+            rt(Term::BoxTm(rt(Term::ElimIWf {
+                sig: Rc::clone(&v.sig),
+                motive_level: lv(0),
+                motive: rty(motive),
+                step: rt(gtm(2, &gacsi)),
+                index: rt(gtm(1, &v.g)),
+                scrut: rt(gtm(0, &v.g)),
+            })))
+        },
     })
+}
+
+/// The `IWf` signature `(U_I; U_S; u_n; u_o; u_c)` of a branch whose `u_c`
+/// is global `k` (so `g` is `k + 5`), the index type and shapes being (or,
+/// `coded`, `El` of) the globals before it — and `g`'s context. rec.rs's
+/// `iwf_view`, transcribed.
+struct IWfAt {
+    sig: Rc<IWfSig>,
+    g: LocalCtx,
+}
+
+fn iwf_sig_at(k: u32, coded: bool, l: Level, li: Level) -> IWfAt {
+    let g = g_ctx(k + 5);
+    let piece = |var: u32, level: &Level| {
+        if coded {
+            Type::El { level: level.clone(), tm: rt(gtm(var, &g)) }
+        } else {
+            gty(var, &g)
+        }
+    };
+    let idx = piece(k + 4, &li);
+    let shape = piece(k + 3, &l);
+    let gx = ext(&g, shape.clone(), l.clone());
+    let arity = gtm(k + 2, &gx);
+    let gxi = ext(&gx, Type::Fin { len: rt(arity.clone()) }, Level::Zero);
+    let sig = Rc::new(IWfSig {
+        level: l,
+        idx_level: li,
+        idx: rty(idx),
+        shape: rty(shape),
+        arity: rt(arity),
+        out: rt(gtm(k + 1, &gx)),
+        child: rt(gtm(k, &gxi)),
+    });
+    IWfAt { sig, g }
 }
 
 /// The signature `(U_I; U_S; U_P; u_o)` of an `M` branch whose context

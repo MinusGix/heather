@@ -1,5 +1,5 @@
 //! The code-recursor telescopes of ch. 04 (§More Typing and Equivalence
-//! Judgments): the two motive scopes `G_M` and the 60 branch telescopes
+//! Judgments): the two motive scopes `G_M` and the 66 branch telescopes
 //! `G_Typ G_Trm` (13 from ch. 04 plus the Id/Σ/Unit/Empty/Sum/W extension
 //! branches of kernel-v1-extensions), each with its expected
 //! (motive-instantiated) type.
@@ -24,8 +24,9 @@ use crate::layer::Layer;
 use crate::level::{Level, UnivVar};
 use crate::subst::{GlobalEntry, GlobalSubst};
 use crate::term::{
-    m_out_ty, m_step_ty, wf_step_telescope, Branches, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar,
-    LocalCtx, LocalSubst, LocalVar, Motives, SealedProof, Term, Type,
+    inst_motive2, iwf_children_ty, iwf_motive_scrut_ty, iwf_step_telescope, m_out_ty, m_step_ty,
+    wf_step_telescope, Branches, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, IWfSig, LocalCtx,
+    LocalSubst, LocalVar, Motives, SealedProof, Term, Type,
 };
 
 // ---------------------------------------------------------------------------
@@ -208,12 +209,12 @@ pub(crate) fn motive_types(m: &Motives) -> [&Rc<Type>; 2] {
     [&m.ty_motive, &m.tm_motive]
 }
 
-/// The 60 branch names, in [`branch_specs`] order — for diagnostics that
+/// The 66 branch names, in [`branch_specs`] order — for diagnostics that
 /// must name a branch without printing a term, and for the surface
 /// `match code`, whose arms are **keyed to these names**: the table below is
 /// the single source of truth for what branches exist and in what order, and
 /// the elaborator reads it rather than restating it.
-pub const BRANCH_NAMES: [&str; 60] = [
+pub const BRANCH_NAMES: [&str; 66] = [
     "ty_nat",
     "ty_pi",
     "ty_ty",
@@ -274,10 +275,16 @@ pub const BRANCH_NAMES: [&str; 60] = [
     "tm_m",
     "tm_corec",
     "tm_out",
+    "ty_dvec",
+    "tm_dvec",
+    "ty_iwf",
+    "tm_iwf",
+    "tm_sup_i",
+    "tm_elim_iwf",
 ];
 
-/// The 60 branches, in [`branch_specs`] order (= `Branches` field order).
-pub(crate) fn branch_terms(b: &Branches) -> [&Rc<Term>; 60] {
+/// The 66 branches, in [`branch_specs`] order (= `Branches` field order).
+pub(crate) fn branch_terms(b: &Branches) -> [&Rc<Term>; 66] {
     [
         &b.ty_nat,
         &b.ty_pi,
@@ -339,6 +346,12 @@ pub(crate) fn branch_terms(b: &Branches) -> [&Rc<Term>; 60] {
         &b.tm_m,
         &b.tm_corec,
         &b.tm_out,
+        &b.ty_dvec,
+        &b.tm_dvec,
+        &b.ty_iwf,
+        &b.tm_iwf,
+        &b.tm_sup_i,
+        &b.tm_elim_iwf,
     ]
 }
 
@@ -366,7 +379,7 @@ pub struct BranchShape {
     pub level: Level,
 }
 
-/// The 60 branch shapes at the given motives, in [`BRANCH_NAMES`] order.
+/// The 66 branch shapes at the given motives, in [`BRANCH_NAMES`] order.
 ///
 /// Derived from [`branch_specs`], never restated: a client that binds arm
 /// variables by position stays correct when a branch's telescope changes,
@@ -391,9 +404,9 @@ pub fn branch_shapes(
         .collect()
 }
 
-/// [`Branches`] from 60 terms in [`BRANCH_NAMES`] order — the inverse of
+/// [`Branches`] from 66 terms in [`BRANCH_NAMES`] order — the inverse of
 /// [`branch_terms`], for clients that build the table by index.
-pub fn branches_from(t: [Rc<Term>; 60]) -> Branches {
+pub fn branches_from(t: [Rc<Term>; 66]) -> Branches {
     let [
         ty_nat, ty_pi, ty_ty, ty_el, ty_id, ty_sigma, ty_unit, ty_empty, tm_var, tm_nat,
         tm_pi, tm_ty, tm_zero, tm_succ, tm_elim_nat, tm_lam, tm_app, tm_id, tm_refl, tm_j,
@@ -403,6 +416,7 @@ pub fn branches_from(t: [Rc<Term>; 60]) -> Branches {
         tm_sempty, tm_srefl, tm_transp, tm_elim_sempty,
         ty_squash, tm_squash, tm_squash_in, tm_elim_squash,
         ty_m, tm_m, tm_corec, tm_out,
+        ty_dvec, tm_dvec, ty_iwf, tm_iwf, tm_sup_i, tm_elim_iwf,
     ] = t;
     Branches {
         ty_nat, ty_pi, ty_ty, ty_el, ty_id, ty_sigma, ty_unit, ty_empty, tm_var, tm_nat,
@@ -413,6 +427,7 @@ pub fn branches_from(t: [Rc<Term>; 60]) -> Branches {
         tm_sempty, tm_srefl, tm_transp, tm_elim_sempty,
         ty_squash, tm_squash, tm_squash_in, tm_elim_squash,
         ty_m, tm_m, tm_corec, tm_out,
+        ty_dvec, tm_dvec, ty_iwf, tm_iwf, tm_sup_i, tm_elim_iwf,
     }
 }
 
@@ -510,7 +525,88 @@ fn m_sig_globals(coded: bool, l: &Level, lp: &Level, li: &Level) -> Vec<GlobalBi
     ]
 }
 
-/// The 60 branch telescopes `G_Typ G_Trm` with their expected types, built
+/// The `IWf` signature `(I; x:S. n; x. o; x i. c)` over globals
+/// `g, I, S, n, o, c` with `c` at index `k` (so `k` globals follow it), and
+/// the two contexts its binders open: `(g, x : S)` and `(g, x, i : Fin n)`
+/// (docs/iwf-former-design.md §6). `coded`, the index type and the shapes are
+/// `El` of code globals, as [`m_view`]'s pieces are.
+struct IWfView {
+    sig: Rc<IWfSig>,
+    g: LocalCtx,
+    gx: LocalCtx,
+    gxi: LocalCtx,
+}
+
+fn iwf_view(coded: bool, k: u32, l: &Level, li: &Level) -> IWfView {
+    let g = g_ctx(k + 5);
+    let idx = m_piece(coded, k + 4, &g, li);
+    let shape = m_piece(coded, k + 3, &g, l);
+    let gx = ext_ctx(&g, shape.clone(), l.clone());
+    let arity = gtm(k + 2, &gx);
+    let gxi = ext_ctx(&gx, Type::Fin { len: Rc::new(arity.clone()) }, Level::Zero);
+    IWfView {
+        sig: Rc::new(IWfSig {
+            level: l.clone(),
+            idx_level: li.clone(),
+            idx: Rc::new(idx),
+            shape: Rc::new(shape),
+            arity: Rc::new(arity),
+            out: Rc::new(gtm(k + 1, &gx)),
+            child: Rc::new(gtm(k, &gxi)),
+        }),
+        g,
+        gx,
+        gxi,
+    }
+}
+
+/// The six globals `g, I, S, n, o, c` every `IWf` branch opens with, each
+/// scoped in its own Ψ-prefix: the index type and the shapes as types
+/// (`Typ_c`) or, `coded`, as terms of `Ty` (`Trm_c`). heather-coq's
+/// `brDecls 57`'s first six, innermost-last.
+fn iwf_sig_globals(coded: bool, l: &Level, li: &Level) -> Vec<GlobalBinding> {
+    let code_or_ty = |ctx: LocalCtx, level: &Level| {
+        if coded {
+            GlobalBinding::Tm {
+                ctx,
+                layer: Layer::Code,
+                ty: Rc::new(Type::Ty(level.clone())),
+                level: Level::succ(level.clone()),
+                body: None,
+            }
+        } else {
+            GlobalBinding::Ty { ctx, layer: Layer::Code, level: level.clone() }
+        }
+    };
+    // Prefix (g, I, S): g = 2, I = 1, S = 0.
+    let g2 = g_ctx(2);
+    let n_ctx = ext_ctx(&g2, m_piece(coded, 0, &g2, l), l.clone());
+    // Prefix (g, I, S, n): g = 3, I = 2, S = 1, n = 0.
+    let g3 = g_ctx(3);
+    let o_ctx = ext_ctx(&g3, m_piece(coded, 1, &g3, l), l.clone());
+    let o_ty = m_piece(coded, 2, &g3, li).shift_local(1);
+    // Prefix (g, I, S, n, o): g = 4, I = 3, S = 2, n = 1, o = 0.
+    let g4 = g_ctx(4);
+    let gx4 = ext_ctx(&g4, m_piece(coded, 2, &g4, l), l.clone());
+    let c_ctx = ext_ctx(&gx4, Type::Fin { len: Rc::new(gtm(1, &gx4)) }, Level::Zero);
+    let c_ty = m_piece(coded, 3, &g4, li).shift_local(2);
+    vec![
+        GlobalBinding::Ctx,
+        code_or_ty(g_ctx(0), li),
+        code_or_ty(g_ctx(1), l),
+        GlobalBinding::Tm {
+            ctx: n_ctx,
+            layer: Layer::Code,
+            ty: Rc::new(Type::Nat),
+            level: Level::Zero,
+            body: None,
+        },
+        GlobalBinding::Tm { ctx: o_ctx, layer: Layer::Code, ty: Rc::new(o_ty), level: li.clone(), body: None },
+        GlobalBinding::Tm { ctx: c_ctx, layer: Layer::Code, ty: Rc::new(c_ty), level: li.clone(), body: None },
+    ]
+}
+
+/// The 66 branch telescopes `G_Typ G_Trm` with their expected types, built
 /// from the given motives (for conversion: the *left* side's, matching its
 /// left-biased inference). `gamma` is the ambient local context (before any
 /// telescope), used only for the shape of the identity substitutions in the
@@ -525,7 +621,7 @@ pub(crate) fn branch_specs(
     l1: &Level,
     l2: &Level,
     gamma: &LocalCtx,
-) -> [BranchSpec; 60] {
+) -> [BranchSpec; 66] {
     let m_ty = &*motives.ty_motive;
     let m_tm = &*motives.tm_motive;
     let gt = |tu: u32, tg: u32| gamma.shift_univ(tu).shift_global(tg);
@@ -4980,6 +5076,421 @@ pub(crate) fn branch_specs(
         }
     };
 
+    // -- dependent tuples and indexed trees (docs/iwf-former-design.md §6) --
+    //
+    // heather-coq's M17c branches 55–60 (`RecSpec`: `brDecls`, `br_calls`,
+    // `br_head`), checked binder for binder. Univs `ℓ`, `ℓi` (and `ℓ'` for
+    // the eliminator) are pushed in that order. Every `IWf` branch opens with
+    // the signature's six globals `g, I, S, n, o, c` ([`iwf_sig_globals`]),
+    // and `x_I … x_c` are its recursive results, each at the motive over the
+    // context its piece lives in.
+    let iwf_sig_locals = |coded: bool, univs: u32, tg: u32, v: &IWfView, gt: &LocalCtx| {
+        let sig = &v.sig;
+        let (l, li) = (&sig.level, &sig.idx_level);
+        let k = tg - 6;
+        let (x_i, x_s) = if coded {
+            let piece = |var: u32, level: &Level, at: u32| {
+                inst_tm_motive(
+                    m_tm,
+                    (univs, tg, at),
+                    Level::succ(level.clone()),
+                    v.g.clone(),
+                    Type::Ty(level.clone()),
+                    Term::BoxTm(Rc::new(gtm(var, &v.g))),
+                    gt,
+                )
+            };
+            ((piece(k + 4, li, 0), l2.shift(univs, 0)), (piece(k + 3, l, 1), l2.shift(univs, 0)))
+        } else {
+            let piece = |ty: &Rc<Type>, level: &Level, at: u32| {
+                inst_ty_motive(m_ty, (univs, tg, at), level.clone(), v.g.clone(), Term::BoxTy(Rc::clone(ty)), gt)
+            };
+            ((piece(&sig.idx, li, 0), l1.shift(univs, 0)), (piece(&sig.shape, l, 1), l1.shift(univs, 0)))
+        };
+        let x_n = inst_tm_motive(
+            m_tm,
+            (univs, tg, 2),
+            Level::Zero,
+            v.gx.clone(),
+            Type::Nat,
+            Term::BoxTm(Rc::clone(&sig.arity)),
+            gt,
+        );
+        let x_o = inst_tm_motive(
+            m_tm,
+            (univs, tg, 3),
+            li.clone(),
+            v.gx.clone(),
+            sig.idx.shift_local(1),
+            Term::BoxTm(Rc::clone(&sig.out)),
+            gt,
+        );
+        let x_c = inst_tm_motive(
+            m_tm,
+            (univs, tg, 4),
+            li.clone(),
+            v.gxi.clone(),
+            sig.idx.shift_local(2),
+            Term::BoxTm(Rc::clone(&sig.child)),
+            gt,
+        );
+        vec![
+            (Rc::new(x_i.0), x_i.1),
+            (Rc::new(x_s.0), x_s.1),
+            (Rc::new(x_n), l2.shift(univs, 0)),
+            (Rc::new(x_o), l2.shift(univs, 0)),
+            (Rc::new(x_c), l2.shift(univs, 0)),
+        ]
+    };
+
+    // (ℓ, g, u_n : Trm_c(g ⊢ Nat @ 0), U_F : Typ_c((g, i : Fin u_n^id @ 0), ℓ),
+    //  x_n, x_F. t_DVec) : M_Typ[ℓ/ℓ, g/g, box DVec^ℓ(u_n^id; i. U_F^id)/x_T]
+    // (55), and (ℓ, g, u_n, u_f : Trm_c((g, i) ⊢ Ty ℓ @ 1+ℓ), x_n, x_f.
+    // t'_DVec) : M_Trm[1+ℓ/ℓ, g/g, Ty ℓ/U_T, box DVec^ℓ(u_n^id; i. u_f^id)/x_t]
+    // (56). The length is a term of g, so x_n is at the *term* motive.
+    let (ty_dvec, tm_dvec) = {
+        let make = |coded: bool| {
+            let l = lvar(0);
+            let gt = gt(1, 3);
+            let fam_binding = |ctx: LocalCtx| {
+                if coded {
+                    GlobalBinding::Tm {
+                        ctx,
+                        layer: Layer::Code,
+                        ty: Rc::new(Type::Ty(l.clone())),
+                        level: Level::succ(l.clone()),
+                        body: None,
+                    }
+                } else {
+                    GlobalBinding::Ty { ctx, layer: Layer::Code, level: l.clone() }
+                }
+            };
+            // U_F's prefix (g, u_n): g = 1, u_n = 0.
+            let g1 = g_ctx(1);
+            let globals = vec![
+                GlobalBinding::Ctx,
+                GlobalBinding::Tm {
+                    ctx: g_ctx(0),
+                    layer: Layer::Code,
+                    ty: Rc::new(Type::Nat),
+                    level: Level::Zero,
+                    body: None,
+                },
+                fam_binding(ext_ctx(&g1, Type::Fin { len: Rc::new(gtm(0, &g1)) }, Level::Zero)),
+            ];
+            // Telescope view: g = 2, u_n = 1, U_F = 0.
+            let g2 = g_ctx(2);
+            let len = Rc::new(gtm(1, &g2));
+            let gi = ext_ctx(&g2, Type::Fin { len: Rc::clone(&len) }, Level::Zero);
+            let x_n = inst_tm_motive(m_tm, (1, 3, 0), Level::Zero, g2.clone(), Type::Nat, Term::BoxTm(Rc::clone(&len)), &gt);
+            let (x_f, ty) = if coded {
+                let fam = Rc::new(gtm(0, &gi));
+                let x_f = inst_tm_motive(
+                    m_tm,
+                    (1, 3, 1),
+                    Level::succ(l.clone()),
+                    gi.clone(),
+                    Type::Ty(l.clone()),
+                    Term::BoxTm(Rc::clone(&fam)),
+                    &gt,
+                );
+                let code = Term::TmDVec { level: l.clone(), len: Rc::clone(&len), fam };
+                let ty = inst_tm_motive(
+                    m_tm,
+                    (1, 3, 2),
+                    Level::succ(l.clone()),
+                    g2.clone(),
+                    Type::Ty(l.clone()),
+                    Term::BoxTm(Rc::new(code)),
+                    &gt,
+                );
+                ((x_f, l2.shift(1, 0)), ty)
+            } else {
+                let fam = Rc::new(gty(0, &gi));
+                let x_f = inst_ty_motive(m_ty, (1, 3, 1), l.clone(), gi.clone(), Term::BoxTy(Rc::clone(&fam)), &gt);
+                let code = Type::DVec { level: l.clone(), len: Rc::clone(&len), fam };
+                let ty = inst_ty_motive(m_ty, (1, 3, 2), l.clone(), g2.clone(), Term::BoxTy(Rc::new(code)), &gt);
+                ((x_f, l1.shift(1, 0)), ty)
+            };
+            BranchSpec {
+                tele: Tele {
+                    univs: 1,
+                    globals,
+                    locals: vec![(Rc::new(x_n), l2.shift(1, 0)), (Rc::new(x_f.0), x_f.1)],
+                },
+                ty: Rc::new(ty),
+                level: if coded { l2.shift(1, 0) } else { l1.shift(1, 0) },
+            }
+        };
+        (make(false), make(true))
+    };
+
+    // (ℓ, ℓi, g, U_I, U_S, u_n, u_o, u_c, u_m : Trm_c(g ⊢ U_I^id @ ℓi),
+    //  x_I, x_S, x_n, x_o, x_c, x_m. t_IWf)
+    //   : M_Typ[ℓ⊔ℓi/ℓ, g/g, box IWf(U_I; U_S; u_n; u_o; u_c)(u_m^id)/x_T]
+    // (57), and its coded twin t'_IWf (58) at M_Trm[1+(ℓ⊔ℓi)/ℓ, g/g,
+    // Ty(ℓ⊔ℓi)/U_T, box TmIWf(…)/x_t].
+    let (ty_iwf, tm_iwf) = {
+        let make = |coded: bool| {
+            let (l, li) = (lvar(1), lvar(0));
+            let gt = gt(2, 7);
+            // u_m's prefix (g, I, S, n, o, c): c = 0.
+            let pre = iwf_view(coded, 0, &l, &li);
+            let mut globals = iwf_sig_globals(coded, &l, &li);
+            globals.push(GlobalBinding::Tm {
+                ctx: pre.g.clone(),
+                layer: Layer::Code,
+                ty: Rc::clone(&pre.sig.idx),
+                level: li.clone(),
+                body: None,
+            });
+            // Telescope view: g = 6, I = 5, S = 4, n = 3, o = 2, c = 1, m = 0.
+            let v = iwf_view(coded, 1, &l, &li);
+            let m = Rc::new(gtm(0, &v.g));
+            let mut locals = iwf_sig_locals(coded, 2, 7, &v, &gt);
+            locals.push((
+                Rc::new(inst_tm_motive(
+                    m_tm,
+                    (2, 7, 5),
+                    li.clone(),
+                    v.g.clone(),
+                    (*v.sig.idx).clone(),
+                    Term::BoxTm(Rc::clone(&m)),
+                    &gt,
+                )),
+                l2.shift(2, 0),
+            ));
+            let family = v.sig.family_level();
+            let ty = if coded {
+                let code = Term::TmIWf {
+                    level: l.clone(),
+                    idx_level: li.clone(),
+                    idx: Rc::new(gtm(5, &v.g)),
+                    shape: Rc::new(gtm(4, &v.g)),
+                    arity: Rc::clone(&v.sig.arity),
+                    out: Rc::clone(&v.sig.out),
+                    child: Rc::clone(&v.sig.child),
+                    index: Rc::clone(&m),
+                };
+                inst_tm_motive(
+                    m_tm,
+                    (2, 7, 6),
+                    Level::succ(family.clone()),
+                    v.g.clone(),
+                    Type::Ty(family),
+                    Term::BoxTm(Rc::new(code)),
+                    &gt,
+                )
+            } else {
+                inst_ty_motive(m_ty, (2, 7, 6), family, v.g.clone(), Term::BoxTy(Rc::new(v.sig.at(m))), &gt)
+            };
+            BranchSpec {
+                tele: Tele { univs: 2, globals, locals },
+                ty: Rc::new(ty),
+                level: if coded { l2.shift(2, 0) } else { l1.shift(2, 0) },
+            }
+        };
+        (make(false), make(true))
+    };
+
+    // (ℓ, ℓi, g, U_I, U_S, u_n, u_o, u_c, u_a : Trm_c(g ⊢ U_S^id @ ℓ),
+    //  u_cs : Trm_c(g ⊢ DVec^{ℓ⊔ℓi}(u_n[u_a]; k. IWf(…)(u_c[u_a, k])) @ ℓ⊔ℓi),
+    //  x_I, x_S, x_n, x_o, x_c, x_a, x_cs. t_supi)
+    //   : M_Trm[ℓ⊔ℓi/ℓ, g/g, IWf(…)(u_o[u_a])/U_T, box sup_i(…; u_a; u_cs)/x_t]
+    // (59). The children's type is `iwf_children_ty`, as in the typing rule.
+    let tm_sup_i = {
+        let (l, li) = (lvar(1), lvar(0));
+        let gt = gt(2, 8);
+        let mut globals = iwf_sig_globals(false, &l, &li);
+        // u_a, prefix (…, c): c = 0.
+        let v0 = iwf_view(false, 0, &l, &li);
+        globals.push(GlobalBinding::Tm {
+            ctx: v0.g.clone(),
+            layer: Layer::Code,
+            ty: Rc::clone(&v0.sig.shape),
+            level: l.clone(),
+            body: None,
+        });
+        // u_cs, prefix (…, c, a): c = 1, a = 0.
+        let v1 = iwf_view(false, 1, &l, &li);
+        globals.push(GlobalBinding::Tm {
+            ctx: v1.g.clone(),
+            layer: Layer::Code,
+            ty: Rc::new(iwf_children_ty(&v1.sig, &gtm(0, &v1.g))),
+            level: v1.sig.family_level(),
+            body: None,
+        });
+        // Telescope view: g = 7, I = 6, S = 5, n = 4, o = 3, c = 2, a = 1,
+        // cs = 0.
+        let v = iwf_view(false, 2, &l, &li);
+        let a = Rc::new(gtm(1, &v.g));
+        let cs = Rc::new(gtm(0, &v.g));
+        let family = v.sig.family_level();
+        let mut locals = iwf_sig_locals(false, 2, 8, &v, &gt);
+        locals.push((
+            Rc::new(inst_tm_motive(
+                m_tm,
+                (2, 8, 5),
+                l.clone(),
+                v.g.clone(),
+                (*v.sig.shape).clone(),
+                Term::BoxTm(Rc::clone(&a)),
+                &gt,
+            )),
+            l2.shift(2, 0),
+        ));
+        locals.push((
+            Rc::new(inst_tm_motive(
+                m_tm,
+                (2, 8, 6),
+                family.clone(),
+                v.g.clone(),
+                iwf_children_ty(&v.sig, &a),
+                Term::BoxTm(Rc::clone(&cs)),
+                &gt,
+            )),
+            l2.shift(2, 0),
+        ));
+        let out_at = v.sig.at(Rc::new(v.sig.out.inst_top(0, &a)));
+        let code = v.sig.supi(a, cs);
+        BranchSpec {
+            tele: Tele { univs: 2, globals, locals },
+            ty: Rc::new(inst_tm_motive(
+                m_tm,
+                (2, 8, 7),
+                family,
+                v.g.clone(),
+                out_at,
+                Term::BoxTm(Rc::new(code)),
+                &gt,
+            )),
+            level: l2.shift(2, 0),
+        }
+    };
+
+    // (ℓ, ℓi, ℓ', g, U_I, U_S, u_n, u_o, u_c,
+    //  U_M : Typ_c((g, j : U_I^id, z : IWf(…)(j)), ℓ'),
+    //  u_s : Trm_c((g, a, cs, ih) ⊢ U_M^{id, u_o[a]/j, sup_i(a; cs)/z} @ ℓ'),
+    //  u_m : Trm_c(g ⊢ U_I^id @ ℓi), u_t : Trm_c(g ⊢ IWf(…)(u_m^id) @ ℓ⊔ℓi),
+    //  x_I, x_S, x_n, x_o, x_c, x_M, x_s, x_m, x_t. t_elimIWf)
+    //   : M_Trm[ℓ'/ℓ, g/g, U_M^{id, u_m/j, u_t/z}/U_T,
+    //           box elim_IWf(…; j z. U_M^id; a cs ih. u_s^id; u_m; u_t)/x_t]
+    // (60). The step telescope is `iwf_step_telescope`, exactly as in the
+    // typing rule; x_M is at the *type* motive.
+    let tm_elim_iwf = {
+        let (l, li, lm) = (lvar(2), lvar(1), lvar(0));
+        let gt = gt(3, 10);
+        // `(g, j : I, z : IWf(…)(j))` and the step's `(g, a, cs, ih)` with
+        // its type, for a view whose motive is the global `motive_at`.
+        let scopes = |v: &IWfView, motive_at: u32| {
+            let gj = ext_ctx(&v.g, (*v.sig.idx).clone(), v.sig.idx_level.clone());
+            let gjz = ext_ctx(&gj, iwf_motive_scrut_ty(&v.sig), v.sig.family_level());
+            let motive = gty(motive_at, &gjz);
+            let (cs_ty, ih_ty, step_ty) = iwf_step_telescope(&v.sig, &lm, &motive);
+            let ga = ext_ctx(&v.g, (*v.sig.shape).clone(), v.sig.level.clone());
+            let gacs = ext_ctx(&ga, cs_ty, v.sig.family_level());
+            let gacsi = ext_ctx(&gacs, ih_ty, lm.clone());
+            (gjz, motive, gacsi, step_ty)
+        };
+        let mut globals = iwf_sig_globals(false, &l, &li);
+        // U_M, prefix (…, c): c = 0.
+        let v0 = iwf_view(false, 0, &l, &li);
+        let (gjz0, _, _, _) = scopes(&v0, 0);
+        globals.push(GlobalBinding::Ty { ctx: gjz0, layer: Layer::Code, level: lm.clone() });
+        // u_s, prefix (…, c, M): c = 1, M = 0.
+        let v1 = iwf_view(false, 1, &l, &li);
+        let (_, _, gacsi1, step_ty1) = scopes(&v1, 0);
+        globals.push(GlobalBinding::Tm {
+            ctx: gacsi1,
+            layer: Layer::Code,
+            ty: Rc::new(step_ty1),
+            level: lm.clone(),
+            body: None,
+        });
+        // u_m, prefix (…, c, M, s): c = 2.
+        let v2 = iwf_view(false, 2, &l, &li);
+        globals.push(GlobalBinding::Tm {
+            ctx: v2.g.clone(),
+            layer: Layer::Code,
+            ty: Rc::clone(&v2.sig.idx),
+            level: li.clone(),
+            body: None,
+        });
+        // u_t, prefix (…, c, M, s, m): c = 3, m = 0.
+        let v3 = iwf_view(false, 3, &l, &li);
+        globals.push(GlobalBinding::Tm {
+            ctx: v3.g.clone(),
+            layer: Layer::Code,
+            ty: Rc::new(v3.sig.at(Rc::new(gtm(0, &v3.g)))),
+            level: v3.sig.family_level(),
+            body: None,
+        });
+        // Telescope view: g = 9, I = 8, S = 7, n = 6, o = 5, c = 4, M = 3,
+        // s = 2, m = 1, t = 0.
+        let v = iwf_view(false, 4, &l, &li);
+        let (gjz, motive, gacsi, step_ty) = scopes(&v, 3);
+        let motive = Rc::new(motive);
+        let step = Rc::new(gtm(2, &gacsi));
+        let m = Rc::new(gtm(1, &v.g));
+        let t = Rc::new(gtm(0, &v.g));
+        let family = v.sig.family_level();
+        let mut locals = iwf_sig_locals(false, 3, 10, &v, &gt);
+        locals.push((
+            Rc::new(inst_ty_motive(m_ty, (3, 10, 5), lm.clone(), gjz, Term::BoxTy(Rc::clone(&motive)), &gt)),
+            l1.shift(3, 0),
+        ));
+        locals.push((
+            Rc::new(inst_tm_motive(m_tm, (3, 10, 6), lm.clone(), gacsi, step_ty, Term::BoxTm(Rc::clone(&step)), &gt)),
+            l2.shift(3, 0),
+        ));
+        locals.push((
+            Rc::new(inst_tm_motive(
+                m_tm,
+                (3, 10, 7),
+                li.clone(),
+                v.g.clone(),
+                (*v.sig.idx).clone(),
+                Term::BoxTm(Rc::clone(&m)),
+                &gt,
+            )),
+            l2.shift(3, 0),
+        ));
+        locals.push((
+            Rc::new(inst_tm_motive(
+                m_tm,
+                (3, 10, 8),
+                family,
+                v.g.clone(),
+                v.sig.at(Rc::clone(&m)),
+                Term::BoxTm(Rc::clone(&t)),
+                &gt,
+            )),
+            l2.shift(3, 0),
+        ));
+        let at_scrut = inst_motive2(&motive, 0, &m, &t);
+        let code = Term::ElimIWf {
+            sig: Rc::clone(&v.sig),
+            motive_level: lm.clone(),
+            motive,
+            step,
+            index: m,
+            scrut: t,
+        };
+        BranchSpec {
+            tele: Tele { univs: 3, globals, locals },
+            ty: Rc::new(inst_tm_motive(
+                m_tm,
+                (3, 10, 9),
+                lm.clone(),
+                v.g.clone(),
+                at_scrut,
+                Term::BoxTm(Rc::new(code)),
+                &gt,
+            )),
+            level: l2.shift(3, 0),
+        }
+    };
+
     [
         ty_nat, ty_pi, ty_ty, ty_el, ty_id, ty_sigma, ty_unit, ty_empty, tm_var, tm_nat,
         tm_pi, tm_ty, tm_zero, tm_succ, tm_elim_nat, tm_lam, tm_app, tm_id, tm_refl, tm_j,
@@ -4989,6 +5500,7 @@ pub(crate) fn branch_specs(
         tm_sempty, tm_srefl, tm_transp, tm_elim_sempty,
         ty_squash, tm_squash, tm_squash_in, tm_elim_squash,
         ty_m, tm_m, tm_corec, tm_out,
+        ty_dvec, tm_dvec, ty_iwf, tm_iwf, tm_sup_i, tm_elim_iwf,
     ]
 }
 
@@ -5002,7 +5514,7 @@ mod tests {
     use crate::term::Motives;
     use crate::typing::{check_global_ctx, check_type};
 
-    /// Enough for the whole 60-branch walk: every judgment here is a small
+    /// Enough for the whole 66-branch walk: every judgment here is a small
     /// contextual type, and the walk is linear in the tables.
     const FUEL: u64 = 1 << 16;
 
@@ -5024,7 +5536,7 @@ mod tests {
     /// as a type at its declared level under the prefix that precedes it.
     /// `label` names the site; failures report the label and the entry index
     /// only — never a term (the kernel's `Debug` is bounded, but a
-    /// 60-telescope walk is no place to exercise it).
+    /// 66-telescope walk is no place to exercise it).
     fn check_tele(label: &str, tele: &Tele) -> (GlobalCtx, LocalCtx) {
         // The ambient scope is `(L; Ψ; Γ) = (0; ·; ·)` at layer `m`: `rec_ga`
         // runs under `meta_layer`, and `push_spec` keeps the layer, so this
@@ -5132,7 +5644,7 @@ mod tests {
     /// independently hand-written halves of each branch spec — its
     /// `globals:` list and its `inst_ty_motive` arguments — must agree.
     ///
-    /// The correspondence is the identity on order and, in all 60 branches,
+    /// The correspondence is the identity on order and, in all 66 branches,
     /// a **bijection**: `n` layer-c `Ty` globals ⟺ `n` type-motive calls, in
     /// the same order. Layer-**p** `Ty` globals are the exception that
     /// explains the rule, and it is the paper's own
@@ -5144,7 +5656,8 @@ mod tests {
     /// term-motive calls, whose slots formation already pins (see the
     /// sibling test).
     ///
-    /// 59 slots are covered (ten of them `M`'s); the enumeration is
+    /// 67 slots are covered (ten of them `M`'s, eight `DVec`'s and
+    /// `IWf`'s); the enumeration is
     /// `branch_specs` itself, read off by this walk rather than transcribed.
     #[test]
     fn every_type_motive_recursive_call_matches_its_code_layer_type_binding() {
@@ -5206,6 +5719,6 @@ mod tests {
         // A tripwire on the *scope* of this test: if a branch gains or loses
         // a type-motive recursive call, the enumeration in the issue and the
         // Coq `G_Typ` table both move with it.
-        assert_eq!(covered, 59, "the number of type-motive recursive calls moved");
+        assert_eq!(covered, 67, "the number of type-motive recursive calls moved");
     }
 }
