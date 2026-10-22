@@ -343,6 +343,12 @@ dependently typed "this decreases" field. A loop that is pure but may
 diverge, with no measure at all, is not a FunctionIR loop: it is the layer's
 `Loop` with no calls in its body, and the tree gives it `Tau`s.
 
+*As built (S4 round 5):* the pass that sets the exit bit is a pass too, so
+the bound that provably never runs out is the measure at entry plus one, or
+the measure itself when it stays positive at every pass.
+`loop_runs_unexhausted` (`lib/function_ir.hthr`) takes the invariant and
+the measure, and states it for any bound above the measure.
+
 `issues/function-ir-lowering-loops.md` then resolves as: **S4 gains round 5,
 the bounded loop**, and B2 waits for it as that issue already requires.
 

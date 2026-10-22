@@ -5,7 +5,7 @@ labels: [native,x86,ir,proofs]
 area: heather-in-heather
 milestone: [hih-passes]
 created: 2026-10-21
-updated: 2026-10-21
+updated: 2026-10-22
 ---
 
 Round S4 of `docs/native-program-logic-design.md` (§3.2, §9): lower
@@ -249,3 +249,68 @@ costs a refusal, never a wrong program.
    function; the immediate forms (`AddRI8`/`AddRI32`, CMP-and-Jcc without a
    materialised bit) come back as selection rules with their own cases in
    the theorem. Then B2 can start.
+5. **The bounded loop** (`docs/native-effect-source-design.md` §5.4, L3):
+   FunctionIR's loop of at most `bound` passes with an explicit `Exhausted`
+   outcome, lowered and proved inside `emit_calls`.
+
+   *Round 5 as built:* `StructuredRegion::Loop(inputs, bound, parameters,
+   count, body, exit, next, outputs, exhausted)` in `lib/function_ir.hthr`.
+   - Its meaning is `LoopRuns`. Each pass binds the state to `parameters`
+     and the passes left, counted down from `bound`, to `count`, in a
+     valuation of its own, and runs `body`. The bit `exit` set ends the loop
+     with the words `next`; otherwise `next` is the next pass's state. With
+     no passes left the final state is the current one and `exhausted` is
+     set. The evaluator (`function_ir_eval`) runs it by recursion on the
+     bound, so FunctionIR stays total.
+   - The code is the entry moves into the state registers and the count
+     into a counter register, then the head `TEST counter; JE X`, the body,
+     `TEST exit; JE C`, the leave moves with the flag cleared and `JMP J`,
+     then at `C` the back moves, `ADD counter, -1` (imm8) and `JMP` to the
+     head, at `X` the flag set, and `J`. The four labels are the next four
+     names; the body's start after them.
+   - The loop is a barrier for the register file: after it, the file holds
+     the outputs and the exhausted bit and nothing else. The state,
+     counter and flag registers must be pairwise apart and caller-saved
+     (`LoopRegisters::Apart`, checked by evaluation); anything else is a
+     refusal.
+   - The proof (`loop_emits`) is an induction over the passes left
+     (`Site::loop_passes`) built from separate segment theorems
+     (`loop_stops`, `loop_enters`, `loop_body_runs`, `loop_leaves`,
+     `loop_rounds`, `loop_marks`), with the counter represented as
+     `ofNat(r)`, `r < 2^64`, and decremented by `BitVec::toNat_decrement`.
+     The x86 side gained `Site::moves_block`, `moves_jump` (ahead or
+     behind) and `moves_test`.
+   - A JMP may now land behind it, as a CALL already could. A name no
+     label has resolves to offset 0, which a backward jump reaches, so
+     `Prog::laid_out` gained `targets_named`: every Jcc, JMP and CALL
+     target must be a name of the program (round 2's missing-label control
+     caught this).
+   - **Well-founded functions:** `loop_runs_unexhausted` takes an
+     invariant on the state and a measure that every pass which goes round
+     decreases, and shows that a loop entered with the measure below the
+     passes left never sets `exhausted`. The pass that leaves is a pass
+     too, so the bound is the measure at entry plus one in general, or the
+     measure itself when it is positive at every pass (a countdown whose
+     measure is `x - 1` takes `bound := x`). This sharpens the design's
+     "`bound :=` the measure".
+   - The fixture (`fixtures/function_ir_lower_loops_examples.hthr`, checked
+     by `function_ir_lower_loops.rs`) evaluates and lowers `triangle` (a
+     fold, exhausted by design), `gcd` by subtraction (a conditional in the
+     body, bound `a + b`) and `scale` (a call to `double` inside the loop),
+     pins each program and instantiates `lower_program_correct`. `twice`
+     is a Wf-style countdown proved never exhausted through
+     `loop_runs_unexhausted`. Refusals: the flag or counter placed on a
+     state register, a body clobbering the counter, a short placement, and
+     the flag in a callee-saved register. The Rust side mutates the back
+     edge and the exhausted claim, and the kernel refuses both.
+
+   Left for later:
+   - A one-bit `Const` is not lowered (`word_only`), so a loop whose exit
+     is never set spells its bit as a comparison (`count < count`).
+   - The counter is a 64-bit word, so `bound` is read mod `2^64`.
+   - Loop state is words only, and the barrier drops every value the loop
+     does not output, so a value live across a loop must go through it.
+   - Nothing plans a loop's registers; the fixture's placements are by
+     hand, like round 3's.
+   - The old per-function loop path (`function_ir_loop`) is untouched;
+     moving its examples onto this route is part of B2.

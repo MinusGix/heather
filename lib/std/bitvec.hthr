@@ -1923,6 +1923,37 @@ theorem BitVec::zero_toNat(n: Nat): BitVec::zero(n := n).toNat() = 0 {
     }
 }
 
+// Below the period, counting up from zero is `ofNat`.
+theorem BitVec::zero_iterate_increment(n, m: Nat, lt: m < Nat::pow(2, n)):
+    BitVec::zero(n := n).iterate_increment(m) = BitVec::ofNat(m, n := n) {
+    trans(BitVec::cong_iterate_increment_count(n, BitVec::zero(), sym(BitVec::toNat_ofNat(n, m, lt))),
+        BitVec::iterate_increment_toNat(n, BitVec::ofNat(m, n := n)))
+}
+
+// A nonzero vector is one past its decrement.
+theorem BitVec::toNat_decrement(n: Nat, x: BitVec(n), nonzero: 0 < x.toNat()): Succ(x.decrement().toNat()) = x.toNat() {
+    let y = x.decrement();
+    let k = y.toNat();
+    let back: (BitVec::zero(n := n).iterate_increment(Succ(k)) = x) =
+        trans(BitVec::cong_increment(n, BitVec::iterate_increment_toNat(n, y)), BitVec::increment_decrement(n, x));
+    match Succ(k).eq_dec(Nat::pow(2, n)) {
+        Inl(full) => {
+            let wrapped: (x = BitVec::zero(n := n)) = trans(sym(back),
+                trans(BitVec::cong_iterate_increment_count(n, BitVec::zero(), full), BitVec::iterate_increment_period(n, BitVec::zero())));
+            let none: (x.toNat() = 0) = trans(j(wrapped, λ z _ => x.toNat() = z.toNat(), refl), BitVec::zero_toNat(n));
+            let bad: False = j(none, λ t _ => 0 < t, nonzero);
+            false_elim(bad)
+        },
+        Inr(short) => {
+            let fits: (Succ(k) < Nat::pow(2, n)) = Succ(k).lt_of_le_of_ne(Nat::pow(2, n), BitVec::toNat_lt_pow(n, y), short);
+            let counted = BitVec::zero_iterate_increment(n, Succ(k), fits);
+            sym(trans(j(sym(back), λ z _ => x.toNat() = z.toNat(), refl),
+                trans(j(counted, λ z _ => BitVec::zero(n := n).iterate_increment(Succ(k)).toNat() = z.toNat(), refl),
+                    BitVec::toNat_ofNat(n, Succ(k), fits))))
+        },
+    }
+}
+
 // Zeros above a vector add nothing to its value: zero extension keeps it.
 theorem BitVec::concat_zero_toNat(n: Nat): (m: Nat) → (lo: BitVec(n)) → (lo.concat(BitVec::zero(n := m))).toNat() = lo.toNat() {
     match n as λ k => (m: Nat) → (lo: BitVec(k)) → (lo.concat(BitVec::zero(n := m))).toNat() = lo.toNat() {

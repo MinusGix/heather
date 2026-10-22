@@ -123,7 +123,7 @@ theorem Site::moves_branch<M>(self site: Site<M>, writes: ByteWrites<M>, fits: F
     jump_k: Nat, jump_at: asm_back(site.program, jump_k) = At(yes_end, 0, Jmp(join_name)),
     else_lands: JumpsForward(prog_len(start.test_label(register)), 6,
         asm_jump_of(asm_labels(site.program), prog_len(start.test_label(register)), Jcc(E, else_name)), prog_len(yes_end) + 5),
-    join_lands: JumpsForward(prog_len(yes_end), 5, asm_jump_of(asm_labels(site.program), prog_len(yes_end), Jmp(join_name)),
+    join_lands: NearLands(prog_len(yes_end), asm_jump_of(asm_labels(site.program), prog_len(yes_end), Jmp(join_name)),
         prog_len(no_end)),
     pre, post: Gprs → M → Type,
     yes: site.Moves(writes, prog_len(start.branch_label(register, else_name)), prog_len(yes_end),
@@ -172,6 +172,85 @@ theorem Site::moves_branch<M>(self site: Site<M>, writes: ByteWrites<M>, fits: F
                         trans(cong_fn<BitVec(64), BitVec(64)>(λ address => near_branch_target(address, 6, displacement), u_rip),
                             jumps_forward(site.origin, prog_len(tested), 6, displacement, prog_len(yes_end) + 5, else_lands)));
                 site.arrives_after(writes, s, v, prog_len(no_end), post_s, entry, no(v, v_rip, resident, ⟨holds, zero⟩))
+            },
+        })(refl)
+    }
+}
+
+// A pure block at a label, its condition on registers and memory together.
+theorem Site::moves_block<M>(self site: Site<M>, writes: ByteWrites<M>, fits: FillsFit(site.program, no_fills()), k: Nat,
+    before: Prog, name: Nat, instructions: List<Instruction>, at: asm_back(site.program, k) = At(before, name, Block(instructions)),
+    pre, post: Gprs → M → Type,
+    step: (s: MachineState<M>) → (memory: M) → pre(s.gprs, memory) → post(execute_block_normal(instructions, s).gprs, memory)):
+    site.Moves(writes, prog_len(before), prog_len(before) + block_length(instructions),
+        λ (s: MachineState<M>) => pre(s.gprs, s.memory), λ (t: MachineState<M>) => post(t.gprs, t.memory)) {
+    site.moves_of_pure(writes, prog_len(before), prog_len(before) + block_length(instructions), pre, post,
+        λ memory => site.runs_block(fits, k, before, name, instructions, at, λ (g: Gprs) => pre(g, memory),
+            λ (g: Gprs) => post(g, memory), λ s held => step(s, memory, held)))
+}
+
+// A near JMP at a label, ahead or behind.
+theorem Site::moves_jump<M>(self site: Site<M>, writes: ByteWrites<M>, fits: FillsFit(site.program, no_fills()), k: Nat,
+    before: Prog, name, target: Nat, at: asm_back(site.program, k) = At(before, name, Jmp(target)), to: Nat,
+    lands: NearLands(prog_len(before), asm_jump_of(asm_labels(site.program), prog_len(before), Jmp(target)), to),
+    pre: Gprs → M → Type):
+    site.Moves(writes, prog_len(before), to, λ (s: MachineState<M>) => pre(s.gprs, s.memory), λ (t: MachineState<M>) => pre(t.gprs, t.memory)) {
+    site.moves_of_pure(writes, prog_len(before), to, pre, pre,
+        λ memory => site.runs_jump(fits, k, before, name, target, at, to, lands, λ (g: Gprs) => pre(g, memory)))
+}
+
+// No state satisfies `pre`.
+theorem Site::moves_absurd<M>(self site: Site<M>, writes: ByteWrites<M>, from, to: Nat, pre, post: MachineState<M> → Type,
+    never: (s: MachineState<M>) → pre(s) → False): site.Moves(writes, from, to, pre, post) {
+    λ s here resident holds => false_elim(never(s, holds))
+}
+
+// TEST of a register with itself and JE, each way to `to`: falling through
+// where the register is nonzero, from the jump's target where it is zero.
+theorem Site::moves_test<M>(self site: Site<M>, writes: ByteWrites<M>, fits: FillsFit(site.program, no_fills()),
+    start: Prog, register: Gpr, else_name: Nat,
+    test_k: Nat, test_at: asm_back(site.program, test_k) = start.test_label(register),
+    branch_k: Nat, branch_at: asm_back(site.program, branch_k) = start.branch_label(register, else_name),
+    else_to: Nat, else_lands: JumpsForward(prog_len(start.test_label(register)), 6,
+        asm_jump_of(asm_labels(site.program), prog_len(start.test_label(register)), Jcc(E, else_name)), else_to),
+    to: Nat, pre: Gprs → M → Type, post: MachineState<M> → Type,
+    yes: site.Moves(writes, prog_len(start.branch_label(register, else_name)), to,
+        λ (s: MachineState<M>) => pre(s.gprs, s.memory) ∧ register.tests_zero(s.gprs) = False, post),
+    no: site.Moves(writes, else_to, to, λ (s: MachineState<M>) => pre(s.gprs, s.memory) ∧ register.tests_zero(s.gprs) = True, post)):
+    site.Moves(writes, prog_len(start), to, λ (s: MachineState<M>) => pre(s.gprs, s.memory), post) {
+    λ s here resident holds => {
+        let test = TestRR(register, register);
+        let tested = start.test_label(register);
+        let item = site.item_resident(fits, s.memory, resident, test_k, start, 0, Block([test]), test_at);
+        let ran = block_steps(site.fetch, site.data, [test], s,
+            j(sym(here), λ address _ => CodeResident(site.fetch, s.memory, canonical_block_bytes([test]), address), item));
+        let u = execute_block_normal([test], s);
+        let u_rip: (u.rip = next_rip(site.origin, prog_len(tested))) = trans(ran.right.left, trans(
+            cong_fn<BitVec(64), BitVec(64)>(λ address => next_rip(address, block_length([test])), here),
+            rip_compose(site.origin, prog_len(start), block_length([test]))));
+        let displacement = asm_jump_of(asm_labels(site.program), prog_len(tested), Jcc(E, else_name));
+        let control = JumpIfNear(E, displacement);
+        let jcc = site.item_resident(fits, s.memory, resident, branch_k, tested, 0, Jcc(E, else_name), branch_at);
+        let step = near_fetched_step(site.fetch, site.data, control, u,
+            resident_state(site.fetch, near_control_bytes(control), s.memory, next_rip(site.origin, prog_len(tested)), u,
+                ran.right.right, u_rip, jcc));
+        let v = execute_near_control(control, u);
+        let entry = machine_steps_of_fetched(site.fetch, site.data, writes, s, v,
+            fetched_steps_trans(site.fetch, site.data, s, u, v, ran.left, fetched_steps_one(site.fetch, site.data, u, v, step)));
+        (match register.tests_zero(s.gprs) as λ z => register.tests_zero(s.gprs) = z → site.Arrives(writes, s, to, post) {
+            False => λ nonzero => {
+                let v_rip: (v.rip = next_rip(site.origin, prog_len(tested) + 6)) =
+                    trans(near_if_not_taken_rip(E, displacement, u, nonzero),
+                        trans(cong_fn<BitVec(64), BitVec(64)>(λ address => next_rip(address, 6), u_rip),
+                            rip_compose(site.origin, prog_len(tested), 6)));
+                site.arrives_after(writes, s, v, to, post, entry, yes(v, v_rip, resident, ⟨holds, nonzero⟩))
+            },
+            True => λ zero => {
+                let v_rip: (v.rip = next_rip(site.origin, else_to)) =
+                    trans(near_if_taken_rip(E, displacement, u, zero),
+                        trans(cong_fn<BitVec(64), BitVec(64)>(λ address => near_branch_target(address, 6, displacement), u_rip),
+                            jumps_forward(site.origin, prog_len(tested), 6, displacement, else_to, else_lands)));
+                site.arrives_after(writes, s, v, to, post, entry, no(v, v_rip, resident, ⟨holds, zero⟩))
             },
         })(refl)
     }
@@ -276,7 +355,7 @@ theorem Site::returns_weaken<M>(self site: Site<M>, stack: Stack<M>(site.fetch, 
 // pointer, at offset `index(s)`; after the call the stack pointer is back.
 theorem Site::moves_call<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), fits: FillsFit(site.program, no_fills()),
     k: Nat, before: Prog, name, target: Nat, at: asm_back(site.program, k) = At(before, name, CallTo(target)),
-    entry: Nat, lands: CallLands(prog_len(before), asm_jump_of(asm_labels(site.program), prog_len(before), CallTo(target)), entry),
+    entry: Nat, lands: NearLands(prog_len(before), asm_jump_of(asm_labels(site.program), prog_len(before), CallTo(target)), entry),
     callee_pre: Nat → MachineState<M> → Type, callee_post: Nat → MachineState<M> → MachineState<M> → Type,
     callee: site.Returns(stack, entry, callee_pre, callee_post),
     pre, post: MachineState<M> → Type, index: MachineState<M> → Nat,
@@ -303,7 +382,7 @@ theorem Site::moves_call<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site
             site.item_fetched(fits, s, resident, k, before, name, CallTo(target), at, here), executes);
         let u_rip: (u.rip = next_rip(site.origin, entry)) =
             trans(cong_fn<BitVec(64), BitVec(64)>(λ a => near_branch_target(a, 5, displacement), here),
-                call_lands_target(site.origin, prog_len(before), displacement, entry, lands));
+                near_lands_target(site.origin, prog_len(before), displacement, entry, lands));
         let u_resident: site.Resident(u.memory) =
             j(sym(pushed), λ a _ => site.Resident(stack.writes.store(s.memory, a, word_bytes(ret))),
                 stack.keeps_code(s.memory, i, room, ret, assemble(no_fills(), site.program, site.last), next_rip(site.origin, 0), resident));

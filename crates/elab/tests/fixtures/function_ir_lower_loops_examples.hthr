@@ -1,0 +1,307 @@
+// Bounded loops lowered by `function_ir_lower_calls`'s one theorem
+// (issues/function-ir-verified-lowering.md, round 5): the code is computed
+// by evaluation, and each program's claim is the theorem instantiated. A
+// fold that runs out of passes, gcd with a conditional in its body, and a
+// call in a loop; then the bound a function defined by well-founded
+// recursion takes, its measure, and the proof that its loop never runs out.
+
+import function_ir;
+import function_ir_eval;
+import function_ir_lower;
+import function_ir_lower_structured;
+import function_ir_lower_calls;
+import x86_64;
+import x86_64_block;
+import x86_64_fetch;
+import x86_64_data_read;
+import x86_64_fetched_code;
+import x86_64_stack;
+import x86_64_asm;
+import x86_64_asm_runs;
+import x86_64_stack_runs;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+import omega;
+
+fn word(id: Nat) → Port { Port(id := id, width := 64) }
+fn bit(id: Nat) → Port { Port(id := id, width := 1) }
+fn w(n: Nat) → BitVec(64) { BitVec::ofNat(n) }
+
+// A program written forward: an item, an empty block a jump or CALL
+// names, and a call's saves and restores.
+fn Prog::put(self p: Prog, item: Asm) → Prog { At(p, 0, item) }
+fn Prog::label(self p: Prog, name: Nat) → Prog { At(p, name, Block([])) }
+fn Prog::saving(self p: Prog) → Prog { saved_registers().spills(p, 0) }
+fn Prog::restoring(self p: Prog) → Prog { saved_registers().reloads(p, 0) }
+
+// ---------------------------------------------------------------------------
+// A fold: triangle(n) = n + (n - 1) + … + 1
+
+// Each pass adds the passes left; nothing sets the exit bit (`count <
+// count`: one-bit constants are not lowered yet), so the loop runs `n`
+// passes and comes out exhausted.
+fn triangle() → Function {
+    Function(parameters := [0],
+        body := Sequence(
+            Region(inputs := Ports([word(0)]), nodes := [Const(width := 64, output := 1, value := 0)],
+                outputs := Ports([word(0), word(1)])),
+            Loop(inputs := [1], bound := 0, parameters := [10], count := 11,
+                body := Dataflow(Region(inputs := Ports([word(10), word(11)]),
+                    nodes := [Add(width := 64, output := 12, left := 10, right := 11),
+                        UnsignedLessThan(width := 64, output := 13, left := 11, right := 11)],
+                    outputs := Ports([word(12), bit(13)]))),
+                exit := 13, next := [12], outputs := [2], exhausted := 3)),
+        result := 2)
+}
+
+theorem triangle_evaluable(): program_evaluable([triangle()]).IsTrue() { trivial }
+theorem triangle_runs(): program_eval([triangle()], 0, [w(4)]) = w(10) { refl }
+theorem triangle_of_zero(): program_eval([triangle()], 0, [w(0)]) = w(0) { refl }
+
+// The loop came out exhausted.
+theorem triangle_exhausted():
+    triangle().body.eval(program_eval([triangle()]), Valuation::bind(Valuation::zero(), [0], [w(4)]))(1, 3) = BitVec::ofBool(True) { refl }
+
+// The state in R8, the counter in RCX, the flag in RDX; the body's sum
+// lands in the state's register, so neither way out moves anything.
+fn triangle_placement() → List<Gpr> { [Rax, R8, Rcx, Rdx, R8, R9] }
+
+fn triangle_program() → Prog {
+    Start
+        .label(1).put(Block([frame_allocate()]))
+        .put(Block([MovRI(Rax, w(0))]))
+        .put(Block([MovRR(Rcx, Rdi), MovRR(R8, Rax)]))
+        .label(2).put(Block([TestRR(Rcx, Rcx)])).put(Jcc(E, 4))
+        .put(Block([AddRR(R8, Rcx), XorRR(R9, R9), CmpRR(Rcx, Rcx), SetBelow(R9b)]))
+        .put(Block([TestRR(R9, R9)])).put(Jcc(E, 3))
+        .put(Block([])).put(Block([MovRI(Rdx, w(0))])).put(Jmp(5))
+        .label(3).put(Block([])).put(Block([AddRI8(Rcx, BitVec::ofNat(255))])).put(Jmp(2))
+        .label(4).put(Block([MovRI(Rdx, w(1))]))
+        .label(5)
+        .put(Block([MovRR(Rax, R8)])).put(Block([frame_free()])).put(Ret)
+}
+
+theorem triangle_lowers(): lower_program([triangle()], triangle_placement()) = Some(triangle_program()) { refl }
+
+theorem triangle_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
+    stack: Stack<M>(fetch, data)):
+    Site<M>(fetch, data, triangle_program(), last, origin).Calls(stack, program_callees([triangle()]), 1) {
+    lower_program_correct<M>([triangle()], triangle_placement(), triangle_program(), triangle_lowers(), fetch, data, last, origin, stack)
+}
+
+// ---------------------------------------------------------------------------
+// gcd by subtraction, a conditional in the loop's body
+
+// The bound is a + b, a measure: each pass that goes round takes the
+// smaller from the larger. Equal sides set the exit bit; the false arm then
+// leaves `a` where the result is read.
+fn gcd() → Function {
+    Function(parameters := [0, 1],
+        body := Sequence(
+            Region(inputs := Ports([word(0), word(1)]), nodes := [Add(width := 64, output := 2, left := 0, right := 1)],
+                outputs := Ports([word(0), word(1), word(2)])),
+            Loop(inputs := [0, 1], bound := 2, parameters := [10, 11], count := 12,
+                body := Sequence(
+                    Region(inputs := Ports([word(10), word(11)]),
+                        nodes := [Equal(width := 64, output := 13, left := 10, right := 11),
+                            UnsignedLessThan(width := 64, output := 14, left := 11, right := 10)],
+                        outputs := Ports([word(10), word(11), bit(13), bit(14)])),
+                    Conditional(Ports([word(10), word(11), bit(13), bit(14)]), 14, Ports([word(10), word(11)]),
+                        Ports([word(15), word(16)]),
+                        Dataflow(Region(inputs := Ports([word(10), word(11)]),
+                            nodes := [Sub(width := 64, output := 15, left := 10, right := 11), Move(width := 64, output := 16, source := 11)],
+                            outputs := Ports([word(15), word(16)]))),
+                        Dataflow(Region(inputs := Ports([word(10), word(11)]),
+                            nodes := [Sub(width := 64, output := 16, left := 11, right := 10), Move(width := 64, output := 15, source := 10)],
+                            outputs := Ports([word(15), word(16)]))))),
+                exit := 13, next := [15, 16], outputs := [3, 4], exhausted := 5)),
+        result := 3)
+}
+
+theorem gcd_evaluable(): program_evaluable([gcd()]).IsTrue() { trivial }
+theorem gcd_runs(): program_eval([gcd()], 0, [w(12), w(18)]) = w(6) { refl }
+theorem gcd_not_exhausted():
+    gcd().body.eval(program_eval([gcd()]), Valuation::bind(Valuation::zero(), [0, 1], [w(12), w(18)]))(1, 5) = BitVec::ofBool(False) { refl }
+
+// Both arms leave the new state in R8 and R9, where the loop keeps it.
+fn gcd_placement() → List<Gpr> { [Rax, R8, R9, Rcx, Rdx, R10, R11, R8, R9, R9, R8] }
+
+fn gcd_program() → Prog {
+    Start
+        .label(1).put(Block([frame_allocate()]))
+        .put(Block([MovRR(Rax, Rdi), AddRR(Rax, Rsi)]))
+        .put(Block([MovRR(Rcx, Rax), MovRR(R8, Rdi), MovRR(R9, Rsi)]))
+        .label(2).put(Block([TestRR(Rcx, Rcx)])).put(Jcc(E, 4))
+        .put(Block([XorRR(R10, R10), CmpRR(R8, R9), SetEqual(R10b), XorRR(R11, R11), CmpRR(R9, R8), SetBelow(R11b)]))
+        .put(Block([TestRR(R11, R11)])).put(Jcc(E, 6))
+        .put(Block([SubRR(R8, R9), MovRR(R9, R9)])).put(Jmp(7))
+        .label(6).put(Block([SubRR(R9, R8), MovRR(R8, R8)]))
+        .label(7)
+        .put(Block([TestRR(R10, R10)])).put(Jcc(E, 3))
+        .put(Block([])).put(Block([MovRI(Rdx, w(0))])).put(Jmp(5))
+        .label(3).put(Block([])).put(Block([AddRI8(Rcx, BitVec::ofNat(255))])).put(Jmp(2))
+        .label(4).put(Block([MovRI(Rdx, w(1))]))
+        .label(5)
+        .put(Block([MovRR(Rax, R8)])).put(Block([frame_free()])).put(Ret)
+}
+
+theorem gcd_lowers(): lower_program([gcd()], gcd_placement()) = Some(gcd_program()) { refl }
+
+theorem gcd_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
+    stack: Stack<M>(fetch, data)):
+    Site<M>(fetch, data, gcd_program(), last, origin).Calls(stack, program_callees([gcd()]), 1) {
+    lower_program_correct<M>([gcd()], gcd_placement(), gcd_program(), gcd_lowers(), fetch, data, last, origin, stack)
+}
+
+// ---------------------------------------------------------------------------
+// A call in a loop: scale(x, n) = x · 2ⁿ by `double`
+
+fn double() → Function {
+    Function(parameters := [0],
+        body := Dataflow(Region(inputs := Ports([word(0)]), nodes := [Add(width := 64, output := 1, left := 0, right := 0)],
+            outputs := Ports([word(1)]))),
+        result := 1)
+}
+
+// The counter and the state survive the CALL in saved registers; the
+// result comes back in RAX and is moved into the state's register either
+// way out.
+fn scale() → Function {
+    Function(parameters := [0, 1],
+        body := Loop(inputs := [0], bound := 1, parameters := [10], count := 11,
+            body := Compose(Call(0, [10], 12),
+                Dataflow(Region(inputs := Ports([word(11), word(12)]),
+                    nodes := [UnsignedLessThan(width := 64, output := 13, left := 11, right := 11)],
+                    outputs := Ports([word(12), bit(13)])))),
+            exit := 13, next := [12], outputs := [2], exhausted := 3),
+        result := 2)
+}
+
+fn scaled() → List<Function> { [scale(), double()] }
+
+theorem scaled_evaluable(): program_evaluable(scaled()).IsTrue() { trivial }
+theorem scale_runs(): program_eval(scaled(), 1, [w(3), w(4)]) = w(48) { refl }
+
+fn scale_placement() → List<Gpr> { [Rax, R8, Rcx, Rdx, R9] }
+
+fn scaled_program() → Prog {
+    Start
+        .label(1).put(Block([frame_allocate()]))
+        .put(Block([MovRR(Rax, Rdi), AddRR(Rax, Rax)]))
+        .put(Block([])).put(Block([frame_free()])).put(Ret)
+        .label(2).put(Block([frame_allocate()]))
+        .put(Block([MovRR(Rcx, Rsi), MovRR(R8, Rdi)]))
+        .label(3).put(Block([TestRR(Rcx, Rcx)])).put(Jcc(E, 5))
+        .saving().put(Block([MovRR(Rdi, R8)])).put(CallTo(1)).restoring()
+        .put(Block([XorRR(R9, R9), CmpRR(Rcx, Rcx), SetBelow(R9b)]))
+        .put(Block([TestRR(R9, R9)])).put(Jcc(E, 4))
+        .put(Block([MovRR(R8, Rax)])).put(Block([MovRI(Rdx, w(0))])).put(Jmp(6))
+        .label(4).put(Block([MovRR(R8, Rax)])).put(Block([AddRI8(Rcx, BitVec::ofNat(255))])).put(Jmp(3))
+        .label(5).put(Block([MovRI(Rdx, w(1))]))
+        .label(6)
+        .put(Block([MovRR(Rax, R8)])).put(Block([frame_free()])).put(Ret)
+}
+
+theorem scaled_lowers(): lower_program(scaled(), scale_placement()) = Some(scaled_program()) { refl }
+
+theorem scaled_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
+    stack: Stack<M>(fetch, data)):
+    Site<M>(fetch, data, scaled_program(), last, origin).Calls(stack, program_callees(scaled()), 2) {
+    lower_program_correct<M>(scaled(), scale_placement(), scaled_program(), scaled_lowers(), fetch, data, last, origin, stack)
+}
+
+// ---------------------------------------------------------------------------
+// Refusals
+
+// The flag shares the state's register.
+theorem flag_on_state_refused(): lower_program([triangle()], [Rax, R8, Rcx, R8, R8, R9]) = None { refl }
+// The counter shares the state's register.
+theorem counter_on_state_refused(): lower_program([triangle()], [Rax, R8, R8, Rdx, R8, R9]) = None { refl }
+// The body writes the counter's register while the count is still read.
+theorem counter_clobbered_refused(): lower_program([triangle()], [Rax, R8, Rcx, Rdx, Rcx, R9]) = None { refl }
+// Too few registers for the state, the counter and the flag.
+theorem placement_short_refused(): lower_program([triangle()], [Rax, R8, Rcx]) = None { refl }
+// The flag in a callee-saved register: its MOVs would not keep it.
+theorem flag_callee_saved_refused(): lower_program([triangle()], [Rax, R8, Rcx, Rbx, R8, R9]) = None { refl }
+
+// ---------------------------------------------------------------------------
+// Well-founded recursion: the measure is the bound
+
+// twice(x) = 2x, counting x down: the loop a function defined by `Wf` on x
+// takes when each recursive call is on x - 1 and the last leaves at x - 1
+// = 0. Its bound is x itself, its measure at entry; the proof that the
+// measure (x - 1, x positive) falls on every pass that goes round shows the
+// loop never runs out (`loop_runs_unexhausted`).
+fn countdown_body() → StructuredRegion {
+    Dataflow(Region(inputs := Ports([word(10), word(11)]),
+        nodes := [Const(width := 64, output := 13, value := 1), Sub(width := 64, output := 14, left := 10, right := 13),
+            Const(width := 64, output := 15, value := 2), Add(width := 64, output := 16, left := 11, right := 15),
+            Const(width := 64, output := 18, value := 0), Equal(width := 64, output := 17, left := 14, right := 18)],
+        outputs := Ports([word(14), word(16), bit(17)])))
+}
+
+fn countdown_loop() → StructuredRegion {
+    Loop(inputs := [0, 1], bound := 0, parameters := [10, 11], count := 12, body := countdown_body(), exit := 17, next := [14, 16],
+        outputs := [2, 3], exhausted := 4)
+}
+
+fn twice() → Function {
+    Function(parameters := [0],
+        body := Sequence(
+            Region(inputs := Ports([word(0)]), nodes := [Const(width := 64, output := 1, value := 0)],
+                outputs := Ports([word(0), word(1)])),
+            countdown_loop()),
+        result := 3)
+}
+
+theorem twice_evaluable(): program_evaluable([twice()]).IsTrue() { trivial }
+theorem twice_runs(): program_eval([twice()], 0, [w(21)]) = w(42) { refl }
+theorem twice_lowers(): lower_program([twice()], [Rax, R8, R9, Rcx, Rdx, R10, R8, R11, R9, Rsi, R10]).is_some() = True { refl }
+
+fn countdown_head(state: List<BitVec(64)>) → BitVec(64) { match state { Nil => BitVec::zero(), Cons(x, _) => x } }
+fn CountdownLive(state: List<BitVec(64)>) → Type { 0 < countdown_head(state).toNat() }
+fn countdown_measure(state: List<BitVec(64)>) → Nat { countdown_head(state).toNat() - 1 }
+
+theorem sub_one(x: BitVec(64)): x.sub(w(1)) = x.decrement() { trans(sym(BitVec::iter_sub_eq_sub(64, x, w(1))), refl) }
+
+theorem nonzero_of_unequal(y, zero: BitVec(64), is_zero: zero = w(0), differs: y.eq_bit(zero) = False): 0 < y.toNat() {
+    match y.toNat().eq_dec(0) {
+        Inl(none) => {
+            let same: (y = zero) = trans(sym(BitVec::ofNat_toNat(64, y)), trans(j(none, λ t _ => BitVec::ofNat(y.toNat(), n := 64) = BitVec::ofNat(t), refl),
+                sym(is_zero)));
+            absurd(trans(sym(differs), BitVec::eq_bit_of_eq(64, y, zero, same)))
+        },
+        Inr(some) => { omega },
+    }
+}
+
+// A pass that goes round keeps x positive and lowers the measure.
+theorem countdown_decreases(callees: Callees(), values: Valuation(), holds: StructuredRegionHoldsIn(callees, values, countdown_body()),
+    live: CountdownLive(words_of(values, [10, 11])), clear: values(1, 17).head_bit() = False):
+    CountdownLive(words_of(values, [14, 16])) ∧ countdown_measure(words_of(values, [14, 16])) < countdown_measure(words_of(values, [10, 11])) {
+    let x = values(64, 10);
+    let y = values(64, 14);
+    let stepped: (y = x.decrement()) = trans(holds.right.left, trans(j(sym(holds.left), λ one _ => x.sub(one) = x.sub(w(1)), refl), sub_one(x)));
+    let counted: (Succ(y.toNat()) = x.toNat()) =
+        trans(j(stepped, λ z _ => Succ(y.toNat()) = Succ(z.toNat()), refl), BitVec::toNat_decrement(64, x, live));
+    let unequal: (y.eq_bit(values(64, 18)) = False) = trans(sym(BitVec::head_bit_ofBool(y.eq_bit(values(64, 18)))),
+        trans(j(holds.right.right.right.right.right.left, λ b _ => b.head_bit() = values(1, 17).head_bit(), refl), clear));
+    let positive: (0 < y.toNat()) = nonzero_of_unequal(y, values(64, 18), holds.right.right.right.right.left, unequal);
+    let falls: (y.toNat() - 1 < x.toNat() - 1) = j(counted, λ t _ => y.toNat() - 1 < t - 1,
+        j(sym(Nat::sub_zero(y.toNat())), λ t _ => y.toNat() - 1 < t, y.toNat().sub_lt_of_pos(1, trivial, positive)));
+    ⟨positive, falls⟩
+}
+
+// Entered with x positive, the loop leaves before its passes run out.
+theorem twice_never_exhausts(callees: Callees(), values: Valuation(), holds: StructuredRegionHoldsIn(callees, values, countdown_loop()),
+    positive: 0 < values(64, 0).toNat()): values(1, 4).head_bit() = False {
+    let measured: (values(64, 0).toNat() - 1 < values(64, 0).toNat()) = values(64, 0).toNat().sub_lt_of_pos(1, trivial, positive);
+    loop_runs_unexhausted(λ (pass: Valuation()) => StructuredRegionHoldsIn(callees, pass, countdown_body()), [10, 11], 12, 17, [14, 16],
+        λ (state: List<BitVec(64)>) => CountdownLive(state), λ (state: List<BitVec(64)>) => countdown_measure(state),
+        λ pass held live clear => countdown_decreases(callees, pass, held, live, clear),
+        values(64, 0).toNat(), words_of(values, [0, 1]), words_of(values, [2, 3]), values(1, 4).head_bit(), positive, measured, holds)
+}

@@ -199,6 +199,24 @@ theorem words_of_bind(values: Valuation(), ids: List<Nat>): distinct(ids).IsTrue
     }
 }
 
+// Binding ids leaves every other id as it was.
+theorem Valuation::bind_frame(values: Valuation(), ids: List<Nat>): (words: List<BitVec(64)>) → (w, id: Nat) →
+    absent(id, ids).IsTrue() → Valuation::bind(values, ids, words)(w, id) = values(w, id) {
+    match ids {
+        Nil => λ words w id _ => refl,
+        Cons(x, rest) => λ words => match words {
+            Nil => λ w id _ => refl,
+            Cons(word, more) => λ w id h => {
+                let parts = Bool::is_true_and(id.differs(x), absent(id, rest), h);
+                trans(Valuation::set_other(Valuation::bind(values, rest, more), x, word_value(word), w, id, id.differs_ne(x, parts.left)),
+                    Valuation::bind_frame(values, rest, more, w, id, parts.right))
+            },
+        },
+    }
+}
+
+theorem BitVec::head_bit_ofBool(b: Bool): BitVec::ofBool(b).head_bit() = b { match b { False => refl, True => refl } }
+
 // ---------------------------------------------------------------------------
 // Nodes
 
@@ -355,6 +373,96 @@ theorem eval_nodes_holds(nodes: List<Node>): nodes_evaluable(nodes).IsTrue() →
 // What a call is answered with: function `f` on words.
 fn Answers() → Type { Nat → List<BitVec(64)> → BitVec(64) }
 
+// How a loop ends: its state, and whether its passes ran out.
+record LoopEnd { state: List<BitVec(64)>, exhausted: Bool }
+
+// A pass's own valuation: the state at the parameters, the passes left at
+// `count`.
+fn pass_valuation(parameters: List<Nat>, count, remaining: Nat, state: List<BitVec(64)>) → Valuation() {
+    Valuation::bind(Valuation::set(Valuation::zero(), count, word_value(BitVec::ofNat(remaining))), parameters, state)
+}
+
+// The loop's passes, each run by `step`, from `state` with `remaining`
+// passes left.
+fn loop_eval(step: Valuation() → Valuation(), parameters: List<Nat>, count, exit: Nat, next: List<Nat>, remaining: Nat) →
+    List<BitVec(64)> → LoopEnd {
+    match remaining {
+        Zero => λ state => LoopEnd(state, True),
+        Succ(rest) => λ state => {
+            let after = step(pass_valuation(parameters, count, Succ(rest), state));
+            match after(1, exit).head_bit() {
+                False => loop_eval(step, parameters, count, exit, next, rest, words_of(after, next)),
+                True => LoopEnd(words_of(after, next), False),
+            }
+        },
+    }
+}
+
+// The loop's final state is a state: as many words as parameters.
+theorem loop_eval_len(step: Valuation() → Valuation(), parameters: List<Nat>, count, exit: Nat, next: List<Nat>,
+    lengths: next.len() = parameters.len(), remaining: Nat):
+    (state: List<BitVec(64)>) → state.len() = parameters.len() →
+    loop_eval(step, parameters, count, exit, next, remaining, state).state.len() = parameters.len() {
+    match remaining {
+        Zero => λ state same => same,
+        Succ(rest) => λ state same => {
+            let after = step(pass_valuation(parameters, count, Succ(rest), state));
+            let next_len: (words_of(after, next).len() = parameters.len()) = trans(words_of_len(after, next), lengths);
+            match after(1, exit).head_bit() as λ b => (match b {
+                False => loop_eval(step, parameters, count, exit, next, rest, words_of(after, next)),
+                True => LoopEnd(words_of(after, next), False),
+            }).state.len() = parameters.len() {
+                False => loop_eval_len(step, parameters, count, exit, next, lengths, rest, words_of(after, next), next_len),
+                True => next_len,
+            }
+        },
+    }
+}
+
+// What the loop evaluates to is a run of it, when each pass's step
+// satisfies `pass` and keeps the parameters and the count.
+theorem loop_eval_runs(pass: Valuation() → Type, step: Valuation() → Valuation(), holds: (v: Valuation()) → pass(step(v)),
+    parameters: List<Nat>, count, exit: Nat, next: List<Nat>, apart: distinct(Cons(count, parameters)).IsTrue(),
+    kept: (v: Valuation()) → (w, id: Nat) → Mem(id, Cons(count, parameters)) → step(v)(w, id) = v(w, id),
+    lengths: next.len() = parameters.len(), remaining: Nat):
+    (state: List<BitVec(64)>) → state.len() = parameters.len() →
+    LoopRuns(pass, parameters, count, exit, next, remaining, state, loop_eval(step, parameters, count, exit, next, remaining, state).state,
+        loop_eval(step, parameters, count, exit, next, remaining, state).exhausted) {
+    match remaining {
+        Zero => λ state _ => ⟨refl, refl⟩,
+        Succ(rest) => λ state same => {
+            let parts = Bool::is_true_and(absent(count, parameters), distinct(parameters), apart);
+            let counted = Valuation::set(Valuation::zero(), count, word_value(BitVec::ofNat(Succ(rest))));
+            let before = pass_valuation(parameters, count, Succ(rest), state);
+            let after = step(before);
+            let bound: (words_of(after, parameters) = state) = trans(
+                words_agree(parameters, before, after, λ id m => kept(before, 64, id, Inr(m))),
+                words_of_bind(counted, parameters, parts.right, state, sym(same)));
+            let at_count: (after(64, count) = BitVec::ofNat(Succ(rest))) = trans(kept(before, 64, count, Inl(refl)),
+                trans(Valuation::bind_frame(counted, parameters, state, 64, count, parts.left),
+                    trans(Valuation::set_here(Valuation::zero(), count, word_value(BitVec::ofNat(Succ(rest))), 64),
+                        word_value_word(BitVec::ofNat(Succ(rest))))));
+            let next_len: (words_of(after, next).len() = parameters.len()) = trans(words_of_len(after, next), lengths);
+            Exists(after, ⟨bound, ⟨at_count, ⟨holds(before),
+                match after(1, exit).head_bit() as λ b => match b as λ _ => Type {
+                    False => LoopRuns(pass, parameters, count, exit, next, rest, words_of(after, next),
+                        (match b as λ _ => LoopEnd { False => loop_eval(step, parameters, count, exit, next, rest, words_of(after, next)),
+                            True => LoopEnd(words_of(after, next), False) }).state,
+                        (match b as λ _ => LoopEnd { False => loop_eval(step, parameters, count, exit, next, rest, words_of(after, next)),
+                            True => LoopEnd(words_of(after, next), False) }).exhausted),
+                    True => ((match b as λ _ => LoopEnd { False => loop_eval(step, parameters, count, exit, next, rest, words_of(after, next)),
+                            True => LoopEnd(words_of(after, next), False) }).state = words_of(after, next)) ∧
+                        ((match b as λ _ => LoopEnd { False => loop_eval(step, parameters, count, exit, next, rest, words_of(after, next)),
+                            True => LoopEnd(words_of(after, next), False) }).exhausted = False),
+                } {
+                    False => loop_eval_runs(pass, step, holds, parameters, count, exit, next, apart, kept, lengths, rest,
+                        words_of(after, next), next_len),
+                    True => ⟨refl, refl⟩,
+                }⟩⟩⟩)
+        },
+    }
+}
+
 fn StructuredRegion::eval(self region: StructuredRegion, call: Answers(), values: Valuation()) → Valuation() {
     match region {
         Dataflow(body) => body.eval(values),
@@ -365,6 +473,11 @@ fn StructuredRegion::eval(self region: StructuredRegion, call: Answers(), values
             True => when_true.eval(call, values),
         },
         Call(callee, arguments, result) => Valuation::set(values, result, word_value(call(callee, words_of(values, arguments)))),
+        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => {
+            let end = loop_eval(λ (pass: Valuation()) => body.eval(call, pass), parameters, count, exit, next, values(64, bound).toNat(),
+                words_of(values, inputs));
+            Valuation::set(Valuation::bind(values, outputs, end.state), exhausted, bit_value(end.exhausted))
+        },
     }
 }
 
@@ -375,6 +488,7 @@ fn StructuredRegion::writes(self region: StructuredRegion) → List<Nat> {
         Compose(prefix, continuation) => prefix.writes() ++ continuation.writes(),
         Conditional(_, _, _, _, when_true, when_false) => when_true.writes() ++ when_false.writes(),
         Call(_, _, result) => [result],
+        Loop(_, _, _, _, _, _, _, outputs, exhausted) => Cons(exhausted, outputs),
     }
 }
 
@@ -385,6 +499,7 @@ fn StructuredRegion::mentions(self region: StructuredRegion) → List<Nat> {
         Compose(prefix, continuation) => prefix.mentions() ++ continuation.mentions(),
         Conditional(_, condition, _, _, when_true, when_false) => Cons(condition, when_true.mentions() ++ when_false.mentions()),
         Call(_, arguments, result) => Cons(result, arguments),
+        Loop(inputs, bound, _, _, _, _, _, outputs, exhausted) => Cons(bound, inputs) ++ Cons(exhausted, outputs),
     }
 }
 
@@ -403,6 +518,11 @@ fn StructuredRegion::evaluable(self region: StructuredRegion, arity: Nat → Opt
         Conditional(_, condition, _, _, when_true, when_false) => absent(condition, when_true.writes() ++ when_false.writes())
             && (when_true.evaluable(arity) && when_false.evaluable(arity)),
         Call(callee, arguments, result) => absent(result, arguments) && arity_fits(arity(callee), arguments.len()),
+        Loop(inputs, bound, parameters, count, body, _, next, outputs, exhausted) => body.evaluable(arity)
+            && (distinct(Cons(count, parameters)) && (disjoint(body.writes(), Cons(count, parameters))
+            && (distinct(Cons(exhausted, outputs)) && (disjoint(Cons(exhausted, outputs), Cons(bound, inputs))
+            && (inputs.len().matches(parameters.len()) && (next.len().matches(parameters.len())
+            && outputs.len().matches(parameters.len()))))))),
     }
 }
 
@@ -432,6 +552,14 @@ theorem StructuredRegion::eval_frame(self region: StructuredRegion, call: Answer
         Call(callee, arguments, result) => λ values w id h =>
             Valuation::set_other(values, result, word_value(call(callee, words_of(values, arguments))), w, id,
                 id.differs_ne(result, Bool::is_true_and(id.differs(result), True, h).left)),
+        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ values w id h => {
+            let end = loop_eval(λ (pass: Valuation()) => body.eval(call, pass), parameters, count, exit, next, values(64, bound).toNat(),
+                words_of(values, inputs));
+            let parts = Bool::is_true_and(id.differs(exhausted), absent(id, outputs), h);
+            trans(Valuation::set_other(Valuation::bind(values, outputs, end.state), exhausted, bit_value(end.exhausted), w, id,
+                    id.differs_ne(exhausted, parts.left)),
+                Valuation::bind_frame(values, outputs, end.state, w, id, parts.right))
+        },
     }
 }
 
@@ -506,6 +634,70 @@ theorem StructuredRegion::eval_holds_in(self region: StructuredRegion, callees: 
                 j(sym(words_of_len(values, arguments)), λ n _ => arity_fits(arity(callee), n).IsTrue(), parts.right);
             j(sym(read), λ ws _ => callees(callee, ws, after(64, result)),
                 j(sym(at_result), λ r _ => callees(callee, words, r), answers(callee, words, fits)))
+        },
+        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ ok values after agree => {
+            let pass = λ (v: Valuation()) => StructuredRegionHoldsIn(callees, v, body);
+            let step = λ (v: Valuation()) => body.eval(call, v);
+            let p1 = Bool::is_true_and(body.evaluable(arity), distinct(Cons(count, parameters)) && (disjoint(body.writes(), Cons(count, parameters))
+                && (distinct(Cons(exhausted, outputs)) && (disjoint(Cons(exhausted, outputs), Cons(bound, inputs))
+                && (inputs.len().matches(parameters.len()) && (next.len().matches(parameters.len())
+                && outputs.len().matches(parameters.len())))))), ok);
+            let p2 = Bool::is_true_and(distinct(Cons(count, parameters)), disjoint(body.writes(), Cons(count, parameters))
+                && (distinct(Cons(exhausted, outputs)) && (disjoint(Cons(exhausted, outputs), Cons(bound, inputs))
+                && (inputs.len().matches(parameters.len()) && (next.len().matches(parameters.len())
+                && outputs.len().matches(parameters.len()))))), p1.right);
+            let p3 = Bool::is_true_and(disjoint(body.writes(), Cons(count, parameters)), distinct(Cons(exhausted, outputs))
+                && (disjoint(Cons(exhausted, outputs), Cons(bound, inputs))
+                && (inputs.len().matches(parameters.len()) && (next.len().matches(parameters.len())
+                && outputs.len().matches(parameters.len())))), p2.right);
+            let p4 = Bool::is_true_and(distinct(Cons(exhausted, outputs)), disjoint(Cons(exhausted, outputs), Cons(bound, inputs))
+                && (inputs.len().matches(parameters.len()) && (next.len().matches(parameters.len())
+                && outputs.len().matches(parameters.len()))), p3.right);
+            let p5 = Bool::is_true_and(disjoint(Cons(exhausted, outputs), Cons(bound, inputs)), inputs.len().matches(parameters.len())
+                && (next.len().matches(parameters.len()) && outputs.len().matches(parameters.len())), p4.right);
+            let p6 = Bool::is_true_and(inputs.len().matches(parameters.len()),
+                next.len().matches(parameters.len()) && outputs.len().matches(parameters.len()), p5.right);
+            let p7 = Bool::is_true_and(next.len().matches(parameters.len()), outputs.len().matches(parameters.len()), p6.right);
+            let outs = Bool::is_true_and(absent(exhausted, outputs), distinct(outputs), p4.left);
+            let in_len: (words_of(values, inputs).len() = parameters.len()) =
+                trans(words_of_len(values, inputs), inputs.len().matches_eq(parameters.len(), p6.left));
+            let next_len: (next.len() = parameters.len()) = next.len().matches_eq(parameters.len(), p7.left);
+            let n = values(64, bound).toNat();
+            let start = words_of(values, inputs);
+            let end = loop_eval(step, parameters, count, exit, next, n, start);
+            let region = Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted);
+            let bound_after: (after(64, bound) = values(64, bound)) = trans(agree(64, bound, Inl(refl)),
+                region.eval_frame(call, values, 64, bound, disjoint_mem(Cons(exhausted, outputs), Cons(bound, inputs), p5.left, bound, Inl(refl))));
+            let inputs_after: (words_of(after, inputs) = start) = words_agree(inputs, values, after, λ id m =>
+                trans(agree(64, id, List::mem_append_l(Cons(bound, inputs), Cons(exhausted, outputs), id, Inr(m))),
+                    region.eval_frame(call, values, 64, id, disjoint_mem(Cons(exhausted, outputs), Cons(bound, inputs), p5.left, id, Inr(m)))));
+            let bound_values = Valuation::bind(values, outputs, end.state);
+            let outputs_after: (words_of(after, outputs) = end.state) = trans(
+                words_agree(outputs, bound_values, after, λ id m =>
+                    trans(agree(64, id, List::mem_append_r(Cons(bound, inputs), Cons(exhausted, outputs), id, Inr(m))),
+                        Valuation::set_other(bound_values, exhausted, bit_value(end.exhausted), 64, id,
+                            λ e => absent_mem(exhausted, outputs, outs.left, id, m, sym(e))))),
+                words_of_bind(values, outputs, outs.right, end.state,
+                    trans(outputs.len().matches_eq(parameters.len(), p7.right),
+                        sym(loop_eval_len(step, parameters, count, exit, next, next_len, n, start, in_len)))));
+            let exhausted_after: (after(1, exhausted).head_bit() = end.exhausted) = trans(
+                cong_fn<BitVec(1), Bool>(λ x => x.head_bit(), trans(agree(1, exhausted, List::mem_append_r(Cons(bound, inputs),
+                    Cons(exhausted, outputs), exhausted, Inl(refl))),
+                    trans(Valuation::set_here(bound_values, exhausted, bit_value(end.exhausted), 1), bit_value_bit(end.exhausted)))),
+                BitVec::head_bit_ofBool(end.exhausted));
+            let runs = loop_eval_runs(pass, step,
+                λ v => body.eval_holds_in(callees, call, arity, answers, p1.left, v, body.eval(call, v), λ w id m => refl),
+                parameters, count, exit, next, p2.left,
+                λ v w id m => body.eval_frame(call, v, w, id, disjoint_mem(body.writes(), Cons(count, parameters), p3.left, id, m)),
+                next_len, n, start, in_len);
+            j(sym(exhausted_after), λ x _ => LoopRuns(pass, parameters, count, exit, next, after(64, bound).toNat(), words_of(after, inputs),
+                    words_of(after, outputs), x),
+                j(sym(outputs_after), λ x _ => LoopRuns(pass, parameters, count, exit, next, after(64, bound).toNat(), words_of(after, inputs),
+                        x, end.exhausted),
+                    j(sym(inputs_after), λ x _ => LoopRuns(pass, parameters, count, exit, next, after(64, bound).toNat(), x, end.state,
+                            end.exhausted),
+                        j(sym(bound_after), λ x _ => LoopRuns(pass, parameters, count, exit, next, x.toNat(), start, end.state, end.exhausted),
+                            runs))))
         },
     }
 }
