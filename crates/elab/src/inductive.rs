@@ -450,6 +450,7 @@ pub(crate) fn decoded(t: &Type) -> Cow<'_, Type> {
                 | Term::TmVec { .. }
                 | Term::TmFin { .. }
                 | Term::TmWf { .. }
+                | Term::TmM { .. }
                 | Term::TmSEq { .. }
         )
     }

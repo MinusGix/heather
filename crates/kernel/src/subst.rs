@@ -247,12 +247,6 @@ trait Mapper {
         None
     }
 
-    /// [`Self::pre_tm`] for a **type** node. `None` — the default, and every
-    /// mapper here but the read-only [`NeedsComputing`] — descends as usual.
-    fn pre_ty(&mut self, _t: &Rc<Type>, _at: Depths) -> Option<Type> {
-        None
-    }
-
     /// Whether this subtree provably cannot be changed by this mapper at
     /// these depths, decided in O(1) from cached per-node metadata
     /// (see §Skipping closed subtrees). `false` — the default — means
@@ -304,10 +298,6 @@ fn shared_tm<M: Mapper>(orig: &Rc<Term>, mapped: Term) -> Rc<Term> {
 fn sub_ty<M: Mapper>(t: &Rc<Type>, m: &mut M, at: Depths) -> Rc<Type> {
     if M::COUNT_NODES {
         crate::stats::shift_global_nodes(1);
-    }
-    if let Some(r) = m.pre_ty(t, at) {
-        m.note();
-        return Rc::new(r);
     }
     if m.skip_ty(t, at) {
         // A skip claims the whole traversal is a no-op here. Verify the
@@ -635,6 +625,16 @@ fn map_term<M: Mapper>(t: &Term, m: &mut M, at: Depths) -> Term {
             level: m.level(level, at),
             shape: sub_tm(shape, m, at),
             arity: sub_tm(arity, m, at + dep(0, 0, 1)),
+        },
+        Term::TmM { level, pos_level, idx_level, idx, shape, pos, next, index } => Term::TmM {
+            level: m.level(level, at),
+            pos_level: m.level(pos_level, at),
+            idx_level: m.level(idx_level, at),
+            idx: sub_tm(idx, m, at),
+            shape: sub_tm(shape, m, at + dep(0, 0, 1)),
+            pos: sub_tm(pos, m, at + dep(0, 0, 2)),
+            next: sub_tm(next, m, at + dep(0, 0, 3)),
+            index: sub_tm(index, m, at),
         },
         Term::Zero => Term::Zero,
         Term::NatLit(n) => Term::NatLit(n.clone()),
@@ -1033,6 +1033,10 @@ fn map_branches<M: Mapper>(b: &Branches, m: &mut M, at: Depths) -> Branches {
         tm_squash: sub_tm(&b.tm_squash, m, at + dep(1, 2, 1)),
         tm_squash_in: sub_tm(&b.tm_squash_in, m, at + dep(1, 3, 2)),
         tm_elim_squash: sub_tm(&b.tm_elim_squash, m, at + dep(2, 5, 4)),
+        ty_m: sub_tm(&b.ty_m, m, at + dep(3, 6, 5)),
+        tm_m: sub_tm(&b.tm_m, m, at + dep(3, 6, 5)),
+        tm_corec: sub_tm(&b.tm_corec, m, at + dep(4, 9, 8)),
+        tm_out: sub_tm(&b.tm_out, m, at + dep(3, 7, 6)),
     }
 }
 
@@ -1159,7 +1163,7 @@ impl Mapper for ShiftGlobal {
 /// The recursor's motive and branch telescopes, weakened by `by` global
 /// bindings. The value machine's one materialization site that is a
 /// telescope table rather than a term (`docs/lazy-global-offset-design.md`
-/// §5); routed through the generic traversal so the 56 telescopes are not
+/// §5); routed through the generic traversal so the 60 telescopes are not
 /// written down again.
 pub(crate) fn shift_global_tables(
     motives: &Motives,
@@ -2233,80 +2237,6 @@ impl Mapper for RebuildChecked<'_> {
         self.replaced += 1;
         Some(out)
     }
-}
-
-/// The read-only walk behind [`needs_computing_layer`]: it rebuilds nothing it
-/// does not cut, and it cuts (replaces by a leaf) every subtree once the
-/// answer is known, so the walk ends at the first witness.
-struct NeedsComputing<'a> {
-    psi_len: usize,
-    prog: &'a dyn Fn(usize) -> bool,
-    found: bool,
-    changes: u64,
-}
-
-impl NeedsComputing<'_> {
-    /// Whether global variable `v`, seen under `at.global` binders, is a Ψ
-    /// binding at layer p.
-    fn prog_global(&self, v: GlobalVar, at: Depths) -> bool {
-        v.0 >= at.global
-            && self
-                .psi_len
-                .checked_sub(1 + (v.0 - at.global) as usize)
-                .is_some_and(|i| (self.prog)(i))
-    }
-}
-
-impl Mapper for NeedsComputing<'_> {
-    const LOCAL_OP: bool = false;
-    const NAME: &'static str = "needs_computing_layer";
-
-    fn changes(&mut self) -> &mut u64 {
-        &mut self.changes
-    }
-
-    fn pre_tm(&mut self, t: &Rc<Term>, at: Depths) -> Option<Term> {
-        if !self.found {
-            self.found = match &**t {
-                Term::Supi { .. } | Term::ElimIWf { .. } | Term::Corec { .. } | Term::Out { .. } => true,
-                Term::GlobalTm { var, .. } => self.prog_global(*var, at),
-                _ => false,
-            };
-        }
-        self.found.then_some(Term::Zero)
-    }
-
-    fn pre_ty(&mut self, t: &Rc<Type>, at: Depths) -> Option<Type> {
-        if !self.found {
-            self.found = match &**t {
-                Type::DVec { .. } | Type::IWf { .. } | Type::M { .. } => true,
-                Type::GlobalTy { var, .. } => self.prog_global(*var, at),
-                _ => false,
-            };
-        }
-        self.found.then_some(Type::Nat)
-    }
-}
-
-/// Whether `t` can be checked only at a **computing** layer (p or m): it
-/// holds a former admitted only there — `DVec`, `IWf`, `M` and their terms,
-/// until their codes rounds — or refers to a global bound at layer p.
-/// `prog(i)` says whether Ψ binding `i` (from the front, of `psi_len`) is one.
-///
-/// The elaborator's choice of a declaration's layer
-/// (docs/codata-elaborator-design.md §6). Not a judgment: the declaration is
-/// still checked at the layer chosen, so a wrong answer is a rejection.
-pub fn needs_computing_layer(t: &Rc<Term>, psi_len: usize, prog: &dyn Fn(usize) -> bool) -> bool {
-    let mut m = NeedsComputing { psi_len, prog, found: false, changes: 0 };
-    let _ = sub_tm(t, &mut m, Depths::default());
-    m.found
-}
-
-/// [`needs_computing_layer`] over a type.
-pub fn needs_computing_layer_ty(t: &Rc<Type>, psi_len: usize, prog: &dyn Fn(usize) -> bool) -> bool {
-    let mut m = NeedsComputing { psi_len, prog, found: false, changes: 0 };
-    let _ = sub_ty(t, &mut m, Depths::default());
-    m.found
 }
 
 /// Rebuild `t` with every recorded checked spelling in its component form;

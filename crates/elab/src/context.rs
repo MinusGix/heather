@@ -78,7 +78,7 @@ pub(crate) struct Cx {
     /// Set while a **quotation payload** elaborates (`quote.rs`'s `pcx`), and
     /// nowhere else. The checked spellings of
     /// `docs/intro-by-type-design.md` §2.3 may not appear inside a `box`: the
-    /// code grammar, `code_eq` and the 56 recursor branches range over that
+    /// code grammar, `code_eq` and the 60 recursor branches range over that
     /// payload, and `tm_pair`'s branch telescope types its field
     /// sub-structures by `U_S`/`U_T`, which a collapsed annotation cannot
     /// state (§2.2). The design spelled this restriction as "layers p and m",

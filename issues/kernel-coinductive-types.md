@@ -131,3 +131,4 @@ copatterns).
   open: heather-coq's §9 Q1–Q3 (the relation, decidability, the bridge),
   the elaborator round (§10 step 4) and the library (§10 step 5).
 - 2026-10-22: Elaborator round (design §10 step 4) implemented: [[codata-elaborator]], `docs/codata-elaborator-design.md`. It needed one more kernel change: bodied term definitions at layer p in Ψ, since `M` has no codes and every declaration was bound at c. Follow-ups are [[codata-indexed]] (`Bisim`/eutt need it), [[codata-nested-guards]] and [[codata-codes]]. Next is the library (§10 step 5), milestone `it-coinductive`.
+- 2026-10-22: Codes round (design §10 step 6, brought forward): `TmM`, the four `ty_m`/`tm_m`/`tm_corec`/`tm_out` branches, and `M`/`corec`/`out` at layer c, so codata declarations are bound at c and the round-1 p-layer extension is gone (`docs/kernel-m-codes-design.md`, [[codata-codes]]).

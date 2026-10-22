@@ -395,6 +395,12 @@ impl Cache {
             Term::TmWf { shape, arity, .. } => {
                 self.term_use(shape).join(self.term_use(arity).under(1))
             }
+            Term::TmM { idx, shape, pos, next, index, .. } => self
+                .term_use(idx)
+                .join(self.term_use(shape).under(1))
+                .join(self.term_use(pos).under(2))
+                .join(self.term_use(next).under(3))
+                .join(self.term_use(index)),
             Term::Succ(t) => self.term_use(t),
             Term::ElimNat {
                 motive,
@@ -686,6 +692,10 @@ impl Cache {
             .join(self.term_use(&b.tm_squash).under(1))
             .join(self.term_use(&b.tm_squash_in).under(2))
             .join(self.term_use(&b.tm_elim_squash).under(4))
+            .join(self.term_use(&b.ty_m).under(5))
+            .join(self.term_use(&b.tm_m).under(5))
+            .join(self.term_use(&b.tm_corec).under(8))
+            .join(self.term_use(&b.tm_out).under(6))
     }
 }
 

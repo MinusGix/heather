@@ -3675,7 +3675,7 @@ fn global_app<'v>(
 ///
 /// No analyzer slot, and no `meta fn`: the fold is a program-layer function of
 /// one `Ir`, so an ordinary application is the whole invocation — which is
-/// also what keeps it off the 56-branch `rec_ga` gate every `match code` shell
+/// also what keeps it off the 60-branch `rec_ga` gate every `match code` shell
 /// pays. Evaluation is the same demand-driven forcing under the same budgets
 /// as every other readback here.
 fn run_cert_fold<'v>(

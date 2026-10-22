@@ -483,6 +483,16 @@ impl<'a, 'v> Agree<'a, 'v> {
                 self.lazy_tm(shape, s2, gamma, d)?;
                 self.under_tm(arity, n2, gamma, 1, d)
             }
+            (Val::TmM(m), Term::TmM { level, pos_level, idx_level, idx, shape, pos, next, index }) => {
+                self.lev(&m.level, level, "`M level")?;
+                self.lev(&m.pos_level, pos_level, "`M position level")?;
+                self.lev(&m.idx_level, idx_level, "`M index level")?;
+                self.lazy_tm(m.idx, idx, gamma, d)?;
+                self.under_tm(m.shape, shape, gamma, 1, d)?;
+                self.under_tm(m.pos, pos, gamma, 2, d)?;
+                self.under_tm(m.next, next, gamma, 3, d)?;
+                self.lazy_tm(m.index, index, gamma, d)
+            }
             (
                 Val::TmId { level: a, ty, lhs, rhs },
                 Term::TmId { level: b, ty: t2, lhs: l2, rhs: r2 },
@@ -1332,7 +1342,7 @@ fn stream3_open_terms_at_a_checked_type() {
 }
 
 // ---------------------------------------------------------------------------
-// Seed stream 4: boxed code under the identity code recursors — the 56
+// Seed stream 4: boxed code under the identity code recursors — the 60
 // branch telescopes, fired through the *shared* `beta_elim_*`
 // ---------------------------------------------------------------------------
 

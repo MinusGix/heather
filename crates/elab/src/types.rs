@@ -35,10 +35,6 @@ pub(crate) struct Types {
     current: Rc<TypeLayer>,
     next_tag: u32,
     gdefs: GenDefs,
-    /// Whether any committed declaration is `codata`: until one is, no
-    /// declaration can need a computing layer (`Elaborator::decl_layer`), and
-    /// the walk that decides it is skipped.
-    any_codata: bool,
 }
 
 impl Types {
@@ -64,10 +60,6 @@ impl Types {
 
     fn layers(&self) -> impl Iterator<Item = &TypeLayer> {
         std::iter::once(self.current.as_ref()).chain(self.sealed.iter().rev().map(Rc::as_ref))
-    }
-
-    pub(crate) fn any_codata(&self) -> bool {
-        self.any_codata
     }
 
     pub(crate) fn next_tag(&self) -> u32 {
@@ -120,7 +112,6 @@ impl Types {
         debug_assert!(reserved_collection_literal || ind.tag == ind_tag);
         debug_assert!(self.by_tag(ind.tag).is_none());
 
-        self.any_codata |= ind.codata;
         let layer = crate::stats::make_mut(&mut self.current);
         if let Some(skeleton) = &ind.skel {
             layer.by_tag.insert(skeleton.tag, Rc::clone(skeleton));

@@ -698,6 +698,16 @@ fn unify_tm(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]
             unify_tm(u, b1, b2, n, d + 1, sols);
         }
         (
+            Term::TmM { idx: x1, shape: s1, pos: p1, next: o1, index: j1, .. },
+            Term::TmM { idx: x2, shape: s2, pos: p2, next: o2, index: j2, .. },
+        ) => {
+            unify_tm(u, x1, x2, n, d, sols);
+            unify_tm(u, s1, s2, n, d + 1, sols);
+            unify_tm(u, p1, p2, n, d + 2, sols);
+            unify_tm(u, o1, o2, n, d + 3, sols);
+            unify_tm(u, j1, j2, n, d, sols);
+        }
+        (
             Term::TmSum {
                 lhs: a1, rhs: b1, ..
             },

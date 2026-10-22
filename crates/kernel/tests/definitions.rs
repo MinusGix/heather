@@ -606,5 +606,9 @@ fn const_branches(t: Term) -> Rc<Branches> {
         tm_squash: z(),
         tm_squash_in: z(),
         tm_elim_squash: z(),
+        ty_m: z(),
+        tm_m: z(),
+        tm_corec: z(),
+        tm_out: z(),
     })
 }

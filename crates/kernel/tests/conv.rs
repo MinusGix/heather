@@ -512,7 +512,11 @@ fn const_branches(t: Term) -> Rc<Branches> {
         ty_squash: rt(t.clone()),
         tm_squash: rt(t.clone()),
         tm_squash_in: rt(t.clone()),
-        tm_elim_squash: rt(t),
+        tm_elim_squash: rt(t.clone()),
+        ty_m: rt(t.clone()),
+        tm_m: rt(t.clone()),
+        tm_corec: rt(t.clone()),
+        tm_out: rt(t),
     })
 }
 
@@ -588,7 +592,8 @@ fn recursor_branch_type_uses_motive() {
                   &mut br.tm_wf, &mut br.tm_supf, &mut br.tm_elim_wf,
                   &mut br.tm_seq, &mut br.tm_sempty, &mut br.tm_srefl,
                   &mut br.tm_transp, &mut br.tm_elim_sempty, &mut br.tm_squash,
-                  &mut br.tm_squash_in, &mut br.tm_elim_squash] {
+                  &mut br.tm_squash_in, &mut br.tm_elim_squash, &mut br.tm_m,
+                  &mut br.tm_corec, &mut br.tm_out] {
             *f = rt(Term::Zero);
         }
         br.ty_nat = rt(v(0));
@@ -620,7 +625,8 @@ fn recursor_branch_type_uses_motive() {
                   &mut br.tm_wf, &mut br.tm_supf, &mut br.tm_elim_wf,
                   &mut br.tm_seq, &mut br.tm_sempty, &mut br.tm_srefl,
                   &mut br.tm_transp, &mut br.tm_elim_sempty, &mut br.tm_squash,
-                  &mut br.tm_squash_in, &mut br.tm_elim_squash] {
+                  &mut br.tm_squash_in, &mut br.tm_elim_squash, &mut br.tm_m,
+                  &mut br.tm_corec, &mut br.tm_out] {
             *f = rt(Term::Zero);
         }
         *branches = Rc::new(br);

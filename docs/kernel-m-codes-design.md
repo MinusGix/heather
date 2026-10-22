@@ -1,6 +1,6 @@
 # Codes for `M`
 
-Status: design, 2026-10-22. This is step 6 of
+Status: implemented, 2026-10-22 (`crates/kernel/tests/m_codes.rs`). This is step 6 of
 `docs/kernel-coinduction-design.md` §10, brought forward on Minus's call so
 that codata lands at layer c rather than through layer-p definitions
 (`docs/codata-elaborator-design.md` §6, PR #131). Issue:

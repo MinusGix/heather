@@ -205,11 +205,11 @@ fn value_parameters_and_approximation() {
     e.elab_module_source("cotree", src).unwrap_or_else(|err| panic!("{}", err.render(src)));
 }
 
-// §6 — a declaration whose statement or body mentions codata is bound at
-// layer p; one that only *uses* such a binding is p too, and an unrelated
-// one stays at c.
+// §6 — every declaration is bound at layer c, codata or not: `M`, `corec`
+// and `out` are admitted there, with `TmM` their code
+// (docs/kernel-m-codes-design.md).
 #[test]
-fn layers_follow_codata() {
+fn codata_declarations_are_code() {
     let e = elab(&format!(
         "{STREAM}
          fn third() -> Nat {{ nth(from(1), 2) }}
@@ -217,12 +217,24 @@ fn layers_follow_codata() {
          fn plain(n: Nat) -> Nat {{ Succ(n) }}"
     ));
     use heather_kernel::layer::Layer;
-    let layer_of = |name: &str| e.global_layer(name).unwrap_or_else(|| panic!("`{name}` is a term binding"));
-    assert_eq!(layer_of("hd"), Layer::Prog);
-    assert_eq!(layer_of("zeros"), Layer::Prog);
-    assert_eq!(layer_of("third"), Layer::Prog);
-    assert_eq!(layer_of("plain"), Layer::Code);
-    assert_eq!(layer_of("add"), Layer::Code);
+    for name in ["hd", "zeros", "from", "third", "third_is", "plain", "add"] {
+        assert_eq!(e.global_layer(name), Some(Layer::Code), "`{name}`");
+    }
+}
+
+// §6 — codata has a code, so it is a type argument like any other: written
+// (`id<Stream>`), inferred, and inside another type's argument (`Pair`).
+#[test]
+fn codata_as_a_type_argument() {
+    elab(&format!(
+        "{STREAM}
+         fn id<A>(a: A) -> A {{ a }}
+         theorem written(): hd(id<Stream>(from(2))) = 2 {{ refl }}
+         theorem inferred(n: Nat): hd(tl(id(from(n)))) = Succ(n) {{ refl }}
+         record Two<A> {{ fst: A, snd: A }}
+         fn both(n: Nat) -> Two<Stream> {{ Two<Stream>(fst := from(n), snd := zeros()) }}
+         theorem both_fst(n: Nat): hd(both(n).fst) = n {{ refl }}"
+    ));
 }
 
 // Images: a codata declaration and its corecursive functions written to a

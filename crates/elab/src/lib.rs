@@ -3161,8 +3161,8 @@ impl Elaborator {
     }
 
     /// The layer a term binding was bound at, by the name the current module
-    /// resolves: `c` for an ordinary declaration, `p` for one over codata
-    /// (docs/codata-elaborator-design.md §6).
+    /// resolves: `c` for every declaration, codata included
+    /// (docs/kernel-m-codes-design.md §0).
     pub fn global_layer(&self, name: &str) -> Option<Layer> {
         match self.psi.bindings.get(self.global_abs(name)?)? {
             GlobalBinding::Tm { layer, .. } => Some(*layer),
@@ -4193,15 +4193,10 @@ impl Elaborator {
         // An installed gate oracle (`gate.rs`) may vouch for the declaration
         // instead, in which case neither call runs. Nothing installs one by
         // default; `heather check --cache` is the only caller today.
-        //
-        // At layer c unless the declaration needs a computing one: a codata
-        // type or a corecursive value, or a global that already did
-        // (docs/codata-elaborator-design.md §6).
-        let layer = self.decl_layer(&lifted_psi, &stmt, term.as_ref());
         let empty = LocalCtx::nil();
         if let Some(term) = term.as_ref() {
             let opaque = matches!(decl.kind, DeclKind::Theorem);
-            self.gate_bodied(&lifted_psi, &decl.name, decl.span, &empty, &stmt, &stmt_lvl, term, opaque, layer)?;
+            self.gate_bodied(&lifted_psi, &decl.name, decl.span, &empty, &stmt, &stmt_lvl, term, opaque)?;
         } else {
             // Axioms extend the trusted assumptions, but their statements are
             // still required to be well-formed kernel types.
@@ -4305,7 +4300,7 @@ impl Elaborator {
         };
         let binding = GlobalBinding::Tm {
             ctx: LocalCtx::nil(),
-            layer,
+            layer: Layer::Code,
             ty: Rc::new(stmt),
             level: stmt_lvl,
             body: match decl.kind {
@@ -4342,32 +4337,6 @@ impl Elaborator {
         })
     }
 
-    /// The layer a declaration is checked and bound at: `Code`, every
-    /// declaration's, unless its statement or body holds a former admitted
-    /// only at the computing layers — the codata `M` above all — or refers to
-    /// a global bound at `Prog` (docs/codata-elaborator-design.md §6). The
-    /// walk runs only once a `codata` declaration exists.
-    fn decl_layer(&self, psi: &GlobalCtx, stmt: &Type, body: Option<&Term>) -> Layer {
-        if !self.types.any_codata() {
-            return Layer::Code;
-        }
-        let prog = |i: usize| {
-            matches!(
-                psi.bindings.get(i),
-                Some(GlobalBinding::Tm { layer: Layer::Prog, .. } | GlobalBinding::Ty { layer: Layer::Prog, .. })
-            )
-        };
-        let n = psi.bindings.len();
-        let stmt = Rc::new(stmt.clone());
-        if heather_kernel::subst::needs_computing_layer_ty(&stmt, n, &prog)
-            || body.is_some_and(|b| heather_kernel::subst::needs_computing_layer(&Rc::new(b.clone()), n, &prog))
-        {
-            Layer::Prog
-        } else {
-            Layer::Code
-        }
-    }
-
     /// The kernel gate for one bodied global in `psi`: the cache oracle, then
     /// the statement here, then the body here or on the pool. Shared by a
     /// declaration and the tactic proofs it lifts, which extend Ψ before it
@@ -4383,9 +4352,8 @@ impl Elaborator {
         level: &Level,
         body: &Term,
         opaque: bool,
-        layer: Layer,
     ) -> R<()> {
-        let item = gate::GateItem { name, ctx, ty, level, body, opaque, layer, lands_in_psi: true };
+        let item = gate::GateItem { name, ctx, ty, level, body, opaque, layer: Layer::Code, lands_in_psi: true };
         if self.gate.as_ref().is_some_and(|g| g.admits(psi, &item)) {
             return Ok(());
         }
@@ -4404,7 +4372,7 @@ impl Elaborator {
             // every ordinary run — asks the kernel.
             let verdict = match self.kernel_replay.reuse(psi.bindings.len(), self.fuel, &item) {
                 Some(verdict) => verdict,
-                None => stats::time_kernel(|| self.kernel_check_term(psi, layer, ctx, body, ty, level)),
+                None => stats::time_kernel(|| self.kernel_check_term(psi, Layer::Code, ctx, body, ty, level)),
             };
             verdict.map_err(|e| self.kernel_error(name, span, e))?;
             let unsealed = recording.finish();
@@ -4425,7 +4393,7 @@ impl Elaborator {
                 level: level.clone(),
                 body: body.clone(),
                 opaque,
-                layer,
+                layer: Layer::Code,
                 lands_in_psi: true,
                 fuel: self.fuel,
                 unsealed: recording.finish(),
@@ -4489,11 +4457,10 @@ impl Elaborator {
             let at = Rc::new(world.clone());
             stats::time_kernel(|| typing::check_local_ctx(&at, 0, Layer::Prog, &gamma, self.fuel))
                 .map_err(|e| self.kernel_error(&format!("{name}#aux{j}"), span, e))?;
-            let layer = self.decl_layer(&at, &ty, Some(&body));
-            self.gate_bodied(&at, &format!("{name}#aux{j}"), span, &gamma, &ty, &slot.level, &body, !slot.transparent, layer)?;
+            self.gate_bodied(&at, &format!("{name}#aux{j}"), span, &gamma, &ty, &slot.level, &body, !slot.transparent)?;
             let binding = GlobalBinding::Tm {
                 ctx: gamma.clone(),
-                layer,
+                layer: Layer::Code,
                 ty: Rc::new(ty),
                 level: slot.level,
                 body: slot.transparent.then(|| Rc::new(body)),

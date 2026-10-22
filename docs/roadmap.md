@@ -540,3 +540,5 @@ separate machines do not slow each other's tests.
 - 2026-10-22: `it-coinductive` added for the coinductive tree library on the
   kernel's `M` (PR #111), with `it-codata` (the elaborator's `codata`
   surface) as its first submilestone, done on this round's PR.
+- 2026-10-22: `M` got codes on the same PR (`docs/kernel-m-codes-design.md`),
+  so codata declarations sit at layer c with everything else.

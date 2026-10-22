@@ -179,30 +179,19 @@ to write the state yourself: `echo(w: Phase)` with `Waiting`/`Ticking`.
 
 ## 6. Layers
 
-`M`, `corec` and `out` exist at layers p and m only. They have no codes yet
-(`docs/kernel-coinduction-design.md` §5), and Heather checks every
-declaration body at c. So the kernel now admits **term definitions at p** in
-Ψ, beside c (`check_global_binding_declaration` in `typing.rs`). A
-reference already requires the binding's layer to be at or below the use
-site's, so a p binding can never be mentioned at c: not in a box, and not in
-a code the code recursor sees. δ stays layer-preserving and inlines a p
-definition away, so the extension is conservative.
+Every declaration over codata is bound at **layer c**, like every other:
+`M`, `corec` and `out` are admitted there, and `TmM` is `M`'s code, with
+four code-recursor branches (`docs/kernel-m-codes-design.md`). So codata is
+an ordinary type argument (`id<Stream>(…)`, `Two<Stream>`: `code::code_of`
+quotes `M` to `TmM`), and boxed codata is inert syntax.
+`codata_declarations_are_code` and `codata_as_a_type_argument` pin both.
 
-The elaborator binds a declaration at p exactly when its statement or body
-mentions an `M`, `corec` or `out` (or `IWf`/`DVec` and their terms), or a
-global already bound at p (`Elaborator::decl_layer`, over the kernel's
-`subst::needs_computing_layer`). Everything else stays at c, and a module
-without codata never pays for the walk (`Types::any_codata`).
-`layers_follow_codata` pins both sides: `hd`, `zeros` and `third` (a `Nat`
-function that only *uses* a stream) are p, and `add` and `plain` are c.
+Round 1 had bound codata declarations at layer p instead, through a kernel
+extension (bodied term definitions at p in Ψ) and an elaborator walk that
+chose each declaration's layer. Both are gone with the codes round.
 
-Two consequences to keep in mind:
-
-- A codata definition is never quotable. Codes for `M` (the design's §5,
-  four recursor branches) are what lifts that, filed as
-  `issues/codata-codes.md`.
-- Goals, holes, `have`, `rewrite` and `calc` work over codata statements
-  (they check at the theorem's layer); certgen refuses codata (§1).
+Goals, holes, `have`, `rewrite` and `calc` work over codata statements;
+certgen refuses codata (§1).
 
 ## 7. Testing
 
@@ -237,5 +226,4 @@ image, replayed, and used from an importing module.
    `Bisim ⇔ Π n. Same(approx n t, approx n u)`.
 3. **Nested guards** (`issues/codata-nested-guards.md`): generated carrier
    states, which `bind` and `iter` will want.
-4. **Codes for `M`** (`issues/codata-codes.md`), when a metaprogram needs
-   to see codata.
+4. ~~Codes for `M`~~: done (`docs/kernel-m-codes-design.md`).

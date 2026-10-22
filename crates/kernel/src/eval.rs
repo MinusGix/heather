@@ -17,7 +17,7 @@
 //! - [`crate::reduce::beta_elim_ty`] / [`beta_elim_tm`] — the ~1300-line code
 //!   recursor β. The evaluator hands the box's payload to the *existing*
 //!   function, receives the fired branch as **syntax**, and evaluates it. The
-//!   56 branch telescopes are not written down a sixth time.
+//!   60 branch telescopes are not written down a sixth time.
 //! - [`crate::term::nth`] and the `elim_W`/`elim_Wf` ih λs, which are built
 //!   from the same syntax `reduce.rs` builds — see [`Eval::fire_elim_w`].
 //! - [`crate::reduce::step_type_delta`], for the one annotation that lives in
@@ -58,7 +58,7 @@ use crate::term::{
     Motives, Term, Type,
 };
 use crate::value::{
-    Elim, ElimSpine, Env, Head, Lookup, PiAnn, VCorec, VIWfSig, VMSig, SigAnn, SumAnn, TmClo, TyClo, VNeTy, VNeutral,
+    Elim, ElimSpine, Env, Head, Lookup, PiAnn, VCorec, VIWfSig, VMSig, VTmM, SigAnn, SumAnn, TmClo, TyClo, VNeTy, VNeutral,
     VSubst, VTail, VTy, Val, ValueArena, WIhSyntax,
 };
 use crate::value::algebra::{AffineTree, FoldClass};
@@ -943,6 +943,27 @@ impl<'a, 'v> Eval<'a, 'v> {
                 let Some(s) = el(l, shape) else { return stuck_el() };
                 VTy::Wf { level: l.clone(), shape: s, arity: *arity }
             }
+            // `El(TmM …) ⇝ M(El idx; El shape; El pos; next)(index)`
+            // (docs/kernel-m-codes-design.md §1): `next` and the index are
+            // terms of the decoded index type and ride across unchanged.
+            Val::TmM(m) => {
+                let VTmM { level: l, pos_level, idx_level, idx, shape, pos, next, index } = &**m;
+                let (Some(i), Some(s), Some(p)) = (el(idx_level, idx), el(l, shape), el(pos_level, pos)) else {
+                    return stuck_el();
+                };
+                VTy::M {
+                    sig: Rc::new(VMSig {
+                        level: l.clone(),
+                        pos_level: pos_level.clone(),
+                        idx_level: idx_level.clone(),
+                        idx: i,
+                        shape: s,
+                        pos: p,
+                        next: *next,
+                    }),
+                    index: *index,
+                }
+            }
             // `El (Vec s k) ⇝ Vec (El s) k`, which then steps at a canonical
             // length — so the decode continues into the `Vec` rule.
             Val::TmVec { level: l, elem, len } => {
@@ -1225,6 +1246,16 @@ impl<'a, 'v> Eval<'a, 'v> {
                 shape: tclo(env, shape),
                 arity: tclo(env, arity),
             },
+            Term::TmM { level, pos_level, idx_level, idx, shape, pos, next, index } => Val::TmM(Rc::new(VTmM {
+                level: level.clone(),
+                pos_level: pos_level.clone(),
+                idx_level: idx_level.clone(),
+                idx: tclo(env, idx),
+                shape: tclo(env, shape),
+                pos: tclo(env, pos),
+                next: tclo(env, next),
+                index: tclo(env, index),
+            })),
             Term::TmId { level, ty, lhs, rhs } => Val::TmId {
                 level: level.clone(),
                 ty: tclo(env, ty),

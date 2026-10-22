@@ -22,14 +22,15 @@ round's record: `docs/codata-elaborator-design.md`.
   non-dependent motive.
 - Guarded corecursive functions compiled into one `corec`, with fixed and
   varying parameters.
-- Layer p term definitions in the kernel's Ψ, so declarations over codata
-  can be bound at all (design §6).
+- Declarations over codata bound at layer c, over `M`'s codes ([[codata-codes]],
+  design §6). Round 1 used layer-p term definitions for this; the codes
+  round removed them.
 
 ## Follow-ups
 
 - [[codata-indexed]]: indexed codata, which `Bisim` and eutt need.
 - [[codata-nested-guards]]: a constructor nested above a self-call.
-- [[codata-codes]]: codes for `M`, so codata can be quoted.
+- ~~[[codata-codes]]~~: done, codata declarations are bound at layer c.
 - The library: the coinductive tree, `approx`, `Bisim`, eutt and the bridge
   (`docs/kernel-coinduction-design.md` §4, §6), milestone `it-coinductive`.
 
@@ -46,3 +47,4 @@ round's record: `docs/codata-elaborator-design.md`.
   image round trip and `approx` into the finite `ITree`, and it caught one
   encoding bug: a function child's codomain was left unshifted under its
   binder.
+- 2026-10-22: With [[codata-codes]] done, codata declarations are bound at layer c; §6 rewritten, `layers_follow_codata` became `codata_declarations_are_code`, and codata works as a type argument.

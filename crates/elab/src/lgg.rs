@@ -256,6 +256,7 @@ fn former_tm(t: &Term) -> &'static str {
         | Term::TmSum { .. }
         | Term::TmW { .. }
         | Term::TmWf { .. }
+        | Term::TmM { .. }
         | Term::TmVec { .. }
         | Term::TmFin { .. }
         | Term::TmSEmpty { .. } => "type code",
@@ -530,6 +531,20 @@ impl Lgg {
                 shape: Rc::new(self.tm(s1, s2, k)?),
                 // The arity binds the shape.
                 arity: Rc::new(self.tm(a1, a2, k + 1)?),
+            }),
+            (
+                Term::TmM { level: l1, pos_level: p1, idx_level: i1, idx: x1, shape: s1, pos: q1, next: n1, index: j1 },
+                Term::TmM { level: l2, pos_level: p2, idx_level: i2, idx: x2, shape: s2, pos: q2, next: n2, index: j2 },
+            ) if l1 == l2 && p1 == p2 && i1 == i2 => Ok(Term::TmM {
+                level: l1.clone(),
+                pos_level: p1.clone(),
+                idx_level: i1.clone(),
+                idx: Rc::new(self.tm(x1, x2, k)?),
+                // shape binds i, pos i s, next i s p.
+                shape: Rc::new(self.tm(s1, s2, k + 1)?),
+                pos: Rc::new(self.tm(q1, q2, k + 2)?),
+                next: Rc::new(self.tm(n1, n2, k + 3)?),
+                index: Rc::new(self.tm(j1, j2, k)?),
             }),
             (
                 Term::ElimNat {

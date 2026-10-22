@@ -493,7 +493,7 @@ fn gen_wt_nat(env: &WtEnv, r: &mut Rng, b: u32) -> Rc<Term> {
 
 /// Synthesize an encoding `⊢_i t : Ty l @ 1+l`, returning `(t, l)`.
 pub fn gen_encoding(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Term>, Level) {
-    match r.below(14) {
+    match r.below(15) {
         10 => {
             let l = gen_wf_level(env.univs, r, 1);
             (rt(Term::TmUnit { level: l.clone() }), l)
@@ -602,6 +602,37 @@ pub fn gen_encoding(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Term>, Level) {
             );
             let arity = gen_wt_nat(&e, r, b / 2);
             (rt(Term::TmWf { level: l.clone(), shape, arity }), l)
+        }
+        14 if b > 0 => {
+            // M encoding (docs/kernel-m-codes-design.md §1): each piece an
+            // encoding under `El` of the earlier ones; `next` is the bound
+            // index `i` itself, which always fits.
+            let (idx, li) = gen_encoding(env, r, b / 4);
+            let el_i = rty(Type::El { level: li.clone(), tm: Rc::clone(&idx) });
+            let Some(index) = gen_wt_term_at(env, r, b / 4, &el_i, &li) else {
+                return (rt(Term::TmNat), Level::Zero);
+            };
+            let e_i = env.push_entry(Rc::clone(&el_i), li.clone());
+            let (shape, l) = gen_encoding(&e_i, r, b / 4);
+            let e_is = e_i.push_entry(
+                rty(Type::El { level: l.clone(), tm: Rc::clone(&shape) }),
+                l.clone(),
+            );
+            let (pos, lp) = gen_encoding(&e_is, r, b / 4);
+            let family = Level::max(l.clone(), Level::max(lp.clone(), li.clone()));
+            (
+                rt(Term::TmM {
+                    level: l,
+                    pos_level: lp,
+                    idx_level: li,
+                    idx,
+                    shape,
+                    pos,
+                    next: rt(v(2)),
+                    index,
+                }),
+                family,
+            )
         }
         _ => (rt(Term::TmNat), Level::Zero),
     }
@@ -1605,7 +1636,7 @@ fn gen_letbox_ty(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Term>, Rc<Type>, Level
 /// recursive-call entry has that same motive (so `Var(0)` inhabits the
 /// branch type). Order = `Branches` field order. Independent transcription
 /// of docs/delam/04 — a disagreement with `src/rec.rs` is a test failure.
-const BRANCH_DIMS: [(u32, u32, u32, bool, bool); 56] = [
+const BRANCH_DIMS: [(u32, u32, u32, bool, bool); 60] = [
     (0, 1, 0, false, false), // ty_nat
     (2, 3, 2, false, true),  // ty_pi
     (1, 1, 0, false, false), // ty_ty
@@ -1662,6 +1693,10 @@ const BRANCH_DIMS: [(u32, u32, u32, bool, bool); 56] = [
     (1, 2, 1, true, true),   // tm_squash
     (1, 3, 2, true, true),   // tm_squash_in
     (2, 5, 4, true, true),   // tm_elim_squash
+    (3, 6, 5, false, false), // ty_m (innermost local is a term-motive call)
+    (3, 6, 5, true, true),   // tm_m
+    (4, 9, 8, true, true),   // tm_corec
+    (3, 7, 6, true, true),   // tm_out
 ];
 
 /// A Γ-variable whose WHNF type is a contextual type matching `tm_variant`:
@@ -1717,7 +1752,7 @@ fn gen_const_rec(
         ty_motive: rty(m1ty.shift_univ(1).shift_global(1).shift_local(1)),
         tm_motive: rty(m2ty.shift_univ(1).shift_global(2).shift_local(1)),
     });
-    let mut bs: Vec<Rc<Term>> = Vec::with_capacity(56);
+    let mut bs: Vec<Rc<Term>> = Vec::with_capacity(60);
     for &(tu, tg, tl, tm_kind, var_ok) in &BRANCH_DIMS {
         if var_ok && r.below(3) == 0 {
             bs.push(rt(v(0)));
@@ -1783,6 +1818,10 @@ fn gen_const_rec(
         tm_squash: bs[53].clone(),
         tm_squash_in: bs[54].clone(),
         tm_elim_squash: bs[55].clone(),
+        ty_m: bs[56].clone(),
+        tm_m: bs[57].clone(),
+        tm_corec: bs[58].clone(),
+        tm_out: bs[59].clone(),
     });
     if tm_variant {
         let (scrut, delta, cty, cl) = match neutral {
@@ -2023,7 +2062,7 @@ pub fn gen_nat_rec(base: &WtEnv, r: &mut Rng, tm_variant: bool) -> NatRec {
 impl NatRec {
     /// The recursor over `Var 0` with the given branch bodies, in
     /// [`Branches`] field order. Checks at `Nat @ 0` in `self.env`.
-    pub fn build(&self, bs: &[Rc<Term>; 56]) -> Rc<Term> {
+    pub fn build(&self, bs: &[Rc<Term>; 60]) -> Rc<Term> {
         let motives = Rc::new(Motives {
             ty_motive: rty(Type::Nat),
             tm_motive: rty(Type::Nat),
@@ -2085,6 +2124,10 @@ impl NatRec {
             tm_squash: bs[53].clone(),
             tm_squash_in: bs[54].clone(),
             tm_elim_squash: bs[55].clone(),
+            ty_m: bs[56].clone(),
+            tm_m: bs[57].clone(),
+            tm_corec: bs[58].clone(),
+            tm_out: bs[59].clone(),
         });
         rt(if self.tm_variant {
             Term::ElimCodeTm {
@@ -2598,5 +2641,87 @@ pub fn identity_branches() -> Rc<Branches> {
                 scrut: rt(gtm(0, &g4s)),
             })))
         },
+        // box (M(U_I; U_S; U_P; u_o)(u_j)) — g = 5, U_I = 4, U_S = 3, U_P =
+        // 2, u_o = 1, u_j = 0; ℓ = lv(2), ℓ' = lv(1), ℓi = lv(0).
+        ty_m: {
+            let (sig, g) = m_sig_at(5, false, lv(2), lv(1), lv(0));
+            rt(Term::BoxTy(rty(Type::M { sig, index: rt(gtm(0, &g)) })))
+        },
+        // box (TmM(u_I; u_S; u_P; u_o; u_j)), the pieces read through El.
+        tm_m: {
+            let (sig, g) = m_sig_at(5, true, lv(2), lv(1), lv(0));
+            let code = |t: &Rc<Type>| match &**t {
+                Type::El { tm, .. } => Rc::clone(tm),
+                _ => unreachable!("coded pieces are El"),
+            };
+            rt(Term::BoxTm(rt(Term::TmM {
+                level: lv(2),
+                pos_level: lv(1),
+                idx_level: lv(0),
+                idx: code(&sig.idx),
+                shape: code(&sig.shape),
+                pos: code(&sig.pos),
+                next: Rc::clone(&sig.next),
+                index: rt(gtm(0, &g)),
+            })))
+        },
+        // box (corec^k(σ; U_X; u_c; u_j; u_x)) — g = 8, U_I = 7, U_S = 6,
+        // U_P = 5, u_o = 4, U_X = 3, u_c = 2, u_j = 1, u_x = 0; ℓ = lv(3),
+        // ℓ' = lv(2), ℓi = lv(1), k = lv(0).
+        tm_corec: {
+            let (sig, g) = m_sig_at(8, false, lv(3), lv(2), lv(1));
+            let gi = ext(&g, (*sig.idx).clone(), lv(1));
+            let carrier = gty(3, &gi);
+            let gix = ext(&gi, carrier.clone(), lv(0));
+            rt(Term::BoxTm(rt(Term::Corec {
+                sig,
+                carrier_level: lv(0),
+                carrier: rty(carrier),
+                step: rt(gtm(2, &gix)),
+                index: rt(gtm(1, &g)),
+                seed: rt(gtm(0, &g)),
+            })))
+        },
+        // box (out(σ; u_j; u_m)) — g = 6, U_I = 5, …, u_o = 2, u_j = 1, u_m
+        // = 0.
+        tm_out: {
+            let (sig, g) = m_sig_at(6, false, lv(2), lv(1), lv(0));
+            rt(Term::BoxTm(rt(Term::Out {
+                sig,
+                index: rt(gtm(1, &g)),
+                scrut: rt(gtm(0, &g)),
+            })))
+        },
     })
+}
+
+/// The signature `(U_I; U_S; U_P; u_o)` of an `M` branch whose context
+/// variable `g` is global `g_at`, the four pieces the next globals inward
+/// (or, `coded`, `El` of code globals) — and `g`'s context.
+fn m_sig_at(g_at: u32, coded: bool, l: Level, lp: Level, li: Level) -> (Rc<MSig>, LocalCtx) {
+    let piece = |var: u32, ctx: &LocalCtx, level: &Level| {
+        if coded {
+            Type::El { level: level.clone(), tm: rt(gtm(var, ctx)) }
+        } else {
+            gty(var, ctx)
+        }
+    };
+    let g = g_ctx(g_at);
+    let idx = piece(g_at - 1, &g, &li);
+    let gi = ext(&g, idx.clone(), li.clone());
+    let shape = piece(g_at - 2, &gi, &l);
+    let gis = ext(&gi, shape.clone(), l.clone());
+    let pos = piece(g_at - 3, &gis, &lp);
+    let gisp = ext(&gis, pos.clone(), lp.clone());
+    let next = gtm(g_at - 4, &gisp);
+    let sig = Rc::new(MSig {
+        level: l,
+        pos_level: lp,
+        idx_level: li,
+        idx: rty(idx),
+        shape: rty(shape),
+        pos: rty(pos),
+        next: rt(next),
+    });
+    (sig, g)
 }

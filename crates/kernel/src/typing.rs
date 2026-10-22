@@ -34,7 +34,7 @@
 //!   variables demand `i' ≤ i`; `ω` is accepted nowhere a programmer level
 //!   is demanded ([`crate::level::Level::well_formed`]) and arises only as
 //!   the inferred level of `ΠΠ`/`Λ ℓ⃗`.
-//! - The recursor rules check the two motives and 56 branches against the
+//! - The recursor rules check the two motives and 60 branches against the
 //!   `G_M G_Typ G_Trm` telescopes of [`crate::rec`] — the same tables
 //!   conversion compares against.
 //!
@@ -258,13 +258,7 @@ fn check_global_binding_declaration(tc: &Tc, env: &Env, b: &GlobalBinding) -> R 
             tc.ctx_wf(env, Layer::Prog, ctx)?;
         }
         GlobalBinding::Tm { ctx, layer, ty, level, body } => {
-            // `p` is admitted too (an extension past ch. 04's {v, c}): the
-            // program-only formers (M, IWf, DVec) have no codes, so a
-            // definition over them can only be stated and checked at p. A
-            // reference requires the binding's layer ≤ the use site's, so a
-            // p binding never reaches a box or the code recursor, and δ
-            // inlines it away — a conservative extension.
-            if !matches!(layer, Layer::Var | Layer::Code | Layer::Prog) {
+            if !matches!(layer, Layer::Var | Layer::Code) {
                 return Err(TypeError::LayerMismatch);
             }
             tc.level_wf(env, level)?;
@@ -277,7 +271,7 @@ fn check_global_binding_declaration(tc: &Tc, env: &Env, b: &GlobalBinding) -> R 
             // no term but a variable, so a definition there would be a
             // rename with extra steps; reject it and keep `v` meaning
             // exactly what ch. 04 says.
-            if body.is_some() && !matches!(layer, Layer::Code | Layer::Prog) {
+            if body.is_some() && *layer != Layer::Code {
                 return Err(TypeError::LayerMismatch);
             }
         }
@@ -1951,10 +1945,10 @@ impl Tc {
             }
             // M-formation (extension; docs/kernel-coinduction-design.md
             // §1.1): ⊢_i M^{l,l',li}(I; i. S; i s. P; i s p. o)(j) @ l ⊔ l' ⊔
-            // li ⟸ the signature (`m_sig_wf`), ⊢_i j : I @ li. Computing
-            // layers only until a codes round (design §1.5).
+            // li ⟸ the signature (`m_sig_wf`), ⊢_i j : I @ li. Admitted at
+            // every layer, as `Wf` is: `TmM` is its code
+            // (docs/kernel-m-codes-design.md §0).
             Type::M { sig, index } => {
-                self.computing_layer(env)?;
                 self.m_sig_wf(env, sig)?;
                 self.tm_check_rc(env, index, &sig.idx, &sig.idx_level)?;
                 Ok(sig.family_level())
@@ -2255,7 +2249,7 @@ impl Tc {
             // against the expected type instead ([`Tc::tm_check_at`]).
             //
             // The guard is the design's §2.3 and is what leaves the code
-            // grammar and all 56 recursor branches alone: these forms do not
+            // grammar and all 60 recursor branches alone: these forms do not
             // occur inside a `box`, so `code_eq` never meets one and
             // `rec.rs` needs no branch.
             //
@@ -2568,7 +2562,7 @@ impl Tc {
                 let GlobalBinding::Tm { ctx, layer, ty, level, .. } = binding else {
                     return Err(TypeError::WrongGlobalBinding(var.0));
                 };
-                // i' ∈ {v, c, p} is the binding invariant; i' ≤ i:
+                // i' ∈ {v, c} is the binding invariant; i' ≤ i:
                 if *layer > env.layer {
                     return Err(TypeError::LayerMismatch);
                 }
@@ -2749,6 +2743,18 @@ impl Tc {
                 let e = env.push_entry(Rc::new(el), level.clone());
                 self.tm_check_ty(&e, arity, &Type::Nat, &Level::Zero)?;
                 Ok((Type::Ty(level.clone()), Level::succ(level.clone())))
+            }
+            // M-code (docs/kernel-m-codes-design.md §1): well-formed exactly
+            // when its decoding is a well-formed `M` signature, since `El u`
+            // at `l` checks `u : Ty l`; the index is a term of the decoded
+            // index type. A code at every layer but v, like every code.
+            Term::TmM { level, pos_level, idx_level, idx, shape, pos, next, index } => {
+                self.not_var_layer(env)?;
+                let sig = crate::term::m_sig_of_code(level, pos_level, idx_level, idx, shape, pos, next);
+                self.m_sig_wf(env, &sig)?;
+                self.tm_check_rc(env, index, &sig.idx, &sig.idx_level)?;
+                let family = sig.family_level();
+                Ok((Type::Ty(family.clone()), Level::succ(family)))
             }
             Term::Zero => {
                 self.not_var_layer(env)?;
@@ -3388,9 +3394,10 @@ impl Tc {
             // (Γ, i) ⊢ X @ k, (Γ, i, x : X) ⊢ c : m_step_ty(…)↑ and
             // x : X[j/i] (docs/kernel-coinduction-design.md §1.3). The
             // carrier's level is free: one rule per k, quantifying over
-            // nothing.
+            // nothing. Admitted at c (docs/kernel-m-codes-design.md §0): a
+            // boxed corec is inert syntax, as a boxed `supf` is.
             Term::Corec { sig, carrier_level, carrier, step, index, seed } => {
-                self.computing_layer(env)?;
+                self.not_var_layer(env)?;
                 self.m_sig_wf(env, sig)?;
                 self.level_wf(env, carrier_level)?;
                 let e_i = env.push_entry(Rc::clone(&sig.idx), sig.idx_level.clone());
@@ -3407,7 +3414,7 @@ impl Tc {
             // out(sig; j; m) : Σ(s : S[j]). Π(p : P[j, s]). M(sig)(o[j, s, p])
             // for m : M(sig)(j) (design §1.2).
             Term::Out { sig, index, scrut } => {
-                self.computing_layer(env)?;
+                self.not_var_layer(env)?;
                 self.m_sig_wf(env, sig)?;
                 self.tm_check_rc(env, index, &sig.idx, &sig.idx_level)?;
                 let fl = sig.family_level();
@@ -3705,7 +3712,7 @@ impl Tc {
 
     /// The `G_A = G_M G_Typ G_Trm` premise bundle shared by the two
     /// recursor rules: motive levels, both motives well-formed in their
-    /// scopes, and all 56 branches at their instantiated motive types.
+    /// scopes, and all 60 branches at their instantiated motive types.
     fn rec_ga(
         &self,
         env: &Env,
@@ -3755,6 +3762,7 @@ fn term_head(t: &Term) -> &'static str {
         Term::TmVec { .. } => "TmVec",
         Term::TmFin { .. } => "TmFin",
         Term::TmWf { .. } => "TmWf",
+        Term::TmM { .. } => "TmM",
         Term::Zero => "Zero",
         Term::NatLit(..) => "NatLit",
         Term::Succ(..) => "Succ",
@@ -3835,6 +3843,7 @@ fn type_head(ty: &Type) -> &'static str {
             | Term::TmVec { .. }
             | Term::TmFin { .. }
             | Term::TmWf { .. }
+            | Term::TmM { .. }
             | Term::TmSEq { .. } => "El⌜⌝",
             _ => "El(?)",
         },

@@ -1,6 +1,6 @@
 ---
 title: Codes for M so codata can be quoted
-status: open
+status: closed
 labels: [codata,coinduction,kernel,codes]
 area: kernel
 created: 2026-10-22
@@ -22,3 +22,12 @@ so bisimilar code stays distinguishable as code.
 Once that lands, the p-layer choice in `Elaborator::decl_layer` can retire
 for codata (bind at c again), and `needs_computing_layer` shrinks to
 whatever is still code-less.
+
+## Log
+
+- 2026-10-22: Brought forward before the library on Minus's call ("thoughts
+  on giving it codes first?"). Done: `TmM` with `El` decoding, `M`/`corec`/
+  `out` admitted at c, the four branches (56 → 60), and the p-layer route
+  removed (`decl_layer`, `needs_computing_layer`, bodied term bindings at p).
+  Design and record: `docs/kernel-m-codes-design.md`; tests:
+  `crates/kernel/tests/m_codes.rs`.

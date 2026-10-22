@@ -4,7 +4,7 @@
 //! disciplines, global contexts and local substitutions, universe
 //! polymorphism, contextual types (box/letbox, checking-only box under
 //! binders), and the code recursors, including a full *identity recursor*
-//! whose 56 branches re-box their telescopes' code — an end-to-end exercise
+//! whose 60 branches re-box their telescopes' code — an end-to-end exercise
 //! of every `G_Typ`/`G_Trm` telescope.
 //!
 //! No generator-based properties: the generators produce ill-typed terms,
@@ -17,7 +17,7 @@ use heather_kernel::layer::Layer;
 use heather_kernel::level::{Level, UnivVar};
 use heather_kernel::reduce::whnf_term;
 use heather_kernel::term::{
-    nth, Branches, CtxBase, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, LocalCtx,
+    nth, Branches, CtxBase, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, LocalCtx, MSig,
     LocalSubst, LocalVar, Motives, SubstTail, Term, Type,
 };
 use heather_kernel::typing::{
@@ -576,6 +576,10 @@ fn constant_branches() -> Rc<Branches> {
         tm_squash: z(),
         tm_squash_in: z(),
         tm_elim_squash: z(),
+        ty_m: z(),
+        tm_m: z(),
+        tm_corec: z(),
+        tm_out: z(),
     })
 }
 
@@ -1129,7 +1133,89 @@ fn identity_branches() -> Rc<Branches> {
                 scrut: rt(gtm(0, &g4s)),
             })))
         },
+        // box (M(U_I; U_S; U_P; u_o)(u_j)) — g = 5, U_I = 4, U_S = 3, U_P =
+        // 2, u_o = 1, u_j = 0; ℓ = lv(2), ℓ' = lv(1), ℓi = lv(0).
+        ty_m: {
+            let (sig, g) = m_sig_at(5, false, lv(2), lv(1), lv(0));
+            rt(Term::BoxTy(rty(Type::M { sig, index: rt(gtm(0, &g)) })))
+        },
+        // box (TmM(u_I; u_S; u_P; u_o; u_j)), the pieces read through El.
+        tm_m: {
+            let (sig, g) = m_sig_at(5, true, lv(2), lv(1), lv(0));
+            let code = |t: &Rc<Type>| match &**t {
+                Type::El { tm, .. } => Rc::clone(tm),
+                _ => unreachable!("coded pieces are El"),
+            };
+            rt(Term::BoxTm(rt(Term::TmM {
+                level: lv(2),
+                pos_level: lv(1),
+                idx_level: lv(0),
+                idx: code(&sig.idx),
+                shape: code(&sig.shape),
+                pos: code(&sig.pos),
+                next: Rc::clone(&sig.next),
+                index: rt(gtm(0, &g)),
+            })))
+        },
+        // box (corec^k(σ; U_X; u_c; u_j; u_x)) — g = 8, U_I = 7, U_S = 6,
+        // U_P = 5, u_o = 4, U_X = 3, u_c = 2, u_j = 1, u_x = 0; ℓ = lv(3),
+        // ℓ' = lv(2), ℓi = lv(1), k = lv(0).
+        tm_corec: {
+            let (sig, g) = m_sig_at(8, false, lv(3), lv(2), lv(1));
+            let gi = ext(&g, (*sig.idx).clone(), lv(1));
+            let carrier = gty(3, &gi);
+            let gix = ext(&gi, carrier.clone(), lv(0));
+            rt(Term::BoxTm(rt(Term::Corec {
+                sig,
+                carrier_level: lv(0),
+                carrier: rty(carrier),
+                step: rt(gtm(2, &gix)),
+                index: rt(gtm(1, &g)),
+                seed: rt(gtm(0, &g)),
+            })))
+        },
+        // box (out(σ; u_j; u_m)) — g = 6, U_I = 5, …, u_o = 2, u_j = 1, u_m
+        // = 0.
+        tm_out: {
+            let (sig, g) = m_sig_at(6, false, lv(2), lv(1), lv(0));
+            rt(Term::BoxTm(rt(Term::Out {
+                sig,
+                index: rt(gtm(1, &g)),
+                scrut: rt(gtm(0, &g)),
+            })))
+        },
     })
+}
+
+/// The signature `(U_I; U_S; U_P; u_o)` of an `M` branch whose context
+/// variable `g` is global `g_at`, the four pieces the next globals inward
+/// (or, `coded`, `El` of code globals) — and `g`'s context.
+fn m_sig_at(g_at: u32, coded: bool, l: Level, lp: Level, li: Level) -> (Rc<MSig>, LocalCtx) {
+    let piece = |var: u32, ctx: &LocalCtx, level: &Level| {
+        if coded {
+            Type::El { level: level.clone(), tm: rt(gtm(var, ctx)) }
+        } else {
+            gty(var, ctx)
+        }
+    };
+    let g = g_ctx(g_at);
+    let idx = piece(g_at - 1, &g, &li);
+    let gi = ext(&g, idx.clone(), li.clone());
+    let shape = piece(g_at - 2, &gi, &l);
+    let gis = ext(&gi, shape.clone(), l.clone());
+    let pos = piece(g_at - 3, &gis, &lp);
+    let gisp = ext(&gis, pos.clone(), lp.clone());
+    let next = gtm(g_at - 4, &gisp);
+    let sig = Rc::new(MSig {
+        level: l,
+        pos_level: lp,
+        idx_level: li,
+        idx: rty(idx),
+        shape: rty(shape),
+        pos: rty(pos),
+        next: rt(next),
+    });
+    (sig, g)
 }
 
 /// **Phase-2 acceptance** (`docs/unit-empty-level-indexing.md` §4): the
@@ -1363,7 +1449,7 @@ fn elim_empty_branch_recursive_call_is_at_the_scrutinee_level() {
 /// The pattern is `elim_empty_branch_recursive_call_is_at_the_scrutinee_level`
 /// generalised: the identity body is routed through `λ(z : claim). <body>`
 /// applied to the entry under test, so only `claim` varies. The harness
-/// recursor is `elim^Typ` on `box Nat`: `rec_ga` checks all 56 branches
+/// recursor is `elim^Typ` on `box Nat`: `rec_ga` checks all 60 branches
 /// whatever the scrutinee is, so a single trivial scrutinee observes any
 /// branch's telescope.
 #[test]
@@ -1402,7 +1488,7 @@ fn type_motive_branch_entries_are_usable_at_their_declared_context_and_level() {
         })
     };
     // `elim^Typ` over `box Nat`, whose only job is to make `rec_ga` walk the
-    // 56 branches; it fires `ty_nat`, which no probe touches.
+    // 60 branches; it fires `ty_nat`, which no probe touches.
     let harness = |branches: Rc<Branches>| Term::ElimCodeTy {
         ty_motive_level: Level::Zero,
         tm_motive_level: Level::Zero,
@@ -1860,7 +1946,7 @@ fn pair_projections_and_dependency() {
 /// 4. the guard is §2.3's box side condition, not a layer: layer v refuses
 ///    them, layer **c** admits them (every body is checked there), and the
 ///    payload of a `box` refuses them, which is what leaves the code grammar
-///    and the 56 recursor branches alone;
+///    and the 60 recursor branches alone;
 /// 5. without an annotation an intro checks against the expected type and
 ///    does not infer (design §2.1).
 #[test]

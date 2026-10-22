@@ -405,6 +405,53 @@ pub fn gen_branches(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Branches> {
                 GK::Tm(sh(g, 0)),
             ]
         }),
+        // (ℓ, ℓ', ℓi, g, U_I, U_S : (g, i), U_P : (g, i, s), u_o : (g, i, s,
+        // p), u_j, x_I … x_j) — docs/kernel-m-codes-design.md §2.
+        ty_m: t(3, 5, &|g| {
+            vec![
+                GK::Ctx,
+                GK::Ty(sh(g, 0)),
+                GK::Ty(sh(g, 1)),
+                GK::Ty(sh(g, 2)),
+                GK::Tm(sh(g, 3)),
+                GK::Tm(sh(g, 0)),
+            ]
+        }),
+        tm_m: t(3, 5, &|g| {
+            vec![
+                GK::Ctx,
+                GK::Tm(sh(g, 0)),
+                GK::Tm(sh(g, 1)),
+                GK::Tm(sh(g, 2)),
+                GK::Tm(sh(g, 3)),
+                GK::Tm(sh(g, 0)),
+            ]
+        }),
+        // … then U_X : (g, i), u_c : (g, i, x), u_j, u_x.
+        tm_corec: t(4, 8, &|g| {
+            vec![
+                GK::Ctx,
+                GK::Ty(sh(g, 0)),
+                GK::Ty(sh(g, 1)),
+                GK::Ty(sh(g, 2)),
+                GK::Tm(sh(g, 3)),
+                GK::Ty(sh(g, 1)),
+                GK::Tm(sh(g, 2)),
+                GK::Tm(sh(g, 0)),
+                GK::Tm(sh(g, 0)),
+            ]
+        }),
+        tm_out: t(3, 6, &|g| {
+            vec![
+                GK::Ctx,
+                GK::Ty(sh(g, 0)),
+                GK::Ty(sh(g, 1)),
+                GK::Ty(sh(g, 2)),
+                GK::Tm(sh(g, 3)),
+                GK::Tm(sh(g, 0)),
+                GK::Tm(sh(g, 0)),
+            ]
+        }),
     })
 }
 
@@ -641,7 +688,7 @@ pub fn gen_term(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Term> {
     }
 
     for _ in 0..8 {
-        let arm = if b == 0 { r.below(5) } else { r.below(44) };
+        let arm = if b == 0 { r.below(5) } else { r.below(45) };
         match arm {
             0 if sc.local.len > 0 => return Rc::new(Term::Var(LocalVar(r.below(sc.local.len)))),
             0 | 1 => return Rc::new(Term::Zero),
@@ -1090,6 +1137,24 @@ pub fn gen_term(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Term> {
                     arity: gen_term(&in1, r, b / 2),
                 });
             }
+            // The M code: `shape` binds `i`, `pos` `i, s`, `next` `i, s, p`.
+            44 if b > 0 => {
+                let under = |k: u32| {
+                    let mut inner = sc.clone();
+                    inner.local.len += k;
+                    inner
+                };
+                return Rc::new(Term::TmM {
+                    level: gen_level(sc, r, 1),
+                    pos_level: gen_level(sc, r, 1),
+                    idx_level: gen_level(sc, r, 1),
+                    idx: gen_term(sc, r, b / 4),
+                    shape: gen_term(&under(1), r, b / 4),
+                    pos: gen_term(&under(2), r, b / 4),
+                    next: gen_term(&under(3), r, b / 4),
+                    index: gen_term(sc, r, b / 4),
+                });
+            }
             _ => continue,
         }
     }
@@ -1255,6 +1320,9 @@ pub fn count_term(t: &Term) -> u64 {
         Term::TmVec { elem, len, .. } => count_term(elem) + count_term(len),
         Term::TmFin { len } => count_term(len),
         Term::TmWf { shape, arity, .. } => count_term(shape) + count_term(arity),
+        Term::TmM { idx, shape, pos, next, index, .. } => {
+            count_term(idx) + count_term(shape) + count_term(pos) + count_term(next) + count_term(index)
+        }
         Term::Sup { shape_ty, pos_ty, label, children, .. } => {
             count_type(shape_ty) + count_type(pos_ty) + count_term(label)
                 + count_term(children)

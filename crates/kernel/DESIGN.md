@@ -326,17 +326,12 @@ Three choices carry the design:
   would break coherence. Structurally this holds because reduction never
   enters a `box` and boxed code compares with `==`; `tests/definitions.rs`
   pins it anyway, in both directions.
-- **The body is checked at the binding's own layer** (`i ∈ {c, p}`; a
-  definition at layer v is rejected, since v admits no term but a variable).
-  That is what makes δ layer-preserving: unfolding `u` at any layer `j ≥ i`
-  can only produce a term that was already legal at `j`.
-- **Term bindings at p** (2026-10-22, `docs/codata-elaborator-design.md`
-  §6), past ch. 04's `{v, c}`: the program-only formers (`M`, `IWf`, `DVec`)
-  have no codes, so a definition over them can only be stated and checked at
-  p. A reference already requires `i ≤` the use site's layer, so a p binding
-  never appears at c: not in a box, and not in a scrutinee of the code
-  recursor. δ inlines it away, so the extension is conservative. The
-  elaborator binds at p only the declarations that need it.
+- **The body is checked at the binding's own layer** (`i = c`; a definition
+  at layer v is rejected, since v admits no term but a variable). That is
+  what makes δ layer-preserving: unfolding `u` at any layer `j ≥ i` can only
+  produce a term that was already legal at `j`. Codata needs nothing more:
+  `M`, `corec` and `out` are admitted at c, with `TmM` their code
+  (`docs/kernel-m-codes-design.md`).
 
 Conversion is **δ-lazy**: weak-head-reduce without δ first, and when both
 sides stop at the same defined head, compare their spines before unfolding

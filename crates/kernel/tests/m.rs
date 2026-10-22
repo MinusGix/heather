@@ -409,16 +409,16 @@ fn the_level_is_the_join_of_the_three() {
 }
 
 #[test]
-fn m_and_its_terms_are_gated_out_of_layer_c() {
-    // Design §1.5: no code yet, so admitted at p and m only.
+fn m_and_its_terms_are_admitted_at_layer_c() {
+    // docs/kernel-m-codes-design.md §0: `TmM` is M's code, so the former and
+    // its terms check at c as at p and m (`tests/m_codes.rs` has the rest).
     let ty = stream_ty();
-    assert_eq!(ck_ty_at(Layer::Code, &nil_ctx(), &ty, &c(0)), Err(TypeError::LayerMismatch));
-    assert_eq!(ck_ty_at(Layer::Meta, &nil_ctx(), &ty, &c(0)), Ok(()));
-    assert!(check_term(&psi(), 0, Layer::Code, &nil_ctx(), &zeros(), &ty, &c(0), FUEL).is_err());
-    assert!(check_term(&psi(), 0, Layer::Meta, &nil_ctx(), &zeros(), &ty, &c(0), FUEL).is_ok());
-    let g = one_stream();
-    assert!(check_term(&psi(), 0, Layer::Code, &g, &hd(v(0)), &Type::Nat, &c(0), FUEL).is_err());
-    assert!(check_term(&psi(), 0, Layer::Prog, &g, &hd(v(0)), &Type::Nat, &c(0), FUEL).is_ok());
+    for layer in [Layer::Code, Layer::Prog, Layer::Meta] {
+        assert_eq!(ck_ty_at(layer, &nil_ctx(), &ty, &c(0)), Ok(()));
+        assert!(check_term(&psi(), 0, layer, &nil_ctx(), &zeros(), &ty, &c(0), FUEL).is_ok());
+        let g = one_stream();
+        assert!(check_term(&psi(), 0, layer, &g, &hd(v(0)), &Type::Nat, &c(0), FUEL).is_ok());
+    }
 }
 
 #[test]
