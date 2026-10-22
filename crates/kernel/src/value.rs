@@ -1572,6 +1572,9 @@ pub enum Val<'v> {
         shape: &'v TmClo<'v>,
         arity: &'v TmClo<'v>,
     },
+    /// [`crate::term::Term::TmM`]'s value, behind one pointer as
+    /// [`VMSig`] is, so the code does not widen every value.
+    TmM(Rc<VTmM<'v>>),
     TmId {
         level: Level,
         ty: &'v TmClo<'v>,
@@ -2000,6 +2003,20 @@ pub struct VMSig<'v> {
     pub next: &'v TmClo<'v>,
 }
 
+/// The `M` code as a value ([`Val::TmM`]): the pieces as closures in one
+/// environment, `shape`/`pos`/`next` with one, two and three pending binders
+/// as in [`VMSig`], `idx` and `index` with none.
+pub struct VTmM<'v> {
+    pub level: Level,
+    pub pos_level: Level,
+    pub idx_level: Level,
+    pub idx: &'v TmClo<'v>,
+    pub shape: &'v TmClo<'v>,
+    pub pos: &'v TmClo<'v>,
+    pub next: &'v TmClo<'v>,
+    pub index: &'v TmClo<'v>,
+}
+
 /// A `corec`'s coalgebra: the carrier (one pending binder, `i`), the step
 /// (two, `i, x`), and the environment both were built in, which `out`'s β
 /// extends by the index and the seed (`Eval::fire_out`).
@@ -2386,6 +2403,10 @@ impl fmt::Debug for Val<'_> {
             Val::TmSigma { fst, snd, .. } => write!(f, "`Σ({fst:?}). {snd:?}"),
             Val::TmW { shape, pos, .. } => write!(f, "`W({shape:?}). {pos:?}"),
             Val::TmWf { shape, arity, .. } => write!(f, "`Wf({shape:?}). {arity:?}"),
+            Val::TmM(m) => {
+                let VTmM { idx, shape, pos, next, index, .. } = &**m;
+                write!(f, "`M({idx:?}; {shape:?}; {pos:?}; {next:?})({index:?})")
+            }
             Val::TmId { ty, lhs, rhs, .. } => write!(f, "`Id({ty:?}; {lhs:?}; {rhs:?})"),
             Val::TmSEq { ty, lhs, rhs, .. } => write!(f, "`sEq({ty:?}; {lhs:?}; {rhs:?})"),
             Val::TmSum { lhs, rhs, .. } => write!(f, "`({lhs:?} + {rhs:?})"),

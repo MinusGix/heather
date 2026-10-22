@@ -394,6 +394,17 @@ pub(crate) fn elab_self_call(
     );
     let name = &self_ref.name;
     let Some(guard) = cx.guard.clone() else {
+        if let Some(codata) = &cx.codata_match {
+            return err(
+                format!(
+                    "recursive call to `{name}` under a `match` on the codata `{codata}`: codata \
+                     has no structural order, so a function out of it cannot recurse on it — \
+                     recurse on a `Nat` fuel parameter beside it instead \
+                     (docs/codata-elaborator-design.md §4)"
+                ),
+                span,
+            );
+        }
         return err(
             format!(
                 "recursive call to `{name}` is not structurally guarded: it must occur \

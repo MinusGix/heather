@@ -37,7 +37,7 @@
 //! - **Boxed types/terms compare syntactically** (`==`; α-equality is free
 //!   under de Bruijn). Code is static data — β-convertible code is *not*
 //!   convertible.
-//! - Neutral recursors compare motives, all 56 branches (each at its
+//! - Neutral recursors compare motives, all 60 branches (each at its
 //!   instantiated motive type, the ch. 04 `G_A` telescopes), and indices —
 //!   the ch. 06 `C_A` bundle ([`Conv::rec_ca`]).
 //! - The layer index restricts *types*, not terms (ch. 06 intro): layer-m
@@ -1849,6 +1849,27 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                     let e = self.push_el(env, l1, s1)?;
                     self.tm_at_nat(&e, n1, n2)
                 }
+                // TmM congruence (docs/kernel-m-codes-design.md §1): the
+                // type former's comparison read through `El` — the shape
+                // under the index, the positions under both, the child index
+                // under all three at the index type, and the index there.
+                (
+                    TmView::TmM { level: l1, pos_level: p1, idx_level: i1, idx: x1, shape: s1, pos: q1, next: o1, index: j1 },
+                    TmView::TmM { level: l2, pos_level: p2, idx_level: i2, idx: x2, shape: s2, pos: q2, next: o2, index: j2 },
+                ) => {
+                    self.lev_eq(l1, l2)?;
+                    self.lev_eq(p1, p2)?;
+                    self.lev_eq(i1, i2)?;
+                    self.tm_at_univ(env, x1, x2, i1)?;
+                    let el_i = D::el(self, env, i1, x1)?;
+                    let e_i = D::push_entry(env, &el_i, i1);
+                    self.tm_at_univ(&e_i, s1, s2, l1)?;
+                    let e_is = self.push_el(&e_i, l1, s1)?;
+                    self.tm_at_univ(&e_is, q1, q2, p1)?;
+                    let e_isp = self.push_el(&e_is, p1, q1)?;
+                    self.tm(&e_isp, o1, o2, &D::weaken_ty(env, &el_i, 3), i1)?;
+                    self.tm(env, j1, j2, &el_i, i1)
+                }
                 (x, y) if x.is_encoding() || y.is_encoding() => Err(NC),
                 _ => self.tm_nee(env, a, b).map(drop),
             },
@@ -2912,7 +2933,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
 
     // -- the C_A bundle for neutral recursors -------------------------------
 
-    /// Ch. 06 `C_A`: motive levels, both motives, and all 56 branches, each
+    /// Ch. 06 `C_A`: motive levels, both motives, and all 60 branches, each
     /// branch compared at its instantiated motive type under its ch. 04
     /// telescope (`G_M G_Typ G_Trm`). Branch types and telescope entry
     /// types are built from the *left* side (left-biased, like all
@@ -2942,7 +2963,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
             self.ty(&e, &x, &y, &spec.level)?;
         }
 
-        // G_Typ G_Trm: the 56 branches, each at its instantiated motive
+        // G_Typ G_Trm: the 60 branches, each at its instantiated motive
         // type under its telescope.
         let branch_specs = rec::branch_specs(&a.motives, a.l1, a.l2, &env.gamma);
         let ba = rec::branch_terms(&a.branches);

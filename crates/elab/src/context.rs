@@ -78,7 +78,7 @@ pub(crate) struct Cx {
     /// Set while a **quotation payload** elaborates (`quote.rs`'s `pcx`), and
     /// nowhere else. The checked spellings of
     /// `docs/intro-by-type-design.md` §2.3 may not appear inside a `box`: the
-    /// code grammar, `code_eq` and the 56 recursor branches range over that
+    /// code grammar, `code_eq` and the 60 recursor branches range over that
     /// payload, and `tm_pair`'s branch telescope types its field
     /// sub-structures by `U_S`/`U_T`, which a collapsed annotation cannot
     /// state (§2.2). The design spelled this restriction as "layers p and m",
@@ -87,6 +87,15 @@ pub(crate) struct Cx {
     /// argument is why), so a layer predicate is constantly false. "Under a
     /// quotation" is the property §2.2 actually needs.
     pub(crate) quoted: bool,
+    /// Set while a **corecursive** body elaborates (docs/codata-elaborator-design.md
+    /// §5): the definition's step and child types, which a checking position
+    /// at either of them is elaborated against by `Elaborator::corec_check`.
+    /// `None` everywhere else, which keeps the hook inert.
+    pub(crate) corec: Option<Rc<crate::codata::CorecSite>>,
+    /// The codata type of the innermost `match` on codata, while its arms
+    /// elaborate — only so an unguarded self-call there can say that codata
+    /// has no structural order (docs/codata-elaborator-design.md §4).
+    pub(crate) codata_match: Option<Rc<str>>,
 }
 
 type ReceiverInference = OnceCell<R<(Term, Type, Level)>>;
@@ -171,6 +180,8 @@ impl Cx {
             op_locals: vec![],
             meta: None,
             quoted: false,
+            corec: None,
+            codata_match: None,
         }
     }
 
@@ -230,6 +241,8 @@ impl Cx {
             op_locals: vec![],
             meta: None,
             quoted: self.quoted,
+            corec: None,
+            codata_match: None,
         }
     }
 

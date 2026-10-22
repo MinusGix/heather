@@ -100,7 +100,7 @@ module.exports = grammar({
     ),
 
     inductive_declaration: $ => seq(
-      'inductive', field('name', $.identifier), optional($.type_parameters),
+      choice('inductive', 'codata'), field('name', $.identifier), optional($.type_parameters),
       optional($.value_parameters), optional(seq(':', field('index', $._expression))),
       field('body', $.constructor_list),
     ),

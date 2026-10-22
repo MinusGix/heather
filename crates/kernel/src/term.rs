@@ -369,6 +369,23 @@ pub enum Term {
         shape: Rc<Term>,
         arity: Rc<Term>,
     },
+    /// `M^{l,l',li}(u_I; i. u_S; i s. u_P; i s p. o)(j) : Ty (l ⊔ l' ⊔ li)` —
+    /// encoding of the indexed final coalgebra applied at index `j`
+    /// (docs/kernel-m-codes-design.md §1), decoded by `El(TmM …) ⇝
+    /// M(El idx; i. El shape; i s. El pos; i s p. next)(index)`. `shape`
+    /// binds the index, `pos` the index and the shape, `next` all three; the
+    /// index of the child (`next`) and `index` are terms of `El idx`, carried
+    /// across the decoding unchanged.
+    TmM {
+        level: Level,
+        pos_level: Level,
+        idx_level: Level,
+        idx: Rc<Term>,
+        shape: Rc<Term>,
+        pos: Rc<Term>,
+        next: Rc<Term>,
+        index: Rc<Term>,
+    },
 
     // ---- natural numbers ----
     Zero,
@@ -1196,6 +1213,24 @@ pub struct Branches {
     /// scoped over `z : ∥U_A∥`; `u_b` over `x : U_A` and returns
     /// `∥U_B[squash x/z]∥`; `u_q : ∥U_A∥`.
     pub tm_elim_squash: Rc<Term>,
+
+    // -- M-types (docs/kernel-m-codes-design.md §2) --
+    /// `(ℓ, ℓ', ℓi, g, U_I, U_S, U_P, u_o, u_j, x_I, x_S, x_P, x_o, x_j.
+    /// t_M)` — code of the type `M(U_I; U_S; U_P; u_o)(u_j)`. `U_S` is
+    /// scoped over `i : U_I`, `U_P` over `(i, s)`, `u_o : U_I` over `(i, s,
+    /// p)`.
+    pub ty_m: Rc<Term>,
+    /// `(ℓ, ℓ', ℓi, g, u_I, u_S, u_P, u_o, u_j, x_I, …, x_j. t'_M)` — code
+    /// of the encoding `TmM(u_I; u_S; u_P; u_o; u_j) : Ty(ℓ ⊔ ℓ' ⊔ ℓi)`,
+    /// the pieces read through `El` as `tm_wf` reads them.
+    pub tm_m: Rc<Term>,
+    /// `(ℓ, ℓ', ℓi, k, g, U_I, U_S, U_P, u_o, U_X, u_c, u_j, u_x, x_I, …,
+    /// x_x. t_corec)` — code of `corec^k(σ; U_X; u_c; u_j; u_x)`; `U_X` is
+    /// scoped over `i : U_I`, `u_c` over `(i, x : U_X)` at the step type.
+    pub tm_corec: Rc<Term>,
+    /// `(ℓ, ℓ', ℓi, g, U_I, U_S, U_P, u_o, u_j, u_m, x_I, …, x_m. t_out)` —
+    /// code of `out(σ; u_j; u_m)`.
+    pub tm_out: Rc<Term>,
 }
 
 /// Base of a local context: empty (`·`) or a context variable `g`.
@@ -2710,6 +2745,31 @@ impl MSig {
     /// `o[j/i, s, p]`, in `(Γ, s, p)` for `j` in Γ.
     pub fn next_at(&self, j: &Term) -> Term {
         self.next.inst_top_above(0, 2, j)
+    }
+}
+
+/// The signature a [`Term::TmM`] code decodes to: each piece read through
+/// `El` at its own level, `next` carried across unchanged
+/// (docs/kernel-m-codes-design.md §1). The one place the decoding is
+/// spelled, so both reducers and the typing rule agree on it.
+pub fn m_sig_of_code(
+    level: &Level,
+    pos_level: &Level,
+    idx_level: &Level,
+    idx: &Rc<Term>,
+    shape: &Rc<Term>,
+    pos: &Rc<Term>,
+    next: &Rc<Term>,
+) -> MSig {
+    let el = |level: &Level, tm: &Rc<Term>| Rc::new(Type::El { level: level.clone(), tm: Rc::clone(tm) });
+    MSig {
+        level: level.clone(),
+        pos_level: pos_level.clone(),
+        idx_level: idx_level.clone(),
+        idx: el(idx_level, idx),
+        shape: el(level, shape),
+        pos: el(pos_level, pos),
+        next: Rc::clone(next),
     }
 }
 

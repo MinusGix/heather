@@ -329,7 +329,9 @@ Three choices carry the design:
 - **The body is checked at the binding's own layer** (`i = c`; a definition
   at layer v is rejected, since v admits no term but a variable). That is
   what makes δ layer-preserving: unfolding `u` at any layer `j ≥ i` can only
-  produce a term that was already legal at `j`.
+  produce a term that was already legal at `j`. Codata needs nothing more:
+  `M`, `corec` and `out` are admitted at c, with `TmM` their code
+  (`docs/kernel-m-codes-design.md`).
 
 Conversion is **δ-lazy**: weak-head-reduce without δ first, and when both
 sides stop at the same defined head, compare their spines before unfolding

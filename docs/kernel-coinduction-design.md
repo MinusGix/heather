@@ -151,8 +151,12 @@ with no bisimilarity in between.
 
 ### 1.5 Layers
 
-As `IWf`'s were until its codes round: the former, `out` and `corec` are
-admitted at layers p and m only, until a round gives them codes (§5).
+The former, `out` and `corec` are admitted at every layer but v, as `Wf`'s
+are: `TmM` is the former's code and the code recursor has a branch for each
+(§5, `docs/kernel-m-codes-design.md`). Declarations over codata are bound at
+c like every other. (Before the codes round the three were admitted at p and
+m only, and the elaborator's first round bound codata declarations at p;
+that route is gone.)
 
 ---
 
@@ -295,14 +299,14 @@ where the hypothesis is `UIP_Cmd`), and the same caveat.
 
 ## 5. Codes and the meta layer
 
-Four code-recursor branches when codes come (`ty_m`, `tm_m`, `tm_corec`,
-`tm_out`), with the step telescope of `tm_corec` the widest yet (the
-carrier family, the step under two binders, the seed). At layer c nothing
+Four code-recursor branches (`ty_m`, `tm_m`, `tm_corec`, `tm_out`; done,
+`docs/kernel-m-codes-design.md`), with the step telescope of `tm_corec` the
+widest yet (the carrier family, the step under two binders, the seed). At layer c nothing
 computes, so a boxed corecursive definition is a finite piece of syntax;
 `□` comparison stays syntactic, so bisimilar code stays distinguishable as
 code. A `Code` may mention an `M`; a `corec` under a quote is inert like
 every other intro form. This is the same firewall funext would have and
-needs nothing new; it waits for its own round, as `IWf`'s codes did.
+needs nothing new.
 
 ---
 
@@ -501,7 +505,8 @@ relation over an abstract interface). No kernel rule needed a change.
    through `out`, guarded corecursive definitions (§6).
 5. **Library**: the coinductive tree, `approx`, `Bisim` and eutt as `M`
    instances, the bridge of §4, `Sim`'s coinductive form (§6.1).
-6. **Codes** (§5), when a meta-program needs them.
+6. **Codes** (§5). Brought forward before the library on Minus's call,
+   2026-10-22, so codata lands at layer c: `docs/kernel-m-codes-design.md`.
 
 ## Sources
 

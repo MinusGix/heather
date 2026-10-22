@@ -10,6 +10,8 @@ mod support;
 
 #[path = "../coinduction_probe.rs"]
 mod coinduction_probe;
+#[path = "../codata.rs"]
+mod codata;
 #[path = "../lib_algebra.rs"]
 mod lib_algebra;
 #[path = "../lib_list_algos.rs"]

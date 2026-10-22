@@ -571,7 +571,7 @@ impl Tr<'_> {
             Type::Fin { len } => konst("Fin", &[], vec![self.tm(len)?])?,
             Type::Wf { level, shape, .. } => self.wf_type(level, shape)?,
             Type::DVec { .. } | Type::IWf { .. } => return refuse("DVec/IWf (no code yet; not in declarations)"),
-            Type::M { .. } => return refuse("M (no code yet; not in declarations)"),
+            Type::M { .. } => return refuse("M (not exported yet)"),
             Type::UPi { .. } => return refuse("ΠΠ (universe polymorphism)"),
             Type::GlobalTy { .. } => return refuse("global type variable (layer c/p meta binding)"),
             Type::CtxPi { .. } | Type::TyPi { .. } => return refuse("context/type meta-function"),
@@ -870,7 +870,7 @@ impl Tr<'_> {
                 self.wf_elim(level, motive_level, shape, arity, motive, step, scrut)?
             }
             Term::Supi { .. } | Term::ElimIWf { .. } => return refuse("IWf (no code yet; not in declarations)"),
-            Term::Corec { .. } | Term::Out { .. } => return refuse("M (no code yet; not in declarations)"),
+            Term::Corec { .. } | Term::Out { .. } | Term::TmM { .. } => return refuse("M (not exported yet)"),
             // ---- functions ----
             Term::Lam { dom, body, .. } => lam(self.ty(dom)?, self.under(Some(dom), || self.tm(body))?),
             Term::App { fun, arg, dom, .. } => app(self.tm(fun)?, vec![self.tm_at_ty(arg, dom)?]),

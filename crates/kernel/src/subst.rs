@@ -626,6 +626,16 @@ fn map_term<M: Mapper>(t: &Term, m: &mut M, at: Depths) -> Term {
             shape: sub_tm(shape, m, at),
             arity: sub_tm(arity, m, at + dep(0, 0, 1)),
         },
+        Term::TmM { level, pos_level, idx_level, idx, shape, pos, next, index } => Term::TmM {
+            level: m.level(level, at),
+            pos_level: m.level(pos_level, at),
+            idx_level: m.level(idx_level, at),
+            idx: sub_tm(idx, m, at),
+            shape: sub_tm(shape, m, at + dep(0, 0, 1)),
+            pos: sub_tm(pos, m, at + dep(0, 0, 2)),
+            next: sub_tm(next, m, at + dep(0, 0, 3)),
+            index: sub_tm(index, m, at),
+        },
         Term::Zero => Term::Zero,
         Term::NatLit(n) => Term::NatLit(n.clone()),
         Term::Succ(t) => Term::Succ(sub_tm(t, m, at)),
@@ -1023,6 +1033,10 @@ fn map_branches<M: Mapper>(b: &Branches, m: &mut M, at: Depths) -> Branches {
         tm_squash: sub_tm(&b.tm_squash, m, at + dep(1, 2, 1)),
         tm_squash_in: sub_tm(&b.tm_squash_in, m, at + dep(1, 3, 2)),
         tm_elim_squash: sub_tm(&b.tm_elim_squash, m, at + dep(2, 5, 4)),
+        ty_m: sub_tm(&b.ty_m, m, at + dep(3, 6, 5)),
+        tm_m: sub_tm(&b.tm_m, m, at + dep(3, 6, 5)),
+        tm_corec: sub_tm(&b.tm_corec, m, at + dep(4, 9, 8)),
+        tm_out: sub_tm(&b.tm_out, m, at + dep(3, 7, 6)),
     }
 }
 
@@ -1149,7 +1163,7 @@ impl Mapper for ShiftGlobal {
 /// The recursor's motive and branch telescopes, weakened by `by` global
 /// bindings. The value machine's one materialization site that is a
 /// telescope table rather than a term (`docs/lazy-global-offset-design.md`
-/// §5); routed through the generic traversal so the 56 telescopes are not
+/// §5); routed through the generic traversal so the 60 telescopes are not
 /// written down again.
 pub(crate) fn shift_global_tables(
     motives: &Motives,

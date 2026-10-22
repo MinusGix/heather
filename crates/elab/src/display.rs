@@ -379,6 +379,31 @@ impl Speller<'_> {
         if let Some(inline) = self.el.unspell_here(ty) {
             return self.ty(&inline, d);
         }
+        // A codata instance, `M(…)(⟨⟩)`: its declaration's name, with the type
+        // arguments read off the shape it carries (a tier-1 spine), and value
+        // arguments elided (docs/codata-elaborator-design.md §2).
+        if let Type::M { sig, .. } = ty
+            && let Some(ind) = self.el.tag_of(ty).filter(|i| i.codata)
+        {
+            if ind.params.is_empty() && ind.valparams.is_empty() {
+                return ind.name.clone();
+            }
+            if self.annotations {
+                return self.raw_ty(ty);
+            }
+            let shape = sig.shape_at(&Term::Triv { level: sig.idx_level.clone() });
+            let targs = if ind.params.is_empty() {
+                String::new()
+            } else if let Some(args) = self.el.display_targs(self.cx, &shape, &ind, self.binders()) {
+                let shown = args.iter().map(|(arg, _)| self.ty(arg, d + 1)).collect::<Vec<_>>().join(", ");
+                format!("<{shown}>")
+            } else {
+                "<…>".to_string()
+            };
+            let vargs = if ind.valparams.is_empty() { "" } else { "(…)" };
+            let shown = format!("{}{targs}{vargs}", ind.name);
+            return if targs == "<…>" || !vargs.is_empty() { self.elided(shown) } else { shown };
+        }
         // An inductive instance is its declaration's name, wherever its
         // lowering is what we are looking at.
         if matches!(ty, Type::Wf { .. } | Type::Sum { .. } | Type::Sigma { .. })

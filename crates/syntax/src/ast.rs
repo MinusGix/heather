@@ -322,6 +322,11 @@ pub struct InductiveDecl {
     /// extra surface checks (non-recursive, distinct field names) and the
     /// accessor table.
     pub is_record: bool,
+    /// Written `codata D<…> { … }` — a **coinductive** declaration
+    /// (docs/codata-elaborator-design.md): the same constructor grammar,
+    /// lowered onto the kernel's negative `M` former instead of an inductive
+    /// one, so a value may be infinitely deep and is observed only by `match`.
+    pub is_codata: bool,
     /// `inductive Vec<A> : (n: Nat) -> Type { … }` — the index telescope of an
     /// indexed family (docs/inductive-indexed-lowering.md §2). Parsed as an
     /// ordinary [`TyKind::Fn`] and validated by the elaborator: this round it
@@ -1052,7 +1057,7 @@ pub enum ExprKind {
     /// (docs/certgen-transcriber-in-language-design.md §3).
     ///
     /// Three things distinguish it from [`ExprKind::Match`], and all three are
-    /// what make a 56-branch elimination writable at all:
+    /// what make a 60-branch elimination writable at all:
     ///
     /// - the motive is a **constant type**, not a lambda: a motive that
     ///   mentioned the scrutinee, its context or its level would give the

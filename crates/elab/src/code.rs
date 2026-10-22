@@ -126,6 +126,19 @@ pub(crate) fn code_of(t: &Type) -> Option<Term> {
             shape: Rc::new(code_of(shape)?),
             arity: Rc::clone(arity),
         },
+        // The coinductive former (docs/kernel-m-codes-design.md §1): the
+        // index is part of the code, and the pieces are coded under the
+        // binders they already have.
+        Type::M { sig, index } => Term::TmM {
+            level: sig.level.clone(),
+            pos_level: sig.pos_level.clone(),
+            idx_level: sig.idx_level.clone(),
+            idx: Rc::new(code_of(&sig.idx)?),
+            shape: Rc::new(code_of(&sig.shape)?),
+            pos: Rc::new(code_of(&sig.pos)?),
+            next: Rc::clone(&sig.next),
+            index: Rc::clone(index),
+        },
         // No code: `UPi` is layer m, and the box/context formers are not
         // types a type argument can be.
         _ => return None,

@@ -227,6 +227,13 @@ impl Walk<'_> {
                 self.term(shape, d);
                 self.term(arity, d + 1);
             }
+            Term::TmM { idx, shape, pos, next, index, .. } => {
+                self.term(idx, d);
+                self.term(shape, d + 1);
+                self.term(pos, d + 2);
+                self.term(next, d + 3);
+                self.term(index, d);
+            }
 
             Term::ElimNat {
                 motive,

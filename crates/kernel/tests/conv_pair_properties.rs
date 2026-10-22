@@ -38,7 +38,7 @@ use common::Rng;
 use heather_kernel::conv::{conv_term, conv_type, ConvError};
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
-use heather_kernel::term::{LocalSubst, LocalVar, Term, Type};
+use heather_kernel::term::{LocalSubst, LocalVar, MSig, Term, Type};
 use heather_kernel::typing::check_term;
 
 const CASES: u64 = 300;
@@ -149,6 +149,20 @@ fn decode(e: &Term) -> Type {
             level: level.clone(),
             shape: rty(Type::El { level: level.clone(), tm: Rc::clone(shape) }),
             arity: Rc::clone(arity),
+        },
+        // M (docs/kernel-m-codes-design.md §1): every piece decodes under its
+        // binders; `next` and the index are terms and ride across.
+        Term::TmM { level, pos_level, idx_level, idx, shape, pos, next, index } => Type::M {
+            sig: Rc::new(MSig {
+                level: level.clone(),
+                pos_level: pos_level.clone(),
+                idx_level: idx_level.clone(),
+                idx: rty(Type::El { level: idx_level.clone(), tm: Rc::clone(idx) }),
+                shape: rty(Type::El { level: level.clone(), tm: Rc::clone(shape) }),
+                pos: rty(Type::El { level: pos_level.clone(), tm: Rc::clone(pos) }),
+                next: Rc::clone(next),
+            }),
+            index: Rc::clone(index),
         },
         _ => unreachable!("gen_encoding produced an encoding this decoder does not cover"),
     }
@@ -266,6 +280,19 @@ fn mutate_encoding(e: &Term) -> Term {
             shape: Rc::clone(shape),
             arity: rt(Term::Succ(Rc::clone(arity))),
         },
+        // M: mutate the positions. They are the type of `next`'s last
+        // binder, which the generator's `next` (the index variable `i`)
+        // never reads, so this stays type-preserving.
+        Term::TmM { level, pos_level, idx_level, idx, shape, pos, next, index } => Term::TmM {
+            level: level.clone(),
+            pos_level: pos_level.clone(),
+            idx_level: idx_level.clone(),
+            idx: Rc::clone(idx),
+            shape: Rc::clone(shape),
+            pos: rt(mutate_encoding(pos)),
+            next: Rc::clone(next),
+            index: Rc::clone(index),
+        },
         _ => unreachable!("gen_encoding produced an encoding this mutator does not cover"),
     }
 }
@@ -355,9 +382,9 @@ fn neutral_recursor_compares_branches() {
         let tm_variant = r.below(2) == 1;
         let nr = gen_nat_rec(&base_env, &mut r, tm_variant);
         let env = &nr.env;
-        // Branch i holds the numeral i: all 56 pairwise distinct, so any
+        // Branch i holds the numeral i: all 60 pairwise distinct, so any
         // swap or bump must be caught by the branchwise comparison.
-        let base: [Rc<Term>; 56] = std::array::from_fn(|i| numeral(i as u32));
+        let base: [Rc<Term>; 60] = std::array::from_fn(|i| numeral(i as u32));
         let t = nr.build(&base);
         let res =
             check_term(&env.psi, env.univs, env.layer, &env.gamma, &t, &Type::Nat, &Level::Zero, FUEL);
@@ -365,7 +392,7 @@ fn neutral_recursor_compares_branches() {
         let conv = |a: &Term, b: &Term| {
             conv_term(&env.psi, &env.gamma, Layer::Meta, a, b, &Type::Nat, &Level::Zero, FUEL)
         };
-        let k = r.below(56) as usize;
+        let k = r.below(60) as usize;
         // β-wrapped branch: differing sides that are still convertible.
         let mut pos = base.clone();
         pos[k] = beta_wrap(&base[k]);
@@ -381,7 +408,7 @@ fn neutral_recursor_compares_branches() {
         let tn = nr.build(&neg);
         assert_eq!(conv(&t, &tn), Err(NC), "seed {seed}: bumped branch {k}");
         // Two distinct branches swapped: NotConvertible.
-        let j = (k + 1 + r.below(44) as usize) % 45;
+        let j = (k + 1 + r.below(59) as usize) % 60;
         let mut sw = base.clone();
         sw.swap(j, k);
         let ts = nr.build(&sw);

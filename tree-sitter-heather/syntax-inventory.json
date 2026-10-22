@@ -1,6 +1,6 @@
 {
   "keywords": [
-    "Code", "Ctx", "TyCode", "Type", "apply", "as", "at", "axiom", "calc", "class", "code",
+    "Code", "Ctx", "TyCode", "Type", "apply", "as", "at", "axiom", "calc", "class", "code", "codata",
     "all_goals", "datarepr", "designation", "else", "evidence", "export", "extends", "fn", "for", "fun", "if",
     "give", "have", "impl", "import", "inductive", "infer", "instance", "j", "let", "match",
     "meta", "mk", "on", "postfix", "prefix", "record", "refl", "by",

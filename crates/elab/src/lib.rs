@@ -93,6 +93,7 @@ pub mod function_ir_exec;
 pub mod function_ir_source;
 pub mod function_ir_x86_lower;
 mod code;
+mod codata;
 mod constructor;
 mod context;
 mod defaults;
@@ -3159,6 +3160,16 @@ impl Elaborator {
         Some(self.lookup_global(name)?.abs as usize)
     }
 
+    /// The layer a term binding was bound at, by the name the current module
+    /// resolves: `c` for every declaration, codata included
+    /// (docs/kernel-m-codes-design.md §0).
+    pub fn global_layer(&self, name: &str) -> Option<Layer> {
+        match self.psi.bindings.get(self.global_abs(name)?)? {
+            GlobalBinding::Tm { layer, .. } => Some(*layer),
+            _ => None,
+        }
+    }
+
     /// The written (base) name of the binding at absolute Ψ index `abs` —
     /// the reverse of [`Self::global_abs`], for resolving a stored body's
     /// `GlobalVar`s to callee names. The name registry maintains this reverse
@@ -3284,7 +3295,13 @@ impl Elaborator {
         // A `fn` whose structural lowering would not mean its source is
         // lowered by measure, or refused where that has no unfolding equation
         // either (issues/fn-recursion-means-the-function.md).
-        if decl.kind == DeclKind::Fn {
+        // A `fn` returning codata recurses *guardedly*, not structurally: its
+        // self-calls become one `corec` (docs/codata-elaborator-design.md §5),
+        // so a `match` reading a parameter is the step's own observation.
+        let corecursive = matches!(&decl.result.kind,
+            heather_syntax::ast::TyKind::Named { name, .. }
+                if self.lookup_inductive(name).is_some_and(|i| i.codata));
+        if decl.kind == DeclKind::Fn && !corecursive {
             let self_ref = recursion::SelfRef::of_decl(decl);
             match recursion::plan(&self_ref, &decl.body) {
                 recursion::RecursionPlan::Structural => {}
@@ -4046,16 +4063,43 @@ impl Elaborator {
             // A `decreases` declaration never reaches here: `elab_measure_decl`
             // has already replaced it by the family of `measure.rs`.
             debug_assert!(decl.decreases.is_none());
-            let body = statements::check_block(
-                self,
-                &cx,
-                &decl.body,
-                &res_ty,
-                &res_lvl,
-                None,
-                None,
-                true,
-            )?;
+            // A corecursive definition (docs/codata-elaborator-design.md §5):
+            // the result is codata and the body calls itself, so the body is
+            // one `corec`'s step, checked at the step type with the
+            // self-reference turned into seeds rather than induction
+            // hypotheses.
+            let corec = match cx.selfref.as_ref() {
+                Some(selfref) => self.corec_plan(&cx, decl, selfref, &res_ty, decl.span)?,
+                None => None,
+            };
+            let body = if let Some(site) = &corec {
+                let mut bcx = cx.clone();
+                bcx.selfref = None;
+                bcx.corec = Some(Rc::clone(site));
+                let (step_ty, step_lvl) = Self::corec_body_ty(site);
+                let step = statements::check_block(
+                    self,
+                    &bcx,
+                    &decl.body,
+                    &step_ty,
+                    &step_lvl,
+                    None,
+                    None,
+                    true,
+                )?;
+                self.corec_close(&cx, decl.tyvars.len(), site, step, decl.span)?
+            } else {
+                statements::check_block(
+                    self,
+                    &cx,
+                    &decl.body,
+                    &res_ty,
+                    &res_lvl,
+                    None,
+                    None,
+                    true,
+                )?
+            };
             self.solve_goals(&decl.body.ons, &decl.name)?;
             Some(body)
         };
@@ -4631,6 +4675,13 @@ impl Elaborator {
         capture_slots: bool,
     ) -> R<Term> {
         let _depth = expr::ExprDepthGuard::enter(&self.expr_depth, e.span)?;
+        // A corecursive body's two positions, a node and a child
+        // (docs/codata-elaborator-design.md §5.2).
+        if let Some(site) = cx.corec.as_ref()
+            && let Some(t) = self.corec_check(cx, site, e, expected, lvl)?
+        {
+            return Ok(t);
+        }
         if let Some(quoted) = self.quote_for_by(cx, e, expected, lvl)? {
             return Ok(quoted);
         }
@@ -6287,6 +6338,19 @@ impl Elaborator {
                     e.span,
                 );
             }
+        }
+        if let Some(site) = cx.corec.as_ref()
+            && recursion::surface_self_call(&site.selfref, e).is_some()
+        {
+            let name = &site.selfref.written_name;
+            return err(
+                format!(
+                    "this call to `{name}` is not guarded: a corecursive call must be a child of the \
+                     constructor the definition returns — `C(…, {name}(…), …)` or \
+                     `C(…, λ y => {name}(…), …)` (docs/codata-elaborator-design.md §5)"
+                ),
+                e.span,
+            );
         }
         let (term, ty, level) = self.elab_infer_written(cx, e, expected)?;
         Ok((self.reduced_decision(cx, e, term), ty, level))

@@ -1492,6 +1492,7 @@ impl Elaborator {
             valparams: d.valparams.clone(),
             ctors: vec![ctor],
             is_record: true,
+            is_codata: false,
             index: None,
             span: d.span,
         };

@@ -521,8 +521,17 @@
       "type": "SEQ",
       "members": [
         {
-          "type": "STRING",
-          "value": "inductive"
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "STRING",
+              "value": "inductive"
+            },
+            {
+              "type": "STRING",
+              "value": "codata"
+            }
+          ]
         },
         {
           "type": "FIELD",

@@ -929,6 +929,16 @@ impl<'v> Dom<'v> for Values {
                 shape: TmC::here(env, *shape),
                 arity: TmC::under(env, *arity, 1),
             },
+            Val::TmM(m) => TmView::TmM {
+                level: &m.level,
+                pos_level: &m.pos_level,
+                idx_level: &m.idx_level,
+                idx: TmC::here(env, m.idx),
+                shape: TmC::under(env, m.shape, 1),
+                pos: TmC::under(env, m.pos, 2),
+                next: TmC::under(env, m.next, 3),
+                index: TmC::here(env, m.index),
+            },
             Val::TmId { level, ty, lhs, rhs } => TmView::TmId {
                 level,
                 ty: TmC::here(env, *ty),

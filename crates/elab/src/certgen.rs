@@ -523,6 +523,9 @@ impl ResTy {
                          certified (docs/inductive-tier2-w-lowering.md §1)"
                     ));
                 }
+                if ind.codata {
+                    return Err(format!("`{name}` is `codata`: a coinductive type is not certified"));
+                }
                 if ind.recursive {
                     return Err(format!(
                         "`{name}` is recursive: a tier-1 result type is deferred \
@@ -662,6 +665,12 @@ impl ParamTy {
                     return Err(format!(
                         "parameter `{}`'s type `{name}` has a recursive function field: a \
                          tier-2 type is not certified (docs/inductive-tier2-w-lowering.md §1)",
+                        p.name
+                    ));
+                }
+                if ind.codata {
+                    return Err(format!(
+                        "parameter `{}`'s type `{name}` is `codata`: a coinductive type is not certified",
                         p.name
                     ));
                 }
@@ -3666,7 +3675,7 @@ fn global_app<'v>(
 ///
 /// No analyzer slot, and no `meta fn`: the fold is a program-layer function of
 /// one `Ir`, so an ordinary application is the whole invocation — which is
-/// also what keeps it off the 56-branch `rec_ga` gate every `match code` shell
+/// also what keeps it off the 60-branch `rec_ga` gate every `match code` shell
 /// pays. Evaluation is the same demand-driven forcing under the same budgets
 /// as every other readback here.
 fn run_cert_fold<'v>(

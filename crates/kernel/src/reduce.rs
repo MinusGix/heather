@@ -40,7 +40,7 @@ use std::sync::Arc as Rc;
 use crate::level::Level;
 use crate::subst::{GlobalEntry, GlobalSubst};
 use crate::term::{
-    iwf_ih, m_out_corec, nth, wf_step_telescope, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, LocalCtx,
+    iwf_ih, m_out_corec, m_step_ty, nth, wf_step_telescope, MSig, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, LocalCtx,
     LocalSubst, LocalVar, Term, Type,
 };
 
@@ -465,6 +465,12 @@ fn step_type_frame(t: &Type, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) 
                 level: l.clone(),
                 shape: Rc::new(Type::El { level: l.clone(), tm: Rc::clone(shape) }),
                 arity: Rc::clone(arity),
+            }),
+            // El(TmM …) ⇝ M(El idx; El shape; El pos; next)(index)
+            // (docs/kernel-m-codes-design.md §1).
+            Term::TmM { level: l, pos_level, idx_level, idx, shape, pos, next, index } => Some(Type::M {
+                sig: Rc::new(crate::term::m_sig_of_code(l, pos_level, idx_level, idx, shape, pos, next)),
+                index: Rc::clone(index),
             }),
             _ => step_term_in(tm, gamma, defs, frames)
                 .map(|tm| Type::El { level: level.clone(), tm: Rc::new(tm) }),
@@ -1151,7 +1157,7 @@ pub(crate) struct Rec<'a> {
 
 impl<'a> Rec<'a> {
     /// The recursor's copied-forward parts, for [`crate::eval`]'s β: the
-    /// evaluator shares these functions rather than transcribing the 56
+    /// evaluator shares these functions rather than transcribing the 60
     /// branch telescopes a sixth time (docs/nbe-conversion-design.md §2).
     pub(crate) fn new(
         ty_motive_level: &'a Level,
@@ -1220,6 +1226,41 @@ fn fire(
         delta = delta.extended(payload);
     }
     t.apply_local(&delta)
+}
+
+/// The signature pieces of an `M` branch, `U_I, U_S, U_P, u_o` as global
+/// payloads and `x_I, x_S, x_P, x_o` as recursive calls, each at the
+/// context its piece lives in (docs/kernel-m-codes-design.md §2). The
+/// pieces are the *types* of a boxed `M`/`corec`/`out`; [`tm_m_pieces`] is
+/// the code former's.
+fn m_sig_pieces(rec: &Rec, delta: &LocalCtx, sig: &MSig) -> (Vec<GlobalEntry>, Vec<Rc<Term>>) {
+    let di = extend(delta, Rc::clone(&sig.idx), sig.idx_level.clone());
+    let dis = extend(&di, Rc::clone(&sig.shape), sig.level.clone());
+    let disp = extend(&dis, Rc::clone(&sig.pos), sig.pos_level.clone());
+    let s_idx = rec.elim_ty(sig.idx_level.clone(), delta.clone(), Rc::clone(&sig.idx));
+    let s_shape = rec.elim_ty(sig.level.clone(), di, Rc::clone(&sig.shape));
+    let s_pos = rec.elim_ty(sig.pos_level.clone(), dis, Rc::clone(&sig.pos));
+    let s_next = rec.elim_tm(
+        sig.idx_level.clone(),
+        disp,
+        Rc::new(sig.idx.shift_local(3)),
+        Rc::clone(&sig.next),
+    );
+    (
+        vec![
+            GlobalEntry::Ctx(delta.clone()),
+            GlobalEntry::Ty(Rc::clone(&sig.idx)),
+            GlobalEntry::Ty(Rc::clone(&sig.shape)),
+            GlobalEntry::Ty(Rc::clone(&sig.pos)),
+            GlobalEntry::Tm(Rc::clone(&sig.next)),
+        ],
+        vec![s_idx, s_shape, s_pos, s_next],
+    )
+}
+
+/// `M`'s universe payload, innermost-first: `li, l', l`.
+fn m_univs(sig: &MSig) -> Vec<Level> {
+    vec![sig.idx_level.clone(), sig.pos_level.clone(), sig.level.clone()]
 }
 
 /// β for `elim^Typ … (l', Δ) (box code)`, dispatching on the head of the
@@ -1466,6 +1507,19 @@ pub(crate) fn beta_elim_ty(
                 vec![s_ty],
                 gamma,
             ))
+        }
+        // (l, l', li, g, U_I, U_S, U_P, u_o, u_j, x_I, x_S, x_P, x_o, x_j.
+        // t_M)   (docs/kernel-m-codes-design.md §2)
+        Type::M { sig, index } => {
+            let (mut globals, mut locals) = m_sig_pieces(rec, delta, sig);
+            globals.push(GlobalEntry::Tm(Rc::clone(index)));
+            locals.push(rec.elim_tm(
+                sig.idx_level.clone(),
+                delta.clone(),
+                Rc::clone(&sig.idx),
+                Rc::clone(index),
+            ));
+            Some(fire(&b.ty_m, &m_univs(sig), globals, locals, gamma))
         }
         // Layer-m types cannot be layer-c code, nor can a former with no code
         // yet (`DVec`): ill-typed, stuck.
@@ -2586,6 +2640,96 @@ pub(crate) fn beta_elim_tm(
                 gamma,
             ))
         }
+        // (l, l', li, g, u_I, u_S, u_P, u_o, u_j, x_I, x_S, x_P, x_o, x_j.
+        // t'_M) — the encoding; the pieces recurse at `Ty`, under `El` of
+        // the earlier ones, as tm_wf's do.   (docs/kernel-m-codes-design.md §2)
+        Term::TmM { level, pos_level, idx_level, idx, shape, pos, next, index } => {
+            let el = |level: &Level, tm: &Rc<Term>| {
+                Rc::new(Type::El { level: level.clone(), tm: Rc::clone(tm) })
+            };
+            let code_at = |level: &Level, ctx: LocalCtx, tm: &Rc<Term>| {
+                rec.elim_tm(Level::succ(level.clone()), ctx, Rc::new(Type::Ty(level.clone())), Rc::clone(tm))
+            };
+            let el_i = el(idx_level, idx);
+            let di = extend(delta, Rc::clone(&el_i), idx_level.clone());
+            let dis = extend(&di, el(level, shape), level.clone());
+            let disp = extend(&dis, el(pos_level, pos), pos_level.clone());
+            let s_idx = code_at(idx_level, delta.clone(), idx);
+            let s_shape = code_at(level, di, shape);
+            let s_pos = code_at(pos_level, dis, pos);
+            let s_next = rec.elim_tm(idx_level.clone(), disp, Rc::new(el_i.shift_local(3)), Rc::clone(next));
+            let s_index = rec.elim_tm(idx_level.clone(), delta.clone(), el_i, Rc::clone(index));
+            Some(fire(
+                &b.tm_m,
+                &[idx_level.clone(), pos_level.clone(), level.clone()],
+                vec![
+                    GlobalEntry::Ctx(delta.clone()),
+                    GlobalEntry::Tm(Rc::clone(idx)),
+                    GlobalEntry::Tm(Rc::clone(shape)),
+                    GlobalEntry::Tm(Rc::clone(pos)),
+                    GlobalEntry::Tm(Rc::clone(next)),
+                    GlobalEntry::Tm(Rc::clone(index)),
+                ],
+                vec![s_idx, s_shape, s_pos, s_next, s_index],
+                gamma,
+            ))
+        }
+        // (l, l', li, k, g, U_I, U_S, U_P, u_o, U_X, u_c, u_j, u_x, x_I, …,
+        // x_x. t_corec) — the step recurses at `m_step_ty`, as in the typing
+        // rule. A boxed corec is inert: this is the only thing the code
+        // recursor does with one.   (docs/kernel-m-codes-design.md §2)
+        Term::Corec { sig, carrier_level, carrier, step, index, seed } => {
+            let (mut globals, mut locals) = m_sig_pieces(rec, delta, sig);
+            let di = extend(delta, Rc::clone(&sig.idx), sig.idx_level.clone());
+            let dix = extend(&di, Rc::clone(carrier), carrier_level.clone());
+            let step_ty = m_step_ty(sig, carrier_level, carrier).shift_local(1);
+            let step_level = Level::join(
+                sig.level.clone(),
+                Level::join(carrier_level.clone(), sig.family_level()),
+            );
+            locals.push(rec.elim_ty(carrier_level.clone(), di, Rc::clone(carrier)));
+            locals.push(rec.elim_tm(step_level, dix, Rc::new(step_ty), Rc::clone(step)));
+            locals.push(rec.elim_tm(
+                sig.idx_level.clone(),
+                delta.clone(),
+                Rc::clone(&sig.idx),
+                Rc::clone(index),
+            ));
+            locals.push(rec.elim_tm(
+                carrier_level.clone(),
+                delta.clone(),
+                Rc::new(carrier.inst_top(0, index)),
+                Rc::clone(seed),
+            ));
+            globals.extend([
+                GlobalEntry::Ty(Rc::clone(carrier)),
+                GlobalEntry::Tm(Rc::clone(step)),
+                GlobalEntry::Tm(Rc::clone(index)),
+                GlobalEntry::Tm(Rc::clone(seed)),
+            ]);
+            let mut univs = vec![carrier_level.clone()];
+            univs.extend(m_univs(sig));
+            Some(fire(&b.tm_corec, &univs, globals, locals, gamma))
+        }
+        // (l, l', li, g, U_I, U_S, U_P, u_o, u_j, u_m, x_I, …, x_m. t_out)
+        //   (docs/kernel-m-codes-design.md §2)
+        Term::Out { sig, index, scrut } => {
+            let (mut globals, mut locals) = m_sig_pieces(rec, delta, sig);
+            locals.push(rec.elim_tm(
+                sig.idx_level.clone(),
+                delta.clone(),
+                Rc::clone(&sig.idx),
+                Rc::clone(index),
+            ));
+            locals.push(rec.elim_tm(
+                sig.family_level(),
+                delta.clone(),
+                Rc::new(sig.at(Rc::clone(index))),
+                Rc::clone(scrut),
+            ));
+            globals.extend([GlobalEntry::Tm(Rc::clone(index)), GlobalEntry::Tm(Rc::clone(scrut))]);
+            Some(fire(&b.tm_out, &m_univs(sig), globals, locals, gamma))
+        }
         // box (u^δ): blocked, neutral.
         Term::GlobalTm { .. } => None,
         // Layer-m forms cannot be layer-c code: ill-typed, stuck.
@@ -2711,6 +2855,7 @@ pub fn is_whnf_term(t: &Term) -> bool {
         | Term::TmVec { .. }
         | Term::TmFin { .. }
         | Term::TmWf { .. }
+        | Term::TmM { .. }
         | Term::Zero
         | Term::Succ(_)
         | Term::Refl { .. }

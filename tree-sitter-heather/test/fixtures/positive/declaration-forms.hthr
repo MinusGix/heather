@@ -18,3 +18,7 @@ fn choose(o: Option<Nat>) -> Nat {
 class TaggedPair<A>(first, second: A -> A -> A)
     extends Pointed<A>(first) as additive, Pointed<A>(second) as multiplicative
 {}
+
+codata Stream { SCons(head: Nat, tail: Stream) }
+
+fn from(n: Nat) -> Stream { SCons(n, from(Succ(n))) }
