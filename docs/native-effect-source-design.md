@@ -332,6 +332,17 @@ becomes FunctionIR's bounded loop and a `loop`/`while` becomes the layer's.
 A bounded loop with no early exit, run `bound` times, is a fold. With an
 early exit, it is `bounded_readonly`'s shape.
 
+**The bounded loop has an explicit `Exhausted` outcome**, as
+`bounded_readonly` does. A loop that runs out of passes before its exit bit
+is set yields `Exhausted`, not an `Option` and not a cut. Its meaning is then
+total and a function. A function defined by well-founded recursion (gcd by
+`Wf`, say) has no count to read off, but it does have a measure. It compiles
+with `bound :=` the measure at entry, and the function's own proof that the
+measure decreases shows `Exhausted` is unreachable. The IR never needs a
+dependently typed "this decreases" field. A loop that is pure but may
+diverge, with no measure at all, is not a FunctionIR loop: it is the layer's
+`Loop` with no calls in its body, and the tree gives it `Tau`s.
+
 `issues/function-ir-lowering-loops.md` then resolves as: **S4 gains round 5,
 the bounded loop**, and B2 waits for it as that issue already requires.
 
@@ -550,7 +561,42 @@ per-program proof is a pass-sized lemma.
 S3.0, S3.1 and S4.5 can run in parallel. S3.2 needs S3.0 and the contract
 footprints. `tr` needs everything above it.
 
-## 11. Decision
+## 11. Why this is the right shape, not only the cheap one
+
+That S4 is reused unchanged under A is a consequence of the split, not its
+justification. On principle alone:
+
+- **A syscall's answer is control, not data.** A dataflow node's output is a
+  function of its inputs. FunctionIR's meaning, CSE, reordering and every
+  pure rewrite rest on that. Linux picks a syscall's answer, so it is not a
+  function of the call's inputs. There are only two honest ways to put a
+  syscall in dataflow.
+  - Reify the world as a value: an IO token whose meaning is
+    `World → (World, answer)`, which is `run_state`'s interpreted view. That
+    builds a world model into the IR, which S1's abstract container
+    deliberately avoided.
+  - Make the IR's meaning a tree. The IR has then become the layer.
+
+  A relational reading ("some valuation satisfies it") would not just be
+  awkward. It would pick the answer *angelically*, which is wrong. An answer
+  binds a continuation, and that is `Vis`.
+- **Two levels are the minimum, not cruft.** This is Levy's split in
+  call-by-push-value between values and computations, and Moggi's
+  computational metalanguage. FunctionIR is the value level (total, a
+  function), and the layer is the computation level (a tree). Whether the
+  two are written as two inductives or as one inductive indexed by level is
+  a matter of representation. FunctionIR exists, so two.
+- **Termination is semantic, and an IR should keep it where it is known.**
+  Heather's own type theory makes the same split: structural and
+  well-founded recursion are total, and general recursion goes through
+  `iter`, fuel or coinduction. L1 throws away totality the source already
+  proved. L2 puts partiality into the one level whose whole value is being a
+  function. L3 keeps each level's meaning as simple as it can be.
+- **What B genuinely buys** (one allocator, passes that move code across a
+  call) is tooling over A: passes that see both levels. It is not a reason to
+  change either level's meaning.
+
+## 12. Decision
 
 1. **The source's shape**: A (recommended), or B.
 2. **Loops**: L3 (recommended), L1, or L2.
