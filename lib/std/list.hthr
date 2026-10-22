@@ -752,7 +752,7 @@ theorem List::nth_present<A>(self xs: List<A>): (i: Nat) → i < xs.len() → Ex
 // The list as a vector of its length, in order: what a store of a list's
 // bytes stores (`Memory::set_span`, lib/std/memory.hthr).
 fn List::to_vector<A>(self xs: List<A>) → [A; xs.len()] {
-    match xs as λ ys => [A; ys.len()] {
+    match xs {
         Nil => {
             let empty: [A; 0] = [];
             empty
