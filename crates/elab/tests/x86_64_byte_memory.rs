@@ -12,26 +12,9 @@
 //!     view arm.
 
 use crate::read_loop_fixture::checker_with;
-use crate::linux_wp::assert_refused;
-
-const MODULES: &[(&str, &str)] = &[
-    ("result", include_str!("../../../lib/std/result.hthr")),
-    ("vector", include_str!("../../../lib/std/vector.hthr")),
-    ("bitvec_bytes", include_str!("../../../lib/std/bitvec/bitvec_bytes.hthr")),
-    ("memory", include_str!("../../../lib/std/memory.hthr")),
-    ("x86_64_step_forms", include_str!("../../../lib/std/arch/x86_64/x86_64_step_forms.hthr")),
-    ("linux_x86_64_determinism", include_str!("../../../lib/linux_x86_64_determinism.hthr")),
-    ("itree", include_str!("../../../lib/std/itree.hthr")),
-    ("itree_trace", include_str!("../../../lib/std/itree_trace.hthr")),
-    ("linux_trees", include_str!("../../../lib/linux_trees.hthr")),
-    ("linux_x86_64_sim", include_str!("../../../lib/linux_x86_64_sim.hthr")),
-    ("x86_64_stack", include_str!("../../../lib/std/arch/x86_64/x86_64_stack.hthr")),
-    ("x86_64_asm", include_str!("../../../lib/std/arch/x86_64/x86_64_asm.hthr")),
-    ("x86_64_asm_runs", include_str!("../../../lib/std/arch/x86_64/x86_64_asm_runs.hthr")),
-    ("linux_x86_64_wp", include_str!("../../../lib/linux_x86_64_wp.hthr")),
-    ("x86_64_byte_memory", include_str!("../../../lib/std/arch/x86_64/x86_64_byte_memory.hthr")),
-    ("linux_x86_64_byte_memory", include_str!("../../../lib/linux_x86_64_byte_memory.hthr")),
-];
+// The one-Wp round's list carries the byte model, so both share one semantic
+// test image.
+use crate::linux_wp::{assert_refused, MODULES};
 
 const EXAMPLES: &str = include_str!("fixtures/x86_64_byte_memory_examples.hthr");
 

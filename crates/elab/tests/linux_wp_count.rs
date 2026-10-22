@@ -32,7 +32,7 @@ fn the_pure_loop_counts_down_and_exits() {
 // The loop loads and stores slot 1, where the invariant counts slot 0.
 #[test]
 fn a_loop_over_the_wrong_slot_is_refused() {
-    mutant_refused("linux_wp_count_slot", "MovRI(Rbx, frame_at(0))", "MovRI(Rbx, frame_at(8))");
+    mutant_refused("linux_wp_count_slot", "MovRI(Rbx, BitVec::ofNat(0x411000))", "MovRI(Rbx, BitVec::ofNat(0x411008))");
 }
 
 // The exit's status is 1 where the spec returns 0.

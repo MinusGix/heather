@@ -1,6 +1,6 @@
 ---
 title: Load the process image into an X86Profile's memory
-status: open
+status: closed
 labels: [native,x86,memory,proofs]
 area: heather-in-heather
 milestone: [hih-memory-model]
@@ -33,3 +33,7 @@ whose laws come from the model's span lemmas.
   `DataRegion` and the buffer view. Assumed here: only that a memory carries
   a proof of what its profile relies on.
 - **[[native-one-wp]]** owns `Wp` and the view interface.
+
+## Log
+
+- 2026-10-22: LANDED. `lib/linux_x86_64_image.hthr`: the profile `X86Profile::io()` relies on the page (0x410000) and the frame (0x411000) being data and on nothing else; `DataRegion::io_page`/`io_frame` are its regions; `X86Memory::io_load(file)` maps the file at 0x400000 with `Perm::code()` (new in memory.hthr), the RW segment zero-filled, nothing else, and proves the code resident past a header (`io_load_resident`, `io_load_entry` at `io_entry()`) and both regions zero. The code is not in the profile but in the view: `View::with_code` + `X86Profile::with_code_sound` (stores on data keep code, `store_keeps_code`); `DataRegion::program_view` = buffer view + code (linux_x86_64_byte_memory). The page and frame views are retired, not restated: the page is the buffer view; the frame's word slots are a lemma over the buffer (`DataRegion::x86_word_stored`, from `get_set_span_list`). `lib/elf64_io.hthr` and `lib/linux_x86_64_views.hthr` deleted (IoMemory, io_store_offset arithmetic, the Stored kit). Fixtures moved: drain over the page, count over the frame; new `drain_entry` (the loaded process from its entry meets `drain(n)`) with a control (a 231-byte header is refused). Residue: a view over two regions at once (the old frame view knew page + slots) is [[wp-view-separating-product]]; the process's own stack (RSP, argv) is not mapped by the loader yet: [[io-image-process-stack]].
