@@ -3,7 +3,9 @@
 Status: **kernel round implemented** (2026-10-21, §10 step 3: `Type::M`,
 `Term::Corec`, `Term::Out`, `crates/kernel/tests/m.rs`; `crates/kernel/DESIGN.md`
 has the summary). Minus asked for it after reading the design ("Let's
-implement now"), ahead of heather-coq's §9 check, which is still open. Tracking issue:
+implement now"), ahead of heather-coq's §9 check, which has since answered
+Q1–Q3 with no kernel rule changed (heather-coq `M18_DESIGN.md`, M18a; §9.1
+below). Tracking issue:
 `issues/kernel-coinductive-types.md`, planned now by Minus's decision of
 2026-10-21 ("might as well get full proper power sooner"). Written before
 the code, per repo discipline, as the specification a kernel round would be
@@ -129,12 +131,20 @@ reduct mentions `r` twice. The environment machine shares it inside the
 step (`eval.rs` builds the pair over one closure); `reduce.rs`, the
 substituting oracle, duplicates it, which is §7's cost note.
 
-A constructor is a `corec` whose children all exit, at carrier `Unit`:
+A constructor is a `corec` whose children all exit. Its carrier is
+`out`'s type itself, and the seed the node:
 
 ```
-in(σ; j; s; f) := corec(σ; _. Unit; _ _. pair(s, λp. inr(f p)); j; ⟨⟩)
+in(σ; j; s; f) := corec^{f}(σ; i. Σ(s : S[i]). Π(p : P[i, s]). M(o[i, s, p]);
+                            i x. pair(fst x, λp. inr(snd x p)); j; pair(s, f))
 out(in(s, f)) ⇝ pair(s, λp. case(inr(f p); …; t. t)) ⇝ pair(s, λp. f p) ≡η pair(s, f)
 ```
+
+(Correction, 2026-10-21, from heather-coq M18a, `probes/MCoind.v`: the
+first version took carrier `Unit` and step `_ _. pair(s, λp. inr(f p))`.
+That step is checked under the bound index `i`, where `s : S[j]` is not an
+`S[i]`, so it types only when `I` is `Unit`. It is still the cheaper
+spelling there, and `tests/m.rs`'s `Stream` `cons` uses it.)
 
 So `Vis(c, k)` written in a program gives back exactly `k` under one `out`,
 with no bisimilarity in between.
@@ -443,6 +453,33 @@ Ordered by how expensive a bad answer would be to unwind, as
 The bridge of §4 is a theorem about the library, to prove in Heather once
 the kernel and library rounds land; `probes/ItreeDepthBisim.v` already has
 its Coq shape.
+
+### 9.1 Answers (heather-coq M18a, 2026-10-21)
+
+`M18_DESIGN.md` there, with two standalone probes (`probes/MCoind.v`, a
+model of the rules with negative records; `probes/MRelProbe.v`, the
+relation over an abstract interface). No kernel rule needed a change.
+
+- **Q1.** The ω-intersection is a per-former case with no carrier in it,
+  provided *every* depth keeps the clause relating the two sides' whnfs
+  **generically** (not only declaratively: the algorithmic instance needs
+  it). Observations alone relate two `corec`s of one stream that
+  conversion separates (`zeros` over `Unit` and over `Nat`), so escape
+  would fail without it. The family level needs `li`: the relation is
+  stratified by level and the `M` case uses the index type's relation at
+  the family's stage, as `IWf`'s does.
+- **Q2.** The algorithm of §2.1 is an instance of the generic equivalence
+  with two new laws, the `corec` arm and `out`'s neutral arm; the forced
+  annotations are forced through `M`'s injectivity as in
+  `ELIM_CONGRUENCE.md`, and the carrier's level stays compared as a
+  motive's does. β at an open, computed child index needs no index
+  conversion: the reduct's child is at `o[j, fst r, p]`, which is what
+  `out`'s type asks for at the shape `fst r`.
+- **Q3.** The bridge holds: left to right by induction, right to left a
+  `corec` into `Bisim` that needs UIP on the shapes (free when they have
+  decidable equality). At an indexed `M`, `Bisim`'s index is `Σ(j). M(j) ×
+  M(j)` and the right child is moved to the left child's index along the
+  shapes' equation; checked too.
 
 ---
 
