@@ -3,8 +3,9 @@ title: Finite linear algebra over a ring
 status: open
 labels: [stdlib,mathematics]
 area: mathematics
+milestone: [ml-layers]
 created: 2026-10-21
-updated: 2026-10-21
+updated: 2026-10-22
 ---
 
 Vectors `Fin n → R` and matrices over a commutative (semi)ring: sums,

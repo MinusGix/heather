@@ -3,8 +3,9 @@ title: One model at Rat, CReal and Float with a composed error theorem
 status: open
 labels: [design,machine-learning,floating-point]
 area: machine-learning
+milestone: [ml-float-forward]
 created: 2026-10-21
-updated: 2026-10-21
+updated: 2026-10-22
 ---
 
 The ML area's float story (`docs/wick-survey.md` §3.1). A model is written
