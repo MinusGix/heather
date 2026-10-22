@@ -1,0 +1,599 @@
+// FunctionIR evaluated: a total function computing a region's values, and
+// the theorem that what it computes satisfies the region's equations
+// (issues/function-ir-total-evaluator.md; docs/native-effect-source-design.md
+// §2.1, round S3.0).
+//
+// FunctionIR's meaning is relational: a valuation satisfies a region's
+// equations. A tree has to compute its next command from values in hand, so
+// the effectful source needs a function. `eval` runs a region's schedule over
+// a valuation, setting each node's output; `Function::eval` binds a
+// function's parameters and evaluates its body; `program_eval` evaluates a
+// program's functions last first, as `program_callees` orders them.
+//
+// A value is set at every width at once (`Valuation::set` takes a value per
+// width), and each node's value is its equation's right side read at the
+// width asked for. At the node's own width that is the equation; no width is
+// ever compared, so nothing is transported along a width equation.
+//
+// The theorem asks a schedule to be evaluable, a Bool computed by
+// evaluation: no node reads its own output, nothing later writes an id
+// anything earlier mentions, an arm writes no condition, a call names a
+// function of the right arity, and a function's parameters are distinct and
+// unwritten. Under that, the evaluated valuation satisfies the equations
+// (`StructuredRegion::eval_holds_in`), and a program's evaluated results are
+// results its functions compute (`program_eval_computes`), which is what
+// every lowering theorem is stated over.
+
+import function_ir;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+
+// ---------------------------------------------------------------------------
+// Ids and lists of them, decided by evaluation
+
+fn Nat::differs(self a, b: Nat) → Bool { match a.eq_dec(b) { Inl(_) => False, Inr(_) => True } }
+
+fn Nat::matches(self a, b: Nat) → Bool { match a.eq_dec(b) { Inl(_) => True, Inr(_) => False } }
+
+theorem Nat::differs_ne(self a, b: Nat, h: a.differs(b).IsTrue()): a ≠ b {
+    (match a.eq_dec(b) as λ d => Bool::IsTrue(match d { Inl(_) => False, Inr(_) => True }) → a ≠ b {
+        Inl(_) => λ never => false_elim(never),
+        Inr(ne) => λ _ => ne,
+    })(h)
+}
+
+theorem Nat::matches_eq(self a, b: Nat, h: a.matches(b).IsTrue()): a = b {
+    (match a.eq_dec(b) as λ d => Bool::IsTrue(match d { Inl(_) => True, Inr(_) => False }) → a = b {
+        Inl(e) => λ _ => e,
+        Inr(_) => λ never => false_elim(never),
+    })(h)
+}
+
+// `id` is none of `ids`.
+fn absent(id: Nat, ids: List<Nat>) → Bool {
+    match ids { Nil => True, Cons(x, rest) => id.differs(x) && absent(id, rest) }
+}
+
+// No id of `ys` is one of `xs`.
+fn disjoint(xs, ys: List<Nat>) → Bool {
+    match ys { Nil => True, Cons(y, rest) => absent(y, xs) && disjoint(xs, rest) }
+}
+
+// No id appears twice.
+fn distinct(ids: List<Nat>) → Bool {
+    match ids { Nil => True, Cons(x, rest) => absent(x, rest) && distinct(rest) }
+}
+
+theorem absent_mem(id: Nat, ids: List<Nat>): absent(id, ids).IsTrue() → (y: Nat) → Mem(y, ids) → id ≠ y {
+    match ids {
+        Nil => λ _ y never => false_elim(never),
+        Cons(x, rest) => λ h y m => {
+            let parts = Bool::is_true_and(id.differs(x), absent(id, rest), h);
+            match m {
+                Inl(e) => λ same => id.differs_ne(x, parts.left, trans(same, e)),
+                Inr(later) => absent_mem(id, rest, parts.right, y, later),
+            }
+        },
+    }
+}
+
+theorem disjoint_mem(xs, ys: List<Nat>): disjoint(xs, ys).IsTrue() → (y: Nat) → Mem(y, ys) → absent(y, xs).IsTrue() {
+    match ys {
+        Nil => λ _ y never => false_elim(never),
+        Cons(z, rest) => λ h y m => {
+            let parts = Bool::is_true_and(absent(z, xs), disjoint(xs, rest), h);
+            match m {
+                Inl(e) => j(sym(e), λ x _ => absent(x, xs).IsTrue(), parts.left),
+                Inr(later) => disjoint_mem(xs, rest, parts.right, y, later),
+            }
+        },
+    }
+}
+
+theorem absent_append(id: Nat, xs, ys: List<Nat>): absent(id, xs ++ ys).IsTrue() →
+    absent(id, xs).IsTrue() ∧ absent(id, ys).IsTrue() {
+    match xs {
+        Nil => λ h => ⟨trivial, h⟩,
+        Cons(x, rest) => λ h => {
+            let parts = Bool::is_true_and(id.differs(x), absent(id, rest ++ ys), h);
+            let later = absent_append(id, rest, ys, parts.right);
+            ⟨Bool::is_true_and_intro(id.differs(x), absent(id, rest), parts.left, later.left), later.right⟩
+        },
+    }
+}
+
+theorem eq2<A, B, C>(g: A → B → C, {a, a2: A}, {b, b2: B}, p: a = a2, q: b = b2): g(a, b) = g(a2, b2) {
+    trans(cong_fn(λ (x: A) => g(x, b), p), cong_fn(λ (y: B) => g(a2, y), q))
+}
+
+// ---------------------------------------------------------------------------
+// Valuations, set at every width
+
+// `id` holds `value` (at each width, the value at that width); every other
+// id keeps its value.
+fn Valuation::set(values: Valuation(), id: Nat, value: (w: Nat) → BitVec(w)) → Valuation() {
+    λ w query => match query.eq_dec(id) { Inl(_) => value(w), Inr(_) => values(w, query) }
+}
+
+theorem Valuation::set_here(values: Valuation(), id: Nat, value: (w: Nat) → BitVec(w), w: Nat):
+    Valuation::set(values, id, value, w, id) = value(w) {
+    match id.eq_dec(id) as λ d => (match d { Inl(_) => value(w), Inr(_) => values(w, id) }) = value(w) {
+        Inl(_) => refl,
+        Inr(ne) => false_elim(ne(refl)),
+    }
+}
+
+theorem Valuation::set_other(values: Valuation(), id: Nat, value: (w: Nat) → BitVec(w), w, query: Nat,
+    ne: query ≠ id): Valuation::set(values, id, value, w, query) = values(w, query) {
+    match query.eq_dec(id) as λ d => (match d { Inl(_) => value(w), Inr(_) => values(w, query) }) = values(w, query) {
+        Inl(e) => false_elim(ne(e)),
+        Inr(_) => refl,
+    }
+}
+
+fn Valuation::zero() → Valuation() { λ w id => BitVec::zero() }
+
+// A word at every width: itself at 64.
+fn word_value(word: BitVec(64)) → (w: Nat) → BitVec(w) { λ w => BitVec::ofNat(word.toNat()) }
+
+theorem word_value_word(word: BitVec(64)): word_value(word, 64) = word { BitVec::ofNat_toNat(64, word) }
+
+// A one-bit result at every width: the bit, then zeroes.
+fn bit_value(b: Bool) → (w: Nat) → BitVec(w) {
+    λ w => match w as λ k => BitVec(k) { Zero => BitVec::nil(), Succ(_) => BitVec::zero().cons_bit(b) }
+}
+
+theorem bit_value_bit(b: Bool): bit_value(b, 1) = BitVec::ofBool(b) {
+    match b { False => refl, True => refl }
+}
+
+// Words at `ids`, each set to the word at its place.
+fn Valuation::bind(values: Valuation(), ids: List<Nat>) → List<BitVec(64)> → Valuation() {
+    match ids {
+        Nil => λ words => values,
+        Cons(id, rest) => λ words => match words {
+            Nil => values,
+            Cons(word, more) => Valuation::set(Valuation::bind(values, rest, more), id, word_value(word)),
+        },
+    }
+}
+
+theorem words_of_len(values: Valuation(), ids: List<Nat>): words_of(values, ids).len() = ids.len() {
+    match ids { Nil => refl, Cons(_, rest) => cong_fn(λ (n: Nat) => Succ(n), words_of_len(values, rest)) }
+}
+
+// Valuations agreeing at 64 on `ids` read the same words there.
+theorem words_agree(ids: List<Nat>, values, other: Valuation(), h: (id: Nat) → Mem(id, ids) → other(64, id) = values(64, id)):
+    words_of(other, ids) = words_of(values, ids) {
+    match ids {
+        Nil => refl,
+        Cons(id, rest) => eq2(λ (w: BitVec(64)) (ws: List<BitVec(64)>) => Cons(w, ws), h(id, Inl(refl)),
+            words_agree(rest, values, other, λ x m => h(x, Inr(m)))),
+    }
+}
+
+// Binding distinct ids to as many words reads the words back.
+theorem words_of_bind(values: Valuation(), ids: List<Nat>): distinct(ids).IsTrue() →
+    (words: List<BitVec(64)>) → ids.len() = words.len() → words_of(Valuation::bind(values, ids, words), ids) = words {
+    match ids {
+        Nil => λ _ words => match words {
+            Nil => λ _ => refl,
+            Cons(_, more) => λ (bad: 0 = Succ(more.len())) => false_elim(more.len().zero_ne_succ(bad)),
+        },
+        Cons(id, rest) => λ apart words => match words {
+            Nil => λ (bad: Succ(rest.len()) = 0) => false_elim(rest.len().succ_ne_zero(bad)),
+            Cons(word, more) => λ (same: Succ(rest.len()) = Succ(more.len())) => {
+                let parts = Bool::is_true_and(absent(id, rest), distinct(rest), apart);
+                let inner = Valuation::bind(values, rest, more);
+                let head = trans(Valuation::set_here(inner, id, word_value(word), 64), word_value_word(word));
+                let kept = words_agree(rest, inner, Valuation::set(inner, id, word_value(word)), λ x m =>
+                    Valuation::set_other(inner, id, word_value(word), 64, x, λ e => absent_mem(id, rest, parts.left, x, m, sym(e))));
+                let tail = trans(kept, words_of_bind(values, rest, parts.right, more, Nat::succ_inj(rest.len(), more.len(), same)));
+                eq2(λ (w: BitVec(64)) (ws: List<BitVec(64)>) => Cons(w, ws), head, tail)
+            },
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Nodes
+
+fn Node::reads(self node: Node) → List<Nat> {
+    match node {
+        Const(_, _, _) => [],
+        Move(_, _, source) => [source],
+        Add(_, _, left, right) => [left, right],
+        Sub(_, _, left, right) => [left, right],
+        BitAnd(_, _, left, right) => [left, right],
+        BitOr(_, _, left, right) => [left, right],
+        BitXor(_, _, left, right) => [left, right],
+        ShiftLeft(_, _, value, _) => [value],
+        LogicalShiftRight(_, _, value, _) => [value],
+        ArithmeticShiftRight(_, _, value, _) => [value],
+        UnsignedLessThan(_, _, left, right) => [left, right],
+        SignedLessThan(_, _, left, right) => [left, right],
+        Equal(_, _, left, right) => [left, right],
+    }
+}
+
+fn Node::mentions(self node: Node) → List<Nat> { Cons(node_output(node).id, node.reads()) }
+
+// The node's equation's right side, at each width.
+fn Node::value(self node: Node, values: Valuation()) → (w: Nat) → BitVec(w) {
+    match node {
+        Const(_, _, value) => λ w => BitVec::ofNat(value),
+        Move(_, _, source) => λ w => values(w, source),
+        Add(_, _, left, right) => λ w => values(w, left).add(values(w, right)),
+        Sub(_, _, left, right) => λ w => values(w, left).sub(values(w, right)),
+        BitAnd(_, _, left, right) => λ w => values(w, left).band(values(w, right)),
+        BitOr(_, _, left, right) => λ w => values(w, left).bor(values(w, right)),
+        BitXor(_, _, left, right) => λ w => values(w, left).bxor(values(w, right)),
+        ShiftLeft(_, _, value, amount) => λ w => values(w, value).shift_left(amount),
+        LogicalShiftRight(_, _, value, amount) => λ w => values(w, value).shift_right(amount),
+        ArithmeticShiftRight(_, _, value, amount) => λ w => values(w, value).arithmetic_shift_right(amount),
+        UnsignedLessThan(width, _, left, right) => bit_value(values(width, left).unsigned_lt_bit(values(width, right))),
+        SignedLessThan(width, _, left, right) => bit_value(values(width, left).signed_lt_bit(values(width, right))),
+        Equal(width, _, left, right) => bit_value(values(width, left).eq_bit(values(width, right))),
+    }
+}
+
+fn Node::step(self node: Node, values: Valuation()) → Valuation() { Valuation::set(values, node_output(node).id, node.value(values)) }
+
+// A valuation whose output is the node's value and whose operands are as
+// they were satisfies the node.
+theorem Node::holds_of(self node: Node, values, after: Valuation()):
+    ((w: Nat) → after(w, node_output(node).id) = node.value(values)(w)) →
+    ((w: Nat) → (id: Nat) → Mem(id, node.reads()) → after(w, id) = values(w, id)) → NodeHolds(after, node) {
+    match node {
+        Const(width, _, _) => λ at_output kept => at_output(width),
+        Move(width, _, source) => λ at_output kept => trans(at_output(width), sym(kept(width, source, Inl(refl)))),
+        Add(width, _, left, right) => λ at_output kept => trans(at_output(width), sym(eq2(λ (x: BitVec(width)) (y: BitVec(width)) => x.add(y),
+            kept(width, left, Inl(refl)), kept(width, right, Inr(Inl(refl)))))),
+        Sub(width, _, left, right) => λ at_output kept => trans(at_output(width), sym(eq2(λ (x: BitVec(width)) (y: BitVec(width)) => x.sub(y),
+            kept(width, left, Inl(refl)), kept(width, right, Inr(Inl(refl)))))),
+        BitAnd(width, _, left, right) => λ at_output kept => trans(at_output(width), sym(eq2(λ (x: BitVec(width)) (y: BitVec(width)) => x.band(y),
+            kept(width, left, Inl(refl)), kept(width, right, Inr(Inl(refl)))))),
+        BitOr(width, _, left, right) => λ at_output kept => trans(at_output(width), sym(eq2(λ (x: BitVec(width)) (y: BitVec(width)) => x.bor(y),
+            kept(width, left, Inl(refl)), kept(width, right, Inr(Inl(refl)))))),
+        BitXor(width, _, left, right) => λ at_output kept => trans(at_output(width), sym(eq2(λ (x: BitVec(width)) (y: BitVec(width)) => x.bxor(y),
+            kept(width, left, Inl(refl)), kept(width, right, Inr(Inl(refl)))))),
+        ShiftLeft(width, _, value, amount) => λ at_output kept => trans(at_output(width),
+            sym(cong_fn(λ (x: BitVec(width)) => x.shift_left(amount), kept(width, value, Inl(refl))))),
+        LogicalShiftRight(width, _, value, amount) => λ at_output kept => trans(at_output(width),
+            sym(cong_fn(λ (x: BitVec(width)) => x.shift_right(amount), kept(width, value, Inl(refl))))),
+        ArithmeticShiftRight(width, _, value, amount) => λ at_output kept => trans(at_output(width),
+            sym(cong_fn(λ (x: BitVec(width)) => x.arithmetic_shift_right(amount), kept(width, value, Inl(refl))))),
+        UnsignedLessThan(width, _, left, right) => λ at_output kept => trans(at_output(1), trans(
+            bit_value_bit(values(width, left).unsigned_lt_bit(values(width, right))),
+            sym(cong_fn(BitVec::ofBool, eq2(λ (x: BitVec(width)) (y: BitVec(width)) => x.unsigned_lt_bit(y),
+                kept(width, left, Inl(refl)), kept(width, right, Inr(Inl(refl)))))))),
+        SignedLessThan(width, _, left, right) => λ at_output kept => trans(at_output(1), trans(
+            bit_value_bit(values(width, left).signed_lt_bit(values(width, right))),
+            sym(cong_fn(BitVec::ofBool, eq2(λ (x: BitVec(width)) (y: BitVec(width)) => x.signed_lt_bit(y),
+                kept(width, left, Inl(refl)), kept(width, right, Inr(Inl(refl)))))))),
+        Equal(width, _, left, right) => λ at_output kept => trans(at_output(1), trans(
+            bit_value_bit(values(width, left).eq_bit(values(width, right))),
+            sym(cong_fn(BitVec::ofBool, eq2(λ (x: BitVec(width)) (y: BitVec(width)) => x.eq_bit(y),
+                kept(width, left, Inl(refl)), kept(width, right, Inr(Inl(refl)))))))),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Schedules of nodes
+
+fn eval_nodes(nodes: List<Node>, values: Valuation()) → Valuation() {
+    match nodes { Nil => values, Cons(node, rest) => eval_nodes(rest, node.step(values)) }
+}
+
+fn Region::eval(self region: Region, values: Valuation()) → Valuation() { eval_nodes(region.nodes, values) }
+
+fn nodes_writes(nodes: List<Node>) → List<Nat> {
+    match nodes { Nil => [], Cons(node, rest) => Cons(node_output(node).id, nodes_writes(rest)) }
+}
+
+fn nodes_mentions(nodes: List<Node>) → List<Nat> {
+    match nodes { Nil => [], Cons(node, rest) => node.mentions() ++ nodes_mentions(rest) }
+}
+
+// No node reads its own output, and nothing later writes an id a node
+// mentions.
+fn nodes_evaluable(nodes: List<Node>) → Bool {
+    match nodes {
+        Nil => True,
+        Cons(node, rest) => absent(node_output(node).id, node.reads())
+            && (disjoint(nodes_writes(rest), node.mentions()) && nodes_evaluable(rest)),
+    }
+}
+
+theorem eval_nodes_frame(nodes: List<Node>): (values: Valuation()) → (w, id: Nat) → absent(id, nodes_writes(nodes)).IsTrue() →
+    eval_nodes(nodes, values, w, id) = values(w, id) {
+    match nodes {
+        Nil => λ values w id _ => refl,
+        Cons(node, rest) => λ values w id h => {
+            let parts = Bool::is_true_and(id.differs(node_output(node).id), absent(id, nodes_writes(rest)), h);
+            trans(eval_nodes_frame(rest, node.step(values), w, id, parts.right),
+                Valuation::set_other(values, node_output(node).id, node.value(values), w, id, id.differs_ne(node_output(node).id, parts.left)))
+        },
+    }
+}
+
+// Any valuation agreeing with the evaluated one on what the nodes mention
+// satisfies them.
+theorem eval_nodes_holds(nodes: List<Node>): nodes_evaluable(nodes).IsTrue() → (values, after: Valuation()) →
+    ((w: Nat) → (id: Nat) → Mem(id, nodes_mentions(nodes)) → after(w, id) = eval_nodes(nodes, values, w, id)) →
+    NodesHold(after, nodes) {
+    match nodes {
+        Nil => λ _ values after _ => trivial,
+        Cons(node, rest) => λ ok values after agree => {
+            let output = node_output(node).id;
+            let parts = Bool::is_true_and(absent(output, node.reads()),
+                disjoint(nodes_writes(rest), node.mentions()) && nodes_evaluable(rest), ok);
+            let later = Bool::is_true_and(disjoint(nodes_writes(rest), node.mentions()), nodes_evaluable(rest), parts.right);
+            let stepped = node.step(values);
+            let at_output = λ (w: Nat) => trans(agree(w, output, List::mem_append_l(node.mentions(), nodes_mentions(rest), output, Inl(refl))),
+                trans(eval_nodes_frame(rest, stepped, w, output, disjoint_mem(nodes_writes(rest), node.mentions(), later.left, output, Inl(refl))),
+                    Valuation::set_here(values, output, node.value(values), w)));
+            let kept = λ (w: Nat) (id: Nat) (m: Mem(id, node.reads())) =>
+                trans(agree(w, id, List::mem_append_l(node.mentions(), nodes_mentions(rest), id, Inr(m))),
+                    trans(eval_nodes_frame(rest, stepped, w, id, disjoint_mem(nodes_writes(rest), node.mentions(), later.left, id, Inr(m))),
+                        Valuation::set_other(values, output, node.value(values), w, id,
+                            λ e => absent_mem(output, node.reads(), parts.left, id, m, sym(e)))));
+            ⟨node.holds_of(values, after, at_output, kept),
+                eval_nodes_holds(rest, later.right, stepped, after,
+                    λ w id m => agree(w, id, List::mem_append_r(node.mentions(), nodes_mentions(rest), id, m)))⟩
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Structured regions
+
+// What a call is answered with: function `f` on words.
+fn Answers() → Type { Nat → List<BitVec(64)> → BitVec(64) }
+
+fn StructuredRegion::eval(self region: StructuredRegion, call: Answers(), values: Valuation()) → Valuation() {
+    match region {
+        Dataflow(body) => body.eval(values),
+        Sequence(prefix, continuation) => continuation.eval(call, prefix.eval(values)),
+        Compose(prefix, continuation) => continuation.eval(call, prefix.eval(call, values)),
+        Conditional(_, condition, _, _, when_true, when_false) => match values(1, condition).head_bit() {
+            False => when_false.eval(call, values),
+            True => when_true.eval(call, values),
+        },
+        Call(callee, arguments, result) => Valuation::set(values, result, word_value(call(callee, words_of(values, arguments)))),
+    }
+}
+
+fn StructuredRegion::writes(self region: StructuredRegion) → List<Nat> {
+    match region {
+        Dataflow(body) => nodes_writes(body.nodes),
+        Sequence(prefix, continuation) => nodes_writes(prefix.nodes) ++ continuation.writes(),
+        Compose(prefix, continuation) => prefix.writes() ++ continuation.writes(),
+        Conditional(_, _, _, _, when_true, when_false) => when_true.writes() ++ when_false.writes(),
+        Call(_, _, result) => [result],
+    }
+}
+
+fn StructuredRegion::mentions(self region: StructuredRegion) → List<Nat> {
+    match region {
+        Dataflow(body) => nodes_mentions(body.nodes),
+        Sequence(prefix, continuation) => nodes_mentions(prefix.nodes) ++ continuation.mentions(),
+        Compose(prefix, continuation) => prefix.mentions() ++ continuation.mentions(),
+        Conditional(_, condition, _, _, when_true, when_false) => Cons(condition, when_true.mentions() ++ when_false.mentions()),
+        Call(_, arguments, result) => Cons(result, arguments),
+    }
+}
+
+// The function a call names takes as many words as it is given.
+fn arity_fits(arity: Option<Nat>, count: Nat) → Bool {
+    match arity { None => False, Some(k) => k.matches(count) }
+}
+
+fn StructuredRegion::evaluable(self region: StructuredRegion, arity: Nat → Option<Nat>) → Bool {
+    match region {
+        Dataflow(body) => nodes_evaluable(body.nodes),
+        Sequence(prefix, continuation) => nodes_evaluable(prefix.nodes)
+            && (disjoint(continuation.writes(), nodes_mentions(prefix.nodes)) && continuation.evaluable(arity)),
+        Compose(prefix, continuation) => prefix.evaluable(arity)
+            && (disjoint(continuation.writes(), prefix.mentions()) && continuation.evaluable(arity)),
+        Conditional(_, condition, _, _, when_true, when_false) => absent(condition, when_true.writes() ++ when_false.writes())
+            && (when_true.evaluable(arity) && when_false.evaluable(arity)),
+        Call(callee, arguments, result) => absent(result, arguments) && arity_fits(arity(callee), arguments.len()),
+    }
+}
+
+// Evaluating keeps every id the region does not write.
+theorem StructuredRegion::eval_frame(self region: StructuredRegion, call: Answers()): (values: Valuation()) → (w, id: Nat) →
+    absent(id, region.writes()).IsTrue() → region.eval(call, values)(w, id) = values(w, id) {
+    match region {
+        Dataflow(body) => λ values w id h => eval_nodes_frame(body.nodes, values, w, id, h),
+        Sequence(prefix, continuation) => λ values w id h => {
+            let parts = absent_append(id, nodes_writes(prefix.nodes), continuation.writes(), h);
+            trans(continuation.eval_frame(call, prefix.eval(values), w, id, parts.right),
+                eval_nodes_frame(prefix.nodes, values, w, id, parts.left))
+        },
+        Compose(prefix, continuation) => λ values w id h => {
+            let parts = absent_append(id, prefix.writes(), continuation.writes(), h);
+            trans(continuation.eval_frame(call, prefix.eval(call, values), w, id, parts.right),
+                prefix.eval_frame(call, values, w, id, parts.left))
+        },
+        Conditional(_, condition, _, _, when_true, when_false) => λ values w id h => {
+            let parts = absent_append(id, when_true.writes(), when_false.writes(), h);
+            match values(1, condition).head_bit() as λ b =>
+                (match b { False => when_false.eval(call, values), True => when_true.eval(call, values) })(w, id) = values(w, id) {
+                False => when_false.eval_frame(call, values, w, id, parts.right),
+                True => when_true.eval_frame(call, values, w, id, parts.left),
+            }
+        },
+        Call(callee, arguments, result) => λ values w id h =>
+            Valuation::set_other(values, result, word_value(call(callee, words_of(values, arguments))), w, id,
+                id.differs_ne(result, Bool::is_true_and(id.differs(result), True, h).left)),
+    }
+}
+
+// The theorem: when every call a region makes is answered by a result its
+// callee may return, any valuation agreeing with the evaluated one on what
+// the region mentions satisfies the region.
+theorem StructuredRegion::eval_holds_in(self region: StructuredRegion, callees: Callees(), call: Answers(),
+    arity: Nat → Option<Nat>,
+    answers: (f: Nat) → (words: List<BitVec(64)>) → arity_fits(arity(f), words.len()).IsTrue() → callees(f, words, call(f, words))):
+    region.evaluable(arity).IsTrue() → (values, after: Valuation()) →
+    ((w: Nat) → (id: Nat) → Mem(id, region.mentions()) → after(w, id) = region.eval(call, values)(w, id)) →
+    StructuredRegionHoldsIn(callees, after, region) {
+    match region {
+        Dataflow(body) => λ ok values after agree => eval_nodes_holds(body.nodes, ok, values, after, agree),
+        Sequence(prefix, continuation) => λ ok values after agree => {
+            let parts = Bool::is_true_and(nodes_evaluable(prefix.nodes),
+                disjoint(continuation.writes(), nodes_mentions(prefix.nodes)) && continuation.evaluable(arity), ok);
+            let later = Bool::is_true_and(disjoint(continuation.writes(), nodes_mentions(prefix.nodes)), continuation.evaluable(arity), parts.right);
+            let first = prefix.eval(values);
+            ⟨eval_nodes_holds(prefix.nodes, parts.left, values, after, λ w id m =>
+                    trans(agree(w, id, List::mem_append_l(nodes_mentions(prefix.nodes), continuation.mentions(), id, m)),
+                        continuation.eval_frame(call, first, w, id,
+                            disjoint_mem(continuation.writes(), nodes_mentions(prefix.nodes), later.left, id, m)))),
+                continuation.eval_holds_in(callees, call, arity, answers, later.right, first, after, λ w id m =>
+                    agree(w, id, List::mem_append_r(nodes_mentions(prefix.nodes), continuation.mentions(), id, m)))⟩
+        },
+        Compose(prefix, continuation) => λ ok values after agree => {
+            let parts = Bool::is_true_and(prefix.evaluable(arity),
+                disjoint(continuation.writes(), prefix.mentions()) && continuation.evaluable(arity), ok);
+            let later = Bool::is_true_and(disjoint(continuation.writes(), prefix.mentions()), continuation.evaluable(arity), parts.right);
+            let first = prefix.eval(call, values);
+            ⟨prefix.eval_holds_in(callees, call, arity, answers, parts.left, values, after, λ w id m =>
+                    trans(agree(w, id, List::mem_append_l(prefix.mentions(), continuation.mentions(), id, m)),
+                        continuation.eval_frame(call, first, w, id,
+                            disjoint_mem(continuation.writes(), prefix.mentions(), later.left, id, m)))),
+                continuation.eval_holds_in(callees, call, arity, answers, later.right, first, after, λ w id m =>
+                    agree(w, id, List::mem_append_r(prefix.mentions(), continuation.mentions(), id, m)))⟩
+        },
+        Conditional(inputs, condition, arguments, outputs, when_true, when_false) => λ ok values after agree => {
+            let parts = Bool::is_true_and(absent(condition, when_true.writes() ++ when_false.writes()),
+                when_true.evaluable(arity) && when_false.evaluable(arity), ok);
+            let arms = Bool::is_true_and(when_true.evaluable(arity), when_false.evaluable(arity), parts.right);
+            let kept: (after(1, condition) = values(1, condition)) = trans(agree(1, condition, Inl(refl)),
+                Conditional(inputs, condition, arguments, outputs, when_true, when_false).eval_frame(call, values, 1, condition, parts.left));
+            let chosen = (match values(1, condition).head_bit() as λ b =>
+                    ((w: Nat) → (id: Nat) → Mem(id, Cons(condition, when_true.mentions() ++ when_false.mentions())) →
+                        after(w, id) = (match b { False => when_false.eval(call, values), True => when_true.eval(call, values) })(w, id)) →
+                    (match b {
+                        False => StructuredRegionHoldsIn(callees, after, when_false),
+                        True => StructuredRegionHoldsIn(callees, after, when_true),
+                    }) {
+                False => λ chose => when_false.eval_holds_in(callees, call, arity, answers, arms.right, values, after, λ w id m =>
+                    chose(w, id, Inr(List::mem_append_r(when_true.mentions(), when_false.mentions(), id, m)))),
+                True => λ chose => when_true.eval_holds_in(callees, call, arity, answers, arms.left, values, after, λ w id m =>
+                    chose(w, id, Inr(List::mem_append_l(when_true.mentions(), when_false.mentions(), id, m)))),
+            })(agree);
+            j(sym(kept), λ x _ => match x.head_bit() {
+                False => StructuredRegionHoldsIn(callees, after, when_false),
+                True => StructuredRegionHoldsIn(callees, after, when_true),
+            }, chosen)
+        },
+        Call(callee, arguments, result) => λ ok values after agree => {
+            let parts = Bool::is_true_and(absent(result, arguments), arity_fits(arity(callee), arguments.len()), ok);
+            let words = words_of(values, arguments);
+            let answer = call(callee, words);
+            let at_result: (after(64, result) = answer) = trans(agree(64, result, Inl(refl)),
+                trans(Valuation::set_here(values, result, word_value(answer), 64), word_value_word(answer)));
+            let read: (words_of(after, arguments) = words) = words_agree(arguments, values, after, λ id m =>
+                trans(agree(64, id, Inr(m)), Valuation::set_other(values, result, word_value(answer), 64, id,
+                    λ e => absent_mem(result, arguments, parts.left, id, m, sym(e)))));
+            let fits: arity_fits(arity(callee), words.len()).IsTrue() =
+                j(sym(words_of_len(values, arguments)), λ n _ => arity_fits(arity(callee), n).IsTrue(), parts.right);
+            j(sym(read), λ ws _ => callees(callee, ws, after(64, result)),
+                j(sym(at_result), λ r _ => callees(callee, words, r), answers(callee, words, fits)))
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Functions and programs
+
+// Called on `arguments`: the parameters bound, the body evaluated, the
+// result read.
+fn Function::eval(self function: Function, call: Answers(), arguments: List<BitVec(64)>) → BitVec(64) {
+    function.body.eval(call, Valuation::bind(Valuation::zero(), function.parameters, arguments))(64, function.result)
+}
+
+fn Function::evaluable(self function: Function, arity: Nat → Option<Nat>) → Bool {
+    function.body.evaluable(arity) && (distinct(function.parameters) && disjoint(function.body.writes(), function.parameters))
+}
+
+// A program's functions, each answering its calls by the functions after
+// it, as `program_callees` orders them.
+fn program_eval(functions: List<Function>) → Answers() {
+    match functions {
+        Nil => λ _ _ => BitVec::zero(),
+        Cons(last, earlier) => λ f arguments => match f.eq_dec(earlier.len()) {
+            Inl(_) => last.eval(program_eval(earlier), arguments),
+            Inr(_) => program_eval(earlier, f, arguments),
+        },
+    }
+}
+
+fn program_arity(functions: List<Function>) → Nat → Option<Nat> {
+    match functions {
+        Nil => λ _ => None,
+        Cons(last, earlier) => λ f => match f.eq_dec(earlier.len()) {
+            Inl(_) => Some(last.parameters.len()),
+            Inr(_) => program_arity(earlier, f),
+        },
+    }
+}
+
+fn program_evaluable(functions: List<Function>) → Bool {
+    match functions {
+        Nil => True,
+        Cons(last, earlier) => last.evaluable(program_arity(earlier)) && program_evaluable(earlier),
+    }
+}
+
+// An evaluable function, its calls answered by results its callees may
+// return, may return what it evaluates to.
+theorem Function::eval_computes(self function: Function, callees: Callees(), call: Answers(), arity: Nat → Option<Nat>,
+    answers: (f: Nat) → (words: List<BitVec(64)>) → arity_fits(arity(f), words.len()).IsTrue() → callees(f, words, call(f, words)),
+    ok: function.evaluable(arity).IsTrue(), arguments: List<BitVec(64)>, count: function.parameters.len() = arguments.len()):
+    function.Computes(callees, arguments, function.eval(call, arguments)) {
+    let parts = Bool::is_true_and(function.body.evaluable(arity),
+        distinct(function.parameters) && disjoint(function.body.writes(), function.parameters), ok);
+    let params = Bool::is_true_and(distinct(function.parameters), disjoint(function.body.writes(), function.parameters), parts.right);
+    let bound = Valuation::bind(Valuation::zero(), function.parameters, arguments);
+    let after = function.body.eval(call, bound);
+    let read: (words_of(after, function.parameters) = arguments) = trans(
+        words_agree(function.parameters, bound, after, λ id m =>
+            function.body.eval_frame(call, bound, 64, id, disjoint_mem(function.body.writes(), function.parameters, params.right, id, m))),
+        words_of_bind(Valuation::zero(), function.parameters, params.left, arguments, count));
+    ⟨after, ⟨read, ⟨function.body.eval_holds_in(callees, call, arity, answers, parts.left, bound, after,
+        λ w id _ => refl), refl⟩⟩⟩
+}
+
+// The theorem for programs: what `program_eval` returns for a call of the
+// right arity is a result the function may return.
+theorem program_eval_computes(functions: List<Function>, ok: program_evaluable(functions).IsTrue()):
+    (f: Nat) → (words: List<BitVec(64)>) → arity_fits(program_arity(functions, f), words.len()).IsTrue() →
+    program_callees(functions, f, words, program_eval(functions, f, words)) {
+    match functions {
+        Nil => λ f words never => false_elim(never),
+        Cons(last, earlier) => λ f words => {
+            let parts = Bool::is_true_and(last.evaluable(program_arity(earlier)), program_evaluable(earlier), ok);
+            let ih = program_eval_computes(earlier, parts.right);
+            match f.eq_dec(earlier.len()) as λ d =>
+                arity_fits(match d as λ _ => Option<Nat> { Inl(_) => Some(last.parameters.len()), Inr(_) => program_arity(earlier, f) },
+                    words.len()).IsTrue() →
+                (match d as λ _ => Type {
+                    Inl(_) => last.Computes(program_callees(earlier), words,
+                        match d as λ _ => BitVec(64) { Inl(_) => last.eval(program_eval(earlier), words), Inr(_) => program_eval(earlier, f, words) }),
+                    Inr(_) => program_callees(earlier, f, words,
+                        match d as λ _ => BitVec(64) { Inl(_) => last.eval(program_eval(earlier), words), Inr(_) => program_eval(earlier, f, words) }),
+                }) {
+                Inl(_) => λ fits => last.eval_computes(program_callees(earlier), program_eval(earlier), program_arity(earlier), ih,
+                    parts.left, words, last.parameters.len().matches_eq(words.len(), fits)),
+                Inr(_) => λ fits => ih(f, words, fits),
+            }
+        },
+    }
+}

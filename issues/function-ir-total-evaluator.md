@@ -1,11 +1,11 @@
 ---
 title: A total evaluator for FunctionIR, agreeing with its equations
-status: open
+status: closed
 labels: [native,ir,proofs]
 area: heather-in-heather
 milestone: [hih-pl-source]
 created: 2026-10-21
-updated: 2026-10-21
+updated: 2026-10-22
 ---
 
 FunctionIR's meaning is relational: `RegionHolds`,
@@ -33,3 +33,7 @@ the source takes.
 - **[[native-effect-source-compiler]]** owns the source that calls it.
 - **[[function-ir-lowering-loops]]**: if FunctionIR gains the bounded loop,
   its `eval` is structural recursion on the bound and stays total.
+
+## Log
+
+- 2026-10-22: Done (round S3.0), `lib/function_ir_eval.hthr`. A value is set at every width at once, and a node's value is its equation's right side read at the width asked for, so no width is ever compared or transported. `eval` is total; the theorem asks a Bool `evaluable` computed by evaluation (no node reads its own output; nothing later writes an id earlier code mentions; no arm writes its condition; a call names a function of its arity whose result is not an argument; a function's parameters are distinct and unwritten). `StructuredRegion::eval_holds_in`: any valuation agreeing with the evaluated one on what a region mentions satisfies it, its calls answered by results callees may return. `program_eval_computes`: what `program_eval` returns for a call of the right arity is in `program_callees`. Examples (the lowering rounds' `pair`, a conditional `select` at literal and open arguments, eight refusals) in `crates/elab/tests/fixtures/function_ir_eval_examples.hthr`, with two kernel-refusal controls.

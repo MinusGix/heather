@@ -1,0 +1,117 @@
+// FunctionIR evaluated (`function_ir_eval`; issues/function-ir-total-evaluator.md):
+// each example's values are computed by `refl`, its schedule is evaluable by
+// evaluation, and its claim is the theorem instantiated. The refusal
+// controls are schedules `evaluable` rejects: a node reading its own output,
+// a later node overwriting an operand, an arm writing its condition, a call
+// to the wrong arity or to no function, a call whose result is one of its
+// arguments, and a function writing its own parameter.
+
+import function_ir;
+import function_ir_eval;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+
+fn word(id: Nat) → Port { Port(id := id, width := 64) }
+fn bit(id: Nat) → Port { Port(id := id, width := 1) }
+
+fn w(n: Nat) → BitVec(64) { BitVec::ofNat(n) }
+
+// ---------------------------------------------------------------------------
+// The lowering rounds' programs
+
+// double(a) = a + a, function 0.
+fn double() → Function {
+    Function(parameters := [0],
+        body := Dataflow(Region(inputs := Ports([word(0)]), nodes := [Add(width := 64, output := 1, left := 0, right := 0)],
+            outputs := Ports([word(1)]))),
+        result := 1)
+}
+
+// add_double(a, b) = double(a) + b, function 1.
+fn add_double() → Function {
+    Function(parameters := [0, 1],
+        body := Compose(Call(0, [0], 2),
+            Dataflow(Region(inputs := Ports([word(1), word(2)]), nodes := [Add(width := 64, output := 3, left := 2, right := 1)],
+                outputs := Ports([word(3)])))),
+        result := 3)
+}
+
+fn pair() → List<Function> { [add_double(), double()] }
+
+theorem pair_evaluable(): program_evaluable(pair()).IsTrue() { trivial }
+
+theorem pair_runs(): program_eval(pair(), 1, [w(3), w(4)]) = w(10) { refl }
+theorem double_runs(): program_eval(pair(), 0, [w(21)]) = w(42) { refl }
+
+// The claim: add_double, called on 3 and 4, may return what it evaluates
+// to, with its call answered by double.
+theorem pair_computes(): program_callees(pair(), 1, [w(3), w(4)], w(10)) {
+    program_eval_computes(pair(), pair_evaluable, 1, [w(3), w(4)], trivial)
+}
+
+// select(c, a, b) = if c < a then a - c else b: a comparison, then a
+// conditional whose false arm returns an input under a new id.
+fn select_body() → StructuredRegion {
+    Sequence(Region(inputs := Ports([word(0), word(1), word(2)]),
+            nodes := [UnsignedLessThan(width := 64, output := 3, left := 0, right := 1)],
+            outputs := Ports([bit(3)])),
+        Conditional(inputs := Ports([word(0), word(1), word(2), bit(3)]), condition := 3,
+            arguments := Ports([word(0), word(1), word(2)]), outputs := Ports([word(4)]),
+            when_true := Dataflow(Region(inputs := Ports([word(0), word(1), word(2)]),
+                nodes := [Sub(width := 64, output := 4, left := 1, right := 0)], outputs := Ports([word(4)]))),
+            when_false := Dataflow(Region(inputs := Ports([word(0), word(1), word(2)]),
+                nodes := [Move(width := 64, output := 4, source := 2)], outputs := Ports([word(4)])))))
+}
+
+fn select() → Function { Function(parameters := [0, 1, 2], body := select_body(), result := 4) }
+
+theorem select_evaluable(): program_evaluable([select()]).IsTrue() { trivial }
+theorem select_true(): program_eval([select()], 0, [w(2), w(9), w(100)]) = w(7) { refl }
+theorem select_false(): program_eval([select()], 0, [w(9), w(2), w(100)]) = w(100) { refl }
+
+theorem select_computes(): program_callees([select()], 0, [w(2), w(9), w(100)], w(7)) {
+    program_eval_computes([select()], select_evaluable, 0, [w(2), w(9), w(100)], trivial)
+}
+
+// At an open argument the claim is the theorem's, with no evaluation.
+theorem select_computes_open(a, b, c: BitVec(64)): program_callees([select()], 0, [a, b, c], program_eval([select()], 0, [a, b, c])) {
+    program_eval_computes([select()], select_evaluable, 0, [a, b, c], trivial)
+}
+
+// ---------------------------------------------------------------------------
+// Refusals
+
+// A node reading its own output.
+theorem own_output_refused(): nodes_evaluable([Add(width := 64, output := 1, left := 1, right := 0)]) = False { refl }
+
+// A later node overwriting an id an earlier one read.
+theorem clobbered_operand_refused(): nodes_evaluable([Add(width := 64, output := 2, left := 0, right := 1),
+    Const(width := 64, output := 0, value := 5)]) = False { refl }
+
+// A later node overwriting an earlier output.
+theorem clobbered_output_refused(): nodes_evaluable([Const(width := 64, output := 2, value := 1),
+    Const(width := 64, output := 2, value := 5)]) = False { refl }
+
+// An arm writing its own condition.
+theorem arm_writes_condition_refused(): StructuredRegion::evaluable(Conditional(inputs := Ports([bit(3)]), condition := 3,
+    arguments := Ports([]), outputs := Ports([bit(3)]),
+    when_true := Dataflow(Region(inputs := Ports([]), nodes := [Const(width := 1, output := 3, value := 0)], outputs := Ports([bit(3)]))),
+    when_false := Dataflow(Region(inputs := Ports([]), nodes := [Const(width := 1, output := 3, value := 1)], outputs := Ports([bit(3)])))),
+    λ _ => None) = False { refl }
+
+// A call with too few arguments, to a function that is not there, and
+// whose result is one of its arguments.
+theorem wrong_arity_refused(): StructuredRegion::evaluable(Call(0, [0], 2), program_arity([add_double()])) = False { refl }
+theorem no_callee_refused(): StructuredRegion::evaluable(Call(1, [0], 2), program_arity([double()])) = False { refl }
+theorem result_is_argument_refused(): StructuredRegion::evaluable(Call(0, [0], 0), program_arity([double()])) = False { refl }
+
+// A function writing its parameter, and one naming a parameter twice.
+theorem parameter_written_refused(): Function::evaluable(Function(parameters := [0],
+    body := Dataflow(Region(inputs := Ports([word(0)]), nodes := [Const(width := 64, output := 0, value := 1)], outputs := Ports([word(0)]))),
+    result := 0), λ _ => None) = False { refl }
+theorem parameter_twice_refused(): Function::evaluable(Function(parameters := [0, 0], body := Dataflow(Region(inputs := Ports([word(0)]),
+    nodes := [Move(width := 64, output := 1, source := 0)], outputs := Ports([word(1)]))), result := 1), λ _ => None) = False { refl }
