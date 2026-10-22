@@ -59,9 +59,9 @@ theorem io_offset_frame(i: Nat): io_offset_of(io_frame_base() + i) = None {
     let high = io_leb_false(Succ(io_frame_base() + i), io_page_base() + 4096, { omega });
     j(sym(low), λ below _ => (match below as λ _ => Option<Nat> {
             False => None,
-            True => match Succ(io_frame_base() + i).leb(io_page_base() + 4096) { False => None, True => Some((io_frame_base() + i) -io_page_base()) },
+            True => match Succ(io_frame_base() + i).leb(io_page_base() + 4096) { False => None, True => Some((io_frame_base() + i) - io_page_base()) },
         }) = None,
-        j(sym(high), λ above _ => (match above as λ _ => Option<Nat> { False => None, True => Some((io_frame_base() + i) -io_page_base()) }) = None, refl))
+        j(sym(high), λ above _ => (match above as λ _ => Option<Nat> { False => None, True => Some((io_frame_base() + i) - io_page_base()) }) = None, refl))
 }
 theorem io_file_offset_frame(i: Nat): io_file_offset(io_frame_base() + i) = None {
     let low = eq_true_of_is_true(0x400000.leb(io_frame_base() + i),
@@ -69,9 +69,9 @@ theorem io_file_offset_frame(i: Nat): io_file_offset(io_frame_base() + i) = None
     let high = io_leb_false(Succ(io_frame_base() + i), 0x400000 + 65536, { omega });
     j(sym(low), λ below _ => (match below as λ _ => Option<Nat> {
             False => None,
-            True => match Succ(io_frame_base() + i).leb(0x400000 + 65536) { False => None, True => Some((io_frame_base() + i) -0x400000) },
+            True => match Succ(io_frame_base() + i).leb(0x400000 + 65536) { False => None, True => Some((io_frame_base() + i) - 0x400000) },
         }) = None,
-        j(sym(high), λ above _ => (match above as λ _ => Option<Nat> { False => None, True => Some((io_frame_base() + i) -0x400000) }) = None, refl))
+        j(sym(high), λ above _ => (match above as λ _ => Option<Nat> { False => None, True => Some((io_frame_base() + i) - 0x400000) }) = None, refl))
 }
 theorem io_frame_offset_in(i: Nat, inside: i < 4096): io_frame_offset(io_frame_base() + i) = Some(i) {
     let low = eq_true_of_is_true(io_frame_base().leb(io_frame_base() + i),
@@ -79,13 +79,13 @@ theorem io_frame_offset_in(i: Nat, inside: i < 4096): io_frame_offset(io_frame_b
     let fits: (Succ(io_frame_base() + i) <= io_frame_base() + 4096) = omega;
     let high = eq_true_of_is_true(Succ(io_frame_base() + i).leb(io_frame_base() + 4096),
         Nat::leb_complete(Succ(io_frame_base() + i), io_frame_base() + 4096, fits));
-    let offset: ((io_frame_base() + i) -io_frame_base() = i) =
-        trans(cong_fn<Nat, Nat>(λ a => a -io_frame_base(), Nat::add_comm(io_frame_base(), i)), Nat::add_sub_cancel(i, io_frame_base()));
+    let offset: ((io_frame_base() + i) - io_frame_base() = i) =
+        trans(cong_fn<Nat, Nat>(λ a => a - io_frame_base(), Nat::add_comm(io_frame_base(), i)), Nat::add_sub_cancel(i, io_frame_base()));
     j(sym(low), λ below _ => (match below as λ _ => Option<Nat> {
             False => None,
-            True => match Succ(io_frame_base() + i).leb(io_frame_base() + 4096) { False => None, True => Some((io_frame_base() + i) -io_frame_base()) },
+            True => match Succ(io_frame_base() + i).leb(io_frame_base() + 4096) { False => None, True => Some((io_frame_base() + i) - io_frame_base()) },
         }) = Some(i),
-        j(sym(high), λ above _ => (match above { False => None, True => Some((io_frame_base() + i) -io_frame_base()) }) = Some(i),
+        j(sym(high), λ above _ => (match above { False => None, True => Some((io_frame_base() + i) - io_frame_base()) }) = Some(i),
             cong_fn<Nat, Option<Nat>>(λ k => Some(k), offset)))
 }
 
@@ -144,7 +144,7 @@ theorem frame_store_lands(memory: IoMemory, o: Nat, room: o + 8 <= 4096, bytes: 
         trans(cong_fn<Nat, Option<Nat>>(λ v => io_frame_offset(v), frame_value(o, { omega })), io_frame_offset_in(o, { omega }));
     j(sym(in_frame), λ found _ => (match found {
             Some(start) => IoMemory(io_frame_store_offset(memory.file, start, bytes), memory.page),
-            None => io_store_offset(memory, frame_at(o).toNat() -io_page_base(), bytes),
+            None => io_store_offset(memory, frame_at(o).toNat() - io_page_base(), bytes),
         }) = IoMemory(io_frame_store_offset(memory.file, o, bytes), memory.page), refl)
 }
 theorem frame_writable(memory: IoMemory, o: Nat, room: o + 8 <= 4096): IoWritable(memory, frame_at(o), 8) {
@@ -155,11 +155,11 @@ theorem frame_writable(memory: IoMemory, o: Nat, room: o + 8 <= 4096): IoWritabl
 theorem frame_store_reads(file: IoImage, offset, k: Nat, bytes: List<BitVec(8)>, byte: BitVec(8), present: bytes.nth(k) = Some(byte)):
     io_frame_store_offset(file, offset, bytes).frame(offset + k) = byte {
     let reached = eq_true_of_is_true(offset.leb(offset + k), Nat::leb_complete(offset, offset + k, Nat::le_add_l(offset, k)));
-    let back: ((offset + k) -offset = k) = trans(cong_fn<Nat, Nat>(λ a => a -offset, Nat::add_comm(offset, k)), Nat::add_sub_cancel(k, offset));
-    let found: (bytes.nth((offset + k) -offset) = Some(byte)) = trans(cong_fn<Nat, Option<BitVec(8)>>(λ i => bytes.nth(i), back), present);
+    let back: ((offset + k) - offset = k) = trans(cong_fn<Nat, Nat>(λ a => a - offset, Nat::add_comm(offset, k)), Nat::add_sub_cancel(k, offset));
+    let found: (bytes.nth((offset + k) - offset) = Some(byte)) = trans(cong_fn<Nat, Option<BitVec(8)>>(λ i => bytes.nth(i), back), present);
     j(sym(reached), λ b _ => (match b {
             False => file.frame(offset + k),
-            True => match bytes.nth((offset + k) -offset) { None => file.frame(offset + k), Some(x) => x },
+            True => match bytes.nth((offset + k) - offset) { None => file.frame(offset + k), Some(x) => x },
         }) = byte,
         j(sym(found), λ f _ => (match f { None => file.frame(offset + k), Some(x) => x }) = byte, refl))
 }
@@ -167,20 +167,20 @@ theorem frame_store_below(file: IoImage, offset, i: Nat, bytes: List<BitVec(8)>,
     io_frame_store_offset(file, offset, bytes).frame(i) = file.frame(i) {
     j(sym(io_leb_false(offset, i, below)), λ b _ => (match b {
             False => file.frame(i),
-            True => match bytes.nth(i -offset) { None => file.frame(i), Some(x) => x },
+            True => match bytes.nth(i - offset) { None => file.frame(i), Some(x) => x },
         }) = file.frame(i), refl)
 }
 theorem frame_store_above(file: IoImage, offset, i: Nat, bytes: List<BitVec(8)>, above: offset + bytes.len() <= i):
     io_frame_store_offset(file, offset, bytes).frame(i) = file.frame(i) {
     let reached = eq_true_of_is_true(offset.leb(i), Nat::leb_complete(offset, i, { omega }));
-    let past: (bytes.len() <= i -offset) = {
-        let back: ((i -offset) + offset = i) = Nat::sub_add_cancel(offset, i, { omega });
+    let past: (bytes.len() <= i - offset) = {
+        let back: ((i - offset) + offset = i) = Nat::sub_add_cancel(offset, i, { omega });
         omega
     };
-    let none: (bytes.nth(i -offset) = None) = bytes.nth_past_end(i -offset, past);
+    let none: (bytes.nth(i - offset) = None) = bytes.nth_past_end(i - offset, past);
     j(sym(reached), λ b _ => (match b {
             False => file.frame(i),
-            True => match bytes.nth(i -offset) { None => file.frame(i), Some(x) => x },
+            True => match bytes.nth(i - offset) { None => file.frame(i), Some(x) => x },
         }) = file.frame(i),
         j(sym(none), λ f _ => (match f { None => file.frame(i), Some(x) => x }) = file.frame(i), refl))
 }
@@ -302,7 +302,7 @@ theorem page_span_writable(memory: IoMemory, a: BitVec(64), c, len: Nat, room: c
 fn page_stored(page: Nat → BitVec(8), c: Nat, bytes: List<BitVec(8)>) → Nat → BitVec(8) {
     λ offset => match c.leb(offset) {
         False => page(offset),
-        True => match bytes.nth(offset -c) { None => page(offset), Some(byte) => byte },
+        True => match bytes.nth(offset - c) { None => page(offset), Some(byte) => byte },
     }
 }
 

@@ -284,7 +284,7 @@ fn Nat::sub(self m, n: Nat) → Nat {
 
 designation - at Nat := Nat::sub
 
-theorem Nat::sub_zero(m: Nat): m -0 = m {
+theorem Nat::sub_zero(m: Nat): m - 0 = m {
     match m { Zero => refl, Succ(_) => refl }
 }
 
@@ -818,7 +818,7 @@ instance DecEq<Nat> { eq_dec := Nat::eq_dec }
 
 // `Le(n, m)` gives the difference. Induction on `n` with `m` generalized —
 // by the elaborator, since 2026-09-05.
-theorem Nat::le_add(self n, m: Nat): n <= m → n + (m -n) = m {
+theorem Nat::le_add(self n, m: Nat): n <= m → n + (m - n) = m {
     match n {
         Zero => hle ⊢
             apply trans;
@@ -829,7 +829,7 @@ theorem Nat::le_add(self n, m: Nat): n <= m → n + (m -n) = m {
                 Zero => bad ⊢ false_elim(bad),
                 Succ(m2) => good ⊢
                     apply trans;
-                    give n2.add_succ_left(m2 -n2);
+                    give n2.add_succ_left(m2 - n2);
                     Nat::cong_succ(n2.le_add(m2, good)),
             },
     }
@@ -853,7 +853,7 @@ theorem Nat::le_add_r(self n, m: Nat): m <= n + m {
 // definition — which is what makes the definition swappable later.
 theorem Nat::le_iff_exists_add(self n, m: Nat): n <= m ↔ ∃ k: Nat, n + k = m {
     Iff(
-        mp := λ (h: n <= m) => Exists(m -n, n.le_add(m, h)),
+        mp := λ (h: n <= m) => Exists(m - n, n.le_add(m, h)),
         mpr := λ (h: ∃ k: Nat, n + k = m) =>
             rewrite(sym(h.proof), n.le_add_l(h.witness)),
     )
@@ -861,32 +861,32 @@ theorem Nat::le_iff_exists_add(self n, m: Nat): n <= m ↔ ∃ k: Nat, n + k = m
 
 // ---------------------------------------------------------------------------
 
-theorem Nat::sub_self(self n: Nat): n -n = 0 {
+theorem Nat::sub_self(self n: Nat): n - n = 0 {
     match n { Zero => refl, Succ(k) => k.sub_self() }
 }
 
-theorem Nat::add_sub_cancel(self n, m: Nat): (n + m) -m = n {
+theorem Nat::add_sub_cancel(self n, m: Nat): (n + m) - m = n {
     match m { Zero => n.sub_zero(), Succ(k) => n.add_sub_cancel(k) }
 }
 
-theorem Nat::sub_add_cancel(self n, m: Nat, h: n <= m): (m -n) + n = m {
-    trans((m -n).add_comm(n), n.le_add(m, h))
+theorem Nat::sub_add_cancel(self n, m: Nat, h: n <= m): (m - n) + n = m {
+    trans((m - n).add_comm(n), n.le_add(m, h))
 }
 
-theorem Nat::sub_le(self m: Nat): (n: Nat) → m -n <= m {
+theorem Nat::sub_le(self m: Nat): (n: Nat) → m - n <= m {
     match m {
         Zero => λ n => trivial,
         Succ(m2, ih) => λ n =>
             match n {
                 Zero => Succ(m2).le_refl(),
-                Succ(n2) => (m2 -n2).le_succ_r(m2, ih(n2)),
+                Succ(n2) => (m2 - n2).le_succ_r(m2, ih(n2)),
             },
     }
 }
 
 // Removing a positive amount from a value strictly lowers it, provided the
 // amount was available rather than truncated away.
-theorem Nat::sub_lt_of_pos(self m: Nat): (n: Nat) → 0 < n → n <= m → m -n < m {
+theorem Nat::sub_lt_of_pos(self m: Nat): (n: Nat) → 0 < n → n <= m → m - n < m {
     match m {
         Zero => λ n => match n {
             Zero => λ positive bounded => false_elim(positive),
@@ -1311,7 +1311,7 @@ theorem Nat::pow_le_pow_add(self a, i: Nat, ha: 1 <= a, d: Nat): a.pow(i) <= a.p
 }
 
 theorem Nat::pow_le_pow_r(self a, i, k: Nat, ha: 1 <= a, h: i <= k): a.pow(i) <= a.pow(k) {
-    j(i.le_add(k, h), λ y _ => a.pow(i) <= a.pow(y), a.pow_le_pow_add(i, ha, k -i))
+    j(i.le_add(k, h), λ y _ => a.pow(i) <= a.pow(y), a.pow_le_pow_add(i, ha, k - i))
 }
 
 fn Nat::fact(self n: Nat) → Nat { match n { Zero => 1, Succ(k) => Succ(k) * k.fact() } }
@@ -1586,7 +1586,7 @@ fn DivMod::rem(self s: DivMod) → Nat { match s { MkDivMod(_, r) => r } }
 // The next bit of the quotient: `r` is what is left of `n` after twice the
 // quotient so far.
 fn Nat::ldiv_pick(d, q, r: Nat, c: d <= r ∨ ¬(d <= r)) → DivMod {
-    match c { Inl(_) => MkDivMod(Succ(q * 2), r -d), Inr(_) => MkDivMod(q * 2, r) }
+    match c { Inl(_) => MkDivMod(Succ(q * 2), r - d), Inr(_) => MkDivMod(q * 2, r) }
 }
 
 // The bit halving drops: `n = 2·h + bit` when `h = ⌊n/2⌋`.
@@ -1625,22 +1625,22 @@ theorem Nat::ldiv_pick_spec(n, d, q, r: Nat, c: d <= r ∨ ¬(d <= r), parts: (q
     let dbl: ((q * 2) * d = q * d + q * d) = trans(Nat::cong(λ (x: Nat) => x * d, q.mul_two()), q.add_mul_distr(q, d));
     match c {
         Inl(le) => {
-            let back: ((r -d) + d = r) = d.sub_add_cancel(r, le);
+            let back: ((r - d) + d = r) = d.sub_add_cancel(r, le);
             let sum = calc {
-                Succ(q * 2) * d + (r -d)
-                    = (d + (q * 2) * d) + (r -d) := Nat::cong(λ (x: Nat) => x + (r -d), (q * 2).mul_succ_left(d)),
-                    = ((q * 2) * d + d) + (r -d) := Nat::cong(λ (x: Nat) => x + (r -d), d.add_comm((q * 2) * d)),
-                    = (q * 2) * d + (d + (r -d)) := ((q * 2) * d).add_assoc(d, r -d),
-                    = (q * 2) * d + ((r -d) + d) := Nat::cong(λ (x: Nat) => (q * 2) * d + x, d.add_comm(r -d)),
+                Succ(q * 2) * d + (r - d)
+                    = (d + (q * 2) * d) + (r - d) := Nat::cong(λ (x: Nat) => x + (r - d), (q * 2).mul_succ_left(d)),
+                    = ((q * 2) * d + d) + (r - d) := Nat::cong(λ (x: Nat) => x + (r - d), d.add_comm((q * 2) * d)),
+                    = (q * 2) * d + (d + (r - d)) := ((q * 2) * d).add_assoc(d, r - d),
+                    = (q * 2) * d + ((r - d) + d) := Nat::cong(λ (x: Nat) => (q * 2) * d + x, d.add_comm(r - d)),
                     = (q * 2) * d + r := Nat::cong(λ (x: Nat) => (q * 2) * d + x, back),
                     = (q * d + q * d) + r := Nat::cong(λ (x: Nat) => x + r, dbl),
                     = n := parts,
             };
-            let lower: (d <= 0 ∨ r -d < d) = match bound {
+            let lower: (d <= 0 ∨ r - d < d) = match bound {
                 Inl(zero) => Inl(zero),
                 Inr(lt) => {
-                    let shifted: (Succ((r -d) + d) <= d + d) = j(sym(back), λ y _ => Succ(y) <= d + d, lt);
-                    Inr(d.le_of_add_le_add_r(Succ(r -d), d, j(sym((r -d).add_succ_left(d)), λ y _ => y <= d + d, shifted)))
+                    let shifted: (Succ((r - d) + d) <= d + d) = j(sym(back), λ y _ => Succ(y) <= d + d, lt);
+                    Inr(d.le_of_add_le_add_r(Succ(r - d), d, j(sym((r - d).add_succ_left(d)), λ y _ => y <= d + d, shifted)))
                 },
             };
             And(sum, lower)

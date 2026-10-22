@@ -67,7 +67,7 @@ pub fn format_source(src: &str) -> String {
             // many. A run of them is the author lining a column up — 27 of
             // them across four library files, `tm_lam(dom, b)            =>`
             // and the like — and re-deciding that is not formatting.
-            out.push_str(match gap_between(tok, next, &roles) {
+            out.push_str(match gap_between(tok, next, roles.as_ref()) {
                 Gap::Tight => "",
                 Gap::Space if raw.is_empty() => " ",
                 Gap::Space | Gap::Keep => raw,
@@ -117,19 +117,19 @@ fn clean_multiline(trivia: &str) -> String {
     out
 }
 
-/// The roles no [`TokKind`] determines, or empty when the file does not parse —
-/// every `<` then falls to [`Gap::Keep`] rather than being padded as a
-/// comparison, so an unparseable file is still formatted everywhere else.
-fn token_role_map(src: &str, toks: &[Tok]) -> HashMap<usize, TokenRole> {
-    let Ok(file) = parse_file(src) else { return HashMap::new() };
-    token_roles(toks, &file)
+/// The roles no [`TokKind`] determines, or `None` when the file does not parse —
+/// every `<` and `-` then falls to [`Gap::Keep`] rather than being guessed at,
+/// so an unparseable file is still formatted everywhere else.
+fn token_role_map(src: &str, toks: &[Tok]) -> Option<HashMap<usize, TokenRole>> {
+    let file = parse_file(src).ok()?;
+    Some(token_roles(toks, &file))
 }
 
 /// Is this token an infix operator, and so spaced on both sides?
 ///
 /// A classification of the lexer's own vocabulary, not a second table of
-/// operator spellings: `<` is the only kind that needs outside help, and it
-/// gets it from `delims`.
+/// operator spellings: `<` and `-` are the kinds that need outside help, and
+/// they get it from [`crate::roles`].
 fn is_infix(tok: &Tok, roles: &HashMap<usize, TokenRole>) -> bool {
     match tok.kind {
         TokKind::Plus
@@ -156,15 +156,20 @@ fn is_infix(tok: &Tok, roles: &HashMap<usize, TokenRole>) -> bool {
         // file did not parse, `delims` is empty and every `<` reads as infix —
         // so `Lt` is excluded there too, by `role_known`.
         TokKind::Lt => !matches!(roles.get(&tok.span.start), Some(TokenRole::ArgumentDelimiter)),
+        // Subtraction; every other `-` is a prefix negation or a declared name.
+        TokKind::Minus => matches!(roles.get(&tok.span.start), Some(TokenRole::InfixMinus)),
         _ => false,
     }
 }
 
-fn gap_between(a: &Tok, b: &Tok, roles: &HashMap<usize, TokenRole>) -> Gap {
+fn gap_between(a: &Tok, b: &Tok, roles: Option<&HashMap<usize, TokenRole>>) -> Gap {
     use TokKind::*;
 
+    let parsed = roles.is_some();
+    let empty = HashMap::new();
+    let roles = roles.unwrap_or(&empty);
     // Nothing may be decided about `<`/`>` spacing without a parse.
-    let role_known = |t: &Tok| !matches!(t.kind, Lt | Gt) || !roles.is_empty();
+    let role_known = |t: &Tok| !matches!(t.kind, Lt | Gt) || parsed;
     let declared = |t: &Tok| matches!(roles.get(&t.span.start), Some(TokenRole::OperatorName));
 
     // Punctuation hugs what precedes it and is followed by one space.
@@ -206,6 +211,13 @@ fn gap_between(a: &Tok, b: &Tok, roles: &HashMap<usize, TokenRole>) -> Gap {
     // `λ` is not on this list — the library writes `λ source begin =>` in every
     // occurrence — and a bare `?` must keep its gap, because `? p` and `?p` are
     // different programs.
+    //
+    // A `-` is the one of these with an infix reading too, and only the parse
+    // tells `a - b` from `-b`: without one it keeps its gap either way.
+    let infix_minus = |t: &Tok| matches!(roles.get(&t.span.start), Some(TokenRole::InfixMinus));
+    if matches!(a.kind, Minus) && (!parsed || infix_minus(a)) {
+        return if infix_minus(a) { Gap::Space } else { Gap::Keep };
+    }
     if matches!(a.kind, Neg | Minus | Bang | Dollar) && !declared(a) {
         return Gap::Tight;
     }

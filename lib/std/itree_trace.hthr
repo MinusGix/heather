@@ -342,8 +342,8 @@ theorem IsTrace::up<R>(E: Events, p: Nat → ITree<R>(E), g: ITree::Grows(E, p),
 theorem IsTrace::fuel_monotone<R>(E: Events, p: Nat → ITree<R>(E), g: ITree::Grows(E, p), n: Nat, m: Nat,
     le: n <= m, tr: Trace<R>(E), it: IsTrace(E, p(n), tr)): IsTrace(E, p(m), tr)
 {
-    let e: (n + (m -n) = m) = trans(n.add_comm(m -n), n.sub_add_cancel(m, le));
-    j(e, λ y q => IsTrace(E, p(y), tr), IsTrace::up(E, p, g, n, m -n, tr, it))
+    let e: (n + (m - n) = m) = trans(n.add_comm(m - n), n.sub_add_cancel(m, le));
+    j(e, λ y q => IsTrace(E, p(y), tr), IsTrace::up(E, p, g, n, m - n, tr, it))
 }
 
 // A trace the program produces at some fuel: the `converges` of

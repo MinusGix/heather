@@ -93,7 +93,7 @@ fn Format::emax(self F: Format) → Int { F.emin + F.span.int() }
 
 // The quantum exponent of the least binade: subnormals are multiples of
 // `2^qmin`.
-fn Format::qmin(self F: Format) → Int { F.emin -F.frac.int() }
+fn Format::qmin(self F: Format) → Int { F.emin - F.frac.int() }
 
 fn Format::qmax(self F: Format) → Int { F.qmin() + F.span.int() }
 
@@ -435,7 +435,7 @@ fn Finite::min_normal(F: Format) → Finite(F) {
 // The largest significand the top binade holds: all ones, or one less where
 // the all-ones pattern is NaN.
 fn Format::max_mag(self F: Format) → Nat {
-    match F.specials.reserves_top() { True => F.top() -2, False => F.top() -1 }
+    match F.specials.reserves_top() { True => F.top() - 2, False => F.top() - 1 }
 }
 
 // Where the largest significand sits: above the least normal one, one below
@@ -450,20 +450,20 @@ theorem Format::max_mag_bounds(self F: Format):
     let four = F.four_le_top();
     let s1 = Nat::sub_add_cancel(1, F.top(), Nat::le_trans(1, 4, F.top(), trivial, four));
     let s2 = Nat::sub_add_cancel(2, F.top(), Nat::le_trans(2, 4, F.top(), trivial, four));
-    match F.specials.reserves_top() as λ r => F.half() <= (match r { True => F.top() -2, False => F.top() -1 })
-        ∧ Succ(match r { True => F.top() -2, False => F.top() -1 }) <= F.top()
-        ∧ (r.IsTrue() → Succ(Succ(match r { True => F.top() -2, False => F.top() -1 })) = F.top())
-        ∧ (¬r.IsTrue() → Succ(match r { True => F.top() -2, False => F.top() -1 }) = F.top())
+    match F.specials.reserves_top() as λ r => F.half() <= (match r { True => F.top() - 2, False => F.top() - 1 })
+        ∧ Succ(match r { True => F.top() - 2, False => F.top() - 1 }) <= F.top()
+        ∧ (r.IsTrue() → Succ(Succ(match r { True => F.top() - 2, False => F.top() - 1 })) = F.top())
+        ∧ (¬r.IsTrue() → Succ(match r { True => F.top() - 2, False => F.top() - 1 }) = F.top())
     {
         True => {
-            let a: (F.half() <= F.top() -2) = omega;
-            let b: (F.top() -2 + 1 <= F.top()) = omega;
-            let c: (F.top() -2 + 2 = F.top()) = omega;
+            let a: (F.half() <= F.top() - 2) = omega;
+            let b: (F.top() - 2 + 1 <= F.top()) = omega;
+            let c: (F.top() - 2 + 2 = F.top()) = omega;
             And(a, And(b, And(λ _ => c, λ no => false_elim(no(trivial)))))
         },
         False => {
-            let a: (F.half() <= F.top() -1) = omega;
-            let b: (F.top() -1 + 1 = F.top()) = omega;
+            let a: (F.half() <= F.top() - 1) = omega;
+            let b: (F.top() - 1 + 1 = F.top()) = omega;
             And(a, And(j(sym(b), λ y _ => y <= F.top(), F.top().le_refl()), And(λ no => false_elim(no), λ _ => b)))
         },
     }
@@ -476,17 +476,17 @@ fn Finite::max_finite(F: Format) → Finite(F) {
     let four = F.four_le_top();
     let s1 = Nat::sub_add_cancel(1, F.top(), Nat::le_trans(1, 4, F.top(), trivial, four));
     let s2 = Nat::sub_add_cancel(2, F.top(), Nat::le_trans(2, 4, F.top(), trivial, four));
-    let fits = match F.specials.reserves_top() as λ r => Succ(match r { True => F.top() -2, False => F.top() -1 }) <= F.top() {
-        True => { let g: (F.top() -2 + 1 <= F.top()) = omega; g },
-        False => { let g: (F.top() -1 + 1 <= F.top()) = omega; g },
+    let fits = match F.specials.reserves_top() as λ r => Succ(match r { True => F.top() - 2, False => F.top() - 1 }) <= F.top() {
+        True => { let g: (F.top() - 2 + 1 <= F.top()) = omega; g },
+        False => { let g: (F.top() - 1 + 1 <= F.top()) = omega; g },
     };
-    let normal = match F.specials.reserves_top() as λ r => F.half() <= match r { True => F.top() -2, False => F.top() -1 } {
-        True => { let g: (F.half() <= F.top() -2) = omega; g },
-        False => { let g: (F.half() <= F.top() -1) = omega; g },
+    let normal = match F.specials.reserves_top() as λ r => F.half() <= match r { True => F.top() - 2, False => F.top() - 1 } {
+        True => { let g: (F.half() <= F.top() - 2) = omega; g },
+        False => { let g: (F.half() <= F.top() - 1) = omega; g },
     };
     let free = λ (rt: F.specials.reserves_top().IsTrue()) (_: F.span <= F.span) =>
-        match F.specials.reserves_top() as λ r => r.IsTrue() → Succ(Succ(match r { True => F.top() -2, False => F.top() -1 })) <= F.top() {
-            True => λ _ => { let g: (F.top() -2 + 2 <= F.top()) = omega; g },
+        match F.specials.reserves_top() as λ r => r.IsTrue() → Succ(Succ(match r { True => F.top() - 2, False => F.top() - 1 })) <= F.top() {
+            True => λ _ => { let g: (F.top() - 2 + 2 <= F.top()) = omega; g },
             False => λ no => false_elim(no),
         }(rt);
     let ok = F.canonical_intro(F.max_mag(), F.span, fits, F.span.le_refl(), Inr(normal), free);
@@ -506,7 +506,7 @@ theorem Finite::zero_dyadic(F: Format, neg: Bool): (Finite::zero(F, neg)).dyadic
 // The least normal is `2^emin`, read at the least exponent.
 theorem Finite::min_normal_dyadic(F: Format): (Finite::min_normal(F)).dyadic() ≈ Dyadic(1, F.emin) {
     let shift = Dyadic::align(1, F.qmin() + OfNat(0), F.frac);
-    let qd: (F.qmin() = F.emin -F.frac.int()) = refl;
+    let qd: (F.qmin() = F.emin - F.frac.int()) = refl;
     let exp: (F.qmin() + OfNat(0) + F.frac.int() = F.emin) = omega;
     let one: (OfNat(1) * F.half().int() = F.half().int()) = OfNat(F.half()).one_mul();
     Dyadic::same_trans(

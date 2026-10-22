@@ -77,8 +77,8 @@ theorem toNat_word_of_nat(n, value: Nat, bounded: value < Nat::pow(2, n)): word_
 
 // Subtraction that does not borrow reads back as Nat subtraction.
 theorem toNat_sub(n: Nat, a, b: BitVec(n), fits: b.toNat() <= a.toNat()):
-    a.sub(b).toNat() = a.toNat() -b.toNat() {
-    let d = a.toNat() -b.toNat();
+    a.sub(b).toNat() = a.toNat() - b.toNat() {
+    let d = a.toNat() - b.toNat();
     let d_below: (d < Nat::pow(2, n)) = Nat::le_trans(Succ(d), Succ(a.toNat()), Nat::pow(2, n),
         Nat::le_succ_succ(d, a.toNat(), Nat::sub_le(a.toNat(), b.toNat())), BitVec::toNat_lt_pow(n, a));
     let c = BitVec::ofNat(d, n := n);

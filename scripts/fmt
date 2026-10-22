@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Normalize the whitespace of Heather source.
 #
-# Usage: scripts/fmt [--check] [paths...]   (default: lib examples)
+# Usage: scripts/fmt [--check] [paths...]   (default: lib examples crates, the
+# corpus `repository_sources_are_formatted` gates on)
 #
 # `--check` writes nothing and exits 1 listing the files that would change;
 # that is the form `scripts/test` gates on. The formatter itself never moves a
@@ -21,7 +22,7 @@ if [[ "${1:-}" == --check ]]; then
 fi
 PATHS=("$@")
 if [[ ${#PATHS[@]} -eq 0 ]]; then
-  PATHS=(lib examples)
+  PATHS=(lib examples crates)
 fi
 
 # Build outside any `ulimit -v` cap: mold reserves ~8 GiB of address space per

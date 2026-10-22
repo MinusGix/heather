@@ -118,7 +118,7 @@ theorem caller_moves<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, stack: S
 record Toy { code: BitVec(64) → Option<BitVec(8)>, bytes: Nat → BitVec(8) }
 
 fn store_at(f: Nat → BitVec(8), base: Nat, bytes: List<BitVec(8)>, n: Nat) → BitVec(8) {
-    match base.leb(n) { False => f(n), True => match bytes.nth(n -base) { None => f(n), Some(byte) => byte } }
+    match base.leb(n) { False => f(n), True => match bytes.nth(n - base) { None => f(n), Some(byte) => byte } }
 }
 
 fn toy_fetch() → FetchAccess<Toy> {
@@ -156,9 +156,9 @@ theorem nth_past<A>(xs: List<A>): (i: Nat) → xs.len() <= i → xs.nth(i) = Non
 // Byte `j` of a store from `base` is the store's `j`th byte.
 theorem store_inside(f: Nat → BitVec(8), base: Nat, bytes: List<BitVec(8)>, j: Nat):
     store_at(f, base, bytes, base + j) = match bytes.nth(j) { None => f(base + j), Some(byte) => byte } {
-    let back: ((base + j) -base = j) = trans(cong_fn<Nat, Nat>(λ n => n -base, base.add_comm(j)), j.add_sub_cancel(base));
+    let back: ((base + j) - base = j) = trans(cong_fn<Nat, Nat>(λ n => n - base, base.add_comm(j)), j.add_sub_cancel(base));
     j(sym(leb_true(base, base + j, base.le_add_l(j))),
-        λ found _ => (match found { False => f(base + j), True => match bytes.nth((base + j) -base) { None => f(base + j), Some(byte) => byte } }) =
+        λ found _ => (match found { False => f(base + j), True => match bytes.nth((base + j) - base) { None => f(base + j), Some(byte) => byte } }) =
             (match bytes.nth(j) { None => f(base + j), Some(byte) => byte }),
         cong_fn<Nat, BitVec(8)>(λ d => match bytes.nth(d) { None => f(base + j), Some(byte) => byte }, back))
 }
@@ -166,14 +166,14 @@ theorem store_inside(f: Nat → BitVec(8), base: Nat, bytes: List<BitVec(8)>, j:
 // A byte below the store or past its end is as it was.
 theorem store_below(f: Nat → BitVec(8), base: Nat, bytes: List<BitVec(8)>, n: Nat, below: n < base): store_at(f, base, bytes, n) = f(n) {
     j(sym(leb_false(base, n, below)),
-        λ found _ => (match found { False => f(n), True => match bytes.nth(n -base) { None => f(n), Some(byte) => byte } }) = f(n), refl)
+        λ found _ => (match found { False => f(n), True => match bytes.nth(n - base) { None => f(n), Some(byte) => byte } }) = f(n), refl)
 }
 theorem store_past(f: Nat → BitVec(8), base: Nat, bytes: List<BitVec(8)>, n: Nat, past: base + bytes.len() <= n): store_at(f, base, bytes, n) = f(n) {
     let le: (base <= n) = Nat::le_trans(base, base + bytes.len(), n, base.le_add_l(bytes.len()), past);
-    let off: (bytes.len() <= n -base) = { let back: ((n -base) + base = n) = Nat::sub_add_cancel(base, n, le); omega };
+    let off: (bytes.len() <= n - base) = { let back: ((n - base) + base = n) = Nat::sub_add_cancel(base, n, le); omega };
     j(sym(leb_true(base, n, le)),
-        λ found _ => (match found { False => f(n), True => match bytes.nth(n -base) { None => f(n), Some(byte) => byte } }) = f(n),
-        j(sym(nth_past(bytes, n -base, off)), λ o _ => (match o { None => f(n), Some(byte) => byte }) = f(n), refl))
+        λ found _ => (match found { False => f(n), True => match bytes.nth(n - base) { None => f(n), Some(byte) => byte } }) = f(n),
+        j(sym(nth_past(bytes, n - base, off)), λ o _ => (match o { None => f(n), Some(byte) => byte }) = f(n), refl))
 }
 
 theorem bytes8_same(a0, a1, a2, a3, a4, a5, a6, a7, b0, b1, b2, b3, b4, b5, b6, b7: BitVec(8),
