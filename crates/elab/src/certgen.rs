@@ -523,6 +523,9 @@ impl ResTy {
                          certified (docs/inductive-tier2-w-lowering.md §1)"
                     ));
                 }
+                if ind.codata {
+                    return Err(format!("`{name}` is `codata`: a coinductive type is not certified"));
+                }
                 if ind.recursive {
                     return Err(format!(
                         "`{name}` is recursive: a tier-1 result type is deferred \
@@ -662,6 +665,12 @@ impl ParamTy {
                     return Err(format!(
                         "parameter `{}`'s type `{name}` has a recursive function field: a \
                          tier-2 type is not certified (docs/inductive-tier2-w-lowering.md §1)",
+                        p.name
+                    ));
+                }
+                if ind.codata {
+                    return Err(format!(
+                        "parameter `{}`'s type `{name}` is `codata`: a coinductive type is not certified",
                         p.name
                     ));
                 }

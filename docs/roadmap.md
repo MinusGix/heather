@@ -101,6 +101,8 @@ through `milestone:`; the list of issues is `scripts/issue list --milestone
 | `it-core` | interaction-trees | done | Events as containers, the fuel-cut tree, `bind`/`iter`/`mrec`, and the structural laws, with the definitional ones checked as such. | it-library |
 | `it-refinement` | interaction-trees | done | Trace refinement and depth-indexed equivalence, with the bridge to `converges`/`fuel_monotone` and one handler into world threading. | it-library |
 | `it-native` | interaction-trees | open | A native program's theorem says its run refines an interaction tree. |  |
+| `it-coinductive` | interaction-trees | open | Interaction trees diverge for real: a coinductive tree over container events with `bind` and `iter`, `approx` into the finite tree, and bisimilarity and eutt as `M` instances, bridged to the finite library's `Same` (`docs/kernel-coinduction-design.md` §6). |  |
+| `it-codata` | interaction-trees | done | A surface `codata` declaration lowers onto the kernel's `M`, with constructors, `match` through `out`, and guarded corecursive functions compiled into one `corec` (`docs/codata-elaborator-design.md`). | it-coinductive |
 | `math-classes` | mathematics | open | The algebra and order class hierarchy (semiring to ordered field, lattices) is settled, with a documented API that clients use without restating laws. |  |
 | `math-reals` | mathematics | open | Reals have their completeness interfaces and basic analysis (sequences, limits, continuity) on top of the regular Cauchy reals. |  |
 | `math-float` | mathematics | open | Binary floating point (formats as data, a relational rounding spec with one executable rounding, error bounds, arithmetic and the error-free transformations) is in `lib/std/float/`, proved over dyadics and transferable to any ordered field (`docs/floating-point-design.md`; rounds 1–5). |  |
@@ -535,3 +537,6 @@ separate machines do not slow each other's tests.
   trees, and a kernel round for coinductive types planned now rather than
   waiting for a customer (`issues/kernel-coinductive-types.md`, area
   `kernel`). The source's shape (S3) stays open.
+- 2026-10-22: `it-coinductive` added for the coinductive tree library on the
+  kernel's `M` (PR #111), with `it-codata` (the elaborator's `codata`
+  surface) as its first submilestone, done on this round's PR.

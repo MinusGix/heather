@@ -108,6 +108,12 @@ pub(crate) struct Inductive {
     /// constructor, every field named. The lowering is unchanged — this is
     /// what makes `m.f` a projection and `D { … }` a literal.
     pub is_record: bool,
+    /// Declared with `codata` (docs/codata-elaborator-design.md): lowered onto
+    /// the kernel's negative `M` former (`codata.rs`), never onto a sum, `Wf`
+    /// or `W`. [`Self::recursive`] and [`Self::infinitary`] are both false for
+    /// one, so every test that means "tier 0" must check this as well
+    /// ([`Self::flat`]).
+    pub codata: bool,
     /// An indexed family's index binder name (`inductive Vec<A> : (n: Nat) ->
     /// Type`) (docs/inductive-indexed-lowering.md §2). When set, the
     /// declaration lowers by recursion on the index (`indexed.rs`), **never**
@@ -188,9 +194,17 @@ impl Inductive {
     /// §5) and [`Self::recursive`] — which means "lowered onto `Wf`" — is false.
     /// Derived from the field kinds, so it needs no storage of its own.
     pub fn infinitary(&self) -> bool {
-        self.ctors
-            .iter()
-            .any(|c| c.kind.contains(&FieldKind::FnChild))
+        !self.codata
+            && self
+                .ctors
+                .iter()
+                .any(|c| c.kind.contains(&FieldKind::FnChild))
+    }
+
+    /// Tier 0: lowered to the bare sum-of-Σs, with no children of any kind —
+    /// not `Wf` (tier 1), not `W` (tier 2), not `M` (codata).
+    pub fn flat(&self) -> bool {
+        !self.recursive && !self.infinitary() && !self.codata
     }
 
     /// The index of field `name` in this record's single constructor, or
@@ -793,6 +807,23 @@ impl Elaborator {
             return err("`Nat` is built in", d.span);
         }
         reject_function_fields(d)?;
+        // A coinductive declaration is unindexed this round
+        // (docs/codata-elaborator-design.md §1): an indexed one is a
+        // coinductive *predicate*, whose shapes depend on the index, and that
+        // needs the observation form of §8 rather than constructors.
+        if d.is_codata
+            && let Some(ix) = &d.index
+        {
+            return err(
+                format!(
+                    "`{}` is `codata` with an index: an indexed coinductive declaration is \
+                     not lowered this round, only `codata D<…>(…) {{ … }}` \
+                     (issues/codata-indexed.md)",
+                    d.name
+                ),
+                ix.span,
+            );
+        }
         for (i, p) in d.params.iter().enumerate() {
             if d.params[..i].contains(p) {
                 return err(format!("duplicate type parameter `{p}`"), d.span);
@@ -1056,8 +1087,27 @@ impl Elaborator {
         // field anywhere puts the whole declaration on `W`, and `recursive`
         // keeps meaning "lowered onto `Wf`".
         let infinitary = ctors.iter().any(|c| c.kind.contains(&FieldKind::FnChild));
-        let recursive = any_child && !infinitary;
-        if infinitary {
+        // Codata (docs/codata-elaborator-design.md §2): any number of plain
+        // and function children per constructor, since a `match` on a value of
+        // `M` never has to rebuild the children function — its motive does
+        // not depend on the scrutinee. A container field is not lowered yet.
+        if d.is_codata {
+            for (c, cd) in ctors.iter().zip(&d.ctors) {
+                if c.container().is_some() {
+                    return err(
+                        format!(
+                            "`{}` has a container field, which a `codata` constructor does not \
+                             take this round: write the children as a function from `Fin(n)` \
+                             (docs/codata-elaborator-design.md §2)",
+                            c.name
+                        ),
+                        cd.span,
+                    );
+                }
+            }
+        }
+        let recursive = any_child && !infinitary && !d.is_codata;
+        if infinitary && !d.is_codata {
             for (c, cd) in ctors.iter().zip(&d.ctors) {
                 if c.container().is_some() {
                     return err(
@@ -1154,6 +1204,7 @@ impl Elaborator {
             ctors,
             recursive,
             is_record: d.is_record,
+            codata: d.is_codata,
             index,
             index_ty,
             skel,
@@ -1163,7 +1214,7 @@ impl Elaborator {
         // (docs/inductive-tier2-w-lowering.md §1.5) — so an unparameterized
         // one is lowered once here, where that is a declaration error rather
         // than a surprise at its first use.
-        if ind.infinitary() && ind.params.is_empty() && ind.valparams.is_empty() {
+        if (ind.infinitary() || ind.codata) && ind.params.is_empty() && ind.valparams.is_empty() {
             self.lower_instance(&Cx::empty(), &ind, &[], &[], d.span)?;
         }
         // From here on registration is infallible. The type registry installs
@@ -1188,6 +1239,9 @@ impl Elaborator {
         // with that definition, and the rest stays inline.
         if ind.infinitary() {
             self.register_w_canon(&ind, d.span);
+        } else if ind.codata {
+            // Nothing is named yet (docs/codata-elaborator-design.md §2): `⟦D⟧`
+            // is an `M` over the inline shape and positions.
         } else {
             self.register_gen_defs(&ind, d.span);
         }
@@ -1239,6 +1293,15 @@ impl Elaborator {
                     "`{iname}` is itself an indexed family; indexing `{name}` by it would \
                      need a family over a family, which is not this scheme \
                      (docs/inductive-indexed-lowering.md §8.3)"
+                ),
+                dom.span,
+            );
+        }
+        if ind.codata {
+            return err(
+                format!(
+                    "`{iname}` is `codata`, so it has no eliminator to compute `{name}`'s \
+                     family by; an index type is an inductive"
                 ),
                 dom.span,
             );
@@ -1775,6 +1838,11 @@ impl Elaborator {
         if ind.infinitary() {
             return self.lower_instance_w(cx, ind, args, vargs, span);
         }
+        // Codata (docs/codata-elaborator-design.md §2): the same shape under
+        // the negative `M`.
+        if ind.codata {
+            return self.lower_instance_m(cx, ind, args, vargs, span);
+        }
         let (shape, level) = self.lower_shape(cx, ind, args, vargs, span)?;
         if !ind.recursive {
             return Ok((shape, level));
@@ -1915,6 +1983,23 @@ impl Elaborator {
         vargs: &[(Term, Type, Level)],
         span: Span,
     ) -> R<(Type, Level, Option<(Type, Level, usize)>)> {
+        let (t, l, mut domains) = self.lower_ctor_with_domains(cx, ind, i, args, vargs, span)?;
+        Ok((t, l, domains.pop()))
+    }
+
+    /// [`Self::lower_ctor_with_domain`] for every recursive function field of
+    /// the constructor, in field order: a `codata` constructor may have
+    /// several (docs/codata-elaborator-design.md §2), a tier-2 one at most
+    /// one.
+    pub(crate) fn lower_ctor_with_domains(
+        &self,
+        cx: &Cx,
+        ind: &Inductive,
+        i: usize,
+        args: &[(Type, Level)],
+        vargs: &[(Term, Type, Level)],
+        span: Span,
+    ) -> R<(Type, Level, Vec<(Type, Level, usize)>)> {
         let _scope = self.use_inductive_scope(ind);
         // Field types see the type parameters and the earlier *named* fields;
         // nothing else from the ambient declaration. The arguments are scoped
@@ -1977,7 +2062,7 @@ impl Elaborator {
         // bind it in a pattern.
         let mut entries = vec![(tag_type(ind.tag), Level::Zero)];
         fcx.push("#tag".into(), tag_type(ind.tag), Level::Zero);
-        let mut domain = None;
+        let mut domains = Vec::new();
         let ctor = &ind.ctors[i];
         for (k, (name, ty)) in ctor.fields.iter().enumerate() {
             if ctor.kind[k] == FieldKind::FnChild {
@@ -1987,7 +2072,7 @@ impl Elaborator {
                     return err("internal: a recursive function field is not a `->`", ty.span);
                 };
                 let (t, l) = self.elab_ty(&fcx, dom)?;
-                domain = Some((t, l, entries.len() - 1));
+                domains.push((t, l, entries.len() - 1));
                 continue;
             }
             if ctor.kind[k] != FieldKind::Payload {
@@ -2029,7 +2114,7 @@ impl Elaborator {
             // tree compounds per field and is copied into every Σ level slot.
             acc_lvl = Level::max(lvl, acc_lvl).normalize().canonical();
         }
-        Ok((acc, acc_lvl, domain))
+        Ok((acc, acc_lvl, domains))
     }
 
     // -- reading a lowered type back ----------------------------------------
@@ -2052,6 +2137,12 @@ impl Elaborator {
             // Tier 2: `Σ(t : W(x : S). P). El(canon t)`, and the summands are
             // `S`'s at the `W`'s shape level
             // (docs/inductive-tier2-w-lowering.md §5).
+            // Codata: `M(Unit; _. S; …)`, the summands `S`'s at the shape
+            // level (docs/codata-elaborator-design.md §2).
+            Type::M { sig, .. } => (
+                Rc::new(sig.shape_at(&Term::Triv { level: sig.idx_level.clone() })),
+                sig.level.clone(),
+            ),
             other => match crate::infinitary::w_of(other) {
                 Some((shape, shape_level)) => (shape, shape_level),
                 None => (Rc::new(other.clone()), lvl.clone()),
@@ -2131,6 +2222,10 @@ impl Elaborator {
             // Tier 1: the tag is in the `Wf`'s shape (tier 1 §4).
             Type::Wf { shape, .. } => self.tag_of(shape),
             Type::Sum { lhs, .. } => self.tag_of(lhs),
+            // Codata: the tag is in the `M`'s shape, under its index binder,
+            // which the shape never mentions (docs/codata-elaborator-design.md
+            // §2).
+            Type::M { sig, .. } => self.tag_of(&sig.shape_at(&Term::Triv { level: sig.idx_level.clone() })),
             // Tier 2: through the `Σ` and the `W` to the shape
             // (docs/inductive-tier2-w-lowering.md §5).
             Type::Sigma { .. } if crate::infinitary::w_of(ty).is_some() => {
@@ -2427,6 +2522,10 @@ impl Elaborator {
         if ind.infinitary() {
             // Tier 2 (docs/inductive-tier2-w-lowering.md §6).
             return self.build_ctor_w(cx, ind, i, &args, expected, span);
+        }
+        if ind.codata {
+            // Codata (docs/codata-elaborator-design.md §3).
+            return self.build_ctor_m(cx, ind, i, &args, expected, span);
         }
         let prepared = self.prepare_ctor(cx, ind, i, &args, expected, expected_lvl, span)?;
         if !ind.recursive { return Ok(prepared.term); }
@@ -2888,6 +2987,11 @@ impl Elaborator {
             .into_iter()
             .map(|a| a.expect("checked above"))
             .collect();
+        if ind.codata {
+            // Codata: a case tree on the label of `out(s)`, at the motive's
+            // instance at `s` itself (docs/codata-elaborator-design.md §4).
+            return self.elab_match_m(cx, ind, &arms, scrut, scrut_ty, motive, mlvl, span);
+        }
         if ind.recursive {
             // Tier 1: one `elim_Wf`, not a case tree over the scrutinee
             // (docs/inductive-tier1-wf-lowering.md §6). Everything above is
@@ -4425,6 +4529,7 @@ fn skeleton_of(d: &InductiveDecl, ctors: &[Ctor], tag: u32, scope: Rc<Scope>) ->
         ctors: sctors,
         recursive,
         is_record: false,
+        codata: false,
         index: None,
         index_ty: None,
         skel: None,
@@ -5106,7 +5211,23 @@ impl Elaborator {
         // field gets the whole value as a stand-in, only to keep the field
         // list aligned with the declaration.
         let tier2 = ind.infinitary();
+        // Codata: `corec(…; _ _. ⟨ℓ, …⟩; …)`, and the label sits under the
+        // step's two binders, which it never mentions
+        // (docs/codata-elaborator-design.md §4.2). The children are read back
+        // as stand-ins, like tier 2's.
+        let codata_label = match (ind.codata, t) {
+            (true, Term::Corec { step, .. }) => match crate::spelling::pair_of(step) {
+                Some((fst, _)) => match crate::strengthen_tm(&cx.gamma, fst, 2) {
+                    Some(l) => Some(l),
+                    None => return Ok(None),
+                },
+                None => return Ok(None),
+            },
+            (true, _) => return Ok(None),
+            (false, _) => None,
+        };
         let label = match (tier2, crate::spelling::pair_of(t)) {
+            _ if codata_label.is_some() => codata_label.as_ref().expect("checked"),
             (true, Some((fst, _))) => match &**fst {
                 Term::Sup { label, .. } => &**label,
                 _ => return Ok(None),
@@ -5195,7 +5316,7 @@ impl Elaborator {
             }
         } else if ctor.container().is_some() {
             return Ok(None);
-        } else if tier2 {
+        } else if tier2 || ind.codata {
             for _ in ctor.kind.iter().filter(|k| k.is_child()) {
                 kids.push(Rc::new(t.clone()));
             }
@@ -5423,6 +5544,9 @@ impl Elaborator {
         if ind.infinitary() {
             return self.const_elim_w(mcx, ind, d_ty, spine, motive, mlvl, scrut, body, span);
         }
+        if ind.codata {
+            return self.const_out_m(mcx, ind, d_ty, spine, motive, mlvl, scrut, body, span);
+        }
         self.const_case_tree(
             mcx,
             spine,
@@ -5575,6 +5699,18 @@ impl Elaborator {
                      `[{}; …]` depends on the length field before it, so the two sides' \
                      lengths would have to be definitionally equal \
                      (docs/container-fields.md §6)",
+                    ind.ctors[i].name, ind.name
+                ),
+                span,
+            );
+        }
+        if ind.codata && ind.ctors[i].kind[k].is_child() {
+            return err(
+                format!(
+                    "`inj` at the recursive field of `{}` is not supported: `{}` is `codata`, \
+                     and its children come back through `out` as a function of the \
+                     positions, which an equation of two values does not take apart \
+                     (docs/codata-elaborator-design.md §4.2)",
                     ind.ctors[i].name, ind.name
                 ),
                 span,

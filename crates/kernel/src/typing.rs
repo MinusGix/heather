@@ -258,7 +258,13 @@ fn check_global_binding_declaration(tc: &Tc, env: &Env, b: &GlobalBinding) -> R 
             tc.ctx_wf(env, Layer::Prog, ctx)?;
         }
         GlobalBinding::Tm { ctx, layer, ty, level, body } => {
-            if !matches!(layer, Layer::Var | Layer::Code) {
+            // `p` is admitted too (an extension past ch. 04's {v, c}): the
+            // program-only formers (M, IWf, DVec) have no codes, so a
+            // definition over them can only be stated and checked at p. A
+            // reference requires the binding's layer ≤ the use site's, so a
+            // p binding never reaches a box or the code recursor, and δ
+            // inlines it away — a conservative extension.
+            if !matches!(layer, Layer::Var | Layer::Code | Layer::Prog) {
                 return Err(TypeError::LayerMismatch);
             }
             tc.level_wf(env, level)?;
@@ -271,7 +277,7 @@ fn check_global_binding_declaration(tc: &Tc, env: &Env, b: &GlobalBinding) -> R 
             // no term but a variable, so a definition there would be a
             // rename with extra steps; reject it and keep `v` meaning
             // exactly what ch. 04 says.
-            if body.is_some() && *layer != Layer::Code {
+            if body.is_some() && !matches!(layer, Layer::Code | Layer::Prog) {
                 return Err(TypeError::LayerMismatch);
             }
         }
@@ -2562,7 +2568,7 @@ impl Tc {
                 let GlobalBinding::Tm { ctx, layer, ty, level, .. } = binding else {
                     return Err(TypeError::WrongGlobalBinding(var.0));
                 };
-                // i' ∈ {v, c} is the binding invariant; i' ≤ i:
+                // i' ∈ {v, c, p} is the binding invariant; i' ≤ i:
                 if *layer > env.layer {
                     return Err(TypeError::LayerMismatch);
                 }

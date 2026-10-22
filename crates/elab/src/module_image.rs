@@ -33,8 +33,8 @@ use crate::resolve::DerivedInst;
 use crate::slots::Slot;
 use crate::traits::{ClassInfo, DesignationInfo, EvidenceRule, InstanceInfo};
 
-const MAGIC: &[u8; 8] = b"HTHMOD\0\x0d";
-const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x0b";
+const MAGIC: &[u8; 8] = b"HTHMOD\0\x0e";
+const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x0c";
 
 /// Hard limits applied before any decoded collection or string allocation.
 /// The loader may choose a smaller policy; these defaults are deliberately
@@ -1561,7 +1561,7 @@ fn put_inductive(w: &mut Writer, info: &Inductive) {
     w.vec(&info.params, |w, name| w.string(name));
     w.vec(&info.valparams, |w, (name, ty)| { w.string(name); put_ty(w, ty); });
     w.vec(&info.op_symbols, |w, (symbol, name)| { w.string(symbol); w.string(name); });
-    w.vec(&info.ctors, put_ctor); w.bool(info.recursive); w.bool(info.is_record);
+    w.vec(&info.ctors, put_ctor); w.bool(info.recursive); w.bool(info.is_record); w.bool(info.codata);
     w.option(info.index.as_ref(), |w, index| w.string(index));
     w.option(info.index_ty.as_ref(), |w, ty| match ty {
         IdxTy::Nat => w.byte(0),
@@ -1576,7 +1576,7 @@ fn get_inductive(r: &mut Reader<'_>) -> Result<Inductive, ModuleImageDecodeError
         params: r.vec(Reader::string)?,
         valparams: r.vec(|r| Ok((r.string()?, get_ty(r)?)))?,
         op_symbols: r.vec(|r| Ok((r.string()?, r.string()?)))?,
-        ctors: r.vec(get_ctor)?, recursive: r.bool()?, is_record: r.bool()?,
+        ctors: r.vec(get_ctor)?, recursive: r.bool()?, is_record: r.bool()?, codata: r.bool()?,
         index: r.option(Reader::string)?,
         index_ty: r.option(|r| match r.byte()? {
             0 => Ok(IdxTy::Nat), 1 => Ok(IdxTy::Decl(Rc::new(get_inductive(r)?))),

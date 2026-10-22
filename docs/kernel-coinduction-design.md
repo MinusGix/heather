@@ -153,6 +153,9 @@ with no bisimilarity in between.
 
 As `IWf`'s were until its codes round: the former, `out` and `corec` are
 admitted at layers p and m only, until a round gives them codes (§5).
+Declarations over them are therefore bound at p, which the elaborator round
+made possible by admitting term definitions at p in Ψ
+(`docs/codata-elaborator-design.md` §6).
 
 ---
 

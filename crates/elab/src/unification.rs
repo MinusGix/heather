@@ -351,6 +351,19 @@ pub(super) fn unify_ty(
         (Type::Fin { len: k1 }, Type::Fin { len: k2 }) => {
             unify_tm(u, k1, k2, n, d, sols);
         }
+        // A codata instance `M(I; S; P; next)(j)`: the shape binds the index,
+        // the positions index and shape, `next` all three
+        // (docs/codata-elaborator-design.md §2) — so a type argument read off
+        // a constructor's field is learned under those binders.
+        (Type::M { sig: g1, index: j1 }, Type::M { sig: g2, index: j2 }) => {
+            if !Rc::ptr_eq(g1, g2) {
+                unify_ty(u, &g1.idx, &g2.idx, n, d, sols);
+                unify_ty(u, &g1.shape, &g2.shape, n, d + 1, sols);
+                unify_ty(u, &g1.pos, &g2.pos, n, d + 2, sols);
+                unify_tm(u, &g1.next, &g2.next, n, d + 3, sols);
+            }
+            unify_tm(u, j1, j2, n, d, sols);
+        }
         (Type::El { tm: t1, .. }, Type::El { tm: t2, .. }) => {
             unify_tm(u, t1, t2, n, d, sols);
         }

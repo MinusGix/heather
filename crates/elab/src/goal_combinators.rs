@@ -142,8 +142,7 @@ fn payload(ty: Type) -> Rc<Term> {
 /// names for its fields, and a field the goal matches on is split where it
 /// blocks.
 fn finite_inductive(inductive: &crate::inductive::Inductive) -> bool {
-    !inductive.recursive
-        && !inductive.infinitary()
+    inductive.flat()
         && inductive.index.is_none()
         && inductive.ctors.len() > 1
 }

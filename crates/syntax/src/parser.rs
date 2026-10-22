@@ -13,6 +13,9 @@
 //! constr  := name ("<" type ("," type)* ">")?  -- `A: C<X>` is `C<A, X>`
 //! univ    := "Type" ("<" numeral ">")?
 //! induct  := "inductive" name tyvars? "{" ctors? "}"
+//! codata  := "codata" name tyvars? vparams? "{" ctors? "}"
+//!                                     -- a coinductive declaration
+//!                                     (docs/codata-elaborator-design.md)
 //! record  := "record" name tyvars? "{" rfield ("," rfield)* ","? "}"
 //! rfield  := name ":" type            -- a record field is always named
 //! class   := "class" name tyvars? ("extends" cref ("as" name)? ("," cref ("as" name)?)*)?
@@ -1005,7 +1008,7 @@ impl Parser {
         if self.at_kw("import") || self.at_kw("export") {
             return Ok(Item::Import(self.import()?));
         }
-        if self.at_kw("inductive") {
+        if self.at_kw("inductive") || self.at_kw("codata") {
             return Ok(Item::Inductive(self.inductive()?));
         }
         if self.at_kw("record") {
@@ -1875,6 +1878,7 @@ impl Parser {
             valparams,
             ctors: vec![ctor],
             is_record: true,
+            is_codata: false,
             index: None,
             span,
         })
@@ -1978,7 +1982,11 @@ impl Parser {
     /// empty type); so is a constructor with no field list.
     fn inductive(&mut self) -> R<InductiveDecl> {
         let start = self.peek_span();
-        self.bump(); // `inductive`
+        // `codata` shares the whole grammar: the constructors are written the
+        // same way, and what they mean is the elaborator's
+        // (docs/codata-elaborator-design.md §1).
+        let is_codata = self.at_kw("codata");
+        self.bump(); // `inductive` / `codata`
         let (name, _) = self.ident("inductive name")?;
         let params = self.tyvar_list()?;
         // Parsed, then rejected by the elaborator: value parameters are a
@@ -2040,6 +2048,7 @@ impl Parser {
             valparams,
             ctors,
             is_record: false,
+            is_codata,
             index,
             span: start.join(end),
         })
