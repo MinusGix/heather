@@ -6,7 +6,7 @@ license.workspace = true
 
 [dependencies]
 heather-cli = { path = "../cli" }
-heather-elab = { path = "../elab" }
+heather-elab-lib = { path = "../elab-lib" }
 heather-syntax = { path = "../syntax" }
 serde_json = "=1.0.108"
 

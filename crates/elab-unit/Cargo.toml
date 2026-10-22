@@ -24,10 +24,10 @@ path = "../elab/src/lib.rs"
 doctest = false
 
 [features]
-value-metrics = ["heather-kernel/value-metrics"]
+value-metrics = ["heather-kernel-lib/value-metrics"]
 
 [dependencies]
-heather-kernel = { path = "../kernel" }
+heather-kernel-lib = { path = "../kernel-lib" }
 heather-numeral = { path = "../numeral" }
 heather-syntax = { path = "../syntax" }
 

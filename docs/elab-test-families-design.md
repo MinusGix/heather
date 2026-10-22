@@ -179,7 +179,9 @@ matters to people reading `--test family_x`, not to the runner.
   across members. This changes rails and fixture granularity, so it's its own
   decision.
 - A separate test package at a lower opt-level for test code
-  (`issues/elab-rebuild-floor.md`).
+  (`issues/elab-rebuild-floor.md`). Done the other way round on 2026-10-22:
+  the library moved to `heather-elab-lib` (O3) and the tests stay in
+  `heather-elab` at O0 (`issues/fresh-container-compile-cost.md`).
 
 ## As landed (2026-09-24)
 

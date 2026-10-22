@@ -14,17 +14,19 @@ autobenches = false
 # builds.
 autotests = false
 
-[lib]
-name = "heather_elab"
+# No lib target: src/ is the `heather-elab-lib` package's
+# (crates/elab-lib/Cargo.toml), so this package's integration tests compile at
+# the dev profile's opt-level 0 while the library they drive keeps opt-level 3.
 # The unit tests in src/ build and run as the `heather-elab-unit` package
 # (crates/elab-unit/Cargo.toml), which has none of the dev-dependencies below.
-test = false
+autolib = false
 
 [features]
-value-metrics = ["heather-kernel/value-metrics"]
+value-metrics = ["heather-elab-lib/value-metrics"]
 
 [dependencies]
-heather-kernel = { path = "../kernel" }
+heather-elab-lib = { path = "../elab-lib" }
+heather-kernel-lib = { path = "../kernel-lib" }
 heather-numeral = { path = "../numeral" }
 heather-syntax = { path = "../syntax" }
 
@@ -33,15 +35,14 @@ heather-syntax = { path = "../syntax" }
 # docs/frontend-benchmarking.md). Run through `scripts/bench-frontend`
 # (ulimit), never `cargo bench` directly.
 #
-# `heather-cache` is the workspace's own crate (a dev-dependency cycle Cargo
-# supports: the cache depends on this crate's `gate` seam, and this crate's
-# *tests* install it there): the certgen test family gates its shared library
+# `heather-cache` is the workspace's own crate (the cache depends on the
+# library's `gate` seam, and this package's *tests* install it there; a
+# dev-dependency cycle before the library moved to `heather-elab-lib`): the certgen test family gates its shared library
 # prefix through the declaration cache so six binaries stop re-checking
 # identical work (issues/elaborator-snapshot-across-test-binaries.md; the
 # helper is `with_decl_cache` in tests/support/mod.rs).
 #
-# `heather-cli` is here for the same kind of reason and it is the same kind of
-# cycle: the frontend bench corpus computes `lib/ir_v1.hthr`'s import closure
+# `heather-cli` is here for the same kind of reason: the frontend bench corpus computes `lib/ir_v1.hthr`'s import closure
 # with the CLI's own loader instead of a hand-written list of module names,
 # which is what went stale in issues/frontend-bench-ir-closure-stale.md.
 [dev-dependencies]

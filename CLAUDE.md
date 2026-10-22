@@ -28,6 +28,15 @@
   not `-p heather-elab --lib`: a package of their own keeps their compile off
   the heather-cli dev-dependency chain
   (`issues/elab-unit-tests-wait-on-cli-dev-dependency.md`).
+- **The kernel and elab libraries are packages of their own**:
+  `heather-kernel-lib` and `heather-elab-lib` (`crates/*-lib/Cargo.toml`,
+  pointing at `crates/kernel/src` and `crates/elab/src`; crate names still
+  `heather_kernel`/`heather_elab`). They build at opt-level 3; `heather-kernel`
+  and `heather-elab` keep the integration tests and benches at the dev
+  profile's opt-level 0, so `-p heather-elab --test X` is unchanged. Cargo
+  applies a package's opt-level to all its targets, which is why
+  (`issues/fresh-container-compile-cost.md`). The kernel's unit tests are
+  `-p heather-kernel-lib --lib`.
 - **Cap every direct `heather` run too**: deep conversion workloads are
   memory-superlinear. `(ulimit -v 8388608 -t 120 -c 0; target/release/heather
   check <file>)`, loosening deliberately per run — never uncapped. Keep

@@ -15,6 +15,11 @@ test("artifact discovery keeps test-profile executables once", () => {
   const summary = { ...artifact, executable: "/tmp/summary",
     target: { name: "native_summary", kind: ["test"], src_path: "/work/crates/cli/tests/native_summary.rs" } };
   assert.equal(parseArtifacts(JSON.stringify(summary), "/work")[0].exclusive, true);
+  // The kernel's unit tests build in `heather-kernel-lib` and keep their label.
+  const unit = { ...artifact, executable: "/tmp/kernel-unit",
+    package_id: "path+file:///work/crates/kernel-lib#heather-kernel-lib@0.0.1",
+    target: { name: "heather_kernel", kind: ["lib"], src_path: "/work/crates/kernel-lib/../kernel/src/lib.rs" } };
+  assert.equal(parseArtifacts(JSON.stringify(unit), "/work")[0].label, "heather-kernel (crates/kernel/src/lib.rs)");
 });
 
 test("a family binary runs as one shard per member file, labelled as that file", () => {

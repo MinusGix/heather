@@ -1,0 +1,35 @@
+[package]
+name = "heather-kernel-lib"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+autotests = false
+autobenches = false
+autoexamples = false
+autobins = false
+
+# The kernel library, compiled from `crates/kernel/src`, with its in-crate
+# unit tests. A package of its own for the same reason as `heather-elab-lib`:
+# Cargo applies `[profile.dev.package.X]` to every target of X, so while the
+# lib and the integration tests shared `heather-kernel`, every test binary
+# compiled at opt-level 3 (issues/fresh-container-compile-cost.md).
+# `heather-kernel` (crates/kernel) keeps the integration tests and the bench,
+# so `-p heather-kernel --test X` is unchanged; the lib keeps its crate name
+# `heather_kernel`, and still has no dependencies beyond these two.
+[lib]
+name = "heather_kernel"
+path = "../kernel/src/lib.rs"
+
+[features]
+value-metrics = []
+# Every slow self-check on every occasion (src/checks.rs); the `--long`
+# lane of scripts/test. Debug builds only have anything to switch.
+long-checks = []
+
+[dependencies]
+heather-numeral = { path = "../numeral" }
+typed-arena = "=2.0.2"
+
+[lints]
+workspace = true

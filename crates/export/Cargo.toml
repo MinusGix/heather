@@ -8,10 +8,10 @@ license.workspace = true
 name = "heather_export"
 
 [dependencies]
-heather-kernel = { path = "../kernel" }
+heather-kernel-lib = { path = "../kernel-lib" }
 
 [dev-dependencies]
-heather-elab = { path = "../elab" }
+heather-elab-lib = { path = "../elab-lib" }
 heather-cli = { path = "../cli" }
 
 [lints]
