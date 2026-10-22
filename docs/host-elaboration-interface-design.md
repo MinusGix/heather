@@ -9,8 +9,8 @@ B1) and places `issues/elabcode-abstraction-layer.md`. Round pattern as
 usual: this document first, the implementing rounds against §10.
 
 Status: **§0 decided by Minus on 2026-10-21** (the request-tree model, with
-native tactics and certificate oracles as §8a describes). **Rounds 1, 2, 2½
-and 2¾ landed**: §12–§15 record what building them changed.
+native tactics and certificate oracles as §8a describes). **Rounds 1, 2, 2½,
+2¾ and 3 landed**: §12–§16 record what building them changed.
 
 ---
 
@@ -445,7 +445,7 @@ the generalisation.
 | R2 (landed) | `Open` (the design's `Intro`), `Infer`, `Resolve`, `Lam` in `Expr`, binder scopes in the host; quoting the goal's terms into `Expr` arguments; `focus`, `attempt`, `first_of`, `exact`, `intro`, `apply` in Heather (§13) | a Heather `apply` closes an implication chain; a failed `first_of` reports each branch |
 | R2½ (landed) | `View` on the speller's recognisers (moved from R1 and R2), `Whnf`, `Match`; `apply` solves what its conclusion determines (§14) | a Heather tactic dispatches on the goal's head; `apply(sym, assumption())` closes `b = a` |
 | R2¾ (landed) | `Hole` with `Mark`/`Restore`, `GlobalRef` (`Lookup`, `Global`, `HGlobal`'s reference), `At` notes rendered by the host (§15) | `apply(trans, assumption())` closes `a = c`; a failed alternative's solutions are forgotten |
-| R3 | `tac-first-port`: `split_all` or `monoid` normalisation in Heather | it closes the same goals as the Rust one on the existing tests |
+| R3 (landed) | `tac-first-port`: `split_all` in Heather on the split requests `Cases`/`Constructor`/`Close` and `View`'s `HMatch`, with `reflexivity` as its leaf (§16) | it closes the same goals as the Rust one on the existing tests |
 | R3½ | `Oracle(name, input)` with one registered native procedure and a reflection-checked certificate (§8a) | a goal closes by native search plus a Heather check whose proof term is small |
 | R4 | publication (`heather-checked-construction-api`, retargeted): a `Publish(group)` request that checks a small declaration group and adds it only if every member passes the kernel | a Heather generator publishes a lemma group in the caller's scope; a failing member publishes nothing |
 
@@ -675,3 +675,52 @@ Recorded after building it, as the inductive-tier designs do.
 - **Still not here:** comparing two sides that both mention unsolved holes
   (no tactic needs it yet), `Hole` under `Match` (a target with holes is
   refused), and backtracking `apply` over premise alternatives.
+
+## 16. What round 3 changed
+
+- **`split_all` is a Heather tactic; the case split is the host's.**
+  `lib/std/tactic.hthr`'s `split_all(leaf)` closes the ten goals of
+  `crates/elab/tests/goal_combinators.rs` (`tactic_split_all.rs`, with
+  `reflexivity()` as the leaf). The strategy is Heather: split every local
+  of a finite type, introduce binders and split the finite ones, prove `And`
+  one side at a time, and split an equation on the `match` one of its sides
+  is stuck on, deepest first (`blocker`: a call's arguments, then its head
+  normal form's `HMatch` scrutinee, then that scrutinee's own blocker). The
+  split itself is a request, because it is the elaborator's: `Cases(e,
+  goal)` answers one branch per constructor of `e`'s type, each with its
+  new locals (the fields and the equation `e = C(fields)`) and its goal.
+- **A split is built from source syntax, twice.** A branch's context and
+  statement are whatever the elaborator's own `match` gives its arm, so the
+  host does not compute them: it elaborates a skeleton (the `match`, or the
+  anonymous constructor for `Constructor`) whose leaves are unwritable
+  markers that record their context and expected type, and makes each a
+  branch scope. `Close(split, proofs)` checks each proof at its branch's goal
+  and elaborates the skeleton again with the proofs at the leaves, so the
+  split's proof is exactly what that `match` written in source would be.
+  The recording run happens twice with different placeholders, and a
+  branch whose statement changes between them (a dependent field, `{ n,
+  p: n = 0 }`) is refused rather than stated about a placeholder.
+- **The motive is `split_all`'s.** `Cases` abstracts the scrutinee out of
+  the goal together with every position that reaches it only through a
+  definition (`goal_combinators::co_occurrences`), so `either(p) = (p.left
+  || p.right)` splits both sides on `p.left` at once. A goal that does not
+  mention the scrutinee is every branch's goal.
+- **Branches are scopes with several locals, and siblings.** A scope now
+  carries the ids of every local it adds, so a branch's fields and equation
+  are ordinary locals (`Lam` still abstracts only a scope that adds exactly
+  one). Two branches are siblings: a handle from one is refused in the other,
+  which is the binder discipline of §13 applied to arms.
+- **`HMatch(scrut)`** is the view of a term whose head (below projections)
+  is a `match` or a Nat recursion, with its scrutinee as a handle; `Whnf`
+  plus `View` is how a tactic finds what blocks a term.
+- **What stays in Rust.** The word-comparison bridge of the Rust
+  `split_all` (stating `bitvec_omega` Nat facts in each arm) and its
+  restatement of hypotheses an earlier split simplified are not ported:
+  both are reading arithmetic, which §8a puts in native code. The Rust
+  combinator stays the one `split_all; all_goals { … }` uses.
+- **Cost.** The host's answers are cheap; evaluating the tactic between
+  requests dominates: for strategy code, forcing the resumed tree's next
+  node costs orders of magnitude more than a request in a tight loop does
+  (issues/tactic-strategy-step-cost.md). A `split_all` over two booleans
+  makes a few hundred requests.
+

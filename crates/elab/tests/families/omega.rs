@@ -55,3 +55,7 @@ mod bv_omega;
 mod positivity_tactic;
 #[path = "../tactic_host.rs"]
 mod tactic_host;
+#[path = "../tactic_split_all.rs"]
+mod tactic_split_all;
+#[path = "../tactic_splits.rs"]
+mod tactic_splits;

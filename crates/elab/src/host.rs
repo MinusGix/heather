@@ -33,6 +33,14 @@
 //! represented). Every request zonks before the kernel sees a term, and the
 //! result must mention no unsolved hole.
 //!
+//! **Splits.** `Cases` and `Constructor` split a goal with the elaborator's
+//! own `match` or constructor, built from surface syntax whose leaves are
+//! markers ([`Leaves`]). The skeleton is elaborated once with every leaf
+//! recording its context and statement, which become the branches the tactic
+//! proves, and once more by `Close`, with each leaf the branch's proof. So a
+//! split's proof is exactly what the same `match` written in source would
+//! elaborate to.
+//!
 //! **Reading the tree.** The host never decodes `Tac`'s lowered encoding by
 //! hand. Each question it asks is an application of one of the library's
 //! `host_*` functions to the current tree, evaluated to a numeral, an `Expr`
@@ -122,6 +130,20 @@ pub struct OpenedView {
     pub dependent: bool,
 }
 
+/// One branch of a split: its new locals, oldest first, and its goal.
+#[derive(Clone, Debug)]
+pub struct BranchView {
+    pub locals: Vec<LocalView>,
+    pub goal: u64,
+}
+
+/// A split, as `Cases` and `Constructor` answer it.
+#[derive(Clone, Debug)]
+pub struct SplitView {
+    pub id: u64,
+    pub branches: Vec<BranchView>,
+}
+
 /// A request, as the host receives it from either kind of tactic.
 #[derive(Clone, Debug)]
 pub enum Request {
@@ -142,6 +164,11 @@ pub enum Request {
     Mark,
     Restore(u64),
     Lookup(String),
+    /// The scrutinee and the goal's handle.
+    Cases(RExpr, u64),
+    Constructor(u64),
+    /// A split's number and one proof per branch.
+    Close(u64, Vec<RExpr>),
 }
 
 /// One layer of a handle, as `View` answers it (`tactic::Head`).
@@ -153,6 +180,8 @@ pub enum HeadView {
     Global(u64, String, Vec<u64>),
     Local(u64, Vec<u64>),
     Lit(u64),
+    /// A `match` stuck on the scrutinee.
+    Match(u64),
     /// A hole nothing has solved.
     Hole,
     Other,
@@ -175,6 +204,7 @@ pub enum Answer {
     Unit,
     /// A global reference, from `Lookup`.
     Global(Result<u64, String>),
+    Split(Result<SplitView, String>),
 }
 
 /// Where a tactic is after its last answer.
@@ -390,6 +420,7 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
                     HeadView::Pi(dom) => return self.call("host_head_pi", vec![self.lit(*dom)]),
                     HeadView::Eq(l, r) => return self.call("host_head_eq", vec![self.lit(*l), self.lit(*r)]),
                     HeadView::Lit(n) => return self.call("host_head_lit", vec![self.lit(*n)]),
+                    HeadView::Match(s) => return self.call("host_head_match", vec![self.lit(*s)]),
                     HeadView::Hole => return self.call("host_head_hole", vec![]),
                     HeadView::Other => return self.call("host_head_other", vec![]),
                     HeadView::Global(g, name, args) => {
@@ -417,6 +448,18 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
             Answer::Unit => self.call("host_unit", vec![]),
             Answer::Global(Ok(g)) => self.call("host_global", vec![self.lit(*g)]),
             Answer::Global(Err(why)) => self.call("host_no_global", vec![self.string_value(why)?]),
+            Answer::Split(Ok(split)) => {
+                let mut out = self.call("host_split", vec![self.lit(split.id)])?;
+                for b in &split.branches {
+                    out = self.call("host_branch", vec![out, self.lit(b.goal)])?;
+                    for l in &b.locals {
+                        let name = self.string_value(&l.name)?;
+                        out = self.call("host_branch_local", vec![out, self.lit(l.id), name, self.lit(l.ty)])?;
+                    }
+                }
+                Ok(out)
+            }
+            Answer::Split(Err(why)) => self.call("host_split_refused", vec![self.string_value(why)?]),
         }
     }
 
@@ -454,6 +497,22 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
             11 => Ok(Step::Ask(Request::Mark)),
             12 => Ok(Step::Ask(Request::Restore(self.nat_of("host_mark", vec![tree])?))),
             13 => Ok(Step::Ask(Request::Lookup(self.string(self.call("host_name", vec![tree])?)?))),
+            14 => {
+                let mut budget = READ_BUDGET;
+                let e = self.expr(self.call("host_lhs", vec![tree])?, &mut budget)?;
+                Ok(Step::Ask(Request::Cases(e, self.nat_of("host_handle", vec![tree])?)))
+            }
+            15 => Ok(Step::Ask(Request::Constructor(self.nat_of("host_handle", vec![tree])?))),
+            16 => {
+                let split = self.nat_of("host_split_id", vec![tree])?;
+                let count = self.nat_of("host_proof_count", vec![tree])?;
+                let mut budget = READ_BUDGET;
+                let mut proofs = Vec::new();
+                for i in 0..count {
+                    proofs.push(self.expr(self.call("host_proof", vec![tree, self.lit(i)])?, &mut budget)?);
+                }
+                Ok(Step::Ask(Request::Close(split, proofs)))
+            }
             other => Err(format!("a request tree with tag {other}")),
         }
     }
@@ -509,9 +568,9 @@ struct Scope {
     /// Its context, in the world of the first `world` holes (see [`Run`]).
     cx: Cx,
     world: usize,
-    /// The id of the local this scope's binder introduced (`None` at the
-    /// root).
-    local: Option<u64>,
+    /// The ids of the locals this scope adds to its parent's context, in
+    /// order: an opened binder's one local, a branch's fields and equation.
+    locals: Vec<u64>,
 }
 
 /// What a handle stands for.
@@ -551,10 +610,10 @@ enum GlobalKey {
 }
 
 /// Everything one run issued: its scopes, its handles (each in a scope),
-/// the locals `Open` introduced, its holes and the global references it
-/// handed out. Ids of the goal's own locals are their positions in its
-/// context; an opened local's id is the goal's length plus its index in
-/// `opened`.
+/// the locals its scopes introduced, its holes, the global references it
+/// handed out and its splits. Ids of the goal's own locals are their
+/// positions in its context; any other local's id is the goal's length plus
+/// its index in `opened`.
 ///
 /// **Holes are metavariables in the elaborator's scratch-world form**
 /// (`unification.rs`): with `m` holes, a term of the run lives in Ψ extended
@@ -568,12 +627,58 @@ enum GlobalKey {
 struct Run {
     scopes: Vec<Scope>,
     held: Vec<Issued>,
-    opened: Vec<usize>,
+    /// Each introduced local's scope and position there.
+    opened: Vec<(usize, usize)>,
     holes: Vec<Hole>,
     /// Holes in the order they were solved; a mark is a length of it.
     trail: Vec<usize>,
     globals: Vec<GlobalKey>,
+    splits: Vec<Rc<Split>>,
     span: Span,
+}
+
+/// How a split's proof is built: surface syntax whose leaves are
+/// [`leaf_expr`] markers, one per branch.
+enum Skeleton {
+    /// `match` on an elaborated scrutinee, at a motive, with the equation
+    /// binder named `equation` (the elaborator's convoy).
+    Cases { scrut: Term, ty: Type, level: Level, motive: Type, equation: String, arms: Vec<heather_syntax::Arm> },
+    /// A constructor application, checked at the goal.
+    Constructor(Expr),
+}
+
+/// A split the run issued: the scope and goal it splits, how its proof is
+/// built, and each branch's scope and goal handle. Everything is committed.
+struct Split {
+    at: usize,
+    goal: Type,
+    lvl: Level,
+    skeleton: Skeleton,
+    branches: Vec<(usize, u64)>,
+}
+
+/// What a split's leaves do while its skeleton is elaborated.
+#[derive(Clone)]
+pub(crate) enum Leaves {
+    /// Record each leaf's context, statement and level, and stand for it
+    /// with `placeholder`.
+    Record { placeholder: Term, seen: Vec<Option<(Cx, Type, Level)>> },
+    /// Each leaf is its branch's proof, valid in a context of the length
+    /// given.
+    Fill(Vec<(Term, usize)>),
+}
+
+const LEAF: &str = "\0host-leaf-";
+
+/// Leaf `k` of a skeleton. Like the parser's markers, its name cannot be
+/// written.
+fn leaf_expr(k: usize, span: Span) -> Expr {
+    Expr { kind: heather_syntax::ast::ExprKind::Var(format!("{LEAF}{k}")), span }
+}
+
+/// The leaf a name marks, if it is one.
+pub(crate) fn leaf_index(name: &str) -> Option<usize> {
+    name.strip_prefix(LEAF)?.parse().ok()
 }
 
 /// Why an `Expr` could not be elaborated. A broken protocol (an id the run
@@ -643,8 +748,7 @@ impl Run {
         if id < root {
             return Ok((0, id));
         }
-        let s = *self.opened.get(id - root).ok_or_else(|| Fault::Protocol(format!("there is no local {id} in this run")))?;
-        Ok((s, self.len(s) - 1))
+        self.opened.get(id - root).copied().ok_or_else(|| Fault::Protocol(format!("there is no local {id} in this run")))
     }
 
     /// The type of position `i` of scope `at`'s context, scoped there, in the
@@ -686,10 +790,12 @@ impl Run {
         }
         let mut s = at;
         loop {
-            if self.len(s) == p + 1 {
-                return self.scopes[s].local;
+            let parent = self.scopes[s].parent?;
+            let base = self.len(parent);
+            if p >= base {
+                return self.scopes[s].locals.get(p - base).copied();
             }
-            s = self.scopes[s].parent?;
+            s = parent;
         }
     }
 
@@ -1011,12 +1117,13 @@ impl Elaborator {
     ) -> R<Term> {
         let fail = |msg: String| err(format!("`by {shown}`: {msg}"), span);
         let mut run = Run {
-            scopes: vec![Scope { parent: None, cx: cx.clone(), world: 0, local: None }],
+            scopes: vec![Scope { parent: None, cx: cx.clone(), world: 0, locals: Vec::new() }],
             held: Vec::new(),
             opened: Vec::new(),
             holes: Vec::new(),
             trail: Vec::new(),
             globals: Vec::new(),
+            splits: Vec::new(),
             span,
         };
         run.issue(0, Held::Type(goal.clone(), lvl.clone()));
@@ -1079,6 +1186,21 @@ impl Elaborator {
                     Answer::Unit
                 }
                 Request::Lookup(name) => Answer::Global(self.lookup_request(&mut run, &name)),
+                Request::Cases(e, goal) => match self.cases_request(&mut run, &e, goal) {
+                    Err(Fault::Protocol(msg)) => return fail(msg),
+                    Err(Fault::Ill(why)) => Answer::Split(Err(why)),
+                    Ok(split) => Answer::Split(Ok(split)),
+                },
+                Request::Constructor(goal) => match self.constructor_request(&mut run, goal) {
+                    Err(Fault::Protocol(msg)) => return fail(msg),
+                    Err(Fault::Ill(why)) => Answer::Split(Err(why)),
+                    Ok(split) => Answer::Split(Ok(split)),
+                },
+                Request::Close(split, proofs) => match self.close_request(&mut run, split, &proofs) {
+                    Err(Fault::Protocol(msg)) => return fail(msg),
+                    Err(Fault::Ill(why)) => Answer::Handle(Err(why)),
+                    Ok(h) => Answer::Handle(Ok(h)),
+                },
             };
             step = speaker.resume(answer);
         }
@@ -1339,9 +1461,10 @@ impl Elaborator {
         inner.gamma = inner.gamma.shift_global(world as u32);
         inner.push(name.clone(), (*dom).clone(), dom_level.clone());
         let id = (run.len(0) + run.opened.len()) as u64;
-        run.scopes.push(Scope { parent: Some(at), cx: inner, world, local: Some(id) });
+        let position = inner.gamma.len() - 1;
+        run.scopes.push(Scope { parent: Some(at), cx: inner, world, locals: vec![id] });
         let scope = run.scopes.len() - 1;
-        run.opened.push(scope);
+        run.opened.push((scope, position));
         let ty = run.issue_in(at, world, Held::Type((*dom).clone(), dom_level));
         let body = run.issue_in(scope, world, Held::Type((*cod).clone(), cod_level));
         Ok(OpenedView { local: LocalView { id, name, ty }, body, dependent })
@@ -1516,6 +1639,12 @@ impl Elaborator {
         if let Term::Succ(p) = t {
             let p = run.issue(at, Held::Term((**p).clone(), Type::Nat, Level::Zero));
             return HeadView::Global(run.global_ref(GlobalKey::Builtin("Succ")), "Succ".into(), vec![p]);
+        }
+        if let Term::Case { scrut, .. } | Term::ElimNat { scrut, .. } = crate::goal_combinators::head_match(t) {
+            return match self.kernel_type(run, at, scrut) {
+                Some((ty, level)) => HeadView::Match(run.issue(at, Held::Term((**scrut).clone(), ty, level))),
+                None => HeadView::Other,
+            };
         }
         let n = run.len(at);
         if let Term::Var(LocalVar(i)) = t {
@@ -1720,7 +1849,7 @@ impl Elaborator {
             }
             RExpr::Lam(x, body) => {
                 let (s, i) = run.local(*x)?;
-                if run.scopes[s].parent != Some(at) || i < run.len(0) {
+                if run.scopes[s].parent != Some(at) || run.scopes[s].locals.len() != 1 || i < run.len(0) {
                     return Err(Fault::Protocol(format!("`Lam` abstracts local {x}, which is not bound here")));
                 }
                 let b = self.reify(run, body, s)?;
@@ -1736,6 +1865,281 @@ impl Elaborator {
         }
     }
 
+    /// A handle's committed type, lifted to scope `to`, for a request that
+    /// builds from it.
+    fn committed_goal(&self, run: &Run, h: u64, to: Option<usize>, what: &str) -> Result<(usize, Type, Level), Fault> {
+        let (s, ty, level) = match run.held(h)? {
+            (s, Held::Type(t, l)) => (s, t, l),
+            (_, Held::Term(..)) => return Err(Fault::Ill(format!("handle {h} stands for a term, not a type"))),
+        };
+        let at = to.unwrap_or(s);
+        let ty = run.lift(s, at, |k| ty.shift_local(k))?;
+        let ty = run.committed_ty(&ty).ok_or_else(|| Fault::Ill(format!("`{what}` needs a goal that mentions no unsolved hole")))?;
+        Ok((at, ty, level))
+    }
+
+    /// The inductive a type is, reading through its type code (a binder's
+    /// domain reached through a definition is `El` of the code) and head
+    /// normalisation.
+    fn inductive_of(&self, cx: &Cx, ty: &Type) -> Option<Rc<crate::inductive::Inductive>> {
+        let of = |t: &Type| crate::goal_combinators::type_inductive(self, cx, t);
+        of(ty)
+            .or_else(|| of(&self.unspell_here(ty)?))
+            .or_else(|| of(&self.goal_oracle().whnf_type(&cx.gamma, ty).ok()?))
+    }
+
+    /// `Cases(e, goal)`: split `goal` by the elaborator's own `match` on `e`.
+    /// The motive abstracts `e` out of the goal, and with it each position
+    /// that reaches `e` only through a definition, as `split_all` does
+    /// (`goal_combinators::co_occurrences`): a goal whose two sides match on
+    /// the same field behind two definitions is specialised on both.
+    fn cases_request(&self, run: &mut Run, e: &RExpr, goal: u64) -> Result<SplitView, Fault> {
+        let at = run.join(run.scope_of(e)?, run.held(goal)?.0)?;
+        let (_, goal_ty, lvl) = self.committed_goal(run, goal, Some(at), "Cases")?;
+        let mark = run.trail.len();
+        let r = self.reify(run, e, at).inspect_err(|_| run.restore(mark))?;
+        let unsolved = || Fault::Ill("`Cases` needs a scrutinee that mentions no unsolved hole".into());
+        let scrut = run.committed_tm(&r.term).ok_or_else(unsolved)?;
+        let ty = run.committed_ty(&r.ty).ok_or_else(unsolved)?;
+        let cx = run.cx(at)?;
+        let Some(ind) = self.inductive_of(&cx, &ty) else {
+            return Err(Fault::Ill(format!("its type `{}` is not an inductive type", self.display_type(&cx, &ty))));
+        };
+        if !ind.flat() || ind.index.is_some() {
+            return Err(Fault::Ill(format!(
+                "`{}` has a recursive field or an index, and `Cases` splits only types without either",
+                ind.name
+            )));
+        }
+        let goal_ty = crate::inductive::decoded(&goal_ty).into_owned();
+        let mut pairs = Vec::new();
+        let mut budget = 256;
+        match &goal_ty {
+            Type::Id { lhs, rhs, .. } => {
+                for side in [lhs, rhs] {
+                    crate::goal_combinators::co_occurrences(self, &cx, side, &scrut, &scrut, &mut budget, &mut pairs);
+                }
+            }
+            Type::El { tm, .. } => {
+                for arg in crate::spelling::app_spine(tm).1 {
+                    crate::goal_combinators::co_occurrences(self, &cx, arg, &scrut, &scrut, &mut budget, &mut pairs);
+                }
+            }
+            _ => {}
+        }
+        pairs.push((scrut.clone(), Term::Var(LocalVar(0))));
+        // A goal that does not mention `e` is every branch's goal.
+        let motive = goal_ty.abstract_local_with_all(&pairs).unwrap_or_else(|| goal_ty.shift_local(1));
+        let span = run.span;
+        let equation = crate::goal_combinators::fresh(self, &cx, "case".to_string());
+        let arms = ind
+            .ctors
+            .iter()
+            .enumerate()
+            .map(|(k, ctor)| heather_syntax::Arm {
+                ctor: ctor.name.clone(),
+                default: false,
+                binders: ctor
+                    .fields
+                    .iter()
+                    .enumerate()
+                    .map(|(f, (name, _))| heather_syntax::Pat::Var {
+                        name: crate::goal_combinators::fresh(self, &cx, name.clone().unwrap_or_else(|| format!("x{f}"))),
+                        span,
+                    })
+                    .collect(),
+                body: leaf_expr(k, span),
+                span,
+            })
+            .collect();
+        let skeleton = Skeleton::Cases { scrut, ty, level: r.level, motive, equation, arms };
+        self.split(run, at, goal_ty, lvl, skeleton, ind.ctors.len())
+    }
+
+    /// `Constructor(goal)`: split a goal whose type has one constructor into
+    /// its fields, by the anonymous constructor checked at it.
+    fn constructor_request(&self, run: &mut Run, goal: u64) -> Result<SplitView, Fault> {
+        let (at, goal_ty, lvl) = self.committed_goal(run, goal, None, "Constructor")?;
+        let cx = run.cx(at)?;
+        let ind = self
+            .inductive_of(&cx, &goal_ty)
+            .filter(|ind| ind.flat() && ind.index.is_none() && ind.ctors.len() == 1)
+            .ok_or_else(|| Fault::Ill(format!("`{}` is not a type with one constructor", self.display_type(&cx, &goal_ty))))?;
+        let span = run.span;
+        let n = ind.ctors[0].fields.len();
+        let expr = Expr {
+            kind: heather_syntax::ast::ExprKind::App {
+                head: Box::new(Expr { kind: heather_syntax::ast::ExprKind::Var(heather_syntax::ANON_CTOR_ONLY.into()), span }),
+                args: (0..n).map(|k| leaf_expr(k, span)).collect(),
+                named: vec![],
+                explicit: false,
+                goal_oriented: false,
+            },
+            span,
+        };
+        self.split(run, at, goal_ty, lvl, Skeleton::Constructor(expr), n)
+    }
+
+    /// Issue a split of `goal` at scope `at`: elaborate the skeleton with
+    /// its `n` leaves recording, and make each leaf a branch scope with a goal.
+    ///
+    /// The skeleton is elaborated twice, with two different placeholders at
+    /// the leaves, and the branches must come out the same: a branch whose
+    /// statement mentions another leaf (a dependent field) would otherwise
+    /// be stated about a placeholder.
+    fn split(&self, run: &mut Run, at: usize, goal: Type, lvl: Level, skeleton: Skeleton, n: usize) -> Result<SplitView, Fault> {
+        let cx = run.cx(at)?;
+        let mut runs = Vec::with_capacity(2);
+        for placeholder in [Term::Zero, Term::Succ(Rc::new(Term::Zero))] {
+            let probe = self.clone();
+            let (built, leaves) = probe.build(&cx, &skeleton, &goal, &lvl, Leaves::Record { placeholder, seen: vec![None; n] }, run.span);
+            built.map_err(|e| Fault::Ill(elab_message(e)))?;
+            let Leaves::Record { seen, .. } = leaves else { unreachable!("a recording run stays one") };
+            let seen: Option<Vec<_>> = seen.into_iter().collect();
+            runs.push(seen.ok_or_else(|| Fault::Ill("a branch of the split was never elaborated".into()))?);
+        }
+        let (second, first) = (runs.pop().expect("two runs"), runs.pop().expect("two runs"));
+        if first.iter().zip(&second).any(|(a, b)| a.0.gamma != b.0.gamma || a.1 != b.1) {
+            return Err(Fault::Ill("a branch's statement depends on another branch's proof".into()));
+        }
+        let base = run.len(at);
+        let mut branches = Vec::with_capacity(n);
+        let mut views = Vec::with_capacity(n);
+        for (bcx, ty, level) in first {
+            if bcx.gamma.len() < base {
+                return Err(Fault::Protocol("a branch's context does not extend the goal's".into()));
+            }
+            let scope = run.scopes.len();
+            let len = bcx.gamma.len();
+            let mut locals = Vec::with_capacity(len - base);
+            let mut shown = Vec::with_capacity(len - base);
+            for p in base..len {
+                let id = (run.len(0) + run.opened.len()) as u64;
+                run.opened.push((scope, p));
+                locals.push(id);
+                let entry = bcx.gamma.entries.get(p).expect("a context entry below its length");
+                let name = bcx.names.get(p).cloned().unwrap_or_else(|| "_".to_string());
+                shown.push((id, name, entry.ty.shift_local((len - p) as u32), entry.level.clone()));
+            }
+            run.scopes.push(Scope { parent: Some(at), cx: bcx, world: 0, locals });
+            let locals = shown
+                .into_iter()
+                .map(|(id, name, ty, level)| LocalView { id, name, ty: run.issue(scope, Held::Type(ty, level)) })
+                .collect();
+            let goal = run.issue(scope, Held::Type(ty, level));
+            branches.push((scope, goal));
+            views.push(BranchView { locals, goal });
+        }
+        run.splits.push(Rc::new(Split { at, goal, lvl, skeleton, branches }));
+        Ok(SplitView { id: (run.splits.len() - 1) as u64, branches: views })
+    }
+
+    /// Elaborate a split's skeleton at its goal with its leaves doing what
+    /// `leaves` says, and hand back what they did.
+    fn build(&self, cx: &Cx, skeleton: &Skeleton, goal: &Type, lvl: &Level, leaves: Leaves, span: Span) -> (R<Term>, Leaves) {
+        let state = Rc::new(RefCell::new(leaves));
+        let outer = self.host_leaves.replace(Some(Rc::clone(&state)));
+        let built = match skeleton {
+            Skeleton::Cases { scrut, ty, level, motive, equation, arms } => self.elab_convoy(
+                cx,
+                heather_syntax::MatchForm::Match,
+                true,
+                equation,
+                arms,
+                scrut.clone(),
+                ty,
+                level,
+                motive.clone(),
+                lvl,
+                goal,
+                span,
+            ),
+            Skeleton::Constructor(e) => self.elab_check(cx, e, goal, lvl),
+        };
+        self.host_leaves.replace(outer);
+        let leaves = state.borrow().clone();
+        (built, leaves)
+    }
+
+    /// Leaf `k` of the split being elaborated (see [`Leaves`]).
+    pub(crate) fn host_leaf(&self, cx: &Cx, k: usize, expected: &Type, lvl: &Level, span: Span) -> R<Term> {
+        let Some(state) = self.host_leaves.borrow().clone() else {
+            return err("a tactic's split leaf outside its split", span);
+        };
+        let mut leaves = state.borrow_mut();
+        match &mut *leaves {
+            Leaves::Record { placeholder, seen } => {
+                if seen.len() <= k {
+                    seen.resize(k + 1, None);
+                }
+                seen[k] = Some((cx.clone(), expected.clone(), lvl.clone()));
+                Ok(placeholder.clone())
+            }
+            Leaves::Fill(proofs) => match proofs.get(k) {
+                Some((t, n)) if *n == cx.gamma.len() => Ok(t.clone()),
+                _ => err("a split's branch was elaborated in another context than it was proved in", span),
+            },
+        }
+    }
+
+    /// `Close(split, proofs)`: each proof checked at its branch's goal
+    /// (which may solve holes), then the skeleton elaborated with them. A
+    /// refused close solves nothing.
+    fn close_request(&self, run: &mut Run, id: u64, proofs: &[RExpr]) -> Result<u64, Fault> {
+        let split = run.splits.get(id as usize).cloned().ok_or_else(|| Fault::Protocol(format!("split {id} was not issued by this run")))?;
+        if proofs.len() != split.branches.len() {
+            return Err(Fault::Ill(format!(
+                "the split has {} branches, and {} proofs were given",
+                split.branches.len(),
+                proofs.len()
+            )));
+        }
+        let mark = run.trail.len();
+        let checked = self.branch_proofs(run, &split, proofs);
+        let fills = match checked {
+            Ok(fills) => fills,
+            Err(f) => {
+                run.restore(mark);
+                return Err(f);
+            }
+        };
+        let cx = run.cx(split.at)?;
+        let search = crate::resolve::SearchMark::of(self);
+        match self.build(&cx, &split.skeleton, &split.goal, &split.lvl, Leaves::Fill(fills), run.span).0 {
+            Ok(t) => Ok(run.issue(split.at, Held::Term(t, split.goal.clone(), split.lvl.clone()))),
+            Err(e) => {
+                search.rollback(self);
+                run.restore(mark);
+                Err(Fault::Ill(elab_message(e)))
+            }
+        }
+    }
+
+    /// Each branch's proof, checked at its goal, in the committed world.
+    fn branch_proofs(&self, run: &mut Run, split: &Split, proofs: &[RExpr]) -> Result<Vec<(Term, usize)>, Fault> {
+        let mut terms = Vec::with_capacity(proofs.len());
+        for (k, (&(scope, goal), p)) in split.branches.iter().zip(proofs).enumerate() {
+            let r = self.reify(run, p, scope)?;
+            let (_, Held::Type(ty, level)) = run.held(goal)? else { unreachable!("a branch's goal is a type") };
+            if !r.level.equiv(&level) || !self.same_ty(run, scope, &r.ty, &ty, &level)? {
+                return Err(Fault::Ill(format!(
+                    "branch {k}'s proof proves `{}`, not its goal `{}`",
+                    self.shown_ty(run, scope, &r.ty),
+                    self.shown_ty(run, scope, &ty)
+                )));
+            }
+            terms.push((scope, r.term));
+        }
+        let mut fills = Vec::with_capacity(terms.len());
+        for (k, (scope, t)) in terms.into_iter().enumerate() {
+            let c = run.committed_tm(&t).ok_or_else(|| {
+                Fault::Ill(format!("branch {k}'s proof `{}` mentions a hole nothing solved", self.shown_tm(run, scope, &t)))
+            })?;
+            fills.push((c, run.len(scope)));
+        }
+        Ok(fills)
+    }
+
     /// Make `name` available as `by name` (design §8a). A name a source file
     /// declares, or a local, takes precedence over a native tactic.
     pub fn register_native_tactic(&mut self, name: &str, make: fn() -> Box<dyn NativeTactic>) {
@@ -1749,6 +2153,14 @@ fn tactic_name(e: &Expr) -> String {
         heather_syntax::ast::ExprKind::Var(name) => name.clone(),
         heather_syntax::ast::ExprKind::App { head, .. } => format!("{}(…)", tactic_name(head)),
         _ => "…".to_string(),
+    }
+}
+
+/// An elaboration error's message, for a refusal.
+fn elab_message(e: crate::ElabError) -> String {
+    match e {
+        crate::ElabError::Elab { msg, .. } => msg,
+        other => format!("{other:?}"),
     }
 }
 
