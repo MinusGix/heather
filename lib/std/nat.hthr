@@ -1748,6 +1748,15 @@ theorem Nat::leb_complete(self n: Nat): (m: Nat) → n <= m → n.leb(m).IsTrue(
     }
 }
 
+// The decision, evaluated at a known order.
+theorem Nat::leb_true(self n, m: Nat, h: n <= m): n.leb(m) = True { eq_true_of_is_true(n.leb(m), n.leb_complete(m, h)) }
+theorem Nat::leb_false(self n, m: Nat, h: m < n): n.leb(m) = False {
+    (match n.leb(m) as λ b => (n.leb(m) = b) → b = False {
+        False => λ _ => refl,
+        True => λ found => false_elim(m.lt_irrefl(Succ(m).le_trans(n, m, h, n.leb_sound(m, j(sym(found), λ d _ => d.IsTrue(), trivial))))),
+    })(refl)
+}
+
 theorem Nat::le_of_not_lt(self n, m: Nat, h: ¬(n < m)): m <= n {
     or_resolve(m.le_dec(n), λ (k: ¬(m <= n)) => h(n.lt_of_not_le(m, k)))
 }

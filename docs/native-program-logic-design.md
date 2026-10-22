@@ -333,8 +333,9 @@ the computed type structural"):
 
 ### 6.4 As built (round S2)
 
-`lib/linux_x86_64_wp.hthr` and `lib/linux_x86_64_views.hthr`; the controls
-are `crates/elab/tests/linux_wp.rs`. Where the build differs from §6.1–6.2:
+`lib/linux_x86_64_wp.hthr`; the views it was built with now live on the byte
+memory model (`lib/linux_x86_64_byte_memory.hthr`,
+`lib/linux_x86_64_image.hthr`); the controls are `crates/elab/tests/linux_wp.rs`. Where the build differs from §6.1–6.2:
 
 - **`Proved(index, bytes, len, measured)` names its contract in a table**
   (`contracts: Nat → Contract`, a parameter of `Wp`), not by a field. A
@@ -356,10 +357,16 @@ are `crates/elab/tests/linux_wp.rs`. Where the build differs from §6.1–6.2:
 - **Views** carry `Holds(v, m)` and four arms: `Word` and `Byte` (the caller
   names the value read), `Stores` (the caller names where it goes and the
   view after it) and `Asks` (what a call asks of memory). `ViewSound` proves
-  each arm once against the access model. `io_page_view` holds the I/O page
-  (`v` is the page; a store is a span of it); `io_frame_view` holds the frame
-  as 32 word slots plus the page (`v` is a `Framed`; a store is a slot set or
-  a page span).
+  each arm once against the access model. S2 built two views over the old
+  fixed image (`elf64_io`): a page view and a frame view of 32 word slots
+  plus the page. Both are gone (issues/io-image-on-byte-model.md): the
+  process image is an `X86Memory` of the profile `X86Profile::io()`, the page
+  and the frame are data regions of it, and a program sees either through
+  `DataRegion::program_view`, the buffer view (`v` is the region's bytes; a
+  store is a span of it) with the program's code resident. A word slot is a
+  lemma over the buffer (`DataRegion::x86_word_stored`), not a view of its
+  own. A view over two regions at once is
+  `issues/wp-view-separating-product.md`.
 - **Syscall answers** go through `linux_buffer`/`linux_stored`/`linux_left`:
   what Linux leaves in memory on answering is stated once, and the view's
   `Stores` arm is asked for it, so a view sees a read's bytes land.

@@ -5,11 +5,14 @@
 //!
 //!  1. the modules check: `Syscall` and `Proved` in `x86_64_asm`, the
 //!     computed `Wp` with `wp_runs`/`wp_sound`/`loop_at`
-//!     (`linux_x86_64_wp`), and the page and frame views
-//!     (`linux_x86_64_views`);
+//!     (`linux_x86_64_wp`), and the process image on the byte memory model
+//!     with a program's view of its page or frame (`linux_x86_64_image`,
+//!     `linux_x86_64_byte_memory`);
 //!  2. the I/O loop control, a few hand-written items proved through
-//!     `loop_at` and measured by its trace: read stdin to its end, exit 0;
-//!  3. a negative control: its exit claimed with the wrong status.
+//!     `loop_at` and measured by its trace: read stdin to its end, exit 0,
+//!     from the head and from the entry of the process Linux loads;
+//!  3. negative controls: its exit claimed with the wrong status, and its
+//!     entry claimed past a header one byte short.
 //!
 //! The pure loop control is `linux_wp_count.rs`, a file (and so a test
 //! process, under its own CPU rail) of its own: on a cold image store each
@@ -18,6 +21,10 @@
 use crate::read_loop_fixture::checker_with;
 
 pub(crate) const MODULES: &[(&str, &str)] = &[
+    ("result", include_str!("../../../lib/std/result.hthr")),
+    ("vector", include_str!("../../../lib/std/vector.hthr")),
+    ("bitvec_bytes", include_str!("../../../lib/std/bitvec/bitvec_bytes.hthr")),
+    ("memory", include_str!("../../../lib/std/memory.hthr")),
     ("x86_64_step_forms", include_str!("../../../lib/std/arch/x86_64/x86_64_step_forms.hthr")),
     ("linux_x86_64_determinism", include_str!("../../../lib/linux_x86_64_determinism.hthr")),
     ("itree", include_str!("../../../lib/std/itree.hthr")),
@@ -28,7 +35,9 @@ pub(crate) const MODULES: &[(&str, &str)] = &[
     ("x86_64_asm", include_str!("../../../lib/std/arch/x86_64/x86_64_asm.hthr")),
     ("x86_64_asm_runs", include_str!("../../../lib/std/arch/x86_64/x86_64_asm_runs.hthr")),
     ("linux_x86_64_wp", include_str!("../../../lib/linux_x86_64_wp.hthr")),
-    ("linux_x86_64_views", include_str!("../../../lib/linux_x86_64_views.hthr")),
+    ("x86_64_byte_memory", include_str!("../../../lib/std/arch/x86_64/x86_64_byte_memory.hthr")),
+    ("linux_x86_64_byte_memory", include_str!("../../../lib/linux_x86_64_byte_memory.hthr")),
+    ("linux_x86_64_image", include_str!("../../../lib/linux_x86_64_image.hthr")),
 ];
 
 const DRAIN: &str = include_str!("fixtures/linux_wp_drain.hthr");
@@ -42,23 +51,36 @@ pub(crate) fn assert_refused(name: &str, msg: &str) {
     assert!(!first.contains("unbound") && !first.contains("ambiguous") && !first.contains("parse"), "{name}: {msg}");
 }
 
-// The loop reads to the end of its input and exits 0; claimed to exit 1, the
-// same exit proof is refused.
+// The theorem after `comment` in the drain fixture, changed by `edit`, as a
+// module of its own over the fixture.
+fn drain_variant(comment: &str, edit: impl Fn(&str) -> String) -> String {
+    let start = DRAIN.find(comment).expect("the theorem's comment");
+    let end = DRAIN[start..].find("\n}\n").map(|i| start + i + 3).expect("the theorem's end");
+    format!("import linux_wp_drain;\n{}\n{}",
+        DRAIN[..start].lines().filter(|l| l.starts_with("import")).collect::<Vec<_>>().join("\n"),
+        edit(&DRAIN[start..end]))
+}
+
+// The loop reads to the end of its input and exits 0, from its head and from
+// the loaded process's entry; claimed to exit 1, the same exit proof is
+// refused, and so is the entry proof past a header one byte short.
 #[test]
 fn the_io_loop_reads_to_the_end_and_exits() {
     let mut e = checker_with(MODULES);
     if let Err(err) = e.elab_module_source("linux_wp_drain", DRAIN) {
         panic!("{}", err.render(DRAIN));
     }
-    let start = DRAIN.find("// The exit:").expect("the exit's comment");
-    let end = DRAIN[start..].find("\n}\n").map(|i| start + i + 3).expect("the exit's end");
-    let wrong = format!("import linux_wp_drain;\n{}\n{}",
-        DRAIN[..start].lines().filter(|l| l.starts_with("import")).collect::<Vec<_>>().join("\n"),
-        DRAIN[start..end].replace("theorem drain_exit(", "theorem drain_exit_one(")
-            .replace("Sim(io_linux(), Ret(BitVec::ofNat(0)), state)", "Sim(io_linux(), Ret(BitVec::ofNat(1)), state)")
-            .replace("Ret(BitVec::ofNat(0)), page, state", "Ret(BitVec::ofNat(1)), page, state"));
+    let wrong = drain_variant("// The exit:", |s| s.replace("theorem drain_exit(", "theorem drain_exit_one(")
+        .replace("Sim(X86Profile::io().linux(), Ret(BitVec::ofNat(0)), state)", "Sim(X86Profile::io().linux(), Ret(BitVec::ofNat(1)), state)")
+        .replace("Ret(BitVec::ofNat(0)), page, state", "Ret(BitVec::ofNat(1)), page, state"));
     match e.elab_module_source("linux_wp_drain_exit_one", &wrong) {
         Ok(()) => panic!("an exit 0 passed off as exit 1 should be refused"),
         Err(err) => assert_refused("linux_wp_drain_exit_one", &err.render(&wrong)),
+    }
+    let short = drain_variant("// The entry:", |s| s.replace("theorem drain_entry(", "theorem drain_entry_short(")
+        .replace("long: header.len() = 232", "long: header.len() = 231"));
+    match e.elab_module_source("linux_wp_drain_entry_short", &short) {
+        Ok(()) => panic!("an entry past a 231-byte header should be refused"),
+        Err(err) => assert_refused("linux_wp_drain_entry_short", &err.render(&short)),
     }
 }

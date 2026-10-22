@@ -653,6 +653,13 @@ theorem BitVec::offset_toNat(n: Nat, a: BitVec(n), i: Nat, fits: a.toNat() + i <
     trans(moved, trans(bitvec_nat::toNat_add(n, a, BitVec::ofNat(i), bounded), summed))
 }
 
+// From a literal base, likewise.
+theorem BitVec::ofNat_offset_toNat(n, base, i: Nat, fits: base + i < Nat::pow(2, n)):
+    BitVec::ofNat(base, n := n).iterate_increment(i).toNat() = base + i {
+    let low: (BitVec::ofNat(base, n := n).toNat() = base) = BitVec::toNat_ofNat(n, base, omega(fits));
+    trans(BitVec::offset_toNat(n, BitVec::ofNat(base), i, omega(low, fits)), cong_fn<Nat, Nat>(λ k => k + i, low))
+}
+
 theorem BitVec::space_distinct(n: Nat, a: BitVec(n), k: Nat, fits: a.toNat() + k <= Nat::pow(2, n)):
     BitVec::space(n).Distinct(a, k) {
     λ p q order high => BitVec::space_laws(n).same_false(BitVec::space(n), a.iterate_increment(q), a.iterate_increment(p), λ same => {
@@ -696,6 +703,8 @@ theorem Nat::space_apart(a, k, b, l: Nat, below: a + k <= b): Nat::space().Apart
 
 fn Perm::none() → Perm { Perm(False, False, False) }
 fn Perm::data() → Perm { Perm(True, True, False) }
+// Read and execute, never written: a program's code as a loader maps it.
+fn Perm::code() → Perm { Perm(True, False, True) }
 
 // Read and write below `cap`, nothing at or above it.
 fn Perm::below(cap: Nat) → Nat → Perm {

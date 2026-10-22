@@ -1,15 +1,20 @@
 // The I/O loop control of the one-Wp round (issues/native-loop-rule.md):
 // five items that read stdin into the page until a read returns no bytes,
 // then exit 0. No variant: every pass makes a call, so `loop_at` measures it
-// by the trace. The page view (`io_page_view`) carries the page the reads
-// fill; the proofs are one pass (`drain_pass`) and the exit (`drain_exit`).
+// by the trace. The program's view of the page (`DataRegion::program_view`
+// over `DataRegion::io_page`) carries the buffer the reads fill and the code;
+// the proofs are one pass (`drain_pass`), the exit (`drain_exit`), and the
+// process Linux loads from an image of the program, from its entry
+// (`drain_entry`).
 import linux_x86_64_wp;
-import linux_x86_64_views;
+import linux_x86_64_byte_memory;
+import linux_x86_64_image;
 import linux_x86_64_sim;
 import linux_x86_64_io;
 import linux_trees;
 import linux_calls;
-import elf64_io;
+import x86_64_byte_memory;
+import memory;
 import itree;
 import itree_trace;
 import x86_64;
@@ -48,25 +53,30 @@ fn drain_prog() → Prog {
 }
 fn drain_labels() → Nat → Nat { asm_labels(drain_prog()) }
 fn no_contracts() → Nat → Contract { λ _ => Contract(λ _ => True, λ _ _ => True) }
+fn drain_code() → List<BitVec(8)> { asm_code(no_fills(), drain_labels(), drain_prog()) }
+fn drain_view(origin: BitVec(64)) → View<X86Memory(X86Profile::io()), Nat → BitVec(8)> {
+    DataRegion::io_page().program_view(drain_code(), next_rip(origin, 0))
+}
+theorem drain_sound(origin: BitVec(64)): ViewSound<X86Memory(X86Profile::io()), Nat → BitVec(8)>(X86Profile::io().linux(), drain_view(origin)) {
+    DataRegion::io_page().program_view_sound(drain_code(), next_rip(origin, 0))
+}
 
 theorem drain_reach(): wp_reach(drain_labels(), drain_loop(), 5).IsTrue() { trivial }
 theorem drain_exit_reach(): wp_reach(drain_labels(), drain_prog(), 2).IsTrue() { trivial }
 
 // The exit: from the exit label, the machine exits 0.
-theorem drain_exit(file: IoImage, origin: BitVec(64),
-    code: (page: Nat → BitVec(8)) → CodeResident(io_fetch_access(), IoMemory(file, page), asm_code(no_fills(), drain_labels(), drain_prog()), next_rip(origin, 0)),
-    page: Nat → BitVec(8), state: MachineState<IoMemory>, rip: state.rip = next_rip(origin, prog_len(drain_loop())),
-    holds: state.memory = IoMemory(file, page)): Sim(io_linux(), Ret(BitVec::ofNat(0)), state) {
-    wp_sound(io_linux(), io_page_view(file), io_page_view_sound(file), origin, no_fills(), drain_labels(), no_contracts(), drain_prog(), 2,
+theorem drain_exit(origin: BitVec(64), page: Nat → BitVec(8), state: MachineState<X86Memory(X86Profile::io())>,
+    rip: state.rip = next_rip(origin, prog_len(drain_loop())),
+    holds: drain_view(origin).Holds(page, state.memory)): Sim(X86Profile::io().linux(), Ret(BitVec::ofNat(0)), state) {
+    wp_sound(X86Profile::io().linux(), drain_view(origin), drain_sound(origin), origin, no_fills(), drain_labels(), no_contracts(), drain_prog(), 2,
         λ _ _ _ _ => False, trivial, Nil,
-        λ v m h => j(sym(h), λ x _ => CodeResident(io_fetch_access(), x, asm_code(no_fills(), drain_labels(), drain_prog()) ++ Nil, next_rip(origin, 0)),
-            j(sym(List::append_nil(asm_code(no_fills(), drain_labels(), drain_prog()))), λ c _ => CodeResident(io_fetch_access(), IoMemory(file, v), c, next_rip(origin, 0)), code(v))),
+        λ v m h => j(sym(List::append_nil(drain_code())), λ c _ => CodeResident(X86Profile::io().fetch(), m, c, next_rip(origin, 0)), h.right),
         drain_exit_reach(), ⟨trivial, ⟨trivial, trivial⟩⟩,
         λ _ _ _ _ never _ => false_elim(never),
         Ret(BitVec::ofNat(0)), page, state, rip, holds, ⟨refl, refl⟩)
 }
 
-fn drain_inv(file: IoImage) → Nat → ITree<BitVec(64)>(Events::linux()) → (Nat → BitVec(8)) → MachineState<IoMemory> → Type {
+fn drain_inv() → Nat → ITree<BitVec(64)>(Events::linux()) → (Nat → BitVec(8)) → MachineState<X86Memory(X86Profile::io())> → Type {
     λ w t page state => t = drain(w)
 }
 
@@ -91,48 +101,60 @@ theorem drain_failed_nonzero(e: Nat, error: Errno(e)): is_zero_bits(64, errno_wo
     test_self_nonzero(64, errno_word(e), errno_nonzero(e, error))
 }
 
+// The read asks for the whole page, which is writable in every memory of
+// the profile.
+theorem drain_writable(m: X86Memory(X86Profile::io())):
+    X86Profile::io().at(m).Allows(Perm::writes, BitVec::ofNat(0x410000), 4096) {
+    DataRegion::io_page().allows(Perm::writes, refl, m, 0, 4096, drain_fits(4096, omega))
+}
+
 // One pass of the loop: a read, then back to the head, or out at the end.
-theorem drain_pass(file: IoImage, origin: BitVec(64),
-    code: (page: Nat → BitVec(8)) → CodeResident(io_fetch_access(), IoMemory(file, page), asm_code(no_fills(), drain_labels(), drain_prog()), next_rip(origin, 0)),
-    w: Nat, page: Nat → BitVec(8), state: MachineState<IoMemory>):
-    Wp(io_linux(), io_page_view(file), origin, drain_labels(), no_contracts(), drain_loop(), 5,
-        LoopPost(io_linux(), io_page_view(file), origin, prog_len(asm_back(drain_loop(), 5)), drain_inv(file), w), drain(w), page, state) {
+theorem drain_pass(origin: BitVec(64), w: Nat, page: Nat → BitVec(8), state: MachineState<X86Memory(X86Profile::io())>):
+    Wp(X86Profile::io().linux(), drain_view(origin), origin, drain_labels(), no_contracts(), drain_loop(), 5,
+        LoopPost(X86Profile::io().linux(), drain_view(origin), origin, prog_len(asm_back(drain_loop(), 5)), drain_inv(), w), drain(w), page, state) {
     match w {
         Zero => trivial,
-        Succ(m) => ⟨⟨⟨refl, ⟨refl, refl⟩⟩, page_span_writable(IoMemory(file, page), BitVec::ofNat(0x410000), 0, 4096, trivial, refl)⟩,
+        Succ(m) => ⟨λ memory _ => ⟨⟨refl, ⟨refl, refl⟩⟩, drain_writable(memory)⟩,
             λ a => match a {
                 ReadBytes(bytes) => match bytes {
-                    Nil => λ fits junk leaves rcx r11 => Exists(0, ⟨trivial, ⟨trivial, ⟨refl,
-                        ⟨λ yes after rip _ => Inr(λ holds => drain_exit(file, origin, code, page_stored(page, 0, Nil), after, rip, holds)),
-                         λ no => absurd(trans(sym(drain_none_zero()), no))⟩⟩⟩⟩),
-                    Cons(b, rest) => λ fits junk leaves rcx r11 => Exists(0, ⟨trivial, ⟨drain_fits(Succ(rest.len()), fits), ⟨refl,
+                    Nil => λ fits junk leaves rcx r11 => Exists(0, ⟨trivial, ⟨refl,
+                        ⟨λ yes after rip _ => Inr(λ holds => drain_exit(origin, DataRegion::io_page().buffer(page).set_span(0, List::to_vector<BitVec(8)>(Nil)).cells,
+                            after, rip, holds)),
+                         λ no => absurd(trans(sym(drain_none_zero()), no))⟩⟩⟩),
+                    Cons(_, rest) => λ fits junk leaves rcx r11 => Exists(0, ⟨drain_fits(Succ(rest.len()), fits), ⟨refl,
                         ⟨λ yes => absurd(trans(sym(yes), drain_some_nonzero(rest.len(), fits))),
-                         λ no after rip _ => Inl(Exists(m, ⟨rip, ⟨refl, trivial⟩⟩))⟩⟩⟩⟩),
+                         λ no after rip _ => Inl(Exists(m, ⟨rip, ⟨refl, trivial⟩⟩))⟩⟩⟩),
                 },
-                ReadFailed(e) => λ error junk leaves rcx r11 => Exists(0, ⟨trivial, ⟨drain_fits(junk.len(), leaves), ⟨refl,
+                ReadFailed(e) => λ error junk leaves rcx r11 => Exists(0, ⟨drain_fits(junk.len(), leaves), ⟨refl,
                     ⟨λ yes => absurd(trans(sym(yes), drain_failed_nonzero(e, error))),
-                     λ no after rip _ => Inl(Exists(m, ⟨rip, ⟨refl, trivial⟩⟩))⟩⟩⟩⟩),
+                     λ no after rip _ => Inl(Exists(m, ⟨rip, ⟨refl, trivial⟩⟩))⟩⟩⟩),
             }⟩,
     }
 }
 
 // From the head, the machine reads to the end of its input and exits 0, at
 // every fuel.
-theorem drain_runs(file: IoImage, origin: BitVec(64),
-    code: (page: Nat → BitVec(8)) → CodeResident(io_fetch_access(), IoMemory(file, page), asm_code(no_fills(), drain_labels(), drain_prog()), next_rip(origin, 0)),
-    n: Nat, page: Nat → BitVec(8), state: MachineState<IoMemory>, rip: state.rip = next_rip(origin, 0),
-    holds: state.memory = IoMemory(file, page)): Sim(io_linux(), drain(n), state) {
-    loop_at(io_linux(), io_page_view(file), io_page_view_sound(file), origin, no_fills(), drain_labels(), no_contracts(), drain_loop(), 5,
+theorem drain_runs(origin: BitVec(64), n: Nat, page: Nat → BitVec(8), state: MachineState<X86Memory(X86Profile::io())>,
+    rip: state.rip = next_rip(origin, 0), holds: drain_view(origin).Holds(page, state.memory)): Sim(X86Profile::io().linux(), drain(n), state) {
+    loop_at(X86Profile::io().linux(), drain_view(origin), drain_sound(origin), origin, no_fills(), drain_labels(), no_contracts(), drain_loop(), 5,
         trivial, asm_code_after(no_fills(), drain_labels(), drain_prog(), 2) ++ Nil,
-        λ v m h => j(sym(h), λ x _ => CodeResident(io_fetch_access(), x,
-                asm_code(no_fills(), drain_labels(), drain_loop()) ++ (asm_code_after(no_fills(), drain_labels(), drain_prog(), 2) ++ Nil), next_rip(origin, 0)),
-            wp_code_at(io_fetch_access(), IoMemory(file, v), origin, no_fills(), drain_labels(), drain_prog(), 2, Nil,
-                j(sym(List::append_nil(asm_code(no_fills(), drain_labels(), drain_prog()))),
-                    λ c _ => CodeResident(io_fetch_access(), IoMemory(file, v), c, next_rip(origin, 0)), code(v)))),
+        λ v m h => wp_code_at(X86Profile::io().fetch(), m, origin, no_fills(), drain_labels(), drain_prog(), 2, Nil,
+            j(sym(List::append_nil(drain_code())), λ c _ => CodeResident(X86Profile::io().fetch(), m, c, next_rip(origin, 0)), h.right)),
         drain_reach(), ⟨trivial, ⟨trivial, ⟨trivial, ⟨trivial, ⟨trivial, trivial⟩⟩⟩⟩⟩,
-        drain_inv(file),
-        λ w t v s at h same => j(sym(same), λ x _ => Wp(io_linux(), io_page_view(file), origin, drain_labels(), no_contracts(), drain_loop(), 5,
-            LoopPost(io_linux(), io_page_view(file), origin, prog_len(asm_back(drain_loop(), 5)), drain_inv(file), w), x, v, s),
-            drain_pass(file, origin, code, w, v, s)),
+        drain_inv(),
+        λ w t v s at h same => j(sym(same), λ x _ => Wp(X86Profile::io().linux(), drain_view(origin), origin, drain_labels(), no_contracts(), drain_loop(), 5,
+            LoopPost(X86Profile::io().linux(), drain_view(origin), origin, prog_len(asm_back(drain_loop(), 5)), drain_inv(), w), x, v, s),
+            drain_pass(origin, w, v, s)),
         n, drain(n), page, state, rip, holds, refl)
+}
+
+// The entry: the process Linux loads from a file of a 232-byte header and
+// the program, started at the entry with any registers and flags, reads to
+// the end of its input and exits 0.
+theorem drain_entry(header: List<BitVec(8)>, long: header.len() = 232, n: Nat, gprs: Gprs, flags: Flags):
+    Sim(X86Profile::io().linux(), drain(n), MachineState(gprs, flags, io_entry(), X86Memory::io_load(header ++ drain_code()))) {
+    let memory = X86Memory::io_load(header ++ drain_code());
+    let fits: (232 + drain_code().len() <= 65536) = Nat::leb_sound(232 + drain_code().len(), 65536, trivial);
+    drain_runs(io_entry(), n, io_zero(), MachineState(gprs, flags, io_entry(), memory), refl,
+        ⟨X86Memory::io_load_page(header ++ drain_code()), X86Memory::io_load_entry(header, drain_code(), long, fits)⟩)
 }

@@ -21,7 +21,6 @@ pub const READ_LOOP: &[(&str, &str)] = &[
     ("x86_64_store", include_str!("../../../../lib/std/arch/x86_64/x86_64_store.hthr")),
     ("linux_calls", include_str!("../../../../lib/linux_calls.hthr")),
     ("linux_x86_64_io", include_str!("../../../../lib/linux_x86_64_io.hthr")),
-    ("elf64_io", include_str!("../../../../lib/elf64_io.hthr")),
 ];
 
 pub fn checker() -> heather_elab::Elaborator { checker_with(&[]) }
