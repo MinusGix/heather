@@ -3,8 +3,9 @@ title: Tensors over shapes as data, with canonical structure computed
 status: open
 labels: [design,machine-learning]
 area: machine-learning
+milestone: [ml-layers]
 created: 2026-10-21
-updated: 2026-10-21
+updated: 2026-10-22
 ---
 
 Design Heather's tensor representation for the ML area

@@ -116,6 +116,10 @@ through `milestone:`; the list of issues is `scripts/issue list --milestone
 | `math-specific-choice` | mathematics | open | A library convention, with inference behind it, for asking for the specific property instead of choice, with per-type instances that discharge it without an axiom. |  |
 | `export-fragment` | heather-in-lean-coq | open | A closed, layer-free fragment of the library (Nat and List lemmas) is translated to Coq or Lean and rechecked there. |  |
 | `ml-survey` | machine-learning | done | Wick is surveyed: what transfers, what must be redone better, and the mathematics and tooling it needs from Heather. |  |
+| `ml-layers` | machine-learning | open | A layer grammar (linear, pointwise activation, compose, fork, residual) over computed shapes, with reverse mode defined once and proved against the formal derivative on polynomial layers, and a two-layer network that evaluates at `Rat` (`docs/wick-survey.md` §6). |  |
+| `ml-float-forward` | machine-learning | open | One small network's forward pass runs at `Float(F)` and at `Rat`/`CReal`, with a composed error theorem between them, using `float-error`. |  |
+| `ml-descent` | machine-learning | open | Deterministic gradient descent converges on an L-smooth, strongly convex (or PL) objective over an ordered field, with one concrete known-answer instance proved by evaluation. |  |
+| `ml-gaussian-states` | machine-learning | open | Gaussian states on a polynomial algebra, Wick's theorem by perfect matchings, and cumulants by Möbius inversion on the partition lattice. |  |
 | `gpu-model` | gpu | open | A design note fixes the GPU execution model and the kernel-language level (tile IR, Triton-like) to prove against, with what it needs from the other areas. |  |
 | `rust-design` | rust-in-heather | open | A design note fixes the Rust subset, the semantics source (MIR or surface), and what the translation needs from `hih-memory` and `it-library`. |  |
 | `lean-fragment` | lean-in-heather | open | A design note says which fragment of Lean translates into Heather and how impredicative `Prop` is handled. |  |
@@ -372,11 +376,18 @@ transfers, what to redo (models as programs at `Rat`/`CReal`/`Float`,
 canonical structure computed rather than searched, algebra before measure),
 and what it needs, with follow-up issues. Nothing is implemented yet. It
 depends on `math-classes`, `math-reals`, `math-float`, finite linear algebra,
-and later on measure and probability. The survey proposes milestones
-(`ml-layers`, `ml-float-forward`, `ml-descent`, `ml-gaussian-states`) that
-are not adopted yet.
+and later on measure and probability.
 
-**Milestone.** `ml-survey` ([wick-survey](../issues/wick-survey.md)).
+**Milestones.** `ml-survey` (done, [wick-survey](../issues/wick-survey.md)).
+`ml-layers` ([ml-tensor-shapes](../issues/ml-tensor-shapes.md),
+[ml-layers-reverse-mode](../issues/ml-layers-reverse-mode.md)) is the
+recommended first round, after finite big operators and the start of
+[finite-linear-algebra](../issues/finite-linear-algebra.md). Then
+`ml-float-forward` ([ml-scalar-refinement](../issues/ml-scalar-refinement.md)),
+`ml-descent` ([ml-deterministic-descent](../issues/ml-deterministic-descent.md))
+and `ml-gaussian-states` ([ml-gaussian-states](../issues/ml-gaussian-states.md)),
+which is independent of the others and can run in the mathematics lane once
+[set-partition-combinatorics](../issues/set-partition-combinatorics.md) exists.
 
 ### GPU (`gpu`)
 
@@ -511,6 +522,9 @@ separate machines do not slow each other's tests.
   (`docs/itree-refinement-round.md`), not by a relation of its own.
 - 2026-10-21: `ml-survey` done (`docs/wick-survey.md`). Its proposed ML
   milestones wait for Minus's review before they are added here.
+- 2026-10-22: Minus adopted the survey's four ML milestones (`ml-layers`,
+  `ml-float-forward`, `ml-descent`, `ml-gaussian-states`) as proposed in
+  `docs/wick-survey.md` §6; the follow-up issues are tagged with them.
 - 2026-10-21: `float-values` marked done: round 1 (PR #85) and round 2's
   successor/predecessor (PR #95) cover its "done when"
   (`docs/floating-point-design.md` §10, §12).
