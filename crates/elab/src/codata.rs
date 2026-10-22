@@ -283,12 +283,13 @@ pub(crate) struct MParts {
     pub lw: Level,
     /// `S` at `j` as emitted: `El(D#mshape ā j)` for a named signature.
     pub shape: Rc<Type>,
-    /// `S` at `j` inline, for the structural readers (the spine).
-    pub shape_inline: Rc<Type>,
     /// `P`, over `(g, s : S)`.
     pos: Rc<Type>,
-    /// `P` inline, for [`Self::pos_code`].
-    pos_inline: Rc<Type>,
+    /// The signature inline, for the structural readers (the spine,
+    /// [`Self::pos_code`]): unfolded on first use, since most reads (every
+    /// checking site of a corecursive body asks for one) never need it, and
+    /// unfolding moves each definition's whole body into scope.
+    inline: std::cell::OnceCell<Option<Rc<MSig>>>,
     /// `o`, over `(g, s : S, p : P)`.
     next: Rc<Term>,
     /// The index type is not `Unit`.
@@ -297,12 +298,11 @@ pub(crate) struct MParts {
 
 impl MParts {
     /// Read a lowered `⟦D⟧` back.
-    pub(crate) fn read(el: &Elaborator, ty: &Type, g: &LocalCtx) -> Option<MParts> {
+    pub(crate) fn read(ty: &Type, g: &LocalCtx) -> Option<MParts> {
         let ty = decoded(ty);
         let Type::M { sig, index } = &*ty else {
             return None;
         };
-        let inline = el.m_sig_inline(sig, g)?;
         let indexed = !matches!(&*decoded(&sig.idx), Type::Unit { .. });
         Some(MParts {
             g: g.clone(),
@@ -312,12 +312,23 @@ impl MParts {
             lp: sig.pos_level.clone(),
             lw: sig.family_level(),
             shape: Rc::new(sig.shape_at(index)),
-            shape_inline: Rc::new(inline.shape_at(index)),
             pos: Rc::new(sig.pos_at(index)),
-            pos_inline: Rc::new(inline.pos_at(index)),
+            inline: std::cell::OnceCell::new(),
             next: Rc::new(sig.next_at(index)),
             indexed,
         })
+    }
+
+    fn inline(&self, el: &Elaborator) -> Option<&Rc<MSig>> {
+        self.inline.get_or_init(|| el.m_sig_inline(&self.sig, &self.g)).as_ref()
+    }
+
+    /// `S` at `j` inline, for the spine.
+    pub(crate) fn shape_inline(&self, el: &Elaborator, span: Span) -> R<Type> {
+        match self.inline(el) {
+            Some(sig) => Ok(sig.shape_at(&self.index)),
+            None => err("internal: a codata signature's named shape did not unfold", span),
+        }
     }
 
     /// `⟦D⟧` itself — at this index — at depth `k`.
@@ -406,8 +417,9 @@ impl MParts {
     /// case on the label's injection taken (`infinitary.rs`'s `pos_shown`):
     /// `π₀ + (π₁ + …)` as written by [`Elaborator::lower_instance_m`].
     /// `gamma` is the context `label` is scoped in.
-    fn pos_code(&self, k: u32, gamma: &LocalCtx, label: Rc<Term>) -> Rc<Term> {
-        let Type::El { tm, .. } = self.pos_inline.apply_local(&embed(&self.g, k).extended(label)) else {
+    fn pos_code(&self, el: &Elaborator, k: u32, gamma: &LocalCtx, label: Rc<Term>) -> Rc<Term> {
+        let inline = self.inline(el).expect("the spine was read, so the signature unfolds");
+        let Type::El { tm, .. } = inline.pos_at(&self.index).apply_local(&embed(&self.g, k).extended(label)) else {
             unreachable!("the positions are `El` of a case tree")
         };
         let mut tm = tm;
@@ -431,22 +443,22 @@ impl MParts {
     /// scoped): for `m` children, the `m` component types and the `m - 1`
     /// right tails of the sum (`P(label) ≡ C₀ + (C₁ + …)`). One child's
     /// positions are the whole of `P(label)`; none is `Empty`.
-    fn components(&self, k: u32, gamma: &LocalCtx, label: Rc<Term>, m: usize) -> (Vec<Type>, Vec<Type>) {
-        let el = |tm: &Rc<Term>| decoded(&Type::El { level: self.lp.clone(), tm: Rc::clone(tm) }).into_owned();
+    fn components(&self, el: &Elaborator, k: u32, gamma: &LocalCtx, label: Rc<Term>, m: usize) -> (Vec<Type>, Vec<Type>) {
+        let dec = |tm: &Rc<Term>| decoded(&Type::El { level: self.lp.clone(), tm: Rc::clone(tm) }).into_owned();
         let mut comps = Vec::with_capacity(m);
         let mut tails = Vec::with_capacity(m.saturating_sub(1));
-        let mut cur = self.pos_code(k, gamma, label);
+        let mut cur = self.pos_code(el, k, gamma, label);
         for _ in 0..m.saturating_sub(1) {
             let Term::TmSum { lhs, rhs, .. } = &*cur else {
                 unreachable!("a constructor with several children has sum positions")
             };
-            comps.push(el(lhs));
-            tails.push(el(rhs));
+            comps.push(dec(lhs));
+            tails.push(dec(rhs));
             let next = Rc::clone(rhs);
             cur = next;
         }
         if m > 0 {
-            comps.push(el(&cur));
+            comps.push(dec(&cur));
         }
         (comps, tails)
     }
@@ -1445,7 +1457,7 @@ impl Elaborator {
                 );
             }
         }
-        let Some(p) = MParts::read(self, &ty, &cx.gamma) else {
+        let Some(p) = MParts::read(&ty, &cx.gamma) else {
             return err("internal: a codata declaration did not lower to its `M` encoding", span);
         };
         let (label, comps, tails, children) = self.ctor_parts(cx, ind, i, &p, args, &mut |cx, arg, at| {
@@ -1627,7 +1639,7 @@ impl Elaborator {
             );
         }
         let n = ind.ctors.len();
-        let spine = self.spine(&p.shape_inline, &p.ls, n, span)?;
+        let spine = self.spine(&p.shape_inline(self, span)?, &p.ls, n, span)?;
         let payload: Vec<&Expr> = args
             .iter()
             .zip(&ctor.kind)
@@ -1637,7 +1649,7 @@ impl Elaborator {
         let fields = self.build_fields(cx, &spine.ctors[i].0, &payload, true, span)?;
         let label = inject(&spine, i, n, fields, 0);
         let m = ctor.kind.iter().filter(|k| k.is_child()).count();
-        let (comps, tails) = p.components(0, &cx.gamma, Rc::new(label.clone()), m);
+        let (comps, tails) = p.components(self, 0, &cx.gamma, Rc::new(label.clone()), m);
         let lab = Rc::new(label.clone());
         let mut children = Vec::with_capacity(m);
         let mut r = 0usize;
@@ -1749,7 +1761,7 @@ impl Elaborator {
         mlvl: Level,
         span: Span,
     ) -> R<Term> {
-        let Some(p) = MParts::read(self, scrut_ty, &cx.gamma) else {
+        let Some(p) = MParts::read(scrut_ty, &cx.gamma) else {
             return err("internal: a codata declaration did not lower to its `M` encoding", span);
         };
         let scrut = Rc::new(scrut);
@@ -1765,7 +1777,7 @@ impl Elaborator {
                 scrut: Rc::new(p.out_fst(0, Rc::new(p.out(0, scrut)))),
             });
         }
-        let spine = self.spine(&p.shape_inline, &p.ls, n, span)?;
+        let spine = self.spine(&p.shape_inline(self, span)?, &p.ls, n, span)?;
         let lq = Level::join(lf.clone(), mlvl.clone());
         // Q(v), over (Γ, o, v) at depth `k` = 2.
         let q = |k: u32, v: Rc<Term>| Type::Pi {
@@ -1801,7 +1813,7 @@ impl Elaborator {
                 // The positions at the label are read in Γ: the label at depth
                 // `d` mentions the branch binders, so take the components there
                 // and shift.
-                let (comps, tails) = p.components(d, &bcx.gamma, Rc::clone(&inj), m);
+                let (comps, tails) = p.components(self, d, &bcx.gamma, Rc::clone(&inj), m);
                 let mut payload_k = 0usize;
                 let mut r = 0usize;
                 for (k, name) in arm.binders.iter().map(|b| b.name().to_string()).enumerate() {
@@ -1832,7 +1844,11 @@ impl Elaborator {
                             (term, ty, lf.clone())
                         }
                         _ => {
-                            let r = self.projection(&acx, &ctor_ty, &value_here, payload_k, span)?;
+                            let r = if self.emits_at_forms(&acx) {
+                                self.projection_at(&acx, &ctor_ty, &value_here, payload_k, span)?
+                            } else {
+                                self.projection(&acx, &ctor_ty, &value_here, payload_k, span)?
+                            };
                             payload_k += 1;
                             r
                         }
@@ -1899,7 +1915,7 @@ impl Elaborator {
         span: Span,
     ) -> R<Term> {
         let g = mcx.gamma.prefix(mcx.gamma.len() - 2);
-        let Some(p) = MParts::read(self, d_ty, &g) else {
+        let Some(p) = MParts::read(d_ty, &g) else {
             return err("internal: a codata declaration did not lower to its `M` encoding", span);
         };
         let label = Rc::new(p.out_fst(2, Rc::new(p.out(2, scrut))));
@@ -1941,7 +1957,7 @@ impl Elaborator {
         let Some(ind) = self.tag_of(&head).filter(|i| i.codata) else {
             return Ok(None);
         };
-        let Some(p) = MParts::read(self, &head, &cx.gamma) else {
+        let Some(p) = MParts::read(&head, &cx.gamma) else {
             return Ok(None);
         };
         if let Some(q) = decl.params.iter().find(|q| q.implicit) {
@@ -2099,7 +2115,7 @@ impl Elaborator {
     }
 
     fn corec_close_annotated(&self, cx: &Cx, n_ty: usize, site: &CorecSite, b: Term, span: Span) -> R<Term> {
-        let Some(p) = MParts::read(self, &site.d_ty, &cx.gamma) else {
+        let Some(p) = MParts::read(&site.d_ty, &cx.gamma) else {
             return err("internal: a codata declaration did not lower to its `M` encoding", span);
         };
         let n = site.rank.len();
@@ -2214,7 +2230,7 @@ impl Elaborator {
     /// positions and this function built it; `None` to elaborate it as usual.
     pub(crate) fn corec_check(&self, cx: &Cx, site: &CorecSite, e: &Expr, expected: &Type, lvl: &Level) -> R<Option<Term>> {
         let by = site.by(cx);
-        let Some(p) = MParts::read(self, &site.d_ty.shift_local(by), &cx.gamma) else {
+        let Some(p) = MParts::read(&site.d_ty.shift_local(by), &cx.gamma) else {
             return err("internal: a codata declaration did not lower to its `M` encoding", e.span);
         };
         let carrier = site.carrier.under(by);

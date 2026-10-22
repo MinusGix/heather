@@ -1,7 +1,8 @@
 # Codata: the named signature and the checked spelling
 
 Status: implemented, 2026-10-22 (`crates/elab/src/codata.rs`,
-`crates/elab/src/gendefs.rs`). Issue: `issues/codata-named-signature.md`.
+`crates/elab/src/gendefs.rs`); §8 the same day, with
+`lib/std/coitree_eutt.hthr` as its workload. Issue: `issues/codata-named-signature.md`.
 It changes how `docs/codata-elaborator-design.md` ("codata §n") and
 `docs/codata-indexed-design.md` ("indexed §n") spell their terms, not what
 they mean: every lowering, rule and test there is unchanged.
@@ -66,9 +67,13 @@ The elaborator's own readers take the shape apart: a constructor's label,
 `match`'s branches, the spine an `inj`/`absurd`/declared equation walks.
 They now read a named instance by **unfolding the reference** (the gendef's
 body, one λ peeled per argument, then substituted), never by whnf of the
-whole type. `MParts::read` keeps both forms: the named one for the terms it
-emits, the unfolded one (`shape_inline`, `pos_inline`) for the spines it
-walks. `tag_of` finds the declaration from the reference's key directly.
+whole type. `MParts` keeps both forms: the named one for the terms it
+emits, the unfolded one (`shape_inline`, and the positions behind
+`components`) for the spines it walks. The unfolded signature is built on
+first use: every checking site in a corecursive body reads an `MParts`, and
+most never walk a spine, while unfolding moves each definition's whole body
+into scope. `tag_of` finds the declaration from the reference's key
+directly.
 
 ## 4. The instance matcher learns `M`
 
@@ -116,3 +121,30 @@ declaration through the kernel, and their image round trips now carry the
 named keys). `crates/elab/tests/lib_std_coitree.rs` adds a goal display
 over a named instance (`b : Bisim<R>(E, t, spin(E))`), and the library
 itself is the workload the names exist for.
+
+## 8. Match fields in the checked spelling
+
+A `match` on a codata value binds each payload field to its projection out
+of the label, `fst(sndᵏ⁺¹ ℓ)`, as an alias. `Elaborator::projection` writes
+each `Fst`/`Snd` with both component types, and for a dependent payload
+those types mention the earlier fields, each again a projection with its own
+annotations. The term is small as a graph (the components are shared) but
+its tree size grows with the product of the dependencies. That stays harmless
+until something walks it as a tree: the constructor a branch builds shifts
+its label and children under the step's binders, and a local shift rebuilds
+every open node it visits. `Eutt`'s fields are counts and equations about
+`after(nl, t)`, all dependent, so `Eutt::sym` spent nearly all its time in
+those shifts, with no conversion or evaluation behind it.
+
+The branch now binds payload fields with `Elaborator::projection_at`: the
+checked forms `fst@`/`snd@` (`Term::FstAt`/`SndAt`), which carry no
+annotation because the receiver infers. Here it does: the label is the case
+tree's binder, or `fst(out(e))` for a single constructor. The alias's *type*
+is the same inline field type as before, so every structural reader sees
+what it saw; only the spelling of the term changes. Record field projections
+already took this route under the same gate (`emits_at_forms`: not inside a
+quotation, where the term is data and keeps its annotations).
+
+Cost: `Eutt::sym` and `CoTree::bind_cong` lost more than an order of
+magnitude each, and what remains is in proportion to the declaration. The
+codata, indexed codata and coitree tests are unchanged and pass.

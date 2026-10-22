@@ -26,3 +26,7 @@ Done when:
 ## What it assumes from elsewhere
 - **[[coitree-library]]** owns `CoTree::program` and `Bisim::approx`.
   Assumed here: only their statements.
+
+## Log
+
+- 2026-10-22: Bisimilar trees give programs that refine each other (`Bisim::refines`), and so do trees equivalent up to taus (`Eutt::refines`, `Eutt::refined`), all in `lib/std/coitree_eutt.hthr`. Still open: `CoTree::program(iter(…))` against `Program::iter`, and the optional embedding.

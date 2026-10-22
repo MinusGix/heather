@@ -1,6 +1,6 @@
 ---
 title: Equivalence up to taus (eutt) on coinductive trees
-status: open
+status: closed
 labels: [codata,coinduction,itree,library]
 area: interaction-trees
 milestone: [it-coinductive]
@@ -29,3 +29,7 @@ to eutt, and `Eutt` giving equivalent approximation programs (with
 ## What it assumes from elsewhere
 - **[[coitree-library]]** owns `CoTree`, `Obs` and `Bisim`. Assumed here:
   only the observation-seeded style (`docs/coitree-design.md` §2).
+
+## Log
+
+- 2026-10-22: Done (`lib/std/coitree_eutt.hthr`, `docs/coitree-design.md` §7). Drops are counts, not an inductive peel: each constructor names how many `CTau`s each side drops (`CoTree::after`). refl/sym/trans, `of_bisim`, `tau_l`/`tau_r`, the monad laws (through `of_bisim`), and `Eutt::refines`/`refined` (equivalent trees give programs that refine each other). The `bind` congruence up to eutt is left to [[coitree-eutt-bind-cong]]. Making it cheap needed a codata change: a match's payload fields are now checked-spelling projections (`docs/codata-named-signature-design.md` §8).
