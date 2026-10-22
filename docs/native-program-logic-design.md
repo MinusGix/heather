@@ -450,7 +450,9 @@ us to burn a lot of code".
    worries.
 5. **The surface.** *Decided: uniqueness threading that denotes trees*
    (`issues/effects-direction.md`).
-6. **The source's shape (S3).** *Open.* Minus likes the lean (a tree-shaped
+6. **The source's shape (S3).** *Decided 2026-10-22: the layer over a total
+   FunctionIR, loops split by totality* (`docs/native-effect-source-design.md`
+   §11–§12). Before that: Minus liked the lean (a tree-shaped
    layer whose leaves are FunctionIR regions) but is unsure. The input for
    S3, from the same discussion:
    - **Split effects by where they live, not by IR.** *External* effects

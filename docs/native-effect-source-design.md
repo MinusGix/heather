@@ -1,6 +1,6 @@
 # The effectful source: a control layer over total FunctionIR
 
-Status: **design, for Minus's decision (2026-10-21); not implemented.**
+Status: **design, decided by Minus 2026-10-22 (A and L3, §12); not implemented.**
 Round S3 of `docs/native-program-logic-design.md` (§7, §9, §10 item 6),
 issue `issues/native-effect-source-compiler.md`. It also answers
 `issues/function-ir-lowering-loops.md` and says what S3 contributes to
@@ -390,7 +390,7 @@ buffer is touched only by calls (§10).
 
 ---
 
-## 7. The layer (if A)
+## 7. The layer
 
 ### 7.1 Syntax
 
@@ -598,8 +598,12 @@ justification. On principle alone:
 
 ## 12. Decision
 
-1. **The source's shape**: A (recommended), or B.
-2. **Loops**: L3 (recommended), L1, or L2.
+*Decided by Minus, 2026-10-22* ("your recommendations make sense to me"),
+after asking for the case on principle (§11):
+
+1. **The source's shape: A**, a control layer over FunctionIR.
+2. **Loops: L3**, split by totality. The bounded loop with `Exhausted` is in
+   FunctionIR (S4 round 5), and the general loop is in the layer.
 
 The rest follows from those two answers: the denotation target, buffers as
-state edges, and how the layer places values.
+state edges, and how the layer places values. The rounds are §10's.
