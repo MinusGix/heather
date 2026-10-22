@@ -42,7 +42,7 @@
 //! (itself bounded) and never force anything.
 
 use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 #[cfg(feature = "value-metrics")]
 use std::collections::BTreeMap;
 use std::fmt;
@@ -349,26 +349,14 @@ pub struct ValueArena<'v> {
     /// `λy. snd(k y)`, read one application instead of evaluating it twice
     /// (issues/tier2-left-nested-bind-cost.md). The keys are arena closures,
     /// which live as long as this map, so no address is freed and reused
-    /// under it; bounded like the force cache.
+    /// under it; kept for the query like the force cache.
     shared_apps: RefCell<ValueCache<(usize, usize), Val<'v>>>,
-    /// See [`GlueTombs`].
-    glue_tombs: RefCell<GlueTombs<'v>>,
     envs: Arena<EnvNode<'v>>,
     levels: Arena<Level>,
     elims: Arena<ElimNode<'v>>,
     terms: Arena<TmClo<'v>>,
     types: Arena<TyClo<'v>>,
 }
-
-const VALUE_CACHE_CAPACITY: usize = 64 * 1024;
-
-/// The fuel a term force must spend for its value to enter the costly tier
-/// of the force cache ([`ValueArena::cache_tm`]).
-pub(crate) const COSTLY_FORCE: u64 = 256;
-
-/// How many evicted glued neutrals' unfoldings [`ValueArena`] remembers
-/// ([`GlueTombs`]).
-const GLUE_TOMB_CAPACITY: usize = 4 * VALUE_CACHE_CAPACITY;
 
 /// Aggregate, observational counters for value-machine regions.
 ///
@@ -407,12 +395,10 @@ struct ValueMetricCells {
     term_cache_lookups: Cell<u64>,
     term_cache_hits: Cell<u64>,
     term_cache_inserts: Cell<u64>,
-    term_cache_evictions: Cell<u64>,
     term_cache_peak: Cell<u64>,
     type_cache_lookups: Cell<u64>,
     type_cache_hits: Cell<u64>,
     type_cache_inserts: Cell<u64>,
-    type_cache_evictions: Cell<u64>,
     type_cache_peak: Cell<u64>,
 }
 
@@ -442,12 +428,10 @@ pub struct ValueMetricsSnapshot {
     pub term_cache_lookups: u64,
     pub term_cache_hits: u64,
     pub term_cache_inserts: u64,
-    pub term_cache_evictions: u64,
     pub term_cache_peak: u64,
     pub type_cache_lookups: u64,
     pub type_cache_hits: u64,
     pub type_cache_inserts: u64,
-    pub type_cache_evictions: u64,
     pub type_cache_peak: u64,
 }
 
@@ -461,12 +445,10 @@ impl ValueMetrics {
             term_cache_lookups: self.inner.term_cache_lookups.get(),
             term_cache_hits: self.inner.term_cache_hits.get(),
             term_cache_inserts: self.inner.term_cache_inserts.get(),
-            term_cache_evictions: self.inner.term_cache_evictions.get(),
             term_cache_peak: self.inner.term_cache_peak.get(),
             type_cache_lookups: self.inner.type_cache_lookups.get(),
             type_cache_hits: self.inner.type_cache_hits.get(),
             type_cache_inserts: self.inner.type_cache_inserts.get(),
-            type_cache_evictions: self.inner.type_cache_evictions.get(),
             type_cache_peak: self.inner.type_cache_peak.get(),
         }
     }
@@ -480,12 +462,10 @@ impl ValueMetrics {
         self.inner.term_cache_lookups.set(zero.term_cache_lookups);
         self.inner.term_cache_hits.set(zero.term_cache_hits);
         self.inner.term_cache_inserts.set(zero.term_cache_inserts);
-        self.inner.term_cache_evictions.set(zero.term_cache_evictions);
         self.inner.term_cache_peak.set(zero.term_cache_peak);
         self.inner.type_cache_lookups.set(zero.type_cache_lookups);
         self.inner.type_cache_hits.set(zero.type_cache_hits);
         self.inner.type_cache_inserts.set(zero.type_cache_inserts);
-        self.inner.type_cache_evictions.set(zero.type_cache_evictions);
         self.inner.type_cache_peak.set(zero.type_cache_peak);
         #[cfg(feature = "value-metrics")]
         self.inner.conv_misses.borrow_mut().clear();
@@ -635,12 +615,10 @@ impl ValueMetricsSnapshot {
             term_cache_lookups: delta!(term_cache_lookups),
             term_cache_hits: delta!(term_cache_hits),
             term_cache_inserts: delta!(term_cache_inserts),
-            term_cache_evictions: delta!(term_cache_evictions),
             term_cache_peak: delta!(term_cache_peak),
             type_cache_lookups: delta!(type_cache_lookups),
             type_cache_hits: delta!(type_cache_hits),
             type_cache_inserts: delta!(type_cache_inserts),
-            type_cache_evictions: delta!(type_cache_evictions),
             type_cache_peak: delta!(type_cache_peak),
         }
     }
@@ -684,70 +662,34 @@ impl std::hash::Hasher for PtrHasher {
 
 type PtrMap<K, V> = HashMap<K, V, std::hash::BuildHasherDefault<PtrHasher>>;
 
+/// A memo from an arena's own closures (or pairs of them) to the values
+/// they forced to. It keeps every entry for as long as the arena lives: see
+/// [`ValueArena::cache_tm`] for why that is a constant factor over the arena
+/// and not a bound to choose.
 struct ValueCache<K, V> {
     values: PtrMap<K, Rc<V>>,
-    order: VecDeque<K>,
-    /// The insertion order of the **costly** entries, a second FIFO with a
-    /// bound of its own, so that cheap entries never push one out. See
-    /// [`ValueArena::cache_tm`].
-    costly: VecDeque<K>,
-    /// `false` for a [`ValueArena::retaining`] arena's caches, which keep
-    /// every entry and so need no insertion order.
-    bounded: bool,
 }
 
 impl<K: Copy + Eq + std::hash::Hash, V> ValueCache<K, V> {
     fn new() -> ValueCache<K, V> {
-        ValueCache { values: PtrMap::default(), order: VecDeque::new(), costly: VecDeque::new(), bounded: true }
-    }
-
-    fn retaining() -> ValueCache<K, V> {
-        ValueCache { values: PtrMap::default(), order: VecDeque::new(), costly: VecDeque::new(), bounded: false }
+        ValueCache { values: PtrMap::default() }
     }
 
     fn get(&self, key: K) -> Option<Rc<V>> {
         self.values.get(&key).cloned()
     }
 
-    /// Remember `value` for `key`, in the costly tier when `costly`. Each
-    /// tier holds at most [`VALUE_CACHE_CAPACITY`] entries and evicts its
-    /// oldest past that. Whether it inserted, and the entry it evicted.
-    fn admit(&mut self, key: K, value: &Rc<V>, costly: bool) -> (bool, Option<(K, Rc<V>)>) {
-        if self.values.contains_key(&key) { return (false, None); }
+    /// Remember `value` for `key`; whether it was new.
+    fn insert(&mut self, key: K, value: &Rc<V>) -> bool {
+        if self.values.contains_key(&key) { return false; }
         self.values.insert(key, Rc::clone(value));
-        if !self.bounded { return (true, None); }
-        let order = if costly { &mut self.costly } else { &mut self.order };
-        order.push_back(key);
-        if order.len() <= VALUE_CACHE_CAPACITY { return (true, None); }
-        let evicted = order.pop_front().and_then(|oldest| Some((oldest, self.values.remove(&oldest)?)));
-        (true, evicted)
-    }
-
-    #[cfg(not(feature = "value-metrics"))]
-    fn insert(&mut self, key: K, value: &Rc<V>) {
-        self.admit(key, value, false);
-    }
-
-    #[cfg(feature = "value-metrics")]
-    fn insert_profiled(&mut self, key: K, value: &Rc<V>) -> (bool, bool) {
-        let (inserted, evicted) = self.admit(key, value, false);
-        (inserted, evicted.is_some())
+        true
     }
 
     #[cfg(feature = "value-metrics")]
     fn len(&self) -> usize {
         self.values.len()
     }
-
-}
-
-/// What [`ValueArena`] remembers of a glued neutral its force cache evicted:
-/// the closure that forced to it and the neutral's unfolding, so that the
-/// closure's next force can be glued to the same unfolding
-/// ([`ValueArena::cache_tm`]). Bounded first-in first-out, like the cache.
-struct GlueTombs<'v> {
-    unfolds: PtrMap<*const TmClo<'v>, &'v TmClo<'v>>,
-    order: VecDeque<*const TmClo<'v>>,
 }
 
 /// One [`ValueArena`] `w_ih` entry: the syntax it was built from, and what
@@ -794,11 +736,7 @@ impl<'v> ValueArena<'v> {
     }
 
     pub(crate) fn cache_shared_app(&self, key: (usize, usize), value: &Rc<Val<'v>>) {
-        let mut cache = self.shared_apps.borrow_mut();
-        #[cfg(feature = "value-metrics")]
-        cache.insert_profiled(key, value);
-        #[cfg(not(feature = "value-metrics"))]
-        cache.insert(key, value);
+        self.shared_apps.borrow_mut().insert(key, value);
     }
 
     pub fn new() -> ValueArena<'v> {
@@ -815,36 +753,12 @@ impl<'v> ValueArena<'v> {
             sealed_any: Cell::new(false),
             w_ih: RefCell::new(PtrMap::default()),
             shared_apps: RefCell::new(ValueCache::new()),
-            glue_tombs: RefCell::new(GlueTombs { unfolds: PtrMap::default(), order: VecDeque::new() }),
             envs: Arena::new(),
             levels: Arena::new(),
             elims: Arena::new(),
             terms: Arena::new(),
             types: Arena::new(),
         }
-    }
-
-    /// An arena whose caches keep every value they are given, for a region
-    /// that lives across many evaluations of one growing lazy structure:
-    /// the tactic host's run, whose every resume builds the next tree out of
-    /// closures the earlier ones forced (`crates/elab/src/host.rs`).
-    ///
-    /// The bound of [`ValueArena::new`] is right for a query, which forces a
-    /// graph once and is done with it. Across a run it is not: once the
-    /// oldest values are evicted, a later resume that reaches them through
-    /// its tree evaluates them again, and what they were made of, back
-    /// through the run's history. A `bind` nested 64 deep to the left paid
-    /// over ten times the evaluation of the same run with nothing evicted,
-    /// and at 100 deep ran out of fuel (issues/tier2-left-nested-bind-cost.md).
-    /// What this keeps is bounded by the work the region does, which the
-    /// host bounds by its request budget; the arena already holds every
-    /// closure and environment cell of that work.
-    pub fn retaining() -> ValueArena<'v> {
-        let mut arena = Self::new();
-        arena.term_cache = RefCell::new(ValueCache::retaining());
-        arena.type_cache = RefCell::new(ValueCache::retaining());
-        arena.shared_apps = RefCell::new(ValueCache::retaining());
-        arena
     }
 
     /// Make a region whose activity contributes to `metrics`.
@@ -864,8 +778,7 @@ impl<'v> ValueArena<'v> {
                 sealed_any: Cell::new(false),
                 w_ih: RefCell::new(PtrMap::default()),
                 shared_apps: RefCell::new(ValueCache::new()),
-                glue_tombs: RefCell::new(GlueTombs { unfolds: PtrMap::default(), order: VecDeque::new() }),
-                envs: Arena::new(),
+                    envs: Arena::new(),
                 levels: Arena::new(),
                 elims: Arena::new(),
                 terms: Arena::new(),
@@ -1012,115 +925,62 @@ impl<'v> ValueArena<'v> {
         }
     }
 
-    /// Remember that `clo` forced to `value`, which cost `spent` fuel.
+    /// Remember that `clo` forced to `value`, for the rest of the query.
     ///
-    /// The cache is bounded and first-in first-out, which is right for the
-    /// many cheap thunks a query forces once. Two kinds of value are wrong
-    /// for it (issues/computed-argument-reevaluated-in-rounding.md, where a
-    /// binary32 rounding of `1/3` re-ran its long division about ten times
-    /// and ran out of fuel):
+    /// The memo keeps every entry: nothing is evicted while the arena lives.
+    /// Each key is a closure of this arena, which the arena already keeps
+    /// until the query ends, together with its environment cells; one `Rc`
+    /// value per forced closure is a constant factor over that, the same
+    /// order as the work the query did, which its fuel bounds. A bound
+    /// below the query's live set, on the other hand, is not a constant
+    /// factor of anything: whatever it evicts and the query reads again is
+    /// forced again, and so are the evicted cells the re-force reads, back
+    /// through the computation's history.
     ///
-    /// - **A value that cost a computation** and is read again later. The
-    ///   64K cheaper thunks made after it pushed it out, and the next read
-    ///   paid the computation again. So the cache keeps a second tier with
-    ///   its own bound, which cheap entries never push out, for a value
-    ///   whose force spent at least [`COSTLY_FORCE`] fuel.
-    /// - **A glued neutral.** The rounding's half-unit count `rat_h(F, x)`
-    ///   forces cheaply, to a neutral glued to its unfolding — a closure made
-    ///   by that evaluation and reachable only through the neutral, whose
-    ///   force is the long division. Once the neutral was evicted (often
-    ///   while its unfolding was still being forced, the long division
-    ///   itself making the 64K thunks), the next reader's force evaluated
-    ///   the count's syntax again, to a fresh neutral glued to a fresh
-    ///   unfolding, and the costly value the first one had found was
-    ///   unreachable. So an evicted glued neutral leaves its unfolding
-    ///   behind, by the closure that forced to it ([`GlueTombs`]), and that
-    ///   closure's next force is glued to it again
-    ///   ([`ValueArena::reglue`]).
+    /// The bound used to be a 64K-entry FIFO, from when a value owned the
+    /// closures it reached and unbounded memos held whole graphs (the first
+    /// arena version exceeded the 4 GiB test cap on `lib_std_bitvec`).
+    /// Values point into the arena now, and the FIFO was what made a long
+    /// evaluation by `refl` fragile: running the effectful source's `cat`
+    /// at width 64 forced its environment's word cells, the FIFO evicted
+    /// them under the thousands of intermediate values each 64-bit
+    /// operation forces, and every later read recomputed them: copying one
+    /// byte spent nine tenths of the fuel and three ran out, where kept, a
+    /// run takes about a tenth of the steps and grows linearly in its
+    /// passes (issues/kernel-value-cache-evaluation-thrash.md). The FIFO had grown
+    /// two patches for the same loss (a protected tier for costly forces,
+    /// and tombs regluing an evicted glued neutral's unfolding:
+    /// issues/computed-argument-reevaluated-in-rounding.md); with nothing
+    /// evicted, neither has anything to do.
     ///
-    /// Both are policy, and change the fuel a query spends, never its
-    /// value: the memo is a function of the closure alone, only successes
-    /// are remembered, and a closure forced again denotes what it denoted
-    /// before, so the unfolding of its first value is the unfolding of its
-    /// next. A costly entry stands for at least [`COSTLY_FORCE`] fuel spent,
-    /// so in an ordinary query that tier holds few entries and never fills;
-    /// at worst the cache's bound doubles, and the tombs hold one pointer
-    /// pair per evicted neutral, under a bound of their own.
-    pub(crate) fn cache_tm(&self, clo: &'v TmClo<'v>, value: &Rc<Val<'v>>, spent: u64) {
+    /// Policy changes the fuel a query spends, never its value: the memo is
+    /// a function of the closure alone, and only successes are remembered.
+    pub(crate) fn cache_tm(&self, clo: &'v TmClo<'v>, value: &Rc<Val<'v>>) {
         if !matches!(clo, TmClo::Val(_)) {
             let mut cache = self.term_cache.borrow_mut();
-            let (inserted, evicted) =
-                cache.admit(clo as *const TmClo<'v>, value, spent >= COSTLY_FORCE);
+            let inserted = cache.insert(clo as *const TmClo<'v>, value);
             #[cfg(feature = "value-metrics")]
             if let Some(m) = self.metrics {
                 if inserted { ValueMetrics::bump(&m.inner.term_cache_inserts); }
-                if evicted.is_some() {
-                    ValueMetrics::bump(&m.inner.term_cache_evictions);
-                }
                 ValueMetrics::record_peak(&m.inner.term_cache_peak, cache.len());
             }
             #[cfg(not(feature = "value-metrics"))]
             let _ = inserted;
-            if let Some((key, value)) = evicted {
-                if let Val::Neutral(n) = &*value {
-                    if let Some(unfold) = n.unfold {
-                        let mut tombs = self.glue_tombs.borrow_mut();
-                        if tombs.unfolds.insert(key, unfold).is_none() {
-                            tombs.order.push_back(key);
-                            if tombs.order.len() > GLUE_TOMB_CAPACITY {
-                                if let Some(oldest) = tombs.order.pop_front() {
-                                    tombs.unfolds.remove(&oldest);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
         }
     }
 
-    /// `value`, the value `clo` was just forced to, glued to the unfolding
-    /// of the glued neutral `clo` was forced to before, if the cache evicted
-    /// that one ([`ValueArena::cache_tm`]). The neutral is otherwise the one
-    /// given: same head, same spine.
-    pub(crate) fn reglue(&self, clo: &'v TmClo<'v>, value: Rc<Val<'v>>) -> Rc<Val<'v>> {
-        let Val::Neutral(n) = &*value else { return value };
-        if n.unfold.is_none() {
-            return value;
-        }
-        let tombs = self.glue_tombs.borrow();
-        if tombs.order.is_empty() {
-            return value;
-        }
-        match tombs.unfolds.get(&(clo as *const TmClo<'v>)) {
-            Some(&unfold) => Rc::new(Val::Neutral(Rc::new(VNeutral {
-                head: n.head.clone(),
-                spine: n.spine,
-                unfold: Some(unfold),
-            }))),
-            None => value,
-        }
-    }
-
+    /// [`Self::cache_tm`] for types.
     pub(crate) fn cache_ty(&self, clo: &'v TyClo<'v>, value: &Rc<VTy<'v>>) {
         if !matches!(clo, TyClo::Val(_)) {
             let mut cache = self.type_cache.borrow_mut();
+            let inserted = cache.insert(clo as *const TyClo<'v>, value);
             #[cfg(feature = "value-metrics")]
-            {
-                let (inserted, evicted) =
-                    cache.insert_profiled(clo as *const TyClo<'v>, value);
-                if let Some(m) = self.metrics {
-                    if inserted { ValueMetrics::bump(&m.inner.type_cache_inserts); }
-                    if evicted {
-                        ValueMetrics::bump(&m.inner.type_cache_evictions);
-                    }
-                    ValueMetrics::record_peak(&m.inner.type_cache_peak, cache.len());
-                }
+            if let Some(m) = self.metrics {
+                if inserted { ValueMetrics::bump(&m.inner.type_cache_inserts); }
+                ValueMetrics::record_peak(&m.inner.type_cache_peak, cache.len());
             }
             #[cfg(not(feature = "value-metrics"))]
-            {
-                cache.insert(clo as *const TyClo<'v>, value);
-            }
+            let _ = inserted;
         }
     }
 }
@@ -1130,8 +990,8 @@ impl<'v> ValueArena<'v> {
 // ---------------------------------------------------------------------------
 
 /// A term sub-structure of a value: an environment plus unevaluated syntax.
-/// Its weak head result is held, when useful, by [`ValueArena`]'s bounded
-/// query cache.
+/// Its weak head result is held, when useful, by [`ValueArena`]'s query
+/// cache.
 ///
 /// With `k > 0` pending binders it is a **closure** (applied by
 /// [`crate::eval::Eval::apply`]); with none it is a **lazy value** (forced by
@@ -2473,7 +2333,7 @@ impl fmt::Debug for Val<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Elim, ElimSpine, Env, EnvNode, Head, TmClo, TyClo, VNeutral, VTy, Val, ValueArena, ValueMetrics};
+    use super::{Elim, ElimSpine, Env, EnvNode, TmClo, TyClo, VTy, Val, ValueArena, ValueMetrics};
     use std::sync::Arc as Rc;
 
     #[test]
@@ -2569,92 +2429,33 @@ mod tests {
     }
 
     #[test]
-    fn query_value_cache_is_bounded() {
+    fn a_query_keeps_every_value_it_forced() {
         let metrics = ValueMetrics::default();
         let arena = ValueArena::profiled(&metrics);
         let env = super::Env::empty();
-        let mut closures = Vec::with_capacity(super::VALUE_CACHE_CAPACITY + 1);
-        for _ in 0..=super::VALUE_CACHE_CAPACITY {
+        // Past the 64K entries the cache used to hold, its first entry is
+        // still there.
+        let n = 64 * 1024 + 1;
+        let mut closures = Vec::with_capacity(n);
+        for _ in 0..n {
             let clo = arena.tm(TmClo::syn(env, Rc::new(crate::term::Term::Zero)));
-            arena.cache_tm(clo, &Rc::new(Val::Zero), 0);
+            arena.cache_tm(clo, &Rc::new(Val::Zero));
             closures.push(clo);
         }
-        assert!(arena.memo_tm(closures[0]).is_none());
+        assert!(arena.memo_tm(closures[0]).is_some());
         assert!(arena.memo_tm(*closures.last().expect("one cached closure")).is_some());
         #[cfg(feature = "value-metrics")]
         {
             let stats = metrics.snapshot();
             assert_eq!(stats.arenas, 1);
-            assert_eq!(stats.term_closures, (super::VALUE_CACHE_CAPACITY + 1) as u64);
-            assert_eq!(stats.term_cache_inserts, (super::VALUE_CACHE_CAPACITY + 1) as u64);
-            assert_eq!(stats.term_cache_evictions, 1);
-            assert_eq!(stats.term_cache_peak, super::VALUE_CACHE_CAPACITY as u64);
+            assert_eq!(stats.term_closures, n as u64);
+            assert_eq!(stats.term_cache_inserts, n as u64);
+            assert_eq!(stats.term_cache_peak, n as u64);
             assert_eq!(stats.term_cache_lookups, 2);
-            assert_eq!(stats.term_cache_hits, 1);
+            assert_eq!(stats.term_cache_hits, 2);
 
             metrics.reset();
             assert_eq!(metrics.snapshot(), Default::default());
         }
-    }
-
-    /// Fill the cheap tier with fresh closures, pushing out everything
-    /// cheap that was cached before.
-    fn flood<'v>(arena: &'v ValueArena<'v>) {
-        let env = super::Env::empty();
-        for _ in 0..=super::VALUE_CACHE_CAPACITY {
-            let clo = arena.tm(TmClo::syn(env, Rc::new(crate::term::Term::Zero)));
-            arena.cache_tm(clo, &Rc::new(Val::Zero), 0);
-        }
-    }
-
-    fn glued<'v>(unfold: &'v TmClo<'v>) -> Rc<Val<'v>> {
-        Rc::new(Val::Neutral(Rc::new(VNeutral {
-            head: Head::Var(0),
-            spine: ElimSpine::empty(),
-            unfold: Some(unfold),
-        })))
-    }
-
-    fn unfold_of<'v>(value: &Val<'v>) -> Option<*const TmClo<'v>> {
-        match value {
-            Val::Neutral(n) => n.unfold.map(|u| u as *const TmClo<'v>),
-            _ => None,
-        }
-    }
-
-    #[test]
-    fn costly_values_outlive_cheap_ones() {
-        let arena = ValueArena::new();
-        let env = super::Env::empty();
-        let costly = arena.tm(TmClo::syn(env, Rc::new(crate::term::Term::Zero)));
-        let cheap = arena.tm(TmClo::syn(env, Rc::new(crate::term::Term::Zero)));
-        arena.cache_tm(costly, &Rc::new(Val::Zero), super::COSTLY_FORCE);
-        arena.cache_tm(cheap, &Rc::new(Val::Zero), super::COSTLY_FORCE - 1);
-        flood(&arena);
-        assert!(arena.memo_tm(costly).is_some());
-        assert!(arena.memo_tm(cheap).is_none());
-    }
-
-    #[test]
-    fn an_evicted_glued_neutral_leaves_its_unfolding() {
-        let arena = ValueArena::new();
-        let env = super::Env::empty();
-        let syn = || arena.tm(TmClo::syn(env, Rc::new(crate::term::Term::Zero)));
-        let (count, other, first, second) = (syn(), syn(), syn(), syn());
-        // Nothing evicted yet: a force is cached as it came.
-        let fresh = arena.reglue(count, glued(first));
-        assert_eq!(unfold_of(&fresh), Some(first as *const TmClo<'_>));
-        arena.cache_tm(count, &fresh, 0);
-        flood(&arena);
-        assert!(arena.memo_tm(count).is_none());
-        // Forced again, the closure's fresh neutral is glued to the first
-        // unfolding; another closure's is left alone, and so is a value that
-        // is not a glued neutral.
-        let again = arena.reglue(count, glued(second));
-        assert_eq!(unfold_of(&again), Some(first as *const TmClo<'_>));
-        let unrelated = arena.reglue(other, glued(second));
-        assert_eq!(unfold_of(&unrelated), Some(second as *const TmClo<'_>));
-        assert!(matches!(&*arena.reglue(count, Rc::new(Val::Zero)), Val::Zero));
-        assert!(unfold_of(&arena.reglue(count, Rc::new(Val::var(0)))).is_none());
     }
 }

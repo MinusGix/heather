@@ -1,6 +1,6 @@
 ---
 title: absurd reduces a computed equation side by substitution to find its constructor
-status: open
+status: closed
 labels: [elaboration,performance]
 area: language
 created: 2026-10-22
@@ -44,3 +44,7 @@ is in (2026-10-22, [[linux-wp-cold-rail]]); the elaborator cost is not.
 
 Acceptance: `drain_pass` written with the bare `absurd(no)` elaborates in
 about its gate's time.
+
+## Log
+
+- 2026-10-22: 2026-10-22: Fixed by a third lever, narrower than both above: `absurd` needs only the two constructors' indices, not a spelling of either side. `Elaborator::ctor_indices` (`crates/elab/src/inductive.rs`) builds, where `build_absurd`'s `J` motive builds its tag predicate, the constant case tree that answers constructor `k` with the numeral `k` (`ConstBody::Arity` with no fields counted, so every tier and codata go through `const_predicate` as the motive does) and evaluates it at each side with the value machine (`SemanticOracle::nat_value`). The `J` then keeps the sides as written; the kernel converts them anyway. A side that is stuck, or out of fuel, falls back to the old reduce-and-read path, so its diagnostics are unchanged. `inj` still reduces: it needs the fields. `drain_pass` with the bare `absurd(no)` now spends 3.3 s in `elab_whnf` (was ~90 s), item 31 s against a 22 s gate on a loaded box. Tests: `computed_sides_are_read_by_evaluation` (tier 0: nullary and field-carrying constructors on either side, the same constructor still "not absurd", a stuck side still not a constructor), `absurd_evaluates_a_computed_recursive_side` (tier 1), and a computed side at tier 2 in `no_confusion`.

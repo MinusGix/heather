@@ -262,10 +262,10 @@ theorem LinuxCmd::sized_asks_some(c: LinuxCmd<True>, max: Nat, some: 0 < max): c
 // A spec with every read given one size of at least one byte implements it.
 //
 // The call's step is a theorem of its own, its trace stated as a `VisTrace`
-// over the call and continuation: matched inside the λ, where the trace's
-// type is `IsTrace` of the sized tree's `Vis`, the same proof costs the
-// kernel two orders of magnitude more steps
-// (issues/trace-match-under-computed-binder-cost.md).
+// over the call and continuation. (Matched inside the λ, the binder must be
+// annotated with that `VisTrace`: its expected type is `IsTrace` of the sized
+// tree's `Vis`, and arms spelled off that cost the kernel two orders of
+// magnitude more; issues/trace-match-under-computed-binder-cost.md.)
 theorem ITree::implements_sized_vis<R>(max: Nat, some: 0 < max, c: LinuxCmd<True>, k: c.Resp() → ITree<R>(Events::linux_spec()),
     ih: (b: c.sized(max).Resp()) → ITree::Implements(ITree::sized(max, k(c.sized_answer(max, b))), k(c.sized_answer(max, b))),
     tr: Trace<R>(Events::linux()),

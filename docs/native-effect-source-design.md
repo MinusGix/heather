@@ -441,8 +441,10 @@ functions: `words: List<Nat>` and `buffers: List<Bytes>`, indexed by id.
 
 As functions (`Valuation()`, `Nat → Bytes`), each read re-ran the updates
 that built the value, so evaluation cost compounded with every statement.
-As constructor fields, each word is computed once. Longer runs still meet
-the kernel's bounded value cache: `issues/kernel-value-cache-evaluation-thrash.md`.
+As constructor fields, each word is computed once. Once read, it stays read:
+the kernel's value cache keeps what a query forced (until 2026-10-22 a FIFO
+evicted the cells under each 64-bit operation's intermediates, and longer runs
+recomputed them: `issues/kernel-value-cache-evaluation-thrash.md`).
 
 ### 7.3 `denote`
 

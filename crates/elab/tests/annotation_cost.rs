@@ -193,3 +193,48 @@ theorem left(): And(1, And(2, 3)).right.left = 2 { refl }
     assert!(el.elab_source("theorem wrong(): read(And(1, And(2, Witness(7, refl)))) = 8 { refl }").is_err());
     assert!(el.elab_source("fn wrong_type<A, B>(facts: And<B, And<B, A>>) -> B { facts.right.right }").is_err());
 }
+
+/// A λ's binder annotated against a *computed* domain takes the annotation
+/// as its type, so a `match` on it spells its arms off the annotation: the
+/// same match as a lemma over the annotated parameter costs about the same.
+/// When the binder kept the expected domain, `Fits(Vis(c, k), n)`, the arms
+/// carried `Fits`'s recursion unfolded and the kernel paid twenty to a
+/// hundred and seventy times the lemma
+/// (issues/trace-match-under-computed-binder-cost.md).
+#[test]
+fn a_match_on_an_annotated_binder_costs_what_the_lemma_does() {
+    let setup = "
+inductive Flag { Yes, No }
+inductive Cmd { Ask, Say(v: Nat) }
+fn Resp(c: Cmd) -> Type { match c { Ask => Nat, Say(v) => Flag } }
+inductive Tree { Ret(r: Nat), Vis(c: Cmd, k: Resp(c) -> Tree) }
+inductive Seen(c: Cmd, n: Nat, S: Resp(c) -> Nat -> Type) {
+    Early(at: n = 0),
+    Later(a: Resp(c), m: Nat, at: n = Succ(m), sub: S(a, m)),
+}
+fn Fits(t: Tree, n: Nat) -> Type {
+    match t { Ret(r) => n = r, Vis(c, k) => Seen(c, n, λ a m => Fits(k(a), m)) }
+}
+fn used(t: Tree, n: Nat, w: Fits(t, n)) -> Nat { n }";
+    let arms = "Early(at) => refl,
+            Later(a, m, at, sub) => { let deeper: Nat = used(k(a), m, sub); refl },";
+    let in_place = |body: &str| measure(setup, &format!("
+theorem probe(c: Cmd, k: Resp(c) -> Tree): (n: Nat) -> Fits(Vis(c, k), n) -> n = n {{
+    λ n (w: Seen(c, n, λ a m => Fits(k(a), m))) => {body}
+}}"), "probe", "");
+    let lemma = |body: &str| measure(setup, &format!("
+theorem probe(c: Cmd, k: Resp(c) -> Tree, n: Nat, w: Seen(c, n, λ a m => Fits(k(a), m))): n = n {{
+    {body}
+}}"), "probe", "");
+    // What the match adds, on top of the binder itself: in place, the
+    // annotation is converted with `Fits(Vis(c, k), n)` once, at the λ, and
+    // that conversion is the same with or without the match.
+    let matched = format!("match w {{ {arms} }}");
+    let (in_place, in_place_bare) = (in_place(&matched), in_place("refl"));
+    let (lemma, lemma_bare) = (lemma(&matched), lemma("refl"));
+    eprintln!("match on an annotated binder: in place {in_place} ({in_place_bare} without the match), \
+        lemma {lemma} ({lemma_bare})");
+    assert!(lemma > lemma_bare);
+    let (here, there) = (in_place - in_place_bare, lemma - lemma_bare);
+    assert!(here <= 2 * there, "the match costs {here} in place against {there} in the lemma");
+}

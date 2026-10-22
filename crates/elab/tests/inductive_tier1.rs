@@ -231,6 +231,22 @@ fn absurd_reads_a_recursive_match_arms_own_scrutinee() {
     );
 }
 
+// `absurd` at a recursive declaration, with a side that computes to its
+// constructor: read by evaluating the side through the `Wf` encoding's tag
+// (issues/absurd-reduces-computed-sides-by-substitution.md).
+#[test]
+fn absurd_evaluates_a_computed_recursive_side() {
+    elab(
+        r#"
+        inductive List<A> { Nil, Cons(A, List<A>) }
+        fn single<A>(x: A) -> List<A> { Cons(x, Nil) }
+        fn none() -> List<Nat> { Nil }
+        theorem t(p: single(1) = Nil<Nat>): 0 = 1 { absurd(p) }
+        theorem u(n: Nat, p: none() = single(n)): 0 = 1 { absurd(p) }
+        "#,
+    );
+}
+
 // The payload half of injectivity, at a constructor that carries both a
 // payload field and children: the two halves are projected by different
 // mechanisms and both have to land on the declared field order.

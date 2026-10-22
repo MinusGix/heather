@@ -355,9 +355,10 @@ Head ::= Var(lvl) | BaseVar(depth) | Global(u, δ_values) | BoxedGlobal(box-synt
 - `unfold` is `Some` exactly when the head is a `Global(u, …)` that `Defs`
   says is defined. It is a **cached thunk**: forcing it evaluates the
   definition's body under `δ`'s value environment and then replays the
-  spine. Recent visits share the value through the query's bounded cache; a
-  visit after eviction may recompute it rather than retaining a dead graph
-  for the whole query.
+  spine. Every visit in the query shares the value through the query's
+  cache, which keeps what it is given until the query ends (it was a
+  bounded FIFO until 2026-10-22, when a visit after eviction recomputed
+  the value; `ValueArena::cache_tm` says why keeping is a constant factor).
 - `BoxedGlobal` is ch. 06's `box(U^δ)` / `box(u^δ)` neutral-scrutinee case
   for the code recursors: a canonical box under an eliminator that can never
   fire. Naming it a head keeps `is_neutral_term`'s special case from having
@@ -378,7 +379,7 @@ reason: a neutral with `unfold: None` cannot enter the stage at all.
 **Instrumentation.** `ValueMetrics` is an explicitly supplied aggregate
 collector, not evaluator state. A profiled arena counts its environment,
 term-closure and type-closure allocations and the two caches' lookups, hits,
-inserts, evictions and peak resident entries. The profiled typing entry points
+inserts and peak resident entries. The profiled typing entry points
 lend one collector to each short-lived conversion arena inside a kernel gate;
 the elaborator can lend that same collector to its analyzer arena. Thus a
 measurement has a caller-defined boundary and remains meaningful under

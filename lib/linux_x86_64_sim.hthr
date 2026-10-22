@@ -100,9 +100,10 @@ theorem sim_ret<M>(io: LinuxIo<M>, status: BitVec(64), state, at: MachineState<M
 // Linux steps to a syscall that requests the tree's call, and every way it
 // may answer and resume meets the tree's continuation at that answer.
 //
-// Of one trace, stated as a `VisTrace`: matched inside `sim_vis`'s λ, where
-// its type is `IsTrace` of the tree's `Vis`, the same proof costs the kernel
-// twenty times the steps (issues/trace-match-under-computed-binder-cost.md).
+// Of one trace, stated as a `VisTrace`. (Matched inside `sim_vis`'s λ, the
+// binder must be annotated with that `VisTrace`: its expected type is
+// `IsTrace` of the tree's `Vis`, and arms spelled off that cost the kernel
+// twenty times the steps; issues/trace-match-under-computed-binder-cost.md.)
 theorem sim_vis_trace<M>(io: LinuxIo<M>, c: LinuxCmd<Nat>, k: c.Resp() → ITree<BitVec(64)>(Events::linux()),
     state, at: MachineState<M>, steps: LinuxSteps(io, state, at), syscall: LinuxSyscallAt(io, at),
     requests: LinuxRequests(io, at, c),

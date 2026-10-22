@@ -840,18 +840,32 @@ impl<'a> ExprElab<'a> {
             }
         }
 
-        if let Some(annotation) = &binder.ty {
-            let (annotation_ty, _) = elab.lower_lambda_annotation(cx, annotation)?;
-            if !elab.lambda_domains_convert(cx, &annotation_ty, &dom, &dom_level) {
-                return err(
-                    format!(
-                        "`{}` is annotated with a type that is not the one expected here",
-                        binder.name
-                    ),
-                    annotation.span,
-                );
+        // A written annotation convertible with the expected domain is the
+        // binder's type from here on: the context is extended with it and
+        // the λ emits it, so the kernel converts the two once, here. The
+        // expected domain may be a *computed* spelling of the same type —
+        // `IsTrace(E, Vis(c, k), tr)` where the binder says
+        // `VisTrace<…>(…)` — and everything the body spells off the binder
+        // (a `match`'s arm types, above all) would otherwise carry that
+        // computation unfolded, which cost the kernel twenty to a hundred
+        // and seventy times the same proof stated over the annotation
+        // (issues/trace-match-under-computed-binder-cost.md).
+        let dom = match &binder.ty {
+            Some(annotation) => {
+                let (annotation_ty, _) = elab.lower_lambda_annotation(cx, annotation)?;
+                if !elab.lambda_domains_convert(cx, &annotation_ty, &dom, &dom_level) {
+                    return err(
+                        format!(
+                            "`{}` is annotated with a type that is not the one expected here",
+                            binder.name
+                        ),
+                        annotation.span,
+                    );
+                }
+                Rc::new(annotation_ty)
             }
-        }
+            None => dom,
+        };
 
         let binder_skel = position
             .and_then(|position| position.dom.clone())

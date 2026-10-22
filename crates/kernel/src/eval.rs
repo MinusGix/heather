@@ -192,10 +192,9 @@ enum Work<'v> {
 /// What a value flows back into: a thunk waiting to memoize it, or an
 /// elimination waiting for its head.
 enum Frame<'v> {
-    /// A thunk being forced, with the fuel that stood when its force began:
-    /// what it spent decides which tier of the force cache keeps its value
+    /// A thunk being forced: its value is memoized when it arrives
     /// (`ValueArena::cache_tm`).
-    Memo(&'v TmClo<'v>, u64),
+    Memo(&'v TmClo<'v>),
     Elim(Rc<Elim<'v>>),
     /// A successor program waiting for the value its fold produced at the
     /// run's tail. A run there is merged into one program rather than left
@@ -454,12 +453,12 @@ impl<'a, 'v> Eval<'a, 'v> {
                             TmClo::Val(v) => Work::Val(Rc::clone(v)),
                             TmClo::Syn { env, body, .. } => {
                                 let w = Work::Eval(Rc::clone(body), *env);
-                                self.frames.push(Frame::Memo(c, self.fuel));
+                                self.frames.push(Frame::Memo(c));
                                 w
                             }
                             TmClo::Elim { head, elim, .. } => {
                                 let w = Work::Force(head);
-                                self.frames.push(Frame::Memo(c, self.fuel));
+                                self.frames.push(Frame::Memo(c));
                                 self.frames.push(Frame::Elim(Rc::clone(elim)));
                                 w
                             }
@@ -473,9 +472,8 @@ impl<'a, 'v> Eval<'a, 'v> {
                     match self.frames.pop() {
                         None => return Ok(v),
                         // A thunk records its value only on success.
-                        Some(Frame::Memo(c, fuel)) => {
-                            let v = self.arena.reglue(c, v);
-                            self.arena.cache_tm(c, &v, fuel.saturating_sub(self.fuel));
+                        Some(Frame::Memo(c)) => {
+                            self.arena.cache_tm(c, &v);
                             Work::Val(v)
                         }
                         Some(Frame::Elim(e)) => Work::Elim(v, (*e).clone()),
