@@ -80,6 +80,13 @@ theorem drain_some_nonzero(n: Nat, fits: Succ(n) <= 4096):
     test_self_nonzero(64, bitvec_nat::word_of_nat(64, Succ(n)),
         j(sym(bitvec_nat::toNat_word_of_nat(64, Succ(n), drain_small(Succ(n), fits))), λ x _ => 0 < x, drain_pos(n)))
 }
+// A read of no bytes leaves RAX zero. Stated here and cited, as the other two
+// answers' facts are: `absurd` of the bare flag equation reduces the flag off
+// the answered machine state by substitution, most of this module's
+// elaboration (issues/absurd-reduces-computed-sides-by-substitution.md).
+theorem drain_none_zero(): is_zero_bits(64, bitvec_nat::word_of_nat(64, 0).band(bitvec_nat::word_of_nat(64, 0))) = bool::True {
+    test_self_zero(64, bitvec_nat::word_of_nat(64, 0), refl)
+}
 theorem drain_failed_nonzero(e: Nat, error: Errno(e)): is_zero_bits(64, errno_word(e).band(errno_word(e))) = bool::False {
     test_self_nonzero(64, errno_word(e), errno_nonzero(e, error))
 }
@@ -97,7 +104,7 @@ theorem drain_pass(file: IoImage, origin: BitVec(64),
                 ReadBytes(bytes) => match bytes {
                     Nil => λ fits junk leaves rcx r11 => Exists(0, ⟨trivial, ⟨trivial, ⟨refl,
                         ⟨λ yes after rip _ => Inr(λ holds => drain_exit(file, origin, code, page_stored(page, 0, Nil), after, rip, holds)),
-                         λ no => absurd(no)⟩⟩⟩⟩),
+                         λ no => absurd(trans(sym(drain_none_zero()), no))⟩⟩⟩⟩),
                     Cons(b, rest) => λ fits junk leaves rcx r11 => Exists(0, ⟨trivial, ⟨drain_fits(Succ(rest.len()), fits), ⟨refl,
                         ⟨λ yes => absurd(trans(sym(yes), drain_some_nonzero(rest.len(), fits))),
                          λ no after rip _ => Inl(Exists(m, ⟨rip, ⟨refl, trivial⟩⟩))⟩⟩⟩⟩),

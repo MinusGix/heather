@@ -12,9 +12,8 @@
 //!  3. a negative control: its exit claimed with the wrong status.
 //!
 //! The pure loop control is `linux_wp_count.rs`, a file (and so a test
-//! process, under its own CPU rail) of its own: this one's pass is the
-//! elaborator's whnf workload (`issues/elab-whnf-copies-straight-continuations.md`)
-//! and takes most of the rail by itself.
+//! process, under its own CPU rail) of its own: on a cold image store each
+//! process elaborates the Linux prefix itself (`issues/linux-wp-cold-rail.md`).
 
 use crate::read_loop_fixture::checker_with;
 

@@ -432,6 +432,18 @@ impl Elaborator {
         if !self.only_ctors_visible(name) {
             return None;
         }
+        // `only_ctors_visible` holds vacuously of a name nothing declares —
+        // a recursive call to the declaration being checked, which is not
+        // registered until it is admitted — and `arm_ctor_index` can only
+        // match a name some inductive registered as its constructor (or a
+        // record as its own). Without this, every recursive call reduced its
+        // expected type for nothing: most of `Prog::no_holes_fit`'s
+        // elaboration, its seventeen arms each a self-call at an expected
+        // type over `Asm` (issues/linux-wp-cold-rail.md).
+        let base = name.split_once("::").map_or(name, |(_, ctor)| ctor);
+        if !self.names.declares_any_as(base, &[NameKind::Ctor, NameKind::Inductive]) {
+            return None;
+        }
         // **Whnf first** (2026-08-16). The expected type reaches here in
         // whatever spelling its position had: a declared result type arrives
         // already structural, but a *parameter's* domain — which is what an
