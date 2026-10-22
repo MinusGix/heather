@@ -90,6 +90,7 @@ fn StructuredRegion::write_ports(self region: StructuredRegion) → List<Port> {
         Compose(prefix, continuation) => prefix.write_ports() ++ continuation.write_ports(),
         Conditional(_, _, _, _, when_true, when_false) => when_true.write_ports() ++ when_false.write_ports(),
         Call(_, _, result) => [Port(result, 64)],
+        Loop(_, _, _, _, _, _, _, outputs, exhausted) => word_ports(outputs) ++ [Port(exhausted, 1)],
     }
 }
 

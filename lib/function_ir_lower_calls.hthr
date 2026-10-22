@@ -466,6 +466,163 @@ fn emit_kept_nodes(prog: Prog, file: File, nodes: List<Node>, placement: List<Gp
     }
 }
 
+// ---------------------------------------------------------------------------
+// Loops (round 5)
+//
+// A loop's code, its four labels the names after `names` (H, C, X, J):
+//
+//       moves: bound, inputs → counter, state registers
+//   H:  TEST counter; JE X
+//       body, its file the counter's and the state's
+//       TEST exit bit; JE C
+//       moves: next → state registers
+//       MOV flag, 0
+//       JMP J
+//   C:  moves: count, next → counter, state registers
+//       ADD counter, -1
+//       JMP H
+//   X:  MOV flag, 1
+//   J:
+//
+// The counter holds the passes left, so the head's test is the bound's. A
+// pass's body sees only its own valuation: the head's file holds the state
+// and the counter under the parameters' and `count`'s names, and what the
+// body leaves (any registers, its calls answered) is read back through its
+// file at the exit test and the moves. After the loop the file is the
+// outputs' and the exhausted bit's, nothing else: the loop is a barrier.
+
+// One register per parameter, then the counter and the flag; the rest
+// place the body.
+record LoopRegisters { state: List<Gpr>, counter: Gpr, flag: Gpr, rest: List<Gpr> }
+
+fn loop_registers(n: Nat, placement: List<Gpr>) → Option<LoopRegisters> {
+    match n {
+        Zero => match placement {
+            Nil => None,
+            Cons(counter, after) => match after {
+                Nil => None,
+                Cons(flag, rest) => Some(LoopRegisters([], counter, flag, rest)),
+            },
+        },
+        Succ(m) => match placement {
+            Nil => None,
+            Cons(register, after) => match loop_registers(m, after) {
+                None => None,
+                Some(registers) => Some(LoopRegisters(Cons(register, registers.state), registers.counter, registers.flag, registers.rest)),
+            },
+        },
+    }
+}
+
+// The flag cleared and set, and the counter stepped down.
+fn LoopRegisters::clear(self registers: LoopRegisters) → Instruction { MovRI(registers.flag, BitVec::ofNat(0)) }
+fn LoopRegisters::mark(self registers: LoopRegisters) → Instruction { MovRI(registers.flag, BitVec::ofNat(1)) }
+fn LoopRegisters::step(self registers: LoopRegisters) → Instruction { AddRI8(registers.counter, BitVec::ofNat(255)) }
+
+// The counter and the flag are none of the state's registers nor each
+// other, and their instructions keep the callee-saved registers.
+fn LoopRegisters::apart(self registers: LoopRegisters) → Bool {
+    registers.counter.misses(registers.state) && (registers.flag.misses(Cons(registers.counter, registers.state)) &&
+        (leaves_all([registers.clear()], callee_saved()) && (leaves_all([registers.mark()], callee_saved()) &&
+            leaves_all([registers.step()], callee_saved()))))
+}
+
+// The code into the loop and the head's file.
+record LoopEntry { registers: LoopRegisters, code: List<Instruction>, head: File }
+
+fn loop_entry_with(registers: LoopRegisters, moves: Lowered, inputs: List<Nat>, limit: Nat, parameters: List<Nat>, count: Nat) →
+    Option<LoopEntry> {
+    match input_file(word_ports(Cons(count, parameters)), Cons(registers.counter, registers.state)) {
+        None => None,
+        Some(head) => match moves.file.outputs_check(word_ports(Cons(limit, inputs)), Cons(registers.counter, registers.state)) &&
+            (leaves_all(moves.code, callee_saved()) && registers.apart()) {
+            False => None,
+            True => Some(LoopEntry(registers, moves.code, head)),
+        },
+    }
+}
+
+fn File::loop_entry_at(self file: File, registers: LoopRegisters, inputs: List<Nat>, limit: Nat, parameters: List<Nat>, count: Nat) →
+    Option<LoopEntry> {
+    match file.move_outputs(word_ports(Cons(limit, inputs)), Cons(registers.counter, registers.state)) {
+        None => None,
+        Some(moves) => loop_entry_with(registers, moves, inputs, limit, parameters, count),
+    }
+}
+
+fn File::loop_entry(self file: File, inputs: List<Nat>, limit: Nat, parameters: List<Nat>, count: Nat, placement: List<Gpr>) →
+    Option<LoopEntry> {
+    match loop_registers(parameters.len(), placement) {
+        None => None,
+        Some(registers) => file.loop_entry_at(registers, inputs, limit, parameters, count),
+    }
+}
+
+// The code out of a pass: the exit bit's register, the moves to leave and
+// to go round, and the file after the loop.
+record LoopExit { register: Gpr, leave: List<Instruction>, back: List<Instruction>, out: File }
+
+fn File::loop_exit_out(self file: File, register: Gpr, leave, back: Lowered, registers: LoopRegisters, count, exit: Nat,
+    next, outputs: List<Nat>, exhausted: Nat) → Option<LoopExit> {
+    match input_file(Cons(Port(id := exhausted, width := 1), word_ports(outputs)), Cons(registers.flag, registers.state)) {
+        None => None,
+        Some(out) => match file.check_one(exit, Some(Bit), register) &&
+            (leave.file.outputs_check(word_ports(next), registers.state) && (leaves_all(leave.code, callee_saved()) &&
+                (back.file.outputs_check(word_ports(Cons(count, next)), Cons(registers.counter, registers.state)) &&
+                    leaves_all(back.code, callee_saved())))) {
+            False => None,
+            True => Some(LoopExit(register, leave.code, back.code, out)),
+        },
+    }
+}
+
+fn File::loop_exit_back(self file: File, register: Gpr, leave: Lowered, registers: LoopRegisters, count, exit: Nat,
+    next, outputs: List<Nat>, exhausted: Nat) → Option<LoopExit> {
+    match file.move_outputs(word_ports(Cons(count, next)), Cons(registers.counter, registers.state)) {
+        None => None,
+        Some(back) => file.loop_exit_out(register, leave, back, registers, count, exit, next, outputs, exhausted),
+    }
+}
+
+fn File::loop_exit(self file: File, registers: LoopRegisters, count, exit: Nat, next, outputs: List<Nat>, exhausted: Nat) →
+    Option<LoopExit> {
+    match file.find(Held(exit, Bit)) {
+        None => None,
+        Some(found) => match file.move_outputs(word_ports(next), registers.state) {
+            None => None,
+            Some(leave) => file.loop_exit_back(found.register, leave, registers, count, exit, next, outputs, exhausted),
+        },
+    }
+}
+
+// The loop's code from the head (the four labels after `names`).
+fn loop_head(prog: Prog, entry: LoopEntry, names: Nat) → Prog { At(At(prog, 0, Block(entry.code)), Succ(names), Block([])) }
+fn loop_tested(prog: Prog, entry: LoopEntry, names: Nat) → Prog {
+    loop_head(prog, entry, names).branch_label(entry.registers.counter, Succ(Succ(Succ(names))))
+}
+fn loop_jumped(pass: Prog, registers: LoopRegisters, exit: LoopExit, names: Nat) → Prog {
+    At(At(At(pass.branch_label(exit.register, Succ(Succ(names))), 0, Block(exit.leave)), 0, Block([registers.clear()])), 0,
+        Jmp(Succ(Succ(Succ(Succ(names))))))
+}
+fn loop_again(pass: Prog, registers: LoopRegisters, exit: LoopExit, names: Nat) → Prog {
+    At(At(At(At(loop_jumped(pass, registers, exit, names), Succ(Succ(names)), Block([])), 0, Block(exit.back)), 0,
+        Block([registers.step()])), 0, Jmp(Succ(names)))
+}
+fn loop_set(pass: Prog, registers: LoopRegisters, exit: LoopExit, names: Nat) → Prog {
+    At(At(loop_again(pass, registers, exit, names), Succ(Succ(Succ(names))), Block([])), 0, Block([registers.mark()]))
+}
+fn loop_done(pass: Prog, registers: LoopRegisters, exit: LoopExit, names: Nat) → Prog {
+    At(loop_set(pass, registers, exit, names), Succ(Succ(Succ(Succ(names)))), Block([]))
+}
+
+fn Emitted::loop_close(self pass: Emitted, registers: LoopRegisters, count, exit: Nat, next, outputs: List<Nat>, exhausted: Nat,
+    names: Nat) → Option<Emitted> {
+    match pass.file.loop_exit(registers, count, exit, next, outputs, exhausted) {
+        None => None,
+        Some(out) => Some(Emitted(loop_done(pass.prog, registers, out, names), out.out, pass.placement, pass.names)),
+    }
+}
+
 // Round 2's `emit` with calls of the functions below `bound`.
 fn StructuredRegion::emit_calls(self region: StructuredRegion, prog: Prog, file: File, placement: List<Gpr>, names, bound: Nat) →
     Option<Emitted> {
@@ -490,6 +647,15 @@ fn StructuredRegion::emit_calls(self region: StructuredRegion, prog: Prog, file:
             },
         },
         Call(callee, arguments, result) => file.emit_call(prog, callee, arguments, result, placement, names, bound),
+        Loop(inputs, limit, parameters, count, body, exit, next, outputs, exhausted) =>
+            match file.loop_entry(inputs, limit, parameters, count, placement) {
+                None => None,
+                Some(entry) => match body.emit_calls(loop_tested(prog, entry, names), entry.head, entry.registers.rest,
+                    Succ(Succ(Succ(Succ(names)))), bound) {
+                    None => None,
+                    Some(pass) => pass.loop_close(entry.registers, count, exit, next, outputs, exhausted, names),
+                },
+            },
     }
 }
 
@@ -640,7 +806,7 @@ theorem branch_emits_in<M>(site: Site<M>, laid: site.program.laid_out().IsTrue()
                 asm_jump_of(labels, prog_len(prog.test_label(register)), Jcc(E, else_name)), to),
             jcc_lands(labels, branched_in.witness, program, prog.test_label(register), 0, E, else_name, lands, branched_in.proof));
         let join_lands = j(label_target(within.witness, program, no.prog, Succ(names), Block([]), unique, within.proof),
-            λ to _ => JumpsForward(prog_len(yes.prog), 5, asm_jump_of(labels, prog_len(yes.prog), Jmp(join_name)), to),
+            λ to _ => NearLands(prog_len(yes.prog), asm_jump_of(labels, prog_len(yes.prog), Jmp(join_name)), to),
             jmp_lands(labels, jumped_in.witness, program, yes.prog, 0, join_name, lands, jumped_in.proof));
         let selects = λ (g: Gprs) (represents: file.Represents(values, g)) =>
             register.tests_zero_bit(g, values(1, condition), found.at.rep(values, g, represents));
@@ -721,6 +887,715 @@ theorem File::emit_call_emits<M>(self file: File, site: Site<M>, laid: site.prog
                     })(refl),
             })(move_outputs_keeps<M>(values, ports, file, argument_registers())),
     })(refl)
+}
+
+// ---------------------------------------------------------------------------
+// Loops: what the checks give
+
+fn LoopRegisters::Apart(self registers: LoopRegisters) → Type {
+    registers.counter.misses(registers.state).IsTrue() ∧ (registers.flag.misses(registers.state).IsTrue() ∧
+        (leaves_all([registers.clear()], callee_saved()).IsTrue() ∧ (leaves_all([registers.mark()], callee_saved()).IsTrue() ∧
+            leaves_all([registers.step()], callee_saved()).IsTrue())))
+}
+
+theorem LoopRegisters::apart_sound(self registers: LoopRegisters, apart: registers.apart().IsTrue()): registers.Apart() {
+    let clear = leaves_all([registers.clear()], callee_saved());
+    let mark = leaves_all([registers.mark()], callee_saved());
+    let step = leaves_all([registers.step()], callee_saved());
+    let flag = registers.flag.misses(Cons(registers.counter, registers.state));
+    let first = Bool::is_true_and(registers.counter.misses(registers.state), flag && (clear && (mark && step)), apart);
+    let second = Bool::is_true_and(flag, clear && (mark && step), first.right);
+    let flagged = Bool::is_true_and(!registers.flag.same(registers.counter), registers.flag.misses(registers.state), second.left);
+    let third = Bool::is_true_and(clear, mark && step, second.right);
+    let fourth = Bool::is_true_and(mark, step, third.right);
+    ⟨first.left, ⟨flagged.right, ⟨third.left, ⟨fourth.left, fourth.right⟩⟩⟩⟩
+}
+
+// Moving `ids` into `registers`: their words land there, the callee-saved
+// registers kept.
+fn MovesInto<M>(values: Valuation(), file: File, ids: List<Nat>, registers: List<Gpr>, code: List<Instruction>) → Type {
+    (s: MachineState<M>) → file.Represents(values, s.gprs) →
+        ArgsIn(words_of(values, ids), registers, execute_block_normal(code, s).gprs) ∧
+        Kept(callee_saved(), s.gprs, execute_block_normal(code, s).gprs)
+}
+
+theorem moves_into<M>(values: Valuation(), file: File, ids: List<Nat>, registers: List<Gpr>, moves: Lowered,
+    keeps: Keeps<M>(values, file, True, moves), placed: moves.file.outputs_check(word_ports(ids), registers).IsTrue(),
+    leaves: leaves_all(moves.code, callee_saved()).IsTrue()): MovesInto<M>(values, file, ids, registers, moves.code) {
+    λ s represents => ⟨ports_args(values, ids, registers, execute_block_normal(moves.code, s).gprs,
+            outputs_check_sound(values, moves.file, execute_block_normal(moves.code, s).gprs, keeps(s, represents, trivial),
+                word_ports(ids), registers, placed)),
+        execute_block_kept<M>(moves.code, s, callee_saved(), leaves)⟩
+}
+
+// The entry's code moves the bound and the inputs into the counter and the
+// state's registers, and the head's file describes every pass whose
+// parameters and count are there.
+fn LoopEntryOk<M>(values: Valuation(), file: File, inputs: List<Nat>, limit: Nat, parameters: List<Nat>, count: Nat,
+    entry: LoopEntry) → Type {
+    MovesInto<M>(values, file, Cons(limit, inputs), Cons(entry.registers.counter, entry.registers.state), entry.code) ∧
+    (((pass: Valuation()) → (g: Gprs) →
+        ArgsIn(words_of(pass, Cons(count, parameters)), Cons(entry.registers.counter, entry.registers.state), g) →
+        entry.head.Represents(pass, g)) ∧ entry.registers.Apart())
+}
+
+fn MayLoopEntry<M>(values: Valuation(), file: File, inputs: List<Nat>, limit: Nat, parameters: List<Nat>, count: Nat,
+    out: Option<LoopEntry>) → Type {
+    out.All(λ (entry: LoopEntry) => LoopEntryOk<M>(values, file, inputs, limit, parameters, count, entry))
+}
+
+theorem loop_entry_with_sound<M>(values: Valuation(), file: File, registers: LoopRegisters, moves: Lowered,
+    keeps: Keeps<M>(values, file, True, moves), inputs: List<Nat>, limit: Nat, parameters: List<Nat>, count: Nat):
+    MayLoopEntry<M>(values, file, inputs, limit, parameters, count, loop_entry_with(registers, moves, inputs, limit, parameters, count)) {
+    let into = Cons(registers.counter, registers.state);
+    let placed = moves.file.outputs_check(word_ports(Cons(limit, inputs)), into);
+    let kept = leaves_all(moves.code, callee_saved());
+    (match input_file(word_ports(Cons(count, parameters)), into) as λ o =>
+        ((pass: Valuation()) → (g: Gprs) → PortsAt(pass, word_ports(Cons(count, parameters)), into, g) →
+            o.All(λ (f: File) => f.Represents(pass, g))) →
+        MayLoopEntry<M>(values, file, inputs, limit, parameters, count, match o {
+            None => None,
+            Some(head) => match placed && (kept && registers.apart()) {
+                False => None,
+                True => Some(LoopEntry(registers, moves.code, head)),
+            },
+        }) {
+        None => λ _ => trivial,
+        Some(head) => λ head_ok =>
+            (match placed && (kept && registers.apart()) as λ c => (placed && (kept && registers.apart())) = c →
+                MayLoopEntry<M>(values, file, inputs, limit, parameters, count, match c {
+                    False => None,
+                    True => Some(LoopEntry(registers, moves.code, head)),
+                }) {
+                False => λ _ => trivial,
+                True => λ checked => {
+                    let all = Bool::is_true_and(placed, kept && registers.apart(), is_true_of_eq(placed && (kept && registers.apart()), checked));
+                    let rest = Bool::is_true_and(kept, registers.apart(), all.right);
+                    ⟨moves_into<M>(values, file, Cons(limit, inputs), into, moves, keeps, all.left, rest.left),
+                     ⟨λ pass g args => head_ok(pass, g, args_ports(pass, Cons(count, parameters), into, g, args)),
+                      registers.apart_sound(rest.right)⟩⟩
+                },
+            })(refl),
+    })(λ pass g placed_at => input_file_represents(pass, g, word_ports(Cons(count, parameters)), into, placed_at))
+}
+
+theorem loop_entry_at_sound<M>(values: Valuation(), file: File, registers: LoopRegisters, inputs: List<Nat>, limit: Nat,
+    parameters: List<Nat>, count: Nat):
+    MayLoopEntry<M>(values, file, inputs, limit, parameters, count, file.loop_entry_at(registers, inputs, limit, parameters, count)) {
+    (match file.move_outputs(word_ports(Cons(limit, inputs)), Cons(registers.counter, registers.state)) as λ o =>
+        MayKeep<M>(values, file, True, o) →
+        MayLoopEntry<M>(values, file, inputs, limit, parameters, count, match o {
+            None => None,
+            Some(moves) => loop_entry_with(registers, moves, inputs, limit, parameters, count),
+        }) {
+        None => λ _ => trivial,
+        Some(moves) => λ keeps => loop_entry_with_sound<M>(values, file, registers, moves, keeps, inputs, limit, parameters, count),
+    })(move_outputs_keeps<M>(values, word_ports(Cons(limit, inputs)), file, Cons(registers.counter, registers.state)))
+}
+
+theorem loop_entry_sound<M>(values: Valuation(), file: File, inputs: List<Nat>, limit: Nat, parameters: List<Nat>, count: Nat,
+    placement: List<Gpr>):
+    MayLoopEntry<M>(values, file, inputs, limit, parameters, count, file.loop_entry(inputs, limit, parameters, count, placement)) {
+    match loop_registers(parameters.len(), placement) as λ o =>
+        MayLoopEntry<M>(values, file, inputs, limit, parameters, count, match o {
+            None => None,
+            Some(registers) => file.loop_entry_at(registers, inputs, limit, parameters, count),
+        }) {
+        None => trivial,
+        Some(registers) => loop_entry_at_sound<M>(values, file, registers, inputs, limit, parameters, count),
+    }
+}
+
+// At the exit test the exit bit's register tests zero exactly when the bit
+// is clear; the moves leave or go round; and the file after the loop
+// describes the outputs in the state's registers and the exhausted bit in
+// the flag.
+fn LoopExitOk<M>(file: File, registers: LoopRegisters, count, exit: Nat, next, outputs: List<Nat>, exhausted: Nat,
+    out: LoopExit) → Type {
+    ((pass: Valuation()) → (g: Gprs) → file.Represents(pass, g) → out.register.tests_zero(g) = !pass(1, exit).head_bit()) ∧
+    (((pass: Valuation()) → MovesInto<M>(pass, file, next, registers.state, out.leave)) ∧
+     (((pass: Valuation()) → MovesInto<M>(pass, file, Cons(count, next), Cons(registers.counter, registers.state), out.back)) ∧
+      ((values: Valuation()) → (g: Gprs) → ArgsIn(words_of(values, outputs), registers.state, g) →
+        values(1, exhausted).zero_extend(63) = read_gpr(registers.flag, g) → out.out.Represents(values, g))))
+}
+
+fn MayLoopExit<M>(file: File, registers: LoopRegisters, count, exit: Nat, next, outputs: List<Nat>, exhausted: Nat,
+    out: Option<LoopExit>) → Type {
+    out.All(λ (x: LoopExit) => LoopExitOk<M>(file, registers, count, exit, next, outputs, exhausted, x))
+}
+
+theorem loop_exit_out_sound<M>(file: File, register: Gpr, leave, back: Lowered,
+    leave_keeps: (pass: Valuation()) → Keeps<M>(pass, file, True, leave), back_keeps: (pass: Valuation()) → Keeps<M>(pass, file, True, back),
+    registers: LoopRegisters, count, exit: Nat, next, outputs: List<Nat>, exhausted: Nat):
+    MayLoopExit<M>(file, registers, count, exit, next, outputs, exhausted,
+        file.loop_exit_out(register, leave, back, registers, count, exit, next, outputs, exhausted)) {
+    let ports = Cons(Port(id := exhausted, width := 1), word_ports(outputs));
+    let into = Cons(registers.flag, registers.state);
+    let found = file.check_one(exit, Some(Bit), register);
+    let leave_placed = leave.file.outputs_check(word_ports(next), registers.state);
+    let leave_kept = leaves_all(leave.code, callee_saved());
+    let back_placed = back.file.outputs_check(word_ports(Cons(count, next)), Cons(registers.counter, registers.state));
+    let back_kept = leaves_all(back.code, callee_saved());
+    (match input_file(ports, into) as λ o =>
+        ((values: Valuation()) → (g: Gprs) → PortsAt(values, ports, into, g) → o.All(λ (f: File) => f.Represents(values, g))) →
+        MayLoopExit<M>(file, registers, count, exit, next, outputs, exhausted, match o {
+            None => None,
+            Some(after) => match found && (leave_placed && (leave_kept && (back_placed && back_kept))) {
+                False => None,
+                True => Some(LoopExit(register, leave.code, back.code, after)),
+            },
+        }) {
+        None => λ _ => trivial,
+        Some(after) => λ after_ok =>
+            (match found && (leave_placed && (leave_kept && (back_placed && back_kept))) as λ c =>
+                (found && (leave_placed && (leave_kept && (back_placed && back_kept)))) = c →
+                MayLoopExit<M>(file, registers, count, exit, next, outputs, exhausted, match c {
+                    False => None,
+                    True => Some(LoopExit(register, leave.code, back.code, after)),
+                }) {
+                False => λ _ => trivial,
+                True => λ checked => {
+                    let first = Bool::is_true_and(found, leave_placed && (leave_kept && (back_placed && back_kept)),
+                        is_true_of_eq(found && (leave_placed && (leave_kept && (back_placed && back_kept))), checked));
+                    let second = Bool::is_true_and(leave_placed, leave_kept && (back_placed && back_kept), first.right);
+                    let third = Bool::is_true_and(leave_kept, back_placed && back_kept, second.right);
+                    let fourth = Bool::is_true_and(back_placed, back_kept, third.right);
+                    ⟨λ pass g represents => register.tests_zero_bit(g, pass(1, exit),
+                        check_one_sound(pass, file, g, represents, exit, Some(Bit), register, first.left)),
+                     ⟨λ pass => moves_into<M>(pass, file, next, registers.state, leave, leave_keeps(pass), second.left, third.left),
+                      ⟨λ pass => moves_into<M>(pass, file, Cons(count, next), Cons(registers.counter, registers.state), back, back_keeps(pass),
+                            fourth.left, fourth.right),
+                       λ values g args flag => after_ok(values, g, ⟨flag, args_ports(values, outputs, registers.state, g, args)⟩)⟩⟩⟩
+                },
+            })(refl),
+    })(λ values g placed => input_file_represents(values, g, ports, into, placed))
+}
+
+theorem loop_exit_back_sound<M>(file: File, register: Gpr, leave: Lowered, leave_keeps: (pass: Valuation()) → Keeps<M>(pass, file, True, leave),
+    registers: LoopRegisters, count, exit: Nat, next, outputs: List<Nat>, exhausted: Nat):
+    MayLoopExit<M>(file, registers, count, exit, next, outputs, exhausted,
+        file.loop_exit_back(register, leave, registers, count, exit, next, outputs, exhausted)) {
+    (match file.move_outputs(word_ports(Cons(count, next)), Cons(registers.counter, registers.state)) as λ o =>
+        ((pass: Valuation()) → MayKeep<M>(pass, file, True, o)) →
+        MayLoopExit<M>(file, registers, count, exit, next, outputs, exhausted, match o {
+            None => None,
+            Some(back) => file.loop_exit_out(register, leave, back, registers, count, exit, next, outputs, exhausted),
+        }) {
+        None => λ _ => trivial,
+        Some(back) => λ back_keeps => loop_exit_out_sound<M>(file, register, leave, back, leave_keeps, back_keeps, registers, count, exit,
+            next, outputs, exhausted),
+    })(λ pass => move_outputs_keeps<M>(pass, word_ports(Cons(count, next)), file, Cons(registers.counter, registers.state)))
+}
+
+theorem loop_exit_sound<M>(file: File, registers: LoopRegisters, count, exit: Nat, next, outputs: List<Nat>, exhausted: Nat):
+    MayLoopExit<M>(file, registers, count, exit, next, outputs, exhausted, file.loop_exit(registers, count, exit, next, outputs, exhausted)) {
+    match file.find(Held(exit, Bit)) as λ o =>
+        MayLoopExit<M>(file, registers, count, exit, next, outputs, exhausted, match o {
+            None => None,
+            Some(found) => match file.move_outputs(word_ports(next), registers.state) {
+                None => None,
+                Some(leave) => file.loop_exit_back(found.register, leave, registers, count, exit, next, outputs, exhausted),
+            },
+        }) {
+        None => trivial,
+        Some(found) =>
+            (match file.move_outputs(word_ports(next), registers.state) as λ o =>
+                ((pass: Valuation()) → MayKeep<M>(pass, file, True, o)) →
+                MayLoopExit<M>(file, registers, count, exit, next, outputs, exhausted, match o {
+                    None => None,
+                    Some(leave) => file.loop_exit_back(found.register, leave, registers, count, exit, next, outputs, exhausted),
+                }) {
+                None => λ _ => trivial,
+                Some(leave) => λ leave_keeps => loop_exit_back_sound<M>(file, found.register, leave, leave_keeps, registers, count, exit,
+                    next, outputs, exhausted),
+            })(λ pass => move_outputs_keeps<M>(pass, word_ports(next), file, registers.state)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Loops: the counter
+
+theorem Gpr::tests_zero_at(self register: Gpr, gprs: Gprs, word: BitVec(64), held: read_gpr(register, gprs) = word):
+    register.tests_zero(gprs) = is_zero_bits(64, word.band(word)) {
+    j(held, λ w _ => register.tests_zero(gprs) = is_zero_bits(64, w.band(w)), refl)
+}
+
+theorem loop_counter_zero(): is_zero_bits(64, BitVec::ofNat(0, n := 64).band(BitVec::ofNat(0, n := 64))) = True { refl }
+
+theorem loop_counter_nonzero(rest: Nat, lt: Succ(rest) < Nat::pow(2, 64)):
+    is_zero_bits(64, BitVec::ofNat(Succ(rest), n := 64).band(BitVec::ofNat(Succ(rest), n := 64))) = False {
+    let positive: (0 < Succ(rest)) = { omega };
+    test_self_nonzero(64, BitVec::ofNat(Succ(rest), n := 64),
+        j(sym(BitVec::toNat_ofNat(64, Succ(rest), lt)), λ x _ => 0 < x, positive))
+}
+
+// ADD counter, -1 counts a pass off.
+theorem loop_counter_step(rest: Nat, lt: Succ(rest) < Nat::pow(2, 64)):
+    BitVec::ofNat(Succ(rest), n := 64).add(BitVec::ofNat(255, n := 8).sign_extend(56)) = BitVec::ofNat(rest, n := 64) {
+    let c = BitVec::ofNat(255, n := 8).sign_extend(56);
+    let zero = BitVec::zero(n := 64);
+    let under: (rest < Nat::pow(2, 64)) = { omega };
+    let reading: (c.toNat() = Nat::pow(2, 64) - 1) = refl;
+    let back: ((Nat::pow(2, 64) - 1) + 1 = Nat::pow(2, 64)) = Nat::sub_add_cancel(1, Nat::pow(2, 64), trivial);
+    let count: (Succ(rest) + (Nat::pow(2, 64) - 1) = rest + Nat::pow(2, 64)) = { omega };
+    trans(sym(BitVec::iter_add_eq_add(64, BitVec::ofNat(Succ(rest), n := 64), c)),
+    trans(BitVec::cong_iterate_increment_count(64, BitVec::ofNat(Succ(rest), n := 64), reading),
+    trans(BitVec::cong_iterate_increment(64, Nat::pow(2, 64) - 1, sym(BitVec::zero_iterate_increment(64, Succ(rest), lt))),
+    trans(BitVec::iterate_increment_compose(64, zero, Succ(rest), Nat::pow(2, 64) - 1),
+    trans(BitVec::cong_iterate_increment_count(64, zero, count),
+    trans(sym(BitVec::iterate_increment_compose(64, zero, rest, Nat::pow(2, 64))),
+    trans(BitVec::iterate_increment_period(64, zero.iterate_increment(rest)), BitVec::zero_iterate_increment(64, rest, under))))))))
+}
+
+// ---------------------------------------------------------------------------
+// Loops: the passes
+
+// The loop's passes over its code from the head, by induction on the passes
+// left: with none the loop stops exhausted; otherwise a pass runs and leaves,
+// or goes round to the head with one fewer.
+theorem Site::loop_passes<M>(self site: Site<M>, writes: ByteWrites<M>, head_at, done_at: Nat,
+    Head: Nat → List<BitVec(64)> → MachineState<M> → Type, Done: List<BitVec(64)> → Bool → MachineState<M> → Type,
+    pass: Valuation() → Type, parameters: List<Nat>, count, exit: Nat, next: List<Nat>,
+    stop: (state: List<BitVec(64)>) → site.Moves(writes, head_at, done_at, Head(0, state), Done(state, True)),
+    leave: (rest: Nat) → Succ(rest) < Nat::pow(2, 64) → (values: Valuation()) → values(64, count) = BitVec::ofNat(Succ(rest)) →
+        pass(values) → values(1, exit).head_bit() = True →
+        site.Moves(writes, head_at, done_at, Head(Succ(rest), words_of(values, parameters)), Done(words_of(values, next), False)),
+    again: (rest: Nat) → Succ(rest) < Nat::pow(2, 64) → (values: Valuation()) → values(64, count) = BitVec::ofNat(Succ(rest)) →
+        pass(values) → values(1, exit).head_bit() = False →
+        site.Moves(writes, head_at, head_at, Head(Succ(rest), words_of(values, parameters)), Head(rest, words_of(values, next))),
+    remaining: Nat): remaining < Nat::pow(2, 64) → (state, final: List<BitVec(64)>) → (exhausted: Bool) →
+    LoopRuns(pass, parameters, count, exit, next, remaining, state, final, exhausted) →
+    site.Moves(writes, head_at, done_at, Head(remaining, state), Done(final, exhausted)) {
+    match remaining {
+        Zero => λ _ state final exhausted ran =>
+            j(sym(ran.right), λ e _ => site.Moves(writes, head_at, done_at, Head(0, state), Done(final, e)),
+                j(sym(ran.left), λ f _ => site.Moves(writes, head_at, done_at, Head(0, state), Done(f, True)), stop(state))),
+        Succ(rest) => λ lt state final exhausted ran => {
+            let values = ran.witness;
+            let under: (rest < Nat::pow(2, 64)) = { omega };
+            j(ran.proof.left, λ st _ => site.Moves(writes, head_at, done_at, Head(Succ(rest), st), Done(final, exhausted)),
+                (match values(1, exit).head_bit() as λ b => values(1, exit).head_bit() = b →
+                    (match b {
+                        False => LoopRuns(pass, parameters, count, exit, next, rest, words_of(values, next), final, exhausted),
+                        True => (final = words_of(values, next)) ∧ (exhausted = False),
+                    }) →
+                    site.Moves(writes, head_at, done_at, Head(Succ(rest), words_of(values, parameters)), Done(final, exhausted)) {
+                    False => λ clear later => site.moves_trans(writes, head_at, head_at, done_at,
+                        Head(Succ(rest), words_of(values, parameters)), Head(rest, words_of(values, next)), Done(final, exhausted),
+                        again(rest, lt, values, ran.proof.right.left, ran.proof.right.right.left, clear),
+                        site.loop_passes(writes, head_at, done_at, Head, Done, pass, parameters, count, exit, next, stop, leave, again,
+                            rest, under, words_of(values, next), final, exhausted, later)),
+                    True => λ set ended =>
+                        j(sym(ended.right), λ e _ =>
+                                site.Moves(writes, head_at, done_at, Head(Succ(rest), words_of(values, parameters)), Done(final, e)),
+                            j(sym(ended.left), λ f _ =>
+                                    site.Moves(writes, head_at, done_at, Head(Succ(rest), words_of(values, parameters)), Done(f, False)),
+                                leave(rest, lt, values, ran.proof.right.left, ran.proof.right.right.left, set))),
+                })(refl, ran.proof.right.right.right))
+        },
+    }
+}
+
+// The state at the head with `remaining` passes left: the state's words in
+// their registers, the counter, and the frame.
+fn Stack::LoopHead<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), d: Nat,
+    s0: MachineState<M>, registers: LoopRegisters, remaining: Nat, state: List<BitVec(64)>) → Gprs → M → Type {
+    λ g m => (ArgsIn(state, registers.state, g) ∧ read_gpr(registers.counter, g) = BitVec::ofNat(remaining)) ∧
+        (Kept(callee_saved(), s0.gprs, g) ∧ stack.Unchanged(d + 64, s0.memory, m))
+}
+
+// After a pass's body: its file describes the pass's valuation.
+fn Stack::LoopPassed<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), d: Nat,
+    s0: MachineState<M>, file: File, values: Valuation()) → Gprs → M → Type {
+    λ g m => file.Represents(values, g) ∧ (Kept(callee_saved(), s0.gprs, g) ∧ stack.Unchanged(d + 64, s0.memory, m))
+}
+
+// At the loop's end: the final state in the state's registers, the
+// exhausted bit in the flag.
+fn Stack::LoopDone<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), d: Nat,
+    s0: MachineState<M>, registers: LoopRegisters, final: List<BitVec(64)>, exhausted: Bool) → Gprs → M → Type {
+    λ g m => (ArgsIn(final, registers.state, g) ∧ BitVec::ofBool(exhausted).zero_extend(63) = read_gpr(registers.flag, g)) ∧
+        (Kept(callee_saved(), s0.gprs, g) ∧ stack.Unchanged(d + 64, s0.memory, m))
+}
+
+// With no passes left the head's test jumps to X.
+theorem loop_stops<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), d: Nat,
+    s0: MachineState<M>, head: Prog, registers: LoopRegisters, x_name, x_at: Nat, x_lands: asm_target(site.program, x_name) = x_at,
+    tested_in: head.branch_label(registers.counter, x_name).Within(site.program), state: List<BitVec(64)>, to: Nat,
+    post: MachineState<M> → Type,
+    exhausted: site.Moves(stack.writes, x_at, to,
+        λ (s: MachineState<M>) => stack.LoopHead(d, s0, registers, 0, state)(s.gprs, s.memory), post)):
+    site.Moves(stack.writes, prog_len(head), to, λ (s: MachineState<M>) => stack.LoopHead(d, s0, registers, 0, state)(s.gprs, s.memory),
+        post) {
+    let program = site.program;
+    let counter = registers.counter;
+    let tested = head.test_label(counter);
+    let test_in = tested.within_before(0, Jcc(E, x_name), program, tested_in);
+    let else_lands = j(x_lands, λ target _ => JumpsForward(prog_len(tested), 6,
+            asm_jump_of(asm_labels(program), prog_len(tested), Jcc(E, x_name)), target),
+        jcc_lands(asm_labels(program), tested_in.witness, program, tested, 0, E, x_name, program.laid_out_lands(laid), tested_in.proof));
+    let pre = stack.LoopHead(d, s0, registers, 0, state);
+    site.moves_test(stack.writes, program.laid_out_fits(laid), head, counter, x_name, test_in.witness, test_in.proof,
+        tested_in.witness, tested_in.proof, x_at, else_lands, to, pre, post,
+        site.moves_absurd(stack.writes, prog_len(head.branch_label(counter, x_name)), to,
+            λ (s: MachineState<M>) => pre(s.gprs, s.memory) ∧ counter.tests_zero(s.gprs) = False, post,
+            λ s held => {
+                let bad: (True = False) = trans(sym(loop_counter_zero()),
+                    trans(sym(counter.tests_zero_at(s.gprs, BitVec::ofNat(0), held.left.left.right)), held.right));
+                absurd(bad)
+            }),
+        site.moves_weaken(stack.writes, x_at, to, λ (s: MachineState<M>) => pre(s.gprs, s.memory), post,
+            λ (s: MachineState<M>) => pre(s.gprs, s.memory) ∧ counter.tests_zero(s.gprs) = True, post,
+            exhausted, λ s held => held.left, λ t held => held))
+}
+
+// With passes left the head's test falls through to the body.
+theorem loop_enters<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), d: Nat,
+    s0: MachineState<M>, head: Prog, registers: LoopRegisters, x_name, x_at: Nat, x_lands: asm_target(site.program, x_name) = x_at,
+    tested_in: head.branch_label(registers.counter, x_name).Within(site.program), rest: Nat, lt: Succ(rest) < Nat::pow(2, 64),
+    state: List<BitVec(64)>, to: Nat, post: MachineState<M> → Type,
+    body: site.Moves(stack.writes, prog_len(head.branch_label(registers.counter, x_name)), to,
+        λ (s: MachineState<M>) => stack.LoopHead(d, s0, registers, Succ(rest), state)(s.gprs, s.memory), post)):
+    site.Moves(stack.writes, prog_len(head), to,
+        λ (s: MachineState<M>) => stack.LoopHead(d, s0, registers, Succ(rest), state)(s.gprs, s.memory), post) {
+    let program = site.program;
+    let counter = registers.counter;
+    let tested = head.test_label(counter);
+    let test_in = tested.within_before(0, Jcc(E, x_name), program, tested_in);
+    let else_lands = j(x_lands, λ target _ => JumpsForward(prog_len(tested), 6,
+            asm_jump_of(asm_labels(program), prog_len(tested), Jcc(E, x_name)), target),
+        jcc_lands(asm_labels(program), tested_in.witness, program, tested, 0, E, x_name, program.laid_out_lands(laid), tested_in.proof));
+    let pre = stack.LoopHead(d, s0, registers, Succ(rest), state);
+    site.moves_test(stack.writes, program.laid_out_fits(laid), head, counter, x_name, test_in.witness, test_in.proof,
+        tested_in.witness, tested_in.proof, x_at, else_lands, to, pre, post,
+        site.moves_weaken(stack.writes, prog_len(head.branch_label(counter, x_name)), to, λ (s: MachineState<M>) => pre(s.gprs, s.memory),
+            post, λ (s: MachineState<M>) => pre(s.gprs, s.memory) ∧ counter.tests_zero(s.gprs) = False, post,
+            body, λ s held => held.left, λ t held => held),
+        site.moves_absurd(stack.writes, x_at, to,
+            λ (s: MachineState<M>) => pre(s.gprs, s.memory) ∧ counter.tests_zero(s.gprs) = True, post,
+            λ s held => {
+                let bad: (True = False) = trans(sym(held.right),
+                    trans(counter.tests_zero_at(s.gprs, BitVec::ofNat(Succ(rest)), held.left.left.right), loop_counter_nonzero(rest, lt)));
+                absurd(bad)
+            }))
+}
+
+// X: the flag set, the state as it was.
+theorem loop_marks<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), d: Nat,
+    s0: MachineState<M>, registers: LoopRegisters, apart: registers.Apart(), before: Prog, x_name, k: Nat,
+    at: asm_back(site.program, k) = At(At(before, x_name, Block([])), 0, Block([registers.mark()])), state: List<BitVec(64)>):
+    site.Moves(stack.writes, prog_len(before), prog_len(before) + block_length([registers.mark()]),
+        λ (s: MachineState<M>) => stack.LoopHead(d, s0, registers, 0, state)(s.gprs, s.memory),
+        λ (t: MachineState<M>) => stack.LoopDone(d, s0, registers, state, True)(t.gprs, t.memory)) {
+    site.moves_block(stack.writes, site.program.laid_out_fits(laid), k, At(before, x_name, Block([])), 0, [registers.mark()], at,
+        stack.LoopHead(d, s0, registers, 0, state), stack.LoopDone(d, s0, registers, state, True),
+        λ s memory held => ⟨⟨args_after_write(state, registers.state, s.gprs, registers.flag, BitVec::ofNat(1), apart.right.left, held.left.left),
+                sym(read_gpr_after_write(registers.flag, BitVec::ofNat(1), s.gprs))⟩,
+            ⟨kept_trans(callee_saved(), s0.gprs, s.gprs, execute_block_normal([registers.mark()], s).gprs, held.right.left,
+                execute_block_kept<M>([registers.mark()], s, callee_saved(), apart.right.right.right.left)), held.right.right⟩⟩)
+}
+
+// A pass's body, from the head's file at the pass's valuation.
+theorem loop_body_runs<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data), callees: Callees(), d: Nat, s0: MachineState<M>,
+    start: Prog, entry: LoopEntry, count: Nat, parameters: List<Nat>,
+    head_ok: (pass: Valuation()) → (g: Gprs) →
+        ArgsIn(words_of(pass, Cons(count, parameters)), Cons(entry.registers.counter, entry.registers.state), g) →
+        entry.head.Represents(pass, g),
+    body: StructuredRegion, values: Valuation(), pass: Emitted,
+    emits: EmitsIn<M>(site, stack, values, d, s0, start, entry.head, StructuredRegionHoldsIn(callees, values, body), pass),
+    pass_in: pass.prog.Within(site.program), rest: Nat, counted: values(64, count) = BitVec::ofNat(Succ(rest)),
+    passed: StructuredRegionHoldsIn(callees, values, body)):
+    site.Moves(stack.writes, prog_len(start), prog_len(pass.prog),
+        λ (s: MachineState<M>) => stack.LoopHead(d, s0, entry.registers, Succ(rest), words_of(values, parameters))(s.gprs, s.memory),
+        λ (t: MachineState<M>) => stack.LoopPassed(d, s0, pass.file, values)(t.gprs, t.memory)) {
+    site.moves_weaken(stack.writes, prog_len(start), prog_len(pass.prog),
+        λ (s: MachineState<M>) => (entry.head.Represents(values, s.gprs) ∧ StructuredRegionHoldsIn(callees, values, body)) ∧
+            stack.Framed(d, s0, s),
+        λ (t: MachineState<M>) => pass.file.Represents(values, t.gprs) ∧ stack.Framed(d, s0, t),
+        λ (s: MachineState<M>) => stack.LoopHead(d, s0, entry.registers, Succ(rest), words_of(values, parameters))(s.gprs, s.memory),
+        λ (t: MachineState<M>) => stack.LoopPassed(d, s0, pass.file, values)(t.gprs, t.memory),
+        emits.right(pass_in),
+        λ s held => ⟨⟨head_ok(values, s.gprs, ⟨trans(held.left.right, sym(counted)), held.left.left⟩), passed⟩, held.right⟩,
+        λ t held => held)
+}
+
+// The exit bit set: the state moved out, the flag cleared, JMP J.
+theorem loop_leaves<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), d: Nat,
+    s0: MachineState<M>, registers: LoopRegisters, apart: registers.Apart(), pass: Prog, file: File, count, exit: Nat,
+    next, outputs: List<Nat>, exhausted: Nat, out: LoopExit, out_ok: LoopExitOk<M>(file, registers, count, exit, next, outputs, exhausted, out),
+    names: Nat, jumped_in: loop_jumped(pass, registers, out, names).Within(site.program),
+    c_lands: asm_target(site.program, Succ(Succ(names))) = prog_len(loop_jumped(pass, registers, out, names)),
+    j_at: Nat, j_lands: asm_target(site.program, Succ(Succ(Succ(Succ(names))))) = j_at,
+    values: Valuation(), set: values(1, exit).head_bit() = True):
+    site.Moves(stack.writes, prog_len(pass), j_at,
+        λ (s: MachineState<M>) => stack.LoopPassed(d, s0, file, values)(s.gprs, s.memory),
+        λ (t: MachineState<M>) => stack.LoopDone(d, s0, registers, words_of(values, next), False)(t.gprs, t.memory)) {
+    let program = site.program;
+    let fits = program.laid_out_fits(laid);
+    let lands = program.laid_out_lands(laid);
+    let c_name = Succ(Succ(names));
+    let j_name = Succ(Succ(Succ(Succ(names))));
+    let left = pass.branch_label(out.register, c_name);
+    let leave = At(left, 0, Block(out.leave));
+    let cleared = At(leave, 0, Block([registers.clear()]));
+    let jumped = loop_jumped(pass, registers, out, names);
+    let cleared_in = cleared.within_before(0, Jmp(j_name), program, jumped_in);
+    let leave_in = leave.within_before(0, Block([registers.clear()]), program, cleared_in);
+    let left_in = left.within_before(0, Block(out.leave), program, leave_in);
+    let tested = pass.test_label(out.register);
+    let test_in = tested.within_before(0, Jcc(E, c_name), program, left_in);
+    let else_lands = j(c_lands, λ target _ => JumpsForward(prog_len(tested), 6,
+            asm_jump_of(asm_labels(program), prog_len(tested), Jcc(E, c_name)), target),
+        jcc_lands(asm_labels(program), left_in.witness, program, tested, 0, E, c_name, lands, left_in.proof));
+    let jump_lands = j(j_lands, λ target _ => NearLands(prog_len(cleared), asm_jump_of(asm_labels(program), prog_len(cleared), Jmp(j_name)),
+            target),
+        jmp_lands(asm_labels(program), jumped_in.witness, program, cleared, 0, j_name, lands, jumped_in.proof));
+    let pre = stack.LoopPassed(d, s0, file, values);
+    let moved = λ (g: Gprs) (m: M) => ArgsIn(words_of(values, next), registers.state, g) ∧
+        (Kept(callee_saved(), s0.gprs, g) ∧ stack.Unchanged(d + 64, s0.memory, m));
+    let post = stack.LoopDone(d, s0, registers, words_of(values, next), False);
+    site.moves_test(stack.writes, fits, pass, out.register, c_name, test_in.witness, test_in.proof, left_in.witness, left_in.proof,
+        prog_len(jumped), else_lands, j_at, pre, λ (t: MachineState<M>) => post(t.gprs, t.memory),
+        site.moves_trans(stack.writes, prog_len(left), prog_len(cleared), j_at,
+            λ (s: MachineState<M>) => pre(s.gprs, s.memory) ∧ out.register.tests_zero(s.gprs) = False,
+            λ (s: MachineState<M>) => post(s.gprs, s.memory), λ (t: MachineState<M>) => post(t.gprs, t.memory),
+            site.moves_trans(stack.writes, prog_len(left), prog_len(leave), prog_len(cleared),
+                λ (s: MachineState<M>) => pre(s.gprs, s.memory) ∧ out.register.tests_zero(s.gprs) = False,
+                λ (s: MachineState<M>) => moved(s.gprs, s.memory), λ (t: MachineState<M>) => post(t.gprs, t.memory),
+                site.moves_weaken(stack.writes, prog_len(left), prog_len(leave), λ (s: MachineState<M>) => pre(s.gprs, s.memory),
+                    λ (t: MachineState<M>) => moved(t.gprs, t.memory),
+                    λ (s: MachineState<M>) => pre(s.gprs, s.memory) ∧ out.register.tests_zero(s.gprs) = False,
+                    λ (t: MachineState<M>) => moved(t.gprs, t.memory),
+                    site.moves_block(stack.writes, fits, leave_in.witness, left, 0, out.leave, leave_in.proof, pre, moved,
+                        λ s memory held => {
+                            let ran = out_ok.right.left(values, s, held.left);
+                            ⟨ran.left, ⟨kept_trans(callee_saved(), s0.gprs, s.gprs, execute_block_normal(out.leave, s).gprs, held.right.left,
+                                ran.right), held.right.right⟩⟩
+                        }),
+                    λ s held => held.left, λ t held => held),
+                site.moves_block(stack.writes, fits, cleared_in.witness, leave, 0, [registers.clear()], cleared_in.proof, moved, post,
+                    λ s memory held => ⟨⟨args_after_write(words_of(values, next), registers.state, s.gprs, registers.flag, BitVec::ofNat(0),
+                            apart.right.left, held.left),
+                        sym(read_gpr_after_write(registers.flag, BitVec::ofNat(0), s.gprs))⟩,
+                        ⟨kept_trans(callee_saved(), s0.gprs, s.gprs, execute_block_normal([registers.clear()], s).gprs, held.right.left,
+                            execute_block_kept<M>([registers.clear()], s, callee_saved(), apart.right.right.left)), held.right.right⟩⟩)),
+            site.moves_jump(stack.writes, fits, jumped_in.witness, cleared, 0, j_name, jumped_in.proof, j_at, jump_lands, post)),
+        site.moves_absurd(stack.writes, prog_len(jumped), j_at,
+            λ (s: MachineState<M>) => pre(s.gprs, s.memory) ∧ out.register.tests_zero(s.gprs) = True,
+            λ (t: MachineState<M>) => post(t.gprs, t.memory),
+            λ s held => {
+                let bad: (True = False) = trans(sym(held.right), trans(out_ok.left(values, s.gprs, held.left.left),
+                    cong_fn<Bool, Bool>(λ b => !b, set)));
+                absurd(bad)
+            }))
+}
+
+// The exit bit clear: the state and the count moved round, a pass counted
+// off, JMP H.
+theorem loop_rounds<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), d: Nat,
+    s0: MachineState<M>, registers: LoopRegisters, apart: registers.Apart(), pass: Prog, file: File, count, exit: Nat,
+    next, outputs: List<Nat>, exhausted: Nat, out: LoopExit, out_ok: LoopExitOk<M>(file, registers, count, exit, next, outputs, exhausted, out),
+    names: Nat, again_in: loop_again(pass, registers, out, names).Within(site.program),
+    c_lands: asm_target(site.program, Succ(Succ(names))) = prog_len(loop_jumped(pass, registers, out, names)),
+    h_at: Nat, h_lands: asm_target(site.program, Succ(names)) = h_at,
+    values: Valuation(), clear: values(1, exit).head_bit() = False, rest: Nat, lt: Succ(rest) < Nat::pow(2, 64),
+    counted: values(64, count) = BitVec::ofNat(Succ(rest))):
+    site.Moves(stack.writes, prog_len(pass), h_at,
+        λ (s: MachineState<M>) => stack.LoopPassed(d, s0, file, values)(s.gprs, s.memory),
+        λ (t: MachineState<M>) => stack.LoopHead(d, s0, registers, rest, words_of(values, next))(t.gprs, t.memory)) {
+    let program = site.program;
+    let fits = program.laid_out_fits(laid);
+    let lands = program.laid_out_lands(laid);
+    let c_name = Succ(Succ(names));
+    let h_name = Succ(names);
+    let jumped = loop_jumped(pass, registers, out, names);
+    let cont = At(jumped, c_name, Block([]));
+    let back = At(cont, 0, Block(out.back));
+    let stepped = At(back, 0, Block([registers.step()]));
+    let stepped_in = stepped.within_before(0, Jmp(h_name), program, again_in);
+    let back_in = back.within_before(0, Block([registers.step()]), program, stepped_in);
+    let cont_in = cont.within_before(0, Block(out.back), program, back_in);
+    let jumped_in = jumped.within_before(c_name, Block([]), program, cont_in);
+    let left = pass.branch_label(out.register, c_name);
+    let into_jumped: left.Within(jumped) = Exists(3, refl);
+    let left_in = left.within_trans(jumped, program, into_jumped, jumped_in);
+    let tested = pass.test_label(out.register);
+    let test_in = tested.within_before(0, Jcc(E, c_name), program, left_in);
+    let else_lands = j(c_lands, λ target _ => JumpsForward(prog_len(tested), 6,
+            asm_jump_of(asm_labels(program), prog_len(tested), Jcc(E, c_name)), target),
+        jcc_lands(asm_labels(program), left_in.witness, program, tested, 0, E, c_name, lands, left_in.proof));
+    let jump_lands = j(h_lands, λ target _ => NearLands(prog_len(stepped), asm_jump_of(asm_labels(program), prog_len(stepped), Jmp(h_name)),
+            target),
+        jmp_lands(asm_labels(program), again_in.witness, program, stepped, 0, h_name, lands, again_in.proof));
+    let pre = stack.LoopPassed(d, s0, file, values);
+    let turned = stack.LoopHead(d, s0, registers, Succ(rest), words_of(values, next));
+    let post = stack.LoopHead(d, s0, registers, rest, words_of(values, next));
+    let c = BitVec::ofNat(255, n := 8).sign_extend(56);
+    site.moves_test(stack.writes, fits, pass, out.register, c_name, test_in.witness, test_in.proof, left_in.witness, left_in.proof,
+        prog_len(jumped), else_lands, h_at, pre, λ (t: MachineState<M>) => post(t.gprs, t.memory),
+        site.moves_absurd(stack.writes, prog_len(left), h_at,
+            λ (s: MachineState<M>) => pre(s.gprs, s.memory) ∧ out.register.tests_zero(s.gprs) = False,
+            λ (t: MachineState<M>) => post(t.gprs, t.memory),
+            λ s held => {
+                let bad: (True = False) = trans(sym(cong_fn<Bool, Bool>(λ b => !b, clear)),
+                    trans(sym(out_ok.left(values, s.gprs, held.left.left)), held.right));
+                absurd(bad)
+            }),
+        site.moves_trans(stack.writes, prog_len(jumped), prog_len(stepped), h_at,
+            λ (s: MachineState<M>) => pre(s.gprs, s.memory) ∧ out.register.tests_zero(s.gprs) = True,
+            λ (s: MachineState<M>) => post(s.gprs, s.memory), λ (t: MachineState<M>) => post(t.gprs, t.memory),
+            site.moves_trans(stack.writes, prog_len(jumped), prog_len(back), prog_len(stepped),
+                λ (s: MachineState<M>) => pre(s.gprs, s.memory) ∧ out.register.tests_zero(s.gprs) = True,
+                λ (s: MachineState<M>) => turned(s.gprs, s.memory), λ (t: MachineState<M>) => post(t.gprs, t.memory),
+                site.moves_weaken(stack.writes, prog_len(cont), prog_len(back), λ (s: MachineState<M>) => pre(s.gprs, s.memory),
+                    λ (t: MachineState<M>) => turned(t.gprs, t.memory),
+                    λ (s: MachineState<M>) => pre(s.gprs, s.memory) ∧ out.register.tests_zero(s.gprs) = True,
+                    λ (t: MachineState<M>) => turned(t.gprs, t.memory),
+                    site.moves_block(stack.writes, fits, back_in.witness, cont, 0, out.back, back_in.proof, pre, turned,
+                        λ s memory held => {
+                            let ran = out_ok.right.right.left(values, s, held.left);
+                            ⟨⟨ran.left.right, trans(ran.left.left, counted)⟩,
+                             ⟨kept_trans(callee_saved(), s0.gprs, s.gprs, execute_block_normal(out.back, s).gprs, held.right.left, ran.right),
+                              held.right.right⟩⟩
+                        }),
+                    λ s held => held.left, λ t held => held),
+                site.moves_block(stack.writes, fits, stepped_in.witness, back, 0, [registers.step()], stepped_in.proof, turned, post,
+                    λ s memory held => ⟨⟨args_after_write(words_of(values, next), registers.state, s.gprs, registers.counter,
+                            read_gpr(registers.counter, s.gprs).add(c), apart.left, held.left.left),
+                        trans(read_gpr_after_write(registers.counter, read_gpr(registers.counter, s.gprs).add(c), s.gprs),
+                            trans(cong_fn<BitVec(64), BitVec(64)>(λ a => a.add(c), held.left.right), loop_counter_step(rest, lt)))⟩,
+                        ⟨kept_trans(callee_saved(), s0.gprs, s.gprs, execute_block_normal([registers.step()], s).gprs, held.right.left,
+                            execute_block_kept<M>([registers.step()], s, callee_saved(), apart.right.right.right.right)), held.right.right⟩⟩)),
+            site.moves_jump(stack.writes, fits, again_in.witness, stepped, 0, h_name, again_in.proof, h_at, jump_lands, post)))
+}
+
+// The loop: the entry's moves, the passes by induction, and the file after.
+theorem loop_emits<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
+    callees: Callees(), values: Valuation(), d: Nat, s0: MachineState<M>, prog: Prog, file: File,
+    inputs: List<Nat>, limit: Nat, parameters: List<Nat>, count: Nat, body: StructuredRegion, exit: Nat, next, outputs: List<Nat>,
+    exhausted: Nat, names: Nat, entry: LoopEntry, entry_ok: LoopEntryOk<M>(values, file, inputs, limit, parameters, count, entry),
+    pass: Emitted,
+    pass_emits: (v: Valuation()) →
+        EmitsIn<M>(site, stack, v, d, s0, loop_tested(prog, entry, names), entry.head, StructuredRegionHoldsIn(callees, v, body), pass),
+    out: LoopExit, out_ok: LoopExitOk<M>(pass.file, entry.registers, count, exit, next, outputs, exhausted, out)):
+    EmitsIn<M>(site, stack, values, d, s0, prog, file,
+        StructuredRegionHoldsIn(callees, values, Loop(inputs, limit, parameters, count, body, exit, next, outputs, exhausted)),
+        Emitted(loop_done(pass.prog, entry.registers, out, names), out.out, pass.placement, pass.names)) {
+    let registers = entry.registers;
+    let apart = entry_ok.right.right;
+    let entered = At(prog, 0, Block(entry.code));
+    let head = loop_head(prog, entry, names);
+    let tested = loop_tested(prog, entry, names);
+    let jumped = loop_jumped(pass.prog, registers, out, names);
+    let again = loop_again(pass.prog, registers, out, names);
+    let set = loop_set(pass.prog, registers, out, names);
+    let done = loop_done(pass.prog, registers, out, names);
+    let x_name = Succ(Succ(Succ(names)));
+    let grown: tested.Within(pass.prog) = pass_emits(values).left;
+    let opened: prog.Within(tested) = Exists(4, refl);
+    let closed: pass.prog.Within(done) = Exists(12, refl);
+    let holds = StructuredRegionHoldsIn(callees, values, Loop(inputs, limit, parameters, count, body, exit, next, outputs, exhausted));
+    ⟨prog.within_trans(tested, done, opened, tested.within_trans(pass.prog, done, grown, closed)),
+     λ within => {
+        let program = site.program;
+        let unique = program.laid_out_unique(laid);
+        let pass_in = pass.prog.within_trans(done, program, closed, within);
+        let tested_in = tested.within_trans(pass.prog, program, grown, pass_in);
+        let head_back: head.Within(tested) = Exists(2, refl);
+        let head_in = head.within_trans(tested, program, head_back, tested_in);
+        let entered_back: entered.Within(tested) = Exists(3, refl);
+        let entered_in = entered.within_trans(tested, program, entered_back, tested_in);
+        let jumped_back: jumped.Within(done) = Exists(7, refl);
+        let jumped_in = jumped.within_trans(done, program, jumped_back, within);
+        let cont_back: At(jumped, Succ(Succ(names)), Block([])).Within(done) = Exists(6, refl);
+        let cont_in = At(jumped, Succ(Succ(names)), Block([])).within_trans(done, program, cont_back, within);
+        let again_back: again.Within(done) = Exists(3, refl);
+        let again_in = again.within_trans(done, program, again_back, within);
+        let x_back: At(again, x_name, Block([])).Within(done) = Exists(2, refl);
+        let x_in = At(again, x_name, Block([])).within_trans(done, program, x_back, within);
+        let set_in = set.within_before(Succ(x_name), Block([]), program, within);
+        let h_lands = label_target(head_in.witness, program, entered, names, Block([]), unique, head_in.proof);
+        let c_lands = label_target(cont_in.witness, program, jumped, Succ(names), Block([]), unique, cont_in.proof);
+        let x_lands = label_target(x_in.witness, program, again, Succ(Succ(names)), Block([]), unique, x_in.proof);
+        let j_lands = label_target(within.witness, program, set, x_name, Block([]), unique, within.proof);
+        let Head = λ (r: Nat) (state: List<BitVec(64)>) (s: MachineState<M>) =>
+            stack.LoopHead(d, s0, registers, r, state)(s.gprs, s.memory);
+        let Done = λ (final: List<BitVec(64)>) (e: Bool) (s: MachineState<M>) =>
+            stack.LoopDone(d, s0, registers, final, e)(s.gprs, s.memory);
+        let Passed = λ (v: Valuation()) (s: MachineState<M>) => stack.LoopPassed(d, s0, pass.file, v)(s.gprs, s.memory);
+        let stop = λ (state: List<BitVec(64)>) => loop_stops<M>(site, laid, stack, d, s0, head, registers, x_name, prog_len(again),
+            x_lands, tested_in, state, prog_len(done), Done(state, True),
+            loop_marks<M>(site, laid, stack, d, s0, registers, apart, again, x_name, set_in.witness, set_in.proof, state));
+        let enters = λ (rest: Nat) (lt: Succ(rest) < Nat::pow(2, 64)) (v: Valuation()) (counted: v(64, count) = BitVec::ofNat(Succ(rest)))
+            (passed: StructuredRegionHoldsIn(callees, v, body)) =>
+            loop_enters<M>(site, laid, stack, d, s0, head, registers, x_name, prog_len(again), x_lands, tested_in, rest, lt,
+                words_of(v, parameters), prog_len(pass.prog), Passed(v),
+                loop_body_runs<M>(site, stack, callees, d, s0, tested, entry, count, parameters, entry_ok.right.left, body, v, pass,
+                    pass_emits(v), pass_in, rest, counted, passed));
+        let leave = λ (rest: Nat) (lt: Succ(rest) < Nat::pow(2, 64)) (v: Valuation()) (counted: v(64, count) = BitVec::ofNat(Succ(rest)))
+            (passed: StructuredRegionHoldsIn(callees, v, body)) (set_bit: v(1, exit).head_bit() = True) =>
+            site.moves_trans(stack.writes, prog_len(head), prog_len(pass.prog), prog_len(done), Head(Succ(rest), words_of(v, parameters)),
+                Passed(v), Done(words_of(v, next), False),
+                enters(rest, lt, v, counted, passed),
+                loop_leaves<M>(site, laid, stack, d, s0, registers, apart, pass.prog, pass.file, count, exit, next, outputs, exhausted, out,
+                    out_ok, names, jumped_in, c_lands, prog_len(done), j_lands, v, set_bit));
+        let rounds = λ (rest: Nat) (lt: Succ(rest) < Nat::pow(2, 64)) (v: Valuation()) (counted: v(64, count) = BitVec::ofNat(Succ(rest)))
+            (passed: StructuredRegionHoldsIn(callees, v, body)) (clear: v(1, exit).head_bit() = False) =>
+            site.moves_trans(stack.writes, prog_len(head), prog_len(pass.prog), prog_len(head), Head(Succ(rest), words_of(v, parameters)),
+                Passed(v), Head(rest, words_of(v, next)),
+                enters(rest, lt, v, counted, passed),
+                loop_rounds<M>(site, laid, stack, d, s0, registers, apart, pass.prog, pass.file, count, exit, next, outputs, exhausted, out,
+                    out_ok, names, again_in, c_lands, prog_len(head), h_lands, v, clear, rest, lt, counted));
+        let n = values(64, limit).toNat();
+        let pre = λ (g: Gprs) (m: M) => (file.Represents(values, g) ∧ holds) ∧
+            (Kept(callee_saved(), s0.gprs, g) ∧ stack.Unchanged(d + 64, s0.memory, m));
+        let entering = site.moves_block(stack.writes, program.laid_out_fits(laid), entered_in.witness, prog, 0, entry.code, entered_in.proof,
+            pre, stack.LoopHead(d, s0, registers, n, words_of(values, inputs)),
+            λ s memory held => {
+                let ran = entry_ok.left(s, held.left.left);
+                ⟨⟨ran.left.right, trans(ran.left.left, sym(BitVec::ofNat_toNat(64, values(64, limit))))⟩,
+                 ⟨kept_trans(callee_saved(), s0.gprs, s.gprs, execute_block_normal(entry.code, s).gprs, held.right.left, ran.right),
+                  held.right.right⟩⟩
+            });
+        let after = λ (t: MachineState<M>) => out.out.Represents(values, t.gprs) ∧ stack.Framed(d, s0, t);
+        λ s here resident held => site.moves_trans(stack.writes, prog_len(prog), prog_len(head), prog_len(done),
+            λ (x: MachineState<M>) => pre(x.gprs, x.memory), Head(n, words_of(values, inputs)), after,
+            entering,
+            site.moves_weaken(stack.writes, prog_len(head), prog_len(done), Head(n, words_of(values, inputs)),
+                Done(words_of(values, outputs), values(1, exhausted).head_bit()), Head(n, words_of(values, inputs)), after,
+                site.loop_passes(stack.writes, prog_len(head), prog_len(done), Head, Done,
+                    λ (v: Valuation()) => StructuredRegionHoldsIn(callees, v, body), parameters, count, exit, next, stop, leave, rounds,
+                    n, BitVec::toNat_lt_pow(64, values(64, limit)), words_of(values, inputs), words_of(values, outputs),
+                    values(1, exhausted).head_bit(), held.left.right),
+                λ x h => h,
+                λ t ended => ⟨out_ok.right.right.right(values, t.gprs, ended.left.left,
+                    j(sym(BitVec::one_bit_eq_ofBool(values(1, exhausted))), λ x _ => x.zero_extend(63) = read_gpr(registers.flag, t.gprs),
+                        ended.left.right)), ended.right⟩))(s, here, resident, held)
+     }⟩
+}
+
+theorem loop_close_emits<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
+    callees: Callees(), values: Valuation(), d: Nat, s0: MachineState<M>, prog: Prog, file: File,
+    inputs: List<Nat>, limit: Nat, parameters: List<Nat>, count: Nat, body: StructuredRegion, exit: Nat, next, outputs: List<Nat>,
+    exhausted: Nat, names: Nat, entry: LoopEntry, entry_ok: LoopEntryOk<M>(values, file, inputs, limit, parameters, count, entry),
+    pass: Emitted,
+    pass_emits: (v: Valuation()) →
+        EmitsIn<M>(site, stack, v, d, s0, loop_tested(prog, entry, names), entry.head, StructuredRegionHoldsIn(callees, v, body), pass)):
+    MayEmitIn<M>(site, stack, values, d, s0, prog, file,
+        StructuredRegionHoldsIn(callees, values, Loop(inputs, limit, parameters, count, body, exit, next, outputs, exhausted)),
+        pass.loop_close(entry.registers, count, exit, next, outputs, exhausted, names)) {
+    (match pass.file.loop_exit(entry.registers, count, exit, next, outputs, exhausted) as λ e =>
+        MayLoopExit<M>(pass.file, entry.registers, count, exit, next, outputs, exhausted, e) →
+        MayEmitIn<M>(site, stack, values, d, s0, prog, file,
+            StructuredRegionHoldsIn(callees, values, Loop(inputs, limit, parameters, count, body, exit, next, outputs, exhausted)),
+            match e {
+                None => None,
+                Some(out) => Some(Emitted(loop_done(pass.prog, entry.registers, out, names), out.out, pass.placement, pass.names)),
+            }) {
+        None => λ _ => trivial,
+        Some(out) => λ out_ok => loop_emits<M>(site, laid, stack, callees, values, d, s0, prog, file, inputs, limit, parameters, count,
+            body, exit, next, outputs, exhausted, names, entry, entry_ok, pass, pass_emits, out, out_ok),
+    })(loop_exit_sound<M>(pass.file, entry.registers, count, exit, next, outputs, exhausted))
 }
 
 // Round 2's theorem over machine runs: whatever `emit_calls` emits keeps
@@ -809,6 +1684,35 @@ theorem StructuredRegion::emit_calls_emits<M>(self region: StructuredRegion, sit
         Call(callee, arguments, result) => λ prog file placement names =>
             file.emit_call_emits<M>(site, laid, stack, callees, bound, calls, values, d, s0, rsp0, room, fits, prog, callee, arguments,
                 result, placement, names),
+        Loop(inputs, limit, parameters, count, body, exit, next, outputs, exhausted) => λ prog file placement names => {
+            let holds = StructuredRegionHoldsIn(callees, values, Loop(inputs, limit, parameters, count, body, exit, next, outputs, exhausted));
+            (match file.loop_entry(inputs, limit, parameters, count, placement) as λ e =>
+                MayLoopEntry<M>(values, file, inputs, limit, parameters, count, e) →
+                MayEmitIn<M>(site, stack, values, d, s0, prog, file, holds, match e {
+                    None => None,
+                    Some(entry) => match body.emit_calls(loop_tested(prog, entry, names), entry.head, entry.registers.rest,
+                        Succ(Succ(Succ(Succ(names)))), bound) {
+                        None => None,
+                        Some(pass) => pass.loop_close(entry.registers, count, exit, next, outputs, exhausted, names),
+                    },
+                }) {
+                None => λ _ => trivial,
+                Some(entry) => λ entry_ok =>
+                    (match body.emit_calls(loop_tested(prog, entry, names), entry.head, entry.registers.rest, Succ(Succ(Succ(Succ(names)))),
+                        bound) as λ b =>
+                        ((v: Valuation()) → MayEmitIn<M>(site, stack, v, d, s0, loop_tested(prog, entry, names), entry.head,
+                            StructuredRegionHoldsIn(callees, v, body), b)) →
+                        MayEmitIn<M>(site, stack, values, d, s0, prog, file, holds, match b {
+                            None => None,
+                            Some(pass) => pass.loop_close(entry.registers, count, exit, next, outputs, exhausted, names),
+                        }) {
+                        None => λ _ => trivial,
+                        Some(pass) => λ pass_emits => loop_close_emits<M>(site, laid, stack, callees, values, d, s0, prog, file, inputs, limit,
+                            parameters, count, body, exit, next, outputs, exhausted, names, entry, entry_ok, pass, pass_emits),
+                    })(λ v => body.emit_calls_emits<M>(site, laid, stack, callees, bound, calls, v, d, s0, rsp0, room, fits,
+                        loop_tested(prog, entry, names), entry.head, entry.registers.rest, Succ(Succ(Succ(Succ(names)))))),
+            })(loop_entry_sound<M>(values, file, inputs, limit, parameters, count, placement))
+        },
     }
 }
 
@@ -1172,6 +2076,24 @@ theorem File::emit_call_grows(self file: File, prog: Prog, callee: Nat, argument
     }
 }
 
+theorem loop_close_grows(prog: Prog, entry: LoopEntry, names: Nat, pass: Emitted, grown: loop_tested(prog, entry, names).Within(pass.prog),
+    count, exit: Nat, next, outputs: List<Nat>, exhausted: Nat):
+    Grows(prog, pass.loop_close(entry.registers, count, exit, next, outputs, exhausted, names)) {
+    let tested = loop_tested(prog, entry, names);
+    let opened: prog.Within(tested) = Exists(4, refl);
+    match pass.file.loop_exit(entry.registers, count, exit, next, outputs, exhausted) as λ e => Grows(prog, match e {
+        None => None,
+        Some(out) => Some(Emitted(loop_done(pass.prog, entry.registers, out, names), out.out, pass.placement, pass.names)),
+    }) {
+        None => trivial,
+        Some(out) => {
+            let closed: pass.prog.Within(loop_done(pass.prog, entry.registers, out, names)) = Exists(12, refl);
+            prog.within_trans(tested, loop_done(pass.prog, entry.registers, out, names), opened,
+                tested.within_trans(pass.prog, loop_done(pass.prog, entry.registers, out, names), grown, closed))
+        },
+    }
+}
+
 theorem StructuredRegion::emit_calls_grows(self region: StructuredRegion, bound: Nat):
     (prog: Prog) → (file: File) → (placement: List<Gpr>) → (names: Nat) → Grows(prog, region.emit_calls(prog, file, placement, names, bound)) {
     match region {
@@ -1242,6 +2164,27 @@ theorem StructuredRegion::emit_calls_grows(self region: StructuredRegion, bound:
             },
         Call(callee, arguments, result) => λ prog file placement names =>
             file.emit_call_grows(prog, callee, arguments, result, placement, names, bound),
+        Loop(inputs, limit, parameters, count, body, exit, next, outputs, exhausted) => λ prog file placement names =>
+            match file.loop_entry(inputs, limit, parameters, count, placement) as λ e => Grows(prog, match e {
+                None => None,
+                Some(entry) => match body.emit_calls(loop_tested(prog, entry, names), entry.head, entry.registers.rest,
+                    Succ(Succ(Succ(Succ(names)))), bound) {
+                    None => None,
+                    Some(pass) => pass.loop_close(entry.registers, count, exit, next, outputs, exhausted, names),
+                },
+            }) {
+                None => trivial,
+                Some(entry) =>
+                    (match body.emit_calls(loop_tested(prog, entry, names), entry.head, entry.registers.rest, Succ(Succ(Succ(Succ(names)))),
+                        bound) as λ b => Grows(loop_tested(prog, entry, names), b) → Grows(prog, match b {
+                        None => None,
+                        Some(pass) => pass.loop_close(entry.registers, count, exit, next, outputs, exhausted, names),
+                    }) {
+                        None => λ _ => trivial,
+                        Some(pass) => λ grown => loop_close_grows(prog, entry, names, pass, grown, count, exit, next, outputs, exhausted),
+                    })(body.emit_calls_grows(bound, loop_tested(prog, entry, names), entry.head, entry.registers.rest,
+                        Succ(Succ(Succ(Succ(names)))))),
+            },
     }
 }
 

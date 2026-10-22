@@ -31,6 +31,8 @@ mod function_ir_lower;
 mod function_ir_lower_structured;
 #[path = "../function_ir_lower_calls.rs"]
 mod function_ir_lower_calls;
+#[path = "../function_ir_lower_loops.rs"]
+mod function_ir_lower_loops;
 #[path = "../function_ir_eval.rs"]
 mod function_ir_eval;
 #[path = "../native_source.rs"]
