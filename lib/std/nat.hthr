@@ -612,9 +612,9 @@ theorem Nat::lt_trichotomy(self n: Nat): (m: Nat) → n < m ∨ n = m ∨ m < n 
 
 // Below, or at or above: trichotomy with its last two arms joined.
 theorem Nat::lt_or_ge(self n, m: Nat): n < m ∨ m <= n {
-    match n.lt_trichotomy(m) as λ _ => n < m ∨ m <= n {
+    match n.lt_trichotomy(m) {
         Inl(below) => Inl(below),
-        Inr(rest) => Inr(match rest as λ _ => m <= n {
+        Inr(rest) => Inr(match rest {
             Inl(same) => j(same, λ y _ => y <= n, n.le_refl()),
             Inr(above) => m.le_of_lt(n, above),
         }),
