@@ -99,22 +99,33 @@ theorem sim_ret<M>(io: LinuxIo<M>, status: BitVec(64), state, at: MachineState<M
 
 // Linux steps to a syscall that requests the tree's call, and every way it
 // may answer and resume meets the tree's continuation at that answer.
+//
+// Of one trace, stated as a `VisTrace`: matched inside `sim_vis`'s λ, where
+// its type is `IsTrace` of the tree's `Vis`, the same proof costs the kernel
+// twenty times the steps (issues/trace-match-under-computed-binder-cost.md).
+theorem sim_vis_trace<M>(io: LinuxIo<M>, c: LinuxCmd<Nat>, k: c.Resp() → ITree<BitVec(64)>(Events::linux()),
+    state, at: MachineState<M>, steps: LinuxSteps(io, state, at), syscall: LinuxSyscallAt(io, at),
+    requests: LinuxRequests(io, at, c),
+    answers: (a: c.Resp()) → c.Answers(a) → LinuxResumes(io, at, c, a, Sim(io, k(a))),
+    tr: Trace<BitVec(64)>(Events::linux()), w: VisTrace<BitVec(64)>(Events::linux(), c, tr, λ a rest => IsTrace(Events::linux(), k(a), rest)),
+    valid: Trace::LinuxValid(tr)): RunsAs(io, tr, state) {
+    match w {
+        Prefix(e) => j(sym(e), λ y _ => RunsAs(io, y, state), trivial),
+        Pending(e) => j(sym(e), λ y _ => RunsAs(io, y, state), Exists(at, ⟨steps, ⟨syscall, requests⟩⟩)),
+        Answered(a, rest, e, sub) => {
+            let moved: Trace::LinuxValid<BitVec(64)>(TAns(c, a, rest)) = rewrite(e, in := valid);
+            j(sym(e), λ y _ => RunsAs(io, y, state), Exists(at, ⟨steps, ⟨syscall, ⟨requests, ⟨moved.left,
+                linux_resumes_mono(io, at, c, a, Sim(io, k(a)), RunsAs(io, rest),
+                    λ resumed sim => sim(rest, sub, moved.right), answers(a, moved.left))⟩⟩⟩⟩))
+        },
+    }
+}
 theorem sim_vis<M>(io: LinuxIo<M>, c: LinuxCmd<Nat>, k: c.Resp() → ITree<BitVec(64)>(Events::linux()),
     state, at: MachineState<M>, steps: LinuxSteps(io, state, at), syscall: LinuxSyscallAt(io, at),
     requests: LinuxRequests(io, at, c),
     answers: (a: c.Resp()) → c.Answers(a) → LinuxResumes(io, at, c, a, Sim(io, k(a)))):
     Sim<M>(io, Vis(c, k), state) {
-    λ tr (w: VisTrace<BitVec(64)>(Events::linux(), c, tr, λ a rest => IsTrace(Events::linux(), k(a), rest))) valid =>
-        match w {
-            Prefix(e) => j(sym(e), λ y _ => RunsAs(io, y, state), trivial),
-            Pending(e) => j(sym(e), λ y _ => RunsAs(io, y, state), Exists(at, ⟨steps, ⟨syscall, requests⟩⟩)),
-            Answered(a, rest, e, sub) => {
-                let moved: Trace::LinuxValid<BitVec(64)>(TAns(c, a, rest)) = rewrite(e, in := valid);
-                j(sym(e), λ y _ => RunsAs(io, y, state), Exists(at, ⟨steps, ⟨syscall, ⟨requests, ⟨moved.left,
-                    linux_resumes_mono(io, at, c, a, Sim(io, k(a)), RunsAs(io, rest),
-                        λ resumed sim => sim(rest, sub, moved.right), answers(a, moved.left))⟩⟩⟩⟩))
-            },
-        }
+    λ tr w valid => sim_vis_trace(io, c, k, state, at, steps, syscall, requests, answers, tr, w, valid)
 }
 
 // What `Sim` asks of the tree's next move: the exit, the call, or nothing at
