@@ -118,14 +118,19 @@ fn open_element_type() {
 }
 
 // A function child whose domain mentions the index, a λ in child position,
-// and a value parameter beside the index.
+// an existing function child passed whole (η-expanded into the step), and a
+// value parameter beside the index.
 #[test]
 fn function_children_and_value_parameters() {
     elab(
         "codata Fan(w: Nat) : (n: Nat) -> Type { F(k: (i: Fin(Succ(n))) -> Fan(w, Succ(n))) }
          fn fan(w: Nat, n: Nat) -> Fan(w, n) { F(λ i => fan(w, Succ(n))) }
          fn kid(w: Nat, n: Nat, f: Fan(w, n), i: Fin(Succ(n))) -> Fan(w, Succ(n)) { match f { F(k) => k(i) } }
-         theorem fan_kid(w: Nat, n: Nat, i: Fin(Succ(n))): kid(w, n, fan(w, n), i) = fan(w, Succ(n)) { refl }",
+         theorem fan_kid(w: Nat, n: Nat, i: Fin(Succ(n))): kid(w, n, fan(w, n), i) = fan(w, Succ(n)) { refl }
+         fn keep(w: Nat, n: Nat, f: Fan(w, n), b: Nat) -> Fan(w, n) {
+             match b { Zero => match f { F(k) => F(k) }, Succ(_) => F(λ i => keep(w, Succ(n), fan(w, Succ(n)), 0)) }
+         }
+         theorem keep_kid(w: Nat, n: Nat, f: Fan(w, n), i: Fin(Succ(n))): kid(w, n, keep(w, n, f, 0), i) = kid(w, n, f, i) { refl }",
     );
 }
 
