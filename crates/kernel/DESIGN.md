@@ -707,6 +707,25 @@ paper too).
   dead `Rc` allocation through its control block.) Conversion and the
   definition-body cache are unchanged; a force after eviction may spend fuel
   again, which affects cost thresholds but never a verdict.
+  Plain first-in first-out was wrong for two kinds of term value
+  (2026-10-22, `issues/computed-argument-reevaluated-in-rounding.md`: a
+  binary32 rounding of `1/3` ran its long division about ten times and out
+  of fuel, where an unbounded cache checks it in a fraction of the fuel). A
+  value whose force spent at least `COSTLY_FORCE` fuel goes to a **second
+  tier** with its own bound, which cheap entries never push out; each entry
+  there stands for that much fuel spent, so at worst the bound doubles. And
+  a **glued neutral** is cheap to force but is the only path to its
+  unfolding, a closure that evaluation made: once evicted (often while that
+  unfolding was still being forced, its own thunks doing the pushing), the
+  next force of the same closure made a fresh neutral glued to a fresh
+  unfolding, and the work behind the first was unreachable. So an evicted
+  glued neutral leaves its unfolding as a **tomb** keyed by its closure
+  (bounded, two pointers each), and that closure's next force is glued to
+  the old unfolding (`ValueArena::reglue`). This is sharing by closure
+  identity, the same argument as the memo itself: a closure forced again
+  denotes what it denoted, so the unfolding of its first value is the
+  unfolding of its next, and the head and spine are the new force's own.
+  Fuel only.
   Hot handles are kept compact: an environment closure captures only its
   persistent head and length, while whichever machine extends it supplies the
   already-owned query arena explicitly. Persistent cells remain two pointers.
