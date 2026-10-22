@@ -12,6 +12,8 @@ mod support;
 mod coinduction_probe;
 #[path = "../codata.rs"]
 mod codata;
+#[path = "../codata_indexed.rs"]
+mod codata_indexed;
 #[path = "../lib_algebra.rs"]
 mod lib_algebra;
 #[path = "../lib_list_algos.rs"]

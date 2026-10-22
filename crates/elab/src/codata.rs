@@ -29,8 +29,8 @@
 use std::sync::Arc as Rc;
 
 use heather_kernel::level::Level;
-use heather_kernel::term::{LocalCtx, LocalSubst, LocalVar, MSig, Term, Type};
-use heather_syntax::{Arm, Expr, ExprKind, Span};
+use heather_kernel::term::{LocalCtx, LocalSubst, LocalVar, MSig, Term, Type, m_out_ty, m_step_ty};
+use heather_syntax::{Arm, Expr, ExprKind, Span, TyKind};
 
 use crate::inductive::{FieldKind, Inductive, Spine, decoded, inject, tag_type, tag_value};
 use crate::recursion::{SelfRef, surface_self_call};
@@ -43,6 +43,19 @@ fn var(i: u32) -> Rc<Term> {
 
 fn app_at(fun: Rc<Term>, arg: Rc<Term>) -> Rc<Term> {
     Rc::new(Term::AppAt { fun, arg })
+}
+
+/// Component `r` of an `nv`-tuple `t` (right-nested pairs; the value itself
+/// when there is one component).
+fn tuple_proj(nv: usize, r: usize, t: Term) -> Term {
+    if nv == 1 {
+        return t;
+    }
+    let mut t = t;
+    for _ in 0..r {
+        t = Term::SndAt { pair: Rc::new(t) };
+    }
+    if r + 1 < nv { Term::FstAt { pair: Rc::new(t) } } else { t }
 }
 
 /// The index of every unindexed `M`: `⟨⟩ : Unit⁰`.
@@ -59,45 +72,70 @@ enum Kid {
     Fn(Rc<Term>, usize),
 }
 
-/// The components of `⟦D⟧ = M(Unit; _. S; _ s. P; _ _ _. ⟨⟩)(⟨⟩)`, scoped in
-/// `g`, with the index binder already instantiated away.
+/// The components of `⟦D⟧ = M(I; i. S; i s. P; i s p. o)(j)`, scoped in `g`,
+/// with the index binder instantiated at `j` (`⟨⟩` for an unindexed
+/// declaration, docs/codata-indexed-design.md §3 for an indexed one).
 pub(crate) struct MParts {
     g: LocalCtx,
     sig: Rc<MSig>,
+    /// `j`, in `g`.
+    index: Rc<Term>,
     pub ls: Level,
     pub lp: Level,
-    /// The family's level, `ls ⊔ lp ⊔ 0` — the kernel's `family_level`.
+    /// The family's level, `ls ⊔ lp ⊔ li` — the kernel's `family_level`.
     pub lw: Level,
     pub shape: Rc<Type>,
     /// `P`, over `(g, s : S)`.
     pos: Rc<Type>,
+    /// `o`, over `(g, s : S, p : P)`.
+    next: Rc<Term>,
+    /// The index type is not `Unit`.
+    pub indexed: bool,
 }
 
 impl MParts {
-    /// Read a lowered `⟦D⟧` back: an `M` whose index type is `Unit`.
+    /// Read a lowered `⟦D⟧` back.
     pub(crate) fn read(ty: &Type, g: &LocalCtx) -> Option<MParts> {
         let ty = decoded(ty);
-        let Type::M { sig, .. } = &*ty else {
+        let Type::M { sig, index } = &*ty else {
             return None;
         };
-        if !matches!(&*decoded(&sig.idx), Type::Unit { .. }) {
-            return None;
-        }
-        let t = Term::Triv { level: sig.idx_level.clone() };
+        let indexed = !matches!(&*decoded(&sig.idx), Type::Unit { .. });
         Some(MParts {
             g: g.clone(),
             sig: Rc::clone(sig),
+            index: Rc::clone(index),
             ls: sig.level.clone(),
             lp: sig.pos_level.clone(),
             lw: sig.family_level(),
-            shape: Rc::new(sig.shape_at(&t)),
-            pos: Rc::new(sig.pos_at(&t)),
+            shape: Rc::new(sig.shape_at(index)),
+            pos: Rc::new(sig.pos_at(index)),
+            next: Rc::new(sig.next_at(index)),
+            indexed,
         })
     }
 
-    /// `⟦D⟧` itself at depth `k`.
+    /// `⟦D⟧` itself — at this index — at depth `k`.
     pub(crate) fn d_at(&self, k: u32) -> Type {
-        self.sig.shift_local(k).at(triv())
+        self.sig.shift_local(k).at(Rc::new(self.index.shift_local(k)))
+    }
+
+    /// The family at another index `idx`, scoped at depth `k`.
+    fn d_of(&self, k: u32, idx: Rc<Term>) -> Type {
+        self.sig.shift_local(k).at(idx)
+    }
+
+    /// `o(j, label, pos)`, the index of the child at `pos`, at depth `k`.
+    fn next_tm(&self, k: u32, label: Rc<Term>, pos: Rc<Term>) -> Rc<Term> {
+        if !self.indexed {
+            return triv();
+        }
+        Rc::new(self.next.apply_local(&embed(&self.g, k).extended(label).extended(pos)))
+    }
+
+    /// The child at `pos`'s type, `⟦D⟧(o(j, label, pos))`, at depth `k`.
+    fn child_ty(&self, k: u32, label: Rc<Term>, pos: Rc<Term>) -> Type {
+        self.d_of(k, self.next_tm(k, label, pos))
     }
 
     fn shape_at(&self, k: u32) -> Type {
@@ -109,13 +147,14 @@ impl MParts {
         self.pos.apply_local(&embed(&self.g, k).extended(label))
     }
 
-    /// `Π(p : P label). ⟦D⟧` — the children's type, as `out` hands them over.
+    /// `Π(p : P label). ⟦D⟧(o(j, label, p))` — the children's type, as `out`
+    /// hands them over.
     fn kids_ty(&self, k: u32, label: Rc<Term>) -> Type {
         Type::Pi {
             dom_level: self.lp.clone(),
             cod_level: self.lw.clone(),
-            dom: Rc::new(self.pos_at(k, label)),
-            cod: Rc::new(self.d_at(k + 1)),
+            dom: Rc::new(self.pos_at(k, Rc::clone(&label))),
+            cod: Rc::new(self.child_ty(k + 1, Rc::new(label.shift_local(1)), var(0))),
         }
     }
 
@@ -123,8 +162,8 @@ impl MParts {
         Level::join(self.lp.clone(), self.lw.clone())
     }
 
-    /// `out`'s type, `Σ(s : S). Π(p : P s). ⟦D⟧` (the kernel's `m_out_ty` at
-    /// the unit index).
+    /// `out`'s type, `Σ(s : S). Π(p : P s). ⟦D⟧(o(j, s, p))` (the kernel's
+    /// `m_out_ty`).
     fn out_ty(&self, k: u32) -> Type {
         Type::Sigma {
             fst_level: self.ls.clone(),
@@ -135,7 +174,7 @@ impl MParts {
     }
 
     fn out(&self, k: u32, t: Rc<Term>) -> Term {
-        Term::Out { sig: self.sig.shift_local(k), index: triv(), scrut: t }
+        Term::Out { sig: self.sig.shift_local(k), index: Rc::new(self.index.shift_local(k)), scrut: t }
     }
 
     fn out_fst(&self, k: u32, o: Rc<Term>) -> Term {
@@ -207,39 +246,17 @@ impl MParts {
         (comps, tails)
     }
 
-    /// Child `r` of `m`'s position at `payload` (the `⟨⟩` of a plain child or
-    /// the argument of a function child): `inr^r(inl(payload))`, or
-    /// `inr^{m-1}(payload)` for the last. `comps`/`tails` are
-    /// [`Self::components`]', scoped `k` binders below `payload`.
+    /// [`position`] at this declaration's position level.
     fn position(&self, comps: &[Type], tails: &[Type], k: u32, r: usize, payload: Rc<Term>) -> Rc<Term> {
-        let m = comps.len();
-        let mut t = payload;
-        if r + 1 < m {
-            t = Rc::new(Term::Inl {
-                lhs_level: self.lp.clone(),
-                rhs_level: self.lp.clone(),
-                lhs: Rc::new(comps[r].shift_local(k)),
-                rhs: Rc::new(tails[r].shift_local(k)),
-                val: t,
-            });
-        }
-        for j in (0..r).rev() {
-            t = Rc::new(Term::Inr {
-                lhs_level: self.lp.clone(),
-                rhs_level: self.lp.clone(),
-                lhs: Rc::new(comps[j].shift_local(k)),
-                rhs: Rc::new(tails[j].shift_local(k)),
-                val: t,
-            });
-        }
-        t
+        position(&self.lp, comps, tails, k, r, payload)
     }
 
     /// `λ(p : P label). kids(p)` at a target type over the positions: a case
-    /// tree on `p` down the sum, child `r`'s value at each leaf. `value(r,
-    /// d, y)` is child `r` at depth `d` (past the label's context), `y` the
-    /// position's payload there (a function child's argument; a plain child
-    /// ignores it). `target(d)` is the children's type at depth `d`.
+    /// tree on `p` down the sum, child `r`'s value at each leaf. `value(r, d,
+    /// y, pos)` is child `r` at depth `d` (past `g`), `y` the position's
+    /// payload there (a function child's argument; a plain child ignores it)
+    /// and `pos` the whole position. `target(d, pos)` is the children's type
+    /// at depth `d` and position `pos`.
     #[allow(clippy::too_many_arguments)]
     fn kids_lam(
         &self,
@@ -247,52 +264,11 @@ impl MParts {
         label: Rc<Term>,
         comps: &[Type],
         tails: &[Type],
-        target: &dyn Fn(u32) -> Type,
+        target: &dyn Fn(u32, Rc<Term>) -> Type,
         tlvl: &Level,
-        value: &mut dyn FnMut(usize, u32, Rc<Term>) -> R<Term>,
+        value: &mut dyn FnMut(usize, u32, Rc<Term>, Rc<Term>) -> R<Term>,
     ) -> R<Term> {
-        let m = comps.len();
-        // Over (…, p): the case down the sum, scrut at depth `d`.
-        #[allow(clippy::too_many_arguments)]
-        fn down(
-            p: &MParts,
-            comps: &[Type],
-            tails: &[Type],
-            target: &dyn Fn(u32) -> Type,
-            tlvl: &Level,
-            value: &mut dyn FnMut(usize, u32, Rc<Term>) -> R<Term>,
-            r: usize,
-            d: u32,
-            scrut: Rc<Term>,
-        ) -> R<Term> {
-            let m = comps.len();
-            if r + 1 == m {
-                return value(r, d, scrut);
-            }
-            let case_l = value(r, d + 1, var(0))?;
-            let case_r = down(p, comps, tails, target, tlvl, value, r + 1, d + 1, var(0))?;
-            Ok(Term::Case {
-                lhs_level: p.lp.clone(),
-                rhs_level: p.lp.clone(),
-                motive_level: tlvl.clone(),
-                lhs: Rc::new(comps[r].shift_local(d)),
-                rhs: Rc::new(tails[r].shift_local(d)),
-                motive: Rc::new(target(d + 1)),
-                case_l: Rc::new(case_l),
-                case_r: Rc::new(case_r),
-                scrut,
-            })
-        }
-        let body = if m == 0 {
-            Term::ElimEmpty {
-                level: tlvl.clone(),
-                scrut_level: self.lp.clone(),
-                motive: Rc::new(target(k + 2)),
-                scrut: var(0),
-            }
-        } else {
-            down(self, comps, tails, target, tlvl, value, 0, k + 1, var(0))?
-        };
+        let body = pos_cases(&self.lp, comps, tails, k + 1, target, tlvl, value)?;
         Ok(Term::Lam {
             dom_level: self.lp.clone(),
             cod_level: tlvl.clone(),
@@ -300,6 +276,102 @@ impl MParts {
             body: Rc::new(body),
         })
     }
+}
+
+/// `inr` over the first `r` components of a constructor's position sum,
+/// around `z` (a position into the `r`-th tail): the whole position. `comps`
+/// and `tails` are scoped at depth 0, the result at depth `k`.
+fn wrap_inr(lp: &Level, comps: &[Type], tails: &[Type], k: u32, r: usize, z: Rc<Term>) -> Rc<Term> {
+    let mut t = z;
+    for j in (0..r).rev() {
+        t = Rc::new(Term::Inr {
+            lhs_level: lp.clone(),
+            rhs_level: lp.clone(),
+            lhs: Rc::new(comps[j].shift_local(k)),
+            rhs: Rc::new(tails[j].shift_local(k)),
+            val: t,
+        });
+    }
+    t
+}
+
+/// Child `r` of `m`'s position at `payload` (the `⟨⟩` of a plain child or
+/// the argument of a function child): `inr^r(inl(payload))`, or
+/// `inr^{m-1}(payload)` for the last. `comps`/`tails` are
+/// [`MParts::components`]', scoped at depth 0, the result at depth `k`.
+fn position(lp: &Level, comps: &[Type], tails: &[Type], k: u32, r: usize, payload: Rc<Term>) -> Rc<Term> {
+    let m = comps.len();
+    let mut t = payload;
+    if r + 1 < m {
+        t = Rc::new(Term::Inl {
+            lhs_level: lp.clone(),
+            rhs_level: lp.clone(),
+            lhs: Rc::new(comps[r].shift_local(k)),
+            rhs: Rc::new(tails[r].shift_local(k)),
+            val: t,
+        });
+    }
+    wrap_inr(lp, comps, tails, k, r, t)
+}
+
+/// The case tree down a position sum, the position binder `Var(0)` at depth
+/// `d0` (past the depth `comps` and `tails` are scoped at):
+/// [`MParts::kids_lam`]'s body, and the child index's (§3 of
+/// docs/codata-indexed-design.md).
+#[allow(clippy::too_many_arguments)]
+fn pos_cases(
+    lp: &Level,
+    comps: &[Type],
+    tails: &[Type],
+    d0: u32,
+    target: &dyn Fn(u32, Rc<Term>) -> Type,
+    tlvl: &Level,
+    value: &mut dyn FnMut(usize, u32, Rc<Term>, Rc<Term>) -> R<Term>,
+) -> R<Term> {
+    let m = comps.len();
+    // Level `r`: `scrut` (at depth `d`) is a position into the `r`-th tail.
+    #[allow(clippy::too_many_arguments)]
+    fn down(
+        lp: &Level,
+        comps: &[Type],
+        tails: &[Type],
+        target: &dyn Fn(u32, Rc<Term>) -> Type,
+        tlvl: &Level,
+        value: &mut dyn FnMut(usize, u32, Rc<Term>, Rc<Term>) -> R<Term>,
+        r: usize,
+        d: u32,
+        scrut: Rc<Term>,
+    ) -> R<Term> {
+        let m = comps.len();
+        if r + 1 == m {
+            let pos = wrap_inr(lp, comps, tails, d, r, Rc::clone(&scrut));
+            return value(r, d, scrut, pos);
+        }
+        let y = var(0);
+        let pos_l = position(lp, comps, tails, d + 1, r, Rc::clone(&y));
+        let case_l = value(r, d + 1, y, pos_l)?;
+        let case_r = down(lp, comps, tails, target, tlvl, value, r + 1, d + 1, var(0))?;
+        Ok(Term::Case {
+            lhs_level: lp.clone(),
+            rhs_level: lp.clone(),
+            motive_level: tlvl.clone(),
+            lhs: Rc::new(comps[r].shift_local(d)),
+            rhs: Rc::new(tails[r].shift_local(d)),
+            motive: Rc::new(target(d + 1, wrap_inr(lp, comps, tails, d + 1, r, var(0)))),
+            case_l: Rc::new(case_l),
+            case_r: Rc::new(case_r),
+            scrut,
+        })
+    }
+    if m == 0 {
+        return Ok(Term::ElimEmpty {
+            level: tlvl.clone(),
+            scrut_level: lp.clone(),
+            motive: Rc::new(target(d0 + 1, var(0))),
+            scrut: var(0),
+        });
+    }
+    down(lp, comps, tails, target, tlvl, value, 0, d0, var(0))
 }
 
 /// A child's value, as [`MParts::kids_lam`]'s leaves need it.
@@ -310,6 +382,26 @@ enum KidVal {
     Fn(Rc<Term>, Rc<Type>),
 }
 
+/// A `corec` carrier as a family `X(i)` over `(g, i)`. An unindexed carrier
+/// is a constant family (the type weakened past `i`).
+#[derive(Clone)]
+struct Carrier {
+    fam: Type,
+    level: Level,
+}
+
+impl Carrier {
+    /// `X(idx)`, for `idx` at depth `d` past `g`.
+    fn at(&self, d: u32, idx: &Term) -> Type {
+        self.fam.inst_top(d, idx)
+    }
+
+    /// The family over `(g, Δ, i)` with `|Δ| = by`.
+    fn under(&self, by: u32) -> Carrier {
+        Carrier { fam: self.fam.shift_local_above(by, 1), level: self.level.clone() }
+    }
+}
+
 /// A corecursive definition in progress (§5): what [`Elaborator::corec_check`]
 /// recognizes and what a corecursive call's seed is built against. Every type
 /// is scoped at `depth`, the body's own context (the declaration's whole
@@ -318,17 +410,19 @@ pub(crate) struct CorecSite {
     pub(crate) selfref: Rc<SelfRef>,
     depth: usize,
     ind: Rc<Inductive>,
-    /// `⟦D⟧`, the result type.
+    /// `⟦D⟧(g)`, the result type (`g = ⟨⟩` unindexed).
     d_ty: Type,
-    /// The carrier `X`: the varying parameters' tuple.
-    carrier: Type,
-    carrier_level: Level,
-    /// `X + ⟦D⟧` — a child: a new seed, or a tree that already exists.
-    child_ty: Type,
-    child_level: Level,
-    /// `Σ(s : S). Π(p : P s). X + ⟦D⟧` — a node.
+    /// The varying parameters' tuple `V`.
+    vtuple: Type,
+    vtuple_level: Level,
+    /// The carrier: `V` unindexed, `Σ(v : V). Id(I; g[v]; i)` indexed
+    /// (docs/codata-indexed-design.md §6).
+    carrier: Carrier,
+    /// `Σ(s : S). Π(p : P s). X(o) + ⟦D⟧(o)` at `g` — a node.
     step_ty: Type,
     step_level: Level,
+    /// `X(o) + ⟦D⟧(o)`'s level — a child.
+    child_level: Level,
     /// Per parameter (after the type parameters): `None` when it is passed
     /// unchanged by every corecursive call (it stays an outer binder),
     /// `Some(r)` when it is the carrier's `r`-th component.
@@ -350,25 +444,68 @@ impl CorecSite {
 impl Elaborator {
     // -- the type (§2) ------------------------------------------------------
 
-    /// `⟦D<args>⟧` for a `codata` declaration (§2).
+    /// `⟦D<args>⟧` for a `codata` declaration (§2), at `index` when it is
+    /// indexed (docs/codata-indexed-design.md §3; `index` scoped in `cx`).
     pub(crate) fn lower_instance_m(
         &self,
         cx: &Cx,
         ind: &Inductive,
         args: &[(Type, Level)],
         vargs: &[(Term, Type, Level)],
+        index: Option<Term>,
         span: Span,
     ) -> R<(Type, Level)> {
         let n = ind.ctors.len();
-        let (shape, ls) = self.lower_shape(cx, ind, args, vargs, span)?;
+        let indexed = !ind.co_index.is_empty();
+        let index = match (indexed, index) {
+            (false, _) => None,
+            (true, Some(j)) => Some(j),
+            (true, None) => {
+                return err(
+                    format!(
+                        "`{}` is an indexed family and needs its index: write `{}{}(…)`",
+                        ind.name,
+                        ind.name,
+                        if ind.params.is_empty() { "" } else { "<…>" }
+                    ),
+                    span,
+                );
+            }
+        };
+        // The base every piece is scoped over: `Γ` unindexed, `(Γ, i)` indexed,
+        // where the index binders are aliases of `i`'s projections.
+        let (bcx, ity, args_b, vargs_b, extra) = if indexed {
+            let (ity, li) = self.codata_index_ty(cx, ind, args, vargs, span)?;
+            let mut icx = cx.clone();
+            icx.push("#i".into(), ity.clone(), li.clone());
+            let extra = self.index_aliases(ind, &ity, &li, icx.names.len());
+            let args_b: Vec<(Type, Level)> = args.iter().map(|(t, l)| (t.shift_local(1), l.clone())).collect();
+            let vargs_b: Vec<(Term, Type, Level)> =
+                vargs.iter().map(|(t, ty, l)| (t.shift_local(1), ty.shift_local(1), l.clone())).collect();
+            (icx, Some((ity, li)), args_b, vargs_b, extra)
+        } else {
+            (cx.clone(), None, args.to_vec(), vargs.to_vec(), Vec::new())
+        };
+        let mut parts = Vec::with_capacity(n);
+        let mut all_doms = Vec::with_capacity(n);
+        for i in 0..n {
+            let (t, l, doms) = self.lower_ctor_with_domains_at(&bcx, ind, i, &args_b, &vargs_b, &extra, span)?;
+            parts.push((t, l));
+            all_doms.push(doms);
+        }
+        let (shape, ls) = match parts.pop() {
+            None => (Type::Empty { level: Level::Zero }, Level::Zero),
+            Some((mut acc, mut acc_lvl)) => {
+                for (ty, lvl) in parts.into_iter().rev() {
+                    acc = Type::Sum { lhs_level: lvl.clone(), rhs_level: acc_lvl.clone(), lhs: Rc::new(ty), rhs: Rc::new(acc) };
+                    acc_lvl = Level::max(lvl, acc_lvl).normalize().canonical();
+                }
+                (acc, acc_lvl)
+            }
+        };
         let mut kids: Vec<Vec<Kid>> = Vec::with_capacity(n);
         let mut lp: Option<(Level, String)> = None;
-        for (i, ctor) in ind.ctors.iter().enumerate() {
-            let doms = if ctor.kind.contains(&FieldKind::FnChild) {
-                self.lower_ctor_with_domains(cx, ind, i, args, vargs, span)?.2
-            } else {
-                Vec::new()
-            };
+        for (ctor, doms) in ind.ctors.iter().zip(all_doms) {
             let mut doms = doms.into_iter();
             let mut row = Vec::new();
             for kind in &ctor.kind {
@@ -412,10 +549,42 @@ impl Elaborator {
         }
         let lp = lp.map(|(l, _)| l).unwrap_or(Level::Zero);
         let spine = self.spine(&shape, &ls, n, span)?;
-        // P over (Γ, x : S): a constant-motive case tree into `Ty lp`.
-        let mut xcx = cx.clone();
-        xcx.push("#x".into(), shape.clone(), ls.clone());
         let tag = Rc::new(tag_value(&tag_type(ind.tag)));
+        // A branch's position codes, at its depth `d` past the base.
+        let codes_at = |bcx2: &Cx, i: usize, d: u32, value: &Rc<Term>| -> R<Vec<Term>> {
+            let mut codes = Vec::with_capacity(kids[i].len());
+            for kid in &kids[i] {
+                codes.push(match kid {
+                    Kid::Plain => Term::TmUnit { level: lp.clone() },
+                    Kid::Fn(code, j) => {
+                        // The domain's binders are the tag and the payload
+                        // fields before it; here they are the branch value's
+                        // projections (the tag by its canonical inhabitant).
+                        let ctor_ty = spine.ctors[i].0.shift_local(d);
+                        let mut subst = embed(&bcx.gamma, d).extended(Rc::clone(&tag));
+                        for m in 0..*j {
+                            let (proj, _, _) = self.projection(bcx2, &ctor_ty, value, m, span)?;
+                            subst = subst.extended(proj);
+                        }
+                        code.apply_local(&subst)
+                    }
+                });
+            }
+            Ok(codes)
+        };
+        let sum_codes = |mut codes: Vec<Term>| -> Term {
+            let Some(mut acc) = codes.pop() else {
+                return Term::TmEmpty { level: lp.clone() };
+            };
+            while let Some(c) = codes.pop() {
+                acc = Term::TmSum { lhs_level: lp.clone(), rhs_level: lp.clone(), lhs: Rc::new(c), rhs: Rc::new(acc) };
+            }
+            acc
+        };
+        // P over (base, x : S): a constant-motive case tree into `Ty lp`.
+        let mut xcx = self.field_scope_cx(&bcx, ind, &args_b, &vargs_b);
+        xcx.aliases.extend(extra.iter().cloned());
+        xcx.push("#x".into(), shape.clone(), ls.clone());
         let ptree = if n == 0 {
             // No constructors: `S` is `Empty`, and so are the positions.
             Term::ElimEmpty {
@@ -434,60 +603,343 @@ impl Elaborator {
                 &Level::succ(lp.clone()),
                 var(0),
                 1,
-                &mut |bcx, i, d, value| {
-                    let mut codes = Vec::with_capacity(kids[i].len());
-                    for kid in &kids[i] {
-                        codes.push(match kid {
-                            Kid::Plain => Term::TmUnit { level: lp.clone() },
-                            Kid::Fn(code, j) => {
-                                // The domain's binders are the tag and the payload
-                                // fields before it; here they are the branch value's
-                                // projections (the tag by its canonical inhabitant).
-                                let ctor_ty = spine.ctors[i].0.shift_local(d);
-                                let mut subst = embed(&cx.gamma, d).extended(Rc::clone(&tag));
-                                for m in 0..*j {
-                                    let (proj, _, _) = self.projection(bcx, &ctor_ty, &value, m, span)?;
-                                    subst = subst.extended(proj);
-                                }
-                                code.apply_local(&subst)
-                            }
-                        });
-                    }
-                    let Some(mut acc) = codes.pop() else {
-                        return Ok(Term::TmEmpty { level: lp.clone() });
-                    };
-                    while let Some(c) = codes.pop() {
-                        acc = Term::TmSum {
-                            lhs_level: lp.clone(),
-                            rhs_level: lp.clone(),
-                            lhs: Rc::new(c),
-                            rhs: Rc::new(acc),
-                        };
-                    }
-                    Ok(acc)
-                },
+                &mut |bcx2, i, d, value| Ok(sum_codes(codes_at(bcx2, i, d, &value)?)),
             )?
         };
         let pos = Type::El { level: lp.clone(), tm: Rc::new(ptree) };
-        // The index binder `i : Unit` goes under everything: the shape binds
-        // it, the positions bind `i, s`, the child index `i, s, p`.
+        let Some((ity, li)) = ity else {
+            // Unindexed: the index binder `i : Unit` goes under everything:
+            // the shape binds it, the positions bind `i, s`, the child index
+            // `i, s, p`.
+            let sig = Rc::new(MSig {
+                level: ls,
+                pos_level: lp,
+                idx_level: Level::Zero,
+                idx: Rc::new(Type::Unit { level: Level::Zero }),
+                shape: Rc::new(shape.shift_local(1)),
+                pos: Rc::new(pos.shift_local_above(1, 1)),
+                next: triv(),
+            });
+            let lw = sig.family_level();
+            return Ok((sig.at(triv()), lw));
+        };
+        // o over (Γ, i, x : S, p : P(i, x)): a case on the label into
+        // `Π(p : P(i, z)). I`, applied to `p` (docs/codata-indexed-design.md §3).
+        let next = if n == 0 {
+            Term::ElimEmpty {
+                level: li.clone(),
+                scrut_level: ls.clone(),
+                motive: Rc::new(ity.shift_local(4)),
+                scrut: var(1),
+            }
+        } else {
+            let motive = Type::Pi {
+                dom_level: lp.clone(),
+                cod_level: li.clone(),
+                dom: Rc::new(pos.shift_local_above(1, 1)),
+                cod: Rc::new(ity.shift_local(4)),
+            };
+            let tree = self.w_case_tree(
+                &xcx,
+                &spine,
+                n,
+                0,
+                motive,
+                &Level::join(lp.clone(), li.clone()),
+                var(0),
+                1,
+                &mut |bcx2, i, d, value| {
+                    let codes = codes_at(bcx2, i, d, &value)?;
+                    let el = |tm: Term| decoded(&Type::El { level: lp.clone(), tm: Rc::new(tm) }).into_owned();
+                    let m = codes.len();
+                    let comps: Vec<Type> = codes.iter().cloned().map(el).collect();
+                    let tails: Vec<Type> = (1..m).map(|r| el(sum_codes(codes[r..].to_vec()))).collect();
+                    // `comps`/`tails` are scoped at `bcx2`, which is depth `d`
+                    // past the base; `pos_cases` counts from there.
+                    let base_len = bcx2.names.len();
+                    let mut lam_cx = bcx2.clone();
+                    lam_cx.push("#p".into(), el(sum_codes(codes.clone())), lp.clone());
+                    let body = pos_cases(
+                        &lp,
+                        &comps,
+                        &tails,
+                        1,
+                        &|dd, _| ity.shift_local(d + dd + 1),
+                        &li,
+                        &mut |r, dd, y, _| {
+                            self.child_index_at(&lam_cx, ind, i, r, &spine, &value, d, dd, &comps, &tails, y, &ity, &li, &lp, base_len, span)
+                        },
+                    )?;
+                    Ok(Term::Lam {
+                        dom_level: lp.clone(),
+                        cod_level: li.clone(),
+                        dom: Rc::new(el(sum_codes(codes))),
+                        body: Rc::new(body),
+                    })
+                },
+            )?;
+            Term::AppAt { fun: Rc::new(tree.shift_local(1)), arg: var(0) }
+        };
         let sig = Rc::new(MSig {
             level: ls,
             pos_level: lp,
-            idx_level: Level::Zero,
-            idx: Rc::new(Type::Unit { level: Level::Zero }),
-            shape: Rc::new(shape.shift_local(1)),
-            pos: Rc::new(pos.shift_local_above(1, 1)),
-            next: triv(),
+            idx_level: li,
+            idx: Rc::new(ity),
+            shape: Rc::new(shape),
+            pos: Rc::new(pos),
+            next: Rc::new(next),
         });
         let lw = sig.family_level();
-        Ok((sig.at(triv()), lw))
+        Ok((sig.at(Rc::new(index.expect("indexed"))), lw))
+    }
+
+    /// Child `r` of constructor `i`'s written index, at a leaf of the child
+    /// index's case tree (docs/codata-indexed-design.md §3): `lam_cx` is the
+    /// branch's context with the position binder pushed, `value` the branch
+    /// value at depth `d` past the base, the leaf at `dd` past `lam_cx`'s
+    /// branch (so `d + dd` past the base), `y` the position's payload there.
+    #[allow(clippy::too_many_arguments)]
+    fn child_index_at(
+        &self,
+        lam_cx: &Cx,
+        ind: &Inductive,
+        i: usize,
+        r: usize,
+        spine: &crate::inductive::Spine,
+        value: &Rc<Term>,
+        d: u32,
+        dd: u32,
+        comps: &[Type],
+        tails: &[Type],
+        y: Rc<Term>,
+        ity: &Type,
+        li: &Level,
+        lp: &Level,
+        base_len: usize,
+        span: Span,
+    ) -> R<Term> {
+        let _scope = self.use_inductive_scope(ind);
+        let ctor = &ind.ctors[i];
+        let m = comps.len();
+        // The case binders between the position binder and the leaf: `r`
+        // right tails, then the left component unless `r` is the last.
+        let mut lcx = lam_cx.clone();
+        for j in 0..r {
+            lcx.push("#rest".into(), tails[j].shift_local(lcx.names.len() as u32 - base_len as u32), lp.clone());
+        }
+        if r + 1 < m {
+            lcx.push("#y".into(), comps[r].shift_local(lcx.names.len() as u32 - base_len as u32), lp.clone());
+        }
+        let at = lcx.names.len();
+        debug_assert_eq!(at - base_len, dd as usize);
+        // The payload fields declared before this child, by name; and a
+        // function child's own binder.
+        let ctor_ty = spine.ctors[i].0.shift_local(d + dd);
+        let here = Rc::new(value.shift_local(dd));
+        let mut seen = 0usize;
+        let mut payload_k = 0usize;
+        let mut field = None;
+        for (k, kind) in ctor.kind.iter().enumerate() {
+            match kind {
+                FieldKind::Payload => {
+                    if let Some(name) = &ctor.fields[k].0 {
+                        let (term, ty, level) = self.projection(&lcx, &ctor_ty, &here, payload_k, span)?;
+                        lcx.aliases.push(Rc::new(Alias { skel: None, name: name.clone(), depth: at, term, ty, level }));
+                    }
+                    payload_k += 1;
+                }
+                _ if kind.is_child() => {
+                    if seen == r {
+                        field = Some(k);
+                        break;
+                    }
+                    seen += 1;
+                }
+                _ => {}
+            }
+        }
+        let Some(k) = field else {
+            return err("internal: an indexed codata child was not found", span);
+        };
+        if ctor.kind[k] == FieldKind::FnChild
+            && let TyKind::Fn { binder: Some(b), .. } = &ctor.fields[k].1.kind
+        {
+            lcx.aliases.push(Rc::new(Alias {
+                skel: None,
+                name: b.clone(),
+                depth: at,
+                term: y,
+                ty: comps[r].shift_local(at as u32 - base_len as u32),
+                level: lp.clone(),
+            }));
+        }
+        let Some(Some(exprs)) = ctor.child_index.get(k) else {
+            return err("internal: an indexed codata child has no written index", span);
+        };
+        let exprs: Vec<&Expr> = exprs.iter().collect();
+        self.index_tuple(&lcx, &ity.shift_local(at as u32 - base_len as u32 + d + 1), li, &exprs, span)
+    }
+
+    /// The index type `I` of an indexed `codata` instance, in `cx`: the
+    /// telescope's right-nested `Σ` (docs/codata-indexed-design.md §3).
+    pub(crate) fn codata_index_ty(
+        &self,
+        cx: &Cx,
+        ind: &Inductive,
+        args: &[(Type, Level)],
+        vargs: &[(Term, Type, Level)],
+        span: Span,
+    ) -> R<(Type, Level)> {
+        let _scope = self.use_inductive_scope(ind);
+        let mut tcx = self.field_scope_cx(cx, ind, args, vargs);
+        let mut tys = Vec::with_capacity(ind.co_index.len());
+        for (name, ty) in &ind.co_index {
+            let (t, l) = self.elab_ty(&tcx, ty)?;
+            if crate::code::code_of(&t).is_none() {
+                return err(
+                    format!(
+                        "the index `{name}` of `{}` has a type with no code; an index type is \
+                         one the kernel can quote (docs/codata-indexed-design.md §2)",
+                        ind.name
+                    ),
+                    span,
+                );
+            }
+            tcx.push(name.clone(), t.clone(), l.clone());
+            tys.push((t, l));
+        }
+        let (mut acc, mut acc_lvl) = tys.pop().expect("an index telescope is nonempty");
+        while let Some((t, l)) = tys.pop() {
+            acc = Type::Sigma { fst_level: l.clone(), snd_level: acc_lvl.clone(), fst: Rc::new(t), snd: Rc::new(acc) };
+            acc_lvl = Level::max(l, acc_lvl).normalize().canonical();
+        }
+        Ok((acc, acc_lvl))
+    }
+
+    /// The index binders as aliases of `i`'s projections, `i` the newest
+    /// binder at `depth` and of type `ity` (scoped below it).
+    fn index_aliases(&self, ind: &Inductive, ity: &Type, li: &Level, depth: usize) -> Vec<Rc<Alias>> {
+        let n = ind.co_index.len();
+        let mut out = Vec::with_capacity(n);
+        let mut ty = ity.shift_local(1);
+        let mut lvl = li.clone();
+        let mut tm = var(0);
+        for (k, (name, _)) in ind.co_index.iter().enumerate() {
+            if k + 1 == n {
+                out.push(Rc::new(Alias { skel: None, name: name.clone(), depth, term: tm, ty, level: lvl }));
+                break;
+            }
+            let Type::Sigma { fst_level, snd_level, fst, snd } = ty else {
+                unreachable!("an index telescope of several binders is a Σ")
+            };
+            let first = Rc::new(Term::Fst {
+                fst_level: fst_level.clone(),
+                snd_level: snd_level.clone(),
+                fst_ty: Rc::clone(&fst),
+                snd_ty: Rc::clone(&snd),
+                pair: Rc::clone(&tm),
+            });
+            out.push(Rc::new(Alias {
+                skel: None,
+                name: name.clone(),
+                depth,
+                term: Rc::clone(&first),
+                ty: (*fst).clone(),
+                level: fst_level.clone(),
+            }));
+            tm = Rc::new(Term::Snd {
+                fst_level: fst_level.clone(),
+                snd_level: snd_level.clone(),
+                fst_ty: Rc::clone(&fst),
+                snd_ty: Rc::clone(&snd),
+                pair: tm,
+            });
+            ty = snd.inst_top(0, &first);
+            lvl = snd_level;
+        }
+        out
+    }
+
+    /// The tuple of `exprs` at the index type `ity` (in `cx`), each component
+    /// checked with the earlier ones substituted.
+    fn index_tuple(&self, cx: &Cx, ity: &Type, li: &Level, exprs: &[&Expr], span: Span) -> R<Term> {
+        let n = exprs.len();
+        let mut parts = Vec::with_capacity(n);
+        let mut cur = ity.clone();
+        let mut lvl = li.clone();
+        for (k, e) in exprs.iter().enumerate() {
+            if k + 1 == n {
+                let mut acc = Rc::new(self.elab_check(cx, e, &cur, &lvl)?);
+                while let Some((fl, sl, f, s, v)) = parts.pop() {
+                    acc = Rc::new(Term::Pair { fst_level: fl, snd_level: sl, fst_ty: f, snd_ty: s, fst: v, snd: acc });
+                }
+                return Ok((*acc).clone());
+            }
+            let Type::Sigma { fst_level, snd_level, fst, snd } = cur else {
+                return err("internal: an index telescope of several binders is not a Σ", span);
+            };
+            let v = Rc::new(self.elab_check(cx, e, &fst, &fst_level)?);
+            cur = snd.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(&v)));
+            lvl = snd_level.clone();
+            parts.push((fst_level, snd_level, fst, snd, v));
+        }
+        err("internal: an empty index", span)
+    }
+
+    /// `D<ā>(v̄, ī)` for an indexed `codata` declaration
+    /// (docs/codata-indexed-design.md §2): the value arguments, then the
+    /// indices, in one list. `None` for every other expression.
+    pub(crate) fn try_codata_indexed_ty(&self, cx: &Cx, e: &Expr, span: Span) -> R<Option<(Type, Level)>> {
+        let ExprKind::App { head, args, .. } = &e.kind else {
+            return Ok(None);
+        };
+        let Some((name, targs)) = crate::inductive::named_head(head) else {
+            return Ok(None);
+        };
+        if self.shadowed(cx, name) {
+            return Ok(None);
+        }
+        let Some(ind) = self.lookup_inductive(name).cloned() else {
+            return Ok(None);
+        };
+        if ind.co_index.is_empty() {
+            return Ok(None);
+        }
+        let nv = ind.valparams.len();
+        let ni = ind.co_index.len();
+        if args.len() != nv + ni {
+            return err(
+                format!(
+                    "`{name}` takes {nv} value argument(s) and then {ni} index argument(s), \
+                     found {} argument(s) (docs/codata-indexed-design.md §2)",
+                    args.len()
+                ),
+                span,
+            );
+        }
+        if targs.len() != ind.params.len() {
+            return err(
+                format!("`{name}` takes {} type argument(s), found {}", ind.params.len(), targs.len()),
+                span,
+            );
+        }
+        let mut lowered = Vec::with_capacity(targs.len());
+        for a in targs {
+            lowered.push(self.elab_ty(cx, a)?);
+        }
+        let vargs = self.valparam_args(cx, &ind, &lowered, &args[..nv], span)?;
+        let (ity, li) = self.codata_index_ty(cx, &ind, &lowered, &vargs, span)?;
+        let idx: Vec<&Expr> = args[nv..].iter().collect();
+        let index = self.index_tuple(cx, &ity, &li, &idx, span)?;
+        self.lower_instance_m(cx, &ind, &lowered, &vargs, Some(index), span).map(Some)
     }
 
     // -- constructors (§3) ----------------------------------------------------
 
-    /// `⟦Cᵢ(ā)⟧ = corec(…; _. Unit; _ _. ⟨ℓᵢ, λp. inr(kids p)⟩; ⟨⟩; ⟨⟩)` at
-    /// the expected `⟦D⟧`: the apomorphism's `in`, every child an exit.
+    /// `⟦Cᵢ(ā)⟧` at the expected `⟦D⟧`: the apomorphism's `in`, every child an
+    /// exit. Unindexed, `corec(…; _. Unit; _ _. ⟨ℓᵢ, λp. inr(kids p)⟩; ⟨⟩;
+    /// ⟨⟩)`; indexed, the out type is the carrier and the node the seed
+    /// (docs/codata-indexed-design.md §4).
     pub(crate) fn build_ctor_m(
         &self,
         cx: &Cx,
@@ -516,49 +968,162 @@ impl Elaborator {
         };
         let (label, comps, tails, children) = self.ctor_parts(cx, ind, i, &p, args, &mut |cx, arg, at| {
             Ok(Rc::new(self.elab_check(cx, arg, at, &p.lw)?))
-        }, &|d| ty.shift_local(d), &p.lw, span)?;
+        }, &|d, label, pos| p.child_ty(d, label, pos), &p.lw, span)?;
+        if p.indexed {
+            return Ok(self.ctor_m_indexed(&p, label, &comps, &tails, children)?);
+        }
         // In (Γ, i, x): the node, every child an existing tree.
-        let unit = Type::Unit { level: Level::Zero };
-        let target = |d: u32| self.child_sum(&p, &unit, &Level::Zero, d);
-        let tlvl = Level::join(Level::Zero, p.lw.clone());
+        let unit = Carrier { fam: Type::Unit { level: Level::Zero }, level: Level::Zero };
         let lab2 = Rc::new(label.shift_local(2));
-        let kids = p.kids_lam(2, Rc::clone(&lab2), &comps, &tails, &target, &tlvl, &mut |r, d, y| {
+        let target = |d: u32, pos: Rc<Term>| {
+            self.child_sum(&p, &unit, d, p.next_tm(d, Rc::new(label.shift_local(d)), pos))
+        };
+        let tlvl = Level::join(Level::Zero, p.lw.clone());
+        let kids = p.kids_lam(2, Rc::clone(&lab2), &comps, &tails, &target, &tlvl, &mut |r, d, y, pos| {
             // `d` is past Γ; the children are scoped in Γ.
-            let tree = match &children[r] {
-                KidVal::Tm(t) => Rc::new(t.shift_local(d)),
-                KidVal::Fn(f, dom) => Rc::new(checked_app(
-                    Rc::new(f.shift_local(d)),
-                    p.lp.clone(),
-                    p.lw.clone(),
-                    Rc::new(dom.shift_local(d)),
-                    Rc::new(p.d_at(d + 1)),
-                    y,
-                )),
-            };
+            let tree = self.kid_at(&p, &children[r], d, &label, y, &comps, &tails, r);
             Ok(Term::Inr {
                 lhs_level: Level::Zero,
                 rhs_level: p.lw.clone(),
-                lhs: Rc::new(unit.clone()),
-                rhs: Rc::new(p.d_at(d)),
+                lhs: Rc::new(Type::Unit { level: Level::Zero }),
+                rhs: Rc::new(p.child_ty(d, Rc::new(label.shift_local(d)), pos)),
                 val: tree,
             })
         })?;
-        let step = self.step_pair(&p, 2, lab2, &unit, &Level::Zero, kids);
+        let step = self.step_pair(&p, 2, lab2, &unit, kids);
         Ok(Term::Corec {
             sig: Rc::clone(&p.sig),
             carrier_level: Level::Zero,
-            carrier: Rc::new(unit.clone()),
+            carrier: Rc::new(Type::Unit { level: Level::Zero }),
             step: Rc::new(step),
             index: triv(),
             seed: triv(),
         })
     }
 
+    /// A child's tree at depth `d` past Γ (a function child applied to the
+    /// position's payload `y`), as the children function's leaves need it.
+    #[allow(clippy::too_many_arguments)]
+    fn kid_at(
+        &self,
+        p: &MParts,
+        kid: &KidVal,
+        d: u32,
+        label: &Term,
+        y: Rc<Term>,
+        comps: &[Type],
+        tails: &[Type],
+        r: usize,
+    ) -> Rc<Term> {
+        match kid {
+            KidVal::Tm(t) => Rc::new(t.shift_local(d)),
+            KidVal::Fn(f, dom) => Rc::new(checked_app(
+                Rc::new(f.shift_local(d)),
+                p.lp.clone(),
+                p.lw.clone(),
+                Rc::new(dom.shift_local(d)),
+                Rc::new(p.child_ty(
+                    d + 1,
+                    Rc::new(label.shift_local(d + 1)),
+                    p.position(comps, tails, d + 1, r, var(0)),
+                )),
+                y,
+            )),
+        }
+    }
+
+    /// The indexed `in` (docs/codata-indexed-design.md §4):
+    /// `corec(sig; i. Out(i); i x. ⟨fst x, λp. inr(snd x p)⟩; j; ⟨ℓ, kids⟩)`.
+    fn ctor_m_indexed(
+        &self,
+        p: &MParts,
+        label: Term,
+        comps: &[Type],
+        tails: &[Type],
+        children: Vec<KidVal>,
+    ) -> R<Term> {
+        let lw = p.lw.clone();
+        // The carrier, over (Γ, i): the out type at `i`.
+        let out_fam = m_out_ty(&p.sig.shift_local(1), &Term::Var(LocalVar(0)));
+        let carrier = Carrier { fam: out_fam.clone(), level: lw.clone() };
+        // The step, over (Γ, i, x).
+        let Type::Sigma { fst_level: ofl, snd_level: osl, fst: ofst, snd: osnd } = out_fam.shift_local(1) else {
+            unreachable!("m_out_ty builds a Σ")
+        };
+        let fst_x = Rc::new(Term::Fst {
+            fst_level: ofl.clone(),
+            snd_level: osl.clone(),
+            fst_ty: Rc::clone(&ofst),
+            snd_ty: Rc::clone(&osnd),
+            pair: var(0),
+        });
+        let snd_x = Rc::new(Term::Snd {
+            fst_level: ofl,
+            snd_level: osl,
+            fst_ty: ofst,
+            snd_ty: Rc::clone(&osnd),
+            pair: var(0),
+        });
+        let Type::Pi { dom: kdom, cod: kcod, .. } = osnd.inst_top(0, &fst_x) else {
+            unreachable!("the out type's second component is a Π")
+        };
+        let step_ty = m_step_ty(&p.sig, &lw, &carrier.fam).shift_local(1);
+        let Type::Sigma { fst_level: sfl, snd_level: ssl, fst: sfst, snd: ssnd } = step_ty else {
+            unreachable!("m_step_ty builds a Σ")
+        };
+        let Type::Pi { cod: scod, .. } = ssnd.inst_top(0, &fst_x) else {
+            unreachable!("the step type's second component is a Π")
+        };
+        let Type::Sum { lhs_level, rhs_level, lhs, rhs } = (*scod).clone() else {
+            unreachable!("a step's child is a sum")
+        };
+        let body = Term::Inr {
+            lhs_level,
+            rhs_level,
+            lhs,
+            rhs,
+            val: Rc::new(checked_app(
+                Rc::new(snd_x.shift_local(1)),
+                p.lp.clone(),
+                lw.clone(),
+                Rc::new(kdom.shift_local(1)),
+                Rc::new(kcod.shift_local_above(1, 1)),
+                var(0),
+            )),
+        };
+        let step = Term::Pair {
+            fst_level: sfl,
+            snd_level: ssl.clone(),
+            fst_ty: sfst,
+            snd_ty: ssnd,
+            fst: fst_x,
+            snd: Rc::new(Term::Lam { dom_level: p.lp.clone(), cod_level: ssl, dom: kdom, body: Rc::new(body) }),
+        };
+        // The seed: the node at `j`, every child as written.
+        let label = Rc::new(label);
+        let target = |d: u32, pos: Rc<Term>| p.child_ty(d, Rc::new(label.shift_local(d)), pos);
+        let kids = p.kids_lam(0, Rc::clone(&label), comps, tails, &target, &lw, &mut |r, d, y, _| {
+            Ok((*self.kid_at(p, &children[r], d, &label, y, comps, tails, r)).clone())
+        })?;
+        let Type::Sigma { fst_level, snd_level, fst, snd } = p.out_ty(0) else {
+            unreachable!("the out type is a Σ")
+        };
+        let seed = Term::Pair { fst_level, snd_level, fst_ty: fst, snd_ty: snd, fst: label, snd: Rc::new(kids) };
+        Ok(Term::Corec {
+            sig: Rc::clone(&p.sig),
+            carrier_level: lw,
+            carrier: Rc::new(carrier.fam),
+            step: Rc::new(step),
+            index: Rc::clone(&p.index),
+            seed: Rc::new(seed),
+        })
+    }
+
     /// The pieces every node is built from, in `cx` (which is `p`'s
     /// context): the label from the payload arguments, the positions taken
     /// apart, and each child checked by `child` — a plain one at
-    /// `plain_ty(0)`, a function one at `Π(y : A). plain_ty(1)` with `A` the
-    /// position read off the label.
+    /// `child_at(0, label, pos)`, a function one at `Π(y : A). child_at(1,
+    /// label, pos(y))` with `A` the position read off the label.
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     fn ctor_parts(
         &self,
@@ -568,7 +1133,7 @@ impl Elaborator {
         p: &MParts,
         args: &[&Expr],
         child: &mut dyn FnMut(&Cx, &Expr, &Type) -> R<Rc<Term>>,
-        plain_ty: &dyn Fn(u32) -> Type,
+        child_at: &dyn Fn(u32, Rc<Term>, Rc<Term>) -> Type,
         plain_level: &Level,
         span: Span,
     ) -> R<(Term, Vec<Type>, Vec<Type>, Vec<KidVal>)> {
@@ -592,21 +1157,24 @@ impl Elaborator {
         let label = inject(&spine, i, n, fields, 0);
         let m = ctor.kind.iter().filter(|k| k.is_child()).count();
         let (comps, tails) = p.components(0, &cx.gamma, Rc::new(label.clone()), m);
+        let lab = Rc::new(label.clone());
         let mut children = Vec::with_capacity(m);
         let mut r = 0usize;
         for (k, kind) in ctor.kind.iter().enumerate() {
             match kind {
                 FieldKind::Plain => {
-                    children.push(KidVal::Tm(child(cx, args[k], &plain_ty(0))?));
+                    let pos = p.position(&comps, &tails, 0, r, Rc::new(Term::Triv { level: p.lp.clone() }));
+                    children.push(KidVal::Tm(child(cx, args[k], &child_at(0, Rc::clone(&lab), pos))?));
                     r += 1;
                 }
                 FieldKind::FnChild => {
                     let dom = Rc::new(comps[r].clone());
+                    let pos = p.position(&comps, &tails, 1, r, var(0));
                     let k_ty = Type::Pi {
                         dom_level: p.lp.clone(),
                         cod_level: plain_level.clone(),
                         dom: Rc::clone(&dom),
-                        cod: Rc::new(plain_ty(1)),
+                        cod: Rc::new(child_at(1, Rc::new(label.shift_local(1)), pos)),
                     };
                     children.push(KidVal::Fn(child(cx, args[k], &k_ty)?, dom));
                     r += 1;
@@ -617,49 +1185,49 @@ impl Elaborator {
         Ok((label, comps, tails, children))
     }
 
-    /// `X + ⟦D⟧` at depth `d`, `X` scoped at depth 0.
-    fn child_sum(&self, p: &MParts, carrier: &Type, carrier_level: &Level, d: u32) -> Type {
+    /// `X(idx) + ⟦D⟧(idx)` at depth `d`, `idx` scoped there.
+    fn child_sum(&self, p: &MParts, carrier: &Carrier, d: u32, idx: Rc<Term>) -> Type {
         Type::Sum {
-            lhs_level: carrier_level.clone(),
+            lhs_level: carrier.level.clone(),
             rhs_level: p.lw.clone(),
-            lhs: Rc::new(carrier.shift_local(d)),
-            rhs: Rc::new(p.d_at(d)),
+            lhs: Rc::new(carrier.at(d, &idx)),
+            rhs: Rc::new(p.d_of(d, idx)),
         }
     }
 
-    /// `⟨label, kids⟩` at the step type `Σ(s : S). Π(p : P s). X + ⟦D⟧`, at
-    /// depth `k` (`X` scoped at depth 0), in the kernel's `m_step_ty`
-    /// levels.
-    fn step_pair(&self, p: &MParts, k: u32, label: Rc<Term>, carrier: &Type, carrier_level: &Level, kids: Term) -> Term {
-        let kf = Level::join(carrier_level.clone(), p.lw.clone());
+    /// `Π(p : P s). X(o) + ⟦D⟧(o)` over `s = Var(0)` at depth `k + 1`.
+    fn step_kids_ty(&self, p: &MParts, k: u32, carrier: &Carrier) -> Type {
+        let kf = Level::join(carrier.level.clone(), p.lw.clone());
+        Type::Pi {
+            dom_level: p.lp.clone(),
+            cod_level: kf,
+            dom: Rc::new(p.pos_at(k + 1, var(0))),
+            cod: Rc::new(self.child_sum(p, carrier, k + 2, p.next_tm(k + 2, var(1), var(0)))),
+        }
+    }
+
+    /// `⟨label, kids⟩` at the step type `Σ(s : S). Π(p : P s). X(o) + ⟦D⟧(o)`,
+    /// at depth `k`, in the kernel's `m_step_ty` levels.
+    fn step_pair(&self, p: &MParts, k: u32, label: Rc<Term>, carrier: &Carrier, kids: Term) -> Term {
+        let kf = Level::join(carrier.level.clone(), p.lw.clone());
         Term::Pair {
             fst_level: p.ls.clone(),
-            snd_level: kf.clone(),
+            snd_level: kf,
             fst_ty: Rc::new(p.shape_at(k)),
-            snd_ty: Rc::new(Type::Pi {
-                dom_level: p.lp.clone(),
-                cod_level: kf,
-                dom: Rc::new(p.pos_at(k + 1, var(0))),
-                cod: Rc::new(self.child_sum(p, carrier, carrier_level, k + 2)),
-            }),
+            snd_ty: Rc::new(self.step_kids_ty(p, k, carrier)),
             fst: label,
             snd: Rc::new(kids),
         }
     }
 
-    /// The step type at depth `k`, `X` scoped at depth 0.
-    fn step_ty(&self, p: &MParts, k: u32, carrier: &Type, carrier_level: &Level) -> Type {
-        let kf = Level::join(carrier_level.clone(), p.lw.clone());
+    /// The step type at depth `k`.
+    fn step_ty(&self, p: &MParts, k: u32, carrier: &Carrier) -> Type {
+        let kf = Level::join(carrier.level.clone(), p.lw.clone());
         Type::Sigma {
             fst_level: p.ls.clone(),
-            snd_level: kf.clone(),
+            snd_level: kf,
             fst: Rc::new(p.shape_at(k)),
-            snd: Rc::new(Type::Pi {
-                dom_level: p.lp.clone(),
-                cod_level: kf,
-                dom: Rc::new(p.pos_at(k + 1, var(0))),
-                cod: Rc::new(self.child_sum(p, carrier, carrier_level, k + 2)),
-            }),
+            snd: Rc::new(self.step_kids_ty(p, k, carrier)),
         }
     }
 
@@ -744,12 +1312,14 @@ impl Elaborator {
                         FieldKind::Plain => {
                             let at = p.position(&comps, &tails, 1, r, Rc::new(Term::Triv { level: p.lp.clone() }));
                             r += 1;
-                            (app_at(var(0), at), p.d_at(db), p.lw.clone())
+                            let ty = p.child_ty(db, Rc::new(inj.shift_local(1)), Rc::clone(&at));
+                            (app_at(var(0), at), ty, p.lw.clone())
                         }
                         FieldKind::FnChild => {
                             let dom = Rc::new(comps[r].shift_local(1));
                             let at = p.position(&comps, &tails, 2, r, var(0));
                             r += 1;
+                            let cod = p.child_ty(db + 1, Rc::new(inj.shift_local(2)), Rc::clone(&at));
                             let term = Rc::new(Term::Lam {
                                 dom_level: p.lp.clone(),
                                 cod_level: p.lw.clone(),
@@ -760,7 +1330,7 @@ impl Elaborator {
                                 dom_level: p.lp.clone(),
                                 cod_level: p.lw.clone(),
                                 dom,
-                                cod: Rc::new(p.d_at(db + 1)),
+                                cod: Rc::new(cod),
                             };
                             (term, ty, lf.clone())
                         }
@@ -904,9 +1474,9 @@ impl Elaborator {
             let e = &cx.gamma.entries[n_ty + j];
             ((*e.ty).clone(), e.level.clone())
         };
-        // The carrier, built in the body's context: component `r` is the
-        // `r`-th varying parameter's type, its earlier parameters replaced by
-        // the outer binder (fixed) or the Σ binder (varying).
+        // The varying tuple, built in the body's context: component `r` is
+        // the `r`-th varying parameter's type, its earlier parameters replaced
+        // by the outer binder (fixed) or the Σ binder (varying).
         let mut rank = Vec::with_capacity(n);
         let mut comps: Vec<(Type, Level)> = Vec::new();
         for j in 0..n {
@@ -930,7 +1500,8 @@ impl Elaborator {
             }
             comps.push((ty.apply_local(&subst), lvl));
         }
-        let (carrier, carrier_level) = match comps.len() {
+        let nv = comps.len();
+        let (vtuple, vtuple_level) = match comps.len() {
             0 => (Type::Unit { level: Level::Zero }, Level::Zero),
             _ => {
                 let (mut acc, mut lvl) = comps.pop().expect("nonempty");
@@ -941,35 +1512,75 @@ impl Elaborator {
                 (acc, lvl)
             }
         };
-        // The result type may mention only the fixed parameters: it is the
-        // signature of the one `corec`, which sits outside the carrier.
+        // Unindexed, the result type may mention only the fixed parameters:
+        // it is the signature of the one `corec`, which sits outside the
+        // carrier. Indexed, the *index* may mention any of them (the carrier
+        // carries the equation, docs/codata-indexed-design.md §6), and the
+        // signature still only the fixed ones.
+        let sig_only = p.sig.at(Rc::new(Term::Zero));
         for (j, r) in rank.iter().enumerate() {
-            if r.is_some() && crate::mentions_binder(&head, depth as u32, (n - 1 - j) as u32) {
+            let at = if p.indexed { &sig_only } else { &head };
+            if r.is_some() && crate::mentions_binder(at, depth as u32, (n - 1 - j) as u32) {
                 return err(
-                    format!(
-                        "the result type of the corecursive `{}` mentions `{}`, which a corecursive \
-                         call changes: the result type may mention only parameters every call passes \
-                         unchanged (docs/codata-elaborator-design.md §5)",
-                        decl.name, names[j]
-                    ),
+                    if p.indexed {
+                        format!(
+                            "the result type of the corecursive `{}` has a type or value argument \
+                             mentioning `{}`, which a corecursive call changes: only its index may \
+                             (docs/codata-indexed-design.md §6)",
+                            decl.name, names[j]
+                        )
+                    } else {
+                        format!(
+                            "the result type of the corecursive `{}` mentions `{}`, which a \
+                             corecursive call changes: the result type may mention only parameters \
+                             every call passes unchanged (docs/codata-elaborator-design.md §5)",
+                            decl.name, names[j]
+                        )
+                    },
                     span,
                 );
             }
         }
-        let child_ty = self.child_sum(&p, &carrier, &carrier_level, 0);
-        let step_ty = self.step_ty(&p, 0, &carrier, &carrier_level);
-        let kf = Level::join(carrier_level.clone(), p.lw.clone());
+        let carrier = if p.indexed {
+            // X(i) = Σ(v : V). Id(I; g[v]; i), over (body, i).
+            let base = cx.gamma.prefix(n_ty);
+            let mut subst = embed(&base, (n + 2) as u32);
+            for (j, r) in rank.iter().enumerate() {
+                let t = match r {
+                    None => Term::Var(LocalVar((n - 1 - j + 2) as u32)),
+                    Some(r) => tuple_proj(nv, *r, Term::Var(LocalVar(0))),
+                };
+                subst = subst.extended(Rc::new(t));
+            }
+            let li = p.sig.idx_level.clone();
+            let fam = Type::Sigma {
+                fst_level: vtuple_level.clone(),
+                snd_level: li.clone(),
+                fst: Rc::new(vtuple.shift_local(1)),
+                snd: Rc::new(Type::Id {
+                    level: li.clone(),
+                    ty: Rc::new(p.sig.idx.shift_local(2)),
+                    lhs: Rc::new(p.index.apply_local(&subst)),
+                    rhs: var(1),
+                }),
+            };
+            Carrier { fam, level: Level::max(vtuple_level.clone(), li).normalize().canonical() }
+        } else {
+            Carrier { fam: vtuple.shift_local(1), level: vtuple_level.clone() }
+        };
+        let step_ty = self.step_ty(&p, 0, &carrier);
+        let kf = Level::join(carrier.level.clone(), p.lw.clone());
         Ok(Some(Rc::new(CorecSite {
             selfref: Rc::clone(selfref),
             depth,
             ind: Rc::clone(&ind),
             d_ty: head,
+            vtuple,
+            vtuple_level,
             carrier,
-            carrier_level: carrier_level.clone(),
-            child_ty,
-            child_level: kf.clone(),
             step_ty,
-            step_level: Level::join(p.ls.clone(), Level::join(p.lp.clone(), kf)),
+            step_level: Level::join(p.ls.clone(), Level::join(p.lp.clone(), kf.clone())),
+            child_level: kf,
             rank,
             names,
         })))
@@ -981,8 +1592,10 @@ impl Elaborator {
     }
 
     /// The definition's term from its step `b` (scoped in the body's
-    /// context): `corec(sig; _. X; _ x. b[varying ↦ projections of x]; ⟨⟩;
-    /// ⟨varying parameters⟩)`, in the body's context.
+    /// context), in the body's context. Unindexed, `corec(sig; _. V; _ x.
+    /// b[varying ↦ projections of x]; ⟨⟩; ⟨varying parameters⟩)`; indexed, the
+    /// step moves `b` from `g` to `i` along the carrier's equation
+    /// (docs/codata-indexed-design.md §6).
     pub(crate) fn corec_close(&self, cx: &Cx, n_ty: usize, site: &CorecSite, b: Term, span: Span) -> R<Term> {
         let Some(p) = MParts::read(&site.d_ty, &cx.gamma) else {
             return err("internal: a codata declaration did not lower to its `M` encoding", span);
@@ -990,37 +1603,55 @@ impl Elaborator {
         let n = site.rank.len();
         let nv = site.varying();
         // In (body, i, x): the varying parameters are the carrier's
-        // components, the fixed ones the outer binders.
-        let proj = |r: usize| -> Term {
-            let mut t = Term::Var(LocalVar(0));
-            if nv == 1 {
-                return t;
-            }
-            for _ in 0..r {
-                t = Term::SndAt { pair: Rc::new(t) };
-            }
-            if r + 1 < nv { Term::FstAt { pair: Rc::new(t) } } else { t }
-        };
+        // components (of `fst x` when indexed), the fixed ones the outer
+        // binders.
+        let tuple = if p.indexed { Term::FstAt { pair: var(0) } } else { Term::Var(LocalVar(0)) };
         let base = cx.gamma.prefix(n_ty);
         let mut subst = embed(&base, (n + 2) as u32);
         for (j, r) in site.rank.iter().enumerate() {
             let t = match r {
                 None => Term::Var(LocalVar((n - 1 - j + 2) as u32)),
-                Some(r) => proj(*r),
+                Some(r) => tuple_proj(nv, *r, tuple.clone()),
             };
             subst = subst.extended(Rc::new(t));
         }
-        let step = b.apply_local(&subst);
-        let seed = self.carrier_tuple(&site.carrier, nv, &mut |r| {
+        let mut step = b.apply_local(&subst);
+        let vt = self.carrier_tuple(&site.vtuple, nv, &mut |r| {
             let j = site.rank.iter().position(|x| *x == Some(r)).expect("a varying parameter");
             Ok(Rc::new(Term::Var(LocalVar((n - 1 - j) as u32))))
         })?;
+        let seed = if p.indexed {
+            let li = p.sig.idx_level.clone();
+            step = Term::J {
+                ty_level: li.clone(),
+                motive_level: site.step_level.clone(),
+                ty: Rc::new(p.sig.idx.shift_local(2)),
+                lhs: Rc::new(p.index.apply_local(&subst)),
+                motive: Rc::new(m_step_ty(&p.sig, &site.carrier.level, &site.carrier.fam).inst_top(4, &Term::Var(LocalVar(1)))),
+                case: Rc::new(step),
+                rhs: var(1),
+                proof: Rc::new(Term::SndAt { pair: var(0) }),
+            };
+            let Type::Sigma { fst_level, snd_level, fst, snd } = site.carrier.at(0, &p.index) else {
+                unreachable!("an indexed carrier is a Σ")
+            };
+            Term::Pair {
+                fst_level,
+                snd_level,
+                fst_ty: fst,
+                snd_ty: snd,
+                fst: Rc::new(vt),
+                snd: Rc::new(Term::Refl { level: li, ty: Rc::clone(&p.sig.idx), tm: Rc::clone(&p.index) }),
+            }
+        } else {
+            vt
+        };
         Ok(Term::Corec {
             sig: Rc::clone(&p.sig),
-            carrier_level: site.carrier_level.clone(),
-            carrier: Rc::new(site.carrier.shift_local(1)),
+            carrier_level: site.carrier.level.clone(),
+            carrier: Rc::new(site.carrier.fam.clone()),
             step: Rc::new(step),
-            index: triv(),
+            index: Rc::clone(&p.index),
             seed: Rc::new(seed),
         })
     }
@@ -1055,8 +1686,11 @@ impl Elaborator {
     /// positions and this function built it; `None` to elaborate it as usual.
     pub(crate) fn corec_check(&self, cx: &Cx, site: &CorecSite, e: &Expr, expected: &Type, lvl: &Level) -> R<Option<Term>> {
         let by = site.by(cx);
+        let Some(p) = MParts::read(&site.d_ty.shift_local(by), &cx.gamma) else {
+            return err("internal: a codata declaration did not lower to its `M` encoding", e.span);
+        };
+        let carrier = site.carrier.under(by);
         let step_here = site.step_ty.shift_local(by);
-        let child_here = site.child_ty.shift_local(by);
         let at = |want: &Type, wlvl: &Level| -> bool {
             *expected == *want || {
                 let head = self.whnf(cx, expected, e.span).ok();
@@ -1065,10 +1699,26 @@ impl Elaborator {
             }
         };
         let _ = lvl;
+        // A child position, and the index of the child there: one fixed type
+        // unindexed, `X(e) + ⟦D⟧(e)` at the child's own `e` indexed.
+        let child_idx: Option<Rc<Term>> = if !p.indexed {
+            at(&self.child_sum(&p, &carrier, 0, triv()), &site.child_level).then(triv)
+        } else {
+            match self.whnf(cx, expected, e.span).ok() {
+                Some(Type::Sum { lhs, rhs, .. }) => match &*decoded(&rhs) {
+                    Type::M { sig, index } if **sig == *p.sig
+                        && self.conv_types(cx, &lhs, &carrier.at(0, index), &carrier.level) =>
+                    {
+                        Some(Rc::clone(index))
+                    }
+                    _ => None,
+                },
+                _ => None,
+            }
+        };
         let self_call = surface_self_call(&site.selfref, e);
-        let is_child = at(&child_here, &site.child_level);
         if let Some((args, _)) = self_call {
-            if !is_child {
+            let Some(idx) = child_idx else {
                 return err(
                     format!(
                         "this call to `{}` is not guarded: a corecursive call must be a child of the \
@@ -1078,7 +1728,7 @@ impl Elaborator {
                     ),
                     e.span,
                 );
-            }
+            };
             if let ExprKind::App { head, .. } = &e.kind
                 && matches!(head.kind, ExprKind::TyApp { .. })
             {
@@ -1087,18 +1737,17 @@ impl Elaborator {
                     e.span,
                 );
             }
-            let seed = self.corec_seed(cx, site, &args, e.span)?;
-            let p = MParts::read(&site.d_ty, &LocalCtx::nil()).expect("planned at an M");
+            let seed = self.corec_seed(cx, site, &p, &carrier, &idx, &args, e.span)?;
             return Ok(Some(Term::Inl {
-                lhs_level: site.carrier_level.clone(),
+                lhs_level: carrier.level.clone(),
                 rhs_level: p.lw.clone(),
-                lhs: Rc::new(site.carrier.shift_local(by)),
-                rhs: Rc::new(site.d_ty.shift_local(by)),
+                lhs: Rc::new(carrier.at(0, &idx)),
+                rhs: Rc::new(p.d_of(0, idx)),
                 val: Rc::new(seed),
             }));
         }
         let control = matches!(e.kind, ExprKind::Match { .. } | ExprKind::Block(..));
-        if is_child {
+        if let Some(idx) = child_idx {
             if control {
                 return Ok(None);
             }
@@ -1125,13 +1774,12 @@ impl Elaborator {
                     at,
                 );
             }
-            let d_here = site.d_ty.shift_local(by);
-            let p = MParts::read(&site.d_ty, &LocalCtx::nil()).expect("planned at an M");
+            let d_here = p.d_of(0, Rc::clone(&idx));
             let t = self.elab_check(cx, e, &d_here, &p.lw)?;
             return Ok(Some(Term::Inr {
-                lhs_level: site.carrier_level.clone(),
+                lhs_level: carrier.level.clone(),
                 rhs_level: p.lw.clone(),
-                lhs: Rc::new(site.carrier.shift_local(by)),
+                lhs: Rc::new(carrier.at(0, &idx)),
                 rhs: Rc::new(d_here),
                 val: Rc::new(t),
             }));
@@ -1142,11 +1790,10 @@ impl Elaborator {
         if control {
             return Ok(None);
         }
-        let Some(p) = MParts::read(&site.d_ty.shift_local(by), &cx.gamma) else {
-            return err("internal: a codata declaration did not lower to its `M` encoding", e.span);
-        };
-        let carrier = site.carrier.shift_local(by);
         let tlvl = site.child_level.clone();
+        let child_at = |d: u32, label: Rc<Term>, pos: Rc<Term>| {
+            self.child_sum(&p, &carrier, d, p.next_tm(d, label, pos))
+        };
         // A node: a constructor of the declaration itself.
         if let Some((i, args)) = self.codata_ctor_app(cx, &site.ind, e) {
             let (label, comps, tails, children) = self.ctor_parts(
@@ -1156,12 +1803,13 @@ impl Elaborator {
                 &p,
                 &args,
                 &mut |cx, arg, at| Ok(Rc::new(self.elab_check(cx, arg, at, &tlvl)?)),
-                &|d| self.child_sum(&p, &carrier, &site.carrier_level, d),
+                &child_at,
                 &tlvl,
                 e.span,
             )?;
-            let target = |d: u32| self.child_sum(&p, &carrier, &site.carrier_level, d);
-            let kids = p.kids_lam(0, Rc::new(label.clone()), &comps, &tails, &target, &tlvl, &mut |r, d, y| {
+            let label = Rc::new(label);
+            let target = |d: u32, pos: Rc<Term>| child_at(d, Rc::new(label.shift_local(d)), pos);
+            let kids = p.kids_lam(0, Rc::clone(&label), &comps, &tails, &target, &tlvl, &mut |r, d, y, _| {
                 Ok(match &children[r] {
                     KidVal::Tm(t) => t.shift_local(d),
                     KidVal::Fn(f, dom) => checked_app(
@@ -1169,39 +1817,40 @@ impl Elaborator {
                         p.lp.clone(),
                         tlvl.clone(),
                         Rc::new(dom.shift_local(d)),
-                        Rc::new(target(d + 1)),
+                        Rc::new(target(d + 1, p.position(&comps, &tails, d + 1, r, var(0)))),
                         y,
                     ),
                 })
             })?;
-            return Ok(Some(self.step_pair(&p, 0, Rc::new(label), &carrier, &site.carrier_level, kids)));
+            return Ok(Some(self.step_pair(&p, 0, label, &carrier, kids)));
         }
         // Anything else is a tree that already exists, and the node is its
         // first one: `(λo. ⟨fst o, λq. inr(snd o q)⟩) (out t)`.
         let t = Rc::new(self.elab_check(cx, e, &p.d_at(0), &p.lw)?);
         let o_ty = Rc::new(p.out_ty(0));
-        let kf = Level::join(site.carrier_level.clone(), p.lw.clone());
+        let kf = Level::join(carrier.level.clone(), p.lw.clone());
         let lab = Rc::new(p.out_fst(1, var(0)));
+        let child_idx = p.next_tm(2, Rc::new(lab.shift_local(1)), var(0));
         let kids = Term::Lam {
             dom_level: p.lp.clone(),
             cod_level: kf.clone(),
             dom: Rc::new(p.pos_at(1, Rc::clone(&lab))),
             body: Rc::new(Term::Inr {
-                lhs_level: site.carrier_level.clone(),
+                lhs_level: carrier.level.clone(),
                 rhs_level: p.lw.clone(),
-                lhs: Rc::new(carrier.shift_local(2)),
-                rhs: Rc::new(p.d_at(2)),
+                lhs: Rc::new(carrier.at(2, &child_idx)),
+                rhs: Rc::new(p.d_of(2, Rc::clone(&child_idx))),
                 val: Rc::new(checked_app(
                     Rc::new(p.out_snd(2, var(1))),
                     p.lp.clone(),
                     p.lw.clone(),
                     Rc::new(p.pos_at(2, Rc::new(p.out_fst(2, var(1))))),
-                    Rc::new(p.d_at(3)),
+                    Rc::new(p.child_ty(3, Rc::new(p.out_fst(3, var(2))), var(0))),
                     var(0),
                 )),
             }),
         };
-        let node = self.step_pair(&p, 1, lab, &carrier, &site.carrier_level, kids);
+        let node = self.step_pair(&p, 1, lab, &carrier, kids);
         Ok(Some(Term::App {
             fun: Rc::new(Term::Lam {
                 dom_level: p.lw.clone(),
@@ -1217,9 +1866,22 @@ impl Elaborator {
         }))
     }
 
-    /// A corecursive call's seed: the varying arguments as a carrier value,
-    /// each fixed argument checked to be its own parameter.
-    fn corec_seed(&self, cx: &Cx, site: &CorecSite, args: &[&Expr], span: Span) -> R<Term> {
+    /// A corecursive call's seed at a child of index `idx` (scoped at `cx`):
+    /// the varying arguments as a carrier value, each fixed argument checked
+    /// to be its own parameter. Indexed, the seed carries `refl` of the
+    /// call's index, which must be the child's (docs/codata-indexed-design.md
+    /// §6).
+    #[allow(clippy::too_many_arguments)]
+    fn corec_seed(
+        &self,
+        cx: &Cx,
+        site: &CorecSite,
+        p: &MParts,
+        carrier: &Carrier,
+        idx: &Rc<Term>,
+        args: &[&Expr],
+        span: Span,
+    ) -> R<Term> {
         let n = site.rank.len();
         if args.len() != n {
             return err(
@@ -1246,18 +1908,52 @@ impl Elaborator {
                 }
             }
         }
-        self.corec_seed_checked(cx, site, args, &site.carrier.shift_local(by))
+        if !p.indexed {
+            return self.corec_seed_checked(cx, site, args, &carrier.at(0, idx));
+        }
+        let Type::Sigma { fst_level, snd_level, fst, snd } = carrier.at(0, idx) else {
+            return err("internal: an indexed corecursive carrier is not a Σ", span);
+        };
+        let tuple = Rc::new(self.corec_seed_checked(cx, site, args, &fst)?);
+        let eq = snd.inst_top(0, &tuple);
+        let Type::Id { level, ty, lhs, .. } = &eq else {
+            return err("internal: an indexed corecursive carrier carries no equation", span);
+        };
+        let call_at = p.d_of(0, Rc::clone(lhs));
+        let child_at = p.d_of(0, Rc::clone(idx));
+        if !self.conv_types(cx, &call_at, &child_at, &p.lw) {
+            return err(
+                format!(
+                    "this call to `{}` is at `{}`, but the child it stands for is at `{}`: a \
+                     corecursive call's result index must be the child's \
+                     (docs/codata-indexed-design.md §6)",
+                    site.selfref.written_name,
+                    self.display_type(cx, &call_at),
+                    self.display_type(cx, &child_at)
+                ),
+                span,
+            );
+        }
+        Ok(Term::Pair {
+            fst_level,
+            snd_level,
+            fst_ty: fst,
+            snd_ty: Rc::clone(&snd),
+            fst: tuple,
+            snd: Rc::new(Term::Refl { level: level.clone(), ty: Rc::clone(ty), tm: Rc::clone(lhs) }),
+        })
     }
 
-    /// [`Self::corec_seed`]'s tuple, each component checked at its type with
-    /// the earlier components substituted.
-    fn corec_seed_checked(&self, cx: &Cx, site: &CorecSite, args: &[&Expr], carrier: &Type) -> R<Term> {
+    /// [`Self::corec_seed`]'s tuple at `vtuple` (the varying parameters'
+    /// tuple type, here), each component checked at its type with the earlier
+    /// components substituted.
+    fn corec_seed_checked(&self, cx: &Cx, site: &CorecSite, args: &[&Expr], vtuple: &Type) -> R<Term> {
         let varying: Vec<usize> = (0..site.rank.len()).filter(|&j| site.rank[j].is_some()).collect();
         let mut parts = Vec::new();
-        let mut cur = carrier.clone();
+        let mut cur = vtuple.clone();
         for (r, &j) in varying.iter().enumerate() {
             if r + 1 == varying.len() {
-                let mut acc = Rc::new(self.elab_check(cx, args[j], &cur, &site.carrier_level)?);
+                let mut acc = Rc::new(self.elab_check(cx, args[j], &cur, &site.vtuple_level)?);
                 while let Some((fl, sl, f, s, v)) = parts.pop() {
                     acc = Rc::new(Term::Pair { fst_level: fl, snd_level: sl, fst_ty: f, snd_ty: s, fst: v, snd: acc });
                 }
